@@ -23,10 +23,6 @@ struct VS_OUTPUT
 	float4 PreviousWorldPosition					: POSITION2;
 	float3 ViewDirectionVec 						: POSITION3;
 	float3 VertexNormal 					        : POSITION4;
-	float4 InstanceData1							: TEXCOORD4;
-	float4 InstanceData2							: TEXCOORD5;
-	float4 InstanceData3							: TEXCOORD6;
-	float4 InstanceData4							: TEXCOORD7;
 };
 
 cbuffer PerGeometry									: register(b2)
@@ -112,10 +108,6 @@ float4 GetMSPosition(VS_INPUT input, float windTimer, float3x3 world3x3)
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
-	vsout.InstanceData1 = input.InstanceData1;
-	vsout.InstanceData2 = input.InstanceData2;
-	vsout.InstanceData3 = input.InstanceData3;
-	vsout.InstanceData4 = input.InstanceData4;
 
 	float3x3 world3x3 = float3x3(input.InstanceData2.xyz, input.InstanceData3.xyz, float3(input.InstanceData4.x, input.InstanceData2.w, input.InstanceData3.w));
 
@@ -302,7 +294,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// // Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
 	if (!frontFace) worldNormal.xyz = -worldNormal.xyz;
 
-	float4 v_CommonSpaceNormal = 1;
 	if (complex) {
 		float3 normalColor = float4(TransformNormal(specColor.xyz), 1);
 		// Inverting x as well as y seems to look more correct.
