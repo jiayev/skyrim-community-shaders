@@ -333,12 +333,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	// Generated texture to simulate light transport.
 	// Numerous attempts were made to use a more interesting algorithm however they were mostly fruitless.
-	float3 subsurfaceColor = normalize(baseColor.xyz);
+	float3 subsurfaceColor = baseColor.xyz;
 
 	// Applies lighting across the whole surface apart from what is already lit.
 	lightsDiffuseColor += subsurfaceColor * dirLightColor * GetSoftLightMultiplier(dirLightAngle, SubsurfaceScatteringAmount);
 	// Applies lighting from the opposite direction. Does not account for normals perpendicular to the light source.
-	lightsDiffuseColor += baseColor.xyz * dirLightColor * saturate(-dirLightAngle) * SubsurfaceScatteringAmount;
+	lightsDiffuseColor += subsurfaceColor * dirLightColor * saturate(-dirLightAngle) * SubsurfaceScatteringAmount;
 
 	if (complex) {
 		lightsSpecularColor = GetLightSpecularInput(DirLightDirection, viewDirection, worldNormal.xyz, dirLightColor.xyz, Glossiness);
