@@ -12,7 +12,6 @@ namespace BSShaderHooks
 			const auto shaderDir = std::filesystem::current_path() /= "Data/SKSE/plugins/shaders/"sv;
 
 			if (std::filesystem::exists(shaderDir)) {
-
 				std::size_t foundCount = 0;
 				std::size_t successCount = 0;
 				std::size_t failedCount = 0;

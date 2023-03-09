@@ -71,6 +71,21 @@ namespace SIE
 			return instance;
 		}
 
+		inline static bool IsSupportedShader(const RE::BSShader::Type type)
+		{
+			return type == RE::BSShader::Type::Lighting ||
+			       type == RE::BSShader::Type::BloodSplatter ||
+			       type == RE::BSShader::Type::DistantTree ||
+			       type == RE::BSShader::Type::Sky ||
+			       type == RE::BSShader::Type::Grass ||
+			       type == RE::BSShader::Type::Particle;
+		}
+		
+		inline static bool IsSupportedShader(const RE::BSShader& shader)
+		{
+			return IsSupportedShader(shader.shaderType.get());
+		}
+
 		bool IsEnabled() const;
 		void SetEnabled(bool value);
 		bool IsAsync() const;

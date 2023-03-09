@@ -4,7 +4,7 @@
 #include "imgui.h"
 #include "reshade/reshade.hpp"
 
-class Menu
+class Menu : public RE::BSTEventSink<RE::InputEvent*>
 {
 public:
 	static Menu* GetSingleton()
@@ -13,6 +13,14 @@ public:
 		return &menu;
 	}
 
+	RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event,
+		RE::BSTEventSource<RE::InputEvent*>* a_eventSource) override;
+
 	void DrawSettings();
 	void DrawOverlay();
+
+private:
+	Menu()
+	{
+	}
 };

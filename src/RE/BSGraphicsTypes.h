@@ -713,6 +713,28 @@ namespace BSGraphics
 		char _pad2[0x18];
 		RE::NiPoint3 m_EyePosition;
 		char _pad3[0x8];
+
+		static BSShaderAccumulator* GetCurrentAccumulator();
 	};
 	static_assert(sizeof(BSShaderAccumulator) == 0x180);
+
+	class TESImagespaceManager
+	{
+	public:
+		float pad0[42];
+		RE::ImageSpaceBaseData* baseData0;
+		RE::ImageSpaceBaseData* baseData1;
+		float pad1;
+		float pad2;
+		float pad3;
+		float pad4;
+		RE::ImageSpaceBaseData hdrData;
+
+		static TESImagespaceManager* GetSingleton()
+		{
+			REL::Relocation<TESImagespaceManager**> singleton{ REL::RelocationID(527731, 414660) };
+			return *singleton;
+		}
+	};
 }
+

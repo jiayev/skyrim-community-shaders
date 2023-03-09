@@ -1,11 +1,9 @@
 #include "GrassLighting.h"
-#include "Features/Clustered.h"
-#include <State.h>
 
-#define IMGUI_DISABLE_INCLUDE_IMCONFIG_H
-#include "imgui.h"
-#include "reshade/reshade.hpp"
-#include <Util.h>
+#include "State.h"
+#include "Util.h"
+
+#include "Features/Clustered.h"
 
 enum class GrassShaderTechniques
 {
@@ -16,20 +14,17 @@ void GrassLighting::DrawSettings()
 {
 	if (ImGui::BeginTabItem("Grass Lighting")) {
 		if (ImGui::TreeNodeEx("Complex Grass", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Text("Specular highlights for complex grass.\nFunctions the same as typical meshes.");
-			ImGui::SliderFloat("Glossiness", &settings.Glossiness, 1.0f, 20.0f);
+			ImGui::Text("Specular highlights for complex grass.\nFunctions the same as on other objects.");
+			ImGui::SliderFloat("Glossiness", &settings.Glossiness, 1.0f, 100.0f);
 			ImGui::SliderFloat("Specular Strength", &settings.SpecularStrength, 0.0f, 1.0f);
 			ImGui::TreePop();
 		}
 
 		if (ImGui::TreeNodeEx("Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Text("Soft lighting controls how evenly lit grass is.");
-			ImGui::Text("Back lighting illuminates the back face of grass.");
+			ImGui::Text("Soft lighting controls how evenly lit an object is.");
+			ImGui::Text("Back lighting illuminates the back face of an object.");
 			ImGui::Text("Combined to model the transport of light through the surface.");
 			ImGui::SliderFloat("Subsurface Scattering Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 1.0f);
-
-			ImGui::Text("The vividness of the light transport. Not physically accurate.");
-			ImGui::SliderFloat("Subsurface Scattering Saturation", &settings.SubsurfaceScatteringSaturation, 0.0f, 3.0f);
 
 			ImGui::TreePop();
 		}
@@ -38,42 +33,15 @@ void GrassLighting::DrawSettings()
 			ImGui::Text("Fix for grass not being affected by sunlight scale.");
 			ImGui::Checkbox("Enable Directional Light Fix", (bool*)&settings.EnableDirLightFix);
 
-			ImGui::Text("Enable point lighting on grass. Can impact performance.");
+			ImGui::Text("Enables point lights on grass like other objects. Slightly impacts performance if there are a lot of lights.");
 			ImGui::Checkbox("Enable Point Lights", (bool*)&settings.EnablePointLights);
 
-			ImGui::Text("Reduces the brightness of directional light sources.");
-			ImGui::SliderFloat("Directional Light Dimmer", &settings.DirectionalLightDimmer, 1.0f, 4.0f);
-
-			ImGui::Text("Reduces the brightness of point light sources.");
-			ImGui::SliderFloat("Point Light Dimmer", &settings.PointLightDimmer, 1.0f, 4.0f);
 			ImGui::TreePop();
 		}
 
 		ImGui::EndTabItem();
 	}
 }
-
-
-struct TESImagespaceManager
-{
-	float pad0[42];
-	RE::ImageSpaceBaseData* baseData0;
-	RE::ImageSpaceBaseData* baseData1;
-	float pad1;
-	float pad2;
-	float pad3;
-	float pad4;
-	RE::ImageSpaceBaseData hdrData;
-
-	static TESImagespaceManager* GetSingleton()
-	{
-		REL::Relocation<TESImagespaceManager**> singleton{ REL::RelocationID(527731, 414660) };
-		return *singleton;
-	}
-};
-
-
-
 
 void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 {
@@ -88,7 +56,7 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 
 			Util::StoreTransform3x4NoScale(perFrameData.DirectionalAmbient, dalcTransform);
 
-			auto accumulator = State::GetCurrentAccumulator();
+			auto accumulator = BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 			auto& position = accumulator->m_EyePosition;
 			auto state = BSGraphics::RendererShadowState::QInstance();
 
@@ -96,7 +64,7 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 			perFrameData.EyePosition.y = position.y - state->m_PosAdjust.y;
 			perFrameData.EyePosition.z = position.z - state->m_PosAdjust.z;
 
-			auto manager = TESImagespaceManager::GetSingleton();
+			auto manager = BSGraphics::TESImagespaceManager::GetSingleton();
 			perFrameData.SunlightScale = manager->hdrData.hdr.sunlightScale;
 
 			perFrameData.Settings = settings;
@@ -134,18 +102,21 @@ void GrassLighting::Load(json& o_json)
 			settings.Glossiness = grassLighting["Glossiness"];
 		if (grassLighting["SpecularStrength"].is_number())
 			settings.SpecularStrength = grassLighting["SpecularStrength"];
-		if (grassLighting["SubsurfaceScatteringSaturation"].is_number())
-			settings.SubsurfaceScatteringSaturation = grassLighting["SubsurfaceScatteringSaturation"];
 		if (grassLighting["SubsurfaceScatteringAmount"].is_number())
 			settings.SubsurfaceScatteringAmount = grassLighting["SubsurfaceScatteringAmount"];
-		if (grassLighting["DirectionalLightDimmer"].is_number())
-			settings.DirectionalLightDimmer = grassLighting["DirectionalLightDimmer"];
-		if (grassLighting["PointLightDimmer"].is_number())
-			settings.PointLightDimmer = grassLighting["PointLightDimmer"];
 		if (grassLighting["EnableDirLightFix"].is_boolean())
 			settings.EnableDirLightFix = grassLighting["EnableDirLightFix"];
 		if (grassLighting["EnablePointLights"].is_boolean())
 			settings.EnablePointLights = grassLighting["EnablePointLights"];
+	}
+	CSimpleIniA ini;
+	ini.SetUnicode();
+	ini.LoadFile(L"Data\\Shaders\\Features\\GrassLighting.ini");
+	if (auto value = ini.GetValue("Info", "Version")) {
+		enabled = true;
+		version = value;
+	} else {
+		enabled = false;
 	}
 }
 
@@ -154,14 +125,12 @@ void GrassLighting::Save(json& o_json)
 	json grassLighting;
 	grassLighting["Glossiness"] = settings.Glossiness;
 	grassLighting["SpecularStrength"] = settings.SpecularStrength;
-	grassLighting["SubsurfaceScatteringSaturation"] = settings.SubsurfaceScatteringSaturation;
 	grassLighting["SubsurfaceScatteringAmount"] = settings.SubsurfaceScatteringAmount;
-	grassLighting["DirectionalLightDimmer"] = settings.DirectionalLightDimmer;
-	grassLighting["PointLightDimmer"] = settings.PointLightDimmer;
 	grassLighting["EnableDirLightFix"] = (bool)settings.EnableDirLightFix;
 	grassLighting["EnablePointLights"] = (bool)settings.EnablePointLights;
 	o_json["Grass Lighting"] = grassLighting;
 }
+
 
 void GrassLighting::SetupResources()
 {
@@ -171,4 +140,38 @@ void GrassLighting::SetupResources()
 void GrassLighting::Reset()
 {
 	updatePerFrame = true;
+}
+
+bool GrassLighting::ValidateCache(CSimpleIniA& a_ini)
+{
+	logger::info("Validating Grass Lighting");
+
+	auto enabledInCache = a_ini.GetBoolValue("Grass Lighting", "Enabled", false);
+	if (enabledInCache && !enabled) {
+		logger::info("Feature was uninstalled");
+		return false;
+	}
+	if (!enabledInCache && enabled) {
+		logger::info("Feature was installed");
+		return false;
+	}
+
+	if (enabled) {
+		auto versionInCache = a_ini.GetValue("Grass Lighting", "Version");
+		if (strcmp(versionInCache, version.c_str()) != 0) {
+			logger::info("Change in version detected. Installed {} but {} in Disk Cache", version, versionInCache);
+			return false;
+		} else {
+			logger::info("Installed version and cached version match.");
+		}
+	}
+
+	logger::info("Cached feature is valid");
+	return true;
+}
+
+void GrassLighting::WriteDiskCacheInfo(CSimpleIniA& a_ini)
+{
+	a_ini.SetBoolValue("Grass Lighting", "Enabled", enabled);
+	a_ini.SetValue("Grass Lighting", "Version", version.c_str());
 }

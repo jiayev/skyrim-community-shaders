@@ -7,7 +7,6 @@
     "fmt",
     "rapidcsv",
     "spdlog",
-    "simpleini",
     "magic-enum",
     "xbyak",
     "catch2",

@@ -35,11 +35,11 @@ namespace REX
 		CONSTANT_GROUP_LEVEL_PERFRAME = 0xC,        // PS/VS. Per-frame constants. Contains view projections and some other variables.
 	};
 
-	#define MAX_PS_CONSTANTS 64
+#define MAX_PS_CONSTANTS 64
 
 	struct PixelShader
 	{
-		std::uint32_t m_TechniqueID;       // Bit flags
+		std::uint32_t m_TechniqueID;  // Bit flags
 		ID3D11PixelShader* m_Shader;  // DirectX handle
 
 		union
@@ -62,8 +62,6 @@ namespace REX
 	static_assert(offsetof(PixelShader, m_ConstantUnion.m_PerMaterial) == 0x20);
 	static_assert(offsetof(PixelShader, m_ConstantOffsets) == 0x40);
 
-
-
 	class BSShader :
 		public RE::NiRefObject,          // 00
 		public RE::NiBoneMatrixSetterI,  // 10
@@ -71,28 +69,27 @@ namespace REX
 	{
 	public:
 		template <class Key>
-	    struct TechniqueIDHasher
-	    {
-	    public:
-		    std::uint32_t operator()(const Key& a_key) const
-		    {
-			    return a_key->m_TechniqueID;
-		    }
-	    };
+		struct TechniqueIDHasher
+		{
+		public:
+			std::uint32_t operator()(const Key& a_key) const
+			{
+				return a_key->m_TechniqueID;
+			}
+		};
 
+		template <class T>
+		struct TechniqueIDCompare
+		{
+		public:
+			bool operator()(const T& a_lhs, const T& a_rhs) const
+			{
+				return a_lhs->m_TechniqueID == a_rhs->m_TechniqueID;
+			}
+		};
 
-	    template <class T>
-	    struct TechniqueIDCompare
-	    {
-	    public:
-		    bool operator()(const T& a_lhs, const T& a_rhs) const
-		    {
-			    return a_lhs->m_TechniqueID == a_rhs->m_TechniqueID;
-		    }
-	    };
-
-
-	    template <class Key> using TechniqueIDMap = RE::BSTSet<Key, TechniqueIDHasher<Key>, TechniqueIDCompare<Key>>;
+		template <class Key>
+		using TechniqueIDMap = RE::BSTSet<Key, TechniqueIDHasher<Key>, TechniqueIDCompare<Key>>;
 
 		inline static constexpr auto RTTI = RE::RTTI_BSShader;
 

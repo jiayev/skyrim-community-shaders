@@ -9,14 +9,6 @@ project(
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include(XSEPlugin)
 
-find_path(SIMPLEINI_INCLUDE_DIRS "ConvertUTF.c")
-
-target_include_directories(
-	"${PROJECT_NAME}"
-	PRIVATE
-		${SIMPLEINI_INCLUDE_DIRS}
-)
-
 find_package(magic_enum CONFIG REQUIRED)
 find_package(xbyak CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)

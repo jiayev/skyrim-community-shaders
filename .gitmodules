@@ -1,0 +1,3 @@
+[submodule "extern/CommonLibSSE-NG"]
+	path = extern/CommonLibSSE-NG
+	url = https://github.com/doodlum/CommonLibSSE-NG.git

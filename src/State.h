@@ -20,12 +20,14 @@ public:
 	uint32_t currentVertexDescriptor = 0;
 	uint32_t currentPixelDescriptor = 0;
 
-	static BSGraphics::BSShaderAccumulator* GetCurrentAccumulator();
-
 	void Draw();
 	void Reset();
 	void Setup();
 
 	void Load();
 	void Save();
+
+	bool ValidateCache(CSimpleIniA& a_ini);
+	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
 };
+

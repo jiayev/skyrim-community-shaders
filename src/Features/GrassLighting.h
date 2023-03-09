@@ -4,11 +4,6 @@
 
 #include "Buffer.h"
 
-#include <RE/BSGraphicsTypes.h>
-
-#include <nlohmann/json.hpp>
-using json = nlohmann::json;
-
 class GrassLighting
 {
 public:
@@ -18,14 +13,14 @@ public:
 		return &singleton;
 	}
 
+	bool enabled = false;
+	std::string version;
+
 	struct Settings
 	{
 		float Glossiness = 20;
 		float SpecularStrength = 0.5;
-		float SubsurfaceScatteringSaturation = 1.5;
 		float SubsurfaceScatteringAmount = 0.5;
-		float DirectionalLightDimmer = 1;
-		float PointLightDimmer = 3;
 		std::uint32_t EnableDirLightFix = 1;
 		std::uint32_t EnablePointLights = 1;
 	};
@@ -38,7 +33,6 @@ public:
 		Settings Settings;
 		float pad0;
 		float pad1;
-		float pad2;
 	};
 
 	Settings settings;
@@ -55,6 +49,6 @@ public:
 	void Load(json& o_json);
 	void Save(json& o_json);
 
-private:
-	bool enabled = true;
+	bool ValidateCache(CSimpleIniA& a_ini);
+	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
 };

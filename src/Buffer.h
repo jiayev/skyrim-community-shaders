@@ -1,7 +1,7 @@
 #pragma once
 #include <DirectXMath.h>
-#include <d3d11.h>
 #include <Windows.Foundation.h>
+#include <d3d11.h>
 #include <stdio.h>
 #include <winrt/base.h>
 #include <wrl\client.h>

@@ -2,13 +2,11 @@
 
 #include <RE/V/VertexDesc.h>
 
-#include <magic_enum.hpp>
-
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
-#include <SimpleIni.h>
+#include "State.h"
 
 namespace SIE
 {
@@ -1212,22 +1210,12 @@ namespace SIE
 
 			return newShader;
 		}
-
-		static bool IsSupportedShader(const RE::BSShader& shader)
-		{
-			return shader.shaderType == RE::BSShader::Type::Lighting ||
-			       shader.shaderType == RE::BSShader::Type::BloodSplatter ||
-			       shader.shaderType == RE::BSShader::Type::DistantTree ||
-			       shader.shaderType == RE::BSShader::Type::Sky ||
-			       shader.shaderType == RE::BSShader::Type::Grass ||
-			       shader.shaderType == RE::BSShader::Type::Particle;
-		}
 	}
 
 	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (!SShaderCache::IsSupportedShader(shader)) {
+		if (!ShaderCache::IsSupportedShader(shader)) {
 			return nullptr;
 		}
 
@@ -1252,7 +1240,7 @@ namespace SIE
 	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (!SShaderCache::IsSupportedShader(shader)) {
+		if (!ShaderCache::IsSupportedShader(shader)) {
 			return nullptr;
 		}
 
@@ -1346,7 +1334,7 @@ namespace SIE
 		bool valid = true;
 
 		if (auto version = ini.GetValue("Cache", "Version")) {
-			if (strcmp(Plugin::VERSION.string().c_str(), version) != 0) {
+			if (strcmp(Plugin::VERSION.string().c_str(), version) != 0 || !(State::GetSingleton()->ValidateCache(ini))) {
 				logger::info("Disk cache outdated or invalid");
 				valid = false;
 			}
@@ -1367,13 +1355,14 @@ namespace SIE
 		CSimpleIniA ini;
 		ini.SetUnicode();
 		ini.SetValue("Cache", "Version", Plugin::VERSION.string().c_str());
+		State::GetSingleton()->WriteDiskCacheInfo(ini);
 		ini.SaveFile(L"Data\\ShaderCache\\Info.ini");
 		logger::info("Saved disk cache info");
 	}
 
 	ShaderCache::ShaderCache()
 	{
-		static const auto compilationThreadCount = max(1, (static_cast<int32_t>(std::thread::hardware_concurrency()) - 4));
+		static const auto compilationThreadCount = max(1, (static_cast<int32_t>(std::thread::hardware_concurrency() - 4)));
 		for (size_t threadIndex = 0; threadIndex < compilationThreadCount; ++threadIndex) {
 			compilationThreads.push_back(std::jthread(&ShaderCache::ProcessCompilationSet, this));
 		}

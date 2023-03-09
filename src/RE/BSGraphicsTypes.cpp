@@ -34,3 +34,10 @@ BSGraphics::ShaderState* BSGraphics::ShaderState::QInstance()
 	static ShaderState* g_ShaderState = (ShaderState*)RELOCATION_ID(513211, 390951).address();
 	return g_ShaderState;
 }
+
+BSGraphics::BSShaderAccumulator* BSGraphics::BSShaderAccumulator::GetCurrentAccumulator()
+{
+	using func_t = decltype(&GetCurrentAccumulator);
+	REL::Relocation<func_t> func{ REL::RelocationID(98997, 105651) };
+	return func();
+}

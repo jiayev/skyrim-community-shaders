@@ -1,5 +1,5 @@
 #include "Clustered.h"
-#include <State.h>
+#include "State.h"
 
 void Clustered::Reset()
 {
@@ -25,19 +25,49 @@ void Clustered::Bind(bool a_update)
 
 void Clustered::UpdateLights()
 {
-	std::uint32_t current_light_count = 0;  // Max number of lights is 4294967295
+	std::uint32_t currentLightCount = 0;  // Max number of lights is 4294967295
 
-	auto accumulator = State::GetCurrentAccumulator();
+	auto accumulator = BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 	auto shadowSceneNode = accumulator->m_ActiveShadowSceneNode;
-
 	auto state = BSGraphics::RendererShadowState::QInstance();
 
 	std::vector<LightSData> lights_data{};
-	for (auto& e : shadowSceneNode->GetRuntimeData().activeSceneLights) {
-		if (auto screenSpaceLight = e.get()) {
-			if (auto& niLight = screenSpaceLight->light) {
+
+	for (auto& e : shadowSceneNode->GetRuntimeData().activePointLights) {
+		if (auto bsLight = e.get()) {
+			if (auto niLight = bsLight->light.get()) {
+				// See ShadowSceneNode::GetLuminanceAtPoint_1412BC190
+				// Not particularly needed.
+				if (!bsLight->pointLight) {
+					continue;
+				}
+
+				// Vanilla is bugged
+				//if (!bsLight->affectLand) {
+				//	continue;
+				//}
+
+				// See BSFadeNode::sub_1412BB090
+				// Unlikely to use full portal culling.
+				if (bsLight->unk05C == 255) {
+					continue;
+				}
+				if (bsLight->objectNode) {
+					continue;
+				}
+				if (bsLight->Unk_03()) {
+					continue;
+				}
+
+				// unk018->unk0 maintains a list of BSGeometry nodes where their sorted light lists contain the current light.
+				// This is used to control updates and destruction of lights.
+				// This checks that the head of the list is not-null, however if the light is too weak to hit an object it may not exist. (untested)
+				if (!bsLight->unk018.unk00) {
+					continue;
+				}
+
 				RE::NiPoint3 worldPos = niLight->world.translate;
-				float dimmer = niLight->GetLightRuntimeData().fade * screenSpaceLight->lodDimmer;
+				float dimmer = niLight->GetLightRuntimeData().fade * bsLight->lodDimmer;
 
 				LightSData light{};
 
@@ -63,16 +93,18 @@ void Clustered::UpdateLights()
 				light.mask = -1;
 
 				lights_data.push_back(light);
-				current_light_count++;
+				currentLightCount++;
 			}
 		}
 	}
 
-	for (auto& e : shadowSceneNode->GetRuntimeData().shadowCasterLights) {
-		if (auto shadowLight = e) {
-			if (auto& niLight = shadowLight->light) {
+	// See ShadowSceneNode::CalculateActiveShadowCasterLights_1412E2F60
+	// Whilst there is another shadow caster list, it includes ones that aren't being used due to the shadow caster limit.
+	for (auto& e : shadowSceneNode->GetRuntimeData().activeShadowLights) {
+		if (auto bsShadowLight = (RE::BSShadowLight*)e.get()) {
+			if (auto& niLight = bsShadowLight->light) {
 				RE::NiPoint3 worldPos = niLight->world.translate;
-				float dimmer = niLight->GetLightRuntimeData().fade * shadowLight->lodDimmer;
+				float dimmer = niLight->GetLightRuntimeData().fade * bsShadowLight->lodDimmer;
 
 				LightSData light{};
 
@@ -95,26 +127,26 @@ void Clustered::UpdateLights()
 
 				light.active = true;
 				light.shadow = true;
-				light.mask = (float)shadowLight->unk520;
+				light.mask = (float)bsShadowLight->maskSelect;
 
 				lights_data.push_back(light);
-				current_light_count++;
+				currentLightCount++;
 			}
 		}
 	}
 
-	if (!current_light_count) {
+	if (!currentLightCount) {
 		LightSData data{};
 		ZeroMemory(&data, sizeof(data));
 		lights_data.push_back(data);
-		current_light_count++;
+		currentLightCount = 1;
 	}
 
-	static std::uint32_t light_count = 0;
-	bool light_count_changed = current_light_count != light_count;
+	static std::uint32_t lightCount = 0;
+	bool lightCountChanged = currentLightCount != lightCount;
 
-	if (!lights || light_count_changed) {
-		light_count = current_light_count;
+	if (!lights || lightCountChanged) {
+		lightCount = currentLightCount;
 
 		D3D11_BUFFER_DESC sbDesc{};
 		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
@@ -122,21 +154,21 @@ void Clustered::UpdateLights()
 		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 		sbDesc.StructureByteStride = sizeof(LightSData);
-		sbDesc.ByteWidth = sizeof(LightSData) * light_count;
+		sbDesc.ByteWidth = sizeof(LightSData) * lightCount;
 		lights = std::make_unique<Buffer>(sbDesc);
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
 		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
 		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
 		srvDesc.Buffer.FirstElement = 0;
-		srvDesc.Buffer.NumElements = light_count;
+		srvDesc.Buffer.NumElements = lightCount;
 		lights->CreateSRV(srvDesc);
 	}
 
 	auto context = RE::BSRenderManager::GetSingleton()->GetRuntimeData().context;
 	D3D11_MAPPED_SUBRESOURCE mapped;
 	DX::ThrowIfFailed(context->Map(lights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-	size_t bytes = sizeof(LightSData) * light_count;
+	size_t bytes = sizeof(LightSData) * lightCount;
 	memcpy_s(mapped.pData, bytes, lights_data.data(), bytes);
 	context->Unmap(lights->resource.get(), 0);
 }

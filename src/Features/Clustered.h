@@ -6,8 +6,7 @@
 #include "RE/BSGraphicsTypes.h"
 
 #include "Buffer.h"
-
-#define MAXSHADOWLIGHTS 4
+#include <shared_mutex>
 
 class Clustered
 {

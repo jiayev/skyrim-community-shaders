@@ -5,6 +5,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 
+#include "Features/Clustered.h"
 #include "ShaderTools/BSShaderHooks.h"
 
 void hk_BSShader_LoadShaders(RE::BSShader* shader, std::uintptr_t stream);
@@ -85,7 +86,7 @@ namespace Hooks
 			*(uintptr_t*)&ptrPresent = Detours::X64::DetourClassVTable(*(uintptr_t*)swapchain, &hk_IDXGISwapChain_Present, 8);
 			*(uintptr_t*)&ptrDrawIndexed = Detours::X64::DetourClassVTable(*(uintptr_t*)context, &hk_ID3D11DeviceContext_DrawIndexed, 12);
 			*(uintptr_t*)&ptrDrawIndexedInstanced = Detours::X64::DetourClassVTable(*(uintptr_t*)context, &hk_ID3D11DeviceContext_DrawIndexedInstanced, 20);
-	
+
 			State::GetSingleton()->Setup();
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

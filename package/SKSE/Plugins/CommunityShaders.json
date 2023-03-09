@@ -5,18 +5,15 @@
   "Enable Shaders": true
  },
  "Grass Lighting": {
-  "DirectionalLightDimmer": 1.0,
   "EnableDirLightFix": true,
   "EnablePointLights": true,
   "Glossiness": 20.0,
-  "PointLightDimmer": 2.0,
   "SpecularStrength": 0.5,
-  "SubsurfaceScatteringAmount": 0.5,
-  "SubsurfaceScatteringSaturation": 1.5
+  "SubsurfaceScatteringAmount": 1.0
  },
  "Replace Original Shaders": {
   "BloodSplatter": false,
-  "DistantTree": false,
+  "DistantTree": true,
   "Effect": false,
   "Grass": true,
   "ImageSpace": false,
@@ -25,6 +22,12 @@
   "Sky": false,
   "Utility": false,
   "Water": false
+ },
+ "Tree LOD Lighting": {
+  "EnableComplexTreeLOD": true,
+  "EnableDirLightFix": true,
+  "FogDimmerAmount": 1.0,
+  "SubsurfaceScatteringAmount": 0.5
  },
  "Version": "0-0-1-0"
 }
