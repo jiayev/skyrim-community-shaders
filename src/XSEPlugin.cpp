@@ -25,6 +25,29 @@ void DrawOverlayCallback(reshade::api::effect_runtime*)
 void MessageHandler(SKSE::MessagingInterface::Message* message)
 {
 	switch (message->type) {
+	case SKSE::MessagingInterface::kPostPostLoad:
+		{
+			Hooks::Install();
+
+			auto& shaderCache = SIE::ShaderCache::Instance();
+
+			shaderCache.SetEnabled(true);
+			shaderCache.SetAsync(true);
+			shaderCache.SetDiskCache(true);
+
+			State::GetSingleton()->Load();
+
+			shaderCache.ValidateDiskCache();
+
+			if (reshade::register_addon(m_hModule)) {
+				logger::info("ReShade: Registered add-on");
+				reshade::register_event<reshade::addon_event::reshade_overlay>(DrawOverlayCallback);
+			} else {
+				logger::info("ReShade: Could not register add-on");
+			}
+
+			break;
+		}
 	case SKSE::MessagingInterface::kDataLoaded:
 		{
 			RE::BSInputDeviceManager::GetSingleton()->AddEventSink(Menu::GetSingleton());
@@ -48,25 +71,6 @@ bool Load()
 {
 	auto messaging = SKSE::GetMessagingInterface();
 	messaging->RegisterListener("SKSE", MessageHandler);
-
-	Hooks::Install();
-
-	auto& shaderCache = SIE::ShaderCache::Instance();
-
-	shaderCache.SetEnabled(true);
-	shaderCache.SetAsync(true);
-	shaderCache.SetDiskCache(true);
-
-	State::GetSingleton()->Load();
-
-	shaderCache.ValidateDiskCache();
-
-	if (reshade::register_addon(m_hModule)) {
-		logger::info("ReShade: Registered add-on");
-		reshade::register_event<reshade::addon_event::reshade_overlay>(DrawOverlayCallback);
-	} else {
-		logger::info("ReShade: Could not register add-on");
-	}
 
 	return true;
 }
