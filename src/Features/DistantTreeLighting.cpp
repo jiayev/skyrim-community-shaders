@@ -62,7 +62,7 @@ enum class DistantTreeShaderTechniques
 	Depth = 1,
 };
 
-void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t)
+void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t descriptor)
 {
 	if (auto player = RE::PlayerCharacter::GetSingleton())
 	{
@@ -84,59 +84,59 @@ void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t)
 		}
 	}
 
-	//const auto technique = descriptor & 1;
-	//if (technique != static_cast<uint32_t>(DistantTreeShaderTechniques::Depth)) {
+	const auto technique = descriptor & 1;
+	if (technique != static_cast<uint32_t>(DistantTreeShaderTechniques::Depth)) {
 
-	//	PerPass perPassData{};
-	//	ZeroMemory(&perPassData, sizeof(perPassData));
+		PerPass perPassData{};
+		ZeroMemory(&perPassData, sizeof(perPassData));
 
-	//	auto shaderState = BSGraphics::ShaderState::QInstance();
-	//	RE::NiTransform& dalcTransform = shaderState->DirectionalAmbientTransform;
+		auto shaderState = BSGraphics::ShaderState::QInstance();
+		RE::NiTransform& dalcTransform = shaderState->DirectionalAmbientTransform;
 
-	//	Util::StoreTransform3x4NoScale(perPassData.DirectionalAmbient, dalcTransform);
+		Util::StoreTransform3x4NoScale(perPassData.DirectionalAmbient, dalcTransform);
 
-	//	auto accumulator = BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-	//	auto& position = accumulator->m_EyePosition;
-	//	auto state = BSGraphics::RendererShadowState::QInstance();
+		auto accumulator = BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
+		auto& position = accumulator->m_EyePosition;
+		auto state = BSGraphics::RendererShadowState::QInstance();
 
-	//	perPassData.EyePosition.x = position.x - state->m_PosAdjust.x;
-	//	perPassData.EyePosition.y = position.y - state->m_PosAdjust.y;
-	//	perPassData.EyePosition.z = position.z - state->m_PosAdjust.z;
+		perPassData.EyePosition.x = position.x - state->m_PosAdjust.x;
+		perPassData.EyePosition.y = position.y - state->m_PosAdjust.y;
+		perPassData.EyePosition.z = position.z - state->m_PosAdjust.z;
 
-	//	if (auto sunLight = (NiDirectionalLight*)accumulator->m_ActiveShadowSceneNode->sunLight->light.get()) {
-	//		auto imageSpaceManager = BSGraphics::TESImagespaceManager::GetSingleton();
+		if (auto sunLight = (NiDirectionalLight*)accumulator->m_ActiveShadowSceneNode->GetRuntimeData().sunLight->light.get()) {
+			auto imageSpaceManager = BSGraphics::TESImagespaceManager::GetSingleton();
 
-	//		perPassData.DirLightScale = imageSpaceManager->hdrData.hdr.sunlightScale * sunLight->fade;
+			perPassData.DirLightScale = imageSpaceManager->hdrData.hdr.sunlightScale * sunLight->GetLightRuntimeData().fade;
 
-	//		perPassData.DirLightColor.x = sunLight->diffuse.red;
-	//		perPassData.DirLightColor.y = sunLight->diffuse.green;
-	//		perPassData.DirLightColor.z = sunLight->diffuse.blue;
+			perPassData.DirLightColor.x = sunLight->GetLightRuntimeData().diffuse.red;
+			perPassData.DirLightColor.y = sunLight->GetLightRuntimeData().diffuse.green;
+			perPassData.DirLightColor.z = sunLight->GetLightRuntimeData().diffuse.blue;
 
-	//		auto& direction = sunLight->GetWorldDirection();
-	//		perPassData.DirLightDirection.x = direction.x;
-	//		perPassData.DirLightDirection.y = direction.y;
-	//		perPassData.DirLightDirection.z = direction.z;
-	//	}
+			auto& direction = sunLight->GetWorldDirection();
+			perPassData.DirLightDirection.x = direction.x;
+			perPassData.DirLightDirection.y = direction.y;
+			perPassData.DirLightDirection.z = direction.z;
+		}
 
-	//	perPassData.ComplexAtlasTexture = complexAtlasTexture;
+		perPassData.ComplexAtlasTexture = complexAtlasTexture;
 
-	//	perPassData.Settings = settings;
+		perPassData.Settings = settings;
 
-	//	perPass->Update(perPassData);
+		perPass->Update(perPassData);
 
-	//	auto context = RE::BSRenderManager::GetSingleton()->GetRuntimeData().context;
+		auto context = RE::BSRenderManager::GetSingleton()->GetRuntimeData().context;
 
-	//	ID3D11Buffer* buffers[2];
-	//	context->VSGetConstantBuffers(2, 1, buffers);  // buffers[0]
-	//	buffers[1] = perPass->CB();
-	//	context->VSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
-	//	context->PSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
+		ID3D11Buffer* buffers[2];
+		context->VSGetConstantBuffers(2, 1, buffers);  // buffers[0]
+		buffers[1] = perPass->CB();
+		context->VSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
+		context->PSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
 
-	//	auto renderer = BSGraphics::Renderer::QInstance();
-	//	ID3D11ShaderResourceView* views[1]{};
-	//	views[0] = renderer->pRenderTargets[RENDER_TARGET_SHADOW_MASK].SRV;
-	//	context->PSSetShaderResources(17, ARRAYSIZE(views), views);
-	//}
+		auto renderer = BSGraphics::Renderer::QInstance();
+		ID3D11ShaderResourceView* views[1]{};
+		views[0] = renderer->pRenderTargets[RENDER_TARGET_SHADOW_MASK].SRV;
+		context->PSSetShaderResources(17, ARRAYSIZE(views), views);
+	}
 }
 
 void DistantTreeLighting::Draw(const RE::BSShader* shader, const uint32_t descriptor)
