@@ -73,36 +73,31 @@ const static float4x4 M_IdentityMatrix =
 
 float4 GetMSPosition(VS_INPUT input, float windTimer)
 {
-	float4 r0,r1,r2,r3,r4,r5,r6;
-	r0.yzw = input.InstanceData4.y * ScaleMask.xyz + float3(1,1,1);
-	r0.yzw = input.Position.xyz * r0.yzw;
-	r1.x = dot(input.InstanceData2.xyz, r0.yzw);
-	r1.y = dot(input.InstanceData3.xyz, r0.yzw);
-	r2.x = input.InstanceData4.x;
-	r2.y = input.InstanceData2.w;
-	r2.z = input.InstanceData3.w;
-	r1.z = dot(r2.xyz, r0.yzw);
-	r0.y = input.InstanceData1.x + input.InstanceData1.y;
-	r0.z = -r0.y * 0.0078125 + windTimer;
-	r0.z = 0.400000006 * r0.z;
-	sincos(r0.z, r2.x, r3.x);
-	r0.zw = float2(3.1415925,6.28318501) * r2.xx;
-	r0.zw = sin(r0.zw);
-	r0.z = r0.z + r0.w;
-	r0.w = 3.1415925 * r3.x;
-	r0.w = cos(r0.w);
-	r0.w = 0.200000003 * r0.w;
-	r0.z = r0.z * 0.300000012 + r0.w;
-	r0.w = input.Color.w * input.Color.w;
-	r0.w = 0.5 * r0.w;
-	r0.z = r0.z * r0.w;
-	r0.z = WindVector.z * r0.z;
-	r2.xy = WindVector.xy;
-	r2.z = 0;
-	r3.xyz = r2.xyz * r0.zzz + r1.xyz;
-	r3.xyz = input.InstanceData1.xyz + r3.xyz;
-	r3.w = 1;
-	return r3;
+	float windAngle = 0.4 * ((input.InstanceData1.x + input.InstanceData1.y) * -0.0078125 + windTimer);
+	float windAngleSin, windAngleCos;
+	sincos(windAngle, windAngleSin, windAngleCos);
+
+	float windTmp3 = 0.2 * cos(M_PI * windAngleCos);
+	float windTmp1 = sin(M_PI * windAngleSin);
+	float windTmp2 = sin(M_2PI * windAngleSin);
+	float windPower = WindVector.z * (((windTmp1 + windTmp2) * 0.3 + windTmp3) *
+	                  (0.5 * (input.Color.w * input.Color.w)));
+
+	float3 inputPosition = input.Position.xyz * (input.InstanceData4.yyy * ScaleMask.xyz + float3(1, 1, 1));
+
+	float3 instancePosition;
+	instancePosition.z = dot(
+		float3(input.InstanceData4.x, input.InstanceData2.w, input.InstanceData3.w), inputPosition);
+	instancePosition.x = dot(input.InstanceData2.xyz, inputPosition);
+	instancePosition.y = dot(input.InstanceData3.xyz, inputPosition);
+
+	float3 windVector = float3(WindVector.xy, 0);
+
+	float4 msPosition;
+	msPosition.xyz = input.InstanceData1.xyz + (windVector * windPower + instancePosition);
+	msPosition.w = 1;
+
+	return msPosition;
 }
 
 VS_OUTPUT main(VS_INPUT input)
@@ -224,25 +219,6 @@ struct PerEye
 cbuffer cb12 : register(b12)
 {
   float4 cb12[87];
-}
-
-cbuffer PerGeometry									: register(b2)
-{
-	row_major float4x4 WorldViewProj				: packoffset(c0);
-	row_major float4x4 WorldView					: packoffset(c4);
-	row_major float4x4 World						: packoffset(c8);
-	row_major float4x4 PreviousWorld				: packoffset(c12);
-	float4 FogNearColor								: packoffset(c16);
-	float3 WindVector								: packoffset(c17);
-	float WindTimer 								: packoffset(c17.w);
-	float3 DirLightDirection						: packoffset(c18);
-	float PreviousWindTimer 						: packoffset(c18.w);
-	float3 DirLightColor							: packoffset(c19);
-	float AlphaParam1 								: packoffset(c19.w);
-	float3 AmbientColor								: packoffset(c20);
-	float AlphaParam2 								: packoffset(c20.w);
-	float3 ScaleMask								: packoffset(c21);
-	float ShadowClampValue 							: packoffset(c21.w);
 }
 
 PS_OUTPUT main(PS_INPUT input)
