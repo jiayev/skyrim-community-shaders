@@ -17,10 +17,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID)
 	return TRUE;
 }
 
-//void DrawOverlayCallback(reshade::api::effect_runtime*)
-//{
-//	Menu::GetSingleton()->DrawOverlay();
-//}
+void DrawOverlayCallback(reshade::api::effect_runtime*)
+{
+	Menu::GetSingleton()->DrawOverlay();
+}
 
 void MessageHandler(SKSE::MessagingInterface::Message* message)
 {
@@ -29,19 +29,19 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		{
 			Hooks::Install();
 
-			//auto& shaderCache = SIE::ShaderCache::Instance();
+			auto& shaderCache = SIE::ShaderCache::Instance();
 
-			//shaderCache.SetEnabled(true);
-			//shaderCache.SetAsync(true);
-			//shaderCache.SetDiskCache(true);
+			shaderCache.SetEnabled(true);
+			shaderCache.SetAsync(true);
+			shaderCache.SetDiskCache(true);
 
-			//State::GetSingleton()->Load();
+			State::GetSingleton()->Load();
 
-			//shaderCache.ValidateDiskCache();
+			shaderCache.ValidateDiskCache();
 
 			if (reshade::register_addon(m_hModule)) {
 				logger::info("ReShade: Registered add-on");
-			//	reshade::register_event<reshade::addon_event::reshade_overlay>(DrawOverlayCallback);
+				reshade::register_event<reshade::addon_event::reshade_overlay>(DrawOverlayCallback);
 			} else {
 				logger::info("ReShade: Could not register add-on");
 			}

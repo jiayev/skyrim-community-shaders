@@ -11,6 +11,8 @@
     "xbyak",
     "catch2",
     "magic-enum",
-    "nlohmann-json"
+    "nlohmann-json",
+    "boost-stl-interfaces",
+    "rsm-binary-io"
   ]
 }
