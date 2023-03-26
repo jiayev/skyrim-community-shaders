@@ -8,6 +8,7 @@
 
 #include "Features/GrassLighting.h"
 #include "Features/DistantTreeLighting.h"
+#include "Features/GrassCollision.h"
 
 
 void SetupImGuiStyle()
@@ -236,6 +237,7 @@ void Menu::DrawSettings()
 	if (ImGui::BeginTabBar("Features", ImGuiTabBarFlags_None)) {
 		GrassLighting::GetSingleton()->DrawSettings();
 		DistantTreeLighting::GetSingleton()->DrawSettings();
+		GrassCollision::GetSingleton()->DrawSettings();
 	}
 
 	ImGui::End();

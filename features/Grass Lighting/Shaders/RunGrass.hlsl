@@ -60,6 +60,10 @@ cbuffer PerFrame : register(b3)
 
 #ifdef VSHADER
 
+#ifdef GRASS_COLLISION
+	#include "RunGrass\\GrassCollision.hlsli"
+#endif
+
 cbuffer cb7											: register(b7)
 {
 	float4 cb7[1];
@@ -113,6 +117,11 @@ VS_OUTPUT main(VS_INPUT input)
 
 	float4 msPosition = GetMSPosition(input, WindTimer, world3x3);
 
+#ifdef GRASS_COLLISION
+	float3 displacement = GetDisplacedPosition(msPosition.xyz, input.Color.w);
+	msPosition.xyz += displacement;
+#endif
+
 	float4 projSpacePosition = mul(WorldViewProj, msPosition);
 	vsout.HPosition = projSpacePosition;
 
@@ -134,6 +143,10 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.WorldPosition = mul(World, msPosition);
 
 	float4 previousMsPosition = GetMSPosition(input, PreviousWindTimer, world3x3);
+
+#ifdef GRASS_COLLISION
+	previousMsPosition.xyz += displacement;
+#endif
 
 	vsout.PreviousWorldPosition = mul(PreviousWorld, previousMsPosition);
 

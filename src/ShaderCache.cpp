@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 #include "State.h"
+#include "Features/GrassCollision.h"
 
 namespace SIE
 {
@@ -249,6 +250,12 @@ namespace SIE
 			}
 			if (descriptor & static_cast<uint32_t>(GrassShaderFlags::AlphaTest)) {
 				defines[0] = { "DO_ALPHA_TEST", nullptr };
+				++defines;
+			}
+
+			if (GrassCollision::GetSingleton()->enabled)
+			{
+				defines[0] = { "GRASS_COLLISION", nullptr };		
 				++defines;
 			}
 			defines[0] = { nullptr, nullptr };

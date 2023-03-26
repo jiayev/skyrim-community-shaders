@@ -7,6 +7,8 @@
 #include "Features/Clustered.h"
 #include "Features/GrassLighting.h"
 #include "Features/DistantTreeLighting.h"
+#include "Features/ImageBasedLighting.h"
+#include "Features/GrassCollision.h"
 
 void State::Draw()
 {
@@ -27,6 +29,8 @@ void State::Draw()
 
 				GrassLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
 				DistantTreeLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
+				//ImageBasedLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
+				GrassCollision::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
 			}
 		}
 	}
@@ -38,12 +42,16 @@ void State::Reset()
 {
 	Clustered::GetSingleton()->Reset();
 	GrassLighting::GetSingleton()->Reset();
+	//ImageBasedLighting::GetSingleton()->Reset();
+	GrassCollision::GetSingleton()->Reset();
 }
 
 void State::Setup()
 {
 	GrassLighting::GetSingleton()->SetupResources();
 	DistantTreeLighting::GetSingleton()->SetupResources();
+	//ImageBasedLighting::GetSingleton()->SetupResources();
+	GrassCollision::GetSingleton()->SetupResources();
 }
 
 void State::Load()
@@ -78,6 +86,7 @@ void State::Load()
 
 	GrassLighting::GetSingleton()->Load(settings);
 	DistantTreeLighting::GetSingleton()->Load(settings);
+	GrassCollision::GetSingleton()->Load(settings);
 }
 
 void State::Save()
@@ -103,6 +112,7 @@ void State::Save()
 
 	GrassLighting::GetSingleton()->Save(settings);
 	DistantTreeLighting::GetSingleton()->Save(settings);
+	GrassCollision::GetSingleton()->Save(settings);
 	o << settings.dump(1);
 }
 
@@ -115,6 +125,9 @@ bool State::ValidateCache(CSimpleIniA& a_ini)
 	if (!DistantTreeLighting::GetSingleton()->ValidateCache(a_ini)) {
 		valid = false;
 	}
+	if (!GrassCollision::GetSingleton()->ValidateCache(a_ini)) {
+		valid = false;
+	}
 	return valid;
 }
 
@@ -122,4 +135,5 @@ void State::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 {
 	GrassLighting::GetSingleton()->WriteDiskCacheInfo(a_ini);
 	DistantTreeLighting::GetSingleton()->WriteDiskCacheInfo(a_ini);
+	GrassCollision::GetSingleton()->WriteDiskCacheInfo(a_ini);
 }
