@@ -41,8 +41,6 @@ public:
 
 	Texture2D* cubemapIBL = nullptr;
 
-	PerPass lastPerPassData{};
-
 	void SetupResources();
 
 	void DrawSettings();
