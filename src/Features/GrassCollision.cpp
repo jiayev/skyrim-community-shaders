@@ -15,15 +15,18 @@ void GrassCollision::DrawSettings()
 	if (ImGui::BeginTabItem("Grass Collision")) {
 		if (ImGui::TreeNodeEx("Grass Collision", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Text("Allows player collision to modify grass position.");
+			
 			ImGui::Checkbox("Enable Grass Collision", (bool*)&settings.EnableGrassCollision);
 			ImGui::Text("Distance from collision centres to apply collision");
 			ImGui::SliderFloat("Radius Multiplier", &settings.RadiusMultiplier, 0.0f, 8.0f);
+			
 			ImGui::Text("Strength of each collision on grass position.");
 			ImGui::SliderFloat("Displacement Multiplier", &settings.DisplacementMultiplier, 0.0f, 16.0f);
+		
 			ImGui::TreePop();
 		}
-		ImGui::EndTabItem();
 
+		ImGui::EndTabItem();
 	}
 }
 
@@ -49,7 +52,7 @@ static bool GetShapeBound(RE::NiAVObject* a_node, RE::NiPoint3& centerPos, float
 		if (shape) {
 			float upExtent = shape->GetMaximumProjection(RE::hkVector4{ 0.0f, 0.0f, 1.0f, 0.0f }) * RE::bhkWorld::GetWorldScaleInverse();
 			float downExtent = shape->GetMaximumProjection(RE::hkVector4{ 0.0f, 0.0f, -1.0f, 0.0f }) * RE::bhkWorld::GetWorldScaleInverse();
-			auto z_extent = upExtent + downExtent;
+			auto z_extent = (upExtent + downExtent) / 2.0f;
 
 			float forwardExtent = shape->GetMaximumProjection(RE::hkVector4{ 0.0f, 1.0f, 0.0f, 0.0f }) * RE::bhkWorld::GetWorldScaleInverse();
 			float backwardExtent = shape->GetMaximumProjection(RE::hkVector4{ 0.0f, -1.0f, 0.0f, 0.0f }) * RE::bhkWorld::GetWorldScaleInverse();
@@ -86,7 +89,7 @@ static bool GetShapeBound(RE::bhkNiCollisionObject* Colliedobj, RE::NiPoint3& ce
 		if (shape) {
 			float upExtent = shape->GetMaximumProjection(RE::hkVector4{ 0.0f, 0.0f, 1.0f, 0.0f }) * RE::bhkWorld::GetWorldScaleInverse();
 			float downExtent = shape->GetMaximumProjection(RE::hkVector4{ 0.0f, 0.0f, -1.0f, 0.0f }) * RE::bhkWorld::GetWorldScaleInverse();
-			auto z_extent = upExtent + downExtent;
+			auto z_extent = (upExtent + downExtent) / 2.0f;
 
 			float forwardExtent = shape->GetMaximumProjection(RE::hkVector4{ 0.0f, 1.0f, 0.0f, 0.0f }) * RE::bhkWorld::GetWorldScaleInverse();
 			float backwardExtent = shape->GetMaximumProjection(RE::hkVector4{ 0.0f, -1.0f, 0.0f, 0.0f }) * RE::bhkWorld::GetWorldScaleInverse();
@@ -114,12 +117,13 @@ void GrassCollision::UpdateCollisions()
 	std::vector<CollisionSData> collisionsData{};
 
 	if (auto player = RE::PlayerCharacter::GetSingleton()) {
-		using namespace RE;
 		if (auto root = player->Get3D(false)) {
-			BSVisit::TraverseScenegraphCollision(root, [&](bhkNiCollisionObject* a_object) -> BSVisit::BSVisitControl {
+			auto position = player->GetPosition();
+			RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 				RE::NiPoint3 centerPos;
 				float radius;
 				if (GetShapeBound(a_object, centerPos, radius)) {
+					radius *= settings.RadiusMultiplier;
 					CollisionSData data{};
 					data.centre.x = centerPos.x - state->m_PosAdjust.x;
 					data.centre.y = centerPos.y - state->m_PosAdjust.y;
@@ -128,7 +132,7 @@ void GrassCollision::UpdateCollisions()
 					currentCollisionCount++;
 					collisionsData.push_back(data);
 				}
-				return BSVisit::BSVisitControl::kContinue;
+				return RE::BSVisit::BSVisitControl::kContinue;
 			});
 		}
 	}
@@ -174,10 +178,21 @@ void GrassCollision::UpdateCollisions()
 void GrassCollision::ModifyGrass(const RE::BSShader*, const uint32_t)
 {
 	if (updatePerFrame) {
-		UpdateCollisions();
+		if (settings.EnableGrassCollision) {
+			UpdateCollisions();
+		}
 
 		PerFrame perFrameData{};
 		ZeroMemory(&perFrameData, sizeof(perFrameData));
+
+		auto state = BSGraphics::RendererShadowState::QInstance();
+		auto shaderState = BSGraphics::ShaderState::QInstance();
+
+		auto bound = shaderState->kCachedPlayerBound;
+		perFrameData.boundCentre.x = bound.center.x - state->m_PosAdjust.x;
+		perFrameData.boundCentre.y = bound.center.y - state->m_PosAdjust.y;
+		perFrameData.boundCentre.z = bound.center.z - state->m_PosAdjust.z;
+		perFrameData.boundRadius = bound.radius * settings.RadiusMultiplier;
 
 		perFrameData.Settings = settings;
 

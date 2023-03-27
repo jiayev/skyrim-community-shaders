@@ -25,6 +25,8 @@ public:
 
 	struct alignas(16) PerFrame
 	{
+		DirectX::XMFLOAT3 boundCentre;
+		float boundRadius;
 		Settings Settings;
 		float pad0;
 	};
