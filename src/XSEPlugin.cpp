@@ -1,8 +1,8 @@
 #include "Hooks.h"
 
+#include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
-#include "Menu.h"
 #include <fmt/xchar.h>
 
 
@@ -18,10 +18,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID)
 	return TRUE;
 }
 
-//void DrawOverlayCallback(reshade::api::effect_runtime*)
-//{
-//	Menu::GetSingleton()->DrawOverlay();
-//}
+void DrawOverlayCallback(reshade::api::effect_runtime*)
+{
+	Menu::GetSingleton()->DrawOverlay();
+}
 
 void MessageHandler(SKSE::MessagingInterface::Message* message)
 {
@@ -44,48 +44,47 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			if (!incompatible) {
 				Hooks::Install();
 
-				//auto& shaderCache = SIE::ShaderCache::Instance();
+				auto& shaderCache = SIE::ShaderCache::Instance();
 
-				//shaderCache.SetEnabled(true);
-				//shaderCache.SetAsync(true);
-				//shaderCache.SetDiskCache(true);
+				shaderCache.SetEnabled(true);
+				shaderCache.SetAsync(true);
+				shaderCache.SetDiskCache(true);
 
-				//State::GetSingleton()->Load();
+				State::GetSingleton()->Load();
 
-				//shaderCache.ValidateDiskCache();
+				shaderCache.ValidateDiskCache();
 
 				if (reshade::register_addon(m_hModule)) {
 					logger::info("ReShade: Registered add-on");
-					//	reshade::register_event<reshade::addon_event::reshade_overlay>(DrawOverlayCallback);
+					reshade::register_event<reshade::addon_event::reshade_overlay>(DrawOverlayCallback);
 				} else {
 					logger::info("ReShade: Could not register add-on");
 				}
+				break;
 			}
-			break;
-		}
-	case SKSE::MessagingInterface::kDataLoaded:
-		{
-			RE::BSInputDeviceManager::GetSingleton()->AddEventSink(Menu::GetSingleton());
+		case SKSE::MessagingInterface::kDataLoaded:
+			{
+				RE::BSInputDeviceManager::GetSingleton()->AddEventSink(Menu::GetSingleton());
 
-			auto& shaderCache = SIE::ShaderCache::Instance();
+				auto& shaderCache = SIE::ShaderCache::Instance();
 
-			while (shaderCache.GetCompletedTasks() != shaderCache.GetTotalTasks()) {
-				std::this_thread::sleep_for(100ms);
+				while (shaderCache.GetCompletedTasks() != shaderCache.GetTotalTasks()) {
+					std::this_thread::sleep_for(100ms);
+				}
+
+				if (shaderCache.IsDiskCache()) {
+					shaderCache.WriteDiskCacheInfo();
+				}
+
+				break;
 			}
-
-			if (shaderCache.IsDiskCache()) {
-				shaderCache.WriteDiskCacheInfo();
-			}
-
-			break;
 		}
 	}
-}
 
-bool Load()
-{
-	auto messaging = SKSE::GetMessagingInterface();
-	messaging->RegisterListener("SKSE", MessageHandler);
+	bool Load()
+	{
+		auto messaging = SKSE::GetMessagingInterface();
+		messaging->RegisterListener("SKSE", MessageHandler);
 
-	return true;
-}
+		return true;
+	}

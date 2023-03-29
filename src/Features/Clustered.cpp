@@ -27,13 +27,17 @@ void Clustered::UpdateLights()
 {
 	std::uint32_t currentLightCount = 0;  // Max number of lights is 4294967295
 
-	auto accumulator = BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-	auto shadowSceneNode = accumulator->m_ActiveShadowSceneNode;
+	//auto accumulator = BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
+
+	auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
+	//auto shadowSceneNode = accumulator->m_ActiveShadowSceneNode;
 	auto state = BSGraphics::RendererShadowState::QInstance();
 
 	std::vector<LightSData> lights_data{};
 
-	for (auto& e : shadowSceneNode->GetRuntimeData().activePointLights) {
+	auto& runtimeData = shadowSceneNode->GetRuntimeData();
+
+	for (auto& e : runtimeData.activePointLights) {
 		if (auto bsLight = e.get()) {
 			if (auto niLight = bsLight->light.get()) {
 				// See ShadowSceneNode::GetLuminanceAtPoint_1412BC190
@@ -100,7 +104,7 @@ void Clustered::UpdateLights()
 
 	// See ShadowSceneNode::CalculateActiveShadowCasterLights_1412E2F60
 	// Whilst there is another shadow caster list, it includes ones that aren't being used due to the shadow caster limit.
-	for (auto& e : shadowSceneNode->GetRuntimeData().activeShadowLights) {
+	for (auto& e : runtimeData.activeShadowLights) {
 		if (auto bsShadowLight = (RE::BSShadowLight*)e.get()) {
 			if (auto& niLight = bsShadowLight->light) {
 				RE::NiPoint3 worldPos = niLight->world.translate;
