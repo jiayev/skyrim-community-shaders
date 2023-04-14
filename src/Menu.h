@@ -13,6 +13,9 @@ public:
 		return &menu;
 	}
 
+	void Load(json& o_json);
+	void Save(json& o_json);
+
 	RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event,
 		RE::BSTEventSource<RE::InputEvent*>* a_eventSource) override;
 
@@ -20,7 +23,10 @@ public:
 	void DrawOverlay();
 
 private:
-	Menu()
-	{
-	}
+
+	uint32_t toggleKey = VK_END;
+	bool settingToggleKey = false;
+
+	Menu() { }
+	const char* KeyIdToString(uint32_t key);
 };
