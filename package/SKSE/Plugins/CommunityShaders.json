@@ -1,4 +1,7 @@
 {
+ "Menu": {
+  "Toggle Key": 35
+ },
  "General": {
   "Enable Async": true,
   "Enable Disk Cache": true,
