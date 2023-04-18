@@ -245,8 +245,11 @@ void GrassCollision::Load(json& o_json)
 
 void GrassCollision::Save(json& o_json)
 {
-	json GrassCollisions;
-	o_json["Grass Collision"] = GrassCollisions;
+	json grassCollision;
+	grassCollision["EnableGrassCollision"] = (bool)settings.EnableGrassCollision;
+	grassCollision["RadiusMultiplier"] = settings.RadiusMultiplier;
+	grassCollision["DisplacementMultiplier"] = settings.DisplacementMultiplier;
+	o_json["Grass Collision"] = grassCollision;
 }
 
 void GrassCollision::SetupResources()
