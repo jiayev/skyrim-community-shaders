@@ -164,7 +164,7 @@ void Menu::DrawSettings()
 	static bool visible = false;
 
 	ImGui::SetNextWindowSize({ 1024, 1024 }, ImGuiCond_Once);
-	ImGui::Begin("Skyrim Community Shaders", &IsEnabled);
+	ImGui::Begin(std::format("Skyrim Community Shaders {}", Plugin::VERSION.string(".")).c_str(), &IsEnabled);
 
 	auto& shaderCache = SIE::ShaderCache::Instance();
 
@@ -210,7 +210,7 @@ void Menu::DrawSettings()
 
 	ImGui::Spacing();
 
-	if (ImGui::CollapsingHeader("Menu")) {
+	if (ImGui::CollapsingHeader("Menu", ImGuiTreeNodeFlags_DefaultOpen)) {
 		
 		// Check if we're waiting for input
 		if (settingToggleKey) {
