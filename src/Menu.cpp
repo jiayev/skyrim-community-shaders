@@ -8,7 +8,9 @@
 
 #include "Features/GrassLighting.h"
 #include "Features/DistantTreeLighting.h"
+#include "Features/GrassCollision.h"
 
+#define SETTING_MENU_TOGGLEKEY "Toggle Key"
 
 void SetupImGuiStyle()
 {
@@ -16,6 +18,21 @@ void SetupImGuiStyle()
 	style.Alpha = 0.9f;
 }
 bool IsEnabled = false;
+
+void Menu::Load(json& o_json)
+{
+	if (o_json[SETTING_MENU_TOGGLEKEY].is_number_unsigned()) {
+		toggleKey = o_json[SETTING_MENU_TOGGLEKEY];
+	}
+}
+
+void Menu::Save(json& o_json)
+{
+	json menu;
+	menu[SETTING_MENU_TOGGLEKEY] = toggleKey;
+
+	o_json["Menu"] = menu;
+}
 
 RE::BSEventNotifyControl Menu::ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>* a_eventSource)
 {
@@ -31,6 +48,7 @@ RE::BSEventNotifyControl Menu::ProcessEvent(RE::InputEvent* const* a_event, RE::
 
 			auto scan_code = button->GetIDCode();
 			uint32_t key = MapVirtualKeyEx(scan_code, MAPVK_VSC_TO_VK_EX, GetKeyboardLayout(0));
+
 			switch (scan_code) {
 			case DIK_LEFTARROW:
 				key = VK_LEFT;
@@ -116,7 +134,14 @@ RE::BSEventNotifyControl Menu::ProcessEvent(RE::InputEvent* const* a_event, RE::
 
 			switch (button->device.get()) {
 			case RE::INPUT_DEVICE::kKeyboard:
-				if (key == VK_END && !button->IsPressed()) {
+				if (key == toggleKey && !button->IsPressed()) {
+
+					// Avoid closing menu when setting the toggle key
+					if (settingToggleKey) {
+						settingToggleKey = false;
+						break;
+					}
+
 					IsEnabled = !IsEnabled;
 					if (const auto controlMap = RE::ControlMap::GetSingleton()) {
 						controlMap->ignoreKeyboardMouse = IsEnabled;
@@ -139,7 +164,7 @@ void Menu::DrawSettings()
 	static bool visible = false;
 
 	ImGui::SetNextWindowSize({ 1024, 1024 }, ImGuiCond_Once);
-	ImGui::Begin("Skyrim Community Shaders", &IsEnabled);
+	ImGui::Begin(std::format("Skyrim Community Shaders {}", Plugin::VERSION.string(".")).c_str(), &IsEnabled);
 
 	auto& shaderCache = SIE::ShaderCache::Instance();
 
@@ -184,6 +209,36 @@ void Menu::DrawSettings()
 	}
 
 	ImGui::Spacing();
+
+	if (ImGui::CollapsingHeader("Menu", ImGuiTreeNodeFlags_DefaultOpen)) {
+		
+		// Check if we're waiting for input
+		if (settingToggleKey) {
+			// Loop over all the keys and check if any of them are pressed
+			for (int i = 0; i < IM_ARRAYSIZE(ImGui::GetIO().KeysDown); i++) {
+				if (ImGui::IsKeyPressed(i)) {
+					// If a key is pressed, set the selected key code and break out of the loop
+					toggleKey = i;
+					break;
+				}
+			}
+		}
+		if (settingToggleKey) 
+		{
+			ImGui::Text("Press any key to set as toggle key...");
+		} 
+		else 
+		{			
+			ImGui::Text("Toggle Key:");
+			ImGui::SameLine();
+			ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", KeyIdToString(toggleKey));
+
+			ImGui::SameLine();
+			if (ImGui::Button("Change")) {
+				settingToggleKey = true;
+			}
+		}
+	}
 
 	if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen)) {
 		bool useCustomShaders = shaderCache.IsEnabled();
@@ -236,6 +291,7 @@ void Menu::DrawSettings()
 	if (ImGui::BeginTabBar("Features", ImGuiTabBarFlags_None)) {
 		GrassLighting::GetSingleton()->DrawSettings();
 		DistantTreeLighting::GetSingleton()->DrawSettings();
+		GrassCollision::GetSingleton()->DrawSettings();
 	}
 
 	ImGui::End();
@@ -271,4 +327,31 @@ void Menu::DrawOverlay()
 	    ImGui::GetIO().MouseDrawCursor = true;
 		DrawSettings();
 	}
+}
+
+const char* Menu::KeyIdToString(uint32_t key)
+{
+	if (key >= 256)
+		return std::string().c_str();
+
+	static const char* keyboard_keys_international[256] = {
+		"", "Left Mouse", "Right Mouse", "Cancel", "Middle Mouse", "X1 Mouse", "X2 Mouse", "", "Backspace", "Tab", "", "", "Clear", "Enter", "", "",
+		"Shift", "Control", "Alt", "Pause", "Caps Lock", "", "", "", "", "", "", "Escape", "", "", "", "",
+		"Space", "Page Up", "Page Down", "End", "Home", "Left Arrow", "Up Arrow", "Right Arrow", "Down Arrow", "Select", "", "", "Print Screen", "Insert", "Delete", "Help",
+		"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "", "", "", "", "", "",
+		"", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O",
+		"P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "Left Windows", "Right Windows", "Apps", "", "Sleep",
+		"Numpad 0", "Numpad 1", "Numpad 2", "Numpad 3", "Numpad 4", "Numpad 5", "Numpad 6", "Numpad 7", "Numpad 8", "Numpad 9", "Numpad *", "Numpad +", "", "Numpad -", "Numpad Decimal", "Numpad /",
+		"F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "F13", "F14", "F15", "F16",
+		"F17", "F18", "F19", "F20", "F21", "F22", "F23", "F24", "", "", "", "", "", "", "", "",
+		"Num Lock", "Scroll Lock", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+		"Left Shift", "Right Shift", "Left Control", "Right Control", "Left Menu", "Right Menu", "Browser Back", "Browser Forward", "Browser Refresh", "Browser Stop", "Browser Search", "Browser Favorites", "Browser Home", "Volume Mute", "Volume Down", "Volume Up",
+		"Next Track", "Previous Track", "Media Stop", "Media Play/Pause", "Mail", "Media Select", "Launch App 1", "Launch App 2", "", "", "OEM ;", "OEM +", "OEM ,", "OEM -", "OEM .", "OEM /",
+		"OEM ~", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+		"", "", "", "", "", "", "", "", "", "", "", "OEM [", "OEM \\", "OEM ]", "OEM '", "OEM 8",
+		"", "", "OEM <", "", "", "", "", "", "", "", "", "", "", "", "", "",
+		"", "", "", "", "", "", "Attn", "CrSel", "ExSel", "Erase EOF", "Play", "Zoom", "", "PA1", "OEM Clear", ""
+	};
+
+	return keyboard_keys_international[key];
 }

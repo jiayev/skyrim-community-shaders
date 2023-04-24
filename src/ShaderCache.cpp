@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 #include "State.h"
+#include "Features/GrassCollision.h"
 
 namespace SIE
 {
@@ -249,6 +250,12 @@ namespace SIE
 			}
 			if (descriptor & static_cast<uint32_t>(GrassShaderFlags::AlphaTest)) {
 				defines[0] = { "DO_ALPHA_TEST", nullptr };
+				++defines;
+			}
+
+			if (GrassCollision::GetSingleton()->enabled)
+			{
+				defines[0] = { "GRASS_COLLISION", nullptr };		
 				++defines;
 			}
 			defines[0] = { nullptr, nullptr };
@@ -1334,7 +1341,7 @@ namespace SIE
 		bool valid = true;
 
 		if (auto version = ini.GetValue("Cache", "Version")) {
-			if (strcmp(Plugin::VERSION.string().c_str(), version) != 0 || !(State::GetSingleton()->ValidateCache(ini))) {
+			if (strcmp(SHADER_CACHE_VERSION.string().c_str(), version) != 0 || !(State::GetSingleton()->ValidateCache(ini))) {
 				logger::info("Disk cache outdated or invalid");
 				valid = false;
 			}
@@ -1354,7 +1361,7 @@ namespace SIE
 	{
 		CSimpleIniA ini;
 		ini.SetUnicode();
-		ini.SetValue("Cache", "Version", Plugin::VERSION.string().c_str());
+		ini.SetValue("Cache", "Version", SHADER_CACHE_VERSION.string().c_str());
 		State::GetSingleton()->WriteDiskCacheInfo(ini);
 		ini.SaveFile(L"Data\\ShaderCache\\Info.ini");
 		logger::info("Saved disk cache info");

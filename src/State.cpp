@@ -3,10 +3,13 @@
 #include <magic_enum.hpp>
 
 #include "ShaderCache.h"
+#include "Menu.h"
 
 #include "Features/Clustered.h"
 #include "Features/GrassLighting.h"
 #include "Features/DistantTreeLighting.h"
+#include "Features/ImageBasedLighting.h"
+#include "Features/GrassCollision.h"
 
 void State::Draw()
 {
@@ -27,6 +30,8 @@ void State::Draw()
 
 				GrassLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
 				DistantTreeLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
+				//ImageBasedLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
+				GrassCollision::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
 			}
 		}
 	}
@@ -38,20 +43,44 @@ void State::Reset()
 {
 	Clustered::GetSingleton()->Reset();
 	GrassLighting::GetSingleton()->Reset();
+	//ImageBasedLighting::GetSingleton()->Reset();
+	GrassCollision::GetSingleton()->Reset();
 }
 
 void State::Setup()
 {
 	GrassLighting::GetSingleton()->SetupResources();
 	DistantTreeLighting::GetSingleton()->SetupResources();
+	//ImageBasedLighting::GetSingleton()->SetupResources();
+	GrassCollision::GetSingleton()->SetupResources();
 }
 
 void State::Load()
 {
 	auto& shaderCache = SIE::ShaderCache::Instance();
-	std::ifstream i(L"Data\\SKSE\\Plugins\\CommunityShaders.json");
+
+	std::string configPath = "Data\\SKSE\\Plugins\\CommunityShaders.json";
+	
+	std::ifstream i(configPath);
+	if (!i.is_open()) {
+		logger::error("Error opening config file ({})\n", configPath);
+		return;
+	}
+
 	json settings;
-	i >> settings;
+	try 
+	{
+		i >> settings;
+	} 
+	catch (const nlohmann::json::parse_error& e) 
+	{
+		logger::error("Error parsing json config file ({}) : {}\n", configPath, e.what());
+		return;
+	}
+
+	if (settings["Menu"].is_object()) {
+		Menu::GetSingleton()->Load(settings["Menu"]);
+	}
 
 	if (settings["General"].is_object()) {
 		json& general = settings["General"];
@@ -60,10 +89,10 @@ void State::Load()
 			shaderCache.SetEnabled(general["Enable Shaders"]);
 
 		if (general["Enable Disk Cache"].is_boolean())
-			shaderCache.SetEnabled(general["Enable Disk Cache"]);
+			shaderCache.SetDiskCache(general["Enable Disk Cache"]);
 
 		if (general["Enable Async"].is_boolean())
-			shaderCache.SetEnabled(general["Enable Async"]);
+			shaderCache.SetAsync(general["Enable Async"]);
 	}
 
 	if (settings["Replace Original Shaders"].is_object()) {
@@ -78,6 +107,7 @@ void State::Load()
 
 	GrassLighting::GetSingleton()->Load(settings);
 	DistantTreeLighting::GetSingleton()->Load(settings);
+	GrassCollision::GetSingleton()->Load(settings);
 }
 
 void State::Save()
@@ -85,6 +115,8 @@ void State::Save()
 	auto& shaderCache = SIE::ShaderCache::Instance();
 	std::ofstream o(L"Data\\SKSE\\Plugins\\CommunityShaders.json");
 	json settings;
+
+	Menu::GetSingleton()->Save(settings);
 
 	json general;
 	general["Enable Shaders"] = shaderCache.IsEnabled();
@@ -103,6 +135,7 @@ void State::Save()
 
 	GrassLighting::GetSingleton()->Save(settings);
 	DistantTreeLighting::GetSingleton()->Save(settings);
+	GrassCollision::GetSingleton()->Save(settings);
 	o << settings.dump(1);
 }
 
@@ -115,6 +148,9 @@ bool State::ValidateCache(CSimpleIniA& a_ini)
 	if (!DistantTreeLighting::GetSingleton()->ValidateCache(a_ini)) {
 		valid = false;
 	}
+	if (!GrassCollision::GetSingleton()->ValidateCache(a_ini)) {
+		valid = false;
+	}
 	return valid;
 }
 
@@ -122,4 +158,5 @@ void State::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 {
 	GrassLighting::GetSingleton()->WriteDiskCacheInfo(a_ini);
 	DistantTreeLighting::GetSingleton()->WriteDiskCacheInfo(a_ini);
+	GrassCollision::GetSingleton()->WriteDiskCacheInfo(a_ini);
 }

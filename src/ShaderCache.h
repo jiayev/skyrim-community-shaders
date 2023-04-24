@@ -6,6 +6,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
+static constexpr REL::Version SHADER_CACHE_VERSION = { 0, 0, 0, 3 };
+
 namespace SIE
 {
 	enum class ShaderClass
