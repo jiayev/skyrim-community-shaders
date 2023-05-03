@@ -17,11 +17,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID)
 	return TRUE;
 }
 
-void DrawOverlayCallback(reshade::api::effect_runtime*)
-{
-	Menu::GetSingleton()->DrawOverlay();
-}
-
 void MessageHandler(SKSE::MessagingInterface::Message* message)
 {
 	switch (message->type) {
@@ -38,13 +33,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			State::GetSingleton()->Load();
 
 			shaderCache.ValidateDiskCache();
-
-			if (reshade::register_addon(m_hModule)) {
-				logger::info("ReShade: Registered add-on");
-				reshade::register_event<reshade::addon_event::reshade_overlay>(DrawOverlayCallback);
-			} else {
-				logger::info("ReShade: Could not register add-on");
-			}
 
 			break;
 		}
