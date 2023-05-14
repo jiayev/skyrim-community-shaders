@@ -15,7 +15,7 @@
 void SetupImGuiStyle()
 {
 	ImGuiStyle& style = ImGui::GetStyle();
-	style.Alpha = 0.9f;
+	style.Alpha = 0.5f;
 }
 bool IsEnabled = false;
 
@@ -207,11 +207,6 @@ void Menu::DrawSettings()
 	SetupImGuiStyle();
 	static bool visible = false;
 
-	// Start the Dear ImGui frame
-	ImGui_ImplDX11_NewFrame();
-	ImGui_ImplWin32_NewFrame();
-	ImGui::NewFrame();
-
 	ImGui::SetNextWindowSize({ 1024, 1024 }, ImGuiCond_Once);
 	ImGui::Begin(std::format("Skyrim Community Shaders {}", Plugin::VERSION.string(".")).c_str(), &IsEnabled);
 
@@ -330,6 +325,7 @@ void Menu::DrawSettings()
 		GrassLighting::GetSingleton()->DrawSettings();
 		DistantTreeLighting::GetSingleton()->DrawSettings();
 		GrassCollision::GetSingleton()->DrawSettings();
+		ImGui::EndTabBar();
 	}
 
 	ImGui::End();
@@ -342,6 +338,12 @@ void Menu::DrawSettings()
 
 void Menu::DrawOverlay()
 {
+
+	// Start the Dear ImGui frame
+	ImGui_ImplDX11_NewFrame();
+	ImGui_ImplWin32_NewFrame();
+	ImGui::NewFrame();
+
 	uint64_t totalShaders = 0;
 	uint64_t compiledShaders = 0;
 
@@ -352,10 +354,6 @@ void Menu::DrawOverlay()
 
 	 if (compiledShaders != totalShaders) 
 	 {
-		ImGui_ImplDX11_NewFrame();
-		ImGui_ImplWin32_NewFrame();
-		ImGui::NewFrame();
-
 		ImGui::SetNextWindowBgAlpha(1);
 		ImGui::SetNextWindowPos(ImVec2(10, 10));
 		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
@@ -366,22 +364,24 @@ void Menu::DrawOverlay()
 		ImGui::Text("Compiling Shaders: %d / %d", compiledShaders, totalShaders);
 
 		ImGui::End();
-
-		ImGui::Render();
-		ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 	}
 
 	if (IsEnabled)
 	{
 	    ImGui::GetIO().MouseDrawCursor = true;
 		DrawSettings();
+	} else {
+		ImGui::GetIO().MouseDrawCursor = false;
 	}
+
+	ImGui::Render();
+	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 }
 
 const char* Menu::KeyIdToString(uint32_t key)
 {
 	if (key >= 256)
-		return std::string().c_str();
+		return "";
 
 	static const char* keyboard_keys_international[256] = {
 		"", "Left Mouse", "Right Mouse", "Cancel", "Middle Mouse", "X1 Mouse", "X2 Mouse", "", "Backspace", "Tab", "", "", "Clear", "Enter", "", "",
