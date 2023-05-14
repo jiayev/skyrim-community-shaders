@@ -12,6 +12,8 @@ include(XSEPlugin)
 find_package(magic_enum CONFIG REQUIRED)
 find_package(xbyak CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
+
 
 target_link_libraries(
 	${PROJECT_NAME} 
@@ -22,4 +24,5 @@ target_link_libraries(
 		magic_enum::magic_enum
 		xbyak::xbyak
 		nlohmann_json::nlohmann_json
+		imgui::imgui
 )

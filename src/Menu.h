@@ -1,12 +1,14 @@
 #pragma once
 
-#define IMGUI_DISABLE_INCLUDE_IMCONFIG_H
 #include "imgui.h"
-#include "reshade/reshade.hpp"
+#include "imgui_impl_dx11.h"
+#include "imgui_impl_win32.h"
 
 class Menu : public RE::BSTEventSink<RE::InputEvent*>
 {
 public:
+	~Menu();
+
 	static Menu* GetSingleton()
 	{
 		static Menu menu;
@@ -19,6 +21,8 @@ public:
 	RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event,
 		RE::BSTEventSource<RE::InputEvent*>* a_eventSource) override;
 
+
+	void Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceContext* context);
 	void DrawSettings();
 	void DrawOverlay();
 
@@ -29,4 +33,5 @@ private:
 
 	Menu() { }
 	const char* KeyIdToString(uint32_t key);
+	const ImGuiKey VirtualKeyToImGuiKey(WPARAM vkKey);
 };

@@ -1,5 +1,5 @@
 {
-"name": "commonlibsse-plugin",
+  "name": "commonlibsse-plugin",
   "version-string": "1.0.0",
   "description": "",
   "license": "MIT",
@@ -11,6 +11,12 @@
     "xbyak",
     "catch2",
     "magic-enum",
-    "nlohmann-json"
-  ]
+    "nlohmann-json",
+    {
+      "name": "imgui",
+      "features": [ "dx11-binding", "win32-binding" ],
+      "version>=": "1.88"
+    }
+  ],
+  "builtin-baseline": "36fb23307e10cc6ffcec566c46c4bb3f567c82c6"
 }

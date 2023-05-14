@@ -4,6 +4,7 @@
 
 #include "ShaderCache.h"
 #include "State.h"
+#include "Menu.h"
 
 #include "Features/Clustered.h"
 #include "ShaderTools/BSShaderHooks.h"
@@ -45,6 +46,7 @@ decltype(&ID3D11DeviceContext::DrawIndexedInstanced) ptrDrawIndexedInstanced;
 HRESULT WINAPI hk_IDXGISwapChain_Present(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 {
 	State::GetSingleton()->Reset();
+	Menu::GetSingleton()->DrawOverlay();
 	return (This->*ptrPresent)(SyncInterval, Flags);
 }
 
@@ -80,6 +82,7 @@ namespace Hooks
 
 			auto context = manager->GetRuntimeData().context;
 			auto swapchain = manager->GetRuntimeData().swapChain;
+			auto device = manager->GetRuntimeData().forwarder;
 
 			logger::info("Detouring virtual function tables");
 
@@ -88,6 +91,7 @@ namespace Hooks
 			*(uintptr_t*)&ptrDrawIndexedInstanced = Detours::X64::DetourClassVTable(*(uintptr_t*)context, &hk_ID3D11DeviceContext_DrawIndexedInstanced, 20);
 
 			State::GetSingleton()->Setup();
+			Menu::GetSingleton()->Init(swapchain, device, context);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
