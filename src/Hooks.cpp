@@ -2,10 +2,10 @@
 
 #include <detours/Detours.h>
 
+#include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
 
-#include "Features/Clustered.h"
 #include "ShaderTools/BSShaderHooks.h"
 
 //std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
@@ -111,30 +111,23 @@ bool hk_BSShader_BeginTechnique(RE::BSShader* shader, int vertexDescriptor, int 
 	return (ptr_BSShader_BeginTechnique)(shader, vertexDescriptor, pixelDescriptor, skipPIxelShader);
 }
 
-decltype(&IDXGISwapChain::Present) ptrPresent;
-decltype(&ID3D11DeviceContext::DrawIndexed) ptrDrawIndexed;
-decltype(&ID3D11DeviceContext::DrawIndexedInstanced) ptrDrawIndexedInstanced;
+decltype(&IDXGISwapChain::Present) ptr_IDXGISwapChain_Present;
 
 HRESULT WINAPI hk_IDXGISwapChain_Present(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 {
 	State::GetSingleton()->Reset();
-	return (This->*ptrPresent)(SyncInterval, Flags);
+	Menu::GetSingleton()->DrawOverlay();
+	return (This->*ptr_IDXGISwapChain_Present)(SyncInterval, Flags);
 }
 
-void hk_ID3D11DeviceContext_DrawIndexed(ID3D11DeviceContext* This, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
-{
-	State::GetSingleton()->Draw();
-	(This->*ptrDrawIndexed)(IndexCount, StartIndexLocation, BaseVertexLocation);
-}
+void hk_BSGraphics_SetDirtyStates(bool isCompute);
 
-void hk_ID3D11DeviceContext_DrawIndexedInstanced(ID3D11DeviceContext* This, UINT IndexCountPerInstance,
-	UINT InstanceCount,
-	UINT StartIndexLocation,
-	INT BaseVertexLocation,
-	UINT StartInstanceLocation)
+decltype(&hk_BSGraphics_SetDirtyStates) ptr_BSGraphics_SetDirtyStates;
+
+void hk_BSGraphics_SetDirtyStates(bool isCompute)
 {
+	(ptr_BSGraphics_SetDirtyStates)(isCompute);
 	State::GetSingleton()->Draw();
-	(This->*ptrDrawIndexedInstanced)(IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation);
 }
 
 //decltype(&ID3D11Device::CreateVertexShader) ptrCreateVertexShader;
@@ -160,7 +153,6 @@ void hk_ID3D11DeviceContext_DrawIndexedInstanced(ID3D11DeviceContext* This, UINT
 //	return hr;
 //}
 
-
 namespace Hooks
 {
 	struct BSGraphics_Renderer_Init_InitD3D
@@ -177,18 +169,17 @@ namespace Hooks
 
 			auto context = manager->GetRuntimeData().context;
 			auto swapchain = manager->GetRuntimeData().swapChain;
-			//auto device = manager->GetRuntimeData().forwarder;
+			auto device = manager->GetRuntimeData().forwarder;
 
 			logger::info("Detouring virtual function tables");
 
-			*(uintptr_t*)&ptrPresent = Detours::X64::DetourClassVTable(*(uintptr_t*)swapchain, &hk_IDXGISwapChain_Present, 8);
-			*(uintptr_t*)&ptrDrawIndexed = Detours::X64::DetourClassVTable(*(uintptr_t*)context, &hk_ID3D11DeviceContext_DrawIndexed, 12);
-			*(uintptr_t*)&ptrDrawIndexedInstanced = Detours::X64::DetourClassVTable(*(uintptr_t*)context, &hk_ID3D11DeviceContext_DrawIndexedInstanced, 20);
+			*(uintptr_t*)&ptr_IDXGISwapChain_Present = Detours::X64::DetourClassVTable(*(uintptr_t*)swapchain, &hk_IDXGISwapChain_Present, 8);
 
 			//*(uintptr_t*)&ptrCreateVertexShader = Detours::X64::DetourClassVTable(*(uintptr_t*)device, &hk_CreateVertexShader, 12);
 			//*(uintptr_t*)&ptrCreatePixelShader = Detours::X64::DetourClassVTable(*(uintptr_t*)device, &hk_CreatePixelShader, 15);
-		
+
 			State::GetSingleton()->Setup();
+			Menu::GetSingleton()->Init(swapchain, device, context);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -199,6 +190,8 @@ namespace Hooks
 		*(uintptr_t*)&ptr_BSShader_LoadShaders = Detours::X64::DetourFunction(REL::RelocationID(101339, 108326).address(), (uintptr_t)&hk_BSShader_LoadShaders);
 		logger::info("Hooking BSShader::BeginTechnique");
 		*(uintptr_t*)&ptr_BSShader_BeginTechnique = Detours::X64::DetourFunction(REL::RelocationID(101341, 108328).address(), (uintptr_t)&hk_BSShader_BeginTechnique);
+		logger::info("Hooking BSGraphics::SetDirtyStates");
+		*(uintptr_t*)&ptr_BSGraphics_SetDirtyStates = Detours::X64::DetourFunction(REL::RelocationID(75580, 77386).address(), (uintptr_t)&hk_BSGraphics_SetDirtyStates);
 		logger::info("Hooking BSGraphics::Renderer::InitD3D");
 		stl::write_thunk_call<BSGraphics_Renderer_Init_InitD3D>(REL::RelocationID(75595, 77226).address() + REL::Relocate(0x50, 0x2BC));
 	}

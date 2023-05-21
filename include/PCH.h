@@ -170,9 +170,7 @@ namespace DX
 
 #include <CLIBUtil/simpleINI.hpp>
 
-#define IMGUI_DISABLE_INCLUDE_IMCONFIG_H
 #include "imgui.h"
-#include "reshade/reshade.hpp"
 
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
