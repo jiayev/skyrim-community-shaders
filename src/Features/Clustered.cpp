@@ -151,7 +151,7 @@ void Clustered::UpdateLights()
 
 	if (!lights || lightCountChanged) {
 		lightCount = currentLightCount;
-
+		logger::debug("Found {} lights", lightCount);
 		D3D11_BUFFER_DESC sbDesc{};
 		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
 		sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;

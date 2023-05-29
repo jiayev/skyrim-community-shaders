@@ -1023,7 +1023,7 @@ namespace SIE
 			defines[1] = { nullptr, nullptr };
 			GetShaderDefines(type, descriptor, &defines[1]);
 
-			//logger::info("{}, {}", descriptor, MergeDefinesString(defines));
+			logger::debug("{}, {}", descriptor, MergeDefinesString(defines));
 
 			auto diskPath = GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
 
@@ -1041,7 +1041,7 @@ namespace SIE
 					std::transform(diskPath.begin(), diskPath.end(), std::back_inserter(str), [](wchar_t c) {
 						return (char)c;
 					});
-					//logger::debug("Loaded shader from {}", str);
+					logger::debug("Loaded shader from {}", str);
 					return shaderBlob;
 				}
 			}
@@ -1065,8 +1065,8 @@ namespace SIE
 
 				return nullptr;
 			}
-			//logger::debug("Compiled {} shader {}::{}", magic_enum::enum_name(shaderClass),
-			//	magic_enum::enum_name(type), descriptor);
+			logger::debug("Compiled {} shader {}::{}", magic_enum::enum_name(shaderClass),
+				magic_enum::enum_name(type), descriptor);
 
 			if (useDiskCache) {
 				auto directoryPath = std::format("Data/ShaderCache/{}", shader.fxpFilename);
@@ -1092,7 +1092,7 @@ namespace SIE
 					std::transform(diskPath.begin(), diskPath.end(), std::back_inserter(str), [](wchar_t c) {
 						return (char)c;
 					});
-					//logger::debug("Saved shader to {}", str);
+					logger::debug("Saved shader to {}", str);
 				}
 			}
 

@@ -165,6 +165,7 @@ RE::BSEventNotifyControl Menu::ProcessEvent(RE::InputEvent* const* a_event, RE::
 				}
 				break;
 			case RE::INPUT_DEVICE::kMouse:
+				logger::trace("Detect mouse scan code {} value {} pressed: {}", scan_code, button->Value(), button->IsPressed());
 				if (scan_code > 7)  // middle scroll
 					io.AddMouseWheelEvent(0, button->Value() * (scan_code == 8 ? 1 : -1));
 				else {
