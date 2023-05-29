@@ -82,6 +82,12 @@ void State::Load()
 		Menu::GetSingleton()->Load(settings["Menu"]);
 	}
 
+	if (settings["Advanced"].is_object()) {
+		json& advanced = settings["Advanced"];
+		if (advanced["Dump Shaders"].is_boolean())
+			shaderCache.SetDump(advanced["Dump Shaders"]);
+	}
+
 	if (settings["General"].is_object()) {
 		json& general = settings["General"];
 
@@ -117,6 +123,10 @@ void State::Save()
 	json settings;
 
 	Menu::GetSingleton()->Save(settings);
+
+	json advanced;
+	advanced["Dump Shaders"] = shaderCache.IsDump();
+	settings["Advanced"] = advanced;
 
 	json general;
 	general["Enable Shaders"] = shaderCache.IsEnabled();

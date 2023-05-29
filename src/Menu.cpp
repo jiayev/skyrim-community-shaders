@@ -273,6 +273,19 @@ void Menu::DrawSettings()
 		}
 	}
 
+	if (ImGui::CollapsingHeader("Advanced", ImGuiTreeNodeFlags_DefaultOpen)) {
+		bool useDump = shaderCache.IsDump();
+		if (ImGui::Checkbox("Dump Shaders", &useDump)) {
+			shaderCache.SetDump(useDump);
+		}
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Dump shaders at startup. This should be used only when reversing shaders. Normal users don't need this.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
+	}
 	if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen)) {
 		bool useCustomShaders = shaderCache.IsEnabled();
 		if (ImGui::Checkbox("Enable Shaders", &useCustomShaders)) {
