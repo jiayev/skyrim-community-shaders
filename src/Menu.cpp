@@ -285,6 +285,28 @@ void Menu::DrawSettings()
 			ImGui::PopTextWrapPos();
 			ImGui::EndTooltip();
 		}
+		spdlog::level::level_enum logLevel = State::GetSingleton()->GetLogLevel();
+		const char* items[] = {
+			"trace",
+			"debug",
+			"info",
+			"warn",
+			"err",
+			"critical",
+			"off"
+		};
+		static int item_current = static_cast<int>(logLevel);
+		if (ImGui::Combo("Log Level", &item_current, items, IM_ARRAYSIZE(items))) {
+			ImGui::SameLine();
+			State::GetSingleton()->SetLogLevel(static_cast<spdlog::level::level_enum>(item_current));
+		}
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Log level. Trace is most verbose. Default is info.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 	}
 	if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen)) {
 		bool useCustomShaders = shaderCache.IsEnabled();
