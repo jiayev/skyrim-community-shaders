@@ -1312,6 +1312,16 @@ namespace SIE
 		isAsync = value;
 	}
 
+	bool ShaderCache::IsDump() const
+	{
+		return isDump;
+	}
+
+	void ShaderCache::SetDump(bool value)
+	{
+		isDump = value;
+	}
+
 	bool ShaderCache::IsDiskCache() const
 	{
 		return isDiskCache;

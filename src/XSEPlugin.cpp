@@ -34,6 +34,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				shaderCache.SetEnabled(true);
 				shaderCache.SetAsync(true);
 				shaderCache.SetDiskCache(true);
+				shaderCache.SetDump(false);
 
 				State::GetSingleton()->Load();
 
