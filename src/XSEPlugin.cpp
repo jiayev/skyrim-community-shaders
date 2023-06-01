@@ -10,7 +10,7 @@ std::list<std::string> errors;
 
 bool Load();
 
-void InitializeLog(spdlog::level::level_enum a_level = spdlog::level::info)
+void InitializeLog([[maybe_unused]] spdlog::level::level_enum a_level = spdlog::level::info)
 {
 #ifndef NDEBUG
 	auto sink = std::make_shared<spdlog::sinks::msvc_sink_mt>();
