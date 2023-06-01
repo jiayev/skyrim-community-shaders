@@ -8,7 +8,6 @@
 #include "Features/Clustered.h"
 #include "Features/GrassLighting.h"
 #include "Features/DistantTreeLighting.h"
-#include "Features/ImageBasedLighting.h"
 #include "Features/GrassCollision.h"
 
 void State::Draw()
@@ -30,7 +29,6 @@ void State::Draw()
 
 				GrassLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
 				DistantTreeLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
-				//ImageBasedLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
 				GrassCollision::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
 			}
 		}
@@ -43,7 +41,6 @@ void State::Reset()
 {
 	Clustered::GetSingleton()->Reset();
 	GrassLighting::GetSingleton()->Reset();
-	//ImageBasedLighting::GetSingleton()->Reset();
 	GrassCollision::GetSingleton()->Reset();
 }
 
@@ -51,7 +48,6 @@ void State::Setup()
 {
 	GrassLighting::GetSingleton()->SetupResources();
 	DistantTreeLighting::GetSingleton()->SetupResources();
-	//ImageBasedLighting::GetSingleton()->SetupResources();
 	GrassCollision::GetSingleton()->SetupResources();
 }
 
