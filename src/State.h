@@ -19,6 +19,7 @@ public:
 	RE::BSShader* currentShader = nullptr;
 	uint32_t currentVertexDescriptor = 0;
 	uint32_t currentPixelDescriptor = 0;
+	spdlog::level::level_enum logLevel = spdlog::level::info;
 
 	void Draw();
 	void Reset();
@@ -29,5 +30,9 @@ public:
 
 	bool ValidateCache(CSimpleIniA& a_ini);
 	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
+
+	void SetLogLevel(spdlog::level::level_enum a_level = spdlog::level::info);
+	spdlog::level::level_enum GetLogLevel();
+
 };
 

@@ -82,6 +82,15 @@ void State::Load()
 		Menu::GetSingleton()->Load(settings["Menu"]);
 	}
 
+	if (settings["Advanced"].is_object()) {
+		json& advanced = settings["Advanced"];
+		if (advanced["Dump Shaders"].is_boolean())
+			shaderCache.SetDump(advanced["Dump Shaders"]);
+		if (advanced["Log Level"].is_number_integer()) {
+			logLevel = static_cast<spdlog::level::level_enum>(max(spdlog::level::trace, min(spdlog::level::off, (int)advanced["Log Level"])));
+		}
+	}
+
 	if (settings["General"].is_object()) {
 		json& general = settings["General"];
 
@@ -117,6 +126,11 @@ void State::Save()
 	json settings;
 
 	Menu::GetSingleton()->Save(settings);
+
+	json advanced;
+	advanced["Dump Shaders"] = shaderCache.IsDump();
+	advanced["Log Level"] = logLevel;
+	settings["Advanced"] = advanced;
 
 	json general;
 	general["Enable Shaders"] = shaderCache.IsEnabled();
@@ -159,4 +173,17 @@ void State::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 	GrassLighting::GetSingleton()->WriteDiskCacheInfo(a_ini);
 	DistantTreeLighting::GetSingleton()->WriteDiskCacheInfo(a_ini);
 	GrassCollision::GetSingleton()->WriteDiskCacheInfo(a_ini);
+}
+
+void State::SetLogLevel(spdlog::level::level_enum a_level)
+{
+	logLevel = a_level;
+	spdlog::set_level(logLevel);
+	spdlog::flush_on(logLevel);
+	logger::info("Log Level set to {} ({})", magic_enum::enum_name(logLevel), static_cast<int>(logLevel));
+}
+
+spdlog::level::level_enum State::GetLogLevel()
+{
+	return logLevel;
 }

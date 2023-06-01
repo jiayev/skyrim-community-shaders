@@ -92,6 +92,8 @@ namespace SIE
 		void SetEnabled(bool value);
 		bool IsAsync() const;
 		void SetAsync(bool value);
+		bool IsDump() const;
+		void SetDump(bool value);
 
 		bool IsDiskCache() const;
 		void SetDiskCache(bool value);
@@ -129,6 +131,7 @@ namespace SIE
 		bool isEnabled = false;
 		bool isDiskCache = false;
 		bool isAsync = true;
+		bool isDump = false;
 
 		std::vector<std::jthread> compilationThreads;
 		std::mutex vertexShadersMutex;

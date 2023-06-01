@@ -165,6 +165,7 @@ RE::BSEventNotifyControl Menu::ProcessEvent(RE::InputEvent* const* a_event, RE::
 				}
 				break;
 			case RE::INPUT_DEVICE::kMouse:
+				logger::trace("Detect mouse scan code {} value {} pressed: {}", scan_code, button->Value(), button->IsPressed());
 				if (scan_code > 7)  // middle scroll
 					io.AddMouseWheelEvent(0, button->Value() * (scan_code == 8 ? 1 : -1));
 				else {
@@ -273,6 +274,41 @@ void Menu::DrawSettings()
 		}
 	}
 
+	if (ImGui::CollapsingHeader("Advanced", ImGuiTreeNodeFlags_DefaultOpen)) {
+		bool useDump = shaderCache.IsDump();
+		if (ImGui::Checkbox("Dump Shaders", &useDump)) {
+			shaderCache.SetDump(useDump);
+		}
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Dump shaders at startup. This should be used only when reversing shaders. Normal users don't need this.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
+		spdlog::level::level_enum logLevel = State::GetSingleton()->GetLogLevel();
+		const char* items[] = {
+			"trace",
+			"debug",
+			"info",
+			"warn",
+			"err",
+			"critical",
+			"off"
+		};
+		static int item_current = static_cast<int>(logLevel);
+		if (ImGui::Combo("Log Level", &item_current, items, IM_ARRAYSIZE(items))) {
+			ImGui::SameLine();
+			State::GetSingleton()->SetLogLevel(static_cast<spdlog::level::level_enum>(item_current));
+		}
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Log level. Trace is most verbose. Default is info.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
+	}
 	if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen)) {
 		bool useCustomShaders = shaderCache.IsEnabled();
 		if (ImGui::Checkbox("Enable Shaders", &useCustomShaders)) {
