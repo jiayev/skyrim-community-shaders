@@ -12,8 +12,6 @@
     "catch2",
     "magic-enum",
     "nlohmann-json",
-    "boost-stl-interfaces",
-    "rsm-binary-io",
     {
       "name": "imgui",
       "features": [ "dx11-binding", "win32-binding" ],
