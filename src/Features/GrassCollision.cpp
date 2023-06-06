@@ -125,9 +125,16 @@ void GrassCollision::UpdateCollisions()
 				if (GetShapeBound(a_object, centerPos, radius)) {
 					radius *= settings.RadiusMultiplier;
 					CollisionSData data{};
-					data.centre.x = centerPos.x - state->m_PosAdjust.x;
-					data.centre.y = centerPos.y - state->m_PosAdjust.y;
-					data.centre.z = centerPos.z - state->m_PosAdjust.z;
+					RE::NiPoint3 eyePosition{};
+					if (REL::Module::IsVR()) {
+						// find center of eye position
+						eyePosition = state->GetVRRuntimeData2().m_PosAdjust.getEye() + state->GetVRRuntimeData2().m_PosAdjust.getEye(1);
+						eyePosition /= 2;
+					} else
+						eyePosition = state->GetRuntimeData2().m_PosAdjust.getEye();
+					data.centre.x = centerPos.x - eyePosition.x;
+					data.centre.y = centerPos.y - eyePosition.y;
+					data.centre.z = centerPos.z - eyePosition.z;
 					data.radius = radius;
 					currentCollisionCount++;
 					collisionsData.push_back(data);
@@ -167,7 +174,7 @@ void GrassCollision::UpdateCollisions()
 		collisions->CreateSRV(srvDesc);
 	}
 
-	auto context = RE::BSRenderManager::GetSingleton()->GetRuntimeData().context;
+	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 	D3D11_MAPPED_SUBRESOURCE mapped;
 	DX::ThrowIfFailed(context->Map(collisions->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 	size_t bytes = sizeof(CollisionSData) * colllisionCount;
@@ -186,12 +193,19 @@ void GrassCollision::ModifyGrass(const RE::BSShader*, const uint32_t)
 		ZeroMemory(&perFrameData, sizeof(perFrameData));
 
 		auto state = BSGraphics::RendererShadowState::QInstance();
-		auto shaderState = BSGraphics::ShaderState::QInstance();
+		auto& shaderState = RE::BSShaderManager::State::GetSingleton();
 
-		auto bound = shaderState->kCachedPlayerBound;
-		perFrameData.boundCentre.x = bound.center.x - state->m_PosAdjust.x;
-		perFrameData.boundCentre.y = bound.center.y - state->m_PosAdjust.y;
-		perFrameData.boundCentre.z = bound.center.z - state->m_PosAdjust.z;
+		auto bound = shaderState.cachedPlayerBound;
+		RE::NiPoint3 eyePosition{};
+		if (REL::Module::IsVR()) {
+			// find center of eye position
+			eyePosition = state->GetVRRuntimeData2().m_PosAdjust.getEye() + state->GetVRRuntimeData2().m_PosAdjust.getEye(1);
+			eyePosition /= 2;
+		} else
+			eyePosition = state->GetRuntimeData2().m_PosAdjust.getEye();
+		perFrameData.boundCentre.x = bound.center.x - eyePosition.x;
+		perFrameData.boundCentre.y = bound.center.y - eyePosition.y;
+		perFrameData.boundCentre.z = bound.center.z - eyePosition.z;
 		perFrameData.boundRadius = bound.radius * settings.RadiusMultiplier;
 
 		perFrameData.Settings = settings;
@@ -201,7 +215,7 @@ void GrassCollision::ModifyGrass(const RE::BSShader*, const uint32_t)
 		updatePerFrame = false;
 	}
 
-	auto context = RE::BSRenderManager::GetSingleton()->GetRuntimeData().context;
+	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
 	ID3D11ShaderResourceView* views[1]{};
 	views[0] = collisions->srv.get();

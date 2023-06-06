@@ -169,10 +169,10 @@ namespace Hooks
 
 			logger::info("Accessing render device information");
 
-			auto manager = RE::BSRenderManager::GetSingleton();
+			auto manager = RE::BSGraphics::Renderer::GetSingleton();
 
 			auto context = manager->GetRuntimeData().context;
-			auto swapchain = manager->GetRuntimeData().swapChain;
+			auto swapchain = manager->GetRuntimeData().renderWindows->swapChain;
 			auto device = manager->GetRuntimeData().forwarder;
 
 			logger::info("Detouring virtual function tables");
