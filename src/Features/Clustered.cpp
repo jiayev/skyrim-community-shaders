@@ -36,7 +36,52 @@ void Clustered::UpdateLights()
 	std::vector<LightSData> lights_data{};
 
 	auto& runtimeData = shadowSceneNode->GetRuntimeData();
+	auto processLights = [&](RE::NiLight* niLight, RE::BSLight* bsLight, RE::BSShadowLight* bsShadowLight) {
+		RE::NiPoint3 worldPos = niLight->world.translate;
 
+		float lodDimmer = 0;
+		if (bsLight)
+			lodDimmer = bsLight->lodDimmer;
+		else if (bsShadowLight)
+			lodDimmer = bsShadowLight->lodDimmer;
+		float dimmer = niLight->GetLightRuntimeData().fade * lodDimmer;
+		logger::trace("Found {}light {} at ({} {} {})", bsShadowLight ? "shadow" : "", niLight->name, worldPos.x, worldPos.y, worldPos.z);
+
+		LightSData light{};
+
+		DirectX::XMFLOAT3 color{};
+		color.x = dimmer * niLight->GetLightRuntimeData().diffuse.red;
+		color.y = dimmer * niLight->GetLightRuntimeData().diffuse.green;
+		color.z = dimmer * niLight->GetLightRuntimeData().diffuse.blue;
+		light.color = XMLoadFloat3(&color);
+
+		RE::NiPoint3 eyePosition{};
+		if (REL::Module::IsVR()) {
+			// find center of eye position
+			eyePosition = state->GetVRRuntimeData2().m_PosAdjust.getEye() + state->GetVRRuntimeData2().m_PosAdjust.getEye(1);
+			eyePosition /= 2;
+		} else
+			eyePosition = state->GetRuntimeData2().m_PosAdjust.getEye();
+
+		worldPos = worldPos - eyePosition;
+		logger::trace("Set {}light {} at ({} {} {}) because of eye ({} {} {})", bsShadowLight ? "shadow" : "", niLight->name, worldPos.x, worldPos.y, worldPos.z,
+			eyePosition.x, eyePosition.y, eyePosition.z);
+
+		DirectX::XMFLOAT3 position{};
+		position.x = worldPos.x;
+		position.y = worldPos.y;
+		position.z = worldPos.z;
+		light.positionWS = XMLoadFloat3(&position);
+		light.positionVS = XMVector3TransformCoord(light.positionWS, state->GetVRRuntimeData2().m_CameraData.getEye().m_ViewMat);
+
+		light.radius = niLight->GetLightRuntimeData().radius.x;
+
+		light.active = true;
+		light.shadow = (bool)bsShadowLight;
+		light.mask = bsShadowLight ? (float)bsShadowLight->maskSelect : -1;
+		lights_data.push_back(light);
+		currentLightCount++;
+	};
 	for (auto& e : runtimeData.activePointLights) {
 		if (auto bsLight = e.get()) {
 			if (auto niLight = bsLight->light.get()) {
@@ -70,42 +115,7 @@ void Clustered::UpdateLights()
 					continue;
 				}
 
-				RE::NiPoint3 worldPos = niLight->world.translate;
-				float dimmer = niLight->GetLightRuntimeData().fade * bsLight->lodDimmer;
-
-				LightSData light{};
-
-				DirectX::XMFLOAT3 color{};
-				color.x = dimmer * niLight->GetLightRuntimeData().diffuse.red;
-				color.y = dimmer * niLight->GetLightRuntimeData().diffuse.green;
-				color.z = dimmer * niLight->GetLightRuntimeData().diffuse.blue;
-				light.color = XMLoadFloat3(&color);
-
-				RE::NiPoint3 eyePosition{};
-				if (REL::Module::IsVR()) {
-					// find center of eye position
-					eyePosition = state->GetVRRuntimeData2().m_PosAdjust.getEye() + state->GetVRRuntimeData2().m_PosAdjust.getEye(1);
-					eyePosition /= 2;
-				} else
-					eyePosition = state->GetRuntimeData2().m_PosAdjust.getEye();
-
-				worldPos = worldPos - eyePosition;
-
-				DirectX::XMFLOAT3 position{};
-				position.x = worldPos.x;
-				position.y = worldPos.y;
-				position.z = worldPos.z;
-				light.positionWS = XMLoadFloat3(&position);
-				light.positionVS = XMVector3TransformCoord(light.positionWS, state->GetVRRuntimeData2().m_CameraData.getEye().m_ViewMat);
-
-				light.radius = niLight->GetLightRuntimeData().radius.x;
-
-				light.active = true;
-				light.shadow = false;
-				light.mask = -1;
-
-				lights_data.push_back(light);
-				currentLightCount++;
+				processLights(niLight, bsLight, nullptr);
 			}
 		}
 	}
@@ -114,43 +124,8 @@ void Clustered::UpdateLights()
 	// Whilst there is another shadow caster list, it includes ones that aren't being used due to the shadow caster limit.
 	for (auto& e : runtimeData.activeShadowLights) {
 		if (auto bsShadowLight = (RE::BSShadowLight*)e.get()) {
-			if (auto& niLight = bsShadowLight->light) {
-				RE::NiPoint3 worldPos = niLight->world.translate;
-				float dimmer = niLight->GetLightRuntimeData().fade * bsShadowLight->lodDimmer;
-
-				LightSData light{};
-
-				DirectX::XMFLOAT3 color{};
-				color.x = dimmer * niLight->GetLightRuntimeData().diffuse.red;
-				color.y = dimmer * niLight->GetLightRuntimeData().diffuse.green;
-				color.z = dimmer * niLight->GetLightRuntimeData().diffuse.blue;
-				light.color = XMLoadFloat3(&color);
-
-				RE::NiPoint3 eyePosition{};
-				if (REL::Module::IsVR()) {
-					// find center of eye position
-					eyePosition = state->GetVRRuntimeData2().m_PosAdjust.getEye() + state->GetVRRuntimeData2().m_PosAdjust.getEye(1);
-					eyePosition /= 2;
-				} else
-					eyePosition = state->GetRuntimeData2().m_PosAdjust.getEye();
-
-				worldPos = worldPos - eyePosition;
-
-				DirectX::XMFLOAT3 position{};
-				position.x = worldPos.x;
-				position.y = worldPos.y;
-				position.z = worldPos.z;
-				light.positionWS = XMLoadFloat3(&position);
-				light.positionVS = XMVector3TransformCoord(light.positionWS, state->GetVRRuntimeData2().m_CameraData.getEye().m_ViewMat);
-
-				light.radius = niLight->GetLightRuntimeData().radius.x;
-
-				light.active = true;
-				light.shadow = true;
-				light.mask = (float)bsShadowLight->maskSelect;
-
-				lights_data.push_back(light);
-				currentLightCount++;
+			if (auto niLight = bsShadowLight->light.get()) {
+				processLights(niLight, nullptr, bsShadowLight);
 			}
 		}
 	}
