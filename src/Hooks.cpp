@@ -99,7 +99,7 @@ void hk_BSShader_LoadShaders(RE::BSShader* shader, std::uintptr_t stream)
 		}
 		shaderCache.GetVertexShader(*shader, entry->id);
 	}
-	//BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
+	BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
 };
 
 bool hk_BSShader_BeginTechnique(RE::BSShader* shader, int vertexDescriptor, int pixelDescriptor, bool skipPIxelShader);
