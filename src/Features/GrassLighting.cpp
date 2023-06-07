@@ -17,6 +17,7 @@ void GrassLighting::DrawSettings()
 			ImGui::Text("Specular highlights for complex grass.\nFunctions the same as on other objects.");
 			ImGui::SliderFloat("Glossiness", &settings.Glossiness, 1.0f, 100.0f);
 			ImGui::SliderFloat("Specular Strength", &settings.SpecularStrength, 0.0f, 1.0f);
+
 			ImGui::TreePop();
 		}
 
