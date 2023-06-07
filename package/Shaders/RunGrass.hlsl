@@ -8,6 +8,7 @@ struct VS_INPUT
 	float4 InstanceData2							: TEXCOORD5;
 	float4 InstanceData3							: TEXCOORD6;
 	float4 InstanceData4							: TEXCOORD7;
+	uint   InstanceID 								: SV_InstanceID0;
 };
 
 struct VS_OUTPUT
@@ -22,36 +23,41 @@ struct VS_OUTPUT
 #endif
 	float4 WorldPosition							: POSITION1;
 	float4 PreviousWorldPosition					: POSITION2;
+	float  o7 										: SV_ClipDistance0;
+	float  p7 										: SV_CullDistance0;
 };
 
 #ifdef VSHADER
-cbuffer PerGeometry									: register(b2)
-{
-	row_major float4x4 WorldViewProj				: packoffset(c0);
-	row_major float4x4 WorldView					: packoffset(c4);
-	row_major float4x4 World						: packoffset(c8);
-	row_major float4x4 PreviousWorld				: packoffset(c12);
-	float4 FogNearColor								: packoffset(c16);               
-	float3 WindVector								: packoffset(c17);                 
-	float WindTimer									: packoffset(c17.w);                 
-	float3 DirLightDirection						: packoffset(c18);          
-	float PreviousWindTimer							: packoffset(c18.w);         
-	float3 DirLightColor							: packoffset(c19);              
-	float AlphaParam1								: packoffset(c19.w);               
-	float3 AmbientColor								: packoffset(c20);               
-	float AlphaParam2								: packoffset(c20.w);               
-	float3 ScaleMask								: packoffset(c21);                  
-	float ShadowClampValue							: packoffset(c21.w);          
-}
 
-cbuffer cb7											: register(b7) 
-{ 
-	float4 cb7[1]; 
+cbuffer cb7 : register(b7)
+{
+  float4 cb7[1];
 }
 
 cbuffer cb8											: register(b8) 
 {
 	float4 cb8[240]; 
+}
+
+cbuffer PerGeometry									: register(b2)
+{
+	float4 cb2[32] 									: packoffset(c0);               
+	float4 FogNearColor								: packoffset(c32);               
+	float3 WindVector								: packoffset(c33);                 
+	float WindTimer									: packoffset(c33.w);                 
+	float3 DirLightDirection						: packoffset(c34);          
+	float PreviousWindTimer							: packoffset(c34.w);         
+	float3 DirLightColor							: packoffset(c35);              
+	float AlphaParam1								: packoffset(c35.w);               
+	float3 AmbientColor								: packoffset(c36);               
+	float AlphaParam2								: packoffset(c36.w);               
+	float3 ScaleMask								: packoffset(c37);                  
+	float ShadowClampValue							: packoffset(c37.w);   
+}
+
+cbuffer cb13 : register(b13)
+{
+  float4 cb13[3];
 }
 
 #define M_PI  3.1415925 // PI
@@ -98,10 +104,24 @@ VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
 
+	float4 r0,r1,r2,r3,r4,r5,r6;
+	uint4 bitmask, uiDest;
+	float4 fDest;
+
+	r0.x = (int)input.InstanceID & 1;
+	r0.x = (uint)r0.x;
+	r0.x = cb13[0].y * r0.x;
+	r0.x = (uint)r0.x;
+	r0.z = (uint)r0.x << 2;
+	r0.y = (uint)r0.x << 2;
+
 	float4 msPosition = GetMSPosition(input, WindTimer);
 
-	float4 projSpacePosition = mul(WorldViewProj, msPosition);
-	vsout.HPosition = projSpacePosition;
+	float4 projSpacePosition;
+	projSpacePosition.x = dot(cb2[r0.z+0].xyzw, msPosition.xyzw);
+  	projSpacePosition.y = dot(cb2[r0.z+1].xyzw, msPosition.xyzw);
+  	projSpacePosition.z = dot(cb2[r0.z+2].xyzw, msPosition.xyzw);
+  	projSpacePosition.w = dot(cb2[r0.z+3].xyzw, msPosition.xyzw);
 
 #if defined(RENDER_DEPTH)
 	vsout.Depth = projSpacePosition.zw;
@@ -123,12 +143,38 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.AmbientColor.xyz = input.InstanceData1.www * (AmbientColor.xyz * input.Color.xyz);
 	vsout.AmbientColor.w = ShadowClampValue;
 
-	vsout.ViewSpacePosition = mul(WorldView, msPosition).xyz;
-	vsout.WorldPosition = mul(World, msPosition);
+	vsout.WorldPosition.x = dot(cb2[r0.z+16].xyzw, msPosition.xyzw);
+	vsout.WorldPosition.y = dot(cb2[r0.z+17].xyzw, msPosition.xyzw);
+	vsout.WorldPosition.z = dot(cb2[r0.z+18].xyzw, msPosition.xyzw);
+	vsout.WorldPosition.w = dot(cb2[r0.z+19].xyzw, msPosition.xyzw);
 
 	float4 previousMsPosition = GetMSPosition(input, PreviousWindTimer);
+	
+	vsout.PreviousWorldPosition.x = dot(cb2[r0.z+24].xyzw, previousMsPosition.xyzw);
+	vsout.PreviousWorldPosition.y = dot(cb2[r0.z+25].xyzw, previousMsPosition.xyzw);
+	vsout.PreviousWorldPosition.z = dot(cb2[r0.z+26].xyzw, previousMsPosition.xyzw);
+	vsout.PreviousWorldPosition.w = dot(cb2[r0.z+27].xyzw, previousMsPosition.xyzw);
 
-	vsout.PreviousWorldPosition = mul(PreviousWorld, previousMsPosition);
+	vsout.ViewSpacePosition.x = dot(cb2[r0.z+8].xyzw, msPosition.xyzw);
+ 	vsout.ViewSpacePosition.y = dot(cb2[r0.z+9].xyzw, msPosition.xyzw);
+  	vsout.ViewSpacePosition.z = dot(cb2[r0.z+10].xyzw, msPosition.xyzw);
+
+	if (0 < cb13[0].y) {
+		r0.yz = dot(projSpacePosition, cb13[r0.x+1].xyzw);
+	} else {
+		r0.yz = float2(1,1);
+	}
+	
+	r0.w = 2 + -cb13[0].y;
+	r0.x = dot(cb13[0].zw, M_IdentityMatrix[r0.x+0].xy);
+  	r0.xw = r0.xw * projSpacePosition.wx;
+    r0.x = cb13[0].y * r0.x;
+
+	vsout.HPosition.x = r0.w * 0.5 + r0.x;
+	vsout.HPosition.yzw = projSpacePosition.yzw;
+
+	vsout.o7.x = r0.z;
+  	vsout.p7.x = r0.y;
 
 	return vsout;
 }
@@ -154,17 +200,26 @@ SamplerState SampShadowMaskSampler					: register(s1);
 Texture2D<float4> TexBaseSampler					: register(t0);
 Texture2D<float4> TexShadowMaskSampler				: register(t1);
 
-cbuffer AlphaTestRefCB								: register(b11) 
+cbuffer AlphaTestRefCB								: register(b13) 
 { 
 	float AlphaTestRefRS							: packoffset(c0); 
 }
 
-cbuffer PerFrame : register(b12)
+cbuffer cb0 : register(b0)
 {
-	float4 UnknownPerFrame1[12]						: packoffset(c0);
-	row_major float4x4 ScreenProj					: packoffset(c12);
-	row_major float4x4 PreviousScreenProj			: packoffset(c16);
+  float4 cb0[10];
+}
+
+struct PerEye 
+{
+	row_major float4x4 ScreenProj;
+	row_major float4x4 PreviousScreenProj;
 };
+
+cbuffer cb12 : register(b12)
+{
+  float4 cb12[87];
+}
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -195,12 +250,24 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Albedo.xyz = input.TexCoord.zzz * (diffuseColor * diffuseFraction + ambientColor);
 	psout.Albedo.w = 1;
 
-	float4 screenPosition = mul(ScreenProj, input.WorldPosition);
-	screenPosition.xy = screenPosition.xy / screenPosition.ww;
-	float4 previousScreenPosition = mul(PreviousScreenProj, input.PreviousWorldPosition);
-	previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.ww;
-	float2 screenMotionVector = float2(-0.5, 0.5) * (screenPosition.xy - previousScreenPosition.xy);
+	float stereoUV = input.HPosition.x * cb0[9].x + cb0[9].z;
+	stereoUV = stereoUV * cb12[86].x;
 
+	uint eyeIndex = (stereoUV >= 0.5);
+
+	float3 screenPosition;
+	screenPosition.x = dot(cb12[eyeIndex+24].xyzw, input.WorldPosition);
+	screenPosition.y = dot(cb12[eyeIndex+25].xyzw, input.WorldPosition);
+	screenPosition.z = dot(cb12[eyeIndex+27].xyzw, input.WorldPosition);
+	screenPosition.xy = screenPosition.xy / screenPosition.zz;
+
+	float3 previousScreenPosition;
+	previousScreenPosition.x = dot(cb12[eyeIndex+32].xyzw, input.PreviousWorldPosition);
+	previousScreenPosition.y = dot(cb12[eyeIndex+33].xyzw, input.PreviousWorldPosition);
+	previousScreenPosition.z = dot(cb12[eyeIndex+35].xyzw, input.PreviousWorldPosition);
+	previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.zz;
+
+	float2 screenMotionVector = float2(-0.5, 0.5) * (screenPosition.xy - previousScreenPosition.xy);
 	psout.MotionVectors = screenMotionVector;
 
 	float3 ddx = ddx_coarse(input.ViewSpacePosition);
@@ -209,6 +276,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float normalScale = max(1.0 / 1000.0, sqrt(normal.z * -8 + 8));
 	psout.Normal.xy = float2(0.5, 0.5) + normal.xy / normalScale;
 	psout.Normal.zw = float2(0, 0);
+
 #endif
 
 	return psout;

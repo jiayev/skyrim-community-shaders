@@ -351,9 +351,14 @@ void Menu::DrawSettings()
 		auto state = State::GetSingleton();
 		for (int classIndex = 0; classIndex < RE::BSShader::Type::Total - 1; ++classIndex) {
 			auto type = (RE::BSShader::Type)(classIndex + 1);
-			if (SIE::ShaderCache::IsSupportedShader(type)) {
+			if (!(SIE::ShaderCache::IsSupportedShader(type) ||
+					// allow all shaders if debug or trace logging
+					(state->GetLogLevel()) <= spdlog::level::debug)) {
+				ImGui::BeginDisabled();
 				ImGui::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
-			}
+				ImGui::EndDisabled();
+			} else
+				ImGui::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
 		}
 	}
 

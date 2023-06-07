@@ -14,11 +14,11 @@ void Clustered::Bind(bool a_update)
 	}
 
 	if (lights) {
-		auto context = RE::BSRenderManager::GetSingleton()->GetRuntimeData().context;
-		auto renderer = BSGraphics::Renderer::QInstance();
+		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+		auto context = renderer->GetRuntimeData().context;
 		ID3D11ShaderResourceView* views[2]{};
-		views[0] = lights->srv.get();
-		views[1] = renderer->pDepthStencils[DEPTH_STENCIL_POST_ZPREPASS_COPY].DepthSRV;
+		views[0] = lights.get()->srv.get();
+		views[1] = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGET_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
 		context->PSSetShaderResources(17, ARRAYSIZE(views), views);
 	}
 }
@@ -27,13 +27,62 @@ void Clustered::UpdateLights()
 {
 	std::uint32_t currentLightCount = 0;  // Max number of lights is 4294967295
 
-	auto accumulator = BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-	auto shadowSceneNode = accumulator->m_ActiveShadowSceneNode;
-	auto state = BSGraphics::RendererShadowState::QInstance();
+	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
+
+	//auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
+	auto shadowSceneNode = accumulator->GetRuntimeData().activeShadowSceneNode;
+	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 
 	std::vector<LightSData> lights_data{};
 
-	for (auto& e : shadowSceneNode->GetRuntimeData().activePointLights) {
+	auto& runtimeData = shadowSceneNode->GetRuntimeData();
+	auto processLights = [&](RE::NiLight* niLight, RE::BSLight* bsLight, RE::BSShadowLight* bsShadowLight) {
+		RE::NiPoint3 worldPos = niLight->world.translate;
+
+		float lodDimmer = 0;
+		if (bsLight)
+			lodDimmer = bsLight->lodDimmer;
+		else if (bsShadowLight)
+			lodDimmer = bsShadowLight->lodDimmer;
+		float dimmer = niLight->GetLightRuntimeData().fade * lodDimmer;
+		logger::trace("Found {}light {} at ({} {} {})", bsShadowLight ? "shadow" : "", niLight->name, worldPos.x, worldPos.y, worldPos.z);
+
+		LightSData light{};
+
+		DirectX::XMFLOAT3 color{};
+		color.x = dimmer * niLight->GetLightRuntimeData().diffuse.red;
+		color.y = dimmer * niLight->GetLightRuntimeData().diffuse.green;
+		color.z = dimmer * niLight->GetLightRuntimeData().diffuse.blue;
+		light.color = XMLoadFloat3(&color);
+
+		RE::NiPoint3 eyePosition{};
+		if (REL::Module::IsVR()) {
+			// find center of eye position
+			eyePosition = state->GetVRRuntimeData2().posAdjust.getEye() + state->GetVRRuntimeData2().posAdjust.getEye(1);
+			eyePosition /= 2;
+		} else
+			eyePosition = state->GetRuntimeData2().posAdjust.getEye();
+
+		worldPos = worldPos - eyePosition;
+		logger::trace("Set {}light {} at ({} {} {}) because of eye ({} {} {})", bsShadowLight ? "shadow" : "", niLight->name, worldPos.x, worldPos.y, worldPos.z,
+			eyePosition.x, eyePosition.y, eyePosition.z);
+
+		DirectX::XMFLOAT3 position{};
+		position.x = worldPos.x;
+		position.y = worldPos.y;
+		position.z = worldPos.z;
+		light.positionWS = XMLoadFloat3(&position);
+		light.positionVS = XMVector3TransformCoord(light.positionWS, state->GetVRRuntimeData2().cameraData.getEye().viewMat);
+
+		light.radius = niLight->GetLightRuntimeData().radius.x;
+
+		light.active = true;
+		light.shadow = (bool)bsShadowLight;
+		light.mask = bsShadowLight ? (float)bsShadowLight->maskSelect : -1;
+		lights_data.push_back(light);
+		currentLightCount++;
+	};
+	for (auto& e : runtimeData.activePointLights) {
 		if (auto bsLight = e.get()) {
 			if (auto niLight = bsLight->light.get()) {
 				// See ShadowSceneNode::GetLuminanceAtPoint_1412BC190
@@ -66,71 +115,17 @@ void Clustered::UpdateLights()
 					continue;
 				}
 
-				RE::NiPoint3 worldPos = niLight->world.translate;
-				float dimmer = niLight->GetLightRuntimeData().fade * bsLight->lodDimmer;
-
-				LightSData light{};
-
-				DirectX::XMFLOAT3 color{};
-				color.x = dimmer * niLight->GetLightRuntimeData().diffuse.red;
-				color.y = dimmer * niLight->GetLightRuntimeData().diffuse.green;
-				color.z = dimmer * niLight->GetLightRuntimeData().diffuse.blue;
-				light.color = XMLoadFloat3(&color);
-
-				worldPos = worldPos - BSGraphics::RendererShadowState::QInstance()->m_PosAdjust;
-
-				DirectX::XMFLOAT3 position{};
-				position.x = worldPos.x;
-				position.y = worldPos.y;
-				position.z = worldPos.z;
-				light.positionWS = XMLoadFloat3(&position);
-				light.positionVS = XMVector3TransformCoord(light.positionWS, state->m_CameraData.m_ViewMat);
-
-				light.radius = niLight->GetLightRuntimeData().radius.x;
-
-				light.active = true;
-				light.shadow = false;
-				light.mask = -1;
-
-				lights_data.push_back(light);
-				currentLightCount++;
+				processLights(niLight, bsLight, nullptr);
 			}
 		}
 	}
 
 	// See ShadowSceneNode::CalculateActiveShadowCasterLights_1412E2F60
 	// Whilst there is another shadow caster list, it includes ones that aren't being used due to the shadow caster limit.
-	for (auto& e : shadowSceneNode->GetRuntimeData().activeShadowLights) {
+	for (auto& e : runtimeData.activeShadowLights) {
 		if (auto bsShadowLight = (RE::BSShadowLight*)e.get()) {
-			if (auto& niLight = bsShadowLight->light) {
-				RE::NiPoint3 worldPos = niLight->world.translate;
-				float dimmer = niLight->GetLightRuntimeData().fade * bsShadowLight->lodDimmer;
-
-				LightSData light{};
-
-				DirectX::XMFLOAT3 color{};
-				color.x = dimmer * niLight->GetLightRuntimeData().diffuse.red;
-				color.y = dimmer * niLight->GetLightRuntimeData().diffuse.green;
-				color.z = dimmer * niLight->GetLightRuntimeData().diffuse.blue;
-				light.color = XMLoadFloat3(&color);
-
-				worldPos = worldPos - BSGraphics::RendererShadowState::QInstance()->m_PosAdjust;
-
-				DirectX::XMFLOAT3 position{};
-				position.x = worldPos.x;
-				position.y = worldPos.y;
-				position.z = worldPos.z;
-				light.positionWS = XMLoadFloat3(&position);
-				light.positionVS = XMVector3TransformCoord(light.positionWS, state->m_CameraData.m_ViewMat);
-
-				light.radius = niLight->GetLightRuntimeData().radius.x;
-
-				light.active = true;
-				light.shadow = true;
-				light.mask = (float)bsShadowLight->maskSelect;
-
-				lights_data.push_back(light);
-				currentLightCount++;
+			if (auto niLight = bsShadowLight->light.get()) {
+				processLights(niLight, nullptr, bsShadowLight);
 			}
 		}
 	}
@@ -165,7 +160,7 @@ void Clustered::UpdateLights()
 		lights->CreateSRV(srvDesc);
 	}
 
-	auto context = RE::BSRenderManager::GetSingleton()->GetRuntimeData().context;
+	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 	D3D11_MAPPED_SUBRESOURCE mapped;
 	DX::ThrowIfFailed(context->Map(lights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 	size_t bytes = sizeof(LightSData) * lightCount;

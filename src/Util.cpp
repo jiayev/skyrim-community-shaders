@@ -29,9 +29,9 @@ namespace Util
 	ID3D11ShaderResourceView* GetSRVFromRTV(ID3D11RenderTargetView* a_rtv)
 	{
 		if (a_rtv) {
-			if (auto r = BSGraphics::Renderer::QInstance()) {
-				for (int i = 0; i < RenderTargets::RENDER_TARGET_COUNT; i++) {
-					auto rt = r->pRenderTargets[i];
+			if (auto r = RE::BSGraphics::Renderer::GetSingleton()) {
+				for (int i = 0; i < RE::RENDER_TARGETS::kTOTAL; i++) {
+					auto rt = r->GetRuntimeData().renderTargets[i];
 					if (a_rtv == rt.RTV) {
 						return rt.SRV;
 					}
@@ -44,9 +44,9 @@ namespace Util
 	ID3D11RenderTargetView* GetRTVFromSRV(ID3D11ShaderResourceView* a_srv)
 	{
 		if (a_srv) {
-			if (auto r = BSGraphics::Renderer::QInstance()) {
-				for (int i = 0; i < RenderTargets::RENDER_TARGET_COUNT; i++) {
-					auto rt = r->pRenderTargets[i];
+			if (auto r = RE::BSGraphics::Renderer::GetSingleton()) {
+				for (int i = 0; i < RE::RENDER_TARGETS::kTOTAL; i++) {
+					auto rt = r->GetRuntimeData().renderTargets[i];
 					if (a_srv == rt.SRV || a_srv == rt.SRVCopy) {
 						return rt.RTV;
 					}
@@ -58,12 +58,14 @@ namespace Util
 
 	std::string GetNameFromSRV(ID3D11ShaderResourceView* a_srv)
 	{
+		using RENDER_TARGET = RE::RENDER_TARGETS::RENDER_TARGET;
+ 
 		if (a_srv) {
-			if (auto r = BSGraphics::Renderer::QInstance()) {
-				for (int i = 0; i < RenderTargets::RENDER_TARGET_COUNT; i++) {
-					auto rt = r->pRenderTargets[i];
+			if (auto r = RE::BSGraphics::Renderer::GetSingleton()) {
+				for (int i = 0; i < RENDER_TARGET::kTOTAL; i++) {
+					auto rt = r->GetRuntimeData().renderTargets[i];
 					if (a_srv == rt.SRV || a_srv == rt.SRVCopy) {
-						return RTNames[i];
+						return std::string(magic_enum::enum_name(static_cast<RENDER_TARGET>(i)));
 					}
 				}
 			}
@@ -73,12 +75,13 @@ namespace Util
 
 	std::string GetNameFromRTV(ID3D11RenderTargetView* a_rtv)
 	{
+		using RENDER_TARGET = RE::RENDER_TARGETS::RENDER_TARGET;
 		if (a_rtv) {
-			if (auto r = BSGraphics::Renderer::QInstance()) {
-				for (int i = 0; i < RenderTargets::RENDER_TARGET_COUNT; i++) {
-					auto rt = r->pRenderTargets[i];
+			if (auto r = RE::BSGraphics::Renderer::GetSingleton()) {
+				for (int i = 0; i < RENDER_TARGET::kTOTAL; i++) {
+					auto rt = r->GetRuntimeData().renderTargets[i];
 					if (a_rtv == rt.RTV) {
-						return RTNames[i];
+						return std::string(magic_enum::enum_name(static_cast<RENDER_TARGET>(i)));
 					}
 				}
 			}

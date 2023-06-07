@@ -75,12 +75,14 @@ namespace SIE
 
 		inline static bool IsSupportedShader(const RE::BSShader::Type type)
 		{
+			if (!REL::Module::IsVR())
 			return type == RE::BSShader::Type::Lighting ||
 			       type == RE::BSShader::Type::BloodSplatter ||
 			       type == RE::BSShader::Type::DistantTree ||
 			       type == RE::BSShader::Type::Sky ||
 			       type == RE::BSShader::Type::Grass ||
 			       type == RE::BSShader::Type::Particle;
+			return type == RE::BSShader::Type::Grass;
 		}
 		
 		inline static bool IsSupportedShader(const RE::BSShader& shader)

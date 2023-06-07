@@ -90,27 +90,35 @@ void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t 
 		PerPass perPassData{};
 		ZeroMemory(&perPassData, sizeof(perPassData));
 
-		auto shaderState = BSGraphics::ShaderState::QInstance();
-		RE::NiTransform& dalcTransform = shaderState->DirectionalAmbientTransform;
+		auto& shaderState = RE::BSShaderManager::State::GetSingleton();
+		RE::NiTransform& dalcTransform = shaderState.directionalAmbientTransform;
 
 		Util::StoreTransform3x4NoScale(perPassData.DirectionalAmbient, dalcTransform);
 
-		auto accumulator = BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-		auto& position = accumulator->m_EyePosition;
-		auto state = BSGraphics::RendererShadowState::QInstance();
+		auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 
-		perPassData.EyePosition.x = position.x - state->m_PosAdjust.x;
-		perPassData.EyePosition.y = position.y - state->m_PosAdjust.y;
-		perPassData.EyePosition.z = position.z - state->m_PosAdjust.z;
+		auto& position = accumulator->GetRuntimeData().eyePosition;
+		auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 
-		if (auto sunLight = (NiDirectionalLight*)accumulator->m_ActiveShadowSceneNode->sunLight->light.get()) {
-			auto imageSpaceManager = BSGraphics::TESImagespaceManager::GetSingleton();
+		RE::NiPoint3 eyePosition{};
+		if (REL::Module::IsVR()) {
+			// find center of eye position
+			eyePosition = state->GetVRRuntimeData2().posAdjust.getEye() + state->GetVRRuntimeData2().posAdjust.getEye(1);
+			eyePosition /= 2;
+		} else
+			eyePosition = state->GetRuntimeData2().posAdjust.getEye();
+		perPassData.EyePosition.x = position.x - eyePosition.x;
+		perPassData.EyePosition.y = position.y - eyePosition.y;
+		perPassData.EyePosition.z = position.z - eyePosition.z;
 
-			perPassData.DirLightScale = imageSpaceManager->hdrData.hdr.sunlightScale * sunLight->fade;
+		if (auto sunLight = (NiDirectionalLight*)accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get()) {
+			auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 
-			perPassData.DirLightColor.x = sunLight->diffuse.red;
-			perPassData.DirLightColor.y = sunLight->diffuse.green;
-			perPassData.DirLightColor.z = sunLight->diffuse.blue;
+			perPassData.DirLightScale = imageSpaceManager->data.baseData.hdr.sunlightScale * sunLight->GetLightRuntimeData().fade;
+
+			perPassData.DirLightColor.x = sunLight->GetLightRuntimeData().diffuse.red;
+			perPassData.DirLightColor.y = sunLight->GetLightRuntimeData().diffuse.green;
+			perPassData.DirLightColor.z = sunLight->GetLightRuntimeData().diffuse.blue;
 
 			auto& direction = sunLight->GetWorldDirection();
 			perPassData.DirLightDirection.x = direction.x;
@@ -124,7 +132,7 @@ void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t 
 
 		perPass->Update(perPassData);
 
-		auto context = RE::BSRenderManager::GetSingleton()->GetRuntimeData().context;
+		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
 		ID3D11Buffer* buffers[2];
 		context->VSGetConstantBuffers(2, 1, buffers);  // buffers[0]
@@ -132,9 +140,9 @@ void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t 
 		context->VSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
 		context->PSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
 
-		auto renderer = BSGraphics::Renderer::QInstance();
+		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 		ID3D11ShaderResourceView* views[1]{};
-		views[0] = renderer->pRenderTargets[RENDER_TARGET_SHADOW_MASK].SRV;
+		views[0] = renderer->GetRuntimeData().renderTargets[RENDER_TARGET_SHADOW_MASK].SRV;
 		context->PSSetShaderResources(17, ARRAYSIZE(views), views);
 	}
 }

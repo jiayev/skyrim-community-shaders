@@ -1,8 +1,8 @@
 #include "Hooks.h"
 
+#include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
-#include "Menu.h"
 
 #define DLLEXPORT __declspec(dllexport)
 

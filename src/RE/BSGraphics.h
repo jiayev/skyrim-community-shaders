@@ -6,32 +6,32 @@ namespace BSGraphics
 {
 	struct alignas(16) ViewData
 	{
-		DirectX::XMVECTOR m_ViewUp;
-		DirectX::XMVECTOR m_ViewRight;
-		DirectX::XMVECTOR m_ViewDir;
-		DirectX::XMMATRIX m_ViewMat;
-		DirectX::XMMATRIX m_ProjMat;
-		DirectX::XMMATRIX m_ViewProjMat;
-		DirectX::XMMATRIX m_UnknownMat1;
-		DirectX::XMMATRIX m_ViewProjMatrixUnjittered;
-		DirectX::XMMATRIX m_PreviousViewProjMatrixUnjittered;
-		DirectX::XMMATRIX m_ProjMatrixUnjittered;
-		DirectX::XMMATRIX m_UnknownMat2;
-		float m_ViewPort[4];  // NiRect<float> { left = 0, right = 1, top = 1, bottom = 0 }
-		RE::NiPoint2 m_ViewDepthRange;
-		char _pad0[0x8];
+		DirectX::XMVECTOR m_ViewUp;                            // 00
+		DirectX::XMVECTOR m_ViewRight;                         // 10
+		DirectX::XMVECTOR m_ViewForward;                       // 20
+		DirectX::XMMATRIX m_ViewMat;                           // 30
+		DirectX::XMMATRIX m_ProjMat;                           // 70
+		DirectX::XMMATRIX m_ViewProjMat;                       // B0
+		DirectX::XMMATRIX m_UnknownMat1;                       // F0 - all 0?
+		DirectX::XMMATRIX m_ViewProjMatrixUnjittered;          // 130
+		DirectX::XMMATRIX m_PreviousViewProjMatrixUnjittered;  // 170
+		DirectX::XMMATRIX m_ProjMatrixUnjittered;              // 1B0
+		DirectX::XMMATRIX m_UnknownMat2;                       // 1F0 - all 0?
+		float m_ViewPort[4];                                   // 230 - NiRect<float> { left = 0, right = 1, top = 1, bottom = 0 }
+		RE::NiPoint2 m_ViewDepthRange;                         // 240
+		char _pad0[0x8];                                       // 248
 	};
 	static_assert(sizeof(ViewData) == 0x250);
 
 	struct CameraStateData
 	{
-		RE::NiCamera* pReferenceCamera;
-		ViewData CamViewData;
-		RE::NiPoint3 PosAdjust;
-		RE::NiPoint3 CurrentPosAdjust;
-		RE::NiPoint3 PreviousPosAdjust;
-		bool UseJitter;
-		char _pad0[0x8];
+		RE::NiCamera* pReferenceCamera;  // 00
+		ViewData CamViewData;            // 08 VR is BSTArray, Each array has 2 elements (one for each eye?)
+		RE::NiPoint3 PosAdjust;          // 258
+		RE::NiPoint3 CurrentPosAdjust;   // 264
+		RE::NiPoint3 PreviousPosAdjust;  // 270
+		bool UseJitter;                  // 27c
+		uint32_t numData;                // 28f
 	};
 	static_assert(sizeof(CameraStateData) == 0x290);
 

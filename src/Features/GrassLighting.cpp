@@ -51,21 +51,28 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 			PerFrame perFrameData{};
 			ZeroMemory(&perFrameData, sizeof(perFrameData));
 
-			auto shaderState = BSGraphics::ShaderState::QInstance();
-			RE::NiTransform& dalcTransform = shaderState->DirectionalAmbientTransform;
+			auto& shaderState = RE::BSShaderManager::State::GetSingleton();
+			RE::NiTransform& dalcTransform = shaderState.directionalAmbientTransform;
 
 			Util::StoreTransform3x4NoScale(perFrameData.DirectionalAmbient, dalcTransform);
 
-			auto accumulator = BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-			auto& position = accumulator->m_EyePosition;
-			auto state = BSGraphics::RendererShadowState::QInstance();
+			auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
+			auto& position = accumulator->GetRuntimeData().eyePosition;
+			auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 
-			perFrameData.EyePosition.x = position.x - state->m_PosAdjust.x;
-			perFrameData.EyePosition.y = position.y - state->m_PosAdjust.y;
-			perFrameData.EyePosition.z = position.z - state->m_PosAdjust.z;
+			RE::NiPoint3 eyePosition{};
+			if (REL::Module::IsVR()) {
+				// find center of eye position
+				eyePosition = state->GetVRRuntimeData2().posAdjust.getEye() + state->GetVRRuntimeData2().posAdjust.getEye(1);
+				eyePosition /= 2;
+			} else
+				eyePosition = state->GetRuntimeData2().posAdjust.getEye();
+			perFrameData.EyePosition.x = position.x - eyePosition.x;
+			perFrameData.EyePosition.y = position.y - eyePosition.y;
+			perFrameData.EyePosition.z = position.z - eyePosition.z;
 
-			auto manager = BSGraphics::TESImagespaceManager::GetSingleton();
-			perFrameData.SunlightScale = manager->hdrData.hdr.sunlightScale;
+			auto manager = RE::ImageSpaceManager::GetSingleton();
+			perFrameData.SunlightScale = manager->data.baseData.hdr.sunlightScale;
 
 			perFrameData.Settings = settings;
 
@@ -75,7 +82,7 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 		}
 
 		Clustered::GetSingleton()->Bind(true);
-		auto context = RE::BSRenderManager::GetSingleton()->GetRuntimeData().context;
+		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
 		ID3D11Buffer* buffers[2];
 		context->VSGetConstantBuffers(2, 1, buffers);  // buffers[0]

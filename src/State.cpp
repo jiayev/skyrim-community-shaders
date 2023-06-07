@@ -17,7 +17,7 @@ void State::Draw()
 		auto type = currentShader->shaderType.get();
 		if (type > 0 && type < RE::BSShader::Type::Total) {
 			if (enabledClasses[type - 1]) {
-				auto context = RE::BSRenderManager::GetSingleton()->GetRuntimeData().context;
+				auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
 				if (auto vertexShader = shaderCache.GetVertexShader(*currentShader, currentVertexDescriptor)) {
 					context->VSSetShader(vertexShader->shader, NULL, NULL);
