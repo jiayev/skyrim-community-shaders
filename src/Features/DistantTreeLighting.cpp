@@ -36,6 +36,8 @@ void DistantTreeLighting::DrawSettings()
 			ImGui::Text("Darkens lighting relative fog strength.");
 			ImGui::SliderFloat("Fog Dimmer Amount", &settings.FogDimmerAmount, 0.0f, 1.0f);
 
+			ImGui::TreePop();
+
 		}
 
 		ImGui::EndTabItem();
