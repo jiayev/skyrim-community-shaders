@@ -110,7 +110,7 @@ static bool GetShapeBound(RE::bhkNiCollisionObject* Colliedobj, RE::NiPoint3& ce
 
 void GrassCollision::UpdateCollisions()
 {
-	auto state = BSGraphics::RendererShadowState::QInstance();
+	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 
 	std::uint32_t currentCollisionCount = 0;
 
@@ -128,10 +128,10 @@ void GrassCollision::UpdateCollisions()
 					RE::NiPoint3 eyePosition{};
 					if (REL::Module::IsVR()) {
 						// find center of eye position
-						eyePosition = state->GetVRRuntimeData2().m_PosAdjust.getEye() + state->GetVRRuntimeData2().m_PosAdjust.getEye(1);
+						eyePosition = state->GetVRRuntimeData2().posAdjust.getEye() + state->GetVRRuntimeData2().posAdjust.getEye(1);
 						eyePosition /= 2;
 					} else
-						eyePosition = state->GetRuntimeData2().m_PosAdjust.getEye();
+						eyePosition = state->GetRuntimeData2().posAdjust.getEye();
 					data.centre.x = centerPos.x - eyePosition.x;
 					data.centre.y = centerPos.y - eyePosition.y;
 					data.centre.z = centerPos.z - eyePosition.z;
@@ -192,17 +192,17 @@ void GrassCollision::ModifyGrass(const RE::BSShader*, const uint32_t)
 		PerFrame perFrameData{};
 		ZeroMemory(&perFrameData, sizeof(perFrameData));
 
-		auto state = BSGraphics::RendererShadowState::QInstance();
+		auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 		auto& shaderState = RE::BSShaderManager::State::GetSingleton();
 
 		auto bound = shaderState.cachedPlayerBound;
 		RE::NiPoint3 eyePosition{};
 		if (REL::Module::IsVR()) {
 			// find center of eye position
-			eyePosition = state->GetVRRuntimeData2().m_PosAdjust.getEye() + state->GetVRRuntimeData2().m_PosAdjust.getEye(1);
+			eyePosition = state->GetVRRuntimeData2().posAdjust.getEye() + state->GetVRRuntimeData2().posAdjust.getEye(1);
 			eyePosition /= 2;
 		} else
-			eyePosition = state->GetRuntimeData2().m_PosAdjust.getEye();
+			eyePosition = state->GetRuntimeData2().posAdjust.getEye();
 		perFrameData.boundCentre.x = bound.center.x - eyePosition.x;
 		perFrameData.boundCentre.y = bound.center.y - eyePosition.y;
 		perFrameData.boundCentre.z = bound.center.z - eyePosition.z;

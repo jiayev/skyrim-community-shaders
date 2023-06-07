@@ -18,7 +18,7 @@ void Clustered::Bind(bool a_update)
 		auto context = renderer->GetRuntimeData().context;
 		ID3D11ShaderResourceView* views[2]{};
 		views[0] = lights.get()->srv.get();
-		views[1] = renderer->GetDepthStencilData().depthStencils[DEPTH_STENCIL_POST_ZPREPASS_COPY].depthSRV;
+		views[1] = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGET_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
 		context->PSSetShaderResources(17, ARRAYSIZE(views), views);
 	}
 }
@@ -27,11 +27,11 @@ void Clustered::UpdateLights()
 {
 	std::uint32_t currentLightCount = 0;  // Max number of lights is 4294967295
 
-	auto accumulator = BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
+	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 
 	//auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
-	auto shadowSceneNode = accumulator->GetRuntimeData().m_ActiveShadowSceneNode;
-	auto state = BSGraphics::RendererShadowState::QInstance();
+	auto shadowSceneNode = accumulator->GetRuntimeData().activeShadowSceneNode;
+	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 
 	std::vector<LightSData> lights_data{};
 
@@ -58,10 +58,10 @@ void Clustered::UpdateLights()
 		RE::NiPoint3 eyePosition{};
 		if (REL::Module::IsVR()) {
 			// find center of eye position
-			eyePosition = state->GetVRRuntimeData2().m_PosAdjust.getEye() + state->GetVRRuntimeData2().m_PosAdjust.getEye(1);
+			eyePosition = state->GetVRRuntimeData2().posAdjust.getEye() + state->GetVRRuntimeData2().posAdjust.getEye(1);
 			eyePosition /= 2;
 		} else
-			eyePosition = state->GetRuntimeData2().m_PosAdjust.getEye();
+			eyePosition = state->GetRuntimeData2().posAdjust.getEye();
 
 		worldPos = worldPos - eyePosition;
 		logger::trace("Set {}light {} at ({} {} {}) because of eye ({} {} {})", bsShadowLight ? "shadow" : "", niLight->name, worldPos.x, worldPos.y, worldPos.z,
@@ -72,7 +72,7 @@ void Clustered::UpdateLights()
 		position.y = worldPos.y;
 		position.z = worldPos.z;
 		light.positionWS = XMLoadFloat3(&position);
-		light.positionVS = XMVector3TransformCoord(light.positionWS, state->GetVRRuntimeData2().m_CameraData.getEye().m_ViewMat);
+		light.positionVS = XMVector3TransformCoord(light.positionWS, state->GetVRRuntimeData2().cameraData.getEye().viewMat);
 
 		light.radius = niLight->GetLightRuntimeData().radius.x;
 

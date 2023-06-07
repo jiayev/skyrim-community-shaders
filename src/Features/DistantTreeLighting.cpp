@@ -95,22 +95,23 @@ void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t 
 
 		Util::StoreTransform3x4NoScale(perPassData.DirectionalAmbient, dalcTransform);
 
-		auto accumulator = BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-		auto& position = accumulator->GetRuntimeData().m_EyePosition;
-		auto state = BSGraphics::RendererShadowState::QInstance();
+		auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
+
+		auto& position = accumulator->GetRuntimeData().eyePosition;
+		auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 
 		RE::NiPoint3 eyePosition{};
 		if (REL::Module::IsVR()) {
 			// find center of eye position
-			eyePosition = state->GetVRRuntimeData2().m_PosAdjust.getEye() + state->GetVRRuntimeData2().m_PosAdjust.getEye(1);
+			eyePosition = state->GetVRRuntimeData2().posAdjust.getEye() + state->GetVRRuntimeData2().posAdjust.getEye(1);
 			eyePosition /= 2;
 		} else
-			eyePosition = state->GetRuntimeData2().m_PosAdjust.getEye();
+			eyePosition = state->GetRuntimeData2().posAdjust.getEye();
 		perPassData.EyePosition.x = position.x - eyePosition.x;
 		perPassData.EyePosition.y = position.y - eyePosition.y;
 		perPassData.EyePosition.z = position.z - eyePosition.z;
 
-		if (auto sunLight = (NiDirectionalLight*)accumulator->GetRuntimeData().m_ActiveShadowSceneNode->GetRuntimeData().sunLight->light.get()) {
+		if (auto sunLight = (NiDirectionalLight*)accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get()) {
 			auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 
 			perPassData.DirLightScale = imageSpaceManager->data.baseData.hdr.sunlightScale * sunLight->GetLightRuntimeData().fade;

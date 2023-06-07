@@ -56,21 +56,20 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 
 			Util::StoreTransform3x4NoScale(perFrameData.DirectionalAmbient, dalcTransform);
 
-			auto accumulator = BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-			auto& position = accumulator->GetRuntimeData().m_EyePosition;
-			auto state = BSGraphics::RendererShadowState::QInstance();
+			auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
+			auto& position = accumulator->GetRuntimeData().eyePosition;
+			auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 
 			RE::NiPoint3 eyePosition{};
 			if (REL::Module::IsVR()) {
 				// find center of eye position
-				eyePosition = state->GetVRRuntimeData2().m_PosAdjust.getEye() + state->GetVRRuntimeData2().m_PosAdjust.getEye(1);
-				eyePosition /= 2;	
+				eyePosition = state->GetVRRuntimeData2().posAdjust.getEye() + state->GetVRRuntimeData2().posAdjust.getEye(1);
+				eyePosition /= 2;
 			} else
-				eyePosition = state->GetRuntimeData2().m_PosAdjust.getEye();
+				eyePosition = state->GetRuntimeData2().posAdjust.getEye();
 			perFrameData.EyePosition.x = position.x - eyePosition.x;
 			perFrameData.EyePosition.y = position.y - eyePosition.y;
 			perFrameData.EyePosition.z = position.z - eyePosition.z;
-
 
 			auto manager = RE::ImageSpaceManager::GetSingleton();
 			perFrameData.SunlightScale = manager->data.baseData.hdr.sunlightScale;
