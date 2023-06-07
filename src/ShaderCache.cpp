@@ -950,7 +950,7 @@ namespace SIE
 				[&](const char* bufferName, size_t& bufferSize) {
 					auto bufferReflector = reflector.GetConstantBufferByName(bufferName);
 					if (bufferReflector == nullptr) {
-						logger::warn("Buffer {} not found for {} shader {}::{}",
+						logger::trace("Buffer {} not found for {} shader {}::{}",
 							bufferName, magic_enum::enum_name(shaderClass),
 							magic_enum::enum_name(shaderType),
 							descriptor);
@@ -959,7 +959,7 @@ namespace SIE
 
 					D3D11_SHADER_BUFFER_DESC bufferDesc;
 					if (FAILED(bufferReflector->GetDesc(&bufferDesc))) {
-						logger::warn("Failed to get buffer {} descriptor for {} shader {}::{}",
+						logger::trace("Failed to get buffer {} descriptor for {} shader {}::{}",
 							bufferName, magic_enum::enum_name(shaderClass),
 							magic_enum::enum_name(shaderType),
 							descriptor);
@@ -971,7 +971,7 @@ namespace SIE
 
 						D3D11_SHADER_VARIABLE_DESC varDesc;
 						if (FAILED(var->GetDesc(&varDesc))) {
-							logger::error("Failed to get variable descriptor for {} shader {}::{}",
+							logger::trace("Failed to get variable descriptor for {} shader {}::{}",
 								magic_enum::enum_name(shaderClass), magic_enum::enum_name(shaderType),
 								descriptor);
 							continue;
@@ -982,7 +982,7 @@ namespace SIE
 						if (variableIndex != -1) {
 							constantOffsets[variableIndex] = (int8_t)(varDesc.StartOffset / 4);
 						} else {
-							logger::error("Unknown variable name {} in {} shader {}::{}",
+							logger::trace("Unknown variable name {} in {} shader {}::{}",
 								varDesc.Name, magic_enum::enum_name(shaderClass),
 								magic_enum::enum_name(shaderType),
 								descriptor);
