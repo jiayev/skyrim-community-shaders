@@ -1,6 +1,9 @@
 #include "Clustered.h"
 #include "State.h"
 
+#include <RE/S/ShaderAccumulator.h>
+#include <RE/S/ShadowState.h>
+
 void Clustered::Reset()
 {
 	rendered = false;
