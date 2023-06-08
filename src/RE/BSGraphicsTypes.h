@@ -67,7 +67,7 @@ namespace BSGraphics
 	//
 	// Renderer shadow state settings
 	//
-	enum ShaderFlags : uint32_t
+	enum
 	{
 		DIRTY_RENDERTARGET = 0x1,
 		DIRTY_VIEWPORT = 0x2,
@@ -191,10 +191,7 @@ namespace BSGraphics
 
 	struct Texture3DTargetData
 	{
-		ID3D11Texture3D* texture;        // 00
-		ID3D11UnorderedAccessView* uav;  // 08
-		ID3D11ShaderResourceView* SRV;   // 10
-		uint64_t unkCount;               // 18
+		char _pad0[0x20];
 	};
 	static_assert(sizeof(Texture3DTargetData) == 0x20);
 
@@ -534,190 +531,70 @@ namespace BSGraphics
 		CRITICAL_SECTION RendererLock;
 	};
 
-	template <typename T, uint32_t size = 1>
-	class EYE_POSITION
-	{
-	public:
-		/**
-         * Get the eye of type T
-		 *
-         * @param a_index The index of the eye. By default it is set to 0. Default in SSE or Left in VR. 1 is Right.
-		 * @throws std::out_of_range if index is greater than or equal to size.
-         */
-		T getEye(uint32_t a_index = 0)
-		{
-			if (a_index >= size)
-				throw std::out_of_range("Index for eye is out of range");
-			return eye[a_index];
-		}
-
-	private:
-		T eye[size];  // default or left eye is index 0, right eye is index 1
-	};
-
 	class RendererShadowState
 	{
 	public:
-		struct RUNTIME_DATA2
-		{
-#define RUNTIME_DATA2_CONTENT                                                               \
-	EYE_POSITION<RE::NiPoint3> m_PosAdjust;         /* 35c, VR 3A4 */                       \
-	EYE_POSITION<RE::NiPoint3> m_PreviousPosAdjust; /* 368, VR 3BC */                       \
-	EYE_POSITION<ViewData> m_CameraData;            /* 374, VR 3E0 - size of each is 250 */ \
-	uint32_t m_AlphaBlendModeExtra;                 /* 5c4, VR 880 */                       \
-	float unk5c8;                                   /* 5c8, VR 884 */                       \
-	float unk5cc;                                   /* 5cc VR 888 */                        \
-	uint32_t unk5d0;                                /* 5d0 VR 88c */
-			RUNTIME_DATA2_CONTENT;
-		};
-		static_assert(sizeof(RUNTIME_DATA2) == 0x280);
-		static_assert(offsetof(RUNTIME_DATA2, m_PosAdjust) == 0);
-		static_assert(offsetof(RUNTIME_DATA2, m_PreviousPosAdjust) == 0xc);
-		static_assert(offsetof(RUNTIME_DATA2, m_CameraData) == 0x20);
+		uint32_t m_StateUpdateFlags;        // Flags +0x0  0xFFFFFFFF; global state updates
+		uint32_t m_PSResourceModifiedBits;  // Flags +0x4  0xFFFF
+		uint32_t m_PSSamplerModifiedBits;   // Flags +0x8  0xFFFF
+		uint32_t m_CSResourceModifiedBits;  // Flags +0xC  0xFFFF
+		uint32_t m_CSSamplerModifiedBits;   // Flags +0x10 0xFFFF
+		uint32_t m_CSUAVModifiedBits;       // Flags +0x14 0xFF
 
-		struct VR_RUNTIME_DATA2
-		{
-#define VR_RUNTIME_DATA2_CONTENT                                                               \
-	EYE_POSITION<RE::NiPoint3, 2> m_PosAdjust;         /* 35c, VR 3A4 */                       \
-	EYE_POSITION<RE::NiPoint3, 2> m_PreviousPosAdjust; /* 368, VR 3BC */                       \
-	uint8_t unk3d4[0x3e0 - 0x3d4];                     /* 3d4, VR only pad */                  \
-	EYE_POSITION<ViewData, 2> m_CameraData;            /* 374, VR 3E0 - size of each is 250 */ \
-	uint32_t m_AlphaBlendModeExtra;                    /* 5c4, VR 880 */                       \
-	float unk5c8;                                      /* 5c8, VR 884 */                       \
-	float unk5cc;                                      /* 5cc VR 888 */                        \
-	uint32_t unk5d0;                                   /* 5d0 VR 88c */                        \
-	ID3D11Buffer* VSConstantBuffers[12];               /* VR 890 only */                       \
-	ID3D11Buffer* PSConstantBuffers[12];               /* VR 8F0 only */
-			VR_RUNTIME_DATA2_CONTENT;
-		};
-		static_assert(sizeof(VR_RUNTIME_DATA2) == 0x5b0);
-		static_assert(offsetof(VR_RUNTIME_DATA2, m_PosAdjust) == 0);
-		static_assert(offsetof(VR_RUNTIME_DATA2, m_PreviousPosAdjust) == 0x18);
-		static_assert(offsetof(VR_RUNTIME_DATA2, m_CameraData) == 0x40);
-		static_assert(offsetof(VR_RUNTIME_DATA2, VSConstantBuffers) == 0x4f0);
+		uint32_t m_RenderTargets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+		uint32_t m_DepthStencil;             // Index
+		uint32_t m_DepthStencilSlice;        // Index
+		uint32_t m_CubeMapRenderTarget;      // Index
+		uint32_t m_CubeMapRenderTargetView;  // Index
 
-		struct RUNTIME_DATA
-		{
-#ifndef ENABLE_SKYRIM_VR
-#	define RUNTIME_DATA_CONTENT                                                        \
-		RUNTIME_DATA2_CONTENT;               /* 35c, VR 3A4 */
-#elif !defined(ENABLE_SKYRIM_AE) && !defined(ENABLE_SKYRIM_SE)
-#	define RUNTIME_DATA_CONTENT                                                        \
-		VR_RUNTIME_DATA2_CONTENT;            /* 35c, VR 3A4 */
-#else
-#	define RUNTIME_DATA_CONTENT
-#endif
-			uint64_t m_VertexDesc;               /* 340 doesn't fit in SSE, VR 388 only? */
-			VertexShader* m_CurrentVertexShader; /* 348, VR 390 */
-			PixelShader* m_CurrentPixelShader;   /* 350, VR 398 */
-			D3D11_PRIMITIVE_TOPOLOGY m_Topology; /* 358, VR 3A0 */                          
-			RUNTIME_DATA_CONTENT;
-		};
-#ifndef ENABLE_SKYRIM_VR
-		static_assert(sizeof(RUNTIME_DATA) == 0x2a0);
-		static_assert(offsetof(RUNTIME_DATA, m_Topology) == 0x18);
-		static_assert(offsetof(RUNTIME_DATA, m_PosAdjust) == 0x1c);
-		static_assert(offsetof(RUNTIME_DATA, m_PreviousPosAdjust) == 0x28);
-		static_assert(offsetof(RUNTIME_DATA, m_CameraData) == 0x40);
-#elif !defined(ENABLE_SKYRIM_AE) && !defined(ENABLE_SKYRIM_SE)
-		static_assert(sizeof(RUNTIME_DATA) == 0x5d0);
-		static_assert(offsetof(RUNTIME_DATA, m_Topology) == 0x18);
-		static_assert(offsetof(RUNTIME_DATA, m_PosAdjust) == 0x1c);
-		static_assert(offsetof(RUNTIME_DATA, m_PreviousPosAdjust) == 0x34);
-		static_assert(offsetof(RUNTIME_DATA, m_CameraData) == 0x60);
-		static_assert(offsetof(RUNTIME_DATA, VSConstantBuffers) == 0x510);
-#else
-		static_assert(sizeof(RUNTIME_DATA) == 0x20);
-		static_assert(offsetof(RUNTIME_DATA, m_Topology) == 0x18);
-#endif
+		SetRenderTargetMode m_SetRenderTargetMode[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+		SetRenderTargetMode m_SetDepthStencilMode;
+		SetRenderTargetMode m_SetCubeMapRenderTargetMode;
 
-		ShaderFlags m_StateUpdateFlags;     // 00 Flags +0x0  0xFFFFFFFF; global state updates
-		uint32_t m_PSResourceModifiedBits;  // 04 Flags +0x4  0xFFFF
-		uint32_t m_PSSamplerModifiedBits;   // 08 Flags +0x8  0xFFFF
-		uint32_t m_CSResourceModifiedBits;  // 0c Flags +0xC  0xFFFF
-		uint32_t m_CSSamplerModifiedBits;   // 10 Flags +0x10 0xFFFF
-		uint32_t m_CSUAVModifiedBits;       // 14 Flags +0x14 0xFF
-		uint32_t m_OMUAVModifiedBits;       // 18 Flags +0x18 0xFF
-		uint32_t m_SRVModifiedBits;         // 1c Flags +0x1C 0xFF
+		D3D11_VIEWPORT m_ViewPort;
 
-		uint32_t m_RenderTargets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];  // 20
-		uint32_t m_DepthStencil;                                           // 40 - Index
-		uint32_t m_DepthStencilSlice;                                      // 44 Index
-		uint32_t m_CubeMapRenderTarget;                                    // 48 = Index
-		uint32_t m_CubeMapRenderTargetView;                                // 4c Index
+		DepthStencilDepthMode m_DepthStencilDepthMode;
+		uint32_t m_DepthStencilUnknown;
+		uint32_t m_DepthStencilStencilMode;
+		uint32_t m_StencilRef;
 
-		SetRenderTargetMode m_SetRenderTargetMode[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];  // 50
-		SetRenderTargetMode m_SetDepthStencilMode;                                          // 70
-		SetRenderTargetMode m_SetCubeMapRenderTargetMode;                                   // 74
+		uint32_t m_RasterStateFillMode;
+		uint32_t m_RasterStateCullMode;
+		uint32_t m_RasterStateDepthBiasMode;
+		uint32_t m_RasterStateScissorMode;
 
-		D3D11_VIEWPORT m_ViewPort;  // 78
+		uint32_t m_AlphaBlendMode;
+		uint32_t m_AlphaBlendAlphaToCoverage;
+		uint32_t m_AlphaBlendWriteMode;
 
-		DepthStencilDepthMode m_DepthStencilDepthMode;          // 90
-		DepthStencilDepthMode m_DepthStencilDepthModePrevious;  // 94 - also some kind of mode
-		uint32_t m_DepthStencilStencilMode;                     // 98
-		uint32_t m_StencilRef;                                  // 9c
+		bool m_AlphaTestEnabled;
+		float m_AlphaTestRef;
 
-		uint32_t m_RasterStateFillMode;       // a0
-		uint32_t m_RasterStateCullMode;       // a4
-		uint32_t m_RasterStateDepthBiasMode;  // a8
-		uint32_t m_RasterStateScissorMode;    // ac
+		uint32_t m_PSTextureAddressMode[16];
+		uint32_t m_PSTextureFilterMode[16];
+		ID3D11ShaderResourceView* m_PSTexture[16];
 
-		uint32_t m_AlphaBlendMode;             // b0
-		uint32_t m_AlphaBlendAlphaToCoverage;  // b4
-		uint32_t m_AlphaBlendWriteMode;        // b8
+		uint32_t m_CSTextureAddressMode[16];
+		uint32_t m_CSTextureFilterMode[16];
 
-		bool m_AlphaTestEnabled;  // BC
-		float m_AlphaTestRef;     // C0
+		ID3D11ShaderResourceView* m_CSTexture[16];
+		uint32_t m_CSTextureMinLodMode[16];
+		ID3D11UnorderedAccessView* m_CSUAV[8];
 
-		uint32_t m_PSTextureAddressMode[16];        // c4
-		uint32_t m_PSTextureFilterMode[16];         // 104
-		uint32_t unk144;                            // 144
-		ID3D11ShaderResourceView* m_PSTexture[16];  // 148
+		uint64_t m_VertexDesc;
+		VertexShader* m_CurrentVertexShader;
+		PixelShader* m_CurrentPixelShader;
+		D3D11_PRIMITIVE_TOPOLOGY m_Topology;
 
-		uint32_t m_CSTextureAddressMode[16];  // 1c8
-		uint32_t m_CSTextureFilterMode[16];   // 208
+		RE::NiPoint3 m_PosAdjust;
+		RE::NiPoint3 m_PreviousPosAdjust;
+		ViewData m_CameraData;
 
-		ID3D11ShaderResourceView* m_CSTexture[16];  // 248
-		uint32_t m_CSTextureMinLodMode[16];         // 2C8
-		ID3D11UnorderedAccessView* m_CSUAV[8];      // 308
-
-		RUNTIME_DATA_CONTENT;  // 340
-
-		[[nodiscard]] inline RUNTIME_DATA& GetRuntimeData() noexcept
-		{
-			return REL::RelocateMember<RUNTIME_DATA>(this, 0x340, 0x388);
-		}
-
-		[[nodiscard]] inline const RUNTIME_DATA& GetRuntimeData() const noexcept
-		{
-			return REL::RelocateMember<RUNTIME_DATA>(this, 0x340, 0x388);
-		}
-
-		[[nodiscard]] inline RUNTIME_DATA2& GetRuntimeData2() noexcept
-		{
-			return REL::RelocateMember<RUNTIME_DATA2>(this, 0x35c, 0x3a4);
-		}
-
-		[[nodiscard]] inline const RUNTIME_DATA2& GetRuntimeData2() const noexcept
-		{
-			return REL::RelocateMember<RUNTIME_DATA2>(this, 0x35c, 0x3a4);
-		}
-
-		[[nodiscard]] inline VR_RUNTIME_DATA2& GetVRRuntimeData2() noexcept
-		{
-			return REL::RelocateMember<VR_RUNTIME_DATA2>(this, 0x35c, 0x3a4);
-		}
-
-		[[nodiscard]] inline const VR_RUNTIME_DATA2& GetVRRuntimeData2() const noexcept
-		{
-			return REL::RelocateMember<VR_RUNTIME_DATA2>(this, 0x35c, 0x3a4);
-		}
+		uint32_t m_AlphaBlendModeExtra;
+		char _pad0[0xC];
 
 		static RendererShadowState* QInstance();
 	};
-#undef RUNTIME_DATA_CONTENT
-#undef RUNTIME_DATA2_CONTENT
-#undef VR_RUNTIME_DATA2_CONTENT
 
 	class Renderer
 	{
@@ -821,69 +698,37 @@ namespace BSGraphics
 		virtual ~BSShaderAccumulator();
 		virtual void StartAccumulating(RE::NiCamera const*) override;
 		virtual void FinishAccumulatingDispatch(uint32_t RenderFlags);
-		struct RUNTIME_DATA
-		{
-#define RUNTIME_DATA_CONTENT                      \
-	RE::BSBatchRenderer* m_BatchRenderer;         \
-	uint32_t m_CurrentPass;                       \
-	uint32_t m_CurrentBucket;                     \
-	bool m_CurrentActive;                         \
-	char _pad[0x7];                               \
-	RE::ShadowSceneNode* m_ActiveShadowSceneNode; \
-	uint32_t m_RenderMode;                        \
-	char _pad2[0x18];                             \
-	RE::NiPoint3 m_EyePosition;                   \
-	char _pad3[0x8];
-			RUNTIME_DATA_CONTENT
-		};
-		static_assert(sizeof(RUNTIME_DATA) == 0x50);
-		static_assert(offsetof(RUNTIME_DATA, m_BatchRenderer) == 0);
-		static_assert(offsetof(RUNTIME_DATA, m_ActiveShadowSceneNode) == 0x18);
 
-		[[nodiscard]] inline RUNTIME_DATA& GetRuntimeData() noexcept
-		{
-			return REL::RelocateMember<RUNTIME_DATA>(this, 0x130, 0x158);
-		}
-
-		[[nodiscard]] inline const RUNTIME_DATA& GetRuntimeData() const noexcept
-		{
-			return REL::RelocateMember<RUNTIME_DATA>(this, 0x148, 0x170);
-		}
-		static BSShaderAccumulator* GetCurrentAccumulator();
-
-		//members
 		char _pad1[0xD0];
-		bool m_1stPerson;   // 128
-		char _pad0[0x3];    // 129
-		bool m_DrawDecals;  // 130
-#ifndef ENABLE_SKYRIM_VR
-		RUNTIME_DATA_CONTENT;  // 130
-#elif !defined(ENABLE_SKYRIM_AE) && !defined(ENABLE_SKYRIM_SE)
-		std::uint64_t unk000[(0x158 - 0x130) >> 3];  // 130
-		RUNTIME_DATA_CONTENT;                        // 158
-#endif
+		bool m_1stPerson;
+		char _pad0[0x3];
+		bool m_DrawDecals;
+		RE::BSBatchRenderer* m_BatchRenderer;
+		uint32_t m_CurrentPass;
+		uint32_t m_CurrentBucket;
+		bool m_CurrentActive;
+		char _pad[0x7];
+		RE::ShadowSceneNode* m_ActiveShadowSceneNode;
+		uint32_t m_RenderMode;
+		char _pad2[0x18];
+		RE::NiPoint3 m_EyePosition;
+		char _pad3[0x8];
+
+		static BSShaderAccumulator* GetCurrentAccumulator();
 	};
-#ifndef ENABLE_SKYRIM_VR
 	static_assert(sizeof(BSShaderAccumulator) == 0x180);
-	static_assert(offsetof(BSShaderAccumulator, m_BatchRenderer) == 0x130);
-	static_assert(offsetof(BSShaderAccumulator, m_ActiveShadowSceneNode) == 0x148);
-#elif !defined(ENABLE_SKYRIM_AE) && !defined(ENABLE_SKYRIM_SE)
-	static_assert(offsetof(BSShaderAccumulator, m_BatchRenderer) == 0x158);
-	static_assert(offsetof(BSShaderAccumulator, m_ActiveShadowSceneNode) == 0x170);
-#endif
-#undef RUNTIME_DATA_CONTENT
 
 	class TESImagespaceManager
 	{
 	public:
 		float pad0[42];
-		RE::ImageSpaceBaseData* baseData0;  //a8
-		RE::ImageSpaceBaseData* baseData1;  //b0
+		RE::ImageSpaceBaseData* baseData0;
+		RE::ImageSpaceBaseData* baseData1;
 		float pad1;
 		float pad2;
 		float pad3;
 		float pad4;
-		RE::ImageSpaceBaseData hdrData;  // c8
+		RE::ImageSpaceBaseData hdrData;
 
 		static TESImagespaceManager* GetSingleton()
 		{
@@ -892,3 +737,4 @@ namespace BSGraphics
 		}
 	};
 }
+
