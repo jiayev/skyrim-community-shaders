@@ -541,14 +541,26 @@ Texture2D<float4> TexLandLodNoiseSampler			: register(t15);
 Texture2D<float4> TexShadowMaskSampler				: register(t14);
 #endif
 
-cbuffer PerFrame									: register(b12)
+cbuffer PerFrame : register(b12)
 {
-	float4 UnknownPerFrame1[12]						: packoffset(c0);
-	row_major float4x4 ScreenProj					: packoffset(c12);
-	row_major float4x4 PreviousScreenProj			: packoffset(c16);
-	float4 UnknownPerFrame2[23]						: packoffset(c20);
-	float4 UnknownPerFrame3[2]						: packoffset(c43);
-};
+    row_major float4x4  ViewMatrix                                                  : packoffset(c0);
+    row_major float4x4  ProjMatrix                                                  : packoffset(c4);
+    row_major float4x4  ViewProjMatrix                                              : packoffset(c8);
+    row_major float4x4  ViewProjMatrixUnjittered                                    : packoffset(c12);
+    row_major float4x4  PreviousViewProjMatrixUnjittered                            : packoffset(c16);
+    row_major float4x4  InvProjMatrixUnjittered                                     : packoffset(c20);
+    row_major float4x4  ProjMatrixUnjittered                                        : packoffset(c24);
+    row_major float4x4  InvViewMatrix                                               : packoffset(c28);
+    row_major float4x4  InvViewProjMatrix                                           : packoffset(c32);
+    row_major float4x4  InvProjMatrix                                               : packoffset(c36);
+    float4              CurrentPosAdjust                                            : packoffset(c40);
+    float4              PreviousPosAdjust                                           : packoffset(c41);
+    // notes: FirstPersonY seems 1.0 regardless of third/first person, could be LE legacy stuff
+    float4              GammaInvX_FirstPersonY_AlphaPassZ_CreationKitW              : packoffset(c42);
+    float4              DynamicRes_WidthX_HeightY_PreviousWidthZ_PreviousHeightW    : packoffset(c43);
+    float4              DynamicRes_InvWidthX_InvHeightY_WidthClampZ_HeightClampW    : packoffset(c44);
+}
+
 
 cbuffer PerTechnique								: register(b0)
 {
@@ -914,6 +926,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #endif
 }
 
+#if defined(SCREEN_SPACE_SHADOWS)
+	#include "ScreenSpaceShadows/ShadowsPS.hlsli"
+#endif
+
 PS_OUTPUT main(PS_INPUT input)
 {
     PS_OUTPUT psout;
@@ -1124,8 +1140,8 @@ PS_OUTPUT main(PS_INPUT input)
 	if (numShadowLights > 0)
 #endif
 	{
-		baseShadowUV = input.Position.xy * UnknownPerFrame3[1].xy;
-		float2 shadowUV = min(float2(UnknownPerFrame3[1].z, UnknownPerFrame3[0].y), max(0.0.xx, UnknownPerFrame3[0].xy * (baseShadowUV * VPOSOffset.xy + VPOSOffset.zw)));
+		baseShadowUV = input.Position.xy * DynamicRes_InvWidthX_InvHeightY_WidthClampZ_HeightClampW.xy;
+		float2 shadowUV = min(float2(DynamicRes_InvWidthX_InvHeightY_WidthClampZ_HeightClampW.z, DynamicRes_WidthX_HeightY_PreviousWidthZ_PreviousHeightW.y), max(0.0.xx, DynamicRes_WidthX_HeightY_PreviousWidthZ_PreviousHeightW.xy * (baseShadowUV * VPOSOffset.xy + VPOSOffset.zw)));
 		shadowColor = TexShadowMaskSampler.Sample(SampShadowMaskSampler, shadowUV);
 	}
 #if !defined (SHADOW_DIR)
@@ -1220,8 +1236,14 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 dirLightColor = DirLightColor.xyz;
 	float3 nsDirLightColor = dirLightColor;
+
 #if defined (DEFSHADOW) && defined (SHADOW_DIR)
 	dirLightColor *= shadowColor.xxx;
+#endif
+
+#if defined(SCREEN_SPACE_SHADOWS)
+	float dirLightSShadow = PrepassScreenSpaceShadows(input.WorldPosition);
+	dirLightColor *= dirLightSShadow;
 #endif
 	
 #if defined(PBR)
@@ -1385,9 +1407,9 @@ PS_OUTPUT main(PS_INPUT input)
 	vertexColor = (saturate(viewNormalAngle) * (1 - baseColor.w)).xxx * ((directionalAmbientColor + lightsDiffuseColor) * (input.Color.xyz * layerColor) - vertexColor) + vertexColor;
 #endif
 	
-    float4 screenPosition = mul(ScreenProj, input.WorldPosition);
+    float4 screenPosition = mul(ViewProjMatrixUnjittered, input.WorldPosition);
     screenPosition.xy = screenPosition.xy / screenPosition.ww;
-    float4 previousScreenPosition = mul(PreviousScreenProj, input.PreviousWorldPosition);
+    float4 previousScreenPosition = mul(PreviousViewProjMatrixUnjittered, input.PreviousWorldPosition);
     previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.ww;
     float2 screenMotionVector = float2(-0.5, 0.5) * (screenPosition.xy - previousScreenPosition.xy);
 	
@@ -1417,7 +1439,7 @@ PS_OUTPUT main(PS_INPUT input)
     color.xyz = lerp(vertexColor.xyz, input.FogParam.xyz, input.FogParam.w);
     color.xyz = vertexColor.xyz - color.xyz * FogColor.w;
 	
-    float3 tmpColor = color.xyz * UnknownPerFrame2[22].yyy;
+    float3 tmpColor = color.xyz * GammaInvX_FirstPersonY_AlphaPassZ_CreationKitW.yyy;
     color.xyz = tmpColor.xyz + ColourOutputClamp.xxx;
     color.xyz = min(vertexColor.xyz, color.xyz);
 	
@@ -1428,7 +1450,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 specularTmp = lerp(color.xyz, input.FogParam.xyz, input.FogParam.w);
 	specularTmp = color.xyz - specularTmp.xyz * FogColor.w;
 	
-	tmpColor = specularTmp.xyz * UnknownPerFrame2[22].yyy;
+	tmpColor = specularTmp.xyz * GammaInvX_FirstPersonY_AlphaPassZ_CreationKitW.yyy;
 	specularTmp.xyz = tmpColor.xyz + ColourOutputClamp.zzz;
 	color.xyz = min(specularTmp.xyz, color.xyz);
 #endif
@@ -1491,7 +1513,7 @@ PS_OUTPUT main(PS_INPUT input)
 	
 #endif
 	
-    psout.Albedo.xyz = color.xyz - tmpColor.xyz * UnknownPerFrame2[22].zzz;
+    psout.Albedo.xyz = color.xyz - tmpColor.xyz * GammaInvX_FirstPersonY_AlphaPassZ_CreationKitW.zzz;
 
 #if defined (SNOW)
 	psout.SnowParameters.x = dot(lightsSpecularColor, float3(0.3, 0.59, 0.11));
