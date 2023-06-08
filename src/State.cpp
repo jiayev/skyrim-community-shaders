@@ -9,6 +9,7 @@
 #include "Features/GrassLighting.h"
 #include "Features/DistantTreeLighting.h"
 #include "Features/GrassCollision.h"
+#include "Features/ScreenSpaceShadows.h"
 
 void State::Draw()
 {
@@ -30,6 +31,7 @@ void State::Draw()
 				GrassLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
 				DistantTreeLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
 				GrassCollision::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
+				ScreenSpaceShadows::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
 			}
 		}
 	}
@@ -42,6 +44,7 @@ void State::Reset()
 	Clustered::GetSingleton()->Reset();
 	GrassLighting::GetSingleton()->Reset();
 	GrassCollision::GetSingleton()->Reset();
+	ScreenSpaceShadows::GetSingleton()->Reset();
 }
 
 void State::Setup()
@@ -49,6 +52,7 @@ void State::Setup()
 	GrassLighting::GetSingleton()->SetupResources();
 	DistantTreeLighting::GetSingleton()->SetupResources();
 	GrassCollision::GetSingleton()->SetupResources();
+	ScreenSpaceShadows::GetSingleton()->SetupResources();
 }
 
 void State::Load()
@@ -113,6 +117,7 @@ void State::Load()
 	GrassLighting::GetSingleton()->Load(settings);
 	DistantTreeLighting::GetSingleton()->Load(settings);
 	GrassCollision::GetSingleton()->Load(settings);
+	ScreenSpaceShadows::GetSingleton()->Load(settings);
 }
 
 void State::Save()
@@ -146,6 +151,8 @@ void State::Save()
 	GrassLighting::GetSingleton()->Save(settings);
 	DistantTreeLighting::GetSingleton()->Save(settings);
 	GrassCollision::GetSingleton()->Save(settings);
+	ScreenSpaceShadows::GetSingleton()->Save(settings);
+
 	o << settings.dump(1);
 }
 
@@ -161,6 +168,9 @@ bool State::ValidateCache(CSimpleIniA& a_ini)
 	if (!GrassCollision::GetSingleton()->ValidateCache(a_ini)) {
 		valid = false;
 	}
+	if (!ScreenSpaceShadows::GetSingleton()->ValidateCache(a_ini)) {
+		valid = false;
+	}
 	return valid;
 }
 
@@ -169,6 +179,7 @@ void State::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 	GrassLighting::GetSingleton()->WriteDiskCacheInfo(a_ini);
 	DistantTreeLighting::GetSingleton()->WriteDiskCacheInfo(a_ini);
 	GrassCollision::GetSingleton()->WriteDiskCacheInfo(a_ini);
+	ScreenSpaceShadows::GetSingleton()->WriteDiskCacheInfo(a_ini);
 }
 
 void State::SetLogLevel(spdlog::level::level_enum a_level)
