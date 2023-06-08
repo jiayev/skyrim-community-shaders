@@ -13,14 +13,14 @@ public:
 		return &singleton;
 	}
 
-	bool enabled = false;
+	bool enabledFeature = false;
 	std::string version;
 
 	struct Settings
 	{
 		std::uint32_t EnableGrassCollision = 1;
 		float RadiusMultiplier = 2;
-		float DisplacementMultiplier = 8;
+		float DisplacementMultiplier = 16;
 	};
 
 	struct alignas(16) PerFrame
@@ -36,6 +36,8 @@ public:
 		DirectX::XMFLOAT3 centre;
 		float radius;
 	};
+
+	bool enabled = false;
 
 	std::unique_ptr<Buffer> collisions = nullptr;
 
