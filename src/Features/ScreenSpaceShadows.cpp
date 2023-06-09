@@ -236,8 +236,10 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 			context->CSGetUnorderedAccessViews(0, 1, &old.uav);
 
 			{
-				float resolutionX = screenSpaceShadowsTexture->desc.Width * RE::BSGraphics::State::GetSingleton()->dynamicResolutionCurrentWidthScale;
-				float resolutionY = screenSpaceShadowsTexture->desc.Height * RE::BSGraphics::State::GetSingleton()->dynamicResolutionCurrentHeightScale;
+				auto viewport = RE::BSGraphics::State::GetSingleton();
+
+				float resolutionX = screenSpaceShadowsTexture->desc.Width * viewport->dynamicResolutionCurrentWidthScale;
+				float resolutionY = screenSpaceShadowsTexture->desc.Height * viewport->dynamicResolutionCurrentHeightScale;
 
 				{
 					RaymarchCB data{};
@@ -245,8 +247,8 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 					data.BufferDim.x = (float)screenSpaceShadowsTexture->desc.Width;
 					data.BufferDim.y = (float)screenSpaceShadowsTexture->desc.Height;
 
-					data.RcpBufferDim.x = 1.0f / screenSpaceShadowsTexture->desc.Width;
-					data.RcpBufferDim.y = 1.0f / screenSpaceShadowsTexture->desc.Height;
+					data.RcpBufferDim.x = 1.0f / data.BufferDim.x;
+					data.RcpBufferDim.y = 1.0f / data.BufferDim.y;
 
 					data.ProjMatrix = shadowState->m_CameraData.m_ProjMat;
 					data.InvProjMatrix = XMMatrixInverse(nullptr, shadowState->m_CameraData.m_ProjMat);
@@ -261,7 +263,13 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 					data.InvDirLightDirectionVS = XMVector3TransformCoord(invDirLightDirectionWS, shadowState->m_CameraData.m_ViewMat);
 
 					data.ShadowDistance = 10000.0f;
-							
+
+					data.DynamicRes.x = viewport->dynamicResolutionCurrentWidthScale;
+					data.DynamicRes.y = viewport->dynamicResolutionCurrentHeightScale;
+
+					data.DynamicRes.z = 1.0f / data.DynamicRes.x;
+					data.DynamicRes.w = 1.0f / data.DynamicRes.y;
+				
 					data.Settings = settings;
 
 					raymarchCB->Update(data);

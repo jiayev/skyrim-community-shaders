@@ -41,6 +41,7 @@ public:
 		DirectX::XMMATRIX ProjMatrix;
 		DirectX::XMMATRIX InvProjMatrix;
 		DirectX::XMVECTOR InvDirLightDirectionVS;
+		DirectX::XMFLOAT4 DynamicRes;
 		float ShadowDistance = 10000;
 		Settings Settings;
 	};
