@@ -123,8 +123,10 @@ void GrassLighting::Load(json& o_json)
 	if (auto value = ini.GetValue("Info", "Version")) {
 		enabled = true;
 		version = value;
+		logger::info("GrassLighting.ini successfully loaded");
 	} else {
 		enabled = false;
+		logger::warn("GrassLighting.ini not successfully loaded");
 	}
 }
 

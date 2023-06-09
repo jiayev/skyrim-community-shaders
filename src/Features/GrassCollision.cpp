@@ -257,8 +257,10 @@ void GrassCollision::Load(json& o_json)
 	if (auto value = ini.GetValue("Info", "Version")) {
 		enabledFeature = true;
 		version = value;
+		logger::info("GrassCollision.ini successfully loaded");
 	} else {
 		enabledFeature = false;
+		logger::warn("GrassCollision.ini not successfully loaded");
 	}
 }
 

@@ -177,8 +177,10 @@ void DistantTreeLighting::Load(json& o_json)
 	if (auto value = ini.GetValue("Info", "Version")) {
 		enabled = true;
 		version = value;
+		logger::info("TreeLODLighting.ini successfully loaded");
 	} else {
 		enabled = false;
+		logger::warn("TreeLODLighting.ini not successfully loaded");
 	}
 }
 
