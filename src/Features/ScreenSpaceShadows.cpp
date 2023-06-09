@@ -132,22 +132,28 @@ void ScreenSpaceShadows::ClearComputeShader()
 
 ID3D11ComputeShader* ScreenSpaceShadows::GetComputeShader()
 {
-	if (!raymarchProgram)
+	if (!raymarchProgram) {
+		logger::debug("Compiling raymarchProgram");
 		raymarchProgram = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", {}, "cs_5_0");
+	}
 	return raymarchProgram;
 }
 
 ID3D11ComputeShader* ScreenSpaceShadows::GetComputeShaderHorizontalBlur()
 {
-	if (!horizontalBlurProgram)
+	if (!horizontalBlurProgram) {
+		logger::debug("Compiling horizontalBlurProgram");
 		horizontalBlurProgram = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\FilterCS.hlsl", { { "HORIZONTAL", "" } }, "cs_5_0");
+	}
 	return horizontalBlurProgram;
 }
 
 ID3D11ComputeShader* ScreenSpaceShadows::GetComputeShaderVerticalBlur()
 {
-	if (!verticalBlurProgram) 
+	if (!verticalBlurProgram) {
 		verticalBlurProgram = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\FilterCS.hlsl", { { "VERTICAL", "" } }, "cs_5_0");
+		logger::debug("Compiling verticalBlurProgram");
+	}
 	return verticalBlurProgram;
 }
 
@@ -165,6 +171,8 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 
 		if (!screenSpaceShadowsTexture) {
 			{
+				logger::debug("Creating screenSpaceShadowsTexture");
+
 				auto device = renderer->GetRuntimeData().forwarder;
 
 				D3D11_SAMPLER_DESC samplerDesc = {};
