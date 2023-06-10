@@ -24,10 +24,9 @@ float2 ViewToUV(float3 x, bool is_position = true)
     return (uv.xy / uv.w) * float2(0.5f, -0.5f) + 0.5f;
 }
 
-float2 GetDynamicResolutionAdjustedScreenPosition(float2 screenPosition)
+float2 GetDynamicResolutionAdjustedScreenPosition(float2 uv)
 {
-	float2 adjustedScreenPosition = max(0.0.xx, DynamicRes_WidthX_HeightY_PreviousWidthZ_PreviousHeightW.xy * screenPosition);
-    return adjustedScreenPosition;
+    return uv * DynamicRes_WidthX_HeightY_PreviousWidthZ_PreviousHeightW.xy;
 }
 
 float PrepassScreenSpaceShadows(float3 positionWS)

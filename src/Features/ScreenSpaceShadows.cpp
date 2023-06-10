@@ -253,6 +253,12 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 					data.ProjMatrix = shadowState->m_CameraData.m_ProjMat;
 					data.InvProjMatrix = XMMatrixInverse(nullptr, shadowState->m_CameraData.m_ProjMat);
 
+					data.DynamicRes.x = viewport->dynamicResolutionCurrentWidthScale;
+					data.DynamicRes.y = viewport->dynamicResolutionCurrentHeightScale;
+
+					data.DynamicRes.z = 1.0f / data.DynamicRes.x;
+					data.DynamicRes.w = 1.0f / data.DynamicRes.y;
+
 					auto& direction = sunLight->GetWorldDirection();
 					DirectX::XMFLOAT3 position{};
 					position.x = -direction.x;
@@ -263,12 +269,6 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 					data.InvDirLightDirectionVS = XMVector3TransformCoord(invDirLightDirectionWS, shadowState->m_CameraData.m_ViewMat);
 
 					data.ShadowDistance = 10000.0f;
-
-					data.DynamicRes.x = viewport->dynamicResolutionCurrentWidthScale;
-					data.DynamicRes.y = viewport->dynamicResolutionCurrentHeightScale;
-
-					data.DynamicRes.z = 1.0f / data.DynamicRes.x;
-					data.DynamicRes.w = 1.0f / data.DynamicRes.y;
 				
 					data.Settings = settings;
 
