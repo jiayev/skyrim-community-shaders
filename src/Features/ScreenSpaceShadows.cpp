@@ -238,8 +238,8 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 			{
 				auto viewport = RE::BSGraphics::State::GetSingleton();
 
-				float resolutionX = screenSpaceShadowsTexture->desc.Width * viewport->dynamicResolutionCurrentWidthScale;
-				float resolutionY = screenSpaceShadowsTexture->desc.Height * viewport->dynamicResolutionCurrentHeightScale;
+				float resolutionX = screenSpaceShadowsTexture->desc.Width * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
+				float resolutionY = screenSpaceShadowsTexture->desc.Height * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
 
 				{
 					RaymarchCB data{};
@@ -253,8 +253,8 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 					data.ProjMatrix = shadowState->m_CameraData.m_ProjMat;
 					data.InvProjMatrix = XMMatrixInverse(nullptr, shadowState->m_CameraData.m_ProjMat);
 
-					data.DynamicRes.x = viewport->dynamicResolutionCurrentWidthScale;
-					data.DynamicRes.y = viewport->dynamicResolutionCurrentHeightScale;
+					data.DynamicRes.x = viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
+					data.DynamicRes.y = viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
 
 					data.DynamicRes.z = 1.0f / data.DynamicRes.x;
 					data.DynamicRes.w = 1.0f / data.DynamicRes.y;
