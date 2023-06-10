@@ -263,7 +263,9 @@ float3x3 CalculateTBN(float3 N, float3 p, float2 uv)
 	return float3x3(T * invmax, B * invmax, N);
 }
 
-#include "ScreenSpaceShadows/ShadowsPS.hlsli"
+#if defined(SCREEN_SPACE_SHADOWS)
+	#include "ScreenSpaceShadows/ShadowsPS.hlsli"
+#endif
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {

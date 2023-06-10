@@ -85,19 +85,21 @@ void hk_BSShader_LoadShaders(RE::BSShader* shader, std::uintptr_t stream)
 {
 	(ptr_BSShader_LoadShaders)(shader, stream);
 	auto& shaderCache = SIE::ShaderCache::Instance();
-	for (const auto& entry : shader->pixelShaders) {
-		if (entry->shader && shaderCache.IsDump()) {
-			auto& bytecode = GetShaderBytecode(entry->shader);
-			DumpShader((REX::BSShader*)shader, entry, bytecode);
+	if (shaderCache.IsDiskCache() || shaderCache.IsDump()) {
+		for (const auto& entry : shader->pixelShaders) {
+			if (entry->shader && shaderCache.IsDump()) {
+				auto& bytecode = GetShaderBytecode(entry->shader);
+				DumpShader((REX::BSShader*)shader, entry, bytecode);
+			}
+			shaderCache.GetPixelShader(*shader, entry->id);
 		}
-		shaderCache.GetPixelShader(*shader, entry->id);
-	}
-	for (const auto& entry : shader->vertexShaders) {
-		if (entry->shader && shaderCache.IsDump()) {
-			auto& bytecode = GetShaderBytecode(entry->shader);
-			DumpShader((REX::BSShader*)shader, entry, bytecode);
+		for (const auto& entry : shader->vertexShaders) {
+			if (entry->shader && shaderCache.IsDump()) {
+				auto& bytecode = GetShaderBytecode(entry->shader);
+				DumpShader((REX::BSShader*)shader, entry, bytecode);
+			}
+			shaderCache.GetVertexShader(*shader, entry->id);
 		}
-		shaderCache.GetVertexShader(*shader, entry->id);
 	}
 	BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
 };
