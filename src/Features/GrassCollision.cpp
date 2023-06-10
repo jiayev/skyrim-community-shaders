@@ -21,7 +21,7 @@ void GrassCollision::DrawSettings()
 			ImGui::SliderFloat("Radius Multiplier", &settings.RadiusMultiplier, 0.0f, 8.0f);
 			
 			ImGui::Text("Strength of each collision on grass position.");
-			ImGui::SliderFloat("Displacement Multiplier", &settings.DisplacementMultiplier, 0.0f, 16.0f);
+			ImGui::SliderFloat("Displacement Multiplier", &settings.DisplacementMultiplier, 0.0f, 32.0f);
 		
 			ImGui::TreePop();
 		}
@@ -184,6 +184,9 @@ void GrassCollision::UpdateCollisions()
 
 void GrassCollision::ModifyGrass(const RE::BSShader*, const uint32_t)
 {
+	if (!enabledFeature)
+		return;
+
 	if (updatePerFrame) {
 		if (settings.EnableGrassCollision) {
 			UpdateCollisions();
@@ -215,15 +218,17 @@ void GrassCollision::ModifyGrass(const RE::BSShader*, const uint32_t)
 		updatePerFrame = false;
 	}
 
-	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+	if (settings.EnableGrassCollision) {
+		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
-	ID3D11ShaderResourceView* views[1]{};
-	views[0] = collisions->srv.get();
-	context->VSSetShaderResources(0, ARRAYSIZE(views), views);
+		ID3D11ShaderResourceView* views[1]{};
+		views[0] = collisions->srv.get();
+		context->VSSetShaderResources(0, ARRAYSIZE(views), views);
 
-	ID3D11Buffer* buffers[1];
-	buffers[0] = perFrame->CB();
-	context->VSSetConstantBuffers(4, ARRAYSIZE(buffers), buffers);
+		ID3D11Buffer* buffers[1];
+		buffers[0] = perFrame->CB();
+		context->VSSetConstantBuffers(4, ARRAYSIZE(buffers), buffers);
+	}
 }
 
 void GrassCollision::Draw(const RE::BSShader* shader, const uint32_t descriptor)
@@ -250,10 +255,10 @@ void GrassCollision::Load(json& o_json)
 	ini.SetUnicode();
 	ini.LoadFile(L"Data\\Shaders\\Features\\GrassCollision.ini");
 	if (auto value = ini.GetValue("Info", "Version")) {
-		enabled = true;
+		enabledFeature = true;
 		version = value;
 	} else {
-		enabled = false;
+		enabledFeature = false;
 	}
 }
 
@@ -281,16 +286,16 @@ bool GrassCollision::ValidateCache(CSimpleIniA& a_ini)
 	logger::info("Validating Grass Collision");
 
 	auto enabledInCache = a_ini.GetBoolValue("Grass Collision", "Enabled", false);
-	if (enabledInCache && !enabled) {
+	if (enabledInCache && !enabledFeature) {
 		logger::info("Feature was uninstalled");
 		return false;
 	}
-	if (!enabledInCache && enabled) {
+	if (!enabledInCache && enabledFeature) {
 		logger::info("Feature was installed");
 		return false;
 	}
 
-	if (enabled) {
+	if (enabledFeature) {
 		auto versionInCache = a_ini.GetValue("Grass Collision", "Version");
 		if (strcmp(versionInCache, version.c_str()) != 0) {
 			logger::info("Change in version detected. Installed {} but {} in Disk Cache", version, versionInCache);
@@ -306,6 +311,6 @@ bool GrassCollision::ValidateCache(CSimpleIniA& a_ini)
 
 void GrassCollision::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 {
-	a_ini.SetBoolValue("Grass Collision", "Enabled", enabled);
+	a_ini.SetBoolValue("Grass Collision", "Enabled", enabledFeature);
 	a_ini.SetValue("Grass Collision", "Version", version.c_str());
 }

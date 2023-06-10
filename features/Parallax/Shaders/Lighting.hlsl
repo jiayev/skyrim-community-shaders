@@ -926,6 +926,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #endif
 }
 
+#if defined(PARALLAX) || defined(LANDSCAPE)
+	#include "Parallax/ParallaxEffect.hlsli"
+#endif
+
 #if defined(SCREEN_SPACE_SHADOWS)
 	#include "ScreenSpaceShadows/ShadowsPS.hlsli"
 #endif
@@ -957,9 +961,11 @@ PS_OUTPUT main(PS_INPUT input)
 #endif
 
     float2 uv = input.TexCoord0.xy;
+
 #if defined (PARALLAX)
-	float height = TexParallaxSampler.Sample(SampParallaxSampler, uv).x * 0.08 - 0.04;
-	uv += viewDirection.xy * height;
+	//float height = TexParallaxSampler.Sample(SampParallaxSampler, uv).x * 0.08 - 0.04;
+	//uv += viewDirection.xy * height;
+	uv = GetParallaxCoords(uv, viewDirection, input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz);
 #endif
 
 #if defined (SNOW)
@@ -977,6 +983,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 diffuseUv = uv;
 #if defined (SPARKLE)
 	diffuseUv = ProjectedUVParams2.yy * input.TexCoord0.zw;
+#endif
+
+#if defined(LANDSCAPE)
+	diffuseUv = GetParallaxCoordsTerrain(diffuseUv, viewDirection, input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz, TexColorSampler, input.LandBlendWeights1.x);
 #endif
     float4 rawBaseColor = TexColorSampler.Sample(SampColorSampler, diffuseUv);
 	float4 baseColor = rawBaseColor;
@@ -1042,6 +1052,10 @@ PS_OUTPUT main(PS_INPUT input)
 #endif
 	
 #if defined (LANDSCAPE)
+
+	float2 uvOriginal = uv;
+	uv = GetParallaxCoordsTerrain(uvOriginal, viewDirection, input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz, TexLandColor2Sampler, input.LandBlendWeights1.y);
+
 	float4 landColor2 = TexLandColor2Sampler.Sample(SampLandColor2Sampler, uv);
 	float landSnowMask2 = GetLandSnowMaskValue(landColor2.w);
 	baseColor = input.LandBlendWeights1.xxxx * baseColor + input.LandBlendWeights1.yyyy * landColor2;
@@ -1050,6 +1064,8 @@ PS_OUTPUT main(PS_INPUT input)
 	normal.xyz = input.LandBlendWeights1.xxx * normal.xyz + input.LandBlendWeights1.yyy * landNormal2.xyz;
 	glossiness = input.LandBlendWeights1.x * glossiness + input.LandBlendWeights1.y * landNormal2.w;
 	
+	uv = GetParallaxCoordsTerrain(uvOriginal, viewDirection, input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz, TexLandColor3Sampler, input.LandBlendWeights1.z);
+
 	float4 landColor3 = TexLandColor3Sampler.Sample(SampLandColor3Sampler, uv);
 	float landSnowMask3 = GetLandSnowMaskValue(landColor3.w);
 	baseColor += input.LandBlendWeights1.zzzz * landColor3;
@@ -1058,6 +1074,8 @@ PS_OUTPUT main(PS_INPUT input)
 	normal.xyz += input.LandBlendWeights1.zzz * landNormal3.xyz;
 	glossiness += input.LandBlendWeights1.z * landNormal3.w;
 	
+	uv = GetParallaxCoordsTerrain(uvOriginal, viewDirection, input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz, TexLandColor4Sampler, input.LandBlendWeights1.w);
+
 	float4 landColor4 = TexLandColor4Sampler.Sample(SampLandColor4Sampler, uv);
 	float landSnowMask4 = GetLandSnowMaskValue(landColor4.w);
 	baseColor += input.LandBlendWeights1.wwww * landColor4;
@@ -1066,6 +1084,8 @@ PS_OUTPUT main(PS_INPUT input)
 	normal.xyz += input.LandBlendWeights1.www * landNormal4.xyz;
 	glossiness += input.LandBlendWeights1.w * landNormal4.w;
 	
+	uv = GetParallaxCoordsTerrain(uvOriginal, viewDirection, input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz, TexLandColor5Sampler, input.LandBlendWeights2.x);
+
 	float4 landColor5 = TexLandColor5Sampler.Sample(SampLandColor5Sampler, uv);
 	float landSnowMask5 = GetLandSnowMaskValue(landColor5.w);
 	baseColor += input.LandBlendWeights2.xxxx * landColor5;
@@ -1074,6 +1094,8 @@ PS_OUTPUT main(PS_INPUT input)
 	normal.xyz += input.LandBlendWeights2.xxx * landNormal5.xyz;
 	glossiness += input.LandBlendWeights2.x * landNormal5.w;
 	
+	uv = GetParallaxCoordsTerrain(uvOriginal, viewDirection, input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz, TexLandColor6Sampler, input.LandBlendWeights2.y);
+
 	float4 landColor6 = TexLandColor6Sampler.Sample(SampLandColor6Sampler, uv);
 	float landSnowMask6 = GetLandSnowMaskValue(landColor6.w);
 	baseColor += input.LandBlendWeights2.yyyy * landColor6;
@@ -1235,6 +1257,7 @@ PS_OUTPUT main(PS_INPUT input)
 #endif
 
 	float3 dirLightColor = DirLightColor.xyz;
+
 	float3 nsDirLightColor = dirLightColor;
 
 #if defined (DEFSHADOW) && defined (SHADOW_DIR)

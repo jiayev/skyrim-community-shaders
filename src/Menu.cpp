@@ -9,6 +9,7 @@
 #include "Features/GrassLighting.h"
 #include "Features/DistantTreeLighting.h"
 #include "Features/GrassCollision.h"
+#include "Features/ScreenSpaceShadows.h"
 
 #define SETTING_MENU_TOGGLEKEY "Toggle Key"
 
@@ -226,6 +227,7 @@ void Menu::DrawSettings()
 
 	if (ImGui::Button("Clear Shader Cache")) {
 		shaderCache.Clear();
+		ScreenSpaceShadows::GetSingleton()->ClearComputeShader();
 	}
 	if (ImGui::IsItemHovered()) {
 		ImGui::BeginTooltip();
@@ -366,6 +368,7 @@ void Menu::DrawSettings()
 		GrassLighting::GetSingleton()->DrawSettings();
 		DistantTreeLighting::GetSingleton()->DrawSettings();
 		GrassCollision::GetSingleton()->DrawSettings();
+		ScreenSpaceShadows::GetSingleton()->DrawSettings();
 		ImGui::EndTabBar();
 	}
 

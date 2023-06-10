@@ -1,11 +1,17 @@
 {
- "Menu": {
-  "Toggle Key": 35
+ "Advanced": {
+  "Dump Shaders": false,
+  "Log Level": 2
  },
  "General": {
   "Enable Async": true,
   "Enable Disk Cache": true,
   "Enable Shaders": true
+ },
+ "Grass Collision": {
+  "DisplacementMultiplier": 16.0,
+  "EnableGrassCollision": true,
+  "RadiusMultiplier": 2.0
  },
  "Grass Lighting": {
   "EnableDirLightFix": true,
@@ -14,17 +20,32 @@
   "SpecularStrength": 0.5,
   "SubsurfaceScatteringAmount": 1.0
  },
+ "Menu": {
+  "Toggle Key": 35
+ },
  "Replace Original Shaders": {
   "BloodSplatter": false,
   "DistantTree": true,
   "Effect": false,
   "Grass": true,
   "ImageSpace": false,
-  "Lighting": false,
+  "Lighting": true,
   "Particle": false,
   "Sky": false,
   "Utility": false,
   "Water": false
+ },
+ "Screen-Space Shadows": {
+  "BlurDropoff": 0.005,
+  "BlurRadius": 0.5,
+  "EnableScreenSpaceShadows": true,
+  "FarDistanceScale": 0.025,
+  "FarHardness": 8.0,
+  "FarThicknessScale": 0.025,
+  "MaxSamples": 24,
+  "NearDistance": 16.0,
+  "NearHardness": 32.0,
+  "NearThickness": 2.0
  },
  "Tree LOD Lighting": {
   "EnableComplexTreeLOD": true,
@@ -32,5 +53,5 @@
   "FogDimmerAmount": 1.0,
   "SubsurfaceScatteringAmount": 0.5
  },
- "Version": "0-0-1-0"
+ "Version": "0-2-0-0"
 }
