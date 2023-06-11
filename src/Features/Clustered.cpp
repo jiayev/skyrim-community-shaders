@@ -19,9 +19,8 @@ void Clustered::Bind(bool a_update)
 	if (lights) {
 		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 		auto context = renderer->GetRuntimeData().context;
-		ID3D11ShaderResourceView* views[2]{};
+		ID3D11ShaderResourceView* views[1]{};
 		views[0] = lights.get()->srv.get();
-		views[1] = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGET_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
 		context->PSSetShaderResources(17, ARRAYSIZE(views), views);
 	}
 }
