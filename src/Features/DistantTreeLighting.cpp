@@ -105,15 +105,16 @@ void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t 
 		RE::NiPoint3 eyePosition{};
 		if (REL::Module::IsVR()) {
 			// find center of eye position
-			eyePosition = state->GetVRRuntimeData2().posAdjust.getEye() + state->GetVRRuntimeData2().posAdjust.getEye(1);
+			eyePosition = state->GetVRRuntimeData().posAdjust.getEye() + state->GetVRRuntimeData().posAdjust.getEye(1);
 			eyePosition /= 2;
 		} else
-			eyePosition = state->GetRuntimeData2().posAdjust.getEye();
+			eyePosition = state->GetRuntimeData().posAdjust.getEye();
 		perPassData.EyePosition.x = position.x - eyePosition.x;
 		perPassData.EyePosition.y = position.y - eyePosition.y;
 		perPassData.EyePosition.z = position.z - eyePosition.z;
 
-		if (auto sunLight = (NiDirectionalLight*)accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get()) {
+		auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
+		if (sunLight) {
 			auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 
 			perPassData.DirLightScale = imageSpaceManager->data.baseData.hdr.sunlightScale * sunLight->GetLightRuntimeData().fade;

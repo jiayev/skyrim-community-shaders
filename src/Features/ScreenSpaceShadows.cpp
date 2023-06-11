@@ -3,6 +3,8 @@
 #include "State.h"
 #include "Util.h"
 
+using RE::RENDER_TARGETS;
+
 void ScreenSpaceShadows::DrawSettings()
 {
 	if (ImGui::BeginTabItem("Screen-Space Shadows")) {
@@ -164,8 +166,8 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-
-	if (auto sunLight = (NiDirectionalLight*)accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get()) {
+	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
+	if (sunLight) {
 		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 
 		if (!screenSpaceShadowsTexture) {
@@ -217,7 +219,7 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 
 		bool enableSSS = true;
 
-		if (shadowState->cubeMapRenderTarget == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS) {
+		if (shadowState->GetRuntimeData().cubeMapRenderTarget == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS) {
 			enableSSS = false;
 
 		} else if (!renderedScreenCamera && enabled) {
@@ -256,6 +258,10 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 
 					data.RcpBufferDim.x = 1.0f / data.BufferDim.x;
 					data.RcpBufferDim.y = 1.0f / data.BufferDim.y;
+					if (REL::Module::IsVR())
+						data.ProjMatrix = shadowState->GetVRRuntimeData().cameraData.getEye().projMat;
+					else
+						data.ProjMatrix = shadowState->GetRuntimeData().cameraData.getEye().projMat;
 
 					data.ProjMatrix = shadowState->GetRuntimeData2().cameraData.getEye().projMat;
 					data.InvProjMatrix = XMMatrixInverse(nullptr, data.ProjMatrix);
@@ -271,9 +277,12 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 					position.x = -direction.x;
 					position.y = -direction.y;
 					position.z = -direction.z;
+					auto viewMatrix = shadowState->GetRuntimeData().cameraData.getEye().viewMat;
+					if (REL::Module::IsVR())
+						viewMatrix = shadowState->GetVRRuntimeData().cameraData.getEye().viewMat;
 
 					auto invDirLightDirectionWS = XMLoadFloat3(&position);
-					data.InvDirLightDirectionVS = XMVector3TransformCoord(invDirLightDirectionWS, shadowState->GetRuntimeData2().cameraData.getEye().viewMat);
+					data.InvDirLightDirectionVS = XMVector3TransformCoord(invDirLightDirectionWS, viewMatrix);
 
 					data.ShadowDistance = 10000.0f;
 
@@ -287,7 +296,7 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 
 				context->CSSetSamplers(0, 1, &computeSampler);
 
-				auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGET_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+				auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 
 				ID3D11ShaderResourceView* view = depth.depthSRV;
 				context->CSSetShaderResources(0, 1, &view);
@@ -364,7 +373,7 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 		}
 
 		PerPass data{};
-		data.EnableSSS = enableSSS && shadowState->rasterStateCullMode <= 1 && enabled;
+		data.EnableSSS = enableSSS && shadowState->GetRuntimeData().rasterStateCullMode <= 1 && enabled;
 		perPass->Update(data);
 
 		if (renderedScreenCamera) {

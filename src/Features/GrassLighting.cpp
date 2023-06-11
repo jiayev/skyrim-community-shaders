@@ -64,10 +64,10 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 			RE::NiPoint3 eyePosition{};
 			if (REL::Module::IsVR()) {
 				// find center of eye position
-				eyePosition = state->GetVRRuntimeData2().posAdjust.getEye() + state->GetVRRuntimeData2().posAdjust.getEye(1);
+				eyePosition = state->GetVRRuntimeData().posAdjust.getEye() + state->GetVRRuntimeData().posAdjust.getEye(1);
 				eyePosition /= 2;
 			} else
-				eyePosition = state->GetRuntimeData2().posAdjust.getEye();
+				eyePosition = state->GetRuntimeData().posAdjust.getEye();
 			perFrameData.EyePosition.x = position.x - eyePosition.x;
 			perFrameData.EyePosition.y = position.y - eyePosition.y;
 			perFrameData.EyePosition.z = position.z - eyePosition.z;
