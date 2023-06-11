@@ -584,17 +584,32 @@ namespace BSGraphics
 		uint64_t m_VertexDesc;
 		VertexShader* m_CurrentVertexShader;
 		PixelShader* m_CurrentPixelShader;
-		D3D11_PRIMITIVE_TOPOLOGY m_Topology;
+		D3D11_PRIMITIVE_TOPOLOGY m_Topology; // 358
 
-		RE::NiPoint3 m_PosAdjust;
-		RE::NiPoint3 m_PreviousPosAdjust;
-		ViewData m_CameraData;
+		RE::NiPoint3 m_PosAdjust; // 35c
+		RE::NiPoint3 m_PreviousPosAdjust; //368
+		ViewData m_CameraData; // 380
 
-		uint32_t m_AlphaBlendModeExtra;
+		uint32_t m_AlphaBlendModeExtra; //5d0
 		char _pad0[0xC];
 
 		static RendererShadowState* QInstance();
 	};
+	static_assert(sizeof(RendererShadowState) == 0x5e0);
+	static_assert(offsetof(RendererShadowState, m_RenderTargets) == 0x18);
+	static_assert(offsetof(RendererShadowState, m_ViewPort) == 0x70);
+	static_assert(offsetof(RendererShadowState, m_AlphaTestEnabled) == 0xb4);
+	static_assert(offsetof(RendererShadowState, m_PSTextureAddressMode) == 0xbc);
+	static_assert(offsetof(RendererShadowState, m_PSTextureFilterMode) == 0xfc);
+	static_assert(offsetof(RendererShadowState, m_PSTexture) == 0x140);
+	static_assert(offsetof(RendererShadowState, m_CSUAV) == 0x300);
+	static_assert(offsetof(RendererShadowState, m_VertexDesc) == 0x340);
+	static_assert(offsetof(RendererShadowState, m_CurrentVertexShader) == 0x348);
+	static_assert(offsetof(RendererShadowState, m_CurrentPixelShader) == 0x350);
+	static_assert(offsetof(RendererShadowState, m_Topology) == 0x358);
+	static_assert(offsetof(RendererShadowState, m_PosAdjust) == 0x35c);
+	static_assert(offsetof(RendererShadowState, m_PreviousPosAdjust) == 0x368);
+	static_assert(offsetof(RendererShadowState, m_CameraData) == 0x380);
 
 	class Renderer
 	{
