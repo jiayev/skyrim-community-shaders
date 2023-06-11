@@ -263,7 +263,6 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 					else
 						data.ProjMatrix = shadowState->GetRuntimeData().cameraData.getEye().projMat;
 
-					data.ProjMatrix = shadowState->GetRuntimeData2().cameraData.getEye().projMat;
 					data.InvProjMatrix = XMMatrixInverse(nullptr, data.ProjMatrix);
 
 					data.DynamicRes.x = viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
