@@ -43,9 +43,9 @@
   "FarHardness": 8.0,
   "FarThicknessScale": 0.025,
   "MaxSamples": 24,
-  "NearDistance": 8.0,
+  "NearDistance": 16.0,
   "NearHardness": 32.0,
-  "NearThickness": 1.0
+  "NearThickness": 2.0
  },
  "Tree LOD Lighting": {
   "EnableComplexTreeLOD": true,

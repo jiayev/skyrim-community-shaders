@@ -11,6 +11,7 @@ cbuffer PerFrame : register(b0)
     float2 RcpBufferDim;
     float4x4 ProjMatrix;
     float4x4 InvProjMatrix;
+    float4 DynamicRes;
     float4 InvDirLightDirectionVS;
     float ShadowDistance;
     uint MaxSamples;
@@ -31,7 +32,7 @@ bool IsSaturated(float2 value) { return IsSaturated(value.x) && IsSaturated(valu
 float GetDepth(float2 uv)
 {
     // effects like screen space shadows, can get artefacts if a point sampler is used
-    return DepthTexture.SampleLevel(LinearSampler, uv, 0).r;
+    return DepthTexture.SampleLevel(LinearSampler, uv * DynamicRes.xy, 0).r;
 }
 
 float2 ViewToUV(float3 x, bool is_position = true)
@@ -144,6 +145,6 @@ float ScreenSpaceShadowsUV(float2 texcoord, float3 lightDirectionVS)
 [numthreads( 32, 32, 1 )]
 void main( uint3 DTid : SV_DispatchThreadID )
 {
-    float2 TexCoord = (DTid.xy + 0.5) * RcpBufferDim; 
+    float2 TexCoord = (DTid.xy + 0.5) * RcpBufferDim * DynamicRes.zw; 
     OcclusionRW[DTid.xy] = ScreenSpaceShadowsUV(TexCoord, InvDirLightDirectionVS);
 }

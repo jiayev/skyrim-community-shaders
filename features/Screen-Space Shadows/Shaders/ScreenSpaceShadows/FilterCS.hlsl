@@ -40,6 +40,7 @@ cbuffer PerFrame : register(b0)
     float2 RcpBufferDim;
     float4x4 ProjMatrix;
     float4x4 InvProjMatrix;
+    float4 DynamicRes;
     float4 InvDirLightDirectionVS;
     float ShadowDistance;
     uint MaxSamples;
@@ -119,7 +120,10 @@ void main( uint3 DTid : SV_DispatchThreadID )
 #endif
 
     float2 TexCoord = (DTid.xy + 0.5) * RcpBufferDim; 
-    TexCoord += 0.5 * RcpBufferDim;
+
+    #if defined(HORIZONTAL)
+        TexCoord += 0.5 * RcpBufferDim;
+    #endif
 
     float startDepth = GetDepth(TexCoord * 2);
     if (startDepth >= 1)
@@ -135,14 +139,19 @@ void main( uint3 DTid : SV_DispatchThreadID )
     [unroll]
     for (int i = 0; i < cKernelSize; i++)
     {
+#if defined(HORIZONTAL)
         float2 uv = TexCoord + (BlurOffsets[i] * OffsetMask * RcpBufferDim) * BlurRadius;
+#elif defined(VERTICAL)
+        float2 uv = TexCoord + (BlurOffsets[i] * OffsetMask * RcpBufferDim / 2) * BlurRadius;
+#endif
         float4 color2 = OcclusionTexture.SampleLevel(LinearSampler, uv * 2, 0).r;
         float depth2 = InverseProjectUV(uv * 2).z;
-        float diff = abs(float(depth1 - depth2));
 
-        int useForBlur = (diff <= depthDrop);
-        color1 += BlurWeights[i] * color2 * useForBlur;
-        WeightSum += BlurWeights[i] * useForBlur;
+        // Depth-awareness
+        float awareness  = saturate(depthDrop - abs(depth1 - depth2));
+
+        color1 += BlurWeights[i] * color2 * awareness;
+        WeightSum += BlurWeights[i] * awareness;
     }
     color1 /= WeightSum;
     OcclusionRW[DTid.xy] = color1;
