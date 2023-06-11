@@ -22,6 +22,19 @@ namespace BSGraphics
 		char _pad0[0x8];
 	};
 	static_assert(sizeof(ViewData) == 0x250);
+	static_assert(offsetof(ViewData, m_ViewUp) == 0);
+	static_assert(offsetof(ViewData, m_ViewRight) == 0x10);
+	static_assert(offsetof(ViewData, m_ViewDir) == 0x20);
+	static_assert(offsetof(ViewData, m_ViewMat) == 0x30);
+	static_assert(offsetof(ViewData, m_ProjMat) == 0x70);
+	static_assert(offsetof(ViewData, m_ViewProjMat) == 0xb0);
+	static_assert(offsetof(ViewData, m_UnknownMat1) == 0xf0);
+	static_assert(offsetof(ViewData, m_ViewProjMatrixUnjittered) == 0x130);
+	static_assert(offsetof(ViewData, m_PreviousViewProjMatrixUnjittered) == 0x170);
+	static_assert(offsetof(ViewData, m_ProjMatrixUnjittered) == 0x1b0);
+	static_assert(offsetof(ViewData, m_UnknownMat2) == 0x1f0);
+	static_assert(offsetof(ViewData, m_ViewPort) == 0x230);
+	static_assert(offsetof(ViewData, m_ViewDepthRange) == 0x240);
 
 	struct CameraStateData
 	{

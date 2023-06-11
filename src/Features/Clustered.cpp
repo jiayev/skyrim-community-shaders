@@ -61,10 +61,10 @@ void Clustered::UpdateLights()
 		RE::NiPoint3 eyePosition{};
 		if (REL::Module::IsVR()) {
 			// find center of eye position
-			eyePosition = state->GetVRRuntimeData2().posAdjust.getEye() + state->GetVRRuntimeData2().posAdjust.getEye(1);
+			eyePosition = state->GetVRRuntimeData().posAdjust.getEye() + state->GetVRRuntimeData().posAdjust.getEye(1);
 			eyePosition /= 2;
 		} else
-			eyePosition = state->GetRuntimeData2().posAdjust.getEye();
+			eyePosition = state->GetRuntimeData().posAdjust.getEye();
 
 		worldPos = worldPos - eyePosition;
 		logger::trace("Set {}light {} at ({} {} {}) because of eye ({} {} {})", bsShadowLight ? "shadow" : "", niLight->name, worldPos.x, worldPos.y, worldPos.z,
@@ -75,8 +75,10 @@ void Clustered::UpdateLights()
 		position.y = worldPos.y;
 		position.z = worldPos.z;
 		light.positionWS = XMLoadFloat3(&position);
-		light.positionVS = XMVector3TransformCoord(light.positionWS, state->GetVRRuntimeData2().cameraData.getEye().viewMat);
-
+		if (!REL::Module::IsVR())
+			light.positionVS = XMVector3TransformCoord(light.positionWS, state->GetRuntimeData().cameraData.getEye().viewMat);
+		else
+			light.positionVS = XMVector3TransformCoord(light.positionWS, state->GetVRRuntimeData().cameraData.getEye().viewMat);
 		light.radius = niLight->GetLightRuntimeData().radius.x;
 
 		light.active = true;
