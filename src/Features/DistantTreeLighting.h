@@ -1,7 +1,5 @@
 #pragma once
 
-#include "RE/BSGraphicsTypes.h"
-
 #include "Buffer.h"
 
 class DistantTreeLighting

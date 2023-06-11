@@ -1,12 +1,11 @@
 #pragma once
-#include <DirectXMath.h>
-#include <d3d11.h>
 
-#include "RE/BSGraphics.h"
-#include "RE/BSGraphicsTypes.h"
+#include <shared_mutex>
+
+#include <d3d11.h>
+#include <DirectXMath.h>
 
 #include "Buffer.h"
-#include <shared_mutex>
 
 class Clustered
 {

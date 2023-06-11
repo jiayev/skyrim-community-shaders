@@ -1,6 +1,6 @@
 #include "Util.h"
+
 #include <d3dcompiler.h>
-#include <RE/R/Renderer.h>
 
 namespace Util
 {

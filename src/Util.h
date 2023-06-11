@@ -1,7 +1,5 @@
 #pragma once
 
-#include "RE/BSGraphicsTypes.h"
-
 namespace Util
 {
 	void StoreTransform3x4NoScale(DirectX::XMFLOAT3X4& Dest, const RE::NiTransform& Source);
