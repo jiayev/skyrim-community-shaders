@@ -156,7 +156,7 @@ RE::BSEventNotifyControl Menu::ProcessEvent(RE::InputEvent* const* a_event, RE::
 						IsEnabled = !IsEnabled;
 						if (const auto controlMap = RE::ControlMap::GetSingleton()) 
 						{
-							controlMap->ignoreKeyboardMouse = IsEnabled;
+							controlMap->GetRuntimeData().ignoreKeyboardMouse = IsEnabled;
 						}
 					} 
 					else 
