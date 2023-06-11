@@ -44,20 +44,6 @@ void DistantTreeLighting::DrawSettings()
 	}
 }
 
-class NiDirectionalLight : public RE::NiLight
-{
-public:
-	RE::NiPoint3 m_kWorldDir;
-	char _pad[0xC];  // NiColor m_kEffectColor?
-
-	// The model direction of the light is (1,0,0). The world direction is
-	// the first column of the world rotation matrix.
-	inline const RE::NiPoint3& GetWorldDirection() const
-	{
-		return m_kWorldDir;
-	}
-};
-
 enum class DistantTreeShaderTechniques
 {
 	DistantTreeBlock = 0,
