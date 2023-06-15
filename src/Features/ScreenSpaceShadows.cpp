@@ -152,8 +152,13 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
-	if (sunLight) {
+	auto dirLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
+	
+	bool skyLight = true;
+	if (auto sky = RE::Sky::GetSingleton()) 
+		skyLight = sky->mode.get() == RE::Sky::Mode::kFull;
+
+	if (dirLight && skyLight) {
 		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 
 		if (!screenSpaceShadowsTexture) {
@@ -257,7 +262,7 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 					data.DynamicRes.z = 1.0f / data.DynamicRes.x;
 					data.DynamicRes.w = 1.0f / data.DynamicRes.y;
 
-					auto& direction = sunLight->GetWorldDirection();
+					auto& direction = dirLight->GetWorldDirection();
 					DirectX::XMFLOAT3 position{};
 					position.x = -direction.x;
 					position.y = -direction.y;
