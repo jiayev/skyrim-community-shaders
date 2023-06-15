@@ -4,6 +4,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 
+#include "Features/ExtendedMaterials.h"
 #define DLLEXPORT __declspec(dllexport)
 
 std::list<std::string> errors;

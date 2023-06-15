@@ -10,6 +10,8 @@
 #include "Features/DistantTreeLighting.h"
 #include "Features/GrassCollision.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/ExtendedMaterials.h"
+#include "Features/WaterBlending.h"
 
 #define SETTING_MENU_TOGGLEKEY "Toggle Key"
 
@@ -369,6 +371,8 @@ void Menu::DrawSettings()
 		DistantTreeLighting::GetSingleton()->DrawSettings();
 		GrassCollision::GetSingleton()->DrawSettings();
 		ScreenSpaceShadows::GetSingleton()->DrawSettings();
+		ExtendedMaterials::GetSingleton()->DrawSettings();
+		WaterBlending::GetSingleton()->DrawSettings();
 		ImGui::EndTabBar();
 	}
 

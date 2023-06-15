@@ -10,6 +10,8 @@
 #include "Features/DistantTreeLighting.h"
 #include "Features/GrassCollision.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/ExtendedMaterials.h"
+#include "Features/WaterBlending.h"
 
 void State::Draw()
 {
@@ -32,6 +34,8 @@ void State::Draw()
 				DistantTreeLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
 				GrassCollision::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
 				ScreenSpaceShadows::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
+				ExtendedMaterials::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
+				WaterBlending::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
 			}
 		}
 	}
@@ -53,6 +57,8 @@ void State::Setup()
 	DistantTreeLighting::GetSingleton()->SetupResources();
 	GrassCollision::GetSingleton()->SetupResources();
 	ScreenSpaceShadows::GetSingleton()->SetupResources();
+	ExtendedMaterials::GetSingleton()->SetupResources();
+	WaterBlending::GetSingleton()->SetupResources();
 }
 
 void State::Load()
