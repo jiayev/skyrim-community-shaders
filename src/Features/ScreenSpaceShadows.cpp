@@ -158,7 +158,7 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeShaderVerticalBlur()
 
 void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 {
-	if (!enabledFeature)
+	if (!loaded)
 		return;
 
 	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
@@ -418,17 +418,7 @@ void ScreenSpaceShadows::Load(json& o_json)
 	if (o_json["Screen-Space Shadows"].is_object())
 		settings = o_json["Screen-Space Shadows"];
 
-	CSimpleIniA ini;
-	ini.SetUnicode();
-	ini.LoadFile(L"Data\\Shaders\\Features\\ScreenSpaceShadows.ini");
-	if (auto value = ini.GetValue("Info", "Version")) {
-		enabledFeature = true;
-		version = value;
-		logger::info("ScreenSpaceShadows.ini successfully loaded");
-	} else {
-		enabledFeature = false;
-		logger::warn("ScreenSpaceShadows.ini not successfully loaded");
-	}
+	Feature::Load(o_json);
 }
 
 void ScreenSpaceShadows::Save(json& o_json)
@@ -440,40 +430,6 @@ void ScreenSpaceShadows::SetupResources()
 {
 	perPass = new ConstantBuffer(ConstantBufferDesc<PerPass>());
 	raymarchCB = new ConstantBuffer(ConstantBufferDesc<RaymarchCB>());
-}
-
-bool ScreenSpaceShadows::ValidateCache(CSimpleIniA& a_ini)
-{
-	logger::info("Validating Screen-Space Shadows");
-
-	auto enabledInCache = a_ini.GetBoolValue("Screen-Space Shadows", "Enabled", false);
-	if (enabledInCache && !enabledFeature) {
-		logger::info("Feature was uninstalled");
-		return false;
-	}
-	if (!enabledInCache && enabledFeature) {
-		logger::info("Feature was installed");
-		return false;
-	}
-
-	if (enabledFeature) {
-		auto versionInCache = a_ini.GetValue("Screen-Space Shadows", "Version");
-		if (strcmp(versionInCache, version.c_str()) != 0) {
-			logger::info("Change in version detected. Installed {} but {} in Disk Cache", version, versionInCache);
-			return false;
-		} else {
-			logger::info("Installed version and cached version match.");
-		}
-	}
-
-	logger::info("Cached feature is valid");
-	return true;
-}
-
-void ScreenSpaceShadows::WriteDiskCacheInfo(CSimpleIniA& a_ini)
-{
-	a_ini.SetBoolValue("Screen-Space Shadows", "Enabled", enabledFeature);
-	a_ini.SetValue("Screen-Space Shadows", "Version", version.c_str());
 }
 
 void ScreenSpaceShadows::Reset()

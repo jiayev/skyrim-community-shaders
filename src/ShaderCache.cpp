@@ -6,9 +6,9 @@
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
-#include "State.h"
 #include "Features/GrassCollision.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "State.h"
 
 namespace SIE
 {
@@ -103,7 +103,7 @@ namespace SIE
 				++defines;
 			}
 
-			if (ScreenSpaceShadows::GetSingleton()->enabledFeature) {
+			if (ScreenSpaceShadows::GetSingleton()->loaded) {
 				defines[0] = { "SCREEN_SPACE_SHADOWS", nullptr };
 				++defines;
 			}
@@ -152,7 +152,7 @@ namespace SIE
 				++defines;
 			}
 
-			if (ScreenSpaceShadows::GetSingleton()->enabledFeature) {
+			if (ScreenSpaceShadows::GetSingleton()->loaded) {
 				defines[0] = { "SCREEN_SPACE_SHADOWS", nullptr };
 				++defines;
 			}
@@ -265,13 +265,12 @@ namespace SIE
 				++defines;
 			}
 
-			if (GrassCollision::GetSingleton()->enabledFeature)
-			{
-				defines[0] = { "GRASS_COLLISION", nullptr };		
+			if (GrassCollision::GetSingleton()->loaded) {
+				defines[0] = { "GRASS_COLLISION", nullptr };
 				++defines;
 			}
 
-			if (ScreenSpaceShadows::GetSingleton()->enabledFeature) {
+			if (ScreenSpaceShadows::GetSingleton()->loaded) {
 				defines[0] = { "SCREEN_SPACE_SHADOWS", nullptr };
 				++defines;
 			}

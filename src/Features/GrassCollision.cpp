@@ -190,7 +190,7 @@ void GrassCollision::UpdateCollisions()
 
 void GrassCollision::ModifyGrass(const RE::BSShader*, const uint32_t)
 {
-	if (!enabledFeature)
+	if (!loaded)
 		return;
 
 	if (updatePerFrame) {
@@ -251,17 +251,7 @@ void GrassCollision::Load(json& o_json)
 	if (o_json["Grass Collision"].is_object())
 		settings = o_json["Grass Collision"];
 
-	CSimpleIniA ini;
-	ini.SetUnicode();
-	ini.LoadFile(L"Data\\Shaders\\Features\\GrassCollision.ini");
-	if (auto value = ini.GetValue("Info", "Version")) {
-		enabledFeature = true;
-		version = value;
-		logger::info("GrassCollision.ini successfully loaded");
-	} else {
-		enabledFeature = false;
-		logger::warn("GrassCollision.ini not successfully loaded");
-	}
+	Feature::Load(o_json);
 }
 
 void GrassCollision::Save(json& o_json)
@@ -277,38 +267,4 @@ void GrassCollision::SetupResources()
 void GrassCollision::Reset()
 {
 	updatePerFrame = true;
-}
-
-bool GrassCollision::ValidateCache(CSimpleIniA& a_ini)
-{
-	logger::info("Validating Grass Collision");
-
-	auto enabledInCache = a_ini.GetBoolValue("Grass Collision", "Enabled", false);
-	if (enabledInCache && !enabledFeature) {
-		logger::info("Feature was uninstalled");
-		return false;
-	}
-	if (!enabledInCache && enabledFeature) {
-		logger::info("Feature was installed");
-		return false;
-	}
-
-	if (enabledFeature) {
-		auto versionInCache = a_ini.GetValue("Grass Collision", "Version");
-		if (strcmp(versionInCache, version.c_str()) != 0) {
-			logger::info("Change in version detected. Installed {} but {} in Disk Cache", version, versionInCache);
-			return false;
-		} else {
-			logger::info("Installed version and cached version match.");
-		}
-	}
-
-	logger::info("Cached feature is valid");
-	return true;
-}
-
-void GrassCollision::WriteDiskCacheInfo(CSimpleIniA& a_ini)
-{
-	a_ini.SetBoolValue("Grass Collision", "Enabled", enabledFeature);
-	a_ini.SetValue("Grass Collision", "Version", version.c_str());
 }

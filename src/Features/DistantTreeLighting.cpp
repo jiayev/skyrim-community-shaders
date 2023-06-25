@@ -150,18 +150,8 @@ void DistantTreeLighting::Load(json& o_json)
 {
 	if (o_json["Distant Tree Lighting"].is_object())
 		settings = o_json["Distant Tree Lighting"];
-	
-	CSimpleIniA ini;
-	ini.SetUnicode();
-	ini.LoadFile(L"Data\\Shaders\\Features\\TreeLODLighting.ini");
-	if (auto value = ini.GetValue("Info", "Version")) {
-		enabled = true;
-		version = value;
-		logger::info("TreeLODLighting.ini successfully loaded");
-	} else {
-		enabled = false;
-		logger::warn("TreeLODLighting.ini not successfully loaded");
-	}
+
+	Feature::Load(o_json);
 }
 
 void DistantTreeLighting::Save(json& o_json)
@@ -172,38 +162,4 @@ void DistantTreeLighting::Save(json& o_json)
 void DistantTreeLighting::SetupResources()
 {
 	perPass = new ConstantBuffer(ConstantBufferDesc<PerPass>());
-}
-
-bool DistantTreeLighting::ValidateCache(CSimpleIniA& a_ini)
-{
-	logger::info("Validating Tree LOD Lighting");
-
-	auto enabledInCache = a_ini.GetBoolValue("Tree LOD Lighting", "Enabled", false);
-	if (enabledInCache && !enabled) {
-		logger::info("Feature was uninstalled");
-		return false;
-	}
-	if (!enabledInCache && enabled) {
-		logger::info("Feature was installed");
-		return false;
-	}
-
-	if (enabled) {
-		auto versionInCache = a_ini.GetValue("Tree LOD Lighting", "Version");
-		if (strcmp(versionInCache, version.c_str()) != 0) {
-			logger::info("Change in version detected. Installed {} but {} in Disk Cache", version, versionInCache);
-			return false;
-		} else {
-			logger::info("Installed version and cached version match.");
-		}
-	}
-
-	logger::info("Cached feature is valid");
-	return true;
-}
-
-void DistantTreeLighting::WriteDiskCacheInfo(CSimpleIniA& a_ini)
-{
-	a_ini.SetBoolValue("Tree LOD Lighting", "Enabled", enabled);
-	a_ini.SetValue("Tree LOD Lighting", "Version", version.c_str());
 }
