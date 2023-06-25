@@ -5,6 +5,12 @@
 
 #include "Features/Clustered.h"
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	GrassCollision::Settings,
+	EnableGrassCollision,
+	RadiusMultiplier,
+	DisplacementMultiplier)
+
 enum class GrassShaderTechniques
 {
 	RenderDepth = 8,
@@ -15,14 +21,14 @@ void GrassCollision::DrawSettings()
 	if (ImGui::BeginTabItem("Grass Collision")) {
 		if (ImGui::TreeNodeEx("Grass Collision", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Text("Allows player collision to modify grass position.");
-			
+
 			ImGui::Checkbox("Enable Grass Collision", (bool*)&settings.EnableGrassCollision);
 			ImGui::Text("Distance from collision centres to apply collision");
 			ImGui::SliderFloat("Radius Multiplier", &settings.RadiusMultiplier, 0.0f, 8.0f);
-			
+
 			ImGui::Text("Strength of each collision on grass position.");
 			ImGui::SliderFloat("Displacement Multiplier", &settings.DisplacementMultiplier, 0.0f, 32.0f);
-		
+
 			ImGui::TreePop();
 		}
 
@@ -242,15 +248,8 @@ void GrassCollision::Draw(const RE::BSShader* shader, const uint32_t descriptor)
 
 void GrassCollision::Load(json& o_json)
 {
-	if (o_json["Grass Collision"].is_object()) {
-		json& grassCollision = o_json["Grass Collision"];
-		if (grassCollision["EnableGrassCollision"].is_boolean())
-			settings.EnableGrassCollision = grassCollision["EnableGrassCollision"];
-		if (grassCollision["RadiusMultiplier"].is_number())
-			settings.RadiusMultiplier = grassCollision["RadiusMultiplier"];
-		if (grassCollision["DisplacementMultiplier"].is_number())
-			settings.DisplacementMultiplier = grassCollision["DisplacementMultiplier"];
-	}
+	settings = o_json["Grass Collision"];
+
 	CSimpleIniA ini;
 	ini.SetUnicode();
 	ini.LoadFile(L"Data\\Shaders\\Features\\GrassCollision.ini");
@@ -266,11 +265,7 @@ void GrassCollision::Load(json& o_json)
 
 void GrassCollision::Save(json& o_json)
 {
-	json grassCollision;
-	grassCollision["EnableGrassCollision"] = (bool)settings.EnableGrassCollision;
-	grassCollision["RadiusMultiplier"] = settings.RadiusMultiplier;
-	grassCollision["DisplacementMultiplier"] = settings.DisplacementMultiplier;
-	o_json["Grass Collision"] = grassCollision;
+	o_json["Grass Collision"] = settings;
 }
 
 void GrassCollision::SetupResources()
