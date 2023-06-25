@@ -12,7 +12,7 @@ struct ScreenSpaceShadows : Feature
 	}
 
 	virtual inline std::string GetName() { return "Screen-Space Shadows"; }
-	virtual inline std::string GetIniFilename() { return "GrassLighting.ini"; }
+	virtual inline std::string GetIniFilename() { return "ScreenSpaceShadows.ini"; }
 	virtual inline std::string GetIniName() { return "Screen-Space Shadows"; }
 
 	struct Settings

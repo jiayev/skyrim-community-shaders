@@ -11,9 +11,9 @@ struct DistantTreeLighting : Feature
 		return &singleton;
 	}
 
-	virtual inline std::string GetName() { return "Screen-Space Shadows"; }
-	virtual inline std::string GetIniFilename() { return "ScreenSpaceShadows.ini"; }
-	virtual inline std::string GetIniName() { return "Screen-Space Shadows"; }
+	virtual inline std::string GetName() { return "Tree LOD Lighting"; }
+	virtual inline std::string GetIniFilename() { return "TreeLODLighting.ini"; }
+	virtual inline std::string GetIniName() { return "Tree LOD Lighting"; }
 
 	struct Settings
 	{
