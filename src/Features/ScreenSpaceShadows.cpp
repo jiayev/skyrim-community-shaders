@@ -5,6 +5,18 @@
 
 using RE::RENDER_TARGETS;
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	ScreenSpaceShadows::Settings,
+	MaxSamples,
+	FarDistanceScale,
+	FarThicknessScale,
+	FarHardness,
+	NearDistance,
+	NearThickness,
+	NearHardness,
+	BlurRadius,
+	BlurDropoff)
+
 void ScreenSpaceShadows::DrawSettings()
 {
 	if (ImGui::BeginTabItem("Screen-Space Shadows")) {
@@ -152,8 +164,13 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
-	if (sunLight) {
+	auto dirLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
+
+	bool skyLight = true;
+	if (auto sky = RE::Sky::GetSingleton())
+		skyLight = sky->mode.get() == RE::Sky::Mode::kFull;
+
+	if (dirLight && skyLight) {
 		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 
 		if (!screenSpaceShadowsTexture) {
@@ -257,7 +274,7 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 					data.DynamicRes.z = 1.0f / data.DynamicRes.x;
 					data.DynamicRes.w = 1.0f / data.DynamicRes.y;
 
-					auto& direction = sunLight->GetWorldDirection();
+					auto& direction = dirLight->GetWorldDirection();
 					DirectX::XMFLOAT3 position{};
 					position.x = -direction.x;
 					position.y = -direction.y;
@@ -398,29 +415,9 @@ void ScreenSpaceShadows::Draw(const RE::BSShader* shader, const uint32_t descrip
 
 void ScreenSpaceShadows::Load(json& o_json)
 {
-	if (o_json["Screen-Space Shadows"].is_object()) {
-		json& ssShadows = o_json["Screen-Space Shadows"];
-		if (ssShadows["EnableScreenSpaceShadows"].is_boolean())
-			enabled = ssShadows["EnableScreenSpaceShadows"];
-		if (ssShadows["MaxSamples"].is_number())
-			settings.MaxSamples = ssShadows["MaxSamples"];
-		if (ssShadows["FarDistanceScale"].is_number())
-			settings.FarDistanceScale = ssShadows["FarDistanceScale"];
-		if (ssShadows["FarThicknessScale"].is_number())
-			settings.FarThicknessScale = ssShadows["FarThicknessScale"];
-		if (ssShadows["FarHardness"].is_number())
-			settings.FarHardness = ssShadows["FarHardness"];
-		if (ssShadows["NearDistance"].is_number())
-			settings.NearDistance = ssShadows["NearDistance"];
-		if (ssShadows["NearThickness"].is_number())
-			settings.NearThickness = ssShadows["NearThickness"];
-		if (ssShadows["NearHardness"].is_number())
-			settings.NearHardness = ssShadows["NearHardness"];
-		if (ssShadows["BlurRadius"].is_number())
-			settings.BlurRadius = ssShadows["BlurRadius"];
-		if (ssShadows["BlurDropoff"].is_number())
-			settings.BlurDropoff = ssShadows["BlurDropoff"];
-	}
+	if (o_json["Screen-Space Shadows"].is_object())
+		settings = o_json["Screen-Space Shadows"];
+
 	CSimpleIniA ini;
 	ini.SetUnicode();
 	ini.LoadFile(L"Data\\Shaders\\Features\\ScreenSpaceShadows.ini");
@@ -436,18 +433,7 @@ void ScreenSpaceShadows::Load(json& o_json)
 
 void ScreenSpaceShadows::Save(json& o_json)
 {
-	json ssShadows;
-	ssShadows["EnableScreenSpaceShadows"] = enabled;
-	ssShadows["MaxSamples"] = settings.MaxSamples;
-	ssShadows["FarDistanceScale"] = settings.FarDistanceScale;
-	ssShadows["FarThicknessScale"] = settings.FarThicknessScale;
-	ssShadows["FarHardness"] = settings.FarHardness;
-	ssShadows["NearDistance"] = settings.NearDistance;
-	ssShadows["NearThickness"] = settings.NearThickness;
-	ssShadows["NearHardness"] = settings.NearHardness;
-	ssShadows["BlurRadius"] = settings.BlurRadius;
-	ssShadows["BlurDropoff"] = settings.BlurDropoff;
-	o_json["Screen-Space Shadows"] = ssShadows;
+	o_json["Screen-Space Shadows"] = settings;
 }
 
 void ScreenSpaceShadows::SetupResources()

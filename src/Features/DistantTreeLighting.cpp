@@ -3,10 +3,16 @@
 #include "State.h"
 #include "Util.h"
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	DistantTreeLighting::Settings,
+	EnableComplexTreeLOD,
+	EnableDirLightFix,
+	SubsurfaceScatteringAmount,
+	FogDimmerAmount)
+
 void DistantTreeLighting::DrawSettings()
 {
 	if (ImGui::BeginTabItem("Tree LOD Lighting")) {
-
 		if (ImGui::TreeNodeEx("Complex Tree LOD", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Text("Enables advanced lighting simulation on tree LOD.");
 			ImGui::Text("Requires DynDOLOD.");
@@ -37,7 +43,6 @@ void DistantTreeLighting::DrawSettings()
 			ImGui::SliderFloat("Fog Dimmer Amount", &settings.FogDimmerAmount, 0.0f, 1.0f);
 
 			ImGui::TreePop();
-
 		}
 
 		ImGui::EndTabItem();
@@ -52,12 +57,9 @@ enum class DistantTreeShaderTechniques
 
 void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t descriptor)
 {
-	if (auto player = RE::PlayerCharacter::GetSingleton())
-	{
-		if (auto worldSpace = player->GetWorldspace())
-		{
-			if (lastWorldSpace != worldSpace)
-			{
+	if (auto player = RE::PlayerCharacter::GetSingleton()) {
+		if (auto worldSpace = player->GetWorldspace()) {
+			if (lastWorldSpace != worldSpace) {
 				lastWorldSpace = worldSpace;
 				if (auto name = worldSpace->GetFormEditorID()) {
 					CSimpleIniA ini;
@@ -74,7 +76,6 @@ void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t 
 
 	const auto technique = descriptor & 1;
 	if (technique != static_cast<uint32_t>(DistantTreeShaderTechniques::Depth)) {
-
 		PerPass perPassData{};
 		ZeroMemory(&perPassData, sizeof(perPassData));
 
@@ -147,17 +148,9 @@ void DistantTreeLighting::Draw(const RE::BSShader* shader, const uint32_t descri
 
 void DistantTreeLighting::Load(json& o_json)
 {
-	if (o_json["Tree LOD Lighting"].is_object()) {
-		json& distantTreeLighting = o_json["Distant Tree Lighting"];
-		if (distantTreeLighting["EnableComplexTreeLOD"].is_boolean())
-			settings.EnableComplexTreeLOD = distantTreeLighting["EnableComplexTreeLOD"];
-		if (distantTreeLighting["EnableDirLightFix"].is_boolean())
-			settings.EnableDirLightFix = distantTreeLighting["EnableDirLightFix"];
-		if (distantTreeLighting["SubsurfaceScatteringAmount"].is_number())
-			settings.SubsurfaceScatteringAmount = distantTreeLighting["SubsurfaceScatteringAmount"];
-		if (distantTreeLighting["FogDimmerAmount"].is_number())
-			settings.FogDimmerAmount = distantTreeLighting["FogDimmerAmount"];
-	}
+	if (o_json["Distant Tree Lighting"].is_object())
+		settings = o_json["Distant Tree Lighting"];
+	
 	CSimpleIniA ini;
 	ini.SetUnicode();
 	ini.LoadFile(L"Data\\Shaders\\Features\\TreeLODLighting.ini");
@@ -173,12 +166,7 @@ void DistantTreeLighting::Load(json& o_json)
 
 void DistantTreeLighting::Save(json& o_json)
 {
-	json distantTreeLighting;
-	distantTreeLighting["EnableComplexTreeLOD"] = (bool)settings.EnableComplexTreeLOD;
-	distantTreeLighting["EnableDirLightFix"] = (bool)settings.EnableDirLightFix;
-	distantTreeLighting["SubsurfaceScatteringAmount"] = settings.SubsurfaceScatteringAmount;
-	distantTreeLighting["FogDimmerAmount"] = settings.FogDimmerAmount;
-	o_json["Tree LOD Lighting"] = distantTreeLighting;
+	o_json["Tree LOD Lighting"] = settings;
 }
 
 void DistantTreeLighting::SetupResources()
