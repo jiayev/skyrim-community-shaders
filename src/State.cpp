@@ -7,10 +7,6 @@
 
 #include "Feature.h"
 #include "Features/Clustered.h"
-// #include "Features/GrassLighting.h"
-// #include "Features/DistantTreeLighting.h"
-// #include "Features/GrassCollision.h"
-// #include "Features/ScreenSpaceShadows.h"
 
 void State::Draw()
 {

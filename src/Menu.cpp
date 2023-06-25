@@ -6,9 +6,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 
-#include "Features/DistantTreeLighting.h"
-#include "Features/GrassCollision.h"
-#include "Features/GrassLighting.h"
+#include "Feature.h"
 #include "Features/ScreenSpaceShadows.h"
 
 #define SETTING_MENU_TOGGLEKEY "Toggle Key"
