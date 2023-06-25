@@ -5,6 +5,14 @@
 
 #include "Features/Clustered.h"
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	GrassLighting::Settings,
+	Glossiness,
+	SpecularStrength,
+	SubsurfaceScatteringAmount,
+	EnableDirLightFix,
+	EnablePointLights)
+
 enum class GrassShaderTechniques
 {
 	RenderDepth = 8,
@@ -104,19 +112,9 @@ void GrassLighting::Draw(const RE::BSShader* shader, const uint32_t descriptor)
 
 void GrassLighting::Load(json& o_json)
 {
-	if (o_json["Grass Lighting"].is_object()) {
-		json& grassLighting = o_json["Grass Lighting"];
-		if (grassLighting["Glossiness"].is_number())
-			settings.Glossiness = grassLighting["Glossiness"];
-		if (grassLighting["SpecularStrength"].is_number())
-			settings.SpecularStrength = grassLighting["SpecularStrength"];
-		if (grassLighting["SubsurfaceScatteringAmount"].is_number())
-			settings.SubsurfaceScatteringAmount = grassLighting["SubsurfaceScatteringAmount"];
-		if (grassLighting["EnableDirLightFix"].is_boolean())
-			settings.EnableDirLightFix = grassLighting["EnableDirLightFix"];
-		if (grassLighting["EnablePointLights"].is_boolean())
-			settings.EnablePointLights = grassLighting["EnablePointLights"];
-	}
+	if (o_json["Grass Lighting"].is_object())
+		settings = o_json["Grass Lighting"];
+
 	CSimpleIniA ini;
 	ini.SetUnicode();
 	ini.LoadFile(L"Data\\Shaders\\Features\\GrassLighting.ini");
@@ -132,15 +130,8 @@ void GrassLighting::Load(json& o_json)
 
 void GrassLighting::Save(json& o_json)
 {
-	json grassLighting;
-	grassLighting["Glossiness"] = settings.Glossiness;
-	grassLighting["SpecularStrength"] = settings.SpecularStrength;
-	grassLighting["SubsurfaceScatteringAmount"] = settings.SubsurfaceScatteringAmount;
-	grassLighting["EnableDirLightFix"] = (bool)settings.EnableDirLightFix;
-	grassLighting["EnablePointLights"] = (bool)settings.EnablePointLights;
-	o_json["Grass Lighting"] = grassLighting;
+	o_json["Grass Lighting"] = settings;
 }
-
 
 void GrassLighting::SetupResources()
 {
