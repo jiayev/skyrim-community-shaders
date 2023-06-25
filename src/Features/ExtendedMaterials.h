@@ -10,7 +10,7 @@ public:
 		static ExtendedMaterials singleton;
 		return &singleton;
 	}
-
+	
 	bool enabledFeature = false;
 	std::string version;
 
@@ -52,5 +52,4 @@ public:
 	bool ValidateCache(CSimpleIniA& a_ini);
 	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
 	void Reset();
-
 };

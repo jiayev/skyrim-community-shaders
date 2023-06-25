@@ -3,8 +3,6 @@
 #include "State.h"
 #include "Util.h"
 
-#include <srell.hpp>
-
 using RE::RENDER_TARGETS;
 
 void ExtendedMaterials::DrawSettings()
@@ -101,5 +99,3 @@ void ExtendedMaterials::WriteDiskCacheInfo(CSimpleIniA& )
 void ExtendedMaterials::Reset()
 {
 }
-
-
