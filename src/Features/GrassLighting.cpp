@@ -112,7 +112,8 @@ void GrassLighting::Draw(const RE::BSShader* shader, const uint32_t descriptor)
 
 void GrassLighting::Load(json& o_json)
 {
-	settings = o_json["Grass Lighting"];
+	if (o_json["Grass Lighting"].is_object())
+		settings = o_json["Grass Lighting"];
 
 	CSimpleIniA ini;
 	ini.SetUnicode();

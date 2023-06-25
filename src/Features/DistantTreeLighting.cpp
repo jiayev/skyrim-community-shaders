@@ -148,8 +148,9 @@ void DistantTreeLighting::Draw(const RE::BSShader* shader, const uint32_t descri
 
 void DistantTreeLighting::Load(json& o_json)
 {
+	if (o_json["Distant Tree Lighting"].is_object())
 		settings = o_json["Distant Tree Lighting"];
-
+	
 	CSimpleIniA ini;
 	ini.SetUnicode();
 	ini.LoadFile(L"Data\\Shaders\\Features\\TreeLODLighting.ini");

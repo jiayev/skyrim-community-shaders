@@ -248,7 +248,8 @@ void GrassCollision::Draw(const RE::BSShader* shader, const uint32_t descriptor)
 
 void GrassCollision::Load(json& o_json)
 {
-	settings = o_json["Grass Collision"];
+	if (o_json["Grass Collision"].is_object())
+		settings = o_json["Grass Collision"];
 
 	CSimpleIniA ini;
 	ini.SetUnicode();

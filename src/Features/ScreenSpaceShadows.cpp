@@ -415,7 +415,8 @@ void ScreenSpaceShadows::Draw(const RE::BSShader* shader, const uint32_t descrip
 
 void ScreenSpaceShadows::Load(json& o_json)
 {
-	settings = o_json["Screen-Space Shadows"];
+	if (o_json["Screen-Space Shadows"].is_object())
+		settings = o_json["Screen-Space Shadows"];
 
 	CSimpleIniA ini;
 	ini.SetUnicode();
