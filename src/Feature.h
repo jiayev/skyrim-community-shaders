@@ -16,7 +16,7 @@ struct Feature
 	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor) = 0;
 
 	virtual void Load(json& o_json);
-	virtual void Save(json& o_json);
+	virtual void Save(json& o_json) = 0;
 
 	virtual bool ValidateCache(CSimpleIniA& a_ini);
 	virtual void WriteDiskCacheInfo(CSimpleIniA& a_ini);
