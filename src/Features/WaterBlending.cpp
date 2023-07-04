@@ -9,12 +9,11 @@ void WaterBlending::DrawSettings()
 		if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Checkbox("Enable Water Blending", (bool*)&settings.EnableWaterBlending);
 
-			ImGui::SliderFloat("Sharpness", &settings.Sharpness, 1, 128);
+			ImGui::SliderFloat("Water Blend Range", &settings.WaterBlendRange, 0, 2);
 
 			ImGui::Checkbox("Enable Water Blending SSR", (bool*)&settings.EnableWaterBlendingSSR);
 
-			ImGui::SliderFloat("SSR Blend Range", &settings.SSRBlendRange, 1, 64);
-			ImGui::SliderFloat("SSR Blend Sharpness", &settings.SSRBlendSharpness, 1, 16);
+			ImGui::SliderFloat("SSR Blend Range", &settings.SSRBlendRange, 0, 2);
 
 			ImGui::TreePop();
 		}
@@ -28,7 +27,6 @@ void WaterBlending::Draw(const RE::BSShader* shader, const uint32_t)
 	if (shader->shaderType.any(RE::BSShader::Type::Water, RE::BSShader::Type::Lighting)) 
 	{
 		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
-
 		
 		PerPass data{};
 		data.settings = settings;

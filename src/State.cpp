@@ -13,7 +13,7 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/WaterBlending.h"
 
-void State::Draw()
+ void State::Draw()
 {
 	auto& shaderCache = SIE::ShaderCache::Instance();
 	if (shaderCache.IsEnabled() && currentShader) {
@@ -124,6 +124,7 @@ void State::Load()
 	DistantTreeLighting::GetSingleton()->Load(settings);
 	GrassCollision::GetSingleton()->Load(settings);
 	ScreenSpaceShadows::GetSingleton()->Load(settings);
+	ExtendedMaterials::GetSingleton()->Load(settings);
 }
 
 void State::Save()
@@ -158,6 +159,7 @@ void State::Save()
 	DistantTreeLighting::GetSingleton()->Save(settings);
 	GrassCollision::GetSingleton()->Save(settings);
 	ScreenSpaceShadows::GetSingleton()->Save(settings);
+	ExtendedMaterials::GetSingleton()->Save(settings);
 
 	o << settings.dump(1);
 }

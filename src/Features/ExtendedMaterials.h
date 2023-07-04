@@ -14,22 +14,34 @@ public:
 	bool enabledFeature = false;
 	std::string version;
 
+	const char* _name = "Extended Materials";
+	const char* _shortName = "ExtendedMaterials";
+
 	struct Settings
 	{
-		uint32_t EnableParallax = 1;
-		uint32_t EnableTerrainParallax = 1;
-		uint32_t EnableExtendedParallax = 1;
 		uint32_t EnableComplexMaterial = 1;
-		uint32_t LODLevel = 8;
-		uint32_t MinSamples = 4;
-		uint32_t MaxSamples = 16;
-		float Intensity = 1;
+
+		uint32_t EnableParallax = 1;
+		uint32_t EnableTerrain = 1;
+		uint32_t EnableHighQuality = 0;
+
+		uint32_t MaxDistance = 2048;
+		float CRPMRange = 0.5f;
+		float BlendRange = 0.05f;
+		float Height = 0.1f;
+
+		uint32_t EnableShadows = 1;
+		uint32_t ShadowsStartFade = 768;
+		uint32_t ShadowsEndFade = 1024;
 	};
 
 	struct alignas(16) PerPass
 	{
+		uint32_t CullingMode = 0;
 		Settings settings;
 	};
+
+	ID3D11SamplerState* terrainSampler = nullptr;
 
 	Settings settings;
 
@@ -41,8 +53,6 @@ public:
 
 	void DrawSettings();
 
-	void ModifyGrass(const RE::BSShader* shader, const uint32_t descriptor);
-	void ModifyDistantTree(const RE::BSShader*, const uint32_t descriptor);
 	void ModifyLighting(const RE::BSShader* shader, const uint32_t descriptor);
 	void Draw(const RE::BSShader* shader, const uint32_t descriptor);
 
@@ -51,5 +61,5 @@ public:
 
 	bool ValidateCache(CSimpleIniA& a_ini);
 	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
-	void Reset();
 };
+
