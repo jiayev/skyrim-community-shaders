@@ -57,7 +57,7 @@ void DumpShader(const REX::BSShader* thisClass, const RE::BSGraphics::PixelShade
 	size_t dxbcLen = bytecode.second;
 	memcpy(dxbcData, bytecode.first.get(), bytecode.second);
 
-	std::string dumpDir = std::format("Data\\ShaderDump\\{}\\{}.ps.bin", thisClass->m_LoaderType, shader->id);
+	std::string dumpDir = std::format("Data\\ShaderDump\\{}\\{:X}.ps.bin", thisClass->m_LoaderType, shader->id);
 
 	auto directoryPath = std::format("Data\\ShaderDump\\{}", thisClass->m_LoaderType);
 	logger::debug(fmt::runtime("Dumping pixel shader {} with id {:x} at {}"), thisClass->m_LoaderType, shader->id, dumpDir);
