@@ -1,18 +1,19 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Feature.h"
 
-class GrassCollision
+struct GrassCollision : Feature
 {
-public:
 	static GrassCollision* GetSingleton()
 	{
 		static GrassCollision singleton;
 		return &singleton;
 	}
 
-	bool enabledFeature = false;
-	std::string version;
+	virtual inline std::string GetName() { return "Grass Collision"; }
+	virtual inline std::string GetIniFilename() { return "GrassCollision.ini"; }
+	virtual inline std::string GetIniName() { return "Grass Collision"; }
 
 	struct Settings
 	{
@@ -35,8 +36,6 @@ public:
 		float radius;
 	};
 
-	bool enabled = false;
-
 	std::unique_ptr<Buffer> collisions = nullptr;
 
 	Settings settings;
@@ -44,17 +43,14 @@ public:
 	bool updatePerFrame = false;
 	ConstantBuffer* perFrame = nullptr;
 
-	void SetupResources();
-	void Reset();
+	virtual void SetupResources();
+	virtual void Reset();
 
-	void DrawSettings();
+	virtual void DrawSettings();
 	void UpdateCollisions();
 	void ModifyGrass(const RE::BSShader* shader, const uint32_t descriptor);
-	void Draw(const RE::BSShader* shader, const uint32_t descriptor);
+	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
 
-	void Load(json& o_json);
-	void Save(json& o_json);
-
-	bool ValidateCache(CSimpleIniA& a_ini);
-	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
+	virtual void Load(json& o_json);
+	virtual void Save(json& o_json);
 };
