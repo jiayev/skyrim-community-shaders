@@ -2,10 +2,12 @@
 
 #include <shared_mutex>
 
-#include <d3d11.h>
 #include <DirectXMath.h>
+#include <d3d11.h>
 
 #include "Buffer.h"
+
+// Cat: since this is WIP I'm leaving it as is
 
 class Clustered
 {

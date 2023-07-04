@@ -1,18 +1,19 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Feature.h"
 
-class GrassLighting
+struct GrassLighting : Feature
 {
-public:
 	static GrassLighting* GetSingleton()
 	{
 		static GrassLighting singleton;
 		return &singleton;
 	}
 
-	bool enabled = false;
-	std::string version;
+	virtual inline std::string GetName() { return "Grass Lighting"; }
+	virtual inline std::string GetIniFilename() { return "GrassLighting.ini"; }
+	virtual inline std::string GetIniName() { return "Grass Lighting"; }
 
 	struct Settings
 	{
@@ -37,16 +38,13 @@ public:
 
 	bool updatePerFrame = false;
 	ConstantBuffer* perFrame = nullptr;
-	void SetupResources();
-	void Reset();
+	virtual void SetupResources();
+	virtual void Reset();
 
-	void DrawSettings();
+	virtual void DrawSettings();
 	void ModifyGrass(const RE::BSShader* shader, const uint32_t descriptor);
-	void Draw(const RE::BSShader* shader, const uint32_t descriptor);
+	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
 
-	void Load(json& o_json);
-	void Save(json& o_json);
-
-	bool ValidateCache(CSimpleIniA& a_ini);
-	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
+	virtual void Load(json& o_json);
+	virtual void Save(json& o_json);
 };

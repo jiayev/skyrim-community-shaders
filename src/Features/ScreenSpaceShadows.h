@@ -1,18 +1,19 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Feature.h"
 
-class ScreenSpaceShadows
+struct ScreenSpaceShadows : Feature
 {
-public:
 	static ScreenSpaceShadows* GetSingleton()
 	{
 		static ScreenSpaceShadows singleton;
 		return &singleton;
 	}
 
-	bool enabledFeature = false;
-	std::string version;
+	virtual inline std::string GetName() { return "Screen-Space Shadows"; }
+	virtual inline std::string GetIniFilename() { return "ScreenSpaceShadows.ini"; }
+	virtual inline std::string GetIniName() { return "Screen-Space Shadows"; }
 
 	struct Settings
 	{
@@ -62,12 +63,13 @@ public:
 
 	ID3D11ComputeShader* horizontalBlurProgram = nullptr;
 	ID3D11ComputeShader* verticalBlurProgram = nullptr;
-	
+
 	bool renderedScreenCamera = false;
 
-	void SetupResources();
+	virtual void SetupResources();
+	virtual void Reset();
 
-	void DrawSettings();
+	virtual void DrawSettings();
 	void ModifyGrass(const RE::BSShader* shader, const uint32_t descriptor);
 	void ModifyDistantTree(const RE::BSShader*, const uint32_t descriptor);
 
@@ -77,12 +79,8 @@ public:
 	ID3D11ComputeShader* GetComputeShaderVerticalBlur();
 
 	void ModifyLighting(const RE::BSShader* shader, const uint32_t descriptor);
-	void Draw(const RE::BSShader* shader, const uint32_t descriptor);
+	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
 
-	void Load(json& o_json);
-	void Save(json& o_json);
-
-	bool ValidateCache(CSimpleIniA& a_ini);
-	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
-	void Reset();
+	virtual void Load(json& o_json);
+	virtual void Save(json& o_json);
 };

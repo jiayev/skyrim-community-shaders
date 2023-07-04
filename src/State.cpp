@@ -2,16 +2,11 @@
 
 #include <magic_enum.hpp>
 
-#include "ShaderCache.h"
 #include "Menu.h"
+#include "ShaderCache.h"
 
+#include "Feature.h"
 #include "Features/Clustered.h"
-#include "Features/GrassLighting.h"
-#include "Features/DistantTreeLighting.h"
-#include "Features/GrassCollision.h"
-#include "Features/ScreenSpaceShadows.h"
-#include "Features/ExtendedMaterials.h"
-#include "Features/WaterBlending.h"
 
  void State::Draw()
 {
@@ -30,12 +25,8 @@
 					context->PSSetShader(pixelShader->shader, NULL, NULL);
 				}
 
-				GrassLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
-				DistantTreeLighting::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
-				GrassCollision::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
-				ScreenSpaceShadows::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
-				ExtendedMaterials::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
-				WaterBlending::GetSingleton()->Draw(currentShader, currentPixelDescriptor);
+				for (auto* feature : Feature::GetFeatureList())
+					feature->Draw(currentShader, currentPixelDescriptor);
 			}
 		}
 	}
@@ -46,19 +37,14 @@
 void State::Reset()
 {
 	Clustered::GetSingleton()->Reset();
-	GrassLighting::GetSingleton()->Reset();
-	GrassCollision::GetSingleton()->Reset();
-	ScreenSpaceShadows::GetSingleton()->Reset();
+	for (auto* feature : Feature::GetFeatureList())
+		feature->Reset();
 }
 
 void State::Setup()
 {
-	GrassLighting::GetSingleton()->SetupResources();
-	DistantTreeLighting::GetSingleton()->SetupResources();
-	GrassCollision::GetSingleton()->SetupResources();
-	ScreenSpaceShadows::GetSingleton()->SetupResources();
-	ExtendedMaterials::GetSingleton()->SetupResources();
-	WaterBlending::GetSingleton()->SetupResources();
+	for (auto* feature : Feature::GetFeatureList())
+		feature->SetupResources();
 }
 
 void State::Load()
@@ -66,7 +52,7 @@ void State::Load()
 	auto& shaderCache = SIE::ShaderCache::Instance();
 
 	std::string configPath = "Data\\SKSE\\Plugins\\CommunityShaders.json";
-	
+
 	std::ifstream i(configPath);
 	if (!i.is_open()) {
 		logger::error("Error opening config file ({})\n", configPath);
@@ -74,12 +60,9 @@ void State::Load()
 	}
 
 	json settings;
-	try 
-	{
+	try {
 		i >> settings;
-	} 
-	catch (const nlohmann::json::parse_error& e) 
-	{
+	} catch (const nlohmann::json::parse_error& e) {
 		logger::error("Error parsing json config file ({}) : {}\n", configPath, e.what());
 		return;
 	}
@@ -120,11 +103,8 @@ void State::Load()
 		}
 	}
 
-	GrassLighting::GetSingleton()->Load(settings);
-	DistantTreeLighting::GetSingleton()->Load(settings);
-	GrassCollision::GetSingleton()->Load(settings);
-	ScreenSpaceShadows::GetSingleton()->Load(settings);
-	ExtendedMaterials::GetSingleton()->Load(settings);
+	for (auto* feature : Feature::GetFeatureList())
+		feature->Load(settings);
 }
 
 void State::Save()
@@ -155,11 +135,8 @@ void State::Save()
 
 	settings["Version"] = Plugin::VERSION.string();
 
-	GrassLighting::GetSingleton()->Save(settings);
-	DistantTreeLighting::GetSingleton()->Save(settings);
-	GrassCollision::GetSingleton()->Save(settings);
-	ScreenSpaceShadows::GetSingleton()->Save(settings);
-	ExtendedMaterials::GetSingleton()->Save(settings);
+	for (auto* feature : Feature::GetFeatureList())
+		feature->Save(settings);
 
 	o << settings.dump(1);
 }
@@ -167,27 +144,15 @@ void State::Save()
 bool State::ValidateCache(CSimpleIniA& a_ini)
 {
 	bool valid = true;
-	if (!GrassLighting::GetSingleton()->ValidateCache(a_ini)) {
-		valid = false;
-	}
-	if (!DistantTreeLighting::GetSingleton()->ValidateCache(a_ini)) {
-		valid = false;
-	}
-	if (!GrassCollision::GetSingleton()->ValidateCache(a_ini)) {
-		valid = false;
-	}
-	if (!ScreenSpaceShadows::GetSingleton()->ValidateCache(a_ini)) {
-		valid = false;
-	}
+	for (auto* feature : Feature::GetFeatureList())
+		valid = valid && feature->ValidateCache(a_ini);
 	return valid;
 }
 
 void State::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 {
-	GrassLighting::GetSingleton()->WriteDiskCacheInfo(a_ini);
-	DistantTreeLighting::GetSingleton()->WriteDiskCacheInfo(a_ini);
-	GrassCollision::GetSingleton()->WriteDiskCacheInfo(a_ini);
-	ScreenSpaceShadows::GetSingleton()->WriteDiskCacheInfo(a_ini);
+	for (auto* feature : Feature::GetFeatureList())
+		feature->WriteDiskCacheInfo(a_ini);
 }
 
 void State::SetLogLevel(spdlog::level::level_enum a_level)

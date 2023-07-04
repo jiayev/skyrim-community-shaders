@@ -115,17 +115,7 @@ void GrassLighting::Load(json& o_json)
 	if (o_json["Grass Lighting"].is_object())
 		settings = o_json["Grass Lighting"];
 
-	CSimpleIniA ini;
-	ini.SetUnicode();
-	ini.LoadFile(L"Data\\Shaders\\Features\\GrassLighting.ini");
-	if (auto value = ini.GetValue("Info", "Version")) {
-		enabled = true;
-		version = value;
-		logger::info("GrassLighting.ini successfully loaded");
-	} else {
-		enabled = false;
-		logger::warn("GrassLighting.ini not successfully loaded");
-	}
+	Feature::Load(o_json);
 }
 
 void GrassLighting::Save(json& o_json)
@@ -141,38 +131,4 @@ void GrassLighting::SetupResources()
 void GrassLighting::Reset()
 {
 	updatePerFrame = true;
-}
-
-bool GrassLighting::ValidateCache(CSimpleIniA& a_ini)
-{
-	logger::info("Validating Grass Lighting");
-
-	auto enabledInCache = a_ini.GetBoolValue("Grass Lighting", "Enabled", false);
-	if (enabledInCache && !enabled) {
-		logger::info("Feature was uninstalled");
-		return false;
-	}
-	if (!enabledInCache && enabled) {
-		logger::info("Feature was installed");
-		return false;
-	}
-
-	if (enabled) {
-		auto versionInCache = a_ini.GetValue("Grass Lighting", "Version");
-		if (strcmp(versionInCache, version.c_str()) != 0) {
-			logger::info("Change in version detected. Installed {} but {} in Disk Cache", version, versionInCache);
-			return false;
-		} else {
-			logger::info("Installed version and cached version match.");
-		}
-	}
-
-	logger::info("Cached feature is valid");
-	return true;
-}
-
-void GrassLighting::WriteDiskCacheInfo(CSimpleIniA& a_ini)
-{
-	a_ini.SetBoolValue("Grass Lighting", "Enabled", enabled);
-	a_ini.SetValue("Grass Lighting", "Version", version.c_str());
 }
