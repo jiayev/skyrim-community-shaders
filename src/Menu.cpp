@@ -8,6 +8,8 @@
 
 #include "Feature.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/ExtendedMaterials.h"
+#include "Features/WaterBlending.h"
 
 #define SETTING_MENU_TOGGLEKEY "Toggle Key"
 

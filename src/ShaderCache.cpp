@@ -1075,6 +1075,9 @@ namespace SIE
 						magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor,
 						static_cast<char*>(errorBlob->GetBufferPointer()));
 					errorBlob->Release();
+				} else {
+					logger::error("Failed to compile {} shader {}::{}",
+						magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor);
 				}
 				if (shaderBlob != nullptr) {
 					shaderBlob->Release();
@@ -1085,9 +1088,13 @@ namespace SIE
 			logger::debug("Compiled {} shader {}::{}", magic_enum::enum_name(shaderClass),
 				magic_enum::enum_name(type), descriptor);
 
+			D3DStripShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), D3DCOMPILER_STRIP_REFLECTION_DATA || D3DCOMPILER_STRIP_DEBUG_INFO, nullptr);
+
 			if (useDiskCache) {
 				auto directoryPath = std::format("Data/ShaderCache/{}", shader.fxpFilename);
 				if (!std::filesystem::is_directory(directoryPath)) {
+
+
 					try {
 						std::filesystem::create_directories(directoryPath);
 					} catch (std::filesystem::filesystem_error const& ex) {
