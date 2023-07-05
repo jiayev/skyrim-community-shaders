@@ -262,7 +262,7 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset;
 
-	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Atkinson-Hyperlegible-Regular-102.ttf", 16);
+	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Atkinson-Hyperlegible-Regular-102.ttf", 20);
 
 	DXGI_SWAP_CHAIN_DESC desc;
 	swapchain->GetDesc(&desc);
@@ -461,6 +461,7 @@ void Menu::DrawSettings()
 			auto& featureList = Feature::GetFeatureList();
 
 			ImGui::TableNextColumn();
+			ImGui::Spacing();
 			for (size_t i = 0; i < featureList.size(); i++)
 				if (ImGui::Selectable(featureList[i]->GetName().c_str(), selectedFeature == i))
 					selectedFeature = i;

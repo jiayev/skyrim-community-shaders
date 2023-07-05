@@ -21,7 +21,9 @@ enum class GrassShaderTechniques
 void GrassLighting::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Complex Grass", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Text("Specular highlights for complex grass.\nFunctions the same as on other objects.");
+		ImGui::TextWrapped(
+			"Specular highlights for complex grass.\n"
+			"Functions the same as on other objects.");
 		ImGui::SliderFloat("Glossiness", &settings.Glossiness, 1.0f, 100.0f);
 		ImGui::SliderFloat("Specular Strength", &settings.SpecularStrength, 0.0f, 1.0f);
 
@@ -29,19 +31,20 @@ void GrassLighting::DrawSettings()
 	}
 
 	if (ImGui::TreeNodeEx("Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Text("Soft lighting controls how evenly lit an object is.");
-		ImGui::Text("Back lighting illuminates the back face of an object.");
-		ImGui::Text("Combined to model the transport of light through the surface.");
+		ImGui::TextWrapped(
+			"Soft lighting controls how evenly lit an object is.\n"
+			"Back lighting illuminates the back face of an object.\n"
+			"Combined to model the transport of light through the surface.");
 		ImGui::SliderFloat("Subsurface Scattering Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 1.0f);
 
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx("Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Text("Fix for grass not being affected by sunlight scale.");
+		ImGui::TextWrapped("Fix for grass not being affected by sunlight scale.");
 		ImGui::Checkbox("Enable Directional Light Fix", (bool*)&settings.EnableDirLightFix);
 
-		ImGui::Text("Enables point lights on grass like other objects. Slightly impacts performance if there are a lot of lights.");
+		ImGui::TextWrapped("Enables point lights on grass like other objects. Slightly impacts performance if there are a lot of lights.");
 		ImGui::Checkbox("Enable Point Lights", (bool*)&settings.EnablePointLights);
 
 		ImGui::TreePop();

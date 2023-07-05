@@ -22,7 +22,7 @@ void ScreenSpaceShadows::DrawSettings()
 	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Screen-Space Shadows", &enabled);
 
-		ImGui::Text("Controls the accuracy of traced shadows.");
+		ImGui::TextWrapped("Controls the accuracy of traced shadows.");
 		ImGui::SliderInt("Max Samples", (int*)&settings.MaxSamples, 1, 512);
 
 		ImGui::TreePop();

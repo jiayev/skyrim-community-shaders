@@ -17,49 +17,54 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void ExtendedMaterials::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Complex Material", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Text("Enables support for the Complex Material specification which makes use of the environment mask.");
-		ImGui::Text("This includes parallax, as well as more realistic metals and specular reflections.");
-		ImGui::Text("May lead to some warped textures on modded content which have an invalid alpha channel in their environment mask.");
+		ImGui::TextWrapped(
+			"Enables support for the Complex Material specification which makes use of the environment mask.\n"
+			"This includes parallax, as well as more realistic metals and specular reflections.\n"
+			"May lead to some warped textures on modded content which have an invalid alpha channel in their environment mask.");
 		ImGui::Checkbox("Enable Complex Material", (bool*)&settings.EnableComplexMaterial);
 
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx("Contact Refinement Parallax Mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Text("Enables parallax on standard meshes made for parallax.");
+		ImGui::TextWrapped("Enables parallax on standard meshes made for parallax.");
 		ImGui::Checkbox("Enable Parallax", (bool*)&settings.EnableParallax);
 
-		ImGui::Text("Enables terrain parallax using the alpha channel of each landscape texture.");
-		ImGui::Text("Therefore, all landscape textures must support parallax for this effect to work properly.");
+		ImGui::TextWrapped(
+			"Enables terrain parallax using the alpha channel of each landscape texture.\n"
+			"Therefore, all landscape textures must support parallax for this effect to work properly.");
 		ImGui::Checkbox("Enable Terrain", (bool*)&settings.EnableTerrain);
 
-		ImGui::Text("Doubles the sample count and approximates the intersection point using Steep Parallax Mapping.");
-		ImGui::Text("Significantly improves the quality and removes aliasing.");
-		ImGui::Text("TAA or the Skyrim Upscaler is recommended when using this option due to CRPM artifacts.");
+		ImGui::TextWrapped(
+			"Doubles the sample count and approximates the intersection point using Steep Parallax Mapping.\n"
+			"Significantly improves the quality and removes aliasing.\n"
+			"TAA or the Skyrim Upscaler is recommended when using this option due to CRPM artifacts.");
 		ImGui::Checkbox("Enable High Quality", (bool*)&settings.EnableHighQuality);
 
-		ImGui::Text("The furthest distance from the camera which uses parallax.");
+		ImGui::TextWrapped("The furthest distance from the camera which uses parallax.");
 		ImGui::SliderInt("Max Distance", (int*)&settings.MaxDistance, 0, 4096);
 
-		ImGui::Text("The percentage of the max distance which uses CRPM.");
+		ImGui::TextWrapped("The percentage of the max distance which uses CRPM.");
 		ImGui::SliderFloat("CRPM Range", &settings.CRPMRange, 0.0f, 1.0f);
 
-		ImGui::Text("The range that parallax blends from POM to relief mapping, and relief mapping to nothing.");
-		ImGui::Text("This value should be set as low as possible due to the performance impact of blending POM and relief mapping.");
+		ImGui::TextWrapped(
+			"The range that parallax blends from POM to relief mapping, and relief mapping to nothing.\n"
+			"This value should be set as low as possible due to the performance impact of blending POM and relief mapping.");
 		ImGui::SliderFloat("Blend Range", &settings.BlendRange, 0.0f, settings.CRPMRange);
 
-		ImGui::Text("The range between the highest and lowest point a surface can be offset by.");
+		ImGui::TextWrapped("The range between the highest and lowest point a surface can be offset by.");
 		ImGui::SliderFloat("Height", &settings.Height, 0, 0.2f);
 
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx("Approximate Soft Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Text("Enables cheap soft shadows when using parallax.");
-		ImGui::Text("This applies to all directional and point lights.");
+		ImGui::TextWrapped(
+			"Enables cheap soft shadows when using parallax.\n"
+			"This applies to all directional and point lights.");
 		ImGui::Checkbox("Enable Shadows", (bool*)&settings.EnableShadows);
 
-		ImGui::Text("Modifying the start and end fade can improve performance and hide obvious texture tiling.");
+		ImGui::TextWrapped("Modifying the start and end fade can improve performance and hide obvious texture tiling.");
 		ImGui::SliderInt("Shadows Start Fade", (int*)&settings.ShadowsStartFade, 0, settings.ShadowsEndFade);
 		ImGui::SliderInt("Shadows End Fade", (int*)&settings.ShadowsEndFade, settings.ShadowsStartFade, 4096);
 
