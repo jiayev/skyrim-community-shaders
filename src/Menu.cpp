@@ -7,8 +7,8 @@
 #include "State.h"
 
 #include "Feature.h"
-#include "Features/ScreenSpaceShadows.h"
 #include "Features/ExtendedMaterials.h"
+#include "Features/ScreenSpaceShadows.h"
 #include "Features/WaterBlending.h"
 
 #define SETTING_MENU_TOGGLEKEY "Toggle Key"
@@ -262,7 +262,7 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard;
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset;
 
-	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Jost-Regular.ttf", 24);
+	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Atkinson-Hyperlegible-Regular-102.ttf", 16);
 
 	DXGI_SWAP_CHAIN_DESC desc;
 	swapchain->GetDesc(&desc);
