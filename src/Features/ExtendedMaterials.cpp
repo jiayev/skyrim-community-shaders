@@ -48,7 +48,7 @@ void ExtendedMaterials::DrawSettings()
 		ImGui::SliderFloat("CRPM Range", &settings.CRPMRange, 0.0f, 1.0f);
 
 		ImGui::TextWrapped(
-			"The range that parallax blends from POM to relief mapping, and relief mapping to nothing.\n"
+			"The range that parallax blends from POM to bump mapping, and bump mapping to nothing.\n"
 			"This value should be set as low as possible due to the performance impact of blending POM and relief mapping.");
 		ImGui::SliderFloat("Blend Range", &settings.BlendRange, 0.0f, settings.CRPMRange);
 
