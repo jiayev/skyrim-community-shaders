@@ -453,18 +453,20 @@ void Menu::DrawSettings()
 
 		ImGui::Separator();
 
-		if (ImGui::BeginTable("Feature Table", 2, ImGuiTableFlags_SizingFixedFit)) {
-			ImGui::TableSetupColumn("##ListOfFeatures");
-			ImGui::TableSetupColumn("##FeatureConfig", ImGuiTableColumnFlags_WidthStretch);
+		if (ImGui::BeginTable("Feature Table", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
+			ImGui::TableSetupColumn("##ListOfFeatures", 0, 3);
+			ImGui::TableSetupColumn("##FeatureConfig", 0, 7);
 
 			static size_t selectedFeature = 0;
 			auto& featureList = Feature::GetFeatureList();
 
 			ImGui::TableNextColumn();
-			ImGui::Spacing();
-			for (size_t i = 0; i < featureList.size(); i++)
-				if (ImGui::Selectable(featureList[i]->GetName().c_str(), selectedFeature == i))
-					selectedFeature = i;
+			if (ImGui::BeginListBox("##FeatureList", { -FLT_MIN, -FLT_MIN })) {
+				for (size_t i = 0; i < featureList.size(); i++)
+					if (ImGui::Selectable(featureList[i]->GetName().c_str(), selectedFeature == i))
+						selectedFeature = i;
+				ImGui::EndListBox();
+			}
 
 			ImGui::TableNextColumn();
 			if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
