@@ -1100,7 +1100,17 @@ namespace SIE
 			logger::debug("Compiled {} shader {}::{}", magic_enum::enum_name(shaderClass),
 				magic_enum::enum_name(type), descriptor);
 
-			D3DStripShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), D3DCOMPILER_STRIP_REFLECTION_DATA || D3DCOMPILER_STRIP_DEBUG_INFO, nullptr);
+
+			ID3DBlob* strippedShaderBlob = nullptr;
+
+			const uint32_t stripFlags = D3DCOMPILER_STRIP_DEBUG_INFO |
+			                        D3DCOMPILER_STRIP_REFLECTION_DATA |
+			                        D3DCOMPILER_STRIP_TEST_BLOBS |
+			                        D3DCOMPILER_STRIP_PRIVATE_DATA;
+
+			D3DStripShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), stripFlags, &strippedShaderBlob);
+			std::swap(shaderBlob, strippedShaderBlob);
+			strippedShaderBlob->Release();
 
 			if (useDiskCache) {
 				auto directoryPath = std::format("Data/ShaderCache/{}", shader.fxpFilename);
