@@ -7,8 +7,8 @@
 #include "State.h"
 
 #include "Feature.h"
-#include "Features/ScreenSpaceShadows.h"
 #include "Features/ExtendedMaterials.h"
+#include "Features/ScreenSpaceShadows.h"
 #include "Features/WaterBlending.h"
 
 #define SETTING_MENU_TOGGLEKEY "Toggle Key"
@@ -259,10 +259,10 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	ImGui::CreateContext();
 	auto& imgui_io = ImGui::GetIO();
 
-	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard;
+	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset;
 
-	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Jost-Regular.ttf", 24);
+	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Atkinson-Hyperlegible-Regular-102.ttf", 18);
 
 	DXGI_SWAP_CHAIN_DESC desc;
 	swapchain->GetDesc(&desc);
@@ -278,162 +278,216 @@ void Menu::DrawSettings()
 	SetupImGuiStyle();
 	static bool visible = false;
 
-	ImGui::SetNextWindowSize({ 1000, 1000 }, ImGuiCond_Once);
-	ImGui::SetNextWindowPos(ImVec2(0, 0));
-	ImGui::Begin(std::format("Skyrim Community Shaders {}", Plugin::VERSION.string(".")).c_str(), &IsEnabled);
+	ImGui::DockSpaceOverViewport(NULL, ImGuiDockNodeFlags_PassthruCentralNode);
 
-	auto& shaderCache = SIE::ShaderCache::Instance();
+	ImGui::SetNextWindowSize({ 1000, 1000 }, ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowPos({ 0, 0 }, ImGuiCond_FirstUseEver);
+	if (ImGui::Begin(std::format("Skyrim Community Shaders {}", Plugin::VERSION.string(".")).c_str(), &IsEnabled)) {
+		auto& shaderCache = SIE::ShaderCache::Instance();
 
-	if (ImGui::Button("Save Settings")) {
-		State::GetSingleton()->Save();
-	}
+		if (ImGui::BeginTable("##LeButtons", 4, ImGuiTableFlags_SizingStretchSame)) {
+			ImGui::TableNextColumn();
+			if (ImGui::Button("Save Settings", { -1, 0 })) {
+				State::GetSingleton()->Save();
+			}
 
-	ImGui::SameLine();
+			ImGui::TableNextColumn();
+			if (ImGui::Button("Load Settings", { -1, 0 })) {
+				State::GetSingleton()->Load();
+			}
 
-	if (ImGui::Button("Load Settings")) {
-		State::GetSingleton()->Load();
-	}
-	ImGui::SameLine();
+			ImGui::TableNextColumn();
+			if (ImGui::Button("Clear Shader Cache", { -1, 0 })) {
+				shaderCache.Clear();
+				ScreenSpaceShadows::GetSingleton()->ClearComputeShader();
+			}
+			if (ImGui::IsItemHovered()) {
+				ImGui::BeginTooltip();
+				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+				ImGui::Text("The Shader Cache is the collection of compiled shaders which replace the vanilla shaders at runtime.");
+				ImGui::Text("Clearing the shader cache will mean that shaders are recompiled only when the game re-encounters them.");
+				ImGui::Text("This is only needed for hot-loading shaders for development purposes.");
+				ImGui::PopTextWrapPos();
+				ImGui::EndTooltip();
+			}
 
-	if (ImGui::Button("Clear Shader Cache")) {
-		shaderCache.Clear();
-		ScreenSpaceShadows::GetSingleton()->ClearComputeShader();
-	}
-	if (ImGui::IsItemHovered()) {
-		ImGui::BeginTooltip();
-		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-		ImGui::Text("The Shader Cache is the collection of compiled shaders which replace the vanilla shaders at runtime.");
-		ImGui::Text("Clearing the shader cache will mean that shaders are recompiled only when the game re-encounters them.");
-		ImGui::Text("This is only needed for hot-loading shaders for development purposes.");
-		ImGui::PopTextWrapPos();
-		ImGui::EndTooltip();
-	}
+			ImGui::TableNextColumn();
+			if (ImGui::Button("Clear Disk Cache", { -1, 0 })) {
+				shaderCache.DeleteDiskCache();
+			}
+			if (ImGui::IsItemHovered()) {
+				ImGui::BeginTooltip();
+				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+				ImGui::Text("The Disk Cache is a collection of compiled shaders on disk, which are automatically created when shaders are added to the Shader Cache.");
+				ImGui::Text("If you do not have a Disk Cache, or it is outdated or invalid, you will see \"Compiling Shaders\" in the upper-left corner.");
+				ImGui::Text("After this has completed you will no longer see this message apart from when loading from the Disk Cache.");
+				ImGui::Text("Only delete the Disk Cache manually if you are encountering issues.");
+				ImGui::PopTextWrapPos();
+				ImGui::EndTooltip();
+			}
 
-	ImGui::SameLine();
+			ImGui::EndTable();
+		}
 
-	if (ImGui::Button("Clear Disk Cache")) {
-		shaderCache.DeleteDiskCache();
-	}
-	if (ImGui::IsItemHovered()) {
-		ImGui::BeginTooltip();
-		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-		ImGui::Text("The Disk Cache is a collection of compiled shaders on disk, which are automatically created when shaders are added to the Shader Cache.");
-		ImGui::Text("If you do not have a Disk Cache, or it is outdated or invalid, you will see \"Compiling Shaders\" in the upper-left corner.");
-		ImGui::Text("After this has completed you will no longer see this message apart from when loading from the Disk Cache.");
-		ImGui::Text("Only delete the Disk Cache manually if you are encountering issues.");
-		ImGui::PopTextWrapPos();
-		ImGui::EndTooltip();
-	}
+		ImGui::Spacing();
 
-	ImGui::Spacing();
+		if (ImGui::CollapsingHeader("Menu", ImGuiTreeNodeFlags_DefaultOpen)) {
+			if (settingToggleKey) {
+				ImGui::Text("Press any key to set as toggle key...");
+			} else {
+				ImGui::AlignTextToFramePadding();
+				ImGui::Text("Toggle Key:");
+				ImGui::SameLine();
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", KeyIdToString(toggleKey));
 
-	if (ImGui::CollapsingHeader("Menu", ImGuiTreeNodeFlags_DefaultOpen)) {
-		if (settingToggleKey) {
-			ImGui::Text("Press any key to set as toggle key...");
-		} else {
-			ImGui::Text("Toggle Key:");
-			ImGui::SameLine();
-			ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", KeyIdToString(toggleKey));
-
-			ImGui::SameLine();
-			if (ImGui::Button("Change")) {
-				settingToggleKey = true;
+				ImGui::AlignTextToFramePadding();
+				ImGui::SameLine();
+				if (ImGui::Button("Change")) {
+					settingToggleKey = true;
+				}
 			}
 		}
-	}
 
-	if (ImGui::CollapsingHeader("Advanced", ImGuiTreeNodeFlags_DefaultOpen)) {
-		bool useDump = shaderCache.IsDump();
-		if (ImGui::Checkbox("Dump Shaders", &useDump)) {
-			shaderCache.SetDump(useDump);
-		}
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-			ImGui::Text("Dump shaders at startup. This should be used only when reversing shaders. Normal users don't need this.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
-		}
-		spdlog::level::level_enum logLevel = State::GetSingleton()->GetLogLevel();
-		const char* items[] = {
-			"trace",
-			"debug",
-			"info",
-			"warn",
-			"err",
-			"critical",
-			"off"
-		};
-		static int item_current = static_cast<int>(logLevel);
-		if (ImGui::Combo("Log Level", &item_current, items, IM_ARRAYSIZE(items))) {
-			ImGui::SameLine();
-			State::GetSingleton()->SetLogLevel(static_cast<spdlog::level::level_enum>(item_current));
-		}
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-			ImGui::Text("Log level. Trace is most verbose. Default is info.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
-		}
-	}
-	if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen)) {
-		bool useCustomShaders = shaderCache.IsEnabled();
-		if (ImGui::Checkbox("Enable Shaders", &useCustomShaders)) {
-			shaderCache.SetEnabled(useCustomShaders);
-		}
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-			ImGui::Text("Disabling this effectively disables all features.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
+		if (ImGui::CollapsingHeader("Advanced", ImGuiTreeNodeFlags_DefaultOpen)) {
+			bool useDump = shaderCache.IsDump();
+			if (ImGui::Checkbox("Dump Shaders", &useDump)) {
+				shaderCache.SetDump(useDump);
+			}
+			if (ImGui::IsItemHovered()) {
+				ImGui::BeginTooltip();
+				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+				ImGui::Text("Dump shaders at startup. This should be used only when reversing shaders. Normal users don't need this.");
+				ImGui::PopTextWrapPos();
+				ImGui::EndTooltip();
+			}
+			spdlog::level::level_enum logLevel = State::GetSingleton()->GetLogLevel();
+			const char* items[] = {
+				"trace",
+				"debug",
+				"info",
+				"warn",
+				"err",
+				"critical",
+				"off"
+			};
+			static int item_current = static_cast<int>(logLevel);
+			if (ImGui::Combo("Log Level", &item_current, items, IM_ARRAYSIZE(items))) {
+				ImGui::SameLine();
+				State::GetSingleton()->SetLogLevel(static_cast<spdlog::level::level_enum>(item_current));
+			}
+			if (ImGui::IsItemHovered()) {
+				ImGui::BeginTooltip();
+				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+				ImGui::Text("Log level. Trace is most verbose. Default is info.");
+				ImGui::PopTextWrapPos();
+				ImGui::EndTooltip();
+			}
 		}
 
-		bool useDiskCache = shaderCache.IsDiskCache();
-		if (ImGui::Checkbox("Enable Disk Cache", &useDiskCache)) {
-			shaderCache.SetDiskCache(useDiskCache);
-		}
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-			ImGui::Text("Disabling this stops shaders from being loaded from disk, as well as stops shaders from being saved to it.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
+		if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen)) {
+			bool useCustomShaders = shaderCache.IsEnabled();
+			if (ImGui::BeginTable("##GeneralToggles", 3, ImGuiTableFlags_SizingStretchSame)) {
+				ImGui::TableNextColumn();
+				if (ImGui::Checkbox("Enable Shaders", &useCustomShaders)) {
+					shaderCache.SetEnabled(useCustomShaders);
+				}
+				if (ImGui::IsItemHovered()) {
+					ImGui::BeginTooltip();
+					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+					ImGui::Text("Disabling this effectively disables all features.");
+					ImGui::PopTextWrapPos();
+					ImGui::EndTooltip();
+				}
+
+				bool useDiskCache = shaderCache.IsDiskCache();
+				ImGui::TableNextColumn();
+				if (ImGui::Checkbox("Enable Disk Cache", &useDiskCache)) {
+					shaderCache.SetDiskCache(useDiskCache);
+				}
+				if (ImGui::IsItemHovered()) {
+					ImGui::BeginTooltip();
+					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+					ImGui::Text("Disabling this stops shaders from being loaded from disk, as well as stops shaders from being saved to it.");
+					ImGui::PopTextWrapPos();
+					ImGui::EndTooltip();
+				}
+
+				bool useAsync = shaderCache.IsAsync();
+				ImGui::TableNextColumn();
+				if (ImGui::Checkbox("Enable Async", &useAsync)) {
+					shaderCache.SetAsync(useAsync);
+				}
+				if (ImGui::IsItemHovered()) {
+					ImGui::BeginTooltip();
+					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+					ImGui::Text("Skips a shader being replaced if it hasn't been compiled yet. Also makes compilation blazingly fast!");
+					ImGui::PopTextWrapPos();
+					ImGui::EndTooltip();
+				}
+
+				ImGui::EndTable();
+			}
 		}
 
-		bool useAsync = shaderCache.IsAsync();
-		if (ImGui::Checkbox("Enable Async", &useAsync)) {
-			shaderCache.SetAsync(useAsync);
-		}
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-			ImGui::Text("Skips a shader being replaced if it hasn't been compiled yet. Also makes compilation blazingly fast!");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
-		}
-	}
+		if (ImGui::CollapsingHeader("Replace Original Shaders", ImGuiTreeNodeFlags_DefaultOpen)) {
+			auto state = State::GetSingleton();
+			if (ImGui::BeginTable("##ReplaceToggles", 3, ImGuiTableFlags_SizingStretchSame)) {
+				for (int classIndex = 0; classIndex < RE::BSShader::Type::Total - 1; ++classIndex) {
+					ImGui::TableNextColumn();
 
-	if (ImGui::CollapsingHeader("Replace Original Shaders", ImGuiTreeNodeFlags_DefaultOpen)) {
-		auto state = State::GetSingleton();
-		for (int classIndex = 0; classIndex < RE::BSShader::Type::Total - 1; ++classIndex) {
-			auto type = (RE::BSShader::Type)(classIndex + 1);
-			if (!(SIE::ShaderCache::IsSupportedShader(type) ||
-					// allow all shaders if debug or trace logging
-					(state->GetLogLevel()) <= spdlog::level::debug)) {
-				ImGui::BeginDisabled();
-				ImGui::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
-				ImGui::EndDisabled();
-			} else
-				ImGui::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
-		}
-	}
+					auto type = (RE::BSShader::Type)(classIndex + 1);
+					if (!(SIE::ShaderCache::IsSupportedShader(type) ||
+							// allow all shaders if debug or trace logging
+							(state->GetLogLevel()) <= spdlog::level::debug)) {
+						ImGui::BeginDisabled();
+						ImGui::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
+						ImGui::EndDisabled();
+					} else
+						ImGui::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
+				}
 
-	if (ImGui::BeginTabBar("Features", ImGuiTabBarFlags_None)) {
-		for (auto* feature : Feature::GetFeatureList())
-			feature->DrawSettings();
-		ImGui::EndTabBar();
+				ImGui::EndTable();
+			}
+		}
+
+		ImGui::Separator();
+
+		if (ImGui::BeginTable("Feature Table", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
+			ImGui::TableSetupColumn("##ListOfFeatures", 0, 3);
+			ImGui::TableSetupColumn("##FeatureConfig", 0, 7);
+
+			static size_t selectedFeature = 0;
+			auto& featureList = Feature::GetFeatureList();
+
+			ImGui::TableNextColumn();
+			if (ImGui::BeginListBox("##FeatureList", { -FLT_MIN, -FLT_MIN })) {
+				for (size_t i = 0; i < featureList.size(); i++)
+					if (ImGui::Selectable(featureList[i]->GetName().c_str(), selectedFeature == i))
+						selectedFeature = i;
+				ImGui::EndListBox();
+			}
+
+			ImGui::TableNextColumn();
+			if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
+				bool shownFeature = false;
+				for (size_t i = 0; i < featureList.size(); i++)
+					if (i == selectedFeature) {
+						shownFeature = true;
+						featureList[i]->DrawSettings();
+					}
+				if (!shownFeature)
+					ImGui::TextDisabled("Please select a feature on the left.");
+			}
+			ImGui::EndChild();
+
+			ImGui::EndTable();
+		}
+		// if (ImGui::BeginTabBar("Features", ImGuiTabBarFlags_None)) {
+		// 	for (auto* feature : Feature::GetFeatureList())
+		// 		feature->DrawSettings();
+		// 	ImGui::EndTabBar();
+		// }
 	}
 
 	ImGui::End();

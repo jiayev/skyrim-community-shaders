@@ -19,41 +19,39 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void ScreenSpaceShadows::DrawSettings()
 {
-	if (ImGui::BeginTabItem("Screen-Space Shadows")) {
-		if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Checkbox("Enable Screen-Space Shadows", &enabled);
+	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Enable Screen-Space Shadows", &enabled);
 
-			ImGui::Text("Controls the accuracy of traced shadows.");
-			ImGui::SliderInt("Max Samples", (int*)&settings.MaxSamples, 1, 512);
+		ImGui::TextWrapped("Controls the accuracy of traced shadows.");
+		ImGui::SliderInt("Max Samples", (int*)&settings.MaxSamples, 1, 512);
 
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNodeEx("Blur Filter", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::SliderFloat("Blur Radius", &settings.BlurRadius, 0, 1);
-			ImGui::SliderFloat("Blur Depth Dropoff", &settings.BlurDropoff, 0.001f, 0.1f);
-
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNodeEx("Near Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::SliderFloat("Near Distance", &settings.NearDistance, 0, 128);
-			ImGui::SliderFloat("Near Thickness", &settings.NearThickness, 0, 128);
-			ImGui::SliderFloat("Near Hardness", &settings.NearHardness, 0, 64);
-
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNodeEx("Far Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::SliderFloat("Far Distance Scale", &settings.FarDistanceScale, 0, 1);
-			ImGui::SliderFloat("Far Thickness Scale", &settings.FarThicknessScale, 0, 1);
-			ImGui::SliderFloat("Far Hardness", &settings.FarHardness, 0, 64);
-
-			ImGui::TreePop();
-		}
-
-		ImGui::EndTabItem();
+		ImGui::TreePop();
 	}
+
+	if (ImGui::TreeNodeEx("Blur Filter", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::SliderFloat("Blur Radius", &settings.BlurRadius, 0, 1);
+		ImGui::SliderFloat("Blur Depth Dropoff", &settings.BlurDropoff, 0.001f, 0.1f);
+
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx("Near Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::SliderFloat("Near Distance", &settings.NearDistance, 0, 128);
+		ImGui::SliderFloat("Near Thickness", &settings.NearThickness, 0, 128);
+		ImGui::SliderFloat("Near Hardness", &settings.NearHardness, 0, 64);
+
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx("Far Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::SliderFloat("Far Distance Scale", &settings.FarDistanceScale, 0, 1);
+		ImGui::SliderFloat("Far Thickness Scale", &settings.FarThicknessScale, 0, 1);
+		ImGui::SliderFloat("Far Hardness", &settings.FarHardness, 0, 64);
+
+		ImGui::TreePop();
+	}
+
+	ImGui::EndTabItem();
 }
 
 enum class GrassShaderTechniques

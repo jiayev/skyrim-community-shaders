@@ -18,22 +18,20 @@ enum class GrassShaderTechniques
 
 void GrassCollision::DrawSettings()
 {
-	if (ImGui::BeginTabItem("Grass Collision")) {
-		if (ImGui::TreeNodeEx("Grass Collision", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Text("Allows player collision to modify grass position.");
+	if (ImGui::TreeNodeEx("Grass Collision", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::TextWrapped("Allows player collision to modify grass position.");
 
-			ImGui::Checkbox("Enable Grass Collision", (bool*)&settings.EnableGrassCollision);
-			ImGui::Text("Distance from collision centres to apply collision");
-			ImGui::SliderFloat("Radius Multiplier", &settings.RadiusMultiplier, 0.0f, 8.0f);
+		ImGui::Checkbox("Enable Grass Collision", (bool*)&settings.EnableGrassCollision);
+		ImGui::TextWrapped("Distance from collision centres to apply collision");
+		ImGui::SliderFloat("Radius Multiplier", &settings.RadiusMultiplier, 0.0f, 8.0f);
 
-			ImGui::Text("Strength of each collision on grass position.");
-			ImGui::SliderFloat("Displacement Multiplier", &settings.DisplacementMultiplier, 0.0f, 32.0f);
+		ImGui::TextWrapped("Strength of each collision on grass position.");
+		ImGui::SliderFloat("Displacement Multiplier", &settings.DisplacementMultiplier, 0.0f, 32.0f);
 
-			ImGui::TreePop();
-		}
-
-		ImGui::EndTabItem();
+		ImGui::TreePop();
 	}
+
+	ImGui::EndTabItem();
 }
 
 static bool GetShapeBound(RE::NiAVObject* a_node, RE::NiPoint3& centerPos, float& radius)
