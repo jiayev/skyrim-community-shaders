@@ -36,7 +36,7 @@ void ExtendedMaterials::DrawSettings()
 		ImGui::Checkbox("Enable Terrain", (bool*)&settings.EnableTerrain);
 
 		ImGui::TextWrapped(
-			"Doubles the sample count and approximates the intersection point using Steep Parallax Mapping.\n"
+			"Doubles the sample count and approximates the intersection point using Parallax Occlusion Mapping.\n"
 			"Significantly improves the quality and removes aliasing.\n"
 			"TAA or the Skyrim Upscaler is recommended when using this option due to CRPM artifacts.");
 		ImGui::Checkbox("Enable High Quality", (bool*)&settings.EnableHighQuality);
