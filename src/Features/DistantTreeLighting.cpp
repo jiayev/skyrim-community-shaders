@@ -12,41 +12,39 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void DistantTreeLighting::DrawSettings()
 {
-	if (ImGui::BeginTabItem("Tree LOD Lighting")) {
-		if (ImGui::TreeNodeEx("Complex Tree LOD", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Text("Enables advanced lighting simulation on tree LOD.");
-			ImGui::Text("Requires DynDOLOD.");
-			ImGui::Text("See https://dyndolod.info/ for more information.");
-			ImGui::Checkbox("Enable Complex Tree LOD", (bool*)&settings.EnableComplexTreeLOD);
+	if (ImGui::TreeNodeEx("Complex Tree LOD", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Text("Enables advanced lighting simulation on tree LOD.");
+		ImGui::Text("Requires DynDOLOD.");
+		ImGui::Text("See https://dyndolod.info/ for more information.");
+		ImGui::Checkbox("Enable Complex Tree LOD", (bool*)&settings.EnableComplexTreeLOD);
 
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNodeEx("Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Text("Fix for trees not being affected by sunlight scale.");
-			ImGui::Checkbox("Enable Directional Light Fix", (bool*)&settings.EnableDirLightFix);
-
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNodeEx("Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Text("Soft lighting controls how evenly lit an object is.");
-			ImGui::Text("Back lighting illuminates the back face of an object.");
-			ImGui::Text("Combined to model the transport of light through the surface.");
-			ImGui::SliderFloat("Subsurface Scattering Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 1.0f);
-
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNodeEx("Vanilla", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Text("Darkens lighting relative fog strength.");
-			ImGui::SliderFloat("Fog Dimmer Amount", &settings.FogDimmerAmount, 0.0f, 1.0f);
-
-			ImGui::TreePop();
-		}
-
-		ImGui::EndTabItem();
+		ImGui::TreePop();
 	}
+
+	if (ImGui::TreeNodeEx("Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Text("Fix for trees not being affected by sunlight scale.");
+		ImGui::Checkbox("Enable Directional Light Fix", (bool*)&settings.EnableDirLightFix);
+
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx("Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Text("Soft lighting controls how evenly lit an object is.");
+		ImGui::Text("Back lighting illuminates the back face of an object.");
+		ImGui::Text("Combined to model the transport of light through the surface.");
+		ImGui::SliderFloat("Subsurface Scattering Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 1.0f);
+
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx("Vanilla", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Text("Darkens lighting relative fog strength.");
+		ImGui::SliderFloat("Fog Dimmer Amount", &settings.FogDimmerAmount, 0.0f, 1.0f);
+
+		ImGui::TreePop();
+	}
+
+	ImGui::EndTabItem();
 }
 
 enum class DistantTreeShaderTechniques

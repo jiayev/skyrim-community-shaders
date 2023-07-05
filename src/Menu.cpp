@@ -332,10 +332,13 @@ void Menu::DrawSettings()
 			if (settingToggleKey) {
 				ImGui::Text("Press any key to set as toggle key...");
 			} else {
+				ImGui::AlignTextToFramePadding();
 				ImGui::Text("Toggle Key:");
 				ImGui::SameLine();
+				ImGui::AlignTextToFramePadding();
 				ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", KeyIdToString(toggleKey));
 
+				ImGui::AlignTextToFramePadding();
 				ImGui::SameLine();
 				if (ImGui::Button("Change")) {
 					settingToggleKey = true;
@@ -378,6 +381,7 @@ void Menu::DrawSettings()
 				ImGui::EndTooltip();
 			}
 		}
+
 		if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen)) {
 			bool useCustomShaders = shaderCache.IsEnabled();
 			if (ImGui::Checkbox("Enable Shaders", &useCustomShaders)) {
@@ -431,11 +435,40 @@ void Menu::DrawSettings()
 			}
 		}
 
-		if (ImGui::BeginTabBar("Features", ImGuiTabBarFlags_None)) {
-			for (auto* feature : Feature::GetFeatureList())
-				feature->DrawSettings();
-			ImGui::EndTabBar();
+		ImGui::Separator();
+
+		if (ImGui::BeginTable("Feature Table", 2, ImGuiTableFlags_SizingFixedFit)) {
+			ImGui::TableSetupColumn("##ListOfFeatures");
+			ImGui::TableSetupColumn("##FeatureConfig", ImGuiTableColumnFlags_WidthStretch);
+
+			static size_t selectedFeature = 0;
+			auto& featureList = Feature::GetFeatureList();
+
+			ImGui::TableNextColumn();
+			for (size_t i = 0; i < featureList.size(); i++)
+				if (ImGui::Selectable(featureList[i]->GetName().c_str(), selectedFeature == i))
+					selectedFeature = i;
+
+			ImGui::TableNextColumn();
+			if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
+				bool shownFeature = false;
+				for (size_t i = 0; i < featureList.size(); i++)
+					if (i == selectedFeature) {
+						shownFeature = true;
+						featureList[i]->DrawSettings();
+					}
+				if (!shownFeature)
+					ImGui::TextDisabled("Please select a feature on the left.");
+			}
+			ImGui::EndChild();
+
+			ImGui::EndTable();
 		}
+		// if (ImGui::BeginTabBar("Features", ImGuiTabBarFlags_None)) {
+		// 	for (auto* feature : Feature::GetFeatureList())
+		// 		feature->DrawSettings();
+		// 	ImGui::EndTabBar();
+		// }
 	}
 
 	ImGui::End();

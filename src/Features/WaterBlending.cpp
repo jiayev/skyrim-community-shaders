@@ -5,34 +5,30 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableWaterBlending,
 	WaterBlendRange,
 	EnableWaterBlendingSSR,
-	SSRBlendRange
-)
+	SSRBlendRange)
 
 void WaterBlending::DrawSettings()
 {
-	if (ImGui::BeginTabItem("Water Blending")) {
-		if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Checkbox("Enable Water Blending", (bool*)&settings.EnableWaterBlending);
+	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Enable Water Blending", (bool*)&settings.EnableWaterBlending);
 
-			ImGui::SliderFloat("Water Blend Range", &settings.WaterBlendRange, 0, 3);
+		ImGui::SliderFloat("Water Blend Range", &settings.WaterBlendRange, 0, 3);
 
-			ImGui::Checkbox("Enable Water Blending SSR", (bool*)&settings.EnableWaterBlendingSSR);
+		ImGui::Checkbox("Enable Water Blending SSR", (bool*)&settings.EnableWaterBlendingSSR);
 
-			ImGui::SliderFloat("SSR Blend Range", &settings.SSRBlendRange, 0, 3);
+		ImGui::SliderFloat("SSR Blend Range", &settings.SSRBlendRange, 0, 3);
 
-			ImGui::TreePop();
-		}
-
-		ImGui::EndTabItem();
+		ImGui::TreePop();
 	}
+
+	ImGui::EndTabItem();
 }
 
 void WaterBlending::Draw(const RE::BSShader* shader, const uint32_t)
 {
-	if (shader->shaderType.any(RE::BSShader::Type::Water, RE::BSShader::Type::Lighting)) 
-	{
+	if (shader->shaderType.any(RE::BSShader::Type::Water, RE::BSShader::Type::Lighting)) {
 		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
-		
+
 		PerPass data{};
 		data.settings = settings;
 
@@ -54,7 +50,7 @@ void WaterBlending::Draw(const RE::BSShader* shader, const uint32_t)
 		size_t bytes = sizeof(PerPass);
 		memcpy_s(mapped.pData, bytes, &data, bytes);
 		context->Unmap(perPass->resource.get(), 0);
-		
+
 		if (shader->shaderType.any(RE::BSShader::Type::Water)) {
 			auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 			ID3D11ShaderResourceView* views[2]{};
