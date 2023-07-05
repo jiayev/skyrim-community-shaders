@@ -597,17 +597,22 @@ PS_OUTPUT main(PS_INPUT input)
 #if defined(DEPTH)
 	if (perPassWaterBlending[0].EnableWaterBlending){
 		#if defined(VERTEX_ALPHA_DEPTH)
-			float4 background = RefractionTex.Load(float3(DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy), 0));
 			float blendFactor = 1 - smoothstep(0.0, perPassWaterBlending[0].WaterBlendRange, input.TexCoord3.z);
-
-			psout.Lighting.xyz = lerp(psout.Lighting.xyz, background.xyz, blendFactor);
-			psout.Lighting.w = lerp(psout.Lighting.w, background.w, blendFactor);
+			if (blendFactor > 0.0)
+			{
+				float4 background = RefractionTex.Load(float3(DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy), 0));
+				psout.Lighting.xyz = lerp(psout.Lighting.xyz, background.xyz, blendFactor);
+				psout.Lighting.w = lerp(psout.Lighting.w, background.w, blendFactor);
+			}
 		#else
-			float4 background = RefractionTex.Load(float3(DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy), 0));
 			float blendFactor = 1 - smoothstep(0.0, 0.01 * perPassWaterBlending[0].WaterBlendRange, distanceMul.z );
-
-			psout.Lighting.xyz = lerp(psout.Lighting.xyz, background.xyz, blendFactor);
-			psout.Lighting.w = lerp(psout.Lighting.w, background.w, blendFactor);
+			
+			if (blendFactor > 0.0)
+			{
+				float4 background = RefractionTex.Load(float3(DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy), 0));
+				psout.Lighting.xyz = lerp(psout.Lighting.xyz, background.xyz, blendFactor);
+				psout.Lighting.w = lerp(psout.Lighting.w, background.w, blendFactor);
+			}
 		#endif
 	}
 #endif
