@@ -69,7 +69,7 @@
  "Water Blending": {
   "EnableWaterBlending": 1,
   "EnableWaterBlendingSSR": 1,
-  "SSRBlendRange": 2.0,
+  "SSRBlendRange": 1.0,
   "WaterBlendRange": 1.0
  }
 }
