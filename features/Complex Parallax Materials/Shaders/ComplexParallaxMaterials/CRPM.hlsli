@@ -6,28 +6,6 @@
 // https://bartwronski.files.wordpress.com/2014/03/ac4_gdc.pdf
 // https://www.artstation.com/blogs/andreariccardi/3VPo/a-new-approach-for-parallax-mapping-presenting-the-contact-refinement-parallax-mapping-technique
 
-struct PerPassParallax
-{
-	uint CullingMode;
-
-	bool EnableComplexMaterial;
-
-	bool EnableParallax;
-	bool EnableTerrainParallax;	
-	bool EnableHighQuality;
-	
-	uint MaxDistance;
-	float CRPMRange;
-	float BlendRange;
-	float Height;
-
-	bool EnableShadows;
-	uint ShadowsStartFade;
-	uint ShadowsEndFade;
-};
-
-StructuredBuffer<PerPassParallax> perPassParallax : register(t30);
-
 float linearstep(float edge0, float edge1, float x)
 {
     return saturate((x - edge0) / (edge1 - edge0));

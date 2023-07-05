@@ -248,15 +248,15 @@ void GrassCollision::Draw(const RE::BSShader* shader, const uint32_t descriptor)
 
 void GrassCollision::Load(json& o_json)
 {
-	if (o_json["Grass Collision"].is_object())
-		settings = o_json["Grass Collision"];
+	if (o_json[GetName()].is_object())
+		settings = o_json[GetName()];
 
 	Feature::Load(o_json);
 }
 
 void GrassCollision::Save(json& o_json)
 {
-	o_json["Grass Collision"] = settings;
+	o_json[GetName()] = settings;
 }
 
 void GrassCollision::SetupResources()

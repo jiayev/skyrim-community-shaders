@@ -1,7 +1,12 @@
 #include "WaterBlending.h"
 
-#include "Util.h"
-
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	WaterBlending::Settings,
+	EnableWaterBlending,
+	WaterBlendRange,
+	EnableWaterBlendingSSR,
+	SSRBlendRange
+)
 
 void WaterBlending::DrawSettings()
 {
@@ -9,11 +14,11 @@ void WaterBlending::DrawSettings()
 		if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Checkbox("Enable Water Blending", (bool*)&settings.EnableWaterBlending);
 
-			ImGui::SliderFloat("Water Blend Range", &settings.WaterBlendRange, 0, 2);
+			ImGui::SliderFloat("Water Blend Range", &settings.WaterBlendRange, 0, 3);
 
 			ImGui::Checkbox("Enable Water Blending SSR", (bool*)&settings.EnableWaterBlendingSSR);
 
-			ImGui::SliderFloat("SSR Blend Range", &settings.SSRBlendRange, 0, 2);
+			ImGui::SliderFloat("SSR Blend Range", &settings.SSRBlendRange, 0, 3);
 
 			ImGui::TreePop();
 		}
@@ -50,7 +55,6 @@ void WaterBlending::Draw(const RE::BSShader* shader, const uint32_t)
 		memcpy_s(mapped.pData, bytes, &data, bytes);
 		context->Unmap(perPass->resource.get(), 0);
 		
-
 		if (shader->shaderType.any(RE::BSShader::Type::Water)) {
 			auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 			ID3D11ShaderResourceView* views[2]{};
@@ -82,4 +86,17 @@ void WaterBlending::SetupResources()
 	srvDesc.Buffer.FirstElement = 0;
 	srvDesc.Buffer.NumElements = 1;
 	perPass->CreateSRV(srvDesc);
+}
+
+void WaterBlending::Load(json& o_json)
+{
+	if (o_json[GetName()].is_object())
+		settings = o_json[GetName()];
+
+	Feature::Load(o_json);
+}
+
+void WaterBlending::Save(json& o_json)
+{
+	o_json[GetName()] = settings;
 }

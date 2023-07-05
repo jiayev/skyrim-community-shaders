@@ -148,15 +148,15 @@ void DistantTreeLighting::Draw(const RE::BSShader* shader, const uint32_t descri
 
 void DistantTreeLighting::Load(json& o_json)
 {
-	if (o_json["Distant Tree Lighting"].is_object())
-		settings = o_json["Distant Tree Lighting"];
+	if (o_json[GetName()].is_object())
+		settings = o_json[GetName()];
 
 	Feature::Load(o_json);
 }
 
 void DistantTreeLighting::Save(json& o_json)
 {
-	o_json["Tree LOD Lighting"] = settings;
+	o_json[GetName()] = settings;
 }
 
 void DistantTreeLighting::SetupResources()

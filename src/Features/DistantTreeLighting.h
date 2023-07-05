@@ -12,8 +12,7 @@ struct DistantTreeLighting : Feature
 	}
 
 	virtual inline std::string GetName() { return "Tree LOD Lighting"; }
-	virtual inline std::string GetIniFilename() { return "TreeLODLighting.ini"; }
-	virtual inline std::string GetIniName() { return "Tree LOD Lighting"; }
+	virtual inline std::string GetShortName() { return "TreeLODLighting"; }
 
 	struct Settings
 	{

@@ -415,15 +415,15 @@ void ScreenSpaceShadows::Draw(const RE::BSShader* shader, const uint32_t descrip
 
 void ScreenSpaceShadows::Load(json& o_json)
 {
-	if (o_json["Screen-Space Shadows"].is_object())
-		settings = o_json["Screen-Space Shadows"];
+	if (o_json[GetName()].is_object())
+		settings = o_json[GetName()];
 
 	Feature::Load(o_json);
 }
 
 void ScreenSpaceShadows::Save(json& o_json)
 {
-	o_json["Screen-Space Shadows"] = settings;
+	o_json[GetName()] = settings;
 }
 
 void ScreenSpaceShadows::SetupResources()

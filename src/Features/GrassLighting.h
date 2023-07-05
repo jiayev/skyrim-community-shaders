@@ -12,8 +12,7 @@ struct GrassLighting : Feature
 	}
 
 	virtual inline std::string GetName() { return "Grass Lighting"; }
-	virtual inline std::string GetIniFilename() { return "GrassLighting.ini"; }
-	virtual inline std::string GetIniName() { return "Grass Lighting"; }
+	virtual inline std::string GetShortName() { return "GrassLighting"; }
 
 	struct Settings
 	{

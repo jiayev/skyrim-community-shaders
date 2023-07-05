@@ -15,9 +15,54 @@
 
 void SetupImGuiStyle()
 {
-	ImGuiStyle& style = ImGui::GetStyle();
-	style.Alpha = 0.5f;
+	constexpr auto bg_alpha = 0.68f;
+	constexpr auto disabled_alpha = 0.30f;
+
+	constexpr auto background = ImVec4(0.0f, 0.0f, 0.0f, bg_alpha);
+	constexpr auto border = ImVec4(0.396f, 0.404f, 0.412f, bg_alpha);
+
+	auto& style = ImGui::GetStyle();
+	auto& colors = style.Colors;
+
+	style.WindowBorderSize = 3.0f;
+	style.TabRounding = 0.0f;
+
+	colors[ImGuiCol_WindowBg] = background;
+	colors[ImGuiCol_ChildBg] = background;
+
+	colors[ImGuiCol_Border] = border;
+	colors[ImGuiCol_Separator] = border;
+
+	colors[ImGuiCol_TextDisabled] = ImVec4(1.0f, 1.0f, 1.0f, disabled_alpha);
+
+	colors[ImGuiCol_FrameBg] = ImVec4(0.2f, 0.2f, 0.2f, bg_alpha);
+	colors[ImGuiCol_FrameBgHovered] = colors[ImGuiCol_FrameBg];
+	colors[ImGuiCol_FrameBgActive] = colors[ImGuiCol_FrameBg];
+
+	colors[ImGuiCol_SliderGrab] = ImVec4(1.0f, 1.0f, 1.0f, 0.245f);
+	colors[ImGuiCol_SliderGrabActive] = ImVec4(1.0f, 1.0f, 1.0f, 0.531f);
+
+	colors[ImGuiCol_Tab] = ImVec4(0.2f, 0.2f, 0.2f, disabled_alpha);
+	colors[ImGuiCol_TabHovered] = ImVec4(0.2f, 0.2f, 0.2f, 1.0f);
+	colors[ImGuiCol_TabActive] = colors[ImGuiCol_TabHovered];
+	colors[ImGuiCol_TabUnfocused] = colors[ImGuiCol_Tab];
+	colors[ImGuiCol_TabUnfocusedActive] = colors[ImGuiCol_TabHovered];
+
+	colors[ImGuiCol_Header] = colors[ImGuiCol_TabHovered];
+	colors[ImGuiCol_HeaderHovered] = ImVec4(1.0f, 1.0f, 1.0f, 0.1f);
+	colors[ImGuiCol_HeaderActive] = colors[ImGuiCol_HeaderActive];
+
+	colors[ImGuiCol_Button] = colors[ImGuiCol_Header];
+	colors[ImGuiCol_ButtonHovered] = colors[ImGuiCol_HeaderHovered];
+	colors[ImGuiCol_ButtonActive] = colors[ImGuiCol_HeaderHovered];
+
+	colors[ImGuiCol_TitleBg] = colors[ImGuiCol_WindowBg];
+	colors[ImGuiCol_TitleBgCollapsed] = colors[ImGuiCol_WindowBg];
+	colors[ImGuiCol_TitleBgActive] = colors[ImGuiCol_WindowBg];
+	
+	colors[ImGuiCol_CheckMark] = ImVec4(1.0f, 1.0f, 1.0f, 0.9f);
 }
+
 bool IsEnabled = false;
 
 Menu::~Menu()
@@ -185,6 +230,8 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 
 	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard;
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset;
+
+	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Jost-Regular.ttf", 20);
 
 	DXGI_SWAP_CHAIN_DESC desc;
 	swapchain->GetDesc(&desc);

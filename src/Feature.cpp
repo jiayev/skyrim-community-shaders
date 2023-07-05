@@ -4,11 +4,13 @@
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/ExtendedMaterials.h"
+#include "Features/WaterBlending.h"
 
 void Feature::Load(json&)
 {
 	// convert string to wstring
-	auto ini_filename = GetIniFilename();
+	auto ini_filename = std::format("{}.ini", GetShortName());
 	std::wstring ini_filename_w;
 	std::ranges::copy(ini_filename, std::back_inserter(ini_filename_w));
 	auto ini_path = L"Data\\Shaders\\Features\\" + ini_filename_w;
@@ -29,7 +31,7 @@ void Feature::Load(json&)
 bool Feature::ValidateCache(CSimpleIniA& a_ini)
 {
 	auto name = GetName();
-	auto ini_name = GetIniName();
+	auto ini_name = GetShortName();
 
 	logger::info("Validating {}", name);
 
@@ -59,8 +61,7 @@ bool Feature::ValidateCache(CSimpleIniA& a_ini)
 
 void Feature::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 {
-	auto ini_name = GetIniName();
-
+	auto ini_name = GetShortName();
 	a_ini.SetBoolValue(ini_name.c_str(), "Enabled", loaded);
 	a_ini.SetValue(ini_name.c_str(), "Version", version.c_str());
 }
@@ -72,7 +73,9 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		GrassLighting::GetSingleton(),
 		DistantTreeLighting::GetSingleton(),
 		GrassCollision::GetSingleton(),
-		ScreenSpaceShadows::GetSingleton()
+		ScreenSpaceShadows::GetSingleton(),
+		ExtendedMaterials::GetSingleton(),
+		WaterBlending::GetSingleton()
 	};
 	return features;
 }

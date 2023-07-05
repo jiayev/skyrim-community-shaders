@@ -6,9 +6,11 @@
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
+#include "State.h"
 #include "Features/GrassCollision.h"
 #include "Features/ScreenSpaceShadows.h"
-#include "State.h"
+#include "Features/WaterBlending.h"
+#include "Features/ExtendedMaterials.h"
 
 namespace SIE
 {
@@ -105,6 +107,11 @@ namespace SIE
 
 			if (ScreenSpaceShadows::GetSingleton()->loaded) {
 				defines[0] = { "SCREEN_SPACE_SHADOWS", nullptr };
+				++defines;
+			}
+
+			if (ExtendedMaterials::GetSingleton()->loaded) {
+				defines[0] = { "COMPLEX_PARALLAX_MATERIALS", nullptr };
 				++defines;
 			}
 
@@ -563,6 +570,11 @@ namespace SIE
 				defines[0] = { "SPECULAR", nullptr };
 				defines[1] = { "NUM_SPECULAR_LIGHTS", numLightDefines[technique] };
 				defines += 2;
+			}
+
+			if (WaterBlending::GetSingleton()->loaded) {
+				defines[0] = { "WATER_BLENDING", nullptr };
+				++defines;
 			}
 
 			defines[0] = { nullptr, nullptr };

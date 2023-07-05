@@ -12,8 +12,7 @@ struct GrassCollision : Feature
 	}
 
 	virtual inline std::string GetName() { return "Grass Collision"; }
-	virtual inline std::string GetIniFilename() { return "GrassCollision.ini"; }
-	virtual inline std::string GetIniName() { return "Grass Collision"; }
+	virtual inline std::string GetShortName() { return "GrassCollision"; }
 
 	struct Settings
 	{

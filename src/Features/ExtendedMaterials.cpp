@@ -1,8 +1,5 @@
 #include "ExtendedMaterials.h"
 
-#include "State.h"
-#include "Util.h"
-
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ExtendedMaterials::Settings,
 	EnableParallax,
@@ -26,6 +23,8 @@ void ExtendedMaterials::DrawSettings()
 			ImGui::Text("This includes parallax, as well as more realistic metals and specular reflections.");
 			ImGui::Text("May lead to some warped textures on modded content which have an invalid alpha channel in their environment mask.");
 			ImGui::Checkbox("Enable Complex Material", (bool*)&settings.EnableComplexMaterial);
+
+			ImGui::TreePop();
 		}
 
 		if (ImGui::TreeNodeEx("Contact Refinement Parallax Mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -90,24 +89,6 @@ void ExtendedMaterials::ModifyLighting(const RE::BSShader*, const uint32_t)
 		context->Unmap(perPass->resource.get(), 0);
 	}
 
-
-	if (!terrainSampler) {
-		logger::debug("Creating terrain parallax sampler state");
-
-		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-		auto device = renderer->GetRuntimeData().forwarder;
-
-		D3D11_SAMPLER_DESC samplerDesc = {};
-		samplerDesc.Filter = D3D11_FILTER_ANISOTROPIC;
-		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
-		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
-		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-		samplerDesc.MaxAnisotropy = 16;
-		samplerDesc.MinLOD = 0;
-		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &terrainSampler));
-	}
-
 	context->PSSetSamplers(1, 1, &terrainSampler);
 
 	ID3D11ShaderResourceView* views[1]{};
@@ -141,61 +122,32 @@ void ExtendedMaterials::SetupResources()
 	srvDesc.Buffer.FirstElement = 0;
 	srvDesc.Buffer.NumElements = 1;
 	perPass->CreateSRV(srvDesc);
+
+	logger::info("Creating terrain parallax sampler state");
+
+	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+	auto device = renderer->GetRuntimeData().forwarder;
+
+	D3D11_SAMPLER_DESC samplerDesc = {};
+	samplerDesc.Filter = D3D11_FILTER_ANISOTROPIC;
+	samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+	samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+	samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+	samplerDesc.MaxAnisotropy = 16;
+	samplerDesc.MinLOD = 0;
+	samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+	DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &terrainSampler));
 }
 
 void ExtendedMaterials::Load(json& o_json)
 {
-	if (o_json[_name].is_object())
-		settings = o_json[_name];
+	if (o_json[GetName()].is_object())
+		settings = o_json[GetName()];
 
-	CSimpleIniA ini;
-	ini.SetUnicode();
-	ini.LoadFile(std::format("Data\\Shaders\\Features\\{}.ini", _shortName).c_str());
-	if (auto value = ini.GetValue("Info", "Version")) {
-		enabledFeature = true;
-		version = value;
-		logger::info("{}.ini successfully loaded", _shortName);
-	} else {
-		enabledFeature = false;
-		logger::warn("{}.ini not successfully loaded", _shortName);
-	}
+	Feature::Load(o_json);
 }
 
 void ExtendedMaterials::Save(json& o_json)
 {
-	o_json[_name] = settings;
-}
-
-bool ExtendedMaterials::ValidateCache(CSimpleIniA& a_ini)
-{
-	logger::info("Validating {}", _name);
-
-	auto enabledInCache = a_ini.GetBoolValue(_name, "Enabled", false);
-	if (enabledInCache && !enabledFeature) {
-		logger::info("Feature was uninstalled");
-		return false;
-	}
-	if (!enabledInCache && enabledFeature) {
-		logger::info("Feature was installed");
-		return false;
-	}
-
-	if (enabledFeature) {
-		auto versionInCache = a_ini.GetValue(_name, "Version");
-		if (strcmp(versionInCache, version.c_str()) != 0) {
-			logger::info("Change in version detected. Installed {} but {} in Disk Cache", version, versionInCache);
-			return false;
-		} else {
-			logger::info("Installed version and cached version match.");
-		}
-	}
-
-	logger::info("Cached feature is valid");
-	return true;
-}
-
-void ExtendedMaterials::WriteDiskCacheInfo(CSimpleIniA& a_ini)
-{
-	a_ini.SetBoolValue(_name, "Enabled", enabledFeature);
-	a_ini.SetValue(_name, "Version", version.c_str());
+	o_json[GetName()] = settings;
 }

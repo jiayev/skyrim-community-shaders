@@ -6,8 +6,7 @@ struct Feature
 	std::string version;
 
 	virtual std::string GetName() = 0;
-	virtual std::string GetIniFilename() = 0;
-	virtual std::string GetIniName() = 0;
+	virtual std::string GetShortName() = 0;
 
 	virtual void SetupResources() = 0;
 	virtual void Reset() = 0;

@@ -959,7 +959,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #endif
 
 #if defined(CPM_AVAILABLE) 
-	#include "CPM/CPM.hlsli"
+	#include "ComplexParallaxMaterials/ComplexParallaxMaterials.hlsli"
 #endif
 
 #if defined(SCREEN_SPACE_SHADOWS)

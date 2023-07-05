@@ -112,15 +112,15 @@ void GrassLighting::Draw(const RE::BSShader* shader, const uint32_t descriptor)
 
 void GrassLighting::Load(json& o_json)
 {
-	if (o_json["Grass Lighting"].is_object())
-		settings = o_json["Grass Lighting"];
+	if (o_json[GetName()].is_object())
+		settings = o_json[GetName()];
 
 	Feature::Load(o_json);
 }
 
 void GrassLighting::Save(json& o_json)
 {
-	o_json["Grass Lighting"] = settings;
+	o_json[GetName()] = settings;
 }
 
 void GrassLighting::SetupResources()
