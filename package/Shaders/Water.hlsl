@@ -503,7 +503,9 @@ float3 GetSunColor(float3 normal, float3 viewDirection)
 }
 #endif
 
+#if defined(WATER_BLENDING)
 #include "WaterBlending/WaterBlending.hlsli"
+#endif
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -591,10 +593,9 @@ PS_OUTPUT main(PS_INPUT input)
 #endif
 
 	psout.Lighting = saturate(float4(finalColor * PosAdjust.w, isSpecular));
-
+#if defined(WATER_BLENDING)
 #if defined(DEPTH)
 	if (perPassWaterBlending[0].EnableWaterBlending){
-
 		#if defined(VERTEX_ALPHA_DEPTH)
 			float4 background = RefractionTex.Load(float3(DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy), 0));
 			float blendFactor = 1 - smoothstep(0.0, perPassWaterBlending[0].WaterBlendRange, input.TexCoord3.z);
@@ -609,6 +610,7 @@ PS_OUTPUT main(PS_INPUT input)
 			psout.Lighting.w = lerp(psout.Lighting.w, background.w, blendFactor);
 		#endif
 	}
+#endif
 #endif
 
 #endif

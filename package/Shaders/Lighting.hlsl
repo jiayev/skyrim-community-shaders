@@ -952,9 +952,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #endif
 }
 
-#define CPM
-
-#if defined(CPM) && (defined(PARALLAX) || defined(LANDSCAPE) || defined(ENVMAP)) 
+#if defined(COMPLEX_PARALLAX_MATERIALS) && (defined(PARALLAX) || defined(LANDSCAPE) || defined(ENVMAP)) 
 	#define CPM_AVAILABLE
 #endif
 
@@ -966,7 +964,9 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 	#include "ScreenSpaceShadows/ShadowsPS.hlsli"
 #endif
 
+#if defined(WATER_BLENDING)
 #include "WaterBlending/WaterBlending.hlsli"
+#endif
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -1793,11 +1793,6 @@ if (input.LandBlendWeights2.y > 0.0)
 	
     psout.Albedo.xyz = color.xyz - tmpColor.xyz * GammaInvX_FirstPersonY_AlphaPassZ_CreationKitW.zzz;
 
-#if defined(CPM_AVAILABLE)
-	//float3 viewDirTS = normalize(mul(viewDirection, tbn).xyz);
-	//   psout.Albedo.xyz  = 1 - viewDirTS.z;
-#endif
-
 #if defined (SNOW)
 	psout.SnowParameters.x = dot(lightsSpecularColor, float3(0.3, 0.59, 0.11));
 #endif
@@ -1813,17 +1808,19 @@ if (input.LandBlendWeights2.y > 0.0)
     tmp *= tmp * (3 + -2 * tmp);
     psout.ScreenSpaceNormals.w = tmp * SSRParams.w;
 
-if (perPassWaterBlending[0].EnableWaterBlendingSSR)
-{
-    // Compute distance to water surface
-    float distToWater = max(0, input.WorldPosition.z - perPassWaterBlending[0].WaterHeight);
-	float blendFactor = smoothstep(viewPosition.z * 0.001 * 4, viewPosition.z * 0.001 * 16 * perPassWaterBlending[0].SSRBlendRange, distToWater );
+#if defined(WATER_BLENDING)
+	if (perPassWaterBlending[0].EnableWaterBlendingSSR)
+	{
+		// Compute distance to water surface
+		float distToWater = max(0, input.WorldPosition.z - perPassWaterBlending[0].WaterHeight);
+		float blendFactor = smoothstep(viewPosition.z * 0.001 * 4, viewPosition.z * 0.001 * 16 * perPassWaterBlending[0].SSRBlendRange, distToWater );
 
-	// Reduce SSR amount
-	normal.z *= blendFactor;
-	normal.xyz = normalize(normal.xyz);
-	psout.ScreenSpaceNormals.w *= blendFactor;
-}
+		// Reduce SSR amount
+		normal.z *= blendFactor;
+		normal.xyz = normalize(normal.xyz);
+		psout.ScreenSpaceNormals.w *= blendFactor;
+	}
+#endif
 	
     float3 screenSpaceNormal;
     screenSpaceNormal.x = dot(input.ScreenNormalTransform0.xyz, normal.xyz);
