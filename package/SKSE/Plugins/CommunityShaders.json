@@ -6,9 +6,9 @@
  "Complex Parallax Materials": {
   "BlendRange": 0.05000000074505806,
   "CRPMRange": 0.5,
-  "EnableComplexMaterial": 0,
+  "EnableComplexMaterial": 1,
   "EnableHighQuality": 0,
-  "EnableParallax": 0,
+  "EnableParallax": 1,
   "EnableShadows": 1,
   "EnableTerrain": 0,
   "Height": 0.10000000149011612,
