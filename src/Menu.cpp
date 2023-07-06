@@ -77,12 +77,6 @@ void Menu::Load(json& o_json)
 	}
 	if (o_json[SETTING_MENU_FONTSCALE].is_number_float()) {
 		o_json[SETTING_MENU_FONTSCALE].get_to(fontScale);
-
-		auto trueScale = exp2(fontScale);
-		auto& style = ImGui::GetStyle();
-		style.ScaleAllSizes(trueScale);
-		auto& io = ImGui::GetIO();
-		io.FontGlobalScale = trueScale;
 	}
 }
 
@@ -272,6 +266,12 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	// Setup Platform/Renderer backends
 	ImGui_ImplWin32_Init(desc.OutputWindow);
 	ImGui_ImplDX11_Init(device, context);
+
+	//float trueScale = exp2(fontScale);
+	//auto& style = ImGui::GetStyle();
+	//style.ScaleAllSizes(trueScale);
+	//auto& io = ImGui::GetIO();
+	//io.FontGlobalScale = trueScale;
 }
 
 void Menu::DrawSettings()
@@ -350,13 +350,13 @@ void Menu::DrawSettings()
 				}
 			}
 
-			if (ImGui::SliderFloat("Font Scale", &fontScale, -2.f, 2.f, "%.2f")) {
-				float trueScale = exp2(fontScale);
-				auto& style = ImGui::GetStyle();
-				style.ScaleAllSizes(trueScale);
-				auto& io = ImGui::GetIO();
-				io.FontGlobalScale = trueScale;
-			}
+			//if (ImGui::SliderFloat("Font Scale", &fontScale, -2.f, 2.f, "%.2f")) {
+			//	float trueScale = exp2(fontScale);
+			//	auto& style = ImGui::GetStyle();
+			//	style.ScaleAllSizes(trueScale);
+			//	auto& io = ImGui::GetIO();
+			//	io.FontGlobalScale = trueScale;
+			//}
 		}
 
 		if (ImGui::CollapsingHeader("Advanced", ImGuiTreeNodeFlags_DefaultOpen)) {
