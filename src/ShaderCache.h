@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-static constexpr REL::Version SHADER_CACHE_VERSION = { 0, 0, 0, 4 };
+static constexpr REL::Version SHADER_CACHE_VERSION = { 0, 0, 0, 5 };
 
 namespace SIE
 {
