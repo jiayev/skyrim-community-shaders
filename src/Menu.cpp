@@ -129,13 +129,17 @@ void Menu::Save(json& o_json)
 	o_json["Menu"] = menu;
 }
 
+#define IM_VK_KEYPAD_ENTER (VK_RETURN + 256)
 RE::BSEventNotifyControl Menu::ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>* a_eventSource)
 {
 	if (!a_event || !a_eventSource)
 		return RE::BSEventNotifyControl::kContinue;
 
+	auto& io = ImGui::GetIO();
+
 	for (auto event = *a_event; event; event = event->next) {
 		if (event->eventType == RE::INPUT_EVENT_TYPE::kChar) {
+			io.AddInputCharacter(event->AsCharEvent()->keycode);
 		} else if (event->eventType == RE::INPUT_EVENT_TYPE::kButton) {
 			const auto button = static_cast<RE::ButtonEvent*>(event);
 			if (!button || (button->IsPressed() && !button->IsDown()))
@@ -208,12 +212,27 @@ RE::BSEventNotifyControl Menu::ProcessEvent(RE::InputEvent* const* a_event, RE::
 			case DIK_DECIMAL:
 				key = VK_DECIMAL;
 				break;
+			case DIK_NUMPADENTER:
+				key = IM_VK_KEYPAD_ENTER;
+				break;
+			case DIK_LMENU:
+				key = VK_LMENU;
+				break;  // left alt
+			case DIK_LCONTROL:
+				key = VK_LCONTROL;
+				break;  // left control
+			case DIK_LSHIFT:
+				key = VK_LSHIFT;
+				break;  // left shift
 			case DIK_RMENU:
 				key = VK_RMENU;
 				break;  // right alt
 			case DIK_RCONTROL:
 				key = VK_RCONTROL;
 				break;  // right control
+			case DIK_RSHIFT:
+				key = VK_RSHIFT;
+				break;  // right shift
 			case DIK_LWIN:
 				key = VK_LWIN;
 				break;  // left win
@@ -227,7 +246,6 @@ RE::BSEventNotifyControl Menu::ProcessEvent(RE::InputEvent* const* a_event, RE::
 				break;
 			}
 
-			auto& io = ImGui::GetIO();
 			switch (button->device.get()) {
 			case RE::INPUT_DEVICE::kKeyboard:
 				if (!button->IsPressed()) {
@@ -239,10 +257,17 @@ RE::BSEventNotifyControl Menu::ProcessEvent(RE::InputEvent* const* a_event, RE::
 						if (const auto controlMap = RE::ControlMap::GetSingleton()) {
 							controlMap->GetRuntimeData().ignoreKeyboardMouse = IsEnabled;
 						}
-					} else {
-						io.AddKeyEvent(VirtualKeyToImGuiKey(key), button->IsPressed());
 					}
 				}
+
+				io.AddKeyEvent(VirtualKeyToImGuiKey(key), button->IsPressed());
+
+				if (key == VK_LCONTROL || key == VK_RCONTROL)
+					io.AddKeyEvent(ImGuiMod_Ctrl, button->IsPressed());
+				else if (key == VK_LSHIFT || key == VK_RSHIFT)
+					io.AddKeyEvent(ImGuiMod_Shift, button->IsPressed());
+				else if (key == VK_LMENU || key == VK_RMENU)
+					io.AddKeyEvent(ImGuiMod_Alt, button->IsPressed());
 				break;
 			case RE::INPUT_DEVICE::kMouse:
 				logger::trace("Detect mouse scan code {} value {} pressed: {}", scan_code, button->Value(), button->IsPressed());
@@ -583,7 +608,6 @@ const char* Menu::KeyIdToString(uint32_t key)
 	return keyboard_keys_international[key];
 }
 
-#define IM_VK_KEYPAD_ENTER (VK_RETURN + 256)
 const ImGuiKey Menu::VirtualKeyToImGuiKey(WPARAM vkKey)
 {
 	switch (vkKey) {
