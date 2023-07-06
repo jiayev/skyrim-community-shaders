@@ -270,6 +270,7 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	float trueScale = exp2(fontScale);
 	auto& style = ImGui::GetStyle();
 	style.ScaleAllSizes(trueScale);
+	style.MouseCursorScale = 1.f;
 	auto& io = ImGui::GetIO();
 	io.FontGlobalScale = trueScale;
 }
@@ -354,6 +355,7 @@ void Menu::DrawSettings()
 				float trueScale = exp2(fontScale);
 				auto& style = ImGui::GetStyle();
 				style.ScaleAllSizes(trueScale);
+				style.MouseCursorScale = 1.f;
 				auto& io = ImGui::GetIO();
 				io.FontGlobalScale = trueScale;
 			}
