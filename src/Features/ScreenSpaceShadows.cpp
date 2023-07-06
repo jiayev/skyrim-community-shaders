@@ -50,8 +50,6 @@ void ScreenSpaceShadows::DrawSettings()
 
 		ImGui::TreePop();
 	}
-
-	ImGui::EndTabItem();
 }
 
 enum class GrassShaderTechniques

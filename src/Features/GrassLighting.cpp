@@ -35,6 +35,7 @@ void GrassLighting::DrawSettings()
 			"Soft lighting controls how evenly lit an object is.\n"
 			"Back lighting illuminates the back face of an object.\n"
 			"Combined to model the transport of light through the surface.");
+		ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.5f);
 		ImGui::SliderFloat("Subsurface Scattering Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 1.0f);
 
 		ImGui::TreePop();
@@ -49,8 +50,6 @@ void GrassLighting::DrawSettings()
 
 		ImGui::TreePop();
 	}
-
-	ImGui::EndTabItem();
 }
 
 void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)

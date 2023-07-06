@@ -20,8 +20,6 @@ void WaterBlending::DrawSettings()
 
 		ImGui::TreePop();
 	}
-
-	ImGui::EndTabItem();
 }
 
 void WaterBlending::Draw(const RE::BSShader* shader, const uint32_t)

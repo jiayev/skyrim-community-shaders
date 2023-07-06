@@ -70,8 +70,6 @@ void ExtendedMaterials::DrawSettings()
 
 		ImGui::TreePop();
 	}
-
-	ImGui::EndTabItem();
 }
 
 void ExtendedMaterials::ModifyLighting(const RE::BSShader*, const uint32_t)

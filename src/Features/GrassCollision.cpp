@@ -30,8 +30,6 @@ void GrassCollision::DrawSettings()
 
 		ImGui::TreePop();
 	}
-
-	ImGui::EndTabItem();
 }
 
 static bool GetShapeBound(RE::NiAVObject* a_node, RE::NiPoint3& centerPos, float& radius)

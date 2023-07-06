@@ -45,8 +45,6 @@ void DistantTreeLighting::DrawSettings()
 
 		ImGui::TreePop();
 	}
-
-	ImGui::EndTabItem();
 }
 
 enum class DistantTreeShaderTechniques
