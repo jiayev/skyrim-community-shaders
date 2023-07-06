@@ -12,6 +12,7 @@
 #include "Features/WaterBlending.h"
 
 #define SETTING_MENU_TOGGLEKEY "Toggle Key"
+#define SETTING_MENU_FONTSCALE "Font Scale"
 
 void SetupImGuiStyle()
 {
@@ -108,12 +109,22 @@ void Menu::Load(json& o_json)
 	if (o_json[SETTING_MENU_TOGGLEKEY].is_number_unsigned()) {
 		toggleKey = o_json[SETTING_MENU_TOGGLEKEY];
 	}
+	if (o_json[SETTING_MENU_FONTSCALE].is_number_float()) {
+		o_json[SETTING_MENU_FONTSCALE].get_to(fontScale);
+
+		auto trueScale = exp2(fontScale);
+		auto& style = ImGui::GetStyle();
+		style.ScaleAllSizes(trueScale);
+		auto& io = ImGui::GetIO();
+		io.FontGlobalScale = trueScale;
+	}
 }
 
 void Menu::Save(json& o_json)
 {
 	json menu;
 	menu[SETTING_MENU_TOGGLEKEY] = toggleKey;
+	menu[SETTING_MENU_FONTSCALE] = fontScale;
 
 	o_json["Menu"] = menu;
 }
@@ -262,7 +273,7 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset;
 
-	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Atkinson-Hyperlegible-Regular-102.ttf", 18);
+	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Atkinson-Hyperlegible-Regular-102.ttf", 24);
 
 	DXGI_SWAP_CHAIN_DESC desc;
 	swapchain->GetDesc(&desc);
@@ -346,6 +357,14 @@ void Menu::DrawSettings()
 				if (ImGui::Button("Change")) {
 					settingToggleKey = true;
 				}
+			}
+
+			if (ImGui::SliderFloat("Font Scale", &fontScale, -2.f, 2.f, "%.2f")) {
+				float trueScale = exp2(fontScale);
+				auto& style = ImGui::GetStyle();
+				style.ScaleAllSizes(trueScale);
+				auto& io = ImGui::GetIO();
+				io.FontGlobalScale = trueScale;
 			}
 		}
 
