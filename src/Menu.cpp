@@ -469,14 +469,15 @@ void Menu::DrawSettings()
 			ImGui::TableSetupColumn("##ListOfFeatures", 0, 3);
 			ImGui::TableSetupColumn("##FeatureConfig", 0, 7);
 
-			static size_t selectedFeature = 0;
+			static size_t selectedFeature = SIZE_T_MAX;
 			auto& featureList = Feature::GetFeatureList();
 
 			ImGui::TableNextColumn();
 			if (ImGui::BeginListBox("##FeatureList", { -FLT_MIN, -FLT_MIN })) {
 				for (size_t i = 0; i < featureList.size(); i++)
-					if (ImGui::Selectable(featureList[i]->GetName().c_str(), selectedFeature == i))
-						selectedFeature = i;
+					if (featureList[i]->loaded)
+						if (ImGui::Selectable(featureList[i]->GetName().c_str(), selectedFeature == i))
+							selectedFeature = i;
 				ImGui::EndListBox();
 			}
 
