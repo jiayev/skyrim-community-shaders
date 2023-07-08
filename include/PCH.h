@@ -9,7 +9,6 @@
 #	define SKSEPlugin_Load F4SEPlugin_Load
 #	define SKSEPlugin_Query F4SEPlugin_Query
 #else
-#	undef ENABLE_SKYRIM_VR
 #	define SKSE_SUPPORT_XBYAK
 #	include "RE/Skyrim.h"
 #	include "SKSE/SKSE.h"
