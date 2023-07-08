@@ -76,7 +76,7 @@ void Menu::Load(json& o_json)
 		toggleKey = o_json[SETTING_MENU_TOGGLEKEY];
 	}
 	if (o_json[SETTING_MENU_FONTSCALE].is_number_float()) {
-		o_json[SETTING_MENU_FONTSCALE].get_to(fontScale);
+		fontScale = o_json[SETTING_MENU_FONTSCALE];
 	}
 }
 
@@ -267,11 +267,12 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	ImGui_ImplWin32_Init(desc.OutputWindow);
 	ImGui_ImplDX11_Init(device, context);
 
-	//float trueScale = exp2(fontScale);
-	//auto& style = ImGui::GetStyle();
-	//style.ScaleAllSizes(trueScale);
-	//auto& io = ImGui::GetIO();
-	//io.FontGlobalScale = trueScale;
+	float trueScale = exp2(fontScale);
+	auto& style = ImGui::GetStyle();
+	style.ScaleAllSizes(trueScale);
+	style.MouseCursorScale = 1.f;
+	auto& io = ImGui::GetIO();
+	io.FontGlobalScale = trueScale;
 }
 
 void Menu::DrawSettings()
@@ -350,13 +351,14 @@ void Menu::DrawSettings()
 				}
 			}
 
-			//if (ImGui::SliderFloat("Font Scale", &fontScale, -2.f, 2.f, "%.2f")) {
-			//	float trueScale = exp2(fontScale);
-			//	auto& style = ImGui::GetStyle();
-			//	style.ScaleAllSizes(trueScale);
-			//	auto& io = ImGui::GetIO();
-			//	io.FontGlobalScale = trueScale;
-			//}
+			if (ImGui::SliderFloat("Font Scale", &fontScale, -2.f, 2.f, "%.2f")) {
+				float trueScale = exp2(fontScale);
+				auto& style = ImGui::GetStyle();
+				style.ScaleAllSizes(trueScale);
+				style.MouseCursorScale = 1.f;
+				auto& io = ImGui::GetIO();
+				io.FontGlobalScale = trueScale;
+			}
 		}
 
 		if (ImGui::CollapsingHeader("Advanced", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -467,14 +469,15 @@ void Menu::DrawSettings()
 			ImGui::TableSetupColumn("##ListOfFeatures", 0, 3);
 			ImGui::TableSetupColumn("##FeatureConfig", 0, 7);
 
-			static size_t selectedFeature = 0;
+			static size_t selectedFeature = SIZE_T_MAX;
 			auto& featureList = Feature::GetFeatureList();
 
 			ImGui::TableNextColumn();
 			if (ImGui::BeginListBox("##FeatureList", { -FLT_MIN, -FLT_MIN })) {
 				for (size_t i = 0; i < featureList.size(); i++)
-					if (ImGui::Selectable(featureList[i]->GetName().c_str(), selectedFeature == i))
-						selectedFeature = i;
+					if (featureList[i]->loaded)
+						if (ImGui::Selectable(featureList[i]->GetName().c_str(), selectedFeature == i))
+							selectedFeature = i;
 				ImGui::EndListBox();
 			}
 
@@ -493,11 +496,6 @@ void Menu::DrawSettings()
 
 			ImGui::EndTable();
 		}
-		// if (ImGui::BeginTabBar("Features", ImGuiTabBarFlags_None)) {
-		// 	for (auto* feature : Feature::GetFeatureList())
-		// 		feature->DrawSettings();
-		// 	ImGui::EndTabBar();
-		// }
 	}
 
 	ImGui::End();
