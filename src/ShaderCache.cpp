@@ -1297,6 +1297,14 @@ namespace SIE
 			return nullptr;
 		}
 
+		if (shader.shaderType.get() == RE::BSShader::Type::Water)
+		{
+			const auto technique = (descriptor >> 11) & 0xF;
+			if (technique == 9) { // LOD
+				return nullptr;
+			}
+		}
+
 		{
 			std::lock_guard lockGuard(pixelShadersMutex);
 			auto& typeCache = pixelShaders[static_cast<size_t>(shader.shaderType.underlying())];

@@ -1,6 +1,10 @@
 #include "Common/FrameBuffer.hlsl"
 #include "Common/MotionBlur.hlsl"
 
+#if defined(VERTEX_ALPHA_DEPTH)
+#define VC
+#endif
+
 struct VS_INPUT
 {
 #if defined(SPECULAR) || defined(UNDERWATER) || defined(STENCIL) || defined(SIMPLE)
