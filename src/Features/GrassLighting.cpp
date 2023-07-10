@@ -69,16 +69,26 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 			auto& position = accumulator->GetRuntimeData().eyePosition;
 			auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 
-			RE::NiPoint3 eyePosition{};
+
 			if (REL::Module::IsVR()) {
-				// find center of eye position
-				eyePosition = state->GetVRRuntimeData().posAdjust.getEye() + state->GetVRRuntimeData().posAdjust.getEye(1);
-				eyePosition /= 2;
-			} else
-				eyePosition = state->GetRuntimeData().posAdjust.getEye();
-			perFrameData.EyePosition.x = position.x - eyePosition.x;
-			perFrameData.EyePosition.y = position.y - eyePosition.y;
-			perFrameData.EyePosition.z = position.z - eyePosition.z;
+				RE::NiPoint3 eyePosition = state->GetVRRuntimeData().posAdjust.getEye();
+
+				perFrameData.EyePosition.x = position.x - eyePosition.x;
+				perFrameData.EyePosition.y = position.y - eyePosition.y;
+				perFrameData.EyePosition.z = position.z - eyePosition.z;
+
+				eyePosition = state->GetVRRuntimeData().posAdjust.getEye(1);
+				perFrameData.EyePosition2.x = position.x - eyePosition.x;
+				perFrameData.EyePosition2.y = position.y - eyePosition.y;
+				perFrameData.EyePosition2.z = position.z - eyePosition.z;
+			} else {
+				RE::NiPoint3 eyePosition = state->GetRuntimeData().posAdjust.getEye();
+
+				perFrameData.EyePosition.x = position.x - eyePosition.x;
+				perFrameData.EyePosition.y = position.y - eyePosition.y;
+				perFrameData.EyePosition.z = position.z - eyePosition.z;
+
+			}
 
 			auto manager = RE::ImageSpaceManager::GetSingleton();
 			perFrameData.SunlightScale = manager->data.baseData.hdr.sunlightScale;
