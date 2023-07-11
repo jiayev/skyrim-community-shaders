@@ -282,6 +282,10 @@ namespace SIE
 				++defines;
 			}
 
+			if (REL::Module::IsVR()) {
+				defines[0] = { "VR", nullptr };
+				++defines;
+			}
 			defines[0] = { nullptr, nullptr };
 		}
 
