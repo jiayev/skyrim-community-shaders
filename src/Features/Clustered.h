@@ -21,8 +21,7 @@ public:
 	struct alignas(16) LightSData
 	{
 		DirectX::XMVECTOR color;
-		DirectX::XMVECTOR positionWS;
-		DirectX::XMVECTOR positionWS2;
+		DirectX::XMVECTOR positionWS[2];
 		float radius;
 		uint32_t shadow;
 		float mask;

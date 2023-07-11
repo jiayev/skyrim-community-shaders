@@ -26,6 +26,15 @@ struct GrassLighting : Feature
 	struct alignas(16) PerFrame
 	{
 		DirectX::XMFLOAT4 EyePosition;
+		DirectX::XMFLOAT3X4 DirectionalAmbient;
+		float SunlightScale;
+		Settings Settings;
+		float pad[2];
+	};
+
+	struct alignas(16) PerFrameVR
+	{
+		DirectX::XMFLOAT4 EyePosition;
 		DirectX::XMFLOAT4 EyePosition2;
 		DirectX::XMFLOAT3X4 DirectionalAmbient;
 		float SunlightScale;
@@ -46,4 +55,7 @@ struct GrassLighting : Feature
 
 	virtual void Load(json& o_json);
 	virtual void Save(json& o_json);
+
+private:
+	void ProcessFrame(PerFrame* perFrameData, PerFrameVR* perFrameDataVR);
 };
