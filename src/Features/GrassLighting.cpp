@@ -113,8 +113,8 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 		ID3D11Buffer* buffers[2];
 		context->VSGetConstantBuffers(2, 1, buffers);  // buffers[0]
 		buffers[1] = perFrame->CB();
-		context->VSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
-		context->PSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
+	//	context->VSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
+		context->PSSetConstantBuffers(9, ARRAYSIZE(buffers), buffers);
 	}
 }
 
