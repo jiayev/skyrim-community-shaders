@@ -1821,6 +1821,9 @@ if (input.LandBlendWeights2.y > 0.0)
 		psout.ScreenSpaceNormals.w *= blendFactor;
 	}
 #endif
+
+	// Green reflections fix
+	psout.ScreenSpaceNormals.w = psout.ScreenSpaceNormals.w * psout.Albedo.w * psout.Albedo.w;
 	
     float3 screenSpaceNormal;
     screenSpaceNormal.x = dot(input.ScreenNormalTransform0.xyz, normal.xyz);
