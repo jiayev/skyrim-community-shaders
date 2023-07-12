@@ -46,7 +46,13 @@ struct VS_OUTPUT
 };
 
 // Constant Buffers (Flat and VR)
-cbuffer PerGeometry									: register(b2)
+cbuffer PerGeometry									: register(
+#ifdef VSHADER
+	b2
+#else
+	b3
+#endif
+)
 {
 #if !defined(VR)
 	row_major float4x4 WorldViewProj				: packoffset(c0);
@@ -80,7 +86,13 @@ cbuffer PerGeometry									: register(b2)
 #endif // !VR
 }
 
-cbuffer PerFrame : register(b3)
+cbuffer PerFrame : register(
+#ifdef VSHADER
+	b3
+#else
+	b4
+#endif
+)
 {
 #if !defined(VR)
 	float4  			EyePosition;
@@ -572,7 +584,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 
 	if (EnablePointLights) {
-		uint counter = 0;
 		uint light_count, dummy;
 		lights.GetDimensions(light_count, dummy);
 		for (uint light_index = 0; light_index < light_count; light_index++)
@@ -584,7 +595,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float intensityFactor = saturate(lightDist / light.radius);
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 				if (intensityMultiplier) {
-					counter++;
 					float3 lightColor = light.color.xyz;
 
 					if (light.shadow) {
