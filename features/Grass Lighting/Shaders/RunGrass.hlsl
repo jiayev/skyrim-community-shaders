@@ -330,7 +330,7 @@ cbuffer cb0 : register(b0)
 
 #endif // VR
 
-cbuffer PerFrame : register(b12)
+cbuffer PS_cb12 : register(b12)
 {
 #if !defined(VR)
     row_major float4x4  ViewMatrix                                                  : packoffset(c0);
