@@ -52,59 +52,58 @@ void GrassLighting::DrawSettings()
 	}
 }
 
-void GrassLighting::ProcessFrame(PerFrame* perFrameData, PerFrameVR* perFrameDataVR)
-{
-	auto& shaderState = RE::BSShaderManager::State::GetSingleton();
-	RE::NiTransform& dalcTransform = shaderState.directionalAmbientTransform;
-	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-	auto& position = accumulator->GetRuntimeData().eyePosition;
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-	auto manager = RE::ImageSpaceManager::GetSingleton();
-	if (REL::Module::IsVR()) {
-		ZeroMemory(perFrameDataVR, sizeof(perFrameDataVR));
-		Util::StoreTransform3x4NoScale(perFrameDataVR->DirectionalAmbient, dalcTransform);
-		RE::NiPoint3 eyePosition = state->GetVRRuntimeData().posAdjust.getEye();
-
-		perFrameDataVR->EyePosition.x = position.x - eyePosition.x;
-		perFrameDataVR->EyePosition.y = position.y - eyePosition.y;
-		perFrameDataVR->EyePosition.z = position.z - eyePosition.z;
-
-		eyePosition = state->GetVRRuntimeData().posAdjust.getEye(1);
-		perFrameDataVR->EyePosition2.x = position.x - eyePosition.x;
-		perFrameDataVR->EyePosition2.y = position.y - eyePosition.y;
-		perFrameDataVR->EyePosition2.z = position.z - eyePosition.z;
-
-		perFrameDataVR->SunlightScale = manager->data.baseData.hdr.sunlightScale;
-
-		perFrameDataVR->Settings = settings;
-
-		perFrame->Update(perFrameDataVR);
-
-	} else {
-		ZeroMemory(perFrameData, sizeof(perFrameData));
-		Util::StoreTransform3x4NoScale(perFrameData->DirectionalAmbient, dalcTransform);
-		RE::NiPoint3 eyePosition = state->GetRuntimeData().posAdjust.getEye();
-
-		perFrameData->EyePosition.x = position.x - eyePosition.x;
-		perFrameData->EyePosition.y = position.y - eyePosition.y;
-		perFrameData->EyePosition.z = position.z - eyePosition.z;
-		perFrameData->SunlightScale = manager->data.baseData.hdr.sunlightScale;
-
-		perFrameData->Settings = settings;
-
-		perFrame->Update(perFrameData);
-	}
-
-	updatePerFrame = false;
-}
 void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 {
 	const auto technique = descriptor & 0b1111;
 	if (technique != static_cast<uint32_t>(GrassShaderTechniques::RenderDepth)) {
-		PerFrame perFrameData{};
-		PerFrameVR perFrameDataVR{};
 		if (updatePerFrame) {
-			ProcessFrame(&perFrameData, &perFrameDataVR);
+			auto& shaderState = RE::BSShaderManager::State::GetSingleton();
+			auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
+			auto& position = accumulator->GetRuntimeData().eyePosition;
+			auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+			RE::NiTransform& dalcTransform = shaderState.directionalAmbientTransform;
+			auto manager = RE::ImageSpaceManager::GetSingleton();
+
+			if (REL::Module::IsVR()) {
+				PerFrameVR perFrameDataVR{};
+				ZeroMemory(&perFrameDataVR, sizeof(perFrameDataVR));
+				Util::StoreTransform3x4NoScale(perFrameDataVR.DirectionalAmbient, dalcTransform);
+
+				RE::NiPoint3 eyePosition = state->GetVRRuntimeData().posAdjust.getEye();
+
+				perFrameDataVR.EyePosition.x = position.x - eyePosition.x;
+				perFrameDataVR.EyePosition.y = position.y - eyePosition.y;
+				perFrameDataVR.EyePosition.z = position.z - eyePosition.z;
+
+				eyePosition = state->GetVRRuntimeData().posAdjust.getEye(1);
+				perFrameDataVR.EyePosition2.x = position.x - eyePosition.x;
+				perFrameDataVR.EyePosition2.y = position.y - eyePosition.y;
+				perFrameDataVR.EyePosition2.z = position.z - eyePosition.z;
+
+				perFrameDataVR.SunlightScale = manager->data.baseData.hdr.sunlightScale;
+
+				perFrameDataVR.Settings = settings;
+
+				perFrame->Update(perFrameDataVR);
+			} else {
+				PerFrame perFrameData{};
+				ZeroMemory(&perFrameData, sizeof(perFrameData));
+				Util::StoreTransform3x4NoScale(perFrameData.DirectionalAmbient, dalcTransform);
+
+				RE::NiPoint3 eyePosition = state->GetRuntimeData().posAdjust.getEye();
+
+				perFrameData.EyePosition.x = position.x - eyePosition.x;
+				perFrameData.EyePosition.y = position.y - eyePosition.y;
+				perFrameData.EyePosition.z = position.z - eyePosition.z;
+
+				perFrameData.SunlightScale = manager->data.baseData.hdr.sunlightScale;
+
+				perFrameData.Settings = settings;
+
+				perFrame->Update(perFrameData);
+			}
+
+			updatePerFrame = false;
 		}
 
 		Clustered::GetSingleton()->Bind(true);
