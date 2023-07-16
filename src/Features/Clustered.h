@@ -18,15 +18,14 @@ public:
 		return &render;
 	}
 
-	struct LightSData
+	struct alignas(16) LightSData
 	{
 		DirectX::XMVECTOR color;
-		DirectX::XMVECTOR positionWS;
-		DirectX::XMVECTOR positionVS;
+		DirectX::XMVECTOR positionWS[2];
 		float radius;
-		bool shadow;
+		uint32_t shadow;
 		float mask;
-		bool active;
+		uint32_t active;
 	};
 
 	bool rendered = false;

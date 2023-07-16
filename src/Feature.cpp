@@ -77,5 +77,10 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		ExtendedMaterials::GetSingleton(),
 		WaterBlending::GetSingleton()
 	};
-	return features;
+
+	static std::vector<Feature*> featuresVR = {
+		GrassLighting::GetSingleton()
+	};
+
+	return REL::Module::IsVR() ? featuresVR : features;
 }

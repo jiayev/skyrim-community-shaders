@@ -8,6 +8,10 @@ struct VS_INPUT
 	float4 InstanceData2							: TEXCOORD5;
 	float4 InstanceData3							: TEXCOORD6;
 	float4 InstanceData4							: TEXCOORD7;
+#ifdef VR
+	uint InstanceID: SV_INSTANCEID;
+#endif // VR
+
 };
 
 struct VS_OUTPUT
@@ -15,38 +19,86 @@ struct VS_OUTPUT
 	float4 HPosition								: SV_POSITION0;
 	float4 VertexColor								: COLOR0;
 	float3 TexCoord									: TEXCOORD0;
-	float3 ViewSpacePosition						: TEXCOORD1;
+	float3 ViewSpacePosition						: 
+#if !defined(VR)
+	TEXCOORD1;
+#else
+	TEXCOORD2;
+#endif // !VR
 #if defined(RENDER_DEPTH)
-	float2 Depth									: TEXCOORD2;
-#endif
+	float2 Depth									: 
+#if !defined(VR)
+	TEXCOORD2;
+#else
+	TEXCOORD3;
+#endif // !VR
+#endif // RENDER_DEPTH
 	float4 WorldPosition							: POSITION1;
 	float4 PreviousWorldPosition					: POSITION2;
+#if !defined(VR)
 	float3 ViewDirectionVec 						: POSITION3;
+#endif // !VR
 	float3 VertexNormal 					        : POSITION4;
+#ifdef VR
+	float ClipDistance : SV_ClipDistance0;
+  	float CullDistance : SV_CullDistance0;
+#endif // !VR
 };
 
-cbuffer PerGeometry									: register(b2)
+// Constant Buffers (Flat and VR)
+cbuffer PerGeometry									: register(
+#ifdef VSHADER
+	b2
+#else
+	b3
+#endif
+)
 {
+#if !defined(VR)
 	row_major float4x4 WorldViewProj				: packoffset(c0);
 	row_major float4x4 WorldView					: packoffset(c4);
 	row_major float4x4 World						: packoffset(c8);
 	row_major float4x4 PreviousWorld				: packoffset(c12);
 	float4 FogNearColor								: packoffset(c16);
 	float3 WindVector								: packoffset(c17);
-	float WindTimer 								: packoffset(c17.w);
+	float WindTimer									: packoffset(c17.w);
 	float3 DirLightDirection						: packoffset(c18);
-	float PreviousWindTimer 						: packoffset(c18.w);
+	float PreviousWindTimer							: packoffset(c18.w);
 	float3 DirLightColor							: packoffset(c19);
-	float AlphaParam1 								: packoffset(c19.w);
+	float AlphaParam1								: packoffset(c19.w);
 	float3 AmbientColor								: packoffset(c20);
-	float AlphaParam2 								: packoffset(c20.w);
+	float AlphaParam2								: packoffset(c20.w);
 	float3 ScaleMask								: packoffset(c21);
-	float ShadowClampValue 							: packoffset(c21.w);
+	float ShadowClampValue							: packoffset(c21.w);
+#else
+	float4 cb2[32] 									: packoffset(c0);
+	float4 FogNearColor								: packoffset(c32);
+	float3 WindVector								: packoffset(c33);
+	float WindTimer									: packoffset(c33.w);
+	float3 DirLightDirection						: packoffset(c34);
+	float PreviousWindTimer							: packoffset(c34.w);
+	float3 DirLightColor							: packoffset(c35);
+	float AlphaParam1								: packoffset(c35.w);
+	float3 AmbientColor								: packoffset(c36);
+	float AlphaParam2								: packoffset(c36.w);
+	float3 ScaleMask								: packoffset(c37);
+	float ShadowClampValue							: packoffset(c37.w);
+#endif // !VR
 }
 
-cbuffer PerFrame : register(b3)
+cbuffer PerFrame : register(
+#ifdef VSHADER
+	b3
+#else
+	b4
+#endif
+)
 {
+#if !defined(VR)
 	float4  			EyePosition;
+#else
+	float4  			EyePosition[2];
+#endif //!VR
 	row_major float3x4 	DirectionalAmbient;
 	float 				SunlightScale;
 	float 				Glossiness;
@@ -54,25 +106,31 @@ cbuffer PerFrame : register(b3)
 	float 				SubsurfaceScatteringAmount;
 	bool 				EnableDirLightFix;
 	bool 				EnablePointLights;
-	float pad0;
-	float pad1;
+	float pad[2];
 }
 
 #ifdef VSHADER
 
 #ifdef GRASS_COLLISION
-	#include "RunGrass\\GrassCollision.hlsli"
+	#include "GrassCollision\\GrassCollision.hlsli"
 #endif
 
-cbuffer cb7											: register(b7)
-{
-	float4 cb7[1];
+cbuffer cb7											: register(b7) 
+{ 
+	float4 cb7[1]; 
 }
 
-cbuffer cb8 : register(b8)
+cbuffer cb8											: register(b8) 
 {
-	float4 cb8[240];
+	float4 cb8[240]; 
 }
+
+#ifdef VR
+cbuffer cb13 : register(b13)
+{
+  float4 cb13[3];
+}
+#endif // VR
 
 #define M_PI  3.1415925 // PI
 #define M_2PI 6.283185 // PI * 2
@@ -113,6 +171,32 @@ VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
 
+#ifdef VR
+/*
+https://docs.google.com/presentation/d/19x9XDjUvkW_9gsfsMQzt3hZbRNziVsoCEHOn4AercAc/htmlpresent
+This section looks like this code
+Matrix WorldToEyeClipMatrix[2] // computed from SDK
+Vector4 EyeClipEdge[2]={(-1,0,0,1), (1,0,0,1)}
+float EyeOffsetScale[2]={0.5,-0.5}
+uint eyeIndex = instanceID & 1 // use low bit as eye index.
+Vector4 clipPos = worldPos * WorldToEyeClipMatrix[eyeIndex]
+cullDistanceOut.x = clipDistanceOut.x = clipPos · EyeClipEdge[eyeIndex]
+clipPos.x *= 0.5; // shrink to half of the screen
+clipPos.x += EyeOffsetScale[eyeIndex] * clipPos.w; // scoot left or right.
+clipPositionOut = clipPos
+*/
+	float4 r0,r1,r2,r3,r4,r5,r6;
+	uint4 bitmask, uiDest;
+	float4 fDest;
+
+	r0.x = (int)input.InstanceID & 1;
+	r0.x = (uint)r0.x;
+	r0.x = cb13[0].y * r0.x;
+	r0.x = (uint)r0.x;
+	r0.z = (uint)r0.x << 2;
+	r0.y = (uint)r0.x << 2;
+#endif // VR
+
 	float3x3 world3x3 = float3x3(input.InstanceData2.xyz, input.InstanceData3.xyz, float3(input.InstanceData4.x, input.InstanceData2.w, input.InstanceData3.w));
 
 	float4 msPosition = GetMSPosition(input, WindTimer, world3x3);
@@ -122,13 +206,26 @@ VS_OUTPUT main(VS_INPUT input)
 	msPosition.xyz += displacement;
 #endif
 
+#if !defined(VR)
 	float4 projSpacePosition = mul(WorldViewProj, msPosition);
 	vsout.HPosition = projSpacePosition;
+#else
+	float4 projSpacePosition;
+	projSpacePosition.x = dot(cb2[r0.z+0].xyzw, msPosition.xyzw);
+  	projSpacePosition.y = dot(cb2[r0.z+1].xyzw, msPosition.xyzw);
+  	projSpacePosition.z = dot(cb2[r0.z+2].xyzw, msPosition.xyzw);
+  	projSpacePosition.w = dot(cb2[r0.z+3].xyzw, msPosition.xyzw);
+#endif // !VR
 
 #if defined(RENDER_DEPTH)
 	vsout.Depth = projSpacePosition.zw;
-#endif
+#endif // RENDER_DEPTH
 
+#ifdef VR
+	float3 instanceNormal = float3(input.InstanceData2.z, input.InstanceData3.zw);
+	float dirLightAngle = dot(DirLightDirection.xyz, instanceNormal);
+	float3 diffuseMultiplier = input.InstanceData1.www * input.Color.xyz * saturate(dirLightAngle.xxx);
+#endif // VR
 	float perInstanceFade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, M_IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
 	float distanceFade = 1 - saturate((length(projSpacePosition.xyz) - AlphaParam1) / AlphaParam2);
 
@@ -139,18 +236,66 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.TexCoord.xy = input.TexCoord.xy;
 	vsout.TexCoord.z = FogNearColor.w;
 
+#if !defined(VR)
 	vsout.ViewSpacePosition = mul(WorldView, msPosition).xyz;
 	vsout.WorldPosition = mul(World, msPosition);
+#else
+	vsout.ViewSpacePosition.x = dot(cb2[r0.z+8].xyzw, msPosition.xyzw);
+ 	vsout.ViewSpacePosition.y = dot(cb2[r0.z+9].xyzw, msPosition.xyzw);
+  	vsout.ViewSpacePosition.z = dot(cb2[r0.z+10].xyzw, msPosition.xyzw);
+
+	vsout.WorldPosition.x = dot(cb2[r0.z+16].xyzw, msPosition.xyzw);
+	vsout.WorldPosition.y = dot(cb2[r0.z+17].xyzw, msPosition.xyzw);
+	vsout.WorldPosition.z = dot(cb2[r0.z+18].xyzw, msPosition.xyzw);
+	vsout.WorldPosition.w = dot(cb2[r0.z+19].xyzw, msPosition.xyzw);
+#endif // !VR
 
 	float4 previousMsPosition = GetMSPosition(input, PreviousWindTimer, world3x3);
 
 #ifdef GRASS_COLLISION
 	previousMsPosition.xyz += displacement;
-#endif
+#endif // GRASS_COLLISION
 
+#if !defined(VR)
 	vsout.PreviousWorldPosition = mul(PreviousWorld, previousMsPosition);
 
 	vsout.ViewDirectionVec.xyz = EyePosition.xyz - vsout.WorldPosition.xyz;
+#else
+	vsout.PreviousWorldPosition.x = dot(cb2[r0.z+24].xyzw, previousMsPosition.xyzw);
+	vsout.PreviousWorldPosition.y = dot(cb2[r0.z+25].xyzw, previousMsPosition.xyzw);
+	vsout.PreviousWorldPosition.z = dot(cb2[r0.z+26].xyzw, previousMsPosition.xyzw);
+	vsout.PreviousWorldPosition.w = dot(cb2[r0.z+27].xyzw, previousMsPosition.xyzw);
+
+/*
+https://docs.google.com/presentation/d/19x9XDjUvkW_9gsfsMQzt3hZbRNziVsoCEHOn4AercAc/htmlpresent
+This section looks like this code
+Matrix WorldToEyeClipMatrix[2] // computed from SDK
+Vector4 EyeClipEdge[2]={(-1,0,0,1), (1,0,0,1)}
+float EyeOffsetScale[2]={0.5,-0.5}
+uint eyeIndex = instanceID & 1 // use low bit as eye index.
+Vector4 clipPos = worldPos * WorldToEyeClipMatrix[eyeIndex]
+cullDistanceOut.x = clipDistanceOut.x = clipPos · EyeClipEdge[eyeIndex]
+clipPos.x *= 0.5; // shrink to half of the screen
+clipPos.x += EyeOffsetScale[eyeIndex] * clipPos.w; // scoot left or right.
+clipPositionOut = clipPos
+*/
+	if (0 < cb13[0].y) {
+		r0.yz = dot(projSpacePosition, cb13[r0.x+1].xyzw);
+	} else {
+		r0.yz = float2(1,1);
+	}
+
+	r0.w = 2 + -cb13[0].y;
+	r0.x = dot(cb13[0].zw, M_IdentityMatrix[r0.x+0].xy);
+  	r0.xw = r0.xw * projSpacePosition.wx;
+    r0.x = cb13[0].y * r0.x;
+
+	vsout.HPosition.x = r0.w * 0.5 + r0.x;
+	vsout.HPosition.yzw = projSpacePosition.yzw;
+
+	vsout.ClipDistance.x = r0.z;
+  	vsout.CullDistance.x = r0.y;
+#endif // !VR
 
 	// Vertex normal needs to be transformed to world-space for lighting calculations.
 	float3 vertexNormal = input.Normal.xyz * 2.0 - 1.0;
@@ -159,7 +304,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	return vsout;
 }
-#endif
+#endif // VSHADER
 
 typedef VS_OUTPUT PS_INPUT;
 
@@ -171,7 +316,7 @@ struct PS_OUTPUT
 	float4 Albedo									: SV_Target0;
 	float2 MotionVectors							: SV_Target1;
 	float4 Normal									: SV_Target2;
-#endif
+#endif // RENDER_DEPTH
 };
 
 #ifdef PSHADER
@@ -181,13 +326,25 @@ SamplerState SampShadowMaskSampler					: register(s1);
 Texture2D<float4> TexBaseSampler					: register(t0);
 Texture2D<float4> TexShadowMaskSampler				: register(t1);
 
-cbuffer AlphaTestRefCB								: register(b11)
+
+
+#ifdef VR
+struct PerEye 
 {
-	float AlphaTestRefRS : packoffset(c0);
+	row_major float4x4 ScreenProj;
+	row_major float4x4 PreviousScreenProj;
+};
+
+cbuffer cb0 : register(b0)
+{
+  float4 cb0[10];
 }
 
-cbuffer PerFrame : register(b12)
+#endif // VR
+
+cbuffer PS_cb12 : register(b12)
 {
+#if !defined(VR)
     row_major float4x4  ViewMatrix                                                  : packoffset(c0);
     row_major float4x4  ProjMatrix                                                  : packoffset(c4);
     row_major float4x4  ViewProjMatrix                                              : packoffset(c8);
@@ -204,13 +361,27 @@ cbuffer PerFrame : register(b12)
     float4              GammaInvX_FirstPersonY_AlphaPassZ_CreationKitW              : packoffset(c42);
     float4              DynamicRes_WidthX_HeightY_PreviousWidthZ_PreviousHeightW    : packoffset(c43);
     float4              DynamicRes_InvWidthX_InvHeightY_WidthClampZ_HeightClampW    : packoffset(c44);
+#else
+	//VR is float4 PerFrame[87]; VR original used for eye position in PerFrame[86].x
+	float4 cb12[87];
+#endif // !VR
+}
+
+cbuffer AlphaTestRefCB								: register(
+#if !defined(VR)
+	b11
+#else
+	b13
+#endif // !VR
+) 
+{ 
+	float AlphaTestRefRS							: packoffset(c0); 
 }
 
 struct StructuredLight
 {
 	float4  color;
-	float4  positionWS;
-	float4  positionVS;
+	float4  positionWS[2];
 	float   radius;
 	bool    shadow;
 	float   mask;
@@ -292,7 +463,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	{
 		discard;
 	}
-#endif
+#endif // RENDER_DEPTH | DO_ALPHA_TEST
 
 #if defined(RENDER_DEPTH)
 	// Depth
@@ -303,10 +474,41 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float4 specColor = complex ? TexBaseSampler.Sample(SampBaseSampler, float2(input.TexCoord.x, 0.5 + input.TexCoord.y * 0.5)) : 1;
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 
+	// Albedo
+	// float diffuseFraction = lerp(sunShadowMask, 1, input.AmbientColor.w);
+	// float3 diffuseColor = input.DiffuseColor.xyz * baseColor.xyz;
+	// float3 ambientColor = input.AmbientColor.xyz * baseColor.xyz;
+	// psout.Albedo.xyz = input.TexCoord.zzz * (diffuseColor * diffuseFraction + ambientColor);
+	// psout.Albedo.w = 1;
+
+#if !defined(VR)
 	float4 screenPosition = mul(ViewProjMatrixUnjittered, input.WorldPosition);
 	screenPosition.xy = screenPosition.xy / screenPosition.ww;
 	float4 previousScreenPosition = mul(PreviousViewProjMatrixUnjittered, input.PreviousWorldPosition);
 	previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.ww;
+	uint eyeIndex = 0;
+#else
+	float stereoUV = input.HPosition.x * cb0[2].xy + cb0[2].zw;
+	stereoUV = stereoUV * cb12[86].x;
+
+	uint eyeIndex = (stereoUV >= 0.5) ? 1 : 0;
+	uint eyeOffset = eyeIndex;
+	uint bitmask;
+	bitmask = ((~(-1 << 1)) << 2) & 0xffffffff;  eyeOffset = (((uint)eyeOffset<< 2) & bitmask) | ((uint)0 & ~bitmask);
+
+	float3 screenPosition;
+	screenPosition.x = dot(cb12[eyeOffset+24].xyzw, input.WorldPosition);
+	screenPosition.y = dot(cb12[eyeOffset+25].xyzw, input.WorldPosition);
+	screenPosition.z = dot(cb12[eyeOffset+27].xyzw, input.WorldPosition);
+	screenPosition.xy = screenPosition.xy / screenPosition.zz;
+
+	float3 previousScreenPosition;
+	previousScreenPosition.x = dot(cb12[eyeOffset+32].xyzw, input.PreviousWorldPosition);
+	previousScreenPosition.y = dot(cb12[eyeOffset+33].xyzw, input.PreviousWorldPosition);
+	previousScreenPosition.z = dot(cb12[eyeOffset+35].xyzw, input.PreviousWorldPosition);
+	previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.zz;
+#endif // !VR
+
 	float2 screenMotionVector = float2(-0.5, 0.5) * (screenPosition.xy - previousScreenPosition.xy);
 
 	psout.MotionVectors = screenMotionVector;
@@ -318,7 +520,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Normal.xy = float2(0.5, 0.5) + normal.xy / normalScale;
 	psout.Normal.zw = float2(0, 0);
 
+#if !defined(VR)
 	float3 viewDirection = normalize(input.ViewDirectionVec);
+#else
+	float3 viewDirection = normalize(-input.WorldPosition.xyz);
+#endif // !VR
 	float3 worldNormal = normalize(input.VertexNormal);
 
 	// Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
@@ -330,7 +536,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		normalColor.xy = -normalColor.xy;
 		// world-space -> tangent-space -> world-space. 
 		// This is because we don't have pre-computed tangents.
+#if !defined(VR)
 		worldNormal.xyz = normalize(mul(normalColor.xyz, CalculateTBN(worldNormal.xyz, -viewDirection, input.TexCoord.xy)));
+#else
+		worldNormal.xyz = normalize(mul(normalColor.xyz, CalculateTBN(worldNormal.xyz, input.WorldPosition.xyz, input.TexCoord.xy)));
+#endif // !VR
 	}
 
 	float3 dirLightColor = DirLightColor.xyz;
@@ -344,8 +554,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #if defined(SCREEN_SPACE_SHADOWS)
 	float dirLightSShadow = PrepassScreenSpaceShadows(input.WorldPosition);
 	dirLightColor *= dirLightSShadow;
-#endif
-	
+#endif // !SCREEN_SPACE_SHADOWS
+
 
 	float3 diffuseColor = 0;
 	float3 specularColor = 0;
@@ -373,8 +583,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-DirLightDirection, viewDirection, worldNormal.xyz, dirLightColor.xyz, Glossiness);
 	}
 
-	float shadow = 1;
-
 	if (EnablePointLights) {
 		uint light_count, dummy;
 		lights.GetDimensions(light_count, dummy);
@@ -382,7 +590,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		{
 			StructuredLight light = lights[light_index];
 			if (light.active) {
-				float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
+				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightDirection);
 				float intensityFactor = saturate(lightDist / light.radius);
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
@@ -392,11 +600,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 					if (light.shadow) {
 						lightColor *= shadowColor[light.mask];
 					}
-					
+
 					float3 normalizedLightDirection = normalize(lightDirection);
 
 					float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
-					float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);		
+					float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
 					lightDiffuseColor += subsurfaceColor * lightColor * GetSoftLightMultiplier(lightAngle, SubsurfaceScatteringAmount);
 					lightDiffuseColor += subsurfaceColor * lightColor * saturate(-lightAngle) * SubsurfaceScatteringAmount;
@@ -428,7 +636,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Albedo.xyz = color;
 	psout.Albedo.w = 1;
 
-#endif
+#endif // RENDER_DEPTH
 	return psout;
 }
-#endif
+#endif // PSHADER

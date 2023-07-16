@@ -1,4 +1,4 @@
-cbuffer SSSData						     : register(b4)
+cbuffer SSSData						     : register(b5)
 {
     bool EnableSSS;
     uint FrameCount;

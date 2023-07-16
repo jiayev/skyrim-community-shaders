@@ -57,27 +57,22 @@ void Clustered::UpdateLights()
 		color.z = dimmer * niLight->GetLightRuntimeData().diffuse.blue;
 		light.color = XMLoadFloat3(&color);
 
-		RE::NiPoint3 eyePosition{};
-		if (REL::Module::IsVR()) {
-			// find center of eye position
-			eyePosition = state->GetVRRuntimeData().posAdjust.getEye() + state->GetVRRuntimeData().posAdjust.getEye(1);
-			eyePosition /= 2;
-		} else
-			eyePosition = state->GetRuntimeData().posAdjust.getEye();
+		for (int eyeIndex = 0; eyeIndex < (!REL::Module::IsVR() ? 1 : 2); eyeIndex++) {
+			DirectX::XMFLOAT3 position{};
+			auto eyePos = !REL::Module::IsVR() ?
+			                  state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
+			                  state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+			auto adjustedWorldPos = worldPos - eyePos;
 
-		worldPos = worldPos - eyePosition;
-		logger::trace("Set {}light {} at ({} {} {}) because of eye ({} {} {})", bsShadowLight ? "shadow" : "", niLight->name, worldPos.x, worldPos.y, worldPos.z,
-			eyePosition.x, eyePosition.y, eyePosition.z);
+			position.x = adjustedWorldPos.x;
+			position.y = adjustedWorldPos.y;
+			position.z = adjustedWorldPos.z;
+			light.positionWS[eyeIndex] = XMLoadFloat3(&position);
+		}
 
-		DirectX::XMFLOAT3 position{};
-		position.x = worldPos.x;
-		position.y = worldPos.y;
-		position.z = worldPos.z;
-		light.positionWS = XMLoadFloat3(&position);
-		if (!REL::Module::IsVR())
-			light.positionVS = XMVector3TransformCoord(light.positionWS, state->GetRuntimeData().cameraData.getEye().viewMat);
-		else
-			light.positionVS = XMVector3TransformCoord(light.positionWS, state->GetVRRuntimeData().cameraData.getEye().viewMat);
+		//logger::trace("Set {}light {} at ({} {} {}) because of eye ({} {} {})", bsShadowLight ? "shadow" : "", niLight->name, worldPos.x, worldPos.y, worldPos.z,
+		//	eyePosition.x, eyePosition.y, eyePosition.z);
+
 		light.radius = niLight->GetLightRuntimeData().radius.x;
 
 		light.active = true;

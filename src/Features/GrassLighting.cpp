@@ -36,7 +36,7 @@ void GrassLighting::DrawSettings()
 			"Back lighting illuminates the back face of an object.\n"
 			"Combined to model the transport of light through the surface.");
 		ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.5f);
-		ImGui::SliderFloat("Subsurface Scattering Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 1.0f);
+		ImGui::SliderFloat("Subsurface Scattering Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 2.0f);
 
 		ImGui::TreePop();
 	}
@@ -57,35 +57,51 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 	const auto technique = descriptor & 0b1111;
 	if (technique != static_cast<uint32_t>(GrassShaderTechniques::RenderDepth)) {
 		if (updatePerFrame) {
-			PerFrame perFrameData{};
-			ZeroMemory(&perFrameData, sizeof(perFrameData));
-
 			auto& shaderState = RE::BSShaderManager::State::GetSingleton();
-			RE::NiTransform& dalcTransform = shaderState.directionalAmbientTransform;
-
-			Util::StoreTransform3x4NoScale(perFrameData.DirectionalAmbient, dalcTransform);
-
 			auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 			auto& position = accumulator->GetRuntimeData().eyePosition;
 			auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-
-			RE::NiPoint3 eyePosition{};
-			if (REL::Module::IsVR()) {
-				// find center of eye position
-				eyePosition = state->GetVRRuntimeData().posAdjust.getEye() + state->GetVRRuntimeData().posAdjust.getEye(1);
-				eyePosition /= 2;
-			} else
-				eyePosition = state->GetRuntimeData().posAdjust.getEye();
-			perFrameData.EyePosition.x = position.x - eyePosition.x;
-			perFrameData.EyePosition.y = position.y - eyePosition.y;
-			perFrameData.EyePosition.z = position.z - eyePosition.z;
-
+			RE::NiTransform& dalcTransform = shaderState.directionalAmbientTransform;
 			auto manager = RE::ImageSpaceManager::GetSingleton();
-			perFrameData.SunlightScale = manager->data.baseData.hdr.sunlightScale;
 
-			perFrameData.Settings = settings;
+			if (REL::Module::IsVR()) {
+				PerFrameVR perFrameDataVR{};
+				ZeroMemory(&perFrameDataVR, sizeof(perFrameDataVR));
+				Util::StoreTransform3x4NoScale(perFrameDataVR.DirectionalAmbient, dalcTransform);
 
-			perFrame->Update(perFrameData);
+				RE::NiPoint3 eyePosition = state->GetVRRuntimeData().posAdjust.getEye();
+
+				perFrameDataVR.EyePosition.x = position.x - eyePosition.x;
+				perFrameDataVR.EyePosition.y = position.y - eyePosition.y;
+				perFrameDataVR.EyePosition.z = position.z - eyePosition.z;
+
+				eyePosition = state->GetVRRuntimeData().posAdjust.getEye(1);
+				perFrameDataVR.EyePosition2.x = position.x - eyePosition.x;
+				perFrameDataVR.EyePosition2.y = position.y - eyePosition.y;
+				perFrameDataVR.EyePosition2.z = position.z - eyePosition.z;
+
+				perFrameDataVR.SunlightScale = manager->data.baseData.hdr.sunlightScale;
+
+				perFrameDataVR.Settings = settings;
+
+				perFrame->Update(perFrameDataVR);
+			} else {
+				PerFrame perFrameData{};
+				ZeroMemory(&perFrameData, sizeof(perFrameData));
+				Util::StoreTransform3x4NoScale(perFrameData.DirectionalAmbient, dalcTransform);
+
+				RE::NiPoint3 eyePosition = state->GetRuntimeData().posAdjust.getEye();
+
+				perFrameData.EyePosition.x = position.x - eyePosition.x;
+				perFrameData.EyePosition.y = position.y - eyePosition.y;
+				perFrameData.EyePosition.z = position.z - eyePosition.z;
+
+				perFrameData.SunlightScale = manager->data.baseData.hdr.sunlightScale;
+
+				perFrameData.Settings = settings;
+
+				perFrame->Update(perFrameData);
+			}
 
 			updatePerFrame = false;
 		}
@@ -97,7 +113,7 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 		context->VSGetConstantBuffers(2, 1, buffers);  // buffers[0]
 		buffers[1] = perFrame->CB();
 		context->VSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
-		context->PSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
+		context->PSSetConstantBuffers(3, ARRAYSIZE(buffers), buffers);
 	}
 }
 
@@ -125,7 +141,7 @@ void GrassLighting::Save(json& o_json)
 
 void GrassLighting::SetupResources()
 {
-	perFrame = new ConstantBuffer(ConstantBufferDesc<PerFrame>());
+	perFrame = !REL::Module::IsVR() ? new ConstantBuffer(ConstantBufferDesc<PerFrame>()) : new ConstantBuffer(ConstantBufferDesc<PerFrameVR>());
 }
 
 void GrassLighting::Reset()

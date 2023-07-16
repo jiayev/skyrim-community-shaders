@@ -18,7 +18,7 @@ struct GrassLighting : Feature
 	{
 		float Glossiness = 20;
 		float SpecularStrength = 0.5;
-		float SubsurfaceScatteringAmount = 0.5;
+		float SubsurfaceScatteringAmount = 1.0;
 		std::uint32_t EnableDirLightFix = 1;
 		std::uint32_t EnablePointLights = 1;
 	};
@@ -29,8 +29,17 @@ struct GrassLighting : Feature
 		DirectX::XMFLOAT3X4 DirectionalAmbient;
 		float SunlightScale;
 		Settings Settings;
-		float pad0;
-		float pad1;
+		float pad[2];
+	};
+
+	struct alignas(16) PerFrameVR
+	{
+		DirectX::XMFLOAT4 EyePosition;
+		DirectX::XMFLOAT4 EyePosition2;
+		DirectX::XMFLOAT3X4 DirectionalAmbient;
+		float SunlightScale;
+		Settings Settings;
+		float pad[2];
 	};
 
 	Settings settings;
@@ -46,4 +55,5 @@ struct GrassLighting : Feature
 
 	virtual void Load(json& o_json);
 	virtual void Save(json& o_json);
+
 };
