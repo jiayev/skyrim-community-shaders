@@ -121,10 +121,6 @@ void main( uint3 DTid : SV_DispatchThreadID )
 
     float2 TexCoord = (DTid.xy + 0.5) * RcpBufferDim; 
 
-    #if defined(HORIZONTAL)
-        TexCoord += 0.5 * RcpBufferDim;
-    #endif
-
     float startDepth = GetDepth(TexCoord * 2);
     if (startDepth >= 1)
         return;
