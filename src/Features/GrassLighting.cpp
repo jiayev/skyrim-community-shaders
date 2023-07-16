@@ -80,7 +80,7 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 				perFrameDataVR.EyePosition2.y = position.y - eyePosition.y;
 				perFrameDataVR.EyePosition2.z = position.z - eyePosition.z;
 
-				perFrameDataVR.SunlightScale = manager->data.baseData.hdr.sunlightScale;
+				perFrameDataVR.SunlightScale = manager->data.baseData.cinematic.brightness;
 
 				perFrameDataVR.Settings = settings;
 
