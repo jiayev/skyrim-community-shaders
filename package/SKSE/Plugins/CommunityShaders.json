@@ -29,9 +29,9 @@
  "Grass Lighting": {
   "EnableDirLightFix": 1,
   "EnablePointLights": 1,
-  "Glossiness": 44.779998779296875,
+  "Glossiness": 20.0,
   "SpecularStrength": 0.5,
-  "SubsurfaceScatteringAmount": 0.5
+  "SubsurfaceScatteringAmount": 1.0
  },
  "Menu": {
   "Toggle Key": 35

@@ -18,7 +18,7 @@ struct GrassLighting : Feature
 	{
 		float Glossiness = 20;
 		float SpecularStrength = 0.5;
-		float SubsurfaceScatteringAmount = 0.5;
+		float SubsurfaceScatteringAmount = 1.0;
 		std::uint32_t EnableDirLightFix = 1;
 		std::uint32_t EnablePointLights = 1;
 	};

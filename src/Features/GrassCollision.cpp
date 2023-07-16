@@ -229,7 +229,7 @@ void GrassCollision::ModifyGrass(const RE::BSShader*, const uint32_t)
 
 		ID3D11Buffer* buffers[1];
 		buffers[0] = perFrame->CB();
-		context->VSSetConstantBuffers(4, ARRAYSIZE(buffers), buffers);
+		context->VSSetConstantBuffers(5, ARRAYSIZE(buffers), buffers);
 	}
 }
 

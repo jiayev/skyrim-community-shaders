@@ -389,7 +389,7 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 
 	ID3D11Buffer* buffers[1]{};
 	buffers[0] = perPass->CB();
-	context->PSSetConstantBuffers(4, ARRAYSIZE(buffers), buffers);
+	context->PSSetConstantBuffers(5, ARRAYSIZE(buffers), buffers);
 
 	context->PSSetSamplers(14, 1, &computeSampler);
 }

@@ -36,7 +36,7 @@ void GrassLighting::DrawSettings()
 			"Back lighting illuminates the back face of an object.\n"
 			"Combined to model the transport of light through the surface.");
 		ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.5f);
-		ImGui::SliderFloat("Subsurface Scattering Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 1.0f);
+		ImGui::SliderFloat("Subsurface Scattering Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 2.0f);
 
 		ImGui::TreePop();
 	}
@@ -80,7 +80,7 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 				perFrameDataVR.EyePosition2.y = position.y - eyePosition.y;
 				perFrameDataVR.EyePosition2.z = position.z - eyePosition.z;
 
-				perFrameDataVR.SunlightScale = manager->data.baseData.hdr.sunlightScale;
+				perFrameDataVR.SunlightScale = manager->data.baseData.cinematic.brightness;
 
 				perFrameDataVR.Settings = settings;
 

@@ -112,7 +112,7 @@ cbuffer PerFrame : register(
 #ifdef VSHADER
 
 #ifdef GRASS_COLLISION
-	#include "RunGrass\\GrassCollision.hlsli"
+	#include "GrassCollision\\GrassCollision.hlsli"
 #endif
 
 cbuffer cb7											: register(b7) 
