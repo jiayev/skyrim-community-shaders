@@ -1,5 +1,5 @@
 
-cbuffer GrassCollisionPerFrame : register(b4)
+cbuffer GrassCollisionPerFrame : register(b5)
 {
 	float3 boundCentre;
 	float boundRadius;
