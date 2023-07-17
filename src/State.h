@@ -31,6 +31,4 @@ public:
 
 	void SetLogLevel(spdlog::level::level_enum a_level = spdlog::level::info);
 	spdlog::level::level_enum GetLogLevel();
-
 };
-

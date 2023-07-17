@@ -10,7 +10,7 @@ struct ExtendedMaterials : Feature
 		static ExtendedMaterials singleton;
 		return &singleton;
 	}
-	
+
 	virtual inline std::string GetName() { return "Complex Parallax Materials"; }
 	virtual inline std::string GetShortName() { return "ComplexParallaxMaterials"; }
 
@@ -19,7 +19,7 @@ struct ExtendedMaterials : Feature
 		uint32_t EnableComplexMaterial = 1;
 
 		uint32_t EnableParallax = 1;
-		uint32_t EnableTerrain =0;
+		uint32_t EnableTerrain = 0;
 		uint32_t EnableHighQuality = 0;
 
 		uint32_t MaxDistance = 2048;
@@ -43,7 +43,7 @@ struct ExtendedMaterials : Feature
 	std::unique_ptr<Buffer> perPass = nullptr;
 
 	ID3D11SamplerState* terrainSampler = nullptr;
-	
+
 	virtual void SetupResources();
 	virtual inline void Reset() {}
 
@@ -55,4 +55,3 @@ struct ExtendedMaterials : Feature
 	virtual void Load(json& o_json);
 	virtual void Save(json& o_json);
 };
-
