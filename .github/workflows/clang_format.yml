@@ -21,7 +21,7 @@ jobs:
       - uses: DoozyX/clang-format-lint-action@v0.16.2
         with:
           source: "."
-          exclude: "./extern,./include"
+          exclude: "extern include"
           extensions: "h,cpp,c,hlsl,hlsli"
           clangFormatVersion: 16
           inplace: True # commit the changes (if there are any)
