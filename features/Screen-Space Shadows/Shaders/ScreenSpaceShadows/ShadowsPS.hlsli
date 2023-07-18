@@ -13,30 +13,19 @@ Texture2D<float> TexOcclusionSampler : register(t21);
 SamplerState LinearSampler : register(s14);
 #endif
 
-float3 WorldToView(float3 x, bool is_position = true)
+float2 SSGetDynamicResolutionAdjustedScreenPosition(float2 uv)
 {
-	return mul(ViewMatrix, float4(x, (float)is_position)).xyz;
+	return uv * DynamicResolutionParams1.xy;
 }
 
-float2 ViewToUV(float3 x, bool is_position = true)
-{
-	float4 uv = mul(ProjMatrix, float4(x, (float)is_position));
-	return (uv.xy / uv.w) * float2(0.5f, -0.5f) + 0.5f;
-}
-
-float2 GetDynamicResolutionAdjustedScreenPosition(float2 uv)
-{
-	return uv * DynamicRes_WidthX_HeightY_PreviousWidthZ_PreviousHeightW.xy;
-}
-
-float PrepassScreenSpaceShadows(float3 positionWS)
+float PrepassScreenSpaceShadows(float3 positionWS, uint eyeIndex = 0)
 {
 #if defined(EYE)
 	return 1;
 #else
 	if (EnableSSS) {
-		float2 texCoord = ViewToUV(WorldToView(positionWS));
-		float2 coords = GetDynamicResolutionAdjustedScreenPosition(texCoord) / 2;
+		float2 texCoord = ViewToUV(WorldToView(positionWS, true, eyeIndex), true, eyeIndex);
+		float2 coords = SSGetDynamicResolutionAdjustedScreenPosition(texCoord) / 2;
 		float shadow = TexOcclusionSampler.SampleLevel(LinearSampler, coords, 0);
 		return shadow;
 	}
