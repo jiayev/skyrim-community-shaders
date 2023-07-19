@@ -14,7 +14,7 @@ jobs:
       # added or changed files to the repository.
       contents: write
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           # check out HEAD on the branch
           ref: ${{ github.head_ref }}
