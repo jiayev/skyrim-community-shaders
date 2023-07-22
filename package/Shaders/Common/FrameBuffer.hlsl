@@ -29,7 +29,7 @@ cbuffer PerFrame : register(b12)
 	row_major float4x4 CameraViewProjUnjittered[2] : packoffset(c24);
 	row_major float4x4 CameraPreviousViewProjUnjittered[2] : packoffset(c32);
 	row_major float4x4 CameraProjUnjittered[2] : packoffset(c40);
-	row_major float4x4 CameraProjUnjitteredInverse[2] : packoffset(c44);
+	row_major float4x4 CameraProjUnjitteredInverse[2] : packoffset(c48);
 	row_major float4x4 CameraViewInverse[2] : packoffset(c56);
 	row_major float4x4 CameraViewProjInverse[2] : packoffset(c64);
 	row_major float4x4 CameraProjInverse[2] : packoffset(c72);
