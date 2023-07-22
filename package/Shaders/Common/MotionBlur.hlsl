@@ -1,7 +1,7 @@
-float2 GetSSMotionVector(float4 wsPosition, float4 previousWSPosition, uint eyeOffset = 0)
+float2 GetSSMotionVector(float4 a_wsPosition, float4 a_previousWSPosition, uint a_eyeIndex = 0)
 {
-	float4 screenPosition = NG_mul(CameraViewProjUnjittered, wsPosition, eyeOffset);
-	float4 previousScreenPosition = NG_mul(CameraPreviousViewProjUnjittered, previousWSPosition, eyeOffset);
+	float4 screenPosition = mul(CameraViewProjUnjittered[a_eyeIndex], a_wsPosition);
+	float4 previousScreenPosition = mul(CameraPreviousViewProjUnjittered[a_eyeIndex], a_previousWSPosition);
 #if !defined(VR)
 	screenPosition.xy = screenPosition.xy / screenPosition.ww;
 	previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.ww;

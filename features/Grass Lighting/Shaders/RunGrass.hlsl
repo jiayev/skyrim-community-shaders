@@ -57,10 +57,10 @@ cbuffer PerGeometry : register(
 					  )
 {
 #if !defined(VR)
-	row_major float4x4 WorldViewProj : packoffset(c0);
-	row_major float4x4 WorldView : packoffset(c4);
-	row_major float4x4 World : packoffset(c8);
-	row_major float4x4 PreviousWorld : packoffset(c12);
+	row_major float4x4 WorldViewProj[1] : packoffset(c0);
+	row_major float4x4 WorldView[1] : packoffset(c4);
+	row_major float4x4 World[1] : packoffset(c8);
+	row_major float4x4 PreviousWorld[1] : packoffset(c12);
 	float4 FogNearColor : packoffset(c16);
 	float3 WindVector : packoffset(c17);
 	float WindTimer : packoffset(c17.w);
@@ -73,10 +73,10 @@ cbuffer PerGeometry : register(
 	float3 ScaleMask : packoffset(c21);
 	float ShadowClampValue : packoffset(c21.w);
 #else
-	row_major float4x4 WorldViewProj : packoffset(c0);
-	row_major float4x4 WorldView : packoffset(c8);
-	row_major float4x4 World : packoffset(c16);
-	row_major float4x4 PreviousWorld : packoffset(c24);
+	row_major float4x4 WorldViewProj[2] : packoffset(c0);
+	row_major float4x4 WorldView[2] : packoffset(c8);
+	row_major float4x4 World[2] : packoffset(c16);
+	row_major float4x4 PreviousWorld[2] : packoffset(c24);
 	float4 FogNearColor : packoffset(c32);
 	float3 WindVector : packoffset(c33);
 	float WindTimer : packoffset(c33.w);
@@ -100,7 +100,7 @@ cbuffer PerFrame : register(
 				   )
 {
 #if !defined(VR)
-	float4 EyePosition;
+	float4 EyePosition[1];
 #else
 	float4 EyePosition[2];
 #endif  //! VR
@@ -207,11 +207,11 @@ VS_OUTPUT main(VS_INPUT input)
 	float4 msPosition = GetMSPosition(input, WindTimer, world3x3);
 
 #	ifdef GRASS_COLLISION
-	float3 displacement = GetDisplacedPosition(msPosition.xyz, input.Color.w, eyeIndexX4);
+	float3 displacement = GetDisplacedPosition(msPosition.xyz, input.Color.w, eyeIndex);
 	msPosition.xyz += displacement;
 #	endif
 
-	float4 projSpacePosition = NG_mul(WorldViewProj, msPosition, eyeIndexX4);
+	float4 projSpacePosition = mul(WorldViewProj[eyeIndex], msPosition);
 #	if !defined(VR)
 	vsout.HPosition = projSpacePosition;
 #	endif  // !VR
@@ -235,8 +235,8 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.TexCoord.xy = input.TexCoord.xy;
 	vsout.TexCoord.z = FogNearColor.w;
 
-	vsout.ViewSpacePosition = NG_mul(WorldView, msPosition, eyeIndexX4).xyz;
-	vsout.WorldPosition = NG_mul(World, msPosition, eyeIndexX4);
+	vsout.ViewSpacePosition = mul(WorldView[eyeIndex], msPosition).xyz;
+	vsout.WorldPosition = mul(World[eyeIndex], msPosition);
 
 	float4 previousMsPosition = GetMSPosition(input, PreviousWindTimer, world3x3);
 
@@ -244,9 +244,9 @@ VS_OUTPUT main(VS_INPUT input)
 	previousMsPosition.xyz += displacement;
 #	endif  // GRASS_COLLISION
 
-	vsout.PreviousWorldPosition = NG_mul(PreviousWorld, previousMsPosition, eyeIndexX4);
+	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], previousMsPosition);
 #	if !defined(VR)
-	vsout.ViewDirectionVec.xyz = EyePosition.xyz - vsout.WorldPosition.xyz;
+	vsout.ViewDirectionVec.xyz = EyePosition[eyeIndex].xyz - vsout.WorldPosition.xyz;
 #	else
 	/*
 https://docs.google.com/presentation/d/19x9XDjUvkW_9gsfsMQzt3hZbRNziVsoCEHOn4AercAc/htmlpresent
