@@ -476,11 +476,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		normalColor.xy = -normalColor.xy;
 		// world-space -> tangent-space -> world-space.
 		// This is because we don't have pre-computed tangents.
-#		if !defined(VR)
 		worldNormal.xyz = normalize(mul(normalColor.xyz, CalculateTBN(worldNormal.xyz, -viewDirection, input.TexCoord.xy)));
-#		else
-		worldNormal.xyz = normalize(mul(normalColor.xyz, CalculateTBN(worldNormal.xyz, input.WorldPosition.xyz, input.TexCoord.xy)));
-#		endif  // !VR
 	}
 
 	float3 dirLightColor = DirLightColor.xyz;
