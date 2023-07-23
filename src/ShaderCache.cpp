@@ -115,6 +115,10 @@ namespace SIE
 				++defines;
 			}
 
+			if (REL::Module::IsVR()) {
+				defines[0] = { "VR", nullptr };
+				++defines;
+			}
 			VanillaGetLightingShaderDefines(descriptor, defines);
 		}
 

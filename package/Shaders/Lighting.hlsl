@@ -1,10 +1,13 @@
+#include "Common/FrameBuffer.hlsl"
+#include "Common/MotionBlur.hlsl"
+
 #if (defined(TREE_ANIM) || defined(LANDSCAPE)) && !defined(VC)
 #	define VC
-#endif
+#endif  // TREE_ANIM || LANDSCAPE || !VC
 
 #if defined(SPECULAR) || defined(AMBIENT_SPECULAR) || defined(ENVMAP) || defined(RIM_LIGHTING) || defined(PARALLAX) || defined(MULTI_LAYER_PARALLAX) || defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(SNOW_FLAG) || defined(EYE) || defined(PBR)
 #	define HAS_VIEW_VECTOR
-#endif
+#endif  // defined(SPECULAR) || defined(AMBIENT_SPECULAR) || defined(ENVMAP) || defined(RIM_LIGHTING) || defined(PARALLAX) || defined(MULTI_LAYER_PARALLAX) || defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(SNOW_FLAG) || defined(EYE) || defined(PBR)
 
 struct VS_INPUT
 {
@@ -13,22 +16,25 @@ struct VS_INPUT
 #if !defined(MODELSPACENORMALS)
 	float4 Normal : NORMAL0;
 	float4 Bitangent : BINORMAL0;
-#endif
+#endif  // !MODELSPACENORMALS
 
 #if defined(VC)
 	float4 Color : COLOR0;
 #	if defined(LANDSCAPE)
 	float4 LandBlendWeights1 : TEXCOORD2;
 	float4 LandBlendWeights2 : TEXCOORD3;
-#	endif
-#endif
+#	endif  // LANDSCAPE
+#endif      // VC
 #if defined(SKINNED)
 	float4 BoneWeights : BLENDWEIGHT0;
 	float4 BoneIndices : BLENDINDICES0;
-#endif
+#endif  // SKINNED
 #if defined(EYE)
 	float EyeParameter : TEXCOORD2;
-#endif
+#endif  // EYE
+#if defined(VR)
+	uint InstanceID : SV_INSTANCEID;
+#endif  // VR
 };
 
 struct VS_OUTPUT
@@ -38,20 +44,20 @@ struct VS_OUTPUT
 	float4
 #else
 	float2
-#endif
+#endif  // (defined (PROJECTED_UV) && !defined(SKINNED)) || defined(LANDSCAPE)
 		TexCoord0 : TEXCOORD0;
 #if defined(ENVMAP)
 	precise
-#endif
+#endif  // ENVMAP
 		float3 InputPosition : TEXCOORD4;
 #if defined(SKINNED) || !defined(MODELSPACENORMALS)
 	float3 TBN0 : TEXCOORD1;
 	float3 TBN1 : TEXCOORD2;
 	float3 TBN2 : TEXCOORD3;
-#endif
+#endif  // defined(SKINNED) || !defined(MODELSPACENORMALS)
 #if defined(HAS_VIEW_VECTOR)
 	float3 ViewVector : TEXCOORD5;
-#endif
+#endif  // HAS_VIEW_VECTOR
 #if defined(EYE)
 	float3 EyeNormal : TEXCOORD6;
 #elif defined(LANDSCAPE)
@@ -59,33 +65,37 @@ struct VS_OUTPUT
 	float4 LandBlendWeights2 : TEXCOORD7;
 #elif defined(PROJECTED_UV) && !defined(SKINNED)
 	float3 TexProj : TEXCOORD7;
-#endif
+#endif  // EYE
 	float3 ScreenNormalTransform0 : TEXCOORD8;
 	float3 ScreenNormalTransform1 : TEXCOORD9;
 	float3 ScreenNormalTransform2 : TEXCOORD10;
+	// #if !defined(VR)  // Position is normally not in VR, but perhaps we can use
+	// it.
 	float4 WorldPosition : POSITION1;
 	float4 PreviousWorldPosition : POSITION2;
+	// #endif // !VR
 	float4 Color : COLOR0;
 	float4 FogParam : COLOR1;
+#if defined(VR)
+	float ClipDistance : SV_ClipDistance0;  // o11
+	float CullDistance : SV_CullDistance0;  // p11
+#endif                                      // VR
 };
-
 #ifdef VSHADER
-cbuffer PerFrame : register(b12)
-{
-	row_major float3x3 ScreenProj : packoffset(c0);
-	row_major float4x4 ViewProj : packoffset(c8);
-#	if defined(SKINNED)
-	float3 BonesPivot : packoffset(c40);
-	float3 PreviousBonesPivot : packoffset(c41);
-#	endif
-};
 
 cbuffer PerTechnique : register(b0)
 {
-	float4 HighDetailRange : packoffset(c0);  // loaded cells center in xy, size in zw
+#	if !defined(VR)
+	float4 HighDetailRange[1] : packoffset(c0);  // loaded cells center in xy, size in zw
 	float4 FogParam : packoffset(c1);
 	float4 FogNearColor : packoffset(c2);
 	float4 FogFarColor : packoffset(c3);
+#	else
+	float4 HighDetailRange[2] : packoffset(c0);  // loaded cells center in xy, size in zw
+	float4 FogParam : packoffset(c2);
+	float4 FogNearColor : packoffset(c3);
+	float4 FogFarColor : packoffset(c4);
+#	endif  // VR
 };
 
 cbuffer PerMaterial : register(b1)
@@ -97,15 +107,27 @@ cbuffer PerMaterial : register(b1)
 
 cbuffer PerGeometry : register(b2)
 {
-	row_major float3x4 World : packoffset(c0);
-	row_major float3x4 PreviousWorld : packoffset(c3);
-	float4 EyePosition : packoffset(c6);
+#	if !defined(VR)
+	row_major float3x4 World[1] : packoffset(c0);
+	row_major float3x4 PreviousWorld[1] : packoffset(c3);
+	float4 EyePosition[1] : packoffset(c6);
 	float4 LandBlendParams : packoffset(c7);  // offset in xy, gridPosition in yw
 	float4 TreeParams : packoffset(c8);       // wind magnitude in y, amplitude in z, leaf frequency in w
 	float2 WindTimers : packoffset(c9);
-	row_major float3x4 TextureProj : packoffset(c10);
+	row_major float3x4 TextureProj[1] : packoffset(c10);
 	float IndexScale : packoffset(c13);
 	float4 WorldMapOverlayParameters : packoffset(c14);
+#	else   // VR has 49 vs 30 entries
+	row_major float3x4 World[2] : packoffset(c0);
+	row_major float3x4 PreviousWorld[2] : packoffset(c6);
+	float4 EyePosition[2] : packoffset(c12);
+	float4 LandBlendParams : packoffset(c14);  // offset in xy, gridPosition in yw
+	float4 TreeParams : packoffset(c15);       // wind magnitude in y, amplitude in z, leaf frequency in w
+	float2 WindTimers : packoffset(c16);
+	row_major float3x4 TextureProj[2] : packoffset(c17);
+	float IndexScale : packoffset(c23);
+	float4 WorldMapOverlayParameters : packoffset(c24);
+#	endif  // VR
 };
 
 #	if defined(SKINNED)
@@ -114,11 +136,38 @@ cbuffer PreviousBonesBuffer : register(b9)
 	float4 PreviousBones[240] : packoffset(c0);
 }
 
-cbuffer BonesBuffer : register(b10)
-{
-	float4 Bones[240] : packoffset(c0);
-}
+cbuffer BonesBuffer : register(b10) { float4 Bones[240] : packoffset(c0); }
 #	endif
+
+cbuffer VS_PerFrame : register(b12)
+{
+#	if !defined(VR)
+	row_major float3x3 ScreenProj[1] : packoffset(c0);
+	row_major float4x4 ViewProj[1] : packoffset(c8);
+#		if defined(SKINNED)
+	float3 BonesPivot[1] : packoffset(c40);
+	float3 PreviousBonesPivot[1] : packoffset(c41);
+#		endif  // SKINNED
+#	else
+	row_major float3x3 ScreenProj[2] : packoffset(c0);
+	row_major float4x4 ViewProj[2] : packoffset(c16);
+#		if defined(SKINNED)
+	float3 BonesPivot[2] : packoffset(c80);
+	float3 PreviousBonesPivot[2] : packoffset(c82);
+#		endif  // SKINNED
+#	endif      // VR
+};
+
+#	ifdef VR
+cbuffer cb13 : register(b13)
+{
+	float4 cb13[3];
+}
+#	endif  // VR
+
+const static float4x4 M_IdentityMatrix = {
+	{ 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 }, { 0, 0, 0, 1 }
+};
 
 #	if defined(TREE_ANIM)
 float2 GetTreeShiftVector(float4 position, float4 color)
@@ -135,16 +184,17 @@ float2 GetTreeShiftVector(float4 position, float4 color)
 float3x4 GetBoneMatrix(float4 bones[240], int4 actualIndices, float3 pivot, float4 weights)
 {
 	/*float3x4 result;
-	for (int rowIndex = 0; rowIndex < 3; ++rowIndex)
-	{
-		float4 pivotRow = float4(0, 0, 0, pivot[rowIndex]);
-		result[rowIndex] = 0.0.xxxx;
-		for (int boneIndex = 0; boneIndex < 4; ++boneIndex)
-		{
-			result[rowIndex] += (bones[actualIndices[boneIndex] + rowIndex] - pivotRow) * weights[boneIndex];
-		}
-	}
-	return result;*/
+for (int rowIndex = 0; rowIndex < 3; ++rowIndex)
+{
+float4 pivotRow = float4(0, 0, 0, pivot[rowIndex]);
+result[rowIndex] = 0.0.xxxx;
+for (int boneIndex = 0; boneIndex < 4; ++boneIndex)
+{
+result[rowIndex] += (bones[actualIndices[boneIndex] +
+rowIndex] - pivotRow) * weights[boneIndex];
+}
+}
+return result;*/
 
 	float3x4 pivotMatrix = transpose(float4x3(0.0.xxx, 0.0.xxx, 0.0.xxx, pivot));
 
@@ -180,7 +230,7 @@ float3x3 GetBoneRSMatrix(float4 bones[240], int4 actualIndices, float4 weights)
 	}
 	return result;
 }
-#	endif
+#	endif  // SKINNED
 
 VS_OUTPUT main(VS_INPUT input)
 {
@@ -188,14 +238,24 @@ VS_OUTPUT main(VS_INPUT input)
 
 	precise float4 inputPosition = float4(input.Position.xyz, 1.0);
 
+#	if !defined(VR)
+	uint eyeIndex = 0;
+	uint eyeIndexX3 = 0;
+	uint eyeIndexX4 = 0;
+#	else   // VR
+	uint eyeIndex = cb13[0].y * (input.InstanceID.x & 1);
+	uint eyeIndexX3 = eyeIndex * 3;
+	uint eyeIndexX4 = eyeIndex << 2;
+#	endif  // VR
+
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
-	float4 rawWorldPosition = float4(mul(World, inputPosition), 1);
-	float worldXShift = rawWorldPosition.x - HighDetailRange.x;
-	float worldYShift = rawWorldPosition.y - HighDetailRange.y;
-	if ((abs(worldXShift) < HighDetailRange.z) && (abs(worldYShift) < HighDetailRange.w)) {
+	float4 rawWorldPosition = float4(mul(World[eyeIndex], inputPosition), 1);
+	float worldXShift = rawWorldPosition.x - HighDetailRange[eyeIndex].x;
+	float worldYShift = rawWorldPosition.y - HighDetailRange[eyeIndex].y;
+	if ((abs(worldXShift) < HighDetailRange[eyeIndex].z) && (abs(worldYShift) < HighDetailRange[eyeIndex].w)) {
 		inputPosition.z -= (230 + rawWorldPosition.z / 1e9);
 	}
-#	endif
+#	endif  // defined(LODLANDNOISE) || defined(LODLANDSCAPE)                                                                   \
 
 	precise float4 previousInputPosition = inputPosition;
 
@@ -211,21 +271,21 @@ VS_OUTPUT main(VS_INPUT input)
 	precise int4 actualIndices = 765.01.xxxx * input.BoneIndices.xyzw;
 
 	float3x4 previousWorldMatrix =
-		GetBoneMatrix(PreviousBones, actualIndices, PreviousBonesPivot, input.BoneWeights);
+		GetBoneMatrix(PreviousBones, actualIndices, PreviousBonesPivot[eyeIndex], input.BoneWeights);
 	precise float4 previousWorldPosition =
 		float4(mul(inputPosition, transpose(previousWorldMatrix)), 1);
 
-	float3x4 worldMatrix = GetBoneMatrix(Bones, actualIndices, BonesPivot, input.BoneWeights);
+	float3x4 worldMatrix = GetBoneMatrix(Bones, actualIndices, BonesPivot[eyeIndex], input.BoneWeights);
 	precise float4 worldPosition = float4(mul(inputPosition, transpose(worldMatrix)), 1);
 
-	float4 viewPos = mul(ViewProj, worldPosition);
-#	else
-	precise float4 previousWorldPosition = float4(mul(PreviousWorld, inputPosition), 1);
-	precise float4 worldPosition = float4(mul(World, inputPosition), 1);
-	precise float4x4 world4x4 = float4x4(World[0], World[1], World[2], float4(0, 0, 0, 1));
-	precise float4x4 modelView = mul(ViewProj, world4x4);
+	float4 viewPos = mul(ViewProj[eyeIndex], worldPosition);
+#	else   // !SKINNED
+	precise float4 previousWorldPosition = float4(mul(PreviousWorld[eyeIndex], inputPosition), 1);
+	precise float4 worldPosition = float4(mul(World[eyeIndex], inputPosition), 1);
+	precise float4x4 world4x4 = float4x4(World[eyeIndex][0], World[eyeIndex][1], World[eyeIndex][2], float4(0, 0, 0, 1));
+	precise float4x4 modelView = mul(ViewProj[eyeIndex], world4x4);
 	float4 viewPos = mul(modelView, inputPosition);
-#	endif
+#	endif  // SKINNED
 
 #	if defined(OUTLINE) && !defined(MODELSPACENORMALS)
 	float3 normal = normalize(-1.0.xxx + 2.0.xxx * input.Normal.xyz);
@@ -237,13 +297,13 @@ VS_OUTPUT main(VS_INPUT input)
 	previousWorldPosition =
 		float4(mul(inputPosition, transpose(previousWorldMatrix)), 1);
 	worldPosition = float4(mul(inputPosition, transpose(worldMatrix)), 1);
-	viewPos = mul(ViewProj, worldPosition);
-#		else
-	previousWorldPosition = float4(mul(PreviousWorld, inputPosition), 1);
-	worldPosition = float4(mul(World, inputPosition), 1);
+	viewPos = mul(ViewProj[eyeIndex], worldPosition);
+#		else   // !SKINNED
+	previousWorldPosition = float4(mul(PreviousWorld[eyeIndex], inputPosition), 1);
+	worldPosition = float4(mul(World[eyeIndex], inputPosition), 1);
 	viewPos = mul(modelView, inputPosition);
-#		endif
-#	endif
+#		endif  // SKINNED
+#	endif      // defined(OUTLINE) && !defined(MODELSPACENORMALS)
 
 	vsout.Position = viewPos;
 
@@ -255,8 +315,8 @@ VS_OUTPUT main(VS_INPUT input)
 #	if defined(LANDSCAPE)
 	vsout.TexCoord0.zw = (uv * 0.010416667.xx + LandBlendParams.xy) * float2(1, -1) + float2(0, 1);
 #	elif defined(PROJECTED_UV) && !defined(SKINNED)
-	vsout.TexCoord0.z = mul(TextureProj[0], inputPosition);
-	vsout.TexCoord0.w = mul(TextureProj[1], inputPosition);
+	vsout.TexCoord0.z = mul(TextureProj[eyeIndex][0], inputPosition);
+	vsout.TexCoord0.w = mul(TextureProj[eyeIndex][1], inputPosition);
 #	endif
 	vsout.TexCoord0.xy = uv;
 
@@ -290,9 +350,9 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.TBN1.xyz = worldTbnTr[1];
 	vsout.TBN2.xyz = worldTbnTr[2];
 #		elif defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
-	vsout.TBN0.xyz = mul(tbn, World[0].xyz);
-	vsout.TBN1.xyz = mul(tbn, World[1].xyz);
-	vsout.TBN2.xyz = mul(tbn, World[2].xyz);
+	vsout.TBN0.xyz = mul(tbn, World[eyeIndex][0].xyz);
+	vsout.TBN1.xyz = mul(tbn, World[eyeIndex][1].xyz);
+	vsout.TBN2.xyz = mul(tbn, World[eyeIndex][2].xyz);
 	float3x3 tempTbnTr = transpose(float3x3(vsout.TBN0.xyz, vsout.TBN1.xyz, vsout.TBN2.xyz));
 	tempTbnTr[0] = normalize(tempTbnTr[0]);
 	tempTbnTr[1] = normalize(tempTbnTr[1]);
@@ -323,30 +383,30 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.LandBlendWeights2.w = 1 - saturate(0.000375600968 * (9625.59961 - length(gridOffset)));
 	vsout.LandBlendWeights2.xyz = input.LandBlendWeights2.xyz;
 #	elif defined(PROJECTED_UV) && !defined(SKINNED)
-	vsout.TexProj = TextureProj[2].xyz;
+	vsout.TexProj = TextureProj[eyeIndex][2].xyz;
 #	endif
 
 #	if defined(HAS_VIEW_VECTOR)
 #		if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(SKINNED)
-	vsout.ViewVector = EyePosition.xyz - worldPosition.xyz;
+	vsout.ViewVector = EyePosition[eyeIndex].xyz - worldPosition.xyz;
 #		else
-	vsout.ViewVector = EyePosition.xyz - input.Position.xyz;
+	vsout.ViewVector = EyePosition[eyeIndex].xyz - input.Position.xyz;
 #		endif
-#	endif
+#	endif  // HAS_VIEW_VECTOR
 
 #	if defined(EYE)
 	precise float4 modelEyeCenter = float4(LeftEyeCenter.xyz + input.EyeParameter.xxx * (RightEyeCenter.xyz - LeftEyeCenter.xyz), 1);
 	vsout.EyeNormal.xyz = normalize(worldPosition.xyz - mul(modelEyeCenter, transpose(worldMatrix)));
-#	endif
+#	endif  // EYE
 
 #	if defined(SKINNED)
-	float3x3 ScreenNormalTransform = mul(ScreenProj, worldTbnTr);
+	float3x3 ScreenNormalTransform = mul(ScreenProj[eyeIndex], worldTbnTr);
 
 	vsout.ScreenNormalTransform0.xyz = ScreenNormalTransform[0];
 	vsout.ScreenNormalTransform1.xyz = ScreenNormalTransform[1];
 	vsout.ScreenNormalTransform2.xyz = ScreenNormalTransform[2];
 #	else
-	float3x4 transMat = mul(ScreenProj, World);
+	float3x4 transMat = mul(ScreenProj[eyeIndex], World[eyeIndex]);
 
 #		if defined(MODELSPACENORMALS)
 	vsout.ScreenNormalTransform0.xyz = transMat[0].xyz;
@@ -356,8 +416,8 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.ScreenNormalTransform0.xyz = mul(transMat[0].xyz, transpose(tbn));
 	vsout.ScreenNormalTransform1.xyz = mul(transMat[1].xyz, transpose(tbn));
 	vsout.ScreenNormalTransform2.xyz = mul(transMat[2].xyz, transpose(tbn));
-#		endif
-#	endif
+#		endif  // MODELSPACENORMALS
+#	endif      // SKINNED
 
 	vsout.WorldPosition = worldPosition;
 	vsout.PreviousWorldPosition = previousWorldPosition;
@@ -366,7 +426,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Color = input.Color;
 #	else
 	vsout.Color = 1.0.xxxx;
-#	endif
+#	endif  // VC
 
 	float fogColorParam = min(FogParam.w,
 		exp2(FogParam.z * log2(saturate(length(viewPos.xyz) * FogParam.y - FogParam.x))));
@@ -374,9 +434,30 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.FogParam.xyz = lerp(FogNearColor.xyz, FogFarColor.xyz, fogColorParam);
 	vsout.FogParam.w = fogColorParam;
 
+#	ifdef VR
+	float4 r0;
+	float4 projSpacePosition = viewPos;
+	r0.xyzw = 0;
+	if (0 < cb13[0].y) {
+		r0.yz = dot(projSpacePosition, cb13[eyeIndex + 1].xyzw);
+	} else {
+		r0.yz = float2(1, 1);
+	}
+
+	r0.w = 2 + -cb13[0].y;
+	r0.x = dot(cb13[0].zw, M_IdentityMatrix[eyeIndex + 0].xy);
+	r0.xw = r0.xw * projSpacePosition.wx;
+	r0.x = cb13[0].y * r0.x;
+
+	vsout.Position.x = r0.w * 0.5 + r0.x;
+	vsout.Position.yzw = projSpacePosition.yzw;
+
+	vsout.ClipDistance.x = r0.z;
+	vsout.CullDistance.x = r0.y;
+#	endif  // VR
 	return vsout;
 }
-#endif
+#endif  // VSHADER
 
 typedef VS_OUTPUT PS_INPUT;
 
@@ -410,23 +491,23 @@ SamplerState SampColorSampler : register(s0);
 #		define SampLandNormal5Sampler SampColorSampler
 #		define SampLandNormal6Sampler SampColorSampler
 
-// SamplerState SampLandColor2Sampler					: register(s1);
-// SamplerState SampLandColor3Sampler					: register(s2);
-// SamplerState SampLandColor4Sampler					: register(s3);
-// SamplerState SampLandColor5Sampler					: register(s4);
-// SamplerState SampLandColor6Sampler					: register(s5);
-// SamplerState SampNormalSampler						: register(s7);
-// SamplerState SampLandNormal2Sampler					: register(s8);
-// SamplerState SampLandNormal3Sampler					: register(s9);
-// SamplerState SampLandNormal4Sampler					: register(s10);
-// SamplerState SampLandNormal5Sampler					: register(s11);
-// SamplerState SampLandNormal6Sampler					: register(s12);
+// SamplerState SampLandColor2Sampler : register(s1);
+// SamplerState SampLandColor3Sampler : register(s2);
+// SamplerState SampLandColor4Sampler : register(s3);
+// SamplerState SampLandColor5Sampler : register(s4);
+// SamplerState SampLandColor6Sampler : register(s5);
+// SamplerState SampNormalSampler : register(s7);
+// SamplerState SampLandNormal2Sampler : register(s8);
+// SamplerState SampLandNormal3Sampler : register(s9);
+// SamplerState SampLandNormal4Sampler : register(s10);
+// SamplerState SampLandNormal5Sampler : register(s11);
+// SamplerState SampLandNormal6Sampler : register(s12);
 
 #	else
 SamplerState SampColorSampler : register(s0);
 
 #		define SampNormalSampler SampColorSampler
-//SamplerState SampNormalSampler						: register(s1);
+// SamplerState SampNormalSampler : register(s1);
 
 #		if defined(MODELSPACENORMALS) && !defined(LODLANDNOISE)
 SamplerState SampSpecularSampler : register(s2);
@@ -564,26 +645,6 @@ Texture2D<float4> TexLandLodNoiseSampler : register(t15);
 Texture2D<float4> TexShadowMaskSampler : register(t14);
 #	endif
 
-cbuffer PerFrame : register(b12)
-{
-	row_major float4x4 ViewMatrix : packoffset(c0);
-	row_major float4x4 ProjMatrix : packoffset(c4);
-	row_major float4x4 ViewProjMatrix : packoffset(c8);
-	row_major float4x4 ViewProjMatrixUnjittered : packoffset(c12);
-	row_major float4x4 PreviousViewProjMatrixUnjittered : packoffset(c16);
-	row_major float4x4 InvProjMatrixUnjittered : packoffset(c20);
-	row_major float4x4 ProjMatrixUnjittered : packoffset(c24);
-	row_major float4x4 InvViewMatrix : packoffset(c28);
-	row_major float4x4 InvViewProjMatrix : packoffset(c32);
-	row_major float4x4 InvProjMatrix : packoffset(c36);
-	float4 CurrentPosAdjust : packoffset(c40);
-	float4 PreviousPosAdjust : packoffset(c41);
-	// notes: FirstPersonY seems 1.0 regardless of third/first person, could be LE legacy stuff
-	float4 GammaInvX_FirstPersonY_AlphaPassZ_CreationKitW : packoffset(c42);
-	float4 DynamicRes_WidthX_HeightY_PreviousWidthZ_PreviousHeightW : packoffset(c43);
-	float4 DynamicRes_InvWidthX_InvHeightY_WidthClampZ_HeightClampW : packoffset(c44);
-}
-
 cbuffer PerTechnique : register(b0)
 {
 	float4 FogColor : packoffset(c0);           // Color in xyz, invFrameBufferRange in w
@@ -608,10 +669,12 @@ cbuffer PerMaterial : register(b1)
 	float4 LandscapeTexture5to6IsSpecPower : packoffset(c12);
 	float4 SnowRimLightParameters : packoffset(c13);  // fSnowRimLightIntensity in x, fSnowGeometrySpecPower in y, fSnowNormalSpecPower in z, bEnableSnowRimLighting in w
 	float4 CharacterLightParams : packoffset(c14);
+	// VR is [9] instead of [15]
 };
 
 cbuffer PerGeometry : register(b2)
 {
+#	if !defined(VR)
 	float3 DirLightDirection : packoffset(c0);
 	float3 DirLightColor : packoffset(c1);
 	float4 ShadowLightMaskSelect : packoffset(c2);
@@ -628,12 +691,39 @@ cbuffer PerGeometry : register(b2)
 	float4 PointLightPosition[7] : packoffset(c15);               // point light radius in w
 	float4 PointLightColor[7] : packoffset(c22);
 	float2 NumLightNumShadowLight : packoffset(c29);
+#	else
+	// VR is [49] instead of [30]
+	float3 DirLightDirection : packoffset(c0);
+	float4 UnknownPerGeometry[12] : packoffset(c1);
+	float3 DirLightColor : packoffset(c13);
+	float4 ShadowLightMaskSelect : packoffset(c14);
+	float4 MaterialData : packoffset(c15);  // envmapLODFade in x, specularLODFade in y, alpha in z
+	float AlphaTestRef : packoffset(c16);
+	float3 EmitColor : packoffset(c16.y);
+	float4 ProjectedUVParams : packoffset(c18);
+	float4 SSRParams : packoffset(c19);
+	float4 WorldMapOverlayParametersPS : packoffset(c20);
+	float4 ProjectedUVParams2 : packoffset(c21);
+	float4 ProjectedUVParams3 : packoffset(c22);  // fProjectedUVDiffuseNormalTilingScale in x,	fProjectedUVNormalDetailTilingScale in y, EnableProjectedNormals in w
+	row_major float3x4 DirectionalAmbient : packoffset(c23);
+	float4 AmbientSpecularTintAndFresnelPower : packoffset(c26);  // Fresnel power in z, color in xyz
+	float4 PointLightPosition[14] : packoffset(c27);              // point light radius in w
+	float4 PointLightColor[7] : packoffset(c41);
+	float2 NumLightNumShadowLight : packoffset(c48);
+#	endif  // VR
 };
 
 cbuffer AlphaTestRefBuffer : register(b11)
 {
 	float AlphaThreshold : packoffset(c0);
 }
+
+#	ifdef VR
+cbuffer cb13 : register(b13)
+{
+	float4 cb13[3];
+}
+#	endif  // VR
 
 float GetSoftLightMultiplier(float angle)
 {
@@ -956,31 +1046,115 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
+#	if !defined(VR)
+	uint eyeIndex = 0;
+	uint eyeIndexX3 = 0;
+	uint eyeIndexX4 = 0;
+#	else
+	// this code appears in parallax code in the PShader,
+	// https://github.com/alandtse/SSEShaderTools/commit/450a0d62d01b0cbdfeb86b4eba46c3528833c897?diff=split#diff-1927ad1d541f8de9480b08bd5e6878a9a56b64d06068e1724e4a5792c663c87bR71
+
+	// calculate eyeindex
+	// r0.xy = HPosition.xy * cb0[2].xy + cb0[2].zw;
+	// r0.x = cb12[86].x * r0.x;
+	// r0.z = cmp(r0.x >= 0.5);
+	// r0.z = r0.z ? 1.000000 : 0;  // eyeIndex
+	// r0.w = (uint)cb13[0].y;
+	// r0.z = (int)r0.w * (int)r0.z;
+	// r1.x = (uint)r0.z;
+	// r1.y = -r1.x * 0.5 + r0.x;
+	// r1.y = r1.y + r1.y;
+	// r2.x = r0.w ? r1.y : r0.x;
+	// r2.y = -r0.y * cb12[86].y + 1;
+	// r2.xy = r2.xy * float2(2, 2) + float2(-1, -1);
+	// r0.x = (uint)r0.z << 2;
+	// r2.z = v0.z;
+	// r2.w = 1;
+	// r3.x = dot(cb12[r0.x + 64].xyzw, r2.xyzw);
+	// r3.y = dot(cb12[r0.x + 65].xyzw, r2.xyzw);
+	// r3.z = dot(cb12[r0.x + 66].xyzw, r2.xyzw);
+	// r0.y = dot(cb12[r0.x + 67].xyzw, r2.xyzw);
+	// r2.xyz = r3.xyz / r0.yyy;
+	// r0.y = (int)r0.z * 3;  // should be fixed at 0 to avoid specular lightin issues
+	// r2.w = 1;
+	// r3.x = dot(cb2[r0.y + 1].xyzw, r2.xyzw);
+	// r3.y = dot(cb2[r0.y + 2].xyzw, r2.xyzw);
+	// r3.z = dot(cb2[r0.y + 3].xyzw, r2.xyzw);
+	// r3.w = 1;
+	// r4.x = dot(cb2[r0.y + 7].xyzw, r3.xyzw);
+	// r4.y = dot(cb2[r0.y + 8].xyzw, r3.xyzw);
+	// r4.z = dot(cb2[r0.y + 9].xyzw, r3.xyzw);
+	// see also
+	// r0.x = v0.x * cb0[2].x + cb0[2].z;
+	// r0.x = cb12[86].x * r0.x;
+	// r0.x = cmp(r0.x >= 0.5);
+	// r0.x = r0.x ? 0.000000 : 0; // note this is broken VR code, it needs to
+	// return 1 on true.
+	// r0.y = (uint)cb13[0].y; r0.x = (int)r0.y * (int)r0.x;
+	//
+	float4 r0, r1, r3, stereoUV;
+	stereoUV.xy = input.Position.xy * VPOSOffset.xy + VPOSOffset.zw;
+	stereoUV.x = DynamicResolutionParams2.x * stereoUV.x;
+	stereoUV.x = (stereoUV.x >= 0.5);
+	uint eyeIndex =
+		(uint)(((int)((uint)cb13[0].y)) *
+			   (int)stereoUV.x);  // this may be eyeOffset from RunGrass.hsl
+	uint eyeIndexX3 = eyeIndex * 3;
+	uint eyeIndexX4 = eyeIndex << 2;
+
+	// In VR, there is no worldPosition or PreviousWorldPosition as an input. This code is used to determine position
+	// float4 worldPositionVR;
+	// worldPositionVR.x =
+	// 	(uint)cb13[0].y ? 2 * (-eyeIndex * 0.5 + stereoUV.x) : stereoUV.x;
+	// worldPositionVR.y = -stereoUV.y * DynamicResolutionParams2.y + 1;
+	// worldPositionVR.xy = worldPositionVR.xy * float2(2, 2) + float2(-1, -1);
+	// worldPositionVR.z = input.Position.z;
+	// worldPositionVR.w = 1;
+	// r3.x = dot(CameraViewProjInverse[eyeIndex][0].xyzw, worldPositionVR.xyzw);
+	// r3.y = dot(CameraViewProjInverse[eyeIndex][1].xyzw, worldPositionVR.xyzw);
+	// r3.z = dot(CameraViewProjInverse[eyeIndex][2].xyzw, worldPositionVR.xyzw);
+	// r0.y = dot(CameraViewProjInverse[eyeIndex][3].xyzw, worldPositionVR.xyzw);
+	// worldPositionVR.xyz = r3.xyz / r0.yyy;
+	// worldPositionVR.w = 1;
+	// note in RE this was eyeIndexX3 for accessing UnknownPerEGeomtry;
+	// but that was causing a specular bug in the right eye. Resolved with
+	// https://github.com/alandtse/SSEShaderTools/commit/731f1d126319eecaf0ed9178c8b77e22926cf3f9
+	// r3.x = dot(UnknownPerGeometry[0].xyzw, worldPositionVR.xyzw);
+	// r3.y = dot(UnknownPerGeometry[1].xyzw, worldPositionVR.xyzw);
+	// r3.z = dot(UnknownPerGeometry[2].xyzw, worldPositionVR.xyzw);
+	// r3.w = 1;
+	// float4 PreviousWorldPositionVR;
+	// PreviousWorldPositionVR.x = dot(UnknownPerGeometry[6].xyzw, r3.xyzw);
+	// PreviousWorldPositionVR.y = dot(UnknownPerGeometry[7].xyzw, r3.xyzw);
+	// PreviousWorldPositionVR.z = dot(UnknownPerGeometry[8].xyzw, r3.xyzw);
+	// PreviousWorldPositionVR.w = 1;
+	// end
+#	endif
+
 #	if defined(SKINNED) || !defined(MODELSPACENORMALS)
 	float3x3 tbn = float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz);
-#	endif
+#	endif  // defined (SKINNED) || !defined (MODELSPACENORMALS)
 
 #	if defined(LANDSCAPE)
 	float shininess = dot(input.LandBlendWeights1, LandscapeTexture1to4IsSpecPower) + input.LandBlendWeights2.x * LandscapeTexture5to6IsSpecPower.x + input.LandBlendWeights2.y * LandscapeTexture5to6IsSpecPower.y;
 #	else
 	float shininess = SpecularColor.w;
-#	endif
+#	endif  // defined (LANDSCAPE)
 
-	float3 viewPosition = mul(ViewMatrix, float4(input.WorldPosition.xyz, 1));
-
+	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 #	if defined(CPM_AVAILABLE)
 	float parallaxShadowQuality = 1 - smoothstep(perPassParallax[0].ShadowsStartFade, perPassParallax[0].ShadowsEndFade, viewPosition.z);
 #	endif
 
 #	if defined(HAS_VIEW_VECTOR)
-	//#if defined (SKINNED)
+	// #if defined (SKINNED)
 	//	float3 viewDirection = normalize(mul(tbn, input.ViewVector.xyz));
-	//#else
+	// #else
 	float3 viewDirection = normalize(input.ViewVector.xyz);
-//#endif
+// #endif
 #	else
 	float3 viewDirection = 0.57735026.xxx;
-#	endif
+#	endif  // HAS_VIEW_VECTOR
 
 	float2 uv = input.TexCoord0.xy;
 	float2 uvOriginal = uv;
@@ -991,7 +1165,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	else
 	float mipLevel;
 	float sh0;
-#	endif
+#	endif  // LANDSCAPE
 
 #	if defined(CPM_AVAILABLE)
 #		if defined(PARALLAX)
@@ -1001,7 +1175,7 @@ PS_OUTPUT main(PS_INPUT input)
 		if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 			sh0 = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, 0).x;
 	}
-#		endif
+#		endif  // PARALLAX
 
 #		if defined(ENVMAP)
 	bool complexMaterial = false;
@@ -1024,25 +1198,25 @@ PS_OUTPUT main(PS_INPUT input)
 			complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
 		}
 	}
-#		endif
-#	endif
+#		endif  // ENVMAP
+#	endif      // CPM_AVAILABLE
 
 #	if defined(SNOW)
 	bool useSnowSpecular = true;
 #	else
 	bool useSnowSpecular = false;
-#	endif
+#	endif  // SNOW
 
 #	if defined(SPARKLE) || !defined(PROJECTED_UV)
 	bool useSnowDecalSpecular = true;
 #	else
 	bool useSnowDecalSpecular = false;
-#	endif
+#	endif  // defined(SPARKLE) || !defined(PROJECTED_UV)
 
 	float2 diffuseUv = uv;
 #	if defined(SPARKLE)
 	diffuseUv = ProjectedUVParams2.yy * input.TexCoord0.zw;
-#	endif
+#	endif  // SPARKLE
 
 #	if defined(CPM_AVAILABLE)
 
@@ -1055,14 +1229,14 @@ PS_OUTPUT main(PS_INPUT input)
 		if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 			sh0[0] = TexColorSampler.SampleLevel(SampTerrainParallaxSampler, uv, 0).w;
 	}
-#		endif
+#		endif  // LANDSCAPE
 
 #		if defined(SPARKLE)
 	diffuseUv = ProjectedUVParams2.yy * (input.TexCoord0.zw + (uv - uvOriginal));
 #		else
 	diffuseUv = uv;
-#		endif
-#	endif
+#		endif  // SPARKLE
+#	endif      // CPM_AVAILABLE
 
 	float4 baseColor = 0;
 	float4 normal = 0;
@@ -1070,7 +1244,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if defined(LANDSCAPE)
 	if (input.LandBlendWeights1.x > 0.0) {
-#	endif
+#	endif  // LANDSCAPE
 
 		float4 rawBaseColor = TexColorSampler.Sample(SampColorSampler, diffuseUv);
 
@@ -1098,18 +1272,18 @@ PS_OUTPUT main(PS_INPUT input)
 		normal.xyz = normal.xzy * 2.0.xxx + -1.0.xxx;
 		normal.w = 1;
 		glossiness = TexSpecularSampler.Sample(SampSpecularSampler, uv).x;
-#		endif
+#		endif  // LODLANDNOISE
 #	elif (defined(SNOW) && defined(LANDSCAPE))
 	normal.xyz = GetLandNormal(landSnowMask1, normal.xyz, uv, SampNormalSampler, TexNormalSampler);
 	glossiness = normal.w;
 #	else
 	normal.xyz = TransformNormal(normal.xyz);
 	glossiness = normal.w;
-#	endif
+#	endif  // MODELSPACENORMALS
 
 #	if defined(WORLD_MAP)
 		normal.xyz = GetWorldMapNormal(input, normal.xyz, rawBaseColor.xyz);
-#	endif
+#	endif  // WORLD_MAP
 
 #	if defined(LANDSCAPE)
 		baseColor *= input.LandBlendWeights1.x;
@@ -1117,7 +1291,7 @@ PS_OUTPUT main(PS_INPUT input)
 		glossiness *= input.LandBlendWeights1.x;
 	}
 
-#	endif
+#	endif  // LANDSCAPE
 
 #	if defined(CPM_AVAILABLE) && defined(ENVMAP)
 	float3 complexSpecular = 1.0f;
@@ -1130,39 +1304,39 @@ PS_OUTPUT main(PS_INPUT input)
 			complexSpecular = lerp(1.0f, baseColor.xyz, complexMaterialColor.z);
 		}
 	}
-#	endif
+#	endif  // defined (CPM_AVAILABLE) && defined(ENVMAP)
 
 #	if defined(PBR)
-	//float3 rmaoColor = TexRMAOSampler.Sample(SampRMAOSampler, uv).xyz;
-	//float roughness = rmaoColor.x;
-	//float metallic = rmaoColor.y;
-	//float ao = rmaoColor.z;
+	// float3 rmaoColor = TexRMAOSampler.Sample(SampRMAOSampler, uv).xyz;
+	// float roughness = rmaoColor.x;
+	// float metallic = rmaoColor.y;
+	// float ao = rmaoColor.z;
 
 	float roughness = 1 - glossiness;
 	float metallic = 0;
 #		if defined(ENVMAP)
 	float envMaskColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).x;
 	metallic = envMaskColor * EnvmapData.x;
-#		endif
+#		endif  // ENVMAP
 	float ao = 1;
 
 	float3 F0 = 0.04.xxx;
 	F0 = lerp(F0, baseColor.xyz, metallic);
 
 	float3 totalRadiance = 0.0.xxx;
-#	endif
+#	endif  // PBR
 
 #	if defined(FACEGEN)
 	baseColor.xyz = GetFacegenBaseColor(baseColor.xyz, uv);
 #	elif defined(FACEGEN_RGB_TINT)
 	baseColor.xyz = GetFacegenRGBTintBaseColor(baseColor.xyz, uv);
-#	endif
+#	endif  // FACEGEN
 
 #	if defined(LANDSCAPE)
 
 #		if defined(SNOW)
 	float landSnowMask = LandscapeTexture1to4IsSnow.x * input.LandBlendWeights1.x;
-#		endif
+#		endif  // SNOW
 
 	if (input.LandBlendWeights1.y > 0.0) {
 #		if defined(CPM_AVAILABLE)
@@ -1173,7 +1347,7 @@ PS_OUTPUT main(PS_INPUT input)
 			if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 				sh0[1] = TexLandColor2Sampler.SampleLevel(SampTerrainParallaxSampler, uv, 0).w;
 		}
-#		endif
+#		endif  // CPM_AVAILABLE
 		float4 landColor2 = TexLandColor2Sampler.Sample(SampLandColor2Sampler, uv);
 		float landSnowMask2 = GetLandSnowMaskValue(landColor2.w);
 		baseColor += input.LandBlendWeights1.yyyy * landColor2;
@@ -1183,7 +1357,7 @@ PS_OUTPUT main(PS_INPUT input)
 		glossiness += input.LandBlendWeights1.y * landNormal2.w;
 #		if defined(SNOW)
 		landSnowMask += LandscapeTexture1to4IsSnow.y * input.LandBlendWeights1.y * landSnowMask2;
-#		endif
+#		endif  // SNOW
 	}
 
 	if (input.LandBlendWeights1.z > 0.0) {
@@ -1195,7 +1369,7 @@ PS_OUTPUT main(PS_INPUT input)
 			if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 				sh0[2] = TexLandColor3Sampler.SampleLevel(SampTerrainParallaxSampler, uv, 0).w;
 		}
-#		endif
+#		endif  // CPM_AVAILABLE
 		float4 landColor3 = TexLandColor3Sampler.Sample(SampLandColor3Sampler, uv);
 		float landSnowMask3 = GetLandSnowMaskValue(landColor3.w);
 		baseColor += input.LandBlendWeights1.zzzz * landColor3;
@@ -1205,7 +1379,7 @@ PS_OUTPUT main(PS_INPUT input)
 		glossiness += input.LandBlendWeights1.z * landNormal3.w;
 #		if defined(SNOW)
 		landSnowMask += LandscapeTexture1to4IsSnow.z * input.LandBlendWeights1.z * landSnowMask3;
-#		endif
+#		endif  // SNOW
 	}
 
 	if (input.LandBlendWeights1.w > 0.0) {
@@ -1217,7 +1391,7 @@ PS_OUTPUT main(PS_INPUT input)
 			if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 				sh0[3] = TexLandColor4Sampler.SampleLevel(SampTerrainParallaxSampler, uv, 0).w;
 		}
-#		endif
+#		endif  // CPM_AVAILABLE
 		float4 landColor4 = TexLandColor4Sampler.Sample(SampLandColor4Sampler, uv);
 		float landSnowMask4 = GetLandSnowMaskValue(landColor4.w);
 		baseColor += input.LandBlendWeights1.wwww * landColor4;
@@ -1227,7 +1401,7 @@ PS_OUTPUT main(PS_INPUT input)
 		glossiness += input.LandBlendWeights1.w * landNormal4.w;
 #		if defined(SNOW)
 		landSnowMask += LandscapeTexture1to4IsSnow.w * input.LandBlendWeights1.w * landSnowMask4;
-#		endif
+#		endif  // SNOW
 	}
 
 	if (input.LandBlendWeights2.x > 0.0) {
@@ -1239,7 +1413,7 @@ PS_OUTPUT main(PS_INPUT input)
 			if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 				sh0[4] = TexLandColor5Sampler.SampleLevel(SampTerrainParallaxSampler, uv, 0).w;
 		}
-#		endif
+#		endif  // CPM_AVAILABLE
 		float4 landColor5 = TexLandColor5Sampler.Sample(SampLandColor5Sampler, uv);
 		float landSnowMask5 = GetLandSnowMaskValue(landColor5.w);
 		baseColor += input.LandBlendWeights2.xxxx * landColor5;
@@ -1249,7 +1423,7 @@ PS_OUTPUT main(PS_INPUT input)
 		glossiness += input.LandBlendWeights2.x * landNormal5.w;
 #		if defined(SNOW)
 		landSnowMask += LandscapeTexture5to6IsSnow.x * input.LandBlendWeights2.x * landSnowMask5;
-#		endif
+#		endif  // SNOW
 	}
 
 	if (input.LandBlendWeights2.y > 0.0) {
@@ -1261,7 +1435,7 @@ PS_OUTPUT main(PS_INPUT input)
 			if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 				sh0[5] = TexLandColor6Sampler.SampleLevel(SampTerrainParallaxSampler, uv, 0).w;
 		}
-#		endif
+#		endif  // CPM_AVAILABLE
 		float4 landColor6 = TexLandColor6Sampler.Sample(SampLandColor6Sampler, uv);
 		float landSnowMask6 = GetLandSnowMaskValue(landColor6.w);
 		baseColor += input.LandBlendWeights2.yyyy * landColor6;
@@ -1271,14 +1445,11 @@ PS_OUTPUT main(PS_INPUT input)
 		glossiness += input.LandBlendWeights2.y * landNormal6.w;
 #		if defined(SNOW)
 		landSnowMask += LandscapeTexture5to6IsSnow.y * input.LandBlendWeights2.y * landSnowMask6;
-#		endif
+#		endif  // SNOW
 	}
 
 #		if defined(LOD_LAND_BLEND)
 	float4 lodBlendColor = TexLandLodBlend1Sampler.Sample(SampLandLodBlend1Sampler, input.TexCoord0.zw);
-#		endif
-
-#		if defined(LOD_LAND_BLEND)
 	float lodBlendTmp = GetLodLandBlendParameter(lodBlendColor.xyz);
 	float lodBlendMask = TexLandLodBlend2Sampler.Sample(SampLandLodBlend2Sampler, 3.0.xx * input.TexCoord0.zw).x;
 	float lodBlendMul1 = GetLodLandBlendMultiplier(lodBlendTmp, lodBlendMask);
@@ -1287,24 +1458,24 @@ PS_OUTPUT main(PS_INPUT input)
 	baseColor = lodBlendMul2.xxxx * (lodBlendColor * lodBlendMul1.xxxx - baseColor) + baseColor;
 	normal.xyz = lodBlendMul2.xxx * (float3(0, 0, 1) - normal.xyz) + normal.xyz;
 	glossiness += lodBlendMul2 * -glossiness;
-#		endif
+#		endif  // LOD_LAND_BLEND
 
 #		if defined(SNOW)
 	useSnowSpecular = landSnowMask > 0;
-#		endif
-#	endif
+#		endif  // SNOW
+#	endif      // LANDSCAPE
 
 #	if defined(BACK_LIGHTING)
 	float4 backLightColor = TexBackLightSampler.Sample(SampBackLightSampler, uv);
-#	endif
+#	endif  // BACK_LIGHTING
 #	if defined(SOFT_LIGHTING) || defined(RIM_LIGHTING)
 	float4 rimSoftLightColor = TexRimSoftLightSampler.Sample(SampRimSoftLightSampler, uv);
-#	endif
+#	endif  // defined (SOFT_LIGHTING) || defined(RIM_LIGHTING)
 
 	float numLights = min(7, NumLightNumShadowLight.x);
 #	if defined(DEFSHADOW)
 	float numShadowLights = min(4, NumLightNumShadowLight.y);
-#	endif
+#	endif  // DEFSHADOW
 
 #	if defined(MODELSPACENORMALS) && !defined(SKINNED)
 	float4 modelNormal = normal;
@@ -1313,26 +1484,26 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		if defined(SPARKLE)
 	float3 projectedNormal = normalize(mul(tbn, float3(ProjectedUVParams2.xx * normal.xy, normal.z)));
-#		endif
-#	endif
+#		endif  // SPARKLE
+#	endif      // defined (MODELSPACENORMALS) && !defined (SKINNED)
 
 	float2 baseShadowUV = 1.0.xx;
 #	if defined(DEFSHADOW)
 	float4 shadowColor;
 #		if !defined(SHADOW_DIR)
 	if (numShadowLights > 0)
-#		endif
+#		endif  // !defined (SHADOW_DIR)
 	{
-		baseShadowUV = input.Position.xy * DynamicRes_InvWidthX_InvHeightY_WidthClampZ_HeightClampW.xy;
-		float2 shadowUV = min(float2(DynamicRes_InvWidthX_InvHeightY_WidthClampZ_HeightClampW.z, DynamicRes_WidthX_HeightY_PreviousWidthZ_PreviousHeightW.y), max(0.0.xx, DynamicRes_WidthX_HeightY_PreviousWidthZ_PreviousHeightW.xy * (baseShadowUV * VPOSOffset.xy + VPOSOffset.zw)));
+		baseShadowUV = input.Position.xy * DynamicResolutionParams2.xy;
+		float2 shadowUV = min(float2(DynamicResolutionParams2.z, DynamicResolutionParams1.y), max(0.0.xx, DynamicResolutionParams1.xy * (baseShadowUV * VPOSOffset.xy + VPOSOffset.zw)));
 		shadowColor = TexShadowMaskSampler.Sample(SampShadowMaskSampler, shadowUV);
 	}
 #		if !defined(SHADOW_DIR)
 	else {
 		shadowColor = 1.0.xxxx;
 	}
-#		endif
-#	endif
+#		endif  // SHADOW_DIR
+#	endif      // DEFSHADOW
 
 	float texProjTmp = 0;
 
@@ -1344,11 +1515,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float vertexAlpha = 1;
 #		else
 	float vertexAlpha = input.Color.w;
-#		endif
+#		endif  // defined (TREE_ANIM) || defined (LODOBJECTSHD)
 	texProjTmp = -ProjectedUVParams.x * projNoise + (dot(modelNormal.xyz, texProj) * vertexAlpha - ProjectedUVParams.w);
 #		if defined(LODOBJECTSHD)
 	texProjTmp += (-0.5 + input.Color.w) * 2.5;
-#		endif
+#		endif  // LODOBJECTSHD
 #		if defined(SPARKLE)
 	if (texProjTmp < 0) {
 		discard;
@@ -1357,7 +1528,7 @@ PS_OUTPUT main(PS_INPUT input)
 	modelNormal.xyz = projectedNormal;
 #			if defined(SNOW)
 	psout.SnowParameters.y = 1;
-#			endif
+#			endif  // SNOW
 #		else
 	if (ProjectedUVParams3.w > 0.5) {
 		float2 projNormalUv = ProjectedUVParams3.x * projNoiseUv;
@@ -1377,37 +1548,37 @@ PS_OUTPUT main(PS_INPUT input)
 		useSnowDecalSpecular = true;
 #			if defined(SNOW)
 		psout.SnowParameters.y = GetSnowParameterY(texProjTmp2, baseColor.w);
-#			endif
+#			endif  // SNOW
 	} else {
 		if (texProjTmp > 0) {
 			baseColor.xyz = ProjectedUVParams2.xyz;
 			useSnowDecalSpecular = true;
 #			if defined(SNOW)
 			psout.SnowParameters.y = GetSnowParameterY(texProjTmp, baseColor.w);
-#			endif
+#			endif  // SNOW
 		} else {
 #			if defined(SNOW)
 			psout.SnowParameters.y = 0;
-#			endif
+#			endif  // SNOW
 		}
 	}
 
 #			if defined(SPECULAR)
 	useSnowSpecular = useSnowDecalSpecular;
-#			endif
-#		endif
+#			endif  // SPECULAR
+#		endif      // SPARKLE
 
 #	elif defined(SNOW)
 #		if defined(LANDSCAPE)
 	psout.SnowParameters.y = landSnowMask;
 #		else
 	psout.SnowParameters.y = baseColor.w;
-#		endif
+#		endif  // LANDSCAPE
 #	endif
 
 #	if defined(WORLD_MAP)
 	baseColor.xyz = GetWorldMapBaseColor(rawBaseColor.xyz, baseColor.xyz, texProjTmp);
-#	endif
+#	endif  // WORLD_MAP
 
 	float3 dirLightColor = DirLightColor.xyz;
 	float selfShadowFactor = 1.0f;
@@ -1416,12 +1587,12 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if defined(DEFSHADOW) && defined(SHADOW_DIR)
 	dirLightColor *= shadowColor.xxx;
-#	endif
+#	endif  // defined (DEFSHADOW) && defined (SHADOW_DIR)
 
 #	if defined(SCREEN_SPACE_SHADOWS)
-	float dirLightSShadow = PrepassScreenSpaceShadows(input.WorldPosition);
+	float dirLightSShadow = PrepassScreenSpaceShadows(input.WorldPosition.xyz);
 	dirLightColor *= dirLightSShadow;
-#	endif
+#	endif  // SCREEN_SPACE_SHADOWS
 
 #	if defined(CPM_AVAILABLE) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 	float3 dirLightDirectionTS = mul(DirLightDirection, tbn).xyz;
@@ -1430,12 +1601,12 @@ PS_OUTPUT main(PS_INPUT input)
 #		if defined(DEFSHADOW) && defined(SHADOW_DIR)
 	if (shadowColor.x == 0)
 		dirLightIsLit = false;
-#		endif
+#		endif  // defined (DEFSHADOW) && defined (SHADOW_DIR)
 
 #		if defined(SCREEN_SPACE_SHADOWS)
 	if (dirLightSShadow == 0)
 		dirLightIsLit = false;
-#		endif
+#		endif  // SCREEN_SPACE_SHADOWS
 
 #		if defined(LANDSCAPE)
 	if (perPassParallax[0].EnableTerrainParallax && perPassParallax[0].EnableShadows)
@@ -1446,8 +1617,9 @@ PS_OUTPUT main(PS_INPUT input)
 #		elif defined(ENVMAP)
 	if (complexMaterialParallax && perPassParallax[0].EnableShadows)
 		dirLightColor *= GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, dirLightIsLit * parallaxShadowQuality);
-#		endif
-#	endif
+#		endif  // LANDSCAPE
+#	endif      // defined(CPM_AVAILABLE) && (defined (SKINNED) || !defined \
+				// (MODELSPACENORMALS))
 
 #	if defined(PBR)
 	totalRadiance += GetLightRadiance(modelNormal.xyz, DirLightDirection.xyz, viewDirection, F0, dirLightColor.xyz, baseColor.xyz, roughness, metallic);
@@ -1497,7 +1669,7 @@ PS_OUTPUT main(PS_INPUT input)
 			}
 #	endif
 			int intLightIndex = lightIndex;
-			float3 lightDirection = PointLightPosition[intLightIndex].xyz - input.InputPosition.xyz;
+			float3 lightDirection = PointLightPosition[eyeIndex * numLights + intLightIndex].xyz - input.InputPosition.xyz;
 			float lightDist = length(lightDirection);
 			float intensityFactor = saturate(lightDist / PointLightPosition[intLightIndex].w);
 			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
@@ -1544,32 +1716,32 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		if defined(SOFT_LIGHTING)
 			lightDiffuseColor += nsLightColor * GetSoftLightMultiplier(dot(modelNormal.xyz, lightDirection.xyz)) * rimSoftLightColor.xyz;
-#		endif
+#		endif  // SOFT_LIGHTING
 
 #		if defined(RIM_LIGHTING)
 			lightDiffuseColor += nsLightColor * GetRimLightMultiplier(normalizedLightDirection, viewDirection, modelNormal.xyz) * rimSoftLightColor.xyz;
-#		endif
+#		endif  // RIM_LIGHTING
 
 #		if defined(BACK_LIGHTING)
 			lightDiffuseColor += (saturate(-lightAngle) * backLightColor.xyz) * nsLightColor;
-#		endif
+#		endif  // BACK_LIGHTING
 
 #		if defined(SPECULAR) || (defined(SPARKLE) && !defined(SNOW))
 			lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, viewDirection, modelNormal.xyz, lightColor, shininess, uv) * intensityMultiplier.xxx;
-#		endif
+#		endif  // defined (SPECULAR) || (defined (SPARKLE) && !defined(SNOW))
 
 			lightsDiffuseColor += lightDiffuseColor * intensityMultiplier.xxx;
-#	endif
+#	endif      // PBR
 		}
 	}
 
 #	if defined(PBR)
-	//float3 ambientColor = 0.03 * baseColor.xyz * ao;
+	// float3 ambientColor = 0.03 * baseColor.xyz * ao;
 	float3 ambientColor = (mul(DirectionalAmbient, modelNormal) + IBLParams.yzw * IBLParams.xxx) * baseColor.xyz * ao;
 	float3 color = ambientColor + totalRadiance;
 
-	//color = color / (color + 1.0);
-	//color = pow(color, 1.0 / 2.2);
+	// color = color / (color + 1.0);
+	// color = pow(color, 1.0 / 2.2);
 #	else
 
 	diffuseColor += lightsDiffuseColor;
@@ -1581,11 +1753,11 @@ PS_OUTPUT main(PS_INPUT input)
 		CharacterLightParams.y * saturate(dot(float2(0.164398998, -0.986393988), modelNormal.yz));
 	float charLightColor = min(CharacterLightParams.w, max(0, CharacterLightParams.z * TexCharacterLightSampler.Sample(SampCharacterLightSampler, baseShadowUV).x));
 	diffuseColor += (charLightMul * charLightColor).xxx;
-#		endif
+#		endif  // CHARACTER_LIGHT
 
 #		if defined(EYE)
 	modelNormal.xyz = input.EyeNormal;
-#		endif
+#		endif  // EYE
 
 #		if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
 	float envMaskColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).x;
@@ -1593,13 +1765,13 @@ PS_OUTPUT main(PS_INPUT input)
 	float viewNormalAngle = dot(modelNormal.xyz, viewDirection);
 	float3 envSamplingPoint = (viewNormalAngle * 2) * modelNormal.xyz - viewDirection;
 	float3 envColor = TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz * envMask.xxx;
-#		endif
+#		endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
 
 	float3 emitColor = EmitColor;
 #		if defined(GLOWMAP)
 	float3 glowColor = TexGlowSampler.Sample(SampGlowSampler, uv).xyz;
 	emitColor *= glowColor;
-#		endif
+#		endif  // GLOWMAP
 
 	float3 directionalAmbientColor = mul(DirectionalAmbient, modelNormal);
 	diffuseColor = directionalAmbientColor + emitColor.xyz + diffuseColor;
@@ -1608,13 +1780,13 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 color;
 	color.xyz = diffuseColor * baseColor.xyz;
 
-#	endif
+#	endif  // PBR
 
 #	if defined(HAIR)
 	float3 vertexColor = (input.Color.yyy * (TintColor.xyz - 1.0.xxx) + 1.0.xxx) * color.xyz;
 #	else
 	float3 vertexColor = input.Color.xyz * color.xyz;
-#	endif
+#	endif  // HAIR
 
 #	if defined(MULTI_LAYER_PARALLAX)
 	float layerValue = MultiLayerParallaxData.x * TexLayerSampler.Sample(SampLayerSampler, uv).w;
@@ -1628,21 +1800,20 @@ PS_OUTPUT main(PS_INPUT input)
 
 	vertexColor = (saturate(viewNormalAngle) * (1 - baseColor.w)).xxx * ((directionalAmbientColor + lightsDiffuseColor) * (input.Color.xyz * layerColor) - vertexColor) + vertexColor;
 
-#	endif
+#	endif  // MULTI_LAYER_PARALLAX
 
-	float4 screenPosition = mul(ViewProjMatrixUnjittered, input.WorldPosition);
-	screenPosition.xy = screenPosition.xy / screenPosition.ww;
-	float4 previousScreenPosition = mul(PreviousViewProjMatrixUnjittered, input.PreviousWorldPosition);
-	previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.ww;
-	float2 screenMotionVector = float2(-0.5, 0.5) * (screenPosition.xy - previousScreenPosition.xy);
-
+	//#	if !defined(VR)
+	float2 screenMotionVector = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
+	// #	else   // VR
+	// float2 screenMotionVector = GetSSMotionVector(worldPositionVR, PreviousWorldPositionVR, eyeIndex);
+// #	endif  // !VR
 #	if !defined(PBR)
 #		if defined(SPECULAR)
 	specularColor = (specularColor * glossiness * MaterialData.yyy) * SpecularColor.xyz;
 #		elif defined(SPARKLE)
 	specularColor *= glossiness;
-#		endif
-#	endif
+#		endif  // SPECULAR
+#	endif      // !defined(PBR)
 	if (useSnowSpecular) {
 		specularColor = 0;
 	}
@@ -1652,7 +1823,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float ambientSpecularColorMultiplier = exp2(AmbientSpecularTintAndFresnelPower.w * log2(1 - viewAngle));
 	float3 ambientSpecularColor = AmbientSpecularTintAndFresnelPower.xyz * saturate(mul(DirectionalAmbient, float4(modelNormal.xyz, 0.15)));
 	specularColor += ambientSpecularColor * ambientSpecularColorMultiplier.xxx;
-#	endif
+#	endif  // AMBIENT_SPECULAR
 
 #	if !defined(PBR) && (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
 #		if defined(CPM_AVAILABLE) && defined(ENVMAP)
@@ -1660,13 +1831,14 @@ PS_OUTPUT main(PS_INPUT input)
 #		else
 	vertexColor += diffuseColor * envColor;
 
-#		endif
-#	endif
+#		endif  // defined (CPM_AVAILABLE) && defined(ENVMAP)
+#	endif      // !defined(PBR) && (defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) \
+				// || defined(EYE))
 
 	color.xyz = lerp(vertexColor.xyz, input.FogParam.xyz, input.FogParam.w);
 	color.xyz = vertexColor.xyz - color.xyz * FogColor.w;
 
-	float3 tmpColor = color.xyz * GammaInvX_FirstPersonY_AlphaPassZ_CreationKitW.yyy;
+	float3 tmpColor = color.xyz * FrameParams.yyy;
 	color.xyz = tmpColor.xyz + ColourOutputClamp.xxx;
 	color.xyz = min(vertexColor.xyz, color.xyz);
 
@@ -1675,18 +1847,18 @@ PS_OUTPUT main(PS_INPUT input)
 	color.xyz += specularColor * complexSpecular;
 #		else
 	color.xyz += specularColor;
-#		endif
+#		endif  // defined (CPM_AVAILABLE) && defined(ENVMAP)
 
 #		if defined(SPECULAR) || defined(AMBIENT_SPECULAR) || defined(SPARKLE)
 	float3 specularTmp = lerp(color.xyz, input.FogParam.xyz, input.FogParam.w);
 	specularTmp = color.xyz - specularTmp.xyz * FogColor.w;
 
-	tmpColor = specularTmp.xyz * GammaInvX_FirstPersonY_AlphaPassZ_CreationKitW.yyy;
+	tmpColor = specularTmp.xyz * FrameParams.yyy;
 	specularTmp.xyz = tmpColor.xyz + ColourOutputClamp.zzz;
 	color.xyz = min(specularTmp.xyz, color.xyz);
-#		endif
+#		endif  // defined (SPECULAR) || defined(AMBIENT_SPECULAR) || defined(SPARKLE)
 
-#	endif
+#	endif  // !defined(PBR)
 
 #	if defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
 	psout.Albedo.w = 0;
@@ -1721,30 +1893,30 @@ PS_OUTPUT main(PS_INPUT input)
 	if (MaterialData.z - maskValues[alphaMask.x] < 0) {
 		discard;
 	}
-#		endif
+#		endif  // !defined(ADDITIONAL_ALPHA_MASK)
 #		if !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
 	alpha *= input.Color.w;
-#		endif
+#		endif  // !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
 #		if defined(DO_ALPHA_TEST)
 #			if defined(DEPTH_WRITE_DECALS)
 	if (alpha - 0.0156862754 < 0) {
 		discard;
 	}
 	alpha = saturate(1.05 * alpha);
-#			endif
+#			endif  // DEPTH_WRITE_DECALS
 	if (alpha - AlphaThreshold < 0) {
 		discard;
 	}
-#		endif
+#		endif      // DO_ALPHA_TEST
 	psout.Albedo.w = alpha;
 
 #	endif
 
-	psout.Albedo.xyz = color.xyz - tmpColor.xyz * GammaInvX_FirstPersonY_AlphaPassZ_CreationKitW.zzz;
+	psout.Albedo.xyz = color.xyz - tmpColor.xyz * FrameParams.zzz;
 
 #	if defined(SNOW)
 	psout.SnowParameters.x = dot(lightsSpecularColor, float3(0.3, 0.59, 0.11));
-#	endif
+#	endif  // SNOW
 
 	psout.MotionVectors.xy = SSRParams.z > 1e-5 ? float2(1, 0) : screenMotionVector.xy;
 	psout.MotionVectors.zw = float2(0, 1);
@@ -1768,12 +1940,12 @@ PS_OUTPUT main(PS_INPUT input)
 		normal.xyz = normalize(normal.xyz);
 		psout.ScreenSpaceNormals.w *= blendFactor;
 	}
-#	endif
+#	endif  // WATER_BLENDING
 
 #	if !defined(LANDSCAPE) && defined(SPECULAR)
 	// Green reflections fix
 	psout.ScreenSpaceNormals.w = psout.ScreenSpaceNormals.w * (psout.Albedo.w == 1);
-#	endif
+#	endif  //  !defined(LANDSCAPE) && defined(SPECULAR)
 
 	float3 screenSpaceNormal;
 	screenSpaceNormal.x = dot(input.ScreenNormalTransform0.xyz, normal.xyz);
@@ -1788,8 +1960,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if defined(OUTLINE)
 	psout.Albedo = float4(1, 0, 0, 1);
-#	endif
+#	endif  // OUTLINE
 
 	return psout;
 }
-#endif
+#endif  // PSHADER
