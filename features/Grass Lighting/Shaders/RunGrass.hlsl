@@ -135,7 +135,7 @@ cbuffer cb13 : register(b13)
 {
 	float4 cb13[3];
 }
-#	endif                  // VR
+#	endif  // VR
 
 #	define M_PI 3.1415925  // PI
 #	define M_2PI 6.283185  // PI * 2
@@ -569,7 +569,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.Albedo.xyz = color;
 	psout.Albedo.w = 1;
 
-#	endif      // RENDER_DEPTH
+#	endif  // RENDER_DEPTH
 	return psout;
 }
 #endif  // PSHADER

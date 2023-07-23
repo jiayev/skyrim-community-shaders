@@ -44,7 +44,7 @@ cbuffer PerFrame : register(b12)
 														  // fDynamicResolutionHeightRatio in y,
 														  // fDynamicResolutionWidthRatio - fDRClampOffset in z,
 														  // fDynamicResolutionPreviousWidthRatio - fDRClampOffset in w
-#endif                                                    // !VR
+#endif  // !VR
 }
 
 float2 GetDynamicResolutionAdjustedScreenPosition(float2 screenPosition)
