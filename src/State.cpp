@@ -8,7 +8,7 @@
 #include "Feature.h"
 #include "Features/Clustered.h"
 
- void State::Draw()
+void State::Draw()
 {
 	auto& shaderCache = SIE::ShaderCache::Instance();
 	if (shaderCache.IsEnabled() && currentShader) {

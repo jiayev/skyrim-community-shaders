@@ -61,7 +61,7 @@ namespace Util
 	std::string GetNameFromSRV(ID3D11ShaderResourceView* a_srv)
 	{
 		using RENDER_TARGET = RE::RENDER_TARGETS::RENDER_TARGET;
- 
+
 		if (a_srv) {
 			if (auto r = RE::BSGraphics::Renderer::GetSingleton()) {
 				for (int i = 0; i < RENDER_TARGET::kTOTAL; i++) {

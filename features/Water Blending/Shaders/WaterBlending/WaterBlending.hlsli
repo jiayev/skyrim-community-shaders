@@ -11,7 +11,7 @@ struct PerPassWaterBlending
 };
 
 #if defined(WATER)
-Texture2D<float4> SharedDepthTex           : register(t31);
+Texture2D<float4> SharedDepthTex : register(t31);
 #endif
 
-StructuredBuffer<PerPassWaterBlending> perPassWaterBlending: register(t32);
+StructuredBuffer<PerPassWaterBlending> perPassWaterBlending : register(t32);

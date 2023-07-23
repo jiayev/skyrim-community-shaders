@@ -1,64 +1,63 @@
 struct VS_INPUT
 {
-	float4 Position									: POSITION0;
-	float2 TexCoord									: TEXCOORD0;
-	float4 Normal									: NORMAL0;
-	float4 Color									: COLOR0;
-	float4 InstanceData1							: TEXCOORD4;
-	float4 InstanceData2							: TEXCOORD5;
-	float4 InstanceData3							: TEXCOORD6;
-	float4 InstanceData4							: TEXCOORD7;
+	float4 Position : POSITION0;
+	float2 TexCoord : TEXCOORD0;
+	float4 Normal : NORMAL0;
+	float4 Color : COLOR0;
+	float4 InstanceData1 : TEXCOORD4;
+	float4 InstanceData2 : TEXCOORD5;
+	float4 InstanceData3 : TEXCOORD6;
+	float4 InstanceData4 : TEXCOORD7;
 };
 
 struct VS_OUTPUT
 {
-	float4 HPosition								: SV_POSITION0;
-	float4 DiffuseColor								: COLOR0;
-	float3 TexCoord									: TEXCOORD0;
-	float4 AmbientColor								: TEXCOORD1;
-	float3 ViewSpacePosition						: TEXCOORD2;
+	float4 HPosition : SV_POSITION0;
+	float4 DiffuseColor : COLOR0;
+	float3 TexCoord : TEXCOORD0;
+	float4 AmbientColor : TEXCOORD1;
+	float3 ViewSpacePosition : TEXCOORD2;
 #if defined(RENDER_DEPTH)
-	float2 Depth									: TEXCOORD3;
+	float2 Depth : TEXCOORD3;
 #endif
-	float4 WorldPosition							: POSITION1;
-	float4 PreviousWorldPosition					: POSITION2;
+	float4 WorldPosition : POSITION1;
+	float4 PreviousWorldPosition : POSITION2;
 };
 
 #ifdef VSHADER
-cbuffer PerGeometry									: register(b2)
+cbuffer PerGeometry : register(b2)
 {
-	row_major float4x4 WorldViewProj				: packoffset(c0);
-	row_major float4x4 WorldView					: packoffset(c4);
-	row_major float4x4 World						: packoffset(c8);
-	row_major float4x4 PreviousWorld				: packoffset(c12);
-	float4 FogNearColor								: packoffset(c16);               
-	float3 WindVector								: packoffset(c17);                 
-	float WindTimer									: packoffset(c17.w);                 
-	float3 DirLightDirection						: packoffset(c18);          
-	float PreviousWindTimer							: packoffset(c18.w);         
-	float3 DirLightColor							: packoffset(c19);              
-	float AlphaParam1								: packoffset(c19.w);               
-	float3 AmbientColor								: packoffset(c20);               
-	float AlphaParam2								: packoffset(c20.w);               
-	float3 ScaleMask								: packoffset(c21);                  
-	float ShadowClampValue							: packoffset(c21.w);          
+	row_major float4x4 WorldViewProj : packoffset(c0);
+	row_major float4x4 WorldView : packoffset(c4);
+	row_major float4x4 World : packoffset(c8);
+	row_major float4x4 PreviousWorld : packoffset(c12);
+	float4 FogNearColor : packoffset(c16);
+	float3 WindVector : packoffset(c17);
+	float WindTimer : packoffset(c17.w);
+	float3 DirLightDirection : packoffset(c18);
+	float PreviousWindTimer : packoffset(c18.w);
+	float3 DirLightColor : packoffset(c19);
+	float AlphaParam1 : packoffset(c19.w);
+	float3 AmbientColor : packoffset(c20);
+	float AlphaParam2 : packoffset(c20.w);
+	float3 ScaleMask : packoffset(c21);
+	float ShadowClampValue : packoffset(c21.w);
 }
 
-cbuffer cb7											: register(b7) 
-{ 
-	float4 cb7[1]; 
+cbuffer cb7 : register(b7)
+{
+	float4 cb7[1];
 }
 
-cbuffer cb8											: register(b8) 
+cbuffer cb8 : register(b8)
 {
-	float4 cb8[240]; 
+	float4 cb8[240];
 }
 
-#define M_PI  3.1415925 // PI
-#define M_2PI 6.283185 // PI * 2
+#	define M_PI 3.1415925  // PI
+#	define M_2PI 6.283185  // PI * 2
 
-const static float4x4 M_IdentityMatrix =
-{
+const static float4x4 M_IdentityMatrix = {
 	{ 1, 0, 0, 0 },
 	{ 0, 1, 0, 0 },
 	{ 0, 0, 1, 0 },
@@ -75,7 +74,7 @@ float4 GetMSPosition(VS_INPUT input, float windTimer)
 	float windTmp1 = sin(M_PI * windAngleSin);
 	float windTmp2 = sin(M_2PI * windAngleSin);
 	float windPower = WindVector.z * (((windTmp1 + windTmp2) * 0.3 + windTmp3) *
-	                  (0.5 * (input.Color.w * input.Color.w)));
+										 (0.5 * (input.Color.w * input.Color.w)));
 
 	float3 inputPosition = input.Position.xyz * (input.InstanceData4.yyy * ScaleMask.xyz + float3(1, 1, 1));
 
@@ -103,9 +102,9 @@ VS_OUTPUT main(VS_INPUT input)
 	float4 projSpacePosition = mul(WorldViewProj, msPosition);
 	vsout.HPosition = projSpacePosition;
 
-#if defined(RENDER_DEPTH)
+#	if defined(RENDER_DEPTH)
 	vsout.Depth = projSpacePosition.zw;
-#endif
+#	endif
 
 	float3 instanceNormal = float3(input.InstanceData2.z, input.InstanceData3.zw);
 	float dirLightAngle = dot(DirLightDirection.xyz, instanceNormal);
@@ -139,31 +138,31 @@ typedef VS_OUTPUT PS_INPUT;
 struct PS_OUTPUT
 {
 #if defined(RENDER_DEPTH)
-	float4 PS										: SV_Target0;
+	float4 PS : SV_Target0;
 #else
-	float4 Albedo									: SV_Target0;
-	float2 MotionVectors							: SV_Target1;
-	float4 Normal									: SV_Target2;
+	float4 Albedo : SV_Target0;
+	float2 MotionVectors : SV_Target1;
+	float4 Normal : SV_Target2;
 #endif
 };
 
 #ifdef PSHADER
-SamplerState SampBaseSampler						: register(s0);
-SamplerState SampShadowMaskSampler					: register(s1);
+SamplerState SampBaseSampler : register(s0);
+SamplerState SampShadowMaskSampler : register(s1);
 
-Texture2D<float4> TexBaseSampler					: register(t0);
-Texture2D<float4> TexShadowMaskSampler				: register(t1);
+Texture2D<float4> TexBaseSampler : register(t0);
+Texture2D<float4> TexShadowMaskSampler : register(t1);
 
-cbuffer AlphaTestRefCB								: register(b11) 
-{ 
-	float AlphaTestRefRS							: packoffset(c0); 
+cbuffer AlphaTestRefCB : register(b11)
+{
+	float AlphaTestRefRS : packoffset(c0);
 }
 
 cbuffer PerFrame : register(b12)
 {
-	float4 UnknownPerFrame1[12]						: packoffset(c0);
-	row_major float4x4 ScreenProj					: packoffset(c12);
-	row_major float4x4 PreviousScreenProj			: packoffset(c16);
+	float4 UnknownPerFrame1[12] : packoffset(c0);
+	row_major float4x4 ScreenProj : packoffset(c12);
+	row_major float4x4 PreviousScreenProj : packoffset(c16);
 };
 
 PS_OUTPUT main(PS_INPUT input)
@@ -172,20 +171,19 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord.xy);
 
-#if defined(RENDER_DEPTH) || defined(DO_ALPHA_TEST)
+#	if defined(RENDER_DEPTH) || defined(DO_ALPHA_TEST)
 	float diffuseAlpha = input.DiffuseColor.w * baseColor.w;
 
-	if ((diffuseAlpha - AlphaTestRefRS) < 0)
-	{
+	if ((diffuseAlpha - AlphaTestRefRS) < 0) {
 		discard;
 	}
-#endif
+#	endif
 
-#if defined(RENDER_DEPTH)
+#	if defined(RENDER_DEPTH)
 	// Depth
 	psout.PS.xyz = input.Depth.xxx / input.Depth.yyy;
 	psout.PS.w = diffuseAlpha;
-#else
+#	else
 	float sunShadowMask = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0)).x;
 
 	// Albedo
@@ -209,7 +207,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float normalScale = max(1.0 / 1000.0, sqrt(normal.z * -8 + 8));
 	psout.Normal.xy = float2(0.5, 0.5) + normal.xy / normalScale;
 	psout.Normal.zw = float2(0, 0);
-#endif
+#	endif
 
 	return psout;
 }

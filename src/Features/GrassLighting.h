@@ -55,5 +55,4 @@ struct GrassLighting : Feature
 
 	virtual void Load(json& o_json);
 	virtual void Save(json& o_json);
-
 };

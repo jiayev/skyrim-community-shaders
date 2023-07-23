@@ -6,11 +6,11 @@
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
-#include "State.h"
+#include "Features/ExtendedMaterials.h"
 #include "Features/GrassCollision.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/WaterBlending.h"
-#include "Features/ExtendedMaterials.h"
+#include "State.h"
 
 namespace SIE
 {
@@ -1104,13 +1104,12 @@ namespace SIE
 			logger::debug("Compiled {} shader {}::{}", magic_enum::enum_name(shaderClass),
 				magic_enum::enum_name(type), descriptor);
 
-
 			ID3DBlob* strippedShaderBlob = nullptr;
 
 			const uint32_t stripFlags = D3DCOMPILER_STRIP_DEBUG_INFO |
-			                        D3DCOMPILER_STRIP_REFLECTION_DATA |
-			                        D3DCOMPILER_STRIP_TEST_BLOBS |
-			                        D3DCOMPILER_STRIP_PRIVATE_DATA;
+			                            D3DCOMPILER_STRIP_REFLECTION_DATA |
+			                            D3DCOMPILER_STRIP_TEST_BLOBS |
+			                            D3DCOMPILER_STRIP_PRIVATE_DATA;
 
 			D3DStripShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), stripFlags, &strippedShaderBlob);
 			std::swap(shaderBlob, strippedShaderBlob);
@@ -1119,8 +1118,6 @@ namespace SIE
 			if (useDiskCache) {
 				auto directoryPath = std::format("Data/ShaderCache/{}", shader.fxpFilename);
 				if (!std::filesystem::is_directory(directoryPath)) {
-
-
 					try {
 						std::filesystem::create_directories(directoryPath);
 					} catch (std::filesystem::filesystem_error const& ex) {
@@ -1301,10 +1298,9 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (shader.shaderType.get() == RE::BSShader::Type::Water)
-		{
+		if (shader.shaderType.get() == RE::BSShader::Type::Water) {
 			const auto technique = (descriptor >> 11) & 0xF;
-			if (technique == 9) { // LOD
+			if (technique == 9) {  // LOD
 				return nullptr;
 			}
 		}
