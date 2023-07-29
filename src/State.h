@@ -31,4 +31,32 @@ public:
 
 	void SetLogLevel(spdlog::level::level_enum a_level = spdlog::level::info);
 	spdlog::level::level_enum GetLogLevel();
+
+    /*
+     * Whether a_type is currently enabled in Community Shaders
+     *
+     * @param a_type The type of shader to check
+     * @return Whether the shader has been enabled.
+     */
+	bool ShaderEnabled(const RE::BSShader::Type a_type);
+
+	/*
+     * Whether a_shader is currently enabled in Community Shaders
+     *
+     * @param a_shader The shader to check
+     * @return Whether the shader has been enabled.
+     */
+	bool IsShaderEnabled(const RE::BSShader& a_shader);
+
+	/*
+     * Whether developer mode is enabled allowing advanced options.
+	 * Use at your own risk! No support provided.
+     *
+	 * <p>
+	 * Developer mode is active when the log level is trace or debug.
+	 * </p>
+	 * 
+     * @return Whether in developer mode.
+     */
+	bool IsDeveloperMode();
 };

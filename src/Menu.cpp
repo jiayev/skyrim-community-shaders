@@ -449,9 +449,7 @@ void Menu::DrawSettings()
 					ImGui::TableNextColumn();
 
 					auto type = (RE::BSShader::Type)(classIndex + 1);
-					if (!(SIE::ShaderCache::IsSupportedShader(type) ||
-							// allow all shaders if debug or trace logging
-							(state->GetLogLevel()) <= spdlog::level::debug)) {
+					if (!(SIE::ShaderCache::IsSupportedShader(type) || state->IsDeveloperMode())) {
 						ImGui::BeginDisabled();
 						ImGui::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
 						ImGui::EndDisabled();

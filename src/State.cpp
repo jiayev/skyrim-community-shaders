@@ -167,3 +167,22 @@ spdlog::level::level_enum State::GetLogLevel()
 {
 	return logLevel;
 }
+
+bool State::ShaderEnabled(const RE::BSShader::Type a_type)
+{
+	auto index = static_cast<uint32_t>(a_type) + 1; 
+	if (index && index < sizeof(enabledClasses)) {
+		return enabledClasses[index];
+	}
+	return false;
+}
+
+bool State::IsShaderEnabled(const RE::BSShader& a_shader)
+{
+	return ShaderEnabled(a_shader.shaderType.get());
+}
+
+bool State::IsDeveloperMode()
+{
+	return GetLogLevel() <= spdlog::level::debug;
+}

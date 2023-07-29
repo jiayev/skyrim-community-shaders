@@ -1270,7 +1270,10 @@ namespace SIE
 	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (!ShaderCache::IsSupportedShader(shader)) {
+		auto state = State::GetSingleton();
+		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() 
+			&& state->IsShaderEnabled(shader))))
+		{
 			return nullptr;
 		}
 
@@ -1295,7 +1298,10 @@ namespace SIE
 	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (!ShaderCache::IsSupportedShader(shader)) {
+		auto state = State::GetSingleton();
+		if (!(ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && 
+			state->IsShaderEnabled(shader)))
+		{
 			return nullptr;
 		}
 
