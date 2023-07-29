@@ -1051,7 +1051,7 @@ namespace SIE
 			}
 			if (!REL::Module::IsVR()) {
 				defines[1] = { nullptr, nullptr };
-			}else{
+			} else {
 				defines[1] = { "VR", nullptr };
 				defines[2] = { nullptr, nullptr };
 			}
@@ -1271,9 +1271,7 @@ namespace SIE
 		uint32_t descriptor)
 	{
 		auto state = State::GetSingleton();
-		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() 
-			&& state->IsShaderEnabled(shader))))
-		{
+		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)))) {
 			return nullptr;
 		}
 
@@ -1299,9 +1297,8 @@ namespace SIE
 		uint32_t descriptor)
 	{
 		auto state = State::GetSingleton();
-		if (!(ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && 
-			state->IsShaderEnabled(shader)))
-		{
+		if (!(ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() &&
+															state->IsShaderEnabled(shader))) {
 			return nullptr;
 		}
 

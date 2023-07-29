@@ -170,7 +170,7 @@ spdlog::level::level_enum State::GetLogLevel()
 
 bool State::ShaderEnabled(const RE::BSShader::Type a_type)
 {
-	auto index = static_cast<uint32_t>(a_type) + 1; 
+	auto index = static_cast<uint32_t>(a_type) + 1;
 	if (index && index < sizeof(enabledClasses)) {
 		return enabledClasses[index];
 	}

@@ -32,7 +32,7 @@ public:
 	void SetLogLevel(spdlog::level::level_enum a_level = spdlog::level::info);
 	spdlog::level::level_enum GetLogLevel();
 
-    /*
+	/*
      * Whether a_type is currently enabled in Community Shaders
      *
      * @param a_type The type of shader to check
