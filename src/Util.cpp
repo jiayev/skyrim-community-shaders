@@ -147,6 +147,12 @@ namespace Util
 		ID3DBlob* shaderBlob;
 		ID3DBlob* shaderErrors;
 
+		std::string str;
+		std::wstring path{ FilePath };
+		std::transform(path.begin(), path.end(), std::back_inserter(str), [](wchar_t c) {
+			return (char)c;
+		});
+		logger::debug("Compiling {} with {}", str, DefinesToString(macros));
 		if (FAILED(D3DCompileFromFile(FilePath, macros.data(), D3D_COMPILE_STANDARD_FILE_INCLUDE, Program, ProgramType, flags, 0, &shaderBlob, &shaderErrors))) {
 			logger::warn("Shader compilation failed:\n\n{}", shaderErrors ? (const char*)shaderErrors->GetBufferPointer() : "Unknown error");
 			return nullptr;
@@ -179,5 +185,32 @@ namespace Util
 		}
 
 		return nullptr;
+	}
+
+	std::string DefinesToString(std::vector<std::pair<const char*, const char*>>& defines)
+	{
+		std::string result;
+		for (const auto& def : defines) {
+			if (def.first != nullptr) {
+				result += def.first;
+				result += ' ';
+			} else {
+				break;
+			}
+		}
+		return result;
+	}
+	std::string DefinesToString(std::vector<D3D_SHADER_MACRO>& defines)
+	{
+		std::string result;
+		for (const auto& def : defines) {
+			if (def.Name != nullptr) {
+				result += def.Name;
+				result += ' ';
+			} else {
+				break;
+			}
+		}
+		return result;
 	}
 }
