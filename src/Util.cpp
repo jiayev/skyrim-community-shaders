@@ -118,6 +118,9 @@ namespace Util
 		for (auto& i : Defines)
 			macros.push_back({ i.first, i.second });
 
+		if (REL::Module::IsVR())
+			macros.push_back({ "VR", "" });
+
 		if (!_stricmp(ProgramType, "ps_5_0"))
 			macros.push_back({ "PIXELSHADER", "" });
 		else if (!_stricmp(ProgramType, "vs_5_0"))
