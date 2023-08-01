@@ -1,3 +1,6 @@
+#include "Common/FrameBuffer.hlsl"
+#include "Common/MotionBlur.hlsl"
+
 struct VS_INPUT
 {
 	float4 Position : POSITION0;
@@ -54,10 +57,10 @@ cbuffer PerGeometry : register(
 					  )
 {
 #if !defined(VR)
-	row_major float4x4 WorldViewProj : packoffset(c0);
-	row_major float4x4 WorldView : packoffset(c4);
-	row_major float4x4 World : packoffset(c8);
-	row_major float4x4 PreviousWorld : packoffset(c12);
+	row_major float4x4 WorldViewProj[1] : packoffset(c0);
+	row_major float4x4 WorldView[1] : packoffset(c4);
+	row_major float4x4 World[1] : packoffset(c8);
+	row_major float4x4 PreviousWorld[1] : packoffset(c12);
 	float4 FogNearColor : packoffset(c16);
 	float3 WindVector : packoffset(c17);
 	float WindTimer : packoffset(c17.w);
@@ -70,7 +73,10 @@ cbuffer PerGeometry : register(
 	float3 ScaleMask : packoffset(c21);
 	float ShadowClampValue : packoffset(c21.w);
 #else
-	float4 cb2[32] : packoffset(c0);
+	row_major float4x4 WorldViewProj[2] : packoffset(c0);
+	row_major float4x4 WorldView[2] : packoffset(c8);
+	row_major float4x4 World[2] : packoffset(c16);
+	row_major float4x4 PreviousWorld[2] : packoffset(c24);
 	float4 FogNearColor : packoffset(c32);
 	float3 WindVector : packoffset(c33);
 	float WindTimer : packoffset(c33.w);
@@ -94,10 +100,10 @@ cbuffer PerFrame : register(
 				   )
 {
 #if !defined(VR)
-	float4 EyePosition;
+	float4 EyePosition[1];
 #else
 	float4 EyePosition[2];
-#endif  //!VR
+#endif  //! VR
 	row_major float3x4 DirectionalAmbient;
 	float SunlightScale;
 	float Glossiness;
@@ -169,30 +175,31 @@ VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
 
-#	ifdef VR
+#	if !defined(VR)
+	uint eyeIndex = 0;
+	uint eyeIndexX3 = 0;
+	uint eyeIndexX4 = 0;
+#	else
 	/*
-https://docs.google.com/presentation/d/19x9XDjUvkW_9gsfsMQzt3hZbRNziVsoCEHOn4AercAc/htmlpresent
-This section looks like this code
-Matrix WorldToEyeClipMatrix[2] // computed from SDK
-Vector4 EyeClipEdge[2]={(-1,0,0,1), (1,0,0,1)}
-float EyeOffsetScale[2]={0.5,-0.5}
-uint eyeIndex = instanceID & 1 // use low bit as eye index.
-Vector4 clipPos = worldPos * WorldToEyeClipMatrix[eyeIndex]
-cullDistanceOut.x = clipDistanceOut.x = clipPos · EyeClipEdge[eyeIndex]
-clipPos.x *= 0.5; // shrink to half of the screen
-clipPos.x += EyeOffsetScale[eyeIndex] * clipPos.w; // scoot left or right.
-clipPositionOut = clipPos
-*/
+  https://docs.google.com/presentation/d/19x9XDjUvkW_9gsfsMQzt3hZbRNziVsoCEHOn4AercAc/htmlpresent
+  This section looks like this code
+  Matrix WorldToEyeClipMatrix[2] // computed from SDK
+  Vector4 EyeClipEdge[2]={(-1,0,0,1), (1,0,0,1)}
+  float EyeOffsetScale[2]={0.5,-0.5}
+  uint eyeIndex = instanceID & 1 // use low bit as eye index.
+  Vector4 clipPos = worldPos * WorldToEyeClipMatrix[eyeIndex]
+  cullDistanceOut.x = clipDistanceOut.x = clipPos · EyeClipEdge[eyeIndex]
+  clipPos.x *= 0.5; // shrink to half of the screen
+  clipPos.x += EyeOffsetScale[eyeIndex] * clipPos.w; // scoot left or right.
+  clipPositionOut = clipPos
+  */
 	float4 r0, r1, r2, r3, r4, r5, r6;
 	uint4 bitmask, uiDest;
 	float4 fDest;
 
-	r0.x = (int)input.InstanceID & 1;
-	r0.x = (uint)r0.x;
-	r0.x = cb13[0].y * r0.x;
-	r0.x = (uint)r0.x;
-	r0.z = (uint)r0.x << 2;
-	r0.y = (uint)r0.x << 2;
+	uint eyeIndex = cb13[0].y * (input.InstanceID.x & 1);
+	uint eyeIndexX3 = eyeIndex * 3;
+	uint eyeIndexX4 = eyeIndex << 2;
 #	endif  // VR
 
 	float3x3 world3x3 = float3x3(input.InstanceData2.xyz, input.InstanceData3.xyz, float3(input.InstanceData4.x, input.InstanceData2.w, input.InstanceData3.w));
@@ -200,19 +207,13 @@ clipPositionOut = clipPos
 	float4 msPosition = GetMSPosition(input, WindTimer, world3x3);
 
 #	ifdef GRASS_COLLISION
-	float3 displacement = GetDisplacedPosition(msPosition.xyz, input.Color.w);
+	float3 displacement = GetDisplacedPosition(msPosition.xyz, input.Color.w, eyeIndex);
 	msPosition.xyz += displacement;
 #	endif
 
+	float4 projSpacePosition = mul(WorldViewProj[eyeIndex], msPosition);
 #	if !defined(VR)
-	float4 projSpacePosition = mul(WorldViewProj, msPosition);
 	vsout.HPosition = projSpacePosition;
-#	else
-	float4 projSpacePosition;
-	projSpacePosition.x = dot(cb2[r0.z + 0].xyzw, msPosition.xyzw);
-	projSpacePosition.y = dot(cb2[r0.z + 1].xyzw, msPosition.xyzw);
-	projSpacePosition.z = dot(cb2[r0.z + 2].xyzw, msPosition.xyzw);
-	projSpacePosition.w = dot(cb2[r0.z + 3].xyzw, msPosition.xyzw);
 #	endif  // !VR
 
 #	if defined(RENDER_DEPTH)
@@ -234,19 +235,8 @@ clipPositionOut = clipPos
 	vsout.TexCoord.xy = input.TexCoord.xy;
 	vsout.TexCoord.z = FogNearColor.w;
 
-#	if !defined(VR)
-	vsout.ViewSpacePosition = mul(WorldView, msPosition).xyz;
-	vsout.WorldPosition = mul(World, msPosition);
-#	else
-	vsout.ViewSpacePosition.x = dot(cb2[r0.z + 8].xyzw, msPosition.xyzw);
-	vsout.ViewSpacePosition.y = dot(cb2[r0.z + 9].xyzw, msPosition.xyzw);
-	vsout.ViewSpacePosition.z = dot(cb2[r0.z + 10].xyzw, msPosition.xyzw);
-
-	vsout.WorldPosition.x = dot(cb2[r0.z + 16].xyzw, msPosition.xyzw);
-	vsout.WorldPosition.y = dot(cb2[r0.z + 17].xyzw, msPosition.xyzw);
-	vsout.WorldPosition.z = dot(cb2[r0.z + 18].xyzw, msPosition.xyzw);
-	vsout.WorldPosition.w = dot(cb2[r0.z + 19].xyzw, msPosition.xyzw);
-#	endif  // !VR
+	vsout.ViewSpacePosition = mul(WorldView[eyeIndex], msPosition).xyz;
+	vsout.WorldPosition = mul(World[eyeIndex], msPosition);
 
 	float4 previousMsPosition = GetMSPosition(input, PreviousWindTimer, world3x3);
 
@@ -254,16 +244,10 @@ clipPositionOut = clipPos
 	previousMsPosition.xyz += displacement;
 #	endif  // GRASS_COLLISION
 
+	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], previousMsPosition);
 #	if !defined(VR)
-	vsout.PreviousWorldPosition = mul(PreviousWorld, previousMsPosition);
-
-	vsout.ViewDirectionVec.xyz = EyePosition.xyz - vsout.WorldPosition.xyz;
+	vsout.ViewDirectionVec.xyz = EyePosition[eyeIndex].xyz - vsout.WorldPosition.xyz;
 #	else
-	vsout.PreviousWorldPosition.x = dot(cb2[r0.z + 24].xyzw, previousMsPosition.xyzw);
-	vsout.PreviousWorldPosition.y = dot(cb2[r0.z + 25].xyzw, previousMsPosition.xyzw);
-	vsout.PreviousWorldPosition.z = dot(cb2[r0.z + 26].xyzw, previousMsPosition.xyzw);
-	vsout.PreviousWorldPosition.w = dot(cb2[r0.z + 27].xyzw, previousMsPosition.xyzw);
-
 	/*
 https://docs.google.com/presentation/d/19x9XDjUvkW_9gsfsMQzt3hZbRNziVsoCEHOn4AercAc/htmlpresent
 This section looks like this code
@@ -278,13 +262,13 @@ clipPos.x += EyeOffsetScale[eyeIndex] * clipPos.w; // scoot left or right.
 clipPositionOut = clipPos
 */
 	if (0 < cb13[0].y) {
-		r0.yz = dot(projSpacePosition, cb13[r0.x + 1].xyzw);
+		r0.yz = dot(projSpacePosition, cb13[eyeIndex + 1].xyzw);
 	} else {
 		r0.yz = float2(1, 1);
 	}
 
 	r0.w = 2 + -cb13[0].y;
-	r0.x = dot(cb13[0].zw, M_IdentityMatrix[r0.x + 0].xy);
+	r0.x = dot(cb13[0].zw, M_IdentityMatrix[eyeIndex + 0].xy);
 	r0.xw = r0.xw * projSpacePosition.wx;
 	r0.x = cb13[0].y * r0.x;
 
@@ -338,38 +322,14 @@ cbuffer cb0 : register(b0)
 
 #	endif  // VR
 
-cbuffer PS_cb12 : register(b12)
-{
+cbuffer AlphaTestRefCB :
+	register(
 #	if !defined(VR)
-	row_major float4x4 ViewMatrix : packoffset(c0);
-	row_major float4x4 ProjMatrix : packoffset(c4);
-	row_major float4x4 ViewProjMatrix : packoffset(c8);
-	row_major float4x4 ViewProjMatrixUnjittered : packoffset(c12);
-	row_major float4x4 PreviousViewProjMatrixUnjittered : packoffset(c16);
-	row_major float4x4 InvProjMatrixUnjittered : packoffset(c20);
-	row_major float4x4 ProjMatrixUnjittered : packoffset(c24);
-	row_major float4x4 InvViewMatrix : packoffset(c28);
-	row_major float4x4 InvViewProjMatrix : packoffset(c32);
-	row_major float4x4 InvProjMatrix : packoffset(c36);
-	float4 CurrentPosAdjust : packoffset(c40);
-	float4 PreviousPosAdjust : packoffset(c41);
-	// notes: FirstPersonY seems 1.0 regardless of third/first person, could be LE legacy stuff
-	float4 GammaInvX_FirstPersonY_AlphaPassZ_CreationKitW : packoffset(c42);
-	float4 DynamicRes_WidthX_HeightY_PreviousWidthZ_PreviousHeightW : packoffset(c43);
-	float4 DynamicRes_InvWidthX_InvHeightY_WidthClampZ_HeightClampW : packoffset(c44);
+		b11
 #	else
-	//VR is float4 PerFrame[87]; VR original used for eye position in PerFrame[86].x
-	float4 cb12[87];
+		b13
 #	endif  // !VR
-}
-
-cbuffer AlphaTestRefCB : register(
-#	if !defined(VR)
-							 b11
-#	else
-							 b13
-#	endif  // !VR
-						 )
+	)
 {
 	float AlphaTestRefRS : packoffset(c0);
 }
@@ -476,14 +436,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	// psout.Albedo.w = 1;
 
 #		if !defined(VR)
-	float4 screenPosition = mul(ViewProjMatrixUnjittered, input.WorldPosition);
-	screenPosition.xy = screenPosition.xy / screenPosition.ww;
-	float4 previousScreenPosition = mul(PreviousViewProjMatrixUnjittered, input.PreviousWorldPosition);
-	previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.ww;
 	uint eyeIndex = 0;
+	uint eyeOffset = 0;
 #		else
 	float stereoUV = input.HPosition.x * cb0[2].xy + cb0[2].zw;
-	stereoUV = stereoUV * cb12[86].x;
+	stereoUV = stereoUV * DynamicResolutionParams2.x;
 
 	uint eyeIndex = (stereoUV >= 0.5) ? 1 : 0;
 	uint eyeOffset = eyeIndex;
@@ -491,22 +448,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	bitmask = ((~(-1 << 1)) << 2) & 0xffffffff;
 	eyeOffset = (((uint)eyeOffset << 2) & bitmask) | ((uint)0 & ~bitmask);
 
-	float3 screenPosition;
-	screenPosition.x = dot(cb12[eyeOffset + 24].xyzw, input.WorldPosition);
-	screenPosition.y = dot(cb12[eyeOffset + 25].xyzw, input.WorldPosition);
-	screenPosition.z = dot(cb12[eyeOffset + 27].xyzw, input.WorldPosition);
-	screenPosition.xy = screenPosition.xy / screenPosition.zz;
-
-	float3 previousScreenPosition;
-	previousScreenPosition.x = dot(cb12[eyeOffset + 32].xyzw, input.PreviousWorldPosition);
-	previousScreenPosition.y = dot(cb12[eyeOffset + 33].xyzw, input.PreviousWorldPosition);
-	previousScreenPosition.z = dot(cb12[eyeOffset + 35].xyzw, input.PreviousWorldPosition);
-	previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.zz;
 #		endif  // !VR
 
-	float2 screenMotionVector = float2(-0.5, 0.5) * (screenPosition.xy - previousScreenPosition.xy);
-
-	psout.MotionVectors = screenMotionVector;
+	psout.MotionVectors = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeOffset);
 
 	float3 ddx = ddx_coarse(input.ViewSpacePosition);
 	float3 ddy = ddy_coarse(input.ViewSpacePosition);
@@ -532,11 +476,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		normalColor.xy = -normalColor.xy;
 		// world-space -> tangent-space -> world-space.
 		// This is because we don't have pre-computed tangents.
-#		if !defined(VR)
 		worldNormal.xyz = normalize(mul(normalColor.xyz, CalculateTBN(worldNormal.xyz, -viewDirection, input.TexCoord.xy)));
-#		else
-		worldNormal.xyz = normalize(mul(normalColor.xyz, CalculateTBN(worldNormal.xyz, input.WorldPosition.xyz, input.TexCoord.xy)));
-#		endif  // !VR
 	}
 
 	float3 dirLightColor = DirLightColor.xyz;
@@ -547,7 +487,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	dirLightColor *= shadowColor.x;
 
 #		if defined(SCREEN_SPACE_SHADOWS)
-	float dirLightSShadow = PrepassScreenSpaceShadows(input.WorldPosition);
+	float dirLightSShadow = PrepassScreenSpaceShadows(input.WorldPosition, eyeOffset);
 	dirLightColor *= dirLightSShadow;
 #		endif  // !SCREEN_SPACE_SHADOWS
 

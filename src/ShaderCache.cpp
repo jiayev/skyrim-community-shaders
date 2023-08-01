@@ -119,6 +119,10 @@ namespace SIE
 				++defines;
 			}
 
+			if (REL::Module::IsVR()) {
+				defines[0] = { "VR", nullptr };
+				++defines;
+			}
 			VanillaGetLightingShaderDefines(descriptor, defines);
 		}
 
@@ -1827,11 +1831,13 @@ namespace SIE
 
 	void ShaderCache::ProcessCompilationSet()
 	{
+		SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
 		while (true) {
 			const auto& task = compilationSet.WaitTake();
 			task.Perform();
 			compilationSet.Complete(task);
 		}
+		SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
 	}
 
 	ShaderCompilationTask::ShaderCompilationTask(ShaderClass aShaderClass,
