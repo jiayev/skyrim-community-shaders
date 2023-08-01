@@ -87,7 +87,6 @@ namespace SIE
 			       type == RE::BSShader::Type::Grass;
 		}
 
-
 		inline static bool IsSupportedShader(const RE::BSShader& shader)
 		{
 			return IsSupportedShader(shader.shaderType.get());

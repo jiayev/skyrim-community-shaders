@@ -1091,7 +1091,7 @@ namespace SIE
 			std::array<int8_t, MaxOffsetsSize>& constantOffsets,
 			uint64_t& vertexDesc,
 			ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor)
-		{	
+		{
 			RE::BSShader::Type shaderType = shader.shaderType.get();
 			D3D11_SHADER_DESC desc;
 			if (FAILED(reflector.GetDesc(&desc))) {
@@ -1223,8 +1223,8 @@ namespace SIE
 		{
 			const auto type = shader.shaderType.get();
 			const auto name = shader.shaderType == RE::BSShader::Type::ImageSpace ?
-					std::string_view(static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName.c_str()) :
-					shader.fxpFilename;
+			                      std::string_view(static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName.c_str()) :
+			                      shader.fxpFilename;
 			const std::wstring path = GetShaderPath(name);
 
 			std::array<D3D_SHADER_MACRO, 64> defines;
@@ -1328,7 +1328,7 @@ namespace SIE
 
 		std::unique_ptr<RE::BSGraphics::VertexShader> CreateVertexShader(ID3DBlob& shaderData,
 			const RE::BSShader& shader, uint32_t descriptor)
-		{	
+		{
 			auto type = shader.shaderType.get();
 			static const auto device = REL::Relocation<ID3D11Device**>(RE::Offset::D3D11Device);
 			static const auto perTechniqueBuffersArray =

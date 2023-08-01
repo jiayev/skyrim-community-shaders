@@ -6,19 +6,19 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-    float4 Color : SV_Target0;
+	float4 Color : SV_Target0;
 };
 
 #if defined(PSHADER)
-SamplerState Src0Sampler					: register(s0);
-SamplerState Src1Sampler					: register(s1);
+SamplerState Src0Sampler : register(s0);
+SamplerState Src1Sampler : register(s1);
 
-Texture2D<float4> Src0Tex					: register(t0);
-Texture2D<float4> Src1Tex					: register(t1);
+Texture2D<float4> Src0Tex : register(t0);
+Texture2D<float4> Src1Tex : register(t1);
 
-cbuffer PerGeometry							: register(b2)
+cbuffer PerGeometry : register(b2)
 {
-	float4 Tint								: packoffset(c0);
+	float4 Tint : packoffset(c0);
 };
 
 PS_OUTPUT main(PS_INPUT input)
@@ -41,13 +41,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 src01 = Src0Tex.Sample(Src0Sampler, adjustedTexCoord1);
 	float4 src0 = unk1 != 0 ? src01 : src00;
 
-	if (src1.w > 0.8 && src1.w < 1)
-	{
+	if (src1.w > 0.8 && src1.w < 1) {
 		psout.Color.xyz =
 			(1 - Tint.w) * src0.xyz + Tint.xyz * (Tint.w * RGBToLuminance2(src01.xyz));
-	}
-	else
-	{
+	} else {
 		psout.Color.xyz = src0.xyz;
 	}
 
