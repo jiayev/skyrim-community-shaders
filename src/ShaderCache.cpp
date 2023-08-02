@@ -12,6 +12,10 @@
 #include "Features/WaterBlending.h"
 #include "State.h"
 
+#ifdef max
+#	undef max
+#endif
+
 namespace SIE
 {
 	namespace SShaderCache
@@ -588,6 +592,171 @@ namespace SIE
 			defines[0] = { nullptr, nullptr };
 		}
 
+		static void GetImagespaceShaderDefines(uint32_t descriptor, D3D_SHADER_MACRO* defines)
+		{
+			using enum RE::ImageSpaceManager::ImageSpaceEffectEnum;
+
+			const auto descEnum =
+				static_cast<RE::ImageSpaceManager::ImageSpaceEffectEnum>(descriptor);
+			if ((descriptor >= static_cast<uint32_t>(ISBlur3) &&
+					descriptor <= static_cast<uint32_t>(ISBrightPassBlur15)) ||
+				descEnum == ISBlur) {
+				if (descEnum == ISBlur) {
+					defines[0] = { "BLUR_RADIUS", "0" };
+					++defines;
+				} else {
+					static constexpr std::array<const char*, 7> blurRadiusDefines = { { "3", "5",
+						"7", "9", "11", "13", "15" } };
+					const size_t blurRadius = static_cast<size_t>(
+						(descriptor - static_cast<uint32_t>(ISBlur3)) % blurRadiusDefines.size());
+					defines[0] = { "BLUR_RADIUS", blurRadiusDefines[blurRadius] };
+					++defines;
+					const size_t blurType = static_cast<size_t>(
+						(descriptor - static_cast<uint32_t>(ISBlur3)) / blurRadiusDefines.size());
+					if (blurType == 1) {
+						defines[0] = { "BLUR_NON_HDR", nullptr };
+						++defines;
+					} else if (blurType == 2) {
+						defines[0] = { "BLUR_BRIGHT_PASS", nullptr };
+						++defines;
+					}
+				}
+			} else if (descEnum == ISDisplayDepth) {
+				defines[0] = { "DISPLAY_DEPTH", nullptr };
+				++defines;
+			} else if (descEnum == ISSimpleColor) {
+				defines[0] = { "SIMPLE_COLOR", nullptr };
+				++defines;
+			} else if (descEnum == ISCopyDynamicFetchDisabled) {
+				defines[0] = { "DYNAMIC_FETCH_DISABLED", nullptr };
+				++defines;
+			} else if (descEnum == ISCopyGrayScale) {
+				defines[0] = { "GRAY_SCALE", nullptr };
+				++defines;
+			} else if (descEnum == ISCopyTextureMask) {
+				defines[0] = { "TEXTURE_MASK", nullptr };
+				++defines;
+			} else if (descEnum == ISCompositeLensFlare) {
+				defines[0] = { "VOLUMETRIC_LIGHTING", nullptr };
+				++defines;
+			} else if (descEnum == ISCompositeVolumetricLighting) {
+				defines[0] = { "LENS_FLARE", nullptr };
+				++defines;
+			} else if (descEnum == ISCompositeLensFlareVolumetricLighting) {
+				defines[0] = { "VOLUMETRIC_LIGHTING", nullptr };
+				++defines;
+				defines[0] = { "LENS_FLARE", nullptr };
+				++defines;
+			} else if (descriptor >= static_cast<uint32_t>(ISDepthOfField) &&
+					   descriptor <= static_cast<uint32_t>(ISDistantBlurMaskedFogged)) {
+				if (descriptor >= static_cast<uint32_t>(ISDepthOfField) &&
+					descriptor <= static_cast<uint32_t>(ISDepthOfFieldMaskedFogged))
+
+				{
+					defines[0] = { "DOF", nullptr };
+					++defines;
+				} else {
+					defines[0] = { "DISTANT_BLUR", nullptr };
+					++defines;
+				}
+				if (descEnum != ISDepthOfField && descEnum != ISDistantBlur) {
+					defines[0] = { "FOGGED", nullptr };
+					++defines;
+				}
+				if (descEnum == ISDepthOfFieldMaskedFogged || descEnum == ISDistantBlurMaskedFogged) {
+					defines[0] = { "MASKED", nullptr };
+					++defines;
+				}
+			} else if (descEnum == ISDownsampleIgnoreBrightest) {
+				defines[0] = { "IGNORE_BRIGHTEST", nullptr };
+				++defines;
+			} else if (descEnum == ISHDRTonemapBlendCinematic) {
+				defines[0] = { "TONEMAP", nullptr };
+				++defines;
+			} else if (descEnum == ISHDRTonemapBlendCinematicFade) {
+				defines[0] = { "TONEMAP", nullptr };
+				++defines;
+				defines[0] = { "FADE", nullptr };
+				++defines;
+			} else if (descriptor >= static_cast<uint32_t>(ISHDRDownSample16) &&
+					   descriptor <= static_cast<uint32_t>(ISHDRDownSample16LightAdapt)) {
+				defines[0] = { "DOWNSAMPLE", nullptr };
+				++defines;
+				if (descEnum == ISHDRDownSample16 || descEnum == ISHDRDownSample16Lum ||
+					descEnum == ISHDRDownSample16LightAdapt ||
+					descEnum == ISHDRDownSample16LumClamp) {
+					defines[0] = { "SAMPLES_COUNT", "16" };
+					++defines;
+				} else {
+					defines[0] = { "SAMPLES_COUNT", "4" };
+					++defines;
+				}
+				if (descEnum == ISHDRDownSample4RGB2Lum) {
+					defines[0] = { "RGB2LUM", nullptr };
+					++defines;
+				} else if (descEnum == ISHDRDownSample16Lum || descEnum == ISHDRDownSample16LumClamp) {
+					defines[0] = { "LUM", nullptr };
+					++defines;
+				} else if (descEnum == ISHDRDownSample16LightAdapt ||
+						   descEnum == ISHDRDownSample4LightAdapt) {
+					defines[0] = { "LIGHT_ADAPT", nullptr };
+					++defines;
+				}
+			} else if (descEnum == ISLightingCompositeMenu) {
+				defines[0] = { "MENU", nullptr };
+				++defines;
+			} else if (descEnum == ISLightingCompositeNoDirectionalLight) {
+				defines[0] = { "NO_DIRECTIONAL_LIGHT", nullptr };
+				++defines;
+			} else if (descEnum == ISWaterBlendHeightmaps) {
+				defines[0] = { "BLEND_HEIGHTMAPS", nullptr };
+				++defines;
+			} else if (descEnum == ISWaterDisplacementClearSimulation) {
+				defines[0] = { "CLEAR_SIMULATION", nullptr };
+				++defines;
+			} else if (descEnum == ISWaterDisplacementNormals) {
+				defines[0] = { "NORMALS", nullptr };
+				++defines;
+			} else if (descEnum == ISWaterDisplacementRainRipple) {
+				defines[0] = { "RAIN_RIPPLE", nullptr };
+				++defines;
+			} else if (descEnum == ISWaterDisplacementTexOffset) {
+				defines[0] = { "TEX_OFFSET", nullptr };
+				++defines;
+			} else if (descEnum == ISWaterSmoothHeightmap) {
+				defines[0] = { "SMOOTH_HEIGHTMAP", nullptr };
+				++defines;
+			} else if (descEnum == ISWaterRainHeightmap) {
+				defines[0] = { "RAIN_HEIGHTMAP", nullptr };
+				++defines;
+			} else if (descEnum == ISWaterWadingHeightmap) {
+				defines[0] = { "WADING_HEIGHTMAP", nullptr };
+				++defines;
+			} else if (descEnum == ISWorldMapNoSkyBlur) {
+				defines[0] = { "NO_SKY_BLUR", nullptr };
+				++defines;
+			} else if (descEnum == ISMinifyContrast) {
+				defines[0] = { "CONTRAST", nullptr };
+				++defines;
+			} else if (descEnum == ISNoiseNormalmap) {
+				defines[0] = { "NORMALMAP", nullptr };
+				++defines;
+			} else if (descEnum == ISNoiseScrollAndBlend) {
+				defines[0] = { "SCROLL_AND_BLEND", nullptr };
+				++defines;
+			} else if (descEnum == ISRadialBlur) {
+				defines[0] = { "SAMPLES_COUNT", "2" };
+				++defines;
+			} else if (descEnum == ISRadialBlurHigh) {
+				defines[0] = { "SAMPLES_COUNT", "10" };
+				++defines;
+			} else if (descEnum == ISRadialBlurMedium) {
+				defines[0] = { "SAMPLES_COUNT", "6" };
+				++defines;
+			}
+			defines[0] = { nullptr, nullptr };
+		}
+
 		static void GetShaderDefines(RE::BSShader::Type type, uint32_t descriptor,
 			D3D_SHADER_MACRO* defines)
 		{
@@ -603,6 +772,9 @@ namespace SIE
 				break;
 			case RE::BSShader::Type::BloodSplatter:
 				GetBloodSplaterShaderDefines(descriptor, defines);
+				break;
+			case RE::BSShader::Type::ImageSpace:
+				GetImagespaceShaderDefines(descriptor, defines);
 				break;
 			case RE::BSShader::Type::Lighting:
 				GetLightingShaderDefines(descriptor, defines);
@@ -879,12 +1051,12 @@ namespace SIE
 			return result;
 		}
 
-		static int32_t GetVariableIndex(ShaderClass shaderClass, RE::BSShader::Type shaderType, const char* name)
+		static int32_t GetVariableIndex(ShaderClass shaderClass, const RE::BSShader& shader, const char* name)
 		{
 			static auto variableNames = GetVariableIndices();
 
 			const auto& names =
-				variableNames[static_cast<size_t>(shaderType)][static_cast<size_t>(shaderClass)];
+				variableNames[static_cast<size_t>(shader.shaderType.get())][static_cast<size_t>(shaderClass)];
 			auto it = names.find(name);
 			if (it == names.cend()) {
 				return -1;
@@ -918,8 +1090,9 @@ namespace SIE
 			std::array<size_t, 3>& bufferSizes,
 			std::array<int8_t, MaxOffsetsSize>& constantOffsets,
 			uint64_t& vertexDesc,
-			ShaderClass shaderClass, RE::BSShader::Type shaderType, uint32_t descriptor)
+			ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor)
 		{
+			RE::BSShader::Type shaderType = shader.shaderType.get();
 			D3D11_SHADER_DESC desc;
 			if (FAILED(reflector.GetDesc(&desc))) {
 				logger::error("Failed to get shader descriptor for {} shader {}::{}",
@@ -1015,7 +1188,7 @@ namespace SIE
 						}
 
 						const auto variableIndex =
-							GetVariableIndex(shaderClass, shaderType, varDesc.Name);
+							GetVariableIndex(shaderClass, shader, varDesc.Name);
 						if (variableIndex != -1) {
 							constantOffsets[variableIndex] = (int8_t)(varDesc.StartOffset / 4);
 						} else {
@@ -1049,7 +1222,10 @@ namespace SIE
 			uint32_t descriptor, bool useDiskCache)
 		{
 			const auto type = shader.shaderType.get();
-			const std::wstring path = GetShaderPath(shader.fxpFilename);
+			const auto name = shader.shaderType == RE::BSShader::Type::ImageSpace ?
+			                      std::string_view(static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName.c_str()) :
+			                      shader.fxpFilename;
+			const std::wstring path = GetShaderPath(name);
 
 			std::array<D3D_SHADER_MACRO, 64> defines;
 			if (shaderClass == ShaderClass::Vertex) {
@@ -1062,7 +1238,7 @@ namespace SIE
 
 			logger::debug("{}, {}", descriptor, MergeDefinesString(defines));
 
-			auto diskPath = GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
+			auto diskPath = GetDiskPath(name, descriptor, shaderClass);
 
 			if (useDiskCache && std::filesystem::exists(diskPath)) {
 				ID3DBlob* shaderBlob = nullptr;
@@ -1151,8 +1327,9 @@ namespace SIE
 		}
 
 		std::unique_ptr<RE::BSGraphics::VertexShader> CreateVertexShader(ID3DBlob& shaderData,
-			RE::BSShader::Type type, uint32_t descriptor)
+			const RE::BSShader& shader, uint32_t descriptor)
 		{
+			auto type = shader.shaderType.get();
 			static const auto device = REL::Relocation<ID3D11Device**>(RE::Offset::D3D11Device);
 			static const auto perTechniqueBuffersArray =
 				REL::Relocation<ID3D11Buffer**>(RELOCATION_ID(524755, 411371));
@@ -1185,7 +1362,7 @@ namespace SIE
 				std::fill(newShader->constantTable.begin(), newShader->constantTable.end(), 0);
 #pragma warning(pop)
 				ReflectConstantBuffers(*reflector.Get(), bufferSizes, newShader->constantTable, newShader->shaderDesc,
-					ShaderClass::Vertex, type, descriptor);
+					ShaderClass::Vertex, shader, descriptor);
 				if (bufferSizes[0] != 0) {
 					newShader->constantBuffers[0].buffer =
 						(RE::ID3D11Buffer*)perTechniqueBuffersArray.get()[bufferSizes[0]];
@@ -1213,8 +1390,9 @@ namespace SIE
 		}
 
 		std::unique_ptr<RE::BSGraphics::PixelShader> CreatePixelShader(ID3DBlob& shaderData,
-			RE::BSShader::Type type, uint32_t descriptor)
+			const RE::BSShader& shader, uint32_t descriptor)
 		{
+			auto type = shader.shaderType.get();
 			static const auto device = REL::Relocation<ID3D11Device**>(RE::Offset::D3D11Device);
 			static const auto perTechniqueBuffersArray =
 				REL::Relocation<ID3D11Buffer**>(RELOCATION_ID(524761, 411377));
@@ -1242,7 +1420,7 @@ namespace SIE
 				uint64_t dummy;
 				ReflectConstantBuffers(*reflector.Get(), bufferSizes, newShader->constantTable,
 					dummy,
-					ShaderClass::Pixel, type, descriptor);
+					ShaderClass::Pixel, shader, descriptor);
 				if (bufferSizes[0] != 0) {
 					newShader->constantBuffers[0].buffer =
 						(RE::ID3D11Buffer*)perTechniqueBuffersArray.get()[bufferSizes[0]];
@@ -1268,12 +1446,147 @@ namespace SIE
 
 			return newShader;
 		}
+		static uint32_t GetImagespaceShaderDescriptor(const RE::BSImagespaceShader& imagespaceShader)
+		{
+			using enum RE::ImageSpaceManager::ImageSpaceEffectEnum;
+
+			static const std::unordered_map<std::string_view, uint32_t> descriptors{
+				{ "BSImagespaceShaderISBlur", static_cast<uint32_t>(ISBlur) },
+				{ "BSImagespaceShaderBlur3", static_cast<uint32_t>(ISBlur3) },
+				{ "BSImagespaceShaderBlur5", static_cast<uint32_t>(ISBlur5) },
+				{ "BSImagespaceShaderBlur7", static_cast<uint32_t>(ISBlur7) },
+				{ "BSImagespaceShaderBlur9", static_cast<uint32_t>(ISBlur9) },
+				{ "BSImagespaceShaderBlur11", static_cast<uint32_t>(ISBlur11) },
+				{ "BSImagespaceShaderBlur13", static_cast<uint32_t>(ISBlur13) },
+				{ "BSImagespaceShaderBlur15", static_cast<uint32_t>(ISBlur15) },
+				{ "BSImagespaceShaderBrightPassBlur3", static_cast<uint32_t>(ISBrightPassBlur3) },
+				{ "BSImagespaceShaderBrightPassBlur5", static_cast<uint32_t>(ISBrightPassBlur5) },
+				{ "BSImagespaceShaderBrightPassBlur7", static_cast<uint32_t>(ISBrightPassBlur7) },
+				{ "BSImagespaceShaderBrightPassBlur9", static_cast<uint32_t>(ISBrightPassBlur9) },
+				{ "BSImagespaceShaderBrightPassBlur11", static_cast<uint32_t>(ISBrightPassBlur11) },
+				{ "BSImagespaceShaderBrightPassBlur13", static_cast<uint32_t>(ISBrightPassBlur13) },
+				{ "BSImagespaceShaderBrightPassBlur15", static_cast<uint32_t>(ISBrightPassBlur15) },
+				{ "BSImagespaceShaderNonHDRBlur3", static_cast<uint32_t>(ISNonHDRBlur3) },
+				{ "BSImagespaceShaderNonHDRBlur5", static_cast<uint32_t>(ISNonHDRBlur5) },
+				{ "BSImagespaceShaderNonHDRBlur7", static_cast<uint32_t>(ISNonHDRBlur7) },
+				{ "BSImagespaceShaderNonHDRBlur9", static_cast<uint32_t>(ISNonHDRBlur9) },
+				{ "BSImagespaceShaderNonHDRBlur11", static_cast<uint32_t>(ISNonHDRBlur11) },
+				{ "BSImagespaceShaderNonHDRBlur13", static_cast<uint32_t>(ISNonHDRBlur13) },
+				{ "BSImagespaceShaderNonHDRBlur15", static_cast<uint32_t>(ISNonHDRBlur15) },
+				{ "BSImagespaceShaderISBasicCopy", static_cast<uint32_t>(ISBasicCopy) },
+				{ "BSImagespaceShaderISSimpleColor", static_cast<uint32_t>(ISSimpleColor) },
+				{ "BSImagespaceShaderApplyReflections", static_cast<uint32_t>(ISApplyReflections) },
+				{ "BSImagespaceShaderISExp", static_cast<uint32_t>(ISExp) },
+				{ "BSImagespaceShaderISDisplayDepth", static_cast<uint32_t>(ISDisplayDepth) },
+				{ "BSImagespaceShaderAlphaBlend", static_cast<uint32_t>(ISAlphaBlend) },
+				{ "BSImagespaceShaderWaterFlow", static_cast<uint32_t>(ISWaterFlow) },
+				{ "BSImagespaceShaderISWaterBlend", static_cast<uint32_t>(ISWaterBlend) },
+				{ "BSImagespaceShaderGreyScale", static_cast<uint32_t>(ISCopyGrayScale) },
+				{ "BSImagespaceShaderCopy", static_cast<uint32_t>(ISCopy) },
+				{ "BSImagespaceShaderCopyScaleBias", static_cast<uint32_t>(ISCopyScaleBias) },
+				{ "BSImagespaceShaderCopyCustomViewport",
+					static_cast<uint32_t>(ISCopyCustomViewport) },
+				{ "BSImagespaceShaderCopyTextureMask", static_cast<uint32_t>(ISCopyTextureMask) },
+				{ "BSImagespaceShaderCopyDynamicFetchDisabled",
+					static_cast<uint32_t>(ISCopyDynamicFetchDisabled) },
+				{ "BSImagespaceShaderISCompositeVolumetricLighting",
+					static_cast<uint32_t>(ISCompositeVolumetricLighting) },
+				{ "BSImagespaceShaderISCompositeLensFlare",
+					static_cast<uint32_t>(ISCompositeLensFlare) },
+				{ "BSImagespaceShaderISCompositeLensFlareVolumetricLighting",
+					static_cast<uint32_t>(ISCompositeLensFlareVolumetricLighting) },
+				{ "BSImagespaceShaderISDebugSnow", static_cast<uint32_t>(ISDebugSnow) },
+				{ "BSImagespaceShaderDepthOfField", static_cast<uint32_t>(ISDepthOfField) },
+				{ "BSImagespaceShaderDepthOfFieldFogged",
+					static_cast<uint32_t>(ISDepthOfFieldFogged) },
+				{ "BSImagespaceShaderDepthOfFieldMaskedFogged",
+					static_cast<uint32_t>(ISDepthOfFieldMaskedFogged) },
+				{ "BSImagespaceShaderDistantBlur", static_cast<uint32_t>(ISDistantBlur) },
+				{ "BSImagespaceShaderDistantBlurFogged",
+					static_cast<uint32_t>(ISDistantBlurFogged) },
+				{ "BSImagespaceShaderDistantBlurMaskedFogged",
+					static_cast<uint32_t>(ISDistantBlurMaskedFogged) },
+				{ "BSImagespaceShaderDoubleVision", static_cast<uint32_t>(ISDoubleVision) },
+				{ "BSImagespaceShaderISDownsample", static_cast<uint32_t>(ISDownsample) },
+				{ "BSImagespaceShaderISDownsampleIgnoreBrightest",
+					static_cast<uint32_t>(ISDownsampleIgnoreBrightest) },
+				{ "BSImagespaceShaderISUpsampleDynamicResolution",
+					static_cast<uint32_t>(ISUpsampleDynamicResolution) },
+				{ "BSImageSpaceShaderVolumetricLighting",
+					static_cast<uint32_t>(ISVolumetricLighting) },
+				{ "BSImagespaceShaderHDRDownSample4", static_cast<uint32_t>(ISHDRDownSample4) },
+				{ "BSImagespaceShaderHDRDownSample4LightAdapt",
+					static_cast<uint32_t>(ISHDRDownSample4LightAdapt) },
+				{ "BSImagespaceShaderHDRDownSample4LumClamp",
+					static_cast<uint32_t>(ISHDRDownSample4LumClamp) },
+				{ "BSImagespaceShaderHDRDownSample4RGB2Lum",
+					static_cast<uint32_t>(ISHDRDownSample4RGB2Lum) },
+				{ "BSImagespaceShaderHDRDownSample16", static_cast<uint32_t>(ISHDRDownSample16) },
+				{ "BSImagespaceShaderHDRDownSample16LightAdapt",
+					static_cast<uint32_t>(ISHDRDownSample16LightAdapt) },
+				{ "BSImagespaceShaderHDRDownSample16Lum",
+					static_cast<uint32_t>(ISHDRDownSample16Lum) },
+				{ "BSImagespaceShaderHDRDownSample16LumClamp",
+					static_cast<uint32_t>(ISHDRDownSample16LumClamp) },
+				{ "BSImagespaceShaderHDRTonemapBlendCinematic",
+					static_cast<uint32_t>(ISHDRTonemapBlendCinematic) },
+				{ "BSImagespaceShaderHDRTonemapBlendCinematicFade",
+					static_cast<uint32_t>(ISHDRTonemapBlendCinematicFade) },
+				{ "BSImagespaceShaderISIBLensFlares", static_cast<uint32_t>(ISIBLensFlares) },
+				{ "BSImagespaceShaderISLightingComposite",
+					static_cast<uint32_t>(ISLightingComposite) },
+				{ "BSImagespaceShaderISLightingCompositeMenu",
+					static_cast<uint32_t>(ISLightingCompositeMenu) },
+				{ "BSImagespaceShaderISLightingCompositeNoDirectionalLight",
+					static_cast<uint32_t>(ISLightingCompositeNoDirectionalLight) },
+				{ "BSImagespaceShaderLocalMap", static_cast<uint32_t>(ISLocalMap) },
+				{ "BSISWaterBlendHeightmaps", static_cast<uint32_t>(ISWaterBlendHeightmaps) },
+				{ "BSISWaterDisplacementClearSimulation",
+					static_cast<uint32_t>(ISWaterDisplacementClearSimulation) },
+				{ "BSISWaterDisplacementNormals",
+					static_cast<uint32_t>(ISWaterDisplacementNormals) },
+				{ "BSISWaterDisplacementRainRipple",
+					static_cast<uint32_t>(ISWaterDisplacementRainRipple) },
+				{ "BSISWaterDisplacementTexOffset",
+					static_cast<uint32_t>(ISWaterDisplacementTexOffset) },
+				{ "BSISWaterWadingHeightmap", static_cast<uint32_t>(ISWaterWadingHeightmap) },
+				{ "BSISWaterRainHeightmap", static_cast<uint32_t>(ISWaterRainHeightmap) },
+				{ "BSISWaterSmoothHeightmap", static_cast<uint32_t>(ISWaterSmoothHeightmap) },
+				{ "BSISWaterWadingHeightmap", static_cast<uint32_t>(ISWaterWadingHeightmap) },
+				{ "BSImagespaceShaderMap", static_cast<uint32_t>(ISMap) },
+				{ "BSImagespaceShaderMap", static_cast<uint32_t>(ISMap) },
+				{ "BSImagespaceShaderWorldMap", static_cast<uint32_t>(ISWorldMap) },
+				{ "BSImagespaceShaderWorldMapNoSkyBlur",
+					static_cast<uint32_t>(ISWorldMapNoSkyBlur) },
+				{ "BSImagespaceShaderISMinify", static_cast<uint32_t>(ISMinify) },
+				{ "BSImagespaceShaderISMinifyContrast", static_cast<uint32_t>(ISMinifyContrast) },
+				{ "BSImagespaceShaderNoiseNormalmap", static_cast<uint32_t>(ISNoiseNormalmap) },
+				{ "BSImagespaceShaderNoiseScrollAndBlend",
+					static_cast<uint32_t>(ISNoiseScrollAndBlend) },
+				{ "BSImagespaceShaderRadialBlur",
+					static_cast<uint32_t>(ISRadialBlur) },
+				{ "BSImagespaceShaderRadialBlurHigh", static_cast<uint32_t>(ISRadialBlurHigh) },
+				{ "BSImagespaceShaderRadialBlurMedium", static_cast<uint32_t>(ISRadialBlurMedium) },
+				{ "BSImagespaceShaderRefraction", static_cast<uint32_t>(ISRefraction) },
+			};
+
+			auto it = descriptors.find(imagespaceShader.name.c_str());
+			if (it == descriptors.cend()) {
+				return std::numeric_limits<uint32_t>::max();
+			}
+			return it->second;
+		}
 	}
 
 	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (!ShaderCache::IsSupportedShader(shader)) {
+		if (shader.shaderType == RE::BSShader::Type::ImageSpace) {
+			descriptor = SShaderCache::GetImagespaceShaderDescriptor(
+				static_cast<const RE::BSImagespaceShader&>(shader));
+		}
+
+		if (!ShaderCache::IsSupportedShader(shader) || descriptor != std::numeric_limits<uint32_t>::max()) {
 			return nullptr;
 		}
 
@@ -1298,7 +1611,12 @@ namespace SIE
 	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (!ShaderCache::IsSupportedShader(shader)) {
+		if (shader.shaderType == RE::BSShader::Type::ImageSpace) {
+			descriptor = SShaderCache::GetImagespaceShaderDescriptor(
+				static_cast<const RE::BSImagespaceShader&>(shader));
+		}
+
+		if (!ShaderCache::IsSupportedShader(shader) || descriptor != std::numeric_limits<uint32_t>::max()) {
 			return nullptr;
 		}
 
@@ -1450,7 +1768,7 @@ namespace SIE
 				SShaderCache::CompileShader(ShaderClass::Vertex, shader, descriptor, isDiskCache)) {
 			static const auto device = REL::Relocation<ID3D11Device**>(RE::Offset::D3D11Device);
 
-			auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader.shaderType.get(),
+			auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader,
 				descriptor);
 
 			std::lock_guard lockGuard(vertexShadersMutex);
@@ -1479,7 +1797,7 @@ namespace SIE
 				SShaderCache::CompileShader(ShaderClass::Pixel, shader, descriptor, isDiskCache)) {
 			static const auto device = REL::Relocation<ID3D11Device**>(RE::Offset::D3D11Device);
 
-			auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader.shaderType.get(),
+			auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader,
 				descriptor);
 
 			std::lock_guard lockGuard(pixelShadersMutex);
