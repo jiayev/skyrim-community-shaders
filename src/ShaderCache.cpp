@@ -115,10 +115,6 @@ namespace SIE
 				++defines;
 			}
 
-			if (REL::Module::IsVR()) {
-				defines[0] = { "VR", nullptr };
-				++defines;
-			}
 			VanillaGetLightingShaderDefines(descriptor, defines);
 		}
 
@@ -286,10 +282,6 @@ namespace SIE
 				++defines;
 			}
 
-			if (REL::Module::IsVR()) {
-				defines[0] = { "VR", nullptr };
-				++defines;
-			}
 			defines[0] = { nullptr, nullptr };
 		}
 
@@ -1057,8 +1049,13 @@ namespace SIE
 			} else if (shaderClass == ShaderClass::Pixel) {
 				defines[0] = { "PSHADER", nullptr };
 			}
-			defines[1] = { nullptr, nullptr };
-			GetShaderDefines(type, descriptor, &defines[1]);
+			if (!REL::Module::IsVR()) {
+				defines[1] = { nullptr, nullptr };
+			} else {
+				defines[1] = { "VR", nullptr };
+				defines[2] = { nullptr, nullptr };
+			}
+			GetShaderDefines(type, descriptor, &defines[(1 + (size_t)REL::Module::IsVR())]);
 
 			logger::debug("{}, {}", descriptor, MergeDefinesString(defines));
 
@@ -1273,7 +1270,8 @@ namespace SIE
 	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (!ShaderCache::IsSupportedShader(shader)) {
+		auto state = State::GetSingleton();
+		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)))) {
 			return nullptr;
 		}
 
@@ -1298,7 +1296,9 @@ namespace SIE
 	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (!ShaderCache::IsSupportedShader(shader)) {
+		auto state = State::GetSingleton();
+		if (!(ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() &&
+															state->IsShaderEnabled(shader))) {
 			return nullptr;
 		}
 

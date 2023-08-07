@@ -177,8 +177,6 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	if !defined(VR)
 	uint eyeIndex = 0;
-	uint eyeIndexX3 = 0;
-	uint eyeIndexX4 = 0;
 #	else
 	/*
   https://docs.google.com/presentation/d/19x9XDjUvkW_9gsfsMQzt3hZbRNziVsoCEHOn4AercAc/htmlpresent
@@ -194,12 +192,8 @@ VS_OUTPUT main(VS_INPUT input)
   clipPositionOut = clipPos
   */
 	float4 r0, r1, r2, r3, r4, r5, r6;
-	uint4 bitmask, uiDest;
-	float4 fDest;
 
 	uint eyeIndex = cb13[0].y * (input.InstanceID.x & 1);
-	uint eyeIndexX3 = eyeIndex * 3;
-	uint eyeIndexX4 = eyeIndex << 2;
 #	endif  // VR
 
 	float3x3 world3x3 = float3x3(input.InstanceData2.xyz, input.InstanceData3.xyz, float3(input.InstanceData4.x, input.InstanceData2.w, input.InstanceData3.w));
@@ -437,20 +431,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if !defined(VR)
 	uint eyeIndex = 0;
-	uint eyeOffset = 0;
 #		else
 	float stereoUV = input.HPosition.x * cb0[2].xy + cb0[2].zw;
 	stereoUV = stereoUV * DynamicResolutionParams2.x;
 
 	uint eyeIndex = (stereoUV >= 0.5) ? 1 : 0;
-	uint eyeOffset = eyeIndex;
-	uint bitmask;
-	bitmask = ((~(-1 << 1)) << 2) & 0xffffffff;
-	eyeOffset = (((uint)eyeOffset << 2) & bitmask) | ((uint)0 & ~bitmask);
-
 #		endif  // !VR
 
-	psout.MotionVectors = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeOffset);
+	psout.MotionVectors = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 
 	float3 ddx = ddx_coarse(input.ViewSpacePosition);
 	float3 ddy = ddy_coarse(input.ViewSpacePosition);
@@ -487,7 +475,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	dirLightColor *= shadowColor.x;
 
 #		if defined(SCREEN_SPACE_SHADOWS)
-	float dirLightSShadow = PrepassScreenSpaceShadows(input.WorldPosition, eyeOffset);
+	float dirLightSShadow = PrepassScreenSpaceShadows(input.WorldPosition, eyeIndex);
 	dirLightColor *= dirLightSShadow;
 #		endif  // !SCREEN_SPACE_SHADOWS
 

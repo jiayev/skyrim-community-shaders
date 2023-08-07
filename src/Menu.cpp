@@ -334,7 +334,7 @@ void Menu::DrawSettings()
 
 		ImGui::Spacing();
 
-		if (ImGui::CollapsingHeader("Menu", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("Menu", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 			if (settingToggleKey) {
 				ImGui::Text("Press any key to set as toggle key...");
 			} else {
@@ -361,7 +361,7 @@ void Menu::DrawSettings()
 			}
 		}
 
-		if (ImGui::CollapsingHeader("Advanced", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("Advanced", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 			bool useDump = shaderCache.IsDump();
 			if (ImGui::Checkbox("Dump Shaders", &useDump)) {
 				shaderCache.SetDump(useDump);
@@ -397,7 +397,7 @@ void Menu::DrawSettings()
 			}
 		}
 
-		if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 			bool useCustomShaders = shaderCache.IsEnabled();
 			if (ImGui::BeginTable("##GeneralToggles", 3, ImGuiTableFlags_SizingStretchSame)) {
 				ImGui::TableNextColumn();
@@ -442,16 +442,14 @@ void Menu::DrawSettings()
 			}
 		}
 
-		if (ImGui::CollapsingHeader("Replace Original Shaders", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("Replace Original Shaders", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 			auto state = State::GetSingleton();
 			if (ImGui::BeginTable("##ReplaceToggles", 3, ImGuiTableFlags_SizingStretchSame)) {
 				for (int classIndex = 0; classIndex < RE::BSShader::Type::Total - 1; ++classIndex) {
 					ImGui::TableNextColumn();
 
 					auto type = (RE::BSShader::Type)(classIndex + 1);
-					if (!(SIE::ShaderCache::IsSupportedShader(type) ||
-							// allow all shaders if debug or trace logging
-							(state->GetLogLevel()) <= spdlog::level::debug)) {
+					if (!(SIE::ShaderCache::IsSupportedShader(type) || state->IsDeveloperMode())) {
 						ImGui::BeginDisabled();
 						ImGui::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
 						ImGui::EndDisabled();
