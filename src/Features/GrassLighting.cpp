@@ -106,7 +106,7 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 			updatePerFrame = false;
 		}
 
-		Clustered::GetSingleton()->Bind(true);
+		//Clustered::GetSingleton()->Bind(true);
 		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
 		ID3D11Buffer* buffers[2];
