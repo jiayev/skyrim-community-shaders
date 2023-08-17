@@ -25,8 +25,11 @@ void State::Draw()
 					context->PSSetShader(pixelShader->shader, NULL, NULL);
 				}
 
-				for (auto* feature : Feature::GetFeatureList())
-					feature->Draw(currentShader, currentPixelDescriptor);
+				for (auto* feature : Feature::GetFeatureList()) {
+					if (feature->loaded) {
+						feature->Draw(currentShader, currentPixelDescriptor);
+					}
+				}
 			}
 		}
 	}
@@ -76,7 +79,8 @@ void State::Load()
 		if (advanced["Dump Shaders"].is_boolean())
 			shaderCache.SetDump(advanced["Dump Shaders"]);
 		if (advanced["Log Level"].is_number_integer()) {
-			logLevel = static_cast<spdlog::level::level_enum>(max(spdlog::level::trace, min(spdlog::level::off, (int)advanced["Log Level"])));
+			logLevel = static_cast<spdlog::level::level_enum>((int)advanced["Log Level"]);
+			//logLevel = static_cast<spdlog::level::level_enum>(max(spdlog::level::trace, min(spdlog::level::off, (int)advanced["Log Level"])));
 		}
 	}
 
