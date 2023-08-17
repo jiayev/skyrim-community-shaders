@@ -11,6 +11,7 @@
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/WaterBlending.h"
 #include "State.h"
+#include "Features/LightLimitFix.h"
 
 namespace SIE
 {
@@ -112,6 +113,11 @@ namespace SIE
 
 			if (ExtendedMaterials::GetSingleton()->loaded) {
 				defines[0] = { "COMPLEX_PARALLAX_MATERIALS", nullptr };
+				++defines;
+			}
+
+			if (LightLimitFix::GetSingleton()->loaded) {
+				defines[0] = { "LIGHT_LIMIT_FIX", nullptr };
 				++defines;
 			}
 
@@ -279,6 +285,11 @@ namespace SIE
 
 			if (ScreenSpaceShadows::GetSingleton()->loaded) {
 				defines[0] = { "SCREEN_SPACE_SHADOWS", nullptr };
+				++defines;
+			}
+
+			if (LightLimitFix::GetSingleton()->loaded) {
+				defines[0] = { "LIGHT_LIMIT_FIX", nullptr };
 				++defines;
 			}
 

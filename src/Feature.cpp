@@ -6,6 +6,7 @@
 #include "Features/GrassLighting.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/WaterBlending.h"
+#include "Features/LightLimitFix.h"
 
 void Feature::Load(json&)
 {
@@ -75,7 +76,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		GrassCollision::GetSingleton(),
 		ScreenSpaceShadows::GetSingleton(),
 		ExtendedMaterials::GetSingleton(),
-		WaterBlending::GetSingleton()
+		WaterBlending::GetSingleton(),
+		LightLimitFix::GetSingleton()
 	};
 
 	static std::vector<Feature*> featuresVR = {

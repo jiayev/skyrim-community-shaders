@@ -5,6 +5,7 @@
 #include "State.h"
 
 #include "Features/ExtendedMaterials.h"
+#include "Features/LightLimitFix.h"
 #define DLLEXPORT __declspec(dllexport)
 
 std::list<std::string> errors;
@@ -88,6 +89,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 			if (errors.empty()) {
 				Hooks::Install();
+				LightLimitFix::InstallHooks();
 
 				auto& shaderCache = SIE::ShaderCache::Instance();
 
