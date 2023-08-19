@@ -1678,11 +1678,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(LIGHT_LIMIT_FIX)
 	float2 screenUV = ViewToUV(viewPosition);
 	float screenNoise = InterleavedGradientNoise(screenUV * perPassLLF[0].BufferDim);
-	float backFaceShadowMult = lerp(1, frontFace, 0.5);
-	float3 rayPos = float3(viewPosition.x, viewPosition.y, GetScreenDepth(screenUV)); // Prevents z-fighting
 #	endif
 
 	if (numLights > 0) {
+		[loop]
 		for (float lightIndex = 0; lightIndex < numLights; ++lightIndex) {
 #	if defined(DEFSHADOW)
 			float shadowComponent;
@@ -1732,24 +1731,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			}
 #	endif
 
-#	if defined(LIGHT_LIMIT_FIX)
-#		if defined(DEFSHADOW)
-			if (!FrameParams.z && FrameParams.y && perPassLLF[0].EnableShadows && shadowComponent != 0){
-#		else
-			if (!FrameParams.z && FrameParams.y && perPassLLF[0].EnableShadows){
-# 		endif
-				float3 normalizedLightDirectionVS;
-				if (input.WorldSpace){
-					normalizedLightDirectionVS = WorldToView(normalizedLightDirection);
-				} else {
-					float3 pointLightPositionWS = mul(input.World[eyeIndex], PointLightPosition[eyeIndex * numLights + intLightIndex].xyz);
-					float3 normalizedLightDirectionWS = normalize(pointLightPositionWS - input.WorldPosition.xyz);
-					normalizedLightDirectionVS = WorldToView(normalizedLightDirectionWS);
-				}
-				lightColor *= lerp(1, ContactShadows(rayPos, screenUV, screenNoise, normalizedLightDirectionVS), saturate(lightDist / 32) * backFaceShadowMult);
-			}
-#endif
-
 #	if defined(PBR)
 			totalRadiance += GetLightRadiance(modelNormal.xyz, normalizedLightDirection, viewDirection, F0, lightColor * intensityMultiplier.xxx, baseColor.xyz, roughness, metallic);
 #	else
@@ -1777,9 +1758,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 	}
 
+	float3 screenSpaceNormal;
+    screenSpaceNormal.x = dot(input.ScreenNormalTransform0.xyz, normal.xyz);
+    screenSpaceNormal.y = dot(input.ScreenNormalTransform1.xyz, normal.xyz);
+    screenSpaceNormal.z = dot(input.ScreenNormalTransform2.xyz, normal.xyz);
+    screenSpaceNormal = normalize(screenSpaceNormal);
+	
 #if defined(LIGHT_LIMIT_FIX)
 	float clampedDepth = clamp(viewPosition.z, GetNearPlane(), GetFarPlane());
-    uint zCluster = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 24.0f / log2(GetFarPlane() / GetNearPlane()), 0.0f));
+    uint zCluster = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 24.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
     uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(16, 8));
     uint3 clusters = uint3(uint2(input.Position.xy / clusterDim), zCluster);
 
@@ -1790,16 +1777,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	uint lightCount = lightGrid[clusterIndex].lightCount;
     uint lightOffset = lightGrid[clusterIndex].offset;
 
-	float3 screenSpaceNormal;
-    screenSpaceNormal.x = dot(input.ScreenNormalTransform0.xyz, normal.xyz);
-    screenSpaceNormal.y = dot(input.ScreenNormalTransform1.xyz, normal.xyz);
-    screenSpaceNormal.z = dot(input.ScreenNormalTransform2.xyz, normal.xyz);
-    screenSpaceNormal = normalize(screenSpaceNormal);
-
 	float3 worldSpaceNormal = normalize(mul(CameraViewInverse[0], float4(screenSpaceNormal, 0)));
 	float3 worldSpaceViewDirection = -normalize(input.WorldPosition.xyz);	
 
-#	if (defined(SKINNED) || !defined(MODELSPACENORMALS))
+#	if (defined(SKINNED) || !defined(MODELSPACENORMALS)) && !defined(DRAW_IN_WORLDSPACE)
 	if (!input.WorldSpace)
 	{
 		input.TBN0.xyz = mul(tbn, input.World[eyeIndex][0].xyz);
@@ -1817,7 +1798,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
+
 	if (perPassLLF[0].EnableGlobalLights){
+		[loop]
 		for (uint i = 0; i < lightCount; i++)
 		{		
 			uint light_index = lightList[lightOffset + i];
@@ -1836,6 +1819,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			float3 nsLightColor = lightColor;
 
 			float3 normalizedLightDirection = normalize(lightDirection);
+
 
 #	if defined(CPM_AVAILABLE)
 			if (perPassParallax[0].EnableShadows) {
@@ -1861,13 +1845,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			}
 #	endif
 
-			if (!FrameParams.z && FrameParams.y && perPassLLF[0].EnableShadows){
+			if (!FrameParams.z && FrameParams.y && light.shadowMode){
 				float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection);
-				float contactShadow = 1.0;
-				if (light.firstPerson)
-					contactShadow *= ContactShadowsLong(rayPos, screenUV, screenNoise, normalizedLightDirectionVS, light.radius);
-				contactShadow *= ContactShadows(rayPos, screenUV, screenNoise, normalizedLightDirectionVS);
-				lightColor *= lerp(1.0, contactShadow, saturate(lightDist / 32) * backFaceShadowMult);	
+				if (light.shadowMode == 2)
+					lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS);
+				else
+					lightColor *= ContactShadowsLong(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius);
 			}
 			
 	#if defined(PBR)
@@ -1890,8 +1873,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			
 	#if defined (SPECULAR) || (defined (SPARKLE) && !defined(SNOW))
 			lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz, lightColor, shininess, uv) * intensityMultiplier.xxx;
-	#endif
-			
+	#endif	
 			lightsDiffuseColor += lightDiffuseColor * intensityMultiplier.xxx;
 	#endif
 		}
