@@ -24,14 +24,13 @@ struct StructuredLight
     float   radius;
 	float3  positionWS;
     float3  positionVS;
-    bool    firstPerson;
+    uint    shadowMode;
     uint    pad;
 };
 
 cbuffer PerFrame : register(b0)
 {
     row_major float4x4 InvProjMatrix; 
-    row_major float4x4 ViewMatrix; 
     float CameraNear;
     float CameraFar;
     float pad[2];

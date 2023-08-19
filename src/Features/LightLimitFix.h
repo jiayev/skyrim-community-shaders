@@ -30,7 +30,7 @@ public:
 		float radius;
 		float3 positionWS;
 		float3 positionVS;
-		uint firstPerson;
+		uint shadowMode;
 		uint pad;
 	};
 
@@ -49,7 +49,6 @@ public:
 	struct alignas(16) PerFrameLightCulling
 	{
 		float4x4 InvProjMatrix;
-		float4x4 ViewMatrix;
 		float LightsNear;
 		float LightsFar;
 		float pad[2];
@@ -63,7 +62,6 @@ public:
 		float4 CameraData;
 		float2 BufferDim;
 		uint FrameCount;
-		uint EnableContactShadows;
 	};
 
 	struct CachedParticleLight
@@ -126,7 +124,7 @@ public:
 		float ParticleLightsRadius = 100.0f;
 		float ParticleLightsRadiusBillboards = 0.5f;
 		bool EnableParticleLightsOptimization = true;
-		float ParticleLightsOptimisationClusterRadius = 32.0f;
+		uint32_t ParticleLightsOptimisationClusterRadius = 32;
 	};
 
 	float lightsNear = 0.0f;

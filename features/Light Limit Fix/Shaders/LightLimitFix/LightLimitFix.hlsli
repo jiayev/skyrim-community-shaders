@@ -10,7 +10,7 @@ struct StructuredLight
     float   radius;
 	float3  positionWS;
     float3  positionVS;
-    bool    firstPerson;
+    uint    shadowMode;
     uint    pad;
 };
 
@@ -22,7 +22,6 @@ struct PerPassLLF
     float4 CameraData;
     float2 BufferDim;
     uint FrameCount;
-    uint EnableShadows;
 };
 
 StructuredBuffer<StructuredLight>   lights          : register(t17);
@@ -45,8 +44,7 @@ float GetFarPlane()
 // Get a raw depth from the depth buffer.
 float GetDepth(float2 uv)
 {
-    // effects like screen space shadows, can get artefacts if a point sampler is used
-    return TexDepthSampler.SampleLevel(SampColorSampler, uv, 0).r;
+    return TexDepthSampler.Load(int3(uv * perPassLLF[0].BufferDim, 0));
 }
 
 bool IsSaturated(float value)  { return value == saturate(value); }
@@ -69,6 +67,7 @@ float GetScreenDepth(float depth)
 	return (perPassLLF[0].CameraData.w / (-depth * perPassLLF[0].CameraData.z + perPassLLF[0].CameraData.x));
 }
 
+
 float GetScreenDepth(float2 uv)
 {
 	float depth = GetDepth(uv);
@@ -76,51 +75,40 @@ float GetScreenDepth(float2 uv)
 }
 
 float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS)
-{   
+{     
     lightDirectionVS *= 1.5;
-  
-    //Offset starting position with interleaved gradient noise
+
+    // Offset starting position with interleaved gradient noise
     rayPos      += lightDirectionVS * offset;
 
-    float3 rayPosStep[4];
-    rayPosStep[0] = rayPos + lightDirectionVS;
-    rayPosStep[1] = rayPosStep[0] + lightDirectionVS;
-    rayPosStep[2] = rayPosStep[1] + lightDirectionVS;
-    rayPosStep[3] = rayPosStep[2] + lightDirectionVS;
+    // Accumulate samples
+    float shadow = 0.0;
+    [loop]
+    for (uint i = 0; i < 4; i++)
+    {
+        // Step the ray
+        rayPos += lightDirectionVS;
+        float2 rayUV  = ViewToUV(rayPos);
 
-    float4 rayUVStep[2];
-    rayUVStep[0].xy = ViewToUV(rayPosStep[0]);
-    rayUVStep[0].zw = ViewToUV(rayPosStep[1]);
-    rayUVStep[1].xy = ViewToUV(rayPosStep[2]);
-    rayUVStep[1].zw = ViewToUV(rayPosStep[3]);
+        // Ensure the UV coordinates are inside the screen
+        if (!IsSaturated(rayUV))
+            break;
 
-    float4 depthSteps;
-    depthSteps.x = GetDepth(rayUVStep[0].xy);
-    depthSteps.y = GetDepth(rayUVStep[0].zw);
-    depthSteps.z = GetDepth(rayUVStep[1].xy);
-    depthSteps.w = GetDepth(rayUVStep[1].zw);
+        // Compute the difference between the ray's and the camera's depth
+        float rayDepth = GetScreenDepth(rayUV);
 
-    float4 depthDelta;
-    depthDelta.x = rayPosStep[0].z - GetScreenDepth(depthSteps.x);
-    depthDelta.y = rayPosStep[1].z - GetScreenDepth(depthSteps.y);
-    depthDelta.z = rayPosStep[2].z - GetScreenDepth(depthSteps.z);
-    depthDelta.w = rayPosStep[3].z - GetScreenDepth(depthSteps.w);
-
-    depthDelta.xyzw = (saturate(depthDelta.xyzw) - saturate(depthDelta.xyzw / (depthSteps.xyzw * 10)));
+        // Difference between the current ray distance and the marched light
+        float depthDelta = rayPos.z - rayDepth;
+        if (rayDepth > 16.5) // First person
+            shadow += saturate(depthDelta) - saturate(depthDelta / (rayDepth * 0.1));
+    }
     
-    depthDelta.xyzw *= float4(
-            IsSaturated(rayUVStep[0].xy), 
-            IsSaturated(rayUVStep[0].zw),
-            IsSaturated(rayUVStep[1].xy),
-            IsSaturated(rayUVStep[1].zw)
-        );
-
-    return 1.0 - saturate((depthDelta.x + depthDelta.y + depthDelta.z + depthDelta.w) * 1.5);
+    return 1.0 - saturate(shadow);
 }
 
 float ContactShadowsLong(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, float radius)
 {     
-    lightDirectionVS *= radius / 16;
+    lightDirectionVS *= radius / 32;
 
     // Offset starting position with interleaved gradient noise
     rayPos      += lightDirectionVS * offset;
@@ -139,12 +127,12 @@ float ContactShadowsLong(float3 rayPos, float2 texcoord, float offset, float3 li
             break;
 
         // Compute the difference between the ray's and the camera's depth
-        float rayDepth =  GetScreenDepth(rayUV);
+        float rayDepth = GetScreenDepth(rayUV);
 
         // Difference between the current ray distance and the marched light
         float depthDelta = rayPos.z - rayDepth;
-        if (rayDepth > 16.5)
-            shadow += saturate(depthDelta) - saturate(depthDelta * 0.025);
+        if (rayDepth > 16.5) // First person
+            shadow += saturate(depthDelta) - saturate(depthDelta / (rayDepth * 0.4));
     }
     
     return 1.0 - saturate(shadow);
