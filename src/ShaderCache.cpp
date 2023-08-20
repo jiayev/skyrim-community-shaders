@@ -8,10 +8,10 @@
 
 #include "Features/ExtendedMaterials.h"
 #include "Features/GrassCollision.h"
+#include "Features/LightLimitFix.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/WaterBlending.h"
 #include "State.h"
-#include "Features/LightLimitFix.h"
 
 namespace SIE
 {
@@ -1055,18 +1055,20 @@ namespace SIE
 			const std::wstring path = GetShaderPath(shader.fxpFilename);
 
 			std::array<D3D_SHADER_MACRO, 64> defines;
+			auto lastIndex = 0;
 			if (shaderClass == ShaderClass::Vertex) {
-				defines[0] = { "VSHADER", nullptr };
+				defines[lastIndex++] = { "VSHADER", nullptr };
 			} else if (shaderClass == ShaderClass::Pixel) {
-				defines[0] = { "PSHADER", nullptr };
+				defines[lastIndex++] = { "PSHADER", nullptr };
 			}
-			if (!REL::Module::IsVR()) {
-				defines[1] = { nullptr, nullptr };
-			} else {
-				defines[1] = { "VR", nullptr };
-				defines[2] = { nullptr, nullptr };
+			if (State::GetSingleton()->IsDeveloperMode()) {
+				defines[lastIndex++] = { "D3DCOMPILE_SKIP_OPTIMIZATION", nullptr };
+				defines[lastIndex++] = { "D3DCOMPILE_DEBUG", nullptr };
 			}
-			GetShaderDefines(type, descriptor, &defines[(1 + (size_t)REL::Module::IsVR())]);
+			if (REL::Module::IsVR())
+				defines[lastIndex++] = { "VR", nullptr };
+			defines[lastIndex] = { nullptr, nullptr };  // do final entry
+			GetShaderDefines(type, descriptor, &defines[lastIndex]);
 
 			logger::debug("{}, {}", descriptor, MergeDefinesString(defines));
 
