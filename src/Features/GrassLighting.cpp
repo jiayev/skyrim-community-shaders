@@ -62,25 +62,17 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 			RE::NiTransform& dalcTransform = state.directionalAmbientTransform;
 			auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 
+			PerFrame perFrameData{};
+			ZeroMemory(&perFrameData, sizeof(perFrameData));
+			Util::StoreTransform3x4NoScale(perFrameData.DirectionalAmbient, dalcTransform);
+
 			if (REL::Module::IsVR()) {
-				PerFrameVR perFrameDataVR{};
-				ZeroMemory(&perFrameDataVR, sizeof(perFrameDataVR));
-				Util::StoreTransform3x4NoScale(perFrameDataVR.DirectionalAmbient, dalcTransform);
-
-				perFrameDataVR.SunlightScale = imageSpaceManager->data.baseData.cinematic.brightness;
-				perFrameDataVR.Settings = settings;
-
-				perFrame->Update(perFrameDataVR);
+				perFrameData.SunlightScale = imageSpaceManager->data.baseData.cinematic.brightness;
 			} else {
-				PerFrame perFrameData{};
-				ZeroMemory(&perFrameData, sizeof(perFrameData));
-				Util::StoreTransform3x4NoScale(perFrameData.DirectionalAmbient, dalcTransform);
-
 				perFrameData.SunlightScale = imageSpaceManager->data.baseData.hdr.sunlightScale;
-				perFrameData.Settings = settings;
-
-				perFrame->Update(perFrameData);
 			}
+			perFrameData.Settings = settings;
+			perFrame->Update(perFrameData);
 
 			updatePerFrame = false;
 		}
@@ -119,7 +111,7 @@ void GrassLighting::Save(json& o_json)
 
 void GrassLighting::SetupResources()
 {
-	perFrame = !REL::Module::IsVR() ? new ConstantBuffer(ConstantBufferDesc<PerFrame>()) : new ConstantBuffer(ConstantBufferDesc<PerFrameVR>());
+	perFrame = new ConstantBuffer(ConstantBufferDesc<PerFrame>());
 }
 
 void GrassLighting::Reset()
