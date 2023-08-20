@@ -1695,10 +1695,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			float3 lightDirection = PointLightPosition[eyeIndex * numLights + intLightIndex].xyz - input.InputPosition.xyz;
 			float lightDist = length(lightDirection);
 			float intensityFactor = saturate(lightDist / PointLightPosition[intLightIndex].w);
+			if (intensityFactor == 1)
+					continue;
 			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-
-			if (!(intensityMultiplier > 0.0))
-				continue;
 
 			float3 lightColor = PointLightColor[intLightIndex].xyz;
 			float3 nsLightColor = lightColor;
@@ -1765,117 +1764,105 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
     screenSpaceNormal = normalize(screenSpaceNormal);
 	
 #if defined(LIGHT_LIMIT_FIX)
-	float clampedDepth = clamp(viewPosition.z, GetNearPlane(), GetFarPlane());
-    uint zCluster = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 24.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
-    uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(16, 8));
-    uint3 clusters = uint3(uint2(input.Position.xy / clusterDim), zCluster);
+	if (perPassLLF[0].EnableGlobalLights){
+		float clampedDepth = clamp(viewPosition.z, GetNearPlane(), GetFarPlane());
+		
+		uint  clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 24.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
+		uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(16, 8));
+		uint3 cluster = uint3(uint2(input.Position.xy / clusterDim), clusterZ);
+		uint  clusterIndex = cluster.x + (16 * cluster.y) + (16 * 8 * cluster.z);
+		
+		uint lightCount = lightGrid[clusterIndex].lightCount;
 
-    uint clusterIndex = clusters.x +
-                     16 * clusters.y +
-                     (16 * 8) * clusters.z;
-    
-	uint lightCount = lightGrid[clusterIndex].lightCount;
-    uint lightOffset = lightGrid[clusterIndex].offset;
+		if (lightCount > 0){
+			uint lightOffset = lightGrid[clusterIndex].offset;
 
-	float3 worldSpaceNormal = normalize(mul(CameraViewInverse[0], float4(screenSpaceNormal, 0)));
-	float3 worldSpaceViewDirection = -normalize(input.WorldPosition.xyz);	
+			float3 worldSpaceNormal = normalize(mul(CameraViewInverse[0], float4(screenSpaceNormal, 0)));
+			float3 worldSpaceViewDirection = -normalize(input.WorldPosition.xyz);	
 
 #	if (defined(SKINNED) || !defined(MODELSPACENORMALS)) && !defined(DRAW_IN_WORLDSPACE)
-	if (!input.WorldSpace)
-	{
-		input.TBN0.xyz = mul(tbn, input.World[eyeIndex][0].xyz);
-		input.TBN1.xyz = mul(tbn, input.World[eyeIndex][1].xyz);
-		input.TBN2.xyz = mul(tbn, input.World[eyeIndex][2].xyz);
-		float3x3 tempTbnTr = transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz));
-		tempTbnTr[0] = normalize(tempTbnTr[0]);
-		tempTbnTr[1] = normalize(tempTbnTr[1]);
-		tempTbnTr[2] = normalize(tempTbnTr[2]);
-		tempTbnTr = transpose(tempTbnTr);
-		input.TBN0.xyz = tempTbnTr[0];
-		input.TBN1.xyz = tempTbnTr[1];
-		input.TBN2.xyz = tempTbnTr[2];
-		tbn = float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz);
-	}
-#	endif
-
-
-	if (perPassLLF[0].EnableGlobalLights){
-		[loop]
-		for (uint i = 0; i < lightCount; i++)
-		{		
-			uint light_index = lightList[lightOffset + i];
-			StructuredLight light = lights[light_index];
-
-			float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
-			float lightDist = length(lightDirection);
-			float intensityFactor = saturate(lightDist / light.radius);
-			if (intensityFactor == 1)
-				continue;
-
-			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-			
-			float3 lightColor = light.color.xyz;
-
-			float3 nsLightColor = lightColor;
-
-			float3 normalizedLightDirection = normalize(lightDirection);
-
-
-#	if defined(CPM_AVAILABLE)
-			if (perPassParallax[0].EnableShadows) {
-				float3 lightDirectionTS = mul(normalizedLightDirection, tbn).xyz;
-
-				bool lightIsLit = true;
-
-#		if defined(DEFSHADOW) && defined(SHADOW_DIR)
-				if (shadowComponent.x == 0)
-					lightIsLit = false;
-#		endif
-
-#		if defined(PARALLAX)
-				if (perPassParallax[0].EnableParallax)
-					lightColor *= GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, lightIsLit * parallaxShadowQuality);
-#		elif defined(LANDSCAPE)
-				if (perPassParallax[0].EnableTerrainParallax)
-					lightColor *= GetParallaxSoftShadowMultiplierTerrain(input, terrainUVs, mipLevel, lightDirectionTS, sh0, lightIsLit * parallaxShadowQuality);
-#		elif defined(ENVMAP)
-				if (complexMaterialParallax)
-					lightColor *= GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, lightIsLit * parallaxShadowQuality);
-#		endif
+			if (!input.WorldSpace)
+			{
+				input.TBN0.xyz = mul(tbn, input.World[eyeIndex][0].xyz);
+				input.TBN1.xyz = mul(tbn, input.World[eyeIndex][1].xyz);
+				input.TBN2.xyz = mul(tbn, input.World[eyeIndex][2].xyz);
+				float3x3 tempTbnTr = transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz));
+				tempTbnTr[0] = normalize(tempTbnTr[0]);
+				tempTbnTr[1] = normalize(tempTbnTr[1]);
+				tempTbnTr[2] = normalize(tempTbnTr[2]);
+				tempTbnTr = transpose(tempTbnTr);
+				input.TBN0.xyz = tempTbnTr[0];
+				input.TBN1.xyz = tempTbnTr[1];
+				input.TBN2.xyz = tempTbnTr[2];
+				tbn = float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz);
 			}
 #	endif
+			[loop]
+			for (uint i = 0; i < lightCount; i++)
+			{		
+				uint light_index = lightList[lightOffset + i];
+				StructuredLight light = lights[light_index];
 
-			if (!FrameParams.z && FrameParams.y && light.shadowMode){
-				float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection);
-				if (light.shadowMode == 2)
-					lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS);
-				else
-					lightColor *= ContactShadowsLong(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius);
+				float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
+				float lightDist = length(lightDirection);
+				float intensityFactor = saturate(lightDist / light.radius);
+				if (intensityFactor == 1)
+					continue;
+
+				float intensityMultiplier = 1 - intensityFactor * intensityFactor;		
+				float3 lightColor = light.color.xyz;
+				float3 nsLightColor = lightColor;
+				float3 normalizedLightDirection = normalize(lightDirection);
+
+				if (!FrameParams.z && FrameParams.y && light.shadowMode){
+					float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection);
+					if (light.shadowMode == 2)
+						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS);
+					else
+						lightColor *= ContactShadowsLong(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius);
+				}
+				
+	#	if defined(CPM_AVAILABLE)
+				if (perPassParallax[0].EnableShadows) {
+					float3 lightDirectionTS = mul(normalizedLightDirection, tbn).xyz;
+
+	#		if defined(PARALLAX)
+					if (perPassParallax[0].EnableParallax)
+						lightColor *= GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, parallaxShadowQuality);
+	#		elif defined(LANDSCAPE)
+					if (perPassParallax[0].EnableTerrainParallax)
+						lightColor *= GetParallaxSoftShadowMultiplierTerrain(input, terrainUVs, mipLevel, lightDirectionTS, sh0, parallaxShadowQuality);
+	#		elif defined(ENVMAP)
+					if (complexMaterialParallax)
+						lightColor *= GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, parallaxShadowQuality);
+	#		endif
+				}
+	#	endif
+				
+		#if defined(PBR)
+				totalRadiance += GetLightRadiance(worldSpaceNormal.xyz, normalizedLightDirection, worldSpaceViewDirection, F0, lightColor * intensityMultiplier.xxx, baseColor.xyz, roughness, metallic);
+		#else
+				float lightAngle = dot(worldSpaceNormal.xyz, normalizedLightDirection.xyz);
+				float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
+				
+		#if defined (SOFT_LIGHTING)
+				lightDiffuseColor += nsLightColor * GetSoftLightMultiplier(dot(worldSpaceNormal.xyz, lightDirection.xyz)) * rimSoftLightColor.xyz;
+		#endif
+				
+		#if defined (RIM_LIGHTING)
+				lightDiffuseColor += nsLightColor * GetRimLightMultiplier(normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz) * rimSoftLightColor.xyz;
+		#endif
+
+		#if defined (BACK_LIGHTING)
+				lightDiffuseColor += (saturate(-lightAngle) * backLightColor.xyz) * nsLightColor;
+		#endif
+				
+		#if defined (SPECULAR) || (defined (SPARKLE) && !defined(SNOW))
+				lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz, lightColor, shininess, uv) * intensityMultiplier.xxx;
+		#endif	
+				lightsDiffuseColor += lightDiffuseColor * intensityMultiplier.xxx;
+		#endif
 			}
-			
-	#if defined(PBR)
-			totalRadiance += GetLightRadiance(worldSpaceNormal.xyz, normalizedLightDirection, worldSpaceViewDirection, F0, lightColor * intensityMultiplier.xxx, baseColor.xyz, roughness, metallic);
-	#else
-			float lightAngle = dot(worldSpaceNormal.xyz, normalizedLightDirection.xyz);
-			float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
-			
-	#if defined (SOFT_LIGHTING)
-			lightDiffuseColor += nsLightColor * GetSoftLightMultiplier(dot(worldSpaceNormal.xyz, lightDirection.xyz)) * rimSoftLightColor.xyz;
-	#endif
-			
-	#if defined (RIM_LIGHTING)
-			lightDiffuseColor += nsLightColor * GetRimLightMultiplier(normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz) * rimSoftLightColor.xyz;
-	#endif
-
-	#if defined (BACK_LIGHTING)
-			lightDiffuseColor += (saturate(-lightAngle) * backLightColor.xyz) * nsLightColor;
-	#endif
-			
-	#if defined (SPECULAR) || (defined (SPARKLE) && !defined(SNOW))
-			lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz, lightColor, shininess, uv) * intensityMultiplier.xxx;
-	#endif	
-			lightsDiffuseColor += lightDiffuseColor * intensityMultiplier.xxx;
-	#endif
 		}
 	}
 #	endif
