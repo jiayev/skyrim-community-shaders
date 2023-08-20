@@ -1,8 +1,9 @@
 #include "LightLimitFix.h"
 
+#include <PerlinNoise.hpp>
+
 #include "State.h"
 #include "Util.h"
-#include <detours/Detours.h>
 
 constexpr std::uint32_t CLUSTER_SIZE_X = 16;
 constexpr std::uint32_t CLUSTER_SIZE_Y = 8;
@@ -538,6 +539,11 @@ void LightLimitFix::UpdateLights()
 
 	eastl::vector<LightData> lightsData{};
 
+	static float* g_deltaTime = (float*)RELOCATION_ID(523660, 410199).address();  // 2F6B948, 30064C8
+	static double timer = 0;
+	if (!RE::UI::GetSingleton()->GameIsPaused())
+		timer += *g_deltaTime;
+
 	for (auto& e : shadowSceneNode->GetRuntimeData().activePointLights) {
 		if (auto bsLight = e.get()) {
 			if (auto niLight = bsLight->light.get()) {
@@ -545,21 +551,23 @@ void LightLimitFix::UpdateLights()
 					LightData light{};
 
 					float dimmer = niLight->GetLightRuntimeData().fade * bsLight->lodDimmer;
-					light.color.x = niLight->GetLightRuntimeData().diffuse.red * dimmer;
-					light.color.y = niLight->GetLightRuntimeData().diffuse.green * dimmer;
-					light.color.z = niLight->GetLightRuntimeData().diffuse.blue * dimmer;
-					light.radius = niLight->GetLightRuntimeData().radius.x;
+					if (dimmer != 0) {
+						light.color.x = niLight->GetLightRuntimeData().diffuse.red * dimmer;
+						light.color.y = niLight->GetLightRuntimeData().diffuse.green * dimmer;
+						light.color.z = niLight->GetLightRuntimeData().diffuse.blue * dimmer;
+						light.radius = niLight->GetLightRuntimeData().radius.x;
 
-					auto worldPos = niLight->world.translate - state->posAdjust.getEye();
-					light.positionWS.x = worldPos.x;
-					light.positionWS.y = worldPos.y;
-					light.positionWS.z = worldPos.z;
-					light.positionVS = DirectX::SimpleMath::Vector3::Transform(light.positionWS, state->cameraData.getEye().viewMat);
+						auto worldPos = niLight->world.translate - state->posAdjust.getEye();
+						light.positionWS.x = worldPos.x;
+						light.positionWS.y = worldPos.y;
+						light.positionWS.z = worldPos.z;
+						light.positionVS = DirectX::SimpleMath::Vector3::Transform(light.positionWS, state->cameraData.getEye().viewMat);
 
-					light.shadowMode = bsLight == firstPersonLight || bsLight == thirdPersonLight || niLight == refLight || niLight == magicLight;
+						light.shadowMode = bsLight == firstPersonLight || bsLight == thirdPersonLight || niLight == refLight || niLight == magicLight;
 
-					lightsData.push_back(light);
-					currentLightCount++;
+						lightsData.push_back(light);
+						currentLightCount++;
+					}
 				}
 			}
 		}
@@ -610,7 +618,7 @@ void LightLimitFix::UpdateLights()
 							}
 
 							if (dimmer != 0) {
-								if (light.color.x > 0 && light.color.y > 0 && light.color.z > 0 && light.radius > 0) {
+								if ((light.color.x > 0 || light.color.y > 0 || light.color.z > 0) && light.radius > 0) {
 									CachedParticleLight cachedParticleLight{};
 									cachedParticleLight.color = { light.color.x, light.color.y, light.color.z };
 									cachedParticleLight.position = { light.positionWS.x + state->posAdjust.getEye().x, light.positionWS.y + state->posAdjust.getEye().y, light.positionWS.z + state->posAdjust.getEye().z };
@@ -660,7 +668,7 @@ void LightLimitFix::UpdateLights()
 					}
 
 					if (dimmer != 0) {
-						if (light.color.x > 0 && light.color.y > 0 && light.color.z > 0 && light.radius > 0) {
+						if ((light.color.x > 0 || light.color.y > 0 || light.color.z > 0) && light.radius > 0) {
 							CachedParticleLight cachedParticleLight{};
 							cachedParticleLight.color = { light.color.x, light.color.y, light.color.z };
 							cachedParticleLight.position = { light.positionWS.x + state->posAdjust.getEye().x, light.positionWS.y + state->posAdjust.getEye().y, light.positionWS.z + state->posAdjust.getEye().z };
@@ -708,7 +716,22 @@ void LightLimitFix::UpdateLights()
 				}
 
 				if (dimmer != 0) {
-					if (light.color.x > 0 && light.color.y > 0 && light.color.z > 0 && light.radius > 0) {
+					if ((light.color.x > 0 || light.color.y > 0 || light.color.z > 0) && light.radius > 0) {
+						{
+							auto seed = (std::uint32_t)std::hash<void*>{}(particleLight.first);
+
+							siv::PerlinNoise perlin1{ seed };
+							siv::PerlinNoise perlin2{ seed + 1 };
+							siv::PerlinNoise perlin3{ seed + 2 };
+							siv::PerlinNoise perlin4{ seed + 3 };
+
+							light.positionWS.x += (float)perlin1.noise1D(timer) * 5.0f;
+							light.positionWS.y += (float)perlin2.noise1D(timer) * 5.0f;
+							light.positionWS.z += (float)perlin3.noise1D(timer) * 5.0f;
+
+							dimmer = std::max(0.0f, dimmer - ((float)perlin4.noise1D_01(timer) * 0.5f));
+						}
+
 						CachedParticleLight cachedParticleLight{};
 						cachedParticleLight.color = { light.color.x, light.color.y, light.color.z };
 						cachedParticleLight.position = { light.positionWS.x + state->posAdjust.getEye().x, light.positionWS.y + state->posAdjust.getEye().y, light.positionWS.z + state->posAdjust.getEye().z };
