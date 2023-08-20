@@ -368,23 +368,20 @@ void LightLimitFix::Bind()
 	}
 
 	{
-		ID3D11ShaderResourceView* views[2]{};
+		ID3D11ShaderResourceView* views[1]{};
 		views[0] = perPass->srv.get();
-		views[1] = strictLights ? strictLights->srv.get() : nullptr;
 		context->PSSetShaderResources(32, ARRAYSIZE(views), views);
 	}
 }
 
 bool LightLimitFix::IsValidLight(RE::BSLight* a_light)
 {
-	using func_t = decltype(&LightLimitFix::IsValidLight);
-	static REL::Relocation<func_t> func{ REL::RelocationID(98902, 105550) };
 	return a_light && a_light->unk05C != 255 && !a_light->light->GetFlags().any(RE::NiAVObject::Flag::kHidden);
 }
 
 bool LightLimitFix::IsGlobalLight(RE::BSLight* a_light)
 {
-	return !(a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light));
+	return !(a_light->portalStrict || !a_light->portalGraph);
 }
 
 struct VertexColor

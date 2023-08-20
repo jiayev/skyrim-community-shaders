@@ -1,3 +1,4 @@
+#include "Common/Color.hlsl"
 #include "Common/FrameBuffer.hlsl"
 #include "Common/MotionBlur.hlsl"
 
@@ -37,7 +38,8 @@ struct VS_OUTPUT
 #endif      // RENDER_DEPTH
 	float4 WorldPosition : POSITION1;
 	float4 PreviousWorldPosition : POSITION2;
-	float4 VertexNormal : POSITION4;
+	float3 VertexNormal : POSITION4;
+	float4 FlatNormal : POSITION5;
 #ifdef VR
 	float ClipDistance : SV_ClipDistance0;
 	float CullDistance : SV_CullDistance0;
@@ -96,19 +98,15 @@ cbuffer PerFrame : register(
 #endif
 				   )
 {
-#if !defined(VR)
-	float4 EyePosition[1];
-#else
-	float4 EyePosition[2];
-#endif  //! VR
 	row_major float3x4 DirectionalAmbient;
 	float SunlightScale;
 	float Glossiness;
 	float SpecularStrength;
 	float SubsurfaceScatteringAmount;
 	bool EnableDirLightFix;
-	bool EnablePointLights;
-	float pad[2];
+	float Brightness;
+	float Saturation;
+	float pad[1];
 }
 
 #ifdef VSHADER
@@ -269,10 +267,9 @@ clipPositionOut = clipPos
 #	endif  // !VR
 
 	// Vertex normal needs to be transformed to world-space for lighting calculations.
-	float3 vertexNormal = input.Normal.xyz * 2.0 - 1.0;
-	vertexNormal = mul(world3x3, vertexNormal);
-	vsout.VertexNormal.xyz = vertexNormal;
-	vsout.VertexNormal.w = input.Color.w;
+	vsout.VertexNormal.xyz = mul(world3x3, input.Normal.xyz * 2.0 - 1.0);
+	vsout.FlatNormal.xyz = mul(world3x3, float3(0, 0, 1));
+	vsout.FlatNormal.w = input.Color.w;
 
 	return vsout;
 }
@@ -446,7 +443,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (!frontFace)
 		worldNormal.xyz = -worldNormal.xyz;
 
-	worldNormal.xyz = normalize(lerp(worldNormal.xyz, float3(0, 0, 1), input.VertexNormal.w));
+	worldNormal.xyz = normalize(lerp(worldNormal.xyz, normalize(input.FlatNormal.xyz), saturate(input.FlatNormal.w)));
 
 	if (complex) {
 		float3 normalColor = float4(TransformNormal(specColor.xyz), 1);
@@ -459,7 +456,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		specColor.w = length(baseColor.xyz) / 3.0;
 	}
 
-	baseColor.xyz *= 0.75;
+	baseColor.xyz *= Brightness;
+	baseColor.xyz = lerp(RGBToLuminance(baseColor.xyz), baseColor.xyz, Saturation);
 
 	float3 dirLightColor = DirLightColor.xyz;
 	if (EnableDirLightFix) {
@@ -486,7 +484,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	// Generated texture to simulate light transport.
 	// Numerous attempts were made to use a more interesting algorithm however they were mostly fruitless.
-	float3 subsurfaceColor = baseColor.xyz;
+	float3 subsurfaceColor = normalize(baseColor.xyz);
 
 	// Applies lighting across the whole surface apart from what is already lit.
 	lightsDiffuseColor += subsurfaceColor * dirLightColor * GetSoftLightMultiplier(dirLightAngle, SubsurfaceScatteringAmount);
@@ -534,16 +532,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			float3 normalizedLightDirection = normalize(lightDirection);
 
 			float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
-			float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
 			float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
 			if (light.shadowMode == 2)
 				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, eyeIndex);
-			else
+			else if (light.shadowMode == 1)
 				lightColor *= ContactShadowsLong(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, eyeIndex);
 
-			lightDiffuseColor += subsurfaceColor * lightColor * GetSoftLightMultiplier(lightAngle, SubsurfaceScatteringAmount);
-			lightDiffuseColor += subsurfaceColor * lightColor * saturate(-lightAngle) * SubsurfaceScatteringAmount;
+			float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
+
+			lightDiffuseColor += subsurfaceColor * nsLightColor * GetSoftLightMultiplier(lightAngle, SubsurfaceScatteringAmount);
+			lightDiffuseColor += subsurfaceColor * nsLightColor * saturate(-lightAngle) * SubsurfaceScatteringAmount;
 
 			lightsSpecularColor += GetLightSpecularInput(normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
 			lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;

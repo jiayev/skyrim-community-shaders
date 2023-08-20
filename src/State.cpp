@@ -6,7 +6,6 @@
 #include "ShaderCache.h"
 
 #include "Feature.h"
-#include "Features/Clustered.h"
 
 void State::Draw()
 {
@@ -39,7 +38,6 @@ void State::Draw()
 
 void State::Reset()
 {
-	Clustered::GetSingleton()->Reset();
 	for (auto* feature : Feature::GetFeatureList())
 		feature->Reset();
 }
