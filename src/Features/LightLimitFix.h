@@ -28,8 +28,8 @@ public:
 	{
 		float3 color;
 		float radius;
-		float3 positionWS;
-		float3 positionVS;
+		float3 positionWS[2];
+		float3 positionVS[2];
 		uint shadowMode;
 		uint pad;
 	};
@@ -48,7 +48,7 @@ public:
 
 	struct alignas(16) PerFrameLightCulling
 	{
-		float4x4 InvProjMatrix;
+		float4x4 InvProjMatrix[2];
 		float LightsNear;
 		float LightsFar;
 		float pad[2];
@@ -67,13 +67,14 @@ public:
 	struct CachedParticleLight
 	{
 		RE::NiColor color;
-		RE::NiPoint3 position;
+		RE::NiPoint3 position[2];
 		float radius;
 	};
 
 	std::unique_ptr<Buffer> perPass = nullptr;
 
 	bool rendered = false;
+	int eyeCount = !REL::Module::IsVR() ? 1 : 2;
 
 	ID3D11ComputeShader* clusterBuildingCS = nullptr;
 	ID3D11ComputeShader* clusterCullingCS = nullptr;
@@ -106,6 +107,9 @@ public:
 	virtual void DrawSettings();
 	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
 
+	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
+	bool AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, float dimmer, float dimmerMult = 1.0f, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
+	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3& a_initialPosition);
 	void UpdateLights();
 	void Bind();
 
@@ -149,7 +153,7 @@ public:
 	};
 
 	std::shared_mutex cachedParticleLightsMutex;
-	eastl::vector<CachedParticleLight> cachedParticleLights;
+	eastl::vector<CachedParticleLight> cachedParticleLights[2];
 	uint32_t particleLightsDetectionHits = 0;
 
 	float CalculateLuminance(CachedParticleLight& light, RE::NiPoint3& point);

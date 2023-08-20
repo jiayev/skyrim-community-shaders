@@ -1,88 +1,85 @@
 #include "Common.hlsli"
 
-//references 
+//references
 //https://github.com/pezcode/Cluster
 
-StructuredBuffer<ClusterAABB> clusters      : register(t0);
-StructuredBuffer<StructuredLight> lights    : register(t1);
+StructuredBuffer<ClusterAABB> clusters : register(t0);
+StructuredBuffer<StructuredLight> lights : register(t1);
 
-RWStructuredBuffer<uint> lightIndexCounter    : register(u0); //1
-RWStructuredBuffer<uint> lightIndexList       : register(u1); //MAX_CLUSTER_LIGHTS * 16^3
-RWStructuredBuffer<LightGrid> lightGrid        : register(u2); //16^3
+RWStructuredBuffer<uint> lightIndexCounter : register(u0);  //1
+RWStructuredBuffer<uint> lightIndexList : register(u1);     //MAX_CLUSTER_LIGHTS * 16^3
+RWStructuredBuffer<LightGrid> lightGrid : register(u2);     //16^3
 
 groupshared StructuredLight sharedLights[GROUP_SIZE];
 
 bool LightIntersectsCluster(StructuredLight light, ClusterAABB cluster)
 {
-    float3 closest = max(cluster.minPoint, min(light.positionVS.xyz, cluster.maxPoint)).xyz;
+	// For now, only use left eye position
+	float3 closest = max(cluster.minPoint, min(light.positionVS[0].xyz, cluster.maxPoint)).xyz;
 
-    float3 dist = closest - light.positionVS.xyz;
-    return dot(dist, dist) <= (light.radius * light.radius);
+	float3 dist = closest - light.positionVS[0].xyz;
+	return dot(dist, dist) <= (light.radius * light.radius);
 }
 
-[numthreads(16, 8, 8)]
-void main(uint3 groupId : SV_GroupID,
-          uint3 dispatchThreadId : SV_DispatchThreadID,
-          uint3 groupThreadId : SV_GroupThreadID,
-          uint groupIndex : SV_GroupIndex)
-{ 
-    if (all(dispatchThreadId == 0))
-    {
-        lightIndexCounter[0] = 0;
-    }
-        
-    uint visibleLightCount = 0;
-    uint visibleLightIndices[MAX_CLUSTER_LIGHTS];
-    
-    uint clusterIndex = groupIndex + GROUP_SIZE * groupId.z;
-    
-    ClusterAABB cluster = clusters[clusterIndex];
-    
-    uint lightOffset = 0;
-    uint lightCount, dummy;
-    lights.GetDimensions(lightCount, dummy);
-     
-    while (lightOffset < lightCount)
-    {
-        uint batchSize = min(GROUP_SIZE, lightCount - lightOffset);
-        
-        if(groupIndex < batchSize)
-        {
-            uint lightIndex = lightOffset + groupIndex;
-            
-            StructuredLight light = lights[lightIndex];
-            
-            sharedLights[groupIndex] = light;
-        }
-        
-        GroupMemoryBarrierWithGroupSync();
+[numthreads(16, 8, 8)] void main(uint3 groupId
+								 : SV_GroupID,
+								 uint3 dispatchThreadId
+								 : SV_DispatchThreadID,
+								 uint3 groupThreadId
+								 : SV_GroupThreadID,
+								 uint groupIndex
+								 : SV_GroupIndex) {
+	if (all(dispatchThreadId == 0)) {
+		lightIndexCounter[0] = 0;
+	}
 
-        for (uint i = 0; i < batchSize; i++)
-        {
-            StructuredLight light = lights[i];
-            
-            if (visibleLightCount < MAX_CLUSTER_LIGHTS && LightIntersectsCluster(light, cluster))
-            {
-                visibleLightIndices[visibleLightCount] = lightOffset + i;
-                visibleLightCount++;
-            }
-        }
+	uint visibleLightCount = 0;
+	uint visibleLightIndices[MAX_CLUSTER_LIGHTS];
 
-        lightOffset += batchSize;
-    }
-    
-    GroupMemoryBarrierWithGroupSync();
-    
-    uint offset = 0;
-    InterlockedAdd(lightIndexCounter[0], visibleLightCount, offset);
+	uint clusterIndex = groupIndex + GROUP_SIZE * groupId.z;
 
-    for (uint i = 0; i < visibleLightCount; i++)
-    {
-        lightIndexList[offset + i] = visibleLightIndices[i];
-    }
-    
-    lightGrid[clusterIndex].offset = offset; 
-    lightGrid[clusterIndex].lightCount = visibleLightCount;
+	ClusterAABB cluster = clusters[clusterIndex];
+
+	uint lightOffset = 0;
+	uint lightCount, dummy;
+	lights.GetDimensions(lightCount, dummy);
+
+	while (lightOffset < lightCount) {
+		uint batchSize = min(GROUP_SIZE, lightCount - lightOffset);
+
+		if (groupIndex < batchSize) {
+			uint lightIndex = lightOffset + groupIndex;
+
+			StructuredLight light = lights[lightIndex];
+
+			sharedLights[groupIndex] = light;
+		}
+
+		GroupMemoryBarrierWithGroupSync();
+
+		for (uint i = 0; i < batchSize; i++) {
+			StructuredLight light = lights[i];
+
+			if (visibleLightCount < MAX_CLUSTER_LIGHTS && LightIntersectsCluster(light, cluster)) {
+				visibleLightIndices[visibleLightCount] = lightOffset + i;
+				visibleLightCount++;
+			}
+		}
+
+		lightOffset += batchSize;
+	}
+
+	GroupMemoryBarrierWithGroupSync();
+
+	uint offset = 0;
+	InterlockedAdd(lightIndexCounter[0], visibleLightCount, offset);
+
+	for (uint i = 0; i < visibleLightCount; i++) {
+		lightIndexList[offset + i] = visibleLightIndices[i];
+	}
+
+	lightGrid[clusterIndex].offset = offset;
+	lightGrid[clusterIndex].lightCount = visibleLightCount;
 }
 
 //https://www.3dgep.com/forward-plus/#Grid_Frustums_Compute_Shader
