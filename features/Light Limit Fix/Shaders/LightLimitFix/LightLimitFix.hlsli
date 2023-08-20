@@ -27,7 +27,10 @@ struct PerPassLLF
 StructuredBuffer<StructuredLight>   lights          : register(t17);
 StructuredBuffer<uint>              lightList       : register(t18); //MAX_CLUSTER_LIGHTS * 16^3
 StructuredBuffer<LightGrid>         lightGrid       : register(t19); //16^3
-Texture2D<float4>                   TexDepthSampler : register(t20);
+
+#if !defined(SCREEN_SPACE_SHADOWS)
+Texture2D<float4> TexDepthSampler : register(t20);
+#endif  // SCREEN_SPACE_SHADOWS
 
 StructuredBuffer<PerPassLLF>        perPassLLF : register(t32);
 
@@ -116,7 +119,7 @@ float ContactShadowsLong(float3 rayPos, float2 texcoord, float offset, float3 li
     // Accumulate samples
     float shadow = 0.0;
     [loop]
-    for (uint i = 0; i < 16; i++)
+    for (uint i = 0; i < 32; i++)
     {
         // Step the ray
         rayPos += lightDirectionVS;
