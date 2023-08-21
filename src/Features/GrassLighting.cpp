@@ -3,15 +3,13 @@
 #include "State.h"
 #include "Util.h"
 
-#include "Features/Clustered.h"
-
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	GrassLighting::Settings,
 	Glossiness,
 	SpecularStrength,
 	SubsurfaceScatteringAmount,
 	EnableDirLightFix,
-	EnablePointLights)
+	Brightness)
 
 enum class GrassShaderTechniques
 {
@@ -41,12 +39,15 @@ void GrassLighting::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::TextWrapped("Fix for grass not being affected by sunlight scale.");
 		ImGui::Checkbox("Enable Directional Light Fix", (bool*)&settings.EnableDirLightFix);
-
-		ImGui::TextWrapped("Enables point lights on grass like other objects. Slightly impacts performance if there are a lot of lights.");
-		ImGui::Checkbox("Enable Point Lights", (bool*)&settings.EnablePointLights);
+		
+		ImGui::TextWrapped("Darkens the grass textures to look better with the new lighting");
+		ImGui::SliderFloat("Brightness", &settings.Brightness, 0.0f, 1.0f);
+	
+		ImGui::TextWrapped("Boosts the vibrancy of textures");
+		ImGui::SliderFloat("Saturation", &settings.Saturation, 1.0f, 2.0f);
 
 		ImGui::TreePop();
 	}
@@ -57,31 +58,16 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 	const auto technique = descriptor & 0b1111;
 	if (technique != static_cast<uint32_t>(GrassShaderTechniques::RenderDepth)) {
 		if (updatePerFrame) {
-			auto& shaderState = RE::BSShaderManager::State::GetSingleton();
-			auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-			auto& position = accumulator->GetRuntimeData().eyePosition;
-			auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-			RE::NiTransform& dalcTransform = shaderState.directionalAmbientTransform;
-			auto manager = RE::ImageSpaceManager::GetSingleton();
+			auto& state = RE::BSShaderManager::State::GetSingleton();
+			RE::NiTransform& dalcTransform = state.directionalAmbientTransform;
+			auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 
 			if (REL::Module::IsVR()) {
 				PerFrameVR perFrameDataVR{};
 				ZeroMemory(&perFrameDataVR, sizeof(perFrameDataVR));
 				Util::StoreTransform3x4NoScale(perFrameDataVR.DirectionalAmbient, dalcTransform);
 
-				RE::NiPoint3 eyePosition = state->GetVRRuntimeData().posAdjust.getEye();
-
-				perFrameDataVR.EyePosition.x = position.x - eyePosition.x;
-				perFrameDataVR.EyePosition.y = position.y - eyePosition.y;
-				perFrameDataVR.EyePosition.z = position.z - eyePosition.z;
-
-				eyePosition = state->GetVRRuntimeData().posAdjust.getEye(1);
-				perFrameDataVR.EyePosition2.x = position.x - eyePosition.x;
-				perFrameDataVR.EyePosition2.y = position.y - eyePosition.y;
-				perFrameDataVR.EyePosition2.z = position.z - eyePosition.z;
-
-				perFrameDataVR.SunlightScale = manager->data.baseData.cinematic.brightness;
-
+				perFrameDataVR.SunlightScale = imageSpaceManager->data.baseData.cinematic.brightness;
 				perFrameDataVR.Settings = settings;
 
 				perFrame->Update(perFrameDataVR);
@@ -90,14 +76,7 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 				ZeroMemory(&perFrameData, sizeof(perFrameData));
 				Util::StoreTransform3x4NoScale(perFrameData.DirectionalAmbient, dalcTransform);
 
-				RE::NiPoint3 eyePosition = state->GetRuntimeData().posAdjust.getEye();
-
-				perFrameData.EyePosition.x = position.x - eyePosition.x;
-				perFrameData.EyePosition.y = position.y - eyePosition.y;
-				perFrameData.EyePosition.z = position.z - eyePosition.z;
-
-				perFrameData.SunlightScale = manager->data.baseData.hdr.sunlightScale;
-
+				perFrameData.SunlightScale = imageSpaceManager->data.baseData.hdr.sunlightScale;
 				perFrameData.Settings = settings;
 
 				perFrame->Update(perFrameData);
@@ -106,7 +85,6 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 			updatePerFrame = false;
 		}
 
-		Clustered::GetSingleton()->Bind(true);
 		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
 		ID3D11Buffer* buffers[2];
