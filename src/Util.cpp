@@ -1,4 +1,5 @@
 #include "Util.h"
+#include "State.h"
 
 #include <d3dcompiler.h>
 
@@ -120,7 +121,10 @@ namespace Util
 
 		if (REL::Module::IsVR())
 			macros.push_back({ "VR", "" });
-
+		if (State::GetSingleton()->IsDeveloperMode()) {
+			macros.push_back({ "D3DCOMPILE_SKIP_OPTIMIZATION", "" });
+			macros.push_back({ "D3DCOMPILE_DEBUG", "" });
+		}
 		if (!_stricmp(ProgramType, "ps_5_0"))
 			macros.push_back({ "PIXELSHADER", "" });
 		else if (!_stricmp(ProgramType, "vs_5_0"))

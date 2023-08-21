@@ -32,14 +32,6 @@ struct GrassLighting : Feature
 		float pad[1];
 	};
 
-	struct alignas(16) PerFrameVR
-	{
-		DirectX::XMFLOAT3X4 DirectionalAmbient;
-		float SunlightScale;
-		Settings Settings;
-		float pad[1];
-	};
-
 	Settings settings;
 
 	bool updatePerFrame = false;

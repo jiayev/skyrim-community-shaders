@@ -54,6 +54,7 @@ void LightLimitFix::DrawSettings()
 	if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());
 		ImGui::Text(std::format("Particle Lights Detection Count : {}", particleLightsDetectionHits).c_str());
+		ImGui::Text(std::format("Strict Lights Count : {}", strictLightsCount).c_str());
 
 		ImGui::TreePop();
 	}
@@ -190,10 +191,26 @@ void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass*)
 	strictLightsData.clear();
 }
 
-void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* Pass, uint32_t NumLights, uint32_t ShadowLightCount)
+void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3& a_initialPosition)
 {
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
+		auto eyePosition = eyeCount == 1 ?
+		                       state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
+		                       state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+		auto viewMatrix = eyeCount == 1 ?
+		                      state->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
+		                      state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
+		auto worldPos = a_initialPosition - eyePosition;
+		a_light.positionWS[eyeIndex].x = worldPos.x;
+		a_light.positionWS[eyeIndex].y = worldPos.y;
+		a_light.positionWS[eyeIndex].z = worldPos.z;
+		a_light.positionVS[eyeIndex] = DirectX::SimpleMath::Vector3::Transform(a_light.positionWS[eyeIndex], viewMatrix);
+	}
+}
 
+void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* Pass, uint32_t NumLights, uint32_t ShadowLightCount)
+{
 	NumLights = (uint8_t)std::min(7, Pass->numLights - 1);
 
 	for (uint8_t i = 0; i < NumLights; i++) {
@@ -209,11 +226,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 		light.color.z = niLight->GetLightRuntimeData().diffuse.blue * dimmer;
 		light.radius = niLight->GetLightRuntimeData().radius.x;
 
-		auto worldPos = niLight->world.translate - state->posAdjust.getEye();
-		light.positionWS.x = worldPos.x;
-		light.positionWS.y = worldPos.y;
-		light.positionWS.z = worldPos.z;
-		light.positionVS = DirectX::SimpleMath::Vector3::Transform(light.positionWS, state->cameraData.getEye().viewMat);
+		SetLightPosition(light, niLight->world.translate);
 
 		//light.shadow = false;
 		//light.mask = -1;
@@ -249,7 +262,7 @@ void LightLimitFix::AddParticleLightLuminance(RE::NiPoint3& targetPosition, int&
 	std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
 	particleLightsDetectionHits = 0;
 	if (settings.EnableParticleLightsDetection) {
-		for (auto& light : cachedParticleLights) {
+		for (auto& light : cachedParticleLights[0]) {  // left eye only
 			auto luminance = CalculateLuminance(light, targetPosition);
 			lightLevel += luminance;
 			if (luminance > 0.0)
@@ -300,7 +313,11 @@ void LightLimitFix::Bind()
 	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 
-	if (RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().cubeMapRenderTarget == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS || accumulator->activeShadowSceneNode != RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0]) {
+	auto reflections = (!REL::Module::IsVR() ?
+							   RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().cubeMapRenderTarget :
+							   RE::BSGraphics::RendererShadowState::GetSingleton()->GetVRRuntimeData().cubeMapRenderTarget) == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
+
+	if (reflections || accumulator->GetRuntimeData().activeShadowSceneNode != RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0]) {
 		PerPass perPassData{};
 		perPassData.EnableGlobalLights = false;
 
@@ -326,10 +343,10 @@ void LightLimitFix::Bind()
 
 		{
 			PerPass perPassData{};
-			perPassData.CameraData.x = accumulator->kCamera->viewFrustum.fFar;
-			perPassData.CameraData.y = accumulator->kCamera->viewFrustum.fNear;
-			perPassData.CameraData.z = accumulator->kCamera->viewFrustum.fFar - accumulator->kCamera->viewFrustum.fNear;
-			perPassData.CameraData.w = accumulator->kCamera->viewFrustum.fFar * accumulator->kCamera->viewFrustum.fNear;
+			perPassData.CameraData.x = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar;
+			perPassData.CameraData.y = accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
+			perPassData.CameraData.z = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar - accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
+			perPassData.CameraData.w = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar * accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
 
 			auto viewport = RE::BSGraphics::State::GetSingleton();
 			float resolutionX = viewport->screenWidth * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
@@ -505,6 +522,75 @@ void LightLimitFix::Draw(const RE::BSShader* shader, const uint32_t descriptor)
 	}
 }
 
+float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radius)
+{
+	return (a_lightPosition.x * a_lightPosition.x) + (a_lightPosition.y * a_lightPosition.y) + (a_lightPosition.z * a_lightPosition.z) - (a_radius * a_radius);
+}
+
+bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, float dimmerMult, int a_eyeIndex, RE::BSGeometry* a_geometry, double timer)
+{
+	static float& lightFadeStart = (*(float*)RELOCATION_ID(527668, 414582).address());
+	static float& lightFadeEnd = (*(float*)RELOCATION_ID(527669, 414583).address());
+
+	float distance = CalculateLightDistance(light.positionWS[a_eyeIndex], light.radius);
+
+	float dimmer = 0.0f;
+	if (!settings.EnableParticleLightsFade || distance < lightFadeStart || lightFadeEnd == 0.0f) {
+		dimmer = 1.0f;
+	} else if (distance <= lightFadeEnd) {
+		dimmer = 1.0f - ((distance - lightFadeStart) / (lightFadeEnd - lightFadeStart));
+	} else {
+		dimmer = 0.0f;
+	}
+	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+	if (dimmer != 0) {
+		if ((light.color.x > 0 || light.color.y > 0 || light.color.z > 0) && light.radius > 0) {
+			if (a_geometry) {
+				auto seed = (std::uint32_t)std::hash<void*>{}(a_geometry);
+
+				siv::PerlinNoise perlin1{ seed };
+				siv::PerlinNoise perlin2{ seed + 1 };
+				siv::PerlinNoise perlin3{ seed + 2 };
+				siv::PerlinNoise perlin4{ seed + 3 };
+
+				light.positionWS[0].x += (float)perlin1.noise1D(timer) * 5.0f;
+				light.positionWS[0].y += (float)perlin2.noise1D(timer) * 5.0f;
+				light.positionWS[0].z += (float)perlin3.noise1D(timer) * 5.0f;
+				light.positionWS[1] = light.positionWS[0];
+				dimmer = std::max(0.0f, dimmer - ((float)perlin4.noise1D_01(timer) * 0.5f));
+			}
+			CachedParticleLight cachedParticleLight{};
+			cachedParticleLight.color = { light.color.x, light.color.y, light.color.z };
+			cachedParticleLight.radius = light.radius;
+
+			light.color.x *= dimmer * dimmerMult;
+			light.color.y *= dimmer * dimmerMult;
+			light.color.z *= dimmer * dimmerMult;
+
+			light.shadowMode = 2 * settings.EnableContactShadows;
+
+			auto eyePosition = eyeCount == 1 ?
+			                       state->GetRuntimeData().posAdjust.getEye(a_eyeIndex) :
+			                       state->GetVRRuntimeData().posAdjust.getEye(a_eyeIndex);
+			cachedParticleLight.position = { light.positionWS[a_eyeIndex].x + eyePosition.x, light.positionWS[a_eyeIndex].y + eyePosition.y, light.positionWS[a_eyeIndex].z + eyePosition.z };
+			for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
+				auto viewMatrix = eyeCount == 1 ?
+				                      state->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
+				                      state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
+				light.positionVS[eyeIndex] = DirectX::SimpleMath::Vector3::Transform(light.positionWS[eyeIndex], viewMatrix);
+			}
+			for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
+				cachedParticleLights[eyeIndex].push_back(cachedParticleLight);
+				logger::debug("Adding cachedParticleLight[{}] {:x} color {} position {}", eyeIndex, reinterpret_cast<uintptr_t>(&cachedParticleLight), cachedParticleLight.color, cachedParticleLight.position);
+			}
+			lightsData.push_back(light);
+			logger::debug("Adding light {:x} at eyeIndex {} WS {} {} VS {} {}", reinterpret_cast<uintptr_t>(&light), a_eyeIndex, light.positionWS[0], light.positionWS[1], light.positionVS[0], light.positionVS[1]);
+			return true;
+		}
+	}
+	return false;
+}
+
 void LightLimitFix::UpdateLights()
 {
 	std::uint32_t currentLightCount = 0;  // Max number of lights is 4294967295
@@ -521,8 +607,8 @@ void LightLimitFix::UpdateLights()
 		if (auto playerCamera = RE::PlayerCamera::GetSingleton()) {
 			if (playerCamera->IsInFirstPerson()) {
 				if (auto player = RE::PlayerCharacter::GetSingleton()) {
-					firstPersonLight = player->GetPlayerRuntimeData().firstPersonLight.get();
-					thirdPersonLight = player->GetPlayerRuntimeData().thirdPersonLight.get();
+					firstPersonLight = player->GetInfoRuntimeData().firstPersonLight.get();
+					thirdPersonLight = player->GetInfoRuntimeData().thirdPersonLight.get();
 					if (auto light = player->extraList.GetByType<RE::ExtraLight>()) {
 						refLight = light->lightData->light.get();
 					}
@@ -541,6 +627,7 @@ void LightLimitFix::UpdateLights()
 	if (!RE::UI::GetSingleton()->GameIsPaused())
 		timer += *g_deltaTime;
 
+	//process point lights
 	for (auto& e : shadowSceneNode->GetRuntimeData().activePointLights) {
 		if (auto bsLight = e.get()) {
 			if (auto niLight = bsLight->light.get()) {
@@ -554,11 +641,7 @@ void LightLimitFix::UpdateLights()
 						light.color.z = niLight->GetLightRuntimeData().diffuse.blue * dimmer;
 						light.radius = niLight->GetLightRuntimeData().radius.x;
 
-						auto worldPos = niLight->world.translate - state->posAdjust.getEye();
-						light.positionWS.x = worldPos.x;
-						light.positionWS.y = worldPos.y;
-						light.positionWS.z = worldPos.z;
-						light.positionVS = DirectX::SimpleMath::Vector3::Transform(light.positionWS, state->cameraData.getEye().viewMat);
+						SetLightPosition(light, niLight->world.translate);
 
 						light.shadowMode = bsLight == firstPersonLight || bsLight == thirdPersonLight || niLight == refLight || niLight == magicLight;
 
@@ -570,15 +653,18 @@ void LightLimitFix::UpdateLights()
 		}
 	}
 
-	static float& lightFadeStart = (*(float*)RELOCATION_ID(527668, 414582).address());
-	static float& lightFadeEnd = (*(float*)RELOCATION_ID(527669, 414583).address());
-
 	{
 		std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
-		cachedParticleLights.clear();
-
+		cachedParticleLights[0].clear();
+		cachedParticleLights[1].clear();
 		for (const auto& particleLight : particleLights) {
-			if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(particleLight.first)) {
+			auto eyeIndex = 0;  // only calculate for left eye
+			auto eyePosition = eyeCount == 1 ?
+			                       state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
+			                       state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+			// process BSGeometry
+			if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(particleLight.first);
+				particleSystem && particleSystem->particleData.get()) {
 				auto particleData = particleSystem->particleData.get();
 				LightData light{};
 				uint32_t clusteredLights = 0;
@@ -590,163 +676,59 @@ void LightLimitFix::UpdateLights()
 
 					float radius = particleData->sizes[p] * settings.ParticleLightsRadius;
 
-					RE::NiPoint3 positionWS = particleData->positions[p] + (particleSystem->isWorldspace ? RE::NiPoint3{} : (particleLight.first->worldBound.center)) - state->posAdjust.getEye();
+					auto initialPosition = particleData->positions[p] + (particleSystem->isWorldspace ? RE::NiPoint3{} : (particleLight.first->worldBound.center));
+
+					RE::NiPoint3 positionWS = initialPosition - eyePosition;
 
 					if (clusteredLights) {
 						float radiusDiff = abs((light.radius / (float)clusteredLights) - radius);
 						radiusDiff *= radiusDiff;
 
-						auto averagePosition = light.positionWS / (float)clusteredLights;
+						auto averagePosition = light.positionWS[eyeIndex] / (float)clusteredLights;
 						float positionDiff = positionWS.GetDistance({ averagePosition.x, averagePosition.y, averagePosition.z });
 
 						if ((radiusDiff + positionDiff) > settings.ParticleLightsOptimisationClusterRadius || !settings.EnableParticleLightsOptimization) {
 							light.radius /= (float)clusteredLights;
-							light.positionWS /= (float)clusteredLights;
+							light.positionWS[eyeIndex] /= (float)clusteredLights;
 
-							float distance = (light.positionWS.x * light.positionWS.x) + (light.positionWS.y * light.positionWS.y) + (light.positionWS.z * light.positionWS.z) - (light.radius * light.radius);
-
-							float dimmer = 0.0f;
-							if (!settings.EnableParticleLightsFade || distance < lightFadeStart || lightFadeEnd == 0.0f) {
-								dimmer = 1.0f;
-							} else if (distance <= lightFadeEnd) {
-								dimmer = 1.0f - ((distance - lightFadeStart) / (lightFadeEnd - lightFadeStart));
-							} else {
-								dimmer = 0.0f;
-							}
-
-							if (dimmer != 0) {
-								if ((light.color.x > 0 || light.color.y > 0 || light.color.z > 0) && light.radius > 0) {
-									CachedParticleLight cachedParticleLight{};
-									cachedParticleLight.color = { light.color.x, light.color.y, light.color.z };
-									cachedParticleLight.position = { light.positionWS.x + state->posAdjust.getEye().x, light.positionWS.y + state->posAdjust.getEye().y, light.positionWS.z + state->posAdjust.getEye().z };
-									cachedParticleLight.radius = light.radius;
-									cachedParticleLights.push_back(cachedParticleLight);
-
-									light.color.x *= dimmer * 2.0f;
-									light.color.y *= dimmer * 2.0f;
-									light.color.z *= dimmer * 2.0f;
-
-									light.positionVS = DirectX::SimpleMath::Vector3::Transform(light.positionWS, state->cameraData.getEye().viewMat);
-
-									light.shadowMode = 2 * settings.EnableContactShadows;
-
-									lightsData.push_back(light);
-									currentLightCount++;
-								}
-							}
+							currentLightCount += AddCachedParticleLights(lightsData, light, 2.0f, eyeIndex);
 
 							clusteredLights = 0;
 							light.color = { 0, 0, 0 };
 							light.radius = 0;
-							light.positionWS = { 0, 0, 0 };
+							light.positionWS[eyeIndex] = { 0, 0, 0 };
 						}
 					}
 
 					clusteredLights++;
 					light.radius += radius;
-					light.positionWS.x += positionWS.x;
-					light.positionWS.y += positionWS.y;
-					light.positionWS.z += positionWS.z;
+					light.positionWS[eyeIndex].x += positionWS.x;
+					light.positionWS[eyeIndex].y += positionWS.y;
+					light.positionWS[eyeIndex].z += positionWS.z;
 				}
 
 				if (clusteredLights) {
 					light.radius /= (float)clusteredLights;
-					light.positionWS /= (float)clusteredLights;
+					light.positionWS[eyeIndex] /= (float)clusteredLights;
 
-					float distance = (light.positionWS.x * light.positionWS.x) + (light.positionWS.y * light.positionWS.y) + (light.positionWS.z * light.positionWS.z) - (light.radius * light.radius);
-
-					float dimmer = 0.0f;
-					if (!settings.EnableParticleLightsFade || distance < lightFadeStart || lightFadeEnd == 0.0f) {
-						dimmer = 1.0f;
-					} else if (distance <= lightFadeEnd) {
-						dimmer = 1.0f - ((distance - lightFadeStart) / (lightFadeEnd - lightFadeStart));
-					} else {
-						dimmer = 0.0f;
-					}
-
-					if (dimmer != 0) {
-						if ((light.color.x > 0 || light.color.y > 0 || light.color.z > 0) && light.radius > 0) {
-							CachedParticleLight cachedParticleLight{};
-							cachedParticleLight.color = { light.color.x, light.color.y, light.color.z };
-							cachedParticleLight.position = { light.positionWS.x + state->posAdjust.getEye().x, light.positionWS.y + state->posAdjust.getEye().y, light.positionWS.z + state->posAdjust.getEye().z };
-							cachedParticleLight.radius = light.radius;
-							cachedParticleLights.push_back(cachedParticleLight);
-
-							light.color.x *= dimmer * 2.0f;
-							light.color.y *= dimmer * 2.0f;
-							light.color.z *= dimmer * 2.0f;
-
-							light.positionVS = DirectX::SimpleMath::Vector3::Transform(light.positionWS, state->cameraData.getEye().viewMat);
-
-							light.shadowMode = 2 * settings.EnableContactShadows;
-
-							lightsData.push_back(light);
-							currentLightCount++;
-						}
-					}
+					currentLightCount += AddCachedParticleLights(lightsData, light, 2.0f, eyeIndex);
 				}
+
 			} else {
+				// process NiColor
 				LightData light{};
 
 				light.color.x = particleLight.second.red;
 				light.color.y = particleLight.second.green;
 				light.color.z = particleLight.second.blue;
 
-				float radius = particleLight.first->modelBound.radius * particleLight.first->world.scale;
+				float radius = particleLight.first->GetModelData().modelBound.radius * particleLight.first->world.scale;
 
 				light.radius = radius * settings.ParticleLightsRadiusBillboards;
 
-				RE::NiPoint3 positionWS = particleLight.first->worldBound.center - state->posAdjust.getEye();
-				light.positionWS.x = positionWS.x;
-				light.positionWS.y = positionWS.y;
-				light.positionWS.z = positionWS.z;
+				SetLightPosition(light, particleLight.first->worldBound.center);  //light is complete for both eyes by now
 
-				float distance = (light.positionWS.x * light.positionWS.x) + (light.positionWS.y * light.positionWS.y) + (light.positionWS.z * light.positionWS.z) - (light.radius * light.radius);
-
-				float dimmer = 0.0f;
-				if (!settings.EnableParticleLightsFade || distance < lightFadeStart || lightFadeEnd == 0.0f) {
-					dimmer = 1.0f;
-				} else if (distance <= lightFadeEnd) {
-					dimmer = 1.0f - ((distance - lightFadeStart) / (lightFadeEnd - lightFadeStart));
-				} else {
-					dimmer = 0.0f;
-				}
-
-				if (dimmer != 0) {
-					if ((light.color.x > 0 || light.color.y > 0 || light.color.z > 0) && light.radius > 0) {
-						{
-							auto seed = (std::uint32_t)std::hash<void*>{}(particleLight.first);
-
-							siv::PerlinNoise perlin1{ seed };
-							siv::PerlinNoise perlin2{ seed + 1 };
-							siv::PerlinNoise perlin3{ seed + 2 };
-							siv::PerlinNoise perlin4{ seed + 3 };
-
-							light.positionWS.x += (float)perlin1.noise1D(timer) * 5.0f;
-							light.positionWS.y += (float)perlin2.noise1D(timer) * 5.0f;
-							light.positionWS.z += (float)perlin3.noise1D(timer) * 5.0f;
-
-							dimmer = std::max(0.0f, dimmer - ((float)perlin4.noise1D_01(timer) * 0.5f));
-						}
-
-						CachedParticleLight cachedParticleLight{};
-						cachedParticleLight.color = { light.color.x, light.color.y, light.color.z };
-						cachedParticleLight.position = { light.positionWS.x + state->posAdjust.getEye().x, light.positionWS.y + state->posAdjust.getEye().y, light.positionWS.z + state->posAdjust.getEye().z };
-						cachedParticleLight.radius = light.radius;
-						cachedParticleLights.push_back(cachedParticleLight);
-
-						light.color.x *= dimmer;
-						light.color.y *= dimmer;
-						light.color.z *= dimmer;
-
-						light.positionVS = DirectX::SimpleMath::Vector3::Transform(light.positionWS, state->cameraData.getEye().viewMat);
-
-						light.shadowMode = 2 * settings.EnableContactShadows;
-
-						lightsData.push_back(light);
-						currentLightCount++;
-					}
-				}
+				currentLightCount += AddCachedParticleLights(lightsData, light, 1.0f, eyeIndex, particleLight.first, timer);
 			}
 		}
 	}
@@ -792,15 +774,19 @@ void LightLimitFix::UpdateLights()
 	{
 		auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 
-		lightsNear = std::max(0.0f, accumulator->kCamera->viewFrustum.fNear);
-		lightsFar = std::min(16384.0f, accumulator->kCamera->viewFrustum.fFar);
-
-		float fov = atan(1.0f / static_cast<float4x4>(state->cameraData.getEye().projMatrixUnjittered).m[0][0]) * 2.0f * (180.0f / 3.14159265359f);
+		lightsNear = std::max(0.0f, accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear);
+		lightsFar = std::min(16384.0f, accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar);
+		auto projMatrixUnjittered = eyeCount == 1 ? state->GetRuntimeData().cameraData.getEye().projMatrixUnjittered : state->GetVRRuntimeData().cameraData.getEye().projMatrixUnjittered;
+		float fov = atan(1.0f / static_cast<float4x4>(projMatrixUnjittered).m[0][0]) * 2.0f * (180.0f / 3.14159265359f);
 
 		static float _near = 0.0f, _far = 0.0f, _fov = 0.0f, _lightsNear = 0.0f, _lightsFar = 0.0f;
-		if (fabs(_near - accumulator->kCamera->viewFrustum.fNear) > 1e-4 || fabs(_far - accumulator->kCamera->viewFrustum.fFar) > 1e-4 || fabs(_fov - fov) > 1e-4 || fabs(_lightsNear - lightsNear) > 1e-4 || fabs(_lightsFar - lightsFar) > 1e-4) {
+		if (fabs(_near - accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear) > 1e-4 || fabs(_far - accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar) > 1e-4 || fabs(_fov - fov) > 1e-4 || fabs(_lightsNear - lightsNear) > 1e-4 || fabs(_lightsFar - lightsFar) > 1e-4) {
 			PerFrameLightCulling perFrameData{};
-			perFrameData.InvProjMatrix = DirectX::XMMatrixInverse(nullptr, state->cameraData.getEye().projMatrixUnjittered);
+			perFrameData.InvProjMatrix[0] = DirectX::XMMatrixInverse(nullptr, projMatrixUnjittered);
+			if (eyeCount == 1)
+				perFrameData.InvProjMatrix[1] = perFrameData.InvProjMatrix[0];
+			else
+				perFrameData.InvProjMatrix[1] = DirectX::XMMatrixInverse(nullptr, state->GetVRRuntimeData().cameraData.getEye(1).projMatrixUnjittered);
 			perFrameData.LightsNear = lightsNear;
 			perFrameData.LightsFar = lightsFar;
 
@@ -819,8 +805,8 @@ void LightLimitFix::UpdateLights()
 			ID3D11UnorderedAccessView* null_uav = nullptr;
 			context->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
 
-			_near = accumulator->kCamera->viewFrustum.fNear;
-			_far = accumulator->kCamera->viewFrustum.fFar;
+			_near = accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
+			_far = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar;
 			_fov = fov;
 			_lightsNear = lightsNear;
 			_lightsFar = lightsFar;

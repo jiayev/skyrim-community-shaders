@@ -1,6 +1,6 @@
+#include "Common/Color.hlsl"
 #include "Common/FrameBuffer.hlsl"
 #include "Common/MotionBlur.hlsl"
-#include "Common/Color.hlsl"
 
 struct VS_INPUT
 {
@@ -130,7 +130,7 @@ cbuffer cb13 : register(b13)
 {
 	float4 cb13[3];
 }
-#	endif  // VR
+#	endif                  // VR
 
 #	define M_PI 3.1415925  // PI
 #	define M_2PI 6.283185  // PI * 2
@@ -442,9 +442,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	// Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
 	if (!frontFace)
 		worldNormal.xyz = -worldNormal.xyz;
-	
+
 	worldNormal.xyz = normalize(lerp(worldNormal.xyz, normalize(input.FlatNormal.xyz), saturate(input.FlatNormal.w)));
-	
+
 	if (complex) {
 		float3 normalColor = float4(TransformNormal(specColor.xyz), 1);
 		// Inverting x as well as y seems to look more correct.
@@ -481,7 +481,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 dirDiffuseColor = dirLightColor * saturate(dirLightAngle);
 
 	lightsDiffuseColor += dirDiffuseColor;
-	
+
 	// Generated texture to simulate light transport.
 	// Numerous attempts were made to use a more interesting algorithm however they were mostly fruitless.
 	float3 subsurfaceColor = normalize(baseColor.xyz);
@@ -501,44 +501,43 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 
 	float clampedDepth = clamp(viewPosition.z, GetNearPlane(), GetFarPlane());
-	
-	uint  clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 24.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
+
+	uint clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 24.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
 	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(16, 8));
 	uint3 cluster = uint3(uint2(input.HPosition.xy / clusterDim), clusterZ);
-	uint  clusterIndex = cluster.x + (16 * cluster.y) + (16 * 8 * cluster.z);
-	
+	uint clusterIndex = cluster.x + (16 * cluster.y) + (16 * 8 * cluster.z);
+
 	uint lightCount = lightGrid[clusterIndex].lightCount;
 
-	if (lightCount > 0){
+	if (lightCount > 0) {
 		uint lightOffset = lightGrid[clusterIndex].offset;
 
-		float2 screenUV = ViewToUV(viewPosition);
+		float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
 		float screenNoise = InterleavedGradientNoise(screenUV * perPassLLF[0].BufferDim);
-		
-		[loop]
-		for (uint i = 0; i < lightCount; i++)
-		{		
+
+		[loop] for (uint i = 0; i < lightCount; i++)
+		{
 			uint light_index = lightList[lightOffset + i];
 			StructuredLight light = lights[light_index];
 
-			float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
+			float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
 			float lightDist = length(lightDirection);
 			float intensityFactor = saturate(lightDist / light.radius);
 			if (intensityFactor == 1)
 				continue;
 
-			float intensityMultiplier = 1 - intensityFactor * intensityFactor;		
+			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 			float3 lightColor = light.color.xyz;
 			float3 nsLightColor = lightColor;
 			float3 normalizedLightDirection = normalize(lightDirection);
 
 			float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
 
-			float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection);
+			float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
 			if (light.shadowMode == 2)
-				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS);
+				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, eyeIndex);
 			else if (light.shadowMode == 1)
-				lightColor *= ContactShadowsLong(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius);
+				lightColor *= ContactShadowsLong(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, eyeIndex);
 
 			float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
