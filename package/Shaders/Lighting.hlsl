@@ -1813,17 +1813,18 @@ PS_OUTPUT main(PS_INPUT input)
 #		elif defined(SPARKLE)
 	specularColor *= glossiness;
 #		endif  // SPECULAR
-#	endif      // !defined(PBR)
+
 	if (useSnowSpecular) {
 		specularColor = 0;
 	}
 
-#	if defined(AMBIENT_SPECULAR)
+#		if defined(AMBIENT_SPECULAR)
 	float viewAngle = saturate(dot(modelNormal.xyz, viewDirection));
 	float ambientSpecularColorMultiplier = exp2(AmbientSpecularTintAndFresnelPower.w * log2(1 - viewAngle));
 	float3 ambientSpecularColor = AmbientSpecularTintAndFresnelPower.xyz * saturate(mul(DirectionalAmbient, float4(modelNormal.xyz, 0.15)));
 	specularColor += ambientSpecularColor * ambientSpecularColorMultiplier.xxx;
-#	endif  // AMBIENT_SPECULAR
+#		endif  // AMBIENT_SPECULAR
+#	endif      // !defined(PBR)
 
 #	if !defined(PBR) && (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
 #		if defined(CPM_AVAILABLE) && defined(ENVMAP)
