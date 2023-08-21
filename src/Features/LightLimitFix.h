@@ -67,7 +67,7 @@ public:
 	struct CachedParticleLight
 	{
 		RE::NiColor color;
-		RE::NiPoint3 position[2];
+		RE::NiPoint3 position;
 		float radius;
 	};
 

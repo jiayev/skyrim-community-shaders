@@ -248,7 +248,7 @@ float LightLimitFix::CalculateLuminance(CachedParticleLight& light, RE::NiPoint3
 	// See BSLight::CalculateLuminance_14131D3D0
 	// Performs lighting on the CPU which is identical to GPU code
 
-	auto lightDirection = light.position[0] - point;  // only calculate based on left eye to avoid double count
+	auto lightDirection = light.position - point;
 	float lightDist = lightDirection.Length();
 	float intensityFactor = std::clamp(lightDist / light.radius, 0.0f, 1.0f);
 	float intensityMultiplier = 1 - intensityFactor * intensityFactor;
@@ -556,9 +556,7 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 				light.positionWS[0].x += (float)perlin1.noise1D(timer) * 5.0f;
 				light.positionWS[0].y += (float)perlin2.noise1D(timer) * 5.0f;
 				light.positionWS[0].z += (float)perlin3.noise1D(timer) * 5.0f;
-				light.positionWS[1].x = light.positionWS[0].x;
-				light.positionWS[1].y = light.positionWS[0].y;
-				light.positionWS[1].z = light.positionWS[0].z;
+				light.positionWS[1] = light.positionWS[0];
 				dimmer = std::max(0.0f, dimmer - ((float)perlin4.noise1D_01(timer) * 0.5f));
 			}
 			CachedParticleLight cachedParticleLight{};
@@ -571,20 +569,22 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 
 			light.shadowMode = 2 * settings.EnableContactShadows;
 
+			auto eyePosition = eyeCount == 1 ?
+			                       state->GetRuntimeData().posAdjust.getEye(a_eyeIndex) :
+			                       state->GetVRRuntimeData().posAdjust.getEye(a_eyeIndex);
+			cachedParticleLight.position = { light.positionWS[a_eyeIndex].x + eyePosition.x, light.positionWS[a_eyeIndex].y + eyePosition.y, light.positionWS[a_eyeIndex].z + eyePosition.z };
 			for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
-				auto eyePosition = eyeCount == 1 ?
-				                       state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
-				                       state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
 				auto viewMatrix = eyeCount == 1 ?
 				                      state->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
 				                      state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
-				cachedParticleLight.position[eyeIndex] = { light.positionWS[eyeIndex].x + eyePosition.x, light.positionWS[eyeIndex].y + eyePosition.y, light.positionWS[eyeIndex].z + eyePosition.z };
 				light.positionVS[eyeIndex] = DirectX::SimpleMath::Vector3::Transform(light.positionWS[eyeIndex], viewMatrix);
 			}
 			for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
 				cachedParticleLights[eyeIndex].push_back(cachedParticleLight);
-				lightsData.push_back(light);
+				logger::debug("Adding cachedParticleLight[{}] {:x} color {} position {}", eyeIndex, reinterpret_cast<uintptr_t>(&cachedParticleLight), cachedParticleLight.color, cachedParticleLight.position);
 			}
+			lightsData.push_back(light);
+			logger::debug("Adding light {:x} at eyeIndex {} WS {} {} VS {} {}", reinterpret_cast<uintptr_t>(&light), a_eyeIndex, light.positionWS[0], light.positionWS[1], light.positionVS[0], light.positionVS[1]);
 			return true;
 		}
 	}
@@ -658,81 +658,77 @@ void LightLimitFix::UpdateLights()
 		cachedParticleLights[0].clear();
 		cachedParticleLights[1].clear();
 		for (const auto& particleLight : particleLights) {
-			for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
-				auto eyePosition = eyeCount == 1 ?
-				                       state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
-				                       state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
-				auto viewMatrix = eyeCount == 1 ?
-				                      state->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
-				                      state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
-				// process BSGeometry
-				if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(particleLight.first);
-					particleSystem && particleSystem->particleData.get()) {
-					auto particleData = particleSystem->particleData.get();
-					LightData light{};
-					uint32_t clusteredLights = 0;
-					auto numVertices = particleData->GetActiveVertexCount();
-					for (std::uint32_t p = 0; p < numVertices; p++) {
-						light.color.x += particleLight.second.red * particleData->color[p].red * particleData->color[p].alpha;
-						light.color.y += particleLight.second.green * particleData->color[p].green * particleData->color[p].alpha;
-						light.color.z += particleLight.second.blue * particleData->color[p].blue * particleData->color[p].alpha;
+			auto eyeIndex = 0;  // only calculate for left eye
+			auto eyePosition = eyeCount == 1 ?
+			                       state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
+			                       state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+			// process BSGeometry
+			if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(particleLight.first);
+				particleSystem && particleSystem->particleData.get()) {
+				auto particleData = particleSystem->particleData.get();
+				LightData light{};
+				uint32_t clusteredLights = 0;
+				auto numVertices = particleData->GetActiveVertexCount();
+				for (std::uint32_t p = 0; p < numVertices; p++) {
+					light.color.x += particleLight.second.red * particleData->color[p].red * particleData->color[p].alpha;
+					light.color.y += particleLight.second.green * particleData->color[p].green * particleData->color[p].alpha;
+					light.color.z += particleLight.second.blue * particleData->color[p].blue * particleData->color[p].alpha;
 
-						float radius = particleData->sizes[p] * settings.ParticleLightsRadius;
+					float radius = particleData->sizes[p] * settings.ParticleLightsRadius;
 
-						auto initialPosition = particleData->positions[p] + (particleSystem->isWorldspace ? RE::NiPoint3{} : (particleLight.first->worldBound.center));
+					auto initialPosition = particleData->positions[p] + (particleSystem->isWorldspace ? RE::NiPoint3{} : (particleLight.first->worldBound.center));
 
-						RE::NiPoint3 positionWS = initialPosition - eyePosition;
-
-						if (clusteredLights) {
-							float radiusDiff = abs((light.radius / (float)clusteredLights) - radius);
-							radiusDiff *= radiusDiff;
-
-							auto averagePosition = light.positionWS[eyeIndex] / (float)clusteredLights;
-							float positionDiff = positionWS.GetDistance({ averagePosition.x, averagePosition.y, averagePosition.z });
-
-							if ((radiusDiff + positionDiff) > settings.ParticleLightsOptimisationClusterRadius || !settings.EnableParticleLightsOptimization) {
-								light.radius /= (float)clusteredLights;
-								light.positionWS[eyeIndex] /= (float)clusteredLights;
-
-								currentLightCount += AddCachedParticleLights(lightsData, light, 2.0f, eyeIndex);
-
-								clusteredLights = 0;
-								light.color = { 0, 0, 0 };
-								light.radius = 0;
-								light.positionWS[eyeIndex] = { 0, 0, 0 };
-							}
-						}
-
-						clusteredLights++;
-						light.radius += radius;
-						light.positionWS[eyeIndex].x += positionWS.x;
-						light.positionWS[eyeIndex].y += positionWS.y;
-						light.positionWS[eyeIndex].z += positionWS.z;
-					}
+					RE::NiPoint3 positionWS = initialPosition - eyePosition;
 
 					if (clusteredLights) {
-						light.radius /= (float)clusteredLights;
-						light.positionWS[eyeIndex] /= (float)clusteredLights;
+						float radiusDiff = abs((light.radius / (float)clusteredLights) - radius);
+						radiusDiff *= radiusDiff;
 
-						currentLightCount += AddCachedParticleLights(lightsData, light, 2.0f, eyeIndex);
+						auto averagePosition = light.positionWS[eyeIndex] / (float)clusteredLights;
+						float positionDiff = positionWS.GetDistance({ averagePosition.x, averagePosition.y, averagePosition.z });
+
+						if ((radiusDiff + positionDiff) > settings.ParticleLightsOptimisationClusterRadius || !settings.EnableParticleLightsOptimization) {
+							light.radius /= (float)clusteredLights;
+							light.positionWS[eyeIndex] /= (float)clusteredLights;
+
+							currentLightCount += AddCachedParticleLights(lightsData, light, 2.0f, eyeIndex);
+
+							clusteredLights = 0;
+							light.color = { 0, 0, 0 };
+							light.radius = 0;
+							light.positionWS[eyeIndex] = { 0, 0, 0 };
+						}
 					}
 
-				} else {
-					// process NiColor
-					LightData light{};
-
-					light.color.x = particleLight.second.red;
-					light.color.y = particleLight.second.green;
-					light.color.z = particleLight.second.blue;
-
-					float radius = particleLight.first->GetModelData().modelBound.radius * particleLight.first->world.scale;
-
-					light.radius = radius * settings.ParticleLightsRadiusBillboards;
-
-					SetLightPosition(light, particleLight.first->worldBound.center);
-
-					currentLightCount += AddCachedParticleLights(lightsData, light, 1.0f, eyeIndex, particleLight.first, timer);
+					clusteredLights++;
+					light.radius += radius;
+					light.positionWS[eyeIndex].x += positionWS.x;
+					light.positionWS[eyeIndex].y += positionWS.y;
+					light.positionWS[eyeIndex].z += positionWS.z;
 				}
+
+				if (clusteredLights) {
+					light.radius /= (float)clusteredLights;
+					light.positionWS[eyeIndex] /= (float)clusteredLights;
+
+					currentLightCount += AddCachedParticleLights(lightsData, light, 2.0f, eyeIndex);
+				}
+
+			} else {
+				// process NiColor
+				LightData light{};
+
+				light.color.x = particleLight.second.red;
+				light.color.y = particleLight.second.green;
+				light.color.z = particleLight.second.blue;
+
+				float radius = particleLight.first->GetModelData().modelBound.radius * particleLight.first->world.scale;
+
+				light.radius = radius * settings.ParticleLightsRadiusBillboards;
+
+				SetLightPosition(light, particleLight.first->worldBound.center);  //light is complete for both eyes by now
+
+				currentLightCount += AddCachedParticleLights(lightsData, light, 1.0f, eyeIndex, particleLight.first, timer);
 			}
 		}
 	}
