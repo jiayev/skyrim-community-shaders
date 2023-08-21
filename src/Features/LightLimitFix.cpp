@@ -527,8 +527,21 @@ float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radi
 	return (a_lightPosition.x * a_lightPosition.x) + (a_lightPosition.y * a_lightPosition.y) + (a_lightPosition.z * a_lightPosition.z) - (a_radius * a_radius);
 }
 
-bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, float dimmer, float dimmerMult, RE::BSGeometry* a_geometry, double timer)
+bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, float dimmerMult, int a_eyeIndex, RE::BSGeometry* a_geometry, double timer)
 {
+	static float& lightFadeStart = (*(float*)RELOCATION_ID(527668, 414582).address());
+	static float& lightFadeEnd = (*(float*)RELOCATION_ID(527669, 414583).address());
+
+	float distance = CalculateLightDistance(light.positionWS[a_eyeIndex], light.radius);
+
+	float dimmer = 0.0f;
+	if (!settings.EnableParticleLightsFade || distance < lightFadeStart || lightFadeEnd == 0.0f) {
+		dimmer = 1.0f;
+	} else if (distance <= lightFadeEnd) {
+		dimmer = 1.0f - ((distance - lightFadeStart) / (lightFadeEnd - lightFadeStart));
+	} else {
+		dimmer = 0.0f;
+	}
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 	if (dimmer != 0) {
 		if ((light.color.x > 0 || light.color.y > 0 || light.color.z > 0) && light.radius > 0) {
@@ -640,15 +653,11 @@ void LightLimitFix::UpdateLights()
 		}
 	}
 
-	static float& lightFadeStart = (*(float*)RELOCATION_ID(527668, 414582).address());
-	static float& lightFadeEnd = (*(float*)RELOCATION_ID(527669, 414583).address());
-
 	{
 		std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
 		cachedParticleLights[0].clear();
 		cachedParticleLights[1].clear();
 		for (const auto& particleLight : particleLights) {
-			float dimmer = 0.0f;
 			for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
 				auto eyePosition = eyeCount == 1 ?
 				                       state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
@@ -685,17 +694,7 @@ void LightLimitFix::UpdateLights()
 								light.radius /= (float)clusteredLights;
 								light.positionWS[eyeIndex] /= (float)clusteredLights;
 
-								float distance = CalculateLightDistance(light.positionWS[eyeIndex], light.radius);
-
-								if (!settings.EnableParticleLightsFade || distance < lightFadeStart || lightFadeEnd == 0.0f) {
-									dimmer = 1.0f;
-								} else if (distance <= lightFadeEnd) {
-									dimmer = 1.0f - ((distance - lightFadeStart) / (lightFadeEnd - lightFadeStart));
-								} else {
-									dimmer = 0.0f;
-								}
-
-								currentLightCount += AddCachedParticleLights(lightsData, light, dimmer, 2.0f);
+								currentLightCount += AddCachedParticleLights(lightsData, light, 2.0f, eyeIndex);
 
 								clusteredLights = 0;
 								light.color = { 0, 0, 0 };
@@ -715,17 +714,7 @@ void LightLimitFix::UpdateLights()
 						light.radius /= (float)clusteredLights;
 						light.positionWS[eyeIndex] /= (float)clusteredLights;
 
-						float distance = CalculateLightDistance(light.positionWS[eyeIndex], light.radius);
-
-						if (!settings.EnableParticleLightsFade || distance < lightFadeStart || lightFadeEnd == 0.0f) {
-							dimmer = 1.0f;
-						} else if (distance <= lightFadeEnd) {
-							dimmer = 1.0f - ((distance - lightFadeStart) / (lightFadeEnd - lightFadeStart));
-						} else {
-							dimmer = 0.0f;
-						}
-
-						currentLightCount += AddCachedParticleLights(lightsData, light, dimmer, 2.0f);
+						currentLightCount += AddCachedParticleLights(lightsData, light, 2.0f, eyeIndex);
 					}
 
 				} else {
@@ -742,17 +731,7 @@ void LightLimitFix::UpdateLights()
 
 					SetLightPosition(light, particleLight.first->worldBound.center);
 
-					float distance = CalculateLightDistance(light.positionWS[eyeIndex], light.radius);
-
-					if (!settings.EnableParticleLightsFade || distance < lightFadeStart || lightFadeEnd == 0.0f) {
-						dimmer = 1.0f;
-					} else if (distance <= lightFadeEnd) {
-						dimmer = 1.0f - ((distance - lightFadeStart) / (lightFadeEnd - lightFadeStart));
-					} else {
-						dimmer = 0.0f;
-					}
-
-					currentLightCount += AddCachedParticleLights(lightsData, light, dimmer, 1.0f, particleLight.first, timer);
+					currentLightCount += AddCachedParticleLights(lightsData, light, 1.0f, eyeIndex, particleLight.first, timer);
 				}
 			}
 		}
