@@ -1915,9 +1915,9 @@ PS_OUTPUT main(PS_INPUT input)
 
 	psout.Albedo.xyz = color.xyz - tmpColor.xyz * FrameParams.zzz;
 
-#	if defined(SNOW)
+#	if defined(SNOW) && !defined(PBR)
 	psout.SnowParameters.x = dot(lightsSpecularColor, float3(0.3, 0.59, 0.11));
-#	endif  // SNOW
+#	endif  // SNOW && !PBR
 
 	psout.MotionVectors.xy = SSRParams.z > 1e-5 ? float2(1, 0) : screenMotionVector.xy;
 	psout.MotionVectors.zw = float2(0, 1);
