@@ -5,9 +5,9 @@
 #include "State.h"
 #include "Util.h"
 
-constexpr std::uint32_t CLUSTER_SIZE_X = 16;
-constexpr std::uint32_t CLUSTER_SIZE_Y = 8;
-constexpr std::uint32_t CLUSTER_SIZE_Z = 24;
+constexpr std::uint32_t CLUSTER_SIZE_X = 32;
+constexpr std::uint32_t CLUSTER_SIZE_Y = 16;
+constexpr std::uint32_t CLUSTER_SIZE_Z = 16;
 constexpr std::uint32_t CLUSTER_MAX_LIGHTS = 128;
 
 constexpr std::uint32_t CLUSTER_COUNT = CLUSTER_SIZE_X * CLUSTER_SIZE_Y * CLUSTER_SIZE_Z;
@@ -820,7 +820,7 @@ void LightLimitFix::UpdateLights()
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		context->CSSetShader(clusterCullingCS, nullptr, 0);
-		context->Dispatch(CLUSTER_SIZE_X / 16, CLUSTER_SIZE_Y / 8, CLUSTER_SIZE_Z / 8);
+		context->Dispatch(CLUSTER_SIZE_X / 32, CLUSTER_SIZE_Y / 16, CLUSTER_SIZE_Z / 2);
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
 

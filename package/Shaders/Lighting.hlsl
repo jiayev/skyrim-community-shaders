@@ -1770,17 +1770,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	screenSpaceNormal.y = dot(input.ScreenNormalTransform1.xyz, normal.xyz);
 	screenSpaceNormal.z = dot(input.ScreenNormalTransform2.xyz, normal.xyz);
 	screenSpaceNormal = normalize(screenSpaceNormal);
+	uint lightCount = 0;
 
 #	if defined(LIGHT_LIMIT_FIX)
 	if (perPassLLF[0].EnableGlobalLights) {
 		float clampedDepth = clamp(viewPosition.z, GetNearPlane(), GetFarPlane());
 
-		uint clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 24.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
-		uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(16, 8));
+		uint clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 16.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
+		uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(32, 16));
 		uint3 cluster = uint3(uint2(input.Position.xy / clusterDim), clusterZ);
-		uint clusterIndex = cluster.x + (16 * cluster.y) + (16 * 8 * cluster.z);
+		uint clusterIndex = cluster.x + (32 * cluster.y) + (32 * 16 * cluster.z);
 
-		uint lightCount = lightGrid[clusterIndex].lightCount;
+		lightCount = lightGrid[clusterIndex].lightCount;
 
 		if (lightCount > 0) {
 			uint lightOffset = lightGrid[clusterIndex].offset;
@@ -2055,11 +2056,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 // #	define SHOW_GRIDS
 #	if defined(LIGHT_LIMIT_FIX) && defined(SHOW_GRIDS)
 	float clampedDepth = clamp(viewPosition.z, GetNearPlane(), GetFarPlane());
-	uint clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 24.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
-	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(16, 8));
+	uint clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 16.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
+	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(32, 16));
 	uint3 cluster = uint3(uint2(input.Position.xy / clusterDim), clusterZ);
-	uint clusterIndex = cluster.x + (16 * cluster.y) + (16 * 8 * cluster.z);
-	float level = (float)clusterIndex;
+	uint clusterIndex = cluster.x + (32 * cluster.y) + (32 * 16 * cluster.z);
+	float level = (float)lightCount;
 	float3 col;
 	col.r = sin(level);
 	col.g = sin(level * 2);
