@@ -1951,17 +1951,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		elif defined(SPARKLE)
 	specularColor *= glossiness;
 #		endif  // SPECULAR
-#	endif      // !defined(PBR)
+
 	if (useSnowSpecular) {
 		specularColor = 0;
 	}
 
-#	if defined(AMBIENT_SPECULAR)
+#		if defined(AMBIENT_SPECULAR)
 	float viewAngle = saturate(dot(modelNormal.xyz, viewDirection));
 	float ambientSpecularColorMultiplier = exp2(AmbientSpecularTintAndFresnelPower.w * log2(1 - viewAngle));
 	float3 ambientSpecularColor = AmbientSpecularTintAndFresnelPower.xyz * saturate(mul(DirectionalAmbient, float4(modelNormal.xyz, 0.15)));
 	specularColor += ambientSpecularColor * ambientSpecularColorMultiplier.xxx;
-#	endif  // AMBIENT_SPECULAR
+#		endif  // AMBIENT_SPECULAR
+#	endif      // !defined(PBR)
 
 #	if !defined(PBR) && (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
 #		if defined(CPM_AVAILABLE) && defined(ENVMAP)
@@ -2069,9 +2070,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.Albedo.xyz = color.xyz - tmpColor.xyz * FrameParams.zzz;
 #	endif  // defined(LIGHT_LIMIT_FIX) && defined(SHOW_GRIDS)
 
-#	if defined(SNOW)
+#	if defined(SNOW) && !defined(PBR)
 	psout.SnowParameters.x = dot(lightsSpecularColor, float3(0.3, 0.59, 0.11));
-#	endif  // SNOW
+#	endif  // SNOW && !PBR
 
 	psout.MotionVectors.xy = SSRParams.z > 1e-5 ? float2(1, 0) : screenMotionVector.xy;
 	psout.MotionVectors.zw = float2(0, 1);
