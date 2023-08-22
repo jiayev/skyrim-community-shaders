@@ -15,6 +15,13 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(EASTL CONFIG REQUIRED)
 find_package(directxtk CONFIG REQUIRED)
+find_path(CLIB_UTIL_INCLUDE_DIRS "ClibUtil/utils.hpp")
+
+target_include_directories(
+	${PROJECT_NAME}
+	PRIVATE
+		${CLIB_UTIL_INCLUDE_DIRS}
+)
 
 target_link_libraries(
 	${PROJECT_NAME} 

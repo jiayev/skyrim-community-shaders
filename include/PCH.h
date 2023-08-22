@@ -118,7 +118,11 @@ namespace DX
 	}
 }
 
-#include <CLIBUtil/simpleINI.hpp>
+#include <ClibUtil/distribution.hpp>
+#include <ClibUtil/numeric.hpp>
+#include <ClibUtil/rng.hpp>
+#include <ClibUtil/simpleINI.hpp>
+#include <ClibUtil/editorID.hpp>
 
 #include "imgui.h"
 
