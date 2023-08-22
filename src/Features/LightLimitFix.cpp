@@ -163,7 +163,7 @@ void LightLimitFix::Reset()
 	rendered = false;
 	for (auto& particleLight : particleLights) {
 		if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(particleLight.first)) {
-			if (auto particleData = particleSystem->particleData.get()) {
+			if (auto particleData = particleSystem->GetRuntimeData().particleData.get()) {
 				particleData->DecRefCount();
 			}
 		}
@@ -436,7 +436,7 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_tec
 							if (lightsList.contains(filename)) {
 								a_pass->geometry->IncRefCount();
 								if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(a_pass->geometry)) {
-									if (auto particleData = particleSystem->particleData.get()) {
+									if (auto particleData = particleSystem->GetRuntimeData().particleData.get()) {
 										particleData->IncRefCount();
 									}
 								}
@@ -662,10 +662,10 @@ void LightLimitFix::UpdateLights()
 			auto eyePosition = eyeCount == 1 ?
 			                       state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
 			                       state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
-			// process BSGeometry
 			if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(particleLight.first);
-				particleSystem && particleSystem->particleData.get()) {
-				auto particleData = particleSystem->particleData.get();
+				particleSystem && particleSystem->GetRuntimeData().particleData.get()) {
+				// process BSGeometry
+				auto particleData = particleSystem->GetRuntimeData().particleData.get();
 				LightData light{};
 				uint32_t clusteredLights = 0;
 				auto numVertices = particleData->GetActiveVertexCount();
