@@ -1,3 +1,5 @@
+#include "Common/FrameBuffer.hlsl"
+#include "Common/MotionBlur.hlsl"
 
 cbuffer PerFrame : register(b3)
 {
@@ -101,25 +103,6 @@ cbuffer AlphaTestRefCB : register(b11)
 	float AlphaTestRefRS : packoffset(c0);
 }
 
-cbuffer PerFrame : register(b12)
-{
-	row_major float4x4 ViewMatrix : packoffset(c0);
-	row_major float4x4 ProjMatrix : packoffset(c4);
-	row_major float4x4 ViewProjMatrix : packoffset(c8);
-	row_major float4x4 ViewProjMatrixUnjittered : packoffset(c12);
-	row_major float4x4 PreviousViewProjMatrixUnjittered : packoffset(c16);
-	row_major float4x4 InvProjMatrixUnjittered : packoffset(c20);
-	row_major float4x4 ProjMatrixUnjittered : packoffset(c24);
-	row_major float4x4 InvViewMatrix : packoffset(c28);
-	row_major float4x4 InvViewProjMatrix : packoffset(c32);
-	row_major float4x4 InvProjMatrix : packoffset(c36);
-	float4 CurrentPosAdjust : packoffset(c40);
-	float4 PreviousPosAdjust : packoffset(c41);
-	// notes: FirstPersonY seems 1.0 regardless of third/first person, could be LE legacy stuff
-	float4 GammaInvX_FirstPersonY_AlphaPassZ_CreationKitW : packoffset(c42);
-	float4 DynamicRes_WidthX_HeightY_PreviousWidthZ_PreviousHeightW : packoffset(c43);
-	float4 DynamicRes_InvWidthX_InvHeightY_WidthClampZ_HeightClampW : packoffset(c44);
-}
 cbuffer PerTechnique : register(b0)
 {
 	float4 DiffuseColor : packoffset(c0);
@@ -220,11 +203,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 #		endif
 
-	float4 screenPosition = mul(ViewProjMatrixUnjittered, input.WorldPosition);
-	screenPosition.xy = screenPosition.xy / screenPosition.ww;
-	float4 previousScreenPosition = mul(PreviousViewProjMatrixUnjittered, input.PreviousWorldPosition);
-	previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.ww;
-	float2 screenMotionVector = float2(-0.5, 0.5) * (screenPosition.xy - previousScreenPosition.xy);
+	float2 screenMotionVector = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition);
 
 	float shadowColor = TexShadowMaskSampler.Load(int3(input.Position.xy, 0));
 
