@@ -7,6 +7,7 @@
 
 #include "Feature.h"
 #include "ShaderCache.h"
+#include <Features/LightLimitFix/ParticleLights.h>
 
 struct LightLimitFix : Feature
 {
@@ -16,6 +17,7 @@ public:
 		static LightLimitFix render;
 		return &render;
 	}
+
 
 	static void InstallHooks()
 	{
@@ -92,8 +94,8 @@ public:
 
 	RE::BSRenderPass* currentPass = nullptr;
 
-	eastl::hash_map<RE::BSGeometry*, RE::NiColor> queuedParticleLights;
-	eastl::hash_map<RE::BSGeometry*, RE::NiColor> particleLights;
+	eastl::hash_map < RE::BSGeometry*, std::pair<RE::NiColor, ParticleLights::Config&>> queuedParticleLights;
+	eastl::hash_map<RE::BSGeometry*, std::pair<RE::NiColor, ParticleLights::Config&>> particleLights;
 
 	std::uint32_t strictLightsCount = 0;
 	eastl::vector<LightData> strictLightsData;
@@ -108,7 +110,7 @@ public:
 	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
-	bool AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, float dimmerMult = 1.0f, int eyeIndex = 0, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
+	bool AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config& config, float dimmerMult = 1.0f, int eyeIndex = 0, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
 	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3& a_initialPosition);
 	void UpdateLights();
 	void Bind();
