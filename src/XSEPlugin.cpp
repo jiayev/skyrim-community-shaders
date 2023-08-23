@@ -6,6 +6,7 @@
 
 #include "Features/ExtendedMaterials.h"
 #include "Features/LightLimitFix.h"
+#include "Features/LightLimitFIx/ParticleLights.h"
 #define DLLEXPORT __declspec(dllexport)
 
 std::list<std::string> errors;
@@ -88,6 +89,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			}
 
 			if (errors.empty()) {
+				ParticleLights::GetSingleton()->GetConfigs();
+
 				Hooks::Install();
 				LightLimitFix::InstallHooks();
 

@@ -22,7 +22,8 @@
       ],
       "version>=": "1.88"
     },
-    "eastl"
+    "eastl",
+    "clib-util"
   ],
   "builtin-baseline": "771b438c2ebcda45e6f52537d2d4e5bc80c8475a"
 }

@@ -46,7 +46,7 @@ void LightLimitFix::DrawSettings()
 		ImGui::SliderFloat("Billboard Radius", &settings.ParticleLightsRadiusBillboards, 0.0, 1.0);
 
 		ImGui::Checkbox("Enable Optimization", &settings.EnableParticleLightsOptimization);
-		ImGui::SliderInt("Optimisation Cluster Radius", (int*)&settings.ParticleLightsOptimisationClusterRadius, 1, 128);
+		ImGui::SliderInt("Optimisation Cluster Radius", (int*)&settings.ParticleLightsOptimisationClusterRadius, 1, 48);
 
 		ImGui::TreePop();
 	}
@@ -393,93 +393,73 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_tec
 {
 	// See https://www.nexusmods.com/skyrimspecialedition/articles/1391
 	if (settings.EnableParticleLights) {
-		//	{
-		//			if (auto shaderProperty = netimmerse_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty)) {
-		//				if (auto material = static_cast<RE::BSEffectShaderMaterial*>(shaderProperty->material)) {
-		//					std::string textureName = material->sourceTexturePath.c_str();
-		//					auto lastSeparatorPos = textureName.find_last_of("\\/");
-		//					if (lastSeparatorPos != std::string::npos) {
-		//						std::string filename = textureName.substr(lastSeparatorPos + 1);
-		//#pragma warning(push)
-		//#pragma warning(disable: 4244)
-		//						std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
-		//#pragma warning(pop)
-		//						std::set<std::string> cullingList{
-		//							"fxglowenb.dds", "glowsoft01_enbl.dds", "black.dds", "enblightglow.dds"
-		//						};
-		//						bool shouldCull = cullingList.contains(filename);
-		//						if (shouldCull) {
-		//							logger::info("tech {:X}", a_technique);
-		//						}
-		//					}
-		//				}
-		//			}
-		//		}
-		//
 		if (a_technique == 0x4004146F || a_technique == 0x4004046F || a_technique == 0x4000046F) {
 			if (auto shaderProperty = netimmerse_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty)) {
 				if (auto material = static_cast<RE::BSEffectShaderMaterial*>(shaderProperty->material)) {
-					if (!material->sourceTexturePath.empty() && material->sourceTexturePath.size() > 1) {
+					if (!material->sourceTexturePath.empty()) {
 						std::string textureName = material->sourceTexturePath.c_str();
+						if (textureName.size() < 1)
+							return false;
 						auto lastSeparatorPos = textureName.find_last_of("\\/");
 						if (lastSeparatorPos != std::string::npos) {
 							std::string filename = textureName.substr(lastSeparatorPos + 1);
+							if (filename.size() < 4)
+								return false;
+
+							filename.erase(filename.length() - 4);  // Remove ".dds"
 #pragma warning(push)
 #pragma warning(disable: 4244)
 							std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
 #pragma warning(pop)
+							auto& configs = ParticleLights::GetSingleton()->particleLightConfigs;
+							auto it = configs.find(filename);
+							if (it == configs.end())
+								return false;
 
-							std::set<std::string> lightsList{
-								"candleglow01.dds", "glowslightflash.dds", "fxglowenb.dds", "glowsoft01_enbl.dds", "black.dds", "enblightglow.dds"
-							};
-
-							if (lightsList.contains(filename)) {
-								a_pass->geometry->IncRefCount();
-								if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(a_pass->geometry)) {
-									if (auto particleData = particleSystem->GetRuntimeData().particleData.get()) {
-										particleData->IncRefCount();
-									}
+							auto& config = it->second;
+							a_pass->geometry->IncRefCount();
+							if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(a_pass->geometry)) {
+								if (auto particleData = particleSystem->GetRuntimeData().particleData.get()) {
+									particleData->IncRefCount();
 								}
-
-								RE::NiColor color;
-								color.red = material->baseColor.red * material->baseColorScale * material->baseColor.alpha * shaderProperty->alpha * settings.ParticleLightsBrightness;
-								color.green = material->baseColor.green * material->baseColorScale * material->baseColor.alpha * shaderProperty->alpha * settings.ParticleLightsBrightness;
-								color.blue = material->baseColor.blue * material->baseColorScale * material->baseColor.alpha * shaderProperty->alpha * settings.ParticleLightsBrightness;
-
-								if (auto emittance = shaderProperty->unk88) {
-									color.red *= emittance->red;
-									color.green *= emittance->green;
-									color.blue *= emittance->blue;
-								}
-
-								if (auto rendererData = a_pass->geometry->GetGeometryRuntimeData().rendererData) {
-									if (rendererData->vertexDesc.HasFlag(RE::BSGraphics::Vertex::Flags::VF_COLORS)) {
-										if (auto triShape = a_pass->geometry->AsTriShape()) {
-											uint32_t vertexSize = rendererData->vertexDesc.GetSize();
-											uint32_t offset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_COLOR);
-											RE::NiColorA vertexColor{};
-											for (int v = 0; v < triShape->GetTrishapeRuntimeData().vertexCount; v++) {
-												if (VertexColor* vertex = reinterpret_cast<VertexColor*>(&rendererData->rawVertexData[vertexSize * v + offset])) {
-													RE::NiColorA niColor{ (float)vertex->data[0] / 255.0f, (float)vertex->data[1] / 255.0f, (float)vertex->data[2] / 255.0f, (float)vertex->data[3] / 255.0f };
-													if (niColor.alpha > vertexColor.alpha)
-														vertexColor = niColor;
-												}
-											}
-											color.red *= vertexColor.red * vertexColor.alpha;
-											color.green *= vertexColor.green * vertexColor.alpha;
-											color.blue *= vertexColor.blue * vertexColor.alpha;
-										}
-									}
-								}
-
-								queuedParticleLights.insert({ a_pass->geometry, color });
-
-								std::set<std::string> cullingList{
-									"fxglowenb.dds", "glowsoft01_enbl.dds", "black.dds", "enblightglow.dds"
-								};
-								bool shouldCull = cullingList.contains(filename);
-								return settings.EnableParticleLightsCulling && shouldCull;
 							}
+
+							RE::NiColor color;
+							color.red = material->baseColor.red * material->baseColorScale * material->baseColor.alpha * shaderProperty->alpha * settings.ParticleLightsBrightness;
+							color.green = material->baseColor.green * material->baseColorScale * material->baseColor.alpha * shaderProperty->alpha * settings.ParticleLightsBrightness;
+							color.blue = material->baseColor.blue * material->baseColorScale * material->baseColor.alpha * shaderProperty->alpha * settings.ParticleLightsBrightness;
+
+							if (auto emittance = shaderProperty->unk88) {
+								color.red *= emittance->red;
+								color.green *= emittance->green;
+								color.blue *= emittance->blue;
+							}
+
+							if (auto rendererData = a_pass->geometry->GetGeometryRuntimeData().rendererData) {
+								if (rendererData->vertexDesc.HasFlag(RE::BSGraphics::Vertex::Flags::VF_COLORS)) {
+									if (auto triShape = a_pass->geometry->AsTriShape()) {
+										uint32_t vertexSize = rendererData->vertexDesc.GetSize();
+										uint32_t offset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_COLOR);
+										RE::NiColorA vertexColor{};
+										for (int v = 0; v < triShape->GetTrishapeRuntimeData().vertexCount; v++) {
+											if (VertexColor* vertex = reinterpret_cast<VertexColor*>(&rendererData->rawVertexData[vertexSize * v + offset])) {
+												RE::NiColorA niColor{ (float)vertex->data[0] / 255.0f, (float)vertex->data[1] / 255.0f, (float)vertex->data[2] / 255.0f, (float)vertex->data[3] / 255.0f };
+												if (niColor.alpha > vertexColor.alpha)
+													vertexColor = niColor;
+											}
+										}
+										color.red *= vertexColor.red * vertexColor.alpha;
+										color.green *= vertexColor.green * vertexColor.alpha;
+										color.blue *= vertexColor.blue * vertexColor.alpha;
+									}
+								}
+							}
+
+							color *= config.colorMult;
+
+							queuedParticleLights.insert({ a_pass->geometry, { color, config } });
+
+							return settings.EnableParticleLightsCulling && config.cull;
 						}
 					}
 				}
@@ -527,7 +507,7 @@ float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radi
 	return (a_lightPosition.x * a_lightPosition.x) + (a_lightPosition.y * a_lightPosition.y) + (a_lightPosition.z * a_lightPosition.z) - (a_radius * a_radius);
 }
 
-bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, float dimmerMult, int a_eyeIndex, RE::BSGeometry* a_geometry, double timer)
+bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config& config, float dimmerMult, int a_eyeIndex, RE::BSGeometry* a_geometry, double timer)
 {
 	static float& lightFadeStart = (*(float*)RELOCATION_ID(527668, 414582).address());
 	static float& lightFadeEnd = (*(float*)RELOCATION_ID(527669, 414583).address());
@@ -545,7 +525,7 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 	if (dimmer != 0) {
 		if ((light.color.x > 0 || light.color.y > 0 || light.color.z > 0) && light.radius > 0) {
-			if (a_geometry) {
+			if (a_geometry && config.flicker) {
 				auto seed = (std::uint32_t)std::hash<void*>{}(a_geometry);
 
 				siv::PerlinNoise perlin1{ seed };
@@ -553,12 +533,17 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 				siv::PerlinNoise perlin3{ seed + 2 };
 				siv::PerlinNoise perlin4{ seed + 3 };
 
-				light.positionWS[0].x += (float)perlin1.noise1D(timer) * 5.0f;
-				light.positionWS[0].y += (float)perlin2.noise1D(timer) * 5.0f;
-				light.positionWS[0].z += (float)perlin3.noise1D(timer) * 5.0f;
+				auto scaledTimer = timer * config.flickerSpeed;
+
+				light.positionWS[0].x += (float)perlin1.noise1D(scaledTimer) * config.flickerMovement;
+				light.positionWS[0].y += (float)perlin2.noise1D(scaledTimer) * config.flickerMovement;
+				light.positionWS[0].z += (float)perlin3.noise1D(scaledTimer) * config.flickerMovement;
 				light.positionWS[1] = light.positionWS[0];
-				dimmer = std::max(0.0f, dimmer - ((float)perlin4.noise1D_01(timer) * 0.5f));
+				dimmer = std::max(0.0f, dimmer - ((float)perlin4.noise1D_01(scaledTimer) * config.flickerIntensity));
 			}
+
+			light.radius *= config.radiusMult;
+
 			CachedParticleLight cachedParticleLight{};
 			cachedParticleLight.color = { light.color.x, light.color.y, light.color.z };
 			cachedParticleLight.radius = light.radius;
@@ -670,9 +655,9 @@ void LightLimitFix::UpdateLights()
 				uint32_t clusteredLights = 0;
 				auto numVertices = particleData->GetActiveVertexCount();
 				for (std::uint32_t p = 0; p < numVertices; p++) {
-					light.color.x += particleLight.second.red * particleData->color[p].red * particleData->color[p].alpha;
-					light.color.y += particleLight.second.green * particleData->color[p].green * particleData->color[p].alpha;
-					light.color.z += particleLight.second.blue * particleData->color[p].blue * particleData->color[p].alpha;
+					light.color.x += particleLight.second.first.red * particleData->color[p].red * particleData->color[p].alpha;
+					light.color.y += particleLight.second.first.green * particleData->color[p].green * particleData->color[p].alpha;
+					light.color.z += particleLight.second.first.blue * particleData->color[p].blue * particleData->color[p].alpha;
 
 					float radius = particleData->sizes[p] * settings.ParticleLightsRadius;
 
@@ -691,7 +676,7 @@ void LightLimitFix::UpdateLights()
 							light.radius /= (float)clusteredLights;
 							light.positionWS[eyeIndex] /= (float)clusteredLights;
 
-							currentLightCount += AddCachedParticleLights(lightsData, light, 2.0f, eyeIndex);
+							currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, 1.0f, eyeIndex);
 
 							clusteredLights = 0;
 							light.color = { 0, 0, 0 };
@@ -711,16 +696,16 @@ void LightLimitFix::UpdateLights()
 					light.radius /= (float)clusteredLights;
 					light.positionWS[eyeIndex] /= (float)clusteredLights;
 
-					currentLightCount += AddCachedParticleLights(lightsData, light, 2.0f, eyeIndex);
+					currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, 1.0f, eyeIndex);
 				}
 
 			} else {
 				// process NiColor
 				LightData light{};
 
-				light.color.x = particleLight.second.red;
-				light.color.y = particleLight.second.green;
-				light.color.z = particleLight.second.blue;
+				light.color.x = particleLight.second.first.red;
+				light.color.y = particleLight.second.first.green;
+				light.color.z = particleLight.second.first.blue;
 
 				float radius = particleLight.first->GetModelData().modelBound.radius * particleLight.first->world.scale;
 
@@ -728,7 +713,7 @@ void LightLimitFix::UpdateLights()
 
 				SetLightPosition(light, particleLight.first->worldBound.center);  //light is complete for both eyes by now
 
-				currentLightCount += AddCachedParticleLights(lightsData, light, 1.0f, eyeIndex, particleLight.first, timer);
+				currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, 1.0f, eyeIndex, particleLight.first, timer);
 			}
 		}
 	}
