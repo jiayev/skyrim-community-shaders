@@ -5,8 +5,8 @@
 #include "State.h"
 
 #include "Features/ExtendedMaterials.h"
-#include "Features/LightLimitFix.h"
 #include "Features/LightLimitFIx/ParticleLights.h"
+#include "Features/LightLimitFix.h"
 #define DLLEXPORT __declspec(dllexport)
 
 std::list<std::string> errors;
