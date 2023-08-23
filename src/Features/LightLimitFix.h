@@ -109,7 +109,7 @@ public:
 	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
-	bool AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config& config, float dimmerMult = 1.0f, int eyeIndex = 0, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
+	bool AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config& config, int eyeIndex = 0, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
 	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3& a_initialPosition);
 	void UpdateLights();
 	void Bind();

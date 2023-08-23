@@ -507,7 +507,7 @@ float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radi
 	return (a_lightPosition.x * a_lightPosition.x) + (a_lightPosition.y * a_lightPosition.y) + (a_lightPosition.z * a_lightPosition.z) - (a_radius * a_radius);
 }
 
-bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config& config, float dimmerMult, int a_eyeIndex, RE::BSGeometry* a_geometry, double timer)
+bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config& config, int a_eyeIndex, RE::BSGeometry* a_geometry, double timer)
 {
 	static float& lightFadeStart = (*(float*)RELOCATION_ID(527668, 414582).address());
 	static float& lightFadeEnd = (*(float*)RELOCATION_ID(527669, 414583).address());
@@ -547,9 +547,7 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 			cachedParticleLight.color = { light.color.x, light.color.y, light.color.z };
 			cachedParticleLight.radius = light.radius;
 
-			light.color.x *= dimmer * dimmerMult;
-			light.color.y *= dimmer * dimmerMult;
-			light.color.z *= dimmer * dimmerMult;
+			light.color *= dimmer;
 
 			light.shadowMode = 2 * settings.EnableContactShadows;
 			auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
@@ -673,7 +671,7 @@ void LightLimitFix::UpdateLights()
 							light.radius /= (float)clusteredLights;
 							light.positionWS[eyeIndex] /= (float)clusteredLights;
 
-							currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, 1.0f, eyeIndex);
+							currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, eyeIndex);
 
 							clusteredLights = 0;
 							light.color = { 0, 0, 0 };
@@ -693,7 +691,7 @@ void LightLimitFix::UpdateLights()
 					light.radius /= (float)clusteredLights;
 					light.positionWS[eyeIndex] /= (float)clusteredLights;
 
-					currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, 1.0f, eyeIndex);
+					currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, eyeIndex);
 				}
 
 			} else {
@@ -710,7 +708,7 @@ void LightLimitFix::UpdateLights()
 
 				SetLightPosition(light, particleLight.first->worldBound.center);  //light is complete for both eyes by now
 
-				currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, 1.0f, eyeIndex, particleLight.first, timer);
+				currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, eyeIndex, particleLight.first, timer);
 			}
 		}
 	}
