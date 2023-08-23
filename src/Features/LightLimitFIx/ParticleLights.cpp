@@ -1,6 +1,6 @@
 #include "Features/LightLimitFix/ParticleLights.h"
 
-#include <numbers> 
+#include <numbers>
 
 void ParticleLights::GetConfigs()
 {

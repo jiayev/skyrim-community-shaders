@@ -18,7 +18,6 @@ public:
 		return &render;
 	}
 
-
 	static void InstallHooks()
 	{
 		Hooks::Install();
@@ -94,7 +93,7 @@ public:
 
 	RE::BSRenderPass* currentPass = nullptr;
 
-	eastl::hash_map < RE::BSGeometry*, std::pair<RE::NiColor, ParticleLights::Config&>> queuedParticleLights;
+	eastl::hash_map<RE::BSGeometry*, std::pair<RE::NiColor, ParticleLights::Config&>> queuedParticleLights;
 	eastl::hash_map<RE::BSGeometry*, std::pair<RE::NiColor, ParticleLights::Config&>> particleLights;
 
 	std::uint32_t strictLightsCount = 0;

@@ -4,9 +4,9 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
+#include "Features/LightLimitFix.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/WaterBlending.h"
-#include "Features/LightLimitFix.h"
 
 void Feature::Load(json&)
 {
