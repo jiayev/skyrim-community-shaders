@@ -93,8 +93,8 @@ public:
 
 	RE::BSRenderPass* currentPass = nullptr;
 
-	eastl::hash_map<RE::BSGeometry*, std::pair<RE::NiColor, ParticleLights::Config&>> queuedParticleLights;
-	eastl::hash_map<RE::BSGeometry*, std::pair<RE::NiColor, ParticleLights::Config&>> particleLights;
+	eastl::hash_map<RE::BSGeometry*, std::pair<RE::NiColorA, ParticleLights::Config&>> queuedParticleLights;
+	eastl::hash_map<RE::BSGeometry*, std::pair<RE::NiColorA, ParticleLights::Config&>> particleLights;
 
 	std::uint32_t strictLightsCount = 0;
 	eastl::vector<LightData> strictLightsData;
@@ -114,6 +114,7 @@ public:
 	void UpdateLights();
 	void Bind();
 
+	static inline float3 Saturation(float3 color, float saturation);
 	static inline bool IsValidLight(RE::BSLight* a_light);
 	static inline bool IsGlobalLight(RE::BSLight* a_light);
 
@@ -126,10 +127,11 @@ public:
 		bool EnableParticleLightsFade = true;
 		bool EnableParticleLightsDetection = true;
 		float ParticleLightsBrightness = 1.0f;
-		float ParticleLightsRadius = 100.0f;
-		float ParticleLightsRadiusBillboards = 0.5f;
+		float ParticleLightsRadius = 64.0f;
+		float ParticleLightsRadiusBillboards = 1.0f;
 		bool EnableParticleLightsOptimization = true;
-		uint32_t ParticleLightsOptimisationClusterRadius = 32;
+		uint32_t ParticleLightsOptimisationClusterRadius = 48;
+		float ParticleLightsSaturation = 1.8f;
 	};
 
 	float lightsNear = 0.0f;

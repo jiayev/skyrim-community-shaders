@@ -1,5 +1,7 @@
 #include "LightLimitFix.h"
 
+#include <numbers>
+
 #include <PerlinNoise.hpp>
 
 #include "State.h"
@@ -41,9 +43,11 @@ void LightLimitFix::DrawSettings()
 		ImGui::Checkbox("Enable Fade", &settings.EnableParticleLightsFade);
 		ImGui::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection);
 
-		ImGui::SliderFloat("Brightness", &settings.ParticleLightsBrightness, 0.0, 10.0);
-		ImGui::SliderFloat("Radius", &settings.ParticleLightsRadius, 0.0, 1000.0);
-		ImGui::SliderFloat("Billboard Radius", &settings.ParticleLightsRadiusBillboards, 0.0, 1.0);
+		ImGui::SliderFloat("Brightness", &settings.ParticleLightsBrightness, 0.0, 1.0, "%.2f");
+		ImGui::SliderFloat("Saturation", &settings.ParticleLightsSaturation, 1.0, 2.0, "%.2f");
+
+		ImGui::SliderFloat("Radius", &settings.ParticleLightsRadius, 0.0, 100.0, "%.0f");
+		ImGui::SliderFloat("Billboard Radius", &settings.ParticleLightsRadiusBillboards, 0.0, 1.0, "%.2f");
 
 		ImGui::Checkbox("Enable Optimization", &settings.EnableParticleLightsOptimization);
 		ImGui::SliderInt("Optimisation Cluster Radius", (int*)&settings.ParticleLightsOptimisationClusterRadius, 1, 48);
@@ -424,10 +428,11 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_tec
 								}
 							}
 
-							RE::NiColor color;
-							color.red = material->baseColor.red * material->baseColorScale * material->baseColor.alpha * shaderProperty->alpha * settings.ParticleLightsBrightness;
-							color.green = material->baseColor.green * material->baseColorScale * material->baseColor.alpha * shaderProperty->alpha * settings.ParticleLightsBrightness;
-							color.blue = material->baseColor.blue * material->baseColorScale * material->baseColor.alpha * shaderProperty->alpha * settings.ParticleLightsBrightness;
+							RE::NiColorA color;
+							color.red = material->baseColor.red * material->baseColorScale * settings.ParticleLightsBrightness;
+							color.green = material->baseColor.green * material->baseColorScale * settings.ParticleLightsBrightness;
+							color.blue = material->baseColor.blue * material->baseColorScale * settings.ParticleLightsBrightness;
+							color.alpha = material->baseColor.alpha * shaderProperty->alpha;
 
 							if (auto emittance = shaderProperty->unk88) {
 								color.red *= emittance->red;
@@ -448,14 +453,19 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_tec
 													vertexColor = niColor;
 											}
 										}
-										color.red *= vertexColor.red * vertexColor.alpha;
-										color.green *= vertexColor.green * vertexColor.alpha;
-										color.blue *= vertexColor.blue * vertexColor.alpha;
+										color.red *= vertexColor.red;
+										color.green *= vertexColor.green;
+										color.blue *= vertexColor.blue;
+										if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexAlpha)){
+											color.alpha *= vertexColor.alpha;
+										}
 									}
 								}
 							}
 
-							color *= config.colorMult;
+							color.red *= config.colorMult.red;
+							color.green *= config.colorMult.blue;
+							color.blue *= config.colorMult.green;
 
 							queuedParticleLights.insert({ a_pass->geometry, { color, config } });
 
@@ -571,6 +581,12 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 	return false;
 }
 
+float3 LightLimitFix::Saturation(float3 color, float saturation)
+{
+	auto grey = color.Dot(float3(0.3f, 0.59f, 0.11f));
+	return float3::Lerp( float3(grey), color, saturation);
+}
+
 void LightLimitFix::UpdateLights()
 {
 	std::uint32_t currentLightCount = 0;  // Max number of lights is 4294967295
@@ -650,10 +666,6 @@ void LightLimitFix::UpdateLights()
 				uint32_t clusteredLights = 0;
 				auto numVertices = particleData->GetActiveVertexCount();
 				for (std::uint32_t p = 0; p < numVertices; p++) {
-					light.color.x += particleLight.second.first.red * particleData->GetParticlesRuntimeData().color[p].red * particleData->GetParticlesRuntimeData().color[p].alpha;
-					light.color.y += particleLight.second.first.green * particleData->GetParticlesRuntimeData().color[p].green * particleData->GetParticlesRuntimeData().color[p].alpha;
-					light.color.z += particleLight.second.first.blue * particleData->GetParticlesRuntimeData().color[p].blue * particleData->GetParticlesRuntimeData().color[p].alpha;
-
 					float radius = particleData->GetParticlesRuntimeData().sizes[p] * settings.ParticleLightsRadius;
 
 					auto initialPosition = particleData->GetParticlesRuntimeData().positions[p] + (particleSystem->GetParticleSystemRuntimeData().isWorldspace ? RE::NiPoint3{} : (particleLight.first->worldBound.center));
@@ -661,8 +673,8 @@ void LightLimitFix::UpdateLights()
 					RE::NiPoint3 positionWS = initialPosition - eyePosition;
 
 					if (clusteredLights) {
-						float radiusDiff = abs((light.radius / (float)clusteredLights) - radius);
-						radiusDiff *= radiusDiff;
+						auto averageRadius = light.radius / (float)clusteredLights;
+						float radiusDiff = abs(averageRadius - radius);
 
 						auto averagePosition = light.positionWS[eyeIndex] / (float)clusteredLights;
 						float positionDiff = positionWS.GetDistance({ averagePosition.x, averagePosition.y, averagePosition.z });
@@ -680,11 +692,19 @@ void LightLimitFix::UpdateLights()
 						}
 					}
 
-					clusteredLights++;
+					float alpha = particleLight.second.first.alpha * particleData->GetParticlesRuntimeData().color[p].alpha;
+					float3 color;
+					color.x = particleLight.second.first.red * particleData->GetParticlesRuntimeData().color[p].red;
+					color.y = particleLight.second.first.green * particleData->GetParticlesRuntimeData().color[p].green;
+					color.z = particleLight.second.first.blue * particleData->GetParticlesRuntimeData().color[p].blue;
+					light.color += Saturation(color, settings.ParticleLightsSaturation) * alpha * std::numbers::pi_v<float>;
+
 					light.radius += radius;
 					light.positionWS[eyeIndex].x += positionWS.x;
 					light.positionWS[eyeIndex].y += positionWS.y;
 					light.positionWS[eyeIndex].z += positionWS.z;
+
+					clusteredLights++;
 				}
 
 				if (clusteredLights) {
@@ -701,6 +721,10 @@ void LightLimitFix::UpdateLights()
 				light.color.x = particleLight.second.first.red;
 				light.color.y = particleLight.second.first.green;
 				light.color.z = particleLight.second.first.blue;
+
+				light.color = Saturation(light.color, settings.ParticleLightsSaturation);
+				
+				light.color *= particleLight.second.first.alpha;
 
 				float radius = particleLight.first->GetModelData().modelBound.radius * particleLight.first->world.scale;
 
