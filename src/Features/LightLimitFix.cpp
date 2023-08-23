@@ -285,7 +285,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 void LightLimitFix::BSEffectShader_SetupGeometry_Before(RE::BSRenderPass* a_pass)
 {
 	if (auto shaderProperty = netimmerse_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty)) {
-		if (auto material = static_cast<RE::BSEffectShaderMaterial*>(shaderProperty->material)) {
+		if (auto material = shaderProperty->material) {
 			if (material->sourceTexturePath.size() > 1) {
 				std::string textureName = material->sourceTexturePath.c_str();
 				auto lastSeparatorPos = textureName.find_last_of("\\/");
@@ -395,7 +395,7 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_tec
 	if (settings.EnableParticleLights) {
 		if (a_technique == 0x4004146F || a_technique == 0x4004046F || a_technique == 0x4000046F) {
 			if (auto shaderProperty = netimmerse_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty)) {
-				if (auto material = static_cast<RE::BSEffectShaderMaterial*>(shaderProperty->material)) {
+				if (auto material = shaderProperty->material) {
 					if (!material->sourceTexturePath.empty()) {
 						std::string textureName = material->sourceTexturePath.c_str();
 						if (textureName.size() < 1)
@@ -472,7 +472,7 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_tec
 void LightLimitFix::BSEffectShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	if (auto shaderProperty = netimmerse_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty)) {
-		if (auto material = static_cast<RE::BSEffectShaderMaterial*>(shaderProperty->material)) {
+		if (auto material = shaderProperty->material) {
 			logger::info("{}", material->greyscaleTexturePath.c_str());
 		}
 	}
