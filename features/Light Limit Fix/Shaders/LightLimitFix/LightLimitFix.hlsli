@@ -79,7 +79,7 @@ float GetScreenDepth(float2 uv)
 float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, uint a_eyeIndex = 0)
 {
 	lightDirectionVS *= 1.5;
-
+	
 	// Offset starting position with interleaved gradient noise
 	rayPos += lightDirectionVS * offset;
 
@@ -101,7 +101,7 @@ float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightD
 		// Difference between the current ray distance and the marched light
 		float depthDelta = rayPos.z - rayDepth;
 		if (rayDepth > 16.5)  // First person
-			shadow += saturate(depthDelta) - saturate(depthDelta / (rayDepth * 0.1));
+			shadow += saturate(depthDelta * 0.20) - saturate(depthDelta * 0.1);
 	}
 
 	return 1.0 - saturate(shadow);
@@ -132,7 +132,7 @@ float ContactShadowsLong(float3 rayPos, float2 texcoord, float offset, float3 li
 		// Difference between the current ray distance and the marched light
 		float depthDelta = rayPos.z - rayDepth;
 		if (rayDepth > 16.5)  // First person
-			shadow += saturate(depthDelta) - saturate(depthDelta / (rayDepth * 0.4));
+			shadow += saturate(depthDelta) - saturate(depthDelta * 0.05);
 	}
 
 	return 1.0 - saturate(shadow);
