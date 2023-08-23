@@ -674,11 +674,11 @@ cbuffer PerTechnique : register(b0)
 
 cbuffer PerMaterial : register(b1)
 {
-	float4 LODTexParams : packoffset(c0);            // TerrainTexOffset in xy, LodBlendingEnabled in z
+	float4 LODTexParams : packoffset(c0);  // TerrainTexOffset in xy, LodBlendingEnabled in z
 	float4 TintColor : packoffset(c1);
-	float4 EnvmapData : packoffset(c2);              // fEnvmapScale in x, 1 or 0 in y depending of if has envmask
+	float4 EnvmapData : packoffset(c2);  // fEnvmapScale in x, 1 or 0 in y depending of if has envmask
 	float4 ParallaxOccData : packoffset(c3);
-	float4 SpecularColor : packoffset(c4);           // Shininess in w, color in xyz
+	float4 SpecularColor : packoffset(c4);  // Shininess in w, color in xyz
 	float4 SparkleParams : packoffset(c5);
 	float4 MultiLayerParallaxData : packoffset(c6);  // Layer thickness in x, refraction scale in y, uv scale in zw
 	float4 LightingEffectParams : packoffset(c7);    // fSubSurfaceLightRolloff in x, fRimLightPower in y
@@ -705,7 +705,7 @@ cbuffer PerGeometry : register(b2)
 	float4 SSRParams : packoffset(c7);
 	float4 WorldMapOverlayParametersPS : packoffset(c8);
 	float4 ProjectedUVParams2 : packoffset(c9);
-	float4 ProjectedUVParams3 : packoffset(c10);                  // fProjectedUVDiffuseNormalTilingScale in x, fProjectedUVNormalDetailTilingScale in y, EnableProjectedNormals in w
+	float4 ProjectedUVParams3 : packoffset(c10);  // fProjectedUVDiffuseNormalTilingScale in x, fProjectedUVNormalDetailTilingScale in y, EnableProjectedNormals in w
 	row_major float3x4 DirectionalAmbient : packoffset(c11);
 	float4 AmbientSpecularTintAndFresnelPower : packoffset(c14);  // Fresnel power in z, color in xyz
 	float4 PointLightPosition[7] : packoffset(c15);               // point light radius in w
@@ -724,7 +724,7 @@ cbuffer PerGeometry : register(b2)
 	float4 SSRParams : packoffset(c19);
 	float4 WorldMapOverlayParametersPS : packoffset(c20);
 	float4 ProjectedUVParams2 : packoffset(c21);
-	float4 ProjectedUVParams3 : packoffset(c22);                  // fProjectedUVDiffuseNormalTilingScale in x,	fProjectedUVNormalDetailTilingScale in y, EnableProjectedNormals in w
+	float4 ProjectedUVParams3 : packoffset(c22);  // fProjectedUVDiffuseNormalTilingScale in x,	fProjectedUVNormalDetailTilingScale in y, EnableProjectedNormals in w
 	row_major float3x4 DirectionalAmbient : packoffset(c23);
 	float4 AmbientSpecularTintAndFresnelPower : packoffset(c26);  // Fresnel power in z, color in xyz
 	float4 PointLightPosition[14] : packoffset(c27);              // point light radius in w
@@ -1919,7 +1919,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float4 color;
 	color.xyz = diffuseColor * baseColor.xyz;
 
-#	endif      // PBR
+#	endif  // PBR
 
 #	if defined(HAIR)
 	float3 vertexColor = (input.Color.yyy * (TintColor.xyz - 1.0.xxx) + 1.0.xxx) * color.xyz;
@@ -1998,7 +1998,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	color.xyz = min(specularTmp.xyz, color.xyz);
 #		endif  // defined (SPECULAR) || defined(AMBIENT_SPECULAR) || defined(SPARKLE)
 
-#	endif      // !defined(PBR)
+#	endif  // !defined(PBR)
 
 #	if defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
 	psout.Albedo.w = 0;

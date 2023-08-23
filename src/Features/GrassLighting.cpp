@@ -42,10 +42,10 @@ void GrassLighting::DrawSettings()
 	if (ImGui::TreeNodeEx("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::TextWrapped("Fix for grass not being affected by sunlight scale.");
 		ImGui::Checkbox("Enable Directional Light Fix", (bool*)&settings.EnableDirLightFix);
-		
+
 		ImGui::TextWrapped("Darkens the grass textures to look better with the new lighting");
 		ImGui::SliderFloat("Brightness", &settings.Brightness, 0.0f, 1.0f);
-	
+
 		ImGui::TextWrapped("Boosts the vibrancy of textures");
 		ImGui::SliderFloat("Saturation", &settings.Saturation, 1.0f, 2.0f);
 
