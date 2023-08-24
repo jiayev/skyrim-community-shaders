@@ -79,7 +79,7 @@ float GetScreenDepth(float2 uv)
 float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, uint a_eyeIndex = 0)
 {
 	lightDirectionVS *= 1.5;
-	
+
 	// Offset starting position with interleaved gradient noise
 	rayPos += lightDirectionVS * offset;
 

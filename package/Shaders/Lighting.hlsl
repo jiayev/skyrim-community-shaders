@@ -169,7 +169,10 @@ cbuffer VS_PerFrame : register(b12)
 #	ifdef VR
 cbuffer cb13 : register(b13)
 {
-	float4 cb13[3];
+	float AlphaThreshold : packoffset(c0);
+	float cb13 : packoffset(c0.y);
+	float2 EyeOffsetScale : packoffset(c0.z);
+	float4 EyeClipEdge[2] : packoffset(c1);
 }
 #	endif  // VR
 
@@ -248,12 +251,8 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	if !defined(VR)
 	uint eyeIndex = 0;
-	uint eyeIndexX3 = 0;
-	uint eyeIndexX4 = 0;
 #	else   // VR
-	uint eyeIndex = cb13[0].y * (input.InstanceID.x & 1);
-	uint eyeIndexX3 = eyeIndex * 3;
-	uint eyeIndexX4 = eyeIndex << 2;
+	uint eyeIndex = cb13 * (input.InstanceID.x & 1);
 #	endif  // VR
 
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
@@ -458,16 +457,16 @@ VS_OUTPUT main(VS_INPUT input)
 	float4 r0;
 	float4 projSpacePosition = viewPos;
 	r0.xyzw = 0;
-	if (0 < cb13[0].y) {
-		r0.yz = dot(projSpacePosition, cb13[eyeIndex + 1].xyzw);
+	if (0 < cb13) {
+		r0.yz = dot(projSpacePosition, EyeClipEdge[eyeIndex]);  // projSpacePosition is clipPos
 	} else {
 		r0.yz = float2(1, 1);
 	}
 
-	r0.w = 2 + -cb13[0].y;
-	r0.x = dot(cb13[0].zw, M_IdentityMatrix[eyeIndex + 0].xy);
+	r0.w = 2 + -cb13;
+	r0.x = dot(EyeOffsetScale, M_IdentityMatrix[eyeIndex].xy);
 	r0.xw = r0.xw * projSpacePosition.wx;
-	r0.x = cb13[0].y * r0.x;
+	r0.x = cb13 * r0.x;
 
 	vsout.Position.x = r0.w * 0.5 + r0.x;
 	vsout.Position.yzw = projSpacePosition.yzw;
@@ -733,15 +732,20 @@ cbuffer PerGeometry : register(b2)
 #	endif  // VR
 };
 
+#	if !defined(VR)
 cbuffer AlphaTestRefBuffer : register(b11)
 {
 	float AlphaThreshold : packoffset(c0);
 }
+#	endif
 
 #	ifdef VR
 cbuffer cb13 : register(b13)
 {
-	float4 cb13[3];
+	float AlphaThreshold : packoffset(c0);
+	float cb13 : packoffset(c0.y);
+	float2 EyeOffsetScale : packoffset(c0.z);
+	float4 EyeClipEdge[2] : packoffset(c1);
 }
 #	endif  // VR
 
@@ -1073,8 +1077,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if !defined(VR)
 	uint eyeIndex = 0;
-	uint eyeIndexX3 = 0;
-	uint eyeIndexX4 = 0;
 #	else
 	// this code appears in parallax code in the PShader,
 	// https://github.com/alandtse/SSEShaderTools/commit/450a0d62d01b0cbdfeb86b4eba46c3528833c897?diff=split#diff-1927ad1d541f8de9480b08bd5e6878a9a56b64d06068e1724e4a5792c663c87bR71
@@ -1121,12 +1123,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	stereoUV.xy = input.Position.xy * VPOSOffset.xy + VPOSOffset.zw;
 	stereoUV.x = DynamicResolutionParams2.x * stereoUV.x;
 	stereoUV.x = (stereoUV.x >= 0.5);
-	uint eyeIndex =
-		(uint)(((int)((uint)cb13[0].y)) *
-			   (int)stereoUV.x);  // this may be eyeOffset from RunGrass.hsl
-	uint eyeIndexX3 = eyeIndex * 3;
-	uint eyeIndexX4 = eyeIndex << 2;
-
+	uint eyeIndex = (uint)(((int)((uint)cb13)) * (int)stereoUV.x);
 	// In VR, there is no worldPosition or PreviousWorldPosition as an input. This code is used to determine position
 	// float4 worldPositionVR;
 	// worldPositionVR.x =
