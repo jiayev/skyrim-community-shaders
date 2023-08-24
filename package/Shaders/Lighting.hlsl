@@ -248,12 +248,8 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	if !defined(VR)
 	uint eyeIndex = 0;
-	uint eyeIndexX3 = 0;
-	uint eyeIndexX4 = 0;
 #	else   // VR
 	uint eyeIndex = cb13[0].y * (input.InstanceID.x & 1);
-	uint eyeIndexX3 = eyeIndex * 3;
-	uint eyeIndexX4 = eyeIndex << 2;
 #	endif  // VR
 
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
@@ -1073,8 +1069,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if !defined(VR)
 	uint eyeIndex = 0;
-	uint eyeIndexX3 = 0;
-	uint eyeIndexX4 = 0;
 #	else
 	// this code appears in parallax code in the PShader,
 	// https://github.com/alandtse/SSEShaderTools/commit/450a0d62d01b0cbdfeb86b4eba46c3528833c897?diff=split#diff-1927ad1d541f8de9480b08bd5e6878a9a56b64d06068e1724e4a5792c663c87bR71
@@ -1124,8 +1118,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	uint eyeIndex =
 		(uint)(((int)((uint)cb13[0].y)) *
 			   (int)stereoUV.x);  // this may be eyeOffset from RunGrass.hsl
-	uint eyeIndexX3 = eyeIndex * 3;
-	uint eyeIndexX4 = eyeIndex << 2;
 
 	// In VR, there is no worldPosition or PreviousWorldPosition as an input. This code is used to determine position
 	// float4 worldPositionVR;
