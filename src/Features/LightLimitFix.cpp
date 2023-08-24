@@ -456,7 +456,7 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_tec
 										color.red *= vertexColor.red;
 										color.green *= vertexColor.green;
 										color.blue *= vertexColor.blue;
-										if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexAlpha)){
+										if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexAlpha)) {
 											color.alpha *= vertexColor.alpha;
 										}
 									}
@@ -584,7 +584,7 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 float3 LightLimitFix::Saturation(float3 color, float saturation)
 {
 	auto grey = color.Dot(float3(0.3f, 0.59f, 0.11f));
-	return float3::Lerp( float3(grey), color, saturation);
+	return float3::Lerp(float3(grey), color, saturation);
 }
 
 void LightLimitFix::UpdateLights()
@@ -723,7 +723,7 @@ void LightLimitFix::UpdateLights()
 				light.color.z = particleLight.second.first.blue;
 
 				light.color = Saturation(light.color, settings.ParticleLightsSaturation);
-				
+
 				light.color *= particleLight.second.first.alpha;
 
 				float radius = particleLight.first->GetModelData().modelBound.radius * particleLight.first->world.scale;
