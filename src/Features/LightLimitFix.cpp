@@ -682,7 +682,7 @@ void LightLimitFix::UpdateLights()
 						if ((radiusDiff + positionDiff) > settings.ParticleLightsOptimisationClusterRadius || !settings.EnableParticleLightsOptimization) {
 							light.radius /= (float)clusteredLights;
 							light.positionWS[eyeIndex] /= (float)clusteredLights;
-
+							light.positionWS[1] = light.positionWS[0];  // naive implementation; may be removed if we actually iterate
 							currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, eyeIndex);
 
 							clusteredLights = 0;
@@ -710,7 +710,7 @@ void LightLimitFix::UpdateLights()
 				if (clusteredLights) {
 					light.radius /= (float)clusteredLights;
 					light.positionWS[eyeIndex] /= (float)clusteredLights;
-
+					light.positionWS[1] = light.positionWS[0];  // naive implementation; may be removed if we actually iterate
 					currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, eyeIndex);
 				}
 
