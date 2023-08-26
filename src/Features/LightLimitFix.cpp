@@ -685,9 +685,9 @@ void LightLimitFix::UpdateLights()
 							light.positionWS[1] = light.positionWS[0];
 							if (eyeCount == 2) {
 								auto offset = eyePosition - state->GetVRRuntimeData().posAdjust.getEye(1);
-								light.positionWS[1].x += offset.x;
-								light.positionWS[1].y += offset.y;
-								light.positionWS[1].z += offset.z;
+								light.positionWS[1].x += offset.x / (float)clusteredLights;
+								light.positionWS[1].y += offset.y / (float)clusteredLights;
+								light.positionWS[1].z += offset.z / (float)clusteredLights;
 							}
 							currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, eyeIndex);
 
@@ -719,9 +719,9 @@ void LightLimitFix::UpdateLights()
 					light.positionWS[1] = light.positionWS[0];
 					if (eyeCount == 2) {
 						auto offset = eyePosition - state->GetVRRuntimeData().posAdjust.getEye(1);
-						light.positionWS[1].x += offset.x;
-						light.positionWS[1].y += offset.y;
-						light.positionWS[1].z += offset.z;
+						light.positionWS[1].x += offset.x / (float)clusteredLights;
+						light.positionWS[1].y += offset.y / (float)clusteredLights;
+						light.positionWS[1].z += offset.z / (float)clusteredLights;
 					}
 					currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, eyeIndex);
 				}
