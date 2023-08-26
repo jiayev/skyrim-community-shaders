@@ -499,12 +499,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(LIGHT_LIMIT_FIX)
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
+	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
 
 	float clampedDepth = clamp(viewPosition.z, GetNearPlane(), GetFarPlane());
 
 	uint clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 24.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
 	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(16, 8));
+#			if !defined(VR)
 	uint3 cluster = uint3(uint2(input.HPosition.xy / clusterDim), clusterZ);
+#			else
+	uint3 cluster = uint3(uint2((screenUV * perPassLLF[0].BufferDim) / clusterDim), clusterZ);
+#			endif  // !VR
 	uint clusterIndex = cluster.x + (16 * cluster.y) + (16 * 8 * cluster.z);
 
 	uint lightCount = lightGrid[clusterIndex].lightCount;
