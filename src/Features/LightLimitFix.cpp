@@ -682,7 +682,11 @@ void LightLimitFix::UpdateLights()
 						if ((radiusDiff + positionDiff) > settings.ParticleLightsOptimisationClusterRadius || !settings.EnableParticleLightsOptimization) {
 							light.radius /= (float)clusteredLights;
 							light.positionWS[eyeIndex] /= (float)clusteredLights;
-							light.positionWS[1] = light.positionWS[0];  // naive implementation; may be removed if we actually iterate
+							light.positionWS[1] = light.positionWS[0];
+							auto offset = eyePosition - state->GetVRRuntimeData().posAdjust.getEye(1);
+							light.positionWS[1].x += offset.x;
+							light.positionWS[1].y += offset.y;
+							light.positionWS[1].z += offset.z;
 							currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, eyeIndex);
 
 							clusteredLights = 0;
@@ -710,7 +714,11 @@ void LightLimitFix::UpdateLights()
 				if (clusteredLights) {
 					light.radius /= (float)clusteredLights;
 					light.positionWS[eyeIndex] /= (float)clusteredLights;
-					light.positionWS[1] = light.positionWS[0];  // naive implementation; may be removed if we actually iterate
+					light.positionWS[1] = light.positionWS[0];
+					auto offset = eyePosition - state->GetVRRuntimeData().posAdjust.getEye(1);
+					light.positionWS[1].x += offset.x;
+					light.positionWS[1].y += offset.y;
+					light.positionWS[1].z += offset.z;
 					currentLightCount += AddCachedParticleLights(lightsData, light, particleLight.second.second, eyeIndex);
 				}
 
