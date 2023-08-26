@@ -157,7 +157,7 @@ cbuffer VS_PerFrame : register(b12)
 	float3 PreviousBonesPivot[1] : packoffset(c41);
 #		endif  // SKINNED
 #	else
-	row_major float3x3 ScreenProj[2] : packoffset(c0);
+	row_major float4x4 ScreenProj[2] : packoffset(c0);
 	row_major float4x4 ViewProj[2] : packoffset(c16);
 #		if defined(SKINNED)
 	float3 BonesPivot[2] : packoffset(c80);
@@ -1775,7 +1775,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 		uint clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 16.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
 		uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(32, 16));
+#		if !defined(VR)
 		uint3 cluster = uint3(uint2(input.Position.xy / clusterDim), clusterZ);
+#		else
+		uint3 cluster = uint3(uint2((screenUV * perPassLLF[0].BufferDim) / clusterDim), clusterZ);
+#		endif  // !VR
 		uint clusterIndex = cluster.x + (32 * cluster.y) + (32 * 16 * cluster.z);
 
 		lightCount = lightGrid[clusterIndex].lightCount;
@@ -2055,7 +2059,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float clampedDepth = clamp(viewPosition.z, GetNearPlane(), GetFarPlane());
 	uint clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 16.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
 	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(32, 16));
+#		if !defined(VR)
 	uint3 cluster = uint3(uint2(input.Position.xy / clusterDim), clusterZ);
+#		else
+	uint3 cluster = uint3(uint2((screenUV * perPassLLF[0].BufferDim) / clusterDim), clusterZ);
+#		endif  // !VR
 	uint clusterIndex = cluster.x + (32 * cluster.y) + (32 * 16 * cluster.z);
 	float level = (float)lightCount;
 	float3 col;
