@@ -902,6 +902,10 @@ namespace SIE
 			for (const auto& def : defines) {
 				if (def.Name != nullptr) {
 					result += def.Name;
+					if (def.Definition != nullptr && !std::string(def.Definition).empty()) {
+						result += "=";
+						result += def.Definition;
+					}
 					result += ' ';
 				} else {
 					break;
@@ -1054,7 +1058,7 @@ namespace SIE
 			const auto type = shader.shaderType.get();
 			const std::wstring path = GetShaderPath(shader.fxpFilename);
 
-			std::array<D3D_SHADER_MACRO, 64> defines;
+			std::array<D3D_SHADER_MACRO, 64> defines{};
 			auto lastIndex = 0;
 			if (shaderClass == ShaderClass::Vertex) {
 				defines[lastIndex++] = { "VSHADER", nullptr };
@@ -1067,6 +1071,11 @@ namespace SIE
 			}
 			if (REL::Module::IsVR())
 				defines[lastIndex++] = { "VR", nullptr };
+			auto shaderDefines = State::GetSingleton()->GetDefines();
+			if (!shaderDefines->empty()) {
+				for (unsigned int i = 0; i < shaderDefines->size(); i++)
+					defines[lastIndex++] = { shaderDefines->at(i).first.c_str(), shaderDefines->at(i).second.c_str() };
+			}
 			defines[lastIndex] = { nullptr, nullptr };  // do final entry
 			GetShaderDefines(type, descriptor, &defines[lastIndex]);
 

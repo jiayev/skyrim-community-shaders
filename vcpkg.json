@@ -13,6 +13,7 @@
     "catch2",
     "magic-enum",
     "nlohmann-json",
+    "pystring",
     {
       "name": "imgui",
       "features": [
