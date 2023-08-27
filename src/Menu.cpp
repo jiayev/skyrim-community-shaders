@@ -1,6 +1,7 @@
 #include "Menu.h"
 
 #include <dinput.h>
+#include <imgui_stdlib.h>
 #include <magic_enum.hpp>
 
 #include "ShaderCache.h"
@@ -392,6 +393,18 @@ void Menu::DrawSettings()
 				ImGui::BeginTooltip();
 				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
 				ImGui::Text("Log level. Trace is most verbose. Default is info.");
+				ImGui::PopTextWrapPos();
+				ImGui::EndTooltip();
+			}
+
+			auto& shaderDefines = State::GetSingleton()->shaderDefinesString;
+			if (ImGui::InputText("Shader Defines", &shaderDefines)) {
+				State::GetSingleton()->SetDefines(shaderDefines);
+			}
+			if (ImGui::IsItemHovered()) {
+				ImGui::BeginTooltip();
+				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+				ImGui::Text("Defines for Shader Compiler. Semicolon \";\" separated. Clear with space. Rebuild shaders after making change. Compute Shaders require a restart to recompile.");
 				ImGui::PopTextWrapPos();
 				ImGui::EndTooltip();
 			}

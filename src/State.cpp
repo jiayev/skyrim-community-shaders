@@ -1,6 +1,7 @@
 #include "State.h"
 
 #include <magic_enum.hpp>
+#include <pystring/pystring.h>
 
 #include "Menu.h"
 #include "ShaderCache.h"
@@ -79,6 +80,8 @@ void State::Load()
 		if (advanced["Log Level"].is_number_integer()) {
 			logLevel = static_cast<spdlog::level::level_enum>((int)advanced["Log Level"]);
 			//logLevel = static_cast<spdlog::level::level_enum>(max(spdlog::level::trace, min(spdlog::level::off, (int)advanced["Log Level"])));
+			if (advanced["Shader Defines"].is_string())
+				SetDefines(advanced["Shader Defines"]);
 		}
 	}
 
@@ -120,6 +123,7 @@ void State::Save()
 	json advanced;
 	advanced["Dump Shaders"] = shaderCache.IsDump();
 	advanced["Log Level"] = logLevel;
+	advanced["Shader Defines"] = shaderDefinesString;
 	settings["Advanced"] = advanced;
 
 	json general;
@@ -168,6 +172,38 @@ void State::SetLogLevel(spdlog::level::level_enum a_level)
 spdlog::level::level_enum State::GetLogLevel()
 {
 	return logLevel;
+}
+
+void State::SetDefines(std::string a_defines)
+{
+	shaderDefines.clear();
+	shaderDefinesString = "";
+	std::string name = "";
+	std::string definition = "";
+	auto defines = pystring::split(a_defines, ";");
+	for (const auto& define : defines) {
+		auto cleanedDefine = pystring::strip(define);
+		auto token = pystring::split(cleanedDefine, "=");
+		if (token.empty() || token[0].empty())
+			continue;
+		if (token.size() > 2) {
+			logger::warn("Define string has too many '='; ignoring {}", define);
+			continue;
+		}
+		name = pystring::strip(token[0]);
+		if (token.size() == 2) {
+			definition = pystring::strip(token[1]);
+		}
+		shaderDefinesString += pystring::strip(define) + ";";
+		shaderDefines.push_back(std::pair(name, definition));
+	}
+	shaderDefinesString = shaderDefinesString.substr(0, shaderDefinesString.size() - 1);
+	logger::debug("Shader Defines set to {}", shaderDefinesString);
+}
+
+std::vector<std::pair<std::string, std::string>>* State::GetDefines()
+{
+	return &shaderDefines;
 }
 
 bool State::ShaderEnabled(const RE::BSShader::Type a_type)
