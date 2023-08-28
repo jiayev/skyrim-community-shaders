@@ -33,8 +33,15 @@ float3 IntersectionZPlane(float3 B, float z_dist)
 
 	float2 clusterSize = rcp(float2(CLUSTER_BUILDING_DISPATCH_SIZE_X, CLUSTER_BUILDING_DISPATCH_SIZE_Y));
 
-	float3 maxPointVS = GetPositionVS((groupId.xy + 1) * clusterSize, 1.0f);
-	float3 minPointVS = GetPositionVS(groupId.xy * clusterSize, 1.0f);
+	float2 texcoordMax = (groupId.xy + 1) * clusterSize;
+	float2 texcoordMin = groupId.xy * clusterSize;
+#if !defined(VR)
+	float3 maxPointVS = GetPositionVS(texcoordMax, 1.0f);
+	float3 minPointVS = GetPositionVS(texcoordMin, 1.0f);
+#else
+	float3 maxPointVS = max(GetPositionVS(texcoordMax, 1.0f, 0), GetPositionVS(texcoordMax, 1.0f, 1));
+	float3 minPointVS = min(GetPositionVS(texcoordMin, 1.0f, 0), GetPositionVS(texcoordMin, 1.0f, 1));
+#endif  // !VR
 
 	float clusterNear = CameraNear * pow(CameraFar / CameraNear, groupId.z / float(CLUSTER_BUILDING_DISPATCH_SIZE_Z));
 	float clusterFar = CameraNear * pow(CameraFar / CameraNear, (groupId.z + 1) / float(CLUSTER_BUILDING_DISPATCH_SIZE_Z));

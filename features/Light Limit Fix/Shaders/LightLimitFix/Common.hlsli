@@ -36,20 +36,13 @@ cbuffer PerFrame : register(b0)
 	float pad[2];
 }
 
-float3 GetPositionVS(float2 texcoord, float depth)
+float3 GetPositionVS(float2 texcoord, float depth, int eyeIndex = 0)
 {
 	float4 clipSpaceLocation;
-#ifdef VR
-	uint eyeIndex = (texcoord.x > .5);
-	// next code should convert between eyes in VR (may not be necessary)
-//	texcoord.x = (texcoord.x * 2 - eyeIndex);       // [0, 0.5] -> [0, 1], [0.5, 1] -> [0, 1]
-#else
-	uint eyeIndex = 0;
-#endif                                              //VR
 	clipSpaceLocation.xy = texcoord * 2.0f - 1.0f;  // convert from [0,1] to [-1,1]
 	clipSpaceLocation.y *= -1;
 	clipSpaceLocation.z = depth;
 	clipSpaceLocation.w = 1.0f;
-	float4 homogenousLocation = mul(clipSpaceLocation, InvProjMatrix[0]);
+	float4 homogenousLocation = mul(clipSpaceLocation, InvProjMatrix[eyeIndex]);
 	return homogenousLocation.xyz / homogenousLocation.w;
 }

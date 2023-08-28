@@ -12,12 +12,12 @@ RWStructuredBuffer<LightGrid> lightGrid : register(u2);     //16^3
 
 groupshared StructuredLight sharedLights[GROUP_SIZE];
 
-bool LightIntersectsCluster(StructuredLight light, ClusterAABB cluster)
+bool LightIntersectsCluster(StructuredLight light, ClusterAABB cluster, int eyeIndex = 0)
 {
 	// For now, only use left eye position
-	float3 closest = max(cluster.minPoint, min(light.positionVS[0].xyz, cluster.maxPoint)).xyz;
+	float3 closest = max(cluster.minPoint, min(light.positionVS[eyeIndex].xyz, cluster.maxPoint)).xyz;
 
-	float3 dist = closest - light.positionVS[0].xyz;
+	float3 dist = closest - light.positionVS[eyeIndex].xyz;
 	return dot(dist, dist) <= (light.radius * light.radius);
 }
 
@@ -60,7 +60,11 @@ bool LightIntersectsCluster(StructuredLight light, ClusterAABB cluster)
 		for (uint i = 0; i < batchSize; i++) {
 			StructuredLight light = lights[i];
 
-			if (visibleLightCount < MAX_CLUSTER_LIGHTS && LightIntersectsCluster(light, cluster)) {
+			if (visibleLightCount < MAX_CLUSTER_LIGHTS && (LightIntersectsCluster(light, cluster)
+#ifdef VR
+															  || LightIntersectsCluster(light, cluster, 1)
+#endif  // VR
+																  )) {
 				visibleLightIndices[visibleLightCount] = lightOffset + i;
 				visibleLightCount++;
 			}
