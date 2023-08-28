@@ -23,15 +23,14 @@ struct GrassCollision : Feature
 
 	struct alignas(16) PerFrame
 	{
-		DirectX::XMFLOAT3 boundCentre;
+		Vector4 boundCentre[2];
 		float boundRadius;
 		Settings Settings;
-		float pad0;
 	};
 
 	struct CollisionSData
 	{
-		DirectX::XMFLOAT3 centre;
+		Vector3 centre[2];
 		float radius;
 	};
 
@@ -41,6 +40,7 @@ struct GrassCollision : Feature
 
 	bool updatePerFrame = false;
 	ConstantBuffer* perFrame = nullptr;
+	int eyeCount = !REL::Module::IsVR() ? 1 : 2;
 
 	virtual void SetupResources();
 	virtual void Reset();

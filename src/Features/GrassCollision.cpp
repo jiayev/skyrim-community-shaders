@@ -126,15 +126,15 @@ void GrassCollision::UpdateCollisions()
 					radius *= settings.RadiusMultiplier;
 					CollisionSData data{};
 					RE::NiPoint3 eyePosition{};
-					if (REL::Module::IsVR()) {
-						// find center of eye position
-						eyePosition = state->GetVRRuntimeData().posAdjust.getEye() + state->GetVRRuntimeData().posAdjust.getEye(1);
-						eyePosition /= 2;
-					} else
-						eyePosition = state->GetRuntimeData().posAdjust.getEye();
-					data.centre.x = centerPos.x - eyePosition.x;
-					data.centre.y = centerPos.y - eyePosition.y;
-					data.centre.z = centerPos.z - eyePosition.z;
+					for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
+						if (!REL::Module::IsVR()) {
+							eyePosition = state->GetRuntimeData().posAdjust.getEye();
+						} else
+							eyePosition = state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+						data.centre[eyeIndex].x = centerPos.x - eyePosition.x;
+						data.centre[eyeIndex].y = centerPos.y - eyePosition.y;
+						data.centre[eyeIndex].z = centerPos.z - eyePosition.z;
+					}
 					data.radius = radius;
 					currentCollisionCount++;
 					collisionsData.push_back(data);
@@ -200,15 +200,16 @@ void GrassCollision::ModifyGrass(const RE::BSShader*, const uint32_t)
 
 		auto bound = shaderState.cachedPlayerBound;
 		RE::NiPoint3 eyePosition{};
-		if (REL::Module::IsVR()) {
-			// find center of eye position
-			eyePosition = state->GetVRRuntimeData().posAdjust.getEye() + state->GetVRRuntimeData().posAdjust.getEye(1);
-			eyePosition /= 2;
-		} else
-			eyePosition = state->GetRuntimeData().posAdjust.getEye();
-		perFrameData.boundCentre.x = bound.center.x - eyePosition.x;
-		perFrameData.boundCentre.y = bound.center.y - eyePosition.y;
-		perFrameData.boundCentre.z = bound.center.z - eyePosition.z;
+		for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
+			if (!REL::Module::IsVR()) {
+				eyePosition = state->GetRuntimeData().posAdjust.getEye();
+			} else
+				eyePosition = state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+			perFrameData.boundCentre[eyeIndex].x = bound.center.x - eyePosition.x;
+			perFrameData.boundCentre[eyeIndex].y = bound.center.y - eyePosition.y;
+			perFrameData.boundCentre[eyeIndex].z = bound.center.z - eyePosition.z;
+			perFrameData.boundCentre[eyeIndex].w = 0.0f;
+		}
 		perFrameData.boundRadius = bound.radius * settings.RadiusMultiplier;
 
 		perFrameData.Settings = settings;
