@@ -202,7 +202,7 @@ void GrassCollision::ModifyGrass(const RE::BSShader*, const uint32_t)
 		RE::NiPoint3 eyePosition{};
 		for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
 			if (!REL::Module::IsVR()) {
-				eyePosition = state->GetRuntimeData().posAdjust.getEye();			
+				eyePosition = state->GetRuntimeData().posAdjust.getEye();
 			} else
 				eyePosition = state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
 			perFrameData.boundCentre[eyeIndex].x = bound.center.x - eyePosition.x;
