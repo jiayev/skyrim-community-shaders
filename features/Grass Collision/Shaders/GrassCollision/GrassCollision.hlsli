@@ -1,7 +1,7 @@
 
 cbuffer GrassCollisionPerFrame : register(b5)
 {
-	float3 boundCentre;
+	float4 boundCentre[2];
 	float boundRadius;
 	bool EnableGrassCollision;
 	float RadiusMultiplier;
@@ -10,7 +10,7 @@ cbuffer GrassCollisionPerFrame : register(b5)
 
 struct StructuredCollision
 {
-	float3 centre;
+	float3 centre[2];
 	float radius;
 };
 
@@ -23,7 +23,7 @@ float3 GetDisplacedPosition(float3 position, float alpha, uint eyeIndex = 0)
 
 	// Player bound culling
 	{
-		float dist = distance(boundCentre, worldPosition);
+		float dist = distance(boundCentre[eyeIndex].xyz, worldPosition);
 		if (dist > boundRadius) {
 			return 0;
 		}
@@ -36,9 +36,9 @@ float3 GetDisplacedPosition(float3 position, float alpha, uint eyeIndex = 0)
 		for (uint collision_index = 0; collision_index < collision_count; collision_index++) {
 			StructuredCollision collision = collisions[collision_index];
 
-			float dist = distance(collision.centre, worldPosition);
+			float dist = distance(collision.centre[eyeIndex], worldPosition);
 			float power = smoothstep(collision.radius, 0.0, dist);
-			float3 direction = worldPosition - collision.centre;
+			float3 direction = worldPosition - collision.centre[eyeIndex];
 			direction.y = 0;  // stops expanding/stretching
 			direction = normalize(direction);
 			float3 shift = power * direction;

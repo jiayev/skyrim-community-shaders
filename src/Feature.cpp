@@ -82,6 +82,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 
 	static std::vector<Feature*> featuresVR = {
 		GrassLighting::GetSingleton(),
+		GrassCollision::GetSingleton(),
 		ExtendedMaterials::GetSingleton(),
 		LightLimitFix::GetSingleton()
 	};
