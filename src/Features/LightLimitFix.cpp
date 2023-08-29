@@ -544,10 +544,11 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 
 				auto scaledTimer = timer * config.flickerSpeed;
 
-				light.positionWS[0].x += (float)perlin1.noise1D(scaledTimer) * config.flickerMovement;
-				light.positionWS[0].y += (float)perlin2.noise1D(scaledTimer) * config.flickerMovement;
-				light.positionWS[0].z += (float)perlin3.noise1D(scaledTimer) * config.flickerMovement;
-				light.positionWS[1] = light.positionWS[0];
+				for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
+					light.positionWS[eyeIndex].x += (float)perlin1.noise1D(scaledTimer) * config.flickerMovement;
+					light.positionWS[eyeIndex].y += (float)perlin2.noise1D(scaledTimer) * config.flickerMovement;
+					light.positionWS[eyeIndex].z += (float)perlin3.noise1D(scaledTimer) * config.flickerMovement;
+				}
 				dimmer = std::max(0.0f, dimmer - ((float)perlin4.noise1D_01(scaledTimer) * config.flickerIntensity));
 			}
 
