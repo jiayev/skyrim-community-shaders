@@ -283,3 +283,39 @@ public:
 		}
 	};
 };
+
+template <>
+struct fmt::formatter<LightLimitFix::LightData>
+{
+	// Presentation format: 'f' - fixed.
+	char presentation = 'f';
+
+	// Parses format specifications of the form ['f'].
+	constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator
+	{
+		auto it = ctx.begin(), end = ctx.end();
+		if (it != end && (*it == 'f'))
+			presentation = *it++;
+
+		// Check if reached the end of the range:
+		if (it != end && *it != '}')
+			throw_format_error("invalid format");
+
+		// Return an iterator past the end of the parsed range:
+		return it;
+	}
+
+	// Formats the point p using the parsed format specification (presentation)
+	// stored in this formatter.
+	auto format(const LightLimitFix::LightData& l, format_context& ctx) const -> format_context::iterator
+	{
+		// ctx.out() is an output iterator to write to.
+		return fmt::format_to(ctx.out(), "{{address {:x} color {} radius {} posWS {} {} posVS {} {} shadow {}}}",
+			reinterpret_cast<uintptr_t>(&l),
+			(Vector3)l.color,
+			l.radius,
+			(Vector3)l.positionWS[0], (Vector3)l.positionWS[1],
+			(Vector3)l.positionVS[0], (Vector3)l.positionVS[1],
+			l.shadowMode);
+	}
+};
