@@ -14,6 +14,9 @@ constexpr std::uint32_t CLUSTER_MAX_LIGHTS = 1024;
 
 constexpr std::uint32_t CLUSTER_COUNT = CLUSTER_SIZE_X * CLUSTER_SIZE_Y * CLUSTER_SIZE_Z;
 
+std::set<std::string> textures;
+std::set<std::string> gradients;
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LightLimitFix::Settings,
 	EnableContactShadows,
@@ -201,10 +204,10 @@ void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPo
 	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
 		auto eyePosition = eyeCount == 1 ?
 		                       state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
-		                       state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+                               state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
 		auto viewMatrix = eyeCount == 1 ?
 		                      state->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
-		                      state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
+                              state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
 		auto worldPos = a_initialPosition - eyePosition;
 		a_light.positionWS[eyeIndex].x = worldPos.x;
 		a_light.positionWS[eyeIndex].y = worldPos.y;
@@ -290,8 +293,8 @@ void LightLimitFix::BSEffectShader_SetupGeometry_Before(RE::BSRenderPass* a_pass
 {
 	if (auto shaderProperty = netimmerse_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty)) {
 		if (auto material = shaderProperty->material) {
-			if (material->sourceTexturePath.size() > 1) {
-				std::string textureName = material->sourceTexturePath.c_str();
+			if (material->greyscaleTexturePath.size() > 1) {
+				std::string textureName = material->greyscaleTexturePath.c_str();
 				auto lastSeparatorPos = textureName.find_last_of("\\/");
 				if (lastSeparatorPos != std::string::npos) {
 					std::string filename = textureName.substr(lastSeparatorPos + 1);
@@ -299,10 +302,8 @@ void LightLimitFix::BSEffectShader_SetupGeometry_Before(RE::BSRenderPass* a_pass
 #pragma warning(disable: 4244)
 					std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
 #pragma warning(pop)
-					std::set<std::string> cullingList{
-						"fxglowenb.dds", "glowsoft01_enbl.dds", "black.dds", "enblightglow.dds"
-					};
-					bool shouldCull = cullingList.contains(filename);
+					;
+					bool shouldCull = filename.contains("ench");
 					if (shouldCull) {
 						logger::info("cull");
 					}
@@ -319,7 +320,7 @@ void LightLimitFix::Bind()
 
 	auto reflections = (!REL::Module::IsVR() ?
 							   RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().cubeMapRenderTarget :
-							   RE::BSGraphics::RendererShadowState::GetSingleton()->GetVRRuntimeData().cubeMapRenderTarget) == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
+                               RE::BSGraphics::RendererShadowState::GetSingleton()->GetVRRuntimeData().cubeMapRenderTarget) == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
 
 	if (reflections || accumulator->GetRuntimeData().activeShadowSceneNode != RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0]) {
 		PerPass perPassData{};
@@ -406,28 +407,71 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
 	// See https://www.nexusmods.com/skyrimspecialedition/articles/1391
 	if (settings.EnableParticleLights) {
 		if (auto shaderProperty = netimmerse_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty)) {
-			if (auto material = shaderProperty->material) {
-				if (!material->sourceTexturePath.empty()) {
-					std::string textureName = material->sourceTexturePath.c_str();
-					if (textureName.size() < 1)
-						return false;
-					auto lastSeparatorPos = textureName.find_last_of("\\/");
-					if (lastSeparatorPos != std::string::npos) {
-						std::string filename = textureName.substr(lastSeparatorPos + 1);
-						if (filename.size() < 4)
-							return false;
+			if (!shaderProperty->lightData) {
+				if (auto material = shaderProperty->material) {
+					if (!material->sourceTexturePath.empty()) {
+						std::string textureName = material->sourceTexturePath.c_str();
 
-						filename.erase(filename.length() - 4);  // Remove ".dds"
+						{
+							if (textureName.size() < 1)
+								return false;
+							auto lastSeparatorPos = textureName.find_last_of("\\/");
+							if (lastSeparatorPos == std::string::npos)
+								return false;
+
+							textureName = textureName.substr(lastSeparatorPos + 1);
+							if (textureName.size() < 4)
+								return false;
+
+							textureName.erase(textureName.length() - 4);  // Remove ".dds"
 #pragma warning(push)
 #pragma warning(disable: 4244)
-						std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
+							std::transform(textureName.begin(), textureName.end(), textureName.begin(), ::tolower);
 #pragma warning(pop)
+						}
+
 						auto& configs = ParticleLights::GetSingleton()->particleLightConfigs;
-						auto it = configs.find(filename);
+						auto it = configs.find(textureName);
+						if (!textures.contains(textureName)) {
+							logger::info("new texture {}", textureName);
+							textures.insert(textureName);
+						}
 						if (it == configs.end())
 							return false;
 
-						auto& config = it->second;
+						ParticleLights::Config* config = &it->second;
+						ParticleLights::GradientConfig* gradientConfig = nullptr;
+						if (!material->greyscaleTexturePath.empty()) {
+							textureName = material->greyscaleTexturePath.c_str();
+							{
+								if (textureName.size() < 1)
+									return false;
+								auto lastSeparatorPos = textureName.find_last_of("\\/");
+								if (lastSeparatorPos == std::string::npos)
+									return false;
+
+								textureName = textureName.substr(lastSeparatorPos + 1);
+								if (textureName.size() < 4)
+									return false;
+
+								textureName.erase(textureName.length() - 4);  // Remove ".dds"
+#pragma warning(push)
+#pragma warning(disable: 4244)
+								std::transform(textureName.begin(), textureName.end(), textureName.begin(), ::tolower);
+#pragma warning(pop)
+							}
+							if (!gradients.contains(textureName)) {
+								logger::info("new gradient {}", textureName);
+								gradients.insert(textureName);
+							}
+
+							auto& gradientConfigs = ParticleLights::GetSingleton()->particleLightGradientConfigs;
+							auto itGradient = gradientConfigs.find(textureName);
+							if (itGradient == gradientConfigs.end())
+								return false;
+							gradientConfig = &itGradient->second;
+						}
+
 						a_pass->geometry->IncRefCount();
 						if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(a_pass->geometry)) {
 							if (auto particleData = particleSystem->GetParticleRuntimeData().particleData.get()) {
@@ -470,13 +514,19 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
 							}
 						}
 
-						color.red *= config.colorMult.red;
-						color.green *= config.colorMult.blue;
-						color.blue *= config.colorMult.green;
+						color.red *= config->colorMult.red;
+						color.green *= config->colorMult.green;
+						color.blue *= config->colorMult.blue;
 
-						queuedParticleLights.insert({ a_pass->geometry, { color, config } });
+						if (gradientConfig) {
+							color.red *= gradientConfig->color.red;
+							color.green *= gradientConfig->color.green;
+							color.blue *= gradientConfig->color.blue;
+						}
 
-						return settings.EnableParticleLightsCulling && config.cull;
+						queuedParticleLights.insert({ a_pass->geometry, { color, *config } });
+
+						return settings.EnableParticleLightsCulling && config->cull;
 					}
 				}
 			}
@@ -568,12 +618,12 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 			auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 			auto eyePosition = eyeCount == 1 ?
 			                       state->GetRuntimeData().posAdjust.getEye(a_eyeIndex) :
-			                       state->GetVRRuntimeData().posAdjust.getEye(a_eyeIndex);
+                                   state->GetVRRuntimeData().posAdjust.getEye(a_eyeIndex);
 			cachedParticleLight.position = { light.positionWS[a_eyeIndex].x + eyePosition.x, light.positionWS[a_eyeIndex].y + eyePosition.y, light.positionWS[a_eyeIndex].z + eyePosition.z };
 			for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
 				auto viewMatrix = eyeCount == 1 ?
 				                      state->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
-				                      state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
+                                      state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
 				light.positionVS[eyeIndex] = DirectX::SimpleMath::Vector3::Transform(light.positionWS[eyeIndex], viewMatrix);
 			}
 			for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
@@ -668,7 +718,6 @@ void LightLimitFix::UpdateLights()
                                state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
 
 		for (const auto& particleLight : particleLights) {
-
 			if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(particleLight.first);
 				particleSystem && particleSystem->GetParticleRuntimeData().particleData.get()) {
 				// process BSGeometry
@@ -710,10 +759,12 @@ void LightLimitFix::UpdateLights()
 					}
 
 					float alpha = particleLight.second.first.alpha * particleData->GetParticlesRuntimeData().color[p].alpha;
+					
 					float3 color;
 					color.x = particleLight.second.first.red * particleData->GetParticlesRuntimeData().color[p].red;
 					color.y = particleLight.second.first.green * particleData->GetParticlesRuntimeData().color[p].green;
 					color.z = particleLight.second.first.blue * particleData->GetParticlesRuntimeData().color[p].blue;
+					
 					clusteredLight.color += Saturation(color, settings.ParticleLightsSaturation) * alpha * std::numbers::pi_v<float>;
 
 					clusteredLight.radius += radius * particleLight.second.second.radiusMult;
@@ -723,7 +774,6 @@ void LightLimitFix::UpdateLights()
 
 					clusteredLights++;
 				}
-
 			} else {
 				// process billboard
 				LightData light{};

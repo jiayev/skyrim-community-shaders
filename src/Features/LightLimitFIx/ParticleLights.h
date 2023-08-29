@@ -26,7 +26,13 @@ public:
 		float flickerMovement;
 	};
 
+	struct GradientConfig
+	{
+		RE::NiColor color;
+	};
+
 	std::unordered_map<std::string, Config> particleLightConfigs;
+	std::unordered_map<std::string, GradientConfig> particleLightGradientConfigs;
 
 	void GetConfigs();
 };
