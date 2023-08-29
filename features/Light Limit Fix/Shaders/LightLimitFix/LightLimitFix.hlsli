@@ -1,3 +1,5 @@
+#include "Common/VR.hlsl"
+
 struct LightGrid
 {
 	uint offset;
@@ -44,9 +46,10 @@ float GetFarPlane()
 	return perPassLLF[0].CameraFar;
 }
 
-// Get a raw depth from the depth buffer.
-float GetDepth(float2 uv)
+// Get a raw depth from the depth buffer. [0,1] in uv space
+float GetDepth(float2 uv, uint a_eyeIndex = 0)
 {
+	uv = ConvertToStereoUV(uv, a_eyeIndex);
 	return TexDepthSampler.Load(int3(uv * perPassLLF[0].BufferDim, 0));
 }
 
@@ -70,9 +73,9 @@ float GetScreenDepth(float depth)
 	return (perPassLLF[0].CameraData.w / (-depth * perPassLLF[0].CameraData.z + perPassLLF[0].CameraData.x));
 }
 
-float GetScreenDepth(float2 uv)
+float GetScreenDepth(float2 uv, uint a_eyeIndex = 0)
 {
-	float depth = GetDepth(uv);
+	float depth = GetDepth(uv, a_eyeIndex);
 	return GetScreenDepth(depth);
 }
 
@@ -106,7 +109,7 @@ float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightD
 			break;
 
 		// Compute the difference between the ray's and the camera's depth
-		float rayDepth = GetScreenDepth(rayUV);
+		float rayDepth = GetScreenDepth(rayUV, a_eyeIndex);
 
 		// Difference between the current ray distance and the marched light
 		float depthDelta = rayPos.z - rayDepth;

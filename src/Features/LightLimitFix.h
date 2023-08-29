@@ -92,6 +92,7 @@ public:
 	std::uint32_t lightCount = 0;
 
 	RE::BSRenderPass* currentPass = nullptr;
+	Texture2D* screenSpaceShadowsTexture = nullptr;
 
 	eastl::hash_map<RE::BSGeometry*, std::pair<RE::NiColorA, ParticleLights::Config&>> queuedParticleLights;
 	eastl::hash_map<RE::BSGeometry*, std::pair<RE::NiColorA, ParticleLights::Config&>> particleLights;
