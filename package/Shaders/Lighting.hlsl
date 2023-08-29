@@ -1825,9 +1825,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				if (!FrameParams.z && FrameParams.y && light.shadowMode) {
 					float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
 					if (light.shadowMode == 2)
-						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, eyeIndex);
+						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, 0.0, eyeIndex);
 					else
-						lightColor *= ContactShadowsLong(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, eyeIndex);
+						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, eyeIndex);
 				}
 
 #		if defined(CPM_AVAILABLE)

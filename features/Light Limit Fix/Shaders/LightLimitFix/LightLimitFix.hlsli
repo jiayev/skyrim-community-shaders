@@ -76,47 +76,26 @@ float GetScreenDepth(float2 uv)
 	return GetScreenDepth(depth);
 }
 
-float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, uint a_eyeIndex = 0)
+float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, float radius = 0.0, uint a_eyeIndex = 0)
 {
-	lightDirectionVS *= 1.5;
+	float lightDirectionMult = 1.5;
+	float2 depthDeltaMult = float2(0.20, 0.1);
+	uint loopMax = 4;
 
-	// Offset starting position with interleaved gradient noise
-	rayPos += lightDirectionVS * offset;
-
-	// Accumulate samples
-	float shadow = 0.0;
-	[loop] for (uint i = 0; i < 4; i++)
-	{
-		// Step the ray
-		rayPos += lightDirectionVS;
-		float2 rayUV = ViewToUV(rayPos, true, a_eyeIndex);
-
-		// Ensure the UV coordinates are inside the screen
-		if (!IsSaturated(rayUV))
-			break;
-
-		// Compute the difference between the ray's and the camera's depth
-		float rayDepth = GetScreenDepth(rayUV);
-
-		// Difference between the current ray distance and the marched light
-		float depthDelta = rayPos.z - rayDepth;
-		if (rayDepth > 16.5)  // First person
-			shadow += saturate(depthDelta * 0.20) - saturate(depthDelta * 0.1);
+	if (radius > 0) {  // long
+		lightDirectionMult = radius / 32;
+		depthDeltaMult = float2(1.0, 0.05);
+		loopMax = 32;
 	}
 
-	return 1.0 - saturate(shadow);
-}
-
-float ContactShadowsLong(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, float radius, uint a_eyeIndex = 0)
-{
-	lightDirectionVS *= radius / 32;
+	lightDirectionVS *= lightDirectionMult;
 
 	// Offset starting position with interleaved gradient noise
 	rayPos += lightDirectionVS * offset;
 
 	// Accumulate samples
 	float shadow = 0.0;
-	[loop] for (uint i = 0; i < 32; i++)
+	[loop] for (uint i = 0; i < loopMax; i++)
 	{
 		// Step the ray
 		rayPos += lightDirectionVS;
@@ -132,7 +111,7 @@ float ContactShadowsLong(float3 rayPos, float2 texcoord, float offset, float3 li
 		// Difference between the current ray distance and the marched light
 		float depthDelta = rayPos.z - rayDepth;
 		if (rayDepth > 16.5)  // First person
-			shadow += saturate(depthDelta) - saturate(depthDelta * 0.05);
+			shadow += saturate(depthDelta * depthDeltaMult.x) - saturate(depthDelta * depthDeltaMult.y);
 	}
 
 	return 1.0 - saturate(shadow);
