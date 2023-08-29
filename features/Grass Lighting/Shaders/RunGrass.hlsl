@@ -517,7 +517,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (lightCount > 0) {
 		uint lightOffset = lightGrid[clusterIndex].offset;
 
-		float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
 		float screenNoise = InterleavedGradientNoise(screenUV * perPassLLF[0].BufferDim);
 
 		[loop] for (uint i = 0; i < lightCount; i++)
@@ -540,9 +539,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 			float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
 			if (light.shadowMode == 2)
-				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, eyeIndex);
+				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, 0.0, eyeIndex);
 			else if (light.shadowMode == 1)
-				lightColor *= ContactShadowsLong(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, eyeIndex);
+				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, eyeIndex);
 
 			float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 

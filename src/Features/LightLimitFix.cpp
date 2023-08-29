@@ -353,8 +353,16 @@ void LightLimitFix::Bind()
 			perPassData.CameraData.w = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar * accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
 
 			auto viewport = RE::BSGraphics::State::GetSingleton();
-			float resolutionX = viewport->screenWidth * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
-			float resolutionY = viewport->screenHeight * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
+			if (!screenSpaceShadowsTexture) {
+				auto shadowMask = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kSHADOW_MASK];
+				D3D11_TEXTURE2D_DESC texDesc{};
+				shadowMask.texture->GetDesc(&texDesc);
+				texDesc.Format = DXGI_FORMAT_R16_FLOAT;
+				texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET;
+				screenSpaceShadowsTexture = new Texture2D(texDesc);
+			}
+			float resolutionX = screenSpaceShadowsTexture->desc.Width * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
+			float resolutionY = screenSpaceShadowsTexture->desc.Height * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
 
 			perPassData.LightsNear = lightsNear;
 			perPassData.LightsFar = lightsFar;
@@ -544,10 +552,11 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 
 				auto scaledTimer = timer * config.flickerSpeed;
 
-				light.positionWS[0].x += (float)perlin1.noise1D(scaledTimer) * config.flickerMovement;
-				light.positionWS[0].y += (float)perlin2.noise1D(scaledTimer) * config.flickerMovement;
-				light.positionWS[0].z += (float)perlin3.noise1D(scaledTimer) * config.flickerMovement;
-				light.positionWS[1] = light.positionWS[0];
+				for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
+					light.positionWS[eyeIndex].x += (float)perlin1.noise1D(scaledTimer) * config.flickerMovement;
+					light.positionWS[eyeIndex].y += (float)perlin2.noise1D(scaledTimer) * config.flickerMovement;
+					light.positionWS[eyeIndex].z += (float)perlin3.noise1D(scaledTimer) * config.flickerMovement;
+				}
 				dimmer = std::max(0.0f, dimmer - ((float)perlin4.noise1D_01(scaledTimer) * config.flickerIntensity));
 			}
 

@@ -1127,7 +1127,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	// In VR, there is no worldPosition or PreviousWorldPosition as an input. This code is used to determine position
 	// float4 worldPositionVR;
 	// worldPositionVR.x =
-	// 	(uint)cb13[0].y ? 2 * (-eyeIndex * 0.5 + stereoUV.x) : stereoUV.x;
+	// 	(uint)cb13 ? 2 * (-eyeIndex * 0.5 + stereoUV.x) : stereoUV.x;
 	// worldPositionVR.y = -stereoUV.y * DynamicResolutionParams2.y + 1;
 	// worldPositionVR.xy = worldPositionVR.xy * float2(2, 2) + float2(-1, -1);
 	// worldPositionVR.z = input.Position.z;
@@ -1825,9 +1825,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				if (!FrameParams.z && FrameParams.y && light.shadowMode) {
 					float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
 					if (light.shadowMode == 2)
-						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, eyeIndex);
+						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, 0.0, eyeIndex);
 					else
-						lightColor *= ContactShadowsLong(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, eyeIndex);
+						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, eyeIndex);
 				}
 
 #		if defined(CPM_AVAILABLE)

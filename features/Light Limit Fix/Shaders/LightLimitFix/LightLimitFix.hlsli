@@ -1,3 +1,5 @@
+#include "Common/VR.hlsl"
+
 struct LightGrid
 {
 	uint offset;
@@ -44,9 +46,10 @@ float GetFarPlane()
 	return perPassLLF[0].CameraFar;
 }
 
-// Get a raw depth from the depth buffer.
-float GetDepth(float2 uv)
+// Get a raw depth from the depth buffer. [0,1] in uv space
+float GetDepth(float2 uv, uint a_eyeIndex = 0)
 {
+	uv = ConvertToStereoUV(uv, a_eyeIndex);
 	return TexDepthSampler.Load(int3(uv * perPassLLF[0].BufferDim, 0));
 }
 
@@ -70,53 +73,32 @@ float GetScreenDepth(float depth)
 	return (perPassLLF[0].CameraData.w / (-depth * perPassLLF[0].CameraData.z + perPassLLF[0].CameraData.x));
 }
 
-float GetScreenDepth(float2 uv)
+float GetScreenDepth(float2 uv, uint a_eyeIndex = 0)
 {
-	float depth = GetDepth(uv);
+	float depth = GetDepth(uv, a_eyeIndex);
 	return GetScreenDepth(depth);
 }
 
-float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, uint a_eyeIndex = 0)
+float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, float radius = 0.0, uint a_eyeIndex = 0)
 {
-	lightDirectionVS *= 1.5;
+	float lightDirectionMult = 1.5;
+	float2 depthDeltaMult = float2(0.20, 0.1);
+	uint loopMax = 4;
 
-	// Offset starting position with interleaved gradient noise
-	rayPos += lightDirectionVS * offset;
-
-	// Accumulate samples
-	float shadow = 0.0;
-	[loop] for (uint i = 0; i < 4; i++)
-	{
-		// Step the ray
-		rayPos += lightDirectionVS;
-		float2 rayUV = ViewToUV(rayPos, true, a_eyeIndex);
-
-		// Ensure the UV coordinates are inside the screen
-		if (!IsSaturated(rayUV))
-			break;
-
-		// Compute the difference between the ray's and the camera's depth
-		float rayDepth = GetScreenDepth(rayUV);
-
-		// Difference between the current ray distance and the marched light
-		float depthDelta = rayPos.z - rayDepth;
-		if (rayDepth > 16.5)  // First person
-			shadow += saturate(depthDelta * 0.20) - saturate(depthDelta * 0.1);
+	if (radius > 0) {  // long
+		lightDirectionMult = radius / 32;
+		depthDeltaMult = float2(1.0, 0.05);
+		loopMax = 32;
 	}
 
-	return 1.0 - saturate(shadow);
-}
-
-float ContactShadowsLong(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, float radius, uint a_eyeIndex = 0)
-{
-	lightDirectionVS *= radius / 32;
+	lightDirectionVS *= lightDirectionMult;
 
 	// Offset starting position with interleaved gradient noise
 	rayPos += lightDirectionVS * offset;
 
 	// Accumulate samples
 	float shadow = 0.0;
-	[loop] for (uint i = 0; i < 32; i++)
+	[loop] for (uint i = 0; i < loopMax; i++)
 	{
 		// Step the ray
 		rayPos += lightDirectionVS;
@@ -127,12 +109,12 @@ float ContactShadowsLong(float3 rayPos, float2 texcoord, float offset, float3 li
 			break;
 
 		// Compute the difference between the ray's and the camera's depth
-		float rayDepth = GetScreenDepth(rayUV);
+		float rayDepth = GetScreenDepth(rayUV, a_eyeIndex);
 
 		// Difference between the current ray distance and the marched light
 		float depthDelta = rayPos.z - rayDepth;
 		if (rayDepth > 16.5)  // First person
-			shadow += saturate(depthDelta) - saturate(depthDelta * 0.05);
+			shadow += saturate(depthDelta * depthDeltaMult.x) - saturate(depthDelta * depthDeltaMult.y);
 	}
 
 	return 1.0 - saturate(shadow);
