@@ -1127,7 +1127,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	// In VR, there is no worldPosition or PreviousWorldPosition as an input. This code is used to determine position
 	// float4 worldPositionVR;
 	// worldPositionVR.x =
-	// 	(uint)cb13[0].y ? 2 * (-eyeIndex * 0.5 + stereoUV.x) : stereoUV.x;
+	// 	(uint)cb13 ? 2 * (-eyeIndex * 0.5 + stereoUV.x) : stereoUV.x;
 	// worldPositionVR.y = -stereoUV.y * DynamicResolutionParams2.y + 1;
 	// worldPositionVR.xy = worldPositionVR.xy * float2(2, 2) + float2(-1, -1);
 	// worldPositionVR.z = input.Position.z;
