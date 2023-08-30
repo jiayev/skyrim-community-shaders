@@ -88,8 +88,6 @@ void ParticleLights::GetConfigs()
 				continue;
 			}
 
-
-
 			GradientConfig data{};
 			const char* value = nullptr;
 			constexpr std::string_view prefix1 = "0x";
@@ -121,7 +119,7 @@ void ParticleLights::GetConfigs()
 				logger::error("[LLF] missing color");
 				continue;
 			}
-		
+
 			auto lastSeparatorPos = path.find_last_of("\\/");
 			if (lastSeparatorPos != std::string::npos) {
 				std::string filename = path.substr(lastSeparatorPos + 1);
