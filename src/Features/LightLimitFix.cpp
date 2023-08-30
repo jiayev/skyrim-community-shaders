@@ -568,6 +568,13 @@ void LightLimitFix::Draw(const RE::BSShader* shader, const uint32_t descriptor)
 	}
 }
 
+void LightLimitFix::DataLoaded()
+{
+	auto iMagicLightMaxCount = RE::GameSettingCollection::GetSingleton()->GetSetting("iMagicLightMaxCount");
+	iMagicLightMaxCount->data.i = MAXINT32;
+	logger::info("[LLF] Unlocked magic light limit");
+}
+
 float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radius)
 {
 	return (a_lightPosition.x * a_lightPosition.x) + (a_lightPosition.y * a_lightPosition.y) + (a_lightPosition.z * a_lightPosition.z) - (a_radius * a_radius);
