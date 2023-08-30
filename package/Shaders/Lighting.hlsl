@@ -2106,7 +2106,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if !defined(LANDSCAPE) && defined(SPECULAR)
 	// Green reflections fix
-	psout.ScreenSpaceNormals.w = psout.ScreenSpaceNormals.w * pow(psout.Albedo.w, 10);
+	if (FrameParams.z)
+		psout.ScreenSpaceNormals.w = 0;
 #	endif  //  !defined(LANDSCAPE) && defined(SPECULAR)
 
 	screenSpaceNormal.z = max(0.001, sqrt(8 + -8 * screenSpaceNormal.z));
