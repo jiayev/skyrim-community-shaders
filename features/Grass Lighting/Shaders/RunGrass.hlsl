@@ -503,14 +503,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float clampedDepth = clamp(viewPosition.z, GetNearPlane(), GetFarPlane());
 
-	uint clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 24.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
-	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(16, 8));
+	uint clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 16.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
+	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(32, 16));
 #			if !defined(VR)
 	uint3 cluster = uint3(uint2(input.HPosition.xy / clusterDim), clusterZ);
 #			else
 	uint3 cluster = uint3(uint2((screenUV * perPassLLF[0].BufferDim) / clusterDim), clusterZ);
 #			endif  // !VR
-	uint clusterIndex = cluster.x + (16 * cluster.y) + (16 * 8 * cluster.z);
+	uint clusterIndex = cluster.x + (32 * cluster.y) + (32 * 16 * cluster.z);
 
 	uint lightCount = lightGrid[clusterIndex].lightCount;
 
@@ -532,21 +532,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 			float3 lightColor = light.color.xyz;
-			float3 nsLightColor = lightColor;
-			float3 normalizedLightDirection = normalize(lightDirection);
+				float3 normalizedLightDirection = normalize(lightDirection);
 
 			float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
-
-			float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
-			if (light.shadowMode == 2)
-				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, 0.0, eyeIndex);
-			else if (light.shadowMode == 1)
-				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, eyeIndex);
-
+		
+			if (light.shadowMode){
+				float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
+				if (light.shadowMode == 2)
+					lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, 0.0, eyeIndex);
+				else
+					lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, eyeIndex);
+			}
+		
 			float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
-			lightDiffuseColor += subsurfaceColor * nsLightColor * GetSoftLightMultiplier(lightAngle, SubsurfaceScatteringAmount);
-			lightDiffuseColor += subsurfaceColor * nsLightColor * saturate(-lightAngle) * SubsurfaceScatteringAmount;
+			lightDiffuseColor += subsurfaceColor * lightColor * GetSoftLightMultiplier(lightAngle, SubsurfaceScatteringAmount);
+			lightDiffuseColor += subsurfaceColor * lightColor * saturate(-lightAngle) * SubsurfaceScatteringAmount;
 
 			lightsSpecularColor += GetLightSpecularInput(normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
 			lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
