@@ -123,18 +123,17 @@ public:
 
 	struct Settings
 	{
-		bool EnableContactShadows = true;
-		bool ExtendFirstPersonShadows = true;
+		bool EnableFirstPersonShadows = true;
 		bool EnableParticleLights = true;
 		bool EnableParticleLightsCulling = true;
-		bool EnableParticleLightsFade = true;
 		bool EnableParticleLightsDetection = true;
+		bool EnableParticleLightsShadows = true;
 		float ParticleLightsBrightness = 1.0f;
-		float ParticleLightsRadius = 64.0f;
+		float ParticleLightsSaturation = 1.0f;
+		float ParticleLightsRadius = 100.0f;
 		float ParticleLightsRadiusBillboards = 1.0f;
 		bool EnableParticleLightsOptimization = true;
 		uint32_t ParticleLightsOptimisationClusterRadius = 48;
-		float ParticleLightsSaturation = 1.8f;
 	};
 
 	float lightsNear = 0.0f;
