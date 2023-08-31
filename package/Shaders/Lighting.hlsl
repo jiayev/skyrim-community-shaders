@@ -1847,7 +1847,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				if (!FrameParams.z && FrameParams.y) {
 					float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
 					if (light.firstPersonShadow){
-						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, eyeIndex);
+						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, light.radius, eyeIndex);
 					} else if (perPassLLF[0].EnableContactShadows){
 #		if defined(SKINNED) || !defined(MODELSPACENORMALS)
 						float shadowIntensityFactor = saturate(dot(worldSpaceVertexNormal, normalizedLightDirection.xyz) * PI);
