@@ -12,15 +12,18 @@ struct StructuredLight
 	float radius;
 	float3 positionWS[2];
 	float3 positionVS[2];
-	uint shadowMode;
-	uint pad;
+	uint firstPersonShadow;
 };
 
 struct PerPassLLF
 {
-	uint EnableGlobalLights;
-	float CameraNear;
-	float CameraFar;
+	bool EnableGlobalLights;
+	bool EnableContactShadows;
+	bool EnableLightsVisualisation;
+	uint LightsVisualisationMode;
+	uint StrictLightsCount;
+	float LightsNear;
+	float LightsFar;
 	float4 CameraData;
 	float2 BufferDim;
 	uint FrameCount;
@@ -38,12 +41,21 @@ StructuredBuffer<PerPassLLF> perPassLLF : register(t32);
 
 float GetNearPlane()
 {
-	return perPassLLF[0].CameraNear;
+	return perPassLLF[0].LightsNear;
 }
 
 float GetFarPlane()
 {
-	return perPassLLF[0].CameraFar;
+	return perPassLLF[0].LightsFar;
+}
+
+uint GetClusterIndex(float2 uv, float z)
+{
+	float clampedZ = clamp(z, perPassLLF[0].LightsNear, perPassLLF[0].LightsFar);
+	uint clusterZ = uint(max((log2(clampedZ) - log2(perPassLLF[0].LightsNear)) * 16.0 / log2(perPassLLF[0].LightsFar / perPassLLF[0].LightsNear), 0.0));
+	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(32, 16));
+	uint3 cluster = uint3(uint2((uv * perPassLLF[0].BufferDim) / clusterDim), clusterZ);
+	return cluster.x + (32 * cluster.y) + (32 * 16 * cluster.z);;
 }
 
 // Get a raw depth from the depth buffer. [0,1] in uv space
@@ -79,16 +91,17 @@ float GetScreenDepth(float2 uv, uint a_eyeIndex = 0)
 	return GetScreenDepth(depth);
 }
 
-float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, float radius = 0.0, uint a_eyeIndex = 0)
+float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, float shadowQualityScale, float radius = 0.0, uint a_eyeIndex = 0)
 {
-	float2 depthDeltaMult = float2(0.20, 0.10);
-
-	uint loopMax = 6;
-
+	float2 depthDeltaMult;
+	uint loopMax;
 	if (radius > 0) {  // long
 		lightDirectionVS *= radius / 32;
 		depthDeltaMult = float2(0.04, 0.01);
-		loopMax = 32;
+		loopMax = round(32 * shadowQualityScale);
+	} else {
+		depthDeltaMult = float2(0.20, 0.10);
+		loopMax = round(6.0 * shadowQualityScale);
 	}
 
 	// Offset starting position with interleaved gradient noise
@@ -121,8 +134,6 @@ float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightD
 #if defined(SKINNED) || defined(ENVMAP) || defined(EYE) || defined(MULTI_LAYER_PARALLAX)
 #	define DRAW_IN_WORLDSPACE
 #endif
-
-
 
 // Copyright 2019 Google LLC.
 // SPDX-License-Identifier: Apache-2.0
