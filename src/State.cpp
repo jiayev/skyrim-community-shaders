@@ -115,6 +115,11 @@ void State::Load()
 
 	for (auto* feature : Feature::GetFeatureList())
 		feature->Load(settings);
+	i.close();
+	if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
+		logger::info("Found older config for version {}; upgrading to {}", (std::string) settings["Version"], Plugin::VERSION.string());
+		Save();
+	}
 }
 
 void State::Save()
