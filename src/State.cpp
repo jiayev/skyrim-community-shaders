@@ -155,6 +155,7 @@ void State::Save()
 		feature->Save(settings);
 
 	o << settings.dump(1);
+	logger::info("Saving settings to {}", userConfigPath);
 }
 
 bool State::ValidateCache(CSimpleIniA& a_ini)
