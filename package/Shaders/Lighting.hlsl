@@ -1683,6 +1683,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(LIGHT_LIMIT_FIX)
 	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = InterleavedGradientNoise(screenUV * perPassLLF[0].BufferDim);
+#		if defined(SKINNED) || !defined(MODELSPACENORMALS)
+	float3 vertexNormal = normalize(transpose(tbn)[2]);
+# 		endif
 #	endif
 
 	if (numLights > 0) {
@@ -1710,6 +1713,28 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			lightColor *= shadowComponent.xxx;
 #	endif
 			float3 normalizedLightDirection = normalize(lightDirection);
+#		if defined(LIGHT_LIMIT_FIX)
+#			if defined(DEFSHADOW)
+			if (perPassLLF[0].EnableContactShadows && !FrameParams.z && FrameParams.y && shadowComponent != 0.0) {
+#			else
+			if (perPassLLF[0].EnableContactShadows && !FrameParams.z && FrameParams.y) {
+#			endif
+				float3 normalizedLightDirectionWS = normalizedLightDirection;
+#			if (defined(SKINNED) || !defined(MODELSPACENORMALS)) && !defined(DRAW_IN_WORLDSPACE)
+				if (!input.WorldSpace) {
+					normalizedLightDirectionWS = normalize(mul(input.World[eyeIndex], float4(normalizedLightDirection, 0)));
+				} 
+#			endif
+				float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirectionWS, true, eyeIndex);
+				
+#				if defined(SKINNED) || !defined(MODELSPACENORMALS)
+				float shadowIntensityFactor = saturate(dot(vertexNormal, normalizedLightDirection.xyz) * PI);
+				lightColor *= lerp(1.0, ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, 1.0, 0.0, eyeIndex), shadowIntensityFactor);
+#				else
+				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, 1.0, 0.0, eyeIndex);
+#				endif
+			}
+#				endif
 
 #	if defined(CPM_AVAILABLE)
 			if (perPassParallax[0].EnableShadows) {
@@ -1771,17 +1796,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(LIGHT_LIMIT_FIX)
 	if (perPassLLF[0].EnableGlobalLights) {
-		float clampedDepth = clamp(viewPosition.z, GetNearPlane(), GetFarPlane());
-
-		uint clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 16.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
-		uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(32, 16));
-#		if !defined(VR)
-		uint3 cluster = uint3(uint2(input.Position.xy / clusterDim), clusterZ);
-#		else
-		uint3 cluster = uint3(uint2((screenUV * perPassLLF[0].BufferDim) / clusterDim), clusterZ);
-#		endif  // !VR
-		uint clusterIndex = cluster.x + (32 * cluster.y) + (32 * 16 * cluster.z);
-
+		uint clusterIndex = GetClusterIndex(screenUV, viewPosition.z);
 		lightCount = lightGrid[clusterIndex].lightCount;
 
 		if (lightCount > 0) {
@@ -1790,7 +1805,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			float3 worldSpaceNormal = normalize(mul(CameraViewInverse[eyeIndex], float4(screenSpaceNormal, 0)));
 			float3 worldSpaceViewDirection = -normalize(input.WorldPosition.xyz);
 
-#		if (defined(SKINNED) || !defined(MODELSPACENORMALS)) && !defined(DRAW_IN_WORLDSPACE)
+			float shadowQualityScale = saturate(1.0 - (((float)lightCount * (float)lightCount) / 128.0));
+
+#		if (defined(SKINNED) || !defined(MODELSPACENORMALS))
+			float3 worldSpaceVertexNormal = vertexNormal;
+#			if (!defined(DRAW_IN_WORLDSPACE))
 			if (!input.WorldSpace) {
 				input.TBN0.xyz = mul(tbn, input.World[eyeIndex][0].xyz);
 				input.TBN1.xyz = mul(tbn, input.World[eyeIndex][1].xyz);
@@ -1804,7 +1823,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				input.TBN1.xyz = tempTbnTr[1];
 				input.TBN2.xyz = tempTbnTr[2];
 				tbn = float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz);
+
+				worldSpaceVertexNormal = normalize(mul(input.World[eyeIndex], float4(vertexNormal, 0)));
 			}
+#			endif
 #		endif
 			[loop] for (uint i = 0; i < lightCount; i++)
 			{
@@ -1822,12 +1844,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				float3 nsLightColor = lightColor;
 				float3 normalizedLightDirection = normalize(lightDirection);
 
-				if (!FrameParams.z && FrameParams.y && light.shadowMode) {
+				if (!FrameParams.z && FrameParams.y) {
 					float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
-					if (light.shadowMode == 2)
-						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, 0.0, eyeIndex);
-					else
-						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, eyeIndex);
+					if (light.firstPersonShadow){
+						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, light.radius, eyeIndex);
+					} else if (perPassLLF[0].EnableContactShadows){
+#		if defined(SKINNED) || !defined(MODELSPACENORMALS)
+						float shadowIntensityFactor = saturate(dot(worldSpaceVertexNormal, normalizedLightDirection.xyz) * PI);
+						lightColor *= lerp(1.0, ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, 0.0, eyeIndex), shadowIntensityFactor);
+#		else
+						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, 0.0, eyeIndex);
+#		endif		
+					}
 				}
 
 #		if defined(CPM_AVAILABLE)
@@ -2001,6 +2029,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	endif  // !defined(PBR)
 
+
 #	if defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
 	psout.Albedo.w = 0;
 #	else
@@ -2053,28 +2082,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	endif
 
-// manually define SHOW_GRIDS to see the grids
-// #	define SHOW_GRIDS
-#	if defined(LIGHT_LIMIT_FIX) && defined(SHOW_GRIDS)
-	float clampedDepth = clamp(viewPosition.z, GetNearPlane(), GetFarPlane());
-	uint clusterZ = uint(max((log2(clampedDepth) - log2(GetNearPlane())) * 16.0 / log2(GetFarPlane() / GetNearPlane()), 0.0));
-	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(32, 16));
-#		if !defined(VR)
-	uint3 cluster = uint3(uint2(input.Position.xy / clusterDim), clusterZ);
-#		else
-	uint3 cluster = uint3(uint2((screenUV * perPassLLF[0].BufferDim) / clusterDim), clusterZ);
-#		endif  // !VR
-	uint clusterIndex = cluster.x + (32 * cluster.y) + (32 * 16 * cluster.z);
-	float level = (float)lightCount;
-	float3 col;
-	col.r = sin(level);
-	col.g = sin(level * 2);
-	col.b = cos(level);
-
-	psout.Albedo.xyz = col;
+#	if defined(LIGHT_LIMIT_FIX)
+if (perPassLLF[0].EnableLightsVisualisation){
+	if (perPassLLF[0].LightsVisualisationMode == 0){
+		psout.Albedo.xyz = TurboColormap(perPassLLF[0].StrictLightsCount > 7);
+	} else	if (perPassLLF[0].LightsVisualisationMode == 1){
+		psout.Albedo.xyz = TurboColormap((float)perPassLLF[0].StrictLightsCount / 7.0);
+	} else {
+		psout.Albedo.xyz = TurboColormap((float)lightCount / 128.0);
+	}
+} else {
+	psout.Albedo.xyz = color.xyz - tmpColor.xyz * FrameParams.zzz;
+}
 #	else
 	psout.Albedo.xyz = color.xyz - tmpColor.xyz * FrameParams.zzz;
-#	endif  // defined(LIGHT_LIMIT_FIX) && defined(SHOW_GRIDS)
+#	endif  // defined(LIGHT_LIMIT_FIX)
 
 #	if defined(SNOW) && !defined(PBR)
 	psout.SnowParameters.x = dot(lightsSpecularColor, float3(0.3, 0.59, 0.11));

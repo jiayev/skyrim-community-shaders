@@ -20,6 +20,7 @@ public:
 		bool cull;
 		RE::NiColor colorMult;
 		float radiusMult;
+		float saturationMult;
 		bool flicker;
 		float flickerSpeed;
 		float flickerIntensity;

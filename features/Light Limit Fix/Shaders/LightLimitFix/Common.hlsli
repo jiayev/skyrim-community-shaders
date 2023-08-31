@@ -1,6 +1,6 @@
 
 #define GROUP_SIZE (32 * 16 * 2)
-#define MAX_CLUSTER_LIGHTS 1024
+#define MAX_CLUSTER_LIGHTS 128
 
 #define CLUSTER_BUILDING_DISPATCH_SIZE_X 32
 #define CLUSTER_BUILDING_DISPATCH_SIZE_Y 16
@@ -24,16 +24,14 @@ struct StructuredLight
 	float radius;
 	float3 positionWS[2];
 	float3 positionVS[2];
-	uint shadowMode;
-	uint pad;
+	uint firstPersonShadow;
 };
 
 cbuffer PerFrame : register(b0)
 {
 	row_major float4x4 InvProjMatrix[2];
-	float CameraNear;
-	float CameraFar;
-	float pad[2];
+	float LightsNear;
+	float LightsFar;
 }
 
 float3 GetPositionVS(float2 texcoord, float depth, int eyeIndex = 0)
