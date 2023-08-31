@@ -192,10 +192,10 @@ void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPo
 	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
 		auto eyePosition = eyeCount == 1 ?
 		                       state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
-                               state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+		                       state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
 		auto viewMatrix = eyeCount == 1 ?
 		                      state->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
-                              state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
+		                      state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
 		auto worldPos = a_initialPosition - eyePosition;
 		a_light.positionWS[eyeIndex].x = worldPos.x;
 		a_light.positionWS[eyeIndex].y = worldPos.y;
@@ -239,7 +239,7 @@ void LightLimitFix::Bind()
 
 	auto reflections = (!REL::Module::IsVR() ?
 							   RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().cubeMapRenderTarget :
-                               RE::BSGraphics::RendererShadowState::GetSingleton()->GetVRRuntimeData().cubeMapRenderTarget) == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
+							   RE::BSGraphics::RendererShadowState::GetSingleton()->GetVRRuntimeData().cubeMapRenderTarget) == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
 
 	if (reflections || accumulator->GetRuntimeData().activeShadowSceneNode != RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0]) {
 		PerPass perPassData{};
@@ -431,14 +431,12 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
 							}
 						}
 
-
 						if (gradientConfig) {
 							auto grey = float3(config->colorMult.red, config->colorMult.green, config->colorMult.blue).Dot(float3(0.3f, 0.59f, 0.11f));
 							color.red *= grey * gradientConfig->color.red;
 							color.green *= grey * gradientConfig->color.green;
 							color.blue *= grey * gradientConfig->color.blue;
-						}
-						else {
+						} else {
 							color.red *= config->colorMult.red;
 							color.green *= config->colorMult.green;
 							color.blue *= config->colorMult.blue;
@@ -454,7 +452,6 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
 	}
 	return false;
 }
-
 
 enum class GrassShaderTechniques
 {
@@ -550,12 +547,12 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 		auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 		auto eyePosition = eyeCount == 1 ?
 		                       state->GetRuntimeData().posAdjust.getEye(a_eyeIndex) :
-                               state->GetVRRuntimeData().posAdjust.getEye(a_eyeIndex);
+		                       state->GetVRRuntimeData().posAdjust.getEye(a_eyeIndex);
 		cachedParticleLight.position = { light.positionWS[a_eyeIndex].x + eyePosition.x, light.positionWS[a_eyeIndex].y + eyePosition.y, light.positionWS[a_eyeIndex].z + eyePosition.z };
 		for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
 			auto viewMatrix = eyeCount == 1 ?
 			                      state->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
-                                  state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
+			                      state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
 			light.positionVS[eyeIndex] = DirectX::SimpleMath::Vector3::Transform(light.positionWS[eyeIndex], viewMatrix);
 		}
 
@@ -678,7 +675,7 @@ void LightLimitFix::UpdateLights()
 		auto eyeIndex = 0;  // only calculate for left eye
 		auto eyePosition = eyeCount == 1 ?
 		                       state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
-                               state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+		                       state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
 
 		for (const auto& particleLight : particleLights) {
 			if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(particleLight.first);

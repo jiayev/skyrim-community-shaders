@@ -526,7 +526,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			float3 normalizedLightDirection = normalize(lightDirection);
 
 			float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
-			
+
 			float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
 			if (light.firstPersonShadow)
 				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, 0.0, eyeIndex);
@@ -557,21 +557,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	specularColor *= specColor.w * SpecularStrength;
 	color.xyz += specularColor;
 
-#	if defined(LIGHT_LIMIT_FIX)
-if (perPassLLF[0].EnableLightsVisualisation){
-	if (perPassLLF[0].LightsVisualisationMode == 0){
-		psout.Albedo.xyz = TurboColormap(0);
-	} else	if (perPassLLF[0].LightsVisualisationMode == 1){
-		psout.Albedo.xyz = TurboColormap(0);
+#		if defined(LIGHT_LIMIT_FIX)
+	if (perPassLLF[0].EnableLightsVisualisation) {
+		if (perPassLLF[0].LightsVisualisationMode == 0) {
+			psout.Albedo.xyz = TurboColormap(0);
+		} else if (perPassLLF[0].LightsVisualisationMode == 1) {
+			psout.Albedo.xyz = TurboColormap(0);
+		} else {
+			psout.Albedo.xyz = TurboColormap((float)lightCount / 128.0);
+		}
 	} else {
-		psout.Albedo.xyz = TurboColormap((float)lightCount / 128.0);
+		psout.Albedo.xyz = color;
 	}
-} else {
+#		else
 	psout.Albedo.xyz = color;
-}
-#	else
-	psout.Albedo.xyz = color;
-# endif
+#		endif
 
 	psout.Albedo.w = 1;
 
