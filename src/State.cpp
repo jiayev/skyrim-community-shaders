@@ -53,13 +53,18 @@ void State::Load()
 {
 	auto& shaderCache = SIE::ShaderCache::Instance();
 
-	std::string configPath = "Data\\SKSE\\Plugins\\CommunityShaders.json";
-
+	std::string configPath = userConfigPath;
 	std::ifstream i(configPath);
 	if (!i.is_open()) {
-		logger::error("Error opening config file ({})\n", configPath);
-		return;
+		logger::info("Unable to open user config file ({}); trying default ({})", configPath, defaultConfigPath);
+		configPath = defaultConfigPath;
+		i.open(configPath);
+		if (!i.is_open()) {
+			logger::error("Error opening config file ({})\n", configPath);
+			return;
+		}
 	}
+	logger::info("Loading config file ({})", configPath);
 
 	json settings;
 	try {
@@ -110,12 +115,17 @@ void State::Load()
 
 	for (auto* feature : Feature::GetFeatureList())
 		feature->Load(settings);
+	i.close();
+	if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
+		logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
+		Save();
+	}
 }
 
 void State::Save()
 {
 	auto& shaderCache = SIE::ShaderCache::Instance();
-	std::ofstream o(L"Data\\SKSE\\Plugins\\CommunityShaders.json");
+	std::ofstream o(userConfigPath);
 	json settings;
 
 	Menu::GetSingleton()->Save(settings);
@@ -145,6 +155,7 @@ void State::Save()
 		feature->Save(settings);
 
 	o << settings.dump(1);
+	logger::info("Saving settings to {}", userConfigPath);
 }
 
 bool State::ValidateCache(CSimpleIniA& a_ini)
