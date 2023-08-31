@@ -39,16 +39,6 @@ Texture2D<float4> TexDepthSampler : register(t20);
 
 StructuredBuffer<PerPassLLF> perPassLLF : register(t32);
 
-float GetNearPlane()
-{
-	return perPassLLF[0].LightsNear;
-}
-
-float GetFarPlane()
-{
-	return perPassLLF[0].LightsFar;
-}
-
 uint GetClusterIndex(float2 uv, float z)
 {
 	float clampedZ = clamp(z, perPassLLF[0].LightsNear, perPassLLF[0].LightsFar);
@@ -96,9 +86,9 @@ float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightD
 	float2 depthDeltaMult;
 	uint loopMax;
 	if (radius > 0) {  // long
-		lightDirectionVS *= radius / 32;
-		depthDeltaMult = float2(0.04, 0.01);
-		loopMax = round(32 * shadowQualityScale);
+		lightDirectionVS *= radius / 16;
+		depthDeltaMult = float2(1.00, 0.01);
+		loopMax = round(16 * shadowQualityScale);
 	} else {
 		depthDeltaMult = float2(0.20, 0.10);
 		loopMax = round(6.0 * shadowQualityScale);
