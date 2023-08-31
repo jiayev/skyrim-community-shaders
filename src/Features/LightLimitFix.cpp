@@ -431,14 +431,12 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
 							}
 						}
 
-
 						if (gradientConfig) {
 							auto grey = float3(config->colorMult.red, config->colorMult.green, config->colorMult.blue).Dot(float3(0.3f, 0.59f, 0.11f));
 							color.red *= grey * gradientConfig->color.red;
 							color.green *= grey * gradientConfig->color.green;
 							color.blue *= grey * gradientConfig->color.blue;
-						}
-						else {
+						} else {
 							color.red *= config->colorMult.red;
 							color.green *= config->colorMult.green;
 							color.blue *= config->colorMult.blue;
@@ -454,7 +452,6 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
 	}
 	return false;
 }
-
 
 enum class GrassShaderTechniques
 {

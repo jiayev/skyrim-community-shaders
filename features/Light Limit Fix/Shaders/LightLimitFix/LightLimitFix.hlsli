@@ -45,7 +45,8 @@ uint GetClusterIndex(float2 uv, float z)
 	uint clusterZ = uint(max((log2(clampedZ) - log2(perPassLLF[0].LightsNear)) * 16.0 / log2(perPassLLF[0].LightsFar / perPassLLF[0].LightsNear), 0.0));
 	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(32, 16));
 	uint3 cluster = uint3(uint2((uv * perPassLLF[0].BufferDim) / clusterDim), clusterZ);
-	return cluster.x + (32 * cluster.y) + (32 * 16 * cluster.z);;
+	return cluster.x + (32 * cluster.y) + (32 * 16 * cluster.z);
+	;
 }
 
 // Get a raw depth from the depth buffer. [0,1] in uv space

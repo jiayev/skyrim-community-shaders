@@ -1685,7 +1685,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float screenNoise = InterleavedGradientNoise(screenUV * perPassLLF[0].BufferDim);
 #		if defined(SKINNED) || !defined(MODELSPACENORMALS)
 	float3 vertexNormal = normalize(transpose(tbn)[2]);
-# 		endif
+#		endif
 #	endif
 
 	if (numLights > 0) {
@@ -1713,28 +1713,28 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			lightColor *= shadowComponent.xxx;
 #	endif
 			float3 normalizedLightDirection = normalize(lightDirection);
-#		if defined(LIGHT_LIMIT_FIX)
-#			if defined(DEFSHADOW)
+#	if defined(LIGHT_LIMIT_FIX)
+#		if defined(DEFSHADOW)
 			if (perPassLLF[0].EnableContactShadows && !FrameParams.z && FrameParams.y && shadowComponent != 0.0) {
-#			else
+#		else
 			if (perPassLLF[0].EnableContactShadows && !FrameParams.z && FrameParams.y) {
-#			endif
+#		endif
 				float3 normalizedLightDirectionWS = normalizedLightDirection;
-#			if (defined(SKINNED) || !defined(MODELSPACENORMALS)) && !defined(DRAW_IN_WORLDSPACE)
+#		if (defined(SKINNED) || !defined(MODELSPACENORMALS)) && !defined(DRAW_IN_WORLDSPACE)
 				if (!input.WorldSpace) {
 					normalizedLightDirectionWS = normalize(mul(input.World[eyeIndex], float4(normalizedLightDirection, 0)));
-				} 
-#			endif
+				}
+#		endif
 				float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirectionWS, true, eyeIndex);
-				
-#				if defined(SKINNED) || !defined(MODELSPACENORMALS)
+
+#		if defined(SKINNED) || !defined(MODELSPACENORMALS)
 				float shadowIntensityFactor = saturate(dot(vertexNormal, normalizedLightDirection.xyz) * PI);
 				lightColor *= lerp(1.0, ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, 1.0, 0.0, eyeIndex), shadowIntensityFactor);
-#				else
+#		else
 				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, 1.0, 0.0, eyeIndex);
-#				endif
+#		endif
 			}
-#				endif
+#	endif
 
 #	if defined(CPM_AVAILABLE)
 			if (perPassParallax[0].EnableShadows) {
@@ -1754,8 +1754,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				if (perPassParallax[0].EnableTerrainParallax)
 					lightColor *= GetParallaxSoftShadowMultiplierTerrain(input, terrainUVs, mipLevel, lightDirectionTS, sh0, lightIsLit * parallaxShadowQuality);
 #		elif defined(ENVMAP)
-				if (complexMaterialParallax)
-					lightColor *= GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, lightIsLit * parallaxShadowQuality);
+			if (complexMaterialParallax)
+				lightColor *= GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, lightIsLit * parallaxShadowQuality);
 #		endif
 			}
 #	endif
@@ -1846,15 +1846,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 				if (!FrameParams.z && FrameParams.y) {
 					float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
-					if (light.firstPersonShadow){
+					if (light.firstPersonShadow) {
 						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, light.radius, eyeIndex);
-					} else if (perPassLLF[0].EnableContactShadows){
+					} else if (perPassLLF[0].EnableContactShadows) {
 #		if defined(SKINNED) || !defined(MODELSPACENORMALS)
 						float shadowIntensityFactor = saturate(dot(worldSpaceVertexNormal, normalizedLightDirection.xyz) * PI);
 						lightColor *= lerp(1.0, ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, 0.0, eyeIndex), shadowIntensityFactor);
 #		else
 						lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, 0.0, eyeIndex);
-#		endif		
+#		endif
 					}
 				}
 
@@ -2029,7 +2029,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	endif  // !defined(PBR)
 
-
 #	if defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
 	psout.Albedo.w = 0;
 #	else
@@ -2083,17 +2082,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 #	if defined(LIGHT_LIMIT_FIX)
-if (perPassLLF[0].EnableLightsVisualisation){
-	if (perPassLLF[0].LightsVisualisationMode == 0){
-		psout.Albedo.xyz = TurboColormap(perPassLLF[0].StrictLightsCount > 7);
-	} else	if (perPassLLF[0].LightsVisualisationMode == 1){
-		psout.Albedo.xyz = TurboColormap((float)perPassLLF[0].StrictLightsCount / 7.0);
+	if (perPassLLF[0].EnableLightsVisualisation) {
+		if (perPassLLF[0].LightsVisualisationMode == 0) {
+			psout.Albedo.xyz = TurboColormap(perPassLLF[0].StrictLightsCount > 7);
+		} else if (perPassLLF[0].LightsVisualisationMode == 1) {
+			psout.Albedo.xyz = TurboColormap((float)perPassLLF[0].StrictLightsCount / 7.0);
+		} else {
+			psout.Albedo.xyz = TurboColormap((float)lightCount / 128.0);
+		}
 	} else {
-		psout.Albedo.xyz = TurboColormap((float)lightCount / 128.0);
+		psout.Albedo.xyz = color.xyz - tmpColor.xyz * FrameParams.zzz;
 	}
-} else {
-	psout.Albedo.xyz = color.xyz - tmpColor.xyz * FrameParams.zzz;
-}
 #	else
 	psout.Albedo.xyz = color.xyz - tmpColor.xyz * FrameParams.zzz;
 #	endif  // defined(LIGHT_LIMIT_FIX)
