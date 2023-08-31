@@ -532,18 +532,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 			float3 lightColor = light.color.xyz;
-				float3 normalizedLightDirection = normalize(lightDirection);
+			float3 normalizedLightDirection = normalize(lightDirection);
 
 			float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
-		
-			if (light.shadowMode){
+
+			if (light.shadowMode) {
 				float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
 				if (light.shadowMode == 2)
 					lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, 0.0, eyeIndex);
 				else
 					lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, eyeIndex);
 			}
-		
+
 			float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
 			lightDiffuseColor += subsurfaceColor * lightColor * GetSoftLightMultiplier(lightAngle, SubsurfaceScatteringAmount);
