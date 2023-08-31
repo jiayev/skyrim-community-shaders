@@ -53,13 +53,18 @@ void State::Load()
 {
 	auto& shaderCache = SIE::ShaderCache::Instance();
 
-	std::string configPath = "Data\\SKSE\\Plugins\\CommunityShaders.json";
-
+	std::string configPath = userConfigPath;
 	std::ifstream i(configPath);
 	if (!i.is_open()) {
-		logger::error("Error opening config file ({})\n", configPath);
-		return;
+		logger::info("Unable to open user config file ({}); trying default ({})", configPath, defaultConfigPath);
+		configPath = defaultConfigPath;
+		i.open(configPath);
+		if (!i.is_open()) {
+			logger::error("Error opening config file ({})\n", configPath);
+			return;
+		}
 	}
+	logger::info("Loading config file ({})", configPath);
 
 	json settings;
 	try {
@@ -115,7 +120,7 @@ void State::Load()
 void State::Save()
 {
 	auto& shaderCache = SIE::ShaderCache::Instance();
-	std::ofstream o(L"Data\\SKSE\\Plugins\\CommunityShaders.json");
+	std::ofstream o(userConfigPath);
 	json settings;
 
 	Menu::GetSingleton()->Save(settings);
