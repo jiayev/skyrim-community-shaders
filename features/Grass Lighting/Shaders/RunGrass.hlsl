@@ -1,3 +1,4 @@
+#include "Common/Color.hlsl"
 #include "Common/FrameBuffer.hlsl"
 #include "Common/MotionBlur.hlsl"
 
@@ -37,10 +38,8 @@ struct VS_OUTPUT
 #endif      // RENDER_DEPTH
 	float4 WorldPosition : POSITION1;
 	float4 PreviousWorldPosition : POSITION2;
-#if !defined(VR)
-	float3 ViewDirectionVec : POSITION3;
-#endif  // !VR
 	float3 VertexNormal : POSITION4;
+	float4 FlatNormal : POSITION5;
 #ifdef VR
 	float ClipDistance : SV_ClipDistance0;
 	float CullDistance : SV_CullDistance0;
@@ -99,19 +98,15 @@ cbuffer PerFrame : register(
 #endif
 				   )
 {
-#if !defined(VR)
-	float4 EyePosition[1];
-#else
-	float4 EyePosition[2];
-#endif  //! VR
 	row_major float3x4 DirectionalAmbient;
 	float SunlightScale;
 	float Glossiness;
 	float SpecularStrength;
 	float SubsurfaceScatteringAmount;
 	bool EnableDirLightFix;
-	bool EnablePointLights;
-	float pad[2];
+	float Brightness;
+	float Saturation;
+	float pad[1];
 }
 
 #ifdef VSHADER
@@ -239,9 +234,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif  // GRASS_COLLISION
 
 	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], previousMsPosition);
-#	if !defined(VR)
-	vsout.ViewDirectionVec.xyz = EyePosition[eyeIndex].xyz - vsout.WorldPosition.xyz;
-#	else
+#	if defined(VR)
 	/*
 https://docs.google.com/presentation/d/19x9XDjUvkW_9gsfsMQzt3hZbRNziVsoCEHOn4AercAc/htmlpresent
 This section looks like this code
@@ -274,9 +267,9 @@ clipPositionOut = clipPos
 #	endif  // !VR
 
 	// Vertex normal needs to be transformed to world-space for lighting calculations.
-	float3 vertexNormal = input.Normal.xyz * 2.0 - 1.0;
-	vertexNormal = mul(world3x3, vertexNormal);
-	vsout.VertexNormal.xyz = vertexNormal;
+	vsout.VertexNormal.xyz = mul(world3x3, input.Normal.xyz * 2.0 - 1.0);
+	vsout.FlatNormal.xyz = mul(world3x3, float3(0, 0, 1));
+	vsout.FlatNormal.w = input.Color.w;
 
 	return vsout;
 }
@@ -328,18 +321,6 @@ cbuffer AlphaTestRefCB :
 	float AlphaTestRefRS : packoffset(c0);
 }
 
-struct StructuredLight
-{
-	float4 color;
-	float4 positionWS[2];
-	float radius;
-	bool shadow;
-	float mask;
-	bool active;
-};
-
-StructuredBuffer<StructuredLight> lights : register(t17);
-
 float GetSoftLightMultiplier(float angle, float strength)
 {
 	float softLightParam = saturate((strength + angle) / (1 + strength));
@@ -386,6 +367,10 @@ float3x3 CalculateTBN(float3 N, float3 p, float2 uv)
 
 #	if defined(SCREEN_SPACE_SHADOWS)
 #		include "ScreenSpaceShadows/ShadowsPS.hlsli"
+#	endif
+
+#	if defined(LIGHT_LIMIT_FIX)
+#		include "LightLimitFix/LightLimitFix.hlsli"
 #	endif
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace
@@ -448,15 +433,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.Normal.zw = float2(0, 0);
 
 #		if !defined(VR)
-	float3 viewDirection = normalize(input.ViewDirectionVec);
+	float3 viewDirection = normalize(-input.WorldPosition.xyz);
 #		else
 	float3 viewDirection = normalize(-input.WorldPosition.xyz);
 #		endif  // !VR
-	float3 worldNormal = normalize(input.VertexNormal);
+	float3 worldNormal = normalize(input.VertexNormal.xyz);
 
 	// Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
 	if (!frontFace)
 		worldNormal.xyz = -worldNormal.xyz;
+
+	worldNormal.xyz = normalize(lerp(worldNormal.xyz, normalize(input.FlatNormal.xyz), saturate(input.FlatNormal.w)));
 
 	if (complex) {
 		float3 normalColor = float4(TransformNormal(specColor.xyz), 1);
@@ -465,7 +452,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		// world-space -> tangent-space -> world-space.
 		// This is because we don't have pre-computed tangents.
 		worldNormal.xyz = normalize(mul(normalColor.xyz, CalculateTBN(worldNormal.xyz, -viewDirection, input.TexCoord.xy)));
+	} else {
+		specColor.w = length(baseColor.xyz) / 3.0;
 	}
+
+	baseColor.xyz *= Brightness;
+	baseColor.xyz = lerp(RGBToLuminance(baseColor.xyz), baseColor.xyz, Saturation);
 
 	float3 dirLightColor = DirLightColor.xyz;
 	if (EnableDirLightFix) {
@@ -492,7 +484,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	// Generated texture to simulate light transport.
 	// Numerous attempts were made to use a more interesting algorithm however they were mostly fruitless.
-	float3 subsurfaceColor = baseColor.xyz;
+	float3 subsurfaceColor = normalize(baseColor.xyz);
 
 	// Applies lighting across the whole surface apart from what is already lit.
 	lightsDiffuseColor += subsurfaceColor * dirLightColor * GetSoftLightMultiplier(dirLightAngle, SubsurfaceScatteringAmount);
@@ -505,41 +497,54 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-DirLightDirection, viewDirection, worldNormal.xyz, dirLightColor.xyz, Glossiness);
 	}
 
-	if (EnablePointLights) {
-		uint light_count, dummy;
-		lights.GetDimensions(light_count, dummy);
-		for (uint light_index = 0; light_index < light_count; light_index++) {
+#		if defined(LIGHT_LIMIT_FIX)
+	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
+	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
+
+	uint clusterIndex = GetClusterIndex(screenUV, viewPosition.z);
+	uint lightCount = lightGrid[clusterIndex].lightCount;
+
+	if (lightCount > 0) {
+		uint lightOffset = lightGrid[clusterIndex].offset;
+
+		float screenNoise = InterleavedGradientNoise(screenUV * perPassLLF[0].BufferDim);
+		float shadowQualityScale = saturate(1.0 - (((float)lightCount * (float)lightCount) / 128.0));
+
+		[loop] for (uint i = 0; i < lightCount; i++)
+		{
+			uint light_index = lightList[lightOffset + i];
 			StructuredLight light = lights[light_index];
-			if (light.active) {
-				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
-				float lightDist = length(lightDirection);
-				float intensityFactor = saturate(lightDist / light.radius);
-				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-				if (intensityMultiplier) {
-					float3 lightColor = light.color.xyz;
 
-					if (light.shadow) {
-						lightColor *= shadowColor[light.mask];
-					}
+			float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
+			float lightDist = length(lightDirection);
+			float intensityFactor = saturate(lightDist / light.radius);
+			if (intensityFactor == 1)
+				continue;
 
-					float3 normalizedLightDirection = normalize(lightDirection);
+			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+			float3 lightColor = light.color.xyz;
+			float3 normalizedLightDirection = normalize(lightDirection);
 
-					float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
-					float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
+			float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
 
-					lightDiffuseColor += subsurfaceColor * lightColor * GetSoftLightMultiplier(lightAngle, SubsurfaceScatteringAmount);
-					lightDiffuseColor += subsurfaceColor * lightColor * saturate(-lightAngle) * SubsurfaceScatteringAmount;
+			float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
+			if (light.firstPersonShadow)
+				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, 0.0, eyeIndex);
+			else if (perPassLLF[0].EnableContactShadows)
+				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, 0.0, eyeIndex);
 
-					if (complex) {
-						lightsSpecularColor += GetLightSpecularInput(normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
-						lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
-					}
+			float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
-					lightsDiffuseColor += lightDiffuseColor * intensityMultiplier;
-				}
-			}
+			lightDiffuseColor += subsurfaceColor * lightColor * GetSoftLightMultiplier(lightAngle, SubsurfaceScatteringAmount);
+			lightDiffuseColor += subsurfaceColor * lightColor * saturate(-lightAngle) * SubsurfaceScatteringAmount;
+
+			lightsSpecularColor += GetLightSpecularInput(normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
+			lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
+
+			lightsDiffuseColor += lightDiffuseColor * intensityMultiplier;
 		}
 	}
+#		endif
 
 	float3 directionalAmbientColor = mul(DirectionalAmbient, float4(worldNormal.xyz, 1));
 	lightsDiffuseColor += directionalAmbientColor;
@@ -548,13 +553,26 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 color = diffuseColor * baseColor.xyz * input.VertexColor.xyz;
 
-	if (complex) {
-		specularColor += lightsSpecularColor;
-		specularColor *= specColor.w * SpecularStrength;
-		color.xyz += specularColor;
-	}
+	specularColor += lightsSpecularColor;
+	specularColor *= specColor.w * SpecularStrength;
+	color.xyz += specularColor;
 
+#		if defined(LIGHT_LIMIT_FIX)
+	if (perPassLLF[0].EnableLightsVisualisation) {
+		if (perPassLLF[0].LightsVisualisationMode == 0) {
+			psout.Albedo.xyz = TurboColormap(0);
+		} else if (perPassLLF[0].LightsVisualisationMode == 1) {
+			psout.Albedo.xyz = TurboColormap(0);
+		} else {
+			psout.Albedo.xyz = TurboColormap((float)lightCount / 128.0);
+		}
+	} else {
+		psout.Albedo.xyz = color;
+	}
+#		else
 	psout.Albedo.xyz = color;
+#		endif
+
 	psout.Albedo.w = 1;
 
 #	endif  // RENDER_DEPTH

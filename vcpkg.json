@@ -13,6 +13,7 @@
     "catch2",
     "magic-enum",
     "nlohmann-json",
+    "pystring",
     {
       "name": "imgui",
       "features": [
@@ -21,7 +22,9 @@
         "docking-experimental"
       ],
       "version>=": "1.88"
-    }
+    },
+    "eastl",
+    "clib-util"
   ],
-  "builtin-baseline": "36fb23307e10cc6ffcec566c46c4bb3f567c82c6"
+  "builtin-baseline": "417119555f155f6044dec7a379cd25466e339873"
 }

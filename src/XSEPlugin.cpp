@@ -5,6 +5,8 @@
 #include "State.h"
 
 #include "Features/ExtendedMaterials.h"
+#include "Features/LightLimitFIx/ParticleLights.h"
+#include "Features/LightLimitFix.h"
 #define DLLEXPORT __declspec(dllexport)
 
 std::list<std::string> errors;
@@ -45,7 +47,7 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	while (!WinAPI::IsDebuggerPresent()) {};
 #endif
 	InitializeLog();
-	logger::info("Loaded plugin");
+	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION.string());
 	SKSE::Init(a_skse);
 	return Load();
 }
@@ -87,6 +89,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			}
 
 			if (errors.empty()) {
+				ParticleLights::GetSingleton()->GetConfigs();
+
 				Hooks::Install();
 
 				auto& shaderCache = SIE::ShaderCache::Instance();
@@ -99,6 +103,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				State::GetSingleton()->Load();
 
 				shaderCache.ValidateDiskCache();
+
+				if (LightLimitFix::GetSingleton()->loaded)
+					LightLimitFix::InstallHooks();
 			}
 
 			break;
@@ -122,6 +129,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				if (shaderCache.IsDiskCache()) {
 					shaderCache.WriteDiskCacheInfo();
 				}
+
+				if (LightLimitFix::GetSingleton()->loaded)
+					LightLimitFix::GetSingleton()->DataLoaded();
 			}
 
 			break;
@@ -136,7 +146,8 @@ bool Load()
 
 	auto state = State::GetSingleton();
 	state->Load();
-	InitializeLog(state->GetLogLevel());
+	auto log = spdlog::default_logger();
+	log->set_level(state->GetLogLevel());
 
 	return true;
 }

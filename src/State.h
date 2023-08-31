@@ -18,6 +18,10 @@ public:
 	uint32_t currentVertexDescriptor = 0;
 	uint32_t currentPixelDescriptor = 0;
 	spdlog::level::level_enum logLevel = spdlog::level::info;
+	std::string shaderDefinesString = "";
+	std::vector<std::pair<std::string, std::string>> shaderDefines{};  // data structure to parse string into; needed to avoid dangling pointers
+	const std::string userConfigPath = "Data\\SKSE\\Plugins\\CommunityShadersUSER.json";
+	const std::string defaultConfigPath = "Data\\SKSE\\Plugins\\CommunityShaders.json";
 
 	void Draw();
 	void Reset();
@@ -31,6 +35,9 @@ public:
 
 	void SetLogLevel(spdlog::level::level_enum a_level = spdlog::level::info);
 	spdlog::level::level_enum GetLogLevel();
+
+	void SetDefines(std::string defines);
+	std::vector<std::pair<std::string, std::string>>* GetDefines();
 
 	/*
      * Whether a_type is currently enabled in Community Shaders

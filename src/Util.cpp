@@ -1,4 +1,5 @@
 #include "Util.h"
+#include "State.h"
 
 #include <d3dcompiler.h>
 
@@ -120,7 +121,15 @@ namespace Util
 
 		if (REL::Module::IsVR())
 			macros.push_back({ "VR", "" });
-
+		if (State::GetSingleton()->IsDeveloperMode()) {
+			macros.push_back({ "D3DCOMPILE_SKIP_OPTIMIZATION", "" });
+			macros.push_back({ "D3DCOMPILE_DEBUG", "" });
+		}
+		auto shaderDefines = State::GetSingleton()->GetDefines();
+		if (!shaderDefines->empty()) {
+			for (unsigned int i = 0; i < shaderDefines->size(); i++)
+				macros.push_back({ shaderDefines->at(i).first.c_str(), shaderDefines->at(i).second.c_str() });
+		}
 		if (!_stricmp(ProgramType, "ps_5_0"))
 			macros.push_back({ "PIXELSHADER", "" });
 		else if (!_stricmp(ProgramType, "vs_5_0"))
@@ -193,6 +202,10 @@ namespace Util
 		for (const auto& def : defines) {
 			if (def.first != nullptr) {
 				result += def.first;
+				if (def.second != nullptr && !std::string(def.second).empty()) {
+					result += "=";
+					result += def.second;
+				}
 				result += ' ';
 			} else {
 				break;
@@ -206,6 +219,10 @@ namespace Util
 		for (const auto& def : defines) {
 			if (def.Name != nullptr) {
 				result += def.Name;
+				if (def.Definition != nullptr && !std::string(def.Definition).empty()) {
+					result += "=";
+					result += def.Definition;
+				}
 				result += ' ';
 			} else {
 				break;

@@ -137,7 +137,7 @@ namespace SIE
 		bool isAsync = true;
 		bool isDump = false;
 
-		std::vector<std::jthread> compilationThreads;
+		eastl::vector<std::jthread> compilationThreads;
 		std::mutex vertexShadersMutex;
 		std::mutex pixelShadersMutex;
 		CompilationSet compilationSet;

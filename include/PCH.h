@@ -1,5 +1,10 @@
 #pragma once
 
+#include <new>
+void* operator new[](size_t size, const char* pName, int flags, unsigned debugFlags, const char* file, int line);
+void* operator new[](size_t size, size_t alignment, size_t alignmentOffset, const char* pName, int flags,
+	unsigned debugFlags, const char* file, int line);
+
 #pragma warning(push)
 #if defined(FALLOUT4)
 #	include "F4SE/F4SE.h"
@@ -113,7 +118,11 @@ namespace DX
 	}
 }
 
-#include <CLIBUtil/simpleINI.hpp>
+#include <ClibUtil/distribution.hpp>
+#include <ClibUtil/numeric.hpp>
+#include <ClibUtil/rng.hpp>
+#include <ClibUtil/simpleINI.hpp>
+#include <ClibUtil/editorID.hpp>
 
 #include "imgui.h"
 
@@ -121,3 +130,30 @@ namespace DX
 using json = nlohmann::json;
 
 #include <magic_enum.hpp>
+
+#include <EASTL/algorithm.h>
+#include <EASTL/array.h>
+#include <EASTL/bitset.h>
+#include <EASTL/bonus/fixed_ring_buffer.h>
+#include <EASTL/fixed_list.h>
+#include <EASTL/fixed_slist.h>
+#include <EASTL/fixed_vector.h>
+#include <EASTL/functional.h>
+#include <EASTL/map.h>
+#include <EASTL/numeric_limits.h>
+#include <EASTL/set.h>
+#include <EASTL/shared_ptr.h>
+#include <EASTL/string.h>
+#include <EASTL/tuple.h>
+#include <EASTL/unique_ptr.h>
+#include <EASTL/unordered_map.h>
+#include <EASTL/vector.h>
+#include <EASTL/hash_set.h>
+
+#include "SimpleMath.h"
+
+using float2 = DirectX::SimpleMath::Vector2;
+using float3 = DirectX::SimpleMath::Vector3;
+using float4 = DirectX::SimpleMath::Vector4;
+using float4x4 = DirectX::SimpleMath::Matrix;
+using uint = uint32_t;

@@ -1,12 +1,12 @@
 #include "State.h"
 
 #include <magic_enum.hpp>
+#include <pystring/pystring.h>
 
 #include "Menu.h"
 #include "ShaderCache.h"
 
 #include "Feature.h"
-#include "Features/Clustered.h"
 
 void State::Draw()
 {
@@ -25,8 +25,11 @@ void State::Draw()
 					context->PSSetShader(pixelShader->shader, NULL, NULL);
 				}
 
-				for (auto* feature : Feature::GetFeatureList())
-					feature->Draw(currentShader, currentPixelDescriptor);
+				for (auto* feature : Feature::GetFeatureList()) {
+					if (feature->loaded) {
+						feature->Draw(currentShader, currentPixelDescriptor);
+					}
+				}
 			}
 		}
 	}
@@ -36,7 +39,6 @@ void State::Draw()
 
 void State::Reset()
 {
-	Clustered::GetSingleton()->Reset();
 	for (auto* feature : Feature::GetFeatureList())
 		feature->Reset();
 }
@@ -51,13 +53,18 @@ void State::Load()
 {
 	auto& shaderCache = SIE::ShaderCache::Instance();
 
-	std::string configPath = "Data\\SKSE\\Plugins\\CommunityShaders.json";
-
+	std::string configPath = userConfigPath;
 	std::ifstream i(configPath);
 	if (!i.is_open()) {
-		logger::error("Error opening config file ({})\n", configPath);
-		return;
+		logger::info("Unable to open user config file ({}); trying default ({})", configPath, defaultConfigPath);
+		configPath = defaultConfigPath;
+		i.open(configPath);
+		if (!i.is_open()) {
+			logger::error("Error opening config file ({})\n", configPath);
+			return;
+		}
 	}
+	logger::info("Loading config file ({})", configPath);
 
 	json settings;
 	try {
@@ -76,7 +83,10 @@ void State::Load()
 		if (advanced["Dump Shaders"].is_boolean())
 			shaderCache.SetDump(advanced["Dump Shaders"]);
 		if (advanced["Log Level"].is_number_integer()) {
-			logLevel = static_cast<spdlog::level::level_enum>(max(spdlog::level::trace, min(spdlog::level::off, (int)advanced["Log Level"])));
+			logLevel = static_cast<spdlog::level::level_enum>((int)advanced["Log Level"]);
+			//logLevel = static_cast<spdlog::level::level_enum>(max(spdlog::level::trace, min(spdlog::level::off, (int)advanced["Log Level"])));
+			if (advanced["Shader Defines"].is_string())
+				SetDefines(advanced["Shader Defines"]);
 		}
 	}
 
@@ -105,12 +115,17 @@ void State::Load()
 
 	for (auto* feature : Feature::GetFeatureList())
 		feature->Load(settings);
+	i.close();
+	if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
+		logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
+		Save();
+	}
 }
 
 void State::Save()
 {
 	auto& shaderCache = SIE::ShaderCache::Instance();
-	std::ofstream o(L"Data\\SKSE\\Plugins\\CommunityShaders.json");
+	std::ofstream o(userConfigPath);
 	json settings;
 
 	Menu::GetSingleton()->Save(settings);
@@ -118,6 +133,7 @@ void State::Save()
 	json advanced;
 	advanced["Dump Shaders"] = shaderCache.IsDump();
 	advanced["Log Level"] = logLevel;
+	advanced["Shader Defines"] = shaderDefinesString;
 	settings["Advanced"] = advanced;
 
 	json general;
@@ -139,6 +155,7 @@ void State::Save()
 		feature->Save(settings);
 
 	o << settings.dump(1);
+	logger::info("Saving settings to {}", userConfigPath);
 }
 
 bool State::ValidateCache(CSimpleIniA& a_ini)
@@ -166,6 +183,38 @@ void State::SetLogLevel(spdlog::level::level_enum a_level)
 spdlog::level::level_enum State::GetLogLevel()
 {
 	return logLevel;
+}
+
+void State::SetDefines(std::string a_defines)
+{
+	shaderDefines.clear();
+	shaderDefinesString = "";
+	std::string name = "";
+	std::string definition = "";
+	auto defines = pystring::split(a_defines, ";");
+	for (const auto& define : defines) {
+		auto cleanedDefine = pystring::strip(define);
+		auto token = pystring::split(cleanedDefine, "=");
+		if (token.empty() || token[0].empty())
+			continue;
+		if (token.size() > 2) {
+			logger::warn("Define string has too many '='; ignoring {}", define);
+			continue;
+		}
+		name = pystring::strip(token[0]);
+		if (token.size() == 2) {
+			definition = pystring::strip(token[1]);
+		}
+		shaderDefinesString += pystring::strip(define) + ";";
+		shaderDefines.push_back(std::pair(name, definition));
+	}
+	shaderDefinesString = shaderDefinesString.substr(0, shaderDefinesString.size() - 1);
+	logger::debug("Shader Defines set to {}", shaderDefinesString);
+}
+
+std::vector<std::pair<std::string, std::string>>* State::GetDefines()
+{
+	return &shaderDefines;
 }
 
 bool State::ShaderEnabled(const RE::BSShader::Type a_type)
