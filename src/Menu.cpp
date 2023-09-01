@@ -487,7 +487,7 @@ void Menu::DrawSettings()
 			if (ImGui::BeginListBox("##FeatureList", { -FLT_MIN, -FLT_MIN })) {
 				for (size_t i = 0; i < featureList.size(); i++)
 					if (featureList[i]->loaded)
-						if (ImGui::Selectable(featureList[i]->GetName().c_str(), selectedFeature == i))
+						if (ImGui::Selectable(fmt::format("{} ({})", featureList[i]->GetName(), featureList[i]->version).c_str(), selectedFeature == i))
 							selectedFeature = i;
 				ImGui::EndListBox();
 			}
