@@ -122,6 +122,12 @@ void State::Load()
 		logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
 		Save();
 	}
+
+	upscalerLoaded = GetModuleHandleW(L"Data\\SKSE\\Plugins\\SkyrimUpscaler.dll");
+	if (upscalerLoaded)
+		logger::info("Skyrim Upscaler detected");
+	else
+		logger::info("Skyrim Upscaler not detected");
 }
 
 void State::Save()

@@ -123,14 +123,14 @@ public:
 
 	struct Settings
 	{
-		bool EnableContactShadows = true;
-		bool EnableFirstPersonShadows = true;
+		bool EnableContactShadows = false;
+		bool EnableFirstPersonShadows = false;
 		bool EnableLightsVisualisation = false;
 		uint LightsVisualisationMode = 0;
 		bool EnableParticleLights = true;
 		bool EnableParticleLightsCulling = true;
 		bool EnableParticleLightsDetection = true;
-		float ParticleLightsBrightness = 1.0f;
+		float ParticleLightsBrightness = 0.5f;
 		float ParticleLightsSaturation = 1.0f;
 		float ParticleLightsRadiusBillboards = 1.0f;
 		bool EnableParticleLightsOptimization = true;
