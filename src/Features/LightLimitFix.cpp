@@ -184,14 +184,9 @@ void LightLimitFix::Save(json& o_json)
 	o_json[GetName()] = settings;
 }
 
-void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass*)
+void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass)
 {
-	strictLightsCount = 0;
-}
-
-void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* Pass, uint32_t, uint32_t)
-{
-	strictLightsCount = Pass->numLights - 1;
+	strictLightsCount = a_pass->numLights - 1;
 }
 
 void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3& a_initialPosition)
