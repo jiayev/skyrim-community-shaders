@@ -1,6 +1,10 @@
 name: Run clang-format Linter
 
 on:
+  push:
+    branches:
+      - main
+      - dev
   pull_request_target:
     branches:
       - main

@@ -40,13 +40,15 @@ void State::Draw()
 void State::Reset()
 {
 	for (auto* feature : Feature::GetFeatureList())
-		feature->Reset();
+		if (feature->loaded)
+			feature->Reset();
 }
 
 void State::Setup()
 {
 	for (auto* feature : Feature::GetFeatureList())
-		feature->SetupResources();
+		if (feature->loaded)
+			feature->SetupResources();
 }
 
 void State::Load()

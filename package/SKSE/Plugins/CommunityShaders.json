@@ -1,7 +1,8 @@
 {
  "Advanced": {
   "Dump Shaders": false,
-  "Log Level": 2
+  "Log Level": 2,
+  "Shader Defines": ""
  },
  "Complex Parallax Materials": {
   "BlendRange": 0.05000000074505806,
@@ -27,13 +28,25 @@
   "RadiusMultiplier": 2.0
  },
  "Grass Lighting": {
+  "Brightness": 0.75,
   "EnableDirLightFix": 1,
-  "EnablePointLights": 1,
   "Glossiness": 20.0,
   "SpecularStrength": 0.5,
   "SubsurfaceScatteringAmount": 1.0
  },
+ "Light Limit Fix": {
+  "EnableContactShadows": true,
+  "EnableFirstPersonShadows": true,
+  "EnableLightsVisualisation": false,
+  "EnableParticleLights": true,
+  "EnableParticleLightsCulling": true,
+  "EnableParticleLightsDetection": true,
+  "EnableParticleLightsOptimization": true,
+  "ParticleLightsBrightness": 1.0,
+  "ParticleLightsOptimisationClusterRadius": 32
+ },
  "Menu": {
+  "Font Scale": 0.0,
   "Toggle Key": 35
  },
  "Replace Original Shaders": {
@@ -65,7 +78,7 @@
   "FogDimmerAmount": 1.0,
   "SubsurfaceScatteringAmount": 0.5
  },
- "Version": "0-4-0-0",
+ "Version": "0-6-0-0",
  "Water Blending": {
   "EnableWaterBlending": 1,
   "EnableWaterBlendingSSR": 1,
