@@ -1816,7 +1816,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			float3 worldSpaceNormal = normalize(mul(CameraViewInverse[eyeIndex], float4(screenSpaceNormal, 0)));
 			float3 worldSpaceViewDirection = -normalize(input.WorldPosition.xyz);
 
-			float shadowQualityScale = saturate(1.0 - (((float)lightCount * (float)lightCount) / 128.0));
+			float shadowQualityScale = saturate(1.0 - ((float)lightCount / 128.0));
 
 #			if (defined(SKINNED) || !defined(MODELSPACENORMALS))
 			float3 worldSpaceVertexNormal = vertexNormal;
