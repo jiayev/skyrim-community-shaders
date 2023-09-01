@@ -35,15 +35,16 @@
   "SubsurfaceScatteringAmount": 1.0
  },
  "Light Limit Fix": {
-  "EnableContactShadows": true,
-  "EnableFirstPersonShadows": true,
+  "EnableContactShadows": false,
+  "EnableFirstPersonShadows": false,
   "EnableLightsVisualisation": false,
   "EnableParticleLights": true,
   "EnableParticleLightsCulling": true,
   "EnableParticleLightsDetection": true,
   "EnableParticleLightsOptimization": true,
   "ParticleLightsBrightness": 1.0,
-  "ParticleLightsOptimisationClusterRadius": 32
+  "ParticleLightsOptimisationClusterRadius": 32,
+  "ParticleLightsSaturation": 1.0
  },
  "Menu": {
   "Font Scale": 0.0,
