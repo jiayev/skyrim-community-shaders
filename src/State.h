@@ -23,6 +23,8 @@ public:
 	const std::string userConfigPath = "Data\\SKSE\\Plugins\\CommunityShadersUSER.json";
 	const std::string defaultConfigPath = "Data\\SKSE\\Plugins\\CommunityShaders.json";
 
+	bool upscalerLoaded = false;
+
 	void Draw();
 	void Reset();
 	void Setup();
