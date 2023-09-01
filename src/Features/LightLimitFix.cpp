@@ -23,15 +23,20 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableParticleLightsCulling,
 	EnableParticleLightsDetection,
 	ParticleLightsBrightness,
+	ParticleLightsSaturation,
 	EnableParticleLightsOptimization,
 	ParticleLightsOptimisationClusterRadius)
 
 void LightLimitFix::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Miscellaneous", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::TextWrapped("All lights cast small shadows. Performance impact.");
 		ImGui::Checkbox("Enable Contact Shadows", &settings.EnableContactShadows);
-
+		
+		ImGui::TextWrapped("Torches and light spells will cast shadows in first-person. Performance impact.");
 		ImGui::Checkbox("Enable First-Person Shadows", &settings.EnableFirstPersonShadows);
+		
+		ImGui::TextWrapped("- Visualise the light limit; Red when the \"strict\" light limit is reached (portal-strict lights).\n - Visualise the number of strict lights. \n - Visualise the number of clustered lights.");
 		ImGui::Checkbox("Enable Lights Visualisation", &settings.EnableLightsVisualisation);
 
 		{
@@ -44,13 +49,16 @@ void LightLimitFix::DrawSettings()
 
 	if (ImGui::TreeNodeEx("Particle Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
-
+		ImGui::TextWrapped("Significantly improves performance by not rendering empty textures. Only disable if you are encountering issues.");
 		ImGui::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
+	
+		ImGui::TextWrapped("Adds particle lights to the player light level, so that NPCs can detect them for stealth and gameplay.");
 		ImGui::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection);
 
 		ImGui::SliderFloat("Brightness", &settings.ParticleLightsBrightness, 0.0, 1.0, "%.2f");
 		ImGui::SliderFloat("Saturation", &settings.ParticleLightsSaturation, 1.0, 2.0, "%.2f");
-
+		
+		ImGui::TextWrapped("Merges vertices which are close enough to each other to significantly improve performance.");
 		ImGui::Checkbox("Enable Optimization", &settings.EnableParticleLightsOptimization);
 		ImGui::SliderInt("Optimisation Cluster Radius", (int*)&settings.ParticleLightsOptimisationClusterRadius, 1, 64);
 
@@ -680,6 +688,8 @@ void LightLimitFix::UpdateLights()
 					float radius = particleData->GetParticlesRuntimeData().sizes[p] * 64.0f;
 
 					auto initialPosition = particleData->GetParticlesRuntimeData().positions[p];
+					if (!particleSystem->GetParticleSystemRuntimeData().isWorldspace)
+						initialPosition += particleLight.first->world.translate;
 
 					RE::NiPoint3 positionWS = initialPosition - eyePosition;
 
