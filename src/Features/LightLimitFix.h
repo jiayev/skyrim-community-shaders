@@ -130,7 +130,7 @@ public:
 		bool EnableParticleLights = true;
 		bool EnableParticleLightsCulling = true;
 		bool EnableParticleLightsDetection = true;
-		float ParticleLightsBrightness = 0.5f;
+		float ParticleLightsBrightness = 1.0f;
 		float ParticleLightsSaturation = 1.0f;
 		float ParticleLightsRadiusBillboards = 1.0f;
 		bool EnableParticleLightsOptimization = true;

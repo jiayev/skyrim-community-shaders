@@ -1,7 +1,5 @@
 #include "LightLimitFix.h"
 
-#include <numbers>
-
 #include <PerlinNoise.hpp>
 
 #include "State.h"
@@ -722,7 +720,7 @@ void LightLimitFix::UpdateLights()
 					color.y = particleLight.second.first.green * particleData->GetParticlesRuntimeData().color[p].green;
 					color.z = particleLight.second.first.blue * particleData->GetParticlesRuntimeData().color[p].blue;
 
-					clusteredLight.color += Saturation(color, settings.ParticleLightsSaturation * particleLight.second.second.saturationMult) * alpha * std::numbers::pi_v<float>;
+					clusteredLight.color += Saturation(color, settings.ParticleLightsSaturation * particleLight.second.second.saturationMult) * alpha;
 
 					clusteredLight.radius += radius * particleLight.second.second.radiusMult;
 
