@@ -504,7 +504,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	uint clusterIndex = 0;
 	uint lightCount = 0;
 
-	if (GetClusterIndex(screenUV, viewPosition.z, clusterIndex)){
+	if (GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		lightCount = lightGrid[clusterIndex].lightCount;
 		if (lightCount) {
 			uint lightOffset = lightGrid[clusterIndex].offset;

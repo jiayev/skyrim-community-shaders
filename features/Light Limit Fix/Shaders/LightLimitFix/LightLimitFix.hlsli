@@ -48,7 +48,7 @@ bool GetClusterIndex(in float2 uv, in float z, out uint clusterIndex)
 	uint clusterZ = uint(max((log2(z) - log2(perPassLLF[0].LightsNear)) * 16.0 / log2(perPassLLF[0].LightsFar / perPassLLF[0].LightsNear), 0.0));
 	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(32, 16));
 	uint3 cluster = uint3(uint2((uv * perPassLLF[0].BufferDim) / clusterDim), clusterZ);
-	
+
 	clusterIndex = cluster.x + (32 * cluster.y) + (32 * 16 * cluster.z);
 	return true;
 }
