@@ -288,7 +288,7 @@ void LightLimitFix::Bind()
 			perPassData.LightsFar = lightsFar;
 
 			perPassData.BufferDim = { resolutionX, resolutionY };
-			perPassData.FrameCount = viewport->uiFrameCount;
+			perPassData.FrameCount = viewport->uiFrameCount * Util::UnkOuterStruct::GetSingleton()->GetTAA();
 			perPassData.EnableGlobalLights = true;
 			perPassData.EnableContactShadows = settings.EnableContactShadows;
 			perPassData.EnableLightsVisualisation = settings.EnableLightsVisualisation;
