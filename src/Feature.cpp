@@ -22,10 +22,10 @@ void Feature::Load(json&)
 	if (auto value = ini.GetValue("Info", "Version")) {
 		loaded = true;
 		version = value;
-		logger::info("{} successfully loaded", ini_filename);
+		logger::info("{} {} successfully loaded", ini_filename, value);
 	} else {
 		loaded = false;
-		logger::warn("{} not successfully loaded", ini_filename);
+		logger::warn("{} missing version info; not successfully loaded", ini_filename);
 	}
 }
 
