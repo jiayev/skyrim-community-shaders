@@ -4,7 +4,7 @@
 
 void ParticleLights::GetConfigs()
 {
-	{
+	if (std::filesystem::exists("Data\\ParticleLights")) {
 		logger::info("[LLF] Loading particle lights configs");
 
 		auto configs = clib_util::distribution::get_configs("Data\\ParticleLights", "", ".ini");
@@ -65,7 +65,7 @@ void ParticleLights::GetConfigs()
 		}
 	}
 
-	{
+	if (std::filesystem::exists("Data\\ParticleLights\\Gradients")) {
 		logger::info("[LLF] Loading particle lights gradients configs");
 
 		auto configs = clib_util::distribution::get_configs("Data\\ParticleLights\\Gradients", "", ".ini");
