@@ -453,7 +453,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		// This is because we don't have pre-computed tangents.
 		worldNormal.xyz = normalize(mul(normalColor.xyz, CalculateTBN(worldNormal.xyz, -viewDirection, input.TexCoord.xy)));
 	} else {
-		specColor.w = length(baseColor.xyz);
+		specColor.w = RGBToLuminance(baseColor.xyz) / 3.0;
 	}
 
 	baseColor.xyz *= Brightness;
@@ -491,11 +491,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	// Applies lighting from the opposite direction. Does not account for normals perpendicular to the light source.
 	lightsDiffuseColor += subsurfaceColor * dirLightColor * saturate(-dirLightAngle) * SubsurfaceScatteringAmount;
 
-	if (complex) {
-		lightsSpecularColor = GetLightSpecularInput(DirLightDirection, viewDirection, worldNormal.xyz, dirLightColor.xyz, Glossiness);
-		// Not physically accurate but grass will otherwise look too flat.
-		lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-DirLightDirection, viewDirection, worldNormal.xyz, dirLightColor.xyz, Glossiness);
-	}
+	lightsSpecularColor = GetLightSpecularInput(DirLightDirection, viewDirection, worldNormal.xyz, dirLightColor.xyz, Glossiness);
+	// Not physically accurate but grass will otherwise look too flat.
+	lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-DirLightDirection, viewDirection, worldNormal.xyz, dirLightColor.xyz, Glossiness);
 
 #		if defined(LIGHT_LIMIT_FIX)
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
