@@ -453,7 +453,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		// This is because we don't have pre-computed tangents.
 		worldNormal.xyz = normalize(mul(normalColor.xyz, CalculateTBN(worldNormal.xyz, -viewDirection, input.TexCoord.xy)));
 	} else {
-		specColor.w = length(baseColor.xyz) / 3.0;
+		specColor.w = length(baseColor.xyz);
 	}
 
 	baseColor.xyz *= Brightness;
@@ -484,7 +484,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	// Generated texture to simulate light transport.
 	// Numerous attempts were made to use a more interesting algorithm however they were mostly fruitless.
-	float3 subsurfaceColor = normalize(baseColor.xyz);
+	float3 subsurfaceColor = lerp(RGBToLuminance(baseColor.xyz), baseColor.xyz, 2.0);
 
 	// Applies lighting across the whole surface apart from what is already lit.
 	lightsDiffuseColor += subsurfaceColor * dirLightColor * GetSoftLightMultiplier(dirLightAngle, SubsurfaceScatteringAmount);
@@ -576,6 +576,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.Albedo.xyz = color;
 #		endif
 
+	psout.Normal.w = specColor.w * SpecularStrength;
 	psout.Albedo.w = 1;
 
 #	endif  // RENDER_DEPTH
