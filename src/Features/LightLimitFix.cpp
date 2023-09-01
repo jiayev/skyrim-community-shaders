@@ -572,18 +572,10 @@ float3 LightLimitFix::Saturation(float3 color, float saturation)
 
 void LightLimitFix::UpdateLights()
 {
-	bool interior = true;
-
-	if (auto playerCharacter = RE::PlayerCharacter::GetSingleton()) {
-		if (auto parentCell = playerCharacter->GetParentCell()) {
-			interior = parentCell->IsInteriorCell();
-		}
-	}
-
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 
 	lightsNear = std::max(0.0f, accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear);
-	lightsFar = std::min(interior ? 8192.0f : 16384.0f, accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar);
+	lightsFar = std::min(16384.0f, accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar);
 
 	std::uint32_t currentLightCount = 0;  // Max number of lights is 4294967295
 
