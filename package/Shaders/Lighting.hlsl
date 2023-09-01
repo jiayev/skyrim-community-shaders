@@ -9,6 +9,10 @@
 #	define HAS_VIEW_VECTOR
 #endif  // defined(SPECULAR) || defined(AMBIENT_SPECULAR) || defined(ENVMAP) || defined(RIM_LIGHTING) || defined(PARALLAX) || defined(MULTI_LAYER_PARALLAX) || defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(SNOW_FLAG) || defined(EYE) || defined(PBR)
 
+#	if defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(LODLANDNOISE)
+#		define LOD
+#	endif
+
 struct VS_INPUT
 {
 	float4 Position : POSITION0;
@@ -441,7 +445,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.FogParam.xyz = lerp(FogNearColor.xyz, FogFarColor.xyz, fogColorParam);
 	vsout.FogParam.w = fogColorParam;
 
-#	if defined(LIGHT_LIMIT_FIX)
+#	if defined(LIGHT_LIMIT_FIX) 
 	vsout.World[0] = World[0];
 #		ifdef VR
 	vsout.World[1] = World[1];
@@ -1050,6 +1054,12 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #	endif
 }
 
+#	if defined(LOD)
+#		undef COMPLEX_PARALLAX_MATERIALS
+#		undef WATER_BLENDING
+#		undef LIGHT_LIMIT_FIX
+#	endif
+
 #	if defined(COMPLEX_PARALLAX_MATERIALS) && (defined(PARALLAX) || defined(LANDSCAPE) || defined(ENVMAP))
 #		define CPM_AVAILABLE
 #	endif
@@ -1066,7 +1076,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "WaterBlending/WaterBlending.hlsli"
 #	endif
 
-#	if defined(LIGHT_LIMIT_FIX)
+#	if defined(LIGHT_LIMIT_FIX) 
 #		include "LightLimitFix/LightLimitFix.hlsli"
 #	endif
 
@@ -1680,7 +1690,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	lightsDiffuseColor += dirDiffuseColor;
 #	endif
 
-#	if defined(LIGHT_LIMIT_FIX)
+#	if defined(LIGHT_LIMIT_FIX) 
 	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = InterleavedGradientNoise(screenUV * perPassLLF[0].BufferDim);
 #		if defined(SKINNED) || !defined(MODELSPACENORMALS)
@@ -1688,6 +1698,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 #	endif
 
+	float3 screenSpaceNormal;
+	screenSpaceNormal.x = dot(input.ScreenNormalTransform0.xyz, normal.xyz);
+	screenSpaceNormal.y = dot(input.ScreenNormalTransform1.xyz, normal.xyz);
+	screenSpaceNormal.z = dot(input.ScreenNormalTransform2.xyz, normal.xyz);
+	screenSpaceNormal = normalize(screenSpaceNormal);
+
+#if !defined(LOD)
 	if (numLights > 0) {
 		[loop] for (float lightIndex = 0; lightIndex < numLights; ++lightIndex)
 		{
@@ -1713,7 +1730,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			lightColor *= shadowComponent.xxx;
 #	endif
 			float3 normalizedLightDirection = normalize(lightDirection);
-#	if defined(LIGHT_LIMIT_FIX)
+#	if defined(LIGHT_LIMIT_FIX) 
 #		if defined(DEFSHADOW)
 			if (perPassLLF[0].EnableContactShadows && !FrameParams.z && FrameParams.y && shadowComponent != 0.0) {
 #		else
@@ -1735,6 +1752,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 			}
 #	endif
+
 
 #	if defined(CPM_AVAILABLE)
 			if (perPassParallax[0].EnableShadows) {
@@ -1786,20 +1804,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif      // PBR
 		}
 	}
-
-	float3 screenSpaceNormal;
-	screenSpaceNormal.x = dot(input.ScreenNormalTransform0.xyz, normal.xyz);
-	screenSpaceNormal.y = dot(input.ScreenNormalTransform1.xyz, normal.xyz);
-	screenSpaceNormal.z = dot(input.ScreenNormalTransform2.xyz, normal.xyz);
-	screenSpaceNormal = normalize(screenSpaceNormal);
+	
 	uint lightCount = 0;
+	uint clusterIndex = 0;
 
-#	if defined(LIGHT_LIMIT_FIX)
-	if (perPassLLF[0].EnableGlobalLights) {
-		uint clusterIndex = GetClusterIndex(screenUV, viewPosition.z);
+#	if defined(LIGHT_LIMIT_FIX) 
+	if (perPassLLF[0].EnableGlobalLights && GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		lightCount = lightGrid[clusterIndex].lightCount;
-
-		if (lightCount > 0) {
+		if (lightCount) {
 			uint lightOffset = lightGrid[clusterIndex].offset;
 
 			float3 worldSpaceNormal = normalize(mul(CameraViewInverse[eyeIndex], float4(screenSpaceNormal, 0)));
@@ -1902,7 +1914,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 	}
 #	endif
-
+#endif
 #	if defined(PBR)
 	// float3 ambientColor = 0.03 * baseColor.xyz * ao;
 	float3 ambientColor = (mul(DirectionalAmbient, modelNormal) + IBLParams.yzw * IBLParams.xxx) * baseColor.xyz * ao;
@@ -2081,7 +2093,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	endif
 
-#	if defined(LIGHT_LIMIT_FIX)
+#	if defined(LIGHT_LIMIT_FIX) 
 	if (perPassLLF[0].EnableLightsVisualisation) {
 		if (perPassLLF[0].LightsVisualisationMode == 0) {
 			psout.Albedo.xyz = TurboColormap(perPassLLF[0].StrictLightsCount > 7);

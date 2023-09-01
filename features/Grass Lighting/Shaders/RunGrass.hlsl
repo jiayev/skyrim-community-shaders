@@ -501,47 +501,50 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
 
-	uint clusterIndex = GetClusterIndex(screenUV, viewPosition.z);
-	uint lightCount = lightGrid[clusterIndex].lightCount;
+	uint clusterIndex = 0;
+	uint lightCount = 0;
 
-	if (lightCount > 0) {
-		uint lightOffset = lightGrid[clusterIndex].offset;
+	if (GetClusterIndex(screenUV, viewPosition.z, clusterIndex)){
+		lightCount = lightGrid[clusterIndex].lightCount;
+		if (lightCount) {
+			uint lightOffset = lightGrid[clusterIndex].offset;
 
-		float screenNoise = InterleavedGradientNoise(screenUV * perPassLLF[0].BufferDim);
-		float shadowQualityScale = saturate(1.0 - (((float)lightCount * (float)lightCount) / 128.0));
+			float screenNoise = InterleavedGradientNoise(screenUV * perPassLLF[0].BufferDim);
+			float shadowQualityScale = saturate(1.0 - (((float)lightCount * (float)lightCount) / 128.0));
 
-		[loop] for (uint i = 0; i < lightCount; i++)
-		{
-			uint light_index = lightList[lightOffset + i];
-			StructuredLight light = lights[light_index];
+			[loop] for (uint i = 0; i < lightCount; i++)
+			{
+				uint light_index = lightList[lightOffset + i];
+				StructuredLight light = lights[light_index];
 
-			float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
-			float lightDist = length(lightDirection);
-			float intensityFactor = saturate(lightDist / light.radius);
-			if (intensityFactor == 1)
-				continue;
+				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
+				float lightDist = length(lightDirection);
+				float intensityFactor = saturate(lightDist / light.radius);
+				if (intensityFactor == 1)
+					continue;
 
-			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-			float3 lightColor = light.color.xyz;
-			float3 normalizedLightDirection = normalize(lightDirection);
+				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+				float3 lightColor = light.color.xyz;
+				float3 normalizedLightDirection = normalize(lightDirection);
 
-			float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
+				float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
 
-			float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
-			if (light.firstPersonShadow)
-				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, 0.0, eyeIndex);
-			else if (perPassLLF[0].EnableContactShadows)
-				lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, 0.0, eyeIndex);
+				float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
+				if (light.firstPersonShadow)
+					lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, 0.0, eyeIndex);
+				else if (perPassLLF[0].EnableContactShadows)
+					lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, 0.0, eyeIndex);
 
-			float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
+				float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
-			lightDiffuseColor += subsurfaceColor * lightColor * GetSoftLightMultiplier(lightAngle, SubsurfaceScatteringAmount);
-			lightDiffuseColor += subsurfaceColor * lightColor * saturate(-lightAngle) * SubsurfaceScatteringAmount;
+				lightDiffuseColor += subsurfaceColor * lightColor * GetSoftLightMultiplier(lightAngle, SubsurfaceScatteringAmount);
+				lightDiffuseColor += subsurfaceColor * lightColor * saturate(-lightAngle) * SubsurfaceScatteringAmount;
 
-			lightsSpecularColor += GetLightSpecularInput(normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
-			lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
+				lightsSpecularColor += GetLightSpecularInput(normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
+				lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
 
-			lightsDiffuseColor += lightDiffuseColor * intensityMultiplier;
+				lightsDiffuseColor += lightDiffuseColor * intensityMultiplier;
+			}
 		}
 	}
 #		endif
