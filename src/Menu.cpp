@@ -488,8 +488,7 @@ void Menu::DrawSettings()
 			ImGui::TableNextColumn();
 			if (ImGui::BeginListBox("##FeatureList", { -FLT_MIN, -FLT_MIN })) {
 				for (size_t i = 0; i < featureList.size(); i++)
-					if (featureList[i]->loaded)
-					{
+					if (featureList[i]->loaded) {
 						if (ImGui::Selectable(fmt::format("{} ", featureList[i]->GetName()).c_str(), selectedFeature == i, ImGuiSelectableFlags_SpanAllColumns))
 							selectedFeature = i;
 						ImGui::SameLine();
