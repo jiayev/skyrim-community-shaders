@@ -9,6 +9,7 @@
 
 #include "Feature.h"
 #include "Features/ExtendedMaterials.h"
+#include "Features/LightLimitFix/ParticleLights.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/WaterBlending.h"
 
@@ -298,6 +299,7 @@ void Menu::DrawSettings()
 			ImGui::TableNextColumn();
 			if (ImGui::Button("Load Settings", { -1, 0 })) {
 				State::GetSingleton()->Load();
+				ParticleLights::GetSingleton()->GetConfigs();
 			}
 
 			ImGui::TableNextColumn();
