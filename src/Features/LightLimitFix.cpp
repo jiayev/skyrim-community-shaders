@@ -16,7 +16,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LightLimitFix::Settings,
 	EnableContactShadows,
 	EnableFirstPersonShadows,
-	EnableLightsVisualisation,
 	EnableParticleLights,
 	EnableParticleLightsCulling,
 	EnableParticleLightsDetection,

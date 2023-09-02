@@ -37,7 +37,6 @@
  "Light Limit Fix": {
   "EnableContactShadows": false,
   "EnableFirstPersonShadows": false,
-  "EnableLightsVisualisation": false,
   "EnableParticleLights": true,
   "EnableParticleLightsCulling": true,
   "EnableParticleLightsDetection": true,
