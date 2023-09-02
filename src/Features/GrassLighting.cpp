@@ -9,7 +9,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SpecularStrength,
 	SubsurfaceScatteringAmount,
 	EnableDirLightFix,
-	Brightness)
+	Brightness,
+	Saturation)
 
 enum class GrassShaderTechniques
 {
