@@ -17,14 +17,14 @@ public:
 
 	struct Config
 	{
-		bool cull;
-		RE::NiColor colorMult;
-		float radiusMult;
-		float saturationMult;
-		bool flicker;
-		float flickerSpeed;
-		float flickerIntensity;
-		float flickerMovement;
+		bool cull = false;
+		RE::NiColor colorMult{ 1.0f, 1.0f, 1.0f };
+		float radiusMult = 1.0f;
+		float saturationMult = 1.0f;
+		bool flicker = false;
+		float flickerSpeed = 0.0f;
+		float flickerIntensity = 0.0f;
+		float flickerMovement = 0.0f;
 	};
 
 	struct GradientConfig
