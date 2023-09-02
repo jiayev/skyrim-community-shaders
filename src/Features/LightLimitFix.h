@@ -101,7 +101,7 @@ public:
 		ParticleLights::Config& config;
 	};
 
-	eastl::hash_map < RE::BSGeometry*, ParticleLightInfo> queuedParticleLights;
+	eastl::hash_map<RE::BSGeometry*, ParticleLightInfo> queuedParticleLights;
 	eastl::hash_map<RE::BSGeometry*, ParticleLightInfo> particleLights;
 
 	std::uint32_t strictLightsCount = 0;
