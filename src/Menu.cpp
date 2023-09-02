@@ -337,6 +337,51 @@ void Menu::DrawSettings()
 
 		ImGui::Spacing();
 
+		if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
+			bool useCustomShaders = shaderCache.IsEnabled();
+			if (ImGui::BeginTable("##GeneralToggles", 3, ImGuiTableFlags_SizingStretchSame)) {
+				ImGui::TableNextColumn();
+				if (ImGui::Checkbox("Enable Shaders", &useCustomShaders)) {
+					shaderCache.SetEnabled(useCustomShaders);
+				}
+				if (ImGui::IsItemHovered()) {
+					ImGui::BeginTooltip();
+					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+					ImGui::Text("Disabling this effectively disables all features.");
+					ImGui::PopTextWrapPos();
+					ImGui::EndTooltip();
+				}
+
+				bool useDiskCache = shaderCache.IsDiskCache();
+				ImGui::TableNextColumn();
+				if (ImGui::Checkbox("Enable Disk Cache", &useDiskCache)) {
+					shaderCache.SetDiskCache(useDiskCache);
+				}
+				if (ImGui::IsItemHovered()) {
+					ImGui::BeginTooltip();
+					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+					ImGui::Text("Disabling this stops shaders from being loaded from disk, as well as stops shaders from being saved to it.");
+					ImGui::PopTextWrapPos();
+					ImGui::EndTooltip();
+				}
+
+				bool useAsync = shaderCache.IsAsync();
+				ImGui::TableNextColumn();
+				if (ImGui::Checkbox("Enable Async", &useAsync)) {
+					shaderCache.SetAsync(useAsync);
+				}
+				if (ImGui::IsItemHovered()) {
+					ImGui::BeginTooltip();
+					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+					ImGui::Text("Skips a shader being replaced if it hasn't been compiled yet. Also makes compilation blazingly fast!");
+					ImGui::PopTextWrapPos();
+					ImGui::EndTooltip();
+				}
+
+				ImGui::EndTable();
+			}
+		}
+
 		if (ImGui::CollapsingHeader("Menu", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 			if (settingToggleKey) {
 				ImGui::Text("Press any key to set as toggle key...");
@@ -412,51 +457,6 @@ void Menu::DrawSettings()
 			}
 		}
 
-		if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
-			bool useCustomShaders = shaderCache.IsEnabled();
-			if (ImGui::BeginTable("##GeneralToggles", 3, ImGuiTableFlags_SizingStretchSame)) {
-				ImGui::TableNextColumn();
-				if (ImGui::Checkbox("Enable Shaders", &useCustomShaders)) {
-					shaderCache.SetEnabled(useCustomShaders);
-				}
-				if (ImGui::IsItemHovered()) {
-					ImGui::BeginTooltip();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-					ImGui::Text("Disabling this effectively disables all features.");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
-				}
-
-				bool useDiskCache = shaderCache.IsDiskCache();
-				ImGui::TableNextColumn();
-				if (ImGui::Checkbox("Enable Disk Cache", &useDiskCache)) {
-					shaderCache.SetDiskCache(useDiskCache);
-				}
-				if (ImGui::IsItemHovered()) {
-					ImGui::BeginTooltip();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-					ImGui::Text("Disabling this stops shaders from being loaded from disk, as well as stops shaders from being saved to it.");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
-				}
-
-				bool useAsync = shaderCache.IsAsync();
-				ImGui::TableNextColumn();
-				if (ImGui::Checkbox("Enable Async", &useAsync)) {
-					shaderCache.SetAsync(useAsync);
-				}
-				if (ImGui::IsItemHovered()) {
-					ImGui::BeginTooltip();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-					ImGui::Text("Skips a shader being replaced if it hasn't been compiled yet. Also makes compilation blazingly fast!");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
-				}
-
-				ImGui::EndTable();
-			}
-		}
-
 		if (ImGui::CollapsingHeader("Replace Original Shaders", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 			auto state = State::GetSingleton();
 			if (ImGui::BeginTable("##ReplaceToggles", 3, ImGuiTableFlags_SizingStretchSame)) {
@@ -488,9 +488,12 @@ void Menu::DrawSettings()
 			ImGui::TableNextColumn();
 			if (ImGui::BeginListBox("##FeatureList", { -FLT_MIN, -FLT_MIN })) {
 				for (size_t i = 0; i < featureList.size(); i++)
-					if (featureList[i]->loaded)
-						if (ImGui::Selectable(fmt::format("{} ({})", featureList[i]->GetName(), featureList[i]->version).c_str(), selectedFeature == i))
+					if (featureList[i]->loaded) {
+						if (ImGui::Selectable(fmt::format("{} ", featureList[i]->GetName()).c_str(), selectedFeature == i, ImGuiSelectableFlags_SpanAllColumns))
 							selectedFeature = i;
+						ImGui::SameLine();
+						ImGui::TextDisabled(fmt::format("({})", featureList[i]->version).c_str());
+					}
 				ImGui::EndListBox();
 			}
 
