@@ -95,8 +95,14 @@ public:
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
 
-	eastl::hash_map<RE::BSGeometry*, std::pair<RE::NiColorA, ParticleLights::Config&>> queuedParticleLights;
-	eastl::hash_map<RE::BSGeometry*, std::pair<RE::NiColorA, ParticleLights::Config&>> particleLights;
+	struct ParticleLightInfo
+	{
+		RE::NiColorA color;
+		ParticleLights::Config& config;
+	};
+
+	eastl::hash_map < RE::BSGeometry*, ParticleLightInfo> queuedParticleLights;
+	eastl::hash_map<RE::BSGeometry*, ParticleLightInfo> particleLights;
 
 	std::uint32_t strictLightsCount = 0;
 
@@ -112,7 +118,7 @@ public:
 	void DataLoaded();
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
-	bool AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, int eyeIndex = 0, ParticleLights::Config* a_config = nullptr, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
+	bool AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config* a_config = nullptr, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
 	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3& a_initialPosition);
 	void UpdateLights();
 	void Bind();
@@ -143,9 +149,7 @@ public:
 	Settings settings;
 
 	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique);
-
 	void BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass);
-	void BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* Pass, uint32_t LightCount, uint32_t ShadowLightCount);
 
 	enum class Space
 	{
@@ -158,7 +162,6 @@ public:
 	uint32_t particleLightsDetectionHits = 0;
 
 	float CalculateLuminance(CachedParticleLight& light, RE::NiPoint3& point);
-
 	void AddParticleLightLuminance(RE::NiPoint3& targetPosition, int& numHits, float& lightLevel);
 
 	struct Hooks
@@ -226,16 +229,6 @@ public:
 			{
 				GetSingleton()->BSLightingShader_SetupGeometry_Before(Pass);
 				func(This, Pass, RenderFlags);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights
-		{
-			static void thunk(RE::BSGraphics::PixelShader* PixelShader, RE::BSRenderPass* Pass, DirectX::XMMATRIX& Transform, uint32_t LightCount, uint32_t ShadowLightCount, float WorldScale, Space RenderSpace)
-			{
-				GetSingleton()->BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(Pass, LightCount, ShadowLightCount);
-				func(PixelShader, Pass, Transform, LightCount, ShadowLightCount, WorldScale, RenderSpace);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
