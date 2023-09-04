@@ -668,7 +668,7 @@ void LightLimitFix::UpdateLights()
 		                       state->GetRuntimeData().posAdjust.getEye(0) :
 		                       state->GetVRRuntimeData().posAdjust.getEye(0);
 
-	for (const auto& particleLight : particleLights) {
+		for (const auto& particleLight : particleLights) {
 			if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(particleLight.first);
 				particleSystem && particleSystem->GetParticleRuntimeData().particleData.get()) {
 				// process BSGeometry
@@ -683,7 +683,7 @@ void LightLimitFix::UpdateLights()
 						// Detect first-person meshes
 						if ((particleLight.first->GetModelData().modelBound.radius * particleLight.first->world.scale) != particleLight.first->worldBound.radius)
 							initialPosition += particleLight.first->worldBound.center;
-						else 
+						else
 							initialPosition += particleLight.first->world.translate;
 					}
 
