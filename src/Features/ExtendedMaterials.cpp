@@ -17,56 +17,128 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void ExtendedMaterials::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Complex Material", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::TextWrapped(
-			"Enables support for the Complex Material specification which makes use of the environment mask.\n"
-			"This includes parallax, as well as more realistic metals and specular reflections.\n"
-			"May lead to some warped textures on modded content which have an invalid alpha channel in their environment mask.");
 		ImGui::Checkbox("Enable Complex Material", (bool*)&settings.EnableComplexMaterial);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Enables support for the Complex Material specification which makes use of the environment mask.\n");
+			ImGui::Text("This includes parallax, as well as more realistic metals and specular reflections.\n");
+			ImGui::Text("May lead to some warped textures on modded content which have an invalid alpha channel in their environment mask.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
+		ImGui::Spacing();
+		ImGui::Spacing();
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx("Contact Refinement Parallax Mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::TextWrapped("Enables parallax on standard meshes made for parallax.");
 		ImGui::Checkbox("Enable Parallax", (bool*)&settings.EnableParallax);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Enables parallax on standard meshes made for parallax.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
-		ImGui::TextWrapped(
-			"Enables terrain parallax using the alpha channel of each landscape texture.\n"
-			"Therefore, all landscape textures must support parallax for this effect to work properly.");
 		ImGui::Checkbox("Enable Terrain", (bool*)&settings.EnableTerrain);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Enables terrain parallax using the alpha channel of each landscape texture.\n");
+			ImGui::Text("Therefore, all landscape textures must support parallax for this effect to work properly.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
-		ImGui::TextWrapped(
-			"Doubles the sample count and approximates the intersection point using Parallax Occlusion Mapping.\n"
-			"Significantly improves the quality and removes aliasing.\n"
-			"TAA or the Skyrim Upscaler is recommended when using this option due to CRPM artifacts.");
 		ImGui::Checkbox("Enable High Quality", (bool*)&settings.EnableHighQuality);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Doubles the sample count and approximates the intersection point using Parallax Occlusion Mapping.\n");
+			ImGui::Text("Significantly improves the quality and removes aliasing.\n");
+			ImGui::Text("TAA or the Skyrim Upscaler is recommended when using this option due to CRPM artifacts.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
-		ImGui::TextWrapped("The furthest distance from the camera which uses parallax.");
+		ImGui::Spacing();
+		ImGui::Spacing();
 		ImGui::SliderInt("Max Distance", (int*)&settings.MaxDistance, 0, 4096);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("The furthest distance from the camera which uses parallax.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
-		ImGui::TextWrapped("The percentage of the max distance which uses CRPM.");
 		ImGui::SliderFloat("CRPM Range", &settings.CRPMRange, 0.0f, 1.0f);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("The percentage of the max distance which uses Contact Refinement Parallax Mapping (CRPM).");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
-		ImGui::TextWrapped(
-			"The range that parallax blends from POM to bump mapping, and bump mapping to nothing.\n"
-			"This value should be set as low as possible due to the performance impact of blending POM and relief mapping.");
 		ImGui::SliderFloat("Blend Range", &settings.BlendRange, 0.0f, settings.CRPMRange);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("The range that parallax blends from Parallax Occlusion Mapping (POM) to bump mapping, and bump mapping to nothing.\n");
+			ImGui::Text("This value should be set as low as possible due to the performance impact of blending POM and relief mapping.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
-		ImGui::TextWrapped("The range between the highest and lowest point a surface can be offset by.");
 		ImGui::SliderFloat("Height", &settings.Height, 0, 0.2f);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("The range between the highest and lowest point a surface can be offset by.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
+		ImGui::Spacing();
+		ImGui::Spacing();
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx("Approximate Soft Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::TextWrapped(
-			"Enables cheap soft shadows when using parallax.\n"
-			"This applies to all directional and point lights.");
 		ImGui::Checkbox("Enable Shadows", (bool*)&settings.EnableShadows);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Enables cheap soft shadows when using parallax.\n");
+			ImGui::Text("This applies to all directional and point lights.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
-		ImGui::TextWrapped("Modifying the start and end fade can improve performance and hide obvious texture tiling.");
-		ImGui::SliderInt("Shadows Start Fade", (int*)&settings.ShadowsStartFade, 0, settings.ShadowsEndFade);
-		ImGui::SliderInt("Shadows End Fade", (int*)&settings.ShadowsEndFade, settings.ShadowsStartFade, 4096);
+		ImGui::Spacing();
+		ImGui::Spacing();
+		ImGui::TextWrapped("Modifying the shadow start and end fade can improve performance and hide obvious texture tiling.");
+		ImGui::SliderInt("Start Fade", (int*)&settings.ShadowsStartFade, 0, settings.ShadowsEndFade);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Distance shadows start to fade.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
+
+		ImGui::SliderInt("End Fade", (int*)&settings.ShadowsEndFade, settings.ShadowsStartFade, 4096);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Distance shadows finish fading.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
 		ImGui::TreePop();
 	}
