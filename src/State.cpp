@@ -87,9 +87,11 @@ void State::Load()
 		if (advanced["Log Level"].is_number_integer()) {
 			logLevel = static_cast<spdlog::level::level_enum>((int)advanced["Log Level"]);
 			//logLevel = static_cast<spdlog::level::level_enum>(max(spdlog::level::trace, min(spdlog::level::off, (int)advanced["Log Level"])));
-			if (advanced["Shader Defines"].is_string())
-				SetDefines(advanced["Shader Defines"]);
 		}
+		if (advanced["Shader Defines"].is_string())
+			SetDefines(advanced["Shader Defines"]);
+		if (advanced["Compiler Threads"].is_number_integer())
+			shaderCache.compilationThreadCount = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
 	}
 
 	if (settings["General"].is_object()) {
@@ -142,6 +144,7 @@ void State::Save()
 	advanced["Dump Shaders"] = shaderCache.IsDump();
 	advanced["Log Level"] = logLevel;
 	advanced["Shader Defines"] = shaderDefinesString;
+	advanced["Compiler Threads"] = shaderCache.compilationThreadCount;
 	settings["Advanced"] = advanced;
 
 	json general;

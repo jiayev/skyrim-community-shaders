@@ -332,6 +332,24 @@ void Menu::DrawSettings()
 				ImGui::EndTooltip();
 			}
 
+			if (shaderCache.GetFailedTasks()) {
+				ImGui::TableNextRow();
+				ImGui::TableNextColumn();
+				if (ImGui::Button("Toggle Error Message", { -1, 0 })) {
+					shaderCache.ToggleErrorMessages();
+				}
+				if (ImGui::IsItemHovered()) {
+					ImGui::BeginTooltip();
+					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+					ImGui::Text(
+						"Hide or show the shader failure message. "
+						"Your installation is broken and will likely see errors in game. "
+						"Please double check you have updated all features and that your load order is correct. "
+						"See CommunityShaders.log for details and check the NexusMods page or Discord server. ");
+					ImGui::PopTextWrapPos();
+					ImGui::EndTooltip();
+				}
+			}
 			ImGui::EndTable();
 		}
 
@@ -455,6 +473,22 @@ void Menu::DrawSettings()
 				ImGui::PopTextWrapPos();
 				ImGui::EndTooltip();
 			}
+			ImGui::Spacing();
+			ImGui::SliderInt("Compiler Threads", &shaderCache.compilationThreadCount, 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+			if (ImGui::IsItemHovered()) {
+				ImGui::BeginTooltip();
+				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+				ImGui::Text(
+					"Number of threads to compile shaders with. "
+					"The more threads the faster compilation will finish but may make the system unresponsive. "
+					"This should only be changed between restarts. ");
+				ImGui::PopTextWrapPos();
+				ImGui::EndTooltip();
+			}
+			if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
+				ImGui::Text(std::format("Shader Compiler : {}", shaderCache.GetShaderStatsString()).c_str());
+				ImGui::TreePop();
+			}
 		}
 
 		if (ImGui::CollapsingHeader("Replace Original Shaders", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
@@ -537,7 +571,10 @@ void Menu::DrawOverlay()
 	compiledShaders = shaderCache.GetCompletedTasks();
 	totalShaders = shaderCache.GetTotalTasks();
 
-	if (compiledShaders != totalShaders) {
+	auto failed = shaderCache.GetFailedTasks();
+	auto hide = shaderCache.IsHideErrors();
+	auto stats = shaderCache.GetShaderStatsString();
+	if (shaderCache.IsCompiling()) {
 		ImGui::SetNextWindowBgAlpha(1);
 		ImGui::SetNextWindowPos(ImVec2(10, 10));
 		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
@@ -545,8 +582,19 @@ void Menu::DrawOverlay()
 			return;
 		}
 
-		ImGui::Text("Compiling Shaders: %d / %d", compiledShaders, totalShaders);
+		ImGui::Text(fmt::format("Compiling Shaders: {}", stats).c_str());
 
+		ImGui::End();
+	} else if (failed && !hide) {
+		ImGui::SetNextWindowBgAlpha(1);
+		ImGui::SetNextWindowPos(ImVec2(10, 10));
+		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+			ImGui::End();
+			return;
+		}
+
+		ImGui::Text("ERROR: %d shaders failed to compile. Check installation and CommunityShaders.log", failed, totalShaders);
+		ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 0, 0, 255));
 		ImGui::End();
 	}
 

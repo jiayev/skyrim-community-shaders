@@ -122,7 +122,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 				auto& shaderCache = SIE::ShaderCache::Instance();
 
-				while (shaderCache.GetCompletedTasks() != shaderCache.GetTotalTasks()) {
+				while (shaderCache.IsCompiling()) {
 					std::this_thread::sleep_for(100ms);
 				}
 
