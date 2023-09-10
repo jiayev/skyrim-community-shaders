@@ -6,15 +6,17 @@ SKSE core plugin for community-driven advanced graphics modifications.
 
 ## Requirements
 
-- [CMake](https://cmake.org/)
-  - Add this to your `PATH`
-- [PowerShell](https://github.com/PowerShell/PowerShell/releases/latest)
-- [Vcpkg](https://github.com/microsoft/vcpkg)
-  - Add the environment variable `VCPKG_ROOT` with the value as the path to the folder containing vcpkg
+- Any terminal of your choice (e.g., PowerShell)
 - [Visual Studio Community 2022](https://visualstudio.microsoft.com/)
   - Desktop development with C++
-- [CommonLibSSENG](https://github.com/alandtse/commonlibvr/tree/ng)
-  - Add this as as an environment variable `CommonLibSSEPath`
+- [CMake](https://cmake.org/)
+  - Edit the `PATH` environment variable and add the cmake.exe install path as a new value
+  - Instructions for finding and editing the `PATH` environment variable can be found [here](https://www.java.com/en/download/help/path.html)
+- [Git](https://git-scm.com/downloads)
+  - Edit the `PATH` environment variable and add the Git.exe install path as a new value
+- [Vcpkg](https://github.com/microsoft/vcpkg)
+  - Install vcpkg using the directions in vcpkg's [Quick Start Guide](https://github.com/microsoft/vcpkg#quick-start-windows)
+  - After install, add a new environment variable named `VCPKG_ROOT` with the value as the path to the folder containing vcpkg
 
 ## User Requirements
 
@@ -30,6 +32,7 @@ SKSE core plugin for community-driven advanced graphics modifications.
 - Close the cmd window
 
 ## Building
+Open terminal (e.g., PowerShell) and run the following commands:
 
 ```
 git clone https://github.com/doodlum/skyrim-community-shaders.git
