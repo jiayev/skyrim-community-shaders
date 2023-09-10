@@ -19,6 +19,8 @@ struct GrassCollision : Feature
 		std::uint32_t EnableGrassCollision = 1;
 		float RadiusMultiplier = 2;
 		float DisplacementMultiplier = 16;
+		float maxDistance = 1000.0;
+		std::uint32_t frameInterval = 0;
 	};
 
 	struct alignas(16) PerFrame
@@ -26,6 +28,7 @@ struct GrassCollision : Feature
 		Vector4 boundCentre[2];
 		float boundRadius;
 		Settings Settings;
+		float pad01[2];
 	};
 
 	struct CollisionSData
@@ -35,6 +38,12 @@ struct GrassCollision : Feature
 	};
 
 	std::unique_ptr<Buffer> collisions = nullptr;
+	std::uint32_t totalActorCount = 0;
+	std::uint32_t activeActorCount = 0;
+	std::uint32_t currentCollisionCount = 0;
+	std::vector<RE::Actor*> actorList{};
+	std::vector<CollisionSData> collisionsData{};
+	std::uint32_t colllisionCount = 0;
 
 	Settings settings;
 
