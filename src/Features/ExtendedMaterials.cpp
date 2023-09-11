@@ -14,6 +14,18 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ShadowsStartFade,
 	ShadowsEndFade)
 
+void ExtendedMaterials::DataLoaded()
+{
+	if (&settings.EnableTerrain) {
+		if (auto bLandSpecular = RE::INISettingCollection::GetSingleton()->GetSetting("bLandSpecular:Landscape"); bLandSpecular) {
+			if (!bLandSpecular->data.b) {
+				logger::info("[CPM] Changing bLandSpecular from {} to {} to support Terrain Parallax", bLandSpecular->data.b, true);
+				bLandSpecular->data.b = true;
+			}
+		}
+	}
+}
+
 void ExtendedMaterials::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Complex Material", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -43,7 +55,11 @@ void ExtendedMaterials::DrawSettings()
 			ImGui::EndTooltip();
 		}
 
-		ImGui::Checkbox("Enable Terrain", (bool*)&settings.EnableTerrain);
+		if (ImGui::Checkbox("Enable Terrain", (bool*)&settings.EnableTerrain)) {
+			if (settings.EnableTerrain) {
+				DataLoaded();
+			}
+		}
 		if (ImGui::IsItemHovered()) {
 			ImGui::BeginTooltip();
 			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);

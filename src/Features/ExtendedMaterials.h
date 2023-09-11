@@ -47,6 +47,8 @@ struct ExtendedMaterials : Feature
 	virtual void SetupResources();
 	virtual inline void Reset() {}
 
+	void DataLoaded();
+
 	virtual void DrawSettings();
 
 	void ModifyLighting(const RE::BSShader* shader, const uint32_t descriptor);
