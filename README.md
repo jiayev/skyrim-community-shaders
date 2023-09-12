@@ -31,18 +31,13 @@ SKSE core plugin for community-driven advanced graphics modifications.
 - Run `cmake`
 - Close the cmd window
 
-## Building
+## Clone and Build
 Open terminal (e.g., PowerShell) and run the following commands:
 
 ```
-git clone https://github.com/doodlum/skyrim-community-shaders.git
+git clone https://github.com/doodlum/skyrim-community-shaders.git --recursive
 cd skyrim-community-shaders
-# pull commonlib /extern to override the path settings
-git submodule update --init --recursive
-#configure cmake
-cmake -S . --preset=ALL
-#build dll
-cmake --build build --config Release
+.\BuildRelease.bat
 ```
 
 ## License
