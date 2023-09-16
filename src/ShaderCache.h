@@ -66,7 +66,7 @@ namespace SIE
 		void Clear();
 		std::string GetHumanTime(double a_totalms);
 		double GetEta();
-		std::string GetStatsString();
+		std::string GetStatsString(bool a_timeOnly = false);
 		std::atomic<uint64_t> completedTasks = 0;
 		std::atomic<uint64_t> totalTasks = 0;
 		std::atomic<uint64_t> failedTasks = 0;
@@ -132,7 +132,7 @@ namespace SIE
 		ID3DBlob* GetCompletedShader(const SIE::ShaderCompilationTask& a_task);
 		ID3DBlob* GetCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor);
 		ShaderCompilationTask::Status GetShaderStatus(const std::string a_key);
-		std::string GetShaderStatsString();
+		std::string GetShaderStatsString(bool a_timeOnly = false);
 
 		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor);
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader& shader,

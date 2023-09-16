@@ -1449,9 +1449,9 @@ namespace SIE
 		return ShaderCompilationTask::Status::Pending;
 	}
 
-	std::string ShaderCache::GetShaderStatsString()
+	std::string ShaderCache::GetShaderStatsString(bool a_timeOnly)
 	{
-		return compilationSet.GetStatsString();
+		return compilationSet.GetStatsString(a_timeOnly);
 	}
 
 	bool ShaderCache::IsCompiling()
@@ -1767,8 +1767,12 @@ namespace SIE
 		return remaining / rate;
 	}
 
-	std::string CompilationSet::GetStatsString()
+	std::string CompilationSet::GetStatsString(bool a_timeOnly)
 	{
+		if (a_timeOnly)
+			return fmt::format("{}/{}",
+				GetHumanTime(totalMs),
+				GetHumanTime(GetEta() + totalMs));
 		return fmt::format("{}/{} (successful/total)\tfailed: {}\tcachehits: {}\nElapsed/Estimated Time: {}/{}",
 			(std::uint64_t)completedTasks,
 			(std::uint64_t)totalTasks,
