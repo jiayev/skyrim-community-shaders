@@ -1,56 +1,37 @@
-name: build Community Shaders for dist
+name: build Community Shaders and addons
+
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+
 permissions:
   contents: write
 
 env:
-  VCPKG_COMMIT_ID: 9edb1b8e590cc086563301d735cae4b6e732d2d2
-  CMAKE_BUILD_TYPE: Release
+  VCPKG_COMMIT_ID: d99b6930b920d85dd4e1edbac37ecb3f354185c0
 
 jobs:
   compile:
-    name: build plugin
+    name: build plugin and addons
     runs-on: windows-latest
     steps:
         - uses: actions/checkout@v3
           with:
             submodules: 'true'
-  
-        - uses: actions/cache@v3
-          with:
-              path: |
-                  build
-              key: ${{ runner.os }}-cmake-${{ hashFiles('CMakeLists.txt') }}
-              restore-keys: |
-                ${{ runner.os }}-cmake-
-                ${{ runner.os }}-
-                  
+
         - uses: ilammy/msvc-dev-cmd@v1.10.0
 
         - uses: lukka/run-vcpkg@v11
           with:
               vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-        
-        - name: check the stamp file
+
+        - name: cmake configure
           run: cmake -S . --preset=ALL --check-stamp-file "build\CMakeFiles\generate.stamp"
-        
-        - name: run cmake to build
+
+        - name: cmake build
           run: cmake --build build --config Release
-
-        - name: copy build artifacts into place
-          shell: bash
-          run: |
-              mkdir -p CommunityShaders/SKSE/Plugins
-              cp -p build/release/*.dll CommunityShaders/SKSE/Plugins
-              cp -p build/release/*.pdb CommunityShaders/SKSE/Plugins
-              cp -rp package/* CommunityShaders/
-
-        - name: 7zip compress it
-          run: 7z a "CommunityShaders_${{ github.ref_name }}.7z" ./CommunityShaders
 
         - name: create a tagged release and upload the archive
           uses: ncipollo/release-action@v1
@@ -58,6 +39,6 @@ jobs:
               GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           with:
             name: Community Shaders ${{ github.ref_name }}
-            tag: ${{ github.ref_name }}
             draft: true
-            artifacts: "CommunityShaders_${{ github.ref_name }}.7z"
+            tag: ${{ github.ref_name }}
+            artifacts: "${{ github.workspace }}/dist/*.7z"
