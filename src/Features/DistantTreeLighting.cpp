@@ -130,8 +130,10 @@ void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t 
 		auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
 		if (sunLight) {
 			auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+			auto sunlightScale = !REL::Module::IsVR() ? imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale :
+			                                            imageSpaceManager->GetVRRuntimeData().data.baseData.hdr.sunlightScale;
 
-			perPassData.DirLightScale = imageSpaceManager->data.baseData.hdr.sunlightScale * sunLight->GetLightRuntimeData().fade;
+			perPassData.DirLightScale = sunlightScale * sunLight->GetLightRuntimeData().fade;
 
 			perPassData.DirLightColor.x = sunLight->GetLightRuntimeData().diffuse.red;
 			perPassData.DirLightColor.y = sunLight->GetLightRuntimeData().diffuse.green;

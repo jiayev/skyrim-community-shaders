@@ -110,11 +110,9 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 			ZeroMemory(&perFrameData, sizeof(perFrameData));
 			Util::StoreTransform3x4NoScale(perFrameData.DirectionalAmbient, dalcTransform);
 
-			if (REL::Module::IsVR()) {
-				perFrameData.SunlightScale = imageSpaceManager->data.baseData.cinematic.brightness;
-			} else {
-				perFrameData.SunlightScale = imageSpaceManager->data.baseData.hdr.sunlightScale;
-			}
+			perFrameData.SunlightScale = !REL::Module::IsVR() ?
+			                                 imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale :
+			                                 imageSpaceManager->GetVRRuntimeData().data.baseData.hdr.sunlightScale;
 			perFrameData.Settings = settings;
 			perFrame->Update(perFrameData);
 

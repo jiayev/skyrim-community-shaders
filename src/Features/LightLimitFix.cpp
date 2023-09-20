@@ -376,7 +376,12 @@ void LightLimitFix::Bind()
 			perPassData.LightsFar = lightsFar;
 
 			perPassData.BufferDim = { resolutionX, resolutionY };
-			perPassData.FrameCount = viewport->uiFrameCount * (Util::UnkOuterStruct::GetSingleton()->GetTAA() || State::GetSingleton()->upscalerLoaded);
+
+			const auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+			auto bTAA = !REL::Module::IsVR() ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled :
+			                                   imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled;
+
+			perPassData.FrameCount = viewport->uiFrameCount * (bTAA || State::GetSingleton()->upscalerLoaded);
 			perPassData.EnableGlobalLights = true;
 			perPassData.EnableContactShadows = settings.EnableContactShadows;
 			perPassData.EnableLightsVisualisation = settings.EnableLightsVisualisation;
