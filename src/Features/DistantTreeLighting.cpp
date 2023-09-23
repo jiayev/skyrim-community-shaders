@@ -13,35 +13,64 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void DistantTreeLighting::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Complex Tree LOD", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::TextWrapped(
-			"Enables advanced lighting simulation on tree LOD.\n"
-			"Requires DynDOLOD.\n"
-			"See https://dyndolod.info/ for more information.");
 		ImGui::Checkbox("Enable Complex Tree LOD", (bool*)&settings.EnableComplexTreeLOD);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Enables advanced lighting simulation on tree LOD.\n");
+			ImGui::Text("Requires DynDOLOD.\n");
+			ImGui::Text("See https://dyndolod.info/ for more information.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
+		ImGui::Spacing();
+		ImGui::Spacing();
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx("Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::TextWrapped("Fix for trees not being affected by sunlight scale.");
 		ImGui::Checkbox("Enable Directional Light Fix", (bool*)&settings.EnableDirLightFix);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Fix for trees not being affected by sunlight scale.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
+		ImGui::Spacing();
+		ImGui::Spacing();
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx("Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::TextWrapped(
-			"Soft lighting controls how evenly lit an object is.\n"
-			"Back lighting illuminates the back face of an object.\n"
-			"Combined to model the transport of light through the surface.");
-		ImGui::SliderFloat("Subsurface Scattering Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 1.0f);
+		ImGui::SliderFloat("SSS Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 1.0f);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Subsurface Scattering (SSS) amount\n");
+			ImGui::Text("Soft lighting controls how evenly lit an object is.\n");
+			ImGui::Text("Back lighting illuminates the back face of an object.\n");
+			ImGui::Text("Combined to model the transport of light through the surface.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
+		ImGui::Spacing();
+		ImGui::Spacing();
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx("Vanilla", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::TextWrapped("Darkens lighting relative fog strength.");
 		ImGui::SliderFloat("Fog Dimmer Amount", &settings.FogDimmerAmount, 0.0f, 1.0f);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Darkens lighting relative fog strength.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
 		ImGui::TreePop();
 	}

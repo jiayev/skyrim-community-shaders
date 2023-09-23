@@ -41,4 +41,21 @@ function(add_cxx_files TARGET)
 		FILES ${SOURCE_FILES})
 
 	target_sources("${TARGET}" PRIVATE ${SOURCE_FILES})
+
+	file(GLOB_RECURSE HLSL_FILES
+		LIST_DIRECTORIES false
+		CONFIGURE_DEPENDS
+		"Features/**/*.hlsl"
+		"Features/**/*.hlsli"
+		"Package/**/*.hlsl"
+		"Package/**/*.hlsli"
+	)
+
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/
+		PREFIX "HLSL Files"
+		FILES ${HLSL_FILES})
+
+	set_source_files_properties(${HLSL_FILES} PROPERTIES VS_TOOL_OVERRIDE "None")
+
+	target_sources("${TARGET}" PRIVATE ${HLSL_FILES})
 endfunction()

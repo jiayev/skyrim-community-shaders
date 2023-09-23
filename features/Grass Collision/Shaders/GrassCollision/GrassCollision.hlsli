@@ -6,6 +6,7 @@ cbuffer GrassCollisionPerFrame : register(b5)
 	bool EnableGrassCollision;
 	float RadiusMultiplier;
 	float DisplacementMultiplier;
+	float maxDistance;
 }
 
 struct StructuredCollision
@@ -21,10 +22,10 @@ float3 GetDisplacedPosition(float3 position, float alpha, uint eyeIndex = 0)
 	float3 worldPosition = mul(World[eyeIndex], float4(position, 1)).xyz;
 	float3 displacement = 0;
 
-	// Player bound culling
+	// Player bound culling and distance from player culling
 	{
 		float dist = distance(boundCentre[eyeIndex].xyz, worldPosition);
-		if (dist > boundRadius) {
+		if ((dist > boundRadius) && (dist > maxDistance)) {
 			return 0;
 		}
 	}
