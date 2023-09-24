@@ -27,8 +27,9 @@ public:
 
 private:
 	uint32_t toggleKey = VK_END;
+	uint32_t skipCompilationKey = VK_ESCAPE;
 	bool settingToggleKey = false;
-
+	bool settingSkipCompilationKey = false;
 	float fontScale = 0.f;  // exponential
 
 	Menu() {}

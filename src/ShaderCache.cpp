@@ -4,6 +4,7 @@
 
 #include <d3d11.h>
 #include <d3dcompiler.h>
+#include <fmt/std.h>
 #include <wrl/client.h>
 
 #include "Features/ExtendedMaterials.h"
@@ -1386,6 +1387,27 @@ namespace SIE
 		Clear();
 	}
 
+	void ShaderCache::AdjustThreadCount()
+	{
+		auto size = compilationThreads.size();
+		if (size == compilationThreadCount)
+			return;
+		if (size && std::this_thread::get_id() != compilationThreads.front().get_id())
+			// only allow first thread to adjust threads
+			return;
+		logger::debug("Adjusting active threads {}/{}", (int)size, (int)compilationThreadCount);
+		if (size && size > compilationThreadCount) {
+			auto& thread = compilationThreads.back();
+			logger::debug("Stopping thread {}: active {}/{}", thread.get_id(), (int)size - 1, (int)compilationThreadCount);
+			thread.request_stop();
+			compilationThreads.pop_back();
+		} else if (size < compilationThreadCount) {
+			compilationThreads.push_back(std::jthread(&ShaderCache::ProcessCompilationSet, this, ssource.get_token()));
+			auto& thread = compilationThreads.back();
+			logger::debug("Starting new thread {}: active {}/{}", thread.get_id(), (int)size + 1, (int)compilationThreadCount);
+		}
+	}
+
 	void ShaderCache::Clear()
 	{
 		for (auto& shaders : vertexShaders) {
@@ -1401,6 +1423,7 @@ namespace SIE
 			shaders.clear();
 		}
 
+		ssource.request_stop();
 		compilationSet.Clear();
 		std::unique_lock lock{ mapMutex };
 		shaderMap.clear();
@@ -1546,10 +1569,8 @@ namespace SIE
 
 	ShaderCache::ShaderCache()
 	{
-		logger::debug("ShaderCache initialized with {} compiler threads", compilationThreadCount);
-		for (size_t threadIndex = 0; threadIndex < compilationThreadCount; ++threadIndex) {
-			compilationThreads.push_back(std::jthread(&ShaderCache::ProcessCompilationSet, this));
-		}
+		logger::debug("ShaderCache initialized with {} compiler threads", (int)compilationThreadCount);
+		AdjustThreadCount();
 	}
 
 	RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(const RE::BSShader& shader,
@@ -1642,13 +1663,16 @@ namespace SIE
 		hideError = !hideError;
 	}
 
-	void ShaderCache::ProcessCompilationSet()
+	void ShaderCache::ProcessCompilationSet(std::stop_token stoken)
 	{
-		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
-		while (true) {
-			const auto& task = compilationSet.WaitTake();
-			task.Perform();
-			compilationSet.Complete(task);
+		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+		while (!stoken.stop_requested()) {
+			const auto& task = compilationSet.WaitTake(stoken);
+			if (!task.has_value())
+				break;  // exit because thread told to end
+			task.value().Perform();
+			compilationSet.Complete(task.value());
+			AdjustThreadCount();
 		}
 	}
 
@@ -1684,15 +1708,23 @@ namespace SIE
 		return GetId() == other.GetId();
 	}
 
-	ShaderCompilationTask CompilationSet::WaitTake()
+	std::optional<ShaderCompilationTask> CompilationSet::WaitTake(std::stop_token stoken)
 	{
 		std::unique_lock lock(compilationMutex);
-		conditionVariable.wait(lock, [this]() { return !availableTasks.empty(); });
+		if (!conditionVariable.wait(
+				lock, stoken,
+				[this, &shaderCache]() { return !availableTasks.empty() &&
+			                                    // check against all tasks in queue to trickle the work. It cannot be the active tasks count because the thread pool itself is maximum.
+			                                    (int)shaderCache.compilationPool.get_tasks_total() <=
+			                                        (!shaderCache.backgroundCompilation ? shaderCache.compilationThreadCount : shaderCache.backgroundCompilationThreadCount); })) {
+			/*Woke up because of a stop request. */
+			return std::nullopt;
+		}
 		if (!ShaderCache::Instance().IsCompiling()) {  // we just got woken up because there's a task, start clock
 			lastCalculation = lastReset = high_resolution_clock::now();
 		}
 		auto node = availableTasks.extract(availableTasks.begin());
-		auto task = node.value();
+		auto& task = node.value();
 		tasksInProgress.insert(std::move(node));
 		return task;
 	}
