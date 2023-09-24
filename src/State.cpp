@@ -92,6 +92,8 @@ void State::Load()
 			SetDefines(advanced["Shader Defines"]);
 		if (advanced["Compiler Threads"].is_number_integer())
 			shaderCache.compilationThreadCount = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+		if (advanced["Background Compiler Threads"].is_number_integer())
+			shaderCache.backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
 	}
 
 	if (settings["General"].is_object()) {
@@ -145,6 +147,7 @@ void State::Save()
 	advanced["Log Level"] = logLevel;
 	advanced["Shader Defines"] = shaderDefinesString;
 	advanced["Compiler Threads"] = shaderCache.compilationThreadCount;
+	advanced["Background Compiler Threads"] = shaderCache.backgroundCompilationThreadCount;
 	settings["Advanced"] = advanced;
 
 	json general;

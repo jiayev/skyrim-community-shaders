@@ -677,7 +677,7 @@ void LightLimitFix::UpdateLights()
 
 	if (settings.EnableFirstPersonShadows) {
 		if (auto playerCamera = RE::PlayerCamera::GetSingleton()) {
-			if (playerCamera->IsInFirstPerson()) {
+			if (playerCamera->IsInFirstPerson() || REL::Module::IsVR()) {
 				if (auto player = RE::PlayerCharacter::GetSingleton()) {
 					firstPersonLight = player->GetInfoRuntimeData().firstPersonLight.get();
 					thirdPersonLight = player->GetInfoRuntimeData().thirdPersonLight.get();
