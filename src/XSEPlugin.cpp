@@ -114,8 +114,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				RE::BSInputDeviceManager::GetSingleton()->AddEventSink(Menu::GetSingleton());
 
 				auto& shaderCache = SIE::ShaderCache::Instance();
-				shaderCache.menuLoaded = true;
-				while (shaderCache.IsCompiling() && !shaderCache.backgroundCompilation) {
+
+				while (shaderCache.IsCompiling()) {
 					std::this_thread::sleep_for(100ms);
 				}
 
