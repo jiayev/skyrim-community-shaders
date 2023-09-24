@@ -25,6 +25,7 @@ include(XSEPlugin)
 # #######################################################################################################################
 # # Find dependencies
 # #######################################################################################################################
+find_path(BSHOSHANY_THREAD_POOL_INCLUDE_DIRS "BS_thread_pool.hpp")
 find_package(magic_enum CONFIG REQUIRED)
 find_package(xbyak CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
@@ -37,6 +38,7 @@ find_package(pystring CONFIG REQUIRED)
 target_include_directories(
 	${PROJECT_NAME}
 	PRIVATE
+	${BSHOSHANY_THREAD_POOL_INCLUDE_DIRS}
 	${CLIB_UTIL_INCLUDE_DIRS}
 )
 
