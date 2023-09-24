@@ -1781,7 +1781,7 @@ namespace SIE
 	{
 		auto rate = completedTasks / totalMs;
 		auto remaining = totalTasks - completedTasks - failedTasks;
-		return remaining / rate;
+		return std::max(remaining / rate, 0.0);
 	}
 
 	std::string CompilationSet::GetStatsString(bool a_timeOnly)
