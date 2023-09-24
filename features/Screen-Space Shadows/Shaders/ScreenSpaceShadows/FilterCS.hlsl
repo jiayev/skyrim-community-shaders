@@ -52,6 +52,7 @@ cbuffer PerFrame : register(b0)
 	float NearHardness;
 	float BlurRadius;
 	float BlurDropoff;
+	bool Enabled;
 };
 
 float GetDepth(float2 uv)

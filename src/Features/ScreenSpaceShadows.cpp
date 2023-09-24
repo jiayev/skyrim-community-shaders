@@ -15,12 +15,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	NearThickness,
 	NearHardness,
 	BlurRadius,
-	BlurDropoff)
+	BlurDropoff,
+	Enabled)
 
 void ScreenSpaceShadows::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox("Enable Screen-Space Shadows", &enabled);
+		ImGui::Checkbox("Enable Screen-Space Shadows", &settings.Enabled);
 		if (ImGui::IsItemHovered()) {
 			ImGui::BeginTooltip();
 			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
@@ -298,7 +299,7 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 		if (shadowState->GetRuntimeData().cubeMapRenderTarget == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS) {
 			enableSSS = false;
 
-		} else if (!renderedScreenCamera && enabled) {
+		} else if (!renderedScreenCamera && settings.Enabled) {
 			renderedScreenCamera = true;
 
 			// Backup the game state
@@ -448,7 +449,7 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 		}
 
 		PerPass data{};
-		data.EnableSSS = enableSSS && shadowState->GetRuntimeData().rasterStateCullMode <= 1 && enabled;
+		data.EnableSSS = enableSSS && shadowState->GetRuntimeData().rasterStateCullMode <= 1 && settings.Enabled;
 		perPass->Update(data);
 
 		if (renderedScreenCamera) {
