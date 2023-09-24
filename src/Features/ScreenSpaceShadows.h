@@ -25,6 +25,7 @@ struct ScreenSpaceShadows : Feature
 		float NearHardness = 32.0f;
 		float BlurRadius = 0.5f;
 		float BlurDropoff = 0.005f;
+		bool Enabled = true;
 	};
 
 	struct alignas(16) PerPass
@@ -49,8 +50,6 @@ struct ScreenSpaceShadows : Feature
 	Settings settings;
 
 	ConstantBuffer* perPass = nullptr;
-
-	bool enabled = true;
 
 	ID3D11SamplerState* computeSampler = nullptr;
 
