@@ -1,5 +1,6 @@
 #include "Common/FrameBuffer.hlsl"
 #include "Common/MotionBlur.hlsl"
+#include "Common/Permutation.hlsl"
 
 #if defined(VERTEX_ALPHA_DEPTH)
 #	define VC
@@ -369,48 +370,40 @@ float3 GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFa
 float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	float distanceFactor, float refractionsDepthFactor)
 {
-#		if defined(REFLECTIONS)
-	float3 finalSsrReflectionColor = 0.0.xxx;
-	float ssrFraction = 0;
-
-#			if defined(CUBEMAP)
-	float3 cubemapUV =
-		reflect(viewDirection, WaterParams.y * normal + float3(0, 0, 1 - WaterParams.y));
-	float3 reflectionColor = CubeMapTex.Sample(CubeMapSampler, cubemapUV).xyz;
-#			else
-
-#				if NUM_SPECULAR_LIGHTS == 0
-	float4 reflectionNormalRaw =
-		float4((VarAmounts.w * refractionsDepthFactor) * normal.xy + input.MPosition.xy,
-			input.MPosition.z, 1);
-#				else
-	float4 reflectionNormalRaw = float4(VarAmounts.w * normal.xy, reflectionNormalZ, 1);
-#				endif
-
-	float4 reflectionNormal = mul(transpose(TextureProj), reflectionNormalRaw);
-	float3 reflectionColor =
-		ReflectionTex.Sample(ReflectionSampler, reflectionNormal.xy / reflectionNormal.ww).xyz;
-#			endif
-
-#			if defined(CUBEMAP) && NUM_SPECULAR_LIGHTS == 0
-	float2 ssrReflectionUv = GetDynamicResolutionAdjustedScreenPosition(
-		(DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw +
-		SSRParams2.x * normal.xy);
-	float4 ssrReflectionColor1 = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUv);
-	float4 ssrReflectionColor2 = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUv);
-	float4 ssrReflectionColor = lerp(ssrReflectionColor2, ssrReflectionColor1, SSRParams.y);
-
-	finalSsrReflectionColor = ssrReflectionColor.xyz;
-	ssrFraction = saturate(ssrReflectionColor.w * (SSRParams.x * distanceFactor));
-#			endif
-
-	float3 finalReflectionColor =
-		lerp(reflectionColor * WaterParams.w, finalSsrReflectionColor, ssrFraction);
-	return lerp(ReflectionColor.xyz, finalReflectionColor, VarAmounts.y);
+	if (shaderDescriptors[0].PixelShaderDescriptor & _Reflections) {
+		float3 finalSsrReflectionColor = 0.0.xxx;
+		float ssrFraction = 0;
+		float3 reflectionColor = 0;
+		if (shaderDescriptors[0].PixelShaderDescriptor & _Cubemap) {
+			float3 cubemapUV = reflect(viewDirection, WaterParams.y * normal + float3(0, 0, 1 - WaterParams.y));
+			reflectionColor = CubeMapTex.Sample(CubeMapSampler, cubemapUV).xyz;
+		} else {
+#		if NUM_SPECULAR_LIGHTS == 0
+			float4 reflectionNormalRaw = float4((VarAmounts.w * refractionsDepthFactor) * normal.xy + input.MPosition.xy, input.MPosition.z, 1);
 #		else
-
-	return ReflectionColor.xyz * VarAmounts.y;
+			float4 reflectionNormalRaw = float4(VarAmounts.w * normal.xy, 1, 1);
 #		endif
+
+			float4 reflectionNormal = mul(transpose(TextureProj), reflectionNormalRaw);
+			reflectionColor = ReflectionTex.Sample(ReflectionSampler, reflectionNormal.xy / reflectionNormal.ww).xyz;
+		}
+
+#		if NUM_SPECULAR_LIGHTS == 0
+		if (shaderDescriptors[0].PixelShaderDescriptor & _Reflections) {
+			float2 ssrReflectionUv = GetDynamicResolutionAdjustedScreenPosition((DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw + SSRParams2.x * normal.xy);
+			float4 ssrReflectionColor1 = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUv);
+			float4 ssrReflectionColor2 = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUv);
+			float4 ssrReflectionColor = lerp(ssrReflectionColor2, ssrReflectionColor1, SSRParams.y);
+
+			finalSsrReflectionColor = ssrReflectionColor.xyz;
+			ssrFraction = saturate(ssrReflectionColor.w * (SSRParams.x * distanceFactor));
+		}
+#		endif
+
+		float3 finalReflectionColor = lerp(reflectionColor * WaterParams.w, finalSsrReflectionColor, ssrFraction);
+		return lerp(ReflectionColor.xyz, finalReflectionColor, VarAmounts.y);
+	}
+	return ReflectionColor.xyz * VarAmounts.y;
 }
 
 #		if defined(DEPTH)
@@ -423,9 +416,11 @@ float GetScreenDepth(float2 screenPosition)
 
 float3 GetLdotN(float3 normal)
 {
-#		if defined(INTERIOR) || defined(UNDERWATER)
+#		if defined(UNDERWATER)
 	return 1;
 #		else
+	if (shaderDescriptors[0].PixelShaderDescriptor & _Interior)
+		return 1;
 	return saturate(dot(SunDir.xyz, normal));
 #		endif
 }
@@ -490,9 +485,12 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 
 float3 GetSunColor(float3 normal, float3 viewDirection)
 {
-#		if defined(INTERIOR) || defined(UNDERWATER)
+#		if defined(UNDERWATER)
 	return 0.0.xxx;
 #		else
+	if (shaderDescriptors[0].PixelShaderDescriptor & _Interior)
+		return 0.0.xxx;
+
 	float3 reflectionDirection = reflect(viewDirection, normal);
 
 	float reflectionMul = exp2(VarAmounts.x * log2(saturate(dot(reflectionDirection, SunDir.xyz))));

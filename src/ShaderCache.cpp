@@ -47,54 +47,6 @@ namespace SIE
 			return 0x3F & (descriptor >> 24);
 		}
 
-		enum class LightingShaderTechniques
-		{
-			None = 0,
-			Envmap = 1,
-			Glowmap = 2,
-			Parallax = 3,
-			Facegen = 4,
-			FacegenRGBTint = 5,
-			Hair = 6,
-			ParallaxOcc = 7,
-			MTLand = 8,
-			LODLand = 9,
-			Snow = 10,  // unused
-			MultilayerParallax = 11,
-			TreeAnim = 12,
-			LODObjects = 13,
-			MultiIndexSparkle = 14,
-			LODObjectHD = 15,
-			Eye = 16,
-			Cloud = 17,  // unused
-			LODLandNoise = 18,
-			MTLandLODBlend = 19,
-			Outline = 20,
-		};
-
-		enum class LightingShaderFlags
-		{
-			VC = 1 << 0,
-			Skinned = 1 << 1,
-			ModelSpaceNormals = 1 << 2,
-			// flags 3 to 8 are unused
-			Specular = 1 << 9,
-			SoftLighting = 1 << 10,
-			RimLighting = 1 << 11,
-			BackLighting = 1 << 12,
-			ShadowDir = 1 << 13,
-			DefShadow = 1 << 14,
-			ProjectedUV = 1 << 15,
-			AnisoLighting = 1 << 16,
-			AmbientSpecular = 1 << 17,
-			WorldMap = 1 << 18,
-			BaseObjectIsSnow = 1 << 19,
-			DoAlphaTest = 1 << 20,
-			Snow = 1 << 21,
-			CharacterLight = 1 << 22,
-			AdditionalAlphaMask = 1 << 23,
-		};
-
 		static void GetLightingShaderDefines(uint32_t descriptor,
 			D3D_SHADER_MACRO* defines)
 		{
@@ -102,9 +54,9 @@ namespace SIE
 				RELOCATION_ID(101631, 108698));
 
 			const auto technique =
-				static_cast<LightingShaderTechniques>(GetTechnique(descriptor));
+				static_cast<ShaderCache::LightingShaderTechniques>(GetTechnique(descriptor));
 
-			if (technique == LightingShaderTechniques::Outline) {
+			if (technique == ShaderCache::LightingShaderTechniques::Outline) {
 				defines[0] = { "OUTLINE", nullptr };
 				++defines;
 			}
@@ -491,91 +443,68 @@ namespace SIE
 			defines[0] = { nullptr, nullptr };
 		}
 
-		enum class WaterShaderTechniques
-		{
-			Underwater = 8,
-			Lod = 9,
-			Stencil = 10,
-			Simple = 11,
-		};
-
-		enum class WaterShaderFlags
-		{
-			Vc = 1 << 0,
-			NormalTexCoord = 1 << 1,
-			Reflections = 1 << 2,
-			Refractions = 1 << 3,
-			Depth = 1 << 4,
-			Interior = 1 << 5,
-			Wading = 1 << 6,
-			VertexAlphaDepth = 1 << 7,
-			Cubemap = 1 << 8,
-			Flowmap = 1 << 9,
-			BlendNormals = 1 << 10,
-		};
-
 		static void GetWaterShaderDefines(uint32_t descriptor, D3D_SHADER_MACRO* defines)
 		{
 			defines[0] = { "WATER", nullptr };
 			defines[1] = { "FOG", nullptr };
 			defines += 2;
 
-			if (descriptor & static_cast<uint32_t>(WaterShaderFlags::Vc)) {
+			if (descriptor & static_cast<uint32_t>(ShaderCache::WaterShaderFlags::Vc)) {
 				defines[0] = { "VC", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(WaterShaderFlags::NormalTexCoord)) {
+			if (descriptor & static_cast<uint32_t>(ShaderCache::WaterShaderFlags::NormalTexCoord)) {
 				defines[0] = { "NORMAL_TEXCOORD", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(WaterShaderFlags::Reflections)) {
+			if (descriptor & static_cast<uint32_t>(ShaderCache::WaterShaderFlags::Reflections)) {
 				defines[0] = { "REFLECTIONS", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(WaterShaderFlags::Refractions)) {
+			if (descriptor & static_cast<uint32_t>(ShaderCache::WaterShaderFlags::Refractions)) {
 				defines[0] = { "REFRACTIONS", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(WaterShaderFlags::Depth)) {
+			if (descriptor & static_cast<uint32_t>(ShaderCache::WaterShaderFlags::Depth)) {
 				defines[0] = { "DEPTH", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(WaterShaderFlags::Interior)) {
+			if (descriptor & static_cast<uint32_t>(ShaderCache::WaterShaderFlags::Interior)) {
 				defines[0] = { "INTERIOR", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(WaterShaderFlags::Wading)) {
+			if (descriptor & static_cast<uint32_t>(ShaderCache::WaterShaderFlags::Wading)) {
 				defines[0] = { "WADING", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(WaterShaderFlags::VertexAlphaDepth)) {
+			if (descriptor & static_cast<uint32_t>(ShaderCache::WaterShaderFlags::VertexAlphaDepth)) {
 				defines[0] = { "VERTEX_ALPHA_DEPTH", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(WaterShaderFlags::Cubemap)) {
+			if (descriptor & static_cast<uint32_t>(ShaderCache::WaterShaderFlags::Cubemap)) {
 				defines[0] = { "CUBEMAP", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(WaterShaderFlags::Flowmap)) {
+			if (descriptor & static_cast<uint32_t>(ShaderCache::WaterShaderFlags::Flowmap)) {
 				defines[0] = { "FLOWMAP", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(WaterShaderFlags::BlendNormals)) {
+			if (descriptor & static_cast<uint32_t>(ShaderCache::WaterShaderFlags::BlendNormals)) {
 				defines[0] = { "BLEND_NORMALS", nullptr };
 				++defines;
 			}
 
 			const auto technique = (descriptor >> 11) & 0xF;
-			if (technique == static_cast<uint32_t>(WaterShaderTechniques::Underwater)) {
+			if (technique == static_cast<uint32_t>(ShaderCache::WaterShaderTechniques::Underwater)) {
 				defines[0] = { "UNDERWATER", nullptr };
 				++defines;
-			} else if (technique == static_cast<uint32_t>(WaterShaderTechniques::Lod)) {
+			} else if (technique == static_cast<uint32_t>(ShaderCache::WaterShaderTechniques::Lod)) {
 				defines[0] = { "LOD", nullptr };
 				++defines;
-			} else if (technique == static_cast<uint32_t>(WaterShaderTechniques::Stencil)) {
+			} else if (technique == static_cast<uint32_t>(ShaderCache::WaterShaderTechniques::Stencil)) {
 				defines[0] = { "STENCIL", nullptr };
 				++defines;
-			} else if (technique == static_cast<uint32_t>(WaterShaderTechniques::Simple)) {
+			} else if (technique == static_cast<uint32_t>(ShaderCache::WaterShaderTechniques::Simple)) {
 				defines[0] = { "SIMPLE", nullptr };
 				++defines;
 			} else if (technique < 8) {

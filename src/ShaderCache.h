@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-static constexpr REL::Version SHADER_CACHE_VERSION = { 0, 0, 0, 11 };
+static constexpr REL::Version SHADER_CACHE_VERSION = { 0, 0, 0, 12 };
 
 using namespace std::chrono;
 
@@ -156,6 +156,77 @@ namespace SIE
 		BS::thread_pool compilationPool{};
 		bool backgroundCompilation = false;
 		bool menuLoaded = false;
+
+		enum class LightingShaderTechniques
+		{
+			None = 0,
+			Envmap = 1,
+			Glowmap = 2,
+			Parallax = 3,
+			Facegen = 4,
+			FacegenRGBTint = 5,
+			Hair = 6,
+			ParallaxOcc = 7,
+			MTLand = 8,
+			LODLand = 9,
+			Snow = 10,  // unused
+			MultilayerParallax = 11,
+			TreeAnim = 12,
+			LODObjects = 13,
+			MultiIndexSparkle = 14,
+			LODObjectHD = 15,
+			Eye = 16,
+			Cloud = 17,  // unused
+			LODLandNoise = 18,
+			MTLandLODBlend = 19,
+			Outline = 20,
+		};
+
+		enum class LightingShaderFlags
+		{
+			VC = 1 << 0,
+			Skinned = 1 << 1,
+			ModelSpaceNormals = 1 << 2,
+			// flags 3 to 8 are unused
+			Specular = 1 << 9,
+			SoftLighting = 1 << 10,
+			RimLighting = 1 << 11,
+			BackLighting = 1 << 12,
+			ShadowDir = 1 << 13,
+			DefShadow = 1 << 14,
+			ProjectedUV = 1 << 15,
+			AnisoLighting = 1 << 16,
+			AmbientSpecular = 1 << 17,
+			WorldMap = 1 << 18,
+			BaseObjectIsSnow = 1 << 19,
+			DoAlphaTest = 1 << 20,
+			Snow = 1 << 21,
+			CharacterLight = 1 << 22,
+			AdditionalAlphaMask = 1 << 23,
+		};
+
+		enum class WaterShaderTechniques
+		{
+			Underwater = 8,
+			Lod = 9,
+			Stencil = 10,
+			Simple = 11,
+		};
+
+		enum class WaterShaderFlags
+		{
+			Vc = 1 << 0,
+			NormalTexCoord = 1 << 1,
+			Reflections = 1 << 2,
+			Refractions = 1 << 3,
+			Depth = 1 << 4,
+			Interior = 1 << 5,
+			Wading = 1 << 6,
+			VertexAlphaDepth = 1 << 7,
+			Cubemap = 1 << 8,
+			Flowmap = 1 << 9,
+			BlendNormals = 1 << 10,
+		};
 
 	private:
 		ShaderCache();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Buffer.h>
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
@@ -68,4 +69,18 @@ public:
      * @return Whether in developer mode.
      */
 	bool IsDeveloperMode();
+
+	void SetupResources();
+	void ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor);
+
+	struct PerShader
+	{
+		uint VertexShaderDescriptor;
+		uint PixelShaderDescriptor;
+	};
+
+	uint lastVertexDescriptor = 0;
+	uint lastPixelDescriptor = 0;
+
+	std::unique_ptr<Buffer> perShader = nullptr;
 };
