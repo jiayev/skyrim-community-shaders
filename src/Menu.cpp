@@ -10,6 +10,7 @@
 #include "Feature.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/LightLimitFix/ParticleLights.h"
+#include "Features/RainWetnessEffects.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/WaterBlending.h"
 

@@ -754,6 +754,7 @@ float3 GetLightSpecularInput(PS_INPUT input, float3 L, float3 V, float3 N, float
 
 #	if defined(SPECULAR)
 	float lightColorMultiplier = exp2(shininess * log2(HdotN));
+
 #	elif defined(SPARKLE)
 	float lightColorMultiplier = 0;
 #	else
@@ -972,6 +973,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "LightLimitFix/LightLimitFix.hlsli"
 #	endif
 
+#	if defined(RAIN_WETNESS_EFFECTS)
+#		include "RainWetnessEffects/RainWetnessEffects.hlsli"
+#	endif
+
 PS_OUTPUT main(PS_INPUT input, bool frontFace
 			   : SV_IsFrontFace)
 {
@@ -1064,6 +1069,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	else
 	float shininess = SpecularColor.w;
 #	endif  // defined (LANDSCAPE)
+
+#	if defined(RAIN_WETNESS_EFFECTS) && !defined(SNOW)
+	shininess *= perPassRainWetnessEffects[0].RainShininessMultiplier;
+#	endif  // RAIN_WETNESS_EFFECTS
 
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 #	if defined(CPM_AVAILABLE)
@@ -1749,6 +1758,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 #		endif
 #	endif
+
+#	if defined(RAIN_WETNESS_EFFECTS) && !defined(SNOW)
+	lightsDiffuseColor *= perPassRainWetnessEffects[0].RainDiffuseMultiplier;
+	lightsSpecularColor *= perPassRainWetnessEffects[0].RainSpecularMultiplier;
+#	endif  // RAIN_WETNESS_EFFECTS
 
 	diffuseColor += lightsDiffuseColor;
 	specularColor += lightsSpecularColor;
