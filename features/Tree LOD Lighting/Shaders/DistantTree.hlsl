@@ -95,7 +95,7 @@ struct PS_OUTPUT
 
 #ifdef PSHADER
 SamplerState SampDiffuse : register(s0);
-
+SamplerState SampShadowMaskSampler : register(s14);
 Texture2D<float4> TexDiffuse : register(t0);
 
 cbuffer AlphaTestRefCB : register(b11)
