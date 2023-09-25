@@ -7,11 +7,7 @@ cbuffer SSSData : register(b5)
 Texture2D<float> TexDepthSampler : register(t20);
 Texture2D<float> TexOcclusionSampler : register(t21);
 
-#if defined(DEFSHADOW)
-#	define LinearSampler SampShadowMaskSampler
-#else
-SamplerState LinearSampler : register(s14);
-#endif
+#define LinearSampler SampShadowMaskSampler
 
 float2 SSGetDynamicResolutionAdjustedScreenPosition(float2 uv)
 {
