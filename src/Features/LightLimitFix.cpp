@@ -570,6 +570,12 @@ void LightLimitFix::Draw(const RE::BSShader* shader, const uint32_t descriptor)
 	}
 }
 
+void LightLimitFix::PostPostLoad()
+{
+	ParticleLights::GetSingleton()->GetConfigs();
+	LightLimitFix::InstallHooks();
+}
+
 void LightLimitFix::DataLoaded()
 {
 	auto iMagicLightMaxCount = RE::GameSettingCollection::GetSingleton()->GetSetting("iMagicLightMaxCount");

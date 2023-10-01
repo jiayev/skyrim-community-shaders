@@ -115,7 +115,8 @@ public:
 	virtual void DrawSettings();
 	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
 
-	void DataLoaded();
+	virtual void PostPostLoad() override;
+	virtual void DataLoaded() override;
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
 	bool AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config* a_config = nullptr, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);

@@ -39,6 +39,15 @@ void State::Draw()
 	currentShader = nullptr;
 }
 
+void State::DrawDeferred()
+{
+	for (auto* feature : Feature::GetFeatureList()) {
+		if (feature->loaded) {
+			feature->DrawDeferred();
+		}
+	}
+}
+
 void State::Reset()
 {
 	for (auto* feature : Feature::GetFeatureList())
