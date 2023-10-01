@@ -46,7 +46,7 @@ struct ExtendedMaterials : Feature
 	virtual void SetupResources();
 	virtual inline void Reset() {}
 
-	void DataLoaded();
+	virtual void DataLoaded() override;
 
 	virtual void DrawSettings();
 

@@ -71,7 +71,7 @@ struct ScreenSpaceShadows : Feature
 	void ModifyGrass(const RE::BSShader* shader, const uint32_t descriptor);
 	void ModifyDistantTree(const RE::BSShader*, const uint32_t descriptor);
 
-	void ClearComputeShader();
+	virtual void ClearShaderCache() override;
 	ID3D11ComputeShader* GetComputeShader();
 	ID3D11ComputeShader* GetComputeShaderHorizontalBlur();
 	ID3D11ComputeShader* GetComputeShaderVerticalBlur();

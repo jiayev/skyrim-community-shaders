@@ -187,7 +187,7 @@ uint32_t GetTechnique(uint32_t descriptor)
 	return 0x3F & (descriptor >> 24);
 }
 
-void ScreenSpaceShadows::ClearComputeShader()
+void ScreenSpaceShadows::ClearShaderCache()
 {
 	if (raymarchProgram) {
 		raymarchProgram->Release();

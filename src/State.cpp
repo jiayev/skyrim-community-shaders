@@ -39,6 +39,15 @@ void State::Draw()
 	currentShader = nullptr;
 }
 
+void State::DrawDeferred()
+{
+	for (auto* feature : Feature::GetFeatureList()) {
+		if (feature->loaded) {
+			feature->DrawDeferred();
+		}
+	}
+}
+
 void State::Reset()
 {
 	for (auto* feature : Feature::GetFeatureList())
@@ -316,15 +325,15 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			static auto enableImprovedSnow = RE::GetINISetting("bEnableImprovedSnow:Display");
 			static bool vr = REL::Module::IsVR();
 
-			if (vr  || !enableImprovedSnow->GetBool())
+			if (vr || !enableImprovedSnow->GetBool())
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow);
 
 			{
 				uint32_t technique = 0x3F & (a_vertexDescriptor >> 24);
-				if (technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Glowmap || 
+				if (technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Glowmap ||
 					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Parallax ||
 					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Facegen ||
-					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::FacegenRGBTint || 
+					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::FacegenRGBTint ||
 					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::LODObjects ||
 					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::LODObjectHD ||
 					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::MultiIndexSparkle ||
