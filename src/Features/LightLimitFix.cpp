@@ -8,7 +8,7 @@
 constexpr std::uint32_t CLUSTER_SIZE_X = 32;
 constexpr std::uint32_t CLUSTER_SIZE_Y = 16;
 constexpr std::uint32_t CLUSTER_SIZE_Z = 16;
-constexpr std::uint32_t CLUSTER_MAX_LIGHTS = 128;
+constexpr std::uint32_t CLUSTER_MAX_LIGHTS = 1024;
 
 constexpr std::uint32_t CLUSTER_COUNT = CLUSTER_SIZE_X * CLUSTER_SIZE_Y * CLUSTER_SIZE_Z;
 
