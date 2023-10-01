@@ -1,14 +1,12 @@
 
 struct PerPassParallax
 {
-	uint CullingMode;
-
 	bool EnableComplexMaterial;
 
 	bool EnableParallax;
-	bool EnableTerrainParallax;
+	bool EnableTerrainParallax;	
 	bool EnableHighQuality;
-
+	
 	uint MaxDistance;
 	float CRPMRange;
 	float BlendRange;

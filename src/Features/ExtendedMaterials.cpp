@@ -166,10 +166,6 @@ void ExtendedMaterials::ModifyLighting(const RE::BSShader*, const uint32_t)
 
 	{
 		PerPass data{};
-		if (!REL::Module::IsVR())
-			data.CullingMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateCullMode;
-		else
-			data.CullingMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetVRRuntimeData().rasterStateCullMode;
 		data.settings = settings;
 
 		D3D11_MAPPED_SUBRESOURCE mapped;

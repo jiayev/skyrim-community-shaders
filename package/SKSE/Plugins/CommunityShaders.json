@@ -5,7 +5,7 @@
     "Shader Defines": ""
   },
   "Complex Parallax Materials": {
-    "BlendRange": 0.05000000074505806,
+    "BlendRange": 0.25,
     "CRPMRange": 0.5,
     "EnableComplexMaterial": 1,
     "EnableHighQuality": 0,
