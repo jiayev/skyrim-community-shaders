@@ -318,7 +318,11 @@ void Menu::DrawSettings()
 			ImGui::TableNextColumn();
 			if (ImGui::Button("Clear Shader Cache", { -1, 0 })) {
 				shaderCache.Clear();
-				ScreenSpaceShadows::GetSingleton()->ClearComputeShader();
+				for (auto* feature : Feature::GetFeatureList()) {
+					if (feature->loaded) {
+						feature->ClearShaderCache();
+					}
+				}
 			}
 			if (ImGui::IsItemHovered()) {
 				ImGui::BeginTooltip();

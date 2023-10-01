@@ -95,9 +95,10 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 				shaderCache.ValidateDiskCache();
 
-				if (LightLimitFix::GetSingleton()->loaded) {
-					ParticleLights::GetSingleton()->GetConfigs();
-					LightLimitFix::InstallHooks();
+				for (auto* feature : Feature::GetFeatureList()) {
+					if (feature->loaded) {
+						feature->PostPostLoad();
+					}
 				}
 			}
 
@@ -123,10 +124,11 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 					shaderCache.WriteDiskCacheInfo();
 				}
 
-				if (LightLimitFix::GetSingleton()->loaded)
-					LightLimitFix::GetSingleton()->DataLoaded();
-				if (ExtendedMaterials::GetSingleton()->loaded)
-					ExtendedMaterials::GetSingleton()->DataLoaded();
+				for (auto* feature : Feature::GetFeatureList()) {
+					if (feature->loaded) {
+						feature->DataLoaded();
+					}
+				}
 			}
 
 			break;
