@@ -309,13 +309,34 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 
 			a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AdditionalAlphaMask |
 								   (uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
-								   (uint32_t)SIE::ShaderCache::LightingShaderFlags::DoAlphaTest |
 								   (uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
 								   (uint32_t)SIE::ShaderCache::LightingShaderFlags::DefShadow |
-								   (uint32_t)SIE::ShaderCache::LightingShaderFlags::CharacterLight |
-								   (uint32_t)SIE::ShaderCache::LightingShaderFlags::RimLighting |
-								   (uint32_t)SIE::ShaderCache::LightingShaderFlags::SoftLighting |
-								   (uint32_t)SIE::ShaderCache::LightingShaderFlags::BackLighting);
+								   (uint32_t)SIE::ShaderCache::LightingShaderFlags::CharacterLight);
+
+			static auto enableImprovedSnow = RE::GetINISetting("bEnableImprovedSnow:Display");
+			static bool vr = REL::Module::IsVR();
+
+			if (vr  || !enableImprovedSnow->GetBool())
+				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow);
+
+			{
+				uint32_t technique = 0x3F & (a_vertexDescriptor >> 24);
+				if (technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Glowmap || 
+					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Parallax ||
+					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Facegen ||
+					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::FacegenRGBTint || 
+					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::LODObjects ||
+					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::LODObjectHD ||
+					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::MultiIndexSparkle ||
+					technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Hair)
+					a_vertexDescriptor &= ~(0x3F << 24);
+			}
+
+			{
+				uint32_t technique = 0x3F & (a_pixelDescriptor >> 24);
+				if (technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Glowmap)
+					a_pixelDescriptor &= ~(0x3F << 24);
+			}
 
 		} else {
 			a_vertexDescriptor &= ~((uint32_t)SIE::ShaderCache::WaterShaderFlags::Reflections |
