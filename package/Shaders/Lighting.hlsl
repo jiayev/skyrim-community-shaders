@@ -2,7 +2,7 @@
 #include "Common/MotionBlur.hlsl"
 #include "Common/Permutation.hlsl"
 
-const float PI = 3.1415927;
+#define PI 3.1415927
 
 #if (defined(TREE_ANIM) || defined(LANDSCAPE)) && !defined(VC)
 #	define VC
@@ -1529,17 +1529,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float dirLightAngle = dot(modelNormal.xyz, DirLightDirection.xyz);
 	float3 dirDiffuseColor = dirLightColor * saturate(dirLightAngle.xxx);
 
-#	if defined(SOFT_LIGHTING)
+#		if defined(SOFT_LIGHTING)
 	lightsDiffuseColor += nsDirLightColor.xyz * GetSoftLightMultiplier(dirLightAngle) * rimSoftLightColor.xyz;
-#	endif
+#		endif
 
-#	if defined(RIM_LIGHTING)
+#		if defined(RIM_LIGHTING)
 	lightsDiffuseColor += nsDirLightColor.xyz * GetRimLightMultiplier(DirLightDirection, viewDirection, modelNormal.xyz) * rimSoftLightColor.xyz;
-#	endif
+#		endif
 
-#	if defined(BACK_LIGHTING)
+#		if defined(BACK_LIGHTING)
 	lightsDiffuseColor += nsDirLightColor.xyz * (saturate(-dirLightAngle) * backLightColor.xyz);
-#	endif
+#		endif
 
 	if (useSnowSpecular && useSnowDecalSpecular) {
 #	if defined(SNOW)
@@ -1600,7 +1600,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				}
 #			endif
 				float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirectionWS, true, eyeIndex);
-
 #			if defined(SKINNED) || !defined(MODELSPACENORMALS)
 				float shadowIntensityFactor = saturate(dot(vertexNormal, normalizedLightDirection.xyz) * PI);
 				lightColor *= lerp(1.0, ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, 1.0, 0.0, eyeIndex), shadowIntensityFactor);
@@ -1635,17 +1634,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			float lightAngle = dot(modelNormal.xyz, normalizedLightDirection.xyz);
 			float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
-#		if defined(SOFT_LIGHTING)
+#			if defined(SOFT_LIGHTING)
 			lightDiffuseColor += nsLightColor * GetSoftLightMultiplier(dot(modelNormal.xyz, lightDirection.xyz)) * rimSoftLightColor.xyz;
-#		endif  // SOFT_LIGHTING
+#			endif  // SOFT_LIGHTING
 
-#		if defined(RIM_LIGHTING)
+#			if defined(RIM_LIGHTING)
 			lightDiffuseColor += nsLightColor * GetRimLightMultiplier(normalizedLightDirection, viewDirection, modelNormal.xyz) * rimSoftLightColor.xyz;
-#		endif  // RIM_LIGHTING
+#			endif  // RIM_LIGHTING
 
-#		if defined(BACK_LIGHTING)
+#			if defined(BACK_LIGHTING)
 			lightDiffuseColor += (saturate(-lightAngle) * backLightColor.xyz) * nsLightColor;
-#		endif  // BACK_LIGHTING
+#			endif  // BACK_LIGHTING
 
 #		if defined(SPECULAR) || (defined(SPARKLE) && !defined(SNOW))
 			lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, viewDirection, modelNormal.xyz, lightColor, shininess, uv) * intensityMultiplier.xxx;
@@ -1660,7 +1659,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(LIGHT_LIMIT_FIX)
 	if (perPassLLF[0].EnableGlobalLights && GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
-		lightCount = lightGrid[clusterIndex].lightCount;
+		lightCount = min(1024, lightGrid[clusterIndex].lightCount);
 		if (lightCount) {
 			uint lightOffset = lightGrid[clusterIndex].offset;
 
@@ -1740,17 +1739,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				float lightAngle = dot(worldSpaceNormal.xyz, normalizedLightDirection.xyz);
 				float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
-#			if defined(SOFT_LIGHTING)
+#				if defined(SOFT_LIGHTING)
 				lightDiffuseColor += nsLightColor * GetSoftLightMultiplier(dot(worldSpaceNormal.xyz, lightDirection.xyz)) * rimSoftLightColor.xyz;
-#			endif
+#				endif
 
-#			if defined(RIM_LIGHTING)
+#				if defined(RIM_LIGHTING)
 				lightDiffuseColor += nsLightColor * GetRimLightMultiplier(normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz) * rimSoftLightColor.xyz;
-#			endif
+#				endif
 
-#			if defined(BACK_LIGHTING)
+#				if defined(BACK_LIGHTING)
 				lightDiffuseColor += (saturate(-lightAngle) * backLightColor.xyz) * nsLightColor;
-#			endif
+#				endif
 
 #			if defined(SPECULAR) || (defined(SPARKLE) && !defined(SNOW))
 				lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz, lightColor, shininess, uv) * intensityMultiplier.xxx;
@@ -1809,7 +1808,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 vertexColor = (input.Color.yyy * (TintColor.xyz - 1.0.xxx) + 1.0.xxx) * color.xyz;
 #	else
 	float3 vertexColor = input.Color.xyz * color.xyz;
-#	endif  // defined (HAIR)
+#	endif // defined (HAIR)
 
 #	if defined(MULTI_LAYER_PARALLAX)
 	float layerValue = MultiLayerParallaxData.x * TexLayerSampler.Sample(SampLayerSampler, uv).w;
@@ -1873,52 +1872,52 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.Albedo.w = 0;
 #	else
 	float alpha = baseColor.w;
+	
+if (shaderDescriptors[0].PixelShaderDescriptor & _AdditionalAlphaMask){
+	alpha *= MaterialData.z;
+} else {
+	uint2 alphaMask = input.Position.xy;
+	alphaMask.x = ((alphaMask.x << 2) & 12);
+	alphaMask.x = (alphaMask.y & 3) | (alphaMask.x & ~3);
+	const float maskValues[16] = {
+		0.003922,
+		0.533333,
+		0.133333,
+		0.666667,
+		0.800000,
+		0.266667,
+		0.933333,
+		0.400000,
+		0.200000,
+		0.733333,
+		0.066667,
+		0.600000,
+		0.996078,
+		0.466667,
+		0.866667,
+		0.333333,
+	};
 
-	if (shaderDescriptors[0].PixelShaderDescriptor & _AdditionalAlphaMask) {
-		alpha *= MaterialData.z;
-	} else {
-		uint2 alphaMask = input.Position.xy;
-		alphaMask.x = ((alphaMask.x << 2) & 12);
-		alphaMask.x = (alphaMask.y & 3) | (alphaMask.x & ~3);
-		const float maskValues[16] = {
-			0.003922,
-			0.533333,
-			0.133333,
-			0.666667,
-			0.800000,
-			0.266667,
-			0.933333,
-			0.400000,
-			0.200000,
-			0.733333,
-			0.066667,
-			0.600000,
-			0.996078,
-			0.466667,
-			0.866667,
-			0.333333,
-		};
-
-		float testTmp = 0;
-		if (MaterialData.z - maskValues[alphaMask.x] < 0)
-			discard;
-	}
+	float testTmp = 0;
+	if (MaterialData.z - maskValues[alphaMask.x] < 0)
+		discard;
+}
 #		if !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
 	alpha *= input.Color.w;
 #		endif  // !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
 #		if defined(DO_ALPHA_TEST)
 #			if defined(HAIR)
-	if (shaderDescriptors[0].PixelShaderDescriptor & _DepthWriteDecals) {
+	if (shaderDescriptors[0].PixelShaderDescriptor & _DepthWriteDecals){
 		if (alpha - 0.0156862754 < 0)
 			discard;
 		alpha = saturate(1.05 * alpha);
 	}
-#			endif  // defined(HAIR)
+#			endif // defined(HAIR)
 	if (alpha - AlphaThreshold < 0)
 		discard;
-#		endif      // defined(DO_ALPHA_TEST)
+#		endif // defined(DO_ALPHA_TEST) 
 	psout.Albedo.w = alpha;
-#	endif          // defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
+#	endif // defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
 
 #	if defined(LIGHT_LIMIT_FIX)
 	if (perPassLLF[0].EnableLightsVisualisation) {
