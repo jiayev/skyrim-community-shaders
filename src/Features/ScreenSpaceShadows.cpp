@@ -449,7 +449,7 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 		}
 
 		PerPass data{};
-		data.EnableSSS = enableSSS && shadowState->GetRuntimeData().rasterStateCullMode <= 1 && settings.Enabled;
+		data.EnableSSS = enableSSS && settings.Enabled;
 		perPass->Update(data);
 
 		if (renderedScreenCamera) {
