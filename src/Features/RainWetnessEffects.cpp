@@ -149,7 +149,6 @@ void RainWetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 	}
 
 	if (shader->shaderType.any(RE::BSShader::Type::Lighting)) {
-
 		// During world cubemap generation we cannot use the cubemap
 		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 		if (shadowState->GetRuntimeData().cubeMapRenderTarget == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS) {
