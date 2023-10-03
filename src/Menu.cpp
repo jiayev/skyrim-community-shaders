@@ -527,6 +527,31 @@ void Menu::DrawSettings()
 				ImGui::PopTextWrapPos();
 				ImGui::EndTooltip();
 			}
+
+			if (ImGui::SliderInt("Test Interval", (int*)&testInterval, 0, 10)) {
+				if (testInterval == 0) {
+					inTestMode = false;
+					logger::info("Disabling test mode.");
+					State::GetSingleton()->Load(true);  // restore last settings before entering test mode
+				} else if (testInterval && !inTestMode) {
+					logger::info("Saving current settings for test mode and starting test with interval {}.", testInterval);
+					State::GetSingleton()->Save(true);
+					inTestMode = true;
+				} else {
+					logger::info("Setting new interval {}.", testInterval);
+				}
+			}
+			if (ImGui::IsItemHovered()) {
+				ImGui::BeginTooltip();
+				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+				ImGui::Text(
+					"Sets number of seconds before toggling between default USER and TEST config. "
+					"0 disables. Non-zero will enable testing mode. "
+					"Enabling will save current settings as TEST config."
+					"This has no impact if no settings are changed.");
+				ImGui::PopTextWrapPos();
+				ImGui::EndTooltip();
+			}
 			if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
 				ImGui::Text(std::format("Shader Compiler : {}", shaderCache.GetShaderStatsString()).c_str());
 				ImGui::TreePop();
@@ -658,6 +683,25 @@ void Menu::DrawOverlay()
 		DrawSettings();
 	} else {
 		ImGui::GetIO().MouseDrawCursor = false;
+	}
+
+	if (inTestMode) {  // In test mode
+		float seconds = (float)duration_cast<std::chrono::milliseconds>(high_resolution_clock::now() - lastTestSwitch).count() / 1000;
+		auto remaining = (float)testInterval - seconds;
+		if (remaining < 0) {
+			usingTestConfig = !usingTestConfig;
+			logger::info("Swapping mode to {}", usingTestConfig ? "test" : "user");
+			State::GetSingleton()->Load(usingTestConfig);
+			lastTestSwitch = high_resolution_clock::now();
+		}
+		ImGui::SetNextWindowBgAlpha(1);
+		ImGui::SetNextWindowPos(ImVec2(10, 10));
+		if (!ImGui::Begin("Testing", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+			ImGui::End();
+			return;
+		}
+		ImGui::Text(fmt::format("{} Mode : {:.1f} seconds left", usingTestConfig ? "Test" : "User", remaining).c_str());
+		ImGui::End();
 	}
 
 	ImGui::Render();

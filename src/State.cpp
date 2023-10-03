@@ -63,11 +63,11 @@ void State::Setup()
 	SetupResources();
 }
 
-void State::Load()
+void State::Load(bool a_test)
 {
 	auto& shaderCache = SIE::ShaderCache::Instance();
 
-	std::string configPath = userConfigPath;
+	std::string configPath = a_test ? testConfigPath : userConfigPath;
 	std::ifstream i(configPath);
 	if (!i.is_open()) {
 		logger::info("Unable to open user config file ({}); trying default ({})", configPath, defaultConfigPath);
@@ -146,10 +146,10 @@ void State::Load()
 		logger::info("Skyrim Upscaler not detected");
 }
 
-void State::Save()
+void State::Save(bool a_test)
 {
 	auto& shaderCache = SIE::ShaderCache::Instance();
-	std::ofstream o(userConfigPath);
+	std::ofstream o{ a_test ? testConfigPath : userConfigPath };
 	json settings;
 
 	Menu::GetSingleton()->Save(settings);
