@@ -102,10 +102,67 @@ void RainWetnessEffects::DrawSettings()
 	}
 }
 
+void RainWetnessEffects::UpdateCubemap()
+{
+	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+
+	auto context = renderer->GetRuntimeData().context;
+	auto cubemap = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
+
+	for (UINT face = 0; face < 6; face++) {
+		D3D11_BOX srcBox = { 0 };
+		srcBox.left = 0;
+		srcBox.right = (blurredReflectionsTexture->desc.Width >> 0);
+		srcBox.top = 0;
+		srcBox.bottom = (blurredReflectionsTexture->desc.Height >> 0);
+		srcBox.front = 0;
+		srcBox.back = 1;
+
+		// Calculate the subresource index for the current face and mip level
+		UINT srcSubresourceIndex = D3D11CalcSubresource(0, face, 1);
+
+		// Copy the subresource from the source to the destination texture
+		context->CopySubresourceRegion(blurredReflectionsTexture->resource.get(), D3D11CalcSubresource(0, face, 4), 0, 0, 0, cubemap.texture, srcSubresourceIndex, &srcBox);
+	}
+
+	context->GenerateMips(blurredReflectionsTexture->srv.get());
+}
+
 void RainWetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 {
+	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+
+	if (!blurredReflectionsTexture) {
+		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+		auto cubemap = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
+
+		D3D11_TEXTURE2D_DESC texDesc{};
+		cubemap.texture->GetDesc(&texDesc);
+		texDesc.MipLevels = 4;
+		texDesc.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
+		blurredReflectionsTexture = new Texture2D(texDesc);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		cubemap.SRV->GetDesc(&srvDesc);
+		srvDesc.TextureCube.MipLevels = 4;
+		blurredReflectionsTexture->CreateSRV(srvDesc);
+	}
+
 	if (shader->shaderType.any(RE::BSShader::Type::Lighting)) {
-		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+
+		// During world cubemap generation we cannot use the cubemap
+		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+		if (shadowState->GetRuntimeData().cubeMapRenderTarget == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS) {
+			ID3D11ShaderResourceView* views[1]{};
+			views[0] = nullptr;
+			context->PSSetShaderResources(64, 1, views);
+		} else if (!renderedScreenCamera) {
+			UpdateCubemap();
+			renderedScreenCamera = true;
+			ID3D11ShaderResourceView* views[1]{};
+			views[0] = blurredReflectionsTexture->srv.get();
+			context->PSSetShaderResources(64, 1, views);
+		}
 
 		PerPass data{};
 		data.settings = settings;
@@ -272,6 +329,11 @@ void RainWetnessEffects::SetupResources()
 	srvDesc.Buffer.FirstElement = 0;
 	srvDesc.Buffer.NumElements = 1;
 	perPass->CreateSRV(srvDesc);
+}
+
+void RainWetnessEffects::Reset()
+{
+	renderedScreenCamera = false;
 }
 
 void RainWetnessEffects::Load(json& o_json)

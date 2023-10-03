@@ -39,10 +39,16 @@ public:
 
 	std::unique_ptr<Buffer> perPass = nullptr;
 
+	Texture2D* blurredReflectionsTexture = nullptr;
+
+	bool renderedScreenCamera = false;
+
 	virtual void SetupResources();
-	virtual inline void Reset() {}
+	virtual void Reset();
 
 	virtual void DrawSettings();
+
+	void UpdateCubemap();
 
 	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
 
