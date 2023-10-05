@@ -14,6 +14,9 @@ public:
 
 	virtual inline std::string GetName() { return "Water Blending"; }
 	virtual inline std::string GetShortName() { return "WaterBlending"; }
+	inline std::string_view GetShaderDefineName() override { return "WATER_BLENDING"; }
+
+	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
 	struct Settings
 	{

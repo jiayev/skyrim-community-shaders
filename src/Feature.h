@@ -7,6 +7,9 @@ struct Feature
 
 	virtual std::string GetName() = 0;
 	virtual std::string GetShortName() = 0;
+	virtual std::string_view GetShaderDefineName() { return ""; }
+
+	virtual bool HasShaderDefine(RE::BSShader::Type) { return false; }
 
 	virtual void SetupResources() = 0;
 	virtual void Reset() = 0;

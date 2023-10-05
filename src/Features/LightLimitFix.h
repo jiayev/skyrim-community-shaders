@@ -24,6 +24,9 @@ public:
 	}
 	virtual inline std::string GetName() { return "Light Limit Fix"; }
 	virtual inline std::string GetShortName() { return "LightLimitFix"; }
+	inline std::string_view GetShaderDefineName() override { return "LIGHT_LIMIT_FIX"; }
+
+	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
 	struct LightData
 	{

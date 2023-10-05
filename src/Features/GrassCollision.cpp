@@ -336,3 +336,13 @@ void GrassCollision::Reset()
 {
 	updatePerFrame = true;
 }
+
+bool GrassCollision::HasShaderDefine(RE::BSShader::Type shaderType)
+{
+	switch (shaderType) {
+	case RE::BSShader::Type::Grass:
+		return true;
+	default:
+		return false;
+	}
+}

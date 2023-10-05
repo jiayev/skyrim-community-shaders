@@ -958,3 +958,14 @@ void LightLimitFix::UpdateLights()
 	ID3D11UnorderedAccessView* null_uavs[3] = { nullptr };
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(null_uavs), null_uavs, nullptr);
 }
+
+bool LightLimitFix::HasShaderDefine(RE::BSShader::Type shaderType)
+{
+	switch (shaderType) {
+	case RE::BSShader::Type::Lighting:
+	case RE::BSShader::Type::Grass:
+		return true;
+	default:
+		return false;
+	}
+}

@@ -14,6 +14,9 @@ public:
 
 	virtual inline std::string GetName() { return "Rain Wetness Effects"; }
 	virtual inline std::string GetShortName() { return "RainWetnessEffects"; }
+	inline std::string_view GetShaderDefineName() override { return "RAIN_WETNESS_EFFECTS"; }
+
+	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
 	struct Settings
 	{

@@ -347,3 +347,13 @@ void RainWetnessEffects::Save(json& o_json)
 {
 	o_json[GetName()] = settings;
 }
+
+bool RainWetnessEffects::HasShaderDefine(RE::BSShader::Type shaderType)
+{
+	switch (shaderType) {
+	case RE::BSShader::Type::Lighting:
+		return true;
+	default:
+		return false;
+	}
+}

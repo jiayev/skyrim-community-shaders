@@ -124,3 +124,13 @@ void WaterBlending::Save(json& o_json)
 {
 	o_json[GetName()] = settings;
 }
+
+bool WaterBlending::HasShaderDefine(RE::BSShader::Type shaderType)
+{
+	switch (shaderType) {
+	case RE::BSShader::Type::Water:
+		return true;
+	default:
+		return false;
+	}
+}

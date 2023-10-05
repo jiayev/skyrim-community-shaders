@@ -13,6 +13,9 @@ struct ExtendedMaterials : Feature
 
 	virtual inline std::string GetName() { return "Complex Parallax Materials"; }
 	virtual inline std::string GetShortName() { return "ComplexParallaxMaterials"; }
+	inline std::string_view GetShaderDefineName() override { return "COMPLEX_PARALLAX_MATERIALS"; }
+
+	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
 	struct Settings
 	{

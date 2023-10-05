@@ -510,3 +510,15 @@ void ScreenSpaceShadows::Reset()
 {
 	renderedScreenCamera = false;
 }
+
+bool ScreenSpaceShadows::HasShaderDefine(RE::BSShader::Type shaderType)
+{
+	switch (shaderType) {
+	case RE::BSShader::Type::Lighting:
+	case RE::BSShader::Type::Grass:
+	case RE::BSShader::Type::DistantTree:
+		return true;
+	default:
+		return false;
+	}
+}
