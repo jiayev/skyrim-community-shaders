@@ -179,6 +179,23 @@ void LightLimitFix::SetupResources()
 	}
 
 	{
+		D3D11_BUFFER_DESC sbDesc{};
+		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
+		sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		sbDesc.StructureByteStride = sizeof(StrictLightData);
+		sbDesc.ByteWidth = sizeof(StrictLightData);
+		strictLightData = std::make_unique<Buffer>(sbDesc);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = 1;
+		strictLightData->CreateSRV(srvDesc);
+	}
+	{
 		clusterBuildingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0");
 		clusterCullingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0");
 
@@ -272,7 +289,61 @@ void LightLimitFix::Save(json& o_json)
 void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass)
 {
 	strictLightsCount = a_pass->numLights - 1;
+	strictLightDataTemp.NumLights = 0;
 }
+
+void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
+{
+	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+	D3D11_MAPPED_SUBRESOURCE mapped;
+	DX::ThrowIfFailed(context->Map(strictLightData->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+	size_t bytes = sizeof(StrictLightData);
+	memcpy_s(mapped.pData, bytes, &strictLightDataTemp, bytes);
+	context->Unmap(strictLightData->resource.get(), 0);
+}
+
+void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass, DirectX::XMMATRIX& Transform, uint32_t, uint32_t, float WorldScale, Space RenderSpace)
+{
+	strictLightDataTemp.NumLights = a_pass->numLights - 1;
+	for (uint32_t i = 0; i < strictLightDataTemp.NumLights; i++)
+	{
+		auto bsLight = a_pass->sceneLights[i + 1];
+		auto niLight = bsLight->light.get();
+
+		auto& runtimeData = niLight->GetLightRuntimeData();
+
+		float radius = runtimeData.radius.x;
+		float3 worldPos = { niLight->world.translate.x, niLight->world.translate.y, niLight->world.translate.z };
+
+		if (RenderSpace == Space::Model) {
+			auto position = DirectX::XMVector3TransformCoord(worldPos, Transform);
+			float3 position3;
+			XMStoreFloat3(&position3, position);
+
+			strictLightDataTemp.PointLightPosition[i].x = position3.x;
+			strictLightDataTemp.PointLightPosition[i].y = position3.y;
+			strictLightDataTemp.PointLightPosition[i].z = position3.z;
+			strictLightDataTemp.PointLightPosition[i].w = radius / WorldScale;
+		} else {
+			auto posAdjust = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().posAdjust.getEye();
+			worldPos = worldPos - float3(posAdjust.x, posAdjust.y, posAdjust.z);
+			strictLightDataTemp.PointLightPosition[i].x = worldPos.x;
+			strictLightDataTemp.PointLightPosition[i].y = worldPos.y;
+			strictLightDataTemp.PointLightPosition[i].z = worldPos.z;
+			strictLightDataTemp.PointLightPosition[i].w = radius;
+		}
+
+		float3 color = { runtimeData.diffuse.red, runtimeData.diffuse.green, runtimeData.diffuse.blue };
+		color *= runtimeData.fade;
+		color *= bsLight->lodDimmer;
+
+		strictLightDataTemp.PointLightColor[i].x = color.x;
+		strictLightDataTemp.PointLightColor[i].y = color.y;
+		strictLightDataTemp.PointLightColor[i].z = color.z;
+		strictLightDataTemp.PointLightColor[i].w = 0;
+	}
+}
+
 
 void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3& a_initialPosition)
 {
@@ -320,6 +391,7 @@ void LightLimitFix::AddParticleLightLuminance(RE::NiPoint3& targetPosition, int&
 	numHits += particleLightsDetectionHits;
 }
 
+
 void LightLimitFix::Bind()
 {
 	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
@@ -355,6 +427,7 @@ void LightLimitFix::Bind()
 
 		{
 			PerPass perPassData{};
+
 			perPassData.CameraData.x = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar;
 			perPassData.CameraData.y = accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
 			perPassData.CameraData.z = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar - accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
@@ -400,6 +473,12 @@ void LightLimitFix::Bind()
 		ID3D11ShaderResourceView* views[1]{};
 		views[0] = perPass->srv.get();
 		context->PSSetShaderResources(32, ARRAYSIZE(views), views);
+	}
+
+	{
+		ID3D11ShaderResourceView* views[1]{};
+		views[0] = strictLightData->srv.get();
+		context->PSSetShaderResources(37, ARRAYSIZE(views), views);
 	}
 }
 
@@ -605,7 +684,7 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 		dimmer = 0.0f;
 	}
 
-	//light.color *= dimmer;
+	light.color *= dimmer;
 
 	float distantLightFadeStart = lightsFar * lightsFar * (lightFadeStart / lightFadeEnd);
 	float distantLightFadeEnd = lightsFar * lightsFar;
@@ -618,7 +697,7 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 		dimmer = 0.0f;
 	}
 
-	//light.color *= dimmer;
+	light.color *= dimmer;
 
 	if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
 		if (a_geometry && a_config && a_config->flicker) {
@@ -636,7 +715,7 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 				light.positionWS[eyeIndex].y += (float)perlin2.noise1D(scaledTimer) * a_config->flickerMovement;
 				light.positionWS[eyeIndex].z += (float)perlin3.noise1D(scaledTimer) * a_config->flickerMovement;
 			}
-			dimmer = std::max(0.0f, dimmer - ((float)perlin4.noise1D_01(scaledTimer) * a_config->flickerIntensity));
+			dimmer = std::max(0.0f, dimmer - ((float)perlin4.noise1D_01(scaledTimer) * a_config->flickerIntensity)); // todo: this is wrong
 		}
 
 		CachedParticleLight cachedParticleLight{};

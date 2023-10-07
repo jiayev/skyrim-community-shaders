@@ -71,6 +71,15 @@ public:
 		uint FrameCount;
 	};
 
+	struct StrictLightData
+	{
+		uint NumLights;
+		float4 PointLightPosition[15];
+		float4 PointLightColor[15];
+	};
+
+	StrictLightData strictLightDataTemp;
+
 	struct CachedParticleLight
 	{
 		float grey;
@@ -79,6 +88,7 @@ public:
 	};
 
 	std::unique_ptr<Buffer> perPass = nullptr;
+	std::unique_ptr<Buffer> strictLightData = nullptr;
 
 	bool rendered = false;
 	int eyeCount = !REL::Module::IsVR() ? 1 : 2;
@@ -154,6 +164,7 @@ public:
 
 	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique);
 	void BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass);
+	void BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
 
 	enum class Space
 	{
@@ -167,6 +178,9 @@ public:
 
 	float CalculateLuminance(CachedParticleLight& light, RE::NiPoint3& point);
 	void AddParticleLightLuminance(RE::NiPoint3& targetPosition, int& numHits, float& lightLevel);
+
+	void BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass, DirectX::XMMATRIX& Transform, uint32_t, uint32_t, float WorldScale, Space RenderSpace);
+
 
 	struct Hooks
 	{
@@ -233,6 +247,7 @@ public:
 			{
 				GetSingleton()->BSLightingShader_SetupGeometry_Before(Pass);
 				func(This, Pass, RenderFlags);
+				GetSingleton()->BSLightingShader_SetupGeometry_After(Pass);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -243,6 +258,16 @@ public:
 			{
 				func(shadowSceneNode, targetPosition, numHits, sunLightLevel, lightLevel, refLight, shadowBitMask);
 				GetSingleton()->AddParticleLightLuminance(targetPosition, numHits, lightLevel);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights
+		{
+			static void thunk(RE::BSGraphics::PixelShader* PixelShader, RE::BSRenderPass* Pass, DirectX::XMMATRIX& Transform, uint32_t LightCount, uint32_t ShadowLightCount, float WorldScale, Space RenderSpace)
+			{
+				GetSingleton()->BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(Pass, Transform, LightCount, ShadowLightCount, WorldScale, RenderSpace);
+				func(PixelShader, Pass, Transform, LightCount, ShadowLightCount, WorldScale, RenderSpace);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -262,6 +287,8 @@ public:
 			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 
 			logger::info("[LLF] Installed hooks");
+
+			stl::write_thunk_call<BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights>(REL::RelocationID(100565, 107300).address() + REL::Relocate(0x523, 0xB0E));
 		}
 	};
 };

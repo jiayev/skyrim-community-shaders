@@ -33,11 +33,21 @@ StructuredBuffer<StructuredLight> lights : register(t17);
 StructuredBuffer<uint> lightList : register(t18);       //MAX_CLUSTER_LIGHTS * 16^3
 StructuredBuffer<LightGrid> lightGrid : register(t19);  //16^3
 
+
 #if !defined(SCREEN_SPACE_SHADOWS)
 Texture2D<float4> TexDepthSampler : register(t20);
 #endif  // SCREEN_SPACE_SHADOWS
 
 StructuredBuffer<PerPassLLF> perPassLLF : register(t32);
+
+struct StrictLightData
+{
+	uint NumLights;
+	float4 PointLightPosition[15];
+	float4 PointLightColor[15];
+};
+
+StructuredBuffer<StrictLightData> strictLightData : register(t37);
 
 bool GetClusterIndex(in float2 uv, in float z, out uint clusterIndex)
 {
