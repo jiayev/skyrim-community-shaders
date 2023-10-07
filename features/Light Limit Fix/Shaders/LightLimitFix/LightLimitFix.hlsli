@@ -21,7 +21,6 @@ struct PerPassLLF
 	bool EnableContactShadows;
 	bool EnableLightsVisualisation;
 	uint LightsVisualisationMode;
-	uint StrictLightsCount;
 	float LightsNear;
 	float LightsFar;
 	float4 CameraData;
@@ -43,8 +42,9 @@ StructuredBuffer<PerPassLLF> perPassLLF : register(t32);
 struct StrictLightData
 {
 	uint NumLights;
-	float4 PointLightPosition[15];
-	float4 PointLightColor[15];
+	float3 PointLightPosition[15];
+	float PointLightRadius[15];
+	float3 PointLightColor[15];
 };
 
 StructuredBuffer<StrictLightData> strictLightData : register(t37);

@@ -1573,13 +1573,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(LIGHT_LIMIT_FIX)
 		[loop] for (uint lightIndex = 0; lightIndex < strictLightData[0].NumLights; lightIndex++)
 		{
-			float3 lightDirection = strictLightData[0].PointLightPosition[lightIndex].xyz - input.InputPosition.xyz;
+			float3 lightDirection = strictLightData[0].PointLightPosition[lightIndex] - input.InputPosition;
 			float lightDist = length(lightDirection);
-			float intensityFactor = saturate(lightDist / strictLightData[0].PointLightPosition[lightIndex].w);
+			float intensityFactor = saturate(lightDist / strictLightData[0].PointLightRadius[lightIndex]);
 			if (intensityFactor == 1)
 				continue;
 			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-			float3 lightColor = strictLightData[0].PointLightColor[lightIndex].xyz;
+			float3 lightColor = strictLightData[0].PointLightColor[lightIndex];
 #		else
 		[loop] for (uint lightIndex = 0; lightIndex < numLights; ++lightIndex)
 		{
@@ -1934,9 +1934,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(LIGHT_LIMIT_FIX)
 	if (perPassLLF[0].EnableLightsVisualisation) {
 		if (perPassLLF[0].LightsVisualisationMode == 0) {
-			psout.Albedo.xyz = TurboColormap(perPassLLF[0].StrictLightsCount > 7);
+			psout.Albedo.xyz = TurboColormap(strictLightData[0].NumLights >= 7.0);
 		} else if (perPassLLF[0].LightsVisualisationMode == 1) {
-			psout.Albedo.xyz = TurboColormap((float)perPassLLF[0].StrictLightsCount / 7.0);
+			psout.Albedo.xyz = TurboColormap((float)strictLightData[0].NumLights / 15.0);
 		} else {
 			psout.Albedo.xyz = TurboColormap((float)lightCount / 128.0);
 		}

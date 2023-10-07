@@ -63,7 +63,6 @@ public:
 		uint EnableContactShadows;
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		uint StrictLightsCount;
 		float LightsNear;
 		float LightsFar;
 		float4 CameraData;
@@ -74,8 +73,9 @@ public:
 	struct StrictLightData
 	{
 		uint NumLights;
-		float4 PointLightPosition[15];
-		float4 PointLightColor[15];
+		float3 PointLightPosition[15];
+		float PointLightRadius[15];
+		float3 PointLightColor[15];
 	};
 
 	StrictLightData strictLightDataTemp;
@@ -116,8 +116,6 @@ public:
 
 	eastl::hash_map<RE::BSGeometry*, ParticleLightInfo> queuedParticleLights;
 	eastl::hash_map<RE::BSGeometry*, ParticleLightInfo> particleLights;
-
-	std::uint32_t strictLightsCount = 0;
 
 	virtual void SetupResources();
 	virtual void Reset();
@@ -163,8 +161,8 @@ public:
 	Settings settings;
 
 	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique);
+
 	void BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass);
-	void BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
 
 	enum class Space
 	{
@@ -172,15 +170,16 @@ public:
 		Model = 1,
 	};
 
+	void BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass, DirectX::XMMATRIX& Transform, uint32_t, uint32_t, float WorldScale, Space RenderSpace);
+
+	void BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
+
 	std::shared_mutex cachedParticleLightsMutex;
 	eastl::vector<CachedParticleLight> cachedParticleLights;
 	uint32_t particleLightsDetectionHits = 0;
 
 	float CalculateLuminance(CachedParticleLight& light, RE::NiPoint3& point);
 	void AddParticleLightLuminance(RE::NiPoint3& targetPosition, int& numHits, float& lightLevel);
-
-	void BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass, DirectX::XMMATRIX& Transform, uint32_t, uint32_t, float WorldScale, Space RenderSpace);
-
 
 	struct Hooks
 	{

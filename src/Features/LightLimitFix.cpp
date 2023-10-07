@@ -286,10 +286,35 @@ void LightLimitFix::Save(json& o_json)
 	o_json[GetName()] = settings;
 }
 
-void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass)
+void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass*)
 {
-	strictLightsCount = a_pass->numLights - 1;
 	strictLightDataTemp.NumLights = 0;
+}
+
+void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass, DirectX::XMMATRIX& Transform, uint32_t, uint32_t, float WorldScale, Space RenderSpace)
+{
+	strictLightDataTemp.NumLights = a_pass->numLights - 1;
+	for (uint32_t i = 0; i < strictLightDataTemp.NumLights; i++) {
+		auto bsLight = a_pass->sceneLights[i + 1];
+		auto niLight = bsLight->light.get();
+
+		auto& runtimeData = niLight->GetLightRuntimeData();
+
+		float3 worldPos = { niLight->world.translate.x, niLight->world.translate.y, niLight->world.translate.z };
+
+		if (RenderSpace == Space::Model) {
+			strictLightDataTemp.PointLightPosition[i] = DirectX::SimpleMath::Vector3::Transform(worldPos, Transform);
+			strictLightDataTemp.PointLightRadius[i] = runtimeData.radius.x / WorldScale;
+		} else {
+			auto posAdjust = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().posAdjust.getEye();
+			strictLightDataTemp.PointLightPosition[i] = worldPos - float3(posAdjust.x, posAdjust.y, posAdjust.z);
+			strictLightDataTemp.PointLightRadius[i] = runtimeData.radius.x;
+		}
+
+		strictLightDataTemp.PointLightColor[i] = { runtimeData.diffuse.red, runtimeData.diffuse.green, runtimeData.diffuse.blue };
+		strictLightDataTemp.PointLightColor[i] *= runtimeData.fade;
+		strictLightDataTemp.PointLightColor[i] *= bsLight->lodDimmer;
+	}
 }
 
 void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
@@ -301,49 +326,6 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 	memcpy_s(mapped.pData, bytes, &strictLightDataTemp, bytes);
 	context->Unmap(strictLightData->resource.get(), 0);
 }
-
-void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass, DirectX::XMMATRIX& Transform, uint32_t, uint32_t, float WorldScale, Space RenderSpace)
-{
-	strictLightDataTemp.NumLights = a_pass->numLights - 1;
-	for (uint32_t i = 0; i < strictLightDataTemp.NumLights; i++)
-	{
-		auto bsLight = a_pass->sceneLights[i + 1];
-		auto niLight = bsLight->light.get();
-
-		auto& runtimeData = niLight->GetLightRuntimeData();
-
-		float radius = runtimeData.radius.x;
-		float3 worldPos = { niLight->world.translate.x, niLight->world.translate.y, niLight->world.translate.z };
-
-		if (RenderSpace == Space::Model) {
-			auto position = DirectX::XMVector3TransformCoord(worldPos, Transform);
-			float3 position3;
-			XMStoreFloat3(&position3, position);
-
-			strictLightDataTemp.PointLightPosition[i].x = position3.x;
-			strictLightDataTemp.PointLightPosition[i].y = position3.y;
-			strictLightDataTemp.PointLightPosition[i].z = position3.z;
-			strictLightDataTemp.PointLightPosition[i].w = radius / WorldScale;
-		} else {
-			auto posAdjust = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().posAdjust.getEye();
-			worldPos = worldPos - float3(posAdjust.x, posAdjust.y, posAdjust.z);
-			strictLightDataTemp.PointLightPosition[i].x = worldPos.x;
-			strictLightDataTemp.PointLightPosition[i].y = worldPos.y;
-			strictLightDataTemp.PointLightPosition[i].z = worldPos.z;
-			strictLightDataTemp.PointLightPosition[i].w = radius;
-		}
-
-		float3 color = { runtimeData.diffuse.red, runtimeData.diffuse.green, runtimeData.diffuse.blue };
-		color *= runtimeData.fade;
-		color *= bsLight->lodDimmer;
-
-		strictLightDataTemp.PointLightColor[i].x = color.x;
-		strictLightDataTemp.PointLightColor[i].y = color.y;
-		strictLightDataTemp.PointLightColor[i].z = color.z;
-		strictLightDataTemp.PointLightColor[i].w = 0;
-	}
-}
-
 
 void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3& a_initialPosition)
 {
@@ -459,7 +441,6 @@ void LightLimitFix::Bind()
 			perPassData.EnableContactShadows = settings.EnableContactShadows;
 			perPassData.EnableLightsVisualisation = settings.EnableLightsVisualisation;
 			perPassData.LightsVisualisationMode = settings.LightsVisualisationMode;
-			perPassData.StrictLightsCount = strictLightsCount;
 
 			D3D11_MAPPED_SUBRESOURCE mapped;
 			DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
