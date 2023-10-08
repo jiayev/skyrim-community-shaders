@@ -63,13 +63,22 @@ public:
 		uint EnableContactShadows;
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		uint StrictLightsCount;
 		float LightsNear;
 		float LightsFar;
 		float4 CameraData;
 		float2 BufferDim;
 		uint FrameCount;
 	};
+
+	struct StrictLightData
+	{
+		uint NumLights;
+		float3 PointLightPosition[15];
+		float PointLightRadius[15];
+		float3 PointLightColor[15];
+	};
+
+	StrictLightData strictLightDataTemp;
 
 	struct CachedParticleLight
 	{
@@ -79,6 +88,7 @@ public:
 	};
 
 	std::unique_ptr<Buffer> perPass = nullptr;
+	std::unique_ptr<Buffer> strictLightData = nullptr;
 
 	bool rendered = false;
 	int eyeCount = !REL::Module::IsVR() ? 1 : 2;
@@ -106,8 +116,6 @@ public:
 
 	eastl::hash_map<RE::BSGeometry*, ParticleLightInfo> queuedParticleLights;
 	eastl::hash_map<RE::BSGeometry*, ParticleLightInfo> particleLights;
-
-	std::uint32_t strictLightsCount = 0;
 
 	virtual void SetupResources();
 	virtual void Reset();
@@ -153,6 +161,7 @@ public:
 	Settings settings;
 
 	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique);
+
 	void BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass);
 
 	enum class Space
@@ -160,6 +169,10 @@ public:
 		World = 0,
 		Model = 1,
 	};
+
+	void BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass, DirectX::XMMATRIX& Transform, uint32_t, uint32_t, float WorldScale, Space RenderSpace);
+
+	void BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
 
 	std::shared_mutex cachedParticleLightsMutex;
 	eastl::vector<CachedParticleLight> cachedParticleLights;
@@ -174,7 +187,7 @@ public:
 		{
 			static bool thunk(RE::BSShaderProperty* a_property, RE::BSLight* a_light)
 			{
-				return func(a_property, a_light) && (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light));
+				return func(a_property, a_light) && (!netimmerse_cast<RE::BSLightingShaderProperty*>(a_property) || (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light)));
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -183,7 +196,7 @@ public:
 		{
 			static bool thunk(RE::BSShaderProperty* a_property, RE::BSLight* a_light)
 			{
-				return func(a_property, a_light) && (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light));
+				return func(a_property, a_light) && (!netimmerse_cast<RE::BSLightingShaderProperty*>(a_property) || (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light)));
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -192,7 +205,7 @@ public:
 		{
 			static bool thunk(RE::BSShaderProperty* a_property, RE::BSLight* a_light)
 			{
-				return func(a_property, a_light) && (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light));
+				return func(a_property, a_light) && (!netimmerse_cast<RE::BSLightingShaderProperty*>(a_property) || (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light)));
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -233,6 +246,7 @@ public:
 			{
 				GetSingleton()->BSLightingShader_SetupGeometry_Before(Pass);
 				func(This, Pass, RenderFlags);
+				GetSingleton()->BSLightingShader_SetupGeometry_After(Pass);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -243,6 +257,16 @@ public:
 			{
 				func(shadowSceneNode, targetPosition, numHits, sunLightLevel, lightLevel, refLight, shadowBitMask);
 				GetSingleton()->AddParticleLightLuminance(targetPosition, numHits, lightLevel);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights
+		{
+			static void thunk(RE::BSGraphics::PixelShader* PixelShader, RE::BSRenderPass* Pass, DirectX::XMMATRIX& Transform, uint32_t LightCount, uint32_t ShadowLightCount, float WorldScale, Space RenderSpace)
+			{
+				GetSingleton()->BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(Pass, Transform, LightCount, ShadowLightCount, WorldScale, RenderSpace);
+				func(PixelShader, Pass, Transform, LightCount, ShadowLightCount, WorldScale, RenderSpace);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -262,6 +286,8 @@ public:
 			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 
 			logger::info("[LLF] Installed hooks");
+
+			stl::write_thunk_call<BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights>(REL::RelocationID(100565, 107300).address() + REL::Relocate(0x523, 0xB0E, 0x5fe));
 		}
 	};
 };

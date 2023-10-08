@@ -21,7 +21,6 @@ struct PerPassLLF
 	bool EnableContactShadows;
 	bool EnableLightsVisualisation;
 	uint LightsVisualisationMode;
-	uint StrictLightsCount;
 	float LightsNear;
 	float LightsFar;
 	float4 CameraData;
@@ -38,6 +37,16 @@ Texture2D<float4> TexDepthSampler : register(t20);
 #endif  // SCREEN_SPACE_SHADOWS
 
 StructuredBuffer<PerPassLLF> perPassLLF : register(t32);
+
+struct StrictLightData
+{
+	uint NumLights;
+	float3 PointLightPosition[15];
+	float PointLightRadius[15];
+	float3 PointLightColor[15];
+};
+
+StructuredBuffer<StrictLightData> strictLightData : register(t37);
 
 bool GetClusterIndex(in float2 uv, in float z, out uint clusterIndex)
 {
