@@ -373,7 +373,6 @@ void LightLimitFix::AddParticleLightLuminance(RE::NiPoint3& targetPosition, int&
 	numHits += particleLightsDetectionHits;
 }
 
-
 void LightLimitFix::Bind()
 {
 	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
@@ -696,7 +695,7 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 				light.positionWS[eyeIndex].y += (float)perlin2.noise1D(scaledTimer) * a_config->flickerMovement;
 				light.positionWS[eyeIndex].z += (float)perlin3.noise1D(scaledTimer) * a_config->flickerMovement;
 			}
-			dimmer = std::max(0.0f, dimmer - ((float)perlin4.noise1D_01(scaledTimer) * a_config->flickerIntensity)); // todo: this is wrong
+			dimmer = std::max(0.0f, dimmer - ((float)perlin4.noise1D_01(scaledTimer) * a_config->flickerIntensity));  // todo: this is wrong
 		}
 
 		CachedParticleLight cachedParticleLight{};

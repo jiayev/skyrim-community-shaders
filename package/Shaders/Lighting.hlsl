@@ -1590,7 +1590,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				continue;
 			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 			float3 lightColor = PointLightColor[lightIndex].xyz;
-#	endif
+#		endif
 			float3 nsLightColor = lightColor;
 
 			float shadowComponent = 1.0;
@@ -1675,7 +1675,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			uint lightOffset = lightGrid[clusterIndex].offset;
 
 			float shadowQualityScale = saturate(1.0 - ((float)lightCount / 128.0));
-			
+
 			float3 worldSpaceNormal = normalize(mul(CameraViewInverse[eyeIndex], float4(screenSpaceNormal, 0)));
 			float3 worldSpaceViewDirection = -normalize(input.WorldPosition.xyz);
 
