@@ -215,7 +215,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float3 diffuseMultiplier = input.InstanceData1.www * input.Color.xyz * saturate(dirLightAngle.xxx);
 #	endif  // VR
 	float perInstanceFade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, M_IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
-	float distanceFade = 1 - saturate((length(projSpacePosition.xyz) - AlphaParam1) / AlphaParam2);
+	float distanceFade = 1 - saturate((length(mul(WorldViewProj[0], msPosition).xyz) - AlphaParam1) / AlphaParam2);
 
 	// Note: input.Color.w is used for wind speed
 	vsout.VertexColor.xyz = input.Color.xyz * input.InstanceData1.www;
