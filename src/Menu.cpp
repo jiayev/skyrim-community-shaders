@@ -323,9 +323,10 @@ void Menu::DrawSettings()
 			if (ImGui::IsItemHovered()) {
 				ImGui::BeginTooltip();
 				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-				ImGui::Text("The Shader Cache is the collection of compiled shaders which replace the vanilla shaders at runtime.");
-				ImGui::Text("Clearing the shader cache will mean that shaders are recompiled only when the game re-encounters them.");
-				ImGui::Text("This is only needed for hot-loading shaders for development purposes.");
+				ImGui::Text(
+					"The Shader Cache is the collection of compiled shaders which replace the vanilla shaders at runtime. "
+					"Clearing the shader cache will mean that shaders are recompiled only when the game re-encounters them. "
+					"This is only needed for hot-loading shaders for development purposes. ");
 				ImGui::PopTextWrapPos();
 				ImGui::EndTooltip();
 			}
@@ -337,10 +338,11 @@ void Menu::DrawSettings()
 			if (ImGui::IsItemHovered()) {
 				ImGui::BeginTooltip();
 				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-				ImGui::Text("The Disk Cache is a collection of compiled shaders on disk, which are automatically created when shaders are added to the Shader Cache.");
-				ImGui::Text("If you do not have a Disk Cache, or it is outdated or invalid, you will see \"Compiling Shaders\" in the upper-left corner.");
-				ImGui::Text("After this has completed you will no longer see this message apart from when loading from the Disk Cache.");
-				ImGui::Text("Only delete the Disk Cache manually if you are encountering issues.");
+				ImGui::Text(
+					"The Disk Cache is a collection of compiled shaders on disk, which are automatically created when shaders are added to the Shader Cache. "
+					"If you do not have a Disk Cache, or it is outdated or invalid, you will see \"Compiling Shaders\" in the upper-left corner. "
+					"After this has completed you will no longer see this message apart from when loading from the Disk Cache. "
+					"Only delete the Disk Cache manually if you are encountering issues. ");
 				ImGui::PopTextWrapPos();
 				ImGui::EndTooltip();
 			}
@@ -543,8 +545,8 @@ void Menu::DrawSettings()
 				ImGui::Text(
 					"Sets number of seconds before toggling between default USER and TEST config. "
 					"0 disables. Non-zero will enable testing mode. "
-					"Enabling will save current settings as TEST config."
-					"This has no impact if no settings are changed.");
+					"Enabling will save current settings as TEST config. "
+					"This has no impact if no settings are changed. ");
 				ImGui::PopTextWrapPos();
 				ImGui::EndTooltip();
 			}
