@@ -2,6 +2,8 @@
 #include "Common/FrameBuffer.hlsl"
 #include "Common/MotionBlur.hlsl"
 
+#define GRASS
+
 struct VS_INPUT
 {
 	float4 Position : POSITION0;
@@ -39,7 +41,7 @@ struct VS_OUTPUT
 	float4 WorldPosition : POSITION1;
 	float4 PreviousWorldPosition : POSITION2;
 	float3 VertexNormal : POSITION4;
-	float4 FlatNormal : POSITION5;
+	float4 SphereNormal : POSITION5;
 #ifdef VR
 	float ClipDistance : SV_ClipDistance0;
 	float CullDistance : SV_CullDistance0;
@@ -268,8 +270,8 @@ clipPositionOut = clipPos
 
 	// Vertex normal needs to be transformed to world-space for lighting calculations.
 	vsout.VertexNormal.xyz = mul(world3x3, input.Normal.xyz * 2.0 - 1.0);
-	vsout.FlatNormal.xyz = mul(world3x3, float3(0, 0, 1));
-	vsout.FlatNormal.w = input.Color.w;
+	vsout.SphereNormal.xyz = mul(world3x3, normalize(input.Position.xyz));
+	vsout.SphereNormal.w = input.Color.w;
 
 	return vsout;
 }
@@ -373,6 +375,17 @@ float3x3 CalculateTBN(float3 N, float3 p, float2 uv)
 #		include "LightLimitFix/LightLimitFix.hlsli"
 #	endif
 
+#	define SampColorSampler SampBaseSampler
+#	define PI 3.1415927
+
+#	if defined(DYNAMIC_CUBEMAPS)
+#		include "DynamicCubemaps/DynamicCubemaps.hlsli"
+#	endif
+
+#	if defined(WETNESS_EFFECTS)
+#		include "WetnessEffects/WetnessEffects.hlsli"
+#	endif
+
 PS_OUTPUT main(PS_INPUT input, bool frontFace
 			   : SV_IsFrontFace)
 {
@@ -433,27 +446,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.Normal.zw = float2(0, 0);
 
 #		if !defined(VR)
-	float3 viewDirection = normalize(-input.WorldPosition.xyz);
+	float3 viewDirection = -normalize(input.WorldPosition.xyz);
 #		else
-	float3 viewDirection = normalize(-input.WorldPosition.xyz);
+	float3 viewDirection = -normalize(input.WorldPosition.xyz);
 #		endif  // !VR
 	float3 worldNormal = normalize(input.VertexNormal.xyz);
 
 	// Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
 	if (!frontFace)
-		worldNormal.xyz = -worldNormal.xyz;
+		worldNormal = -worldNormal;
 
-	worldNormal.xyz = normalize(lerp(worldNormal.xyz, normalize(input.FlatNormal.xyz), saturate(input.FlatNormal.w)));
+	worldNormal = normalize(lerp(worldNormal, normalize(input.SphereNormal.xyz), saturate(input.SphereNormal.w * 2)));
 
 	if (complex) {
 		float3 normalColor = float4(TransformNormal(specColor.xyz), 1);
-		// Inverting x as well as y seems to look more correct.
-		normalColor.xy = -normalColor.xy;
+		normalColor.y = -normalColor.y;
 		// world-space -> tangent-space -> world-space.
 		// This is because we don't have pre-computed tangents.
-		worldNormal.xyz = normalize(mul(normalColor.xyz, CalculateTBN(worldNormal.xyz, -viewDirection, input.TexCoord.xy)));
-	} else {
-		specColor.w = RGBToLuminance(baseColor.xyz) / 3.0;
+		worldNormal = normalize(mul(normalColor, CalculateTBN(worldNormal, -viewDirection, input.TexCoord.xy)));
 	}
 
 	baseColor.xyz *= Brightness;
@@ -477,7 +487,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 lightsDiffuseColor = 0;
 	float3 lightsSpecularColor = 0;
 
-	float dirLightAngle = dot(worldNormal.xyz, DirLightDirection.xyz);
+	float dirLightAngle = dot(worldNormal, DirLightDirection.xyz);
 	float3 dirDiffuseColor = dirLightColor * saturate(dirLightAngle);
 
 	lightsDiffuseColor += dirDiffuseColor;
@@ -488,12 +498,29 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	// Applies lighting across the whole surface apart from what is already lit.
 	lightsDiffuseColor += subsurfaceColor * dirLightColor * GetSoftLightMultiplier(dirLightAngle, SubsurfaceScatteringAmount);
-	// Applies lighting from the opposite direction. Does not account for normals perpendicular to the light source.
-	lightsDiffuseColor += subsurfaceColor * dirLightColor * saturate(-dirLightAngle) * SubsurfaceScatteringAmount;
 
-	lightsSpecularColor = GetLightSpecularInput(DirLightDirection, viewDirection, worldNormal.xyz, dirLightColor.xyz, Glossiness);
-	// Not physically accurate but grass will otherwise look too flat.
-	lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-DirLightDirection, viewDirection, worldNormal.xyz, dirLightColor.xyz, Glossiness);
+	if (complex) {
+		lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(DirLightDirection, viewDirection, worldNormal, dirLightColor, Glossiness);
+		// Not physically accurate but grass will otherwise look too flat.
+		lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-DirLightDirection, viewDirection, worldNormal, dirLightColor.xyz, Glossiness);
+	}
+
+#		if defined(WETNESS_EFFECTS)
+	float waterSpecular = 0.0;
+
+	float3 puddleCoords = ((input.WorldPosition.xyz + CameraPosAdjust[0]) * 0.5 + 0.5) * lerp(0.03, 0.02, perPassWetnessEffects[0].Wetness);
+	float puddle = pow(saturate(FBM(puddleCoords, 3, 1.0) * 0.5 + 0.5), 1) * perPassWetnessEffects[0].Wetness;
+
+	float waterGlossinessSpecular = saturate(worldNormal.z) * max(perPassWetnessEffects[0].Wetness * saturate(worldNormal.z) * 0.5, puddle);
+
+	float waterRoughnessSpecular = 1.0 - waterGlossinessSpecular;
+	waterRoughnessSpecular = lerp(perPassWetnessEffects[0].MinRoughness, 1.0, waterRoughnessSpecular);
+
+	if (waterRoughnessSpecular < 1.0) {
+		waterSpecular += GetWetnessSpecular(worldNormal, DirLightDirection, viewDirection, dirLightColor, waterRoughnessSpecular);
+		waterSpecular += GetPBRAmbientSpecular(worldNormal, viewDirection, 1.0 - waterGlossinessSpecular, 0.02);
+	}
+#		endif
 
 #		if defined(LIGHT_LIMIT_FIX)
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
@@ -554,9 +581,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 color = diffuseColor * baseColor.xyz * input.VertexColor.xyz;
 
-	specularColor += lightsSpecularColor;
-	specularColor *= specColor.w * SpecularStrength;
-	color.xyz += specularColor;
+	if (complex) {
+		specularColor += lightsSpecularColor;
+		specularColor *= specColor.w * SpecularStrength;
+		color.xyz += specularColor;
+	}
+
+#		if defined(WETNESS_EFFECTS)
+	color.xyz = sRGB2Lin(color.xyz);
+	color.xyz += waterSpecular;
+	color.xyz = Lin2sRGB(color.xyz);
+#		endif
 
 #		if defined(LIGHT_LIMIT_FIX)
 	if (perPassLLF[0].EnableLightsVisualisation) {

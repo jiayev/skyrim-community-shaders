@@ -1,4 +1,5 @@
 #include "WaterBlending.h"
+#include <Util.h>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	WaterBlending::Settings,
@@ -60,19 +61,6 @@ void WaterBlending::Draw(const RE::BSShader* shader, const uint32_t)
 		PerPass data{};
 		data.settings = settings;
 
-		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
-
-		data.waterHeight = -FLT_MAX;
-
-		if (auto player = RE::PlayerCharacter::GetSingleton()) {
-			if (auto cell = player->GetParentCell()) {
-				if (!cell->IsInteriorCell()) {
-					auto height = cell->GetExteriorWaterHeight();
-					data.waterHeight = height - shadowState->GetRuntimeData().posAdjust.getEye().z;
-				}
-			}
-		}
-
 		D3D11_MAPPED_SUBRESOURCE mapped;
 		DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 		size_t bytes = sizeof(PerPass);
@@ -84,11 +72,11 @@ void WaterBlending::Draw(const RE::BSShader* shader, const uint32_t)
 			ID3D11ShaderResourceView* views[2]{};
 			views[0] = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
 			views[1] = perPass->srv.get();
-			context->PSSetShaderResources(31, ARRAYSIZE(views), views);
+			context->PSSetShaderResources(33, ARRAYSIZE(views), views);
 		} else {
 			ID3D11ShaderResourceView* views[1]{};
 			views[0] = perPass->srv.get();
-			context->PSSetShaderResources(32, ARRAYSIZE(views), views);
+			context->PSSetShaderResources(34, ARRAYSIZE(views), views);
 		}
 	}
 }
@@ -125,12 +113,7 @@ void WaterBlending::Save(json& o_json)
 	o_json[GetName()] = settings;
 }
 
-bool WaterBlending::HasShaderDefine(RE::BSShader::Type shaderType)
+bool WaterBlending::HasShaderDefine(RE::BSShader::Type)
 {
-	switch (shaderType) {
-	case RE::BSShader::Type::Water:
-		return true;
-	default:
-		return false;
-	}
+	return true;
 }

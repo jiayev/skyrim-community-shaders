@@ -84,5 +84,19 @@ public:
 	uint lastVertexDescriptor = 0;
 	uint lastPixelDescriptor = 0;
 
-	std::unique_ptr<Buffer> perShader = nullptr;
+	std::unique_ptr<Buffer> shaderDataBuffer = nullptr;
+
+	void UpdateSharedData(const RE::BSShader* shader, const uint32_t descriptor);
+
+	bool lightingDataRequiresUpdate = false;
+
+	struct LightingData
+	{
+		float WaterHeight[25];
+		bool Reflections;
+	};
+
+	LightingData lightingData{};
+
+	std::unique_ptr<Buffer> lightingDataBuffer = nullptr;
 };

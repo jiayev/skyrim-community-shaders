@@ -1,14 +1,23 @@
+#include "Common/Color.hlsl"
 #include "Common/FrameBuffer.hlsl"
 #include "Common/MotionBlur.hlsl"
 #include "Common/Permutation.hlsl"
 
 #define PI 3.1415927
 
+struct LightingData
+{
+	float WaterHeight[25];
+	bool Reflections;
+};
+
+StructuredBuffer<LightingData> lightingData : register(t126);
+
 #if (defined(TREE_ANIM) || defined(LANDSCAPE)) && !defined(VC)
 #	define VC
 #endif  // TREE_ANIM || LANDSCAPE || !VC
 
-#if defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(LODLANDNOISE)
+#if defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(LODLANDNOISE) || defined(WORLD_MAP)
 #	define LOD
 #endif
 
@@ -77,14 +86,12 @@ struct VS_OUTPUT
 	// #endif // !VR
 	float4 Color : COLOR0;
 	float4 FogParam : COLOR1;
-#if defined(LIGHT_LIMIT_FIX)
-#	if !defined(VR)
+#if !defined(VR)
 	row_major float3x4 World[1] : POSITION3;
-#	else
+#else
 	row_major float3x4 World[2] : POSITION3;
-#	endif  // VR
+#endif  // VR
 	bool WorldSpace : TEXCOORD11;
-#endif
 #if defined(VR)
 	float ClipDistance : SV_ClipDistance0;  // o11
 	float CullDistance : SV_CullDistance0;  // p11
@@ -440,16 +447,14 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.FogParam.xyz = lerp(FogNearColor.xyz, FogFarColor.xyz, fogColorParam);
 	vsout.FogParam.w = fogColorParam;
 
-#	if defined(LIGHT_LIMIT_FIX)
 	vsout.World[0] = World[0];
-#		ifdef VR
+#	ifdef VR
 	vsout.World[1] = World[1];
-#		endif  // VR
-#		if defined(SKINNED) || defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
+#	endif  // VR
+#	if defined(SKINNED) || defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
 	vsout.WorldSpace = true;
-#		else
+#	else
 	vsout.WorldSpace = false;
-#		endif
 #	endif
 
 #	ifdef VR
@@ -953,7 +958,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		undef LIGHT_LIMIT_FIX
 #	endif
 
-#	if defined(COMPLEX_PARALLAX_MATERIALS) && (defined(PARALLAX) || defined(LANDSCAPE) || defined(ENVMAP))
+#	if defined(COMPLEX_PARALLAX_MATERIALS) && !defined(LOD) && (defined(PARALLAX) || defined(LANDSCAPE) || defined(ENVMAP))
 #		define CPM_AVAILABLE
 #	endif
 
@@ -973,8 +978,16 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "LightLimitFix/LightLimitFix.hlsli"
 #	endif
 
-#	if defined(RAIN_WETNESS_EFFECTS)
-#		include "RainWetnessEffects/RainWetnessEffects.hlsli"
+#	if defined(DYNAMIC_CUBEMAPS)
+#		include "DynamicCubemaps/DynamicCubemaps.hlsli"
+#	endif
+
+#	if defined(TREE_ANIM)
+#		undef WETNESS_EFFECTS
+#	endif
+
+#	if defined(WETNESS_EFFECTS)
+#		include "WetnessEffects/WetnessEffects.hlsli"
 #	endif
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace
@@ -1069,10 +1082,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	else
 	float shininess = SpecularColor.w;
 #	endif  // defined (LANDSCAPE)
-
-#	if defined(RAIN_WETNESS_EFFECTS) && !defined(SNOW)
-	shininess *= perPassRainWetnessEffects[0].RainShininessMultiplier;
-#	endif  // RAIN_WETNESS_EFFECTS
 
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 #	if defined(CPM_AVAILABLE)
@@ -1554,19 +1563,129 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	lightsDiffuseColor += dirDiffuseColor;
 
-#	if defined(LIGHT_LIMIT_FIX)
-	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
-	float screenNoise = InterleavedGradientNoise(screenUV * perPassLLF[0].BufferDim);
-#		if defined(SKINNED) || !defined(MODELSPACENORMALS)
-	float3 vertexNormal = normalize(transpose(tbn)[2]);
-#		endif
-#	endif
-
 	float3 screenSpaceNormal;
 	screenSpaceNormal.x = dot(input.ScreenNormalTransform0.xyz, normal.xyz);
 	screenSpaceNormal.y = dot(input.ScreenNormalTransform1.xyz, normal.xyz);
 	screenSpaceNormal.z = dot(input.ScreenNormalTransform2.xyz, normal.xyz);
 	screenSpaceNormal = normalize(screenSpaceNormal);
+
+	float3 worldSpaceNormal = normalize(mul(CameraViewInverse[eyeIndex], float4(screenSpaceNormal, 0)));
+	float3 worldSpaceViewDirection = -normalize(input.WorldPosition.xyz);
+	float3 normalizedDirLightDirectionWS = DirLightDirection;
+
+#	if (defined(SKINNED) || !defined(MODELSPACENORMALS))
+	float3 vertexNormal = normalize(transpose(tbn)[2]);
+	float3 blankNormal = float3(0, 0, 1);
+
+	float3 screenSpaceVertexNormal;
+	screenSpaceVertexNormal.x = dot(input.ScreenNormalTransform0.xyz, blankNormal.xyz);
+	screenSpaceVertexNormal.y = dot(input.ScreenNormalTransform1.xyz, blankNormal.xyz);
+	screenSpaceVertexNormal.z = dot(input.ScreenNormalTransform2.xyz, blankNormal.xyz);
+	screenSpaceVertexNormal = normalize(screenSpaceVertexNormal);
+
+	float3 worldSpaceVertexNormal = normalize(mul(CameraViewInverse[eyeIndex], float4(screenSpaceVertexNormal, 0)));
+
+#		if (!defined(DRAW_IN_WORLDSPACE))
+	if (!input.WorldSpace)
+		normalizedDirLightDirectionWS = normalize(mul(input.World[eyeIndex], float4(normalizedDirLightDirectionWS, 0)));
+#		endif
+#	endif
+
+	float porosity = 1.0;
+
+#	if defined(WATER_BLENDING) || defined(WETNESS_EFFECTS)
+	float2 cellF = ((input.WorldPosition.xy + CameraPosAdjust[0].xy) + (32 * 4096)) / 4096.0;  // always positive
+	int2 cellInt;
+	float2 cellFrac = modf(cellF, cellInt);
+
+	cellF = input.WorldPosition.xy / float2(4096.0, 4096.0);  // remap to cell scale
+	cellF += 2.5;                                             // 5x5 cell grid
+	cellF -= cellFrac;                                        // align to cell borders
+	cellInt = round(cellF);
+
+	uint waterTile = cellInt.x + (cellInt.y * 5u);  // remap xy to 0-24
+	float waterHeight = -2147483648;                // lowest 32-bit integer
+
+	if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
+		waterHeight = lightingData[0].WaterHeight[waterTile];
+#	endif
+
+#	if defined(WETNESS_EFFECTS)
+
+	float wetness = 0.0;
+
+	float wetnessDistToWater = abs(input.WorldPosition.z - waterHeight);
+	float shoreFactor = saturate(1.0 - (wetnessDistToWater / (float)perPassWetnessEffects[0].ShoreRange));
+
+	float shoreFactorAlbedo = shoreFactor;
+	shoreFactorAlbedo *= shoreFactorAlbedo;
+	if (input.WorldPosition.z < waterHeight)
+		shoreFactorAlbedo = 1.0;
+
+	float rainWetness = perPassWetnessEffects[0].Wetness;
+#		if !defined(MODELSPACENORMALS)
+	rainWetness *= saturate(max(worldSpaceNormal.z, worldSpaceVertexNormal.z));
+#		else
+	rainWetness *= saturate(worldSpaceNormal.z);
+#		endif
+
+	wetness = max(shoreFactor * perPassWetnessEffects[0].MaxShoreWetness, rainWetness * perPassWetnessEffects[0].MaxRainWetness);
+
+	float3 puddleCoords = ((input.WorldPosition.xyz + CameraPosAdjust[0]) * 0.5 + 0.5) * 0.01 * perPassWetnessEffects[0].PuddleRadius;
+	float puddle = 0;
+	if (wetness > 0.0) {
+		puddle = FBM(puddleCoords, 3, 1.0) * 0.5 + 0.5;
+		puddle = lerp(0.5, 1.0, puddle);
+		puddle *= wetness;
+#		if !defined(HAIR)
+		puddle *= RGBToLuminance(input.Color.xyz);
+#		endif
+		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow) {
+			if (shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
+				float upAngle = dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz);
+				puddle *= lerp(1.0, shadowColor.x, saturate(upAngle) * perPassWetnessEffects[0].MaxOcclusion);
+			}
+		}
+	}
+
+	float3 wetnessNormal = worldSpaceNormal;
+
+#		if defined(LODLANDNOISE)
+	wetnessNormal.z *= noise;
+	wetnessNormal = normalize(wetnessNormal);
+#		elif defined(LOD_LAND_BLEND)
+	wetnessNormal.z *= lerp(1.0, lodBlendMask, lodBlendMul2);
+	wetnessNormal = normalize(wetnessNormal);
+#		endif
+
+	float3 wetnessSpecular = 0.0;
+
+	float wetnessGlossinessAlbedo = max(puddle, shoreFactorAlbedo);
+	wetnessGlossinessAlbedo *= wetnessGlossinessAlbedo;
+
+	float wetnessGlossinessSpecular = puddle;
+
+	if (input.WorldPosition.z < waterHeight)
+		wetnessGlossinessSpecular *= shoreFactor;
+
+#		if !defined(MODELSPACENORMALS)
+	float flatnessAmount = perPassWetnessEffects[0].PuddleFlatness;
+	flatnessAmount *= smoothstep(perPassWetnessEffects[0].PuddleMaxAngle, 1.0, worldSpaceVertexNormal.z);
+	flatnessAmount *= smoothstep(perPassWetnessEffects[0].PuddleMinWetness, 1.0, wetnessGlossinessSpecular);
+	wetnessNormal = normalize(lerp(worldSpaceNormal, worldSpaceVertexNormal, flatnessAmount));
+#		endif
+
+	float waterRoughnessSpecular = lerp(1.0, perPassWetnessEffects[0].MinRoughness, wetnessGlossinessSpecular);
+
+	wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedDirLightDirectionWS, worldSpaceViewDirection, dirLightColor, waterRoughnessSpecular);
+#	endif
+
+#	if defined(LIGHT_LIMIT_FIX)
+	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
+	float screenNoise = InterleavedGradientNoise(screenUV * perPassLLF[0].BufferDim);
+#	endif
+
+	float roomOcclusion = 0.0;
 
 #	if !defined(LOD)
 	if (numLights > 0) {
@@ -1602,14 +1721,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			}
 
 			float3 normalizedLightDirection = normalize(lightDirection);
+			float3 normalizedLightDirectionWS = normalizedLightDirection;
+#		if (defined(SKINNED) || !defined(MODELSPACENORMALS)) && !defined(DRAW_IN_WORLDSPACE)
+			if (!input.WorldSpace) {
+				normalizedLightDirectionWS = normalize(mul(input.World[eyeIndex], float4(normalizedLightDirection, 0)));
+			}
+#		endif
+
 #		if defined(LIGHT_LIMIT_FIX)
 			if (perPassLLF[0].EnableContactShadows && !FrameParams.z && FrameParams.y && shadowComponent != 0.0) {
-				float3 normalizedLightDirectionWS = normalizedLightDirection;
-#			if (defined(SKINNED) || !defined(MODELSPACENORMALS)) && !defined(DRAW_IN_WORLDSPACE)
-				if (!input.WorldSpace) {
-					normalizedLightDirectionWS = normalize(mul(input.World[eyeIndex], float4(normalizedLightDirection, 0)));
-				}
-#			endif
 				float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirectionWS, true, eyeIndex);
 #			if defined(SKINNED) || !defined(MODELSPACENORMALS)
 				float shadowIntensityFactor = saturate(dot(vertexNormal, normalizedLightDirection.xyz) * PI);
@@ -1662,6 +1782,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif  // defined (SPECULAR) || (defined (SPARKLE) && !defined(SNOW))
 
 			lightsDiffuseColor += lightDiffuseColor * intensityMultiplier.xxx;
+
+			roomOcclusion += intensityMultiplier;
+
+#		if defined(WETNESS_EFFECTS)
+			wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirectionWS, worldSpaceViewDirection, lightColor, waterRoughnessSpecular) * intensityMultiplier;
+#		endif
 		}
 	}
 
@@ -1669,37 +1795,31 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	uint clusterIndex = 0;
 
 #		if defined(LIGHT_LIMIT_FIX)
+#			if (defined(SKINNED) || !defined(MODELSPACENORMALS))
+#				if (!defined(DRAW_IN_WORLDSPACE))
+	if (!input.WorldSpace) {
+		input.TBN0.xyz = mul(tbn, input.World[eyeIndex][0].xyz);
+		input.TBN1.xyz = mul(tbn, input.World[eyeIndex][1].xyz);
+		input.TBN2.xyz = mul(tbn, input.World[eyeIndex][2].xyz);
+		float3x3 tempTbnTr = transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz));
+		tempTbnTr[0] = normalize(tempTbnTr[0]);
+		tempTbnTr[1] = normalize(tempTbnTr[1]);
+		tempTbnTr[2] = normalize(tempTbnTr[2]);
+		tempTbnTr = transpose(tempTbnTr);
+		input.TBN0.xyz = tempTbnTr[0];
+		input.TBN1.xyz = tempTbnTr[1];
+		input.TBN2.xyz = tempTbnTr[2];
+		tbn = float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz);
+	}
+#				endif
+#			endif
+
 	if (perPassLLF[0].EnableGlobalLights && GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		lightCount = min(1024, lightGrid[clusterIndex].lightCount);
 		if (lightCount) {
 			uint lightOffset = lightGrid[clusterIndex].offset;
 
 			float shadowQualityScale = saturate(1.0 - ((float)lightCount / 128.0));
-
-			float3 worldSpaceNormal = normalize(mul(CameraViewInverse[eyeIndex], float4(screenSpaceNormal, 0)));
-			float3 worldSpaceViewDirection = -normalize(input.WorldPosition.xyz);
-
-#			if (defined(SKINNED) || !defined(MODELSPACENORMALS))
-			float3 worldSpaceVertexNormal = vertexNormal;
-#				if (!defined(DRAW_IN_WORLDSPACE))
-			if (!input.WorldSpace) {
-				input.TBN0.xyz = mul(tbn, input.World[eyeIndex][0].xyz);
-				input.TBN1.xyz = mul(tbn, input.World[eyeIndex][1].xyz);
-				input.TBN2.xyz = mul(tbn, input.World[eyeIndex][2].xyz);
-				float3x3 tempTbnTr = transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz));
-				tempTbnTr[0] = normalize(tempTbnTr[0]);
-				tempTbnTr[1] = normalize(tempTbnTr[1]);
-				tempTbnTr[2] = normalize(tempTbnTr[2]);
-				tempTbnTr = transpose(tempTbnTr);
-				input.TBN0.xyz = tempTbnTr[0];
-				input.TBN1.xyz = tempTbnTr[1];
-				input.TBN2.xyz = tempTbnTr[2];
-				tbn = float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz);
-
-				worldSpaceVertexNormal = normalize(mul(input.World[eyeIndex], float4(vertexNormal, 0)));
-			}
-#				endif
-#			endif
 
 			[loop] for (uint i = 0; i < lightCount; i++)
 			{
@@ -1767,16 +1887,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz, lightColor, shininess, uv) * intensityMultiplier.xxx;
 #			endif
 				lightsDiffuseColor += lightDiffuseColor * intensityMultiplier.xxx;
+
+#			if defined(WETNESS_EFFECTS)
+				wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirection, worldSpaceViewDirection, lightColor, waterRoughnessSpecular) * intensityMultiplier;
+#			endif
 			}
 		}
 	}
 #		endif
 #	endif
-
-#	if defined(RAIN_WETNESS_EFFECTS) && !defined(SNOW)
-	lightsDiffuseColor *= perPassRainWetnessEffects[0].RainDiffuseMultiplier;
-	lightsSpecularColor *= perPassRainWetnessEffects[0].RainSpecularMultiplier;
-#	endif  // RAIN_WETNESS_EFFECTS
 
 	diffuseColor += lightsDiffuseColor;
 	specularColor += lightsSpecularColor;
@@ -1790,8 +1909,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		diffuseColor += (charLightMul * charLightColor).xxx;
 	}
 #	endif
+
 #	if defined(EYE)
 	modelNormal.xyz = input.EyeNormal;
+#		if (!defined(DRAW_IN_WORLDSPACE))
+	if (!input.WorldSpace)
+		worldSpaceNormal = normalize(mul(input.World[eyeIndex], float4(modelNormal.xyz, 0)));
+#		endif
 #	endif  // EYE
 
 #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
@@ -1799,7 +1923,32 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float envMask = (EnvmapData.y * (envMaskColor - glossiness) + glossiness) * (EnvmapData.x * MaterialData.x);
 	float viewNormalAngle = dot(modelNormal.xyz, viewDirection);
 	float3 envSamplingPoint = (viewNormalAngle * 2) * modelNormal.xyz - viewDirection;
-	float3 envColor = TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz * envMask.xxx;
+	float3 envColor = TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz * envMask;
+#		if defined(DYNAMIC_CUBEMAPS)
+	if (envMask != 0) {
+		uint2 envSize;
+		TexEnvSampler.GetDimensions(envSize.x, envSize.y);
+		bool dynamicCubemap = envSize.x == 1 && envSize.y == 1;
+		float3 F0;
+		if (dynamicCubemap)
+#			if defined(CPM_AVAILABLE)
+			F0 = complexSpecular;
+#			else
+			F0 = 1.0;
+#			endif
+		else
+			F0 = envColor * 2.0;
+
+		float envRoughness = 1.0 / (20.0 * (envMask + 0.05));
+		envRoughness = saturate(envRoughness);
+
+#			if defined(EYE)
+		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, envRoughness, envMask * 0.1);
+#			else
+		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, envRoughness, F0);
+#			endif
+	}
+#		endif
 #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
 
 	float3 emitColor = EmitColor;
@@ -1812,6 +1961,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 directionalAmbientColor = mul(DirectionalAmbient, modelNormal);
 	diffuseColor = directionalAmbientColor + emitColor.xyz + diffuseColor;
+
+#	if defined(WETNESS_EFFECTS)
+#		if !(defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)) || defined(TREE_ANIM)
+#			if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
+	porosity = lerp(porosity, 0.0, saturate(envMask * 10));
+#			endif
+	float wetnessDarkeningAmount = (porosity * wetnessGlossinessAlbedo * perPassWetnessEffects[0].MaxDarkness) * 0.5;
+	baseColor.xyz = pow(baseColor.xyz, 1 + wetnessDarkeningAmount);
+#		endif
+	wetnessSpecular += GetPBRAmbientSpecular(wetnessNormal, worldSpaceViewDirection, 1.0 - wetnessGlossinessSpecular, 0.02);
+#	endif
 
 	float4 color;
 	color.xyz = diffuseColor * baseColor.xyz;
@@ -1849,20 +2009,31 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 
 #	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
+#		if defined(DYNAMIC_CUBEMAPS)
+	float softenedDiffuseColor = 1.0;
+	if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow) {
+		if (shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
+			float upAngle = dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz);
+			softenedDiffuseColor *= lerp(1.0, shadowColor.x, upAngle * lerp(1.0, saturate(envSamplingPoint.z), 0.5) * 0.5);
+		}
+	}
+
+#			define diffuseColor softenedDiffuseColor
+#		endif
 #		if defined(CPM_AVAILABLE) && defined(ENVMAP)
 	vertexColor += diffuseColor * envColor * complexSpecular;
 #		else
 	vertexColor += diffuseColor * envColor;
-
 #		endif  // defined (CPM_AVAILABLE) && defined(ENVMAP)
-#	endif      // (defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) \
+#		undef diffuseColor
+#	endif  // (defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) \
 				// || defined(EYE))
 
 	color.xyz = lerp(vertexColor.xyz, input.FogParam.xyz, input.FogParam.w);
 	color.xyz = vertexColor.xyz - color.xyz * FogColor.w;
 
 	float3 tmpColor = color.xyz * FrameParams.yyy;
-	color.xyz = tmpColor.xyz + ColourOutputClamp.xxx;
+	color.xyz = tmpColor.xyz + 10000;
 	color.xyz = min(vertexColor.xyz, color.xyz);
 
 #	if defined(CPM_AVAILABLE) && defined(ENVMAP)
@@ -1876,61 +2047,71 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	specularTmp = color.xyz - specularTmp.xyz * FogColor.w;
 
 	tmpColor = specularTmp.xyz * FrameParams.yyy;
-	specularTmp.xyz = tmpColor.xyz + ColourOutputClamp.zzz;
+	specularTmp.xyz = tmpColor.xyz + 10000;
 	color.xyz = min(specularTmp.xyz, color.xyz);
 #	endif  // defined (SPECULAR) || defined(SPARKLE)
+
+#	if defined(WETNESS_EFFECTS)
+	color.xyz = sRGB2Lin(color.xyz);
+	color.xyz += wetnessSpecular * (1.0 - saturate(roomOcclusion * 2));
+	color.xyz = Lin2sRGB(color.xyz);
+#	endif
+
+#	if defined(ENVMAP) && defined(TESTCUBEMAP)
+	color.xyz = specularTexture.SampleLevel(SampEnvSampler, envSamplingPoint, 0).xyz;
+#	endif
 
 #	if defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
 	psout.Albedo.w = 0;
 #	else
 	float alpha = baseColor.w;
+#		if !defined(ADDITIONAL_ALPHA_MASK)
+	alpha *= MaterialData.z;
+#		else
+	uint2 alphaMask = input.Position.xy;
+	alphaMask.x = ((alphaMask.x << 2) & 12);
+	alphaMask.x = (alphaMask.y & 3) | (alphaMask.x & ~3);
+	const float maskValues[16] = {
+		0.003922,
+		0.533333,
+		0.133333,
+		0.666667,
+		0.800000,
+		0.266667,
+		0.933333,
+		0.400000,
+		0.200000,
+		0.733333,
+		0.066667,
+		0.600000,
+		0.996078,
+		0.466667,
+		0.866667,
+		0.333333,
+	};
 
-	if (shaderDescriptors[0].PixelShaderDescriptor & _AdditionalAlphaMask) {
-		alpha *= MaterialData.z;
-	} else {
-		uint2 alphaMask = input.Position.xy;
-		alphaMask.x = ((alphaMask.x << 2) & 12);
-		alphaMask.x = (alphaMask.y & 3) | (alphaMask.x & ~3);
-		const float maskValues[16] = {
-			0.003922,
-			0.533333,
-			0.133333,
-			0.666667,
-			0.800000,
-			0.266667,
-			0.933333,
-			0.400000,
-			0.200000,
-			0.733333,
-			0.066667,
-			0.600000,
-			0.996078,
-			0.466667,
-			0.866667,
-			0.333333,
-		};
-
-		float testTmp = 0;
-		if (MaterialData.z - maskValues[alphaMask.x] < 0)
-			discard;
+	float testTmp = 0;
+	if (MaterialData.z - maskValues[alphaMask.x] < 0) {
+		discard;
 	}
+#		endif  // !defined(ADDITIONAL_ALPHA_MASK)
 #		if !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
 	alpha *= input.Color.w;
 #		endif  // !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
 #		if defined(DO_ALPHA_TEST)
-#			if defined(HAIR)
-	if (shaderDescriptors[0].PixelShaderDescriptor & _DepthWriteDecals) {
-		if (alpha - 0.0156862754 < 0)
-			discard;
-		alpha = saturate(1.05 * alpha);
-	}
-#			endif  // defined(HAIR)
-	if (alpha - AlphaThreshold < 0)
+#			if defined(DEPTH_WRITE_DECALS)
+	if (alpha - 0.0156862754 < 0) {
 		discard;
-#		endif      // defined(DO_ALPHA_TEST)
+	}
+	alpha = saturate(1.05 * alpha);
+#			endif  // DEPTH_WRITE_DECALS
+	if (alpha - AlphaThreshold < 0) {
+		discard;
+	}
+#		endif      // DO_ALPHA_TEST
 	psout.Albedo.w = alpha;
-#	endif          // defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
 
+#	endif
 #	if defined(LIGHT_LIMIT_FIX)
 	if (perPassLLF[0].EnableLightsVisualisation) {
 		if (perPassLLF[0].LightsVisualisationMode == 0) {
@@ -1962,24 +2143,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	tmp *= tmp * (3 + -2 * tmp);
 	psout.ScreenSpaceNormals.w = tmp * SSRParams.w;
 
+#	if defined(WETNESS_EFFECTS)
+	psout.ScreenSpaceNormals.w = max(psout.ScreenSpaceNormals.w, wetnessGlossinessSpecular);
+#	endif
+
 #	if defined(WATER_BLENDING)
 	if (perPassWaterBlending[0].EnableWaterBlendingSSR) {
 		// Compute distance to water surface
-		float distToWater = max(0, input.WorldPosition.z - perPassWaterBlending[0].WaterHeight);
+		float distToWater = max(0, input.WorldPosition.z - waterHeight);
 		float blendFactor = smoothstep(viewPosition.z * 0.001 * 4, viewPosition.z * 0.001 * 16 * perPassWaterBlending[0].SSRBlendRange, distToWater);
-
 		// Reduce SSR amount
-		normal.z *= blendFactor;
-		normal.xyz = normalize(normal.xyz);
 		psout.ScreenSpaceNormals.w *= blendFactor;
 	}
 #	endif  // WATER_BLENDING
 
-#	if !defined(LANDSCAPE) && defined(SPECULAR)
 	// Green reflections fix
 	if (FrameParams.z)
 		psout.ScreenSpaceNormals.w = 0;
-#	endif  //  !defined(LANDSCAPE) && defined(SPECULAR)
 
 	screenSpaceNormal.z = max(0.001, sqrt(8 + -8 * screenSpaceNormal.z));
 	screenSpaceNormal.xy /= screenSpaceNormal.zz;

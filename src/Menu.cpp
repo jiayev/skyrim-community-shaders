@@ -1,4 +1,5 @@
 #include "Menu.h"
+#include "Util.h"
 
 #include <dinput.h>
 #include <imgui_stdlib.h>
@@ -549,6 +550,9 @@ void Menu::DrawSettings()
 					"This has no impact if no settings are changed. ");
 				ImGui::PopTextWrapPos();
 				ImGui::EndTooltip();
+			}
+			if (ImGui::Button("Dump Ini Settings", { -1, 0 })) {
+				Util::DumpSettingsOptions();
 			}
 			if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
 				ImGui::Text(std::format("Shader Compiler : {}", shaderCache.GetShaderStatsString()).c_str());

@@ -1,13 +1,14 @@
 #include "Feature.h"
 
 #include "Features/DistantTreeLighting.h"
+#include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/LightLimitFix.h"
-#include "Features/RainWetnessEffects.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/WaterBlending.h"
+#include "Features/WetnessEffects.h"
 
 void Feature::Load(json&)
 {
@@ -78,15 +79,17 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		ScreenSpaceShadows::GetSingleton(),
 		ExtendedMaterials::GetSingleton(),
 		WaterBlending::GetSingleton(),
-		RainWetnessEffects::GetSingleton(),
-		LightLimitFix::GetSingleton()
+		WetnessEffects::GetSingleton(),
+		LightLimitFix::GetSingleton(),
+		DynamicCubemaps::GetSingleton()
 	};
 
 	static std::vector<Feature*> featuresVR = {
+		DynamicCubemaps::GetSingleton(),
 		GrassLighting::GetSingleton(),
 		GrassCollision::GetSingleton(),
 		ExtendedMaterials::GetSingleton(),
-		RainWetnessEffects::GetSingleton(),
+		WetnessEffects::GetSingleton(),
 		LightLimitFix::GetSingleton()
 	};
 

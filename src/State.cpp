@@ -7,6 +7,7 @@
 #include "ShaderCache.h"
 
 #include "Feature.h"
+#include "Util.h"
 
 void State::Draw()
 {
@@ -16,6 +17,7 @@ void State::Draw()
 		if (type > 0 && type < RE::BSShader::Type::Total) {
 			if (enabledClasses[type - 1]) {
 				ModifyShaderLookup(*currentShader, currentVertexDescriptor, currentPixelDescriptor);
+				UpdateSharedData(currentShader, currentPixelDescriptor);
 
 				auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
@@ -41,15 +43,63 @@ void State::Draw()
 
 void State::DrawDeferred()
 {
+	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+	auto context = renderer->GetRuntimeData().context;
+
+	ID3D11ShaderResourceView* srvs[16];
+	context->PSGetShaderResources(0, 16, srvs);
+
+	ID3D11ShaderResourceView* srvsCS[16];
+	context->CSGetShaderResources(0, 16, srvsCS);
+
+	ID3D11UnorderedAccessView* uavsCS[16];
+	context->CSGetUnorderedAccessViews(0, 16, uavsCS);
+
+	ID3D11UnorderedAccessView* nullUavs[16] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+	context->CSSetUnorderedAccessViews(0, 16, nullUavs, nullptr);
+
+	ID3D11ShaderResourceView* nullSrvs[16] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+	context->PSSetShaderResources(0, 16, nullSrvs);
+	context->CSSetShaderResources(0, 16, nullSrvs);
+
+	ID3D11RenderTargetView* views[8];
+	ID3D11DepthStencilView* dsv;
+	context->OMGetRenderTargets(8, views, &dsv);
+
+	ID3D11RenderTargetView* nullViews[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+	ID3D11DepthStencilView* nullDsv = nullptr;
+	context->OMSetRenderTargets(8, nullViews, nullDsv);
+
 	for (auto* feature : Feature::GetFeatureList()) {
 		if (feature->loaded) {
 			feature->DrawDeferred();
 		}
 	}
+
+	context->PSSetShaderResources(0, 16, srvs);
+	context->CSSetShaderResources(0, 16, srvsCS);
+	context->CSSetUnorderedAccessViews(0, 16, uavsCS, nullptr);
+	context->OMSetRenderTargets(8, views, dsv);
+
+	for (int i = 0; i < 16; i++) {
+		if (srvs[i])
+			srvs[i]->Release();
+		if (srvsCS[i])
+			srvsCS[i]->Release();
+	}
+
+	for (int i = 0; i < 8; i++) {
+		if (views[i])
+			views[i]->Release();
+	}
+
+	if (dsv)
+		dsv->Release();
 }
 
 void State::Reset()
 {
+	lightingDataRequiresUpdate = true;
 	for (auto* feature : Feature::GetFeatureList())
 		if (feature->loaded)
 			feature->Reset();
@@ -271,14 +321,19 @@ void State::SetupResources()
 	sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 	sbDesc.StructureByteStride = sizeof(PerShader);
 	sbDesc.ByteWidth = sizeof(PerShader);
-	perShader = std::make_unique<Buffer>(sbDesc);
+	shaderDataBuffer = std::make_unique<Buffer>(sbDesc);
 
 	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
 	srvDesc.Format = DXGI_FORMAT_UNKNOWN;
 	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
 	srvDesc.Buffer.FirstElement = 0;
 	srvDesc.Buffer.NumElements = 1;
-	perShader->CreateSRV(srvDesc);
+	shaderDataBuffer->CreateSRV(srvDesc);
+
+	sbDesc.StructureByteStride = sizeof(LightingData);
+	sbDesc.ByteWidth = sizeof(LightingData);
+	lightingDataBuffer = std::make_unique<Buffer>(sbDesc);
+	lightingDataBuffer->CreateSRV(srvDesc);
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor)
@@ -292,10 +347,10 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			data.PixelShaderDescriptor = a_pixelDescriptor;
 
 			D3D11_MAPPED_SUBRESOURCE mapped;
-			DX::ThrowIfFailed(context->Map(perShader->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+			DX::ThrowIfFailed(context->Map(shaderDataBuffer->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 			size_t bytes = sizeof(PerShader);
 			memcpy_s(mapped.pData, bytes, &data, bytes);
-			context->Unmap(perShader->resource.get(), 0);
+			context->Unmap(shaderDataBuffer->resource.get(), 0);
 
 			lastVertexDescriptor = a_vertexDescriptor;
 			lastPixelDescriptor = a_pixelDescriptor;
@@ -316,8 +371,7 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 									(uint32_t)SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow |
 									(uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow);
 
-			a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AdditionalAlphaMask |
-								   (uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
+			a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
 								   (uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
 								   (uint32_t)SIE::ShaderCache::LightingShaderFlags::DefShadow |
 								   (uint32_t)SIE::ShaderCache::LightingShaderFlags::CharacterLight);
@@ -358,7 +412,52 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 								   (uint32_t)SIE::ShaderCache::WaterShaderFlags::Interior);
 		}
 
-		ID3D11ShaderResourceView* view = perShader->srv.get();
+		ID3D11ShaderResourceView* view = shaderDataBuffer->srv.get();
 		context->PSSetShaderResources(127, 1, &view);
+	}
+}
+
+void State::UpdateSharedData(const RE::BSShader* a_shader, const uint32_t)
+{
+	if (a_shader->shaderType.get() == RE::BSShader::Type::Lighting) {
+		bool updateBuffer = false;
+
+		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+
+		bool currentReflections = (!REL::Module::IsVR() ?
+										  RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().cubeMapRenderTarget :
+										  RE::BSGraphics::RendererShadowState::GetSingleton()->GetVRRuntimeData().cubeMapRenderTarget) == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
+
+		if (lightingData.Reflections != currentReflections) {
+			updateBuffer = true;
+			lightingDataRequiresUpdate = true;
+		}
+
+		lightingData.Reflections = currentReflections;
+
+		if (lightingDataRequiresUpdate) {
+			lightingDataRequiresUpdate = false;
+			for (int i = -2; i < 3; i++) {
+				for (int k = -2; k < 3; k++) {
+					int waterTile = (i + 2) + ((k + 2) * 5);
+					auto position = !REL::Module::IsVR() ? shadowState->GetRuntimeData().posAdjust.getEye() : shadowState->GetVRRuntimeData().posAdjust.getEye();
+					lightingData.WaterHeight[waterTile] = Util::TryGetWaterHeight((float)i * 4096.0f, (float)k * 4096.0f) - position.z;
+				}
+			}
+			updateBuffer = true;
+		}
+
+		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+
+		if (updateBuffer) {
+			D3D11_MAPPED_SUBRESOURCE mapped;
+			DX::ThrowIfFailed(context->Map(lightingDataBuffer->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+			size_t bytes = sizeof(LightingData);
+			memcpy_s(mapped.pData, bytes, &lightingData, bytes);
+			context->Unmap(lightingDataBuffer->resource.get(), 0);
+		}
+
+		ID3D11ShaderResourceView* view = lightingDataBuffer->srv.get();
+		context->PSSetShaderResources(126, 1, &view);
 	}
 }

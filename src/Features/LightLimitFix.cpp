@@ -408,11 +408,7 @@ void LightLimitFix::Bind()
 
 		{
 			PerPass perPassData{};
-
-			perPassData.CameraData.x = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar;
-			perPassData.CameraData.y = accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
-			perPassData.CameraData.z = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar - accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
-			perPassData.CameraData.w = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar * accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
+			perPassData.CameraData = Util::GetCameraData();
 
 			auto viewport = RE::BSGraphics::State::GetSingleton();
 			if (!screenSpaceShadowsTexture) {

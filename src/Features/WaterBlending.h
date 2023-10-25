@@ -26,11 +26,9 @@ public:
 		float SSRBlendRange = 1;
 	};
 
-	struct alignas(16) PerPass
+	struct PerPass
 	{
-		float waterHeight;
 		Settings settings;
-		float pad[3];
 	};
 
 	Settings settings;
