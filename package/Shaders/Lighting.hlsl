@@ -1616,7 +1616,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float porosity = 1.0;
 
-#	if defined(WATER_BLENDING) || defined(WETNESS_EFFECTS)
+#	if (defined(WATER_BLENDING) && !defined(LOD)) || defined(WETNESS_EFFECTS)
 	float2 cellF = ((input.WorldPosition.xy + CameraPosAdjust[0].xy) + (32 * 4096)) / 4096.0;  // always positive
 	int2 cellInt;
 	float2 cellFrac = modf(cellF, cellInt);
@@ -1637,13 +1637,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float wetness = 0.0;
 
+#		if !defined(LOD)
 	float wetnessDistToWater = abs(input.WorldPosition.z - waterHeight);
 	float shoreFactor = saturate(1.0 - (wetnessDistToWater / (float)perPassWetnessEffects[0].ShoreRange));
-
 	float shoreFactorAlbedo = shoreFactor;
 	shoreFactorAlbedo *= shoreFactorAlbedo;
 	if (input.WorldPosition.z < waterHeight)
 		shoreFactorAlbedo = 1.0;
+#		endif
 
 	float rainWetness = perPassWetnessEffects[0].Wetness;
 #		if !defined(MODELSPACENORMALS)
@@ -1652,7 +1653,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	rainWetness *= lerp(0.2, 1.0, saturate(worldSpaceNormal.z));
 #		endif
 
+#		if !defined(LOD)
 	wetness = max(shoreFactor * perPassWetnessEffects[0].MaxShoreWetness, rainWetness * perPassWetnessEffects[0].MaxRainWetness);
+#		else
+	wetness = rainWetness * perPassWetnessEffects[0].MaxRainWetness;
+#		endif
 
 	float3 puddleCoords = ((input.WorldPosition.xyz + CameraPosAdjust[0]) * 0.5 + 0.5) * 0.01 * perPassWetnessEffects[0].PuddleRadius;
 	float puddle = 0;
@@ -1683,13 +1688,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 wetnessSpecular = 0.0;
 
+#		if !defined(LOD)
 	float wetnessGlossinessAlbedo = max(puddle, shoreFactorAlbedo);
+#		else
+	float wetnessGlossinessAlbedo = puddle;
+#		endif
 	wetnessGlossinessAlbedo *= wetnessGlossinessAlbedo;
 
 	float wetnessGlossinessSpecular = puddle;
 
+#		if !defined(LOD)
 	if (input.WorldPosition.z < waterHeight)
 		wetnessGlossinessSpecular *= shoreFactor;
+#		endif
 
 #		if !defined(MODELSPACENORMALS)
 	float flatnessAmount = perPassWetnessEffects[0].PuddleFlatness;
