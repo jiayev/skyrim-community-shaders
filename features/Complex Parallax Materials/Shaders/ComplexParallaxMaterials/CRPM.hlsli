@@ -34,7 +34,7 @@ float GetMipLevel(float2 coords, Texture2D<float4> tex)
 	// Compute the current mip level  (* 0.5 is effectively computing a square root before )
 	float mipLevel = max(0.5 * log2(minTexCoordDelta), 0);
 
-	return log2(mipLevel);  // Adjust scaling
+	return sqrt(mipLevel);  // Adjust scaling
 }
 
 #if defined(LANDSCAPE)
