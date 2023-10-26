@@ -82,8 +82,8 @@ float DistributionGGX(float NoH, float roughness)
 
 float GeometrySchlickGGXApprox(float cosTheta, float roughness)
 {
-    float k = (roughness + 1) * (roughness + 1) / 8;
-    return cosTheta / (cosTheta * (1 - k) + k);
+	float k = (roughness + 1) * (roughness + 1) / 8;
+	return cosTheta / (cosTheta * (1 - k) + k);
 }
 
 float GeometrySmith(float NoV, float NoL, float roughness)
@@ -103,7 +103,7 @@ float3 GetWetnessSpecular(float3 N, float3 L, float3 V, float3 lightColor, float
 
 	float NDF = DistributionGGX(NoH, roughness);
 	float G = GeometrySmith(NoV, NoL, roughness);
-    float F = 0.02 + (1 - 0.02) * exp2((-5.55473 * LoH - 6.98316) * LoH);
+	float F = 0.02 + (1 - 0.02) * exp2((-5.55473 * LoH - 6.98316) * LoH);
 
 	float numerator = NDF * G * F;
 	float denominator = 4 * NoV * NoL + 0.0001;
