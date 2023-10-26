@@ -9,37 +9,38 @@ Texture2D<float4> ColorTexture : register(t1);
 // this particular fragment in a cubemap.
 float3 GetSamplingVector(uint3 ThreadID, in RWTexture2DArray<float4> OutputTexture)
 {
-	float width = 0.0f;
-	float height = 0.0f;
-	float depth = 0.0f;
-	OutputTexture.GetDimensions(width, height, depth);
+    float width  = 0.0f;
+    float height = 0.0f;
+    float depth  = 0.0f;
+    OutputTexture.GetDimensions(width, height, depth);
 
-	float2 st = ThreadID.xy / float2(width, height);
-	float2 uv = 2.0 * float2(st.x, 1.0 - st.y) - 1.0;
+    float2 st = ThreadID.xy / float2(width, height);
+    float2 uv = 2.0 * float2(st.x, 1.0 - st.y) - 1.0;
 
 	// Select vector based on cubemap face index.
-	float3 result = float3(0.0f, 0.0f, 0.0f);
-	switch (ThreadID.z) {
-	case 0:
-		result = float3(1.0, uv.y, -uv.x);
-		break;
-	case 1:
-		result = float3(-1.0, uv.y, uv.x);
-		break;
-	case 2:
-		result = float3(uv.x, 1.0, -uv.y);
-		break;
-	case 3:
-		result = float3(uv.x, -1.0, uv.y);
-		break;
-	case 4:
-		result = float3(uv.x, uv.y, 1.0);
-		break;
-	case 5:
-		result = float3(-uv.x, uv.y, -1.0);
-		break;
-	}
-	return normalize(result);
+    float3 result = float3(0.0f, 0.0f, 0.0f);
+    switch (ThreadID.z)
+    {
+        case 0:
+            result = float3(1.0, uv.y, -uv.x);
+            break;
+        case 1:
+            result = float3(-1.0, uv.y, uv.x);
+            break;
+        case 2:
+            result = float3(uv.x, 1.0, -uv.y);
+            break;
+        case 3:
+            result = float3(uv.x, -1.0, uv.y);
+            break;
+        case 4:
+            result = float3(uv.x, uv.y, 1.0);
+            break;
+        case 5:
+            result = float3(-uv.x, uv.y, -1.0);
+            break;
+    }
+    return normalize(result);
 }
 
 cbuffer PerFrame : register(b0)
@@ -126,16 +127,17 @@ float2 GetDynamicResolutionAdjustedScreenPosition(float2 screenPosition)
 bool IsSaturated(float value) { return value == saturate(value); }
 bool IsSaturated(float2 value) { return IsSaturated(value.x) && IsSaturated(value.y); }
 
-[numthreads(32, 32, 1)] void main(uint3 ThreadID
-								  : SV_DispatchThreadID) {
-	float3 captureDirection = -GetSamplingVector(ThreadID, DynamicCubemap);
-	float3 viewDirection = WorldToView(captureDirection, false);
+[numthreads(32, 32, 1)]
+void main(uint3 ThreadID : SV_DispatchThreadID)
+{	
+	float3 captureDirection  = -GetSamplingVector(ThreadID, DynamicCubemap);
+	float3 viewDirection  = WorldToView(captureDirection, false);
 	float2 uv = ViewToUV(viewDirection, false);
 
 	if (Reset)
 		DynamicCubemap[ThreadID] = 0.0;
 
-	if (IsSaturated(uv) && viewDirection.z < 0.0) {  // Check that the view direction exists in screenspace and that it is in front of the camera
+    if (IsSaturated(uv) && viewDirection.z < 0.0) { // Check that the view direction exists in screenspace and that it is in front of the camera
 		uv = GetDynamicResolutionAdjustedScreenPosition(uv);
 		uv = ConvertToStereoUV(uv, 0);
 
@@ -145,13 +147,9 @@ bool IsSaturated(float2 value) { return IsSaturated(value.x) && IsSaturated(valu
 		float depth = DepthTexture[round(uv * textureDims)];
 		depth = GetScreenDepth(depth);
 
-		if (depth > 16.5) {  // First person
-			float3 color = ColorTexture[round(uv * textureDims)];
-			DynamicCubemap[ThreadID] = float4(pow(color, 2.2), 1.0);
+		if (depth > 16.5) { // First person
+       		float3 color = ColorTexture[round(uv * textureDims)];
+       	 	DynamicCubemap[ThreadID] = float4(pow(color, 2.2), 1.0); 
 		}
-	} else {
-		float cameraDistance = distance(CameraPosAdjust[0].xyz, CameraPreviousPosAdjust[0].xyz);
-		if (cameraDistance > 0.0)
-			DynamicCubemap[ThreadID] *= lerp(1.0, saturate(1.0 / cameraDistance), 0.025);
-	}
+    }
 }
