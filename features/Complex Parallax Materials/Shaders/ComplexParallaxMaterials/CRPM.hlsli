@@ -34,7 +34,7 @@ float GetMipLevel(float2 coords, Texture2D<float4> tex)
 	// Compute the current mip level  (* 0.5 is effectively computing a square root before )
 	float mipLevel = max(0.5 * log2(minTexCoordDelta), 0);
 
-	return mipLevel;
+	return log2(mipLevel); // Adjust scaling
 }
 
 #if defined(LANDSCAPE)
@@ -262,7 +262,7 @@ float GetParallaxSoftShadowMultiplier(float2 coords, float mipLevel, float3 L, f
 		const float h = 1.0 - tex.SampleLevel(texSampler, coords + rayDir * 0.5, mipLevel)[channel];
 
 		// Compare the difference between the two heights to see if the height blocks it
-		const float occlusion = 1.0 - saturate((h0 - h) * 16.0);
+		const float occlusion = 1.0 - saturate((h0 - h) * 10.0);
 
 		// Fade out with quality
 		return lerp(1, occlusion, quality);
