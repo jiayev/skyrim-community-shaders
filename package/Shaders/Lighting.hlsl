@@ -1964,12 +1964,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 		float envRoughness = 1.0 / (20.0 * (envMask + 0.05));
 		envRoughness = saturate(envRoughness);
-
-#			if defined(EYE)
-		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, envRoughness, envMask * 0.1);
-#			else
 		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, envRoughness, F0);
-#			endif
 	}
 #		endif
 #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
