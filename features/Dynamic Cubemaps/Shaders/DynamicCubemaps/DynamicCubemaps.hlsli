@@ -2,24 +2,6 @@ TextureCube<float4> specularTexture : register(t64);
 Texture2D<float4> specularBRDF_LUT : register(t65);
 
 #define LinearSampler SampShadowMaskSampler
-// Separable SSS Reflectance Pixel Shader
-float3 sRGB2Lin2(float3 Color)
-{
-#if defined(ACES)
-	return mul(g_sRGBToACEScg, Color);
-#else
-	return Color > 0.04045 ? pow(Color / 1.055 + 0.055 / 1.055, 2.4) : Color / 12.92;
-#endif
-}
-
-float3 Lin2sRGB2(float3 Color)
-{
-#if defined(ACES)
-	return mul(g_ACEScgToSRGB, Color);
-#else
-	return Color > 0.0031308 ? 1.055 * pow(Color, 1.0 / 2.4) - 0.055 : 12.92 * Color;
-#endif
-}
 
 float3 GetDynamicCubemap(float3 N, float3 V, float roughness, float3 F0)
 {
