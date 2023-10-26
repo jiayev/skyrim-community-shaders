@@ -210,7 +210,10 @@ void DynamicCubemaps::UpdateCubemapCapture()
 
 void DynamicCubemaps::DrawDeferred()
 {
-	if (!activeReflections && updateCapture)
+	auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
+	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
+
+	if (!activeReflections && updateCapture && shadowSceneNode == accumulator->GetRuntimeData().activeShadowSceneNode)
 		UpdateCubemapCapture();
 }
 
