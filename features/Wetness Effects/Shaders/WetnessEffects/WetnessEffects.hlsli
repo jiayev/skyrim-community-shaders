@@ -42,7 +42,7 @@ float3 GetPBRAmbientSpecular(float3 N, float3 V, float roughness, float3 F0)
 	if (!lightingData[0].Reflections)
 #	endif
 	{
-		float level = roughness * 4.0;
+		float level = roughness * 9.0;
 #	if defined(GRASS)
 		level++;
 #	endif
@@ -67,79 +67,59 @@ float3 GetPBRAmbientSpecular(float3 N, float3 V, float roughness, float3 F0)
 	return specularIrradiance * (S * specularBRDF.x + specularBRDF.y);
 }
 
-float3 FresnelSchlick(float cosTheta, float3 F0)
-{
-	return F0 + (1 - F0) * pow(saturate(1 - cosTheta), 5);
-}
-
-float DistributionGGX(float NdotH, float roughness)
+float DistributionGGX(float NoH, float roughness)
 {
 	float a = roughness * roughness;
 	float a2 = a * a;
-	float NdotH2 = NdotH * NdotH;
+	float NoH2 = NoH * NoH;
 
 	float num = a2;
-	float denom = (NdotH2 * (a2 - 1) + 1);
+	float denom = (NoH2 * (a2 - 1) + 1);
 	denom = PI * denom * denom;
 
 	return num / denom;
 }
 
-float GeometrySchlickGGX(float cosTheta, float roughness)
+float GeometrySchlickGGXApprox(float cosTheta, float roughness)
 {
-	float r = (roughness + 1);
-	float k = (r * r) / 8;
-
-	float num = cosTheta;
-	float denom = cosTheta * (1 - k) + k;
-
-	return num / denom;
+    float k = (roughness + 1) * (roughness + 1) / 8;
+    return cosTheta / (cosTheta * (1 - k) + k);
 }
 
-float GeometrySmith(float NdotV, float NdotL, float roughness)
+float GeometrySmith(float NoV, float NoL, float roughness)
 {
-	float ggxV = GeometrySchlickGGX(NdotV, roughness);
-	float ggxL = GeometrySchlickGGX(NdotL, roughness);
-
+	float ggxV = GeometrySchlickGGXApprox(NoV, roughness);
+	float ggxL = GeometrySchlickGGXApprox(NoL, roughness);
 	return ggxV * ggxL;
 }
 
 float3 GetWetnessSpecular(float3 N, float3 L, float3 V, float3 lightColor, float roughness)
 {
 	float3 H = normalize(V + L);
-	float NdotL = saturate(dot(N, L));
-	float NdotV = saturate(dot(N, V));
-	float HdotV = saturate(dot(H, V));
-	float NdotH = saturate(dot(N, H));
+	float NoL = saturate(dot(N, L));
+	float NoV = saturate(dot(N, V));
+	float NoH = saturate(dot(N, H));
+	float LoH = saturate(dot(L, H));
 
-	float NDF = DistributionGGX(NdotH, roughness);
-	float G = GeometrySmith(NdotV, NdotL, roughness);
-	float3 F = FresnelSchlick(HdotV, 0.02);
+	float NDF = DistributionGGX(NoH, roughness);
+	float G = GeometrySmith(NoV, NoL, roughness);
+    float F = 0.02 + (1 - 0.02) * exp2((-5.55473 * LoH - 6.98316) * LoH);
 
-	float3 numerator = NDF * G * F;
-	float denominator = 4 * NdotV * NdotL + 0.0001;
-	float3 specular = numerator / denominator;
+	float numerator = NDF * G * F;
+	float denominator = 4 * NoV * NoL + 0.0001;
+	float specular = numerator / denominator;
 
-	return specular * NdotL * pow(lightColor, 2.2);
+	return specular * NoL * pow(lightColor, 2.2);
 }
 
-// Separable SSS Reflectance Pixel Shader
-float3 sRGB2Lin(float3 Color)
+float3 sRGB2Lin(float3 color)
 {
-#if defined(ACES)
-	return mul(g_sRGBToACEScg, Color);
-#else
-	return Color > 0.04045 ? pow(Color / 1.055 + 0.055 / 1.055, 2.4) : Color / 12.92;
-#endif
+	return pow(color, 2.2);
 }
 
-float3 Lin2sRGB(float3 Color)
+float3 Lin2sRGB(float3 color)
 {
-#if defined(ACES)
-	return mul(g_ACEScgToSRGB, Color);
-#else
-	return Color > 0.0031308 ? 1.055 * pow(Color, 1.0 / 2.4) - 0.055 : 12.92 * Color;
-#endif
+	return pow(color, 1.0 / 2.2);
 }
 
 // https://github.com/BelmuTM/Noble/blob/master/LICENSE.txt

@@ -1647,9 +1647,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float rainWetness = perPassWetnessEffects[0].Wetness;
 #		if !defined(MODELSPACENORMALS)
-	rainWetness *= saturate(max(worldSpaceNormal.z, worldSpaceVertexNormal.z));
+	rainWetness *= lerp(0.2, 1.0, saturate(max(worldSpaceNormal.z, worldSpaceVertexNormal.z)));
 #		else
-	rainWetness *= saturate(worldSpaceNormal.z);
+	rainWetness *= lerp(0.2, 1.0, saturate(worldSpaceNormal.z));
 #		endif
 
 	wetness = max(shoreFactor * perPassWetnessEffects[0].MaxShoreWetness, rainWetness * perPassWetnessEffects[0].MaxRainWetness);
@@ -1658,7 +1658,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float puddle = 0;
 	if (wetness > 0.0) {
 		puddle = FBM(puddleCoords, 3, 1.0) * 0.5 + 0.5;
-		puddle = lerp(0.5, 1.0, puddle);
+		puddle = lerp(0.2, 1.0, puddle);
 		puddle *= wetness;
 #		if !defined(HAIR)
 		puddle *= RGBToLuminance(input.Color.xyz);
@@ -1698,7 +1698,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	wetnessNormal = normalize(lerp(worldSpaceNormal, worldSpaceVertexNormal, flatnessAmount));
 #		endif
 
-	float waterRoughnessSpecular = lerp(1.0, perPassWetnessEffects[0].MinRoughness, wetnessGlossinessSpecular);
+	float waterRoughnessSpecular = lerp(1.0, perPassWetnessEffects[0].MinRoughness, saturate(wetnessGlossinessSpecular * (1.0 / perPassWetnessEffects[0].PuddleMinWetness)));
 
 	wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedDirLightDirectionWS, worldSpaceViewDirection, dirLightColor, waterRoughnessSpecular);
 #	endif
@@ -1809,7 +1809,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			roomOcclusion += intensityMultiplier;
 
 #		if defined(WETNESS_EFFECTS)
-			wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirectionWS, worldSpaceViewDirection, lightColor, waterRoughnessSpecular) * intensityMultiplier;
+			wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirectionWS, worldSpaceViewDirection, lightColor * intensityMultiplier, waterRoughnessSpecular);
 #		endif
 		}
 	}
@@ -1912,7 +1912,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				lightsDiffuseColor += lightDiffuseColor * intensityMultiplier.xxx;
 
 #			if defined(WETNESS_EFFECTS)
-				wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirection, worldSpaceViewDirection, lightColor, waterRoughnessSpecular) * intensityMultiplier;
+				wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirection, worldSpaceViewDirection, lightColor * intensityMultiplier, waterRoughnessSpecular);
 #			endif
 			}
 		}
@@ -2037,7 +2037,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow) {
 		if (shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 			float upAngle = dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz);
-			softenedDiffuseColor *= lerp(1.0, shadowColor.x, upAngle * lerp(1.0, saturate(envSamplingPoint.z), 0.5) * 0.5);
+			softenedDiffuseColor *= lerp(1.0, shadowColor.x, upAngle * 0.5);
 		}
 	}
 
