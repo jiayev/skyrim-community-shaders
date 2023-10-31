@@ -1965,7 +1965,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			envColor = specularTexture.SampleLevel(SampEnvMaskSampler, envSamplingPoint, 1).rgb * envMask;
 #			endif
 		else
-			envColor *= specularTexture.SampleLevel(SampEnvMaskSampler, envSamplingPoint, 1).rgb * 2.0;;
+			envColor *= specularTexture.SampleLevel(SampEnvMaskSampler, envSamplingPoint, 1).rgb * 2.0;
+		;
 	}
 #		endif
 #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)

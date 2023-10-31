@@ -34,35 +34,35 @@ For more information, please refer to <http://unlicense.org/>
 
 float G1V(float dotNV, float k)
 {
-	return 1.0f/(dotNV*(1.0f-k)+k);
+	return 1.0f / (dotNV * (1.0f - k) + k);
 }
 
 float LightingFuncGGX_REF(float3 N, float3 V, float3 L, float roughness, float F0)
 {
-	float alpha = roughness*roughness;
+	float alpha = roughness * roughness;
 
-	float3 H = normalize(V+L);
+	float3 H = normalize(V + L);
 
-	float dotNL = saturate(dot(N,L));
-	float dotNV = saturate(dot(N,V));
-	float dotNH = saturate(dot(N,H));
-	float dotLH = saturate(dot(L,H));
+	float dotNL = saturate(dot(N, L));
+	float dotNV = saturate(dot(N, V));
+	float dotNH = saturate(dot(N, H));
+	float dotLH = saturate(dot(L, H));
 
 	float F, D, vis;
 
 	// D
-	float alphaSqr = alpha*alpha;
+	float alphaSqr = alpha * alpha;
 	float pi = 3.14159f;
-	float denom = dotNH * dotNH *(alphaSqr-1.0) + 1.0f;
-	D = alphaSqr/(pi * denom * denom);
+	float denom = dotNH * dotNH * (alphaSqr - 1.0) + 1.0f;
+	D = alphaSqr / (pi * denom * denom);
 
 	// F
-	float dotLH5 = pow(1.0f-dotLH,5);
-	F = F0 + (1.0-F0)*(dotLH5);
+	float dotLH5 = pow(1.0f - dotLH, 5);
+	F = F0 + (1.0 - F0) * (dotLH5);
 
 	// V
-	float k = alpha/2.0f;
-	vis = G1V(dotNL,k)*G1V(dotNV,k);
+	float k = alpha / 2.0f;
+	vis = G1V(dotNL, k) * G1V(dotNV, k);
 
 	float specular = dotNL * D * F * vis;
 	return specular;
@@ -70,63 +70,62 @@ float LightingFuncGGX_REF(float3 N, float3 V, float3 L, float roughness, float F
 
 float LightingFuncGGX_OPT1(float3 N, float3 V, float3 L, float roughness, float F0)
 {
-	float alpha = roughness*roughness;
+	float alpha = roughness * roughness;
 
-	float3 H = normalize(V+L);
+	float3 H = normalize(V + L);
 
-	float dotNL = saturate(dot(N,L));
-	float dotLH = saturate(dot(L,H));
-	float dotNH = saturate(dot(N,H));
+	float dotNL = saturate(dot(N, L));
+	float dotLH = saturate(dot(L, H));
+	float dotNH = saturate(dot(N, H));
 
 	float F, D, vis;
 
 	// D
-	float alphaSqr = alpha*alpha;
+	float alphaSqr = alpha * alpha;
 	float pi = 3.14159f;
-	float denom = dotNH * dotNH *(alphaSqr-1.0) + 1.0f;
-	D = alphaSqr/(pi * denom * denom);
+	float denom = dotNH * dotNH * (alphaSqr - 1.0) + 1.0f;
+	D = alphaSqr / (pi * denom * denom);
 
 	// F
-	float dotLH5 = pow(1.0f-dotLH,5);
-	F = F0 + (1.0-F0)*(dotLH5);
+	float dotLH5 = pow(1.0f - dotLH, 5);
+	F = F0 + (1.0 - F0) * (dotLH5);
 
 	// V
-	float k = alpha/2.0f;
-	vis = G1V(dotLH,k)*G1V(dotLH,k);
+	float k = alpha / 2.0f;
+	vis = G1V(dotLH, k) * G1V(dotLH, k);
 
 	float specular = dotNL * D * F * vis;
 	return specular;
 }
 
-
 float LightingFuncGGX_OPT2(float3 N, float3 V, float3 L, float roughness, float F0)
 {
-	float alpha = roughness*roughness;
+	float alpha = roughness * roughness;
 
-	float3 H = normalize(V+L);
+	float3 H = normalize(V + L);
 
-	float dotNL = saturate(dot(N,L));
+	float dotNL = saturate(dot(N, L));
 
-	float dotLH = saturate(dot(L,H));
-	float dotNH = saturate(dot(N,H));
+	float dotLH = saturate(dot(L, H));
+	float dotNH = saturate(dot(N, H));
 
 	float F, D, vis;
 
 	// D
-	float alphaSqr = alpha*alpha;
+	float alphaSqr = alpha * alpha;
 	float pi = 3.14159f;
-	float denom = dotNH * dotNH *(alphaSqr-1.0) + 1.0f;
-	D = alphaSqr/(pi * denom * denom);
+	float denom = dotNH * dotNH * (alphaSqr - 1.0) + 1.0f;
+	D = alphaSqr / (pi * denom * denom);
 
 	// F
-	float dotLH5 = pow(1.0f-dotLH,5);
-	F = F0 + (1.0-F0)*(dotLH5);
+	float dotLH5 = pow(1.0f - dotLH, 5);
+	F = F0 + (1.0 - F0) * (dotLH5);
 
 	// V
-	float k = alpha/2.0f;
-	float k2 = k*k;
-	float invK2 = 1.0f-k2;
-	vis = rcp(dotLH*dotLH*invK2 + k2);
+	float k = alpha / 2.0f;
+	float k2 = k * k;
+	float invK2 = 1.0f - k2;
+	vis = rcp(dotLH * dotLH * invK2 + k2);
 
 	float specular = dotNL * D * F * vis;
 	return specular;
@@ -134,47 +133,47 @@ float LightingFuncGGX_OPT2(float3 N, float3 V, float3 L, float roughness, float 
 
 float2 LightingFuncGGX_FV(float dotLH, float roughness)
 {
-	float alpha = roughness*roughness;
+	float alpha = roughness * roughness;
 
 	// F
 	float F_a, F_b;
-	float dotLH5 = pow(1.0f-dotLH,5);
+	float dotLH5 = pow(1.0f - dotLH, 5);
 	F_a = 1.0f;
 	F_b = dotLH5;
 
 	// V
 	float vis;
-	float k = alpha/2.0f;
-	float k2 = k*k;
-	float invK2 = 1.0f-k2;
-	vis = rcp(dotLH*dotLH*invK2 + k2);
+	float k = alpha / 2.0f;
+	float k2 = k * k;
+	float invK2 = 1.0f - k2;
+	vis = rcp(dotLH * dotLH * invK2 + k2);
 
-	return float2(F_a*vis,F_b*vis);
+	return float2(F_a * vis, F_b * vis);
 }
 
 float LightingFuncGGX_D(float dotNH, float roughness)
 {
-	float alpha = roughness*roughness;
-	float alphaSqr = alpha*alpha;
+	float alpha = roughness * roughness;
+	float alphaSqr = alpha * alpha;
 	float pi = 3.14159f;
-	float denom = dotNH * dotNH *(alphaSqr-1.0) + 1.0f;
+	float denom = dotNH * dotNH * (alphaSqr - 1.0) + 1.0f;
 
-	float D = alphaSqr/(pi * denom * denom);
+	float D = alphaSqr / (pi * denom * denom);
 	return D;
 }
 
 float LightingFuncGGX_OPT3(float3 N, float3 V, float3 L, float roughness, float F0)
 {
-	float3 H = normalize(V+L);
+	float3 H = normalize(V + L);
 
-	float dotNL = saturate(dot(N,L));
-	float dotLH = saturate(dot(L,H));
-	float dotNH = saturate(dot(N,H));
+	float dotNL = saturate(dot(N, L));
+	float dotLH = saturate(dot(L, H));
+	float dotNH = saturate(dot(N, H));
 
-	float D = LightingFuncGGX_D(dotNH,roughness);
-	float2 FV_helper = LightingFuncGGX_FV(dotLH,roughness);
+	float D = LightingFuncGGX_D(dotNH, roughness);
+	float2 FV_helper = LightingFuncGGX_FV(dotLH, roughness);
 
-	float FV = F0*FV_helper.x + FV_helper.y;
+	float FV = F0 * FV_helper.x + FV_helper.y;
 	float specular = dotNL * D * FV;
 
 	return specular;
