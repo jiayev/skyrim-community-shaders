@@ -1617,7 +1617,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float porosity = 1.0;
 
 #	if (defined(WATER_BLENDING) && !defined(LOD)) || defined(WETNESS_EFFECTS)
-	float2 cellF = ((input.WorldPosition.xy + CameraPosAdjust[0].xy) + (32 * 4096)) / 4096.0;  // always positive
+	float2 cellF = (((input.WorldPosition.xy + CameraPosAdjust[0].xy)) / 4096.0) + 64;  // always positive
 	int2 cellInt;
 	float2 cellFrac = modf(cellF, cellInt);
 
@@ -1634,7 +1634,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 #	if defined(WETNESS_EFFECTS)
-
 	float wetness = 0.0;
 
 #		if !defined(LOD)
@@ -1665,14 +1664,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		puddle = FBM(puddleCoords, 3, 1.0) * 0.5 + 0.5;
 		puddle = lerp(0.2, 1.0, puddle);
 		puddle *= wetness;
-#		if !defined(HAIR)
-		puddle *= RGBToLuminance(input.Color.xyz);
-#		endif
 		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow) {
 			if (shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 				float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
 				puddle *= lerp(1.0, shadowColor.x, upAngle * perPassWetnessEffects[0].MaxOcclusion);
-
 			}
 		}
 	}
@@ -1711,8 +1706,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 	float waterRoughnessSpecular = lerp(1.0, perPassWetnessEffects[0].MinRoughness, saturate(wetnessGlossinessSpecular * (1.0 / perPassWetnessEffects[0].PuddleMinWetness)));
-
-	wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedDirLightDirectionWS, worldSpaceViewDirection, dirLightColor, waterRoughnessSpecular);
+	waterRoughnessSpecular = NormalFiltering(waterRoughnessSpecular, wetnessNormal);
 #	endif
 
 #	if defined(LIGHT_LIMIT_FIX)
@@ -1817,7 +1811,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			lightsDiffuseColor += lightDiffuseColor;
 
 #		if defined(WETNESS_EFFECTS)
-			wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirectionWS, worldSpaceViewDirection, lightColor, waterRoughnessSpecular);
+			if (waterRoughnessSpecular < 1.0)
+				wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirectionWS, worldSpaceViewDirection, lightColor, waterRoughnessSpecular);
 #		endif
 		}
 	}
@@ -1865,10 +1860,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 				if (!FrameParams.z && FrameParams.y) {
 					float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
-					float contactShadow = 1.0;
 					if (light.firstPersonShadow || perPassLLF[0].EnableContactShadows) {
 						float radius = light.firstPersonShadow ? light.radius : 0.0;
-						contactShadow = ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, radius, eyeIndex);
+						float contactShadow = ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, radius, eyeIndex);
 						if (light.firstPersonShadow) {
 							lightColor *= contactShadow;
 						} else {
@@ -1920,6 +1914,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				lightsDiffuseColor += lightDiffuseColor;
 
 #			if defined(WETNESS_EFFECTS)
+			if (waterRoughnessSpecular < 1.0)
 				wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirection, worldSpaceViewDirection, lightColor, waterRoughnessSpecular);
 #			endif
 			}
@@ -1983,12 +1978,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(WETNESS_EFFECTS)
 #		if !(defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)) || defined(TREE_ANIM)
 #			if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
-	porosity = lerp(porosity, 0.0, saturate(envMask * 10));
+	porosity = lerp(porosity, 0.0, saturate(sqrt(envMask)));
 #			endif
-	float wetnessDarkeningAmount = (porosity * wetnessGlossinessAlbedo * perPassWetnessEffects[0].MaxDarkness) * 0.5;
+	float wetnessDarkeningAmount = (porosity * wetnessGlossinessAlbedo * perPassWetnessEffects[0].MaxDarkness);
 	baseColor.xyz = pow(baseColor.xyz, 1 + wetnessDarkeningAmount);
 #		endif
-	wetnessSpecular += GetWetnessAmbientSpecular(wetnessNormal, worldSpaceViewDirection, 1.0 - wetnessGlossinessSpecular, 0.02);
+	if (waterRoughnessSpecular < 1.0)
+		wetnessSpecular += GetWetnessAmbientSpecular(wetnessNormal, worldSpaceViewDirection, 1.0 - wetnessGlossinessSpecular, 0.02);
 #	endif
 
 	float4 color;
@@ -2033,10 +2029,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			if (shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 				float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
 				wetnessVisibility *= lerp(1.0, shadowColor.x, upAngle * 0.5);
-
 			}
 		}
-
 
 #			define diffuseColor wetnessVisibility
 #		endif
