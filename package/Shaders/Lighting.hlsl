@@ -2024,13 +2024,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
 #		if defined(DYNAMIC_CUBEMAPS)
-		float wetnessVisibility  = 1;
-		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow) {
-			if (shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
-				float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
-				wetnessVisibility *= lerp(1.0, shadowColor.x, upAngle * 0.5);
-			}
+	float wetnessVisibility = 1;
+	if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow) {
+		if (shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
+			float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
+			wetnessVisibility *= lerp(1.0, shadowColor.x, upAngle * 0.5);
 		}
+	}
 
 #			define diffuseColor wetnessVisibility
 #		endif
