@@ -1633,13 +1633,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		waterHeight = lightingData[0].WaterHeight[waterTile];
 #	endif
 
-	float upAngle = 0.0;
-	if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow) {
-		if (shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
-			upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
-		}
-	}
-
 #	if defined(WETNESS_EFFECTS)
 
 	float wetness = 0.0;
@@ -1675,7 +1668,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if !defined(HAIR)
 		puddle *= RGBToLuminance(input.Color.xyz);
 #		endif
-		puddle *= lerp(1.0, shadowColor.x, upAngle * perPassWetnessEffects[0].MaxOcclusion);
+		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow) {
+			if (shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
+				float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
+				puddle *= lerp(1.0, shadowColor.x, upAngle * perPassWetnessEffects[0].MaxOcclusion);
+
+			}
+		}
 	}
 
 	float3 wetnessNormal = worldSpaceNormal;
@@ -1965,7 +1964,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			envColor = specularTexture.SampleLevel(SampEnvMaskSampler, envSamplingPoint, 1).rgb * envMask;
 #			endif
 		else
-			envColor *= specularTexture.SampleLevel(SampEnvMaskSampler, envSamplingPoint, 1).rgb * 2.0;;
+			envColor *= specularTexture.SampleLevel(SampEnvMaskSampler, envSamplingPoint, 1).rgb * 2.0;
 	}
 #		endif
 #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
@@ -2029,7 +2028,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
 #		if defined(DYNAMIC_CUBEMAPS)
-	float wetnessVisibility = lerp(1.0, shadowColor.x, upAngle * 0.5);
+		float wetnessVisibility  = 1;
+		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow) {
+			if (shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
+				float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
+				wetnessVisibility *= lerp(1.0, shadowColor.x, upAngle * 0.5);
+
+			}
+		}
+
 
 #			define diffuseColor wetnessVisibility
 #		endif
