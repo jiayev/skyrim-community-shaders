@@ -1,3 +1,5 @@
+#include "WetnessEffects/optimized-ggx.hlsl"
+
 struct PerPassWetnessEffects
 {
 	float Wetness;
@@ -30,7 +32,7 @@ float2 EnvBRDFApprox(float3 F0, float Roughness, float NoV)
 	return AB;
 }
 
-float3 GetPBRAmbientSpecular(float3 N, float3 V, float roughness, float3 F0)
+float3 GetWetnessAmbientSpecular(float3 N, float3 V, float roughness, float3 F0)
 {
 	float3 R = reflect(-V, N);
 	float NoV = saturate(dot(N, V));
@@ -50,7 +52,7 @@ float3 GetPBRAmbientSpecular(float3 N, float3 V, float roughness, float3 F0)
 	}
 #endif
 
-	specularIrradiance = max(0.01, pow(specularIrradiance, 2.2));
+	specularIrradiance = pow(specularIrradiance, 2.2);
 
 	// Split-sum approximation factors for Cook-Torrance specular BRDF.
 #if defined(DYNAMIC_CUBEMAPS)
@@ -67,49 +69,9 @@ float3 GetPBRAmbientSpecular(float3 N, float3 V, float roughness, float3 F0)
 	return specularIrradiance * (S * specularBRDF.x + specularBRDF.y);
 }
 
-float DistributionGGX(float NoH, float roughness)
-{
-	float a = roughness * roughness;
-	float a2 = a * a;
-	float NoH2 = NoH * NoH;
-
-	float num = a2;
-	float denom = (NoH2 * (a2 - 1) + 1);
-	denom = PI * denom * denom;
-
-	return num / denom;
-}
-
-float GeometrySchlickGGXApprox(float cosTheta, float roughness)
-{
-	float k = (roughness + 1) * (roughness + 1) / 8;
-	return cosTheta / (cosTheta * (1 - k) + k);
-}
-
-float GeometrySmith(float NoV, float NoL, float roughness)
-{
-	float ggxV = GeometrySchlickGGXApprox(NoV, roughness);
-	float ggxL = GeometrySchlickGGXApprox(NoL, roughness);
-	return ggxV * ggxL;
-}
-
 float3 GetWetnessSpecular(float3 N, float3 L, float3 V, float3 lightColor, float roughness)
 {
-	float3 H = normalize(V + L);
-	float NoL = saturate(dot(N, L));
-	float NoV = saturate(dot(N, V));
-	float NoH = saturate(dot(N, H));
-	float LoH = saturate(dot(L, H));
-
-	float NDF = DistributionGGX(NoH, roughness);
-	float G = GeometrySmith(NoV, NoL, roughness);
-	float F = 0.02 + (1 - 0.02) * exp2((-5.55473 * LoH - 6.98316) * LoH);
-
-	float numerator = NDF * G * F;
-	float denominator = 4 * NoV * NoL + 0.0001;
-	float specular = numerator / denominator;
-
-	return specular * NoL * pow(lightColor, 2.2);
+	return LightingFuncGGX_OPT3(N, V, L, roughness, 0.02) * pow(lightColor, 2.2);
 }
 
 float3 sRGB2Lin(float3 color)
