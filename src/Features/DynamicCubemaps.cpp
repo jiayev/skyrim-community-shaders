@@ -348,16 +348,6 @@ void DynamicCubemaps::SetupResources()
 		srvDesc.Texture2D.MipLevels = 1;
 		spBRDFLUT->CreateSRV(srvDesc);
 
-		D3D11_SAMPLER_DESC samplerDesc = {};
-		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.MaxAnisotropy = 1;
-		samplerDesc.MinLOD = 0;
-		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &spBRDFSampler));
-
 		{
 			// Compute Cook-Torrance BRDF 2D LUT for split-sum approximation.
 			auto uav = spBRDFLUT->uav.get();

@@ -40,7 +40,6 @@ public:
 
 	ID3D11ComputeShader* spBRDFProgram = nullptr;
 	Texture2D* spBRDFLUT = nullptr;
-	ID3D11SamplerState* spBRDFSampler = nullptr;
 
 	// Reflection capture
 
