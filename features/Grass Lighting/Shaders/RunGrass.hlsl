@@ -518,7 +518,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	if (waterRoughnessSpecular < 1.0) {
 		waterSpecular += GetWetnessSpecular(worldNormal, DirLightDirection, viewDirection, dirLightColor, waterRoughnessSpecular);
-		waterSpecular += GetPBRAmbientSpecular(worldNormal, viewDirection, 1.0 - waterGlossinessSpecular, 0.02);
+		waterSpecular += GetWetnessAmbientSpecular(worldNormal, viewDirection, 1.0 - waterGlossinessSpecular, 0.02);
 	}
 #		endif
 
