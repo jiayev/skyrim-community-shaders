@@ -2,10 +2,6 @@
 #include "Common/MotionBlur.hlsl"
 #include "Common/Permutation.hlsl"
 
-#if defined(VERTEX_ALPHA_DEPTH)
-#	define VC
-#endif
-
 struct VS_INPUT
 {
 #if defined(SPECULAR) || defined(UNDERWATER) || defined(STENCIL) || defined(SIMPLE)
@@ -291,8 +287,7 @@ float3 GetFlowmapNormal(PS_INPUT input, float2 uvShift, float multiplier, float 
 	float2 flowSinCos = flowmapColor.xy * 2 - 1;
 	float2x2 flowRotationMatrix = float2x2(flowSinCos.x, flowSinCos.y, -flowSinCos.y, flowSinCos.x);
 	float2 rotatedFlowVector = mul(transpose(flowRotationMatrix), flowVector);
-	float2 uv = offset + (-float2(multiplier * ((0.001 * ReflectionColor.w) * flowmapColor.w), 0) +
-							 rotatedFlowVector);
+	float2 uv =offset + (rotatedFlowVector - float2(multiplier * ((0.001 * ReflectionColor.w) * flowmapColor.w), 0));
 	return float3(FlowMapNormalsTex.Sample(FlowMapNormalsSampler, uv).xy, flowmapColor.z);
 }
 #		endif
@@ -310,7 +305,7 @@ float3 GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFa
 	float3 flowmapNormal3 = GetFlowmapNormal(input, float2(uvShift, 0), 8.48, 0.62);
 
 	float2 flowmapNormalWeighted =
-		normalMul.y * ((1 - normalMul.x) * flowmapNormal3.xy + normalMul.x * flowmapNormal2.xy) +
+		normalMul.y * (normalMul.x * flowmapNormal2.xy + (1 - normalMul.x) * flowmapNormal3.xy) +
 		(1 - normalMul.y) *
 			(normalMul.x * flowmapNormal1.xy + (1 - normalMul.x) * flowmapNormal0.xy);
 	float2 flowmapDenominator = sqrt(normalMul * normalMul + (1 - normalMul) * (1 - normalMul));
@@ -376,20 +371,20 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 		float3 reflectionColor = 0;
 		if (shaderDescriptors[0].PixelShaderDescriptor & _Cubemap) {
 			float3 cubemapUV = reflect(viewDirection, WaterParams.y * normal + float3(0, 0, 1 - WaterParams.y));
-			reflectionColor = CubeMapTex.Sample(CubeMapSampler, cubemapUV).xyz;
+			reflectionColor = CubeMapTex.SampleLevel(CubeMapSampler, cubemapUV, 0).xyz;
 		} else {
-#		if NUM_SPECULAR_LIGHTS == 0
+#		if !defined(LOD) && NUM_SPECULAR_LIGHTS == 0
 			float4 reflectionNormalRaw = float4((VarAmounts.w * refractionsDepthFactor) * normal.xy + input.MPosition.xy, input.MPosition.z, 1);
 #		else
-			float4 reflectionNormalRaw = float4(VarAmounts.w * normal.xy, 1, 1);
+			float4 reflectionNormalRaw = float4(VarAmounts.w * normal.xy, 0, 1);
 #		endif
 
 			float4 reflectionNormal = mul(transpose(TextureProj), reflectionNormalRaw);
-			reflectionColor = ReflectionTex.Sample(ReflectionSampler, reflectionNormal.xy / reflectionNormal.ww).xyz;
+			reflectionColor = ReflectionTex.SampleLevel(ReflectionSampler, reflectionNormal.xy / reflectionNormal.ww, 0).xyz;
 		}
 
-#		if NUM_SPECULAR_LIGHTS == 0
-		if (shaderDescriptors[0].PixelShaderDescriptor & _Reflections) {
+#		if !defined(LOD) && NUM_SPECULAR_LIGHTS == 0
+		if (shaderDescriptors[0].PixelShaderDescriptor & _Cubemap) {
 			float2 ssrReflectionUv = GetDynamicResolutionAdjustedScreenPosition((DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw + SSRParams2.x * normal.xy);
 			float4 ssrReflectionColor1 = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUv);
 			float4 ssrReflectionColor2 = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUv);
@@ -452,9 +447,9 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	float refractionDepth =
 		GetScreenDepth(DynamicResolutionParams1.xy * (refractionUvRaw / VPOSOffset.xy));
 	float refractionDepthMul = length(
-		float3((refractionDepth * ((VPOSOffset.zw + refractionUvRaw / VPOSOffset.xy) * 2 - 1)) /
+		float3((refractionDepth * ((VPOSOffset.zw + refractionUvRaw) * 2 - 1)) /
 				   ProjData.xy,
-			depth));
+			refractionDepth));
 
 	float3 refractionDepthAdjustedViewDirection = -viewDirection * refractionDepthMul;
 	float refractionViewSurfaceAngle = dot(refractionDepthAdjustedViewDirection, ReflectPlane.xyz);
@@ -518,10 +513,15 @@ PS_OUTPUT main(PS_INPUT input)
 
 	bool isSpecular = false;
 
-#		if defined(DEPTH)
-#			if defined(VERTEX_ALPHA_DEPTH)
-	distanceMul = input.TexCoord3.z;
-#			else
+
+#	if defined(DEPTH)
+#		if defined(VERTEX_ALPHA_DEPTH)
+#			if defined(VC)
+	distanceMul = saturate(input.TexCoord3.z);
+#			endif
+#		else
+	distanceMul = 0;
+
 	float depth = GetScreenDepth(
 		DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy));
 	float2 depthOffset =
