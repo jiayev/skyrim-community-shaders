@@ -8,7 +8,7 @@ static const float PI = 3.141592;
 static const float TwoPI = 2 * PI;
 static const float Epsilon = 0.00001;
 
-static const uint NumSamples = 8;
+static const uint NumSamples = 16;
 static const float InvNumSamples = 1.0 / float(NumSamples);
 
 cbuffer SpecularMapFilterSettings : register(b0)
