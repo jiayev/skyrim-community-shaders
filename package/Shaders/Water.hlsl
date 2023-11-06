@@ -594,7 +594,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		if defined(WATER_BLENDING)
 #			if defined(DEPTH)
 	if (perPassWaterBlending[0].EnableWaterBlending) {
-#				if defined(VERTEX_ALPHA_DEPTH) && && defined(VC)
+#				if defined(VERTEX_ALPHA_DEPTH) && defined(VC)
 		float blendFactor = 1 - smoothstep(0.0, 0.025 * perPassWaterBlending[0].WaterBlendRange, input.TexCoord3.z);
 		if (blendFactor > 0.0) {
 			float4 background = RefractionTex.Load(float3(DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy), 0));
