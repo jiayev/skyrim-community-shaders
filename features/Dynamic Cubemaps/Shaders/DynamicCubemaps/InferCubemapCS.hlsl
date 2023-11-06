@@ -47,33 +47,37 @@ float3 GetSamplingVector(uint3 ThreadID, in RWTexture2DArray<float4> OutputTextu
 	float3 uv = GetSamplingVector(ThreadID, EnvInferredTexture);
 	float4 color = EnvCaptureTexture.SampleLevel(LinearSampler, uv, 0);
 	uint mipLevel = 1;
-	float brightness = 4.0;
-	float3 startUV = uv;
-	while (color.w < 1.0 && mipLevel <= 10) {
+	while (color.w < 1.0 && mipLevel <= 11) {
 		float4 tempColor = 0.0;
 		if (mipLevel < 10) {
 			tempColor = EnvCaptureTexture.SampleLevel(LinearSampler, uv, mipLevel);
-		} else {  // The lowest cubemap mip is 6x6, a 1x1 result needs to be calculated
+		} else if (mipLevel < 11) {  // The lowest cubemap mip is 6x6, a 1x1 result needs to be calculated
 			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(-1.0, 0.0, 0.0), 0.5), 9);
 			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(1.0, 0.0, 0.0), 0.5), 9);
 			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, -1.0, 0.0), 0.5), 9);
 			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 1.0, 0.0), 0.5), 9);
 			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 0.0, -1.0), 0.5), 9);
 			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 0.0, 1.0), 0.5), 9);
+		} else {
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(-1.0, 0.0, 0.0), 1), 9);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(1.0, 0.0, 0.0), 1), 9);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, -1.0, 0.0), 1), 9);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 1.0, 0.0), 1), 9);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 0.0, -1.0), 1), 9);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 0.0, 1.0), 1), 9);
 		}
-		tempColor *= brightness;
+
+		tempColor.rgb /= sqrt(mipLevel);
 
 		if (color.w + tempColor.w > 1.0) {
 			float alphaDiff = 1.0 - color.w;
 			tempColor.xyz *= alphaDiff / tempColor.w;
 			color.xyzw += tempColor;
-			break;
 		} else {
 			color.xyzw += tempColor;
 		}
 
 		mipLevel++;
-		brightness *= 4.0;
 	}
 	color.rgb = pow(color.rgb, 1.0 / 2.2);
 	EnvInferredTexture[ThreadID] = color;
