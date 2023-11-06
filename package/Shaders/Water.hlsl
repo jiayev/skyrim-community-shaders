@@ -287,7 +287,7 @@ float3 GetFlowmapNormal(PS_INPUT input, float2 uvShift, float multiplier, float 
 	float2 flowSinCos = flowmapColor.xy * 2 - 1;
 	float2x2 flowRotationMatrix = float2x2(flowSinCos.x, flowSinCos.y, -flowSinCos.y, flowSinCos.x);
 	float2 rotatedFlowVector = mul(transpose(flowRotationMatrix), flowVector);
-	float2 uv = offset + (rotatedFlowVector - float2(multiplier * ((0.001 * ReflectionColor.w) * flowmapColor.w), 0));
+	float2 uv =offset + (rotatedFlowVector - float2(multiplier * ((0.001 * ReflectionColor.w) * flowmapColor.w), 0));
 	return float3(FlowMapNormalsTex.Sample(FlowMapNormalsSampler, uv).xy, flowmapColor.z);
 }
 #		endif
@@ -513,12 +513,13 @@ PS_OUTPUT main(PS_INPUT input)
 
 	bool isSpecular = false;
 
-#		if defined(DEPTH)
-#			if defined(VERTEX_ALPHA_DEPTH)
-#				if defined(VC)
+
+#	if defined(DEPTH)
+#		if defined(VERTEX_ALPHA_DEPTH)
+#			if defined(VC)
 	distanceMul = saturate(input.TexCoord3.z);
-#				endif
-#			else
+#			endif
+#		else
 	distanceMul = 0;
 
 	float depth = GetScreenDepth(
@@ -593,7 +594,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		if defined(WATER_BLENDING)
 #			if defined(DEPTH)
 	if (perPassWaterBlending[0].EnableWaterBlending) {
-#				if defined(VERTEX_ALPHA_DEPTH)
+#				if defined(VERTEX_ALPHA_DEPTH) && && defined(VC)
 		float blendFactor = 1 - smoothstep(0.0, 0.025 * perPassWaterBlending[0].WaterBlendRange, input.TexCoord3.z);
 		if (blendFactor > 0.0) {
 			float4 background = RefractionTex.Load(float3(DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy), 0));
