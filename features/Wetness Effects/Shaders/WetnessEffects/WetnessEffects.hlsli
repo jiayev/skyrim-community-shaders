@@ -74,14 +74,9 @@ float3 GetWetnessSpecular(float3 N, float3 L, float3 V, float3 lightColor, float
 	return LightingFuncGGX_OPT3(N, V, L, roughness, 0.02) * pow(lightColor, 2.2);
 }
 
-float3 sRGB2Lin(float3 color)
+float3 GetWetnessSpecular(float3 N, float3 L, float3 V, float3 lightColor, float roughness, float3 f0)
 {
-	return color > 0.04045 ? pow(color / 1.055 + 0.055 / 1.055, 2.4) : color / 12.92;
-}
-
-float3 Lin2sRGB(float3 color)
-{
-	return color > 0.0031308 ? 1.055 * pow(color, 1.0 / 2.4) - 0.055 : 12.92 * color;
+	return LightingFuncGGX_OPT3(N, V, L, roughness, f0) * pow(lightColor, 2.2);
 }
 
 // https://github.com/BelmuTM/Noble/blob/master/LICENSE.txt
@@ -122,11 +117,10 @@ float FBM(float3 pos, int octaves, float frequency)
 	return height;
 }
 
-float NormalFiltering(float roughness, const float3 worldNormal)
-{
-	// Kaplanyan 2016, "Stable specular highlights"
-	// Tokuyoshi 2017, "Error Reduction and Simplification for Shading Anti-Aliasing"
-	// Tokuyoshi and Kaplanyan 2019, "Improved Geometric Specular Antialiasing"
-	float3 dxy = max(abs(ddx(worldNormal)), abs(ddy(worldNormal)));
-	return max(roughness, 0.04 + max(max(dxy.x, dxy.y), dxy.z));
+float NormalFiltering(float roughness, const float3 worldNormal) {
+    // Kaplanyan 2016, "Stable specular highlights"
+    // Tokuyoshi 2017, "Error Reduction and Simplification for Shading Anti-Aliasing"
+    // Tokuyoshi and Kaplanyan 2019, "Improved Geometric Specular Antialiasing"
+	float3 dxy = max( abs(ddx(worldNormal)), abs(ddy(worldNormal)));
+	return max(roughness, 0.04 + max( max(dxy.x, dxy.y), dxy.z));
 }
