@@ -34,7 +34,7 @@ void WetnessEffects::DrawSettings()
 
 		ImGui::SliderFloat("Max Rain Wetness", &settings.MaxRainWetness, 0.0f, 1.0f);
 		ImGui::SliderFloat("Max Shore Wetness", &settings.MaxShoreWetness, 0.0f, 1.0f);
-		ImGui::SliderFloat("Max Darkeness", &settings.MaxDarkness, 1.0f, 2.0f);
+		ImGui::SliderFloat("Max Darkness", &settings.MaxDarkness, 1.0f, 2.0f);
 		ImGui::SliderFloat("Max Occlusion", &settings.MaxOcclusion, 0.0f, 1.0f);
 		ImGui::SliderFloat("Min Roughness", &settings.MinRoughness, 0.0f, 1.0f);
 
