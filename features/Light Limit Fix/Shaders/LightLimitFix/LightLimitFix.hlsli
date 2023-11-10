@@ -51,14 +51,14 @@ StructuredBuffer<StrictLightData> strictLightData : register(t37);
 bool GetClusterIndex(in float2 uv, in float z, out uint clusterIndex)
 {
 	if (z < perPassLLF[0].LightsNear || z > perPassLLF[0].LightsFar)
-		return false;
+	 	return false;
 
 	float clampedZ = clamp(z, perPassLLF[0].LightsNear, perPassLLF[0].LightsFar);
 	uint clusterZ = uint(max((log2(z) - log2(perPassLLF[0].LightsNear)) * 16.0 / log2(perPassLLF[0].LightsFar / perPassLLF[0].LightsNear), 0.0));
-	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(32, 16));
+	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(16, 16));
 	uint3 cluster = uint3(uint2((uv * perPassLLF[0].BufferDim) / clusterDim), clusterZ);
 
-	clusterIndex = cluster.x + (32 * cluster.y) + (32 * 16 * cluster.z);
+	clusterIndex = cluster.x + (16 * cluster.y) + (16 * 16 * cluster.z);
 	return true;
 }
 
