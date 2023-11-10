@@ -34,7 +34,31 @@ float GetMipLevel(float2 coords, Texture2D<float4> tex)
 	// Compute the current mip level  (* 0.5 is effectively computing a square root before )
 	float mipLevel = max(0.5 * log2(minTexCoordDelta), 0);
 
-	return sqrt(mipLevel);  // Adjust scaling
+	mipLevel = (mipLevel) + 1;  // Adjust scaling
+#if !defined(PARALLAX)
+	mipLevel++;
+#endif
+	return mipLevel;
+}
+
+// http://www.thetenthplanet.de/archives/1180
+float3x3 CalculateTBN(float3 N, float3 p, float2 uv)
+{
+	// get edge vectors of the pixel triangle
+	float3 dp1 = ddx_coarse(p);
+	float3 dp2 = ddy_coarse(p);
+	float2 duv1 = ddx_coarse(uv);
+	float2 duv2 = ddy_coarse(uv);
+
+	// solve the linear system
+	float3 dp2perp = cross(dp2, N);
+	float3 dp1perp = cross(N, dp1);
+	float3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+	float3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+
+	// construct a scale-invariant frame
+	float invmax = rsqrt(max(dot(T, T), dot(B, B)));
+	return float3x3(T * invmax, B * invmax, N);
 }
 
 #if defined(LANDSCAPE)
@@ -44,7 +68,17 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 #endif
 {
 	float3 viewDirTS = mul(viewDir, tbn).xyz;
-
+	
+	// Compute initial parallax displacement direction:
+    float2 parallaxDirection = normalize(  viewDirTS.xy );
+       
+    // The length of this vector determines the furthest amount of displacement:
+    float parallaxLength = length( viewDirTS );
+    parallaxLength = sqrt( parallaxLength * parallaxLength - viewDirTS.z * viewDirTS.z ) / viewDirTS.z; 
+       
+    // Compute the actual reverse parallax displacement vector:
+    viewDirTS.xy = parallaxDirection * parallaxLength;
+	
 	distance /= (float)perPassParallax[0].MaxDistance;
 
 	float nearQuality = linearstep(0.0, perPassParallax[0].CRPMRange, distance);
@@ -52,40 +86,39 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 	float midBlendToFar = linearstep(1.0 - perPassParallax[0].BlendRange, 1.0, distance);
 
 	float maxHeight = perPassParallax[0].Height;
-	float minHeight = maxHeight / 2;
+	float minHeight = maxHeight * 0.5;
+
+	float angleQuality = 1.0 - dot(viewDir, transpose(tbn)[2]);
 
 	float2 output;
 	if (nearBlendToMid < 1.0) {
-		float heightCorrectionScale = ((-1.0 * viewDirTS.z) + 2.0);
-
 		uint numSteps;
 #if defined(PARALLAX)
-		float quality = 1.0 - nearQuality;
+		float quality = (1.0 - nearQuality) * angleQuality;
 		if (perPassParallax[0].EnableHighQuality) {
-			numSteps = round(lerp(4, 32, quality));
-			numSteps = clamp((numSteps + 3) & ~0x03, 4, 32);
+			numSteps = round(lerp(4, 256, quality));
+			numSteps = clamp((numSteps + 3) & ~0x03, 4, 256);
 		} else {
-			numSteps = round(lerp(4, 16, quality));
-			numSteps = clamp((numSteps + 3) & ~0x03, 4, 16);
+			numSteps = round(lerp(4, 128, quality));
+			numSteps = clamp((numSteps + 3) & ~0x03, 4, 128);
 		}
 #else
-		mipLevel++;
 #	if defined(LANDSCAPE)
-		float quality = min(1.0 - nearQuality, pow(saturate(blend), 0.5));
+		float quality = min(1.0 - nearQuality, pow(saturate(blend), 0.5)) * angleQuality;
 		if (perPassParallax[0].EnableHighQuality) {
-			numSteps = round(lerp(4, 16, quality));
-			numSteps = clamp((numSteps + 3) & ~0x03, 4, 16);
+			numSteps = round(lerp(4, 64, quality));
+			numSteps = clamp((numSteps + 3) & ~0x03, 4, 64);
 		} else {
-			numSteps = round(lerp(4, 8, quality));
-			numSteps = clamp((numSteps + 3) & ~0x03, 4, 8);
+			numSteps = round(lerp(4, 32, quality));
+			numSteps = clamp((numSteps + 3) & ~0x03, 4, 32);
 		}
 #	else
 		if (perPassParallax[0].EnableHighQuality) {
-			numSteps = round(lerp(4, 16, 1.0 - nearQuality));
-			numSteps = clamp((numSteps + 3) & ~0x03, 4, 16);
+			numSteps = round(lerp(4, 64, 1.0 - nearQuality));
+			numSteps = clamp((numSteps + 3) & ~0x03, 4, 64);
 		} else {
-			numSteps = round(lerp(4, 8, 1.0 - nearQuality));
-			numSteps = clamp((numSteps + 3) & ~0x03, 4, 8);
+			numSteps = round(lerp(4, 32, 1.0 - nearQuality));
+			numSteps = clamp((numSteps + 3) & ~0x03, 4, 32);
 		}
 #	endif
 #endif
@@ -95,8 +128,16 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 		float2 prevOffset = viewDirTS.xy * float2(minHeight, minHeight) + coords.xy;
 
 		float prevBound = 1.0;
+		float prevHeight = 1.0;
 
 		uint numStepsTemp = numSteps;
+
+		float2 pt1 = 0;
+		float2 pt2 = 0;
+
+		bool contactRefinement = false;
+
+		mipLevel--;
 
 		[loop] while (numSteps > 0)
 		{
@@ -110,95 +151,49 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 			currHeight.y = tex.SampleLevel(texSampler, currentOffset[0].zw, mipLevel)[channel];
 			currHeight.z = tex.SampleLevel(texSampler, currentOffset[1].xy, mipLevel)[channel];
 			currHeight.w = tex.SampleLevel(texSampler, currentOffset[1].zw, mipLevel)[channel];
-
-			currHeight.xyzw -= 0.5;
-			currHeight.xyzw = heightCorrectionScale * currHeight.xyzw + 0.5;
 
 			bool4 testResult = currHeight >= currentBound;
 			[branch] if (any(testResult))
 			{
 				float2 outOffset = 0;
-				float outBound = 0;
 				[flatten] if (testResult.w)
 				{
 					outOffset = currentOffset[1].xy;
-					outBound = currentBound.z;
-				}
-				[flatten] if (testResult.z)
-				{
-					outOffset = currentOffset[0].zw;
-					outBound = currentBound.y;
-				}
-				[flatten] if (testResult.y)
-				{
-					outOffset = currentOffset[0].xy;
-					outBound = currentBound.x;
-				}
-				[flatten] if (testResult.x)
-				{
-					outOffset = prevOffset;
-					outBound = prevBound;
-				}
-				prevOffset = outOffset;
-				prevBound = outBound;
-				break;
-			}
-
-			prevOffset = currentOffset[1].zw;
-			prevBound = currentBound.w;
-			numSteps -= 4;
-		}
-
-		numSteps = numStepsTemp;
-
-		stepSize /= (float)numSteps;
-		offsetPerStep /= (float)numSteps;
-
-		float prevHeight = 1.0;
-
-		float2 pt1 = 0;
-		float2 pt2 = 0;
-
-		[loop] while (numSteps > 0)
-		{
-			float4 currentOffset[2];
-			currentOffset[0] = prevOffset.xyxy - float4(1, 1, 2, 2) * offsetPerStep.xyxy;
-			currentOffset[1] = prevOffset.xyxy - float4(3, 3, 4, 4) * offsetPerStep.xyxy;
-			float4 currentBound = prevBound.xxxx - float4(1, 2, 3, 4) * stepSize;
-
-			float4 currHeight;
-			currHeight.x = tex.SampleLevel(texSampler, currentOffset[0].xy, mipLevel)[channel];
-			currHeight.y = tex.SampleLevel(texSampler, currentOffset[0].zw, mipLevel)[channel];
-			currHeight.z = tex.SampleLevel(texSampler, currentOffset[1].xy, mipLevel)[channel];
-			currHeight.w = tex.SampleLevel(texSampler, currentOffset[1].zw, mipLevel)[channel];
-
-			currHeight.xyzw -= 0.5;
-			currHeight.xyzw = heightCorrectionScale * currHeight.xyzw + 0.5;
-
-			bool4 testResult = currHeight >= currentBound;
-			[branch] if (any(testResult))
-			{
-				[flatten] if (testResult.w)
-				{
 					pt1 = float2(currentBound.w, currHeight.w);
 					pt2 = float2(currentBound.z, currHeight.z);
 				}
 				[flatten] if (testResult.z)
 				{
+					outOffset = currentOffset[0].zw;
 					pt1 = float2(currentBound.z, currHeight.z);
 					pt2 = float2(currentBound.y, currHeight.y);
 				}
 				[flatten] if (testResult.y)
 				{
+					outOffset = currentOffset[0].xy;
 					pt1 = float2(currentBound.y, currHeight.y);
 					pt2 = float2(currentBound.x, currHeight.x);
 				}
 				[flatten] if (testResult.x)
 				{
+					outOffset = prevOffset;
+
 					pt1 = float2(currentBound.x, currHeight.x);
 					pt2 = float2(prevBound, prevHeight);
 				}
-				break;
+
+				if (contactRefinement)
+				{
+					break;
+				} else {
+					contactRefinement = true;
+					prevOffset = outOffset;
+					prevBound = pt2.x;
+					numSteps = numStepsTemp;
+					stepSize /= (float)numSteps;
+					offsetPerStep /= (float)numSteps;
+					continue;
+				}
 			}
 
 			prevOffset = currentOffset[1].zw;
@@ -207,25 +202,20 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 			numSteps -= 4;
 		}
 
-		if (perPassParallax[0].EnableHighQuality) {
-			float delta2 = pt2.x - pt2.y;
-			float delta1 = pt1.x - pt1.y;
+		float delta2 = pt2.x - pt2.y;
+		float delta1 = pt1.x - pt1.y;
 
-			float denominator = delta2 - delta1;
+		float denominator = delta2 - delta1;
 
-			float parallaxAmount = 0.0;
-			if (denominator == 0.0) {
-				parallaxAmount = 0.0;
-			} else {
-				parallaxAmount = (pt1.x * delta2 - pt2.x * delta1) / denominator;
-			}
-
-			float offset = (1.0 - parallaxAmount) * -maxHeight + minHeight;
-			output = viewDirTS.xy * offset + coords.xy;
+		float parallaxAmount = 0.0;
+		if (denominator == 0.0) {
+			parallaxAmount = 0.0;
 		} else {
-			float offset = (1.0 - pt1.x) * -maxHeight + minHeight;
-			output = viewDirTS.xy * offset + coords.xy;
+			parallaxAmount = (pt1.x * delta2 - pt2.x * delta1) / denominator;
 		}
+
+		float offset = (1.0 - parallaxAmount) * -maxHeight + minHeight;
+		output = viewDirTS.xy * offset + coords.xy;
 
 		if (nearBlendToMid > 0.0) {
 			float height = tex.Sample(texSampler, coords.xy)[channel];
@@ -254,20 +244,20 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 // Only uses 1 sample vs the 8 in the original paper's example, which makes this effect very scaleable at the cost of small details
 float GetParallaxSoftShadowMultiplier(float2 coords, float mipLevel, float3 L, float sh0, Texture2D<float4> tex, SamplerState texSampler, uint channel, float quality)
 {
-	if (quality > 0.0f) {
+	if (quality > 0.0) {
 		const float height = 0.05;
 		const float2 rayDir = L.xy * height;
 
 		const float h0 = 1.0 - sh0;
-		const float h = 1.0 - tex.SampleLevel(texSampler, coords + rayDir * 0.5, mipLevel)[channel];
+		const float h = 1.0 - tex.SampleLevel(texSampler, coords + rayDir, mipLevel)[channel];
 
 		// Compare the difference between the two heights to see if the height blocks it
-		const float occlusion = 1.0 - saturate((h0 - h) * 10.0);
+		const float occlusion = 1.0 - saturate((h0 - h) * 7.0);
 
 		// Fade out with quality
-		return lerp(1, occlusion, quality);
+		return lerp(1.0, occlusion, quality);
 	}
-	return 1;
+	return 1.0;
 }
 
 #if defined(LANDSCAPE)
