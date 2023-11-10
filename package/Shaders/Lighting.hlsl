@@ -1970,14 +1970,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			}
 #			endif
 #			if defined(CPM_AVAILABLE)
-			envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, max(0.1, 1.0 - complexMaterialColor.y), F0) * envMask;
+			envColor = GetDynamicCubemap(worldSpaceNormal, viewDirection, max(0.1, 1.0 - complexMaterialColor.y), F0) * envMask;
 #			else
-			envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, 0.1, F0) * envMask;
+			envColor = GetDynamicCubemap(worldSpaceNormal, viewDirection, 0.1, F0) * envMask;
 #			endif
 		}
 	}
 #		endif
-
 #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
 
 	float3 emitColor = EmitColor;
