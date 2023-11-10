@@ -68,17 +68,17 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 #endif
 {
 	float3 viewDirTS = mul(viewDir, tbn).xyz;
-	
+
 	// Compute initial parallax displacement direction:
-    float2 parallaxDirection = normalize(  viewDirTS.xy );
-       
-    // The length of this vector determines the furthest amount of displacement:
-    float parallaxLength = length( viewDirTS );
-    parallaxLength = sqrt( parallaxLength * parallaxLength - viewDirTS.z * viewDirTS.z ) / viewDirTS.z; 
-       
-    // Compute the actual reverse parallax displacement vector:
-    viewDirTS.xy = parallaxDirection * parallaxLength;
-	
+	float2 parallaxDirection = normalize(viewDirTS.xy);
+
+	// The length of this vector determines the furthest amount of displacement:
+	float parallaxLength = length(viewDirTS);
+	parallaxLength = sqrt(parallaxLength * parallaxLength - viewDirTS.z * viewDirTS.z) / viewDirTS.z;
+
+	// Compute the actual reverse parallax displacement vector:
+	viewDirTS.xy = parallaxDirection * parallaxLength;
+
 	distance /= (float)perPassParallax[0].MaxDistance;
 
 	float nearQuality = linearstep(0.0, perPassParallax[0].CRPMRange, distance);
@@ -182,8 +182,7 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 					pt2 = float2(prevBound, prevHeight);
 				}
 
-				if (contactRefinement)
-				{
+				if (contactRefinement) {
 					break;
 				} else {
 					contactRefinement = true;
