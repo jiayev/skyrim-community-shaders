@@ -1957,13 +1957,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		if (dynamicCubemap) {
 			float3 F0;
 #			if defined(CPM_AVAILABLE)
-			if (envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0){
+			if (envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0) {
 				F0 = 1.0;
 			} else {
 				F0 = envColorBase;
 			}
 #			else
-			if (envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0){
+			if (envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0) {
 				F0 = 1.0;
 			} else {
 				F0 = envColorBase;
@@ -2095,9 +2095,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	color.xyz = Lin2sRGB(color.xyz);
 #	endif
 
-// #if defined(LANDSCAPE)
-// color.xyz = transpose(tbn)[2];
-// #endif
+	// #if defined(LANDSCAPE)
+	// color.xyz = transpose(tbn)[2];
+	// #endif
 
 #	if defined(ENVMAP) && defined(TESTCUBEMAP)
 	color.xyz = specularTexture.SampleLevel(SampEnvSampler, envSamplingPoint, 0).xyz;
