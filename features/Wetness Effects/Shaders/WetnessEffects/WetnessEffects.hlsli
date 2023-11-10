@@ -117,10 +117,11 @@ float FBM(float3 pos, int octaves, float frequency)
 	return height;
 }
 
-float NormalFiltering(float roughness, const float3 worldNormal) {
-    // Kaplanyan 2016, "Stable specular highlights"
-    // Tokuyoshi 2017, "Error Reduction and Simplification for Shading Anti-Aliasing"
-    // Tokuyoshi and Kaplanyan 2019, "Improved Geometric Specular Antialiasing"
-	float3 dxy = max( abs(ddx(worldNormal)), abs(ddy(worldNormal)));
-	return max(roughness, 0.04 + max( max(dxy.x, dxy.y), dxy.z));
+float NormalFiltering(float roughness, const float3 worldNormal)
+{
+	// Kaplanyan 2016, "Stable specular highlights"
+	// Tokuyoshi 2017, "Error Reduction and Simplification for Shading Anti-Aliasing"
+	// Tokuyoshi and Kaplanyan 2019, "Improved Geometric Specular Antialiasing"
+	float3 dxy = max(abs(ddx(worldNormal)), abs(ddy(worldNormal)));
+	return max(roughness, 0.04 + max(max(dxy.x, dxy.y), dxy.z));
 }

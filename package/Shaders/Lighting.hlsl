@@ -1627,8 +1627,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	cellF -= cellFrac;                                        // align to cell borders
 	cellInt = round(cellF);
 
-	uint waterTile = (uint)clamp(cellInt.x + (cellInt.y * 5), 0, 24);  	// remap xy to 0-24
-	float waterHeight = -2147483648;                					// lowest 32-bit integer
+	uint waterTile = (uint)clamp(cellInt.x + (cellInt.y * 5), 0, 24);  // remap xy to 0-24
+	float waterHeight = -2147483648;                                   // lowest 32-bit integer
 
 	if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
 		waterHeight = lightingData[0].WaterHeight[waterTile];
@@ -1954,7 +1954,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		uint2 envSize;
 		TexEnvSampler.GetDimensions(envSize.x, envSize.y);
 		dynamicCubemap = envSize.x == 1;
-		if (dynamicCubemap){
+		if (dynamicCubemap) {
 			float3 F0;
 #			if defined(CPM_AVAILABLE)
 			if (envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0){
@@ -1969,12 +1969,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				F0 = envColorBase;
 			}
 #			endif
-#	if defined(CPM_AVAILABLE)
-			envColor = GetDynamicCubemap(worldSpaceNormal, viewDirection, max(0.1, 1.0 - complexMaterialColor.y), F0) * envMask;
-# else
-			envColor = GetDynamicCubemap(worldSpaceNormal, viewDirection, 0.1, F0) * envMask;
-
-#	endif
+#			if defined(CPM_AVAILABLE)
+			envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, max(0.1, 1.0 - complexMaterialColor.y), F0) * envMask;
+#			else
+			envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, 0.1, F0) * envMask;
+#			endif
 		}
 	}
 #		endif
@@ -2042,7 +2041,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
 #		if defined(DYNAMIC_CUBEMAPS)
 	float wetnessVisibility = 1;
-	if (dynamicCubemap){
+	if (dynamicCubemap) {
 		vertexColor = sRGB2Lin(vertexColor);
 		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow) {
 			if (shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
@@ -2050,11 +2049,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				wetnessVisibility *= lerp(1.0, shadowColor.x, upAngle * 0.5);
 			}
 		}
-#		if defined(CPM_AVAILABLE) && defined(ENVMAP)
+#			if defined(CPM_AVAILABLE) && defined(ENVMAP)
 		vertexColor += envColor * complexSpecular * wetnessVisibility;
-#		else
+#			else
 		vertexColor += envColor * wetnessVisibility;
-#		endif
+#			endif
 		vertexColor = Lin2sRGB(vertexColor);
 	} else {
 #		endif
@@ -2062,7 +2061,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(CPM_AVAILABLE) && defined(ENVMAP)
 		vertexColor += envColor * complexSpecular * diffuseColor;
 #		else
-		vertexColor += envColor * diffuseColor;
+	vertexColor += envColor * diffuseColor;
 #		endif
 #		if defined(DYNAMIC_CUBEMAPS)
 	}
