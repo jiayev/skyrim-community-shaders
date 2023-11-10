@@ -393,8 +393,7 @@ void LightLimitFix::Bind()
 		context->Unmap(perPass->resource.get(), 0);
 	} else {
 		if (!rendered) {
-			if (updateLights)
-				UpdateLights();
+			UpdateLights();
 			rendered = true;
 		}
 
