@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Buffer.h>
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
@@ -20,17 +21,19 @@ public:
 	spdlog::level::level_enum logLevel = spdlog::level::info;
 	std::string shaderDefinesString = "";
 	std::vector<std::pair<std::string, std::string>> shaderDefines{};  // data structure to parse string into; needed to avoid dangling pointers
+	const std::string testConfigPath = "Data\\SKSE\\Plugins\\CommunityShadersTEST.json";
 	const std::string userConfigPath = "Data\\SKSE\\Plugins\\CommunityShadersUSER.json";
 	const std::string defaultConfigPath = "Data\\SKSE\\Plugins\\CommunityShaders.json";
 
 	bool upscalerLoaded = false;
 
 	void Draw();
+	void DrawDeferred();
 	void Reset();
 	void Setup();
 
-	void Load();
-	void Save();
+	void Load(bool a_test = false);
+	void Save(bool a_test = false);
 
 	bool ValidateCache(CSimpleIniA& a_ini);
 	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
@@ -68,4 +71,32 @@ public:
      * @return Whether in developer mode.
      */
 	bool IsDeveloperMode();
+
+	void SetupResources();
+	void ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor);
+
+	struct PerShader
+	{
+		uint VertexShaderDescriptor;
+		uint PixelShaderDescriptor;
+	};
+
+	uint lastVertexDescriptor = 0;
+	uint lastPixelDescriptor = 0;
+
+	std::unique_ptr<Buffer> shaderDataBuffer = nullptr;
+
+	void UpdateSharedData(const RE::BSShader* shader, const uint32_t descriptor);
+
+	bool lightingDataRequiresUpdate = false;
+
+	struct LightingData
+	{
+		float WaterHeight[25];
+		bool Reflections;
+	};
+
+	LightingData lightingData{};
+
+	std::unique_ptr<Buffer> lightingDataBuffer = nullptr;
 };

@@ -19,20 +19,17 @@ struct DistantTreeLighting : Feature
 		std::uint32_t EnableComplexTreeLOD = 1;
 		std::uint32_t EnableDirLightFix = 1;
 		float SubsurfaceScatteringAmount = 0.5;
-		float FogDimmerAmount = 1.0;
 	};
 
 	struct alignas(16) PerPass
 	{
-		DirectX::XMFLOAT4 EyePosition;
 		DirectX::XMFLOAT3X4 DirectionalAmbient;
 		DirectX::XMFLOAT4 DirLightColor;
 		DirectX::XMFLOAT4 DirLightDirection;
 		float DirLightScale;
 		std::uint32_t ComplexAtlasTexture;
 		Settings Settings;
-		float pad0;
-		float pad1;
+		float pad[3];
 	};
 
 	Settings settings;

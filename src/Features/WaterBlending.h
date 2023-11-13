@@ -14,6 +14,9 @@ public:
 
 	virtual inline std::string GetName() { return "Water Blending"; }
 	virtual inline std::string GetShortName() { return "WaterBlending"; }
+	inline std::string_view GetShaderDefineName() override { return "WATER_BLENDING"; }
+
+	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
 	struct Settings
 	{
@@ -23,11 +26,9 @@ public:
 		float SSRBlendRange = 1;
 	};
 
-	struct alignas(16) PerPass
+	struct PerPass
 	{
-		float waterHeight;
 		Settings settings;
-		float pad[3];
 	};
 
 	Settings settings;

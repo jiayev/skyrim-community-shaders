@@ -9,7 +9,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SpecularStrength,
 	SubsurfaceScatteringAmount,
 	EnableDirLightFix,
-	Brightness)
+	BasicGrassBrightness)
 
 enum class GrassShaderTechniques
 {
@@ -19,35 +19,69 @@ enum class GrassShaderTechniques
 void GrassLighting::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Complex Grass", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::TextWrapped(
-			"Specular highlights for complex grass.\n"
-			"Functions the same as on other objects.");
+		ImGui::TextWrapped("Specular highlights for complex grass");
 		ImGui::SliderFloat("Glossiness", &settings.Glossiness, 1.0f, 100.0f);
-		ImGui::SliderFloat("Specular Strength", &settings.SpecularStrength, 0.0f, 1.0f);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Specular highlight glossiness.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
+		ImGui::SliderFloat("Specular Strength", &settings.SpecularStrength, 0.0f, 1.0f);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Specular highlight strength.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
+
+		ImGui::Spacing();
+		ImGui::Spacing();
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx("Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::TextWrapped(
-			"Soft lighting controls how evenly lit an object is.\n"
-			"Back lighting illuminates the back face of an object.\n"
-			"Combined to model the transport of light through the surface.");
-		ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.5f);
-		ImGui::SliderFloat("Subsurface Scattering Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 2.0f);
+		ImGui::SliderFloat("SSS Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 2.0f);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Subsurface Scattering (SSS) amount\n");
+			ImGui::Text("Soft lighting controls how evenly lit an object is.\n");
+			ImGui::Text("Back lighting illuminates the back face of an object.\n");
+			ImGui::Text("Combined to model the transport of light through the surface.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
+		ImGui::Spacing();
+		ImGui::Spacing();
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::TextWrapped("Fix for grass not being affected by sunlight scale.");
 		ImGui::Checkbox("Enable Directional Light Fix", (bool*)&settings.EnableDirLightFix);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Fix for grass not being affected by sunlight scale.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
-		ImGui::TextWrapped("Darkens the grass textures to look better with the new lighting");
-		ImGui::SliderFloat("Brightness", &settings.Brightness, 0.0f, 1.0f);
-
-		ImGui::TextWrapped("Boosts the vibrancy of textures");
-		ImGui::SliderFloat("Saturation", &settings.Saturation, 1.0f, 2.0f);
+		ImGui::Spacing();
+		ImGui::Spacing();
+		ImGui::TextWrapped("Basic Grass");
+		ImGui::SliderFloat("Brightness", &settings.BasicGrassBrightness, 0.0f, 1.0f);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Darkens the grass textures to look better with the new lighting");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
 		ImGui::TreePop();
 	}
@@ -66,11 +100,9 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 			ZeroMemory(&perFrameData, sizeof(perFrameData));
 			Util::StoreTransform3x4NoScale(perFrameData.DirectionalAmbient, dalcTransform);
 
-			if (REL::Module::IsVR()) {
-				perFrameData.SunlightScale = imageSpaceManager->data.baseData.cinematic.brightness;
-			} else {
-				perFrameData.SunlightScale = imageSpaceManager->data.baseData.hdr.sunlightScale;
-			}
+			perFrameData.SunlightScale = !REL::Module::IsVR() ?
+			                                 imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale :
+			                                 imageSpaceManager->GetVRRuntimeData().data.baseData.hdr.sunlightScale;
 			perFrameData.Settings = settings;
 			perFrame->Update(perFrameData);
 

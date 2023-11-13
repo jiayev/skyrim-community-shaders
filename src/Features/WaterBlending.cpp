@@ -1,4 +1,5 @@
 #include "WaterBlending.h"
+#include <Util.h>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	WaterBlending::Settings,
@@ -9,14 +10,44 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void WaterBlending::DrawSettings()
 {
-	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Water Blending", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Water Blending", (bool*)&settings.EnableWaterBlending);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Enables blending water into the terrain and objects on the water's surface.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
 		ImGui::SliderFloat("Water Blend Range", &settings.WaterBlendRange, 0, 3);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Water Blend Range.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
+		ImGui::Spacing();
+		ImGui::Spacing();
 		ImGui::Checkbox("Enable Water Blending SSR", (bool*)&settings.EnableWaterBlendingSSR);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Enables blending screen-space reflections (SSR) as they are faded out near where the terrain touches large water sources.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
 		ImGui::SliderFloat("SSR Blend Range", &settings.SSRBlendRange, 0, 3);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Screen-space Reflection (SSR) Blend Range.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
 		ImGui::TreePop();
 	}
@@ -30,19 +61,6 @@ void WaterBlending::Draw(const RE::BSShader* shader, const uint32_t)
 		PerPass data{};
 		data.settings = settings;
 
-		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
-
-		data.waterHeight = -FLT_MAX;
-
-		if (auto player = RE::PlayerCharacter::GetSingleton()) {
-			if (auto cell = player->GetParentCell()) {
-				if (!cell->IsInteriorCell()) {
-					auto height = cell->GetExteriorWaterHeight();
-					data.waterHeight = height - shadowState->GetRuntimeData().posAdjust.getEye().z;
-				}
-			}
-		}
-
 		D3D11_MAPPED_SUBRESOURCE mapped;
 		DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 		size_t bytes = sizeof(PerPass);
@@ -54,11 +72,11 @@ void WaterBlending::Draw(const RE::BSShader* shader, const uint32_t)
 			ID3D11ShaderResourceView* views[2]{};
 			views[0] = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
 			views[1] = perPass->srv.get();
-			context->PSSetShaderResources(31, ARRAYSIZE(views), views);
+			context->PSSetShaderResources(33, ARRAYSIZE(views), views);
 		} else {
 			ID3D11ShaderResourceView* views[1]{};
 			views[0] = perPass->srv.get();
-			context->PSSetShaderResources(32, ARRAYSIZE(views), views);
+			context->PSSetShaderResources(34, ARRAYSIZE(views), views);
 		}
 	}
 }
@@ -93,4 +111,9 @@ void WaterBlending::Load(json& o_json)
 void WaterBlending::Save(json& o_json)
 {
 	o_json[GetName()] = settings;
+}
+
+bool WaterBlending::HasShaderDefine(RE::BSShader::Type)
+{
+	return true;
 }

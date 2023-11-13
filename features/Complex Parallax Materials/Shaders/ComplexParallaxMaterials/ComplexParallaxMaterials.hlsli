@@ -1,8 +1,6 @@
 
 struct PerPassParallax
 {
-	uint CullingMode;
-
 	bool EnableComplexMaterial;
 
 	bool EnableParallax;

@@ -24,6 +24,9 @@ public:
 	}
 	virtual inline std::string GetName() { return "Light Limit Fix"; }
 	virtual inline std::string GetShortName() { return "LightLimitFix"; }
+	inline std::string_view GetShaderDefineName() override { return "LIGHT_LIMIT_FIX"; }
+
+	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
 	struct LightData
 	{
@@ -60,13 +63,22 @@ public:
 		uint EnableContactShadows;
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		uint StrictLightsCount;
 		float LightsNear;
 		float LightsFar;
 		float4 CameraData;
 		float2 BufferDim;
 		uint FrameCount;
 	};
+
+	struct StrictLightData
+	{
+		uint NumLights;
+		float3 PointLightPosition[15];
+		float PointLightRadius[15];
+		float3 PointLightColor[15];
+	};
+
+	StrictLightData strictLightDataTemp;
 
 	struct CachedParticleLight
 	{
@@ -76,6 +88,7 @@ public:
 	};
 
 	std::unique_ptr<Buffer> perPass = nullptr;
+	std::unique_ptr<Buffer> strictLightData = nullptr;
 
 	bool rendered = false;
 	int eyeCount = !REL::Module::IsVR() ? 1 : 2;
@@ -95,10 +108,14 @@ public:
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
 
-	eastl::hash_map<RE::BSGeometry*, std::pair<RE::NiColorA, ParticleLights::Config&>> queuedParticleLights;
-	eastl::hash_map<RE::BSGeometry*, std::pair<RE::NiColorA, ParticleLights::Config&>> particleLights;
+	struct ParticleLightInfo
+	{
+		RE::NiColorA color;
+		ParticleLights::Config& config;
+	};
 
-	std::uint32_t strictLightsCount = 0;
+	eastl::hash_map<RE::BSGeometry*, ParticleLightInfo> queuedParticleLights;
+	eastl::hash_map<RE::BSGeometry*, ParticleLightInfo> particleLights;
 
 	virtual void SetupResources();
 	virtual void Reset();
@@ -109,10 +126,11 @@ public:
 	virtual void DrawSettings();
 	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
 
-	void DataLoaded();
+	virtual void PostPostLoad() override;
+	virtual void DataLoaded() override;
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
-	bool AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, int eyeIndex = 0, ParticleLights::Config* a_config = nullptr, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
+	bool AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config* a_config = nullptr, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
 	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3& a_initialPosition);
 	void UpdateLights();
 	void Bind();
@@ -130,7 +148,7 @@ public:
 		bool EnableParticleLights = true;
 		bool EnableParticleLightsCulling = true;
 		bool EnableParticleLightsDetection = true;
-		float ParticleLightsBrightness = 0.5f;
+		float ParticleLightsBrightness = 1.0f;
 		float ParticleLightsSaturation = 1.0f;
 		float ParticleLightsRadiusBillboards = 1.0f;
 		bool EnableParticleLightsOptimization = true;
@@ -145,7 +163,6 @@ public:
 	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique);
 
 	void BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass);
-	void BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* Pass, uint32_t LightCount, uint32_t ShadowLightCount);
 
 	enum class Space
 	{
@@ -153,12 +170,15 @@ public:
 		Model = 1,
 	};
 
+	void BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass, DirectX::XMMATRIX& Transform, uint32_t, uint32_t, float WorldScale, Space RenderSpace);
+
+	void BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
+
 	std::shared_mutex cachedParticleLightsMutex;
 	eastl::vector<CachedParticleLight> cachedParticleLights;
 	uint32_t particleLightsDetectionHits = 0;
 
 	float CalculateLuminance(CachedParticleLight& light, RE::NiPoint3& point);
-
 	void AddParticleLightLuminance(RE::NiPoint3& targetPosition, int& numHits, float& lightLevel);
 
 	struct Hooks
@@ -167,7 +187,7 @@ public:
 		{
 			static bool thunk(RE::BSShaderProperty* a_property, RE::BSLight* a_light)
 			{
-				return func(a_property, a_light) && (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light));
+				return func(a_property, a_light) && (!netimmerse_cast<RE::BSLightingShaderProperty*>(a_property) || (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light)));
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -176,7 +196,7 @@ public:
 		{
 			static bool thunk(RE::BSShaderProperty* a_property, RE::BSLight* a_light)
 			{
-				return func(a_property, a_light) && (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light));
+				return func(a_property, a_light) && (!netimmerse_cast<RE::BSLightingShaderProperty*>(a_property) || (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light)));
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -185,7 +205,7 @@ public:
 		{
 			static bool thunk(RE::BSShaderProperty* a_property, RE::BSLight* a_light)
 			{
-				return func(a_property, a_light) && (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light));
+				return func(a_property, a_light) && (!netimmerse_cast<RE::BSLightingShaderProperty*>(a_property) || (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light)));
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -226,6 +246,18 @@ public:
 			{
 				GetSingleton()->BSLightingShader_SetupGeometry_Before(Pass);
 				func(This, Pass, RenderFlags);
+				GetSingleton()->BSLightingShader_SetupGeometry_After(Pass);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct AIProcess_CalculateLightValue_GetLuminance
+		{
+			static float thunk(RE::ShadowSceneNode* shadowSceneNode, RE::NiPoint3& targetPosition, int& numHits, float& sunLightLevel, float& lightLevel, RE::NiLight& refLight, int32_t shadowBitMask)
+			{
+				auto ret = func(shadowSceneNode, targetPosition, numHits, sunLightLevel, lightLevel, refLight, shadowBitMask);
+				GetSingleton()->AddParticleLightLuminance(targetPosition, numHits, ret);
+				return ret;
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -234,18 +266,8 @@ public:
 		{
 			static void thunk(RE::BSGraphics::PixelShader* PixelShader, RE::BSRenderPass* Pass, DirectX::XMMATRIX& Transform, uint32_t LightCount, uint32_t ShadowLightCount, float WorldScale, Space RenderSpace)
 			{
-				GetSingleton()->BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(Pass, LightCount, ShadowLightCount);
+				GetSingleton()->BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(Pass, Transform, LightCount, ShadowLightCount, WorldScale, RenderSpace);
 				func(PixelShader, Pass, Transform, LightCount, ShadowLightCount, WorldScale, RenderSpace);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct AIProcess_CalculateLightValue_GetLuminance
-		{
-			static void thunk(RE::ShadowSceneNode* shadowSceneNode, RE::NiPoint3& targetPosition, int& numHits, float& sunLightLevel, float& lightLevel, RE::NiLight& refLight, int32_t shadowBitMask)
-			{
-				func(shadowSceneNode, targetPosition, numHits, sunLightLevel, lightLevel, refLight, shadowBitMask);
-				GetSingleton()->AddParticleLightLuminance(targetPosition, numHits, lightLevel);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -265,6 +287,8 @@ public:
 			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 
 			logger::info("[LLF] Installed hooks");
+
+			stl::write_thunk_call<BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights>(REL::RelocationID(100565, 107300).address() + REL::Relocate(0x523, 0xB0E, 0x5fe));
 		}
 	};
 };

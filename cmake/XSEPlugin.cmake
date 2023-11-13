@@ -97,6 +97,7 @@ if (CMAKE_GENERATOR MATCHES "Visual Studio")
 			/Zc:trigraphs
 			/Zc:wchar_t
 			/wd4200 # nonstandard extension used : zero-sized array in struct/union
+			/arch:AVX2
 	)
 
 	target_compile_options(${PROJECT_NAME} PUBLIC "$<$<CONFIG:DEBUG>:/fp:strict>")

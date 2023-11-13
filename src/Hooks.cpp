@@ -85,20 +85,27 @@ void hk_BSShader_LoadShaders(RE::BSShader* shader, std::uintptr_t stream)
 {
 	(ptr_BSShader_LoadShaders)(shader, stream);
 	auto& shaderCache = SIE::ShaderCache::Instance();
+
 	if (shaderCache.IsDiskCache() || shaderCache.IsDump()) {
-		for (const auto& entry : shader->pixelShaders) {
-			if (entry->shader && shaderCache.IsDump()) {
-				auto& bytecode = GetShaderBytecode(entry->shader);
-				DumpShader((REX::BSShader*)shader, entry, bytecode);
-			}
-			shaderCache.GetPixelShader(*shader, entry->id);
-		}
 		for (const auto& entry : shader->vertexShaders) {
 			if (entry->shader && shaderCache.IsDump()) {
 				auto& bytecode = GetShaderBytecode(entry->shader);
 				DumpShader((REX::BSShader*)shader, entry, bytecode);
 			}
-			shaderCache.GetVertexShader(*shader, entry->id);
+			auto vertexShaderDesriptor = entry->id;
+			auto pixelShaderDescriptor = entry->id;
+			State::GetSingleton()->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
+			shaderCache.GetVertexShader(*shader, vertexShaderDesriptor);
+		}
+		for (const auto& entry : shader->pixelShaders) {
+			if (entry->shader && shaderCache.IsDump()) {
+				auto& bytecode = GetShaderBytecode(entry->shader);
+				DumpShader((REX::BSShader*)shader, entry, bytecode);
+			}
+			auto vertexShaderDesriptor = entry->id;
+			auto pixelShaderDescriptor = entry->id;
+			State::GetSingleton()->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
+			shaderCache.GetPixelShader(*shader, pixelShaderDescriptor);
 		}
 	}
 	BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
@@ -159,6 +166,57 @@ HRESULT STDMETHODCALLTYPE hk_CreatePixelShader(ID3D11Device* This, const void* p
 	return hr;
 }
 
+decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChain;
+
+HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
+	IDXGIAdapter* pAdapter,
+	D3D_DRIVER_TYPE DriverType,
+	HMODULE Software,
+	UINT Flags,
+	[[maybe_unused]] const D3D_FEATURE_LEVEL* pFeatureLevels,
+	[[maybe_unused]] UINT FeatureLevels,
+	UINT SDKVersion,
+	const DXGI_SWAP_CHAIN_DESC* pSwapChainDesc,
+	IDXGISwapChain** ppSwapChain,
+	ID3D11Device** ppDevice,
+	[[maybe_unused]] D3D_FEATURE_LEVEL* pFeatureLevel,
+	ID3D11DeviceContext** ppImmediateContext)
+{
+	logger::info("Upgrading D3D11 feature level to 11.1");
+
+	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;  // Create a device with only the latest feature level
+
+#ifndef NDEBUG
+	// Flags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+
+	HRESULT hr = (*ptrD3D11CreateDeviceAndSwapChain)(
+		pAdapter,
+		DriverType,
+		Software,
+		Flags,
+		&featureLevel,
+		1,
+		SDKVersion,
+		pSwapChainDesc,
+		ppSwapChain,
+		ppDevice,
+		nullptr,
+		ppImmediateContext);
+
+	return hr;
+}
+
+void hk_BSShaderRenderTargets_Create();
+
+decltype(&hk_BSShaderRenderTargets_Create) ptr_BSShaderRenderTargets_Create;
+
+void hk_BSShaderRenderTargets_Create()
+{
+	(ptr_BSShaderRenderTargets_Create)();
+	State::GetSingleton()->Setup();
+}
+
 namespace Hooks
 {
 	struct BSGraphics_Renderer_Init_InitD3D
@@ -186,8 +244,37 @@ namespace Hooks
 				*(uintptr_t*)&ptrCreateVertexShader = Detours::X64::DetourClassVTable(*(uintptr_t*)device, &hk_CreateVertexShader, 12);
 				*(uintptr_t*)&ptrCreatePixelShader = Detours::X64::DetourClassVTable(*(uintptr_t*)device, &hk_CreatePixelShader, 15);
 			}
-			State::GetSingleton()->Setup();
 			Menu::GetSingleton()->Init(swapchain, device, context);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSImagespaceShaderISSAOCompositeSAO_SetupTechnique
+	{
+		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
+		{
+			State::GetSingleton()->DrawDeferred();
+			func(a_shader, a_material);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSImagespaceShaderISSAOCompositeFog_SetupTechnique
+	{
+		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
+		{
+			State::GetSingleton()->DrawDeferred();
+			func(a_shader, a_material);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSImagespaceShaderISSAOCompositeSAOFog_SetupTechnique
+	{
+		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
+		{
+			State::GetSingleton()->DrawDeferred();
+			func(a_shader, a_material);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -202,5 +289,17 @@ namespace Hooks
 		*(uintptr_t*)&ptr_BSGraphics_SetDirtyStates = Detours::X64::DetourFunction(REL::RelocationID(75580, 77386).address(), (uintptr_t)&hk_BSGraphics_SetDirtyStates);
 		logger::info("Hooking BSGraphics::Renderer::InitD3D");
 		stl::write_thunk_call<BSGraphics_Renderer_Init_InitD3D>(REL::RelocationID(75595, 77226).address() + REL::Relocate(0x50, 0x2BC));
+
+		logger::info("Hooking deferred passes");
+		stl::write_vfunc<0x2, BSImagespaceShaderISSAOCompositeSAO_SetupTechnique>(RE::VTABLE_BSImagespaceShaderISSAOCompositeSAO[0]);
+		stl::write_vfunc<0x2, BSImagespaceShaderISSAOCompositeFog_SetupTechnique>(RE::VTABLE_BSImagespaceShaderISSAOCompositeFog[0]);
+		stl::write_vfunc<0x2, BSImagespaceShaderISSAOCompositeSAOFog_SetupTechnique>(RE::VTABLE_BSImagespaceShaderISSAOCompositeSAOFog[0]);
+
+		//logger::info("Hooking D3D11CreateDeviceAndSwapChain");
+		//*(FARPROC*)&ptrD3D11CreateDeviceAndSwapChain = GetProcAddress(GetModuleHandleA("d3d11.dll"), "D3D11CreateDeviceAndSwapChain");
+		//SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChain, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
+
+		logger::info("Hooking BSShaderRenderTargets::Create");
+		*(uintptr_t*)&ptr_BSShaderRenderTargets_Create = Detours::X64::DetourFunction(REL::RelocationID(100458, 107175).address(), (uintptr_t)&hk_BSShaderRenderTargets_Create);
 	}
 }

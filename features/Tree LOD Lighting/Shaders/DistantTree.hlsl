@@ -1,9 +1,9 @@
+#include "Common/Color.hlsl"
 #include "Common/FrameBuffer.hlsl"
 #include "Common/MotionBlur.hlsl"
 
 cbuffer PerFrame : register(b3)
 {
-	float4 EyePosition;
 	row_major float3x4 DirectionalAmbient;
 	float4 DirLightColor;
 	float4 DirLightDirection;
@@ -12,9 +12,7 @@ cbuffer PerFrame : register(b3)
 	bool EnableComplexTreeLOD;
 	bool EnableDirLightFix;
 	float SubsurfaceScatteringAmount;
-	float FogDimmerAmount;
-	float pad0;
-	float pad1;
+	float pad[3];
 }
 
 struct VS_INPUT
@@ -36,8 +34,8 @@ struct VS_OUTPUT
 #else
 	float4 WorldPosition : POSITION1;
 	float4 PreviousWorldPosition : POSITION2;
-	float3 ViewDirectionVec : POSITION3;
 #endif
+	float3 SphereNormal : TEXCOORD4;
 };
 
 #ifdef VSHADER
@@ -62,6 +60,7 @@ VS_OUTPUT main(VS_INPUT input)
 	adjustedModelPosition.x = dot(float2(1, -1) * input.InstanceData2.xy, scaledModelPosition.xy);
 	adjustedModelPosition.y = dot(input.InstanceData2.yx, scaledModelPosition.xy);
 	adjustedModelPosition.z = scaledModelPosition.z;
+
 	float4 finalModelPosition = float4(input.InstanceData1.xyz + adjustedModelPosition.xyz, 1.0);
 	float4 viewPosition = mul(WorldViewProj, finalModelPosition);
 
@@ -71,11 +70,17 @@ VS_OUTPUT main(VS_INPUT input)
 #	else
 	vsout.WorldPosition = mul(World, finalModelPosition);
 	vsout.PreviousWorldPosition = mul(PreviousWorld, finalModelPosition);
-	vsout.ViewDirectionVec.xyz = EyePosition.xyz - vsout.WorldPosition.xyz;
 #	endif
 
 	vsout.Position = viewPosition;
 	vsout.TexCoord = float3(input.TexCoord0.xy, FogParam.z);
+
+	scaledModelPosition = input.Position.xyz;
+	adjustedModelPosition.x = dot(float2(1, -1) * input.InstanceData2.xy, scaledModelPosition.xy);
+	adjustedModelPosition.y = dot(input.InstanceData2.yx, scaledModelPosition.xy);
+	adjustedModelPosition.z = scaledModelPosition.z;
+
+	vsout.SphereNormal.xyz = mul(World, normalize(adjustedModelPosition));
 
 	return vsout;
 }
@@ -95,7 +100,7 @@ struct PS_OUTPUT
 
 #ifdef PSHADER
 SamplerState SampDiffuse : register(s0);
-
+SamplerState SampShadowMaskSampler : register(s14);
 Texture2D<float4> TexDiffuse : register(t0);
 
 cbuffer AlphaTestRefCB : register(b11)
@@ -213,23 +218,26 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 ddy = ddy_coarse(input.WorldPosition);
 	float3 normal = normalize(cross(ddx, ddy));
 
-	float3 viewDirection = normalize(input.ViewDirectionVec);
+	float3 viewDirection = -normalize(input.WorldPosition.xyz);
 	float3 worldNormal = normal;
+
+	worldNormal = normalize(input.SphereNormal.xyz);
+	worldNormal.xy *= 2;
+	worldNormal = normalize(worldNormal);
+	worldNormal = normalize(lerp(-worldNormal, normal, 0.25));
 
 	if (ComplexAtlasTexture && EnableComplexTreeLOD) {
 		float3 normalColor = TexDiffuse.Sample(SampDiffuse, float2(input.TexCoord.x, 0.5 + input.TexCoord.y));
 		normalColor = TransformNormal(normalColor);
 		// Increases the strength of the normal to simulate more advanced lighting.
-		normalColor.xy *= 2 + (8 * (1 - input.TexCoord.z));
+		normalColor.xy *= 2;
 		normalColor = normalize(normalColor);
-		// Inverting x as well as y seems to look more correct.
-		normalColor.xy = -normalColor.xy;
 		// world-space -> tangent-space -> world-space.
 		// This is because we don't have pre-computed tangents.
-		worldNormal.xyz = normalize(mul(normalColor.xyz, CalculateTBN(worldNormal.xyz, -viewDirection, input.TexCoord.xy)));
+		worldNormal.xyz = normalize(mul(normalColor.xyz, CalculateTBN(worldNormal.xyz, -input.WorldPosition.xyz, input.TexCoord.xy)));
 	}
 
-	float3 dirLightColor = DirLightColor.xyz;
+	float3 dirLightColor = lerp(RGBToLuminance(DirLightColor.xyz), DirLightColor.xyz, 0.5) * 0.5;
 
 	if (EnableDirLightFix) {
 		dirLightColor *= DirLightScale;
@@ -242,8 +250,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	shadowColor *= dirLightSShadow;
 #		endif
 
-	dirLightColor *= min(lerp(1, input.TexCoord.zzz, FogDimmerAmount), min(0.5, shadowColor));
-
 	float3 diffuseColor = 0;
 
 	float3 lightsDiffuseColor = 0;
@@ -253,11 +259,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	lightsDiffuseColor += dirDiffuseColor * dirLightColor;
 
+	float3 subsurfaceColor = lerp(RGBToLuminance(baseColor.xyz), baseColor.xyz, 2.0);
+
 	// Applies lighting across the whole surface apart from what is already lit.
-	lightsDiffuseColor += nsDirLightColor * GetSoftLightMultiplier(dirLightAngle, SubsurfaceScatteringAmount);
+	lightsDiffuseColor += subsurfaceColor * nsDirLightColor * GetSoftLightMultiplier(dirLightAngle, SubsurfaceScatteringAmount);
 
 	// Applies lighting from the opposite direction. Does not account for normals perpendicular to the light source.
-	lightsDiffuseColor += dirLightColor * saturate(-dirLightAngle) * SubsurfaceScatteringAmount;
+	lightsDiffuseColor += subsurfaceColor * dirLightColor * saturate(-dirLightAngle) * SubsurfaceScatteringAmount;
 
 	float3 directionalAmbientColor = mul(DirectionalAmbient, float4(worldNormal.xyz, 1));
 	lightsDiffuseColor += directionalAmbientColor;

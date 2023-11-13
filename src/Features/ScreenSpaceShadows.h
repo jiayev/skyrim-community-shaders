@@ -13,6 +13,9 @@ struct ScreenSpaceShadows : Feature
 
 	virtual inline std::string GetName() { return "Screen-Space Shadows"; }
 	virtual inline std::string GetShortName() { return "ScreenSpaceShadows"; }
+	inline std::string_view GetShaderDefineName() override { return "SCREEN_SPACE_SHADOWS"; }
+
+	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
 	struct Settings
 	{
@@ -25,6 +28,7 @@ struct ScreenSpaceShadows : Feature
 		float NearHardness = 32.0f;
 		float BlurRadius = 0.5f;
 		float BlurDropoff = 0.005f;
+		bool Enabled = true;
 	};
 
 	struct alignas(16) PerPass
@@ -50,8 +54,6 @@ struct ScreenSpaceShadows : Feature
 
 	ConstantBuffer* perPass = nullptr;
 
-	bool enabled = true;
-
 	ID3D11SamplerState* computeSampler = nullptr;
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
@@ -72,7 +74,7 @@ struct ScreenSpaceShadows : Feature
 	void ModifyGrass(const RE::BSShader* shader, const uint32_t descriptor);
 	void ModifyDistantTree(const RE::BSShader*, const uint32_t descriptor);
 
-	void ClearComputeShader();
+	virtual void ClearShaderCache() override;
 	ID3D11ComputeShader* GetComputeShader();
 	ID3D11ComputeShader* GetComputeShaderHorizontalBlur();
 	ID3D11ComputeShader* GetComputeShaderVerticalBlur();

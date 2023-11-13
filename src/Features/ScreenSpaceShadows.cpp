@@ -15,38 +15,116 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	NearThickness,
 	NearHardness,
 	BlurRadius,
-	BlurDropoff)
+	BlurDropoff,
+	Enabled)
 
 void ScreenSpaceShadows::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox("Enable Screen-Space Shadows", &enabled);
+		ImGui::Checkbox("Enable Screen-Space Shadows", &settings.Enabled);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Enables screen-space shadows.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
-		ImGui::TextWrapped("Controls the accuracy of traced shadows.");
 		ImGui::SliderInt("Max Samples", (int*)&settings.MaxSamples, 1, 512);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Controls the accuracy of traced shadows.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
+		ImGui::Spacing();
+		ImGui::Spacing();
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx("Blur Filter", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Blur Radius", &settings.BlurRadius, 0, 1);
-		ImGui::SliderFloat("Blur Depth Dropoff", &settings.BlurDropoff, 0.001f, 0.1f);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Blur radius.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
+		ImGui::SliderFloat("Blur Depth Dropoff", &settings.BlurDropoff, 0.001f, 0.1f);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Blur depth dropoff.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
+
+		ImGui::Spacing();
+		ImGui::Spacing();
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx("Near Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Near Distance", &settings.NearDistance, 0, 128);
-		ImGui::SliderFloat("Near Thickness", &settings.NearThickness, 0, 128);
-		ImGui::SliderFloat("Near Hardness", &settings.NearHardness, 0, 64);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Near Shadow Distance.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
+		ImGui::SliderFloat("Near Thickness", &settings.NearThickness, 0, 128);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Near Shadow Thickness.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
+		ImGui::SliderFloat("Near Hardness", &settings.NearHardness, 0, 64);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Near Shadow Hardness.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
+
+		ImGui::Spacing();
+		ImGui::Spacing();
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx("Far Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Far Distance Scale", &settings.FarDistanceScale, 0, 1);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Far Shadow Distance Scale.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 		ImGui::SliderFloat("Far Thickness Scale", &settings.FarThicknessScale, 0, 1);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Far Shadow Thickness Scale.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 		ImGui::SliderFloat("Far Hardness", &settings.FarHardness, 0, 64);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text("Far Shadow Hardness.");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 
 		ImGui::TreePop();
 	}
@@ -109,7 +187,7 @@ uint32_t GetTechnique(uint32_t descriptor)
 	return 0x3F & (descriptor >> 24);
 }
 
-void ScreenSpaceShadows::ClearComputeShader()
+void ScreenSpaceShadows::ClearShaderCache()
 {
 	if (raymarchProgram) {
 		raymarchProgram->Release();
@@ -221,7 +299,7 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 		if (shadowState->GetRuntimeData().cubeMapRenderTarget == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS) {
 			enableSSS = false;
 
-		} else if (!renderedScreenCamera && enabled) {
+		} else if (!renderedScreenCamera && settings.Enabled) {
 			renderedScreenCamera = true;
 
 			// Backup the game state
@@ -371,7 +449,7 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 		}
 
 		PerPass data{};
-		data.EnableSSS = enableSSS && shadowState->GetRuntimeData().rasterStateCullMode <= 1 && enabled;
+		data.EnableSSS = enableSSS && settings.Enabled;
 		perPass->Update(data);
 
 		if (renderedScreenCamera) {
@@ -431,4 +509,16 @@ void ScreenSpaceShadows::SetupResources()
 void ScreenSpaceShadows::Reset()
 {
 	renderedScreenCamera = false;
+}
+
+bool ScreenSpaceShadows::HasShaderDefine(RE::BSShader::Type shaderType)
+{
+	switch (shaderType) {
+	case RE::BSShader::Type::Lighting:
+	case RE::BSShader::Type::Grass:
+	case RE::BSShader::Type::DistantTree:
+		return true;
+	default:
+		return false;
+	}
 }

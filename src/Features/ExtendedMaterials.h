@@ -13,6 +13,9 @@ struct ExtendedMaterials : Feature
 
 	virtual inline std::string GetName() { return "Complex Parallax Materials"; }
 	virtual inline std::string GetShortName() { return "ComplexParallaxMaterials"; }
+	inline std::string_view GetShaderDefineName() override { return "COMPLEX_PARALLAX_MATERIALS"; }
+
+	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
 	struct Settings
 	{
@@ -22,9 +25,9 @@ struct ExtendedMaterials : Feature
 		uint32_t EnableTerrain = 0;
 		uint32_t EnableHighQuality = 0;
 
-		uint32_t MaxDistance = 2048;
+		uint32_t MaxDistance = 4096;
 		float CRPMRange = 0.5f;
-		float BlendRange = 0.05f;
+		float BlendRange = 0.25f;
 		float Height = 0.1f;
 
 		uint32_t EnableShadows = 1;
@@ -32,9 +35,8 @@ struct ExtendedMaterials : Feature
 		uint32_t ShadowsEndFade = 1024;
 	};
 
-	struct alignas(16) PerPass
+	struct PerPass
 	{
-		uint32_t CullingMode = 0;
 		Settings settings;
 	};
 
@@ -46,6 +48,8 @@ struct ExtendedMaterials : Feature
 
 	virtual void SetupResources();
 	virtual inline void Reset() {}
+
+	virtual void DataLoaded() override;
 
 	virtual void DrawSettings();
 
