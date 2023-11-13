@@ -47,7 +47,8 @@
   },
   "Menu": {
     "Font Scale": 0.0,
-    "Toggle Key": 35
+    "Toggle Key": 35,
+    "Effects Toggle Key": 106
   },
   "Replace Original Shaders": {
     "BloodSplatter": false,

@@ -14,6 +14,7 @@
 #define SETTING_MENU_TOGGLEKEY "Toggle Key"
 #define SETTING_MENU_SKIPKEY "Skip Compilation Key"
 #define SETTING_MENU_FONTSCALE "Font Scale"
+#define SETTING_MENU_TOGGLE_SHADERS_KEY "Toggle Effects Key"
 
 void SetupImGuiStyle()
 {
@@ -82,6 +83,9 @@ void Menu::Load(json& o_json)
 	if (o_json[SETTING_MENU_FONTSCALE].is_number_float()) {
 		fontScale = o_json[SETTING_MENU_FONTSCALE];
 	}
+	if (o_json[SETTING_MENU_TOGGLE_SHADERS_KEY].is_number_unsigned()) {
+		effectToggleKey = o_json[SETTING_MENU_TOGGLE_SHADERS_KEY];
+	}
 }
 
 void Menu::Save(json& o_json)
@@ -90,6 +94,7 @@ void Menu::Save(json& o_json)
 	menu[SETTING_MENU_TOGGLEKEY] = toggleKey;
 	menu[SETTING_MENU_SKIPKEY] = skipCompilationKey;
 	menu[SETTING_MENU_FONTSCALE] = fontScale;
+	menu[SETTING_MENU_TOGGLE_SHADERS_KEY] = effectToggleKey;
 
 	o_json["Menu"] = menu;
 }
@@ -221,11 +226,17 @@ RE::BSEventNotifyControl Menu::ProcessEvent(RE::InputEvent* const* a_event, RE::
 					} else if (settingSkipCompilationKey) {
 						skipCompilationKey = key;
 						settingSkipCompilationKey = false;
+					} else if (settingsEffectsToggle) {
+						effectToggleKey = key;
+						settingsEffectsToggle = false;
 					} else if (key == toggleKey) {
 						IsEnabled = !IsEnabled;
 					} else if (key == skipCompilationKey) {
 						auto& shaderCache = SIE::ShaderCache::Instance();
 						shaderCache.backgroundCompilation = true;
+					} else if (key == effectToggleKey) {
+						auto& shaderCache = SIE::ShaderCache::Instance();
+						shaderCache.SetEnabled(!shaderCache.IsEnabled());
 					}
 				}
 
@@ -430,6 +441,21 @@ void Menu::DrawSettings()
 				ImGui::SameLine();
 				if (ImGui::Button("Change##toggle")) {
 					settingToggleKey = true;
+				}
+			}
+			if (settingsEffectsToggle) {
+				ImGui::Text("Press any key to set as a toggle key for all effects...");
+			} else {
+				ImGui::AlignTextToFramePadding();
+				ImGui::Text("Effect Toggle Key:");
+				ImGui::SameLine();
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", KeyIdToString(effectToggleKey));
+
+				ImGui::AlignTextToFramePadding();
+				ImGui::SameLine();
+				if (ImGui::Button("Change##toggle")) {
+					settingsEffectsToggle = true;
 				}
 			}
 			if (settingSkipCompilationKey) {
