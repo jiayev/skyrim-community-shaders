@@ -7,8 +7,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DistantTreeLighting::Settings,
 	EnableComplexTreeLOD,
 	EnableDirLightFix,
-	SubsurfaceScatteringAmount,
-	FogDimmerAmount)
+	SubsurfaceScatteringAmount
+)
 
 void DistantTreeLighting::DrawSettings()
 {
@@ -61,19 +61,6 @@ void DistantTreeLighting::DrawSettings()
 		ImGui::Spacing();
 		ImGui::TreePop();
 	}
-
-	if (ImGui::TreeNodeEx("Vanilla", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::SliderFloat("Fog Dimmer Amount", &settings.FogDimmerAmount, 0.0f, 1.0f);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-			ImGui::Text("Darkens lighting relative fog strength.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
-		}
-
-		ImGui::TreePop();
-	}
 }
 
 enum class DistantTreeShaderTechniques
@@ -112,20 +99,6 @@ void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t 
 		Util::StoreTransform3x4NoScale(perPassData.DirectionalAmbient, dalcTransform);
 
 		auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-
-		auto& position = accumulator->GetRuntimeData().eyePosition;
-		auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-
-		RE::NiPoint3 eyePosition{};
-		if (REL::Module::IsVR()) {
-			// find center of eye position
-			eyePosition = state->GetVRRuntimeData().posAdjust.getEye() + state->GetVRRuntimeData().posAdjust.getEye(1);
-			eyePosition /= 2;
-		} else
-			eyePosition = state->GetRuntimeData().posAdjust.getEye();
-		perPassData.EyePosition.x = position.x - eyePosition.x;
-		perPassData.EyePosition.y = position.y - eyePosition.y;
-		perPassData.EyePosition.z = position.z - eyePosition.z;
 
 		auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
 		if (sunLight) {
