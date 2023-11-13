@@ -349,11 +349,10 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	if !defined(MODELSPACENORMALS)
 	float3x3 tbn = float3x3(
-		float3(input.Position.w , input.Normal.w * 2 - 1, input.Bitangent.w * 2 - 1),
+		float3(input.Position.w, input.Normal.w * 2 - 1, input.Bitangent.w * 2 - 1),
 		input.Bitangent.xyz * 2.0.xxx + -1.0.xxx,
 		input.Normal.xyz * 2.0.xxx + -1.0.xxx);
 	float3x3 tbnTr = transpose(tbn);
-
 
 #		if defined(SKINNED)
 	float3x3 worldTbnTr = transpose(mul(transpose(tbnTr), transpose(boneRSMatrix)));
@@ -1021,7 +1020,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3x3 tbnTr = transpose(tbn);
 	float3x3 tbnWS = tbn;
 #		if !defined(DRAW_IN_WORLDSPACE)
-	if (!input.WorldSpace){
+	if (!input.WorldSpace) {
 		tbnWS[0] = normalize(mul(input.World[0], tbnTr[0]));
 		tbnWS[1] = normalize(mul(input.World[0], tbnTr[1]));
 		tbnWS[2] = cross(tbnWS[0], tbnWS[1]);
@@ -1059,7 +1058,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(PARALLAX)
 	if (perPassParallax[0].EnableParallax) {
 		mipLevel = GetMipLevel(uv, TexParallaxSampler);
-		uv = GetParallaxCoords( viewPosition.z, uv, mipLevel, worldSpaceViewDirection, tbnWS, TexParallaxSampler, SampParallaxSampler, 0);
+		uv = GetParallaxCoords(viewPosition.z, uv, mipLevel, worldSpaceViewDirection, tbnWS, TexParallaxSampler, SampParallaxSampler, 0);
 		if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 			sh0 = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
 	}
@@ -1078,7 +1077,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			if (envMaskTest > (4.0f / 255.0f)) {
 				complexMaterialParallax = true;
 				mipLevel = GetMipLevel(uv, TexEnvMaskSampler);
-				uv = GetParallaxCoords( viewPosition.z, uv, mipLevel, worldSpaceViewDirection, tbnWS, TexEnvMaskSampler, SampTerrainParallaxSampler, 3);
+				uv = GetParallaxCoords(viewPosition.z, uv, mipLevel, worldSpaceViewDirection, tbnWS, TexEnvMaskSampler, SampTerrainParallaxSampler, 3);
 				if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 					sh0 = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, mipLevel).w;
 			}
@@ -1218,7 +1217,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(CPM_AVAILABLE)
 		if (perPassParallax[0].EnableTerrainParallax) {
 			mipLevel[1] = GetMipLevel(uvOriginal, TexLandColor2Sampler);
-			uv = GetParallaxCoords( viewPosition.z, uvOriginal, mipLevel[1], worldSpaceViewDirection, tbnWS, TexLandColor2Sampler, SampTerrainParallaxSampler, 3, input.LandBlendWeights1.y);
+			uv = GetParallaxCoords(viewPosition.z, uvOriginal, mipLevel[1], worldSpaceViewDirection, tbnWS, TexLandColor2Sampler, SampTerrainParallaxSampler, 3, input.LandBlendWeights1.y);
 			terrainUVs[1] = uv;
 			if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 				sh0[1] = TexLandColor2Sampler.SampleLevel(SampTerrainParallaxSampler, uv, mipLevel[1]).w;
@@ -1240,7 +1239,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(CPM_AVAILABLE)
 		if (perPassParallax[0].EnableTerrainParallax) {
 			mipLevel[2] = GetMipLevel(uvOriginal, TexLandColor3Sampler);
-			uv = GetParallaxCoords( viewPosition.z, uvOriginal, mipLevel[2], worldSpaceViewDirection, tbnWS, TexLandColor3Sampler, SampTerrainParallaxSampler, 3, input.LandBlendWeights1.z);
+			uv = GetParallaxCoords(viewPosition.z, uvOriginal, mipLevel[2], worldSpaceViewDirection, tbnWS, TexLandColor3Sampler, SampTerrainParallaxSampler, 3, input.LandBlendWeights1.z);
 			terrainUVs[2] = uv;
 			if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 				sh0[2] = TexLandColor3Sampler.SampleLevel(SampTerrainParallaxSampler, uv, mipLevel[2]).w;
@@ -1262,7 +1261,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(CPM_AVAILABLE)
 		if (perPassParallax[0].EnableTerrainParallax) {
 			mipLevel[3] = GetMipLevel(uvOriginal, TexLandColor4Sampler);
-			uv = GetParallaxCoords( viewPosition.z, uvOriginal, mipLevel[3], worldSpaceViewDirection, tbnWS, TexLandColor4Sampler, SampTerrainParallaxSampler, 3, input.LandBlendWeights1.w);
+			uv = GetParallaxCoords(viewPosition.z, uvOriginal, mipLevel[3], worldSpaceViewDirection, tbnWS, TexLandColor4Sampler, SampTerrainParallaxSampler, 3, input.LandBlendWeights1.w);
 			terrainUVs[3] = uv;
 			if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 				sh0[3] = TexLandColor4Sampler.SampleLevel(SampTerrainParallaxSampler, uv, mipLevel[3]).w;
@@ -1284,7 +1283,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(CPM_AVAILABLE)
 		if (perPassParallax[0].EnableTerrainParallax) {
 			mipLevel[4] = GetMipLevel(uvOriginal, TexLandColor5Sampler);
-			uv = GetParallaxCoords( viewPosition.z, uvOriginal, mipLevel[4], worldSpaceViewDirection, tbnWS, TexLandColor5Sampler, SampTerrainParallaxSampler, 3, input.LandBlendWeights2.x);
+			uv = GetParallaxCoords(viewPosition.z, uvOriginal, mipLevel[4], worldSpaceViewDirection, tbnWS, TexLandColor5Sampler, SampTerrainParallaxSampler, 3, input.LandBlendWeights2.x);
 			terrainUVs[4] = uv;
 			if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 				sh0[4] = TexLandColor5Sampler.SampleLevel(SampTerrainParallaxSampler, uv, mipLevel[4]).w;
@@ -1306,7 +1305,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(CPM_AVAILABLE)
 		if (perPassParallax[0].EnableTerrainParallax) {
 			mipLevel[5] = GetMipLevel(uvOriginal, TexLandColor6Sampler);
-			uv = GetParallaxCoords( viewPosition.z, uvOriginal, mipLevel[5], worldSpaceViewDirection, tbnWS, TexLandColor6Sampler, SampTerrainParallaxSampler, 3, input.LandBlendWeights2.y);
+			uv = GetParallaxCoords(viewPosition.z, uvOriginal, mipLevel[5], worldSpaceViewDirection, tbnWS, TexLandColor6Sampler, SampTerrainParallaxSampler, 3, input.LandBlendWeights2.y);
 			terrainUVs[5] = uv;
 			if (perPassParallax[0].EnableShadows && parallaxShadowQuality > 0.0f)
 				sh0[5] = TexLandColor6Sampler.SampleLevel(SampTerrainParallaxSampler, uv, mipLevel[5]).w;
@@ -1882,13 +1881,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		if (dynamicCubemap) {
 			float3 F0;
 #			if defined(CPM_AVAILABLE)
-			if (envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0){
+			if (envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0) {
 				F0 = 1.0;
 			} else {
 				F0 = envColorBase;
 			}
 #			else
-			if (envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0){
+			if (envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0) {
 				F0 = 1.0;
 			} else {
 				F0 = envColorBase;
