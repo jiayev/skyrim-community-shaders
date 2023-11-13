@@ -723,8 +723,11 @@ bool LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 
 float3 LightLimitFix::Saturation(float3 color, float saturation)
 {
-	auto grey = color.Dot(float3(0.3f, 0.59f, 0.11f));
-	return float3::Lerp(float3(grey), color, saturation);
+	float grey = color.Dot(float3(0.3f, 0.59f, 0.11f));
+	color.x = std::max(std::lerp(grey, color.x, saturation), 0.0f);
+	color.y = std::max(std::lerp(grey, color.y, saturation), 0.0f);
+	color.z = std::max(std::lerp(grey, color.z, saturation), 0.0f);
+	return color;
 }
 
 void LightLimitFix::UpdateLights()
