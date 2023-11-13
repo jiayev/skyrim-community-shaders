@@ -81,7 +81,7 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 		}
 #	endif
 #endif
-    	float heightCorrectionScale = ((-1.0*viewDirTS.z)+2.0);
+		float heightCorrectionScale = ((-1.0 * viewDirTS.z) + 2.0);
 
 		float stepSize = 1.0 / ((float)numSteps + 1.0);
 
@@ -112,9 +112,9 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 			currHeight.y = tex.SampleLevel(texSampler, currentOffset[0].zw, mipLevel)[channel];
 			currHeight.z = tex.SampleLevel(texSampler, currentOffset[1].xy, mipLevel)[channel];
 			currHeight.w = tex.SampleLevel(texSampler, currentOffset[1].zw, mipLevel)[channel];
-			
+
 			currHeight.xyzw -= 0.5;
-			currHeight.xyzw = heightCorrectionScale* currHeight.xyzw + 0.5;
+			currHeight.xyzw = heightCorrectionScale * currHeight.xyzw + 0.5;
 
 			bool4 testResult = currHeight >= currentBound;
 			[branch] if (any(testResult))
@@ -146,8 +146,7 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 					pt2 = float2(prevBound, prevHeight);
 				}
 
-				if (contactRefinement)
-				{
+				if (contactRefinement) {
 					break;
 				} else {
 					contactRefinement = true;
