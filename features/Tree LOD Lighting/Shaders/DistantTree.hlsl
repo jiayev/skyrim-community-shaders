@@ -1,6 +1,6 @@
+#include "Common/Color.hlsl"
 #include "Common/FrameBuffer.hlsl"
 #include "Common/MotionBlur.hlsl"
-#include "Common/Color.hlsl"
 
 cbuffer PerFrame : register(b3)
 {
@@ -74,12 +74,12 @@ VS_OUTPUT main(VS_INPUT input)
 
 	vsout.Position = viewPosition;
 	vsout.TexCoord = float3(input.TexCoord0.xy, FogParam.z);
-	
+
 	scaledModelPosition = input.Position.xyz;
 	adjustedModelPosition.x = dot(float2(1, -1) * input.InstanceData2.xy, scaledModelPosition.xy);
 	adjustedModelPosition.y = dot(input.InstanceData2.yx, scaledModelPosition.xy);
 	adjustedModelPosition.z = scaledModelPosition.z;
-	
+
 	vsout.SphereNormal.xyz = mul(World, normalize(adjustedModelPosition));
 
 	return vsout;
