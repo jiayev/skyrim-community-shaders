@@ -1,12 +1,12 @@
 {
  "Complex Parallax Materials": {
-  "BlendRange": 0.1679999977350235,
-  "CRPMRange": 1.0,
+  "BlendRange": 0.25,
+  "CRPMRange": 0.5,
   "EnableComplexMaterial": 1,
   "EnableHighQuality": 0,
   "EnableParallax": 1,
   "EnableShadows": 1,
-  "EnableTerrain": 1,
+  "EnableTerrain": 0,
   "Height": 0.10000000149011612,
   "MaxDistance": 4096,
   "ShadowsEndFade": 1024,
@@ -14,7 +14,7 @@
  },
  "General": {
   "Enable Async": true,
-  "Enable Disk Cache": true,
+  "Enable Disk Cache": false,
   "Enable Shaders": true
  },
  "Grass Collision": {
@@ -25,20 +25,20 @@
  "Grass Lighting": {
   "BasicGrassBrightness": 0.6660000085830688,
   "EnableDirLightFix": 1,
-  "Glossiness": 8.524999618530273,
-  "SpecularStrength": 0.1899999976158142,
-  "SubsurfaceScatteringAmount": 2.0
+  "Glossiness": 20.0,
+  "SpecularStrength": 0.5,
+  "SubsurfaceScatteringAmount": 1.0
  },
  "Light Limit Fix": {
-  "EnableContactShadows": true,
-  "EnableFirstPersonShadows": true,
+  "EnableContactShadows": false,
+  "EnableFirstPersonShadows": false,
   "EnableParticleLights": true,
   "EnableParticleLightsCulling": true,
   "EnableParticleLightsDetection": true,
   "EnableParticleLightsOptimization": true,
   "ParticleLightsBrightness": 1.0,
   "ParticleLightsOptimisationClusterRadius": 32,
-  "ParticleLightsSaturation": 2.0
+  "ParticleLightsSaturation": 1.0
  },
  "Menu": {
   "Font Scale": 0.0,
@@ -54,7 +54,7 @@
   "ImageSpace": false,
   "Lighting": true,
   "Particle": false,
-  "Sky": true,
+  "Sky": false,
   "Utility": false,
   "Water": true
  },
@@ -73,7 +73,7 @@
  "Tree LOD Lighting": {
   "EnableComplexTreeLOD": 1,
   "EnableDirLightFix": 1,
-  "SubsurfaceScatteringAmount": 0.5009999871253967
+  "SubsurfaceScatteringAmount": 0.5
  },
  "Version": "0-7-0-0",
  "Water Blending": {
@@ -85,14 +85,14 @@
  "Wetness Effects": {
   "EnableWetnessEffects": 1,
   "MaxDarkness": 1.0,
-  "MaxOcclusion": 0.0,
+  "MaxOcclusion": 0.15000000596046448,
   "MaxRainWetness": 1.0,
-  "MaxShoreWetness": 0.5379999876022339,
-  "MinRoughness": 0.0,
-  "PuddleFlatness": 1.0,
-  "PuddleMaxAngle": 0.9900000095367432,
-  "PuddleMinWetness": 0.7009999752044678,
-  "PuddleRadius": 1.0049999952316284,
+  "MaxShoreWetness": 0.5,
+  "MinRoughness": 0.10000000149011612,
+  "PuddleFlatness": 0.949999988079071,
+  "PuddleMaxAngle": 0.8999999761581421,
+  "PuddleMinWetness": 0.699999988079071,
+  "PuddleRadius": 1.0,
   "ShoreRange": 32
  }
 }
