@@ -18,10 +18,9 @@ struct GrassLighting : Feature
 	{
 		float Glossiness = 20.0f;
 		float SpecularStrength = 0.5f;
-		float SubsurfaceScatteringAmount = 1.0f;
+		float SubsurfaceScatteringAmount = 2.0f;
 		uint EnableDirLightFix = true;
-		float Brightness = 0.75f;
-		float Saturation = 1.5f;
+		float BasicGrassBrightness = 0.666f;
 	};
 
 	struct alignas(16) PerFrame
@@ -29,7 +28,7 @@ struct GrassLighting : Feature
 		DirectX::XMFLOAT3X4 DirectionalAmbient;
 		float SunlightScale;
 		Settings Settings;
-		float pad[1];
+		float pad[2];
 	};
 
 	Settings settings;

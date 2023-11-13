@@ -9,8 +9,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SpecularStrength,
 	SubsurfaceScatteringAmount,
 	EnableDirLightFix,
-	Brightness,
-	Saturation)
+	BasicGrassBrightness
+)
 
 enum class GrassShaderTechniques
 {
@@ -45,7 +45,7 @@ void GrassLighting::DrawSettings()
 	}
 
 	if (ImGui::TreeNodeEx("Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::SliderFloat("SSS Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 2.0f);
+		ImGui::SliderFloat("SSS Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 4.0f);
 		if (ImGui::IsItemHovered()) {
 			ImGui::BeginTooltip();
 			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
@@ -74,21 +74,12 @@ void GrassLighting::DrawSettings()
 
 		ImGui::Spacing();
 		ImGui::Spacing();
-		ImGui::TextWrapped("Grass Color");
-		ImGui::SliderFloat("Brightness", &settings.Brightness, 0.0f, 1.0f);
+		ImGui::TextWrapped("Basic Grass");
+		ImGui::SliderFloat("Brightness", &settings.BasicGrassBrightness, 0.0f, 1.0f);
 		if (ImGui::IsItemHovered()) {
 			ImGui::BeginTooltip();
 			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
 			ImGui::Text("Darkens the grass textures to look better with the new lighting");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
-		}
-
-		ImGui::SliderFloat("Saturation", &settings.Saturation, 1.0f, 2.0f);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-			ImGui::Text("Boosts the vibrancy of textures");
 			ImGui::PopTextWrapPos();
 			ImGui::EndTooltip();
 		}
