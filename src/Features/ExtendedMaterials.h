@@ -25,7 +25,7 @@ struct ExtendedMaterials : Feature
 		uint32_t EnableTerrain = 0;
 		uint32_t EnableHighQuality = 0;
 
-		uint32_t MaxDistance = 2048;
+		uint32_t MaxDistance = 4096;
 		float CRPMRange = 0.5f;
 		float BlendRange = 0.25f;
 		float Height = 0.1f;
