@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-static constexpr REL::Version SHADER_CACHE_VERSION = { 0, 0, 0, 12 };
+static constexpr REL::Version SHADER_CACHE_VERSION = { 0, 0, 0, 13 };
 
 using namespace std::chrono;
 
