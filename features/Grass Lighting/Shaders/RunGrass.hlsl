@@ -462,7 +462,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	// Applies lighting across the whole surface apart from what is already lit.
 	lightsDiffuseColor += subsurfaceColor * dirLightColor * GetSoftLightMultiplier(dirLightAngle, SubsurfaceScatteringAmount);
-	
+
 	// Applies lighting from the opposite direction. Does not account for normals perpendicular to the light source.
 	lightsDiffuseColor += subsurfaceColor * dirLightColor * saturate(-dirLightAngle) * SubsurfaceScatteringAmount;
 

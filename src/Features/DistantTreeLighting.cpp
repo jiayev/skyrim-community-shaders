@@ -7,8 +7,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DistantTreeLighting::Settings,
 	EnableComplexTreeLOD,
 	EnableDirLightFix,
-	SubsurfaceScatteringAmount
-)
+	SubsurfaceScatteringAmount)
 
 void DistantTreeLighting::DrawSettings()
 {
