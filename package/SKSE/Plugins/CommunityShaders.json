@@ -1,98 +1,98 @@
 {
-  "Advanced": {
-    "Dump Shaders": false,
-    "Log Level": 2,
-    "Shader Defines": ""
-  },
-  "Complex Parallax Materials": {
-    "BlendRange": 0.25,
-    "CRPMRange": 0.5,
-    "EnableComplexMaterial": 1,
-    "EnableHighQuality": 0,
-    "EnableParallax": 1,
-    "EnableShadows": 1,
-    "EnableTerrain": 0,
-    "Height": 0.10000000149011612,
-    "MaxDistance": 2048,
-    "ShadowsEndFade": 1024,
-    "ShadowsStartFade": 512
-  },
-  "General": {
-    "Enable Async": true,
-    "Enable Disk Cache": true,
-    "Enable Shaders": true
-  },
-  "Grass Collision": {
-    "DisplacementMultiplier": 16.0,
-    "EnableGrassCollision": 1,
-    "RadiusMultiplier": 2.0
-  },
-  "Grass Lighting": {
-    "Brightness": 0.75,
-    "EnableDirLightFix": 1,
-    "Glossiness": 20.0,
-    "SpecularStrength": 0.5,
-    "SubsurfaceScatteringAmount": 1.0
-  },
-  "Light Limit Fix": {
-    "EnableContactShadows": false,
-    "EnableFirstPersonShadows": false,
-    "EnableParticleLights": true,
-    "EnableParticleLightsCulling": true,
-    "EnableParticleLightsDetection": true,
-    "EnableParticleLightsOptimization": true,
-    "ParticleLightsBrightness": 1.0,
-    "ParticleLightsOptimisationClusterRadius": 32,
-    "ParticleLightsSaturation": 1.0
-  },
-  "Menu": {
-    "Font Scale": 0.0,
-    "Toggle Key": 35,
-    "Effects Toggle Key": 106
-  },
-  "Replace Original Shaders": {
-    "BloodSplatter": false,
-    "DistantTree": true,
-    "Effect": false,
-    "Grass": true,
-    "ImageSpace": false,
-    "Lighting": true,
-    "Particle": false,
-    "Sky": false,
-    "Utility": false,
-    "Water": true
-  },
-  "Screen-Space Shadows": {
-    "BlurDropoff": 0.004999999888241291,
-    "BlurRadius": 0.5,
-    "FarDistanceScale": 0.02500000037252903,
-    "FarHardness": 8.0,
-    "FarThicknessScale": 0.02500000037252903,
-    "MaxSamples": 24,
-    "NearDistance": 16.0,
-    "NearHardness": 32.0,
-    "NearThickness": 2.0
-  },
-  "Tree LOD Lighting": {
-    "EnableComplexTreeLOD": 1,
-    "EnableDirLightFix": 1,
-    "FogDimmerAmount": 1.0,
-    "SubsurfaceScatteringAmount": 0.5
-  },
-  "Version": "0-6-0-0",
-  "Water Blending": {
-    "EnableWaterBlending": 1,
-    "EnableWaterBlendingSSR": 1,
-    "SSRBlendRange": 1.0,
-    "WaterBlendRange": 1.0
-  },
-  "Rain Wetness Effects": {
-    "EnableRainWetnessEffects": 1,
-    "RainShininessMultiplierDay": 2.0,
-    "RainSpecularMultiplierDay": 15.0,
-    "RainDiffuseMultiplierDay": 0.5,
-    "RainShininessMultiplierNight": 2.0,
-    "RainSpecularMultiplierNight": 15.0,
-    "RainDiffuseMultiplierNight": 0.5
-  }
+ "Complex Parallax Materials": {
+  "BlendRange": 0.1679999977350235,
+  "CRPMRange": 1.0,
+  "EnableComplexMaterial": 1,
+  "EnableHighQuality": 0,
+  "EnableParallax": 1,
+  "EnableShadows": 1,
+  "EnableTerrain": 1,
+  "Height": 0.10000000149011612,
+  "MaxDistance": 4096,
+  "ShadowsEndFade": 1024,
+  "ShadowsStartFade": 512
+ },
+ "General": {
+  "Enable Async": true,
+  "Enable Disk Cache": true,
+  "Enable Shaders": true
+ },
+ "Grass Collision": {
+  "DisplacementMultiplier": 16.0,
+  "EnableGrassCollision": 1,
+  "RadiusMultiplier": 2.0
+ },
+ "Grass Lighting": {
+  "BasicGrassBrightness": 0.6660000085830688,
+  "EnableDirLightFix": 1,
+  "Glossiness": 8.524999618530273,
+  "SpecularStrength": 0.1899999976158142,
+  "SubsurfaceScatteringAmount": 2.0
+ },
+ "Light Limit Fix": {
+  "EnableContactShadows": true,
+  "EnableFirstPersonShadows": true,
+  "EnableParticleLights": true,
+  "EnableParticleLightsCulling": true,
+  "EnableParticleLightsDetection": true,
+  "EnableParticleLightsOptimization": true,
+  "ParticleLightsBrightness": 1.0,
+  "ParticleLightsOptimisationClusterRadius": 32,
+  "ParticleLightsSaturation": 2.0
+ },
+ "Menu": {
+  "Font Scale": 0.0,
+  "Skip Compilation Key": 27,
+  "Toggle Effects Key": 106,
+  "Toggle Key": 35
+ },
+ "Replace Original Shaders": {
+  "BloodSplatter": false,
+  "DistantTree": true,
+  "Effect": false,
+  "Grass": true,
+  "ImageSpace": false,
+  "Lighting": true,
+  "Particle": false,
+  "Sky": true,
+  "Utility": false,
+  "Water": true
+ },
+ "Screen-Space Shadows": {
+  "BlurDropoff": 0.004999999888241291,
+  "BlurRadius": 0.5,
+  "Enabled": true,
+  "FarDistanceScale": 0.02500000037252903,
+  "FarHardness": 8.0,
+  "FarThicknessScale": 0.02500000037252903,
+  "MaxSamples": 24,
+  "NearDistance": 16.0,
+  "NearHardness": 32.0,
+  "NearThickness": 2.0
+ },
+ "Tree LOD Lighting": {
+  "EnableComplexTreeLOD": 1,
+  "EnableDirLightFix": 1,
+  "SubsurfaceScatteringAmount": 0.5009999871253967
+ },
+ "Version": "0-7-0-0",
+ "Water Blending": {
+  "EnableWaterBlending": 1,
+  "EnableWaterBlendingSSR": 1,
+  "SSRBlendRange": 1.0,
+  "WaterBlendRange": 1.0
+ },
+ "Wetness Effects": {
+  "EnableWetnessEffects": 1,
+  "MaxDarkness": 1.0,
+  "MaxOcclusion": 0.0,
+  "MaxRainWetness": 1.0,
+  "MaxShoreWetness": 0.5379999876022339,
+  "MinRoughness": 0.0,
+  "PuddleFlatness": 1.0,
+  "PuddleMaxAngle": 0.9900000095367432,
+  "PuddleMinWetness": 0.7009999752044678,
+  "PuddleRadius": 1.0049999952316284,
+  "ShoreRange": 32
+ }
 }
