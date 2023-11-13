@@ -39,7 +39,7 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 viewDir, float3x3 tbn, Texture2D<float4> tex, SamplerState texSampler, uint channel)
 #endif
 {
-	float3 viewDirTS = -mul(tbn, viewDir);
+	float3 viewDirTS = mul(tbn, viewDir);
 	distance /= (float)perPassParallax[0].MaxDistance;
 
 	float nearQuality = smoothstep(0.0, perPassParallax[0].CRPMRange, distance);

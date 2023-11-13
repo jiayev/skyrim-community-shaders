@@ -106,9 +106,8 @@ cbuffer PerFrame : register(
 	float SpecularStrength;
 	float SubsurfaceScatteringAmount;
 	bool EnableDirLightFix;
-	float Brightness;
-	float Saturation;
-	float pad[1];
+	float BasicGrassBrightness;
+	float pad[2];
 }
 
 #ifdef VSHADER
@@ -175,21 +174,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	if !defined(VR)
 	uint eyeIndex = 0;
 #	else
-	/*
-  https://docs.google.com/presentation/d/19x9XDjUvkW_9gsfsMQzt3hZbRNziVsoCEHOn4AercAc/htmlpresent
-  This section looks like this code
-  Matrix WorldToEyeClipMatrix[2] // computed from SDK
-  Vector4 EyeClipEdge[2]={(-1,0,0,1), (1,0,0,1)}
-  float EyeOffsetScale[2]={0.5,-0.5}
-  uint eyeIndex = instanceID & 1 // use low bit as eye index.
-  Vector4 clipPos = worldPos * WorldToEyeClipMatrix[eyeIndex]
-  cullDistanceOut.x = clipDistanceOut.x = clipPos · EyeClipEdge[eyeIndex]
-  clipPos.x *= 0.5; // shrink to half of the screen
-  clipPos.x += EyeOffsetScale[eyeIndex] * clipPos.w; // scoot left or right.
-  clipPositionOut = clipPos
-  */
 	float4 r0, r1, r2, r3, r4, r5, r6;
-
 	uint eyeIndex = cb13[0].y * (input.InstanceID.x & 1);
 #	endif  // VR
 
@@ -237,19 +222,6 @@ VS_OUTPUT main(VS_INPUT input)
 
 	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], previousMsPosition);
 #	if defined(VR)
-	/*
-https://docs.google.com/presentation/d/19x9XDjUvkW_9gsfsMQzt3hZbRNziVsoCEHOn4AercAc/htmlpresent
-This section looks like this code
-Matrix WorldToEyeClipMatrix[2] // computed from SDK
-Vector4 EyeClipEdge[2]={(-1,0,0,1), (1,0,0,1)}
-float EyeOffsetScale[2]={0.5,-0.5}
-uint eyeIndex = instanceID & 1 // use low bit as eye index.
-Vector4 clipPos = worldPos * WorldToEyeClipMatrix[eyeIndex]
-cullDistanceOut.x = clipDistanceOut.x = clipPos · EyeClipEdge[eyeIndex]
-clipPos.x *= 0.5; // shrink to half of the screen
-clipPos.x += EyeOffsetScale[eyeIndex] * clipPos.w; // scoot left or right.
-clipPositionOut = clipPos
-*/
 	if (0 < cb13[0].y) {
 		r0.yz = dot(projSpacePosition, cb13[eyeIndex + 1].xyzw);
 	} else {
@@ -420,13 +392,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float4 specColor = complex ? TexBaseSampler.Sample(SampBaseSampler, float2(input.TexCoord.x, 0.5 + input.TexCoord.y * 0.5)) : 1;
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 
-	// Albedo
-	// float diffuseFraction = lerp(sunShadowMask, 1, input.AmbientColor.w);
-	// float3 diffuseColor = input.DiffuseColor.xyz * baseColor.xyz;
-	// float3 ambientColor = input.AmbientColor.xyz * baseColor.xyz;
-	// psout.Albedo.xyz = input.TexCoord.zzz * (diffuseColor * diffuseFraction + ambientColor);
-	// psout.Albedo.w = 1;
-
 #		if !defined(VR)
 	uint eyeIndex = 0;
 #		else
@@ -460,14 +425,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	if (complex) {
 		float3 normalColor = float4(TransformNormal(specColor.xyz), 1);
-		normalColor.y = -normalColor.y;
 		// world-space -> tangent-space -> world-space.
 		// This is because we don't have pre-computed tangents.
-		worldNormal = normalize(mul(normalColor, CalculateTBN(worldNormal, -viewDirection, input.TexCoord.xy)));
+		worldNormal = normalize(mul(normalColor, CalculateTBN(worldNormal, -input.WorldPosition, input.TexCoord.xy)));
 	}
 
-	baseColor.xyz *= Brightness;
-	baseColor.xyz = lerp(RGBToLuminance(baseColor.xyz), baseColor.xyz, Saturation);
+	if (!complex)
+		baseColor.xyz *= BasicGrassBrightness;
 
 	float3 dirLightColor = DirLightColor.xyz;
 	if (EnableDirLightFix) {
@@ -494,16 +458,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	// Generated texture to simulate light transport.
 	// Numerous attempts were made to use a more interesting algorithm however they were mostly fruitless.
-	float3 subsurfaceColor = lerp(RGBToLuminance(baseColor.xyz), baseColor.xyz, 2.0);
+	float3 subsurfaceColor = lerp(RGBToLuminance(baseColor.xyz), baseColor.xyz * 2.0, 2.0);
 
 	// Applies lighting across the whole surface apart from what is already lit.
 	lightsDiffuseColor += subsurfaceColor * dirLightColor * GetSoftLightMultiplier(dirLightAngle, SubsurfaceScatteringAmount);
 
-	if (complex) {
-		lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(DirLightDirection, viewDirection, worldNormal, dirLightColor, Glossiness);
-		// Not physically accurate but grass will otherwise look too flat.
-		lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-DirLightDirection, viewDirection, worldNormal, dirLightColor.xyz, Glossiness);
-	}
+	if (complex)
+		lightsSpecularColor += GetLightSpecularInput(DirLightDirection, viewDirection, worldNormal, dirLightColor, Glossiness);
 
 #		if defined(WETNESS_EFFECTS)
 	float waterSpecular = 0.0;
@@ -566,7 +527,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				lightDiffuseColor += subsurfaceColor * lightColor * saturate(-lightAngle) * SubsurfaceScatteringAmount;
 
 				lightsSpecularColor += GetLightSpecularInput(normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
-				lightsSpecularColor += subsurfaceColor * GetLightSpecularInput(-normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
 
 				lightsDiffuseColor += lightDiffuseColor * intensityMultiplier;
 			}
