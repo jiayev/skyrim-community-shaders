@@ -306,7 +306,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 			strictLightDataTemp.PointLightPosition[i] = DirectX::SimpleMath::Vector3::Transform(worldPos, Transform);
 			strictLightDataTemp.PointLightRadius[i] = runtimeData.radius.x / WorldScale;
 		} else {
-			auto posAdjust = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().posAdjust.getEye();
+			auto posAdjust = (!REL::Module::IsVR()) ? RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().posAdjust.getEye() : RE::BSGraphics::RendererShadowState::GetSingleton()->GetVRRuntimeData().posAdjust.getEye();
 			strictLightDataTemp.PointLightPosition[i] = worldPos - float3(posAdjust.x, posAdjust.y, posAdjust.z);
 			strictLightDataTemp.PointLightRadius[i] = runtimeData.radius.x;
 		}
