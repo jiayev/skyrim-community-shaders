@@ -1995,7 +1995,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	color.xyz = vertexColor.xyz - color.xyz * FogColor.w;
 
 	float3 tmpColor = color.xyz * FrameParams.yyy;
-	color.xyz = tmpColor.xyz + 10000;
+	color.xyz = tmpColor.xyz + ColourOutputClamp.xxx;
 	color.xyz = min(vertexColor.xyz, color.xyz);
 
 #	if defined(CPM_AVAILABLE) && defined(ENVMAP)
@@ -2009,7 +2009,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	specularTmp = color.xyz - specularTmp.xyz * FogColor.w;
 
 	tmpColor = specularTmp.xyz * FrameParams.yyy;
-	specularTmp.xyz = tmpColor.xyz + 10000;
+	specularTmp.xyz = tmpColor.xyz + ColourOutputClamp.zzz;
 	color.xyz = min(specularTmp.xyz, color.xyz);
 #	endif  // defined (SPECULAR) || defined(SPARKLE)
 
