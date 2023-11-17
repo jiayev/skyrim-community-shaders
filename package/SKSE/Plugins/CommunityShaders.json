@@ -14,7 +14,7 @@
  },
  "General": {
   "Enable Async": true,
-  "Enable Disk Cache": false,
+  "Enable Disk Cache": true,
   "Enable Shaders": true
  },
  "Grass Collision": {
