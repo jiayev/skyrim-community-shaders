@@ -34,6 +34,7 @@ public:
 
 	void Load(bool a_test = false);
 	void Save(bool a_test = false);
+	void PostPostLoad();
 
 	bool ValidateCache(CSimpleIniA& a_ini);
 	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
