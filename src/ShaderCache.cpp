@@ -1202,7 +1202,14 @@ namespace SIE
 		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)))) {
 			return nullptr;
 		}
-
+		auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Vertex, shader, descriptor, true);
+		if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
+			if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
+				blockedIDs.push_back(descriptor);
+				logger::debug("Skipping blocked shader {:X}:{} total: {}", descriptor, blockedKey, blockedIDs.size());
+			}
+			return nullptr;
+		}
 		{
 			std::lock_guard lockGuard(vertexShadersMutex);
 			auto& typeCache = vertexShaders[static_cast<size_t>(shader.shaderType.underlying())];
@@ -1229,7 +1236,14 @@ namespace SIE
 															state->IsShaderEnabled(shader))) {
 			return nullptr;
 		}
-
+		auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Pixel, shader, descriptor, true);
+		if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
+			if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
+				blockedIDs.push_back(descriptor);
+				logger::debug("Skipping blocked shader {:X}:{} total: {}", descriptor, blockedKey, blockedIDs.size());
+			}
+			return nullptr;
+		}
 		{
 			std::lock_guard lockGuard(pixelShadersMutex);
 			auto& typeCache = pixelShaders[static_cast<size_t>(shader.shaderType.underlying())];
@@ -1505,6 +1519,33 @@ namespace SIE
 	void ShaderCache::ToggleErrorMessages()
 	{
 		hideError = !hideError;
+	}
+
+	void ShaderCache::IterateShaderBlock(bool a_forward)
+	{
+		std::scoped_lock lock{ mapMutex };
+		auto targetIndex = a_forward ? 0 : shaderMap.size() - 1;           // default start or last element
+		if (blockedKeyIndex >= 0 && shaderMap.size() > blockedKeyIndex) {  // grab next element
+			targetIndex = (blockedKeyIndex + (a_forward ? 1 : -1)) % shaderMap.size();
+		}
+		auto index = 0;
+		for (auto& [key, value] : shaderMap) {
+			if (index++ == targetIndex) {
+				blockedKey = key;
+				blockedKeyIndex = (uint)targetIndex;
+				blockedIDs.clear();
+				logger::debug("Blocking shader ({}/{}) {}", blockedKeyIndex + 1, shaderMap.size(), blockedKey);
+				return;
+			}
+		}
+	}
+
+	void ShaderCache::DisableShaderBlocking()
+	{
+		blockedKey = "";
+		blockedKeyIndex = (uint)-1;
+		blockedIDs.clear();
+		logger::debug("Stopped blocking shaders");
 	}
 
 	void ShaderCache::ManageCompilationSet(std::stop_token stoken)

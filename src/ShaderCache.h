@@ -149,6 +149,8 @@ namespace SIE
 		uint64_t GetTotalTasks();
 		void IncCacheHitTasks();
 		void ToggleErrorMessages();
+		void DisableShaderBlocking();
+		void IterateShaderBlock(bool a_forward = true);
 		bool IsHideErrors();
 
 		int32_t compilationThreadCount = std::max(static_cast<int32_t>(std::thread::hardware_concurrency()) - 1, 1);
@@ -227,6 +229,10 @@ namespace SIE
 			Flowmap = 1 << 9,
 			BlendNormals = 1 << 10,
 		};
+
+		uint blockedKeyIndex = (uint)-1;  // index in shaderMap; negative value indicates disabled
+		std::string blockedKey = "";
+		std::vector<uint32_t> blockedIDs;  // more than one descriptor could be blocked based on shader hash
 
 	private:
 		ShaderCache();

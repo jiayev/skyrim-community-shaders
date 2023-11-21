@@ -410,6 +410,23 @@ void Menu::DrawSettings()
 			if (ImGui::Button("Dump Ini Settings", { -1, 0 })) {
 				Util::DumpSettingsOptions();
 			}
+			if (!shaderCache.blockedKey.empty()) {
+				auto blockingButtonString = std::format("Stop Blocking {} Shaders", shaderCache.blockedIDs.size());
+				if (ImGui::Button(blockingButtonString.c_str(), { -1, 0 })) {
+					shaderCache.DisableShaderBlocking();
+				}
+				if (ImGui::IsItemHovered()) {
+					ImGui::BeginTooltip();
+					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+					ImGui::Text(
+						"Stop blocking Community Shaders shader. "
+						"Blocking is helpful when debugging shader errors in game to determine which shader has issues. "
+						"Blocking is enabled if in developer mode and pressing PAGEUP and PAGEDOWN. "
+						"Specific shader will be printed to logfile. ");
+					ImGui::PopTextWrapPos();
+					ImGui::EndTooltip();
+				}
+			}
 			if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
 				ImGui::Text(std::format("Shader Compiler : {}", shaderCache.GetShaderStatsString()).c_str());
 				ImGui::TreePop();
@@ -890,6 +907,12 @@ void Menu::ProcessInputEventQueue()
 				} else if (key == effectToggleKey) {
 					auto& shaderCache = SIE::ShaderCache::Instance();
 					shaderCache.SetEnabled(!shaderCache.IsEnabled());
+				} else if (key == priorShaderKey && State::GetSingleton()->IsDeveloperMode()) {
+					auto& shaderCache = SIE::ShaderCache::Instance();
+					shaderCache.IterateShaderBlock();
+				} else if (key == nextShaderKey && State::GetSingleton()->IsDeveloperMode()) {
+					auto& shaderCache = SIE::ShaderCache::Instance();
+					shaderCache.IterateShaderBlock(false);
 				}
 			}
 

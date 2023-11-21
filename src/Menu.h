@@ -34,6 +34,9 @@ private:
 	uint32_t toggleKey = VK_END;
 	uint32_t effectToggleKey = VK_MULTIPLY;  //toggle all effects
 	uint32_t skipCompilationKey = VK_ESCAPE;
+	uint32_t priorShaderKey = VK_PRIOR;  // used for blocking shaders in debugging
+	uint32_t nextShaderKey = VK_NEXT;    // used for blocking shaders in debugging
+
 	bool settingToggleKey = false;
 	bool settingSkipCompilationKey = false;
 	bool settingsEffectsToggle = false;
