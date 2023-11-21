@@ -459,7 +459,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	ifdef VR
 	float4 r0;
-	float4 projSpacePosition = viewPos;
+	float4 projSpacePosition = vsout.Position;
 	r0.xyzw = 0;
 	if (0 < cb13) {
 		r0.yz = dot(projSpacePosition, EyeClipEdge[eyeIndex]);  // projSpacePosition is clipPos
