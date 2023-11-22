@@ -16,9 +16,10 @@ void DistantTreeLighting::DrawSettings()
 		if (ImGui::IsItemHovered()) {
 			ImGui::BeginTooltip();
 			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-			ImGui::Text("Enables advanced lighting simulation on tree LOD.\n");
-			ImGui::Text("Requires DynDOLOD.\n");
-			ImGui::Text("See https://dyndolod.info/ for more information.");
+			ImGui::Text(
+				"Enables advanced lighting simulation on tree LOD. "
+				"Requires DynDOLOD. "
+				"See https://dyndolod.info/ for more information. ");
 			ImGui::PopTextWrapPos();
 			ImGui::EndTooltip();
 		}
@@ -48,10 +49,11 @@ void DistantTreeLighting::DrawSettings()
 		if (ImGui::IsItemHovered()) {
 			ImGui::BeginTooltip();
 			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-			ImGui::Text("Subsurface Scattering (SSS) amount\n");
-			ImGui::Text("Soft lighting controls how evenly lit an object is.\n");
-			ImGui::Text("Back lighting illuminates the back face of an object.\n");
-			ImGui::Text("Combined to model the transport of light through the surface.");
+			ImGui::Text(
+				"Subsurface Scattering (SSS) amount. "
+				"Soft lighting controls how evenly lit an object is. "
+				"Back lighting illuminates the back face of an object. "
+				"Combined to model the transport of light through the surface. ");
 			ImGui::PopTextWrapPos();
 			ImGui::EndTooltip();
 		}

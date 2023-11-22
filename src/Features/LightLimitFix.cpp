@@ -137,9 +137,10 @@ void LightLimitFix::DrawSettings()
 			if (ImGui::IsItemHovered()) {
 				ImGui::BeginTooltip();
 				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-				ImGui::Text(" - Visualise the light limit. Red when the \"strict\" light limit is reached (portal-strict lights).\n");
-				ImGui::Text(" - Visualise the number of strict lights. \n");
-				ImGui::Text(" - Visualise the number of clustered lights.");
+				ImGui::Text(
+					" - Visualise the light limit. Red when the \"strict\" light limit is reached (portal-strict lights). "
+					" - Visualise the number of strict lights. "
+					" - Visualise the number of clustered lights. ");
 				ImGui::PopTextWrapPos();
 				ImGui::EndTooltip();
 			}
