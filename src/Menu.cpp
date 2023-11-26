@@ -100,176 +100,6 @@ void Menu::Save(json& o_json)
 }
 
 #define IM_VK_KEYPAD_ENTER (VK_RETURN + 256)
-RE::BSEventNotifyControl Menu::ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>* a_eventSource)
-{
-	if (!a_event || !a_eventSource)
-		return RE::BSEventNotifyControl::kContinue;
-
-	auto& io = ImGui::GetIO();
-
-	for (auto event = *a_event; event; event = event->next) {
-		if (event->eventType == RE::INPUT_EVENT_TYPE::kChar) {
-			io.AddInputCharacter(event->AsCharEvent()->keycode);
-		} else if (event->eventType == RE::INPUT_EVENT_TYPE::kButton) {
-			const auto button = static_cast<RE::ButtonEvent*>(event);
-			if (!button || (button->IsPressed() && !button->IsDown()))
-				continue;
-
-			auto scan_code = button->GetIDCode();
-			uint32_t key = MapVirtualKeyEx(scan_code, MAPVK_VSC_TO_VK_EX, GetKeyboardLayout(0));
-
-			switch (scan_code) {
-			case DIK_LEFTARROW:
-				key = VK_LEFT;
-				break;
-			case DIK_RIGHTARROW:
-				key = VK_RIGHT;
-				break;
-			case DIK_UPARROW:
-				key = VK_UP;
-				break;
-			case DIK_DOWNARROW:
-				key = VK_DOWN;
-				break;
-			case DIK_DELETE:
-				key = VK_DELETE;
-				break;
-			case DIK_END:
-				key = VK_END;
-				break;
-			case DIK_HOME:
-				key = VK_HOME;
-				break;  // pos1
-			case DIK_PRIOR:
-				key = VK_PRIOR;
-				break;  // page up
-			case DIK_NEXT:
-				key = VK_NEXT;
-				break;  // page down
-			case DIK_INSERT:
-				key = VK_INSERT;
-				break;
-			case DIK_NUMPAD0:
-				key = VK_NUMPAD0;
-				break;
-			case DIK_NUMPAD1:
-				key = VK_NUMPAD1;
-				break;
-			case DIK_NUMPAD2:
-				key = VK_NUMPAD2;
-				break;
-			case DIK_NUMPAD3:
-				key = VK_NUMPAD3;
-				break;
-			case DIK_NUMPAD4:
-				key = VK_NUMPAD4;
-				break;
-			case DIK_NUMPAD5:
-				key = VK_NUMPAD5;
-				break;
-			case DIK_NUMPAD6:
-				key = VK_NUMPAD6;
-				break;
-			case DIK_NUMPAD7:
-				key = VK_NUMPAD7;
-				break;
-			case DIK_NUMPAD8:
-				key = VK_NUMPAD8;
-				break;
-			case DIK_NUMPAD9:
-				key = VK_NUMPAD9;
-				break;
-			case DIK_DECIMAL:
-				key = VK_DECIMAL;
-				break;
-			case DIK_NUMPADENTER:
-				key = IM_VK_KEYPAD_ENTER;
-				break;
-			case DIK_LMENU:
-				key = VK_LMENU;
-				break;  // left alt
-			case DIK_LCONTROL:
-				key = VK_LCONTROL;
-				break;  // left control
-			case DIK_LSHIFT:
-				key = VK_LSHIFT;
-				break;  // left shift
-			case DIK_RMENU:
-				key = VK_RMENU;
-				break;  // right alt
-			case DIK_RCONTROL:
-				key = VK_RCONTROL;
-				break;  // right control
-			case DIK_RSHIFT:
-				key = VK_RSHIFT;
-				break;  // right shift
-			case DIK_LWIN:
-				key = VK_LWIN;
-				break;  // left win
-			case DIK_RWIN:
-				key = VK_RWIN;
-				break;  // right win
-			case DIK_APPS:
-				key = VK_APPS;
-				break;
-			default:
-				break;
-			}
-
-			switch (button->device.get()) {
-			case RE::INPUT_DEVICE::kKeyboard:
-				if (!button->IsPressed()) {
-					logger::trace("Detected key code {} ({})", KeyIdToString(key), key);
-					if (settingToggleKey) {
-						toggleKey = key;
-						settingToggleKey = false;
-					} else if (settingSkipCompilationKey) {
-						skipCompilationKey = key;
-						settingSkipCompilationKey = false;
-					} else if (settingsEffectsToggle) {
-						effectToggleKey = key;
-						settingsEffectsToggle = false;
-					} else if (key == toggleKey) {
-						IsEnabled = !IsEnabled;
-					} else if (key == skipCompilationKey) {
-						auto& shaderCache = SIE::ShaderCache::Instance();
-						shaderCache.backgroundCompilation = true;
-					} else if (key == effectToggleKey) {
-						auto& shaderCache = SIE::ShaderCache::Instance();
-						shaderCache.SetEnabled(!shaderCache.IsEnabled());
-					}
-				}
-
-				io.AddKeyEvent(VirtualKeyToImGuiKey(key), button->IsPressed());
-
-				if (key == VK_LCONTROL || key == VK_RCONTROL)
-					io.AddKeyEvent(ImGuiMod_Ctrl, button->IsPressed());
-				else if (key == VK_LSHIFT || key == VK_RSHIFT)
-					io.AddKeyEvent(ImGuiMod_Shift, button->IsPressed());
-				else if (key == VK_LMENU || key == VK_RMENU)
-					io.AddKeyEvent(ImGuiMod_Alt, button->IsPressed());
-				break;
-			case RE::INPUT_DEVICE::kMouse:
-				logger::trace("Detect mouse scan code {} value {} pressed: {}", scan_code, button->Value(), button->IsPressed());
-				if (scan_code > 7)  // middle scroll
-					io.AddMouseWheelEvent(0, button->Value() * (scan_code == 8 ? 1 : -1));
-				else {
-					if (scan_code > 5)
-						scan_code = 5;
-					io.AddMouseButtonEvent(scan_code, button->IsPressed());
-				}
-				break;
-			default:
-				continue;
-			}
-			if (const auto controlMap = RE::ControlMap::GetSingleton()) {
-				controlMap->GetRuntimeData().ignoreKeyboardMouse = IsEnabled;
-			}
-		}
-	}
-
-	return RE::BSEventNotifyControl::kContinue;
-}
 
 void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceContext* context)
 {
@@ -454,7 +284,7 @@ void Menu::DrawSettings()
 
 				ImGui::AlignTextToFramePadding();
 				ImGui::SameLine();
-				if (ImGui::Button("Change##toggle")) {
+				if (ImGui::Button("Change##EffectToggle")) {
 					settingsEffectsToggle = true;
 				}
 			}
@@ -653,6 +483,8 @@ void Menu::DrawSettings()
 
 void Menu::DrawOverlay()
 {
+	ProcessInputEventQueue();  //Synchronize Inputs to frame
+
 	// Start the Dear ImGui frame
 	ImGui_ImplDX11_NewFrame();
 	ImGui_ImplWin32_NewFrame();
@@ -734,33 +566,6 @@ void Menu::DrawOverlay()
 
 	ImGui::Render();
 	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-}
-
-const char* Menu::KeyIdToString(uint32_t key)
-{
-	if (key >= 256)
-		return "";
-
-	static const char* keyboard_keys_international[256] = {
-		"", "Left Mouse", "Right Mouse", "Cancel", "Middle Mouse", "X1 Mouse", "X2 Mouse", "", "Backspace", "Tab", "", "", "Clear", "Enter", "", "",
-		"Shift", "Control", "Alt", "Pause", "Caps Lock", "", "", "", "", "", "", "Escape", "", "", "", "",
-		"Space", "Page Up", "Page Down", "End", "Home", "Left Arrow", "Up Arrow", "Right Arrow", "Down Arrow", "Select", "", "", "Print Screen", "Insert", "Delete", "Help",
-		"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "", "", "", "", "", "",
-		"", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O",
-		"P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "Left Windows", "Right Windows", "Apps", "", "Sleep",
-		"Numpad 0", "Numpad 1", "Numpad 2", "Numpad 3", "Numpad 4", "Numpad 5", "Numpad 6", "Numpad 7", "Numpad 8", "Numpad 9", "Numpad *", "Numpad +", "", "Numpad -", "Numpad Decimal", "Numpad /",
-		"F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "F13", "F14", "F15", "F16",
-		"F17", "F18", "F19", "F20", "F21", "F22", "F23", "F24", "", "", "", "", "", "", "", "",
-		"Num Lock", "Scroll Lock", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
-		"Left Shift", "Right Shift", "Left Control", "Right Control", "Left Menu", "Right Menu", "Browser Back", "Browser Forward", "Browser Refresh", "Browser Stop", "Browser Search", "Browser Favorites", "Browser Home", "Volume Mute", "Volume Down", "Volume Up",
-		"Next Track", "Previous Track", "Media Stop", "Media Play/Pause", "Mail", "Media Select", "Launch App 1", "Launch App 2", "", "", "OEM ;", "OEM +", "OEM ,", "OEM -", "OEM .", "OEM /",
-		"OEM ~", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
-		"", "", "", "", "", "", "", "", "", "", "", "OEM [", "OEM \\", "OEM ]", "OEM '", "OEM 8",
-		"", "", "OEM <", "", "", "", "", "", "", "", "", "", "", "", "", "",
-		"", "", "", "", "", "", "Attn", "CrSel", "ExSel", "Erase EOF", "Play", "Zoom", "", "PA1", "OEM Clear", ""
-	};
-
-	return keyboard_keys_international[key];
 }
 
 const ImGuiKey Menu::VirtualKeyToImGuiKey(WPARAM vkKey)
@@ -977,4 +782,183 @@ const ImGuiKey Menu::VirtualKeyToImGuiKey(WPARAM vkKey)
 	default:
 		return ImGuiKey_None;
 	};
+}
+
+inline const uint32_t Menu::DIKToVK(uint32_t DIK)
+{
+	switch (DIK) {
+	case DIK_LEFTARROW:
+		return VK_LEFT;
+	case DIK_RIGHTARROW:
+		return VK_RIGHT;
+	case DIK_UPARROW:
+		return VK_UP;
+	case DIK_DOWNARROW:
+		return VK_DOWN;
+	case DIK_DELETE:
+		return VK_DELETE;
+	case DIK_END:
+		return VK_END;
+	case DIK_HOME:
+		return VK_HOME;  // pos1
+	case DIK_PRIOR:
+		return VK_PRIOR;  // page up
+	case DIK_NEXT:
+		return VK_NEXT;  // page down
+	case DIK_INSERT:
+		return VK_INSERT;
+	case DIK_NUMPAD0:
+		return VK_NUMPAD0;
+	case DIK_NUMPAD1:
+		return VK_NUMPAD1;
+	case DIK_NUMPAD2:
+		return VK_NUMPAD2;
+	case DIK_NUMPAD3:
+		return VK_NUMPAD3;
+	case DIK_NUMPAD4:
+		return VK_NUMPAD4;
+	case DIK_NUMPAD5:
+		return VK_NUMPAD5;
+	case DIK_NUMPAD6:
+		return VK_NUMPAD6;
+	case DIK_NUMPAD7:
+		return VK_NUMPAD7;
+	case DIK_NUMPAD8:
+		return VK_NUMPAD8;
+	case DIK_NUMPAD9:
+		return VK_NUMPAD9;
+	case DIK_DECIMAL:
+		return VK_DECIMAL;
+	case DIK_NUMPADENTER:
+		return IM_VK_KEYPAD_ENTER;
+	case DIK_RMENU:
+		return VK_RMENU;  // right alt
+	case DIK_RCONTROL:
+		return VK_RCONTROL;  // right control
+	case DIK_LWIN:
+		return VK_LWIN;  // left win
+	case DIK_RWIN:
+		return VK_RWIN;  // right win
+	case DIK_APPS:
+		return VK_APPS;
+	default:
+		return DIK;
+	}
+}
+
+void Menu::ProcessInputEventQueue()
+{
+	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
+	ImGuiIO& io = ImGui::GetIO();
+
+	for (auto& event : _keyEventQueue) {
+		if (event.eventType == RE::INPUT_EVENT_TYPE::kChar) {
+			io.AddInputCharacter(event.keyCode);
+		}
+
+		if (event.device == RE::INPUT_DEVICE::kMouse) {
+			logger::trace("Detect mouse scan code {} value {} pressed: {}", event.keyCode, event.value, event.IsPressed());
+			if (event.keyCode > 7) {  // middle scroll
+				io.AddMouseWheelEvent(0, event.value * (event.keyCode == 8 ? 1 : -1));
+			} else {
+				if (event.keyCode > 5)
+					event.keyCode = 5;
+				io.AddMouseButtonEvent(event.keyCode, event.IsPressed());
+			}
+		}
+
+		if (event.device == RE::INPUT_DEVICE::kKeyboard) {
+			uint32_t key = DIKToVK(event.keyCode);
+			logger::trace("Detected key code {} ({})", event.keyCode, key);
+			if (key == event.keyCode)
+				key = MapVirtualKeyEx(event.keyCode, MAPVK_VSC_TO_VK_EX, GetKeyboardLayout(0));
+			if (!event.IsPressed()) {
+				if (settingToggleKey) {
+					toggleKey = key;
+					settingToggleKey = false;
+				} else if (settingSkipCompilationKey) {
+					skipCompilationKey = key;
+					settingSkipCompilationKey = false;
+				} else if (settingsEffectsToggle) {
+					effectToggleKey = key;
+					settingsEffectsToggle = false;
+				} else if (key == toggleKey) {
+					IsEnabled = !IsEnabled;
+				} else if (key == skipCompilationKey) {
+					auto& shaderCache = SIE::ShaderCache::Instance();
+					shaderCache.backgroundCompilation = true;
+				} else if (key == effectToggleKey) {
+					auto& shaderCache = SIE::ShaderCache::Instance();
+					shaderCache.SetEnabled(!shaderCache.IsEnabled());
+				}
+			}
+
+			io.AddKeyEvent(VirtualKeyToImGuiKey(key), event.IsPressed());
+
+			if (key == VK_LCONTROL || key == VK_RCONTROL)
+				io.AddKeyEvent(ImGuiMod_Ctrl, event.IsPressed());
+			else if (key == VK_LSHIFT || key == VK_RSHIFT)
+				io.AddKeyEvent(ImGuiMod_Shift, event.IsPressed());
+			else if (key == VK_LMENU || key == VK_RMENU)
+				io.AddKeyEvent(ImGuiMod_Alt, event.IsPressed());
+		}
+	}
+
+	_keyEventQueue.clear();
+}
+
+void Menu::addToEventQueue(KeyEvent e)
+{
+	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
+	_keyEventQueue.emplace_back(e);
+}
+
+void Menu::OnFocusLost()  //todo implement wndproc hook to catch WM_KILLFOCUS
+{
+	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
+	_keyEventQueue.clear();
+}
+
+void Menu::ProcessInputEvents(RE::InputEvent* const* a_events)
+{
+	for (auto it = *a_events; it; it = it->next) {
+		if (it->GetEventType() != RE::INPUT_EVENT_TYPE::kButton && it->GetEventType() != RE::INPUT_EVENT_TYPE::kChar)  // we do not care about non button or char events
+			continue;
+
+		auto event = it->GetEventType() == RE::INPUT_EVENT_TYPE::kButton ? KeyEvent(static_cast<RE::ButtonEvent*>(it)) : it->GetEventType() == RE::INPUT_EVENT_TYPE::kChar ? KeyEvent(static_cast<CharEvent*>(it)) :
+		                                                                                                                                                                     KeyEvent(nullptr);  // last ternary operation should never be taken
+		addToEventQueue(event);
+	}
+}
+
+bool Menu::ShouldSwallowInput()
+{
+	return IsEnabled;
+}
+
+const char* Menu::KeyIdToString(uint32_t key)
+{
+	if (key >= 256)
+		return "";
+
+	static const char* keyboard_keys_international[256] = {
+		"", "Left Mouse", "Right Mouse", "Cancel", "Middle Mouse", "X1 Mouse", "X2 Mouse", "", "Backspace", "Tab", "", "", "Clear", "Enter", "", "",
+		"Shift", "Control", "Alt", "Pause", "Caps Lock", "", "", "", "", "", "", "Escape", "", "", "", "",
+		"Space", "Page Up", "Page Down", "End", "Home", "Left Arrow", "Up Arrow", "Right Arrow", "Down Arrow", "Select", "", "", "Print Screen", "Insert", "Delete", "Help",
+		"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "", "", "", "", "", "",
+		"", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O",
+		"P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "Left Windows", "Right Windows", "Apps", "", "Sleep",
+		"Numpad 0", "Numpad 1", "Numpad 2", "Numpad 3", "Numpad 4", "Numpad 5", "Numpad 6", "Numpad 7", "Numpad 8", "Numpad 9", "Numpad *", "Numpad +", "", "Numpad -", "Numpad Decimal", "Numpad /",
+		"F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "F13", "F14", "F15", "F16",
+		"F17", "F18", "F19", "F20", "F21", "F22", "F23", "F24", "", "", "", "", "", "", "", "",
+		"Num Lock", "Scroll Lock", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+		"Left Shift", "Right Shift", "Left Control", "Right Control", "Left Menu", "Right Menu", "Browser Back", "Browser Forward", "Browser Refresh", "Browser Stop", "Browser Search", "Browser Favorites", "Browser Home", "Volume Mute", "Volume Down", "Volume Up",
+		"Next Track", "Previous Track", "Media Stop", "Media Play/Pause", "Mail", "Media Select", "Launch App 1", "Launch App 2", "", "", "OEM ;", "OEM +", "OEM ,", "OEM -", "OEM .", "OEM /",
+		"OEM ~", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+		"", "", "", "", "", "", "", "", "", "", "", "OEM [", "OEM \\", "OEM ]", "OEM '", "OEM 8",
+		"", "", "OEM <", "", "", "", "", "", "", "", "", "", "", "", "", "",
+		"", "", "", "", "", "", "Attn", "CrSel", "ExSel", "Erase EOF", "Play", "Zoom", "", "PA1", "OEM Clear", ""
+	};
+
+	return keyboard_keys_international[key];
 }
