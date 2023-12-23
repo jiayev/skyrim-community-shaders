@@ -1,8 +1,8 @@
 {
-  "name": "commonlibsse-plugin",
+  "name": "communityshaders",
   "version-string": "1.0.0",
   "description": "",
-  "license": "MIT",
+  "license": "GPL-3.0",
   "dependencies": [
     "bshoshany-thread-pool",
     "cppwinrt",
