@@ -5,6 +5,7 @@
   "license": "MIT",
   "dependencies": [
     "bshoshany-thread-pool",
+    "cppwinrt",
     "fmt",
     "directxtk",
     "rapidcsv",
@@ -17,15 +18,11 @@
     "pystring",
     {
       "name": "imgui",
-      "features": [
-        "dx11-binding",
-        "win32-binding",
-        "docking-experimental"
-      ],
+      "features": ["dx11-binding", "win32-binding", "docking-experimental"],
       "version>=": "1.88"
     },
     "eastl",
     "clib-util"
   ],
-  "builtin-baseline": "417119555f155f6044dec7a379cd25466e339873"
+  "builtin-baseline": "e6aabd1415a1fc9f5e76deb3c5a40e27300aef2a"
 }

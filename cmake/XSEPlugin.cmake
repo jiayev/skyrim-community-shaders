@@ -13,7 +13,7 @@ elseif(BUILD_FALLOUT4)
 	set(GameVersion "Fallout 4")
 else()
 	message(
-	FATAL_ERROR
+		FATAL_ERROR
 		"A game must be selected."
 	)
 endif()
@@ -23,7 +23,7 @@ add_library("${PROJECT_NAME}" SHARED)
 target_compile_features(
 	"${PROJECT_NAME}"
 	PRIVATE
-		cxx_std_23
+	cxx_std_23
 )
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
@@ -46,14 +46,14 @@ configure_file(
 target_sources(
 	"${PROJECT_NAME}"
 	PRIVATE
-		${CMAKE_CURRENT_BINARY_DIR}/cmake/Plugin.h
-		${CMAKE_CURRENT_BINARY_DIR}/cmake/version.rc
+	${CMAKE_CURRENT_BINARY_DIR}/cmake/Plugin.h
+	${CMAKE_CURRENT_BINARY_DIR}/cmake/version.rc
 )
 
 target_precompile_headers(
 	"${PROJECT_NAME}"
 	PRIVATE
-		include/PCH.h
+	include/PCH.h
 )
 
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
@@ -62,42 +62,41 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_DEBUG OFF)
 set(Boost_USE_STATIC_LIBS ON)
 set(Boost_USE_STATIC_RUNTIME ON)
 
-if (CMAKE_GENERATOR MATCHES "Visual Studio")
+if(CMAKE_GENERATOR MATCHES "Visual Studio")
 	add_compile_definitions(_UNICODE)
 
 	target_compile_definitions(${PROJECT_NAME} PRIVATE "$<$<CONFIG:DEBUG>:DEBUG>")
 
-	set(SC_RELEASE_OPTS "/Zi;/fp:fast;/GL;/Gy-;/Gm-;/Gw;/sdl-;/GS-;/guard:cf-;/O2;/Ob2;/Oi;/Ot;/Oy;/fp:except-")	
-	
+	set(SC_RELEASE_OPTS "/Zi;/fp:fast;/GL;/Gy-;/Gm-;/Gw;/sdl-;/GS-;/guard:cf-;/O2;/Ob2;/Oi;/Ot;/Oy;/fp:except-")
+
 	target_compile_options(
 		"${PROJECT_NAME}"
 		PRIVATE
-			/MP
-			/await
-			/W4
-			/WX
-			/permissive-
-			/Zc:alignedNew
-			/Zc:auto
-			/Zc:__cplusplus
-			/Zc:externC
-			/Zc:externConstexpr
-			/Zc:forScope
-			/Zc:hiddenFriend
-			/Zc:implicitNoexcept
-			/Zc:lambda
-			/Zc:noexceptTypes
-			/Zc:preprocessor
-			/Zc:referenceBinding
-			/Zc:rvalueCast
-			/Zc:sizedDealloc
-			/Zc:strictStrings
-			/Zc:ternary
-			/Zc:threadSafeInit
-			/Zc:trigraphs
-			/Zc:wchar_t
-			/wd4200 # nonstandard extension used : zero-sized array in struct/union
-			/arch:AVX
+		/MP
+		/W4
+		/WX
+		/permissive-
+		/Zc:alignedNew
+		/Zc:auto
+		/Zc:__cplusplus
+		/Zc:externC
+		/Zc:externConstexpr
+		/Zc:forScope
+		/Zc:hiddenFriend
+		/Zc:implicitNoexcept
+		/Zc:lambda
+		/Zc:noexceptTypes
+		/Zc:preprocessor
+		/Zc:referenceBinding
+		/Zc:rvalueCast
+		/Zc:sizedDealloc
+		/Zc:strictStrings
+		/Zc:ternary
+		/Zc:threadSafeInit
+		/Zc:trigraphs
+		/Zc:wchar_t
+		/wd4200 # nonstandard extension used : zero-sized array in struct/union
+		/arch:AVX
 	)
 
 	target_compile_options(${PROJECT_NAME} PUBLIC "$<$<CONFIG:DEBUG>:/fp:strict>")
@@ -109,9 +108,9 @@ if (CMAKE_GENERATOR MATCHES "Visual Studio")
 	target_link_options(
 		${PROJECT_NAME}
 		PRIVATE
-			/WX
-			"$<$<CONFIG:DEBUG>:/INCREMENTAL;/OPT:NOREF;/OPT:NOICF>"
-			"$<$<CONFIG:RELEASE>:/LTCG;/INCREMENTAL:NO;/OPT:REF;/OPT:ICF;/DEBUG:FULL>"
+		/WX
+		"$<$<CONFIG:DEBUG>:/INCREMENTAL;/OPT:NOREF;/OPT:NOICF>"
+		"$<$<CONFIG:RELEASE>:/LTCG;/INCREMENTAL:NO;/OPT:REF;/OPT:ICF;/DEBUG:FULL>"
 	)
 endif()
 
@@ -122,14 +121,14 @@ find_package(spdlog CONFIG REQUIRED)
 target_include_directories(
 	${PROJECT_NAME}
 	PUBLIC
-		${CMAKE_CURRENT_SOURCE_DIR}/include
+	${CMAKE_CURRENT_SOURCE_DIR}/include
 	PRIVATE
-		${CMAKE_CURRENT_BINARY_DIR}/cmake
-		${CMAKE_CURRENT_SOURCE_DIR}/src
+	${CMAKE_CURRENT_BINARY_DIR}/cmake
+	${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_link_libraries(
-	${PROJECT_NAME} 
-	PUBLIC 
-		CommonLibSSE::CommonLibSSE
+	${PROJECT_NAME}
+	PUBLIC
+	CommonLibSSE::CommonLibSSE
 )
