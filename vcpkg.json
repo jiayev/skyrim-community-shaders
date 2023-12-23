@@ -1,6 +1,6 @@
 {
   "name": "communityshaders",
-  "version-string": "1.0.0",
+  "version-semver": "0.7.4",
   "description": "",
   "license": "GPL-3.0",
   "dependencies": [
