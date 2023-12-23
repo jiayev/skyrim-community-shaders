@@ -89,6 +89,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			}
 
 			if (errors.empty()) {
+				State::GetSingleton()->PostPostLoad();
 				Hooks::Install();
 
 				auto& shaderCache = SIE::ShaderCache::Instance();
@@ -112,8 +113,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			}
 
 			if (errors.empty()) {
-				RE::BSInputDeviceManager::GetSingleton()->AddEventSink(Menu::GetSingleton());
-
 				auto& shaderCache = SIE::ShaderCache::Instance();
 				shaderCache.menuLoaded = true;
 				while (shaderCache.IsCompiling() && !shaderCache.backgroundCompilation) {

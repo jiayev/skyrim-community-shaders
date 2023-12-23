@@ -106,8 +106,9 @@ cbuffer PerFrame : register(
 	float SpecularStrength;
 	float SubsurfaceScatteringAmount;
 	bool EnableDirLightFix;
+	bool OverrideComplexGrassSettings;
 	float BasicGrassBrightness;
-	float pad[2];
+	float pad[1];
 }
 
 #ifdef VSHADER
@@ -430,7 +431,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		worldNormal = normalize(mul(normalColor, CalculateTBN(worldNormal, -input.WorldPosition, input.TexCoord.xy)));
 	}
 
-	if (!complex)
+	if (!complex || OverrideComplexGrassSettings)
 		baseColor.xyz *= BasicGrassBrightness;
 
 	float3 dirLightColor = DirLightColor.xyz;

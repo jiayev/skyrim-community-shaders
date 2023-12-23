@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
 	CommunityShaders
-	VERSION 0.7.0
+	VERSION 0.7.4
 	LANGUAGES CXX
 )
 
@@ -34,6 +34,7 @@ find_package(EASTL CONFIG REQUIRED)
 find_package(directxtk CONFIG REQUIRED)
 find_path(CLIB_UTIL_INCLUDE_DIRS "ClibUtil/utils.hpp")
 find_package(pystring CONFIG REQUIRED)
+find_package(cppwinrt CONFIG REQUIRED)
 
 target_include_directories(
 	${PROJECT_NAME}
@@ -47,6 +48,7 @@ target_link_libraries(
 	PRIVATE
 	debug ${CMAKE_CURRENT_SOURCE_DIR}/include/detours/Debug/detours.lib
 	optimized ${CMAKE_CURRENT_SOURCE_DIR}/include/detours/Release/detours.lib
+	Microsoft::CppWinRT
 	magic_enum::magic_enum
 	xbyak::xbyak
 	nlohmann_json::nlohmann_json
@@ -79,11 +81,10 @@ endif()
 # #######################################################################################################################
 # # Automatic deployment
 # #######################################################################################################################
-
 file(GLOB FEATURE_PATHS LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/features/*)
 
 # Automatic deployment to CommunityShaders output directory.
-if (AUTO_PLUGIN_DEPLOYMENT)
+if(AUTO_PLUGIN_DEPLOYMENT)
 	foreach(DEPLOY_TARGET $ENV{CommunityShadersOutputDir})
 		message("Copying package folder with dll/pdb with all features to ${DEPLOY_TARGET}")
 		add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -91,13 +92,15 @@ if (AUTO_PLUGIN_DEPLOYMENT)
 			COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${PROJECT_NAME}> "${DEPLOY_TARGET}/SKSE/Plugins/"
 			COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_PDB_FILE:${PROJECT_NAME}> "${DEPLOY_TARGET}/SKSE/Plugins/"
 		)
+
 		foreach(FEATURE_PATH ${FEATURE_PATHS})
 			add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 				COMMAND ${CMAKE_COMMAND} -E copy_directory ${FEATURE_PATH} "${DEPLOY_TARGET}"
 			)
 		endforeach()
 	endforeach()
-	if (NOT DEFINED ENV{CommunityShadersOutputDir})
+
+	if(NOT DEFINED ENV{CommunityShadersOutputDir})
 		message("When using AUTO_PLUGIN_DEPLOYMENT option, you need to set environment variable 'CommunityShadersOutputDir'")
 	endif()
 endif()

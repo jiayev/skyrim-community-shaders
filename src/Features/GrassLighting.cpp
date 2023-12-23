@@ -9,6 +9,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SpecularStrength,
 	SubsurfaceScatteringAmount,
 	EnableDirLightFix,
+	OverrideComplexGrassSettings,
 	BasicGrassBrightness)
 
 enum class GrassShaderTechniques
@@ -48,10 +49,11 @@ void GrassLighting::DrawSettings()
 		if (ImGui::IsItemHovered()) {
 			ImGui::BeginTooltip();
 			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-			ImGui::Text("Subsurface Scattering (SSS) amount\n");
-			ImGui::Text("Soft lighting controls how evenly lit an object is.\n");
-			ImGui::Text("Back lighting illuminates the back face of an object.\n");
-			ImGui::Text("Combined to model the transport of light through the surface.");
+			ImGui::Text(
+				"Subsurface Scattering (SSS) amount. "
+				"Soft lighting controls how evenly lit an object is. "
+				"Back lighting illuminates the back face of an object. "
+				"Combined to model the transport of light through the surface. ");
 			ImGui::PopTextWrapPos();
 			ImGui::EndTooltip();
 		}
@@ -71,6 +73,19 @@ void GrassLighting::DrawSettings()
 			ImGui::EndTooltip();
 		}
 
+		ImGui::Checkbox("Override Complex Grass Lighting Settings", (bool*)&settings.OverrideComplexGrassSettings);
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::Text(
+				"Override the settings set by the grass mesh author. "
+				"Complex grass authors can define the brightness for their grass meshes. "
+				"However, some authors may not account for the extra lights available from Community Shaders. "
+				"This option will treat their grass settings like non-complex grass. "
+				"This was the default in Community Shaders < 0.7.0");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
 		ImGui::Spacing();
 		ImGui::Spacing();
 		ImGui::TextWrapped("Basic Grass");

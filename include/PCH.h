@@ -119,10 +119,10 @@ namespace DX
 }
 
 #include <ClibUtil/distribution.hpp>
+#include <ClibUtil/editorID.hpp>
 #include <ClibUtil/numeric.hpp>
 #include <ClibUtil/rng.hpp>
 #include <ClibUtil/simpleINI.hpp>
-#include <ClibUtil/editorID.hpp>
 
 #include "imgui.h"
 
@@ -139,6 +139,7 @@ using json = nlohmann::json;
 #include <EASTL/fixed_slist.h>
 #include <EASTL/fixed_vector.h>
 #include <EASTL/functional.h>
+#include <EASTL/hash_set.h>
 #include <EASTL/map.h>
 #include <EASTL/numeric_limits.h>
 #include <EASTL/set.h>
@@ -148,7 +149,6 @@ using json = nlohmann::json;
 #include <EASTL/unique_ptr.h>
 #include <EASTL/unordered_map.h>
 #include <EASTL/vector.h>
-#include <EASTL/hash_set.h>
 
 #include "SimpleMath.h"
 

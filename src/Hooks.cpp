@@ -217,6 +217,25 @@ void hk_BSShaderRenderTargets_Create()
 	State::GetSingleton()->Setup();
 }
 
+static void hk_PollInputDevices(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events);
+static inline REL::Relocation<decltype(hk_PollInputDevices)> _InputFunc;
+
+void hk_PollInputDevices(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events)
+{
+	auto menu = Menu::GetSingleton();
+
+	if (a_events)
+		menu->ProcessInputEvents(a_events);
+
+	if (menu->ShouldSwallowInput()) {  //the menu is open, eat all keypresses
+		constexpr RE::InputEvent* const dummy[] = { nullptr };
+		_InputFunc(a_dispatcher, dummy);
+		return;
+	}
+
+	_InputFunc(a_dispatcher, a_events);
+}
+
 namespace Hooks
 {
 	struct BSGraphics_Renderer_Init_InitD3D
@@ -281,6 +300,11 @@ namespace Hooks
 
 	void Install()
 	{
+		SKSE::AllocTrampoline(14);
+		auto& trampoline = SKSE::GetTrampoline();
+		logger::info("Hooking BSInputDeviceManager::PollInputDevices");
+		_InputFunc = trampoline.write_call<5>(REL::RelocationID(67315, 68617).address() + REL::Relocate(0x7B, 0x7B, 0x81), hk_PollInputDevices);  //BSInputDeviceManager::PollInputDevices -> Inputfunc
+
 		logger::info("Hooking BSShader::LoadShaders");
 		*(uintptr_t*)&ptr_BSShader_LoadShaders = Detours::X64::DetourFunction(REL::RelocationID(101339, 108326).address(), (uintptr_t)&hk_BSShader_LoadShaders);
 		logger::info("Hooking BSShader::BeginTechnique");

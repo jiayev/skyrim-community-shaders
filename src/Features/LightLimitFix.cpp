@@ -137,9 +137,10 @@ void LightLimitFix::DrawSettings()
 			if (ImGui::IsItemHovered()) {
 				ImGui::BeginTooltip();
 				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-				ImGui::Text(" - Visualise the light limit. Red when the \"strict\" light limit is reached (portal-strict lights).\n");
-				ImGui::Text(" - Visualise the number of strict lights. \n");
-				ImGui::Text(" - Visualise the number of clustered lights.");
+				ImGui::Text(
+					" - Visualise the light limit. Red when the \"strict\" light limit is reached (portal-strict lights). "
+					" - Visualise the number of strict lights. "
+					" - Visualise the number of clustered lights. ");
 				ImGui::PopTextWrapPos();
 				ImGui::EndTooltip();
 			}
@@ -306,7 +307,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 			strictLightDataTemp.PointLightPosition[i] = DirectX::SimpleMath::Vector3::Transform(worldPos, Transform);
 			strictLightDataTemp.PointLightRadius[i] = runtimeData.radius.x / WorldScale;
 		} else {
-			auto posAdjust = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().posAdjust.getEye();
+			auto posAdjust = (!REL::Module::IsVR()) ? RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().posAdjust.getEye() : RE::BSGraphics::RendererShadowState::GetSingleton()->GetVRRuntimeData().posAdjust.getEye();
 			strictLightDataTemp.PointLightPosition[i] = worldPos - float3(posAdjust.x, posAdjust.y, posAdjust.z);
 			strictLightDataTemp.PointLightRadius[i] = runtimeData.radius.x;
 		}
