@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  VCPKG_COMMIT_ID: 417119555f155f6044dec7a379cd25466e339873
+  VCPKG_COMMIT_ID: e6aabd1415a1fc9f5e76deb3c5a40e27300aef2a
 
 jobs:
   compile:
