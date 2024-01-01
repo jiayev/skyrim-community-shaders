@@ -475,7 +475,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 puddleCoords = ((input.WorldPosition.xyz + CameraPosAdjust[0]) * 0.5 + 0.5) * 0.01 * perPassWetnessEffects[0].PuddleRadius;
 	float3 puddle = FBM(puddleCoords, 3, 1.0) * 0.5 + 0.5;
-	puddle = lerp(0.2, 1.0, puddle); 
+	puddle = lerp(0.2, 1.0, puddle);
 	puddle *= perPassWetnessEffects[0].Wetness * perPassWetnessEffects[0].MaxRainWetness;
 	puddle *= lerp(0.2, 1.0, saturate(worldNormal.z));
 
