@@ -26,6 +26,7 @@
   "BasicGrassBrightness": 0.6660000085830688,
   "EnableDirLightFix": 1,
   "Glossiness": 20.0,
+  "OverrideComplexGrassSettings": 0,
   "SpecularStrength": 0.5,
   "SubsurfaceScatteringAmount": 1.0
  },
@@ -75,7 +76,7 @@
   "EnableDirLightFix": 1,
   "SubsurfaceScatteringAmount": 0.5
  },
- "Version": "0-7-0-0",
+ "Version": "0-7-4-0",
  "Water Blending": {
   "EnableWaterBlending": 1,
   "EnableWaterBlendingSSR": 1,
@@ -84,14 +85,10 @@
  },
  "Wetness Effects": {
   "EnableWetnessEffects": 1,
-  "MaxDarkness": 1.0,
-  "MaxOcclusion": 0.15000000596046448,
   "MaxRainWetness": 1.0,
   "MaxShoreWetness": 0.5,
-  "MinRoughness": 0.10000000149011612,
-  "PuddleFlatness": 0.949999988079071,
-  "PuddleMaxAngle": 0.8999999761581421,
-  "PuddleMinWetness": 0.699999988079071,
+  "PuddleMaxAngle": 0.949999988079071,
+  "PuddleMinWetness": 0.75,
   "PuddleRadius": 1.0,
   "ShoreRange": 32
  }

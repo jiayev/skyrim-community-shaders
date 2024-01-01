@@ -21,14 +21,12 @@ public:
 	struct Settings
 	{
 		uint EnableWetnessEffects = true;
-		float MaxRainWetness = 0.8f;
+		float MaxRainWetness = 1.0f;
 		float MaxShoreWetness = 0.5f;
-		float MaxOcclusion = 0.1f;
 		uint ShoreRange = 32;
-		float PuddleMinWetness = 0.5f;
 		float PuddleRadius = 1.0f;
-		float PuddleMaxAngle = 0.9f;
-		float PuddleFlatness = 0.95f;
+		float PuddleMaxAngle = 0.95f;
+		float PuddleMinWetness = 0.75f;
 	};
 
 	struct PerPass

@@ -11,12 +11,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableWetnessEffects,
 	MaxRainWetness,
 	MaxShoreWetness,
-	MaxOcclusion,
 	ShoreRange,
-	PuddleMinWetness,
 	PuddleRadius,
 	PuddleMaxAngle,
-	PuddleFlatness)
+	PuddleMinWetness)
 
 void WetnessEffects::DrawSettings()
 {
@@ -32,14 +30,12 @@ void WetnessEffects::DrawSettings()
 
 		ImGui::SliderFloat("Max Rain Wetness", &settings.MaxRainWetness, 0.0f, 1.0f);
 		ImGui::SliderFloat("Max Shore Wetness", &settings.MaxShoreWetness, 0.0f, 1.0f);
-		ImGui::SliderFloat("Max Occlusion", &settings.MaxOcclusion, 0.0f, 1.0f);
 
 		ImGui::SliderInt("Shore Range", (int*)&settings.ShoreRange, 1, 64);
 
-		ImGui::SliderFloat("Puddle Min Wetness", &settings.PuddleMinWetness, 0.0f, 1.0f);
 		ImGui::SliderFloat("Puddle Radius", &settings.PuddleRadius, 0.0f, 3.0f);
 		ImGui::SliderFloat("Puddle Max Angle", &settings.PuddleMaxAngle, 0.0f, 1.0f);
-		ImGui::SliderFloat("Puddle Flatness", &settings.PuddleFlatness, 0.0f, 1.0f);
+		ImGui::SliderFloat("Puddle Min Wetness", &settings.PuddleMinWetness, 0.0f, 1.0f);
 
 		ImGui::TreePop();
 	}

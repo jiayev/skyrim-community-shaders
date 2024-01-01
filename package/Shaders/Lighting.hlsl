@@ -1602,7 +1602,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow) {
 			if (shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 				float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
-				puddle *= lerp(1.0, shadowColor.x, upAngle * perPassWetnessEffects[0].MaxOcclusion);
+				puddle *= lerp(1.0, shadowColor.x, upAngle * 0.2);
 			}
 		}
 	}
@@ -1632,14 +1632,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 #		if !defined(MODELSPACENORMALS)
-	float flatnessAmount = perPassWetnessEffects[0].PuddleFlatness;
-	flatnessAmount *= smoothstep(perPassWetnessEffects[0].PuddleMaxAngle, 1.0, worldSpaceNormal.z);
+	float flatnessAmount = smoothstep(perPassWetnessEffects[0].PuddleMaxAngle, 1.0, worldSpaceNormal.z);
 	flatnessAmount *= smoothstep(perPassWetnessEffects[0].PuddleMinWetness, 1.0, wetnessGlossinessSpecular);
 	wetnessNormal = normalize(lerp(wetnessNormal, worldSpaceVertexNormal, flatnessAmount));
 #		endif
 
-	float waterRoughnessSpecular = lerp(1.0, 0.0, saturate(wetnessGlossinessSpecular * (1.0 / perPassWetnessEffects[0].PuddleMinWetness)));
-	float waterRoughnessSpecularClamped = max(waterRoughnessSpecular, 0.1);
+	float waterRoughnessSpecular = lerp(1.0, 0.2, saturate(wetnessGlossinessSpecular * (1.0 / perPassWetnessEffects[0].PuddleMinWetness)));
 #	endif
 
 #	if defined(LIGHT_LIMIT_FIX)
@@ -1744,8 +1742,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			lightsDiffuseColor += lightDiffuseColor;
 
 #		if defined(WETNESS_EFFECTS)
-			if (waterRoughnessSpecularClamped < 1.0)
-				wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirectionWS, worldSpaceViewDirection, lightColor, waterRoughnessSpecularClamped);
+			if (waterRoughnessSpecular < 1.0)
+				wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirectionWS, worldSpaceViewDirection, lightColor, waterRoughnessSpecular);
 #		endif
 		}
 	}
@@ -1839,8 +1837,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				lightsDiffuseColor += lightDiffuseColor;
 
 #			if defined(WETNESS_EFFECTS)
-				if (waterRoughnessSpecularClamped < 1.0)
-					wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirection, worldSpaceViewDirection, lightColor, waterRoughnessSpecularClamped);
+				if (waterRoughnessSpecular < 1.0)
+					wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirection, worldSpaceViewDirection, lightColor, waterRoughnessSpecular);
 #			endif
 			}
 		}
