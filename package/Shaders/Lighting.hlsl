@@ -1540,7 +1540,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	screenSpaceVertexNormal = normalize(screenSpaceVertexNormal);
 
 	float3 worldSpaceVertexNormal = normalize(mul(CameraViewInverse[eyeIndex], float4(screenSpaceVertexNormal, 0)));
-#	endif
+#		endif
 
 #		if (!defined(DRAW_IN_WORLDSPACE))
 	if (!input.WorldSpace)
