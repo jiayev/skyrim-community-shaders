@@ -24,5 +24,11 @@
     "eastl",
     "clib-util"
   ],
-  "builtin-baseline": "e6aabd1415a1fc9f5e76deb3c5a40e27300aef2a"
+  "overrides": [
+    {
+      "name": "bshoshany-thread-pool",
+      "version-string": "3.5.0"
+    }
+  ],
+  "builtin-baseline": "83972272512ce4ede5fc3b2ba98f6468b179f192"
 }
