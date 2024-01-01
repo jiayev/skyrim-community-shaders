@@ -11,9 +11,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableWetnessEffects,
 	MaxRainWetness,
 	MaxShoreWetness,
-	MaxDarkness,
 	MaxOcclusion,
-	MinRoughness,
 	ShoreRange,
 	PuddleMinWetness,
 	PuddleRadius,
@@ -34,9 +32,7 @@ void WetnessEffects::DrawSettings()
 
 		ImGui::SliderFloat("Max Rain Wetness", &settings.MaxRainWetness, 0.0f, 1.0f);
 		ImGui::SliderFloat("Max Shore Wetness", &settings.MaxShoreWetness, 0.0f, 1.0f);
-		ImGui::SliderFloat("Max Darkness", &settings.MaxDarkness, 1.0f, 2.0f);
 		ImGui::SliderFloat("Max Occlusion", &settings.MaxOcclusion, 0.0f, 1.0f);
-		ImGui::SliderFloat("Min Roughness", &settings.MinRoughness, 0.0f, 1.0f);
 
 		ImGui::SliderInt("Shore Range", (int*)&settings.ShoreRange, 1, 64);
 

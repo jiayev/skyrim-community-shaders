@@ -23,9 +23,7 @@ public:
 		uint EnableWetnessEffects = true;
 		float MaxRainWetness = 1.0f;
 		float MaxShoreWetness = 0.5f;
-		float MaxDarkness = 1.0f;
 		float MaxOcclusion = 0.15f;
-		float MinRoughness = 0.1f;
 		uint ShoreRange = 32;
 		float PuddleMinWetness = 0.7f;
 		float PuddleRadius = 1.0f;

@@ -7,9 +7,7 @@ struct PerPassWetnessEffects
 	uint EnableWetnessEffects;
 	float MaxRainWetness;
 	float MaxShoreWetness;
-	float MaxDarkness;
 	float MaxOcclusion;
-	float MinRoughness;
 	uint ShoreRange;
 	float PuddleMinWetness;
 	float PuddleRadius;
@@ -34,7 +32,11 @@ float2 EnvBRDFApprox(float3 F0, float Roughness, float NoV)
 
 float3 GetWetnessAmbientSpecular(float3 N, float3 V, float roughness, float3 F0)
 {
-	float3 R = reflect(-V, N);
+	float3 NT = N;
+	NT.z += 1;
+	NT = normalize(NT);
+
+	float3 R = reflect(-V, NT);
 	float NoV = saturate(dot(N, V));
 
 	float3 specularIrradiance = mul(perPassWetnessEffects[0].DirectionalAmbientWS, float4(R, 1.0)) * 0.75;
@@ -52,7 +54,7 @@ float3 GetWetnessAmbientSpecular(float3 N, float3 V, float roughness, float3 F0)
 	}
 #endif
 
-	specularIrradiance = pow(specularIrradiance, 2.2);
+	specularIrradiance = sRGB2Lin(specularIrradiance);
 
 	// Split-sum approximation factors for Cook-Torrance specular BRDF.
 #if defined(DYNAMIC_CUBEMAPS)
@@ -115,13 +117,4 @@ float FBM(float3 pos, int octaves, float frequency)
 		amplitude *= fbmPersistance;
 	}
 	return height;
-}
-
-float NormalFiltering(float roughness, const float3 worldNormal)
-{
-	// Kaplanyan 2016, "Stable specular highlights"
-	// Tokuyoshi 2017, "Error Reduction and Simplification for Shading Anti-Aliasing"
-	// Tokuyoshi and Kaplanyan 2019, "Improved Geometric Specular Antialiasing"
-	float3 dxy = max(abs(ddx(worldNormal)), abs(ddy(worldNormal)));
-	return max(roughness, 0.04 + max(max(dxy.x, dxy.y), dxy.z));
 }
