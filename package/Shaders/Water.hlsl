@@ -2,6 +2,8 @@
 #include "Common/MotionBlur.hlsl"
 #include "Common/Permutation.hlsl"
 
+#define WATER
+
 struct VS_INPUT
 {
 #if defined(SPECULAR) || defined(UNDERWATER) || defined(STENCIL) || defined(SIMPLE)
@@ -402,7 +404,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 }
 
 #		if defined(DEPTH)
-float GetScreenDepth(float2 screenPosition)
+float GetScreenDepthWater(float2 screenPosition)
 {
 	float depth = DepthTex.Load(float3(screenPosition, 0)).x;
 	return (CameraData.w / (-depth * CameraData.z + CameraData.x));
@@ -443,9 +445,9 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 		float2(refractionNormal.x, refractionNormal.w - refractionNormal.y) / refractionNormal.ww;
 
 #			if defined(DEPTH)
-	float depth = GetScreenDepth(DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy));
+	float depth = GetScreenDepthWater(DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy));
 	float refractionDepth =
-		GetScreenDepth(DynamicResolutionParams1.xy * (refractionUvRaw / VPOSOffset.xy));
+		GetScreenDepthWater(DynamicResolutionParams1.xy * (refractionUvRaw / VPOSOffset.xy));
 	float refractionDepthMul = length(
 		float3((refractionDepth * ((VPOSOffset.zw + refractionUvRaw) * 2 - 1)) /
 				   ProjData.xy,
@@ -501,6 +503,10 @@ float3 GetSunColor(float3 normal, float3 viewDirection)
 #		include "WaterBlending/WaterBlending.hlsli"
 #	endif
 
+#	if defined(LIGHT_LIMIT_FIX)
+#		include "LightLimitFix/LightLimitFix.hlsli"
+#	endif
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
@@ -521,7 +527,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			else
 	distanceMul = 0;
 
-	float depth = GetScreenDepth(
+	float depth = GetScreenDepthWater(
 		DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy));
 	float2 depthOffset =
 		DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;
@@ -574,6 +580,42 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 diffuseColor =
 		GetWaterDiffuseColor(input, normal, viewDirection, distanceMul, depthControl.y, fresnel);
 
+	float3 specularLighting = 0;
+
+#			if defined(LIGHT_LIMIT_FIX)
+	uint eyeIndex = 0;
+	uint lightCount = 0;
+
+	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WPosition.xyz, 1)).xyz;
+	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
+
+	uint clusterIndex = 0;
+	if (perPassLLF[0].EnableGlobalLights && GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+		lightCount = lightGrid[clusterIndex].lightCount;
+		uint lightOffset = lightGrid[clusterIndex].offset;
+		[loop] for (uint i = 0; i < lightCount; i++)
+		{
+			uint light_index = lightList[lightOffset + i];
+			StructuredLight light = lights[light_index];
+
+			float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WPosition.xyz;
+			float lightDist = length(lightDirection);
+			float intensityFactor = saturate(lightDist / light.radius);
+
+			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+
+			float3 normalizedLightDirection = normalize(lightDirection);
+
+			float3 H = normalize(normalizedLightDirection - viewDirection);
+			float HdotN = saturate(dot(H, normal));
+
+			float3 lightColor = light.color.xyz * pow(HdotN, FresnelRI.z);
+			specularLighting += lightColor * intensityMultiplier;
+		}
+	}
+	specularColor += specularLighting * 3;
+#			endif
+
 #			if defined(UNDERWATER)
 	float3 finalSpecularColor = lerp(ShallowColor.xyz, specularColor, 0.5);
 	float3 finalColor = saturate(1 - input.WPosition.w * 0.002) *
@@ -582,9 +624,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			else
 	float3 sunColor = GetSunColor(normal, viewDirection);
 	float specularFraction = lerp(1, fresnel * depthControl.x, distanceFactor);
-
-	float3 finalColorPreFog =
-		lerp(diffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
+	float3 finalColorPreFog = lerp(diffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
 	float3 finalColor = lerp(finalColorPreFog, input.FogParam.xyz, input.FogParam.w);
 #			endif
 #		endif

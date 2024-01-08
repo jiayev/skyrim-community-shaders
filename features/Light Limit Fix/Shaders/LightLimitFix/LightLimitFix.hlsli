@@ -32,7 +32,7 @@ StructuredBuffer<StructuredLight> lights : register(t17);
 StructuredBuffer<uint> lightList : register(t18);       //MAX_CLUSTER_LIGHTS * 16^3
 StructuredBuffer<LightGrid> lightGrid : register(t19);  //16^3
 
-#if !defined(SCREEN_SPACE_SHADOWS)
+#if !defined(SCREEN_SPACE_SHADOWS) && !defined(EFFECT)
 Texture2D<float4> TexDepthSampler : register(t20);
 #endif  // SCREEN_SPACE_SHADOWS
 

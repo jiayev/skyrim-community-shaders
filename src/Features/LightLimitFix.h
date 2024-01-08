@@ -187,7 +187,7 @@ public:
 		{
 			static bool thunk(RE::BSShaderProperty* a_property, RE::BSLight* a_light)
 			{
-				return func(a_property, a_light) && (!netimmerse_cast<RE::BSLightingShaderProperty*>(a_property) || (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light)));
+				return func(a_property, a_light) && ((REL::Module::IsVR() && !netimmerse_cast<RE::BSLightingShaderProperty*>(a_property)) || (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light)));
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -196,7 +196,7 @@ public:
 		{
 			static bool thunk(RE::BSShaderProperty* a_property, RE::BSLight* a_light)
 			{
-				return func(a_property, a_light) && (!netimmerse_cast<RE::BSLightingShaderProperty*>(a_property) || (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light)));
+				return func(a_property, a_light) && ((REL::Module::IsVR() && !netimmerse_cast<RE::BSLightingShaderProperty*>(a_property)) || (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light)));
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -205,7 +205,7 @@ public:
 		{
 			static bool thunk(RE::BSShaderProperty* a_property, RE::BSLight* a_light)
 			{
-				return func(a_property, a_light) && (!netimmerse_cast<RE::BSLightingShaderProperty*>(a_property) || (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light)));
+				return func(a_property, a_light) && ((REL::Module::IsVR() && !netimmerse_cast<RE::BSLightingShaderProperty*>(a_property)) || (a_light->portalStrict || !a_light->portalGraph || skyrim_cast<RE::BSShadowLight*>(a_light)));
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};

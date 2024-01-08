@@ -607,21 +607,14 @@ enum class GrassShaderTechniques
 	RenderDepth = 8,
 };
 
-void LightLimitFix::Draw(const RE::BSShader* shader, const uint32_t descriptor)
+void LightLimitFix::Draw(const RE::BSShader* shader, const uint32_t)
 {
 	switch (shader->shaderType.get()) {
 	case RE::BSShader::Type::Lighting:
-		{
-			Bind();
-		}
-		break;
 	case RE::BSShader::Type::Grass:
-		{
-			const auto technique = descriptor & 0b1111;
-			if (technique != static_cast<uint32_t>(GrassShaderTechniques::RenderDepth)) {
-				Bind();
-			}
-		}
+	case RE::BSShader::Type::Effect:
+	case RE::BSShader::Type::Water:
+		Bind();
 		break;
 	}
 }
@@ -1027,6 +1020,9 @@ bool LightLimitFix::HasShaderDefine(RE::BSShader::Type shaderType)
 	case RE::BSShader::Type::Lighting:
 	case RE::BSShader::Type::Grass:
 		return true;
+	case RE::BSShader::Type::Effect:
+	case RE::BSShader::Type::Water:
+		return !REL::Module::IsVR();
 	default:
 		return false;
 	}
