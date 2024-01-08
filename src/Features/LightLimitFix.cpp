@@ -630,6 +630,10 @@ void LightLimitFix::DataLoaded()
 	auto iMagicLightMaxCount = RE::GameSettingCollection::GetSingleton()->GetSetting("iMagicLightMaxCount");
 	iMagicLightMaxCount->data.i = MAXINT32;
 	logger::info("[LLF] Unlocked magic light limit");
+
+	auto iMaxDesired = RE::GetINISetting("iMaxDesired:Particles");
+	iMaxDesired->data.i = MAXINT32;
+	logger::info("[LLF] Unlocked particle limit");
 }
 
 float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radius)
