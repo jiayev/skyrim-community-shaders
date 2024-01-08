@@ -1332,13 +1332,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif  // SNOW
 #	endif      // LANDSCAPE
 
-#		if defined(BACK_LIGHTING)
+#	if defined(BACK_LIGHTING)
 	float4 backLightColor = TexBackLightSampler.Sample(SampBackLightSampler, uv);
-#		endif  // BACK_LIGHTING
+#	endif  // BACK_LIGHTING
 
-#		if defined(RIM_LIGHTING) || defined(SOFT_LIGHTING)
+#	if defined(RIM_LIGHTING) || defined(SOFT_LIGHTING)
 	float4 rimSoftLightColor = TexRimSoftLightWorldMapOverlaySampler.Sample(SampRimSoftLightWorldMapOverlaySampler, uv);
-#		endif  // RIM_LIGHTING || SOFT_LIGHTING
+#	endif  // RIM_LIGHTING || SOFT_LIGHTING
 
 	float numLights = min(7, NumLightNumShadowLight.x);
 	float numShadowLights = min(4, NumLightNumShadowLight.y);
@@ -1553,7 +1553,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	cellInt = round(cellF);
 
 	uint waterTile = (uint)clamp(cellInt.x + (cellInt.y * 5), 0, 24);  // remap xy to 0-24
-	float waterHeight = lerp(-2147483648, lightingData[0].WaterHeight[waterTile], cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0);                        
+	float waterHeight = lerp(-2147483648, lightingData[0].WaterHeight[waterTile], cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0);
 #	endif
 
 #	if defined(WETNESS_EFFECTS)
@@ -1614,7 +1614,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float wetnessGlossinessSpecular = puddle;
 
 #		if !defined(LOD)
-wetnessGlossinessSpecular = lerp(wetnessGlossinessSpecular, wetnessGlossinessSpecular * shoreFactor, input.WorldPosition.z < waterHeight);
+	wetnessGlossinessSpecular = lerp(wetnessGlossinessSpecular, wetnessGlossinessSpecular * shoreFactor, input.WorldPosition.z < waterHeight);
 #		endif
 
 #		if !defined(MODELSPACENORMALS)
