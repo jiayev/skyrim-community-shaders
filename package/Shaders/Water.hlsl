@@ -582,16 +582,16 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 specularLighting = 0;
 
-#		if defined(LIGHT_LIMIT_FIX)
+#			if defined(LIGHT_LIMIT_FIX)
 	uint eyeIndex = 0;
 	uint lightCount = 0;
 
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WPosition.xyz, 1)).xyz;
 	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
-	
+
 	uint clusterIndex = 0;
-	if (GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {	
-		lightCount = lightGrid[clusterIndex].lightCount;	
+	if (GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+		lightCount = lightGrid[clusterIndex].lightCount;
 		uint lightOffset = lightGrid[clusterIndex].offset;
 		[loop] for (uint i = 0; i < lightCount; i++)
 		{
@@ -611,10 +611,10 @@ PS_OUTPUT main(PS_INPUT input)
 
 			float3 lightColor = light.color.xyz * pow(HdotN, FresnelRI.z);
 			specularLighting += lightColor * intensityMultiplier;
-		}	
+		}
 	}
 	specularColor += specularLighting;
-#		endif
+#			endif
 
 #			if defined(UNDERWATER)
 	float3 finalSpecularColor = lerp(ShallowColor.xyz, specularColor, 0.5);

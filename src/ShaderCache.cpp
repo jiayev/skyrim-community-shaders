@@ -289,133 +289,107 @@ namespace SIE
 
 		static void GetEffectShaderDefines(uint32_t descriptor, D3D_SHADER_MACRO* defines)
 		{
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Vc))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Vc)) {
 				defines[0] = { "VC", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::TexCoord))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::TexCoord)) {
 				defines[0] = { "TEXCOORD", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::TexCoordIndex))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::TexCoordIndex)) {
 				defines[0] = { "TEXCOORD_INDEX", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Skinned))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Skinned)) {
 				defines[0] = { "SKINNED", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Normals))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Normals)) {
 				defines[0] = { "NORMALS", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::BinormalTangent))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::BinormalTangent)) {
 				defines[0] = { "BINORMAL_TANGENT", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Texture))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Texture)) {
 				defines[0] = { "TEXTURE", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::IndexedTexture))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::IndexedTexture)) {
 				defines[0] = { "INDEXED_TEXTURE", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Falloff))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Falloff)) {
 				defines[0] = { "FALLOFF", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::AddBlend))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::AddBlend)) {
 				defines[0] = { "ADDBLEND", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::MultBlend))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::MultBlend)) {
 				defines[0] = { "MULTBLEND", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Particles))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Particles)) {
 				defines[0] = { "PARTICLES", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::StripParticles))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::StripParticles)) {
 				defines[0] = { "STRIP_PARTICLES", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Blood))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Blood)) {
 				defines[0] = { "BLOOD", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Membrane))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Membrane)) {
 				defines[0] = { "MEMBRANE", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Lighting))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Lighting)) {
 				defines[0] = { "LIGHTING", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::ProjectedUv))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::ProjectedUv)) {
 				defines[0] = { "PROJECTED_UV", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Soft))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Soft)) {
 				defines[0] = { "SOFT", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::GrayscaleToColor))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::GrayscaleToColor)) {
 				defines[0] = { "GRAYSCALE_TO_COLOR", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::GrayscaleToAlpha))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::GrayscaleToAlpha)) {
 				defines[0] = { "GRAYSCALE_TO_ALPHA", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::IgnoreTexAlpha))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::IgnoreTexAlpha)) {
 				defines[0] = { "IGNORE_TEX_ALPHA", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::MultBlendDecal))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::MultBlendDecal)) {
 				defines[0] = { "MULTBLEND_DECAL", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::AlphaTest))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::AlphaTest)) {
 				defines[0] = { "ALPHA_TEST", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::SkyObject))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::SkyObject)) {
 				defines[0] = { "SKY_OBJECT", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::MsnSpuSkinned))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::MsnSpuSkinned)) {
 				defines[0] = { "MSN_SPU_SKINNED", nullptr };
 				++defines;
 			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::MotionVectorsNormals))
-			{
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::MotionVectorsNormals)) {
 				defines[0] = { "MOTIONVECTORS_NORMALS", nullptr };
 				++defines;
 			}

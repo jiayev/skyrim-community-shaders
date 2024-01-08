@@ -103,7 +103,7 @@ namespace SIE
 				       type == RE::BSShader::Type::Grass ||
 				       type == RE::BSShader::Type::Particle ||
 				       type == RE::BSShader::Type::Water ||
-					   type == RE::BSShader::Type::Effect;
+				       type == RE::BSShader::Type::Effect;
 			return type == RE::BSShader::Type::Lighting ||
 			       type == RE::BSShader::Type::Grass;
 		}
