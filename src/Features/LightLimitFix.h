@@ -111,6 +111,7 @@ public:
 	struct ParticleLightInfo
 	{
 		RE::NiColorA color;
+		float radius;
 		ParticleLights::Config& config;
 	};
 
