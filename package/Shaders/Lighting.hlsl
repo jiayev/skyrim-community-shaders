@@ -1576,9 +1576,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 #		if !defined(LOD)
-	wetness = max(shoreFactor * perPassWetnessEffects[0].MaxShoreWetness, rainWetness * perPassWetnessEffects[0].MaxRainWetness);
+	wetness = max(shoreFactor * perPassWetnessEffects[0].MaxShoreWetness, rainWetness);
 #		else
-	wetness = rainWetness * perPassWetnessEffects[0].MaxRainWetness;
+	wetness = rainWetness;
 #		endif
 	float3 wetnessNormal = worldSpaceNormal;
 

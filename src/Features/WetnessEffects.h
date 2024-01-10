@@ -29,7 +29,7 @@ public:
 		float PuddleMinWetness = 0.75f;
 	};
 
-	struct PerPass
+	struct alignas(16) PerPass
 	{
 		float Wetness;
 		DirectX::XMFLOAT3X4 DirectionalAmbientWS;
@@ -51,4 +51,7 @@ public:
 
 	virtual void Load(json& o_json);
 	virtual void Save(json& o_json);
+
+	float CalculateWeatherTransitionPercentage(RE::TESWeather* weather, float skyCurrentWeatherPct, float beginFade);
+	float CalculateWetness(RE::TESWeather* weather, RE::Sky* sky);
 };
