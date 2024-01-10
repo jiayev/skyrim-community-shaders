@@ -845,7 +845,7 @@ void LightLimitFix::UpdateLights()
 
 				auto numVertices = particleData->GetActiveVertexCount();
 				for (std::uint32_t p = 0; p < numVertices; p++) {
-					float radius = particleData->GetParticlesRuntimeData().sizes[p] * 64;
+					float radius = particleData->GetParticlesRuntimeData().sizes[p] * 50;
 
 					auto initialPosition = particleData->GetParticlesRuntimeData().positions[p];
 					if (!particleSystem->GetParticleSystemRuntimeData().isWorldspace) {
@@ -912,7 +912,7 @@ void LightLimitFix::UpdateLights()
 
 				light.color *= particleLight.second.color.alpha;
 				
-				float radius = (particleLight.first->worldBound.radius / std::max(FLT_MIN, particleLight.first->GetModelData().modelBound.radius)) * particleLight.second.radius * 64; // correct bad model bounds
+				float radius = (particleLight.first->worldBound.radius / std::max(FLT_MIN, particleLight.first->GetModelData().modelBound.radius)) * particleLight.second.radius * 50; // correct bad model bounds
 				light.radius = radius * settings.ParticleLightsRadiusBillboards;
 
 				SetLightPosition(light, particleLight.first->world.translate);  //light is complete for both eyes by now
