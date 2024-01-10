@@ -328,7 +328,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 	context->Unmap(strictLightData->resource.get(), 0);
 }
 
-void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3& a_initialPosition)
+void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition)
 {
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
@@ -913,10 +913,9 @@ void LightLimitFix::UpdateLights()
 				light.color *= particleLight.second.color.alpha;
 				
 				float radius = (particleLight.first->worldBound.radius / std::max(FLT_MIN, particleLight.first->GetModelData().modelBound.radius)) * particleLight.second.radius * 64; // correct bad model bounds
-
 				light.radius = radius * settings.ParticleLightsRadiusBillboards;
 
-				SetLightPosition(light, particleLight.first->worldBound.center);  //light is complete for both eyes by now
+				SetLightPosition(light, particleLight.first->world.translate);  //light is complete for both eyes by now
 
 				currentLightCount += AddCachedParticleLights(lightsData, light, &particleLight.second.config, particleLight.first, timer);
 			}
