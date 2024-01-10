@@ -588,7 +588,7 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
 								uint32_t offset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_POSITION);
 								for (int v = 0; v < triShape->GetTrishapeRuntimeData().vertexCount; v++) {
 									if (VertexPosition* vertex = reinterpret_cast<VertexPosition*>(&rendererData->rawVertexData[vertexSize * v + offset])) {
-										RE::NiPoint3 position{ (float)vertex->data[0] / 255.0f, (float)vertex->data[1] / 255.0f, (float)vertex->data[2] / 255.0f};
+										RE::NiPoint3 position{ (float)vertex->data[0] / 255.0f, (float)vertex->data[1] / 255.0f, (float)vertex->data[2] / 255.0f };
 										radius = std::max(radius, position.Length());
 									}
 								}
@@ -911,8 +911,8 @@ void LightLimitFix::UpdateLights()
 				light.color = Saturation(light.color, settings.ParticleLightsSaturation);
 
 				light.color *= particleLight.second.color.alpha;
-				
-				float radius = (particleLight.first->worldBound.radius / std::max(FLT_MIN, particleLight.first->GetModelData().modelBound.radius)) * particleLight.second.radius * 50; // correct bad model bounds
+			
+				float radius = (particleLight.first->worldBound.radius / std::max(FLT_MIN, particleLight.first->GetModelData().modelBound.radius)) * particleLight.second.radius * 64;  // correct bad model bounds
 				light.radius = radius * settings.ParticleLightsRadiusBillboards;
 
 				SetLightPosition(light, particleLight.first->world.translate);  //light is complete for both eyes by now
