@@ -50,7 +50,7 @@
  "Replace Original Shaders": {
   "BloodSplatter": false,
   "DistantTree": true,
-  "Effect": false,
+  "Effect": true,
   "Grass": true,
   "ImageSpace": false,
   "Lighting": true,
