@@ -1,4 +1,5 @@
 #include "WetnessEffects.h"
+
 #include <Util.h>
 
 const float MIN_START_PERCENTAGE = 0.05f;
@@ -76,9 +77,10 @@ float WetnessEffects::CalculateWetness(RE::TESWeather* weather, RE::Sky* sky)
 void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 {
 	if (shader->shaderType.any(RE::BSShader::Type::Lighting)) {
+		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+
 		if (requiresUpdate) {
 			requiresUpdate = false;
-			auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
 			PerPass data{};
 			data.Wetness = DRY_WETNESS;
@@ -129,11 +131,10 @@ void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 			size_t bytes = sizeof(PerPass);
 			memcpy_s(mapped.pData, bytes, &data, bytes);
 			context->Unmap(perPass->resource.get(), 0);
-
-			ID3D11ShaderResourceView* views[1]{};
-			views[0] = perPass->srv.get();
-			context->PSSetShaderResources(22, ARRAYSIZE(views), views);
 		}
+		ID3D11ShaderResourceView* views[1]{};
+		views[0] = perPass->srv.get();
+		context->PSSetShaderResources(22, ARRAYSIZE(views), views);
 	}
 }
 
