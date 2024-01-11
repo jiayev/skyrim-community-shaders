@@ -94,7 +94,7 @@ public:
 	struct LightingData
 	{
 		float WaterHeight[25];
-		bool Reflections;
+		uint Reflections;
 	};
 
 	LightingData lightingData{};

@@ -1555,7 +1555,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	uint waterTile = (uint)clamp(cellInt.x + (cellInt.y * 5), 0, 24);  // remap xy to 0-24
 	float waterHeight = -2147483648;                                   // lowest 32-bit integer
 
-	[flatten] if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
+	[flatten]
+	if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
 		waterHeight = lightingData[0].WaterHeight[waterTile];
 
 #	endif
@@ -1568,7 +1569,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float shoreFactor = saturate(1.0 - (wetnessDistToWater / (float)perPassWetnessEffects[0].ShoreRange));
 	float shoreFactorAlbedo = shoreFactor;
 	shoreFactorAlbedo *= shoreFactorAlbedo;
-	[flatten] if (input.WorldPosition.z < waterHeight)
+	[flatten]
+	if (input.WorldPosition.z < waterHeight)
 		shoreFactorAlbedo = 1.0;
 #		endif
 
@@ -1847,32 +1849,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 envColorBase = TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz;
 	float3 envColor = envColorBase * envMask;
 #		if defined(DYNAMIC_CUBEMAPS)
-	bool dynamicCubemap = false;
-	if (envMask != 0) {
-		uint2 envSize;
-		TexEnvSampler.GetDimensions(envSize.x, envSize.y);
-		dynamicCubemap = envSize.x == 1;
-		if (dynamicCubemap) {
-			float3 F0;
+	uint2 envSize;
+	TexEnvSampler.GetDimensions(envSize.x, envSize.y);
+	bool dynamicCubemap = envMask != 0 && envSize.x == 1;
+	if (dynamicCubemap) {
 #			if defined(CPM_AVAILABLE)
-			if (envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0) {
-				F0 = 1.0;
-			} else {
-				F0 = envColorBase;
-			}
+		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
+		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, max(0.1, 1.0 - complexMaterialColor.y), F0) * envMask;
 #			else
-			if (envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0) {
-				F0 = 1.0;
-			} else {
-				F0 = envColorBase;
-			}
+		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
+		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, 0.1, F0) * envMask;
 #			endif
-#			if defined(CPM_AVAILABLE)
-			envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, max(0.1, 1.0 - complexMaterialColor.y), F0) * envMask;
-#			else
-			envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, 0.1, F0) * envMask;
-#			endif
-		}
 	}
 #		endif
 
@@ -1935,28 +1922,26 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (useSnowSpecular)
 		specularColor = 0;
 
+	color.xyz = vertexColor.xyz;
+
 #	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
 #		if defined(DYNAMIC_CUBEMAPS)
 	if (dynamicCubemap)
-		vertexColor = sRGB2Lin(vertexColor);
+		color.xyz = sRGB2Lin(color.xyz);
 #		endif
 
 #		if defined(CPM_AVAILABLE) && defined(ENVMAP)
-	vertexColor += envColor * complexSpecular * diffuseColor;
+	color.xyz += envColor * complexSpecular * diffuseColor;
 #		else
-	vertexColor += envColor * diffuseColor;
+	color.xyz += envColor * diffuseColor;
 #		endif
 #		if defined(DYNAMIC_CUBEMAPS)
 	if (dynamicCubemap)
-		vertexColor = Lin2sRGB(vertexColor);
+		color.xyz = Lin2sRGB(color.xyz);
 #		endif
 #	endif
-	color.xyz = lerp(vertexColor.xyz, input.FogParam.xyz, input.FogParam.w);
-	color.xyz = vertexColor.xyz - color.xyz * FogColor.w;
 
-	float3 tmpColor = color.xyz * FrameParams.yyy;
-	color.xyz = tmpColor.xyz + ColourOutputClamp.xxx;
-	color.xyz = min(vertexColor.xyz, color.xyz);
+	color.xyz = min(color.xyz, ColourOutputClamp.x);
 
 #	if defined(CPM_AVAILABLE) && defined(ENVMAP)
 	color.xyz += specularColor * complexSpecular;
@@ -1964,23 +1949,37 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	color.xyz += specularColor;
 #	endif  // defined (CPM_AVAILABLE) && defined(ENVMAP)
 
-#	if defined(SPECULAR) || defined(SPARKLE)
-	float3 specularTmp = lerp(color.xyz, input.FogParam.xyz, input.FogParam.w);
-	specularTmp = color.xyz - specularTmp.xyz * FogColor.w;
-
-	tmpColor = specularTmp.xyz * FrameParams.yyy;
-	specularTmp.xyz = tmpColor.xyz + ColourOutputClamp.zzz;
-	color.xyz = min(specularTmp.xyz, color.xyz);
-#	endif  // defined (SPECULAR) || defined(SPARKLE)
-
 #	if defined(WETNESS_EFFECTS)
 	color.xyz = sRGB2Lin(color.xyz);
 	color.xyz += wetnessSpecular * (1.0 - waterRoughnessSpecular);
 	color.xyz = Lin2sRGB(color.xyz);
 #	endif
 
+	color.xyz = min(color.xyz, ColourOutputClamp.z);
+
 #	if defined(ENVMAP) && defined(TESTCUBEMAP)
 	color.xyz = specularTexture.SampleLevel(SampEnvSampler, envSamplingPoint, 0).xyz;
+#	endif
+
+	// fog
+	// note that this code does NOT match Bethesda's but is probably what was intended, can't be sure though
+	// the diassembled shaders have a mess of code where the above clamping is mixed with the fog in a way that doesn't make much sense
+	
+	// SE implements fog as an imagespace shader that runs after most passes of the lighting shader
+    // AlphaPass and FirstPerson both act to turn the fog on/off in the lighting shader	
+    float FirstPerson = FrameParams.y; // 0.0 if rendering first person body, 1.0 otherwise
+    float AlphaPass = FrameParams.z; // 0.0 for the majority of BSLightingShader render passes, 1.0 for passes after the fog imagespace shader(?) haven't verified
+	
+    float enableFogInLightingShader = FirstPerson * AlphaPass;
+
+	if (lightingData[0].Reflections)
+		enableFogInLightingShader = 1;
+	
+    float3 foggedColor = lerp(color, input.FogParam.xyz, input.FogParam.w);
+
+#	if defined(ENVMAP) && defined(TESTCUBEMAP)
+	color.xyz = specularTexture.SampleLevel(SampEnvSampler, envSamplingPoint, 0).xyz;
+	foggedColor = color.xyz;
 #	endif
 
 #	if defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
@@ -2044,10 +2043,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			psout.Albedo.xyz = TurboColormap((float)lightCount / 128.0);
 		}
 	} else {
-		psout.Albedo.xyz = color.xyz - tmpColor.xyz * FrameParams.zzz;
+		psout.Albedo.xyz = lerp(color, foggedColor, enableFogInLightingShader);
 	}
 #	else
-	psout.Albedo.xyz = color.xyz - tmpColor.xyz * FrameParams.zzz;
+	psout.Albedo.xyz = lerp(color, foggedColor, enableFogInLightingShader);
 #	endif  // defined(LIGHT_LIMIT_FIX)
 
 #	if defined(SNOW)

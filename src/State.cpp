@@ -431,7 +431,7 @@ void State::UpdateSharedData(const RE::BSShader* a_shader, const uint32_t)
 										  RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().cubeMapRenderTarget :
 										  RE::BSGraphics::RendererShadowState::GetSingleton()->GetVRRuntimeData().cubeMapRenderTarget) == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
 
-		if (lightingData.Reflections != currentReflections) {
+		if (lightingData.Reflections != (uint)currentReflections) {
 			updateBuffer = true;
 			lightingDataRequiresUpdate = true;
 		}
