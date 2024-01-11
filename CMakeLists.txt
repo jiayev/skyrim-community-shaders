@@ -32,6 +32,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(EASTL CONFIG REQUIRED)
 find_package(directxtk CONFIG REQUIRED)
+find_package(directxtex CONFIG REQUIRED)
 find_path(CLIB_UTIL_INCLUDE_DIRS "ClibUtil/utils.hpp")
 find_package(pystring CONFIG REQUIRED)
 find_package(cppwinrt CONFIG REQUIRED)
@@ -55,6 +56,7 @@ target_link_libraries(
 	imgui::imgui
 	EASTL
 	Microsoft::DirectXTK
+	Microsoft::DirectXTex
 	pystring::pystring
 )
 
