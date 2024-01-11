@@ -76,7 +76,7 @@ float WetnessEffects::CalculateWetness(RE::TESWeather* weather, RE::Sky* sky)
 
 void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 {
-	if (shader->shaderType.any(RE::BSShader::Type::Lighting)) {
+	if (shader->shaderType.any(RE::BSShader::Type::Lighting, RE::BSShader::Type::Grass)) {
 		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
 		if (requiresUpdate) {

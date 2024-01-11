@@ -285,7 +285,7 @@ void DynamicCubemaps::Draw(const RE::BSShader* shader, const uint32_t)
 {
 	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
-	if (shader->shaderType.any(RE::BSShader::Type::Lighting)) {
+	if (shader->shaderType.any(RE::BSShader::Type::Lighting) || shader->shaderType.any(RE::BSShader::Type::Grass)) {
 		// During world cubemap generation we cannot use the cubemap
 		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 		auto cubeMapRenderTarget = !REL::Module::IsVR() ? shadowState->GetRuntimeData().cubeMapRenderTarget : shadowState->GetVRRuntimeData().cubeMapRenderTarget;
