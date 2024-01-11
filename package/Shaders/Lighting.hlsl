@@ -1555,8 +1555,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	uint waterTile = (uint)clamp(cellInt.x + (cellInt.y * 5), 0, 24);  // remap xy to 0-24
 	float waterHeight = -2147483648;                                   // lowest 32-bit integer
 
-	[flatten]
-	if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
+	[flatten] if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
 		waterHeight = lightingData[0].WaterHeight[waterTile];
 
 #	endif
@@ -1569,8 +1568,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float shoreFactor = saturate(1.0 - (wetnessDistToWater / (float)perPassWetnessEffects[0].ShoreRange));
 	float shoreFactorAlbedo = shoreFactor;
 	shoreFactorAlbedo *= shoreFactorAlbedo;
-	[flatten]
-	if (input.WorldPosition.z < waterHeight)
+	[flatten] if (input.WorldPosition.z < waterHeight)
 		shoreFactorAlbedo = 1.0;
 #		endif
 
