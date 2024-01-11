@@ -1208,9 +1208,7 @@ namespace SIE
 			return nullptr;
 		}
 
-
-		if (shader.shaderType.get() == RE::BSShader::Type::Effect)
-		{
+		if (shader.shaderType.get() == RE::BSShader::Type::Effect) {
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Lighting)) {
 			} else {
 				return nullptr;
@@ -1252,10 +1250,8 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (shader.shaderType.get() == RE::BSShader::Type::Effect)
-		{
+		if (shader.shaderType.get() == RE::BSShader::Type::Effect) {
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Lighting)) {
-
 			} else {
 				return nullptr;
 			}
