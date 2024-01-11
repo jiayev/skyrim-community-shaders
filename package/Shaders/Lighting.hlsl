@@ -1553,7 +1553,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	cellInt = round(cellF);
 
 	uint waterTile = (uint)clamp(cellInt.x + (cellInt.y * 5), 0, 24);  // remap xy to 0-24
-	float waterHeight = lerp(-2147483648, lightingData[0].WaterHeight[waterTile], cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0);
+	float waterHeight = -2147483648;                                   // lowest 32-bit integer
+
+	[flatten]
+	if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
+		waterHeight = lightingData[0].WaterHeight[waterTile];
+
 #	endif
 
 #	if defined(WETNESS_EFFECTS)
@@ -1564,16 +1569,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float shoreFactor = saturate(1.0 - (wetnessDistToWater / (float)perPassWetnessEffects[0].ShoreRange));
 	float shoreFactorAlbedo = shoreFactor;
 	shoreFactorAlbedo *= shoreFactorAlbedo;
+	[flatten]
 	if (input.WorldPosition.z < waterHeight)
 		shoreFactorAlbedo = 1.0;
 #		endif
 
-	float rainWetness = perPassWetnessEffects[0].Wetness;
-#		if !defined(MODELSPACENORMALS)
-	rainWetness *= lerp(0.2, 1.0, saturate(max(worldSpaceNormal.z, worldSpaceVertexNormal.z)));
-#		else
-	rainWetness *= lerp(0.2, 1.0, saturate(worldSpaceNormal.z));
-#		endif
+	float rainWetness = perPassWetnessEffects[0].Wetness * lerp(0.2, 1.0, saturate(worldSpaceNormal.z));
 
 #		if !defined(LOD)
 	wetness = max(shoreFactor * perPassWetnessEffects[0].MaxShoreWetness, rainWetness);
@@ -1586,7 +1587,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float puddle = 0;
 	if (wetness > 0.0) {
 		puddle = FBM(puddleCoords, 3, 1.0) * 0.5 + 0.5;
-		puddle = lerp(0.2, 1.0, puddle);
+		puddle = lerp(0.5, 1.0, puddle);
 		puddle *= wetness;
 		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow && shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 			float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
@@ -1617,11 +1618,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	wetnessGlossinessSpecular = lerp(wetnessGlossinessSpecular, wetnessGlossinessSpecular * shoreFactor, input.WorldPosition.z < waterHeight);
 #		endif
 
-#		if !defined(MODELSPACENORMALS)
 	float flatnessAmount = smoothstep(perPassWetnessEffects[0].PuddleMaxAngle, 1.0, worldSpaceNormal.z);
 	flatnessAmount *= smoothstep(perPassWetnessEffects[0].PuddleMinWetness, 1.0, wetnessGlossinessSpecular);
-	wetnessNormal = normalize(lerp(wetnessNormal, worldSpaceVertexNormal, flatnessAmount));
-#		endif
+	wetnessNormal = normalize(lerp(wetnessNormal, float3(0, 0, 1), flatnessAmount));
 
 	float waterRoughnessSpecular = lerp(1.0, 0.2, saturate(wetnessGlossinessSpecular * (1.0 / perPassWetnessEffects[0].PuddleMinWetness)));
 #	endif
