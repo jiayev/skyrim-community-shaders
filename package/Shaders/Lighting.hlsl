@@ -992,7 +992,7 @@ float2 ComputeTriplanarUV(float3 InputPosition)
 #		include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #	endif
 
-#	if defined(TREE_ANIM)
+#	if defined(LOD)
 #		undef WETNESS_EFFECTS
 #	endif
 
@@ -1542,7 +1542,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float porosity = 1.0;
 
-#	if (defined(WATER_BLENDING) && !defined(LOD)) || defined(WETNESS_EFFECTS)
+#	if defined(WATER_BLENDING) || defined(WETNESS_EFFECTS)
 	float2 cellF = (((input.WorldPosition.xy + CameraPosAdjust[0].xy)) / 4096.0) + 64;  // always positive
 	int2 cellInt;
 	float2 cellFrac = modf(cellF, cellInt);
@@ -1555,7 +1555,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	uint waterTile = (uint)clamp(cellInt.x + (cellInt.y * 5), 0, 24);  // remap xy to 0-24
 	float waterHeight = -2147483648;                                   // lowest 32-bit integer
 
-	[flatten] if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
+	[flatten]
+	if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
 		waterHeight = lightingData[0].WaterHeight[waterTile];
 
 #	endif
@@ -1563,22 +1564,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(WETNESS_EFFECTS)
 	float wetness = 0.0;
 
-#		if !defined(LOD)
 	float wetnessDistToWater = abs(input.WorldPosition.z - waterHeight);
 	float shoreFactor = saturate(1.0 - (wetnessDistToWater / (float)perPassWetnessEffects[0].ShoreRange));
 	float shoreFactorAlbedo = shoreFactor;
 	shoreFactorAlbedo *= shoreFactorAlbedo;
-	[flatten] if (input.WorldPosition.z < waterHeight)
+
+	[flatten]
+	if (input.WorldPosition.z < waterHeight)
 		shoreFactorAlbedo = 1.0;
-#		endif
 
 	float rainWetness = perPassWetnessEffects[0].Wetness * lerp(0.2, 1.0, saturate(worldSpaceNormal.z));
 
-#		if !defined(LOD)
 	wetness = max(shoreFactor * perPassWetnessEffects[0].MaxShoreWetness, rainWetness);
-#		else
-	wetness = rainWetness;
-#		endif
+
+	float wetnessNearFactor = smoothstep(4096.0 * 2.5, 0.0, viewPosition.z);
+	wetness *= wetnessNearFactor;
+
 	float3 wetnessNormal = worldSpaceNormal;
 
 	float3 puddleCoords = ((input.WorldPosition.xyz + CameraPosAdjust[0]) * 0.5 + 0.5) * 0.01 * perPassWetnessEffects[0].PuddleRadius;
@@ -1593,32 +1594,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 	}
 
-#		if defined(LODLANDNOISE)
-	wetnessNormal.z *= noise;
-	wetnessNormal = normalize(wetnessNormal);
-#		elif defined(LOD_LAND_BLEND)
-	wetnessNormal.z *= lerp(1.0, lodBlendMask, lodBlendMul2);
-	wetnessNormal = normalize(wetnessNormal);
-#		endif
-
 	float3 wetnessSpecular = 0.0;
 
-#		if !defined(LOD)
 	float wetnessGlossinessAlbedo = max(puddle, shoreFactorAlbedo * perPassWetnessEffects[0].MaxShoreWetness);
-#		else
-	float wetnessGlossinessAlbedo = puddle;
-#		endif
 	wetnessGlossinessAlbedo *= wetnessGlossinessAlbedo;
 
 	float wetnessGlossinessSpecular = puddle;
-
-#		if !defined(LOD)
 	wetnessGlossinessSpecular = lerp(wetnessGlossinessSpecular, wetnessGlossinessSpecular * shoreFactor, input.WorldPosition.z < waterHeight);
-#		endif
 
 	float flatnessAmount = smoothstep(perPassWetnessEffects[0].PuddleMaxAngle, 1.0, worldSpaceNormal.z);
 	flatnessAmount *= smoothstep(perPassWetnessEffects[0].PuddleMinWetness, 1.0, wetnessGlossinessSpecular);
+
+#		if !defined(MODELSPACENORMALS)
+	wetnessNormal = normalize(lerp(wetnessNormal, worldSpaceVertexNormal, flatnessAmount));
+#		else
 	wetnessNormal = normalize(lerp(wetnessNormal, float3(0, 0, 1), flatnessAmount));
+#		endif
 
 	float waterRoughnessSpecular = lerp(1.0, 0.2, saturate(wetnessGlossinessSpecular * (1.0 / perPassWetnessEffects[0].PuddleMinWetness)));
 #	endif
@@ -1962,21 +1953,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	// fog
 	// note that this code does NOT match Bethesda's but is probably what was intended, can't be sure though
 	// the diassembled shaders have a mess of code where the above clamping is mixed with the fog in a way that doesn't make much sense
-
+	
 	// SE implements fog as an imagespace shader that runs after most passes of the lighting shader
-	// AlphaPass and FirstPerson both act to turn the fog on/off in the lighting shader
-	float FirstPerson = FrameParams.y;  // 0.0 if rendering first person body, 1.0 otherwise
-#	if defined(VR)
-	FirstPerson = 0.0;  // vr is always in first person but doesn't return 0.0
-#	endif
-	float AlphaPass = FrameParams.z;  // 0.0 for the majority of BSLightingShader render passes, 1.0 for passes after the fog imagespace shader(?) haven't verified
+    // AlphaPass and FirstPerson both act to turn the fog on/off in the lighting shader	
+    float FirstPerson = FrameParams.y; // 0.0 if rendering first person body, 1.0 otherwise
+    float AlphaPass = FrameParams.z; // 0.0 for the majority of BSLightingShader render passes, 1.0 for passes after the fog imagespace shader(?) haven't verified
 
-	float enableFogInLightingShader = FirstPerson * AlphaPass;
-
-	if (lightingData[0].Reflections)
-		enableFogInLightingShader = 1;
-
-	float3 foggedColor = lerp(color, input.FogParam.xyz, input.FogParam.w);
+#if defined(VR)
+	float enableFogInLightingShader = AlphaPass;
+#else
+    float enableFogInLightingShader = max(FirstPerson, AlphaPass);
+#endif
+	
+    float3 foggedColor = lerp(color, input.FogParam.xyz, input.FogParam.w);
 
 #	if defined(ENVMAP) && defined(TESTCUBEMAP)
 	color.xyz = specularTexture.SampleLevel(SampEnvSampler, envSamplingPoint, 0).xyz;
