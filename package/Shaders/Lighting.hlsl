@@ -1555,8 +1555,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	uint waterTile = (uint)clamp(cellInt.x + (cellInt.y * 5), 0, 24);  // remap xy to 0-24
 	float waterHeight = -2147483648;                                   // lowest 32-bit integer
 
-	[flatten]
-	if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
+	[flatten] if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
 		waterHeight = lightingData[0].WaterHeight[waterTile];
 
 #	endif
@@ -1569,8 +1568,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float shoreFactorAlbedo = shoreFactor;
 	shoreFactorAlbedo *= shoreFactorAlbedo;
 
-	[flatten]
-	if (input.WorldPosition.z < waterHeight)
+	[flatten] if (input.WorldPosition.z < waterHeight)
 		shoreFactorAlbedo = 1.0;
 
 	float rainWetness = perPassWetnessEffects[0].Wetness * lerp(0.2, 1.0, saturate(worldSpaceNormal.z));
@@ -1953,19 +1951,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	// fog
 	// note that this code does NOT match Bethesda's but is probably what was intended, can't be sure though
 	// the diassembled shaders have a mess of code where the above clamping is mixed with the fog in a way that doesn't make much sense
-	
-	// SE implements fog as an imagespace shader that runs after most passes of the lighting shader
-    // AlphaPass and FirstPerson both act to turn the fog on/off in the lighting shader	
-    float FirstPerson = FrameParams.y; // 0.0 if rendering first person body, 1.0 otherwise
-    float AlphaPass = FrameParams.z; // 0.0 for the majority of BSLightingShader render passes, 1.0 for passes after the fog imagespace shader(?) haven't verified
 
-#if defined(VR)
+	// SE implements fog as an imagespace shader that runs after most passes of the lighting shader
+	// AlphaPass and FirstPerson both act to turn the fog on/off in the lighting shader
+	float FirstPerson = FrameParams.y;  // 0.0 if rendering first person body, 1.0 otherwise
+	float AlphaPass = FrameParams.z;    // 0.0 for the majority of BSLightingShader render passes, 1.0 for passes after the fog imagespace shader(?) haven't verified
+
+#	if defined(VR)
 	float enableFogInLightingShader = AlphaPass;
-#else
-    float enableFogInLightingShader = max(FirstPerson, AlphaPass);
-#endif
-	
-    float3 foggedColor = lerp(color, input.FogParam.xyz, input.FogParam.w);
+#	else
+	float enableFogInLightingShader = max(FirstPerson, AlphaPass);
+#	endif
+
+	float3 foggedColor = lerp(color, input.FogParam.xyz, input.FogParam.w);
 
 #	if defined(ENVMAP) && defined(TESTCUBEMAP)
 	color.xyz = specularTexture.SampleLevel(SampEnvSampler, envSamplingPoint, 0).xyz;
