@@ -42,6 +42,41 @@ float3 GetSamplingVector(uint3 ThreadID, in RWTexture2DArray<float4> OutputTextu
 	return normalize(result);
 }
 
+float3 Lin2sRGB(float3 color)
+{
+	return color > 0.0031308 ? 1.055 * pow(color, 1.0 / 2.4) - 0.055 : 12.92 * color;
+}
+
+
+// https://www.shadertoy.com/view/XdlGzX
+// Nikos Papadopoulos, 4rknova / 2013
+// Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
+
+float hash(in float3 p)
+{
+    return frac(sin(dot(p,float3(127.1,311.7, 321.4)))*43758.5453123);
+}
+
+float noise(in float3 p)
+{
+    float3 i = floor(p);
+	float3 f = frac(p); 
+	f *= f * (3.-2.*f);
+
+    float2 c = float2(0,1);
+
+    return lerp(
+		lerp(lerp(hash(i + c.xxx), hash(i + c.yxx),f.x),
+			lerp(hash(i + c.xyx), hash(i + c.yyx),f.x),
+			f.y),
+		lerp(lerp(hash(i + c.xxy), hash(i + c.yxy),f.x),
+			lerp(hash(i + c.xyy), hash(i + c.yyy),f.x),
+			f.y),
+		f.z);
+}
+
+/////
+
 [numthreads(32, 32, 1)] void main(uint3 ThreadID
 								  : SV_DispatchThreadID) {
 	float3 uv = GetSamplingVector(ThreadID, EnvInferredTexture);
@@ -67,8 +102,6 @@ float3 GetSamplingVector(uint3 ThreadID, in RWTexture2DArray<float4> OutputTextu
 			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 0.0, 1.0), 1), 9);
 		}
 
-		tempColor.rgb /= sqrt(mipLevel);
-
 		if (color.w + tempColor.w > 1.0) {
 			float alphaDiff = 1.0 - color.w;
 			tempColor.xyz *= alphaDiff / tempColor.w;
@@ -79,6 +112,7 @@ float3 GetSamplingVector(uint3 ThreadID, in RWTexture2DArray<float4> OutputTextu
 
 		mipLevel++;
 	}
-	color.rgb = pow(color.rgb, 1.0 / 2.2);
+	color.rgb = lerp(color.rgb, color.rgb * noise(uv * 4), smoothstep(1.0, 12.0, mipLevel));
+	color.rgb = Lin2sRGB(color.rgb);
 	EnvInferredTexture[ThreadID] = color;
 }

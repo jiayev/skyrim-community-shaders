@@ -126,14 +126,21 @@ float2 GetDynamicResolutionAdjustedScreenPosition(float2 screenPosition)
 bool IsSaturated(float value) { return value == saturate(value); }
 bool IsSaturated(float2 value) { return IsSaturated(value.x) && IsSaturated(value.y); }
 
+float3 sRGB2Lin(float3 color)
+{
+	return color > 0.04045 ? pow(color / 1.055 + 0.055 / 1.055, 2.4) : color / 12.92;
+}
+
 [numthreads(32, 32, 1)] void main(uint3 ThreadID
 								  : SV_DispatchThreadID) {
 	float3 captureDirection = -GetSamplingVector(ThreadID, DynamicCubemap);
 	float3 viewDirection = WorldToView(captureDirection, false);
 	float2 uv = ViewToUV(viewDirection, false);
 
-	if (Reset)
+	if (Reset){
 		DynamicCubemap[ThreadID] = 0.0;
+		return;
+	}
 
 	if (IsSaturated(uv) && viewDirection.z < 0.0) {  // Check that the view direction exists in screenspace and that it is in front of the camera
 		uv = GetDynamicResolutionAdjustedScreenPosition(uv);
@@ -147,7 +154,13 @@ bool IsSaturated(float2 value) { return IsSaturated(value.x) && IsSaturated(valu
 
 		if (depth > 16.5) {  // First person
 			float3 color = ColorTexture[round(uv * textureDims)];
-			DynamicCubemap[ThreadID] = float4(pow(color, 2.2), 1.0);
+			DynamicCubemap[ThreadID] = float4(sRGB2Lin(color), 1.0);
+			return;
 		}
 	}
+
+	float4 color = DynamicCubemap[ThreadID];
+	float3 delta = CameraPosAdjust[0] - CameraPreviousPosAdjust[0];
+	color = max(0, color - length(delta) * 0.00001);
+	DynamicCubemap[ThreadID] = color;
 }
