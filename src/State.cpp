@@ -22,16 +22,15 @@ void State::Draw()
 				auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
 				if (auto vertexShader = shaderCache.GetVertexShader(*currentShader, currentVertexDescriptor)) {
-					context->VSSetShader(vertexShader->shader, NULL, NULL);
-				}
+					if (auto pixelShader = shaderCache.GetPixelShader(*currentShader, currentPixelDescriptor)) {
+						context->VSSetShader(vertexShader->shader, NULL, NULL);
+						context->PSSetShader(pixelShader->shader, NULL, NULL);
 
-				if (auto pixelShader = shaderCache.GetPixelShader(*currentShader, currentPixelDescriptor)) {
-					context->PSSetShader(pixelShader->shader, NULL, NULL);
-				}
-
-				for (auto* feature : Feature::GetFeatureList()) {
-					if (feature->loaded) {
-						feature->Draw(currentShader, currentPixelDescriptor);
+						for (auto* feature : Feature::GetFeatureList()) {
+							if (feature->loaded) {
+								feature->Draw(currentShader, currentPixelDescriptor);
+							}
+						}
 					}
 				}
 			}
