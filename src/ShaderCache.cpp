@@ -1255,6 +1255,9 @@ namespace SIE
 			} else {
 				return nullptr;
 			}
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Normals)) {
+				return nullptr;
+			}
 		}
 
 		auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Pixel, shader, descriptor, true);
