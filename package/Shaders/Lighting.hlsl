@@ -1610,6 +1610,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 	float waterRoughnessSpecular = lerp(1.0, 0.2, saturate(wetnessGlossinessSpecular * (1.0 / perPassWetnessEffects[0].PuddleMinWetness)));
+	
+#			if defined(WETNESS_EFFECTS)
+			if (waterRoughnessSpecular < 1.0)
+				wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedDirLightDirectionWS, worldSpaceViewDirection, dirLightColor * 0.5, waterRoughnessSpecular);
+#			endif
+
 #	endif
 
 #	if defined(LIGHT_LIMIT_FIX)
@@ -1849,7 +1855,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			endif
 	}
 #		endif
-
 #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
 
 	float3 emitColor = EmitColor;
