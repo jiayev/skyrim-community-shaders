@@ -1911,7 +1911,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
 #		if defined(DYNAMIC_CUBEMAPS)
-	if (dynamicCubemap){
+	if (dynamicCubemap) {
 		vertexColor = sRGB2Lin(vertexColor);
 		diffuseColor = 1;
 	}
