@@ -1909,26 +1909,31 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (useSnowSpecular)
 		specularColor = 0;
 
-	color.xyz = vertexColor.xyz;
-
 #	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
 #		if defined(DYNAMIC_CUBEMAPS)
-	if (dynamicCubemap)
-		color.xyz = sRGB2Lin(color.xyz);
+	if (dynamicCubemap){
+		vertexColor = sRGB2Lin(vertexColor);
+		diffuseColor = 1;
+	}
 #		endif
 
 #		if defined(CPM_AVAILABLE) && defined(ENVMAP)
-	color.xyz += envColor * complexSpecular * diffuseColor;
+	vertexColor += envColor * complexSpecular * diffuseColor;
 #		else
-	color.xyz += envColor * diffuseColor;
+	vertexColor += envColor * diffuseColor;
 #		endif
 #		if defined(DYNAMIC_CUBEMAPS)
 	if (dynamicCubemap)
-		color.xyz = Lin2sRGB(color.xyz);
+		vertexColor = Lin2sRGB(vertexColor);
 #		endif
 #	endif
 
-	color.xyz = min(color.xyz, ColourOutputClamp.x);
+	color.xyz = lerp(vertexColor.xyz, input.FogParam.xyz, input.FogParam.w);
+	color.xyz = vertexColor.xyz - color.xyz * FogColor.w;
+
+	float3 tmpColor = color.xyz * FrameParams.yyy;
+	color.xyz = tmpColor.xyz + ColourOutputClamp.xxx;
+	color.xyz = min(vertexColor.xyz, color.xyz);
 
 #	if defined(CPM_AVAILABLE) && defined(ENVMAP)
 	color.xyz += specularColor * complexSpecular;
@@ -1942,32 +1947,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	color.xyz = Lin2sRGB(color.xyz);
 #	endif
 
-	color.xyz = min(color.xyz, ColourOutputClamp.z);
+#	if defined(SPECULAR) || defined(SPARKLE)
+	float3 specularTmp = lerp(color.xyz, input.FogParam.xyz, input.FogParam.w);
+	specularTmp = color.xyz - specularTmp.xyz * FogColor.w;
+
+	tmpColor = specularTmp.xyz * FrameParams.yyy;
+	specularTmp.xyz = tmpColor.xyz + ColourOutputClamp.zzz;
+	color.xyz = min(specularTmp.xyz, color.xyz);
+#	endif  // defined (SPECULAR) || defined(SPARKLE)
 
 #	if defined(ENVMAP) && defined(TESTCUBEMAP)
 	color.xyz = specularTexture.SampleLevel(SampEnvSampler, envSamplingPoint, 0).xyz;
-#	endif
-
-	// fog
-	// note that this code does NOT match Bethesda's but is probably what was intended, can't be sure though
-	// the diassembled shaders have a mess of code where the above clamping is mixed with the fog in a way that doesn't make much sense
-
-	// SE implements fog as an imagespace shader that runs after most passes of the lighting shader
-	// AlphaPass and FirstPerson both act to turn the fog on/off in the lighting shader
-	float FirstPerson = FrameParams.y;  // 0.0 if rendering first person body, 1.0 otherwise
-	float AlphaPass = FrameParams.z;    // 0.0 for the majority of BSLightingShader render passes, 1.0 for passes after the fog imagespace shader(?) haven't verified
-
-#	if defined(VR)
-	float enableFogInLightingShader = AlphaPass;
-#	else
-	float enableFogInLightingShader = max(FirstPerson, AlphaPass);
-#	endif
-
-	float3 foggedColor = lerp(color, input.FogParam.xyz, input.FogParam.w);
-
-#	if defined(ENVMAP) && defined(TESTCUBEMAP)
-	color.xyz = specularTexture.SampleLevel(SampEnvSampler, envSamplingPoint, 0).xyz;
-	foggedColor = color.xyz;
 #	endif
 
 #	if defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
@@ -2031,10 +2021,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			psout.Albedo.xyz = TurboColormap((float)lightCount / 128.0);
 		}
 	} else {
-		psout.Albedo.xyz = lerp(color, foggedColor, enableFogInLightingShader);
+		psout.Albedo.xyz = color.xyz - tmpColor.xyz * FrameParams.zzz;
 	}
 #	else
-	psout.Albedo.xyz = lerp(color, foggedColor, enableFogInLightingShader);
+	psout.Albedo.xyz = color.xyz - tmpColor.xyz * FrameParams.zzz;
 #	endif  // defined(LIGHT_LIMIT_FIX)
 
 #	if defined(SNOW)

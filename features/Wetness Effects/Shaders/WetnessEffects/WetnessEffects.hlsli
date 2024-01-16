@@ -30,14 +30,10 @@ float2 EnvBRDFApprox(float3 F0, float Roughness, float NoV)
 
 float3 GetWetnessAmbientSpecular(float3 N, float3 V, float roughness, float3 F0)
 {
-	float3 NT = N;
-	NT.z += 1;
-	NT = normalize(NT);
-
-	float3 R = reflect(-V, NT);
+	float3 R = reflect(-V, N);
 	float NoV = saturate(dot(N, V));
 
-	float3 specularIrradiance = mul(perPassWetnessEffects[0].DirectionalAmbientWS, float4(R, 1.0)) * 0.75;
+	float3 specularIrradiance = sRGB2Lin(mul(perPassWetnessEffects[0].DirectionalAmbientWS, float4(R, 1.0)));
 
 #if defined(DYNAMIC_CUBEMAPS)
 #	if !defined(GRASS)
@@ -51,8 +47,6 @@ float3 GetWetnessAmbientSpecular(float3 N, float3 V, float roughness, float3 F0)
 		specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level).rgb;
 	}
 #endif
-
-	specularIrradiance = sRGB2Lin(specularIrradiance);
 
 	// Split-sum approximation factors for Cook-Torrance specular BRDF.
 #if defined(DYNAMIC_CUBEMAPS)
