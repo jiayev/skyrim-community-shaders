@@ -137,7 +137,7 @@ float3 sRGB2Lin(float3 color)
 	float3 viewDirection = WorldToView(captureDirection, false);
 	float2 uv = ViewToUV(viewDirection, false);
 
-	if (Reset){
+	if (Reset) {
 		DynamicCubemap[ThreadID] = 0.0;
 		return;
 	}
