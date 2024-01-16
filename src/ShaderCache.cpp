@@ -1208,13 +1208,6 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (shader.shaderType.get() == RE::BSShader::Type::Effect) {
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Lighting)) {
-			} else {
-				return nullptr;
-			}
-		}
-
 		auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Vertex, shader, descriptor, true);
 		if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
 			if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
@@ -1248,16 +1241,6 @@ namespace SIE
 		if (!(ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() &&
 															state->IsShaderEnabled(shader))) {
 			return nullptr;
-		}
-
-		if (shader.shaderType.get() == RE::BSShader::Type::Effect) {
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Lighting)) {
-			} else {
-				return nullptr;
-			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Normals)) {
-				return nullptr;
-			}
 		}
 
 		auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Pixel, shader, descriptor, true);

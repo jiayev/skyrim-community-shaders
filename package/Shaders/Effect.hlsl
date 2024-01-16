@@ -507,17 +507,21 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 fogMul = float4(input.FogAlpha.xxx, 1);
 
 #	if defined(MEMBRANE)
+#		if !defined(MOTIONVECTORS_NORMALS)
 	float noiseAlpha = TexNoiseSampler.Sample(SampNoiseSampler, input.TexCoord0.zw).w;
-#		if defined(VC)
+#			if defined(VC)
 	noiseAlpha *= input.Color.w;
-#		endif
+#			endif
 	if (noiseAlpha - AlphaTestRef.x < 0) {
 		discard;
 	}
+#		endif
 #		if defined(ALPHA_TEST)
 #		endif
 
-#		if defined(NORMALS)
+#		if defined(MOTIONVECTORS_NORMALS) && defined(MEMBRANE) && !defined(SKINNED) && defined(NORMALS)
+	float3 normal = input.ScreenSpaceNormal;
+#		elif defined(NORMALS)
 	float3 normal = input.TBN0;
 #		else
 	float3 normal = TexNormalSampler.Sample(SampNormalSampler, input.TexCoord0.zw).xzy * 2 - 1;
@@ -673,7 +677,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	psout.MotionVectors = screenMotionVector;
 
-#		if (defined(MEMBRANE) && (defined(SKINNED) || defined(NORMALS)))
+#		if (defined(MEMBRANE) && defined(SKINNED) && defined(NORMALS))
 	float3 screenSpaceNormal = normalize(input.TBN0);
 #		else
 	float3 screenSpaceNormal = normalize(input.ScreenSpaceNormal);
