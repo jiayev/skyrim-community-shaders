@@ -223,10 +223,8 @@ void DynamicCubemaps::UpdateCubemap()
 	auto context = renderer->GetRuntimeData().context;
 
 	{
-		ID3D11ShaderResourceView* views[2]{};
-		views[0] = nullptr;
-		views[1] = nullptr;
-		context->PSSetShaderResources(64, 2, views);
+		ID3D11ShaderResourceView* view = nullptr;
+		context->PSSetShaderResources(64, 1, &view);
 	}
 
 	{
@@ -290,7 +288,6 @@ void DynamicCubemaps::Draw(const RE::BSShader* shader, const uint32_t)
 		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 		auto cubeMapRenderTarget = !REL::Module::IsVR() ? shadowState->GetRuntimeData().cubeMapRenderTarget : shadowState->GetVRRuntimeData().cubeMapRenderTarget;
 		if (cubeMapRenderTarget == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS) {
-			activeReflections = true;
 		} else if (!renderedScreenCamera) {
 			if (updateIBL)
 				UpdateCubemap();
@@ -450,7 +447,14 @@ void DynamicCubemaps::SetupResources()
 
 void DynamicCubemaps::Reset()
 {
-	activeReflections = false;
+	if (auto sky = RE::Sky::GetSingleton())
+		activeReflections = sky->mode.get() == RE::Sky::Mode::kFull;
+	else
+		activeReflections = false;
+
+	auto setting = RE::GetINISetting("fCubeMapRefreshRate:Water");
+	setting->data.f = activeReflections ? 1 : FLT_MAX;
+
 	renderedScreenCamera = false;
 }
 
