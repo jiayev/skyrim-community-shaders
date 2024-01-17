@@ -86,33 +86,29 @@ void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 			data.Wetness = DRY_WETNESS;
 
 			if (settings.EnableWetnessEffects) {
-				if (auto player = RE::PlayerCharacter::GetSingleton()) {
-					if (auto cell = player->GetParentCell()) {
-						if (!cell->IsInteriorCell()) {
-							if (auto sky = RE::Sky::GetSingleton()) {
-								if (auto currentWeather = sky->currentWeather) {
-									float weatherTransitionPercentage = DEFAULT_TRANSITION_PERCENTAGE;
-									float wetnessCurrentWeather = CalculateWetness(currentWeather, sky);
-									float wetnessLastWeather = DRY_WETNESS;
+				if (auto sky = RE::Sky::GetSingleton()) {
+					if (sky->mode.get() == RE::Sky::Mode::kFull) {
+						if (auto currentWeather = sky->currentWeather) {
+							float weatherTransitionPercentage = DEFAULT_TRANSITION_PERCENTAGE;
+							float wetnessCurrentWeather = CalculateWetness(currentWeather, sky);
+							float wetnessLastWeather = DRY_WETNESS;
 
-									// If there is a lastWeather, figure out what type it is and set the wetness
-									if (auto lastWeather = sky->lastWeather) {
-										wetnessLastWeather = CalculateWetness(lastWeather, sky);
+							// If there is a lastWeather, figure out what type it is and set the wetness
+							if (auto lastWeather = sky->lastWeather) {
+								wetnessLastWeather = CalculateWetness(lastWeather, sky);
 
-										// If it was raining, wait to transition until precipitation ends, otherwise use the current weather's fade in
-										if (lastWeather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy)) {
-											weatherTransitionPercentage = CalculateWeatherTransitionPercentage(lastWeather, sky->currentWeatherPct, lastWeather->data.precipitationEndFadeOut);
-										} else {
-											weatherTransitionPercentage = CalculateWeatherTransitionPercentage(currentWeather, sky->currentWeatherPct, currentWeather->data.precipitationBeginFadeIn);
-										}
-										// Adjust the transition curve to ease in/out of the transition
-										weatherTransitionPercentage = (exp2(TRANSITION_CURVE_MULTIPLIER * log2(weatherTransitionPercentage)));
-									}
-
-									// Transition between CurrentWeather and LastWeather wetness values
-									data.Wetness = std::lerp(wetnessLastWeather, wetnessCurrentWeather, weatherTransitionPercentage);
+								// If it was raining, wait to transition until precipitation ends, otherwise use the current weather's fade in
+								if (lastWeather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy)) {
+									weatherTransitionPercentage = CalculateWeatherTransitionPercentage(lastWeather, sky->currentWeatherPct, lastWeather->data.precipitationEndFadeOut);
+								} else {
+									weatherTransitionPercentage = CalculateWeatherTransitionPercentage(currentWeather, sky->currentWeatherPct, currentWeather->data.precipitationBeginFadeIn);
 								}
+								// Adjust the transition curve to ease in/out of the transition
+								weatherTransitionPercentage = (exp2(TRANSITION_CURVE_MULTIPLIER * log2(weatherTransitionPercentage)));
 							}
+
+							// Transition between CurrentWeather and LastWeather wetness values
+							data.Wetness = std::lerp(wetnessLastWeather, wetnessCurrentWeather, weatherTransitionPercentage);
 						}
 					}
 				}
