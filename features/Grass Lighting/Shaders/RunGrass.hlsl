@@ -355,10 +355,6 @@ float3x3 CalculateTBN(float3 N, float3 p, float2 uv)
 #		include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #	endif
 
-#	if defined(WETNESS_EFFECTS)
-#		include "WetnessEffects/WetnessEffects.hlsli"
-#	endif
-
 PS_OUTPUT main(PS_INPUT input, bool frontFace
 			   : SV_IsFrontFace)
 {
@@ -470,22 +466,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (complex)
 		lightsSpecularColor += GetLightSpecularInput(DirLightDirection, viewDirection, worldNormal, dirLightColor, Glossiness);
 
-#		if defined(WETNESS_EFFECTS)
-	float waterSpecular = 0.0;
-
-	float3 puddleCoords = ((input.WorldPosition.xyz + CameraPosAdjust[0]) * 0.5 + 0.5) * 0.01 * perPassWetnessEffects[0].PuddleRadius;
-	float3 puddle = FBM(puddleCoords, 3, 1.0) * 0.5 + 0.5;
-	puddle = lerp(0.2, 1.0, puddle);
-	puddle *= perPassWetnessEffects[0].Wetness * perPassWetnessEffects[0].MaxRainWetness;
-	puddle *= lerp(0.2, 1.0, saturate(worldNormal.z));
-
-	float waterGlossinessSpecular = puddle;
-	float waterRoughnessSpecular = lerp(1.0, 0.1, saturate(waterGlossinessSpecular * (1.0 / perPassWetnessEffects[0].PuddleMinWetness)));
-
-	if (waterRoughnessSpecular < 1.0)
-		waterSpecular += GetWetnessAmbientSpecular(worldNormal, viewDirection, waterRoughnessSpecular, 0.02);
-#		endif
-
 #		if defined(LIGHT_LIMIT_FIX)
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
@@ -549,12 +529,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		specularColor *= specColor.w * SpecularStrength;
 		color.xyz += specularColor;
 	}
-
-#		if defined(WETNESS_EFFECTS)
-	color.xyz = sRGB2Lin(color.xyz);
-	color.xyz += waterSpecular;
-	color.xyz = Lin2sRGB(color.xyz);
-#		endif
 
 #		if defined(LIGHT_LIMIT_FIX)
 	if (perPassLLF[0].EnableLightsVisualisation) {
