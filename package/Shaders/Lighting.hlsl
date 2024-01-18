@@ -1571,7 +1571,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	[flatten] if (input.WorldPosition.z < waterHeight)
 		shoreFactorAlbedo = 1.0;
 
-	float rainWetness = perPassWetnessEffects[0].Wetness * saturate(worldSpaceNormal.z);
+	float rainWetness = perPassWetnessEffects[0].Wetness * saturate(worldSpaceNormal.z + 0.5);
 
 	wetness = max(shoreFactor * perPassWetnessEffects[0].MaxShoreWetness, rainWetness);
 
@@ -1878,7 +1878,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	porosity = lerp(porosity, 0.0, saturate(sqrt(envMask)));
 #			endif
 	float wetnessDarkeningAmount = porosity * wetnessGlossinessAlbedo;
-	baseColor.xyz = pow(baseColor.xyz, 1.0 + sqrt(wetnessDarkeningAmount));
+	baseColor.xyz = pow(baseColor.xyz, 1.0 + (wetnessDarkeningAmount * wetnessDarkeningAmount));
 #		endif
 	if (waterRoughnessSpecular < 1.0)
 		wetnessSpecular += GetWetnessAmbientSpecular(wetnessNormal, worldSpaceViewDirection, 1.0 - wetnessGlossinessSpecular, 0.02);
@@ -1967,6 +1967,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(ENVMAP) && defined(TESTCUBEMAP)
 	color.xyz = specularTexture.SampleLevel(SampEnvSampler, envSamplingPoint, 0).xyz;
+#	endif
+
+#	if defined(WETNESS_EFFECTS)
+//	color.xyz = wetness;
 #	endif
 
 #	if defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
