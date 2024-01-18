@@ -37,7 +37,7 @@ float3 GetWetnessAmbientSpecular(float3 N, float3 V, float roughness, float3 F0)
 	float3 R = reflect(-V, NT);
 	float NoV = saturate(dot(N, V));
 
-	float3 specularIrradiance = sRGB2Lin(mul(perPassWetnessEffects[0].DirectionalAmbientWS, float4(R, 1.0)));
+	float3 specularIrradiance = mul(perPassWetnessEffects[0].DirectionalAmbientWS, float4(R, 1.0));
 
 #if defined(DYNAMIC_CUBEMAPS)
 #	if !defined(GRASS)
@@ -58,6 +58,8 @@ float3 GetWetnessAmbientSpecular(float3 N, float3 V, float roughness, float3 F0)
 #else
 	float2 specularBRDF = EnvBRDFApprox(F0, roughness, NoV);
 #endif
+
+	specularIrradiance = sRGB2Lin(specularIrradiance);
 
 	// Roughness dependent fresnel
 	// https://www.jcgt.org/published/0008/01/03/paper.pdf
@@ -100,17 +102,4 @@ float noise(float3 pos)
 		lerp(lerp(hash11(n + dot(step, float3(0.0, 0.0, 1.0))), hash11(n + dot(step, float3(1.0, 0.0, 1.0))), u.x),
 			lerp(hash11(n + dot(step, float3(0.0, 1.0, 1.0))), hash11(n + dot(step, float3(1.0, 1.0, 1.0))), u.x), u.y),
 		u.z);
-}
-
-float FBM(float3 pos, int octaves, float frequency)
-{
-	float height = 0.0;
-	float amplitude = 1.0;
-
-	for (int i = 0; i < octaves; i++) {
-		height += noise(pos * frequency) * amplitude;
-		frequency *= fbmLacunarity;
-		amplitude *= fbmPersistance;
-	}
-	return height;
 }
