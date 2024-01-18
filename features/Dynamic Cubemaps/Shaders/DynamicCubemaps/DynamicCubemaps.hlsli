@@ -8,7 +8,7 @@ float3 GetDynamicCubemap(float3 N, float3 V, float roughness, float3 F0)
 
 	float level = roughness * 9.0;
 
-	float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level).rgb;
+	float3 specularIrradiance = sRGB2Lin(specularTexture.SampleLevel(SampColorSampler, R, level).rgb);
 
 	// Split-sum approximation factors for Cook-Torrance specular BRDF.
 	float2 specularBRDF = specularBRDF_LUT.SampleLevel(SampColorSampler, float2(NoV, roughness), 0);
