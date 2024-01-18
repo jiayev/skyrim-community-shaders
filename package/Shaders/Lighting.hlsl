@@ -1556,8 +1556,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	uint waterTile = (uint)clamp(cellInt.x + (cellInt.y * 5), 0, 24);  // remap xy to 0-24
 	float waterHeight = -2147483648;                                   // lowest 32-bit integer
 
-	[flatten]
-	if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
+	[flatten] if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
 		waterHeight = lightingData[0].WaterHeight[waterTile];
 
 #	endif
@@ -1569,8 +1568,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float shoreFactor = saturate(1.0 - (wetnessDistToWater / (float)perPassWetnessEffects[0].ShoreRange));
 	float shoreFactorAlbedo = shoreFactor;
 
-	[flatten]
-	if (input.WorldPosition.z < waterHeight)
+	[flatten] if (input.WorldPosition.z < waterHeight)
 		shoreFactorAlbedo = 1.0;
 
 	float rainWetness = perPassWetnessEffects[0].Wetness * saturate(worldSpaceNormal.z);
@@ -1603,9 +1601,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if !defined(MODELSPACENORMALS)
 	float flatnessAmount = smoothstep(perPassWetnessEffects[0].PuddleMaxAngle, 1.0, saturate(max(worldSpaceVertexNormal.z, worldSpaceNormal.z)));
-#	else
+#		else
 	float flatnessAmount = smoothstep(perPassWetnessEffects[0].PuddleMaxAngle, 1.0, worldSpaceNormal.z);
-#	endif
+#		endif
 
 	flatnessAmount *= smoothstep(perPassWetnessEffects[0].PuddleMinWetness, 1.0, wetnessGlossinessSpecular);
 
@@ -1616,11 +1614,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 	float waterRoughnessSpecular = lerp(1.0, 0.2, saturate(wetnessGlossinessSpecular * (1.0 / perPassWetnessEffects[0].PuddleMinWetness)));
-	
-#			if defined(WETNESS_EFFECTS)
+
+#		if defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1.0)
 		wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedDirLightDirectionWS, worldSpaceViewDirection, dirLightColor * 0.5, waterRoughnessSpecular);
-#			endif
+#		endif
 
 #	endif
 
@@ -1922,7 +1920,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
 #		if defined(DYNAMIC_CUBEMAPS)
-	if (dynamicCubemap){
+	if (dynamicCubemap) {
 		vertexColor = sRGB2Lin(vertexColor);
 		diffuseColor = 1;
 	}
