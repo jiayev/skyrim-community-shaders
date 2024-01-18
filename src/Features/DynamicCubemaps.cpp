@@ -453,7 +453,7 @@ void DynamicCubemaps::Reset()
 		activeReflections = false;
 
 	auto setting = RE::GetINISetting("fCubeMapRefreshRate:Water");
-	setting->data.f = activeReflections ? 1 : FLT_MAX;
+	setting->data.f = activeReflections ? 0 : FLT_MAX;
 
 	renderedScreenCamera = false;
 }
