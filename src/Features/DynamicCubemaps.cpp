@@ -302,6 +302,10 @@ void DynamicCubemaps::Draw(const RE::BSShader* shader, const uint32_t)
 
 void DynamicCubemaps::SetupResources()
 {
+	GetComputeShaderUpdate();
+	GetComputeShaderInferrence();
+	GetComputeShaderSpecularIrradiance();
+
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto context = renderer->GetRuntimeData().context;
 	auto device = renderer->GetRuntimeData().forwarder;
