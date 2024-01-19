@@ -148,7 +148,7 @@ float3 InverseProjectUVZ(float2 uv, float z)
 	float3 viewDirection = WorldToView(captureDirection, false);
 	float2 uv = ViewToUV(viewDirection, false);
 
-	if (Reset){
+	if (Reset) {
 		DynamicCubemap[ThreadID] = 0.0;
 		DynamicCubemapRaw[ThreadID] = 0.0;
 		DynamicCubemapPosition[ThreadID] = 0.0;
@@ -170,7 +170,7 @@ float3 InverseProjectUVZ(float2 uv, float z)
 			float4 output = float4(sRGB2Lin(color), 1.0);
 			DynamicCubemapRaw[ThreadID] = output;
 			DynamicCubemap[ThreadID] = output;
-			
+
 			float3 position = InverseProjectUVZ(uv, depth);
 			DynamicCubemapPosition[ThreadID] = float4(position, 1.0);
 			return;
@@ -178,7 +178,7 @@ float3 InverseProjectUVZ(float2 uv, float z)
 	}
 
 	float4 position = DynamicCubemapPosition[ThreadID];
-	position.xyz = (position.xyz + CameraPreviousPosAdjust[0].xyz) - CameraPosAdjust[0].xyz; // Remove adjustment, add new adjustment
+	position.xyz = (position.xyz + CameraPreviousPosAdjust[0].xyz) - CameraPosAdjust[0].xyz;  // Remove adjustment, add new adjustment
 	DynamicCubemapPosition[ThreadID] = position;
 
 	float4 color = DynamicCubemapRaw[ThreadID];
