@@ -159,8 +159,8 @@ void DynamicCubemaps::UpdateCubemapCapture()
 	ID3D11ShaderResourceView* srvs[2] = { depth.depthSRV, snowSwap.SRV };
 	context->CSSetShaderResources(0, 2, srvs);
 
-	ID3D11UnorderedAccessView* uav = envCaptureTexture->uav.get();
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	ID3D11UnorderedAccessView* uavs[3] = { envCaptureTexture->uav.get(), envCaptureRawTexture->uav.get(), envCapturePositionTexture->uav.get() };
+	context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
 
 	ID3D11Buffer* buffers[2];
 	context->PSGetConstantBuffers(12, 1, buffers);
@@ -168,6 +168,8 @@ void DynamicCubemaps::UpdateCubemapCapture()
 	UpdateCubemapCB updateData{};
 	updateData.CameraData = Util::GetCameraData();
 	updateData.Reset = resetCapture;
+	updateData.Delta = { 0, 0, 0 };
+
 	updateCubemapCB->Update(updateData);
 	buffers[1] = updateCubemapCB->CB();
 
@@ -178,8 +180,10 @@ void DynamicCubemaps::UpdateCubemapCapture()
 	context->CSSetShader(GetComputeShaderUpdate(), nullptr, 0);
 	context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 32.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 32.0f), 6);
 
-	uav = cubemapUAV;
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	uavs[0] = cubemapUAV;
+	uavs[1] = nullptr;
+	uavs[2] = nullptr;
+	context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
 
 	context->GenerateMips(envCaptureTexture->srv.get());
 
@@ -195,8 +199,8 @@ void DynamicCubemaps::UpdateCubemapCapture()
 	srvs[0] = nullptr;
 	context->CSSetShaderResources(0, 1, srvs);
 
-	uav = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	uavs[0] = nullptr;
+	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
 	buffers[0] = nullptr;
 	buffers[1] = nullptr;
@@ -312,7 +316,7 @@ void DynamicCubemaps::SetupResources()
 
 	{
 		D3D11_SAMPLER_DESC samplerDesc = {};
-		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;  // Should be linear but point is faster
+		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
 		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
 		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
 		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
@@ -413,6 +417,17 @@ void DynamicCubemaps::SetupResources()
 		envCaptureTexture = new Texture2D(texDesc);
 		envCaptureTexture->CreateSRV(srvDesc);
 		envCaptureTexture->CreateUAV(uavDesc);
+
+		envCaptureRawTexture = new Texture2D(texDesc);
+		envCaptureRawTexture->CreateSRV(srvDesc);
+		envCaptureRawTexture->CreateUAV(uavDesc);
+
+		//texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT; // this does not need to be precise
+		//srvDesc.Format = texDesc.Format;
+		//uavDesc.Format = texDesc.Format;
+		envCapturePositionTexture = new Texture2D(texDesc);
+		envCapturePositionTexture->CreateSRV(srvDesc);
+		envCapturePositionTexture->CreateUAV(uavDesc);
 
 		updateCubemapCB = new ConstantBuffer(ConstantBufferDesc<UpdateCubemapCB>());
 	}

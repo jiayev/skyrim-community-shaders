@@ -1,5 +1,7 @@
 #include "../Common/VR.hlsl"
 RWTexture2DArray<float4> DynamicCubemap : register(u0);
+RWTexture2DArray<float4> DynamicCubemapRaw : register(u1);
+RWTexture2DArray<float4> DynamicCubemapPosition : register(u2);
 
 Texture2D<float> DepthTexture : register(t0);
 Texture2D<float4> ColorTexture : register(t1);
@@ -131,14 +133,25 @@ float3 sRGB2Lin(float3 color)
 	return color > 0.04045 ? pow(color / 1.055 + 0.055 / 1.055, 2.4) : color / 12.92;
 }
 
+// Inverse project UV + raw depth into world space.
+float3 InverseProjectUVZ(float2 uv, float z)
+{
+	uv.y = 1 - uv.y;
+	float4 cp = float4(float3(uv, z) * 2 - 1, 1);
+	float4 vp = mul(CameraViewProjInverse[0], cp);
+	return float3(vp.xy, vp.z) / vp.w;
+}
+
 [numthreads(32, 32, 1)] void main(uint3 ThreadID
 								  : SV_DispatchThreadID) {
 	float3 captureDirection = -GetSamplingVector(ThreadID, DynamicCubemap);
 	float3 viewDirection = WorldToView(captureDirection, false);
 	float2 uv = ViewToUV(viewDirection, false);
 
-	if (Reset) {
+	if (Reset){
 		DynamicCubemap[ThreadID] = 0.0;
+		DynamicCubemapRaw[ThreadID] = 0.0;
+		DynamicCubemapPosition[ThreadID] = 0.0;
 		return;
 	}
 
@@ -150,17 +163,26 @@ float3 sRGB2Lin(float3 color)
 		DepthTexture.GetDimensions(textureDims.x, textureDims.y);
 
 		float depth = DepthTexture[round(uv * textureDims)];
-		depth = GetScreenDepth(depth);
+		float linearDepth = GetScreenDepth(depth);
 
-		if (depth > 16.5) {  // First person
+		if (linearDepth > 16.5) {  // First person
 			float3 color = ColorTexture[round(uv * textureDims)];
-			DynamicCubemap[ThreadID] = float4(sRGB2Lin(color), 1.0);
+			float4 output = float4(sRGB2Lin(color), 1.0);
+			DynamicCubemapRaw[ThreadID] = output;
+			DynamicCubemap[ThreadID] = output;
+			
+			float3 position = InverseProjectUVZ(uv, depth);
+			DynamicCubemapPosition[ThreadID] = float4(position, 1.0);
 			return;
 		}
 	}
 
-	float4 color = DynamicCubemap[ThreadID];
-	float3 delta = CameraPosAdjust[0] - CameraPreviousPosAdjust[0];
-	color = max(0, color - length(delta) * 0.00001);
+	float4 position = DynamicCubemapPosition[ThreadID];
+	position.xyz = (position.xyz + CameraPreviousPosAdjust[0].xyz) - CameraPosAdjust[0].xyz; // Remove adjustment, add new adjustment
+	DynamicCubemapPosition[ThreadID] = position;
+
+	float4 color = DynamicCubemapRaw[ThreadID];
+	color *= max(0.0, 1.0 - length(position.xyz * float3(0.001, 0.001, 0.0001)));
+
 	DynamicCubemap[ThreadID] = color;
 }

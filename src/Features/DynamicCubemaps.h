@@ -47,7 +47,7 @@ public:
 	{
 		float4 CameraData;
 		uint Reset;
-		float pad[3];
+		float3 Delta;
 	};
 
 	ID3D11ComputeShader* updateCubemapCS = nullptr;
@@ -55,6 +55,8 @@ public:
 
 	ID3D11ComputeShader* inferCubemapCS = nullptr;
 	Texture2D* envCaptureTexture = nullptr;
+	Texture2D* envCaptureRawTexture = nullptr;
+	Texture2D* envCapturePositionTexture = nullptr;
 
 	bool activeReflections = false;
 

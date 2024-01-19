@@ -47,29 +47,30 @@ float3 Lin2sRGB(float3 color)
 	return color > 0.0031308 ? 1.055 * pow(color, 1.0 / 2.4) - 0.055 : 12.92 * color;
 }
 
+
 // https://www.shadertoy.com/view/XdlGzX
 // Nikos Papadopoulos, 4rknova / 2013
 // Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
 
 float hash(in float3 p)
 {
-	return frac(sin(dot(p, float3(127.1, 311.7, 321.4))) * 43758.5453123);
+    return frac(sin(dot(p,float3(127.1,311.7, 321.4)))*43758.5453123);
 }
 
 float noise(in float3 p)
 {
-	float3 i = floor(p);
-	float3 f = frac(p);
-	f *= f * (3. - 2. * f);
+    float3 i = floor(p);
+	float3 f = frac(p); 
+	f *= f * (3.-2.*f);
 
-	float2 c = float2(0, 1);
+    float2 c = float2(0,1);
 
-	return lerp(
-		lerp(lerp(hash(i + c.xxx), hash(i + c.yxx), f.x),
-			lerp(hash(i + c.xyx), hash(i + c.yyx), f.x),
+    return lerp(
+		lerp(lerp(hash(i + c.xxx), hash(i + c.yxx),f.x),
+			lerp(hash(i + c.xyx), hash(i + c.yyx),f.x),
 			f.y),
-		lerp(lerp(hash(i + c.xxy), hash(i + c.yxy), f.x),
-			lerp(hash(i + c.xyy), hash(i + c.yyy), f.x),
+		lerp(lerp(hash(i + c.xxy), hash(i + c.yxy),f.x),
+			lerp(hash(i + c.xyy), hash(i + c.yyy),f.x),
 			f.y),
 		f.z);
 }
@@ -101,7 +102,7 @@ float noise(in float3 p)
 			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 0.0, 1.0), 1), 9);
 		}
 
-		if (color.w + tempColor.w > 1.0) {
+		if ((color.w + tempColor.w) > 1.0) {
 			float alphaDiff = 1.0 - color.w;
 			tempColor.xyz *= alphaDiff / tempColor.w;
 			color.xyzw += tempColor;
@@ -111,7 +112,7 @@ float noise(in float3 p)
 
 		mipLevel++;
 	}
-	color.rgb = lerp(color.rgb, color.rgb * noise(uv * 4), smoothstep(1.0, 12.0, mipLevel));
+	color.rgb = lerp(color.rgb, color.rgb * noise(uv * 4.0) * 2.0, ((mipLevel - 1) * (1.0 / 12.0)));
 	color.rgb = Lin2sRGB(color.rgb);
 	EnvInferredTexture[ThreadID] = color;
 }
