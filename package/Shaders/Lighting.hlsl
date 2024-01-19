@@ -1617,7 +1617,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1.0)
-		wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedDirLightDirectionWS, worldSpaceViewDirection, dirLightColor * 0.5, waterRoughnessSpecular);
+		wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedDirLightDirectionWS, worldSpaceViewDirection, dirLightColor * 0.1, waterRoughnessSpecular);
 #		endif
 
 #	endif
@@ -1878,7 +1878,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	porosity = lerp(porosity, 0.0, saturate(sqrt(envMask)));
 #			endif
 	float wetnessDarkeningAmount = porosity * wetnessGlossinessAlbedo;
-	baseColor.xyz = pow(baseColor.xyz, 1.0 + (wetnessDarkeningAmount * wetnessDarkeningAmount));
+	baseColor.xyz = lerp(baseColor.xyz, pow(baseColor.xyz, 1.0 + wetnessDarkeningAmount), 0.5);
 #		endif
 	if (waterRoughnessSpecular < 1.0)
 		wetnessSpecular += GetWetnessAmbientSpecular(wetnessNormal, worldSpaceViewDirection, 1.0 - wetnessGlossinessSpecular, 0.02);
