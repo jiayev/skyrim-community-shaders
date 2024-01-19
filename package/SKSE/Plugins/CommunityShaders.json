@@ -85,10 +85,10 @@
  },
  "Wetness Effects": {
   "EnableWetnessEffects": 1,
-  "MaxRainWetness": 0.95,
+  "MaxRainWetness": 1.0,
   "MaxShoreWetness": 0.5,
   "PuddleMaxAngle": 0.95,
-  "PuddleMinWetness": 0.75,
+  "PuddleMinWetness": 0.85,
   "PuddleRadius": 1.0,
   "ShoreRange": 32
  }

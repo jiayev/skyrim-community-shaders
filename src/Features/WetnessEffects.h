@@ -26,7 +26,7 @@ public:
 		uint ShoreRange = 32;
 		float PuddleRadius = 1.0f;
 		float PuddleMaxAngle = 0.95f;
-		float PuddleMinWetness = 0.75f;
+		float PuddleMinWetness = 0.85f;
 	};
 
 	struct alignas(16) PerPass
