@@ -206,7 +206,7 @@ void Menu::DrawSettings()
 					ImGui::PopTextWrapPos();
 					ImGui::EndTooltip();
 				}
-			}
+			} 
 			ImGui::EndTable();
 		}
 
@@ -542,17 +542,22 @@ void Menu::DrawOverlay()
 		}
 
 		ImGui::End();
-	} else if (failed && !hide) {
-		ImGui::SetNextWindowBgAlpha(1);
-		ImGui::SetNextWindowPos(ImVec2(10, 10));
-		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
-			ImGui::End();
-			return;
-		}
-
-		ImGui::Text("ERROR: %d shaders failed to compile. Check installation and CommunityShaders.log", failed, totalShaders);
+	} else if (failed) {
 		ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 0, 0, 255));
-		ImGui::End();
+		if (!hide) {
+			ImGui::SetNextWindowBgAlpha(1);
+			ImGui::SetNextWindowPos(ImVec2(10, 10));
+			if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+				ImGui::End();
+				return;
+			}
+
+			ImGui::Text("ERROR: %d shaders failed to compile. Check installation and CommunityShaders.log", failed, totalShaders);
+			ImGui::End();
+		}
+	} else {
+		// Done compiling with no failures
+		ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
 	}
 
 	if (IsEnabled) {

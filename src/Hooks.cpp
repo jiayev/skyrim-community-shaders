@@ -222,12 +222,25 @@ static inline REL::Relocation<decltype(hk_PollInputDevices)> _InputFunc;
 
 void hk_PollInputDevices(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events)
 {
+	bool blockedDevice = true;
 	auto menu = Menu::GetSingleton();
 
-	if (a_events)
+	if (a_events) {
 		menu->ProcessInputEvents(a_events);
+	
+		if (*a_events)
+		{
+			if (auto device = (*a_events)->GetDevice())
+			{
+				// Check that the device is not a Gamepad or VR controller. If it is, unblock input. Values 7 & 8 are returned at least for some VR Controllers.
+				int kVRRightAlt = 7;
+				int kVRLeftAlt = 8;
+				blockedDevice = !((device == RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) || (device == RE::INPUT_DEVICES::INPUT_DEVICE::kVRRight) || (device == RE::INPUT_DEVICES::INPUT_DEVICE::kVRLeft) || (device == kVRRightAlt) || (device == kVRLeftAlt));
+			}
+		}
+	}
 
-	if (menu->ShouldSwallowInput()) {  //the menu is open, eat all keypresses
+	if (blockedDevice && menu->ShouldSwallowInput()) {  //the menu is open, eat all keypresses
 		constexpr RE::InputEvent* const dummy[] = { nullptr };
 		_InputFunc(a_dispatcher, dummy);
 		return;
