@@ -1060,14 +1060,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(ENVMAP)
 	bool complexMaterial = false;
 	bool complexMaterialParallax = false;
-	float4 complexMaterialColor = 1;
-
+	float4 complexMaterialColor = 1.0;
+	
 	if (perPassParallax[0].EnableComplexMaterial) {
 		float envMaskTest = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, 15).w;
-		complexMaterial = envMaskTest < (1.0f - (4.0f / 255.0f));
+		complexMaterial = envMaskTest < (1.0 - (4.0 / 255.0));
 
 		if (complexMaterial) {
-			if (envMaskTest > (4.0f / 255.0f)) {
+			if (envMaskTest > (4.0 / 255.0)) {
 				complexMaterialParallax = true;
 				mipLevel = GetMipLevel(uv, TexEnvMaskSampler);
 				uv = GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, TexEnvMaskSampler, SampTerrainParallaxSampler, 3);
@@ -1078,6 +1078,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
 		}
 	}
+	
 #		endif  // ENVMAP
 #	endif      // CPM_AVAILABLE
 
@@ -1182,16 +1183,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif  // LANDSCAPE
 
 #	if defined(CPM_AVAILABLE) && defined(ENVMAP)
-	float3 complexSpecular = 1.0f;
-
-	if (complexMaterial) {
-		complexMaterial = complexMaterialColor.y > (4.0f / 255.0f) && complexMaterialColor.y < (1 - (4.0f / 255.0f));
-
-		if (complexMaterial) {
-			shininess = shininess * complexMaterialColor.y;
-			complexSpecular = lerp(1.0f, baseColor.xyz, complexMaterialColor.z);
-		}
-	}
+	complexMaterial = complexMaterial && complexMaterialColor.y > (4.0 / 255.0) && (complexMaterialColor.y < (1.0 - (4.0 / 255.0)));
+	shininess = lerp(shininess, shininess * complexMaterialColor.y, complexMaterial);
+	float3 complexSpecular = lerp(1.0, lerp(1.0, baseColor.xyz, complexMaterialColor.z), complexMaterial);
 #	endif  // defined (CPM_AVAILABLE) && defined(ENVMAP)
 
 #	if defined(FACEGEN)
@@ -1561,6 +1555,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	endif
 
+	float nearFactor = smoothstep(4096.0 * 2.5, 0.0, viewPosition.z);
+
 #	if defined(WETNESS_EFFECTS)
 	float wetness = 0.0;
 
@@ -1574,16 +1570,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float rainWetness = perPassWetnessEffects[0].Wetness * saturate(worldSpaceNormal.z);
 
 	wetness = max(shoreFactor * perPassWetnessEffects[0].MaxShoreWetness, rainWetness);
-
-	float wetnessNearFactor = smoothstep(4096.0 * 2.5, 0.0, viewPosition.z);
-	wetness *= wetnessNearFactor;
+	wetness *= nearFactor;
 
 	float3 wetnessNormal = worldSpaceNormal;
 
 	float3 puddleCoords = ((input.WorldPosition.xyz + CameraPosAdjust[0]) * 0.5 + 0.5) * 0.01 * perPassWetnessEffects[0].PuddleRadius;
 	float puddle = 0;
 	if (wetness > 0.0) {
-		puddle = noise(puddleCoords) * 0.25 + 0.75;
+		puddle = noise(puddleCoords) * 0.5 + 0.5;
 		puddle *= wetness;
 		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow && shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 			float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
@@ -1617,7 +1611,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1.0)
-		wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedDirLightDirectionWS, worldSpaceViewDirection, dirLightColor * 0.1, waterRoughnessSpecular);
+		wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedDirLightDirectionWS, worldSpaceViewDirection, sRGB2Lin(dirLightColor) * 0.1, waterRoughnessSpecular);
 #		endif
 
 #	endif
@@ -1720,7 +1714,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(WETNESS_EFFECTS)
 			if (waterRoughnessSpecular < 1.0)
-				wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirectionWS, worldSpaceViewDirection, lightColor, waterRoughnessSpecular);
+				wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirectionWS, worldSpaceViewDirection, sRGB2Lin(lightColor), waterRoughnessSpecular);
 #		endif
 		}
 	}
@@ -1814,7 +1808,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #			if defined(WETNESS_EFFECTS)
 			if (waterRoughnessSpecular < 1.0)
-				wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirection, worldSpaceViewDirection, lightColor, waterRoughnessSpecular);
+				wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirection, worldSpaceViewDirection, sRGB2Lin(lightColor), waterRoughnessSpecular);
 #			endif
 		}
 	}
@@ -1838,6 +1832,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	modelNormal.xyz = input.EyeNormal;
 #	endif  // EYE
 
+	float3 emitColor = EmitColor;
+#	if !defined(LANDSCAPE)
+	if ((0x3F & (shaderDescriptors[0].PixelShaderDescriptor >> 24)) == _Glowmap) {
+		float3 glowColor = TexGlowSampler.Sample(SampGlowSampler, uv).xyz;
+		emitColor *= glowColor;
+	}
+#	endif
+
+	float3 directionalAmbientColor = mul(DirectionalAmbient, modelNormal);
+	diffuseColor = directionalAmbientColor + emitColor.xyz + diffuseColor;
+
 #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
 	float envMaskColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).x;
 	float envMask = (EnvmapData.y * (envMaskColor - glossiness) + glossiness) * (EnvmapData.x * MaterialData.x);
@@ -1850,27 +1855,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	TexEnvSampler.GetDimensions(envSize.x, envSize.y);
 	bool dynamicCubemap = envMask != 0 && envSize.x == 1;
 	if (dynamicCubemap) {
-#			if defined(CPM_AVAILABLE)
+		float envFade = saturate(viewPosition.z / 512.0);
+#			if defined(CPM_AVAILABLE) && defined(ENVMAP)
 		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
-		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, max(0.1, 1.0 - complexMaterialColor.y), F0) * envMask;
+		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, lerp(0.1, 1.0 - complexMaterialColor.y, complexMaterial), complexSpecular) * sRGB2Lin(envMask);
 #			else
 		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
-		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, 0.1, F0) * envMask;
+		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, 0.1, F0) * sRGB2Lin(envMask);
 #			endif
+		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow && shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
+			float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
+			envColor *= lerp(1.0, shadowColor.x, saturate(upAngle) * 0.2);
+		}
 	}
 #		endif
 #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
-
-	float3 emitColor = EmitColor;
-#	if !defined(LANDSCAPE)
-	if ((0x3F & (shaderDescriptors[0].PixelShaderDescriptor >> 24)) == _Glowmap) {
-		float3 glowColor = TexGlowSampler.Sample(SampGlowSampler, uv).xyz;
-		emitColor *= glowColor;
-	}
-#	endif
-
-	float3 directionalAmbientColor = mul(DirectionalAmbient, modelNormal);
-	diffuseColor = directionalAmbientColor + emitColor.xyz + diffuseColor;
 
 #	if defined(WETNESS_EFFECTS)
 #		if !(defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)) || defined(TREE_ANIM)
@@ -1879,9 +1878,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			endif
 	float wetnessDarkeningAmount = porosity * wetnessGlossinessAlbedo;
 	baseColor.xyz = lerp(baseColor.xyz, pow(baseColor.xyz, 1.0 + wetnessDarkeningAmount), 0.8);
+	baseColor.xyz = lerp(baseColor.xyz, pow(baseColor.xyz, 1.0 + (wetnessDarkeningAmount)), 0.5);
 #		endif
 	if (waterRoughnessSpecular < 1.0)
-		wetnessSpecular += GetWetnessAmbientSpecular(wetnessNormal, worldSpaceViewDirection, 1.0 - wetnessGlossinessSpecular, 0.02);
+		wetnessSpecular += GetWetnessAmbientSpecular(wetnessNormal, worldSpaceViewDirection, 1.0 - wetnessGlossinessSpecular);
 #	endif
 
 	float4 color;
@@ -1927,7 +1927,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 #		if defined(CPM_AVAILABLE) && defined(ENVMAP)
-	vertexColor += envColor * complexSpecular * diffuseColor;
+	vertexColor += envColor * lerp(complexSpecular, 1.0, dynamicCubemap) * diffuseColor;
 #		else
 	vertexColor += envColor * diffuseColor;
 #		endif
