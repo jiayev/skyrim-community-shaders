@@ -1061,7 +1061,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	bool complexMaterial = false;
 	bool complexMaterialParallax = false;
 	float4 complexMaterialColor = 1.0;
-	
+
 	if (perPassParallax[0].EnableComplexMaterial) {
 		float envMaskTest = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, 15).w;
 		complexMaterial = envMaskTest < (1.0 - (4.0 / 255.0));
@@ -1078,7 +1078,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
 		}
 	}
-	
+
 #		endif  // ENVMAP
 #	endif      // CPM_AVAILABLE
 

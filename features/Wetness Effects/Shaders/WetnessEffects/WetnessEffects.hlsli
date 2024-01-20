@@ -52,7 +52,7 @@ float noise(float3 pos)
 
 float3 GetWetnessAmbientSpecular(float3 N, float3 V, float roughness)
 {
-#	if defined(DYNAMIC_CUBEMAPS)
+#if defined(DYNAMIC_CUBEMAPS)
 	float3 NT = N;
 	NT.z += 1;
 	NT = normalize(NT);
@@ -63,12 +63,12 @@ float3 GetWetnessAmbientSpecular(float3 N, float3 V, float roughness)
 	float level = roughness * 9.0;
 
 	float3 specularIrradiance = sRGB2Lin(specularTexture.SampleLevel(SampColorSampler, R, level).rgb);
-#	else
+#else
 	float3 R = reflect(-V, N);
 	float NoV = saturate(dot(N, V));
 
 	float3 specularIrradiance = sRGB2Lin(mul(perPassWetnessEffects[0].DirectionalAmbientWS, float4(R, 1.0))) * noise(R * lerp(10.0, 1.0, roughness * roughness));
-#	endif
+#endif
 
 	// Split-sum approximation factors for Cook-Torrance specular BRDF.
 #if defined(DYNAMIC_CUBEMAPSf)
@@ -89,4 +89,3 @@ float3 GetWetnessSpecular(float3 N, float3 L, float3 V, float3 lightColor, float
 {
 	return LightingFuncGGX_OPT3(N, V, L, roughness, 1.0 - roughness) * lightColor;
 }
-
