@@ -444,7 +444,7 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	float2 refractionUvRaw =
 		float2(refractionNormal.x, refractionNormal.w - refractionNormal.y) / refractionNormal.ww;
 
-#			if defined(DEPTH)
+#			if defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH)
 	float depth = GetScreenDepthWater(DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy));
 	float refractionDepth =
 		GetScreenDepthWater(DynamicResolutionParams1.xy * (refractionUvRaw / VPOSOffset.xy));
