@@ -227,11 +227,9 @@ void hk_PollInputDevices(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::
 
 	if (a_events) {
 		menu->ProcessInputEvents(a_events);
-	
-		if (*a_events)
-		{
-			if (auto device = (*a_events)->GetDevice())
-			{
+
+		if (*a_events) {
+			if (auto device = (*a_events)->GetDevice()) {
 				// Check that the device is not a Gamepad or VR controller. If it is, unblock input. Values 7 & 8 are returned at least for some VR Controllers.
 				int kVRRightAlt = 7;
 				int kVRLeftAlt = 8;

@@ -206,7 +206,7 @@ void Menu::DrawSettings()
 					ImGui::PopTextWrapPos();
 					ImGui::EndTooltip();
 				}
-			} 
+			}
 			ImGui::EndTable();
 		}
 
