@@ -1858,10 +1858,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float envFade = saturate(viewPosition.z / 512.0);
 #			if defined(CPM_AVAILABLE) && defined(ENVMAP)
 		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
-		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, lerp(0.1, 1.0 - complexMaterialColor.y, complexMaterial), complexSpecular) * sRGB2Lin(envMask);
+		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, lerp(0.1, 1.0 - complexMaterialColor.y, complexMaterial), complexSpecular, complexMaterial) * envMask;
 #			else
 		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
-		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, 0.1, F0) * sRGB2Lin(envMask);
+		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, 0.1, F0, 0.0) * envMask;
 #			endif
 		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow && shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 			float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
@@ -1920,20 +1920,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
 #		if defined(DYNAMIC_CUBEMAPS)
-	if (dynamicCubemap) {
-		vertexColor = sRGB2Lin(vertexColor);
-		diffuseColor = 1;
-	}
+	if (dynamicCubemap)
+		diffuseColor = 1.0;
 #		endif
 
 #		if defined(CPM_AVAILABLE) && defined(ENVMAP)
 	vertexColor += envColor * lerp(complexSpecular, 1.0, dynamicCubemap) * diffuseColor;
 #		else
 	vertexColor += envColor * diffuseColor;
-#		endif
-#		if defined(DYNAMIC_CUBEMAPS)
-	if (dynamicCubemap)
-		vertexColor = Lin2sRGB(vertexColor);
 #		endif
 #	endif
 
