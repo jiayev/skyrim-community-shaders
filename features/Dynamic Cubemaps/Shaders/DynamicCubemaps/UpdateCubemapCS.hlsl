@@ -172,17 +172,17 @@ float3 InverseProjectUVZ(float2 uv, float z)
 			DynamicCubemap[ThreadID] = output;
 
 			float3 position = InverseProjectUVZ(uv, depth);
-			DynamicCubemapPosition[ThreadID] = float4(position, 1.0);
+			DynamicCubemapPosition[ThreadID] = float4(position * 0.001, 1.0);
 			return;
 		}
 	}
 
 	float4 position = DynamicCubemapPosition[ThreadID];
-	position.xyz = (position.xyz + CameraPreviousPosAdjust[0].xyz) - CameraPosAdjust[0].xyz;  // Remove adjustment, add new adjustment
+	position.xyz = (position.xyz + (CameraPreviousPosAdjust[0].xyz * 0.001)) - (CameraPosAdjust[0].xyz * 0.001);  // Remove adjustment, add new adjustment
 	DynamicCubemapPosition[ThreadID] = position;
 
 	float4 color = DynamicCubemapRaw[ThreadID];
-	color *= max(0.0, 1.0 - length(position.xyz * float3(0.001, 0.001, 0.0001)));
+	color *= max(0.0, 1.0 - length(position.xyz));
 
 	DynamicCubemap[ThreadID] = color;
 }
