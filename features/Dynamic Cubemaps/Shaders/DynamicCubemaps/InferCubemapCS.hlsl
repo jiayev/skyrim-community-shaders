@@ -111,7 +111,7 @@ float noise(in float3 p)
 
 		mipLevel++;
 	}
-	color.rgb = lerp(color.rgb, color.rgb * noise(uv * 4.0) * 2.0, ((mipLevel - 1) * (1.0 / 12.0)));
+	color.rgb = lerp(color.rgb, color.rgb * noise(uv * 8.0), ((mipLevel - 1) * (1.0 / 12.0)));
 	color.rgb = Lin2sRGB(color.rgb);
 	EnvInferredTexture[ThreadID] = color;
 }

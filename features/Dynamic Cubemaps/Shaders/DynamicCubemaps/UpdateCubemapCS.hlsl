@@ -182,7 +182,7 @@ float3 InverseProjectUVZ(float2 uv, float z)
 	DynamicCubemapPosition[ThreadID] = position;
 
 	float4 color = DynamicCubemapRaw[ThreadID];
-	color *= max(0.0, 1.0 - length(position.xyz));
+	color *= max(0.01, 1.0 - length(position.xyz));
 
 	DynamicCubemap[ThreadID] = color;
 }
