@@ -48,7 +48,6 @@ float3 sRGB2Lin(float3 color)
 	return color > 0.04045 ? pow(color / 1.055 + 0.055 / 1.055, 2.4) : color / 12.92;
 }
 
-
 float3 Lin2sRGB(float3 color)
 {
 	return color > 0.0031308 ? 1.055 * pow(color, 1.0 / 2.4) - 0.055 : 12.92 * color;
@@ -89,11 +88,11 @@ float noise(in float3 p)
 	float4 color = EnvCaptureTexture.SampleLevel(LinearSampler, uv, 0);
 	uint mipLevel = 1;
 
-#	if !defined(REFLECTIONS)	
+#if !defined(REFLECTIONS)
 	float k = 4.0;
-#	else
+#else
 	float k = 1.5;
-#	endif
+#endif
 
 	float brightness = k;
 
@@ -120,16 +119,15 @@ float noise(in float3 p)
 		} else {
 			color.xyzw += tempColor;
 		}
-		
 
-		mipLevel++;	
+		mipLevel++;
 	}
 
-#	if defined(REFLECTIONS)
+#if defined(REFLECTIONS)
 	color.rgb = lerp(color.rgb, sRGB2Lin(EnvReflectionsTexture[ThreadID]), (mipLevel - 1) * (1.0 / 10.0));
-#	else
+#else
 	color.rgb = lerp(color.rgb, color.rgb * noise(uv * 5.0), (mipLevel - 1) * (1.0 / 10.0));
-#	endif
+#endif
 
 	color.rgb = Lin2sRGB(color.rgb);
 	EnvInferredTexture[ThreadID] = color;

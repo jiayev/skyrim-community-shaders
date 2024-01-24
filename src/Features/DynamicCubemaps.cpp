@@ -141,7 +141,7 @@ ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrenceReflections()
 {
 	if (!inferCubemapReflectionsCS) {
 		logger::debug("Compiling InferCubemapCS REFLECTIONS");
-		inferCubemapReflectionsCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "REFLECTIONS", "" }}, "cs_5_0");
+		inferCubemapReflectionsCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0");
 	}
 	return inferCubemapReflectionsCS;
 }
@@ -176,7 +176,7 @@ void DynamicCubemaps::UpdateCubemapCapture()
 	UpdateCubemapCB updateData{};
 	updateData.CameraData = Util::GetCameraData();
 	updateData.Reset = resetCapture;
-	
+
 	static float3 cameraPreviousPosAdjust = { 0, 0, 0 };
 	updateData.CameraPreviousPosAdjust = cameraPreviousPosAdjust;
 
@@ -218,9 +218,8 @@ void DynamicCubemaps::DrawDeferred()
 	auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 
-	if (shadowSceneNode == accumulator->GetRuntimeData().activeShadowSceneNode)
-	{
-		if (nextTask == NextTask::kCapture){
+	if (shadowSceneNode == accumulator->GetRuntimeData().activeShadowSceneNode) {
+		if (nextTask == NextTask::kCapture) {
 			UpdateCubemapCapture();
 			nextTask = NextTask::kInferrence;
 		}
@@ -238,10 +237,9 @@ void DynamicCubemaps::UpdateCubemap()
 	}
 
 	auto cubemap = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
-	context->GenerateMips(cubemap.SRV); // Optimisation
+	context->GenerateMips(cubemap.SRV);  // Optimisation
 
-	if (nextTask == NextTask::kInferrence)
-	{	
+	if (nextTask == NextTask::kInferrence) {
 		nextTask = NextTask::kIrradiance;
 
 		// Infer local reflection information
@@ -257,7 +255,7 @@ void DynamicCubemaps::UpdateCubemap()
 		context->CSSetSamplers(0, 1, &computeSampler);
 
 		context->CSSetShader(activeReflections ? GetComputeShaderInferrenceReflections() : GetComputeShaderInferrence(), nullptr, 0);
-		
+
 		context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 32.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 32.0f), 6);
 
 		srv = nullptr;
