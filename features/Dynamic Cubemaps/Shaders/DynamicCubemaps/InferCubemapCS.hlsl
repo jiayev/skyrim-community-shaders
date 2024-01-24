@@ -1,6 +1,7 @@
 TextureCube EnvCaptureTexture : register(t0);
 
 RWTexture2DArray<float4> EnvInferredTexture : register(u0);
+RWTexture2DArray<float4> EnvReflectionsTexture : register(u1);
 
 SamplerState LinearSampler : register(s0);
 
@@ -42,6 +43,12 @@ float3 GetSamplingVector(uint3 ThreadID, in RWTexture2DArray<float4> OutputTextu
 	return normalize(result);
 }
 
+float3 sRGB2Lin(float3 color)
+{
+	return color > 0.04045 ? pow(color / 1.055 + 0.055 / 1.055, 2.4) : color / 12.92;
+}
+
+
 float3 Lin2sRGB(float3 color)
 {
 	return color > 0.0031308 ? 1.055 * pow(color, 1.0 / 2.4) - 0.055 : 12.92 * color;
@@ -81,37 +88,49 @@ float noise(in float3 p)
 	float3 uv = GetSamplingVector(ThreadID, EnvInferredTexture);
 	float4 color = EnvCaptureTexture.SampleLevel(LinearSampler, uv, 0);
 	uint mipLevel = 1;
-	while (color.w < 1.0 && mipLevel <= 11) {
+
+#	if !defined(REFLECTIONS)	
+	float k = 4.0;
+#	else
+	float k = 1.5;
+#	endif
+
+	float brightness = k;
+
+	while (color.w < 1.0 && mipLevel <= 10) {
 		float4 tempColor = 0.0;
 		if (mipLevel < 10) {
 			tempColor = EnvCaptureTexture.SampleLevel(LinearSampler, uv, mipLevel);
-		} else if (mipLevel < 11) {  // The lowest cubemap mip is 6x6, a 1x1 result needs to be calculated
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(-1.0, 0.0, 0.0), 0.5), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(1.0, 0.0, 0.0), 0.5), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, -1.0, 0.0), 0.5), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 1.0, 0.0), 0.5), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 0.0, -1.0), 0.5), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 0.0, 1.0), 0.5), 9);
 		} else {
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(-1.0, 0.0, 0.0), 1), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(1.0, 0.0, 0.0), 1), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, -1.0, 0.0), 1), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 1.0, 0.0), 1), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 0.0, -1.0), 1), 9);
-			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, lerp(uv, float3(0.0, 0.0, 1.0), 1), 9);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(-1.0, 0.0, 0.0), 9);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(1.0, 0.0, 0.0), 9);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, -1.0, 0.0), 9);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, 1.0, 0.0), 9);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, 0.0, -1.0), 9);
+			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, 0.0, 1.0), 9);
 		}
+
+		tempColor *= brightness;
+		brightness *= k;
 
 		if ((color.w + tempColor.w) > 1.0) {
 			float alphaDiff = 1.0 - color.w;
-			tempColor.xyz *= alphaDiff / tempColor.w;
+			tempColor.xyzw *= alphaDiff / tempColor.w;
 			color.xyzw += tempColor;
 		} else {
 			color.xyzw += tempColor;
 		}
+		
 
-		mipLevel++;
+		mipLevel++;	
 	}
-	color.rgb = lerp(color.rgb, color.rgb * noise(uv * 8.0), ((mipLevel - 1) * (1.0 / 12.0)));
+
+#	if defined(REFLECTIONS)
+	color.rgb = lerp(color.rgb, sRGB2Lin(EnvReflectionsTexture[ThreadID]), (mipLevel - 1) * (1.0 / 10.0));
+#	else
+	color.rgb = lerp(color.rgb, color.rgb * noise(uv * 5.0), (mipLevel - 1) * (1.0 / 10.0));
+#	endif
+
 	color.rgb = Lin2sRGB(color.rgb);
 	EnvInferredTexture[ThreadID] = color;
 }

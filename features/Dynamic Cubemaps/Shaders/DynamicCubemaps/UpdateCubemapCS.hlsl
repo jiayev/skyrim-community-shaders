@@ -97,6 +97,7 @@ cbuffer UpdateData : register(b1)
 {
 	float4 CameraData;
 	uint Reset;
+	float3 CameraPreviousPosAdjust2;
 }
 
 float3 WorldToView(float3 x, bool is_position = true, uint a_eyeIndex = 0)
@@ -178,11 +179,11 @@ float3 InverseProjectUVZ(float2 uv, float z)
 	}
 
 	float4 position = DynamicCubemapPosition[ThreadID];
-	position.xyz = (position.xyz + (CameraPreviousPosAdjust[0].xyz * 0.001)) - (CameraPosAdjust[0].xyz * 0.001);  // Remove adjustment, add new adjustment
+	position.xyz = (position.xyz + (CameraPreviousPosAdjust2.xyz * 0.001)) - (CameraPosAdjust[0].xyz * 0.001);  // Remove adjustment, add new adjustment
 	DynamicCubemapPosition[ThreadID] = position;
 
 	float4 color = DynamicCubemapRaw[ThreadID];
-	color *= max(0.01, 1.0 - length(position.xyz));
+	color *= lerp(1.0, 0.0, saturate(length(position.xyz)));
 
 	DynamicCubemap[ThreadID] = color;
 }

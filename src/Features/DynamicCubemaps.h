@@ -47,23 +47,31 @@ public:
 	{
 		float4 CameraData;
 		uint Reset;
-		float3 Delta;
+		float3 CameraPreviousPosAdjust;
 	};
 
 	ID3D11ComputeShader* updateCubemapCS = nullptr;
 	ConstantBuffer* updateCubemapCB = nullptr;
 
 	ID3D11ComputeShader* inferCubemapCS = nullptr;
+	ID3D11ComputeShader* inferCubemapReflectionsCS = nullptr;
+
 	Texture2D* envCaptureTexture = nullptr;
 	Texture2D* envCaptureRawTexture = nullptr;
 	Texture2D* envCapturePositionTexture = nullptr;
+	Texture2D* envInferredTexture = nullptr;
 
 	bool activeReflections = false;
-
 	bool resetCapture = true;
 
-	bool updateCapture = true;
-	bool updateIBL = true;
+	enum class NextTask
+	{
+		kCapture,
+		kInferrence,
+		kIrradiance
+	};
+
+	NextTask nextTask = NextTask::kCapture;
 
 	ID3D11UnorderedAccessView* cubemapUAV;
 
@@ -102,6 +110,7 @@ public:
 	virtual void ClearShaderCache() override;
 	ID3D11ComputeShader* GetComputeShaderUpdate();
 	ID3D11ComputeShader* GetComputeShaderInferrence();
+	ID3D11ComputeShader* GetComputeShaderInferrenceReflections();
 	ID3D11ComputeShader* GetComputeShaderSpecularIrradiance();
 
 	void UpdateCubemapCapture();
