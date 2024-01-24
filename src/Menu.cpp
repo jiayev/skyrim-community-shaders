@@ -64,6 +64,7 @@ void SetupImGuiStyle()
 }
 
 bool IsEnabled = false;
+ImVec4 TextColor = ImVec4{ 1.0f, 0.0f, 1.0f, 1.0f };
 
 Menu::~Menu()
 {
@@ -139,6 +140,7 @@ void Menu::DrawSettings()
 	ImGui::SetNextWindowSize({ 1000, 1000 }, ImGuiCond_FirstUseEver);
 	ImGui::SetNextWindowPos({ 0, 0 }, ImGuiCond_FirstUseEver);
 	if (ImGui::Begin(std::format("Skyrim Community Shaders {}", Plugin::VERSION.string(".")).c_str(), &IsEnabled)) {
+		ImGui::PushStyleColor(ImGuiCol_Text, TextColor);
 		auto& shaderCache = SIE::ShaderCache::Instance();
 
 		if (ImGui::BeginTable("##LeButtons", 4, ImGuiTableFlags_SizingStretchSame)) {
@@ -488,6 +490,7 @@ void Menu::DrawSettings()
 
 			ImGui::EndTable();
 		}
+		ImGui::PopStyleColor(1);
 	}
 
 	ImGui::End();
@@ -543,7 +546,7 @@ void Menu::DrawOverlay()
 
 		ImGui::End();
 	} else if (failed) {
-		ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 0, 0, 255));
+		TextColor = ImVec4{ 1.0f, 0.0f, 0.0f, 1.0f };
 		if (!hide) {
 			ImGui::SetNextWindowBgAlpha(1);
 			ImGui::SetNextWindowPos(ImVec2(10, 10));
@@ -552,12 +555,12 @@ void Menu::DrawOverlay()
 				return;
 			}
 
-			ImGui::Text("ERROR: %d shaders failed to compile. Check installation and CommunityShaders.log", failed, totalShaders);
+			ImGui::TextColored(TextColor, "ERROR: %d shaders failed to compile. Check installation and CommunityShaders.log", failed, totalShaders);
 			ImGui::End();
 		}
 	} else {
 		// Done compiling with no failures
-		ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
+		TextColor = ImVec4{ 1.0f, 1.0f, 1.0f, 1.0f };
 	}
 
 	if (IsEnabled) {
