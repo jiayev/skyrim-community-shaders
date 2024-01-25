@@ -87,17 +87,15 @@ float noise(in float3 p)
 								  : SV_DispatchThreadID) {
 	float3 uv = GetSamplingVector(ThreadID, EnvInferredTexture);
 	float4 color = EnvCaptureTexture.SampleLevel(LinearSampler, uv, 0);
-	uint mipLevel = 1;
-
-#	if !defined(REFLECTIONS)	
-	float k = 4.0;
-#	else
+	
+	float mipLevel = 1.0;
+	
+#	if defined(REFLECTIONS)
 	float k = 1.5;
+	float brightness = k;
 #	endif
 
-	float brightness = k;
-
-	while (color.w < 1.0 && mipLevel <= 10) {
+	while (color.w <= 1.0 && mipLevel <= 10) {
 		float4 tempColor = 0.0;
 		if (mipLevel < 10) {
 			tempColor = EnvCaptureTexture.SampleLevel(LinearSampler, uv, mipLevel);
@@ -110,25 +108,30 @@ float noise(in float3 p)
 			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, 0.0, 1.0), 9);
 		}
 
+#	if defined(REFLECTIONS)
 		tempColor *= brightness;
 		brightness *= k;
+#	endif
 
 		if ((color.w + tempColor.w) > 1.0) {
+			mipLevel -= color.w;
 			float alphaDiff = 1.0 - color.w;
 			tempColor.xyzw *= alphaDiff / tempColor.w;
 			color.xyzw += tempColor;
+			break;
 		} else {
 			color.xyzw += tempColor;
 		}
 		
-
 		mipLevel++;	
 	}
+	
+	mipLevel--;
 
 #	if defined(REFLECTIONS)
-	color.rgb = lerp(color.rgb, sRGB2Lin(EnvReflectionsTexture[ThreadID]), (mipLevel - 1) * (1.0 / 10.0));
+	color.rgb = lerp(color.rgb, sRGB2Lin(EnvReflectionsTexture[ThreadID]), saturate(mipLevel * (1.0 / 10.0)));
 #	else
-	color.rgb = lerp(color.rgb, color.rgb * noise(uv * 5.0), (mipLevel - 1) * (1.0 / 10.0));
+	color.rgb = lerp(color.rgb, max(float3(0, 0, 0), color.rgb * noise(uv * 5.0)), mipLevel * (1.0 / 10.0));
 #	endif
 
 	color.rgb = Lin2sRGB(color.rgb);
