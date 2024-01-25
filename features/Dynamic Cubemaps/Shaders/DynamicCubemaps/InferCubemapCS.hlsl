@@ -48,7 +48,6 @@ float3 sRGB2Lin(float3 color)
 	return color > 0.04045 ? pow(color / 1.055 + 0.055 / 1.055, 2.4) : color / 12.92;
 }
 
-
 float3 Lin2sRGB(float3 color)
 {
 	return color > 0.0031308 ? 1.055 * pow(color, 1.0 / 2.4) - 0.055 : 12.92 * color;
@@ -87,7 +86,7 @@ float noise(in float3 p)
 								  : SV_DispatchThreadID) {
 	float3 uv = GetSamplingVector(ThreadID, EnvInferredTexture);
 	float4 color = EnvCaptureTexture.SampleLevel(LinearSampler, uv, 0);
-	
+
 	float mipLevel = 1.0;
 	
 #	if defined(REFLECTIONS)
@@ -131,7 +130,7 @@ float noise(in float3 p)
 #	if defined(REFLECTIONS)
 	color.rgb = lerp(color.rgb, sRGB2Lin(EnvReflectionsTexture[ThreadID]), saturate(mipLevel * (1.0 / 10.0)));
 #	else
-	color.rgb = lerp(color.rgb, max(float3(0, 0, 0), color.rgb * noise(uv * 5.0)), mipLevel * (1.0 / 10.0));
+	color.rgb = lerp(color.rgb, max(float3(0.0, 0.0, 0.0), color.rgb * noise(uv * 5.0)), mipLevel * (1.0 / 10.0));
 #	endif
 
 	color.rgb = Lin2sRGB(color.rgb);
