@@ -309,6 +309,33 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct WndProcHandler_Hook
+	{
+		static LRESULT thunk(HWND a_hwnd, UINT a_msg, WPARAM a_wParam, LPARAM a_lParam)
+		{
+			if (a_msg == WM_KILLFOCUS) {
+				Menu::GetSingleton()->OnFocusLost();
+				auto& io = ImGui::GetIO();
+				io.ClearInputKeys();
+				io.ClearEventsQueue();
+			}
+			return func(a_hwnd, a_msg, a_wParam, a_lParam);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct RegisterClassA_Hook
+	{
+		static ATOM thunk(WNDCLASSA* a_wndClass)
+		{
+			WndProcHandler_Hook::func = reinterpret_cast<uintptr_t>(a_wndClass->lpfnWndProc);
+			a_wndClass->lpfnWndProc = &WndProcHandler_Hook::thunk;
+
+			return func(a_wndClass);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	void Install()
 	{
 		SKSE::AllocTrampoline(14);
@@ -329,6 +356,9 @@ namespace Hooks
 		stl::write_vfunc<0x2, BSImagespaceShaderISSAOCompositeSAO_SetupTechnique>(RE::VTABLE_BSImagespaceShaderISSAOCompositeSAO[0]);
 		stl::write_vfunc<0x2, BSImagespaceShaderISSAOCompositeFog_SetupTechnique>(RE::VTABLE_BSImagespaceShaderISSAOCompositeFog[0]);
 		stl::write_vfunc<0x2, BSImagespaceShaderISSAOCompositeSAOFog_SetupTechnique>(RE::VTABLE_BSImagespaceShaderISSAOCompositeSAOFog[0]);
+
+		logger::info("Hooking WndProcHandler");
+		stl::write_thunk_call_6<RegisterClassA_Hook>(REL::VariantID(75591, 77226, 0xDC4B90).address() + REL::VariantOffset(0x8E, 0x15C, 0x99).offset());
 
 		//logger::info("Hooking D3D11CreateDeviceAndSwapChain");
 		//*(FARPROC*)&ptrD3D11CreateDeviceAndSwapChain = GetProcAddress(GetModuleHandleA("d3d11.dll"), "D3D11CreateDeviceAndSwapChain");

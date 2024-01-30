@@ -944,7 +944,7 @@ void Menu::addToEventQueue(KeyEvent e)
 	_keyEventQueue.emplace_back(e);
 }
 
-void Menu::OnFocusLost()  //todo implement wndproc hook to catch WM_KILLFOCUS
+void Menu::OnFocusLost()
 {
 	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
 	_keyEventQueue.clear();
