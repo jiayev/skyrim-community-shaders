@@ -82,7 +82,7 @@ float3 GetWetnessAmbientSpecular(float3 N, float3 V, float roughness)
 	float3 Fr = max(1.0.xxx - roughness.xxx, 0.02) - 0.02;
 	float3 S = 0.02 + Fr * pow(1.0 - NoV, 5.0);
 
-	return specularIrradiance * (S * specularBRDF.x + specularBRDF.y);
+	return max(0, specularIrradiance * (S * specularBRDF.x + specularBRDF.y));
 }
 
 float3 GetWetnessSpecular(float3 N, float3 L, float3 V, float3 lightColor, float roughness)
