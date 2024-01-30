@@ -51,6 +51,22 @@ void WaterBlending::DrawSettings()
 
 		ImGui::TreePop();
 	}
+
+	ImGui::Spacing();
+	ImGui::Spacing();
+
+	if (ImGui::Button("Restore Defaults", { -1, 0 })) {
+		WaterBlending::GetSingleton()->RestoreDefaultSettings();
+	}
+	if (ImGui::IsItemHovered()) {
+		ImGui::BeginTooltip();
+		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		ImGui::Text(
+			"Restores the feature's settings back to their default values. "
+			"You will still need to Save Settings to make these changes permanent. ");
+		ImGui::PopTextWrapPos();
+		ImGui::EndTooltip();
+	}
 }
 
 void WaterBlending::Draw(const RE::BSShader* shader, const uint32_t)
@@ -111,6 +127,11 @@ void WaterBlending::Load(json& o_json)
 void WaterBlending::Save(json& o_json)
 {
 	o_json[GetName()] = settings;
+}
+
+void WaterBlending::RestoreDefaultSettings()
+{
+	settings = {};
 }
 
 bool WaterBlending::HasShaderDefine(RE::BSShader::Type)

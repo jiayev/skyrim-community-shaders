@@ -93,6 +93,8 @@ public:
 	virtual void Load(json& o_json);
 	virtual void Save(json& o_json);
 
+	virtual void RestoreDefaultSettings();
+
 	std::vector<std::string> iniVRCubeMapSettings{
 		{ "bAutoWaterSilhouetteReflections:Water" },  //IniSettings 0x1eaa018
 		{ "bForceHighDetailReflections:Water" },      //IniSettings 0x1eaa030

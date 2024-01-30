@@ -100,6 +100,22 @@ void GrassLighting::DrawSettings()
 
 		ImGui::TreePop();
 	}
+
+	ImGui::Spacing();
+	ImGui::Spacing();
+
+	if (ImGui::Button("Restore Defaults", { -1, 0 })) {
+		GrassLighting::GetSingleton()->RestoreDefaultSettings();
+	}
+	if (ImGui::IsItemHovered()) {
+		ImGui::BeginTooltip();
+		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		ImGui::Text(
+			"Restores the feature's settings back to their default values. "
+			"You will still need to Save Settings to make these changes permanent. ");
+		ImGui::PopTextWrapPos();
+		ImGui::EndTooltip();
+	}
 }
 
 void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
@@ -154,6 +170,11 @@ void GrassLighting::Load(json& o_json)
 void GrassLighting::Save(json& o_json)
 {
 	o_json[GetName()] = settings;
+}
+
+void GrassLighting::RestoreDefaultSettings()
+{
+	settings = {};
 }
 
 void GrassLighting::SetupResources()

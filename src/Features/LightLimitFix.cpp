@@ -157,6 +157,22 @@ void LightLimitFix::DrawSettings()
 
 		ImGui::TreePop();
 	}
+
+	ImGui::Spacing();
+	ImGui::Spacing();
+
+	if (ImGui::Button("Restore Defaults", { -1, 0 })) {
+		LightLimitFix::GetSingleton()->RestoreDefaultSettings();
+	}
+	if (ImGui::IsItemHovered()) {
+		ImGui::BeginTooltip();
+		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		ImGui::Text(
+			"Restores the feature's settings back to their default values. "
+			"You will still need to Save Settings to make these changes permanent. ");
+		ImGui::PopTextWrapPos();
+		ImGui::EndTooltip();
+	}
 }
 
 void LightLimitFix::SetupResources()
@@ -285,6 +301,11 @@ void LightLimitFix::Load(json& o_json)
 void LightLimitFix::Save(json& o_json)
 {
 	o_json[GetName()] = settings;
+}
+
+void LightLimitFix::RestoreDefaultSettings()
+{
+	settings = {};
 }
 
 void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass*)

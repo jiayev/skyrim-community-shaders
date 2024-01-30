@@ -163,6 +163,22 @@ void ExtendedMaterials::DrawSettings()
 
 		ImGui::TreePop();
 	}
+
+	ImGui::Spacing();
+	ImGui::Spacing();
+
+	if (ImGui::Button("Restore Defaults", { -1, 0 })) {
+		ExtendedMaterials::GetSingleton()->RestoreDefaultSettings();
+	}
+	if (ImGui::IsItemHovered()) {
+		ImGui::BeginTooltip();
+		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		ImGui::Text(
+			"Restores the feature's settings back to their default values. "
+			"You will still need to Save Settings to make these changes permanent. ");
+		ImGui::PopTextWrapPos();
+		ImGui::EndTooltip();
+	}
 }
 
 void ExtendedMaterials::ModifyLighting(const RE::BSShader*, const uint32_t)
@@ -241,6 +257,11 @@ void ExtendedMaterials::Load(json& o_json)
 void ExtendedMaterials::Save(json& o_json)
 {
 	o_json[GetName()] = settings;
+}
+
+void ExtendedMaterials::RestoreDefaultSettings()
+{
+	settings = {};
 }
 
 bool ExtendedMaterials::HasShaderDefine(RE::BSShader::Type shaderType)

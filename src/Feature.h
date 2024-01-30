@@ -24,6 +24,8 @@ struct Feature
 	virtual void Load(json& o_json);
 	virtual void Save(json& o_json) = 0;
 
+	virtual void RestoreDefaultSettings() = 0;
+
 	virtual bool ValidateCache(CSimpleIniA& a_ini);
 	virtual void WriteDiskCacheInfo(CSimpleIniA& a_ini);
 	virtual void ClearShaderCache() {}
