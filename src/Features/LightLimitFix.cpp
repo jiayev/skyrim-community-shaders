@@ -506,7 +506,7 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
 	if (settings.EnableParticleLights) {
 		if (auto shaderProperty = netimmerse_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty)) {
 			if (!shaderProperty->lightData) {
-				if (auto material = shaderProperty->material) {
+				if (auto material = shaderProperty->GetMaterial()) {
 					if (!material->sourceTexturePath.empty()) {
 						std::string textureName = material->sourceTexturePath.c_str();
 
