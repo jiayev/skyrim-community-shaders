@@ -20,5 +20,5 @@ float3 GetDynamicCubemap(float3 N, float3 V, float roughness, float3 F0, float c
 	float3 Fr = max(1.0.xxx - roughness.xxx, F0) - F0;
 	float3 S = Fr * pow(1.0 - NoV, 5.0);
 
-	return lerp(specularIrradiance * F0 + (specularIrradiance * (S * specularBRDF.x + specularBRDF.y)), specularIrradiance * ((F0 + S) * specularBRDF.x + specularBRDF.y), complexMaterial);
+	return lerp(max(0, specularIrradiance * F0 + (specularIrradiance * (S * specularBRDF.x + specularBRDF.y))), max(0, specularIrradiance * ((F0 + S) * specularBRDF.x + specularBRDF.y)), complexMaterial);
 }

@@ -522,7 +522,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	diffuseColor += lightsDiffuseColor;
 
-	float3 color = diffuseColor * baseColor.xyz * input.VertexColor.xyz;
+	float3 color = max(0, diffuseColor * baseColor.xyz * input.VertexColor.xyz);
 
 	if (complex) {
 		specularColor += lightsSpecularColor;

@@ -392,7 +392,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 			float4 ssrReflectionColor2 = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUv);
 			float4 ssrReflectionColor = lerp(ssrReflectionColor2, ssrReflectionColor1, SSRParams.y);
 
-			finalSsrReflectionColor = ssrReflectionColor.xyz;
+			finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
 			ssrFraction = saturate(ssrReflectionColor.w * (SSRParams.x * distanceFactor));
 		}
 #		endif
