@@ -64,7 +64,7 @@ void SetupImGuiStyle()
 }
 
 bool IsEnabled = false;
-ImVec4 TextColor = ImVec4{ 1.0f, 0.0f, 1.0f, 1.0f };
+ImVec4 TextColor = ImVec4{ 1.0f, 1.0f, 1.0f, 1.0f };
 
 Menu::~Menu()
 {
