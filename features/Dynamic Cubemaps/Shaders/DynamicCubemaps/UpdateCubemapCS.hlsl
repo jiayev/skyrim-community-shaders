@@ -169,7 +169,7 @@ float3 InverseProjectUVZ(float2 uv, float z)
 		if (linearDepth > 16.5) {  // First person
 			float3 color = ColorTexture[round(uv * textureDims)];
 			float4 output = float4(sRGB2Lin(color), 1.0);
-			float lerpFactor = 0.1;
+			float lerpFactor = 0.5;
 
 			DynamicCubemapRaw[ThreadID] = lerp(DynamicCubemapRaw[ThreadID], output, lerpFactor);
 			DynamicCubemap[ThreadID] = lerp(DynamicCubemap[ThreadID], output, lerpFactor);

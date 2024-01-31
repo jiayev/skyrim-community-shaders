@@ -27,6 +27,8 @@ public:
 		float PuddleRadius = 1.0f;
 		float PuddleMaxAngle = 0.95f;
 		float PuddleMinWetness = 0.85f;
+		float MinRainWetness = 0.65f;
+		float SkinWetness = 0.825f;
 	};
 
 	struct alignas(16) PerPass
@@ -34,6 +36,7 @@ public:
 		float Wetness;
 		DirectX::XMFLOAT3X4 DirectionalAmbientWS;
 		Settings settings;
+		float pad[2];
 	};
 
 	Settings settings;
