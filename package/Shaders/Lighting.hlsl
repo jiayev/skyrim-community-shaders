@@ -490,9 +490,9 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-    float4 Albedo : SV_Target0;
-    float4 MotionVectors : SV_Target1;
-    float4 ScreenSpaceNormals : SV_Target2;
+	float4 Albedo : SV_Target0;
+	float4 MotionVectors : SV_Target1;
+	float4 ScreenSpaceNormals : SV_Target2;
 #if defined(SNOW)
 	float2 SnowParameters : SV_Target3;
 #endif
@@ -1575,16 +1575,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float maxOcclusion = 1;
 	float minWetnessAngle = 0;
-	minWetnessAngle = saturate(max(minWetnessValue,worldSpaceNormal.z));
+	minWetnessAngle = saturate(max(minWetnessValue, worldSpaceNormal.z));
 
 	float rainWetness = perPassWetnessEffects[0].Wetness * minWetnessAngle;
 
-#	if defined(SKIN)
+#		if defined(SKIN)
 	rainWetness = perPassWetnessEffects[0].SkinWetness * perPassWetnessEffects[0].Wetness;
-#	endif
-#	if defined(HAIR)
+#		endif
+#		if defined(HAIR)
 	rainWetness = perPassWetnessEffects[0].SkinWetness * perPassWetnessEffects[0].Wetness * 0.8f;
-#	endif
+#		endif
 
 	wetness = max(shoreFactor * perPassWetnessEffects[0].MaxShoreWetness, rainWetness);
 	wetness *= nearFactor;
@@ -1594,11 +1594,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 puddleCoords = ((input.WorldPosition.xyz + CameraPosAdjust[0]) * 0.5 + 0.5) * 0.01 * perPassWetnessEffects[0].PuddleRadius;
 	float puddle = 0;
 	if (wetness > 0.0) {
-		puddle = noise(puddleCoords) * ((minWetnessAngle/perPassWetnessEffects[0].PuddleMaxAngle)/1.5) + 0.5; 
+		puddle = noise(puddleCoords) * ((minWetnessAngle / perPassWetnessEffects[0].PuddleMaxAngle) / 1.5) + 0.5;
 		puddle *= wetness;
 		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow && shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 			float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
-			puddle *= max(1-maxOcclusion,lerp(1.0, shadowColor.x, upAngle * 0.2));
+			puddle *= max(1 - maxOcclusion, lerp(1.0, shadowColor.x, upAngle * 0.2));
 		}
 	}
 
@@ -1723,7 +1723,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(WETNESS_EFFECTS)
 			if (waterRoughnessSpecular < 1.0)
-					wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirectionWS, worldSpaceViewDirection, sRGB2Lin(lightColor), waterRoughnessSpecular) * 0.4;
+				wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirectionWS, worldSpaceViewDirection, sRGB2Lin(lightColor), waterRoughnessSpecular) * 0.4;
 #		endif
 		}
 	}

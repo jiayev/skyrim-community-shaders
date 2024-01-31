@@ -11,9 +11,9 @@ struct PerPassWetnessEffects
 	float PuddleRadius;
 	float PuddleMaxAngle;
 	float PuddleMinWetness;
-    float MinRainWetness;
-    float SkinWetness;
-    float pad[2];
+	float MinRainWetness;
+	float SkinWetness;
+	float pad[2];
 };
 
 StructuredBuffer<PerPassWetnessEffects> perPassWetnessEffects : register(t22);

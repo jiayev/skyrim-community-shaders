@@ -36,7 +36,7 @@ void WetnessEffects::DrawSettings()
 		ImGui::SliderFloat("Shore Wetness", &settings.MaxShoreWetness, 0.0f, 1.0f);
 		ImGui::TreePop();
 	}
-	
+
 	ImGui::Spacing();
 	ImGui::Spacing();
 
