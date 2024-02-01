@@ -1,5 +1,7 @@
 #include "ExtendedMaterials.h"
 
+#include "Util.h"
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ExtendedMaterials::Settings,
 	EnableParallax,
@@ -30,15 +32,11 @@ void ExtendedMaterials::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Complex Material", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Complex Material", (bool*)&settings.EnableComplexMaterial);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Enables support for the Complex Material specification which makes use of the environment mask. "
 				"This includes parallax, as well as more realistic metals and specular reflections. "
 				"May lead to some warped textures on modded content which have an invalid alpha channel in their environment mask. ");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Spacing();
@@ -48,12 +46,8 @@ void ExtendedMaterials::DrawSettings()
 
 	if (ImGui::TreeNodeEx("Contact Refinement Parallax Mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Parallax", (bool*)&settings.EnableParallax);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables parallax on standard meshes made for parallax.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		if (ImGui::Checkbox("Enable Terrain", (bool*)&settings.EnableTerrain)) {
@@ -61,66 +55,42 @@ void ExtendedMaterials::DrawSettings()
 				DataLoaded();
 			}
 		}
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Enables terrain parallax using the alpha channel of each landscape texture. "
 				"Therefore, all landscape textures must support parallax for this effect to work properly. ");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Checkbox("Enable High Quality", (bool*)&settings.EnableHighQuality);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Doubles the sample count and approximates the intersection point using Parallax Occlusion Mapping. "
 				"Significantly improves the quality and removes aliasing. "
 				"TAA or the Skyrim Upscaler is recommended when using this option due to CRPM artifacts. ");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Spacing();
 		ImGui::Spacing();
 		ImGui::SliderInt("Max Distance", (int*)&settings.MaxDistance, 0, 4096);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("The furthest distance from the camera which uses parallax.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::SliderFloat("CRPM Range", &settings.CRPMRange, 0.0f, 1.0f);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("The percentage of the max distance which uses Contact Refinement Parallax Mapping (CRPM).");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::SliderFloat("Blend Range", &settings.BlendRange, 0.0f, settings.CRPMRange);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"The range that parallax blends from Parallax Occlusion Mapping (POM) to bump mapping, and bump mapping to nothing. "
 				"This value should be set as low as possible due to the performance impact of blending POM and relief mapping. ");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::SliderFloat("Height", &settings.Height, 0, 0.2f);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("The range between the highest and lowest point a surface can be offset by.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Spacing();
@@ -130,54 +100,26 @@ void ExtendedMaterials::DrawSettings()
 
 	if (ImGui::TreeNodeEx("Approximate Soft Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Shadows", (bool*)&settings.EnableShadows);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Enables cheap soft shadows when using parallax. "
 				"This applies to all directional and point lights. ");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Spacing();
 		ImGui::Spacing();
 		ImGui::TextWrapped("Modifying the shadow start and end fade can improve performance and hide obvious texture tiling.");
 		ImGui::SliderInt("Start Fade", (int*)&settings.ShadowsStartFade, 0, settings.ShadowsEndFade);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Distance shadows start to fade.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::SliderInt("End Fade", (int*)&settings.ShadowsEndFade, settings.ShadowsStartFade, 4096);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Distance shadows finish fading.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::TreePop();
-	}
-
-	ImGui::Spacing();
-	ImGui::Spacing();
-
-	if (ImGui::Button("Restore Defaults", { -1, 0 })) {
-		ExtendedMaterials::GetSingleton()->RestoreDefaultSettings();
-	}
-	if (ImGui::IsItemHovered()) {
-		ImGui::BeginTooltip();
-		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-		ImGui::Text(
-			"Restores the feature's settings back to their default values. "
-			"You will still need to Save Settings to make these changes permanent. ");
-		ImGui::PopTextWrapPos();
-		ImGui::EndTooltip();
 	}
 }
 

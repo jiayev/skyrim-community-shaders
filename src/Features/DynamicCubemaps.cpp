@@ -12,13 +12,9 @@ void DynamicCubemaps::DrawSettings()
 					if (auto setting = RE::INISettingCollection::GetSingleton()->GetSetting(settingName); setting) {
 						ImGui::TableNextColumn();
 						ImGui::Checkbox(settingName.c_str(), &setting->data.b);
-						if (ImGui::IsItemHovered()) {
-							ImGui::BeginTooltip();
-							ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+						if (auto _tt = Util::HoverTooltipWrapper()) {
 							//ImGui::Text(fmt::format(fmt::runtime("{} {0:x}"), settingName, &setting->data.b).c_str());
 							ImGui::Text(settingName.c_str());
-							ImGui::PopTextWrapPos();
-							ImGui::EndTooltip();
 						}
 					}
 				}
@@ -28,13 +24,9 @@ void DynamicCubemaps::DrawSettings()
 					bool* setting = reinterpret_cast<bool*>(address);
 					ImGui::TableNextColumn();
 					ImGui::Checkbox(settingName.c_str(), setting);
-					if (ImGui::IsItemHovered()) {
-						ImGui::BeginTooltip();
-						ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+					if (auto _tt = Util::HoverTooltipWrapper()) {
 						ImGui::Text(settingName.c_str());
 						//ImGui::Text(fmt::format(fmt::runtime("{} {0:x}"), settingName, address).c_str());
-						ImGui::PopTextWrapPos();
-						ImGui::EndTooltip();
 					}
 				}
 				ImGui::EndTable();

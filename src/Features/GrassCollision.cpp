@@ -18,52 +18,32 @@ void GrassCollision::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Grass Collision", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Grass Collision", (bool*)&settings.EnableGrassCollision);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Allows player collision to modify grass position.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Spacing();
 		ImGui::SliderFloat("Radius Multiplier", &settings.RadiusMultiplier, 0.0f, 8.0f);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Distance from collision centres to apply collision.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::SliderFloat("Max Distance from Player", &settings.maxDistance, 0.0f, 1500.0f);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Distance from player to apply collision (NPCs). 0 to disable NPC collisions.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::SliderFloat("Displacement Multiplier", &settings.DisplacementMultiplier, 0.0f, 32.0f);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Strength of each collision on grass position.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		if (ImGui::SliderInt("Calculation Frame Interval", (int*)&settings.frameInterval, 0, 30)) {
 			if (settings.frameInterval)  // increment so mod math works (e.g., skip 1 frame means frame % 2).
 				settings.frameInterval++;
 		}
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("How many frames to skip before calculating positions again. 0 means calculate every frame (most smooth/costly).");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::TreePop();
@@ -72,22 +52,6 @@ void GrassCollision::DrawSettings()
 		ImGui::Text(std::format("Active/Total Actors : {}/{}", activeActorCount, totalActorCount).c_str());
 		ImGui::Text(std::format("Total Collisions : {}", currentCollisionCount).c_str());
 		ImGui::TreePop();
-	}
-
-	ImGui::Spacing();
-	ImGui::Spacing();
-
-	if (ImGui::Button("Restore Defaults", { -1, 0 })) {
-		GrassCollision::GetSingleton()->RestoreDefaultSettings();
-	}
-	if (ImGui::IsItemHovered()) {
-		ImGui::BeginTooltip();
-		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-		ImGui::Text(
-			"Restores the feature's settings back to their default values. "
-			"You will still need to Save Settings to make these changes permanent. ");
-		ImGui::PopTextWrapPos();
-		ImGui::EndTooltip();
 	}
 }
 

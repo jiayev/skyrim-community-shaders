@@ -24,12 +24,8 @@ void WetnessEffects::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Wetness Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Wetness", (bool*)&settings.EnableWetnessEffects);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables a wetness effect near water and when it is raining.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::SliderFloat("Rain Wetness", &settings.MaxRainWetness, 0.0f, 1.0f);
@@ -43,13 +39,9 @@ void WetnessEffects::DrawSettings()
 	if (ImGui::TreeNodeEx("Advanced", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Min Rain Wetness", &settings.MinRainWetness, 0.0f, 0.9f);
 		ImGui::SliderFloat("Skin Wetness", &settings.SkinWetness, 0.0f, 1.0f);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"The level of wetness for character skin and hair during rain. ");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::SliderInt("Shore Range", (int*)&settings.ShoreRange, 1, 64);
@@ -58,22 +50,6 @@ void WetnessEffects::DrawSettings()
 		ImGui::SliderFloat("Puddle Min Wetness", &settings.PuddleMinWetness, 0.0f, 1.0f);
 
 		ImGui::TreePop();
-	}
-
-	ImGui::Spacing();
-	ImGui::Spacing();
-
-	if (ImGui::Button("Restore Defaults", { -1, 0 })) {
-		WetnessEffects::GetSingleton()->RestoreDefaultSettings();
-	}
-	if (ImGui::IsItemHovered()) {
-		ImGui::BeginTooltip();
-		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-		ImGui::Text(
-			"Restores the feature's settings back to their default values. "
-			"You will still need to Save Settings to make these changes permanent. ");
-		ImGui::PopTextWrapPos();
-		ImGui::EndTooltip();
 	}
 }
 

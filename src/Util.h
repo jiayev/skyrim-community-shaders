@@ -14,4 +14,21 @@ namespace Util
 	float TryGetWaterHeight(float offsetX, float offsetY);
 	void DumpSettingsOptions();
 	float4 GetCameraData();
+
+	/**
+	 * Usage:
+	 * if (auto _tt = Util::HoverTooltipWrapper()){
+	 *     ImGui::Text("What the tooltip says.");
+	 * }
+	*/
+	class HoverTooltipWrapper
+	{
+	private:
+		bool hovered;
+
+	public:
+		HoverTooltipWrapper();
+		~HoverTooltipWrapper();
+		inline operator bool() { return hovered; }
+	};
 }

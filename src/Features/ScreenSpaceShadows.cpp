@@ -22,21 +22,13 @@ void ScreenSpaceShadows::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Screen-Space Shadows", &settings.Enabled);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables screen-space shadows.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::SliderInt("Max Samples", (int*)&settings.MaxSamples, 1, 512);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Controls the accuracy of traced shadows.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Spacing();
@@ -46,21 +38,13 @@ void ScreenSpaceShadows::DrawSettings()
 
 	if (ImGui::TreeNodeEx("Blur Filter", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Blur Radius", &settings.BlurRadius, 0, 1);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Blur radius.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::SliderFloat("Blur Depth Dropoff", &settings.BlurDropoff, 0.001f, 0.1f);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Blur depth dropoff.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Spacing();
@@ -70,29 +54,17 @@ void ScreenSpaceShadows::DrawSettings()
 
 	if (ImGui::TreeNodeEx("Near Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Near Distance", &settings.NearDistance, 0, 128);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Near Shadow Distance.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::SliderFloat("Near Thickness", &settings.NearThickness, 0, 128);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Near Shadow Thickness.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 		ImGui::SliderFloat("Near Hardness", &settings.NearHardness, 0, 64);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Near Shadow Hardness.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Spacing();
@@ -102,47 +74,19 @@ void ScreenSpaceShadows::DrawSettings()
 
 	if (ImGui::TreeNodeEx("Far Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Far Distance Scale", &settings.FarDistanceScale, 0, 1);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Far Shadow Distance Scale.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 		ImGui::SliderFloat("Far Thickness Scale", &settings.FarThicknessScale, 0, 1);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Far Shadow Thickness Scale.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 		ImGui::SliderFloat("Far Hardness", &settings.FarHardness, 0, 64);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Far Shadow Hardness.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::TreePop();
-	}
-
-	ImGui::Spacing();
-	ImGui::Spacing();
-
-	if (ImGui::Button("Restore Defaults", { -1, 0 })) {
-		ScreenSpaceShadows::GetSingleton()->RestoreDefaultSettings();
-	}
-	if (ImGui::IsItemHovered()) {
-		ImGui::BeginTooltip();
-		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-		ImGui::Text(
-			"Restores the feature's settings back to their default values. "
-			"You will still need to Save Settings to make these changes permanent. ");
-		ImGui::PopTextWrapPos();
-		ImGui::EndTooltip();
 	}
 }
 

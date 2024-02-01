@@ -28,68 +28,40 @@ void LightLimitFix::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Particle Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables Particle Lights.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Significantly improves performance by not rendering empty textures. Only disable if you are encountering issues.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Adds particle lights to the player light level, so that NPCs can detect them for stealth and gameplay.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Checkbox("Enable Optimization", &settings.EnableParticleLightsOptimization);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Merges vertices which are close enough to each other to significantly improve performance.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 		ImGui::SliderInt("Optimisation Cluster Radius", (int*)&settings.ParticleLightsOptimisationClusterRadius, 1, 64);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Radius to use for clustering lights.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 		ImGui::Spacing();
 		ImGui::Spacing();
 
 		ImGui::TextWrapped("Particle Lights Color");
 		ImGui::SliderFloat("Brightness", &settings.ParticleLightsBrightness, 0.0, 1.0, "%.2f");
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Particle light brightness.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::SliderFloat("Saturation", &settings.ParticleLightsSaturation, 1.0, 2.0, "%.2f");
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Particle light saturation.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Spacing();
@@ -99,21 +71,13 @@ void LightLimitFix::DrawSettings()
 
 	if (ImGui::TreeNodeEx("Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Contact Shadows", &settings.EnableContactShadows);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("All lights cast small shadows. Performance impact.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Checkbox("Enable First-Person Shadows", &settings.EnableFirstPersonShadows);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Torches and light spells will cast shadows in first-person. Performance impact.");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		ImGui::Spacing();
@@ -123,26 +87,18 @@ void LightLimitFix::DrawSettings()
 
 	if (ImGui::TreeNodeEx("Light Limit Visualization", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Lights Visualisation", &settings.EnableLightsVisualisation);
-		if (ImGui::IsItemHovered()) {
-			ImGui::BeginTooltip();
-			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables visualization of the light limit\n");
-			ImGui::PopTextWrapPos();
-			ImGui::EndTooltip();
 		}
 
 		{
 			static const char* comboOptions[] = { "Light Limit", "Strict Lights Count", "Clustered Lights Count" };
 			ImGui::Combo("Lights Visualisation Mode", (int*)&settings.LightsVisualisationMode, comboOptions, 3);
-			if (ImGui::IsItemHovered()) {
-				ImGui::BeginTooltip();
-				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					" - Visualise the light limit. Red when the \"strict\" light limit is reached (portal-strict lights). "
 					" - Visualise the number of strict lights. "
 					" - Visualise the number of clustered lights. ");
-				ImGui::PopTextWrapPos();
-				ImGui::EndTooltip();
 			}
 		}
 
@@ -156,22 +112,6 @@ void LightLimitFix::DrawSettings()
 		ImGui::Text(std::format("Particle Lights Detection Count : {}", particleLightsDetectionHits).c_str());
 
 		ImGui::TreePop();
-	}
-
-	ImGui::Spacing();
-	ImGui::Spacing();
-
-	if (ImGui::Button("Restore Defaults", { -1, 0 })) {
-		LightLimitFix::GetSingleton()->RestoreDefaultSettings();
-	}
-	if (ImGui::IsItemHovered()) {
-		ImGui::BeginTooltip();
-		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-		ImGui::Text(
-			"Restores the feature's settings back to their default values. "
-			"You will still need to Save Settings to make these changes permanent. ");
-		ImGui::PopTextWrapPos();
-		ImGui::EndTooltip();
 	}
 }
 

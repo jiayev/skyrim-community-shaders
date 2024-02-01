@@ -164,31 +164,23 @@ void Menu::DrawSettings()
 					}
 				}
 			}
-			if (ImGui::IsItemHovered()) {
-				ImGui::BeginTooltip();
-				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					"The Shader Cache is the collection of compiled shaders which replace the vanilla shaders at runtime. "
 					"Clearing the shader cache will mean that shaders are recompiled only when the game re-encounters them. "
 					"This is only needed for hot-loading shaders for development purposes. ");
-				ImGui::PopTextWrapPos();
-				ImGui::EndTooltip();
 			}
 
 			ImGui::TableNextColumn();
 			if (ImGui::Button("Clear Disk Cache", { -1, 0 })) {
 				shaderCache.DeleteDiskCache();
 			}
-			if (ImGui::IsItemHovered()) {
-				ImGui::BeginTooltip();
-				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					"The Disk Cache is a collection of compiled shaders on disk, which are automatically created when shaders are added to the Shader Cache. "
 					"If you do not have a Disk Cache, or it is outdated or invalid, you will see \"Compiling Shaders\" in the upper-left corner. "
 					"After this has completed you will no longer see this message apart from when loading from the Disk Cache. "
 					"Only delete the Disk Cache manually if you are encountering issues. ");
-				ImGui::PopTextWrapPos();
-				ImGui::EndTooltip();
 			}
 
 			if (shaderCache.GetFailedTasks()) {
@@ -197,16 +189,12 @@ void Menu::DrawSettings()
 				if (ImGui::Button("Toggle Error Message", { -1, 0 })) {
 					shaderCache.ToggleErrorMessages();
 				}
-				if (ImGui::IsItemHovered()) {
-					ImGui::BeginTooltip();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text(
 						"Hide or show the shader failure message. "
 						"Your installation is broken and will likely see errors in game. "
 						"Please double check you have updated all features and that your load order is correct. "
 						"See CommunityShaders.log for details and check the NexusMods page or Discord server. ");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
 				}
 			}
 			ImGui::EndTable();
@@ -221,12 +209,8 @@ void Menu::DrawSettings()
 				if (ImGui::Checkbox("Enable Shaders", &useCustomShaders)) {
 					shaderCache.SetEnabled(useCustomShaders);
 				}
-				if (ImGui::IsItemHovered()) {
-					ImGui::BeginTooltip();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text("Disabling this effectively disables all features.");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
 				}
 
 				bool useDiskCache = shaderCache.IsDiskCache();
@@ -234,12 +218,8 @@ void Menu::DrawSettings()
 				if (ImGui::Checkbox("Enable Disk Cache", &useDiskCache)) {
 					shaderCache.SetDiskCache(useDiskCache);
 				}
-				if (ImGui::IsItemHovered()) {
-					ImGui::BeginTooltip();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text("Disabling this stops shaders from being loaded from disk, as well as stops shaders from being saved to it.");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
 				}
 
 				bool useAsync = shaderCache.IsAsync();
@@ -247,12 +227,8 @@ void Menu::DrawSettings()
 				if (ImGui::Checkbox("Enable Async", &useAsync)) {
 					shaderCache.SetAsync(useAsync);
 				}
-				if (ImGui::IsItemHovered()) {
-					ImGui::BeginTooltip();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text("Skips a shader being replaced if it hasn't been compiled yet. Also makes compilation blazingly fast!");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
 				}
 
 				ImGui::EndTable();
@@ -321,12 +297,8 @@ void Menu::DrawSettings()
 			if (ImGui::Checkbox("Dump Shaders", &useDump)) {
 				shaderCache.SetDump(useDump);
 			}
-			if (ImGui::IsItemHovered()) {
-				ImGui::BeginTooltip();
-				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Dump shaders at startup. This should be used only when reversing shaders. Normal users don't need this.");
-				ImGui::PopTextWrapPos();
-				ImGui::EndTooltip();
 			}
 			spdlog::level::level_enum logLevel = State::GetSingleton()->GetLogLevel();
 			const char* items[] = {
@@ -343,46 +315,30 @@ void Menu::DrawSettings()
 				ImGui::SameLine();
 				State::GetSingleton()->SetLogLevel(static_cast<spdlog::level::level_enum>(item_current));
 			}
-			if (ImGui::IsItemHovered()) {
-				ImGui::BeginTooltip();
-				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Log level. Trace is most verbose. Default is info.");
-				ImGui::PopTextWrapPos();
-				ImGui::EndTooltip();
 			}
 
 			auto& shaderDefines = State::GetSingleton()->shaderDefinesString;
 			if (ImGui::InputText("Shader Defines", &shaderDefines)) {
 				State::GetSingleton()->SetDefines(shaderDefines);
 			}
-			if (ImGui::IsItemHovered()) {
-				ImGui::BeginTooltip();
-				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Defines for Shader Compiler. Semicolon \";\" separated. Clear with space. Rebuild shaders after making change. Compute Shaders require a restart to recompile.");
-				ImGui::PopTextWrapPos();
-				ImGui::EndTooltip();
 			}
 			ImGui::Spacing();
 			ImGui::SliderInt("Compiler Threads", &shaderCache.compilationThreadCount, 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
-			if (ImGui::IsItemHovered()) {
-				ImGui::BeginTooltip();
-				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					"Number of threads to use to compile shaders. "
 					"The more threads the faster compilation will finish but may make the system unresponsive. ");
-				ImGui::PopTextWrapPos();
-				ImGui::EndTooltip();
 			}
 			ImGui::SliderInt("Background Compiler Threads", &shaderCache.backgroundCompilationThreadCount, 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
-			if (ImGui::IsItemHovered()) {
-				ImGui::BeginTooltip();
-				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					"Number of threads to use to compile shaders while playing game. "
 					"This is activated if the startup compilation is skipped. "
 					"The more threads the faster compilation will finish but may make the system unresponsive. ");
-				ImGui::PopTextWrapPos();
-				ImGui::EndTooltip();
 			}
 
 			if (ImGui::SliderInt("Test Interval", (int*)&testInterval, 0, 10)) {
@@ -398,16 +354,12 @@ void Menu::DrawSettings()
 					logger::info("Setting new interval {}.", testInterval);
 				}
 			}
-			if (ImGui::IsItemHovered()) {
-				ImGui::BeginTooltip();
-				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					"Sets number of seconds before toggling between default USER and TEST config. "
 					"0 disables. Non-zero will enable testing mode. "
 					"Enabling will save current settings as TEST config. "
 					"This has no impact if no settings are changed. ");
-				ImGui::PopTextWrapPos();
-				ImGui::EndTooltip();
 			}
 			if (ImGui::Button("Dump Ini Settings", { -1, 0 })) {
 				Util::DumpSettingsOptions();
@@ -417,16 +369,12 @@ void Menu::DrawSettings()
 				if (ImGui::Button(blockingButtonString.c_str(), { -1, 0 })) {
 					shaderCache.DisableShaderBlocking();
 				}
-				if (ImGui::IsItemHovered()) {
-					ImGui::BeginTooltip();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text(
 						"Stop blocking Community Shaders shader. "
 						"Blocking is helpful when debugging shader errors in game to determine which shader has issues. "
 						"Blocking is enabled if in developer mode and pressing PAGEUP and PAGEDOWN. "
 						"Specific shader will be printed to logfile. ");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
 				}
 			}
 			if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -476,14 +424,23 @@ void Menu::DrawSettings()
 			}
 
 			ImGui::TableNextColumn();
+
+			bool shownFeature = selectedFeature < featureList.size();
+			if (shownFeature) {
+				if (ImGui::Button("Restore Defaults", { -1, 0 })) {
+					featureList[selectedFeature]->RestoreDefaultSettings();
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text(
+						"Restores the feature's settings back to their default values. "
+						"You will still need to Save Settings to make these changes permanent. ");
+				}
+			}
+
 			if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-				bool shownFeature = false;
-				for (size_t i = 0; i < featureList.size(); i++)
-					if (i == selectedFeature) {
-						shownFeature = true;
-						featureList[i]->DrawSettings();
-					}
-				if (!shownFeature)
+				if (shownFeature)
+					featureList[selectedFeature]->DrawSettings();
+				else
 					ImGui::TextDisabled("Please select a feature on the left.");
 			}
 			ImGui::EndChild();
