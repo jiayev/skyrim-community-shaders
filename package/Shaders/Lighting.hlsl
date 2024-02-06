@@ -1591,8 +1591,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float minWetnessAngle = 0;
 	minWetnessAngle = saturate(max(minWetnessValue, worldSpaceNormal.z));
 
-	float rainWetness = perPassWetnessEffects[0].Wetness * minWetnessAngle;
-
+	float rainWetness = perPassWetnessEffects[0].Wetness * minWetnessAngle * perPassWetnessEffects[0].MaxRainWetness;
+	float puddleWetness = perPassWetnessEffects[0].PuddleWetness * minWetnessAngle * perPassWetnessEffects[0].MaxRainWetness;
 #		if defined(SKIN)
 	rainWetness = perPassWetnessEffects[0].SkinWetness * perPassWetnessEffects[0].Wetness;
 #		endif
@@ -1606,9 +1606,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 wetnessNormal = worldSpaceNormal;
 
 	float3 puddleCoords = ((input.WorldPosition.xyz + CameraPosAdjust[0]) * 0.5 + 0.5) * 0.01 * perPassWetnessEffects[0].PuddleRadius;
-	float puddle = 0;
-	if (wetness > 0.0) {
+	float puddle = wetness;
+	if (wetness > 0.0 || puddleWetness > 0) {
+#		if !defined(SKINNED)
 		puddle = noise(puddleCoords) * ((minWetnessAngle / perPassWetnessEffects[0].PuddleMaxAngle) / 1.5) + 0.5;
+#		endif
+		wetness = lerp(wetness, puddleWetness, saturate(puddle - 0.25));
 		puddle *= wetness;
 		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow && shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 			float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));

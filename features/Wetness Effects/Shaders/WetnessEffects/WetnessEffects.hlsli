@@ -3,6 +3,7 @@
 struct PerPassWetnessEffects
 {
 	float Wetness;
+	float PuddleWetness;
 	row_major float3x4 DirectionalAmbientWS;
 	uint EnableWetnessEffects;
 	float MaxRainWetness;
@@ -13,7 +14,7 @@ struct PerPassWetnessEffects
 	float PuddleMinWetness;
 	float MinRainWetness;
 	float SkinWetness;
-	float pad[2];
+	float WeatherTransitionSpeed;
 };
 
 StructuredBuffer<PerPassWetnessEffects> perPassWetnessEffects : register(t22);
