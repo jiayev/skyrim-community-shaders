@@ -1005,6 +1005,10 @@ float2 ComputeTriplanarUV(float3 InputPosition)
 #		include "WetnessEffects/WetnessEffects.hlsli"
 #	endif
 
+#	if defined(CLOUD_SHADOWS)
+#		include "CloudShadows/CloudShadows.hlsli"
+#	endif
+
 PS_OUTPUT main(PS_INPUT input, bool frontFace
 			   : SV_IsFrontFace)
 {
@@ -1441,6 +1445,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 dirLightColor = DirLightColor.xyz;
 	float selfShadowFactor = 1.0f;
 
+	float3 normalizedDirLightDirectionWS = DirLightDirection;
+#	if ((defined(SKINNED) || !defined(MODELSPACENORMALS)) && !defined(DRAW_IN_WORLDSPACE))
+	normalizedDirLightDirectionWS = lerp(normalize(mul(input.World[eyeIndex], float4(DirLightDirection, 0))), normalizedDirLightDirectionWS, input.WorldSpace);
+	// temp fix for tree barks
+	normalizedDirLightDirectionWS = any(isnan(normalizedDirLightDirectionWS)) ? DirLightDirection : normalizedDirLightDirectionWS;
+#	endif
+
+#	if defined(CLOUD_SHADOWS)
+	float3 cloudShadowMult = 1.0;
+	if (perPassCloudShadow[0].EnableCloudShadows && !lightingData[0].Reflections) {
+		cloudShadowMult = getCloudShadowMult(input.WorldPosition.xyz, normalizedDirLightDirectionWS, SampColorSampler);
+		dirLightColor *= cloudShadowMult;
+	}
+#	endif
+
 	float3 nsDirLightColor = dirLightColor;
 
 	if ((shaderDescriptors[0].PixelShaderDescriptor & _DefShadow) && (shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir))
@@ -1519,7 +1538,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	screenSpaceNormal = normalize(screenSpaceNormal);
 
 	float3 worldSpaceNormal = normalize(mul(CameraViewInverse[eyeIndex], float4(screenSpaceNormal, 0)));
-	float3 normalizedDirLightDirectionWS = DirLightDirection;
 
 #	if (defined(SKINNED) || !defined(MODELSPACENORMALS))
 	float3 vertexNormal = tbnTr[2];
@@ -1532,10 +1550,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	screenSpaceVertexNormal = normalize(screenSpaceVertexNormal);
 
 	float3 worldSpaceVertexNormal = normalize(mul(CameraViewInverse[eyeIndex], float4(screenSpaceVertexNormal, 0)));
-#		endif
-
-#		if (!defined(DRAW_IN_WORLDSPACE))
-	normalizedDirLightDirectionWS = lerp(normalize(mul(input.World[eyeIndex], float4(DirLightDirection, 0))), normalizedDirLightDirectionWS, input.WorldSpace);
 #		endif
 #	endif
 
@@ -1850,6 +1864,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 	float3 directionalAmbientColor = mul(DirectionalAmbient, modelNormal);
+#	if defined(CLOUD_SHADOWS)
+	if (perPassCloudShadow[0].EnableCloudShadows && !lightingData[0].Reflections)
+		directionalAmbientColor *= lerp(1.0, cloudShadowMult, perPassCloudShadow[0].AbsorptionAmbient);
+#	endif
 	diffuseColor = directionalAmbientColor + emitColor.xyz + diffuseColor;
 
 #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
@@ -1935,7 +1953,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 #		if defined(CPM_AVAILABLE) && defined(ENVMAP)
+#			if defined(DYNAMIC_CUBEMAPS)
 	vertexColor += envColor * lerp(complexSpecular, 1.0, dynamicCubemap) * diffuseColor;
+#			else
+	vertexColor += envColor * complexSpecular * diffuseColor;
+#			endif
 #		else
 	vertexColor += envColor * diffuseColor;
 #		endif
