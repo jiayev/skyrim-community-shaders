@@ -1,17 +1,10 @@
 #include "Common/Color.hlsl"
 #include "Common/FrameBuffer.hlsl"
+#include "Common/LightingData.hlsl"
 #include "Common/MotionBlur.hlsl"
 #include "Common/Permutation.hlsl"
 
 #define PI 3.1415927
-
-struct LightingData
-{
-	float WaterHeight[25];
-	bool Reflections;
-};
-
-StructuredBuffer<LightingData> lightingData : register(t126);
 
 #if (defined(TREE_ANIM) || defined(LANDSCAPE)) && !defined(VC)
 #	define VC
