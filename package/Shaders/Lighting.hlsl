@@ -483,9 +483,9 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-    float4 Albedo : SV_Target0;
-    float4 MotionVectors : SV_Target1;
-    float4 ScreenSpaceNormals : SV_Target2;
+	float4 Albedo : SV_Target0;
+	float4 MotionVectors : SV_Target1;
+	float4 ScreenSpaceNormals : SV_Target2;
 #if defined(SNOW)
 	float2 SnowParameters : SV_Target3;
 #endif
@@ -1608,7 +1608,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if !defined(SKINNED)
 		puddle = noise(puddleCoords) * ((minWetnessAngle / perPassWetnessEffects[0].PuddleMaxAngle) * perPassWetnessEffects[0].MaxPuddleWetness * 0.25) + 0.5;
 		wetness = lerp(wetness, puddleWetness, saturate(puddle - 0.25));
-#endif
+#		endif
 		puddle *= wetness;
 		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow && shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 			float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
