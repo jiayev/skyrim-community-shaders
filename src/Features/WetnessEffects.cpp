@@ -24,6 +24,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	WetnessEffects::Settings,
 	EnableWetnessEffects,
 	MaxRainWetness,
+	MaxPuddleWetness,
 	MaxShoreWetness,
 	ShoreRange,
 	PuddleRadius,
@@ -42,6 +43,7 @@ void WetnessEffects::DrawSettings()
 		}
 
 		ImGui::SliderFloat("Rain Wetness", &settings.MaxRainWetness, 0.0f, 1.0f);
+		ImGui::SliderFloat("Puddle Wetness", &settings.MaxPuddleWetness, 0.0f, 4.0f);
 		ImGui::SliderFloat("Shore Wetness", &settings.MaxShoreWetness, 0.0f, 1.0f);
 		ImGui::TreePop();
 	}
@@ -51,17 +53,47 @@ void WetnessEffects::DrawSettings()
 
 	if (ImGui::TreeNodeEx("Advanced", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Weather transition speed", &settings.WeatherTransitionSpeed, 0.5f, 5.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"How fast wetness appears when raining and how quickly it dries "
+				"after rain has stopped. ");
+		}
+
 		ImGui::SliderFloat("Min Rain Wetness", &settings.MinRainWetness, 0.0f, 0.9f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"The minimum amount an object gets wet from rain. ");
+		}
+
 		ImGui::SliderFloat("Skin Wetness", &settings.SkinWetness, 0.0f, 1.0f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"The level of wetness for character skin and hair during rain. ");
+				"How wet character skin and hair get during rain. ");
 		}
 
 		ImGui::SliderInt("Shore Range", (int*)&settings.ShoreRange, 1, 64);
-		ImGui::SliderFloat("Puddle Radius", &settings.PuddleRadius, 0.0f, 3.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"The maximum distance from a body of water that Shore Wetness affects. ");
+		}
+
+		ImGui::SliderFloat("Puddle Radius", &settings.PuddleRadius, 0.3f, 3.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"The radius that is used to determine puddle size and location. ");
+		}
+
 		ImGui::SliderFloat("Puddle Max Angle", &settings.PuddleMaxAngle, 0.0f, 1.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"How flat a surface needs to be for puddles to form on it. ");
+		}
+
 		ImGui::SliderFloat("Puddle Min Wetness", &settings.PuddleMinWetness, 0.0f, 1.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"The wetness value at which puddles start to form. ");
+		}
 
 		ImGui::TreePop();
 	}
