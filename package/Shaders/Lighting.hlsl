@@ -966,6 +966,10 @@ float2 ComputeTriplanarUV(float3 InputPosition)
 #		undef WETNESS_EFFECTS
 #	endif
 
+#	if defined(EYE)
+#		undef WETNESS_EFFECTS
+#	endif
+
 #	if defined(COMPLEX_PARALLAX_MATERIALS) && !defined(LOD) && (defined(PARALLAX) || defined(LANDSCAPE) || defined(ENVMAP))
 #		define CPM_AVAILABLE
 #	endif
@@ -1585,7 +1589,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	minWetnessAngle = saturate(max(minWetnessValue, worldSpaceNormal.z));
 
 	float rainWetness = perPassWetnessEffects[0].Wetness * minWetnessAngle * perPassWetnessEffects[0].MaxRainWetness;
-	float puddleWetness = perPassWetnessEffects[0].PuddleWetness * minWetnessAngle * perPassWetnessEffects[0].MaxRainWetness;
+	float puddleWetness = perPassWetnessEffects[0].PuddleWetness * minWetnessAngle;
 #		if defined(SKIN)
 	rainWetness = perPassWetnessEffects[0].SkinWetness * perPassWetnessEffects[0].Wetness;
 #		endif
@@ -1598,13 +1602,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 wetnessNormal = worldSpaceNormal;
 
-	float3 puddleCoords = ((input.WorldPosition.xyz + CameraPosAdjust[0]) * 0.5 + 0.5) * 0.01 * perPassWetnessEffects[0].PuddleRadius;
+	float3 puddleCoords = ((input.WorldPosition.xyz + CameraPosAdjust[0]) * 0.5 + 0.5) * 0.01 * (1 / perPassWetnessEffects[0].PuddleRadius);
 	float puddle = wetness;
 	if (wetness > 0.0 || puddleWetness > 0) {
 #		if !defined(SKINNED)
-		puddle = noise(puddleCoords) * ((minWetnessAngle / perPassWetnessEffects[0].PuddleMaxAngle) / 1.5) + 0.5;
-#		endif
+		puddle = noise(puddleCoords) * ((minWetnessAngle / perPassWetnessEffects[0].PuddleMaxAngle) * perPassWetnessEffects[0].MaxPuddleWetness * 0.25) + 0.5;
 		wetness = lerp(wetness, puddleWetness, saturate(puddle - 0.25));
+#		endif
 		puddle *= wetness;
 		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow && shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 			float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));

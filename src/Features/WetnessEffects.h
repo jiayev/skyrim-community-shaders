@@ -22,6 +22,7 @@ public:
 	{
 		uint EnableWetnessEffects = true;
 		float MaxRainWetness = 1.0f;
+		float MaxPuddleWetness = 2.667f;
 		float MaxShoreWetness = 0.5f;
 		uint ShoreRange = 32;
 		float PuddleRadius = 1.0f;
@@ -38,6 +39,7 @@ public:
 		float PuddleWetness;
 		DirectX::XMFLOAT3X4 DirectionalAmbientWS;
 		Settings settings;
+		float pad[3];
 	};
 
 	Settings settings;
