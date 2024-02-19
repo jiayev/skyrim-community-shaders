@@ -1710,7 +1710,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			float3 normalizedLightDirection = normalize(lightDirection);
 			float3 normalizedLightDirectionWS = normalizedLightDirection;
 #		if (defined(SKINNED) || !defined(MODELSPACENORMALS)) && !defined(DRAW_IN_WORLDSPACE)
-			normalizedLightDirectionWS = lerp(normalize(mul(input.World[eyeIndex], float4(normalizedLightDirection, 0))), normalizedLightDirectionWS, input.WorldSpace);
+			if (!input.WorldSpace)
+				normalizedLightDirectionWS = normalize(mul(input.World[eyeIndex], float4(normalizedLightDirection, 0)));
 #		endif
 
 #		if defined(LIGHT_LIMIT_FIX)
