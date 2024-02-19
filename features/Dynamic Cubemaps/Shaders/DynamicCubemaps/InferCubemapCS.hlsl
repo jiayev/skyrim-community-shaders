@@ -89,7 +89,7 @@ float noise(in float3 p)
 
 	float mipLevel = 1.0;
 
-#if defined(REFLECTIONS)
+#if !defined(REFLECTIONS)
 	float k = 1.5;
 	float brightness = k;
 #endif
@@ -107,7 +107,7 @@ float noise(in float3 p)
 			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, 0.0, 1.0), 9);
 		}
 
-#if defined(REFLECTIONS)
+#if !defined(REFLECTIONS)
 		tempColor *= brightness;
 		brightness *= k;
 #endif
@@ -134,5 +134,5 @@ float noise(in float3 p)
 #endif
 
 	color.rgb = Lin2sRGB(color.rgb);
-	EnvInferredTexture[ThreadID] = color;
+	EnvInferredTexture[ThreadID] = max(0, color);
 }

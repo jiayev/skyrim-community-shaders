@@ -8,7 +8,10 @@
 #include "Features/GrassLighting.h"
 #include "Features/LightLimitFix.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/TerrainBlending.h"
 #include "Features/WaterBlending.h"
+#include "Features/WaterCaustics.h"
+#include "Features/WaterParallax.h"
 #include "Features/WetnessEffects.h"
 
 void Feature::Load(json&)
@@ -83,7 +86,10 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		WetnessEffects::GetSingleton(),
 		LightLimitFix::GetSingleton(),
 		DynamicCubemaps::GetSingleton(),
-		CloudShadows::GetSingleton()
+		CloudShadows::GetSingleton(),
+		TerrainBlending::GetSingleton(),
+		WaterParallax::GetSingleton(),
+		WaterCaustics::GetSingleton()
 	};
 
 	static std::vector<Feature*> featuresVR = {
@@ -92,7 +98,9 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		GrassCollision::GetSingleton(),
 		ExtendedMaterials::GetSingleton(),
 		WetnessEffects::GetSingleton(),
-		LightLimitFix::GetSingleton()
+		LightLimitFix::GetSingleton(),
+		TerrainBlending::GetSingleton(),
+		WaterCaustics::GetSingleton()
 	};
 
 	return REL::Module::IsVR() ? featuresVR : features;

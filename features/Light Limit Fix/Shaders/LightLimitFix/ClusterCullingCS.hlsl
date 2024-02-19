@@ -1,5 +1,10 @@
 #include "Common.hlsli"
 
+cbuffer PerFrame : register(b0)
+{
+	uint LightCount;
+}
+
 //references
 //https://github.com/pezcode/Cluster
 
@@ -14,7 +19,6 @@ groupshared StructuredLight sharedLights[GROUP_SIZE];
 
 bool LightIntersectsCluster(StructuredLight light, ClusterAABB cluster, int eyeIndex = 0)
 {
-	// For now, only use left eye position
 	float3 closest = max(cluster.minPoint, min(light.positionVS[eyeIndex].xyz, cluster.maxPoint)).xyz;
 
 	float3 dist = closest - light.positionVS[eyeIndex].xyz;
@@ -41,17 +45,14 @@ bool LightIntersectsCluster(StructuredLight light, ClusterAABB cluster, int eyeI
 	ClusterAABB cluster = clusters[clusterIndex];
 
 	uint lightOffset = 0;
-	uint lightCount, dummy;
-	lights.GetDimensions(lightCount, dummy);
+	uint lightCount = LightCount;
 
 	while (lightOffset < lightCount) {
 		uint batchSize = min(GROUP_SIZE, lightCount - lightOffset);
 
 		if (groupIndex < batchSize) {
 			uint lightIndex = lightOffset + groupIndex;
-
 			StructuredLight light = lights[lightIndex];
-
 			sharedLights[groupIndex] = light;
 		}
 

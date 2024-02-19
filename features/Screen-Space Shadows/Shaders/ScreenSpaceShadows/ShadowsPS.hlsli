@@ -4,7 +4,6 @@ cbuffer SSSData : register(b5)
 	uint FrameCount;
 };
 
-Texture2D<float> TexDepthSampler : register(t20);
 Texture2D<float> TexOcclusionSampler : register(t21);
 
 #define LinearSampler SampShadowMaskSampler

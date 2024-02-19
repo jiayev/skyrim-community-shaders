@@ -17,6 +17,7 @@ struct Feature
 	virtual void DrawSettings() = 0;
 	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor) = 0;
 	virtual void DrawDeferred() {}
+	virtual void DrawPreProcess() {}
 
 	virtual void DataLoaded() {}
 	virtual void PostPostLoad() {}

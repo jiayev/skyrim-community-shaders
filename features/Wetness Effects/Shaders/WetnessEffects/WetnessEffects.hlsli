@@ -59,11 +59,7 @@ float noise(float3 pos)
 float3 GetWetnessAmbientSpecular(float3 N, float3 V, float roughness)
 {
 #if defined(DYNAMIC_CUBEMAPS)
-	float3 NT = N;
-	NT.z += 1;
-	NT = normalize(NT);
-
-	float3 R = reflect(-V, NT);
+	float3 R = reflect(-V, N);
 	float NoV = saturate(dot(N, V));
 
 	float level = roughness * 9.0;

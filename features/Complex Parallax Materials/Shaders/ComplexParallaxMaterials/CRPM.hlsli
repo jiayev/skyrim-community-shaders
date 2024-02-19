@@ -34,11 +34,13 @@ float GetMipLevel(float2 coords, Texture2D<float4> tex)
 }
 
 #if defined(LANDSCAPE)
-float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 viewDir, float3x3 tbn, Texture2D<float4> tex, SamplerState texSampler, uint channel, float blend)
+float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 viewDir, float3x3 tbn, Texture2D<float4> tex, SamplerState texSampler, uint channel, float blend, out float pixelOffset)
 #else
-float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 viewDir, float3x3 tbn, Texture2D<float4> tex, SamplerState texSampler, uint channel)
+float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 viewDir, float3x3 tbn, Texture2D<float4> tex, SamplerState texSampler, uint channel, out float pixelOffset)
 #endif
 {
+	pixelOffset = 0.5;
+
 	float3 viewDirTS = mul(tbn, viewDir);
 	distance /= (float)perPassParallax[0].MaxDistance;
 
@@ -191,15 +193,18 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 			}
 
 			float offset = (1.0 - parallaxAmount) * -maxHeight + minHeight;
+			pixelOffset = parallaxAmount;
 			output = viewDirTS.xy * offset + coords.xy;
 		} else {
 			float offset = (1.0 - pt1.x) * -maxHeight + minHeight;
+			pixelOffset = pt1.x;
 			output = viewDirTS.xy * offset + coords.xy;
 		}
 
 		if (nearBlendToMid > 0.0) {
 			float height = tex.Sample(texSampler, coords.xy)[channel];
 			height = height * maxHeight - minHeight;
+			pixelOffset = lerp(pt1.x, height, nearBlendToMid);
 			output = lerp(output, viewDirTS.xy * height.xx + coords.xy, nearBlendToMid);
 		}
 	} else if (midBlendToFar < 1.0) {
@@ -208,6 +213,7 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 			maxHeight *= (1 - midBlendToFar);
 			minHeight *= (1 - midBlendToFar);
 		}
+		pixelOffset = height;
 		height = height * maxHeight - minHeight;
 		output = viewDirTS.xy * height.xx + coords.xy;
 	} else {

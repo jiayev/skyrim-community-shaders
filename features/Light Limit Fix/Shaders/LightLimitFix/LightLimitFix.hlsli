@@ -1,5 +1,3 @@
-#include "Common/VR.hlsl"
-
 struct LightGrid
 {
 	uint offset;
@@ -23,18 +21,12 @@ struct PerPassLLF
 	uint LightsVisualisationMode;
 	float LightsNear;
 	float LightsFar;
-	float4 CameraData;
-	float2 BufferDim;
 	uint FrameCount;
 };
 
 StructuredBuffer<StructuredLight> lights : register(t17);
 StructuredBuffer<uint> lightList : register(t18);       //MAX_CLUSTER_LIGHTS * 16^3
 StructuredBuffer<LightGrid> lightGrid : register(t19);  //16^3
-
-#if !defined(SCREEN_SPACE_SHADOWS) && !defined(EFFECT)
-Texture2D<float4> TexDepthSampler : register(t20);
-#endif  // SCREEN_SPACE_SHADOWS
 
 StructuredBuffer<PerPassLLF> perPassLLF : register(t32);
 
@@ -55,18 +47,11 @@ bool GetClusterIndex(in float2 uv, in float z, out uint clusterIndex)
 
 	float clampedZ = clamp(z, perPassLLF[0].LightsNear, perPassLLF[0].LightsFar);
 	uint clusterZ = uint(max((log2(z) - log2(perPassLLF[0].LightsNear)) * 16.0 / log2(perPassLLF[0].LightsFar / perPassLLF[0].LightsNear), 0.0));
-	uint2 clusterDim = ceil(perPassLLF[0].BufferDim / float2(16, 16));
-	uint3 cluster = uint3(uint2((uv * perPassLLF[0].BufferDim) / clusterDim), clusterZ);
+	uint2 clusterDim = ceil(lightingData[0].BufferDim / float2(16, 16));
+	uint3 cluster = uint3(uint2((uv * lightingData[0].BufferDim) / clusterDim), clusterZ);
 
 	clusterIndex = cluster.x + (16 * cluster.y) + (16 * 16 * cluster.z);
 	return true;
-}
-
-// Get a raw depth from the depth buffer. [0,1] in uv space
-float GetDepth(float2 uv, uint a_eyeIndex = 0)
-{
-	uv = ConvertToStereoUV(uv, a_eyeIndex);
-	return TexDepthSampler.Load(int3(uv * perPassLLF[0].BufferDim, 0));
 }
 
 bool IsSaturated(float value) { return value == saturate(value); }
@@ -82,17 +67,6 @@ float InterleavedGradientNoise(float2 uv)
 
 	float3 magic = float3(0.06711056f, 0.00583715f, 52.9829189f);
 	return frac(magic.z * frac(dot(uv, magic.xy)));
-}
-
-float GetScreenDepth(float depth)
-{
-	return (perPassLLF[0].CameraData.w / (-depth * perPassLLF[0].CameraData.z + perPassLLF[0].CameraData.x));
-}
-
-float GetScreenDepth(float2 uv, uint a_eyeIndex = 0)
-{
-	float depth = GetDepth(uv, a_eyeIndex);
-	return GetScreenDepth(depth);
 }
 
 float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, float shadowQualityScale, float radius = 0.0, uint a_eyeIndex = 0)
@@ -134,10 +108,6 @@ float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightD
 
 	return 1.0 - saturate(shadow);
 }
-
-#if defined(SKINNED) || defined(ENVMAP) || defined(EYE) || defined(MULTI_LAYER_PARALLAX)
-#	define DRAW_IN_WORLDSPACE
-#endif
 
 // Copyright 2019 Google LLC.
 // SPDX-License-Identifier: Apache-2.0

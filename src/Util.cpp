@@ -266,13 +266,15 @@ namespace Util
 	}
 	float4 GetCameraData()
 	{
-		auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-
-		float4 cameraData;
-		cameraData.x = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar;
-		cameraData.y = accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
-		cameraData.z = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar - accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
-		cameraData.w = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar * accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
+		float4 cameraData{};
+		if (auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator()) {
+			if (accumulator->kCamera) {
+				cameraData.x = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar;
+				cameraData.y = accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
+				cameraData.z = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar - accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
+				cameraData.w = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar * accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
+			}
+		}
 		return cameraData;
 	}
 

@@ -49,12 +49,18 @@ public:
 		uint lightCount;
 	};
 
-	struct alignas(16) PerFrameLightCulling
+	struct alignas(16) LightBuildingCB
 	{
 		float4x4 InvProjMatrix[2];
 		float LightsNear;
 		float LightsFar;
 		uint pad[2];
+	};
+
+	struct alignas(16) LightCullingCB
+	{
+		uint LightCount;
+		uint pad[3];
 	};
 
 	struct PerPass
@@ -65,8 +71,6 @@ public:
 		uint LightsVisualisationMode;
 		float LightsNear;
 		float LightsFar;
-		float4 CameraData;
-		float2 BufferDim;
 		uint FrameCount;
 	};
 
@@ -96,7 +100,8 @@ public:
 	ID3D11ComputeShader* clusterBuildingCS = nullptr;
 	ID3D11ComputeShader* clusterCullingCS = nullptr;
 
-	ConstantBuffer* perFrameLightCulling = nullptr;
+	ConstantBuffer* lightBuildingCB = nullptr;
+	ConstantBuffer* lightCullingCB = nullptr;
 
 	eastl::unique_ptr<Buffer> lights = nullptr;
 	eastl::unique_ptr<Buffer> clusters = nullptr;
@@ -105,8 +110,6 @@ public:
 	eastl::unique_ptr<Buffer> lightGrid = nullptr;
 
 	std::uint32_t lightCount = 0;
-
-	Texture2D* screenSpaceShadowsTexture = nullptr;
 
 	struct ParticleLightInfo
 	{
@@ -133,7 +136,7 @@ public:
 	virtual void DataLoaded() override;
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
-	bool AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config* a_config = nullptr, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
+	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config* a_config = nullptr, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
 	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition);
 	void UpdateLights();
 	void Bind();
@@ -179,7 +182,7 @@ public:
 
 	std::shared_mutex cachedParticleLightsMutex;
 	eastl::vector<CachedParticleLight> cachedParticleLights;
-	uint32_t particleLightsDetectionHits = 0;
+	std::uint32_t particleLightsDetectionHits = 0;
 
 	float CalculateLuminance(CachedParticleLight& light, RE::NiPoint3& point);
 	void AddParticleLightLuminance(RE::NiPoint3& targetPosition, int& numHits, float& lightLevel);

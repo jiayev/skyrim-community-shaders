@@ -6,6 +6,8 @@ RWTexture2DArray<float4> DynamicCubemapPosition : register(u2);
 Texture2D<float> DepthTexture : register(t0);
 Texture2D<float4> ColorTexture : register(t1);
 
+SamplerState LinearSampler : register(s0);
+
 // Calculate normalized sampling direction vector based on current fragment coordinates.
 // This is essentially "inverse-sampling": we reconstruct what the sampling vector would be if we wanted it to "hit"
 // this particular fragment in a cubemap.
@@ -160,14 +162,11 @@ float3 InverseProjectUVZ(float2 uv, float z)
 		uv = GetDynamicResolutionAdjustedScreenPosition(uv);
 		uv = ConvertToStereoUV(uv, 0);
 
-		float2 textureDims;
-		DepthTexture.GetDimensions(textureDims.x, textureDims.y);
-
-		float depth = DepthTexture[round(uv * textureDims)];
+		float depth = DepthTexture.SampleLevel(LinearSampler, uv, 0);
 		float linearDepth = GetScreenDepth(depth);
 
-		if (linearDepth > 16.5) {  // First person
-			float3 color = ColorTexture[round(uv * textureDims)];
+		if (linearDepth > 128.0) {  // Ignore objects which are too close
+			float3 color = ColorTexture.SampleLevel(LinearSampler, uv, 0);
 			float4 output = float4(sRGB2Lin(color), 1.0);
 			float lerpFactor = 0.5;
 

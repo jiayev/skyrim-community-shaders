@@ -491,7 +491,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		if (lightCount) {
 			uint lightOffset = lightGrid[clusterIndex].offset;
 
-			float screenNoise = InterleavedGradientNoise(screenUV * perPassLLF[0].BufferDim);
+			float screenNoise = InterleavedGradientNoise(screenUV * lightingData[0].BufferDim);
 			float shadowQualityScale = saturate(1.0 - (((float)lightCount * (float)lightCount) / 128.0));
 
 			[loop] for (uint i = 0; i < lightCount; i++)
