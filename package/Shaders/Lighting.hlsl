@@ -1910,23 +1910,27 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 envColorBase = TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz;
 	float3 envColor = envColorBase * envMask;
 #		if defined(DYNAMIC_CUBEMAPS)
+#			if defined(EYE)
+	bool dynamicCubemap = true;
+	envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, 1.0 / 9.0, 0.25, true) * saturate(envMask * 10.0);
+#			else
 	uint2 envSize;
 	TexEnvSampler.GetDimensions(envSize.x, envSize.y);
 	bool dynamicCubemap = envMask != 0 && envSize.x == 1;
 	if (dynamicCubemap) {
-		float envFade = saturate(viewPosition.z / 512.0);
-#			if defined(CPM_AVAILABLE) && defined(ENVMAP)
+#				if defined(CPM_AVAILABLE) && defined(ENVMAP)
 		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
 		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, lerp(1.0 / 9.0, 1.0 - complexMaterialColor.y, complexMaterial), complexSpecular, complexMaterial) * envMask;
-#			else
+#				else
 		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
 		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, 1.0 / 9.0, F0, 0.0) * envMask;
-#			endif
+#				endif
 		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow && shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 			float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
 			envColor *= lerp(1.0, shadowColor.x, saturate(upAngle) * 0.2);
 		}
 	}
+#			endif
 #		endif
 #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
 
