@@ -4,6 +4,7 @@ struct Feature
 {
 	bool loaded = false;
 	std::string version;
+	std::string failedLoadedMessage;
 
 	virtual std::string GetName() = 0;
 	virtual std::string GetShortName() = 0;

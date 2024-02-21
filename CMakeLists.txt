@@ -83,6 +83,42 @@ if(MSVC_VERSION GREATER_EQUAL 1936 AND MSVC_IDE) # 17.6+
 endif()
 
 # #######################################################################################################################
+# # Feature version detection
+# #######################################################################################################################
+
+file(GLOB_RECURSE FEATURE_CONFIG_FILES
+	LIST_DIRECTORIES false
+	CONFIGURE_DEPENDS
+	"features/*/Shaders/Features/*.ini"
+)
+
+foreach(FEATURE_PATH ${FEATURE_CONFIG_FILES})
+	get_filename_component(FEATURE ${FEATURE_PATH} NAME_WE)
+	file(READ "${FEATURE_PATH}" CONFIG_VALUE)
+	string(REGEX MATCH "Version = ([0-9]*)-([0-9]*)-([0-9]*)" _ ${CONFIG_VALUE})
+	set(ver_major ${CMAKE_MATCH_1})
+	set(ver_minor ${CMAKE_MATCH_2})
+	set(ver_patch ${CMAKE_MATCH_3})
+	list(APPEND FEATURE_VERSIONS \t\t{\ \"${FEATURE}\"sv,\ {${ver_major},${ver_minor},${ver_patch}}\ })
+endforeach()
+
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FEATURE_CONFIG_FILES}")
+
+string (REPLACE ";" ",\n" FEATURE_VERSIONS "${FEATURE_VERSIONS}")
+
+configure_file(
+	${CMAKE_CURRENT_SOURCE_DIR}/cmake/FeatureVersions.h.in
+	${CMAKE_CURRENT_BINARY_DIR}/cmake/FeatureVersions.h
+	@ONLY
+)
+
+target_sources(
+	"${PROJECT_NAME}"
+	PRIVATE
+	${CMAKE_CURRENT_BINARY_DIR}/cmake/FeatureVersions.h
+)
+
+# #######################################################################################################################
 # # Automatic deployment
 # #######################################################################################################################
 file(GLOB FEATURE_PATHS LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/features/*)

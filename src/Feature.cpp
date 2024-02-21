@@ -1,5 +1,6 @@
 #include "Feature.h"
 
+#include "FeatureVersions.h"
 #include "Features/CloudShadows.h"
 #include "Features/DistantTreeLighting.h"
 #include "Features/DynamicCubemaps.h"
@@ -26,12 +27,35 @@ void Feature::Load(json&)
 	ini.SetUnicode();
 	ini.LoadFile(ini_path.c_str());
 	if (auto value = ini.GetValue("Info", "Version")) {
-		loaded = true;
+		REL::Version featureVersion(std::regex_replace(value, std::regex("-"), "."));
+
+		auto& minimalFeatureVersion = FeatureVersions::FEATURE_MINIMAL_VERSIONS.at(GetShortName());
+
+		bool oldFeature = featureVersion.compare(minimalFeatureVersion) == std::strong_ordering::less;
+		bool majorVersionMismatch = minimalFeatureVersion.major() < featureVersion.major();
+
+		if (!oldFeature && !majorVersionMismatch) {
+			loaded = true;
+			logger::info("{} {} successfully loaded", ini_filename, value);
+		} else {
+			loaded = false;
+
+			std::string minimalVersionString = minimalFeatureVersion.string();
+			minimalVersionString = minimalVersionString.substr(0, minimalVersionString.size() - 2);
+
+			if (majorVersionMismatch) {
+				failedLoadedMessage = std::format("{} {} requires a newer version of community shaders, the feature version should be {}", GetShortName(), value, minimalVersionString);
+			} else {
+				failedLoadedMessage = std::format("{} {} is an old feature version, required: {}", GetShortName(), value, minimalVersionString);
+			}
+			logger::warn("{}", failedLoadedMessage);
+		}
+
 		version = value;
-		logger::info("{} {} successfully loaded", ini_filename, value);
 	} else {
 		loaded = false;
-		logger::warn("{} missing version info; not successfully loaded", ini_filename);
+		failedLoadedMessage = std::format("{} missing version info; not successfully loaded", ini_filename);
+		logger::warn("{}", failedLoadedMessage);
 	}
 }
 
