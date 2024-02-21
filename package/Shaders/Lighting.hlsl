@@ -960,21 +960,13 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "WaterCaustics/WaterCaustics.hlsli"
 #	endif
 
-float2 ComputeTriplanarUV(float3 InputPosition)
-{
-	float3 posDDX = ddx(InputPosition.xyz);
-	float3 posDDY = ddy(InputPosition.xyz);
-	return (((0.1 * (abs(posDDX.z) + abs(posDDY.z)) < abs(posDDX.x) + abs(posDDY.x)) &&
-				(0.1 * (abs(posDDX.z) + abs(posDDY.z)) < abs(posDDX.y) + abs(posDDY.y))) ?
-				InputPosition.xy :
-				((0.5 * (abs(posDDX.x) + abs(posDDY.x)) < abs(posDDX.y) + abs(posDDY.y)) ? InputPosition.yz : InputPosition.xz));
-}
-
 #	if defined(LOD)
 #		undef COMPLEX_PARALLAX_MATERIALS
 #		undef WATER_BLENDING
 #		undef LIGHT_LIMIT_FIX
 #		undef WETNESS_EFFECTS
+#		undef DYNAMIC_CUBEMAPS
+#		undef WATER_CAUSTICS
 #	endif
 
 #	if defined(EYE)
@@ -1150,13 +1142,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif  // defined(SPARKLE) || !defined(PROJECTED_UV)
 
 	float2 diffuseUv = uv;
+
 #	if defined(SPARKLE)
-#		if defined(VR)
 	diffuseUv = ProjectedUVParams2.yy * input.TexCoord0.zw;
-#		else
-	float2 triplanarUv = ComputeTriplanarUV(input.InputPosition.xyz);
-	diffuseUv = ProjectedUVParams2.yy * triplanarUv;
-#		endif  // VR
 #	endif      // SPARKLE
 
 #	if defined(CPM_AVAILABLE)
@@ -1436,11 +1424,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			endif  // SNOW
 #		else
 	if (ProjectedUVParams3.w > 0.5) {
-#			if defined(VR)
-		float2 projNormalUv = ProjectedUVParams3.x * ProjectedUVParams.zz * ComputeTriplanarUV(input.InputPosition.xyz);
-#			else
 		float2 projNormalUv = ProjectedUVParams3.x * projNoiseUv;
-#			endif  // VR
 		float3 projNormal = TransformNormal(TexProjNormalSampler.Sample(SampProjNormalSampler, projNormalUv).xyz);
 		float2 projDetailUv = ProjectedUVParams3.y * projNoiseUv;
 		float3 projDetail = TexProjDetail.Sample(SampProjDetailSampler, projDetailUv).xyz;
