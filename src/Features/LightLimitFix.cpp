@@ -21,7 +21,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableParticleLights,
 	EnableParticleLightsCulling,
 	EnableParticleLightsDetection,
-	ParticleLightsBrightness,
 	ParticleLightsSaturation,
 	EnableParticleLightsOptimization,
 	ParticleLightsOptimisationClusterRadius)
@@ -56,11 +55,6 @@ void LightLimitFix::DrawSettings()
 		ImGui::Spacing();
 
 		ImGui::TextWrapped("Particle Lights Color");
-		ImGui::SliderFloat("Brightness", &settings.ParticleLightsBrightness, 0.0, 1.0, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Particle light brightness.");
-		}
-
 		ImGui::SliderFloat("Saturation", &settings.ParticleLightsSaturation, 1.0, 2.0, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Particle light saturation.");
@@ -518,9 +512,9 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
 						}
 
 						RE::NiColorA color;
-						color.red = material->baseColor.red * material->baseColorScale * settings.ParticleLightsBrightness;
-						color.green = material->baseColor.green * material->baseColorScale * settings.ParticleLightsBrightness;
-						color.blue = material->baseColor.blue * material->baseColorScale * settings.ParticleLightsBrightness;
+						color.red = material->baseColor.red * material->baseColorScale;
+						color.green = material->baseColor.green * material->baseColorScale;
+						color.blue = material->baseColor.blue * material->baseColorScale;
 						color.alpha = material->baseColor.alpha * shaderProperty->alpha;
 
 						if (auto emittance = shaderProperty->unk88) {
