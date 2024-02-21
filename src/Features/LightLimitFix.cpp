@@ -883,7 +883,10 @@ void LightLimitFix::UpdateLights()
 
 				light.radius = particleLight.second.radius * 70.0f;
 
-				SetLightPosition(light, particleLight.first->world.translate);  // Light is complete for both eyes by now
+				auto position = particleLight.first->world.translate;
+				position.z += light.radius * 0.5f;
+
+				SetLightPosition(light, position);  // Light is complete for both eyes by now
 
 				AddCachedParticleLights(lightsData, light, &particleLight.second.config, particleLight.first, timer);
 			}
