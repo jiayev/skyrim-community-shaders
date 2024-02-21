@@ -58,16 +58,6 @@ float3 SampleCaustics(float2 uv, float split)
 	return float3(r, g, b);
 }
 
-float2 ComputeWaterCausticsUV(float3 position)
-{
-	float3 posDDX = ddx(position.xyz);
-	float3 posDDY = ddy(position.xyz);
-	return (((0.1 * (abs(posDDX.z) + abs(posDDY.z)) < abs(posDDX.x) + abs(posDDY.x)) &&
-				(0.1 * (abs(posDDX.z) + abs(posDDY.z)) < abs(posDDX.y) + abs(posDDY.y))) ?
-				position.xy :
-				((0.5 * (abs(posDDX.x) + abs(posDDY.x)) < abs(posDDX.y) + abs(posDDY.y)) ? position.yz : position.xz));
-}
-
 float3 ComputeWaterCaustics(float3 waterHeight, float3 worldPosition, float3 worldSpaceNormal)
 {
 	float causticsDistToWater = waterHeight - worldPosition.z;
@@ -76,7 +66,7 @@ float3 ComputeWaterCaustics(float3 waterHeight, float3 worldPosition, float3 wor
 	float causticsFade = 1.0 - saturate(causticsDistToWater / 1024.0);
 	causticsFade *= causticsFade;
 
-	float2 causticsUV = ComputeWaterCausticsUV((worldPosition.xyz + CameraPosAdjust[0].xyz)) * 0.005;
+	float2 causticsUV = (worldPosition.xyz + CameraPosAdjust[0].xyz) * 0.005;
 
 	float2 causticsUV1 = PanCausticsUV(causticsUV, 0.5 * 0.2, 1.0);
 	float2 causticsUV2 = PanCausticsUV(causticsUV, 1.0 * 0.2, -0.5);
