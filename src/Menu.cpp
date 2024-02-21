@@ -419,6 +419,11 @@ void Menu::DrawSettings()
 							selectedFeature = i;
 						ImGui::SameLine();
 						ImGui::TextDisabled(fmt::format("({})", featureList[i]->version).c_str());
+					} else if (!featureList[i]->version.empty()) {
+						ImGui::TextDisabled(fmt::format("{} ({})", featureList[i]->GetName(), featureList[i]->version).c_str());
+						if (auto _tt = Util::HoverTooltipWrapper()) {
+							ImGui::Text(featureList[i]->failedLoadedMessage.c_str());
+						}
 					}
 				ImGui::EndListBox();
 			}
