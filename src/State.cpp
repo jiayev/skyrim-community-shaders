@@ -403,6 +403,16 @@ void State::SetupResources()
 	sbDesc.ByteWidth = sizeof(LightingData);
 	lightingDataBuffer = std::make_unique<Buffer>(sbDesc);
 	lightingDataBuffer->CreateSRV(srvDesc);
+
+	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+
+	// grab main texture to get resolution
+	// VR cannot use viewport->screenWidth/Height as it's the desktop preview window's resolution and not HMD
+	D3D11_TEXTURE2D_DESC texDesc{};
+	renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture->GetDesc(&texDesc);
+
+	screenWidth = (float)texDesc.Width;
+	screenHeight = (float)texDesc.Height;
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor)
@@ -493,8 +503,8 @@ void State::UpdateSharedData(const RE::BSShader* a_shader, const uint32_t)
 		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 
 		bool currentReflections = (!REL::Module::IsVR() ?
-										  RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().cubeMapRenderTarget :
-										  RE::BSGraphics::RendererShadowState::GetSingleton()->GetVRRuntimeData().cubeMapRenderTarget) == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
+										  shadowState->GetRuntimeData().cubeMapRenderTarget :
+										  shadowState->GetVRRuntimeData().cubeMapRenderTarget) == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
 
 		if (lightingData.Reflections != (uint)currentReflections) {
 			updateBuffer = true;
@@ -521,18 +531,9 @@ void State::UpdateSharedData(const RE::BSShader* a_shader, const uint32_t)
 			updateBuffer = true;
 		}
 
-		auto viewport = RE::BSGraphics::State::GetSingleton();
 		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 
-		// grab main texture to get resolution
-		// VR cannot use viewport->screenWidth/Height as it's the desktop preview window's resolution and not HMD
-		D3D11_TEXTURE2D_DESC texDesc{};
-		renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture->GetDesc(&texDesc);
-
-		float resolutionX = (float)texDesc.Width * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
-		float resolutionY = (float)texDesc.Height * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
-
-		float2 bufferDim = { resolutionX, resolutionY };
+		float2 bufferDim = { screenWidth, screenHeight };
 
 		if (bufferDim != lightingData.BufferDim) {
 			lightingData.BufferDim = bufferDim;
@@ -540,7 +541,7 @@ void State::UpdateSharedData(const RE::BSShader* a_shader, const uint32_t)
 
 		lightingData.Timer = timer;
 
-		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+		auto context = renderer->GetRuntimeData().context;
 
 		if (updateBuffer) {
 			D3D11_MAPPED_SUBRESOURCE mapped;
@@ -552,7 +553,7 @@ void State::UpdateSharedData(const RE::BSShader* a_shader, const uint32_t)
 			ID3D11ShaderResourceView* view = lightingDataBuffer->srv.get();
 			context->PSSetShaderResources(126, 1, &view);
 
-			view = RE::BSGraphics::Renderer::GetSingleton()->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
+			view = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
 			context->PSSetShaderResources(20, 1, &view);
 		}
 	}

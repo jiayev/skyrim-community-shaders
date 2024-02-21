@@ -108,4 +108,7 @@ public:
 	LightingData lightingData{};
 
 	std::unique_ptr<Buffer> lightingDataBuffer = nullptr;
+
+	float screenWidth = 0;
+	float screenHeight = 0;
 };
