@@ -1145,7 +1145,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(SPARKLE)
 	diffuseUv = ProjectedUVParams2.yy * input.TexCoord0.zw;
-#	endif      // SPARKLE
+#	endif  // SPARKLE
 
 #	if defined(CPM_AVAILABLE)
 #		if defined(LANDSCAPE)
