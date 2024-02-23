@@ -1876,7 +1876,7 @@ if (dynamicCubemap) {
 		float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
 		envColor *= lerp(1.0, shadowColor.x, saturate(upAngle) * 0.2);
 	}
-} else if (envMask > 0.0){
+} else if (envMask > 0.0) {
 	float4 ssrBlurred = ssrTexture.SampleLevel(SampColorSampler, screenUV, 0);
 	float4 ssrRaw = ssrRawTexture.SampleLevel(SampColorSampler, screenUV, 0);
 	float4 ssrTexture = lerp(ssrRaw, ssrBlurred, 1.0 - saturate(envMask));
