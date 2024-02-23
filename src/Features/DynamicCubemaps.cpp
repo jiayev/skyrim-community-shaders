@@ -333,8 +333,7 @@ void DynamicCubemaps::Draw(const RE::BSShader* shader, const uint32_t)
 			auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 			auto context = renderer->GetRuntimeData().context;
 
-			if (REL::Module::IsVR())
-			{
+			if (REL::Module::IsVR()) {
 				ID3D11ShaderResourceView* views[2]{};
 				views[0] = envTexture->srv.get();
 				views[1] = spBRDFLUT->srv.get();
