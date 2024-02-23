@@ -1858,19 +1858,19 @@ float3 envColorBase = TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz
 float3 envColor = envColorBase * envMask;
 #		if defined(DYNAMIC_CUBEMAPS)
 #			if defined(EYE)
-	bool dynamicCubemap = true;
-	envColor = GetDynamicCubemap(screenUV, worldSpaceNormal, worldSpaceViewDirection, 1.0 / 9.0, 0.25, true) * saturate(envMask * 10.0);
+bool dynamicCubemap = true;
+envColor = GetDynamicCubemap(screenUV, worldSpaceNormal, worldSpaceViewDirection, 1.0 / 9.0, 0.25, true) * saturate(envMask * 10.0);
 #			else
-	uint2 envSize;
-	TexEnvSampler.GetDimensions(envSize.x, envSize.y);
-	bool dynamicCubemap = envMask != 0 && envSize.x == 1;
-	if (dynamicCubemap) {
+uint2 envSize;
+TexEnvSampler.GetDimensions(envSize.x, envSize.y);
+bool dynamicCubemap = envMask != 0 && envSize.x == 1;
+if (dynamicCubemap) {
 #				if defined(CPM_AVAILABLE) && defined(ENVMAP)
-		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
-		envColor = GetDynamicCubemap(screenUV, worldSpaceNormal, worldSpaceViewDirection, lerp(1.0 / 9.0, 1.0 - complexMaterialColor.y, complexMaterial), lerp(F0, complexSpecular, complexMaterial), complexMaterial) * envMask;
+	float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
+	envColor = GetDynamicCubemap(screenUV, worldSpaceNormal, worldSpaceViewDirection, lerp(1.0 / 9.0, 1.0 - complexMaterialColor.y, complexMaterial), lerp(F0, complexSpecular, complexMaterial), complexMaterial) * envMask;
 #				else
-		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
-		envColor = GetDynamicCubemap(screenUV, worldSpaceNormal, worldSpaceViewDirection, 1.0 / 9.0, F0, 0.0) * envMask;
+	float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
+	envColor = GetDynamicCubemap(screenUV, worldSpaceNormal, worldSpaceViewDirection, 1.0 / 9.0, F0, 0.0) * envMask;
 #				endif
 	if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow && shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 		float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
