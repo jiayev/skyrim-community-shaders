@@ -153,8 +153,8 @@ void DynamicCubemaps::UpdateCubemapCapture()
 
 	auto context = renderer->GetRuntimeData().context;
 
-	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-	auto snowSwap = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kSNOW_SWAP];
+	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+	auto& snowSwap = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kSNOW_SWAP];
 
 	ID3D11ShaderResourceView* srvs[2] = { depth.depthSRV, snowSwap.SRV };
 	context->CSSetShaderResources(0, 2, srvs);
@@ -228,12 +228,15 @@ void DynamicCubemaps::UpdateCubemap()
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto context = renderer->GetRuntimeData().context;
 
+	//if (!REL::Module::IsVR()) {
+	//	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+	//	imageSpaceManager->GetRuntimeData().BSImagespaceShaderApplyReflections->active = false;
+	//}
+
 	{
 		ID3D11ShaderResourceView* view = nullptr;
 		context->PSSetShaderResources(64, 1, &view);
 	}
-
-	auto cubemap = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
 
 	if (nextTask == NextTask::kInferrence) {
 		nextTask = NextTask::kIrradiance;
@@ -327,12 +330,26 @@ void DynamicCubemaps::Draw(const RE::BSShader* shader, const uint32_t)
 			UpdateCubemap();
 			renderedScreenCamera = true;
 
-			auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+			auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+			auto context = renderer->GetRuntimeData().context;
 
-			ID3D11ShaderResourceView* views[2]{};
-			views[0] = envTexture->srv.get();
-			views[1] = spBRDFLUT->srv.get();
-			context->PSSetShaderResources(64, 2, views);
+			if (REL::Module::IsVR())
+			{
+				ID3D11ShaderResourceView* views[2]{};
+				views[0] = envTexture->srv.get();
+				views[1] = spBRDFLUT->srv.get();
+				context->PSSetShaderResources(64, 2, views);
+			} else {
+				auto ssrBlurred = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kSSR];
+				auto ssrRaw = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kSSR_RAW];
+
+				ID3D11ShaderResourceView* views[4]{};
+				views[0] = envTexture->srv.get();
+				views[1] = spBRDFLUT->srv.get();
+				views[2] = ssrBlurred.SRV;
+				views[3] = ssrRaw.SRV;
+				context->PSSetShaderResources(64, 4, views);
+			}
 		}
 	}
 }

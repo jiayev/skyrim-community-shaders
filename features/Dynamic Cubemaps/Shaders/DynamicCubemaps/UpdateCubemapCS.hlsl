@@ -165,16 +165,21 @@ float3 InverseProjectUVZ(float2 uv, float z)
 		float depth = DepthTexture.SampleLevel(LinearSampler, uv, 0);
 		float linearDepth = GetScreenDepth(depth);
 
-		if (linearDepth > 128.0) {  // Ignore objects which are too close
+		if (linearDepth > 16.5) {  // Ignore objects which are too close
 			float3 color = ColorTexture.SampleLevel(LinearSampler, uv, 0);
 			float4 output = float4(sRGB2Lin(color), 1.0);
 			float lerpFactor = 0.5;
 
-			DynamicCubemapRaw[ThreadID] = lerp(DynamicCubemapRaw[ThreadID], output, lerpFactor);
-			DynamicCubemap[ThreadID] = lerp(DynamicCubemap[ThreadID], output, lerpFactor);
+			float4 position = float4(InverseProjectUVZ(uv, depth) * 0.001, 1.0);
+			DynamicCubemapPosition[ThreadID] = lerp(DynamicCubemapPosition[ThreadID], position, lerpFactor);
 
-			float3 position = InverseProjectUVZ(uv, depth);
-			DynamicCubemapPosition[ThreadID] = lerp(DynamicCubemapPosition[ThreadID], float4(position * 0.001, 1.0), lerpFactor);
+			DynamicCubemapRaw[ThreadID] = lerp(DynamicCubemapRaw[ThreadID], output, lerpFactor);
+			
+			float distanceFactor = saturate(length(position.xyz));
+			output *= distanceFactor;
+
+			DynamicCubemap[ThreadID] = lerp(DynamicCubemap[ThreadID], output, lerpFactor);
+		
 			return;
 		}
 	}
@@ -184,7 +189,11 @@ float3 InverseProjectUVZ(float2 uv, float z)
 	DynamicCubemapPosition[ThreadID] = position;
 
 	float4 color = DynamicCubemapRaw[ThreadID];
-	color *= lerp(1.0, 0.0, saturate(length(position.xyz)));
+	
+	float distanceFactor = saturate(length(position.xyz));
+	color *= 1.0 - distanceFactor;
+	color *= distanceFactor;
+	color *= 2.0;
 
-	DynamicCubemap[ThreadID] = color;
+	DynamicCubemap[ThreadID] = max(0, color);
 }

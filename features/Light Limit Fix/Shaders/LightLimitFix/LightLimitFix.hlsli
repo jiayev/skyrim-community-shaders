@@ -32,10 +32,8 @@ StructuredBuffer<PerPassLLF> perPassLLF : register(t32);
 
 struct StrictLightData
 {
-	uint NumLights;
-	float3 PointLightPosition[15];
-	float PointLightRadius[15];
-	float3 PointLightColor[15];
+	uint StrictLightCount;
+	StructuredLight StrictLights[15];
 };
 
 StructuredBuffer<StrictLightData> strictLightData : register(t37);
@@ -79,7 +77,7 @@ float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightD
 		loopMax = round(16 * shadowQualityScale);
 	} else {
 		depthDeltaMult = float2(0.20, 0.10);
-		loopMax = round(6.0 * shadowQualityScale);
+		loopMax = round(11.0 * shadowQualityScale);
 	}
 
 	// Offset starting position with interleaved gradient noise

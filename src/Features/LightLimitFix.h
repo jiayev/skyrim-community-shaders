@@ -77,9 +77,7 @@ public:
 	struct StrictLightData
 	{
 		uint NumLights;
-		float3 PointLightPosition[15];
-		float PointLightRadius[15];
-		float3 PointLightColor[15];
+		LightData StrictLights[15];
 	};
 
 	StrictLightData strictLightDataTemp;
@@ -121,6 +119,9 @@ public:
 	eastl::hash_map<RE::BSGeometry*, ParticleLightInfo> queuedParticleLights;
 	eastl::hash_map<RE::BSGeometry*, ParticleLightInfo> particleLights;
 
+	RE::NiPoint3 eyePositionCached[2]{};
+	Matrix viewMatrixCached[2]{};
+
 	virtual void SetupResources();
 	virtual void Reset();
 
@@ -137,7 +138,7 @@ public:
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
 	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config* a_config = nullptr, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
-	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition);
+	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached = true);
 	void UpdateLights();
 	void Bind();
 
