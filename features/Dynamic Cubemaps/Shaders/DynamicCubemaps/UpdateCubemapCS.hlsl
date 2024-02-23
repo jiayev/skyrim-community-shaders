@@ -174,12 +174,12 @@ float3 InverseProjectUVZ(float2 uv, float z)
 			DynamicCubemapPosition[ThreadID] = lerp(DynamicCubemapPosition[ThreadID], position, lerpFactor);
 
 			DynamicCubemapRaw[ThreadID] = lerp(DynamicCubemapRaw[ThreadID], output, lerpFactor);
-			
+
 			float distanceFactor = saturate(length(position.xyz));
 			output *= distanceFactor;
 
 			DynamicCubemap[ThreadID] = lerp(DynamicCubemap[ThreadID], output, lerpFactor);
-		
+
 			return;
 		}
 	}
@@ -189,7 +189,7 @@ float3 InverseProjectUVZ(float2 uv, float z)
 	DynamicCubemapPosition[ThreadID] = position;
 
 	float4 color = DynamicCubemapRaw[ThreadID];
-	
+
 	float distanceFactor = saturate(length(position.xyz));
 	color *= 1.0 - distanceFactor;
 	color *= distanceFactor;

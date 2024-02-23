@@ -310,7 +310,6 @@ void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPo
 {
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
-
 		RE::NiPoint3 eyePosition;
 		Matrix viewMatrix;
 
@@ -319,11 +318,11 @@ void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPo
 			viewMatrix = viewMatrixCached[eyeIndex];
 		} else {
 			eyePosition = eyeCount == 1 ?
-			                       state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
-			                       state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+			                  state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
+			                  state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
 			viewMatrix = eyeCount == 1 ?
-			                      state->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
-			                      state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
+			                 state->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
+			                 state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
 		}
 
 		auto worldPos = a_initialPosition - eyePosition;
@@ -722,11 +721,11 @@ void LightLimitFix::UpdateLights()
 
 	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
 		eyePositionCached[eyeIndex] = eyeCount == 1 ?
-		                       state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
-		                       state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+		                                  state->GetRuntimeData().posAdjust.getEye(eyeIndex) :
+		                                  state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
 		viewMatrixCached[eyeIndex] = eyeCount == 1 ?
-		                      state->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
-		                      state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
+		                                 state->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
+		                                 state->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
 	}
 
 	RE::NiLight* refLight = nullptr;
@@ -974,7 +973,6 @@ void LightLimitFix::UpdateLights()
 		context->CSSetShader(clusterCullingCS, nullptr, 0);
 		context->Dispatch(CLUSTER_SIZE_X / 16, CLUSTER_SIZE_Y / 16, CLUSTER_SIZE_Z / 4);
 	}
-
 
 	context->CSSetShader(nullptr, nullptr, 0);
 
