@@ -886,7 +886,7 @@ void LightLimitFix::UpdateLights()
 
 				light.color *= particleLight.second.color.alpha;
 
-				light.radius = particleLight.second.radius * 70.0f;
+				light.radius = particleLight.second.radius * 70.0f * 0.5f;
 
 				auto position = particleLight.first->world.translate;
 
