@@ -1855,7 +1855,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(DYNAMIC_CUBEMAPS)
 #			if defined(EYE)
 	bool dynamicCubemap = true;
-	envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, 1.0 / 9.0, 0.25, true) * saturate(envMask * 10.0);
+	envColor = GetDynamicCubemap(screenUV, worldSpaceNormal, worldSpaceViewDirection, 1.0 / 9.0, 0.25, true) * saturate(envMask * 10.0);
 #			else
 	uint2 envSize;
 	TexEnvSampler.GetDimensions(envSize.x, envSize.y);
@@ -1863,10 +1863,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (dynamicCubemap) {
 #				if defined(CPM_AVAILABLE) && defined(ENVMAP)
 		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
-		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, lerp(1.0 / 9.0, 1.0 - complexMaterialColor.y, complexMaterial), complexSpecular, complexMaterial) * envMask;
+		envColor = GetDynamicCubemap(screenUV, worldSpaceNormal, worldSpaceViewDirection, lerp(1.0 / 9.0, 1.0 - complexMaterialColor.y, complexMaterial), lerp(F0, complexSpecular, complexMaterial), complexMaterial) * envMask;
 #				else
 		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
-		envColor = GetDynamicCubemap(worldSpaceNormal, worldSpaceViewDirection, 1.0 / 9.0, F0, 0.0) * envMask;
+		envColor = GetDynamicCubemap(screenUV, worldSpaceNormal, worldSpaceViewDirection, 1.0 / 9.0, F0, 0.0) * envMask;
 #				endif
 		if (shaderDescriptors[0].PixelShaderDescriptor & _DefShadow && shaderDescriptors[0].PixelShaderDescriptor & _ShadowDir) {
 			float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
@@ -2077,11 +2077,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 #	endif  // WATER_BLENDING
 
-#	if defined(WETNESS_EFFECTS)
-	psout.ScreenSpaceNormals.w = flatnessAmount;
-	screenSpaceNormal.xyz = normalize(WorldToView(lerp(wetnessNormal, float3(0, 0, 1), flatnessAmount), false, eyeIndex));
-#	else
 	psout.ScreenSpaceNormals.w = 0.0;
+
+#	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
+#		if defined(DYNAMIC_CUBEMAPS)
+	psout.ScreenSpaceNormals.w = dynamicCubemap ? 1.0 : 0.0;
+#		endif
+#	endif
+
+#	if defined(WETNESS_EFFECTS)
+	psout.ScreenSpaceNormals.w = max(psout.ScreenSpaceNormals.w, flatnessAmount);
+	screenSpaceNormal.xyz = normalize(WorldToView(lerp(wetnessNormal, float3(0, 0, 1), flatnessAmount), false, eyeIndex));
 #	endif
 
 	// Green reflections fix

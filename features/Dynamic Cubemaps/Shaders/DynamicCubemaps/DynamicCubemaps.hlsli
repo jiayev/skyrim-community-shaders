@@ -7,14 +7,22 @@ Texture2D<float4> ssrRawTexture : register(t67);
 #	endif
 
 #	if !defined(WATER)
-float3 GetDynamicCubemap(float3 N, float3 V, float roughness, float3 F0, float complexMaterial)
+float3 GetDynamicCubemap(float2 uv, float3 N, float3 V, float roughness, float3 F0, float complexMaterial)
 {
 	float3 R = reflect(-V, N);
 	float NoV = saturate(dot(N, V));
 
 	float level = roughness * 9.0;
 
-	float3 specularIrradiance = sRGB2Lin(specularTexture.SampleLevel(SampColorSampler, R, level));
+#		if defined(DYNAMIC_CUBEMAPS) && !defined(VR)
+	float4 ssrBlurred = ssrTexture.SampleLevel(SampColorSampler, uv, 0);
+	float4 ssrRaw = ssrRawTexture.SampleLevel(SampColorSampler, uv, 0);
+	float4 ssrTexture = lerp(ssrRaw, ssrBlurred, sqrt(roughness));
+	float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level);
+	specularIrradiance = sRGB2Lin(lerp(specularIrradiance, ssrRaw.rgb, ssrRaw.a));
+#		else
+	specularIrradiance = sRGB2Lin(specularIrradiance);
+#		endif
 
 	F0 = sRGB2Lin(F0);
 
