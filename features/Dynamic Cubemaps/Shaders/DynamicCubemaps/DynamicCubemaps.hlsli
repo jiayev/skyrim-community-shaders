@@ -1,12 +1,12 @@
 TextureCube<float4> specularTexture : register(t64);
 Texture2D<float4> specularBRDF_LUT : register(t65);
 
-#	if !defined(VR)
+#if !defined(VR)
 Texture2D<float4> ssrTexture : register(t66);
 Texture2D<float4> ssrRawTexture : register(t67);
-#	endif
+#endif
 
-#	if !defined(WATER)
+#if !defined(WATER)
 float3 GetDynamicCubemap(float2 uv, float3 N, float3 V, float roughness, float3 F0, float complexMaterial)
 {
 	float3 R = reflect(-V, N);
@@ -14,9 +14,9 @@ float3 GetDynamicCubemap(float2 uv, float3 N, float3 V, float roughness, float3 
 
 	float level = roughness * 9.0;
 
-#		if defined(DYNAMIC_CUBEMAPS) && !defined(VR)
+#	if defined(DYNAMIC_CUBEMAPS) && !defined(VR)
 	float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level);
-	if (!FrameParams.z && FrameParams.y){
+	if (!FrameParams.z && FrameParams.y) {
 		float4 ssrBlurred = ssrTexture.SampleLevel(SampColorSampler, uv, 0);
 		float4 ssrRaw = ssrRawTexture.SampleLevel(SampColorSampler, uv, 0);
 		float4 ssrTexture = lerp(ssrRaw, ssrBlurred, sqrt(roughness));
@@ -24,9 +24,9 @@ float3 GetDynamicCubemap(float2 uv, float3 N, float3 V, float roughness, float3 
 	} else {
 		specularIrradiance = sRGB2Lin(specularIrradiance);
 	}
-#		else
+#	else
 	specularIrradiance = sRGB2Lin(specularIrradiance);
-#		endif
+#	endif
 
 	F0 = sRGB2Lin(F0);
 
@@ -40,4 +40,4 @@ float3 GetDynamicCubemap(float2 uv, float3 N, float3 V, float roughness, float3 
 
 	return lerp(specularIrradiance * F0, specularIrradiance * ((F0 + S) * specularBRDF.x + specularBRDF.y), false);
 }
-#	endif
+#endif
