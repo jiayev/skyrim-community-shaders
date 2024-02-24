@@ -23,9 +23,9 @@ float3 GetDynamicCubemap(float2 uv, float3 N, float3 V, float roughness, float3 
 	// 	float4 ssrTexture = lerp(ssrRaw, ssrBlurred, sqrt(roughness));
 	// 	specularIrradiance = sRGB2Lin(lerp(specularIrradiance, ssrTexture.rgb, ssrTexture.a));
 	// } else {
-		specularIrradiance = sRGB2Lin(specularIrradiance);
+	specularIrradiance = sRGB2Lin(specularIrradiance);
 	//}
-#		else
+#	else
 	specularIrradiance = sRGB2Lin(specularIrradiance);
 #	endif
 

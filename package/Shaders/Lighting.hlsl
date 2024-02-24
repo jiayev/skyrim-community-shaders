@@ -2150,11 +2150,11 @@ psout.SnowParameters.w = blendFactorTerrain;
 #		endif
 #	endif
 
-#if defined(EYE)
-float eyeCurve = saturate(normalize(input.EyeNormal2.xyz).y); // Occlusion
-float eyeCenter = pow(eyeCurve, 150); // Iris 
+#	if defined(EYE)
+float eyeCurve = saturate(normalize(input.EyeNormal2.xyz).y);  // Occlusion
+float eyeCenter = pow(eyeCurve, 150);                          // Iris
 psout.Albedo.xyz *= eyeCurve + eyeCenter;
-#endif
+#	endif
 
 #	if defined(OUTLINE)
 psout.Albedo = float4(1, 0, 0, 1);
