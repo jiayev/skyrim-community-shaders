@@ -71,6 +71,7 @@ struct VS_OUTPUT
 	float3 ViewVector : TEXCOORD5;
 #if defined(EYE)
 	float3 EyeNormal : TEXCOORD6;
+	float3 EyeNormal2 : TEXCOORD12;
 #elif defined(LANDSCAPE)
 	float4 LandBlendWeights1 : TEXCOORD6;
 	float4 LandBlendWeights2 : TEXCOORD7;
@@ -411,6 +412,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	if defined(EYE)
 	precise float4 modelEyeCenter = float4(LeftEyeCenter.xyz + input.EyeParameter.xxx * (RightEyeCenter.xyz - LeftEyeCenter.xyz), 1);
 	vsout.EyeNormal.xyz = normalize(worldPosition.xyz - mul(modelEyeCenter, transpose(worldMatrix)));
+	vsout.EyeNormal2.xyz = inputPosition.xyz - modelEyeCenter;
 #	endif  // EYE
 
 #	if defined(SKINNED)
@@ -1859,7 +1861,7 @@ float3 envColor = envColorBase * envMask;
 #		if defined(DYNAMIC_CUBEMAPS)
 #			if defined(EYE)
 bool dynamicCubemap = true;
-envColor = GetDynamicCubemap(screenUV, worldSpaceNormal, worldSpaceViewDirection, 1.0 / 9.0, 0.25, true) * saturate(envMask * 10.0);
+envColor = GetDynamicCubemap(screenUV, worldSpaceNormal, worldSpaceViewDirection, 1.0 / 9.0, 0.25, true) * envMask;
 #			else
 uint2 envSize;
 TexEnvSampler.GetDimensions(envSize.x, envSize.y);
@@ -1878,12 +1880,12 @@ if (dynamicCubemap) {
 	}
 } 
 #				if !defined(VR)
-else if (envMask > 0.0 && !FrameParams.z && FrameParams.y) {
-	float4 ssrBlurred = ssrTexture.SampleLevel(SampColorSampler, screenUV, 0);
-	float4 ssrRaw = ssrRawTexture.SampleLevel(SampColorSampler, screenUV, 0);
-	float4 ssrTexture = lerp(ssrRaw, ssrBlurred, 1.0 - saturate(envMask));
-	envColor = lerp(envColor, ssrTexture.rgb * envColor * 10, ssrTexture.a);
-}
+// else if (envMask > 0.0 && !FrameParams.z && FrameParams.y) {
+// 	float4 ssrBlurred = ssrTexture.SampleLevel(SampColorSampler, screenUV, 0);
+// 	float4 ssrRaw = ssrRawTexture.SampleLevel(SampColorSampler, screenUV, 0);
+// 	float4 ssrTexture = lerp(ssrRaw, ssrBlurred, 1.0 - saturate(envMask));
+// 	envColor = lerp(envColor, ssrTexture.rgb * envColor * 10, ssrTexture.a);
+// }
 #				endif
 #			endif
 #		endif
@@ -2147,6 +2149,12 @@ psout.Albedo.w = blendFactorTerrain;
 psout.SnowParameters.w = blendFactorTerrain;
 #		endif
 #	endif
+
+#if defined(EYE)
+float eyeCurve = saturate(normalize(input.EyeNormal2.xyz).y); // Occlusion
+float eyeCenter = pow(eyeCurve, 150); // Iris 
+psout.Albedo.xyz *= eyeCurve + eyeCenter;
+#endif
 
 #	if defined(OUTLINE)
 psout.Albedo = float4(1, 0, 0, 1);

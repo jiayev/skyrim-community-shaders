@@ -58,7 +58,7 @@ float noise(float3 pos)
 
 float3 GetWetnessAmbientSpecular(float2 uv, float3 N, float3 V, float roughness)
 {
-#if defined(DYNAMIC_CUBEMAPS)
+#	if defined(DYNAMIC_CUBEMAPS)
 	float3 R = reflect(-V, N);
 	float NoV = saturate(dot(N, V));
 
@@ -66,28 +66,29 @@ float3 GetWetnessAmbientSpecular(float2 uv, float3 N, float3 V, float roughness)
 
 	float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level);
 
-#	if defined(DYNAMIC_CUBEMAPS) && !defined(VR)
-	float4 ssrBlurred = ssrTexture.SampleLevel(SampColorSampler, uv, 0);
-	float4 ssrRaw = ssrRawTexture.SampleLevel(SampColorSampler, uv, 0);
-	float4 ssrTexture = lerp(ssrRaw, ssrBlurred, sqrt(roughness));
-	specularIrradiance = sRGB2Lin(lerp(specularIrradiance, ssrTexture.rgb, ssrTexture.a));
-#	else
+#		if defined(DYNAMIC_CUBEMAPS) && !defined(VR)
+	// float4 ssrBlurred = ssrTexture.SampleLevel(SampColorSampler, uv, 0);
+	// float4 ssrRaw = ssrRawTexture.SampleLevel(SampColorSampler, uv, 0);
+	// float4 ssrTexture = lerp(ssrRaw, ssrBlurred, sqrt(roughness));
+	// specularIrradiance = sRGB2Lin(lerp(specularIrradiance, ssrTexture.rgb, ssrTexture.a));
 	specularIrradiance = sRGB2Lin(specularIrradiance);
-#	endif
+#		else
+	specularIrradiance = sRGB2Lin(specularIrradiance);
+#		endif
 
-#else
+#	else
 	float3 R = reflect(-V, N);
 	float NoV = saturate(dot(N, V));
 
 	float3 specularIrradiance = sRGB2Lin(mul(perPassWetnessEffects[0].DirectionalAmbientWS, float4(R, 1.0))) * noise(R * lerp(10.0, 1.0, roughness * roughness));
-#endif
+#	endif
 
 	// Split-sum approximation factors for Cook-Torrance specular BRDF.
-#if defined(DYNAMIC_CUBEMAPS)
+#	if defined(DYNAMIC_CUBEMAPS)
 	float2 specularBRDF = specularBRDF_LUT.Sample(LinearSampler, float2(NoV, roughness));
-#else
+#	else
 	float2 specularBRDF = EnvBRDFApprox(0.02, roughness, NoV);
-#endif
+#	endif
 
 	// Roughness dependent fresnel
 	// https://www.jcgt.org/published/0008/01/03/paper.pdf
