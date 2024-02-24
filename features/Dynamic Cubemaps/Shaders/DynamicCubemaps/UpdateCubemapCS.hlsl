@@ -170,30 +170,27 @@ float3 InverseProjectUVZ(float2 uv, float z)
 			float4 output = float4(sRGB2Lin(color), 1.0);
 			float lerpFactor = 0.5;
 
-			float4 position = float4(InverseProjectUVZ(uv, depth) * 0.001, 1.0);
+			float4 position = float4(InverseProjectUVZ(uv, depth) * 0.0005, 1.0);
 			DynamicCubemapPosition[ThreadID] = lerp(DynamicCubemapPosition[ThreadID], position, lerpFactor);
 
 			DynamicCubemapRaw[ThreadID] = lerp(DynamicCubemapRaw[ThreadID], output, lerpFactor);
-
+			
 			float distanceFactor = saturate(length(position.xyz));
 			output *= distanceFactor;
 
 			DynamicCubemap[ThreadID] = lerp(DynamicCubemap[ThreadID], output, lerpFactor);
-
+		
 			return;
 		}
 	}
 
 	float4 position = DynamicCubemapPosition[ThreadID];
-	position.xyz = (position.xyz + (CameraPreviousPosAdjust2.xyz * 0.001)) - (CameraPosAdjust[0].xyz * 0.001);  // Remove adjustment, add new adjustment
+	position.xyz = (position.xyz + (CameraPreviousPosAdjust2.xyz * 0.0005)) - (CameraPosAdjust[0].xyz * 0.0005);  // Remove adjustment, add new adjustment
 	DynamicCubemapPosition[ThreadID] = position;
 
 	float4 color = DynamicCubemapRaw[ThreadID];
-
-	float distanceFactor = saturate(length(position.xyz));
-	color *= 1.0 - distanceFactor;
-	color *= distanceFactor;
-	color *= 2.0;
+	color *= 1.0 - saturate(length(position.xyz));
+	color *= saturate(length(position.xyz) * 10);
 
 	DynamicCubemap[ThreadID] = max(0, color);
 }
