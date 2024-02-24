@@ -1876,12 +1876,15 @@ if (dynamicCubemap) {
 		float upAngle = saturate(dot(float3(0, 0, 1), normalizedDirLightDirectionWS.xyz));
 		envColor *= lerp(1.0, shadowColor.x, saturate(upAngle) * 0.2);
 	}
-} else if (envMask > 0.0) {
+} 
+#				if !defined(VR)
+else if (envMask > 0.0 && !FrameParams.z && FrameParams.y) {
 	float4 ssrBlurred = ssrTexture.SampleLevel(SampColorSampler, screenUV, 0);
 	float4 ssrRaw = ssrRawTexture.SampleLevel(SampColorSampler, screenUV, 0);
 	float4 ssrTexture = lerp(ssrRaw, ssrBlurred, 1.0 - saturate(envMask));
 	envColor = lerp(envColor, ssrTexture.rgb * envColor * 10, ssrTexture.a);
 }
+#				endif
 #			endif
 #		endif
 #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
@@ -2095,7 +2098,6 @@ psout.ScreenSpaceNormals.w = saturate(sqrt(envMask));
 
 #	if defined(WETNESS_EFFECTS)
 psout.ScreenSpaceNormals.w = max(psout.ScreenSpaceNormals.w, flatnessAmount);
-screenSpaceNormal.xyz = normalize(WorldToView(lerp(wetnessNormal, float3(0, 0, 1), flatnessAmount), false, eyeIndex));
 #	endif
 
 // Green reflections fix
