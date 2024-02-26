@@ -1762,7 +1762,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			[flatten] if (light.firstPersonShadow)
 			{
 				lightColor *= contactShadow;
-			} else
+			}
+			else
 			{
 				float shadowIntensityFactor = saturate(dot(worldSpaceNormal, normalizedLightDirection.xyz) * PI);
 				lightColor *= lerp(lerp(1.0, contactShadow, shadowIntensityFactor), 1.0, !frontFace * 0.2);
