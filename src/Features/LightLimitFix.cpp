@@ -326,10 +326,10 @@ void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPo
 		}
 
 		auto worldPos = a_initialPosition - eyePosition;
-		a_light.positionWS[eyeIndex].x = worldPos.x;
-		a_light.positionWS[eyeIndex].y = worldPos.y;
-		a_light.positionWS[eyeIndex].z = worldPos.z;
-		a_light.positionVS[eyeIndex] = DirectX::SimpleMath::Vector3::Transform(a_light.positionWS[eyeIndex], viewMatrix);
+		a_light.positionWS[eyeIndex].data.x = worldPos.x;
+		a_light.positionWS[eyeIndex].data.y = worldPos.y;
+		a_light.positionWS[eyeIndex].data.z = worldPos.z;
+		a_light.positionVS[eyeIndex].data = DirectX::SimpleMath::Vector3::Transform(a_light.positionWS[eyeIndex].data, viewMatrix);
 	}
 }
 
@@ -632,7 +632,7 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 	static float& lightFadeStart = (*(float*)RELOCATION_ID(527668, 414582).address());
 	static float& lightFadeEnd = (*(float*)RELOCATION_ID(527669, 414583).address());
 
-	float distance = CalculateLightDistance(light.positionWS[0], light.radius);
+	float distance = CalculateLightDistance(light.positionWS[0].data, light.radius);
 
 	float dimmer = 0.0f;
 
@@ -671,9 +671,9 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 			auto scaledTimer = a_timer * a_config->flickerSpeed;
 
 			for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
-				light.positionWS[eyeIndex].x += (float)perlin1.noise1D(scaledTimer) * a_config->flickerMovement;
-				light.positionWS[eyeIndex].y += (float)perlin2.noise1D(scaledTimer) * a_config->flickerMovement;
-				light.positionWS[eyeIndex].z += (float)perlin3.noise1D(scaledTimer) * a_config->flickerMovement;
+				light.positionWS[eyeIndex].data.x += (float)perlin1.noise1D(scaledTimer) * a_config->flickerMovement;
+				light.positionWS[eyeIndex].data.y += (float)perlin2.noise1D(scaledTimer) * a_config->flickerMovement;
+				light.positionWS[eyeIndex].data.z += (float)perlin3.noise1D(scaledTimer) * a_config->flickerMovement;
 			}
 
 			light.color.x = std::max(0.0f, light.color.x - ((float)perlin4.noise1D_01(scaledTimer) * a_config->flickerIntensity));
@@ -682,14 +682,14 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 		}
 
 		for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++)
-			light.positionVS[eyeIndex] = DirectX::SimpleMath::Vector3::Transform(light.positionWS[eyeIndex], viewMatrixCached[eyeIndex]);
+			light.positionVS[eyeIndex].data = DirectX::SimpleMath::Vector3::Transform(light.positionWS[eyeIndex].data, viewMatrixCached[eyeIndex]);
 
 		lightsData.push_back(light);
 
 		CachedParticleLight cachedParticleLight{};
 		cachedParticleLight.grey = float3(light.color.x, light.color.y, light.color.z).Dot(float3(0.3f, 0.59f, 0.11f));
 		cachedParticleLight.radius = light.radius;
-		cachedParticleLight.position = { light.positionWS[0].x + eyePositionCached[0].x, light.positionWS[0].y + eyePositionCached[0].y, light.positionWS[0].z + eyePositionCached[0].z };
+		cachedParticleLight.position = { light.positionWS[0].data.x + eyePositionCached[0].x, light.positionWS[0].data.y + eyePositionCached[0].y, light.positionWS[0].data.z + eyePositionCached[0].z };
 
 		cachedParticleLights.push_back(cachedParticleLight);
 	}
@@ -777,7 +777,7 @@ void LightLimitFix::UpdateLights()
 					static float& lightFadeStart = (*(float*)REL::RelocationID(527668, 414582).address());
 					static float& lightFadeEnd = (*(float*)REL::RelocationID(527669, 414583).address());
 
-					float distance = CalculateLightDistance(light.positionWS[0], light.radius);
+					float distance = CalculateLightDistance(light.positionWS[0].data, light.radius);
 
 					float distantLightFadeStart = lightsFar * lightsFar * (lightFadeStart / lightFadeEnd);
 					float distantLightFadeEnd = lightsFar * lightsFar;
@@ -837,17 +837,17 @@ void LightLimitFix::UpdateLights()
 						auto averageRadius = clusteredLight.radius / (float)clusteredLights;
 						float radiusDiff = abs(averageRadius - radius);
 
-						auto averagePosition = clusteredLight.positionWS[0] / (float)clusteredLights;
+						auto averagePosition = clusteredLight.positionWS[0].data / (float)clusteredLights;
 						float positionDiff = positionWS.GetDistance({ averagePosition.x, averagePosition.y, averagePosition.z });
 
 						if ((radiusDiff + positionDiff) > settings.ParticleLightsOptimisationClusterRadius || !settings.EnableParticleLightsOptimization) {
 							clusteredLight.radius /= (float)clusteredLights;
-							clusteredLight.positionWS[0] /= (float)clusteredLights;
-							clusteredLight.positionWS[1] = clusteredLight.positionWS[0];
+							clusteredLight.positionWS[0].data /= (float)clusteredLights;
+							clusteredLight.positionWS[1].data = clusteredLight.positionWS[0].data;
 							if (eyeCount == 2) {
-								clusteredLight.positionWS[1].x += eyePositionOffset.x / (float)clusteredLights;
-								clusteredLight.positionWS[1].y += eyePositionOffset.y / (float)clusteredLights;
-								clusteredLight.positionWS[1].z += eyePositionOffset.z / (float)clusteredLights;
+								clusteredLight.positionWS[1].data.x += eyePositionOffset.x / (float)clusteredLights;
+								clusteredLight.positionWS[1].data.y += eyePositionOffset.y / (float)clusteredLights;
+								clusteredLight.positionWS[1].data.z += eyePositionOffset.z / (float)clusteredLights;
 							}
 
 							AddCachedParticleLights(lightsData, clusteredLight);
@@ -855,7 +855,7 @@ void LightLimitFix::UpdateLights()
 							clusteredLights = 0;
 							clusteredLight.color = { 0, 0, 0 };
 							clusteredLight.radius = 0;
-							clusteredLight.positionWS[0] = { 0, 0, 0 };
+							clusteredLight.positionWS[0].data = { 0, 0, 0 };
 						}
 					}
 
@@ -867,9 +867,9 @@ void LightLimitFix::UpdateLights()
 					clusteredLight.color += Saturation(color, settings.ParticleLightsSaturation) * alpha;
 
 					clusteredLight.radius += radius * particleLight.second.config.radiusMult;
-					clusteredLight.positionWS[0].x += positionWS.x;
-					clusteredLight.positionWS[0].y += positionWS.y;
-					clusteredLight.positionWS[0].z += positionWS.z;
+					clusteredLight.positionWS[0].data.x += positionWS.x;
+					clusteredLight.positionWS[0].data.y += positionWS.y;
+					clusteredLight.positionWS[0].data.z += positionWS.z;
 
 					clusteredLights++;
 				}
@@ -898,12 +898,12 @@ void LightLimitFix::UpdateLights()
 
 		if (clusteredLights) {
 			clusteredLight.radius /= (float)clusteredLights;
-			clusteredLight.positionWS[0] /= (float)clusteredLights;
-			clusteredLight.positionWS[1] = clusteredLight.positionWS[0];
+			clusteredLight.positionWS[0].data /= (float)clusteredLights;
+			clusteredLight.positionWS[1].data = clusteredLight.positionWS[0].data;
 			if (eyeCount == 2) {
-				clusteredLight.positionWS[1].x += eyePositionOffset.x / (float)clusteredLights;
-				clusteredLight.positionWS[1].y += eyePositionOffset.y / (float)clusteredLights;
-				clusteredLight.positionWS[1].z += eyePositionOffset.z / (float)clusteredLights;
+				clusteredLight.positionWS[1].data.x += eyePositionOffset.x / (float)clusteredLights;
+				clusteredLight.positionWS[1].data.y += eyePositionOffset.y / (float)clusteredLights;
+				clusteredLight.positionWS[1].data.z += eyePositionOffset.z / (float)clusteredLights;
 			}
 			AddCachedParticleLights(lightsData, clusteredLight);
 		}

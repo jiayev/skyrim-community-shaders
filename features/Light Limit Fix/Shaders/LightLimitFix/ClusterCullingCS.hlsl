@@ -19,7 +19,7 @@ groupshared StructuredLight sharedLights[GROUP_SIZE];
 
 bool LightIntersectsCluster(StructuredLight light, ClusterAABB cluster, int eyeIndex = 0)
 {
-	float3 closest = max(cluster.minPoint, min(light.positionVS[eyeIndex].xyz, cluster.maxPoint)).xyz;
+	float3 closest = max(cluster.minPoint.xyz, min(light.positionVS[eyeIndex].xyz, cluster.maxPoint.xyz));
 
 	float3 dist = closest - light.positionVS[eyeIndex].xyz;
 	return dot(dist, dist) <= (light.radius * light.radius);

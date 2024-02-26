@@ -28,13 +28,20 @@ public:
 
 	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
-	struct LightData
+	struct PositionOpt
+	{
+		float3 data;
+		float pad0;
+	};
+
+	struct alignas(16) LightData
 	{
 		float3 color;
 		float radius;
-		float3 positionWS[2];
-		float3 positionVS[2];
+		PositionOpt positionWS[2];
+		PositionOpt positionVS[2];
 		uint firstPersonShadow;
+		float pad0[3];
 	};
 
 	struct ClusterAABB
@@ -43,10 +50,11 @@ public:
 		float4 maxPoint;
 	};
 
-	struct LightGrid
+	struct alignas(16) LightGrid
 	{
 		uint offset;
 		uint lightCount;
+		float pad0[2];
 	};
 
 	struct alignas(16) LightBuildingCB
@@ -54,13 +62,13 @@ public:
 		float4x4 InvProjMatrix[2];
 		float LightsNear;
 		float LightsFar;
-		uint pad[2];
+		float pad[2];
 	};
 
 	struct alignas(16) LightCullingCB
 	{
 		uint LightCount;
-		uint pad[3];
+		float pad[3];
 	};
 
 	struct PerPass
@@ -76,8 +84,8 @@ public:
 
 	struct StrictLightData
 	{
-		uint NumLights;
 		LightData StrictLights[15];
+		uint NumLights;
 	};
 
 	StrictLightData strictLightDataTemp;
@@ -328,8 +336,8 @@ struct fmt::formatter<LightLimitFix::LightData>
 			reinterpret_cast<uintptr_t>(&l),
 			(Vector3)l.color,
 			l.radius,
-			(Vector3)l.positionWS[0], (Vector3)l.positionWS[1],
-			(Vector3)l.positionVS[0], (Vector3)l.positionVS[1],
+			(Vector3)l.positionWS[0].data, (Vector3)l.positionWS[1].data,
+			(Vector3)l.positionVS[0].data, (Vector3)l.positionVS[1].data,
 			l.firstPersonShadow);
 	}
 };

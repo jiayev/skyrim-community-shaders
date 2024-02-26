@@ -2,15 +2,17 @@ struct LightGrid
 {
 	uint offset;
 	uint lightCount;
+	float pad0[2];
 };
 
 struct StructuredLight
 {
 	float3 color;
 	float radius;
-	float3 positionWS[2];
-	float3 positionVS[2];
+	float4 positionWS[2];
+	float4 positionVS[2];
 	uint firstPersonShadow;
+	float pad0[3];
 };
 
 struct PerPassLLF
@@ -32,8 +34,8 @@ StructuredBuffer<PerPassLLF> perPassLLF : register(t32);
 
 struct StrictLightData
 {
-	uint StrictLightCount;
 	StructuredLight StrictLights[15];
+	uint StrictLightCount;
 };
 
 StructuredBuffer<StrictLightData> strictLightData : register(t37);

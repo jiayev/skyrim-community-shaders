@@ -16,13 +16,15 @@ struct LightGrid
 {
 	uint offset;
 	uint lightCount;
+	float pad0[2];
 };
 
 struct StructuredLight
 {
 	float3 color;
 	float radius;
-	float3 positionWS[2];
-	float3 positionVS[2];
+	float4 positionWS[2];
+	float4 positionVS[2];
 	uint firstPersonShadow;
+	float pad0[3];
 };
