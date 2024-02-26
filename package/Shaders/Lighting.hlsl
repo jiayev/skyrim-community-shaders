@@ -1705,7 +1705,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 		lightsDiffuseColor += lightDiffuseColor;
 	}
-}
 
 #		else
 
