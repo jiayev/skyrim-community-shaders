@@ -1714,16 +1714,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	input.TBN2.z = worldSpaceVertexNormal[2];
 #			endif
 
-	uint numStrictLights = strictLightData[0].StrictLightCount;
+	uint numStrictLights = strictLightData[0].NumStrictLights;
+	uint numClusteredLights = 0;
 	uint totalLightCount = numStrictLights;
 	uint clusterIndex = 0;
 	uint lightOffset = 0;
 	if (perPassLLF[0].EnableGlobalLights && GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
-		totalLightCount += lightGrid[clusterIndex].lightCount;
+		numClusteredLights = lightGrid[clusterIndex].lightCount;
+		totalLightCount += numClusteredLights;
 		lightOffset = lightGrid[clusterIndex].offset;
 	}
-
-	float shadowQualityScale = saturate(1.0 - (float(totalLightCount) / 128.0));
 
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
 	{
@@ -1757,14 +1757,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 		[branch] if (!FrameParams.z && FrameParams.y && (light.firstPersonShadow || perPassLLF[0].EnableContactShadows) && shadowComponent != 0.0)
 		{
-			float3 normalizedLightDirectionVS = normalize(light.positionVS[eyeIndex].xyz - viewPosition);
-			float radius = light.firstPersonShadow ? light.radius : 0.0;
-			float contactShadow = ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, radius, eyeIndex);
+			float3 normalizedLightDirectionVS = normalize(light.positionVS[eyeIndex].xyz - viewPosition.xyz);
+			float contactShadow = ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, light.firstPersonShadow, eyeIndex);
 			[flatten] if (light.firstPersonShadow)
 			{
 				lightColor *= contactShadow;
-			}
-			else
+			} else
 			{
 				float shadowIntensityFactor = saturate(dot(worldSpaceNormal, normalizedLightDirection.xyz) * PI);
 				lightColor *= lerp(lerp(1.0, contactShadow, shadowIntensityFactor), 1.0, !frontFace * 0.2);
@@ -2051,11 +2049,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (perPassLLF[0].EnableLightsVisualisation) {
 		if (perPassLLF[0].LightsVisualisationMode == 0) {
-			psout.Albedo.xyz = TurboColormap(strictLightData[0].NumLights >= 7.0);
+			psout.Albedo.xyz = TurboColormap(strictLightData[0].NumStrictLights >= 7.0);
 		} else if (perPassLLF[0].LightsVisualisationMode == 1) {
-			psout.Albedo.xyz = TurboColormap((float)strictLightData[0].NumLights / 15.0);
+			psout.Albedo.xyz = TurboColormap((float)strictLightData[0].NumStrictLights / 15.0);
 		} else {
-			psout.Albedo.xyz = TurboColormap((float)lightCount / 128.0);
+			psout.Albedo.xyz = TurboColormap((float)numClusteredLights / 128.0);
 		}
 	} else {
 		psout.Albedo.xyz = color.xyz - tmpColor.xyz * FrameParams.zzz;

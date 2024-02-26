@@ -35,7 +35,8 @@ StructuredBuffer<PerPassLLF> perPassLLF : register(t32);
 struct StrictLightData
 {
 	StructuredLight StrictLights[15];
-	uint StrictLightCount;
+	uint NumStrictLights;
+	float pad0[3];
 };
 
 StructuredBuffer<StrictLightData> strictLightData : register(t37);
@@ -69,17 +70,18 @@ float InterleavedGradientNoise(float2 uv)
 	return frac(magic.z * frac(dot(uv, magic.xy)));
 }
 
-float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, float shadowQualityScale, float radius = 0.0, uint a_eyeIndex = 0)
+float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, float radius, bool longShadow, uint a_eyeIndex = 0)
 {
 	float2 depthDeltaMult;
 	uint loopMax;
-	if (radius > 0) {  // long
-		lightDirectionVS *= radius / 16;
-		depthDeltaMult = float2(1.00, 0.01);
-		loopMax = round(16 * shadowQualityScale);
+	if (longShadow) {
+		loopMax = log2(radius);
+		depthDeltaMult = float2(1.0 * loopMax, 1.0 / loopMax) * 0.10;
+		lightDirectionVS *= loopMax * 4.0;
 	} else {
-		depthDeltaMult = float2(0.20, 0.10);
-		loopMax = round(11.0 * shadowQualityScale);
+		loopMax = log2(radius) * 0.5;
+		depthDeltaMult = float2(1.0 * loopMax, 1.0 / loopMax) * 0.20;
+		lightDirectionVS *= loopMax;
 	}
 
 	// Offset starting position with interleaved gradient noise

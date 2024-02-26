@@ -82,10 +82,11 @@ public:
 		uint FrameCount;
 	};
 
-	struct StrictLightData
+	struct alignas(16) StrictLightData
 	{
 		LightData StrictLights[15];
 		uint NumLights;
+		float pad0[3];
 	};
 
 	StrictLightData strictLightDataTemp;
