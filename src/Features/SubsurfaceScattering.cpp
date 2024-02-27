@@ -6,7 +6,6 @@
 void SubsurfaceScattering::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-	
 		ImGui::Spacing();
 		ImGui::Spacing();
 
@@ -30,11 +29,9 @@ void SubsurfaceScattering::Draw(const RE::BSShader* shader, const uint32_t)
 		auto normals = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK];
 		auto normalsSwap = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK_SWAP];
 
-		if (views[2] == normals.RTV)
-		{
+		if (views[2] == normals.RTV) {
 			normalsMode = 1;
-		} else if (views[2] == normalsSwap.RTV)
-		{
+		} else if (views[2] == normalsSwap.RTV) {
 			normalsMode = 2;
 		}
 
@@ -107,7 +104,6 @@ void SubsurfaceScattering::SetupResources()
 		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointSampler));
 	}
-	
 }
 
 void SubsurfaceScattering::Reset()
@@ -214,7 +210,7 @@ void SubsurfaceScattering::DrawDeferred()
 				context->CSSetShaderResources(0, 1, views);
 
 				ID3D11UnorderedAccessView* uavs[2] = { snowSwap.UAV, normals.UAV };
- 				context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+				context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
 
 				auto shader = GetComputeShaderVerticalBlur();
 				context->CSSetShader(shader, nullptr, 0);
