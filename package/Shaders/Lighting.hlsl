@@ -1623,7 +1623,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float puddle = wetness;
 	if (wetness > 0.0 || puddleWetness > 0) {
 #		if !defined(SKINNED)
-		puddle = noise(puddleCoords) * 0.25 + 0.75;
+		puddle = noise(puddleCoords) * ((minWetnessAngle / perPassWetnessEffects[0].PuddleMaxAngle) * perPassWetnessEffects[0].MaxPuddleWetness * 0.25) + 0.5;
 		wetness = lerp(wetness, puddleWetness, saturate(puddle - 0.25));
 #		endif
 		puddle *= wetness;

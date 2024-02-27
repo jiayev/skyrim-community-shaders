@@ -83,7 +83,7 @@ void WetnessEffects::DrawSettings()
 				"The radius that is used to determine puddle size and location. ");
 		}
 
-		ImGui::SliderFloat("Puddle Max Angle", &settings.PuddleMaxAngle, 0.0f, 1.0f);
+		ImGui::SliderFloat("Puddle Max Angle", &settings.PuddleMaxAngle, 0.6f, 1.0f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"How flat a surface needs to be for puddles to form on it. ");
