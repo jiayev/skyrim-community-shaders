@@ -14,6 +14,7 @@
 #include "Features/WaterCaustics.h"
 #include "Features/WaterParallax.h"
 #include "Features/WetnessEffects.h"
+#include "Features/SubsurfaceScattering.h"
 
 void Feature::Load(json&)
 {
@@ -113,7 +114,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		CloudShadows::GetSingleton(),
 		TerrainBlending::GetSingleton(),
 		WaterParallax::GetSingleton(),
-		WaterCaustics::GetSingleton()
+		WaterCaustics::GetSingleton(),
+		SubsurfaceScattering::GetSingleton()
 	};
 
 	static std::vector<Feature*> featuresVR = {

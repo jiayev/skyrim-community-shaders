@@ -383,6 +383,78 @@ bool State::IsDeveloperMode()
 
 void State::SetupResources()
 {
+	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+	auto device = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().forwarder;
+
+	{
+		auto& normalsTexture = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK];
+		
+
+		D3D11_TEXTURE2D_DESC texDesc{};
+		normalsTexture.texture->GetDesc(&texDesc);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		normalsTexture.SRV->GetDesc(&srvDesc);
+		
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+		normalsTexture.RTV->GetDesc(&rtvDesc);
+
+		normalsTexture.SRV->Release();
+		normalsTexture.SRV = nullptr;
+
+		normalsTexture.RTV->Release();
+		normalsTexture.RTV = nullptr;
+
+		normalsTexture.texture->Release();
+		normalsTexture.texture = nullptr;
+
+		texDesc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
+		
+		device->CreateTexture2D(&texDesc, nullptr, &normalsTexture.texture);
+		device->CreateShaderResourceView(normalsTexture.texture, &srvDesc, &normalsTexture.SRV);
+		device->CreateRenderTargetView(normalsTexture.texture, &rtvDesc, &normalsTexture.RTV);
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+		uavDesc.Format = texDesc.Format;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+		uavDesc.Texture2D.MipSlice = 0;
+		device->CreateUnorderedAccessView(normalsTexture.texture, &uavDesc, &normalsTexture.UAV);
+	}
+
+	{
+		auto& normalsTexture = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK_SWAP];
+
+		D3D11_TEXTURE2D_DESC texDesc{};
+		normalsTexture.texture->GetDesc(&texDesc);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		normalsTexture.SRV->GetDesc(&srvDesc);
+
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+		normalsTexture.RTV->GetDesc(&rtvDesc);
+
+		normalsTexture.SRV->Release();
+		normalsTexture.SRV = nullptr;
+
+		normalsTexture.RTV->Release();
+		normalsTexture.RTV = nullptr;
+
+		normalsTexture.texture->Release();
+		normalsTexture.texture = nullptr;
+
+		texDesc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
+
+		device->CreateTexture2D(&texDesc, nullptr, &normalsTexture.texture);
+		device->CreateShaderResourceView(normalsTexture.texture, &srvDesc, &normalsTexture.SRV);
+		device->CreateRenderTargetView(normalsTexture.texture, &rtvDesc, &normalsTexture.RTV);
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+		uavDesc.Format = texDesc.Format;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+		uavDesc.Texture2D.MipSlice = 0;
+		device->CreateUnorderedAccessView(normalsTexture.texture, &uavDesc, &normalsTexture.UAV);
+	}
+
 	D3D11_BUFFER_DESC sbDesc{};
 	sbDesc.Usage = D3D11_USAGE_DYNAMIC;
 	sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -404,8 +476,6 @@ void State::SetupResources()
 	lightingDataBuffer = std::make_unique<Buffer>(sbDesc);
 	lightingDataBuffer->CreateSRV(srvDesc);
 
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-
 	// grab main texture to get resolution
 	// VR cannot use viewport->screenWidth/Height as it's the desktop preview window's resolution and not HMD
 	D3D11_TEXTURE2D_DESC texDesc{};
@@ -413,6 +483,7 @@ void State::SetupResources()
 
 	screenWidth = (float)texDesc.Width;
 	screenHeight = (float)texDesc.Height;
+
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor)

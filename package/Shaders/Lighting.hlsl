@@ -6,6 +6,13 @@
 
 #define PI 3.1415927
 
+#if defined(SSS) && (defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(HAIR))
+#	define SKIN
+#	undef SOFT_LIGHTING
+#	undef BACK_LIGHTING
+#	undef RIM_LIGHTING
+#endif
+
 #if defined(SKINNED) || defined(ENVMAP) || defined(EYE) || defined(MULTI_LAYER_PARALLAX)
 #	define DRAW_IN_WORLDSPACE
 #endif
@@ -16,10 +23,6 @@
 
 #if defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(LODLANDNOISE) || defined(WORLD_MAP)
 #	define LOD
-#endif
-
-#if (defined(FACEGEN) || defined(FACEGEN_RGB_TINT)) && defined(SOFT_LIGHTING) && defined(MODELSPACENORMALS)
-#	define SKIN
 #endif
 
 struct VS_INPUT
@@ -1819,7 +1822,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	diffuseColor += lightsDiffuseColor;
 	specularColor += lightsSpecularColor;
 
-#	if !defined(LANDSCAPE)
+#	if !defined(LANDSCAPE) && !defined(SKIN)
 	if (shaderDescriptors[0].PixelShaderDescriptor & _CharacterLight) {
 		float charLightMul =
 			saturate(dot(viewDirection, modelNormal.xyz)) * CharacterLightParams.x +
@@ -2157,6 +2160,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(OUTLINE)
 	psout.Albedo = float4(1, 0, 0, 1);
 #	endif  // OUTLINE
+
+#	if defined(SKIN)
+	psout.ScreenSpaceNormals.z = 1;
+#	endif
 
 	psout.TerrainMask = 1.0;
 
