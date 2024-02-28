@@ -6,11 +6,8 @@
 
 #define PI 3.1415927
 
-#if defined(SSS) && (defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(HAIR))
+#if defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(HAIR)
 #	define SKIN
-#	undef SOFT_LIGHTING
-#	undef BACK_LIGHTING
-#	undef RIM_LIGHTING
 #endif
 
 #if defined(SKINNED) || defined(ENVMAP) || defined(EYE) || defined(MULTI_LAYER_PARALLAX)
@@ -497,9 +494,6 @@ struct PS_OUTPUT
 	float4 ScreenSpaceNormals : SV_Target2;
 #if defined(SNOW)
 	float4 SnowParameters : SV_Target3;
-	float4 TerrainMask : SV_Target4;
-#else
-	float4 TerrainMask : SV_Target4;
 #endif
 };
 
@@ -1482,10 +1476,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float selfShadowFactor = 1.0f;
 
 	float3 normalizedDirLightDirectionWS = DirLightDirection;
-#	if ((defined(SKINNED) || !defined(MODELSPACENORMALS)) && !defined(DRAW_IN_WORLDSPACE))
-	normalizedDirLightDirectionWS = lerp(normalize(mul(input.World[eyeIndex], float4(DirLightDirection, 0))), normalizedDirLightDirectionWS, input.WorldSpace);
-	// temp fix for tree barks
-	normalizedDirLightDirectionWS = any(isnan(normalizedDirLightDirectionWS)) ? DirLightDirection : normalizedDirLightDirectionWS;
+
+#	if !defined(DRAW_IN_WORLDSPACE)
+	[flatten] if (!input.WorldSpace)
+		normalizedDirLightDirectionWS = normalize(mul(input.World[eyeIndex], float4(DirLightDirection.xyz, 0)));
 #	endif
 
 #	if defined(CLOUD_SHADOWS)
@@ -1577,14 +1571,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if !defined(MODELSPACENORMALS)
 	float3 vertexNormal = tbnTr[2];
+	float3 worldSpaceVertexNormal = vertexNormal;
 
-	float3 screenSpaceVertexNormal;
-	screenSpaceVertexNormal.x = dot(input.ScreenNormalTransform0.xyz, vertexNormal);
-	screenSpaceVertexNormal.y = dot(input.ScreenNormalTransform1.xyz, vertexNormal);
-	screenSpaceVertexNormal.z = dot(input.ScreenNormalTransform2.xyz, vertexNormal);
-	screenSpaceVertexNormal = normalize(screenSpaceVertexNormal);
-
-	float3 worldSpaceVertexNormal = normalize(mul(CameraViewInverse[eyeIndex], float4(screenSpaceVertexNormal, 0)));
+#		if !defined(DRAW_IN_WORLDSPACE)
+	[flatten] if (!input.WorldSpace)
+		worldSpaceVertexNormal = normalize(mul(input.World[eyeIndex], float4(worldSpaceVertexNormal, 0)));
+#		endif
 #	endif
 
 	float porosity = 1.0;
@@ -1822,7 +1814,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	diffuseColor += lightsDiffuseColor;
 	specularColor += lightsSpecularColor;
 
-#	if !defined(LANDSCAPE) && !defined(SKIN)
+#	if !defined(LANDSCAPE)
 	if (shaderDescriptors[0].PixelShaderDescriptor & _CharacterLight) {
 		float charLightMul =
 			saturate(dot(viewDirection, modelNormal.xyz)) * CharacterLightParams.x +
@@ -1870,6 +1862,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (dynamicCubemap) {
 #				if defined(CPM_AVAILABLE) && defined(ENVMAP)
 		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
+
 		envColor = GetDynamicCubemap(screenUV, worldSpaceNormal, worldSpaceViewDirection, lerp(1.0 / 9.0, 1.0 - complexMaterialColor.y, complexMaterial), lerp(F0, complexSpecular, complexMaterial), complexMaterial) * envMask;
 #				else
 		float3 F0 = lerp(envColorBase, 1.0, envColorBase.x == 0.0 && envColorBase.y == 0.0 && envColorBase.z == 0.0);
@@ -2161,11 +2154,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.Albedo = float4(1, 0, 0, 1);
 #	endif  // OUTLINE
 
-#	if defined(SKIN)
+#	if defined(SKIN) && defined(SSS)
 	psout.ScreenSpaceNormals.z = 1;
 #	endif
 
-	psout.TerrainMask = 1.0;
 
 	return psout;
 }
