@@ -33,7 +33,6 @@
  * policies, either expressed or implied, of the copyright holders.
  */
 
-
 /**
  *                  _______      _______      _______      _______
  *                 /       |    /       |    /       |    /       |
@@ -114,103 +113,101 @@ float InterleavedGradientNoise(float2 uv)
 #define SSSS_N_SAMPLES 25
 
 float4 SSSSBlurCS(
-        uint2 DTid,
-        float2 texcoord,
-        float2 dir,
-        float4 normals
-    ) {
+	uint2 DTid,
+	float2 texcoord,
+	float2 dir,
+	float4 normals)
+{
+	float sssAmount = normals.z;
 
-    float sssAmount = normals.z;
-
-    // Fetch color of current pixel:
-    float4 colorM = ColorTexture[DTid.xy];
-
-#if defined(HORIZONTAL)
-    colorM.rgb = sRGB2Lin(colorM.rgb);
-#endif
-
-    if (sssAmount == 0)
-        return colorM;
-    
-    // Fetch linear depth of current pixel:
-    float depthM = DepthTexture[DTid.xy].r;
-    depthM = GetScreenDepth(depthM);
-
-float4 kernel[] = {
-    float4(0.530605, 0.613514, 0.739601, 0),
-    float4(0.000973794, 1.11862e-005, 9.43437e-007, -3),
-    float4(0.00333804, 7.85443e-005, 1.2945e-005, -2.52083),
-    float4(0.00500364, 0.00020094, 5.28848e-005, -2.08333),
-    float4(0.00700976, 0.00049366, 0.000151938, -1.6875),
-    float4(0.0094389, 0.00139119, 0.000416598, -1.33333),
-    float4(0.0128496, 0.00356329, 0.00132016, -1.02083),
-    float4(0.017924, 0.00711691, 0.00347194, -0.75),
-    float4(0.0263642, 0.0119715, 0.00684598, -0.520833),
-    float4(0.0410172, 0.0199899, 0.0118481, -0.333333),
-    float4(0.0493588, 0.0367726, 0.0219485, -0.1875),
-    float4(0.0402784, 0.0657244, 0.04631, -0.0833333),
-    float4(0.0211412, 0.0459286, 0.0378196, -0.0208333),
-    float4(0.0211412, 0.0459286, 0.0378196, 0.0208333),
-    float4(0.0402784, 0.0657244, 0.04631, 0.0833333),
-    float4(0.0493588, 0.0367726, 0.0219485, 0.1875),
-    float4(0.0410172, 0.0199899, 0.0118481, 0.333333),
-    float4(0.0263642, 0.0119715, 0.00684598, 0.520833),
-    float4(0.017924, 0.00711691, 0.00347194, 0.75),
-    float4(0.0128496, 0.00356329, 0.00132016, 1.02083),
-    float4(0.0094389, 0.00139119, 0.000416598, 1.33333),
-    float4(0.00700976, 0.00049366, 0.000151938, 1.6875),
-    float4(0.00500364, 0.00020094, 5.28848e-005, 2.08333),
-    float4(0.00333804, 7.85443e-005, 1.2945e-005, 2.52083),
-    float4(0.000973794, 1.11862e-005, 9.43437e-007, 3),
-};
-
-    // Accumulate center sample, multiplying it with its gaussian weight:
-    float4 colorBlurred = colorM;
-    colorBlurred.rgb *= kernel[0].rgb;
-
-    // World-space width
-    float distanceToProjectionWindow = 1.0 / tan(0.5 * radians(SSSS_FOVY));
-    float scale = distanceToProjectionWindow / depthM;
-    
-    // Calculate the final step to fetch the surrounding pixels:
-    float2 finalStep = scale * BufferDim;
-    finalStep *= sssAmount;
-    finalStep *= 1.0 / 3.0;
-
-    float jitter = InterleavedGradientNoise(DTid.xy);
-    float2x2 rotationMatrix = float2x2(cos(jitter), sin(jitter), -sin(jitter), cos(jitter));
-    float2x2 identityMatrix = float2x2(1.0, 0.0, 0.0, 1.0);
-    
-    // Accumulate the other samples:
-    for (uint i = 1; i < SSSS_N_SAMPLES; i++) {
-
-        float2 offset = kernel[i].a * finalStep;
-        
-        // Apply randomized rotation 
-        offset = mul(offset, rotationMatrix);
-
-        uint2 coords = DTid.xy + uint2(offset + 0.5);
-
-        float3 color = ColorTexture[coords].rgb;
+	// Fetch color of current pixel:
+	float4 colorM = ColorTexture[DTid.xy];
 
 #if defined(HORIZONTAL)
-    color.rgb = sRGB2Lin(color.rgb);
+	colorM.rgb = sRGB2Lin(colorM.rgb);
 #endif
 
-        float depth = DepthTexture[coords].r;
-        depth = GetScreenDepth(depth);
+	if (sssAmount == 0)
+		return colorM;
 
-        // If the difference in depth is huge, we lerp color back to "colorM":
-        float s = saturate((1.0 / 3.0) * distanceToProjectionWindow * abs(depthM - depth));
-        color = lerp(color, colorM.rgb, s);
+	// Fetch linear depth of current pixel:
+	float depthM = DepthTexture[DTid.xy].r;
+	depthM = GetScreenDepth(depthM);
 
-        // Accumulate:
-        colorBlurred.rgb += kernel[i].rgb * color.rgb;
-    }
-   
-    colorBlurred = lerp(colorM, colorBlurred, sssAmount);
+	float4 kernel[] = {
+		float4(0.530605, 0.613514, 0.739601, 0),
+		float4(0.000973794, 1.11862e-005, 9.43437e-007, -3),
+		float4(0.00333804, 7.85443e-005, 1.2945e-005, -2.52083),
+		float4(0.00500364, 0.00020094, 5.28848e-005, -2.08333),
+		float4(0.00700976, 0.00049366, 0.000151938, -1.6875),
+		float4(0.0094389, 0.00139119, 0.000416598, -1.33333),
+		float4(0.0128496, 0.00356329, 0.00132016, -1.02083),
+		float4(0.017924, 0.00711691, 0.00347194, -0.75),
+		float4(0.0263642, 0.0119715, 0.00684598, -0.520833),
+		float4(0.0410172, 0.0199899, 0.0118481, -0.333333),
+		float4(0.0493588, 0.0367726, 0.0219485, -0.1875),
+		float4(0.0402784, 0.0657244, 0.04631, -0.0833333),
+		float4(0.0211412, 0.0459286, 0.0378196, -0.0208333),
+		float4(0.0211412, 0.0459286, 0.0378196, 0.0208333),
+		float4(0.0402784, 0.0657244, 0.04631, 0.0833333),
+		float4(0.0493588, 0.0367726, 0.0219485, 0.1875),
+		float4(0.0410172, 0.0199899, 0.0118481, 0.333333),
+		float4(0.0263642, 0.0119715, 0.00684598, 0.520833),
+		float4(0.017924, 0.00711691, 0.00347194, 0.75),
+		float4(0.0128496, 0.00356329, 0.00132016, 1.02083),
+		float4(0.0094389, 0.00139119, 0.000416598, 1.33333),
+		float4(0.00700976, 0.00049366, 0.000151938, 1.6875),
+		float4(0.00500364, 0.00020094, 5.28848e-005, 2.08333),
+		float4(0.00333804, 7.85443e-005, 1.2945e-005, 2.52083),
+		float4(0.000973794, 1.11862e-005, 9.43437e-007, 3),
+	};
 
-    return colorBlurred;
+	// Accumulate center sample, multiplying it with its gaussian weight:
+	float4 colorBlurred = colorM;
+	colorBlurred.rgb *= kernel[0].rgb;
+
+	// World-space width
+	float distanceToProjectionWindow = 1.0 / tan(0.5 * radians(SSSS_FOVY));
+	float scale = distanceToProjectionWindow / depthM;
+
+	// Calculate the final step to fetch the surrounding pixels:
+	float2 finalStep = scale * BufferDim;
+	finalStep *= sssAmount;
+	finalStep *= 1.0 / 3.0;
+
+	float jitter = InterleavedGradientNoise(DTid.xy);
+	float2x2 rotationMatrix = float2x2(cos(jitter), sin(jitter), -sin(jitter), cos(jitter));
+	float2x2 identityMatrix = float2x2(1.0, 0.0, 0.0, 1.0);
+
+	// Accumulate the other samples:
+	for (uint i = 1; i < SSSS_N_SAMPLES; i++) {
+		float2 offset = kernel[i].a * finalStep;
+
+		// Apply randomized rotation
+		offset = mul(offset, rotationMatrix);
+
+		uint2 coords = DTid.xy + uint2(offset + 0.5);
+
+		float3 color = ColorTexture[coords].rgb;
+
+#if defined(HORIZONTAL)
+		color.rgb = sRGB2Lin(color.rgb);
+#endif
+
+		float depth = DepthTexture[coords].r;
+		depth = GetScreenDepth(depth);
+
+		// If the difference in depth is huge, we lerp color back to "colorM":
+		float s = saturate((1.0 / 3.0) * distanceToProjectionWindow * abs(depthM - depth));
+		color = lerp(color, colorM.rgb, s);
+
+		// Accumulate:
+		colorBlurred.rgb += kernel[i].rgb * color.rgb;
+	}
+
+	colorBlurred = lerp(colorM, colorBlurred, sssAmount);
+
+	return colorBlurred;
 }
 
 //-----------------------------------------------------------------------------

@@ -388,14 +388,13 @@ void State::SetupResources()
 
 	{
 		auto& normalsTexture = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK];
-		
 
 		D3D11_TEXTURE2D_DESC texDesc{};
 		normalsTexture.texture->GetDesc(&texDesc);
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 		normalsTexture.SRV->GetDesc(&srvDesc);
-		
+
 		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
 		normalsTexture.RTV->GetDesc(&rtvDesc);
 
@@ -409,7 +408,7 @@ void State::SetupResources()
 		normalsTexture.texture = nullptr;
 
 		texDesc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
-		
+
 		device->CreateTexture2D(&texDesc, nullptr, &normalsTexture.texture);
 		device->CreateShaderResourceView(normalsTexture.texture, &srvDesc, &normalsTexture.SRV);
 		device->CreateRenderTargetView(normalsTexture.texture, &rtvDesc, &normalsTexture.RTV);
@@ -483,7 +482,6 @@ void State::SetupResources()
 
 	screenWidth = (float)texDesc.Width;
 	screenHeight = (float)texDesc.Height;
-
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor)
