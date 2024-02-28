@@ -295,3 +295,39 @@ namespace Util
 		}
 	}
 }
+
+namespace nlohmann
+{
+	void to_json(json& j, const float2& v)
+	{
+		j = json{ v.x, v.y };
+	}
+
+	void from_json(const json& j, float2& v)
+	{
+		std::array<float, 2> temp = j;
+		v = { temp[0], temp[1] };
+	}
+
+	void to_json(json& j, const float3& v)
+	{
+		j = json{ v.x, v.y, v.z };
+	}
+
+	void from_json(const json& j, float3& v)
+	{
+		std::array<float, 3> temp = j;
+		v = { temp[0], temp[1], temp[2] };
+	}
+
+	void to_json(json& j, const float4& v)
+	{
+		j = json{ v.x, v.y, v.z, v.w };
+	}
+
+	void from_json(const json& j, float4& v)
+	{
+		std::array<float, 4> temp = j;
+		v = { temp[0], temp[1], temp[2], temp[3] };
+	}
+}
