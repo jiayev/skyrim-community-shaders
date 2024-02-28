@@ -2158,7 +2158,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.ScreenSpaceNormals.z = 1;
 #	endif
 
-
 	return psout;
 }
 #endif  // PSHADER
