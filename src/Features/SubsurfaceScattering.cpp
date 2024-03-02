@@ -13,7 +13,7 @@ void SubsurfaceScattering::DrawSettings()
 	}
 }
 
-void SubsurfaceScattering::DrawSSSWrapper(bool a_firstPerson)
+void SubsurfaceScattering::DrawSSSWrapper(bool)
 {
 	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 
@@ -340,7 +340,7 @@ void SubsurfaceScattering::PostPostLoad()
 	Hooks::Install();
 }
 
-void SubsurfaceScattering::OverrideFirstPerson()
+void SubsurfaceScattering::OverrideFirstPersonRenderTargets()
 {
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 	state->GetRuntimeData().renderTargets[2] = normalsMode == 1 ? RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK : RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK_SWAP;

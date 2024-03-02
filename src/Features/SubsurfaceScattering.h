@@ -78,7 +78,7 @@ public:
 
 	virtual void PostPostLoad() override;
 
-	void OverrideFirstPerson();
+	void OverrideFirstPersonRenderTargets();
 
 	struct Hooks
 	{
@@ -106,7 +106,7 @@ public:
 		{
 			static void thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges, uint32_t RenderFlags, int GeometryGroup)
 			{
-				GetSingleton()->OverrideFirstPerson();
+				GetSingleton()->OverrideFirstPersonRenderTargets();
 				func(This, StartRange, EndRanges, RenderFlags, GeometryGroup);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -114,10 +114,10 @@ public:
 
 		struct Main_RenderFirstPersonView_End
 		{
-			static int64_t thunk(RE::BSShaderAccumulator* a1, char a2)
+			static void thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges, uint32_t RenderFlags, int GeometryGroup)
 			{
 				GetSingleton()->DrawSSSWrapper(true);
-				return func(a1, a2);
+				func(This, StartRange, EndRanges, RenderFlags, GeometryGroup);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -126,8 +126,8 @@ public:
 		{
 			//stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 			stl::write_thunk_call<BSShaderAccumulator_FinishAccumulating_Standard_PreResolveDepth_QPassesWithinRange_WaterStencil>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x3C5, 0x3B4));
-			stl::write_thunk_call<Main_RenderFirstPersonView_Start>(REL::RelocationID(99943, 99943).address() + REL::Relocate(0x70, 0x492));
-			stl::write_thunk_call<Main_RenderFirstPersonView_End>(REL::RelocationID(99943, 99943).address() + REL::Relocate(0x49C, 0x492));
+			stl::write_thunk_call<Main_RenderFirstPersonView_Start>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0x70, 0x66));
+			stl::write_thunk_call<Main_RenderFirstPersonView_End>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0x49C, 0x47E));
 			logger::info("[SSS] Installed hooks");
 		}
 	};
