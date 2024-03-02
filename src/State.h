@@ -78,6 +78,8 @@ public:
      */
 	bool IsDeveloperMode();
 
+	void AddUAVAccess(RE::RENDER_TARGETS::RENDER_TARGET a_renderTarget);
+
 	void SetupResources();
 	void ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor);
 

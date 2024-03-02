@@ -187,6 +187,7 @@ float4 SSSSBlurCS(
 		offset = mul(offset, rotationMatrix);
 
 		uint2 coords = DTid.xy + uint2(offset + 0.5);
+        coords = clamp(coords, uint2(0), uint2(BufferDim)); // Dynamic resolution
 
 		float3 color = ColorTexture[coords].rgb;
 
@@ -204,8 +205,6 @@ float4 SSSSBlurCS(
 		// Accumulate:
 		colorBlurred.rgb += kernel[i].rgb * color.rgb;
 	}
-
-	colorBlurred = lerp(colorM, colorBlurred, sssAmount);
 
 	return colorBlurred;
 }

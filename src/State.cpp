@@ -172,10 +172,10 @@ void State::Reset()
 
 void State::Setup()
 {
+	SetupResources();
 	for (auto* feature : Feature::GetFeatureList())
 		if (feature->loaded)
 			feature->SetupResources();
-	SetupResources();
 	Bindings::GetSingleton()->SetupResources();
 }
 
@@ -381,78 +381,54 @@ bool State::IsDeveloperMode()
 	return GetLogLevel() <= spdlog::level::debug;
 }
 
-void State::SetupResources()
+void State::AddUAVAccess(RE::RENDER_TARGETS::RENDER_TARGET a_renderTarget)
 {
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto device = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().forwarder;
 
-	{
-		auto& normalsTexture = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK];
+	auto& data = renderer->GetRuntimeData().renderTargets[a_renderTarget];
 
-		D3D11_TEXTURE2D_DESC texDesc{};
-		normalsTexture.texture->GetDesc(&texDesc);
+	if (data.UAV)
+		return;
 
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		normalsTexture.SRV->GetDesc(&srvDesc);
+	D3D11_TEXTURE2D_DESC texDesc{};
+	data.texture->GetDesc(&texDesc);
 
-		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
-		normalsTexture.RTV->GetDesc(&rtvDesc);
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+	data.SRV->GetDesc(&srvDesc);
 
-		normalsTexture.SRV->Release();
-		normalsTexture.SRV = nullptr;
+	D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+	data.RTV->GetDesc(&rtvDesc);
 
-		normalsTexture.RTV->Release();
-		normalsTexture.RTV = nullptr;
+	data.SRV->Release();
+	data.SRV = nullptr;
 
-		normalsTexture.texture->Release();
-		normalsTexture.texture = nullptr;
+	data.RTV->Release();
+	data.RTV = nullptr;
 
-		texDesc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
+	data.texture->Release();
+	data.texture = nullptr;
 
-		device->CreateTexture2D(&texDesc, nullptr, &normalsTexture.texture);
-		device->CreateShaderResourceView(normalsTexture.texture, &srvDesc, &normalsTexture.SRV);
-		device->CreateRenderTargetView(normalsTexture.texture, &rtvDesc, &normalsTexture.RTV);
+	texDesc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
 
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-		uavDesc.Format = texDesc.Format;
-		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-		uavDesc.Texture2D.MipSlice = 0;
-		device->CreateUnorderedAccessView(normalsTexture.texture, &uavDesc, &normalsTexture.UAV);
-	}
+	device->CreateTexture2D(&texDesc, nullptr, &data.texture);
+	device->CreateShaderResourceView(data.texture, &srvDesc, &data.SRV);
+	device->CreateRenderTargetView(data.texture, &rtvDesc, &data.RTV);
 
-	{
-		auto& normalsTexture = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK_SWAP];
+	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+	uavDesc.Format = texDesc.Format;
+	uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+	uavDesc.Texture2D.MipSlice = 0;
+	device->CreateUnorderedAccessView(data.texture, &uavDesc, &data.UAV);
+}
 
-		D3D11_TEXTURE2D_DESC texDesc{};
-		normalsTexture.texture->GetDesc(&texDesc);
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		normalsTexture.SRV->GetDesc(&srvDesc);
-
-		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
-		normalsTexture.RTV->GetDesc(&rtvDesc);
-
-		normalsTexture.SRV->Release();
-		normalsTexture.SRV = nullptr;
-
-		normalsTexture.RTV->Release();
-		normalsTexture.RTV = nullptr;
-
-		normalsTexture.texture->Release();
-		normalsTexture.texture = nullptr;
-
-		texDesc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
-
-		device->CreateTexture2D(&texDesc, nullptr, &normalsTexture.texture);
-		device->CreateShaderResourceView(normalsTexture.texture, &srvDesc, &normalsTexture.SRV);
-		device->CreateRenderTargetView(normalsTexture.texture, &rtvDesc, &normalsTexture.RTV);
-
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-		uavDesc.Format = texDesc.Format;
-		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-		uavDesc.Texture2D.MipSlice = 0;
-		device->CreateUnorderedAccessView(normalsTexture.texture, &uavDesc, &normalsTexture.UAV);
-	}
+void State::SetupResources()
+{
+	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+	
+	AddUAVAccess(RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK);
+	AddUAVAccess(RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK_SWAP);
+	AddUAVAccess(RE::RENDER_TARGETS::kMAIN);
 
 	D3D11_BUFFER_DESC sbDesc{};
 	sbDesc.Usage = D3D11_USAGE_DYNAMIC;
@@ -475,7 +451,7 @@ void State::SetupResources()
 	lightingDataBuffer = std::make_unique<Buffer>(sbDesc);
 	lightingDataBuffer->CreateSRV(srvDesc);
 
-	// grab main texture to get resolution
+	// Grab main texture to get resolution
 	// VR cannot use viewport->screenWidth/Height as it's the desktop preview window's resolution and not HMD
 	D3D11_TEXTURE2D_DESC texDesc{};
 	renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture->GetDesc(&texDesc);

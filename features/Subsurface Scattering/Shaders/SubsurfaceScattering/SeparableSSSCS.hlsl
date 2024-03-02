@@ -40,6 +40,6 @@ float GetScreenDepth(float depth)
 
 	SSSRW[DTid.xy] = color;
 
-	NormalTexture[DTid.xy] = float4(normals.xy, normals.z < 1 ? normals.z : 0.0, normals.w);
+	NormalTexture[DTid.xy] = float4(normals.xy, 0.0, normals.w);
 #endif
 }
