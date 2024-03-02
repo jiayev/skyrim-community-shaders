@@ -188,7 +188,7 @@ float4 SSSSBlurCS(
 		offset = mul(offset, rotationMatrix);
 
 		uint2 coords = DTid.xy + uint2(offset + 0.5);
-        coords = clamp(coords, uint2(0, 0), uint2(BufferDim)); // Dynamic resolution
+		coords = clamp(coords, uint2(0, 0), uint2(BufferDim));  // Dynamic resolution
 
 		float3 color = ColorTexture[coords].rgb;
 
@@ -200,7 +200,7 @@ float4 SSSSBlurCS(
 		depth = GetScreenDepth(depth);
 
 		// If the difference in depth is huge, we lerp color back to "colorM":
-		float s = min(saturate((1.0 / 3.0) * distanceToProjectionWindow * abs(depthM - depth)), 0.5); // Backlighting;
+		float s = min(saturate((1.0 / 3.0) * distanceToProjectionWindow * abs(depthM - depth)), 0.5);  // Backlighting;
 		color = lerp(color, colorM.rgb, s);
 
 		// Accumulate:
