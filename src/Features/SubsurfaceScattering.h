@@ -113,7 +113,7 @@ public:
 		};
 
 		struct Main_RenderFirstPersonView_End
-		{	
+		{
 			static int64_t thunk(RE::BSShaderAccumulator* a1, char a2)
 			{
 				GetSingleton()->DrawSSSWrapper(true);
