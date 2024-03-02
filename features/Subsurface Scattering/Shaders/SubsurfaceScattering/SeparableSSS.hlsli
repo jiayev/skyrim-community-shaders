@@ -187,7 +187,7 @@ float4 SSSSBlurCS(
 		offset = mul(offset, rotationMatrix);
 
 		uint2 coords = DTid.xy + uint2(offset + 0.5);
-        coords = clamp(coords, uint2(0), uint2(BufferDim)); // Dynamic resolution
+		coords = clamp(coords, uint2(0), uint2(BufferDim));  // Dynamic resolution
 
 		float3 color = ColorTexture[coords].rgb;
 

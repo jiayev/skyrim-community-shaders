@@ -425,7 +425,7 @@ void State::AddUAVAccess(RE::RENDER_TARGETS::RENDER_TARGET a_renderTarget)
 void State::SetupResources()
 {
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	
+
 	AddUAVAccess(RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK);
 	AddUAVAccess(RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK_SWAP);
 	AddUAVAccess(RE::RENDER_TARGETS::kMAIN);

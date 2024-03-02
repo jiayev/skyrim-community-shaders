@@ -64,9 +64,8 @@ void SubsurfaceScattering::DrawSSSWrapper(bool a_firstPerson)
 		dsv->Release();
 }
 
-
 void SubsurfaceScattering::DrawSSS()
-	{
+{
 	auto viewport = RE::BSGraphics::State::GetSingleton();
 
 	float resolutionX = blurHorizontalTemp->desc.Width * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
@@ -169,7 +168,7 @@ void SubsurfaceScattering::DrawSSS()
 void SubsurfaceScattering::Draw(const RE::BSShader* a_shader, const uint32_t)
 {
 	if (a_shader->shaderType.get() == RE::BSShader::Type::Lighting) {
-			auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+		auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 
 		if (normalsMode == 0 && state->GetRuntimeData().alphaTestEnabled) {
 			auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -178,7 +177,7 @@ void SubsurfaceScattering::Draw(const RE::BSShader* a_shader, const uint32_t)
 			ID3D11RenderTargetView* views[3];
 			ID3D11DepthStencilView* dsv;
 			context->OMGetRenderTargets(3, views, &dsv);
-			
+
 			auto normals = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK];
 			auto normalsSwap = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK_SWAP];
 
@@ -187,7 +186,6 @@ void SubsurfaceScattering::Draw(const RE::BSShader* a_shader, const uint32_t)
 			} else if (views[2] == normalsSwap.RTV) {
 				normalsMode = 2;
 			}
-
 
 			for (int i = 0; i < 3; i++) {
 				if (views[i])
