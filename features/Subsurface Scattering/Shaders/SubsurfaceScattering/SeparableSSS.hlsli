@@ -91,11 +91,13 @@
 
 float3 sRGB2Lin(float3 color)
 {
+	return color;
 	return color > 0.04045 ? pow(color / 1.055 + 0.055 / 1.055, 2.4) : color / 12.92;
 }
 
 float3 Lin2sRGB(float3 color)
 {
+	return color;
 	return color > 0.0031308 ? 1.055 * pow(color, 1.0 / 2.4) - 0.055 : 12.92 * color;
 }
 
@@ -173,7 +175,6 @@ float4 SSSSBlurCS(
 	// Calculate the final step to fetch the surrounding pixels:
 	float2 finalStep = scale * BufferDim;
 	finalStep *= sssAmount;
-	finalStep *= 1.0 / 3.0;
 
 	float jitter = InterleavedGradientNoise(DTid.xy);
 	float2x2 rotationMatrix = float2x2(cos(jitter), sin(jitter), -sin(jitter), cos(jitter));
@@ -187,7 +188,7 @@ float4 SSSSBlurCS(
 		offset = mul(offset, rotationMatrix);
 
 		uint2 coords = DTid.xy + uint2(offset + 0.5);
-        coords = clamp(coords, uint2(0), uint2(BufferDim)); // Dynamic resolution
+        coords = clamp(coords, uint2(0, 0), uint2(BufferDim)); // Dynamic resolution
 
 		float3 color = ColorTexture[coords].rgb;
 
@@ -199,7 +200,7 @@ float4 SSSSBlurCS(
 		depth = GetScreenDepth(depth);
 
 		// If the difference in depth is huge, we lerp color back to "colorM":
-		float s = saturate((1.0 / 3.0) * distanceToProjectionWindow * abs(depthM - depth));
+		float s = min(saturate((1.0 / 3.0) * distanceToProjectionWindow * abs(depthM - depth)), 0.5); // Backlighting;
 		color = lerp(color, colorM.rgb, s);
 
 		// Accumulate:
