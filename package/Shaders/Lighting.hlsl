@@ -2162,7 +2162,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(SKIN)
 	psout.ScreenSpaceNormals.z = 1;
 #		elif defined(HAIR)
-	psout.ScreenSpaceNormals.z = 1 - psout.Albedo.w; // Exclude hair where possible
+	psout.ScreenSpaceNormals.z = 1 - psout.Albedo.w;  // Exclude hair where possible
 #		endif
 #	endif
 
