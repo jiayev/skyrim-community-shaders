@@ -176,7 +176,7 @@ void State::Setup()
 	for (auto* feature : Feature::GetFeatureList())
 		if (feature->loaded)
 			feature->SetupResources();
-	Bindings::GetSingleton()->SetupResources();
+	//Bindings::GetSingleton()->SetupResources();
 }
 
 void State::Load(bool a_test)
@@ -411,9 +411,9 @@ void State::AddUAVAccess(RE::RENDER_TARGETS::RENDER_TARGET a_renderTarget)
 
 	texDesc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
 
-	device->CreateTexture2D(&texDesc, nullptr, &data.texture);
-	device->CreateShaderResourceView(data.texture, &srvDesc, &data.SRV);
-	device->CreateRenderTargetView(data.texture, &rtvDesc, &data.RTV);
+	DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, nullptr, &data.texture));
+	DX::ThrowIfFailed(device->CreateShaderResourceView(data.texture, &srvDesc, &data.SRV));
+	DX::ThrowIfFailed(device->CreateRenderTargetView(data.texture, &rtvDesc, &data.RTV));
 
 	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 	uavDesc.Format = texDesc.Format;

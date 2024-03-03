@@ -240,30 +240,30 @@ void Bindings::SetDirtyStates(bool)
 
 void Bindings::SetupResources()
 {
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto mainTexture = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	//auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+	//auto mainTexture = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
-	{
-		D3D11_TEXTURE2D_DESC texDesc{};
-		mainTexture.texture->GetDesc(&texDesc);
-		terrainBlendingMask = new Texture2D(texDesc);
+	//{
+	//	D3D11_TEXTURE2D_DESC texDesc{};
+	//	mainTexture.texture->GetDesc(&texDesc);
+	//	terrainBlendingMask = new Texture2D(texDesc);
 
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-		mainTexture.SRV->GetDesc(&srvDesc);
-		terrainBlendingMask->CreateSRV(srvDesc);
+	//	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+	//	mainTexture.SRV->GetDesc(&srvDesc);
+	//	terrainBlendingMask->CreateSRV(srvDesc);
 
-		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
-		mainTexture.RTV->GetDesc(&rtvDesc);
-		terrainBlendingMask->CreateRTV(rtvDesc);
-	}
+	//	D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
+	//	mainTexture.RTV->GetDesc(&rtvDesc);
+	//	terrainBlendingMask->CreateRTV(rtvDesc);
+	//}
 }
 
 void Bindings::Reset()
 {
-	SetOverwriteTerrainMode(false);
-	SetOverwriteTerrainMaskingMode(TerrainMaskMode::kNone);
+	//SetOverwriteTerrainMode(false);
+	//SetOverwriteTerrainMaskingMode(TerrainMaskMode::kNone);
 
-	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
-	FLOAT clear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-	context->ClearRenderTargetView(terrainBlendingMask->rtv.get(), clear);
+	//auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+	//FLOAT clear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	//context->ClearRenderTargetView(terrainBlendingMask->rtv.get(), clear);
 }
