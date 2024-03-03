@@ -78,7 +78,7 @@ public:
      */
 	bool IsDeveloperMode();
 
-	void AddUAVAccess(RE::RENDER_TARGETS::RENDER_TARGET a_renderTarget);
+	void ModifyRenderTarget(RE::RENDER_TARGETS::RENDER_TARGET a_targetIndex, RE::BSGraphics::RenderTargetProperties* a_properties);
 
 	void SetupResources();
 	void ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor);

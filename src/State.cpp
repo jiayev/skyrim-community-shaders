@@ -381,54 +381,15 @@ bool State::IsDeveloperMode()
 	return GetLogLevel() <= spdlog::level::debug;
 }
 
-void State::AddUAVAccess(RE::RENDER_TARGETS::RENDER_TARGET a_renderTarget)
+void State::ModifyRenderTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 {
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto device = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().forwarder;
-
-	auto& data = renderer->GetRuntimeData().renderTargets[a_renderTarget];
-
-	if (data.UAV)
-		return;
-
-	D3D11_TEXTURE2D_DESC texDesc{};
-	data.texture->GetDesc(&texDesc);
-
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-	data.SRV->GetDesc(&srvDesc);
-
-	D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
-	data.RTV->GetDesc(&rtvDesc);
-
-	data.SRV->Release();
-	data.SRV = nullptr;
-
-	data.RTV->Release();
-	data.RTV = nullptr;
-
-	data.texture->Release();
-	data.texture = nullptr;
-
-	texDesc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
-
-	DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, nullptr, &data.texture));
-	DX::ThrowIfFailed(device->CreateShaderResourceView(data.texture, &srvDesc, &data.SRV));
-	DX::ThrowIfFailed(device->CreateRenderTargetView(data.texture, &rtvDesc, &data.RTV));
-
-	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-	uavDesc.Format = texDesc.Format;
-	uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-	uavDesc.Texture2D.MipSlice = 0;
-	device->CreateUnorderedAccessView(data.texture, &uavDesc, &data.UAV);
+	a_properties->supportUnorderedAccess = true;
+	logger::error("Adding UAV access to {}", magic_enum::enum_name(a_target));
 }
 
 void State::SetupResources()
 {
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-
-	AddUAVAccess(RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK);
-	AddUAVAccess(RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK_SWAP);
-	AddUAVAccess(RE::RENDER_TARGETS::kMAIN);
 
 	D3D11_BUFFER_DESC sbDesc{};
 	sbDesc.Usage = D3D11_USAGE_DYNAMIC;
