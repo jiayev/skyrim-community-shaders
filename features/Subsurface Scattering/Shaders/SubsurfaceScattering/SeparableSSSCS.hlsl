@@ -42,7 +42,7 @@ float GetScreenDepth(float depth)
 	float4 normals = NormalTexture[DTid.xy];
 	float4 color = SSSSBlurCS(DTid.xy, texCoord, float2(0.0, 1.0), normals);
 	color.rgb = Lin2sRGB(color.rgb);
-	
+
 	SSSRW[DTid.xy] = color;
 
 	NormalTexture[DTid.xy] = float4(normals.xy, 0.0, normals.w);

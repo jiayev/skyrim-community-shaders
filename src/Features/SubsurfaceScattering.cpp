@@ -12,8 +12,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DepthFalloff,
 	BacklightingAmount,
 	Strength,
-	Falloff
-)
+	Falloff)
 
 void SubsurfaceScattering::DrawSettings()
 {
@@ -52,7 +51,6 @@ void SubsurfaceScattering::DrawSettings()
 		ImGui::TreePop();
 	}
 }
-
 
 float3 SubsurfaceScattering::Gaussian(float variance, float r)
 {
