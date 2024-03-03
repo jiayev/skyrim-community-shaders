@@ -153,8 +153,9 @@ float4 SSSSBlurCS(
 	finalStep *= sssAmount;
 	finalStep *= (1.0 / 3.0);
 	finalStep *= BlurRadius;
-	
-	[flatten] if (firstPerson){
+
+	[flatten] if (firstPerson)
+	{
 		finalStep *= 0.1;
 		distanceToProjectionWindow *= 100.0;
 	}
