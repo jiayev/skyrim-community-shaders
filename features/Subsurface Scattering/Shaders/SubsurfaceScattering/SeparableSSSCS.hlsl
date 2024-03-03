@@ -11,12 +11,17 @@ RWTexture2D<unorm float4> NormalTexture : register(u1);
 
 cbuffer PerFrame : register(b0)
 {
-	float4 DynamicRes;
+	float4 kernel[33];
 	float4 CameraData;
 	float2 BufferDim;
 	float2 RcpBufferDim;
 	uint FrameCount;
 	float SSSS_FOVY;
+	bool UseLinear;
+	float BlurRadius;
+	float DepthFalloff;
+	float Backlighting;
+	uint pad0[2];
 };
 
 float GetScreenDepth(float depth)
@@ -37,7 +42,7 @@ float GetScreenDepth(float depth)
 	float4 normals = NormalTexture[DTid.xy];
 	float4 color = SSSSBlurCS(DTid.xy, texCoord, float2(0.0, 1.0), normals);
 	color.rgb = Lin2sRGB(color.rgb);
-
+	
 	SSSRW[DTid.xy] = color;
 
 	NormalTexture[DTid.xy] = float4(normals.xy, 0.0, normals.w);

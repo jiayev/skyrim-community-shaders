@@ -17,15 +17,32 @@ public:
 		Hooks::Install();
 	}
 
+	struct Settings
+	{
+		uint EnableCharacterLighting = false;
+		uint UseLinear = false;
+		float BlurRadius = 1.0f;
+		float DepthFalloff = 0.0f;
+		float BacklightingAmount = 0.0f;
+		float3 Strength = { 1.0f, 0.66f, 0.0f };
+		float3 Falloff = { 1.0f, 0.37f, 0.3f };
+	};
+
+	Settings settings;
+
 	struct alignas(16) BlurCB
 	{
-		float4 DynamicRes;
+		float4 Kernel[33];
 		float4 CameraData;
 		float2 BufferDim;
 		float2 RcpBufferDim;
 		uint FrameCount;
 		float SSSS_FOVY;
-		uint pad0[2];
+		uint UseLinear;
+		float BlurRadius;
+		float DepthFalloff;
+		float Backlighting;
+		uint pad[2];
 	};
 
 	ConstantBuffer* blurCB = nullptr;
@@ -49,6 +66,8 @@ public:
 	uint skinMode = false;
 	uint normalsMode = 0;
 
+	float4 kernel[33];
+
 	virtual inline std::string GetName() { return "Subsurface Scattering"; }
 	virtual inline std::string GetShortName() { return "SubsurfaceScattering"; }
 	inline std::string_view GetShaderDefineName() override { return "SSS"; }
@@ -60,6 +79,10 @@ public:
 	virtual void RestoreDefaultSettings();
 
 	virtual void DrawSettings();
+
+	float3 Gaussian(float variance, float r);
+	float3 Profile(float r);
+	void CalculateKernel();
 
 	void DrawSSSWrapper(bool a_firstPerson = false);
 

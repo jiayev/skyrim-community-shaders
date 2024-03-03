@@ -6,8 +6,12 @@
 
 #define PI 3.1415927
 
-#if defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(HAIR)
+#if defined(FACEGEN) || defined(FACEGEN_RGB_TINT)
 #	define SKIN
+#endif
+
+#if defined(SKIN) && defined(SSS)
+#	undef SOFT_LIGHTING
 #endif
 
 #if defined(SKINNED) || defined(ENVMAP) || defined(EYE) || defined(MULTI_LAYER_PARALLAX)
@@ -2154,8 +2158,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.Albedo = float4(1, 0, 0, 1);
 #	endif  // OUTLINE
 
-#	if defined(SKIN) && defined(SSS)
+#	if defined(SSS)
+#		if defined(SKIN)
 	psout.ScreenSpaceNormals.z = 1;
+#		else
+	psout.ScreenSpaceNormals.z = 1 - psout.Albedo.w; // Exclude hair where possible
+#		endif
 #	endif
 
 	return psout;
