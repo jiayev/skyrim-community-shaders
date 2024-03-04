@@ -304,8 +304,8 @@ void SubsurfaceScattering::Draw(const RE::BSShader* a_shader, const uint32_t)
 {
 	if (a_shader->shaderType.get() == RE::BSShader::Type::Lighting) {
 		auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-
-		if (normalsMode == 0 && state->GetRuntimeData().alphaTestEnabled) {
+		GET_INSTANCE_MEMBER(alphaTestEnabled, state)
+		if (normalsMode == 0 && alphaTestEnabled) {
 			auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 			auto context = renderer->GetRuntimeData().context;
 
@@ -460,12 +460,19 @@ void SubsurfaceScattering::PostPostLoad()
 void SubsurfaceScattering::OverrideFirstPersonRenderTargets()
 {
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-	state->GetRuntimeData().renderTargets[2] = normalsMode == 1 ? RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK : RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK_SWAP;
-	state->GetRuntimeData().setRenderTargetMode[2] = RE::BSGraphics::SetRenderTargetMode::SRTM_NO_CLEAR;
-	state->GetRuntimeData().stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+	GET_INSTANCE_MEMBER(renderTargets, state)
+	GET_INSTANCE_MEMBER(setRenderTargetMode, state)
+	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
+	GET_INSTANCE_MEMBER(alphaBlendMode, state)
+	GET_INSTANCE_MEMBER(alphaBlendModeExtra, state)
+	GET_INSTANCE_MEMBER(alphaBlendWriteMode, state)
 
-	state->GetRuntimeData().alphaBlendMode = 0;
-	state->GetRuntimeData().alphaBlendModeExtra = 0;
-	state->GetRuntimeData().alphaBlendWriteMode = 1;
-	state->GetRuntimeData().stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
+	renderTargets[2] = normalsMode == 1 ? RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK : RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK_SWAP;
+	setRenderTargetMode[2] = RE::BSGraphics::SetRenderTargetMode::SRTM_NO_CLEAR;
+	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+
+	alphaBlendMode = 0;
+	alphaBlendModeExtra = 0;
+	alphaBlendWriteMode = 1;
+	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
 }

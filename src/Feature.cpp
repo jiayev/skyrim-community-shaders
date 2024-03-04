@@ -126,7 +126,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		WetnessEffects::GetSingleton(),
 		LightLimitFix::GetSingleton(),
 		TerrainBlending::GetSingleton(),
-		WaterCaustics::GetSingleton()
+		WaterCaustics::GetSingleton(),
+		SubsurfaceScattering::GetSingleton()
 	};
 
 	return REL::Module::IsVR() ? featuresVR : features;

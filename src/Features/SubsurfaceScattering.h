@@ -135,9 +135,9 @@ public:
 
 		static void Install()
 		{
-			stl::write_thunk_call<BSShaderAccumulator_FinishAccumulating_Standard_PreResolveDepth_QPassesWithinRange_WaterStencil>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x3C5, 0x3B4));
+			stl::write_thunk_call<BSShaderAccumulator_FinishAccumulating_Standard_PreResolveDepth_QPassesWithinRange_WaterStencil>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x3C5, 0x3B4, 0x3d2));
 			stl::write_thunk_call<Main_RenderFirstPersonView_Start>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0x70, 0x66));
-			stl::write_thunk_call<Main_RenderFirstPersonView_End>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0x49C, 0x47E));
+			stl::write_thunk_call<Main_RenderFirstPersonView_End>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0x49C, 0x47E, 0x4fc));
 			logger::info("[SSS] Installed hooks");
 		}
 	};

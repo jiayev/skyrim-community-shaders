@@ -1,14 +1,12 @@
 #include "Bindings.h"
-
-#define DEFINE_VALUE(a_value) \
-	auto& a_value = !REL::Module::IsVR() ? state->GetRuntimeData().a_value : state->GetVRRuntimeData().a_value;
+#include "Util.h"
 
 void Bindings::DepthStencilStateSetDepthMode(RE::BSGraphics::DepthStencilDepthMode a_mode)
 {
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-	DEFINE_VALUE(depthStencilDepthMode)
-	DEFINE_VALUE(depthStencilDepthModePrevious)
-	DEFINE_VALUE(stateUpdateFlags)
+	GET_INSTANCE_MEMBER(depthStencilDepthMode, state)
+	GET_INSTANCE_MEMBER(depthStencilDepthModePrevious, state)
+	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
 
 	if (depthStencilDepthMode != a_mode) {
 		depthStencilDepthMode = a_mode;
@@ -22,8 +20,8 @@ void Bindings::DepthStencilStateSetDepthMode(RE::BSGraphics::DepthStencilDepthMo
 void Bindings::AlphaBlendStateSetMode(uint32_t a_mode)
 {
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-	DEFINE_VALUE(alphaBlendMode)
-	DEFINE_VALUE(stateUpdateFlags)
+	GET_INSTANCE_MEMBER(alphaBlendMode, state)
+	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
 
 	if (alphaBlendMode != a_mode) {
 		alphaBlendMode = a_mode;
@@ -34,8 +32,8 @@ void Bindings::AlphaBlendStateSetMode(uint32_t a_mode)
 void Bindings::AlphaBlendStateSetAlphaToCoverage(uint32_t a_value)
 {
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-	DEFINE_VALUE(alphaBlendAlphaToCoverage)
-	DEFINE_VALUE(stateUpdateFlags)
+	GET_INSTANCE_MEMBER(alphaBlendAlphaToCoverage, state)
+	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
 
 	if (alphaBlendAlphaToCoverage != a_value) {
 		alphaBlendAlphaToCoverage = a_value;
@@ -46,8 +44,8 @@ void Bindings::AlphaBlendStateSetAlphaToCoverage(uint32_t a_value)
 void Bindings::AlphaBlendStateSetWriteMode(uint32_t a_value)
 {
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-	DEFINE_VALUE(alphaBlendWriteMode)
-	DEFINE_VALUE(stateUpdateFlags)
+	GET_INSTANCE_MEMBER(alphaBlendWriteMode, state)
+	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
 
 	if (alphaBlendWriteMode != a_value) {
 		alphaBlendWriteMode = a_value;
@@ -60,7 +58,7 @@ void Bindings::SetOverwriteTerrainMode(bool a_enable)
 	if (overrideTerrain != a_enable) {
 		overrideTerrain = a_enable;
 		auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-		DEFINE_VALUE(stateUpdateFlags)
+		GET_INSTANCE_MEMBER(stateUpdateFlags, state)
 		stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_DEPTH_MODE);
 		stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
 	}
@@ -71,7 +69,7 @@ void Bindings::SetOverwriteTerrainMaskingMode(TerrainMaskMode a_mode)
 	if (terrainMask != a_mode) {
 		terrainMask = a_mode;
 		auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-		DEFINE_VALUE(stateUpdateFlags)
+		GET_INSTANCE_MEMBER(stateUpdateFlags, state)
 		stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 	}
 }
@@ -92,23 +90,23 @@ void Bindings::SetDirtyStates(bool)
 {
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
-	DEFINE_VALUE(depthStencilStencilMode)
-	DEFINE_VALUE(depthStencilDepthMode)
-	DEFINE_VALUE(alphaBlendAlphaToCoverage)
-	DEFINE_VALUE(alphaBlendMode)
-	DEFINE_VALUE(alphaBlendModeExtra)
-	DEFINE_VALUE(alphaBlendWriteMode)
-	DEFINE_VALUE(cubeMapRenderTarget)
-	DEFINE_VALUE(cubeMapRenderTargetView)
-	DEFINE_VALUE(depthStencil)
-	DEFINE_VALUE(depthStencilSlice)
-	DEFINE_VALUE(renderTargets)
-	DEFINE_VALUE(setCubeMapRenderTargetMode)
-	DEFINE_VALUE(setDepthStencilMode)
-	DEFINE_VALUE(setRenderTargetMode)
-	DEFINE_VALUE(stateUpdateFlags)
-	DEFINE_VALUE(stencilRef)
-	DEFINE_VALUE(PSTexture)
+	GET_INSTANCE_MEMBER(depthStencilStencilMode, state)
+	GET_INSTANCE_MEMBER(depthStencilDepthMode, state)
+	GET_INSTANCE_MEMBER(alphaBlendAlphaToCoverage, state)
+	GET_INSTANCE_MEMBER(alphaBlendMode, state)
+	GET_INSTANCE_MEMBER(alphaBlendModeExtra, state)
+	GET_INSTANCE_MEMBER(alphaBlendWriteMode, state)
+	GET_INSTANCE_MEMBER(cubeMapRenderTarget, state)
+	GET_INSTANCE_MEMBER(cubeMapRenderTargetView, state)
+	GET_INSTANCE_MEMBER(depthStencil, state)
+	GET_INSTANCE_MEMBER(depthStencilSlice, state)
+	GET_INSTANCE_MEMBER(renderTargets, state)
+	GET_INSTANCE_MEMBER(setCubeMapRenderTargetMode, state)
+	GET_INSTANCE_MEMBER(setDepthStencilMode, state)
+	GET_INSTANCE_MEMBER(setRenderTargetMode, state)
+	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
+	GET_INSTANCE_MEMBER(stencilRef, state)
+	GET_INSTANCE_MEMBER(PSTexture, state)
 
 	auto rendererData = RE::BSGraphics::Renderer::GetSingleton();
 

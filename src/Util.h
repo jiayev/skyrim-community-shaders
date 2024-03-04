@@ -1,5 +1,18 @@
 #pragma once
 
+/**
+ @def GET_INSTANCE_MEMBER
+ @brief Set variable in current namespace based on instance member from GetRuntimeData or GetVRRuntimeData.
+  
+ @warning The class must have both a GetRuntimeData() and GetVRRuntimeData() function.
+  
+ @param a_value The instance member value to access (e.g., renderTargets).
+ @param a_source The instance of the class (e.g., state).
+ @result The a_value will be set as a variable in the current namespace. (e.g., auto& renderTargets = state->renderTargets;)
+ */
+#define GET_INSTANCE_MEMBER(a_value, a_source) \
+	auto& a_value = !REL::Module::IsVR() ? a_source->GetRuntimeData().a_value : a_source->GetVRRuntimeData().a_value;
+
 namespace Util
 {
 	void StoreTransform3x4NoScale(DirectX::XMFLOAT3X4& Dest, const RE::NiTransform& Source);
