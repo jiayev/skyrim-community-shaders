@@ -1,5 +1,7 @@
 #include "CloudShadows.h"
 
+#include "State.h"
+
 #include "Util.h"
 
 #include "magic_enum_flags.hpp"
@@ -26,6 +28,19 @@ public:
 		return retval;
 	}
 	inline bool isNewFrame() { return isNewFrame(RE::BSGraphics::State::GetSingleton()->uiFrameCount); }
+};
+
+enum class SkyShaderTechniques
+{
+	SunOcclude = 0,
+	SunGlare = 1,
+	MoonAndStarsMask = 2,
+	Stars = 3,
+	Clouds = 4,
+	CloudsLerp = 5,
+	CloudsFade = 6,
+	Texture = 7,
+	Sky = 8,
 };
 
 void CloudShadows::DrawSettings()
@@ -136,14 +151,15 @@ void CloudShadows::ModifySky(const RE::BSShader*, const uint32_t descriptor)
 		context->OMSetRenderTargets(4, rtvs, depthStencil);
 
 		// blend states
-		ID3D11BlendState* blendState;
-		FLOAT blendFactor[4];
-		UINT sampleMask;
+
+		ID3D11BlendState* blendState = nullptr;
+		FLOAT blendFactor[4] = { 0 };
+		UINT sampleMask = 0;
 
 		context->OMGetBlendState(&blendState, blendFactor, &sampleMask);
 
 		if (!mappedBlendStates.contains(blendState)) {
-			if (!modifiedBlendStates.contains(blendState)) {
+			if (modifiedBlendStates.contains(blendState)) {
 				D3D11_BLEND_DESC blendDesc;
 				blendState->GetDesc(&blendDesc);
 
@@ -155,8 +171,9 @@ void CloudShadows::ModifySky(const RE::BSShader*, const uint32_t descriptor)
 				mappedBlendStates.insert(modifiedBlendState);
 				modifiedBlendStates.insert({ blendState, modifiedBlendState });
 			}
-			blendState = modifiedBlendStates[blendState];
-			context->OMSetBlendState(blendState, blendFactor, sampleMask);
+			context->OMSetBlendState(modifiedBlendStates[blendState], blendFactor, sampleMask);
+
+			resetBlendState = blendState;
 		}
 	}
 }
@@ -283,4 +300,23 @@ void CloudShadows::SetupResources()
 void CloudShadows::RestoreDefaultSettings()
 {
 	settings = {};
+}
+
+void CloudShadows::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::BSRenderPass* Pass, uint32_t Technique, bool AlphaTest, uint32_t RenderFlags)
+{
+	auto feat = GetSingleton();
+	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+
+	func(Pass, Technique, AlphaTest, RenderFlags);
+
+	if (feat->resetBlendState) {
+		ID3D11BlendState* blendState = nullptr;
+		FLOAT blendFactor[4] = { 0 };
+		UINT sampleMask = 0;
+
+		context->OMGetBlendState(&blendState, blendFactor, &sampleMask);
+		context->OMSetBlendState(feat->resetBlendState, blendFactor, sampleMask);
+
+		feat->resetBlendState = nullptr;
+	}
 }
