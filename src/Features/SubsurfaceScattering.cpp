@@ -452,34 +452,6 @@ ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderVerticalBlur()
 	return verticalSSBlur;
 }
 
-void SubsurfaceScattering::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass*)
-{
-	//skinMode = 0;
-
-	//auto geometry = Pass->geometry;
-	//if (auto userData = geometry->GetUserData()) {
-	//	if (auto actor = userData->As<RE::Actor>()) {
-	//		if (auto race = actor->GetRace()) {
-	//			if (Pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kFace, RE::BSShaderProperty::EShaderPropertyFlag::kFaceGenRGBTint)) {
-	//				static auto isBeastRace = RE::TESForm::LookupByEditorID("IsBeastRace")->As<RE::BGSKeyword>();
-	//				skinMode = race->HasKeyword(isBeastRace) ? 1 : 2;
-	//			} else if (Pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kCharacterLighting, RE::BSShaderProperty::EShaderPropertyFlag::kSoftLighting)) {
-	//				auto lightingMaterial = (RE::BSLightingShaderMaterialBase*)(Pass->shaderProperty->material);
-	//				if (auto diffuse = lightingMaterial->textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
-	//					if (diffuse != nullptr) {
-	//						std::string diffuseStr = diffuse;
-	//						if (diffuseStr.contains("MaleChild") || diffuseStr.contains("FemaleChild")) {
-	//							static auto isBeastRace = RE::TESForm::LookupByEditorID("IsBeastRace")->As<RE::BGSKeyword>();
-	//							skinMode = race->HasKeyword(isBeastRace) ? 1 : 2;
-	//						}
-	//					}
-	//				}
-	//			}
-	//		}
-	//	}
-	//}
-}
-
 void SubsurfaceScattering::PostPostLoad()
 {
 	Hooks::Install();

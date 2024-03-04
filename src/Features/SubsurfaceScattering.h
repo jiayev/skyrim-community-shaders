@@ -97,24 +97,12 @@ public:
 	ID3D11ComputeShader* GetComputeShaderHorizontalBlur();
 	ID3D11ComputeShader* GetComputeShaderVerticalBlur();
 
-	void BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* Pass);
-
 	virtual void PostPostLoad() override;
 
 	void OverrideFirstPersonRenderTargets();
 
 	struct Hooks
 	{
-		struct BSLightingShader_SetupGeometry
-		{
-			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
-			{
-				GetSingleton()->BSLightingShader_SetupGeometry_Before(Pass);
-				func(This, Pass, RenderFlags);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
 		struct BSShaderAccumulator_FinishAccumulating_Standard_PreResolveDepth_QPassesWithinRange_WaterStencil
 		{
 			static void thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges)
@@ -147,7 +135,6 @@ public:
 
 		static void Install()
 		{
-			//stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 			stl::write_thunk_call<BSShaderAccumulator_FinishAccumulating_Standard_PreResolveDepth_QPassesWithinRange_WaterStencil>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x3C5, 0x3B4));
 			stl::write_thunk_call<Main_RenderFirstPersonView_Start>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0x70, 0x66));
 			stl::write_thunk_call<Main_RenderFirstPersonView_End>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0x49C, 0x47E));
