@@ -1,5 +1,7 @@
 #include "CloudShadows.h"
 
+#include "State.h"
+
 #include "Util.h"
 
 #include "magic_enum_flags.hpp"
@@ -13,19 +15,17 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TransparencyPower,
 	AbsorptionAmbient)
 
-class FrameChecker
+enum class SkyShaderTechniques
 {
-private:
-	uint32_t last_frame = UINT32_MAX;
-
-public:
-	inline bool isNewFrame(uint32_t frame)
-	{
-		bool retval = last_frame != frame;
-		last_frame = frame;
-		return retval;
-	}
-	inline bool isNewFrame() { return isNewFrame(RE::BSGraphics::State::GetSingleton()->uiFrameCount); }
+	SunOcclude = 0,
+	SunGlare = 1,
+	MoonAndStarsMask = 2,
+	Stars = 3,
+	Clouds = 4,
+	CloudsLerp = 5,
+	CloudsFade = 6,
+	Texture = 7,
+	Sky = 8,
 };
 
 void CloudShadows::DrawSettings()
@@ -70,7 +70,7 @@ void CloudShadows::DrawSettings()
 
 void CloudShadows::CheckResourcesSide(int side)
 {
-	static FrameChecker frame_checker[6];
+	static Util::FrameChecker frame_checker[6];
 	if (!frame_checker[side].isNewFrame())
 		return;
 
@@ -136,14 +136,15 @@ void CloudShadows::ModifySky(const RE::BSShader*, const uint32_t descriptor)
 		context->OMSetRenderTargets(4, rtvs, depthStencil);
 
 		// blend states
-		ID3D11BlendState* blendState;
-		FLOAT blendFactor[4];
-		UINT sampleMask;
+
+		ID3D11BlendState* blendState = nullptr;
+		FLOAT blendFactor[4] = { 0 };
+		UINT sampleMask = 0;
 
 		context->OMGetBlendState(&blendState, blendFactor, &sampleMask);
 
 		if (!mappedBlendStates.contains(blendState)) {
-			if (!modifiedBlendStates.contains(blendState)) {
+			if (modifiedBlendStates.contains(blendState)) {
 				D3D11_BLEND_DESC blendDesc;
 				blendState->GetDesc(&blendDesc);
 
@@ -155,8 +156,9 @@ void CloudShadows::ModifySky(const RE::BSShader*, const uint32_t descriptor)
 				mappedBlendStates.insert(modifiedBlendState);
 				modifiedBlendStates.insert({ blendState, modifiedBlendState });
 			}
-			blendState = modifiedBlendStates[blendState];
-			context->OMSetBlendState(blendState, blendFactor, sampleMask);
+			context->OMSetBlendState(modifiedBlendStates[blendState], blendFactor, sampleMask);
+
+			resetBlendState = blendState;
 		}
 	}
 }
@@ -168,7 +170,7 @@ void CloudShadows::ModifyLighting()
 	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 	auto cubeMapRenderTarget = !REL::Module::IsVR() ? shadowState->GetRuntimeData().cubeMapRenderTarget : shadowState->GetVRRuntimeData().cubeMapRenderTarget;
 	if (cubeMapRenderTarget != RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS) {
-		static FrameChecker frame_checker;
+		static Util::FrameChecker frame_checker;
 		if (frame_checker.isNewFrame())
 			context->GenerateMips(texCubemapCloudOcc->srv.get());
 
@@ -186,7 +188,7 @@ void CloudShadows::ModifyLighting()
 
 void CloudShadows::Draw(const RE::BSShader* shader, const uint32_t descriptor)
 {
-	static FrameChecker frame_checker;
+	static Util::FrameChecker frame_checker;
 	if (frame_checker.isNewFrame()) {
 		// update settings buffer
 		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
@@ -283,4 +285,23 @@ void CloudShadows::SetupResources()
 void CloudShadows::RestoreDefaultSettings()
 {
 	settings = {};
+}
+
+void CloudShadows::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::BSRenderPass* Pass, uint32_t Technique, bool AlphaTest, uint32_t RenderFlags)
+{
+	auto feat = GetSingleton();
+	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+
+	func(Pass, Technique, AlphaTest, RenderFlags);
+
+	if (feat->resetBlendState) {
+		ID3D11BlendState* blendState = nullptr;
+		FLOAT blendFactor[4] = { 0 };
+		UINT sampleMask = 0;
+
+		context->OMGetBlendState(&blendState, blendFactor, &sampleMask);
+		context->OMSetBlendState(feat->resetBlendState, blendFactor, sampleMask);
+
+		feat->resetBlendState = nullptr;
+	}
 }
