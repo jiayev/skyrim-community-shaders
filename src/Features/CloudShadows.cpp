@@ -15,21 +15,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TransparencyPower,
 	AbsorptionAmbient)
 
-class FrameChecker
-{
-private:
-	uint32_t last_frame = UINT32_MAX;
-
-public:
-	inline bool isNewFrame(uint32_t frame)
-	{
-		bool retval = last_frame != frame;
-		last_frame = frame;
-		return retval;
-	}
-	inline bool isNewFrame() { return isNewFrame(RE::BSGraphics::State::GetSingleton()->uiFrameCount); }
-};
-
 enum class SkyShaderTechniques
 {
 	SunOcclude = 0,
@@ -85,7 +70,7 @@ void CloudShadows::DrawSettings()
 
 void CloudShadows::CheckResourcesSide(int side)
 {
-	static FrameChecker frame_checker[6];
+	static Util::FrameChecker frame_checker[6];
 	if (!frame_checker[side].isNewFrame())
 		return;
 
@@ -185,7 +170,7 @@ void CloudShadows::ModifyLighting()
 	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 	auto cubeMapRenderTarget = !REL::Module::IsVR() ? shadowState->GetRuntimeData().cubeMapRenderTarget : shadowState->GetVRRuntimeData().cubeMapRenderTarget;
 	if (cubeMapRenderTarget != RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS) {
-		static FrameChecker frame_checker;
+		static Util::FrameChecker frame_checker;
 		if (frame_checker.isNewFrame())
 			context->GenerateMips(texCubemapCloudOcc->srv.get());
 
@@ -203,7 +188,7 @@ void CloudShadows::ModifyLighting()
 
 void CloudShadows::Draw(const RE::BSShader* shader, const uint32_t descriptor)
 {
-	static FrameChecker frame_checker;
+	static Util::FrameChecker frame_checker;
 	if (frame_checker.isNewFrame()) {
 		// update settings buffer
 		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
