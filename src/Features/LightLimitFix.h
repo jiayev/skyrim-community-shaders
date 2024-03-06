@@ -102,6 +102,7 @@ public:
 	std::unique_ptr<Buffer> strictLightData = nullptr;
 
 	bool rendered = false;
+	bool boundViews = false;
 	int eyeCount = !REL::Module::IsVR() ? 1 : 2;
 
 	ID3D11ComputeShader* clusterBuildingCS = nullptr;
@@ -130,6 +131,8 @@ public:
 
 	RE::NiPoint3 eyePositionCached[2]{};
 	Matrix viewMatrixCached[2]{};
+
+	PerPass perPassData{};
 
 	virtual void SetupResources();
 	virtual void Reset();

@@ -245,6 +245,7 @@ void LightLimitFix::Reset()
 	}
 	particleLights.clear();
 	std::swap(particleLights, queuedParticleLights);
+	boundViews = false;
 }
 
 void LightLimitFix::Load(json& o_json)
@@ -298,12 +299,17 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 {
-	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
-	D3D11_MAPPED_SUBRESOURCE mapped;
-	DX::ThrowIfFailed(context->Map(strictLightData->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-	size_t bytes = sizeof(StrictLightData);
-	memcpy_s(mapped.pData, bytes, &strictLightDataTemp, bytes);
-	context->Unmap(strictLightData->resource.get(), 0);
+	static bool wasEmpty = false;
+	bool isEmpty = strictLightDataTemp.NumLights == 0;
+	if (!isEmpty || (isEmpty && !wasEmpty)) {
+		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+		D3D11_MAPPED_SUBRESOURCE mapped;
+		DX::ThrowIfFailed(context->Map(strictLightData->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+		size_t bytes = sizeof(StrictLightData);
+		memcpy_s(mapped.pData, bytes, &strictLightDataTemp, bytes);
+		context->Unmap(strictLightData->resource.get(), 0);
+		wasEmpty = isEmpty;
+	}
 }
 
 void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached)
@@ -370,22 +376,31 @@ void LightLimitFix::Bind()
 							   RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().cubeMapRenderTarget :
 							   RE::BSGraphics::RendererShadowState::GetSingleton()->GetVRRuntimeData().cubeMapRenderTarget) == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
 
-	if (reflections || accumulator->GetRuntimeData().activeShadowSceneNode != RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0]) {
-		PerPass perPassData{};
-		perPassData.EnableGlobalLights = false;
+	if (!boundViews) 
+	{	
+		boundViews = true;
 
-		D3D11_MAPPED_SUBRESOURCE mapped;
-		DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-		size_t bytes = sizeof(PerPass);
-		memcpy_s(mapped.pData, bytes, &perPassData, bytes);
-		context->Unmap(perPass->resource.get(), 0);
+		ID3D11ShaderResourceView* view = perPass->srv.get();
+		context->PSSetShaderResources(32, 1, &view);
+		
+		view = strictLightData->srv.get();
+		context->PSSetShaderResources(37, 1, &view);
+	}
+
+	if (reflections || accumulator->GetRuntimeData().activeShadowSceneNode != RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0]) {
+		if (perPassData.EnableGlobalLights) {
+			perPassData.EnableGlobalLights = false;
+
+			D3D11_MAPPED_SUBRESOURCE mapped;
+			DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+			size_t bytes = sizeof(PerPass);
+			memcpy_s(mapped.pData, bytes, &perPassData, bytes);
+			context->Unmap(perPass->resource.get(), 0);
+		}
 	} else {
 		if (!rendered) {
 			UpdateLights();
 			rendered = true;
-		}
-
-		{
 			ID3D11ShaderResourceView* views[3]{};
 			views[0] = lights->srv.get();
 			views[1] = lightList->srv.get();
@@ -393,9 +408,8 @@ void LightLimitFix::Bind()
 			context->PSSetShaderResources(17, ARRAYSIZE(views), views);
 		}
 
+		if (!perPassData.EnableGlobalLights)
 		{
-			PerPass perPassData{};
-
 			auto viewport = RE::BSGraphics::State::GetSingleton();
 
 			perPassData.LightsNear = lightsNear;
@@ -417,16 +431,6 @@ void LightLimitFix::Bind()
 			memcpy_s(mapped.pData, bytes, &perPassData, bytes);
 			context->Unmap(perPass->resource.get(), 0);
 		}
-	}
-
-	{
-		ID3D11ShaderResourceView* view = perPass->srv.get();
-		context->PSSetShaderResources(32, 1, &view);
-	}
-
-	{
-		ID3D11ShaderResourceView* view = strictLightData->srv.get();
-		context->PSSetShaderResources(37, 1, &view);
 	}
 }
 
