@@ -376,13 +376,12 @@ void LightLimitFix::Bind()
 							   RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().cubeMapRenderTarget :
 							   RE::BSGraphics::RendererShadowState::GetSingleton()->GetVRRuntimeData().cubeMapRenderTarget) == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
 
-	if (!boundViews) 
-	{	
+	if (!boundViews) {
 		boundViews = true;
 
 		ID3D11ShaderResourceView* view = perPass->srv.get();
 		context->PSSetShaderResources(32, 1, &view);
-		
+
 		view = strictLightData->srv.get();
 		context->PSSetShaderResources(37, 1, &view);
 	}
@@ -408,8 +407,7 @@ void LightLimitFix::Bind()
 			context->PSSetShaderResources(17, ARRAYSIZE(views), views);
 		}
 
-		if (!perPassData.EnableGlobalLights)
-		{
+		if (!perPassData.EnableGlobalLights) {
 			auto viewport = RE::BSGraphics::State::GetSingleton();
 
 			perPassData.LightsNear = lightsNear;
