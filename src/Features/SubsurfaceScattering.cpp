@@ -11,8 +11,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SubsurfaceScattering::Settings,
 	EnableCharacterLighting,
 	HumanProfile,
-	BeastProfile
-)
+	BeastProfile)
 
 void SubsurfaceScattering::DrawSettings()
 {
@@ -473,7 +472,7 @@ void SubsurfaceScattering::OverrideFirstPersonRenderTargets()
 	GET_INSTANCE_MEMBER(alphaBlendWriteMode, state)
 
 	renderTargets[2] = normalsMode;
-	
+
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto context = renderer->GetRuntimeData().context;
 
@@ -496,7 +495,7 @@ void SubsurfaceScattering::OverrideFirstPersonRenderTargets()
 		uav = nullptr;
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 	}
-	
+
 	setRenderTargetMode[2] = RE::BSGraphics::SetRenderTargetMode::SRTM_NO_CLEAR;
 	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 
@@ -504,7 +503,7 @@ void SubsurfaceScattering::OverrideFirstPersonRenderTargets()
 	alphaBlendModeExtra = 0;
 	alphaBlendWriteMode = 1;
 	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
-	
+
 	validMaterial = true;
 }
 
@@ -525,8 +524,7 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 
 		static PerPass perPassData{};
 
-		if (perPassData.ValidMaterial != (uint)validMaterial || perPassData.IsBeastRace != (uint)isBeastRace)
-		{
+		if (perPassData.ValidMaterial != (uint)validMaterial || perPassData.IsBeastRace != (uint)isBeastRace) {
 			perPassData.ValidMaterial = validMaterial;
 			perPassData.IsBeastRace = isBeastRace;
 
