@@ -114,7 +114,7 @@ float4 SSSSBlurCS(
 	bool firstPerson = depthM < 16.5;
 
 	float2 profile = sssAmount == 1.0 ? HumanProfile.xy : BeastProfile.xy;
-	
+
 	uint kernelOffset = sssAmount == 1.0 ? 0 : SSSS_N_SAMPLES;
 
 	// Accumulate center sample, multiplying it with its gaussian weight:
@@ -127,8 +127,8 @@ float4 SSSSBlurCS(
 
 	// Calculate the final step to fetch the surrounding pixels:
 	float2 finalStep = scale * BufferDim * dir;
-	finalStep *= profile.x; // Modulate it using the profile
-    finalStep *= 1.0 / 3.0; // Divide by 3 as the kernels range from -3 to 3.
+	finalStep *= profile.x;  // Modulate it using the profile
+	finalStep *= 1.0 / 3.0;  // Divide by 3 as the kernels range from -3 to 3.
 
 	[flatten] if (firstPerson)
 	{
@@ -148,7 +148,7 @@ float4 SSSSBlurCS(
 		offset = mul(offset, rotationMatrix);
 
 		uint2 coords = DTid.xy + uint2(offset + 0.5);
-		
+
 		// Clamp for Dynamic resolution
 		coords = clamp(coords, uint2(0, 0), uint2(BufferDim));
 

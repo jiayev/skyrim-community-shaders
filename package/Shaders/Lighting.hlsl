@@ -1020,7 +1020,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		undef SOFT_LIGHTING
 #		define LOAD_SOFT_LIGHTING
 #		include "SubsurfaceScattering/SubsurfaceScattering.hlsli"
-#endif
+#	endif
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace
 			   : SV_IsFrontFace)
