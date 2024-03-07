@@ -89,33 +89,6 @@
 
 //-----------------------------------------------------------------------------
 
-float3 sRGB2Lin(float3 color)
-{
-	if (UseLinear)
-		return color > 0.04045 ? pow(color / 1.055 + 0.055 / 1.055, 2.4) : color / 12.92;
-	return color;
-}
-
-float3 Lin2sRGB(float3 color)
-{
-	if (UseLinear)
-		return color > 0.0031308 ? 1.055 * pow(color, 1.0 / 2.4) - 0.055 : 12.92 * color;
-	return color;
-}
-
-float InterleavedGradientNoise(float2 uv)
-{
-	// Temporal factor
-	float frameStep = float(FrameCount % 16) * 0.0625f;
-	uv.x += frameStep * 4.7526;
-	uv.y += frameStep * 3.1914;
-
-	float3 magic = float3(0.06711056f, 0.00583715f, 52.9829189f);
-	return frac(magic.z * frac(dot(uv, magic.xy)));
-}
-
-#define SSSS_N_SAMPLES 33
-
 float4 SSSSBlurCS(
 	uint2 DTid,
 	float2 texcoord,
@@ -140,24 +113,27 @@ float4 SSSSBlurCS(
 
 	bool firstPerson = depthM < 16.5;
 
+	float2 profile = sssAmount == 1.0 ? HumanProfile.xy : BeastProfile.xy;
+	
+	uint kernelOffset = sssAmount == 1.0 ? 0 : SSSS_N_SAMPLES;
+
 	// Accumulate center sample, multiplying it with its gaussian weight:
 	float4 colorBlurred = colorM;
-	colorBlurred.rgb *= kernel[0].rgb;
+	colorBlurred.rgb *= Kernels[kernelOffset].rgb;
 
 	// World-space width
 	float distanceToProjectionWindow = 1.0 / tan(0.5 * radians(SSSS_FOVY));
 	float scale = distanceToProjectionWindow / depthM;
 
 	// Calculate the final step to fetch the surrounding pixels:
-	float2 finalStep = scale * BufferDim;
-	finalStep *= sssAmount;
-	finalStep *= (1.0 / 3.0);
-	finalStep *= BlurRadius;
+	float2 finalStep = scale * BufferDim * dir;
+	finalStep *= profile.x; // Modulate it using the profile
+    finalStep *= 1.0 / 3.0; // Divide by 3 as the kernels range from -3 to 3.
 
 	[flatten] if (firstPerson)
 	{
 		finalStep *= 0.1;
-		distanceToProjectionWindow *= 100.0;
+		distanceToProjectionWindow *= 500.0;
 	}
 
 	float jitter = InterleavedGradientNoise(DTid.xy);
@@ -165,14 +141,16 @@ float4 SSSSBlurCS(
 	float2x2 identityMatrix = float2x2(1.0, 0.0, 0.0, 1.0);
 
 	// Accumulate the other samples:
-	for (uint i = 1; i < SSSS_N_SAMPLES; i++) {
-		float2 offset = kernel[i].a * finalStep;
+	for (uint i = kernelOffset + 1; i < kernelOffset + SSSS_N_SAMPLES; i++) {
+		float2 offset = Kernels[i].a * finalStep;
 
 		// Apply randomized rotation
 		offset = mul(offset, rotationMatrix);
 
 		uint2 coords = DTid.xy + uint2(offset + 0.5);
-		coords = clamp(coords, uint2(0, 0), uint2(BufferDim));  // Dynamic resolution
+		
+		// Clamp for Dynamic resolution
+		coords = clamp(coords, uint2(0, 0), uint2(BufferDim));
 
 		float3 color = ColorTexture[coords].rgb;
 
@@ -184,11 +162,11 @@ float4 SSSSBlurCS(
 		depth = GetScreenDepth(depth);
 
 		// If the difference in depth is huge, we lerp color back to "colorM":
-		float s = min(saturate((1.0 - DepthFalloff) * distanceToProjectionWindow * abs(depthM - depth)), 1.0 - Backlighting);  // Backlighting;
+		float s = saturate(profile.y * (1.0 / 3.0) * distanceToProjectionWindow * abs(depthM - depth));
 		color = lerp(color, colorM.rgb, s);
 
 		// Accumulate:
-		colorBlurred.rgb += kernel[i].rgb * color.rgb;
+		colorBlurred.rgb += Kernels[i].rgb * color.rgb;
 	}
 
 	return colorBlurred;

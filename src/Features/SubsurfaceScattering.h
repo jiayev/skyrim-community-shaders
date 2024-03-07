@@ -3,6 +3,8 @@
 #include "Buffer.h"
 #include "Feature.h"
 
+#define SSSS_N_SAMPLES 21
+
 struct SubsurfaceScattering : Feature
 {
 public:
@@ -17,56 +19,66 @@ public:
 		Hooks::Install();
 	}
 
+	struct DiffusionProfile
+	{
+		float BlurRadius;
+		float Thickness;
+		float3 Strength;
+		float3 Falloff;
+	};
+
 	struct Settings
 	{
 		uint EnableCharacterLighting = false;
-		uint UseLinear = false;
-		float BlurRadius = 1.0f;
-		float DepthFalloff = 0.0f;
-		float BacklightingAmount = 0.0f;
-		float3 Strength = { 1.0f, 0.66f, 0.0f };
-		float3 Falloff = { 1.0f, 0.37f, 0.3f };
+		DiffusionProfile HumanProfile{ 3.0f, 1.0f, { 0.48f, 0.41f, 0.28f }, { 1.0f, 0.37f, 0.3f } };
+		DiffusionProfile BeastProfile{ 1.0f, 3.0f, { 0.48f, 0.48f, 0.48f }, { 1.0f, 1.0f, 1.0f } };
 	};
 
 	Settings settings;
 
+	struct alignas(16) Kernel
+	{
+		float4 Sample[SSSS_N_SAMPLES];
+	};
+
 	struct alignas(16) BlurCB
 	{
-		float4 Kernel[33];
+		Kernel HumanKernel;
+		Kernel BeastKernel;
+		float4 HumanProfile;
+		float4 BeastProfile;
 		float4 CameraData;
 		float2 BufferDim;
 		float2 RcpBufferDim;
 		uint FrameCount;
 		float SSSS_FOVY;
-		uint UseLinear;
-		float BlurRadius;
-		float DepthFalloff;
-		float Backlighting;
 		uint pad[2];
 	};
 
 	ConstantBuffer* blurCB = nullptr;
+	BlurCB blurCBData{};
 
-	struct PerPass
+	struct alignas(16) PerPass
 	{
-		uint SkinMode;
-		uint pad[3];
+		uint ValidMaterial;
+		uint IsBeastRace;
+		uint pad0[2];
 	};
 
 	std::unique_ptr<Buffer> perPass = nullptr;
+
+	bool validMaterial = true;
 
 	Texture2D* blurHorizontalTemp = nullptr;
 
 	ID3D11ComputeShader* horizontalSSBlur = nullptr;
 	ID3D11ComputeShader* verticalSSBlur = nullptr;
+	ID3D11ComputeShader* clearBuffer = nullptr;
 
 	ID3D11SamplerState* linearSampler = nullptr;
 	ID3D11SamplerState* pointSampler = nullptr;
 
-	uint skinMode = false;
-	uint normalsMode = 0;
-
-	float4 kernel[33];
+	RE::RENDER_TARGET normalsMode = RE::RENDER_TARGET::kNONE;
 
 	virtual inline std::string GetName() { return "Subsurface Scattering"; }
 	virtual inline std::string GetShortName() { return "SubsurfaceScattering"; }
@@ -80,9 +92,9 @@ public:
 
 	virtual void DrawSettings();
 
-	float3 Gaussian(float variance, float r);
-	float3 Profile(float r);
-	void CalculateKernel();
+	float3 Gaussian(DiffusionProfile& a_profile, float variance, float r);
+	float3 Profile(DiffusionProfile& a_profile, float r);
+	void CalculateKernel(DiffusionProfile& a_profile, Kernel& kernel);
 
 	void DrawSSSWrapper(bool a_firstPerson = false);
 
@@ -96,19 +108,34 @@ public:
 	virtual void ClearShaderCache();
 	ID3D11ComputeShader* GetComputeShaderHorizontalBlur();
 	ID3D11ComputeShader* GetComputeShaderVerticalBlur();
+	ID3D11ComputeShader* GetComputeShaderClearBuffer();
 
 	virtual void PostPostLoad() override;
 
 	void OverrideFirstPersonRenderTargets();
 
+	void BSLightingShader_SetupSkin(RE::BSRenderPass* Pass);
+
+	void Bind();
+
 	struct Hooks
 	{
-		struct BSShaderAccumulator_FinishAccumulating_Standard_PreResolveDepth_QPassesWithinRange_WaterStencil
+		struct Main_RenderWorld_Start
 		{
-			static void thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges)
+			static void thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges, uint32_t RenderFlags, int GeometryGroup)
 			{
+				GetSingleton()->Bind();
+				func(This, StartRange, EndRanges, RenderFlags, GeometryGroup);  // RenderBatches
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct Main_RenderWorld_End
+		{
+			static void thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges, uint32_t RenderFlags, int GeometryGroup)
+			{
+				func(This, StartRange, EndRanges, RenderFlags, GeometryGroup);  // RenderSky
 				GetSingleton()->DrawSSSWrapper();
-				func(This, StartRange, EndRanges);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -133,11 +160,23 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct BSLightingShader_SetupGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+			{
+				GetSingleton()->BSLightingShader_SetupSkin(Pass);
+				func(This, Pass, RenderFlags);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		static void Install()
 		{
-			stl::write_thunk_call<BSShaderAccumulator_FinishAccumulating_Standard_PreResolveDepth_QPassesWithinRange_WaterStencil>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x3C5, 0x3B4, 0x3d2));
+			stl::write_thunk_call<Main_RenderWorld_Start>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x8E, 0x84));
+			stl::write_thunk_call<Main_RenderWorld_End>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x247, 0x237));
 			stl::write_thunk_call<Main_RenderFirstPersonView_Start>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0x70, 0x66));
 			stl::write_thunk_call<Main_RenderFirstPersonView_End>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0x49C, 0x47E, 0x4fc));
+			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 			logger::info("[SSS] Installed hooks");
 		}
 	};
