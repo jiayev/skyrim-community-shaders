@@ -30,8 +30,8 @@ public:
 	struct Settings
 	{
 		uint EnableCharacterLighting = false;
-		DiffusionProfile HumanProfile{ 3.0f, 1.0f, { 0.48f, 0.41f, 0.28f }, { 1.0f, 0.37f, 0.3f } };
-		DiffusionProfile BeastProfile{ 1.0f, 3.0f, { 0.48f, 0.48f, 0.48f }, { 1.0f, 1.0f, 1.0f } };
+		DiffusionProfile HumanProfile{ 1.0f, 1.0f, { 0.48f, 0.41f, 0.28f }, { 1.0f, 0.37f, 0.3f } };
+		DiffusionProfile BeastProfile{ 1.0f, 1.0f, { 0.48f, 0.41f, 0.28f }, { 0.56f, 0.56f, 0.56f } };
 	};
 
 	Settings settings;
