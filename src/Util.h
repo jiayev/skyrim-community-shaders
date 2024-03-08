@@ -65,6 +65,40 @@ namespace Util
 		}
 		inline bool isNewFrame() { return isNewFrame(RE::BSGraphics::State::GetSingleton()->uiFrameCount); }
 	};
+
+	// for simple benchmarking
+	struct CountedTimer
+	{
+		std::chrono::system_clock::time_point start_time;
+
+		unsigned long long count = 0u;
+		unsigned long long timer = 0u;
+
+		inline float avgTime() const { return timer / (float)count; }
+		inline void add(unsigned long long t)
+		{
+			timer += t;
+			count++;
+		}
+
+		inline void start() { start_time = std::chrono::system_clock::now(); }
+		inline void end() { add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now() - start_time).count()); }
+
+		template <typename T>
+		T run(std::function<T()> func)
+		{
+			if constexpr (std::is_same_v<T, void>) {
+				start();
+				func();
+				end();
+			} else {
+				start();
+				T retval = func();
+				end();
+				return retval;
+			}
+		}
+	};
 }
 
 namespace nlohmann

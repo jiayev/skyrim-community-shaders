@@ -3,6 +3,7 @@
 #include <d3d11.h>
 
 #include "Buffer.h"
+#include "Util.h"
 #include <shared_mutex>
 
 #include "Feature.h"
@@ -177,6 +178,10 @@ public:
 
 	Settings settings;
 
+	using ConfigPair = std::pair<ParticleLights::Config*, ParticleLights::GradientConfig*>;
+	std::optional<ConfigPair> GetConfigs(RE::BSEffectShaderMaterial* a_mat);
+	std::optional<ConfigPair> GetParticleLightConfigs(RE::BSRenderPass* a_pass);
+	void AddParticleLight(RE::BSRenderPass* a_pass, ConfigPair a_config);
 	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique);
 
 	void BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass);
@@ -231,7 +236,7 @@ public:
 		{
 			static void thunk(RE::BSRenderPass* Pass, uint32_t Technique, bool AlphaTest, uint32_t RenderFlags)
 			{
-				if (!GetSingleton()->CheckParticleLights(Pass, Technique))
+				if (GetSingleton()->CheckParticleLights(Pass, Technique))
 					func(Pass, Technique, AlphaTest, RenderFlags);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -241,7 +246,7 @@ public:
 		{
 			static void thunk(RE::BSRenderPass* Pass, uint32_t Technique, bool AlphaTest, uint32_t RenderFlags)
 			{
-				if (!GetSingleton()->CheckParticleLights(Pass, Technique))
+				if (GetSingleton()->CheckParticleLights(Pass, Technique))
 					func(Pass, Technique, AlphaTest, RenderFlags);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -251,7 +256,7 @@ public:
 		{
 			static void thunk(RE::BSRenderPass* Pass, uint32_t Technique, bool AlphaTest, uint32_t RenderFlags)
 			{
-				if (!GetSingleton()->CheckParticleLights(Pass, Technique))
+				if (GetSingleton()->CheckParticleLights(Pass, Technique))
 					func(Pass, Technique, AlphaTest, RenderFlags);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
