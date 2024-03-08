@@ -38,6 +38,7 @@ find_package(directxtex CONFIG REQUIRED)
 find_path(CLIB_UTIL_INCLUDE_DIRS "ClibUtil/utils.hpp")
 find_package(pystring CONFIG REQUIRED)
 find_package(cppwinrt CONFIG REQUIRED)
+find_package(unordered_dense CONFIG REQUIRED)
 
 target_include_directories(
 	${PROJECT_NAME}
@@ -60,6 +61,7 @@ target_link_libraries(
 	Microsoft::DirectXTK
 	Microsoft::DirectXTex
 	pystring::pystring
+	unordered_dense::unordered_dense
 )
 
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990

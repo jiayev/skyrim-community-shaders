@@ -32,8 +32,8 @@ public:
 		RE::NiColor color;
 	};
 
-	std::unordered_map<std::string, Config> particleLightConfigs;
-	std::unordered_map<std::string, GradientConfig> particleLightGradientConfigs;
+	ankerl::unordered_dense::map<std::string, Config> particleLightConfigs;
+	ankerl::unordered_dense::map<std::string, GradientConfig> particleLightGradientConfigs;
 
 	void GetConfigs();
 };

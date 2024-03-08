@@ -452,7 +452,28 @@ struct VertexPosition
 	std::uint8_t data[3];
 };
 
-bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
+std::string ExtractTextureStem(std::string_view a_path)
+{
+	if (a_path.size() < 1)
+		return {};
+
+	auto lastSeparatorPos = a_path.find_last_of("\\/");
+	if (lastSeparatorPos == std::string::npos)
+		return {};
+
+	a_path = a_path.substr(lastSeparatorPos + 1);
+	a_path.remove_suffix(4);  // Remove ".dds"
+
+#pragma warning(push)
+#pragma warning(disable: 4244)
+	auto textureNameView = a_path | std::views::transform(::tolower);
+	std::string textureName = { textureNameView.begin(), textureNameView.end() };
+#pragma warning(pop)
+
+	return textureName;
+}
+
+std::optional<LightLimitFix::ConfigPair> LightLimitFix::GetParticleLightConfigs(RE::BSRenderPass* a_pass)
 {
 	// see https://www.nexusmods.com/skyrimspecialedition/articles/1391
 	if (settings.EnableParticleLights) {
@@ -460,134 +481,122 @@ bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
 			if (!shaderProperty->lightData) {
 				if (auto material = shaderProperty->GetMaterial()) {
 					if (!material->sourceTexturePath.empty()) {
-						std::string textureName = material->sourceTexturePath.c_str();
-
-						{
-							if (textureName.size() < 1)
-								return false;
-
-							auto lastSeparatorPos = textureName.find_last_of("\\/");
-							if (lastSeparatorPos == std::string::npos)
-								return false;
-
-							textureName = textureName.substr(lastSeparatorPos + 1);
-							if (textureName.size() < 4)
-								return false;
-
-							textureName.erase(textureName.length() - 4);  // Remove ".dds"
-#pragma warning(push)
-#pragma warning(disable: 4244)
-							std::transform(textureName.begin(), textureName.end(), textureName.begin(), ::tolower);
-#pragma warning(pop)
-						}
+						std::string textureName = ExtractTextureStem(material->sourceTexturePath.c_str());
+						if (textureName.size() < 1)
+							return std::nullopt;
 
 						auto& configs = ParticleLights::GetSingleton()->particleLightConfigs;
 						auto it = configs.find(textureName);
 						if (it == configs.end())
-							return false;
+							return std::nullopt;
 
 						ParticleLights::Config* config = &it->second;
 						ParticleLights::GradientConfig* gradientConfig = nullptr;
 						if (!material->greyscaleTexturePath.empty()) {
-							textureName = material->greyscaleTexturePath.c_str();
-							{
-								if (textureName.size() < 1)
-									return false;
-
-								auto lastSeparatorPos = textureName.find_last_of("\\/");
-								if (lastSeparatorPos == std::string::npos)
-									return false;
-
-								textureName = textureName.substr(lastSeparatorPos + 1);
-								if (textureName.size() < 4)
-									return false;
-
-								textureName.erase(textureName.length() - 4);  // Remove ".dds"
-#pragma warning(push)
-#pragma warning(disable: 4244)
-								std::transform(textureName.begin(), textureName.end(), textureName.begin(), ::tolower);
-#pragma warning(pop)
-							}
+							textureName = ExtractTextureStem(material->greyscaleTexturePath.c_str());
+							if (textureName.size() < 1)
+								return std::nullopt;
 
 							auto& gradientConfigs = ParticleLights::GetSingleton()->particleLightGradientConfigs;
 							auto itGradient = gradientConfigs.find(textureName);
 							if (itGradient == gradientConfigs.end())
-								return false;
+								return std::nullopt;
 							gradientConfig = &itGradient->second;
 						}
-
-						a_pass->geometry->IncRefCount();
-						if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(a_pass->geometry)) {
-							if (auto particleData = particleSystem->GetParticleRuntimeData().particleData.get()) {
-								particleData->IncRefCount();
-							}
-						}
-
-						RE::NiColorA color;
-						color.red = material->baseColor.red * material->baseColorScale;
-						color.green = material->baseColor.green * material->baseColorScale;
-						color.blue = material->baseColor.blue * material->baseColorScale;
-						color.alpha = material->baseColor.alpha * shaderProperty->alpha;
-
-						if (auto emittance = shaderProperty->unk88) {
-							color.red *= emittance->red;
-							color.green *= emittance->green;
-							color.blue *= emittance->blue;
-						}
-
-						float radius = 0;
-
-						if (auto rendererData = a_pass->geometry->GetGeometryRuntimeData().rendererData) {
-							if (auto triShape = a_pass->geometry->AsTriShape()) {
-								uint32_t vertexSize = rendererData->vertexDesc.GetSize();
-								if (rendererData->vertexDesc.HasFlag(RE::BSGraphics::Vertex::Flags::VF_COLORS)) {
-									uint32_t offset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_COLOR);
-									RE::NiColorA vertexColor{};
-									for (int v = 0; v < triShape->GetTrishapeRuntimeData().vertexCount; v++) {
-										if (VertexColor* vertex = reinterpret_cast<VertexColor*>(&rendererData->rawVertexData[vertexSize * v + offset])) {
-											RE::NiColorA niColor{ (float)vertex->data[0] / 255.0f, (float)vertex->data[1] / 255.0f, (float)vertex->data[2] / 255.0f, (float)vertex->data[3] / 255.0f };
-											if (niColor.alpha > vertexColor.alpha)
-												vertexColor = niColor;
-										}
-									}
-									color.red *= vertexColor.red;
-									color.green *= vertexColor.green;
-									color.blue *= vertexColor.blue;
-									if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexAlpha)) {
-										color.alpha *= vertexColor.alpha;
-									}
-								}
-
-								uint32_t offset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_POSITION);
-								for (int v = 0; v < triShape->GetTrishapeRuntimeData().vertexCount; v++) {
-									if (VertexPosition* vertex = reinterpret_cast<VertexPosition*>(&rendererData->rawVertexData[vertexSize * v + offset])) {
-										RE::NiPoint3 position{ (float)vertex->data[0] / 255.0f, (float)vertex->data[1] / 255.0f, (float)vertex->data[2] / 255.0f };
-										radius = std::max(radius, position.Length());
-									}
-								}
-							}
-						}
-
-						if (gradientConfig) {
-							auto grey = float3(config->colorMult.red, config->colorMult.green, config->colorMult.blue).Dot(float3(0.3f, 0.59f, 0.11f));
-							color.red *= grey * gradientConfig->color.red;
-							color.green *= grey * gradientConfig->color.green;
-							color.blue *= grey * gradientConfig->color.blue;
-						} else {
-							color.red *= config->colorMult.red;
-							color.green *= config->colorMult.green;
-							color.blue *= config->colorMult.blue;
-						}
-
-						queuedParticleLights.insert({ a_pass->geometry, { color, radius, *config } });
-
-						return settings.EnableParticleLightsCulling && config->cull;
+						return std::make_pair(config, gradientConfig);
 					}
 				}
 			}
 		}
 	}
-	return false;
+	return std::nullopt;
+}
+
+bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
+{
+	auto configs = GetParticleLightConfigs(a_pass);
+	if (configs.has_value()) {
+		AddParticleLight(a_pass, configs.value());
+		return !(settings.EnableParticleLightsCulling && configs->first->cull);
+	}
+	return true;
+}
+
+void LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, LightLimitFix::ConfigPair a_config)
+{
+	auto shaderProperty = netimmerse_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty);
+	auto material = shaderProperty->GetMaterial();
+	auto config = a_config.first;
+	auto gradientConfig = a_config.second;
+
+	a_pass->geometry->IncRefCount();
+	if (const auto particleSystem = netimmerse_cast<RE::NiParticleSystem*>(a_pass->geometry)) {
+		if (auto particleData = particleSystem->GetParticleRuntimeData().particleData.get()) {
+			particleData->IncRefCount();
+		}
+	}
+
+	RE::NiColorA color;
+	color.red = material->baseColor.red * material->baseColorScale;
+	color.green = material->baseColor.green * material->baseColorScale;
+	color.blue = material->baseColor.blue * material->baseColorScale;
+	color.alpha = material->baseColor.alpha * shaderProperty->alpha;
+
+	if (auto emittance = shaderProperty->unk88) {
+		color.red *= emittance->red;
+		color.green *= emittance->green;
+		color.blue *= emittance->blue;
+	}
+
+	float radius = 0;
+
+	if (auto rendererData = a_pass->geometry->GetGeometryRuntimeData().rendererData) {
+		if (auto triShape = a_pass->geometry->AsTriShape()) {
+			uint32_t vertexSize = rendererData->vertexDesc.GetSize();
+			if (rendererData->vertexDesc.HasFlag(RE::BSGraphics::Vertex::Flags::VF_COLORS)) {
+				uint32_t offset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_COLOR);
+
+				uint8_t maxAlpha = 0u;
+				VertexColor* vertexColor = nullptr;
+				for (int v = 0; v < triShape->GetTrishapeRuntimeData().vertexCount; v++) {
+					if (VertexColor* vertex = reinterpret_cast<VertexColor*>(&rendererData->rawVertexData[vertexSize * v + offset])) {
+						if (vertex->data[3] > maxAlpha) {
+							maxAlpha = vertex->data[3];
+							vertexColor = vertex;
+						}
+					}
+				}
+				color.red *= vertexColor->data[0] / 255.f;
+				color.green *= vertexColor->data[1] / 255.f;
+				color.blue *= vertexColor->data[2] / 255.f;
+				if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexAlpha)) {
+					color.alpha *= vertexColor->data[3] / 255.f;
+				}
+			}
+
+			uint32_t offset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_POSITION);
+			for (int v = 0; v < triShape->GetTrishapeRuntimeData().vertexCount; v++) {
+				if (VertexPosition* vertex = reinterpret_cast<VertexPosition*>(&rendererData->rawVertexData[vertexSize * v + offset])) {
+					RE::NiPoint3 position{ (float)vertex->data[0], (float)vertex->data[1], (float)vertex->data[2] };
+					radius = std::max(radius, position.Length());
+				}
+			}
+			radius /= 255.f;
+		}
+	}
+
+	if (gradientConfig) {
+		auto grey = float3(config->colorMult.red, config->colorMult.green, config->colorMult.blue).Dot(float3(0.3f, 0.59f, 0.11f));
+		color.red *= grey * gradientConfig->color.red;
+		color.green *= grey * gradientConfig->color.green;
+		color.blue *= grey * gradientConfig->color.blue;
+	} else {
+		color.red *= config->colorMult.red;
+		color.green *= config->colorMult.green;
+		color.blue *= config->colorMult.blue;
+	}
+
+	queuedParticleLights.insert({ a_pass->geometry, { color, radius, *config } });
 }
 
 enum class GrassShaderTechniques
