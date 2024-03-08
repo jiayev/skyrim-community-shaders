@@ -11,8 +11,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SubsurfaceScattering::Settings,
 	EnableCharacterLighting,
 	BaseProfile,
-	HumanProfile
-)
+	HumanProfile)
 
 void SubsurfaceScattering::DrawSettings()
 {
