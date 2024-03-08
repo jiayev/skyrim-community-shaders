@@ -90,6 +90,10 @@ float3 GetWetnessAmbientSpecular(float2 uv, float3 N, float3 V, float roughness)
 	float2 specularBRDF = EnvBRDFApprox(0.02, roughness, NoV);
 #endif
 
+	// Horizon specular occlusion
+	float horizon = min(1.0 + dot(R, N), 1.0);
+	specularIrradiance *= horizon * horizon;
+
 	// Roughness dependent fresnel
 	// https://www.jcgt.org/published/0008/01/03/paper.pdf
 	float3 Fr = max(1.0.xxx - roughness.xxx, 0.02) - 0.02;
