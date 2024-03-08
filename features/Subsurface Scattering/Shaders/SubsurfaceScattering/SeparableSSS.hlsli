@@ -130,21 +130,21 @@ float4 SSSSBlurCS(
 	finalStep *= profile.x;  // Modulate it using the profile
 	finalStep *= 1.0 / 3.0;  // Divide by 3 as the kernels range from -3 to 3.
 
-#	if defined(VR)
-	finalStep.x *= 0.5; // Halve horizontal screen resolution
-	uint eyeIndex = texcoord >= 0.5; // 0 = left 1 = right
+#if defined(VR)
+	finalStep.x *= 0.5;               // Halve horizontal screen resolution
+	uint eyeIndex = texcoord >= 0.5;  // 0 = left 1 = right
 	uint bufferDimHalfX = uint(BufferDim.x * 0.5);
 	uint2 minCoord = uint2(eyeIndex ? bufferDimHalfX : 0, 0);
 	uint2 maxCoord = uint2(eyeIndex ? BufferDim.x : bufferDimHalfX, BufferDim.y);
-#	else
-	[flatten] if (depthM < 16.5) // First-person
+#else
+	[flatten] if (depthM < 16.5)  // First-person
 	{
 		finalStep *= 0.1;
 		distanceToProjectionWindow *= 500.0;
 	}
 	uint2 minCoord = uint2(0, 0);
 	uint2 maxCoord = uint2(BufferDim.x, BufferDim.y);
-#	endif
+#endif
 
 	float jitter = InterleavedGradientNoise(DTid.xy);
 	float2x2 rotationMatrix = float2x2(cos(jitter), sin(jitter), -sin(jitter), cos(jitter));

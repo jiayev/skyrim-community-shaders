@@ -2159,7 +2159,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif  // OUTLINE
 
 #	if defined(SSS) && defined(SKIN)
-	if (perPassSSS[0].ValidMaterial){
+	if (perPassSSS[0].ValidMaterial) {
 		float sssAmount = saturate(baseColor.a) * 0.5;
 		psout.ScreenSpaceNormals.z = perPassSSS[0].IsBeastRace ? sssAmount : sssAmount + 0.5;
 	}
