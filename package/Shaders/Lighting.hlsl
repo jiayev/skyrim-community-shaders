@@ -1018,6 +1018,9 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 
 #	if defined(SSS)
 #		include "SubsurfaceScattering/SubsurfaceScattering.hlsli"
+#		if defined(SKIN)
+#			undef SOFT_LIGHTING
+#		endif
 #	endif
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace
