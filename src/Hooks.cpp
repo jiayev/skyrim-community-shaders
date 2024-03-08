@@ -437,9 +437,8 @@ namespace Hooks
 		*(uintptr_t*)&ptr_BSShaderRenderTargets_Create = Detours::X64::DetourFunction(REL::RelocationID(100458, 107175).address(), (uintptr_t)&hk_BSShaderRenderTargets_Create);
 
 		logger::info("Hooking BSShaderRenderTargets::Create::CreateRenderTarget(s)");
-		bool marketplaceUpdate = REL::Module::get().version() >= SKSE::RUNTIME_SSE_1_6_1130;
-		stl::write_thunk_call<CreateRenderTarget_Main>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x3F0, marketplaceUpdate ? 0x3F3 : 0x200, 0x548));
-		stl::write_thunk_call<CreateRenderTarget_Normals>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x458, marketplaceUpdate ? 0x45B : 0x454, 0x5B0));
-		stl::write_thunk_call<CreateRenderTarget_NormalsSwap>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x46B, marketplaceUpdate ? 0x46E : 0x467, 0x5C3));
+		stl::write_thunk_call<CreateRenderTarget_Main>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x3F0, 0x3F3, 0x548));
+		stl::write_thunk_call<CreateRenderTarget_Normals>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x458, 0x45B, 0x5B0));
+		stl::write_thunk_call<CreateRenderTarget_NormalsSwap>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x46B, 0x46E , 0x5C3));
 	}
 }
