@@ -105,7 +105,6 @@ struct PS_OUTPUT
 
 #ifdef PSHADER
 SamplerState SampDiffuse : register(s0);
-SamplerState SampShadowMaskSampler : register(s14);
 Texture2D<float4> TexDiffuse : register(t0);
 
 cbuffer AlphaTestRefCB : register(b11)
@@ -172,8 +171,6 @@ float3x3 CalculateTBN(float3 N, float3 p, float2 uv)
 	float invmax = rsqrt(max(dot(T, T), dot(B, B)));
 	return float3x3(T * invmax, B * invmax, N);
 }
-
-Texture2D<float4> TexShadowMaskSampler : register(t17);
 
 #	if defined(SCREEN_SPACE_SHADOWS)
 #		include "ScreenSpaceShadows/ShadowsPS.hlsli"

@@ -120,11 +120,6 @@ void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t 
 		buffers[1] = perPass->CB();
 		context->VSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
 		context->PSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
-
-		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-		ID3D11ShaderResourceView* views[1]{};
-		views[0] = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK].SRV;
-		context->PSSetShaderResources(17, ARRAYSIZE(views), views);
 	}
 }
 
