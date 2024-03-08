@@ -94,7 +94,7 @@ float noise(in float3 p)
 	float brightness = k;
 #endif
 
-	while (color.w <= 1.0 && mipLevel <= 10) {
+	while (color.w < 1.0 && mipLevel <= 10) {
 		mipLevel++;
 
 		float4 tempColor = 0.0;

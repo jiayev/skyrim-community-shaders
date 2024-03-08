@@ -145,6 +145,12 @@ float3 InverseProjectUVZ(float2 uv, float z)
 	return float3(vp.xy, vp.z) / vp.w;
 }
 
+float smoothbumpstep(float edge0, float edge1, float x)
+{
+    x = 1.0 - abs(saturate((x - edge0) / (edge1 - edge0)) - 0.5) * 2.0;
+    return x * x * (3.0 - x - x);
+}
+
 [numthreads(32, 32, 1)] void main(uint3 ThreadID
 								  : SV_DispatchThreadID) {
 	float3 captureDirection = -GetSamplingVector(ThreadID, DynamicCubemap);
@@ -170,27 +176,36 @@ float3 InverseProjectUVZ(float2 uv, float z)
 			float4 output = float4(sRGB2Lin(color), 1.0);
 			float lerpFactor = 0.5;
 
-			float4 position = float4(InverseProjectUVZ(uv, depth) * 0.0005, 1.0);
+			float4 position = float4(InverseProjectUVZ(uv, depth) * 0.001, 1.0);
+			
+			float distance = length(position.xyz);
+
+			position.w = smoothstep(1.0, 4096.0 * 0.001, distance); // Objects which are far away from the perspective of the camera do not fade out
+
+			if (depth > 0.999)
+				position.w = 0;
+				
 			DynamicCubemapPosition[ThreadID] = lerp(DynamicCubemapPosition[ThreadID], position, lerpFactor);
 
-			DynamicCubemapRaw[ThreadID] = lerp(DynamicCubemapRaw[ThreadID], output, lerpFactor);
+			DynamicCubemapRaw[ThreadID] = max(0, lerp(DynamicCubemapRaw[ThreadID], output, lerpFactor));
 
-			float distanceFactor = saturate(length(position.xyz));
-			output *= distanceFactor;
+			float distanceFactor = smoothbumpstep(0.0, 1.0, length(position.xyz));
+			output *= max(distanceFactor, position.w); // Pick the largest value
 
-			DynamicCubemap[ThreadID] = lerp(DynamicCubemap[ThreadID], output, lerpFactor);
+			DynamicCubemap[ThreadID] = max(0, lerp(DynamicCubemap[ThreadID], output, lerpFactor));
 
 			return;
 		}
 	}
 
 	float4 position = DynamicCubemapPosition[ThreadID];
-	position.xyz = (position.xyz + (CameraPreviousPosAdjust2.xyz * 0.0005)) - (CameraPosAdjust[0].xyz * 0.0005);  // Remove adjustment, add new adjustment
+	position.xyz = (position.xyz + (CameraPreviousPosAdjust2.xyz * 0.001)) - (CameraPosAdjust[0].xyz * 0.001);  // Remove adjustment, add new adjustment
 	DynamicCubemapPosition[ThreadID] = position;
 
 	float4 color = DynamicCubemapRaw[ThreadID];
-	color *= 1.0 - saturate(length(position.xyz));
-	color *= saturate(length(position.xyz) * 10);
+	
+	float distanceFactor = smoothbumpstep(0.0, 1.0, length(position.xyz));
+	color *= max(distanceFactor, position.w);
 
 	DynamicCubemap[ThreadID] = max(0, color);
 }
