@@ -111,9 +111,10 @@ float4 SSSSBlurCS(
 	float depthM = DepthTexture[DTid.xy].r;
 	depthM = GetScreenDepth(depthM);
 
-	float2 profile = sssAmount == 1.0 ? HumanProfile.xy : BeastProfile.xy;
+	bool humanProfile = sssAmount > 0.5;
 
-	uint kernelOffset = sssAmount == 1.0 ? 0 : SSSS_N_SAMPLES;
+	float2 profile = humanProfile ? HumanProfile.xy : BaseProfile.xy;
+	uint kernelOffset = humanProfile ? SSSS_N_SAMPLES : 0;
 
 	// Accumulate center sample, multiplying it with its gaussian weight:
 	float4 colorBlurred = colorM;
@@ -125,24 +126,25 @@ float4 SSSSBlurCS(
 
 	// Calculate the final step to fetch the surrounding pixels:
 	float2 finalStep = scale * BufferDim * dir;
+	finalStep *= saturate((humanProfile ? (sssAmount.x - 0.5) : sssAmount) * 2.0);
 	finalStep *= profile.x;  // Modulate it using the profile
 	finalStep *= 1.0 / 3.0;  // Divide by 3 as the kernels range from -3 to 3.
 
-#if defined(VR)
-	finalStep.x *= 0.5;               // Halve horizontal screen resolution
-	uint eyeIndex = texcoord >= 0.5;  // 0 = left 1 = right
+#	if defined(VR)
+	finalStep.x *= 0.5; // Halve horizontal screen resolution
+	uint eyeIndex = texcoord >= 0.5; // 0 = left 1 = right
 	uint bufferDimHalfX = uint(BufferDim.x * 0.5);
-	uint2 minCoords = uint2(eyeIndex ? bufferDimHalfX : 0, 0);
-	uint2 maxCoords = uint2(eyeIndex ? BufferDim.x : bufferDimHalfX, BufferDim.y);
-#else
-	[flatten] if (depthM < 16.5)  // First-person
+	uint2 minCoord = uint2(eyeIndex ? bufferDimHalfX : 0, 0);
+	uint2 maxCoord = uint2(eyeIndex ? BufferDim.x : bufferDimHalfX, BufferDim.y);
+#	else
+	[flatten] if (depthM < 16.5) // First-person
 	{
 		finalStep *= 0.1;
 		distanceToProjectionWindow *= 500.0;
 	}
-	uint2 minCoords = uint2(0, 0);
-	uint2 maxCoords = uint2(BufferDim.x, BufferDim.y);
-#endif
+	uint2 minCoord = uint2(0, 0);
+	uint2 maxCoord = uint2(BufferDim.x, BufferDim.y);
+#	endif
 
 	float jitter = InterleavedGradientNoise(DTid.xy);
 	float2x2 rotationMatrix = float2x2(cos(jitter), sin(jitter), -sin(jitter), cos(jitter));
@@ -157,8 +159,8 @@ float4 SSSSBlurCS(
 
 		uint2 coords = DTid.xy + uint2(offset + 0.5);
 
-		// Clamp for dynamic resolution and VR
-		coords = clamp(coords, minCoords, maxCoords);
+		// Clamp for dynamic resolution
+		coords = clamp(coords, minCoord, maxCoord);
 
 		float3 color = ColorTexture[coords].rgb;
 

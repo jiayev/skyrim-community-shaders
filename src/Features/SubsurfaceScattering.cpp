@@ -10,8 +10,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionP
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SubsurfaceScattering::Settings,
 	EnableCharacterLighting,
-	HumanProfile,
-	BeastProfile)
+	BaseProfile,
+	HumanProfile
+)
 
 void SubsurfaceScattering::DrawSettings()
 {
@@ -19,6 +20,23 @@ void SubsurfaceScattering::DrawSettings()
 		ImGui::Checkbox("Enable Character Lighting", (bool*)&settings.EnableCharacterLighting);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Vanilla feature, not recommended.");
+		}
+
+		if (ImGui::TreeNodeEx("Base Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
+			ImGui::SliderFloat("Blur Radius", &settings.BaseProfile.BlurRadius, 0, 3, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Blur radius.");
+			}
+
+			ImGui::SliderFloat("Thickness", &settings.BaseProfile.Thickness, 0, 3, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Blur radius relative to depth.");
+			}
+
+			ImGui::ColorEdit3("Strength", (float*)&settings.BaseProfile.Strength);
+			ImGui::ColorEdit3("Falloff", (float*)&settings.BaseProfile.Falloff);
+
+			ImGui::TreePop();
 		}
 
 		if (ImGui::TreeNodeEx("Human Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -34,23 +52,6 @@ void SubsurfaceScattering::DrawSettings()
 
 			ImGui::ColorEdit3("Strength", (float*)&settings.HumanProfile.Strength);
 			ImGui::ColorEdit3("Falloff", (float*)&settings.HumanProfile.Falloff);
-
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNodeEx("Beast Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::SliderFloat("Blur Radius", &settings.BeastProfile.BlurRadius, 0, 3, "%.2f");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Blur radius.");
-			}
-
-			ImGui::SliderFloat("Thickness", &settings.BeastProfile.Thickness, 0, 3, "%.2f");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Blur radius relative to depth.");
-			}
-
-			ImGui::ColorEdit3("Strength", (float*)&settings.BeastProfile.Strength);
-			ImGui::ColorEdit3("Falloff", (float*)&settings.BeastProfile.Falloff);
 
 			ImGui::TreePop();
 		}
@@ -237,8 +238,8 @@ void SubsurfaceScattering::DrawSSS()
 
 		blurCBData.CameraData = Util::GetCameraData();
 
+		blurCBData.BaseProfile = { settings.BaseProfile.BlurRadius, settings.BaseProfile.Thickness, 0, 0 };
 		blurCBData.HumanProfile = { settings.HumanProfile.BlurRadius, settings.HumanProfile.Thickness, 0, 0 };
-		blurCBData.BeastProfile = { settings.BeastProfile.BlurRadius, settings.BeastProfile.Thickness, 0, 0 };
 
 		blurCB->Update(blurCBData);
 	}
@@ -369,8 +370,8 @@ void SubsurfaceScattering::Reset()
 	auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
 	shaderManager.characterLightEnabled = SIE::ShaderCache::Instance().IsEnabled() ? settings.EnableCharacterLighting : true;
 
+	CalculateKernel(settings.BaseProfile, blurCBData.BaseKernel);
 	CalculateKernel(settings.HumanProfile, blurCBData.HumanKernel);
-	CalculateKernel(settings.BeastProfile, blurCBData.BeastKernel);
 }
 
 void SubsurfaceScattering::RestoreDefaultSettings()

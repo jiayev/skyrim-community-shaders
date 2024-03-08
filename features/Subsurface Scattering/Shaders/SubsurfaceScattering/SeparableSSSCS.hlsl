@@ -20,8 +20,8 @@ struct DiffusionProfile
 cbuffer PerFrame : register(b0)
 {
 	float4 Kernels[SSSS_N_SAMPLES + SSSS_N_SAMPLES];
+	float4 BaseProfile;
 	float4 HumanProfile;
-	float4 BeastProfile;
 	float4 CameraData;
 	float2 BufferDim;
 	float2 RcpBufferDim;
@@ -63,12 +63,12 @@ float InterleavedGradientNoise(float2 uv)
 #if defined(HORIZONTAL)
 	float4 normals = NormalTexture[DTid.xy];
 	float4 color = SSSSBlurCS(DTid.xy, texCoord, float2(1.0, 0.0), normals);
-	SSSRW[DTid.xy] = color;
+	SSSRW[DTid.xy] = max(0, color);
 #else
 	float4 normals = NormalTexture[DTid.xy];
 	float4 color = SSSSBlurCS(DTid.xy, texCoord, float2(0.0, 1.0), normals);
 	color.rgb = Lin2sRGB(color.rgb);
-	SSSRW[DTid.xy] = float4(color.rgb, 1);
+	SSSRW[DTid.xy] = float4(max(0, color.rgb), 1);
 	NormalTexture[DTid.xy] = float4(normals.xy, 0.0, normals.w);
 #endif
 }

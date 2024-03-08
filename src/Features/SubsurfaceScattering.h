@@ -30,8 +30,8 @@ public:
 	struct Settings
 	{
 		uint EnableCharacterLighting = false;
+		DiffusionProfile BaseProfile{ 1.0f, 1.0f, { 0.48f, 0.41f, 0.28f }, { 0.56f, 0.56f, 0.56f } };
 		DiffusionProfile HumanProfile{ 1.0f, 1.0f, { 0.48f, 0.41f, 0.28f }, { 1.0f, 0.37f, 0.3f } };
-		DiffusionProfile BeastProfile{ 1.0f, 1.0f, { 0.48f, 0.41f, 0.28f }, { 0.56f, 0.56f, 0.56f } };
 	};
 
 	Settings settings;
@@ -43,10 +43,10 @@ public:
 
 	struct alignas(16) BlurCB
 	{
+		Kernel BaseKernel;
 		Kernel HumanKernel;
-		Kernel BeastKernel;
+		float4 BaseProfile;
 		float4 HumanProfile;
-		float4 BeastProfile;
 		float4 CameraData;
 		float2 BufferDim;
 		float2 RcpBufferDim;

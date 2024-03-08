@@ -1016,9 +1016,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "TerrainBlending/TerrainBlending.hlsli"
 #	endif
 
-#	if defined(SKIN) && defined(SSS)
-#		undef SOFT_LIGHTING
-#		define LOAD_SOFT_LIGHTING
+#	if defined(SSS)
 #		include "SubsurfaceScattering/SubsurfaceScattering.hlsli"
 #	endif
 
@@ -2160,11 +2158,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.Albedo = float4(1, 0, 0, 1);
 #	endif  // OUTLINE
 
-#	if defined(SSS)
-#		if defined(SKIN)
-	if (perPassSSS[0].ValidMaterial)
-		psout.ScreenSpaceNormals.z = perPassSSS[0].IsBeastRace ? 0.5 : 1.0;
-#		endif
+#	if defined(SSS) && defined(SKIN)
+	if (perPassSSS[0].ValidMaterial){
+		float sssAmount = saturate(baseColor.a) * 0.5;
+		psout.ScreenSpaceNormals.z = perPassSSS[0].IsBeastRace ? sssAmount : sssAmount + 0.5;
+	}
 #	endif
 
 	return psout;
