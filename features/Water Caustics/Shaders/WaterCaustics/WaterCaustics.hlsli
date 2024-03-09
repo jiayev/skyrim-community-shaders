@@ -21,7 +21,7 @@ float3 SampleCaustics(float2 uv, float split)
 	return float3(r, g, b);
 }
 
-float3 ComputeWaterCaustics(float2 uv, float depthDifference)
+float3 ComputeWaterCaustics(float2 uv)
 {
 	float2 causticsUV = uv * 5.0;
 
