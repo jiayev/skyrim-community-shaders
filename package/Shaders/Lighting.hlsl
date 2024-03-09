@@ -1570,10 +1570,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 worldSpaceNormal = modelNormal;
 
-#		if !defined(DRAW_IN_WORLDSPACE)
+#	if !defined(DRAW_IN_WORLDSPACE)
 	[flatten] if (!input.WorldSpace)
 		worldSpaceNormal = normalize(mul(input.World[eyeIndex], float4(worldSpaceNormal, 0)));
-#		endif
+#	endif
 
 	float3 screenSpaceNormal = normalize(WorldToView(worldSpaceNormal, false, eyeIndex));
 
