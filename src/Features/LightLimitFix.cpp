@@ -567,11 +567,13 @@ void LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, LightLimitFix::Co
 						}
 					}
 				}
-				color.red *= vertexColor->data[0] / 255.f;
-				color.green *= vertexColor->data[1] / 255.f;
-				color.blue *= vertexColor->data[2] / 255.f;
-				if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexAlpha)) {
-					color.alpha *= vertexColor->data[3] / 255.f;
+				if (vertexColor) {
+					color.red *= vertexColor->data[0] / 255.f;
+					color.green *= vertexColor->data[1] / 255.f;
+					color.blue *= vertexColor->data[2] / 255.f;
+					if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexAlpha)) {
+						color.alpha *= vertexColor->data[3] / 255.f;
+					}
 				}
 			}
 
