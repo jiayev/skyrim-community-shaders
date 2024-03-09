@@ -405,6 +405,7 @@ void LightLimitFix::Bind()
 			views[1] = lightList->srv.get();
 			views[2] = lightGrid->srv.get();
 			context->PSSetShaderResources(17, ARRAYSIZE(views), views);
+			perPassData.EnableGlobalLights = false;
 		}
 
 		if (!perPassData.EnableGlobalLights) {
