@@ -289,7 +289,7 @@ cbuffer PerGeometry : register(b2)
 #	define SampColorSampler Normals01Sampler
 
 #	if defined(LOD)
-#	undef WATER_CAUSTICS
+#		undef WATER_CAUSTICS
 #	endif
 
 #	if defined(WATER_CAUSTICS)
@@ -310,9 +310,9 @@ float3 GetFlowmapNormal(PS_INPUT input, float2 uvShift, float multiplier, float 
 	float2x2 flowRotationMatrix = float2x2(flowSinCos.x, flowSinCos.y, -flowSinCos.y, flowSinCos.x);
 	float2 rotatedFlowVector = mul(transpose(flowRotationMatrix), flowVector);
 	float2 uv = offset + (rotatedFlowVector - float2(multiplier * ((0.001 * ReflectionColor.w) * flowmapColor.w), 0));
-#	if defined(WATER_CAUSTICS)
+#			if defined(WATER_CAUSTICS)
 	caustics = ComputeWaterCaustics(uv + viewOffset.xy * 0.001);
-#	endif
+#			endif
 	return float3(FlowMapNormalsTex.Sample(FlowMapNormalsSampler, uv).xy, flowmapColor.z);
 }
 #		endif
@@ -329,11 +329,11 @@ float3 GetFlowmapNormal(PS_INPUT input, float2 uvShift, float multiplier, float 
 #			include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #		endif
 
-#	if defined(WATER_CAUSTICS)
+#		if defined(WATER_CAUSTICS)
 float3 GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFactor, float3 viewDirection, float depth, inout float3 caustics)
-#	else
+#		else
 float3 GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFactor, float3 viewDirection, float depth)
-#endif
+#		endif
 {
 	float3 normalScalesRcp = rcp(input.NormalsScale.xyz);
 
@@ -344,9 +344,9 @@ float3 GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFa
 #		if defined(WATER_CAUSTICS)
 #			if defined(VERTEX_ALPHA_DEPTH)
 	float depthDifference = 128.0;
-#				else
+#			else
 	float depthDifference = depth - length(input.WPosition.xyz);
-#				endif
+#			endif
 	float2 viewOffset = viewDirection.xy * depthDifference;
 #		endif
 
@@ -355,7 +355,7 @@ float3 GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFa
 		0.5 + -(-0.5 + abs(frac(input.TexCoord2.zw * (64 * input.TexCoord4)) * 2 - 1));
 	float uvShift = 1 / (128 * input.TexCoord4);
 
-#		if defined(WATER_CAUSTICS)
+#			if defined(WATER_CAUSTICS)
 	float3 flowmapCaustics0;
 	float3 flowmapNormal0 = GetFlowmapNormal(input, uvShift.xx, 9.92, 0, viewOffset, flowmapCaustics0);
 	float3 flowmapCaustics1;
@@ -363,16 +363,16 @@ float3 GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFa
 	float3 flowmapCaustics2;
 	float3 flowmapNormal2 = GetFlowmapNormal(input, 0.0.xx, 8, 0, viewOffset, flowmapCaustics2);
 	float3 flowmapCaustics3;
-	float3 flowmapNormal3 = GetFlowmapNormal(input, float2(uvShift, 0), 8.48, 0.62, viewOffset, flowmapCaustics3);		
+	float3 flowmapNormal3 = GetFlowmapNormal(input, float2(uvShift, 0), 8.48, 0.62, viewOffset, flowmapCaustics3);
 
 	float3 flowmapCausticsWeighted = normalMul.y * (normalMul.x * flowmapCaustics2 + (1.0 - normalMul.x) * flowmapCaustics3) + (1.0 - normalMul.y) * (normalMul.x * flowmapCaustics1 + (1.0 - normalMul.x) * flowmapCaustics0);
 	caustics = flowmapCausticsWeighted;
-#		else
+#			else
 	float3 flowmapNormal0 = GetFlowmapNormal(input, uvShift.xx, 9.92, 0);
 	float3 flowmapNormal1 = GetFlowmapNormal(input, float2(0, uvShift), 10.64, 0.27);
 	float3 flowmapNormal2 = GetFlowmapNormal(input, 0.0.xx, 8, 0);
 	float3 flowmapNormal3 = GetFlowmapNormal(input, float2(uvShift, 0), 8.48, 0.62);
-#	endif
+#			endif
 
 	float2 flowmapNormalWeighted =
 		normalMul.y * (normalMul.x * flowmapNormal2.xy + (1 - normalMul.x) * flowmapNormal3.xy) +
@@ -406,7 +406,7 @@ float3 GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFa
 	float3 normals3 = Normals03Tex.Sample(Normals03Sampler, input.TexCoord2.xy).xyz * 2.0 - 1.0;
 #			endif
 
-#		if defined(WATER_CAUSTICS)
+#			if defined(WATER_CAUSTICS)
 	float3 caustics1 = ComputeWaterCaustics(input.TexCoord1.xy + viewOffset.xy * normalScalesRcp.x);
 	float3 caustics2 = ComputeWaterCaustics(input.TexCoord1.zw + viewOffset.xy * normalScalesRcp.y);
 	float3 caustics3 = ComputeWaterCaustics(input.TexCoord2.xy + viewOffset.xy * normalScalesRcp.z);
@@ -428,9 +428,9 @@ float3 GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFa
 		normalMul.y * ((1 - normalMul.x) * flowmapNormal3.z + normalMul.x * flowmapNormal2.z) +
 		(1 - normalMul.y) * (normalMul.x * flowmapNormal1.z + (1 - normalMul.x) * flowmapNormal0.z);
 	finalNormal = normalize(lerp(normals1 + float3(0, 0, 1), normalize(lerp(finalNormal, flowmapNormal, normalBlendFactor)), distanceFactor));
-#			if defined(WATER_CAUSTICS)
+#				if defined(WATER_CAUSTICS)
 	caustics = lerp(blendedCaustics, flowmapCausticsWeighted, normalBlendFactor);
-#			endif
+#				endif
 #			endif
 #		else
 	float3 finalNormal =
@@ -526,13 +526,13 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 	return (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
 }
 
-#	if defined(WATER_CAUSTICS)
+#		if defined(WATER_CAUSTICS)
 float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	float4 distanceMul, float refractionsDepthFactor, float fresnel, float3 caustics)
-#	else
+#		else
 float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	float4 distanceMul, float refractionsDepthFactor, float fresnel)
-#	endif
+#		endif
 {
 #		if defined(REFRACTIONS)
 	float4 refractionNormal = mul(transpose(TextureProj),
@@ -659,12 +659,12 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 depthControl = DepthControl * (distanceMul - 1) + 1;
 #		endif
 
-#	if defined(WATER_CAUSTICS)
+#		if defined(WATER_CAUSTICS)
 	float3 caustics = 0.0;
 	float3 normal = GetWaterNormal(input, distanceFactor, depthControl.z, viewDirection, depth, caustics);
-#	else
+#		else
 	float3 normal = GetWaterNormal(input, distanceFactor, depthControl.z, viewDirection, depth);
-#	endif
+#		endif
 
 	float fresnel = GetFresnelValue(normal, viewDirection);
 
