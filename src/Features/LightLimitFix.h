@@ -179,9 +179,8 @@ public:
 	Settings settings;
 
 	using ConfigPair = std::pair<ParticleLights::Config*, ParticleLights::GradientConfig*>;
-	std::optional<ConfigPair> GetConfigs(RE::BSEffectShaderMaterial* a_mat);
 	std::optional<ConfigPair> GetParticleLightConfigs(RE::BSRenderPass* a_pass);
-	void AddParticleLight(RE::BSRenderPass* a_pass, ConfigPair a_config);
+	bool AddParticleLight(RE::BSRenderPass* a_pass, ConfigPair a_config);
 	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique);
 
 	void BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass);
