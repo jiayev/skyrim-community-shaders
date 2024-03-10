@@ -3,7 +3,6 @@
 #define _Glowmap 2
 #define _Hair 6
 
-// LightingShaderFlags
 #define _VC (1 << 0)
 #define _Skinned (1 << 1)
 #define _ModelSpaceNormals (1 << 2)
@@ -36,6 +35,10 @@
 #define _Cubemap (1 << 8)
 #define _Flowmap (1 << 9)
 #define _BlendNormals (1 << 10)
+
+#define _GrayscaleToColor (1 << 19)
+#define _GrayscaleToAlpha (1 << 20)
+#define _IgnoreTexAlpha (1 << 21)
 
 struct PerShader
 {

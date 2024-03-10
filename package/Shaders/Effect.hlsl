@@ -556,9 +556,8 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(TEXTURE)
 	baseTexColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
 	baseColor *= baseTexColor;
-#		if defined(IGNORE_TEX_ALPHA) || defined(GRAYSCALE_TO_ALPHA)
-	baseColor.w = 1;
-#		endif
+	if (shaderDescriptors[0].PixelShaderDescriptor & _IgnoreTexAlpha || shaderDescriptors[0].PixelShaderDescriptor & _GrayscaleToAlpha)
+		baseColor.w = 1;
 #	endif
 #	if defined(MEMBRANE)
 	baseColor.w *= input.ViewVector.w;
@@ -610,15 +609,13 @@ PS_OUTPUT main(PS_INPUT input)
 	lightingInfluence = 0;
 #	endif
 
-#	if defined(GRAYSCALE_TO_COLOR)
-	baseColor.xyz = BaseColorScale.x * TexGrayscaleSampler.Sample(SampGrayscaleSampler, float2(baseTexColor.y, baseColorMul.x)).xyz;
-#	endif
+	if (shaderDescriptors[0].PixelShaderDescriptor & _GrayscaleToColor)
+		baseColor.xyz = BaseColorScale.x * TexGrayscaleSampler.Sample(SampGrayscaleSampler, float2(baseTexColor.y, baseColorMul.x)).xyz;
 
 	float alpha = PropertyColor.w * baseColor.w;
 
-#	if defined(GRAYSCALE_TO_ALPHA)
-	alpha = TexGrayscaleSampler.Sample(SampGrayscaleSampler, float2(baseTexColor.w, alpha)).w;
-#	endif
+	if (shaderDescriptors[0].PixelShaderDescriptor & _GrayscaleToAlpha)
+		alpha = TexGrayscaleSampler.Sample(SampGrayscaleSampler, float2(baseTexColor.w, alpha)).w;
 
 #	if defined(BLOOD)
 	baseColor.w = baseColor.y;
