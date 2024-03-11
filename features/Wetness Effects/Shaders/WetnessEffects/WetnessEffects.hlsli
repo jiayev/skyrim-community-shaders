@@ -10,13 +10,15 @@ struct PerPassWetnessEffects
 	float MaxPuddleWetness;
 	float MaxShoreWetness;
 	uint ShoreRange;
+	float MaxPointLightSpecular;
+	float MaxDALCSpecular;
+	float MaxAmbientSpecular;
 	float PuddleRadius;
 	float PuddleMaxAngle;
 	float PuddleMinWetness;
 	float MinRainWetness;
 	float SkinWetness;
 	float WeatherTransitionSpeed;
-	float pad[3];
 };
 
 StructuredBuffer<PerPassWetnessEffects> perPassWetnessEffects : register(t22);

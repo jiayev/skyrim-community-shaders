@@ -1654,7 +1654,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1.0)
-		wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedDirLightDirectionWS, worldSpaceViewDirection, sRGB2Lin(dirLightColor) * 0.01, waterRoughnessSpecular);
+		wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedDirLightDirectionWS, worldSpaceViewDirection, sRGB2Lin(dirLightColor) * perPassWetnessEffects[0].MaxDALCSpecular, waterRoughnessSpecular);
 #		endif
 
 #	endif
@@ -1813,7 +1813,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #			if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1.0)
-			wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirection, worldSpaceViewDirection, sRGB2Lin(lightColor), waterRoughnessSpecular) * 0.4;
+			wetnessSpecular += GetWetnessSpecular(wetnessNormal, normalizedLightDirection, worldSpaceViewDirection, sRGB2Lin(lightColor), waterRoughnessSpecular) * perPassWetnessEffects[0].MaxPointLightSpecular;
 #			endif
 	}
 #		endif
@@ -1904,7 +1904,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	baseColor.xyz = lerp(baseColor.xyz, pow(baseColor.xyz, 1.0 + wetnessDarkeningAmount), 0.8);
 #		endif
 	if (waterRoughnessSpecular < 1.0)
-		wetnessSpecular += GetWetnessAmbientSpecular(screenUV, wetnessNormal, worldSpaceViewDirection, 1.0 - wetnessGlossinessSpecular);
+		wetnessSpecular += GetWetnessAmbientSpecular(screenUV, wetnessNormal, worldSpaceViewDirection, 1.0 - wetnessGlossinessSpecular) * perPassWetnessEffects[0].MaxAmbientSpecular;
 #	endif
 
 	float4 color;

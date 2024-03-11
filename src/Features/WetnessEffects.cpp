@@ -19,6 +19,8 @@ const float MAX_PUDDLE_WETNESS = 1.0f;
 const float MAX_WETNESS = 1.0f;
 const float SECONDS_IN_A_DAY = 86400;
 const float MAX_TIME_DELTA = SECONDS_IN_A_DAY - 30;
+const float MIN_WEATHER_TRANSITION_SPEED = 0.0f;
+const float MAX_WEATHER_TRANSITION_SPEED = 500.0f;
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	WetnessEffects::Settings,
@@ -27,6 +29,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	MaxPuddleWetness,
 	MaxShoreWetness,
 	ShoreRange,
+	MaxPointLightSpecular,
+	MaxDALCSpecular,
+	MaxAmbientSpecular,
 	PuddleRadius,
 	PuddleMaxAngle,
 	PuddleMinWetness,
@@ -69,6 +74,24 @@ void WetnessEffects::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"How wet character skin and hair get during rain. ");
+		}
+
+		ImGui::SliderFloat("Max Point Light Specular", &settings.MaxPointLightSpecular, 0.0f, 1.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"How much point lights (like torches) impact wetness. ");
+		}
+
+		ImGui::SliderFloat("Max Directional Specular", &settings.MaxDALCSpecular, 0.0f, 1.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"How much directional light (like sunlight) impacts wetness. ");
+		}
+
+		ImGui::SliderFloat("Max Ambient Specular", &settings.MaxAmbientSpecular, 0.0f, 1.0f);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"How much ambient light (like reflections) impacts wetness. ");
 		}
 
 		ImGui::SliderInt("Shore Range", (int*)&settings.ShoreRange, 1, 64);
@@ -195,7 +218,7 @@ void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 									float weatherTransitionPercentage = DEFAULT_TRANSITION_PERCENTAGE;
 									float lastWeatherWetnessDepth = wetnessDepth;
 									float lastWeatherPuddleDepth = puddleDepth;
-									seconds *= settings.WeatherTransitionSpeed;
+									seconds *= std::clamp(settings.WeatherTransitionSpeed, MIN_WEATHER_TRANSITION_SPEED, MAX_WEATHER_TRANSITION_SPEED);
 									CalculateWetness(currentWeather, sky, seconds, currentWeatherWetnessDepth, currentWeatherPuddleDepth);
 									// If there is a lastWeather, figure out what type it is and set the wetness
 									if (auto lastWeather = sky->lastWeather) {
