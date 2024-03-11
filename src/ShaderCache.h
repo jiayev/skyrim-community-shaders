@@ -3,6 +3,7 @@
 #include <RE/B/BSShader.h>
 
 #include "BS_thread_pool.hpp"
+#include "efsw/efsw.hpp"
 #include <chrono>
 #include <condition_variable>
 #include <unordered_map>
@@ -84,6 +85,15 @@ namespace SIE
 		double totalMs = (double)duration_cast<std::chrono::milliseconds>(lastReset - lastReset).count();
 	};
 
+	struct ShaderCacheResult
+	{
+		ID3DBlob* blob;
+		ShaderCompilationTask::Status status;
+		system_clock::time_point compileTime = system_clock::now();
+	};
+
+	class UpdateListener;
+
 	class ShaderCache
 	{
 	public:
@@ -126,7 +136,16 @@ namespace SIE
 		void DeleteDiskCache();
 		void ValidateDiskCache();
 		void WriteDiskCacheInfo();
+		void StartFileWatcher();
+		/** @brief Whether the ShaderFile for RE::BSShader::Type has been modified since the timestamp.
+		@param  a_type Case insensitive string for the type of shader. E.g., Lighting
+		@param  a_current The current time in system_clock::time_point.
+		@return True if the shader for the type (i.e., Lighting.hlsl) has been modified since the timestamp
+		*/
+		bool ShaderModifiedSince(std::string a_type, system_clock::time_point a_current);
+
 		void Clear();
+		void Clear(RE::BSShader::Type a_type);
 
 		bool AddCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor, ID3DBlob* a_blob);
 		ID3DBlob* GetCompletedShader(const std::string a_key);
@@ -263,7 +282,8 @@ namespace SIE
 
 		uint blockedKeyIndex = (uint)-1;  // index in shaderMap; negative value indicates disabled
 		std::string blockedKey = "";
-		std::vector<uint32_t> blockedIDs;  // more than one descriptor could be blocked based on shader hash
+		std::vector<uint32_t> blockedIDs;                                               // more than one descriptor could be blocked based on shader hash
+		std::unordered_map<std::string, system_clock::time_point> modifiedShaderMap{};  // hashmap when a shader source file last modified
 
 	private:
 		ShaderCache();
@@ -289,7 +309,19 @@ namespace SIE
 		std::mutex vertexShadersMutex;
 		std::mutex pixelShadersMutex;
 		CompilationSet compilationSet;
-		std::unordered_map<std::string, std::pair<ID3DBlob*, ShaderCompilationTask::Status>> shaderMap{};
+		std::unordered_map<std::string, ShaderCacheResult> shaderMap{};
 		std::mutex mapMutex;
+
+		// efsw file watcher
+		efsw::FileWatcher* fileWatcher;
+		efsw::WatchID watchID;
+		UpdateListener* listener;
+	};
+
+	// Inherits from the abstract listener class, and implements the the file action handler
+	class UpdateListener : public efsw::FileWatchListener
+	{
+	public:
+		void handleFileAction(efsw::WatchID, const std::string& dir, const std::string& filename, efsw::Action action, std::string) override;
 	};
 }

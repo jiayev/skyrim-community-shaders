@@ -24,7 +24,8 @@
     },
     "eastl",
     "clib-util",
-    "unordered-dense"
+    "unordered-dense",
+    "efsw"
   ],
   "overrides": [
     {

@@ -39,7 +39,7 @@ find_path(CLIB_UTIL_INCLUDE_DIRS "ClibUtil/utils.hpp")
 find_package(pystring CONFIG REQUIRED)
 find_package(cppwinrt CONFIG REQUIRED)
 find_package(unordered_dense CONFIG REQUIRED)
-
+find_package(efsw CONFIG REQUIRED)
 target_include_directories(
 	${PROJECT_NAME}
 	PRIVATE
@@ -62,6 +62,7 @@ target_link_libraries(
 	Microsoft::DirectXTex
 	pystring::pystring
 	unordered_dense::unordered_dense
+	efsw::efsw
 )
 
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
@@ -87,7 +88,6 @@ endif()
 # #######################################################################################################################
 # # Feature version detection
 # #######################################################################################################################
-
 file(GLOB_RECURSE FEATURE_CONFIG_FILES
 	LIST_DIRECTORIES false
 	CONFIGURE_DEPENDS
@@ -106,7 +106,7 @@ endforeach()
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FEATURE_CONFIG_FILES}")
 
-string (REPLACE ";" ",\n" FEATURE_VERSIONS "${FEATURE_VERSIONS}")
+string(REPLACE ";" ",\n" FEATURE_VERSIONS "${FEATURE_VERSIONS}")
 
 configure_file(
 	${CMAKE_CURRENT_SOURCE_DIR}/cmake/FeatureVersions.h.in
@@ -189,7 +189,6 @@ endif()
 
 # Create a AIO zip for easier testing
 if(AIO_ZIP_TO_DIST)
-
 	if(NOT ZIP_TO_DIST)
 		add_custom_target(build-time-make-directory ALL
 			COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}" ${CMAKE_SOURCE_DIR}/dist
