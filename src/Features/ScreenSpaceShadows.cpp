@@ -53,7 +53,7 @@ void ScreenSpaceShadows::DrawSettings()
 	}
 
 	if (ImGui::TreeNodeEx("Near Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::SliderFloat("Near Distance", &settings.NearDistance, 0, 128);
+		ImGui::SliderFloat("Near Distance", &settings.NearDistance, 0.25f, 128);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Near Shadow Distance.");
 		}
@@ -256,7 +256,9 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 
 		bool enableSSS = true;
 
-		if (shadowState->GetRuntimeData().cubeMapRenderTarget == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS) {
+		GET_INSTANCE_MEMBER(cubeMapRenderTarget, shadowState)
+
+		if (cubeMapRenderTarget == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS) {
 			enableSSS = false;
 
 		} else if (!renderedScreenCamera && settings.Enabled) {
@@ -295,12 +297,6 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 
 					data.RcpBufferDim.x = 1.0f / data.BufferDim.x;
 					data.RcpBufferDim.y = 1.0f / data.BufferDim.y;
-					if (REL::Module::IsVR())
-						data.ProjMatrix = shadowState->GetVRRuntimeData().cameraData.getEye().projMat;
-					else
-						data.ProjMatrix = shadowState->GetRuntimeData().cameraData.getEye().projMat;
-
-					data.InvProjMatrix = XMMatrixInverse(nullptr, data.ProjMatrix);
 
 					data.DynamicRes.x = viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
 					data.DynamicRes.y = viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
@@ -308,17 +304,23 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 					data.DynamicRes.z = 1.0f / data.DynamicRes.x;
 					data.DynamicRes.w = 1.0f / data.DynamicRes.y;
 
-					auto& direction = dirLight->GetWorldDirection();
-					DirectX::XMFLOAT3 position{};
-					position.x = -direction.x;
-					position.y = -direction.y;
-					position.z = -direction.z;
-					auto viewMatrix = shadowState->GetRuntimeData().cameraData.getEye().viewMat;
-					if (REL::Module::IsVR())
-						viewMatrix = shadowState->GetVRRuntimeData().cameraData.getEye().viewMat;
+					for (int eyeIndex = 0; eyeIndex < (!REL::Module::IsVR() ? 1 : 2); eyeIndex++) {
+						if (REL::Module::IsVR())
+							data.ProjMatrix[eyeIndex] = shadowState->GetVRRuntimeData().cameraData.getEye(eyeIndex).projMat;
+						else
+							data.ProjMatrix[eyeIndex] = shadowState->GetRuntimeData().cameraData.getEye().projMat;
 
-					auto invDirLightDirectionWS = XMLoadFloat3(&position);
-					data.InvDirLightDirectionVS = XMVector3TransformCoord(invDirLightDirectionWS, viewMatrix);
+						data.InvProjMatrix[eyeIndex] = data.ProjMatrix[eyeIndex].Invert();
+					}
+
+					data.CameraData = Util::GetCameraData();
+
+					auto& direction = dirLight->GetWorldDirection();
+					float4 position{ -direction.x, -direction.y, -direction.z, 0.0f };
+
+					auto viewMatrix = !REL::Module::IsVR() ? shadowState->GetRuntimeData().cameraData.getEye().viewMat : shadowState->GetVRRuntimeData().cameraData.getEye().viewMat;
+
+					data.InvDirLightDirectionVS = float4::Transform(position, viewMatrix);
 
 					data.ShadowDistance = 10000.0f;
 
@@ -337,6 +339,12 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 				ID3D11ShaderResourceView* view = depth.depthSRV;
 				context->CSSetShaderResources(0, 1, &view);
 
+				ID3D11ShaderResourceView* stencilView = nullptr;
+				if (REL::Module::IsVR()) {
+					stencilView = depth.stencilSRV;
+					context->CSSetShaderResources(89, 1, &stencilView);
+				}
+
 				ID3D11UnorderedAccessView* uav = screenSpaceShadowsTexture->uav.get();
 				context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
@@ -344,6 +352,11 @@ void ScreenSpaceShadows::ModifyLighting(const RE::BSShader*, const uint32_t)
 				context->CSSetShader(shader, nullptr, 0);
 
 				context->Dispatch((uint32_t)std::ceil(resolutionX / 32.0f), (uint32_t)std::ceil(resolutionY / 32.0f), 1);
+
+				if (REL::Module::IsVR()) {
+					stencilView = nullptr;
+					context->CSSetShaderResources(89, 1, &stencilView);
+				}
 
 				// Filter
 				{

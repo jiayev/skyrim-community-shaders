@@ -122,6 +122,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		DynamicCubemaps::GetSingleton(),
 		GrassLighting::GetSingleton(),
 		GrassCollision::GetSingleton(),
+		ScreenSpaceShadows::GetSingleton(),
 		ExtendedMaterials::GetSingleton(),
 		WetnessEffects::GetSingleton(),
 		LightLimitFix::GetSingleton(),

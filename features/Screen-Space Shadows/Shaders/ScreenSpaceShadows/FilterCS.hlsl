@@ -27,52 +27,9 @@
 
 // HAVE FUN!
 
-RWTexture2D<float> OcclusionRW : register(u0);
+#include "Common.hlsl"
 
-SamplerState LinearSampler : register(s0);
-
-Texture2D<float4> DepthTexture : register(t0);
 Texture2D<float> OcclusionTexture : register(t1);
-
-cbuffer PerFrame : register(b0)
-{
-	float2 BufferDim;
-	float2 RcpBufferDim;
-	float4x4 ProjMatrix;
-	float4x4 InvProjMatrix;
-	float4 DynamicRes;
-	float4 InvDirLightDirectionVS;
-	float ShadowDistance;
-	uint MaxSamples;
-	float FarDistanceScale;
-	float FarThicknessScale;
-	float FarHardness;
-	float NearDistance;
-	float NearThickness;
-	float NearHardness;
-	float BlurRadius;
-	float BlurDropoff;
-	bool Enabled;
-};
-
-float GetDepth(float2 uv)
-{
-	return DepthTexture.SampleLevel(LinearSampler, uv, 0).r;
-}
-
-// Inverse project UV + raw depth into the view space.
-float3 InverseProjectUVZ(float2 uv, float z)
-{
-	uv.y = 1 - uv.y;
-	float4 cp = float4(float3(uv, z) * 2 - 1, 1);
-	float4 vp = mul(InvProjMatrix, cp);
-	return float3(vp.xy, vp.z) / vp.w;
-}
-
-float3 InverseProjectUV(float2 uv)
-{
-	return InverseProjectUVZ(uv, GetDepth(uv));
-}
 
 #define cKernelSize 12
 
@@ -106,6 +63,12 @@ static const float2 BlurOffsets[cKernelSize] = {
 	float2(6.0f, 6.0f)
 };
 
+float InverseProjectUV(float2 uv, uint a_eyeIndex)
+{
+	float depth = GetDepth(uv);
+	return InverseProjectUVZ(uv, depth, a_eyeIndex).z;
+}
+
 [numthreads(32, 32, 1)] void main(uint3 DTid
 								  : SV_DispatchThreadID) {
 
@@ -117,28 +80,29 @@ static const float2 BlurOffsets[cKernelSize] = {
 #	error "Must define an axis!"
 #endif
 
-	float2 TexCoord = (DTid.xy + 0.5) * RcpBufferDim;
+	float2 texCoord = (DTid.xy + 0.5) * RcpBufferDim;
+	uint eyeIndex = GetEyeIndexFromTexCoord(texCoord);
 
-	float startDepth = GetDepth(TexCoord * 2);
+	float startDepth = GetDepth(texCoord * 2 * DynamicRes.zw);
 	if (startDepth >= 1)
 		return;
 
 	float WeightSum = 0.114725602f;
-	float color1 = OcclusionTexture.SampleLevel(LinearSampler, TexCoord * 2, 0).r * WeightSum;
+	float color1 = OcclusionTexture.SampleLevel(LinearSampler, texCoord * 2, 0).r * WeightSum;
 
-	float depth1 = InverseProjectUVZ(TexCoord * 2, startDepth).z;
+	float depth1 = InverseProjectUVZ(texCoord * 2, startDepth, eyeIndex).z;
 
 	float depthDrop = depth1 * BlurDropoff;
 
 	[unroll] for (int i = 0; i < cKernelSize; i++)
 	{
 #if defined(HORIZONTAL)
-		float2 uv = TexCoord + (BlurOffsets[i] * OffsetMask * RcpBufferDim) * BlurRadius;
+		float2 uv = texCoord + (BlurOffsets[i] * OffsetMask * RcpBufferDim) * BlurRadius;
 #elif defined(VERTICAL)
-		float2 uv = TexCoord + (BlurOffsets[i] * OffsetMask * RcpBufferDim / 2) * BlurRadius;
+		float2 uv = texCoord + (BlurOffsets[i] * OffsetMask * RcpBufferDim / 2) * BlurRadius;
 #endif
 		float4 color2 = OcclusionTexture.SampleLevel(LinearSampler, uv * 2, 0).r;
-		float depth2 = InverseProjectUV(uv * 2).z;
+		float depth2 = InverseProjectUV(uv * 2, eyeIndex);
 
 		// Depth-awareness
 		float awareness = saturate(depthDrop - abs(depth1 - depth2));
