@@ -377,6 +377,15 @@ void Menu::DrawSettings()
 						"Specific shader will be printed to logfile. ");
 				}
 			}
+			if (ImGui::TreeNodeEx("Addresses")) {
+				auto Renderer = RE::BSGraphics::Renderer::GetSingleton();
+				auto BSShaderAccumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
+				auto RendererShadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+				ADDRESS_NODE(Renderer)
+				ADDRESS_NODE(BSShaderAccumulator)
+				ADDRESS_NODE(RendererShadowState)
+				ImGui::TreePop();
+			}
 			if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
 				ImGui::Text(std::format("Shader Compiler : {}", shaderCache.GetShaderStatsString()).c_str());
 				ImGui::TreePop();
