@@ -14,7 +14,7 @@ list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 message("Options:")
 option(AUTO_PLUGIN_DEPLOYMENT "Copy the build output and addons to env:CommunityShadersOutputDir." OFF)
 option(ZIP_TO_DIST "Zip the base mod and addons to their own 7z file in dist." ON)
-option(AIO_ZIP_TO_DIST "Zip the base mod and addons to a AIO 7z file in dist." OFF)
+option(AIO_ZIP_TO_DIST "Zip the base mod and addons to a AIO 7z file in dist." ON)
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
@@ -124,6 +124,7 @@ target_sources(
 # # Automatic deployment
 # #######################################################################################################################
 file(GLOB FEATURE_PATHS LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/features/*)
+string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 
 if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
 	set(AIO_DIR "${CMAKE_CURRENT_BINARY_DIR}/aio")
@@ -170,7 +171,7 @@ if(ZIP_TO_DIST)
 		COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_PDB_FILE:${PROJECT_NAME}> "${ZIP_DIR}/SKSE/Plugins/"
 	)
 
-	set(TARGET_ZIP "${PROJECT_NAME}.7z")
+	set(TARGET_ZIP "${PROJECT_NAME}-${UTC_NOW}.7z")
 	message("Zipping ${ZIP_DIR} to ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP}")
 	ADD_CUSTOM_COMMAND(TARGET ${PROJECT_NAME} POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E tar cf ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP} --format=7zip -- .
@@ -179,9 +180,9 @@ if(ZIP_TO_DIST)
 
 	foreach(FEATURE_PATH ${FEATURE_PATHS})
 		get_filename_component(FEATURE ${FEATURE_PATH} NAME)
-		message("Zipping ${FEATURE_PATH} to ${CMAKE_SOURCE_DIR}/dist/${FEATURE}.7z")
+		message("Zipping ${FEATURE_PATH} to ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z")
 		add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E tar cf ${CMAKE_SOURCE_DIR}/dist/${FEATURE}.7z --format=7zip -- .
+			COMMAND ${CMAKE_COMMAND} -E tar cf ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z --format=7zip -- .
 			WORKING_DIRECTORY ${FEATURE_PATH}
 		)
 	endforeach()
@@ -196,7 +197,7 @@ if(AIO_ZIP_TO_DIST)
 		)
 	endif()
 
-	set(TARGET_AIO_ZIP "${PROJECT_NAME}_AIO.7z")
+	set(TARGET_AIO_ZIP "${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
 	message("Zipping ${AIO_DIR} to ${CMAKE_SOURCE_DIR}/dist/${TARGET_AIO_ZIP}")
 	ADD_CUSTOM_COMMAND(TARGET ${PROJECT_NAME} POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E tar cf ${CMAKE_SOURCE_DIR}/dist/${TARGET_AIO_ZIP} --format=7zip -- .
