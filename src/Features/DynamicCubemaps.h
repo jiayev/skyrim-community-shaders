@@ -36,11 +36,6 @@ public:
 	Texture2D* envTexture = nullptr;
 	winrt::com_ptr<ID3D11UnorderedAccessView> uavArray[9];
 
-	// BRDF 2D LUT
-
-	ID3D11ComputeShader* spBRDFProgram = nullptr;
-	Texture2D* spBRDFLUT = nullptr;
-
 	// Reflection capture
 
 	struct alignas(16) UpdateCubemapCB

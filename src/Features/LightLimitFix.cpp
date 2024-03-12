@@ -773,10 +773,6 @@ void LightLimitFix::UpdateLights()
 	eastl::vector<LightData> lightsData{};
 	lightsData.reserve(MAX_LIGHTS);
 
-	static float* deltaTime = (float*)REL::RelocationID(523660, 410199).address();
-	static double timer = 0;
-	timer += *deltaTime;
-
 	// Process point lights
 
 	for (auto& e : shadowSceneNode->GetRuntimeData().activePointLights) {
@@ -912,7 +908,7 @@ void LightLimitFix::UpdateLights()
 
 				SetLightPosition(light, position);  // Light is complete for both eyes by now
 
-				AddCachedParticleLights(lightsData, light, &particleLight.second.config, particleLight.first, timer);
+				AddCachedParticleLights(lightsData, light, &particleLight.second.config, particleLight.first, State::GetSingleton()->timer);
 			}
 		}
 

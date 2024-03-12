@@ -333,22 +333,8 @@ void DynamicCubemaps::Draw(const RE::BSShader* shader, const uint32_t)
 			auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 			auto context = renderer->GetRuntimeData().context;
 
-			if (REL::Module::IsVR()) {
-				ID3D11ShaderResourceView* views[2]{};
-				views[0] = envTexture->srv.get();
-				views[1] = spBRDFLUT->srv.get();
-				context->PSSetShaderResources(64, 2, views);
-			} else {
-				auto ssrBlurred = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kSSR];
-				auto ssrRaw = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kSSR_RAW];
-
-				ID3D11ShaderResourceView* views[4]{};
-				views[0] = envTexture->srv.get();
-				views[1] = spBRDFLUT->srv.get();
-				views[2] = ssrBlurred.SRV;
-				views[3] = ssrRaw.SRV;
-				context->PSSetShaderResources(64, 4, views);
-			}
+			ID3D11ShaderResourceView* view = envTexture->srv.get();
+			context->PSSetShaderResources(64, 1, &view);
 		}
 	}
 }
@@ -361,7 +347,6 @@ void DynamicCubemaps::SetupResources()
 	GetComputeShaderSpecularIrradiance();
 
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto context = renderer->GetRuntimeData().context;
 	auto device = renderer->GetRuntimeData().forwarder;
 
 	{
@@ -374,44 +359,6 @@ void DynamicCubemaps::SetupResources()
 		samplerDesc.MinLOD = 0;
 		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &computeSampler));
-	}
-
-	{
-		spBRDFProgram = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\SpbrdfCS.hlsl", {}, "cs_5_0");
-
-		D3D11_TEXTURE2D_DESC texDesc{};
-		texDesc.Width = 256;
-		texDesc.Height = 256;
-		texDesc.MipLevels = 1;
-		texDesc.ArraySize = 1;
-		texDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
-		texDesc.SampleDesc.Count = 1;
-		texDesc.Usage = D3D11_USAGE_DEFAULT;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		spBRDFLUT = new Texture2D(texDesc);
-
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-		uavDesc.Format = texDesc.Format;
-		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-		uavDesc.Texture2D.MipSlice = 0;
-		spBRDFLUT->CreateUAV(uavDesc);
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-		srvDesc.Format = texDesc.Format;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-		srvDesc.Texture2D.MostDetailedMip = 0;
-		srvDesc.Texture2D.MipLevels = 1;
-		spBRDFLUT->CreateSRV(srvDesc);
-
-		{
-			// Compute Cook-Torrance BRDF 2D LUT for split-sum approximation.
-			auto uav = spBRDFLUT->uav.get();
-			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-			context->CSSetShader(spBRDFProgram, nullptr, 0);
-			context->Dispatch(spBRDFLUT->desc.Width / 32, spBRDFLUT->desc.Height / 32, 1);
-			uav = nullptr;
-			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-		}
 	}
 
 	auto& cubemap = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];

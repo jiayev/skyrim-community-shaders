@@ -1,6 +1,6 @@
 #include "WetnessEffects.h"
 
-#include <Util.h>
+#include "Util.h"
 
 const float MIN_START_PERCENTAGE = 0.05f;
 const float DEFAULT_TRANSITION_PERCENTAGE = 1.0f;
@@ -21,6 +21,9 @@ const float SECONDS_IN_A_DAY = 86400;
 const float MAX_TIME_DELTA = SECONDS_IN_A_DAY - 30;
 const float MIN_WEATHER_TRANSITION_SPEED = 0.0f;
 const float MAX_WEATHER_TRANSITION_SPEED = 500.0f;
+const float AVERAGE_RAIN_VOLUME = 4000.0f;
+const float MIN_RAINDROP_CHANCE_MULTIPLIER = 0.1f;
+const float MAX_RAINDROP_CHANCE_MULTIPLIER = 2.0f;
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	WetnessEffects::Settings,
@@ -37,7 +40,25 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PuddleMinWetness,
 	MinRainWetness,
 	SkinWetness,
-	WeatherTransitionSpeed)
+	WeatherTransitionSpeed,
+	EnableRaindropFx,
+	EnableSplashes,
+	EnableRipples,
+	EnableChaoticRipples,
+	RaindropFxRange,
+	RaindropGridSize,
+	RaindropInterval,
+	RaindropChance,
+	SplashesStrength,
+	SplashesMinRadius,
+	SplashesMaxRadius,
+	RippleStrength,
+	RippleRadius,
+	RippleBreadth,
+	RippleLifetime,
+	ChaoticRippleStrength,
+	ChaoticRippleScale,
+	ChaoticRippleSpeed)
 
 void WetnessEffects::DrawSettings()
 {
@@ -50,6 +71,73 @@ void WetnessEffects::DrawSettings()
 		ImGui::SliderFloat("Rain Wetness", &settings.MaxRainWetness, 0.0f, 1.0f);
 		ImGui::SliderFloat("Puddle Wetness", &settings.MaxPuddleWetness, 0.0f, 4.0f);
 		ImGui::SliderFloat("Shore Wetness", &settings.MaxShoreWetness, 0.0f, 1.0f);
+		ImGui::TreePop();
+	}
+
+	ImGui::Spacing();
+	ImGui::Spacing();
+
+	if (ImGui::TreeNodeEx("Raindrop Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Enable Raindrop Effects", (bool*)&settings.EnableRaindropFx);
+
+		ImGui::BeginDisabled(!settings.EnableRaindropFx);
+
+		ImGui::Checkbox("Enable Splashes", (bool*)&settings.EnableSplashes);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Enables small splashes of wetness on dry surfaces.");
+		ImGui::Checkbox("Enable Ripples", (bool*)&settings.EnableRipples);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Enables circular ripples on puddles, and to a less extent other wet surfaces");
+		ImGui::Checkbox("Enable Chaotic Ripples", (bool*)&settings.EnableChaoticRipples);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Enables an additional layer of disturbance to wet surfaces.");
+
+		ImGui::SliderFloat("Effect Range", &settings.RaindropFxRange, 1e2f, 2e3f, "%.0f game unit(s)");
+
+		if (ImGui::TreeNodeEx("Raindrops")) {
+			ImGui::BulletText(
+				"At every interval, a raindrop is placed within each grid cell.\n"
+				"Only a set portion of raindrops will actually trigger splashes and ripples.\n"
+				"Chaotic ripples are not affected by raindrop settings.");
+
+			ImGui::SliderFloat("Grid Size", &settings.RaindropGridSize, 1.f, 10.f, "%.1f game unit(s)");
+			ImGui::SliderFloat("Interval", &settings.RaindropInterval, 0.0f, 2.f, "%.1f sec");
+			ImGui::SliderFloat("Chance", &settings.RaindropChance, 0.0f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Portion of raindrops that will actually cause splashes and ripples.");
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNodeEx("Splashes")) {
+			ImGui::SliderFloat("Strength", &settings.SplashesStrength, 0.f, 2.f, "%.2f");
+			ImGui::SliderFloat("Min Radius", &settings.SplashesMinRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("As portion of grid size.");
+			ImGui::SliderFloat("Max Radius", &settings.SplashesMaxRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("As portion of grid size.");
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNodeEx("Ripples")) {
+			ImGui::SliderFloat("Strength", &settings.RippleStrength, 0.f, 2.f, "%.2f");
+			ImGui::SliderFloat("Radius", &settings.RippleRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("As portion of grid size.");
+			ImGui::SliderFloat("Breadth", &settings.RippleBreadth, 0.f, 1.f, "%.2f");
+			ImGui::SliderFloat("Lifetime", &settings.RippleLifetime, 0.f, settings.RaindropInterval, "%.2f sec", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNodeEx("Chaotic Ripples")) {
+			ImGui::SliderFloat("Strength", &settings.ChaoticRippleStrength, 0.f, .5f, "%.2f");
+			ImGui::SliderFloat("Scale", &settings.ChaoticRippleScale, 0.1f, 5.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Speed", &settings.ChaoticRippleSpeed, 0.f, 50.f, "%.1f");
+			ImGui::TreePop();
+		}
+
+		ImGui::EndDisabled();
+
 		ImGui::TreePop();
 	}
 
@@ -141,7 +229,7 @@ float WetnessEffects::CalculateWeatherTransitionPercentage(float skyCurrentWeath
 	// Correct if beginFade is zero or negative
 	beginFade = beginFade > 0 ? beginFade : beginFade + TRANSITION_DENOMINATOR;
 	// Wait to start transition until precipitation begins/ends
-	float startPercentage = (TRANSITION_DENOMINATOR - beginFade) * (1.0f / TRANSITION_DENOMINATOR);
+	float startPercentage = 1 - ((TRANSITION_DENOMINATOR - beginFade) * (1.0f / TRANSITION_DENOMINATOR));
 
 	if (fadeIn) {
 		float currentPercentage = (skyCurrentWeatherPct - startPercentage) / (1 - startPercentage);
@@ -190,11 +278,19 @@ void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 			currentWeatherID = 0;
 			uint32_t previousLastWeatherID = lastWeatherID;
 			lastWeatherID = 0;
+			float currentWeatherRaining = 0.0f;
+			float lastWeatherRaining = 0.0f;
+			float weatherTransitionPercentage = 0.0f;
 
 			if (settings.EnableWetnessEffects) {
 				if (auto sky = RE::Sky::GetSingleton()) {
 					if (sky->mode.get() == RE::Sky::Mode::kFull) {
 						if (auto currentWeather = sky->currentWeather) {
+							if (currentWeather->precipitationData && currentWeather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy)) {
+								float rainDensity = currentWeather->precipitationData->data[static_cast<int>(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity)].f;
+								float rainGravity = currentWeather->precipitationData->data[static_cast<int>(RE::BGSShaderParticleGeometryData::DataID::kGravityVelocity)].f;
+								currentWeatherRaining = std::clamp(((rainDensity * rainGravity) / AVERAGE_RAIN_VOLUME), MIN_RAINDROP_CHANCE_MULTIPLIER, MAX_RAINDROP_CHANCE_MULTIPLIER);
+							}
 							currentWeatherID = currentWeather->GetFormID();
 							if (auto calendar = RE::Calendar::GetSingleton()) {
 								float currentWeatherWetnessDepth = wetnessDepth;
@@ -215,7 +311,7 @@ void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 								}
 
 								if (seconds > 0 || (seconds < 0 && (wetnessDepth > 0 || puddleDepth > 0))) {
-									float weatherTransitionPercentage = DEFAULT_TRANSITION_PERCENTAGE;
+									weatherTransitionPercentage = DEFAULT_TRANSITION_PERCENTAGE;
 									float lastWeatherWetnessDepth = wetnessDepth;
 									float lastWeatherPuddleDepth = puddleDepth;
 									seconds *= std::clamp(settings.WeatherTransitionSpeed, MIN_WEATHER_TRANSITION_SPEED, MAX_WEATHER_TRANSITION_SPEED);
@@ -226,6 +322,9 @@ void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 										CalculateWetness(lastWeather, sky, seconds, lastWeatherWetnessDepth, lastWeatherPuddleDepth);
 										// If it was raining, wait to transition until precipitation ends, otherwise use the current weather's fade in
 										if (lastWeather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy)) {
+											float rainDensity = lastWeather->precipitationData->data[static_cast<int>(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity)].f;
+											float rainGravity = lastWeather->precipitationData->data[static_cast<int>(RE::BGSShaderParticleGeometryData::DataID::kGravityVelocity)].f;
+											lastWeatherRaining = std::clamp(((rainDensity * rainGravity) / AVERAGE_RAIN_VOLUME), MIN_RAINDROP_CHANCE_MULTIPLIER, MAX_RAINDROP_CHANCE_MULTIPLIER);
 											weatherTransitionPercentage = CalculateWeatherTransitionPercentage(sky->currentWeatherPct, lastWeather->data.precipitationEndFadeOut, false);
 										} else {
 											weatherTransitionPercentage = CalculateWeatherTransitionPercentage(sky->currentWeatherPct, currentWeather->data.precipitationBeginFadeIn, true);
@@ -242,6 +341,7 @@ void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 								// Calculate the wetness value from the water depth
 								data.Wetness = std::min(wetnessDepth, MAX_WETNESS);
 								data.PuddleWetness = std::min(puddleDepth, MAX_PUDDLE_WETNESS);
+								data.Raining = std::lerp(lastWeatherRaining, currentWeatherRaining, weatherTransitionPercentage);
 							}
 						}
 					}
@@ -252,9 +352,23 @@ void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 			RE::NiTransform& dalcTransform = state.directionalAmbientTransform;
 			Util::StoreTransform3x4NoScale(data.DirectionalAmbientWS, dalcTransform);
 
+			data.PrecipProj = precipProj;
+
+			static size_t rainTimer = 0;                                       // size_t for precision
+			if (!RE::UI::GetSingleton()->GameIsPaused())                       // from lightlimitfix
+				rainTimer += (size_t)(RE::GetSecondsSinceLastFrame() * 1000);  // BSTimer::delta is always 0 for some reason
+			data.Time = rainTimer / 1000.f;
+
 			data.settings = settings;
 			// Disable Shore Wetness if Wetness Effects are Disabled
 			data.settings.MaxShoreWetness = settings.EnableWetnessEffects ? settings.MaxShoreWetness : 0.0f;
+			// calculating some parameters on cpu
+			data.settings.RaindropChance *= data.Raining;
+			data.settings.RaindropGridSize = 1.f / settings.RaindropGridSize;
+			data.settings.RaindropInterval = 1.f / settings.RaindropInterval;
+			data.settings.RippleLifetime = settings.RaindropInterval / settings.RippleLifetime;
+			data.settings.ChaoticRippleStrength *= std::clamp(data.Raining, 0.f, 1.f);
+			data.settings.ChaoticRippleScale = 1.f / settings.ChaoticRippleScale;
 
 			D3D11_MAPPED_SUBRESOURCE mapped;
 			DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
@@ -265,26 +379,45 @@ void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 		ID3D11ShaderResourceView* views[1]{};
 		views[0] = perPass->srv.get();
 		context->PSSetShaderResources(22, ARRAYSIZE(views), views);
+
+		views[0] = precipOcclusionTex->srv.get();
+		context->PSSetShaderResources(31, ARRAYSIZE(views), views);
 	}
 }
 
 void WetnessEffects::SetupResources()
 {
-	D3D11_BUFFER_DESC sbDesc{};
-	sbDesc.Usage = D3D11_USAGE_DYNAMIC;
-	sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-	sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-	sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-	sbDesc.StructureByteStride = sizeof(PerPass);
-	sbDesc.ByteWidth = sizeof(PerPass);
-	perPass = std::make_unique<Buffer>(sbDesc);
+	{
+		D3D11_BUFFER_DESC sbDesc{};
+		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
+		sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		sbDesc.StructureByteStride = sizeof(PerPass);
+		sbDesc.ByteWidth = sizeof(PerPass);
+		perPass = std::make_unique<Buffer>(sbDesc);
 
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-	srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-	srvDesc.Buffer.FirstElement = 0;
-	srvDesc.Buffer.NumElements = 1;
-	perPass->CreateSRV(srvDesc);
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = 1;
+		perPass->CreateSRV(srvDesc);
+	}
+
+	{
+		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+
+		auto precipation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
+		D3D11_TEXTURE2D_DESC texDesc{};
+		precipation.texture->GetDesc(&texDesc);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		precipation.depthSRV->GetDesc(&srvDesc);
+
+		precipOcclusionTex = std::make_unique<Texture2D>(texDesc);
+		precipOcclusionTex->CreateSRV(srvDesc);
+	}
 }
 
 void WetnessEffects::Reset()
@@ -308,4 +441,21 @@ void WetnessEffects::Save(json& o_json)
 void WetnessEffects::RestoreDefaultSettings()
 {
 	settings = {};
+}
+
+void WetnessEffects::Hooks::BSParticleShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+{
+	func(This, Pass, RenderFlags);
+
+	if (auto particleShaderProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(Pass->shaderProperty))
+		if (auto cube = skyrim_cast<RE::BSParticleShaderCubeEmitter*>(particleShaderProperty->particleEmitter))
+			GetSingleton()->precipProj = cube->occlusionProjection;
+
+	static Util::FrameChecker frameChecker;
+	if (frameChecker.isNewFrame()) {
+		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+		auto context = renderer->GetRuntimeData().context;
+		auto precipation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
+		context->CopyResource(GetSingleton()->precipOcclusionTex->resource.get(), precipation.texture);
+	}
 }

@@ -166,8 +166,8 @@ void State::Reset()
 		if (feature->loaded)
 			feature->Reset();
 	Bindings::GetSingleton()->Reset();
-	static float* deltaTime = (float*)REL::RelocationID(523660, 410199).address();
-	timer += *deltaTime;
+	if (!RE::UI::GetSingleton()->GameIsPaused())
+		timer += RE::GetSecondsSinceLastFrame();
 }
 
 void State::Setup()

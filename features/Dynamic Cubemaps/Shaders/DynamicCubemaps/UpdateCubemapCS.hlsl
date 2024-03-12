@@ -182,7 +182,7 @@ float smoothbumpstep(float edge0, float edge1, float x)
 
 			position.w = smoothstep(1.0, 4096.0 * 0.001, distance);  // Objects which are far away from the perspective of the camera do not fade out
 
-			if (depth > 0.999)
+			if (linearDepth > (4096.0 * 5.0))
 				position.w = 0;
 
 			DynamicCubemapPosition[ThreadID] = lerp(DynamicCubemapPosition[ThreadID], position, lerpFactor);

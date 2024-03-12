@@ -34,19 +34,46 @@ public:
 		float MinRainWetness = 0.65f;
 		float SkinWetness = 0.825f;
 		float WeatherTransitionSpeed = 3.0f;
+
+		// Raindrop fx settings
+		uint EnableRaindropFx = true;
+		uint EnableSplashes = true;
+		uint EnableRipples = true;
+		uint EnableChaoticRipples = true;
+		float RaindropFxRange = 1000.f;
+		float RaindropGridSize = 4.f;
+		float RaindropInterval = .5f;
+		float RaindropChance = .3f;
+		float SplashesStrength = 1.2f;
+		float SplashesMinRadius = .3f;
+		float SplashesMaxRadius = .5f;
+		float RippleStrength = 1.f;
+		float RippleRadius = 1.f;
+		float RippleBreadth = .5f;
+		float RippleLifetime = .1f;
+		float ChaoticRippleStrength = .1f;
+		float ChaoticRippleScale = 1.f;
+		float ChaoticRippleSpeed = 20.f;
 	};
 
 	struct alignas(16) PerPass
 	{
+		float Time;
+		float Raining;
 		float Wetness;
 		float PuddleWetness;
 		DirectX::XMFLOAT3X4 DirectionalAmbientWS;
+		RE::DirectX::XMFLOAT4X4 PrecipProj;
 		Settings settings;
+
+		float pad[4 - (sizeof(Settings) / 4 + 16) % 4];
 	};
 
 	Settings settings;
 
 	std::unique_ptr<Buffer> perPass = nullptr;
+
+	std::unique_ptr<Texture2D> precipOcclusionTex = nullptr;
 
 	bool requiresUpdate = true;
 	float wetnessDepth = 0.0f;
@@ -54,6 +81,7 @@ public:
 	float lastGameTimeValue = 0.0f;
 	uint32_t currentWeatherID = 0;
 	uint32_t lastWeatherID = 0;
+	RE::DirectX::XMFLOAT4X4 precipProj;
 
 	virtual void SetupResources();
 	virtual void Reset();
@@ -68,4 +96,20 @@ public:
 	virtual void RestoreDefaultSettings();
 	float CalculateWeatherTransitionPercentage(float skyCurrentWeatherPct, float beginFade, bool fadeIn);
 	void CalculateWetness(RE::TESWeather* weather, RE::Sky* sky, float seconds, float& wetness, float& puddleWetness);
+
+	virtual inline void PostPostLoad() override { Hooks::Install(); }
+
+	struct Hooks
+	{
+		struct BSParticleShader_SetupGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		static void Install()
+		{
+			stl::write_vfunc<0x6, BSParticleShader_SetupGeometry>(RE::VTABLE_BSParticleShader[0]);
+		}
+	};
 };
