@@ -189,8 +189,7 @@ float smoothbumpstep(float edge0, float edge1, float x)
 
 			DynamicCubemapRaw[ThreadID] = max(0, lerp(DynamicCubemapRaw[ThreadID], output, lerpFactor));
 
-			float distanceFactor = smoothbumpstep(0.0, 1.0, length(position.xyz));
-			output *= max(distanceFactor, position.w);  // Pick the largest value
+			output *= sqrt(saturate(0.5 * length(position.xyz)));
 
 			DynamicCubemap[ThreadID] = max(0, lerp(DynamicCubemap[ThreadID], output, lerpFactor));
 
@@ -204,7 +203,7 @@ float smoothbumpstep(float edge0, float edge1, float x)
 
 	float4 color = DynamicCubemapRaw[ThreadID];
 
-	float distanceFactor = smoothbumpstep(0.0, 1.0, length(position.xyz));
+	float distanceFactor = sqrt(smoothbumpstep(0.0, 1.0, length(position.xyz)));
 	color *= max(distanceFactor, position.w);
 
 	DynamicCubemap[ThreadID] = max(0, color);
