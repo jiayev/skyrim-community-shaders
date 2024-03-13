@@ -1822,7 +1822,7 @@ namespace SIE
 			logger::debug("Detected changed path {}", filePath.string());
 			if (std::filesystem::exists(filePath))
 				modifiedTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(filePath));
-			else // if file doesn't exist, don't do anything
+			else  // if file doesn't exist, don't do anything
 				return;
 			if (!std::filesystem::is_directory(filePath) && extension.starts_with(".hlsl") && parentDir.ends_with("Shaders") && shaderType.has_value()) {  // TODO: Case insensitive checks
 				// Shader types, so only invalidate specific shader type (e.g,. Lighting)
