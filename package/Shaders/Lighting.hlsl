@@ -1616,7 +1616,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (perPassWetnessEffects[0].Raining > 0.0f && perPassWetnessEffects[0].EnableRaindropFx &&
 		(dot(input.WorldPosition, input.WorldPosition) < perPassWetnessEffects[0].RaindropFxRange * perPassWetnessEffects[0].RaindropFxRange)) {
 		float4 precipPositionCS = float4(2 * float2(DynamicResolutionParams2.x * screenUV.x, -screenUV.y * DynamicResolutionParams2.y + 1) - 1, input.Position.z, 1);
-		float4 precipPositionMS = mul(CameraViewProjInverse[0], precipPositionCS);
+		float4 precipPositionMS = mul(CameraViewProjInverse[eyeIndex], precipPositionCS);
 		precipPositionMS.xyz = precipPositionMS.xyz / precipPositionMS.w;
 
 		float4 precipOcclusionTexCoord = mul(perPassWetnessEffects[0].PrecipProj, float4(precipPositionMS.xyz, 1));
@@ -1625,7 +1625,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float precipOcclusionZ = TexPrecipOcclusion.SampleLevel(SampShadowMaskSampler, precipOcclusionUv, 0).x;
 
 		if (precipOcclusionTexCoord.z < precipOcclusionZ + 1e-2)
-			raindropInfo = GetRainDrops((input.WorldPosition + CameraPosAdjust[0]).xyz, perPassWetnessEffects[0].Time, worldSpaceNormal);
+			raindropInfo = GetRainDrops((input.WorldPosition + CameraPosAdjust[eyeIndex]).xyz, perPassWetnessEffects[0].Time, worldSpaceNormal);
 	}
 
 	float rainWetness = perPassWetnessEffects[0].Wetness * minWetnessAngle * perPassWetnessEffects[0].MaxRainWetness;

@@ -81,6 +81,7 @@ public:
 	float lastGameTimeValue = 0.0f;
 	uint32_t currentWeatherID = 0;
 	uint32_t lastWeatherID = 0;
+	float previousWeatherTransitionPercentage = 0.0f;
 	RE::DirectX::XMFLOAT4X4 precipProj;
 
 	virtual void SetupResources();

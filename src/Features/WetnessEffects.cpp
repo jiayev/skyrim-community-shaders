@@ -280,7 +280,7 @@ void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 			lastWeatherID = 0;
 			float currentWeatherRaining = 0.0f;
 			float lastWeatherRaining = 0.0f;
-			float weatherTransitionPercentage = 0.0f;
+			float weatherTransitionPercentage = previousWeatherTransitionPercentage;
 
 			if (settings.EnableWetnessEffects) {
 				if (auto sky = RE::Sky::GetSingleton()) {
@@ -305,6 +305,7 @@ void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 									seconds = 0.0f;
 									currentWeatherWetnessDepth = 0.0f;
 									currentWeatherPuddleDepth = 0.0f;
+									weatherTransitionPercentage = DEFAULT_TRANSITION_PERCENTAGE;
 									CalculateWetness(currentWeather, sky, 1.0f, currentWeatherWetnessDepth, currentWeatherPuddleDepth);
 									wetnessDepth = currentWeatherWetnessDepth > 0 ? MAX_WETNESS_DEPTH : 0.0f;
 									puddleDepth = currentWeatherPuddleDepth > 0 ? MAX_PUDDLE_DEPTH : 0.0f;
@@ -342,6 +343,7 @@ void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 								data.Wetness = std::min(wetnessDepth, MAX_WETNESS);
 								data.PuddleWetness = std::min(puddleDepth, MAX_PUDDLE_WETNESS);
 								data.Raining = std::lerp(lastWeatherRaining, currentWeatherRaining, weatherTransitionPercentage);
+								previousWeatherTransitionPercentage = weatherTransitionPercentage;
 							}
 						}
 					}
