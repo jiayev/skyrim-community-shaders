@@ -1615,7 +1615,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float4 raindropInfo = float4(0, 0, 1, 0);
 	if (perPassWetnessEffects[0].Raining > 0.0f && perPassWetnessEffects[0].EnableRaindropFx &&
 		(dot(input.WorldPosition, input.WorldPosition) < perPassWetnessEffects[0].RaindropFxRange * perPassWetnessEffects[0].RaindropFxRange)) {
-		float4 precipPositionCS = float4(2 * float2(DynamicResolutionParams2.x * screenUV.x, -screenUV.y * DynamicResolutionParams2.y + 1) - 1, input.Position.z, 1);
+		float4 precipPositionCS = float4(2 * float2(screenUV.x, -screenUV.y + 1) - 1, input.Position.z, 1);
 		float4 precipPositionMS = mul(CameraViewProjInverse[eyeIndex], precipPositionCS);
 		precipPositionMS.xyz = precipPositionMS.xyz / precipPositionMS.w;
 
