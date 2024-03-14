@@ -32,7 +32,7 @@ public:
 		float PuddleMaxAngle = 0.95f;
 		float PuddleMinWetness = 0.85f;
 		float MinRainWetness = 0.65f;
-		float SkinWetness = 0.825f;
+		float SkinWetness = 0.95f;
 		float WeatherTransitionSpeed = 3.0f;
 
 		// Raindrop fx settings
@@ -44,13 +44,14 @@ public:
 		float RaindropGridSize = 4.f;
 		float RaindropInterval = .5f;
 		float RaindropChance = .3f;
+		float SplashesLifetime = 10.0f;
 		float SplashesStrength = 1.2f;
 		float SplashesMinRadius = .3f;
 		float SplashesMaxRadius = .5f;
 		float RippleStrength = 1.f;
 		float RippleRadius = 1.f;
 		float RippleBreadth = .5f;
-		float RippleLifetime = .1f;
+		float RippleLifetime = .15f;
 		float ChaoticRippleStrength = .1f;
 		float ChaoticRippleScale = 1.f;
 		float ChaoticRippleSpeed = 20.f;

@@ -49,6 +49,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RaindropGridSize,
 	RaindropInterval,
 	RaindropChance,
+	SplashesLifetime,
 	SplashesStrength,
 	SplashesMinRadius,
 	SplashesMaxRadius,
@@ -101,7 +102,7 @@ void WetnessEffects::DrawSettings()
 				"Chaotic ripples are not affected by raindrop settings.");
 
 			ImGui::SliderFloat("Grid Size", &settings.RaindropGridSize, 1.f, 10.f, "%.1f game unit(s)");
-			ImGui::SliderFloat("Interval", &settings.RaindropInterval, 0.0f, 2.f, "%.1f sec");
+			ImGui::SliderFloat("Interval", &settings.RaindropInterval, 0.1f, 2.f, "%.1f sec");
 			ImGui::SliderFloat("Chance", &settings.RaindropChance, 0.0f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("Portion of raindrops that will actually cause splashes and ripples.");
@@ -116,6 +117,7 @@ void WetnessEffects::DrawSettings()
 			ImGui::SliderFloat("Max Radius", &settings.SplashesMaxRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("As portion of grid size.");
+			ImGui::SliderFloat("Lifetime", &settings.SplashesLifetime, 0.1f, 20.f, "%.1f");
 			ImGui::TreePop();
 		}
 
