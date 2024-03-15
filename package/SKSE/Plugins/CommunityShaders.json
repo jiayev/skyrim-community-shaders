@@ -1,4 +1,12 @@
 {
+ "Cloud Shadows": {
+  "AbsorptionAmbient": 0.20000000298023224,
+  "CloudHeight": 140056.03125,
+  "EffectMix": 1.0,
+  "EnableCloudShadows": 1,
+  "PlanetRadius": 446148480.0,
+  "TransparencyPower": 0.10000000149011612
+ },
  "Complex Parallax Materials": {
   "BlendRange": 0.25,
   "CRPMRange": 0.5,
@@ -37,7 +45,6 @@
   "EnableParticleLightsCulling": true,
   "EnableParticleLightsDetection": true,
   "EnableParticleLightsOptimization": true,
-  "ParticleLightsBrightness": 1.0,
   "ParticleLightsOptimisationClusterRadius": 32,
   "ParticleLightsSaturation": 1.0
  },
@@ -48,14 +55,14 @@
   "Toggle Key": 35
  },
  "Replace Original Shaders": {
-  "BloodSplatter": false,
+  "BloodSplatter": true,
   "DistantTree": true,
   "Effect": true,
   "Grass": true,
   "ImageSpace": false,
   "Lighting": true,
-  "Particle": false,
-  "Sky": false,
+  "Particle": true,
+  "Sky": true,
   "Utility": false,
   "Water": true
  },
@@ -71,12 +78,43 @@
   "NearHardness": 32.0,
   "NearThickness": 2.0
  },
+ "Subsurface Scattering": {
+  "BaseProfile": {
+   "BlurRadius": 1.0,
+   "Falloff": [
+    0.5600000023841858,
+    0.5600000023841858,
+    0.5600000023841858
+   ],
+   "Strength": [
+    0.47999998927116394,
+    0.4099999964237213,
+    0.2800000011920929
+   ],
+   "Thickness": 1.0
+  },
+  "EnableCharacterLighting": 0,
+  "HumanProfile": {
+   "BlurRadius": 1.0,
+   "Falloff": [
+    1.0,
+    0.3700000047683716,
+    0.30000001192092896
+   ],
+   "Strength": [
+    0.47999998927116394,
+    0.4099999964237213,
+    0.2800000011920929
+   ],
+   "Thickness": 1.0
+  }
+ },
  "Tree LOD Lighting": {
   "EnableComplexTreeLOD": 1,
   "EnableDirLightFix": 1,
   "SubsurfaceScatteringAmount": 0.5
  },
- "Version": "0-7-4-0",
+ "Version": "0-8-0-0",
  "Water Blending": {
   "EnableWaterBlending": 1,
   "EnableWaterBlendingSSR": 1,
@@ -84,12 +122,38 @@
   "WaterBlendRange": 1.0
  },
  "Wetness Effects": {
+  "ChaoticRippleScale": 1.0,
+  "ChaoticRippleSpeed": 20.0,
+  "ChaoticRippleStrength": 0.10000000149011612,
+  "EnableChaoticRipples": 1,
+  "EnableRaindropFx": 1,
+  "EnableRipples": 1,
+  "EnableSplashes": 1,
   "EnableWetnessEffects": 1,
+  "MaxAmbientSpecular": 1.0,
+  "MaxDALCSpecular": 0.009999999776482582,
+  "MaxPointLightSpecular": 0.4000000059604645,
+  "MaxPuddleWetness": 2.6670000553131104,
   "MaxRainWetness": 1.0,
   "MaxShoreWetness": 0.5,
-  "PuddleMaxAngle": 0.95,
-  "PuddleMinWetness": 0.85,
+  "MinRainWetness": 0.6499999761581421,
+  "PuddleMaxAngle": 0.949999988079071,
+  "PuddleMinWetness": 0.8500000238418579,
   "PuddleRadius": 1.0,
-  "ShoreRange": 32
+  "RaindropChance": 0.30000001192092896,
+  "RaindropFxRange": 1000.0,
+  "RaindropGridSize": 4.0,
+  "RaindropInterval": 0.5,
+  "RippleBreadth": 0.5,
+  "RippleLifetime": 0.15000000596046448,
+  "RippleRadius": 1.0,
+  "RippleStrength": 1.0,
+  "ShoreRange": 32,
+  "SkinWetness": 0.949999988079071,
+  "SplashesLifetime": 10.0,
+  "SplashesMaxRadius": 0.5,
+  "SplashesMinRadius": 0.30000001192092896,
+  "SplashesStrength": 1.2000000476837158,
+  "WeatherTransitionSpeed": 3.0
  }
 }
