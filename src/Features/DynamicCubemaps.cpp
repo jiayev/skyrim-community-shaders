@@ -2,8 +2,8 @@
 
 #include "Util.h"
 
-#include <DirectXTex.h>
 #include <DDSTextureLoader.h>
+#include <DirectXTex.h>
 
 constexpr auto MIPLEVELS = 10;
 
