@@ -2017,13 +2017,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(DYNAMIC_CUBEMAPS)
 #		if defined(EYE)
-	color.xyz += GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 1.0 / 9.0, viewPosition.z) * input.Color.xyz * envMask;
+	color.xyz += GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 0.5, 2, viewPosition.z) * input.Color.xyz * envMask;
 #		elif defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
-	color.xyz += 0.25 * GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, (2.0 - saturate(envMask)) / 9.0, viewPosition.z) * (1.0 - ((float)dynamicCubemap * saturate(envMask))) * input.Color.xyz;
+	color.xyz += GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 0.5 - (saturate(envMask) * 0.5), 2 - saturate(envMask), viewPosition.z) * (1.0 - ((float)dynamicCubemap * saturate(envMask))) * input.Color.xyz;
 #		elif defined(HAIR)
-	color.xyz += 0.25 * GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 2.0 / 9.0, viewPosition.z);
+	color.xyz += GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 0.5, 2, viewPosition.z);
 #		else
-	color.xyz += 0.25 * GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 2.0 / 9.0, viewPosition.z) * input.Color.xyz;
+	color.xyz += GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 0.5, 2, viewPosition.z) * input.Color.xyz;
 #		endif
 #	endif
 
@@ -2131,6 +2131,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	tmp = saturate(tmp1 * tmp2);
 	tmp *= tmp * (3 + -2 * tmp);
 	psout.ScreenSpaceNormals.w = tmp * SSRParams.w;
+	psout.ScreenSpaceNormals.w = 0.0;
 
 #	if defined(WATER_BLENDING)
 	if (perPassWaterBlending[0].EnableWaterBlendingSSR) {

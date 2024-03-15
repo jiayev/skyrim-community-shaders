@@ -53,12 +53,11 @@ float3 GetDynamicCubemap(float2 uv, float3 N, float3 VN, float3 V, float roughne
 	return specularIrradiance * ((F0 + S) * specularBRDF.x + specularBRDF.y);
 }
 
-float3 GetDynamicCubemapFresnel(float2 uv, float3 N, float3 VN, float3 V, float roughness, float distance)
+float3 GetDynamicCubemapFresnel(float2 uv, float3 N, float3 VN, float3 V, float roughness, float level, float distance)
 {
 	float NoV = saturate(dot(N, V));
 	float2 specularBRDF = EnvBRDFApprox(roughness, NoV);
 	if (specularBRDF.y > 0.001) {
-		float level = roughness * 9.0;
 		float3 R = reflect(-V, N);
 
 		float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level);
