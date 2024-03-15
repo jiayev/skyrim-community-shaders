@@ -313,13 +313,15 @@ void DynamicCubemaps::UpdateCubemap()
 		nextTask = NextTask::kIrradiance;
 
 		// Infer local reflection information
-		ID3D11UnorderedAccessView* uavs[2] = { envInferredTexture->uav.get(), cubemapUAV };
+		ID3D11UnorderedAccessView* uav = envInferredTexture->uav.get();
 
-		context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 		context->GenerateMips(envCaptureTexture->srv.get());
 
-		ID3D11ShaderResourceView* srvs[2] = { envCaptureTexture->srv.get(), defaultCubemap };
+		auto& cubemap = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
+
+		ID3D11ShaderResourceView* srvs[2] = { envCaptureTexture->srv.get(), activeReflections ? cubemap.SRV : defaultCubemap };
 		context->CSSetShaderResources(0, 2, srvs);
 
 		context->CSSetSamplers(0, 1, &computeSampler);
@@ -332,10 +334,9 @@ void DynamicCubemaps::UpdateCubemap()
 		srvs[1] = nullptr;
 		context->CSSetShaderResources(0, 2, srvs);
 
-		uavs[0] = nullptr;
-		uavs[1] = nullptr;
+		uav = nullptr;
 
-		context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 		context->CSSetShader(nullptr, 0, 0);
 
@@ -450,35 +451,13 @@ void DynamicCubemaps::SetupResources()
 	auto& cubemap = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
 
 	{
-		// Backup and release the original texture and views
+		D3D11_TEXTURE2D_DESC texDesc;
+		cubemap.texture->GetDesc(&texDesc);
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
 		cubemap.SRV->GetDesc(&srvDesc);
-		cubemap.SRV->Release();
-		cubemap.SRV = nullptr;
-
-		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc[6];
-		for (int i = 0; i < 6; i++) {
-			cubemap.cubeSideRTV[i]->GetDesc(&rtvDesc[i]);
-			cubemap.cubeSideRTV[i]->Release();
-			cubemap.cubeSideRTV[i] = nullptr;
-		}
-
-		D3D11_TEXTURE2D_DESC texDesc;
-		cubemap.texture->GetDesc(&texDesc);
-		cubemap.texture->Release();
-		cubemap.texture = nullptr;
-
-		// Create the new texture and views with UAV access
 
 		texDesc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
-
-		DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, nullptr, &cubemap.texture));
-		DX::ThrowIfFailed(device->CreateShaderResourceView(cubemap.texture, &srvDesc, &cubemap.SRV));
-
-		for (int i = 0; i < 6; i++) {
-			DX::ThrowIfFailed(device->CreateRenderTargetView(cubemap.texture, &rtvDesc[i], &cubemap.cubeSideRTV[i]));
-		}
 
 		// Create additional resources
 
@@ -492,11 +471,6 @@ void DynamicCubemaps::SetupResources()
 		uavDesc.Texture2DArray.MipSlice = 0;
 		uavDesc.Texture2DArray.FirstArraySlice = 0;
 		uavDesc.Texture2DArray.ArraySize = texDesc.ArraySize;
-		DX::ThrowIfFailed(device->CreateUnorderedAccessView(cubemap.texture, &uavDesc, &cubemapUAV));
-
-		envTexture = new Texture2D(texDesc);
-		envTexture->CreateSRV(srvDesc);
-		envTexture->CreateUAV(uavDesc);
 
 		envCaptureTexture = new Texture2D(texDesc);
 		envCaptureTexture->CreateSRV(srvDesc);
@@ -514,6 +488,14 @@ void DynamicCubemaps::SetupResources()
 		envCapturePositionTexture->CreateSRV(srvDesc);
 		envCapturePositionTexture->CreateUAV(uavDesc);
 
+		texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+		srvDesc.Format = texDesc.Format;
+		uavDesc.Format = texDesc.Format;
+
+		envTexture = new Texture2D(texDesc);
+		envTexture->CreateSRV(srvDesc);
+		envTexture->CreateUAV(uavDesc);
+
 		updateCubemapCB = new ConstantBuffer(ConstantBufferDesc<UpdateCubemapCB>());
 	}
 
@@ -522,19 +504,6 @@ void DynamicCubemaps::SetupResources()
 	}
 
 	{
-		D3D11_TEXTURE2D_DESC texDesc{};
-		cubemap.texture->GetDesc(&texDesc);
-		texDesc.MipLevels = 1;
-		texDesc.SampleDesc.Count = 1;
-		texDesc.Usage = D3D11_USAGE_DEFAULT;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET;
-		texDesc.MiscFlags = D3D11_RESOURCE_MISC_TEXTURECUBE;
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
-		srvDesc.TextureCube.MostDetailedMip = 0;
-		srvDesc.TextureCube.MipLevels = 1;
-
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 		uavDesc.Format = envTexture->desc.Format;
 		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;

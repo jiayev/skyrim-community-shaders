@@ -70,8 +70,6 @@ public:
 
 	NextTask nextTask = NextTask::kCapture;
 
-	ID3D11UnorderedAccessView* cubemapUAV;
-
 	// Editor window
 
 	bool enableCreator = false;

@@ -1,8 +1,10 @@
 TextureCube<float4> EnvCaptureTexture : register(t0);
+#if defined(REFLECTIONS)
+TextureCube<float4> ReflectionsTexture : register(t1);
+#else
 TextureCube<float4> DefaultCubemap : register(t1);
-
+#endif
 RWTexture2DArray<float4> EnvInferredTexture : register(u0);
-RWTexture2DArray<float4> EnvReflectionsTexture : register(u1);
 
 SamplerState LinearSampler : register(s0);
 
@@ -98,7 +100,7 @@ float3 Lin2sRGB(float3 color)
 	}
 
 #if defined(REFLECTIONS)
-	color.rgb = lerp(color.rgb, sRGB2Lin(EnvReflectionsTexture[ThreadID]), saturate(mipLevel * (1.0 / 10.0)));
+	color.rgb = lerp(color.rgb, sRGB2Lin(ReflectionsTexture.SampleLevel(LinearSampler, uv, 0)), saturate(mipLevel * (1.0 / 10.0)));
 #else
 	color.rgb = lerp(color.rgb, color.rgb * sRGB2Lin(DefaultCubemap.SampleLevel(LinearSampler, uv, 0)) * 10.0, saturate(mipLevel * (1.0 / 10.0)));
 #endif
