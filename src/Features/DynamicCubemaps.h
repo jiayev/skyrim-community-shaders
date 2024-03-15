@@ -34,7 +34,7 @@ public:
 	ID3D11ComputeShader* specularIrradianceCS = nullptr;
 	ConstantBuffer* spmapCB = nullptr;
 	Texture2D* envTexture = nullptr;
-	winrt::com_ptr<ID3D11UnorderedAccessView> uavArray[9];
+	ID3D11UnorderedAccessView* uavArray[9];
 
 	// Reflection capture
 
@@ -69,6 +69,20 @@ public:
 	NextTask nextTask = NextTask::kCapture;
 
 	ID3D11UnorderedAccessView* cubemapUAV;
+
+	// Editor window
+
+	bool enableCreator = false;
+	float4 cubemapColor{ 1.0f, 1.0f, 1.0f, 0.0f };
+
+	struct alignas(16) CreatorSettingsCB
+	{
+		uint Enabled;
+		uint pad0[3];
+		float4 CubemapColor;
+	};
+
+	std::unique_ptr<Buffer> perFrameCreator = nullptr;
 
 	void UpdateCubemap();
 

@@ -127,8 +127,6 @@ float noise(in float3 p)
 
 #if defined(REFLECTIONS)
 	color.rgb = lerp(color.rgb, sRGB2Lin(EnvReflectionsTexture[ThreadID]), saturate(mipLevel * (1.0 / 10.0)));
-#else
-	color.rgb = lerp(color.rgb, max(float3(0.0, 0.0, 0.0), color.rgb * noise(uv * 5.0)), mipLevel * (1.0 / 10.0));
 #endif
 
 	color.rgb = Lin2sRGB(color.rgb);

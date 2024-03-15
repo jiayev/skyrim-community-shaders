@@ -1,4 +1,5 @@
 #include "DynamicCubemaps.h"
+#include <DirectXTex.h>
 #include <Util.h>
 
 constexpr auto MIPLEVELS = 10;
@@ -32,6 +33,73 @@ void DynamicCubemaps::DrawSettings()
 				ImGui::EndTable();
 			}
 		}
+
+		if (ImGui::TreeNodeEx("Dynamic Cubemap Creator", ImGuiTreeNodeFlags_DefaultOpen)) {
+			ImGui::Text("You must enable creator mode by adding the shader define CREATOR");
+			ImGui::Checkbox("Enable Creator", &enableCreator);
+			if (enableCreator) {
+				ImGui::ColorEdit3("Color", (float*)&cubemapColor);
+				ImGui::SliderFloat("Roughness", &cubemapColor.w, 0.0f, 1.0f, "%.2f");
+				if (ImGui::Button("Export")) {
+					auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+					auto device = renderer->GetRuntimeData().forwarder;
+					auto context = renderer->GetRuntimeData().context;
+
+					D3D11_TEXTURE2D_DESC texDesc{};
+					texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+					texDesc.Height = 1;
+					texDesc.Width = 1;
+					texDesc.ArraySize = 6;
+					texDesc.MipLevels = 1;
+					texDesc.SampleDesc.Count = 1;
+					texDesc.Usage = D3D11_USAGE_DEFAULT;
+					texDesc.BindFlags = 0;
+					texDesc.MiscFlags = D3D11_RESOURCE_MISC_TEXTURECUBE;
+
+					D3D11_SUBRESOURCE_DATA subresourceData[6];
+
+					struct PixelData
+					{
+						uint8_t r, g, b, a;
+					};
+
+					static PixelData colorPixel{};
+
+					colorPixel = { (uint8_t)((cubemapColor.x * 255.0f) + 0.5f),
+						(uint8_t)((cubemapColor.y * 255.0f) + 0.5f),
+						(uint8_t)((cubemapColor.z * 255.0f) + 0.5f),
+						std::min((uint8_t)254u, (uint8_t)((cubemapColor.w * 255.0f) + 0.5f)) };
+
+					static PixelData emptyPixel{};
+
+					subresourceData[0].pSysMem = &colorPixel;
+					subresourceData[0].SysMemPitch = sizeof(PixelData);
+					subresourceData[0].SysMemSlicePitch = sizeof(PixelData);
+
+					for (uint i = 1; i < 6; i++) {
+						subresourceData[i].pSysMem = &emptyPixel;
+						subresourceData[i].SysMemPitch = sizeof(PixelData);
+						subresourceData[i].SysMemSlicePitch = sizeof(PixelData);
+					}
+
+					ID3D11Texture2D* tempTexture;
+					DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, subresourceData, &tempTexture));
+
+					DirectX::ScratchImage image;
+					DX::ThrowIfFailed(CaptureTexture(device, context, tempTexture, image));
+
+					std::string filename = std::format("Data\\Textures\\DynamicCubemaps\\{:.2f}{:.2f}{:.2f}R{:.2f}.dds", cubemapColor.x, cubemapColor.y, cubemapColor.z, cubemapColor.w);
+
+					std::wstring wfilename = std::wstring(filename.begin(), filename.end());
+					DX::ThrowIfFailed(SaveToDDSFile(image.GetImages(), image.GetImageCount(), image.GetMetadata(), DirectX::DDS_FLAGS::DDS_FLAGS_NONE, wfilename.c_str()));
+
+					image.Release();
+					tempTexture->Release();
+				}
+			}
+			ImGui::TreePop();
+		}
+
 		ImGui::Spacing();
 		ImGui::Spacing();
 
@@ -300,7 +368,7 @@ void DynamicCubemaps::UpdateCubemap()
 				const SpecularMapFilterSettingsCB spmapConstants = { level * delta_roughness };
 				spmapCB->Update(spmapConstants);
 
-				auto uav = uavArray[level - 1].get();
+				auto uav = uavArray[level - 1];
 
 				context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 				context->Dispatch(numGroups, numGroups, 6);
@@ -333,8 +401,22 @@ void DynamicCubemaps::Draw(const RE::BSShader* shader, const uint32_t)
 			auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 			auto context = renderer->GetRuntimeData().context;
 
-			ID3D11ShaderResourceView* view = envTexture->srv.get();
-			context->PSSetShaderResources(64, 1, &view);
+			if (enableCreator) {
+				CreatorSettingsCB data{};
+				data.Enabled = true;
+				data.CubemapColor = cubemapColor;
+
+				D3D11_MAPPED_SUBRESOURCE mapped;
+				DX::ThrowIfFailed(context->Map(perFrameCreator->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+				size_t bytes = sizeof(CreatorSettingsCB);
+				memcpy_s(mapped.pData, bytes, &data, bytes);
+				context->Unmap(perFrameCreator->resource.get(), 0);
+			}
+
+			ID3D11ShaderResourceView* views[2];
+			views[0] = envTexture->srv.get();
+			views[1] = enableCreator ? perFrameCreator->srv.get() : nullptr;
+			context->PSSetShaderResources(64, 2, views);
 		}
 	}
 }
@@ -458,8 +540,26 @@ void DynamicCubemaps::SetupResources()
 
 		for (std::uint32_t level = 1; level < MIPLEVELS; ++level) {
 			uavDesc.Texture2DArray.MipSlice = level;
-			DX::ThrowIfFailed(device->CreateUnorderedAccessView(envTexture->resource.get(), &uavDesc, uavArray[level - 1].put()));
+			DX::ThrowIfFailed(device->CreateUnorderedAccessView(envTexture->resource.get(), &uavDesc, &uavArray[level - 1]));
 		}
+	}
+
+	{
+		D3D11_BUFFER_DESC sbDesc{};
+		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
+		sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		sbDesc.StructureByteStride = sizeof(CreatorSettingsCB);
+		sbDesc.ByteWidth = sizeof(CreatorSettingsCB);
+		perFrameCreator = std::make_unique<Buffer>(sbDesc);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = 1;
+		perFrameCreator->CreateSRV(srvDesc);
 	}
 }
 
