@@ -1,6 +1,9 @@
 #include "DynamicCubemaps.h"
+
+#include "Util.h"
+
 #include <DirectXTex.h>
-#include <Util.h>
+#include <DDSTextureLoader.h>
 
 constexpr auto MIPLEVELS = 10;
 
@@ -316,8 +319,8 @@ void DynamicCubemaps::UpdateCubemap()
 
 		context->GenerateMips(envCaptureTexture->srv.get());
 
-		auto srv = envCaptureTexture->srv.get();
-		context->CSSetShaderResources(0, 1, &srv);
+		ID3D11ShaderResourceView* srvs[2] = { envCaptureTexture->srv.get(), defaultCubemap };
+		context->CSSetShaderResources(0, 2, srvs);
 
 		context->CSSetSamplers(0, 1, &computeSampler);
 
@@ -325,8 +328,9 @@ void DynamicCubemaps::UpdateCubemap()
 
 		context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 32.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 32.0f), 6);
 
-		srv = nullptr;
-		context->CSSetShaderResources(0, 1, &srv);
+		srvs[0] = nullptr;
+		srvs[1] = nullptr;
+		context->CSSetShaderResources(0, 2, srvs);
 
 		uavs[0] = nullptr;
 		uavs[1] = nullptr;
@@ -560,6 +564,10 @@ void DynamicCubemaps::SetupResources()
 		srvDesc.Buffer.FirstElement = 0;
 		srvDesc.Buffer.NumElements = 1;
 		perFrameCreator->CreateSRV(srvDesc);
+	}
+
+	{
+		DirectX::CreateDDSTextureFromFile(device, L"Data\\Shaders\\DynamicCubemaps\\defaultcubemap.dds", nullptr, &defaultCubemap);
 	}
 }
 

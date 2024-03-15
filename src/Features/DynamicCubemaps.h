@@ -56,6 +56,8 @@ public:
 	Texture2D* envCapturePositionTexture = nullptr;
 	Texture2D* envInferredTexture = nullptr;
 
+	ID3D11ShaderResourceView* defaultCubemap = nullptr;
+
 	bool activeReflections = false;
 	bool resetCapture = true;
 
