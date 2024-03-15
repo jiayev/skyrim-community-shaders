@@ -1039,7 +1039,7 @@ namespace SIE
 
 			// compile shaders
 			ID3DBlob* errorBlob = nullptr;
-			const uint32_t flags = D3DCOMPILE_OPTIMIZATION_LEVEL3;
+			const uint32_t flags = !State::GetSingleton()->IsDeveloperMode() ? D3DCOMPILE_OPTIMIZATION_LEVEL3 : D3DCOMPILE_DEBUG;
 			const HRESULT compileResult = D3DCompileFromFile(path.c_str(), defines.data(), D3D_COMPILE_STANDARD_FILE_INCLUDE, "main",
 				GetShaderProfile(shaderClass), flags, 0, &shaderBlob, &errorBlob);
 
@@ -1063,16 +1063,18 @@ namespace SIE
 			logger::debug("Compiled shader {}:{}:{:X}", magic_enum::enum_name(type), magic_enum::enum_name(shaderClass), descriptor);
 
 			// strip debug info
-			ID3DBlob* strippedShaderBlob = nullptr;
+			if (!State::GetSingleton()->IsDeveloperMode()) {
+				ID3DBlob* strippedShaderBlob = nullptr;
 
-			const uint32_t stripFlags = D3DCOMPILER_STRIP_DEBUG_INFO |
-			                            D3DCOMPILER_STRIP_REFLECTION_DATA |
-			                            D3DCOMPILER_STRIP_TEST_BLOBS |
-			                            D3DCOMPILER_STRIP_PRIVATE_DATA;
+				const uint32_t stripFlags = D3DCOMPILER_STRIP_DEBUG_INFO |
+				                            D3DCOMPILER_STRIP_REFLECTION_DATA |
+				                            D3DCOMPILER_STRIP_TEST_BLOBS |
+				                            D3DCOMPILER_STRIP_PRIVATE_DATA;
 
-			D3DStripShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), stripFlags, &strippedShaderBlob);
-			std::swap(shaderBlob, strippedShaderBlob);
-			strippedShaderBlob->Release();
+				D3DStripShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), stripFlags, &strippedShaderBlob);
+				std::swap(shaderBlob, strippedShaderBlob);
+				strippedShaderBlob->Release();
+			}
 
 			// save shader to disk
 			if (useDiskCache) {
