@@ -1031,10 +1031,6 @@ namespace SIE
 
 			const std::wstring path = GetShaderPath(shader.fxpFilename);
 
-			// Set timestamp based on file timestamp
-			auto shaderSourceTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(path));
-			cache.modifiedShaderMap.insert_or_assign(std::string(shader.fxpFilename), shaderSourceTime);
-
 			std::string strPath;
 			std::transform(path.begin(), path.end(), std::back_inserter(strPath), [](wchar_t c) {
 				return (char)c;
@@ -1373,7 +1369,7 @@ namespace SIE
 		std::scoped_lock lock{ mapMutex };
 		if (!shaderMap.empty() && shaderMap.contains(a_key)) {
 			if (ShaderModifiedSince(type, shaderMap.at(a_key).compileTime)) {
-				logger::debug("Shader {} compiled {} before changes at {}", a_key, std::format("{:%Y%m%d%H%M}", shaderMap.at(a_key).compileTime), std::format("{:%Y%m%d%H%M}", modifiedShaderMap.at(type)));
+				logger::debug("Shader {} compiled {} before changes at {}", a_key, std::format("{:%Y%m%d%H%M}", shaderMap.at(a_key).compileTime), std::format("{:%Y%m%d%H%M}", GetModifiedShaderMapTime(type)));
 				return nullptr;
 			}
 			auto status = shaderMap.at(a_key).status;
@@ -1524,9 +1520,15 @@ namespace SIE
 
 	bool ShaderCache::ShaderModifiedSince(std::string a_type, system_clock::time_point a_current)
 	{
-		return !a_type.empty() && magic_enum::enum_cast<RE::BSShader::Type>(a_type, magic_enum::case_insensitive).has_value()  // type is valid
-		       && !modifiedShaderMap.empty() && modifiedShaderMap.contains(a_type)                                             // map has Type
-		       && modifiedShaderMap.at(a_type) > a_current;                                                                    //modification time is older than a_current
+		if (a_type.empty() || magic_enum::enum_cast<RE::BSShader::Type>(a_type, magic_enum::case_insensitive).has_value())  // type is invalid
+			return false;
+		std::filesystem::path filePath{ SIE::SShaderCache::GetShaderPath(a_type) };
+		std::lock_guard lockGuard(modifiedMapMutex);
+		if (std::filesystem::exists(filePath) &&
+			(modifiedShaderMap.empty() || !modifiedShaderMap.contains(a_type)))  // insert timestamp when first seen; rely on filewatcher for subsequent changes
+			modifiedShaderMap.insert_or_assign(a_type, std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(filePath)));
+		return !modifiedShaderMap.empty() && modifiedShaderMap.contains(a_type)  // map has Type
+		       && modifiedShaderMap.at(a_type) > a_current;                      //modification time is older than a_current
 	}
 
 	RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(const RE::BSShader& shader,
@@ -1612,6 +1614,18 @@ namespace SIE
 	bool ShaderCache::IsHideErrors()
 	{
 		return hideError;
+	}
+
+	void ShaderCache::InsertModifiedShaderMap(std::string a_shader, std::chrono::time_point<std::chrono::system_clock> a_time)
+	{
+		std::lock_guard lockGuard(modifiedMapMutex);
+		modifiedShaderMap.insert_or_assign(a_shader, a_time);
+	}
+
+	std::chrono::time_point<std::chrono::system_clock> ShaderCache::GetModifiedShaderMapTime(std::string a_shader)
+	{
+		std::lock_guard lockGuard(modifiedMapMutex);
+		return modifiedShaderMap.at(a_shader);
 	}
 
 	void ShaderCache::ToggleErrorMessages()
@@ -1826,7 +1840,7 @@ namespace SIE
 				return;
 			if (!std::filesystem::is_directory(filePath) && extension.starts_with(".hlsl") && parentDir.ends_with("Shaders") && shaderType.has_value()) {  // TODO: Case insensitive checks
 				// Shader types, so only invalidate specific shader type (e.g,. Lighting)
-				cache.modifiedShaderMap.insert_or_assign(shaderTypeString, modifiedTime);
+				cache.InsertModifiedShaderMap(shaderTypeString, modifiedTime);
 				cache.Clear(shaderType.value());
 			} else if (!std::filesystem::is_directory(filePath) && extension.starts_with(".hlsl")) {  // TODO: Case insensitive checks
 				// all other shaders, since we don't know what is using it, clear everything

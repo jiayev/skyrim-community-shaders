@@ -173,6 +173,9 @@ namespace SIE
 		void IterateShaderBlock(bool a_forward = true);
 		bool IsHideErrors();
 
+		void InsertModifiedShaderMap(std::string a_shader, std::chrono::time_point<std::chrono::system_clock> a_time);
+		std::chrono::time_point<std::chrono::system_clock> GetModifiedShaderMapTime(std::string a_shader);
+
 		int32_t compilationThreadCount = std::max(static_cast<int32_t>(std::thread::hardware_concurrency()) - 1, 1);
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(std::thread::hardware_concurrency()) / 2, 1);
 		BS::thread_pool compilationPool{};
@@ -282,8 +285,7 @@ namespace SIE
 
 		uint blockedKeyIndex = (uint)-1;  // index in shaderMap; negative value indicates disabled
 		std::string blockedKey = "";
-		std::vector<uint32_t> blockedIDs;                                               // more than one descriptor could be blocked based on shader hash
-		std::unordered_map<std::string, system_clock::time_point> modifiedShaderMap{};  // hashmap when a shader source file last modified
+		std::vector<uint32_t> blockedIDs;  // more than one descriptor could be blocked based on shader hash
 
 	private:
 		ShaderCache();
@@ -311,6 +313,8 @@ namespace SIE
 		CompilationSet compilationSet;
 		std::unordered_map<std::string, ShaderCacheResult> shaderMap{};
 		std::mutex mapMutex;
+		std::unordered_map<std::string, system_clock::time_point> modifiedShaderMap{};  // hashmap when a shader source file last modified
+		std::mutex modifiedMapMutex;
 
 		// efsw file watcher
 		efsw::FileWatcher* fileWatcher;
