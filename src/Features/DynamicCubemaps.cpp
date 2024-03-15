@@ -480,10 +480,6 @@ void DynamicCubemaps::SetupResources()
 		envCaptureRawTexture->CreateSRV(srvDesc);
 		envCaptureRawTexture->CreateUAV(uavDesc);
 
-		envInferredTexture = new Texture2D(texDesc);
-		envInferredTexture->CreateSRV(srvDesc);
-		envInferredTexture->CreateUAV(uavDesc);
-
 		envCapturePositionTexture = new Texture2D(texDesc);
 		envCapturePositionTexture->CreateSRV(srvDesc);
 		envCapturePositionTexture->CreateUAV(uavDesc);
@@ -495,6 +491,10 @@ void DynamicCubemaps::SetupResources()
 		envTexture = new Texture2D(texDesc);
 		envTexture->CreateSRV(srvDesc);
 		envTexture->CreateUAV(uavDesc);
+
+		envInferredTexture = new Texture2D(texDesc);
+		envInferredTexture->CreateSRV(srvDesc);
+		envInferredTexture->CreateUAV(uavDesc);
 
 		updateCubemapCB = new ConstantBuffer(ConstantBufferDesc<UpdateCubemapCB>());
 	}
