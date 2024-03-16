@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
 	CommunityShaders
-	VERSION 0.8.1
+	VERSION 0.8.2
 	LANGUAGES CXX
 )
 
