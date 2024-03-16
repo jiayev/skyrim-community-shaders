@@ -102,7 +102,7 @@ float3 Lin2sRGB(float3 color)
 #if defined(REFLECTIONS)
 	color.rgb = lerp(color.rgb, sRGB2Lin(ReflectionsTexture.SampleLevel(LinearSampler, uv, 0)), saturate(mipLevel * (1.0 / 10.0)));
 #else
-	color.rgb = lerp(color.rgb, color.rgb * DefaultCubemap.SampleLevel(LinearSampler, uv, 0).x * 5.0, saturate(mipLevel * (1.0 / 10.0)));
+	color.rgb = lerp(color.rgb, color.rgb * sRGB2Lin(DefaultCubemap.SampleLevel(LinearSampler, uv, 0).x) * 10.0, saturate(mipLevel * (1.0 / 10.0)));
 #endif
 
 	color.rgb = Lin2sRGB(color.rgb);
