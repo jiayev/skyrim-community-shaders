@@ -42,7 +42,7 @@ float3 GetDynamicCubemap(float2 uv, float3 N, float3 VN, float3 V, float roughne
 	specularIrradiance = lerp(specularIrradiance, diffuseColor, smoothstep(1000, 2000, distance));
 
 	// Darken under hemisphere
-	specularIrradiance *= lerp(1.0, saturate(R.z), 0.5);
+	specularIrradiance *= lerp(1.0, saturate(R.z) * 2.0, 0.5);
 
 	float2 specularBRDF = EnvBRDFApprox(roughness, NoV);
 
@@ -68,16 +68,9 @@ float3 GetDynamicCubemapFresnel(float2 uv, float3 N, float3 VN, float3 V, float 
 
 		float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level);
 		specularIrradiance = sRGB2Lin(specularIrradiance);
-		diffuseColor = sRGB2Lin(diffuseColor);
-
-		// Local lighting contribution
-		specularIrradiance += specularIrradiance * diffuseColor;
 
 		// Fade into only local lighting
-		specularIrradiance = lerp(specularIrradiance, diffuseColor, smoothstep(1000, 2000, distance));
-
-		// Darken under hemisphere
-		specularIrradiance *= lerp(1.0, saturate(R.z), 0.5);
+		specularIrradiance = lerp(specularIrradiance, 0.0, saturate(distance * 0.001));
 
 		// Horizon specular occlusion
 		// https://marmosetco.tumblr.com/post/81245981087
