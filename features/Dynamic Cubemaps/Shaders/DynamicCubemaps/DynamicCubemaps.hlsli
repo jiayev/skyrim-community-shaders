@@ -33,10 +33,16 @@ float3 GetDynamicCubemap(float2 uv, float3 N, float3 VN, float3 V, float roughne
 
 	float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level);
 	specularIrradiance = sRGB2Lin(specularIrradiance);
+	diffuseColor = sRGB2Lin(diffuseColor);
 
-	diffuseColor = sRGB2Lin(diffuseColor) * 0.5;
+	// Local lighting contribution
+	specularIrradiance += specularIrradiance * diffuseColor; 
 
-	specularIrradiance = lerp(specularIrradiance, diffuseColor, saturate(distance / 1000.0));
+	// Fade into only local lighting
+	specularIrradiance = lerp(specularIrradiance, diffuseColor, smoothstep(1000, 2000, distance));
+	
+	// Darken under hemisphere
+	specularIrradiance *= lerp(1.0, saturate(R.z), 0.5);
 
 	float2 specularBRDF = EnvBRDFApprox(roughness, NoV);
 
@@ -53,7 +59,7 @@ float3 GetDynamicCubemap(float2 uv, float3 N, float3 VN, float3 V, float roughne
 	return specularIrradiance * ((F0 + S) * specularBRDF.x + specularBRDF.y);
 }
 
-float3 GetDynamicCubemapFresnel(float2 uv, float3 N, float3 VN, float3 V, float roughness, float level, float distance)
+float3 GetDynamicCubemapFresnel(float2 uv, float3 N, float3 VN, float3 V, float roughness, float level, float3 diffuseColor, float distance)
 {
 	float NoV = saturate(dot(N, V));
 	float2 specularBRDF = EnvBRDFApprox(roughness, NoV);
@@ -62,7 +68,16 @@ float3 GetDynamicCubemapFresnel(float2 uv, float3 N, float3 VN, float3 V, float 
 
 		float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level);
 		specularIrradiance = sRGB2Lin(specularIrradiance);
-		specularIrradiance = specularIrradiance * (1.0 - saturate(distance / 1000.0));
+		diffuseColor = sRGB2Lin(diffuseColor);
+
+		// Local lighting contribution
+		specularIrradiance += specularIrradiance * diffuseColor; 
+
+		// Fade into only local lighting
+		specularIrradiance = lerp(specularIrradiance, diffuseColor, smoothstep(1000, 2000, distance));
+		
+		// Darken under hemisphere
+		specularIrradiance *= lerp(1.0, saturate(R.z), 0.5);
 
 		// Horizon specular occlusion
 		// https://marmosetco.tumblr.com/post/81245981087

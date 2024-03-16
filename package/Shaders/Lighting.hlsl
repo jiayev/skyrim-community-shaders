@@ -2017,13 +2017,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(DYNAMIC_CUBEMAPS)
 #		if defined(EYE)
-	color.xyz += GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 0.5, 2, viewPosition.z) * input.Color.xyz * envMask;
+	color.xyz += GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 0.5, 2, diffuseColor, viewPosition.z) * input.Color.xyz * envMask;
 #		elif defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
-	color.xyz += GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 0.5 - (saturate(envMask) * 0.5), 2 - saturate(envMask), viewPosition.z) * (1.0 - ((float)dynamicCubemap * saturate(envMask))) * input.Color.xyz;
+	color.xyz += GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 0.5 - (saturate(envMask) * 0.5), 2 - saturate(envMask), diffuseColor, viewPosition.z) * (1.0 - ((float)dynamicCubemap * saturate(envMask))) * input.Color.xyz;
 #		elif defined(HAIR)
-	color.xyz += GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 0.5, 2, viewPosition.z);
+	color.xyz += GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 0.5, 2, diffuseColor, viewPosition.z);
 #		else
-	color.xyz += GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 0.5, 2, viewPosition.z) * input.Color.xyz;
+	color.xyz += GetDynamicCubemapFresnel(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 0.5, 2, diffuseColor, viewPosition.z) * input.Color.xyz;
 #		endif
 #	endif
 
