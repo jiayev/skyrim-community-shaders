@@ -36,11 +36,11 @@ float3 GetDynamicCubemap(float2 uv, float3 N, float3 VN, float3 V, float roughne
 	diffuseColor = sRGB2Lin(diffuseColor);
 
 	// Local lighting contribution
-	specularIrradiance += specularIrradiance * diffuseColor; 
+	specularIrradiance += specularIrradiance * diffuseColor;
 
 	// Fade into only local lighting
 	specularIrradiance = lerp(specularIrradiance, diffuseColor, smoothstep(1000, 2000, distance));
-	
+
 	// Darken under hemisphere
 	specularIrradiance *= lerp(1.0, saturate(R.z), 0.5);
 
@@ -71,11 +71,11 @@ float3 GetDynamicCubemapFresnel(float2 uv, float3 N, float3 VN, float3 V, float 
 		diffuseColor = sRGB2Lin(diffuseColor);
 
 		// Local lighting contribution
-		specularIrradiance += specularIrradiance * diffuseColor; 
+		specularIrradiance += specularIrradiance * diffuseColor;
 
 		// Fade into only local lighting
 		specularIrradiance = lerp(specularIrradiance, diffuseColor, smoothstep(1000, 2000, distance));
-		
+
 		// Darken under hemisphere
 		specularIrradiance *= lerp(1.0, saturate(R.z), 0.5);
 
