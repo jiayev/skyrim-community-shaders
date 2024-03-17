@@ -589,7 +589,7 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, LightLimitFix::Co
 			uint32_t offset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_POSITION);
 			for (int v = 0; v < triShape->GetTrishapeRuntimeData().vertexCount; v++) {
 				if (VertexPosition* vertex = reinterpret_cast<VertexPosition*>(&rendererData->rawVertexData[vertexSize * v + offset])) {
-					RE::NiPoint3 position{ (float)vertex->data[0], (float)vertex->data[1], (float)vertex->data[2] };
+					RE::NiPoint3 position{ (float)vertex->data[0], (float)vertex->data[1], 0.0f };
 					radius = std::max(radius, position.Length());
 				}
 			}
@@ -902,7 +902,7 @@ void LightLimitFix::UpdateLights()
 
 				light.color *= particleLight.second.color.alpha;
 
-				light.radius = particleLight.second.radius * 70.0f * 0.5f;
+				light.radius = particleLight.second.radius * particleLight.second.config.radiusMult * 70.0f * 0.5f;
 
 				auto position = particleLight.first->world.translate;
 
