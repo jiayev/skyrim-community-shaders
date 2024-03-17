@@ -338,7 +338,7 @@ void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPo
 		a_light.positionVS[eyeIndex].data = DirectX::SimpleMath::Vector3::Transform(a_light.positionWS[eyeIndex].data, viewMatrix);
 		
 		if (a_billboard.cameraOffset > 0.0f) {
-			a_light.positionVS[eyeIndex].data.z -= a_billboard.cameraOffset * 70.0f * 0.5f;
+			a_light.positionVS[eyeIndex].data.z -= a_billboard.cameraOffset * 70.0f;
 
 			Matrix viewMatrixInverse;
 			if (a_cached) {
