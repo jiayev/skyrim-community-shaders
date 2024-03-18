@@ -361,6 +361,17 @@ void Menu::DrawSettings()
 					"Enabling will save current settings as TEST config. "
 					"This has no impact if no settings are changed. ");
 			}
+			bool useFileWatcher = shaderCache.UseFileWatcher();
+			ImGui::TableNextColumn();
+			if (ImGui::Checkbox("Enable File Watcher", &useFileWatcher)) {
+				shaderCache.SetFileWatcher(useFileWatcher);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text(
+					"Automatically recompile shaders on file change. "
+					"Intended for developing.");
+			}
+
 			if (ImGui::Button("Dump Ini Settings", { -1, 0 })) {
 				Util::DumpSettingsOptions();
 			}

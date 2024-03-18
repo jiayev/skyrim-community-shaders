@@ -95,7 +95,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				auto& shaderCache = SIE::ShaderCache::Instance();
 
 				shaderCache.ValidateDiskCache();
-				shaderCache.StartFileWatcher();
+				if (shaderCache.UseFileWatcher())
+					shaderCache.StartFileWatcher();
 				for (auto* feature : Feature::GetFeatureList()) {
 					if (feature->loaded) {
 						feature->PostPostLoad();
