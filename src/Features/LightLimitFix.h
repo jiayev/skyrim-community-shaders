@@ -169,6 +169,10 @@ public:
 		bool EnableParticleLightsCulling = true;
 		bool EnableParticleLightsDetection = true;
 		float ParticleLightsSaturation = 1.0f;
+		float ParticleBrightness = 1.0f;
+		float ParticleRadius = 1.0f;
+		float BillboardBrightness = 1.0f;
+		float BillboardRadius = 1.0f;
 		bool EnableParticleLightsOptimization = true;
 		uint ParticleLightsOptimisationClusterRadius = 32;
 	};

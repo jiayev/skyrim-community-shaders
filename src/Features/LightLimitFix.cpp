@@ -23,7 +23,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableParticleLightsDetection,
 	ParticleLightsSaturation,
 	EnableParticleLightsOptimization,
-	ParticleLightsOptimisationClusterRadius)
+	ParticleLightsOptimisationClusterRadius,
+	ParticleBrightness,
+	ParticleRadius,
+	BillboardBrightness,
+	BillboardRadius)
 
 void LightLimitFix::DrawSettings()
 {
@@ -54,11 +58,15 @@ void LightLimitFix::DrawSettings()
 		ImGui::Spacing();
 		ImGui::Spacing();
 
-		ImGui::TextWrapped("Particle Lights Color");
+		ImGui::TextWrapped("Particle Lights Customisation");
 		ImGui::SliderFloat("Saturation", &settings.ParticleLightsSaturation, 1.0, 2.0, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Particle light saturation.");
 		}
+		ImGui::SliderFloat("Particle Brightness", &settings.ParticleBrightness, 0.0, 10.0, "%.2f");
+		ImGui::SliderFloat("Particle Radius", &settings.ParticleRadius, 0.0, 10.0, "%.2f");
+		ImGui::SliderFloat("Billboard Brightness", &settings.BillboardBrightness, 0.0, 10.0, "%.2f");
+		ImGui::SliderFloat("Billboard Radius", &settings.BillboardRadius, 0.0, 10.0, "%.2f");
 
 		ImGui::Spacing();
 		ImGui::Spacing();
@@ -870,9 +878,9 @@ void LightLimitFix::UpdateLights()
 					color.x = particleLight.second.color.red * particleData->GetParticlesRuntimeData().color[p].red;
 					color.y = particleLight.second.color.green * particleData->GetParticlesRuntimeData().color[p].green;
 					color.z = particleLight.second.color.blue * particleData->GetParticlesRuntimeData().color[p].blue;
-					clusteredLight.color += Saturation(color, settings.ParticleLightsSaturation) * alpha * 6.0f;
+					clusteredLight.color += Saturation(color, settings.ParticleLightsSaturation) * alpha * settings.ParticleBrightness;
 
-					clusteredLight.radius += radius * particleLight.second.config.radiusMult;
+					clusteredLight.radius += radius * settings.ParticleRadius * particleLight.second.config.radiusMult;
 					clusteredLight.positionWS[0].data.x += positionWS.x;
 					clusteredLight.positionWS[0].data.y += positionWS.y;
 					clusteredLight.positionWS[0].data.z += positionWS.z;
@@ -890,8 +898,8 @@ void LightLimitFix::UpdateLights()
 
 				light.color = Saturation(light.color, settings.ParticleLightsSaturation);
 
-				light.color *= particleLight.second.color.alpha;
-				light.radius = particleLight.first->worldBound.radius;
+				light.color *= particleLight.second.color.alpha * settings.BillboardBrightness;
+				light.radius = particleLight.first->worldBound.radius * settings.BillboardRadius * particleLight.second.config.radiusMult;
 
 				auto position = particleLight.first->world.translate;
 
