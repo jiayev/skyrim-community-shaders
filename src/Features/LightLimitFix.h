@@ -120,16 +120,9 @@ public:
 
 	std::uint32_t lightCount = 0;
 
-	struct BillboardData
-	{
-		float radius;
-		float cameraOffset;
-	};
-
 	struct ParticleLightInfo
 	{
 		RE::NiColorA color;
-		BillboardData billboardData;
 		ParticleLights::Config& config;
 	};
 
@@ -158,7 +151,7 @@ public:
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
 	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config* a_config = nullptr, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
-	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, BillboardData a_billboard = { 0.0f, 0.0f }, bool a_cached = true);
+	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached = true);
 	void UpdateLights();
 	void Bind();
 

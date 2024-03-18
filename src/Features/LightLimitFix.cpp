@@ -291,7 +291,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 		light.firstPersonShadow = false;
 
-		SetLightPosition(light, niLight->world.translate, { 0.0f, 0.0f }, inWorld);
+		SetLightPosition(light, niLight->world.translate, inWorld);
 
 		strictLightDataTemp.StrictLights[i] = light;
 	}
@@ -312,7 +312,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 	}
 }
 
-void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, BillboardData a_billboard, bool a_cached)
+void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached)
 {
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
@@ -336,19 +336,6 @@ void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPo
 		a_light.positionWS[eyeIndex].data.y = worldPos.y;
 		a_light.positionWS[eyeIndex].data.z = worldPos.z;
 		a_light.positionVS[eyeIndex].data = DirectX::SimpleMath::Vector3::Transform(a_light.positionWS[eyeIndex].data, viewMatrix);
-
-		if (a_billboard.cameraOffset > 0.0f) {
-			a_light.positionVS[eyeIndex].data.z -= a_billboard.cameraOffset * 70.0f;
-
-			Matrix viewMatrixInverse;
-			if (a_cached) {
-				viewMatrixInverse = viewMatrixInverseCached[eyeIndex];
-			} else {
-				viewMatrix.Invert(viewMatrixInverse);
-			}
-
-			a_light.positionWS[eyeIndex].data = DirectX::SimpleMath::Vector3::Transform(a_light.positionVS[eyeIndex].data, viewMatrixInverse);
-		}
 	}
 }
 
@@ -563,8 +550,6 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, LightLimitFix::Co
 		color.blue *= emittance->blue;
 	}
 
-	BillboardData billboardData{ 0.0f, 0.0f };
-
 	if (auto rendererData = a_pass->geometry->GetGeometryRuntimeData().rendererData) {
 		if (auto triShape = a_pass->geometry->AsTriShape()) {
 			uint32_t vertexSize = rendererData->vertexDesc.GetSize();
@@ -598,17 +583,6 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, LightLimitFix::Co
 					color.alpha *= vertexColor->data[3] / 255.f;
 				}
 			}
-
-			uint32_t offset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_POSITION);
-			for (int v = 0; v < triShape->GetTrishapeRuntimeData().vertexCount; v++) {
-				if (VertexPosition* vertex = reinterpret_cast<VertexPosition*>(&rendererData->rawVertexData[vertexSize * v + offset])) {
-					RE::NiPoint3 position{ (float)vertex->data[0], (float)vertex->data[1], 0.0f };
-					billboardData.radius = std::max(billboardData.radius, position.Length());
-					billboardData.cameraOffset = std::max(billboardData.cameraOffset, (float)vertex->data[2]);
-				}
-			}
-			billboardData.radius /= 255.f;
-			billboardData.cameraOffset /= 255.f;
 		}
 	}
 
@@ -623,7 +597,7 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, LightLimitFix::Co
 		color.blue *= config->colorMult.blue;
 	}
 
-	queuedParticleLights.insert({ a_pass->geometry, { color, billboardData, *config } });
+	queuedParticleLights.insert({ a_pass->geometry, { color, *config } });
 	return true;
 }
 
@@ -917,12 +891,11 @@ void LightLimitFix::UpdateLights()
 				light.color = Saturation(light.color, settings.ParticleLightsSaturation);
 
 				light.color *= particleLight.second.color.alpha;
-
-				light.radius = particleLight.second.billboardData.radius * particleLight.second.config.radiusMult * 70.0f;
+				light.radius = particleLight.first->worldBound.radius;
 
 				auto position = particleLight.first->world.translate;
 
-				SetLightPosition(light, position, particleLight.second.billboardData);  // Light is complete for both eyes by now
+				SetLightPosition(light, position);  // Light is complete for both eyes by now
 
 				AddCachedParticleLights(lightsData, light, &particleLight.second.config, particleLight.first, State::GetSingleton()->timer);
 			}
