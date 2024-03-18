@@ -638,8 +638,8 @@ float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radi
 
 void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config* a_config, RE::BSGeometry* a_geometry, double a_timer)
 {
-	static float& lightFadeStart = (*(float*)RELOCATION_ID(527668, 414582).address());
-	static float& lightFadeEnd = (*(float*)RELOCATION_ID(527669, 414583).address());
+	static float& lightFadeStart = (*(float*)REL::RelocationID(527668, 414582).address());
+	static float& lightFadeEnd = (*(float*)REL::RelocationID(527669, 414583).address());
 
 	float distance = CalculateLightDistance(light.positionWS[0].data, light.radius);
 
