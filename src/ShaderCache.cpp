@@ -987,7 +987,7 @@ namespace SIE
 			if (!shaderBlob && useDiskCache && std::filesystem::exists(diskPath)) {
 				shaderBlob = nullptr;
 				// check build time of cache
-				auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath));
+				auto diskCacheTime = cache.UseFileWatcher() ? std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath)) : system_clock::now();
 				if (cache.ShaderModifiedSince(shader.fxpFilename, diskCacheTime)) {
 					logger::debug("Diskcached shader {} older than {}", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true), std::format("{:%Y%m%d%H%M}", diskCacheTime));
 				} else if (FAILED(D3DReadFileToBlob(diskPath.c_str(), &shaderBlob))) {
@@ -1312,24 +1312,29 @@ namespace SIE
 	ShaderCache::~ShaderCache()
 	{
 		Clear();
-		fileWatcher->removeWatch(watchID);
+		StopFileWatcher();
 	}
 
 	void ShaderCache::Clear()
 	{
-		for (auto& shaders : vertexShaders) {
-			for (auto& [id, shader] : shaders) {
-				shader->shader->Release();
+		std::lock_guard lockGuardV(vertexShadersMutex);
+		{
+			for (auto& shaders : vertexShaders) {
+				for (auto& [id, shader] : shaders) {
+					shader->shader->Release();
+				}
+				shaders.clear();
 			}
-			shaders.clear();
 		}
-		for (auto& shaders : pixelShaders) {
-			for (auto& [id, shader] : shaders) {
-				shader->shader->Release();
+		std::lock_guard lockGuardP(pixelShadersMutex);
+		{
+			for (auto& shaders : pixelShaders) {
+				for (auto& [id, shader] : shaders) {
+					shader->shader->Release();
+				}
+				shaders.clear();
 			}
-			shaders.clear();
 		}
-
 		compilationSet.Clear();
 		std::unique_lock lock{ mapMutex };
 		shaderMap.clear();
@@ -1368,6 +1373,7 @@ namespace SIE
 	ID3DBlob* ShaderCache::GetCompletedShader(const std::string a_key)
 	{
 		std::string type = SIE::SShaderCache::GetTypeFromShaderString(a_key);
+		UpdateShaderModifiedTime(a_key);
 		std::scoped_lock lock{ mapMutex };
 		if (!shaderMap.empty() && shaderMap.contains(a_key)) {
 			if (ShaderModifiedSince(type, shaderMap.at(a_key).compileTime)) {
@@ -1504,33 +1510,82 @@ namespace SIE
 		compilationPool.push_task(&ShaderCache::ManageCompilationSet, this, ssource.get_token());
 	}
 
+	bool ShaderCache::UseFileWatcher() const
+	{
+		return useFileWatcher;
+	}
+
+	void ShaderCache::SetFileWatcher(bool value)
+	{
+		auto oldValue = useFileWatcher;
+		useFileWatcher = value;
+		if (useFileWatcher && !oldValue)
+			StartFileWatcher();
+		else if (!useFileWatcher && oldValue)
+			StopFileWatcher();
+	}
+
 	void ShaderCache::StartFileWatcher()
 	{
-		fileWatcher = new efsw::FileWatcher();
-		listener = new UpdateListener();
-		// Add a folder to watch, and get the efsw::WatchID
-		// Reporting the files and directories changes to the instance of the listener
-		watchID = fileWatcher->addWatch("Data\\Shaders", listener, true);
-		// Start watching asynchronously the directories
-		fileWatcher->watch();
-		std::string pathStr = "";
-		for (auto path : fileWatcher->directories()) {
-			pathStr += std::format("{}; ", path);
+		logger::info("Starting FileWatcher");
+		if (!fileWatcher) {
+			fileWatcher = new efsw::FileWatcher();
+			listener = new UpdateListener();
+			// Add a folder to watch, and get the efsw::WatchID
+			// Reporting the files and directories changes to the instance of the listener
+			watchID = fileWatcher->addWatch("Data\\Shaders", listener, true);
+			// Start watching asynchronously the directories
+			fileWatcher->watch();
+			std::string pathStr = "";
+			for (auto path : fileWatcher->directories()) {
+				pathStr += std::format("{}; ", path);
+			}
+			logger::debug("ShaderCache watching for changes in {}", pathStr);
+			compilationPool.push_task(&SIE::UpdateListener::processQueue, listener);
+		} else {
+			logger::debug("ShaderCache already enabled");
 		}
-		logger::debug("ShaderCache watching for changes in {}", pathStr);
+	}
+
+	void ShaderCache::StopFileWatcher()
+	{
+		logger::info("Stopping FileWatcher");
+		if (fileWatcher) {
+			fileWatcher->removeWatch(watchID);
+			fileWatcher = nullptr;
+		}
+		if (listener) {
+			listener = nullptr;
+		}
+	}
+
+	bool ShaderCache::UpdateShaderModifiedTime(std::string a_type)
+	{
+		if (!UseFileWatcher())
+			return false;
+		if (a_type.empty() || !magic_enum::enum_cast<RE::BSShader::Type>(a_type, magic_enum::case_insensitive).has_value())  // type is invalid
+			return false;
+		std::filesystem::path filePath{ SIE::SShaderCache::GetShaderPath(a_type) };
+		std::lock_guard lockGuard(modifiedMapMutex);
+		if (std::filesystem::exists(filePath)) {
+			auto fileTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(filePath));
+			if (!modifiedShaderMap.contains(a_type) || modifiedShaderMap.at(a_type) != fileTime) {  // insert if new or timestamp changed
+				modifiedShaderMap.insert_or_assign(a_type, fileTime);
+				return true;
+			}
+		}
+		return false;
 	}
 
 	bool ShaderCache::ShaderModifiedSince(std::string a_type, system_clock::time_point a_current)
 	{
-		if (a_type.empty() || magic_enum::enum_cast<RE::BSShader::Type>(a_type, magic_enum::case_insensitive).has_value())  // type is invalid
+		if (!UseFileWatcher())
 			return false;
-		std::filesystem::path filePath{ SIE::SShaderCache::GetShaderPath(a_type) };
+		if (a_type.empty() || !magic_enum::enum_cast<RE::BSShader::Type>(a_type, magic_enum::case_insensitive).has_value())  // type is invalid
+			return false;
 		std::lock_guard lockGuard(modifiedMapMutex);
-		if (std::filesystem::exists(filePath) &&
-			(modifiedShaderMap.empty() || !modifiedShaderMap.contains(a_type)))  // insert timestamp when first seen; rely on filewatcher for subsequent changes
-			modifiedShaderMap.insert_or_assign(a_type, std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(filePath)));
 		return !modifiedShaderMap.empty() && modifiedShaderMap.contains(a_type)  // map has Type
-		       && modifiedShaderMap.at(a_type) > a_current;                      //modification time is older than a_current
+		       && modifiedShaderMap.at(a_type) > a_current;                      //modification time is newer than a_current
 	}
 
 	RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(const RE::BSShader& shader,
@@ -1820,40 +1875,67 @@ namespace SIE
 			GetHumanTime(GetEta() + totalMs));
 	}
 
-	void UpdateListener::handleFileAction(efsw::WatchID, const std::string& dir, const std::string& filename, efsw::Action action, std::string)
+	void UpdateListener::processQueue()
 	{
+		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+		std::unique_lock lock(actionMutex, std::defer_lock);
 		auto& cache = SIE::ShaderCache::Instance();
-		const std::filesystem::path filePath = std::filesystem::path(std::format("{}\\{}", dir, filename));
-		std::chrono::time_point<std::chrono::system_clock> modifiedTime{};
-		std::string extension = filePath.extension().string();
-		std::string parentDir = filePath.parent_path().string();
-		std::string shaderTypeString = filePath.stem().string();
-		auto shaderType = magic_enum::enum_cast<RE::BSShader::Type>(shaderTypeString, magic_enum::case_insensitive);
-		switch (action) {
-		case efsw::Actions::Add:
-			break;
-		case efsw::Actions::Delete:
-			break;
-		case efsw::Actions::Modified:
-			logger::debug("Detected changed path {}", filePath.string());
-			if (std::filesystem::exists(filePath))
-				modifiedTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(filePath));
-			else  // if file doesn't exist, don't do anything
-				return;
-			if (!std::filesystem::is_directory(filePath) && extension.starts_with(".hlsl") && parentDir.ends_with("Shaders") && shaderType.has_value()) {  // TODO: Case insensitive checks
-				// Shader types, so only invalidate specific shader type (e.g,. Lighting)
-				cache.InsertModifiedShaderMap(shaderTypeString, modifiedTime);
-				cache.Clear(shaderType.value());
-			} else if (!std::filesystem::is_directory(filePath) && extension.starts_with(".hlsl")) {  // TODO: Case insensitive checks
-				// all other shaders, since we don't know what is using it, clear everything
-				cache.DeleteDiskCache();
-				cache.Clear();
+		while (cache.UseFileWatcher()) {
+			lock.lock();
+			if (!queue.empty() && queue.size() == lastQueueSize) {
+				bool clearCache = false;
+				for (fileAction fAction : queue) {
+					const std::filesystem::path filePath = std::filesystem::path(std::format("{}\\{}", fAction.dir, fAction.filename));
+					std::chrono::time_point<std::chrono::system_clock> modifiedTime{};
+					std::string extension = filePath.extension().string();
+					std::string parentDir = filePath.parent_path().string();
+					std::string shaderTypeString = filePath.stem().string();
+					auto shaderType = magic_enum::enum_cast<RE::BSShader::Type>(shaderTypeString, magic_enum::case_insensitive);
+					switch (fAction.action) {
+					case efsw::Actions::Add:
+						break;
+					case efsw::Actions::Delete:
+						break;
+					case efsw::Actions::Modified:
+						logger::debug("Detected changed path {}", filePath.string());
+						if (std::filesystem::exists(filePath))
+							modifiedTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(filePath));
+						else  // if file doesn't exist, don't do anything
+							return;
+						if (!std::filesystem::is_directory(filePath) && extension.starts_with(".hlsl") && parentDir.ends_with("Shaders") && shaderType.has_value()) {  // TODO: Case insensitive checks
+							// Shader types, so only invalidate specific shader type (e.g,. Lighting)
+							cache.InsertModifiedShaderMap(shaderTypeString, modifiedTime);
+							cache.Clear(shaderType.value());
+						} else if (!std::filesystem::is_directory(filePath) && extension.starts_with(".hlsl")) {  // TODO: Case insensitive checks
+							// all other shaders, since we don't know what is using it, clear everything
+							clearCache = true;
+						}
+						break;
+					case efsw::Actions::Moved:
+						break;
+					default:
+						logger::error("Filewatcher received invalid action {}", magic_enum::enum_name(fAction.action));
+					}
+				}
+				if (clearCache) {
+					cache.DeleteDiskCache();
+					cache.Clear();
+				}
+				queue.clear();
 			}
-			break;
-		case efsw::Actions::Moved:
-			break;
-		default:
-			logger::error("Filewatcher received invalid action {}", magic_enum::enum_name(action));
+			lastQueueSize = queue.size();
+			lock.unlock();
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		}
+		queue.clear();
+	}
+
+	void UpdateListener::handleFileAction(efsw::WatchID watchid, const std::string& dir, const std::string& filename, efsw::Action action, std::string oldFilename)
+	{
+		std::lock_guard lock(actionMutex);
+		if (queue.empty() || (queue.back().action != action && queue.back().filename != filename)) {
+			// only add if not a duplicate; esfw is very spammy
+			queue.push_back({ watchid, dir, filename, action, oldFilename });
 		}
 	}
 }

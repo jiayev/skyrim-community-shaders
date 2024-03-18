@@ -222,6 +222,8 @@ void State::Load(bool a_test)
 			shaderCache.compilationThreadCount = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
 		if (advanced["Background Compiler Threads"].is_number_integer())
 			shaderCache.backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+		if (advanced["Use FileWatcher"].is_boolean())
+			shaderCache.SetFileWatcher(advanced["Use FileWatcher"]);
 	}
 
 	if (settings["General"].is_object()) {
@@ -270,6 +272,7 @@ void State::Save(bool a_test)
 	advanced["Shader Defines"] = shaderDefinesString;
 	advanced["Compiler Threads"] = shaderCache.compilationThreadCount;
 	advanced["Background Compiler Threads"] = shaderCache.backgroundCompilationThreadCount;
+	advanced["Use FileWatcher"] = shaderCache.UseFileWatcher();
 	settings["Advanced"] = advanced;
 
 	json general;
