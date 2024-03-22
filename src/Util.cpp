@@ -153,7 +153,7 @@ namespace Util
 		macros.push_back({ nullptr, nullptr });
 
 		// Compiler setup
-		uint32_t flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3;
+		uint32_t flags = !State::GetSingleton()->IsDeveloperMode() ? (D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3) : D3DCOMPILE_DEBUG;
 
 		ID3DBlob* shaderBlob;
 		ID3DBlob* shaderErrors;
