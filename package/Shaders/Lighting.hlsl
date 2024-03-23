@@ -1967,9 +1967,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(SPECULAR)
 #		if defined(CPM_AVAILABLE) && defined(ENVMAP)
-		specularColor = (specularColor * glossiness * MaterialData.yyy) * lerp(SpecularColor.xyz, complexSpecular, complexMaterial);
+	specularColor = (specularColor * glossiness * MaterialData.yyy) * lerp(SpecularColor.xyz, complexSpecular, complexMaterial);
 #		else
-		specularColor = (specularColor * glossiness * MaterialData.yyy) * SpecularColor.xyz;
+	specularColor = (specularColor * glossiness * MaterialData.yyy) * SpecularColor.xyz;
 #		endif
 #	elif defined(SPARKLE)
 	specularColor *= glossiness;
