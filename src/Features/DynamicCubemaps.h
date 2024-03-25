@@ -127,4 +127,6 @@ public:
 	void UpdateCubemapCapture();
 
 	virtual void DrawDeferred();
+
+	bool SupportsVR() override { return true; };
 };

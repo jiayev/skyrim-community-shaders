@@ -179,4 +179,6 @@ public:
 			logger::info("[SSS] Installed hooks");
 		}
 	};
+
+	bool SupportsVR() override { return true; };
 };
