@@ -430,19 +430,23 @@ void Menu::DrawSettings()
 
 			static size_t selectedFeature = SIZE_T_MAX;
 			auto& featureList = Feature::GetFeatureList();
+			auto sortedList{ featureList };  // need a copy so the load order is not lost
+			std::sort(sortedList.begin(), sortedList.end(), [](Feature* a, Feature* b) {
+				return a->GetName() < b->GetName();
+			});
 
 			ImGui::TableNextColumn();
 			if (ImGui::BeginListBox("##FeatureList", { -FLT_MIN, -FLT_MIN })) {
-				for (size_t i = 0; i < featureList.size(); i++)
-					if (featureList[i]->loaded) {
-						if (ImGui::Selectable(fmt::format("{} ", featureList[i]->GetName()).c_str(), selectedFeature == i, ImGuiSelectableFlags_SpanAllColumns))
+				for (size_t i = 0; i < sortedList.size(); i++)
+					if (sortedList[i]->loaded) {
+						if (ImGui::Selectable(fmt::format("{} ", sortedList[i]->GetName()).c_str(), selectedFeature == i, ImGuiSelectableFlags_SpanAllColumns))
 							selectedFeature = i;
 						ImGui::SameLine();
-						ImGui::TextDisabled(fmt::format("({})", featureList[i]->version).c_str());
-					} else if (!featureList[i]->version.empty()) {
-						ImGui::TextDisabled(fmt::format("{} ({})", featureList[i]->GetName(), featureList[i]->version).c_str());
+						ImGui::TextDisabled(fmt::format("({})", sortedList[i]->version).c_str());
+					} else if (!sortedList[i]->version.empty()) {
+						ImGui::TextDisabled(fmt::format("{} ({})", sortedList[i]->GetName(), sortedList[i]->version).c_str());
 						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::Text(featureList[i]->failedLoadedMessage.c_str());
+							ImGui::Text(sortedList[i]->failedLoadedMessage.c_str());
 						}
 					}
 				ImGui::EndListBox();
@@ -450,10 +454,10 @@ void Menu::DrawSettings()
 
 			ImGui::TableNextColumn();
 
-			bool shownFeature = selectedFeature < featureList.size();
+			bool shownFeature = selectedFeature < sortedList.size();
 			if (shownFeature) {
 				if (ImGui::Button("Restore Defaults", { -1, 0 })) {
-					featureList[selectedFeature]->RestoreDefaultSettings();
+					sortedList[selectedFeature]->RestoreDefaultSettings();
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text(
@@ -464,7 +468,7 @@ void Menu::DrawSettings()
 
 			if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
 				if (shownFeature)
-					featureList[selectedFeature]->DrawSettings();
+					sortedList[selectedFeature]->DrawSettings();
 				else
 					ImGui::TextDisabled("Please select a feature on the left.");
 			}
