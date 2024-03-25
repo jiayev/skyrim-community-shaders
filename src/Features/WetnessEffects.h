@@ -114,4 +114,6 @@ public:
 			stl::write_vfunc<0x6, BSParticleShader_SetupGeometry>(RE::VTABLE_BSParticleShader[0]);
 		}
 	};
+
+	bool SupportsVR() override { return true; };
 };
