@@ -324,7 +324,7 @@ void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 										lastWeatherID = lastWeather->GetFormID();
 										CalculateWetness(lastWeather, sky, seconds, lastWeatherWetnessDepth, lastWeatherPuddleDepth);
 										// If it was raining, wait to transition until precipitation ends, otherwise use the current weather's fade in
-										if (lastWeather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy)) {
+										if (lastWeather->precipitationData && lastWeather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy)) {
 											float rainDensity = lastWeather->precipitationData->data[static_cast<int>(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity)].f;
 											float rainGravity = lastWeather->precipitationData->data[static_cast<int>(RE::BGSShaderParticleGeometryData::DataID::kGravityVelocity)].f;
 											lastWeatherRaining = std::clamp(((rainDensity * rainGravity) / AVERAGE_RAIN_VOLUME), MIN_RAINDROP_CHANCE_MULTIPLIER, MAX_RAINDROP_CHANCE_MULTIPLIER);
