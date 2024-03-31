@@ -111,7 +111,7 @@ namespace Util
 
 	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program)
 	{
-		auto device = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().forwarder;
+		auto& device = State::GetSingleton()->device;
 
 		// Build defines (aka convert vector->D3DCONSTANT array)
 		std::vector<D3D_SHADER_MACRO> macros;
@@ -235,7 +235,7 @@ namespace Util
 
 	float TryGetWaterHeight(float offsetX, float offsetY)
 	{
-		if (auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton()) {
+		if (auto& shadowState = State::GetSingleton()->shadowState) {
 			if (auto tes = RE::TES::GetSingleton()) {
 				auto position = !REL::Module::IsVR() ? shadowState->GetRuntimeData().posAdjust.getEye() : shadowState->GetVRRuntimeData().posAdjust.getEye();
 				position.x += offsetX;

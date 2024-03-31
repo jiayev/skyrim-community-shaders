@@ -1144,21 +1144,21 @@ namespace SIE
 					ShaderClass::Vertex, type, descriptor);
 				if (bufferSizes[0] != 0) {
 					newShader->constantBuffers[0].buffer =
-						(RE::ID3D11Buffer*)perTechniqueBuffersArray.get()[bufferSizes[0]];
+						(REX::W32::ID3D11Buffer*)perTechniqueBuffersArray.get()[bufferSizes[0]];
 				} else {
 					newShader->constantBuffers[0].buffer = nullptr;
 					newShader->constantBuffers[0].data = bufferData.get();
 				}
 				if (bufferSizes[1] != 0) {
 					newShader->constantBuffers[1].buffer =
-						(RE::ID3D11Buffer*)perMaterialBuffersArray.get()[bufferSizes[1]];
+						(REX::W32::ID3D11Buffer*)perMaterialBuffersArray.get()[bufferSizes[1]];
 				} else {
 					newShader->constantBuffers[1].buffer = nullptr;
 					newShader->constantBuffers[1].data = bufferData.get();
 				}
 				if (bufferSizes[2] != 0) {
 					newShader->constantBuffers[2].buffer =
-						(RE::ID3D11Buffer*)perGeometryBuffersArray.get()[bufferSizes[2]];
+						(REX::W32::ID3D11Buffer*)perGeometryBuffersArray.get()[bufferSizes[2]];
 				} else {
 					newShader->constantBuffers[2].buffer = nullptr;
 					newShader->constantBuffers[2].data = bufferData.get();
@@ -1201,21 +1201,21 @@ namespace SIE
 					ShaderClass::Pixel, type, descriptor);
 				if (bufferSizes[0] != 0) {
 					newShader->constantBuffers[0].buffer =
-						(RE::ID3D11Buffer*)perTechniqueBuffersArray.get()[bufferSizes[0]];
+						(REX::W32::ID3D11Buffer*)perTechniqueBuffersArray.get()[bufferSizes[0]];
 				} else {
 					newShader->constantBuffers[0].buffer = nullptr;
 					newShader->constantBuffers[0].data = bufferData.get();
 				}
 				if (bufferSizes[1] != 0) {
 					newShader->constantBuffers[1].buffer =
-						(RE::ID3D11Buffer*)perMaterialBuffersArray.get()[bufferSizes[1]];
+						(REX::W32::ID3D11Buffer*)perMaterialBuffersArray.get()[bufferSizes[1]];
 				} else {
 					newShader->constantBuffers[1].buffer = nullptr;
 					newShader->constantBuffers[1].data = bufferData.get();
 				}
 				if (bufferSizes[2] != 0) {
 					newShader->constantBuffers[2].buffer =
-						(RE::ID3D11Buffer*)perGeometryBuffersArray.get()[bufferSizes[2]];
+						(REX::W32::ID3D11Buffer*)perGeometryBuffersArray.get()[bufferSizes[2]];
 				} else {
 					newShader->constantBuffers[2].buffer = nullptr;
 					newShader->constantBuffers[2].data = bufferData.get();
@@ -1601,7 +1601,7 @@ namespace SIE
 			std::lock_guard lockGuard(vertexShadersMutex);
 
 			const auto result = (*device)->CreateVertexShader(shaderBlob->GetBufferPointer(),
-				newShader->byteCodeSize, nullptr, &newShader->shader);
+				newShader->byteCodeSize, nullptr, reinterpret_cast<ID3D11VertexShader**>(&newShader->shader));
 			if (FAILED(result)) {
 				logger::error("Failed to create vertex shader {}::{}",
 					magic_enum::enum_name(shader.shaderType.get()), descriptor);
@@ -1629,7 +1629,7 @@ namespace SIE
 
 			std::lock_guard lockGuard(pixelShadersMutex);
 			const auto result = (*device)->CreatePixelShader(shaderBlob->GetBufferPointer(),
-				shaderBlob->GetBufferSize(), nullptr, &newShader->shader);
+				shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11PixelShader**>(&newShader->shader));
 			if (FAILED(result)) {
 				logger::error("Failed to create pixel shader {}::{}",
 					magic_enum::enum_name(shader.shaderType.get()),

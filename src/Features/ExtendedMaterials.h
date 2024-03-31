@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 #include "Feature.h"
+#include "State.h"
 
 struct ExtendedMaterials : Feature
 {

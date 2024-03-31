@@ -111,6 +111,11 @@ public:
 
 	std::unique_ptr<Buffer> lightingDataBuffer = nullptr;
 
+	// Skyrim constants
+	bool isVR = false;
 	float screenWidth = 0;
 	float screenHeight = 0;
+	ID3D11DeviceContext* context = nullptr;
+	ID3D11Device* device = nullptr;
+	RE::BSGraphics::RendererShadowState* shadowState = nullptr;
 };

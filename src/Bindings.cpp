@@ -1,9 +1,10 @@
 #include "Bindings.h"
+#include "State.h"
 #include "Util.h"
 
 void Bindings::DepthStencilStateSetDepthMode(RE::BSGraphics::DepthStencilDepthMode a_mode)
 {
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+	auto& state = State::GetSingleton()->shadowState;
 	GET_INSTANCE_MEMBER(depthStencilDepthMode, state)
 	GET_INSTANCE_MEMBER(depthStencilDepthModePrevious, state)
 	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
@@ -19,7 +20,7 @@ void Bindings::DepthStencilStateSetDepthMode(RE::BSGraphics::DepthStencilDepthMo
 
 void Bindings::AlphaBlendStateSetMode(uint32_t a_mode)
 {
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+	auto& state = State::GetSingleton()->shadowState;
 	GET_INSTANCE_MEMBER(alphaBlendMode, state)
 	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
 
@@ -31,7 +32,7 @@ void Bindings::AlphaBlendStateSetMode(uint32_t a_mode)
 
 void Bindings::AlphaBlendStateSetAlphaToCoverage(uint32_t a_value)
 {
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+	auto& state = State::GetSingleton()->shadowState;
 	GET_INSTANCE_MEMBER(alphaBlendAlphaToCoverage, state)
 	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
 
@@ -43,7 +44,7 @@ void Bindings::AlphaBlendStateSetAlphaToCoverage(uint32_t a_value)
 
 void Bindings::AlphaBlendStateSetWriteMode(uint32_t a_value)
 {
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+	auto& state = State::GetSingleton()->shadowState;
 	GET_INSTANCE_MEMBER(alphaBlendWriteMode, state)
 	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
 
@@ -57,7 +58,7 @@ void Bindings::SetOverwriteTerrainMode(bool a_enable)
 {
 	if (overrideTerrain != a_enable) {
 		overrideTerrain = a_enable;
-		auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+		auto& state = State::GetSingleton()->shadowState;
 		GET_INSTANCE_MEMBER(stateUpdateFlags, state)
 		stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_DEPTH_MODE);
 		stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
@@ -68,7 +69,7 @@ void Bindings::SetOverwriteTerrainMaskingMode(TerrainMaskMode a_mode)
 {
 	if (terrainMask != a_mode) {
 		terrainMask = a_mode;
-		auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+		auto& state = State::GetSingleton()->shadowState;
 		GET_INSTANCE_MEMBER(stateUpdateFlags, state)
 		stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 	}
@@ -88,8 +89,8 @@ struct BlendStates
 
 void Bindings::SetDirtyStates(bool)
 {
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+	auto& state = State::GetSingleton()->shadowState;
+	auto& context = State::GetSingleton()->context;
 	GET_INSTANCE_MEMBER(depthStencilStencilMode, state)
 	GET_INSTANCE_MEMBER(depthStencilDepthMode, state)
 	GET_INSTANCE_MEMBER(alphaBlendAlphaToCoverage, state)
@@ -261,7 +262,7 @@ void Bindings::Reset()
 	//SetOverwriteTerrainMode(false);
 	//SetOverwriteTerrainMaskingMode(TerrainMaskMode::kNone);
 
-	//auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+	//auto& context = State::GetSingleton()->context;
 	//FLOAT clear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	//context->ClearRenderTargetView(terrainBlendingMask->rtv.get(), clear);
 }

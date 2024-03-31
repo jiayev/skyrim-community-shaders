@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 #include "Feature.h"
+#include "State.h"
 
 struct WetnessEffects : Feature
 {
@@ -64,7 +65,7 @@ public:
 		float Wetness;
 		float PuddleWetness;
 		DirectX::XMFLOAT3X4 DirectionalAmbientWS;
-		RE::DirectX::XMFLOAT4X4 PrecipProj;
+		REX::W32::XMFLOAT4X4 PrecipProj;
 		Settings settings;
 
 		float pad[4 - (sizeof(Settings) / 4 + 16) % 4];
@@ -83,7 +84,7 @@ public:
 	uint32_t currentWeatherID = 0;
 	uint32_t lastWeatherID = 0;
 	float previousWeatherTransitionPercentage = 0.0f;
-	RE::DirectX::XMFLOAT4X4 precipProj;
+	REX::W32::XMFLOAT4X4 precipProj;
 
 	virtual void SetupResources();
 	virtual void Reset();

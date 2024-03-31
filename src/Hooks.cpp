@@ -275,9 +275,9 @@ namespace Hooks
 
 			auto manager = RE::BSGraphics::Renderer::GetSingleton();
 
-			auto context = manager->GetRuntimeData().context;
-			auto swapchain = manager->GetRuntimeData().renderWindows->swapChain;
-			auto device = manager->GetRuntimeData().forwarder;
+			auto context = reinterpret_cast<ID3D11DeviceContext*>(manager->GetRuntimeData().context);
+			auto swapchain = reinterpret_cast<IDXGISwapChain*>(manager->GetRuntimeData().renderWindows->swapChain);
+			auto device = reinterpret_cast<ID3D11Device*>(manager->GetRuntimeData().forwarder);
 
 			logger::info("Detouring virtual function tables");
 

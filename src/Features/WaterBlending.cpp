@@ -40,7 +40,7 @@ void WaterBlending::DrawSettings()
 void WaterBlending::Draw(const RE::BSShader* shader, const uint32_t)
 {
 	if (shader->shaderType.any(RE::BSShader::Type::Water, RE::BSShader::Type::Lighting)) {
-		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+		auto& context = State::GetSingleton()->context;
 
 		PerPass data{};
 		data.settings = settings;

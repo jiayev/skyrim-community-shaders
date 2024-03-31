@@ -160,7 +160,7 @@ void SubsurfaceScattering::DrawSSSWrapper(bool)
 	if (!SIE::ShaderCache::Instance().IsEnabled())
 		return;
 
-	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+	auto& context = State::GetSingleton()->context;
 
 	ID3D11ShaderResourceView* srvs[8];
 	context->PSGetShaderResources(0, 8, srvs);
@@ -229,7 +229,7 @@ void SubsurfaceScattering::DrawSSS()
 		                                   imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled;
 		blurCBData.FrameCount = viewport->uiFrameCount * (bTAA || State::GetSingleton()->upscalerLoaded);
 
-		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+		auto& shadowState = State::GetSingleton()->shadowState;
 		auto cameraData = !REL::Module::IsVR() ? shadowState->GetRuntimeData().cameraData.getEye() :
 		                                         shadowState->GetVRRuntimeData().cameraData.getEye();
 
@@ -244,7 +244,7 @@ void SubsurfaceScattering::DrawSSS()
 	}
 
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto context = renderer->GetRuntimeData().context;
+	auto& context = State::GetSingleton()->context;
 
 	{
 		ID3D11Buffer* buffer[1] = { blurCB->CB() };
@@ -311,7 +311,7 @@ void SubsurfaceScattering::Draw(const RE::BSShader* a_shader, const uint32_t)
 {
 	if (a_shader->shaderType.get() == RE::BSShader::Type::Lighting) {
 		if (normalsMode == RE::RENDER_TARGET::kNONE) {
-			auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+			auto& state = State::GetSingleton()->shadowState;
 			GET_INSTANCE_MEMBER(renderTargets, state)
 			normalsMode = renderTargets[2];
 		}
@@ -441,7 +441,7 @@ void SubsurfaceScattering::PostPostLoad()
 
 void SubsurfaceScattering::OverrideFirstPersonRenderTargets()
 {
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+	auto& state = State::GetSingleton()->shadowState;
 	GET_INSTANCE_MEMBER(renderTargets, state)
 	GET_INSTANCE_MEMBER(setRenderTargetMode, state)
 	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
@@ -452,7 +452,7 @@ void SubsurfaceScattering::OverrideFirstPersonRenderTargets()
 	renderTargets[2] = normalsMode;
 
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto context = renderer->GetRuntimeData().context;
+	auto& context = State::GetSingleton()->context;
 
 	{
 		auto& target = renderer->GetRuntimeData().renderTargets[renderTargets[2]];
@@ -506,8 +506,7 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 			perPassData.ValidMaterial = validMaterial;
 			perPassData.IsBeastRace = isBeastRace;
 
-			auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-			auto context = renderer->GetRuntimeData().context;
+			auto& context = State::GetSingleton()->context;
 
 			D3D11_MAPPED_SUBRESOURCE mapped;
 			DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
@@ -520,8 +519,7 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 
 void SubsurfaceScattering::Bind()
 {
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto context = renderer->GetRuntimeData().context;
+	auto& context = State::GetSingleton()->context;
 	ID3D11ShaderResourceView* view = perPass->srv.get();
 	context->PSSetShaderResources(36, 1, &view);
 	validMaterial = true;

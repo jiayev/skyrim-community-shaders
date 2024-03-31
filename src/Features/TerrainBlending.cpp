@@ -72,7 +72,7 @@ void TerrainBlending::SetupGeometry(RE::BSRenderPass* a_pass)
 			Bindings::GetSingleton()->SetOverwriteTerrainMode(true);
 			Bindings::GetSingleton()->SetOverwriteTerrainMaskingMode(Bindings::TerrainMaskMode::kRead);
 
-			auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+			auto& context = State::GetSingleton()->context;
 			auto view = Bindings::GetSingleton()->terrainBlendingMask ? Bindings::GetSingleton()->terrainBlendingMask->srv.get() : nullptr;
 			if (view)
 				context->PSSetShaderResources(35, 1, &view);

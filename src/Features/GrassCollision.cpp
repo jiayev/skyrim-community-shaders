@@ -135,7 +135,7 @@ static bool GetShapeBound(RE::bhkNiCollisionObject* Colliedobj, RE::NiPoint3& ce
 
 void GrassCollision::UpdateCollisions()
 {
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+	auto& state = State::GetSingleton()->shadowState;
 
 	auto frameCount = RE::BSGraphics::State::GetSingleton()->uiFrameCount;
 
@@ -227,7 +227,7 @@ void GrassCollision::UpdateCollisions()
 		collisions->CreateSRV(srvDesc);
 	}
 
-	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+	auto& context = State::GetSingleton()->context;
 	D3D11_MAPPED_SUBRESOURCE mapped;
 	DX::ThrowIfFailed(context->Map(collisions->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 	size_t bytes = sizeof(CollisionSData) * colllisionCount;
@@ -248,7 +248,7 @@ void GrassCollision::ModifyGrass(const RE::BSShader*, const uint32_t)
 		PerFrame perFrameData{};
 		ZeroMemory(&perFrameData, sizeof(perFrameData));
 
-		auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+		auto& state = State::GetSingleton()->shadowState;
 		auto& shaderState = RE::BSShaderManager::State::GetSingleton();
 
 		auto bound = shaderState.cachedPlayerBound;
@@ -273,7 +273,7 @@ void GrassCollision::ModifyGrass(const RE::BSShader*, const uint32_t)
 	}
 
 	if (settings.EnableGrassCollision) {
-		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+		auto& context = State::GetSingleton()->context;
 
 		ID3D11ShaderResourceView* views[1]{};
 		views[0] = collisions->srv.get();

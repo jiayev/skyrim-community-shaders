@@ -125,7 +125,7 @@ void ExtendedMaterials::DrawSettings()
 
 void ExtendedMaterials::ModifyLighting(const RE::BSShader*, const uint32_t)
 {
-	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+	auto& context = State::GetSingleton()->context;
 
 	{
 		PerPass data{};
@@ -174,8 +174,7 @@ void ExtendedMaterials::SetupResources()
 
 	logger::info("Creating terrain parallax sampler state");
 
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto device = renderer->GetRuntimeData().forwarder;
+	auto& device = State::GetSingleton()->device;
 
 	D3D11_SAMPLER_DESC samplerDesc = {};
 	samplerDesc.Filter = D3D11_FILTER_ANISOTROPIC;

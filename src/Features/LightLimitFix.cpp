@@ -310,7 +310,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 	static bool wasEmpty = false;
 	bool isEmpty = strictLightDataTemp.NumLights == 0;
 	if (!isEmpty || (isEmpty && !wasEmpty)) {
-		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+		auto& context = State::GetSingleton()->context;
 		D3D11_MAPPED_SUBRESOURCE mapped;
 		DX::ThrowIfFailed(context->Map(strictLightData->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 		size_t bytes = sizeof(StrictLightData);
@@ -322,7 +322,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 
 void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached)
 {
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+	auto& state = State::GetSingleton()->shadowState;
 	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
 		RE::NiPoint3 eyePosition;
 		Matrix viewMatrix;
@@ -377,7 +377,7 @@ void LightLimitFix::AddParticleLightLuminance(RE::NiPoint3& targetPosition, int&
 
 void LightLimitFix::Bind()
 {
-	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+	auto& context = State::GetSingleton()->context;
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 
 	auto reflections = (!REL::Module::IsVR() ?
@@ -732,7 +732,7 @@ void LightLimitFix::UpdateLights()
 	lightsFar = std::min(16384.0f, accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar);
 
 	auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+	auto& state = State::GetSingleton()->shadowState;
 
 	// Cache data since cameraData can become invalid in first-person
 
@@ -922,7 +922,7 @@ void LightLimitFix::UpdateLights()
 		}
 	}
 
-	static auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+	static auto& context = State::GetSingleton()->context;
 
 	{
 		auto projMatrixUnjittered = eyeCount == 1 ? state->GetRuntimeData().cameraData.getEye().projMatrixUnjittered : state->GetVRRuntimeData().cameraData.getEye().projMatrixUnjittered;

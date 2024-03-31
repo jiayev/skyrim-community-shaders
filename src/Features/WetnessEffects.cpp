@@ -269,7 +269,7 @@ void WetnessEffects::CalculateWetness(RE::TESWeather* weather, RE::Sky* sky, flo
 void WetnessEffects::Draw(const RE::BSShader* shader, const uint32_t)
 {
 	if (shader->shaderType.any(RE::BSShader::Type::Lighting, RE::BSShader::Type::Grass)) {
-		auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+		auto& context = State::GetSingleton()->context;
 
 		if (requiresUpdate) {
 			requiresUpdate = false;
@@ -458,7 +458,7 @@ void WetnessEffects::Hooks::BSParticleShader_SetupGeometry::thunk(RE::BSShader* 
 	static Util::FrameChecker frameChecker;
 	if (frameChecker.isNewFrame()) {
 		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-		auto context = renderer->GetRuntimeData().context;
+		auto& context = State::GetSingleton()->context;
 		auto precipation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
 		context->CopyResource(GetSingleton()->precipOcclusionTex->resource.get(), precipation.texture);
 	}
