@@ -311,8 +311,8 @@ namespace SIE
 			static_cast<size_t>(RE::BSShader::Type::Total)>
 			pixelShaders;
 
-		bool isEnabled = false;
-		bool isDiskCache = false;
+		bool isEnabled = true;
+		bool isDiskCache = true;
 		bool isAsync = true;
 		bool isDump = false;
 		bool hideError = false;

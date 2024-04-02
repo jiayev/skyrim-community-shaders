@@ -161,7 +161,7 @@ if(ZIP_TO_DIST)
 	set(ZIP_DIR "${CMAKE_CURRENT_BINARY_DIR}/zip")
 	add_custom_target(build-time-make-directory ALL
 		COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}" ${CMAKE_SOURCE_DIR}/dist
-		COMMAND ${CMAKE_COMMAND} -E make_directory "${ZIP_DIR}" ${CMAKE_SOURCE_DIR}/dist
+		COMMAND ${CMAKE_COMMAND} -E make_directory "${ZIP_DIR}" "${ZIP_DIR}/SKSE/Plugins" ${CMAKE_SOURCE_DIR}/dist
 	)
 
 	message("Copying base CommunityShader into ${ZIP_DIR}.")

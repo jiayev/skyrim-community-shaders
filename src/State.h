@@ -31,14 +31,21 @@ public:
 
 	float timer = 0;
 
+	enum ConfigMode
+	{
+		DEFAULT,
+		USER,
+		TEST
+	};
+
 	void Draw();
 	void DrawDeferred();
 	void DrawPreProcess();
 	void Reset();
 	void Setup();
 
-	void Load(bool a_test = false);
-	void Save(bool a_test = false);
+	void Load(ConfigMode a_configMode = ConfigMode::USER);
+	void Save(ConfigMode a_configMode = ConfigMode::USER);
 	void PostPostLoad();
 
 	bool ValidateCache(CSimpleIniA& a_ini);
