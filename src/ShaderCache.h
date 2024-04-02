@@ -173,6 +173,8 @@ namespace SIE
 		RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 
+		static std::string GetDefinesString(RE::BSShader::Type enumType, uint32_t descriptor);
+
 		uint64_t GetCachedHitTasks();
 		uint64_t GetCompletedTasks();
 		uint64_t GetFailedTasks();

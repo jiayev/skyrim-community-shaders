@@ -32,13 +32,24 @@ void State::Draw()
 					context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 				}
 
+				BeginPerfEvent(std::format("Draw: CommunityShaders {}::{}", magic_enum::enum_name(currentShader->shaderType.get()), currentPixelDescriptor));
+				if (IsDeveloperMode()) {
+					SetPerfMarker(std::format("Defines: {}", SIE::ShaderCache::GetDefinesString(currentShader->shaderType.get(), currentPixelDescriptor)));
+				}
+
 				if (vertexShader && pixelShader) {
 					for (auto* feature : Feature::GetFeatureList()) {
 						if (feature->loaded) {
+							auto hasShaderDefine = feature->HasShaderDefine(currentShader->shaderType.get());
+							if (hasShaderDefine)
+								BeginPerfEvent(feature->GetShortName());
 							feature->Draw(currentShader, currentPixelDescriptor);
+							if (hasShaderDefine)
+								EndPerfEvent();
 						}
 					}
 				}
+				EndPerfEvent();
 			}
 		}
 	}
@@ -442,6 +453,7 @@ void State::SetupResources()
 	context = reinterpret_cast<ID3D11DeviceContext*>(renderer->GetRuntimeData().context);
 	device = reinterpret_cast<ID3D11Device*>(renderer->GetRuntimeData().forwarder);
 	shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+	context->QueryInterface(__uuidof(pPerf), reinterpret_cast<void**>(&pPerf));
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor)
@@ -538,6 +550,21 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 		ID3D11ShaderResourceView* view = shaderDataBuffer->srv.get();
 		context->PSSetShaderResources(127, 1, &view);
 	}
+}
+
+void State::BeginPerfEvent(std::string_view title)
+{
+	pPerf->BeginEvent(std::wstring(title.begin(), title.end()).c_str());
+}
+
+void State::EndPerfEvent()
+{
+	pPerf->EndEvent();
+}
+
+void State::SetPerfMarker(std::string_view title)
+{
+	pPerf->SetMarker(std::wstring(title.begin(), title.end()).c_str());
 }
 
 void State::UpdateSharedData(const RE::BSShader* a_shader, const uint32_t)

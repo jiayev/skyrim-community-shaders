@@ -160,6 +160,8 @@ void SubsurfaceScattering::DrawSSSWrapper(bool)
 	if (!SIE::ShaderCache::Instance().IsEnabled())
 		return;
 
+	State::GetSingleton()->BeginPerfEvent(std::format("DrawSSS: {}", GetShortName()));
+
 	auto& context = State::GetSingleton()->context;
 
 	ID3D11ShaderResourceView* srvs[8];
@@ -209,6 +211,7 @@ void SubsurfaceScattering::DrawSSSWrapper(bool)
 		dsv->Release();
 
 	validMaterial = false;
+	State::GetSingleton()->EndPerfEvent();
 }
 
 void SubsurfaceScattering::DrawSSS()

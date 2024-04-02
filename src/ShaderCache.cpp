@@ -1646,6 +1646,14 @@ namespace SIE
 		return nullptr;
 	}
 
+	std::string ShaderCache::GetDefinesString(RE::BSShader::Type enumType, uint32_t descriptor)
+	{
+		std::array<D3D_SHADER_MACRO, 64> defines{};
+		SIE::SShaderCache::GetShaderDefines(enumType, descriptor, &defines[0]);
+
+		return SIE::SShaderCache::MergeDefinesString(defines, true);
+	}
+
 	uint64_t ShaderCache::GetCachedHitTasks()
 	{
 		return compilationSet.cacheHitTasks;

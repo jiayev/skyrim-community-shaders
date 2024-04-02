@@ -90,6 +90,10 @@ public:
 	void SetupResources();
 	void ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor);
 
+	void BeginPerfEvent(std::string_view title);
+	void EndPerfEvent();
+	void SetPerfMarker(std::string_view title);
+
 	struct PerShader
 	{
 		uint VertexShaderDescriptor;
@@ -125,4 +129,7 @@ public:
 	ID3D11DeviceContext* context = nullptr;
 	ID3D11Device* device = nullptr;
 	RE::BSGraphics::RendererShadowState* shadowState = nullptr;
+
+private:
+	std::shared_ptr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
 };
