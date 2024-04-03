@@ -62,11 +62,11 @@ struct VS_OUTPUT
 	float FogAlpha : TEXCOORD5;
 #endif
 #if defined(MOTIONVECTORS_NORMALS)
-#	if !(defined(MEMBRANE) && (defined(SKINNED) || defined(NORMALS)))
+#	if !defined(LIGHTING) && !(defined(MEMBRANE) && defined(SKINNED)) && !(defined(MEMBRANE) && !defined(SKINNED) && defined(NORMALS))
 	float3 ScreenSpaceNormal : TEXCOORD7;
 #	endif
 	float4 PreviousWorldPosition : POSITION2;
-#	if (defined(MEMBRANE) && defined(SKINNED) && !defined(NORMALS))
+#	if (defined(LIGHTING) || (defined(MEMBRANE) && defined(SKINNED))) && !(defined(MEMBRANE) && defined(NORMALS))
 	float3 ScreenSpaceNormal : TEXCOORD7;
 #	endif
 #endif
@@ -216,14 +216,14 @@ VS_OUTPUT main(VS_INPUT input)
 
 	precise float4 inputPosition = float4(input.Position.xyz, 1.0);
 
-	precise float4x4 world4x4 = float4x4(World[0], World[1], World[2], float4(0, 0, 0, 1));
+	precise row_major float4x4 world4x4 = float4x4(World[0], World[1], World[2], float4(0, 0, 0, 1));
 	precise float3x3 world3x3 =
 		transpose(float3x3(transpose(World)[0], transpose(World)[1], transpose(World)[2]));
 
 #	if defined(SKY_OBJECT)
 	float4x4 viewProj = float4x4(ViewProj[0], ViewProj[1], ViewProj[3], ViewProj[3]);
 #	else
-	float4x4 viewProj = ViewProj;
+	row_major float4x4 viewProj = ViewProj;
 #	endif
 
 #	if defined(SKINNED)
@@ -241,7 +241,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	else
 	precise float4 worldPosition = float4(mul(World, inputPosition), 1);
 	precise float4 previousWorldPosition = float4(mul(PreviousWorld, inputPosition), 1);
-	precise float4x4 modelView = mul(viewProj, world4x4);
+	precise row_major float4x4 modelView = mul(viewProj, world4x4);
 	float4 viewPos = mul(modelView, inputPosition);
 #	endif
 
@@ -324,7 +324,7 @@ VS_OUTPUT main(VS_INPUT input)
 	texCoord.w = input.TexCoord0.y;
 #	elif defined(SOFT)
 	texCoord.w = viewPos.w / SoftMateralVSParams.x;
-#	elif defined(MEMBRANE) && !defined(NORMALS)
+#	elif defined(MEMBRANE) && (!defined(NORMALS) || defined(ALPHA_TEST))
 	texCoord.w = input.TexCoord0.y;
 #	endif
 #	if defined(PROJECTED_UV) && !defined(NORMALS)
@@ -335,7 +335,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float falloff = saturate((-FalloffData.x + abs(WdotN)) / (FalloffData.y - FalloffData.x));
 	float falloffParam = (falloff * falloff) * (3 - falloff * 2);
 	texCoord.z = lerp(FalloffData.z, FalloffData.w, falloffParam);
-#	elif defined(MEMBRANE) && !defined(NORMALS)
+#	elif defined(MEMBRANE) && (!defined(NORMALS) || defined(ALPHA_TEST))
 	texCoord.z = input.TexCoord0.x;
 #	endif
 	vsout.TexCoord0 = texCoord;
@@ -385,8 +385,8 @@ VS_OUTPUT main(VS_INPUT input)
 #		elif defined(FALLOFF) || (defined(SKINNED) && defined(MEMBRANE))
 	float3 screenSpaceNormal = worldNormal;
 #		else
-	float4x3 modelScreen = mul(ScreenProj, world3x3);
-	float3 screenSpaceNormal = normalize(mul(modelScreen, normal)).xyz;
+	float4x4 modelScreen = mul(ScreenProj, world4x4);
+	float3 screenSpaceNormal = normalize(mul(modelScreen, float4(normal, 0))).xyz;
 #		endif
 
 	vsout.ScreenSpaceNormal = screenSpaceNormal;
@@ -490,13 +490,13 @@ cbuffer PerGeometry : register(b2)
 #	if defined(LIGHTING)
 float3 GetLightingColor(float3 msPosition)
 {
-	float4 lightDistanceSquared = (PLightPositionY - msPosition.yyyy) * (PLightPositionY - msPosition.yyyy) + (PLightPositionX - msPosition.xxxx) * (PLightPositionX - msPosition.xxxx) + (PLightPositionZ - msPosition.zzzz) * (PLightPositionZ - msPosition.zzzz);
+	float4 lightDistanceSquared = (PLightPositionX - msPosition.xxxx) * (PLightPositionX - msPosition.xxxx) + (PLightPositionY - msPosition.yyyy) * (PLightPositionY - msPosition.yyyy) + (PLightPositionZ - msPosition.zzzz) * (PLightPositionZ - msPosition.zzzz);
 	float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 
 	float3 color = DLightColor.xyz;
 	color.x += dot(PLightColorR * lightFadeMul, 1.0.xxxx);
-	color.z += dot(PLightColorB * lightFadeMul, 1.0.xxxx);
 	color.y += dot(PLightColorG * lightFadeMul, 1.0.xxxx);
+	color.z += dot(PLightColorB * lightFadeMul, 1.0.xxxx);
 
 	return color;
 }
@@ -506,10 +506,13 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
-	float4 fogMul = float4(input.FogAlpha.xxx, 1);
+	float4 fogMul = 1;
+#	if !defined(MULTBLEND)
+	fogMul.xyz = input.FogAlpha;
+#	endif
 
 #	if defined(MEMBRANE)
-#		if !defined(MOTIONVECTORS_NORMALS)
+#		if !defined(MOTIONVECTORS_NORMALS) && defined(ALPHA_TEST)
 	float noiseAlpha = TexNoiseSampler.Sample(SampNoiseSampler, input.TexCoord0.zw).w;
 #			if defined(VC)
 	noiseAlpha *= input.Color.w;
@@ -517,8 +520,6 @@ PS_OUTPUT main(PS_INPUT input)
 	if (noiseAlpha - AlphaTestRef.x < 0) {
 		discard;
 	}
-#		endif
-#		if defined(ALPHA_TEST)
 #		endif
 
 #		if defined(MOTIONVECTORS_NORMALS) && defined(MEMBRANE) && !defined(SKINNED) && defined(NORMALS)
@@ -534,44 +535,18 @@ PS_OUTPUT main(PS_INPUT input)
 	float NdotV = dot(normal, input.ViewVector.xyz);
 	float membraneColorMul = pow(saturate(1 - NdotV), MembraneVars.x);
 	float4 membraneColor = MembraneRimColor * membraneColorMul;
+#	elif defined(PROJECTED_UV) && defined(NORMALS)
+	float2 noiseTexCoord = 0.00333333341 * input.TexCoord0.xy;
+	float noise = TexNoiseSampler.Sample(SampNoiseSampler, noiseTexCoord).x * 0.2 + 0.4;
+	if (dot(input.TBN0, input.TBN1) - noise < 0) {
+		discard;
+	}
 #	endif
 
 	float softMul = 1;
 #	if defined(SOFT)
 	float depth = TexDepthSamplerEffect.Load(int3(input.Position.xy, 0)).x;
 	softMul = saturate(-input.TexCoord0.w + LightingInfluence.y / ((1 - depth) * CameraData.z + CameraData.y));
-#	endif
-
-#	if defined(MEMBRANE)
-	float4 baseColorMul = float4(1, 1, 1, 1);
-#	else
-	float4 baseColorMul = BaseColor;
-#		if defined(VC)
-	baseColorMul *= input.Color;
-#		endif
-#	endif
-
-	float4 baseTexColor = float4(1, 1, 1, 1);
-	float4 baseColor = float4(1, 1, 1, 1);
-#	if defined(TEXTURE)
-	baseTexColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-	baseColor *= baseTexColor;
-	if (shaderDescriptors[0].PixelShaderDescriptor & _IgnoreTexAlpha || shaderDescriptors[0].PixelShaderDescriptor & _GrayscaleToAlpha)
-		baseColor.w = 1;
-#	endif
-#	if defined(MEMBRANE)
-	baseColor.w *= input.ViewVector.w;
-#	else
-	baseColor.w *= input.TexCoord0.z;
-#	endif
-
-	baseColor *= baseColorMul;
-	baseColor.w *= softMul;
-
-#	if defined(SOFT)
-	if (baseColor.w - 0.003 < 0) {
-		discard;
-	}
 #	endif
 
 	float lightingInfluence = LightingInfluence.x;
@@ -609,28 +584,75 @@ PS_OUTPUT main(PS_INPUT input)
 	lightingInfluence = 0;
 #	endif
 
-	if (shaderDescriptors[0].PixelShaderDescriptor & _GrayscaleToColor)
-		baseColor.xyz = BaseColorScale.x * TexGrayscaleSampler.Sample(SampGrayscaleSampler, float2(baseTexColor.y, baseColorMul.x)).xyz;
+	float4 baseTexColor = float4(1, 1, 1, 1);
+	float4 baseColor = float4(1, 1, 1, 1);
+#	if defined(TEXTURE) || (defined(ADDBLEND) && defined(VC))
+	baseTexColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
+	baseColor *= baseTexColor;
+	if (shaderDescriptors[0].PixelShaderDescriptor & _IgnoreTexAlpha || shaderDescriptors[0].PixelShaderDescriptor & _GrayscaleToAlpha)
+		baseColor.w = 1;
+#	endif
 
-	float alpha = PropertyColor.w * baseColor.w;
+#	if defined(MEMBRANE)
+	float4 baseColorMul = float4(1, 1, 1, 1);
+#	else
+	float4 baseColorMul = BaseColor;
+#		if defined(VC)
+	baseColorMul *= input.Color;
+#		endif
+#	endif
 
-	if (shaderDescriptors[0].PixelShaderDescriptor & _GrayscaleToAlpha)
-		alpha = TexGrayscaleSampler.Sample(SampGrayscaleSampler, float2(baseTexColor.w, alpha)).w;
+#	if defined(MEMBRANE)
+	baseColor.w *= input.ViewVector.w;
+#	else
+	baseColor.w *= input.TexCoord0.z;
+#	endif
+
+	baseColor = baseColorMul * baseColor;
+	baseColor.w *= softMul;
+
+#	if defined(SOFT) && !(defined(FALLOFF) && defined(MULTBLEND))
+	if (baseColor.w - 0.003 < 0) {
+		discard;
+	}
+#	endif
+
+	float alpha = baseColor.w;
 
 #	if defined(BLOOD)
-	baseColor.w = baseColor.y;
+	alpha = baseColor.y;
 	float deltaY = saturate(baseColor.y - AlphaTestRef.x);
 	float bloodMul = baseColor.z;
+#		if defined(VC)
+	bloodMul *= input.Color.w;
+#		endif
 	if (deltaY < AlphaTestRef.y) {
 		bloodMul *= (deltaY / AlphaTestRef.y);
 	}
 	baseColor.xyz = saturate(float3(2, 1, 1) - bloodMul.xxx) * (-bloodMul * AlphaTestRef.z + 1);
 #	endif
 
+	alpha *= PropertyColor.w;
+
+	float baseColorScale = BaseColorScale.x;
+
 #	if defined(MEMBRANE)
 	baseColor.xyz = (PropertyColor.xyz + baseColor.xyz) * alpha + membraneColor.xyz * membraneColor.w;
 	alpha += membraneColor.w;
+	baseColorScale = MembraneVars.z;
 #	endif
+
+	if (shaderDescriptors[0].PixelShaderDescriptor & _GrayscaleToAlpha)
+		alpha = TexGrayscaleSampler.Sample(SampGrayscaleSampler, float2(baseTexColor.w, alpha)).w;
+
+	[branch] if (shaderDescriptors[0].PixelShaderDescriptor & _GrayscaleToColor)
+	{
+		float2 grayscaleToColorUv = float2(baseTexColor.y, baseColorMul.x);
+#	if defined(MEMBRANE)
+		grayscaleToColorUv.y = PropertyColor.x;
+#	endif
+		baseColor.xyz = BaseColorScale.x * TexGrayscaleSampler.Sample(SampGrayscaleSampler, grayscaleToColorUv).xyz;
+	}
 
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence.xxx);
 
@@ -655,7 +677,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 finalColor = float4(blendedColor, alpha);
 #	if defined(MULTBLEND_DECAL)
 	finalColor.xyz *= alpha;
-#	elif !defined(MULTBLEND)
+#	else
 	finalColor *= fogMul;
 #	endif
 	psout.Color = finalColor;
