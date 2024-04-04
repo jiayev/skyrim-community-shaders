@@ -339,6 +339,7 @@ namespace SIE
 	class UpdateListener : public efsw::FileWatchListener
 	{
 	public:
+		void UpdateCache(const std::filesystem::path& filePath, SIE::ShaderCache& cache, bool& clearCache, bool& retFlag);
 		void processQueue();
 		void handleFileAction(efsw::WatchID, const std::string& dir, const std::string& filename, efsw::Action action, std::string) override;
 
