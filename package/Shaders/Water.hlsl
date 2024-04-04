@@ -575,7 +575,8 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 #			endif
 
 #			if defined(WATER_CAUSTICS)
-	refractionColor *= lerp(1.0, caustics, refractionMul);
+	if (perPassWaterCaustics[0].EnableWaterCaustics)
+		refractionColor *= lerp(1.0, caustics, refractionMul);
 #			endif
 
 	return lerp(refractionColor * WaterParams.w, refractionDiffuseColor, refractionMul);

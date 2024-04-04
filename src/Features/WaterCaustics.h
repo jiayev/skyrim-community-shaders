@@ -11,6 +11,20 @@ public:
 		return &singleton;
 	}
 
+	struct Settings
+	{
+		uint32_t EnableWaterCaustics = 1;
+	};
+
+	struct PerPass
+	{
+		Settings settings;
+	};
+
+	Settings settings;
+
+	std::unique_ptr<Buffer> perPass = nullptr;
+
 	ID3D11ShaderResourceView* causticsView;
 
 	virtual inline std::string GetName() { return "Water Caustics"; }

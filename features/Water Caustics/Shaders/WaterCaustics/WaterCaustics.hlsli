@@ -1,3 +1,10 @@
+struct PerPassWaterCaustics
+{
+	bool EnableWaterCaustics;
+	float pad[3];
+};
+
+StructuredBuffer<PerPassWaterCaustics> perPassWaterCaustics : register(t71);
 
 #if defined(WATER)
 
