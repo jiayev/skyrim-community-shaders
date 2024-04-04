@@ -130,16 +130,22 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
 	set(AIO_DIR "${CMAKE_CURRENT_BINARY_DIR}/aio")
 	message("Copying package folder with dll/pdb with all features to ${AIO_DIR}")
 	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E remove_directory "${AIO_DIR}"
+		COMMAND ${CMAKE_COMMAND} -E make_directory "${AIO_DIR}/SKSE/Plugins"
 		COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/package "${AIO_DIR}"
+		COMMAND ${CMAKE_COMMAND} -E copy_directory ${FEATURE_PATHS} "${AIO_DIR}"
 		COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${PROJECT_NAME}> "${AIO_DIR}/SKSE/Plugins/"
 		COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_PDB_FILE:${PROJECT_NAME}> "${AIO_DIR}/SKSE/Plugins/"
 	)
 
-	foreach(FEATURE_PATH ${FEATURE_PATHS})
-		add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_directory ${FEATURE_PATH} "${AIO_DIR}"
-		)
-	endforeach()
+	add_custom_command(
+		OUTPUT copy_shaders.stamp
+		COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/package "${AIO_DIR}"
+		COMMAND ${CMAKE_COMMAND} -E copy_directory ${FEATURE_PATHS} "${AIO_DIR}"
+		COMMAND ${CMAKE_COMMAND} -E touch copy_shaders.stamp
+		DEPENDS ${HLSL_FILES}
+	)
+
 endif()
 
 # Automatic deployment to CommunityShaders output directory.
@@ -149,8 +155,26 @@ if(AUTO_PLUGIN_DEPLOYMENT)
 		add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 			COMMAND ${CMAKE_COMMAND} -E copy_directory ${AIO_DIR} "${DEPLOY_TARGET}"
 		)
+
+		string(MD5 DEPLOY_TARGET_HASH ${DEPLOY_TARGET})
+
+		add_custom_command(
+			OUTPUT ${DEPLOY_TARGET_HASH}.stamp
+			COMMAND ${CMAKE_COMMAND} -E copy_directory "${AIO_DIR}/Shaders" "${DEPLOY_TARGET}/Shaders"
+			COMMAND ${CMAKE_COMMAND} -E touch ${DEPLOY_TARGET_HASH}.stamp
+			DEPENDS copy_shaders.stamp
+		)
+
+		list(APPEND DEPLOY_TARGET_HASHES ${DEPLOY_TARGET_HASH}.stamp)
+
 	endforeach()
 
+	add_custom_target(COPY_SHADERS ALL
+		DEPENDS
+			copy_shaders.stamp
+			${DEPLOY_TARGET_HASHES}
+	)
+	
 	if(NOT DEFINED ENV{CommunityShadersOutputDir})
 		message("When using AUTO_PLUGIN_DEPLOYMENT option, you need to set environment variable 'CommunityShadersOutputDir'")
 	endif()
@@ -159,9 +183,9 @@ endif()
 # Zip base CommunityShaders and all addons as their own 7z in dist folder
 if(ZIP_TO_DIST)
 	set(ZIP_DIR "${CMAKE_CURRENT_BINARY_DIR}/zip")
-	add_custom_target(build-time-make-directory ALL
+	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}" ${CMAKE_SOURCE_DIR}/dist
-		COMMAND ${CMAKE_COMMAND} -E make_directory "${ZIP_DIR}" "${ZIP_DIR}/SKSE/Plugins" ${CMAKE_SOURCE_DIR}/dist
+		COMMAND ${CMAKE_COMMAND} -E make_directory "${ZIP_DIR}/SKSE/Plugins" ${CMAKE_SOURCE_DIR}/dist
 	)
 
 	message("Copying base CommunityShader into ${ZIP_DIR}.")
@@ -173,7 +197,7 @@ if(ZIP_TO_DIST)
 
 	set(TARGET_ZIP "${PROJECT_NAME}-${UTC_NOW}.7z")
 	message("Zipping ${ZIP_DIR} to ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP}")
-	ADD_CUSTOM_COMMAND(TARGET ${PROJECT_NAME} POST_BUILD
+	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E tar cf ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP} --format=7zip -- .
 		WORKING_DIRECTORY ${ZIP_DIR}
 	)
@@ -191,15 +215,15 @@ endif()
 # Create a AIO zip for easier testing
 if(AIO_ZIP_TO_DIST)
 	if(NOT ZIP_TO_DIST)
-		add_custom_target(build-time-make-directory ALL
-			COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}" ${CMAKE_SOURCE_DIR}/dist
-			COMMAND ${CMAKE_COMMAND} -E make_directory "${ZIP_DIR}" ${CMAKE_SOURCE_DIR}/dist
+		add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_SOURCE_DIR}/dist
+			COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/dist
 		)
 	endif()
 
 	set(TARGET_AIO_ZIP "${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
 	message("Zipping ${AIO_DIR} to ${CMAKE_SOURCE_DIR}/dist/${TARGET_AIO_ZIP}")
-	ADD_CUSTOM_COMMAND(TARGET ${PROJECT_NAME} POST_BUILD
+	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E tar cf ${CMAKE_SOURCE_DIR}/dist/${TARGET_AIO_ZIP} --format=7zip -- .
 		WORKING_DIRECTORY ${AIO_DIR}
 	)

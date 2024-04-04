@@ -51,6 +51,8 @@ function(add_cxx_files TARGET)
 		"Package/**/*.hlsli"
 	)
 
+	set(HLSL_FILES ${HLSL_FILES} PARENT_SCOPE)
+
 	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/
 		PREFIX "HLSL Files"
 		FILES ${HLSL_FILES})

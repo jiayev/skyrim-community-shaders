@@ -3,3 +3,4 @@ dist/
 .vs*/
 CMakeUserPresets.json
 shadertoolsconfig.json
+.vscode
