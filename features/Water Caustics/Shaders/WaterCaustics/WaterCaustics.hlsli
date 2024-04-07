@@ -4,11 +4,8 @@ struct PerPassWaterCaustics
 	float pad[3];
 };
 
-StructuredBuffer<PerPassWaterCaustics> perPassWaterCaustics : register(t71);
-
-#if defined(WATER)
-
 Texture2D<float4> WaterCaustics : register(t70);
+StructuredBuffer<PerPassWaterCaustics> perPassWaterCaustics : register(t71);
 
 float2 PanCausticsUV(float2 uv, float speed, float tiling)
 {
@@ -43,29 +40,7 @@ float3 ComputeWaterCaustics(float2 uv)
 	return caustics;
 }
 
-#else
-
-Texture2D<float4> WaterCaustics : register(t70);
-
-float2 PanCausticsUV(float2 uv, float speed, float tiling)
-{
-	return (float2(1, 0) * lightingData[0].Timer * speed) + (uv * tiling);
-}
-
-float3 SampleCaustics(float2 uv, float split)
-{
-	float2 uv1 = uv + float2(split, split);
-	float2 uv2 = uv + float2(split, -split);
-	float2 uv3 = uv + float2(-split, -split);
-
-	float r = WaterCaustics.Sample(SampColorSampler, uv1).r;
-	float g = WaterCaustics.Sample(SampColorSampler, uv2).r;
-	float b = WaterCaustics.Sample(SampColorSampler, uv3).r;
-
-	return float3(r, g, b);
-}
-
-float3 ComputeWaterCaustics(float3 waterHeight, float3 worldPosition, float3 worldSpaceNormal)
+float3 ComputeWaterCaustics(float waterHeight, float3 worldPosition, float3 worldSpaceNormal)
 {
 	float causticsDistToWater = waterHeight - worldPosition.z;
 	float shoreFactorCaustics = saturate(causticsDistToWater / 64.0);
@@ -99,5 +74,3 @@ float3 ComputeWaterCaustics(float3 waterHeight, float3 worldPosition, float3 wor
 	caustics = lerp(causticsLow, caustics, upAmount);
 	return lerp(1.0, caustics, shoreFactorCaustics * upAmount);
 }
-
-#endif

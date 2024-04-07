@@ -1004,9 +1004,9 @@ bool LightLimitFix::HasShaderDefine(RE::BSShader::Type shaderType)
 	switch (shaderType) {
 	case RE::BSShader::Type::Lighting:
 	case RE::BSShader::Type::Grass:
+	case RE::BSShader::Type::Water:
 		return true;
 	case RE::BSShader::Type::Effect:
-	case RE::BSShader::Type::Water:
 		return !REL::Module::IsVR();
 	default:
 		return false;
