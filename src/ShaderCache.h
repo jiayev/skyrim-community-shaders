@@ -115,6 +115,7 @@ namespace SIE
 				       type == RE::BSShader::Type::Water ||
 				       type == RE::BSShader::Type::Effect;
 			return type == RE::BSShader::Type::Lighting ||
+			       type == RE::BSShader::Type::DistantTree ||
 			       type == RE::BSShader::Type::Water ||
 			       type == RE::BSShader::Type::Grass;
 		}

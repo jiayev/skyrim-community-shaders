@@ -119,6 +119,7 @@ void DistantTreeLighting::ModifyDistantTree(const RE::BSShader*, const uint32_t 
 		context->VSGetConstantBuffers(2, 1, buffers);  // buffers[0]
 		buffers[1] = perPass->CB();
 		context->VSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
+		context->PSGetConstantBuffers(2, 1, buffers);  // buffers[0]
 		context->PSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
 	}
 }
