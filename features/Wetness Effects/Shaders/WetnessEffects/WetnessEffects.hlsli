@@ -43,6 +43,7 @@ struct PerPassWetnessEffects
 	float ChaoticRippleStrength;
 	float ChaoticRippleScaleRcp;
 	float ChaoticRippleSpeed;
+	float pad[3];
 };
 
 StructuredBuffer<PerPassWetnessEffects> perPassWetnessEffects : register(t22);

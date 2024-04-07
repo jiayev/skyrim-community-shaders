@@ -68,7 +68,7 @@ public:
 		REX::W32::XMFLOAT4X4 PrecipProj;
 		Settings settings;
 
-		float pad[4 - (sizeof(Settings) / 4 + 16) % 4];
+		float pad[3];
 	};
 
 	Settings settings;
