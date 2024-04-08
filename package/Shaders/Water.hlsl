@@ -668,11 +668,7 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	float depth = GetScreenDepthWater(screenPosition);
 	float2 refractionScreenPosition = DynamicResolutionParams1.xy * (refractionUvRaw / VPOSOffset.xy);
 	float refractionDepth = GetScreenDepthWater(refractionScreenPosition);
-#				if !defined(VR)
 	float refractionDepthMul = length(float3((((VPOSOffset.zw + refractionUvRaw) * 2 - 1)) * refractionDepth / ProjData.xy, refractionDepth));
-#				else
-	float refractionDepthMul = calculateDepthMultfromUV(ConvertFromStereoUV(VPOSOffset.zw + refractionUvRaw, a_eyeIndex, 1), refractionDepth, a_eyeIndex);
-#				endif  //VR
 
 	float3 refractionDepthAdjustedViewDirection = -viewDirection * refractionDepthMul;
 	float refractionViewSurfaceAngle = dot(refractionDepthAdjustedViewDirection, ReflectPlane[a_eyeIndex].xyz);
