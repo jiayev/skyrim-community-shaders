@@ -1035,6 +1035,10 @@ namespace SIE
 			std::transform(path.begin(), path.end(), std::back_inserter(strPath), [](wchar_t c) {
 				return (char)c;
 			});
+			if (!std::filesystem::exists(path)) {
+				logger::error("Failed to compile {} shader {}::{}: {} does not exist", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor, strPath);
+				return nullptr;
+			}
 			logger::debug("Compiling {} {}:{}:{:X} to {}", strPath, magic_enum::enum_name(type), magic_enum::enum_name(shaderClass), descriptor, MergeDefinesString(defines));
 
 			// compile shaders
@@ -1237,7 +1241,7 @@ namespace SIE
 		}
 
 		auto state = State::GetSingleton();
-		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)))) {
+		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader) && ShaderCache::IsShaderSourceAvailable(shader)))) {
 			return nullptr;
 		}
 
@@ -1278,8 +1282,7 @@ namespace SIE
 		}
 
 		auto state = State::GetSingleton();
-		if (!(ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() &&
-															state->IsShaderEnabled(shader))) {
+		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader) && ShaderCache::IsShaderSourceAvailable(shader)))) {
 			return nullptr;
 		}
 
@@ -1412,6 +1415,17 @@ namespace SIE
 	std::string ShaderCache::GetShaderStatsString(bool a_timeOnly)
 	{
 		return compilationSet.GetStatsString(a_timeOnly);
+	}
+
+	inline bool ShaderCache::IsShaderSourceAvailable(const RE::BSShader& shader)
+	{
+		const std::wstring path = SIE::SShaderCache::GetShaderPath(shader.fxpFilename);
+
+		std::string strPath;
+		std::transform(path.begin(), path.end(), std::back_inserter(strPath), [](wchar_t c) {
+			return (char)c;
+		});
+		return std::filesystem::exists(path);
 	}
 
 	bool ShaderCache::IsCompiling()

@@ -125,6 +125,8 @@ namespace SIE
 			return IsSupportedShader(shader.shaderType.get());
 		}
 
+		inline static bool IsShaderSourceAvailable(const RE::BSShader& shader);
+
 		bool IsCompiling();
 		bool IsEnabled() const;
 		void SetEnabled(bool value);
