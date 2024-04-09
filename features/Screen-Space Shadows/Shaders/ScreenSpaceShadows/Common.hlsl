@@ -1,4 +1,5 @@
-#include "../Common/VR.hlsl"
+#include "../Common/Constants.hlsli"
+#include "../Common/VR.hlsli"
 
 RWTexture2D<float> OcclusionRW : register(u0);
 
@@ -47,12 +48,4 @@ float2 ViewToUV(float3 position, bool is_position, uint a_eyeIndex)
 {
 	float4 uv = mul(ProjMatrix[a_eyeIndex], float4(position, (float)is_position));
 	return (uv.xy / uv.w) * float2(0.5f, -0.5f) + 0.5f;
-}
-
-uint GetEyeIndexFromTexCoord(float2 texCoord)
-{
-#ifdef VR
-	return (texCoord.x >= 0.5) ? 1 : 0;
-#endif  // VR
-	return 0;
 }

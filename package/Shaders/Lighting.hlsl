@@ -176,20 +176,6 @@ cbuffer VS_PerFrame : register(b12)
 #	endif      // VR
 };
 
-#	ifdef VR
-cbuffer cb13 : register(b13)
-{
-	float AlphaThreshold : packoffset(c0);
-	float cb13 : packoffset(c0.y);
-	float2 EyeOffsetScale : packoffset(c0.z);
-	float4 EyeClipEdge[2] : packoffset(c1);
-}
-#	endif  // VR
-
-const static float4x4 M_IdentityMatrix = {
-	{ 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 }, { 0, 0, 0, 1 }
-};
-
 #	if defined(TREE_ANIM)
 float2 GetTreeShiftVector(float4 position, float4 color)
 {
@@ -259,12 +245,11 @@ VS_OUTPUT main(VS_INPUT input)
 
 	precise float4 inputPosition = float4(input.Position.xyz, 1.0);
 
-#	if !defined(VR)
-	uint eyeIndex = 0;
-#	else   // VR
-	uint eyeIndex = cb13 * (input.InstanceID.x & 1);
-#	endif  // VR
-
+	uint eyeIndex = GetEyeIndexVS(
+#	if defined(VR)
+		input.InstanceID
+#	endif
+	);
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
 	float4 rawWorldPosition = float4(mul(World[eyeIndex], inputPosition), 1);
 	float worldXShift = rawWorldPosition.x - HighDetailRange[eyeIndex].x;
@@ -460,27 +445,13 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.WorldSpace = false;
 #	endif
 
-#	ifdef VR
-	float4 r0;
-	float4 projSpacePosition = vsout.Position;
-	r0.xyzw = 0;
-	if (0 < cb13) {
-		r0.yz = dot(projSpacePosition, EyeClipEdge[eyeIndex]);  // projSpacePosition is clipPos
-	} else {
-		r0.yz = float2(1, 1);
-	}
-
-	r0.w = 2 + -cb13;
-	r0.x = dot(EyeOffsetScale, M_IdentityMatrix[eyeIndex].xy);
-	r0.xw = r0.xw * projSpacePosition.wx;
-	r0.x = cb13 * r0.x;
-
-	vsout.Position.x = r0.w * 0.5 + r0.x;
-	vsout.Position.yzw = projSpacePosition.yzw;
-
-	vsout.ClipDistance.x = r0.z;
-	vsout.CullDistance.x = r0.y;
+#	if defined(VR)
+	VR_OUTPUT VRout = GetVRVSOutput(vsout.Position, eyeIndex);
+	vsout.Position = VRout.VRPosition;
+	vsout.ClipDistance.x = VRout.ClipDistance;
+	vsout.CullDistance.x = VRout.CullDistance;
 #	endif  // VR
+
 	return vsout;
 }
 #endif  // VSHADER
@@ -712,19 +683,9 @@ cbuffer PerGeometry : register(b2)
 #	if !defined(VR)
 cbuffer AlphaTestRefBuffer : register(b11)
 {
-	float AlphaThreshold : packoffset(c0);
+	float AlphaTestRefRS : packoffset(c0);
 }
 #	endif
-
-#	ifdef VR
-cbuffer cb13 : register(b13)
-{
-	float AlphaThreshold : packoffset(c0);
-	float cb13 : packoffset(c0.y);
-	float2 EyeOffsetScale : packoffset(c0.z);
-	float4 EyeClipEdge[2] : packoffset(c1);
-}
-#	endif  // VR
 
 float GetSoftLightMultiplier(float angle)
 {
@@ -1027,17 +988,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			   : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;
-
-#	if !defined(VR)
-	uint eyeIndex = 0;
-#	else
-	float4 r0, r1, r3, stereoUV;
-	stereoUV.xy = input.Position.xy * VPOSOffset.xy + VPOSOffset.zw;
-	stereoUV.x = DynamicResolutionParams2.x * stereoUV.x;
-	stereoUV.x = (stereoUV.x >= 0.5);
-	uint eyeIndex = (uint)(((int)((uint)cb13)) * (int)stereoUV.x);
-#	endif
-
+	uint eyeIndex = GetEyeIndexPS(input.Position, VPOSOffset);
 #	if defined(SKINNED) || !defined(MODELSPACENORMALS)
 	float3x3 tbn = float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz);
 	float3x3 tbnTr = transpose(tbn);
@@ -2086,7 +2037,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 	alpha = saturate(1.05 * alpha);
 #			endif  // DEPTH_WRITE_DECALS
-	if (alpha - AlphaThreshold < 0) {
+	if (alpha - AlphaTestRefRS < 0) {
 		discard;
 	}
 #		endif      // DO_ALPHA_TEST

@@ -1,3 +1,13 @@
+#ifdef VR
+cbuffer VRValues : register(b13)
+{
+	float AlphaTestRefRS : packoffset(c0);
+	float StereoEnabled : packoffset(c0.y);
+	float2 EyeOffsetScale : packoffset(c0.z);
+	float4 EyeClipEdge[2] : packoffset(c1);
+}
+#endif
+
 /**
 Converts to the eye specific uv [0,1].
 In VR, texture buffers include the left and right eye in the same buffer. Flat
@@ -56,3 +66,92 @@ float2 ConvertToStereoSP(float2 screenPosition, uint a_eyeIndex, float2 a_resolu
 	screenPosition.x /= a_resolution.x;
 	return ConvertToStereoUV(screenPosition, a_eyeIndex) * a_resolution;
 }
+
+#ifdef PSHADER
+/**
+Gets the eyeIndex for PSHADER
+@returns eyeIndex (0 left, 1 right)
+*/
+uint GetEyeIndexPS(float4 position, float4 offset = 0.0.xxxx)
+{
+#	if !defined(VR)
+	uint eyeIndex = 0;
+#	else
+	float4 stereoUV;
+	stereoUV.xy = position.xy * offset.xy + offset.zw;
+	stereoUV.x = DynamicResolutionParams2.x * stereoUV.x;
+	stereoUV.x = (stereoUV.x >= 0.5);
+	uint eyeIndex = (uint)(((int)((uint)StereoEnabled)) * (int)stereoUV.x);
+#	endif
+	return eyeIndex;
+}
+#endif  //PSHADER
+
+/**
+Gets the eyeIndex for Compute Shaders
+@param texCoord Texcoord on the screen [0,1]
+@returns eyeIndex (0 left, 1 right)
+*/
+uint GetEyeIndexFromTexCoord(float2 texCoord)
+{
+#ifdef VR
+	return (texCoord.x >= 0.5) ? 1 : 0;
+#endif  // VR
+	return 0;
+}
+
+struct VR_OUTPUT
+{
+	float4 VRPosition;
+	float ClipDistance;
+	float CullDistance;
+};
+
+#ifdef VSHADER
+/**
+Gets the eyeIndex for VSHADER
+@returns eyeIndex (0 left, 1 right)
+*/
+uint GetEyeIndexVS(uint instanceID = 0)
+{
+#	ifdef VR
+	return StereoEnabled * (instanceID & 1);
+#	endif  // VR
+	return 0;
+}
+
+/**
+Gets VR Output
+@param texCoord Texcoord on the screen [0,1]
+@param a_eyeIndex The eyeIndex; 0 is left, 1 is right
+@returns VR_OUTPUT with VR values
+*/
+VR_OUTPUT GetVRVSOutput(float4 clipPos, uint a_eyeIndex = 0)
+{
+	VR_OUTPUT vsout;
+	vsout.VRPosition = 0.0.xxxx;
+	vsout.ClipDistance = 0.0;
+	vsout.CullDistance = 0.0;
+#	ifdef VR
+	float4 r0;
+	r0.xyzw = 0;
+	if (0 < StereoEnabled) {
+		r0.yz = dot(clipPos, EyeClipEdge[a_eyeIndex]);
+	} else {
+		r0.yz = float2(1, 1);
+	}
+
+	r0.w = 2 + -StereoEnabled;
+	r0.x = dot(EyeOffsetScale, M_IdentityMatrix[a_eyeIndex].xy);
+	r0.xw = r0.xw * clipPos.wx;
+	r0.x = StereoEnabled * r0.x;
+
+	vsout.VRPosition.x = r0.w * 0.5 + r0.x;
+	vsout.VRPosition.yzw = clipPos.yzw;
+
+	vsout.ClipDistance.x = r0.z;
+	vsout.CullDistance.x = r0.y;
+#	endif  // VR
+	return vsout;
+}
+#endif

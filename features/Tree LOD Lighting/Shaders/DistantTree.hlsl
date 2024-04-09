@@ -3,20 +3,6 @@
 #include "Common/LightingData.hlsl"
 #include "Common/MotionBlur.hlsl"
 
-#ifdef VR
-cbuffer VRValues : register(b13)
-{
-	float AlphaTestRefRS : packoffset(c0);
-	float StereoEnabled : packoffset(c0.y);
-	float2 EyeOffsetScale : packoffset(c0.z);
-	float4 EyeClipEdge[2] : packoffset(c1);
-}
-
-const static float4x4 M_IdentityMatrix = {
-	{ 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 }, { 0, 0, 0, 1 }
-};
-#endif  // VR
-
 cbuffer TreePerFrame : register(b3)
 {
 	row_major float3x4 DirectionalAmbient;
@@ -89,11 +75,11 @@ cbuffer PerGeometry : register(b2)
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
-#	if !defined(VR)
-	uint eyeIndex = 0;
-#	else   // VR
-	uint eyeIndex = StereoEnabled * (input.InstanceID.x & 1);
-#	endif  // VR
+	uint eyeIndex = GetEyeIndexVS(
+#	if defined(VR)
+		input.InstanceID
+#	endif
+	);
 
 	float3 scaledModelPosition = input.InstanceData1.www * input.Position.xyz;
 	float3 adjustedModelPosition = 0.0.xxx;
@@ -126,28 +112,10 @@ VS_OUTPUT main(VS_INPUT input)
 #	ifdef VR
 	vsout.World[1] = World[1];
 	vsout.EyeIndex = eyeIndex;
-#	endif  // VR
-
-#	ifdef VR
-	float4 r0;
-	float4 projSpacePosition = vsout.Position;
-	r0.xyzw = 0;
-	if (0 < StereoEnabled) {
-		r0.yz = dot(projSpacePosition, EyeClipEdge[eyeIndex]);  // projSpacePosition is clipPos
-	} else {
-		r0.yz = float2(1, 1);
-	}
-
-	r0.w = 2 + -StereoEnabled;
-	r0.x = dot(EyeOffsetScale, M_IdentityMatrix[eyeIndex].xy);
-	r0.xw = r0.xw * projSpacePosition.wx;
-	r0.x = StereoEnabled * r0.x;
-
-	vsout.Position.x = r0.w * 0.5 + r0.x;
-	vsout.Position.yzw = projSpacePosition.yzw;
-
-	vsout.ClipDistance.x = r0.z;
-	vsout.CullDistance.x = r0.y;
+	VR_OUTPUT VRout = GetVRVSOutput(vsout.Position, eyeIndex);
+	vsout.Position = VRout.VRPosition;
+	vsout.ClipDistance.x = VRout.ClipDistance;
+	vsout.CullDistance.x = VRout.CullDistance;
 #	endif  // VR
 	return vsout;
 }
