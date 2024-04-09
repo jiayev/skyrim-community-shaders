@@ -17,10 +17,10 @@ float RGBToLuminance2(float3 color)
 
 float3 sRGB2Lin(float3 color)
 {
-	return color > 0.04045 ? pow(color / 1.055 + 0.055 / 1.055, 2.4) : color / 12.92;
+	return select(color > 0.04045, pow(color / 1.055 + 0.055 / 1.055, 2.4), color / 12.92);
 }
 
 float3 Lin2sRGB(float3 color)
 {
-	return color > 0.0031308 ? 1.055 * pow(color, 1.0 / 2.4) - 0.055 : 12.92 * color;
+	return select(color > 0.0031308, 1.055 * pow(color, 1.0 / 2.4) - 0.055, 12.92 * color);
 }
