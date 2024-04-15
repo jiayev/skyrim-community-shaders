@@ -157,7 +157,7 @@ float4 SSSSBlurCS(
 		// Apply randomized rotation
 		offset = mul(offset, rotationMatrix);
 
-		uint2 coords = DTid.xy + uint2(offset + 0.5);
+		uint2 coords = DTid.xy + int2(offset + 0.5);
 
 		// Clamp for dynamic resolution
 		coords = clamp(coords, minCoord, maxCoord);
