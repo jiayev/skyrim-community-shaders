@@ -121,6 +121,18 @@ target_sources(
 )
 
 # #######################################################################################################################
+# # clang-format
+# #######################################################################################################################
+
+find_program(CLANG_FORMAT_PATH clang-format)
+if(CLANG_FORMAT_PATH)
+	add_custom_target(FORMAT_CODE
+		COMMAND ${CLANG_FORMAT_PATH} -i -style=file ${CPP_SOURCES};${HLSL_FILES}
+		COMMENT "Running clang format for cpp and hlsl files"
+	)
+endif()
+
+# #######################################################################################################################
 # # Automatic deployment
 # #######################################################################################################################
 file(GLOB FEATURE_PATHS LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/features/*)
