@@ -250,6 +250,8 @@ void State::Load(ConfigMode a_configMode)
 			shaderCache.backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
 		if (advanced["Use FileWatcher"].is_boolean())
 			shaderCache.SetFileWatcher(advanced["Use FileWatcher"]);
+		if (advanced["Extended Frame Annotations"].is_boolean())
+			extendedFrameAnnotations = advanced["Extended Frame Annotations"];
 	}
 
 	if (settings["General"].is_object()) {
@@ -300,6 +302,7 @@ void State::Save(ConfigMode a_configMode)
 	advanced["Compiler Threads"] = shaderCache.compilationThreadCount;
 	advanced["Background Compiler Threads"] = shaderCache.backgroundCompilationThreadCount;
 	advanced["Use FileWatcher"] = shaderCache.UseFileWatcher();
+	advanced["Extended Frame Annotations"] = extendedFrameAnnotations;
 	settings["Advanced"] = advanced;
 
 	json general;
