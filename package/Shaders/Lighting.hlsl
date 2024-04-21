@@ -1,8 +1,10 @@
 #include "Common/Color.hlsl"
 #include "Common/FrameBuffer.hlsl"
 #include "Common/LightingData.hlsl"
+#include "Common/LodLandscape.hlsli"
 #include "Common/MotionBlur.hlsl"
 #include "Common/Permutation.hlsl"
+#include "Common/Skinned.hlsli"
 
 #define PI 3.1415927
 
@@ -148,15 +150,6 @@ cbuffer PerGeometry : register(b2)
 #	endif  // VR
 };
 
-#	if defined(SKINNED)
-cbuffer PreviousBonesBuffer : register(b9)
-{
-	float4 PreviousBones[240] : packoffset(c0);
-}
-
-cbuffer BonesBuffer : register(b10) { float4 Bones[240] : packoffset(c0); }
-#	endif
-
 cbuffer VS_PerFrame : register(b12)
 {
 #	if !defined(VR)
@@ -187,58 +180,6 @@ float2 GetTreeShiftVector(float4 position, float4 color)
 }
 #	endif  // TREE_ANIM
 
-#	if defined(SKINNED)
-float3x4 GetBoneMatrix(float4 bones[240], int4 actualIndices, float3 pivot, float4 weights)
-{
-	/*float3x4 result;
-for (int rowIndex = 0; rowIndex < 3; ++rowIndex)
-{
-float4 pivotRow = float4(0, 0, 0, pivot[rowIndex]);
-result[rowIndex] = 0.0.xxxx;
-for (int boneIndex = 0; boneIndex < 4; ++boneIndex)
-{
-result[rowIndex] += (bones[actualIndices[boneIndex] +
-rowIndex] - pivotRow) * weights[boneIndex];
-}
-}
-return result;*/
-
-	float3x4 pivotMatrix = transpose(float4x3(0.0.xxx, 0.0.xxx, 0.0.xxx, pivot));
-
-	float3x4 boneMatrix1 =
-		float3x4(bones[actualIndices.x], bones[actualIndices.x + 1], bones[actualIndices.x + 2]);
-	float3x4 boneMatrix2 =
-		float3x4(bones[actualIndices.y], bones[actualIndices.y + 1], bones[actualIndices.y + 2]);
-	float3x4 boneMatrix3 =
-		float3x4(bones[actualIndices.z], bones[actualIndices.z + 1], bones[actualIndices.z + 2]);
-	float3x4 boneMatrix4 =
-		float3x4(bones[actualIndices.w], bones[actualIndices.w + 1], bones[actualIndices.w + 2]);
-
-	float3x4 unitMatrix = float3x4(1.0.xxxx, 1.0.xxxx, 1.0.xxxx);
-	float3x4 weightMatrix1 = unitMatrix * weights.x;
-	float3x4 weightMatrix2 = unitMatrix * weights.y;
-	float3x4 weightMatrix3 = unitMatrix * weights.z;
-	float3x4 weightMatrix4 = unitMatrix * weights.w;
-
-	return (boneMatrix1 - pivotMatrix) * weightMatrix1 +
-	       (boneMatrix2 - pivotMatrix) * weightMatrix2 +
-	       (boneMatrix3 - pivotMatrix) * weightMatrix3 +
-	       (boneMatrix4 - pivotMatrix) * weightMatrix4;
-}
-
-float3x3 GetBoneRSMatrix(float4 bones[240], int4 actualIndices, float4 weights)
-{
-	float3x3 result;
-	for (int rowIndex = 0; rowIndex < 3; ++rowIndex) {
-		result[rowIndex] = weights.xxx * bones[actualIndices.x + rowIndex].xyz +
-		                   weights.yyy * bones[actualIndices.y + rowIndex].xyz +
-		                   weights.zzz * bones[actualIndices.z + rowIndex].xyz +
-		                   weights.www * bones[actualIndices.w + rowIndex].xyz;
-	}
-	return result;
-}
-#	endif  // SKINNED
-
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
@@ -251,12 +192,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 	);
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
-	float4 rawWorldPosition = float4(mul(World[eyeIndex], inputPosition), 1);
-	float worldXShift = rawWorldPosition.x - HighDetailRange[eyeIndex].x;
-	float worldYShift = rawWorldPosition.y - HighDetailRange[eyeIndex].y;
-	if ((abs(worldXShift) < HighDetailRange[eyeIndex].z) && (abs(worldYShift) < HighDetailRange[eyeIndex].w)) {
-		inputPosition.z -= (230 + rawWorldPosition.z / 1e9);
-	}
+	inputPosition = AdjustLodLandscapeVertexPositionMS(inputPosition, float4x4(World[eyeIndex], float4(0, 0, 0, 1)), HighDetailRange[eyeIndex]);
 #	endif  // defined(LODLANDNOISE) || defined(LODLANDSCAPE)                                                                   \
 
 	precise float4 previousInputPosition = inputPosition;
@@ -273,11 +209,11 @@ VS_OUTPUT main(VS_INPUT input)
 	precise int4 actualIndices = 765.01.xxxx * input.BoneIndices.xyzw;
 
 	float3x4 previousWorldMatrix =
-		GetBoneMatrix(PreviousBones, actualIndices, PreviousBonesPivot[eyeIndex], input.BoneWeights);
+		GetBoneTransformMatrix(PreviousBones, actualIndices, PreviousBonesPivot[eyeIndex], input.BoneWeights);
 	precise float4 previousWorldPosition =
 		float4(mul(inputPosition, transpose(previousWorldMatrix)), 1);
 
-	float3x4 worldMatrix = GetBoneMatrix(Bones, actualIndices, BonesPivot[eyeIndex], input.BoneWeights);
+	float3x4 worldMatrix = GetBoneTransformMatrix(Bones, actualIndices, BonesPivot[eyeIndex], input.BoneWeights);
 	precise float4 worldPosition = float4(mul(inputPosition, transpose(worldMatrix)), 1);
 
 	float4 viewPos = mul(ViewProj[eyeIndex], worldPosition);

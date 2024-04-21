@@ -113,7 +113,8 @@ namespace SIE
 				       type == RE::BSShader::Type::Grass ||
 				       type == RE::BSShader::Type::Particle ||
 				       type == RE::BSShader::Type::Water ||
-				       type == RE::BSShader::Type::Effect;
+				       type == RE::BSShader::Type::Effect ||
+				       type == RE::BSShader::Type::Utility;
 			return type == RE::BSShader::Type::Lighting ||
 			       type == RE::BSShader::Type::DistantTree ||
 			       type == RE::BSShader::Type::Water ||
@@ -246,6 +247,56 @@ namespace SIE
 			AdditionalAlphaMask = 1 << 23,
 		};
 
+		enum class BloodSplatterShaderTechniques
+		{
+			Splatter = 0,
+			Flare = 1,
+		};
+
+		enum class DistantTreeShaderTechniques
+		{
+			DistantTreeBlock = 0,
+			Depth = 1,
+		};
+
+		enum class DistantTreeShaderFlags
+		{
+			AlphaTest = 0x10000,
+		};
+
+		enum class SkyShaderTechniques
+		{
+			SunOcclude = 0,
+			SunGlare = 1,
+			MoonAndStarsMask = 2,
+			Stars = 3,
+			Clouds = 4,
+			CloudsLerp = 5,
+			CloudsFade = 6,
+			Texture = 7,
+			Sky = 8,
+		};
+
+		enum class GrassShaderTechniques
+		{
+			RenderDepth = 8,
+		};
+
+		enum class GrassShaderFlags
+		{
+			AlphaTest = 0x10000,
+		};
+
+		enum class ParticleShaderTechniques
+		{
+			Particles = 0,
+			ParticlesGryColor = 1,
+			ParticlesGryAlpha = 2,
+			ParticlesGryColorAlpha = 3,
+			EnvCubeSnow = 4,
+			EnvCubeRain = 5,
+		};
+
 		enum class WaterShaderTechniques
 		{
 			Underwater = 8,
@@ -297,6 +348,40 @@ namespace SIE
 			SkyObject = 1 << 24,
 			MsnSpuSkinned = 1 << 25,
 			MotionVectorsNormals = 1 << 26,
+		};
+
+		enum class UtilityShaderFlags : uint64_t
+		{
+			Vc = 1 << 0,
+			Texture = 1 << 1,
+			Skinned = 1 << 2,
+			Normals = 1 << 3,
+			BinormalTangent = 1 << 4,
+			AlphaTest = 1 << 7,
+			LodLandscape = 1 << 8,
+			RenderNormal = 1 << 9,
+			RenderNormalFalloff = 1 << 10,
+			RenderNormalClamp = 1 << 11,
+			RenderNormalClear = 1 << 12,
+			RenderDepth = 1 << 13,
+			RenderShadowmap = 1 << 14,
+			RenderShadowmapClamped = 1 << 15,
+			GrayscaleToAlpha = 1 << 15,
+			RenderShadowmapPb = 1 << 16,
+			AdditionalAlphaMask = 1 << 16,
+			DepthWriteDecals = 1 << 17,
+			DebugShadowSplit = 1 << 18,
+			DebugColor = 1 << 19,
+			GrayscaleMask = 1 << 20,
+			RenderShadowmask = 1 << 21,
+			RenderShadowmaskSpot = 1 << 22,
+			RenderShadowmaskPb = 1 << 23,
+			RenderShadowmaskDpb = 1 << 24,
+			RenderBaseTexture = 1 << 25,
+			TreeAnim = 1 << 26,
+			LodObject = 1 << 27,
+			LocalMapFogOfWar = 1 << 28,
+			OpaqueEffect = 1 << 29,
 		};
 
 		uint blockedKeyIndex = (uint)-1;  // index in shaderMap; negative value indicates disabled

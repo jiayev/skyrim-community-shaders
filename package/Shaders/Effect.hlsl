@@ -1,3 +1,4 @@
+#include "Common/Skinned.hlsli"
 
 #define EFFECT
 
@@ -113,59 +114,6 @@ cbuffer IndexedTexcoordBuffer : register(b11)
 {
 	float4 IndexedTexCoord[128] : packoffset(c0);
 }
-
-#	if defined(SKINNED)
-#		if defined(MOTIONVECTORS_NORMALS)
-cbuffer PreviousBonesBuffer : register(b9)
-{
-	float4 PreviousBones[240] : packoffset(c0);
-}
-#		endif
-
-cbuffer BonesBuffer : register(b10)
-{
-	float4 Bones[240] : packoffset(c0);
-}
-#	endif
-
-#	if defined(SKINNED)
-float3x4 GetBoneTransformMatrix(float4 bones[240], int4 actualIndices, float3 pivot, float4 weights)
-{
-	float3x4 pivotMatrix = transpose(float4x3(0.0.xxx, 0.0.xxx, 0.0.xxx, pivot));
-
-	float3x4 boneMatrix1 =
-		float3x4(bones[actualIndices.x], bones[actualIndices.x + 1], bones[actualIndices.x + 2]);
-	float3x4 boneMatrix2 =
-		float3x4(bones[actualIndices.y], bones[actualIndices.y + 1], bones[actualIndices.y + 2]);
-	float3x4 boneMatrix3 =
-		float3x4(bones[actualIndices.z], bones[actualIndices.z + 1], bones[actualIndices.z + 2]);
-	float3x4 boneMatrix4 =
-		float3x4(bones[actualIndices.w], bones[actualIndices.w + 1], bones[actualIndices.w + 2]);
-
-	float3x4 unitMatrix = float3x4(1.0.xxxx, 1.0.xxxx, 1.0.xxxx);
-	float3x4 weightMatrix1 = unitMatrix * weights.x;
-	float3x4 weightMatrix2 = unitMatrix * weights.y;
-	float3x4 weightMatrix3 = unitMatrix * weights.z;
-	float3x4 weightMatrix4 = unitMatrix * weights.w;
-
-	return (boneMatrix1 - pivotMatrix) * weightMatrix1 +
-	       (boneMatrix2 - pivotMatrix) * weightMatrix2 +
-	       (boneMatrix3 - pivotMatrix) * weightMatrix3 +
-	       (boneMatrix4 - pivotMatrix) * weightMatrix4;
-}
-
-float3x3 GetBoneRSMatrix(float4 bones[240], int4 actualIndices, float4 weights)
-{
-	float3x3 result;
-	for (int rowIndex = 0; rowIndex < 3; ++rowIndex) {
-		result[rowIndex] = weights.xxx * bones[actualIndices.x + rowIndex].xyz +
-		                   weights.yyy * bones[actualIndices.y + rowIndex].xyz +
-		                   weights.zzz * bones[actualIndices.z + rowIndex].xyz +
-		                   weights.www * bones[actualIndices.w + rowIndex].xyz;
-	}
-	return result;
-}
-#	endif
 
 #	define M_HALFPI 1.57079637;
 #	define M_PI 3.141593
