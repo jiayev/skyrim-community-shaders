@@ -7,6 +7,7 @@
 #include <fmt/std.h>
 #include <wrl/client.h>
 
+#include "Deferred.h"
 #include "Feature.h"
 #include "State.h"
 
@@ -60,8 +61,11 @@ namespace SIE
 
 			int lastIndex = 0;
 
-			if (technique == ShaderCache::LightingShaderTechniques::Outline) {
+			if (technique == ShaderCache::LightingShaderTechniques::Outline)
 				defines[lastIndex++] = { "OUTLINE", nullptr };
+
+			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred)) {
+				defines[lastIndex++] = { "DEFERRED", nullptr };
 			}
 
 			for (auto* feature : Feature::GetFeatureList()) {
@@ -100,6 +104,10 @@ namespace SIE
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::DistantTreeShaderFlags::AlphaTest)) {
 				defines[lastIndex++] = { "DO_ALPHA_TEST", nullptr };
+			}
+
+			if (descriptor & static_cast<uint32_t>(ShaderCache::DistantTreeShaderFlags::Deferred)) {
+				defines[lastIndex++] = { "DEFERRED", nullptr };
 			}
 
 			for (auto* feature : Feature::GetFeatureList()) {
@@ -351,6 +359,11 @@ namespace SIE
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::MotionVectorsNormals)) {
 				defines[0] = { "MOTIONVECTORS_NORMALS", nullptr };
+				++defines;
+			}
+
+			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Deferred)) {
+				defines[0] = { "DEFERRED", nullptr };
 				++defines;
 			}
 
@@ -1396,13 +1409,6 @@ namespace SIE
 	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (shader.shaderType.get() == RE::BSShader::Type::Effect) {
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Lighting)) {
-			} else {
-				return nullptr;
-			}
-		}
-
 		auto state = State::GetSingleton();
 		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader) && ShaderCache::IsShaderSourceAvailable(shader)))) {
 			return nullptr;
@@ -1437,13 +1443,6 @@ namespace SIE
 	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (shader.shaderType.get() == RE::BSShader::Type::Effect) {
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Lighting)) {
-			} else {
-				return nullptr;
-			}
-		}
-
 		auto state = State::GetSingleton();
 		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader) && ShaderCache::IsShaderSourceAvailable(shader)))) {
 			return nullptr;

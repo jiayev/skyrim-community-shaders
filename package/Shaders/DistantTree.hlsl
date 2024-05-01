@@ -1,3 +1,9 @@
+#include "Common/Constants.hlsli"
+#include "Common/FrameBuffer.hlsl"
+#include "Common/GBuffer.hlsli"
+#include "Common/MotionBlur.hlsl"
+#include "Common/VR.hlsli"
+
 struct VS_INPUT
 {
 	float3 Position : POSITION0;
@@ -6,6 +12,9 @@ struct VS_INPUT
 	float4 InstanceData2 : TEXCOORD5;
 	float4 InstanceData3 : TEXCOORD6;
 	float4 InstanceData4 : TEXCOORD7;
+#if defined(VR)
+	uint InstanceID : SV_INSTANCEID;
+#endif  // VR
 };
 
 struct VS_OUTPUT
@@ -18,7 +27,14 @@ struct VS_OUTPUT
 #else
 	float4 WorldPosition : POSITION1;
 	float4 PreviousWorldPosition : POSITION2;
-#endif
+#endif  // RENDER_DEPTH
+	float4 ViewPosition : POSITION3;
+
+#if defined(VR)
+	float ClipDistance : SV_ClipDistance0;  // o11
+	float CullDistance : SV_CullDistance0;  // p11
+	uint EyeIndex : EYEIDX0;
+#endif  // VR
 };
 
 #ifdef VSHADER
@@ -29,14 +45,25 @@ cbuffer PerTechnique : register(b0)
 
 cbuffer PerGeometry : register(b2)
 {
-	row_major float4x4 WorldViewProj : packoffset(c0);
-	row_major float4x4 World : packoffset(c4);
-	row_major float4x4 PreviousWorld : packoffset(c8);
+#	if !defined(VR)
+	row_major float4x4 WorldViewProj[1] : packoffset(c0);
+	row_major float4x4 World[1] : packoffset(c4);
+	row_major float4x4 PreviousWorld[1] : packoffset(c8);
+#	else
+	row_major float4x4 WorldViewProj[2] : packoffset(c0);
+	row_major float4x4 World[2] : packoffset(c8);
+	row_major float4x4 PreviousWorld[2] : packoffset(c16);
+#	endif  // !VR
 };
 
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
+	uint eyeIndex = GetEyeIndexVS(
+#	if defined(VR)
+		input.InstanceID
+#	endif  // VR
+	);
 
 	float3 scaledModelPosition = input.InstanceData1.www * input.Position.xyz;
 	float3 adjustedModelPosition = 0.0.xxx;
@@ -44,33 +71,46 @@ VS_OUTPUT main(VS_INPUT input)
 	adjustedModelPosition.y = dot(input.InstanceData2.yx, scaledModelPosition.xy);
 	adjustedModelPosition.z = scaledModelPosition.z;
 	float4 finalModelPosition = float4(input.InstanceData1.xyz + adjustedModelPosition.xyz, 1.0);
-	float4 viewPosition = mul(WorldViewProj, finalModelPosition);
+	float4 viewPosition = mul(WorldViewProj[eyeIndex], finalModelPosition);
 
 #	ifdef RENDER_DEPTH
 	vsout.Depth.xy = viewPosition.zw;
 	vsout.Depth.zw = input.InstanceData2.zw;
 #	else
-	vsout.WorldPosition = mul(World, finalModelPosition);
-	vsout.PreviousWorldPosition = mul(PreviousWorld, finalModelPosition);
-#	endif
+	vsout.WorldPosition = mul(World[eyeIndex], finalModelPosition);
+	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], finalModelPosition);
+	vsout.ViewPosition = viewPosition;
+#	endif  // RENDER_DEPTH
 
 	vsout.Position = viewPosition;
 	vsout.TexCoord = float3(input.TexCoord0.xy, FogParam.z);
 
+#	ifdef VR
+	vsout.EyeIndex = eyeIndex;
+	VR_OUTPUT VRout = GetVRVSOutput(vsout.Position, eyeIndex);
+	vsout.Position = VRout.VRPosition;
+	vsout.ClipDistance.x = VRout.ClipDistance;
+	vsout.CullDistance.x = VRout.CullDistance;
+#	endif  // VR
+
 	return vsout;
 }
-#endif
+#endif  // VSHADER
 
 typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 Albedo : SV_Target0;
+	float4 Diffuse : SV_Target0;
 
 #if !defined(RENDER_DEPTH)
+#	if defined(DEFERRED)
 	float2 MotionVector : SV_Target1;
 	float4 Normal : SV_Target2;
-#endif
+	float4 Albedo : SV_Target3;
+	float4 Masks : SV_Target6;
+#	endif  // DEFERRED
+#endif      // !RENDER_DEPTH
 };
 
 #ifdef PSHADER
@@ -78,10 +118,12 @@ SamplerState SampDiffuse : register(s0);
 
 Texture2D<float4> TexDiffuse : register(t0);
 
+#	if !defined(VR)
 cbuffer AlphaTestRefCB : register(b11)
 {
 	float AlphaTestRefRS : packoffset(c0);
 }
+#	endif  // !VR
 
 cbuffer PerFrame : register(b12)
 {
@@ -119,6 +161,12 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
+#	if !defined(VR)
+	uint eyeIndex = 0;
+#	else
+	uint eyeIndex = input.EyeIndex;
+#	endif  // !VR
+
 #	if defined(RENDER_DEPTH)
 	uint2 temp = uint2(input.Position.xy);
 	uint index = ((temp.x << 2) & 12) | (temp.y & 3);
@@ -136,8 +184,8 @@ PS_OUTPUT main(PS_INPUT input)
 		discard;
 	}
 
-	psout.Albedo.xyz = input.Depth.xxx / input.Depth.yyy;
-	psout.Albedo.w = 0;
+	psout.Diffuse.xyz = input.Depth.xxx / input.Depth.yyy;
+	psout.Diffuse.w = 0;
 #	else
 	float4 baseColor = TexDiffuse.Sample(SampDiffuse, input.TexCoord.xy);
 
@@ -145,21 +193,28 @@ PS_OUTPUT main(PS_INPUT input)
 	if ((baseColor.w - AlphaTestRefRS) < 0) {
 		discard;
 	}
-#		endif
+#		endif  // DO_ALPHA_TEST
 
-	psout.Albedo = float4((input.TexCoord.zzz * DiffuseColor.xyz + AmbientColor.xyz) * baseColor.xyz, 1.0);
+#		if defined(DEFERRED)
+	psout.Diffuse.xyz = 0;
+	psout.Diffuse.w = 1;
 
-	float4 screenPosition = mul(ScreenProj, input.WorldPosition);
-	screenPosition.xy = screenPosition.xy / screenPosition.ww;
-	float4 previousScreenPosition = mul(PreviousScreenProj, input.PreviousWorldPosition);
-	previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.ww;
-	float2 screenMotionVector = float2(-0.5, 0.5) * (screenPosition.xy - previousScreenPosition.xy);
+	psout.MotionVector = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 
-	psout.MotionVector = screenMotionVector;
+	float3 ddx = ddx_coarse(input.ViewPosition);
+	float3 ddy = ddy_coarse(input.ViewPosition);
+	float3 normal = normalize(cross(ddx, ddy));
 
-	psout.Normal = float4(0.5, 0.5, 0, 0);
-#	endif
+	psout.Normal.xy = EncodeNormal(normal);
+	psout.Normal.zw = 0;
+
+	psout.Albedo = float4(baseColor.xyz * 0.5, 1);
+	psout.Masks = float4(0, 0, 1, 0);
+#		else
+	psout.Diffuse = float4((input.TexCoord.zzz * DiffuseColor.xyz + AmbientColor.xyz) * baseColor.xyz, 1.0);
+#		endif  // DEFERRED
+#	endif      // RENDER_DEPTH
 
 	return psout;
 }
-#endif
+#endif  // PSHADER

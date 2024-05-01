@@ -1,5 +1,6 @@
 #include "Common/Color.hlsl"
 #include "Common/FrameBuffer.hlsl"
+#include "Common/GBuffer.hlsli"
 #include "Common/LightingData.hlsl"
 #include "Common/MotionBlur.hlsl"
 
@@ -101,15 +102,12 @@ cbuffer PerFrame : register(
 #endif
 				   )
 {
-	row_major float3x4 DirectionalAmbient;
 	float SunlightScale;
 	float Glossiness;
 	float SpecularStrength;
 	float SubsurfaceScatteringAmount;
-	bool EnableDirLightFix;
 	bool OverrideComplexGrassSettings;
 	float BasicGrassBrightness;
-	float pad[1];
 }
 
 #ifdef VSHADER
@@ -214,7 +212,7 @@ VS_OUTPUT main(VS_INPUT input)
 	// Vertex normal needs to be transformed to world-space for lighting calculations.
 	vsout.VertexNormal.xyz = mul(world3x3, input.Normal.xyz * 2.0 - 1.0);
 	vsout.SphereNormal.xyz = mul(world3x3, normalize(input.Position.xyz));
-	vsout.SphereNormal.w = input.Color.w;
+	vsout.SphereNormal.w = saturate(input.Color.w);
 
 	return vsout;
 }
@@ -227,9 +225,12 @@ struct PS_OUTPUT
 #if defined(RENDER_DEPTH)
 	float4 PS : SV_Target0;
 #else
-	float4 Albedo : SV_Target0;
+	float4 Diffuse : SV_Target0;
 	float2 MotionVectors : SV_Target1;
-	float4 Normal : SV_Target2;
+	float4 NormalGlossiness : SV_Target2;
+	float4 Albedo : SV_Target3;
+	float4 Specular : SV_Target4;
+	float4 Masks : SV_Target6;
 #endif  // RENDER_DEPTH
 };
 
@@ -253,16 +254,6 @@ cbuffer AlphaTestRefCB : register(b11)
 	float AlphaTestRefRS : packoffset(c0);
 }
 #	endif  // VR
-
-float GetSoftLightMultiplier(float angle, float strength)
-{
-	float softLightParam = saturate((strength + angle) / (1 + strength));
-	float arg1 = (softLightParam * softLightParam) * (3 - 2 * softLightParam);
-	float clampedAngle = saturate(angle);
-	float arg2 = (clampedAngle * clampedAngle) * (3 - 2 * clampedAngle);
-	float softLigtMul = saturate(arg1 - arg2);
-	return softLigtMul;
-}
 
 float3 GetLightSpecularInput(float3 L, float3 V, float3 N, float3 lightColor, float shininess)
 {
@@ -298,10 +289,6 @@ float3x3 CalculateTBN(float3 N, float3 p, float2 uv)
 	return float3x3(T * invmax, B * invmax, N);
 }
 
-#	if defined(SCREEN_SPACE_SHADOWS)
-#		include "ScreenSpaceShadows/ShadowsPS.hlsli"
-#	endif
-
 #	if defined(LIGHT_LIMIT_FIX)
 #		include "LightLimitFix/LightLimitFix.hlsli"
 #	endif
@@ -311,10 +298,6 @@ float3x3 CalculateTBN(float3 N, float3 p, float2 uv)
 
 #	if defined(DYNAMIC_CUBEMAPS)
 #		include "DynamicCubemaps/DynamicCubemaps.hlsli"
-#	endif
-
-#	if defined(CLOUD_SHADOWS)
-#		include "CloudShadows/CloudShadows.hlsli"
 #	endif
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace
@@ -348,61 +331,33 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.PS.w = diffuseAlpha;
 #	else
 
-	float4 specColor = complex ? TexBaseSampler.Sample(SampBaseSampler, float2(input.TexCoord.x, 0.5 + input.TexCoord.y * 0.5)) : 1;
+	float4 specColor = complex ? TexBaseSampler.Sample(SampBaseSampler, float2(input.TexCoord.x, 0.5 + input.TexCoord.y * 0.5)) : 0;
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 
 	uint eyeIndex = GetEyeIndexPS(input.HPosition, VPOSOffset);
 	psout.MotionVectors = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 
-	float3 ddx = ddx_coarse(input.ViewSpacePosition);
-	float3 ddy = ddy_coarse(input.ViewSpacePosition);
-	float3 normal = normalize(cross(ddx, ddy));
-	float normalScale = max(1.0 / 1000.0, sqrt(normal.z * -8 + 8));
-	psout.Normal.xy = float2(0.5, 0.5) + normal.xy / normalScale;
-	psout.Normal.zw = float2(0, 0);
-
-#		if !defined(VR)
 	float3 viewDirection = -normalize(input.WorldPosition.xyz);
-#		else
-	float3 viewDirection = -normalize(input.WorldPosition.xyz);
-#		endif  // !VR
-	float3 worldNormal = normalize(input.VertexNormal.xyz);
+	float3 normal = normalize(input.VertexNormal.xyz);
 
 	// Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
 	if (!frontFace)
-		worldNormal = -worldNormal;
+		normal = -normal;
 
-	worldNormal = normalize(lerp(worldNormal, normalize(input.SphereNormal.xyz), saturate(input.SphereNormal.w * 2)));
+	normal = normalize(lerp(normal, normalize(input.SphereNormal.xyz), input.SphereNormal.w));
 
 	if (complex) {
-		float3 normalColor = float4(TransformNormal(specColor.xyz), 1);
+		float3 normalColor = TransformNormal(specColor.xyz);
 		// world-space -> tangent-space -> world-space.
 		// This is because we don't have pre-computed tangents.
-		worldNormal = normalize(mul(normalColor, CalculateTBN(worldNormal, -input.WorldPosition, input.TexCoord.xy)));
+		normal = normalize(mul(normalColor, CalculateTBN(normal, -input.WorldPosition.xyz, input.TexCoord.xy)));
 	}
 
 	if (!complex || OverrideComplexGrassSettings)
 		baseColor.xyz *= BasicGrassBrightness;
 
-	float3 dirLightColor = DirLightColor.xyz;
-	if (EnableDirLightFix) {
-		dirLightColor *= SunlightScale;
-	}
-
-#		if defined(CLOUD_SHADOWS)
-	float3 cloudShadowMult = 1.0;
-	if (perPassCloudShadow[0].EnableCloudShadows && !lightingData[0].Reflections) {
-		cloudShadowMult = getCloudShadowMult(input.WorldPosition.xyz, DirLightDirection.xyz, SampColorSampler);
-		dirLightColor *= cloudShadowMult;
-	}
-#		endif
-
+	float3 dirLightColor = DirLightColor.xyz * SunlightScale;
 	dirLightColor *= shadowColor.x;
-
-#		if defined(SCREEN_SPACE_SHADOWS)
-	float dirLightSShadow = PrepassScreenSpaceShadows(input.WorldPosition, eyeIndex);
-	dirLightColor *= dirLightSShadow;
-#		endif  // !SCREEN_SPACE_SHADOWS
 
 	float3 diffuseColor = 0;
 	float3 specularColor = 0;
@@ -410,23 +365,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 lightsDiffuseColor = 0;
 	float3 lightsSpecularColor = 0;
 
-	float dirLightAngle = dot(worldNormal, DirLightDirection.xyz);
-	float3 dirDiffuseColor = dirLightColor * saturate(dirLightAngle);
-
-	lightsDiffuseColor += dirDiffuseColor;
+	float dirLightAngle = dot(normal, DirLightDirection.xyz);
 
 	// Generated texture to simulate light transport.
 	// Numerous attempts were made to use a more interesting algorithm however they were mostly fruitless.
-	float3 subsurfaceColor = lerp(RGBToLuminance(baseColor.xyz), baseColor.xyz, 2.0);
-
-	// Applies lighting across the whole surface apart from what is already lit.
-	lightsDiffuseColor += subsurfaceColor * dirLightColor * GetSoftLightMultiplier(dirLightAngle, SubsurfaceScatteringAmount);
+	float3 subsurfaceColor = baseColor.xyz * sqrt(input.SphereNormal.w);
 
 	// Applies lighting from the opposite direction. Does not account for normals perpendicular to the light source.
 	lightsDiffuseColor += subsurfaceColor * dirLightColor * saturate(-dirLightAngle) * SubsurfaceScatteringAmount;
 
 	if (complex)
-		lightsSpecularColor += GetLightSpecularInput(DirLightDirection, viewDirection, worldNormal, dirLightColor, Glossiness);
+		lightsSpecularColor += GetLightSpecularInput(DirLightDirection, viewDirection, normal, dirLightColor, Glossiness);
 
 #		if defined(LIGHT_LIMIT_FIX)
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
@@ -458,7 +407,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				float3 lightColor = light.color.xyz;
 				float3 normalizedLightDirection = normalize(lightDirection);
 
-				float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
+				float lightAngle = dot(normal, normalizedLightDirection);
 
 				float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
 				if (light.firstPersonShadow)
@@ -468,53 +417,46 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 				float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
-				lightDiffuseColor += subsurfaceColor * lightColor * GetSoftLightMultiplier(lightAngle, SubsurfaceScatteringAmount);
 				lightDiffuseColor += subsurfaceColor * lightColor * saturate(-lightAngle) * SubsurfaceScatteringAmount;
-
-				lightsSpecularColor += GetLightSpecularInput(normalizedLightDirection, viewDirection, worldNormal.xyz, lightColor, Glossiness) * intensityMultiplier;
-
 				lightsDiffuseColor += lightDiffuseColor * intensityMultiplier;
+
+				if (complex)
+					lightsSpecularColor += GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, Glossiness) * intensityMultiplier;
 			}
 		}
 	}
 #		endif
 
-	float3 directionalAmbientColor = mul(DirectionalAmbient, float4(worldNormal.xyz, 1));
-#		if defined(CLOUD_SHADOWS)
-	if (perPassCloudShadow[0].EnableCloudShadows && !lightingData[0].Reflections)
-		directionalAmbientColor *= lerp(1.0, cloudShadowMult, perPassCloudShadow[0].AbsorptionAmbient);
-#		endif
-	lightsDiffuseColor += directionalAmbientColor;
-
 	diffuseColor += lightsDiffuseColor;
 
-	float3 color = max(0, diffuseColor * baseColor.xyz * input.VertexColor.xyz);
+	float3 albedo = max(0, baseColor.xyz * input.VertexColor.xyz);
+	diffuseColor *= albedo;
 
-	if (complex) {
-		specularColor += lightsSpecularColor;
-		specularColor *= specColor.w * SpecularStrength;
-		color.xyz += specularColor;
-	}
+	specularColor += lightsSpecularColor;
+	specularColor *= specColor.w * SpecularStrength;
 
 #		if defined(LIGHT_LIMIT_FIX)
 	if (perPassLLF[0].EnableLightsVisualisation) {
 		if (perPassLLF[0].LightsVisualisationMode == 0) {
-			psout.Albedo.xyz = TurboColormap(0);
+			diffuseColor.xyz = TurboColormap(0);
 		} else if (perPassLLF[0].LightsVisualisationMode == 1) {
-			psout.Albedo.xyz = TurboColormap(0);
+			diffuseColor.xyz = TurboColormap(0);
 		} else {
-			psout.Albedo.xyz = TurboColormap((float)lightCount / 128.0);
+			diffuseColor.xyz = TurboColormap((float)lightCount / 128.0);
 		}
 	} else {
-		psout.Albedo.xyz = color;
+		psout.Diffuse = float4(diffuseColor, 1);
 	}
 #		else
-	psout.Albedo.xyz = color;
+	psout.Diffuse.xyz = float4(diffuseColor, 1);
 #		endif
 
-	psout.Normal.w = specColor.w * SpecularStrength;
-	psout.Albedo.w = 1;
+	psout.Specular = float4(specularColor, 1);
+	psout.Albedo = float4(albedo, 1);
+	psout.Masks = float4(0, 0, 0, 0);
 
+	float3 normalVS = normalize(WorldToView(normal, false, eyeIndex));
+	psout.NormalGlossiness = float4(EncodeNormal(normalVS), specColor.w, 1);
 #	endif  // RENDER_DEPTH
 	return psout;
 }

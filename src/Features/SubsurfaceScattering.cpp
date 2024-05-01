@@ -2,6 +2,7 @@
 #include <Util.h>
 
 #include "State.h"
+#include <Deferred.h>
 #include <ShaderCache.h>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionProfile,
@@ -155,7 +156,7 @@ void SubsurfaceScattering::CalculateKernel(DiffusionProfile& a_profile, Kernel& 
 	}
 }
 
-void SubsurfaceScattering::DrawSSSWrapper(bool)
+void SubsurfaceScattering::DrawSSSWrapper(bool a_firstPerson)
 {
 	if (!SIE::ShaderCache::Instance().IsEnabled())
 		return;
@@ -188,7 +189,7 @@ void SubsurfaceScattering::DrawSSSWrapper(bool)
 	ID3D11DepthStencilView* nullDsv = nullptr;
 	context->OMSetRenderTargets(8, nullViews, nullDsv);
 
-	DrawSSS();
+	DrawSSS(a_firstPerson);
 
 	context->PSSetShaderResources(0, 8, srvs);
 	context->CSSetShaderResources(0, 8, srvsCS);
@@ -214,7 +215,7 @@ void SubsurfaceScattering::DrawSSSWrapper(bool)
 	State::GetSingleton()->EndPerfEvent();
 }
 
-void SubsurfaceScattering::DrawSSS()
+void SubsurfaceScattering::DrawSSS(bool a_firstPerson)
 {
 	auto viewport = RE::BSGraphics::State::GetSingleton();
 
@@ -251,16 +252,16 @@ void SubsurfaceScattering::DrawSSS()
 
 	{
 		ID3D11Buffer* buffer[1] = { blurCB->CB() };
-		context->CSSetConstantBuffers(0, 1, buffer);
+		context->CSSetConstantBuffers(1, 1, buffer);
 
+		auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 		auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-		auto snowSwap = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-		auto normals = renderer->GetRuntimeData().renderTargets[normalsMode];
+		auto mask = renderer->GetRuntimeData().renderTargets[a_firstPerson ? normalsMode : MASKS];
 
 		ID3D11ShaderResourceView* views[3];
-		views[0] = snowSwap.SRV;
+		views[0] = main.SRV;
 		views[1] = depth.depthSRV;
-		views[2] = normals.SRV;
+		views[2] = mask.SRV;
 
 		context->CSSetShaderResources(0, 3, views);
 
@@ -276,9 +277,6 @@ void SubsurfaceScattering::DrawSSS()
 			context->Dispatch((uint32_t)std::ceil(resolutionX / 32.0f), (uint32_t)std::ceil(resolutionY / 32.0f), 1);
 		}
 
-		ID3D11ShaderResourceView* view = nullptr;
-		context->CSSetShaderResources(2, 1, &view);
-
 		uav = nullptr;
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
@@ -287,8 +285,8 @@ void SubsurfaceScattering::DrawSSS()
 			views[0] = blurHorizontalTemp->srv.get();
 			context->CSSetShaderResources(0, 1, views);
 
-			ID3D11UnorderedAccessView* uavs[2] = { snowSwap.UAV, normals.UAV };
-			context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+			ID3D11UnorderedAccessView* uavs[1] = { main.UAV };
+			context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
 			auto shader = GetComputeShaderVerticalBlur();
 			context->CSSetShader(shader, nullptr, 0);
@@ -298,13 +296,13 @@ void SubsurfaceScattering::DrawSSS()
 	}
 
 	ID3D11Buffer* buffer = nullptr;
-	context->CSSetConstantBuffers(0, 1, &buffer);
+	context->CSSetConstantBuffers(1, 1, &buffer);
 
 	ID3D11ShaderResourceView* views[3]{ nullptr, nullptr, nullptr };
 	context->CSSetShaderResources(0, 3, views);
 
-	ID3D11UnorderedAccessView* uavs[2]{ nullptr, nullptr };
-	context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+	ID3D11UnorderedAccessView* uavs[1]{ nullptr };
+	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
 	ID3D11ComputeShader* shader = nullptr;
 	context->CSSetShader(shader, nullptr, 0);
@@ -404,6 +402,14 @@ void SubsurfaceScattering::ClearShaderCache()
 		verticalSSBlur->Release();
 		verticalSSBlur = nullptr;
 	}
+	if (horizontalSSBlurFP) {
+		horizontalSSBlurFP->Release();
+		horizontalSSBlurFP = nullptr;
+	}
+	if (verticalSSBlurFP) {
+		verticalSSBlurFP->Release();
+		verticalSSBlurFP = nullptr;
+	}
 	if (clearBuffer) {
 		clearBuffer->Release();
 		clearBuffer = nullptr;
@@ -426,6 +432,24 @@ ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderVerticalBlur()
 		verticalSSBlur = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\SubsurfaceScattering\\SeparableSSSCS.hlsl", {}, "cs_5_0");
 	}
 	return verticalSSBlur;
+}
+
+ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderHorizontalBlurFP()
+{
+	if (!horizontalSSBlurFP) {
+		logger::debug("Compiling horizontalSSBlur FIRSTPERSON");
+		horizontalSSBlurFP = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\SubsurfaceScattering\\SeparableSSSCS.hlsl", { { "HORIZONTAL", "" }, { "FIRSTPERSON", "" } }, "cs_5_0");
+	}
+	return horizontalSSBlurFP;
+}
+
+ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderVerticalBlurFP()
+{
+	if (!verticalSSBlurFP) {
+		logger::debug("Compiling verticalSSBlur FIRSTPERSON");
+		verticalSSBlurFP = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\SubsurfaceScattering\\SeparableSSSCS.hlsl", { { "FIRSTPERSON", "" } }, "cs_5_0");
+	}
+	return verticalSSBlurFP;
 }
 
 ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderClearBuffer()

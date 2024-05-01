@@ -2,10 +2,11 @@
 
 #include <detours/Detours.h>
 
-#include "Bindings.h"
+#include "Deferred.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "VariableRateShading.h"
 
 #include "ShaderTools/BSShaderHooks.h"
 
@@ -142,13 +143,7 @@ decltype(&hk_BSGraphics_SetDirtyStates) ptr_BSGraphics_SetDirtyStates;
 
 void hk_BSGraphics_SetDirtyStates(bool isCompute)
 {
-	//auto& shaderCache = SIE::ShaderCache::Instance();
-
-	//if (shaderCache.IsEnabled())
-	//	Bindings::GetSingleton()->SetDirtyStates(isCompute);
-
 	(ptr_BSGraphics_SetDirtyStates)(isCompute);
-
 	State::GetSingleton()->Draw();
 }
 
@@ -400,6 +395,16 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct CreateRenderTarget_ShadowMask
+	{
+		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
+		{
+			State::GetSingleton()->ModifyRenderTarget(a_target, a_properties);
+			func(This, a_target, a_properties);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	void Install()
 	{
 		SKSE::AllocTrampoline(14);
@@ -440,5 +445,6 @@ namespace Hooks
 		stl::write_thunk_call<CreateRenderTarget_Main>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x3F0, 0x3F3, 0x548));
 		stl::write_thunk_call<CreateRenderTarget_Normals>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x458, 0x45B, 0x5B0));
 		stl::write_thunk_call<CreateRenderTarget_NormalsSwap>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x46B, 0x46E, 0x5C3));
+		stl::write_thunk_call<CreateRenderTarget_ShadowMask>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x555, 0x554, 0x6b9));
 	}
 }

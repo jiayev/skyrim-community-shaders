@@ -19,25 +19,18 @@ struct CloudShadows : Feature
 	struct Settings
 	{
 		uint EnableCloudShadows = true;
-
 		float CloudHeight = 2e3f / 1.428e-2f;
 		float PlanetRadius = 6371e3f / 1.428e-2f;
-
 		float EffectMix = 1.f;
-
 		float TransparencyPower = 0.1f;
-		float AbsorptionAmbient = 0.2f;
 	} settings;
 
-	struct alignas(16) PerPass
+	struct PerPass
 	{
 		Settings Settings;
-
 		float RcpHPlusR;
-
-		float padding;
 	};
-	std::unique_ptr<Buffer> perPass = nullptr;
+	std::unique_ptr<StructuredBuffer> perPass = nullptr;
 
 	bool isCubemapPass = false;
 	ID3D11BlendState* resetBlendState = nullptr;
@@ -48,15 +41,20 @@ struct CloudShadows : Feature
 	ID3D11RenderTargetView* cubemapCloudOccRTVs[6] = { nullptr };
 	ID3D11ShaderResourceView* cubemapCloudOccDebugSRV = nullptr;
 
+	ID3D11ComputeShader* outputProgram = nullptr;
+
 	virtual void SetupResources() override;
+	void CompileComputeShaders();
+
 	virtual inline void Reset() override {}
+	virtual void ClearShaderCache() override;
 
 	virtual void DrawSettings() override;
 
 	void CheckResourcesSide(int side);
 	void ModifySky(const RE::BSShader* shader, const uint32_t descriptor);
-	void ModifyLighting();
 	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor) override;
+	void DrawShadows();
 
 	virtual void Load(json& o_json) override;
 	virtual void Save(json& o_json) override;

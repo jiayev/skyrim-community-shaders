@@ -2,9 +2,8 @@
 
 #include "State.h"
 
+#include "Deferred.h"
 #include "Util.h"
-
-#include "magic_enum_flags.hpp"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudShadows::Settings,
@@ -12,8 +11,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudHeight,
 	PlanetRadius,
 	EffectMix,
-	TransparencyPower,
-	AbsorptionAmbient)
+	TransparencyPower)
 
 enum class SkyShaderTechniques
 {
@@ -40,13 +38,6 @@ void CloudShadows::DrawSettings()
 			ImGui::Text(
 				"The amount of light absorbed by the cloud is determined by the alpha of the cloud. "
 				"Negative value will result in more light absorbed, and more contrast between lit and occluded areas.");
-
-		ImGui::SliderFloat("Ambient Absorption", &settings.AbsorptionAmbient, 0.f, 1.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(
-				"By default, ambient light is not affected by cloud, as it is an approximation of reflected light. "
-				"However, if you want darker ambient, you may turn it up a bit. "
-				"Not entirely physical, nonetheless helpful.");
 
 		ImGui::TreePop();
 	}
@@ -80,13 +71,30 @@ void CloudShadows::CheckResourcesSide(int side)
 	context->ClearRenderTargetView(cubemapCloudOccRTVs[side], black);
 }
 
+void CloudShadows::CompileComputeShaders()
+{
+	logger::debug("Compiling shaders...");
+	{
+		outputProgram = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\CloudShadows\\output.cs.hlsl", { {} }, "cs_5_0"));
+	}
+}
+
+void CloudShadows::ClearShaderCache()
+{
+	if (outputProgram)
+		outputProgram->Release();
+	CompileComputeShaders();
+}
+
 void CloudShadows::ModifySky(const RE::BSShader*, const uint32_t descriptor)
 {
 	if (!settings.EnableCloudShadows)
 		return;
 
 	auto& shadowState = State::GetSingleton()->shadowState;
-	auto cubeMapRenderTarget = !REL::Module::IsVR() ? shadowState->GetRuntimeData().cubeMapRenderTarget : shadowState->GetVRRuntimeData().cubeMapRenderTarget;
+
+	GET_INSTANCE_MEMBER(cubeMapRenderTarget, shadowState);
+
 	if (cubeMapRenderTarget != RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS)
 		return;
 
@@ -163,58 +171,72 @@ void CloudShadows::ModifySky(const RE::BSShader*, const uint32_t descriptor)
 	}
 }
 
-void CloudShadows::ModifyLighting()
+void CloudShadows::DrawShadows()
 {
-	auto& context = State::GetSingleton()->context;
+	if (!settings.EnableCloudShadows ||
+		(RE::Sky::GetSingleton()->mode.get() != RE::Sky::Mode::kFull) ||
+		!RE::Sky::GetSingleton()->currentClimate)
+		return;
 
 	auto& shadowState = State::GetSingleton()->shadowState;
-	auto cubeMapRenderTarget = !REL::Module::IsVR() ? shadowState->GetRuntimeData().cubeMapRenderTarget : shadowState->GetVRRuntimeData().cubeMapRenderTarget;
+
+	GET_INSTANCE_MEMBER(cubeMapRenderTarget, shadowState);
+
 	if (cubeMapRenderTarget != RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS) {
 		static Util::FrameChecker frame_checker;
+
+		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+		auto& context = State::GetSingleton()->context;
+		auto deferred = Deferred::GetSingleton();
+
 		if (frame_checker.isNewFrame())
 			context->GenerateMips(texCubemapCloudOcc->srv.get());
 
-		auto srv = texCubemapCloudOcc->srv.get();
-		context->PSSetShaderResources(40, 1, &srv);
-	} else {
-		ID3D11ShaderResourceView* srv = nullptr;
-		context->PSSetShaderResources(40, 1, &srv);
-	}
+		std::array<ID3D11ShaderResourceView*, 3> srvs = { nullptr };
+		std::array<ID3D11UnorderedAccessView*, 1> uavs = { nullptr };
 
-	ID3D11ShaderResourceView* views[1]{};
-	views[0] = perPass->srv.get();
-	context->PSSetShaderResources(23, ARRAYSIZE(views), views);
+		srvs.at(0) = perPass->SRV();
+		srvs.at(1) = texCubemapCloudOcc->srv.get();
+		srvs.at(2) = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
+
+		uavs.at(0) = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK].UAV;
+
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		context->CSSetShader(outputProgram, nullptr, 0);
+		context->Dispatch((deferred->giTexture->desc.Width + 31u) >> 5, (deferred->giTexture->desc.Height + 31u) >> 5, 1);
+
+		// clean up
+		srvs.fill(nullptr);
+		uavs.fill(nullptr);
+
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+	}
 }
 
 void CloudShadows::Draw(const RE::BSShader* shader, const uint32_t descriptor)
 {
+	if (!settings.EnableCloudShadows ||
+		(RE::Sky::GetSingleton()->mode.get() != RE::Sky::Mode::kFull) ||
+		!RE::Sky::GetSingleton()->currentClimate)
+		return;
+
 	static Util::FrameChecker frame_checker;
 	if (frame_checker.isNewFrame()) {
 		// update settings buffer
-		auto& context = State::GetSingleton()->context;
-
 		PerPass perPassData{};
 
 		perPassData.Settings = settings;
 		perPassData.Settings.TransparencyPower = exp2(perPassData.Settings.TransparencyPower);
 		perPassData.RcpHPlusR = 1.f / (settings.CloudHeight + settings.PlanetRadius);
 
-		D3D11_MAPPED_SUBRESOURCE mapped;
-		DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-		size_t bytes = sizeof(PerPass);
-		memcpy_s(mapped.pData, bytes, &perPassData, bytes);
-		context->Unmap(perPass->resource.get(), 0);
+		perPass->Update(&perPassData, sizeof(perPassData));
 	}
 
 	switch (shader->shaderType.get()) {
 	case RE::BSShader::Type::Sky:
 		ModifySky(shader, descriptor);
-		break;
-	case RE::BSShader::Type::Lighting:
-	case RE::BSShader::Type::DistantTree:
-	case RE::BSShader::Type::Grass:
-		// case RE::BSShader::Type::Water:
-		ModifyLighting();
 		break;
 	default:
 		break;
@@ -264,22 +286,11 @@ void CloudShadows::SetupResources()
 	}
 
 	{
-		D3D11_BUFFER_DESC sbDesc{};
-		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
-		sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		sbDesc.StructureByteStride = sizeof(PerPass);
-		sbDesc.ByteWidth = sizeof(PerPass);
-		perPass = std::make_unique<Buffer>(sbDesc);
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		srvDesc.Buffer.FirstElement = 0;
-		srvDesc.Buffer.NumElements = 1;
-		perPass->CreateSRV(srvDesc);
+		perPass = std::make_unique<StructuredBuffer>(StructuredBufferDesc<PerPass>(), 1);
+		perPass->CreateSRV();
 	}
+
+	CompileComputeShaders();
 }
 
 void CloudShadows::RestoreDefaultSettings()

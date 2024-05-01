@@ -10,6 +10,7 @@ struct LightingData
 	float4 CameraData;
 	float2 BufferDim;
 	float Timer;
+	bool Opaque;
 };
 
 StructuredBuffer<LightingData> lightingData : register(t126);
@@ -21,7 +22,7 @@ float GetDepth(float2 uv, uint a_eyeIndex = 0)
 {
 	uv = ConvertToStereoUV(uv, a_eyeIndex);
 	uv = GetDynamicResolutionAdjustedScreenPosition(uv);
-	return TexDepthSampler.Load(int3(uv * lightingData[0].BufferDim, 0));
+	return TexDepthSampler.Load(int3(uv * lightingData[0].BufferDim, 0)).x;
 }
 
 float GetScreenDepth(float depth)

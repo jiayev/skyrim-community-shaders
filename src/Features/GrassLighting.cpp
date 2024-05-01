@@ -8,7 +8,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Glossiness,
 	SpecularStrength,
 	SubsurfaceScatteringAmount,
-	EnableDirLightFix,
 	OverrideComplexGrassSettings,
 	BasicGrassBrightness)
 
@@ -52,11 +51,6 @@ void GrassLighting::DrawSettings()
 	}
 
 	if (ImGui::TreeNodeEx("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox("Enable Directional Light Fix", (bool*)&settings.EnableDirLightFix);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Fix for grass not being affected by sunlight scale.");
-		}
-
 		ImGui::Checkbox("Override Complex Grass Lighting Settings", (bool*)&settings.OverrideComplexGrassSettings);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
@@ -83,14 +77,9 @@ void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
 	const auto technique = descriptor & 0b1111;
 	if (technique != static_cast<uint32_t>(GrassShaderTechniques::RenderDepth)) {
 		if (updatePerFrame) {
-			auto& state = RE::BSShaderManager::State::GetSingleton();
-			RE::NiTransform& dalcTransform = state.directionalAmbientTransform;
 			auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 
 			PerFrame perFrameData{};
-			ZeroMemory(&perFrameData, sizeof(perFrameData));
-			Util::StoreTransform3x4NoScale(perFrameData.DirectionalAmbient, dalcTransform);
-
 			perFrameData.SunlightScale = !REL::Module::IsVR() ?
 			                                 imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale :
 			                                 imageSpaceManager->GetVRRuntimeData().data.baseData.hdr.sunlightScale;

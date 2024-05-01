@@ -93,10 +93,9 @@ float4 SSSSBlurCS(
 	uint2 DTid,
 	float2 texcoord,
 	float2 dir,
-	float4 normals)
+	float sssAmount,
+	bool humanProfile)
 {
-	float sssAmount = normals.z;
-
 	// Fetch color of current pixel:
 	float4 colorM = ColorTexture[DTid.xy];
 
@@ -111,8 +110,6 @@ float4 SSSSBlurCS(
 	float depthM = DepthTexture[DTid.xy].r;
 	depthM = GetScreenDepth(depthM);
 
-	bool humanProfile = sssAmount > 0.5;
-
 	float2 profile = humanProfile ? HumanProfile.xy : BaseProfile.xy;
 	uint kernelOffset = humanProfile ? SSSS_N_SAMPLES : 0;
 
@@ -126,7 +123,7 @@ float4 SSSSBlurCS(
 
 	// Calculate the final step to fetch the surrounding pixels:
 	float2 finalStep = scale * BufferDim * dir;
-	finalStep *= saturate((humanProfile ? (sssAmount.x - 0.5) : sssAmount) * 2.0);
+	finalStep *= sssAmount;
 	finalStep *= profile.x;  // Modulate it using the profile
 	finalStep *= 1.0 / 3.0;  // Divide by 3 as the kernels range from -3 to 3.
 

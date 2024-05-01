@@ -73,6 +73,8 @@ public:
 
 	ID3D11ComputeShader* horizontalSSBlur = nullptr;
 	ID3D11ComputeShader* verticalSSBlur = nullptr;
+	ID3D11ComputeShader* horizontalSSBlurFP = nullptr;
+	ID3D11ComputeShader* verticalSSBlurFP = nullptr;
 	ID3D11ComputeShader* clearBuffer = nullptr;
 
 	RE::RENDER_TARGET normalsMode = RE::RENDER_TARGET::kNONE;
@@ -93,9 +95,9 @@ public:
 	float3 Profile(DiffusionProfile& a_profile, float r);
 	void CalculateKernel(DiffusionProfile& a_profile, Kernel& kernel);
 
-	void DrawSSSWrapper(bool a_firstPerson = false);
+	void DrawSSSWrapper(bool a_firstPerson);
 
-	void DrawSSS();
+	void DrawSSS(bool a_firstPerson);
 
 	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
 
@@ -105,6 +107,8 @@ public:
 	virtual void ClearShaderCache();
 	ID3D11ComputeShader* GetComputeShaderHorizontalBlur();
 	ID3D11ComputeShader* GetComputeShaderVerticalBlur();
+	ID3D11ComputeShader* GetComputeShaderHorizontalBlurFP();
+	ID3D11ComputeShader* GetComputeShaderVerticalBlurFP();
 	ID3D11ComputeShader* GetComputeShaderClearBuffer();
 
 	virtual void PostPostLoad() override;
@@ -123,16 +127,6 @@ public:
 			{
 				GetSingleton()->Bind();
 				func(This, StartRange, EndRanges, RenderFlags, GeometryGroup);  // RenderBatches
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct Main_RenderWorld_End
-		{
-			static void thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges, uint32_t RenderFlags, int GeometryGroup)
-			{
-				func(This, StartRange, EndRanges, RenderFlags, GeometryGroup);  // RenderSky
-				GetSingleton()->DrawSSSWrapper();
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -170,11 +164,10 @@ public:
 		static void Install()
 		{
 			stl::write_thunk_call<Main_RenderWorld_Start>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x8E, 0x84));
-			stl::write_thunk_call<Main_RenderWorld_End>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x247, 0x237, 0x24F));
-			if (!REL::Module::IsVR()) {
-				stl::write_thunk_call<Main_RenderFirstPersonView_Start>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0x70, 0x66));
-				stl::write_thunk_call<Main_RenderFirstPersonView_End>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0x49C, 0x47E, 0x4fc));
-			}
+			//if (!REL::Module::IsVR()) {
+			//	stl::write_thunk_call<Main_RenderFirstPersonView_Start>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0x70, 0x66));
+			//	stl::write_thunk_call<Main_RenderFirstPersonView_End>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0x49C, 0x47E, 0x4fc));
+			//}
 			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 			logger::info("[SSS] Installed hooks");
 		}

@@ -2,11 +2,10 @@ RWTexture2D<float4> SSSRW : register(u0);
 
 Texture2D<float4> ColorTexture : register(t0);
 Texture2D<float4> DepthTexture : register(t1);
-
-#if defined(HORIZONTAL)
+#if defined(FIRSTPERSON)
 Texture2D<float4> NormalTexture : register(t2);
 #else
-RWTexture2D<unorm float4> NormalTexture : register(u1);
+Texture2D<float4> MaskTexture : register(t2);
 #endif
 
 #define SSSS_N_SAMPLES 21
@@ -17,7 +16,7 @@ struct DiffusionProfile
 	float Thickness;
 };
 
-cbuffer PerFrame : register(b0)
+cbuffer PerFrame : register(b1)
 {
 	float4 Kernels[SSSS_N_SAMPLES + SSSS_N_SAMPLES];
 	float4 BaseProfile;
@@ -61,14 +60,31 @@ float InterleavedGradientNoise(float2 uv)
 								  : SV_DispatchThreadID) {
 	float2 texCoord = (DTid.xy + 0.5) * RcpBufferDim;
 #if defined(HORIZONTAL)
-	float4 normals = NormalTexture[DTid.xy];
-	float4 color = SSSSBlurCS(DTid.xy, texCoord, float2(1.0, 0.0), normals);
+
+#	if defined(FIRSTPERSON)
+	float sssAmount = NormalTexture[DTid.xy].z;
+	bool humanProfile = sssAmount > 0.5;
+	sssAmount = saturate((humanProfile ? (sssAmount.x - 0.5) : sssAmount) * 2.0);
+#	else
+	float sssAmount = MaskTexture[DTid.xy].x;
+	bool humanProfile = MaskTexture[DTid.xy].y == sssAmount;
+#	endif
+
+	float4 color = SSSSBlurCS(DTid.xy, texCoord, float2(1.0, 0.0), sssAmount, humanProfile);
 	SSSRW[DTid.xy] = max(0, color);
 #else
-	float4 normals = NormalTexture[DTid.xy];
-	float4 color = SSSSBlurCS(DTid.xy, texCoord, float2(0.0, 1.0), normals);
+
+#	if defined(FIRSTPERSON)
+	float sssAmount = NormalTexture[DTid.xy].z;
+	bool humanProfile = sssAmount > 0.5;
+	sssAmount = saturate((humanProfile ? (sssAmount.x - 0.5) : sssAmount) * 2.0);
+#	else
+	float sssAmount = MaskTexture[DTid.xy].x;
+	bool humanProfile = MaskTexture[DTid.xy].y == sssAmount;
+#	endif
+
+	float4 color = SSSSBlurCS(DTid.xy, texCoord, float2(0.0, 1.0), sssAmount, humanProfile);
 	color.rgb = Lin2sRGB(color.rgb);
-	SSSRW[DTid.xy] = float4(max(0, color.rgb), 1);
-	NormalTexture[DTid.xy] = float4(normals.xy, 0.0, normals.w);
+	SSSRW[DTid.xy] = float4(color.rgb, 1.0);
 #endif
 }

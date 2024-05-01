@@ -13,79 +13,62 @@ struct ScreenSpaceShadows : Feature
 
 	virtual inline std::string GetName() { return "Screen-Space Shadows"; }
 	virtual inline std::string GetShortName() { return "ScreenSpaceShadows"; }
-	inline std::string_view GetShaderDefineName() override { return "SCREEN_SPACE_SHADOWS"; }
 
-	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
-
-	struct Settings
+	struct BendSettings
 	{
-		uint32_t MaxSamples = !REL::Module::IsVR() ? 24u : 6u;
-		float FarDistanceScale = 0.025f;
-		float FarThicknessScale = 0.025f;
-		float FarHardness = 8.0f;
-		float NearDistance = 16.0f;
-		float NearThickness = 2.0f;
-		float NearHardness = 32.0f;
-		float BlurRadius = 0.5f;
-		float BlurDropoff = 0.005f;
-		bool Enabled = true;
+		float SurfaceThickness = 0.005f;
+		float BilinearThreshold = 0.02f;
+		float ShadowContrast = 1.0f;
+		uint Enable = 1;
+		uint EnableNormalMappingShadows = 1;
+		uint SampleCount = 1;
 	};
 
-	struct alignas(16) PerPass
-	{
-		uint32_t EnableSSS;
-		uint32_t FrameCount;
-		uint32_t pad[2];
-	};
+	BendSettings bendSettings;
 
 	struct alignas(16) RaymarchCB
 	{
-		float2 BufferDim;
-		float2 RcpBufferDim;
-		float4x4 ProjMatrix[2];
-		float4x4 InvProjMatrix[2];
-		float4 CameraData;
-		float4 DynamicRes;
-		float4 InvDirLightDirectionVS;
-		float ShadowDistance = 10000;
-		Settings Settings;
-		uint32_t pad[1];
+		// Runtime data returned from BuildDispatchList():
+		float LightCoordinate[4];  // Values stored in DispatchList::LightCoordinate_Shader by BuildDispatchList()
+		int WaveOffset[2];         // Values stored in DispatchData::WaveOffset_Shader by BuildDispatchList()
+
+		// Renderer Specific Values:
+		float FarDepthValue;   // Set to the Depth Buffer Value for the far clip plane, as determined by renderer projection matrix setup (typically 0).
+		float NearDepthValue;  // Set to the Depth Buffer Value for the near clip plane, as determined by renderer projection matrix setup (typically 1).
+
+		// Sampling data:
+		float InvDepthTextureSize[2];  // Inverse of the texture dimensions for 'DepthTexture' (used to convert from pixel coordinates to UVs)
+									   // If 'PointBorderSampler' is an Unnormalized sampler, then this value can be hard-coded to 1.
+									   // The 'USE_HALF_PIXEL_OFFSET' macro might need to be defined if sampling at exact pixel coordinates isn't precise (e.g., if odd patterns appear in the shadow).
+
+		BendSettings settings;
 	};
 
-	Settings settings;
-
-	ConstantBuffer* perPass = nullptr;
-
-	ID3D11SamplerState* computeSampler = nullptr;
-
-	Texture2D* screenSpaceShadowsTexture = nullptr;
-	Texture2D* screenSpaceShadowsTextureTemp = nullptr;
+	ID3D11SamplerState* pointBorderSampler = nullptr;
 
 	ConstantBuffer* raymarchCB = nullptr;
-	ID3D11ComputeShader* raymarchProgram = nullptr;
-
-	ID3D11ComputeShader* horizontalBlurProgram = nullptr;
-	ID3D11ComputeShader* verticalBlurProgram = nullptr;
-
-	bool renderedScreenCamera = false;
+	ID3D11ComputeShader* raymarchCS = nullptr;
+	ID3D11ComputeShader* raymarchRightCS = nullptr;
+	ID3D11ComputeShader* normalMappingShadowsCS = nullptr;
 
 	virtual void SetupResources();
 	virtual void Reset();
 
 	virtual void DrawSettings();
-	void ModifyGrass(const RE::BSShader* shader, const uint32_t descriptor);
-	void ModifyDistantTree(const RE::BSShader*, const uint32_t descriptor);
 
 	virtual void ClearShaderCache() override;
-	ID3D11ComputeShader* GetComputeShader();
-	ID3D11ComputeShader* GetComputeShaderHorizontalBlur();
-	ID3D11ComputeShader* GetComputeShaderVerticalBlur();
+	ID3D11ComputeShader* GetComputeRaymarch();
+	ID3D11ComputeShader* GetComputeRaymarchRight();
 
-	void ModifyLighting(const RE::BSShader* shader, const uint32_t descriptor);
+	ID3D11ComputeShader* GetComputeNormalMappingShadows();
+
 	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
 
 	virtual void Load(json& o_json);
 	virtual void Save(json& o_json);
+
+	void DrawShadows();
+	void DrawNormalMappingShadows();
 
 	virtual void RestoreDefaultSettings();
 

@@ -11,6 +11,10 @@
 #include "Feature.h"
 #include "Features/LightLimitFix/ParticleLights.h"
 
+#include "Deferred.h"
+
+#include "VariableRateShading.h"
+
 #define SETTING_MENU_TOGGLEKEY "Toggle Key"
 #define SETTING_MENU_SKIPKEY "Skip Compilation Key"
 #define SETTING_MENU_FONTSCALE "Font Scale"
@@ -158,6 +162,8 @@ void Menu::DrawSettings()
 			ImGui::TableNextColumn();
 			if (ImGui::Button("Clear Shader Cache", { -1, 0 })) {
 				shaderCache.Clear();
+				Deferred::GetSingleton()->ClearShaderCache();
+				VariableRateShading::GetSingleton()->ClearShaderCache();
 				for (auto* feature : Feature::GetFeatureList()) {
 					if (feature->loaded) {
 						feature->ClearShaderCache();
@@ -424,6 +430,8 @@ void Menu::DrawSettings()
 		}
 
 		ImGui::Separator();
+
+		VariableRateShading::GetSingleton()->DrawSettings();
 
 		if (ImGui::BeginTable("Feature Table", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
 			ImGui::TableSetupColumn("##ListOfFeatures", 0, 3);

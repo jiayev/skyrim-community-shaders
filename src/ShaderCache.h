@@ -118,7 +118,8 @@ namespace SIE
 			return type == RE::BSShader::Type::Lighting ||
 			       type == RE::BSShader::Type::DistantTree ||
 			       type == RE::BSShader::Type::Water ||
-			       type == RE::BSShader::Type::Grass;
+			       type == RE::BSShader::Type::Grass ||
+			       type == RE::BSShader::Type::Effect;
 		}
 
 		inline static bool IsSupportedShader(const RE::BSShader& shader)
@@ -229,7 +230,10 @@ namespace SIE
 			VC = 1 << 0,
 			Skinned = 1 << 1,
 			ModelSpaceNormals = 1 << 2,
-			// flags 3 to 8 are unused
+			// flags 3 to 8 are unused by vanilla
+			// Community Shaders start
+			Deferred = 1 << 4,
+			// Community Shaders end
 			Specular = 1 << 9,
 			SoftLighting = 1 << 10,
 			RimLighting = 1 << 11,
@@ -244,7 +248,7 @@ namespace SIE
 			DoAlphaTest = 1 << 20,
 			Snow = 1 << 21,
 			CharacterLight = 1 << 22,
-			AdditionalAlphaMask = 1 << 23,
+			AdditionalAlphaMask = 1 << 23
 		};
 
 		enum class BloodSplatterShaderTechniques
@@ -261,7 +265,8 @@ namespace SIE
 
 		enum class DistantTreeShaderFlags
 		{
-			AlphaTest = 0x10000,
+			Deferred = 1 << 8,
+			AlphaTest = 1 << 16,
 		};
 
 		enum class SkyShaderTechniques
@@ -348,6 +353,7 @@ namespace SIE
 			SkyObject = 1 << 24,
 			MsnSpuSkinned = 1 << 25,
 			MotionVectorsNormals = 1 << 26,
+			Deferred = 1 << 27
 		};
 
 		enum class UtilityShaderFlags : uint64_t

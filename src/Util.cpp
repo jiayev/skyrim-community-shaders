@@ -163,6 +163,10 @@ namespace Util
 		std::transform(path.begin(), path.end(), std::back_inserter(str), [](wchar_t c) {
 			return (char)c;
 		});
+		if (!std::filesystem::exists(FilePath)) {
+			logger::error("Failed to compile shader; {} does not exist", str);
+			return nullptr;
+		}
 		logger::debug("Compiling {} with {}", str, DefinesToString(macros));
 		if (FAILED(D3DCompileFromFile(FilePath, macros.data(), D3D_COMPILE_STANDARD_FILE_INCLUDE, Program, ProgramType, flags, 0, &shaderBlob, &shaderErrors))) {
 			logger::warn("Shader compilation failed:\n\n{}", shaderErrors ? (const char*)shaderErrors->GetBufferPointer() : "Unknown error");

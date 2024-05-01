@@ -1,3 +1,5 @@
+#include "Common/GBuffer.hlsli"
+
 struct VS_INPUT
 {
 	float4 Position : POSITION0;
@@ -108,12 +110,12 @@ VS_OUTPUT main(VS_INPUT input)
 
 	float3 instanceNormal = float3(input.InstanceData2.z, input.InstanceData3.zw);
 	float dirLightAngle = dot(DirLightDirection.xyz, instanceNormal);
-	float3 diffuseMultiplier = input.InstanceData1.www * input.Color.xyz * saturate(dirLightAngle.xxx);
+	float3 diffuseMultiplier = input.InstanceData1.www * input.Color.xyz;
 
 	float perInstanceFade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, M_IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
 	float distanceFade = 1 - saturate((length(projSpacePosition.xyz) - AlphaParam1) / AlphaParam2);
 
-	vsout.DiffuseColor.xyz = DirLightColor.xyz * diffuseMultiplier;
+	vsout.DiffuseColor.xyz = diffuseMultiplier;
 	vsout.DiffuseColor.w = distanceFade * perInstanceFade;
 
 	vsout.TexCoord.xy = input.TexCoord.xy;
@@ -140,13 +142,22 @@ struct PS_OUTPUT
 #if defined(RENDER_DEPTH)
 	float4 PS : SV_Target0;
 #else
-	float4 Albedo : SV_Target0;
+	float4 Diffuse : SV_Target0;
 	float2 MotionVectors : SV_Target1;
 	float4 Normal : SV_Target2;
+	float4 Albedo : SV_Target3;
+	float4 Masks : SV_Target6;
 #endif
 };
 
 #ifdef PSHADER
+
+#	include "Common/Color.hlsl"
+#	include "Common/FrameBuffer.hlsl"
+#	include "Common/LightingData.hlsl"
+#	include "Common/MotionBlur.hlsl"
+#	include "Common/Permutation.hlsl"
+
 SamplerState SampBaseSampler : register(s0);
 SamplerState SampShadowMaskSampler : register(s1);
 
@@ -157,13 +168,6 @@ cbuffer AlphaTestRefCB : register(b11)
 {
 	float AlphaTestRefRS : packoffset(c0);
 }
-
-cbuffer PerFrame : register(b12)
-{
-	float4 UnknownPerFrame1[12] : packoffset(c0);
-	row_major float4x4 ScreenProj : packoffset(c12);
-	row_major float4x4 PreviousScreenProj : packoffset(c16);
-};
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -186,27 +190,20 @@ PS_OUTPUT main(PS_INPUT input)
 #	else
 	float sunShadowMask = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0)).x;
 
-	// Albedo
-	float diffuseFraction = lerp(sunShadowMask, 1, input.AmbientColor.w);
-	float3 diffuseColor = input.DiffuseColor.xyz * baseColor.xyz;
-	float3 ambientColor = input.AmbientColor.xyz * baseColor.xyz;
-	psout.Albedo.xyz = input.TexCoord.zzz * (diffuseColor * diffuseFraction + ambientColor);
-	psout.Albedo.w = 1;
+	psout.Diffuse.xyz = 0;
+	psout.Diffuse.w = 1;
 
-	float4 screenPosition = mul(ScreenProj, input.WorldPosition);
-	screenPosition.xy = screenPosition.xy / screenPosition.ww;
-	float4 previousScreenPosition = mul(PreviousScreenProj, input.PreviousWorldPosition);
-	previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.ww;
-	float2 screenMotionVector = float2(-0.5, 0.5) * (screenPosition.xy - previousScreenPosition.xy);
-
-	psout.MotionVectors = screenMotionVector;
+	psout.MotionVectors = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, 0);
 
 	float3 ddx = ddx_coarse(input.ViewSpacePosition);
 	float3 ddy = ddy_coarse(input.ViewSpacePosition);
 	float3 normal = normalize(cross(ddx, ddy));
-	float normalScale = max(1.0 / 1000.0, sqrt(normal.z * -8 + 8));
-	psout.Normal.xy = float2(0.5, 0.5) + normal.xy / normalScale;
+
+	psout.Normal.xy = EncodeNormal(normal);
 	psout.Normal.zw = float2(0, 0);
+
+	psout.Albedo = float4(baseColor.xyz * input.DiffuseColor.xyz * 0.5, 1);
+	psout.Masks = float4(0, 0, 1, 0);
 #	endif
 
 	return psout;

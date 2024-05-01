@@ -9,43 +9,50 @@
 #include "Feature.h"
 #include "Util.h"
 
+#include "Deferred.h"
 #include "Features/TerrainBlending.h"
+
+#include "VariableRateShading.h"
 
 void State::Draw()
 {
-	auto& shaderCache = SIE::ShaderCache::Instance();
-	if (shaderCache.IsEnabled() && currentShader && updateShader) {
+	Deferred::GetSingleton()->UpdatePerms();
+	if (currentShader && updateShader) {
 		auto type = currentShader->shaderType.get();
-		if (type > 0 && type < RE::BSShader::Type::Total) {
-			if (enabledClasses[type - 1]) {
-				ModifyShaderLookup(*currentShader, currentVertexDescriptor, currentPixelDescriptor);
-				UpdateSharedData(currentShader, currentPixelDescriptor);
+		VariableRateShading::GetSingleton()->UpdateViews(type != RE::BSShader::Type::ImageSpace && type != RE::BSShader::Type::Sky && type != RE::BSShader::Type::Water);
+		auto& shaderCache = SIE::ShaderCache::Instance();
+		if (shaderCache.IsEnabled()) {
+			if (type > 0 && type < RE::BSShader::Type::Total) {
+				if (enabledClasses[type - 1]) {
+					ModifyShaderLookup(*currentShader, currentVertexDescriptor, currentPixelDescriptor);
+					UpdateSharedData(currentShader, currentPixelDescriptor);
 
-				static RE::BSGraphics::VertexShader* vertexShader = nullptr;
-				static RE::BSGraphics::PixelShader* pixelShader = nullptr;
+					static RE::BSGraphics::VertexShader* vertexShader = nullptr;
+					static RE::BSGraphics::PixelShader* pixelShader = nullptr;
 
-				vertexShader = shaderCache.GetVertexShader(*currentShader, currentVertexDescriptor);
-				pixelShader = shaderCache.GetPixelShader(*currentShader, currentPixelDescriptor);
+					vertexShader = shaderCache.GetVertexShader(*currentShader, currentVertexDescriptor);
+					pixelShader = shaderCache.GetPixelShader(*currentShader, currentPixelDescriptor);
 
-				if (vertexShader && pixelShader) {
-					context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
-					context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
-				}
+					if (vertexShader && pixelShader) {
+						context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
+						context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+					}
 
-				BeginPerfEvent(std::format("Draw: CommunityShaders {}::{}", magic_enum::enum_name(currentShader->shaderType.get()), currentPixelDescriptor));
-				if (IsDeveloperMode()) {
-					SetPerfMarker(std::format("Defines: {}", SIE::ShaderCache::GetDefinesString(currentShader->shaderType.get(), currentPixelDescriptor)));
-				}
+					BeginPerfEvent(std::format("Draw: CommunityShaders {}::{}", magic_enum::enum_name(currentShader->shaderType.get()), currentPixelDescriptor));
+					if (IsDeveloperMode()) {
+						SetPerfMarker(std::format("Defines: {}", SIE::ShaderCache::GetDefinesString(currentShader->shaderType.get(), currentPixelDescriptor)));
+					}
 
-				if (vertexShader && pixelShader) {
-					for (auto* feature : Feature::GetFeatureList()) {
-						if (feature->loaded) {
-							auto hasShaderDefine = feature->HasShaderDefine(currentShader->shaderType.get());
-							if (hasShaderDefine)
-								BeginPerfEvent(feature->GetShortName());
-							feature->Draw(currentShader, currentPixelDescriptor);
-							if (hasShaderDefine)
-								EndPerfEvent();
+					if (vertexShader && pixelShader) {
+						for (auto* feature : Feature::GetFeatureList()) {
+							if (feature->loaded) {
+								auto hasShaderDefine = feature->HasShaderDefine(currentShader->shaderType.get());
+								if (hasShaderDefine)
+									BeginPerfEvent(feature->GetShortName());
+								feature->Draw(currentShader, currentPixelDescriptor);
+								if (hasShaderDefine)
+									EndPerfEvent();
+							}
 						}
 					}
 				}
@@ -168,9 +175,10 @@ void State::Reset()
 	for (auto* feature : Feature::GetFeatureList())
 		if (feature->loaded)
 			feature->Reset();
-	Bindings::GetSingleton()->Reset();
+	Deferred::GetSingleton()->Reset();
 	if (!RE::UI::GetSingleton()->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
+	VariableRateShading::GetSingleton()->UpdateVRS();
 }
 
 void State::Setup()
@@ -179,7 +187,8 @@ void State::Setup()
 	for (auto* feature : Feature::GetFeatureList())
 		if (feature->loaded)
 			feature->SetupResources();
-	//Bindings::GetSingleton()->SetupResources();
+	Deferred::GetSingleton()->SetupResources();
+	VariableRateShading::GetSingleton()->Setup();
 }
 
 static const std::string& GetConfigPath(State::ConfigMode a_configMode)
@@ -334,6 +343,7 @@ void State::PostPostLoad()
 		logger::info("Skyrim Upscaler detected");
 	else
 		logger::info("Skyrim Upscaler not detected");
+	Deferred::Hooks::Install();
 }
 
 bool State::ValidateCache(CSimpleIniA& a_ini)
@@ -461,7 +471,7 @@ void State::SetupResources()
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor)
 {
-	if (a_shader.shaderType.get() == RE::BSShader::Type::Lighting || a_shader.shaderType.get() == RE::BSShader::Type::Water || a_shader.shaderType.get() == RE::BSShader::Type::Effect) {
+	if (a_shader.shaderType.get() == RE::BSShader::Type::Lighting || a_shader.shaderType.get() == RE::BSShader::Type::Water || a_shader.shaderType.get() == RE::BSShader::Type::Effect || a_shader.shaderType.get() == RE::BSShader::Type::DistantTree) {
 		if (a_vertexDescriptor != lastVertexDescriptor || a_pixelDescriptor != lastPixelDescriptor) {
 			PerShader data{};
 			data.VertexShaderDescriptor = a_vertexDescriptor;
@@ -505,6 +515,9 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 				if (vr || !enableImprovedSnow->GetBool())
 					a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow);
 
+				if (Deferred::GetSingleton()->deferredPass)
+					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred;
+
 				{
 					uint32_t technique = 0x3F & (a_vertexDescriptor >> 24);
 					if (technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Glowmap ||
@@ -546,6 +559,15 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor |
 									   (uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToAlpha |
 									   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
+
+				if (Deferred::GetSingleton()->deferredPass)
+					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::EffectShaderFlags::Deferred;
+			}
+			break;
+		case RE::BSShader::Type::DistantTree:
+			{
+				if (Deferred::GetSingleton()->deferredPass)
+					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::DistantTreeShaderFlags::Deferred;
 			}
 			break;
 		}
@@ -575,9 +597,9 @@ void State::UpdateSharedData(const RE::BSShader* a_shader, const uint32_t)
 	if (a_shader->shaderType.get() == RE::BSShader::Type::Lighting) {
 		bool updateBuffer = false;
 
-		bool currentReflections = (!REL::Module::IsVR() ?
-										  shadowState->GetRuntimeData().cubeMapRenderTarget :
-										  shadowState->GetVRRuntimeData().cubeMapRenderTarget) == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
+		GET_INSTANCE_MEMBER(cubeMapRenderTarget, shadowState);
+
+		bool currentReflections = cubeMapRenderTarget == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
 
 		if (lightingData.Reflections != (uint)currentReflections) {
 			updateBuffer = true;

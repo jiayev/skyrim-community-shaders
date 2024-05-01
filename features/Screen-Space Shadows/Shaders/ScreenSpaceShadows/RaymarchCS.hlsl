@@ -1,142 +1,57 @@
-#include "Common.hlsl"
 
-Texture2D<float> ShadowTexture : register(t1);
+#include "../Common/DeferredShared.hlsli"
 
-// Needed to fix a bug in VR that caused the arm
-// to have the "outline" of the VR headset canvas
-// rendered into it and to not cast rays outside the eyes
-#ifdef VR
-Texture2D<uint2> StencilTexture : register(t89);
-
-float GetStencil(float2 uv)
-{
-	return StencilTexture.Load(int3(uv * BufferDim * DynamicRes.xy, 0)).g;
-}
-
-float GetStencil(float2 uv, uint a_eyeIndex)
-{
-	uv = ConvertToStereoUV(uv, a_eyeIndex);
-	return GetStencil(uv);
-}
-#endif  // VR
-
-bool IsSaturated(float value)
-{
-	return value == saturate(value);
-}
-bool IsSaturated(float2 value) { return IsSaturated(value.x) && IsSaturated(value.y); }
-
-// https://www.shadertoy.com/view/Xt23zV
-float smoothbumpstep(float edge0, float edge1, float x)
-{
-	x = 1.0 - abs(clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0) - .5) * 2.0;
-	return x * x * (3.0 - x - x);
-}
-
-// Derived from the interleaved gradient function from Jimenez 2014 http://goo.gl/eomGso
-float InterleavedGradientNoise(float2 uv)
-{
-	float3 magic = float3(0.06711056f, 0.00583715f, 52.9829189f);
-	return frac(magic.z * frac(dot(uv, magic.xy)));
-}
-
-float GetScreenDepth(float depth)
+half GetScreenDepth(half depth)
 {
 	return (CameraData.w / (-depth * CameraData.z + CameraData.x));
 }
 
-float GetScreenDepth(float2 uv, uint a_eyeIndex)
+#include "bend_sss_gpu.hlsli"
+
+Texture2D<unorm half> DepthTexture : register(t0);     // Depth Buffer Texture (rasterized non-linear depth)
+RWTexture2D<unorm half> OutputTexture : register(u0);  // Output screen-space shadow buffer (typically single-channel, 8bit)
+SamplerState PointBorderSampler : register(s0);        // A point sampler, with Wrap Mode set to Clamp-To-Border-Color (D3D12_TEXTURE_ADDRESS_MODE_BORDER), and Border Color set to "FarDepthValue" (typically zero), or some other far-depth value out of DepthBounds.
+													   // If you have issues where invalid shadows are appearing from off-screen, it is likely that this sampler is not correctly setup
+
+cbuffer PerFrame : register(b1)
 {
-	uv = ConvertToStereoUV(uv, a_eyeIndex);
-	float depth = GetDepth(uv);
-	return GetScreenDepth(depth);
-}
+	// Runtime data returned from BuildDispatchList():
+	float4 LightCoordinate;  // Values stored in DispatchList::LightCoordinate_Shader by BuildDispatchList()
+	int2 WaveOffset;         // Values stored in DispatchData::WaveOffset_Shader by BuildDispatchList()
 
-float ScreenSpaceShadowsUV(float2 texcoord, float3 lightDirectionVS, uint eyeIndex)
-{
-#ifdef VR
-	if (GetStencil(texcoord) != 0)
-		return 1;
-#endif  // VR
+	// Renderer Specific Values:
+	float FarDepthValue;   // Set to the Depth Buffer Value for the far clip plane, as determined by renderer projection matrix setup (typically 0).
+	float NearDepthValue;  // Set to the Depth Buffer Value for the near clip plane, as determined by renderer projection matrix setup (typically 1).
 
-	// Ignore the sky
-	float startDepth = GetDepth(texcoord);
-	if (startDepth >= 1)
-		return 1;
+	// Sampling data:
+	float2 InvDepthTextureSize;  // Inverse of the texture dimensions for 'DepthTexture' (used to convert from pixel coordinates to UVs)
+								 // If 'PointBorderSampler' is an Unnormalized sampler, then this value can be hard-coded to 1.
+								 // The 'USE_HALF_PIXEL_OFFSET' macro might need to be defined if sampling at exact pixel coordinates isn't precise (e.g., if odd patterns appear in the shadow).
+	float SurfaceThickness;
+	float BilinearThreshold;
+	float ShadowContrast;
+};
 
-	// Compute ray position in view-space
-	float3 rayPos = InverseProjectUVZ(ConvertFromStereoUV(texcoord, eyeIndex), startDepth, eyeIndex);
+[numthreads(WAVE_SIZE, 1, 1)] void main(
+	int3 groupID
+	: SV_GroupID,
+	int groupThreadID
+	: SV_GroupThreadID) {
+	DispatchParameters parameters;
+	parameters.SetDefaults();
 
-	// Blends effect variables between near, mid and far field
-	float blendFactorFar = smoothstep(ShadowDistance / 3, ShadowDistance / 2, rayPos.z);
-	float blendFactorMid = smoothbumpstep(0, ShadowDistance / 2, rayPos.z);
+	parameters.LightCoordinate = LightCoordinate;
+	parameters.WaveOffset = WaveOffset;
+	parameters.FarDepthValue = 1;
+	parameters.NearDepthValue = 0;
+	parameters.InvDepthTextureSize = InvDepthTextureSize;
+	parameters.DepthTexture = DepthTexture;
+	parameters.OutputTexture = OutputTexture;
+	parameters.PointBorderSampler = PointBorderSampler;
 
-	// Max shadow length, longer shadows are less accurate
-	float maxDistance = lerp(NearDistance, rayPos.z * FarDistanceScale, blendFactorFar);
+	parameters.SurfaceThickness = SurfaceThickness;
+	parameters.BilinearThreshold = BilinearThreshold;
+	parameters.ShadowContrast = ShadowContrast;
 
-	// Max ray steps, affects quality and performance
-	uint maxSteps = max(1, (uint)((float)MaxSamples * (1 - blendFactorMid)));
-
-	// How far to move each sample each step
-	float stepLength = maxDistance / (float)maxSteps;
-
-	// Compute ray step
-	float3 rayStep = lightDirectionVS * stepLength;
-
-	// Offset starting position with interleaved gradient noise
-	float offset = InterleavedGradientNoise(texcoord * BufferDim);
-	rayPos += rayStep * offset;
-
-	float thickness = lerp(NearThickness, rayPos.z * FarThicknessScale, blendFactorFar);
-
-	// Accumulate samples
-	float shadow = 0.0f;
-	uint samples = 0;
-
-	float2 rayUV = 0.0f;
-	for (uint i = 0; i < maxSteps; i++) {
-		samples++;
-
-		// Step the ray
-		rayPos += rayStep;
-		rayUV = ViewToUV(rayPos, true, eyeIndex);
-
-		// Ensure the UV coordinates are inside the screen
-		if (!IsSaturated(rayUV))
-			break;
-
-#ifdef VR
-		if (GetStencil(rayUV, eyeIndex) != 0)
-			break;
-#endif  // VR
-
-		// Compute the difference between the ray's and the camera's depth
-		float rayDepth = GetScreenDepth(rayUV, eyeIndex);
-
-		// Difference between the current ray distance and the marched light
-		float depthDelta = rayPos.z - rayDepth;
-
-		// Distant shadows simulate real shadows whereas near shadows are only intended for small objects
-		float rayShadow = depthDelta / thickness;
-
-		// Check if the depth difference is considered a shadow
-		if (rayShadow > 0.0f && rayShadow <= 1.0f)
-			shadow += rayShadow;
-	}
-
-	// Average samples
-	shadow /= samples;
-
-	// Intensity and sharpness of shadows
-	shadow *= lerp(NearHardness, FarHardness, blendFactorFar);
-
-	// Convert to visibility
-	return 1 - saturate(shadow);
-}
-
-[numthreads(32, 32, 1)] void main(uint3 DTid
-								  : SV_DispatchThreadID) {
-	float2 texCoord = (DTid.xy + 0.5) * RcpBufferDim * DynamicRes.zw;
-	uint eyeIndex = GetEyeIndexFromTexCoord(texCoord);
-	OcclusionRW[DTid.xy] = ScreenSpaceShadowsUV(texCoord, InvDirLightDirectionVS.xyz, eyeIndex);
+	WriteScreenSpaceShadow(parameters, groupID, groupThreadID);
 }

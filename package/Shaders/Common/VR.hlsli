@@ -1,3 +1,5 @@
+#ifndef __VR_DEPENDENCY_HLSL__
+#define __VR_DEPENDENCY_HLSL__
 #ifdef VR
 cbuffer VRValues : register(b13)
 {
@@ -122,7 +124,7 @@ uint GetEyeIndexVS(uint instanceID = 0)
 
 /**
 Gets VR Output
-@param texCoord Texcoord on the screen [0,1]
+@param clipPos clipPosition. Typically the VSHADER position at SV_POSITION0
 @param a_eyeIndex The eyeIndex; 0 is left, 1 is right
 @returns VR_OUTPUT with VR values
 */
@@ -155,3 +157,4 @@ VR_OUTPUT GetVRVSOutput(float4 clipPos, uint a_eyeIndex = 0)
 	return vsout;
 }
 #endif
+#endif  //__VR_DEPENDENCY_HLSL__
