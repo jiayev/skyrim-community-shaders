@@ -1410,7 +1410,7 @@ namespace SIE
 		uint32_t descriptor)
 	{
 		auto state = State::GetSingleton();
-		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader) && ShaderCache::IsShaderSourceAvailable(shader)))) {
+		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)) && ShaderCache::IsShaderSourceAvailable(shader) && state->enableVShaders)) {
 			return nullptr;
 		}
 
@@ -1444,7 +1444,7 @@ namespace SIE
 		uint32_t descriptor)
 	{
 		auto state = State::GetSingleton();
-		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader) && ShaderCache::IsShaderSourceAvailable(shader)))) {
+		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)) && ShaderCache::IsShaderSourceAvailable(shader) && state->enablePShaders)) {
 			return nullptr;
 		}
 
@@ -1587,7 +1587,12 @@ namespace SIE
 		std::transform(path.begin(), path.end(), std::back_inserter(strPath), [](wchar_t c) {
 			return (char)c;
 		});
-		return std::filesystem::exists(path);
+		try {
+			return std::filesystem::exists(path);
+		} catch (const std::filesystem::filesystem_error& e) {
+			logger::warn("Error accessing {} : {}", strPath, e.what());
+			return false;
+		}
 	}
 
 	bool ShaderCache::IsCompiling()

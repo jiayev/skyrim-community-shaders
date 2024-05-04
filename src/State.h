@@ -14,6 +14,8 @@ public:
 	}
 
 	bool enabledClasses[RE::BSShader::Type::Total - 1];
+	bool enablePShaders = true;
+	bool enableVShaders = true;
 
 	bool updateShader = true;
 	RE::BSShader* currentShader = nullptr;

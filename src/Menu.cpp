@@ -424,7 +424,22 @@ void Menu::DrawSettings()
 					} else
 						ImGui::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
 				}
-
+				if (state->IsDeveloperMode()) {
+					ImGui::Checkbox("Vertex", &state->enableVShaders);
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::Text(
+							"Replace Vertex Shaders. "
+							"When false, will disable the custom Vertex Shaders for the types above. "
+							"For developers to test whether CS shaders match vanilla behavior. ");
+					}
+					ImGui::Checkbox("Pixel", &state->enablePShaders);
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::Text(
+							"Replace Pixel Shaders. "
+							"When false, will disable the custom Pixel Shaders for the types above. "
+							"For developers to test whether CS shaders match vanilla behavior. ");
+					}
+				}
 				ImGui::EndTable();
 			}
 		}
