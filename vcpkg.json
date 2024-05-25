@@ -30,7 +30,7 @@
   "overrides": [
     {
       "name": "bshoshany-thread-pool",
-      "version-string": "3.5.0"
+      "version-string": "4.1.0"
     }
   ],
   "builtin-baseline": "83972272512ce4ede5fc3b2ba98f6468b179f192"
