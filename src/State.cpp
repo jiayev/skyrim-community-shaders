@@ -207,8 +207,6 @@ static const std::string& GetConfigPath(State::ConfigMode a_configMode)
 void State::Load(ConfigMode a_configMode)
 {
 	ConfigMode configMode = a_configMode;
-	auto& shaderCache = SIE::ShaderCache::Instance();
-
 	std::string configPath = GetConfigPath(configMode);
 	std::ifstream i(configPath);
 	if (!i.is_open()) {
@@ -238,6 +236,8 @@ void State::Load(ConfigMode a_configMode)
 		logger::error("Error parsing json config file ({}) : {}\n", configPath, e.what());
 		return;
 	}
+
+	auto& shaderCache = SIE::ShaderCache::Instance();
 
 	if (settings["Menu"].is_object()) {
 		Menu::GetSingleton()->Load(settings["Menu"]);
