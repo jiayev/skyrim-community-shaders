@@ -1,3 +1,7 @@
+#if defined(DEFERRED)
+#	undef CLOUD_SHADOWS
+#endif
+
 struct VS_INPUT
 {
 	float4 Position : POSITION0;

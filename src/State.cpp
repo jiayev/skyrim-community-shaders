@@ -10,6 +10,7 @@
 #include "Util.h"
 
 #include "Deferred.h"
+#include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
 
 #include "VariableRateShading.h"
@@ -19,6 +20,11 @@ void State::Draw()
 	Deferred::GetSingleton()->UpdatePerms();
 	if (currentShader && updateShader) {
 		auto type = currentShader->shaderType.get();
+		if (type == RE::BSShader::Type::Utility) {
+			if (currentPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
+				Skylighting::GetSingleton()->CopyShadowData();
+			}
+		}
 		VariableRateShading::GetSingleton()->UpdateViews(type != RE::BSShader::Type::ImageSpace && type != RE::BSShader::Type::Sky && type != RE::BSShader::Type::Water);
 		auto& shaderCache = SIE::ShaderCache::Instance();
 		if (shaderCache.IsEnabled()) {
@@ -471,7 +477,7 @@ void State::SetupResources()
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor)
 {
-	if (a_shader.shaderType.get() == RE::BSShader::Type::Lighting || a_shader.shaderType.get() == RE::BSShader::Type::Water || a_shader.shaderType.get() == RE::BSShader::Type::Effect || a_shader.shaderType.get() == RE::BSShader::Type::DistantTree) {
+	if (a_shader.shaderType.get() == RE::BSShader::Type::Lighting || a_shader.shaderType.get() == RE::BSShader::Type::Water || a_shader.shaderType.get() == RE::BSShader::Type::Effect || a_shader.shaderType.get() == RE::BSShader::Type::DistantTree || a_shader.shaderType.get() == RE::BSShader::Type::Sky) {
 		if (a_vertexDescriptor != lastVertexDescriptor || a_pixelDescriptor != lastPixelDescriptor) {
 			PerShader data{};
 			data.VertexShaderDescriptor = a_vertexDescriptor;
@@ -568,6 +574,12 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			{
 				if (Deferred::GetSingleton()->deferredPass)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::DistantTreeShaderFlags::Deferred;
+			}
+			break;
+		case RE::BSShader::Type::Sky:
+			{
+				if (Deferred::GetSingleton()->deferredPass)
+					a_pixelDescriptor |= 256;
 			}
 			break;
 		}

@@ -65,15 +65,8 @@ struct CloudShadows : Feature
 
 	struct Hooks
 	{
-		struct BSBatchRenderer__RenderPassImmediately
-		{
-			static void thunk(RE::BSRenderPass* Pass, uint32_t Technique, bool AlphaTest, uint32_t RenderFlags);
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
 		static void Install()
 		{
-			stl::write_thunk_call<BSBatchRenderer__RenderPassImmediately>(REL::RelocationID(100877, 107630).address() + REL::Relocate(0x1E5, 0xFD));  // need SE addr
 		}
 	};
 };

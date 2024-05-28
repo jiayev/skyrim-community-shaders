@@ -35,7 +35,9 @@ public:
 	ID3D11ComputeShader* specularIrradianceCS = nullptr;
 	ConstantBuffer* spmapCB = nullptr;
 	Texture2D* envTexture = nullptr;
+	Texture2D* envReflectionsTexture = nullptr;
 	ID3D11UnorderedAccessView* uavArray[9];
+	ID3D11UnorderedAccessView* uavReflectionsArray[9];
 
 	// Reflection capture
 
@@ -66,7 +68,9 @@ public:
 	{
 		kCapture,
 		kInferrence,
-		kIrradiance
+		kInferrence2,
+		kIrradiance,
+		kIrradiance2
 	};
 
 	NextTask nextTask = NextTask::kCapture;
@@ -128,6 +132,10 @@ public:
 	void UpdateCubemapCapture();
 
 	virtual void DrawDeferred();
+
+	void Inferrence(bool a_reflections);
+
+	void Irradiance(bool a_reflections);
 
 	bool SupportsVR() override { return true; };
 };

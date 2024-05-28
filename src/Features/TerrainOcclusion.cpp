@@ -1,4 +1,5 @@
 #include "TerrainOcclusion.h"
+#include "Menu.h"
 
 #include "Deferred.h"
 #include "State.h"
@@ -111,12 +112,15 @@ void TerrainOcclusion::DrawSettings()
 			}
 			ImGui::Unindent();
 
-			ImGui::BulletText("texOcclusion");
-			ImGui::Image(texOcclusion->srv.get(), { texOcclusion->desc.Width * .1f, texOcclusion->desc.Height * .1f });
-			ImGui::BulletText("texNormalisedHeight");
-			ImGui::Image(texNormalisedHeight->srv.get(), { texNormalisedHeight->desc.Width * .1f, texNormalisedHeight->desc.Height * .1f });
-			ImGui::BulletText("texShadowHeight");
-			ImGui::Image(texShadowHeight->srv.get(), { texShadowHeight->desc.Width * .1f, texShadowHeight->desc.Height * .1f });
+			if (ImGui::TreeNode("Buffer Viewer")) {
+				static float debugRescale = .1f;
+				ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+
+				BUFFER_VIEWER_NODE_BULLET(texOcclusion, debugRescale)
+				BUFFER_VIEWER_NODE_BULLET(texNormalisedHeight, debugRescale)
+				BUFFER_VIEWER_NODE_BULLET(texShadowHeight, debugRescale)
+				ImGui::TreePop();
+			}
 		}
 	}
 }
@@ -224,15 +228,15 @@ void TerrainOcclusion::CompileComputeShaders()
 {
 	logger::debug("Compiling shaders...");
 	{
-		auto program_ptr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\TerrainOcclusion\\AOGen.cs.hlsl", { {} }, "cs_5_0"));
+		auto program_ptr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\TerrainOcclusion\\AOGen.cs.hlsl", {}, "cs_5_0"));
 		if (program_ptr)
 			occlusionProgram.attach(program_ptr);
 
-		program_ptr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\TerrainOcclusion\\ShadowUpdate.cs.hlsl", { {} }, "cs_5_0"));
+		program_ptr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\TerrainOcclusion\\ShadowUpdate.cs.hlsl", {}, "cs_5_0"));
 		if (program_ptr)
 			shadowUpdateProgram.attach(program_ptr);
 
-		program_ptr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\TerrainOcclusion\\Output.cs.hlsl", { {} }, "cs_5_0"));
+		program_ptr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\TerrainOcclusion\\Output.cs.hlsl", {}, "cs_5_0"));
 		if (program_ptr)
 			outputProgram.attach(program_ptr);
 	}

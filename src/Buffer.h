@@ -249,11 +249,18 @@ public:
 		DX::ThrowIfFailed(device->CreateRenderTargetView(resource.get(), &a_desc, rtv.put()));
 	}
 
+	void CreateDSV(D3D11_DEPTH_STENCIL_VIEW_DESC const& a_desc)
+	{
+		ID3D11Device* device = reinterpret_cast<ID3D11Device*>(RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().forwarder);
+		DX::ThrowIfFailed(device->CreateDepthStencilView(resource.get(), &a_desc, dsv.put()));
+	}
+
 	D3D11_TEXTURE2D_DESC desc;
 	winrt::com_ptr<ID3D11Texture2D> resource;
 	winrt::com_ptr<ID3D11ShaderResourceView> srv;
 	winrt::com_ptr<ID3D11UnorderedAccessView> uav;
 	winrt::com_ptr<ID3D11RenderTargetView> rtv;
+	winrt::com_ptr<ID3D11DepthStencilView> dsv;
 };
 
 class Texture3D
@@ -276,9 +283,14 @@ public:
 		ID3D11Device* device = reinterpret_cast<ID3D11Device*>(RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().forwarder);
 		DX::ThrowIfFailed(device->CreateUnorderedAccessView(resource.get(), &a_desc, uav.put()));
 	}
-
+	void CreateRTV(D3D11_RENDER_TARGET_VIEW_DESC const& a_desc)
+	{
+		ID3D11Device* device = reinterpret_cast<ID3D11Device*>(RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().forwarder);
+		DX::ThrowIfFailed(device->CreateRenderTargetView(resource.get(), &a_desc, rtv.put()));
+	}
 	D3D11_TEXTURE3D_DESC desc;
 	winrt::com_ptr<ID3D11Texture3D> resource;
 	winrt::com_ptr<ID3D11ShaderResourceView> srv;
 	winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+	winrt::com_ptr<ID3D11RenderTargetView> rtv;
 };

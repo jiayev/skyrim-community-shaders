@@ -60,13 +60,15 @@ groupshared lpfloat g_scratchDepths[8][8];
 [numthreads(8, 8, 1)] void main(uint2 dispatchThreadID
 								: SV_DispatchThreadID, uint2 groupThreadID
 								: SV_GroupThreadID) {
+	const float srcScale = SrcFrameDim * RcpTexDim;
+	const float outScale = OutFrameDim * RcpTexDim;
+
 	// MIP 0
 	const uint2 baseCoord = dispatchThreadID;
 	const uint2 pixCoord = baseCoord * 2;
-	const float2 uv = (pixCoord + .5) * RcpFrameDim * res_scale;
-	const uint eyeIndex = GET_EYE_IDX(uv);
+	const float2 uv = (pixCoord + .5) * RcpSrcFrameDim;
 
-	float4 depths4 = srcNDCDepth.GatherRed(samplerPointClamp, uv, int2(1, 1));
+	float4 depths4 = srcNDCDepth.GatherRed(samplerPointClamp, uv * srcScale, int2(1, 1));
 	lpfloat depth0 = ClampDepth(ScreenToViewDepth(depths4.w));
 	lpfloat depth1 = ClampDepth(ScreenToViewDepth(depths4.z));
 	lpfloat depth2 = ClampDepth(ScreenToViewDepth(depths4.x));

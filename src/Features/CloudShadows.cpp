@@ -4,6 +4,7 @@
 
 #include "Deferred.h"
 #include "Util.h"
+#include <ShaderCache.h>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudShadows::Settings,
@@ -12,19 +13,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PlanetRadius,
 	EffectMix,
 	TransparencyPower)
-
-enum class SkyShaderTechniques
-{
-	SunOcclude = 0,
-	SunGlare = 1,
-	MoonAndStarsMask = 2,
-	Stars = 3,
-	Clouds = 4,
-	CloudsLerp = 5,
-	CloudsFade = 6,
-	Texture = 7,
-	Sky = 8,
-};
 
 void CloudShadows::DrawSettings()
 {
@@ -75,7 +63,7 @@ void CloudShadows::CompileComputeShaders()
 {
 	logger::debug("Compiling shaders...");
 	{
-		outputProgram = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\CloudShadows\\output.cs.hlsl", { {} }, "cs_5_0"));
+		outputProgram = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\CloudShadows\\output.cs.hlsl", {}, "cs_5_0"));
 	}
 }
 
@@ -98,24 +86,10 @@ void CloudShadows::ModifySky(const RE::BSShader*, const uint32_t descriptor)
 	if (cubeMapRenderTarget != RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS)
 		return;
 
-	enum class SkyShaderTechniques
-	{
-		SunOcclude = 0,
-		SunGlare = 1,
-		MoonAndStarsMask = 2,
-		Stars = 3,
-		Clouds = 4,
-		CloudsLerp = 5,
-		CloudsFade = 6,
-		Texture = 7,
-		Sky = 8,
-	};
-
-	auto tech_enum = static_cast<SkyShaderTechniques>(descriptor);
-	if (tech_enum == SkyShaderTechniques::Clouds || tech_enum == SkyShaderTechniques::CloudsLerp || tech_enum == SkyShaderTechniques::CloudsFade) {
+	auto tech_enum = static_cast<SIE::ShaderCache::SkyShaderTechniques>(descriptor);
+	if (tech_enum == SIE::ShaderCache::SkyShaderTechniques::Clouds || tech_enum == SIE::ShaderCache::SkyShaderTechniques::CloudsLerp || tech_enum == SIE::ShaderCache::SkyShaderTechniques::CloudsFade) {
 		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 		auto& context = State::GetSingleton()->context;
-		auto& device = State::GetSingleton()->device;
 
 		{
 			ID3D11ShaderResourceView* srv = nullptr;
@@ -142,32 +116,6 @@ void CloudShadows::ModifySky(const RE::BSShader*, const uint32_t descriptor)
 
 		rtvs[3] = cubemapCloudOccRTVs[side];
 		context->OMSetRenderTargets(4, rtvs, depthStencil);
-
-		// blend states
-
-		ID3D11BlendState* blendState = nullptr;
-		FLOAT blendFactor[4] = { 0 };
-		UINT sampleMask = 0;
-
-		context->OMGetBlendState(&blendState, blendFactor, &sampleMask);
-
-		if (!mappedBlendStates.contains(blendState)) {
-			if (modifiedBlendStates.contains(blendState)) {
-				D3D11_BLEND_DESC blendDesc;
-				blendState->GetDesc(&blendDesc);
-
-				blendDesc.RenderTarget[3] = blendDesc.RenderTarget[0];
-
-				ID3D11BlendState* modifiedBlendState;
-				DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &modifiedBlendState));
-
-				mappedBlendStates.insert(modifiedBlendState);
-				modifiedBlendStates.insert({ blendState, modifiedBlendState });
-			}
-			context->OMSetBlendState(modifiedBlendStates[blendState], blendFactor, sampleMask);
-
-			resetBlendState = blendState;
-		}
 	}
 }
 
@@ -296,23 +244,4 @@ void CloudShadows::SetupResources()
 void CloudShadows::RestoreDefaultSettings()
 {
 	settings = {};
-}
-
-void CloudShadows::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::BSRenderPass* Pass, uint32_t Technique, bool AlphaTest, uint32_t RenderFlags)
-{
-	auto feat = GetSingleton();
-	auto& context = State::GetSingleton()->context;
-
-	func(Pass, Technique, AlphaTest, RenderFlags);
-
-	if (feat->resetBlendState) {
-		ID3D11BlendState* blendState = nullptr;
-		FLOAT blendFactor[4] = { 0 };
-		UINT sampleMask = 0;
-
-		context->OMGetBlendState(&blendState, blendFactor, &sampleMask);
-		context->OMSetBlendState(feat->resetBlendState, blendFactor, sampleMask);
-
-		feat->resetBlendState = nullptr;
-	}
 }

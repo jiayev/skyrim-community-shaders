@@ -262,8 +262,8 @@ void ScreenSpaceShadows::DrawNormalMappingShadows()
 		float resolutionX = state->screenWidth * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
 		float resolutionY = state->screenHeight * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
 
-		uint32_t dispatchX = (uint32_t)std::ceil(resolutionX / 32.0f);
-		uint32_t dispatchY = (uint32_t)std::ceil(resolutionY / 32.0f);
+		uint32_t dispatchX = (uint32_t)std::ceil(resolutionX / 8.0f);
+		uint32_t dispatchY = (uint32_t)std::ceil(resolutionY / 8.0f);
 
 		context->Dispatch(dispatchX, dispatchY, 1);
 	}

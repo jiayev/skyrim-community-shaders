@@ -2,8 +2,10 @@
 #include "State.h"
 #include "Util.h"
 #include <Features/CloudShadows.h>
+#include <Features/DynamicCubemaps.h>
 #include <Features/ScreenSpaceGI.h>
 #include <Features/ScreenSpaceShadows.h>
+#include <Features/Skylighting.h>
 #include <Features/SubsurfaceScattering.h>
 #include <Features/TerrainOcclusion.h>
 #include <ShaderCache.h>
@@ -139,6 +141,8 @@ void Deferred::SetupResources()
 		SetupRenderTarget(NORMALROUGHNESS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R8G8B8A8_UNORM);
 		// Masks
 		SetupRenderTarget(MASKS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R8G8B8A8_UNORM);
+		// Additional Masks
+		SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R8G8B8A8_UNORM);
 	}
 
 	{
@@ -196,10 +200,6 @@ void Deferred::SetupResources()
 
 void Deferred::Reset()
 {
-	//for (auto& str : perms)
-	//{
-	////	logger::info("{}", str);
-	//}
 }
 
 void Deferred::UpdateConstantBuffer()
@@ -388,7 +388,7 @@ void Deferred::StartDeferred()
 		SPECULAR,
 		REFLECTANCE,
 		MASKS,
-		forwardRenderTargets[3]  // Improved snow shader
+		MASKS2
 	};
 
 	for (uint i = 2; i < 8; i++) {
@@ -397,19 +397,6 @@ void Deferred::StartDeferred()
 	}
 
 	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);  // Run OMSetRenderTargets again
-
-	static BlendStates* blendStates = (BlendStates*)REL::RelocationID(524749, 411364).address();
-
-	// Set modified blend states
-	blendStates->a[0][0][1][0] = deferredBlendStates[0];
-	blendStates->a[0][0][10][0] = deferredBlendStates[1];
-	blendStates->a[1][0][1][0] = deferredBlendStates[2];
-	blendStates->a[1][0][11][0] = deferredBlendStates[3];
-	blendStates->a[2][0][1][0] = deferredBlendStates[4];
-	blendStates->a[2][0][11][0] = deferredBlendStates[5];
-	blendStates->a[3][0][11][0] = deferredBlendStates[6];
-
-	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
 
 	deferredPass = true;
 }
@@ -428,6 +415,8 @@ void Deferred::DeferredPasses()
 		context->CSSetConstantBuffers(0, 1, &buffer);
 	}
 
+	Skylighting::GetSingleton()->Bind();
+
 	{
 		FLOAT clr[4] = { 0., 0., 0., 1. };
 		context->ClearUnorderedAccessViewFloat(giTexture->uav.get(), clr);
@@ -440,9 +429,11 @@ void Deferred::DeferredPasses()
 	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 	auto shadowMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
 	auto masks = renderer->GetRuntimeData().renderTargets[MASKS];
+	auto masks2 = renderer->GetRuntimeData().renderTargets[MASKS2];
 
 	auto main = renderer->GetRuntimeData().renderTargets[forwardRenderTargets[0]];
 	auto normals = renderer->GetRuntimeData().renderTargets[forwardRenderTargets[2]];
+	auto snow = renderer->GetRuntimeData().renderTargets[forwardRenderTargets[3]];
 
 	// Only render directional shadows if the game has a directional shadow caster
 	auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
@@ -461,22 +452,40 @@ void Deferred::DeferredPasses()
 		if (CloudShadows::GetSingleton()->loaded) {
 			CloudShadows::GetSingleton()->DrawShadows();
 		}
+
+		if (Skylighting::GetSingleton()->loaded) {
+			ID3D11ShaderResourceView* srvs[1]{
+				Skylighting::GetSingleton()->skylightingTexture->srv.get(),
+			};
+
+			context->CSSetShaderResources(10, ARRAYSIZE(srvs), srvs);
+		}
+
+		if (DynamicCubemaps::GetSingleton()->loaded) {
+			ID3D11ShaderResourceView* srvs[2]{
+				DynamicCubemaps::GetSingleton()->envTexture->srv.get(),
+				DynamicCubemaps::GetSingleton()->envReflectionsTexture->srv.get(),
+			};
+
+			context->CSSetShaderResources(12, ARRAYSIZE(srvs), srvs);
+		}
 	}
 
 	{
-		ID3D11ShaderResourceView* srvs[7]{
+		ID3D11ShaderResourceView* srvs[8]{
 			specular.SRV,
 			albedo.SRV,
 			reflectance.SRV,
 			normalRoughness.SRV,
 			shadowMask.SRV,
 			depth.depthSRV,
-			masks.SRV
+			masks.SRV,
+			masks2.SRV
 		};
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-		ID3D11UnorderedAccessView* uavs[2]{ main.UAV, normals.UAV };
+		ID3D11UnorderedAccessView* uavs[1]{ main.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		context->CSSetSamplers(0, 1, &linearSampler);
@@ -487,8 +496,8 @@ void Deferred::DeferredPasses()
 		float resolutionX = state->screenWidth * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
 		float resolutionY = state->screenHeight * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
 
-		uint32_t dispatchX = (uint32_t)std::ceil(resolutionX / 32.0f);
-		uint32_t dispatchY = (uint32_t)std::ceil(resolutionY / 32.0f);
+		uint32_t dispatchX = (uint32_t)std::ceil(resolutionX / 8.0f);
+		uint32_t dispatchY = (uint32_t)std::ceil(resolutionY / 8.0f);
 
 		context->Dispatch(dispatchX, dispatchY, 1);
 	}
@@ -501,7 +510,7 @@ void Deferred::DeferredPasses()
 
 	{
 		{
-			ID3D11ShaderResourceView* srvs[8]{
+			ID3D11ShaderResourceView* srvs[9]{
 				specular.SRV,
 				albedo.SRV,
 				reflectance.SRV,
@@ -509,12 +518,13 @@ void Deferred::DeferredPasses()
 				shadowMask.SRV,
 				depth.depthSRV,
 				masks.SRV,
+				masks2.SRV,
 				giTexture->srv.get(),
 			};
 
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-			ID3D11UnorderedAccessView* uavs[2]{ main.UAV, normals.UAV };
+			ID3D11UnorderedAccessView* uavs[1]{ main.UAV };
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 			context->CSSetSamplers(0, 1, &linearSampler);
@@ -525,8 +535,8 @@ void Deferred::DeferredPasses()
 			float resolutionX = state->screenWidth * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
 			float resolutionY = state->screenHeight * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
 
-			uint32_t dispatchX = (uint32_t)std::ceil(resolutionX / 32.0f);
-			uint32_t dispatchY = (uint32_t)std::ceil(resolutionY / 32.0f);
+			uint32_t dispatchX = (uint32_t)std::ceil(resolutionX / 8.0f);
+			uint32_t dispatchY = (uint32_t)std::ceil(resolutionY / 8.0f);
 
 			context->Dispatch(dispatchX, dispatchY, 1);
 		}
@@ -538,7 +548,7 @@ void Deferred::DeferredPasses()
 
 	{
 		{
-			ID3D11ShaderResourceView* srvs[8]{
+			ID3D11ShaderResourceView* srvs[9]{
 				specular.SRV,
 				albedo.SRV,
 				reflectance.SRV,
@@ -546,12 +556,13 @@ void Deferred::DeferredPasses()
 				shadowMask.SRV,
 				depth.depthSRV,
 				masks.SRV,
+				masks2.SRV,
 				giTexture->srv.get(),
 			};
 
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-			ID3D11UnorderedAccessView* uavs[2]{ main.UAV, normals.UAV };
+			ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, snow.UAV };
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 			context->CSSetSamplers(0, 1, &linearSampler);
@@ -562,17 +573,17 @@ void Deferred::DeferredPasses()
 			float resolutionX = state->screenWidth * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
 			float resolutionY = state->screenHeight * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
 
-			uint32_t dispatchX = (uint32_t)std::ceil(resolutionX / 32.0f);
-			uint32_t dispatchY = (uint32_t)std::ceil(resolutionY / 32.0f);
+			uint32_t dispatchX = (uint32_t)std::ceil(resolutionX / 8.0f);
+			uint32_t dispatchY = (uint32_t)std::ceil(resolutionY / 8.0f);
 
 			context->Dispatch(dispatchX, dispatchY, 1);
 		}
 	}
 
-	ID3D11ShaderResourceView* views[8]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+	ID3D11ShaderResourceView* views[9]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 	context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-	ID3D11UnorderedAccessView* uavs[2]{ nullptr, nullptr };
+	ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 	ID3D11Buffer* buffer = nullptr;
@@ -613,6 +624,115 @@ void Deferred::EndDeferred()
 
 	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);  // Run OMSetRenderTargets again
 
+	deferredPass = false;
+}
+
+void Deferred::OverrideBlendStates()
+{
+	static bool setup = false;
+	if (!setup) {
+		auto& device = State::GetSingleton()->device;
+
+		static BlendStates* blendStates = (BlendStates*)REL::RelocationID(524749, 411364).address();
+
+		{
+			forwardBlendStates[0] = blendStates->a[0][0][1][0];
+
+			D3D11_BLEND_DESC blendDesc;
+			forwardBlendStates[0]->GetDesc(&blendDesc);
+
+			blendDesc.IndependentBlendEnable = false;
+
+			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[0]));
+		}
+
+		{
+			forwardBlendStates[1] = blendStates->a[0][0][10][0];
+
+			D3D11_BLEND_DESC blendDesc;
+			forwardBlendStates[1]->GetDesc(&blendDesc);
+
+			blendDesc.IndependentBlendEnable = false;
+
+			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[1]));
+		}
+
+		{
+			forwardBlendStates[2] = blendStates->a[1][0][1][0];
+
+			D3D11_BLEND_DESC blendDesc;
+			forwardBlendStates[2]->GetDesc(&blendDesc);
+
+			blendDesc.IndependentBlendEnable = false;
+
+			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[2]));
+		}
+
+		{
+			forwardBlendStates[3] = blendStates->a[1][0][11][0];
+
+			D3D11_BLEND_DESC blendDesc;
+			forwardBlendStates[3]->GetDesc(&blendDesc);
+
+			blendDesc.IndependentBlendEnable = false;
+
+			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[3]));
+		}
+
+		{
+			forwardBlendStates[4] = blendStates->a[2][0][1][0];
+
+			D3D11_BLEND_DESC blendDesc;
+			forwardBlendStates[4]->GetDesc(&blendDesc);
+
+			blendDesc.IndependentBlendEnable = false;
+
+			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[4]));
+		}
+
+		{
+			forwardBlendStates[5] = blendStates->a[2][0][11][0];
+
+			D3D11_BLEND_DESC blendDesc;
+			forwardBlendStates[5]->GetDesc(&blendDesc);
+
+			blendDesc.IndependentBlendEnable = false;
+
+			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[5]));
+		}
+
+		{
+			forwardBlendStates[6] = blendStates->a[3][0][11][0];
+
+			D3D11_BLEND_DESC blendDesc;
+			forwardBlendStates[6]->GetDesc(&blendDesc);
+
+			blendDesc.IndependentBlendEnable = false;
+
+			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[6]));
+		}
+		setup = true;
+	}
+
+	static BlendStates* blendStates = (BlendStates*)REL::RelocationID(524749, 411364).address();
+
+	// Set modified blend states
+	blendStates->a[0][0][1][0] = deferredBlendStates[0];
+	blendStates->a[0][0][10][0] = deferredBlendStates[1];
+	blendStates->a[1][0][1][0] = deferredBlendStates[2];
+	blendStates->a[1][0][11][0] = deferredBlendStates[3];
+	blendStates->a[2][0][1][0] = deferredBlendStates[4];
+	blendStates->a[2][0][11][0] = deferredBlendStates[5];
+	blendStates->a[3][0][11][0] = deferredBlendStates[6];
+
+	auto& state = State::GetSingleton()->shadowState;
+	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
+
+	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
+}
+
+void Deferred::ResetBlendStates()
+{
 	static BlendStates* blendStates = (BlendStates*)REL::RelocationID(524749, 411364).address();
 
 	// Restore modified blend states
@@ -624,9 +744,10 @@ void Deferred::EndDeferred()
 	blendStates->a[2][0][11][0] = forwardBlendStates[5];
 	blendStates->a[3][0][11][0] = forwardBlendStates[6];
 
-	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
+	auto& state = State::GetSingleton()->shadowState;
+	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
 
-	deferredPass = false;
+	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
 }
 
 void Deferred::UpdatePerms()

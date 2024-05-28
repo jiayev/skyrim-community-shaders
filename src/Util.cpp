@@ -172,7 +172,8 @@ namespace Util
 			logger::warn("Shader compilation failed:\n\n{}", shaderErrors ? (const char*)shaderErrors->GetBufferPointer() : "Unknown error");
 			return nullptr;
 		}
-
+		if (shaderErrors)
+			logger::debug("Shader logs:\n{}", (const char*)shaderErrors->GetBufferPointer());
 		if (!_stricmp(ProgramType, "ps_5_0")) {
 			ID3D11PixelShader* regShader;
 			device->CreatePixelShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader);

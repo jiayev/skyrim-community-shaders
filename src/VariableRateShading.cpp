@@ -46,55 +46,63 @@ void VariableRateShading::UpdateVRS()
 	if (!vrsActive)
 		return;
 
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto& context = State::GetSingleton()->context;
+	const auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+	auto bTAA = !REL::Module::IsVR() ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled :
+	                                   imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled;
 
-	ID3D11RenderTargetView* views[8];
-	ID3D11DepthStencilView* dsv;
-	context->OMGetRenderTargets(8, views, &dsv);
+	temporal = bTAA || State::GetSingleton()->upscalerLoaded;
 
-	ID3D11RenderTargetView* nullViews[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-	ID3D11DepthStencilView* nullDsv = nullptr;
-	context->OMSetRenderTargets(8, nullViews, nullDsv);
+	if (enableVRS && temporal && !RE::UI::GetSingleton()->GameIsPaused()) {
+		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+		auto& context = State::GetSingleton()->context;
 
-	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kMAIN];
-	auto& motionVectors = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kMOTION_VECTOR];
+		ID3D11RenderTargetView* views[8];
+		ID3D11DepthStencilView* dsv;
+		context->OMGetRenderTargets(8, views, &dsv);
 
-	ID3D11ShaderResourceView* srvs[2]{
-		main.SRV,
-		motionVectors.SRV
-	};
+		ID3D11RenderTargetView* nullViews[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11DepthStencilView* nullDsv = nullptr;
+		context->OMSetRenderTargets(8, nullViews, nullDsv);
 
-	context->CSSetShaderResources(0, 2, srvs);
+		auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kMAIN];
+		auto& motionVectors = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kMOTION_VECTOR];
 
-	ID3D11UnorderedAccessView* uavs[1]{ reductionData->uav.get() };
-	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+		ID3D11ShaderResourceView* srvs[2]{
+			main.SRV,
+			motionVectors.SRV
+		};
 
-	auto shader = GetComputeNASData();
-	context->CSSetShader(shader, nullptr, 0);
+		context->CSSetShaderResources(0, 2, srvs);
 
-	context->Dispatch(reductionData->desc.Width, reductionData->desc.Height, 1);
+		ID3D11UnorderedAccessView* uavs[1]{ reductionData->uav.get() };
+		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
-	srvs[0] = nullptr;
-	srvs[1] = nullptr;
-	context->CSSetShaderResources(0, 1, srvs);
+		auto shader = GetComputeNASData();
+		context->CSSetShader(shader, nullptr, 0);
 
-	uavs[0] = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+		context->Dispatch(reductionData->desc.Width, reductionData->desc.Height, 1);
 
-	context->CSSetShader(nullptr, nullptr, 0);
+		srvs[0] = nullptr;
+		srvs[1] = nullptr;
+		context->CSSetShaderResources(0, 1, srvs);
 
-	ComputeShadingRate();
+		uavs[0] = nullptr;
+		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
-	context->OMSetRenderTargets(8, views, dsv);
+		context->CSSetShader(nullptr, nullptr, 0);
 
-	for (int i = 0; i < 8; i++) {
-		if (views[i])
-			views[i]->Release();
+		ComputeShadingRate();
+
+		context->OMSetRenderTargets(8, views, dsv);
+
+		for (int i = 0; i < 8; i++) {
+			if (views[i])
+				views[i]->Release();
+		}
+
+		if (dsv)
+			dsv->Release();
 	}
-
-	if (dsv)
-		dsv->Release();
 }
 
 void VariableRateShading::ComputeShadingRate()
@@ -116,8 +124,8 @@ void VariableRateShading::ComputeShadingRate()
 	float resolutionX = (float)reductionData->desc.Width;
 	float resolutionY = (float)reductionData->desc.Height;
 
-	uint32_t dispatchX = (uint32_t)std::ceil(resolutionX / 32.0f);
-	uint32_t dispatchY = (uint32_t)std::ceil(resolutionY / 32.0f);
+	uint32_t dispatchX = (uint32_t)std::ceil(resolutionX / 8.0f);
+	uint32_t dispatchY = (uint32_t)std::ceil(resolutionY / 8.0f);
 
 	context->Dispatch(dispatchX, dispatchY, 1);
 
@@ -154,6 +162,8 @@ std::vector<uint8_t> CreateSingleEyeFixedFoveatedVRSPattern(int width, int heigh
 
 void VariableRateShading::Setup()
 {
+	Hooks::Install();
+
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto& device = State::GetSingleton()->device;
 
@@ -195,7 +205,7 @@ void VariableRateShading::Setup()
 		main.SRV->GetDesc(&srvDesc);
 		main.UAV->GetDesc(&uavDesc);
 
-		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 		srvDesc.Format = texDesc.Format;
 		uavDesc.Format = texDesc.Format;
 
@@ -274,14 +284,6 @@ void VariableRateShading::UpdateViews(bool a_enable)
 	if (!vrsActive)
 		return;
 
-	bool interior = false;
-	if (auto player = RE::PlayerCharacter::GetSingleton()) {
-		if (auto cell = player->GetParentCell()) {
-			if (cell->IsInteriorCell()) {
-				interior = true;
-			}
-		}
-	}
 	auto& context = State::GetSingleton()->context;
 
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
@@ -295,7 +297,7 @@ void VariableRateShading::UpdateViews(bool a_enable)
 		vrsPass = true;
 	}
 
-	vrsPass = enableVRS && vrsPass && a_enable && !RE::UI::GetSingleton()->GameIsPaused() && interior;
+	vrsPass = enableVRS && vrsPass && temporal && a_enable && notLandscape && !RE::UI::GetSingleton()->GameIsPaused();
 
 	static bool currentVRS = false;
 

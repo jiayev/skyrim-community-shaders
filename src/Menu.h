@@ -7,11 +7,16 @@
 #include <shared_mutex>
 
 using namespace std::chrono;
-#define BUFFER_VIEWER_NODE(a_value)                                                                  \
-	if (ImGui::TreeNode(#a_value)) {                                                                 \
-		ImGui::Image(a_value->srv.get(), { a_value->desc.Width * .3f, a_value->desc.Height * .3f }); \
-		ImGui::TreePop();                                                                            \
+#define BUFFER_VIEWER_NODE(a_value, a_scale)                                                                 \
+	if (ImGui::TreeNode(#a_value)) {                                                                         \
+		ImGui::Image(a_value->srv.get(), { a_value->desc.Width * a_scale, a_value->desc.Height * a_scale }); \
+		ImGui::TreePop();                                                                                    \
 	}
+
+#define BUFFER_VIEWER_NODE_BULLET(a_value, a_scale) \
+	ImGui::BulletText(#a_value);                    \
+	ImGui::Image(a_value->srv.get(), { a_value->desc.Width * a_scale, a_value->desc.Height * a_scale });
+
 #define ADDRESS_NODE(a_value)                                                                        \
 	if (ImGui::Button(#a_value)) {                                                                   \
 		ImGui::SetClipboardText(std::format("{0:x}", reinterpret_cast<uintptr_t>(a_value)).c_str()); \

@@ -119,7 +119,8 @@ namespace SIE
 			       type == RE::BSShader::Type::DistantTree ||
 			       type == RE::BSShader::Type::Water ||
 			       type == RE::BSShader::Type::Grass ||
-			       type == RE::BSShader::Type::Effect;
+			       type == RE::BSShader::Type::Effect ||
+			       type == RE::BSShader::Type::Utility;
 		}
 
 		inline static bool IsSupportedShader(const RE::BSShader& shader)

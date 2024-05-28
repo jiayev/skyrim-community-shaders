@@ -16,9 +16,9 @@ struct ScreenSpaceShadows : Feature
 
 	struct BendSettings
 	{
-		float SurfaceThickness = 0.005f;
+		float SurfaceThickness = 0.010f;
 		float BilinearThreshold = 0.02f;
-		float ShadowContrast = 1.0f;
+		float ShadowContrast = 4.0f;
 		uint Enable = 1;
 		uint EnableNormalMappingShadows = 1;
 		uint SampleCount = 1;

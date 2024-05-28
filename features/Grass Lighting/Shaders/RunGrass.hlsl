@@ -344,7 +344,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (!frontFace)
 		normal = -normal;
 
-	normal = normalize(lerp(normal, normalize(input.SphereNormal.xyz), input.SphereNormal.w));
+	normal = normalize(lerp(normal, normalize(input.SphereNormal.xyz), sqrt(input.SphereNormal.w)));
 
 	if (complex) {
 		float3 normalColor = TransformNormal(specColor.xyz);
@@ -367,12 +367,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float dirLightAngle = dot(normal, DirLightDirection.xyz);
 
-	// Generated texture to simulate light transport.
-	// Numerous attempts were made to use a more interesting algorithm however they were mostly fruitless.
-	float3 subsurfaceColor = baseColor.xyz * sqrt(input.SphereNormal.w);
+	float3 albedo = max(0, baseColor.xyz * input.VertexColor.xyz);
 
-	// Applies lighting from the opposite direction. Does not account for normals perpendicular to the light source.
-	lightsDiffuseColor += subsurfaceColor * dirLightColor * saturate(-dirLightAngle) * SubsurfaceScatteringAmount;
+	// Generated texture to simulate light transport.
+	float3 subsurfaceColor = pow(lerp(RGBToLuminance(albedo.xyz), albedo.xyz, 2.0), 1.5) * input.SphereNormal.w;
+
+	float3 sss = dirLightColor * sqrt(-dirLightAngle * 0.5 + 0.5);
 
 	if (complex)
 		lightsSpecularColor += GetLightSpecularInput(DirLightDirection, viewDirection, normal, dirLightColor, Glossiness);
@@ -417,7 +417,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 				float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
-				lightDiffuseColor += subsurfaceColor * lightColor * saturate(-lightAngle) * SubsurfaceScatteringAmount;
+				sss += lightColor * sqrt(-lightAngle * 0.5 + 0.5);
+
 				lightsDiffuseColor += lightDiffuseColor * intensityMultiplier;
 
 				if (complex)
@@ -429,8 +430,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	diffuseColor += lightsDiffuseColor;
 
-	float3 albedo = max(0, baseColor.xyz * input.VertexColor.xyz);
 	diffuseColor *= albedo;
+	diffuseColor += max(0, sss * subsurfaceColor * SubsurfaceScatteringAmount);
 
 	specularColor += lightsSpecularColor;
 	specularColor *= specColor.w * SpecularStrength;

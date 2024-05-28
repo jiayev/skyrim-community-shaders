@@ -14,13 +14,9 @@ SamplerState SamplerDefault;
 [numthreads(32, 32, 1)] void main(uint2 dtid
 								  : SV_DispatchThreadID) {
 	float2 uv = (dtid + .5) * RcpBufferDim;
-#ifdef VR
-	const uint eyeIndex = uv > .5;
-#else
-	const uint eyeIndex = 0;
-#endif
+	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
 
-	float3 ndc = float3(ConvertToStereoUV(uv, eyeIndex), 1);
+	float3 ndc = float3(ConvertFromStereoUV(uv, eyeIndex), 1);
 	ndc = ndc * 2 - 1;
 	ndc.y = -ndc.y;
 	ndc.z = TexDepth[dtid];
@@ -28,7 +24,7 @@ SamplerState SamplerDefault;
 	float4 worldPos = mul(InvViewMatrix[eyeIndex], mul(InvProjMatrix[eyeIndex], float4(ndc, 1)));
 	worldPos.xyz /= worldPos.w;
 	float viewDistance = length(worldPos);
-	worldPos.xyz += CamPosAdjust[0].xyz;
+	worldPos.xyz += CamPosAdjust[eyeIndex].xyz;
 
 	float terrainShadow = 1;
 	float terrainAo = 1;

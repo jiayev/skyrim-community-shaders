@@ -123,7 +123,7 @@ namespace SIE
 		{
 			using enum ShaderCache::SkyShaderTechniques;
 
-			const auto technique = static_cast<ShaderCache::SkyShaderTechniques>(descriptor);
+			const auto technique = static_cast<ShaderCache::SkyShaderTechniques>(descriptor & 255);
 			int lastIndex = 0;
 			switch (technique) {
 			case SunOcclude:
@@ -178,6 +178,12 @@ namespace SIE
 					defines[lastIndex++] = { "DITHER", nullptr };
 					break;
 				}
+			}
+
+			uint32_t flags = descriptor >> 8;
+
+			if (flags) {
+				defines[lastIndex++] = { "DEFERRED", nullptr };
 			}
 
 			for (auto* feature : Feature::GetFeatureList()) {

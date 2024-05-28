@@ -53,10 +53,14 @@ cbuffer SSGICB : register(b1)
 	float4x4 PrevInvViewMat[2];
 	float4 NDCToViewMul;
 	float4 NDCToViewAdd;
-	float4 NDCToViewMul_x_PixelSize;
 
-	float2 FrameDim;
-	float2 RcpFrameDim;
+	float2 TexDim;
+	float2 RcpTexDim;
+	float2 SrcFrameDim;
+	float2 RcpSrcFrameDim;
+	float2 OutFrameDim;
+	float2 RcpOutFrameDim;
+
 	uint FrameIndex;
 
 	uint NumSlices;
@@ -79,9 +83,12 @@ cbuffer SSGICB : register(b1)
 	float GIStrength;
 
 	float DepthDisocclusion;
+	float NormalDisocclusion;
 	uint MaxAccumFrames;
 
-	float pad;
+	float BlurRadius;
+	float DistanceNormalisation;
+	float2 pad;
 };
 
 SamplerState samplerPointClamp : register(s0);
@@ -89,14 +96,16 @@ SamplerState samplerLinearClamp : register(s1);
 
 ///////////////////////////////////////////////////////////////////////////////
 
+// screenPos - normalised position in FrameDim, one eye only
+// uv - normalised position in FrameDim, both eye
+// texCoord - texture coordinate
+
 #ifdef HALF_RES
-const static float res_scale = .5;
 #	define READ_DEPTH(tex, px) tex.Load(int3(px, 1))
-#	define FULLRES_LOAD(tex, px, uv, samp) tex.SampleLevel(samp, uv, 0)
+#	define FULLRES_LOAD(tex, px, texCoord, samp) tex.SampleLevel(samp, texCoord, 0)
 #else
-const static float res_scale = 1.;
 #	define READ_DEPTH(tex, px) tex[px]
-#	define FULLRES_LOAD(tex, px, uv, samp) tex[px]
+#	define FULLRES_LOAD(tex, px, texCoord, samp) tex[px]
 #endif
 
 #ifdef VR

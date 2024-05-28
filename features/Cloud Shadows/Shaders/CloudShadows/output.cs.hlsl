@@ -55,13 +55,9 @@ float3 getCloudShadowMult(float3 rel_pos, float3 eye_to_sun)
 [numthreads(32, 32, 1)] void main(uint2 dtid
 								  : SV_DispatchThreadID) {
 	float2 uv = (dtid + .5) * RcpBufferDim;
-#ifdef VR
-	const uint eyeIndex = uv > .5;
-#else
-	const uint eyeIndex = 0;
-#endif
+	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
 
-	float3 ndc = float3(ConvertToStereoUV(uv, eyeIndex), 1);
+	float3 ndc = float3(ConvertFromStereoUV(uv, eyeIndex), 1);
 	ndc = ndc * 2 - 1;
 	ndc.y = -ndc.y;
 	ndc.z = TexDepth[dtid];
