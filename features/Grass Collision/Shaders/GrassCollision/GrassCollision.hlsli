@@ -1,52 +1,32 @@
+struct CollisionData
+{
+	float4 centre[2];
+};
 
 cbuffer GrassCollisionPerFrame : register(b5)
 {
-	float4 boundCentre[2];
-	float boundRadius;
-	bool EnableGrassCollision;
-	float RadiusMultiplier;
-	float DisplacementMultiplier;
-	float maxDistance;
+	CollisionData collisionData[256];
+	uint numCollisions;
 }
-
-struct StructuredCollision
-{
-	float3 centre[2];
-	float radius;
-};
-
-StructuredBuffer<StructuredCollision> collisions : register(t0);
 
 float3 GetDisplacedPosition(float3 position, float alpha, uint eyeIndex = 0)
 {
-	float3 worldPosition = mul(World[eyeIndex], float4(position, 1)).xyz;
-	float3 displacement = 0;
+	float3 worldPosition = mul(World[eyeIndex], float4(position, 1.0)).xyz;
 
-	// Player bound culling and distance from player culling
-	{
-		float dist = distance(boundCentre[eyeIndex].xyz, worldPosition);
-		if ((dist > boundRadius) && (dist > maxDistance)) {
-			return 0;
-		}
-	}
+	if (length(worldPosition) < 1024.0 && alpha > 0.0) {
+		float3 displacement = 0.0;
 
-	if (EnableGrassCollision) {
-		uint counter = 0;
-		uint collision_count, dummy;
-		collisions.GetDimensions(collision_count, dummy);
-		for (uint collision_index = 0; collision_index < collision_count; collision_index++) {
-			StructuredCollision collision = collisions[collision_index];
-
-			float dist = distance(collision.centre[eyeIndex], worldPosition);
-			float power = smoothstep(collision.radius, 0.0, dist);
-			float3 direction = worldPosition - collision.centre[eyeIndex];
-			direction.y = 0;  // stops expanding/stretching
-			direction = normalize(direction);
+		for (uint i = 0; i < numCollisions; i++) {
+			float dist = distance(collisionData[i].centre[eyeIndex], worldPosition);
+			float power = 1.0 - saturate(dist / collisionData[i].centre[0].w);
+			float3 direction = worldPosition - collisionData[i].centre[eyeIndex];
 			float3 shift = power * direction;
-			shift.z -= power;  // bias downwards
-			displacement += shift.xyz;
+			displacement += shift;
+			displacement.z -= length(shift.xy);
 		}
+
+		return displacement * alpha;
 	}
 
-	return displacement * saturate(alpha * alpha * 5) * DisplacementMultiplier;
+	return 0.0;
 }

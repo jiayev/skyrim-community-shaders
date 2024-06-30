@@ -1,6 +1,4 @@
-#if defined(DEFERRED)
-#	undef CLOUD_SHADOWS
-#endif
+
 
 struct VS_INPUT
 {
@@ -123,9 +121,9 @@ typedef VS_OUTPUT PS_INPUT;
 struct PS_OUTPUT
 {
 	float4 Color : SV_Target0;
-	float2 MotionVectors : SV_Target1;
+	float4 MotionVectors : SV_Target1;
 	float4 Normal : SV_Target2;
-#if defined(CLOUD_SHADOWS) && defined(CLOUDS)
+#if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
 	float4 CloudShadows : SV_Target3;
 #endif
 };
@@ -139,13 +137,6 @@ Texture2D<float4> TexBaseSampler : register(t0);
 Texture2D<float4> TexBlendSampler : register(t1);
 Texture2D<float4> TexNoiseGradSampler : register(t2);
 
-cbuffer PerFrame : register(b12)
-{
-	float4 UnknownPerFrame1[12] : packoffset(c0);
-	row_major float4x4 ScreenProj : packoffset(c12);
-	row_major float4x4 PreviousScreenProj : packoffset(c16);
-}
-
 cbuffer PerGeometry : register(b2)
 {
 	float2 PParams : packoffset(c0);
@@ -155,6 +146,14 @@ cbuffer AlphaTestRefCB : register(b11)
 {
 	float AlphaTestRefRS : packoffset(c0);
 }
+
+#	include "Common/FrameBuffer.hlsl"
+#	include "Common/MotionBlur.hlsl"
+#	include "Common/SharedData.hlsli"
+
+#	if defined(CLOUD_SHADOWS)
+#		include "CloudShadows/CloudShadows.hlsli"
+#	endif
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -184,6 +183,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color.xyz = (PParams.yyy + input.Color.xyz) + noiseGrad;
 	psout.Color.w = input.Color.w;
 #			endif  // TEX
+
 #		elif defined(MOONMASK)
 	psout.Color.xyzw = baseColor;
 
@@ -203,16 +203,12 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color = float4(0, 0, 0, 1.0);
 #	endif  // OCCLUSION
 
-	float4 screenPosition = mul(ScreenProj, input.WorldPosition);
-	screenPosition.xy = screenPosition.xy / screenPosition.ww;
-	float4 previousScreenPosition = mul(PreviousScreenProj, input.PreviousWorldPosition);
-	previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.ww;
-	float2 screenMotionVector = float2(-0.5, 0.5) * (screenPosition.xy - previousScreenPosition.xy);
+	float2 screenMotionVector = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, 0);
 
-	psout.MotionVectors = screenMotionVector;
-	psout.Normal = float4(0.5, 0.5, 0, 0);
+	psout.MotionVectors = float4(screenMotionVector, 0, psout.Color.w);
+	psout.Normal = float4(0.5, 0.5, 0, psout.Color.w);
 
-#	if defined(CLOUD_SHADOWS) && defined(CLOUDS)
+#	if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
 	psout.CloudShadows = psout.Color;
 #	endif
 

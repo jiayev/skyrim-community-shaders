@@ -40,10 +40,8 @@
 #define _GrayscaleToAlpha (1 << 20)
 #define _IgnoreTexAlpha (1 << 21)
 
-struct PerShader
+cbuffer PerShader : register(b4)
 {
 	uint VertexShaderDescriptor;
 	uint PixelShaderDescriptor;
 };
-
-StructuredBuffer<PerShader> shaderDescriptors : register(t127);

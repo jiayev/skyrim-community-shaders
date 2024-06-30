@@ -2,7 +2,6 @@
 
 #include "Buffer.h"
 #include "Feature.h"
-#include "State.h"
 
 class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
 {
@@ -19,8 +18,6 @@ public:
 		static DynamicCubemaps singleton;
 		return &singleton;
 	}
-
-	bool renderedScreenCamera = false;
 
 	// Specular irradiance
 
@@ -77,19 +74,21 @@ public:
 
 	// Editor window
 
-	bool enableCreator = false;
-	float4 cubemapColor{ 1.0f, 1.0f, 1.0f, 0.0f };
-
-	struct alignas(16) CreatorSettingsCB
+	struct Settings
 	{
-		uint Enabled;
-		uint pad0[3];
-		float4 CubemapColor;
+		uint Enabled = false;
+		uint pad0[3]{};
+		float4 CubemapColor{ 1.0f, 1.0f, 1.0f, 0.0f };
+		float scatterCoeffMult = 1;
+		float absorpCoeffMult = 1;
+		uint pad1[2]{};
 	};
 
-	std::unique_ptr<Buffer> perFrameCreator = nullptr;
+	Settings settings;
 
 	void UpdateCubemap();
+
+	void PostDeferred();
 
 	virtual inline std::string GetName() { return "Dynamic Cubemaps"; }
 	virtual inline std::string GetShortName() { return "DynamicCubemaps"; }
@@ -131,7 +130,7 @@ public:
 
 	void UpdateCubemapCapture();
 
-	virtual void DrawDeferred();
+	virtual void Prepass() override;
 
 	void Inferrence(bool a_reflections);
 

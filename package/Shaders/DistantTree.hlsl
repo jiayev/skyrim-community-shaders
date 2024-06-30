@@ -2,6 +2,7 @@
 #include "Common/FrameBuffer.hlsl"
 #include "Common/GBuffer.hlsli"
 #include "Common/MotionBlur.hlsl"
+#include "Common/SharedData.hlsli"
 #include "Common/VR.hlsli"
 
 struct VS_INPUT
@@ -157,6 +158,18 @@ const static float DepthOffsets[16] = {
 	0.333333343
 };
 
+#	if defined(SCREEN_SPACE_SHADOWS)
+#		include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
+#	endif
+
+#	if defined(TERRA_OCC)
+#		include "TerrainOcclusion/TerrainOcclusion.hlsli"
+#	endif
+
+#	if defined(CLOUD_SHADOWS)
+#		include "CloudShadows/CloudShadows.hlsli"
+#	endif
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
@@ -189,14 +202,38 @@ PS_OUTPUT main(PS_INPUT input)
 #	else
 	float4 baseColor = TexDiffuse.Sample(SampDiffuse, input.TexCoord.xy);
 
-#		if defined(DO_ALPHA_TEST)
 	if ((baseColor.w - AlphaTestRefRS) < 0) {
 		discard;
 	}
-#		endif  // DO_ALPHA_TEST
 
 #		if defined(DEFERRED)
-	psout.Diffuse.xyz = 0;
+	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
+	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
+	float screenNoise = InterleavedGradientNoise(screenUV * BufferDim);
+
+	float dirShadow = 1;
+
+#			if defined(SCREEN_SPACE_SHADOWS)
+	dirShadow = GetScreenSpaceShadow(screenUV, screenNoise, viewPosition, eyeIndex);
+#			endif
+
+#			if defined(TERRA_OCC)
+	if (dirShadow > 0.0) {
+		float terrainShadow = 1;
+		float terrainAo = 1;
+		GetTerrainOcclusion(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex], length(input.WorldPosition.xyz), SampDiffuse, terrainShadow, terrainAo);
+		dirShadow = min(dirShadow, terrainShadow);
+	}
+#			endif
+
+#			if defined(CLOUD_SHADOWS)
+	if (dirShadow > 0.0) {
+		dirShadow *= GetCloudShadowMult(input.WorldPosition, SampDiffuse);
+	}
+#			endif
+
+	psout.Diffuse.xyz = DirLightColorShared.xyz * baseColor.xyz * 0.5 * lerp(1.0, dirShadow, 0.8);
+
 	psout.Diffuse.w = 1;
 
 	psout.MotionVector = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
@@ -211,7 +248,15 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Albedo = float4(baseColor.xyz * 0.5, 1);
 	psout.Masks = float4(0, 0, 1, 0);
 #		else
-	psout.Diffuse = float4((input.TexCoord.zzz * DiffuseColor.xyz + AmbientColor.xyz) * baseColor.xyz, 1.0);
+	float3 ddx = ddx_coarse(input.WorldPosition);
+	float3 ddy = ddy_coarse(input.WorldPosition);
+	float3 normal = normalize(cross(ddx, ddy));
+
+	float3 directionalAmbientColor = mul(DirectionalAmbientShared, float4(normal, 1.0));
+
+	float3 color = DirLightColorShared.xyz * baseColor.xyz * 0.5;
+	color += baseColor.xyz * 0.5 * directionalAmbientColor;
+	psout.Diffuse = float4(color, 1.0);
 #		endif  // DEFERRED
 #	endif      // RENDER_DEPTH
 

@@ -11,180 +11,63 @@
 
 #include "Deferred.h"
 #include "Features/Skylighting.h"
-#include "Features/TerrainBlending.h"
 
 #include "VariableRateShading.h"
 
 void State::Draw()
 {
-	Deferred::GetSingleton()->UpdatePerms();
 	if (currentShader && updateShader) {
 		auto type = currentShader->shaderType.get();
 		if (type == RE::BSShader::Type::Utility) {
 			if (currentPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
-				Skylighting::GetSingleton()->CopyShadowData();
+				Deferred::GetSingleton()->CopyShadowData();
 			}
 		}
-		VariableRateShading::GetSingleton()->UpdateViews(type != RE::BSShader::Type::ImageSpace && type != RE::BSShader::Type::Sky && type != RE::BSShader::Type::Water);
 		auto& shaderCache = SIE::ShaderCache::Instance();
 		if (shaderCache.IsEnabled()) {
+			VariableRateShading::GetSingleton()->UpdateViews(type != RE::BSShader::Type::ImageSpace && type != RE::BSShader::Type::Sky && type != RE::BSShader::Type::Water);
 			if (type > 0 && type < RE::BSShader::Type::Total) {
 				if (enabledClasses[type - 1]) {
-					ModifyShaderLookup(*currentShader, currentVertexDescriptor, currentPixelDescriptor);
-					UpdateSharedData(currentShader, currentPixelDescriptor);
+					// Only check against non-shader bits
+					currentPixelDescriptor &= ~modifiedPixelDescriptor;
+					if (currentPixelDescriptor != lastPixelDescriptor) {
+						PermutationCB data{};
+						data.VertexShaderDescriptor = currentVertexDescriptor;
+						data.PixelShaderDescriptor = currentPixelDescriptor;
 
-					static RE::BSGraphics::VertexShader* vertexShader = nullptr;
-					static RE::BSGraphics::PixelShader* pixelShader = nullptr;
+						permutationCB->Update(data);
 
-					vertexShader = shaderCache.GetVertexShader(*currentShader, currentVertexDescriptor);
-					pixelShader = shaderCache.GetPixelShader(*currentShader, currentPixelDescriptor);
+						lastVertexDescriptor = currentVertexDescriptor;
+						lastPixelDescriptor = currentPixelDescriptor;
 
-					if (vertexShader && pixelShader) {
-						context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
-						context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+						ID3D11Buffer* buffers[3] = { permutationCB->CB(), sharedDataCB->CB(), featureDataCB->CB() };
+						context->PSSetConstantBuffers(4, 3, buffers);
 					}
 
-					BeginPerfEvent(std::format("Draw: CS {}::{:x}", magic_enum::enum_name(currentShader->shaderType.get()), currentPixelDescriptor));
 					if (IsDeveloperMode()) {
+						BeginPerfEvent(std::format("Draw: CS {}::{:x}", magic_enum::enum_name(currentShader->shaderType.get()), currentPixelDescriptor));
 						SetPerfMarker(std::format("Defines: {}", SIE::ShaderCache::GetDefinesString(currentShader->shaderType.get(), currentPixelDescriptor)));
-					}
-
-					if (vertexShader && pixelShader) {
-						for (auto* feature : Feature::GetFeatureList()) {
-							if (feature->loaded) {
-								auto hasShaderDefine = feature->HasShaderDefine(currentShader->shaderType.get());
-								if (hasShaderDefine)
-									BeginPerfEvent(feature->GetShortName());
-								feature->Draw(currentShader, currentPixelDescriptor);
-								if (hasShaderDefine)
-									EndPerfEvent();
-							}
-						}
+						EndPerfEvent();
 					}
 				}
-				EndPerfEvent();
 			}
 		}
 	}
 	updateShader = false;
 }
 
-void State::DrawDeferred()
-{
-	ID3D11ShaderResourceView* srvs[8];
-	context->PSGetShaderResources(0, 8, srvs);
-
-	ID3D11ShaderResourceView* srvsCS[8];
-	context->CSGetShaderResources(0, 8, srvsCS);
-
-	ID3D11UnorderedAccessView* uavsCS[8];
-	context->CSGetUnorderedAccessViews(0, 8, uavsCS);
-
-	ID3D11UnorderedAccessView* nullUavs[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-	context->CSSetUnorderedAccessViews(0, 8, nullUavs, nullptr);
-
-	ID3D11ShaderResourceView* nullSrvs[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-	context->PSSetShaderResources(0, 8, nullSrvs);
-	context->CSSetShaderResources(0, 8, nullSrvs);
-
-	ID3D11RenderTargetView* views[8];
-	ID3D11DepthStencilView* dsv;
-	context->OMGetRenderTargets(8, views, &dsv);
-
-	ID3D11RenderTargetView* nullViews[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-	ID3D11DepthStencilView* nullDsv = nullptr;
-	context->OMSetRenderTargets(8, nullViews, nullDsv);
-
-	for (auto* feature : Feature::GetFeatureList()) {
-		if (feature->loaded) {
-			feature->DrawDeferred();
-		}
-	}
-
-	context->PSSetShaderResources(0, 8, srvs);
-	context->CSSetShaderResources(0, 8, srvsCS);
-	context->CSSetUnorderedAccessViews(0, 8, uavsCS, nullptr);
-	context->OMSetRenderTargets(8, views, dsv);
-
-	for (int i = 0; i < 8; i++) {
-		if (srvs[i])
-			srvs[i]->Release();
-		if (srvsCS[i])
-			srvsCS[i]->Release();
-	}
-
-	for (int i = 0; i < 8; i++) {
-		if (views[i])
-			views[i]->Release();
-	}
-
-	if (dsv)
-		dsv->Release();
-}
-
-void State::DrawPreProcess()
-{
-	ID3D11ShaderResourceView* srvs[8];
-	context->PSGetShaderResources(0, 8, srvs);
-
-	ID3D11ShaderResourceView* srvsCS[8];
-	context->CSGetShaderResources(0, 8, srvsCS);
-
-	ID3D11UnorderedAccessView* uavsCS[8];
-	context->CSGetUnorderedAccessViews(0, 8, uavsCS);
-
-	ID3D11UnorderedAccessView* nullUavs[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-	context->CSSetUnorderedAccessViews(0, 8, nullUavs, nullptr);
-
-	ID3D11ShaderResourceView* nullSrvs[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-	context->PSSetShaderResources(0, 8, nullSrvs);
-	context->CSSetShaderResources(0, 8, nullSrvs);
-
-	ID3D11RenderTargetView* views[8];
-	ID3D11DepthStencilView* dsv;
-	context->OMGetRenderTargets(8, views, &dsv);
-
-	ID3D11RenderTargetView* nullViews[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-	ID3D11DepthStencilView* nullDsv = nullptr;
-	context->OMSetRenderTargets(8, nullViews, nullDsv);
-
-	for (auto* feature : Feature::GetFeatureList()) {
-		if (feature->loaded) {
-			feature->DrawPreProcess();
-		}
-	}
-
-	context->PSSetShaderResources(0, 8, srvs);
-	context->CSSetShaderResources(0, 8, srvsCS);
-	context->CSSetUnorderedAccessViews(0, 8, uavsCS, nullptr);
-	context->OMSetRenderTargets(8, views, dsv);
-
-	for (int i = 0; i < 8; i++) {
-		if (srvs[i])
-			srvs[i]->Release();
-		if (srvsCS[i])
-			srvsCS[i]->Release();
-	}
-
-	for (int i = 0; i < 8; i++) {
-		if (views[i])
-			views[i]->Release();
-	}
-
-	if (dsv)
-		dsv->Release();
-}
-
 void State::Reset()
 {
-	lightingDataRequiresUpdate = true;
 	for (auto* feature : Feature::GetFeatureList())
 		if (feature->loaded)
 			feature->Reset();
-	Deferred::GetSingleton()->Reset();
 	if (!RE::UI::GetSingleton()->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
 	VariableRateShading::GetSingleton()->UpdateVRS();
+	lastModifiedPixelDescriptor = 0;
+	lastModifiedVertexDescriptor = 0;
+	lastPixelDescriptor = 0;
+	lastVertexDescriptor = 0;
 }
 
 void State::Setup()
@@ -255,7 +138,6 @@ void State::Load(ConfigMode a_configMode)
 			shaderCache.SetDump(advanced["Dump Shaders"]);
 		if (advanced["Log Level"].is_number_integer()) {
 			logLevel = static_cast<spdlog::level::level_enum>((int)advanced["Log Level"]);
-			//logLevel = static_cast<spdlog::level::level_enum>(max(spdlog::level::trace, min(spdlog::level::off, (int)advanced["Log Level"])));
 		}
 		if (advanced["Shader Defines"].is_string())
 			SetDefines(advanced["Shader Defines"]);
@@ -440,26 +322,10 @@ void State::SetupResources()
 {
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 
-	D3D11_BUFFER_DESC sbDesc{};
-	sbDesc.Usage = D3D11_USAGE_DYNAMIC;
-	sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-	sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-	sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-	sbDesc.StructureByteStride = sizeof(PerShader);
-	sbDesc.ByteWidth = sizeof(PerShader);
-	shaderDataBuffer = std::make_unique<Buffer>(sbDesc);
-
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-	srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-	srvDesc.Buffer.FirstElement = 0;
-	srvDesc.Buffer.NumElements = 1;
-	shaderDataBuffer->CreateSRV(srvDesc);
-
-	sbDesc.StructureByteStride = sizeof(LightingData);
-	sbDesc.ByteWidth = sizeof(LightingData);
-	lightingDataBuffer = std::make_unique<Buffer>(sbDesc);
-	lightingDataBuffer->CreateSRV(srvDesc);
+	permutationCB = new ConstantBuffer(ConstantBufferDesc<PermutationCB>());
+	sharedDataCB = new ConstantBuffer(ConstantBufferDesc<SharedDataCB>());
+	auto [_, size] = GetFeatureBufferData();
+	featureDataCB = new ConstantBuffer(ConstantBufferDesc((uint32_t)size));
 
 	// Grab main texture to get resolution
 	// VR cannot use viewport->screenWidth/Height as it's the desktop preview window's resolution and not HMD
@@ -471,28 +337,12 @@ void State::SetupResources()
 	screenHeight = (float)texDesc.Height;
 	context = reinterpret_cast<ID3D11DeviceContext*>(renderer->GetRuntimeData().context);
 	device = reinterpret_cast<ID3D11Device*>(renderer->GetRuntimeData().forwarder);
-	shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 	context->QueryInterface(__uuidof(pPerf), reinterpret_cast<void**>(&pPerf));
 }
 
-void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor)
+void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred)
 {
-	if (a_shader.shaderType.get() == RE::BSShader::Type::Lighting || a_shader.shaderType.get() == RE::BSShader::Type::Water || a_shader.shaderType.get() == RE::BSShader::Type::Effect || a_shader.shaderType.get() == RE::BSShader::Type::DistantTree || a_shader.shaderType.get() == RE::BSShader::Type::Sky) {
-		if (a_vertexDescriptor != lastVertexDescriptor || a_pixelDescriptor != lastPixelDescriptor) {
-			PerShader data{};
-			data.VertexShaderDescriptor = a_vertexDescriptor;
-			data.PixelShaderDescriptor = a_pixelDescriptor;
-
-			D3D11_MAPPED_SUBRESOURCE mapped;
-			DX::ThrowIfFailed(context->Map(shaderDataBuffer->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-			size_t bytes = sizeof(PerShader);
-			memcpy_s(mapped.pData, bytes, &data, bytes);
-			context->Unmap(shaderDataBuffer->resource.get(), 0);
-
-			lastVertexDescriptor = a_vertexDescriptor;
-			lastPixelDescriptor = a_pixelDescriptor;
-		}
-
+	if (a_shader.shaderType.get() != RE::BSShader::Type::Utility && a_shader.shaderType.get() != RE::BSShader::Type::ImageSpace) {
 		switch (a_shader.shaderType.get()) {
 		case RE::BSShader::Type::Lighting:
 			{
@@ -521,7 +371,7 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 				if (vr || !enableImprovedSnow->GetBool())
 					a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow);
 
-				if (Deferred::GetSingleton()->deferredPass)
+				if (Deferred::GetSingleton()->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred;
 
 				{
@@ -566,26 +416,23 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 									   (uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToAlpha |
 									   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
 
-				if (Deferred::GetSingleton()->deferredPass)
+				if (Deferred::GetSingleton()->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::EffectShaderFlags::Deferred;
 			}
 			break;
 		case RE::BSShader::Type::DistantTree:
 			{
-				if (Deferred::GetSingleton()->deferredPass)
+				if (Deferred::GetSingleton()->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::DistantTreeShaderFlags::Deferred;
 			}
 			break;
 		case RE::BSShader::Type::Sky:
 			{
-				if (Deferred::GetSingleton()->deferredPass)
+				if (Deferred::GetSingleton()->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= 256;
 			}
 			break;
 		}
-
-		ID3D11ShaderResourceView* view = shaderDataBuffer->srv.get();
-		context->PSSetShaderResources(127, 1, &view);
 	}
 }
 
@@ -604,62 +451,56 @@ void State::SetPerfMarker(std::string_view title)
 	pPerf->SetMarker(std::wstring(title.begin(), title.end()).c_str());
 }
 
-void State::UpdateSharedData(const RE::BSShader* a_shader, const uint32_t)
+void State::UpdateSharedData()
 {
-	if (a_shader->shaderType.get() == RE::BSShader::Type::Lighting) {
-		bool updateBuffer = false;
+	{
+		SharedDataCB data{};
 
-		GET_INSTANCE_MEMBER(cubeMapRenderTarget, shadowState);
+		auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
+		RE::NiTransform& dalcTransform = shaderManager.directionalAmbientTransform;
+		Util::StoreTransform3x4NoScale(data.DirectionalAmbient, dalcTransform);
 
-		bool currentReflections = cubeMapRenderTarget == RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS;
+		auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
+		auto dirLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSceneNode->GetRuntimeData().sunLight->light.get());
 
-		if (lightingData.Reflections != (uint)currentReflections) {
-			updateBuffer = true;
-			lightingDataRequiresUpdate = true;
-		}
+		data.DirLightColor = { dirLight->GetLightRuntimeData().diffuse.red, dirLight->GetLightRuntimeData().diffuse.green, dirLight->GetLightRuntimeData().diffuse.blue, 1.0f };
 
-		lightingData.Reflections = currentReflections;
+		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+		data.DirLightColor *= !isVR ? imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale : imageSpaceManager->GetVRRuntimeData().data.baseData.hdr.sunlightScale;
 
-		if (lightingDataRequiresUpdate) {
-			lightingDataRequiresUpdate = false;
-			for (int i = -2; i < 3; i++) {
-				for (int k = -2; k < 3; k++) {
-					int waterTile = (i + 2) + ((k + 2) * 5);
-					auto position = !REL::Module::IsVR() ? shadowState->GetRuntimeData().posAdjust.getEye() : shadowState->GetVRRuntimeData().posAdjust.getEye();
-					lightingData.WaterHeight[waterTile] = Util::TryGetWaterHeight((float)i * 4096.0f, (float)k * 4096.0f) - position.z;
-				}
+		auto& direction = dirLight->GetWorldDirection();
+		data.DirLightDirection = { -direction.x, -direction.y, -direction.z, 0.0f };
+		data.DirLightDirection.Normalize();
+
+		data.CameraData = Util::GetCameraData();
+		data.BufferDim = { screenWidth, screenHeight };
+		data.Timer = timer;
+
+		auto viewport = RE::BSGraphics::State::GetSingleton();
+
+		auto bTAA = !REL::Module::IsVR() ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled :
+		                                   imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled;
+
+		data.FrameCount = viewport->uiFrameCount * (bTAA || State::GetSingleton()->upscalerLoaded);
+
+		for (int i = -2; i <= 2; i++) {
+			for (int k = -2; k <= 2; k++) {
+				int waterTile = (i + 2) + ((k + 2) * 5);
+				data.WaterData[waterTile] = Util::TryGetWaterData((float)i * 4096.0f, (float)k * 4096.0f);
 			}
-			updateBuffer = true;
 		}
 
-		auto cameraData = Util::GetCameraData();
-		if (lightingData.CameraData != cameraData) {
-			lightingData.CameraData = cameraData;
-			updateBuffer = true;
-		}
-
-		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-
-		float2 bufferDim = { screenWidth, screenHeight };
-
-		if (bufferDim != lightingData.BufferDim) {
-			lightingData.BufferDim = bufferDim;
-		}
-
-		lightingData.Timer = timer;
-
-		if (updateBuffer) {
-			D3D11_MAPPED_SUBRESOURCE mapped;
-			DX::ThrowIfFailed(context->Map(lightingDataBuffer->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-			size_t bytes = sizeof(LightingData);
-			memcpy_s(mapped.pData, bytes, &lightingData, bytes);
-			context->Unmap(lightingDataBuffer->resource.get(), 0);
-
-			ID3D11ShaderResourceView* view = lightingDataBuffer->srv.get();
-			context->PSSetShaderResources(126, 1, &view);
-
-			view = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
-			context->PSSetShaderResources(20, 1, &view);
-		}
+		sharedDataCB->Update(data);
 	}
+
+	{
+		auto [data, size] = GetFeatureBufferData();
+
+		featureDataCB->Update(data, size);
+
+		delete[] data;
+	}
+
+	auto depth = RE::BSGraphics::Renderer::GetSingleton()->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
+	context->PSSetShaderResources(20, 1, &depth);
 }

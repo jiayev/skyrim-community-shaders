@@ -14,7 +14,6 @@ using RE::RENDER_TARGETS;
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ScreenSpaceShadows::BendSettings,
 	Enable,
-	EnableNormalMappingShadows,
 	SampleCount,
 	SurfaceThickness,
 	BilinearThreshold,
@@ -24,7 +23,6 @@ void ScreenSpaceShadows::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable", (bool*)&bendSettings.Enable);
-		ImGui::Checkbox("Enable Normal Mapping Shadows", (bool*)&bendSettings.EnableNormalMappingShadows);
 		ImGui::SliderInt("Sample Count", (int*)&bendSettings.SampleCount, 1, 4);
 
 		ImGui::SliderFloat("SurfaceThickness", &bendSettings.SurfaceThickness, 0.005f, 0.05f);
@@ -46,10 +44,6 @@ void ScreenSpaceShadows::ClearShaderCache()
 	if (raymarchRightCS) {
 		raymarchRightCS->Release();
 		raymarchRightCS = nullptr;
-	}
-	if (normalMappingShadowsCS) {
-		normalMappingShadowsCS->Release();
-		normalMappingShadowsCS = nullptr;
 	}
 }
 
@@ -91,24 +85,12 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarchRight()
 	return raymarchRightCS;
 }
 
-ID3D11ComputeShader* ScreenSpaceShadows::GetComputeNormalMappingShadows()
-{
-	if (!normalMappingShadowsCS) {
-		logger::debug("Compiling NormalMappingShadowsCS");
-		normalMappingShadowsCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\NormalMappingShadowsCS.hlsl", {}, "cs_5_0");
-	}
-	return normalMappingShadowsCS;
-}
-
 void ScreenSpaceShadows::DrawShadows()
 {
-	if (!bendSettings.Enable)
-		return;
-
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto& context = State::GetSingleton()->context;
+	auto context = State::GetSingleton()->context;
 
-	auto shadowState = State::GetSingleton()->shadowState;
+	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 	auto viewport = RE::BSGraphics::State::GetSingleton();
 
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
@@ -142,8 +124,8 @@ void ScreenSpaceShadows::DrawShadows()
 	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 	context->CSSetShaderResources(0, 1, &depth.depthSRV);
 
-	auto shadowMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
-	context->CSSetUnorderedAccessViews(0, 1, &shadowMask.UAV, nullptr);
+	auto uav = screenSpaceShadowsTexture->uav.get();
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 	context->CSSetSamplers(0, 1, &pointBorderSampler);
 
@@ -231,57 +213,20 @@ void ScreenSpaceShadows::DrawShadows()
 
 	buffer = nullptr;
 	context->CSSetConstantBuffers(1, 1, &buffer);
-
-	if (bendSettings.EnableNormalMappingShadows)
-		DrawNormalMappingShadows();
 }
 
-void ScreenSpaceShadows::DrawNormalMappingShadows()
+void ScreenSpaceShadows::Prepass()
 {
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto& context = State::GetSingleton()->context;
+	auto context = State::GetSingleton()->context;
 
-	{
-		auto normalRoughness = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
-		auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-		auto masks = renderer->GetRuntimeData().renderTargets[MASKS];
+	float white[4] = { 1, 1, 1, 1 };
+	context->ClearUnorderedAccessViewFloat(screenSpaceShadowsTexture->uav.get(), white);
 
-		ID3D11ShaderResourceView* srvs[3]{ normalRoughness.SRV, depth.depthSRV, masks.SRV };
-		context->CSSetShaderResources(0, 3, srvs);
+	if (bendSettings.Enable)
+		DrawShadows();
 
-		auto shadowMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
-		ID3D11UnorderedAccessView* uavs[1]{ shadowMask.UAV };
-		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-		auto shader = GetComputeNormalMappingShadows();
-		context->CSSetShader(shader, nullptr, 0);
-
-		auto state = State::GetSingleton();
-		auto viewport = RE::BSGraphics::State::GetSingleton();
-
-		float resolutionX = state->screenWidth * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
-		float resolutionY = state->screenHeight * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
-
-		uint32_t dispatchX = (uint32_t)std::ceil(resolutionX / 8.0f);
-		uint32_t dispatchY = (uint32_t)std::ceil(resolutionY / 8.0f);
-
-		context->Dispatch(dispatchX, dispatchY, 1);
-	}
-
-	ID3D11ShaderResourceView* views[3]{ nullptr, nullptr, nullptr };
-	context->CSSetShaderResources(0, 3, views);
-
-	ID3D11UnorderedAccessView* uavs[1]{ nullptr };
-	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-	ID3D11SamplerState* sampler = nullptr;
-	context->CSSetSamplers(0, 1, &sampler);
-
-	context->CSSetShader(nullptr, nullptr, 0);
-}
-
-void ScreenSpaceShadows::Draw(const RE::BSShader*, const uint32_t)
-{
+	auto view = screenSpaceShadowsTexture->srv.get();
+	context->PSSetShaderResources(17, 1, &view);
 }
 
 void ScreenSpaceShadows::Load(json& o_json)
@@ -300,6 +245,11 @@ void ScreenSpaceShadows::Save(json& o_json)
 void ScreenSpaceShadows::RestoreDefaultSettings()
 {
 	bendSettings = {};
+}
+
+bool ScreenSpaceShadows::HasShaderDefine(RE::BSShader::Type)
+{
+	return true;
 }
 
 void ScreenSpaceShadows::SetupResources()
@@ -323,8 +273,27 @@ void ScreenSpaceShadows::SetupResources()
 		samplerDesc.BorderColor[3] = 1.0f;
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointBorderSampler));
 	}
-}
 
-void ScreenSpaceShadows::Reset()
-{
+	{
+		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+		auto shadowMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
+
+		D3D11_TEXTURE2D_DESC texDesc{};
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+
+		shadowMask.texture->GetDesc(&texDesc);
+		shadowMask.SRV->GetDesc(&srvDesc);
+		shadowMask.UAV->GetDesc(&uavDesc);
+
+		texDesc.Format = DXGI_FORMAT_R8_UNORM;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+
+		srvDesc.Format = texDesc.Format;
+		uavDesc.Format = texDesc.Format;
+
+		screenSpaceShadowsTexture = new Texture2D(texDesc);
+		screenSpaceShadowsTexture->CreateSRV(srvDesc);
+		screenSpaceShadowsTexture->CreateUAV(uavDesc);
+	}
 }

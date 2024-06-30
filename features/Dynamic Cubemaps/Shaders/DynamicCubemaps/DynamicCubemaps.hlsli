@@ -13,17 +13,6 @@ half2 EnvBRDFApprox(half Roughness, half NoV)
 
 #if !defined(WATER)
 
-#	if defined(CREATOR)
-struct CreatorSettingsCB
-{
-	uint Enabled;
-	uint pad0[3];
-	float4 CubemapColor;
-};
-
-StructuredBuffer<CreatorSettingsCB> perFrameCreator : register(t65);
-#	endif
-
 float3 GetDynamicCubemap(float2 uv, float3 N, float3 VN, float3 V, float roughness, float3 F0, float3 diffuseColor, float distance)
 {
 	float3 R = reflect(-V, N);

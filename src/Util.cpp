@@ -238,18 +238,69 @@ namespace Util
 		return result;
 	}
 
-	float TryGetWaterHeight(float offsetX, float offsetY)
+	float4 TryGetWaterData(float offsetX, float offsetY)
 	{
-		if (auto& shadowState = State::GetSingleton()->shadowState) {
+		if (auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton()) {
 			if (auto tes = RE::TES::GetSingleton()) {
 				auto position = !REL::Module::IsVR() ? shadowState->GetRuntimeData().posAdjust.getEye() : shadowState->GetVRRuntimeData().posAdjust.getEye();
 				position.x += offsetX;
 				position.y += offsetY;
-				if (auto cell = tes->GetCell(position))
-					return cell->GetExteriorWaterHeight();
+				if (auto cell = tes->GetCell(position)) {
+					float4 data = float4(1.0f, 1.0f, 1.0f, -FLT_MAX);
+
+					bool extraCellWater = false;
+
+					if (auto extraCellWaterType = cell->extraList.GetByType<RE::ExtraCellWaterType>()) {
+						if (auto water = extraCellWaterType->water) {
+							{
+								data = { float(water->data.deepWaterColor.red) + float(water->data.shallowWaterColor.red),
+									float(water->data.deepWaterColor.green) + float(water->data.shallowWaterColor.green),
+									float(water->data.deepWaterColor.blue) + float(water->data.shallowWaterColor.blue) };
+
+								data.x /= 255.0f;
+								data.y /= 255.0f;
+								data.z /= 255.0f;
+
+								data.x *= 0.5;
+								data.y *= 0.5;
+								data.z *= 0.5;
+								extraCellWater = true;
+							}
+						}
+					}
+
+					if (!extraCellWater) {
+						if (auto worldSpace = tes->worldSpace) {
+							if (auto water = worldSpace->worldWater) {
+								data = { float(water->data.deepWaterColor.red) + float(water->data.shallowWaterColor.red),
+									float(water->data.deepWaterColor.green) + float(water->data.shallowWaterColor.green),
+									float(water->data.deepWaterColor.blue) + float(water->data.shallowWaterColor.blue) };
+
+								data.x /= 255.0f;
+								data.y /= 255.0f;
+								data.z /= 255.0f;
+
+								data.x *= 0.5;
+								data.y *= 0.5;
+								data.z *= 0.5;
+							}
+						}
+					}
+
+					if (auto sky = RE::Sky::GetSingleton()) {
+						auto& color = sky->skyColor[RE::TESWeather::ColorTypes::kWaterMultiplier];
+						data.x *= color.red;
+						data.y *= color.green;
+						data.z *= color.blue;
+					}
+
+					data.w = cell->GetExteriorWaterHeight() - position.z;
+
+					return data;
+				}
 			}
 		}
-		return -RE::NI_INFINITY;
+		return float4(1.0f, 1.0f, 1.0f, -FLT_MAX);
 	}
 
 	void DumpSettingsOptions()

@@ -213,11 +213,8 @@ PS_OUTPUT main(PS_INPUT input)
 	PS_OUTPUT psout;
 
 #	if defined(ENVCUBE)
-	float3 precipitationOcclusionUv =
-		float3(TextureSize.xx * (input.PrecipitationOcclusionTexCoord.xy * 0.5.xx + 0.5.xx), 0);
-	float precipitationOcclusion =
-		-input.PrecipitationOcclusionTexCoord.z +
-		TexPrecipitationOcclusionTexture.Load(precipitationOcclusionUv).x;
+	float2 precipitationOcclusionUv = input.PrecipitationOcclusionTexCoord.xy * 0.5 + 0.5;
+	float precipitationOcclusion = -input.PrecipitationOcclusionTexCoord.z + TexPrecipitationOcclusionTexture.SampleLevel(SampSourceTexture, precipitationOcclusionUv, 0).x;
 	float2 underwaterMaskUv = TextureSize.yz * input.Position.xy;
 	float underwaterMask = TexUnderwaterMask.Sample(SampUnderwaterMask, underwaterMaskUv).x;
 	if (precipitationOcclusion - underwaterMask < 0) {

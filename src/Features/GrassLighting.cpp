@@ -1,6 +1,5 @@
 #include "GrassLighting.h"
 
-#include "State.h"
 #include "Util.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -10,11 +9,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SubsurfaceScatteringAmount,
 	OverrideComplexGrassSettings,
 	BasicGrassBrightness)
-
-enum class GrassShaderTechniques
-{
-	RenderDepth = 8,
-};
 
 void GrassLighting::DrawSettings()
 {
@@ -72,42 +66,6 @@ void GrassLighting::DrawSettings()
 	}
 }
 
-void GrassLighting::ModifyGrass(const RE::BSShader*, const uint32_t descriptor)
-{
-	const auto technique = descriptor & 0b1111;
-	if (technique != static_cast<uint32_t>(GrassShaderTechniques::RenderDepth)) {
-		if (updatePerFrame) {
-			auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-
-			PerFrame perFrameData{};
-			perFrameData.SunlightScale = !REL::Module::IsVR() ?
-			                                 imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale :
-			                                 imageSpaceManager->GetVRRuntimeData().data.baseData.hdr.sunlightScale;
-			perFrameData.Settings = settings;
-			perFrame->Update(perFrameData);
-
-			updatePerFrame = false;
-		}
-
-		auto& context = State::GetSingleton()->context;
-
-		ID3D11Buffer* buffers[2];
-		context->VSGetConstantBuffers(2, 1, buffers);  // buffers[0]
-		buffers[1] = perFrame->CB();
-		context->VSSetConstantBuffers(2, ARRAYSIZE(buffers), buffers);
-		context->PSSetConstantBuffers(3, ARRAYSIZE(buffers), buffers);
-	}
-}
-
-void GrassLighting::Draw(const RE::BSShader* shader, const uint32_t descriptor)
-{
-	switch (shader->shaderType.get()) {
-	case RE::BSShader::Type::Grass:
-		ModifyGrass(shader, descriptor);
-		break;
-	}
-}
-
 void GrassLighting::Load(json& o_json)
 {
 	if (o_json[GetName()].is_object())
@@ -124,14 +82,4 @@ void GrassLighting::Save(json& o_json)
 void GrassLighting::RestoreDefaultSettings()
 {
 	settings = {};
-}
-
-void GrassLighting::SetupResources()
-{
-	perFrame = new ConstantBuffer(ConstantBufferDesc<PerFrame>());
-}
-
-void GrassLighting::Reset()
-{
-	updatePerFrame = true;
 }

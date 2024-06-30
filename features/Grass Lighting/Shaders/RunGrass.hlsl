@@ -1,8 +1,8 @@
 #include "Common/Color.hlsl"
 #include "Common/FrameBuffer.hlsl"
 #include "Common/GBuffer.hlsli"
-#include "Common/LightingData.hlsl"
 #include "Common/MotionBlur.hlsl"
+#include "Common/SharedData.hlsli"
 
 #define GRASS
 
@@ -92,22 +92,6 @@ cbuffer PerGeometry : register(
 	float3 ScaleMask : packoffset(c37);
 	float ShadowClampValue : packoffset(c37.w);
 #endif  // !VR
-}
-
-cbuffer PerFrame : register(
-#ifdef VSHADER
-					   b3
-#else
-					   b4
-#endif
-				   )
-{
-	float SunlightScale;
-	float Glossiness;
-	float SpecularStrength;
-	float SubsurfaceScatteringAmount;
-	bool OverrideComplexGrassSettings;
-	float BasicGrassBrightness;
 }
 
 #ifdef VSHADER
@@ -300,6 +284,18 @@ float3x3 CalculateTBN(float3 N, float3 p, float2 uv)
 #		include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #	endif
 
+#	if defined(SCREEN_SPACE_SHADOWS)
+#		include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
+#	endif
+
+#	if defined(TERRA_OCC)
+#		include "TerrainOcclusion/TerrainOcclusion.hlsli"
+#	endif
+
+#	if defined(CLOUD_SHADOWS)
+#		include "CloudShadows/CloudShadows.hlsli"
+#	endif
+
 PS_OUTPUT main(PS_INPUT input, bool frontFace
 			   : SV_IsFrontFace)
 {
@@ -330,7 +326,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.PS.xyz = input.Depth.xxx / input.Depth.yyy;
 	psout.PS.w = diffuseAlpha;
 #	else
-
 	float4 specColor = complex ? TexBaseSampler.Sample(SampBaseSampler, float2(input.TexCoord.x, 0.5 + input.TexCoord.y * 0.5)) : 0;
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 
@@ -340,11 +335,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 viewDirection = -normalize(input.WorldPosition.xyz);
 	float3 normal = normalize(input.VertexNormal.xyz);
 
+	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
+	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
+	float screenNoise = InterleavedGradientNoise(screenUV * BufferDim);
+
 	// Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
 	if (!frontFace)
 		normal = -normal;
 
-	normal = normalize(lerp(normal, normalize(input.SphereNormal.xyz), sqrt(input.SphereNormal.w)));
+	normal = normalize(lerp(normal, normalize(input.SphereNormal.xyz), input.SphereNormal.w));
 
 	if (complex) {
 		float3 normalColor = TransformNormal(specColor.xyz);
@@ -353,34 +352,56 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		normal = normalize(mul(normalColor, CalculateTBN(normal, -input.WorldPosition.xyz, input.TexCoord.xy)));
 	}
 
-	if (!complex || OverrideComplexGrassSettings)
-		baseColor.xyz *= BasicGrassBrightness;
+	if (!complex || grassLightingSettings.OverrideComplexGrassSettings)
+		baseColor.xyz *= grassLightingSettings.BasicGrassBrightness;
 
-	float3 dirLightColor = DirLightColor.xyz * SunlightScale;
+	float3 dirLightColor = DirLightColorShared.xyz;
 	dirLightColor *= shadowColor.x;
+
+	float dirLightAngle = dot(normal, DirLightDirectionShared.xyz);
+
+	float dirDetailShadow = 1.0;
+	float dirShadow = 1.0;
+
+	if (shadowColor.x > 0.0) {
+		if (dirLightAngle > 0.0) {
+#		if defined(SCREEN_SPACE_SHADOWS)
+			dirDetailShadow = GetScreenSpaceShadow(screenUV, screenNoise, viewPosition, eyeIndex);
+#		endif
+		}
+
+#		if defined(TERRA_OCC)
+		if (dirShadow > 0.0) {
+			float terrainShadow = 1;
+			float terrainAo = 1;
+			GetTerrainOcclusion(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex], length(input.WorldPosition.xyz), SampBaseSampler, terrainShadow, terrainAo);
+			dirShadow *= terrainShadow;
+		}
+#		endif
+
+#		if defined(CLOUD_SHADOWS)
+		if (dirShadow != 0.0) {
+			dirShadow *= GetCloudShadowMult(input.WorldPosition, SampBaseSampler);
+		}
+#		endif
+	}
 
 	float3 diffuseColor = 0;
 	float3 specularColor = 0;
 
-	float3 lightsDiffuseColor = 0;
+	float3 lightsDiffuseColor = dirLightColor * saturate(dirLightAngle) * dirShadow;
 	float3 lightsSpecularColor = 0;
-
-	float dirLightAngle = dot(normal, DirLightDirection.xyz);
 
 	float3 albedo = max(0, baseColor.xyz * input.VertexColor.xyz);
 
-	// Generated texture to simulate light transport.
-	float3 subsurfaceColor = pow(lerp(RGBToLuminance(albedo.xyz), albedo.xyz, 2.0), 1.5) * input.SphereNormal.w;
+	float3 subsurfaceColor = lerp(RGBToLuminance(albedo.xyz), albedo.xyz, 2.0) * input.SphereNormal.w;
 
-	float3 sss = dirLightColor * sqrt(-dirLightAngle * 0.5 + 0.5);
+	float3 sss = dirLightColor * saturate(-dirLightAngle);
 
 	if (complex)
-		lightsSpecularColor += GetLightSpecularInput(DirLightDirection, viewDirection, normal, dirLightColor, Glossiness);
+		lightsSpecularColor += GetLightSpecularInput(DirLightDirection, viewDirection, normal, dirLightColor, grassLightingSettings.Glossiness);
 
 #		if defined(LIGHT_LIMIT_FIX)
-	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
-	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
-
 	uint clusterIndex = 0;
 	uint lightCount = 0;
 
@@ -389,7 +410,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		if (lightCount) {
 			uint lightOffset = lightGrid[clusterIndex].offset;
 
-			float screenNoise = InterleavedGradientNoise(screenUV * lightingData[0].BufferDim);
 			float shadowQualityScale = saturate(1.0 - (((float)lightCount * (float)lightCount) / 128.0));
 
 			[loop] for (uint i = 0; i < lightCount; i++)
@@ -412,17 +432,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				float3 normalizedLightDirectionVS = WorldToView(normalizedLightDirection, true, eyeIndex);
 				if (light.firstPersonShadow)
 					lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, 0.0, eyeIndex);
-				else if (perPassLLF[0].EnableContactShadows)
+				else if (lightLimitFixSettings.EnableContactShadows)
 					lightColor *= ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, shadowQualityScale, 0.0, eyeIndex);
 
 				float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
-				sss += lightColor * sqrt(-lightAngle * 0.5 + 0.5);
+				sss += lightColor * saturate(-lightAngle);
 
 				lightsDiffuseColor += lightDiffuseColor * intensityMultiplier;
 
 				if (complex)
-					lightsSpecularColor += GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, Glossiness) * intensityMultiplier;
+					lightsSpecularColor += GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, grassLightingSettings.Glossiness) * intensityMultiplier;
 			}
 		}
 	}
@@ -431,16 +451,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	diffuseColor += lightsDiffuseColor;
 
 	diffuseColor *= albedo;
-	diffuseColor += max(0, sss * subsurfaceColor * SubsurfaceScatteringAmount);
+	diffuseColor += max(0, sss * subsurfaceColor * grassLightingSettings.SubsurfaceScatteringAmount);
 
 	specularColor += lightsSpecularColor;
-	specularColor *= specColor.w * SpecularStrength;
+	specularColor *= specColor.w * grassLightingSettings.SpecularStrength;
 
-#		if defined(LIGHT_LIMIT_FIX)
-	if (perPassLLF[0].EnableLightsVisualisation) {
-		if (perPassLLF[0].LightsVisualisationMode == 0) {
+#		if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
+	if (lightLimitFixSettings.EnableLightsVisualisation) {
+		if (lightLimitFixSettings.LightsVisualisationMode == 0) {
 			diffuseColor.xyz = TurboColormap(0);
-		} else if (perPassLLF[0].LightsVisualisationMode == 1) {
+		} else if (lightLimitFixSettings.LightsVisualisationMode == 1) {
 			diffuseColor.xyz = TurboColormap(0);
 		} else {
 			diffuseColor.xyz = TurboColormap((float)lightCount / 128.0);

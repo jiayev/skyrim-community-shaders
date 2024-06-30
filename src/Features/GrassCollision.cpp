@@ -5,14 +5,7 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	GrassCollision::Settings,
-	EnableGrassCollision,
-	RadiusMultiplier,
-	DisplacementMultiplier)
-
-enum class GrassShaderTechniques
-{
-	RenderDepth = 8,
-};
+	EnableGrassCollision)
 
 void GrassCollision::DrawSettings()
 {
@@ -20,30 +13,6 @@ void GrassCollision::DrawSettings()
 		ImGui::Checkbox("Enable Grass Collision", (bool*)&settings.EnableGrassCollision);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Allows player collision to modify grass position.");
-		}
-
-		ImGui::Spacing();
-		ImGui::SliderFloat("Radius Multiplier", &settings.RadiusMultiplier, 0.0f, 8.0f);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Distance from collision centres to apply collision.");
-		}
-
-		ImGui::SliderFloat("Max Distance from Player", &settings.maxDistance, 0.0f, 1500.0f);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Distance from player to apply collision (NPCs). 0 to disable NPC collisions.");
-		}
-
-		ImGui::SliderFloat("Displacement Multiplier", &settings.DisplacementMultiplier, 0.0f, 32.0f);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Strength of each collision on grass position.");
-		}
-
-		if (ImGui::SliderInt("Calculation Frame Interval", (int*)&settings.frameInterval, 0, 30)) {
-			if (settings.frameInterval)  // increment so mod math works (e.g., skip 1 frame means frame % 2).
-				settings.frameInterval++;
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("How many frames to skip before calculating positions again. 0 means calculate every frame (most smooth/costly).");
 		}
 
 		ImGui::TreePop();
@@ -133,165 +102,97 @@ static bool GetShapeBound(RE::bhkNiCollisionObject* Colliedobj, RE::NiPoint3& ce
 	return false;
 }
 
-void GrassCollision::UpdateCollisions()
+void GrassCollision::UpdateCollisions(PerFrame& perFrameData)
 {
-	auto& state = State::GetSingleton()->shadowState;
+	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+	actorList.clear();
 
-	auto frameCount = RE::BSGraphics::State::GetSingleton()->uiFrameCount;
+	// Actor query code from po3 under MIT
+	// https://github.com/powerof3/PapyrusExtenderSSE/blob/7a73b47bc87331bec4e16f5f42f2dbc98b66c3a7/include/Papyrus/Functions/Faction.h#L24C7-L46
+	if (const auto processLists = RE::ProcessLists::GetSingleton(); processLists) {
+		std::vector<RE::BSTArray<RE::ActorHandle>*> actors;
+		actors.push_back(&processLists->highActorHandles);  // High actors are in combat or doing something interesting
+		for (auto array : actors) {
+			for (auto& actorHandle : *array) {
+				auto actorPtr = actorHandle.get();
+				if (actorPtr && actorPtr.get() && actorPtr.get()->Is3DLoaded()) {
+					actorList.push_back(actorPtr.get());
+					totalActorCount++;
+				}
+			}
+		}
+	}
 
-	if (settings.frameInterval == 0 || frameCount % settings.frameInterval == 0) {  // only calculate actor positions on some frames
+	if (auto player = RE::PlayerCharacter::GetSingleton())
+		actorList.push_back(player);
+
+	RE::NiPoint3 cameraPosition;
+	if (!REL::Module::IsVR())
+		cameraPosition = shadowState->GetRuntimeData().posAdjust.getEye();
+	else
+		cameraPosition = (shadowState->GetVRRuntimeData().posAdjust.getEye(0) + shadowState->GetVRRuntimeData().posAdjust.getEye(1)) * 0.5f;
+
+	for (const auto actor : actorList) {
+		if (currentCollisionCount == 256)
+			break;
+		if (auto root = actor->Get3D(false)) {
+			auto position = actor->GetPosition();
+			if (cameraPosition.GetDistance(position) > 1024)  // Check against distance
+				continue;
+
+			activeActorCount++;
+			RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
+				RE::NiPoint3 centerPos;
+				float radius;
+				if (GetShapeBound(a_object, centerPos, radius)) {
+					radius *= 2.0f;
+					CollisionData data{};
+					RE::NiPoint3 eyePosition{};
+					for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
+						if (!REL::Module::IsVR())
+							eyePosition = shadowState->GetRuntimeData().posAdjust.getEye();
+						else
+							eyePosition = shadowState->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+						data.centre[eyeIndex].x = centerPos.x - eyePosition.x;
+						data.centre[eyeIndex].y = centerPos.y - eyePosition.y;
+						data.centre[eyeIndex].z = centerPos.z - eyePosition.z;
+					}
+					data.centre[0].w = radius;
+					perFrameData.collisionData[currentCollisionCount] = data;
+					currentCollisionCount++;
+					if (currentCollisionCount == 256)
+						return RE::BSVisit::BSVisitControl::kStop;
+				}
+				return RE::BSVisit::BSVisitControl::kContinue;
+			});
+		}
+	}
+	perFrameData.numCollisions = currentCollisionCount;
+}
+
+void GrassCollision::Update()
+{
+	if (updatePerFrame) {
+		PerFrame perFrameData{};
+
+		perFrameData.numCollisions = 0;
 		currentCollisionCount = 0;
 		totalActorCount = 0;
 		activeActorCount = 0;
-		actorList.clear();
-		collisionsData.clear();
-		// actor query code from po3 under MIT
-		// https://github.com/powerof3/PapyrusExtenderSSE/blob/7a73b47bc87331bec4e16f5f42f2dbc98b66c3a7/include/Papyrus/Functions/Faction.h#L24C7-L46
-		if (const auto processLists = RE::ProcessLists::GetSingleton(); processLists && settings.maxDistance > 0.0f) {
-			std::vector<RE::BSTArray<RE::ActorHandle>*> actors;
-			actors.push_back(&processLists->highActorHandles);  // high actors are in combat or doing something interesting
-			for (auto array : actors) {
-				for (auto& actorHandle : *array) {
-					auto actorPtr = actorHandle.get();
-					if (actorPtr && actorPtr.get() && actorPtr.get()->Is3DLoaded()) {
-						actorList.push_back(actorPtr.get());
-						totalActorCount++;
-					}
-				}
-			}
-		}
 
-		RE::NiPoint3 playerPosition;
-		if (auto player = RE::PlayerCharacter::GetSingleton()) {
-			actorList.push_back(player);
-			playerPosition = player->GetPosition();
-		}
-
-		for (const auto actor : actorList) {
-			if (auto root = actor->Get3D(false)) {
-				if (playerPosition.GetDistance(actor->GetPosition()) > settings.maxDistance) {  // npc too far so skip
-					continue;
-				}
-				activeActorCount++;
-				RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
-					RE::NiPoint3 centerPos;
-					float radius;
-					if (GetShapeBound(a_object, centerPos, radius)) {
-						radius *= settings.RadiusMultiplier;
-						CollisionSData data{};
-						RE::NiPoint3 eyePosition{};
-						for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
-							if (!REL::Module::IsVR()) {
-								eyePosition = state->GetRuntimeData().posAdjust.getEye();
-							} else
-								eyePosition = state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
-							data.centre[eyeIndex].x = centerPos.x - eyePosition.x;
-							data.centre[eyeIndex].y = centerPos.y - eyePosition.y;
-							data.centre[eyeIndex].z = centerPos.z - eyePosition.z;
-						}
-						data.radius = radius;
-						currentCollisionCount++;
-						collisionsData.push_back(data);
-					}
-					return RE::BSVisit::BSVisitControl::kContinue;
-				});
-			}
-		}
-	}
-	if (!currentCollisionCount) {
-		CollisionSData data{};
-		ZeroMemory(&data, sizeof(data));
-		collisionsData.push_back(data);
-		currentCollisionCount = 1;
-	}
-
-	bool collisionCountChanged = currentCollisionCount != colllisionCount;
-
-	if (!collisions || collisionCountChanged) {
-		colllisionCount = currentCollisionCount;
-
-		D3D11_BUFFER_DESC sbDesc{};
-		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
-		sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		sbDesc.StructureByteStride = sizeof(CollisionSData);
-		sbDesc.ByteWidth = sizeof(CollisionSData) * colllisionCount;
-		collisions = std::make_unique<Buffer>(sbDesc);
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		srvDesc.Buffer.FirstElement = 0;
-		srvDesc.Buffer.NumElements = colllisionCount;
-		collisions->CreateSRV(srvDesc);
-	}
-
-	auto& context = State::GetSingleton()->context;
-	D3D11_MAPPED_SUBRESOURCE mapped;
-	DX::ThrowIfFailed(context->Map(collisions->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-	size_t bytes = sizeof(CollisionSData) * colllisionCount;
-	memcpy_s(mapped.pData, bytes, collisionsData.data(), bytes);
-	context->Unmap(collisions->resource.get(), 0);
-}
-
-void GrassCollision::ModifyGrass(const RE::BSShader*, const uint32_t)
-{
-	if (!loaded)
-		return;
-
-	if (updatePerFrame) {
-		if (settings.EnableGrassCollision) {
-			UpdateCollisions();
-		}
-
-		PerFrame perFrameData{};
-		ZeroMemory(&perFrameData, sizeof(perFrameData));
-
-		auto& state = State::GetSingleton()->shadowState;
-		auto& shaderState = RE::BSShaderManager::State::GetSingleton();
-
-		auto bound = shaderState.cachedPlayerBound;
-		RE::NiPoint3 eyePosition{};
-		for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
-			if (!REL::Module::IsVR()) {
-				eyePosition = state->GetRuntimeData().posAdjust.getEye();
-			} else
-				eyePosition = state->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
-			perFrameData.boundCentre[eyeIndex].x = bound.center.x - eyePosition.x;
-			perFrameData.boundCentre[eyeIndex].y = bound.center.y - eyePosition.y;
-			perFrameData.boundCentre[eyeIndex].z = bound.center.z - eyePosition.z;
-			perFrameData.boundCentre[eyeIndex].w = 0.0f;
-		}
-		perFrameData.boundRadius = bound.radius * settings.RadiusMultiplier;
-
-		perFrameData.Settings = settings;
+		if (settings.EnableGrassCollision)
+			UpdateCollisions(perFrameData);
 
 		perFrame->Update(perFrameData);
 
 		updatePerFrame = false;
 	}
 
-	if (settings.EnableGrassCollision) {
-		auto& context = State::GetSingleton()->context;
+	auto& context = State::GetSingleton()->context;
 
-		ID3D11ShaderResourceView* views[1]{};
-		views[0] = collisions->srv.get();
-		context->VSSetShaderResources(0, ARRAYSIZE(views), views);
-
-		ID3D11Buffer* buffers[1];
-		buffers[0] = perFrame->CB();
-		context->VSSetConstantBuffers(5, ARRAYSIZE(buffers), buffers);
-	}
-}
-
-void GrassCollision::Draw(const RE::BSShader* shader, const uint32_t descriptor)
-{
-	switch (shader->shaderType.get()) {
-	case RE::BSShader::Type::Grass:
-		ModifyGrass(shader, descriptor);
-		break;
-	}
+	ID3D11Buffer* buffers[1];
+	buffers[0] = perFrame->CB();
+	context->VSSetConstantBuffers(5, ARRAYSIZE(buffers), buffers);
 }
 
 void GrassCollision::Load(json& o_json)
@@ -310,6 +211,11 @@ void GrassCollision::Save(json& o_json)
 void GrassCollision::RestoreDefaultSettings()
 {
 	settings = {};
+}
+
+void GrassCollision::PostPostLoad()
+{
+	Hooks::Install();
 }
 
 void GrassCollision::SetupResources()

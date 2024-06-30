@@ -29,16 +29,21 @@ static constexpr std::uint32_t GetCBufferSize(std::uint32_t buffer_size)
 	return (buffer_size + (64 - 1)) & ~(64 - 1);
 }
 
-template <typename T>
-D3D11_BUFFER_DESC ConstantBufferDesc(bool dynamic = false)
+inline D3D11_BUFFER_DESC ConstantBufferDesc(uint32_t size, bool dynamic = false)
 {
 	D3D11_BUFFER_DESC desc{};
 	ZeroMemory(&desc, sizeof(desc));
 	desc.Usage = (!dynamic) ? D3D11_USAGE_DEFAULT : D3D11_USAGE_DYNAMIC;
 	desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 	desc.CPUAccessFlags = !dynamic ? 0 : D3D11_CPU_ACCESS_WRITE;
-	desc.ByteWidth = GetCBufferSize(sizeof(T));
+	desc.ByteWidth = GetCBufferSize(size);
 	return desc;
+}
+
+template <typename T>
+D3D11_BUFFER_DESC ConstantBufferDesc(bool dynamic = false)
+{
+	return ConstantBufferDesc(sizeof(T), dynamic);
 }
 
 class ConstantBuffer

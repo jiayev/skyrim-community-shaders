@@ -50,11 +50,12 @@ float2 GetInterpolatedHeightRW(float2 pxCoord, bool isVertical)
 		return heightA;
 }
 
-groupshared float2 g_shadowHeight[1024];
+#define NTHREADS 64
+groupshared float2 g_shadowHeight[NTHREADS];
 
-[numthreads(1024, 1, 1)] void main(const uint gtid
-								   : SV_GroupThreadID, const uint gid
-								   : SV_GroupID) {
+[numthreads(NTHREADS, 1, 1)] void main(const uint gtid
+									   : SV_GroupThreadID, const uint gid
+									   : SV_GroupID) {
 	uint2 dims;
 	TexHeight.GetDimensions(dims.x, dims.y);
 
@@ -105,6 +106,6 @@ groupshared float2 g_shadowHeight[1024];
 
 	// save
 	if (isValid) {
-		RWTexShadowHeights[uint2(threadPxCoord)] = lerp(pastHeights, g_shadowHeight[gtid], .2f);
+		RWTexShadowHeights[uint2(threadPxCoord)] = lerp(pastHeights, g_shadowHeight[gtid], .5f);
 	}
 }

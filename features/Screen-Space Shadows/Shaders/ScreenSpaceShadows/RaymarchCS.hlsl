@@ -1,18 +1,12 @@
 
 #include "../Common/DeferredShared.hlsli"
 
-half GetScreenDepth(half depth)
-{
-	return (CameraData.w / (-depth * CameraData.z + CameraData.x));
-}
-
 #include "bend_sss_gpu.hlsli"
 
 Texture2D<unorm half> DepthTexture : register(t0);     // Depth Buffer Texture (rasterized non-linear depth)
 RWTexture2D<unorm half> OutputTexture : register(u0);  // Output screen-space shadow buffer (typically single-channel, 8bit)
 SamplerState PointBorderSampler : register(s0);        // A point sampler, with Wrap Mode set to Clamp-To-Border-Color (D3D12_TEXTURE_ADDRESS_MODE_BORDER), and Border Color set to "FarDepthValue" (typically zero), or some other far-depth value out of DepthBounds.
 													   // If you have issues where invalid shadows are appearing from off-screen, it is likely that this sampler is not correctly setup
-
 cbuffer PerFrame : register(b1)
 {
 	// Runtime data returned from BuildDispatchList():

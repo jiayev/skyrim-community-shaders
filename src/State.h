@@ -4,6 +4,8 @@
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
+#include <FeatureBuffer.h>
+
 class State
 {
 public:
@@ -41,8 +43,6 @@ public:
 	};
 
 	void Draw();
-	void DrawDeferred();
-	void DrawPreProcess();
 	void Reset();
 	void Setup();
 
@@ -90,7 +90,7 @@ public:
 	void ModifyRenderTarget(RE::RENDER_TARGETS::RENDER_TARGET a_targetIndex, RE::BSGraphics::RenderTargetProperties* a_properties);
 
 	void SetupResources();
-	void ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor);
+	void ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred = false);
 
 	void BeginPerfEvent(std::string_view title);
 	void EndPerfEvent();
@@ -98,33 +98,39 @@ public:
 
 	bool extendedFrameAnnotations = false;
 
-	struct PerShader
+	uint lastVertexDescriptor = 0;
+	uint lastPixelDescriptor = 0;
+	uint modifiedVertexDescriptor = 0;
+	uint modifiedPixelDescriptor = 0;
+	uint lastModifiedVertexDescriptor = 0;
+	uint lastModifiedPixelDescriptor = 0;
+
+	void UpdateSharedData();
+
+	struct alignas(16) PermutationCB
 	{
 		uint VertexShaderDescriptor;
 		uint PixelShaderDescriptor;
+		uint pad0[2];
 	};
 
-	uint lastVertexDescriptor = 0;
-	uint lastPixelDescriptor = 0;
+	ConstantBuffer* permutationCB = nullptr;
 
-	std::unique_ptr<Buffer> shaderDataBuffer = nullptr;
-
-	void UpdateSharedData(const RE::BSShader* shader, const uint32_t descriptor);
-
-	bool lightingDataRequiresUpdate = false;
-
-	struct LightingData
+	struct alignas(16) SharedDataCB
 	{
-		float WaterHeight[25];
-		uint Reflections;
+		float4 WaterData[25];
+		DirectX::XMFLOAT3X4 DirectionalAmbient;
+		float4 DirLightDirection;
+		float4 DirLightColor;
 		float4 CameraData;
-		float2 BufferDim;
+		float4 BufferDim;
 		float Timer;
+		uint FrameCount;
+		uint pad0[2];
 	};
 
-	LightingData lightingData{};
-
-	std::unique_ptr<Buffer> lightingDataBuffer = nullptr;
+	ConstantBuffer* sharedDataCB = nullptr;
+	ConstantBuffer* featureDataCB = nullptr;
 
 	// Skyrim constants
 	bool isVR = false;
@@ -132,7 +138,6 @@ public:
 	float screenHeight = 0;
 	ID3D11DeviceContext* context = nullptr;
 	ID3D11Device* device = nullptr;
-	RE::BSGraphics::RendererShadowState* shadowState = nullptr;
 
 private:
 	std::shared_ptr<REX::W32::ID3DUserDefinedAnnotation> pPerf;

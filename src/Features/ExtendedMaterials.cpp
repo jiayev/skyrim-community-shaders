@@ -7,14 +7,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableParallax,
 	EnableTerrain,
 	EnableComplexMaterial,
-	EnableHighQuality,
-	MaxDistance,
-	CRPMRange,
-	BlendRange,
-	Height,
-	EnableShadows,
-	ShadowsStartFade,
-	ShadowsEndFade)
+	EnableShadows)
 
 void ExtendedMaterials::DataLoaded()
 {
@@ -44,7 +37,7 @@ void ExtendedMaterials::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Contact Refinement Parallax Mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Parallax", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Parallax", (bool*)&settings.EnableParallax);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables parallax on standard meshes made for parallax.");
@@ -59,38 +52,6 @@ void ExtendedMaterials::DrawSettings()
 			ImGui::Text(
 				"Enables terrain parallax using the alpha channel of each landscape texture. "
 				"Therefore, all landscape textures must support parallax for this effect to work properly. ");
-		}
-
-		ImGui::Checkbox("Enable High Quality", (bool*)&settings.EnableHighQuality);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Doubles the sample count and approximates the intersection point using Parallax Occlusion Mapping. "
-				"Significantly improves the quality and removes aliasing. "
-				"TAA or the Skyrim Upscaler is recommended when using this option due to CRPM artifacts. ");
-		}
-
-		ImGui::Spacing();
-		ImGui::Spacing();
-		ImGui::SliderInt("Max Distance", (int*)&settings.MaxDistance, 0, 4096);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("The furthest distance from the camera which uses parallax.");
-		}
-
-		ImGui::SliderFloat("CRPM Range", &settings.CRPMRange, 0.0f, 1.0f);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("The percentage of the max distance which uses Contact Refinement Parallax Mapping (CRPM).");
-		}
-
-		ImGui::SliderFloat("Blend Range", &settings.BlendRange, 0.0f, settings.CRPMRange);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"The range that parallax blends from Parallax Occlusion Mapping (POM) to bump mapping, and bump mapping to nothing. "
-				"This value should be set as low as possible due to the performance impact of blending POM and relief mapping. ");
-		}
-
-		ImGui::SliderFloat("Height", &settings.Height, 0, 0.2f);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("The range between the highest and lowest point a surface can be offset by.");
 		}
 
 		ImGui::Spacing();
@@ -108,83 +69,8 @@ void ExtendedMaterials::DrawSettings()
 
 		ImGui::Spacing();
 		ImGui::Spacing();
-		ImGui::TextWrapped("Modifying the shadow start and end fade can improve performance and hide obvious texture tiling.");
-		ImGui::SliderInt("Start Fade", (int*)&settings.ShadowsStartFade, 0, settings.ShadowsEndFade);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Distance shadows start to fade.");
-		}
-
-		ImGui::SliderInt("End Fade", (int*)&settings.ShadowsEndFade, settings.ShadowsStartFade, 4096);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Distance shadows finish fading.");
-		}
-
 		ImGui::TreePop();
 	}
-}
-
-void ExtendedMaterials::ModifyLighting(const RE::BSShader*, const uint32_t)
-{
-	auto& context = State::GetSingleton()->context;
-
-	{
-		PerPass data{};
-		data.settings = settings;
-
-		D3D11_MAPPED_SUBRESOURCE mapped;
-		DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-		size_t bytes = sizeof(PerPass);
-		memcpy_s(mapped.pData, bytes, &data, bytes);
-		context->Unmap(perPass->resource.get(), 0);
-	}
-
-	context->PSSetSamplers(1, 1, &terrainSampler);
-
-	ID3D11ShaderResourceView* views[1]{};
-	views[0] = perPass->srv.get();
-	context->PSSetShaderResources(30, 1, views);
-}
-
-void ExtendedMaterials::Draw(const RE::BSShader* shader, const uint32_t descriptor)
-{
-	switch (shader->shaderType.get()) {
-	case RE::BSShader::Type::Lighting:
-		ModifyLighting(shader, descriptor);
-		break;
-	}
-}
-
-void ExtendedMaterials::SetupResources()
-{
-	D3D11_BUFFER_DESC sbDesc{};
-	sbDesc.Usage = D3D11_USAGE_DYNAMIC;
-	sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-	sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-	sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-	sbDesc.StructureByteStride = sizeof(PerPass);
-	sbDesc.ByteWidth = sizeof(PerPass);
-	perPass = std::make_unique<Buffer>(sbDesc);
-
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-	srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-	srvDesc.Buffer.FirstElement = 0;
-	srvDesc.Buffer.NumElements = 1;
-	perPass->CreateSRV(srvDesc);
-
-	logger::info("Creating terrain parallax sampler state");
-
-	auto& device = State::GetSingleton()->device;
-
-	D3D11_SAMPLER_DESC samplerDesc = {};
-	samplerDesc.Filter = D3D11_FILTER_ANISOTROPIC;
-	samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
-	samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
-	samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-	samplerDesc.MaxAnisotropy = 16;
-	samplerDesc.MinLOD = 0;
-	samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-	DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &terrainSampler));
 }
 
 void ExtendedMaterials::Load(json& o_json)

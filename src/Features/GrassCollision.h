@@ -19,33 +19,25 @@ struct GrassCollision : Feature
 
 	struct Settings
 	{
-		std::uint32_t EnableGrassCollision = 1;
-		float RadiusMultiplier = 2;
-		float DisplacementMultiplier = 16;
-		float maxDistance = 1000.0;
-		std::uint32_t frameInterval = 0;
+		bool EnableGrassCollision = 1;
+	};
+
+	struct alignas(16) CollisionData
+	{
+		float4 centre[2];
 	};
 
 	struct alignas(16) PerFrame
 	{
-		Vector4 boundCentre[2];
-		float boundRadius;
-		Settings Settings;
-		float pad01[2];
+		CollisionData collisionData[256];
+		uint numCollisions;
+		uint pad0[3];
 	};
 
-	struct CollisionSData
-	{
-		Vector3 centre[2];
-		float radius;
-	};
-
-	std::unique_ptr<Buffer> collisions = nullptr;
 	std::uint32_t totalActorCount = 0;
 	std::uint32_t activeActorCount = 0;
 	std::uint32_t currentCollisionCount = 0;
 	std::vector<RE::Actor*> actorList{};
-	std::vector<CollisionSData> collisionsData{};
 	std::uint32_t colllisionCount = 0;
 
 	Settings settings;
@@ -58,14 +50,35 @@ struct GrassCollision : Feature
 	virtual void Reset();
 
 	virtual void DrawSettings();
-	void UpdateCollisions();
-	void ModifyGrass(const RE::BSShader* shader, const uint32_t descriptor);
-	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
+	void UpdateCollisions(PerFrame& perFrame);
+	void Update();
+	virtual void Draw(const RE::BSShader*, const uint32_t){};
 
 	virtual void Load(json& o_json);
 	virtual void Save(json& o_json);
 
 	virtual void RestoreDefaultSettings();
 
+	virtual void PostPostLoad() override;
+
 	bool SupportsVR() override { return true; };
+
+	struct Hooks
+	{
+		struct BSGrassShader_SetupGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+			{
+				GetSingleton()->Update();
+				func(This, Pass, RenderFlags);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		static void Install()
+		{
+			stl::write_vfunc<0x6, BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
+			logger::info("[GRASS COLLISION] Installed hooks");
+		}
+	};
 };

@@ -4,47 +4,9 @@
 
 #include "Deferred.h"
 #include "Util.h"
-#include <ShaderCache.h>
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	CloudShadows::Settings,
-	EnableCloudShadows,
-	CloudHeight,
-	PlanetRadius,
-	EffectMix,
-	TransparencyPower)
 
 void CloudShadows::DrawSettings()
 {
-	ImGui::Checkbox("Enable Cloud Shadows", (bool*)&settings.EnableCloudShadows);
-
-	if (ImGui::TreeNodeEx("Mixing", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::SliderFloat("Effect Mix", &settings.EffectMix, 0.0f, 1.0f, "%.2f");
-
-		ImGui::SliderFloat("Transparency Power", &settings.TransparencyPower, -2.f, 2.f, "%.1f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(
-				"The amount of light absorbed by the cloud is determined by the alpha of the cloud. "
-				"Negative value will result in more light absorbed, and more contrast between lit and occluded areas.");
-
-		ImGui::TreePop();
-	}
-
-	if (ImGui::TreeNodeEx("Geometry")) {
-		ImGui::SliderFloat("Cloud Height", &settings.CloudHeight, 1e3f / 1.428e-2f, 10e3f / 1.428e-2f, "%.1f units");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::BulletText(std::format("approx: {:.2f} km / {:.2f} miles", settings.CloudHeight * 1.428e-5f, settings.CloudHeight * 8.877e-6f).data());
-			ImGui::Text("This setting affects the scale of the cloud movement. Higher clouds casts greater shadow.");
-		}
-
-		ImGui::SliderFloat("Planet Radius", &settings.PlanetRadius, 2000e3f / 1.428e-2f, 10000e3f / 1.428e-2f, "%.1f units");
-
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::BulletText(std::format("approx: {:.1f} km / {:.1f} miles", settings.PlanetRadius * 1.428e-5f, settings.PlanetRadius * 8.877e-6f).data());
-			ImGui::Text("This setting affects distortion of clouds near horizon.");
-		}
-		ImGui::TreePop();
-	}
 }
 
 void CloudShadows::CheckResourcesSide(int side)
@@ -59,42 +21,45 @@ void CloudShadows::CheckResourcesSide(int side)
 	context->ClearRenderTargetView(cubemapCloudOccRTVs[side], black);
 }
 
-void CloudShadows::CompileComputeShaders()
+class BSSkyShaderProperty : public RE::BSShaderProperty
 {
-	logger::debug("Compiling shaders...");
+public:
+	enum SkyObject
 	{
-		outputProgram = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\CloudShadows\\output.cs.hlsl", {}, "cs_5_0"));
-	}
-}
+		SO_SUN = 0x0,
+		SO_SUN_GLARE = 0x1,
+		SO_ATMOSPHERE = 0x2,
+		SO_CLOUDS = 0x3,
+		SO_SKYQUAD = 0x4,
+		SO_STARS = 0x5,
+		SO_MOON = 0x6,
+		SO_MOON_SHADOW = 0x7,
+	};
 
-void CloudShadows::ClearShaderCache()
+	RE::NiColorA kBlendColor;
+	RE::NiSourceTexture* pBaseTexture;
+	RE::NiSourceTexture* pBlendTexture;
+	char _pad0[0x10];
+	float fBlendValue;
+	uint16_t usCloudLayer;
+	bool bFadeSecondTexture;
+	uint32_t uiSkyObjectType;
+};
+
+void CloudShadows::ModifySky(RE::BSRenderPass* Pass)
 {
-	if (outputProgram)
-		outputProgram->Release();
-	CompileComputeShaders();
-}
-
-void CloudShadows::ModifySky(const RE::BSShader*, const uint32_t descriptor)
-{
-	if (!settings.EnableCloudShadows)
-		return;
-
-	auto& shadowState = State::GetSingleton()->shadowState;
+	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 
 	GET_INSTANCE_MEMBER(cubeMapRenderTarget, shadowState);
 
 	if (cubeMapRenderTarget != RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS)
 		return;
 
-	auto tech_enum = static_cast<SIE::ShaderCache::SkyShaderTechniques>(descriptor);
-	if (tech_enum == SIE::ShaderCache::SkyShaderTechniques::Clouds || tech_enum == SIE::ShaderCache::SkyShaderTechniques::CloudsLerp || tech_enum == SIE::ShaderCache::SkyShaderTechniques::CloudsFade) {
+	auto skyProperty = static_cast<const BSSkyShaderProperty*>(Pass->shaderProperty);
+
+	if (skyProperty->uiSkyObjectType == BSSkyShaderProperty::SkyObject::SO_CLOUDS) {
 		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 		auto& context = State::GetSingleton()->context;
-
-		{
-			ID3D11ShaderResourceView* srv = nullptr;
-			context->PSSetShaderResources(40, 1, &srv);
-		}
 
 		auto reflections = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS];
 
@@ -119,89 +84,31 @@ void CloudShadows::ModifySky(const RE::BSShader*, const uint32_t descriptor)
 	}
 }
 
-void CloudShadows::DrawShadows()
+void CloudShadows::Prepass()
 {
-	if (!settings.EnableCloudShadows ||
-		(RE::Sky::GetSingleton()->mode.get() != RE::Sky::Mode::kFull) ||
+	if ((RE::Sky::GetSingleton()->mode.get() != RE::Sky::Mode::kFull) ||
 		!RE::Sky::GetSingleton()->currentClimate)
 		return;
 
-	auto& shadowState = State::GetSingleton()->shadowState;
+	auto& context = State::GetSingleton()->context;
 
-	GET_INSTANCE_MEMBER(cubeMapRenderTarget, shadowState);
+	context->GenerateMips(texCubemapCloudOcc->srv.get());
 
-	if (cubeMapRenderTarget != RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS) {
-		static Util::FrameChecker frame_checker;
-
-		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-		auto& context = State::GetSingleton()->context;
-		auto deferred = Deferred::GetSingleton();
-
-		if (frame_checker.isNewFrame())
-			context->GenerateMips(texCubemapCloudOcc->srv.get());
-
-		std::array<ID3D11ShaderResourceView*, 3> srvs = { nullptr };
-		std::array<ID3D11UnorderedAccessView*, 1> uavs = { nullptr };
-
-		srvs.at(0) = perPass->SRV();
-		srvs.at(1) = texCubemapCloudOcc->srv.get();
-		srvs.at(2) = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
-
-		uavs.at(0) = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK].UAV;
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(outputProgram, nullptr, 0);
-		context->Dispatch((deferred->giTexture->desc.Width + 31u) >> 5, (deferred->giTexture->desc.Height + 31u) >> 5, 1);
-
-		// clean up
-		srvs.fill(nullptr);
-		uavs.fill(nullptr);
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-	}
+	ID3D11ShaderResourceView* srv = texCubemapCloudOcc->srv.get();
+	context->PSSetShaderResources(27, 1, &srv);
 }
 
-void CloudShadows::Draw(const RE::BSShader* shader, const uint32_t descriptor)
+void CloudShadows::Draw(const RE::BSShader*, const uint32_t)
 {
-	if (!settings.EnableCloudShadows ||
-		(RE::Sky::GetSingleton()->mode.get() != RE::Sky::Mode::kFull) ||
-		!RE::Sky::GetSingleton()->currentClimate)
-		return;
-
-	static Util::FrameChecker frame_checker;
-	if (frame_checker.isNewFrame()) {
-		// update settings buffer
-		PerPass perPassData{};
-
-		perPassData.Settings = settings;
-		perPassData.Settings.TransparencyPower = exp2(perPassData.Settings.TransparencyPower);
-		perPassData.RcpHPlusR = 1.f / (settings.CloudHeight + settings.PlanetRadius);
-
-		perPass->Update(&perPassData, sizeof(perPassData));
-	}
-
-	switch (shader->shaderType.get()) {
-	case RE::BSShader::Type::Sky:
-		ModifySky(shader, descriptor);
-		break;
-	default:
-		break;
-	}
 }
 
 void CloudShadows::Load(json& o_json)
 {
-	if (o_json[GetName()].is_object())
-		settings = o_json[GetName()];
-
 	Feature::Load(o_json);
 }
 
-void CloudShadows::Save(json& o_json)
+void CloudShadows::Save(json&)
 {
-	o_json[GetName()] = settings;
 }
 
 void CloudShadows::SetupResources()
@@ -219,9 +126,7 @@ void CloudShadows::SetupResources()
 		reflections.texture->GetDesc(&texDesc);
 		reflections.SRV->GetDesc(&srvDesc);
 
-		texDesc.Format = srvDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 5;
-		texDesc.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
+		texDesc.Format = srvDesc.Format = DXGI_FORMAT_R16G16B16A16_UNORM;
 
 		texCubemapCloudOcc = new Texture2D(texDesc);
 		texCubemapCloudOcc->CreateSRV(srvDesc);
@@ -232,16 +137,8 @@ void CloudShadows::SetupResources()
 			DX::ThrowIfFailed(device->CreateRenderTargetView(texCubemapCloudOcc->resource.get(), &rtvDesc, cubemapCloudOccRTVs + i));
 		}
 	}
-
-	{
-		perPass = std::make_unique<StructuredBuffer>(StructuredBufferDesc<PerPass>(), 1);
-		perPass->CreateSRV();
-	}
-
-	CompileComputeShaders();
 }
 
 void CloudShadows::RestoreDefaultSettings()
 {
-	settings = {};
 }

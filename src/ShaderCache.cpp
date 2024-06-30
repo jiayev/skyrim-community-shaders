@@ -1416,7 +1416,7 @@ namespace SIE
 		uint32_t descriptor)
 	{
 		auto state = State::GetSingleton();
-		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)) && ShaderCache::IsShaderSourceAvailable(shader) && state->enableVShaders)) {
+		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)) && state->enableVShaders)) {
 			return nullptr;
 		}
 
@@ -1428,6 +1428,7 @@ namespace SIE
 			}
 			return nullptr;
 		}
+
 		{
 			std::lock_guard lockGuard(vertexShadersMutex);
 			auto& typeCache = vertexShaders[static_cast<size_t>(shader.shaderType.underlying())];
@@ -1450,7 +1451,7 @@ namespace SIE
 		uint32_t descriptor)
 	{
 		auto state = State::GetSingleton();
-		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)) && ShaderCache::IsShaderSourceAvailable(shader) && state->enablePShaders)) {
+		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)) && state->enablePShaders)) {
 			return nullptr;
 		}
 
@@ -1462,6 +1463,7 @@ namespace SIE
 			}
 			return nullptr;
 		}
+
 		{
 			std::lock_guard lockGuard(pixelShadersMutex);
 			auto& typeCache = pixelShaders[static_cast<size_t>(shader.shaderType.underlying())];

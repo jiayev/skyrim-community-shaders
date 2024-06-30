@@ -13,6 +13,8 @@ struct ScreenSpaceShadows : Feature
 
 	virtual inline std::string GetName() { return "Screen-Space Shadows"; }
 	virtual inline std::string GetShortName() { return "ScreenSpaceShadows"; }
+	inline std::string_view GetShaderDefineName() override { return "SCREEN_SPACE_SHADOWS"; }
+	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
 	struct BendSettings
 	{
@@ -20,8 +22,8 @@ struct ScreenSpaceShadows : Feature
 		float BilinearThreshold = 0.02f;
 		float ShadowContrast = 4.0f;
 		uint Enable = 1;
-		uint EnableNormalMappingShadows = 1;
 		uint SampleCount = 1;
+		uint pad0[1];
 	};
 
 	BendSettings bendSettings;
@@ -49,10 +51,11 @@ struct ScreenSpaceShadows : Feature
 	ConstantBuffer* raymarchCB = nullptr;
 	ID3D11ComputeShader* raymarchCS = nullptr;
 	ID3D11ComputeShader* raymarchRightCS = nullptr;
-	ID3D11ComputeShader* normalMappingShadowsCS = nullptr;
+
+	Texture2D* screenSpaceShadowsTexture = nullptr;
 
 	virtual void SetupResources();
-	virtual void Reset();
+	virtual void Reset(){};
 
 	virtual void DrawSettings();
 
@@ -60,15 +63,14 @@ struct ScreenSpaceShadows : Feature
 	ID3D11ComputeShader* GetComputeRaymarch();
 	ID3D11ComputeShader* GetComputeRaymarchRight();
 
-	ID3D11ComputeShader* GetComputeNormalMappingShadows();
+	virtual void Draw(const RE::BSShader*, const uint32_t){};
 
-	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
+	virtual void Prepass() override;
 
 	virtual void Load(json& o_json);
 	virtual void Save(json& o_json);
 
 	void DrawShadows();
-	void DrawNormalMappingShadows();
 
 	virtual void RestoreDefaultSettings();
 

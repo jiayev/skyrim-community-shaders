@@ -22,56 +22,41 @@ public:
 		return &singleton;
 	}
 
-	void DepthStencilStateSetDepthMode(RE::BSGraphics::DepthStencilDepthMode a_mode);
-
-	void AlphaBlendStateSetMode(uint32_t a_mode);
-	void AlphaBlendStateSetAlphaToCoverage(uint32_t a_value);
-	void AlphaBlendStateSetWriteMode(uint32_t a_value);
-
 	void SetupResources();
-	void Reset();
-
+	void CopyShadowData();
 	void StartDeferred();
 	void OverrideBlendStates();
 	void ResetBlendStates();
 	void DeferredPasses();
 	void EndDeferred();
+	void UpdateConstantBuffer();
+
+	void PrepassPasses();
+
+	void ClearShaderCache();
+	ID3D11ComputeShader* GetComputeAmbientComposite();
+	ID3D11ComputeShader* GetComputeAmbientCompositeInterior();
+	ID3D11ComputeShader* GetComputeMainComposite();
+
+	ID3D11ComputeShader* GetComputeMainCompositeInterior();
 
 	ID3D11BlendState* deferredBlendStates[7];
 	ID3D11BlendState* forwardBlendStates[7];
 	RE::RENDER_TARGET forwardRenderTargets[4];
 
-	ID3D11ComputeShader* directionalShadowCS = nullptr;
-	ID3D11ComputeShader* directionalCS = nullptr;
 	ID3D11ComputeShader* ambientCompositeCS = nullptr;
+	ID3D11ComputeShader* ambientCompositeInteriorCS = nullptr;
+
 	ID3D11ComputeShader* mainCompositeCS = nullptr;
-
-	std::unordered_set<std::string> perms;
-	void UpdatePerms();
-
-	void ClearShaderCache();
-	ID3D11ComputeShader* GetComputeAmbientComposite();
-	ID3D11ComputeShader* GetComputeMainComposite();
-	ID3D11ComputeShader* GetComputeDirectionalShadow();
-	ID3D11ComputeShader* GetComputeDirectional();
+	ID3D11ComputeShader* mainCompositeInteriorCS = nullptr;
 
 	bool inWorld = false;
 	bool deferredPass = false;
 
 	struct alignas(16) DeferredCB
 	{
-		float4 CamPosAdjust[2];
-		float4 DirLightDirectionVS[2];
-		float4 DirLightColor;
+		float4 BufferDim;
 		float4 CameraData;
-		float2 BufferDim;
-		float2 RcpBufferDim;
-		DirectX::XMFLOAT4X4 ViewMatrix[2];
-		DirectX::XMFLOAT4X4 ProjMatrix[2];
-		DirectX::XMFLOAT4X4 ViewProjMatrix[2];
-		DirectX::XMFLOAT4X4 InvViewMatrix[2];
-		DirectX::XMFLOAT4X4 InvProjMatrix[2];
-		DirectX::XMFLOAT4X4 InvViewProjMatrix[2];
 		DirectX::XMFLOAT3X4 DirectionalAmbient;
 		uint FrameCount;
 		uint pad0[3];
@@ -81,9 +66,37 @@ public:
 
 	ID3D11SamplerState* linearSampler = nullptr;
 
-	Texture2D* giTexture = nullptr;  // RGB - GI/IL, A - AO
+	struct alignas(16) PerGeometry
+	{
+		float4 VPOSOffset;
+		float4 ShadowSampleParam;    // fPoissonRadiusScale / iShadowMapResolution in z and w
+		float4 EndSplitDistances;    // cascade end distances int xyz, cascade count int z
+		float4 StartSplitDistances;  // cascade start ditances int xyz, 4 int z
+		float4 FocusShadowFadeParam;
+		float4 DebugColor;
+		float4 PropertyColor;
+		float4 AlphaTestRef;
+		float4 ShadowLightParam;  // Falloff in x, ShadowDistance squared in z
+		DirectX::XMFLOAT4X3 FocusShadowMapProj[4];
+		DirectX::XMFLOAT4X3 ShadowMapProj[4];
+		DirectX::XMFLOAT4X4 CameraViewProjInverse;
+	};
 
-	void UpdateConstantBuffer();
+	ID3D11ComputeShader* copyShadowCS = nullptr;
+	Buffer* perShadow = nullptr;
+	ID3D11ShaderResourceView* shadowView = nullptr;
+
+	struct alignas(16) WaterCB
+	{
+		float3 ShallowColor;
+		uint pad0;
+		float3 DeepColor;
+		uint pad1;
+	};
+
+	ConstantBuffer* waterCB = nullptr;
+
+	void UpdateWaterMaterial(RE::BSWaterShaderMaterial* a_material);
 
 	struct Hooks
 	{
@@ -93,6 +106,7 @@ public:
 			{
 				GetSingleton()->inWorld = true;
 				func(a1);
+				GetSingleton()->inWorld = false;
 			}
 
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -134,12 +148,23 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct BSWaterShader_SetupMaterial
+		{
+			static void thunk(RE::BSShader* This, RE::BSWaterShaderMaterial* a_material)
+			{
+				GetSingleton()->UpdateWaterMaterial(a_material);
+				func(This, a_material);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		static void Install()
 		{
 			stl::write_thunk_call<Main_RenderWorld>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x831, 0x841, 0x791));
 			stl::write_thunk_call<Main_RenderWorld_Start>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x8E, 0x84));
 			stl::write_thunk_call<Main_RenderWorld_End>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x319, 0x308, 0x321));
 			//stl::write_thunk_call<Main_RenderWorld_End>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x2F2, 0x2E1, 0x321));
+			stl::write_vfunc<0x4, BSWaterShader_SetupMaterial>(RE::VTABLE_BSWaterShader[0]);
 
 			logger::info("[Deferred] Installed hooks");
 		}

@@ -11,9 +11,7 @@
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
-#include "Features/TerrainBlending.h"
 #include "Features/TerrainOcclusion.h"
-#include "Features/WaterBlending.h"
 #include "Features/WaterCaustics.h"
 #include "Features/WaterParallax.h"
 #include "Features/WetnessEffects.h"
@@ -22,7 +20,7 @@
 
 void Feature::Load(json&)
 {
-	// convert string to wstring
+	// Convert string to wstring
 	auto ini_filename = std::format("{}.ini", GetShortName());
 	std::wstring ini_filename_w;
 	std::ranges::copy(ini_filename, std::back_inserter(ini_filename_w));
@@ -104,18 +102,15 @@ void Feature::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 
 const std::vector<Feature*>& Feature::GetFeatureList()
 {
-	// Cat: essentially load order i guess
 	static std::vector<Feature*> features = {
 		GrassLighting::GetSingleton(),
 		GrassCollision::GetSingleton(),
 		ScreenSpaceShadows::GetSingleton(),
 		ExtendedMaterials::GetSingleton(),
-		WaterBlending::GetSingleton(),
 		WetnessEffects::GetSingleton(),
 		LightLimitFix::GetSingleton(),
 		DynamicCubemaps::GetSingleton(),
 		CloudShadows::GetSingleton(),
-		TerrainBlending::GetSingleton(),
 		WaterParallax::GetSingleton(),
 		WaterCaustics::GetSingleton(),
 		SubsurfaceScattering::GetSingleton(),

@@ -1,9 +1,9 @@
 #include "Common/Color.hlsl"
 #include "Common/FrameBuffer.hlsl"
 #include "Common/GBuffer.hlsli"
-#include "Common/LightingData.hlsl"
 #include "Common/MotionBlur.hlsl"
 #include "Common/Permutation.hlsl"
+#include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
 #include "Common/VR.hlsli"
 
@@ -455,7 +455,7 @@ cbuffer AlphaTestRefCB : register(b11)
 
 cbuffer PerTechnique : register(b0)
 {
-	float4 CameraData : packoffset(c0);
+	float4 CameraDataEffect : packoffset(c0);
 	float2 VPOSOffset : packoffset(c1);
 	float2 FilteringParam : packoffset(c1.z);
 };
@@ -587,7 +587,7 @@ PS_OUTPUT main(PS_INPUT input)
 		float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
 
 		uint clusterIndex = 0;
-		if (perPassLLF[0].EnableGlobalLights && GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+		if (strictLights[0].EnableGlobalLights && GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 			lightCount = lightGrid[clusterIndex].lightCount;
 			uint lightOffset = lightGrid[clusterIndex].offset;
 			[loop] for (uint i = 0; i < lightCount; i++)
@@ -614,7 +614,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(TEXTURE) || (defined(ADDBLEND) && defined(VC))
 	baseTexColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
 	baseColor *= baseTexColor;
-	if (shaderDescriptors[0].PixelShaderDescriptor & _IgnoreTexAlpha || shaderDescriptors[0].PixelShaderDescriptor & _GrayscaleToAlpha)
+	if (PixelShaderDescriptor & _IgnoreTexAlpha || PixelShaderDescriptor & _GrayscaleToAlpha)
 		baseColor.w = 1;
 #	endif
 
@@ -667,10 +667,10 @@ PS_OUTPUT main(PS_INPUT input)
 	baseColorScale = MembraneVars.z;
 #	endif
 
-	if (shaderDescriptors[0].PixelShaderDescriptor & _GrayscaleToAlpha)
+	if (PixelShaderDescriptor & _GrayscaleToAlpha)
 		alpha = TexGrayscaleSampler.Sample(SampGrayscaleSampler, float2(baseTexColor.w, alpha)).w;
 
-	[branch] if (shaderDescriptors[0].PixelShaderDescriptor & _GrayscaleToColor)
+	[branch] if (PixelShaderDescriptor & _GrayscaleToColor)
 	{
 		float2 grayscaleToColorUv = float2(baseTexColor.y, baseColorMul.x);
 #	if defined(MEMBRANE)
@@ -707,10 +707,10 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 	psout.Diffuse = finalColor;
 #	if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
-	if (perPassLLF[0].EnableLightsVisualisation) {
-		if (perPassLLF[0].LightsVisualisationMode == 0) {
+	if (lightLimitFixSettings.EnableLightsVisualisation) {
+		if (lightLimitFixSettings.LightsVisualisationMode == 0) {
 			psout.Diffuse.xyz = TurboColormap(0.0);
-		} else if (perPassLLF[0].LightsVisualisationMode == 1) {
+		} else if (lightLimitFixSettings.LightsVisualisationMode == 1) {
 			psout.Diffuse.xyz = TurboColormap(0.0);
 		} else {
 			psout.Diffuse.xyz = TurboColormap((float)lightCount / 128.0);

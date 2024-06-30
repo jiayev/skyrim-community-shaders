@@ -122,7 +122,7 @@ float4 SSSSBlurCS(
 	float scale = distanceToProjectionWindow / depthM;
 
 	// Calculate the final step to fetch the surrounding pixels:
-	float2 finalStep = scale * BufferDim * dir;
+	float2 finalStep = scale * BufferDim.xy * dir;
 	finalStep *= sssAmount;
 	finalStep *= profile.x;  // Modulate it using the profile
 	finalStep *= 1.0 / 3.0;  // Divide by 3 as the kernels range from -3 to 3.
@@ -134,17 +134,12 @@ float4 SSSSBlurCS(
 	uint2 minCoord = uint2(eyeIndex ? bufferDimHalfX : 0, 0);
 	uint2 maxCoord = uint2(eyeIndex ? BufferDim.x : bufferDimHalfX, BufferDim.y);
 #else
-	[flatten] if (depthM < 16.5)  // First-person
-	{
-		finalStep *= 0.1;
-		distanceToProjectionWindow *= 500.0;
-	}
 	uint2 minCoord = uint2(0, 0);
 	uint2 maxCoord = uint2(BufferDim.x, BufferDim.y);
 #endif
 
-	float jitter = InterleavedGradientNoise(DTid.xy);
-	float2x2 rotationMatrix = float2x2(cos(jitter), sin(jitter), -sin(jitter), cos(jitter));
+	float jitter = InterleavedGradientNoise(DTid.xy) * M_2PI;
+	float2x2 rotationMatrix = float2x2((jitter), sin(jitter), -sin(jitter), cos(jitter));
 	float2x2 identityMatrix = float2x2(1.0, 0.0, 0.0, 1.0);
 
 	// Accumulate the other samples:

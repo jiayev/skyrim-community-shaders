@@ -387,7 +387,7 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 
 	// Skip first person
 #	if !defined(VR)
-	skip_pixel = skip_pixel || GetScreenDepth(sampling_depth[0]) < 16.5;
+	skip_pixel = skip_pixel;
 #	endif
 
 	// If the starting depth isn't in depth bounds, then we don't need a shadow
@@ -466,7 +466,7 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 
 	// Asking the GPU to write scattered single-byte pixels isn't great,
 	// But thankfully the latency is hidden by all the work we're doing...
-	inParameters.OutputTexture[(int2)write_xy] = min(inParameters.OutputTexture[(int2)write_xy], result);
+	inParameters.OutputTexture[(int2)write_xy] = result;
 }
 
 #endif  // macro check

@@ -405,10 +405,10 @@ namespace SIE
 
 		~ShaderCache();
 
-		std::array<std::map<uint32_t, std::unique_ptr<RE::BSGraphics::VertexShader>>,
+		std::array<eastl::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::VertexShader>>,
 			static_cast<size_t>(RE::BSShader::Type::Total)>
 			vertexShaders;
-		std::array<std::map<uint32_t, std::unique_ptr<RE::BSGraphics::PixelShader>>,
+		std::array<eastl::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::PixelShader>>,
 			static_cast<size_t>(RE::BSShader::Type::Total)>
 			pixelShaders;
 

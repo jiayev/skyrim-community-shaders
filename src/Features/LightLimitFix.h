@@ -27,7 +27,7 @@ public:
 	virtual inline std::string GetShortName() { return "LightLimitFix"; }
 	inline std::string_view GetShaderDefineName() override { return "LIGHT_LIMIT_FIX"; }
 
-	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
+	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
 	struct PositionOpt
 	{
@@ -72,22 +72,23 @@ public:
 		float pad[3];
 	};
 
-	struct PerPass
+	struct alignas(16) PerFrame
 	{
-		uint EnableGlobalLights;
 		uint EnableContactShadows;
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		float LightsNear;
-		float LightsFar;
-		uint FrameCount;
+		uint pad0;
 	};
+
+	PerFrame GetCommonBufferData();
 
 	struct alignas(16) StrictLightData
 	{
 		LightData StrictLights[15];
-		uint NumLights;
-		float pad0[3];
+		uint NumStrictLights;
+		uint EnableGlobalLights;
+		float LightsNear;
+		float LightsFar;
 	};
 
 	StrictLightData strictLightDataTemp;
@@ -99,11 +100,8 @@ public:
 		float radius;
 	};
 
-	std::unique_ptr<Buffer> perPass = nullptr;
 	std::unique_ptr<Buffer> strictLightData = nullptr;
 
-	bool rendered = false;
-	bool boundViews = false;
 	int eyeCount = !REL::Module::IsVR() ? 1 : 2;
 
 	ID3D11ComputeShader* clusterBuildingCS = nullptr;
@@ -133,8 +131,6 @@ public:
 	Matrix viewMatrixCached[2]{};
 	Matrix viewMatrixInverseCached[2]{};
 
-	PerPass perPassData{};
-
 	virtual void SetupResources();
 	virtual void Reset();
 
@@ -153,7 +149,7 @@ public:
 	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config* a_config = nullptr, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
 	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached = true);
 	void UpdateLights();
-	void Bind();
+	virtual void Prepass() override;
 
 	static inline float3 Saturation(float3 color, float saturation);
 	static inline bool IsValidLight(RE::BSLight* a_light);

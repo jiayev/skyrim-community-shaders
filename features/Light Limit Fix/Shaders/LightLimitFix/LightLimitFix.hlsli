@@ -15,41 +15,29 @@ struct StructuredLight
 	float pad0[3];
 };
 
-struct PerPassLLF
-{
-	bool EnableGlobalLights;
-	bool EnableContactShadows;
-	bool EnableLightsVisualisation;
-	uint LightsVisualisationMode;
-	float LightsNear;
-	float LightsFar;
-	uint FrameCount;
-};
-
-StructuredBuffer<StructuredLight> lights : register(t17);
-StructuredBuffer<uint> lightList : register(t18);       //MAX_CLUSTER_LIGHTS * 16^3
-StructuredBuffer<LightGrid> lightGrid : register(t19);  //16^3
-
-StructuredBuffer<PerPassLLF> perPassLLF : register(t32);
-
 struct StrictLightData
 {
 	StructuredLight StrictLights[15];
 	uint NumStrictLights;
-	float pad0[3];
+	bool EnableGlobalLights;
+	float LightsNear;
+	float LightsFar;
 };
 
-StructuredBuffer<StrictLightData> strictLightData : register(t37);
+StructuredBuffer<StructuredLight> lights : register(t50);
+StructuredBuffer<uint> lightList : register(t51);       //MAX_CLUSTER_LIGHTS * 16^3
+StructuredBuffer<LightGrid> lightGrid : register(t52);  //16^3
+StructuredBuffer<StrictLightData> strictLights : register(t53);
 
 bool GetClusterIndex(in float2 uv, in float z, out uint clusterIndex)
 {
-	if (z < perPassLLF[0].LightsNear || z > perPassLLF[0].LightsFar)
+	if (z < strictLights[0].LightsNear || z > strictLights[0].LightsFar)
 		return false;
 
-	float clampedZ = clamp(z, perPassLLF[0].LightsNear, perPassLLF[0].LightsFar);
-	uint clusterZ = uint(max((log2(z) - log2(perPassLLF[0].LightsNear)) * 16.0 / log2(perPassLLF[0].LightsFar / perPassLLF[0].LightsNear), 0.0));
-	uint2 clusterDim = ceil(lightingData[0].BufferDim / float2(16, 16));
-	uint3 cluster = uint3(uint2((uv * lightingData[0].BufferDim) / clusterDim), clusterZ);
+	float clampedZ = clamp(z, strictLights[0].LightsNear, strictLights[0].LightsFar);
+	uint clusterZ = uint(max((log2(z) - log2(strictLights[0].LightsNear)) * 16.0 / log2(strictLights[0].LightsFar / strictLights[0].LightsNear), 0.0));
+	uint2 clusterDim = ceil(BufferDim / float2(16, 16));
+	uint3 cluster = uint3(uint2((uv * BufferDim) / clusterDim), clusterZ);
 
 	clusterIndex = cluster.x + (16 * cluster.y) + (16 * 16 * cluster.z);
 	return true;
@@ -57,18 +45,6 @@ bool GetClusterIndex(in float2 uv, in float z, out uint clusterIndex)
 
 bool IsSaturated(float value) { return value == saturate(value); }
 bool IsSaturated(float2 value) { return IsSaturated(value.x) && IsSaturated(value.y); }
-
-// Derived from the interleaved gradient function from Jimenez 2014 http://goo.gl/eomGso
-float InterleavedGradientNoise(float2 uv)
-{
-	// Temporal factor
-	float frameStep = float(perPassLLF[0].FrameCount % 16) * 0.0625f;
-	uv.x += frameStep * 4.7526;
-	uv.y += frameStep * 3.1914;
-
-	float3 magic = float3(0.06711056f, 0.00583715f, 52.9829189f);
-	return frac(magic.z * frac(dot(uv, magic.xy)));
-}
 
 float ContactShadows(float3 rayPos, float2 texcoord, float offset, float3 lightDirectionVS, float radius, bool longShadow, uint a_eyeIndex = 0)
 {

@@ -24,7 +24,7 @@ namespace Util
 	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program = "main");
 	std::string DefinesToString(std::vector<std::pair<const char*, const char*>>& defines);
 	std::string DefinesToString(std::vector<D3D_SHADER_MACRO>& defines);
-	float TryGetWaterHeight(float offsetX, float offsetY);
+	float4 TryGetWaterData(float offsetX, float offsetY);
 	void DumpSettingsOptions();
 	float4 GetCameraData();
 

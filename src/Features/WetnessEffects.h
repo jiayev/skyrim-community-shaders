@@ -26,9 +26,6 @@ public:
 		float MaxPuddleWetness = 2.667f;
 		float MaxShoreWetness = 0.5f;
 		uint ShoreRange = 32;
-		float MaxPointLightSpecular = 0.4f;
-		float MaxDALCSpecular = 0.01f;
-		float MaxAmbientSpecular = 1.0f;
 		float PuddleRadius = 1.0f;
 		float PuddleMaxAngle = 0.95f;
 		float PuddleMinWetness = 0.85f;
@@ -58,24 +55,19 @@ public:
 		float ChaoticRippleSpeed = 20.f;
 	};
 
-	struct alignas(16) PerPass
+	struct alignas(16) PerFrame
 	{
 		float Time;
 		float Raining;
 		float Wetness;
 		float PuddleWetness;
-		DirectX::XMFLOAT3X4 DirectionalAmbientWS;
-		REX::W32::XMFLOAT4X4 PrecipProj;
 		Settings settings;
-
-		float pad[3];
+		uint pad0[2];
 	};
 
 	Settings settings;
 
-	std::unique_ptr<Buffer> perPass = nullptr;
-
-	std::unique_ptr<Texture2D> precipOcclusionTex = nullptr;
+	PerFrame GetCommonBufferData();
 
 	bool requiresUpdate = true;
 	float wetnessDepth = 0.0f;
@@ -84,7 +76,6 @@ public:
 	uint32_t currentWeatherID = 0;
 	uint32_t lastWeatherID = 0;
 	float previousWeatherTransitionPercentage = 0.0f;
-	REX::W32::XMFLOAT4X4 precipProj;
 
 	virtual void SetupResources();
 	virtual void Reset();
@@ -104,15 +95,8 @@ public:
 
 	struct Hooks
 	{
-		struct BSParticleShader_SetupGeometry
-		{
-			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
 		static void Install()
 		{
-			stl::write_vfunc<0x6, BSParticleShader_SetupGeometry>(RE::VTABLE_BSParticleShader[0]);
 		}
 	};
 

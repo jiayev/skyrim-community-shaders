@@ -33,8 +33,8 @@ void SubsurfaceScattering::DrawSettings()
 				ImGui::Text("Blur radius relative to depth.");
 			}
 
-			ImGui::ColorEdit3("Strength", (float*)&settings.BaseProfile.Strength);
-			ImGui::ColorEdit3("Falloff", (float*)&settings.BaseProfile.Falloff);
+			updateKernels = updateKernels || ImGui::ColorEdit3("Strength", (float*)&settings.BaseProfile.Strength);
+			updateKernels = updateKernels || ImGui::ColorEdit3("Falloff", (float*)&settings.BaseProfile.Falloff);
 
 			ImGui::TreePop();
 		}
@@ -50,8 +50,8 @@ void SubsurfaceScattering::DrawSettings()
 				ImGui::Text("Blur radius relative to depth.");
 			}
 
-			ImGui::ColorEdit3("Strength", (float*)&settings.HumanProfile.Strength);
-			ImGui::ColorEdit3("Falloff", (float*)&settings.HumanProfile.Falloff);
+			updateKernels = updateKernels || ImGui::ColorEdit3("Strength", (float*)&settings.HumanProfile.Strength);
+			updateKernels = updateKernels || ImGui::ColorEdit3("Falloff", (float*)&settings.HumanProfile.Falloff);
 
 			ImGui::TreePop();
 		}
@@ -156,90 +156,24 @@ void SubsurfaceScattering::CalculateKernel(DiffusionProfile& a_profile, Kernel& 
 	}
 }
 
-void SubsurfaceScattering::DrawSSSWrapper(bool a_firstPerson)
+void SubsurfaceScattering::DrawSSS()
 {
-	if (!SIE::ShaderCache::Instance().IsEnabled())
+	if (!validMaterials)
 		return;
 
-	State::GetSingleton()->BeginPerfEvent(std::format("DrawSSS: {}", GetShortName()));
+	validMaterials = false;
 
-	auto& context = State::GetSingleton()->context;
-
-	ID3D11ShaderResourceView* srvs[8];
-	context->PSGetShaderResources(0, 8, srvs);
-
-	ID3D11ShaderResourceView* srvsCS[8];
-	context->CSGetShaderResources(0, 8, srvsCS);
-
-	ID3D11UnorderedAccessView* uavsCS[8];
-	context->CSGetUnorderedAccessViews(0, 8, uavsCS);
-
-	ID3D11UnorderedAccessView* nullUavs[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-	context->CSSetUnorderedAccessViews(0, 8, nullUavs, nullptr);
-
-	ID3D11ShaderResourceView* nullSrvs[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-	context->PSSetShaderResources(0, 8, nullSrvs);
-	context->CSSetShaderResources(0, 8, nullSrvs);
-
-	ID3D11RenderTargetView* views[8];
-	ID3D11DepthStencilView* dsv;
-	context->OMGetRenderTargets(8, views, &dsv);
-
-	ID3D11RenderTargetView* nullViews[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-	ID3D11DepthStencilView* nullDsv = nullptr;
-	context->OMSetRenderTargets(8, nullViews, nullDsv);
-
-	DrawSSS(a_firstPerson);
-
-	context->PSSetShaderResources(0, 8, srvs);
-	context->CSSetShaderResources(0, 8, srvsCS);
-	context->CSSetUnorderedAccessViews(0, 8, uavsCS, nullptr);
-	context->OMSetRenderTargets(8, views, dsv);
-
-	for (int i = 0; i < 8; i++) {
-		if (srvs[i])
-			srvs[i]->Release();
-		if (srvsCS[i])
-			srvsCS[i]->Release();
-	}
-
-	for (int i = 0; i < 8; i++) {
-		if (views[i])
-			views[i]->Release();
-	}
-
-	if (dsv)
-		dsv->Release();
-
-	validMaterial = false;
-	State::GetSingleton()->EndPerfEvent();
-}
-
-void SubsurfaceScattering::DrawSSS(bool a_firstPerson)
-{
 	auto viewport = RE::BSGraphics::State::GetSingleton();
 
 	float resolutionX = blurHorizontalTemp->desc.Width * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
 	float resolutionY = blurHorizontalTemp->desc.Height * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
 
 	{
-		blurCBData.BufferDim.x = (float)blurHorizontalTemp->desc.Width;
-		blurCBData.BufferDim.y = (float)blurHorizontalTemp->desc.Height;
-
-		blurCBData.RcpBufferDim.x = 1.0f / (float)blurHorizontalTemp->desc.Width;
-		blurCBData.RcpBufferDim.y = 1.0f / (float)blurHorizontalTemp->desc.Height;
-		const auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-		auto bTAA = !REL::Module::IsVR() ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled :
-		                                   imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled;
-		blurCBData.FrameCount = viewport->uiFrameCount * (bTAA || State::GetSingleton()->upscalerLoaded);
-
-		auto& shadowState = State::GetSingleton()->shadowState;
+		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 		auto cameraData = !REL::Module::IsVR() ? shadowState->GetRuntimeData().cameraData.getEye() :
 		                                         shadowState->GetVRRuntimeData().cameraData.getEye();
 
 		blurCBData.SSSS_FOVY = atan(1.0f / cameraData.projMat.m[0][0]) * 2.0f * (180.0f / 3.14159265359f);
-
-		blurCBData.CameraData = Util::GetCameraData();
 
 		blurCBData.BaseProfile = { settings.BaseProfile.BlurRadius, settings.BaseProfile.Thickness, 0, 0 };
 		blurCBData.HumanProfile = { settings.HumanProfile.BlurRadius, settings.HumanProfile.Thickness, 0, 0 };
@@ -256,7 +190,10 @@ void SubsurfaceScattering::DrawSSS(bool a_firstPerson)
 
 		auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 		auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-		auto mask = renderer->GetRuntimeData().renderTargets[a_firstPerson ? normalsMode : MASKS];
+		auto mask = renderer->GetRuntimeData().renderTargets[MASKS];
+
+		ID3D11UnorderedAccessView* uav = blurHorizontalTemp->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 		ID3D11ShaderResourceView* views[3];
 		views[0] = main.SRV;
@@ -265,16 +202,12 @@ void SubsurfaceScattering::DrawSSS(bool a_firstPerson)
 
 		context->CSSetShaderResources(0, 3, views);
 
-		ID3D11UnorderedAccessView* uav = blurHorizontalTemp->uav.get();
-
 		// Horizontal pass to temporary texture
 		{
-			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-
 			auto shader = GetComputeShaderHorizontalBlur();
 			context->CSSetShader(shader, nullptr, 0);
 
-			context->Dispatch((uint32_t)std::ceil(resolutionX / 32.0f), (uint32_t)std::ceil(resolutionY / 32.0f), 1);
+			context->Dispatch((uint32_t)std::ceil(resolutionX / 8.0f), (uint32_t)std::ceil(resolutionY / 8.0f), 1);
 		}
 
 		uav = nullptr;
@@ -291,7 +224,7 @@ void SubsurfaceScattering::DrawSSS(bool a_firstPerson)
 			auto shader = GetComputeShaderVerticalBlur();
 			context->CSSetShader(shader, nullptr, 0);
 
-			context->Dispatch((uint32_t)std::ceil(resolutionX / 32.0f), (uint32_t)std::ceil(resolutionY / 32.0f), 1);
+			context->Dispatch((uint32_t)std::ceil(resolutionX / 8.0f), (uint32_t)std::ceil(resolutionY / 8.0f), 1);
 		}
 	}
 
@@ -312,8 +245,8 @@ void SubsurfaceScattering::Draw(const RE::BSShader* a_shader, const uint32_t)
 {
 	if (a_shader->shaderType.get() == RE::BSShader::Type::Lighting) {
 		if (normalsMode == RE::RENDER_TARGET::kNONE) {
-			auto& state = State::GetSingleton()->shadowState;
-			GET_INSTANCE_MEMBER(renderTargets, state)
+			auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+			GET_INSTANCE_MEMBER(renderTargets, shadowState)
 			normalsMode = renderTargets[2];
 		}
 	}
@@ -370,8 +303,11 @@ void SubsurfaceScattering::Reset()
 	auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
 	shaderManager.characterLightEnabled = SIE::ShaderCache::Instance().IsEnabled() ? settings.EnableCharacterLighting : true;
 
-	CalculateKernel(settings.BaseProfile, blurCBData.BaseKernel);
-	CalculateKernel(settings.HumanProfile, blurCBData.HumanKernel);
+	if (updateKernels) {
+		updateKernels = false;
+		CalculateKernel(settings.BaseProfile, blurCBData.BaseKernel);
+		CalculateKernel(settings.HumanProfile, blurCBData.HumanKernel);
+	}
 }
 
 void SubsurfaceScattering::RestoreDefaultSettings()
@@ -402,18 +338,6 @@ void SubsurfaceScattering::ClearShaderCache()
 		verticalSSBlur->Release();
 		verticalSSBlur = nullptr;
 	}
-	if (horizontalSSBlurFP) {
-		horizontalSSBlurFP->Release();
-		horizontalSSBlurFP = nullptr;
-	}
-	if (verticalSSBlurFP) {
-		verticalSSBlurFP->Release();
-		verticalSSBlurFP = nullptr;
-	}
-	if (clearBuffer) {
-		clearBuffer->Release();
-		clearBuffer = nullptr;
-	}
 }
 
 ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderHorizontalBlur()
@@ -434,120 +358,49 @@ ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderVerticalBlur()
 	return verticalSSBlur;
 }
 
-ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderHorizontalBlurFP()
-{
-	if (!horizontalSSBlurFP) {
-		logger::debug("Compiling horizontalSSBlur FIRSTPERSON");
-		horizontalSSBlurFP = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\SubsurfaceScattering\\SeparableSSSCS.hlsl", { { "HORIZONTAL", "" }, { "FIRSTPERSON", "" } }, "cs_5_0");
-	}
-	return horizontalSSBlurFP;
-}
-
-ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderVerticalBlurFP()
-{
-	if (!verticalSSBlurFP) {
-		logger::debug("Compiling verticalSSBlur FIRSTPERSON");
-		verticalSSBlurFP = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\SubsurfaceScattering\\SeparableSSSCS.hlsl", { { "FIRSTPERSON", "" } }, "cs_5_0");
-	}
-	return verticalSSBlurFP;
-}
-
-ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderClearBuffer()
-{
-	if (!clearBuffer) {
-		logger::debug("Compiling clearBuffer");
-		clearBuffer = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\SubsurfaceScattering\\ClearBuffer.hlsl", {}, "cs_5_0");
-	}
-	return clearBuffer;
-}
-
 void SubsurfaceScattering::PostPostLoad()
 {
 	Hooks::Install();
 }
 
-void SubsurfaceScattering::OverrideFirstPersonRenderTargets()
-{
-	auto& state = State::GetSingleton()->shadowState;
-	GET_INSTANCE_MEMBER(renderTargets, state)
-	GET_INSTANCE_MEMBER(setRenderTargetMode, state)
-	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
-	GET_INSTANCE_MEMBER(alphaBlendMode, state)
-	GET_INSTANCE_MEMBER(alphaBlendModeExtra, state)
-	GET_INSTANCE_MEMBER(alphaBlendWriteMode, state)
-
-	renderTargets[2] = normalsMode;
-
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto& context = State::GetSingleton()->context;
-
-	{
-		auto& target = renderer->GetRuntimeData().renderTargets[renderTargets[2]];
-
-		auto uav = target.UAV;
-		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-
-		auto shader = GetComputeShaderClearBuffer();
-		context->CSSetShader(shader, nullptr, 0);
-
-		auto viewport = RE::BSGraphics::State::GetSingleton();
-
-		float resolutionX = blurHorizontalTemp->desc.Width * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
-		float resolutionY = blurHorizontalTemp->desc.Height * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
-
-		context->Dispatch((uint32_t)std::ceil(resolutionX / 32.0f), (uint32_t)std::ceil(resolutionY / 32.0f), 1);
-
-		uav = nullptr;
-		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	}
-
-	setRenderTargetMode[2] = RE::BSGraphics::SetRenderTargetMode::SRTM_NO_CLEAR;
-	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-
-	alphaBlendMode = 0;
-	alphaBlendModeExtra = 0;
-	alphaBlendWriteMode = 1;
-	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
-
-	validMaterial = true;
-}
-
 void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 {
-	if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kFace, RE::BSShaderProperty::EShaderPropertyFlag::kFaceGenRGBTint)) {
-		bool isBeastRace = true;
+	if (Deferred::GetSingleton()->deferredPass) {
+		if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kFace, RE::BSShaderProperty::EShaderPropertyFlag::kFaceGenRGBTint)) {
+			bool isBeastRace = true;
 
-		auto geometry = a_pass->geometry;
-		if (auto userData = geometry->GetUserData()) {
-			if (auto actor = userData->As<RE::Actor>()) {
-				if (auto race = actor->GetRace()) {
-					static auto isBeastRaceForm = RE::TESForm::LookupByEditorID("IsBeastRace")->As<RE::BGSKeyword>();
-					isBeastRace = race->HasKeyword(isBeastRaceForm);
+			auto geometry = a_pass->geometry;
+			if (auto userData = geometry->GetUserData()) {
+				if (auto actor = userData->As<RE::Actor>()) {
+					if (auto race = actor->GetRace()) {
+						static auto isBeastRaceForm = RE::TESForm::LookupByEditorID("IsBeastRace")->As<RE::BGSKeyword>();
+						isBeastRace = race->HasKeyword(isBeastRaceForm);
+					}
 				}
 			}
-		}
 
-		static PerPass perPassData{};
+			validMaterials = true;
 
-		if (perPassData.ValidMaterial != (uint)validMaterial || perPassData.IsBeastRace != (uint)isBeastRace) {
-			perPassData.ValidMaterial = validMaterial;
-			perPassData.IsBeastRace = isBeastRace;
+			static PerPass perPassData{};
 
-			auto& context = State::GetSingleton()->context;
+			if (perPassData.IsBeastRace != (uint)isBeastRace) {
+				perPassData.IsBeastRace = isBeastRace;
 
-			D3D11_MAPPED_SUBRESOURCE mapped;
-			DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-			size_t bytes = sizeof(PerPass);
-			memcpy_s(mapped.pData, bytes, &perPassData, bytes);
-			context->Unmap(perPass->resource.get(), 0);
+				auto& context = State::GetSingleton()->context;
+
+				D3D11_MAPPED_SUBRESOURCE mapped;
+				DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+				size_t bytes = sizeof(PerPass);
+				memcpy_s(mapped.pData, bytes, &perPassData, bytes);
+				context->Unmap(perPass->resource.get(), 0);
+			}
 		}
 	}
 }
 
-void SubsurfaceScattering::Bind()
+void SubsurfaceScattering::Prepass()
 {
 	auto& context = State::GetSingleton()->context;
 	ID3D11ShaderResourceView* view = perPass->srv.get();
 	context->PSSetShaderResources(36, 1, &view);
-	validMaterial = true;
 }

@@ -2,11 +2,9 @@
 
 #include <detours/Detours.h>
 
-#include "Deferred.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
-#include "VariableRateShading.h"
 
 #include "ShaderTools/BSShaderHooks.h"
 
@@ -108,6 +106,8 @@ void hk_BSShader_LoadShaders(RE::BSShader* shader, std::uintptr_t stream)
 			auto pixelShaderDescriptor = entry->id;
 			State::GetSingleton()->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
 			shaderCache.GetPixelShader(*shader, pixelShaderDescriptor);
+			State::GetSingleton()->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor, true);
+			shaderCache.GetPixelShader(*shader, pixelShaderDescriptor);
 		}
 	}
 	BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
@@ -120,12 +120,24 @@ decltype(&hk_BSShader_BeginTechnique) ptr_BSShader_BeginTechnique;
 bool hk_BSShader_BeginTechnique(RE::BSShader* shader, uint32_t vertexDescriptor, uint32_t pixelDescriptor, bool skipPixelShader)
 {
 	auto state = State::GetSingleton();
+
+	state->updateShader = true;
 	state->currentShader = shader;
+
 	state->currentVertexDescriptor = vertexDescriptor;
 	state->currentPixelDescriptor = pixelDescriptor;
-	state->updateShader = true;
 
-	return (ptr_BSShader_BeginTechnique)(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
+	state->modifiedVertexDescriptor = vertexDescriptor;
+	state->modifiedPixelDescriptor = pixelDescriptor;
+
+	state->ModifyShaderLookup(*shader, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor);
+
+	auto ret = (ptr_BSShader_BeginTechnique)(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
+
+	state->lastModifiedVertexDescriptor = state->modifiedVertexDescriptor;
+	state->lastModifiedPixelDescriptor = state->modifiedPixelDescriptor;
+
+	return ret;
 }
 
 decltype(&IDXGISwapChain::Present) ptr_IDXGISwapChain_Present;
@@ -290,56 +302,6 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct BSImagespaceShaderISSAOCompositeSAO_SetupTechnique
-	{
-		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
-		{
-			State::GetSingleton()->DrawDeferred();
-			func(a_shader, a_material);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct BSImagespaceShaderISSAOCompositeFog_SetupTechnique
-	{
-		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
-		{
-			State::GetSingleton()->DrawDeferred();
-			func(a_shader, a_material);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct BSImagespaceShaderISSAOCompositeSAOFog_SetupTechnique
-	{
-		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
-		{
-			State::GetSingleton()->DrawDeferred();
-			func(a_shader, a_material);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct BSImagespaceShaderHDRTonemapBlendCinematic_SetupTechnique
-	{
-		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
-		{
-			State::GetSingleton()->DrawPreProcess();
-			func(a_shader, a_material);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct BSImagespaceShaderHDRTonemapBlendCinematicFade_SetupTechnique
-	{
-		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
-		{
-			State::GetSingleton()->DrawPreProcess();
-			func(a_shader, a_material);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
 	struct WndProcHandler_Hook
 	{
 		static LRESULT thunk(HWND a_hwnd, UINT a_msg, WPARAM a_wParam, LPARAM a_lParam)
@@ -417,6 +379,77 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct BSShader__BeginTechnique_SetVertexShader
+	{
+		static void thunk(RE::BSGraphics::Renderer* This, RE::BSGraphics::VertexShader* a_vertexShader)
+		{
+			func(This, a_vertexShader);  // TODO: Remove original call
+			auto& shaderCache = SIE::ShaderCache::Instance();
+			if (shaderCache.IsEnabled()) {
+				auto state = State::GetSingleton();
+				auto currentShader = state->currentShader;
+				auto type = currentShader->shaderType.get();
+				if (type > 0 && type < RE::BSShader::Type::Total) {
+					if (state->enabledClasses[type - 1]) {
+						RE::BSGraphics::VertexShader* vertexShader = shaderCache.GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
+						if (vertexShader) {
+							state->context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
+							auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+							shadowState->GetRuntimeData().currentVertexShader = a_vertexShader;
+							return;
+						}
+					}
+				}
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSShader__BeginTechnique_SetPixelShader
+	{
+		static void thunk(RE::BSGraphics::Renderer* This, RE::BSGraphics::PixelShader* a_pixelShader)
+		{
+			auto& shaderCache = SIE::ShaderCache::Instance();
+			if (shaderCache.IsEnabled()) {
+				auto state = State::GetSingleton();
+				auto currentShader = state->currentShader;
+				auto type = currentShader->shaderType.get();
+				if (type > 0 && type < RE::BSShader::Type::Total) {
+					if (state->enabledClasses[type - 1]) {
+						if (state->lastModifiedPixelDescriptor != state->modifiedPixelDescriptor) {
+							RE::BSGraphics::PixelShader* pixelShader = shaderCache.GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
+							if (pixelShader) {
+								state->context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+								auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+								shadowState->GetRuntimeData().currentPixelShader = a_pixelShader;
+								return;
+							}
+						} else {
+							auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+							shadowState->GetRuntimeData().currentPixelShader = a_pixelShader;
+							return;
+						}
+					}
+				}
+			}
+			func(This, a_pixelShader);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct CreateDepthStencil_PrecipitationMask
+	{
+		static void thunk(RE::BSGraphics::Renderer* This, uint32_t a_target, RE::BSGraphics::DepthStencilTargetProperties* a_properties)
+		{
+			a_properties->height = 256;
+			a_properties->width = 256;
+			a_properties->use16BitsDepth = true;
+			a_properties->stencil = false;
+			func(This, a_target, a_properties);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	void Install()
 	{
 		SKSE::AllocTrampoline(14);
@@ -428,20 +461,15 @@ namespace Hooks
 		*(uintptr_t*)&ptr_BSShader_LoadShaders = Detours::X64::DetourFunction(REL::RelocationID(101339, 108326).address(), (uintptr_t)&hk_BSShader_LoadShaders);
 		logger::info("Hooking BSShader::BeginTechnique");
 		*(uintptr_t*)&ptr_BSShader_BeginTechnique = Detours::X64::DetourFunction(REL::RelocationID(101341, 108328).address(), (uintptr_t)&hk_BSShader_BeginTechnique);
+
+		stl::write_thunk_call<BSShader__BeginTechnique_SetVertexShader>(REL::RelocationID(101341, 101341).address() + REL::Relocate(0xC3, 0x3F3, 0x548));
+		stl::write_thunk_call<BSShader__BeginTechnique_SetPixelShader>(REL::RelocationID(101341, 101341).address() + REL::Relocate(0xD7, 0x3F3, 0x548));
+
 		logger::info("Hooking BSGraphics::SetDirtyStates");
 		*(uintptr_t*)&ptr_BSGraphics_SetDirtyStates = Detours::X64::DetourFunction(REL::RelocationID(75580, 77386).address(), (uintptr_t)&hk_BSGraphics_SetDirtyStates);
 
 		logger::info("Hooking BSGraphics::Renderer::InitD3D");
 		stl::write_thunk_call<BSGraphics_Renderer_Init_InitD3D>(REL::RelocationID(75595, 77226).address() + REL::Relocate(0x50, 0x2BC));
-
-		logger::info("Hooking deferred passes");
-		stl::write_vfunc<0x2, BSImagespaceShaderISSAOCompositeSAO_SetupTechnique>(RE::VTABLE_BSImagespaceShaderISSAOCompositeSAO[0]);
-		stl::write_vfunc<0x2, BSImagespaceShaderISSAOCompositeFog_SetupTechnique>(RE::VTABLE_BSImagespaceShaderISSAOCompositeFog[0]);
-		stl::write_vfunc<0x2, BSImagespaceShaderISSAOCompositeSAOFog_SetupTechnique>(RE::VTABLE_BSImagespaceShaderISSAOCompositeSAOFog[0]);
-
-		logger::info("Hooking preprocess passes");
-		stl::write_vfunc<0x2, BSImagespaceShaderHDRTonemapBlendCinematic_SetupTechnique>(RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[0]);
-		stl::write_vfunc<0x2, BSImagespaceShaderHDRTonemapBlendCinematicFade_SetupTechnique>(RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[0]);
 
 		logger::info("Hooking WndProcHandler");
 		stl::write_thunk_call_6<RegisterClassA_Hook>(REL::VariantID(75591, 77226, 0xDC4B90).address() + REL::VariantOffset(0x8E, 0x15C, 0x99).offset());
@@ -458,7 +486,9 @@ namespace Hooks
 		stl::write_thunk_call<CreateRenderTarget_Normals>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x458, 0x45B, 0x5B0));
 		stl::write_thunk_call<CreateRenderTarget_NormalsSwap>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x46B, 0x46E, 0x5C3));
 		if (!REL::Module::IsVR())
-			stl::write_thunk_call<CreateRenderTarget_Snow>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x406, 0x402));
+			stl::write_thunk_call<CreateRenderTarget_Snow>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x406, 0x409));
 		stl::write_thunk_call<CreateRenderTarget_ShadowMask>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x555, 0x554, 0x6b9));
+
+		stl::write_thunk_call<CreateDepthStencil_PrecipitationMask>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x1245, 0x554, 0x6b9));
 	}
 }

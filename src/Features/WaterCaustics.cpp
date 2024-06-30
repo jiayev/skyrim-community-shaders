@@ -20,24 +20,6 @@ void WaterCaustics::DrawSettings()
 	}
 }
 
-void WaterCaustics::Draw(const RE::BSShader*, const uint32_t)
-{
-	auto& context = State::GetSingleton()->context;
-	context->PSSetShaderResources(70, 1, &causticsView);
-	PerPass data{};
-	data.settings = settings;
-
-	D3D11_MAPPED_SUBRESOURCE mapped;
-	DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-	size_t bytes = sizeof(PerPass);
-	memcpy_s(mapped.pData, bytes, &data, bytes);
-	context->Unmap(perPass->resource.get(), 0);
-
-	ID3D11ShaderResourceView* views[1]{};
-	views[0] = perPass->srv.get();
-	context->PSSetShaderResources(71, ARRAYSIZE(views), views);
-}
-
 void WaterCaustics::SetupResources()
 {
 	auto& device = State::GetSingleton()->device;
@@ -59,6 +41,24 @@ void WaterCaustics::SetupResources()
 	srvDesc.Buffer.FirstElement = 0;
 	srvDesc.Buffer.NumElements = 1;
 	perPass->CreateSRV(srvDesc);
+}
+
+void WaterCaustics::Prepass()
+{
+	auto& context = State::GetSingleton()->context;
+	context->PSSetShaderResources(70, 1, &causticsView);
+	PerPass data{};
+	data.settings = settings;
+
+	D3D11_MAPPED_SUBRESOURCE mapped;
+	DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+	size_t bytes = sizeof(PerPass);
+	memcpy_s(mapped.pData, bytes, &data, bytes);
+	context->Unmap(perPass->resource.get(), 0);
+
+	ID3D11ShaderResourceView* views[1]{};
+	views[0] = perPass->srv.get();
+	context->PSSetShaderResources(71, ARRAYSIZE(views), views);
 }
 
 void WaterCaustics::Load(json& o_json)

@@ -154,7 +154,7 @@ struct PS_OUTPUT
 
 #	include "Common/Color.hlsl"
 #	include "Common/FrameBuffer.hlsl"
-#	include "Common/LightingData.hlsl"
+#	include "Common/SharedData.hlsli"
 #	include "Common/MotionBlur.hlsl"
 #	include "Common/Permutation.hlsl"
 
@@ -190,7 +190,9 @@ PS_OUTPUT main(PS_INPUT input)
 #	else
 	float sunShadowMask = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0)).x;
 
-	psout.Diffuse.xyz = 0;
+	float3 albedo = baseColor.xyz * input.DiffuseColor.xyz * 0.5;
+
+	psout.Diffuse.xyz = DirLightColorShared.xyz * sunShadowMask * albedo;
 	psout.Diffuse.w = 1;
 
 	psout.MotionVectors = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, 0);
@@ -202,7 +204,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Normal.xy = EncodeNormal(normal);
 	psout.Normal.zw = float2(0, 0);
 
-	psout.Albedo = float4(baseColor.xyz * input.DiffuseColor.xyz * 0.5, 1);
+	psout.Albedo = float4(albedo, 1);
 	psout.Masks = float4(0, 0, 1, 0);
 #	endif
 

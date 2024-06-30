@@ -1,18 +1,24 @@
-cbuffer PerFrameDeferredShared : register(b0)
+cbuffer PerFrameDeferredShared : register(b11)
 {
-	float4 CamPosAdjust[2];
-	float4 DirLightDirectionVS[2];
-	float4 DirLightColor;
+	float4 BufferDim;
 	float4 CameraData;
-	float2 BufferDim;
-	float2 RcpBufferDim;
-	float4x4 ViewMatrix[2];
-	float4x4 ProjMatrix[2];
-	float4x4 ViewProjMatrix[2];
-	float4x4 InvViewMatrix[2];
-	float4x4 InvProjMatrix[2];
-	float4x4 InvViewProjMatrix[2];
 	row_major float3x4 DirectionalAmbient;
 	uint FrameCount;
 	uint pad0[3];
 };
+
+float GetScreenDepth(float depth)
+{
+	return (CameraData.w / (-depth * CameraData.z + CameraData.x));
+}
+
+float InterleavedGradientNoise(float2 uv)
+{
+	// Temporal factor
+	float frameStep = float(FrameCount % 16) * 0.0625f;
+	uv.x += frameStep * 4.7526;
+	uv.y += frameStep * 3.1914;
+
+	float3 magic = float3(0.06711056f, 0.00583715f, 52.9829189f);
+	return frac(magic.z * frac(dot(uv, magic.xy)));
+}

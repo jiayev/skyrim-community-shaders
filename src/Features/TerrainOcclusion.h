@@ -14,36 +14,34 @@ struct TerrainOcclusion : public Feature
 	virtual inline std::string GetName() { return "Terrain Occlusion"; }
 	virtual inline std::string GetShortName() { return "TerrainOcclusion"; }
 	inline std::string_view GetShaderDefineName() override { return "TERRA_OCC"; }
-	inline bool HasShaderDefine(RE::BSShader::Type type) override { return type == RE::BSShader::Type::Lighting; };
-
-	uint shadowUpdateIdx = 0;
+	inline bool HasShaderDefine(RE::BSShader::Type type) override
+	{
+		return type == RE::BSShader::Type::Lighting ||
+		       type == RE::BSShader::Type::DistantTree ||
+		       type == RE::BSShader::Type::Grass ||
+		       type == RE::BSShader::Type::Water;
+	};
 
 	struct Settings
 	{
-		struct AOGenSettings
-		{
-			float AoDistance = 12;
-			uint SliceCount = 60;
-			uint SampleCount = 60;
-		} AoGen;
+		uint EnableTerrainShadow = true;
+		uint EnableTerrainAO = false;
 
-		struct EffectSettings
-		{
-			uint EnableTerrainShadow = true;
-			uint EnableTerrainAO = true;
+		float HeightBias = -1000.f;  // in game unit
+		float ShadowSofteningRadiusAngle = 1.f * RE::NI_PI / 180.f;
+		float2 ShadowFadeDistance = { 1000.f, 2000.f };
 
-			float HeightBias = -1000.f;  // in game unit
+		float AOMix = 1.f;
+		float AOPower = 1.f;
+		float AOFadeOutHeight = 2000;
 
-			float ShadowSofteningRadiusAngle = 1.f * RE::NI_PI / 180.f;
-			float2 ShadowFadeDistance = { 1000.f, 2000.f };
-
-			float AOMix = 1.f;
-			float AOPower = 1.f;
-			float AOFadeOutHeight = 2000;
-		} Effect;
+		float AoDistance = 12;  // in cells
+		uint SliceCount = 60;
+		uint SampleCount = 60;
 	} settings;
 
 	bool needPrecompute = false;
+	uint shadowUpdateIdx = 0;
 
 	struct HeightMapMetadata
 	{
@@ -58,7 +56,9 @@ struct TerrainOcclusion : public Feature
 
 	struct AOGenBuffer
 	{
-		Settings::AOGenSettings settings;
+		float AoDistance;  // in game unit
+		uint SliceCount;
+		uint SampleCount;
 
 		float3 pos0;
 		float3 pos1;
@@ -78,20 +78,29 @@ struct TerrainOcclusion : public Feature
 	static_assert(sizeof(ShadowUpdateCB) % 16 == 0);
 	std::unique_ptr<ConstantBuffer> shadowUpdateCB = nullptr;
 
-	struct PerPass
+	struct alignas(16) PerFrame
 	{
-		Settings::EffectSettings effect;
+		uint EnableTerrainShadow;
+		uint EnableTerrainAO;
+		float HeightBias;
+		float ShadowSofteningRadiusAngle;
 
-		float3 scale;
-		float3 invScale;
-		float3 offset;
-		float2 zRange;
+		float2 ZRange;
+		float2 ShadowFadeDistance;
+
+		float AOMix;
+		float3 Scale;
+
+		float AOPower;
+		float3 InvScale;
+
+		float AOFadeOutHeightRcp;
+		float3 Offset;
 	};
-	std::unique_ptr<Buffer> perPass = nullptr;
+	PerFrame GetCommonBufferData();
 
 	winrt::com_ptr<ID3D11ComputeShader> occlusionProgram = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> shadowUpdateProgram = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> outputProgram = nullptr;
 
 	std::unique_ptr<Texture2D> texHeightMap = nullptr;
 	std::unique_ptr<Texture2D> texOcclusion = nullptr;
@@ -107,9 +116,9 @@ struct TerrainOcclusion : public Feature
 
 	virtual inline void Reset() override{};
 
-	virtual void Draw(const RE::BSShader*, const uint32_t) override;
-	void UpdateBuffer();
-	void DrawTerrainOcclusion();
+	virtual void Draw(const RE::BSShader*, const uint32_t) override{};
+
+	virtual void Prepass() override;
 	void LoadHeightmap();
 	void Precompute();
 	void UpdateShadow();

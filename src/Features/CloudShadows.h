@@ -16,22 +16,6 @@ struct CloudShadows : Feature
 	virtual inline std::string_view GetShaderDefineName() override { return "CLOUD_SHADOWS"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
 
-	struct Settings
-	{
-		uint EnableCloudShadows = true;
-		float CloudHeight = 2e3f / 1.428e-2f;
-		float PlanetRadius = 6371e3f / 1.428e-2f;
-		float EffectMix = 1.f;
-		float TransparencyPower = 0.1f;
-	} settings;
-
-	struct PerPass
-	{
-		Settings Settings;
-		float RcpHPlusR;
-	};
-	std::unique_ptr<StructuredBuffer> perPass = nullptr;
-
 	bool isCubemapPass = false;
 	ID3D11BlendState* resetBlendState = nullptr;
 	std::set<ID3D11BlendState*> mappedBlendStates;
@@ -39,22 +23,19 @@ struct CloudShadows : Feature
 
 	Texture2D* texCubemapCloudOcc = nullptr;
 	ID3D11RenderTargetView* cubemapCloudOccRTVs[6] = { nullptr };
-	ID3D11ShaderResourceView* cubemapCloudOccDebugSRV = nullptr;
-
-	ID3D11ComputeShader* outputProgram = nullptr;
 
 	virtual void SetupResources() override;
-	void CompileComputeShaders();
 
 	virtual inline void Reset() override {}
-	virtual void ClearShaderCache() override;
 
 	virtual void DrawSettings() override;
 
 	void CheckResourcesSide(int side);
-	void ModifySky(const RE::BSShader* shader, const uint32_t descriptor);
+	void ModifySky(RE::BSRenderPass* Pass);
+
+	virtual void Prepass() override;
+
 	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor) override;
-	void DrawShadows();
 
 	virtual void Load(json& o_json) override;
 	virtual void Save(json& o_json) override;
@@ -65,8 +46,20 @@ struct CloudShadows : Feature
 
 	struct Hooks
 	{
+		struct BSSkyShader_SetupMaterial
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+			{
+				GetSingleton()->ModifySky(Pass);
+				func(This, Pass, RenderFlags);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		static void Install()
 		{
+			stl::write_vfunc<0x6, BSSkyShader_SetupMaterial>(RE::VTABLE_BSSkyShader[0]);
+			logger::info("[Cloud Shadows] Installed hooks");
 		}
 	};
 };
