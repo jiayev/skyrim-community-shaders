@@ -62,7 +62,7 @@ namespace SIE
 	class CompilationSet
 	{
 	public:
-		std::optional<ShaderCompilationTask> WaitTake();
+		std::optional<ShaderCompilationTask> WaitTake(std::stop_token stoken);
 		void Add(const ShaderCompilationTask& task);
 		void Complete(const ShaderCompilationTask& task);
 		void Clear();
@@ -74,12 +74,12 @@ namespace SIE
 		std::atomic<uint64_t> failedTasks = 0;
 		std::atomic<uint64_t> cacheHitTasks = 0;  // number of compiles of a previously seen shader combo
 		std::mutex compilationMutex;
-		std::condition_variable conditionVariable;
 
 	private:
 		std::unordered_set<ShaderCompilationTask> availableTasks;
 		std::unordered_set<ShaderCompilationTask> tasksInProgress;
 		std::unordered_set<ShaderCompilationTask> processedTasks;  // completed or failed
+		std::condition_variable_any conditionVariable;
 		std::chrono::steady_clock::time_point lastReset = high_resolution_clock::now();
 		std::chrono::steady_clock::time_point lastCalculation = high_resolution_clock::now();
 		double totalMs = (double)duration_cast<std::chrono::milliseconds>(lastReset - lastReset).count();
@@ -146,7 +146,6 @@ namespace SIE
 		bool UseFileWatcher() const;
 		void SetFileWatcher(bool value);
 
-		void Init();
 		void StartFileWatcher();
 		void StopFileWatcher();
 
@@ -191,7 +190,7 @@ namespace SIE
 		void ToggleErrorMessages();
 		void DisableShaderBlocking();
 		void IterateShaderBlock(bool a_forward = true);
-		bool IsHideErrors() const;
+		bool IsHideErrors();
 
 		void InsertModifiedShaderMap(std::string a_shader, std::chrono::time_point<std::chrono::system_clock> a_time);
 		std::chrono::time_point<std::chrono::system_clock> GetModifiedShaderMapTime(std::string a_shader);
@@ -395,13 +394,11 @@ namespace SIE
 		uint blockedKeyIndex = (uint)-1;  // index in shaderMap; negative value indicates disabled
 		std::string blockedKey = "";
 		std::vector<uint32_t> blockedIDs;  // more than one descriptor could be blocked based on shader hash
-		void ManageCompilationSet();
-		void ProcessCompilationSet(SIE::ShaderCompilationTask task);
-		std::stop_token stoken;
-		HANDLE managementThread = nullptr;
 
 	private:
 		ShaderCache();
+		void ManageCompilationSet(std::stop_token stoken);
+		void ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task);
 
 		~ShaderCache();
 
@@ -418,8 +415,8 @@ namespace SIE
 		bool isDump = false;
 		bool hideError = false;
 		bool useFileWatcher = false;
-		bool isReady = false;
-		std::stop_source ssource{};
+
+		std::stop_source ssource;
 		std::mutex vertexShadersMutex;
 		std::mutex pixelShadersMutex;
 		CompilationSet compilationSet;

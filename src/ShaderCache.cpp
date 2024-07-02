@@ -1484,20 +1484,8 @@ namespace SIE
 
 	ShaderCache::~ShaderCache()
 	{
-		logger::debug("Trying to stop pool with {}/{}/{} running/queued/total", compilationPool.get_tasks_running(), compilationPool.get_tasks_queued(), compilationPool.get_tasks_total());
-		if (!ssource.request_stop())
-			logger::warn("Unable to request a stop");
-		logger::debug("Stop requested: {}", stoken.stop_requested());
-		compilationSet.conditionVariable.notify_all();
-		compilationPool.purge();
 		Clear();
 		StopFileWatcher();
-		if (!compilationPool.wait_for(std::chrono::milliseconds(1000))) {
-			logger::debug("Tasks still running; killing thread!");
-			WaitForSingleObject(managementThread, 1000);
-			TerminateThread(managementThread, 0);
-			CloseHandle(managementThread);
-		}
 	}
 
 	void ShaderCache::Clear()
@@ -1707,6 +1695,8 @@ namespace SIE
 
 	ShaderCache::ShaderCache()
 	{
+		logger::debug("ShaderCache initialized with {} compiler threads", (int)compilationThreadCount);
+		compilationPool.push_task(&ShaderCache::ManageCompilationSet, this, ssource.get_token());
 	}
 
 	bool ShaderCache::UseFileWatcher() const
@@ -1718,21 +1708,10 @@ namespace SIE
 	{
 		auto oldValue = useFileWatcher;
 		useFileWatcher = value;
-		if (!isReady)
-			return;
 		if (useFileWatcher && !oldValue)
 			StartFileWatcher();
 		else if (!useFileWatcher && oldValue)
 			StopFileWatcher();
-	}
-
-	// Whether the threadpool is ready to process tasks
-	void ShaderCache::Init()
-	{
-		logger::debug("ShaderCache initialized with {} compiler threads", (int)compilationThreadCount);
-		stoken = ssource.get_token();
-		compilationPool.detach_task([this] { this->ManageCompilationSet(); });
-		isReady = true;
 	}
 
 	void ShaderCache::StartFileWatcher()
@@ -1751,9 +1730,7 @@ namespace SIE
 				pathStr += std::format("{}; ", path);
 			}
 			logger::debug("ShaderCache watching for changes in {}", pathStr);
-			compilationPool.detach_task([this] {
-				listener->processQueue();
-			});
+			compilationPool.push_task(&SIE::UpdateListener::processQueue, listener);
 		} else {
 			logger::debug("ShaderCache already enabled");
 		}
@@ -1888,7 +1865,7 @@ namespace SIE
 		compilationSet.cacheHitTasks++;
 	}
 
-	bool ShaderCache::IsHideErrors() const
+	bool ShaderCache::IsHideErrors()
 	{
 		return hideError;
 	}
@@ -1937,31 +1914,22 @@ namespace SIE
 		logger::debug("Stopped blocking shaders");
 	}
 
-	void ShaderCache::ManageCompilationSet()
-	{
-		managementThread = GetCurrentThread();
-		SetThreadPriority(managementThread, THREAD_PRIORITY_BELOW_NORMAL);
-		while (!stoken.stop_requested()) {
-			const auto& task = compilationSet.WaitTake();
-			if (task.has_value()) {
-				compilationPool.detach_task([this, &task] {
-					this->ProcessCompilationSet(task.value());
-				});
-			}
-			logger::debug("Pool running with {} tasks, stop {}", compilationPool.get_tasks_running(), stoken.stop_requested());
-		}
-		logger::debug("Pool trying to stop with {} tasks, stop {}", compilationPool.get_tasks_running(), stoken.stop_requested());
-	}
-
-	void ShaderCache::ProcessCompilationSet(SIE::ShaderCompilationTask task)
+	void ShaderCache::ManageCompilationSet(std::stop_token stoken)
 	{
 		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-		if (!stoken.stop_requested()) {
-			task.Perform();
-			compilationSet.Complete(task);
-			logger::debug("Compilation completed: Pool running with {} tasks, stop {}", compilationPool.get_tasks_running(), stoken.stop_requested());
+		while (!stoken.stop_requested()) {
+			const auto& task = compilationSet.WaitTake(stoken);
+			if (!task.has_value())
+				break;  // exit because thread told to end
+			compilationPool.push_task(&ShaderCache::ProcessCompilationSet, this, stoken, task.value());
 		}
-		compilationSet.conditionVariable.notify_one();
+	}
+
+	void ShaderCache::ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task)
+	{
+		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+		task.Perform();
+		compilationSet.Complete(task);
 	}
 
 	ShaderCompilationTask::ShaderCompilationTask(ShaderClass aShaderClass,
@@ -1996,29 +1964,25 @@ namespace SIE
 		return GetId() == other.GetId();
 	}
 
-	std::optional<ShaderCompilationTask> CompilationSet::WaitTake()
+	std::optional<ShaderCompilationTask> CompilationSet::WaitTake(std::stop_token stoken)
 	{
-		auto& shaderCache = ShaderCache::Instance();
 		std::unique_lock lock(compilationMutex);
-		conditionVariable.wait(
-			lock,
-			[this, &shaderCache]() { return shaderCache.stoken.stop_requested() || (!availableTasks.empty() &&
-																					   // check against all tasks in queue to trickle the work. It cannot be the active tasks count because the thread pool itself is maximum.
-																					   (int)shaderCache.compilationPool.get_tasks_total() <=
-																						   (!shaderCache.backgroundCompilation ? shaderCache.compilationThreadCount : shaderCache.backgroundCompilationThreadCount)); });
-		if (shaderCache.stoken.stop_requested()) {  // this appears to never fire so we have to manually kill it
-			logger::debug("Returning null since stop requested");
+		auto& shaderCache = ShaderCache::Instance();
+		if (!conditionVariable.wait(
+				lock, stoken,
+				[this, &shaderCache]() { return !availableTasks.empty() &&
+			                                    // check against all tasks in queue to trickle the work. It cannot be the active tasks count because the thread pool itself is maximum.
+			                                    (int)shaderCache.compilationPool.get_tasks_total() <=
+			                                        (!shaderCache.backgroundCompilation ? shaderCache.compilationThreadCount : shaderCache.backgroundCompilationThreadCount); })) {
+			/*Woke up because of a stop request. */
 			return std::nullopt;
 		}
-		if (!shaderCache.IsCompiling()) {  // we just got woken up because there's a task, start clock
+		if (!ShaderCache::Instance().IsCompiling()) {  // we just got woken up because there's a task, start clock
 			lastCalculation = lastReset = high_resolution_clock::now();
 		}
 		auto node = availableTasks.extract(availableTasks.begin());
-		if (node.empty())
-			return std::nullopt;
 		auto& task = node.value();
 		tasksInProgress.insert(std::move(node));
-		logger::debug("Pool extracted task: {}", task.GetString());
 		return task;
 	}
 
@@ -2055,6 +2019,7 @@ namespace SIE
 		std::scoped_lock lock(compilationMutex);
 		processedTasks.insert(task);
 		tasksInProgress.erase(task);
+		conditionVariable.notify_one();
 	}
 
 	void CompilationSet::Clear()
