@@ -112,8 +112,8 @@ void TerrainBlending::SetupResources()
 		terrainOffsetTexture->CreateUAV(uavDesc);
 
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-		depthDSVBackup = mainDepth.views[0];	
-		depthSRVBackup = mainDepth.depthSRV;	
+		depthDSVBackup = mainDepth.views[0];
+		depthSRVBackup = mainDepth.depthSRV;
 		mainDepth.depthSRV = blendedDepthTexture->srv.get();
 
 		auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
