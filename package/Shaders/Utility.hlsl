@@ -266,6 +266,11 @@ VS_OUTPUT main(VS_INPUT input)
 #		endif
 
 #	endif
+
+#	if defined(OFFSET_DEPTH)
+	vsout.PositionCS.z += 5.0;
+#	endif
+
 #	ifdef VR
 	vsout.EyeIndex = eyeIndex;
 	VR_OUTPUT VRout = GetVRVSOutput(vsout.PositionCS, eyeIndex);
