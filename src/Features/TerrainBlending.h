@@ -1,0 +1,169 @@
+#pragma once
+
+#include "Buffer.h"
+#include "Feature.h"
+
+struct TerrainBlending : Feature
+{
+public:
+	static TerrainBlending* GetSingleton()
+	{
+		static TerrainBlending singleton;
+		return &singleton;
+	}
+
+	static void InstallHooks()
+	{
+		Hooks::Install();
+	}
+
+	virtual inline std::string GetName() { return "Terrain Blending"; }
+	virtual inline std::string GetShortName() { return "TerrainBlending"; }
+	virtual inline std::string_view GetShaderDefineName() { return "TERRAIN_BLENDING"; }
+	virtual inline bool HasShaderDefine(RE::BSShader::Type) { return true; }
+
+	virtual void SetupResources();
+	virtual void Reset();
+
+	virtual void DrawSettings();
+
+	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
+
+	ID3D11VertexShader* GetTerrainVertexShader();
+	ID3D11VertexShader* GetTerrainOffsetVertexShader();
+
+	ID3D11VertexShader* terrainVertexShader = nullptr;
+	ID3D11VertexShader* terrainOffsetVertexShader = nullptr;
+
+	ID3D11ComputeShader* GetDepthBlendShader();
+	ID3D11ComputeShader* GetDepthFixShader();
+
+	virtual void Load(json& o_json);
+	virtual void Save(json& o_json);
+
+	virtual void RestoreDefaultSettings();
+	virtual void PostPostLoad() override;
+
+	bool renderDepth = false;
+	bool renderTerrainDepth = false;
+	bool renderAltTerrain = false;
+	bool renderWorld = false;
+	bool renderTerrainWorld = false;
+
+	void TerrainShaderHacks();
+
+	void OverrideTerrainWorld();
+
+	void OverrideTerrainDepth();
+	void ResetTerrainDepth();
+	void BlendPrepassDepths();
+	void FixDepthTexture();
+	void ResetTerrainWorld();
+
+	Texture2D* terrainDepthTexture = nullptr;
+
+	Texture2D* blendedDepthTexture = nullptr;
+	Texture2D* terrainOffsetTexture = nullptr;
+
+	RE::BSGraphics::DepthStencilData terrainDepth;
+
+	ID3D11DepthStencilState* terrainDepthStencilState = nullptr;
+
+	ID3D11ShaderResourceView* depthSRVBackup = nullptr;
+	ID3D11ShaderResourceView* prepassSRVBackup = nullptr;
+
+	ID3D11ComputeShader* depthBlendShader = nullptr;
+	ID3D11ComputeShader* depthFixShader = nullptr;
+
+	virtual void ClearShaderCache();
+
+	struct Hooks
+	{
+		struct Main_RenderDepth
+		{
+			static void thunk(bool a1, bool a2)
+			{
+				static auto singleton = GetSingleton();
+
+				singleton->renderDepth = true;
+				singleton->OverrideTerrainDepth();
+
+				func(a1, a2);
+
+				singleton->renderDepth = false;
+				if (singleton->renderTerrainDepth) {
+					singleton->renderTerrainDepth = false;
+					singleton->ResetTerrainDepth();
+				}
+				singleton->BlendPrepassDepths();
+			}
+
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSBatchRenderer__RenderPassImmediately
+		{
+			static void thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
+			{
+				static auto singleton = GetSingleton();
+				if (singleton->renderDepth) {
+					// Entering or exiting terrain depth section
+					bool inTerrain = a_pass->shaderProperty && a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
+					if (singleton->renderTerrainDepth != inTerrain) {
+						if (!inTerrain)
+							singleton->ResetTerrainDepth();
+						singleton->renderTerrainDepth = inTerrain;
+					}
+
+					func(a_pass, a_technique, a_alphaTest, a_renderFlags); // Run terrain twice
+				} else if (singleton->renderWorld) {
+					// Entering or exiting terrain section
+					bool inTerrain = a_pass->shaderProperty && a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
+					if (singleton->renderTerrainWorld != inTerrain) {
+						if (!inTerrain)
+							singleton->ResetTerrainWorld();
+						singleton->renderTerrainWorld = inTerrain;
+					}
+					if (inTerrain)
+						singleton->OverrideTerrainWorld();
+				}
+				func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct Main_RenderWorld_RenderBatches
+		{
+			static void thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRange, uint32_t RenderFlags, int GeometryGroup)
+			{
+				static auto singleton = GetSingleton();
+
+				singleton->renderWorld = true;
+
+				func(This, StartRange, EndRange, RenderFlags, GeometryGroup);
+
+				singleton->renderWorld = false;
+
+				if (singleton->renderTerrainWorld) {
+					singleton->renderTerrainWorld = false;
+					singleton->ResetTerrainWorld();
+				}
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		static void Install()
+		{
+			// To know when we are rendering z-prepass depth vs shadows depth
+			stl::write_thunk_call<Main_RenderDepth>(REL::Relocation<std::uintptr_t>(REL::RelocationID(35560, 36559), 0x395).address());
+
+			// To manipulate the depth buffer write, depth testing, alpha blending
+			stl::write_thunk_call<BSBatchRenderer__RenderPassImmediately>(REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
+
+			// To manipulate depth testing
+			stl::write_thunk_call<Main_RenderWorld_RenderBatches>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x8E, 0x84));
+
+			logger::info("[Terrain Blending] Installed hooks");
+		}
+	};
+};

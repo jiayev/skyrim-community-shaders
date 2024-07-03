@@ -972,6 +972,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = InterleavedGradientNoise(screenUV * BufferDim);
 
+#	if defined(LANDSCAPE) && defined(TERRAIN_BLENDING)
+	float depthSampled = GetTerrainOffsetDepth(screenUV, eyeIndex);
+	float depthComp = input.Position.z - depthSampled;
+
+	float depthSampledLinear = GetScreenDepth(depthSampled);
+	float depthPixelLinear = GetScreenDepth(input.Position.z);
+
+	float blendFactorTerrain = saturate((depthSampledLinear - depthPixelLinear) / 5.0);
+
+	clip(blendFactorTerrain);
+	blendFactorTerrain = saturate(blendFactorTerrain);
+
+#	endif
+
 	float3 viewDirection = normalize(input.ViewVector.xyz);
 	float3 worldSpaceViewDirection = -normalize(input.WorldPosition.xyz);
 
@@ -2017,6 +2031,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.ScreenSpaceNormals.z = 0;
 
 #	else
+
+#	if defined(LANDSCAPE) && defined(TERRAIN_BLENDING)	
+	psout.Diffuse.w = blendFactorTerrain;
+#	endif
 
 	psout.MotionVectors.zw = float2(0.0, psout.Diffuse.w);
 	psout.Specular = float4(specularColor.xyz, psout.Diffuse.w);
