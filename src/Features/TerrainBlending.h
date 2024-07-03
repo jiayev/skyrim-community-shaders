@@ -55,9 +55,9 @@ public:
 	void OverrideTerrainWorld();
 
 	void OverrideTerrainDepth();
+	void ResetDepth();
 	void ResetTerrainDepth();
 	void BlendPrepassDepths();
-	void FixDepthTexture();
 	void ResetTerrainWorld();
 
 	Texture2D* terrainDepthTexture = nullptr;
@@ -68,6 +68,8 @@ public:
 	RE::BSGraphics::DepthStencilData terrainDepth;
 
 	ID3D11DepthStencilState* terrainDepthStencilState = nullptr;
+
+	ID3D11DepthStencilView* depthDSVBackup = nullptr;
 
 	ID3D11ShaderResourceView* depthSRVBackup = nullptr;
 	ID3D11ShaderResourceView* prepassSRVBackup = nullptr;

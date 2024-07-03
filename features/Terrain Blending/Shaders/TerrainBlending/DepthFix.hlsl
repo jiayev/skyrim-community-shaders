@@ -1,17 +1,16 @@
 RWTexture2D<float> TerrainOffsetTexture : register(u0);
 Texture2D<unorm float> MainDepthTexture : register(t0);
-Texture2D<unorm float> TerrainDepthTexture : register(t1);
-Texture2D<unorm float> MainDepthTextureNoGrass : register(t2);
+Texture2D<unorm float> MainDepthTextureAfterTerrain : register(t1);
 
-[numthreads(8, 8, 1)] void main(uint3 DTid : SV_DispatchThreadID) {
-
+[numthreads(8, 8, 1)] void main(uint3 DTid : SV_DispatchThreadID) 
+{
 	float mainDepth = MainDepthTexture[DTid.xy];
-	float mainDepthNoGrass = MainDepthTextureNoGrass[DTid.xy];
+	float mainDepthAfterTerrain = MainDepthTextureAfterTerrain[DTid.xy];
 
-	float mixedDepth = mainDepth;
+	float fixedDepth = mainDepth;
 
-	if (mainDepth != mainDepthNoGrass)
-		mixedDepth = TerrainDepthTexture[DTid.xy];
+	if (mainDepth < mainDepthAfterTerrain)
+		fixedDepth = 1;
 
-	TerrainOffsetTexture[DTid.xy] = mixedDepth;
+	TerrainOffsetTexture[DTid.xy] = fixedDepth;
 }

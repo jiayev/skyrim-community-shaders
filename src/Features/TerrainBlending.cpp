@@ -112,6 +112,7 @@ void TerrainBlending::SetupResources()
 		terrainOffsetTexture->CreateUAV(uavDesc);
 
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		depthDSVBackup = mainDepth.views[0];	
 		depthSRVBackup = mainDepth.depthSRV;	
 		mainDepth.depthSRV = blendedDepthTexture->srv.get();
 
@@ -220,6 +221,18 @@ void TerrainBlending::OverrideTerrainDepth()
 	context->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH, 1.0f, 0u);
 }
 
+void TerrainBlending::ResetDepth()
+{
+	auto& context = State::GetSingleton()->context;
+
+	auto rtv = blendedDepthTexture->rtv.get();
+	FLOAT clearColor[4]{ 1, 0, 0, 0 };
+	context->ClearRenderTargetView(rtv, clearColor);
+
+	auto dsv = terrainDepth.views[0];
+	context->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH, 1.0f, 0u);
+}
+
 void TerrainBlending::ResetTerrainDepth()
 {
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -238,6 +251,8 @@ void TerrainBlending::BlendPrepassDepths()
 	auto& context = State::GetSingleton()->context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
+	auto dispatchCount = Util::GetScreenDispatchCount();
+
 	{
 		ID3D11ShaderResourceView* views[2] = { depthSRVBackup, terrainDepth.depthSRV };
 		context->CSSetShaderResources(0, 2, views);
@@ -247,48 +262,23 @@ void TerrainBlending::BlendPrepassDepths()
 
 		context->CSSetShader(GetDepthBlendShader(), nullptr, 0);
 
-		context->Dispatch((uint32_t)std::ceil((float)blendedDepthTexture->desc.Width / 8.0f), (uint32_t)std::ceil((float)blendedDepthTexture->desc.Height / 8.0f), 1);
+		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 	}
 
-	ID3D11ShaderResourceView* views[2] = { nullptr, nullptr };
-	context->CSSetShaderResources(0, 2, views);
-
-	ID3D11UnorderedAccessView* uav = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-
-	ID3D11ComputeShader* shader = nullptr;
-	context->CSSetShader(shader, nullptr, 0);
-
-	FixDepthTexture();
-
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-	state->GetRuntimeData().stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-}
-
-
-void TerrainBlending::FixDepthTexture()
-{
-	auto& context = State::GetSingleton()->context;
-	context->OMSetRenderTargets(0, nullptr, nullptr);
-
 	{
-		// Depth below surface
-		// Depth below surface but not grass
-		// Terrain Depth
-
-		ID3D11ShaderResourceView* views[3] = { depthSRVBackup, terrainDepthTexture->srv.get(), terrainDepth.depthSRV };
-		context->CSSetShaderResources(0, 3, views);
+		ID3D11ShaderResourceView* views[2] = { depthSRVBackup, terrainDepthTexture->srv.get() };
+		context->CSSetShaderResources(0, 2, views);
 
 		ID3D11UnorderedAccessView* uav = terrainOffsetTexture->uav.get();
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 		context->CSSetShader(GetDepthFixShader(), nullptr, 0);
 
-		context->Dispatch((uint32_t)std::ceil((float)terrainOffsetTexture->desc.Width / 8.0f), (uint32_t)std::ceil((float)terrainOffsetTexture->desc.Height / 8.0f), 1);
+		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 	}
 
-	ID3D11ShaderResourceView* views[3] = { nullptr, nullptr, nullptr };
-	context->CSSetShaderResources(0, 3, views);
+	ID3D11ShaderResourceView* views[2] = { nullptr, nullptr };
+	context->CSSetShaderResources(0, 2, views);
 
 	ID3D11UnorderedAccessView* uav = nullptr;
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
