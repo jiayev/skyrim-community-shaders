@@ -87,7 +87,7 @@ public:
 				auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 				auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 				auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-				
+
 				static auto singleton = GetSingleton();
 
 				if (SIE::ShaderCache::Instance().IsEnabled()) {
@@ -170,7 +170,7 @@ public:
 
 					auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 					auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-				
+
 					mainDepth.depthSRV = singleton->depthSRVBackup;
 				} else {
 					func(This, StartRange, EndRange, RenderFlags, GeometryGroup);
