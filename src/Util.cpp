@@ -334,6 +334,20 @@ namespace Util
 		return cameraData;
 	}
 
+	DispatchCount GetScreenDispatchCount()
+	{
+		auto state = State::GetSingleton();
+		auto viewport = RE::BSGraphics::State::GetSingleton();
+
+		float resolutionX = state->screenWidth * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
+		float resolutionY = state->screenHeight * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
+
+		uint dispatchX = (uint)std::ceil(resolutionX / 8.0f);
+		uint dispatchY = (uint)std::ceil(resolutionY / 8.0f);
+
+		return { dispatchX, dispatchY };
+	}
+
 	HoverTooltipWrapper::HoverTooltipWrapper()
 	{
 		hovered = ImGui::IsItemHovered();

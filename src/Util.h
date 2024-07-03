@@ -28,6 +28,14 @@ namespace Util
 	void DumpSettingsOptions();
 	float4 GetCameraData();
 
+	struct DispatchCount
+	{
+		uint x;
+		uint y;
+	};
+
+	DispatchCount GetScreenDispatchCount();
+
 	/**
 	 * Usage:
 	 * if (auto _tt = Util::HoverTooltipWrapper()){

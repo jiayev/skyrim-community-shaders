@@ -170,10 +170,7 @@ void Skylighting::Compute()
 
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 
-	auto viewport = RE::BSGraphics::State::GetSingleton();
-
-	float resolutionX = state->screenWidth * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
-	float resolutionY = state->screenHeight * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
+	auto dispatchCount = Util::GetScreenDispatchCount();
 
 	{
 		PerFrameCB data{};
@@ -217,10 +214,7 @@ void Skylighting::Compute()
 
 	context->CSSetShader(settings.HeightSkylighting ? GetSkylightingCS() : GetSkylightingShadowMapCS(), nullptr, 0);
 
-	uint32_t dispatchX = (uint32_t)std::ceil(resolutionX / 8.0f);
-	uint32_t dispatchY = (uint32_t)std::ceil(resolutionY / 8.0f);
-
-	context->Dispatch(dispatchX, dispatchY, 1);
+	context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 
 	srvs[0] = nullptr;
 	srvs[1] = nullptr;
