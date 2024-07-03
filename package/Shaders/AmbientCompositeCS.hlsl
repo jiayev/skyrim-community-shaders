@@ -1,8 +1,8 @@
+#include "Common/Color.hlsl"
 #include "Common/DeferredShared.hlsli"
 #include "Common/FrameBuffer.hlsl"
 #include "Common/GBuffer.hlsli"
 #include "Common/VR.hlsli"
-#include "Common/Color.hlsl"
 
 Texture2D<unorm half3> AlbedoTexture : register(t0);
 Texture2D<unorm half3> NormalRoughnessTexture : register(t1);
@@ -38,7 +38,7 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 	half3 ambient = albedo * directionalAmbientColor;
 
 	diffuseColor = sRGB2Lin(diffuseColor);
-	ambient = sRGB2Lin(max(0, ambient)); // Fixes black blobs on the world map
+	ambient = sRGB2Lin(max(0, ambient));  // Fixes black blobs on the world map
 	albedo = sRGB2Lin(albedo);
 
 #if defined(SKYLIGHTING)
