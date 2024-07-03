@@ -9,19 +9,15 @@ float GetScreenSpaceShadow(float2 a_uv, float a_noise, float3 a_viewPosition, ui
 	float weight = 0;
 	float shadow = 0;
 
-	static const float2 BlurOffsets[8] = {
-		float2(-0.4706069, -0.4427112),
-		float2(-0.9057375, +0.3003471),
-		float2(-0.3487388, +0.4037880),
-		float2(+0.1023042, +0.6439373),
-		float2(+0.5699277, +0.3513750),
-		float2(+0.2939128, -0.1131226),
-		float2(+0.7836658, -0.4208784),
-		float2(+0.1564120, -0.8198990)
+	static const float2 BlurOffsets[4] = {
+        float2(0.381664f, 0.89172f),
+        float2(0.491409f, 0.216926f),
+        float2(0.937803f, 0.734825f),
+        float2(0.00921659f, 0.0562151f),
 	};
 
-	for (uint i = 0; i < 8; i++) {
-		float2 offset = mul(BlurOffsets[i], rotationMatrix) * 0.001;
+	for (uint i = 0; i < 4; i++) {
+		float2 offset = mul(BlurOffsets[i], rotationMatrix) * 0.0025;
 
 		float2 sampleUV = a_uv + offset;
 		sampleUV = ConvertToStereoUV(sampleUV, a_eyeIndex);
@@ -31,7 +27,7 @@ float GetScreenSpaceShadow(float2 a_uv, float a_noise, float3 a_viewPosition, ui
 		float rawDepth = TexDepthSampler.Load(int3(sampleCoord, 0)).x;
 		float linearDepth = GetScreenDepth(rawDepth);
 
-		float attenuation = 1.0 - saturate(128.0 * abs(linearDepth - a_viewPosition.z) / a_viewPosition.z);
+		float attenuation = 1.0 - saturate(100.0 * abs(linearDepth - a_viewPosition.z) / a_viewPosition.z);
 		if (attenuation > 0.0) {
 			shadow += ScreenSpaceShadowsTexture.Load(int3(sampleCoord, 0)).x * attenuation;
 			weight += attenuation;
