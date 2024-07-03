@@ -35,16 +35,28 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 	half3 directionalAmbientColor = mul(DirectionalAmbient, half4(normalWS, 1.0));
 
 	half3 ambient = albedo * directionalAmbientColor;
+	
+	diffuseColor = pow(diffuseColor, 2.2);
+	ambient = pow(ambient, 2.2);
+	albedo = pow(albedo, 2.2);
+
 #if defined(SKYLIGHTING)
 	half skylightingDiffuse = SkylightingTexture[dispatchID.xy].x;
 	ambient *= skylightingDiffuse;
 #endif
 #if defined(SSGI)
-	half4 ssgiDiffuse = SSGITexture[dispatchID.xy];
-	ambient = ambient * ssgiDiffuse.a + ssgiDiffuse.rgb * albedo;
-#endif
-	diffuseColor += ambient;
 
+	half4 ssgiDiffuse = SSGITexture[dispatchID.xy];
+
+	ambient = ambient * ssgiDiffuse.a + ssgiDiffuse.rgb * albedo;
+
+#endif
+	
+	diffuseColor = pow(diffuseColor, 1.0 / 2.2);
+	ambient = pow(ambient, 1.0 / 2.2);
+
+	diffuseColor += ambient;
+	
 	MainRW[dispatchID.xy] = diffuseColor;
 #if defined(SSGI)
 	DiffuseAmbientRW[dispatchID.xy] = ambient;
