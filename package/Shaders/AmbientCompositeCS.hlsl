@@ -10,7 +10,14 @@ Texture2D<unorm half3> NormalRoughnessTexture : register(t1);
 Texture2D<half2> SkylightingTexture : register(t2);
 #endif
 
+#if defined(SSGI)
+Texture2D<half4> SSGITexture : register(t3);
+#endif
+
 RWTexture2D<half3> MainRW : register(u0);
+#if defined(SSGI)
+RWTexture2D<half3> DiffuseAmbientRW : register(u1);
+#endif
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
@@ -27,12 +34,19 @@ RWTexture2D<half3> MainRW : register(u0);
 
 	half3 directionalAmbientColor = mul(DirectionalAmbient, half4(normalWS, 1.0));
 
+	half3 ambient = albedo * directionalAmbientColor;
 #if defined(SKYLIGHTING)
 	half skylightingDiffuse = SkylightingTexture[dispatchID.xy].x;
-	diffuseColor += albedo * directionalAmbientColor * skylightingDiffuse;
-#else
-	diffuseColor += albedo * directionalAmbientColor;
+	ambient *= skylightingDiffuse;
 #endif
+#if defined(SSGI)
+	half4 ssgiDiffuse = SSGITexture[dispatchID.xy];
+	ambient = ambient * ssgiDiffuse.a + ssgiDiffuse.rgb * albedo;
+#endif
+	diffuseColor += ambient;
 
 	MainRW[dispatchID.xy] = diffuseColor;
+#if defined(SSGI)
+	DiffuseAmbientRW[dispatchID.xy] = ambient;
+#endif
 };

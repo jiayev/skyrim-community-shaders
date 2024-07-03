@@ -2,7 +2,6 @@
 
 #include "Buffer.h"
 #include "State.h"
-#include <Features/SKylighting.h>
 #include <State.h>
 #include <Util.h>
 
@@ -52,6 +51,8 @@ public:
 
 	bool inWorld = false;
 	bool deferredPass = false;
+
+	Texture2D* prevDiffuseAmbientTexture = nullptr;
 
 	struct alignas(16) DeferredCB
 	{

@@ -28,7 +28,7 @@ struct ScreenSpaceGI : Feature
 
 	virtual inline void Draw(const RE::BSShader*, const uint32_t) override{};
 
-	void DrawSSGI(Texture2D* outGI);
+	void DrawSSGI(Texture2D* srcPrevAmbient);
 	void GenerateHilbertLUT();
 	void UpdateSB();
 
@@ -36,6 +36,7 @@ struct ScreenSpaceGI : Feature
 
 	bool hilbertLutGenFlag = false;
 	bool recompileFlag = false;
+	uint outputGIIdx = 0;
 
 	struct Settings
 	{
@@ -44,34 +45,34 @@ struct ScreenSpaceGI : Feature
 		bool EnableGI = true;
 		// performance/quality
 		uint NumSlices = 2;
-		uint NumSteps = 3;
+		uint NumSteps = 5;
 		bool HalfRes = true;
 		float DepthMIPSamplingOffset = 3.3f;
 		// visual
-		float EffectRadius = 200.f;
+		float EffectRadius = 500.f;
 		float EffectFalloffRange = .615f;
 		float ThinOccluderCompensation = 0.f;
-		float Thickness = 50.f;
+		float Thickness = 75.f;
 		float2 DepthFadeRange = { 2e4, 3e4 };
 		// gi
 		bool CheckBackface = true;
-		float BackfaceStrength = 0.1f;
+		float BackfaceStrength = 0.f;
 		bool EnableGIBounce = true;
-		float GIBounceFade = 0.8f;
-		float GIDistanceCompensation = 1;
-		float GICompensationMaxDist = 200;
+		float GIBounceFade = 1.f;
+		float GIDistanceCompensation = 1.f;
+		float GICompensationMaxDist = 500;
 		// mix
 		float AOPower = 1.f;
-		float GIStrength = 8.f;
+		float GIStrength = 4.f;
 		// denoise
 		bool EnableTemporalDenoiser = true;
 		bool EnableBlur = true;
-		float DepthDisocclusion = 50.f;
-		float NormalDisocclusion = .3f;
+		float DepthDisocclusion = .1f;
+		float NormalDisocclusion = .1f;
 		uint MaxAccumFrames = 16;
 		float BlurRadius = 6.f;
 		uint BlurPasses = 1;
-		float DistanceNormalisation = .05f;
+		float DistanceNormalisation = 1.f;
 	} settings;
 
 	struct alignas(16) SSGICB
@@ -125,7 +126,6 @@ struct ScreenSpaceGI : Feature
 	eastl::unique_ptr<Texture2D> texRadiance = nullptr;
 	eastl::unique_ptr<Texture2D> texAccumFrames[2] = { nullptr };
 	eastl::unique_ptr<Texture2D> texGI[2] = { nullptr };
-	eastl::unique_ptr<Texture2D> texPrevGIAlbedo = { nullptr };
 
 	winrt::com_ptr<ID3D11SamplerState> linearClampSampler = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> pointClampSampler = nullptr;
@@ -136,5 +136,4 @@ struct ScreenSpaceGI : Feature
 	winrt::com_ptr<ID3D11ComputeShader> giCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> blurCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> upsampleCompute = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> outputCompute = nullptr;
 };

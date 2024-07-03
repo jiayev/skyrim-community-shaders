@@ -17,51 +17,51 @@
 
 Texture2D<float> srcNDCDepth : register(t0);
 
-RWTexture2D<lpfloat> outDepth0 : register(u0);
-RWTexture2D<lpfloat> outDepth1 : register(u1);
-RWTexture2D<lpfloat> outDepth2 : register(u2);
-RWTexture2D<lpfloat> outDepth3 : register(u3);
-RWTexture2D<lpfloat> outDepth4 : register(u4);
+RWTexture2D<float> outDepth0 : register(u0);
+RWTexture2D<float> outDepth1 : register(u1);
+RWTexture2D<float> outDepth2 : register(u2);
+RWTexture2D<float> outDepth3 : register(u3);
+RWTexture2D<float> outDepth4 : register(u4);
 
 // This is also a good place to do non-linear depth conversion for cases where one wants the 'radius' (effectively the threshold between near-field and far-field GI),
 // is required to be non-linear (i.e. very large outdoors environments).
-lpfloat ClampDepth(float depth)
+float ClampDepth(float depth)
 {
 #ifdef USE_HALF_FLOAT_PRECISION
-	return (lpfloat)clamp(depth, 0.0h, 65504.0h);
+	return clamp(depth, 0.0h, 65504.0h);
 #else
 	return clamp(depth, 0.0, 3.402823466e+38);
 #endif
 }
 
 // weighted average depth filter
-lpfloat DepthMIPFilter(lpfloat depth0, lpfloat depth1, lpfloat depth2, lpfloat depth3)
+float DepthMIPFilter(float depth0, float depth1, float depth2, float depth3)
 {
-	lpfloat maxDepth = max(max(depth0, depth1), max(depth2, depth3));
+	float maxDepth = max(max(depth0, depth1), max(depth2, depth3));
 
-	const lpfloat depthRangeScaleFactor = 0.75;  // found empirically :)
-	const lpfloat effectRadius = depthRangeScaleFactor * (lpfloat)EffectRadius;
-	const lpfloat falloffRange = (lpfloat)EffectFalloffRange * effectRadius;
-	const lpfloat rcpFalloffRange = rcp(falloffRange);
-	const lpfloat falloffFrom = (lpfloat)EffectRadius * ((lpfloat)1 - (lpfloat)EffectFalloffRange);
-	const lpfloat falloffMul = -rcpFalloffRange;
-	const lpfloat falloffAdd = falloffFrom * rcpFalloffRange + (lpfloat)1.0;
+	const float depthRangeScaleFactor = 0.75;  // found empirically :)
+	const float effectRadius = depthRangeScaleFactor * EffectRadius;
+	const float falloffRange = EffectFalloffRange * effectRadius;
+	const float rcpFalloffRange = rcp(falloffRange);
+	const float falloffFrom = EffectRadius * (1 - EffectFalloffRange);
+	const float falloffMul = -rcpFalloffRange;
+	const float falloffAdd = falloffFrom * rcpFalloffRange + 1.0;
 
-	lpfloat weight0 = saturate((maxDepth - depth0) * falloffMul + falloffAdd);
-	lpfloat weight1 = saturate((maxDepth - depth1) * falloffMul + falloffAdd);
-	lpfloat weight2 = saturate((maxDepth - depth2) * falloffMul + falloffAdd);
-	lpfloat weight3 = saturate((maxDepth - depth3) * falloffMul + falloffAdd);
+	float weight0 = saturate((maxDepth - depth0) * falloffMul + falloffAdd);
+	float weight1 = saturate((maxDepth - depth1) * falloffMul + falloffAdd);
+	float weight2 = saturate((maxDepth - depth2) * falloffMul + falloffAdd);
+	float weight3 = saturate((maxDepth - depth3) * falloffMul + falloffAdd);
 
-	lpfloat weightSum = weight0 + weight1 + weight2 + weight3;
+	float weightSum = weight0 + weight1 + weight2 + weight3;
 	return (weight0 * depth0 + weight1 * depth1 + weight2 * depth2 + weight3 * depth3) / weightSum;
 }
 
-groupshared lpfloat g_scratchDepths[8][8];
+groupshared float g_scratchDepths[8][8];
 [numthreads(8, 8, 1)] void main(uint2 dispatchThreadID
 								: SV_DispatchThreadID, uint2 groupThreadID
 								: SV_GroupThreadID) {
-	const float srcScale = SrcFrameDim * RcpTexDim;
-	const float outScale = OutFrameDim * RcpTexDim;
+	const float2 srcScale = SrcFrameDim * RcpTexDim;
+	const float2 outScale = OutFrameDim * RcpTexDim;
 
 	// MIP 0
 	const uint2 baseCoord = dispatchThreadID;
@@ -69,18 +69,18 @@ groupshared lpfloat g_scratchDepths[8][8];
 	const float2 uv = (pixCoord + .5) * RcpSrcFrameDim;
 
 	float4 depths4 = srcNDCDepth.GatherRed(samplerPointClamp, uv * srcScale, int2(1, 1));
-	lpfloat depth0 = ClampDepth(ScreenToViewDepth(depths4.w));
-	lpfloat depth1 = ClampDepth(ScreenToViewDepth(depths4.z));
-	lpfloat depth2 = ClampDepth(ScreenToViewDepth(depths4.x));
-	lpfloat depth3 = ClampDepth(ScreenToViewDepth(depths4.y));
-	outDepth0[pixCoord + uint2(0, 0)] = (lpfloat)depth0;
-	outDepth0[pixCoord + uint2(1, 0)] = (lpfloat)depth1;
-	outDepth0[pixCoord + uint2(0, 1)] = (lpfloat)depth2;
-	outDepth0[pixCoord + uint2(1, 1)] = (lpfloat)depth3;
+	float depth0 = ClampDepth(ScreenToViewDepth(depths4.w));
+	float depth1 = ClampDepth(ScreenToViewDepth(depths4.z));
+	float depth2 = ClampDepth(ScreenToViewDepth(depths4.x));
+	float depth3 = ClampDepth(ScreenToViewDepth(depths4.y));
+	outDepth0[pixCoord + uint2(0, 0)] = depth0;
+	outDepth0[pixCoord + uint2(1, 0)] = depth1;
+	outDepth0[pixCoord + uint2(0, 1)] = depth2;
+	outDepth0[pixCoord + uint2(1, 1)] = depth3;
 
 	// MIP 1
-	lpfloat dm1 = DepthMIPFilter(depth0, depth1, depth2, depth3);
-	outDepth1[baseCoord] = (lpfloat)dm1;
+	float dm1 = DepthMIPFilter(depth0, depth1, depth2, depth3);
+	outDepth1[baseCoord] = dm1;
 	g_scratchDepths[groupThreadID.x][groupThreadID.y] = dm1;
 
 	GroupMemoryBarrierWithGroupSync();
@@ -88,13 +88,13 @@ groupshared lpfloat g_scratchDepths[8][8];
 	// MIP 2
 	[branch] if (all((groupThreadID.xy % 2) == 0))
 	{
-		lpfloat inTL = g_scratchDepths[groupThreadID.x + 0][groupThreadID.y + 0];
-		lpfloat inTR = g_scratchDepths[groupThreadID.x + 1][groupThreadID.y + 0];
-		lpfloat inBL = g_scratchDepths[groupThreadID.x + 0][groupThreadID.y + 1];
-		lpfloat inBR = g_scratchDepths[groupThreadID.x + 1][groupThreadID.y + 1];
+		float inTL = g_scratchDepths[groupThreadID.x + 0][groupThreadID.y + 0];
+		float inTR = g_scratchDepths[groupThreadID.x + 1][groupThreadID.y + 0];
+		float inBL = g_scratchDepths[groupThreadID.x + 0][groupThreadID.y + 1];
+		float inBR = g_scratchDepths[groupThreadID.x + 1][groupThreadID.y + 1];
 
-		lpfloat dm2 = DepthMIPFilter(inTL, inTR, inBL, inBR);
-		outDepth2[baseCoord / 2] = (lpfloat)dm2;
+		float dm2 = DepthMIPFilter(inTL, inTR, inBL, inBR);
+		outDepth2[baseCoord / 2] = dm2;
 		g_scratchDepths[groupThreadID.x][groupThreadID.y] = dm2;
 	}
 
@@ -103,13 +103,13 @@ groupshared lpfloat g_scratchDepths[8][8];
 	// MIP 3
 	[branch] if (all((groupThreadID.xy % 4) == 0))
 	{
-		lpfloat inTL = g_scratchDepths[groupThreadID.x + 0][groupThreadID.y + 0];
-		lpfloat inTR = g_scratchDepths[groupThreadID.x + 2][groupThreadID.y + 0];
-		lpfloat inBL = g_scratchDepths[groupThreadID.x + 0][groupThreadID.y + 2];
-		lpfloat inBR = g_scratchDepths[groupThreadID.x + 2][groupThreadID.y + 2];
+		float inTL = g_scratchDepths[groupThreadID.x + 0][groupThreadID.y + 0];
+		float inTR = g_scratchDepths[groupThreadID.x + 2][groupThreadID.y + 0];
+		float inBL = g_scratchDepths[groupThreadID.x + 0][groupThreadID.y + 2];
+		float inBR = g_scratchDepths[groupThreadID.x + 2][groupThreadID.y + 2];
 
-		lpfloat dm3 = DepthMIPFilter(inTL, inTR, inBL, inBR);
-		outDepth3[baseCoord / 4] = (lpfloat)dm3;
+		float dm3 = DepthMIPFilter(inTL, inTR, inBL, inBR);
+		outDepth3[baseCoord / 4] = dm3;
 		g_scratchDepths[groupThreadID.x][groupThreadID.y] = dm3;
 	}
 
@@ -118,13 +118,13 @@ groupshared lpfloat g_scratchDepths[8][8];
 	// MIP 4
 	[branch] if (all((groupThreadID.xy % 8) == 0))
 	{
-		lpfloat inTL = g_scratchDepths[groupThreadID.x + 0][groupThreadID.y + 0];
-		lpfloat inTR = g_scratchDepths[groupThreadID.x + 4][groupThreadID.y + 0];
-		lpfloat inBL = g_scratchDepths[groupThreadID.x + 0][groupThreadID.y + 4];
-		lpfloat inBR = g_scratchDepths[groupThreadID.x + 4][groupThreadID.y + 4];
+		float inTL = g_scratchDepths[groupThreadID.x + 0][groupThreadID.y + 0];
+		float inTR = g_scratchDepths[groupThreadID.x + 4][groupThreadID.y + 0];
+		float inBL = g_scratchDepths[groupThreadID.x + 0][groupThreadID.y + 4];
+		float inBR = g_scratchDepths[groupThreadID.x + 4][groupThreadID.y + 4];
 
-		lpfloat dm4 = DepthMIPFilter(inTL, inTR, inBL, inBR);
-		outDepth4[baseCoord / 8] = (lpfloat)dm4;
+		float dm4 = DepthMIPFilter(inTL, inTR, inBL, inBR);
+		outDepth4[baseCoord / 8] = dm4;
 		//g_scratchDepths[ groupThreadID.x ][ groupThreadID.y ] = dm4;
 	}
 }

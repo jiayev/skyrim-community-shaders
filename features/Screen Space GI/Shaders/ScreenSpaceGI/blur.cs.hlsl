@@ -6,12 +6,12 @@
 #include "../Common/VR.hlsli"
 #include "common.hlsli"
 
-Texture2D<lpfloat4> srcGI : register(t0);              // maybe half-res
+Texture2D<float4> srcGI : register(t0);                // maybe half-res
 Texture2D<unorm float> srcAccumFrames : register(t1);  // maybe half-res
 Texture2D<half> srcDepth : register(t2);
 Texture2D<half4> srcNormal : register(t3);
 
-RWTexture2D<lpfloat4> outGI : register(u0);
+RWTexture2D<float4> outGI : register(u0);
 RWTexture2D<unorm float> outAccumFrames : register(u1);
 
 // samples = 8, min distance = 0.5, average samples on radius = 2
@@ -33,8 +33,8 @@ float HistoryRadiusScaling(float accumFrames)
 
 [numthreads(8, 8, 1)] void main(const uint2 dtid
 								: SV_DispatchThreadID) {
-	const float srcScale = SrcFrameDim * RcpTexDim;
-	const float outScale = OutFrameDim * RcpTexDim;
+	const float2 srcScale = SrcFrameDim * RcpTexDim;
+	const float2 outScale = OutFrameDim * RcpTexDim;
 
 	float radius = BlurRadius;
 #ifdef TEMPORAL_DENOISER
@@ -52,9 +52,9 @@ float HistoryRadiusScaling(float accumFrames)
 	float3 pos = ScreenToViewPosition(screenPos, depth, eyeIndex);
 	float3 normal = DecodeNormal(FULLRES_LOAD(srcNormal, dtid, uv, samplerLinearClamp).xy);
 
-	lpfloat4 sum = srcGI[dtid];
+	float4 sum = srcGI[dtid];
 #ifdef TEMPORAL_DENOISER
-	lpfloat4 fsum = accumFrames;
+	float4 fsum = accumFrames;
 #endif
 	float4 wsum = 1;
 	for (uint i = 0; i < numSamples; i++) {
@@ -78,11 +78,11 @@ float HistoryRadiusScaling(float accumFrames)
 		// normal weight
 		w *= 1 - saturate(acosFast4(saturate(dot(normalSample, normal))) / fsl_HALF_PI * 2);
 
-		lpfloat4 gi = srcGI.SampleLevel(samplerLinearClamp, uvSample * outScale, 0);
+		float4 gi = srcGI.SampleLevel(samplerLinearClamp, uvSample * outScale, 0);
 
 		sum += gi * w;
 #ifdef TEMPORAL_DENOISER
-		fsum += srcAccumFrames.SampleLevel(samplerLinearClamp, uvSample * outScale, 0);
+		fsum += srcAccumFrames.SampleLevel(samplerLinearClamp, uvSample * outScale, 0) * w;
 #endif
 		wsum += w;
 	}

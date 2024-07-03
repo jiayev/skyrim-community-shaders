@@ -18,32 +18,6 @@
 #ifndef SSGI_COMMON
 #define SSGI_COMMON
 
-#ifndef USE_HALF_FLOAT_PRECISION
-#	define USE_HALF_FLOAT_PRECISION 1
-#endif
-
-#if (USE_HALF_FLOAT_PRECISION != 0)
-#	if 1  // old fp16 approach (<SM6.2)
-typedef min16float lpfloat;
-typedef min16float2 lpfloat2;
-typedef min16float3 lpfloat3;
-typedef min16float4 lpfloat4;
-typedef min16float3x3 lpfloat3x3;
-#	else  // new fp16 approach (requires SM6.2 and -enable-16bit-types) - WARNING: perf degradation noticed on some HW, while the old (min16float) path is mostly at least a minor perf gain so this is more useful for quality testing
-typedef float16_t lpfloat;
-typedef float16_t2 lpfloat2;
-typedef float16_t3 lpfloat3;
-typedef float16_t4 lpfloat4;
-typedef float16_t3x3 lpfloat3x3;
-#	endif
-#else
-typedef float lpfloat;
-typedef float2 lpfloat2;
-typedef float3 lpfloat3;
-typedef float4 lpfloat4;
-typedef float3x3 lpfloat3x3;
-#endif
-
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "../Common/DeferredShared.hlsli"
@@ -119,18 +93,18 @@ SamplerState samplerLinearClamp : register(s1);
 #define ISNAN(x) (!(x < 0.f || x > 0.f || x == 0.f))
 
 // http://h14s.p5r.org/2012/09/0x5f3759df.html, [Drobot2014a] Low Level Optimizations for GCN, https://blog.selfshadow.com/publications/s2016-shading-course/activision/s2016_pbs_activision_occlusion.pdf slide 63
-lpfloat FastSqrt(float x)
+float FastSqrt(float x)
 {
-	return (lpfloat)(asfloat(0x1fbd1df5 + (asint(x) >> 1)));
+	return (asfloat(0x1fbd1df5 + (asint(x) >> 1)));
 }
 
 // input [-1, 1] and output [0, PI], from https://seblagarde.wordpress.com/2014/12/01/inverse-trigonometric-functions-gpu-optimization-for-amd-gcn-architecture/
-lpfloat FastACos(lpfloat inX)
+float FastACos(float inX)
 {
-	const lpfloat PI = 3.141593;
-	const lpfloat HALF_PI = 1.570796;
-	lpfloat x = abs(inX);
-	lpfloat res = -0.156583 * x + HALF_PI;
+	const float PI = 3.141593;
+	const float HALF_PI = 1.570796;
+	float x = abs(inX);
+	float res = -0.156583 * x + HALF_PI;
 	res *= FastSqrt(1.0 - x);
 	return (inX >= 0) ? res : PI - res;
 }
@@ -170,25 +144,25 @@ float3 ViewToWorldVector(const float3 vec, const float4x4 invView)
 // "Efficiently building a matrix to rotate one vector to another"
 // http://cs.brown.edu/research/pubs/pdfs/1999/Moller-1999-EBA.pdf / https://dl.acm.org/doi/10.1080/10867651.1999.10487509
 // (using https://github.com/assimp/assimp/blob/master/include/assimp/matrix3x3.inl#L275 as a code reference as it seems to be best)
-lpfloat3x3 RotFromToMatrix(lpfloat3 from, lpfloat3 to)
+float3x3 RotFromToMatrix(float3 from, float3 to)
 {
-	const lpfloat e = dot(from, to);
-	const lpfloat f = abs(e);  //(e < 0)? -e:e;
+	const float e = dot(from, to);
+	const float f = abs(e);  //(e < 0)? -e:e;
 
 	// WARNING: This has not been tested/worked through, especially not for 16bit floats; seems to work in our special use case (from is always {0, 0, -1}) but wouldn't use it in general
-	if (f > lpfloat(1.0 - 0.0003))
-		return lpfloat3x3(1, 0, 0, 0, 1, 0, 0, 0, 1);
+	if (f > float(1.0 - 0.0003))
+		return float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1);
 
-	const lpfloat3 v = cross(from, to);
+	const float3 v = cross(from, to);
 	/* ... use this hand optimized version (9 mults less) */
-	const lpfloat h = (1.0) / (1.0 + e); /* optimization by Gottfried Chen */
-	const lpfloat hvx = h * v.x;
-	const lpfloat hvz = h * v.z;
-	const lpfloat hvxy = hvx * v.y;
-	const lpfloat hvxz = hvx * v.z;
-	const lpfloat hvyz = hvz * v.y;
+	const float h = (1.0) / (1.0 + e); /* optimization by Gottfried Chen */
+	const float hvx = h * v.x;
+	const float hvz = h * v.z;
+	const float hvxy = hvx * v.y;
+	const float hvxz = hvx * v.z;
+	const float hvyz = hvz * v.y;
 
-	lpfloat3x3 mtx;
+	float3x3 mtx;
 	mtx[0][0] = e + hvx * v.x;
 	mtx[0][1] = hvxy - v.z;
 	mtx[0][2] = hvxz + v.y;

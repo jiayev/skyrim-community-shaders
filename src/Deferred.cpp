@@ -5,6 +5,8 @@
 #include "Util.h"
 
 #include "Features/DynamicCubemaps.h"
+#include "Features/ScreenSpaceGI.h"
+#include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
 
 struct DepthStates
@@ -140,6 +142,32 @@ void Deferred::SetupResources()
 
 	{
 		waterCB = new ConstantBuffer(ConstantBufferDesc<WaterCB>());
+	}
+
+	{
+		D3D11_TEXTURE2D_DESC texDesc;
+		auto mainTex = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+		mainTex.texture->GetDesc(&texDesc);
+
+		texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+		texDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = texDesc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = {
+				.MostDetailedMip = 0,
+				.MipLevels = 1 }
+		};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+			.Format = texDesc.Format,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+
+		prevDiffuseAmbientTexture = new Texture2D(texDesc);
+		prevDiffuseAmbientTexture->CreateSRV(srvDesc);
+		prevDiffuseAmbientTexture->CreateUAV(uavDesc);
 	}
 }
 
@@ -394,19 +422,25 @@ void Deferred::DeferredPasses()
 	if (skylighting->loaded)
 		skylighting->Compute();
 
+	auto ssgi = ScreenSpaceGI::GetSingleton();
+
+	if (ssgi->loaded)
+		ssgi->DrawSSGI(prevDiffuseAmbientTexture);
+
 	auto dispatchCount = Util::GetScreenDispatchCount();
 
 	// Ambient Composite
 	{
-		ID3D11ShaderResourceView* srvs[3]{
+		ID3D11ShaderResourceView* srvs[4]{
 			albedo.SRV,
 			normalRoughness.SRV,
-			skylighting->loaded ? skylighting->skylightingTexture->srv.get() : nullptr
+			skylighting->loaded ? skylighting->skylightingTexture->srv.get() : nullptr,
+			ssgi->loaded ? ssgi->texGI[ssgi->outputGIIdx]->srv.get() : nullptr,
 		};
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-		ID3D11UnorderedAccessView* uavs[1]{ main.UAV };
+		ID3D11UnorderedAccessView* uavs[2]{ main.UAV, prevDiffuseAmbientTexture->uav.get() };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		auto shader = interior ? GetComputeAmbientCompositeInterior() : GetComputeAmbientComposite();
@@ -637,9 +671,17 @@ void Deferred::ClearShaderCache()
 		ambientCompositeCS->Release();
 		ambientCompositeCS = nullptr;
 	}
+	if (ambientCompositeInteriorCS) {
+		ambientCompositeInteriorCS->Release();
+		ambientCompositeInteriorCS = nullptr;
+	}
 	if (mainCompositeCS) {
 		mainCompositeCS->Release();
 		mainCompositeCS = nullptr;
+	}
+	if (mainCompositeInteriorCS) {
+		mainCompositeInteriorCS->Release();
+		mainCompositeInteriorCS = nullptr;
 	}
 }
 
@@ -654,6 +696,10 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientComposite()
 		if (skylighting->loaded)
 			defines.push_back({ "SKYLIGHTING", nullptr });
 
+		auto ssgi = ScreenSpaceGI::GetSingleton();
+		if (ssgi->loaded)
+			defines.push_back({ "SSGI", nullptr });
+
 		ambientCompositeCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0");
 	}
 	return ambientCompositeCS;
@@ -666,6 +712,10 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientCompositeInterior()
 
 		std::vector<std::pair<const char*, const char*>> defines;
 		defines.push_back({ "INTERIOR", nullptr });
+
+		auto ssgi = ScreenSpaceGI::GetSingleton();
+		if (ssgi->loaded)
+			defines.push_back({ "SSGI", nullptr });
 
 		ambientCompositeInteriorCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0");
 	}

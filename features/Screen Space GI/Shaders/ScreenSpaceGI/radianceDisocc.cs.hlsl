@@ -1,3 +1,4 @@
+#include "../Common/FrameBuffer.hlsl"
 #include "../Common/GBuffer.hlsli"
 #include "../Common/VR.hlsli"
 #include "common.hlsli"
@@ -8,7 +9,7 @@ Texture2D<half> srcCurrDepth : register(t2);
 Texture2D<half4> srcCurrNormal : register(t3);
 Texture2D<half3> srcPrevGeo : register(t4);  // maybe half-res
 Texture2D<float4> srcMotionVec : register(t5);
-Texture2D<half4> srcPrevGIAlbedo : register(t6);       // maybe half-res
+Texture2D<half4> srcPrevAmbient : register(t6);
 Texture2D<unorm float> srcAccumFrames : register(t7);  // maybe half-res
 
 RWTexture2D<float3> outRadianceDisocc : register(u0);
@@ -20,9 +21,11 @@ RWTexture2D<float4> outRemappedPrevGI : register(u2);
 #endif
 
 void readHistory(
-	uint eyeIndex, float3 curr_pos, float3 curr_normal, int2 pixCoord, float bilinear_weight,
+	uint eyeIndex, float curr_depth, float3 curr_pos, int2 pixCoord, float bilinear_weight,
 	inout half4 prev_gi, inout half4 prev_gi_albedo, inout float accum_frames, inout float wsum)
 {
+	const float2 srcScale = SrcFrameDim * RcpTexDim;
+
 	const float2 uv = (pixCoord + .5) * RcpOutFrameDim;
 	const float2 screen_pos = ConvertToStereoUV(uv, eyeIndex);
 	if (any(screen_pos < 0) || any(screen_pos > 1))
@@ -30,18 +33,20 @@ void readHistory(
 
 	const half3 prev_geo = srcPrevGeo[pixCoord];
 	const float prev_depth = prev_geo.x;
-	const float3 prev_normal = DecodeNormal(prev_geo.yz);  // prev normal is already world
+	// const float3 prev_normal = DecodeNormal(prev_geo.yz);  // prev normal is already world
 	float3 prev_pos = ScreenToViewPosition(screen_pos, prev_depth, eyeIndex);
 	prev_pos = ViewToWorldPosition(prev_pos, PrevInvViewMat[eyeIndex]);
 
 	float3 delta_pos = curr_pos - prev_pos;
-	float normal_prod = dot(curr_normal, prev_normal);
+	// float normal_prod = dot(curr_normal, prev_normal);
 
-	bool depth_pass = dot(delta_pos, delta_pos) < DepthDisocclusion * DepthDisocclusion;
-	bool normal_pass = normal_prod * normal_prod > NormalDisocclusion;
-	if (depth_pass && normal_pass) {
+	const float movement_thres = curr_depth * DepthDisocclusion;
+
+	bool depth_pass = dot(delta_pos, delta_pos) < movement_thres * movement_thres;
+	// bool normal_pass = normal_prod * normal_prod > NormalDisocclusion;
+	if (depth_pass) {
 #if defined(GI) && defined(GI_BOUNCE)
-		prev_gi_albedo += srcPrevGIAlbedo[pixCoord] * bilinear_weight;
+		prev_gi_albedo += FULLRES_LOAD(srcPrevAmbient, pixCoord, uv * srcScale, samplerLinearClamp) * bilinear_weight;  // TODO better half res
 #endif
 #ifdef TEMPORAL_DENOISER
 		prev_gi += srcPrevGI[pixCoord] * bilinear_weight;
@@ -53,8 +58,8 @@ void readHistory(
 
 [numthreads(8, 8, 1)] void main(const uint2 pixCoord
 								: SV_DispatchThreadID) {
-	const float srcScale = SrcFrameDim * RcpTexDim;
-	const float outScale = OutFrameDim * RcpTexDim;
+	const float2 srcScale = SrcFrameDim * RcpTexDim;
+	const float2 outScale = OutFrameDim * RcpTexDim;
 
 	const float2 uv = (pixCoord + .5) * RcpOutFrameDim;
 	uint eyeIndex = GET_EYE_IDX(uv);
@@ -74,10 +79,10 @@ void readHistory(
 	const float curr_depth = READ_DEPTH(srcCurrDepth, pixCoord);
 #ifdef REPROJECTION
 	if ((curr_depth <= DepthFadeRange.y) && !(any(prev_screen_pos < 0) || any(prev_screen_pos > 1))) {
-		float3 curr_normal = DecodeNormal(FULLRES_LOAD(srcCurrNormal, pixCoord, uv * srcScale, samplerLinearClamp).xy);
-		curr_normal = ViewToWorldVector(curr_normal, InvViewMatrix[eyeIndex]);
+		// float3 curr_normal = DecodeNormal(FULLRES_LOAD(srcCurrNormal, pixCoord, uv * srcScale, samplerLinearClamp).xy);
+		// curr_normal = ViewToWorldVector(curr_normal, CameraViewInverse[eyeIndex]);
 		float3 curr_pos = ScreenToViewPosition(screen_pos, curr_depth, eyeIndex);
-		curr_pos = ViewToWorldPosition(curr_pos, InvViewMatrix[eyeIndex]);
+		curr_pos = ViewToWorldPosition(curr_pos, CameraViewInverse[eyeIndex]);
 
 		float2 prev_px_coord = prev_uv * OutFrameDim;
 		int2 prev_px_lu = floor(prev_px_coord - 0.5);
@@ -85,25 +90,25 @@ void readHistory(
 		{
 			int2 px = prev_px_lu;
 			float w = (1 - bilinear_weights.x) * (1 - bilinear_weights.y);
-			readHistory(eyeIndex, curr_pos, curr_normal, px, w,
+			readHistory(eyeIndex, curr_depth, curr_pos, px, w,
 				prev_gi, prev_gi_albedo, accum_frames, wsum);
 		}
 		{
 			int2 px = prev_px_lu + uint2(1, 0);
 			float w = bilinear_weights.x * (1 - bilinear_weights.y);
-			readHistory(eyeIndex, curr_pos, curr_normal, px, w,
+			readHistory(eyeIndex, curr_depth, curr_pos, px, w,
 				prev_gi, prev_gi_albedo, accum_frames, wsum);
 		}
 		{
 			int2 px = prev_px_lu + uint2(0, 1);
 			float w = (1 - bilinear_weights.x) * bilinear_weights.y;
-			readHistory(eyeIndex, curr_pos, curr_normal, px, w,
+			readHistory(eyeIndex, curr_depth, curr_pos, px, w,
 				prev_gi, prev_gi_albedo, accum_frames, wsum);
 		}
 		{
 			int2 px = prev_px_lu + uint2(1, 1);
 			float w = bilinear_weights.x * bilinear_weights.y;
-			readHistory(eyeIndex, curr_pos, curr_normal, px, w,
+			readHistory(eyeIndex, curr_depth, curr_pos, px, w,
 				prev_gi, prev_gi_albedo, accum_frames, wsum);
 		}
 
