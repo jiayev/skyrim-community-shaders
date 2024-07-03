@@ -15,7 +15,7 @@ ID3D11VertexShader* TerrainBlending::GetTerrainVertexShader()
 {
 	if (!terrainVertexShader) {
 		logger::debug("Compiling Utility.hlsl");
-		terrainVertexShader = (ID3D11VertexShader*)Util::CompileShader(L"Data\\Shaders\\Utility.hlsl", {  { "RENDER_DEPTH", "" } }, "vs_5_0");
+		terrainVertexShader = (ID3D11VertexShader*)Util::CompileShader(L"Data\\Shaders\\Utility.hlsl", { { "RENDER_DEPTH", "" } }, "vs_5_0");
 	}
 	return terrainVertexShader;
 }
@@ -54,7 +54,7 @@ void TerrainBlending::SetupResources()
 
 	{
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-		
+
 		D3D11_TEXTURE2D_DESC texDesc;
 		mainDepth.texture->GetDesc(&texDesc);
 		DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, NULL, &terrainDepth.texture));
@@ -112,7 +112,7 @@ void TerrainBlending::SetupResources()
 		terrainOffsetTexture->CreateUAV(uavDesc);
 
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-		depthSRVBackup = mainDepth.depthSRV;	
+		depthSRVBackup = mainDepth.depthSRV;
 		mainDepth.depthSRV = blendedDepthTexture->srv.get();
 
 		auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
@@ -170,8 +170,7 @@ void TerrainBlending::TerrainShaderHacks()
 	if (renderTerrainDepth) {
 		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 		auto& context = State::GetSingleton()->context;
-		if (renderAltTerrain)
-		{
+		if (renderAltTerrain) {
 			auto dsv = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
 			context->OMSetRenderTargets(0, nullptr, dsv);
 			context->VSSetShader(GetTerrainOffsetVertexShader(), NULL, NULL);
@@ -205,7 +204,6 @@ void TerrainBlending::OverrideTerrainWorld()
 	// Used to get the distance of the surface to the lowest depth
 	auto view = terrainOffsetTexture->srv.get();
 	context->PSSetShaderResources(35, 1, &view);
-	
 }
 
 void TerrainBlending::OverrideTerrainDepth()
@@ -215,7 +213,7 @@ void TerrainBlending::OverrideTerrainDepth()
 	auto rtv = blendedDepthTexture->rtv.get();
 	FLOAT clearColor[4]{ 1, 0, 0, 0 };
 	context->ClearRenderTargetView(rtv, clearColor);
-	
+
 	auto dsv = terrainDepth.views[0];
 	context->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH, 1.0f, 0u);
 }
@@ -264,7 +262,6 @@ void TerrainBlending::BlendPrepassDepths()
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 	state->GetRuntimeData().stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }
-
 
 void TerrainBlending::FixDepthTexture()
 {

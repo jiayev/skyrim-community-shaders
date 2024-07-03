@@ -10,10 +10,10 @@ float GetScreenSpaceShadow(float2 a_uv, float a_noise, float3 a_viewPosition, ui
 	float shadow = 0;
 
 	static const float2 BlurOffsets[4] = {
-        float2(0.381664f, 0.89172f),
-        float2(0.491409f, 0.216926f),
-        float2(0.937803f, 0.734825f),
-        float2(0.00921659f, 0.0562151f),
+		float2(0.381664f, 0.89172f),
+		float2(0.491409f, 0.216926f),
+		float2(0.937803f, 0.734825f),
+		float2(0.00921659f, 0.0562151f),
 	};
 
 	for (uint i = 0; i < 4; i++) {
