@@ -117,7 +117,7 @@ public:
 						singleton->renderTerrainDepth = inTerrain;
 					}
 
-					func(a_pass, a_technique, a_alphaTest, a_renderFlags); // Run terrain twice
+					func(a_pass, a_technique, a_alphaTest, a_renderFlags);  // Run terrain twice
 				} else if (singleton->renderWorld) {
 					// Entering or exiting terrain section
 					bool inTerrain = a_pass->shaderProperty && a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);

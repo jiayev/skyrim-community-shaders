@@ -2032,9 +2032,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	else
 
-#	if defined(LANDSCAPE) && defined(TERRAIN_BLENDING)	
+#		if defined(LANDSCAPE) && defined(TERRAIN_BLENDING)
 	psout.Diffuse.w = blendFactorTerrain;
-#	endif
+#		endif
 
 	psout.MotionVectors.zw = float2(0.0, psout.Diffuse.w);
 	psout.Specular = float4(specularColor.xyz, psout.Diffuse.w);
