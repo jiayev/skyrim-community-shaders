@@ -175,10 +175,14 @@ void TerrainBlending::TerrainShaderHacks()
 		} else {
 			auto dsv = terrainDepth.views[0];
 			context->OMSetRenderTargets(0, nullptr, dsv);
-			context->VSSetShader(GetTerrainVertexShader(), NULL, NULL);
+			auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+			context->VSSetShader((ID3D11VertexShader*)shadowState->GetRuntimeData().currentVertexShader->shader, NULL, NULL);
 		}
 		renderAltTerrain = !renderAltTerrain;
 	}
+
+	if (renderTerrainWorld)
+		OverrideTerrainWorld();
 }
 
 void TerrainBlending::OverrideTerrainWorld()
@@ -235,8 +239,11 @@ void TerrainBlending::ResetTerrainDepth()
 
 	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
-	context->OMSetRenderTargets(0, NULL, mainDepth.views[0]);
-	context->VSSetShader(GetTerrainVertexShader(), NULL, NULL);
+	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
+	state->GetRuntimeData().stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+
+	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+	context->VSSetShader((ID3D11VertexShader*)shadowState->GetRuntimeData().currentVertexShader->shader, NULL, NULL);
 
 	context->CopyResource(terrainDepthTexture->resource.get(), mainDepth.texture);
 }

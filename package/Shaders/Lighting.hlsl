@@ -393,6 +393,10 @@ VS_OUTPUT main(VS_INPUT input)
 
 typedef VS_OUTPUT PS_INPUT;
 
+#if !defined(LANDSCAPE)
+#	undef TERRAIN_BLENDING
+#endif
+
 #if defined(DEFERRED)
 struct PS_OUTPUT
 {
@@ -405,6 +409,9 @@ struct PS_OUTPUT
 	float4 Masks : SV_Target6;
 #	if defined(SNOW)
 	float4 Parameters : SV_Target7;
+#	endif
+#	if defined(TERRAIN_BLENDING)
+	float Depth : SV_Depth;
 #	endif
 };
 #else
@@ -916,10 +923,6 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "WetnessEffects/WetnessEffects.hlsli"
 #	endif
 
-#	if !defined(LANDSCAPE)
-#		undef TERRAIN_BLENDING
-#	endif
-
 #	if defined(TERRAIN_BLENDING)
 #		include "TerrainBlending/TerrainBlending.hlsli"
 #	endif
@@ -972,7 +975,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = InterleavedGradientNoise(screenUV * BufferDim);
 
-#	if defined(LANDSCAPE) && defined(TERRAIN_BLENDING)
+#	if defined(TERRAIN_BLENDING)
 	float depthSampled = GetTerrainOffsetDepth(screenUV, eyeIndex);
 	float depthComp = input.Position.z - depthSampled;
 
@@ -980,6 +983,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float depthPixelLinear = GetScreenDepth(input.Position.z);
 
 	float blendFactorTerrain = saturate((depthSampledLinear - depthPixelLinear) / 5.0);
+
+	if (input.Position.z == depthSampled)
+		blendFactorTerrain = 1;
 
 	clip(blendFactorTerrain);
 	blendFactorTerrain = saturate(blendFactorTerrain);
@@ -2032,8 +2038,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	else
 
-#		if defined(LANDSCAPE) && defined(TERRAIN_BLENDING)
+#		if defined(TERRAIN_BLENDING)
 	psout.Diffuse.w = blendFactorTerrain;
+#			if defined(LOD_LAND_BLEND)
+	psout.Depth = lerp(lerp(depthSampled, input.Position.z, blendFactorTerrain > screenNoise), input.Position.z, lodBlendMul2 > 0.0);
+#			else
+	psout.Depth = lerp(depthSampled, input.Position.z, blendFactorTerrain > screenNoise);
+#			endif
+
 #		endif
 
 	psout.MotionVectors.zw = float2(0.0, psout.Diffuse.w);

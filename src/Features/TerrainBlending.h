@@ -141,8 +141,6 @@ public:
 								singleton->ResetTerrainWorld();
 							singleton->renderTerrainWorld = inTerrain;
 						}
-						if (inTerrain)
-							singleton->OverrideTerrainWorld();
 					}
 				}
 				func(a_pass, a_technique, a_alphaTest, a_renderFlags);
