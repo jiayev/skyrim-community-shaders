@@ -2040,13 +2040,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(TERRAIN_BLENDING)
 	psout.Diffuse.w = blendFactorTerrain;
-#			if defined(LOD_LAND_BLEND)
-	psout.Depth = lerp(lerp(depthSampled, input.Position.z, blendFactorTerrain > screenNoise), input.Position.z, lodBlendMul2 > 0.0);
-#			else
-	psout.Depth = lerp(depthSampled, input.Position.z, blendFactorTerrain > screenNoise);
-#			endif
-
-	psout.Depth = lerp(max(depthSampled, input.Position.z), input.Position.z, blendFactorTerrain > screenNoise);
+	psout.Depth = lerp(max(depthSampled, input.Position.z), input.Position.z, blendFactorTerrain > sqrt(screenNoise));
 #		endif
 
 	psout.MotionVectors.zw = float2(0.0, psout.Diffuse.w);
