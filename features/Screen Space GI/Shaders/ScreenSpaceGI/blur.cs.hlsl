@@ -45,8 +45,8 @@ float HistoryRadiusScaling(float accumFrames)
 	const uint numSamples = 8;
 
 	const float2 uv = (dtid + .5) * RcpOutFrameDim;
-	uint eyeIndex = GET_EYE_IDX(uv);
-	const float2 screenPos = ConvertToStereoUV(uv, eyeIndex);
+	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
+	const float2 screenPos = ConvertFromStereoUV(uv, eyeIndex);
 
 	float depth = READ_DEPTH(srcDepth, dtid);
 	float3 pos = ScreenToViewPosition(screenPos, depth, eyeIndex);
@@ -63,7 +63,7 @@ float HistoryRadiusScaling(float accumFrames)
 		float2 pxOffset = radius * g_Poisson8[i].xy;
 		float2 pxSample = dtid + .5 + pxOffset;
 		float2 uvSample = pxSample * RcpOutFrameDim;
-		float2 screenPosSample = ConvertToStereoUV(uvSample, eyeIndex);
+		float2 screenPosSample = ConvertFromStereoUV(uvSample, eyeIndex);
 
 		if (any(screenPosSample < 0) || any(screenPosSample > 1))
 			continue;

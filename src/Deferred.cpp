@@ -524,7 +524,7 @@ void Deferred::EndDeferred()
 	}
 
 	for (uint i = 4; i < 8; i++) {
-		shadowState->GetRuntimeData().renderTargets[i] = RE::RENDER_TARGET::kNONE;
+		renderTargets[i] = RE::RENDER_TARGET::kNONE;
 	}
 
 	auto& context = State::GetSingleton()->context;

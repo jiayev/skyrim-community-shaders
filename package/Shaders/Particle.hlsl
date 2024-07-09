@@ -1,3 +1,7 @@
+#include "Common/Constants.hlsli"
+#include "Common/FrameBuffer.hlsl"
+#include "Common/VR.hlsli"
+
 struct VS_INPUT
 {
 	float4 Position : POSITION0;
@@ -11,6 +15,9 @@ struct VS_INPUT
 	int4
 #endif
 		TexCoord1 : TEXCOORD1;
+#if defined(VR)
+	uint InstanceID : SV_INSTANCEID;
+#endif  // VR
 };
 
 struct VS_OUTPUT
@@ -21,6 +28,11 @@ struct VS_OUTPUT
 #if defined(ENVCUBE)
 	float4 PrecipitationOcclusionTexCoord : TEXCOORD1;
 #endif
+#if defined(VR)
+	float ClipDistance : SV_ClipDistance0;  // o11
+	float CullDistance : SV_CullDistance0;  // p11
+	uint EyeIndex : EYEIDX0;
+#endif  // VR
 };
 
 #ifdef VSHADER
@@ -31,22 +43,27 @@ cbuffer PerTechnique : register(b0)
 
 cbuffer PerGeometry : register(b2)
 {
-	row_major float4x4 WorldViewProj;
-	row_major float4x4 WorldView;
-#	if defined(ENVCUBE)
-	row_major float4x4 PrecipitationOcclusionWorldViewProj;
+#	if !defined(VR)
+	row_major float4x4 WorldViewProj[1];  // 0
+	row_major float4x4 WorldView[1];      // 4
+#	else
+	row_major float4x4 WorldViewProj[2];  // 0
+	row_major float4x4 WorldView[2];      // 8
 #	endif
-	float4 fVars0;
-	float4 fVars1;
-	float4 fVars2;
-	float4 fVars3;
-	float4 fVars4;
-	float4 Color1;
-	float4 Color2;
-	float4 Color3;
-	float4 Velocity;
-	float4 Acceleration;
-	float4 Wind;
+#	if defined(ENVCUBE)
+	row_major float4x4 PrecipitationOcclusionWorldViewProj;  // 8, 16
+#	endif
+	float4 fVars0;        // 8, 16 ENVCUBE 12, 20
+	float4 fVars1;        // 9, 17 ENVCUBE 13, 21
+	float4 fVars2;        // 10, 18 ENVCUBE 14, 22
+	float4 fVars3;        // 11, 19 ENVCUBE 15, 23
+	float4 fVars4;        // 12, 20 ENVCUBE 16, 24
+	float4 Color1;        // 13, 21 ENVCUBE 17, 25
+	float4 Color2;        // 14, 22 ENVCUBE 18, 26
+	float4 Color3;        // 15, 23 ENVCUBE 19, 27
+	float4 Velocity;      // 16, 24 ENVCUBE 20, 28
+	float4 Acceleration;  // 17, 25 ENVCUBE 21, 29
+	float4 Wind;          // 18, 26 ENVCUBE 22, 30
 }
 
 float2x2 GetRotationMatrix(float angle)
@@ -60,6 +77,12 @@ float2x2 GetRotationMatrix(float angle)
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
+
+	uint eyeIndex = GetEyeIndexVS(
+#	if defined(VR)
+		input.InstanceID
+#	endif
+	);
 
 #	if defined(ENVCUBE)
 #		if defined(RAIN)
@@ -77,11 +100,11 @@ VS_OUTPUT main(VS_INPUT input)
 	msPosition.xyz = normalizedPosition * fVars2.xxx + (-(fVars2.x * 0.5).xxx + fVars1.xyz);
 	msPosition.w = 1;
 
-	float4 viewPosition = mul(WorldViewProj, msPosition);
+	float4 viewPosition = mul(WorldViewProj[eyeIndex], msPosition);
 #		if defined(RAIN)
 	float4 adjustedMsPosition = msPosition - float4(Velocity.xyz, 0);
 	float positionBlendParam = 0.5 * (1 + input.TexCoord1.y);
-	float4 adjustedViewPosition = mul(WorldViewProj, adjustedMsPosition);
+	float4 adjustedViewPosition = mul(WorldViewProj[eyeIndex], adjustedMsPosition);
 	float4 finalViewPosition = lerp(adjustedViewPosition, viewPosition, positionBlendParam);
 #		else
 	float4 finalViewPosition = viewPosition;
@@ -137,7 +160,7 @@ VS_OUTPUT main(VS_INPUT input)
 							 input.Position.xyz));
 	msPosition.w = 1;
 
-	float4 viewPosition = mul(WorldViewProj, msPosition);
+	float4 viewPosition = mul(WorldViewProj[eyeIndex], msPosition);
 	vsout.Position.xy = positionOffset * ScaleAdjust + viewPosition.xy;
 	vsout.Position.zw = viewPosition.zw;
 
@@ -171,6 +194,13 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Color.xyz = color.xyz;
 #	endif
 
+#	ifdef VR
+	vsout.EyeIndex = eyeIndex;
+	VR_OUTPUT VRout = GetVRVSOutput(vsout.Position, eyeIndex);
+	vsout.Position = VRout.VRPosition;
+	vsout.ClipDistance.x = VRout.ClipDistance;
+	vsout.CullDistance.x = VRout.CullDistance;
+#	endif  // VR
 	return vsout;
 }
 #endif
@@ -212,8 +242,17 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
+#	if !defined(VR)
+	uint eyeIndex = 0;
+#	else
+	uint eyeIndex = input.EyeIndex;
+#	endif  // !VR
+
 #	if defined(ENVCUBE)
-	float2 precipitationOcclusionUv = input.PrecipitationOcclusionTexCoord.xy * 0.5 + 0.5;
+	float2 precipitationOcclusionUv = (input.PrecipitationOcclusionTexCoord.xy * 0.5 + 0.5) * TextureSize.x;
+#		ifdef VR
+	precipitationOcclusionUv *= DynamicResolutionParams1.x;  // only difference in VR
+#		endif
 	float precipitationOcclusion = -input.PrecipitationOcclusionTexCoord.z + TexPrecipitationOcclusionTexture.SampleLevel(SampSourceTexture, precipitationOcclusionUv, 0).x;
 	float2 underwaterMaskUv = TextureSize.yz * input.Position.xy;
 	float underwaterMask = TexUnderwaterMask.Sample(SampUnderwaterMask, underwaterMaskUv).x;

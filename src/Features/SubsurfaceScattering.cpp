@@ -169,9 +169,7 @@ void SubsurfaceScattering::DrawSSS()
 	float resolutionY = blurHorizontalTemp->desc.Height * viewport->GetRuntimeData().dynamicResolutionCurrentHeightScale;
 
 	{
-		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
-		auto cameraData = !REL::Module::IsVR() ? shadowState->GetRuntimeData().cameraData.getEye() :
-		                                         shadowState->GetVRRuntimeData().cameraData.getEye();
+		auto cameraData = Util::GetCameraData(0);
 
 		blurCBData.SSSS_FOVY = atan(1.0f / cameraData.projMat.m[0][0]) * 2.0f * (180.0f / 3.14159265359f);
 

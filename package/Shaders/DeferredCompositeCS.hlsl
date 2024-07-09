@@ -16,7 +16,7 @@ RWTexture2D<half4> NormalTAAMaskSpecularMaskRW : register(u1);
 RWTexture2D<half2> SnowParametersRW : register(u2);
 
 #if defined(DYNAMIC_CUBEMAPS)
-Texture2D<unorm float> DepthTexture : register(t5);
+Texture2D<float> DepthTexture : register(t5);
 Texture2D<unorm half3> ReflectanceTexture : register(t6);
 TextureCube<half3> EnvTexture : register(t7);
 TextureCube<half3> EnvReflectionsTexture : register(t8);
@@ -32,6 +32,7 @@ Texture2D<half2> SkylightingTexture : register(t9);
 								: SV_DispatchThreadID) {
 	half2 uv = half2(dispatchID.xy + 0.5) * BufferDim.zw;
 	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
+	uv = ConvertFromStereoUV(uv, eyeIndex);
 
 	half3 normalGlossiness = NormalRoughnessTexture[dispatchID.xy];
 	half3 normalVS = DecodeNormal(normalGlossiness.xy);
@@ -60,7 +61,7 @@ Texture2D<half2> SkylightingTexture : register(t9);
 		half depth = DepthTexture[dispatchID.xy];
 
 		half4 positionCS = half4(2 * half2(uv.x, -uv.y + 1) - 1, depth, 1);
-		positionCS = mul(CameraViewInverse[eyeIndex], positionCS);
+		positionCS = mul(CameraViewProjInverse[eyeIndex], positionCS);
 		positionCS.xyz = positionCS.xyz / positionCS.w;
 
 		half3 positionWS = positionCS;
@@ -100,14 +101,16 @@ Texture2D<half2> SkylightingTexture : register(t9);
 
 #if defined(DEBUG)
 
-	half2 texCoord = half2(dispatchID.xy) / BufferDim.xy;
+#	if defined(VR)
+	uv.x += (eyeIndex ? 0.1 : -0.1);
+#	endif  // VR
 
-	if (texCoord.x < 0.5 && texCoord.y < 0.5) {
+	if (uv.x < 0.5 && uv.y < 0.5) {
 		color = color;
-	} else if (texCoord.x < 0.5) {
+	} else if (uv.x < 0.5) {
 		color = albedo;
-	} else if (texCoord.y < 0.5) {
-		color = normalWS;
+	} else if (uv.y < 0.5) {
+		color = normalVS;
 	} else {
 		color = glossiness;
 	}

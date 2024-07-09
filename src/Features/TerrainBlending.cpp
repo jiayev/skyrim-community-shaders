@@ -1,7 +1,7 @@
 #include "TerrainBlending.h"
 
 #include "State.h"
-#include <Util.h>
+#include "Util.h"
 
 void TerrainBlending::DrawSettings()
 {
@@ -160,9 +160,6 @@ struct BlendStates
 	ID3D11BlendState* a[7][2][13][2];
 };
 
-#define GET_INSTANCE_MEMBER(a_value, a_source) \
-	auto& a_value = !REL::Module::IsVR() ? a_source->GetRuntimeData().a_value : a_source->GetVRRuntimeData().a_value;
-
 void TerrainBlending::TerrainShaderHacks()
 {
 	if (renderTerrainDepth) {
@@ -176,7 +173,8 @@ void TerrainBlending::TerrainShaderHacks()
 			auto dsv = terrainDepth.views[0];
 			context->OMSetRenderTargets(0, nullptr, dsv);
 			auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
-			context->VSSetShader((ID3D11VertexShader*)shadowState->GetRuntimeData().currentVertexShader->shader, NULL, NULL);
+			GET_INSTANCE_MEMBER(currentVertexShader, shadowState)
+			context->VSSetShader((ID3D11VertexShader*)currentVertexShader->shader, NULL, NULL);
 		}
 		renderAltTerrain = !renderAltTerrain;
 	}
@@ -239,11 +237,12 @@ void TerrainBlending::ResetTerrainDepth()
 
 	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-	state->GetRuntimeData().stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-
 	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
-	context->VSSetShader((ID3D11VertexShader*)shadowState->GetRuntimeData().currentVertexShader->shader, NULL, NULL);
+	GET_INSTANCE_MEMBER(stateUpdateFlags, shadowState)
+	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+
+	GET_INSTANCE_MEMBER(currentVertexShader, shadowState)
+	context->VSSetShader((ID3D11VertexShader*)currentVertexShader->shader, NULL, NULL);
 
 	context->CopyResource(terrainDepthTexture->resource.get(), mainDepth.texture);
 }
@@ -289,14 +288,16 @@ void TerrainBlending::BlendPrepassDepths()
 	context->CSSetShader(shader, nullptr, 0);
 
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-	state->GetRuntimeData().stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
+	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }
 
 void TerrainBlending::ResetTerrainWorld()
 {
 	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-	state->GetRuntimeData().stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
-	state->GetRuntimeData().stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_DEPTH_MODE);
+	GET_INSTANCE_MEMBER(stateUpdateFlags, state)
+	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
+	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_DEPTH_MODE);
 }
 
 void TerrainBlending::ClearShaderCache()

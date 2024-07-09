@@ -27,7 +27,7 @@ void readHistory(
 	const float2 srcScale = SrcFrameDim * RcpTexDim;
 
 	const float2 uv = (pixCoord + .5) * RcpOutFrameDim;
-	const float2 screen_pos = ConvertToStereoUV(uv, eyeIndex);
+	const float2 screen_pos = ConvertFromStereoUV(uv, eyeIndex);
 	if (any(screen_pos < 0) || any(screen_pos > 1))
 		return;
 
@@ -62,14 +62,14 @@ void readHistory(
 	const float2 outScale = OutFrameDim * RcpTexDim;
 
 	const float2 uv = (pixCoord + .5) * RcpOutFrameDim;
-	uint eyeIndex = GET_EYE_IDX(uv);
-	const float2 screen_pos = ConvertToStereoUV(uv, eyeIndex);
+	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
+	const float2 screen_pos = ConvertFromStereoUV(uv, eyeIndex);
 
 	float2 prev_uv = uv;
 #ifdef REPROJECTION
 	prev_uv += FULLRES_LOAD(srcMotionVec, pixCoord, uv * srcScale, samplerLinearClamp).xy;
 #endif
-	float2 prev_screen_pos = ConvertToStereoUV(prev_uv, eyeIndex);
+	float2 prev_screen_pos = ConvertFromStereoUV(prev_uv, eyeIndex);
 
 	half4 prev_gi_albedo = 0;
 	half4 prev_gi = 0;

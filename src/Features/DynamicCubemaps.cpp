@@ -246,10 +246,7 @@ void DynamicCubemaps::UpdateCubemapCapture()
 	static float3 cameraPreviousPosAdjust = { 0, 0, 0 };
 	updateData.CameraPreviousPosAdjust = cameraPreviousPosAdjust;
 
-	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
-	auto eyePosition = !REL::Module::IsVR() ?
-	                       shadowState->GetRuntimeData().posAdjust.getEye(0) :
-	                       shadowState->GetVRRuntimeData().posAdjust.getEye(0);
+	auto eyePosition = Util::GetEyePosition(0);
 
 	cameraPreviousPosAdjust = { eyePosition.x, eyePosition.y, eyePosition.z };
 

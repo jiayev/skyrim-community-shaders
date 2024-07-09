@@ -583,13 +583,25 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	refractionUvRaw = ConvertToStereoUV(refractionUvRaw, a_eyeIndex);  // need to convert here for VR due to refractionNormal values
 
 	float2 screenPosition = DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy);
-	float depth = GetScreenDepthWater(screenPosition);
+	float depth = GetScreenDepthWater(screenPosition,
+#			if defined(VR)
+		1
+#			else
+		0
+#			endif
+	);
 
 	float2 refractionScreenPosition = DynamicResolutionParams1.xy * (refractionUvRaw / VPOSOffset.xy);
 	float4 refractionWorldPosition = float4(input.WPosition.xyz * depth / viewPosition.z, 0);
 
 #			if defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH)
-	float refractionDepth = GetScreenDepthWater(refractionScreenPosition);
+	float refractionDepth = GetScreenDepthWater(refractionScreenPosition,
+#				if defined(VR)
+		1
+#				else
+		0
+#				endif
+	);
 	float refractionDepthMul = length(float3((((VPOSOffset.zw + refractionUvRaw) * 2 - 1)) * refractionDepth / ProjData.xy, refractionDepth));
 
 	float3 refractionDepthAdjustedViewDirection = -viewDirection * refractionDepthMul;
@@ -611,7 +623,7 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	float3 refractionDiffuseColor = lerp(ShallowColor.xyz, DeepColor.xyz, distanceMul.y);
 
 	if (!(PixelShaderDescriptor & _Interior)) {
-		float vl = GetVL(input.WPosition.xyz, refractionWorldPosition.xyz, screenPosition) * (dot(viewDirection, SunDir.xyz) * 0.5 + 0.5);
+		float vl = GetVL(input.WPosition.xyz, refractionWorldPosition.xyz, screenPosition, a_eyeIndex) * (dot(viewDirection, SunDir.xyz) * 0.5 + 0.5);
 
 		float3 refractionDiffuseColorSunlight = refractionDiffuseColor * vl * SunColor.xyz * SunDir.w;
 #			if defined(SKYLIGHTING)
@@ -781,7 +793,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 sunColor = GetSunColor(normal, viewDirection);
 
 	if (!(PixelShaderDescriptor & _Interior))
-		sunColor *= GetShadow(input.WPosition + normal * 32);
+		sunColor *= GetShadow(input.WPosition + normal * 32, eyeIndex);
 
 	float specularFraction = lerp(1, fresnel * depthControl.x, distanceFactor);
 	float3 finalColorPreFog = lerp(diffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;

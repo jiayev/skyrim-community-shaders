@@ -37,7 +37,7 @@ float GetScreenSpaceShadow(float2 a_uv, float a_noise, float3 a_viewPosition, ui
 	if (weight > 0.0)
 		shadow /= weight;
 	else
-		shadow = ScreenSpaceShadowsTexture.Load(int3(a_uv * BufferDim.xy, 0)).x;
+		shadow = ScreenSpaceShadowsTexture.Load(int3(GetDynamicResolutionAdjustedScreenPosition(ConvertToStereoUV(a_uv, a_eyeIndex)) * BufferDim.xy, 0)).x;
 
 	return shadow;
 }

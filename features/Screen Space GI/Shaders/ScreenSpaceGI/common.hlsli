@@ -82,12 +82,6 @@ SamplerState samplerLinearClamp : register(s1);
 #	define FULLRES_LOAD(tex, px, texCoord, samp) tex[px]
 #endif
 
-#ifdef VR
-#	define GET_EYE_IDX(uv) (uv.x > 0.5)
-#else
-#	define GET_EYE_IDX(uv) (0)
-#endif
-
 ///////////////////////////////////////////////////////////////////////////////
 
 #define ISNAN(x) (!(x < 0.f || x > 0.f || x == 0.f))

@@ -79,8 +79,9 @@ public:
 		float4 AlphaTestRef;
 		float4 ShadowLightParam;  // Falloff in x, ShadowDistance squared in z
 		DirectX::XMFLOAT4X3 FocusShadowMapProj[4];
-		DirectX::XMFLOAT4X3 ShadowMapProj[4];
-		DirectX::XMFLOAT4X4 CameraViewProjInverse;
+		// Since PerGeometry is passed between c++ and hlsl, can't have different defines due to strong typing
+		DirectX::XMFLOAT4X3 ShadowMapProj[2][3];
+		DirectX::XMFLOAT4X3 CameraViewProjInverse[2];
 	};
 
 	ID3D11ComputeShader* copyShadowCS = nullptr;

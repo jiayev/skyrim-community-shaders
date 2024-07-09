@@ -510,7 +510,6 @@ void ScreenSpaceGI::GenerateHilbertLUT()
 void ScreenSpaceGI::UpdateSB()
 {
 	auto viewport = RE::BSGraphics::State::GetSingleton();
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 
 	float2 res = { (float)texRadiance->desc.Width, (float)texRadiance->desc.Height };
 	float2 dynres = res * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
@@ -523,7 +522,7 @@ void ScreenSpaceGI::UpdateSB()
 	SSGICB data;
 	{
 		for (int eyeIndex = 0; eyeIndex < (1 + REL::Module::IsVR()); ++eyeIndex) {
-			auto eye = (!REL::Module::IsVR()) ? state->GetRuntimeData().cameraData.getEye(eyeIndex) : state->GetVRRuntimeData().cameraData.getEye(eyeIndex);
+			auto eye = Util::GetCameraData(eyeIndex);
 
 			data.PrevInvViewMat[eyeIndex] = prevInvView[eyeIndex];
 			data.NDCToViewMul[eyeIndex] = { 2.0f / eye.projMat(0, 0), -2.0f / eye.projMat(1, 1) };

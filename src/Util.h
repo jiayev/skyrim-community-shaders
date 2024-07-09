@@ -28,6 +28,31 @@ namespace Util
 	void DumpSettingsOptions();
 	float4 GetCameraData();
 
+	inline RE::NiPoint3 GetAverageEyePosition()
+	{
+		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+		if (!REL::Module::IsVR())
+			return shadowState->GetRuntimeData().posAdjust.getEye();
+		return (shadowState->GetVRRuntimeData().posAdjust.getEye(0) + shadowState->GetVRRuntimeData().posAdjust.getEye(1)) * 0.5f;
+	}
+
+	inline RE::NiPoint3 GetEyePosition(int eyeIndex)
+	{
+		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+		if (!REL::Module::IsVR())
+			return shadowState->GetRuntimeData().posAdjust.getEye();
+		return shadowState->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+	}
+
+	inline RE::BSGraphics::ViewData GetCameraData(int eyeIndex)
+	{
+		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+		if (!REL::Module::IsVR()) {
+			return shadowState->GetRuntimeData().cameraData.getEye();
+		}
+		return shadowState->GetVRRuntimeData().cameraData.getEye(eyeIndex);
+	}
+
 	struct DispatchCount
 	{
 		uint x;

@@ -181,7 +181,7 @@ public:
 		static void Install()
 		{
 			// To know when we are rendering z-prepass depth vs shadows depth
-			stl::write_thunk_call<Main_RenderDepth>(REL::Relocation<std::uintptr_t>(REL::RelocationID(35560, 36559), 0x395).address());
+			stl::write_thunk_call<Main_RenderDepth>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x395, 0x395, 0x2EE));
 
 			// To manipulate the depth buffer write, depth testing, alpha blending
 			stl::write_thunk_call<BSBatchRenderer__RenderPassImmediately>(REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
@@ -192,4 +192,5 @@ public:
 			logger::info("[Terrain Blending] Installed hooks");
 		}
 	};
+	bool SupportsVR() override { return true; };
 };

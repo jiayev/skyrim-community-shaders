@@ -83,8 +83,8 @@ void CalculateGI(
 	const float2 srcScale = SrcFrameDim * RcpTexDim;
 	const float2 outScale = OutFrameDim * RcpTexDim;
 
-	uint eyeIndex = GET_EYE_IDX(uv);
-	float2 normalizedScreenPos = ConvertToStereoUV(uv, eyeIndex);
+	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
+	float2 normalizedScreenPos = ConvertFromStereoUV(uv, eyeIndex);
 
 	const float rcpNumSlices = rcp(NumSlices);
 	const float rcpNumSteps = rcp(NumSteps);
@@ -171,7 +171,7 @@ void CalculateGI(
 
 				float2 samplePxCoord = dtid + .5 + sampleOffset * sideSign;
 				float2 sampleUV = samplePxCoord * RcpOutFrameDim;
-				float2 sampleScreenPos = ConvertToStereoUV(sampleUV, eyeIndex);
+				float2 sampleScreenPos = ConvertFromStereoUV(sampleUV, eyeIndex);
 				[branch] if (any(sampleScreenPos > 1.0) || any(sampleScreenPos < 0.0)) break;
 
 				float sampleOffsetLength = length(sampleOffset);
@@ -358,7 +358,7 @@ void CalculateGI(
 	const float2 outScale = OutFrameDim * RcpTexDim;
 
 	float2 uv = (dtid + .5f) * RcpOutFrameDim;
-	uint eyeIndex = GET_EYE_IDX(uv);
+	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
 
 	float viewspaceZ = READ_DEPTH(srcWorkingDepth, dtid);
 

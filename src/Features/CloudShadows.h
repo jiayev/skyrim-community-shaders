@@ -62,4 +62,5 @@ struct CloudShadows : Feature
 			logger::info("[Cloud Shadows] Installed hooks");
 		}
 	};
+	bool SupportsVR() override { return true; };
 };

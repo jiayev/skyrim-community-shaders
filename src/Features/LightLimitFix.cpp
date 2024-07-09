@@ -328,7 +328,6 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 
 void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached)
 {
-	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
 		RE::NiPoint3 eyePosition;
 		Matrix viewMatrix;
@@ -337,12 +336,8 @@ void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPo
 			eyePosition = eyePositionCached[eyeIndex];
 			viewMatrix = viewMatrixCached[eyeIndex];
 		} else {
-			eyePosition = eyeCount == 1 ?
-			                  shadowState->GetRuntimeData().posAdjust.getEye(eyeIndex) :
-			                  shadowState->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
-			viewMatrix = eyeCount == 1 ?
-			                 shadowState->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
-			                 shadowState->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
+			eyePosition = Util::GetEyePosition(eyeIndex);
+			viewMatrix = Util::GetCameraData(eyeIndex).viewMat;
 		}
 
 		auto worldPos = a_initialPosition - eyePosition;
@@ -672,17 +667,12 @@ void LightLimitFix::UpdateLights()
 	lightsFar = std::min(16384.0f, accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar);
 
 	auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
-	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 
 	// Cache data since cameraData can become invalid in first-person
 
 	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
-		eyePositionCached[eyeIndex] = eyeCount == 1 ?
-		                                  shadowState->GetRuntimeData().posAdjust.getEye(eyeIndex) :
-		                                  shadowState->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
-		viewMatrixCached[eyeIndex] = eyeCount == 1 ?
-		                                 shadowState->GetRuntimeData().cameraData.getEye(eyeIndex).viewMat :
-		                                 shadowState->GetVRRuntimeData().cameraData.getEye(eyeIndex).viewMat;
+		eyePositionCached[eyeIndex] = Util::GetEyePosition(eyeIndex);
+		viewMatrixCached[eyeIndex] = Util::GetCameraData(eyeIndex).viewMat;
 		viewMatrixCached[eyeIndex].Invert(viewMatrixInverseCached[eyeIndex]);
 	}
 
@@ -865,7 +855,7 @@ void LightLimitFix::UpdateLights()
 	static auto& context = State::GetSingleton()->context;
 
 	{
-		auto projMatrixUnjittered = eyeCount == 1 ? shadowState->GetRuntimeData().cameraData.getEye().projMatrixUnjittered : shadowState->GetVRRuntimeData().cameraData.getEye().projMatrixUnjittered;
+		auto projMatrixUnjittered = Util::GetCameraData(0).projMatrixUnjittered;
 		float fov = atan(1.0f / static_cast<float4x4>(projMatrixUnjittered).m[0][0]) * 2.0f * (180.0f / 3.14159265359f);
 
 		static float _near = 0.0f, _far = 0.0f, _fov = 0.0f, _lightsNear = 0.0f, _lightsFar = 0.0f;
@@ -875,7 +865,7 @@ void LightLimitFix::UpdateLights()
 			if (eyeCount == 1)
 				updateData.InvProjMatrix[1] = updateData.InvProjMatrix[0];
 			else
-				updateData.InvProjMatrix[1] = DirectX::XMMatrixInverse(nullptr, shadowState->GetVRRuntimeData().cameraData.getEye(1).projMatrixUnjittered);
+				updateData.InvProjMatrix[1] = DirectX::XMMatrixInverse(nullptr, Util::GetCameraData(1).projMatrixUnjittered);
 			updateData.LightsNear = lightsNear;
 			updateData.LightsFar = lightsFar;
 

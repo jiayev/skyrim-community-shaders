@@ -14,8 +14,9 @@ struct PerGeometry
 	float4 AlphaTestRef;
 	float4 ShadowLightParam;  // Falloff in x, ShadowDistance squared in z
 	float4x3 FocusShadowMapProj[4];
-	float4x3 ShadowMapProj[4];
-	float4x4 CameraViewProjInverse;
+	// Since PerGeometry is passed between c++ and hlsl, can't have different defines due to strong typing
+	float4x3 ShadowMapProj[2][3];
+	float4x4 CameraViewProjInverse[2];
 };
 
 Texture2DArray<float4> TexShadowMapSampler : register(t25);
@@ -31,7 +32,7 @@ cbuffer PerWaterType : register(b7)
 	uint pad1water;
 };
 
-float3 GetShadow(float3 positionWS)
+float3 GetShadow(float3 positionWS, uint a_eyeIndex = 0)
 {
 	PerGeometry sD = perShadow[0];
 	sD.EndSplitDistances.x = GetScreenDepth(sD.EndSplitDistances.x);
@@ -42,18 +43,18 @@ float3 GetShadow(float3 positionWS)
 	float shadowMapDepth = length(positionWS.xyz);
 
 	half cascadeIndex = 0;
-	half4x3 lightProjectionMatrix = sD.ShadowMapProj[0];
+	half4x3 lightProjectionMatrix = sD.ShadowMapProj[a_eyeIndex][0];
 	half shadowMapThreshold = sD.AlphaTestRef.y;
 
 	[flatten] if (2.5 < sD.EndSplitDistances.w && sD.EndSplitDistances.y < shadowMapDepth)
 	{
-		lightProjectionMatrix = sD.ShadowMapProj[2];
+		lightProjectionMatrix = sD.ShadowMapProj[a_eyeIndex][2];
 		shadowMapThreshold = sD.AlphaTestRef.z;
 		cascadeIndex = 2;
 	}
 	else if (sD.EndSplitDistances.x < shadowMapDepth)
 	{
-		lightProjectionMatrix = sD.ShadowMapProj[1];
+		lightProjectionMatrix = sD.ShadowMapProj[a_eyeIndex][1];
 		shadowMapThreshold = sD.AlphaTestRef.z;
 		cascadeIndex = 1;
 	}
@@ -74,7 +75,7 @@ float3 GetShadow(float3 positionWS)
 	return shadow;
 }
 
-float GetVL(float3 startPosWS, float3 endPosWS, float2 screenPosition)
+float GetVL(float3 startPosWS, float3 endPosWS, float2 screenPosition, uint a_eyeIndex = 0)
 {
 	const static uint nSteps = 16;
 	const static float step = 1.0 / float(nSteps);
@@ -125,21 +126,21 @@ float GetVL(float3 startPosWS, float3 endPosWS, float2 screenPosition)
 			float shadowMapDepth = length(samplePositionWS.xyz);
 
 			half cascadeIndex = 0;
-			half4x3 lightProjectionMatrix = sD.ShadowMapProj[0];
+			half4x3 lightProjectionMatrix = sD.ShadowMapProj[a_eyeIndex][0];
 			half shadowMapThreshold = sD.AlphaTestRef.y;
 
 			half shadowRange = sD.EndSplitDistances.x;
 
 			[flatten] if (2.5 < sD.EndSplitDistances.w && sD.EndSplitDistances.y < shadowMapDepth)
 			{
-				lightProjectionMatrix = sD.ShadowMapProj[2];
+				lightProjectionMatrix = sD.ShadowMapProj[a_eyeIndex][2];
 				shadowMapThreshold = sD.AlphaTestRef.z;
 				cascadeIndex = 2;
 				shadowRange = sD.EndSplitDistances.z - sD.EndSplitDistances.y;
 			}
 			else if (sD.EndSplitDistances.x < shadowMapDepth)
 			{
-				lightProjectionMatrix = sD.ShadowMapProj[1];
+				lightProjectionMatrix = sD.ShadowMapProj[a_eyeIndex][1];
 				shadowMapThreshold = sD.AlphaTestRef.z;
 				cascadeIndex = 1;
 				shadowRange = sD.EndSplitDistances.y - sD.EndSplitDistances.x;
@@ -158,7 +159,7 @@ float GetVL(float3 startPosWS, float3 endPosWS, float2 screenPosition)
 			if (shadow > 0.0) {
 				float terrainShadow = 1;
 				float terrainAo = 1;
-				GetTerrainOcclusion(samplePositionWS + CameraPosAdjust[0], length(samplePositionWS), LinearSampler, terrainShadow, terrainAo);
+				GetTerrainOcclusion(samplePositionWS + CameraPosAdjust[a_eyeIndex], length(samplePositionWS), LinearSampler, terrainShadow, terrainAo);
 				shadow *= terrainShadow;
 			}
 #	endif

@@ -90,7 +90,6 @@ void ScreenSpaceShadows::DrawShadows()
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto context = State::GetSingleton()->context;
 
-	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 	auto viewport = RE::BSGraphics::State::GetSingleton();
 
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
@@ -103,9 +102,7 @@ void ScreenSpaceShadows::DrawShadows()
 	light.Normalize();
 	float4 lightProjection = float4(-light.x, -light.y, -light.z, 0.0f);
 
-	Matrix viewProjMat = !REL::Module::IsVR() ?
-	                         shadowState->GetRuntimeData().cameraData.getEye().viewProjMat :
-	                         shadowState->GetVRRuntimeData().cameraData.getEye().viewProjMat;
+	Matrix viewProjMat = Util::GetCameraData(0).viewProjMat;
 
 	lightProjection = DirectX::SimpleMath::Vector4::Transform(lightProjection, viewProjMat);
 	float lightProjectionF[4] = { lightProjection.x, lightProjection.y, lightProjection.z, lightProjection.w };
@@ -164,7 +161,7 @@ void ScreenSpaceShadows::DrawShadows()
 	if (REL::Module::IsVR()) {
 		lightProjection = float4(-light.x, -light.y, -light.z, 0.0f);
 
-		viewProjMat = shadowState->GetVRRuntimeData().cameraData.getEye(1).viewProjMat;
+		viewProjMat = Util::GetCameraData(1).viewProjMat;
 
 		lightProjection = DirectX::SimpleMath::Vector4::Transform(lightProjection, viewProjMat);
 

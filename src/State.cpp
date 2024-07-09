@@ -72,6 +72,7 @@ void State::Reset()
 	lastModifiedVertexDescriptor = 0;
 	lastPixelDescriptor = 0;
 	lastVertexDescriptor = 0;
+	initialized = false;
 }
 
 void State::Setup()
@@ -81,7 +82,10 @@ void State::Setup()
 		if (feature->loaded)
 			feature->SetupResources();
 	Deferred::GetSingleton()->SetupResources();
+	if (initialized)
+		return;
 	VariableRateShading::GetSingleton()->Setup();
+	initialized = true;
 }
 
 static const std::string& GetConfigPath(State::ConfigMode a_configMode)

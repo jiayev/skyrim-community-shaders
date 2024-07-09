@@ -1503,9 +1503,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float maxOcclusion = 1;
 	float minWetnessAngle = 0;
 	minWetnessAngle = saturate(max(minWetnessValue, worldSpaceNormal.z));
-
+#		if defined(SKYLIGHTING)
 	float skylight = GetSkylightOcclusion(input.WorldPosition + worldSpaceNormal, screenNoise);
-
+#		else
+	float skylight = 1.0;
+#		endif  // SKYLIGHTING
 	bool raindropOccluded = false;
 
 	float4 raindropInfo = float4(0, 0, 1, 0);

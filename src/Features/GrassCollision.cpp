@@ -104,7 +104,6 @@ static bool GetShapeBound(RE::bhkNiCollisionObject* Colliedobj, RE::NiPoint3& ce
 
 void GrassCollision::UpdateCollisions(PerFrame& perFrameData)
 {
-	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 	actorList.clear();
 
 	// Actor query code from po3 under MIT
@@ -126,11 +125,7 @@ void GrassCollision::UpdateCollisions(PerFrame& perFrameData)
 	if (auto player = RE::PlayerCharacter::GetSingleton())
 		actorList.push_back(player);
 
-	RE::NiPoint3 cameraPosition;
-	if (!REL::Module::IsVR())
-		cameraPosition = shadowState->GetRuntimeData().posAdjust.getEye();
-	else
-		cameraPosition = (shadowState->GetVRRuntimeData().posAdjust.getEye(0) + shadowState->GetVRRuntimeData().posAdjust.getEye(1)) * 0.5f;
+	RE::NiPoint3 cameraPosition = Util::GetAverageEyePosition();
 
 	for (const auto actor : actorList) {
 		if (currentCollisionCount == 256)
@@ -149,10 +144,7 @@ void GrassCollision::UpdateCollisions(PerFrame& perFrameData)
 					CollisionData data{};
 					RE::NiPoint3 eyePosition{};
 					for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
-						if (!REL::Module::IsVR())
-							eyePosition = shadowState->GetRuntimeData().posAdjust.getEye();
-						else
-							eyePosition = shadowState->GetVRRuntimeData().posAdjust.getEye(eyeIndex);
+						eyePosition = Util::GetEyePosition(eyeIndex);
 						data.centre[eyeIndex].x = centerPos.x - eyePosition.x;
 						data.centre[eyeIndex].y = centerPos.y - eyePosition.y;
 						data.centre[eyeIndex].z = centerPos.z - eyePosition.z;
