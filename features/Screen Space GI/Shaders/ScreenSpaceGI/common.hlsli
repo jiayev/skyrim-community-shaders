@@ -70,18 +70,6 @@ SamplerState samplerLinearClamp : register(s1);
 
 ///////////////////////////////////////////////////////////////////////////////
 
-// screenPos - normalised position in FrameDim, one eye only
-// uv - normalised position in FrameDim, both eye
-// texCoord - texture coordinate
-
-#ifdef HALF_RES
-#	define READ_DEPTH(tex, px) tex.Load(int3(px, 1))
-#	define FULLRES_LOAD(tex, px, texCoord, samp) tex.SampleLevel(samp, texCoord, 0)
-#else
-#	define READ_DEPTH(tex, px) tex[px]
-#	define FULLRES_LOAD(tex, px, texCoord, samp) tex[px]
-#endif
-
 ///////////////////////////////////////////////////////////////////////////////
 
 #define ISNAN(x) (!(x < 0.f || x > 0.f || x == 0.f))

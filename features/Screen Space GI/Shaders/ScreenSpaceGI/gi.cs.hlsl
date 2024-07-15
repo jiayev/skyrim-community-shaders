@@ -28,20 +28,16 @@
 #include "../Common/VR.hlsli"
 #include "common.hlsli"
 
-#if USE_HALF_FLOAT_PRECISION == 0
-#	define PI (3.1415926535897932384626433832795)
-#	define HALF_PI (1.5707963267948966192313216916398)
-#	define RCP_PI (0.31830988618)
-#else
-#	define PI (3.1415926535897932384626433832795)
-#	define HALF_PI (1.5707963267948966192313216916398)
-#	define RCP_PI (0.31830988618)
-#endif
+#define FP_Z (16.5)
+
+#define PI (3.1415926535897932384626433832795)
+#define HALF_PI (1.5707963267948966192313216916398)
+#define RCP_PI (0.31830988618)
 
 Texture2D<float> srcWorkingDepth : register(t0);
 Texture2D<float4> srcNormal : register(t1);
 Texture2D<float3> srcRadiance : register(t2);  // maybe half-res
-Texture2D<uint> srcHilbertLUT : register(t3);
+Texture2D<unorm float2> srcNoise : register(t3);
 Texture2D<unorm float> srcAccumFrames : register(t4);  // maybe half-res
 Texture2D<float4> srcPrevGI : register(t5);            // maybe half-res
 
@@ -57,12 +53,10 @@ float GetDepthFade(float depth)
 // Engine-specific screen & temporal noise loader
 float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)  // without TAA, temporalIndex is always 0
 {
-	float2 noise;
-	uint index = srcHilbertLUT.Load(uint3(pixCoord % 64, 0)).x;
-	index += 288 * (temporalIndex % 64);  // why 288? tried out a few and that's the best so far (with XE_HILBERT_LEVEL 6U) - but there's probably better :)
-	// R2 sequence - see http://extremelearning.com.au/unreasonable-effectiveness-of-quasirandom-sequences/
-	// https://www.shadertoy.com/view/mts3zN
-	return float2(frac(0.5 + index * float2(0.245122333753, 0.430159709002)));
+	// noise texture from https://github.com/electronicarts/fastnoise
+	// 128x128x64
+	uint2 noiseCoord = (pixCoord % 128) + uint2(0, (temporalIndex % 64) * 128);
+	return srcNoise.Load(uint3(noiseCoord, 0));
 }
 
 // HBIL pp.29
@@ -176,12 +170,9 @@ void CalculateGI(
 
 				float sampleOffsetLength = length(sampleOffset);
 				float mipLevel = clamp(log2(sampleOffsetLength) - DepthMIPSamplingOffset, 0, 5);
-#ifdef HALF_RES
-				mipLevel = max(mipLevel, 1);
-#endif
 
 				float SZ = srcWorkingDepth.SampleLevel(samplerPointClamp, sampleUV * srcScale, mipLevel);
-				[branch] if (SZ > DepthFadeRange.y) continue;
+				[branch] if (SZ > DepthFadeRange.y || SZ < FP_Z) continue;
 
 				float3 samplePos = ScreenToViewPosition(sampleScreenPos, SZ, eyeIndex);
 				float3 sampleDelta = samplePos - float3(pixCenterPos);
@@ -357,16 +348,23 @@ void CalculateGI(
 	const float2 srcScale = SrcFrameDim * RcpTexDim;
 	const float2 outScale = OutFrameDim * RcpTexDim;
 
-	float2 uv = (dtid + .5f) * RcpOutFrameDim;
+	uint2 pxCoord = dtid;
+#if defined(HALF_RATE)
+	const uint halfWidth = uint(OutFrameDim.x) >> 1;
+	const bool useHistory = dtid.x >= halfWidth;
+	pxCoord.x = (pxCoord.x % halfWidth) * 2 + (dtid.y + FrameIndex + useHistory) % 2;
+#endif
+
+	float2 uv = (pxCoord + .5f) * RcpOutFrameDim;
 	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
 
-	float viewspaceZ = READ_DEPTH(srcWorkingDepth, dtid);
+	float viewspaceZ = srcWorkingDepth[pxCoord];
 
-	float2 normalSample = FULLRES_LOAD(srcNormal, dtid, uv * srcScale, samplerLinearClamp).xy;
+	float2 normalSample = srcNormal[pxCoord].xy;
 	float3 viewspaceNormal = DecodeNormal(normalSample);
 
 	half2 encodedWorldNormal = EncodeNormal(ViewToWorldVector(viewspaceNormal, CameraViewInverse[eyeIndex]));
-	outPrevGeo[dtid] = half3(viewspaceZ, encodedWorldNormal);
+	outPrevGeo[pxCoord] = half3(viewspaceZ, encodedWorldNormal);
 
 // Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used
 #if USE_HALF_FLOAT_PRECISION == 1
@@ -377,25 +375,34 @@ void CalculateGI(
 
 	float4 currGIAO = float4(0, 0, 0, 1);
 	float3 bentNormal = viewspaceNormal;
-	[branch] if (viewspaceZ < DepthFadeRange.y)
+
+	bool needGI = viewspaceZ > FP_Z && viewspaceZ < DepthFadeRange.y;
+#if defined(HALF_RATE)
+	needGI = needGI && !useHistory;
+#endif
+	[branch] if (needGI)
 		CalculateGI(
-			dtid, uv, viewspaceZ, viewspaceNormal,
+			pxCoord, uv, viewspaceZ, viewspaceNormal,
 			currGIAO, bentNormal);
 
 #ifdef BENT_NORMAL
-	outBentNormal[dtid] = EncodeNormal(bentNormal);
+	outBentNormal[pxCoord] = EncodeNormal(bentNormal);
 #endif
 
 #ifdef TEMPORAL_DENOISER
 	if (viewspaceZ < DepthFadeRange.y) {
-		float4 prevGIAO = srcPrevGI[dtid];
-		uint accumFrames = srcAccumFrames[dtid] * 255;
+		float lerpFactor = 0;
+#	if defined(HALF_RATE)
+		if (!useHistory)
+#	endif
+			lerpFactor = rcp(srcAccumFrames[pxCoord] * 255);
 
-		currGIAO = lerp(prevGIAO, currGIAO, rcp(accumFrames));
+		float4 prevGIAO = srcPrevGI[pxCoord];
+		currGIAO = lerp(prevGIAO, currGIAO, lerpFactor);
 	}
 #endif
 
 	currGIAO = any(ISNAN(currGIAO)) ? float4(0, 0, 0, 1) : currGIAO;
 
-	outGI[dtid] = currGIAO;
+	outGI[pxCoord] = currGIAO;
 }

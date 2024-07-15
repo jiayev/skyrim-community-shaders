@@ -48,9 +48,9 @@ float HistoryRadiusScaling(float accumFrames)
 	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
 	const float2 screenPos = ConvertFromStereoUV(uv, eyeIndex);
 
-	float depth = READ_DEPTH(srcDepth, dtid);
+	float depth = srcDepth[dtid];
 	float3 pos = ScreenToViewPosition(screenPos, depth, eyeIndex);
-	float3 normal = DecodeNormal(FULLRES_LOAD(srcNormal, dtid, uv, samplerLinearClamp).xy);
+	float3 normal = DecodeNormal(srcNormal[dtid].xy);
 
 	float4 sum = srcGI[dtid];
 #ifdef TEMPORAL_DENOISER

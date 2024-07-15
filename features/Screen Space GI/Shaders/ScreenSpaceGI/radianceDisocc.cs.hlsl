@@ -16,7 +16,7 @@ RWTexture2D<float3> outRadianceDisocc : register(u0);
 RWTexture2D<unorm float> outAccumFrames : register(u1);
 RWTexture2D<float4> outRemappedPrevGI : register(u2);
 
-#if (defined(GI) && defined(GI_BOUNCE)) || defined(TEMPORAL_DENOISER)
+#if (defined(GI) && defined(GI_BOUNCE)) || defined(TEMPORAL_DENOISER) || defined(HALF_RATE)
 #	define REPROJECTION
 #endif
 
@@ -46,7 +46,7 @@ void readHistory(
 	// bool normal_pass = normal_prod * normal_prod > NormalDisocclusion;
 	if (depth_pass) {
 #if defined(GI) && defined(GI_BOUNCE)
-		prev_gi_albedo += FULLRES_LOAD(srcPrevAmbient, pixCoord, uv * srcScale, samplerLinearClamp) * bilinear_weight;  // TODO better half res
+		prev_gi_albedo += srcPrevAmbient[pixCoord] * bilinear_weight;  // TODO better half res
 #endif
 #ifdef TEMPORAL_DENOISER
 		prev_gi += srcPrevGI[pixCoord] * bilinear_weight;
@@ -67,7 +67,7 @@ void readHistory(
 
 	float2 prev_uv = uv;
 #ifdef REPROJECTION
-	prev_uv += FULLRES_LOAD(srcMotionVec, pixCoord, uv * srcScale, samplerLinearClamp).xy;
+	prev_uv += srcMotionVec[pixCoord].xy;
 #endif
 	float2 prev_screen_pos = ConvertFromStereoUV(prev_uv, eyeIndex);
 
@@ -76,10 +76,10 @@ void readHistory(
 	float accum_frames = 0;
 	float wsum = 0;
 
-	const float curr_depth = READ_DEPTH(srcCurrDepth, pixCoord);
+	const float curr_depth = srcCurrDepth[pixCoord];
 #ifdef REPROJECTION
 	if ((curr_depth <= DepthFadeRange.y) && !(any(prev_screen_pos < 0) || any(prev_screen_pos > 1))) {
-		// float3 curr_normal = DecodeNormal(FULLRES_LOAD(srcCurrNormal, pixCoord, uv * srcScale, samplerLinearClamp).xy);
+		// float3 curr_normal = DecodeNormal(srcCurrNormal[pixCoord];
 		// curr_normal = ViewToWorldVector(curr_normal, CameraViewInverse[eyeIndex]);
 		float3 curr_pos = ScreenToViewPosition(screen_pos, curr_depth, eyeIndex);
 		curr_pos = ViewToWorldPosition(curr_pos, CameraViewInverse[eyeIndex]);
@@ -127,7 +127,7 @@ void readHistory(
 
 	half3 radiance = 0;
 #ifdef GI
-	radiance = FULLRES_LOAD(srcDiffuse, pixCoord, uv * srcScale, samplerLinearClamp).rgb;
+	radiance = srcDiffuse[pixCoord].rgb;
 #	ifdef GI_BOUNCE
 	radiance += prev_gi_albedo.rgb * GIBounceFade;
 #	endif

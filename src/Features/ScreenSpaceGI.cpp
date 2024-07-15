@@ -104,7 +104,7 @@ void ScreenSpaceGI::DrawSettings()
 
 	ImGui::SliderInt("Steps Per Slice", (int*)&settings.NumSteps, 1, 20);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("How many samples does it take in one direction. A greater value enhances the effects but is more expensive.");
+		ImGui::Text("How many samples does it take in one direction. A greater value enhances accuracy but is more expensive.");
 
 	if (showAdvanced) {
 		ImGui::SliderFloat("MIP Sampling Offset", &settings.DepthMIPSamplingOffset, 2.f, 6.f, "%.2f");
@@ -112,7 +112,9 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::Text("Mainly performance (texture memory bandwidth) setting but as a side-effect reduces overshadowing by thin objects and increases temporal instability.");
 	}
 
-	recompileFlag |= ImGui::Checkbox("Half Resolution", &settings.HalfRes);
+	recompileFlag |= ImGui::Checkbox("Half Rate", &settings.HalfRate);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Shading only half the pixels per frame. Cheaper but has more ghosting, and takes twice as long to converge.");
 
 	///////////////////////////////
 	ImGui::SeparatorText("Visual");
@@ -122,7 +124,6 @@ void ScreenSpaceGI::DrawSettings()
 	{
 		auto _ = DisableGuard(!settings.EnableGI);
 		ImGui::SliderFloat("GI Strength", &settings.GIStrength, 0.f, 20.f, "%.2f");
-		// percentageSlider("GI Saturation", &settings.GISaturation);
 	}
 
 	ImGui::Separator();
@@ -177,17 +178,21 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::Separator();
 		}
 
-		recompileFlag |= ImGui::Checkbox("GI Bounce", &settings.EnableGIBounce);
+		recompileFlag |= ImGui::Checkbox("Ambient Bounce", &settings.EnableGIBounce);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Simulates multiple light bounces. Better with denoiser on.");
+			ImGui::Text(
+				"Simulates multiple light bounces. Better with denoiser on.\n"
+				"Mandatory if you want ambient as part of the light source for GI calculation.");
 
 		{
 			auto __ = DisableGuard(!settings.EnableGIBounce);
 			ImGui::Indent();
-			percentageSlider("GI Bounce Strength", &settings.GIBounceFade);
+			percentageSlider("Ambient Bounce Strength", &settings.GIBounceFade);
 			ImGui::Unindent();
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("How much of this frame's GI gets carried to the next frame.");
+				ImGui::Text(
+					"How much of this frame's ambient+GI get carried to the next frame as source.\n"
+					"If you have a very high GI strength, you may want to turn this down to prevent feedback loops that bleaches everything.");
 		}
 
 		if (showAdvanced) {
@@ -278,7 +283,7 @@ void ScreenSpaceGI::DrawSettings()
 		static float debugRescale = .3f;
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
-		//BUFFER_VIEWER_NODE(texHilbertLUT, debugRescale)
+		BUFFER_VIEWER_NODE(texNoise, debugRescale)
 		BUFFER_VIEWER_NODE(texWorkingDepth, debugRescale)
 		BUFFER_VIEWER_NODE(texPrevGeo, debugRescale)
 		BUFFER_VIEWER_NODE(texRadiance, debugRescale)
@@ -341,12 +346,6 @@ void ScreenSpaceGI::SetupResources()
 			.Texture2D = { .MipSlice = 0 }
 		};
 
-		{
-			texHilbertLUT = eastl::make_unique<Texture2D>(texDesc);
-			texHilbertLUT->CreateSRV(srvDesc);
-			texHilbertLUT->CreateUAV(uavDesc);
-		}
-
 		auto mainTex = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 		mainTex.texture->GetDesc(&texDesc);
 		srvDesc.Format = uavDesc.Format = texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
@@ -405,6 +404,40 @@ void ScreenSpaceGI::SetupResources()
 		}
 	}
 
+	logger::debug("Loading noise texture...");
+	{
+		DirectX::ScratchImage image;
+		try {
+			std::filesystem::path path{ "Data\\Shaders\\ScreenSpaceGI\\fast_2uges.dds" };
+
+			DX::ThrowIfFailed(LoadFromDDSFile(path.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image));
+		} catch (const DX::com_exception& e) {
+			logger::error("{}", e.what());
+			return;
+		}
+
+		ID3D11Resource* pResource = nullptr;
+		try {
+			DX::ThrowIfFailed(CreateTexture(device,
+				image.GetImages(), image.GetImageCount(),
+				image.GetMetadata(), &pResource));
+		} catch (const DX::com_exception& e) {
+			logger::error("{}", e.what());
+			return;
+		}
+
+		texNoise = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource));
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = texNoise->desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = {
+				.MostDetailedMip = 0,
+				.MipLevels = 1 }
+		};
+		texNoise->CreateSRV(srvDesc);
+	}
+
 	logger::debug("Creating samplers...");
 	{
 		D3D11_SAMPLER_DESC samplerDesc = {
@@ -428,7 +461,7 @@ void ScreenSpaceGI::SetupResources()
 void ScreenSpaceGI::ClearShaderCache()
 {
 	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
-		&hilbertLutCompute, &prefilterDepthsCompute, &radianceDisoccCompute, &giCompute, &blurCompute, &upsampleCompute
+		&prefilterDepthsCompute, &radianceDisoccCompute, &giCompute, &blurCompute
 	};
 
 	for (auto shader : shaderPtrs)
@@ -451,18 +484,16 @@ void ScreenSpaceGI::CompileComputeShaders()
 
 	std::vector<ShaderCompileInfo>
 		shaderInfos = {
-			{ &hilbertLutCompute, "hilbert.cs.hlsl", {} },
 			{ &prefilterDepthsCompute, "prefilterDepths.cs.hlsl", {} },
 			{ &radianceDisoccCompute, "radianceDisocc.cs.hlsl", {} },
 			{ &giCompute, "gi.cs.hlsl", {} },
-			{ &blurCompute, "blur.cs.hlsl", {} },
-			{ &upsampleCompute, "upsample.cs.hlsl", {} }
+			{ &blurCompute, "blur.cs.hlsl", {} }
 		};
 	for (auto& info : shaderInfos) {
 		if (REL::Module::IsVR())
 			info.defines.push_back({ "VR", "" });
-		if (settings.HalfRes)
-			info.defines.push_back({ "HALF_RES", "" });
+		if (settings.HalfRate)
+			info.defines.push_back({ "HALF_RATE", "" });
 		if (settings.EnableTemporalDenoiser)
 			info.defines.push_back({ "TEMPORAL_DENOISER", "" });
 		if (settings.UseBitmask)
@@ -481,30 +512,12 @@ void ScreenSpaceGI::CompileComputeShaders()
 			info.programPtr->attach(rawPtr);
 	}
 
-	hilbertLutGenFlag = true;
 	recompileFlag = false;
 }
 
 bool ScreenSpaceGI::ShadersOK()
 {
-	return hilbertLutCompute && prefilterDepthsCompute && radianceDisoccCompute && giCompute && blurCompute && upsampleCompute;
-}
-
-void ScreenSpaceGI::GenerateHilbertLUT()
-{
-	auto& context = State::GetSingleton()->context;
-
-	ID3D11UnorderedAccessView* uav = texHilbertLUT->uav.get();
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShader(hilbertLutCompute.get(), nullptr, 0);
-
-	context->Dispatch(2, 2, 1);
-
-	uav = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShader(nullptr, nullptr, 0);
-
-	hilbertLutGenFlag = false;
+	return prefilterDepthsCompute && radianceDisoccCompute && giCompute && blurCompute;
 }
 
 void ScreenSpaceGI::UpdateSB()
@@ -514,8 +527,6 @@ void ScreenSpaceGI::UpdateSB()
 	float2 res = { (float)texRadiance->desc.Width, (float)texRadiance->desc.Height };
 	float2 dynres = res * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
 	dynres = { floor(dynres.x), floor(dynres.y) };
-	float2 halfres = dynres * 0.5;
-	halfres = { floor(halfres.x), floor(halfres.y) };
 
 	static float4x4 prevInvView[2] = {};
 
@@ -537,8 +548,8 @@ void ScreenSpaceGI::UpdateSB()
 		data.RcpTexDim = float2(1.0f) / res;
 		data.SrcFrameDim = dynres;
 		data.RcpSrcFrameDim = float2(1.0f) / dynres;
-		data.OutFrameDim = settings.HalfRes ? halfres : dynres;
-		data.RcpOutFrameDim = float2(1.0f) / (settings.HalfRes ? halfres : dynres);
+		data.OutFrameDim = dynres;
+		data.RcpOutFrameDim = float2(1.0f) / dynres;
 		data.FrameIndex = viewport->uiFrameCount;
 
 		data.NumSlices = settings.NumSlices;
@@ -590,9 +601,6 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 	if (recompileFlag)
 		ClearShaderCache();
 
-	if (hilbertLutGenFlag)
-		GenerateHilbertLUT();
-
 	UpdateSB();
 
 	//////////////////////////////////////////////////////
@@ -606,8 +614,6 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 		(uint)(State::GetSingleton()->screenWidth * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale),
 		(uint)(State::GetSingleton()->screenHeight * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale)
 	};
-	uint halfRes[2] = { resolution[0] >> 1, resolution[1] >> 1 };
-	auto targetRes = settings.HalfRes ? halfRes : resolution;
 
 	std::array<ID3D11ShaderResourceView*, 8> srvs = { nullptr };
 	std::array<ID3D11UnorderedAccessView*, 5> uavs = { nullptr };
@@ -658,7 +664,7 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(radianceDisoccCompute.get(), nullptr, 0);
-		context->Dispatch((targetRes[0] + 7u) >> 3, (targetRes[1] + 7u) >> 3, 1);
+		context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
 
 		context->GenerateMips(texRadiance->srv.get());
 
@@ -672,7 +678,7 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 		srvs.at(0) = texWorkingDepth->srv.get();
 		srvs.at(1) = rts[NORMALROUGHNESS].SRV;
 		srvs.at(2) = texRadiance->srv.get();
-		srvs.at(3) = texHilbertLUT->srv.get();
+		srvs.at(3) = texNoise->srv.get();
 		srvs.at(4) = texAccumFrames[lastFrameAccumTexIdx]->srv.get();
 		srvs.at(5) = texGI[inputGITexIdx]->srv.get();
 
@@ -683,7 +689,7 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(giCompute.get(), nullptr, 0);
-		context->Dispatch((targetRes[0] + 7u) >> 3, (targetRes[1] + 7u) >> 3, 1);
+		context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
 
 		inputGITexIdx = !inputGITexIdx;
 		lastFrameGITexIdx = inputGITexIdx;
@@ -704,28 +710,12 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 			context->CSSetShader(blurCompute.get(), nullptr, 0);
-			context->Dispatch((targetRes[0] + 7u) >> 3, (targetRes[1] + 7u) >> 3, 1);
+			context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
 
 			inputGITexIdx = !inputGITexIdx;
 			lastFrameGITexIdx = inputGITexIdx;
 			lastFrameAccumTexIdx = !lastFrameAccumTexIdx;
 		}
-	}
-
-	// upsasmple
-	if (settings.HalfRes) {
-		resetViews();
-		srvs.at(0) = texWorkingDepth->srv.get();
-		srvs.at(1) = texGI[inputGITexIdx]->srv.get();
-
-		uavs.at(0) = texGI[!inputGITexIdx]->uav.get();
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(upsampleCompute.get(), nullptr, 0);
-		context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
-
-		inputGITexIdx = !inputGITexIdx;
 	}
 
 	outputGIIdx = inputGITexIdx;
