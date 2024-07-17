@@ -1508,10 +1508,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		else
 	float skylight = 1.0;
 #		endif  // SKYLIGHTING
-	bool raindropOccluded = false;
 
 	float4 raindropInfo = float4(0, 0, 1, 0);
-	if (wetnessEffects.Raining > 0.0f && wetnessEffects.EnableRaindropFx &&
+	if (worldSpaceNormal.z > 0 && wetnessEffects.Raining > 0.0f && wetnessEffects.EnableRaindropFx &&
 		(dot(input.WorldPosition, input.WorldPosition) < wetnessEffects.RaindropFxRange * wetnessEffects.RaindropFxRange)) {
 		if (skylight > 0.0)
 			raindropInfo = GetRainDrops((input.WorldPosition + CameraPosAdjust[eyeIndex]).xyz, wetnessEffects.Time, worldSpaceNormal);
