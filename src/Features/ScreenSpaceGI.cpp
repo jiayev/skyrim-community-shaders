@@ -98,6 +98,67 @@ void ScreenSpaceGI::DrawSettings()
 	///////////////////////////////
 	ImGui::SeparatorText("Quality/Performance");
 
+	if (ImGui::BeginTable("Presets", 5)) {
+		ImGui::TableNextColumn();
+		if (ImGui::Button("AO only", { -1, 0 })) {
+			settings.NumSlices = 1;
+			settings.NumSteps = 6;
+			settings.EnableBlur = false;
+			settings.EnableGI = false;
+			recompileFlag = true;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(
+				"1 Slice, 6 Steps, no blur, no GI\n"
+				"Try smaller effect radius :)");
+
+		ImGui::TableNextColumn();
+		if (ImGui::Button("Low", { -1, 0 })) {
+			settings.NumSlices = 2;
+			settings.NumSteps = 4;
+			settings.EnableBlur = true;
+			settings.EnableGI = true;
+			recompileFlag = true;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("2 Slices, 4 Steps");
+
+		ImGui::TableNextColumn();
+		if (ImGui::Button("Medium", { -1, 0 })) {
+			settings.NumSlices = 3;
+			settings.NumSteps = 6;
+			settings.EnableBlur = true;
+			settings.EnableGI = true;
+			recompileFlag = true;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("3 Slices, 6 Steps");
+
+		ImGui::TableNextColumn();
+		if (ImGui::Button("High", { -1, 0 })) {
+			settings.NumSlices = 4;
+			settings.NumSteps = 8;
+			settings.EnableBlur = true;
+			settings.EnableGI = true;
+			recompileFlag = true;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("4 Slices, 8 Steps");
+
+		ImGui::TableNextColumn();
+		if (ImGui::Button("Ultra", { -1, 0 })) {
+			settings.NumSlices = 6;
+			settings.NumSteps = 10;
+			settings.EnableBlur = true;
+			settings.EnableGI = true;
+			recompileFlag = true;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("6 Slices, 10 Steps");
+
+		ImGui::EndTable();
+	}
+
 	ImGui::SliderInt("Slices", (int*)&settings.NumSlices, 1, 10);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("How many directions do the samples take. A greater value reduces noise but is more expensive.");
@@ -214,8 +275,6 @@ void ScreenSpaceGI::DrawSettings()
 
 	///////////////////////////////
 	ImGui::SeparatorText("Denoising");
-
-	ImGui::TextWrapped("At full resolution, you can try disabling denoisers and let TAA handle the noise.");
 
 	if (ImGui::BeginTable("denoisers", 2)) {
 		ImGui::TableNextColumn();
@@ -517,7 +576,7 @@ void ScreenSpaceGI::CompileComputeShaders()
 
 bool ScreenSpaceGI::ShadersOK()
 {
-	return prefilterDepthsCompute && radianceDisoccCompute && giCompute && blurCompute;
+	return texNoise && prefilterDepthsCompute && radianceDisoccCompute && giCompute && blurCompute;
 }
 
 void ScreenSpaceGI::UpdateSB()
@@ -546,10 +605,8 @@ void ScreenSpaceGI::UpdateSB()
 
 		data.TexDim = res;
 		data.RcpTexDim = float2(1.0f) / res;
-		data.SrcFrameDim = dynres;
-		data.RcpSrcFrameDim = float2(1.0f) / dynres;
-		data.OutFrameDim = dynres;
-		data.RcpOutFrameDim = float2(1.0f) / dynres;
+		data.FrameDim = dynres;
+		data.RcpFrameDim = float2(1.0f) / dynres;
 		data.FrameIndex = viewport->uiFrameCount;
 
 		data.NumSlices = settings.NumSlices;
