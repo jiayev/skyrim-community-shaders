@@ -584,7 +584,7 @@ void ScreenSpaceGI::UpdateSB()
 	auto viewport = RE::BSGraphics::State::GetSingleton();
 
 	float2 res = { (float)texRadiance->desc.Width, (float)texRadiance->desc.Height };
-	float2 dynres = res * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale;
+	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
 	static float4x4 prevInvView[2] = {};
@@ -607,7 +607,7 @@ void ScreenSpaceGI::UpdateSB()
 		data.RcpTexDim = float2(1.0f) / res;
 		data.FrameDim = dynres;
 		data.RcpFrameDim = float2(1.0f) / dynres;
-		data.FrameIndex = viewport->uiFrameCount;
+		data.FrameIndex = viewport->frameCount;
 
 		data.NumSlices = settings.NumSlices;
 		data.NumSteps = settings.NumSteps;
@@ -662,15 +662,12 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 
 	//////////////////////////////////////////////////////
 
-	auto viewport = RE::BSGraphics::State::GetSingleton();
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto rts = renderer->GetRuntimeData().renderTargets;
 	auto deferred = Deferred::GetSingleton();
 
-	uint resolution[2] = {
-		(uint)(State::GetSingleton()->screenWidth * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale),
-		(uint)(State::GetSingleton()->screenHeight * viewport->GetRuntimeData().dynamicResolutionCurrentWidthScale)
-	};
+	float2 size = Util::ConvertToDynamic(State::GetSingleton()->screenSize);
+	uint resolution[2] = { (uint)size.x, (uint)size.y };
 
 	std::array<ID3D11ShaderResourceView*, 8> srvs = { nullptr };
 	std::array<ID3D11UnorderedAccessView*, 5> uavs = { nullptr };
