@@ -49,17 +49,17 @@ float GetTerrainHeight(PS_INPUT input, float2 coords, float mipLevels[6], float 
 	pixelOffset[4] = 0;
 	pixelOffset[5] = 0;
 	if (w1.x > 0.0)
-		pixelOffset[0] = w1.x * pow(TexColorSampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[0]).w, blendPower);
+		pixelOffset[0] = w1.x * (0.001 + pow(TexColorSampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[0]).w, blendPower));
 	if (w1.y > 0.0)
-		pixelOffset[1] = w1.y * pow(TexLandColor2Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[1]).w, blendPower);
+		pixelOffset[1] = w1.y * (0.001 + pow(TexLandColor2Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[1]).w, blendPower));
 	if (w1.z > 0.0)
-		pixelOffset[2] = w1.z * pow(TexLandColor3Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[2]).w, blendPower);
+		pixelOffset[2] = w1.z * (0.001 + pow(TexLandColor3Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[2]).w, blendPower));
 	if (w1.w > 0.0)
-		pixelOffset[3] = w1.w * pow(TexLandColor4Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[3]).w, blendPower);
+		pixelOffset[3] = w1.w * (0.001 + pow(TexLandColor4Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[3]).w, blendPower));
 	if (w2.x > 0.0)
-		pixelOffset[4] = w2.x * pow(TexLandColor5Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[4]).w, blendPower);
+		pixelOffset[4] = w2.x * (0.001 + pow(TexLandColor5Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[4]).w, blendPower));
 	if (w2.y > 0.0)
-		pixelOffset[5] = w2.y * pow(TexLandColor6Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[5]).w, blendPower);
+		pixelOffset[5] = w2.y * (0.001 + pow(TexLandColor6Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[5]).w, blendPower));
 	float total = 0;
 	[unroll] for (int i = 0; i < 6; i++)
 	{
