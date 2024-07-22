@@ -38,6 +38,11 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 
 	half3 ambient = albedo * directionalAmbientColor;
 
+	diffuseColor = sRGB2Lin(diffuseColor);
+
+	ambient = sRGB2Lin(max(0, ambient));  // Fixes black blobs on the world map
+	albedo = sRGB2Lin(albedo);
+
 #if defined(SKYLIGHTING)
 	sh2 skylightingSH = SkylightingTexture[dispatchID.xy];
 
@@ -48,21 +53,22 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 
 #if defined(SSGI)
 	half4 ssgiDiffuse = SSGITexture[dispatchID.xy];
+	ssgiDiffuse.rgb *= albedo;
 
 	ambient *= ssgiDiffuse.a;
 
-	diffuseColor = sRGB2Lin(diffuseColor);
-	albedo = sRGB2Lin(albedo);
+	DiffuseAmbientRW[dispatchID.xy] = ambient + ssgiDiffuse.rgb;
 
-	diffuseColor += ssgiDiffuse.rgb * albedo;
-	diffuseColor = Lin2sRGB(diffuseColor);
-
+#	if defined(INTERIOR)
+	diffuseColor *= ssgiDiffuse.a;
+#	endif
+	diffuseColor += ssgiDiffuse.rgb;
 #endif
+
+	ambient = Lin2sRGB(ambient);
+	diffuseColor = Lin2sRGB(diffuseColor);
 
 	diffuseColor += ambient;
 
 	MainRW[dispatchID.xy] = diffuseColor;
-#if defined(SSGI)
-	DiffuseAmbientRW[dispatchID.xy] = ambient;
-#endif
 };

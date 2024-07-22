@@ -28,8 +28,6 @@
 #include "../Common/VR.hlsli"
 #include "common.hlsli"
 
-#define FP_Z (16.5)
-
 #define PI (3.1415926535897932384626433832795)
 #define HALF_PI (1.5707963267948966192313216916398)
 #define RCP_PI (0.31830988618)
@@ -171,18 +169,17 @@ void CalculateGI(
 				float mipLevel = clamp(log2(sampleOffsetLength) - DepthMIPSamplingOffset, 0, 5);
 
 				float SZ = srcWorkingDepth.SampleLevel(samplerPointClamp, sampleUV * frameScale, mipLevel);
-				[branch] if (SZ > DepthFadeRange.y || SZ < FP_Z) continue;
 
 				float3 samplePos = ScreenToViewPosition(sampleScreenPos, SZ, eyeIndex);
-				float3 sampleDelta = samplePos - float3(pixCenterPos);
+				float3 sampleDelta = samplePos - pixCenterPos;
 				float3 sampleHorizonVec = normalize(sampleDelta);
 
 #ifdef BITMASK
 				float3 sampleBackPos = samplePos - viewVec * Thickness;
 				float3 sampleBackHorizonVec = normalize(sampleBackPos - pixCenterPos);
 
-				float angleFront = FastACos(dot(sampleHorizonVec, viewVec));  // either clamp or use float version for whatever reason
-				float angleBack = FastACos(dot(sampleBackHorizonVec, viewVec));
+				float angleFront = ACos(dot(sampleHorizonVec, viewVec));  // either clamp or use float version for whatever reason
+				float angleBack = ACos(dot(sampleBackHorizonVec, viewVec));
 				float2 angleRange = -sideSign * (sideSign == -1 ? float2(angleFront, angleBack) : float2(angleBack, angleFront));
 				angleRange = smoothstep(0, 1, (angleRange + n) * RCP_PI + .5);  // https://discord.com/channels/586242553746030596/586245736413528082/1102228968247144570
 
@@ -205,13 +202,13 @@ void CalculateGI(
 #	ifdef BITMASK
 				float3 sampleBackPosGI = samplePos - viewVec * 500;
 				float3 sampleBackHorizonVecGI = normalize(sampleBackPosGI - pixCenterPos);
-				float angleBackGI = FastACos(dot(sampleBackHorizonVecGI, viewVec));
+				float angleBackGI = ACos(dot(sampleBackHorizonVecGI, viewVec));
 				float2 angleRangeGI = -sideSign * (sideSign == -1 ? float2(angleFront, angleBackGI) : float2(angleBackGI, angleFront));
 				angleRangeGI = smoothstep(0, 1, (angleRangeGI + n) * RCP_PI + .5);  // https://discord.com/channels/586242553746030596/586245736413528082/1102228968247144570
 
 				uint2 bitsRangeGI = uint2(round(angleRangeGI.x * 32u), round((angleRangeGI.y - angleRangeGI.x) * 32u));
 				uint maskedBitsGI = ((1 << bitsRangeGI.y) - 1) << bitsRangeGI.x;
-				bool checkGI = maskedBitsGI;
+				uint checkGI = maskedBitsGI & ~bitmaskGI;
 #	else
 				bool checkGI = shc > horizonCos;
 #	endif
@@ -230,7 +227,7 @@ void CalculateGI(
 					if (frontBackMult > 0.f) {
 						float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * frameScale, mipLevel).rgb * frontBackMult * giBoost;
 
-						sampleRadiance *= countbits(maskedBitsGI & ~bitmaskGI) * 0.03125;  // 1/32
+						sampleRadiance *= countbits(checkGI) * 0.03125;  // 1/32
 						sampleRadiance *= dot(viewspaceNormal, sampleHorizonVec);
 						sampleRadiance = max(0, sampleRadiance);
 
@@ -240,8 +237,8 @@ void CalculateGI(
 					if (frontBackMult > 0.f) {
 						float3 newSampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * frameScale, mipLevel).rgb * frontBackMult * giBoost;
 
-						float anglePrev = n + sideSign * HALF_PI - FastACos(horizonCos);  // float version is closest acos
-						float angleCurr = n + sideSign * HALF_PI - FastACos(shc);
+						float anglePrev = n + sideSign * HALF_PI - ACos(horizonCos);
+						float angleCurr = n + sideSign * HALF_PI - ACos(shc);
 						float2 integralFactor = 0.5 * float2(dot(directionVec.xy, viewspaceNormal.xy) * sideSign, viewspaceNormal.z);
 						newSampleRadiance *= IlIntegral(integralFactor, anglePrev, angleCurr);
 
@@ -293,8 +290,8 @@ void CalculateGI(
 #	endif
 
 		// line ~27, unrolled
-		float h0 = -FastACos(horizonCos1);  // same, breaks stuff
-		float h1 = FastACos(horizonCos0);
+		float h0 = -ACos(horizonCos1);  // same, breaks stuff
+		float h1 = ACos(horizonCos0);
 #	if 0  // we can skip clamping for a tiny little bit more performance
             h0 = n + clamp( h0-n, -HALF_PI, HALF_PI );
             h1 = n + clamp( h1-n, -HALF_PI, HALF_PI );
@@ -330,7 +327,6 @@ void CalculateGI(
 #ifdef GI
 	radiance *= rcpNumSlices;
 	radiance = lerp(radiance, 0, depthFade);
-	radiance *= GIStrength;
 #endif
 
 #ifdef BENT_NORMAL
@@ -350,6 +346,8 @@ void CalculateGI(
 	const uint halfWidth = uint(FrameDim.x) >> 1;
 	const bool useHistory = dtid.x >= halfWidth;
 	pxCoord.x = (pxCoord.x % halfWidth) * 2 + (dtid.y + FrameIndex + useHistory) % 2;
+#else
+	const static bool useHistory = false;
 #endif
 
 	float2 uv = (pxCoord + .5f) * RcpFrameDim;
@@ -374,32 +372,28 @@ void CalculateGI(
 	float3 bentNormal = viewspaceNormal;
 
 	bool needGI = viewspaceZ > FP_Z && viewspaceZ < DepthFadeRange.y;
-#if defined(HALF_RATE)
-	needGI = needGI && !useHistory;
-#endif
-	[branch] if (needGI)
-		CalculateGI(
-			pxCoord, uv, viewspaceZ, viewspaceNormal,
-			currGIAO, bentNormal);
-
-#ifdef BENT_NORMAL
-	outBentNormal[pxCoord] = EncodeNormal(bentNormal);
-#endif
+	if (needGI) {
+		if (!useHistory)
+			CalculateGI(
+				pxCoord, uv, viewspaceZ, viewspaceNormal,
+				currGIAO, bentNormal);
 
 #ifdef TEMPORAL_DENOISER
-	if (viewspaceZ < DepthFadeRange.y) {
-		float lerpFactor = 0;
+		float lerpFactor = rcp(srcAccumFrames[pxCoord] * 255);
 #	if defined(HALF_RATE)
-		if (!useHistory)
+		if (useHistory && lerpFactor != 1)
+			lerpFactor = 0;
 #	endif
-			lerpFactor = rcp(srcAccumFrames[pxCoord] * 255);
 
 		float4 prevGIAO = srcPrevGI[pxCoord];
 		currGIAO = lerp(prevGIAO, currGIAO, lerpFactor);
-	}
 #endif
+	}
 
 	currGIAO = any(ISNAN(currGIAO)) ? float4(0, 0, 0, 1) : currGIAO;
 
 	outGI[pxCoord] = currGIAO;
+#ifdef BENT_NORMAL
+	outBentNormal[pxCoord] = EncodeNormal(bentNormal);
+#endif
 }

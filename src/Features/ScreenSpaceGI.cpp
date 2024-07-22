@@ -26,7 +26,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableGIBounce,
 	GIBounceFade,
 	GIDistanceCompensation,
-	GICompensationMaxDist,
 	AOPower,
 	GIStrength,
 	DepthDisocclusion,
@@ -161,11 +160,15 @@ void ScreenSpaceGI::DrawSettings()
 
 	ImGui::SliderInt("Slices", (int*)&settings.NumSlices, 1, 10);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("How many directions do the samples take. A greater value reduces noise but is more expensive.");
+		ImGui::Text(
+			"How many directions do the samples take.\n"
+			"Controls noise.");
 
 	ImGui::SliderInt("Steps Per Slice", (int*)&settings.NumSteps, 1, 20);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("How many samples does it take in one direction. A greater value enhances accuracy but is more expensive.");
+		ImGui::Text(
+			"How many samples does it take in one direction.\n"
+			"Controls accuracy of lighting, and noise when effect radius is large.");
 
 	if (showAdvanced) {
 		ImGui::SliderFloat("MIP Sampling Offset", &settings.DepthMIPSamplingOffset, 2.f, 6.f, "%.2f");
@@ -226,15 +229,9 @@ void ScreenSpaceGI::DrawSettings()
 		auto _ = DisableGuard(!settings.EnableGI);
 
 		if (showAdvanced) {
-			ImGui::SliderFloat("GI Distance Compensation", &settings.GIDistanceCompensation, 0.0f, 9.0f, "%.1f");
+			ImGui::SliderFloat("GI Distance Compensation", &settings.GIDistanceCompensation, -5.0f, 5.0f, "%.1f");
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text(
-					"Brighten up further radiance samples that are otherwise too weak. Creates a wider GI look.\n"
-					"If using bitmask, this value should be roughly inverse to thickness.");
-
-			ImGui::SliderFloat("GI Compensation Distance", &settings.GICompensationMaxDist, 10.0f, 500.0f, "%.1f game units");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("The distance of maximal compensation/brightening.");
+				ImGui::Text("Brighten/Dimming further radiance samples.");
 
 			ImGui::Separator();
 		}
@@ -251,9 +248,7 @@ void ScreenSpaceGI::DrawSettings()
 			percentageSlider("Ambient Bounce Strength", &settings.GIBounceFade);
 			ImGui::Unindent();
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text(
-					"How much of this frame's ambient+GI get carried to the next frame as source.\n"
-					"If you have a very high GI strength, you may want to turn this down to prevent feedback loops that bleaches everything.");
+				ImGui::Text("How much of this frame's ambient+GI get carried to the next frame as source.");
 		}
 
 		if (showAdvanced) {
@@ -301,31 +296,25 @@ void ScreenSpaceGI::DrawSettings()
 		{
 			auto _ = DisableGuard(!settings.EnableTemporalDenoiser && !(settings.EnableGI || settings.EnableGIBounce));
 
-			percentageSlider("Movement Disocclusion", &settings.DepthDisocclusion, 0.f, 30.f);
+			percentageSlider("Movement Disocclusion", &settings.DepthDisocclusion, 0.f, 10.f);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text(
 					"If a pixel has moved too far from the last frame, its radiance will not be carried to this frame.\n"
 					"Lower values are stricter.");
-
-			// ImGui::SliderFloat("Normal Disocclusion", &settings.NormalDisocclusion, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-			// if (auto _tt = Util::HoverTooltipWrapper())
-			// 	ImGui::Text(
-			// 		"If a pixel's normal deviates too much from the last frame, its radiance will not be carried to this frame.\n"
-			// 		"Higher values are stricter.");
 
 			ImGui::Separator();
 		}
 
 		{
 			auto _ = DisableGuard(!settings.EnableBlur);
-			ImGui::SliderFloat("Blur Radius", &settings.BlurRadius, 0.f, 8.f, "%.1f px");
+			ImGui::SliderFloat("Blur Radius", &settings.BlurRadius, 0.f, 30.f, "%.1f px");
 
 			ImGui::SliderInt("Blur Passes", (int*)&settings.BlurPasses, 1, 3, "%d", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("Blurring repeatedly for x times.");
 
 			if (showAdvanced) {
-				ImGui::SliderFloat("Geometry Weight", &settings.DistanceNormalisation, 0.f, 3.f, "%.2f");
+				ImGui::SliderFloat("Geometry Weight", &settings.DistanceNormalisation, 0.f, 5.f, "%.2f");
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::Text(
 						"Higher value makes the blur more sensitive to differences in geometry.");
@@ -623,7 +612,7 @@ void ScreenSpaceGI::UpdateSB()
 		data.BackfaceStrength = settings.BackfaceStrength;
 		data.GIBounceFade = settings.GIBounceFade;
 		data.GIDistanceCompensation = settings.GIDistanceCompensation;
-		data.GICompensationMaxDist = settings.GICompensationMaxDist;
+		data.GICompensationMaxDist = settings.EffectRadius;
 
 		data.AOPower = settings.AOPower;
 		data.GIStrength = settings.GIStrength;

@@ -68,26 +68,10 @@ SamplerState samplerLinearClamp : register(s1);
 
 ///////////////////////////////////////////////////////////////////////////////
 
-///////////////////////////////////////////////////////////////////////////////
+// first person z
+#define FP_Z (18.0)
 
 #define ISNAN(x) (!(x < 0.f || x > 0.f || x == 0.f))
-
-// http://h14s.p5r.org/2012/09/0x5f3759df.html, [Drobot2014a] Low Level Optimizations for GCN, https://blog.selfshadow.com/publications/s2016-shading-course/activision/s2016_pbs_activision_occlusion.pdf slide 63
-float FastSqrt(float x)
-{
-	return (asfloat(0x1fbd1df5 + (asint(x) >> 1)));
-}
-
-// input [-1, 1] and output [0, PI], from https://seblagarde.wordpress.com/2014/12/01/inverse-trigonometric-functions-gpu-optimization-for-amd-gcn-architecture/
-float FastACos(float inX)
-{
-	const float PI = 3.141593;
-	const float HALF_PI = 1.570796;
-	float x = abs(inX);
-	float res = -0.156583 * x + HALF_PI;
-	res *= FastSqrt(1.0 - x);
-	return (inX >= 0) ? res : PI - res;
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 

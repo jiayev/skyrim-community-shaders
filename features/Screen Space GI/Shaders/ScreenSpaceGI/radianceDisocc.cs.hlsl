@@ -25,8 +25,6 @@ void readHistory(
 	uint eyeIndex, float curr_depth, float3 curr_pos, int2 pixCoord, float bilinear_weight,
 	inout half4 prev_gi, inout half3 prev_gi_albedo, inout float accum_frames, inout float wsum)
 {
-	const float2 frameScale = FrameDim * RcpTexDim;
-
 	const float2 uv = (pixCoord + .5) * RcpFrameDim;
 	const float2 screen_pos = ConvertFromStereoUV(uv, eyeIndex);
 	if (any(screen_pos < 0) || any(screen_pos > 1))
@@ -36,7 +34,7 @@ void readHistory(
 	const float prev_depth = prev_geo.x;
 	// const float3 prev_normal = DecodeNormal(prev_geo.yz);  // prev normal is already world
 	float3 prev_pos = ScreenToViewPosition(screen_pos, prev_depth, eyeIndex);
-	prev_pos = ViewToWorldPosition(prev_pos, PrevInvViewMat[eyeIndex]);
+	prev_pos = ViewToWorldPosition(prev_pos, PrevInvViewMat[eyeIndex]) + CameraPreviousPosAdjust[eyeIndex];
 
 	float3 delta_pos = curr_pos - prev_pos;
 	// float normal_prod = dot(curr_normal, prev_normal);
@@ -47,7 +45,7 @@ void readHistory(
 	// bool normal_pass = normal_prod * normal_prod > NormalDisocclusion;
 	if (depth_pass) {
 #if defined(GI) && defined(GI_BOUNCE)
-		prev_gi_albedo += sRGB2Lin(srcPrevAmbient[pixCoord]) * bilinear_weight;  // TODO better half res
+		prev_gi_albedo += srcPrevAmbient[pixCoord] * bilinear_weight;
 #endif
 #ifdef TEMPORAL_DENOISER
 		prev_gi += srcPrevGI[pixCoord] * bilinear_weight;
@@ -59,8 +57,6 @@ void readHistory(
 
 [numthreads(8, 8, 1)] void main(const uint2 pixCoord
 								: SV_DispatchThreadID) {
-	const float2 frameScale = FrameDim * RcpTexDim;
-
 	const float2 uv = (pixCoord + .5) * RcpFrameDim;
 	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
 	const float2 screen_pos = ConvertFromStereoUV(uv, eyeIndex);
@@ -77,43 +73,40 @@ void readHistory(
 	float wsum = 0;
 
 	const float curr_depth = srcCurrDepth[pixCoord];
+
+	if (curr_depth < FP_Z) {
+		outRadianceDisocc[pixCoord] = half3(0, 0, 0);
+		outAccumFrames[pixCoord] = 1.0 / 255.0;
+		outRemappedPrevGI[pixCoord] = half4(0, 0, 0, 1);
+		return;
+	}
+
 #ifdef REPROJECTION
 	if ((curr_depth <= DepthFadeRange.y) && !(any(prev_screen_pos < 0) || any(prev_screen_pos > 1))) {
 		// float3 curr_normal = DecodeNormal(srcCurrNormal[pixCoord];
 		// curr_normal = ViewToWorldVector(curr_normal, CameraViewInverse[eyeIndex]);
 		float3 curr_pos = ScreenToViewPosition(screen_pos, curr_depth, eyeIndex);
-		curr_pos = ViewToWorldPosition(curr_pos, CameraViewInverse[eyeIndex]);
+		curr_pos = ViewToWorldPosition(curr_pos, CameraViewInverse[eyeIndex]) + CameraPosAdjust[eyeIndex];
 
 		float2 prev_px_coord = prev_uv * FrameDim;
 		int2 prev_px_lu = floor(prev_px_coord - 0.5);
 		float2 bilinear_weights = prev_px_coord - 0.5 - prev_px_lu;
-		{
-			int2 px = prev_px_lu;
-			float w = (1 - bilinear_weights.x) * (1 - bilinear_weights.y);
-			readHistory(eyeIndex, curr_depth, curr_pos, px, w,
-				prev_gi, prev_gi_albedo, accum_frames, wsum);
-		}
-		{
-			int2 px = prev_px_lu + uint2(1, 0);
-			float w = bilinear_weights.x * (1 - bilinear_weights.y);
-			readHistory(eyeIndex, curr_depth, curr_pos, px, w,
-				prev_gi, prev_gi_albedo, accum_frames, wsum);
-		}
-		{
-			int2 px = prev_px_lu + uint2(0, 1);
-			float w = (1 - bilinear_weights.x) * bilinear_weights.y;
-			readHistory(eyeIndex, curr_depth, curr_pos, px, w,
-				prev_gi, prev_gi_albedo, accum_frames, wsum);
-		}
-		{
-			int2 px = prev_px_lu + uint2(1, 1);
-			float w = bilinear_weights.x * bilinear_weights.y;
-			readHistory(eyeIndex, curr_depth, curr_pos, px, w,
-				prev_gi, prev_gi_albedo, accum_frames, wsum);
-		}
+
+		readHistory(eyeIndex, curr_depth, curr_pos,
+			prev_px_lu, (1 - bilinear_weights.x) * (1 - bilinear_weights.y),
+			prev_gi, prev_gi_albedo, accum_frames, wsum);
+		readHistory(eyeIndex, curr_depth, curr_pos,
+			prev_px_lu + uint2(1, 0), bilinear_weights.x * (1 - bilinear_weights.y),
+			prev_gi, prev_gi_albedo, accum_frames, wsum);
+		readHistory(eyeIndex, curr_depth, curr_pos,
+			prev_px_lu + uint2(0, 1), (1 - bilinear_weights.x) * bilinear_weights.y,
+			prev_gi, prev_gi_albedo, accum_frames, wsum);
+		readHistory(eyeIndex, curr_depth, curr_pos,
+			prev_px_lu + uint2(1, 1), bilinear_weights.x * bilinear_weights.y,
+			prev_gi, prev_gi_albedo, accum_frames, wsum);
 
 		if (wsum > 1e-2) {
-			float rcpWsum = rcp(wsum + 1e-2);
+			float rcpWsum = rcp(wsum + 1e-10);
 #	ifdef TEMPORAL_DENOISER
 			prev_gi *= rcpWsum;
 			accum_frames *= rcpWsum;
@@ -127,7 +120,7 @@ void readHistory(
 
 	half3 radiance = 0;
 #ifdef GI
-	radiance = sRGB2Lin(srcDiffuse[pixCoord].rgb);
+	radiance = sRGB2Lin(srcDiffuse[pixCoord].rgb * GIStrength);
 #	ifdef GI_BOUNCE
 	radiance += prev_gi_albedo.rgb * GIBounceFade;
 #	endif
