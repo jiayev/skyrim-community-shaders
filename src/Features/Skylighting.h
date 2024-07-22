@@ -3,6 +3,7 @@
 #include "Buffer.h"
 #include "Feature.h"
 #include "State.h"
+#include "Util.h"
 
 struct Skylighting : Feature
 {
@@ -37,29 +38,41 @@ public:
 
 	ID3D11ComputeShader* skylightingCS = nullptr;
 	ID3D11ComputeShader* skylightingShadowMapCS = nullptr;
+	ID3D11ComputeShader* skylightingBlurHorizontalCS = nullptr;
+	ID3D11ComputeShader* skylightingBlurVerticalCS = nullptr;
+
 	ID3D11ComputeShader* GetSkylightingCS();
 	ID3D11ComputeShader* GetSkylightingShadowMapCS();
+	ID3D11ComputeShader* GetSkylightingBlurHorizontalCS();
+	ID3D11ComputeShader* GetSkylightingBlurVerticalCS();
 
 	ID3D11SamplerState* comparisonSampler;
+
+	ID3D11PixelShader* GetFoliagePS();
+	ID3D11PixelShader* foliagePixelShader = nullptr;
+
+	bool foliage = false;
+	void UpdateFoliage(RE::BSRenderPass* a_pass);
+
+	void SkylightingShaderHacks();
 
 	struct alignas(16) PerFrameCB
 	{
 		REX::W32::XMFLOAT4X4 OcclusionViewProj;
+		float4 EyePosition;
 		float4 ShadowDirection;
-		float4 Parameters;
+		float4 BufferDim;
+		float4 CameraData;
+		uint FrameCount;
+		uint pad0[3];
 	};
 
 	struct Settings
 	{
 		bool EnableSkylighting = true;
 		bool HeightSkylighting = true;
-		float AmbientDiffuseBlend = 0.5;
-		float DirectionalPow = 5.0;
-		float AmbientMult = 1.0;
-		float SkyMult = 1.0;
 		float MinimumBound = 128;
 		bool RenderTrees = false;
-		float RenderDistance = 10000;
 	};
 
 	Settings settings;
@@ -69,10 +82,14 @@ public:
 	virtual void ClearShaderCache() override;
 
 	Texture2D* skylightingTexture = nullptr;
+	Texture2D* skylightingTempTexture = nullptr;
 
 	ID3D11ShaderResourceView* noiseView = nullptr;
 
 	Texture2D* occlusionTexture = nullptr;
+
+	RE::NiPoint3 eyePosition;
+	std::chrono::time_point<std::chrono::system_clock> lastUpdateTimer = std::chrono::system_clock::now();
 
 	struct BSParticleShaderRainEmitter
 	{
@@ -95,6 +112,7 @@ public:
 	}
 
 	void Compute();
+	void ComputeBlur(bool a_horizontal);
 
 	enum class ShaderTechnique
 	{
@@ -325,7 +343,7 @@ public:
 
 			precipitationOcclusionMapRenderPassList->Clear();
 
-			if (!GetSingleton()->inOcclusion && property->flags.any(kSkinned, kTreeAnim))
+			if (!GetSingleton()->inOcclusion && property->flags.any(kSkinned, kTreeAnim) && !GetSingleton()->settings.RenderTrees)
 				return precipitationOcclusionMapRenderPassList;
 
 			if (property->flags.any(kSkinned) && !property->flags.any(kTreeAnim))
@@ -387,46 +405,59 @@ public:
 				} else {
 					doPrecip = true;
 
-					auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-					auto& precipitation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
-					RE::BSGraphics::DepthStencilData precipitationCopy = precipitation;
+					auto singleton = GetSingleton();
 
-					precipitation.depthSRV = GetSingleton()->occlusionTexture->srv.get();
-					precipitation.texture = GetSingleton()->occlusionTexture->resource.get();
-					precipitation.views[0] = GetSingleton()->occlusionTexture->dsv.get();
+					std::chrono::time_point<std::chrono::system_clock> currentTimer = std::chrono::system_clock::now();
+					auto timePassed = std::chrono::duration_cast<std::chrono::milliseconds>(currentTimer - singleton->lastUpdateTimer).count();
 
-					static float& PrecipitationShaderCubeSize = (*(float*)REL::RelocationID(515451, 401590).address());
-					float originalPrecipitationShaderCubeSize = PrecipitationShaderCubeSize;
+					if (timePassed >= (1000.0f / 30.0f)) {
+						singleton->lastUpdateTimer = currentTimer;
 
-					static RE::NiPoint3& PrecipitationShaderDirection = (*(RE::NiPoint3*)REL::RelocationID(515509, 401648).address());
-					RE::NiPoint3 originalParticleShaderDirection = PrecipitationShaderDirection;
+						singleton->eyePosition = Util::GetEyePosition(0);
 
-					GetSingleton()->inOcclusion = true;
-					PrecipitationShaderCubeSize = GetSingleton()->settings.RenderDistance;
+						auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+						auto& precipitation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
+						RE::BSGraphics::DepthStencilData precipitationCopy = precipitation;
 
-					float originaLastCubeSize = precip->lastCubeSize;
-					precip->lastCubeSize = PrecipitationShaderCubeSize;
+						precipitation.depthSRV = singleton->occlusionTexture->srv.get();
+						precipitation.texture = singleton->occlusionTexture->resource.get();
+						precipitation.views[0] = singleton->occlusionTexture->dsv.get();
 
-					PrecipitationShaderDirection = { 0, 0, -1 };
+						static float& PrecipitationShaderCubeSize = (*(float*)REL::RelocationID(515451, 401590).address());
+						float originalPrecipitationShaderCubeSize = PrecipitationShaderCubeSize;
 
-					Precipitation_SetupMask(precip);
-					Precipitation_SetupMask(precip);  // Calling setup twice fixes an issue when it is raining
+						static RE::NiPoint3& PrecipitationShaderDirection = (*(RE::NiPoint3*)REL::RelocationID(515509, 401648).address());
+						RE::NiPoint3 originalParticleShaderDirection = PrecipitationShaderDirection;
 
-					BSParticleShaderRainEmitter* rain = new BSParticleShaderRainEmitter;
-					Precipitation_RenderMask(precip, rain);
-					GetSingleton()->inOcclusion = false;
-					RE::BSParticleShaderCubeEmitter* cube = (RE::BSParticleShaderCubeEmitter*)rain;
-					GetSingleton()->viewProjMat = cube->occlusionProjection;
+						singleton->inOcclusion = true;
+						PrecipitationShaderCubeSize = 10000;
 
-					cube = nullptr;
-					delete rain;
+						float originaLastCubeSize = precip->lastCubeSize;
+						precip->lastCubeSize = PrecipitationShaderCubeSize;
 
-					PrecipitationShaderCubeSize = originalPrecipitationShaderCubeSize;
-					precip->lastCubeSize = originaLastCubeSize;
+						PrecipitationShaderDirection = { 0, 0, -1 };
 
-					PrecipitationShaderDirection = originalParticleShaderDirection;
+						Precipitation_SetupMask(precip);
+						Precipitation_SetupMask(precip);  // Calling setup twice fixes an issue when it is raining
 
-					precipitation = precipitationCopy;
+						BSParticleShaderRainEmitter* rain = new BSParticleShaderRainEmitter;
+						Precipitation_RenderMask(precip, rain);
+						singleton->inOcclusion = false;
+						RE::BSParticleShaderCubeEmitter* cube = (RE::BSParticleShaderCubeEmitter*)rain;
+						singleton->viewProjMat = cube->occlusionProjection;
+
+						cube = nullptr;
+						delete rain;
+
+						PrecipitationShaderCubeSize = originalPrecipitationShaderCubeSize;
+						precip->lastCubeSize = originaLastCubeSize;
+
+						PrecipitationShaderDirection = originalParticleShaderDirection;
+
+						precipitation = precipitationCopy;
+
+						singleton->foliage = false;
+					}
 				}
 			} else {
 				func();
@@ -436,12 +467,12 @@ public:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct BSWaterShader_SetupMaterial
+	struct BSUtilityShader_SetupGeometry
 	{
-		static void thunk(RE::BSShader* This, RE::BSWaterShaderMaterial* a_material)
+		static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 		{
-			//GetSingleton()->Bind();
-			func(This, a_material);
+			GetSingleton()->UpdateFoliage(Pass);
+			func(This, Pass, RenderFlags);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -453,7 +484,7 @@ public:
 			logger::info("[SKYLIGHTING] Hooking BSLightingShaderProperty::GetPrecipitationOcclusionMapRenderPassesImp");
 			stl::write_vfunc<0x2D, BSLightingShaderProperty_GetPrecipitationOcclusionMapRenderPassesImpl>(RE::VTABLE_BSLightingShaderProperty[0]);
 			stl::write_thunk_call<Main_Precipitation_RenderOcclusion>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x3A1, 0x3A1, 0x2FA));
-			stl::write_vfunc<0x4, BSWaterShader_SetupMaterial>(RE::VTABLE_BSWaterShader[0]);
+			stl::write_vfunc<0x6, BSUtilityShader_SetupGeometry>(RE::VTABLE_BSUtilityShader[0]);
 		}
 	};
 

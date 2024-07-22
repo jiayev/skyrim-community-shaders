@@ -5,14 +5,6 @@
 // http://www.diva-portal.org/smash/get/diva2:831762/FULLTEXT01.pdf
 // https://bartwronski.files.wordpress.com/2014/03/ac4_gdc.pdf
 
-struct PerPassWaterParallax
-{
-	bool EnableWaterParallax;
-	float pad[3];
-};
-
-StructuredBuffer<PerPassWaterParallax> perPassWaterParallax : register(t72);
-
 float GetMipLevel(float2 coords, Texture2D<float4> tex)
 {
 	// Compute the current gradients:
@@ -47,8 +39,6 @@ float GetHeight(PS_INPUT input, float2 currentOffset, float3 normalScalesRcp, fl
 
 float2 GetParallaxOffset(PS_INPUT input, float3 normalScalesRcp)
 {
-	if (!perPassWaterParallax[0].EnableWaterParallax)
-		return 0.0.xx;
 	float3 viewDirection = normalize(input.WPosition.xyz);
 	float2 parallaxOffsetTS = viewDirection.xy / -viewDirection.z;
 
@@ -60,7 +50,7 @@ float2 GetParallaxOffset(PS_INPUT input, float3 normalScalesRcp)
 	mipLevels.y = GetMipLevel(input.TexCoord1.zw, Normals02Tex);
 	mipLevels.z = GetMipLevel(input.TexCoord2.xy, Normals03Tex);
 
-	float stepSize = rcp(lerp(32.0, 1.0, dot(viewDirection, float3(0, 0, -1))));
+	float stepSize = 16.0;
 	float currBound = 0.0;
 	float currHeight = 1.0;
 	float prevHeight = 1.0;

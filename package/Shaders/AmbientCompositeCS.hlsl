@@ -8,7 +8,8 @@ Texture2D<unorm half3> AlbedoTexture : register(t0);
 Texture2D<unorm half3> NormalRoughnessTexture : register(t1);
 
 #if defined(SKYLIGHTING)
-Texture2D<half2> SkylightingTexture : register(t2);
+#	include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
+Texture2D<float4> SkylightingTexture : register(t2);
 #endif
 
 #if defined(SSGI)
@@ -37,21 +38,26 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 
 	half3 ambient = albedo * directionalAmbientColor;
 
-	diffuseColor = sRGB2Lin(diffuseColor);
-	ambient = sRGB2Lin(max(0, ambient));  // Fixes black blobs on the world map
-	albedo = sRGB2Lin(albedo);
-
 #if defined(SKYLIGHTING)
-	half skylightingDiffuse = SkylightingTexture[dispatchID.xy].x;
-	ambient *= skylightingDiffuse;
+	sh2 skylightingSH = SkylightingTexture[dispatchID.xy];
+
+	half skylighting = saturate(shUnproject(skylightingSH, normalWS));
+
+	ambient *= lerp(0.25, 1.0, skylighting);
 #endif
+
 #if defined(SSGI)
 	half4 ssgiDiffuse = SSGITexture[dispatchID.xy];
-	ambient = ambient * ssgiDiffuse.a + ssgiDiffuse.rgb * albedo;
-#endif
 
+	ambient *= ssgiDiffuse.a;
+
+	diffuseColor = sRGB2Lin(diffuseColor);
+	albedo = sRGB2Lin(albedo);
+
+	diffuseColor += ssgiDiffuse.rgb * albedo;
 	diffuseColor = Lin2sRGB(diffuseColor);
-	ambient = Lin2sRGB(ambient);
+
+#endif
 
 	diffuseColor += ambient;
 

@@ -1,11 +1,13 @@
+#include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 
 Texture2D<unorm float> OcclusionMapSampler : register(t29);
+Texture2D<float4> SkylightingTexture : register(t30);
 
 cbuffer SkylightingData : register(b8)
 {
 	row_major float4x4 OcclusionViewProj;
+	float4 EyePosition;
 	float4 ShadowDirection;
-	float4 Parameters;
 };
 
 float GetVLSkylighting(float3 startPosWS, float3 endPosWS, float2 screenPosition)

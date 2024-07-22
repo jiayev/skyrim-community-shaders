@@ -8,6 +8,7 @@
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
+#include "Features/TerrainBlending.h"
 
 struct DepthStates
 {
@@ -141,10 +142,6 @@ void Deferred::SetupResources()
 	}
 
 	{
-		waterCB = new ConstantBuffer(ConstantBufferDesc<WaterCB>());
-	}
-
-	{
 		D3D11_TEXTURE2D_DESC texDesc;
 		auto mainTex = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 		mainTex.texture->GetDesc(&texDesc);
@@ -234,13 +231,19 @@ void Deferred::UpdateConstantBuffer()
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 
 	auto useTAA = !REL::Module::IsVR() ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled : imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled;
-	data.FrameCount = useTAA ? RE::BSGraphics::State::GetSingleton()->frameCount : 0;
+	data.FrameCount = useTAA ? RE::BSGraphics::State::GetSingleton()->uiFrameCount : 0;
+	data.FrameCountAlwaysActive = RE::BSGraphics::State::GetSingleton()->uiFrameCount;
 
 	deferredCB->Update(data);
 }
 
 void Deferred::PrepassPasses()
 {
+	auto& shaderCache = SIE::ShaderCache::Instance();
+
+	if (!shaderCache.IsEnabled())
+		return;
+
 	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
@@ -418,35 +421,32 @@ void Deferred::DeferredPasses()
 		interior = sky->mode.get() != RE::Sky::Mode::kFull;
 
 	auto skylighting = Skylighting::GetSingleton();
-
-	if (skylighting->loaded)
-		skylighting->Compute();
-
 	auto ssgi = ScreenSpaceGI::GetSingleton();
-
-	if (ssgi->loaded)
-		ssgi->DrawSSGI(prevDiffuseAmbientTexture);
 
 	auto dispatchCount = Util::GetScreenDispatchCount();
 
-	// Ambient Composite
-	{
-		ID3D11ShaderResourceView* srvs[4]{
-			albedo.SRV,
-			normalRoughness.SRV,
-			skylighting->loaded ? skylighting->skylightingTexture->srv.get() : nullptr,
-			ssgi->loaded ? ssgi->texGI[ssgi->outputGIIdx]->srv.get() : nullptr,
-		};
+	if (ssgi->loaded) {
+		ssgi->DrawSSGI(prevDiffuseAmbientTexture);
 
-		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+		// Ambient Composite
+		{
+			ID3D11ShaderResourceView* srvs[4]{
+				albedo.SRV,
+				normalRoughness.SRV,
+				skylighting->loaded ? skylighting->skylightingTexture->srv.get() : nullptr,
+				ssgi->loaded ? ssgi->texGI[ssgi->outputGIIdx]->srv.get() : nullptr,
+			};
 
-		ID3D11UnorderedAccessView* uavs[2]{ main.UAV, prevDiffuseAmbientTexture->uav.get() };
-		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-		auto shader = interior ? GetComputeAmbientCompositeInterior() : GetComputeAmbientComposite();
-		context->CSSetShader(shader, nullptr, 0);
+			ID3D11UnorderedAccessView* uavs[2]{ main.UAV, prevDiffuseAmbientTexture->uav.get() };
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+			auto shader = interior ? GetComputeAmbientCompositeInterior() : GetComputeAmbientComposite();
+			context->CSSetShader(shader, nullptr, 0);
+
+			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+		}
 	}
 
 	auto sss = SubsurfaceScattering::GetSingleton();
@@ -457,6 +457,8 @@ void Deferred::DeferredPasses()
 	if (dynamicCubemaps->loaded)
 		dynamicCubemaps->UpdateCubemap();
 
+	auto terrainBlending = TerrainBlending::GetSingleton();
+
 	// Deferred Composite
 	{
 		ID3D11ShaderResourceView* srvs[10]{
@@ -465,7 +467,7 @@ void Deferred::DeferredPasses()
 			normalRoughness.SRV,
 			masks.SRV,
 			masks2.SRV,
-			dynamicCubemaps->loaded ? depth.depthSRV : nullptr,
+			dynamicCubemaps->loaded ? (terrainBlending->loaded ? terrainBlending->blendedDepthTexture16->srv.get() : depth.depthSRV) : nullptr,
 			dynamicCubemaps->loaded ? reflectance.SRV : nullptr,
 			dynamicCubemaps->loaded ? dynamicCubemaps->envTexture->srv.get() : nullptr,
 			dynamicCubemaps->loaded ? dynamicCubemaps->envReflectionsTexture->srv.get() : nullptr,
@@ -535,11 +537,6 @@ void Deferred::EndDeferred()
 	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);  // Run OMSetRenderTargets again
 
 	deferredPass = false;
-
-	{
-		ID3D11Buffer* buffer = waterCB->CB();
-		context->PSSetConstantBuffers(7, 1, &buffer);
-	}
 }
 
 void Deferred::OverrideBlendStates()
@@ -757,12 +754,4 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 		mainCompositeInteriorCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0");
 	}
 	return mainCompositeInteriorCS;
-}
-
-void Deferred::UpdateWaterMaterial(RE::BSWaterShaderMaterial* a_material)
-{
-	WaterCB updateData{};
-	updateData.ShallowColor = { a_material->shallowWaterColor.red, a_material->shallowWaterColor.green, a_material->shallowWaterColor.blue };
-	updateData.DeepColor = { a_material->deepWaterColor.red, a_material->deepWaterColor.green, a_material->deepWaterColor.blue };
-	waterCB->Update(updateData);
 }

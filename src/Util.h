@@ -27,6 +27,7 @@ namespace Util
 	float4 TryGetWaterData(float offsetX, float offsetY);
 	void DumpSettingsOptions();
 	float4 GetCameraData();
+	bool GetTemporal();
 
 	inline RE::NiPoint3 GetAverageEyePosition()
 	{

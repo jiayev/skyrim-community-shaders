@@ -214,7 +214,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float dirShadow = 1;
 
 #			if defined(SCREEN_SPACE_SHADOWS)
-	dirShadow = GetScreenSpaceShadow(screenUV, screenNoise, viewPosition, eyeIndex);
+	dirShadow = lerp(0.2, 1.0, GetScreenSpaceShadow(screenUV, screenNoise, viewPosition, eyeIndex));
 #			endif
 
 #			if defined(TERRA_OCC)
@@ -232,17 +232,23 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #			endif
 
-	psout.Diffuse.xyz = DirLightColorShared.xyz * baseColor.xyz * 0.5 * lerp(1.0, dirShadow, 0.8);
+	float3 diffuseColor = DirLightColorShared.xyz * dirShadow;
 
+	float3 ddx = ddx_coarse(input.WorldPosition);
+	float3 ddy = ddy_coarse(input.WorldPosition);
+	float3 normal = normalize(cross(ddx, ddy));
+
+#			if !defined(SSGI)
+	float3 directionalAmbientColor = mul(DirectionalAmbientShared, float4(normal, 1.0));
+	diffuseColor += directionalAmbientColor;
+#			endif
+
+	psout.Diffuse.xyz = diffuseColor * baseColor.xyz * 0.5;
 	psout.Diffuse.w = 1;
 
 	psout.MotionVector = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 
-	float3 ddx = ddx_coarse(input.ViewPosition);
-	float3 ddy = ddy_coarse(input.ViewPosition);
-	float3 normal = normalize(cross(ddx, ddy));
-
-	psout.Normal.xy = EncodeNormal(normal);
+	psout.Normal.xy = EncodeNormal(WorldToView(normal, false, eyeIndex));
 	psout.Normal.zw = 0;
 
 	psout.Albedo = float4(baseColor.xyz * 0.5, 1);
@@ -252,10 +258,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 ddy = ddy_coarse(input.WorldPosition);
 	float3 normal = normalize(cross(ddx, ddy));
 
-	float3 directionalAmbientColor = mul(DirectionalAmbientShared, float4(normal, 1.0));
-
-	float3 color = DirLightColorShared.xyz * baseColor.xyz * 0.5;
-	color += baseColor.xyz * 0.5 * directionalAmbientColor;
+	float3 color = baseColor.xyz * (DiffuseColor + AmbientColor);
 	psout.Diffuse = float4(color, 1.0);
 #		endif  // DEFERRED
 #	endif      // RENDER_DEPTH

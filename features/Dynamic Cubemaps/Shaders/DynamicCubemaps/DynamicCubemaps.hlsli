@@ -18,7 +18,7 @@ float3 GetDynamicCubemap(float2 uv, float3 N, float3 VN, float3 V, float roughne
 	float3 R = reflect(-V, N);
 	float NoV = saturate(dot(N, V));
 
-	float level = roughness * 9.0;
+	float level = roughness * 7.0;
 
 	float2 specularBRDF = EnvBRDFApprox(roughness, NoV);
 

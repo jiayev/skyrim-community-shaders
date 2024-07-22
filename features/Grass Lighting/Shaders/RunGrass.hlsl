@@ -296,6 +296,11 @@ float3x3 CalculateTBN(float3 N, float3 p, float2 uv)
 #		include "CloudShadows/CloudShadows.hlsli"
 #	endif
 
+#	if defined(SKYLIGHTING)
+#		define LinearSampler SampBaseSampler
+#		include "Skylighting/Skylighting.hlsli"
+#	endif
+
 PS_OUTPUT main(PS_INPUT input, bool frontFace
 			   : SV_IsFrontFace)
 {
@@ -449,6 +454,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 	diffuseColor += lightsDiffuseColor;
+
+#		if !defined(SSGI)
+	float3 directionalAmbientColor = mul(DirectionalAmbientShared, float4(normal, 1.0));
+
+#			if defined(SKYLIGHTING)
+	float4 skylightingSH = SkylightingTexture.Load(int3(input.HPosition.xy, 0));
+	float skylighting = saturate(shUnproject(skylightingSH, normal));
+	directionalAmbientColor *= lerp(1.0 / 3.0, 1.0, skylighting);
+#			endif
+
+	diffuseColor += directionalAmbientColor;
+#		endif
 
 	diffuseColor *= albedo;
 	diffuseColor += max(0, sss * subsurfaceColor * grassLightingSettings.SubsurfaceScatteringAmount);

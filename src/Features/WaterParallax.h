@@ -11,20 +11,6 @@ public:
 		return &singleton;
 	}
 
-	struct Settings
-	{
-		uint32_t EnableWaterParallax = 1;
-	};
-
-	struct PerPass
-	{
-		Settings settings;
-	};
-
-	Settings settings;
-
-	std::unique_ptr<Buffer> perPass = nullptr;
-
 	virtual inline std::string GetName() { return "Water Parallax"; }
 	virtual inline std::string GetShortName() { return "WaterParallax"; }
 	inline std::string_view GetShaderDefineName() override { return "WATER_PARALLAX"; }

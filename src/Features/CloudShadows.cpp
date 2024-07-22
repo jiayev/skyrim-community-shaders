@@ -92,8 +92,6 @@ void CloudShadows::Prepass()
 
 	auto& context = State::GetSingleton()->context;
 
-	context->GenerateMips(texCubemapCloudOcc->srv.get());
-
 	ID3D11ShaderResourceView* srv = texCubemapCloudOcc->srv.get();
 	context->PSSetShaderResources(27, 1, &srv);
 }
@@ -126,7 +124,7 @@ void CloudShadows::SetupResources()
 		reflections.texture->GetDesc(&texDesc);
 		reflections.SRV->GetDesc(&srvDesc);
 
-		texDesc.Format = srvDesc.Format = DXGI_FORMAT_R16G16B16A16_UNORM;
+		texDesc.Format = srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 
 		texCubemapCloudOcc = new Texture2D(texDesc);
 		texCubemapCloudOcc->CreateSRV(srvDesc);

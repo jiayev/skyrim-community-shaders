@@ -1,9 +1,10 @@
 #include "SubsurfaceScattering.h"
-#include <Util.h>
 
+#include "Deferred.h"
+#include "Features/TerrainBlending.h"
+#include "ShaderCache.h"
 #include "State.h"
-#include <Deferred.h>
-#include <ShaderCache.h>
+#include "Util.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionProfile,
 	BlurRadius, Thickness, Strength, Falloff)
@@ -184,15 +185,18 @@ void SubsurfaceScattering::DrawSSS()
 		context->CSSetConstantBuffers(1, 1, buffer);
 
 		auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+
 		auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 		auto mask = renderer->GetRuntimeData().renderTargets[MASKS];
 
 		ID3D11UnorderedAccessView* uav = blurHorizontalTemp->uav.get();
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
+		auto terrainBlending = TerrainBlending::GetSingleton();
+
 		ID3D11ShaderResourceView* views[3];
 		views[0] = main.SRV;
-		views[1] = depth.depthSRV;
+		views[1] = terrainBlending->loaded ? terrainBlending->blendedDepthTexture16->srv.get() : depth.depthSRV,
 		views[2] = mask.SRV;
 
 		context->CSSetShaderResources(0, 3, views);
@@ -236,15 +240,8 @@ void SubsurfaceScattering::DrawSSS()
 	context->CSSetShader(shader, nullptr, 0);
 }
 
-void SubsurfaceScattering::Draw(const RE::BSShader* a_shader, const uint32_t)
+void SubsurfaceScattering::Draw(const RE::BSShader*, const uint32_t)
 {
-	if (a_shader->shaderType.get() == RE::BSShader::Type::Lighting) {
-		if (normalsMode == RE::RENDER_TARGET::kNONE) {
-			auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
-			GET_INSTANCE_MEMBER(renderTargets, shadowState)
-			normalsMode = renderTargets[2];
-		}
-	}
 }
 
 void SubsurfaceScattering::SetupResources()
@@ -293,8 +290,6 @@ void SubsurfaceScattering::SetupResources()
 
 void SubsurfaceScattering::Reset()
 {
-	normalsMode = RE::RENDER_TARGET::kNONE;
-
 	auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
 	shaderManager.characterLightEnabled = SIE::ShaderCache::Instance().IsEnabled() ? settings.EnableCharacterLighting : true;
 

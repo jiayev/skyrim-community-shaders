@@ -59,6 +59,8 @@ public:
 	Texture2D* terrainDepthTexture = nullptr;
 
 	Texture2D* blendedDepthTexture = nullptr;
+	Texture2D* blendedDepthTexture16 = nullptr;
+
 	Texture2D* terrainOffsetTexture = nullptr;
 
 	RE::BSGraphics::DepthStencilData terrainDepth;

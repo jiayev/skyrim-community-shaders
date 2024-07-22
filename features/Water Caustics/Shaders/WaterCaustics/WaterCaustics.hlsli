@@ -1,11 +1,4 @@
-struct PerPassWaterCaustics
-{
-	bool EnableWaterCaustics;
-	float pad[3];
-};
-
 Texture2D<float4> WaterCaustics : register(t70);
-StructuredBuffer<PerPassWaterCaustics> perPassWaterCaustics : register(t71);
 
 float2 PanCausticsUV(float2 uv, float speed, float tiling)
 {
@@ -15,7 +8,6 @@ float2 PanCausticsUV(float2 uv, float speed, float tiling)
 float3 SampleCaustics(float2 uv)
 {
 	return WaterCaustics.Sample(SampColorSampler, uv).r;
-	;
 }
 
 float3 ComputeWaterCaustics(float2 uv)

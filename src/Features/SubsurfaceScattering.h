@@ -65,8 +65,6 @@ public:
 	ID3D11ComputeShader* horizontalSSBlur = nullptr;
 	ID3D11ComputeShader* verticalSSBlur = nullptr;
 
-	RE::RENDER_TARGET normalsMode = RE::RENDER_TARGET::kNONE;
-
 	virtual inline std::string GetName() { return "Subsurface Scattering"; }
 	virtual inline std::string GetShortName() { return "SubsurfaceScattering"; }
 	inline std::string_view GetShaderDefineName() override { return "SSS"; }

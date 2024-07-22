@@ -1433,6 +1433,25 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #	endif
 
+#	if defined(FOLIAGE)
+
+	// Randomly skips rendering foliage to depth to simulate transparency
+	float2 depthUV = (input.PositionCS.xy / 512.0);
+
+	float4 positionCS = float4(2 * float2(depthUV.x, -depthUV.y + 1) - 1, input.PositionCS.z, 1);
+	float4 positionMS = mul(CameraViewProjInverse[eyeIndex], positionCS);
+	positionMS.xyz = positionMS.xyz / positionMS.w;
+
+	positionMS.xyz += CameraPosAdjust[eyeIndex];
+
+	positionMS.xyz *= 0.000001;
+
+	float checkerboard = frac(sin(dot(positionMS.xy, float2(12.9898, 78.233))) * 43758.5453);
+
+	if (checkerboard > 0.5)
+		discard;
+#	endif
+
 	float2 baseTexCoord = 0;
 #	if !(defined(RENDER_DEPTH) && defined(RENDER_SHADOWMASK_ANY)) && SHADOWFILTER != 2
 #		if (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP)) && defined(ALPHA_TEST) && !defined(RENDER_SHADOWMAP_PB)

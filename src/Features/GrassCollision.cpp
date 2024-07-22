@@ -182,9 +182,12 @@ void GrassCollision::Update()
 
 	auto& context = State::GetSingleton()->context;
 
-	ID3D11Buffer* buffers[1];
-	buffers[0] = perFrame->CB();
-	context->VSSetConstantBuffers(5, ARRAYSIZE(buffers), buffers);
+	static Util::FrameChecker frameChecker;
+	if (frameChecker.isNewFrame()) {
+		ID3D11Buffer* buffers[1];
+		buffers[0] = perFrame->CB();
+		context->VSSetConstantBuffers(5, ARRAYSIZE(buffers), buffers);
+	}
 }
 
 void GrassCollision::Load(json& o_json)

@@ -446,8 +446,6 @@ void Menu::DrawSettings()
 
 		ImGui::Separator();
 
-		VariableRateShading::GetSingleton()->DrawSettings();
-
 		if (ImGui::BeginTable("Feature Table", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
 			ImGui::TableSetupColumn("##ListOfFeatures", 0, 3);
 			ImGui::TableSetupColumn("##FeatureConfig", 0, 7);

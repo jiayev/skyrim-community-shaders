@@ -190,22 +190,28 @@ PS_OUTPUT main(PS_INPUT input)
 #	else
 	float sunShadowMask = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0)).x;
 
+	float3 diffuseColor = DirLightColorShared.xyz * sunShadowMask;
+
+	float3 ddx = ddx_coarse(input.WorldPosition);
+	float3 ddy = ddy_coarse(input.WorldPosition);
+	float3 normal = normalize(cross(ddx, ddy));
+
+#		if !defined(SSGI)
+	float3 directionalAmbientColor = mul(DirectionalAmbientShared, float4(normal, 1.0));
+	diffuseColor += directionalAmbientColor;
+#		endif
+
 	float3 albedo = baseColor.xyz * input.DiffuseColor.xyz * 0.5;
 
-	psout.Diffuse.xyz = DirLightColorShared.xyz * sunShadowMask * albedo;
+	psout.Diffuse.xyz = diffuseColor * albedo;
 	psout.Diffuse.w = 1;
 
 	psout.MotionVectors = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, 0);
-
-	float3 ddx = ddx_coarse(input.ViewSpacePosition);
-	float3 ddy = ddy_coarse(input.ViewSpacePosition);
-	float3 normal = normalize(cross(ddx, ddy));
-
-	psout.Normal.xy = EncodeNormal(normal);
-	psout.Normal.zw = float2(0, 0);
+	psout.Normal.xy = EncodeNormal(WorldToView(normal, false, 0));
+	psout.Normal.zw = 0;
 
 	psout.Albedo = float4(albedo, 1);
-	psout.Masks = float4(0, 0, 1, 0);
+	psout.Masks = float4(0, 0, 0, 0);
 #	endif
 
 	return psout;
