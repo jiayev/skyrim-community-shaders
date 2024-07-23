@@ -49,12 +49,12 @@ void State::Draw()
 
 						lastVertexDescriptor = currentVertexDescriptor;
 						lastPixelDescriptor = currentPixelDescriptor;
+					}
 
-						static Util::FrameChecker frameChecker;
-						if (frameChecker.isNewFrame()) {
-							ID3D11Buffer* buffers[3] = { permutationCB->CB(), sharedDataCB->CB(), featureDataCB->CB() };
-							context->PSSetConstantBuffers(4, 3, buffers);
-						}
+					static Util::FrameChecker frameChecker;
+					if (frameChecker.isNewFrame()) {
+						ID3D11Buffer* buffers[3] = { permutationCB->CB(), sharedDataCB->CB(), featureDataCB->CB() };
+						context->PSSetConstantBuffers(4, 3, buffers);
 					}
 
 					if (IsDeveloperMode()) {
