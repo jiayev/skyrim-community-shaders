@@ -78,9 +78,6 @@ public:
 		uint Enabled = false;
 		uint pad0[3]{};
 		float4 CubemapColor{ 1.0f, 1.0f, 1.0f, 0.0f };
-		float scatterCoeffMult = 1;
-		float absorpCoeffMult = 1;
-		uint pad1[2]{};
 	};
 
 	Settings settings;

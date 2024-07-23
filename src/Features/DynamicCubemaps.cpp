@@ -38,9 +38,6 @@ void DynamicCubemaps::DrawSettings()
 			}
 		}
 
-		ImGui::SliderFloat("scatterCoeff", (float*)&settings.scatterCoeffMult, 0.0, 1.0, "%.2f");
-		ImGui::SliderFloat("absorpCoeff", (float*)&settings.absorpCoeffMult, 0.0, 10.0, "%.2f");
-
 		if (ImGui::TreeNodeEx("Dynamic Cubemap Creator", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Text("You must enable creator mode by adding the shader define CREATOR");
 			ImGui::Checkbox("Enable Creator", (bool*)&settings.Enabled);
@@ -406,7 +403,7 @@ void DynamicCubemaps::PostDeferred()
 {
 	auto& context = State::GetSingleton()->context;
 
-	ID3D11ShaderResourceView* views[2] = { envReflectionsTexture->srv.get(), envTexture->srv.get() };
+	ID3D11ShaderResourceView* views[2] = { (activeReflections ? envReflectionsTexture : envTexture)->srv.get(), envTexture->srv.get() };
 	context->PSSetShaderResources(64, 2, views);
 }
 
