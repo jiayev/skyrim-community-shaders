@@ -245,16 +245,14 @@ void LightLimitFix::Reset()
 	std::swap(particleLights, queuedParticleLights);
 }
 
-void LightLimitFix::Load(json& o_json)
+void LightLimitFix::LoadSettings(json& o_json)
 {
-	if (o_json[GetName()].is_object())
-		settings = o_json[GetName()];
-	Feature::Load(o_json);
+	settings = o_json;
 }
 
-void LightLimitFix::Save(json& o_json)
+void LightLimitFix::SaveSettings(json& o_json)
 {
-	o_json[GetName()] = settings;
+	o_json = settings;
 }
 
 void LightLimitFix::RestoreDefaultSettings()
@@ -555,10 +553,6 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, LightLimitFix::Co
 
 	queuedParticleLights.insert({ a_pass->geometry, { color, *config } });
 	return true;
-}
-
-void LightLimitFix::Draw(const RE::BSShader*, const uint32_t)
-{
 }
 
 void LightLimitFix::PostPostLoad()

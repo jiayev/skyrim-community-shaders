@@ -11,8 +11,8 @@ struct CloudShadows : Feature
 		return &singleton;
 	}
 
-	virtual inline std::string GetName() override { return "Cloud Shadows"; }
-	virtual inline std::string GetShortName() override { return "CloudShadows"; }
+	virtual inline std::string GetName() { return "Cloud Shadows"; }
+	virtual inline std::string GetShortName() { return "CloudShadows"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "CLOUD_SHADOWS"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
 
@@ -26,21 +26,10 @@ struct CloudShadows : Feature
 
 	virtual void SetupResources() override;
 
-	virtual inline void Reset() override {}
-
-	virtual void DrawSettings() override;
-
 	void CheckResourcesSide(int side);
 	void ModifySky(RE::BSRenderPass* Pass);
 
 	virtual void Prepass() override;
-
-	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor) override;
-
-	virtual void Load(json& o_json) override;
-	virtual void Save(json& o_json) override;
-
-	virtual void RestoreDefaultSettings() override;
 
 	virtual inline void PostPostLoad() override { Hooks::Install(); }
 
@@ -62,5 +51,5 @@ struct CloudShadows : Feature
 			logger::info("[Cloud Shadows] Installed hooks");
 		}
 	};
-	bool SupportsVR() override { return true; };
+	virtual bool SupportsVR() override { return true; };
 };

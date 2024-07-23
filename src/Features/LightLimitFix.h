@@ -21,7 +21,7 @@ public:
 
 	virtual inline std::string GetName() { return "Light Limit Fix"; }
 	virtual inline std::string GetShortName() { return "LightLimitFix"; }
-	inline std::string_view GetShaderDefineName() override { return "LIGHT_LIMIT_FIX"; }
+	virtual inline std::string_view GetShaderDefineName() override { return "LIGHT_LIMIT_FIX"; }
 
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
@@ -127,16 +127,15 @@ public:
 	Matrix viewMatrixCached[2]{};
 	Matrix viewMatrixInverseCached[2]{};
 
-	virtual void SetupResources();
-	virtual void Reset();
+	virtual void SetupResources() override;
+	virtual void Reset() override;
 
-	virtual void Load(json& o_json);
-	virtual void Save(json& o_json);
+	virtual void LoadSettings(json& o_json) override;
+	virtual void SaveSettings(json& o_json) override;
 
-	virtual void RestoreDefaultSettings();
+	virtual void RestoreDefaultSettings() override;
 
-	virtual void DrawSettings();
-	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
+	virtual void DrawSettings() override;
 
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
@@ -309,7 +308,7 @@ public:
 		}
 	};
 
-	bool SupportsVR() override { return true; };
+	virtual bool SupportsVR() override { return true; };
 };
 
 template <>

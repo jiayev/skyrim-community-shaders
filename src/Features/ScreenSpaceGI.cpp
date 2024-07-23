@@ -344,17 +344,14 @@ void ScreenSpaceGI::DrawSettings()
 	}
 }
 
-void ScreenSpaceGI::Load(json& o_json)
+void ScreenSpaceGI::LoadSettings(json& o_json)
 {
-	if (o_json[GetName()].is_object())
-		settings = o_json[GetName()];
-
-	Feature::Load(o_json);
+	settings = o_json;
 }
 
-void ScreenSpaceGI::Save([[maybe_unused]] json& o_json)
+void ScreenSpaceGI::SaveSettings([[maybe_unused]] json& o_json)
 {
-	o_json[GetName()] = settings;
+	o_json = settings;
 }
 
 void ScreenSpaceGI::SetupResources()

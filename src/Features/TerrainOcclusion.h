@@ -13,7 +13,7 @@ struct TerrainOcclusion : public Feature
 
 	virtual inline std::string GetName() { return "Terrain Occlusion"; }
 	virtual inline std::string GetShortName() { return "TerrainOcclusion"; }
-	inline std::string_view GetShaderDefineName() override { return "TERRA_OCC"; }
+	virtual inline std::string_view GetShaderDefineName() override { return "TERRA_OCC"; }
 	inline bool HasShaderDefine(RE::BSShader::Type type) override
 	{
 		return type == RE::BSShader::Type::Lighting ||
@@ -114,19 +114,15 @@ struct TerrainOcclusion : public Feature
 
 	virtual void DrawSettings() override;
 
-	virtual inline void Reset() override{};
-
-	virtual void Draw(const RE::BSShader*, const uint32_t) override{};
-
 	virtual void Prepass() override;
 	void LoadHeightmap();
 	void Precompute();
 	void UpdateShadow();
 
-	virtual void Load(json& o_json) override;
-	virtual void Save(json&) override;
+	virtual void LoadSettings(json& o_json) override;
+	virtual void SaveSettings(json& o_json) override;
 
 	virtual inline void RestoreDefaultSettings() override { settings = {}; }
 	virtual void ClearShaderCache() override;
-	bool SupportsVR() override { return true; };
+	virtual bool SupportsVR() override { return true; };
 };

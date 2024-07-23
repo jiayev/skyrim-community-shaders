@@ -223,17 +223,14 @@ void ScreenSpaceShadows::Prepass()
 	context->PSSetShaderResources(17, 1, &view);
 }
 
-void ScreenSpaceShadows::Load(json& o_json)
+void ScreenSpaceShadows::LoadSettings(json& o_json)
 {
-	if (o_json[GetName()].is_object())
-		bendSettings = o_json[GetName()];
-
-	Feature::Load(o_json);
+	bendSettings = o_json;
 }
 
-void ScreenSpaceShadows::Save(json& o_json)
+void ScreenSpaceShadows::SaveSettings(json& o_json)
 {
-	o_json[GetName()] = bendSettings;
+	o_json = bendSettings;
 }
 
 void ScreenSpaceShadows::RestoreDefaultSettings()

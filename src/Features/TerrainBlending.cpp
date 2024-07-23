@@ -3,14 +3,6 @@
 #include "State.h"
 #include "Util.h"
 
-void TerrainBlending::DrawSettings()
-{
-}
-
-void TerrainBlending::Draw(const RE::BSShader*, const uint32_t)
-{
-}
-
 ID3D11VertexShader* TerrainBlending::GetTerrainVertexShader()
 {
 	if (!terrainVertexShader) {
@@ -136,23 +128,6 @@ void TerrainBlending::SetupResources()
 		depthStencilDesc.StencilEnable = false;
 		DX::ThrowIfFailed(device->CreateDepthStencilState(&depthStencilDesc, &terrainDepthStencilState));
 	}
-}
-
-void TerrainBlending::Reset()
-{
-}
-
-void TerrainBlending::Load(json& o_json)
-{
-	Feature::Load(o_json);
-}
-
-void TerrainBlending::Save(json&)
-{
-}
-
-void TerrainBlending::RestoreDefaultSettings()
-{
 }
 
 void TerrainBlending::PostPostLoad()

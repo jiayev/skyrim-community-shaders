@@ -25,17 +25,12 @@ struct GrassLighting : Feature
 
 	Settings settings;
 
-	virtual void SetupResources(){};
+	virtual void DrawSettings() override;
 
-	virtual void DrawSettings();
-	virtual void Reset(){};
+	virtual void LoadSettings(json& o_json) override;
+	virtual void SaveSettings(json& o_json) override;
 
-	virtual void Draw(const RE::BSShader*, const uint32_t){};
+	virtual void RestoreDefaultSettings() override;
 
-	virtual void Load(json& o_json);
-	virtual void Save(json& o_json);
-
-	virtual void RestoreDefaultSettings();
-
-	bool SupportsVR() override { return true; };
+	virtual bool SupportsVR() override { return true; };
 };

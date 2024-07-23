@@ -15,8 +15,8 @@ struct ScreenSpaceGI : Feature
 
 	virtual inline std::string GetName() override { return "Screen Space GI"; }
 	virtual inline std::string GetShortName() override { return "ScreenSpaceGI"; }
-	inline std::string_view GetShaderDefineName() override { return "SSGI"; }
-	inline bool HasShaderDefine(RE::BSShader::Type t) override
+	virtual inline std::string_view GetShaderDefineName() override { return "SSGI"; }
+	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override
 	{
 		return t == RE::BSShader::Type::Lighting ||
 		       t == RE::BSShader::Type::Grass ||
@@ -26,16 +26,13 @@ struct ScreenSpaceGI : Feature
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
 
-	virtual void Load(json& o_json) override;
-	virtual void Save(json& o_json) override;
+	virtual void LoadSettings(json& o_json) override;
+	virtual void SaveSettings(json& o_json) override;
 
-	virtual inline void Reset() override{};
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
 	void CompileComputeShaders();
 	bool ShadersOK();
-
-	virtual inline void Draw(const RE::BSShader*, const uint32_t) override{};
 
 	void DrawSSGI(Texture2D* srcPrevAmbient);
 	void UpdateSB();

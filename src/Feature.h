@@ -18,11 +18,10 @@ struct Feature
 	 */
 	virtual bool SupportsVR() { return false; }
 
-	virtual void SetupResources() = 0;
-	virtual void Reset() = 0;
+	virtual void SetupResources() {}
+	virtual void Reset() {}
 
-	virtual void DrawSettings() = 0;
-	virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor) = 0;
+	virtual void DrawSettings() {}
 	virtual void DrawDeferred() {}
 	virtual void DrawPreProcess() {}
 	virtual void Prepass() {}
@@ -30,10 +29,13 @@ struct Feature
 	virtual void DataLoaded() {}
 	virtual void PostPostLoad() {}
 
-	virtual void Load(json& o_json);
-	virtual void Save(json& o_json) = 0;
+	void Load(json& o_json);
+	void Save(json& o_json);
 
-	virtual void RestoreDefaultSettings() = 0;
+	virtual void SaveSettings(json&) {}
+	virtual void LoadSettings(json&) {}
+
+	virtual void RestoreDefaultSettings() {}
 
 	virtual bool ValidateCache(CSimpleIniA& a_ini);
 	virtual void WriteDiskCacheInfo(CSimpleIniA& a_ini);

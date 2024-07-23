@@ -18,10 +18,6 @@ void Skylighting::DrawSettings()
 	ImGui::Checkbox("Render Trees", &settings.RenderTrees);
 }
 
-void Skylighting::Draw(const RE::BSShader*, const uint32_t)
-{
-}
-
 void Skylighting::SetupResources()
 {
 	GetSkylightingCS();
@@ -101,21 +97,14 @@ void Skylighting::SetupResources()
 	}
 }
 
-void Skylighting::Reset()
+void Skylighting::LoadSettings(json& o_json)
 {
+	settings = o_json;
 }
 
-void Skylighting::Load(json& o_json)
+void Skylighting::SaveSettings(json& o_json)
 {
-	if (o_json[GetName()].is_object())
-		settings = o_json[GetName()];
-
-	Feature::Load(o_json);
-}
-
-void Skylighting::Save(json& o_json)
-{
-	o_json[GetName()] = settings;
+	o_json = settings;
 }
 
 void Skylighting::PostPostLoad()

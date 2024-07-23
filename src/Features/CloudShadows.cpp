@@ -5,10 +5,6 @@
 #include "Deferred.h"
 #include "Util.h"
 
-void CloudShadows::DrawSettings()
-{
-}
-
 void CloudShadows::CheckResourcesSide(int side)
 {
 	static Util::FrameChecker frame_checker[6];
@@ -96,19 +92,6 @@ void CloudShadows::Prepass()
 	context->PSSetShaderResources(27, 1, &srv);
 }
 
-void CloudShadows::Draw(const RE::BSShader*, const uint32_t)
-{
-}
-
-void CloudShadows::Load(json& o_json)
-{
-	Feature::Load(o_json);
-}
-
-void CloudShadows::Save(json&)
-{
-}
-
 void CloudShadows::SetupResources()
 {
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -135,8 +118,4 @@ void CloudShadows::SetupResources()
 			DX::ThrowIfFailed(device->CreateRenderTargetView(texCubemapCloudOcc->resource.get(), &rtvDesc, cubemapCloudOccRTVs + i));
 		}
 	}
-}
-
-void CloudShadows::RestoreDefaultSettings()
-{
 }

@@ -410,14 +410,6 @@ void DynamicCubemaps::PostDeferred()
 	context->PSSetShaderResources(64, 2, views);
 }
 
-void DynamicCubemaps::Prepass()
-{
-}
-
-void DynamicCubemaps::Draw(const RE::BSShader*, const uint32_t)
-{
-}
-
 void DynamicCubemaps::SetupResources()
 {
 	GetComputeShaderUpdate();
@@ -529,17 +521,4 @@ void DynamicCubemaps::Reset()
 		activeReflections = sky->mode.get() == RE::Sky::Mode::kFull;
 	else
 		activeReflections = false;
-}
-
-void DynamicCubemaps::Load(json& o_json)
-{
-	Feature::Load(o_json);
-}
-
-void DynamicCubemaps::Save(json&)
-{
-}
-
-void DynamicCubemaps::RestoreDefaultSettings()
-{
 }
