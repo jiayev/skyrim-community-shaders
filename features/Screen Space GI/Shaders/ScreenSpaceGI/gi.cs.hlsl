@@ -350,7 +350,7 @@ void CalculateGI(
 	const static bool useHistory = false;
 #endif
 
-	float2 uv = (pxCoord + .5f) * RcpFrameDim;
+	float2 uv = (pxCoord + .5) * RcpFrameDim;
 	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
 
 	float viewspaceZ = srcWorkingDepth[pxCoord];

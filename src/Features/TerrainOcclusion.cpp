@@ -422,6 +422,10 @@ void TerrainOcclusion::UpdateShadow()
 	if (!IsHeightMapReady())
 		return;
 
+	// don't forget to change NTHREADS in shader!
+	constexpr uint updateLength = 128u;
+	constexpr uint logUpdateLength = std::bit_width(128u) - 1;  // integer log2, https://stackoverflow.com/questions/994593/how-to-do-an-integer-log2-in-c
+
 	auto& context = State::GetSingleton()->context;
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
@@ -454,12 +458,12 @@ void TerrainOcclusion::UpdateShadow()
 			stepMult = 1.f / abs(dirLightPxDir.x);
 			edgePxCoord = dirLightPxDir.x > 0 ? 0 : (width - 1);
 			signDir = dirLightPxDir.x > 0 ? 1 : -1;
-			maxUpdates = ((width - 1) >> 6) + 1;
+			maxUpdates = (width + updateLength - 1) >> logUpdateLength;
 		} else {
 			stepMult = 1.f / abs(dirLightPxDir.y);
 			edgePxCoord = dirLightPxDir.y > 0 ? 0 : height - 1;
 			signDir = dirLightPxDir.y > 0 ? 1 : -1;
-			maxUpdates = ((height - 1) >> 6) + 1;
+			maxUpdates = (height + updateLength - 1) >> logUpdateLength;
 		}
 		dirLightPxDir *= stepMult;
 
@@ -474,7 +478,7 @@ void TerrainOcclusion::UpdateShadow()
 		shadowUpdateCBData.LightDeltaZ = -(lenUV / invScale.z * stepMult) * float2{ std::tan(upperAngle), std::tan(lowerAngle) };
 	}
 
-	shadowUpdateCBData.StartPxCoord = edgePxCoord + signDir * shadowUpdateIdx * 64u;
+	shadowUpdateCBData.StartPxCoord = edgePxCoord + signDir * shadowUpdateIdx * updateLength;
 	shadowUpdateCBData.PxSize = { 1.f / texNormalisedHeight->desc.Width, 1.f / texNormalisedHeight->desc.Height };
 
 	shadowUpdateCB->Update(shadowUpdateCBData);
