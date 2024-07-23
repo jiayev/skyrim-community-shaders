@@ -44,10 +44,6 @@ struct CubemapCreatorSettings
 	float3 pad0;
 
 	float4 CubemapColor;
-
-	float scatterCoeffMult;
-	float absorpCoeffMult;
-	float2 pad1;
 };
 
 struct TerraOccSettings
