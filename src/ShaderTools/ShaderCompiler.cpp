@@ -4,7 +4,7 @@
 
 namespace ShaderCompiler
 {
-	ID3D11PixelShader* RegisterPixelShader(const std::wstring a_filePath)
+	ID3D11PixelShader* RegisterPixelShader(const std::wstring& a_filePath)
 	{
 		REL::Relocation<ID3D11Device**> g_ID3D11Device{ RELOCATION_ID(524729, 411348) };
 
@@ -39,7 +39,7 @@ namespace ShaderCompiler
 		return regShader;
 	}
 
-	ID3D11PixelShader* CompileAndRegisterPixelShader(const std::wstring a_filePath)
+	ID3D11PixelShader* CompileAndRegisterPixelShader(const std::wstring& a_filePath)
 	{
 		return static_cast<ID3D11PixelShader*>(Util::CompileShader(a_filePath.data(), {}, "ps_5_0"));
 	}

@@ -13,8 +13,8 @@ public:
 		return &singleton;
 	}
 
-	virtual inline std::string GetName() { return "Terrain Blending"; }
-	virtual inline std::string GetShortName() { return "TerrainBlending"; }
+	virtual inline std::string GetName() override { return "Terrain Blending"; }
+	virtual inline std::string GetShortName() override { return "TerrainBlending"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "TERRAIN_BLENDING"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
 

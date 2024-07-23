@@ -10,8 +10,8 @@ struct GrassLighting : Feature
 		return &singleton;
 	}
 
-	virtual inline std::string GetName() { return "Grass Lighting"; }
-	virtual inline std::string GetShortName() { return "GrassLighting"; }
+	virtual inline std::string GetName() override { return "Grass Lighting"; }
+	virtual inline std::string GetShortName() override { return "GrassLighting"; }
 
 	struct alignas(16) Settings
 	{

@@ -11,8 +11,8 @@ struct CloudShadows : Feature
 		return &singleton;
 	}
 
-	virtual inline std::string GetName() { return "Cloud Shadows"; }
-	virtual inline std::string GetShortName() { return "CloudShadows"; }
+	virtual inline std::string GetName() override { return "Cloud Shadows"; }
+	virtual inline std::string GetShortName() override { return "CloudShadows"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "CLOUD_SHADOWS"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
 

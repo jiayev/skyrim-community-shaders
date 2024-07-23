@@ -10,8 +10,8 @@ struct ExtendedMaterials : Feature
 		return &singleton;
 	}
 
-	virtual inline std::string GetName() { return "Extended Materials"; }
-	virtual inline std::string GetShortName() { return "ExtendedMaterials"; }
+	virtual inline std::string GetName() override { return "Extended Materials"; }
+	virtual inline std::string GetShortName() override { return "ExtendedMaterials"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "EXTENDED_MATERIALS"; }
 
 	bool HasShaderDefine(RE::BSShader::Type shaderType) override;

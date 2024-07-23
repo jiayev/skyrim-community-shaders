@@ -65,8 +65,8 @@ public:
 	ID3D11ComputeShader* horizontalSSBlur = nullptr;
 	ID3D11ComputeShader* verticalSSBlur = nullptr;
 
-	virtual inline std::string GetName() { return "Subsurface Scattering"; }
-	virtual inline std::string GetShortName() { return "SubsurfaceScattering"; }
+	virtual inline std::string GetName() override { return "Subsurface Scattering"; }
+	virtual inline std::string GetShortName() override { return "SubsurfaceScattering"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "SSS"; }
 
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };

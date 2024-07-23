@@ -24,7 +24,7 @@ namespace SIE
 		@param a_key The key generated from GetShaderString
 		@return A string with a valid BSShader::Type
 		*/
-		static std::string GetTypeFromShaderString(std::string);
+		static std::string GetTypeFromShaderString(const std::string&);
 		constexpr const char* VertexShaderProfile = "vs_5_0";
 		constexpr const char* PixelShaderProfile = "ps_5_0";
 		constexpr const char* ComputeShaderProfile = "cs_5_0";
@@ -1142,7 +1142,7 @@ namespace SIE
 			return result;
 		}
 
-		std::string GetTypeFromShaderString(std::string a_key)
+		std::string GetTypeFromShaderString(const std::string& a_key)
 		{
 			std::string type = "";
 			std::string::size_type pos = a_key.find(':');
@@ -1153,11 +1153,11 @@ namespace SIE
 
 		static ID3DBlob* CompileShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor, bool useDiskCache)
 		{
-			ID3DBlob* shaderBlob = nullptr;
-
 			// check hashmap
 			auto& cache = ShaderCache::Instance();
-			if (shaderBlob = cache.GetCompletedShader(shaderClass, shader, descriptor); shaderBlob) {
+			ID3DBlob* shaderBlob = cache.GetCompletedShader(shaderClass, shader, descriptor);
+
+			if (shaderBlob) {
 				// already compiled before
 				logger::debug("Shader already compiled; using cache: {}", SShaderCache::GetShaderString(shaderClass, shader, descriptor));
 				cache.IncCacheHitTasks();
@@ -1168,8 +1168,7 @@ namespace SIE
 			// check diskcache
 			auto diskPath = GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
 
-			if (!shaderBlob && useDiskCache && std::filesystem::exists(diskPath)) {
-				shaderBlob = nullptr;
+			if (useDiskCache && std::filesystem::exists(diskPath)) {
 				// check build time of cache
 				auto diskCacheTime = cache.UseFileWatcher() ? std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath)) : system_clock::now();
 				if (cache.ShaderModifiedSince(shader.fxpFilename, diskCacheTime)) {
@@ -1313,7 +1312,7 @@ namespace SIE
 			auto shaderPtr = new (rawPtr) RE::BSGraphics::VertexShader;
 			memcpy(rawPtr + sizeof(RE::BSGraphics::VertexShader), shaderData.GetBufferPointer(),
 				shaderData.GetBufferSize());
-			auto newShader = std::unique_ptr<RE::BSGraphics::VertexShader>(shaderPtr);
+			std::unique_ptr<RE::BSGraphics::VertexShader> newShader{ shaderPtr };
 			newShader->byteCodeSize = (uint32_t)shaderData.GetBufferSize();
 			newShader->id = descriptor;
 			newShader->shaderDesc = 0;
@@ -1547,7 +1546,7 @@ namespace SIE
 		return (bool)a_blob;
 	}
 
-	ID3DBlob* ShaderCache::GetCompletedShader(const std::string a_key)
+	ID3DBlob* ShaderCache::GetCompletedShader(const std::string& a_key)
 	{
 		std::string type = SIE::SShaderCache::GetTypeFromShaderString(a_key);
 		UpdateShaderModifiedTime(a_key);
@@ -1577,7 +1576,7 @@ namespace SIE
 		return GetCompletedShader(key);
 	}
 
-	ShaderCompilationTask::Status ShaderCache::GetShaderStatus(const std::string a_key)
+	ShaderCompilationTask::Status ShaderCache::GetShaderStatus(const std::string& a_key)
 	{
 		std::scoped_lock lock{ mapMutex };
 		if (!shaderMap.empty() && shaderMap.contains(a_key)) {
@@ -1880,7 +1879,7 @@ namespace SIE
 		modifiedShaderMap.insert_or_assign(a_shader, a_time);
 	}
 
-	std::chrono::time_point<std::chrono::system_clock> ShaderCache::GetModifiedShaderMapTime(std::string a_shader)
+	std::chrono::time_point<std::chrono::system_clock> ShaderCache::GetModifiedShaderMapTime(const std::string& a_shader)
 	{
 		std::lock_guard lockGuard(modifiedMapMutex);
 		return modifiedShaderMap.at(a_shader);

@@ -403,7 +403,7 @@ void DynamicCubemaps::PostDeferred()
 {
 	auto& context = State::GetSingleton()->context;
 
-	ID3D11ShaderResourceView* views[2] = { (activeReflections ? envReflectionsTexture : envTexture)->srv.get(), envTexture->srv.get() };
+	ID3D11ShaderResourceView* views[2] = { envReflectionsTexture->srv.get(), envTexture->srv.get() };
 	context->PSSetShaderResources(64, 2, views);
 }
 

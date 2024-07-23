@@ -22,8 +22,6 @@ struct Feature
 	virtual void Reset() {}
 
 	virtual void DrawSettings() {}
-	virtual void DrawDeferred() {}
-	virtual void DrawPreProcess() {}
 	virtual void Prepass() {}
 
 	virtual void DataLoaded() {}

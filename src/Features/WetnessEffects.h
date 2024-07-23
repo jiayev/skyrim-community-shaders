@@ -13,8 +13,8 @@ public:
 		return &singleton;
 	}
 
-	virtual inline std::string GetName() { return "Wetness Effects"; }
-	virtual inline std::string GetShortName() { return "WetnessEffects"; }
+	virtual inline std::string GetName() override { return "Wetness Effects"; }
+	virtual inline std::string GetShortName() override { return "WetnessEffects"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "WETNESS_EFFECTS"; }
 
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
@@ -87,15 +87,6 @@ public:
 	virtual void RestoreDefaultSettings() override;
 	float CalculateWeatherTransitionPercentage(float skyCurrentWeatherPct, float beginFade, bool fadeIn);
 	void CalculateWetness(RE::TESWeather* weather, RE::Sky* sky, float seconds, float& wetness, float& puddleWetness);
-
-	virtual inline void PostPostLoad() override { Hooks::Install(); }
-
-	struct Hooks
-	{
-		static void Install()
-		{
-		}
-	};
 
 	virtual bool SupportsVR() override { return true; };
 };

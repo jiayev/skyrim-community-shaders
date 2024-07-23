@@ -11,8 +11,8 @@ struct TerrainOcclusion : public Feature
 		return std::addressof(singleton);
 	}
 
-	virtual inline std::string GetName() { return "Terrain Occlusion"; }
-	virtual inline std::string GetShortName() { return "TerrainOcclusion"; }
+	virtual inline std::string GetName() override { return "Terrain Occlusion"; }
+	virtual inline std::string GetShortName() override { return "TerrainOcclusion"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "TERRA_OCC"; }
 	inline bool HasShaderDefine(RE::BSShader::Type type) override
 	{

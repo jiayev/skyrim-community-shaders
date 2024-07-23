@@ -349,7 +349,7 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 	settings = o_json;
 }
 
-void ScreenSpaceGI::SaveSettings([[maybe_unused]] json& o_json)
+void ScreenSpaceGI::SaveSettings(json& o_json)
 {
 	o_json = settings;
 }

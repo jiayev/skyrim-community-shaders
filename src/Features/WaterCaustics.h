@@ -13,8 +13,8 @@ public:
 
 	ID3D11ShaderResourceView* causticsView;
 
-	virtual inline std::string GetName() { return "Water Caustics"; }
-	virtual inline std::string GetShortName() { return "WaterCaustics"; }
+	virtual inline std::string GetName() override { return "Water Caustics"; }
+	virtual inline std::string GetShortName() override { return "WaterCaustics"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "WATER_CAUSTICS"; }
 
 	bool HasShaderDefine(RE::BSShader::Type shaderType) override;

@@ -138,7 +138,7 @@ void Deferred::SetupResources()
 		uavDesc.Buffer.NumElements = numElements;
 		perShadow->CreateUAV(uavDesc);
 
-		copyShadowCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ShadowTest\\CopyShadowData.hlsl", {}, "cs_5_0");
+		copyShadowCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ShadowTest\\CopyShadowData.hlsl", {}, "cs_5_0"));
 	}
 
 	{
@@ -224,8 +224,8 @@ void Deferred::UpdateConstantBuffer()
 
 	data.CameraData = Util::GetCameraData();
 
-	auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
-	RE::NiTransform& dalcTransform = shaderManager.directionalAmbientTransform;
+	const auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
+	const RE::NiTransform& dalcTransform = shaderManager.directionalAmbientTransform;
 	Util::StoreTransform3x4NoScale(data.DirectionalAmbient, dalcTransform);
 
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
@@ -275,7 +275,7 @@ void Deferred::StartDeferred()
 	if (!setup) {
 		auto& device = State::GetSingleton()->device;
 
-		static BlendStates* blendStates = (BlendStates*)REL::RelocationID(524749, 411364).address();
+		static BlendStates* blendStates = reinterpret_cast<BlendStates*>(REL::RelocationID(524749, 411364).address());
 
 		{
 			forwardBlendStates[0] = blendStates->a[0][0][1][0];
@@ -545,7 +545,7 @@ void Deferred::OverrideBlendStates()
 	if (!setup) {
 		auto& device = State::GetSingleton()->device;
 
-		static BlendStates* blendStates = (BlendStates*)REL::RelocationID(524749, 411364).address();
+		static BlendStates* blendStates = reinterpret_cast<BlendStates*>(REL::RelocationID(524749, 411364).address());
 
 		{
 			forwardBlendStates[0] = blendStates->a[0][0][1][0];
@@ -626,7 +626,7 @@ void Deferred::OverrideBlendStates()
 		setup = true;
 	}
 
-	static BlendStates* blendStates = (BlendStates*)REL::RelocationID(524749, 411364).address();
+	static BlendStates* blendStates = reinterpret_cast<BlendStates*>(REL::RelocationID(524749, 411364).address());
 
 	// Set modified blend states
 	blendStates->a[0][0][1][0] = deferredBlendStates[0];
@@ -645,7 +645,7 @@ void Deferred::OverrideBlendStates()
 
 void Deferred::ResetBlendStates()
 {
-	static BlendStates* blendStates = (BlendStates*)REL::RelocationID(524749, 411364).address();
+	static BlendStates* blendStates = reinterpret_cast<BlendStates*>(REL::RelocationID(524749, 411364).address());
 
 	// Restore modified blend states
 	blendStates->a[0][0][1][0] = forwardBlendStates[0];
@@ -689,15 +689,13 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientComposite()
 
 		std::vector<std::pair<const char*, const char*>> defines;
 
-		auto skylighting = Skylighting::GetSingleton();
-		if (skylighting->loaded)
+		if (Skylighting::GetSingleton()->loaded)
 			defines.push_back({ "SKYLIGHTING", nullptr });
 
-		auto ssgi = ScreenSpaceGI::GetSingleton();
-		if (ssgi->loaded)
+		if (ScreenSpaceGI::GetSingleton()->loaded)
 			defines.push_back({ "SSGI", nullptr });
 
-		ambientCompositeCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0");
+		ambientCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return ambientCompositeCS;
 }
@@ -710,11 +708,10 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientCompositeInterior()
 		std::vector<std::pair<const char*, const char*>> defines;
 		defines.push_back({ "INTERIOR", nullptr });
 
-		auto ssgi = ScreenSpaceGI::GetSingleton();
-		if (ssgi->loaded)
+		if (ScreenSpaceGI::GetSingleton()->loaded)
 			defines.push_back({ "SSGI", nullptr });
 
-		ambientCompositeInteriorCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0");
+		ambientCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return ambientCompositeInteriorCS;
 }
@@ -726,15 +723,13 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 
 		std::vector<std::pair<const char*, const char*>> defines;
 
-		auto dynamicCubemaps = DynamicCubemaps::GetSingleton();
-		if (dynamicCubemaps->loaded)
+		if (DynamicCubemaps::GetSingleton()->loaded)
 			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
 
-		auto skylighting = Skylighting::GetSingleton();
-		if (skylighting->loaded)
+		if (Skylighting::GetSingleton()->loaded)
 			defines.push_back({ "SKYLIGHTING", nullptr });
 
-		mainCompositeCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0");
+		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return mainCompositeCS;
 }
@@ -751,7 +746,7 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 		if (dynamicCubemaps->loaded)
 			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
 
-		mainCompositeInteriorCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0");
+		mainCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return mainCompositeInteriorCS;
 }

@@ -11,8 +11,8 @@ struct GrassCollision : Feature
 		return &singleton;
 	}
 
-	virtual inline std::string GetName() { return "Grass Collision"; }
-	virtual inline std::string GetShortName() { return "GrassCollision"; }
+	virtual inline std::string GetName() override { return "Grass Collision"; }
+	virtual inline std::string GetShortName() override { return "GrassCollision"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "GRASS_COLLISION"; }
 
 	bool HasShaderDefine(RE::BSShader::Type shaderType) override;

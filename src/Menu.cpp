@@ -347,12 +347,12 @@ void Menu::DrawSettings()
 					"The more threads the faster compilation will finish but may make the system unresponsive. ");
 			}
 
-			if (ImGui::SliderInt("Test Interval", (int*)&testInterval, 0, 10)) {
+			if (ImGui::SliderInt("Test Interval", reinterpret_cast<int*>(&testInterval), 0, 10)) {
 				if (testInterval == 0) {
 					inTestMode = false;
 					logger::info("Disabling test mode.");
 					State::GetSingleton()->Load(State::ConfigMode::TEST);  // restore last settings before entering test mode
-				} else if (testInterval && !inTestMode) {
+				} else if (!inTestMode) {
 					logger::info("Saving current settings for test mode and starting test with interval {}.", testInterval);
 					State::GetSingleton()->Save(State::ConfigMode::TEST);
 					inTestMode = true;
@@ -966,8 +966,8 @@ void Menu::ProcessInputEvents(RE::InputEvent* const* a_events)
 		if (it->GetEventType() != RE::INPUT_EVENT_TYPE::kButton && it->GetEventType() != RE::INPUT_EVENT_TYPE::kChar)  // we do not care about non button or char events
 			continue;
 
-		auto event = it->GetEventType() == RE::INPUT_EVENT_TYPE::kButton ? KeyEvent(static_cast<RE::ButtonEvent*>(it)) : it->GetEventType() == RE::INPUT_EVENT_TYPE::kChar ? KeyEvent(static_cast<CharEvent*>(it)) :
-		                                                                                                                                                                     KeyEvent(nullptr);  // last ternary operation should never be taken
+		auto event = it->GetEventType() == RE::INPUT_EVENT_TYPE::kButton ? KeyEvent(static_cast<RE::ButtonEvent*>(it)) : KeyEvent(static_cast<CharEvent*>(it));
+
 		addToEventQueue(event);
 	}
 }

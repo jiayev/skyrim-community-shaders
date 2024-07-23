@@ -11,8 +11,8 @@ public:
 		return &singleton;
 	}
 
-	virtual inline std::string GetName() { return "Water Parallax"; }
-	virtual inline std::string GetShortName() { return "WaterParallax"; }
+	virtual inline std::string GetName() override { return "Water Parallax"; }
+	virtual inline std::string GetShortName() override { return "WaterParallax"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "WATER_PARALLAX"; }
 
 	bool HasShaderDefine(RE::BSShader::Type shaderType) override;

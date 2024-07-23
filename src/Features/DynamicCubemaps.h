@@ -86,8 +86,8 @@ public:
 
 	void PostDeferred();
 
-	virtual inline std::string GetName() { return "Dynamic Cubemaps"; }
-	virtual inline std::string GetShortName() { return "DynamicCubemaps"; }
+	virtual inline std::string GetName() override { return "Dynamic Cubemaps"; }
+	virtual inline std::string GetShortName() override { return "DynamicCubemaps"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "DYNAMIC_CUBEMAPS"; }
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 

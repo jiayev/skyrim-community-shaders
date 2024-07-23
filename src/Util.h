@@ -22,8 +22,8 @@ namespace Util
 	std::string GetNameFromRTV(ID3D11RenderTargetView* a_rtv);
 	void SetResourceName(ID3D11DeviceChild* Resource, const char* Format, ...);
 	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program = "main");
-	std::string DefinesToString(std::vector<std::pair<const char*, const char*>>& defines);
-	std::string DefinesToString(std::vector<D3D_SHADER_MACRO>& defines);
+	std::string DefinesToString(const std::vector<std::pair<const char*, const char*>>& defines);
+	std::string DefinesToString(const std::vector<D3D_SHADER_MACRO>& defines);
 	float4 TryGetWaterData(float offsetX, float offsetY);
 	void DumpSettingsOptions();
 	float4 GetCameraData();

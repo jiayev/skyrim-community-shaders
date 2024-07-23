@@ -17,7 +17,7 @@
 
 void State::Draw()
 {
-	auto& shaderCache = SIE::ShaderCache::Instance();
+	const auto& shaderCache = SIE::ShaderCache::Instance();
 	if (shaderCache.IsEnabled()) {
 		auto terrainBlending = TerrainBlending::GetSingleton();
 		if (terrainBlending->loaded)
@@ -49,12 +49,12 @@ void State::Draw()
 
 						lastVertexDescriptor = currentVertexDescriptor;
 						lastPixelDescriptor = currentPixelDescriptor;
-					}
 
-					static Util::FrameChecker frameChecker;
-					if (frameChecker.isNewFrame()) {
-						ID3D11Buffer* buffers[3] = { permutationCB->CB(), sharedDataCB->CB(), featureDataCB->CB() };
-						context->PSSetConstantBuffers(4, 3, buffers);
+						static Util::FrameChecker frameChecker;
+						if (frameChecker.isNewFrame()) {
+							ID3D11Buffer* buffers[3] = { permutationCB->CB(), sharedDataCB->CB(), featureDataCB->CB() };
+							context->PSSetConstantBuffers(4, 3, buffers);
+						}
 					}
 
 					if (IsDeveloperMode()) {
@@ -202,7 +202,7 @@ void State::Load(ConfigMode a_configMode)
 
 void State::Save(ConfigMode a_configMode)
 {
-	auto& shaderCache = SIE::ShaderCache::Instance();
+	const auto& shaderCache = SIE::ShaderCache::Instance();
 	std::string configPath = GetConfigPath(a_configMode);
 	std::ofstream o{ configPath };
 	json settings;
@@ -313,7 +313,7 @@ std::vector<std::pair<std::string, std::string>>* State::GetDefines()
 bool State::ShaderEnabled(const RE::BSShader::Type a_type)
 {
 	auto index = static_cast<uint32_t>(a_type) + 1;
-	if (index && index < sizeof(enabledClasses)) {
+	if (index < sizeof(enabledClasses)) {
 		return enabledClasses[index];
 	}
 	return false;
@@ -414,25 +414,20 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			break;
 		case RE::BSShader::Type::Water:
 			{
-				a_vertexDescriptor &= ~((uint32_t)SIE::ShaderCache::WaterShaderFlags::Reflections |
-										(uint32_t)SIE::ShaderCache::WaterShaderFlags::Cubemap |
-										(uint32_t)SIE::ShaderCache::WaterShaderFlags::Interior |
-										(uint32_t)SIE::ShaderCache::WaterShaderFlags::Reflections);
-
-				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::WaterShaderFlags::Reflections |
-									   (uint32_t)SIE::ShaderCache::WaterShaderFlags::Cubemap |
-									   (uint32_t)SIE::ShaderCache::WaterShaderFlags::Interior);
+				auto flags = ~((uint32_t)SIE::ShaderCache::WaterShaderFlags::Reflections |
+							   (uint32_t)SIE::ShaderCache::WaterShaderFlags::Cubemap |
+							   (uint32_t)SIE::ShaderCache::WaterShaderFlags::Interior);
+				a_vertexDescriptor &= flags;
+				a_pixelDescriptor &= flags;
 			}
 			break;
 		case RE::BSShader::Type::Effect:
 			{
-				a_vertexDescriptor &= ~((uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor |
-										(uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToAlpha |
-										(uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
-
-				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor |
-									   (uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToAlpha |
-									   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
+				auto flags = ~((uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor |
+							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToAlpha |
+							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
+				a_vertexDescriptor &= flags;
+				a_pixelDescriptor &= flags;
 
 				if (Deferred::GetSingleton()->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::EffectShaderFlags::Deferred;
@@ -474,8 +469,8 @@ void State::UpdateSharedData()
 	{
 		SharedDataCB data{};
 
-		auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
-		RE::NiTransform& dalcTransform = shaderManager.directionalAmbientTransform;
+		const auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
+		const RE::NiTransform& dalcTransform = shaderManager.directionalAmbientTransform;
 		Util::StoreTransform3x4NoScale(data.DirectionalAmbient, dalcTransform);
 
 		auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
@@ -486,7 +481,7 @@ void State::UpdateSharedData()
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		data.DirLightColor *= !isVR ? imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale : imageSpaceManager->GetVRRuntimeData().data.baseData.hdr.sunlightScale;
 
-		auto& direction = dirLight->GetWorldDirection();
+		const auto& direction = dirLight->GetWorldDirection();
 		data.DirLightDirection = { -direction.x, -direction.y, -direction.z, 0.0f };
 		data.DirLightDirection.Normalize();
 
@@ -519,7 +514,7 @@ void State::UpdateSharedData()
 		delete[] data;
 	}
 
-	auto& depth = RE::BSGraphics::Renderer::GetSingleton()->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+	const auto& depth = RE::BSGraphics::Renderer::GetSingleton()->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 	auto terrainBlending = TerrainBlending::GetSingleton();
 	auto srv = (terrainBlending->loaded ? terrainBlending->blendedDepthTexture16->srv.get() : depth.depthSRV);
 

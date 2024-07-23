@@ -168,10 +168,10 @@ namespace SIE
 		void Clear(RE::BSShader::Type a_type);
 
 		bool AddCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor, ID3DBlob* a_blob);
-		ID3DBlob* GetCompletedShader(const std::string a_key);
+		ID3DBlob* GetCompletedShader(const std::string& a_key);
 		ID3DBlob* GetCompletedShader(const SIE::ShaderCompilationTask& a_task);
 		ID3DBlob* GetCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor);
-		ShaderCompilationTask::Status GetShaderStatus(const std::string a_key);
+		ShaderCompilationTask::Status GetShaderStatus(const std::string& a_key);
 		std::string GetShaderStatsString(bool a_timeOnly = false);
 
 		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor);
@@ -196,7 +196,7 @@ namespace SIE
 		bool IsHideErrors();
 
 		void InsertModifiedShaderMap(std::string a_shader, std::chrono::time_point<std::chrono::system_clock> a_time);
-		std::chrono::time_point<std::chrono::system_clock> GetModifiedShaderMapTime(std::string a_shader);
+		std::chrono::time_point<std::chrono::system_clock> GetModifiedShaderMapTime(const std::string& a_shader);
 
 		int32_t compilationThreadCount = std::max(static_cast<int32_t>(std::thread::hardware_concurrency()) - 1, 1);
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(std::thread::hardware_concurrency()) / 2, 1);
