@@ -42,7 +42,7 @@ struct Skylighting : Feature
 		bool DirectionalDiffuse = true;
 		float MaxZenith = 3.1415926f / 3.f;  // 60 deg
 		float MinDiffuseVisibility = 0.1;
-		float DiffuseBrightness = 4;
+		float DiffuseBrightness = 3;
 		float MinSpecularVisibility = 0;
 		float SpecularBrightness = 4;
 	} settings;

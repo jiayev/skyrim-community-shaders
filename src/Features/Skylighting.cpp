@@ -99,7 +99,7 @@ void Skylighting::SetupResources()
 		texProbeArray->CreateSRV(srvDesc);
 		texProbeArray->CreateUAV(uavDesc);
 
-		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16_UINT;
+		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R8_UINT;
 
 		texAccumFramesArray = new Texture3D(texDesc);
 		texAccumFramesArray->CreateSRV(srvDesc);
@@ -582,7 +582,7 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 				vPoint.y -= static_cast<unsigned long long>(vPoint.y);
 
 				randFrameCount++;
-				if (randFrameCount == 9999) {
+				if (randFrameCount == 1000) {
 					randFrameCount = 0;
 					randSeed = std::rand();
 				}
