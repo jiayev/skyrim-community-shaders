@@ -569,7 +569,7 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 }
 
 #		if defined(SKYLIGHTING)
-#			define LinearSampler Normals01Sampler
+#			define SL_INCL_METHODS
 #			include "Skylighting/Skylighting.hlsli"
 #		endif
 
@@ -627,7 +627,14 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 
 		float3 refractionDiffuseColorSunlight = refractionDiffuseColor * vl * SunColor.xyz * SunDir.w;
 #			if defined(SKYLIGHTING)
-		float3 refractionDiffuseColorSkylight = refractionDiffuseColor * lerp(GetVLSkylighting(input.WPosition.xyz, refractionWorldPosition.xyz, screenPosition), 1.0, 0.25);
+#				if defined(VR)
+		float3 skylightPosOffset = a_eyeIndex == 1 ? CameraPosAdjust[1] - CameraPosAdjust[0] : 0;
+#				else
+		float3 skylightPosOffset = 0;
+#				endif
+		float3 refractionDiffuseColorSkylight =
+			getVLSkylighting(skylightingSettings, SkylightingProbeArray, input.WPosition.xyz + skylightPosOffset, refractionWorldPosition.xyz + skylightPosOffset, screenPosition);
+		refractionDiffuseColorSkylight = refractionDiffuseColor * lerp(refractionDiffuseColorSkylight, 1.0, 0.25);
 		refractionDiffuseColor = refractionDiffuseColorSkylight;
 #			endif
 		refractionDiffuseColor += refractionDiffuseColorSunlight;

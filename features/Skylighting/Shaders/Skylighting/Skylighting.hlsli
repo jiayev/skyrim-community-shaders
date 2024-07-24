@@ -1,50 +1,93 @@
-#include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
+// Define SL_INCL_STRUCT and SL_INCL_METHODS to include different parts
+// Because this file is included by both forward and deferred shaders
 
-Texture2D<unorm float> OcclusionMapSampler : register(t29);
-Texture2D<float4> SkylightingTexture : register(t30);
-
-cbuffer SkylightingData : register(b8)
+#ifdef SL_INCL_STRUCT
+struct SkylightingSettings
 {
 	row_major float4x4 OcclusionViewProj;
-	float4 EyePosition;
-	float4 ShadowDirection;
+	float4 OcclusionDir;
+
+	float4 PosOffset;
+	uint4 ArrayOrigin;
+	int4 ValidMargin;
+
+	float4 MixParams;  // x: min diffuse visibility, y: diffuse mult, z: min specular visibility, w: specular mult
+
+	uint DirectionalDiffuse;
+	float3 _pad1;
 };
 
-float GetVLSkylighting(float3 startPosWS, float3 endPosWS, float2 screenPosition)
+#endif
+
+#ifdef SL_INCL_METHODS
+
+#	include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
+
+#	ifdef PSHADER
+Texture3D<sh2> SkylightingProbeArray : register(t29);
+#	endif
+
+const static uint3 SL_ARRAY_DIM = uint3(128, 128, 64);
+const static float3 SL_ARRAY_SIZE = float3(8192, 8192, 8192 * 0.5);
+const static float3 SL_CELL_SIZE = SL_ARRAY_SIZE / SL_ARRAY_DIM;
+
+sh2 sampleSkylighting(SkylightingSettings params, Texture3D<sh2> probeArray, float3 positionMS, float3 normalWS)
+{
+	float3 positionMSAdjusted = positionMS - params.PosOffset;
+	float3 uvw = positionMSAdjusted / SL_ARRAY_SIZE + .5;
+
+	if (any(uvw < 0) || any(uvw > 1))
+		return float4(1, 0, 1, 0);
+
+	float3 cellVxCoord = uvw * SL_ARRAY_DIM;
+	int3 cell000 = floor(cellVxCoord - 0.5);
+	float3 trilinearPos = cellVxCoord - 0.5 - cell000;
+
+	sh2 sum = 0;
+	float wsum = 0;
+	for (int i = 0; i < 2; i++)
+		for (int j = 0; j < 2; j++)
+			for (int k = 0; k < 2; k++) {
+				int3 offset = int3(i, j, k);
+				int3 cellID = cell000 + offset;
+
+				if (any(cellID < 0) || any(cellID >= SL_ARRAY_DIM))
+					continue;
+
+				float3 cellCentreMS = cellID + 0.5 - SL_ARRAY_DIM / 2;
+				cellCentreMS = cellCentreMS * SL_CELL_SIZE;
+
+				// https://handmade.network/p/75/monter/blog/p/7288-engine_work__global_illumination_with_irradiance_probes
+				// basic tangent checks
+				if (dot(cellCentreMS - positionMSAdjusted, normalWS) <= 0)
+					continue;
+
+				float3 trilinearWeights = 1 - abs(offset - trilinearPos);
+				float w = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z;
+
+				uint3 cellTexID = (cellID + params.ArrayOrigin.xyz) % SL_ARRAY_DIM;
+				sh2 probe = shScale(probeArray[cellTexID], w);
+
+				sum = shAdd(sum, probe);
+				wsum += w;
+			}
+
+	sh2 result = shScale(sum, rcp(wsum + 1e-10));
+
+	return result;
+}
+
+float getVLSkylighting(SkylightingSettings params, Texture3D<sh2> probeArray, float3 startPosWS, float3 endPosWS, float2 screenPosition)
 {
 	const static uint nSteps = 16;
 	const static float step = 1.0 / float(nSteps);
 
 	float3 worldDir = endPosWS - startPosWS;
+	float3 worldDirNormalised = normalize(worldDir);
 
 	float noise = InterleavedGradientNoise(screenPosition);
 
-	startPosWS += worldDir * step * noise;
-
-	float noise2 = noise * 2.0 * M_PI;
-
-	half2x2 rotationMatrix = half2x2(cos(noise2), sin(noise2), -sin(noise2), cos(noise2));
-
 	float vl = 0;
-
-	half2 PoissonDisk[16] = {
-		half2(-0.94201624, -0.39906216),
-		half2(0.94558609, -0.76890725),
-		half2(-0.094184101, -0.92938870),
-		half2(0.34495938, 0.29387760),
-		half2(-0.91588581, 0.45771432),
-		half2(-0.81544232, -0.87912464),
-		half2(-0.38277543, 0.27676845),
-		half2(0.97484398, 0.75648379),
-		half2(0.44323325, -0.97511554),
-		half2(0.53742981, -0.47373420),
-		half2(-0.26496911, -0.41893023),
-		half2(0.79197514, 0.19090188),
-		half2(-0.24188840, 0.99706507),
-		half2(-0.81409955, 0.91437590),
-		half2(0.19984126, 0.78641367),
-		half2(0.14383161, -0.14100790)
-	};
 
 	for (uint i = 0; i < nSteps; ++i) {
 		float t = saturate(i * step);
@@ -53,77 +96,57 @@ float GetVLSkylighting(float3 startPosWS, float3 endPosWS, float2 screenPosition
 		{
 			float3 samplePositionWS = startPosWS + worldDir * t;
 
-			half2 offset = mul(PoissonDisk[(float(i) + noise) % 16].xy, rotationMatrix);
-			samplePositionWS.xy += offset * 128;
+			sh2 skylighting = sampleSkylighting(params, probeArray, samplePositionWS, float3(0, 0, 1));
 
-			half3 samplePositionLS = mul(OcclusionViewProj, float4(samplePositionWS.xyz, 1));
-			samplePositionLS.y = -samplePositionLS.y;
-
-			float deltaZ = samplePositionLS.z - (1e-2 * 0.05);
-
-			half2 occlusionUV = samplePositionLS.xy * 0.5 + 0.5;
-
-			float4 depths = OcclusionMapSampler.GatherRed(LinearSampler, occlusionUV.xy, 0);
-
-			shadow = dot(depths > deltaZ, 0.25);
+			shadow += lerp(params.MixParams.x, 1, saturate(shUnproject(skylighting, worldDirNormalised) * params.MixParams.y));
 		}
 		vl += shadow;
 	}
 	return vl * step;
 }
 
-float GetSkylightOcclusion(float3 worldPosition, float noise)
+// http://torust.me/ZH3.pdf
+// ZH hallucination that makes skylighting more directional
+// skipped luminance because it's single channel
+float shHallucinateZH3Irradiance(sh2 sh, float3 normal)
 {
-	const static uint nSteps = 16;
-	const static float step = 1.0 / float(nSteps);
+	const static float factor = sqrt(5.0f / (16.0f * 3.1415926f));
 
-	float noise2 = noise * 2.0 * M_PI;
+	float3 zonalAxis = normalize(sh.wyz);
+	float ratio = abs(dot(sh.wyz, zonalAxis)) / sh.x;
+	float3 zonalL2Coeff = sh.x * (0.08f * ratio + 0.6f * ratio * ratio);
 
-	half2x2 rotationMatrix = half2x2(cos(noise2), sin(noise2), -sin(noise2), cos(noise2));
+	float fZ = dot(zonalAxis, normal);
+	float zhDir = factor * (3.0f * fZ * fZ - 1.0f);
 
-	float vl = 0;
+	float result = shFuncProductIntegral(sh, shEvaluateCosineLobe(normal));
 
-	half2 PoissonDisk[16] = {
-		half2(-0.94201624, -0.39906216),
-		half2(0.94558609, -0.76890725),
-		half2(-0.094184101, -0.92938870),
-		half2(0.34495938, 0.29387760),
-		half2(-0.91588581, 0.45771432),
-		half2(-0.81544232, -0.87912464),
-		half2(-0.38277543, 0.27676845),
-		half2(0.97484398, 0.75648379),
-		half2(0.44323325, -0.97511554),
-		half2(0.53742981, -0.47373420),
-		half2(-0.26496911, -0.41893023),
-		half2(0.79197514, 0.19090188),
-		half2(-0.24188840, 0.99706507),
-		half2(-0.81409955, 0.91437590),
-		half2(0.19984126, 0.78641367),
-		half2(0.14383161, -0.14100790)
-	};
+	result += 0.25f * zonalL2Coeff * zhDir;
 
-	for (uint i = 0; i < nSteps; ++i) {
-		float t = saturate(i * step);
-
-		float shadow = 0;
-		{
-			float3 samplePositionWS = worldPosition;
-
-			half2 offset = mul(PoissonDisk[i].xy, rotationMatrix);
-			samplePositionWS.xy += offset * 16;
-
-			half3 samplePositionLS = mul(OcclusionViewProj, float4(samplePositionWS.xyz, 1));
-			samplePositionLS.y = -samplePositionLS.y;
-
-			float deltaZ = samplePositionLS.z - (1e-2 * 0.2);
-
-			half2 occlusionUV = samplePositionLS.xy * 0.5 + 0.5;
-
-			float4 depths = OcclusionMapSampler.GatherRed(LinearSampler, occlusionUV.xy, 0);
-
-			shadow = dot(depths > deltaZ, 0.25);
-		}
-		vl += shadow;
-	}
-	return sqrt(vl * step);
+	return saturate(result);
 }
+
+sh2 fauxSpecularLobeSH(float3 N, float3 V, float roughness)
+{
+	// https://www.gdcvault.com/play/1026701/Fast-Denoising-With-Self-Stabilizing
+	// get dominant ggx reflection direction
+	float f = (1 - roughness) * (sqrt(1 - roughness) + roughness);
+	float3 R = reflect(-V, N);
+	float3 D = lerp(N, R, f);
+	float3 dominantDir = normalize(D);
+
+	sh2 directional = shEvaluate(dominantDir);
+	sh2 cosineLobe = shEvaluateCosineLobe(dominantDir);
+	sh2 result = shAdd(shScale(directional, f), shScale(cosineLobe, 1 - f));
+
+	return result;
+}
+
+float applySkylightingFadeout(float x, float dist)
+{
+	const static float fadeDist = 0.9;
+	float fadeFactor = saturate((dist * 2 / SL_ARRAY_SIZE.x - fadeDist) / (1 - fadeDist));
+	return lerp(x, 1, fadeFactor);
+}
+
+#endif

@@ -421,6 +421,7 @@ void Deferred::DeferredPasses()
 		interior = sky->mode.get() != RE::Sky::Mode::kFull;
 
 	auto skylighting = Skylighting::GetSingleton();
+
 	auto ssgi = ScreenSpaceGI::GetSingleton();
 
 	auto dispatchCount = Util::GetScreenDispatchCount();
@@ -430,10 +431,14 @@ void Deferred::DeferredPasses()
 
 		// Ambient Composite
 		{
-			ID3D11ShaderResourceView* srvs[4]{
+			ID3D11Buffer* buffer = skylighting->loaded ? skylighting->skylightingCB->CB() : nullptr;
+			context->CSSetConstantBuffers(1, 1, &buffer);
+
+			ID3D11ShaderResourceView* srvs[5]{
 				albedo.SRV,
 				normalRoughness.SRV,
-				skylighting->loaded ? skylighting->skylightingTexture->srv.get() : nullptr,
+				skylighting->loaded ? depth.depthSRV : nullptr,
+				skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
 				ssgi->loaded ? ssgi->texGI[ssgi->outputGIIdx]->srv.get() : nullptr,
 			};
 
@@ -446,6 +451,9 @@ void Deferred::DeferredPasses()
 			context->CSSetShader(shader, nullptr, 0);
 
 			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+
+			buffer = nullptr;
+			context->CSSetConstantBuffers(0, 1, &buffer);
 		}
 	}
 
@@ -461,6 +469,9 @@ void Deferred::DeferredPasses()
 
 	// Deferred Composite
 	{
+		ID3D11Buffer* buffer = skylighting->loaded ? skylighting->skylightingCB->CB() : nullptr;
+		context->CSSetConstantBuffers(1, 1, &buffer);
+
 		ID3D11ShaderResourceView* srvs[10]{
 			specular.SRV,
 			albedo.SRV,
@@ -471,7 +482,7 @@ void Deferred::DeferredPasses()
 			dynamicCubemaps->loaded ? reflectance.SRV : nullptr,
 			dynamicCubemaps->loaded ? dynamicCubemaps->envTexture->srv.get() : nullptr,
 			dynamicCubemaps->loaded ? dynamicCubemaps->envReflectionsTexture->srv.get() : nullptr,
-			dynamicCubemaps->loaded && skylighting->loaded ? skylighting->skylightingTexture->srv.get() : nullptr
+			dynamicCubemaps->loaded && skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr
 		};
 
 		if (dynamicCubemaps->loaded)
@@ -486,6 +497,9 @@ void Deferred::DeferredPasses()
 		context->CSSetShader(shader, nullptr, 0);
 
 		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+
+		buffer = nullptr;
+		context->CSSetConstantBuffers(0, 1, &buffer);
 	}
 
 	// Clear

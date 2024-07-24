@@ -25,8 +25,16 @@ SamplerState LinearSampler : register(s0);
 #endif
 
 #if defined(SKYLIGHTING)
-#	include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
-Texture2D<unorm float4> SkylightingTexture : register(t9);
+#	define SL_INCL_STRUCT
+#	define SL_INCL_METHODS
+#	include "Skylighting/Skylighting.hlsli"
+
+cbuffer SkylightingCB : register(b1)
+{
+	SkylightingSettings skylightingSettings;
+};
+
+Texture3D<sh2> SkylightingProbeArray : register(t9);
 #endif
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
@@ -79,25 +87,34 @@ Texture2D<unorm float4> SkylightingTexture : register(t9);
 
 		color += reflectance * specularIrradiance;
 #	elif defined(SKYLIGHTING)
-		sh2 skylightingSH = SkylightingTexture[dispatchID.xy];
+#		if defined(VR)
+		float3 positionMS = positionWS + (eyeIndex == 1 ? CameraPosAdjust[1] - CameraPosAdjust[0] : 0);
+#		else
+		float3 positionMS = positionWS;
+#		endif
 
-		half skylighting = saturate(shUnproject(skylightingSH, R));
+		sh2 skylighting = sampleSkylighting(skylightingSettings, SkylightingProbeArray, positionWS.xyz, normalWS);
+		sh2 specularLobe = fauxSpecularLobeSH(normalWS, -V, roughness);
+
+		half skylightingSpecular = saturate(shFuncProductIntegral(skylighting, specularLobe));
+		skylightingSpecular = lerp(skylightingSettings.MixParams.z, 1, saturate(skylightingSpecular * skylightingSettings.MixParams.w));
+		skylightingSpecular = applySkylightingFadeout(skylightingSpecular, length(positionWS.xyz));
 
 		half3 specularIrradiance = 1;
 
-		if (skylighting < 1.0) {
+		if (skylightingSpecular < 1.0) {
 			specularIrradiance = EnvTexture.SampleLevel(LinearSampler, R, level).xyz;
 			specularIrradiance = sRGB2Lin(specularIrradiance);
 		}
 
 		half3 specularIrradianceReflections = 1.0;
 
-		if (skylighting > 0.0) {
+		if (skylightingSpecular > 0.0) {
 			specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level).xyz;
 			specularIrradianceReflections = sRGB2Lin(specularIrradianceReflections);
 		}
 
-		color += reflectance * lerp(specularIrradiance, specularIrradianceReflections, skylighting);
+		color += reflectance * lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
 #	else
 		half3 specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level).xyz;
 		specularIrradianceReflections = sRGB2Lin(specularIrradianceReflections);

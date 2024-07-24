@@ -8,12 +8,21 @@ Texture2D<unorm half3> AlbedoTexture : register(t0);
 Texture2D<unorm half3> NormalRoughnessTexture : register(t1);
 
 #if defined(SKYLIGHTING)
-#	include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
-Texture2D<float4> SkylightingTexture : register(t2);
+#	define SL_INCL_STRUCT
+#	define SL_INCL_METHODS
+#	include "Skylighting/Skylighting.hlsli"
+
+cbuffer SkylightingCB : register(b1)
+{
+	SkylightingSettings skylightingSettings;
+};
+
+Texture2D<unorm float> DepthTexture : register(t2);
+Texture3D<sh2> SkylightingProbeArray : register(t3);
 #endif
 
 #if defined(SSGI)
-Texture2D<half4> SSGITexture : register(t3);
+Texture2D<half4> SSGITexture : register(t4);
 #endif
 
 RWTexture2D<half3> MainRW : register(u0);
@@ -43,19 +52,30 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 	ambient = sRGB2Lin(max(0, ambient));  // Fixes black blobs on the world map
 	albedo = sRGB2Lin(albedo);
 
+	half visibility = 1.0;
 #if defined(SKYLIGHTING)
-	sh2 skylightingSH = SkylightingTexture[dispatchID.xy];
+	float rawDepth = DepthTexture[dispatchID.xy];
+	float4 positionCS = float4(2 * float2(uv.x, -uv.y + 1) - 1, rawDepth, 1);
+	float4 positionMS = mul(CameraViewProjInverse[eyeIndex], positionCS);
+	positionMS.xyz = positionMS.xyz / positionMS.w;
+#	if defined(VR)
+	if (eyeIndex == 1)
+		positionMS.xyz += CameraPosAdjust[1] - CameraPosAdjust[0];
+#	endif
 
-	half skylighting = saturate(shUnproject(skylightingSH, normalWS));
+	sh2 skylighting = sampleSkylighting(skylightingSettings, SkylightingProbeArray, positionMS.xyz, normalWS);
+	half skylightingDiffuse = shHallucinateZH3Irradiance(skylighting, skylightingSettings.DirectionalDiffuse ? normalWS : float3(0, 0, 1));
+	skylightingDiffuse = lerp(skylightingSettings.MixParams.x, 1, saturate(skylightingDiffuse * skylightingSettings.MixParams.y));
+	skylightingDiffuse = applySkylightingFadeout(skylightingDiffuse, length(positionMS.xyz));
 
-	ambient *= lerp(0.25, 1.0, skylighting);
+	visibility = skylightingDiffuse;
 #endif
 
 #if defined(SSGI)
 	half4 ssgiDiffuse = SSGITexture[dispatchID.xy];
 	ssgiDiffuse.rgb *= albedo;
 
-	ambient *= ssgiDiffuse.a;
+	visibility = min(visibility, ssgiDiffuse.a);
 
 	DiffuseAmbientRW[dispatchID.xy] = ambient + ssgiDiffuse.rgb;
 
@@ -65,7 +85,7 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 	diffuseColor += ssgiDiffuse.rgb;
 #endif
 
-	ambient = Lin2sRGB(ambient);
+	ambient = Lin2sRGB(ambient * visibility);
 	diffuseColor = Lin2sRGB(diffuseColor);
 
 	diffuseColor += ambient;

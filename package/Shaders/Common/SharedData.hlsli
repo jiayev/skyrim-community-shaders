@@ -114,6 +114,10 @@ struct LightLimitFixSettings
 	uint pad0;
 };
 
+#	define SL_INCL_STRUCT
+#	include "Skylighting/Skylighting.hlsli"
+#	undef SL_INCL_STRUCT
+
 cbuffer FeatureData : register(b6)
 {
 	GrassLightingSettings grassLightingSettings;
@@ -122,6 +126,7 @@ cbuffer FeatureData : register(b6)
 	TerraOccSettings terraOccSettings;
 	WetnessEffects wetnessEffects;
 	LightLimitFixSettings lightLimitFixSettings;
+	SkylightingSettings skylightingSettings;
 };
 
 Texture2D<float4> TexDepthSampler : register(t20);

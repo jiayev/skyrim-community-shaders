@@ -7,7 +7,6 @@
 
 struct Skylighting : Feature
 {
-public:
 	static Skylighting* GetSingleton()
 	{
 		static Skylighting singleton;
@@ -21,82 +20,75 @@ public:
 	virtual inline std::string_view GetShaderDefineName() override { return "SKYLIGHTING"; }
 	virtual bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
-	virtual void SetupResources() override;
-
+	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 
-	virtual void PostPostLoad() override;
+	virtual inline void Reset() override{};
+	virtual void SetupResources() override;
+	virtual void ClearShaderCache() override;
+	void CompileComputeShaders();
 
 	virtual void Prepass() override;
 
-	virtual void RestoreDefaultSettings() override;
-
-	ID3D11ComputeShader* GetSkylightingCS();
-	ID3D11ComputeShader* GetSkylightingShadowMapCS();
-	ID3D11ComputeShader* GetSkylightingBlurHorizontalCS();
-	ID3D11ComputeShader* GetSkylightingBlurVerticalCS();
-	virtual void ClearShaderCache() override;
-
-	void Bind();
-
-	void Compute();
-	void ComputeBlur(bool a_horizontal);
-
-	ID3D11PixelShader* GetFoliagePS();
-
-	void SkylightingShaderHacks();  // referenced in State.cpp
+	virtual void PostPostLoad() override;
 
 	//////////////////////////////////////////////////////////////////////////////////
-
-	struct alignas(16) PerFrameCB
-	{
-		REX::W32::XMFLOAT4X4 OcclusionViewProj;
-		float4 EyePosition;
-		float4 ShadowDirection;
-		float4 BufferDim;
-		float4 CameraData;
-		uint FrameCount;
-		uint pad0[3];
-	};
-
-	ConstantBuffer* perFrameCB = nullptr;
 
 	struct Settings
 	{
-		bool EnableSkylighting = true;
-		bool HeightSkylighting = true;
-		float MinimumBound = 128;
-		bool RenderTrees = false;
-	};
+		bool DirectionalDiffuse = true;
+		float MaxZenith = 3.1415926f / 3.f;  // 60 deg
+		float MinDiffuseVisibility = 0.1;
+		float DiffuseBrightness = 4;
+		float MinSpecularVisibility = 0;
+		float SpecularBrightness = 4;
+	} settings;
 
-	Settings settings;
+	struct SkylightingCB
+	{
+		REX::W32::XMFLOAT4X4 OcclusionViewProj;
+		float4 OcclusionDir;
 
-	Texture2D* skylightingTexture = nullptr;
-	Texture2D* skylightingTempTexture = nullptr;
-	ID3D11ShaderResourceView* noiseView = nullptr;
-	Texture2D* occlusionTexture = nullptr;
+		float3 PosOffset;  // cell origin in camera model space
+		float _pad0;
+		uint ArrayOrigin[4];
+		int ValidMargin[4];
 
-	ID3D11ComputeShader* skylightingCS = nullptr;
-	ID3D11ComputeShader* skylightingShadowMapCS = nullptr;
-	ID3D11ComputeShader* skylightingBlurHorizontalCS = nullptr;
-	ID3D11ComputeShader* skylightingBlurVerticalCS = nullptr;
+		float4 MixParams;  // x: min diffuse visibility, y: diffuse mult, z: min specular visibility, w: specular mult
 
-	ID3D11SamplerState* comparisonSampler;
+		uint DirectionalDiffuse;
+		float3 _pad1;
+	} cbData;
+	static_assert(sizeof(SkylightingCB) % 16 == 0);
+	eastl::unique_ptr<ConstantBuffer> skylightingCB = nullptr;
 
-	ID3D11PixelShader* foliagePixelShader = nullptr;
+	winrt::com_ptr<ID3D11SamplerState> pointClampSampler = nullptr;
+
+	Texture2D* texOcclusion = nullptr;
+	Texture3D* texProbeArray = nullptr;
+	Texture3D* texAccumFramesArray = nullptr;
+
+	winrt::com_ptr<ID3D11ComputeShader> probeUpdateCompute = nullptr;
+
+	// misc parameters
+	bool doOcclusion = true;
+	uint probeArrayDims[3] = { 128, 128, 64 };
+	float occlusionDistance = 8192.f;
+	bool renderTrees = false;
+	float boundSize = 128;
 
 	// cached variables
 	bool inOcclusion = false;
-	bool foliage = false;
-	REX::W32::XMFLOAT4X4 viewProjMat;
-	RE::NiPoint3 eyePosition;
-	std::chrono::time_point<std::chrono::system_clock> lastUpdateTimer = std::chrono::system_clock::now();
+	RE::NiPoint3 eyePosition{};
+	REX::W32::XMFLOAT4X4 OcclusionTransform;
+	float4 OcclusionDir;
 
 	//////////////////////////////////////////////////////////////////////////////////
 
+	// Hooks
 	struct BSLightingShaderProperty_GetPrecipitationOcclusionMapRenderPassesImpl
 	{
 		static void* thunk(RE::BSLightingShaderProperty* property, RE::BSGeometry* geometry, uint32_t renderMode, RE::BSGraphics::BSShaderAccumulator* accumulator);
@@ -112,6 +104,12 @@ public:
 	struct BSUtilityShader_SetupGeometry
 	{
 		static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct SetViewFrustum
+	{
+		static void thunk(RE::NiCamera* a_camera, RE::NiFrustum* a_frustum);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 };

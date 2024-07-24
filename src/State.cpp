@@ -23,9 +23,9 @@ void State::Draw()
 		if (terrainBlending->loaded)
 			terrainBlending->TerrainShaderHacks();
 
-		auto skylighting = Skylighting::GetSingleton();
-		if (skylighting->loaded)
-			skylighting->SkylightingShaderHacks();
+		// auto skylighting = Skylighting::GetSingleton();
+		// if (skylighting->loaded)
+		// 	skylighting->SkylightingShaderHacks();
 
 		if (currentShader && updateShader) {
 			auto type = currentShader->shaderType.get();
