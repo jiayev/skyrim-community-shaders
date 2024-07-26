@@ -42,6 +42,28 @@ void Skylighting::DrawSettings()
 	ImGui::SliderFloat("Specular Brightness", &settings.SpecularBrightness, 0, 10, "%.1f");
 }
 
+ID3D11PixelShader* Skylighting::GetFoliagePS()
+{
+	if (!foliagePixelShader) {
+		logger::debug("Compiling Utility.hlsl");
+		foliagePixelShader = (ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Utility.hlsl", { { "RENDER_DEPTH", "" }, { "FOLIAGE", "" } }, "ps_5_0");
+	}
+	return foliagePixelShader;
+}
+
+void Skylighting::SkylightingShaderHacks()
+{
+	if (inOcclusion) {
+		auto& context = State::GetSingleton()->context;
+
+		if (foliage) {
+			context->PSSetShader(GetFoliagePS(), NULL, NULL);
+		} else {
+			context->PSSetShader(nullptr, NULL, NULL);
+		}
+	}
+}
+
 void Skylighting::SetupResources()
 {
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -135,6 +157,10 @@ void Skylighting::ClearShaderCache()
 		}
 
 	CompileComputeShaders();
+	if (foliagePixelShader) {
+		foliagePixelShader->Release();
+		foliagePixelShader = nullptr;
+	}
 }
 
 void Skylighting::CompileComputeShaders()
@@ -239,6 +265,7 @@ void Skylighting::PostPostLoad()
 	stl::write_vfunc<0x2D, BSLightingShaderProperty_GetPrecipitationOcclusionMapRenderPassesImpl>(RE::VTABLE_BSLightingShaderProperty[0]);
 	stl::write_thunk_call<Main_Precipitation_RenderOcclusion>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x3A1, 0x3A1, 0x2FA));
 	stl::write_thunk_call<SetViewFrustum>(REL::RelocationID(25643, 26185).address() + REL::Relocate(0x5D9, 0x59D, 0x5DC));
+	stl::write_vfunc<0x6, BSUtilityShader_SetupGeometry>(RE::VTABLE_BSUtilityShader[0]);
 }
 
 //////////////////////////////////////////////////////////////
@@ -524,10 +551,9 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 	auto sky = RE::Sky::GetSingleton();
 	auto precip = sky->precip;
 
-	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
-	GetSingleton()->eyePosition = shadowState->GetRuntimeData().posAdjust.getEye();
+	auto singleton = GetSingleton();
 
-	if (GetSingleton()->doOcclusion) {
+	if (singleton->doOcclusion) {
 		{
 			doPrecip = false;
 
@@ -550,75 +576,84 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 		{
 			doPrecip = true;
 
-			auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-			auto& precipitation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
-			RE::BSGraphics::DepthStencilData precipitationCopy = precipitation;
+			std::chrono::time_point<std::chrono::system_clock> currentTimer = std::chrono::system_clock::now();
+			auto timePassed = std::chrono::duration_cast<std::chrono::milliseconds>(currentTimer - singleton->lastUpdateTimer).count();
 
-			precipitation.depthSRV = GetSingleton()->texOcclusion->srv.get();
-			precipitation.texture = GetSingleton()->texOcclusion->resource.get();
-			precipitation.views[0] = GetSingleton()->texOcclusion->dsv.get();
+			if (timePassed >= (1000.0f / 30.0f)) {
+				singleton->lastUpdateTimer = currentTimer;
 
-			static float& PrecipitationShaderCubeSize = (*(float*)REL::RelocationID(515451, 401590).address());
-			float originalPrecipitationShaderCubeSize = PrecipitationShaderCubeSize;
+				auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+				auto& precipitation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
+				RE::BSGraphics::DepthStencilData precipitationCopy = precipitation;
 
-			static RE::NiPoint3& PrecipitationShaderDirection = (*(RE::NiPoint3*)REL::RelocationID(515509, 401648).address());
-			RE::NiPoint3 originalParticleShaderDirection = PrecipitationShaderDirection;
+				precipitation.depthSRV = singleton->texOcclusion->srv.get();
+				precipitation.texture = singleton->texOcclusion->resource.get();
+				precipitation.views[0] = singleton->texOcclusion->dsv.get();
 
-			GetSingleton()->inOcclusion = true;
-			PrecipitationShaderCubeSize = GetSingleton()->occlusionDistance;
+				static float& PrecipitationShaderCubeSize = (*(float*)REL::RelocationID(515451, 401590).address());
+				float originalPrecipitationShaderCubeSize = PrecipitationShaderCubeSize;
 
-			float originaLastCubeSize = precip->lastCubeSize;
-			precip->lastCubeSize = PrecipitationShaderCubeSize;
+				static RE::NiPoint3& PrecipitationShaderDirection = (*(RE::NiPoint3*)REL::RelocationID(515509, 401648).address());
+				RE::NiPoint3 originalParticleShaderDirection = PrecipitationShaderDirection;
 
-			float2 vPoint;
-			{
-				constexpr float rcpRandMax = 1.f / RAND_MAX;
-				static int randSeed = std::rand();
-				static uint randFrameCount = 0;
+				singleton->inOcclusion = true;
+				PrecipitationShaderCubeSize = singleton->occlusionDistance;
 
-				// r2 sequence
-				vPoint = float2(randSeed * rcpRandMax) + (float)randFrameCount * float2(0.245122333753, 0.430159709002);
-				vPoint.x -= static_cast<unsigned long long>(vPoint.x);
-				vPoint.y -= static_cast<unsigned long long>(vPoint.y);
+				float originaLastCubeSize = precip->lastCubeSize;
+				precip->lastCubeSize = PrecipitationShaderCubeSize;
 
-				randFrameCount++;
-				if (randFrameCount == 1000) {
-					randFrameCount = 0;
-					randSeed = std::rand();
+				float2 vPoint;
+				{
+					constexpr float rcpRandMax = 1.f / RAND_MAX;
+					static int randSeed = std::rand();
+					static uint randFrameCount = 0;
+
+					// r2 sequence
+					vPoint = float2(randSeed * rcpRandMax) + (float)randFrameCount * float2(0.245122333753f, 0.430159709002f);
+					vPoint.x -= static_cast<unsigned long long>(vPoint.x);
+					vPoint.y -= static_cast<unsigned long long>(vPoint.y);
+
+					randFrameCount++;
+					if (randFrameCount == 1000) {
+						randFrameCount = 0;
+						randSeed = std::rand();
+					}
+
+					// disc transformation
+					vPoint.x = sqrt(vPoint.x * sin(singleton->settings.MaxZenith));
+					vPoint.y *= 6.28318530718f;
+
+					vPoint = { vPoint.x * cos(vPoint.y), vPoint.x * sin(vPoint.y) };
 				}
 
-				// disc transformation
-				vPoint.x = sqrt(vPoint.x * sin(GetSingleton()->settings.MaxZenith));
-				vPoint.y *= 6.28318530718;
+				float3 PrecipitationShaderDirectionF = -float3{ vPoint.x, vPoint.y, sqrt(1 - vPoint.LengthSquared()) };
+				PrecipitationShaderDirectionF.Normalize();
 
-				vPoint = { vPoint.x * cos(vPoint.y), vPoint.x * sin(vPoint.y) };
+				PrecipitationShaderDirection = { PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z };
+
+				Precipitation_SetupMask(precip);
+				Precipitation_SetupMask(precip);  // Calling setup twice fixes an issue when it is raining
+
+				BSParticleShaderRainEmitter* rain = new BSParticleShaderRainEmitter;
+				Precipitation_RenderMask(precip, rain);
+				singleton->inOcclusion = false;
+				RE::BSParticleShaderCubeEmitter* cube = (RE::BSParticleShaderCubeEmitter*)rain;
+
+				singleton->OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };
+				singleton->OcclusionTransform = cube->occlusionProjection;
+
+				cube = nullptr;
+				delete rain;
+
+				PrecipitationShaderCubeSize = originalPrecipitationShaderCubeSize;
+				precip->lastCubeSize = originaLastCubeSize;
+
+				PrecipitationShaderDirection = originalParticleShaderDirection;
+
+				precipitation = precipitationCopy;
+
+				singleton->foliage = false;
 			}
-
-			float3 PrecipitationShaderDirectionF = -float3{ vPoint.x, vPoint.y, sqrt(1 - vPoint.LengthSquared()) };
-			PrecipitationShaderDirectionF.Normalize();
-
-			PrecipitationShaderDirection = { PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z };
-
-			Precipitation_SetupMask(precip);
-			Precipitation_SetupMask(precip);  // Calling setup twice fixes an issue when it is raining
-
-			BSParticleShaderRainEmitter* rain = new BSParticleShaderRainEmitter;
-			Precipitation_RenderMask(precip, rain);
-			GetSingleton()->inOcclusion = false;
-			RE::BSParticleShaderCubeEmitter* cube = (RE::BSParticleShaderCubeEmitter*)rain;
-
-			GetSingleton()->OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };
-			GetSingleton()->OcclusionTransform = cube->occlusionProjection;
-
-			cube = nullptr;
-			delete rain;
-
-			PrecipitationShaderCubeSize = originalPrecipitationShaderCubeSize;
-			precip->lastCubeSize = originaLastCubeSize;
-
-			PrecipitationShaderDirection = originalParticleShaderDirection;
-
-			precipitation = precipitationCopy;
 		}
 	}
 	State::GetSingleton()->EndPerfEvent();
@@ -628,16 +663,7 @@ void Skylighting::BSUtilityShader_SetupGeometry::thunk(RE::BSShader* This, RE::B
 {
 	auto& feat = *GetSingleton();
 	if (feat.inOcclusion) {
-		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-		auto& precipitation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
-
-		precipitation.depthSRV = feat.texOcclusion->srv.get();
-		precipitation.texture = feat.texOcclusion->resource.get();
-		precipitation.views[0] = feat.texOcclusion->dsv.get();
-
-		auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
-		GET_INSTANCE_MEMBER(stateUpdateFlags, state)
-		stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+		feat.foliage = Pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kTreeAnim);
 	}
 
 	func(This, Pass, RenderFlags);

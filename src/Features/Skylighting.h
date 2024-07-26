@@ -35,13 +35,16 @@ struct Skylighting : Feature
 
 	virtual void PostPostLoad() override;
 
+	ID3D11PixelShader* GetFoliagePS();
+	void SkylightingShaderHacks();  // referenced in State.cpp
+
 	//////////////////////////////////////////////////////////////////////////////////
 
 	struct Settings
 	{
 		bool DirectionalDiffuse = true;
 		float MaxZenith = 3.1415926f / 3.f;  // 60 deg
-		float MinDiffuseVisibility = 0.1;
+		float MinDiffuseVisibility = 0.1f;
 		float DiffuseBrightness = 3;
 		float MinSpecularVisibility = 0;
 		float SpecularBrightness = 4;
@@ -73,18 +76,22 @@ struct Skylighting : Feature
 
 	winrt::com_ptr<ID3D11ComputeShader> probeUpdateCompute = nullptr;
 
+	ID3D11PixelShader* foliagePixelShader = nullptr;
+
 	// misc parameters
 	bool doOcclusion = true;
 	uint probeArrayDims[3] = { 128, 128, 64 };
-	float occlusionDistance = 8192.f;
+	float occlusionDistance = 10000.f;
 	bool renderTrees = false;
-	float boundSize = 128;
+	float boundSize = 1;
 
 	// cached variables
 	bool inOcclusion = false;
-	RE::NiPoint3 eyePosition{};
+	bool foliage = false;
 	REX::W32::XMFLOAT4X4 OcclusionTransform;
 	float4 OcclusionDir;
+
+	std::chrono::time_point<std::chrono::system_clock> lastUpdateTimer = std::chrono::system_clock::now();
 
 	//////////////////////////////////////////////////////////////////////////////////
 

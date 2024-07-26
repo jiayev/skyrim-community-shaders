@@ -28,7 +28,7 @@ Texture3D<sh2> SkylightingProbeArray : register(t29);
 #	endif
 
 const static uint3 SL_ARRAY_DIM = uint3(128, 128, 64);
-const static float3 SL_ARRAY_SIZE = float3(8192, 8192, 8192 * 0.5);
+const static float3 SL_ARRAY_SIZE = float3(10000, 10000, 10000 * 0.5);
 const static float3 SL_CELL_SIZE = SL_ARRAY_SIZE / SL_ARRAY_DIM;
 
 sh2 sampleSkylighting(SkylightingSettings params, Texture3D<sh2> probeArray, float3 positionMS, float3 normalWS)
@@ -140,13 +140,6 @@ sh2 fauxSpecularLobeSH(float3 N, float3 V, float roughness)
 	sh2 result = shAdd(shScale(directional, f), shScale(cosineLobe, 1 - f));
 
 	return result;
-}
-
-float applySkylightingFadeout(float x, float dist)
-{
-	const static float fadeDist = 0.9;
-	float fadeFactor = saturate((dist * 2 / SL_ARRAY_SIZE.x - fadeDist) / (1 - fadeDist));
-	return lerp(x, 1, fadeFactor);
 }
 
 #endif

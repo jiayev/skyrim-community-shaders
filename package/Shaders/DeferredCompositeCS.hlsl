@@ -98,7 +98,6 @@ Texture3D<sh2> SkylightingProbeArray : register(t9);
 
 		half skylightingSpecular = saturate(shFuncProductIntegral(skylighting, specularLobe));
 		skylightingSpecular = lerp(skylightingSettings.MixParams.z, 1, saturate(skylightingSpecular * skylightingSettings.MixParams.w));
-		skylightingSpecular = applySkylightingFadeout(skylightingSpecular, length(positionWS.xyz));
 
 		half3 specularIrradiance = 1;
 

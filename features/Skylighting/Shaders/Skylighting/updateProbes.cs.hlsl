@@ -18,10 +18,12 @@ RWTexture3D<uint> outAccumFramesArray : register(u1);
 SamplerState samplerPointClamp : register(s0);
 
 #define ARRAY_DIM uint3(128, 128, 64)
-#define ARRAY_SIZE float3(8192, 8192, 8192 * 0.5)
+#define ARRAY_SIZE float3(10000, 10000, 10000 * 0.5)
 
 [numthreads(8, 8, 1)] void main(uint3 dtid
 								: SV_DispatchThreadID) {
+	const static float fadeInThreshold = 64;
+
 	uint3 cellID = (int3(dtid) - settings.ArrayOrigin.xyz) % ARRAY_DIM;
 	bool isValid = all(cellID >= max(0, settings.ValidMargin.xyz)) && all(cellID <= ARRAY_DIM - 1 + min(0, settings.ValidMargin.xyz));  // check if the cell is newly added
 
@@ -34,15 +36,20 @@ SamplerState samplerPointClamp : register(s0);
 
 	if (all(occlusionUV > 0) && all(occlusionUV < 1)) {
 		uint accumFrames = isValid ? (outAccumFramesArray[dtid] + 1) : 1;
-		if (accumFrames < 255) {
+		if (accumFrames < fadeInThreshold) {
 			float occlusionDepth = srcOcclusionDepth.SampleLevel(samplerPointClamp, occlusionUV, 0);
 			bool visible = cellCentreOS.z < occlusionDepth;
 
 			sh2 occlusionSH = shScale(shEvaluate(settings.OcclusionDir.xyz), float(visible));
 			if (isValid) {
 				float lerpFactor = rcp(accumFrames);
-				occlusionSH = shAdd(shScale(outProbeArray[dtid], 1 - lerpFactor), shScale(occlusionSH, lerpFactor));
+				sh2 prevProbeSH = float4(1, 0, 1, 0);
+				if (accumFrames > 1)
+					prevProbeSH += (outProbeArray[dtid] - float4(1, 0, 1, 0)) * fadeInThreshold / min(fadeInThreshold, accumFrames - 1);  // inverse confidence
+				occlusionSH = shAdd(shScale(prevProbeSH, 1 - lerpFactor), shScale(occlusionSH, lerpFactor));
 			}
+			occlusionSH = lerp(float4(1, 0, 1, 0), occlusionSH, min(fadeInThreshold, accumFrames) / fadeInThreshold);  // confidence fade in
+
 			outProbeArray[dtid] = occlusionSH;
 			outAccumFramesArray[dtid] = accumFrames;
 		}
