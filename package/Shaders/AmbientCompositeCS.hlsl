@@ -34,6 +34,7 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 								: SV_DispatchThreadID) {
 	half2 uv = half2(dispatchID.xy + 0.5) * BufferDim.zw;
 	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
+	uv = ConvertFromStereoUV(uv, eyeIndex);
 
 	half3 normalGlossiness = NormalRoughnessTexture[dispatchID.xy];
 	half3 normalVS = DecodeNormal(normalGlossiness.xy);

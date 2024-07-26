@@ -187,12 +187,11 @@ void Skylighting::CompileComputeShaders()
 void Skylighting::Prepass()
 {
 	auto& context = State::GetSingleton()->context;
-	auto state = RE::BSGraphics::RendererShadowState::GetSingleton();
 
 	{
 		static float3 prevCellID = { 0, 0, 0 };
 
-		auto eyePosNI = !REL::Module::IsVR() ? state->GetRuntimeData().posAdjust.getEye() : state->GetVRRuntimeData().posAdjust.getEye();
+		auto eyePosNI = Util::GetEyePosition(0);
 		auto eyePos = float3{ eyePosNI.x, eyePosNI.y, eyePosNI.z };
 
 		float3 cellSize = {
