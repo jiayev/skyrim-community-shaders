@@ -31,13 +31,24 @@ const static uint3 SL_ARRAY_DIM = uint3(128, 128, 64);
 const static float3 SL_ARRAY_SIZE = float3(10000, 10000, 10000 * 0.5);
 const static float3 SL_CELL_SIZE = SL_ARRAY_SIZE / SL_ARRAY_DIM;
 
+float getFadeOutFactor(float3 positionMS)
+{
+	float3 uvw = saturate(positionMS / SL_ARRAY_SIZE + .5);
+	float3 dists = min(uvw, 1 - uvw);
+	float edgeDist = min(dists.x, min(dists.y, dists.z));
+	return saturate(edgeDist * 20);
+}
+
 sh2 sampleSkylighting(SkylightingSettings params, Texture3D<sh2> probeArray, float3 positionMS, float3 normalWS)
 {
+	const static sh2 unitSH = shEvaluate(float3(0, 0, 1));
+	sh2 scaledUnitSH = unitSH / (params.MixParams.y + 1e-10);
+
 	float3 positionMSAdjusted = positionMS - params.PosOffset;
 	float3 uvw = positionMSAdjusted / SL_ARRAY_SIZE + .5;
 
 	if (any(uvw < 0) || any(uvw > 1))
-		return float4(1, 0, 1, 0);
+		return scaledUnitSH;
 
 	float3 cellVxCoord = uvw * SL_ARRAY_DIM;
 	int3 cell000 = floor(cellVxCoord - 0.5);
@@ -73,6 +84,9 @@ sh2 sampleSkylighting(SkylightingSettings params, Texture3D<sh2> probeArray, flo
 			}
 
 	sh2 result = shScale(sum, rcp(wsum + 1e-10));
+
+	// fade out
+	result = lerp(scaledUnitSH, result, getFadeOutFactor(positionMS));
 
 	return result;
 }

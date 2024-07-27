@@ -59,8 +59,7 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 	float4 positionMS = mul(CameraViewProjInverse[eyeIndex], positionCS);
 	positionMS.xyz = positionMS.xyz / positionMS.w;
 #	if defined(VR)
-	if (eyeIndex == 1)
-		positionMS.xyz += CameraPosAdjust[1] - CameraPosAdjust[0];
+	positionMS.xyz += CameraPosAdjust[eyeIndex] - CameraPosAdjust[0];
 #	endif
 
 	sh2 skylighting = sampleSkylighting(skylightingSettings, SkylightingProbeArray, positionMS.xyz, normalWS);

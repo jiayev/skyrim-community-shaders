@@ -23,6 +23,7 @@ SamplerState samplerPointClamp : register(s0);
 [numthreads(8, 8, 1)] void main(uint3 dtid
 								: SV_DispatchThreadID) {
 	const static float fadeInThreshold = 64;
+	const static sh2 unitSH = shEvaluate(float3(0, 0, 1));
 
 	uint3 cellID = (int3(dtid) - settings.ArrayOrigin.xyz) % ARRAY_DIM;
 	bool isValid = all(cellID >= max(0, settings.ValidMargin.xyz)) && all(cellID <= ARRAY_DIM - 1 + min(0, settings.ValidMargin.xyz));  // check if the cell is newly added
@@ -43,18 +44,18 @@ SamplerState samplerPointClamp : register(s0);
 			sh2 occlusionSH = shScale(shEvaluate(settings.OcclusionDir.xyz), float(visible));
 			if (isValid) {
 				float lerpFactor = rcp(accumFrames);
-				sh2 prevProbeSH = float4(1, 0, 1, 0);
+				sh2 prevProbeSH = unitSH;
 				if (accumFrames > 1)
-					prevProbeSH += (outProbeArray[dtid] - float4(1, 0, 1, 0)) * fadeInThreshold / min(fadeInThreshold, accumFrames - 1);  // inverse confidence
+					prevProbeSH += (outProbeArray[dtid] - unitSH) * fadeInThreshold / min(fadeInThreshold, accumFrames - 1);  // inverse confidence
 				occlusionSH = shAdd(shScale(prevProbeSH, 1 - lerpFactor), shScale(occlusionSH, lerpFactor));
 			}
-			occlusionSH = lerp(float4(1, 0, 1, 0), occlusionSH, min(fadeInThreshold, accumFrames) / fadeInThreshold);  // confidence fade in
+			occlusionSH = lerp(unitSH, occlusionSH, min(fadeInThreshold, accumFrames) / fadeInThreshold);  // confidence fade in
 
 			outProbeArray[dtid] = occlusionSH;
 			outAccumFramesArray[dtid] = accumFrames;
 		}
 	} else if (!isValid) {
-		outProbeArray[dtid] = float4(1, 0, 1, 0);
+		outProbeArray[dtid] = unitSH;
 		outAccumFramesArray[dtid] = 0;
 	}
 }

@@ -88,12 +88,12 @@ Texture3D<sh2> SkylightingProbeArray : register(t9);
 		color += reflectance * specularIrradiance;
 #	elif defined(SKYLIGHTING)
 #		if defined(VR)
-		float3 positionMS = positionWS + (eyeIndex == 1 ? CameraPosAdjust[1] - CameraPosAdjust[0] : 0);
+		float3 positionMS = positionWS + CameraPosAdjust[eyeIndex] - CameraPosAdjust[0];
 #		else
 		float3 positionMS = positionWS;
 #		endif
 
-		sh2 skylighting = sampleSkylighting(skylightingSettings, SkylightingProbeArray, positionWS.xyz, normalWS);
+		sh2 skylighting = sampleSkylighting(skylightingSettings, SkylightingProbeArray, positionMS.xyz, normalWS);
 		sh2 specularLobe = fauxSpecularLobeSH(normalWS, -V, roughness);
 
 		half skylightingSpecular = saturate(shFuncProductIntegral(skylighting, specularLobe));

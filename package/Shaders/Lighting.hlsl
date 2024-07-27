@@ -1497,7 +1497,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(SKYLIGHTING)
 #		if defined(VR)
-	float3 positionMSSkylight = input.WorldPosition.xyz + (eyeIndex == 1 ? CameraPosAdjust[1] - CameraPosAdjust[0] : 0);
+	float3 positionMSSkylight = input.WorldPosition.xyz + CameraPosAdjust[eyeIndex] - CameraPosAdjust[0];
 #		else
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 #		endif
