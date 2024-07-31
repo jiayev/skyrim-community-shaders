@@ -4,6 +4,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
 	DirectionalDiffuse,
 	MaxZenith,
+	MaxFrames,
 	MinDiffuseVisibility,
 	DiffuseBrightness,
 	MinSpecularVisibility,

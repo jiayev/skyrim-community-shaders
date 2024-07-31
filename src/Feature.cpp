@@ -48,7 +48,7 @@ void Feature::Load(json& o_json)
 			loaded = false;
 
 			std::string minimalVersionString = minimalFeatureVersion.string();
-			minimalVersionString.resize(minimalVersionString.size() - 2);
+			minimalVersionString = minimalVersionString.substr(0, minimalVersionString.size() - 2);
 
 			if (majorVersionMismatch) {
 				failedLoadedMessage = std::format("{} {} requires a newer version of community shaders, the feature version should be {}", GetShortName(), value, minimalVersionString);
