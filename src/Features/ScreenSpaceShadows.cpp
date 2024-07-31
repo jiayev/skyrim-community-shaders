@@ -105,15 +105,14 @@ void ScreenSpaceShadows::DrawShadows()
 	lightProjection = DirectX::SimpleMath::Vector4::Transform(lightProjection, viewProjMat);
 	float lightProjectionF[4] = { lightProjection.x, lightProjection.y, lightProjection.z, lightProjection.w };
 
-	int viewportSize[2] = { (int)state->screenSize.x, (int)state->screenSize.y };
+	float2 size = Util::ConvertToDynamic(state->screenSize);
+	int viewportSize[2] = { (int)size.x, (int)size.y };
 
 	if (REL::Module::IsVR())
 		viewportSize[0] /= 2;
 
-	float2 size = Util::ConvertToDynamic({ (float)viewportSize[0], (float)viewportSize[1] });
-
 	int minRenderBounds[2] = { 0, 0 };
-	int maxRenderBounds[2] = { (int)size.x, (int)size.y };
+	int maxRenderBounds[2] = { viewportSize[0], viewportSize[1] };
 
 	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 	context->CSSetShaderResources(0, 1, &depth.depthSRV);
@@ -129,6 +128,10 @@ void ScreenSpaceShadows::DrawShadows()
 	context->CSSetShader(GetComputeRaymarch(), nullptr, 0);
 
 	auto dispatchList = Bend::BuildDispatchList(lightProjectionF, viewportSize, minRenderBounds, maxRenderBounds);
+
+	auto viewport = RE::BSGraphics::State::GetSingleton();
+
+	float2 dynamicRes = { viewport->GetRuntimeData().dynamicResolutionWidthRatio, viewport->GetRuntimeData().dynamicResolutionHeightRatio };
 
 	for (int i = 0; i < dispatchList.DispatchCount; i++) {
 		auto dispatchData = dispatchList.Dispatch[i];
@@ -147,6 +150,8 @@ void ScreenSpaceShadows::DrawShadows()
 
 		data.InvDepthTextureSize[0] = 1.0f / (float)viewportSize[0];
 		data.InvDepthTextureSize[1] = 1.0f / (float)viewportSize[1];
+
+		data.DynamicRes = dynamicRes;
 
 		data.settings = bendSettings;
 
@@ -185,6 +190,8 @@ void ScreenSpaceShadows::DrawShadows()
 
 			data.InvDepthTextureSize[0] = 1.0f / (float)viewportSize[0];
 			data.InvDepthTextureSize[1] = 1.0f / (float)viewportSize[1];
+
+			data.DynamicRes = dynamicRes;
 
 			data.settings = bendSettings;
 

@@ -20,6 +20,7 @@ float GetScreenSpaceShadow(float2 a_uv, float a_noise, float3 a_viewPosition, ui
 		float2 offset = mul(BlurOffsets[i], rotationMatrix) * 0.0025;
 
 		float2 sampleUV = a_uv + offset;
+		sampleUV = saturate(sampleUV);
 		int3 sampleCoord = ConvertUVToSampleCoord(sampleUV, a_eyeIndex);
 
 		float rawDepth = TexDepthSampler.Load(sampleCoord).x;

@@ -39,7 +39,7 @@ Texture3D<sh2> SkylightingProbeArray : register(t9);
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
-	half2 uv = half2(dispatchID.xy + 0.5) * BufferDim.zw;
+	half2 uv = half2(dispatchID.xy + 0.5) * BufferDim.zw * DynamicResolutionParams2.xy;
 	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
 	uv = ConvertFromStereoUV(uv, eyeIndex);
 
