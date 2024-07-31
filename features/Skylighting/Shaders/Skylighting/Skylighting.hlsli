@@ -7,8 +7,8 @@ struct SkylightingSettings
 	row_major float4x4 OcclusionViewProj;
 	float4 OcclusionDir;
 
-	float4 PosOffset;
-	uint4 ArrayOrigin;
+	float4 PosOffset;   // xyz: cell origin in camera model space
+	uint4 ArrayOrigin;  // xyz: array origin, w: max accum frames
 	int4 ValidMargin;
 
 	float4 MixParams;  // x: min diffuse visibility, y: diffuse mult, z: min specular visibility, w: specular mult
@@ -41,7 +41,7 @@ float getFadeOutFactor(float3 positionMS)
 
 sh2 sampleSkylighting(SkylightingSettings params, Texture3D<sh2> probeArray, float3 positionMS, float3 normalWS)
 {
-	const static sh2 unitSH = shEvaluate(float3(0, 0, 1));
+	const static sh2 unitSH = shEvaluate(float3(0, 0, 1)) * 4.0 * shPI;
 	sh2 scaledUnitSH = unitSH / (params.MixParams.y + 1e-10);
 
 	float3 positionMSAdjusted = positionMS - params.PosOffset;
@@ -127,13 +127,13 @@ float shHallucinateZH3Irradiance(sh2 sh, float3 normal)
 	const static float factor = sqrt(5.0f / (16.0f * 3.1415926f));
 
 	float3 zonalAxis = normalize(sh.wyz);
-	float ratio = abs(dot(sh.wyz, zonalAxis)) / sh.x;
-	float3 zonalL2Coeff = sh.x * (0.08f * ratio + 0.6f * ratio * ratio);
+	float ratio = abs(dot(sh.wyz * float3(-1, -1, 0), zonalAxis)) / sh.x;
+	float zonalL2Coeff = sh.x * (0.08f * ratio + 0.6f * ratio * ratio);
 
 	float fZ = dot(zonalAxis, normal);
 	float zhDir = factor * (3.0f * fZ * fZ - 1.0f);
 
-	float result = shFuncProductIntegral(sh, shEvaluateCosineLobe(normal));
+	float result = shFuncProductIntegral(sh, shEvaluateCosineLobe(normal)) / shPI;  // cosine lobe integral -> pi
 
 	result += 0.25f * zonalL2Coeff * zhDir;
 
@@ -150,7 +150,7 @@ sh2 fauxSpecularLobeSH(float3 N, float3 V, float roughness)
 	float3 dominantDir = normalize(D);
 
 	sh2 directional = shEvaluate(dominantDir);
-	sh2 cosineLobe = shEvaluateCosineLobe(dominantDir);
+	sh2 cosineLobe = shEvaluateCosineLobe(dominantDir) / PI;
 	sh2 result = shAdd(shScale(directional, f), shScale(cosineLobe, 1 - f));
 
 	return result;

@@ -44,10 +44,11 @@ struct Skylighting : Feature
 	{
 		bool DirectionalDiffuse = true;
 		float MaxZenith = 3.1415926f / 3.f;  // 60 deg
+		int MaxFrames = 64;
 		float MinDiffuseVisibility = 0.1f;
-		float DiffuseBrightness = 3;
-		float MinSpecularVisibility = 0;
-		float SpecularBrightness = 4;
+		float DiffuseBrightness = 1.f;
+		float MinSpecularVisibility = 0.f;
+		float SpecularBrightness = 1.f;
 	} settings;
 
 	struct SkylightingCB
@@ -57,7 +58,7 @@ struct Skylighting : Feature
 
 		float3 PosOffset;  // cell origin in camera model space
 		float _pad0;
-		uint ArrayOrigin[4];
+		uint ArrayOrigin[4];  // xyz: array origin, w: max accum frames
 		int ValidMargin[4];
 
 		float4 MixParams;  // x: min diffuse visibility, y: diffuse mult, z: min specular visibility, w: specular mult

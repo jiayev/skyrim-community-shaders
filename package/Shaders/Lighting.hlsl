@@ -1521,7 +1521,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float minWetnessAngle = 0;
 	minWetnessAngle = saturate(max(minWetnessValue, worldSpaceNormal.z));
 #		if defined(SKYLIGHTING)
-	float wetnessOcclusion = saturate(shUnproject(skylightingSH, float3(0, 0, 1)) * 10);
+	float wetnessOcclusion = pow(saturate(shUnproject(skylightingSH, float3(0, 0, 1))), 2);
 #		endif  // SKYLIGHTING
 
 	float4 raindropInfo = float4(0, 0, 1, 0);
@@ -1775,7 +1775,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
 
 #	if defined(SKYLIGHTING)
-	float skylightingDiffuse = shHallucinateZH3Irradiance(skylightingSH, worldSpaceNormal);
+	float skylightingDiffuse = shHallucinateZH3Irradiance(skylightingSH, skylightingSettings.DirectionalDiffuse ? worldSpaceNormal : float3(0, 0, 1));
 	skylightingDiffuse = lerp(skylightingSettings.MixParams.x, 1, saturate(skylightingDiffuse * skylightingSettings.MixParams.y));
 	directionalAmbientColor = sRGB2Lin(directionalAmbientColor);
 	directionalAmbientColor *= skylightingDiffuse;

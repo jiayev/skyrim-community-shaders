@@ -22,8 +22,8 @@ SamplerState samplerPointClamp : register(s0);
 
 [numthreads(8, 8, 1)] void main(uint3 dtid
 								: SV_DispatchThreadID) {
-	const static float fadeInThreshold = 64;
-	const static sh2 unitSH = shEvaluate(float3(0, 0, 1));
+	const float fadeInThreshold = settings.ArrayOrigin.w;
+	const static sh2 unitSH = shEvaluate(float3(0, 0, 1)) * 4.0 * shPI;  // 4 pi from monte carlo
 
 	uint3 cellID = (int3(dtid) - settings.ArrayOrigin.xyz) % ARRAY_DIM;
 	bool isValid = all(cellID >= max(0, settings.ValidMargin.xyz)) && all(cellID <= ARRAY_DIM - 1 + min(0, settings.ValidMargin.xyz));  // check if the cell is newly added
@@ -41,7 +41,7 @@ SamplerState samplerPointClamp : register(s0);
 			float occlusionDepth = srcOcclusionDepth.SampleLevel(samplerPointClamp, occlusionUV, 0);
 			bool visible = cellCentreOS.z < occlusionDepth;
 
-			sh2 occlusionSH = shScale(shEvaluate(settings.OcclusionDir.xyz), float(visible));
+			sh2 occlusionSH = shScale(shEvaluate(settings.OcclusionDir.xyz), float(visible) * 4.0 * shPI);
 			if (isValid) {
 				float lerpFactor = rcp(accumFrames);
 				sh2 prevProbeSH = unitSH;
