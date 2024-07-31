@@ -223,8 +223,9 @@ void ScreenSpaceShadows::Prepass()
 	float white[4] = { 1, 1, 1, 1 };
 	context->ClearUnorderedAccessViewFloat(screenSpaceShadowsTexture->uav.get(), white);
 
-	if (bendSettings.Enable)
-		DrawShadows();
+	if (auto sky = RE::Sky::GetSingleton())
+		if (bendSettings.Enable && sky->mode.get() == RE::Sky::Mode::kFull)
+			DrawShadows();
 
 	auto view = screenSpaceShadowsTexture->srv.get();
 	context->PSSetShaderResources(17, 1, &view);
