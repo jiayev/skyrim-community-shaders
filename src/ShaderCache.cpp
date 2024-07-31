@@ -977,7 +977,7 @@ namespace SIE
 			for (const auto& def : defines) {
 				if (def.Name != nullptr) {
 					result += def.Name;
-					if (def.Definition != nullptr && !std::string(def.Definition).empty()) {
+					if (def.Definition != nullptr && !std::string_view(def.Definition).empty()) {
 						result += "=";
 						result += def.Definition;
 					}
@@ -2059,7 +2059,6 @@ namespace SIE
 	{
 		int milliseconds = (int)a_totalms;
 		int seconds = milliseconds / 1000;
-		milliseconds %= 1000;
 		int minutes = seconds / 60;
 		seconds %= 60;
 		int hours = minutes / 60;

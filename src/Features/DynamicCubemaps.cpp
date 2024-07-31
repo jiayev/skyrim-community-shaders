@@ -40,9 +40,9 @@ void DynamicCubemaps::DrawSettings()
 
 		if (ImGui::TreeNodeEx("Dynamic Cubemap Creator", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Text("You must enable creator mode by adding the shader define CREATOR");
-			ImGui::Checkbox("Enable Creator", (bool*)&settings.Enabled);
+			ImGui::Checkbox("Enable Creator", reinterpret_cast<bool*>(&settings.Enabled));
 			if (settings.Enabled) {
-				ImGui::ColorEdit3("Color", (float*)&settings.CubemapColor);
+				ImGui::ColorEdit3("Color", reinterpret_cast<float*>(&settings.CubemapColor));
 				ImGui::SliderFloat("Roughness", &settings.CubemapColor.w, 0.0f, 1.0f, "%.2f");
 				if (ImGui::Button("Export")) {
 					auto& device = State::GetSingleton()->device;
@@ -186,7 +186,7 @@ ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdate()
 {
 	if (!updateCubemapCS) {
 		logger::debug("Compiling UpdateCubemapCS");
-		updateCubemapCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", {}, "cs_5_0");
+		updateCubemapCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", {}, "cs_5_0"));
 	}
 	return updateCubemapCS;
 }
@@ -195,7 +195,7 @@ ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrence()
 {
 	if (!inferCubemapCS) {
 		logger::debug("Compiling InferCubemapCS");
-		inferCubemapCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", {}, "cs_5_0");
+		inferCubemapCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", {}, "cs_5_0"));
 	}
 	return inferCubemapCS;
 }
@@ -204,7 +204,7 @@ ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrenceReflections()
 {
 	if (!inferCubemapReflectionsCS) {
 		logger::debug("Compiling InferCubemapCS REFLECTIONS");
-		inferCubemapReflectionsCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0");
+		inferCubemapReflectionsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0"));
 	}
 	return inferCubemapReflectionsCS;
 }
@@ -213,7 +213,7 @@ ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderSpecularIrradiance()
 {
 	if (!specularIrradianceCS) {
 		logger::debug("Compiling SpecularIrradianceCS");
-		specularIrradianceCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\SpecularIrradianceCS.hlsl", {}, "cs_5_0");
+		specularIrradianceCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\SpecularIrradianceCS.hlsl", {}, "cs_5_0"));
 	}
 	return specularIrradianceCS;
 }

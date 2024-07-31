@@ -18,6 +18,25 @@ struct DepthStates
 struct BlendStates
 {
 	ID3D11BlendState* a[7][2][13][2];
+
+	static BlendStates* GetSingleton()
+	{
+		static auto blendStates = reinterpret_cast<BlendStates*>(REL::RelocationID(524749, 411364).address());
+		return blendStates;
+	}
+
+	static std::array<ID3D11BlendState**, 6> GetBlendStates()
+	{
+		auto blendStates = GetSingleton();
+		return {
+			&blendStates->a[0][0][1][0],
+			&blendStates->a[0][0][10][0],
+			&blendStates->a[1][0][1][0],
+			&blendStates->a[1][0][11][0],
+			&blendStates->a[2][0][1][0],
+			&blendStates->a[3][0][11][0]
+		};
+	}
 };
 
 void SetupRenderTarget(RE::RENDER_TARGET target, D3D11_TEXTURE2D_DESC texDesc, D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc, D3D11_RENDER_TARGET_VIEW_DESC rtvDesc, D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc, DXGI_FORMAT format)
@@ -175,17 +194,11 @@ void Deferred::CopyShadowData()
 	ID3D11UnorderedAccessView* uavs[1]{ perShadow->uav.get() };
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
-	ID3D11Buffer* buffers[1];
-	context->PSGetConstantBuffers(2, 1, buffers);
-	context->CSSetConstantBuffers(0, 1, buffers);
+	ID3D11Buffer* buffers[3];
+	context->PSGetConstantBuffers(0, 3, buffers);
+	context->PSGetConstantBuffers(12, 1, buffers + 1);
 
-	context->PSGetConstantBuffers(12, 1, buffers);
-	context->CSSetConstantBuffers(1, 1, buffers);
-
-	context->PSGetConstantBuffers(0, 1, buffers);
-	context->CSSetConstantBuffers(2, 1, buffers);
-
-	context->PSGetShaderResources(4, 1, &shadowView);
+	context->CSSetConstantBuffers(0, 3, buffers);
 
 	context->CSSetShader(copyShadowCS, nullptr, 0);
 
@@ -194,14 +207,14 @@ void Deferred::CopyShadowData()
 	uavs[0] = nullptr;
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
-	buffers[0] = nullptr;
-	context->CSSetConstantBuffers(0, 1, buffers);
-	context->CSSetConstantBuffers(1, 1, buffers);
-	context->CSSetConstantBuffers(2, 1, buffers);
+	std::fill(buffers, buffers + ARRAYSIZE(buffers), nullptr);
+	context->CSSetConstantBuffers(0, 3, buffers);
 
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	{
+		context->PSGetShaderResources(4, 1, &shadowView);
+
 		ID3D11ShaderResourceView* srvs[2]{
 			shadowView,
 			perShadow->srv.get(),
@@ -271,90 +284,23 @@ void Deferred::StartDeferred()
 
 	State::GetSingleton()->UpdateSharedData();
 
-	static bool setup = false;
-	if (!setup) {
+	static std::once_flag setup;
+	std::call_once(setup, [&]() {
 		auto& device = State::GetSingleton()->device;
 
-		static BlendStates* blendStates = reinterpret_cast<BlendStates*>(REL::RelocationID(524749, 411364).address());
+		auto blendStates = BlendStates::GetBlendStates();
 
-		{
-			forwardBlendStates[0] = blendStates->a[0][0][1][0];
+		for (int i = 0; i < blendStates.size(); ++i) {
+			forwardBlendStates[i] = *blendStates[i];
 
 			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[0]->GetDesc(&blendDesc);
+			forwardBlendStates[i]->GetDesc(&blendDesc);
 
 			blendDesc.IndependentBlendEnable = false;
 
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[0]));
+			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[i]));
 		}
-
-		{
-			forwardBlendStates[1] = blendStates->a[0][0][10][0];
-
-			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[1]->GetDesc(&blendDesc);
-
-			blendDesc.IndependentBlendEnable = false;
-
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[1]));
-		}
-
-		{
-			forwardBlendStates[2] = blendStates->a[1][0][1][0];
-
-			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[2]->GetDesc(&blendDesc);
-
-			blendDesc.IndependentBlendEnable = false;
-
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[2]));
-		}
-
-		{
-			forwardBlendStates[3] = blendStates->a[1][0][11][0];
-
-			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[3]->GetDesc(&blendDesc);
-
-			blendDesc.IndependentBlendEnable = false;
-
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[3]));
-		}
-
-		{
-			forwardBlendStates[4] = blendStates->a[2][0][1][0];
-
-			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[4]->GetDesc(&blendDesc);
-
-			blendDesc.IndependentBlendEnable = false;
-
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[4]));
-		}
-
-		{
-			forwardBlendStates[5] = blendStates->a[2][0][11][0];
-
-			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[5]->GetDesc(&blendDesc);
-
-			blendDesc.IndependentBlendEnable = false;
-
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[5]));
-		}
-
-		{
-			forwardBlendStates[6] = blendStates->a[3][0][11][0];
-
-			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[6]->GetDesc(&blendDesc);
-
-			blendDesc.IndependentBlendEnable = false;
-
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[6]));
-		}
-		setup = true;
-	}
+	});
 
 	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 	GET_INSTANCE_MEMBER(renderTargets, shadowState)
@@ -397,7 +343,7 @@ void Deferred::DeferredPasses()
 	UpdateConstantBuffer();
 
 	{
-		REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
+		static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
 		ID3D11Buffer* buffers[2] = { deferredCB->CB(), *perFrame.get() };
 
 		context->CSSetConstantBuffers(11, 2, buffers);
@@ -555,101 +501,27 @@ void Deferred::EndDeferred()
 
 void Deferred::OverrideBlendStates()
 {
-	static bool setup = false;
-	if (!setup) {
+	auto blendStates = BlendStates::GetBlendStates();
+
+	static std::once_flag setup;
+	std::call_once(setup, [&]() {
 		auto& device = State::GetSingleton()->device;
 
-		static BlendStates* blendStates = reinterpret_cast<BlendStates*>(REL::RelocationID(524749, 411364).address());
-
-		{
-			forwardBlendStates[0] = blendStates->a[0][0][1][0];
+		for (int i = 0; i < blendStates.size(); ++i) {
+			forwardBlendStates[i] = *blendStates[i];
 
 			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[0]->GetDesc(&blendDesc);
+			forwardBlendStates[i]->GetDesc(&blendDesc);
 
 			blendDesc.IndependentBlendEnable = false;
 
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[0]));
+			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[i]));
 		}
-
-		{
-			forwardBlendStates[1] = blendStates->a[0][0][10][0];
-
-			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[1]->GetDesc(&blendDesc);
-
-			blendDesc.IndependentBlendEnable = false;
-
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[1]));
-		}
-
-		{
-			forwardBlendStates[2] = blendStates->a[1][0][1][0];
-
-			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[2]->GetDesc(&blendDesc);
-
-			blendDesc.IndependentBlendEnable = false;
-
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[2]));
-		}
-
-		{
-			forwardBlendStates[3] = blendStates->a[1][0][11][0];
-
-			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[3]->GetDesc(&blendDesc);
-
-			blendDesc.IndependentBlendEnable = false;
-
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[3]));
-		}
-
-		{
-			forwardBlendStates[4] = blendStates->a[2][0][1][0];
-
-			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[4]->GetDesc(&blendDesc);
-
-			blendDesc.IndependentBlendEnable = false;
-
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[4]));
-		}
-
-		{
-			forwardBlendStates[5] = blendStates->a[2][0][11][0];
-
-			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[5]->GetDesc(&blendDesc);
-
-			blendDesc.IndependentBlendEnable = false;
-
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[5]));
-		}
-
-		{
-			forwardBlendStates[6] = blendStates->a[3][0][11][0];
-
-			D3D11_BLEND_DESC blendDesc;
-			forwardBlendStates[6]->GetDesc(&blendDesc);
-
-			blendDesc.IndependentBlendEnable = false;
-
-			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[6]));
-		}
-		setup = true;
-	}
-
-	static BlendStates* blendStates = reinterpret_cast<BlendStates*>(REL::RelocationID(524749, 411364).address());
+	});
 
 	// Set modified blend states
-	blendStates->a[0][0][1][0] = deferredBlendStates[0];
-	blendStates->a[0][0][10][0] = deferredBlendStates[1];
-	blendStates->a[1][0][1][0] = deferredBlendStates[2];
-	blendStates->a[1][0][11][0] = deferredBlendStates[3];
-	blendStates->a[2][0][1][0] = deferredBlendStates[4];
-	blendStates->a[2][0][11][0] = deferredBlendStates[5];
-	blendStates->a[3][0][11][0] = deferredBlendStates[6];
+	for (int i = 0; i < blendStates.size(); ++i)
+		*blendStates[i] = deferredBlendStates[i];
 
 	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 	GET_INSTANCE_MEMBER(stateUpdateFlags, shadowState)
@@ -659,16 +531,11 @@ void Deferred::OverrideBlendStates()
 
 void Deferred::ResetBlendStates()
 {
-	static BlendStates* blendStates = reinterpret_cast<BlendStates*>(REL::RelocationID(524749, 411364).address());
+	auto blendStates = BlendStates::GetBlendStates();
 
 	// Restore modified blend states
-	blendStates->a[0][0][1][0] = forwardBlendStates[0];
-	blendStates->a[0][0][10][0] = forwardBlendStates[1];
-	blendStates->a[1][0][1][0] = forwardBlendStates[2];
-	blendStates->a[1][0][11][0] = forwardBlendStates[3];
-	blendStates->a[2][0][1][0] = forwardBlendStates[4];
-	blendStates->a[2][0][11][0] = forwardBlendStates[5];
-	blendStates->a[3][0][11][0] = forwardBlendStates[6];
+	for (int i = 0; i < blendStates.size(); ++i)
+		*blendStates[i] = forwardBlendStates[i];
 
 	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 	GET_INSTANCE_MEMBER(stateUpdateFlags, shadowState)
@@ -756,8 +623,7 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 		std::vector<std::pair<const char*, const char*>> defines;
 		defines.push_back({ "INTERIOR", nullptr });
 
-		auto dynamicCubemaps = DynamicCubemaps::GetSingleton();
-		if (dynamicCubemaps->loaded)
+		if (DynamicCubemaps::GetSingleton()->loaded)
 			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
 
 		mainCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));

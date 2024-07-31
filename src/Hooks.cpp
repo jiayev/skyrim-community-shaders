@@ -26,42 +26,22 @@ const std::pair<std::unique_ptr<uint8_t[]>, size_t>& GetShaderBytecode(void* Sha
 	return ShaderBytecodeMap.at(Shader);
 }
 
-void DumpShader(const REX::BSShader* thisClass, const RE::BSGraphics::VertexShader* shader, const std::pair<std::unique_ptr<uint8_t[]>, size_t>& bytecode)
+template <class ShaderType>
+void DumpShader(const REX::BSShader* thisClass, const ShaderType* shader, const std::pair<std::unique_ptr<uint8_t[]>, size_t>& bytecode)
 {
+	static_assert(std::is_same_v<ShaderType, RE::BSGraphics::VertexShader> || std::is_same_v<ShaderType, RE::BSGraphics::PixelShader>);
+
 	uint8_t* dxbcData = new uint8_t[bytecode.second];
 	size_t dxbcLen = bytecode.second;
 	memcpy(dxbcData, bytecode.first.get(), bytecode.second);
 
-	std::string dumpDir = std::format("Data\\ShaderDump\\{}\\{}.vs.bin", thisClass->m_LoaderType, shader->id);
+	constexpr auto shaderExtStr = std::is_same_v<ShaderType, RE::BSGraphics::VertexShader> ? "vs" : "ps";
+	constexpr auto shaderTypeStr = std::is_same_v<ShaderType, RE::BSGraphics::VertexShader> ? "vertex" : "pixel";
+
+	std::string dumpDir = std::format("Data\\ShaderDump\\{}\\{:X}.{}.bin", thisClass->m_LoaderType, shader->id, shaderExtStr);
 	auto directoryPath = std::format("Data\\ShaderDump\\{}", thisClass->m_LoaderType);
-	logger::debug(fmt::runtime("Dumping vertex shader {} with id {:x} at {}"), thisClass->m_LoaderType, shader->id, dumpDir);
+	logger::debug(fmt::runtime("Dumping {} shader {} with id {:x} at {}"), shaderTypeStr, thisClass->m_LoaderType, shader->id, dumpDir);
 
-	if (!std::filesystem::is_directory(directoryPath)) {
-		try {
-			std::filesystem::create_directories(directoryPath);
-		} catch (std::filesystem::filesystem_error const& ex) {
-			logger::error("Failed to create folder: {}", ex.what());
-		}
-	}
-
-	if (FILE * file; fopen_s(&file, dumpDir.c_str(), "wb") == 0) {
-		fwrite(dxbcData, 1, dxbcLen, file);
-		fclose(file);
-	}
-
-	delete[] dxbcData;
-}
-
-void DumpShader(const REX::BSShader* thisClass, const RE::BSGraphics::PixelShader* shader, const std::pair<std::unique_ptr<uint8_t[]>, size_t>& bytecode)
-{
-	uint8_t* dxbcData = new uint8_t[bytecode.second];
-	size_t dxbcLen = bytecode.second;
-	memcpy(dxbcData, bytecode.first.get(), bytecode.second);
-
-	std::string dumpDir = std::format("Data\\ShaderDump\\{}\\{:X}.ps.bin", thisClass->m_LoaderType, shader->id);
-
-	auto directoryPath = std::format("Data\\ShaderDump\\{}", thisClass->m_LoaderType);
-	logger::debug(fmt::runtime("Dumping pixel shader {} with id {:x} at {}"), thisClass->m_LoaderType, shader->id, dumpDir);
 	if (!std::filesystem::is_directory(directoryPath)) {
 		try {
 			std::filesystem::create_directories(directoryPath);
@@ -90,7 +70,7 @@ void hk_BSShader_LoadShaders(RE::BSShader* shader, std::uintptr_t stream)
 	if (shaderCache.IsDiskCache() || shaderCache.IsDump()) {
 		for (const auto& entry : shader->vertexShaders) {
 			if (entry->shader && shaderCache.IsDump()) {
-				auto& bytecode = GetShaderBytecode(entry->shader);
+				const auto& bytecode = GetShaderBytecode(entry->shader);
 				DumpShader((REX::BSShader*)shader, entry, bytecode);
 			}
 			auto vertexShaderDesriptor = entry->id;
@@ -100,7 +80,7 @@ void hk_BSShader_LoadShaders(RE::BSShader* shader, std::uintptr_t stream)
 		}
 		for (const auto& entry : shader->pixelShaders) {
 			if (entry->shader && shaderCache.IsDump()) {
-				auto& bytecode = GetShaderBytecode(entry->shader);
+				const auto& bytecode = GetShaderBytecode(entry->shader);
 				DumpShader((REX::BSShader*)shader, entry, bytecode);
 			}
 			auto vertexShaderDesriptor = entry->id;

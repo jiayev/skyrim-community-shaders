@@ -306,7 +306,7 @@ void State::SetDefines(std::string a_defines)
 		shaderDefinesString += pystring::strip(define) + ";";
 		shaderDefines.push_back(std::pair(name, definition));
 	}
-	shaderDefinesString = shaderDefinesString.substr(0, shaderDefinesString.size() - 1);
+	shaderDefinesString.pop_back();
 	logger::debug("Shader Defines set to {}", shaderDefinesString);
 }
 
