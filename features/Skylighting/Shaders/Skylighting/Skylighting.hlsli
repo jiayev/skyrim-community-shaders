@@ -150,7 +150,7 @@ sh2 fauxSpecularLobeSH(float3 N, float3 V, float roughness)
 	float3 dominantDir = normalize(D);
 
 	sh2 directional = shEvaluate(dominantDir);
-	sh2 cosineLobe = shEvaluateCosineLobe(dominantDir) / PI;
+	sh2 cosineLobe = shEvaluateCosineLobe(dominantDir) / shPI;
 	sh2 result = shAdd(shScale(directional, f), shScale(cosineLobe, 1 - f));
 
 	return result;
