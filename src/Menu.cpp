@@ -12,6 +12,7 @@
 #include "Features/LightLimitFix/ParticleLights.h"
 
 #include "Deferred.h"
+#include "TruePBR.h"
 
 #include "VariableRateShading.h"
 
@@ -407,6 +408,7 @@ void Menu::DrawSettings()
 				ImGui::TreePop();
 			}
 			ImGui::Checkbox("Extended Frame Annotations", &State::GetSingleton()->extendedFrameAnnotations);
+			TruePBR::GetSingleton()->DrawSettings();
 		}
 
 		if (ImGui::CollapsingHeader("Replace Original Shaders", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {

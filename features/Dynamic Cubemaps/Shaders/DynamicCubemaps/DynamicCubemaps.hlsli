@@ -13,6 +13,23 @@ half2 EnvBRDFApprox(half Roughness, half NoV)
 
 #if !defined(WATER)
 
+float3 GetDynamicCubemapSpecularIrradiance(float2 uv, float3 N, float3 VN, float3 V, float roughness, float distance)
+{
+	float3 R = reflect(-V, N);
+	float level = roughness * 9.0;
+
+	// Horizon specular occlusion
+	// https://marmosetco.tumblr.com/post/81245981087
+	float horizon = min(1.0 + dot(R, VN), 1.0);
+	horizon *= horizon * horizon;
+
+	float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level).xyz;
+	specularIrradiance *= horizon;
+	specularIrradiance = sRGB2Lin(specularIrradiance);
+
+	return specularIrradiance;
+}
+
 float3 GetDynamicCubemap(float2 uv, float3 N, float3 VN, float3 V, float roughness, float3 F0, float3 diffuseColor, float distance)
 {
 	float3 R = reflect(-V, N);

@@ -20,6 +20,7 @@ public:
 	bool enableVShaders = true;
 
 	bool updateShader = true;
+	bool settingCustomShader = false;
 	RE::BSShader* currentShader = nullptr;
 
 	uint32_t currentVertexDescriptor = 0;

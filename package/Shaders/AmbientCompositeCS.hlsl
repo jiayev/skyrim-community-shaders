@@ -25,6 +25,8 @@ Texture3D<sh2> SkylightingProbeArray : register(t3);
 Texture2D<half4> SSGITexture : register(t4);
 #endif
 
+Texture2D<unorm half3> Masks2Texture : register(t5);
+
 RWTexture2D<half3> MainRW : register(u0);
 #if defined(SSGI)
 RWTexture2D<half3> DiffuseAmbientRW : register(u1);
@@ -41,16 +43,19 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 
 	half3 diffuseColor = MainRW[dispatchID.xy];
 	half3 albedo = AlbedoTexture[dispatchID.xy];
+	half3 masks2 = Masks2Texture[dispatchID.xy];
+
+	half pbrWeight = masks2.z;
 
 	half3 normalWS = normalize(mul(CameraViewInverse[eyeIndex], half4(normalVS, 0)).xyz);
 
 	half3 directionalAmbientColor = mul(DirectionalAmbient, half4(normalWS, 1.0));
 
-	half3 ambient = directionalAmbientColor;
+	half3 linAlbedo = sRGB2Lin(albedo);
+	half3 linDirectionalAmbientColor = sRGB2Lin(directionalAmbientColor);
+	half3 linDiffuseColor = sRGB2Lin(diffuseColor);
 
-	diffuseColor = sRGB2Lin(diffuseColor);
-	ambient = sRGB2Lin(ambient);
-	albedo = sRGB2Lin(albedo);
+	half3 linAmbient = lerp(sRGB2Lin(albedo * directionalAmbientColor), linAlbedo * linDirectionalAmbientColor, pbrWeight);
 
 	half visibility = 1.0;
 #if defined(SKYLIGHTING)
@@ -71,23 +76,23 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 
 #if defined(SSGI)
 	half4 ssgiDiffuse = SSGITexture[dispatchID.xy];
-	ssgiDiffuse.rgb *= albedo;
+	ssgiDiffuse.rgb *= linAlbedo;
 
 	visibility = min(visibility, ssgiDiffuse.a);
 
-	DiffuseAmbientRW[dispatchID.xy] = albedo * ambient + ssgiDiffuse.rgb;
+	DiffuseAmbientRW[dispatchID.xy] = linAlbedo * linDirectionalAmbientColor + ssgiDiffuse.rgb;
 
 #	if defined(INTERIOR)
-	diffuseColor *= ssgiDiffuse.a;
+	linDiffuseColor *= ssgiDiffuse.a;
 #	endif
-	diffuseColor += ssgiDiffuse.rgb;
+	linDiffuseColor += ssgiDiffuse.rgb;
 #endif
 
-	diffuseColor = Lin2sRGB(diffuseColor);
-	ambient = Lin2sRGB(ambient * visibility);
-	albedo = Lin2sRGB(albedo);
+	linAmbient *= visibility;
+	diffuseColor = Lin2sRGB(linDiffuseColor);
+	directionalAmbientColor = Lin2sRGB(linDirectionalAmbientColor * visibility);
 
-	diffuseColor += ambient * albedo;
+	diffuseColor = lerp(diffuseColor + directionalAmbientColor * albedo, Lin2sRGB(linDiffuseColor + linAmbient), pbrWeight);
 
 	MainRW[dispatchID.xy] = diffuseColor;
 };

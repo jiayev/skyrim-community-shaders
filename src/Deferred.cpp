@@ -380,12 +380,13 @@ void Deferred::DeferredPasses()
 			ID3D11Buffer* buffer = skylighting->loaded ? skylighting->skylightingCB->CB() : nullptr;
 			context->CSSetConstantBuffers(1, 1, &buffer);
 
-			ID3D11ShaderResourceView* srvs[5]{
+			ID3D11ShaderResourceView* srvs[6]{
 				albedo.SRV,
 				normalRoughness.SRV,
 				skylighting->loaded ? depth.depthSRV : nullptr,
 				skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
 				ssgi->loaded ? ssgi->texGI[ssgi->outputGIIdx]->srv.get() : nullptr,
+				masks2.SRV,
 			};
 
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);

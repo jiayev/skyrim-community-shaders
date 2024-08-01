@@ -118,6 +118,15 @@ struct LightLimitFixSettings
 #	include "Skylighting/Skylighting.hlsli"
 #	undef SL_INCL_STRUCT
 
+struct PBRSettings
+{
+	float DirectionalLightColorMultiplier;
+	float PointLightColorMultiplier;
+	float AmbientLightColorMultiplier;
+	bool UseMultipleScattering;
+	bool UseMultiBounceAO;
+};
+
 cbuffer FeatureData : register(b6)
 {
 	GrassLightingSettings grassLightingSettings;
@@ -127,6 +136,7 @@ cbuffer FeatureData : register(b6)
 	WetnessEffects wetnessEffects;
 	LightLimitFixSettings lightLimitFixSettings;
 	SkylightingSettings skylightingSettings;
+	PBRSettings pbrSettings;
 };
 
 Texture2D<float4> TexDepthSampler : register(t20);

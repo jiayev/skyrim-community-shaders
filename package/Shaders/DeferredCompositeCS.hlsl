@@ -49,10 +49,14 @@ Texture3D<sh2> SkylightingProbeArray : register(t9);
 	half3 diffuseColor = MainRW[dispatchID.xy];
 	half3 specularColor = SpecularTexture[dispatchID.xy];
 	half3 albedo = AlbedoTexture[dispatchID.xy];
-	half2 snowParameters = Masks2Texture[dispatchID.xy].xy;
+	half3 masks2 = Masks2Texture[dispatchID.xy];
+
+	half2 snowParameters = masks2.xy;
+	half pbrWeight = masks2.z;
 
 	half glossiness = normalGlossiness.z;
-	half3 color = diffuseColor + specularColor;
+
+	half3 color = lerp(diffuseColor + specularColor, Lin2sRGB(sRGB2Lin(diffuseColor) + sRGB2Lin(specularColor)), pbrWeight);
 
 #if defined(DYNAMIC_CUBEMAPS)
 
@@ -81,11 +85,14 @@ Texture3D<sh2> SkylightingProbeArray : register(t9);
 		half roughness = 1.0 - glossiness;
 		half level = roughness * 7.0;
 
+		half3 directionalAmbientColor = sRGB2Lin(mul(DirectionalAmbient, half4(R, 1.0)));
+		half3 finalIrradiance = lerp(0, directionalAmbientColor, pbrWeight);
+
 #	if defined(INTERIOR)
 		half3 specularIrradiance = EnvTexture.SampleLevel(LinearSampler, R, level).xyz;
 		specularIrradiance = sRGB2Lin(specularIrradiance);
 
-		color += reflectance * specularIrradiance;
+		finalIrradiance += specularIrradiance;
 #	elif defined(SKYLIGHTING)
 #		if defined(VR)
 		float3 positionMS = positionWS + CameraPosAdjust[eyeIndex] - CameraPosAdjust[0];
@@ -112,14 +119,15 @@ Texture3D<sh2> SkylightingProbeArray : register(t9);
 			specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level).xyz;
 			specularIrradianceReflections = sRGB2Lin(specularIrradianceReflections);
 		}
-
-		color += reflectance * lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
+		finalIrradiance = finalIrradiance * skylightingSpecular + lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
 #	else
 		half3 specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level).xyz;
 		specularIrradianceReflections = sRGB2Lin(specularIrradianceReflections);
 
-		color += reflectance * specularIrradianceReflections;
+		finalIrradiance += specularIrradianceReflections;
 #	endif
+
+		color += reflectance * finalIrradiance;
 
 		color = Lin2sRGB(color);
 	}
