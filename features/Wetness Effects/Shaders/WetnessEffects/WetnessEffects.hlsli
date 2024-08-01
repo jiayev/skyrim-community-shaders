@@ -1,4 +1,4 @@
-#include "WetnessEffects/optimized-ggx.hlsl"
+#include "WetnessEffects/optimized-ggx.hlsli"
 
 // https://www.unrealengine.com/en-US/blog/physically-based-shading-on-mobile
 float2 EnvBRDFApproxWater(float3 F0, float Roughness, float NoV)

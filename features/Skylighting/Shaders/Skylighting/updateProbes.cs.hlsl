@@ -2,7 +2,7 @@
 #include "Skylighting.hlsli"
 
 #include "../Common/DeferredShared.hlsli"
-#include "../Common/FrameBuffer.hlsl"
+#include "../Common/FrameBuffer.hlsli"
 #include "../Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 
 cbuffer SkylightingCB : register(b1)

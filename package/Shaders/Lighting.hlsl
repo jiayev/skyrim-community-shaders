@@ -1,9 +1,9 @@
-#include "Common/Color.hlsl"
-#include "Common/FrameBuffer.hlsl"
+#include "Common/Color.hlsli"
+#include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
 #include "Common/LodLandscape.hlsli"
-#include "Common/MotionBlur.hlsl"
-#include "Common/Permutation.hlsl"
+#include "Common/MotionBlur.hlsli"
+#include "Common/Permutation.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
 

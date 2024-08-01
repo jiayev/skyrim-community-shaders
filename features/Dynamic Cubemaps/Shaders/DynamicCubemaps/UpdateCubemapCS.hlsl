@@ -1,6 +1,6 @@
 #include "../Common/Constants.hlsli"
 #include "../Common/DeferredShared.hlsli"
-#include "../Common/FrameBuffer.hlsl"
+#include "../Common/FrameBuffer.hlsli"
 #include "../Common/VR.hlsli"
 
 RWTexture2DArray<float4> DynamicCubemap : register(u0);

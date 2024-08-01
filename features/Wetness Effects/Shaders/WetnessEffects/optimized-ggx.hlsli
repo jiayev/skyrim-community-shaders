@@ -1,5 +1,5 @@
 /*
-optimized-ggx.hlsl
+optimized-ggx.hlsli
 This file describes several optimizations you can make when creating a GGX shader.
 
 AUTHOR: John Hable

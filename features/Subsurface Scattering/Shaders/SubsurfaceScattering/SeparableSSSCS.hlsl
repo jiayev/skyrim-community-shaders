@@ -14,7 +14,7 @@ cbuffer PerFrameSSS : register(b1)
 	float SSSS_FOVY;
 };
 
-#include "../Common/Color.hlsl"
+#include "../Common/Color.hlsli"
 #include "../Common/Constants.hlsli"
 #include "../Common/DeferredShared.hlsli"
 
