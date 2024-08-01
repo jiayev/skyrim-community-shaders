@@ -47,9 +47,11 @@ struct ScreenSpaceGI : Feature
 		bool Enabled = true;
 		bool UseBitmask = true;
 		bool EnableGI = true;
+		bool EnableSpecularGI = false;
 		// performance/quality
 		uint NumSlices = 2;
 		uint NumSteps = 4;
+		bool HalfRes = false;
 		bool HalfRate = true;
 		float DepthMIPSamplingOffset = 3.3f;
 		// visual
@@ -66,7 +68,7 @@ struct ScreenSpaceGI : Feature
 		float GIDistanceCompensation = 0.f;
 		// mix
 		float AOPower = 1.f;
-		float GIStrength = 4.f;
+		float GIStrength = 3.f;
 		// denoise
 		bool EnableTemporalDenoiser = true;
 		bool EnableBlur = true;
@@ -127,6 +129,7 @@ struct ScreenSpaceGI : Feature
 	eastl::unique_ptr<Texture2D> texRadiance = nullptr;
 	eastl::unique_ptr<Texture2D> texAccumFrames[2] = { nullptr };
 	eastl::unique_ptr<Texture2D> texGI[2] = { nullptr };
+	eastl::unique_ptr<Texture2D> texGISpecular[2] = { nullptr };
 
 	winrt::com_ptr<ID3D11SamplerState> linearClampSampler = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> pointClampSampler = nullptr;
@@ -135,4 +138,6 @@ struct ScreenSpaceGI : Feature
 	winrt::com_ptr<ID3D11ComputeShader> radianceDisoccCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> giCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> blurCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> blurSpecularCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> upsampleCompute = nullptr;
 };

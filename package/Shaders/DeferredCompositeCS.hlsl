@@ -37,6 +37,10 @@ cbuffer SkylightingCB : register(b1)
 Texture3D<sh2> SkylightingProbeArray : register(t9);
 #endif
 
+#if defined(SSGI)
+Texture2D<half4> SpecularSSGITexture : register(t10);
+#endif
+
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
 	half2 uv = half2(dispatchID.xy + 0.5) * BufferDim.zw * DynamicResolutionParams2.xy;
@@ -125,6 +129,11 @@ Texture3D<sh2> SkylightingProbeArray : register(t9);
 		specularIrradianceReflections = sRGB2Lin(specularIrradianceReflections);
 
 		finalIrradiance += specularIrradianceReflections;
+#	endif
+
+#	if defined(SSGI)
+		half4 ssgiSpecular = SpecularSSGITexture[dispatchID.xy];
+		finalIrradiance = finalIrradiance * (1 - ssgiSpecular.a) + ssgiSpecular.rgb;
 #	endif
 
 		color += reflectance * finalIrradiance;

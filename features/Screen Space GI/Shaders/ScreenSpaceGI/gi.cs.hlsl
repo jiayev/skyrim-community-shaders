@@ -33,15 +33,17 @@
 #define RCP_PI (0.31830988618)
 
 Texture2D<float> srcWorkingDepth : register(t0);
-Texture2D<float4> srcNormal : register(t1);
-Texture2D<float3> srcRadiance : register(t2);
+Texture2D<float4> srcNormalRoughness : register(t1);
+Texture2D<float3> srcRadiance : register(t2);  // maybe half-res
 Texture2D<unorm float2> srcNoise : register(t3);
-Texture2D<unorm float> srcAccumFrames : register(t4);
-Texture2D<float4> srcPrevGI : register(t5);
+Texture2D<unorm float> srcAccumFrames : register(t4);  // maybe half-res
+Texture2D<float4> srcPrevGI : register(t5);            // maybe half-res
+Texture2D<float4> srcPrevGISpecular : register(t6);    // maybe half-res
 
 RWTexture2D<float4> outGI : register(u0);
-RWTexture2D<unorm float2> outBentNormal : register(u1);
-RWTexture2D<half3> outPrevGeo : register(u2);
+RWTexture2D<float4> outGISpecular : register(u1);
+RWTexture2D<unorm float2> outBentNormal : register(u2);
+RWTexture2D<half3> outPrevGeo : register(u3);
 
 float GetDepthFade(float depth)
 {
@@ -70,7 +72,7 @@ float IlIntegral(float2 integral_factor, float angle_prev, float angle_new)
 
 void CalculateGI(
 	uint2 dtid, float2 uv, float viewspaceZ, float3 viewspaceNormal,
-	out float4 o_currGIAO, out float3 o_bentNormal)
+	out float4 o_currGIAO, out float4 o_currGIAOSpecular, out float3 o_bentNormal)
 {
 	const float2 frameScale = FrameDim * RcpTexDim;
 
@@ -90,7 +92,7 @@ void CalculateGI(
 	// if the offset is under approx pixel size (pixelTooCloseThreshold), push it out to the minimum distance
 	const float pixelTooCloseThreshold = 1.3;
 	// approx viewspace pixel size at pixCoord; approximation of NDCToViewspace( uv.xy + ViewportSize.xy, pixCenterPos.z ).xy - pixCenterPos.xy;
-	const float2 pixelDirRBViewspaceSizeAtCenterZ = viewspaceZ.xx * (eyeIndex == 0 ? NDCToViewMul.xy : NDCToViewMul.zw) * RcpFrameDim;
+	const float2 pixelDirRBViewspaceSizeAtCenterZ = viewspaceZ.xx * (eyeIndex == 0 ? NDCToViewMul.xy : NDCToViewMul.zw) * RCP_OUT_FRAME_DIM;
 
 	float screenspaceRadius = EffectRadius / pixelDirRBViewspaceSizeAtCenterZ.x;
 	// this is the min distance to start sampling from to avoid sampling from the center pixel (no useful data obtained from sampling center pixel)
@@ -108,8 +110,14 @@ void CalculateGI(
 	const float3 viewVec = normalize(-pixCenterPos);
 
 	float visibility = 0;
+	float visibilitySpecular = 0;
 	float3 radiance = 0;
+	float3 radianceSpecular = 0;
 	float3 bentNormal = viewspaceNormal;
+
+#ifdef GI_SPECULAR
+	const float roughness = 1 - FULLRES_LOAD(srcNormalRoughness, dtid, uv * frameScale, samplerLinearClamp).z;
+#endif
 
 	for (uint slice = 0; slice < NumSlices; slice++) {
 		float phi = (PI * rcpNumSlices) * (slice + noiseSlice);
@@ -133,6 +141,12 @@ void CalculateGI(
 		uint bitmask = 0;
 #	ifdef GI
 		uint bitmaskGI = 0;
+#		ifdef GI_SPECULAR
+		uint bitmaskGISpecular = 0;
+		float3 domVec = getSpecularDominantDirection(viewspaceNormal, viewVec, roughness);
+		float3 projectedDomVec = normalize(domVec - axisVec * dot(domVec, axisVec));
+		float nDom = sign(dot(orthoDirectionVec, projectedDomVec)) * ACos(saturate(dot(projectedDomVec, viewVec)));
+#		endif
 #	endif
 #else
 		// this is a lower weight target; not using -1 as in the original paper because it is under horizon, so a 'weight' has different meaning based on the normal
@@ -161,12 +175,15 @@ void CalculateGI(
 				float2 sampleOffset = s * omega;
 
 				float2 samplePxCoord = dtid + .5 + sampleOffset * sideSign;
-				float2 sampleUV = samplePxCoord * RcpFrameDim;
+				float2 sampleUV = samplePxCoord * RCP_OUT_FRAME_DIM;
 				float2 sampleScreenPos = ConvertFromStereoUV(sampleUV, eyeIndex);
 				[branch] if (any(sampleScreenPos > 1.0) || any(sampleScreenPos < 0.0)) break;
 
 				float sampleOffsetLength = length(sampleOffset);
 				float mipLevel = clamp(log2(sampleOffsetLength) - DepthMIPSamplingOffset, 0, 5);
+#ifdef HALF_RES
+				mipLevel = max(mipLevel, 1);
+#endif
 
 				float SZ = srcWorkingDepth.SampleLevel(samplerPointClamp, sampleUV * frameScale, mipLevel);
 
@@ -200,10 +217,28 @@ void CalculateGI(
 
 #ifdef GI
 #	ifdef BITMASK
-				float3 sampleBackPosGI = samplePos - viewVec * 500;
+				float3 sampleBackPosGI = samplePos - viewVec * 300;
 				float3 sampleBackHorizonVecGI = normalize(sampleBackPosGI - pixCenterPos);
 				float angleBackGI = ACos(dot(sampleBackHorizonVecGI, viewVec));
 				float2 angleRangeGI = -sideSign * (sideSign == -1 ? float2(angleFront, angleBackGI) : float2(angleBackGI, angleFront));
+
+#		ifdef GI_SPECULAR
+				// thank u Olivier!
+				float coneHalfAngles = specularLobeHalfAngle(roughness);
+				float2 angleRangeSpecular = clamp((angleRangeGI + nDom) * 0.5 / coneHalfAngles, -1, 1) * 0.5 + 0.5;
+
+				// Experimental method using importance sampling
+				// https://agraphicsguynotes.com/posts/sample_microfacet_brdf/
+				// float2 angleRangeSpecular = angleBackGI;
+				// float2 specularSigns = sign(angleRangeSpecular);
+				// angleRangeSpecular = saturate(cos(angleRangeSpecular)) * (roughness2 - 1);
+				// angleRangeSpecular = roughness2 / (angleRangeSpecular * angleRangeSpecular + roughness2 - 1) - 1 / (roughness2 - 1);
+				// angleRangeSpecular = saturate((angleRangeSpecular * specularSigns) * 0.5 + 0.5);
+
+				uint2 bitsRangeGISpecular = uint2(round(angleRangeSpecular.x * 32u), round((angleRangeSpecular.y - angleRangeSpecular.x) * 32u));
+				uint maskedBitsGISpecular = ((1 << bitsRangeGISpecular.y) - 1) << bitsRangeGISpecular.x;
+#		endif
+
 				angleRangeGI = smoothstep(0, 1, (angleRangeGI + n) * RCP_PI + .5);  // https://discord.com/channels/586242553746030596/586245736413528082/1102228968247144570
 
 				uint2 bitsRangeGI = uint2(round(angleRangeGI.x * 32u), round((angleRangeGI.y - angleRangeGI.x) * 32u));
@@ -219,23 +254,33 @@ void CalculateGI(
 					// IL
 					float frontBackMult = 1.f;
 #	ifdef BACKFACE
-					if (dot(DecodeNormal(srcNormal.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).xy), sampleHorizonVec) > 0)  // backface
+					if (dot(DecodeNormal(srcNormalRoughness.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).xy), sampleHorizonVec) > 0)  // backface
 						frontBackMult = BackfaceStrength;
 #	endif
 
 #	ifdef BITMASK
 					if (frontBackMult > 0.f) {
-						float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * frameScale, mipLevel).rgb * frontBackMult * giBoost;
+						float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevel).rgb * frontBackMult * giBoost;
 
-						sampleRadiance *= countbits(checkGI) * 0.03125;  // 1/32
-						sampleRadiance *= dot(viewspaceNormal, sampleHorizonVec);
-						sampleRadiance = max(0, sampleRadiance);
+						float nov = dot(viewspaceNormal, sampleHorizonVec);
 
-						radiance += sampleRadiance;
+						float3 diffuseRadiance = sampleRadiance * countbits(checkGI) * 0.03125;  // 1/32
+						diffuseRadiance *= nov;
+						diffuseRadiance = max(0, diffuseRadiance);
+
+						radiance += diffuseRadiance;
+
+#		ifdef GI_SPECULAR
+						float3 specularRadiance = sampleRadiance * countbits(maskedBitsGISpecular & ~bitmaskGISpecular) * 0.03125;  // 1/32
+						specularRadiance *= nov;
+						specularRadiance = max(0, specularRadiance);
+
+						radianceSpecular += specularRadiance;
+#		endif
 					}
 #	else
 					if (frontBackMult > 0.f) {
-						float3 newSampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * frameScale, mipLevel).rgb * frontBackMult * giBoost;
+						float3 newSampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevel).rgb * frontBackMult * giBoost;
 
 						float anglePrev = n + sideSign * HALF_PI - ACos(horizonCos);
 						float angleCurr = n + sideSign * HALF_PI - ACos(shc);
@@ -270,6 +315,9 @@ void CalculateGI(
 				bitmask |= maskedBits;
 #	ifdef GI
 				bitmaskGI |= maskedBitsGI;
+#		ifdef GI_SPECULAR
+				bitmaskGISpecular |= maskedBitsGISpecular;
+#		endif
 #	endif
 #else
 				if (sideSign == -1)
@@ -281,7 +329,11 @@ void CalculateGI(
 		}
 
 #ifdef BITMASK
-		visibility += 1.0 - countbits(bitmask) * 0.03125;
+		visibility += countbits(bitmask) * 0.03125;
+
+#	if defined(GI) && defined(GI_SPECULAR)
+		visibilitySpecular += countbits(bitmaskGISpecular) * 0.03125;
+#	endif
 
 		// TODO: bent normal for bitmask?
 #else
@@ -321,12 +373,23 @@ void CalculateGI(
 	float depthFade = GetDepthFade(viewspaceZ);
 
 	visibility *= rcpNumSlices;
-	visibility = lerp(saturate(visibility), 1, depthFade);
-	visibility = pow(abs(visibility), AOPower);
+	visibility = lerp(saturate(visibility), 0, depthFade);
+	visibility = 1 - pow(abs(1 - visibility), AOPower);
 
 #ifdef GI
 	radiance *= rcpNumSlices;
 	radiance = lerp(radiance, 0, depthFade);
+#	ifdef GI_SPECULAR
+	radianceSpecular *= rcpNumSlices;
+	radianceSpecular = lerp(radianceSpecular, 0, depthFade);
+
+	visibilitySpecular *= rcpNumSlices;
+	visibilitySpecular = lerp(saturate(visibility), 0, depthFade);
+#	endif
+#endif
+
+#if !defined(GI) || !defined(GI_SPECULAR)
+	visibilitySpecular = 0.0;
 #endif
 
 #ifdef BENT_NORMAL
@@ -334,6 +397,7 @@ void CalculateGI(
 #endif
 
 	o_currGIAO = float4(radiance, visibility);
+	o_currGIAOSpecular = float4(radianceSpecular, visibilitySpecular);
 	o_bentNormal = bentNormal;
 }
 
@@ -343,32 +407,29 @@ void CalculateGI(
 
 	uint2 pxCoord = dtid;
 #if defined(HALF_RATE)
-	const uint halfWidth = uint(FrameDim.x) >> 1;
+	const uint halfWidth = uint(OUT_FRAME_DIM.x) >> 1;
 	const bool useHistory = dtid.x >= halfWidth;
 	pxCoord.x = (pxCoord.x % halfWidth) * 2 + (dtid.y + FrameIndex + useHistory) % 2;
 #else
 	const static bool useHistory = false;
 #endif
 
-	float2 uv = (pxCoord + .5) * RcpFrameDim;
+	float2 uv = (pxCoord + .5) * RCP_OUT_FRAME_DIM;
 	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
 
-	float viewspaceZ = srcWorkingDepth[pxCoord];
+	float viewspaceZ = READ_DEPTH(srcWorkingDepth, pxCoord);
 
-	float2 normalSample = srcNormal[pxCoord].xy;
+	float2 normalSample = FULLRES_LOAD(srcNormalRoughness, pxCoord, uv * frameScale, samplerLinearClamp).xy;
 	float3 viewspaceNormal = DecodeNormal(normalSample);
 
 	half2 encodedWorldNormal = EncodeNormal(ViewToWorldVector(viewspaceNormal, CameraViewInverse[eyeIndex]));
 	outPrevGeo[pxCoord] = half3(viewspaceZ, encodedWorldNormal);
 
-// Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used
-#if USE_HALF_FLOAT_PRECISION == 1
+	// Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used
 	viewspaceZ *= 0.99920h;  // this is good for FP16 depth buffer
-#else
-	viewspaceZ *= 0.99999;  // this is good for FP32 depth buffer
-#endif
 
-	float4 currGIAO = float4(0, 0, 0, 1);
+	float4 currGIAO = float4(0, 0, 0, 0);
+	float4 currGIAOSpecular = float4(0, 0, 0, 0);
 	float3 bentNormal = viewspaceNormal;
 
 	bool needGI = viewspaceZ > FP_Z && viewspaceZ < DepthFadeRange.y;
@@ -376,7 +437,7 @@ void CalculateGI(
 		if (!useHistory)
 			CalculateGI(
 				pxCoord, uv, viewspaceZ, viewspaceNormal,
-				currGIAO, bentNormal);
+				currGIAO, currGIAOSpecular, bentNormal);
 
 #ifdef TEMPORAL_DENOISER
 		float lerpFactor = rcp(srcAccumFrames[pxCoord] * 255);
@@ -385,14 +446,19 @@ void CalculateGI(
 			lerpFactor = 0;
 #	endif
 
-		float4 prevGIAO = srcPrevGI[pxCoord];
-		currGIAO = lerp(prevGIAO, currGIAO, lerpFactor);
+		currGIAO = lerp(srcPrevGI[pxCoord], currGIAO, lerpFactor);
+#	ifdef GI_SPECULAR
+		currGIAOSpecular = lerp(srcPrevGISpecular[pxCoord], currGIAOSpecular, lerpFactor);
+#	endif
 #endif
 	}
-
-	currGIAO = any(ISNAN(currGIAO)) ? float4(0, 0, 0, 1) : currGIAO;
+	currGIAO = any(ISNAN(currGIAO)) ? float4(0, 0, 0, 0) : currGIAO;
+	currGIAOSpecular = any(ISNAN(currGIAOSpecular)) ? float4(0, 0, 0, 0) : currGIAOSpecular;
 
 	outGI[pxCoord] = currGIAO;
+#ifdef GI_SPECULAR
+	outGISpecular[pxCoord] = currGIAOSpecular;
+#endif
 #ifdef BENT_NORMAL
 	outBentNormal[pxCoord] = EncodeNormal(bentNormal);
 #endif

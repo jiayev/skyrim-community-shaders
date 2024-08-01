@@ -385,7 +385,7 @@ void Deferred::DeferredPasses()
 				normalRoughness.SRV,
 				skylighting->loaded ? depth.depthSRV : nullptr,
 				skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
-				ssgi->loaded ? ssgi->texGI[ssgi->outputGIIdx]->srv.get() : nullptr,
+				ssgi->settings.Enabled ? ssgi->texGI[ssgi->outputGIIdx]->srv.get() : nullptr,
 				masks2.SRV,
 			};
 
@@ -419,7 +419,9 @@ void Deferred::DeferredPasses()
 		ID3D11Buffer* buffer = skylighting->loaded ? skylighting->skylightingCB->CB() : nullptr;
 		context->CSSetConstantBuffers(1, 1, &buffer);
 
-		ID3D11ShaderResourceView* srvs[10]{
+		bool doSSGISpecular = ssgi->loaded && ssgi->settings.Enabled && ssgi->settings.EnableGI && ssgi->settings.EnableSpecularGI;
+
+		ID3D11ShaderResourceView* srvs[11]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
@@ -429,7 +431,8 @@ void Deferred::DeferredPasses()
 			dynamicCubemaps->loaded ? reflectance.SRV : nullptr,
 			dynamicCubemaps->loaded ? dynamicCubemaps->envTexture->srv.get() : nullptr,
 			dynamicCubemaps->loaded ? dynamicCubemaps->envReflectionsTexture->srv.get() : nullptr,
-			dynamicCubemaps->loaded && skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr
+			dynamicCubemaps->loaded && skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
+			doSSGISpecular ? ssgi->texGISpecular[ssgi->outputGIIdx]->srv.get() : nullptr,
 		};
 
 		if (dynamicCubemaps->loaded)
@@ -611,6 +614,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		if (Skylighting::GetSingleton()->loaded)
 			defines.push_back({ "SKYLIGHTING", nullptr });
 
+		if (ScreenSpaceGI::GetSingleton()->loaded)
+			defines.push_back({ "SSGI", nullptr });
+
 		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return mainCompositeCS;
@@ -626,6 +632,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 
 		if (DynamicCubemaps::GetSingleton()->loaded)
 			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
+
+		if (ScreenSpaceGI::GetSingleton()->loaded)
+			defines.push_back({ "SSGI", nullptr });
 
 		mainCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}

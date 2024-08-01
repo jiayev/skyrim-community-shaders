@@ -2,14 +2,19 @@
 // 	https://developer.download.nvidia.com/video/gputechconf/gtc/2020/presentations/s22699-fast-denoising-with-self-stabilizing-recurrent-blurs.pdf
 
 #include "../Common/FastMath.hlsli"
+#include "../Common/FrameBuffer.hlsli"
 #include "../Common/GBuffer.hlsli"
 #include "../Common/VR.hlsli"
 #include "common.hlsli"
 
-Texture2D<float4> srcGI : register(t0);
-Texture2D<unorm float> srcAccumFrames : register(t1);
+#ifdef SPECULAR_BLUR
+#	undef TEMPORAL_DENOISER
+#endif
+
+Texture2D<float4> srcGI : register(t0);                // maybe half-res
+Texture2D<unorm float> srcAccumFrames : register(t1);  // maybe half-res
 Texture2D<half> srcDepth : register(t2);
-Texture2D<half4> srcNormal : register(t3);
+Texture2D<half4> srcNormalRoughness : register(t3);
 
 RWTexture2D<float4> outGI : register(u0);
 RWTexture2D<unorm float> outAccumFrames : register(u1);
@@ -26,6 +31,46 @@ static const float3 g_Poisson8[8] = {
 	float3(+0.1564120, -0.8198990, +0.8346850)
 };
 
+// http://marc-b-reynolds.github.io/quaternions/2016/07/06/Orthonormal.html
+float3x3 getBasis(float3 N)
+{
+	float sz = sign(N.z);
+	float a = 1.0 / (sz + N.z);
+	float ya = N.y * a;
+	float b = N.x * ya;
+	float c = N.x * sz;
+
+	float3 T = float3(c * N.x * a - 1.0, sz * b, c);
+	float3 B = float3(b, N.y * ya - sz, N.y);
+
+	// Note: due to the quaternion formulation, the generated frame is rotated by 180 degrees,
+	// s.t. if N = (0, 0, 1), then T = (-1, 0, 0) and B = (0, -1, 0).
+	return float3x3(T, B, N);
+}
+
+// D - Dominant reflection direction
+float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFade = 1.0)
+{
+	float3x3 basis = getBasis(N);
+
+	float3 T = basis[0];
+	float3 B = basis[1];
+
+	float NoD = dot(N, D);
+	if (NoD < 0.999) {
+		float3 R = reflect(-D, N);
+		T = normalize(cross(N, R));
+		B = cross(R, T);
+
+		float skewFactor = lerp(0.5 + 0.5 * roughness, 1.0, NoD);
+		skewFactor = lerp(skewFactor, 1.0, anisoFade);
+
+		B /= skewFactor;
+	}
+
+	return float2x3(T, B);
+}
+
 [numthreads(8, 8, 1)] void main(const uint2 dtid
 								: SV_DispatchThreadID) {
 	const float2 frameScale = FrameDim * RcpTexDim;
@@ -37,13 +82,35 @@ static const float3 g_Poisson8[8] = {
 #endif
 	const uint numSamples = 8;
 
-	const float2 uv = (dtid + .5) * RcpFrameDim;
+	const float2 uv = (dtid + .5) * RCP_OUT_FRAME_DIM;
 	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
 	const float2 screenPos = ConvertFromStereoUV(uv, eyeIndex);
 
-	float depth = srcDepth[dtid];
+	float depth = READ_DEPTH(srcDepth, dtid);
 	float3 pos = ScreenToViewPosition(screenPos, depth, eyeIndex);
-	float3 normal = DecodeNormal(srcNormal[dtid].xy);
+	float4 normalRoughness = FULLRES_LOAD(srcNormalRoughness, dtid, uv, samplerLinearClamp);
+	float3 normal = DecodeNormal(normalRoughness.xy);
+#ifdef SPECULAR_BLUR
+	float roughness = 1 - normalRoughness.z;
+#endif
+
+	const float2 pixelDirRBViewspaceSizeAtCenterZ = depth.xx * (eyeIndex == 0 ? NDCToViewMul.xy : NDCToViewMul.zw) * RCP_OUT_FRAME_DIM;
+	const float worldRadius = radius * pixelDirRBViewspaceSizeAtCenterZ.x;
+#ifdef SPECULAR_BLUR
+	float2x3 TvBv = getKernelBasis(getSpecularDominantDirection(normal, -normalize(pos), roughness), normal, roughness);
+	const float halfAngle = specularLobeHalfAngle(roughness);
+#else
+	float2x3 TvBv = getKernelBasis(normal, normal);  // D = N
+	const float halfAngle = fsl_HALF_PI;
+#endif
+	TvBv[0] *= worldRadius;
+	TvBv[1] *= worldRadius;
+
+	float noise = frac(FrameIndex * 0.38196601125);
+	float2x2 rotMat;
+	sincos(noise, rotMat._11, rotMat._21);
+	rotMat._12 = -rotMat._21;
+	rotMat._22 = rotMat._11;
 
 	float4 gi = srcGI[dtid];
 
@@ -55,29 +122,49 @@ static const float3 g_Poisson8[8] = {
 	for (uint i = 0; i < numSamples; i++) {
 		float w = g_Poisson8[i].z;
 
-		float2 pxOffset = radius * g_Poisson8[i].xy;
-		float2 pxSample = dtid + .5 + pxOffset;
-		float2 uvSample = pxSample * RcpFrameDim;
-		float2 screenPosSample = ConvertFromStereoUV(uvSample, eyeIndex);
+		float2 poissonOffset = mul(rotMat, g_Poisson8[i].xy);
 
-		if (any(screenPosSample < 0) || any(screenPosSample > 1))
+		float3 posOffset = TvBv[0] * poissonOffset.x + TvBv[1] * poissonOffset.y;
+		float4 screenPosSample = mul(CameraProj[eyeIndex], float4(pos + posOffset, 1));
+		screenPosSample.xy /= screenPosSample.w;
+		screenPosSample.y = -screenPosSample.y;
+		screenPosSample.xy = screenPosSample.xy * .5 + .5;
+
+		// old method without kernel transform
+		// float2 pxOffset = radius * poissonOffset.xy;
+		// float2 pxSample = dtid + .5 + pxOffset;
+		// float2 uvSample = (floor(pxSample) + 0.5) * RCP_OUT_FRAME_DIM;  // Snap to the pixel centre
+		// float2 screenPosSample = ConvertFromStereoUV(uvSample, eyeIndex);
+
+		if (any(screenPosSample.xy < 0) || any(screenPosSample.xy > 1))
 			continue;
+
+		float2 uvSample = ConvertToStereoUV(screenPosSample.xy, eyeIndex);
+		uvSample = (floor(uvSample * OUT_FRAME_DIM) + 0.5) * RCP_OUT_FRAME_DIM;  // Snap to the pixel centre
 
 		float depthSample = srcDepth.SampleLevel(samplerLinearClamp, uvSample * frameScale, 0);
 		float3 posSample = ScreenToViewPosition(screenPosSample, depthSample, eyeIndex);
 
-		float3 normalSample = DecodeNormal(srcNormal.SampleLevel(samplerLinearClamp, uvSample * frameScale, 0).xy);
+		float4 normalRoughnessSample = srcNormalRoughness.SampleLevel(samplerLinearClamp, uvSample * frameScale, 0);
+		float3 normalSample = DecodeNormal(normalRoughnessSample.xy);
+#ifdef SPECULAR_BLUR
+		float roughnessSample = 1 - normalRoughnessSample.z;
+#endif
 
-		float4 giSample = srcGI.SampleLevel(samplerLinearClamp, uvSample * frameScale, 0);
+		float4 giSample = srcGI.SampleLevel(samplerLinearClamp, uvSample * OUT_FRAME_SCALE, 0);
 
 		// geometry weight
 		w *= saturate(1 - abs(dot(normal, posSample - pos)) * DistanceNormalisation);
 		// normal weight
-		w *= 1 - saturate(acosFast4(saturate(dot(normalSample, normal))) / fsl_HALF_PI * 2);
+		w *= 1 - saturate(acosFast4(saturate(dot(normalSample, normal))) / halfAngle * 2);
+#ifdef SPECULAR_BLUR
+		// roughness weight
+		w *= abs(roughness - roughnessSample) / (roughness * roughness * 0.99 + 0.01);
+#endif
 
 		sum += giSample * w;
 #ifdef TEMPORAL_DENOISER
-		fsum += srcAccumFrames.SampleLevel(samplerLinearClamp, uvSample * frameScale, 0) * w;
+		fsum += srcAccumFrames.SampleLevel(samplerLinearClamp, uvSample * OUT_FRAME_SCALE, 0) * w;
 #endif
 		wsum += w;
 	}
