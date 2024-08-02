@@ -104,11 +104,11 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 		float3 positionMS = positionWS;
 #		endif
 
-		sh2 skylighting = sampleSkylighting(skylightingSettings, SkylightingProbeArray, positionMS.xyz, normalWS);
-		sh2 specularLobe = fauxSpecularLobeSH(normalWS, -V, roughness);
+		sh2 skylighting = Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMS.xyz, normalWS);
+		sh2 specularLobe = Skylighting::fauxSpecularLobeSH(normalWS, -V, roughness);
 
 		half skylightingSpecular = shFuncProductIntegral(skylighting, specularLobe);
-		skylightingSpecular = lerp(skylightingSettings.MixParams.z, 1, saturate(skylightingSpecular * skylightingSettings.MixParams.w));
+		skylightingSpecular = Skylighting::mixSpecular(skylightingSettings, skylightingSpecular);
 
 		half3 specularIrradiance = 1;
 

@@ -1695,7 +1695,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 #		endif
 
-	sh2 skylightingSH = sampleSkylighting(skylightingSettings, SkylightingProbeArray, positionMSSkylight, worldSpaceNormal);
+	sh2 skylightingSH = Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMSSkylight, worldSpaceNormal);
 #	endif
 
 	float4 waterData = GetWaterData(input.WorldPosition.xyz);
@@ -2205,8 +2205,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
 
 #	if defined(SKYLIGHTING)
-	float skylightingDiffuse = shHallucinateZH3Irradiance(skylightingSH, skylightingSettings.DirectionalDiffuse ? worldSpaceNormal : float3(0, 0, 1));
-	skylightingDiffuse = lerp(skylightingSettings.MixParams.x, 1, saturate(skylightingDiffuse * skylightingSettings.MixParams.y));
+	float skylightingDiffuse = Skylighting::hallucinateZH3(skylightingSH, skylightingSettings.DirectionalDiffuse ? worldSpaceNormal : float3(0, 0, 1));
+	skylightingDiffuse = Skylighting::mixDiffuse(skylightingSettings, skylightingDiffuse);
 	directionalAmbientColor = sRGB2Lin(directionalAmbientColor);
 	directionalAmbientColor *= skylightingDiffuse;
 	directionalAmbientColor = Lin2sRGB(directionalAmbientColor);

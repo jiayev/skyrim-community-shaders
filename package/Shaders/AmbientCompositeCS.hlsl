@@ -67,9 +67,9 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 	positionMS.xyz += CameraPosAdjust[eyeIndex] - CameraPosAdjust[0];
 #	endif
 
-	sh2 skylighting = sampleSkylighting(skylightingSettings, SkylightingProbeArray, positionMS.xyz, normalWS);
-	half skylightingDiffuse = shHallucinateZH3Irradiance(skylighting, skylightingSettings.DirectionalDiffuse ? normalWS : float3(0, 0, 1));
-	skylightingDiffuse = lerp(skylightingSettings.MixParams.x, 1, saturate(skylightingDiffuse * skylightingSettings.MixParams.y));
+	sh2 skylighting = Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMS.xyz, normalWS);
+	half skylightingDiffuse = Skylighting::hallucinateZH3(skylighting, skylightingSettings.DirectionalDiffuse ? normalWS : float3(0, 0, 1));
+	skylightingDiffuse = Skylighting::mixDiffuse(skylightingSettings, skylightingDiffuse);
 
 	visibility = skylightingDiffuse;
 #endif

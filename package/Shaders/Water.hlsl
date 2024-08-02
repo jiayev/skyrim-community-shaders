@@ -374,6 +374,11 @@ float calculateDepthMultfromUV(float2 a_uv, float a_depth, uint a_eyeIndex = 0)
 #		include "TerrainOcclusion/TerrainOcclusion.hlsli"
 #	endif
 
+#	if defined(SKYLIGHTING)
+#		define SL_INCL_METHODS
+#		include "Skylighting/Skylighting.hlsli"
+#	endif
+
 #	include "Common/ShadowSampling.hlsli"
 
 #	if defined(SIMPLE) || defined(UNDERWATER) || defined(LOD) || defined(SPECULAR)
@@ -568,11 +573,6 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 	return (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
 }
 
-#		if defined(SKYLIGHTING)
-#			define SL_INCL_METHODS
-#			include "Skylighting/Skylighting.hlsli"
-#		endif
-
 float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	inout float4 distanceMul, float refractionsDepthFactor, float fresnel, uint a_eyeIndex, float3 viewPosition)
 {
@@ -633,7 +633,7 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 		float3 skylightPosOffset = 0;
 #				endif
 		float3 refractionDiffuseColorSkylight =
-			getVLSkylighting(skylightingSettings, SkylightingProbeArray, input.WPosition.xyz + skylightPosOffset, refractionWorldPosition.xyz + skylightPosOffset, screenPosition);
+			Skylighting::getVL(skylightingSettings, SkylightingProbeArray, input.WPosition.xyz + skylightPosOffset, refractionWorldPosition.xyz + skylightPosOffset, screenPosition);
 		refractionDiffuseColorSkylight = refractionDiffuseColor * lerp(refractionDiffuseColorSkylight, 1.0, 0.25);
 		refractionDiffuseColor = refractionDiffuseColorSkylight;
 #			endif

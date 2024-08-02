@@ -586,9 +586,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 #					endif
 
-	sh2 skylightingSH = sampleSkylighting(skylightingSettings, SkylightingProbeArray, positionMSSkylight, normal);
-	float skylighting = shHallucinateZH3Irradiance(skylightingSH, normal);
-	skylighting = lerp(skylightingSettings.MixParams.x, 1, saturate(skylighting * skylightingSettings.MixParams.y));
+	sh2 skylightingSH = Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMSSkylight, normal);
+	float skylighting = Skylighting::hallucinateZH3(skylightingSH, normal);
+	skylighting = Skylighting::mixDiffuse(skylightingSettings, skylighting);
 	directionalAmbientColor = sRGB2Lin(directionalAmbientColor);
 	directionalAmbientColor *= skylighting;
 	directionalAmbientColor = Lin2sRGB(directionalAmbientColor);
