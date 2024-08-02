@@ -12,6 +12,8 @@ struct GrassLighting : Feature
 
 	virtual inline std::string GetName() override { return "Grass Lighting"; }
 	virtual inline std::string GetShortName() override { return "GrassLighting"; }
+	virtual inline std::string_view GetShaderDefineName() override { return "GRASS_LIGHTING"; }
+	virtual bool HasShaderDefine(RE::BSShader::Type shaderType) override { return shaderType == RE::BSShader::Type::Grass; };
 
 	struct alignas(16) Settings
 	{
