@@ -156,7 +156,7 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 		// geometry weight
 		w *= saturate(1 - abs(dot(normal, posSample - pos)) * DistanceNormalisation);
 		// normal weight
-		w *= 1 - saturate(acosFast4(saturate(dot(normalSample, normal))) / halfAngle * 2);
+		w *= 1 - saturate(acosFast4(saturate(dot(normalSample, normal))) / halfAngle);
 #ifdef SPECULAR_BLUR
 		// roughness weight
 		w *= abs(roughness - roughnessSample) / (roughness * roughness * 0.99 + 0.01);
