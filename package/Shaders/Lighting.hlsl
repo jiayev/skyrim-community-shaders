@@ -327,7 +327,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.ScreenNormalTransform1.xyz = ScreenNormalTransform[1];
 	vsout.ScreenNormalTransform2.xyz = ScreenNormalTransform[2];
 #	else
-	float3x4 transMat = mul((float4x3)(ScreenProj[eyeIndex]), World[eyeIndex]);
+	float3x4 transMat = mul(ScreenProj[eyeIndex], World[eyeIndex]);
 
 #		if defined(MODELSPACENORMALS)
 	vsout.ScreenNormalTransform0.xyz = transMat[0].xyz;
