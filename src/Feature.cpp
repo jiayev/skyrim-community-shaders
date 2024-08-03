@@ -7,6 +7,7 @@
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/LightLimitFix.h"
+#include "Features/PostProcessing.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skylighting.h"
@@ -124,7 +125,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		TerrainOcclusion::GetSingleton(),
 		ScreenSpaceGI::GetSingleton(),
 		Skylighting::GetSingleton(),
-		TerrainBlending::GetSingleton()
+		TerrainBlending::GetSingleton(),
+		PostProcessing::GetSingleton(),
 	};
 
 	static std::vector<Feature*> featuresVR(features);
