@@ -5,6 +5,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 
+#include "ENB/ENBSeriesAPI.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/LightLimitFIx/ParticleLights.h"
 #include "Features/LightLimitFix.h"
@@ -142,6 +143,11 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 bool Load()
 {
+	if (ENB_API::RequestENBAPI()) {
+		logger::info("ENB detected, disabling all hooks and features");
+		return true;
+	}
+
 	if (REL::Module::IsVR()) {
 		REL::IDDatabase::get().IsVRAddressLibraryAtLeastVersion("0.141.0", true);
 	}
