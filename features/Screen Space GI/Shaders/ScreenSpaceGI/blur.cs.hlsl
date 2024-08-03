@@ -106,12 +106,6 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 	TvBv[0] *= worldRadius;
 	TvBv[1] *= worldRadius;
 
-	float noise = frac(FrameIndex * 0.38196601125);
-	float2x2 rotMat;
-	sincos(noise, rotMat._11, rotMat._21);
-	rotMat._12 = -rotMat._21;
-	rotMat._22 = rotMat._11;
-
 	float4 gi = srcGI[dtid];
 
 	float4 sum = gi;
@@ -122,7 +116,7 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 	for (uint i = 0; i < numSamples; i++) {
 		float w = g_Poisson8[i].z;
 
-		float2 poissonOffset = mul(rotMat, g_Poisson8[i].xy);
+		float2 poissonOffset = g_Poisson8[i].xy;
 
 		float3 posOffset = TvBv[0] * poissonOffset.x + TvBv[1] * poissonOffset.y;
 		float4 screenPosSample = mul(CameraProj[eyeIndex], float4(pos + posOffset, 1));

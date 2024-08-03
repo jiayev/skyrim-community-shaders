@@ -1,6 +1,7 @@
 #include "Common/Constants.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/LodLandscape.hlsli"
+#include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
 #include "Common/VR.hlsli"
@@ -463,7 +464,7 @@ PS_OUTPUT main(PS_INPUT input)
 	positionMS.xyz += CameraPosAdjust[eyeIndex];
 
 	// https://www.shadertoy.com/view/mts3zN
-	float checkerboard = frac(positionMS.xyz + float3(0.180827486604, 0.328956393296, 0.450299522098));
+	float checkerboard = R3Sequence(1, positionMS.xyz);
 
 	if (checkerboard > 0.25)
 		discard;
@@ -546,7 +547,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float fadeFactor = input.Alpha.x;
 #		endif
 
-	float noise = InterleavedGradientNoise(input.PositionCS.xy);
+	float noise = InterleavedGradientNoise(input.PositionCS.xy * BufferDim.xy * DynamicResolutionParams1.xy, FrameCount);
 	float noiseAdjusted = noise * M_2PI;
 
 	noise = noise * 2.0 - 1.0;

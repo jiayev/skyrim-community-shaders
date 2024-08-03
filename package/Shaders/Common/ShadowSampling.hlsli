@@ -75,14 +75,14 @@ float3 GetShadow(float3 positionWS, uint a_eyeIndex = 0)
 	return shadow;
 }
 
-float GetVL(float3 startPosWS, float3 endPosWS, float2 screenPosition, uint a_eyeIndex = 0)
+float GetVL(float3 startPosWS, float3 endPosWS, float2 pxCoord, uint a_eyeIndex = 0)
 {
 	const static uint nSteps = 16;
 	const static float step = 1.0 / float(nSteps);
 
 	float3 worldDir = endPosWS - startPosWS;
 
-	float noise = InterleavedGradientNoise(screenPosition);
+	float noise = InterleavedGradientNoise(pxCoord, FrameCount);
 
 	startPosWS += worldDir * step * noise;
 

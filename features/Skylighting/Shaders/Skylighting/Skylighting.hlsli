@@ -21,6 +21,7 @@ struct SkylightingSettings
 
 #ifdef SL_INCL_METHODS
 
+#	include "Common/Random.hlsli"
 #	include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 
 #	ifdef PSHADER
@@ -103,7 +104,7 @@ namespace Skylighting
 		return result;
 	}
 
-	float getVL(SkylightingSettings params, Texture3D<sh2> probeArray, float3 startPosWS, float3 endPosWS, float2 screenPosition)
+	float getVL(SkylightingSettings params, Texture3D<sh2> probeArray, float3 startPosWS, float3 endPosWS, float2 pxCoord)
 	{
 		const static uint nSteps = 16;
 		const static float step = 1.0 / float(nSteps);
@@ -111,7 +112,7 @@ namespace Skylighting
 		float3 worldDir = endPosWS - startPosWS;
 		float3 worldDirNormalised = normalize(worldDir);
 
-		float noise = InterleavedGradientNoise(screenPosition);
+		float noise = InterleavedGradientNoise(pxCoord, FrameCount);
 
 		float vl = 0;
 

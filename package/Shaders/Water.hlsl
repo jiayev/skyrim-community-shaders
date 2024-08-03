@@ -583,6 +583,7 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	refractionUvRaw = ConvertToStereoUV(refractionUvRaw, a_eyeIndex);  // need to convert here for VR due to refractionNormal values
 
 	float2 screenPosition = DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy);
+	float2 pxCoord = screenPosition * BufferDim.xy * DynamicResolutionParams1.xy;
 	float depth = GetScreenDepthWater(screenPosition,
 #			if defined(VR)
 		1
@@ -623,7 +624,7 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	float3 refractionDiffuseColor = lerp(ShallowColor.xyz, DeepColor.xyz, distanceMul.y);
 
 	if (!(PixelShaderDescriptor & _Interior)) {
-		float vl = GetVL(input.WPosition.xyz, refractionWorldPosition.xyz, screenPosition, a_eyeIndex) * (dot(viewDirection, SunDir.xyz) * 0.5 + 0.5);
+		float vl = GetVL(input.WPosition.xyz, refractionWorldPosition.xyz, pxCoord, a_eyeIndex) * (dot(viewDirection, SunDir.xyz) * 0.5 + 0.5);
 
 		float3 refractionDiffuseColorSunlight = refractionDiffuseColor * vl * SunColor.xyz * SunDir.w;
 #			if defined(SKYLIGHTING)
@@ -633,7 +634,7 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 		float3 skylightPosOffset = 0;
 #				endif
 		float3 refractionDiffuseColorSkylight =
-			Skylighting::getVL(skylightingSettings, SkylightingProbeArray, input.WPosition.xyz + skylightPosOffset, refractionWorldPosition.xyz + skylightPosOffset, screenPosition);
+			Skylighting::getVL(skylightingSettings, SkylightingProbeArray, input.WPosition.xyz + skylightPosOffset, refractionWorldPosition.xyz + skylightPosOffset, pxCoord);
 		refractionDiffuseColorSkylight = refractionDiffuseColor * lerp(refractionDiffuseColorSkylight, 1.0, 0.25);
 		refractionDiffuseColor = refractionDiffuseColorSkylight;
 #			endif
