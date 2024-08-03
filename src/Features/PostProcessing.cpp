@@ -34,7 +34,8 @@ void PostProcessing::DrawSettings()
 			ImGui::EndCombo();
 		}
 
-		if (ImGui::BeginListBox("##Modules")) {
+		if (ImGui::BeginListBox("##Modules", { -FLT_MIN, -FLT_MIN })) {
+			ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));  // I hate this
 			for (int i = 0; i < modules.size(); ++i) {
 				auto& mod = modules[i];
 				if (ImGui::Selectable(mod->GetName().c_str(), moduleIdx == i))
@@ -42,6 +43,9 @@ void PostProcessing::DrawSettings()
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::Text(mod->GetDesc().c_str());
 			}
+			ImGui::PopStyleColor();
+
+			ImGui::EndListBox();
 		}
 	} else {
 		if (moduleIdx < modules.size()) {
