@@ -13,8 +13,7 @@
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainOcclusion.h"
-#include "Features/WaterCaustics.h"
-#include "Features/WaterParallax.h"
+#include "Features/WaterLighting.h"
 #include "Features/WetnessEffects.h"
 
 #include "State.h"
@@ -120,8 +119,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		LightLimitFix::GetSingleton(),
 		DynamicCubemaps::GetSingleton(),
 		CloudShadows::GetSingleton(),
-		WaterParallax::GetSingleton(),
-		WaterCaustics::GetSingleton(),
+		WaterLighting::GetSingleton(),
 		SubsurfaceScattering::GetSingleton(),
 		TerrainOcclusion::GetSingleton(),
 		ScreenSpaceGI::GetSingleton(),

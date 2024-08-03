@@ -919,17 +919,17 @@ float3 ApplyFogAndClampColor(float3 srcColor, float4 fogParam, float3 clampColor
 	return min(preClampColor + clampColor, srcColor);
 }
 
-#	if defined(WATER_CAUSTICS)
-#		include "WaterCaustics/WaterCaustics.hlsli"
-#	endif
-
 #	if defined(LOD)
 #		undef EXTENDED_MATERIALS
 #		undef WATER_BLENDING
 #		undef LIGHT_LIMIT_FIX
 #		undef WETNESS_EFFECTS
 #		undef DYNAMIC_CUBEMAPS
-#		undef WATER_CAUSTICS
+#		undef WATER_LIGHTING
+#	endif
+
+#	if defined(WATER_LIGHTING)
+#		include "WaterLighting/WaterCaustics.hlsli"
 #	endif
 
 #	if defined(EYE)
@@ -1794,8 +1794,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 dirLightColor = DirLightColor.xyz;
 	float3 dirLightColorMultiplier = 1;
 
-#	if defined(WATER_CAUSTICS)
-	dirLightColorMultiplier *= ComputeWaterCaustics(waterData, input.WorldPosition.xyz, worldSpaceNormal);
+#	if defined(WATER_LIGHTING)
+	dirLightColorMultiplier *= WaterLighting::ComputeCaustics(waterData, input.WorldPosition.xyz, worldSpaceNormal);
 #	endif
 
 	float selfShadowFactor = 1.0f;
