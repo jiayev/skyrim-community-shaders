@@ -362,14 +362,6 @@ float calculateDepthMultfromUV(float2 a_uv, float a_depth, uint a_eyeIndex = 0)
 #	define SampColorSampler Normals01Sampler
 #	define LinearSampler Normals01Sampler
 
-#	if defined(LOD)
-#		undef WATER_CAUSTICS
-#	endif
-
-#	if defined(WATER_CAUSTICS)
-#		include "WaterCaustics/WaterCaustics.hlsli"
-#	endif
-
 #	if defined(TERRA_OCC)
 #		include "TerrainOcclusion/TerrainOcclusion.hlsli"
 #	endif
@@ -396,10 +388,11 @@ float3 GetFlowmapNormal(PS_INPUT input, float2 uvShift, float multiplier, float 
 #		endif
 
 #		if (defined(FLOWMAP) && !defined(BLEND_NORMALS)) || defined(LOD)
-#			undef WATER_PARALLAX
+#			undef WATER_LIGHTING
 #		endif
 
-#		if defined(WATER_PARALLAX)
+#		if defined(WATER_LIGHTING)
+#			define WATER_PARALLAX
 #			include "WaterParallax/WaterParallax.hlsli"
 #		endif
 
@@ -412,7 +405,7 @@ float3 GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFa
 	float3 normalScalesRcp = rcp(input.NormalsScale.xyz);
 
 #		if defined(WATER_PARALLAX)
-	float2 parallaxOffset = GetParallaxOffset(input, normalScalesRcp);
+	float2 parallaxOffset = WaterLighting::GetParallaxOffset(input, normalScalesRcp);
 #		endif
 
 #		if defined(FLOWMAP)
