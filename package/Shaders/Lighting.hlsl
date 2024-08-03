@@ -929,7 +929,7 @@ float3 ApplyFogAndClampColor(float3 srcColor, float4 fogParam, float3 clampColor
 #	endif
 
 #	if defined(WATER_LIGHTING)
-#		include "WaterCaustics/WaterCaustics.hlsli"
+#		include "WaterLighting/WaterCaustics.hlsli"
 #	endif
 
 #	if defined(EYE)

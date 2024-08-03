@@ -393,7 +393,7 @@ float3 GetFlowmapNormal(PS_INPUT input, float2 uvShift, float multiplier, float 
 
 #		if defined(WATER_LIGHTING)
 #			define WATER_PARALLAX
-#			include "WaterParallax/WaterParallax.hlsli"
+#			include "WaterLighting/WaterParallax.hlsli"
 #		endif
 
 #		if defined(DYNAMIC_CUBEMAPS)
