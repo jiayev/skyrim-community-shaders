@@ -132,29 +132,6 @@ namespace Skylighting
 		return vl * step;
 	}
 
-	// http://torust.me/ZH3.pdf
-	// ZH hallucination that makes skylighting more directional
-	// skipped luminance because it's single channel
-	float hallucinateZH3(sh2 sh, float3 normal)
-	{
-		const static float factor = sqrt(5.0f / (16.0f * 3.1415926f));
-
-		float result = shFuncProductIntegral(sh, shEvaluateCosineLobe(normal)) / shPI;  // cosine lobe integral -> pi
-		if (all(abs(sh.yzw) < 1e-10))
-			return result;
-
-		float3 zonalAxis = normalize(sh.wyz);
-		float ratio = abs(dot(sh.wyz * float3(-1, -1, 0), zonalAxis)) / sh.x;
-		float zonalL2Coeff = sh.x * (0.08f * ratio + 0.6f * ratio * ratio);
-
-		float fZ = dot(zonalAxis, normal);
-		float zhDir = factor * (3.0f * fZ * fZ - 1.0f);
-
-		result += 0.25f * zonalL2Coeff * zhDir;
-
-		return saturate(result);
-	}
-
 	sh2 fauxSpecularLobeSH(float3 N, float3 V, float roughness)
 	{
 		// https://www.gdcvault.com/play/1026701/Fast-Denoising-With-Self-Stabilizing
