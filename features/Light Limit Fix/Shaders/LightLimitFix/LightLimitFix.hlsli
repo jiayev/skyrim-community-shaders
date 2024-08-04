@@ -31,15 +31,16 @@ StructuredBuffer<StrictLightData> strictLights : register(t53);
 
 bool GetClusterIndex(in float2 uv, in float z, out uint clusterIndex)
 {
+	const uint3 clusterSize = lightLimitFixSettings.ClusterSize.xyz;
+
 	if (z < strictLights[0].LightsNear || z > strictLights[0].LightsFar)
 		return false;
 
 	float clampedZ = clamp(z, strictLights[0].LightsNear, strictLights[0].LightsFar);
-	uint clusterZ = uint(max((log2(z) - log2(strictLights[0].LightsNear)) * 16.0 / log2(strictLights[0].LightsFar / strictLights[0].LightsNear), 0.0));
-	uint2 clusterDim = ceil(BufferDim / float2(16, 16));
-	uint3 cluster = uint3(uint2((uv * BufferDim) / clusterDim), clusterZ);
+	uint clusterZ = uint(max((log2(z) - log2(strictLights[0].LightsNear)) * clusterSize.z / log2(strictLights[0].LightsFar / strictLights[0].LightsNear), 0.0));
+	uint3 cluster = uint3(uint2(uv * clusterSize.xy), clusterZ);
 
-	clusterIndex = cluster.x + (16 * cluster.y) + (16 * 16 * cluster.z);
+	clusterIndex = cluster.x + (clusterSize.x * cluster.y) + (clusterSize.x * clusterSize.y * cluster.z);
 	return true;
 }
 

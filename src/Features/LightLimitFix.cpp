@@ -5,12 +5,7 @@
 #include "State.h"
 #include "Util.h"
 
-static constexpr uint CLUSTER_SIZE_X = 16;
-static constexpr uint CLUSTER_SIZE_Y = 16;
-static constexpr uint CLUSTER_SIZE_Z = 16;
 constexpr uint CLUSTER_MAX_LIGHTS = 128;
-
-constexpr std::uint32_t CLUSTER_COUNT = CLUSTER_SIZE_X * CLUSTER_SIZE_Y * CLUSTER_SIZE_Z;
 
 static constexpr uint MAX_LIGHTS = 2048;
 
@@ -125,14 +120,33 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	perFrame.EnableContactShadows = settings.EnableContactShadows;
 	perFrame.EnableLightsVisualisation = settings.EnableLightsVisualisation;
 	perFrame.LightsVisualisationMode = settings.LightsVisualisationMode;
+	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
 	return perFrame;
 }
 
 void LightLimitFix::SetupResources()
 {
+	auto screenSize = Util::ConvertToDynamic(State::GetSingleton()->screenSize);
+	if (REL::Module::IsVR())
+		screenSize.x *= .5;
+	clusterSize[0] = ((uint)screenSize.x + 63) / 64;
+	clusterSize[1] = ((uint)screenSize.y + 63) / 64;
+	clusterSize[2] = 16;
+	uint clusterCount = clusterSize[0] * clusterSize[1] * clusterSize[2];
+
 	{
-		clusterBuildingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0");
-		clusterCullingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0");
+		std::string clusterSizeStrs[3];
+		for (int i = 0; i < 3; ++i)
+			clusterSizeStrs[i] = std::format("{}", clusterSize[i]);
+
+		std::vector<std::pair<const char*, const char*>> defines = {
+			{ "CLUSTER_BUILDING_DISPATCH_SIZE_X", clusterSizeStrs[0].c_str() },
+			{ "CLUSTER_BUILDING_DISPATCH_SIZE_Y", clusterSizeStrs[1].c_str() },
+			{ "CLUSTER_BUILDING_DISPATCH_SIZE_Z", clusterSizeStrs[2].c_str() }
+		};
+
+		clusterBuildingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", defines, "cs_5_0");
+		clusterCullingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", defines, "cs_5_0");
 
 		lightBuildingCB = new ConstantBuffer(ConstantBufferDesc<LightBuildingCB>());
 		lightCullingCB = new ConstantBuffer(ConstantBufferDesc<LightCullingCB>());
@@ -156,7 +170,7 @@ void LightLimitFix::SetupResources()
 		uavDesc.Buffer.FirstElement = 0;
 		uavDesc.Buffer.Flags = 0;
 
-		std::uint32_t numElements = CLUSTER_COUNT;
+		std::uint32_t numElements = clusterCount;
 
 		sbDesc.StructureByteStride = sizeof(ClusterAABB);
 		sbDesc.ByteWidth = sizeof(ClusterAABB) * numElements;
@@ -175,7 +189,7 @@ void LightLimitFix::SetupResources()
 		uavDesc.Buffer.NumElements = numElements;
 		lightCounter->CreateUAV(uavDesc);
 
-		numElements = CLUSTER_COUNT * CLUSTER_MAX_LIGHTS;
+		numElements = clusterCount * CLUSTER_MAX_LIGHTS;
 		sbDesc.StructureByteStride = sizeof(uint32_t);
 		sbDesc.ByteWidth = sizeof(uint32_t) * numElements;
 		lightList = eastl::make_unique<Buffer>(sbDesc);
@@ -184,7 +198,7 @@ void LightLimitFix::SetupResources()
 		uavDesc.Buffer.NumElements = numElements;
 		lightList->CreateUAV(uavDesc);
 
-		numElements = CLUSTER_COUNT;
+		numElements = clusterCount;
 		sbDesc.StructureByteStride = sizeof(LightGrid);
 		sbDesc.ByteWidth = sizeof(LightGrid) * numElements;
 		lightGrid = eastl::make_unique<Buffer>(sbDesc);
@@ -872,7 +886,7 @@ void LightLimitFix::UpdateLights()
 			context->CSSetUnorderedAccessViews(0, 1, &clusters_uav, nullptr);
 
 			context->CSSetShader(clusterBuildingCS, nullptr, 0);
-			context->Dispatch(CLUSTER_SIZE_X, CLUSTER_SIZE_Y, CLUSTER_SIZE_Z);
+			context->Dispatch(clusterSize[0], clusterSize[1], clusterSize[2]);
 
 			ID3D11UnorderedAccessView* null_uav = nullptr;
 			context->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
@@ -908,7 +922,7 @@ void LightLimitFix::UpdateLights()
 		context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
 
 		context->CSSetShader(clusterCullingCS, nullptr, 0);
-		context->Dispatch(CLUSTER_SIZE_X / 16, CLUSTER_SIZE_Y / 16, CLUSTER_SIZE_Z / 4);
+		context->Dispatch((clusterSize[0] + 15) / 16, (clusterSize[1] + 15) / 16, (clusterSize[2] + 3) / 4);
 	}
 
 	context->CSSetShader(nullptr, nullptr, 0);

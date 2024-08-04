@@ -74,6 +74,8 @@ public:
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
 		uint pad0;
+
+		uint ClusterSize[4];
 	};
 
 	PerFrame GetCommonBufferData();
@@ -170,6 +172,8 @@ public:
 
 	float lightsNear = 0.0f;
 	float lightsFar = 16384.0f;
+
+	uint clusterSize[3] = { 16 };
 
 	Settings settings;
 

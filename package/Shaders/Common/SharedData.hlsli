@@ -112,6 +112,8 @@ struct LightLimitFixSettings
 	uint EnableLightsVisualisation;
 	uint LightsVisualisationMode;
 	uint pad0;
+
+	uint4 ClusterSize;
 };
 
 #	define SL_INCL_STRUCT
