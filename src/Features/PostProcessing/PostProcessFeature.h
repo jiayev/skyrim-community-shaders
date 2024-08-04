@@ -22,7 +22,13 @@ struct PostProcessFeature
 	virtual void LoadSettings(json& o_json) = 0;
 	virtual void SaveSettings(json& o_json) = 0;
 	virtual void DrawSettings() = 0;
-	virtual void Draw(ID3D11Texture2D* inputTex, ID3D11Texture2D* inputSrv, ID3D11Texture2D* inputUav = nullptr) = 0;
+
+	struct TextureInfo
+	{
+		ID3D11Texture2D* tex = nullptr;
+		ID3D11Texture2D* srv = nullptr;
+	};
+	virtual void Draw(TextureInfo& inout_tex) = 0;  // read from last pass, do the thing, and replace it with output texture
 
 	virtual inline void Reset(){};
 };
@@ -52,5 +58,5 @@ struct TestFeature : public PostProcessFeature
 	virtual inline void LoadSettings(json&) override{};
 	virtual inline void SaveSettings(json&) override{};
 	virtual inline void DrawSettings() override { ImGui::Text("Hello!"); };
-	virtual inline void Draw(ID3D11Texture2D*, ID3D11Texture2D*, ID3D11Texture2D*) override {}
+	virtual void Draw(TextureInfo&) override {}
 };
