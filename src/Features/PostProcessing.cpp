@@ -10,6 +10,7 @@ void PostProcessing::DrawSettings()
 	// 0 for list of feats
 	// 1 for feat settings
 	static int pageNum = 0;
+	static int featIdx = 0;
 
 	if (ImGui::BeginTable("Page Select", 2)) {
 		ImGui::TableNextColumn();
@@ -22,29 +23,79 @@ void PostProcessing::DrawSettings()
 
 	ImGui::Separator();
 
-	static int featIdx = 0;
 	if (pageNum == 0) {
-		if (ImGui::BeginCombo("Add Feature", "...Select")) {
-			const auto& featConstructors = PostProcessFeatureConstructor::GetFeatureConstructors();
+		if (ImGui::Button(ICON_FA_PLUS))
+			ImGui::OpenPopup("New Feature");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Add a new feature.");
 
-			for (auto& [id, featCon] : featConstructors) {
-				if (ImGui::Selectable(featCon.name.c_str())) {
-					feats.push_back(std::unique_ptr<PostProcessFeature>{ featCon.fn() });
-					feats.back()->name = feats.back()->GetType();
+		if (ImGui::BeginPopup("New Feature", ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) {
+			bool doClose = false;
+			if (ImGui::BeginListBox("##Feature List")) {
+				const auto& featConstructors = PostProcessFeatureConstructor::GetFeatureConstructors();
+
+				for (auto& [id, featCon] : featConstructors) {
+					if (ImGui::Selectable(featCon.name.c_str())) {
+						feats.push_back(std::unique_ptr<PostProcessFeature>{ featCon.fn() });
+						feats.back()->name = feats.back()->GetType();
+
+						featIdx = (int)feats.size() - 1;
+
+						doClose = true;
+					}
+					if (auto _tt = Util::HoverTooltipWrapper())
+						ImGui::Text(featCon.desc.c_str());
 				}
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text(featCon.desc.c_str());
-			}
 
-			ImGui::EndCombo();
+				ImGui::EndListBox();
+			}
+			if (doClose)
+				ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
 		}
+
+		ImGui::SameLine();
+
+		if (ImGui::Button(ICON_FA_MINUS) && (featIdx < feats.size()))
+			feats.erase(feats.begin() + featIdx);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Remove selected feature.");
+
+		ImGui::SameLine();
+		ImGui::Dummy({ ImGui::GetTextLineHeightWithSpacing() * 4, 1 });
+		ImGui::SameLine();
+
+		if (ImGui::Button(ICON_FA_ARROW_UP) && (featIdx < feats.size()) && (featIdx != 0)) {
+			std::iter_swap(feats.begin() + featIdx, feats.begin() + featIdx - 1);
+			featIdx--;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Move selected feature up.");
+
+		ImGui::SameLine();
+
+		if (ImGui::Button(ICON_FA_ARROW_DOWN) && (featIdx < feats.size() - 1)) {
+			std::iter_swap(feats.begin() + featIdx, feats.begin() + featIdx + 1);
+			featIdx++;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Move selected feature down.");
 
 		if (ImGui::BeginListBox("##Features", { -FLT_MIN, -FLT_MIN })) {
 			ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));  // I hate this
 			for (int i = 0; i < feats.size(); ++i) {
+				ImGui::PushID(i);
+
 				auto& feat = feats[i];
 
 				bool nonVR = REL::Module::IsVR() && !feat->SupportsVR();
+
+				ImGui::Checkbox("##Enabled", &feat->enabled);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Enabled/Bypassed");
+				ImGui::SameLine();
+				ImGui::AlignTextToFramePadding();
+
 				if (nonVR)
 					ImGui::BeginDisabled();
 				if (ImGui::Selectable(feat->name.c_str(), featIdx == i))
@@ -57,6 +108,8 @@ void PostProcessing::DrawSettings()
 						ImGui::Text("Bypassed due to no VR support.");
 					else
 						ImGui::Text(feat->GetDesc().c_str());
+
+				ImGui::PopID();
 			}
 			ImGui::PopStyleColor();
 
