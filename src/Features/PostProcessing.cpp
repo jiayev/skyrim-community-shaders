@@ -15,11 +15,13 @@ void PostProcessing::DrawSettings()
 	const float _iconButtonSize = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().FramePadding.x;
 	const ImVec2 iconButtonSize{ _iconButtonSize, _iconButtonSize };
 
-	if (ImGui::BeginTable("Page Select", 2)) {
+	if (ImGui::BeginTable("Page Select", 3)) {
 		ImGui::TableNextColumn();
 		ImGui::RadioButton("Effect List", &pageNum, 0);
 		ImGui::TableNextColumn();
 		ImGui::RadioButton("Effect Settings", &pageNum, 1);
+		ImGui::TableNextColumn();
+		ImGui::RadioButton("LUT Baker", &pageNum, 2);
 
 		ImGui::EndTable();
 	}
@@ -27,6 +29,8 @@ void PostProcessing::DrawSettings()
 	ImGui::SeparatorText("");
 
 	if (pageNum == 0) {
+		// Effect List
+
 		if (ImGui::Button(ICON_FA_PLUS, iconButtonSize))
 			ImGui::OpenPopup("New Feature");
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -121,7 +125,9 @@ void PostProcessing::DrawSettings()
 
 			ImGui::EndListBox();
 		}
-	} else {
+	} else if (pageNum == 1) {
+		// Effect Settings
+
 		if (featIdx < feats.size()) {
 			auto& feat = feats[featIdx];
 			ImGui::InputText("Name", &feat->name);
@@ -136,9 +142,12 @@ void PostProcessing::DrawSettings()
 
 			feat->DrawSettings();
 		} else {
-			ImGui::Separator();
 			ImGui::TextDisabled("Please select an effect in the effect list to continue.");
 		}
+	} else {
+		// LUT Baker
+
+		ImGui::TextDisabled("UNDER CONSTRUCTION");
 	}
 }
 
