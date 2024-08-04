@@ -1,5 +1,7 @@
 #include "PostProcessing.h"
 
+#include "IconsFontAwesome5.h"
+
 #include "Util.h"
 
 void PostProcessing::DrawSettings()
