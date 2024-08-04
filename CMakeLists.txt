@@ -68,7 +68,7 @@ target_link_libraries(
 	pystring::pystring
 	unordered_dense::unordered_dense
 	efsw::efsw
-	 ${NVAPI_LIBRARY} 
+	${NVAPI_LIBRARY} 
 )
 
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
