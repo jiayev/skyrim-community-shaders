@@ -11,6 +11,8 @@ void PostProcessing::DrawSettings()
 	// 1 for feat settings
 	static int pageNum = 0;
 	static int featIdx = 0;
+	const float _iconButtonSize = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().FramePadding.x;
+	const ImVec2 iconButtonSize{ _iconButtonSize, _iconButtonSize };
 
 	if (ImGui::BeginTable("Page Select", 2)) {
 		ImGui::TableNextColumn();
@@ -24,10 +26,10 @@ void PostProcessing::DrawSettings()
 	ImGui::Separator();
 
 	if (pageNum == 0) {
-		if (ImGui::Button(ICON_FA_PLUS))
+		if (ImGui::Button(ICON_FA_PLUS, iconButtonSize))
 			ImGui::OpenPopup("New Feature");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Add a new feature.");
+			ImGui::Text("Add a new effect.");
 
 		if (ImGui::BeginPopup("New Feature", ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) {
 			bool doClose = false;
@@ -56,30 +58,30 @@ void PostProcessing::DrawSettings()
 
 		ImGui::SameLine();
 
-		if (ImGui::Button(ICON_FA_MINUS) && (featIdx < feats.size()))
+		if (ImGui::Button(ICON_FA_MINUS, iconButtonSize) && (featIdx < feats.size()))
 			feats.erase(feats.begin() + featIdx);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Remove selected feature.");
+			ImGui::Text("Remove the selected effect.");
 
 		ImGui::SameLine();
-		ImGui::Dummy({ ImGui::GetTextLineHeightWithSpacing() * 4, 1 });
+		ImGui::Dummy({ ImGui::GetTextLineHeightWithSpacing() * 2, 1 });
 		ImGui::SameLine();
 
-		if (ImGui::Button(ICON_FA_ARROW_UP) && (featIdx < feats.size()) && (featIdx != 0)) {
+		if (ImGui::Button(ICON_FA_ARROW_UP, iconButtonSize) && (featIdx < feats.size()) && (featIdx != 0)) {
 			std::iter_swap(feats.begin() + featIdx, feats.begin() + featIdx - 1);
 			featIdx--;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Move selected feature up.");
+			ImGui::Text("Move the selected effect up.");
 
 		ImGui::SameLine();
 
-		if (ImGui::Button(ICON_FA_ARROW_DOWN) && (featIdx < feats.size() - 1)) {
+		if (ImGui::Button(ICON_FA_ARROW_DOWN, iconButtonSize) && (featIdx < feats.size() - 1)) {
 			std::iter_swap(feats.begin() + featIdx, feats.begin() + featIdx + 1);
 			featIdx++;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Move selected feature down.");
+			ImGui::Text("Move the selected effect down.");
 
 		if (ImGui::BeginListBox("##Features", { -FLT_MIN, -FLT_MIN })) {
 			ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));  // I hate this
