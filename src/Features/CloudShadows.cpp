@@ -17,31 +17,6 @@ void CloudShadows::CheckResourcesSide(int side)
 	context->ClearRenderTargetView(cubemapCloudOccRTVs[side], black);
 }
 
-class BSSkyShaderProperty : public RE::BSShaderProperty
-{
-public:
-	enum SkyObject
-	{
-		SO_SUN = 0x0,
-		SO_SUN_GLARE = 0x1,
-		SO_ATMOSPHERE = 0x2,
-		SO_CLOUDS = 0x3,
-		SO_SKYQUAD = 0x4,
-		SO_STARS = 0x5,
-		SO_MOON = 0x6,
-		SO_MOON_SHADOW = 0x7,
-	};
-
-	RE::NiColorA kBlendColor;
-	RE::NiSourceTexture* pBaseTexture;
-	RE::NiSourceTexture* pBlendTexture;
-	char _pad0[0x10];
-	float fBlendValue;
-	uint16_t usCloudLayer;
-	bool bFadeSecondTexture;
-	uint32_t uiSkyObjectType;
-};
-
 void CloudShadows::ModifySky(RE::BSRenderPass* Pass)
 {
 	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
@@ -51,9 +26,9 @@ void CloudShadows::ModifySky(RE::BSRenderPass* Pass)
 	if (cubeMapRenderTarget != RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS)
 		return;
 
-	auto skyProperty = static_cast<const BSSkyShaderProperty*>(Pass->shaderProperty);
+	auto skyProperty = static_cast<const RE::BSSkyShaderProperty*>(Pass->shaderProperty);
 
-	if (skyProperty->uiSkyObjectType == BSSkyShaderProperty::SkyObject::SO_CLOUDS) {
+	if (skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_CLOUDS) {
 		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 		auto& context = State::GetSingleton()->context;
 
