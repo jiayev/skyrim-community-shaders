@@ -26,7 +26,7 @@ struct PostProcessFeature
 	struct TextureInfo
 	{
 		ID3D11Texture2D* tex = nullptr;
-		ID3D11Texture2D* srv = nullptr;
+		ID3D11ShaderResourceView* srv = nullptr;
 	};
 	virtual void Draw(TextureInfo& inout_tex) = 0;  // read from last pass, do the thing, and replace it with output texture
 
