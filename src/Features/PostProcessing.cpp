@@ -1,13 +1,14 @@
 #include "PostProcessing.h"
 
 #include "IconsFontAwesome5.h"
+#include "imgui_stdlib.h"
 
 #include "Util.h"
 
 void PostProcessing::DrawSettings()
 {
-	// 0 for list of modules
-	// 1 for module settings
+	// 0 for list of feats
+	// 1 for feat settings
 	static int pageNum = 0;
 
 	if (ImGui::BeginTable("Page Select", 2)) {
@@ -19,41 +20,56 @@ void PostProcessing::DrawSettings()
 		ImGui::EndTable();
 	}
 
-	static int moduleIdx = 0;
+	ImGui::Separator();
+
+	static int featIdx = 0;
 	if (pageNum == 0) {
-		ImGui::Separator();
+		if (ImGui::BeginCombo("Add Feature", "...Select")) {
+			const auto& featConstructors = PostProcessFeatureConstructor::GetFeatureConstructors();
 
-		if (ImGui::BeginCombo("Add Module", "...Select")) {
-			const auto& moduleConstructors = PostProcessModuleConstructor::GetModuleConstructors();
-
-			for (auto& [id, modCon] : moduleConstructors) {
-				if (ImGui::Selectable(modCon.name.c_str()))
-					modules.push_back(std::unique_ptr<PostProcessModule>{ modCon.fn() });
+			for (auto& [id, featCon] : featConstructors) {
+				if (ImGui::Selectable(featCon.name.c_str())) {
+					feats.push_back(std::unique_ptr<PostProcessFeature>{ featCon.fn() });
+					feats.back()->name = feats.back()->GetType();
+				}
 				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text(modCon.desc.c_str());
+					ImGui::Text(featCon.desc.c_str());
 			}
 
 			ImGui::EndCombo();
 		}
 
-		if (ImGui::BeginListBox("##Modules", { -FLT_MIN, -FLT_MIN })) {
+		if (ImGui::BeginListBox("##Features", { -FLT_MIN, -FLT_MIN })) {
 			ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));  // I hate this
-			for (int i = 0; i < modules.size(); ++i) {
-				auto& mod = modules[i];
-				if (ImGui::Selectable(mod->GetName().c_str(), moduleIdx == i))
-					moduleIdx = i;
+			for (int i = 0; i < feats.size(); ++i) {
+				auto& feat = feats[i];
+
+				bool nonVR = REL::Module::IsVR() && !feat->SupportsVR();
+				if (nonVR)
+					ImGui::BeginDisabled();
+				if (ImGui::Selectable(feat->name.c_str(), featIdx == i))
+					featIdx = i;
+				if (nonVR)
+					ImGui::EndDisabled();
+
 				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text(mod->GetDesc().c_str());
+					if (nonVR)
+						ImGui::Text("Bypassed due to no VR support.");
+					else
+						ImGui::Text(feat->GetDesc().c_str());
 			}
 			ImGui::PopStyleColor();
 
 			ImGui::EndListBox();
 		}
 	} else {
-		if (moduleIdx < modules.size()) {
-			auto& mod = modules[moduleIdx];
-			ImGui::SeparatorText(mod->GetName().c_str());
-			mod->DrawSettings();
+		if (featIdx < feats.size()) {
+			auto& feat = feats[featIdx];
+			ImGui::InputText("Name", &feat->name);
+
+			ImGui::SeparatorText(feat->name.c_str());
+
+			feat->DrawSettings();
 		} else {
 			ImGui::Separator();
 			ImGui::TextDisabled("Please select an effect in the effect list to continue.");
@@ -63,29 +79,70 @@ void PostProcessing::DrawSettings()
 
 void PostProcessing::LoadSettings(json& o_json)
 {
-	const auto& moduleConstructors = PostProcessModuleConstructor::GetModuleConstructors();
+	const auto& featConstructors = PostProcessFeatureConstructor::GetFeatureConstructors();
+
+	logger::info("Loading post processing settings...");
 
 	for (auto& item : o_json) {
-		auto itemType = item["type"].get<std::string>();
-		if (moduleConstructors.contains(itemType)) {
-			modules.push_back(std::unique_ptr<PostProcessModule>{ moduleConstructors.at(itemType).fn() });
-			modules.back()->LoadSettings(item["settings"]);
+		auto currFeatCount = feats.size();
+		try {
+			auto itemType = item["type"].get<std::string>();
+			if (featConstructors.contains(itemType)) {
+				PostProcessFeature* feat = featConstructors.at(itemType).fn();
+				feat->name = item["name"].get<std::string>();
+				feat->LoadSettings(item["settings"]);
+
+				feats.push_back(std::unique_ptr<PostProcessFeature>{ feat });
+			} else {
+				logger::warn("Invalid post processing feature type \"{}\" detected in settings.", itemType);
+			}
+		} catch (json::exception& e) {
+			logger::error("Error occured while parsing post processing settings: {}", e.what());
+			if (feats.size() > currFeatCount)
+				feats.pop_back();
 		}
 	}
 }
 
-void PostProcessing::SaveSettings(json&)
+void PostProcessing::SaveSettings(json& o_json)
 {
+	o_json = json::array();
+
+	for (auto& feat : feats) {
+		json temp_json{};
+		feat->SaveSettings(temp_json);
+		o_json.push_back({
+			{ "type", feat->GetType() },
+			{ "name", feat->name },
+			{ "settings", temp_json },
+		});
+	}
 }
 
 void PostProcessing::RestoreDefaultSettings()
 {
-	for (auto& module : modules)
-		module->RestoreDefaultSettings();
+	for (auto& feat : feats)
+		if (!REL::Module::IsVR() || feat->SupportsVR())
+			feat->RestoreDefaultSettings();
 }
 
 void PostProcessing::ClearShaderCache()
 {
-	for (auto& module : modules)
-		module->ClearShaderCache();
+	for (auto& feat : feats)
+		if (!REL::Module::IsVR() || feat->SupportsVR())
+			feat->ClearShaderCache();
+}
+
+void PostProcessing::SetupResources()
+{
+	for (auto& feat : feats)
+		if (!REL::Module::IsVR() || feat->SupportsVR())
+			feat->SetupResources();
+}
+
+void PostProcessing::Reset()
+{
+	for (auto& feat : feats)
+		if (!REL::Module::IsVR() || feat->SupportsVR())
+			feat->Reset();
 }
