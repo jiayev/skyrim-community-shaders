@@ -58,5 +58,5 @@ struct TestFeature : public PostProcessFeature
 	virtual inline void LoadSettings(json&) override{};
 	virtual inline void SaveSettings(json&) override{};
 	virtual inline void DrawSettings() override { ImGui::Text("Hello!"); };
-	virtual void Draw(TextureInfo&) override {}
+	virtual inline void Draw(TextureInfo&) override {}
 };
