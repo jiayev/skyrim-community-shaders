@@ -3,6 +3,7 @@
 #include "IconsFontAwesome5.h"
 #include "imgui_stdlib.h"
 
+#include "State.h"
 #include "Util.h"
 
 void PostProcessing::DrawSettings()
@@ -23,7 +24,7 @@ void PostProcessing::DrawSettings()
 		ImGui::EndTable();
 	}
 
-	ImGui::Separator();
+	ImGui::SeparatorText("");
 
 	if (pageNum == 0) {
 		if (ImGui::Button(ICON_FA_PLUS, iconButtonSize))
@@ -40,6 +41,7 @@ void PostProcessing::DrawSettings()
 					if (ImGui::Selectable(featCon.name.c_str())) {
 						feats.push_back(std::unique_ptr<PostProcessFeature>{ featCon.fn() });
 						feats.back()->name = feats.back()->GetType();
+						feats.back()->SetupResources();
 
 						featIdx = (int)feats.size() - 1;
 
@@ -200,4 +202,32 @@ void PostProcessing::Reset()
 	for (auto& feat : feats)
 		if (!REL::Module::IsVR() || feat->SupportsVR())
 			feat->Reset();
+}
+
+void PostProcessing::PreProcess()
+{
+	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+	auto context = State::GetSingleton()->context;
+
+	auto gameTexMain = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	PostProcessFeature::TextureInfo lastTexColor = { gameTexMain.texture, gameTexMain.SRV };
+
+	// go through each fx
+	for (auto& feat : feats)
+		if (feat->enabled && (!REL::Module::IsVR() || feat->SupportsVR()))
+			feat->Draw(lastTexColor);
+
+	// either MAIN_COPY or MAIN is used as input for HDR pass
+	// so we copy to both so whatever the game wants we're not failing it
+	context->CopySubresourceRegion(gameTexMain.texture, 0, 0, 0, 0, lastTexColor.tex, 0, nullptr);
+	context->CopySubresourceRegion(
+		renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN_COPY].texture,
+		0, 0, 0, 0, lastTexColor.tex, 0, nullptr);
+}
+
+void PostProcessing::PostPostLoad()
+{
+	logger::info("Hooking preprocess passes");
+	stl::write_vfunc<0x2, BSImagespaceShaderHDRTonemapBlendCinematic_SetupTechnique>(RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[0]);
+	stl::write_vfunc<0x2, BSImagespaceShaderHDRTonemapBlendCinematicFade_SetupTechnique>(RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[0]);
 }

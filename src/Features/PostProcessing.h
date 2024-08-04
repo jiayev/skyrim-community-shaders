@@ -27,7 +27,33 @@ struct PostProcessing : Feature
 	virtual void SetupResources() override;
 	virtual void Reset() override;
 
+	virtual void PostPostLoad() override;
+
+	void PreProcess();
+
 	/////////////////////////////////////////////////////////////////////////////////
 
 	std::vector<std::unique_ptr<PostProcessFeature>> feats = {};
+
+	/////////////////////////////////////////////////////////////////////////////////
+
+	struct BSImagespaceShaderHDRTonemapBlendCinematic_SetupTechnique
+	{
+		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
+		{
+			GetSingleton()->PreProcess();
+			func(a_shader, a_material);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSImagespaceShaderHDRTonemapBlendCinematicFade_SetupTechnique
+	{
+		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
+		{
+			GetSingleton()->PreProcess();
+			func(a_shader, a_material);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
 };
