@@ -46,17 +46,3 @@ struct PostProcessFeatureConstructor
 	};
 	static const ankerl::unordered_dense::map<std::string, PostProcessFeatureConstructor>& GetFeatureConstructors();
 };
-
-struct TestFeature : public PostProcessFeature
-{
-	virtual inline std::string GetType() const override { return "Test Feature"; }
-	virtual inline std::string GetDesc() const override { return "Feature only for testing"; }
-
-	virtual inline void SetupResources() override{};
-	virtual inline void ClearShaderCache() override{};
-	virtual inline void RestoreDefaultSettings() override{};
-	virtual inline void LoadSettings(json&) override{};
-	virtual inline void SaveSettings(json&) override{};
-	virtual inline void DrawSettings() override { ImGui::Text("Hello!"); };
-	virtual inline void Draw(TextureInfo&) override {}
-};
