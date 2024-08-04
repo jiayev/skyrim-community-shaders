@@ -85,6 +85,8 @@ void PostProcessing::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Move the selected effect down.");
 
+		ImGui::Spacing();
+
 		if (ImGui::BeginListBox("##Features", { -FLT_MIN, -FLT_MIN })) {
 			ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));  // I hate this
 			for (int i = 0; i < feats.size(); ++i) {
@@ -124,7 +126,13 @@ void PostProcessing::DrawSettings()
 			auto& feat = feats[featIdx];
 			ImGui::InputText("Name", &feat->name);
 
-			ImGui::SeparatorText(feat->name.c_str());
+			ImGui::SeparatorText(std::format("{} ({})", feat->name, feat->GetType()).c_str());
+
+			ImGui::TextWrapped(feat->GetDesc().c_str());
+
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::Spacing();
 
 			feat->DrawSettings();
 		} else {
