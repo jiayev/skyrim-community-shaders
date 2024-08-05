@@ -84,7 +84,7 @@ float3 AgxEotf(float3 val)
 	val = mul(agx_mat_inv, val);
 
 	// sRGB IEC 61966-2-1 2.2 Exponent Reference EOTF Display
-	// val = pow(saturate(val), 2.2);
+	val = pow(saturate(val), 2.2);
 
 	return val;
 }

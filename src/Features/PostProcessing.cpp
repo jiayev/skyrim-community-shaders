@@ -157,6 +157,8 @@ void PostProcessing::LoadSettings(json& o_json)
 
 	logger::info("Loading post processing settings...");
 
+	feats.clear();
+
 	for (auto& item : o_json) {
 		auto currFeatCount = feats.size();
 		try {
@@ -167,6 +169,8 @@ void PostProcessing::LoadSettings(json& o_json)
 				feat->LoadSettings(item["settings"]);
 
 				feats.push_back(std::unique_ptr<PostProcessFeature>{ feat });
+
+				logger::info("Loaded {}({}).", feat->name, feat->GetType());
 			} else {
 				logger::warn("Invalid post processing feature type \"{}\" detected in settings.", itemType);
 			}
