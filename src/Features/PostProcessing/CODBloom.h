@@ -7,7 +7,7 @@
 struct CODBloom : public PostProcessFeature
 {
 	virtual inline std::string GetType() const override { return "COD Bloom"; }
-	virtual inline std::string GetDesc() const override { return "Bloom effect used in Call of Duty: Advanced Warfare. Expect HDR Inputs."; }
+	virtual inline std::string GetDesc() const override { return "Bloom effect used in Call of Duty: Advanced Warfare. Expect HDR linear RGB Inputs."; }
 
 	constexpr static size_t s_BloomMips = 9;
 
