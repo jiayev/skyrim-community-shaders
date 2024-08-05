@@ -2,6 +2,8 @@
 /// ref:
 /// http://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare
 
+#include "../../Common/Color.hlsli"
+
 Texture2D<float4> TexColor : register(t0);
 Texture2D<float4> TexBloomIn : register(t1);
 
@@ -24,11 +26,6 @@ bool3 IsNaN(float3 x)
 	return !(x < 0.f || x > 0.f || x == 0.f);
 }
 
-float Luma(float3 color)
-{
-	return dot(color, float3(0.2126, 0.7152, 0.0722));
-}
-
 float3 Sanitise(float3 v)
 {
 	bool3 err = IsNaN(v) || (v < 0);
@@ -40,7 +37,7 @@ float3 Sanitise(float3 v)
 
 float3 ThresholdColor(float3 col, float threshold)
 {
-	float luma = Luma(col);
+	float luma = RGBToLuminance(col);
 	if (luma < 1e-3)
 		return 0;
 	return col * (max(0, luma - threshold) / luma);
@@ -48,10 +45,10 @@ float3 ThresholdColor(float3 col, float threshold)
 
 float4 KarisAverage(float4 a, float4 b, float4 c, float4 d)
 {
-	float wa = rcp(1 + Luma(a.rgb));
-	float wb = rcp(1 + Luma(b.rgb));
-	float wc = rcp(1 + Luma(c.rgb));
-	float wd = rcp(1 + Luma(d.rgb));
+	float wa = rcp(1 + RGBToLuminance(a.rgb));
+	float wb = rcp(1 + RGBToLuminance(b.rgb));
+	float wc = rcp(1 + RGBToLuminance(c.rgb));
+	float wd = rcp(1 + RGBToLuminance(d.rgb));
 	float wsum = wa + wb + wc + wd;
 	return (a * wa + b * wb + c * wc + d * wd) / wsum;
 }
@@ -66,27 +63,27 @@ float4 DownsampleCOD(Texture2D tex, float2 uv, float2 out_px_size)
 	float4 fetches2x2[4];
 	float4 fetches3x3[9];
 
-	for (x = 0; x < 2; ++x)
-		for (y = 0; y < 2; ++y)
+	[unroll] for (x = 0; x < 2; ++x)
+		[unroll] for (y = 0; y < 2; ++y)
 			fetches2x2[x * 2 + y] = tex.SampleLevel(SampColor, uv + (int2(x, y) * 2 - 1) * out_px_size, 0);
-	for (x = 0; x < 3; ++x)
-		for (y = 0; y < 3; ++y)
+	[unroll] for (x = 0; x < 3; ++x)
+		[unroll] for (y = 0; y < 3; ++y)
 			fetches3x3[x * 3 + y] = tex.SampleLevel(SampColor, uv + (int2(x, y) - 1) * 2 * out_px_size, 0);
 
 	retval += 0.5 * KarisAverage(fetches2x2[0], fetches2x2[1], fetches2x2[2], fetches2x2[3]);
 
-	for (x = 0; x < 2; ++x)
-		for (y = 0; y < 2; ++y)
+	[unroll] for (x = 0; x < 2; ++x)
+		[unroll] for (y = 0; y < 2; ++y)
 			retval += 0.125 * KarisAverage(fetches3x3[x * 3 + y], fetches3x3[(x + 1) * 3 + y], fetches3x3[x * 3 + y + 1], fetches3x3[(x + 1) * 3 + y + 1]);
 #else
-	for (x = 0; x < 2; ++x)
-		for (y = 0; y < 2; ++y)
+	[unroll] for (x = 0; x < 2; ++x)
+		[unroll] for (y = 0; y < 2; ++y)
 			retval += 0.125 * tex.SampleLevel(SampColor, uv + (int2(x, y) - .5) * out_px_size, 0);
 
 	// const static float weights[9] = { 0.03125, 0.625, 0.03125, 0.625, 0.125, 0.625, 0.03125, 0.625, 0.03125 };
 	// corresponds to (1 << (!x + !y)) * 0.03125 when $x,y \in [-1, 1] \cap \mathbb N$
-	for (x = -1; x <= 1; ++x)
-		for (y = -1; y <= 1; ++y)
+	[unroll] for (x = -1; x <= 1; ++x)
+		[unroll] for (y = -1; y <= 1; ++y)
 			retval += (1u << (!x + !y)) * 0.03125 * tex.SampleLevel(SampColor, uv + int2(x, y) * out_px_size, 0);
 #endif
 

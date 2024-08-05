@@ -1,0 +1,65 @@
+#pragma once
+
+#include "PostProcessFeature.h"
+
+#include "Buffer.h"
+
+struct HistogramAutoExporsure : public PostProcessFeature
+{
+	virtual inline std::string GetType() const override { return "Histogram Auto Exporsure"; }
+	virtual inline std::string GetDesc() const override { return "Auto exposure/Eye adaptation method that uses histogram to calculate average screen brightness. "
+																 "Expects HDR linear RGB inputs."; }
+
+	virtual bool SupportsVR() { return true; }
+
+	struct Settings
+	{
+		float ExposureCompensation = 2.f;
+
+		// auto exposure
+		float2 AdaptationRange = { -1.f, 1.f };  // EV
+		float2 AdaptArea = { .6f, .6f };
+
+		float AdaptSpeed = 1.5f;
+
+		// purkinje
+		float PurkinjeStartEV = -2.f;  // EV
+		float PurkinjeMaxEV = -4.f;    // EV
+		float PurkinjeStrength = 1.f;
+	} settings;
+
+	// buffers
+	struct alignas(16) AutoExposureCB
+	{
+		float2 AdaptArea;
+		float2 AdaptationRange;
+		float AdaptLerp;
+		float ExposureCompensation;
+		float PurkinjeStartEV;
+		float PurkinjeMaxEV;
+		float PurkinjeStrength;
+
+		float pad[3];
+	};
+	std::unique_ptr<ConstantBuffer> autoExposureCB = nullptr;
+	std::unique_ptr<StructuredBuffer> histogramSB = nullptr;
+	std::unique_ptr<StructuredBuffer> adaptationSB = nullptr;
+
+	winrt::com_ptr<ID3D11ComputeShader> histogramCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> histogramAvgCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> adaptCS = nullptr;
+
+	std::unique_ptr<Texture2D> texAdapt = nullptr;
+
+	virtual void SetupResources() override;
+	virtual void ClearShaderCache() override;
+	void CompileComputeShaders();
+
+	virtual void RestoreDefaultSettings() override;
+	virtual void LoadSettings(json&) override;
+	virtual void SaveSettings(json&) override;
+
+	virtual void DrawSettings() override;
+
+	virtual void Draw(TextureInfo&) override;
+};
