@@ -20,7 +20,7 @@
 
 void Feature::Load(json& o_json)
 {
-	if (o_json[GetName()].is_object())
+	if (o_json[GetName()].is_structured())
 		LoadSettings(o_json[GetName()]);
 
 	// Convert string to wstring
