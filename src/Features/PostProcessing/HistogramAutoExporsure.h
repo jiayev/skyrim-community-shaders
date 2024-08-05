@@ -14,7 +14,7 @@ struct HistogramAutoExporsure : public PostProcessFeature
 
 	struct Settings
 	{
-		float ExposureCompensation = 2.f;
+		float ExposureCompensation = 0.f;
 
 		// auto exposure
 		float2 AdaptationRange = { -1.f, 1.f };  // EV
