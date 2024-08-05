@@ -12,10 +12,59 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void MathTonemapper::DrawSettings()
 {
-	ImGui::SliderFloat("Slope", &settings.Slope, 0.f, 2.f, "%.2f");
-	ImGui::SliderFloat("Power", &settings.Power, 0.f, 2.f, "%.2f");
-	ImGui::SliderFloat("Offset", &settings.Offset, -1.f, 1.f, "%.2f");
-	ImGui::SliderFloat("Saturation", &settings.Saturation, 0.f, 2.f, "%.2f");
+	constexpr auto tonemappers = std::array{
+		"Reinhard"sv,
+		"Reinhard Extended"sv,
+		"Hejl Burgess-Dawson Filmic"sv,
+		"ACES (Hill)"sv,
+		"ACES (Narkowicz)"sv,
+		"ACES (Guy)"sv,
+		"AgX Minimal"sv,
+	};
+	constexpr auto descs = std::array{
+		"Mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002."sv,
+
+		"Extended mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002. "
+		"An additional user parameter specifies the smallest luminance that is mapped to 1, which allows high luminances to burn out."sv,
+
+		"Analytical approximation of a Kodak film curve by Jim Hejl and Richard Burgess-Dawson. "
+		"See the \"Filmic Tonemapping for Real-time Rendering\" SIGGRAPH 2010 course by Haarm-Pieter Duiker."sv,
+
+		"ACES curve fit by Stephen Hill."sv,
+
+		"ACES curve fit by Krzysztof Narkowicz. See his blog post \"ACES Filmic Tone Mapping Curve\"."sv,
+
+		"Curve from Unreal 3 adapted by to close to the ACES curve by Romain Guy."sv,
+
+		"Minimal version of Troy Sobotka's AgX using a 6th order polynomial approximation."
+		"Originally created by bwrensch, and improved by Troy Sobotka."sv,
+	};
+
+	if (ImGui::BeginCombo("Tonemapping Operator", tonemappers[settings.Tonemapper].data())) {
+		for (int i = 0; i < tonemappers.size(); ++i) {
+			if (ImGui::Selectable(tonemappers[i].data(), i == settings.Tonemapper)) {
+				settings.Tonemapper = i;
+				recompileFlag = true;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text(descs[i].data());
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::Spacing();
+	ImGui::TextWrapped(descs[settings.Tonemapper].data());
+	ImGui::Spacing();
+
+	if (settings.Tonemapper == 6) {
+		ImGui::SliderFloat("Slope", &settings.Slope, 0.f, 2.f, "%.2f");
+		ImGui::SliderFloat("Power", &settings.Power, 0.f, 2.f, "%.2f");
+		ImGui::SliderFloat("Offset", &settings.Offset, -1.f, 1.f, "%.2f");
+		ImGui::SliderFloat("Saturation", &settings.Saturation, 0.f, 2.f, "%.2f");
+	} else {
+		ImGui::SliderFloat("Key Value", &settings.KeyValue, 0.f, 5.f, "%.2f");
+		if (settings.Tonemapper == 1)
+			ImGui::SliderFloat("White Point", &settings.WhitePoint, 0.f, 10.f, "%.2f");
+	}
 }
 
 void MathTonemapper::RestoreDefaultSettings()
@@ -91,6 +140,16 @@ void MathTonemapper::ClearShaderCache()
 
 void MathTonemapper::CompileComputeShaders()
 {
+	constexpr auto tonemappers = std::array{
+		"Reinhard"sv,
+		"ReinhardExt"sv,
+		"HejlBurgessDawsonFilmic"sv,
+		"AcesHill"sv,
+		"AcesNarkowicz"sv,
+		"AcesGuy"sv,
+		"AgxMinimal"sv,
+	};
+
 	struct ShaderCompileInfo
 	{
 		winrt::com_ptr<ID3D11ComputeShader>* programPtr;
@@ -101,7 +160,7 @@ void MathTonemapper::CompileComputeShaders()
 
 	std::vector<ShaderCompileInfo>
 		shaderInfos = {
-			{ &tonemapCS, "tonemap.cs.hlsl", {} },
+			{ &tonemapCS, "tonemap.cs.hlsl", { { "TONEMAP_OPERATOR", tonemappers[settings.Tonemapper].data() } } },
 		};
 
 	for (auto& info : shaderInfos) {
@@ -120,9 +179,15 @@ void MathTonemapper::Draw(TextureInfo& inout_tex)
 	if (recompileFlag)
 		ClearShaderCache();
 
-	TonemapCB cbData = {
-		.Params = { settings.Slope, settings.Power, settings.Offset, settings.Saturation }
-	};
+	TonemapCB cbData;
+	if (settings.Tonemapper == 6)
+		cbData = {
+			.Params = { settings.Slope, settings.Power, settings.Offset, settings.Saturation }
+		};
+	else
+		cbData = {
+			.Params = { settings.KeyValue, settings.WhitePoint, 0, 0 }
+		};
 	tonemapCB->Update(cbData);
 
 	ID3D11ShaderResourceView* srv = inout_tex.srv;
