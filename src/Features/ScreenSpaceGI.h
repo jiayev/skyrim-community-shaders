@@ -51,7 +51,7 @@ struct ScreenSpaceGI : Feature
 		// performance/quality
 		uint NumSlices = 2;
 		uint NumSteps = 4;
-		bool HalfRes = false;
+		bool HalfRes = true;
 		bool HalfRate = true;
 		float DepthMIPSamplingOffset = 3.3f;
 		// visual
@@ -67,7 +67,7 @@ struct ScreenSpaceGI : Feature
 		float GIBounceFade = 1.f;
 		float GIDistanceCompensation = 0.f;
 		// mix
-		float AOPower = 1.f;
+		float AOPower = 2.f;
 		float GIStrength = 3.f;
 		// denoise
 		bool EnableTemporalDenoiser = true;

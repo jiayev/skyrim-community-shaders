@@ -208,7 +208,7 @@ void ScreenSpaceGI::DrawSettings()
 	///////////////////////////////
 	ImGui::SeparatorText("Visual");
 
-	ImGui::SliderFloat("AO Power", &settings.AOPower, 0.f, 3.f, "%.2f");
+	ImGui::SliderFloat("AO Power", &settings.AOPower, 0.f, 6.f, "%.2f");
 
 	{
 		auto _ = DisableGuard(!settings.EnableGI);
