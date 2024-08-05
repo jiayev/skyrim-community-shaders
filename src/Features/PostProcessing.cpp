@@ -157,9 +157,30 @@ void PostProcessing::LoadSettings(json& o_json)
 
 	logger::info("Loading post processing settings...");
 
+	auto effects = o_json["effects"];
+	if (!effects.is_array())
+		effects = json::parse(R"(
+		[
+            {
+                "name": "COD Bloom",
+                "settings": {},
+                "type": "COD Bloom"
+            },
+            {
+                "name": "Histogram Auto Exporsure",
+                "settings": {},
+                "type": "Histogram Auto Exporsure"
+            },
+            {
+                "name": "Math Tonemapper",
+                "settings": {},
+                "type": "Math Tonemapper"
+            }
+        ])");
+
 	feats.clear();
 
-	for (auto& item : o_json) {
+	for (auto& item : o_json["effects"]) {
 		auto currFeatCount = feats.size();
 		try {
 			auto itemType = item["type"].get<std::string>();
@@ -184,17 +205,19 @@ void PostProcessing::LoadSettings(json& o_json)
 
 void PostProcessing::SaveSettings(json& o_json)
 {
-	o_json = json::array();
+	auto arr = json::array();
 
 	for (auto& feat : feats) {
 		json temp_json{};
 		feat->SaveSettings(temp_json);
-		o_json.push_back({
+		arr.push_back({
 			{ "type", feat->GetType() },
 			{ "name", feat->name },
 			{ "settings", temp_json },
 		});
 	}
+
+	o_json["effects"] = arr;
 }
 
 void PostProcessing::RestoreDefaultSettings()
