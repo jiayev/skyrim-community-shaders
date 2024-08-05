@@ -1,4 +1,4 @@
-#include "HistogramAutoExporsure.h"
+#include "HistogramAutoExposure.h"
 
 #include "State.h"
 #include "Util.h"

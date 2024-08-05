@@ -12,10 +12,10 @@ struct MathTonemapper : public PostProcessFeature
 
 	struct Settings
 	{
-		float Slope = 1.3f;
-		float Power = 1.5f;
-		float Offset = -0.25f;
-		float Saturation = 1.2f;
+		float Slope = 1.2f;
+		float Power = 1.3f;
+		float Offset = 0.f;
+		float Saturation = 1.f;
 	} settings;
 
 	// buffers

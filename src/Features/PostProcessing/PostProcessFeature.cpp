@@ -1,7 +1,7 @@
 #include "PostProcessFeature.h"
 
 #include "CODBloom.h"
-#include "HistogramAutoExporsure.h"
+#include "HistogramAutoExposure.h"
 #include "MathTonemapper.h"
 
 const ankerl::unordered_dense::map<std::string, PostProcessFeatureConstructor>& PostProcessFeatureConstructor::GetFeatureConstructors()

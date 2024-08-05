@@ -17,14 +17,14 @@ struct HistogramAutoExporsure : public PostProcessFeature
 		float ExposureCompensation = 0.f;
 
 		// auto exposure
-		float2 AdaptationRange = { -1.f, 1.f };  // EV
+		float2 AdaptationRange = { -.5f, .2f };  // EV
 		float2 AdaptArea = { .6f, .6f };
 
 		float AdaptSpeed = 1.5f;
 
 		// purkinje
-		float PurkinjeStartEV = -2.f;  // EV
-		float PurkinjeMaxEV = -4.f;    // EV
+		float PurkinjeStartEV = -1.5f;  // EV
+		float PurkinjeMaxEV = -4.f;     // EV
 		float PurkinjeStrength = 1.f;
 	} settings;
 
