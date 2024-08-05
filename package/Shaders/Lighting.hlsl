@@ -2203,15 +2203,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 	float3 directionalAmbientColor = mul(DirectionalAmbient, modelNormal);
+#	if defined(TRUE_PBR)
+	directionalAmbientColor = PBR::AdjustAmbientLightColor(directionalAmbientColor);
+#	endif
 
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
 
 #	if defined(SKYLIGHTING)
 	float skylightingDiffuse = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(skylightingSettings.DirectionalDiffuse ? worldSpaceNormal : float3(0, 0, 1)));
 	skylightingDiffuse = Skylighting::mixDiffuse(skylightingSettings, skylightingDiffuse);
+#		if !defined(TRUE_PBR)
 	directionalAmbientColor = sRGB2Lin(directionalAmbientColor);
+#		endif
 	directionalAmbientColor *= skylightingDiffuse;
+#		if !defined(TRUE_PBR)
 	directionalAmbientColor = Lin2sRGB(directionalAmbientColor);
+#		endif
 #	endif
 
 #	if defined(TRUE_PBR) && defined(LOD_LAND_BLEND) && !defined(DEFERRED)
@@ -2323,10 +2330,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		indirectSpecularLobeWeight += PBR::GetWetnessIndirectSpecularLobeWeight(wetnessNormal, worldSpaceViewDirection, worldSpaceVertexNormal, waterRoughnessSpecular);
 #		endif
 
-#		if !defined(DEFERRED)
-#			if !defined(SSGI)
+#		if !(defined(DEFERRED) && defined(SSGI))
 	color.xyz += indirectDiffuseLobeWeight * directionalAmbientColor;
-#			endif
+#		endif
+
+#		if !defined(DYNAMIC_CUBEMAPS)
+	specularColorPBR += indirectSpecularLobeWeight * directionalAmbientColor;
+#		endif
+
+#		if !defined(DEFERRED)
 #			if defined(DYNAMIC_CUBEMAPS)
 	specularColorPBR += indirectSpecularLobeWeight * GetDynamicCubemapSpecularIrradiance(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, pbrSurfaceProperties.Roughness, viewPosition.z);
 #			endif

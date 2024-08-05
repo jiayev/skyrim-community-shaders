@@ -90,7 +90,7 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 		half level = roughness * 7.0;
 
 		half3 directionalAmbientColor = sRGB2Lin(mul(DirectionalAmbient, half4(R, 1.0)));
-		half3 finalIrradiance = lerp(0, directionalAmbientColor, pbrWeight);
+		half3 finalIrradiance = 0;
 
 #	if defined(INTERIOR)
 		half3 specularIrradiance = EnvTexture.SampleLevel(LinearSampler, R, level).xyz;
