@@ -6,12 +6,24 @@
 struct MathTonemapper : public PostProcessFeature
 {
 	virtual inline std::string GetType() const override { return "Math Tonemapper"; }
-	virtual inline std::string GetDesc() const override { return "Local tonemapping operators with maths."; }
+	virtual inline std::string GetDesc() const override { return "Local tonemapping operators with various maths functions."; }
 
 	virtual bool SupportsVR() { return true; }
 
 	struct Settings
 	{
+		// 0 Reinhard
+		// 1 ReinhardExt
+		// 2 HejlBurgessDawsonFilmic
+		// 3 AcesHill
+		// 4 AcesNarkowicz
+		// 5 AcesGuy
+		// 6 AgxMinimal
+		int Tonemapper = 6;
+
+		float KeyValue = 2.f;
+		float WhitePoint = 2.0f;
+
 		float Slope = 1.2f;
 		float Power = 1.3f;
 		float Offset = 0.f;
