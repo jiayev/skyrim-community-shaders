@@ -5,28 +5,15 @@ void* operator new[](size_t size, const char* pName, int flags, unsigned debugFl
 void* operator new[](size_t size, size_t alignment, size_t alignmentOffset, const char* pName, int flags,
 	unsigned debugFlags, const char* file, int line);
 
-#pragma warning(push)
-#if defined(FALLOUT4)
-#	include "F4SE/F4SE.h"
-#	include "RE/Fallout.h"
-#	define SKSE F4SE
-#	define SKSEAPI F4SEAPI
-#	define SKSEPlugin_Load F4SEPlugin_Load
-#	define SKSEPlugin_Query F4SEPlugin_Query
-#else
-#	define SKSE_SUPPORT_XBYAK
-#	include "RE/Skyrim.h"
-#	include "SKSE/SKSE.h"
-#	include <xbyak/xbyak.h>
-#endif
+#include "RE/Skyrim.h"
+#include "SKSE/SKSE.h"
+#include <xbyak/xbyak.h>
 
 #ifdef NDEBUG
 #	include <spdlog/sinks/basic_file_sink.h>
 #else
 #	include <spdlog/sinks/msvc_sink.h>
 #endif
-
-#pragma warning(pop)
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>

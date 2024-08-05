@@ -1,6 +1,9 @@
 #include "Menu.h"
 #include "Util.h"
 
+#ifndef DIRECTINPUT_VERSION
+#	define DIRECTINPUT_VERSION 0x0800
+#endif
 #include <dinput.h>
 #include <imgui_stdlib.h>
 #include <magic_enum.hpp>

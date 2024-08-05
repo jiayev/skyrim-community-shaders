@@ -5,7 +5,7 @@
   "features": {
     "commonlibsse-ng": {
       "description": "Dependencies of clib-ng",
-      "dependencies": ["fmt", "directxtk", "rapidcsv", "spdlog"]
+      "dependencies": ["catch2", "fmt", "directxtk", "rapidcsv", "spdlog"]
     }
   },
   "default-features": ["commonlibsse-ng"],

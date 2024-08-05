@@ -49,10 +49,6 @@
 		{
 			"name": "skyrim",
 			"hidden": true,
-			"cacheVariables": {
-				"BUILD_SKYRIM": true,
-				"BUILD_TESTS": "OFF"
-			},
 			"inherits": [
 				"common",
 				"vcpkg",
