@@ -143,7 +143,7 @@ public:
 	virtual void DataLoaded() override;
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
-	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config* a_config = nullptr, RE::BSGeometry* a_geometry = nullptr, double timer = 0.0f);
+	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light);
 	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached = true);
 	void UpdateLights();
 	virtual void Prepass() override;

@@ -1,7 +1,5 @@
 #include "LightLimitFix.h"
 
-#include <PerlinNoise.hpp>
-
 #include "State.h"
 #include "Util.h"
 
@@ -587,7 +585,7 @@ float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radi
 	return (a_lightPosition.x * a_lightPosition.x) + (a_lightPosition.y * a_lightPosition.y) + (a_lightPosition.z * a_lightPosition.z) - (a_radius * a_radius);
 }
 
-void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLights::Config* a_config, RE::BSGeometry* a_geometry, double a_timer)
+void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light)
 {
 	static float& lightFadeStart = *reinterpret_cast<float*>(REL::RelocationID(527668, 414582).address());
 	static float& lightFadeEnd = *reinterpret_cast<float*>(REL::RelocationID(527669, 414583).address());
@@ -620,27 +618,6 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 	light.color *= dimmer;
 
 	if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
-		if (a_geometry && a_config && a_config->flicker) {
-			auto seed = (std::uint32_t)std::hash<void*>{}(a_geometry);
-
-			siv::PerlinNoise perlin1{ seed };
-			siv::PerlinNoise perlin2{ seed + 1 };
-			siv::PerlinNoise perlin3{ seed + 2 };
-			siv::PerlinNoise perlin4{ seed + 3 };
-
-			auto scaledTimer = a_timer * a_config->flickerSpeed;
-
-			for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
-				light.positionWS[eyeIndex].data.x += (float)perlin1.noise1D(scaledTimer) * a_config->flickerMovement;
-				light.positionWS[eyeIndex].data.y += (float)perlin2.noise1D(scaledTimer) * a_config->flickerMovement;
-				light.positionWS[eyeIndex].data.z += (float)perlin3.noise1D(scaledTimer) * a_config->flickerMovement;
-			}
-
-			light.color.x = std::max(0.0f, light.color.x - ((float)perlin4.noise1D_01(scaledTimer) * a_config->flickerIntensity));
-			light.color.y = std::max(0.0f, light.color.y - ((float)perlin4.noise1D_01(scaledTimer) * a_config->flickerIntensity));
-			light.color.z = std::max(0.0f, light.color.z - ((float)perlin4.noise1D_01(scaledTimer) * a_config->flickerIntensity));
-		}
-
 		for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++)
 			light.positionVS[eyeIndex].data = DirectX::SimpleMath::Vector3::Transform(light.positionWS[eyeIndex].data, viewMatrixCached[eyeIndex]);
 
@@ -843,7 +820,7 @@ void LightLimitFix::UpdateLights()
 
 				SetLightPosition(light, position);  // Light is complete for both eyes by now
 
-				AddCachedParticleLights(lightsData, light, &particleLight.second.config, particleLight.first, State::GetSingleton()->timer);
+				AddCachedParticleLights(lightsData, light);
 			}
 		}
 
