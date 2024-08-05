@@ -547,7 +547,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float fadeFactor = input.Alpha.x;
 #		endif
 
-	float noise = InterleavedGradientNoise(input.PositionCS.xy * BufferDim.xy * DynamicResolutionParams1.xy, FrameCount);
+	float noise = InterleavedGradientNoise(input.PositionCS.xy, FrameCount);
 	float noiseAdjusted = noise * M_2PI;
 
 	noise = noise * 2.0 - 1.0;
