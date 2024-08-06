@@ -6,13 +6,29 @@
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	MathTonemapper::Settings,
 	Tonemapper,
-	KeyValue,
+	Exposure,
 	WhitePoint,
 	Cutoff,
 	Slope,
 	Power,
 	Offset,
-	Saturation)
+	Saturation,
+	ContrastLottes,
+	Shoulder,
+	HdrMax,
+	MidIn,
+	MidOut,
+	BlackPoint,
+	CrossoverPoint,
+	WhitePointDay,
+	ShoulderStrength,
+	ToeStrength,
+	MaxBrightness,
+	ContrastUchimura,
+	LinearStart,
+	LinearLen,
+	BlackTightnessShape,
+	BlackTightnessOffset)
 
 void MathTonemapper::DrawSettings()
 {
@@ -25,6 +41,9 @@ void MathTonemapper::DrawSettings()
 		"ACES (Narkowicz)"sv,
 		"ACES (Guy)"sv,
 		"AgX Minimal"sv,
+		"Lottes Filmic/AMD Curve"sv,
+		"Day Filmic/Insomniac Curve"sv,
+		"Uchimura/Grand Turismo Curve"sv,
 	};
 	constexpr auto descs = std::array{
 		"Mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002."sv,
@@ -44,8 +63,17 @@ void MathTonemapper::DrawSettings()
 
 		"Curve from Unreal 3 adapted by to close to the ACES curve by Romain Guy."sv,
 
-		"Minimal version of Troy Sobotka's AgX using a 6th order polynomial approximation."
+		"Minimal version of Troy Sobotka's AgX using a 6th order polynomial approximation. "
 		"Originally created by bwrensch, and improved by Troy Sobotka."sv,
+
+		"Filmic curve by Timothy Lottes, described in his GDC talk \"Advanced Techniques and Optimization of HDR Color Pipelines\". "
+		"Also known as the \"AMD curve\"."sv,
+
+		"Filmic curve by Mike Day, described in his document \"An efficient and user-friendly tone mapping operator\". "
+		"Also known as the \"Insomniac curve\"."sv,
+
+		"Filmic curve by Hajime Uchimura, described in his CEDEC talk \"HDR Theory and Practice\". Characterised by its middle linear section. "
+		"Also known as the \"Gran Turismo curve\"."sv,
 	};
 
 	if (ImGui::BeginCombo("Tonemapping Operator", tonemappers[settings.Tonemapper].data())) {
@@ -69,17 +97,53 @@ void MathTonemapper::DrawSettings()
 		ImGui::SliderFloat("Offset", &settings.Offset, -1.f, 1.f, "%.2f");
 		ImGui::SliderFloat("Saturation", &settings.Saturation, 0.f, 2.f, "%.2f");
 	} else {
-		ImGui::SliderFloat("Key Value", &settings.KeyValue, 0.f, 5.f, "%.2f");
-		if (settings.Tonemapper == 1)
+		ImGui::SliderFloat("Exposure", &settings.Exposure, -5.f, 5.f, "%+.2f EV");
+		switch (settings.Tonemapper) {
+		case 1:
 			ImGui::SliderFloat("White Point", &settings.WhitePoint, 0.f, 10.f, "%.2f");
-		if (settings.Tonemapper == 3)
+			break;
+		case 3:
 			ImGui::SliderFloat("Cutoff", &settings.Cutoff, 0.f, .5f, "%.2f");
+			break;
+		case 8:
+			ImGui::SliderFloat("Contrast", &settings.ContrastLottes, 1.f, 2.f, "%.2f");
+			ImGui::SliderFloat("Shoulder", &settings.Shoulder, 0.01f, 2.f, "%.2f");
+			ImGui::SliderFloat("Maximum HDR Value", &settings.HdrMax, 1.f, 10.f, "%.2f");
+			ImGui::SliderFloat("Input Mid-Level", &settings.MidIn, 0.f, 1.f, "%.2f");
+			ImGui::SliderFloat("Output Mid-Level", &settings.MidOut, 0.f, 1.f, "%.2f");
+			break;
+		case 9:
+			ImGui::SliderFloat("Black Point", &settings.BlackPoint, 0.f, 5.f, "%.2f");
+			ImGui::SliderFloat("White Point", &settings.WhitePointDay, 0.f, 5.f, "%.2f");
+
+			ImGui::SliderFloat("Cross-over Point", &settings.CrossoverPoint, 0.f, 5.f, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Point where the toe and shoulder are pieced together into a single curve.");
+			ImGui::SliderFloat("Shoulder Strength", &settings.ShoulderStrength, 0.f, 1.f, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Amount of blending between a straight-line curve and a purely asymptotic curve for the shoulder.");
+			ImGui::SliderFloat("Toe Strength", &settings.ToeStrength, 0.f, 1.f, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Amount of blending between a straight-line curve and a purely asymptotic curve for the toe.");
+			break;
+		case 10:
+			ImGui::SliderFloat("Contrast", &settings.ContrastUchimura, 0.f, 5.f, "%.2f");
+			ImGui::SliderFloat("Max Brightness", &settings.MaxBrightness, 0.01f, 2.f, "%.2f");
+			ImGui::SliderFloat("Linear Section Start", &settings.LinearStart, 0.f, 1.f, "%.2f");
+			ImGui::SliderFloat("Linear Section Length", &settings.LinearLen, .01f, .99f, "%.2f");
+			ImGui::SliderFloat("Black Tightness Shape", &settings.BlackTightnessShape, 1.f, 3.f, "%.2f");
+			ImGui::SliderFloat("Black Tightness Offset", &settings.BlackTightnessOffset, 0.f, 1.f, "%.2f");
+			break;
+		default:
+			break;
+		}
 	}
 }
 
 void MathTonemapper::RestoreDefaultSettings()
 {
 	settings = {};
+	recompileFlag = true;
 }
 
 void MathTonemapper::LoadSettings(json& o_json)
@@ -159,6 +223,9 @@ void MathTonemapper::CompileComputeShaders()
 		"AcesNarkowicz"sv,
 		"AcesGuy"sv,
 		"AgxMinimal"sv,
+		"LottesFilmic"sv,
+		"DayFilmic"sv,
+		"UchimuraFilmic"sv,
 	};
 
 	struct ShaderCompileInfo
@@ -193,11 +260,26 @@ void MathTonemapper::Draw(TextureInfo& inout_tex)
 	TonemapCB cbData;
 	if (settings.Tonemapper == 7)
 		cbData = {
-			.Params = { settings.Slope, settings.Power, settings.Offset, settings.Saturation }
+			.Params0 = { settings.Slope, settings.Power, settings.Offset, settings.Saturation }
+		};
+	else if (settings.Tonemapper == 8)
+		cbData = {
+			.Params0 = { exp2(settings.Exposure), settings.ContrastLottes, settings.Shoulder, settings.HdrMax },
+			.Params1 = { settings.MidIn, settings.MidOut, 0, 0 }
+		};
+	else if (settings.Tonemapper == 9)
+		cbData = {
+			.Params0 = { exp2(settings.Exposure), settings.BlackPoint, settings.WhitePointDay, settings.CrossoverPoint },
+			.Params1 = { settings.ShoulderStrength, settings.ToeStrength, 0, 0 }
+		};
+	else if (settings.Tonemapper == 10)
+		cbData = {
+			.Params0 = { exp2(settings.Exposure), settings.MaxBrightness, settings.ContrastUchimura, settings.LinearStart },
+			.Params1 = { settings.LinearLen, settings.BlackTightnessShape, settings.BlackTightnessOffset, 0 }
 		};
 	else
 		cbData = {
-			.Params = { settings.KeyValue, settings.WhitePoint, settings.Cutoff, 0 }
+			.Params0 = { exp2(settings.Exposure), settings.WhitePoint, settings.Cutoff, 0 }
 		};
 	tonemapCB->Update(cbData);
 
