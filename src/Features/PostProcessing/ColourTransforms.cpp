@@ -5,10 +5,11 @@
 
 struct SavedSettings
 {
-	std::string TransformType = "ASC CDL";
+	std::string TransformType = "nothingburger";
 	float4 Params0;
 	float4 Params1;
 	float4 Params2;
+	float4 Params3;
 };
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -16,7 +17,31 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TransformType,
 	Params0,
 	Params1,
-	Params2)
+	Params2,
+	Params3)
+
+template <int num = 1>
+bool exposureSlider(float* val)
+{
+	float tempVal[num];
+	for (int i = 0; i < 3; i++)
+		tempVal[i] = log2(val[i]);
+
+	bool retval;
+	if constexpr (num == 1)
+		retval = ImGui::SliderFloat("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+	else if constexpr (num == 2)
+		retval = ImGui::SliderFloat2("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+	else if constexpr (num == 3)
+		retval = ImGui::SliderFloat3("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+	else if constexpr (num == 4)
+		retval = ImGui::SliderFloat4("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+
+	for (int i = 0; i < 3; i++)
+		val[i] = exp2(tempVal[i]);
+
+	return retval;
+}
 
 struct TransformInfo
 {
@@ -32,9 +57,51 @@ struct TransformInfo
 
 	static auto& GetTransforms()
 	{
+		constexpr auto shiftHint = []() { ImGui::TextWrapped("Press Shift and drag the first slider to control all channels at the same time."); };
+
 		// TODO: this might be read from files.
 		static std::vector<TransformInfo> transforms = {
-			TransformInfo{ "ASC CDL"sv, "ASC_CDL_Tr"sv,
+			{ "_"sv, "Basic Transforms"sv,
+				"Primary operators with basic functions. Most of them can apply to both HDR and LDR values."sv,
+				[](CTP&) {},
+				{} },
+
+			{ "Clamp"sv, "Clamp_Tr"sv,
+				"Clamping inputs between min and max values."sv,
+				[](CTP& params) {
+					if (ImGui::SliderFloat3("Min", &params.Params0.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
+						params.Params0.y = params.Params0.z = params.Params0.x;
+					if (ImGui::SliderFloat3("Max", &params.Params1.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
+						params.Params1.y = params.Params1.z = params.Params1.x;
+					shiftHint();
+				},
+				{ { 0.f, 0.f, 0.f, 0.f }, { 1.f, 1.f, 1.f, 0.f } } },
+
+			// TODO: DXGI_FORMAT_R11G11B10_FLOAT is non-negative, need extra support for this
+			// { "Linear -> Log"sv, "LogSpace"sv,
+			// 	"Convert linear values to log space."sv,
+			// 	[](CTP&) {},
+			// 	{} },
+
+			// { "Log -> Linear"sv, "RevLogSpace"sv,
+			// 	"Convert log values to linear space."sv,
+			// 	[](CTP&) {},
+			// 	{} },
+
+			{ "Exposure/Constrast"sv, "ExposureContrast"sv,
+				"Basic exposure and contrast adjustment in linear space. "sv,
+				[](CTP& params) {
+					if (exposureSlider<3>(&params.Params0.x) && ImGui::GetIO().KeyShift)
+						params.Params0.y = params.Params0.z = params.Params0.x;
+					if (ImGui::SliderFloat3("Contrast", &params.Params1.x, 0.f, 3.f, "%.2f") && ImGui::GetIO().KeyShift)
+						params.Params1.y = params.Params1.z = params.Params1.x;
+					if (ImGui::SliderFloat3("Pivot", &params.Params2.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
+						params.Params2.y = params.Params2.z = params.Params2.x;
+					shiftHint();
+				},
+				{ { 1.f, 1.f, 1.f, 0.f }, { 1.f, 1.f, 1.f, 0.f }, { .5f, .5f, .5f, .5f } } },
+
+			{ "ASC CDL"sv, "ASC_CDL_Tr"sv,
 				"ASC Color Decision List.\n"
 				"out = clamp( (in * slope) + offset ) ^ power"sv,
 				[](CTP& params) {
@@ -44,59 +111,69 @@ struct TransformInfo
 						params.Params1.y = params.Params1.z = params.Params1.x;
 					if (ImGui::SliderFloat3("Offset", &params.Params2.x, -1.f, 1.f, "%.2f") && ImGui::GetIO().KeyShift)
 						params.Params2.y = params.Params2.z = params.Params2.x;
-					ImGui::TextWrapped("Press Shift and drag the first slider to control all channels at the same time.");
+					shiftHint();
 				},
 				{ { 1.f, 1.f, 1.f, 0.f }, { 1.f, 1.f, 1.f, 0.f }, { 0.f, 0.f, 0.f, 0.f } } },
 
-			TransformInfo{ "_"sv, "Tonemapping Operators"sv,
-				"Transforms HDR values into a displayable image while retaining contrast and colours."sv,
+			{ "Saturation"sv, "Saturation_Tr"sv,
+				"Adjust saturation."sv,
+				[](CTP& params) {
+					if (ImGui::SliderFloat3("Saturation", &params.Params0.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
+						params.Params0.y = params.Params0.z = params.Params0.x;
+					shiftHint();
+				},
+				{ { 1.f, 1.f, 1.f, 0.f } } },
+
+			{ "_"sv, "Tonemapping Operators"sv,
+				"Transforms HDR values into a displayable image while retaining contrast and colours. "
+				"The outputs of below operators are in linear space, as the game will apply gamma afterwards."sv,
 				[](CTP&) {},
 				{} },
 
-			TransformInfo{ "Reinhard"sv, "Reinhard"sv,
+			{ "Reinhard"sv, "Reinhard"sv,
 				"Mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002."sv,
-				[](CTP& params) { ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV"); },
-				{ { 1.f, 0.f, 0.f, 0.f } } },
+				[](CTP& params) { exposureSlider(&params.Params0.x); },
+				{ { 2.f, 0.f, 0.f, 0.f } } },
 
-			TransformInfo{ "Reinhard Extended"sv, "ReinhardExt"sv,
+			{ "Reinhard Extended"sv, "ReinhardExt"sv,
 				"Extended mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002. "
 				"An additional user parameter specifies the smallest luminance that is mapped to 1, which allows high luminances to burn out."sv,
 				[](CTP& params) {
-					ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV");
+					exposureSlider(&params.Params0.x);
 					ImGui::SliderFloat("White Point", &params.Params0.y, 0.f, 10.f, "%.2f"); },
-				{ { 1.f, 2.f, 0.f, 0.f } } },
+				{ { 2.f, 2.f, 0.f, 0.f } } },
 
-			TransformInfo{ "Hejl Burgess-Dawson Filmic"sv, "HejlBurgessDawsonFilmic"sv,
+			{ "Hejl Burgess-Dawson Filmic"sv, "HejlBurgessDawsonFilmic"sv,
 				"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
 				"See his blog post about \"Approximating Film with Tonemapping\"."sv,
-				[](CTP& params) { ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV"); },
-				{ { 1.f, 0.f, 0.f, 0.f } } },
+				[](CTP& params) { exposureSlider(&params.Params0.x); },
+				{ { 2.f, 0.f, 0.f, 0.f } } },
 
-			TransformInfo{ "Aldridge Filmic"sv, "AldridgeFilmic"sv,
+			{ "Aldridge Filmic"sv, "AldridgeFilmic"sv,
 				"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
 				"See his blog post about \"Approximating Film with Tonemapping\"."sv,
 				[](CTP& params) { 
-					ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV");
+					exposureSlider(&params.Params0.x);
 					ImGui::SliderFloat("Cutoff", &params.Params0.y, 0.f, .5f, "%.2f"); },
-				{ { 1.f, .19f, 0.f, 0.f } } },
+				{ { 2.f, .19f, 0.f, 0.f } } },
 
-			TransformInfo{ "Lottes Filmic/AMD Curve"sv, "LottesFilmic"sv,
+			{ "Lottes Filmic/AMD Curve"sv, "LottesFilmic"sv,
 				"Filmic curve by Timothy Lottes, described in his GDC talk \"Advanced Techniques and Optimization of HDR Color Pipelines\". "
 				"Also known as the \"AMD curve\"."sv,
 				[](CTP& params) { 
-					ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV");
+					exposureSlider(&params.Params0.x);
 					ImGui::SliderFloat("Contrast", &params.Params0.y, 1.f, 2.f, "%.2f");
 					ImGui::SliderFloat("Shoulder", &params.Params0.z, 0.01f, 2.f, "%.2f");
 					ImGui::SliderFloat("Maximum HDR Value", &params.Params0.w, 1.f, 10.f, "%.2f");
 					ImGui::SliderFloat("Input Mid-Level", &params.Params1.x, 0.f, 1.f, "%.2f");
 					ImGui::SliderFloat("Output Mid-Level", &params.Params1.y, 0.f, 1.f, "%.2f"); },
-				{ { 1.f, 1.6f, 0.977f, 8.f }, { 0.18f, 0.267f, 0.f, 0.f } } },
+				{ { 2.f, 1.6f, 0.977f, 8.f }, { 0.18f, 0.267f, 0.f, 0.f } } },
 
-			TransformInfo{ "Day Filmic/Insomniac Curve"sv, "DayFilmic"sv,
+			{ "Day Filmic/Insomniac Curve"sv, "DayFilmic"sv,
 				"Filmic curve by Mike Day, described in his document \"An efficient and user-friendly tone mapping operator\". "
 				"Also known as the \"Insomniac curve\"."sv,
 				[](CTP& params) { 
-					ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV");
+					exposureSlider(&params.Params0.x);
 					ImGui::SliderFloat("Black Point", &params.Params0.y, 0.f, 5.f, "%.2f");
 					ImGui::SliderFloat("White Point", &params.Params0.z, 0.f, 5.f, "%.2f");
 
@@ -109,37 +186,37 @@ struct TransformInfo
 					ImGui::SliderFloat("Toe Strength", &params.Params1.y, 0.f, 1.f, "%.2f");
 					if (auto _tt = Util::HoverTooltipWrapper())
 						ImGui::Text("Amount of blending between a straight-line curve and a purely asymptotic curve for the toe."); },
-				{ { 1.f, 0.f, 2.f, 0.3f }, { 0.8f, 0.7f, 0.f, 0.f } } },
+				{ { 2.f, 0.f, 2.f, 0.3f }, { 0.8f, 0.7f, 0.f, 0.f } } },
 
-			TransformInfo{ "Uchimura/Grand Turismo Curve"sv, "UchimuraFilmic"sv,
+			{ "Uchimura/Grand Turismo Curve"sv, "UchimuraFilmic"sv,
 				"Filmic curve by Hajime Uchimura, described in his CEDEC talk \"HDR Theory and Practice\". Characterised by its middle linear section. "
 				"Also known as the \"Gran Turismo curve\"."sv,
 				[](CTP& params) { 
-					ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV");
+					exposureSlider(&params.Params0.x);
 					ImGui::SliderFloat("Max Brightness", &params.Params0.y, 0.01f, 2.f, "%.2f");
 					ImGui::SliderFloat("Contrast", &params.Params0.z, 0.f, 5.f, "%.2f");
 					ImGui::SliderFloat("Linear Section Start", &params.Params0.w, 0.f, 1.f, "%.2f");
 					ImGui::SliderFloat("Linear Section Length", &params.Params1.x, .01f, .99f, "%.2f");
 					ImGui::SliderFloat("Black Tightness Shape", &params.Params1.y, 1.f, 3.f, "%.2f");
 					ImGui::SliderFloat("Black Tightness Offset", &params.Params1.z, 0.f, 1.f, "%.2f"); },
-				{ { 1.f, 1.f, 1.f, .22f }, { 0.4f, 1.33f, 0.f, 0.f } } },
+				{ { 2.f, 1.f, 1.f, .22f }, { 0.4f, 1.33f, 0.f, 0.f } } },
 
-			TransformInfo{ "ACES (Hill)"sv, "AcesHill"sv,
+			{ "ACES (Hill)"sv, "AcesHill"sv,
 				"ACES curve fit by Stephen Hill."sv,
-				[](CTP& params) { ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV"); },
-				{ { 1.f, 0.f, 0.f, 0.f } } },
+				[](CTP& params) { exposureSlider(&params.Params0.x); },
+				{ { 2.f, 0.f, 0.f, 0.f } } },
 
-			TransformInfo{ "ACES (Narkowicz)"sv, "AcesNarkowicz"sv,
+			{ "ACES (Narkowicz)"sv, "AcesNarkowicz"sv,
 				"ACES curve fit by Krzysztof Narkowicz. See his blog post \"ACES Filmic Tone Mapping Curve\"."sv,
-				[](CTP& params) { ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV"); },
-				{ { 1.f, 0.f, 0.f, 0.f } } },
+				[](CTP& params) { exposureSlider(&params.Params0.x); },
+				{ { 2.f, 0.f, 0.f, 0.f } } },
 
-			TransformInfo{ "ACES (Guy)"sv, "AcesGuy"sv,
+			{ "ACES (Guy)"sv, "AcesGuy"sv,
 				"Curve from Unreal 3 adapted by to close to the ACES curve by Romain Guy."sv,
-				[](CTP& params) { ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV"); },
-				{ { 1.f, 0.f, 0.f, 0.f } } },
+				[](CTP& params) { exposureSlider(&params.Params0.x); },
+				{ { 2.f, 0.f, 0.f, 0.f } } },
 
-			TransformInfo{ "AgX Minimal"sv, "AgxMinimal"sv,
+			{ "AgX Minimal"sv, "AgxMinimal"sv,
 				"Minimal version of Troy Sobotka's AgX using a 6th order polynomial approximation. "
 				"Originally created by bwrensch, and improved by Troy Sobotka."sv,
 				[](CTP& params) { 
@@ -163,8 +240,7 @@ struct TransformInfo
 	static void GetDefaultParams(int& transformType, CTP& params)
 	{
 		auto& transforms = GetTransforms();
-		SavedSettings tempSettings;
-		if (auto it = std::ranges::find_if(transforms, [&](TransformInfo& x) { return tempSettings.TransformType == x.name; });
+		if (auto it = std::ranges::find_if(transforms, [&](TransformInfo& x) { return "ASC CDL"sv == x.name; });
 			it != transforms.end()) {
 			transformType = (int)(it - transforms.begin());
 			params = it->default_settings;
@@ -220,10 +296,15 @@ void ColourTransforms::LoadSettings(json& o_json)
 	SavedSettings tempSettings = o_json;
 
 	if (auto it = std::ranges::find_if(transforms, [&](TransformInfo& x) { return tempSettings.TransformType == x.name; });
-		it != transforms.end())
+		it != transforms.end()) {
 		transformType = (int)(it - transforms.begin());
-	else
+		settings.Params0 = tempSettings.Params0;
+		settings.Params1 = tempSettings.Params1;
+		settings.Params2 = tempSettings.Params2;
+		settings.Params3 = tempSettings.Params3;
+	} else {
 		TransformInfo::GetDefaultParams(transformType, settings);
+	}
 }
 
 void ColourTransforms::SaveSettings(json& o_json)
