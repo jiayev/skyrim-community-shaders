@@ -188,6 +188,8 @@ void PostProcessing::LoadSettings(json& o_json)
 				PostProcessFeature* feat = featConstructors.at(itemType).fn();
 				feat->name = item["name"].get<std::string>();
 				feat->LoadSettings(item["settings"]);
+				if (loaded)
+					feat->SetupResources();
 
 				feats.push_back(std::unique_ptr<PostProcessFeature>{ feat });
 
