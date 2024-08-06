@@ -26,7 +26,10 @@ void PostProcessing::DrawSettings()
 		ImGui::EndTable();
 	}
 
-	ImGui::SeparatorText("");
+	ImGui::Separator();
+	ImGui::Spacing();
+	ImGui::Spacing();
+	ImGui::Spacing();
 
 	if (pageNum == 0) {
 		// Effect List
@@ -108,7 +111,7 @@ void PostProcessing::DrawSettings()
 
 				if (nonVR)
 					ImGui::BeginDisabled();
-				if (ImGui::Selectable(feat->name.c_str(), featIdx == i))
+				if (ImGui::Selectable(std::format("{} ({})", feat->name, feat->GetType()).c_str(), featIdx == i))
 					featIdx = i;
 				if (nonVR)
 					ImGui::EndDisabled();
@@ -172,9 +175,9 @@ void PostProcessing::LoadSettings(json& o_json)
                 "type": "Histogram Auto Exporsure"
             },
             {
-                "name": "Math Tonemapper",
+                "name": "Tonemapper",
                 "settings": {},
-                "type": "Math Tonemapper"
+                "type": "Colour Transforms"
             }
         ])");
 
