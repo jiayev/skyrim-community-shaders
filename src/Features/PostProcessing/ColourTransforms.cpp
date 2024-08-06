@@ -6,8 +6,8 @@
 struct SavedSettings
 {
 	std::string TransformType = "AgX Minimal";
-	float4 Params0 = { 1.2f, 1.3f, 0.f, 1.f };
-	float4 Params1 = { 0.f, 0.f, 0.f, 0.f };
+	float4 Params0;
+	float4 Params1;
 };
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -91,7 +91,7 @@ struct TransformInfo
 					ImGui::SliderFloat("Toe Strength", &params.Params1.y, 0.f, 1.f, "%.2f");
 					if (auto _tt = Util::HoverTooltipWrapper())
 						ImGui::Text("Amount of blending between a straight-line curve and a purely asymptotic curve for the toe."); },
-				{ { 1.f, 0.f, 0.3f, 2.f }, { 0.8f, 0.7f, 0.f, 0.f } } },
+				{ { 1.f, 0.f, 2.f, 0.3f }, { 0.8f, 0.7f, 0.f, 0.f } } },
 
 			TransformInfo{ "Uchimura/Grand Turismo Curve"sv, "UchimuraFilmic"sv,
 				"Filmic curve by Hajime Uchimura, described in his CEDEC talk \"HDR Theory and Practice\". Characterised by its middle linear section. "
@@ -142,6 +142,18 @@ struct TransformInfo
 
 		return transforms;
 	}
+
+	static void GetDefaultParams(int& transformType, CTP& params)
+	{
+		auto& transforms = GetTransforms();
+		SavedSettings tempSettings;
+		if (auto it = std::ranges::find_if(transforms, [&](TransformInfo& x) { return tempSettings.TransformType == x.name; });
+			it != transforms.end()) {
+			transformType = (int)(it - transforms.begin());
+			params = it->default_settings;
+		} else
+			logger::error("Somehow, the default settings are invalid. Please contact the author.");
+	}
 };
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -150,7 +162,7 @@ void ColourTransforms::DrawSettings()
 {
 	auto& transforms = TransformInfo::GetTransforms();
 
-	if (ImGui::BeginCombo("Transforms", transforms[transformType].name.data())) {
+	if (ImGui::BeginCombo("Transforms", transforms[transformType].name.data(), ImGuiComboFlags_HeightLargest)) {
 		for (int i = 0; i < transforms.size(); ++i) {
 			if (ImGui::Selectable(transforms[i].name.data(), i == transformType)) {
 				transforms[transformType].cached_settings = settings;
@@ -175,8 +187,7 @@ void ColourTransforms::DrawSettings()
 
 void ColourTransforms::RestoreDefaultSettings()
 {
-	transformType = 10;
-	settings = {};
+	TransformInfo::GetDefaultParams(transformType, settings);
 	recompileFlag = true;
 }
 
@@ -190,7 +201,7 @@ void ColourTransforms::LoadSettings(json& o_json)
 		it != transforms.end())
 		transformType = (int)(it - transforms.begin());
 	else
-		RestoreDefaultSettings();
+		TransformInfo::GetDefaultParams(transformType, settings);
 }
 
 void ColourTransforms::SaveSettings(json& o_json)
