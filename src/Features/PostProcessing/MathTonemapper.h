@@ -15,14 +15,16 @@ struct MathTonemapper : public PostProcessFeature
 		// 0 Reinhard
 		// 1 ReinhardExt
 		// 2 HejlBurgessDawsonFilmic
-		// 3 AcesHill
-		// 4 AcesNarkowicz
-		// 5 AcesGuy
-		// 6 AgxMinimal
-		int Tonemapper = 6;
+		// 3 AldridgeFilmic
+		// 4 AcesHill
+		// 5 AcesNarkowicz
+		// 6 AcesGuy
+		// 7 AgxMinimal
+		int Tonemapper = 7;
 
 		float KeyValue = 2.f;
 		float WhitePoint = 2.0f;
+		float Cutoff = 0.19f;
 
 		float Slope = 1.2f;
 		float Power = 1.3f;
