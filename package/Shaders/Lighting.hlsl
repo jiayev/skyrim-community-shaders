@@ -2210,7 +2210,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
 
 #	if defined(SKYLIGHTING)
-	float skylightingDiffuse = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(skylightingSettings.DirectionalDiffuse ? worldSpaceNormal : float3(0, 0, 1)));
+	float skylightingDiffuse = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(skylightingSettings.DirectionalDiffuse ? worldSpaceNormal : float3(0, 0, 1))) / shPI;
 	skylightingDiffuse = Skylighting::mixDiffuse(skylightingSettings, skylightingDiffuse);
 #		if !defined(TRUE_PBR)
 	directionalAmbientColor = sRGB2Lin(directionalAmbientColor);
