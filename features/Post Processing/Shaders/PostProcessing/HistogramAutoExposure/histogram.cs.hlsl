@@ -24,6 +24,9 @@ groupshared uint histogramShared[256];
 	uint2 dims;
 	TexColor.GetDimensions(dims.x, dims.y);
 
+	// half res here
+	uint2 pxCoord = tid * 2;
+
 	// init
 	histogramShared[gidx] = 0;
 
@@ -31,13 +34,13 @@ groupshared uint histogramShared[256];
 
 	// local histo
 	float4 box = float4(.5 - AdaptArea * .5, .5 + AdaptArea * .5);
-	if ((tid.x > dims.x * box.r) &&
-		(tid.x < dims.x * box.b) &&
-		(tid.y > dims.y * box.g) &&
-		(tid.y < dims.y * box.a)) {
+	if ((pxCoord.x > dims.x * box.r) &&
+		(pxCoord.x < dims.x * box.b) &&
+		(pxCoord.y > dims.y * box.g) &&
+		(pxCoord.y < dims.y * box.a)) {
 		uint bin = 0;
 
-		float3 color = TexColor[tid].rgb;
+		float3 color = TexColor[pxCoord].rgb;
 		float luma = RGBToLuminance(color);
 		if (luma > 1e-10) {
 			float logLuma = saturate((log2(luma) - MinLogLum) * RcpLogLumRange);
@@ -57,7 +60,7 @@ groupshared uint histogramShared[256];
 										: SV_GroupIndex) {
 	uint2 dims;
 	TexColor.GetDimensions(dims.x, dims.y);
-	uint numPixels = dims.x * dims.y * AdaptArea.x * AdaptArea.y;
+	uint numPixels = dims.x * dims.y * AdaptArea.x * AdaptArea.y * 0.25;
 
 	// init
 	uint pixelsInBin = RWBufferHistogram[gidx];

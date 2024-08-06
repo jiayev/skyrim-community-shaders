@@ -244,6 +244,36 @@ void PostProcessing::ClearShaderCache()
 
 void PostProcessing::SetupResources()
 {
+	{
+		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+		auto gameTexMainCopy = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN_COPY];
+
+		D3D11_TEXTURE2D_DESC texDesc;
+		gameTexMainCopy.texture->GetDesc(&texDesc);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = texDesc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+			.Format = texDesc.Format,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+
+		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 1;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		texDesc.MiscFlags = 0;
+
+		texCopy = eastl::make_unique<Texture2D>(texDesc);
+		texCopy->CreateUAV(uavDesc);
+	}
+
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PostProcessing\\copy.cs.hlsl", {}, "cs_5_0")))
+		copyCS.attach(rawPtr);
+
 	for (auto& feat : feats)
 		if (!REL::Module::IsVR() || feat->SupportsVR())
 			feat->SetupResources();
@@ -269,12 +299,36 @@ void PostProcessing::PreProcess()
 		if (feat->enabled && (!REL::Module::IsVR() || feat->SupportsVR()))
 			feat->Draw(lastTexColor);
 
-	// either MAIN_COPY or MAIN is used as input for HDR pass
-	// so we copy to both so whatever the game wants we're not failing it
-	context->CopySubresourceRegion(gameTexMain.texture, 0, 0, 0, 0, lastTexColor.tex, 0, nullptr);
-	context->CopySubresourceRegion(
-		renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN_COPY].texture,
-		0, 0, 0, 0, lastTexColor.tex, 0, nullptr);
+	D3D11_TEXTURE2D_DESC desc;
+	lastTexColor.tex->GetDesc(&desc);
+	if (desc.Format == texCopy->desc.Format) {
+		// either MAIN_COPY or MAIN is used as input for HDR pass
+		// so we copy to both so whatever the game wants we're not failing it
+		context->CopySubresourceRegion(gameTexMain.texture, 0, 0, 0, 0, lastTexColor.tex, 0, nullptr);
+		context->CopySubresourceRegion(
+			renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN_COPY].texture,
+			0, 0, 0, 0, lastTexColor.tex, 0, nullptr);
+	} else {
+		ID3D11ShaderResourceView* srv = lastTexColor.srv;
+		ID3D11UnorderedAccessView* uav = texCopy->uav.get();
+
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		context->CSSetShaderResources(0, 1, &srv);
+		context->CSSetShader(copyCS.get(), nullptr, 0);
+		context->Dispatch((texCopy->desc.Width + 7) >> 3, (texCopy->desc.Height + 7) >> 3, 1);
+
+		srv = nullptr;
+		uav = nullptr;
+
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		context->CSSetShaderResources(0, 1, &srv);
+		context->CSSetShader(nullptr, nullptr, 0);
+
+		context->CopySubresourceRegion(gameTexMain.texture, 0, 0, 0, 0, texCopy->resource.get(), 0, nullptr);
+		context->CopySubresourceRegion(
+			renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN_COPY].texture,
+			0, 0, 0, 0, texCopy->resource.get(), 0, nullptr);
+	}
 }
 
 void PostProcessing::PostPostLoad()
