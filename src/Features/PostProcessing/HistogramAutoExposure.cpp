@@ -187,7 +187,7 @@ void HistogramAutoExporsure::Draw(TextureInfo& inout_tex)
 
 		// Calculate histogram
 		context->CSSetShader(histogramCS.get(), nullptr, 0);
-		context->Dispatch(((texAdapt->desc.Width - 1) >> 4) + 1, ((texAdapt->desc.Height - 1) >> 4) + 1, 1);
+		context->Dispatch(((texAdapt->desc.Width - 1) >> 5) + 1, ((texAdapt->desc.Height - 1) >> 5) + 1, 1);
 
 		// Calculate average
 		context->CSSetShader(histogramAvgCS.get(), nullptr, 0);

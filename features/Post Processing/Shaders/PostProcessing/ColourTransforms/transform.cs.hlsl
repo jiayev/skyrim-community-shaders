@@ -102,12 +102,7 @@ float3 Clamp_Tr(float3 val)
 
 float3 LogSpace(float3 val)
 {
-	return exp2(log2(val));
-}
-
-float3 RevLogSpace(float3 val)
-{
-	return exp2(val);
+	return log2(max(0, val));
 }
 
 float3 ASC_CDL_Tr(float3 val)

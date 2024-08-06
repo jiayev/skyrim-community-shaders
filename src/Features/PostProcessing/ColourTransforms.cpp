@@ -98,16 +98,15 @@ struct TransformInfo
 				},
 				{ { 0.f, 0.f, 0.f, 0.f }, { 1.f, 1.f, 1.f, 0.f } } },
 
-			// TODO: DXGI_FORMAT_R11G11B10_FLOAT is non-negative, need extra support for this
-			// { "Linear -> Log"sv, "LogSpace"sv,
-			// 	"Convert linear values to log space."sv,
-			// 	[](CTP&) {},
-			// 	{} },
+			{ "Linear -> Log"sv, "LogSpace"sv,
+				"Convert linear values to log space."sv,
+				[](CTP&) {},
+				{} },
 
-			// { "Log -> Linear"sv, "RevLogSpace"sv,
-			// 	"Convert log values to linear space."sv,
-			// 	[](CTP&) {},
-			// 	{} },
+			{ "Log -> Linear"sv, "exp2"sv,
+				"Convert log values to linear space."sv,
+				[](CTP&) {},
+				{} },
 
 			{ "Exposure/Constrast"sv, "ExposureContrast"sv,
 				"Basic exposure and contrast adjustment in linear space. "sv,
@@ -139,7 +138,7 @@ struct TransformInfo
 			{ "Saturation"sv, "Saturation_Tr"sv,
 				"Adjust saturation."sv,
 				[](CTP& params) {
-					if (shiftSlider("Saturation", &params.Params0.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
+					if (ImGui::SliderFloat("Saturation", &params.Params0.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
 						params.Params0.y = params.Params0.z = params.Params0.x;
 					shiftHint();
 				},
@@ -352,11 +351,12 @@ void ColourTransforms::SetupResources()
 
 	logger::debug("Creating 2D textures...");
 	{
-		// texAdapt for adaptation
 		auto gameTexMainCopy = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN_COPY];
 
 		D3D11_TEXTURE2D_DESC texDesc;
 		gameTexMainCopy.texture->GetDesc(&texDesc);
+
+		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
 			.Format = texDesc.Format,

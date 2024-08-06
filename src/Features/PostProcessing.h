@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Buffer.h"
 #include "Feature.h"
 
 #include "PostProcessing/PostProcessFeature.h"
@@ -34,6 +35,9 @@ struct PostProcessing : Feature
 	/////////////////////////////////////////////////////////////////////////////////
 
 	std::vector<std::unique_ptr<PostProcessFeature>> feats = {};
+
+	eastl::unique_ptr<Texture2D> texCopy = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> copyCS = nullptr;
 
 	/////////////////////////////////////////////////////////////////////////////////
 
