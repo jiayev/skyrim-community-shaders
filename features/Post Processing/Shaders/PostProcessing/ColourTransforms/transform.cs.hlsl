@@ -307,7 +307,7 @@ float3 AgxMinimal(float3 val)
 								  : SV_DispatchThreadID) {
 	float3 color = TexColor[tid].rgb;
 
-	color = TONEMAP_OPERATOR(color);
+	color = TRANSFORM_FUNC(color);
 
 	RWTexOut[tid] = float4(color, 1);
 }
