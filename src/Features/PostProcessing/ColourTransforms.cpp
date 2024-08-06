@@ -34,7 +34,11 @@ struct TransformInfo
 
 		// TODO: this might be read from files.
 		static std::vector<TransformInfo> transforms = {
-			// #0
+			TransformInfo{ "_"sv, "Tonemapping Operators"sv,
+				"Transforms HDR values into a displayable image while retaining contrast and colours."sv,
+				[](CTP&) {},
+				{ zeroes, zeroes } },
+
 			TransformInfo{ "Reinhard"sv, "Reinhard"sv,
 				"Mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002."sv,
 				[](CTP& params) { ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV"); },
@@ -121,7 +125,6 @@ struct TransformInfo
 				[](CTP& params) { ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV"); },
 				{ { 1.f, 0.f, 0.f, 0.f }, zeroes } },
 
-			// #10
 			TransformInfo{ "AgX Minimal"sv, "AgxMinimal"sv,
 				"Minimal version of Troy Sobotka's AgX using a 6th order polynomial approximation. "
 				"Originally created by bwrensch, and improved by Troy Sobotka."sv,
@@ -164,12 +167,17 @@ void ColourTransforms::DrawSettings()
 
 	if (ImGui::BeginCombo("Transforms", transforms[transformType].name.data(), ImGuiComboFlags_HeightLargest)) {
 		for (int i = 0; i < transforms.size(); ++i) {
-			if (ImGui::Selectable(transforms[i].name.data(), i == transformType)) {
-				transforms[transformType].cached_settings = settings;
-				settings = transforms[i].cached_settings;
-				transformType = i;
-				recompileFlag = true;
+			if (transforms[i].name == "_"sv) {
+				ImGui::SeparatorText(transforms[i].func_name.data());
+			} else {
+				if (ImGui::Selectable(transforms[i].name.data(), i == transformType)) {
+					transforms[transformType].cached_settings = settings;
+					settings = transforms[i].cached_settings;
+					transformType = i;
+					recompileFlag = true;
+				}
 			}
+
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text(transforms[i].desc.data());
 		}
