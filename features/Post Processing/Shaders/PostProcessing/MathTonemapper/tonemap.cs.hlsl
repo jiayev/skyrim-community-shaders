@@ -9,8 +9,15 @@ StructuredBuffer<float> RWTexAdaptation : register(t1);
 
 cbuffer TonemapCB : register(b1)
 {
-	// Most: key value / exposure, white point, cutoff
+	// Most: exposure, white point, cutoff
 	// AgX: slope, power, offset, saturation
+	// Lottes: exposure, contrast, shoulder, hdrMax
+	// Day: exposure, black point, white point, crossover point
+	// Uchimura: exposure, max brightness, contrast, linear start
+	float4 Params0;
+	// Lottes: midIn, midOut
+	// Day: shoulder, toe
+	// Uchimura: linear length, black tightness shape, black tightness offset
 	float4 Params1;
 };
 
@@ -57,25 +64,27 @@ float3 Saturation(float3 col, float3 sat)
 
 float3 Reinhard(float3 val)
 {
-	val *= Params1.x;
+	val *= Params0.x;
 	float luma = RGBToLuminance(val);
 	float lumaOut = luma / (1 + luma);
 	val = val / (luma + 1e-10) * lumaOut;
+	val = saturate(val);
 	return val;
 }
 
 float3 ReinhardExt(float3 val)
 {
-	val *= Params1.x;
+	val *= Params0.x;
 	float luma = RGBToLuminance(val);
-	float lumaOut = luma * (1 + luma / (Params1.y * Params1.y)) / (1 + luma);
+	float lumaOut = luma * (1 + luma / (Params0.y * Params0.y)) / (1 + luma);
 	val = val / (luma + 1e-10) * lumaOut;
+	val = saturate(val);
 	return val;
 }
 
 float3 HejlBurgessDawsonFilmic(float3 val)
 {
-	val *= Params1.x;
+	val *= Params0.x;
 	val = max(0, val - 0.004);
 	val = (val * (6.2 * val + .5)) / (val * (6.2 * val + 1.7) + 0.06);
 	val = pow(saturate(val), 2.2);
@@ -84,9 +93,9 @@ float3 HejlBurgessDawsonFilmic(float3 val)
 
 float3 AldridgeFilmic(float3 val)
 {
-	val *= Params1.x;
-	float tmp = 2.0 * Params1.z;
-	val = val + (tmp - val) * clamp(tmp - val, 0.0, 1.0) * (0.25 / Params1.z) - Params1.z;
+	val *= Params0.x;
+	float tmp = 2.0 * Params0.z;
+	val = val + (tmp - val) * clamp(tmp - val, 0.0, 1.0) * (0.25 / Params0.z) - Params0.z;
 	val = (val * (6.2 * val + 0.5)) / (val * (6.2 * val + 1.7) + 0.06);
 	val = pow(saturate(val), 2.2);
 	return val;
@@ -103,7 +112,7 @@ float3 AcesHill(float3 val)
 		-0.129520935348888, 1.138399326040076, -0.008779241755018,
 		-0.024127059936902, -0.124620612286390, 1.148822109913262);
 
-	val *= Params1.x;
+	val *= Params0.x;
 
 	val = mul(g_sRGBToACEScg, val);
 	float3 a = val * (val + 0.0245786f) - 0.000090537f;
@@ -111,12 +120,14 @@ float3 AcesHill(float3 val)
 	val = a / b;
 	val = mul(g_ACEScgToSRGB, val);
 
+	val = saturate(val);
+
 	return val;
 }
 
 float3 AcesNarkowicz(float3 val)
 {
-	val *= Params1.x;
+	val *= Params0.x;
 
 	static const float A = 2.51;
 	static const float B = 0.03;
@@ -125,16 +136,93 @@ float3 AcesNarkowicz(float3 val)
 	static const float E = 0.14;
 	val *= 0.6;
 	val = (val * (A * val + B)) / (val * (C * val + D) + E);
-
+	val = saturate(val);
 	return val;
 }
 
 float3 AcesGuy(float3 val)
 {
-	val *= Params1.x;
+	val *= Params0.x;
 	val = val / (val + 0.155f) * 1.019;
 
 	val = pow(saturate(val), 2.2);
+	return val;
+}
+
+float3 LottesFilmic(float3 val)
+{
+	val *= Params0.x;
+	float a = Params0.y,
+		  d = Params0.z,
+		  b = (-pow(Params1.x, a) + pow(Params0.w, a) * Params1.y) /
+	          ((pow(Params0.w, a * d) - pow(Params1.x, a * d)) * Params1.y),
+		  c = (pow(Params0.w, a * d) * pow(Params1.x, a) - pow(Params0.w, a) * pow(Params1.x, a * d) * Params1.y) /
+	          ((pow(Params0.w, a * d) - pow(Params1.x, a * d)) * Params1.y);
+
+	val = pow(val, a) / (pow(val, a * d) * b + c);
+	val = saturate(val);
+	return val;
+}
+
+float DayCurve(float x, float k)
+{
+	const float b = Params0.y;
+	const float w = Params0.z;
+	const float c = Params0.w;
+	const float s = Params1.x;
+	const float t = Params1.y;
+
+	if (x < c) {
+		return k * (1.0 - t) * (x - b) / (c - (1.0 - t) * b - t * x);
+	} else {
+		return (1.0 - k) * (x - c) / (s * x + (1.0 - s) * w - c) + k;
+	}
+}
+
+float3 DayFilmic(float3 val)
+{
+	const float b = Params0.y;
+	const float w = Params0.z;
+	const float c = Params0.w;
+	const float s = Params1.x;
+	const float t = Params1.y;
+
+	val *= Params0.x;
+	float k = (1.0 - t) * (c - b) / ((1.0 - s) * (w - c) + (1.0 - t) * (c - b));
+	val = float3(DayCurve(val.r, k), DayCurve(val.g, k), DayCurve(val.b, k));
+
+	val = saturate(val);
+	return val;
+}
+
+float3 UchimuraFilmic(float3 val)
+{
+	const float P = Params0.y;
+	const float a = Params0.z;
+	const float m = Params0.w;
+	const float l = Params1.x;
+	const float c = Params1.y;
+	const float b = Params1.z;
+
+	val *= Params0.x;
+
+	float l0 = ((P - m) * l) / a,
+		  S0 = m + l0,
+		  S1 = m + a * l0,
+		  C2 = (a * P) / (P - S1),
+		  CP = -C2 / P;
+
+	float3 w0 = 1.0 - smoothstep(0.0, m, val),
+		   w2 = step(m + l0, val),
+		   w1 = 1.0 - w0 - w2;
+
+	float3 T = m * pow(val / m, c) + b,           // toe
+		L = m + a * (val - m),                    // linear
+		S = P - (P - S1) * exp(CP * (val - S0));  // shoulder
+
+	val = T * w0 + L * w1 + S * w2;
+
+	val = saturate(val);
 	return val;
 }
 
@@ -208,8 +296,8 @@ float3 AgxEotf(float3 val)
 float3 AgxMinimal(float3 val)
 {
 	val = Agx(val);
-	val = ASC_CDL(val, Params1.x, Params1.y, Params1.z);
-	val = Saturation(val, Params1.w);
+	val = ASC_CDL(val, Params0.x, Params0.y, Params0.z);
+	val = Saturation(val, Params0.w);
 	val = AgxEotf(val);
 
 	return val;

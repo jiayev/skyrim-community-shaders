@@ -15,7 +15,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void HistogramAutoExporsure::DrawSettings()
 {
-	ImGui::SliderFloat("Exposure Compensation", &settings.ExposureCompensation, -6.f, 21.f, "%+.2f EV");
+	ImGui::SliderFloat("Exposure Compensation", &settings.ExposureCompensation, -5.f, 5.f, "%+.2f EV");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Applying additional exposure adjustment to the image.");
 

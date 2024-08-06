@@ -20,22 +20,49 @@ struct MathTonemapper : public PostProcessFeature
 		// 5 AcesNarkowicz
 		// 6 AcesGuy
 		// 7 AgxMinimal
+		// 8 LottesFilmic
+		// 9 DayFilmic
+		// 10 UchimuraFilmic
 		int Tonemapper = 7;
 
-		float KeyValue = 2.f;
+		float Exposure = 1.f;
 		float WhitePoint = 2.0f;
 		float Cutoff = 0.19f;
 
+		// AgX
 		float Slope = 1.2f;
 		float Power = 1.3f;
 		float Offset = 0.f;
 		float Saturation = 1.f;
+
+		// Lottes
+		float ContrastLottes = 1.6f;
+		float Shoulder = 0.977f;
+		float HdrMax = 8.f;
+		float MidIn = 0.18f;
+		float MidOut = 0.267f;
+
+		// Day
+		float BlackPoint = 0.f;
+		float CrossoverPoint = .3f;
+		float WhitePointDay = 2.f;
+		float ShoulderStrength = 0.8f;
+		float ToeStrength = 0.7f;
+
+		// Uchimura
+		float MaxBrightness = 1.f;
+		float ContrastUchimura = 1.f;
+		float LinearStart = .22f;
+		float LinearLen = 0.4f;
+		float BlackTightnessShape = 1.33f;
+		float BlackTightnessOffset = 0.f;
 	} settings;
 
 	// buffers
 	struct alignas(16) TonemapCB
 	{
-		float4 Params;
+		float4 Params0;
+		float4 Params1;
 	};
 	std::unique_ptr<ConstantBuffer> tonemapCB = nullptr;
 
