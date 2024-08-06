@@ -5,16 +5,18 @@
 
 struct SavedSettings
 {
-	std::string TransformType = "AgX Minimal";
+	std::string TransformType = "ASC CDL";
 	float4 Params0;
 	float4 Params1;
+	float4 Params2;
 };
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SavedSettings,
 	TransformType,
 	Params0,
-	Params1)
+	Params1,
+	Params2)
 
 struct TransformInfo
 {
@@ -30,19 +32,31 @@ struct TransformInfo
 
 	static auto& GetTransforms()
 	{
-		constexpr Vector4 zeroes = { 0.f, 0.f, 0.f, 0.f };
-
 		// TODO: this might be read from files.
 		static std::vector<TransformInfo> transforms = {
+			TransformInfo{ "ASC CDL"sv, "ASC_CDL_Tr"sv,
+				"ASC Color Decision List.\n"
+				"out = clamp( (in * slope) + offset ) ^ power"sv,
+				[](CTP& params) {
+					if (ImGui::SliderFloat3("Slope", &params.Params0.x, 0.f, 2.f, "%.2f") && ImGui::GetIO().KeyShift)
+						params.Params0.y = params.Params0.z = params.Params0.x;
+					if (ImGui::SliderFloat3("Power", &params.Params1.x, 0.f, 2.f, "%.2f") && ImGui::GetIO().KeyShift)
+						params.Params1.y = params.Params1.z = params.Params1.x;
+					if (ImGui::SliderFloat3("Offset", &params.Params2.x, -1.f, 1.f, "%.2f") && ImGui::GetIO().KeyShift)
+						params.Params2.y = params.Params2.z = params.Params2.x;
+					ImGui::TextWrapped("Press Shift and drag the first slider to control all channels at the same time.");
+				},
+				{ { 1.f, 1.f, 1.f, 0.f }, { 1.f, 1.f, 1.f, 0.f }, { 0.f, 0.f, 0.f, 0.f } } },
+
 			TransformInfo{ "_"sv, "Tonemapping Operators"sv,
 				"Transforms HDR values into a displayable image while retaining contrast and colours."sv,
 				[](CTP&) {},
-				{ zeroes, zeroes } },
+				{} },
 
 			TransformInfo{ "Reinhard"sv, "Reinhard"sv,
 				"Mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002."sv,
 				[](CTP& params) { ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV"); },
-				{ { 1.f, 0.f, 0.f, 0.f }, zeroes } },
+				{ { 1.f, 0.f, 0.f, 0.f } } },
 
 			TransformInfo{ "Reinhard Extended"sv, "ReinhardExt"sv,
 				"Extended mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002. "
@@ -50,13 +64,13 @@ struct TransformInfo
 				[](CTP& params) {
 					ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV");
 					ImGui::SliderFloat("White Point", &params.Params0.y, 0.f, 10.f, "%.2f"); },
-				{ { 1.f, 2.f, 0.f, 0.f }, zeroes } },
+				{ { 1.f, 2.f, 0.f, 0.f } } },
 
 			TransformInfo{ "Hejl Burgess-Dawson Filmic"sv, "HejlBurgessDawsonFilmic"sv,
 				"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
 				"See his blog post about \"Approximating Film with Tonemapping\"."sv,
 				[](CTP& params) { ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV"); },
-				{ { 1.f, 0.f, 0.f, 0.f }, zeroes } },
+				{ { 1.f, 0.f, 0.f, 0.f } } },
 
 			TransformInfo{ "Aldridge Filmic"sv, "AldridgeFilmic"sv,
 				"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
@@ -64,7 +78,7 @@ struct TransformInfo
 				[](CTP& params) { 
 					ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV");
 					ImGui::SliderFloat("Cutoff", &params.Params0.y, 0.f, .5f, "%.2f"); },
-				{ { 1.f, .19f, 0.f, 0.f }, zeroes } },
+				{ { 1.f, .19f, 0.f, 0.f } } },
 
 			TransformInfo{ "Lottes Filmic/AMD Curve"sv, "LottesFilmic"sv,
 				"Filmic curve by Timothy Lottes, described in his GDC talk \"Advanced Techniques and Optimization of HDR Color Pipelines\". "
@@ -113,17 +127,17 @@ struct TransformInfo
 			TransformInfo{ "ACES (Hill)"sv, "AcesHill"sv,
 				"ACES curve fit by Stephen Hill."sv,
 				[](CTP& params) { ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV"); },
-				{ { 1.f, 0.f, 0.f, 0.f }, zeroes } },
+				{ { 1.f, 0.f, 0.f, 0.f } } },
 
 			TransformInfo{ "ACES (Narkowicz)"sv, "AcesNarkowicz"sv,
 				"ACES curve fit by Krzysztof Narkowicz. See his blog post \"ACES Filmic Tone Mapping Curve\"."sv,
 				[](CTP& params) { ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV"); },
-				{ { 1.f, 0.f, 0.f, 0.f }, zeroes } },
+				{ { 1.f, 0.f, 0.f, 0.f } } },
 
 			TransformInfo{ "ACES (Guy)"sv, "AcesGuy"sv,
 				"Curve from Unreal 3 adapted by to close to the ACES curve by Romain Guy."sv,
 				[](CTP& params) { ImGui::SliderFloat("Exposure", &params.Params0.x, -5.f, 5.f, "%+.2f EV"); },
-				{ { 1.f, 0.f, 0.f, 0.f }, zeroes } },
+				{ { 1.f, 0.f, 0.f, 0.f } } },
 
 			TransformInfo{ "AgX Minimal"sv, "AgxMinimal"sv,
 				"Minimal version of Troy Sobotka's AgX using a 6th order polynomial approximation. "
@@ -133,7 +147,7 @@ struct TransformInfo
 					ImGui::SliderFloat("Power", &params.Params0.y, 0.f, 2.f, "%.2f");
 					ImGui::SliderFloat("Offset", &params.Params0.z, -1.f, 1.f, "%.2f");
 					ImGui::SliderFloat("Saturation", &params.Params0.w, 0.f, 2.f, "%.2f"); },
-				{ { 1.2f, 1.3f, 0.f, 1.f }, zeroes } },
+				{ { 1.2f, 1.3f, 0.f, 1.f } } },
 		};
 
 		static std::once_flag flag;

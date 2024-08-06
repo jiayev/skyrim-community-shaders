@@ -10,13 +10,14 @@ struct ColourTransforms : public PostProcessFeature
 
 	virtual bool SupportsVR() { return true; }
 
-	int transformType = 10;
+	int transformType = 0;
 
 	// buffers
 	struct TonemapCB
 	{
 		float4 Params0 = { 1.2f, 1.3f, 0.f, 1.f };
 		float4 Params1 = { 0.f, 0.f, 0.f, 0.f };
+		float4 Params2 = { 0.f, 0.f, 0.f, 0.f };
 	} settings;
 	std::unique_ptr<ConstantBuffer> tonemapCB = nullptr;
 

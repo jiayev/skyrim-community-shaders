@@ -19,6 +19,8 @@ cbuffer TonemapCB : register(b1)
 	// Day: shoulder, toe
 	// Uchimura: linear length, black tightness shape, black tightness offset
 	float4 Params1;
+
+	float4 Params2;
 };
 
 float3 ASC_CDL(float3 col, float3 slope, float3 power, float3 offset)
@@ -30,6 +32,13 @@ float3 Saturation(float3 col, float3 sat)
 {
 	float luma = RGBToLuminance(col);
 	return lerp(luma, col, sat);
+}
+
+/////////////////////////////////////////////////////////////////////////////////
+
+float3 ASC_CDL_Tr(float3 val)
+{
+	return ASC_CDL(val, Params0.rgb, Params1.rgb, Params2.rgb);
 }
 
 /////////////////////////////////////////////////////////////////////////////////
