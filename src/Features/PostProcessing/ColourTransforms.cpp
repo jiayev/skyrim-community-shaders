@@ -20,6 +20,27 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Params2,
 	Params3)
 
+template <int num = 3>
+bool shiftSlider(const char* label, float* v, float v_min, float v_max, const char* format = "%.3f", ImGuiSliderFlags flags = 0)
+{
+	static_assert(num > 1 && num < 5);
+
+	if (ImGui::GetIO().KeyShift) {
+		auto changed = ImGui::SliderFloat(label, v, v_min, v_max, format, flags);
+		if (changed)
+			for (int i = 1; i < num; i++)
+				v[i] = v[0];
+		return changed;
+	} else {
+		if constexpr (num == 2)
+			return ImGui::SliderFloat2(label, v, v_min, v_max, format, flags);
+		else if constexpr (num == 3)
+			return ImGui::SliderFloat3(label, v, v_min, v_max, format, flags);
+		else if constexpr (num == 4)
+			return ImGui::SliderFloat4(label, v, v_min, v_max, format, flags);
+	}
+}
+
 template <int num = 1>
 bool exposureSlider(float* val)
 {
@@ -31,11 +52,11 @@ bool exposureSlider(float* val)
 	if constexpr (num == 1)
 		retval = ImGui::SliderFloat("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
 	else if constexpr (num == 2)
-		retval = ImGui::SliderFloat2("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = shiftSlider<2>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
 	else if constexpr (num == 3)
-		retval = ImGui::SliderFloat3("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = shiftSlider<3>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
 	else if constexpr (num == 4)
-		retval = ImGui::SliderFloat4("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = shiftSlider<4>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
 
 	for (int i = 0; i < 3; i++)
 		val[i] = exp2(tempVal[i]);
@@ -57,7 +78,7 @@ struct TransformInfo
 
 	static auto& GetTransforms()
 	{
-		constexpr auto shiftHint = []() { ImGui::TextWrapped("Press Shift and drag the first slider to control all channels at the same time."); };
+		constexpr auto shiftHint = []() { ImGui::TextWrapped("Press Shift to control all channels at the same time."); };
 
 		// TODO: this might be read from files.
 		static std::vector<TransformInfo> transforms = {
@@ -69,9 +90,9 @@ struct TransformInfo
 			{ "Clamp"sv, "Clamp_Tr"sv,
 				"Clamping inputs between min and max values."sv,
 				[](CTP& params) {
-					if (ImGui::SliderFloat3("Min", &params.Params0.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
+					if (shiftSlider("Min", &params.Params0.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
 						params.Params0.y = params.Params0.z = params.Params0.x;
-					if (ImGui::SliderFloat3("Max", &params.Params1.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
+					if (shiftSlider("Max", &params.Params1.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
 						params.Params1.y = params.Params1.z = params.Params1.x;
 					shiftHint();
 				},
@@ -93,9 +114,9 @@ struct TransformInfo
 				[](CTP& params) {
 					if (exposureSlider<3>(&params.Params0.x) && ImGui::GetIO().KeyShift)
 						params.Params0.y = params.Params0.z = params.Params0.x;
-					if (ImGui::SliderFloat3("Contrast", &params.Params1.x, 0.f, 3.f, "%.2f") && ImGui::GetIO().KeyShift)
+					if (shiftSlider("Contrast", &params.Params1.x, 0.f, 3.f, "%.2f") && ImGui::GetIO().KeyShift)
 						params.Params1.y = params.Params1.z = params.Params1.x;
-					if (ImGui::SliderFloat3("Pivot", &params.Params2.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
+					if (shiftSlider("Pivot", &params.Params2.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
 						params.Params2.y = params.Params2.z = params.Params2.x;
 					shiftHint();
 				},
@@ -105,11 +126,11 @@ struct TransformInfo
 				"ASC Color Decision List.\n"
 				"out = clamp( (in * slope) + offset ) ^ power"sv,
 				[](CTP& params) {
-					if (ImGui::SliderFloat3("Slope", &params.Params0.x, 0.f, 2.f, "%.2f") && ImGui::GetIO().KeyShift)
+					if (shiftSlider("Slope", &params.Params0.x, 0.f, 2.f, "%.2f") && ImGui::GetIO().KeyShift)
 						params.Params0.y = params.Params0.z = params.Params0.x;
-					if (ImGui::SliderFloat3("Power", &params.Params1.x, 0.f, 2.f, "%.2f") && ImGui::GetIO().KeyShift)
+					if (shiftSlider("Power", &params.Params1.x, 0.f, 2.f, "%.2f") && ImGui::GetIO().KeyShift)
 						params.Params1.y = params.Params1.z = params.Params1.x;
-					if (ImGui::SliderFloat3("Offset", &params.Params2.x, -1.f, 1.f, "%.2f") && ImGui::GetIO().KeyShift)
+					if (shiftSlider("Offset", &params.Params2.x, -1.f, 1.f, "%.2f") && ImGui::GetIO().KeyShift)
 						params.Params2.y = params.Params2.z = params.Params2.x;
 					shiftHint();
 				},
@@ -118,7 +139,7 @@ struct TransformInfo
 			{ "Saturation"sv, "Saturation_Tr"sv,
 				"Adjust saturation."sv,
 				[](CTP& params) {
-					if (ImGui::SliderFloat3("Saturation", &params.Params0.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
+					if (shiftSlider("Saturation", &params.Params0.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
 						params.Params0.y = params.Params0.z = params.Params0.x;
 					shiftHint();
 				},
