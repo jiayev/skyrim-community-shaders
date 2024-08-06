@@ -9,9 +9,9 @@ StructuredBuffer<float> RWTexAdaptation : register(t1);
 
 cbuffer TonemapCB : register(b1)
 {
-	// Most: key value / exposure, white point,
+	// Most: key value / exposure, white point, cutoff
 	// AgX: slope, power, offset, saturation
-	float4 Params;
+	float4 Params1;
 };
 
 float3 ASC_CDL(float3 col, float3 slope, float3 power, float3 offset)
@@ -57,7 +57,7 @@ float3 Saturation(float3 col, float3 sat)
 
 float3 Reinhard(float3 val)
 {
-	val *= Params.x;
+	val *= Params1.x;
 	float luma = RGBToLuminance(val);
 	float lumaOut = luma / (1 + luma);
 	val = val / (luma + 1e-10) * lumaOut;
@@ -66,19 +66,30 @@ float3 Reinhard(float3 val)
 
 float3 ReinhardExt(float3 val)
 {
-	val *= Params.x;
+	val *= Params1.x;
 	float luma = RGBToLuminance(val);
-	float lumaOut = luma * (1 + luma / (Params.y * Params.y)) / (1 + luma);
+	float lumaOut = luma * (1 + luma / (Params1.y * Params1.y)) / (1 + luma);
 	val = val / (luma + 1e-10) * lumaOut;
 	return val;
 }
 
 float3 HejlBurgessDawsonFilmic(float3 val)
 {
-	val *= Params.x;
+	val *= Params1.x;
 	val = max(0, val - 0.004);
 	val = (val * (6.2 * val + .5)) / (val * (6.2 * val + 1.7) + 0.06);
-	return saturate(val);
+	val = pow(saturate(val), 2.2);
+	return val;
+}
+
+float3 AldridgeFilmic(float3 val)
+{
+	val *= Params1.x;
+	float tmp = 2.0 * Params1.z;
+	val = val + (tmp - val) * clamp(tmp - val, 0.0, 1.0) * (0.25 / Params1.z) - Params1.z;
+	val = (val * (6.2 * val + 0.5)) / (val * (6.2 * val + 1.7) + 0.06);
+	val = pow(saturate(val), 2.2);
+	return val;
 }
 
 float3 AcesHill(float3 val)
@@ -92,7 +103,7 @@ float3 AcesHill(float3 val)
 		-0.129520935348888, 1.138399326040076, -0.008779241755018,
 		-0.024127059936902, -0.124620612286390, 1.148822109913262);
 
-	val *= Params.x;
+	val *= Params1.x;
 
 	val = mul(g_sRGBToACEScg, val);
 	float3 a = val * (val + 0.0245786f) - 0.000090537f;
@@ -105,7 +116,7 @@ float3 AcesHill(float3 val)
 
 float3 AcesNarkowicz(float3 val)
 {
-	val *= Params.x;
+	val *= Params1.x;
 
 	static const float A = 2.51;
 	static const float B = 0.03;
@@ -120,7 +131,7 @@ float3 AcesNarkowicz(float3 val)
 
 float3 AcesGuy(float3 val)
 {
-	val *= Params.x;
+	val *= Params1.x;
 	val = val / (val + 0.155f) * 1.019;
 
 	val = pow(saturate(val), 2.2);
@@ -197,8 +208,8 @@ float3 AgxEotf(float3 val)
 float3 AgxMinimal(float3 val)
 {
 	val = Agx(val);
-	val = ASC_CDL(val, Params.x, Params.y, Params.z);
-	val = Saturation(val, Params.w);
+	val = ASC_CDL(val, Params1.x, Params1.y, Params1.z);
+	val = Saturation(val, Params1.w);
 	val = AgxEotf(val);
 
 	return val;

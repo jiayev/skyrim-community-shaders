@@ -5,6 +5,10 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	MathTonemapper::Settings,
+	Tonemapper,
+	KeyValue,
+	WhitePoint,
+	Cutoff,
 	Slope,
 	Power,
 	Offset,
@@ -16,6 +20,7 @@ void MathTonemapper::DrawSettings()
 		"Reinhard"sv,
 		"Reinhard Extended"sv,
 		"Hejl Burgess-Dawson Filmic"sv,
+		"Aldridge Filmic"sv,
 		"ACES (Hill)"sv,
 		"ACES (Narkowicz)"sv,
 		"ACES (Guy)"sv,
@@ -29,6 +34,9 @@ void MathTonemapper::DrawSettings()
 
 		"Analytical approximation of a Kodak film curve by Jim Hejl and Richard Burgess-Dawson. "
 		"See the \"Filmic Tonemapping for Real-time Rendering\" SIGGRAPH 2010 course by Haarm-Pieter Duiker."sv,
+
+		"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
+		"See his blog post about \"Approximating Film with Tonemapping\"."sv,
 
 		"ACES curve fit by Stephen Hill."sv,
 
@@ -55,7 +63,7 @@ void MathTonemapper::DrawSettings()
 	ImGui::TextWrapped(descs[settings.Tonemapper].data());
 	ImGui::Spacing();
 
-	if (settings.Tonemapper == 6) {
+	if (settings.Tonemapper == 7) {
 		ImGui::SliderFloat("Slope", &settings.Slope, 0.f, 2.f, "%.2f");
 		ImGui::SliderFloat("Power", &settings.Power, 0.f, 2.f, "%.2f");
 		ImGui::SliderFloat("Offset", &settings.Offset, -1.f, 1.f, "%.2f");
@@ -64,6 +72,8 @@ void MathTonemapper::DrawSettings()
 		ImGui::SliderFloat("Key Value", &settings.KeyValue, 0.f, 5.f, "%.2f");
 		if (settings.Tonemapper == 1)
 			ImGui::SliderFloat("White Point", &settings.WhitePoint, 0.f, 10.f, "%.2f");
+		if (settings.Tonemapper == 3)
+			ImGui::SliderFloat("Cutoff", &settings.Cutoff, 0.f, .5f, "%.2f");
 	}
 }
 
@@ -144,6 +154,7 @@ void MathTonemapper::CompileComputeShaders()
 		"Reinhard"sv,
 		"ReinhardExt"sv,
 		"HejlBurgessDawsonFilmic"sv,
+		"AldridgeFilmic"sv,
 		"AcesHill"sv,
 		"AcesNarkowicz"sv,
 		"AcesGuy"sv,
@@ -180,13 +191,13 @@ void MathTonemapper::Draw(TextureInfo& inout_tex)
 		ClearShaderCache();
 
 	TonemapCB cbData;
-	if (settings.Tonemapper == 6)
+	if (settings.Tonemapper == 7)
 		cbData = {
 			.Params = { settings.Slope, settings.Power, settings.Offset, settings.Saturation }
 		};
 	else
 		cbData = {
-			.Params = { settings.KeyValue, settings.WhitePoint, 0, 0 }
+			.Params = { settings.KeyValue, settings.WhitePoint, settings.Cutoff, 0 }
 		};
 	tonemapCB->Update(cbData);
 
