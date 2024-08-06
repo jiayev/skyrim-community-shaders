@@ -48,6 +48,9 @@ void PostProcessing::DrawSettings()
 					if (ImGui::Selectable(featCon.name.c_str())) {
 						feats.push_back(std::unique_ptr<PostProcessFeature>{ featCon.fn() });
 						feats.back()->name = feats.back()->GetType();
+
+						auto bogey = json::object();
+						feats.back()->LoadSettings(bogey);
 						feats.back()->SetupResources();
 
 						featIdx = (int)feats.size() - 1;
@@ -192,7 +195,7 @@ void PostProcessing::LoadSettings(json& o_json)
 				feat->name = item["name"].get<std::string>();
 				feat->LoadSettings(item["settings"]);
 				if (loaded)
-					feat->SetupResources();
+					feat->SetupResources();  // to prevent double setup after loaded
 
 				feats.push_back(std::unique_ptr<PostProcessFeature>{ feat });
 
