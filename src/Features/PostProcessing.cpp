@@ -165,12 +165,12 @@ void PostProcessing::LoadSettings(json& o_json)
 		effects = json::parse(R"(
 		[
             {
-                "name": "COD Bloom",
+                "name": "Bloom",
                 "settings": {},
                 "type": "COD Bloom"
             },
             {
-                "name": "Histogram Auto Exporsure",
+                "name": "Auto Exporsure",
                 "settings": {},
                 "type": "Histogram Auto Exporsure"
             },

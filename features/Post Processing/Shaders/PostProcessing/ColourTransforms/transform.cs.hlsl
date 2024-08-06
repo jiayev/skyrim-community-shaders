@@ -9,7 +9,7 @@ StructuredBuffer<float> RWTexAdaptation : register(t1);
 
 cbuffer TonemapCB : register(b1)
 {
-	// Most: exposure, white point, cutoff
+	// Most: exposure, white point / cutoff
 	// AgX: slope, power, offset, saturation
 	// Lottes: exposure, contrast, shoulder, hdrMax
 	// Day: exposure, black point, white point, crossover point
@@ -94,8 +94,8 @@ float3 HejlBurgessDawsonFilmic(float3 val)
 float3 AldridgeFilmic(float3 val)
 {
 	val *= Params0.x;
-	float tmp = 2.0 * Params0.z;
-	val = val + (tmp - val) * clamp(tmp - val, 0.0, 1.0) * (0.25 / Params0.z) - Params0.z;
+	float tmp = 2.0 * Params0.y;
+	val = val + (tmp - val) * clamp(tmp - val, 0.0, 1.0) * (0.25 / Params0.y) - Params0.y;
 	val = (val * (6.2 * val + 0.5)) / (val * (6.2 * val + 1.7) + 0.06);
 	val = pow(saturate(val), 2.2);
 	return val;
