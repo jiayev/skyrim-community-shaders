@@ -1,4 +1,4 @@
-Texture2D<float4> WaterLighting : register(t70);
+Texture2D<float4> WaterCaustics : register(t70);
 
 namespace WaterLighting
 {
@@ -13,7 +13,7 @@ namespace WaterLighting
 
 	float3 SampleCaustics(float2 uv)
 	{
-		return WaterLighting.Sample(SampColorSampler, uv).r;
+		return WaterCaustics.Sample(SampColorSampler, uv).r;
 	}
 
 	float3 ComputeCaustics(float2 uv)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <winrt/base.h>
+
 #include "Feature.h"
 
 struct WaterLighting : Feature
@@ -11,7 +13,7 @@ public:
 		return &singleton;
 	}
 
-	ID3D11ShaderResourceView* causticsView;
+	winrt::com_ptr<ID3D11ShaderResourceView> causticsView;
 
 	virtual inline std::string GetName() override { return "Water Lighting"; }
 	virtual inline std::string GetShortName() override { return "WaterLighting"; }
