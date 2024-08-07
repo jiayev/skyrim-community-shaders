@@ -133,7 +133,7 @@ void CODBloom::SetupResources()
 
 void CODBloom::ClearShaderCache()
 {
-	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
+	auto const shaderPtrs = std::array{
 		&thresholdCS, &downsampleCS, &downsampleFirstMipCS, &upsampleCS, &compositeCS
 	};
 

@@ -111,7 +111,7 @@ void HistogramAutoExporsure::SetupResources()
 
 void HistogramAutoExporsure::ClearShaderCache()
 {
-	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
+	const auto shaderPtrs = std::array{
 		&histogramCS, &histogramAvgCS, &adaptCS
 	};
 
