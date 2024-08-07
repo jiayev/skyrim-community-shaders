@@ -77,7 +77,7 @@ float3 Gamma(float3 col, float3 gamma, float3 black_pivot, float3 white_pivot)
 	float3 sgn = sign(col);
 	float3 range = white_pivot - black_pivot;
 	col = col / range;
-	col = pow(abs(col), gamma);
+	col = pow(max(0, col), gamma);
 	col = col * sgn * range + black_pivot;
 	return col;
 }
@@ -90,12 +90,12 @@ float3 Saturation(float3 col, float sat)
 
 float3 ASC_CDL(float3 col, float3 slope, float3 power, float3 offset)
 {
-	return pow(abs(col * slope + offset), power);
+	return pow(max(0, col * slope + offset), power);
 }
 
 /////////////////////////////////////////////////////////////////////////////////
 
-float3 Clamp_Tr(float3 val)
+float3 Clamp(float3 val)
 {
 	return clamp(val, Params0.xyz, Params1.xyz);
 }
@@ -105,14 +105,26 @@ float3 LogSpace(float3 val)
 	return log2(max(0, val));
 }
 
-float3 ASC_CDL_Tr(float3 val)
+float3 ASC_CDL(float3 val)
 {
 	return ASC_CDL(val, Params0.rgb, Params1.rgb, Params2.rgb);
 }
 
-float3 Saturation_Tr(float3 val)
+float3 Saturation(float3 val)
 {
 	return Saturation(val, Params0.r);
+}
+
+float3 Gamma(float3 val)
+{
+	return Gamma(val, Params0.rgb, Params1.rgb, Params2.rgb);
+}
+
+/////////////////////////////////////////////////////////////////////////////////
+
+float3 MatMul(float3 val)
+{
+	return mul(float3x3(Params0.rgb, Params1.rgb, Params2.rgb), val);
 }
 
 /////////////////////////////////////////////////////////////////////////////////
