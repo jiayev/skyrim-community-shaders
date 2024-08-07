@@ -156,7 +156,7 @@ float3 ASC_CDL(float3 val)
 
 float3 LiftGammaGain(float3 val)
 {
-	return LiftGammaGain(val, Params0.argb, Params1.argb, Params2.argb);
+	return LiftGammaGain(val, Params0.gbar, Params1.gbar, Params2.gbar);
 }
 
 float3 SaturationHue(float3 val)

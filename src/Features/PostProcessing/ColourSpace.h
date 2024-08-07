@@ -8,7 +8,7 @@ inline const auto& getAvailableColourSpaces()
 		"sRGB",
 		"BT709",
 		"BT2020",
-		"DCI-P3"
+		"DCI-P3",
 		"XYZ",
 		"ACEScg"
 	};
