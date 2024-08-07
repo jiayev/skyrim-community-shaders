@@ -48,7 +48,7 @@ template <int num = 1>
 bool exposureSlider(float* val)
 {
 	float tempVal[num];
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < num; i++)
 		tempVal[i] = log2(val[i]);
 
 	bool retval;
@@ -61,7 +61,7 @@ bool exposureSlider(float* val)
 	else if constexpr (num == 4)
 		retval = shiftSlider<4>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
 
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < num; i++)
 		val[i] = exp2(tempVal[i]);
 
 	return retval;
@@ -295,7 +295,7 @@ struct TransformInfo
 					ImGui::SliderFloat("Power", &params.Params0.z, 0.f, 2.f, "%.2f");
 					ImGui::SliderFloat("Offset", &params.Params0.w, -1.f, 1.f, "%.2f");
 					ImGui::SliderFloat("Saturation", &params.Params1.x, 0.f, 2.f, "%.2f"); },
-				{ { 2.f, 1.2f, 1.3f, 0.f }, { 1.f, 0.f, 0.f, 0.f } } },
+				{ { 2.f, 1.f, 1.f, 0.f }, { 1.f, 0.f, 0.f, 0.f } } },
 		};
 
 		static std::once_flag flag;
@@ -351,7 +351,9 @@ void ColourTransforms::DrawSettings()
 		settings = transforms[transformType].default_settings;
 	ImGui::Spacing();
 
+	ImGui::PushID(transformType);
 	transforms[transformType].draw_settings_func(settings);
+	ImGui::PopID();
 }
 
 void ColourTransforms::RestoreDefaultSettings()

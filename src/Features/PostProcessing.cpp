@@ -146,7 +146,9 @@ void PostProcessing::DrawSettings()
 			ImGui::Separator();
 			ImGui::Spacing();
 
+			ImGui::PushID(featIdx);
 			feat->DrawSettings();
+			ImGui::PopID();
 		} else {
 			ImGui::TextDisabled("Please select an effect in the effect list to continue.");
 		}
