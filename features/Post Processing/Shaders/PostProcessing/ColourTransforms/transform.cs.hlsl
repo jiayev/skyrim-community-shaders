@@ -444,9 +444,11 @@ float3 AgxEotf(float3 val)
 
 float3 AgxMinimal(float3 val)
 {
+	val *= Params0.x;
+
 	val = Agx(val);
-	val = ASC_CDL(val, Params0.x, Params0.y, Params0.z);
-	val = Saturation(val, Params0.w);
+	val = ASC_CDL(val, Params0.y, Params0.z, Params0.w);
+	val = Saturation(val, Params1.x);
 	val = AgxEotf(val);
 
 	return val;
