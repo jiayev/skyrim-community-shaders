@@ -290,11 +290,12 @@ struct TransformInfo
 				"Minimal version of Troy Sobotka's AgX using a 6th order polynomial approximation. "
 				"Originally created by bwrensch, and improved by Troy Sobotka."sv,
 				[](CTP& params) { 
-					ImGui::SliderFloat("Slope", &params.Params0.x, 0.f, 2.f, "%.2f");
-					ImGui::SliderFloat("Power", &params.Params0.y, 0.f, 2.f, "%.2f");
-					ImGui::SliderFloat("Offset", &params.Params0.z, -1.f, 1.f, "%.2f");
-					ImGui::SliderFloat("Saturation", &params.Params0.w, 0.f, 2.f, "%.2f"); },
-				{ { 1.2f, 1.3f, 0.f, 1.f } } },
+					exposureSlider(&params.Params0.x);
+					ImGui::SliderFloat("Slope", &params.Params0.y, 0.f, 2.f, "%.2f");
+					ImGui::SliderFloat("Power", &params.Params0.z, 0.f, 2.f, "%.2f");
+					ImGui::SliderFloat("Offset", &params.Params0.w, -1.f, 1.f, "%.2f");
+					ImGui::SliderFloat("Saturation", &params.Params1.x, 0.f, 2.f, "%.2f"); },
+				{ { 2.f, 1.2f, 1.3f, 0.f }, { 1.f, 0.f, 0.f, 0.f } } },
 		};
 
 		static std::once_flag flag;
