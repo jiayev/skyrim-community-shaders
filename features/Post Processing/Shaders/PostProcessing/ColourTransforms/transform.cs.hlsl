@@ -2,6 +2,8 @@
 
 #include "../../Common/Color.hlsli"
 
+#define PI 3.1415926535
+
 RWTexture2D<float4> RWTexOut : register(u0);
 
 Texture2D<float4> TexColor : register(t0);
@@ -19,8 +21,8 @@ cbuffer TonemapCB : register(b1)
 	// Day: shoulder, toe
 	// Uchimura: linear length, black tightness shape, black tightness offset
 	float4 Params1;
-
 	float4 Params2;
+	float4 Params3;
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -88,10 +90,47 @@ float3 Saturation(float3 col, float sat)
 	return lerp(luma, col, sat);
 }
 
+// https://www.shadertoy.com/view/MdjBRy
+float3 HueShift(float3 col, float shift)
+{
+	float3 P = 0.55735 * dot(0.55735, col);
+	float3 U = col - P;
+	float3 V = cross(0.55735, U);
+	col = U * cos(shift * 6.2832) + V * sin(shift * 6.2832) + P;
+	return col;
+}
+
 float3 ASC_CDL(float3 col, float3 slope, float3 power, float3 offset)
 {
-	return pow(max(0, col * slope + offset), power);
+	return Gamma(col * slope + offset, power, 0, 1);
 }
+
+// https://www.shadertoy.com/view/ss23DD
+float3 LiftGammaGain(float3 rgb, float4 lift, float4 gamma, float4 gain)
+{
+	float4 liftt = 1.0 - pow(1.0 - lift, log2(gain + 1.0));
+
+	float4 gammat = gamma.rgba - float4(0.0, 0.0, 0.0, RGBToLuminance(gamma.rgb));
+	float4 gammatTemp = 1.0 + 4.0 * abs(gammat);
+	gammat = lerp(gammatTemp, 1.0 / gammatTemp, step(0.0, gammat));
+
+	float3 col = rgb;
+	float luma = RGBToLuminance(col);
+
+	col = pow(col, gammat.rgb);
+	col *= pow(gain.rgb, gammat.rgb);
+	col = max(lerp(2.0 * liftt.rgb, 1.0, col), 0.0);
+
+	luma = pow(luma, gammat.a);
+	luma *= pow(gain.a, gammat.a);
+	luma = max(lerp(2.0 * liftt.a, 1.0, luma), 0.0);
+
+	col += luma - RGBToLuminance(col);
+
+	return col;
+}
+
+/////////////////////////////////////////////////////////////////////////////////
 
 /////////////////////////////////////////////////////////////////////////////////
 
@@ -105,19 +144,26 @@ float3 LogSpace(float3 val)
 	return log2(max(0, val));
 }
 
+float3 Gamma(float3 val)
+{
+	return Gamma(val, Params0.rgb, Params1.rgb, Params2.rgb);
+}
+
 float3 ASC_CDL(float3 val)
 {
 	return ASC_CDL(val, Params0.rgb, Params1.rgb, Params2.rgb);
 }
 
-float3 Saturation(float3 val)
+float3 LiftGammaGain(float3 val)
 {
-	return Saturation(val, Params0.r);
+	return LiftGammaGain(val, Params0.argb, Params1.argb, Params2.argb);
 }
 
-float3 Gamma(float3 val)
+float3 SaturationHue(float3 val)
 {
-	return Gamma(val, Params0.rgb, Params1.rgb, Params2.rgb);
+	val = Saturation(val, Params0.r);
+	val = HueShift(val, Params0.g);
+	return val;
 }
 
 /////////////////////////////////////////////////////////////////////////////////

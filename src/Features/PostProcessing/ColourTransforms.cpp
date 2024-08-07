@@ -85,7 +85,7 @@ struct TransformInfo
 		// TODO: this might be read from files.
 		static std::vector<TransformInfo> transforms = {
 			{ "_"sv, "Basic Transforms"sv,
-				"Primary operators with basic functions. Most of them can apply to both HDR and LDR values."sv,
+				"Primary operators with basic functions."sv,
 				[](CTP&) {},
 				{} },
 
@@ -139,14 +139,24 @@ struct TransformInfo
 				},
 				{ { 1.f, 1.f, 1.f, 0.f }, { 1.f, 1.f, 1.f, 0.f }, { 0.f, 0.f, 0.f, 0.f } } },
 
-			{ "Saturation"sv, "Saturation"sv,
-				"Adjust saturation."sv,
+			{ "Lift Gamma Gain"sv, "LiftGammaGain"sv,
+				"Basic lift gamma gain control (Luma+RGB) like Davinci Resolve, affecting dark tones/midtones/highlights respectively. "
+				"Expects inputs between [0, 1]."sv,
 				[](CTP& params) {
-					if (ImGui::SliderFloat("Saturation", &params.Params0.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
-						params.Params0.y = params.Params0.z = params.Params0.x;
+					shiftSlider<4>("Lift", &params.Params0.x, -1.f, 1.f, "%.2f");
+					shiftSlider<4>("Gamma", &params.Params1.x, -2.f, 2.f, "%.2f");
+					shiftSlider<4>("Gain", &params.Params2.x, 0.f, 2.f, "%.2f");
 					shiftHint();
 				},
-				{ { 1.f, 1.f, 1.f, 0.f } } },
+				{ { 0.f, 0.f, 0.f, 0.f }, { 0.f, 0.f, 0.f, 0.f }, { 1.f, 1.f, 1.f, 1.f } } },
+
+			{ "Saturation/Hue"sv, "SaturationHue"sv,
+				"Adjust saturation and hue shift. Expects linear RGB inputs."sv,
+				[](CTP& params) {
+					ImGui::SliderFloat("Saturation", &params.Params0.x, 0.f, 4.f, "%.2f");
+					ImGui::SliderFloat("Hue Shift", &params.Params0.y, -1.f, 1.f, "%.2f");
+				},
+				{ { 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "_"sv, "Colour Space Conversions"sv,
 				"Converting to other colour spaces to exploit their characteristic."sv,
