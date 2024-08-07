@@ -8,19 +8,20 @@
 struct SavedSettings
 {
 	std::string TransformType = "nothingburger";
-	float4 Params0;
-	float4 Params1;
-	float4 Params2;
-	float4 Params3;
+	ColourTransforms::TonemapCB Params;
 };
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	SavedSettings,
-	TransformType,
+	ColourTransforms::TonemapCB,
 	Params0,
 	Params1,
 	Params2,
 	Params3)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	SavedSettings,
+	TransformType,
+	Params)
 
 template <int num = 3>
 bool shiftSlider(const char* label, float* v, float v_min, float v_max, const char* format = "%.3f", ImGuiSliderFlags flags = 0)
@@ -144,7 +145,7 @@ struct TransformInfo
 				"Expects inputs between [0, 1]."sv,
 				[](CTP& params) {
 					shiftSlider<4>("Lift", &params.Params0.x, -1.f, 1.f, "%.2f");
-					shiftSlider<4>("Gamma", &params.Params1.x, -2.f, 2.f, "%.2f");
+					shiftSlider<4>("Gamma", &params.Params1.x, -1.5f, 1.5f, "%.2f");
 					shiftSlider<4>("Gain", &params.Params2.x, 0.f, 2.f, "%.2f");
 					shiftHint();
 				},
@@ -367,13 +368,12 @@ void ColourTransforms::LoadSettings(json& o_json)
 	if (auto it = std::ranges::find_if(transforms, [&](TransformInfo& x) { return tempSettings.TransformType == x.name; });
 		it != transforms.end()) {
 		transformType = (int)(it - transforms.begin());
-		settings.Params0 = tempSettings.Params0;
-		settings.Params1 = tempSettings.Params1;
-		settings.Params2 = tempSettings.Params2;
-		settings.Params3 = tempSettings.Params3;
+		settings = tempSettings.Params;
 	} else {
 		TransformInfo::GetDefaultParams(transformType, settings);
 	}
+
+	recompileFlag = true;
 }
 
 void ColourTransforms::SaveSettings(json& o_json)
@@ -382,8 +382,7 @@ void ColourTransforms::SaveSettings(json& o_json)
 
 	SavedSettings tempSettings = {
 		.TransformType = transforms[transformType].name.data(),
-		.Params0 = settings.Params0,
-		.Params1 = settings.Params1,
+		.Params = settings,
 	};
 
 	o_json = tempSettings;
@@ -433,7 +432,7 @@ void ColourTransforms::SetupResources()
 
 void ColourTransforms::ClearShaderCache()
 {
-	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
+	const auto shaderPtrs = std::array{
 		&tonemapCS
 	};
 
@@ -448,7 +447,7 @@ void ColourTransforms::ClearShaderCache()
 
 void ColourTransforms::CompileComputeShaders()
 {
-	auto& transforms = TransformInfo::GetTransforms();
+	const auto& transforms = TransformInfo::GetTransforms();
 
 	struct ShaderCompileInfo
 	{
