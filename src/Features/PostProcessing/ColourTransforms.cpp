@@ -3,6 +3,8 @@
 #include "State.h"
 #include "Util.h"
 
+#include "ColourSpace.h"
+
 struct SavedSettings
 {
 	std::string TransformType = "nothingburger";
@@ -87,13 +89,11 @@ struct TransformInfo
 				[](CTP&) {},
 				{} },
 
-			{ "Clamp"sv, "Clamp_Tr"sv,
+			{ "Clamp"sv, "Clamp"sv,
 				"Clamping inputs between min and max values."sv,
 				[](CTP& params) {
-					if (shiftSlider("Min", &params.Params0.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
-						params.Params0.y = params.Params0.z = params.Params0.x;
-					if (shiftSlider("Max", &params.Params1.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
-						params.Params1.y = params.Params1.z = params.Params1.x;
+					shiftSlider("Min", &params.Params0.x, 0.f, 4.f, "%.2f");
+					shiftSlider("Max", &params.Params1.x, 0.f, 4.f, "%.2f");
 					shiftHint();
 				},
 				{ { 0.f, 0.f, 0.f, 0.f }, { 1.f, 1.f, 1.f, 0.f } } },
@@ -108,34 +108,38 @@ struct TransformInfo
 				[](CTP&) {},
 				{} },
 
+			{ "Gamma"sv, "Gamma"sv,
+				"Apply gamma curve. Negative values will be mirrored."sv,
+				[](CTP& params) {
+					shiftSlider("Gamma", &params.Params0.x, 0.f, 4.f, "%.2f");
+					shiftSlider("Black Pivot", &params.Params1.x, 0.f, 1.f, "%.2f");
+					shiftSlider("White Pivot", &params.Params2.x, 0.f, 5.f, "%.2f");
+					shiftHint();
+				},
+				{ { 1.f, 1.f, 1.f, 0.f }, { 0.f, 0.f, 0.f, 0.f }, { 1.f, 1.f, 1.f, 1.f } } },
+
 			{ "Exposure/Constrast"sv, "ExposureContrast"sv,
 				"Basic exposure and contrast adjustment in linear space. "sv,
 				[](CTP& params) {
-					if (exposureSlider<3>(&params.Params0.x) && ImGui::GetIO().KeyShift)
-						params.Params0.y = params.Params0.z = params.Params0.x;
-					if (shiftSlider("Contrast", &params.Params1.x, 0.f, 3.f, "%.2f") && ImGui::GetIO().KeyShift)
-						params.Params1.y = params.Params1.z = params.Params1.x;
-					if (shiftSlider("Pivot", &params.Params2.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
-						params.Params2.y = params.Params2.z = params.Params2.x;
+					exposureSlider<3>(&params.Params0.x);
+					shiftSlider("Contrast", &params.Params1.x, 0.f, 3.f, "%.2f");
+					shiftSlider("Pivot", &params.Params2.x, 0.f, 4.f, "%.2f");
 					shiftHint();
 				},
 				{ { 1.f, 1.f, 1.f, 0.f }, { 1.f, 1.f, 1.f, 0.f }, { .5f, .5f, .5f, .5f } } },
 
-			{ "ASC CDL"sv, "ASC_CDL_Tr"sv,
+			{ "ASC CDL"sv, "ASC_CDL"sv,
 				"ASC Color Decision List.\n"
 				"out = clamp( (in * slope) + offset ) ^ power"sv,
 				[](CTP& params) {
-					if (shiftSlider("Slope", &params.Params0.x, 0.f, 2.f, "%.2f") && ImGui::GetIO().KeyShift)
-						params.Params0.y = params.Params0.z = params.Params0.x;
-					if (shiftSlider("Power", &params.Params1.x, 0.f, 2.f, "%.2f") && ImGui::GetIO().KeyShift)
-						params.Params1.y = params.Params1.z = params.Params1.x;
-					if (shiftSlider("Offset", &params.Params2.x, -1.f, 1.f, "%.2f") && ImGui::GetIO().KeyShift)
-						params.Params2.y = params.Params2.z = params.Params2.x;
+					shiftSlider("Slope", &params.Params0.x, 0.f, 2.f, "%.2f");
+					shiftSlider("Power", &params.Params1.x, 0.f, 2.f, "%.2f");
+					shiftSlider("Offset", &params.Params2.x, -1.f, 1.f, "%.2f");
 					shiftHint();
 				},
 				{ { 1.f, 1.f, 1.f, 0.f }, { 1.f, 1.f, 1.f, 0.f }, { 0.f, 0.f, 0.f, 0.f } } },
 
-			{ "Saturation"sv, "Saturation_Tr"sv,
+			{ "Saturation"sv, "Saturation"sv,
 				"Adjust saturation."sv,
 				[](CTP& params) {
 					if (ImGui::SliderFloat("Saturation", &params.Params0.x, 0.f, 4.f, "%.2f") && ImGui::GetIO().KeyShift)
@@ -143,6 +147,41 @@ struct TransformInfo
 					shiftHint();
 				},
 				{ { 1.f, 1.f, 1.f, 0.f } } },
+
+			{ "_"sv, "Colour Space Conversions"sv,
+				"Converting to other colour spaces to exploit their characteristic."sv,
+				[](CTP&) {},
+				{} },
+
+			{ "RGB Spaces"sv, "MatMul"sv,
+				"Convert between linear RGB spaces with different sets of gamuts, or any colour spaces using matrix multiplication."sv,
+				[](CTP& params) {
+					auto& spaces = getAvailableColourSpaces();
+
+					bool manualInput = params.Params2.w > 0;
+					if (ImGui::Checkbox("Manual Input", &manualInput))
+						params.Params2.w = manualInput * 2.f - 1.f;
+
+					if (manualInput) {
+						ImGui::InputFloat3("Row 1", &params.Params0.x);
+						ImGui::InputFloat3("Row 2", &params.Params1.x);
+						ImGui::InputFloat3("Row 3", &params.Params2.x);
+					} else {
+						int in_space = (int)params.Params0.w;
+						int out_space = (int)params.Params1.w;
+						if (ImGui::Combo("Input Space", &in_space, spaces.data(), (int)spaces.size()))
+							params.Params0.w = (float)in_space;
+						if (ImGui::Combo("Output Space", &out_space, spaces.data(), (int)spaces.size()))
+							params.Params1.w = (float)out_space;
+
+						auto mat = getRGBMatrix(spaces[in_space], spaces[out_space]);
+
+						params.Params0 = { mat(0, 0), mat(0, 1), mat(0, 2), params.Params0.w };
+						params.Params1 = { mat(1, 0), mat(1, 1), mat(1, 2), params.Params1.w };
+						params.Params2 = { mat(2, 0), mat(2, 1), mat(2, 2), params.Params2.w };
+					}
+				},
+				{ { 1.f, 0.f, 0.f, 0.f }, { 0.f, 1.f, 0.f, 0.f }, { 0.f, 0.f, 1.f, -1.f } } },
 
 			{ "_"sv, "Tonemapping Operators"sv,
 				"Transforms HDR values into a displayable image while retaining contrast and colours. "
