@@ -800,6 +800,9 @@ namespace SIE
 			} else if (descEnum == ISSAOBlurV) {
 				defines[0] = { "AXIS_V", nullptr };
 				++defines;
+			} else if (descEnum == ISUnderwaterMask) {
+				defines[0] = { "UNDERWATERMASK", nullptr };
+				++defines;
 			}
 			defines[0] = { nullptr, nullptr };
 		}
@@ -1840,12 +1843,15 @@ namespace SIE
 				{ "BSImagespaceShaderHDRTonemapBlendCinematicFade",
 					static_cast<uint32_t>(ISHDRTonemapBlendCinematicFade) },
 				{ "BSImagespaceShaderISIBLensFlares", static_cast<uint32_t>(ISIBLensFlares) },
-				{ "BSImagespaceShaderISLightingComposite",
+
+				// Those cause issue because of typo in shader name in vanilla code but at the same time they are not used by vanilla game.
+				/*{ "BSImagespaceShaderISLightingComposite",
 					static_cast<uint32_t>(ISLightingComposite) },
 				{ "BSImagespaceShaderISLightingCompositeMenu",
 					static_cast<uint32_t>(ISLightingCompositeMenu) },
 				{ "BSImagespaceShaderISLightingCompositeNoDirectionalLight",
-					static_cast<uint32_t>(ISLightingCompositeNoDirectionalLight) },
+					static_cast<uint32_t>(ISLightingCompositeNoDirectionalLight) },*/
+
 				{ "BSImagespaceShaderLocalMap", static_cast<uint32_t>(ISLocalMap) },
 				{ "BSISWaterBlendHeightmaps", static_cast<uint32_t>(ISWaterBlendHeightmaps) },
 				{ "BSISWaterDisplacementClearSimulation",
@@ -1883,6 +1889,7 @@ namespace SIE
 				{ "BSImagespaceShaderISSnowSSS", static_cast<uint32_t>(ISSnowSSS) },
 				{ "BSImagespaceShaderISSAOBlurH", static_cast<uint32_t>(ISSAOBlurH) },
 				{ "BSImagespaceShaderISSAOBlurV", static_cast<uint32_t>(ISSAOBlurV) },
+				{ "BSImagespaceShaderISUnderwaterMask", static_cast<uint32_t>(ISUnderwaterMask) },
 			};
 
 			auto it = descriptors.find(imagespaceShader.name.c_str());
