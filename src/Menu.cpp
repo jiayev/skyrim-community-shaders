@@ -893,6 +893,7 @@ void Menu::ProcessInputEventQueue()
 	for (auto& event : _keyEventQueue) {
 		if (event.eventType == RE::INPUT_EVENT_TYPE::kChar) {
 			io.AddInputCharacter(event.keyCode);
+			continue;
 		}
 
 		if (event.device == RE::INPUT_DEVICE::kMouse) {
