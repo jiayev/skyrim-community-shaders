@@ -175,9 +175,9 @@ void PostProcessing::LoadSettings(json& o_json)
                 "type": "COD Bloom"
             },
             {
-                "name": "Auto Exporsure",
+                "name": "Auto Exposure",
                 "settings": {},
-                "type": "Histogram Auto Exporsure"
+                "type": "Histogram Auto Exposure"
             },
             {
                 "name": "Tonemapper",
