@@ -4,7 +4,7 @@
 #include "Util.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	HistogramAutoExporsure::Settings,
+	HistogramAutoExposure::Settings,
 	ExposureCompensation,
 	AdaptationRange,
 	AdaptArea,
@@ -13,7 +13,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PurkinjeMaxEV,
 	PurkinjeStrength)
 
-void HistogramAutoExporsure::DrawSettings()
+void HistogramAutoExposure::DrawSettings()
 {
 	ImGui::SliderFloat("Exposure Compensation", &settings.ExposureCompensation, -5.f, 5.f, "%+.2f EV");
 	if (auto _tt = Util::HoverTooltipWrapper())
@@ -46,22 +46,22 @@ void HistogramAutoExporsure::DrawSettings()
 	}
 }
 
-void HistogramAutoExporsure::RestoreDefaultSettings()
+void HistogramAutoExposure::RestoreDefaultSettings()
 {
 	settings = {};
 }
 
-void HistogramAutoExporsure::LoadSettings(json& o_json)
+void HistogramAutoExposure::LoadSettings(json& o_json)
 {
 	settings = o_json;
 }
 
-void HistogramAutoExporsure::SaveSettings(json& o_json)
+void HistogramAutoExposure::SaveSettings(json& o_json)
 {
 	o_json = settings;
 }
 
-void HistogramAutoExporsure::SetupResources()
+void HistogramAutoExposure::SetupResources()
 {
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 
@@ -109,7 +109,7 @@ void HistogramAutoExporsure::SetupResources()
 	CompileComputeShaders();
 }
 
-void HistogramAutoExporsure::ClearShaderCache()
+void HistogramAutoExposure::ClearShaderCache()
 {
 	const auto shaderPtrs = std::array{
 		&histogramCS, &histogramAvgCS, &adaptCS
@@ -124,7 +124,7 @@ void HistogramAutoExporsure::ClearShaderCache()
 	CompileComputeShaders();
 }
 
-void HistogramAutoExporsure::CompileComputeShaders()
+void HistogramAutoExposure::CompileComputeShaders()
 {
 	struct ShaderCompileInfo
 	{
@@ -148,7 +148,7 @@ void HistogramAutoExporsure::CompileComputeShaders()
 	}
 }
 
-void HistogramAutoExporsure::Draw(TextureInfo& inout_tex)
+void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 {
 	auto context = State::GetSingleton()->context;
 

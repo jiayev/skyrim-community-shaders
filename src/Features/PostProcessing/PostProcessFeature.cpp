@@ -8,7 +8,7 @@ const ankerl::unordered_dense::map<std::string, PostProcessFeatureConstructor>& 
 {
 	static ankerl::unordered_dense::map<std::string, PostProcessFeatureConstructor> retval = {
 		GetFeatureConstructorPair<CODBloom>(),
-		GetFeatureConstructorPair<HistogramAutoExporsure>(),
+		GetFeatureConstructorPair<HistogramAutoExposure>(),
 		GetFeatureConstructorPair<ColourTransforms>(),
 	};
 	return retval;
