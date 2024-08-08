@@ -7,10 +7,6 @@
 #include "../Common/VR.hlsli"
 #include "common.hlsli"
 
-#ifdef SPECULAR_BLUR
-#	undef TEMPORAL_DENOISER
-#endif
-
 Texture2D<float4> srcGI : register(t0);                // maybe half-res
 Texture2D<unorm float> srcAccumFrames : register(t1);  // maybe half-res
 Texture2D<half> srcDepth : register(t2);
@@ -30,6 +26,11 @@ static const float3 g_Poisson8[8] = {
 	float3(+0.7836658, -0.4208784, +0.8895339),
 	float3(+0.1564120, -0.8198990, +0.8346850)
 };
+
+float GaussianWeight(float r)
+{
+	return exp(-0.66 * r * r);
+}
 
 // http://marc-b-reynolds.github.io/quaternions/2016/07/06/Orthonormal.html
 float3x3 getBasis(float3 N)
@@ -98,23 +99,26 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 	const float worldRadius = radius * pixelDirRBViewspaceSizeAtCenterZ.x;
 #ifdef SPECULAR_BLUR
 	float2x3 TvBv = getKernelBasis(getSpecularDominantDirection(normal, -normalize(pos), roughness), normal, roughness);
-	const float halfAngle = specularLobeHalfAngle(roughness);
+	float halfAngle = specularLobeHalfAngle(roughness);
 #else
 	float2x3 TvBv = getKernelBasis(normal, normal);  // D = N
-	const float halfAngle = fsl_HALF_PI;
+	float halfAngle = fsl_HALF_PI * .5f;
 #endif
 	TvBv[0] *= worldRadius;
 	TvBv[1] *= worldRadius;
+#ifdef TEMPORAL_DENOISER
+	halfAngle *= 1.01 - sqrt(accumFrames / (float)MaxAccumFrames);
+#endif
 
 	float4 gi = srcGI[dtid];
 
 	float4 sum = gi;
-#ifdef TEMPORAL_DENOISER
+#if defined(TEMPORAL_DENOISER) && !defined(SPECULAR_BLUR)
 	float fsum = accumFrames;
 #endif
 	float wsum = 1;
 	for (uint i = 0; i < numSamples; i++) {
-		float w = g_Poisson8[i].z;
+		float w = GaussianWeight(g_Poisson8[i].z);
 
 		float2 poissonOffset = g_Poisson8[i].xy;
 
@@ -155,16 +159,20 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 		// roughness weight
 		w *= abs(roughness - roughnessSample) / (roughness * roughness * 0.99 + 0.01);
 #endif
+#ifdef TEMPORAL_DENOISER
+		// luminance weight
+		w *= exp(-dot(abs(gi - giSample), 1) / (sqrt(accumFrames / (float)MaxAccumFrames) + 1e-8));
+#endif
 
 		sum += giSample * w;
-#ifdef TEMPORAL_DENOISER
+#if defined(TEMPORAL_DENOISER) && !defined(SPECULAR_BLUR)
 		fsum += srcAccumFrames.SampleLevel(samplerLinearClamp, uvSample * OUT_FRAME_SCALE, 0) * w;
 #endif
 		wsum += w;
 	}
 
 	outGI[dtid] = sum / wsum;
-#ifdef TEMPORAL_DENOISER
+#if defined(TEMPORAL_DENOISER) && !defined(SPECULAR_BLUR)
 	outAccumFrames[dtid] = fsum / wsum;
 #endif
 }

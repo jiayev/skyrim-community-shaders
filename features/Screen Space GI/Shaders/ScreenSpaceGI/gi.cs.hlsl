@@ -243,7 +243,11 @@ void CalculateGI(
 
 				uint2 bitsRangeGI = uint2(round(angleRangeGI.x * 32u), round((angleRangeGI.y - angleRangeGI.x) * 32u));
 				uint maskedBitsGI = ((1 << bitsRangeGI.y) - 1) << bitsRangeGI.x;
+
 				uint checkGI = maskedBitsGI & ~bitmaskGI;
+#		ifdef GI_SPECULAR
+				checkGI = checkGI || (maskedBitsGISpecular & ~bitsRangeGISpecular);
+#		endif
 #	else
 				bool checkGI = shc > horizonCos;
 #	endif

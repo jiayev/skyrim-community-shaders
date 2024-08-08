@@ -791,7 +791,7 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 			if (doSpecular) {
 				resetViews();
 				srvs.at(0) = texGISpecular[inputGITexIdx]->srv.get();
-				srvs.at(1) = nullptr;
+				srvs.at(1) = texAccumFrames[lastFrameAccumTexIdx]->srv.get();
 				srvs.at(2) = texWorkingDepth->srv.get();
 				srvs.at(3) = rts[NORMALROUGHNESS].SRV;
 
