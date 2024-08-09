@@ -67,6 +67,8 @@ void PostProcessing::DrawSettings()
 		}
 
 		ImGui::SameLine();
+		ImGui::Dummy({ ImGui::GetTextLineHeightWithSpacing() * 2, 1 });
+		ImGui::SameLine();
 
 		ImGui::Checkbox("Bypass", &bypass);
 
@@ -88,7 +90,7 @@ void PostProcessing::DrawSettings()
 					ImGui::Text("Enabled/Bypassed");
 
 				ImGui::SameLine();
-				if (ImGui::Button(ICON_FA_MINUS, iconButtonSize)) {
+				if (ImGui::Button(ICON_FA_TIMES, iconButtonSize)) {
 					markedFeat = i;
 					actionType = 0;
 				}
