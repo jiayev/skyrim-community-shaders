@@ -298,8 +298,10 @@ void ScreenSpaceGI::DrawSettings()
 
 	if (ImGui::BeginTable("denoisers", 2)) {
 		ImGui::TableNextColumn();
-		recompileFlag |= ImGui::Checkbox("Temporal Denoiser", &settings.EnableTemporalDenoiser);
-
+		{
+			auto _ = DisableGuard(!settings.EnableGI);
+			recompileFlag |= ImGui::Checkbox("Temporal Denoiser", &settings.EnableTemporalDenoiser);
+		}
 		ImGui::TableNextColumn();
 		ImGui::Checkbox("Blur", &settings.EnableBlur);
 
@@ -578,7 +580,7 @@ void ScreenSpaceGI::CompileComputeShaders()
 			info.defines.push_back({ "HALF_RES", "" });
 		if (settings.HalfRate)
 			info.defines.push_back({ "HALF_RATE", "" });
-		if (settings.EnableTemporalDenoiser)
+		if (settings.EnableGI && settings.EnableTemporalDenoiser)
 			info.defines.push_back({ "TEMPORAL_DENOISER", "" });
 		if (settings.UseBitmask)
 			info.defines.push_back({ "BITMASK", "" });
