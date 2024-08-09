@@ -34,6 +34,8 @@ struct PostProcessing : Feature
 
 	/////////////////////////////////////////////////////////////////////////////////
 
+	bool bypass = false;
+
 	std::vector<std::unique_ptr<PostProcessFeature>> feats = {};
 
 	eastl::unique_ptr<Texture2D> texCopy = nullptr;
@@ -45,7 +47,8 @@ struct PostProcessing : Feature
 	{
 		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
 		{
-			GetSingleton()->PreProcess();
+			if (GetSingleton()->loaded)
+				GetSingleton()->PreProcess();
 			func(a_shader, a_material);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -55,7 +58,8 @@ struct PostProcessing : Feature
 	{
 		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
 		{
-			GetSingleton()->PreProcess();
+			if (GetSingleton()->loaded)
+				GetSingleton()->PreProcess();
 			func(a_shader, a_material);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

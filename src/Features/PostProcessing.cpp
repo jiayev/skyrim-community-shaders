@@ -20,8 +20,6 @@ void PostProcessing::DrawSettings()
 		ImGui::RadioButton("Effect List", &pageNum, 0);
 		ImGui::TableNextColumn();
 		ImGui::RadioButton("Effect Settings", &pageNum, 1);
-		ImGui::TableNextColumn();
-		ImGui::RadioButton("LUT Baker", &pageNum, 2);
 
 		ImGui::EndTable();
 	}
@@ -70,33 +68,12 @@ void PostProcessing::DrawSettings()
 
 		ImGui::SameLine();
 
-		if (ImGui::Button(ICON_FA_MINUS, iconButtonSize) && (featIdx < feats.size()))
-			feats.erase(feats.begin() + featIdx);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Remove the selected effect.");
-
-		ImGui::SameLine();
-		ImGui::Dummy({ ImGui::GetTextLineHeightWithSpacing() * 2, 1 });
-		ImGui::SameLine();
-
-		if (ImGui::Button(ICON_FA_ARROW_UP, iconButtonSize) && (featIdx < feats.size()) && (featIdx != 0)) {
-			std::iter_swap(feats.begin() + featIdx, feats.begin() + featIdx - 1);
-			featIdx--;
-		}
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Move the selected effect up.");
-
-		ImGui::SameLine();
-
-		if (ImGui::Button(ICON_FA_ARROW_DOWN, iconButtonSize) && (featIdx < feats.size() - 1)) {
-			std::iter_swap(feats.begin() + featIdx, feats.begin() + featIdx + 1);
-			featIdx++;
-		}
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Move the selected effect down.");
+		ImGui::Checkbox("Bypass", &bypass);
 
 		ImGui::Spacing();
 
+		int markedFeat = -1;
+		int actionType = -1;  // 0 - remove, 1 - move up, 2 - move down
 		if (ImGui::BeginListBox("##Features", { -FLT_MIN, -FLT_MIN })) {
 			ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));  // I hate this
 			for (int i = 0; i < feats.size(); ++i) {
@@ -109,6 +86,31 @@ void PostProcessing::DrawSettings()
 				ImGui::Checkbox("##Enabled", &feat->enabled);
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::Text("Enabled/Bypassed");
+
+				ImGui::SameLine();
+				if (ImGui::Button(ICON_FA_MINUS, iconButtonSize)) {
+					markedFeat = i;
+					actionType = 0;
+				}
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Remove the selected effect.");
+
+				ImGui::SameLine();
+				if (ImGui::Button(ICON_FA_ARROW_UP, iconButtonSize) && (i != 0)) {
+					markedFeat = i;
+					actionType = 1;
+				}
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Move the selected effect up.");
+
+				ImGui::SameLine();
+				if (ImGui::Button(ICON_FA_ARROW_DOWN, iconButtonSize) && (i < feats.size() - 1)) {
+					markedFeat = i;
+					actionType = 2;
+				}
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Move the selected effect down.");
+
 				ImGui::SameLine();
 				ImGui::AlignTextToFramePadding();
 
@@ -131,6 +133,31 @@ void PostProcessing::DrawSettings()
 
 			ImGui::EndListBox();
 		}
+
+		if (markedFeat >= 0 && actionType >= 0) {
+			switch (actionType) {
+			case 0:
+				feats.erase(feats.begin() + markedFeat);
+				break;
+			case 1:
+				std::iter_swap(feats.begin() + markedFeat, feats.begin() + markedFeat - 1);
+				if (markedFeat == featIdx)
+					featIdx--;
+				else if (markedFeat - 1 == featIdx)
+					featIdx++;
+				break;
+			case 2:
+				std::iter_swap(feats.begin() + markedFeat, feats.begin() + markedFeat + 1);
+				if (markedFeat == featIdx)
+					featIdx++;
+				else if (markedFeat + 1 == featIdx)
+					featIdx--;
+				break;
+			default:
+				break;
+			}
+		}
+
 	} else if (pageNum == 1) {
 		// Effect Settings
 
@@ -152,10 +179,6 @@ void PostProcessing::DrawSettings()
 		} else {
 			ImGui::TextDisabled("Please select an effect in the effect list to continue.");
 		}
-	} else {
-		// LUT Baker
-
-		ImGui::TextDisabled("UNDER CONSTRUCTION");
 	}
 }
 
@@ -290,6 +313,9 @@ void PostProcessing::Reset()
 
 void PostProcessing::PreProcess()
 {
+	if (bypass)
+		return;
+
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto context = State::GetSingleton()->context;
 
