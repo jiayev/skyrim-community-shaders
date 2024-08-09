@@ -7,7 +7,6 @@
 RWTexture2D<float4> RWTexOut : register(u0);
 
 Texture2D<float4> TexColor : register(t0);
-StructuredBuffer<float> RWTexAdaptation : register(t1);
 
 cbuffer TonemapCB : register(b1)
 {
@@ -454,8 +453,8 @@ float3 AgxMinimal(float3 val)
 	return val;
 }
 
-[numthreads(32, 32, 1)] void main(uint2 tid
-								  : SV_DispatchThreadID) {
+[numthreads(8, 8, 1)] void main(uint2 tid
+								: SV_DispatchThreadID) {
 	float3 color = TexColor[tid].rgb;
 
 	color = TRANSFORM_FUNC(color);

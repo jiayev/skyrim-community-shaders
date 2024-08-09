@@ -20,6 +20,7 @@ struct ColourTransforms : public PostProcessFeature
 		float4 Params2 = { 0.f, 0.f, 0.f, 0.f };
 		float4 Params3 = { 0.f, 0.f, 0.f, 0.f };
 	} settings;
+	static_assert(sizeof(TonemapCB) % 16 == 0);
 	std::unique_ptr<ConstantBuffer> tonemapCB = nullptr;
 
 	std::unique_ptr<Texture2D> texTonemap = nullptr;

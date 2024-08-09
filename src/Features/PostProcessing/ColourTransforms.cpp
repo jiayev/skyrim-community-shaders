@@ -492,7 +492,7 @@ void ColourTransforms::Draw(TextureInfo& inout_tex)
 	context->CSSetShaderResources(0, 1, &srv);
 	context->CSSetShader(tonemapCS.get(), nullptr, 0);
 
-	context->Dispatch(((texTonemap->desc.Width - 1) >> 5) + 1, ((texTonemap->desc.Height - 1) >> 5) + 1, 1);
+	context->Dispatch((texTonemap->desc.Width + 7) >> 3, (texTonemap->desc.Height + 7) >> 3, 1);
 
 	// clean up
 	srv = nullptr;
