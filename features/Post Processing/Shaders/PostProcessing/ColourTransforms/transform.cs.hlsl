@@ -1,6 +1,6 @@
 /// By ProfJack/五脚猫, 2024-2-17 UTC
 
-#include "../../Common/Color.hlsli"
+#include "../common.hlsli"
 
 #define PI 3.1415926535
 
@@ -25,84 +25,6 @@ cbuffer TonemapCB : register(b1)
 };
 
 /////////////////////////////////////////////////////////////////////////////////
-
-/*
-    OpenColorIO
-        url:    https://github.com/AcademySoftwareFoundation/OpenColorIO/
-        license:
-			Copyright Contributors to the OpenColorIO Project.
-
-			Redistribution and use in source and binary forms, with or without
-			modification, are permitted provided that the following conditions are
-			met:
-
-			* Redistributions of source code must retain the above copyright
-			notice, this list of conditions and the following disclaimer.
-			* Redistributions in binary form must reproduce the above copyright
-			notice, this list of conditions and the following disclaimer in the
-			documentation and/or other materials provided with the distribution.
-			* Neither the name of the copyright holder nor the names of its
-			contributors may be used to endorse or promote products derived from
-			this software without specific prior written permission.
-
-			THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-			"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-			LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-			A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-			HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-			SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-			LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-			DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-			THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-			(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-			OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
-
-float3 LogContrast(float3 col, float3 contrast, float3 pivot)
-{
-	return lerp(pivot, col, contrast);
-}
-
-float3 LinearContrast(float3 col, float3 contrast, float3 pivot)
-{
-	col = col / pivot;
-	float3 sgn = sign(col);
-	col = pow(abs(col), contrast) * pivot;
-	col *= sgn;
-	return col;
-}
-
-float3 Gamma(float3 col, float3 gamma, float3 black_pivot, float3 white_pivot)
-{
-	col = col - black_pivot;
-	float3 sgn = sign(col);
-	float3 range = white_pivot - black_pivot;
-	col = col / range;
-	col = pow(max(0, col), gamma);
-	col = col * sgn * range + black_pivot;
-	return col;
-}
-
-float3 Saturation(float3 col, float sat)
-{
-	float luma = RGBToLuminance(col);
-	return lerp(luma, col, sat);
-}
-
-// https://www.shadertoy.com/view/MdjBRy
-float3 HueShift(float3 col, float shift)
-{
-	float3 P = 0.55735 * dot(0.55735, col);
-	float3 U = col - P;
-	float3 V = cross(0.55735, U);
-	col = U * cos(shift * 6.2832) + V * sin(shift * 6.2832) + P;
-	return col;
-}
-
-float3 ASC_CDL(float3 col, float3 slope, float3 power, float3 offset)
-{
-	return Gamma(col * slope + offset, power, 0, 1);
-}
 
 // https://www.shadertoy.com/view/ss23DD
 float3 LiftGammaGain(float3 rgb, float4 lift, float4 gamma, float4 gain)
