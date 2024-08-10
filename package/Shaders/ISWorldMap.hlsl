@@ -32,7 +32,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float depthFactor = DepthParams.w / ((1 - depth) * DepthParams.z + DepthParams.y);
 	float offsetDelta = min(TexelSize.y, TexelSize.z * abs(depthFactor - TexelSize.x));
-#	if defined(NO_SKY_BLUR)
+#	if defined(NO_SKY)
 	if (1 - depth <= 1e-4) {
 		offsetDelta = 0;
 	}

@@ -1,6 +1,6 @@
 #if defined(DISPLAY_DEPTH)
 #	include "Common/DummyVSTexCoord.hlsl"
-#elif defined(SIMPLE_COLOR)
+#else
 #	include "Common/DummyVS.hlsl"
 #endif
 
@@ -41,7 +41,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float screenDepth = saturate((-Color.x + depth) / (Color.y - Color.x));
 	psout.Color.xyz = (screenDepth * -2 + 3) * (screenDepth * screenDepth);
 	psout.Color.w = 1;
-#	elif defined(SIMPLE_COLOR)
+#	else
 	psout.Color = Color;
 #	endif
 

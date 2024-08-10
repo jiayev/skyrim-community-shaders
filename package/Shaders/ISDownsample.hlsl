@@ -34,11 +34,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float luminance = 0;
 	for (uint sampleIndex = 0; sampleIndex < asuint(SamplesCount); ++sampleIndex) {
 		float2 texCoord = OffsetsAndWeights[sampleIndex].xy * TexelSize.xy + input.TexCoord;
-#	if defined(IGNORE_BRIGHTEST)
+#	if defined(DYNAMIC_SOURCE)
 		texCoord = GetDynamicResolutionAdjustedScreenPosition(texCoord);
 #	endif
 		float4 sourceColor = SourceTex.Sample(SourceSampler, texCoord);
-#	if defined(IGNORE_BRIGHTEST)
+#	if defined(DYNAMIC_SOURCE)
 		downsampledColor += sourceColor;
 #	else
 		float sampleLuminance = RGBToLuminanceAlternative(sourceColor.xyz);
@@ -48,7 +48,7 @@ PS_OUTPUT main(PS_INPUT input)
 		}
 #	endif
 	}
-#	if defined(IGNORE_BRIGHTEST)
+#	if defined(DYNAMIC_SOURCE)
 	psout.Color = downsampledColor / asuint(SamplesCount);
 #	else
 	if (CompensateJittering) {
