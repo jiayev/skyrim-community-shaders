@@ -51,7 +51,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float4 color = sourceTex.Sample(sourceSampler, finalTexCoord);
 
-#	if defined(CONTRAST)
+#	if defined(APPLY_CENTER_CONTRAST)
 	int contrastIndex = (int)(5 * input.TexCoord.x) + (int)(5 * input.TexCoord.y) * 5;
 	float contrastFactor = ContrastValues[contrastIndex] * g_ContrastParams.x;
 	color *= contrastFactor;

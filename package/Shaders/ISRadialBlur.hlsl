@@ -40,13 +40,13 @@ PS_OUTPUT main(PS_INPUT input)
 											  GetCircleParam(centerDistance, Center.z, Params.w)));
 
 	float4 color = 0;
-	for (float sampleIndex = -SAMPLES_COUNT; sampleIndex <= SAMPLES_COUNT; ++sampleIndex) {
+	for (float sampleIndex = -NUM_STEPS; sampleIndex <= NUM_STEPS; ++sampleIndex) {
 		float2 texCoord = input.TexCoord + sampleDelta * sampleIndex;
 		float2 adjustedTexCoord = GetDynamicResolutionAdjustedScreenPosition(texCoord);
 		float4 currentColor = ImageTex.SampleLevel(ImageSampler, adjustedTexCoord, 0);
 		color += currentColor;
 	}
-	color *= (1. / (2. * SAMPLES_COUNT + 1.));
+	color *= (1. / (2. * NUM_STEPS + 1.));
 
 	psout.Color = color;
 

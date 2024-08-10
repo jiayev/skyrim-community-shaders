@@ -17,7 +17,7 @@ namespace SIE
 {
 	namespace SShaderCache
 	{
-		static void GetShaderDefines(RE::BSShader::Type, uint32_t, D3D_SHADER_MACRO*);
+		static void GetShaderDefines(const RE::BSShader&, uint32_t, D3D_SHADER_MACRO*);
 		static std::string GetShaderString(ShaderClass, const RE::BSShader&, uint32_t, bool = false);
 		/**
 		@brief Get the BSShader::Type from the ShaderString
@@ -622,195 +622,18 @@ namespace SIE
 			defines[0] = { nullptr, nullptr };
 		}
 
-		static void GetImagespaceShaderDefines(uint32_t descriptor, D3D_SHADER_MACRO* defines)
+		static void GetImagespaceShaderDefines(const RE::BSShader& shader, D3D_SHADER_MACRO* defines)
 		{
-			using enum RE::ImageSpaceManager::ImageSpaceEffectEnum;
-
-			const auto descEnum =
-				static_cast<RE::ImageSpaceManager::ImageSpaceEffectEnum>(descriptor);
-			if ((descriptor >= static_cast<uint32_t>(ISBlur3) &&
-					descriptor <= static_cast<uint32_t>(ISBrightPassBlur15)) ||
-				descEnum == ISBlur) {
-				if (descEnum == ISBlur) {
-					defines[0] = { "BLUR_RADIUS", "0" };
-					++defines;
-				} else {
-					static constexpr std::array<const char*, 7> blurRadiusDefines = { { "3", "5",
-						"7", "9", "11", "13", "15" } };
-					const size_t blurRadius = static_cast<size_t>(
-						(descriptor - static_cast<uint32_t>(ISBlur3)) % blurRadiusDefines.size());
-					defines[0] = { "BLUR_RADIUS", blurRadiusDefines[blurRadius] };
-					++defines;
-					const size_t blurType = static_cast<size_t>(
-						(descriptor - static_cast<uint32_t>(ISBlur3)) / blurRadiusDefines.size());
-					if (blurType == 1) {
-						defines[0] = { "BLUR_NON_HDR", nullptr };
-						++defines;
-					} else if (blurType == 2) {
-						defines[0] = { "BLUR_BRIGHT_PASS", nullptr };
-						++defines;
-					}
-				}
-			} else if (descEnum == ISDisplayDepth) {
-				defines[0] = { "DISPLAY_DEPTH", nullptr };
-				++defines;
-			} else if (descEnum == ISSimpleColor) {
-				defines[0] = { "SIMPLE_COLOR", nullptr };
-				++defines;
-			} else if (descEnum == ISCopyDynamicFetchDisabled) {
-				defines[0] = { "DYNAMIC_FETCH_DISABLED", nullptr };
-				++defines;
-			} else if (descEnum == ISCopyGrayScale) {
-				defines[0] = { "GRAY_SCALE", nullptr };
-				++defines;
-			} else if (descEnum == ISCopyTextureMask) {
-				defines[0] = { "TEXTURE_MASK", nullptr };
-				++defines;
-			} else if (descEnum == ISCompositeLensFlare) {
-				defines[0] = { "VOLUMETRIC_LIGHTING", nullptr };
-				++defines;
-			} else if (descEnum == ISCompositeVolumetricLighting) {
-				defines[0] = { "LENS_FLARE", nullptr };
-				++defines;
-			} else if (descEnum == ISCompositeLensFlareVolumetricLighting) {
-				defines[0] = { "VOLUMETRIC_LIGHTING", nullptr };
-				++defines;
-				defines[0] = { "LENS_FLARE", nullptr };
-				++defines;
-			} else if (descriptor >= static_cast<uint32_t>(ISDepthOfField) &&
-					   descriptor <= static_cast<uint32_t>(ISDistantBlurMaskedFogged)) {
-				if (descriptor >= static_cast<uint32_t>(ISDepthOfField) &&
-					descriptor <= static_cast<uint32_t>(ISDepthOfFieldMaskedFogged))
-
-				{
-					defines[0] = { "DOF", nullptr };
-					++defines;
-				} else {
-					defines[0] = { "DISTANT_BLUR", nullptr };
-					++defines;
-				}
-				if (descEnum != ISDepthOfField && descEnum != ISDistantBlur) {
-					defines[0] = { "FOGGED", nullptr };
-					++defines;
-				}
-				if (descEnum == ISDepthOfFieldMaskedFogged || descEnum == ISDistantBlurMaskedFogged) {
-					defines[0] = { "MASKED", nullptr };
-					++defines;
-				}
-			} else if (descEnum == ISDownsampleIgnoreBrightest) {
-				defines[0] = { "IGNORE_BRIGHTEST", nullptr };
-				++defines;
-			} else if (descEnum == ISHDRTonemapBlendCinematic) {
-				defines[0] = { "TONEMAP", nullptr };
-				++defines;
-			} else if (descEnum == ISHDRTonemapBlendCinematicFade) {
-				defines[0] = { "TONEMAP", nullptr };
-				++defines;
-				defines[0] = { "FADE", nullptr };
-				++defines;
-			} else if (descriptor >= static_cast<uint32_t>(ISHDRDownSample16) &&
-					   descriptor <= static_cast<uint32_t>(ISHDRDownSample16LightAdapt)) {
-				defines[0] = { "DOWNSAMPLE", nullptr };
-				++defines;
-				if (descEnum == ISHDRDownSample16 || descEnum == ISHDRDownSample16Lum ||
-					descEnum == ISHDRDownSample16LightAdapt ||
-					descEnum == ISHDRDownSample16LumClamp) {
-					defines[0] = { "SAMPLES_COUNT", "16" };
-					++defines;
-				} else {
-					defines[0] = { "SAMPLES_COUNT", "4" };
-					++defines;
-				}
-				if (descEnum == ISHDRDownSample4RGB2Lum) {
-					defines[0] = { "RGB2LUM", nullptr };
-					++defines;
-				} else if (descEnum == ISHDRDownSample16Lum || descEnum == ISHDRDownSample16LumClamp) {
-					defines[0] = { "LUM", nullptr };
-					++defines;
-				} else if (descEnum == ISHDRDownSample16LightAdapt ||
-						   descEnum == ISHDRDownSample4LightAdapt) {
-					defines[0] = { "LIGHT_ADAPT", nullptr };
-					++defines;
-				}
-			} else if (descEnum == ISLightingCompositeMenu) {
-				defines[0] = { "MENU", nullptr };
-				++defines;
-			} else if (descEnum == ISLightingCompositeNoDirectionalLight) {
-				defines[0] = { "NO_DIRECTIONAL_LIGHT", nullptr };
-				++defines;
-			} else if (descEnum == ISWaterBlendHeightmaps) {
-				defines[0] = { "BLEND_HEIGHTMAPS", nullptr };
-				++defines;
-			} else if (descEnum == ISWaterDisplacementClearSimulation) {
-				defines[0] = { "CLEAR_SIMULATION", nullptr };
-				++defines;
-			} else if (descEnum == ISWaterDisplacementNormals) {
-				defines[0] = { "NORMALS", nullptr };
-				++defines;
-			} else if (descEnum == ISWaterDisplacementRainRipple) {
-				defines[0] = { "RAIN_RIPPLE", nullptr };
-				++defines;
-			} else if (descEnum == ISWaterDisplacementTexOffset) {
-				defines[0] = { "TEX_OFFSET", nullptr };
-				++defines;
-			} else if (descEnum == ISWaterSmoothHeightmap) {
-				defines[0] = { "SMOOTH_HEIGHTMAP", nullptr };
-				++defines;
-			} else if (descEnum == ISWaterRainHeightmap) {
-				defines[0] = { "RAIN_HEIGHTMAP", nullptr };
-				++defines;
-			} else if (descEnum == ISWaterWadingHeightmap) {
-				defines[0] = { "WADING_HEIGHTMAP", nullptr };
-				++defines;
-			} else if (descEnum == ISWorldMapNoSkyBlur) {
-				defines[0] = { "NO_SKY_BLUR", nullptr };
-				++defines;
-			} else if (descEnum == ISMinifyContrast) {
-				defines[0] = { "CONTRAST", nullptr };
-				++defines;
-			} else if (descEnum == ISNoiseNormalmap) {
-				defines[0] = { "NORMALMAP", nullptr };
-				++defines;
-			} else if (descEnum == ISNoiseScrollAndBlend) {
-				defines[0] = { "SCROLL_AND_BLEND", nullptr };
-				++defines;
-			} else if (descEnum == ISRadialBlur) {
-				defines[0] = { "SAMPLES_COUNT", "2" };
-				++defines;
-			} else if (descEnum == ISRadialBlurHigh) {
-				defines[0] = { "SAMPLES_COUNT", "10" };
-				++defines;
-			} else if (descEnum == ISRadialBlurMedium) {
-				defines[0] = { "SAMPLES_COUNT", "6" };
-				++defines;
-			} else if (descEnum == ISSAOCompositeSAO) {
-				defines[0] = { "APPLY_SAO", nullptr };
-				++defines;
-			} else if (descEnum == ISSAOCompositeFog) {
-				defines[0] = { "APPLY_FOG", nullptr };
-				++defines;
-			} else if (descEnum == ISSAOCompositeSAOFog) {
-				defines[0] = { "APPLY_SAO", nullptr };
-				++defines;
-				defines[0] = { "APPLY_FOG", nullptr };
-				++defines;
-			} else if (descEnum == ISSAOBlurH) {
-				defines[0] = { "AXIS_H", nullptr };
-				++defines;
-			} else if (descEnum == ISSAOBlurV) {
-				defines[0] = { "AXIS_V", nullptr };
-				++defines;
-			} else if (descEnum == ISUnderwaterMask) {
-				defines[0] = { "UNDERWATERMASK", nullptr };
-				++defines;
-			}
-			defines[0] = { nullptr, nullptr };
+			auto& isShader = const_cast<RE::BSImagespaceShader&>(static_cast<const RE::BSImagespaceShader&>(shader));
+			auto getDefines = reinterpret_cast<void (RE::BSImagespaceShader::*)(D3D_SHADER_MACRO*)>(&RE::BSImagespaceShader::Unk_0D);
+			(isShader.*getDefines)(defines);
+			return;
 		}
 
-		static void GetShaderDefines(RE::BSShader::Type type, uint32_t descriptor,
+		static void GetShaderDefines(const RE::BSShader& shader, uint32_t descriptor,
 			D3D_SHADER_MACRO* defines)
 		{
-			switch (type) {
+			switch (shader.shaderType.get()) {
 			case RE::BSShader::Type::Grass:
 				GetGrassShaderDefines(descriptor, defines);
 				break;
@@ -824,7 +647,7 @@ namespace SIE
 				GetBloodSplaterShaderDefines(descriptor, defines);
 				break;
 			case RE::BSShader::Type::ImageSpace:
-				GetImagespaceShaderDefines(descriptor, defines);
+				GetImagespaceShaderDefines(shader, defines);
 				break;
 			case RE::BSShader::Type::Lighting:
 				GetLightingShaderDefines(descriptor, defines);
@@ -1473,7 +1296,7 @@ namespace SIE
 		{
 			auto sourceShaderFile = shader.fxpFilename;
 			std::array<D3D_SHADER_MACRO, 64> defines{};
-			SIE::SShaderCache::GetShaderDefines(shader.shaderType.get(), descriptor, &defines[0]);
+			SIE::SShaderCache::GetShaderDefines(shader, descriptor, &defines[0]);
 			std::string result;
 			if (hashkey)  // generate hashkey so don't include descriptor
 				result = fmt::format("{}:{}:{}", sourceShaderFile, magic_enum::enum_name(shaderClass), SIE::SShaderCache::MergeDefinesString(defines, true));
@@ -1550,7 +1373,7 @@ namespace SIE
 					defines[lastIndex++] = { shaderDefines->at(i).first.c_str(), shaderDefines->at(i).second.c_str() };
 			}
 			defines[lastIndex] = { nullptr, nullptr };  // do final entry
-			GetShaderDefines(type, descriptor, &defines[lastIndex]);
+			GetShaderDefines(shader, descriptor, &defines[lastIndex]);
 
 			const std::wstring path = GetShaderPath(
 				shader.shaderType == RE::BSShader::Type::ImageSpace ?
@@ -2352,10 +2175,10 @@ namespace SIE
 		return nullptr;
 	}
 
-	std::string ShaderCache::GetDefinesString(RE::BSShader::Type enumType, uint32_t descriptor)
+	std::string ShaderCache::GetDefinesString(const RE::BSShader& shader, uint32_t descriptor)
 	{
 		std::array<D3D_SHADER_MACRO, 64> defines{};
-		SIE::SShaderCache::GetShaderDefines(enumType, descriptor, &defines[0]);
+		SIE::SShaderCache::GetShaderDefines(shader, descriptor, &defines[0]);
 
 		return SIE::SShaderCache::MergeDefinesString(defines, true);
 	}

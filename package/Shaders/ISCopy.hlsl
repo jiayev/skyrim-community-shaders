@@ -24,7 +24,7 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
-#	if !defined(DYNAMIC_FETCH_DISABLED)
+#	if !defined(DISABLE_DYNAMIC)
 	float2 screenPosition = GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 #	else
 	float2 screenPosition = input.TexCoord;
@@ -32,9 +32,9 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float4 color = ImageTex.Sample(ImageSampler, screenPosition);
 
-#	if defined(GRAY_SCALE)
+#	if defined(GREYSCALE)
 	color = float4(dot(color, ColorSelect).xxx, color.w);
-#	elif defined(TEXTURE_MASK)
+#	elif defined(MASK)
 	color.w = 1 - color.x;
 #	endif
 
