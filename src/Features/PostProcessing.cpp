@@ -164,7 +164,7 @@ void PostProcessing::DrawSettings()
 	const float _iconButtonSize = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().FramePadding.x;
 	const ImVec2 iconButtonSize{ _iconButtonSize, _iconButtonSize };
 
-	if (ImGui::BeginTable("Page Select", 3)) {
+	if (ImGui::BeginTable("Page Select", 2)) {
 		ImGui::TableNextColumn();
 		ImGui::RadioButton("Effect List", &pageNum, 0);
 		ImGui::TableNextColumn();

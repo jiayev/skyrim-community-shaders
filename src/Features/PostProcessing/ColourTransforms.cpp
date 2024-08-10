@@ -144,18 +144,17 @@ struct TransformInfo
 				"Basic lift gamma gain control (Luma+RGB) like Davinci Resolve, affecting dark tones/midtones/highlights respectively. "
 				"Expects inputs between [0, 1]."sv,
 				[](CTP& params) {
-					shiftSlider<4>("Lift", &params.Params0.x, -1.f, 1.f, "%.2f");
-					shiftSlider<4>("Gamma", &params.Params1.x, -1.5f, 1.5f, "%.2f");
-					shiftSlider<4>("Gain", &params.Params2.x, 0.f, 2.f, "%.2f");
-					shiftHint();
+					ImGui::DragFloat4("Lift", &params.Params0.x, 1e-3f, -1.f, 1.f, "%.3f");
+					ImGui::DragFloat4("Gamma", &params.Params1.x, 1e-3f, -1.5f, 1.5f, "%.3f");
+					ImGui::DragFloat4("Gain", &params.Params2.x, 1e-3f, 0.f, 2.f, "%.3f");
 				},
 				{ { 0.f, 0.f, 0.f, 0.f }, { 0.f, 0.f, 0.f, 0.f }, { 1.f, 1.f, 1.f, 1.f } } },
 
 			{ "Saturation/Hue"sv, "SaturationHue"sv,
 				"Adjust saturation and hue shift. Expects linear RGB inputs."sv,
 				[](CTP& params) {
-					ImGui::SliderFloat("Saturation", &params.Params0.x, 0.f, 4.f, "%.2f");
-					ImGui::SliderFloat("Hue Shift", &params.Params0.y, -1.f, 1.f, "%.2f");
+					ImGui::DragFloat("Saturation", &params.Params0.x, 1e-3f, 0.f, 4.f, "%.3f");
+					ImGui::DragFloat("Hue Shift", &params.Params0.y, 1e-3f, -1.f, 1.f, "%.3f");
 				},
 				{ { 1.f, 0.f, 0.f, 0.f } } },
 
