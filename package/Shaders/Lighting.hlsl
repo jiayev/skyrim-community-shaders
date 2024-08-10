@@ -928,6 +928,11 @@ float3 ApplyFogAndClampColor(float3 srcColor, float4 fogParam, float3 clampColor
 #		undef WATER_LIGHTING
 #	endif
 
+#	if defined(WORLD_MAP)
+#		undef CLOUD_SHADOWS
+#		undef SKYLIGHTING
+#	endif
+
 #	if defined(WATER_LIGHTING)
 #		include "WaterLighting/WaterCaustics.hlsli"
 #	endif
@@ -954,10 +959,6 @@ float3 ApplyFogAndClampColor(float3 srcColor, float4 fogParam, float3 clampColor
 
 #	if defined(SCREEN_SPACE_SHADOWS)
 #		include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
-#	endif
-
-#	if defined(WATER_BLENDING)
-#		include "WaterBlending/WaterBlending.hlsli"
 #	endif
 
 #	if defined(LIGHT_LIMIT_FIX)
@@ -1023,6 +1024,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = InterleavedGradientNoise(input.Position.xy, FrameCount);
+
+	// If InWorld or first-person
+	bool mainPass = (PixelShaderDescriptor & _InWorld) || !FrameParams.y;
 
 #	if defined(TERRAIN_BLENDING)
 	float depthSampled = GetTerrainOffsetDepth(screenUV, eyeIndex);
@@ -1696,7 +1700,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 #		endif
 
+#		if defined(DEFERRED)
 	sh2 skylightingSH = Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMSSkylight, worldSpaceNormal);
+#		else
+	sh2 skylightingSH = mainPass ? Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMSSkylight, worldSpaceNormal) : float4(sqrt(4.0 * shPI), 0, 0, 0);
+#		endif
+
 #	endif
 
 	float4 waterData = GetWaterData(input.WorldPosition.xyz);
@@ -1720,21 +1729,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float minWetnessAngle = 0;
 	minWetnessAngle = saturate(max(minWetnessValue, worldSpaceNormal.z));
 #		if defined(SKYLIGHTING)
-	float wetnessOcclusion = pow(saturate(shUnproject(skylightingSH, float3(0, 0, 1))), 2);
-#		endif  // SKYLIGHTING
+	float wetnessOcclusion = mainPass ? pow(saturate(shUnproject(skylightingSH, float3(0, 0, 1))), 2) : 0;
+#		else
+	float wetnessOcclusion = mainPass;
+#		endif
 
 	float4 raindropInfo = float4(0, 0, 1, 0);
 	if (worldSpaceNormal.z > 0 && wetnessEffects.Raining > 0.0f && wetnessEffects.EnableRaindropFx &&
 		(dot(input.WorldPosition, input.WorldPosition) < wetnessEffects.RaindropFxRange * wetnessEffects.RaindropFxRange)) {
-#		if defined(SKYLIGHTING)
 		if (wetnessOcclusion > 0.0)
-#		endif
 #		if defined(SKINNED)
 			raindropInfo = GetRainDrops(input.ModelPosition, wetnessEffects.Time, worldSpaceNormal);
 #		elif defined(DEFERRED)
-		raindropInfo = GetRainDrops(input.WorldPosition + CameraPosAdjust[eyeIndex], wetnessEffects.Time, worldSpaceNormal);
+			raindropInfo = GetRainDrops(input.WorldPosition + CameraPosAdjust[eyeIndex], wetnessEffects.Time, worldSpaceNormal);
 #		else
-		raindropInfo = GetRainDrops(!FrameParams.y ? input.ModelPosition : input.WorldPosition + CameraPosAdjust[eyeIndex], wetnessEffects.Time, worldSpaceNormal);
+			raindropInfo = GetRainDrops(!FrameParams.y ? input.ModelPosition : input.WorldPosition + CameraPosAdjust[eyeIndex], wetnessEffects.Time, worldSpaceNormal);
 #		endif
 	}
 
@@ -1749,10 +1758,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	rainWetness = wetnessEffects.SkinWetness * wetnessEffects.Wetness * 0.8f;
 #		endif
 
-#		if defined(SKYLIGHTING)
 	rainWetness *= wetnessOcclusion;
 	puddleWetness *= wetnessOcclusion;
-#		endif
 
 	wetness = max(shoreFactor * wetnessEffects.MaxShoreWetness, rainWetness);
 
@@ -1830,13 +1837,28 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float dirDetailShadow = 1.0;
 	float dirShadow = 1.0;
 	float parallaxShadow = 1;
-#	if defined(SOFT_LIGHTING) || defined(BACK_LIGHTING) || defined(RIM_LIGHTING)
-	if (!inDirShadow && dirLightAngle > 0.0) {
+
+#	if defined(DEFERRED)
+#		if defined(SOFT_LIGHTING) || defined(BACK_LIGHTING) || defined(RIM_LIGHTING)
+	bool extraDirShadows = !inDirShadow && mainPass;
+#		else
+	// If lighting cannot hit the backface of the object, do not render shadows
+	bool extraDirShadows = !inDirShadow && dirLightAngle > 0.0 && mainPass;
+#		endif
 #	else
-	if (!inDirShadow) {
+#		if defined(SOFT_LIGHTING) || defined(BACK_LIGHTING) || defined(RIM_LIGHTING)
+	bool extraDirShadows = !inDirShadow && mainPass;
+#		else
+	bool extraDirShadows = !inDirShadow && dirLightAngle > 0.0 && mainPass;
+#		endif
 #	endif
+
+	if (extraDirShadows) {
 #	if defined(DEFERRED) && defined(SCREEN_SPACE_SHADOWS)
-		dirDetailShadow = GetScreenSpaceShadow(screenUV, screenNoise, viewPosition, eyeIndex);
+#		if defined(SOFT_LIGHTING) || defined(BACK_LIGHTING) || defined(RIM_LIGHTING)
+		if (dirLightAngle > 0.0)
+#		endif
+			dirDetailShadow = GetScreenSpaceShadow(screenUV, screenNoise, viewPosition, eyeIndex);
 #	endif
 
 #	if defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
