@@ -13,7 +13,7 @@ struct PS_OUTPUT
 SamplerState ImageSampler : register(s0);
 #	if defined(DOWNSAMPLE)
 SamplerState AdaptSampler : register(s1);
-#	elif defined(TONEMAP)
+#	elif defined(BLEND)
 SamplerState BlendSampler : register(s1);
 #	endif
 SamplerState AvgSampler : register(s2);
@@ -21,7 +21,7 @@ SamplerState AvgSampler : register(s2);
 Texture2D<float4> ImageTex : register(t0);
 #	if defined(DOWNSAMPLE)
 Texture2D<float4> AdaptTex : register(t1);
-#	elif defined(TONEMAP)
+#	elif defined(BLEND)
 Texture2D<float4> BlendTex : register(t1);
 #	endif
 Texture2D<float4> AvgTex : register(t2);
@@ -56,20 +56,20 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if defined(DOWNSAMPLE)
 	float3 downsampledColor = 0;
-	for (int sampleIndex = 0; sampleIndex < SAMPLES_COUNT; ++sampleIndex) {
+	for (int sampleIndex = 0; sampleIndex < DOWNSAMPLE; ++sampleIndex) {
 		float2 texCoord = BlurOffsets[sampleIndex].xy * BlurScale.xy + input.TexCoord;
 		if (Flags.x > 0.5) {
 			texCoord = GetDynamicResolutionAdjustedScreenPosition(texCoord);
 		}
 		float3 imageColor = ImageTex.Sample(ImageSampler, texCoord).xyz;
-#		if defined(LUM)
-		imageColor = imageColor.x;
-#		elif defined(RGB2LUM)
+#		if defined(RGB2LUM)
 		imageColor = RGBToLuminance(imageColor);
+#		elif (defined(LUM) || defined(LUMCLAMP)) && !defined(DOWNADAPT)
+		imageColor = imageColor.x;
 #		endif
 		downsampledColor += imageColor * BlurOffsets[sampleIndex].z;
 	}
-#		if defined(LIGHT_ADAPT)
+#		if defined(DOWNADAPT)
 	float2 adaptValue = AdaptTex.Sample(AdaptSampler, input.TexCoord).xy;
 	if (isnan(downsampledColor.x) || isnan(downsampledColor.y) || isnan(downsampledColor.z)) {
 		downsampledColor.xy = adaptValue;
@@ -82,7 +82,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 	psout.Color = float4(downsampledColor, BlurScale.z);
 
-#	elif defined(TONEMAP)
+#	elif defined(BLEND)
 	float2 adjustedTexCoord = GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 	float3 blendColor = BlendTex.Sample(BlendSampler, adjustedTexCoord).xyz;
 	float3 imageColor = 0;

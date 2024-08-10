@@ -24,34 +24,45 @@ cbuffer PerGeometry : register(b2)
 	float4 BlurOffsets[16] : packoffset(c3);
 };
 
+float4 GetImageColor(float2 texCoord, float blurScale)
+{
+	return ImageTex.Sample(ImageSampler, texCoord) * float4(blurScale.xxx, 1);
+}
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
-	float4 color = 0.0.xxxx;
+	float4 color = 0;
 
-	float blurRadius = BLUR_RADIUS;
-	float2 blurScale = BlurScale.zw;
-#	if BLUR_RADIUS == 0
-	blurRadius = BlurRadius;
+#	if defined(TEXTAP)
+	int blurRadius = TEXTAP;
+#	else
+	uint blurRadius = asuint(BlurRadius);
 #	endif
-#	if BLUR_RADIUS == 0 || defined(BLUR_NON_HDR)
-	blurScale = 1.0.xx;
+	float2 blurScale = BlurScale.zw;
+#	if !defined(TEXTAP) || !defined(COLORRANGE)
+	blurScale = 1;
 #	endif
 
 	for (int blurIndex = 0; blurIndex < blurRadius; ++blurIndex) {
 		float2 screenPosition = BlurOffsets[blurIndex].xy + input.TexCoord.xy;
-		if (BlurScale.x < 0.5) {
-			screenPosition = GetDynamicResolutionAdjustedScreenPosition(screenPosition);
+		float4 imageColor = 0;
+		[branch] if (BlurScale.x < 0.5)
+		{
+			imageColor = GetImageColor(GetDynamicResolutionAdjustedScreenPosition(screenPosition), blurScale.y);
 		}
-		float4 imageColor = ImageTex.Sample(ImageSampler, screenPosition) * float4(blurScale.yyy, 1);
-#	if defined(BLUR_BRIGHT_PASS)
-		imageColor = BlurBrightPass.y * max(0.0.xxxx, -BlurBrightPass.x + imageColor);
+		else
+		{
+			imageColor = GetImageColor(screenPosition, blurScale.y);
+		}
+#	if defined(BRIGHTPASS)
+		imageColor = BlurBrightPass.y * max(0, -BlurBrightPass.x + imageColor);
 #	endif
 		color += imageColor * BlurOffsets[blurIndex].z;
 	}
 
-#	if defined(BLUR_BRIGHT_PASS)
+#	if defined(BRIGHTPASS)
 	float avgLum = RGBToLuminance(AvgLumTex.Sample(AvgLumSampler, input.TexCoord.xy).xyz);
 	color.w = avgLum;
 #	endif

@@ -21,34 +21,36 @@ cbuffer PerGeometry : register(b2)
 	float4 Tint : packoffset(c0);
 };
 
+float2 GetRefractedTexCoord(float2 texCoordOriginal, float3 normalOriginal)
+{
+	float2 texCoord = texCoordOriginal + float2(-1, 1) * (2 * (0.05 * normalOriginal.z) * (normalOriginal.xy - 0.5));
+	float2 texCoordClamped = texCoord > 0.85 ? lerp(0.85, texCoord, 0.78) : texCoord;
+	texCoordClamped = texCoord < 0.15 ? lerp(0.15, texCoord, 0.78) : texCoordClamped;
+	return GetDynamicResolutionAdjustedScreenPosition(lerp(texCoord, texCoordClamped, normalOriginal.z));
+}
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
-	float2 adjustedTexCoord = GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
+	float2 texCoordOriginal = GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 
-	float4 src1 = Src1Tex.Sample(Src1Sampler, adjustedTexCoord);
-	float4 src00 = Src0Tex.Sample(Src0Sampler, adjustedTexCoord);
+	float4 normalOriginal = Src1Tex.Sample(Src1Sampler, texCoordOriginal);
+	float4 colorOriginal = Src0Tex.Sample(Src0Sampler, texCoordOriginal);
 
-	float2 texCoord10 = input.TexCoord + float2(1, -1) * (2 * (0.05 * src1.z) * (src1.xy - 0.5));
-	float2 texCoord11 = texCoord10 > 0.85 ? lerp(texCoord10, 0.85, 0.78) : texCoord10;
-	texCoord11 = texCoord10 < 0.15 ? lerp(texCoord10, 0.15, 0.78) : texCoord11;
+	float2 texCoordRefracted = GetRefractedTexCoord(input.TexCoord, normalOriginal.xyz);
 
-	float2 texCoord1 = lerp(texCoord10, texCoord11, src1.z);
-	float2 adjustedTexCoord1 = GetDynamicResolutionAdjustedScreenPosition(texCoord1);
+	float refractedMask = Src1Tex.Sample(Src1Sampler, texCoordRefracted).w;
+	float4 colorRefracted = Src0Tex.Sample(Src0Sampler, texCoordRefracted);
+	float4 colorResulting = refractedMask != 0 ? colorRefracted : colorOriginal;
 
-	float unk1 = Src1Tex.Sample(Src1Sampler, adjustedTexCoord1).w;
-	float4 src01 = Src0Tex.Sample(Src0Sampler, adjustedTexCoord1);
-	float4 src0 = unk1 != 0 ? src01 : src00;
-
-	if (src1.w > 0.8 && src1.w < 1) {
-		psout.Color.xyz =
-			(1 - Tint.w) * src0.xyz + Tint.xyz * (Tint.w * RGBToLuminance2(src01.xyz));
+	if (normalOriginal.w > 0.8 && normalOriginal.w < 1) {
+		psout.Color.xyz = lerp(colorResulting.xyz, Tint.xyz * RGBToLuminance2(colorRefracted.xyz), Tint.w);
 	} else {
-		psout.Color.xyz = src0.xyz;
+		psout.Color.xyz = colorResulting.xyz;
 	}
 
-	psout.Color.w = src0.w;
+	psout.Color.w = colorResulting.w;
 
 	return psout;
 }

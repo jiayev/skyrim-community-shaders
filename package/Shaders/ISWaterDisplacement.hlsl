@@ -1,4 +1,4 @@
-#if defined(SMOOTH_HEIGHTMAP) || defined(RAIN_HEIGHTMAP) || defined(WADING_HEIGHTMAP)
+#if defined(HEIGHTMAP_SMOOTH) || defined(HEIGHTMAP_RAIN) || defined(HEIGHTMAP_WADING)
 #	define HEIGHTMAP
 #endif
 
@@ -51,7 +51,7 @@ SamplerState HeightMap01Sampler : register(s0);
 SamplerState HeightMap02Sampler : register(s1);
 #	elif defined(NORMALS)
 SamplerState DisplaceMapSampler : register(s0);
-#	elif defined(TEX_OFFSET)
+#	elif defined(TEXCOORD_OFFSET)
 SamplerState DisplaySamplerSampler : register(s0);
 #	elif defined(HEIGHTMAP)
 SamplerState HeightMapSampler : register(s0);
@@ -62,7 +62,7 @@ Texture2D<float4> HeightMap01Tex : register(t0);
 Texture2D<float4> HeightMap02Tex : register(t1);
 #	elif defined(NORMALS)
 Texture2D<float4> DisplaceMapTex : register(t0);
-#	elif defined(TEX_OFFSET)
+#	elif defined(TEXCOORD_OFFSET)
 Texture2D<float4> DisplaySamplerTex : register(t0);
 #	elif defined(HEIGHTMAP)
 Texture2D<float4> HeightMapTex : register(t0);
@@ -142,18 +142,18 @@ PS_OUTPUT main(PS_INPUT input)
 
 	psout.Color = float4(normalize(float3(-valueRL, valueTB, 1)), 1) * 0.5 + 0.5;
 
-#	elif defined(RAIN_RIPPLE) || defined(WADING_RIPPLE)
+#	elif defined(RIPPLE_MAKER_RAIN) || defined(RIPPLE_MAKER_WADING)
 	psout.Color = float4(1, 0.5, 0.5, 0.5);
-#	elif defined(TEX_OFFSET)
+#	elif defined(TEXCOORD_OFFSET)
 	float lerpFactor = saturate(10 * (-0.4 + length(input.TexCoord - 0.5)));
 	float4 displayColor = DisplaySamplerTex.Sample(DisplaySamplerSampler, TextureOffset + input.TexCoord);
 	psout.Color.xy = displayColor.xy;
 	psout.Color.zw = lerp(displayColor.zw, 0.5, lerpFactor);
-#	elif defined(SMOOTH_HEIGHTMAP)
+#	elif defined(HEIGHTMAP_SMOOTH)
 	psout.Color = HeightMapTex.Sample(HeightMapSampler, input.TexCoord);
-#	elif defined(RAIN_HEIGHTMAP)
+#	elif defined(HEIGHTMAP_RAIN)
 	psout.Color = GetHeight(input, RainVars);
-#	elif defined(WADING_HEIGHTMAP)
+#	elif defined(HEIGHTMAP_WADING)
 	psout.Color = GetHeight(input, WadingVars);
 #	endif
 

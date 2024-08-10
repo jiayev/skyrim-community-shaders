@@ -59,38 +59,38 @@ float GetTerrainHeight(PS_INPUT input, float2 coords, float mipLevels[6], Displa
 	float2 w2 = pow(input.LandBlendWeights2.xy, 1 + 1 * blendFactor);
 	float blendPower = blendFactor * HEIGHT_POWER;
 	// important to zero initialize, otherwise invalid/old values will be used here and as weights in Lighting.hlsl
-	pixelOffset[0] = 0;  // can't init whole 'out' array by = {...}
-	pixelOffset[1] = 0;
-	pixelOffset[2] = 0;
-	pixelOffset[3] = 0;
-	pixelOffset[4] = 0;
-	pixelOffset[5] = 0;
+	pixelOffset[0] = w1.x;
+	pixelOffset[1] = w1.y;
+	pixelOffset[2] = w1.z;
+	pixelOffset[3] = w1.w;
+	pixelOffset[4] = w2.x;
+	pixelOffset[5] = w2.y;
 #	if defined(TRUE_PBR)
 	[branch] if ((PBRFlags & TruePBR_LandTile0HasDisplacement) != 0) if (w1.x > 0.0)
-		pixelOffset[0] = w1.x * (0.001 + pow(AdjustDisplacement(TexLandDisplacement0Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[0]).x, params[0]), blendPower));
+		pixelOffset[0] *= 0.001 + pow(AdjustDisplacement(TexLandDisplacement0Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[0]).x, params[0]), blendPower);
 	[branch] if ((PBRFlags & TruePBR_LandTile1HasDisplacement) != 0) if (w1.y > 0.0)
-		pixelOffset[1] = w1.y * (0.001 + pow(AdjustDisplacement(TexLandDisplacement1Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[1]).x, params[1]), blendPower));
+		pixelOffset[1] *= 0.001 + pow(AdjustDisplacement(TexLandDisplacement1Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[1]).x, params[1]), blendPower);
 	[branch] if ((PBRFlags & TruePBR_LandTile2HasDisplacement) != 0) if (w1.z > 0.0)
-		pixelOffset[2] = w1.z * (0.001 + pow(AdjustDisplacement(TexLandDisplacement2Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[2]).x, params[2]), blendPower));
+		pixelOffset[2] *= 0.001 + pow(AdjustDisplacement(TexLandDisplacement2Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[2]).x, params[2]), blendPower);
 	[branch] if ((PBRFlags & TruePBR_LandTile3HasDisplacement) != 0) if (w1.w > 0.0)
-		pixelOffset[3] = w1.w * (0.001 + pow(AdjustDisplacement(TexLandDisplacement3Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[3]).x, params[3]), blendPower));
+		pixelOffset[3] *= 0.001 + pow(AdjustDisplacement(TexLandDisplacement3Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[3]).x, params[3]), blendPower);
 	[branch] if ((PBRFlags & TruePBR_LandTile4HasDisplacement) != 0) if (w2.x > 0.0)
-		pixelOffset[4] = w2.x * (0.001 + pow(AdjustDisplacement(TexLandDisplacement4Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[4]).x, params[4]), blendPower));
+		pixelOffset[4] *= 0.001 + pow(AdjustDisplacement(TexLandDisplacement4Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[4]).x, params[4]), blendPower);
 	[branch] if ((PBRFlags & TruePBR_LandTile5HasDisplacement) != 0) if (w2.y > 0.0)
-		pixelOffset[5] = w2.y * (0.001 + pow(AdjustDisplacement(TexLandDisplacement5Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[5]).x, params[5]), blendPower));
+		pixelOffset[5] *= 0.001 + pow(AdjustDisplacement(TexLandDisplacement5Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[5]).x, params[5]), blendPower);
 #	else
 	if (w1.x > 0.0)
-		pixelOffset[0] = w1.x * (0.001 + pow(TexColorSampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[0]).w, blendPower));
+		pixelOffset[0] *= 0.001 + pow(TexColorSampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[0]).w, blendPower);
 	if (w1.y > 0.0)
-		pixelOffset[1] = w1.y * (0.001 + pow(TexLandColor2Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[1]).w, blendPower));
+		pixelOffset[1] *= 0.001 + pow(TexLandColor2Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[1]).w, blendPower);
 	if (w1.z > 0.0)
-		pixelOffset[2] = w1.z * (0.001 + pow(TexLandColor3Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[2]).w, blendPower));
+		pixelOffset[2] *= 0.001 + pow(TexLandColor3Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[2]).w, blendPower);
 	if (w1.w > 0.0)
-		pixelOffset[3] = w1.w * (0.001 + pow(TexLandColor4Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[3]).w, blendPower));
+		pixelOffset[3] *= 0.001 + pow(TexLandColor4Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[3]).w, blendPower);
 	if (w2.x > 0.0)
-		pixelOffset[4] = w2.x * (0.001 + pow(TexLandColor5Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[4]).w, blendPower));
+		pixelOffset[4] *= 0.001 + pow(TexLandColor5Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[4]).w, blendPower);
 	if (w2.y > 0.0)
-		pixelOffset[5] = w2.y * (0.001 + pow(TexLandColor6Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[5]).w, blendPower));
+		pixelOffset[5] *= 0.001 + pow(TexLandColor6Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[5]).w, blendPower);
 #	endif
 
 	float total = 0;

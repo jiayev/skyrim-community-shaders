@@ -121,9 +121,9 @@ PS_OUTPUT main(PS_INPUT input)
 		finalDepth = GetFinalDepth(depth, near, far);
 
 		float dofStrength = 0;
-#	if defined(DISTANT_BLUR)
+#	if defined(DISTANT)
 		dofStrength = (finalDepth - focusDistance) / dofBlurRange.y;
-#	elif defined(DOF)
+#	else
 		if ((focusDistance > finalDepth || mask == 0) && dofParams2.y != 0) {
 			dofStrength = (focusDistance - finalDepth) / dofBlurRange.y;
 		} else if (finalDepth > focusDistance && dofParams2.z != 0) {

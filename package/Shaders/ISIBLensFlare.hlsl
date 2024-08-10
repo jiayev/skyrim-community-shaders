@@ -32,7 +32,7 @@ cbuffer PerGeometry : register(b2)
 	float haloFetch : packoffset(c2.z);
 	float haloWidthPow : packoffset(c2.w);
 	float dynamicSource : packoffset(c3.x);
-	float globalIntensity : packoffset(c3.y);
+	float globalIntensity : packoffset(c4.x);
 };
 
 float4 GetSampleColor(float2 texCoord)

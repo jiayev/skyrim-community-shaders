@@ -244,9 +244,11 @@ void CalculateGI(
 				uint2 bitsRangeGI = uint2(round(angleRangeGI.x * 32u), round((angleRangeGI.y - angleRangeGI.x) * 32u));
 				uint maskedBitsGI = ((1 << bitsRangeGI.y) - 1) << bitsRangeGI.x;
 
-				uint checkGI = maskedBitsGI & ~bitmaskGI;
+				uint overlappedBits = maskedBitsGI & ~bitmaskGI;
+				bool checkGI = overlappedBits;
 #		ifdef GI_SPECULAR
-				checkGI = checkGI || (maskedBitsGISpecular & ~bitsRangeGISpecular);
+				uint overlappedBitsSpecular = maskedBitsGISpecular & ~bitsRangeGISpecular;
+				checkGI = checkGI || overlappedBitsSpecular;
 #		endif
 #	else
 				bool checkGI = shc > horizonCos;
@@ -268,14 +270,14 @@ void CalculateGI(
 
 						float nov = dot(viewspaceNormal, sampleHorizonVec);
 
-						float3 diffuseRadiance = sampleRadiance * countbits(checkGI) * 0.03125;  // 1/32
+						float3 diffuseRadiance = sampleRadiance * countbits(overlappedBits) * 0.03125;  // 1/32
 						diffuseRadiance *= nov;
 						diffuseRadiance = max(0, diffuseRadiance);
 
 						radiance += diffuseRadiance;
 
 #		ifdef GI_SPECULAR
-						float3 specularRadiance = sampleRadiance * countbits(maskedBitsGISpecular & ~bitmaskGISpecular) * 0.03125;  // 1/32
+						float3 specularRadiance = sampleRadiance * countbits(overlappedBitsSpecular) * 0.03125;  // 1/32
 						specularRadiance *= nov;
 						specularRadiance = max(0, specularRadiance);
 
@@ -450,7 +452,7 @@ void CalculateGI(
 			lerpFactor = 0;
 #	endif
 
-		currGIAO = float4(lerp(srcPrevGI[pxCoord].rgb, currGIAO.rgb, lerpFactor), currGIAO.a);
+		currGIAO = lerp(srcPrevGI[pxCoord], currGIAO, lerpFactor);
 #	ifdef GI_SPECULAR
 		currGIAOSpecular = lerp(srcPrevGISpecular[pxCoord], currGIAOSpecular, lerpFactor);
 #	endif
