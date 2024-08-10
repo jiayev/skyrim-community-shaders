@@ -18,36 +18,9 @@ cbuffer PerGeometry : register(b2)
 	float4 g_ScreenInfos : packoffset(c0);
 };
 
-float GetBlurredComponent(float3 color)
-{
-#	if defined(AXIS_H)
-	return color.x;
-#	elif defined(AXIS_V)
-	return color.y;
-#	endif
-}
-
-float2 GetNonBlurredComponents(float3 color)
-{
-#	if defined(AXIS_H)
-	return color.yz;
-#	elif defined(AXIS_V)
-	return color.xz;
-#	endif
-}
-
-float3 SetBlurredComponent(float3 color, float blurredComponent)
-{
-#	if defined(AXIS_H)
-	return float3(blurredComponent, color.yz);
-#	elif defined(AXIS_V)
-	return float3(color.x, blurredComponent, color.z);
-#	endif
-}
-
 float GetBlurFactor(float3 color)
 {
-	return dot(GetNonBlurredComponents(color), float2(0.996108949, 0.00389105058));
+	return dot(color.yz, float2(0.996108949, 0.00389105058));
 }
 
 PS_OUTPUT main(PS_INPUT input)
@@ -75,7 +48,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 centralColor = offsetColors[0];
 	float centralBlurFactor = GetBlurFactor(centralColor);
 	if (centralBlurFactor == 1.0) {
-		psout.Color = float4(SetBlurredComponent(centralColor, 0), 0);
+		psout.Color = float4(0, centralColor.yz, 0);
 		return psout;
 	}
 
@@ -87,11 +60,16 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 offsetColor = offsetColors[offsetIndex];
 		float blurFactor = GetBlurFactor(offsetColor);
 		float offsetWeight = blurParameters[offsetIndex] * max(0, 1 - 2000 * abs(blurFactor - centralBlurFactor));
-		weightedComponent += offsetWeight * GetBlurredComponent(offsetColor);
+		weightedComponent += offsetWeight * offsetColor.x;
 		weight += offsetWeight;
 	}
 
-	psout.Color = float4(SetBlurredComponent(offsetColors[0], weightedComponent / (1e-4 + weight)), 0);
+	float blurredComponent = weightedComponent / (1e-4 + weight);
+#	if defined(AXIS_H)
+	psout.Color = float4(blurredComponent, offsetColors[0].yz, 0);
+#	elif defined(AXIS_V)
+	psout.Color = blurredComponent;
+#	endif
 
 	return psout;
 }
