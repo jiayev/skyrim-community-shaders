@@ -49,11 +49,6 @@ float3 Clamp(float3 val)
 	return clamp(val, Params[0].xyz, Params[1].xyz);
 }
 
-float3 LogSpace(float3 val)
-{
-	return log2(max(0, val));
-}
-
 float3 Gamma(float3 val)
 {
 	return Gamma(val, Params[0].rgb, Params[1].rgb, Params[2].rgb);
@@ -104,11 +99,11 @@ float3 OklchColourMixer(float3 val)
 	float c = length(oklab.yz);
 	float h = atan2(oklab.z, oklab.y);
 
-	float lerpFactor = (h / (2 * PI) - redHue) * 8;
+	float lerpFactor = (h / (2 * PI) - redHue) * 7;
 	int leftHue = floor(lerpFactor);
 	lerpFactor = lerpFactor - leftHue;
-	leftHue += (leftHue < 0) * 8;
-	int rightHue = (leftHue + 1) % 8;
+	leftHue += (leftHue < 0) * 7;
+	int rightHue = (leftHue + 1) % 7;
 	float effect = saturate(c / 0.37);
 
 	// hue shift
