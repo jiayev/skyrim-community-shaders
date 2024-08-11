@@ -107,7 +107,7 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 	TvBv[0] *= worldRadius;
 	TvBv[1] *= worldRadius;
 #ifdef TEMPORAL_DENOISER
-	halfAngle *= 1.01 - sqrt(accumFrames / (float)MaxAccumFrames);
+	halfAngle *= 1.2 - sqrt(accumFrames / (float)MaxAccumFrames);
 #endif
 
 	float4 gi = srcGI[dtid];
