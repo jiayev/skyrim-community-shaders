@@ -24,7 +24,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	// ThinOccluderCompensation,
 	Thickness,
 	DepthFadeRange,
-	CheckBackface,
 	BackfaceStrength,
 	EnableGIBounce,
 	GIBounceFade,
@@ -279,17 +278,9 @@ void ScreenSpaceGI::DrawSettings()
 		if (showAdvanced) {
 			ImGui::Separator();
 
-			recompileFlag |= ImGui::Checkbox("Backface Checks", &settings.CheckBackface);
+			percentageSlider("Backface Lighting Mix", &settings.BackfaceStrength);
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Disable to get some frames, IF you don't care about light emitting from the back of objects.");
-			{
-				auto __ = DisableGuard(!settings.CheckBackface);
-				ImGui::Indent();
-				percentageSlider("Backface Lighting Mix", &settings.BackfaceStrength);
-				ImGui::Unindent();
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("How bright at the back of objects is compared to the front. A small value to make up for foliage translucency.");
-			}
+				ImGui::Text("How bright at the back of objects is compared to the front. A small value to make up for foliage translucency.");
 		}
 	}
 
@@ -588,8 +579,6 @@ void ScreenSpaceGI::CompileComputeShaders()
 			info.defines.push_back({ "GI_SPECULAR", "" });
 		if (settings.EnableGIBounce)
 			info.defines.push_back({ "GI_BOUNCE", "" });
-		if (settings.CheckBackface)
-			info.defines.push_back({ "BACKFACE", "" });
 	}
 
 	for (auto& info : shaderInfos) {
