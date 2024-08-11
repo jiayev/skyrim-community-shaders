@@ -295,6 +295,11 @@ struct TransformInfo
 					ImGui::SliderFloat("Offset", &params.Params0.w, -1.f, 1.f, "%.2f");
 					ImGui::SliderFloat("Saturation", &params.Params1.x, 0.f, 2.f, "%.2f"); },
 				{ { 2.f, 1.f, 1.f, 0.f }, { 1.f, 0.f, 0.f, 0.f } } },
+
+			{ "Melon"sv, "MelonTonemap"sv,
+				"Tonemapper designed by TripleMelon to fix the ACES issue of intense colour being shifted."sv,
+				[](CTP& params) { exposureSlider(&params.Params0.x); },
+				{ { 2.f, 0.f, 0.f, 0.f } } },
 		};
 
 		static std::once_flag flag;
