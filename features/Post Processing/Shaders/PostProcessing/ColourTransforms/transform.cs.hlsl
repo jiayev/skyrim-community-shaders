@@ -87,6 +87,23 @@ float3 SaturationHue(float3 val)
 	return val;
 }
 
+float3 OklchSaturation(float3 val)
+{
+	float3 oklab = RgbToOklab(val);
+
+	float c = length(oklab.yz);
+	float h = atan2(oklab.z, oklab.y);
+
+	c = c * Params0.r;
+	c = lerp(1, c, exp(-Params0.g));
+	h += Params0.b * PI;
+
+	sincos(h, oklab.z, oklab.y);
+	oklab.yz *= c;
+
+	return OklabToRgb(oklab);
+}
+
 /////////////////////////////////////////////////////////////////////////////////
 
 float3 MatMul(float3 val)
@@ -403,6 +420,67 @@ float3 MelonTonemap(float3 color)
 
 	// clamp to [0-1] range
 	return clamp(color, float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0));
+}
+
+/* 
+    EmbarkStudios/kajiya
+        url:    https://github.com/EmbarkStudios/kajiya	
+        license:
+			Copyright (c) 2019 Embark Studios
+
+			Permission is hereby granted, free of charge, to any
+			person obtaining a copy of this software and associated
+			documentation files (the "Software"), to deal in the
+			Software without restriction, including without
+			limitation the rights to use, copy, modify, merge,
+			publish, distribute, sublicense, and/or sell copies of
+			the Software, and to permit persons to whom the Software
+			is furnished to do so, subject to the following
+			conditions:
+
+			The above copyright notice and this permission notice
+			shall be included in all copies or substantial portions
+			of the Software.
+
+			THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+			ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+			TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+			PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+			SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+			CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+			OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+			IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+			DEALINGS IN THE SOFTWARE.
+*/
+
+float KajiyaCurve(float v)
+{
+	return 1.0 - exp(-v);
+}
+
+float3 KajiyaCurve(float3 v)
+{
+	return 1.0 - exp(-v);
+}
+
+float3 KajiyaTonemap(float3 col)
+{
+	col *= Params0.r;
+
+	float3 ycbcr = RgbToYCbCr(col);
+
+	float bt = KajiyaCurve(length(ycbcr.yz) * 2.4);
+	float desat = max((bt - 0.7) * 0.8, 0);
+	desat = desat * desat;
+
+	float3 desat_col = lerp(col, ycbcr.x, desat);
+
+	float tm_luma = KajiyaCurve(ycbcr.x);
+	float3 tm0 = col * max(tm_luma / max(RGBToLuminance(col), 1e-5), 0);
+	float final_mult = 0.97;
+	float3 tm1 = KajiyaCurve(desat_col);
+
+	return lerp(tm0, tm1, bt * bt) * final_mult;
 }
 
 [numthreads(8, 8, 1)] void main(uint2 tid

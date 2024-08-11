@@ -131,3 +131,59 @@ float3 ASC_CDL(float3 col, float3 slope, float3 power, float3 offset)
 {
 	return Gamma(col * slope + offset, power, 0, 1);
 }
+
+////////////////////////////////////////////////////////////////////////
+
+//
+// RGB / Full-range YCbCr conversions (ITU-R BT.601)
+//
+float3 RgbToYCbCr(float3 c)
+{
+	float Y = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+	float Cb = -0.169 * c.r - 0.331 * c.g + 0.500 * c.b;
+	float Cr = 0.500 * c.r - 0.419 * c.g - 0.081 * c.b;
+	return float3(Y, Cb, Cr);
+}
+
+float3 YCbCrToRgb(float3 c)
+{
+	float R = c.x + 0.000 * c.y + 1.403 * c.z;
+	float G = c.x - 0.344 * c.y - 0.714 * c.z;
+	float B = c.x - 1.773 * c.y + 0.000 * c.z;
+	return float3(R, G, B);
+}
+
+float3 RgbToOklab(float3 c)
+{
+	float l = 0.4121656120f * c.r + 0.5362752080f * c.g + 0.0514575653f * c.b;
+	float m = 0.2118591070f * c.r + 0.6807189584f * c.g + 0.1074065790f * c.b;
+	float s = 0.0883097947f * c.r + 0.2818474174f * c.g + 0.6302613616f * c.b;
+
+	float l_ = pow(l, 1. / 3.);
+	float m_ = pow(m, 1. / 3.);
+	float s_ = pow(s, 1. / 3.);
+
+	float3 labResult;
+	labResult.x = 0.2104542553f * l_ + 0.7936177850f * m_ - 0.0040720468f * s_;
+	labResult.y = 1.9779984951f * l_ - 2.4285922050f * m_ + 0.4505937099f * s_;
+	labResult.z = 0.0259040371f * l_ + 0.7827717662f * m_ - 0.8086757660f * s_;
+
+	return labResult;
+}
+
+float3 OklabToRgb(float3 c)
+{
+	float l_ = c.x + 0.3963377774f * c.y + 0.2158037573f * c.z;
+	float m_ = c.x - 0.1055613458f * c.y - 0.0638541728f * c.z;
+	float s_ = c.x - 0.0894841775f * c.y - 1.2914855480f * c.z;
+
+	float l = l_ * l_ * l_;
+	float m = m_ * m_ * m_;
+	float s = s_ * s_ * s_;
+
+	float3 rgbResult;
+	rgbResult.r = +4.0767245293f * l - 3.3072168827f * m + 0.2307590544f * s;
+	rgbResult.g = -1.2681437731f * l + 2.6093323231f * m - 0.3411344290f * s;
+	rgbResult.b = -0.0041119885f * l - 0.7034763098f * m + 1.7068625689f * s;
+	return rgbResult;
+}
