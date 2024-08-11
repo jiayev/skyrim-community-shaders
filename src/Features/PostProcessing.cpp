@@ -9,6 +9,123 @@
 constexpr auto def_settings = R"(
 [
 	{
+	"enabled": true,
+	"name": "Gamma",
+	"settings": {
+		"Params": [
+		[
+		1.2000000476837158,
+		1.2000000476837158,
+		1.2000000476837158,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		1.0,
+		1.0,
+		1.0,
+		1.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		]
+		],
+		"TransformType": "Gamma"
+	},
+	"type": "Colour Transforms"
+	},
+	{
+	"enabled": true,
+	"name": "Blue Filter",
+	"settings": {
+		"Params": [
+		[
+		0.0,
+		1.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		1.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		1.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		1.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		1.100000023841858,
+		-0.20000000298023224,
+		0.0
+		],
+		[
+		0.0,
+		1.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		1.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		1.0,
+		0.0,
+		0.0
+		]
+		],
+		"TransformType": "OKLCH Colour Mixer"
+	},
+	"type": "Colour Transforms"
+	},
+	{
+	"enabled": true,
 	"name": "Bloom",
 	"settings": {
 		"BlendFactor": 0.05000000074505806,
@@ -28,6 +145,7 @@ constexpr auto def_settings = R"(
 	"type": "COD Bloom"
 	},
 	{
+	"enabled": true,
 	"name": "Auto Exposure",
 	"settings": {
 		"AdaptArea": [
@@ -36,8 +154,8 @@ constexpr auto def_settings = R"(
 		],
 		"AdaptSpeed": 1.0,
 		"AdaptationRange": [
-		0.0,
-		2.0
+		-1.0,
+		1.0
 		],
 		"ExposureCompensation": 0.0,
 		"PurkinjeMaxEV": -5.0,
@@ -47,6 +165,7 @@ constexpr auto def_settings = R"(
 	"type": "Histogram Auto Exposure"
 	},
 	{
+	"enabled": true,
 	"name": "Vignette",
 	"settings": {
 		"FocalLength": 1.0,
@@ -55,7 +174,8 @@ constexpr auto def_settings = R"(
 	"type": "Vignette"
 	},
 	{
-	"name": "Colour Transforms",
+	"enabled": true,
+	"name": "Tonemapper",
 	"settings": {
 		"Params": [
 		[

@@ -160,7 +160,7 @@ struct TransformInfo
 					ImGui::SliderFloat("Vibrance", &params[0].y, 0.f, 3.f, "%.3f");
 					ImGui::SliderFloat("Hue Shift", &params[0].z, -1.f, 1.f, "%.3f");
 				},
-				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
+				{ f4{ 1.f, 1.f, 0.f, 0.f } } },
 
 			{ "OKLCH Colour Mixer"sv, "OklchColourMixer"sv,
 				"Adjust brightness, vibrance and hue shift of specific hues in the perceptually uniform OKLCH space. Expects LDR linear RGB inputs."sv,

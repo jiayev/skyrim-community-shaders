@@ -107,7 +107,7 @@ float3 OklchColourMixer(float3 val)
 	float effect = saturate(c / 0.37);
 
 	// hue shift
-	h = h + lerp(Params[leftHue].x, Params[rightHue].x, lerpFactor) * PI / 4 * effect;
+	h = h + lerp(Params[leftHue].x, Params[rightHue].x, lerpFactor) * PI / 4;
 	// vibrance
 	float c1 = (1 - pow(1 - c / 0.37, Params[leftHue].y)) * 0.37;
 	float c2 = (1 - pow(1 - c / 0.37, Params[rightHue].y)) * 0.37;
