@@ -13,14 +13,7 @@ struct ColourTransforms : public PostProcessFeature
 	int transformType = 1;
 
 	// buffers
-	struct TonemapCB
-	{
-		float4 Params0 = { 1.2f, 1.3f, 0.f, 1.f };
-		float4 Params1 = { 0.f, 0.f, 0.f, 0.f };
-		float4 Params2 = { 0.f, 0.f, 0.f, 0.f };
-		float4 Params3 = { 0.f, 0.f, 0.f, 0.f };
-	} settings;
-	static_assert(sizeof(TonemapCB) % 16 == 0);
+	std::array<float4, 8> settings;
 	std::unique_ptr<ConstantBuffer> tonemapCB = nullptr;
 
 	std::unique_ptr<Texture2D> texTonemap = nullptr;

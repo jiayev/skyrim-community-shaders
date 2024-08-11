@@ -7,10 +7,10 @@
 #include "Util.h"
 
 constexpr auto def_settings = R"(
-[	
+[
 	{
-		"name": "Bloom",
-		"settings": {
+	"name": "Bloom",
+	"settings": {
 		"BlendFactor": 0.05000000074505806,
 		"MipBlendFactor": [
 		1.0,
@@ -24,12 +24,12 @@ constexpr auto def_settings = R"(
 		],
 		"Threshold": -6.0,
 		"UpsampleRadius": 2.0
-		},
-		"type": "COD Bloom"
+	},
+	"type": "COD Bloom"
 	},
 	{
-		"name": "Auto Exposure",
-		"settings": {
+	"name": "Auto Exposure",
+	"settings": {
 		"AdaptArea": [
 		0.6000000238418579,
 		0.6000000238418579
@@ -43,49 +43,73 @@ constexpr auto def_settings = R"(
 		"PurkinjeMaxEV": -5.0,
 		"PurkinjeStartEV": -3.0,
 		"PurkinjeStrength": 0.5
-		},
-		"type": "Histogram Auto Exposure"
+	},
+	"type": "Histogram Auto Exposure"
 	},
 	{
-		"name": "Vignette",
-		"settings": {
+	"name": "Vignette",
+	"settings": {
 		"FocalLength": 1.0,
 		"Power": 3.0
-		},
-		"type": "Vignette"
+	},
+	"type": "Vignette"
 	},
 	{
-		"name": "Tonemapper",
-		"settings": {
-		"Params": {
-		"Params0": [
-		3.160165548324585,
+	"name": "Colour Transforms",
+	"settings": {
+		"Params": [
+		[
+		3.1166582107543945,
 		0.0,
 		0.0,
 		0.0
 		],
-		"Params1": [
-		0.0,
-		0.0,
-		0.0,
-		0.0
-		],
-		"Params2": [
+		[
 		0.0,
 		0.0,
 		0.0,
 		0.0
 		],
-		"Params3": [
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
 		0.0,
 		0.0,
 		0.0,
 		0.0
 		]
-		},
+		],
 		"TransformType": "Melon"
-		},
-		"type": "Colour Transforms"
+	},
+	"type": "Colour Transforms"
 	}
 ])";
 
@@ -282,10 +306,11 @@ void PostProcessing::LoadSettings(json& o_json)
 	for (auto& item : effects) {
 		auto currFeatCount = feats.size();
 		try {
-			auto itemType = item["type"].get<std::string>();
+			auto itemType = item.value<std::string>("type", "UNSPECIFIED");
 			if (featConstructors.contains(itemType)) {
 				PostProcessFeature* feat = featConstructors.at(itemType).fn();
-				feat->name = item["name"].get<std::string>();
+				feat->name = item.value<std::string>("name", feat->GetType());
+				feat->enabled = item.value<bool>("enabled", true);
 				feat->LoadSettings(item["settings"]);
 				if (loaded)
 					feat->SetupResources();  // to prevent double setup before loaded
@@ -314,6 +339,7 @@ void PostProcessing::SaveSettings(json& o_json)
 		arr.push_back({
 			{ "type", feat->GetType() },
 			{ "name", feat->name },
+			{ "enabled", feat->enabled },
 			{ "settings", temp_json },
 		});
 	}
