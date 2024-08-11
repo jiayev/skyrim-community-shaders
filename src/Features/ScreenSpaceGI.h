@@ -61,7 +61,6 @@ struct ScreenSpaceGI : Feature
 		float Thickness = 75.f;
 		float2 DepthFadeRange = { 2e4, 3e4 };
 		// gi
-		bool CheckBackface = true;
 		float BackfaceStrength = 0.f;
 		bool EnableGIBounce = true;
 		float GIBounceFade = 1.f;
@@ -72,7 +71,7 @@ struct ScreenSpaceGI : Feature
 		// denoise
 		bool EnableTemporalDenoiser = true;
 		bool EnableBlur = true;
-		float DepthDisocclusion = .02f;
+		float DepthDisocclusion = .03f;
 		float NormalDisocclusion = .1f;
 		uint MaxAccumFrames = 16;
 		float BlurRadius = 15.f;

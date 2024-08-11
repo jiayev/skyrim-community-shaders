@@ -247,7 +247,7 @@ void CalculateGI(
 				uint overlappedBits = maskedBitsGI & ~bitmaskGI;
 				bool checkGI = overlappedBits;
 #		ifdef GI_SPECULAR
-				uint overlappedBitsSpecular = maskedBitsGISpecular & ~bitsRangeGISpecular;
+				uint overlappedBitsSpecular = maskedBitsGISpecular & ~bitmaskGISpecular;
 				checkGI = checkGI || overlappedBitsSpecular;
 #		endif
 #	else
@@ -259,26 +259,25 @@ void CalculateGI(
 
 					// IL
 					float frontBackMult = 1.f;
-#	ifdef BACKFACE
-					if (dot(DecodeNormal(srcNormalRoughness.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).xy), sampleHorizonVec) > 0)  // backface
+					float3 normalSample = DecodeNormal(srcNormalRoughness.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).xy);
+					if (dot(normalSample, sampleHorizonVec) > 0)  // backface
 						frontBackMult = BackfaceStrength;
-#	endif
 
 #	ifdef BITMASK
 					if (frontBackMult > 0.f) {
 						float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevel).rgb * frontBackMult * giBoost;
 
-						float nov = dot(viewspaceNormal, sampleHorizonVec);
+						float sourceMult = saturate(-dot(normalSample, sampleHorizonVec));
 
 						float3 diffuseRadiance = sampleRadiance * countbits(overlappedBits) * 0.03125;  // 1/32
-						diffuseRadiance *= nov;
+						diffuseRadiance *= sourceMult * dot(viewspaceNormal, sampleHorizonVec);
 						diffuseRadiance = max(0, diffuseRadiance);
 
 						radiance += diffuseRadiance;
 
 #		ifdef GI_SPECULAR
 						float3 specularRadiance = sampleRadiance * countbits(overlappedBitsSpecular) * 0.03125;  // 1/32
-						specularRadiance *= nov;
+						specularRadiance *= sourceMult;
 						specularRadiance = max(0, specularRadiance);
 
 						radianceSpecular += specularRadiance;
