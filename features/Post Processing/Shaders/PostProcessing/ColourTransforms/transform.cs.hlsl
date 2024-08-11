@@ -10,18 +10,7 @@ Texture2D<float4> TexColor : register(t0);
 
 cbuffer TonemapCB : register(b1)
 {
-	// Most: exposure, white point / cutoff
-	// AgX: slope, power, offset, saturation
-	// Lottes: exposure, contrast, shoulder, hdrMax
-	// Day: exposure, black point, white point, crossover point
-	// Uchimura: exposure, max brightness, contrast, linear start
-	float4 Params0;
-	// Lottes: midIn, midOut
-	// Day: shoulder, toe
-	// Uchimura: linear length, black tightness shape, black tightness offset
-	float4 Params1;
-	float4 Params2;
-	float4 Params3;
+	float4 Params[8];
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -57,7 +46,7 @@ float3 LiftGammaGain(float3 rgb, float4 lift, float4 gamma, float4 gain)
 
 float3 Clamp(float3 val)
 {
-	return clamp(val, Params0.xyz, Params1.xyz);
+	return clamp(val, Params[0].xyz, Params[1].xyz);
 }
 
 float3 LogSpace(float3 val)
@@ -67,23 +56,23 @@ float3 LogSpace(float3 val)
 
 float3 Gamma(float3 val)
 {
-	return Gamma(val, Params0.rgb, Params1.rgb, Params2.rgb);
+	return Gamma(val, Params[0].rgb, Params[1].rgb, Params[2].rgb);
 }
 
 float3 ASC_CDL(float3 val)
 {
-	return ASC_CDL(val, Params0.rgb, Params1.rgb, Params2.rgb);
+	return ASC_CDL(val, Params[0].rgb, Params[1].rgb, Params[2].rgb);
 }
 
 float3 LiftGammaGain(float3 val)
 {
-	return LiftGammaGain(val, Params0.gbar, Params1.gbar, Params2.gbar);
+	return LiftGammaGain(val, Params[0].gbar, Params[1].gbar, Params[2].gbar);
 }
 
 float3 SaturationHue(float3 val)
 {
-	val = Saturation(val, Params0.r);
-	val = HueShift(val, Params0.g);
+	val = Saturation(val, Params[0].r);
+	val = HueShift(val, Params[0].g);
 	return val;
 }
 
@@ -94,29 +83,63 @@ float3 OklchSaturation(float3 val)
 	float c = length(oklab.yz);
 	float h = atan2(oklab.z, oklab.y);
 
-	c = c * Params0.r;
-	c = lerp(1, c, exp(-Params0.g));
-	h += Params0.b * PI;
+	c = min(0.37, c * Params[0].r);
+	c = (1 - pow(1 - c / 0.37, Params[0].g)) * 0.37;
+	h += Params[0].b * PI;
 
 	sincos(h, oklab.z, oklab.y);
 	oklab.yz *= c;
 
-	return OklabToRgb(oklab);
+	return max(0, OklabToRgb(oklab));
+}
+
+// mimicking lightroom colour mixer
+float3 OklchColourMixer(float3 val)
+{
+	static const float redHue = 0.08120523664;  //0xff0000
+
+	float3 oklab = RgbToOklab(val);
+
+	float l = oklab.x;
+	float c = length(oklab.yz);
+	float h = atan2(oklab.z, oklab.y);
+
+	float lerpFactor = (h / (2 * PI) - redHue) * 8;
+	int leftHue = floor(lerpFactor);
+	lerpFactor = lerpFactor - leftHue;
+	leftHue += (leftHue < 0) * 8;
+	int rightHue = (leftHue + 1) % 8;
+	float effect = saturate(c / 0.37);
+
+	// hue shift
+	h = h + lerp(Params[leftHue].x, Params[rightHue].x, lerpFactor) * PI / 4 * effect;
+	// vibrance
+	float c1 = (1 - pow(1 - c / 0.37, Params[leftHue].y)) * 0.37;
+	float c2 = (1 - pow(1 - c / 0.37, Params[rightHue].y)) * 0.37;
+	c = lerp(c1, c2, lerpFactor);
+	// brightness
+	l = l + lerp(Params[leftHue].z, Params[rightHue].z, lerpFactor) * effect;
+
+	oklab.x = l;
+	sincos(h, oklab.z, oklab.y);
+	oklab.yz *= c;
+
+	return max(0, OklabToRgb(oklab));
 }
 
 /////////////////////////////////////////////////////////////////////////////////
 
 float3 MatMul(float3 val)
 {
-	return mul(float3x3(Params0.rgb, Params1.rgb, Params2.rgb), val);
+	return mul(float3x3(Params[0].rgb, Params[1].rgb, Params[2].rgb), val);
 }
 
 /////////////////////////////////////////////////////////////////////////////////
 
 float3 ExposureContrast(float3 val)
 {
-	val *= Params0.xyz;
-	val = LinearContrast(val, Params1.xyz, Params2.xyz);
+	val *= Params[0].xyz;
+	val = LinearContrast(val, Params[1].xyz, Params[2].xyz);
 	return val;
 }
 
@@ -151,7 +174,7 @@ float3 ExposureContrast(float3 val)
 
 float3 Reinhard(float3 val)
 {
-	val *= Params0.x;
+	val *= Params[0].x;
 	float luma = RGBToLuminance(val);
 	float lumaOut = luma / (1 + luma);
 	val = val / (luma + 1e-10) * lumaOut;
@@ -161,9 +184,9 @@ float3 Reinhard(float3 val)
 
 float3 ReinhardExt(float3 val)
 {
-	val *= Params0.x;
+	val *= Params[0].x;
 	float luma = RGBToLuminance(val);
-	float lumaOut = luma * (1 + luma / (Params0.y * Params0.y)) / (1 + luma);
+	float lumaOut = luma * (1 + luma / (Params[0].y * Params[0].y)) / (1 + luma);
 	val = val / (luma + 1e-10) * lumaOut;
 	val = saturate(val);
 	return val;
@@ -171,7 +194,7 @@ float3 ReinhardExt(float3 val)
 
 float3 HejlBurgessDawsonFilmic(float3 val)
 {
-	val *= Params0.x;
+	val *= Params[0].x;
 	val = max(0, val - 0.004);
 	val = (val * (6.2 * val + .5)) / (val * (6.2 * val + 1.7) + 0.06);
 	val = pow(saturate(val), 2.2);
@@ -180,9 +203,9 @@ float3 HejlBurgessDawsonFilmic(float3 val)
 
 float3 AldridgeFilmic(float3 val)
 {
-	val *= Params0.x;
-	float tmp = 2.0 * Params0.y;
-	val = val + (tmp - val) * clamp(tmp - val, 0.0, 1.0) * (0.25 / Params0.y) - Params0.y;
+	val *= Params[0].x;
+	float tmp = 2.0 * Params[0].y;
+	val = val + (tmp - val) * clamp(tmp - val, 0.0, 1.0) * (0.25 / Params[0].y) - Params[0].y;
 	val = (val * (6.2 * val + 0.5)) / (val * (6.2 * val + 1.7) + 0.06);
 	val = pow(saturate(val), 2.2);
 	return val;
@@ -199,7 +222,7 @@ float3 AcesHill(float3 val)
 		-0.129520935348888, 1.138399326040076, -0.008779241755018,
 		-0.024127059936902, -0.124620612286390, 1.148822109913262);
 
-	val *= Params0.x;
+	val *= Params[0].x;
 
 	val = mul(g_sRGBToACEScg, val);
 	float3 a = val * (val + 0.0245786f) - 0.000090537f;
@@ -214,7 +237,7 @@ float3 AcesHill(float3 val)
 
 float3 AcesNarkowicz(float3 val)
 {
-	val *= Params0.x;
+	val *= Params[0].x;
 
 	static const float A = 2.51;
 	static const float B = 0.03;
@@ -229,7 +252,7 @@ float3 AcesNarkowicz(float3 val)
 
 float3 AcesGuy(float3 val)
 {
-	val *= Params0.x;
+	val *= Params[0].x;
 	val = val / (val + 0.155f) * 1.019;
 
 	val = pow(saturate(val), 2.2);
@@ -238,13 +261,13 @@ float3 AcesGuy(float3 val)
 
 float3 LottesFilmic(float3 val)
 {
-	val *= Params0.x;
-	float a = Params0.y,
-		  d = Params0.z,
-		  b = (-pow(Params1.x, a) + pow(Params0.w, a) * Params1.y) /
-	          ((pow(Params0.w, a * d) - pow(Params1.x, a * d)) * Params1.y),
-		  c = (pow(Params0.w, a * d) * pow(Params1.x, a) - pow(Params0.w, a) * pow(Params1.x, a * d) * Params1.y) /
-	          ((pow(Params0.w, a * d) - pow(Params1.x, a * d)) * Params1.y);
+	val *= Params[0].x;
+	float a = Params[0].y,
+		  d = Params[0].z,
+		  b = (-pow(Params[1].x, a) + pow(Params[0].w, a) * Params[1].y) /
+	          ((pow(Params[0].w, a * d) - pow(Params[1].x, a * d)) * Params[1].y),
+		  c = (pow(Params[0].w, a * d) * pow(Params[1].x, a) - pow(Params[0].w, a) * pow(Params[1].x, a * d) * Params[1].y) /
+	          ((pow(Params[0].w, a * d) - pow(Params[1].x, a * d)) * Params[1].y);
 
 	val = pow(val, a) / (pow(val, a * d) * b + c);
 	val = saturate(val);
@@ -253,11 +276,11 @@ float3 LottesFilmic(float3 val)
 
 float DayCurve(float x, float k)
 {
-	const float b = Params0.y;
-	const float w = Params0.z;
-	const float c = Params0.w;
-	const float s = Params1.x;
-	const float t = Params1.y;
+	const float b = Params[0].y;
+	const float w = Params[0].z;
+	const float c = Params[0].w;
+	const float s = Params[1].x;
+	const float t = Params[1].y;
 
 	if (x < c) {
 		return k * (1.0 - t) * (x - b) / (c - (1.0 - t) * b - t * x);
@@ -268,13 +291,13 @@ float DayCurve(float x, float k)
 
 float3 DayFilmic(float3 val)
 {
-	const float b = Params0.y;
-	const float w = Params0.z;
-	const float c = Params0.w;
-	const float s = Params1.x;
-	const float t = Params1.y;
+	const float b = Params[0].y;
+	const float w = Params[0].z;
+	const float c = Params[0].w;
+	const float s = Params[1].x;
+	const float t = Params[1].y;
 
-	val *= Params0.x;
+	val *= Params[0].x;
 	float k = (1.0 - t) * (c - b) / ((1.0 - s) * (w - c) + (1.0 - t) * (c - b));
 	val = float3(DayCurve(val.r, k), DayCurve(val.g, k), DayCurve(val.b, k));
 
@@ -284,14 +307,14 @@ float3 DayFilmic(float3 val)
 
 float3 UchimuraFilmic(float3 val)
 {
-	const float P = Params0.y;
-	const float a = Params0.z;
-	const float m = Params0.w;
-	const float l = Params1.x;
-	const float c = Params1.y;
-	const float b = Params1.z;
+	const float P = Params[0].y;
+	const float a = Params[0].z;
+	const float m = Params[0].w;
+	const float l = Params[1].x;
+	const float c = Params[1].y;
+	const float b = Params[1].z;
 
-	val *= Params0.x;
+	val *= Params[0].x;
 
 	float l0 = ((P - m) * l) / a,
 		  S0 = m + l0,
@@ -382,11 +405,11 @@ float3 AgxEotf(float3 val)
 
 float3 AgxMinimal(float3 val)
 {
-	val *= Params0.x;
+	val *= Params[0].x;
 
 	val = Agx(val);
-	val = ASC_CDL(val, Params0.y, Params0.z, Params0.w);
-	val = Saturation(val, Params1.x);
+	val = ASC_CDL(val, Params[0].y, Params[0].z, Params[0].w);
+	val = Saturation(val, Params[1].x);
 	val = AgxEotf(val);
 
 	return val;
@@ -402,7 +425,7 @@ float3 MelonHueShift(float3 In)
 
 float3 MelonTonemap(float3 color)
 {
-	color *= Params0.r;
+	color *= Params[0].r;
 
 	// remaps the colors to [0-1] range
 	// tested to be as close ti ACES contrast levels as possible
@@ -465,7 +488,7 @@ float3 KajiyaCurve(float3 v)
 
 float3 KajiyaTonemap(float3 col)
 {
-	col *= Params0.r;
+	col *= Params[0].r;
 
 	float3 ycbcr = RgbToYCbCr(col);
 
