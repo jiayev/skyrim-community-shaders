@@ -375,6 +375,36 @@ float3 AgxMinimal(float3 val)
 	return val;
 }
 
+// src: https://github.com/ltmx/Melon-Tonemapper
+// GPL-3.0 license
+float3 MelonHueShift(float3 In)
+{
+	float A = max(In.x, In.y);
+	return float3(A, max(A, In.z), In.z);
+}
+
+float3 MelonTonemap(float3 color)
+{
+	color *= Params0.r;
+
+	// remaps the colors to [0-1] range
+	// tested to be as close ti ACES contrast levels as possible
+	color = pow(color, float3(1.56, 1.56, 1.56));
+	color = color / (color + 0.84);
+
+	// governs the transition to white for high color intensities
+	float factor = max(color.r, max(color.g, color.b)) * 0.15;  // multiply by 0.15 to get a similar look to ACES
+	factor = factor / (factor + 1);                             // remaps the factor to [0-1] range
+	factor *= factor;                                           // smooths the transition to white
+
+	// shift the hue for high intensities (for a more pleasing look).
+	color = lerp(color, MelonHueShift(color), factor);   // can be removed for more neutral colors
+	color = lerp(color, float3(1.0, 1.0, 1.0), factor);  // shift to white for high intensities
+
+	// clamp to [0-1] range
+	return clamp(color, float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0));
+}
+
 [numthreads(8, 8, 1)] void main(uint2 tid
 								: SV_DispatchThreadID) {
 	float3 color = TexColor[tid].rgb;

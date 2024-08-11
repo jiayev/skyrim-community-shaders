@@ -7,152 +7,86 @@
 #include "Util.h"
 
 constexpr auto def_settings = R"(
-[
+"effects": [
 	{
-		"name": "Bloom",
-		"settings": {
-		"BlendFactor": 0.10000000149011612,
-		"MipBlendFactor": [
-		1.0,
-		1.0,
-		1.0,
-		1.0,
-		1.0,
-		1.0,
-		0.0,
-		0.0
-		],
-		"Threshold": -6.0,
-		"UpsampleRadius": 2.0
-		},
-		"type": "COD Bloom"
-	},
-	{
-		"name": "Gamma to Linear",
-		"settings": {
-		"Params": {
-		"Params0": [
-		1.7000000476837158,
-		1.7000000476837158,
-		1.7000000476837158,
-		0.0
-		],
-		"Params1": [
-		0.0,
-		0.0,
-		0.0,
-		0.0
-		],
-		"Params2": [
-		1.0,
-		1.0,
-		1.0,
-		1.0
-		],
-		"Params3": [
-		0.0,
-		0.0,
-		0.0,
-		0.0
-		]
-		},
-		"TransformType": "Gamma"
-		},
-		"type": "Colour Transforms"
-	},
-	{
-		"name": "Brighten",
-		"settings": {
-		"Params": {
-		"Params0": [
-		16.0,
-		16.0,
-		16.0,
-		0.0
-		],
-		"Params1": [
-		1.0,
-		1.0,
-		1.0,
-		0.0
-		],
-		"Params2": [
-		0.5,
-		0.5,
-		0.5,
-		0.5
-		],
-		"Params3": [
-		0.0,
-		0.0,
-		0.0,
-		0.0
-		]
-		},
-		"TransformType": "Exposure/Constrast"
-		},
-		"type": "Colour Transforms"
-	},
-	{
-		"name": "Auto Exposure",
-		"settings": {
-		"AdaptArea": [
-		0.800000011920929,
-		0.800000011920929
-		],
-		"AdaptSpeed": 1.5,
-		"AdaptationRange": [
-		-2.0,
-		3.0
-		],
-		"ExposureCompensation": 0.0,
-		"PurkinjeMaxEV": -6.0,
-		"PurkinjeStartEV": -4.0,
-		"PurkinjeStrength": 0.5
-		},
-		"type": "Histogram Auto Exposure"
-	},
-	{
-		"name": "Vignette",
-		"settings": {
-		"FocalLength": 1.0,
-		"Power": 3.0
-		},
-		"type": "Vignette"
-	},
-	{
-		"name": "Tonemapping",
-		"settings": {
-		"Params": {
-		"Params0": [
-		1.0,
-		1.0,
-		1.0,
-		0.0
-		],
-		"Params1": [
-		1.0,
-		0.0,
-		0.0,
-		0.0
-		],
-		"Params2": [
-		0.0,
-		0.0,
-		0.0,
-		0.0
-		],
-		"Params3": [
-		0.0,
-		0.0,
-		0.0,
-		0.0
-		]
-		},
-		"TransformType": "AgX Minimal"
-		},
-		"type": "Colour Transforms"
-	}
+    "name": "Bloom",
+    "settings": {
+     "BlendFactor": 0.05000000074505806,
+     "MipBlendFactor": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+     ],
+     "Threshold": -6.0,
+     "UpsampleRadius": 2.0
+    },
+    "type": "COD Bloom"
+   },
+   {
+    "name": "Auto Exposure",
+    "settings": {
+     "AdaptArea": [
+      0.6000000238418579,
+      0.6000000238418579
+     ],
+     "AdaptSpeed": 1.0,
+     "AdaptationRange": [
+      0.0,
+      2.0
+     ],
+     "ExposureCompensation": 0.0,
+     "PurkinjeMaxEV": -5.0,
+     "PurkinjeStartEV": -3.0,
+     "PurkinjeStrength": 0.5
+    },
+    "type": "Histogram Auto Exposure"
+   },
+   {
+    "name": "Vignette",
+    "settings": {
+     "FocalLength": 1.0,
+     "Power": 3.0
+    },
+    "type": "Vignette"
+   },
+   {
+    "name": "Tonemapper",
+    "settings": {
+     "Params": {
+      "Params0": [
+       3.160165548324585,
+       0.0,
+       0.0,
+       0.0
+      ],
+      "Params1": [
+       0.0,
+       0.0,
+       0.0,
+       0.0
+      ],
+      "Params2": [
+       0.0,
+       0.0,
+       0.0,
+       0.0
+      ],
+      "Params3": [
+       0.0,
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "TransformType": "Melon"
+    },
+    "type": "Colour Transforms"
+   }
 ])";
 
 void PostProcessing::DrawSettings()
