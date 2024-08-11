@@ -5,6 +5,8 @@
 
 #include "ColourSpace.h"
 
+#include "IconsFontAwesome5.h"
+
 template <size_t N, typename T>
 constexpr auto make_array(T value) -> std::array<T, N>
 {
@@ -102,16 +104,6 @@ struct TransformInfo
 				},
 				{ f4{ 0.f, 0.f, 0.f, 0.f }, f4{ 1.f, 1.f, 1.f, 0.f } } },
 
-			{ "Linear -> Log"sv, "LogSpace"sv,
-				"Convert linear values to log space."sv,
-				[](CTP&) {},
-				{} },
-
-			{ "Log -> Linear"sv, "exp2"sv,
-				"Convert log values to linear space."sv,
-				[](CTP&) {},
-				{} },
-
 			{ "Gamma"sv, "Gamma"sv,
 				"Apply gamma curve. Negative values will be mirrored."sv,
 				[](CTP& params) {
@@ -173,8 +165,29 @@ struct TransformInfo
 			{ "OKLCH Colour Mixer"sv, "OklchColourMixer"sv,
 				"Adjust brightness, vibrance and hue shift of specific hues in the perceptually uniform OKLCH space. Expects LDR linear RGB inputs."sv,
 				[](CTP& params) {
+					constexpr std::array<ImColor, 7> hues = { {
+						{ 255, 0, 0 },
+						{ 182, 124, 1 },
+						{ 87, 159, 0 },
+						{ 0, 161, 145 },
+						{ 0, 149, 217 },
+						{ 133, 100, 255 },
+						{ 255, 35, 189 },
+					} };
 					static int hueId = 0;
-					ImGui::SliderInt("Hue", &hueId, 0, 7, "%d", ImGuiSliderFlags_AlwaysClamp);
+
+					if (ImGui::BeginTable("##HueTable", 7)) {
+						for (int i = 0; i < 7; i++) {
+							ImGui::TableNextColumn();
+
+							ImGui::PushID(i);
+							ImGui::PushStyleColor(ImGuiCol_Text, hues[i].Value);
+							ImGui::RadioButton(ICON_FA_SQUARE, &hueId, i);
+							ImGui::PopStyleColor();
+							ImGui::PopID();
+						}
+						ImGui::EndTable();
+					}
 					ImGui::SliderFloat("Hue Shift", &params[hueId].x, -1.f, 1.f, "%.3f");
 					ImGui::SliderFloat("Vibrance", &params[hueId].y, 0.f, 3.f, "%.3f");
 					ImGui::SliderFloat("Brightness", &params[hueId].z, -1.f, 1.f, "%.3f");
