@@ -158,6 +158,15 @@ struct TransformInfo
 				},
 				{ { 1.f, 0.f, 0.f, 0.f } } },
 
+			{ "OKLCH Saturation"sv, "OklchSaturation"sv,
+				"Adjust saturation and hue shift in OKLCH space. Expects linear RGB inputs."sv,
+				[](CTP& params) {
+					ImGui::DragFloat("Saturation", &params.Params0.x, 5e-3f, 0.f, 3.f, "%.3f");
+					ImGui::DragFloat("Vibrance", &params.Params0.y, 1e-3f, 0.f, .3f, "%.3f");
+					ImGui::DragFloat("Hue Shift", &params.Params0.z, 1e-3f, -1.f, 1.f, "%.3f");
+				},
+				{ { 1.f, 0.f, 0.f, 0.f } } },
+
 			{ "_"sv, "Colour Space Conversions"sv,
 				"Converting to other colour spaces to exploit their characteristic."sv,
 				[](CTP&) {},
@@ -193,7 +202,7 @@ struct TransformInfo
 				},
 				{ { 1.f, 0.f, 0.f, 0.f }, { 0.f, 1.f, 0.f, 0.f }, { 0.f, 0.f, 1.f, -1.f } } },
 
-			{ "_"sv, "Tonemapping Operators"sv,
+			{ "_"sv, "Tonemapping Operators (Per Channel Curve)"sv,
 				"Transforms HDR values into a displayable image while retaining contrast and colours. "
 				"The outputs of below operators are in linear space, as the game will apply gamma afterwards."sv,
 				[](CTP&) {},
@@ -285,6 +294,12 @@ struct TransformInfo
 				[](CTP& params) { exposureSlider(&params.Params0.x); },
 				{ { 2.f, 0.f, 0.f, 0.f } } },
 
+			{ "_"sv, "Tonemapping Operators (Complex)"sv,
+				"Transforms HDR values into a displayable image while retaining contrast and colours. "
+				"The outputs of below operators are in linear space, as the game will apply gamma afterwards."sv,
+				[](CTP&) {},
+				{} },
+
 			{ "AgX Minimal"sv, "AgxMinimal"sv,
 				"Minimal version of Troy Sobotka's AgX using a 6th order polynomial approximation. "
 				"Originally created by bwrensch, and improved by Troy Sobotka."sv,
@@ -298,6 +313,11 @@ struct TransformInfo
 
 			{ "Melon"sv, "MelonTonemap"sv,
 				"Tonemapper designed by TripleMelon to fix the ACES issue of intense colour being shifted."sv,
+				[](CTP& params) { exposureSlider(&params.Params0.x); },
+				{ { 2.f, 0.f, 0.f, 0.f } } },
+
+			{ "Kajiya"sv, "KajiyaTonemap"sv,
+				"Tonemapper designed by Tomasz Stachowiak/Embark for their real time ray tracing engine Kajiya."sv,
 				[](CTP& params) { exposureSlider(&params.Params0.x); },
 				{ { 2.f, 0.f, 0.f, 0.f } } },
 		};
