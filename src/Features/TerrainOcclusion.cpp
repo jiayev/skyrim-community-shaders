@@ -432,6 +432,9 @@ void TerrainOcclusion::UpdateShadow()
 	if (!sunLight)
 		return;
 
+	ZoneScoped;
+	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Terrain Occlusion - Update Shadows");
+
 	/* ---- UPDATE CB ---- */
 	uint width = texNormalisedHeight->desc.Width;
 	uint height = texNormalisedHeight->desc.Height;

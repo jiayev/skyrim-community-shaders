@@ -381,6 +381,8 @@ void State::SetupResources()
 	context = reinterpret_cast<ID3D11DeviceContext*>(renderer->GetRuntimeData().context);
 	device = reinterpret_cast<ID3D11Device*>(renderer->GetRuntimeData().forwarder);
 	context->QueryInterface(__uuidof(pPerf), reinterpret_cast<void**>(&pPerf));
+
+	tracyCtx = TracyD3D11Context(device, context);
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred)

@@ -109,6 +109,13 @@
 				"ENABLE_SKYRIM_VR": "OFF"
 			},
 			"inherits": "skyrim"
+		},
+		{
+			"name": "ALL-TRACY",
+			"cacheVariables": {
+				"TRACY_SUPPORT": "ON"
+			},
+			"inherits": "ALL"
 		}
 	]
 }

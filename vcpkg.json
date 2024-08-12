@@ -24,6 +24,7 @@
     "magic-enum",
     "nlohmann-json",
     "pystring",
+    "tracy",
     "unordered-dense",
     "xbyak"
   ],
@@ -35,6 +36,10 @@
     {
       "name": "imgui",
       "version": "1.90"
+    },
+    {
+      "name": "tracy",
+      "version": "0.11.0"
     }
   ],
   "builtin-baseline": "1dc5ee30eb1032221d29f281f4a94b73f06b4284"
