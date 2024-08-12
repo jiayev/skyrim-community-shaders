@@ -108,6 +108,7 @@ void CalculateGI(
 
 	const float3 pixCenterPos = ScreenToViewPosition(normalizedScreenPos, viewspaceZ, eyeIndex);
 	const float3 viewVec = normalize(-pixCenterPos);
+	const float NoV = abs(dot(viewVec, viewspaceNormal));
 
 	float visibility = 0;
 	float visibilitySpecular = 0;
@@ -116,7 +117,8 @@ void CalculateGI(
 	float3 bentNormal = viewspaceNormal;
 
 #ifdef GI_SPECULAR
-	const float roughness = 1 - FULLRES_LOAD(srcNormalRoughness, dtid, uv * frameScale, samplerLinearClamp).z;
+	const float roughness2 = saturate(1 - FULLRES_LOAD(srcNormalRoughness, dtid, uv * frameScale, samplerLinearClamp).z);
+	const float roughness = sqrt(roughness2);
 #endif
 
 	for (uint slice = 0; slice < NumSlices; slice++) {
@@ -224,7 +226,7 @@ void CalculateGI(
 
 #		ifdef GI_SPECULAR
 				// thank u Olivier!
-				float coneHalfAngles = specularLobeHalfAngle(roughness);
+				float coneHalfAngles = max(5e-2, specularLobeHalfAngle(roughness));  // not too small
 				float2 angleRangeSpecular = clamp((angleRangeGI + nDom) * 0.5 / coneHalfAngles, -1, 1) * 0.5 + 0.5;
 
 				// Experimental method using importance sampling
@@ -267,17 +269,18 @@ void CalculateGI(
 					if (frontBackMult > 0.f) {
 						float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevel).rgb * frontBackMult * giBoost;
 
-						float sourceMult = saturate(-dot(normalSample, sampleHorizonVec));
+						// float sourceMult = saturate(-dot(normalSample, sampleHorizonVec));
+						float NoL = clamp(dot(viewspaceNormal, sampleHorizonVec), 1e-5, 1);
 
 						float3 diffuseRadiance = sampleRadiance * countbits(overlappedBits) * 0.03125;  // 1/32
-						diffuseRadiance *= sourceMult * dot(viewspaceNormal, sampleHorizonVec);
+						diffuseRadiance *= NoL;
 						diffuseRadiance = max(0, diffuseRadiance);
 
 						radiance += diffuseRadiance;
 
 #		ifdef GI_SPECULAR
 						float3 specularRadiance = sampleRadiance * countbits(overlappedBitsSpecular) * 0.03125;  // 1/32
-						specularRadiance *= sourceMult;
+						specularRadiance *= NoL;
 						specularRadiance = max(0, specularRadiance);
 
 						radianceSpecular += specularRadiance;
