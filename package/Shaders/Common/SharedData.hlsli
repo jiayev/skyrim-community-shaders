@@ -17,7 +17,7 @@ cbuffer SharedData : register(b5)
 	float Timer;
 	uint FrameCount;
 	bool Interior;  // If the area lacks a directional shadow light e.g. the sun or moon
-	uint pad0b4[1];
+	uint pad0b5[1];
 };
 
 struct GrassLightingSettings
@@ -28,7 +28,7 @@ struct GrassLightingSettings
 	bool OverrideComplexGrassSettings;
 
 	float BasicGrassBrightness;
-	float3 pad;
+	float3 pad0;
 };
 
 struct CPMSettings
@@ -129,7 +129,7 @@ struct SkylightingSettings
 	float4 MixParams;  // x: min diffuse visibility, y: diffuse mult, z: min specular visibility, w: specular mult
 
 	uint DirectionalDiffuse;
-	float3 _pad1;
+	float3 pad0;
 };
 
 struct PBRSettings
@@ -137,8 +137,9 @@ struct PBRSettings
 	float DirectionalLightColorMultiplier;
 	float PointLightColorMultiplier;
 	float AmbientLightColorMultiplier;
-	bool UseMultipleScattering;
-	bool UseMultiBounceAO;
+	uint UseMultipleScattering;
+	uint UseMultiBounceAO;
+	uint3 pad0;
 };
 
 cbuffer FeatureData : register(b6)
