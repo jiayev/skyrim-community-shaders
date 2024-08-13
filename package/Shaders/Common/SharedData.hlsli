@@ -16,7 +16,7 @@ cbuffer SharedData : register(b5)
 	float4 BufferDim;
 	float Timer;
 	uint FrameCount;
-	bool Interior;
+	bool Interior;  // If the area lacks a directional shadow light e.g. the sun or moon
 	uint pad0b4[1];
 };
 
