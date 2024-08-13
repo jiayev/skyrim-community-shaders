@@ -130,7 +130,8 @@ public:
 		float4 BufferDim;
 		float Timer;
 		uint FrameCount;
-		uint pad0[2];
+		uint Interior;
+		uint pad0[1];
 	};
 
 	ConstantBuffer* sharedDataCB = nullptr;

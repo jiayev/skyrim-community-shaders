@@ -530,6 +530,11 @@ void State::UpdateSharedData()
 			}
 		}
 
+		if (auto sky = RE::Sky::GetSingleton())
+			data.Interior = sky->mode.get() != RE::Sky::Mode::kFull;
+		else
+			data.Interior = true;
+
 		sharedDataCB->Update(data);
 	}
 
