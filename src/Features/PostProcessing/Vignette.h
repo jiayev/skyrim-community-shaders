@@ -8,7 +8,6 @@ struct Vignette : public PostProcessFeature
 	virtual inline std::string GetType() const override { return "Vignette"; }
 	virtual inline std::string GetDesc() const override { return "Simulates natural vignetting due to angled rays impinging on the film or sensor array."; }
 
-	// buffers
 	struct Settings
 	{
 		float FocalLength = 1.f;
@@ -24,9 +23,9 @@ struct Vignette : public PostProcessFeature
 		float2 RcpDynRes;
 		float pad[2];
 	};
-	std::unique_ptr<ConstantBuffer> vignetteCB = nullptr;
+	eastl::unique_ptr<ConstantBuffer> vignetteCB = nullptr;
 
-	std::unique_ptr<Texture2D> texOutput = nullptr;
+	eastl::unique_ptr<Texture2D> texOutput = nullptr;
 
 	winrt::com_ptr<ID3D11ComputeShader> vignetteCS = nullptr;
 

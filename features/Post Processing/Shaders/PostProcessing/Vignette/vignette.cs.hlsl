@@ -1,6 +1,3 @@
-
-#include "../../Common/Color.hlsli"
-
 RWTexture2D<float4> RWTexOut : register(u0);
 
 Texture2D<float4> TexColor : register(t0);
