@@ -46,7 +46,7 @@ void Vignette::SetupResources()
 
 	logger::debug("Creating buffers...");
 	{
-		vignetteCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<VignetteCB>());
+		vignetteCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<VignetteCB>());
 	}
 
 	logger::debug("Creating 2D textures...");
@@ -72,7 +72,7 @@ void Vignette::SetupResources()
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		texDesc.MiscFlags = 0;
 
-		texOutput = std::make_unique<Texture2D>(texDesc);
+		texOutput = eastl::make_unique<Texture2D>(texDesc);
 		texOutput->CreateSRV(srvDesc);
 		texOutput->CreateUAV(uavDesc);
 	}
@@ -139,7 +139,7 @@ void Vignette::Draw(TextureInfo& inout_tex)
 	context->CSSetShaderResources(0, 1, &srv);
 	context->CSSetShader(vignetteCS.get(), nullptr, 0);
 
-	context->Dispatch((texOutput->desc.Width + 7) >> 3, (texOutput->desc.Height + 7) >> 3, 1);
+	context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
 
 	// clean up
 	srv = nullptr;

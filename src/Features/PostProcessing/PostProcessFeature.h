@@ -38,11 +38,5 @@ struct PostProcessFeatureConstructor
 	std::function<PostProcessFeature*()> fn;
 	std::string name;
 	std::string desc;
-
-	template <class T>
-	static inline std::pair<std::string, PostProcessFeatureConstructor> GetFeatureConstructorPair()
-	{
-		return { T().GetType(), { []() { return new T(); }, T().GetType(), T().GetDesc() } };
-	};
 	static const ankerl::unordered_dense::map<std::string, PostProcessFeatureConstructor>& GetFeatureConstructors();
 };

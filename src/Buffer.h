@@ -279,6 +279,12 @@ public:
 		DX::ThrowIfFailed(device->CreateTexture3D(&desc, nullptr, resource.put()));
 	}
 
+	explicit Texture3D(ID3D11Texture3D* a_resource)
+	{
+		a_resource->GetDesc(&desc);
+		resource.attach(a_resource);
+	}
+
 	void CreateSRV(D3D11_SHADER_RESOURCE_VIEW_DESC const& a_desc)
 	{
 		ID3D11Device* device = reinterpret_cast<ID3D11Device*>(RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().forwarder);
