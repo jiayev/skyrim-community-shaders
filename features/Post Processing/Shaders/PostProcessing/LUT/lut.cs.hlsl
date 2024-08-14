@@ -39,19 +39,19 @@ float3 biLerp(in float3 values[8], in float3 lerpFactors)
 	[branch] if (LutType == 0)
 	{
 		float luma = RGBToLuminance(color);
-		float pxCoord = (luma - InputMin.x) / (InputMax.x - InputMin.x) * (dims.x - 1) + 0.5;
+		float pxCoord = (luma - InputMin.x) / (InputMax.x - InputMin.x) * (dims.x - 1);
 		int px0 = clamp(int(pxCoord), 0, dims.x - 1);
 		int px1 = min(px0 + 1, dims.x - 1);
-		float targetLuma = lerp(TexLut[int2(px0, 1)].x, TexLut[int2(px1, 1)].x, saturate(pxCoord - px0 - 0.5));
+		float targetLuma = lerp(TexLut[int2(px0, 1)].x, TexLut[int2(px1, 1)].x, saturate(pxCoord - px0));
 
 		color *= targetLuma / (luma + 1e-8);
 	}
 	else if (LutType == 1)
 	{
-		float3 pxCoord = (color - InputMin) / (InputMax - InputMin) * (dims.x - 1) + 0.5;
+		float3 pxCoord = (color - InputMin) / (InputMax - InputMin) * (dims.x - 1);
 		int3 px0 = clamp(int3(pxCoord), 0, dims.x - 1);
 		int3 px1 = min(px0 + 1, dims.x - 1);
-		float3 lerpFactors = saturate(pxCoord - px0 - 0.5);
+		float3 lerpFactors = saturate(pxCoord - px0);
 
 		color.r = lerp(TexLut[int2(px0.x, 1)].x, TexLut[int2(px1.x, 1)].x, lerpFactors.x);
 		color.g = lerp(TexLut[int2(px0.y, 1)].x, TexLut[int2(px1.y, 1)].x, lerpFactors.y);
@@ -61,10 +61,10 @@ float3 biLerp(in float3 values[8], in float3 lerpFactors)
 	{
 		dims = LutType == 2 ? uint3(dims.y, dims.y, dims.x / dims.y) : dims;
 
-		float3 pxCoord = (color - InputMin) / (InputMax - InputMin) * (dims - 1) + 0.5;
+		float3 pxCoord = (color - InputMin) / (InputMax - InputMin) * (dims - 1);
 		int3 px0 = clamp(int3(pxCoord), 0, dims - 1);
 		int3 px1 = min(px0 + 1, dims - 1);
-		float3 lerpFactors = saturate(pxCoord - px0 - 0.5);
+		float3 lerpFactors = saturate(pxCoord - px0);
 
 		float3 lutSamples[8];
 		[branch] if (LutType == 2)
