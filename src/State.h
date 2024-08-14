@@ -1,5 +1,8 @@
 #pragma once
 
+#include <Tracy/Tracy.hpp>
+#include <Tracy/TracyD3D11.hpp>
+
 #include <Buffer.h>
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
@@ -127,7 +130,8 @@ public:
 		float4 BufferDim;
 		float Timer;
 		uint FrameCount;
-		uint pad0[2];
+		uint Interior;
+		uint pad0[1];
 	};
 
 	ConstantBuffer* sharedDataCB = nullptr;
@@ -138,6 +142,16 @@ public:
 	float2 screenSize = {};
 	ID3D11DeviceContext* context = nullptr;
 	ID3D11Device* device = nullptr;
+
+	TracyD3D11Ctx tracyCtx = nullptr;  // Tracy context
+
+	inline ~State()
+	{
+#ifdef TRACY_ENABLE
+		if (tracyCtx)
+			TracyD3D11Destroy(tracyCtx);
+#endif
+	}
 
 private:
 	std::shared_ptr<REX::W32::ID3DUserDefinedAnnotation> pPerf;

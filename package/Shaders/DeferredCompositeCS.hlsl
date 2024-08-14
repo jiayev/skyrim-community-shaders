@@ -161,7 +161,7 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 
 #endif
 
-	MainRW[dispatchID.xy] = min(color, 128);  // Vanilla bloom fix
+	MainRW[dispatchID.xy] = min(color, 250);  // Vanilla bloom fix
 	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = half4(EncodeNormalVanilla(normalVS), 0.0, 0.0);
 	SnowParametersRW[dispatchID.xy] = snowParameters;
 }

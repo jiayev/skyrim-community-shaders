@@ -381,6 +381,8 @@ void State::SetupResources()
 	context = reinterpret_cast<ID3D11DeviceContext*>(renderer->GetRuntimeData().context);
 	device = reinterpret_cast<ID3D11Device*>(renderer->GetRuntimeData().forwarder);
 	context->QueryInterface(__uuidof(pPerf), reinterpret_cast<void**>(&pPerf));
+
+	tracyCtx = TracyD3D11Context(device, context);
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred)
@@ -527,6 +529,11 @@ void State::UpdateSharedData()
 				data.WaterData[waterTile] = Util::TryGetWaterData((float)i * 4096.0f, (float)k * 4096.0f);
 			}
 		}
+
+		if (auto sky = RE::Sky::GetSingleton())
+			data.Interior = sky->mode.get() != RE::Sky::Mode::kFull;
+		else
+			data.Interior = true;
 
 		sharedDataCB->Update(data);
 	}

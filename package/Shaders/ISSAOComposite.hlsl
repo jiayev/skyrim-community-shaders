@@ -198,7 +198,7 @@ PS_OUTPUT main(PS_INPUT input)
 	composedColor *= 1 - SparklesParameters2.w;
 	composedColor += sparklesColor;
 
-	psout.Color = saturate(composedColor);
+	psout.Color = composedColor;
 
 	return psout;
 }

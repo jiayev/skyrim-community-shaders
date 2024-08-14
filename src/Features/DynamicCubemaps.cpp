@@ -368,6 +368,8 @@ void DynamicCubemaps::Irradiance(bool a_reflections)
 
 void DynamicCubemaps::UpdateCubemap()
 {
+	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Cubemap Update");
+
 	switch (nextTask) {
 	case NextTask::kInferrence:
 		nextTask = NextTask::kIrradiance;

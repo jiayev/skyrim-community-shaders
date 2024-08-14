@@ -87,6 +87,9 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarchRight()
 
 void ScreenSpaceShadows::DrawShadows()
 {
+	ZoneScoped;
+	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Screen Space Shadows");
+
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto context = State::GetSingleton()->context;
 
@@ -134,6 +137,8 @@ void ScreenSpaceShadows::DrawShadows()
 	float2 dynamicRes = { viewport->GetRuntimeData().dynamicResolutionWidthRatio, viewport->GetRuntimeData().dynamicResolutionHeightRatio };
 
 	for (int i = 0; i < dispatchList.DispatchCount; i++) {
+		TracyD3D11Zone(State::GetSingleton()->tracyCtx, "SSS - Ray March");
+
 		auto dispatchData = dispatchList.Dispatch[i];
 
 		RaymarchCB data{};
@@ -174,6 +179,8 @@ void ScreenSpaceShadows::DrawShadows()
 		dispatchList = Bend::BuildDispatchList(lightProjectionRightF, viewportSize, minRenderBounds, maxRenderBounds);
 
 		for (int i = 0; i < dispatchList.DispatchCount; i++) {
+			TracyD3D11Zone(State::GetSingleton()->tracyCtx, "SSS - Ray March (VR Right Eye)");
+
 			auto dispatchData = dispatchList.Dispatch[i];
 
 			RaymarchCB data{};

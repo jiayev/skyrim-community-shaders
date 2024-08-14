@@ -148,7 +148,9 @@ HRESULT WINAPI hk_IDXGISwapChain_Present(IDXGISwapChain* This, UINT SyncInterval
 {
 	State::GetSingleton()->Reset();
 	Menu::GetSingleton()->DrawOverlay();
-	return (This->*ptr_IDXGISwapChain_Present)(SyncInterval, Flags);
+	auto retval = (This->*ptr_IDXGISwapChain_Present)(SyncInterval, Flags);
+	TracyD3D11Collect(State::GetSingleton()->tracyCtx);
+	return retval;
 }
 
 void hk_BSGraphics_SetDirtyStates(bool isCompute);
@@ -439,6 +441,18 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+#ifdef TRACY_ENABLE
+	struct Main_Update
+	{
+		static void thunk(RE::Main* a_this, float a2)
+		{
+			func(a_this, a2);
+			FrameMark;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+#endif
+
 	void Install()
 	{
 		SKSE::AllocTrampoline(14);
@@ -482,5 +496,9 @@ namespace Hooks
 			stl::write_thunk_call<CreateRenderTarget_Snow>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x406, 0x409));
 		stl::write_thunk_call<CreateDepthStencil_PrecipitationMask>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x1245, 0x123B, 0x1917));
 		stl::write_thunk_call<CreateCubemapRenderTarget_Reflections>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0xA25, 0xA25, 0xCD2));
+
+#ifdef TRACY_ENABLE
+		stl::write_thunk_call<Main_Update>(REL::RelocationID(35551, 36544).address() + REL::Relocate(0x11F, 0x160));
+#endif
 	}
 }

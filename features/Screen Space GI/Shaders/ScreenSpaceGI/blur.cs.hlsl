@@ -107,7 +107,7 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 	TvBv[0] *= worldRadius;
 	TvBv[1] *= worldRadius;
 #ifdef TEMPORAL_DENOISER
-	halfAngle *= 1.2 - sqrt(accumFrames / (float)MaxAccumFrames);
+	halfAngle *= 1 - lerp(0, 0.8, sqrt(accumFrames / (float)MaxAccumFrames));
 #endif
 
 	float4 gi = srcGI[dtid];
@@ -158,10 +158,6 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 #ifdef SPECULAR_BLUR
 		// roughness weight
 		w *= abs(roughness - roughnessSample) / (roughness * roughness * 0.99 + 0.01);
-#endif
-#ifdef TEMPORAL_DENOISER
-		// luminance weight
-		w *= exp(-dot(abs(gi - giSample), 1) / (sqrt(accumFrames / (float)MaxAccumFrames) + 1e-8));
 #endif
 
 		sum += giSample * w;
