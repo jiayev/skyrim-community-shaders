@@ -163,6 +163,9 @@ void SubsurfaceScattering::DrawSSS()
 	if (!validMaterials)
 		return;
 
+	ZoneScoped;
+	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Subsurface Scattering");
+
 	validMaterials = false;
 
 	auto dispatchCount = Util::GetScreenDispatchCount();
@@ -204,6 +207,8 @@ void SubsurfaceScattering::DrawSSS()
 
 		// Horizontal pass to temporary texture
 		{
+			TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Subsurface Scattering - Horizontal");
+
 			auto shader = GetComputeShaderHorizontalBlur();
 			context->CSSetShader(shader, nullptr, 0);
 
@@ -215,6 +220,8 @@ void SubsurfaceScattering::DrawSSS()
 
 		// Vertical pass to main texture
 		{
+			TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Subsurface Scattering - Vertical");
+
 			views[0] = blurHorizontalTemp->srv.get();
 			context->CSSetShaderResources(0, 1, views);
 

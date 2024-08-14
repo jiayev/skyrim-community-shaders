@@ -62,8 +62,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 fog = FogTex.Sample(FogSampler, input.TexCoord);
 
 	if (fog.x + fog.y + fog.z + fog.w != 0) {
-		psout.Color =
-			float4(saturate(FogNearColor.w * lerp(preFog.xyz, fog.xyz, fog.w)), saturate(preFog.w));
+		psout.Color = float4(FogNearColor.w * lerp(preFog.xyz, fog.xyz, fog.w), saturate(preFog.w));
 	} else {
 		psout.Color = preFog;
 	}

@@ -201,6 +201,8 @@ void Skylighting::CompileComputeShaders()
 
 void Skylighting::Prepass()
 {
+	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Skylighting - Update Probes");
+
 	auto& context = State::GetSingleton()->context;
 
 	{
@@ -494,7 +496,10 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 				precip->SetupMask();  // Calling setup twice fixes an issue when it is raining
 
 				BSParticleShaderRainEmitter* rain = new BSParticleShaderRainEmitter;
-				precip->RenderMask((RE::BSParticleShaderRainEmitter*)rain);
+				{
+					TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Skylighting - Render Height Map");
+					precip->RenderMask((RE::BSParticleShaderRainEmitter*)rain);
+				}
 				singleton->inOcclusion = false;
 
 				singleton->OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };

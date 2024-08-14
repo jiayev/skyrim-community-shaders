@@ -913,12 +913,6 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #	endif
 }
 
-float3 ApplyFogAndClampColor(float3 srcColor, float4 fogParam, float3 clampColor, out float3 preClampColor)
-{
-	preClampColor = (srcColor - lerp(srcColor, fogParam.xyz, fogParam.w) * FogColor.w) * FrameParams.y;
-	return min(preClampColor + clampColor, srcColor);
-}
-
 #	if defined(LOD)
 #		undef EXTENDED_MATERIALS
 #		undef WATER_BLENDING
@@ -1930,7 +1924,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		lightsDiffuseColor += dirDiffuseColor;
 		coatLightsDiffuseColor += coatDirDiffuseColor;
 		transmissionColor += dirTransmissionColor;
-		specularColorPBR += dirSpecularColor;
+		specularColorPBR += dirSpecularColor * !Interior;
 #		if defined(LOD_LAND_BLEND)
 		lodLandDiffuseColor += dirLightColor * saturate(dirLightAngle) * dirDetailShadow;
 #		endif
@@ -2560,15 +2554,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (lightLimitFixSettings.EnableLightsVisualisation) {
 		if (lightLimitFixSettings.LightsVisualisationMode == 0) {
-			psout.Diffuse.xyz = TurboColormap(NumStrictLights >= 7.0);
+			psout.Diffuse.xyz = TurboColormap(strictLights[0].NumStrictLights >= 7.0);
 		} else if (lightLimitFixSettings.LightsVisualisationMode == 1) {
-			psout.Diffuse.xyz = TurboColormap((float)NumStrictLights / 15.0);
+			psout.Diffuse.xyz = TurboColormap((float)strictLights[0].NumStrictLights / 15.0);
 		} else {
 			psout.Diffuse.xyz = TurboColormap((float)numClusteredLights / 128.0);
 		}
 		baseColor.xyz = 0.0;
 	} else {
-		psout.Diffuse.xyz = color.xyz - preClampColor * FrameParams.z;
+		psout.Diffuse.xyz = color.xyz;
 	}
 #	else
 	psout.Diffuse.xyz = color.xyz;
