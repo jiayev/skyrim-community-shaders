@@ -25,7 +25,6 @@ float3 GetDynamicCubemapSpecularIrradiance(float2 uv, float3 N, float3 VN, float
 
 	float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level).xyz;
 	specularIrradiance *= horizon;
-	specularIrradiance = sRGB2Lin(specularIrradiance);
 
 	return specularIrradiance;
 }
@@ -53,7 +52,6 @@ float3 GetDynamicCubemap(float2 uv, float3 N, float3 VN, float3 V, float roughne
 	return horizon * ((F0 + S) * specularBRDF.x + specularBRDF.y);
 #	else
 	float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level).xyz;
-	specularIrradiance = sRGB2Lin(specularIrradiance);
 
 	return specularIrradiance * ((F0 + S) * specularBRDF.x + specularBRDF.y);
 #	endif
