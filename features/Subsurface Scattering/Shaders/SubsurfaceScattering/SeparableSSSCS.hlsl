@@ -39,7 +39,6 @@ cbuffer PerFrameSSS : register(b1)
 	bool humanProfile = MaskTexture[DTid.xy].y == sssAmount;
 
 	float4 color = SSSSBlurCS(DTid.xy, texCoord, float2(0.0, 1.0), sssAmount, humanProfile);
-	color.rgb = Lin2sRGB(color.rgb);
 	SSSRW[DTid.xy] = float4(color.rgb, 1.0);
 
 #endif

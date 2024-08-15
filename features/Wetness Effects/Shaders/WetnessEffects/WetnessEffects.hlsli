@@ -144,7 +144,7 @@ float3 GetWetnessAmbientSpecular(float2 uv, float3 N, float3 VN, float3 V, float
 	float3 specularIrradiance = 1.0;
 #	else
 	float level = roughness * 7.0;
-	float3 specularIrradiance = sRGB2Lin(specularTexture.SampleLevel(SampColorSampler, R, level));
+	float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level);
 #	endif
 #else
 	float3 specularIrradiance = 1.0;

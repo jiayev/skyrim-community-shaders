@@ -117,8 +117,7 @@ void CalculateGI(
 	float3 bentNormal = viewspaceNormal;
 
 #ifdef GI_SPECULAR
-	const float roughness2 = max(0.04, saturate(1 - FULLRES_LOAD(srcNormalRoughness, dtid, uv * frameScale, samplerLinearClamp).z));  // can't handle low roughness
-	const float roughness = sqrt(roughness2);
+	const float roughness = max(0.2, saturate(1 - FULLRES_LOAD(srcNormalRoughness, dtid, uv * frameScale, samplerLinearClamp).z));  // can't handle low roughness
 #endif
 
 	for (uint slice = 0; slice < NumSlices; slice++) {

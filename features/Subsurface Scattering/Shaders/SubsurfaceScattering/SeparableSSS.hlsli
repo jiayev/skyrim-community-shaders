@@ -99,10 +99,6 @@ float4 SSSSBlurCS(
 	// Fetch color of current pixel:
 	float4 colorM = ColorTexture[DTid.xy];
 
-#if defined(HORIZONTAL)
-	colorM.rgb = sRGB2Lin(colorM.rgb);
-#endif
-
 	if (sssAmount == 0)
 		return colorM;
 
@@ -155,10 +151,6 @@ float4 SSSSBlurCS(
 		coords = clamp(coords, minCoord, maxCoord);
 
 		float3 color = ColorTexture[coords].rgb;
-
-#if defined(HORIZONTAL)
-		color.rgb = sRGB2Lin(color.rgb);
-#endif
 
 		float depth = DepthTexture[coords].r;
 		depth = GetScreenDepth(depth);
