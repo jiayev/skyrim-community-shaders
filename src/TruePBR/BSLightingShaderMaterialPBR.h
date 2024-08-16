@@ -1,5 +1,7 @@
 #pragma once
 
+#include "TruePBR.h"
+
 enum class PBRFlags : uint32_t
 {
 	Subsurface = 1 << 0,
@@ -9,6 +11,7 @@ enum class PBRFlags : uint32_t
 	CoatNormal = 1 << 4,
 	Fuzz = 1 << 5,
 	HairMarschner = 1 << 6,
+	Glint = 1 << 7,
 };
 
 enum class PBRShaderFlags : uint32_t
@@ -24,6 +27,7 @@ enum class PBRShaderFlags : uint32_t
 	CoatNormal = 1 << 8,
 	Fuzz = 1 << 9,
 	HairMarschner = 1 << 10,
+	Glint = 1 << 11,
 };
 
 class BSLightingShaderMaterialPBR : public RE::BSLightingShaderMaterialBase
@@ -72,6 +76,8 @@ public:
 	const RE::NiColor& GetFuzzColor() const;
 	float GetFuzzWeight() const;
 
+	const GlintParameters& GetGlintParameters() const;
+
 	// members
 	RE::BSShaderMaterial::Feature loadedWithFeature = RE::BSShaderMaterial::Feature::kDefault;
 
@@ -86,6 +92,8 @@ public:
 	std::array<float, 3> projectedMaterialBaseColorScale = { 1.f, 1.f, 1.f };
 	float projectedMaterialRoughness = 1.f;
 	float projectedMaterialSpecularLevel = 0.04f;
+
+	GlintParameters glintParameters;
 
 	// Roughness in r, metallic in g, AO in b, nonmetal reflectance in a
 	RE::NiPointer<RE::NiSourceTexture> rmaosTexture;

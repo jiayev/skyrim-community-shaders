@@ -27,6 +27,7 @@ void BSLightingShaderMaterialPBR::CopyMembers(RE::BSShaderMaterial* that)
 	coatSpecularLevel = pbrThat->coatSpecularLevel;
 	fuzzColor = pbrThat->fuzzColor;
 	fuzzWeight = pbrThat->fuzzWeight;
+	glintParameters = pbrThat->glintParameters;
 	projectedMaterialBaseColorScale = pbrThat->projectedMaterialBaseColorScale;
 	projectedMaterialRoughness = pbrThat->projectedMaterialRoughness;
 	projectedMaterialSpecularLevel = pbrThat->projectedMaterialSpecularLevel;
@@ -46,7 +47,11 @@ std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)
 		float coatRoughness = 0.f;
 		float coatSpecularLevel = 0.f;
 		std::array<float, 3> fuzzColor = { 0.f, 0.f, 0.f };
-		float fuzzWeight = 0.;
+		float fuzzWeight = 0.f;
+		float screenSpaceScale = 0.f;
+		float logMicrofacetDensity = 0.f;
+		float microfacetRoughness = 0.f;
+		float densityRandomization = 0.f;
 		std::array<float, 3> projectedMaterialBaseColorScale = { 0.f, 0.f, 0.f };
 		float projectedMaterialRoughness = 0.f;
 		float projectedMaterialSpecularLevel = 0.f;
@@ -65,6 +70,10 @@ std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)
 	hashes.fuzzColor[1] = fuzzColor[1] * 100.f;
 	hashes.fuzzColor[2] = fuzzColor[2] * 100.f;
 	hashes.fuzzWeight = fuzzWeight * 100.f;
+	hashes.screenSpaceScale = glintParameters.screenSpaceScale * 100.f;
+	hashes.logMicrofacetDensity = glintParameters.logMicrofacetDensity * 100.f;
+	hashes.microfacetRoughness = glintParameters.microfacetRoughness * 100.f;
+	hashes.densityRandomization = glintParameters.densityRandomization * 100.f;
 	hashes.projectedMaterialBaseColorScale[0] = projectedMaterialBaseColorScale[0] * 100.f;
 	hashes.projectedMaterialBaseColorScale[1] = projectedMaterialBaseColorScale[1] * 100.f;
 	hashes.projectedMaterialBaseColorScale[2] = projectedMaterialBaseColorScale[2] * 100.f;
@@ -133,6 +142,10 @@ void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTex
 							fuzzColor = textureSetData->fuzzColor;
 							fuzzWeight = textureSetData->fuzzWeight;
 						}
+					}
+
+					if (pbrFlags.any(PBRFlags::Glint)) {
+						glintParameters = textureSetData->glintParameters;
 					}
 				}
 			}
@@ -226,6 +239,11 @@ void BSLightingShaderMaterialPBR::LoadBinary(RE::NiStream& stream)
 			parameters[2] };
 		fuzzWeight = parameters[3];
 
+		glintParameters.screenSpaceScale = parameters[0];
+		glintParameters.logMicrofacetDensity = parameters[1];
+		glintParameters.microfacetRoughness = parameters[2];
+		glintParameters.densityRandomization = parameters[3];
+
 		if (stream.header.version > 0x4A) {
 			float dummy;
 			stream.iStr->read(&dummy, 1);
@@ -301,4 +319,9 @@ const RE::NiColor& BSLightingShaderMaterialPBR::GetFuzzColor() const
 float BSLightingShaderMaterialPBR::GetFuzzWeight() const
 {
 	return fuzzWeight;
+}
+
+const GlintParameters& BSLightingShaderMaterialPBR::GetGlintParameters() const
+{
+	return glintParameters;
 }
