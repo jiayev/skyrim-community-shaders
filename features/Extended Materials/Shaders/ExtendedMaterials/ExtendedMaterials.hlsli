@@ -28,6 +28,10 @@ float GetMipLevel(float2 coords, Texture2D<float4> tex)
 	float2 textureDims;
 	tex.GetDimensions(textureDims.x, textureDims.y);
 
+#if !defined(PARALLAX) && !defined(TRUE_PBR)
+	textureDims /= 2.0;
+#endif
+
 	float2 texCoordsPerSize = coords * textureDims;
 
 	float2 dxSize = ddx(texCoordsPerSize);
@@ -42,7 +46,7 @@ float GetMipLevel(float2 coords, Texture2D<float4> tex)
 	// Compute the current mip level  (* 0.5 is effectively computing a square root before )
 	float mipLevel = max(0.5 * log2(minTexCoordDelta), 0);
 
-#if !defined(PARALLAX)
+#if !defined(PARALLAX) && !defined(TRUE_PBR)
 	mipLevel++;
 #endif
 
