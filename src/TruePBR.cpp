@@ -8,42 +8,10 @@
 #include "Hooks.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Util.h"
 
 namespace PNState
 {
-	template <typename ResultType>
-	bool Read(const json& config, const std::string_view& key, ResultType& result)
-	{
-		if (!config.is_object()) {
-			return false;
-		}
-
-		auto it = config.find(key);
-		if (it == config.end()) {
-			return false;
-		}
-
-		const json& section = it.value();
-
-		if constexpr (std::is_same_v<ResultType, std::array<float, 3>> || std::is_same_v<ResultType, RE::NiColor>) {
-			if (section.is_array() && section.size() == 3 &&
-				section[0].is_number_float() && section[1].is_number_float() &&
-				section[2].is_number_float()) {
-				result[0] = section[0];
-				result[1] = section[1];
-				result[2] = section[2];
-				return true;
-			}
-		}
-		if constexpr (std::is_same_v<ResultType, float>) {
-			if (section.is_number_float()) {
-				result = section;
-				return true;
-			}
-		}
-		return false;
-	}
-
 	void ReadPBRRecordConfigs(const std::string& rootPath, std::function<void(const std::string&, const json&)> recordReader)
 	{
 		if (std::filesystem::exists(rootPath)) {
@@ -94,6 +62,27 @@ namespace PNState
 		} catch (const nlohmann::json::type_error& e) {
 			logger::error("[TruePBR] failed to serialize {} : {}", outputPath, e.what());
 			return;
+		}
+	}
+}
+
+namespace nlohmann
+{
+	void to_json(json& section, const RE::NiColor& result)
+	{
+		section = { result[0],
+			result[1],
+			result[2] };
+	}
+
+	void from_json(const json& section, RE::NiColor& result)
+	{
+		if (section.is_array() && section.size() == 3 &&
+			section[0].is_number_float() && section[1].is_number_float() &&
+			section[2].is_number_float()) {
+			result[0] = section[0];
+			result[1] = section[1];
+			result[2] = section[2];
 		}
 	}
 }
@@ -192,6 +181,85 @@ void TruePBR::SaveSettings(json& o_json)
 	o_json["Ambient Light Color Multiplier"] = globalPBRAmbientLightColorMultiplier;
 }
 
+void TruePBR::PrePass()
+{
+	auto context = State::GetSingleton()->context;
+	if (!glintsNoiseTexture)
+		SetupGlintsTexture();
+	ID3D11ShaderResourceView* srv = glintsNoiseTexture->srv.get();
+	context->PSSetShaderResources(28, 1, &srv);
+}
+
+void TruePBR::SetupGlintsTexture()
+{
+	constexpr uint noiseTexSize = 512;
+
+	D3D11_TEXTURE2D_DESC tex_desc{
+		.Width = noiseTexSize,
+		.Height = noiseTexSize,
+		.MipLevels = 1,
+		.ArraySize = 1,
+		.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
+		.SampleDesc = { .Count = 1, .Quality = 0 },
+		.Usage = D3D11_USAGE_DEFAULT,
+		.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+		.CPUAccessFlags = 0,
+		.MiscFlags = 0
+	};
+	D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {
+		.Format = tex_desc.Format,
+		.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+		.Texture2D = {
+			.MostDetailedMip = 0,
+			.MipLevels = 1 }
+	};
+	D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {
+		.Format = tex_desc.Format,
+		.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+		.Texture2D = { .MipSlice = 0 }
+	};
+
+	glintsNoiseTexture = eastl::make_unique<Texture2D>(tex_desc);
+	glintsNoiseTexture->CreateSRV(srv_desc);
+	glintsNoiseTexture->CreateUAV(uav_desc);
+
+	// Compile
+	auto noiseGenProgram = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Common\\Glints\\noisegen.cs.hlsl", {}, "cs_5_0"));
+	if (!noiseGenProgram) {
+		logger::error("Failed to compile glints noise generation shader!");
+		return;
+	}
+
+	// Generate the noise
+	{
+		auto context = State::GetSingleton()->context;
+
+		struct OldState
+		{
+			ID3D11ComputeShader* shader;
+			ID3D11UnorderedAccessView* uav[1];
+			ID3D11ClassInstance* instance;
+			UINT numInstances;
+		};
+
+		OldState newer{}, old{};
+		context->CSGetShader(&old.shader, &old.instance, &old.numInstances);
+		context->CSGetUnorderedAccessViews(0, ARRAYSIZE(old.uav), old.uav);
+
+		{
+			newer.uav[0] = glintsNoiseTexture->uav.get();
+			context->CSSetShader(noiseGenProgram, nullptr, 0);
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(newer.uav), newer.uav, nullptr);
+			context->Dispatch((noiseTexSize + 31) >> 5, (noiseTexSize + 31) >> 5, 1);
+		}
+
+		context->CSSetShader(old.shader, &old.instance, old.numInstances);
+		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(old.uav), old.uav, nullptr);
+	}
+
+	noiseGenProgram->Release();
+}
+
 void TruePBR::SetupFrame()
 {
 	float newDirectionalLightScale = 1.f;
@@ -234,22 +302,11 @@ void TruePBR::SetupTextureSetData()
 	pbrTextureSets.clear();
 
 	PNState::ReadPBRRecordConfigs("Data\\PBRTextureSets", [this](const std::string& editorId, const json& config) {
-		PBRTextureSetData textureSetData;
-
-		PNState::Read(config, "roughnessScale", textureSetData.roughnessScale);
-		PNState::Read(config, "displacementScale", textureSetData.displacementScale);
-		PNState::Read(config, "specularLevel", textureSetData.specularLevel);
-		PNState::Read(config, "subsurfaceColor", textureSetData.subsurfaceColor);
-		PNState::Read(config, "subsurfaceOpacity", textureSetData.subsurfaceOpacity);
-		PNState::Read(config, "coatColor", textureSetData.coatColor);
-		PNState::Read(config, "coatStrength", textureSetData.coatStrength);
-		PNState::Read(config, "coatRoughness", textureSetData.coatRoughness);
-		PNState::Read(config, "coatSpecularLevel", textureSetData.coatSpecularLevel);
-		PNState::Read(config, "innerLayerDisplacementOffset", textureSetData.innerLayerDisplacementOffset);
-		PNState::Read(config, "fuzzColor", textureSetData.fuzzColor);
-		PNState::Read(config, "fuzzWeight", textureSetData.fuzzWeight);
-
-		pbrTextureSets.insert_or_assign(editorId, textureSetData);
+		try {
+			pbrTextureSets.insert_or_assign(editorId, config);
+		} catch (const std::exception& e) {
+			logger::error("Failed to deserialize config for {}: {}.", editorId, e.what());
+		}
 	});
 }
 
@@ -278,13 +335,11 @@ void TruePBR::SetupMaterialObjectData()
 	pbrMaterialObjects.clear();
 
 	PNState::ReadPBRRecordConfigs("Data\\PBRMaterialObjects", [this](const std::string& editorId, const json& config) {
-		PBRMaterialObjectData materialObjectData;
-
-		PNState::Read(config, "baseColorScale", materialObjectData.baseColorScale);
-		PNState::Read(config, "roughness", materialObjectData.roughness);
-		PNState::Read(config, "specularLevel", materialObjectData.specularLevel);
-
-		pbrMaterialObjects.insert_or_assign(editorId, materialObjectData);
+		try {
+			pbrMaterialObjects.insert_or_assign(editorId, config);
+		} catch (const std::exception& e) {
+			logger::error("Failed to deserialize config for {}: {}.", editorId, e.what());
+		}
 	});
 }
 
@@ -313,12 +368,11 @@ void TruePBR::SetupLightingTemplateData()
 	pbrLightingTemplates.clear();
 
 	PNState::ReadPBRRecordConfigs("Data\\PBRLightingTemplates", [this](const std::string& editorId, const json& config) {
-		PBRLightingTemplateData lightingTemplateData;
-
-		PNState::Read(config, "directionalLightColorScale", lightingTemplateData.directionalLightColorScale);
-		PNState::Read(config, "directionalAmbientLightColorScale", lightingTemplateData.directionalAmbientLightColorScale);
-
-		pbrLightingTemplates.insert_or_assign(editorId, lightingTemplateData);
+		try {
+			pbrLightingTemplates.insert_or_assign(editorId, config);
+		} catch (const std::exception& e) {
+			logger::error("Failed to deserialize config for {}: {}.", editorId, e.what());
+		}
 	});
 }
 
@@ -343,12 +397,11 @@ bool TruePBR::IsPBRLightingTemplate(const RE::TESForm* lightingTemplate)
 void TruePBR::SavePBRLightingTemplateData(const std::string& editorId)
 {
 	const auto& pbrLightingTemplateData = pbrLightingTemplates[editorId];
-
-	json config;
-	config["directionalLightColorScale"] = pbrLightingTemplateData.directionalLightColorScale;
-	config["directionalAmbientLightColorScale"] = pbrLightingTemplateData.directionalAmbientLightColorScale;
-
-	PNState::SavePBRRecordConfig("Data\\PBRLightingTemplates\\", editorId, config);
+	try {
+		PNState::SavePBRRecordConfig("Data\\PBRLightingTemplates\\", editorId, pbrLightingTemplateData);
+	} catch (const std::exception& e) {
+		logger::error("Failed to serialize config for {}: {}.", editorId, e.what());
+	}
 }
 
 void TruePBR::SetupWeatherData()
@@ -358,12 +411,11 @@ void TruePBR::SetupWeatherData()
 	pbrWeathers.clear();
 
 	PNState::ReadPBRRecordConfigs("Data\\PBRWeathers", [this](const std::string& editorId, const json& config) {
-		PBRWeatherData weatherData;
-
-		PNState::Read(config, "directionalLightColorScale", weatherData.directionalLightColorScale);
-		PNState::Read(config, "directionalAmbientLightColorScale", weatherData.directionalAmbientLightColorScale);
-
-		pbrWeathers.insert_or_assign(editorId, weatherData);
+		try {
+			pbrWeathers.insert_or_assign(editorId, config);
+		} catch (const std::exception& e) {
+			logger::error("Failed to deserialize config for {}: {}.", editorId, e.what());
+		}
 	});
 }
 
@@ -388,12 +440,11 @@ bool TruePBR::IsPBRWeather(const RE::TESForm* weather)
 void TruePBR::SavePBRWeatherData(const std::string& editorId)
 {
 	const auto& pbrWeatherData = pbrWeathers[editorId];
-
-	json config;
-	config["directionalLightColorScale"] = pbrWeatherData.directionalLightColorScale;
-	config["directionalAmbientLightColorScale"] = pbrWeatherData.directionalAmbientLightColorScale;
-
-	PNState::SavePBRRecordConfig("Data\\PBRWeathers\\", editorId, config);
+	try {
+		PNState::SavePBRRecordConfig("Data\\PBRWeathers\\", editorId, pbrWeatherData);
+	} catch (const std::exception& e) {
+		logger::error("Failed to serialize config for {}: {}.", editorId, e.what());
+	}
 }
 
 namespace Permutations
@@ -648,10 +699,13 @@ struct BSLightingShaderProperty_LoadBinary
 				}
 				if (property->flags.any(kSoftLighting)) {
 					pbrMaterial->pbrFlags.set(PBRFlags::Fuzz);
+				} else if (property->flags.any(kFitSlope)) {
+					pbrMaterial->pbrFlags.set(PBRFlags::Glint);
+					pbrMaterial->glintParameters.enabled = true;
 				}
 			}
 			property->flags.set(kVertexLighting);
-			property->flags.reset(kMenuScreen, kSpecular, kGlowMap, kEnvMap, kMultiLayerParallax, kSoftLighting, kRimLighting, kBackLighting, kAnisotropicLighting, kEffectLighting);
+			property->flags.reset(kMenuScreen, kSpecular, kGlowMap, kEnvMap, kMultiLayerParallax, kSoftLighting, kRimLighting, kBackLighting, kAnisotropicLighting, kEffectLighting, kFitSlope);
 		}
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
@@ -682,6 +736,17 @@ struct BSLightingShaderProperty_GetRenderPasses
 				lightingFlags &= ~0b111000u;
 				if (isPbr) {
 					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr);
+					if (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape)) {
+						auto* material = static_cast<BSLightingShaderMaterialPBRLandscape*>(property->material);
+						if (material->HasGlint()) {
+							lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AnisoLighting);
+						}
+					} else {
+						auto* material = static_cast<BSLightingShaderMaterialPBR*>(property->material);
+						if (material->pbrFlags.any(PBRFlags::Glint)) {
+							lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AnisoLighting);
+						}
+					}
 				}
 				lightingTechnique = (static_cast<uint32_t>(lightingType) << 24) | lightingFlags;
 				currentPass->passEnum = lightingTechnique + LightingTechniqueStart;
@@ -754,6 +819,9 @@ struct BSLightingShader_SetupMaterial
 							if (pbrMaterial->landscapeDisplacementTextures[textureIndex] != nullptr && pbrMaterial->landscapeDisplacementTextures[textureIndex] != RE::BSGraphics::State::GetSingleton()->GetRuntimeData().defaultTextureBlack) {
 								flags |= (1 << (BSLightingShaderMaterialPBRLandscape::NumTiles + textureIndex));
 							}
+							if (pbrMaterial->glintParameters[textureIndex].enabled) {
+								flags |= (1 << (2 * BSLightingShaderMaterialPBRLandscape::NumTiles + textureIndex));
+							}
 						}
 					}
 					shadowState->SetPSConstant(flags, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 36);
@@ -761,6 +829,7 @@ struct BSLightingShader_SetupMaterial
 
 				{
 					constexpr size_t PBRParamsStartIndex = 37;
+					constexpr size_t GlintParametersStartIndex = 44;
 
 					for (uint32_t textureIndex = 0; textureIndex < BSLightingShaderMaterialPBRLandscape::NumTiles; ++textureIndex) {
 						std::array<float, 3> PBRParams;
@@ -768,6 +837,13 @@ struct BSLightingShader_SetupMaterial
 						PBRParams[1] = pbrMaterial->displacementScales[textureIndex];
 						PBRParams[2] = pbrMaterial->specularLevels[textureIndex];
 						shadowState->SetPSConstant(PBRParams, RE::BSGraphics::ConstantGroupLevel::PerMaterial, PBRParamsStartIndex + textureIndex);
+
+						std::array<float, 4> glintParameters;
+						glintParameters[0] = pbrMaterial->glintParameters[textureIndex].screenSpaceScale;
+						glintParameters[1] = 40.f - pbrMaterial->glintParameters[textureIndex].logMicrofacetDensity;
+						glintParameters[2] = pbrMaterial->glintParameters[textureIndex].microfacetRoughness;
+						glintParameters[3] = pbrMaterial->glintParameters[textureIndex].densityRandomization;
+						shadowState->SetPSConstant(glintParameters, RE::BSGraphics::ConstantGroupLevel::PerMaterial, GlintParametersStartIndex + textureIndex);
 					}
 				}
 
@@ -843,6 +919,15 @@ struct BSLightingShader_SetupMaterial
 						PBRParams3[2] = pbrMaterial->GetFuzzColor().blue;
 						PBRParams3[3] = pbrMaterial->GetFuzzWeight();
 						shadowState->SetPSConstant(PBRParams3, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 27);
+					} else if (pbrMaterial->pbrFlags.any(PBRFlags::Glint)) {
+						shaderFlags.set(PBRShaderFlags::Glint);
+
+						std::array<float, 4> GlintParameters;
+						GlintParameters[0] = pbrMaterial->GetGlintParameters().screenSpaceScale;
+						GlintParameters[0] = 40.f - pbrMaterial->GetGlintParameters().logMicrofacetDensity;
+						GlintParameters[0] = pbrMaterial->GetGlintParameters().microfacetRoughness;
+						GlintParameters[0] = pbrMaterial->GetGlintParameters().densityRandomization;
+						shadowState->SetPSConstant(GlintParameters, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 27);
 					}
 				}
 
@@ -952,10 +1037,11 @@ struct BSLightingShader_SetupGeometry
 {
 	static void thunk(RE::BSLightingShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 	{
-		const uint32_t originalExtraFlags = shader->currentRawTechnique & 0b111000u;
+		const auto originalTechnique = shader->currentRawTechnique;
 
 		if ((shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0) {
 			shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AmbientSpecular);
+			shader->currentRawTechnique ^= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AnisoLighting);
 		}
 
 		shader->currentRawTechnique &= ~0b111000u;
@@ -963,12 +1049,7 @@ struct BSLightingShader_SetupGeometry
 
 		func(shader, pass, renderFlags);
 
-		shader->currentRawTechnique &= ~0b111000u;
-		shader->currentRawTechnique |= originalExtraFlags;
-
-		if ((shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0) {
-			shader->currentRawTechnique &= ~static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AmbientSpecular);
-		}
+		shader->currentRawTechnique = originalTechnique;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -1009,6 +1090,8 @@ void SetupLandscapeTexture(BSLightingShaderMaterialPBRLandscape& material, RE::T
 		material.displacementScales[textureIndex] = textureSetData->displacementScale;
 		material.roughnessScales[textureIndex] = textureSetData->roughnessScale;
 		material.specularLevels[textureIndex] = textureSetData->specularLevel;
+
+		material.glintParameters[textureIndex] = textureSetData->glintParameters;
 	}
 	material.isPbr[textureIndex] = isPbr;
 

@@ -246,7 +246,7 @@ namespace SIE
 			ShadowDir = 1 << 13,
 			DefShadow = 1 << 14,
 			ProjectedUV = 1 << 15,
-			AnisoLighting = 1 << 16,
+			AnisoLighting = 1 << 16,  // Reused for glint with PBR
 			AmbientSpecular = 1 << 17,
 			WorldMap = 1 << 18,
 			BaseObjectIsSnow = 1 << 19,

@@ -1,5 +1,25 @@
 #pragma once
 
+#include "Buffer.h"
+
+struct GlintParameters
+{
+	bool enabled = false;
+	float screenSpaceScale = 1.5f;
+	float logMicrofacetDensity = 40.f;
+	float microfacetRoughness = .015f;
+	float densityRandomization = 2.f;
+
+	NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(GlintParameters, enabled, screenSpaceScale, logMicrofacetDensity,
+		microfacetRoughness, densityRandomization);
+};
+
+namespace nlohmann
+{
+	void to_json(json&, const RE::NiColor&);
+	void from_json(const json&, RE::NiColor&);
+}
+
 struct TruePBR
 {
 public:
@@ -15,10 +35,14 @@ public:
 	void SetupResources();
 	void LoadSettings(json& o_json);
 	void SaveSettings(json& o_json);
+	void PrePass();
 	void PostPostLoad();
 
 	void SetShaderResouces();
 	void GenerateShaderPermutations(RE::BSShader* shader);
+
+	void SetupGlintsTexture();
+	eastl::unique_ptr<Texture2D> glintsNoiseTexture = nullptr;
 
 	std::unordered_map<uint32_t, std::string> editorIDs;
 
@@ -28,7 +52,7 @@ public:
 	float weatherPBRDirectionalLightColorMultiplier = 1.f;
 	float weatherPBRDirectionalAmbientLightColorMultiplier = 1.f;
 
-	struct alignas(16) Settings
+	struct Settings
 	{
 		float directionalLightColorMultiplier = 1.f;
 		float pointLightColorMultiplier = 1.f;
@@ -37,6 +61,7 @@ public:
 		uint32_t useMultiBounceAO = true;
 		uint32_t pad[3];
 	} settings{};
+	static_assert(sizeof(Settings) % 16 == 0);
 
 	struct PBRTextureSetData
 	{
@@ -55,6 +80,12 @@ public:
 
 		RE::NiColor fuzzColor;
 		float fuzzWeight = 0.f;
+
+		GlintParameters glintParameters;
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(PBRTextureSetData, roughnessScale, displacementScale, specularLevel,
+			subsurfaceColor, subsurfaceOpacity, coatColor, coatStrength, coatRoughness, coatSpecularLevel,
+			innerLayerDisplacementOffset, fuzzColor, fuzzWeight, glintParameters);
 	};
 
 	void SetupFrame();
@@ -70,6 +101,8 @@ public:
 		std::array<float, 3> baseColorScale = { 1.f, 1.f, 1.f };
 		float roughness = 1.f;
 		float specularLevel = 1.f;
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(PBRMaterialObjectData, baseColorScale, roughness, specularLevel);
 	};
 
 	void SetupMaterialObjectData();
@@ -82,6 +115,8 @@ public:
 	{
 		float directionalLightColorScale = 1.f;
 		float directionalAmbientLightColorScale = 1.f;
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(PBRLightingTemplateData, directionalLightColorScale, directionalAmbientLightColorScale);
 	};
 
 	void SetupLightingTemplateData();
@@ -95,6 +130,8 @@ public:
 	{
 		float directionalLightColorScale = 1.f;
 		float directionalAmbientLightColorScale = 1.f;
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(PBRWeatherData, directionalLightColorScale, directionalAmbientLightColorScale);
 	};
 
 	void SetupWeatherData();

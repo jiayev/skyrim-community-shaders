@@ -456,6 +456,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	normal = normalize(lerp(normal, normalize(input.SphereNormal.xyz), input.SphereNormal.w));
 
+	float3x3 tbn = 0;
+
 #			if !defined(TRUE_PBR)
 	if (complex)
 #			endif  // !TRUE_PBR
@@ -463,7 +465,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float3 normalColor = GrassLighting::TransformNormal(specColor.xyz);
 		// world-space -> tangent-space -> world-space.
 		// This is because we don't have pre-computed tangents.
-		normal = normalize(mul(normalColor, GrassLighting::CalculateTBN(normal, -input.WorldPosition.xyz, input.TexCoord.xy)));
+		tbn = GrassLighting::CalculateTBN(normal, -input.WorldPosition.xyz, input.TexCoord.xy);
+		normal = normalize(mul(normalColor, tbn));
 	}
 
 #			if !defined(TRUE_PBR)
@@ -474,23 +477,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			if defined(TRUE_PBR)
 	float4 rawRMAOS = TexRMAOSSampler.Sample(SampRMAOSSampler, input.TexCoord.xy) * float4(PBRParams1.x, 1, 1, PBRParams1.y);
 
-	PBR::SurfaceProperties pbrSurfaceProperties;
+	PBR::SurfaceProperties pbrSurfaceProperties = PBR::InitSurfaceProperties();
 
 	pbrSurfaceProperties.Roughness = saturate(rawRMAOS.x);
 	pbrSurfaceProperties.Metallic = saturate(rawRMAOS.y);
 	pbrSurfaceProperties.AO = rawRMAOS.z;
 	pbrSurfaceProperties.F0 = lerp(saturate(rawRMAOS.w), baseColor.xyz, pbrSurfaceProperties.Metallic);
-
-	pbrSurfaceProperties.SubsurfaceColor = 0;
-	pbrSurfaceProperties.Thickness = 0;
-
-	pbrSurfaceProperties.CoatColor = 0;
-	pbrSurfaceProperties.CoatStrength = 0;
-	pbrSurfaceProperties.CoatRoughness = 0;
-	pbrSurfaceProperties.CoatF0 = 0.04;
-
-	pbrSurfaceProperties.FuzzColor = 0;
-	pbrSurfaceProperties.FuzzWeight = 0;
 
 	baseColor.xyz *= 1 - pbrSurfaceProperties.Metallic;
 
@@ -554,7 +546,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float3 pbrDirLightColor = PBR::AdjustDirectionalLightColor(DirLightColorShared.xyz) * dirLightColorMultiplier * dirShadow;
 
 		float3 dirDiffuseColor, coatDirDiffuseColor, dirTransmissionColor, dirSpecularColor;
-		PBR::GetDirectLightInput(dirDiffuseColor, coatDirDiffuseColor, dirTransmissionColor, dirSpecularColor, normal, normal, viewDirection, viewDirection, DirLightDirection, DirLightDirection, pbrDirLightColor, pbrDirLightColor, pbrSurfaceProperties);
+		PBR::GetDirectLightInput(dirDiffuseColor, coatDirDiffuseColor, dirTransmissionColor, dirSpecularColor, normal, normal, viewDirection, viewDirection, DirLightDirection, DirLightDirection, pbrDirLightColor, pbrDirLightColor, pbrSurfaceProperties, tbn, input.TexCoord.xy);
 		lightsDiffuseColor += dirDiffuseColor;
 		transmissionColor += dirTransmissionColor;
 		specularColorPBR += dirSpecularColor;
@@ -610,7 +602,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				{
 					float3 pointDiffuseColor, coatDirDiffuseColor, pointTransmissionColor, pointSpecularColor;
 					float3 pbrLightColor = PBR::AdjustPointLightColor(lightColor * intensityMultiplier);
-					PBR::GetDirectLightInput(pointDiffuseColor, coatDirDiffuseColor, pointTransmissionColor, pointSpecularColor, normal, normal, viewDirection, viewDirection, normalizedLightDirection, normalizedLightDirection, pbrLightColor, pbrLightColor, pbrSurfaceProperties);
+					PBR::GetDirectLightInput(pointDiffuseColor, coatDirDiffuseColor, pointTransmissionColor, pointSpecularColor, normal, normal, viewDirection, viewDirection, normalizedLightDirection, normalizedLightDirection, pbrLightColor, pbrLightColor, pbrSurfaceProperties, tbn, input.TexCoord.xy);
 					lightsDiffuseColor += pointDiffuseColor;
 					transmissionColor += pointTransmissionColor;
 					specularColorPBR += pointSpecularColor;
