@@ -630,6 +630,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	diffuseColor.xyz += transmissionColor;
 	specularColor.xyz += specularColorPBR;
+	specularColor.xyz = Lin2sRGB(specularColor.xyz);
+	diffuseColor.xyz = Lin2sRGB(diffuseColor.xyz);
 #			else
 
 #				if !defined(SSGI)
@@ -646,7 +648,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float skylighting = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(skylightingSettings.DirectionalDiffuse ? normal : float3(0, 0, 1))) / shPI;
 	skylighting = Skylighting::mixDiffuse(skylightingSettings, skylighting);
 
+	directionalAmbientColor = sRGB2Lin(directionalAmbientColor);
 	directionalAmbientColor *= skylighting;
+	directionalAmbientColor = Lin2sRGB(directionalAmbientColor);
 #					endif  // SKYLIGHTING
 
 	diffuseColor += directionalAmbientColor;
@@ -677,7 +681,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 normalVS = normalize(WorldToView(normal, false, eyeIndex));
 #			if defined(TRUE_PBR)
-	psout.Albedo = float4(indirectDiffuseLobeWeight, 1);
+	psout.Albedo = float4(Lin2sRGB(indirectDiffuseLobeWeight), 1);
 	psout.NormalGlossiness = float4(EncodeNormal(normalVS), 1 - pbrSurfaceProperties.Roughness, 1);
 	psout.Reflectance = float4(indirectSpecularLobeWeight, 1);
 	psout.Parameters = float4(0, 0, 1, 1);
