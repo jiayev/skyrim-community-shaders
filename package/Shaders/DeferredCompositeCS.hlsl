@@ -60,7 +60,7 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 
 	half glossiness = normalGlossiness.z;
 
-	half3 color = diffuseColor + specularColor;
+	half3 color = lerp(diffuseColor + specularColor, Lin2sRGB(sRGB2Lin(diffuseColor) + sRGB2Lin(specularColor)), pbrWeight);
 
 #if defined(DYNAMIC_CUBEMAPS)
 
@@ -72,6 +72,8 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 		half wetnessMask = MasksTexture[dispatchID.xy].z;
 
 		normalWS = lerp(normalWS, float3(0, 0, 1), wetnessMask);
+
+		color = sRGB2Lin(color);
 
 		half depth = DepthTexture[dispatchID.xy];
 
@@ -87,12 +89,12 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 		half roughness = 1.0 - glossiness;
 		half level = roughness * 7.0;
 
-		half3 directionalAmbientColor = mul(DirectionalAmbient, half4(R, 1.0));
+		half3 directionalAmbientColor = sRGB2Lin(mul(DirectionalAmbient, half4(R, 1.0)));
 		half3 finalIrradiance = 0;
 
 #	if defined(INTERIOR)
 		half3 specularIrradiance = EnvTexture.SampleLevel(LinearSampler, R, level).xyz;
-		specularIrradiance = specularIrradiance;
+		specularIrradiance = sRGB2Lin(specularIrradiance);
 
 		finalIrradiance += specularIrradiance;
 #	elif defined(SKYLIGHTING)
@@ -112,19 +114,19 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 
 		if (skylightingSpecular < 1.0) {
 			specularIrradiance = EnvTexture.SampleLevel(LinearSampler, R, level).xyz;
-			specularIrradiance = specularIrradiance;
+			specularIrradiance = sRGB2Lin(specularIrradiance);
 		}
 
 		half3 specularIrradianceReflections = 1.0;
 
 		if (skylightingSpecular > 0.0) {
 			specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level).xyz;
-			specularIrradianceReflections = specularIrradianceReflections;
+			specularIrradianceReflections = sRGB2Lin(specularIrradianceReflections);
 		}
 		finalIrradiance = finalIrradiance * skylightingSpecular + lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
 #	else
 		half3 specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level).xyz;
-		specularIrradianceReflections = specularIrradianceReflections;
+		specularIrradianceReflections = sRGB2Lin(specularIrradianceReflections);
 
 		finalIrradiance += specularIrradianceReflections;
 #	endif
@@ -135,6 +137,8 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 #	endif
 
 		color += reflectance * finalIrradiance;
+
+		color = Lin2sRGB(color);
 	}
 
 #endif

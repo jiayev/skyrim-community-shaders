@@ -87,17 +87,17 @@ namespace PBR
 
 	float3 AdjustDirectionalLightColor(float3 lightColor)
 	{
-		return pbrSettings.DirectionalLightColorMultiplier * lightColor;
+		return pbrSettings.DirectionalLightColorMultiplier * sRGB2Lin(lightColor);
 	}
 
 	float3 AdjustPointLightColor(float3 lightColor)
 	{
-		return pbrSettings.PointLightColorMultiplier * lightColor;
+		return pbrSettings.PointLightColorMultiplier * sRGB2Lin(lightColor);
 	}
 
 	float3 AdjustAmbientLightColor(float3 lightColor)
 	{
-		return pbrSettings.AmbientLightColorMultiplier * lightColor;
+		return pbrSettings.AmbientLightColorMultiplier * sRGB2Lin(lightColor);
 	}
 
 	// [Jimenez et al. 2016, "Practical Realtime Strategies for Accurate Indirect Occlusion"]
