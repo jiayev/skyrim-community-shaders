@@ -1614,6 +1614,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 screenSpaceNormal = normalize(WorldToView(worldSpaceNormal, false, eyeIndex));
 
 #	if defined(TRUE_PBR)
+	baseColor.xyz = Lin2sRGB(baseColor.xyz);
+
 	PBR::SurfaceProperties pbrSurfaceProperties = PBR::InitSurfaceProperties();
 
 	pbrSurfaceProperties.Roughness = saturate(rawRMAOS.x);
