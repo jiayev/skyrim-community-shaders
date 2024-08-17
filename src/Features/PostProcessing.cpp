@@ -9,14 +9,14 @@
 constexpr auto def_settings = R"(
 [
 	{
-	"enabled": true,
-	"name": "Gamma",
-	"settings": {
+		"enabled": true,
+		"name": "Half Gamma to Linear",
+		"settings": {
 		"Params": [
 		[
-		1.2000000476837158,
-		1.2000000476837158,
-		1.2000000476837158,
+		1.5,
+		1.5,
+		1.5,
 		0.0
 		],
 		[
@@ -63,71 +63,13 @@ constexpr auto def_settings = R"(
 		]
 		],
 		"TransformType": "Gamma"
-	},
-	"type": "Colour Transforms"
-	},
-	{
-	"enabled": true,
-	"name": "Blue Filter",
-	"settings": {
-		"Params": [
-		[
-		0.0,
-		1.0,
-		0.0,
-		0.0
-		],
-		[
-		0.0,
-		1.0,
-		0.0,
-		0.0
-		],
-		[
-		0.0,
-		1.0,
-		0.0,
-		0.0
-		],
-		[
-		0.0,
-		1.0,
-		0.0,
-		0.0
-		],
-		[
-		0.0,
-		1.100000023841858,
-		-0.20000000298023224,
-		0.0
-		],
-		[
-		0.0,
-		1.0,
-		0.0,
-		0.0
-		],
-		[
-		0.0,
-		1.0,
-		0.0,
-		0.0
-		],
-		[
-		0.0,
-		1.0,
-		0.0,
-		0.0
-		]
-		],
-		"TransformType": "OKLCH Colour Mixer"
-	},
-	"type": "Colour Transforms"
+		},
+		"type": "Colour Transforms"
 	},
 	{
-	"enabled": true,
-	"name": "Bloom",
-	"settings": {
+		"enabled": true,
+		"name": "COD Bloom",
+		"settings": {
 		"BlendFactor": 0.05000000074505806,
 		"MipBlendFactor": [
 		1.0,
@@ -136,50 +78,50 @@ constexpr auto def_settings = R"(
 		1.0,
 		1.0,
 		1.0,
-		1.0,
-		1.0
+		0.0,
+		0.0
 		],
 		"Threshold": -6.0,
 		"UpsampleRadius": 2.0
-	},
-	"type": "COD Bloom"
+		},
+		"type": "COD Bloom"
 	},
 	{
-	"enabled": true,
-	"name": "Auto Exposure",
-	"settings": {
+		"enabled": true,
+		"name": "Histogram Auto Exposure",
+		"settings": {
 		"AdaptArea": [
 		0.6000000238418579,
 		0.6000000238418579
 		],
-		"AdaptSpeed": 1.0,
+		"AdaptSpeed": 1.5,
 		"AdaptationRange": [
-		-1.0,
+		-0.20000000298023224,
 		1.0
 		],
 		"ExposureCompensation": 0.0,
-		"PurkinjeMaxEV": -5.0,
-		"PurkinjeStartEV": -3.0,
+		"PurkinjeMaxEV": -6.0,
+		"PurkinjeStartEV": -4.0,
 		"PurkinjeStrength": 0.5
-	},
-	"type": "Histogram Auto Exposure"
+		},
+		"type": "Histogram Auto Exposure"
 	},
 	{
-	"enabled": true,
-	"name": "Vignette",
-	"settings": {
+		"enabled": true,
+		"name": "Vignette",
+		"settings": {
 		"FocalLength": 1.0,
 		"Power": 3.0
-	},
-	"type": "Vignette"
+		},
+		"type": "Vignette"
 	},
 	{
-	"enabled": true,
-	"name": "Tonemapper",
-	"settings": {
+		"enabled": true,
+		"name": "Tonemapper",
+		"settings": {
 		"Params": [
 		[
-		3.1166582107543945,
+		2.0,
 		0.0,
 		0.0,
 		0.0
@@ -228,8 +170,66 @@ constexpr auto def_settings = R"(
 		]
 		],
 		"TransformType": "Melon"
+		},
+		"type": "Colour Transforms"
 	},
-	"type": "Colour Transforms"
+	{
+		"enabled": true,
+		"name": "Linear to Gamma",
+		"settings": {
+		"Params": [
+		[
+		0.4399999976158142,
+		0.4399999976158142,
+		0.4399999976158142,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		1.0,
+		1.0,
+		1.0,
+		1.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		],
+		[
+		0.0,
+		0.0,
+		0.0,
+		0.0
+		]
+		],
+		"TransformType": "Gamma"
+		},
+		"type": "Colour Transforms"
 	}
 ])";
 
