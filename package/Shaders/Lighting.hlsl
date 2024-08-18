@@ -1386,8 +1386,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			landColor2.rgb = pow(landColor2.rgb, pbrSettings.BaseColorGamma);
 			rawRMAOS += input.LandBlendWeights1.y * float4(1 - landNormal2.w, 0, 1, 0.04);
 		}
-		baseColor += input.LandBlendWeights1.yyyy * landColor2;
 #		endif
+		baseColor += input.LandBlendWeights1.yyyy * landColor2;
 	}
 
 	if (input.LandBlendWeights1.z > 0.0) {
@@ -1414,8 +1414,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			landColor3.rgb = pow(landColor3.rgb, pbrSettings.BaseColorGamma);
 			rawRMAOS += input.LandBlendWeights1.z * float4(1 - landNormal3.w, 0, 1, 0.04);
 		}
-		baseColor += input.LandBlendWeights1.zzzz * landColor3;
 #		endif
+		baseColor += input.LandBlendWeights1.zzzz * landColor3;
 	}
 
 	if (input.LandBlendWeights1.w > 0.0) {
@@ -1442,8 +1442,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			landColor4.rgb = pow(landColor4.rgb, pbrSettings.BaseColorGamma);
 			rawRMAOS += input.LandBlendWeights1.w * float4(1 - landNormal4.w, 0, 1, 0.04);
 		}
-		baseColor += input.LandBlendWeights1.wwww * landColor4;
 #		endif
+		baseColor += input.LandBlendWeights1.wwww * landColor4;
 	}
 
 	if (input.LandBlendWeights2.x > 0.0) {
@@ -1470,8 +1470,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			landColor5.rgb = pow(landColor5.rgb, pbrSettings.BaseColorGamma);
 			rawRMAOS += input.LandBlendWeights2.x * float4(1 - landNormal5.w, 0, 1, 0.04);
 		}
-		baseColor += input.LandBlendWeights2.xxxx * landColor5;
 #		endif
+		baseColor += input.LandBlendWeights2.xxxx * landColor5;
 	}
 
 	if (input.LandBlendWeights2.y > 0.0) {
@@ -1498,8 +1498,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			landColor6.rgb = pow(landColor6.rgb, pbrSettings.BaseColorGamma);
 			rawRMAOS += input.LandBlendWeights2.y * float4(1 - landNormal6.w, 0, 1, 0.04);
 		}
-		baseColor += input.LandBlendWeights2.yyyy * landColor6;
 #		endif
+		baseColor += input.LandBlendWeights2.yyyy * landColor6;
 	}
 
 #		if defined(LOD_LAND_BLEND)
