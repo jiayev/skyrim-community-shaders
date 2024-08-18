@@ -371,29 +371,17 @@ float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatri
 float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatrix, Texture2DArray<float4> tex, SamplerComparisonState samp, float2 baseUV, float layerIndex, float compareValue, bool asymmetric)
 #	endif
 {
-	const int SampleCount = 8;
-	compareValue += 0.002;
-
-	const static float2 PoissonDiskSampleOffsets[] = {
-		float2(-0.4706069, -0.4427112),
-		float2(-0.9057375, +0.3003471),
-		float2(-0.3487388, +0.4037880),
-		float2(+0.1023042, +0.6439373),
-		float2(+0.5699277, +0.3513750),
-		float2(+0.2939128, -0.1131226),
-		float2(+0.7836658, -0.4208784),
-		float2(+0.1564120, -0.8198990)
-	};
+	const int sampleCount = 8;
+	compareValue += 0.001;
 
 	float layerIndexRcp = rcp(1 + layerIndex);
 
 	float visibility = 0;
-	for (int sampleIndex = 0; sampleIndex < SampleCount; ++sampleIndex) {
-		float2 sampleOffset = mul(PoissonDiskSampleOffsets[sampleIndex], rotationMatrix);
-		float2 sampleOffsetScale = ShadowSampleParam.z;
+	for (int sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
+		float2 sampleOffset = mul(SpiralSampleOffsets8[sampleIndex], rotationMatrix);
 
 #	if defined(RENDER_SHADOWMASKDPB)
-		float2 sampleUV = sampleOffset * 2 + baseUV;
+		float2 sampleUV = sampleOffset * 2 + baseUV;  // Replaced radius parameter to fix sharpness
 
 		baseUV.z += noise;
 
@@ -407,12 +395,15 @@ float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatri
 
 		visibility += tex.SampleCmpLevelZero(samp, float3(shadowMapUV, layerIndex), compareValue + noise * 0.001).x;
 
+#	elif defined(RENDER_SHADOWMASK)
+		float2 sampleUV = layerIndexRcp * sampleOffset * ShadowSampleParam.z + baseUV;
+		visibility += tex.SampleCmpLevelZero(samp, float3(sampleUV, layerIndex), compareValue + noise * 0.001).x;
 #	else
-		float2 sampleUV = layerIndexRcp * sampleOffset * sampleOffsetScale + baseUV;
+		float2 sampleUV = sampleOffset * ShadowSampleParam.z + baseUV;
 		visibility += tex.SampleCmpLevelZero(samp, float3(sampleUV, layerIndex), compareValue + noise * 0.001).x;
 #	endif
 	}
-	return visibility * rcp(SampleCount);
+	return visibility * rcp(sampleCount);
 }
 
 PS_OUTPUT main(PS_INPUT input)
@@ -466,8 +457,8 @@ PS_OUTPUT main(PS_INPUT input)
 	// https://www.shadertoy.com/view/mts3zN
 	float checkerboard = R3Sequence(1, positionMS.xyz);
 
-	if (checkerboard > 0.25)
-		discard;
+	//if (checkerboard > 0.25)
+	//	discard;
 #	endif
 
 	float2 baseTexCoord = 0;
@@ -548,11 +539,12 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 
 	float noise = InterleavedGradientNoise(input.PositionCS.xy, FrameCount);
-	float noiseAdjusted = noise * M_2PI;
+
+	float2 rotation;
+	sincos(M_2PI * noise, rotation.y, rotation.x);
+	float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
 
 	noise = noise * 2.0 - 1.0;
-
-	half2x2 rotationMatrix = half2x2(cos(noiseAdjusted), sin(noiseAdjusted), -sin(noiseAdjusted), cos(noiseAdjusted));
 
 #		if defined(RENDER_SHADOWMASK)
 	if (EndSplitDistances.z >= shadowMapDepth) {

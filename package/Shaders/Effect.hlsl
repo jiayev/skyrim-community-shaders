@@ -3,6 +3,7 @@
 #include "Common/GBuffer.hlsli"
 #include "Common/MotionBlur.hlsli"
 #include "Common/Permutation.hlsli"
+#include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
 #include "Common/VR.hlsli"
@@ -585,9 +586,10 @@ PS_OUTPUT main(PS_INPUT input)
 	if (LightingInfluence.x > 0.0) {
 		float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 		float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
+		bool mainPass = PixelShaderDescriptor & _InWorld;
 
 		uint clusterIndex = 0;
-		if (strictLights[0].EnableGlobalLights && GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+		if (mainPass && GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 			lightCount = lightGrid[clusterIndex].lightCount;
 			uint lightOffset = lightGrid[clusterIndex].offset;
 			[loop] for (uint i = 0; i < lightCount; i++)

@@ -417,6 +417,10 @@ float calculateDepthMultfromUV(float2 a_uv, float a_depth, uint a_eyeIndex = 0)
 #			include "Skylighting/Skylighting.hlsli"
 #		endif
 
+#		if defined(CLOUD_SHADOWS)
+#			include "CloudShadows/CloudShadows.hlsli"
+#		endif
+
 #		include "Common/ShadowSampling.hlsli"
 
 #		if defined(SIMPLE) || defined(UNDERWATER) || defined(LOD) || defined(SPECULAR)
@@ -560,7 +564,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 			reflectionColor = ReflectionTex.SampleLevel(ReflectionSampler, reflectionNormal.xy / reflectionNormal.ww, 0).xyz;
 		}
 
-#			if !defined(LOD) && NUM_SPECULAR_LIGHTS == 0 && !defined(VR)
+#			if NUM_SPECULAR_LIGHTS == 0 && !defined(VR)
 		if (PixelShaderDescriptor & _Cubemap) {
 			float2 ssrReflectionUv = GetDynamicResolutionAdjustedScreenPosition((DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw + SSRParams2.x * normal.xy);
 			float4 ssrReflectionColor1 = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUv);
@@ -568,7 +572,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 			float4 ssrReflectionColor = lerp(ssrReflectionColor2, ssrReflectionColor1, SSRParams.y);
 
 			finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
-			ssrFraction = saturate(ssrReflectionColor.w * (SSRParams.x * distanceFactor));
+			ssrFraction = saturate(ssrReflectionColor.w * SSRParams.x * (1.0 - saturate(length(input.WPosition.xyz) / 320000)));
 		}
 #			endif
 
@@ -613,7 +617,7 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 }
 
 float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
-	inout float4 distanceMul, float refractionsDepthFactor, float fresnel, uint a_eyeIndex, float3 viewPosition)
+	inout float4 distanceMul, float refractionsDepthFactor, float fresnel, uint a_eyeIndex, float3 viewPosition, inout float shadow)
 {
 #			if defined(REFRACTIONS)
 	float4 refractionNormal = mul(transpose(TextureProj[a_eyeIndex]), float4((VarAmounts.w * refractionsDepthFactor).xx * normal.xy + input.MPosition.xy, input.MPosition.z, 1));
@@ -662,7 +666,7 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	float3 refractionDiffuseColor = lerp(ShallowColor.xyz, DeepColor.xyz, distanceMul.y);
 
 	if (!(PixelShaderDescriptor & _Interior)) {
-		float vl = GetVL(input.WPosition.xyz, refractionWorldPosition.xyz, input.HPosition.xy, a_eyeIndex) * (dot(viewDirection, SunDir.xyz) * 0.5 + 0.5);
+		float vl = GetVL(input.WPosition.xyz, refractionWorldPosition.xyz, normal, screenPosition, shadow, a_eyeIndex);
 
 		float3 refractionDiffuseColorSunlight = refractionDiffuseColor * vl * SunColor.xyz * SunDir.w;
 #				if defined(SKYLIGHTING)
@@ -706,10 +710,6 @@ float3 GetSunColor(float3 normal, float3 viewDirection)
 	return reflectionMul * SunColor.xyz * SunDir.w * DeepColor.w;
 #			endif
 }
-#		endif
-
-#		if defined(WATER_BLENDING)
-#			include "WaterBlending/WaterBlending.hlsli"
 #		endif
 
 #		if defined(LIGHT_LIMIT_FIX)
@@ -795,8 +795,10 @@ PS_OUTPUT main(PS_INPUT input)
 	isSpecular = true;
 #			else
 
+	float shadow = 1;
+
 	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, depthControl.y, eyeIndex);
-	float3 diffuseColor = GetWaterDiffuseColor(input, normal, viewDirection, distanceMul, depthControl.y, fresnel, eyeIndex, viewPosition);
+	float3 diffuseColor = GetWaterDiffuseColor(input, normal, viewDirection, distanceMul, depthControl.y, fresnel, eyeIndex, viewPosition, shadow);
 
 	depthControl = DepthControl * (distanceMul - 1) + 1;
 
@@ -838,8 +840,14 @@ PS_OUTPUT main(PS_INPUT input)
 #				else
 	float3 sunColor = GetSunColor(normal, viewDirection);
 
-	if (!(PixelShaderDescriptor & _Interior))
-		sunColor *= GetShadow(input.WPosition + normal * 32, eyeIndex);
+	if (!(PixelShaderDescriptor & _Interior)) {
+		if (shadow != 0.0) {
+			float screenNoise = InterleavedGradientNoise(input.HPosition.xy, FrameCount);
+			sunColor *= min(shadow, GetLightingShadow(screenNoise, input.WPosition, eyeIndex));
+		} else {
+			sunColor *= shadow;
+		}
+	}
 
 	float specularFraction = lerp(1, fresnel * depthControl.x, distanceFactor);
 	float3 finalColorPreFog = lerp(diffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;

@@ -37,8 +37,6 @@ public:
 		float radius;
 		PositionOpt positionWS[2];
 		PositionOpt positionVS[2];
-		uint firstPersonShadow;
-		float pad0[3];
 	};
 
 	struct ClusterAABB
@@ -84,9 +82,9 @@ public:
 	{
 		LightData StrictLights[15];
 		uint NumStrictLights;
-		uint EnableGlobalLights;
 		float LightsNear;
 		float LightsFar;
+		uint pad0;
 	};
 
 	StrictLightData strictLightDataTemp;
@@ -155,7 +153,6 @@ public:
 	struct Settings
 	{
 		bool EnableContactShadows = false;
-		bool EnableFirstPersonShadows = false;
 		bool EnableLightsVisualisation = false;
 		uint LightsVisualisationMode = 0;
 		bool EnableParticleLights = true;
@@ -341,12 +338,11 @@ struct fmt::formatter<LightLimitFix::LightData>
 	auto format(const LightLimitFix::LightData& l, format_context& ctx) const -> format_context::iterator
 	{
 		// ctx.out() is an output iterator to write to.
-		return fmt::format_to(ctx.out(), "{{address {:x} color {} radius {} posWS {} {} posVS {} {} first-person shadow {}}}",
+		return fmt::format_to(ctx.out(), "{{address {:x} color {} radius {} posWS {} {} posVS {} {}}}",
 			reinterpret_cast<uintptr_t>(&l),
 			(Vector3)l.color,
 			l.radius,
 			(Vector3)l.positionWS[0].data, (Vector3)l.positionWS[1].data,
-			(Vector3)l.positionVS[0].data, (Vector3)l.positionVS[1].data,
-			l.firstPersonShadow);
+			(Vector3)l.positionVS[0].data, (Vector3)l.positionVS[1].data);
 	}
 };

@@ -1002,6 +1002,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Skylighting/Skylighting.hlsli"
 #	endif
 
+#	define LinearSampler SampColorSampler
+
+#	include "Common/ShadowSampling.hlsli"
+
 PS_OUTPUT main(PS_INPUT input, bool frontFace
 			   : SV_IsFrontFace)
 {
@@ -1031,9 +1035,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = InterleavedGradientNoise(input.Position.xy, FrameCount);
+	float3 screenNoise3D;
+	{
+		uint3 seed = pcg3d(uint3(input.Position.xy, input.Position.x * M_PI));
+		float3 rnd = R3Modified(FrameCount, seed / 4294967295.f);
+
+		float phi = rnd.x * 2 * 3.1415926535;
+		float cos_theta = rnd.y * 2 - 1;
+		float sin_theta = sqrt(1 - cos_theta);
+		float r = rnd.z;
+		float4 sincos_phi;
+		sincos(phi, sincos_phi.y, sincos_phi.x);
+		screenNoise3D = float3(r * sin_theta * sincos_phi.x, r * sin_theta * sincos_phi.y, r * cos_theta);
+	}
 
 	// If InWorld or first-person
-	bool mainPass = (PixelShaderDescriptor & _InWorld) || !FrameParams.y;
+	bool mainPass = PixelShaderDescriptor & _InWorld;
 
 #	if defined(TERRAIN_BLENDING)
 	float depthSampled = GetTerrainOffsetDepth(screenUV, eyeIndex);
@@ -1843,6 +1860,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if ((PixelShaderDescriptor & _DefShadow) && (PixelShaderDescriptor & _ShadowDir)) {
 		dirLightColorMultiplier *= shadowColor.x;
 	}
+#	if !defined(DEFERRED)
+	else if (!Interior && mainPass) {
+		dirLightColorMultiplier *= GetLightingShadow(screenNoise, input.WorldPosition, eyeIndex);
+	}
+#	endif
 
 #	if defined(SOFT_LIGHTING) || defined(BACK_LIGHTING) || defined(RIM_LIGHTING)
 	bool inDirShadow = ((PixelShaderDescriptor & _DefShadow) && (PixelShaderDescriptor & _ShadowDir) && shadowColor.x == 0);
@@ -2074,11 +2096,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	uint totalLightCount = strictLights[0].NumStrictLights;
 	uint clusterIndex = 0;
 	uint lightOffset = 0;
-	if (strictLights[0].EnableGlobalLights && GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+	if (mainPass && GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		numClusteredLights = lightGrid[clusterIndex].lightCount;
 		totalLightCount += numClusteredLights;
 		lightOffset = lightGrid[clusterIndex].offset;
 	}
+
+	uint contactShadowSteps = round(4.0 * (1.0 - saturate(viewPosition.z / 1024.0)));
 
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
 	{
@@ -2112,19 +2136,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float lightAngle = dot(worldSpaceNormal.xyz, normalizedLightDirection.xyz);
 
 		float contactShadow = 1;
-		[branch] if (strictLights[0].EnableGlobalLights && !FrameParams.z && FrameParams.y && (light.firstPersonShadow || lightLimitFixSettings.EnableContactShadows) && shadowComponent != 0.0 && lightAngle > 0.0)
+		[branch] if (mainPass && !FrameParams.z && lightLimitFixSettings.EnableContactShadows && shadowComponent != 0.0 && lightAngle > 0.0)
 		{
 			float3 normalizedLightDirectionVS = normalize(light.positionVS[eyeIndex].xyz - viewPosition.xyz);
-			contactShadow = ContactShadows(viewPosition, screenUV, screenNoise, normalizedLightDirectionVS, light.radius, light.firstPersonShadow, eyeIndex);
-			[flatten] if (light.firstPersonShadow)
-			{
-				contactShadow = contactShadow;
-			}
-			else
-			{
-				float shadowIntensityFactor = saturate(dot(worldSpaceNormal, normalizedLightDirection.xyz) * PI);
-				contactShadow = lerp(lerp(1.0, contactShadow, shadowIntensityFactor), 1.0, !frontFace * 0.2);
-			}
+			contactShadow = ContactShadows(viewPosition, screenNoise, screenNoise3D, normalizedLightDirectionVS, contactShadowSteps, eyeIndex);
 		}
 
 		float3 refractedLightDirection = normalizedLightDirection;
