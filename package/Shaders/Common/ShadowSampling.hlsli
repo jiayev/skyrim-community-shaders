@@ -28,7 +28,14 @@ float3 Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 scree
 
 	float shadowMapDepth = length(positionWS.xyz);
 
-	float fadeFactor = 1 - pow(saturate(dot(positionWS.xyz, positionWS.xyz) / sD.ShadowLightParam.z), 8);
+	float fadeFactor = 1.0 - pow(saturate(dot(positionWS.xyz, positionWS.xyz) / sD.ShadowLightParam.z), 8);
+	uint sampleCount = ceil(8.0 * (1.0 - saturate(shadowMapDepth / sqrt(sD.ShadowLightParam.z))));
+
+	if (sampleCount == 0)
+		return 1.0;
+
+	float rcpSampleCount = rcp(sampleCount);
+
 	uint3 seed = pcg3d(uint3(screenPosition.xy, screenPosition.x * M_PI));
 
 	float2 compareValue;
@@ -36,10 +43,10 @@ float3 Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 scree
 	compareValue.y = mul(transpose(sD.ShadowMapProj[eyeIndex][1]), float4(positionWS, 1)).z;
 
 	float shadow = 0.0;
-	[unroll] for (int i = 0; i < 8; i++)
+	[unroll] for (int i = 0; i < sampleCount; i++)
 	{
 		if (sD.EndSplitDistances.z >= shadowMapDepth) {
-			float3 rnd = R3Modified(i + FrameCount * 8, seed / 4294967295.f);
+			float3 rnd = R3Modified(i + FrameCount * sampleCount, seed / 4294967295.f);
 
 			// https://stats.stackexchange.com/questions/8021/how-to-generate-uniformly-distributed-points-in-the-3-d-unit-ball
 			float phi = rnd.x * 2 * 3.1415926535;
@@ -48,10 +55,10 @@ float3 Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 scree
 			float r = rnd.z;
 			float4 sincos_phi;
 			sincos(phi, sincos_phi.y, sincos_phi.x);
-			float3 sampleOffset = viewDirection * i * 32;
+			float3 sampleOffset = viewDirection * i * 256 * rcpSampleCount;
 			sampleOffset += float3(r * sin_theta * sincos_phi.x, r * sin_theta * sincos_phi.y, r * cos_theta) * 32;
 
-			uint cascadeIndex = (sD.EndSplitDistances.x < (shadowMapDepth - 1000) + dot(sampleOffset, float2(1, 1)));  // Stochastic cascade sampling
+			uint cascadeIndex = (sD.EndSplitDistances.x < shadowMapDepth + dot(sampleOffset, float2(1, 1)));  // Stochastic cascade sampling
 			float3 positionLS = mul(transpose(sD.ShadowMapProj[eyeIndex][cascadeIndex]), float4(positionWS + sampleOffset, 1));
 
 			float4 depths = SharedTexShadowMapSampler.GatherRed(LinearSampler, float3(saturate(positionLS.xy), cascadeIndex), 0);
@@ -61,7 +68,7 @@ float3 Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 scree
 		}
 	}
 
-	return lerp(1.0, shadow / 8.0, fadeFactor);
+	return lerp(1.0, shadow * rcpSampleCount, fadeFactor);
 }
 
 float3 Get2DFilteredShadowCascade(float noise, float2x2 rotationMatrix, float sampleOffsetScale, float2 baseUV, float cascadeIndex, float compareValue, uint eyeIndex)
@@ -159,8 +166,10 @@ float GetVL(float3 startPosWS, float3 endPosWS, float3 normal, float2 screenPosi
 
 	worldShadow *= phase;
 
-	float nearFactor = 1.0 - saturate(startDepth / 5000.0);
-	uint sampleCount = round(8 * nearFactor);
+	PerGeometry sD = SharedPerShadow[0];
+
+	float fadeFactor = 1.0 - pow(saturate(dot(startPosWS.xyz, startPosWS.xyz) / sD.ShadowLightParam.z), 8);
+	uint sampleCount = ceil(8.0 * (1.0 - saturate(startDepth / (sD.ShadowLightParam.z * sD.ShadowLightParam.z))));
 
 	if (sampleCount == 0)
 		return worldShadow;
@@ -178,7 +187,6 @@ float GetVL(float3 startPosWS, float3 endPosWS, float3 normal, float2 screenPosi
 	// Offset starting position
 	startPosWS += worldDir * stepSize * noise;
 
-	PerGeometry sD = SharedPerShadow[0];
 	sD.EndSplitDistances.x = GetScreenDepth(sD.EndSplitDistances.x);
 	sD.EndSplitDistances.y = GetScreenDepth(sD.EndSplitDistances.y);
 	sD.StartSplitDistances.y = GetScreenDepth(sD.StartSplitDistances.y);
@@ -202,13 +210,13 @@ float GetVL(float3 startPosWS, float3 endPosWS, float3 normal, float2 screenPosi
 
 		float3 samplePositionLS = mul(transpose(lightProjectionMatrix), float4(samplePositionWS.xyz, 1)).xyz;
 
-		samplePositionLS.xy += nearFactor * 8.0 * sampleOffset * rcp(shadowRange);
+		samplePositionLS.xy += 8.0 * sampleOffset * rcp(shadowRange);
 
 		float4 depths = SharedTexShadowMapSampler.GatherRed(LinearSampler, float3(saturate(samplePositionLS.xy), cascadeIndex), 0);
 
 		vlShadow += dot(depths > samplePositionLS.z, 0.25);
 	}
-	return lerp(worldShadow, min(worldShadow, vlShadow * stepSize), nearFactor);
+	return lerp(worldShadow, min(worldShadow, vlShadow * stepSize), fadeFactor);
 }
 
 float3 GetEffectShadow(float3 worldPosition, float3 viewDirection, float2 screenPosition, uint eyeIndex)

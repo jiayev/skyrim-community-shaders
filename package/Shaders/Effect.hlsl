@@ -499,21 +499,41 @@ cbuffer PerGeometry : register(b2)
 #	endif
 };
 
-#	if defined(MEMBRANE) || !defined(LIGHTING)
-#		undef LIGHT_LIMIT_FIX
-#	endif
-
 #	if defined(LIGHT_LIMIT_FIX)
 #		include "LightLimitFix/LightLimitFix.hlsli"
 #	endif
 
+#	define LinearSampler SampBaseSampler
+
+#	if defined(TERRA_OCC)
+#		include "TerrainOcclusion/TerrainOcclusion.hlsli"
+#	endif
+
+#	if defined(CLOUD_SHADOWS)
+#		include "CloudShadows/CloudShadows.hlsli"
+#	endif
+
+#	include "Common/ShadowSampling.hlsli"
+
 #	if defined(LIGHTING)
-float3 GetLightingColor(float3 msPosition, uint a_eyeIndex = 0)
+float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPosition, uint eyeIndex)
 {
-	float4 lightDistanceSquared = (PLightPositionX[a_eyeIndex] - msPosition.xxxx) * (PLightPositionX[a_eyeIndex] - msPosition.xxxx) + (PLightPositionY[a_eyeIndex] - msPosition.yyyy) * (PLightPositionY[a_eyeIndex] - msPosition.yyyy) + (PLightPositionZ[a_eyeIndex] - msPosition.zzzz) * (PLightPositionZ[a_eyeIndex] - msPosition.zzzz);
+	float4 lightDistanceSquared = (PLightPositionX[eyeIndex] - msPosition.xxxx) * (PLightPositionX[eyeIndex] - msPosition.xxxx) + (PLightPositionY[eyeIndex] - msPosition.yyyy) * (PLightPositionY[eyeIndex] - msPosition.yyyy) + (PLightPositionZ[eyeIndex] - msPosition.zzzz) * (PLightPositionZ[eyeIndex] - msPosition.zzzz);
 	float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 
 	float3 color = DLightColor.xyz;
+	if (!Interior && (PixelShaderDescriptor & _InWorld)) {
+		float3 viewDirection = normalize(worldPosition);
+		color = DirLightColorShared * GetEffectShadow(worldPosition, viewDirection, screenPosition, eyeIndex);
+
+		float3 directionalAmbientColor = DirectionalAmbientShared._14_24_34;
+		color += directionalAmbientColor;
+	} else {
+		color = DirLightColorShared;
+
+		float3 directionalAmbientColor = DirectionalAmbientShared._14_24_34;
+		color += directionalAmbientColor;
+	}
 	color.x += dot(PLightColorR * lightFadeMul, 1.0.xxxx);
 	color.y += dot(PLightColorG * lightFadeMul, 1.0.xxxx);
 	color.z += dot(PLightColorB * lightFadeMul, 1.0.xxxx);
@@ -579,7 +599,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 propertyColor = PropertyColor.xyz;
 
 #	if defined(LIGHTING)
-	propertyColor = GetLightingColor(input.MSPosition, eyeIndex);
+	propertyColor = GetLightingColor(input.MSPosition, input.WorldPosition, input.Position, eyeIndex);
 
 #		if defined(LIGHT_LIMIT_FIX)
 	uint lightCount = 0;
