@@ -1742,13 +1742,6 @@ namespace SIE
 	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (shader.shaderType.get() == RE::BSShader::Type::Effect) {
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Lighting)) {
-			} else {
-				return nullptr;
-			}
-		}
-
 		if (shader.shaderType == RE::BSShader::Type::ImageSpace) {
 			const auto& isShader = static_cast<const RE::BSImagespaceShader&>(shader);
 			if (!SShaderCache::GetImagespaceShaderDescriptor(isShader, descriptor)) {
@@ -1791,13 +1784,6 @@ namespace SIE
 	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (shader.shaderType.get() == RE::BSShader::Type::Effect) {
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Lighting)) {
-			} else {
-				return nullptr;
-			}
-		}
-
 		auto state = State::GetSingleton();
 		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)) && state->enablePShaders)) {
 			return nullptr;

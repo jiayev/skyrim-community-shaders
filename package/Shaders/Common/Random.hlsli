@@ -1,6 +1,18 @@
 #ifndef CS_RANDOM
 #define CS_RANDOM
 
+// https://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare/
+const static float2 SpiralSampleOffsets8[] = {
+	{ -0.7071, 0.7071 },
+	{ -0.0000, -0.8750 },
+	{ 0.5303, 0.5303 },
+	{ -0.6250, -0.0000 },
+	{ 0.3536, -0.3536 },
+	{ -0.0000, 0.3750 },
+	{ -0.1768, -0.1768 },
+	{ 0.1250, 0.0000 }
+};
+
 ///////////////////////////////////////////////////////////
 // WHITE-LIKE HASHES
 ///////////////////////////////////////////////////////////

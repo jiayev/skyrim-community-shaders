@@ -10,7 +10,6 @@ static constexpr uint MAX_LIGHTS = 2048;
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LightLimitFix::Settings,
 	EnableContactShadows,
-	EnableFirstPersonShadows,
 	EnableParticleLights,
 	EnableParticleLightsCulling,
 	EnableParticleLightsDetection,
@@ -70,11 +69,6 @@ void LightLimitFix::DrawSettings()
 		ImGui::Checkbox("Enable Contact Shadows", &settings.EnableContactShadows);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("All lights cast small shadows. Performance impact.");
-		}
-
-		ImGui::Checkbox("Enable First-Person Shadows", &settings.EnableFirstPersonShadows);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Torches and light spells will cast shadows in first-person. Performance impact.");
 		}
 
 		ImGui::Spacing();
@@ -297,8 +291,6 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 		light.radius = runtimeData.radius.x;
 
-		light.firstPersonShadow = false;
-
 		SetLightPosition(light, niLight->world.translate, inWorld);
 
 		strictLightDataTemp.StrictLights[i] = light;
@@ -320,8 +312,6 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 	bool isWorld = accumulator->GetRuntimeData().activeShadowSceneNode == RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
 
 	if (!isEmpty || (isEmpty && !wasEmpty) || isWorld != wasWorld) {
-		strictLightDataTemp.EnableGlobalLights = isWorld;
-
 		D3D11_MAPPED_SUBRESOURCE mapped;
 		DX::ThrowIfFailed(context->Map(strictLightData->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 		size_t bytes = sizeof(StrictLightData);
@@ -661,28 +651,6 @@ void LightLimitFix::UpdateLights()
 		viewMatrixCached[eyeIndex].Invert(viewMatrixInverseCached[eyeIndex]);
 	}
 
-	RE::NiLight* refLight = nullptr;
-	RE::NiLight* magicLight = nullptr;
-	RE::BSLight* firstPersonLight = nullptr;
-	RE::BSLight* thirdPersonLight = nullptr;
-
-	if (settings.EnableFirstPersonShadows) {
-		if (auto playerCamera = RE::PlayerCamera::GetSingleton()) {
-			if (playerCamera->IsInFirstPerson() || REL::Module::IsVR()) {
-				if (auto player = RE::PlayerCharacter::GetSingleton()) {
-					firstPersonLight = player->GetInfoRuntimeData().firstPersonLight.get();
-					thirdPersonLight = player->GetInfoRuntimeData().thirdPersonLight.get();
-					if (auto light = player->extraList.GetByType<RE::ExtraLight>()) {
-						refLight = light->lightData->light.get();
-					}
-					if (auto light = player->extraList.GetByType<RE::ExtraMagicLight>()) {
-						magicLight = light->lightData->light.get();
-					}
-				}
-			}
-		}
-	}
-
 	eastl::vector<LightData> lightsData{};
 	lightsData.reserve(MAX_LIGHTS);
 
@@ -724,7 +692,6 @@ void LightLimitFix::UpdateLights()
 					light.color *= dimmer;
 
 					if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
-						light.firstPersonShadow = bsLight == firstPersonLight || bsLight == thirdPersonLight || niLight == refLight || niLight == magicLight;
 						lightsData.push_back(light);
 					}
 				}
