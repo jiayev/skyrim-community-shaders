@@ -622,7 +622,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 baseColorMul = float4(1, 1, 1, 1);
 #	else
 	float4 baseColorMul = BaseColor;
-#		if defined(VC)
+#		if defined(VC) && !defined(PROJECTED_UV)
 	baseColorMul *= input.Color;
 #		endif
 #	endif
@@ -676,7 +676,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(MEMBRANE)
 		grayscaleToColorUv.y = PropertyColor.x;
 #	endif
-		baseColor.xyz = BaseColorScale.x * TexGrayscaleSampler.Sample(SampGrayscaleSampler, grayscaleToColorUv).xyz;
+		baseColor.xyz = baseColorScale * TexGrayscaleSampler.Sample(SampGrayscaleSampler, grayscaleToColorUv).xyz;
 	}
 
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence.xxx);
