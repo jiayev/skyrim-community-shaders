@@ -137,6 +137,7 @@ struct PBRSettings
 	float DirectionalLightColorMultiplier;
 	float PointLightColorMultiplier;
 	float AmbientLightColorMultiplier;
+	float BaseColorGamma;
 	uint UseMultipleScattering;
 	uint UseMultiBounceAO;
 	uint3 pad0;

@@ -539,19 +539,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 lightsDiffuseColor = 0;
 	float3 lightsSpecularColor = 0;
 
-	dirLightColor *= dirLightColorMultiplier;
-
 #			if defined(TRUE_PBR)
 	{
-		float3 pbrDirLightColor = PBR::AdjustDirectionalLightColor(DirLightColorShared.xyz) * dirLightColorMultiplier * dirShadow;
-
+		PBR::LightProperties lightProperties = PBR::InitLightProperties(DirLightColorShared.xyz, dirLightColorMultiplier * dirShadow, 1);
 		float3 dirDiffuseColor, coatDirDiffuseColor, dirTransmissionColor, dirSpecularColor;
-		PBR::GetDirectLightInput(dirDiffuseColor, coatDirDiffuseColor, dirTransmissionColor, dirSpecularColor, normal, normal, viewDirection, viewDirection, DirLightDirection, DirLightDirection, pbrDirLightColor, pbrDirLightColor, pbrSurfaceProperties, tbn, input.TexCoord.xy);
+		PBR::GetDirectLightInput(dirDiffuseColor, coatDirDiffuseColor, dirTransmissionColor, dirSpecularColor, normal, normal, viewDirection, viewDirection, DirLightDirection, DirLightDirection, lightProperties, pbrSurfaceProperties, tbn, input.TexCoord.xy);
 		lightsDiffuseColor += dirDiffuseColor;
 		transmissionColor += dirTransmissionColor;
 		specularColorPBR += dirSpecularColor;
 	}
 #			else
+	dirLightColor *= dirLightColorMultiplier;
+
 	lightsDiffuseColor += dirLightColor * saturate(dirLightAngle) * dirShadow;
 
 	float3 albedo = max(0, baseColor.xyz * input.VertexColor.xyz);
@@ -592,9 +591,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #				if defined(TRUE_PBR)
 				{
+					PBR::LightProperties lightProperties = PBR::InitLightProperties(lightColor * intensityMultiplier, 1, 1);
 					float3 pointDiffuseColor, coatDirDiffuseColor, pointTransmissionColor, pointSpecularColor;
-					float3 pbrLightColor = PBR::AdjustPointLightColor(lightColor * intensityMultiplier);
-					PBR::GetDirectLightInput(pointDiffuseColor, coatDirDiffuseColor, pointTransmissionColor, pointSpecularColor, normal, normal, viewDirection, viewDirection, normalizedLightDirection, normalizedLightDirection, pbrLightColor, pbrLightColor, pbrSurfaceProperties, tbn, input.TexCoord.xy);
+					PBR::GetDirectLightInput(pointDiffuseColor, coatDirDiffuseColor, pointTransmissionColor, pointSpecularColor, normal, normal, viewDirection, viewDirection, normalizedLightDirection, normalizedLightDirection, lightProperties, pbrSurfaceProperties, tbn, input.TexCoord.xy);
 					lightsDiffuseColor += pointDiffuseColor;
 					transmissionColor += pointTransmissionColor;
 					specularColorPBR += pointSpecularColor;
