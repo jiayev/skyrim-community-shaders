@@ -403,7 +403,7 @@ float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatri
 		visibility += tex.SampleCmpLevelZero(samp, float3(sampleUV, layerIndex), compareValue + noise * 0.001).x;
 #	endif
 	}
-	return visibility * rcp(sampleCount);
+	return visibility * rcp((float)sampleCount);
 }
 
 PS_OUTPUT main(PS_INPUT input)

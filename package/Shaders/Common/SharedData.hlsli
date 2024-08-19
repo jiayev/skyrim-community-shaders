@@ -67,7 +67,7 @@ struct TerraOccSettings
 	float3 Offset;
 };
 
-struct WetnessEffects
+struct WetnessEffectsSettings
 {
 	float Time;
 	float Raining;
@@ -149,7 +149,7 @@ cbuffer FeatureData : register(b6)
 	CPMSettings extendedMaterialSettings;
 	CubemapCreatorSettings cubemapCreatorSettings;
 	TerraOccSettings terraOccSettings;
-	WetnessEffects wetnessEffects;
+	WetnessEffectsSettings wetnessEffectsSettings;
 	LightLimitFixSettings lightLimitFixSettings;
 	SkylightingSettings skylightingSettings;
 	PBRSettings pbrSettings;

@@ -609,7 +609,7 @@ PS_OUTPUT main(PS_INPUT input)
 		bool mainPass = PixelShaderDescriptor & _InWorld;
 
 		uint clusterIndex = 0;
-		if (mainPass && GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+		if (mainPass && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 			lightCount = lightGrid[clusterIndex].lightCount;
 			uint lightOffset = lightGrid[clusterIndex].offset;
 			[loop] for (uint i = 0; i < lightCount; i++)
@@ -731,11 +731,11 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (lightLimitFixSettings.EnableLightsVisualisation) {
 		if (lightLimitFixSettings.LightsVisualisationMode == 0) {
-			psout.Diffuse.xyz = TurboColormap(0.0);
+			psout.Diffuse.xyz = LightLimitFix::TurboColormap(0.0);
 		} else if (lightLimitFixSettings.LightsVisualisationMode == 1) {
-			psout.Diffuse.xyz = TurboColormap(0.0);
+			psout.Diffuse.xyz = LightLimitFix::TurboColormap(0.0);
 		} else {
-			psout.Diffuse.xyz = TurboColormap((float)lightCount / 128.0);
+			psout.Diffuse.xyz = LightLimitFix::TurboColormap((float)lightCount / 128.0);
 		}
 	}
 #	endif

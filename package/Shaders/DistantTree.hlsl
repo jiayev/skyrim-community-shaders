@@ -215,21 +215,21 @@ PS_OUTPUT main(PS_INPUT input)
 	float dirShadow = 1;
 
 #			if defined(SCREEN_SPACE_SHADOWS)
-	dirShadow = lerp(0.2, 1.0, GetScreenSpaceShadow(screenUV, screenNoise, viewPosition, eyeIndex));
+	dirShadow = lerp(0.2, 1.0, ScreenSpaceShadows::GetScreenSpaceShadow(screenUV, screenNoise, viewPosition, eyeIndex));
 #			endif
 
 #			if defined(TERRA_OCC)
 	if (dirShadow > 0.0) {
 		float terrainShadow = 1;
 		float terrainAo = 1;
-		GetTerrainOcclusion(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex], length(input.WorldPosition.xyz), SampDiffuse, terrainShadow, terrainAo);
+		TerrainOcclusion::GetTerrainOcclusion(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex], length(input.WorldPosition.xyz), SampDiffuse, terrainShadow, terrainAo);
 		dirShadow = min(dirShadow, terrainShadow);
 	}
 #			endif
 
 #			if defined(CLOUD_SHADOWS)
 	if (dirShadow > 0.0) {
-		dirShadow *= GetCloudShadowMult(input.WorldPosition, SampDiffuse);
+		dirShadow *= CloudShadows::GetCloudShadowMult(input.WorldPosition, SampDiffuse);
 	}
 #			endif
 
@@ -259,7 +259,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 ddy = ddy_coarse(input.WorldPosition);
 	float3 normal = normalize(cross(ddx, ddy));
 
-	float3 color = baseColor.xyz * (DiffuseColor + AmbientColor);
+	float3 color = baseColor.xyz * (DiffuseColor.xyz + AmbientColor.xyz);
 	psout.Diffuse = float4(color, 1.0);
 #		endif  // DEFERRED
 #	endif      // RENDER_DEPTH
