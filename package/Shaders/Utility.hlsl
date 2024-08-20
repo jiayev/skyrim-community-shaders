@@ -373,7 +373,7 @@ float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatri
 {
 	const int sampleCount = 8;
 #	if defined(RENDER_SHADOWMASK)
-	compareValue += 0.002 * (1.0 + layerIndex);
+	compareValue += 0.001 * (1.0 + layerIndex);
 #	else
 	compareValue += 0.001;
 #	endif
