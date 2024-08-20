@@ -1049,8 +1049,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		screenNoise3D = float3(r * sin_theta * sincos_phi.x, r * sin_theta * sincos_phi.y, r * cos_theta);
 	}
 
-	// If InWorld or first-person
-	bool mainPass = PixelShaderDescriptor & _InWorld;
+	bool inWorld = ExtraShaderDescriptor & _InWorld;
 
 #	if defined(TERRAIN_BLENDING)
 	float depthSampled = TerrainBlending::GetTerrainOffsetDepth(screenUV, eyeIndex);
@@ -1761,7 +1760,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(DEFERRED)
 	sh2 skylightingSH = Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMSSkylight, worldSpaceNormal);
 #		else
-	sh2 skylightingSH = mainPass ? Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMSSkylight, worldSpaceNormal) : float4(sqrt(4.0 * shPI), 0, 0, 0);
+	sh2 skylightingSH = inWorld ? Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMSSkylight, worldSpaceNormal) : float4(sqrt(4.0 * shPI), 0, 0, 0);
 #		endif
 
 #	endif
@@ -1787,9 +1786,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float minWetnessAngle = 0;
 	minWetnessAngle = saturate(max(minWetnessValue, worldSpaceNormal.z));
 #		if defined(SKYLIGHTING)
-	float wetnessOcclusion = mainPass ? pow(saturate(shUnproject(skylightingSH, float3(0, 0, 1))), 2) : 0;
+	float wetnessOcclusion = inWorld ? pow(saturate(shUnproject(skylightingSH, float3(0, 0, 1))), 2) : 0;
 #		else
-	float wetnessOcclusion = mainPass;
+	float wetnessOcclusion = inWorld;
 #		endif
 
 	float4 raindropInfo = float4(0, 0, 1, 0);
@@ -1878,7 +1877,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		dirLightColorMultiplier *= shadowColor.x;
 	}
 #	if !defined(DEFERRED)
-	else if (!Interior && mainPass) {
+	else if (!Interior && inWorld) {
 		dirLightColorMultiplier *= GetLightingShadow(screenNoise, input.WorldPosition, eyeIndex);
 	}
 #	endif
@@ -1903,16 +1902,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(DEFERRED)
 #		if defined(SOFT_LIGHTING) || defined(BACK_LIGHTING) || defined(RIM_LIGHTING)
-	bool extraDirShadows = !inDirShadow && mainPass;
+	bool extraDirShadows = !inDirShadow && inWorld;
 #		else
 	// If lighting cannot hit the backface of the object, do not render shadows
-	bool extraDirShadows = !inDirShadow && dirLightAngle > 0.0 && mainPass;
+	bool extraDirShadows = !inDirShadow && dirLightAngle > 0.0 && inWorld;
 #		endif
 #	else
 #		if defined(SOFT_LIGHTING) || defined(BACK_LIGHTING) || defined(RIM_LIGHTING)
-	bool extraDirShadows = !inDirShadow && mainPass;
+	bool extraDirShadows = !inDirShadow && inWorld;
 #		else
-	bool extraDirShadows = !inDirShadow && dirLightAngle > 0.0 && mainPass;
+	bool extraDirShadows = !inDirShadow && dirLightAngle > 0.0 && inWorld;
 #		endif
 #	endif
 
@@ -2100,7 +2099,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	uint totalLightCount = strictLights[0].NumStrictLights;
 	uint clusterIndex = 0;
 	uint lightOffset = 0;
-	if (mainPass && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+	if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		numClusteredLights = lightGrid[clusterIndex].lightCount;
 		totalLightCount += numClusteredLights;
 		lightOffset = lightGrid[clusterIndex].offset;
@@ -2140,7 +2139,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float lightAngle = dot(worldSpaceNormal.xyz, normalizedLightDirection.xyz);
 
 		float contactShadow = 1;
-		[branch] if (mainPass && !FrameParams.z && lightLimitFixSettings.EnableContactShadows && shadowComponent != 0.0 && lightAngle > 0.0)
+		[branch] if (inWorld && !FrameParams.z && lightLimitFixSettings.EnableContactShadows && shadowComponent != 0.0 && lightAngle > 0.0)
 		{
 			float3 normalizedLightDirectionVS = normalize(light.positionVS[eyeIndex].xyz - viewPosition.xyz);
 			contactShadow = LightLimitFix::ContactShadows(viewPosition, screenNoise, screenNoise3D, normalizedLightDirectionVS, contactShadowSteps, eyeIndex);

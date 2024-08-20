@@ -108,6 +108,13 @@ public:
 	uint modifiedPixelDescriptor = 0;
 	uint lastModifiedVertexDescriptor = 0;
 	uint lastModifiedPixelDescriptor = 0;
+	uint currentExtraDescriptor = 0;
+	uint lastExtraDescriptor = 0;
+
+	enum class ExtraShaderDescriptors : uint32_t
+	{
+		InWorld = 1 << 0,
+	};
 
 	void UpdateSharedData();
 
@@ -115,7 +122,8 @@ public:
 	{
 		uint VertexShaderDescriptor;
 		uint PixelShaderDescriptor;
-		uint pad0[2];
+		uint ExtraShaderDescriptor;
+		uint pad0[1];
 	};
 
 	ConstantBuffer* permutationCB = nullptr;

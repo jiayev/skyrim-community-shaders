@@ -16,11 +16,6 @@
 
 #include "VariableRateShading.h"
 
-enum class PermutationFlags : uint32_t
-{
-	InWorld = 1 << 24,
-};
-
 void State::Draw()
 {
 	const auto& shaderCache = SIE::ShaderCache::Instance();
@@ -49,22 +44,26 @@ void State::Draw()
 					// Only check against non-shader bits
 					currentPixelDescriptor &= ~modifiedPixelDescriptor;
 
+					currentExtraDescriptor = 0;
+
 					if (auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator()) {
 						// Set an unused bit to indicate if we are rendering an object in the main rendering pass
 						if (accumulator->GetRuntimeData().activeShadowSceneNode == RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0]) {
-							currentPixelDescriptor |= (uint32_t)PermutationFlags::InWorld;
+							currentExtraDescriptor |= (uint32_t)ExtraShaderDescriptors::InWorld;
 						}
 					}
 
-					if (currentPixelDescriptor != lastPixelDescriptor) {
+					if (currentPixelDescriptor != lastPixelDescriptor || currentExtraDescriptor != lastExtraDescriptor) {
 						PermutationCB data{};
 						data.VertexShaderDescriptor = currentVertexDescriptor;
 						data.PixelShaderDescriptor = currentPixelDescriptor;
+						data.ExtraShaderDescriptor = currentExtraDescriptor;
 
 						permutationCB->Update(data);
 
 						lastVertexDescriptor = currentVertexDescriptor;
 						lastPixelDescriptor = currentPixelDescriptor;
+						lastExtraDescriptor = currentExtraDescriptor;
 					}
 
 					static Util::FrameChecker frameChecker;
