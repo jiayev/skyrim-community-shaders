@@ -22,7 +22,7 @@ SamplerState samplerPointClamp : register(s0);
 
 [numthreads(8, 8, 1)] void main(uint3 dtid
 								: SV_DispatchThreadID) {
-	const float fadeInThreshold = settings.ArrayOrigin.w;
+	const float fadeInThreshold = 255;
 	const static sh2 unitSH = float4(sqrt(4.0 * shPI), 0, 0, 0);
 
 	uint3 cellID = (int3(dtid) - settings.ArrayOrigin.xyz) % ARRAY_DIM;

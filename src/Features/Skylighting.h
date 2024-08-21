@@ -42,8 +42,7 @@ struct Skylighting : Feature
 	struct Settings
 	{
 		bool DirectionalDiffuse = false;
-		float MaxZenith = 3.1415926f / 3.f;  // 60 deg
-		int MaxFrames = 64;
+		float MaxZenith = 3.1415926f / 4.f;  // 45 deg
 		float MinDiffuseVisibility = 0.1f;
 		float DiffusePower = 1.f;
 		float MinSpecularVisibility = 0.f;
@@ -56,14 +55,15 @@ struct Skylighting : Feature
 		float4 OcclusionDir;
 
 		float3 PosOffset;  // cell origin in camera model space
-		float _pad0;
-		uint ArrayOrigin[4];  // xyz: array origin, w: max accum frames
+		uint _pad0;
+		uint ArrayOrigin[3];  // xyz: array origin, w: max accum frames
+		uint _pad1;
 		int ValidMargin[4];
 
 		float4 MixParams;  // x: min diffuse visibility, y: diffuse mult, z: min specular visibility, w: specular mult
 
 		uint DirectionalDiffuse;
-		float3 _pad1;
+		uint _pad2[3];
 	} cbData;
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 	eastl::unique_ptr<ConstantBuffer> skylightingCB = nullptr;
@@ -90,6 +90,7 @@ struct Skylighting : Feature
 	bool foliage = false;
 	REX::W32::XMFLOAT4X4 OcclusionTransform;
 	float4 OcclusionDir;
+	uint forceFrames = 255 * 4;
 
 	std::chrono::time_point<std::chrono::system_clock> lastUpdateTimer = std::chrono::system_clock::now();
 
@@ -118,5 +119,38 @@ struct Skylighting : Feature
 	{
 		static void thunk(RE::NiCamera* a_camera, RE::NiFrustum* a_frustum);
 		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// Event handler
+	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+	{
+	public:
+		virtual RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
+		{
+			// When entering a new cell through a loadscreen, update every frame until completion
+			if (a_event->menuName == RE::LoadingMenu::MENU_NAME) {
+				if (!a_event->opening)
+					Skylighting::GetSingleton()->forceFrames = 255 * 4;
+			}
+
+			return RE::BSEventNotifyControl::kContinue;
+		}
+
+		static bool Register()
+		{
+			static MenuOpenCloseEventHandler singleton;
+			auto ui = RE::UI::GetSingleton();
+
+			if (!ui) {
+				logger::error("UI event source not found");
+				return false;
+			}
+
+			ui->GetEventSource<RE::MenuOpenCloseEvent>()->AddEventSink(&singleton);
+
+			logger::info("Registered {}", typeid(singleton).name());
+
+			return true;
+		}
 	};
 };
