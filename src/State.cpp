@@ -532,9 +532,14 @@ void State::UpdateSharedData()
 		}
 
 		if (auto sky = RE::Sky::GetSingleton())
-			data.Interior = sky->mode.get() != RE::Sky::Mode::kFull;
+			data.InInterior = sky->mode.get() != RE::Sky::Mode::kFull;
 		else
-			data.Interior = true;
+			data.InInterior = true;
+
+		if (auto ui = RE::UI::GetSingleton())
+			data.InMapMenu = ui->IsMenuOpen(RE::MapMenu::MENU_NAME);
+		else
+			data.InMapMenu = true;
 
 		sharedDataCB->Update(data);
 	}

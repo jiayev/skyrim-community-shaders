@@ -522,7 +522,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 
 	float3 color = DLightColor.xyz;
-	if (!Interior && (ExtraShaderDescriptor & _InWorld)) {
+	if (!InInterior && !InMapMenu && (ExtraShaderDescriptor & _InWorld)) {
 		float3 viewDirection = normalize(worldPosition);
 		color = DirLightColorShared * GetEffectShadow(worldPosition, viewDirection, screenPosition, eyeIndex);
 

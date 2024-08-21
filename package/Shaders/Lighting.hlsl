@@ -1877,7 +1877,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		dirLightColorMultiplier *= shadowColor.x;
 	}
 #	if !defined(DEFERRED)
-	else if (!Interior && inWorld) {
+	else if (!InInterior && inWorld) {
 		dirLightColorMultiplier *= GetLightingShadow(screenNoise, input.WorldPosition, eyeIndex);
 	}
 #	endif
@@ -1978,7 +1978,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		lightsDiffuseColor += dirDiffuseColor;
 		coatLightsDiffuseColor += coatDirDiffuseColor;
 		transmissionColor += dirTransmissionColor;
-		specularColorPBR += dirSpecularColor * !Interior;
+		specularColorPBR += dirSpecularColor * !InInterior;
 #		if defined(LOD_LAND_BLEND)
 		lodLandDiffuseColor += dirLightColor * saturate(dirLightAngle) * dirLightColorMultiplier * dirDetailShadow * parallaxShadow;
 #		endif
