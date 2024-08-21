@@ -443,6 +443,13 @@ void Menu::DrawSettings()
 							"When false, will disable the custom Pixel Shaders for the types above. "
 							"For developers to test whether CS shaders match vanilla behavior. ");
 					}
+					ImGui::Checkbox("Compute", &state->enableCShaders);
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::Text(
+							"Replace Compute Shaders. "
+							"When false, will disable the custom Compute Shaders for the types above. "
+							"For developers to test whether CS shaders match vanilla behavior. ");
+					}
 				}
 				ImGui::EndTable();
 			}

@@ -465,6 +465,92 @@ namespace Hooks
 	};
 #endif
 
+	namespace CSShadersSupport
+	{
+		RE::BSImagespaceShader* CurrentlyDispatchedShader = nullptr;
+		RE::BSComputeShader* CurrentlyDispatchedComputeShader = nullptr;
+		uint32_t CurrentComputeShaderTechniqueId = 0;
+
+		RE::BSImagespaceShader* vlGenerateShader = nullptr;
+		RE::BSImagespaceShader* vlRaymarchShader = nullptr;
+
+		RE::BSImagespaceShader* CreateVLShader(const std::string_view& name, const std::string_view& fileName, RE::BSComputeShader* computeShader)
+		{
+			auto shader = RE::BSImagespaceShader::Create();
+			shader->shaderType = RE::BSShader::Type::ImageSpace;
+			shader->fxpFilename = fileName.data();
+			shader->name = name.data();
+			shader->originalShaderName = fileName.data();
+			shader->computeShader = computeShader;
+			shader->isComputeShader = true;
+			return shader;
+		}
+
+		RE::BSImagespaceShader* GetOrCreateVLGenerateShader(RE::BSComputeShader* computeShader)
+		{
+			if (vlGenerateShader == nullptr) {
+				vlGenerateShader = CreateVLShader("BSImagespaceShaderVolumetricLightingGenerateCS", "ISVolumetricLightingGenerateCS", computeShader);
+			}
+			return vlGenerateShader;
+		}
+
+		RE::BSImagespaceShader* GetOrCreateVLRaymarchShader(RE::BSComputeShader* computeShader)
+		{
+			if (vlRaymarchShader == nullptr) {
+				vlRaymarchShader = CreateVLShader("BSImagespaceShaderVolumetricLightingRaymarchCS", "ISVolumetricLightingRaymarchCS", computeShader);
+			}
+			return vlRaymarchShader;
+		}
+
+		void hk_BSImagespaceShader_DispatchComputeShader(RE::BSImagespaceShader* shader, uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ);
+		decltype(&hk_BSImagespaceShader_DispatchComputeShader) ptr_BSImagespaceShader_DispatchComputeShader;
+		void hk_BSImagespaceShader_DispatchComputeShader(RE::BSImagespaceShader* shader, uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ)
+		{
+			CurrentlyDispatchedShader = shader;
+			(ptr_BSImagespaceShader_DispatchComputeShader)(shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);
+			CurrentlyDispatchedShader = nullptr;
+		}
+
+		struct BSComputeShader_Dispatch
+		{
+			static void thunk(RE::BSComputeShader* shader, uint32_t techniqueId, uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ)
+			{
+				CurrentlyDispatchedComputeShader = shader;
+				CurrentComputeShaderTechniqueId = techniqueId;
+				func(shader, techniqueId, threadGroupCountX, threadGroupCountY, threadGroupCountZ);
+				CurrentlyDispatchedComputeShader = nullptr;
+				CurrentComputeShaderTechniqueId = 0;
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		void hk_Renderer_DispatchCSShader(RE::BSGraphics::Renderer* renderer, RE::BSGraphics::ComputeShader* shader, uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ);
+		decltype(&hk_Renderer_DispatchCSShader) ptr_Renderer_DispatchCSShader;
+		void hk_Renderer_DispatchCSShader(RE::BSGraphics::Renderer* renderer, RE::BSGraphics::ComputeShader* shader, uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ)
+		{
+			auto state = State::GetSingleton();
+			if (state->enabledClasses[RE::BSShader::Type::ImageSpace]) {
+				auto& shaderCache = SIE::ShaderCache::Instance();
+				RE::BSImagespaceShader* isShader = CurrentlyDispatchedShader;
+				uint32_t techniqueId = CurrentComputeShaderTechniqueId;
+				if (CurrentlyDispatchedShader == nullptr) {
+					techniqueId = 0;
+					if (CurrentlyDispatchedComputeShader->name == std::string_view("ISVolumetricLightingGenerateCS")) {
+						isShader = GetOrCreateVLGenerateShader(CurrentlyDispatchedComputeShader);
+					} else if (CurrentlyDispatchedComputeShader->name == std::string_view("ISVolumetricLightingRaymarchCS")) {
+						isShader = GetOrCreateVLRaymarchShader(CurrentlyDispatchedComputeShader);
+					}
+				}
+				if (isShader != nullptr) {
+					if (auto* computeShader = shaderCache.GetComputeShader(*isShader, techniqueId)) {
+						shader = computeShader;
+					}
+				}
+			}
+			(ptr_Renderer_DispatchCSShader)(renderer, shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);
+		}
+	}
+
 	void Install()
 	{
 		SKSE::AllocTrampoline(14);
@@ -508,5 +594,14 @@ namespace Hooks
 #ifdef TRACY_ENABLE
 		stl::write_thunk_call<Main_Update>(REL::RelocationID(35551, 36544).address() + REL::Relocate(0x11F, 0x160));
 #endif
+
+		logger::info("Hooking BSImagespaceShader");
+		*(uintptr_t*)&CSShadersSupport::ptr_BSImagespaceShader_DispatchComputeShader = Detours::X64::DetourFunction(REL::RelocationID(100952, 107734).address(), (uintptr_t)&CSShadersSupport::hk_BSImagespaceShader_DispatchComputeShader);
+
+		logger::info("Hooking BSComputeShader");
+		stl::write_vfunc<0x02, CSShadersSupport::BSComputeShader_Dispatch>(RE::VTABLE_BSComputeShader[0]);
+
+		logger::info("Hooking Renderer::DispatchCSShader");
+		*(uintptr_t*)&CSShadersSupport::ptr_Renderer_DispatchCSShader = Detours::X64::DetourFunction(REL::RelocationID(75532, 77329).address(), (uintptr_t)&CSShadersSupport::hk_Renderer_DispatchCSShader);
 	}
 }
