@@ -9,17 +9,15 @@ Texture2D<half3> SpecularTexture : register(t0);
 Texture2D<unorm half3> AlbedoTexture : register(t1);
 Texture2D<unorm half3> NormalRoughnessTexture : register(t2);
 Texture2D<unorm half3> MasksTexture : register(t3);
-Texture2D<unorm half3> Masks2Texture : register(t4);
 
 RWTexture2D<half3> MainRW : register(u0);
 RWTexture2D<half4> NormalTAAMaskSpecularMaskRW : register(u1);
-RWTexture2D<half2> SnowParametersRW : register(u2);
 
 #if defined(DYNAMIC_CUBEMAPS)
-Texture2D<float> DepthTexture : register(t5);
-Texture2D<half3> ReflectanceTexture : register(t6);
-TextureCube<half3> EnvTexture : register(t7);
-TextureCube<half3> EnvReflectionsTexture : register(t8);
+Texture2D<float> DepthTexture : register(t4);
+Texture2D<half3> ReflectanceTexture : register(t5);
+TextureCube<half3> EnvTexture : register(t6);
+TextureCube<half3> EnvReflectionsTexture : register(t7);
 
 SamplerState LinearSampler : register(s0);
 #endif
@@ -34,11 +32,11 @@ cbuffer SkylightingCB : register(b1)
 	SkylightingSettings skylightingSettings;
 };
 
-Texture3D<sh2> SkylightingProbeArray : register(t9);
+Texture3D<sh2> SkylightingProbeArray : register(t8);
 #endif
 
 #if defined(SSGI)
-Texture2D<half4> SpecularSSGITexture : register(t10);
+Texture2D<half4> SpecularSSGITexture : register(t9);
 #endif
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
@@ -53,14 +51,9 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 	half3 diffuseColor = MainRW[dispatchID.xy];
 	half3 specularColor = SpecularTexture[dispatchID.xy];
 	half3 albedo = AlbedoTexture[dispatchID.xy];
-	half3 masks2 = Masks2Texture[dispatchID.xy];
-
-	half2 snowParameters = masks2.xy;
-	half pbrWeight = masks2.z;
-
 	half glossiness = normalGlossiness.z;
 
-	half3 color = lerp(diffuseColor + specularColor, Lin2sRGB(sRGB2Lin(diffuseColor) + sRGB2Lin(specularColor)), pbrWeight);
+	half3 color = sRGB2Lin(diffuseColor) + sRGB2Lin(specularColor);
 
 #if defined(DYNAMIC_CUBEMAPS)
 
@@ -72,8 +65,6 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 		half wetnessMask = MasksTexture[dispatchID.xy].z;
 
 		normalWS = lerp(normalWS, float3(0, 0, 1), wetnessMask);
-
-		color = sRGB2Lin(color);
 
 		half depth = DepthTexture[dispatchID.xy];
 
@@ -89,7 +80,6 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 		half roughness = 1.0 - glossiness;
 		half level = roughness * 7.0;
 
-		half3 directionalAmbientColor = sRGB2Lin(mul(DirectionalAmbient, half4(R, 1.0)));
 		half3 finalIrradiance = 0;
 
 #	if defined(INTERIOR)
@@ -137,11 +127,11 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 #	endif
 
 		color += reflectance * finalIrradiance;
-
-		color = Lin2sRGB(color);
 	}
 
 #endif
+
+	color = Lin2sRGB(color);
 
 #if defined(DEBUG)
 
@@ -163,5 +153,4 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 
 	MainRW[dispatchID.xy] = min(color, 250);  // Vanilla bloom fix
 	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = half4(EncodeNormalVanilla(normalVS), 0.0, 0.0);
-	SnowParametersRW[dispatchID.xy] = snowParameters;
 }
