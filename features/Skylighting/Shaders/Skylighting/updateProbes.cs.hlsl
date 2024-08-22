@@ -39,9 +39,9 @@ SamplerState samplerPointClamp : register(s0);
 		uint accumFrames = isValid ? (outAccumFramesArray[dtid] + 1) : 1;
 		if (accumFrames < fadeInThreshold) {
 			float occlusionDepth = srcOcclusionDepth.SampleLevel(samplerPointClamp, occlusionUV, 0);
-			bool visible = cellCentreOS.z < occlusionDepth;
+			float visibility = saturate((occlusionDepth + 0.0005 - cellCentreOS.z) * 1024);
 
-			sh2 occlusionSH = shScale(shEvaluate(settings.OcclusionDir.xyz), float(visible) * 4.0 * shPI);  // 4 pi from monte carlo
+			sh2 occlusionSH = shScale(shEvaluate(settings.OcclusionDir.xyz), visibility * 4.0 * shPI);  // 4 pi from monte carlo
 			if (isValid) {
 				float lerpFactor = rcp(accumFrames);
 				sh2 prevProbeSH = unitSH;
