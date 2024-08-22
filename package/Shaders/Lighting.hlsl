@@ -394,9 +394,7 @@ struct PS_OUTPUT
 	float4 Specular : SV_Target4;
 	float4 Reflectance : SV_Target5;
 	float4 Masks : SV_Target6;
-#	if defined(SNOW)
 	float4 Parameters : SV_Target7;
-#	endif
 #	if defined(TERRAIN_BLENDING)
 	float Depth : SV_Depth;
 #	endif
@@ -1729,6 +1727,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 #		endif
 
+	float3 specularColorPBR = 0;
 	float3 transmissionColor = 0;
 
 	float pbrWeight = 1;
@@ -1979,13 +1978,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		lightsDiffuseColor += dirDiffuseColor;
 		coatLightsDiffuseColor += coatDirDiffuseColor;
 		transmissionColor += dirTransmissionColor;
-		specularColor += dirSpecularColor * !InInterior;
+		specularColorPBR += dirSpecularColor * !InInterior;
 #		if defined(LOD_LAND_BLEND)
 		lodLandDiffuseColor += dirLightColor * saturate(dirLightAngle) * dirLightColorMultiplier * dirDetailShadow * parallaxShadow;
 #		endif
 #		if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1.0)
-			specularColor += PBR::GetWetnessDirectLightSpecularInput(wetnessNormal, worldSpaceViewDirection, normalizedDirLightDirectionWS, lightProperties.LinearCoatLightColor, waterRoughnessSpecular);
+			specularColorPBR += PBR::GetWetnessDirectLightSpecularInput(wetnessNormal, worldSpaceViewDirection, normalizedDirLightDirectionWS, lightProperties.LinearCoatLightColor, waterRoughnessSpecular);
 #		endif
 	}
 #	else
@@ -2061,7 +2060,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			lightsDiffuseColor += pointDiffuseColor;
 			coatLightsDiffuseColor += coatPointDiffuseColor;
 			transmissionColor += pointTransmissionColor;
-			specularColor += pointSpecularColor;
+			specularColorPBR += pointSpecularColor;
 		}
 #			else
 		lightColor *= lightShadow;
@@ -2184,10 +2183,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			lightsDiffuseColor += pointDiffuseColor;
 			coatLightsDiffuseColor += coatPointDiffuseColor;
 			transmissionColor += pointTransmissionColor;
-			specularColor += pointSpecularColor;
+			specularColorPBR += pointSpecularColor;
 #				if defined(WETNESS_EFFECTS)
 			if (waterRoughnessSpecular < 1.0)
-				specularColor += PBR::GetWetnessDirectLightSpecularInput(wetnessNormal, worldSpaceViewDirection, normalizedLightDirection, lightProperties.LinearCoatLightColor, waterRoughnessSpecular);
+				specularColorPBR += PBR::GetWetnessDirectLightSpecularInput(wetnessNormal, worldSpaceViewDirection, normalizedLightDirection, lightProperties.LinearCoatLightColor, waterRoughnessSpecular);
 #				endif
 		}
 #			else
@@ -2267,7 +2266,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
 
 #	if defined(SKYLIGHTING)
-	float skylightingDiffuse = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(skylightingSettings.DirectionalDiffuse ? worldSpaceNormal : float3(worldSpaceNormal.xy, worldSpaceNormal.z * 0.5 + 0.5))) / shPI;
+	float skylightingDiffuse = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(skylightingSettings.DirectionalDiffuse ? worldSpaceNormal : float3(0, 0, 1))) / shPI;
 	skylightingDiffuse = Skylighting::mixDiffuse(skylightingSettings, skylightingDiffuse);
 	directionalAmbientColor = sRGB2Lin(directionalAmbientColor);
 	directionalAmbientColor *= skylightingDiffuse;
@@ -2388,12 +2387,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 #		if !defined(DYNAMIC_CUBEMAPS)
-	specularColor += indirectSpecularLobeWeight * sRGB2Lin(directionalAmbientColor);
+	specularColorPBR += indirectSpecularLobeWeight * sRGB2Lin(directionalAmbientColor);
 #		endif
 
 #		if !defined(DEFERRED)
 #			if defined(DYNAMIC_CUBEMAPS)
-	specularColor += indirectSpecularLobeWeight * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, pbrSurfaceProperties.Roughness, viewPosition.z);
+	specularColorPBR += indirectSpecularLobeWeight * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, pbrSurfaceProperties.Roughness, viewPosition.z);
 #			endif
 #		else
 	indirectDiffuseLobeWeight *= vertexColor;
@@ -2475,18 +2474,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	specularColor *= complexSpecular;
 #	endif  // defined (EMAT) && defined(ENVMAP)
 
-	color.xyz = sRGB2Lin(color.xyz);
-
-#	if !defined(DEFERRED) && !defined(TRUE_PBR)
-	specularColor = sRGB2Lin(specularColor);
-#	endif
-
-#	if !defined(DEFERRED)
+#	if !defined(TRUE_PBR)
+#		if !defined(DEFERRED)
 	color.xyz += specularColor;
+#		endif
 #	endif
+
+	color.xyz = sRGB2Lin(color.xyz);
 
 #	if defined(WETNESS_EFFECTS) && !defined(TRUE_PBR)
 	color.xyz += wetnessSpecular * wetnessGlossinessSpecular;
+#	endif
+
+#	if defined(TRUE_PBR) && !defined(DEFERRED)
+	color.xyz += specularColorPBR;
 #	endif
 
 	color.xyz = Lin2sRGB(color.xyz);
@@ -2499,7 +2500,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		color.xyz = lerp(color.xyz, litLodLandColor, lodLandBlendFactor);
 
 #		if defined(DEFERRED)
-		specularColor = lerp(specularColor, 0, lodLandBlendFactor);
+		specularColorPBR = lerp(specularColorPBR, 0, lodLandBlendFactor);
 		indirectDiffuseLobeWeight = lerp(indirectDiffuseLobeWeight, input.Color.xyz * lodLandColor * lodLandFadeFactor, lodLandBlendFactor);
 		indirectSpecularLobeWeight = lerp(indirectSpecularLobeWeight, 0, lodLandBlendFactor);
 		pbrGlossiness = lerp(pbrGlossiness, 0, lodLandBlendFactor);
@@ -2605,7 +2606,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(SNOW)
 #		if defined(TRUE_PBR)
-	psout.Parameters.x = RGBToLuminanceAlternative(specularColor);
+	psout.Parameters.x = RGBToLuminanceAlternative(specularColorPBR);
 #		else
 	psout.Parameters.x = RGBToLuminanceAlternative(lightsSpecularColor);
 #		endif
@@ -2641,7 +2642,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 outputSpecular = specularColor.xyz;
 #		if defined(TRUE_PBR)
-	outputSpecular = Lin2sRGB(specularColor.xyz);
+	outputSpecular = Lin2sRGB(specularColorPBR.xyz);
 #		endif
 	psout.Specular = float4(outputSpecular, psout.Diffuse.w);
 
@@ -2654,6 +2655,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float outGlossiness = saturate(glossiness * SSRParams.w);
 
 #		if defined(TRUE_PBR)
+	psout.Parameters.z = pbrWeight;
+#		else
+	psout.Parameters.z = 0;
+#		endif
+
+#		if defined(TRUE_PBR)
 	psout.Reflectance = float4(indirectSpecularLobeWeight, psout.Diffuse.w);
 	psout.NormalGlossiness = float4(EncodeNormal(screenSpaceNormal), pbrGlossiness, psout.Diffuse.w);
 #		elif defined(WETNESS_EFFECTS)
@@ -2664,9 +2671,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.NormalGlossiness = float4(EncodeNormal(screenSpaceNormal), outGlossiness, psout.Diffuse.w);
 #		endif
 
-#		if defined(SNOW)
 	psout.Parameters.w = psout.Diffuse.w;
-#		endif
 
 #		if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
 #			if defined(DYNAMIC_CUBEMAPS)

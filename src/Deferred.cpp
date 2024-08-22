@@ -108,6 +108,8 @@ void Deferred::SetupResources()
 		SetupRenderTarget(NORMALROUGHNESS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R8G8B8A8_UNORM);
 		// Masks
 		SetupRenderTarget(MASKS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R8G8B8A8_UNORM);
+		// Additional Masks
+		SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R8G8B8A8_UNORM);
 	}
 
 	{
@@ -326,7 +328,7 @@ void Deferred::StartDeferred()
 		SPECULAR,
 		REFLECTANCE,
 		MASKS,
-		forwardRenderTargets[3]
+		MASKS2
 	};
 
 	for (uint i = 2; i < 8; i++) {
@@ -362,9 +364,11 @@ void Deferred::DeferredPasses()
 	auto albedo = renderer->GetRuntimeData().renderTargets[ALBEDO];
 	auto normalRoughness = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
 	auto masks = renderer->GetRuntimeData().renderTargets[MASKS];
+	auto masks2 = renderer->GetRuntimeData().renderTargets[MASKS2];
 
 	auto main = renderer->GetRuntimeData().renderTargets[forwardRenderTargets[0]];
 	auto normals = renderer->GetRuntimeData().renderTargets[forwardRenderTargets[2]];
+	auto snow = renderer->GetRuntimeData().renderTargets[forwardRenderTargets[3]];
 
 	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 	auto reflectance = renderer->GetRuntimeData().renderTargets[REFLECTANCE];
@@ -389,12 +393,13 @@ void Deferred::DeferredPasses()
 			ID3D11Buffer* buffer = skylighting->loaded ? skylighting->skylightingCB->CB() : nullptr;
 			context->CSSetConstantBuffers(1, 1, &buffer);
 
-			ID3D11ShaderResourceView* srvs[5]{
+			ID3D11ShaderResourceView* srvs[6]{
 				albedo.SRV,
 				normalRoughness.SRV,
 				skylighting->loaded ? depth.depthSRV : nullptr,
 				skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
-				ssgi->settings.Enabled ? ssgi->texGI[ssgi->outputGIIdx]->srv.get() : nullptr
+				ssgi->settings.Enabled ? ssgi->texGI[ssgi->outputGIIdx]->srv.get() : nullptr,
+				masks2.SRV,
 			};
 
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -431,11 +436,12 @@ void Deferred::DeferredPasses()
 
 		bool doSSGISpecular = ssgi->loaded && ssgi->settings.Enabled && ssgi->settings.EnableGI && ssgi->settings.EnableSpecularGI;
 
-		ID3D11ShaderResourceView* srvs[10]{
+		ID3D11ShaderResourceView* srvs[11]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
 			masks.SRV,
+			masks2.SRV,
 			dynamicCubemaps->loaded ? (terrainBlending->loaded ? terrainBlending->blendedDepthTexture16->srv.get() : depth.depthSRV) : nullptr,
 			dynamicCubemaps->loaded ? reflectance.SRV : nullptr,
 			dynamicCubemaps->loaded ? dynamicCubemaps->envTexture->srv.get() : nullptr,
@@ -449,7 +455,7 @@ void Deferred::DeferredPasses()
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-		ID3D11UnorderedAccessView* uavs[2]{ main.UAV, normals.UAV };
+		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, snow.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		auto shader = interior ? GetComputeMainCompositeInterior() : GetComputeMainComposite();
