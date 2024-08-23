@@ -71,32 +71,35 @@ namespace Skylighting
 
 		sh2 sum = 0;
 		float wsum = 0;
-		for (int i = 0; i < 2; i++)
-			for (int j = 0; j < 2; j++)
-				for (int k = 0; k < 2; k++) {
-					int3 offset = int3(i, j, k);
-					int3 cellID = cell000 + offset;
+		[unroll] for (int i = 0; i < 2; i++)
+			[unroll] for (int j = 0; j < 2; j++)
+				[unroll] for (int k = 0; k < 2; k++)
+		{
+			int3 offset = int3(i, j, k);
+			int3 cellID = cell000 + offset;
 
-					if (any(cellID < 0) || any(cellID >= ARRAY_DIM))
-						continue;
+			if (any(cellID < 0) || any(cellID >= ARRAY_DIM))
+				continue;
 
-					float3 cellCentreMS = cellID + 0.5 - ARRAY_DIM / 2;
-					cellCentreMS = cellCentreMS * CELL_SIZE;
+			float3 cellCentreMS = cellID + 0.5 - ARRAY_DIM / 2;
+			cellCentreMS = cellCentreMS * CELL_SIZE;
 
-					// https://handmade.network/p/75/monter/blog/p/7288-engine_work__global_illumination_with_irradiance_probes
-					// basic tangent checks
-					if (dot(cellCentreMS - positionMSAdjusted, normalWS) <= 0)
-						continue;
+			// https://handmade.network/p/75/monter/blog/p/7288-engine_work__global_illumination_with_irradiance_probes
+			// basic tangent checks
+			float tangentWeight = dot(normalize(cellCentreMS - positionMSAdjusted), normalWS);
+			if (tangentWeight <= 0.0)
+				continue;
+			tangentWeight = sqrt(tangentWeight);
 
-					float3 trilinearWeights = 1 - abs(offset - trilinearPos);
-					float w = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z;
+			float3 trilinearWeights = 1 - abs(offset - trilinearPos);
+			float w = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z * tangentWeight;
 
-					uint3 cellTexID = (cellID + params.ArrayOrigin.xyz) % ARRAY_DIM;
-					sh2 probe = shScale(probeArray[cellTexID], w);
+			uint3 cellTexID = (cellID + params.ArrayOrigin.xyz) % ARRAY_DIM;
+			sh2 probe = shScale(probeArray[cellTexID], w);
 
-					sum = shAdd(sum, probe);
-					wsum += w;
-				}
+			sum = shAdd(sum, probe);
+			wsum += w;
+		}
 
 		sh2 result = shScale(sum, rcp(wsum + 1e-10));
 
