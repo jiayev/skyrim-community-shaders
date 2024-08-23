@@ -1272,7 +1272,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(TRUE_PBR) && defined(LANDSCAPE)
 		[branch] if ((PBRFlags & TruePBR_LandTile0PBR) == 0)
 		{
-			rawBaseColor.rgb = pow(rawBaseColor.rgb, pbrSettings.BaseColorGamma);
+			rawBaseColor.rgb = sRGB2Lin(rawBaseColor.rgb) * PI;
 		}
 #	endif
 		baseColor = rawBaseColor;
@@ -1382,7 +1382,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		else
 		{
-			landColor2.rgb = pow(landColor2.rgb, pbrSettings.BaseColorGamma);
+			landColor2.rgb = sRGB2Lin(landColor2.rgb) * PI;
 			rawRMAOS += input.LandBlendWeights1.y * float4(1 - landNormal2.w, 0, 1, 0.04);
 		}
 #		endif
@@ -1410,7 +1410,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		else
 		{
-			landColor3.rgb = pow(landColor3.rgb, pbrSettings.BaseColorGamma);
+			landColor3.rgb = sRGB2Lin(landColor3.rgb) * PI;
 			rawRMAOS += input.LandBlendWeights1.z * float4(1 - landNormal3.w, 0, 1, 0.04);
 		}
 #		endif
@@ -1438,7 +1438,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		else
 		{
-			landColor4.rgb = pow(landColor4.rgb, pbrSettings.BaseColorGamma);
+			landColor4.rgb = sRGB2Lin(landColor4.rgb) * PI;
 			rawRMAOS += input.LandBlendWeights1.w * float4(1 - landNormal4.w, 0, 1, 0.04);
 		}
 #		endif
@@ -1466,7 +1466,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		else
 		{
-			landColor5.rgb = pow(landColor5.rgb, pbrSettings.BaseColorGamma);
+			landColor5.rgb = sRGB2Lin(landColor5.rgb) * PI;
 			rawRMAOS += input.LandBlendWeights2.x * float4(1 - landNormal5.w, 0, 1, 0.04);
 		}
 #		endif
@@ -1494,7 +1494,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		else
 		{
-			landColor6.rgb = pow(landColor6.rgb, pbrSettings.BaseColorGamma);
+			landColor6.rgb = sRGB2Lin(landColor6.rgb) * PI;
 			rawRMAOS += input.LandBlendWeights2.y * float4(1 - landNormal6.w, 0, 1, 0.04);
 		}
 #		endif
@@ -1655,8 +1655,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	baseColor.xyz *= 1 - pbrSurfaceProperties.Metallic;
 
-	baseColor.xyz = pow(baseColor.xyz, 1 / pbrSettings.BaseColorGamma);
-
 	pbrSurfaceProperties.BaseColor = baseColor.xyz;
 
 	float3 coatModelNormal = modelNormal.xyz;
@@ -1673,8 +1671,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			pbrSurfaceProperties.SubsurfaceColor *= sampledSubsurfaceProperties.xyz;
 			pbrSurfaceProperties.Thickness *= sampledSubsurfaceProperties.w;
 		}
-
-		pbrSurfaceProperties.SubsurfaceColor = pow(pbrSurfaceProperties.SubsurfaceColor, 1 / pbrSettings.BaseColorGamma);
 	}
 	else if ((PBRFlags & TruePBR_TwoLayer) != 0)
 	{
@@ -1710,8 +1706,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			}
 #			endif
 		}
-
-		pbrSurfaceProperties.CoatColor = pow(pbrSurfaceProperties.CoatColor, 1 / pbrSettings.BaseColorGamma);
 	}
 
 	[branch] if ((PBRFlags & TruePBR_Fuzz) != 0)
@@ -2260,7 +2254,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 directionalAmbientColor = mul(DirectionalAmbient, modelNormal);
 #	if defined(TRUE_PBR)
-	directionalAmbientColor = directionalAmbientColor;
+	directionalAmbientColor = sRGB2Lin(directionalAmbientColor);
 #	endif
 
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
@@ -2268,9 +2262,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(SKYLIGHTING)
 	float skylightingDiffuse = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(skylightingSettings.DirectionalDiffuse ? worldSpaceNormal : float3(0, 0, 1))) / shPI;
 	skylightingDiffuse = Skylighting::mixDiffuse(skylightingSettings, skylightingDiffuse);
+#		if !defined(TRUE_PBR)
 	directionalAmbientColor = sRGB2Lin(directionalAmbientColor);
+#		endif
 	directionalAmbientColor *= skylightingDiffuse;
+#		if !defined(TRUE_PBR)
 	directionalAmbientColor = Lin2sRGB(directionalAmbientColor);
+#		endif
 #	endif
 
 #	if defined(TRUE_PBR) && defined(LOD_LAND_BLEND) && !defined(DEFERRED)
@@ -2387,7 +2385,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 #		if !defined(DYNAMIC_CUBEMAPS)
-	specularColorPBR += indirectSpecularLobeWeight * sRGB2Lin(directionalAmbientColor);
+	specularColorPBR += indirectSpecularLobeWeight * directionalAmbientColor;
 #		endif
 
 #		if !defined(DEFERRED)
@@ -2398,7 +2396,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	indirectDiffuseLobeWeight *= vertexColor;
 #		endif
 
-	color.xyz += pow(emitColor.xyz, 1 / pbrSettings.BaseColorGamma);
+	color.xyz += emitColor.xyz;
 	color.xyz += transmissionColor;
 #	else
 	color.xyz += diffuseColor * baseColor.xyz;
@@ -2478,9 +2476,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if !defined(DEFERRED)
 	color.xyz += specularColor;
 #		endif
-#	endif
-
 	color.xyz = sRGB2Lin(color.xyz);
+#	endif
 
 #	if defined(WETNESS_EFFECTS) && !defined(TRUE_PBR)
 	color.xyz += wetnessSpecular * wetnessGlossinessSpecular;
@@ -2501,7 +2498,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(DEFERRED)
 		specularColorPBR = lerp(specularColorPBR, 0, lodLandBlendFactor);
-		indirectDiffuseLobeWeight = lerp(indirectDiffuseLobeWeight, input.Color.xyz * lodLandColor * lodLandFadeFactor, lodLandBlendFactor);
+		indirectDiffuseLobeWeight = lerp(indirectDiffuseLobeWeight, sRGB2Lin(input.Color.xyz * lodLandColor * lodLandFadeFactor), lodLandBlendFactor);
 		indirectSpecularLobeWeight = lerp(indirectSpecularLobeWeight, 0, lodLandBlendFactor);
 		pbrGlossiness = lerp(pbrGlossiness, 0, lodLandBlendFactor);
 #		endif
@@ -2648,7 +2645,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 outputAlbedo = baseColor.xyz * vertexColor;
 #		if defined(TRUE_PBR)
-	outputAlbedo = indirectDiffuseLobeWeight;
+	outputAlbedo = Lin2sRGB(indirectDiffuseLobeWeight);
 #		endif
 	psout.Albedo = float4(outputAlbedo, psout.Diffuse.w);
 
