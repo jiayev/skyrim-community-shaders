@@ -215,7 +215,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float dirShadow = 1;
 
 #			if defined(SCREEN_SPACE_SHADOWS)
-	dirShadow = lerp(0.2, 1.0, ScreenSpaceShadows::GetScreenSpaceShadow(screenUV, screenNoise, viewPosition, eyeIndex));
+	dirShadow = lerp(0.5, 1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position, screenUV, screenNoise, viewPosition, eyeIndex));
 #			endif
 
 #			if defined(TERRA_OCC)

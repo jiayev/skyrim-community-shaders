@@ -178,6 +178,11 @@ float GetScreenDepth(float depth)
 	return (CameraData.w / (-depth * CameraData.z + CameraData.x));
 }
 
+float4 GetScreenDepths(float4 depths)
+{
+	return (CameraData.w / (-depths * CameraData.z + CameraData.x));
+}
+
 float GetScreenDepth(float2 uv, uint a_eyeIndex = 0)
 {
 	float depth = GetDepth(uv, a_eyeIndex);

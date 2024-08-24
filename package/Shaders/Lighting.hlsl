@@ -1914,7 +1914,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(SOFT_LIGHTING) || defined(BACK_LIGHTING) || defined(RIM_LIGHTING)
 		if (dirLightAngle > 0.0)
 #		endif
-			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(screenUV, screenNoise, viewPosition, eyeIndex);
+			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position, screenUV, screenNoise, viewPosition, eyeIndex);
 #	endif
 
 #	if defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
