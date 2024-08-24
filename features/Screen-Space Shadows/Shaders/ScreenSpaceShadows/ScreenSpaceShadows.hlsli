@@ -22,9 +22,9 @@ namespace ScreenSpaceShadows
 		shadowSamples[0] = ScreenSpaceShadowsTexture.Load(int3(screenPosition.xy, 0));
 
 		static const float2 BlurOffsets[3] = {
-			float2(0.555528f, 0.869625f),
-			float2(0.93997f, 0.362499f),
-			float2(0.347453f, 0.065981f)
+			float2(0.555528, 0.869625) * 2.0 - 1.0,
+			float2(0.939970, 0.362499) * 2.0 - 1.0,
+			float2(0.347453, 0.065981) * 2.0 - 1.0
 		};
 
 		[unroll] for (uint i = 1; i < 4; i++)
