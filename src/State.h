@@ -21,6 +21,7 @@ public:
 	bool enabledClasses[RE::BSShader::Type::Total - 1];
 	bool enablePShaders = true;
 	bool enableVShaders = true;
+	bool enableCShaders = true;
 
 	bool updateShader = true;
 	bool settingCustomShader = false;
@@ -108,6 +109,13 @@ public:
 	uint modifiedPixelDescriptor = 0;
 	uint lastModifiedVertexDescriptor = 0;
 	uint lastModifiedPixelDescriptor = 0;
+	uint currentExtraDescriptor = 0;
+	uint lastExtraDescriptor = 0;
+
+	enum class ExtraShaderDescriptors : uint32_t
+	{
+		InWorld = 1 << 0,
+	};
 
 	void UpdateSharedData();
 
@@ -115,7 +123,8 @@ public:
 	{
 		uint VertexShaderDescriptor;
 		uint PixelShaderDescriptor;
-		uint pad0[2];
+		uint ExtraShaderDescriptor;
+		uint pad0[1];
 	};
 
 	ConstantBuffer* permutationCB = nullptr;
@@ -130,8 +139,8 @@ public:
 		float4 BufferDim;
 		float Timer;
 		uint FrameCount;
-		uint Interior;
-		uint pad0[1];
+		uint InInterior;
+		uint InMapMenu;
 	};
 
 	ConstantBuffer* sharedDataCB = nullptr;

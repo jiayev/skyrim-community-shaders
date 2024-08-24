@@ -49,19 +49,17 @@ cbuffer PerFrame : register(b12)
 
 float2 GetDynamicResolutionAdjustedScreenPosition(float2 screenPosition)
 {
-	float2 adjustedScreenPosition =
-		max(0.0.xx, DynamicResolutionParams1.xy * screenPosition);
-	return min(float2(DynamicResolutionParams2.z, DynamicResolutionParams1.y),
-		adjustedScreenPosition);
+	return clamp(DynamicResolutionParams1.xy * screenPosition, 0, float2(DynamicResolutionParams2.z, DynamicResolutionParams1.y));
 }
 
-float2
-	GetPreviousDynamicResolutionAdjustedScreenPosition(float2 screenPosition)
+float2 GetDynamicResolutionUnadjustedScreenPosition(float2 screenPositionDR)
 {
-	float2 adjustedScreenPosition =
-		max(0.0.xx, DynamicResolutionParams1.zw * screenPosition);
-	return min(float2(DynamicResolutionParams2.w, DynamicResolutionParams1.w),
-		adjustedScreenPosition);
+	return screenPositionDR * DynamicResolutionParams2.xy;
+}
+
+float2 GetPreviousDynamicResolutionAdjustedScreenPosition(float2 screenPosition)
+{
+	return clamp(DynamicResolutionParams1.zw * screenPosition, 0, float2(DynamicResolutionParams2.w, DynamicResolutionParams1.w));
 }
 
 float3 ToSRGBColor(float3 linearColor)

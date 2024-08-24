@@ -372,7 +372,11 @@ float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatri
 #	endif
 {
 	const int sampleCount = 8;
+#	if defined(RENDER_SHADOWMASK)
+	compareValue += 0.001 * (1.0 + layerIndex);
+#	else
 	compareValue += 0.001;
+#	endif
 
 	float layerIndexRcp = rcp(1 + layerIndex);
 
@@ -403,7 +407,7 @@ float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatri
 		visibility += tex.SampleCmpLevelZero(samp, float3(sampleUV, layerIndex), compareValue + noise * 0.001).x;
 #	endif
 	}
-	return visibility * rcp(sampleCount);
+	return visibility * rcp((float)sampleCount);
 }
 
 PS_OUTPUT main(PS_INPUT input)

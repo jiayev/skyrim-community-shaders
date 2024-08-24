@@ -184,7 +184,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float4 msPosition = GetMSPosition(input, WindTimer, world3x3);
 
 #		ifdef GRASS_COLLISION
-	float3 displacement = GetDisplacedPosition(msPosition.xyz, input.Color.w, eyeIndex);
+	float3 displacement = GrassCollision::GetDisplacedPosition(msPosition.xyz, input.Color.w, eyeIndex);
 	msPosition.xyz += displacement;
 #		endif  // GRASS_COLLISION
 
@@ -438,7 +438,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			else
 	float4 specColor = TexNormalSampler.Sample(SampNormalSampler, input.TexCoord.xy);
 #			endif
-	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
+	float dirShadowColor = !InInterior ? TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0)) : 1.0;
 
 	uint eyeIndex = GetEyeIndexPS(input.HPosition, VPOSOffset);
 	psout.MotionVectors = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
@@ -448,7 +448,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
-	float screenNoise = InterleavedGradientNoise(input.HPosition, FrameCount);
+	float screenNoise = InterleavedGradientNoise(input.HPosition.xy, FrameCount);
 
 	// Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
 	if (!frontFace)
@@ -503,17 +503,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 dirLightColor = DirLightColorShared.xyz;
 	float3 dirLightColorMultiplier = 1;
-	dirLightColorMultiplier *= shadowColor.x;
+	dirLightColorMultiplier *= dirShadowColor;
 
 	float dirLightAngle = dot(normal, DirLightDirectionShared.xyz);
 
 	float dirDetailShadow = 1.0;
 	float dirShadow = 1.0;
 
-	if (shadowColor.x > 0.0) {
+	if (dirShadowColor > 0.0) {
 		if (dirLightAngle > 0.0) {
 #			if defined(SCREEN_SPACE_SHADOWS)
-			dirDetailShadow = GetScreenSpaceShadow(screenUV, screenNoise, viewPosition, eyeIndex);
+			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition, screenUV, screenNoise, viewPosition, eyeIndex);
 #			endif  // SCREEN_SPACE_SHADOWS
 		}
 
@@ -521,14 +521,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		if (dirShadow > 0.0) {
 			float terrainShadow = 1;
 			float terrainAo = 1;
-			GetTerrainOcclusion(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, length(input.WorldPosition.xyz), SampBaseSampler, terrainShadow, terrainAo);
+			TerrainOcclusion::GetTerrainOcclusion(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, length(input.WorldPosition.xyz), SampBaseSampler, terrainShadow, terrainAo);
 			dirShadow *= terrainShadow;
 		}
 #			endif  // TERRA_OCC
 
 #			if defined(CLOUD_SHADOWS)
 		if (dirShadow != 0.0) {
-			dirShadow *= GetCloudShadowMult(input.WorldPosition.xyz, SampBaseSampler);
+			dirShadow *= CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, SampBaseSampler);
 		}
 #			endif  // CLOUD_SHADOWS
 	}
@@ -567,7 +567,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	uint clusterIndex = 0;
 	uint lightCount = 0;
 
-	if (GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		lightCount = lightGrid[clusterIndex].lightCount;
 		if (lightCount) {
 			uint lightOffset = lightGrid[clusterIndex].offset;
@@ -657,11 +657,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (lightLimitFixSettings.EnableLightsVisualisation) {
 		if (lightLimitFixSettings.LightsVisualisationMode == 0) {
-			diffuseColor.xyz = TurboColormap(0);
+			diffuseColor.xyz = LightLimitFix::TurboColormap(0);
 		} else if (lightLimitFixSettings.LightsVisualisationMode == 1) {
-			diffuseColor.xyz = TurboColormap(0);
+			diffuseColor.xyz = LightLimitFix::TurboColormap(0);
 		} else {
-			diffuseColor.xyz = TurboColormap((float)lightCount / 128.0);
+			diffuseColor.xyz = LightLimitFix::TurboColormap((float)lightCount / 128.0);
 		}
 	} else {
 		psout.Diffuse = float4(diffuseColor, 1);

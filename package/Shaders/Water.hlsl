@@ -381,7 +381,7 @@ cbuffer PerGeometry : register(b2)
 #		ifdef VR
 float GetStencil(float2 uv)
 {
-	return DepthTex.Load(int3(uv * BufferDim * DynamicResolutionParams1.xy, 0)).g;
+	return DepthTex.Load(int3(uv * BufferDim.xy * DynamicResolutionParams1.xy, 0)).g;
 }
 
 /**
@@ -564,7 +564,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 			reflectionColor = ReflectionTex.SampleLevel(ReflectionSampler, reflectionNormal.xy / reflectionNormal.ww, 0).xyz;
 		}
 
-#			if NUM_SPECULAR_LIGHTS == 0 && !defined(VR)
+#			if !defined(LOD) && NUM_SPECULAR_LIGHTS == 0 && !defined(VR)
 		if (PixelShaderDescriptor & _Cubemap) {
 			float2 ssrReflectionUv = GetDynamicResolutionAdjustedScreenPosition((DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw + SSRParams2.x * normal.xy);
 			float4 ssrReflectionColor1 = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUv);
@@ -572,7 +572,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 			float4 ssrReflectionColor = lerp(ssrReflectionColor2, ssrReflectionColor1, SSRParams.y);
 
 			finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
-			ssrFraction = saturate(ssrReflectionColor.w * SSRParams.x * (1.0 - saturate(length(input.WPosition.xyz) / 320000)));
+			ssrFraction = saturate(ssrReflectionColor.w * SSRParams.x * distanceFactor);
 		}
 #			endif
 
@@ -808,7 +808,7 @@ PS_OUTPUT main(PS_INPUT input)
 	uint lightCount = 0;
 
 	uint clusterIndex = 0;
-	if (GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		lightCount = lightGrid[clusterIndex].lightCount;
 		uint lightOffset = lightGrid[clusterIndex].offset;
 		[loop] for (uint i = 0; i < lightCount; i++)
@@ -843,7 +843,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (!(PixelShaderDescriptor & _Interior)) {
 		if (shadow != 0.0) {
 			float screenNoise = InterleavedGradientNoise(input.HPosition.xy, FrameCount);
-			sunColor *= min(shadow, GetLightingShadow(screenNoise, input.WPosition, eyeIndex));
+			sunColor *= min(shadow, GetLightingShadow(screenNoise, input.WPosition.xyz, eyeIndex));
 		} else {
 			sunColor *= shadow;
 		}
