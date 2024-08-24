@@ -702,111 +702,72 @@ namespace SIE
 				{ "Bones", 16 },
 			};
 
+			const auto& lightingPSConstants = ShaderConstants::LightingPS::Get();
+
 			auto& lightingPS = result[static_cast<size_t>(RE::BSShader::Type::Lighting)]
 									 [static_cast<size_t>(ShaderClass::Pixel)];
 
 			lightingPS = {
-				{ "NumLightNumShadowLight", 0 },
-				{ "PointLightPosition", 1 },
-				{ "PointLightColor", 2 },
-				{ "DirLightDirection", 3 },
-				{ "DirLightColor", 4 },
-				{ "DirectionalAmbient", 5 },
-				{ "AmbientSpecularTintAndFresnelPower", 6 },
-				{ "MaterialData", 7 },
-				{ "EmitColor", 8 },
-				{ "AlphaTestRef", 9 },
-				{ "ShadowLightMaskSelect", 10 },
-				{ "VPOSOffset", 11 },
-				{ "ProjectedUVParams", 12 },
-				{ "ProjectedUVParams2", 13 },
-				{ "ProjectedUVParams3", 14 },
-				{ "SplitDistance", 15 },
-				{ "SSRParams", 16 },
-				{ "WorldMapOverlayParametersPS", 17 },
+				{ "NumLightNumShadowLight", lightingPSConstants.NumLightNumShadowLight },
+				{ "PointLightPosition", lightingPSConstants.PointLightPosition },
+				{ "PointLightColor", lightingPSConstants.PointLightColor },
+				{ "DirLightDirection", lightingPSConstants.DirLightDirection },
+				{ "DirLightColor", lightingPSConstants.DirLightColor },
+				{ "DirectionalAmbient", lightingPSConstants.DirectionalAmbient },
+				{ "AmbientSpecularTintAndFresnelPower", lightingPSConstants.AmbientSpecularTintAndFresnelPower },
+				{ "MaterialData", lightingPSConstants.MaterialData },
+				{ "EmitColor", lightingPSConstants.EmitColor },
+				{ "AlphaTestRef", lightingPSConstants.AlphaTestRef },
+				{ "ShadowLightMaskSelect", lightingPSConstants.ShadowLightMaskSelect },
+				{ "VPOSOffset", lightingPSConstants.VPOSOffset },
+				{ "ProjectedUVParams", lightingPSConstants.ProjectedUVParams },
+				{ "ProjectedUVParams2", lightingPSConstants.ProjectedUVParams2 },
+				{ "ProjectedUVParams3", lightingPSConstants.ProjectedUVParams3 },
+				{ "SplitDistance", lightingPSConstants.SplitDistance },
+				{ "SSRParams", lightingPSConstants.SSRParams },
+				{ "WorldMapOverlayParametersPS", lightingPSConstants.WorldMapOverlayParametersPS },
+				{ "ShadowSampleParam", lightingPSConstants.ShadowSampleParam },      // VR only
+				{ "EndSplitDistances", lightingPSConstants.EndSplitDistances },      // VR only
+				{ "StartSplitDistances", lightingPSConstants.StartSplitDistances },  // VR only
+				{ "DephBiasParam", lightingPSConstants.DephBiasParam },              // VR only
+				{ "ShadowLightParam", lightingPSConstants.ShadowLightParam },        // VR only
+				{ "ShadowMapProj", lightingPSConstants.ShadowMapProj },              // VR only
+				{ "AmbientColor", lightingPSConstants.AmbientColor },
+				{ "FogColor", lightingPSConstants.FogColor },
+				{ "ColourOutputClamp", lightingPSConstants.ColourOutputClamp },
+				{ "EnvmapData", lightingPSConstants.EnvmapData },
+				{ "ParallaxOccData", lightingPSConstants.ParallaxOccData },
+				{ "TintColor", lightingPSConstants.TintColor },
+				{ "LODTexParams", lightingPSConstants.LODTexParams },
+				{ "SpecularColor", lightingPSConstants.SpecularColor },
+				{ "SparkleParams", lightingPSConstants.SparkleParams },
+				{ "MultiLayerParallaxData", lightingPSConstants.MultiLayerParallaxData },
+				{ "LightingEffectParams", lightingPSConstants.LightingEffectParams },
+				{ "IBLParams", lightingPSConstants.IBLParams },
+				{ "LandscapeTexture1to4IsSnow", lightingPSConstants.LandscapeTexture1to4IsSnow },
+				{ "LandscapeTexture5to6IsSnow", lightingPSConstants.LandscapeTexture5to6IsSnow },
+				{ "LandscapeTexture1to4IsSpecPower", lightingPSConstants.LandscapeTexture1to4IsSpecPower },
+				{ "LandscapeTexture5to6IsSpecPower", lightingPSConstants.LandscapeTexture5to6IsSpecPower },
+				{ "SnowRimLightParameters", lightingPSConstants.SnowRimLightParameters },
+				{ "CharacterLightParams", lightingPSConstants.CharacterLightParams },
+				{ "InvWorldMat", lightingPSConstants.InvWorldMat },            // VR only
+				{ "PreviousWorldMat", lightingPSConstants.PreviousWorldMat },  // VR only
+
+				{ "PBRFlags", lightingPSConstants.PBRFlags },
+				{ "PBRParams1", lightingPSConstants.PBRParams1 },
+				{ "LandscapeTexture2PBRParams", lightingPSConstants.LandscapeTexture2PBRParams },
+				{ "LandscapeTexture3PBRParams", lightingPSConstants.LandscapeTexture3PBRParams },
+				{ "LandscapeTexture4PBRParams", lightingPSConstants.LandscapeTexture4PBRParams },
+				{ "LandscapeTexture5PBRParams", lightingPSConstants.LandscapeTexture5PBRParams },
+				{ "LandscapeTexture6PBRParams", lightingPSConstants.LandscapeTexture6PBRParams },
+				{ "PBRParams2", lightingPSConstants.PBRParams2 },
+				{ "LandscapeTexture1GlintParameters", lightingPSConstants.LandscapeTexture1GlintParameters },
+				{ "LandscapeTexture2GlintParameters", lightingPSConstants.LandscapeTexture2GlintParameters },
+				{ "LandscapeTexture3GlintParameters", lightingPSConstants.LandscapeTexture3GlintParameters },
+				{ "LandscapeTexture4GlintParameters", lightingPSConstants.LandscapeTexture4GlintParameters },
+				{ "LandscapeTexture5GlintParameters", lightingPSConstants.LandscapeTexture5GlintParameters },
+				{ "LandscapeTexture6GlintParameters", lightingPSConstants.LandscapeTexture6GlintParameters },
 			};
-
-			if (REL::Module::IsVR()) {
-				lightingPS.insert({
-					{ "ShadowSampleParam", 18 },    // VR only
-					{ "EndSplitDistances", 19 },    // VR only
-					{ "StartSplitDistances", 20 },  // VR only
-					{ "DephBiasParam", 21 },        // VR only
-					{ "ShadowLightParam", 22 },     // VR only
-					{ "ShadowMapProj", 23 },        // VR only
-					{ "AmbientColor", 24 },
-					{ "FogColor", 25 },
-					{ "ColourOutputClamp", 26 },
-					{ "EnvmapData", 27 },
-					{ "ParallaxOccData", 28 },
-					{ "TintColor", 29 },
-					{ "LODTexParams", 30 },
-					{ "SpecularColor", 31 },
-					{ "SparkleParams", 32 },
-					{ "MultiLayerParallaxData", 33 },
-					{ "LightingEffectParams", 34 },
-					{ "IBLParams", 35 },
-					{ "LandscapeTexture1to4IsSnow", 36 },
-					{ "LandscapeTexture5to6IsSnow", 37 },
-					{ "LandscapeTexture1to4IsSpecPower", 38 },
-					{ "LandscapeTexture5to6IsSpecPower", 39 },
-					{ "SnowRimLightParameters", 40 },
-					{ "CharacterLightParams", 41 },
-					{ "InvWorldMat", 42 },       // VR only
-					{ "PreviousWorldMat", 43 },  // VR only
-
-					{ "PBRFlags", 44 },
-					{ "PBRParams1", 45 },
-					{ "LandscapeTexture2PBRParams", 46 },
-					{ "LandscapeTexture3PBRParams", 47 },
-					{ "LandscapeTexture4PBRParams", 48 },
-					{ "LandscapeTexture5PBRParams", 49 },
-					{ "LandscapeTexture6PBRParams", 50 },
-					{ "PBRParams2", 51 },
-					{ "LandscapeTexture1GlintParameters", 52 },
-					{ "LandscapeTexture2GlintParameters", 53 },
-					{ "LandscapeTexture3GlintParameters", 54 },
-					{ "LandscapeTexture4GlintParameters", 55 },
-					{ "LandscapeTexture5GlintParameters", 56 },
-					{ "LandscapeTexture6GlintParameters", 57 },
-				});
-			} else {
-				lightingPS.insert({
-					{ "AmbientColor", 18 },
-					{ "FogColor", 19 },
-					{ "ColourOutputClamp", 20 },
-					{ "EnvmapData", 21 },
-					{ "ParallaxOccData", 22 },
-					{ "TintColor", 23 },
-					{ "LODTexParams", 24 },
-					{ "SpecularColor", 25 },
-					{ "SparkleParams", 26 },
-					{ "MultiLayerParallaxData", 27 },
-					{ "LightingEffectParams", 28 },
-					{ "IBLParams", 29 },
-					{ "LandscapeTexture1to4IsSnow", 30 },
-					{ "LandscapeTexture5to6IsSnow", 31 },
-					{ "LandscapeTexture1to4IsSpecPower", 32 },
-					{ "LandscapeTexture5to6IsSpecPower", 33 },
-					{ "SnowRimLightParameters", 34 },
-					{ "CharacterLightParams", 35 },
-
-					{ "PBRFlags", 36 },
-					{ "PBRParams1", 37 },
-					{ "LandscapeTexture2PBRParams", 38 },
-					{ "LandscapeTexture3PBRParams", 39 },
-					{ "LandscapeTexture4PBRParams", 40 },
-					{ "LandscapeTexture5PBRParams", 41 },
-					{ "LandscapeTexture6PBRParams", 42 },
-					{ "PBRParams2", 43 },
-					{ "LandscapeTexture1GlintParameters", 44 },
-					{ "LandscapeTexture2GlintParameters", 45 },
-					{ "LandscapeTexture3GlintParameters", 46 },
-					{ "LandscapeTexture4GlintParameters", 47 },
-					{ "LandscapeTexture5GlintParameters", 48 },
-					{ "LandscapeTexture6GlintParameters", 49 },
-				});
-			}
 
 			auto& bloodSplatterVS = result[static_cast<size_t>(RE::BSShader::Type::BloodSplatter)]
 										  [static_cast<size_t>(ShaderClass::Vertex)];
@@ -887,12 +848,14 @@ namespace SIE
 				grassVS.insert({ "ShadowClampValue", 14 });
 			}
 
+			const auto& grassPSConstants = ShaderConstants::GrassPS::Get();
+
 			auto& grassPS = result[static_cast<size_t>(RE::BSShader::Type::Grass)]
 								  [static_cast<size_t>(ShaderClass::Pixel)];
 			grassPS = {
-				{ "PBRFlags", 0 },
-				{ "PBRParams1", 1 },
-				{ "PBRParams2", 2 },
+				{ "PBRFlags", grassPSConstants.PBRFlags },
+				{ "PBRParams1", grassPSConstants.PBRParams1 },
+				{ "PBRParams2", grassPSConstants.PBRParams2 },
 			};
 
 			auto& particleVS = result[static_cast<size_t>(RE::BSShader::Type::Particle)]

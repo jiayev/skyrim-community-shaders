@@ -771,6 +771,8 @@ struct BSLightingShader_SetupMaterial
 	{
 		using enum SIE::ShaderCache::LightingShaderTechniques;
 
+		const auto& lightingPSConstants = ShaderConstants::LightingPS::Get();
+
 		auto lightingFlags = shader->currentRawTechnique & ~(~0u << 24);
 		auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((shader->currentRawTechnique >> 24) & 0x3F);
 		if (!(lightingType == LODLand || lightingType == LODLandNoise) && (lightingFlags & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr))) {
@@ -830,12 +832,12 @@ struct BSLightingShader_SetupMaterial
 							}
 						}
 					}
-					shadowState->SetPSConstant(flags, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 36);
+					shadowState->SetPSConstant(flags, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRFlags);
 				}
 
 				{
-					constexpr size_t PBRParamsStartIndex = 37;
-					constexpr size_t GlintParametersStartIndex = 44;
+					const size_t PBRParamsStartIndex = lightingPSConstants.PBRParams1;
+					const size_t GlintParametersStartIndex = lightingPSConstants.LandscapeTexture1GlintParameters;
 
 					for (uint32_t textureIndex = 0; textureIndex < BSLightingShaderMaterialPBRLandscape::NumTiles; ++textureIndex) {
 						std::array<float, 3> PBRParams;
@@ -859,7 +861,7 @@ struct BSLightingShader_SetupMaterial
 					lodTexParams[1] = pbrMaterial->terrainTexOffsetY;
 					lodTexParams[2] = 1.f;
 					lodTexParams[3] = pbrMaterial->terrainTexFade;
-					shadowState->SetPSConstant(lodTexParams, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 24);
+					shadowState->SetPSConstant(lodTexParams, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.LODTexParams);
 				}
 			} else if (lightingType == None || lightingType == TreeAnim) {
 				auto* pbrMaterial = static_cast<const BSLightingShaderMaterialPBR*>(material);
@@ -897,12 +899,12 @@ struct BSLightingShader_SetupMaterial
 					PBRParams2[1] = pbrMaterial->GetCoatColor().green;
 					PBRParams2[2] = pbrMaterial->GetCoatColor().blue;
 					PBRParams2[3] = pbrMaterial->GetCoatStrength();
-					shadowState->SetPSConstant(PBRParams2, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 43);
+					shadowState->SetPSConstant(PBRParams2, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRParams2);
 
 					std::array<float, 4> PBRParams3;
 					PBRParams3[0] = pbrMaterial->GetCoatRoughness();
 					PBRParams3[1] = pbrMaterial->GetCoatSpecularLevel();
-					shadowState->SetPSConstant(PBRParams3, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 27);
+					shadowState->SetPSConstant(PBRParams3, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.MultiLayerParallaxData);
 				} else if (pbrMaterial->pbrFlags.any(PBRFlags::HairMarschner)) {
 					shaderFlags.set(PBRShaderFlags::HairMarschner);
 				} else {
@@ -914,7 +916,7 @@ struct BSLightingShader_SetupMaterial
 						PBRParams2[1] = pbrMaterial->GetSubsurfaceColor().green;
 						PBRParams2[2] = pbrMaterial->GetSubsurfaceColor().blue;
 						PBRParams2[3] = pbrMaterial->GetSubsurfaceOpacity();
-						shadowState->SetPSConstant(PBRParams2, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 43);
+						shadowState->SetPSConstant(PBRParams2, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRParams2);
 					}
 					if (pbrMaterial->pbrFlags.any(PBRFlags::Fuzz)) {
 						shaderFlags.set(PBRShaderFlags::Fuzz);
@@ -924,7 +926,7 @@ struct BSLightingShader_SetupMaterial
 						PBRParams3[1] = pbrMaterial->GetFuzzColor().green;
 						PBRParams3[2] = pbrMaterial->GetFuzzColor().blue;
 						PBRParams3[3] = pbrMaterial->GetFuzzWeight();
-						shadowState->SetPSConstant(PBRParams3, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 27);
+						shadowState->SetPSConstant(PBRParams3, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.MultiLayerParallaxData);
 					} else if (pbrMaterial->pbrFlags.any(PBRFlags::Glint)) {
 						shaderFlags.set(PBRShaderFlags::Glint);
 
@@ -933,7 +935,7 @@ struct BSLightingShader_SetupMaterial
 						GlintParameters[0] = 40.f - pbrMaterial->GetGlintParameters().logMicrofacetDensity;
 						GlintParameters[0] = pbrMaterial->GetGlintParameters().microfacetRoughness;
 						GlintParameters[0] = pbrMaterial->GetGlintParameters().densityRandomization;
-						shadowState->SetPSConstant(GlintParameters, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 27);
+						shadowState->SetPSConstant(GlintParameters, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.MultiLayerParallaxData);
 					}
 				}
 
@@ -942,12 +944,12 @@ struct BSLightingShader_SetupMaterial
 					PBRProjectedUVParams1[0] = pbrMaterial->GetProjectedMaterialBaseColorScale()[0];
 					PBRProjectedUVParams1[1] = pbrMaterial->GetProjectedMaterialBaseColorScale()[1];
 					PBRProjectedUVParams1[2] = pbrMaterial->GetProjectedMaterialBaseColorScale()[2];
-					shadowState->SetPSConstant(PBRProjectedUVParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 21);
+					shadowState->SetPSConstant(PBRProjectedUVParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.EnvmapData);
 
 					std::array<float, 4> PBRProjectedUVParams2;
 					PBRProjectedUVParams2[0] = pbrMaterial->GetProjectedMaterialRoughness();
 					PBRProjectedUVParams2[1] = pbrMaterial->GetProjectedMaterialSpecularLevel();
-					shadowState->SetPSConstant(PBRProjectedUVParams2, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 22);
+					shadowState->SetPSConstant(PBRProjectedUVParams2, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.ParallaxOccData);
 				}
 
 				const bool hasEmissive = pbrMaterial->emissiveTexture != nullptr && pbrMaterial->emissiveTexture != RE::BSGraphics::State::GetSingleton()->GetRuntimeData().defaultTextureBlack;
@@ -987,7 +989,7 @@ struct BSLightingShader_SetupMaterial
 				}
 
 				{
-					shadowState->SetPSConstant(shaderFlags, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 36);
+					shadowState->SetPSConstant(shaderFlags, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRFlags);
 				}
 
 				{
@@ -995,7 +997,7 @@ struct BSLightingShader_SetupMaterial
 					PBRParams1[0] = pbrMaterial->GetRoughnessScale();
 					PBRParams1[1] = pbrMaterial->GetDisplacementScale();
 					PBRParams1[2] = pbrMaterial->GetSpecularLevel();
-					shadowState->SetPSConstant(PBRParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 37);
+					shadowState->SetPSConstant(PBRParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRParams1);
 				}
 			}
 
@@ -1025,7 +1027,7 @@ struct BSLightingShader_SetupMaterial
 				} else {
 					std::fill_n(characterLightParams.data(), 4, 0.f);
 				}
-				shadowState->SetPSConstant(characterLightParams, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 35);
+				shadowState->SetPSConstant(characterLightParams, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.CharacterLightParams);
 			}
 
 			RE::BSGraphics::Renderer::FlushVSConstantGroup(RE::BSGraphics::ConstantGroupLevel::PerMaterial);
@@ -1432,6 +1434,8 @@ struct BSGrassShader_SetupMaterial
 		const auto& state = State::GetSingleton();
 		const auto technique = static_cast<SIE::ShaderCache::GrassShaderTechniques>(state->currentPixelDescriptor & 0b1111);
 
+		const auto& grassPSConstants = ShaderConstants::GrassPS::Get();
+
 		if (technique == SIE::ShaderCache::GrassShaderTechniques::TruePbr) {
 			auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 
@@ -1465,14 +1469,14 @@ struct BSGrassShader_SetupMaterial
 			}
 
 			{
-				shadowState->SetPSConstant(shaderFlags, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 0);
+				shadowState->SetPSConstant(shaderFlags, RE::BSGraphics::ConstantGroupLevel::PerMaterial, grassPSConstants.PBRFlags);
 			}
 
 			{
 				std::array<float, 3> PBRParams1;
 				PBRParams1[0] = pbrMaterial->GetRoughnessScale();
 				PBRParams1[1] = pbrMaterial->GetSpecularLevel();
-				shadowState->SetPSConstant(PBRParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 1);
+				shadowState->SetPSConstant(PBRParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, grassPSConstants.PBRParams1);
 			}
 
 			{
@@ -1481,7 +1485,7 @@ struct BSGrassShader_SetupMaterial
 				PBRParams2[1] = pbrMaterial->GetSubsurfaceColor().green;
 				PBRParams2[2] = pbrMaterial->GetSubsurfaceColor().blue;
 				PBRParams2[3] = pbrMaterial->GetSubsurfaceOpacity();
-				shadowState->SetPSConstant(PBRParams2, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 2);
+				shadowState->SetPSConstant(PBRParams2, RE::BSGraphics::ConstantGroupLevel::PerMaterial, grassPSConstants.PBRParams2);
 			}
 
 			RE::BSGraphics::Renderer::FlushPSConstantGroup(RE::BSGraphics::ConstantGroupLevel::PerMaterial);
