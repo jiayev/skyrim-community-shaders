@@ -522,7 +522,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 
 	float3 color = DLightColor.xyz;
-	if (!Interior && (PixelShaderDescriptor & _InWorld)) {
+	if (!InInterior && !InMapMenu && (ExtraShaderDescriptor & _InWorld)) {
 		float3 viewDirection = normalize(worldPosition);
 		color = DirLightColorShared * GetEffectShadow(worldPosition, viewDirection, screenPosition, eyeIndex);
 
@@ -606,10 +606,10 @@ PS_OUTPUT main(PS_INPUT input)
 	if (LightingInfluence.x > 0.0) {
 		float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 		float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
-		bool mainPass = PixelShaderDescriptor & _InWorld;
+		bool inWorld = ExtraShaderDescriptor & _InWorld;
 
 		uint clusterIndex = 0;
-		if (mainPass && GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+		if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 			lightCount = lightGrid[clusterIndex].lightCount;
 			uint lightOffset = lightGrid[clusterIndex].offset;
 			[loop] for (uint i = 0; i < lightCount; i++)
@@ -731,11 +731,11 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (lightLimitFixSettings.EnableLightsVisualisation) {
 		if (lightLimitFixSettings.LightsVisualisationMode == 0) {
-			psout.Diffuse.xyz = TurboColormap(0.0);
+			psout.Diffuse.xyz = LightLimitFix::TurboColormap(0.0);
 		} else if (lightLimitFixSettings.LightsVisualisationMode == 1) {
-			psout.Diffuse.xyz = TurboColormap(0.0);
+			psout.Diffuse.xyz = LightLimitFix::TurboColormap(0.0);
 		} else {
-			psout.Diffuse.xyz = TurboColormap((float)lightCount / 128.0);
+			psout.Diffuse.xyz = LightLimitFix::TurboColormap((float)lightCount / 128.0);
 		}
 	}
 #	endif

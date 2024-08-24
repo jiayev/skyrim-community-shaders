@@ -178,10 +178,14 @@ namespace SIE
 		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor);
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader& shader,
 			uint32_t descriptor);
+		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
+			uint32_t descriptor);
 
 		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 		RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader& shader,
+			uint32_t descriptor);
+		RE::BSGraphics::ComputeShader* MakeAndAddComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 
 		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor);
@@ -413,6 +417,9 @@ namespace SIE
 		std::array<eastl::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::PixelShader>>,
 			static_cast<size_t>(RE::BSShader::Type::Total)>
 			pixelShaders;
+		std::array<eastl::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::ComputeShader>>,
+			static_cast<size_t>(RE::BSShader::Type::Total)>
+			computeShaders;
 
 		bool isEnabled = true;
 		bool isDiskCache = true;
@@ -424,6 +431,7 @@ namespace SIE
 		std::stop_source ssource;
 		std::mutex vertexShadersMutex;
 		std::mutex pixelShadersMutex;
+		std::mutex computeShadersMutex;
 		CompilationSet compilationSet;
 		std::unordered_map<std::string, ShaderCacheResult> shaderMap{};
 		std::mutex mapMutex;

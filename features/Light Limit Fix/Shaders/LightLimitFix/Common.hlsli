@@ -24,6 +24,4 @@ struct StructuredLight
 	float radius;
 	float4 positionWS[2];
 	float4 positionVS[2];
-	uint firstPersonShadow;
-	float pad0[3];
 };

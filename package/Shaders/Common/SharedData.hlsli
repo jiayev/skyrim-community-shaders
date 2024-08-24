@@ -16,8 +16,8 @@ cbuffer SharedData : register(b5)
 	float4 BufferDim;
 	float Timer;
 	uint FrameCount;
-	bool Interior;  // If the area lacks a directional shadow light e.g. the sun or moon
-	uint pad0b5[1];
+	bool InInterior;  // If the area lacks a directional shadow light e.g. the sun or moon
+	bool InMapMenu;   // If the world/local map is open (note that the renderer is still deferred here)
 };
 
 struct GrassLightingSettings
@@ -67,7 +67,7 @@ struct TerraOccSettings
 	float3 Offset;
 };
 
-struct WetnessEffects
+struct WetnessEffectsSettings
 {
 	float Time;
 	float Raining;
@@ -122,14 +122,16 @@ struct SkylightingSettings
 	row_major float4x4 OcclusionViewProj;
 	float4 OcclusionDir;
 
-	float4 PosOffset;   // xyz: cell origin in camera model space
-	uint4 ArrayOrigin;  // xyz: array origin, w: max accum frames
+	float3 PosOffset;  // xyz: cell origin in camera model space
+	uint pad0;
+	uint3 ArrayOrigin;  // xyz: array origin, w: max accum frames
+	uint pad1;
 	int4 ValidMargin;
 
 	float4 MixParams;  // x: min diffuse visibility, y: diffuse mult, z: min specular visibility, w: specular mult
 
 	uint DirectionalDiffuse;
-	float3 pad0;
+	uint3 pad2;
 };
 
 struct PBRSettings
@@ -149,7 +151,7 @@ cbuffer FeatureData : register(b6)
 	CPMSettings extendedMaterialSettings;
 	CubemapCreatorSettings cubemapCreatorSettings;
 	TerraOccSettings terraOccSettings;
-	WetnessEffects wetnessEffects;
+	WetnessEffectsSettings wetnessEffectsSettings;
 	LightLimitFixSettings lightLimitFixSettings;
 	SkylightingSettings skylightingSettings;
 	PBRSettings pbrSettings;
@@ -174,6 +176,11 @@ float GetDepth(float2 uv, uint a_eyeIndex = 0)
 float GetScreenDepth(float depth)
 {
 	return (CameraData.w / (-depth * CameraData.z + CameraData.x));
+}
+
+float4 GetScreenDepths(float4 depths)
+{
+	return (CameraData.w / (-depths * CameraData.z + CameraData.x));
 }
 
 float GetScreenDepth(float2 uv, uint a_eyeIndex = 0)

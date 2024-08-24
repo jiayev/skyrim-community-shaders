@@ -57,7 +57,7 @@ public:
 		float directionalLightColorMultiplier = 1.f;
 		float pointLightColorMultiplier = 1.f;
 		float ambientLightColorMultiplier = 1.f;
-		float baseColorGamma = 1.9f;
+		float baseColorGamma = 2.2f;
 		uint32_t useMultipleScattering = true;
 		uint32_t useMultiBounceAO = true;
 		uint32_t pad[2];

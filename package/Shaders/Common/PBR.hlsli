@@ -87,8 +87,6 @@ namespace PBR
 
 	struct LightProperties
 	{
-		float3 LightColor;
-		float3 CoatLightColor;
 		float3 LinearLightColor;
 		float3 LinearCoatLightColor;
 	};
@@ -96,16 +94,13 @@ namespace PBR
 	LightProperties InitLightProperties(float3 lightColor, float3 nonParallaxShadow, float3 parallaxShadow)
 	{
 		LightProperties result;
-		result.LightColor = lightColor * nonParallaxShadow * parallaxShadow;
 		result.LinearLightColor = sRGB2Lin(lightColor) * nonParallaxShadow * parallaxShadow;
 		[branch] if ((PBRFlags & TruePBR_InterlayerParallax) != 0)
 		{
-			result.CoatLightColor = lightColor * nonParallaxShadow;
 			result.LinearCoatLightColor = sRGB2Lin(lightColor) * nonParallaxShadow;
 		}
 		else
 		{
-			result.CoatLightColor = result.LightColor;
 			result.LinearCoatLightColor = result.LinearLightColor;
 		}
 		return result;
@@ -423,12 +418,12 @@ namespace PBR
 #if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 		[branch] if ((PBRFlags & TruePBR_HairMarschner) != 0)
 		{
-			transmission += PI * lightProperties.LightColor * GetHairColorMarschner(N, V, L, NdotL, NdotV, VdotL, 0, 1, 0, surfaceProperties);
+			transmission += lightProperties.LinearLightColor * GetHairColorMarschner(N, V, L, NdotL, NdotV, VdotL, 0, 1, 0, surfaceProperties);
 		}
 		else
 #endif
 		{
-			diffuse += lightProperties.LightColor * satNdotL;
+			diffuse += lightProperties.LinearLightColor * satNdotL * GetDiffuseDirectLightMultiplierLambert();
 
 #if defined(GLINT)
 			GlintInput glintInput;
@@ -444,9 +439,9 @@ namespace PBR
 
 			float3 F;
 #if defined(GLINT)
-			specular += PI * GetSpecularDirectLightMultiplierMicrofacetWithGlint(surfaceProperties.Roughness, surfaceProperties.F0, satNdotL, satNdotV, satNdotH, satVdotH, glintInput, F) * lightProperties.LinearLightColor * satNdotL;
+			specular += GetSpecularDirectLightMultiplierMicrofacetWithGlint(surfaceProperties.Roughness, surfaceProperties.F0, satNdotL, satNdotV, satNdotH, satVdotH, glintInput, F) * lightProperties.LinearLightColor * satNdotL;
 #else
-			specular += PI * GetSpecularDirectLightMultiplierMicrofacet(surfaceProperties.Roughness, surfaceProperties.F0, satNdotL, satNdotV, satNdotH, satVdotH, F) * lightProperties.LinearLightColor * satNdotL;
+			specular += GetSpecularDirectLightMultiplierMicrofacet(surfaceProperties.Roughness, surfaceProperties.F0, satNdotL, satNdotV, satNdotH, satVdotH, F) * lightProperties.LinearLightColor * satNdotL;
 #endif
 
 			float2 specularBRDF = 0;
@@ -459,7 +454,7 @@ namespace PBR
 #if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 			[branch] if ((PBRFlags & TruePBR_Fuzz) != 0)
 			{
-				float3 fuzzSpecular = PI * GetSpecularDirectLightMultiplierMicroflakes(surfaceProperties.Roughness, surfaceProperties.FuzzColor, satNdotL, satNdotV, satNdotH, satVdotH) * lightProperties.LinearLightColor * satNdotL;
+				float3 fuzzSpecular = GetSpecularDirectLightMultiplierMicroflakes(surfaceProperties.Roughness, surfaceProperties.FuzzColor, satNdotL, satNdotV, satNdotH, satVdotH) * lightProperties.LinearLightColor * satNdotL;
 				[branch] if (pbrSettings.UseMultipleScattering)
 				{
 					fuzzSpecular *= 1 + surfaceProperties.FuzzColor * (1 / (specularBRDF.x + specularBRDF.y) - 1);
@@ -474,7 +469,7 @@ namespace PBR
 				float forwardScatter = exp2(saturate(-VdotL) * subsurfacePower - subsurfacePower);
 				float backScatter = saturate(satNdotL * surfaceProperties.Thickness + (1.0 - surfaceProperties.Thickness)) * 0.5;
 				float subsurface = lerp(backScatter, 1, forwardScatter) * (1.0 - surfaceProperties.Thickness);
-				transmission += surfaceProperties.SubsurfaceColor * subsurface * lightProperties.LightColor;
+				transmission += surfaceProperties.SubsurfaceColor * subsurface * lightProperties.LinearLightColor;
 			}
 			else if ((PBRFlags & TruePBR_TwoLayer) != 0)
 			{
@@ -493,13 +488,13 @@ namespace PBR
 				}
 
 				float3 coatF;
-				float3 coatSpecular = PI * GetSpecularDirectLightMultiplierMicrofacet(surfaceProperties.CoatRoughness, surfaceProperties.CoatF0, coatNdotL, coatNdotV, coatNdotH, coatVdotH, coatF) * lightProperties.LinearCoatLightColor * coatNdotL;
+				float3 coatSpecular = GetSpecularDirectLightMultiplierMicrofacet(surfaceProperties.CoatRoughness, surfaceProperties.CoatF0, coatNdotL, coatNdotV, coatNdotH, coatVdotH, coatF) * lightProperties.LinearCoatLightColor * coatNdotL;
 
 				float3 layerAttenuation = 1 - coatF * surfaceProperties.CoatStrength;
 				diffuse *= layerAttenuation;
 				specular *= layerAttenuation;
 
-				coatDiffuse += lightProperties.CoatLightColor * coatNdotL;
+				coatDiffuse += lightProperties.LinearCoatLightColor * coatNdotL;
 				specular += coatSpecular * surfaceProperties.CoatStrength;
 			}
 #endif
@@ -518,7 +513,7 @@ namespace PBR
 		float VdotH = saturate(dot(V, H));
 
 		float3 wetnessF;
-		float3 wetnessSpecular = PI * GetSpecularDirectLightMultiplierMicrofacet(roughness, wetnessF0, NdotL, NdotV, NdotH, VdotH, wetnessF) * lightColor * NdotL;
+		float3 wetnessSpecular = GetSpecularDirectLightMultiplierMicrofacet(roughness, wetnessF0, NdotL, NdotV, NdotH, VdotH, wetnessF) * lightColor * NdotL;
 
 		return wetnessSpecular * wetnessStrength;
 	}
@@ -593,7 +588,7 @@ namespace PBR
 		// https://marmosetco.tumblr.com/post/81245981087
 		float3 R = reflect(-V, N);
 		float horizon = min(1.0 + dot(R, VN), 1.0);
-		horizon *= horizon * horizon;
+		horizon = horizon * horizon;
 		specularLobeWeight *= horizon;
 
 		float3 diffuseAO = surfaceProperties.AO;
@@ -604,7 +599,7 @@ namespace PBR
 			specularAO = MultiBounceAO(surfaceProperties.F0, specularAO.x).y;
 		}
 
-		diffuseLobeWeight *= diffuseAO;
+		diffuseLobeWeight *= diffuseAO / PI;
 		specularLobeWeight *= specularAO;
 	}
 
@@ -621,7 +616,7 @@ namespace PBR
 		// https://marmosetco.tumblr.com/post/81245981087
 		float3 R = reflect(-V, N);
 		float horizon = min(1.0 + dot(R, VN), 1.0);
-		horizon *= horizon * horizon;
+		horizon = horizon * horizon;
 		specularLobeWeight *= horizon;
 
 		return specularLobeWeight * wetnessStrength;
