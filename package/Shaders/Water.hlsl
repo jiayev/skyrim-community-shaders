@@ -840,6 +840,11 @@ PS_OUTPUT main(PS_INPUT input)
 #				else
 	float3 sunColor = GetSunColor(normal, viewDirection);
 
+#					if defined(LOD)
+	if (length(sunColor) > 0.0)
+		shadow = GetWorldShadow(input.WPosition, length(input.WPosition.xyz), normal, eyeIndex);
+#					endif
+
 	if (!(PixelShaderDescriptor & _Interior)) {
 		if (shadow != 0.0) {
 			float screenNoise = InterleavedGradientNoise(input.HPosition.xy, FrameCount);
