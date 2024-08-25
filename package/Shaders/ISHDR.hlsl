@@ -93,10 +93,11 @@ PS_OUTPUT main(PS_INPUT input)
 	PS_OUTPUT psout;
 
 #	if defined(DOWNSAMPLE)
-	float3 downsampledColor = 0;
+	float3 downsampledColor = float3(0, 9999999, -9999999);
 	for (int sampleIndex = 0; sampleIndex < DOWNSAMPLE; ++sampleIndex) {
 		float2 texCoord = BlurOffsets[sampleIndex].xy * BlurScale.xy + input.TexCoord;
-		if (Flags.x > 0.5) {
+		[branch] if (Flags.x > 0.5)
+		{
 			texCoord = GetDynamicResolutionAdjustedScreenPosition(texCoord);
 		}
 		float3 imageColor = ImageTex.Sample(ImageSampler, texCoord).xyz;
