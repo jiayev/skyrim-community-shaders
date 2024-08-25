@@ -87,6 +87,8 @@ namespace nlohmann
 	}
 }
 
+void SetupPBRLandscapeTextureParameters(BSLightingShaderMaterialPBRLandscape& material, const TruePBR::PBRTextureSetData& textureSetData, uint32_t textureIndex);
+
 void TruePBR::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("PBR", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -129,6 +131,66 @@ void TruePBR::DrawSettings()
 						}
 					}
 				}
+			}
+		}
+
+		if (ImGui::TreeNodeEx("Texture Set Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+			if (ImGui::BeginCombo("Texture Set", selectedPbrTextureSetName.c_str())) {
+				for (auto& [textureSetName, textureSet] : pbrTextureSets) {
+					if (ImGui::Selectable(textureSetName.c_str(), textureSetName == selectedPbrTextureSetName)) {
+						selectedPbrTextureSetName = textureSetName;
+						selectedPbrTextureSet = &textureSet;
+					}
+				}
+				ImGui::EndCombo();
+			}
+
+			if (selectedPbrTextureSet != nullptr) {
+				bool wasEdited = false;
+				if (ImGui::SliderFloat("Displacement Scale", &selectedPbrTextureSet->displacementScale, 0.f, 3.f, "%.3f")) {
+					wasEdited = true;
+				}
+				if (ImGui::SliderFloat("Roughness Scale", &selectedPbrTextureSet->roughnessScale, 0.f, 3.f, "%.3f")) {
+					wasEdited = true;
+				}
+				if (ImGui::SliderFloat("Specular Level", &selectedPbrTextureSet->specularLevel, 0.f, 3.f, "%.3f")) {
+					wasEdited = true;
+				}
+				if (ImGui::TreeNodeEx("Glint", ImGuiTreeNodeFlags_DefaultOpen)) {
+					if (ImGui::Checkbox("Enabled", &selectedPbrTextureSet->glintParameters.enabled)) {
+						wasEdited = true;
+					}
+					if (selectedPbrTextureSet->glintParameters.enabled) {
+						if (ImGui::SliderFloat("Screenspace Scale", &selectedPbrTextureSet->glintParameters.screenSpaceScale, 0.f, 3.f, "%.3f")) {
+							wasEdited = true;
+						}
+						if (ImGui::SliderFloat("Log Microfacet Density", &selectedPbrTextureSet->glintParameters.logMicrofacetDensity, 0.f, 40.f, "%.3f")) {
+							wasEdited = true;
+						}
+						if (ImGui::SliderFloat("Microfacet Roughness", &selectedPbrTextureSet->glintParameters.microfacetRoughness, 0.f, 1.f, "%.3f")) {
+							wasEdited = true;
+						}
+						if (ImGui::SliderFloat("Density Randomization", &selectedPbrTextureSet->glintParameters.densityRandomization, 0.f, 5.f, "%.3f")) {
+							wasEdited = true;
+						}
+					}
+					ImGui::TreePop();
+				}
+				if (wasEdited) {
+					for (auto& [material, textureSets] : BSLightingShaderMaterialPBRLandscape::All) {
+						for (uint32_t textureSetIndex = 0; textureSetIndex < BSLightingShaderMaterialPBRLandscape::NumTiles; ++textureSetIndex) {
+							if (textureSets[textureSetIndex] == selectedPbrTextureSet) {
+								SetupPBRLandscapeTextureParameters(*material, *textureSets[textureSetIndex], textureSetIndex);
+							}
+						}
+					}
+				}
+				if (selectedPbrTextureSet != nullptr) {
+					if (ImGui::Button("Save")) {
+						PNState::SavePBRRecordConfig("Data\\PBRTextureSets", selectedPbrTextureSetName, *selectedPbrTextureSet);
+					}
+				}
+				ImGui::TreePop();
 			}
 		}
 
@@ -314,6 +376,27 @@ void TruePBR::SetupTextureSetData()
 			logger::error("Failed to deserialize config for {}: {}.", editorId, e.what());
 		}
 	});
+}
+
+void TruePBR::ReloadTextureSetData()
+{
+	logger::info("[TruePBR] reloading PBR texture set configs");
+
+	PNState::ReadPBRRecordConfigs("Data\\PBRTextureSets", [this](const std::string& editorId, const json& config) {
+		try {
+			if (auto it = pbrTextureSets.find(editorId); it != pbrTextureSets.cend()) {
+				it->second = config;
+			}
+		} catch (const std::exception& e) {
+			logger::error("Failed to deserialize config for {}: {}.", editorId, e.what());
+		}
+	});
+
+	for (const auto& [material, textureSets] : BSLightingShaderMaterialPBRLandscape::All) {
+		for (uint32_t textureSetIndex = 0; textureSetIndex < BSLightingShaderMaterialPBRLandscape::NumTiles; ++textureSetIndex) {
+			SetupPBRLandscapeTextureParameters(*material, *textureSets[textureSetIndex], textureSetIndex);
+		}
+	}
 }
 
 TruePBR::PBRTextureSetData* TruePBR::GetPBRTextureSetData(const RE::TESForm* textureSet)
@@ -1075,7 +1158,15 @@ uint32_t hk_BSLightingShader_GetPixelTechnique(uint32_t rawTechnique)
 	return pixelTechnique;
 }
 
-void SetupLandscapeTexture(BSLightingShaderMaterialPBRLandscape& material, RE::TESLandTexture& landTexture, uint32_t textureIndex)
+void SetupPBRLandscapeTextureParameters(BSLightingShaderMaterialPBRLandscape& material, const TruePBR::PBRTextureSetData& textureSetData, uint32_t textureIndex)
+{
+	material.displacementScales[textureIndex] = textureSetData.displacementScale;
+	material.roughnessScales[textureIndex] = textureSetData.roughnessScale;
+	material.specularLevels[textureIndex] = textureSetData.specularLevel;
+	material.glintParameters[textureIndex] = textureSetData.glintParameters;
+}
+
+void SetupLandscapeTexture(BSLightingShaderMaterialPBRLandscape& material, RE::TESLandTexture& landTexture, uint32_t textureIndex, std::array<TruePBR::PBRTextureSetData*, BSLightingShaderMaterialPBRLandscape::NumTiles>& textureSets)
 {
 	if (textureIndex >= 6) {
 		return;
@@ -1089,17 +1180,15 @@ void SetupLandscapeTexture(BSLightingShaderMaterialPBRLandscape& material, RE::T
 	auto* textureSetData = TruePBR::GetSingleton()->GetPBRTextureSetData(landTexture.textureSet);
 	const bool isPbr = textureSetData != nullptr;
 
+	textureSets[textureIndex] = textureSetData;
+
 	textureSet->SetTexture(BSLightingShaderMaterialPBRLandscape::BaseColorTexture, material.landscapeBaseColorTextures[textureIndex]);
 	textureSet->SetTexture(BSLightingShaderMaterialPBRLandscape::NormalTexture, material.landscapeNormalTextures[textureIndex]);
 
 	if (isPbr) {
 		textureSet->SetTexture(BSLightingShaderMaterialPBRLandscape::RmaosTexture, material.landscapeRMAOSTextures[textureIndex]);
 		textureSet->SetTexture(BSLightingShaderMaterialPBRLandscape::DisplacementTexture, material.landscapeDisplacementTextures[textureIndex]);
-		material.displacementScales[textureIndex] = textureSetData->displacementScale;
-		material.roughnessScales[textureIndex] = textureSetData->roughnessScale;
-		material.specularLevels[textureIndex] = textureSetData->specularLevel;
-
-		material.glintParameters[textureIndex] = textureSetData->glintParameters;
+		SetupPBRLandscapeTextureParameters(material, *textureSetData, textureIndex);
 	}
 	material.isPbr[textureIndex] = isPbr;
 
@@ -1164,12 +1253,14 @@ bool hk_TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 				material->landscapeRMAOSTextures[textureIndex] = stateData.defaultTextureWhite;
 			}
 
+			auto& textureSets = BSLightingShaderMaterialPBRLandscape::All[material];
+
 			if (auto defTexture = land->loadedData->defQuadTextures[quadIndex]) {
-				SetupLandscapeTexture(*material, *defTexture, 0);
+				SetupLandscapeTexture(*material, *defTexture, 0, textureSets);
 			}
 			for (uint32_t textureIndex = 0; textureIndex < BSLightingShaderMaterialPBRLandscape::NumTiles - 1; ++textureIndex) {
 				if (auto landTexture = land->loadedData->quadTextures[quadIndex][textureIndex]) {
-					SetupLandscapeTexture(*material, *landTexture, textureIndex + 1);
+					SetupLandscapeTexture(*material, *landTexture, textureIndex + 1, textureSets);
 				}
 			}
 
