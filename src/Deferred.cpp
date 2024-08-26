@@ -411,9 +411,20 @@ void Deferred::DeferredPasses()
 			context->CSSetShader(shader, nullptr, 0);
 
 			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+		}
 
-			buffer = nullptr;
+		// Clear
+		{
+			ID3D11ShaderResourceView* views[6]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+			context->CSSetShaderResources(0, ARRAYSIZE(views), views);
+
+			ID3D11UnorderedAccessView* uavs[2]{ nullptr, nullptr };
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+			ID3D11Buffer* buffer = nullptr;
 			context->CSSetConstantBuffers(0, 1, &buffer);
+
+			context->CSSetShader(nullptr, nullptr, 0);
 		}
 	}
 
