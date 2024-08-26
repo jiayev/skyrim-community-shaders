@@ -271,7 +271,8 @@ namespace SIE
 			       type == RE::BSShader::Type::Particle ||
 			       type == RE::BSShader::Type::Water ||
 			       type == RE::BSShader::Type::Effect ||
-			       type == RE::BSShader::Type::Utility;
+			       type == RE::BSShader::Type::Utility ||
+			       type == RE::BSShader::Type::ImageSpace;
 		}
 
 		inline static bool IsSupportedShader(const RE::BSShader& shader)
