@@ -1857,6 +1857,12 @@ namespace SIE
 	{
 		Clear();
 		StopFileWatcher();
+		if (!compilationPool.wait_for_tasks_duration(std::chrono::milliseconds(1000))) {
+			logger::info("Tasks still running despite request to stop; killing thread {}!", GetThreadId(managementThread));
+			WaitForSingleObject(managementThread, 1000);
+			TerminateThread(managementThread, 0);
+			CloseHandle(managementThread);
+		}
 	}
 
 	void ShaderCache::Clear()
@@ -2332,7 +2338,8 @@ namespace SIE
 
 	void ShaderCache::ManageCompilationSet(std::stop_token stoken)
 	{
-		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+		managementThread = GetCurrentThread();
+		SetThreadPriority(managementThread, THREAD_PRIORITY_BELOW_NORMAL);
 		while (!stoken.stop_requested()) {
 			const auto& task = compilationSet.WaitTake(stoken);
 			if (!task.has_value())
