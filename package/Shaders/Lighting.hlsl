@@ -2507,6 +2507,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 #	endif  // defined(LOD_LAND_BLEND) && defined(TRUE_PBR)
 
+	color.xyz = max(0, color);  // Black screen fix
+
 #	if !defined(DEFERRED)
 	if (FrameParams.y && FrameParams.z)
 		color.xyz = lerp(color.xyz, input.FogParam.xyz, input.FogParam.w);
