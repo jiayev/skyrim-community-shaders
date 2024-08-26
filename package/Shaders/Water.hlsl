@@ -47,6 +47,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	include "Common/MotionBlur.hlsli"
 #	include "Common/Permutation.hlsli"
 #	include "Common/Random.hlsli"
+#	include "Common/Color.hlsli"
 
 #	define WATER
 
@@ -855,8 +856,8 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 	float specularFraction = lerp(1, fresnel * depthControl.x, distanceFactor);
-	float3 finalColorPreFog = lerp(diffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
-
+	float3 finalColorPreFog = lerp(sRGB2Lin(diffuseColor), sRGB2Lin(specularColor), specularFraction) + sRGB2Lin(sunColor) * depthControl.w;
+	finalColorPreFog = Lin2sRGB(finalColorPreFog);
 	float3 finalColor = lerp(finalColorPreFog, input.FogParam.xyz, input.FogParam.w);
 #				endif
 #			endif
