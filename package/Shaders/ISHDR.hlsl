@@ -155,10 +155,10 @@ PS_OUTPUT main(PS_INPUT input)
 
 		float blendedLuminance = RGBToLuminance(blendedColor);
 
-		float4 linearColor = lerp(avgValue.x,
-			Cinematic.w * lerp(lerp(blendedLuminance, float4(blendedColor, 1), Cinematic.x),
-							  blendedLuminance * Tint, Tint.w),
-			Cinematic.z);
+		float3 linearColor = Cinematic.w * lerp(lerp(blendedLuminance, float4(blendedColor, 1), Cinematic.x), blendedLuminance * Tint, Tint.w);
+
+		// Contrast modified to fix crushed shadows
+		linearColor = pow(abs(linearColor) / avgValue.x, Cinematic.z) * avgValue.x * sign(linearColor);
 
 		gameSdrColor = max(0, gameSdrColor);
 		ppColor = max(0, linearColor);
