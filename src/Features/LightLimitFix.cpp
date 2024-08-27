@@ -656,7 +656,7 @@ void LightLimitFix::UpdateLights()
 
 	// Process point lights
 
-	for (auto& e : shadowSceneNode->GetRuntimeData().activePointLights) {
+	for (auto& e : shadowSceneNode->GetRuntimeData().activeLights) {
 		if (auto bsLight = e.get()) {
 			if (auto niLight = bsLight->light.get()) {
 				if (IsValidLight(bsLight) && IsGlobalLight(bsLight)) {
