@@ -70,7 +70,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (isSsrDisabled) {
 		psout.Color.rgb = float3(0.5 * color.r, 0, 0);
 	} else {
-		psout.Color = color * (1 - float3(ssrPower, 0.5 * ssrPower, ssrPower));
+		psout.Color.rgb = color * (1 - float3(ssrPower, 0.5 * ssrPower, ssrPower));
 	}
 	psout.Color.a = 1;
 #	else

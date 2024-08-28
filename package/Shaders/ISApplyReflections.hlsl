@@ -32,7 +32,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 mainColor = MainBufferTex.Sample(MainBufferSampler, adjustedScreenPosition).xyz;
 
 	float3 colorOffset = 0.0.xxx;
-	if (waterMask.x >= 1e-5 && waterMask.y > 1e-5) {
+	if (1e-5 >= waterMask.x && waterMask.y > 1e-5) {
 		float4 ssrSourceColor = SSRSourceTex.Sample(SSRSourceSampler, adjustedScreenPosition);
 		colorOffset = clamp(SSRParams.x * (ssrSourceColor.xyz * ssrSourceColor.w),
 			0, SSRParams.y * mainColor);

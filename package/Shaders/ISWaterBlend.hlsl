@@ -1,5 +1,7 @@
+#include "Common/Constants.hlsli"
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/VR.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
 
@@ -30,7 +32,7 @@ cbuffer PerGeometry : register(b2)
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
-
+	uint eyeIndex = GetEyeIndexPS(float4(input.TexCoord, 0, 0));
 	float2 adjustedScreenPosition = GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 	float waterMask = waterMaskTex.Sample(waterMaskSampler, adjustedScreenPosition).z;
 	if (waterMask < 1e-4) {
@@ -39,14 +41,17 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 sourceColor = sourceTex.Sample(sourceSampler, adjustedScreenPosition).xyz;
 	float2 motion = motionBufferTex.Sample(motionBufferSampler, adjustedScreenPosition).xy;
-	float2 motionScreenPosition = input.TexCoord + motion;
+	float2 motionScreenPosition = ConvertToStereoUV(ConvertFromStereoUV(input.TexCoord, eyeIndex) + motion, eyeIndex);
 	float2 motionAdjustedScreenPosition =
 		GetPreviousDynamicResolutionAdjustedScreenPosition(motionScreenPosition);
 	float4 waterHistory =
 		waterHistoryTex.Sample(waterHistorySampler, motionAdjustedScreenPosition).xyzw;
 
 	float3 finalColor = sourceColor;
-	if (motionScreenPosition.x >= 0 && motionScreenPosition.y >= 0 && motionScreenPosition.x <= 1 &&
+	if (
+#	ifndef VR
+		motionScreenPosition.x >= 0 && motionScreenPosition.y >= 0 && motionScreenPosition.x <= 1 &&
+#	endif
 		motionScreenPosition.y <= 1 && waterHistory.w == 1) {
 		float historyFactor = 0.95;
 		if (NearFar_Menu_DistanceFactor.z == 0) {

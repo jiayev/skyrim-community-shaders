@@ -134,6 +134,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float4 composedColor = sourceColor;
 
+#	if !defined(VR)
 	if (0.5 < SSRParams.z) {
 		float2 ssrMask = NormalsSSRMaskTex.SampleLevel(NormalsSSRMaskSampler, screenPosition, 0).zw;
 		float4 ssr = SSRSourceTex.Sample(SSRSourceSampler, screenPosition);
@@ -144,13 +145,16 @@ PS_OUTPUT main(PS_INPUT input)
 		}
 		composedColor.xyz += ssrInput;
 	}
+#	endif
 
 	float snowMask = 0;
+#	if !defined(VR)
 	if (EyePosition.w != 0) {
 		float2 specSnow = snowSpecAlphaTex.Sample(snowSpecAlphaSampler, screenPosition).xy;
 		composedColor.xyz += specSnow.x * specSnow.y;
 		snowMask = specSnow.y;
 	}
+#	endif
 
 #	if defined(APPLY_SAO)
 	if (EyePosition.w != 0 && 1e-5 < snowMask) {
@@ -165,11 +169,12 @@ PS_OUTPUT main(PS_INPUT input)
 	float fogDistanceFactor = (2 * CameraNearFar.x * CameraNearFar.y) / ((CameraNearFar.y + CameraNearFar.x) - (2 * (1.01 * depth - 0.01) - 1) * (CameraNearFar.y - CameraNearFar.x));
 	float fogFactor = min(FogParam.w, pow(saturate(fogDistanceFactor * FogParam.y - FogParam.x), FogParam.z));
 	float3 fogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogFactor);
-	if (depth < 1) {
+	if (depth < 0.999999) {
 		composedColor.xyz = FogNearColor.w * lerp(composedColor.xyz, fogColor, fogFactor);
 	}
 #	endif
 
+#	if !defined(VR)
 	float sparklesInput = 0;
 	if (EyePosition.w != 0 && snowMask != 0 && 1e-5 < SparklesParameters2.z) {
 		float shadowMask = shadowMaskTex.SampleLevel(shadowMaskSampler, screenPosition, 0).x;
@@ -197,6 +202,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	composedColor *= 1 - SparklesParameters2.w;
 	composedColor += sparklesColor;
+#	endif
 
 	psout.Color = composedColor;
 

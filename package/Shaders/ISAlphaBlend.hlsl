@@ -50,7 +50,7 @@ cbuffer PerGeometry : register(b2)
 float3 BlendAlpha(Texture2D<float4> tintMaskTex, SamplerState tintMaskSamplerState, float2 texCoord, float4 blendColor, float3 color)
 {
 	float tintMask = tintMaskTex.Sample(tintMaskSamplerState, texCoord).x;
-	return blendColor.xyz * (1 - tintMask * blendColor.w) + (blendColor.w * tintMask) * color;
+	return lerp(color, blendColor.xyz, blendColor.w * tintMask);
 }
 
 PS_OUTPUT main(PS_INPUT input)

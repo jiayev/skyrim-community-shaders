@@ -92,10 +92,13 @@ public:
 	void SetupFrame();
 
 	void SetupTextureSetData();
+	void ReloadTextureSetData();
 	PBRTextureSetData* GetPBRTextureSetData(const RE::TESForm* textureSet);
 	bool IsPBRTextureSet(const RE::TESForm* textureSet);
 
 	std::unordered_map<std::string, PBRTextureSetData> pbrTextureSets;
+	std::string selectedPbrTextureSetName;
+	PBRTextureSetData* selectedPbrTextureSet = nullptr;
 
 	struct PBRMaterialObjectData
 	{

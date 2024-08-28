@@ -94,10 +94,10 @@ namespace PBR
 	LightProperties InitLightProperties(float3 lightColor, float3 nonParallaxShadow, float3 parallaxShadow)
 	{
 		LightProperties result;
-		result.LinearLightColor = sRGB2Lin(lightColor) * nonParallaxShadow * parallaxShadow;
+		result.LinearLightColor = GammaToLinear(lightColor) * nonParallaxShadow * parallaxShadow;
 		[branch] if ((PBRFlags & TruePBR_InterlayerParallax) != 0)
 		{
-			result.LinearCoatLightColor = sRGB2Lin(lightColor) * nonParallaxShadow;
+			result.LinearCoatLightColor = GammaToLinear(lightColor) * nonParallaxShadow;
 		}
 		else
 		{
@@ -108,17 +108,17 @@ namespace PBR
 
 	float3 AdjustDirectionalLightColor(float3 lightColor)
 	{
-		return pbrSettings.DirectionalLightColorMultiplier * sRGB2Lin(lightColor);
+		return pbrSettings.DirectionalLightColorMultiplier * GammaToLinear(lightColor);
 	}
 
 	float3 AdjustPointLightColor(float3 lightColor)
 	{
-		return pbrSettings.PointLightColorMultiplier * sRGB2Lin(lightColor);
+		return pbrSettings.PointLightColorMultiplier * GammaToLinear(lightColor);
 	}
 
 	float3 AdjustAmbientLightColor(float3 lightColor)
 	{
-		return pbrSettings.AmbientLightColorMultiplier * sRGB2Lin(lightColor);
+		return pbrSettings.AmbientLightColorMultiplier * GammaToLinear(lightColor);
 	}
 
 	// [Jimenez et al. 2016, "Practical Realtime Strategies for Accurate Indirect Occlusion"]
