@@ -74,16 +74,21 @@ float3 Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 scree
 float3 Get2DFilteredShadowCascade(float noise, float2x2 rotationMatrix, float sampleOffsetScale, float2 baseUV, float cascadeIndex, float compareValue, uint eyeIndex)
 {
 	const uint sampleCount = 8;
-	compareValue += 0.001;
+	compareValue += 0.001 * (1 + cascadeIndex);
 
 	float layerIndexRcp = rcp(1 + cascadeIndex);
 
 	float visibility = 0;
 
+#if defined(WATER)
+	sampleOffsetScale *= 8;
+#endif
+
 	for (int sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
 		float2 sampleOffset = mul(SpiralSampleOffsets8[sampleIndex], rotationMatrix);
 
 		float2 sampleUV = layerIndexRcp * sampleOffset * sampleOffsetScale + baseUV;
+
 		float4 depths = SharedTexShadowMapSampler.GatherRed(LinearSampler, float3(saturate(sampleUV), cascadeIndex), 0);
 		visibility += dot(depths > (compareValue + noise * 0.001), 0.25);
 	}
@@ -94,11 +99,11 @@ float3 Get2DFilteredShadowCascade(float noise, float2x2 rotationMatrix, float sa
 float3 Get2DFilteredShadow(float noise, float2x2 rotationMatrix, float3 positionWS, uint eyeIndex)
 {
 	PerGeometry sD = SharedPerShadow[0];
-	sD.EndSplitDistances.x = GetScreenDepth(sD.EndSplitDistances.x);
-	sD.EndSplitDistances.z = GetScreenDepth(sD.EndSplitDistances.z);
-	sD.StartSplitDistances.y = GetScreenDepth(sD.StartSplitDistances.y);
 
-	float shadowMapDepth = length(positionWS.xyz);
+	float4 positionCSShifted = mul(transpose(CameraViewProj[eyeIndex]), float4(positionWS, 1));
+	positionCSShifted /= positionCSShifted.w;
+
+	float shadowMapDepth = positionCSShifted.z;
 
 	if (sD.EndSplitDistances.z >= shadowMapDepth) {
 		float fadeFactor = 1 - pow(saturate(dot(positionWS.xyz, positionWS.xyz) / sD.ShadowLightParam.z), 8);
@@ -151,7 +156,7 @@ float3 GetWorldShadow(float3 positionWS, float depth, float3 offset, uint eyeInd
 	return worldShadow;
 }
 
-float GetVL(float3 startPosWS, float3 endPosWS, float3 normal, float2 screenPosition, inout float shadow, uint eyeIndex)
+float GetVL(float3 startPosWS, float3 endPosWS, float3 normal, float noise, inout float shadow, uint eyeIndex)
 {
 	float startDepth = length(startPosWS);
 
@@ -168,13 +173,11 @@ float GetVL(float3 startPosWS, float3 endPosWS, float3 normal, float2 screenPosi
 
 	PerGeometry sD = SharedPerShadow[0];
 
-	float fadeFactor = 1.0 - pow(saturate(dot(startPosWS.xyz, startPosWS.xyz) / sD.ShadowLightParam.z), 8);
-	uint sampleCount = ceil(8.0 * (1.0 - saturate(startDepth / (sD.ShadowLightParam.z * sD.ShadowLightParam.z))));
+	float fadeFactor = 1.0 - saturate(length(endPosWS) / 4096.0);
+	uint sampleCount = ceil(4.0 * fadeFactor);
 
 	if (sampleCount == 0)
 		return worldShadow;
-
-	float noise = InterleavedGradientNoise(screenPosition, FrameCount);
 
 	float2 rotation;
 	sincos(M_2PI * noise, rotation.y, rotation.x);
@@ -195,7 +198,7 @@ float GetVL(float3 startPosWS, float3 endPosWS, float3 normal, float2 screenPosi
 
 	for (uint i = 0; i < sampleCount; i++) {
 		float3 samplePositionWS = startPosWS + worldDir * saturate(i * stepSize);
-		float2 sampleOffset = mul(SpiralSampleOffsets8[(float(i) + noise * 8) % 8].xy, rotationMatrix);
+		float2 sampleOffset = mul(SpiralSampleOffsets8[(float(i * 2) + noise * 8) % 8].xy, rotationMatrix);
 
 		float cascadeIndex = 0;
 		float4x3 lightProjectionMatrix = sD.ShadowMapProj[eyeIndex][0];
@@ -214,7 +217,7 @@ float GetVL(float3 startPosWS, float3 endPosWS, float3 normal, float2 screenPosi
 
 		float4 depths = SharedTexShadowMapSampler.GatherRed(LinearSampler, float3(saturate(samplePositionLS.xy), cascadeIndex), 0);
 
-		vlShadow += dot(depths > samplePositionLS.z, 0.25);
+		vlShadow += dot(depths > (samplePositionLS.z - 0.0005), 0.25);
 	}
 	return lerp(worldShadow, min(worldShadow, vlShadow * stepSize), fadeFactor);
 }
@@ -236,4 +239,18 @@ float3 GetLightingShadow(float noise, float3 worldPosition, uint eyeIndex)
 	sincos(M_2PI * noise, rotation.y, rotation.x);
 	float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
 	return Get2DFilteredShadow(noise, rotationMatrix, worldPosition, eyeIndex);
+}
+
+float3 GetWaterShadow(float noise, float3 worldPosition, uint eyeIndex)
+{
+	float worldShadow = GetWorldShadow(worldPosition, length(worldPosition), 0.0, eyeIndex);
+	if (worldShadow != 0.0) {
+		float2 rotation;
+		sincos(M_2PI * noise, rotation.y, rotation.x);
+		float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
+		float shadow = Get2DFilteredShadow(noise, rotationMatrix, worldPosition, eyeIndex);
+		return shadow;
+	}
+
+	return worldShadow;
 }
