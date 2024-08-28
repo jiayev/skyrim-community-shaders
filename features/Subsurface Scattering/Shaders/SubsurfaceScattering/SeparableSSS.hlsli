@@ -100,7 +100,7 @@ float4 SSSSBlurCS(
 	float4 colorM = ColorTexture[DTid.xy];
 
 #if defined(HORIZONTAL)
-	colorM.rgb = sRGB2Lin(colorM.rgb);
+	colorM.rgb = GammaToLinear(colorM.rgb);
 #endif
 
 	if (sssAmount == 0)
@@ -157,7 +157,7 @@ float4 SSSSBlurCS(
 		float3 color = ColorTexture[coords].rgb;
 
 #if defined(HORIZONTAL)
-		color.rgb = sRGB2Lin(color.rgb);
+		color.rgb = GammaToLinear(color.rgb);
 #endif
 
 		float depth = DepthTexture[coords].r;

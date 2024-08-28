@@ -1,4 +1,5 @@
 TextureCube<float4> specularTexture : register(t64);
+TextureCube<float4> specularTextureNoReflections : register(t65);
 
 namespace DynamicCubemaps
 {
@@ -27,7 +28,7 @@ namespace DynamicCubemaps
 
 		float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level).xyz;
 		specularIrradiance *= horizon;
-		specularIrradiance = sRGB2Lin(specularIrradiance);
+		specularIrradiance = GammaToLinear(specularIrradiance);
 
 		return specularIrradiance;
 	}
@@ -55,7 +56,7 @@ namespace DynamicCubemaps
 		return horizon * ((F0 + S) * specularBRDF.x + specularBRDF.y);
 #	else
 		float3 specularIrradiance = specularTexture.SampleLevel(SampColorSampler, R, level).xyz;
-		specularIrradiance = sRGB2Lin(specularIrradiance);
+		specularIrradiance = GammaToLinear(specularIrradiance);
 
 		return specularIrradiance * ((F0 + S) * specularBRDF.x + specularBRDF.y);
 #	endif

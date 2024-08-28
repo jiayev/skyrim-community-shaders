@@ -29,6 +29,8 @@ public:
 
 	bool HasGlint() const;
 
+	inline static std::unordered_map<BSLightingShaderMaterialPBRLandscape*, std::array<TruePBR::PBRTextureSetData*, NumTiles>> All;
+
 	// members
 	std::uint32_t numLandscapeTextures = 0;
 
