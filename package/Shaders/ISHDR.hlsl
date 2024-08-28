@@ -51,43 +51,6 @@ float GetTonemapFactorHejlBurgessDawson(float luminance)
 	       pow(((tmp * 6.2 + 0.5) * tmp) / (tmp * (tmp * 6.2 + 1.7) + 0.06), GammaCorrectionValue);
 }
 
-// SafeDivision and RestorePostProcess by Pumbo https://github.com/Filoppi
-
-// Returns 0, 1 or FLT_MAX if "dividend" is 0
-float SafeDivision(float quotient, float dividend, int fallbackMode = 0)
-{
-	if (dividend == 0.0) {
-		if (fallbackMode == 0)
-			return 0;
-		if (fallbackMode == 1)
-			return sign(quotient);
-		return asfloat(0x7F7FFFFF) * sign(quotient);
-	}
-	return quotient / dividend;
-}
-
-// Returns 0, 1 or FLT_MAX if "dividend" is 0
-float3 SafeDivision(float3 quotient, float3 dividend, int fallbackMode = 0)
-{
-	return float3(SafeDivision(quotient.x, dividend.x, fallbackMode), SafeDivision(quotient.y, dividend.y, fallbackMode), SafeDivision(quotient.z, dividend.z, fallbackMode));
-}
-
-// Takes any original color (before some post process is applied to it) and re-applies the same transformation the post process had applied to it on a different (but similar) color.
-// The images are expected to have roughly the same mid gray.
-// It can be used for example to apply any SDR LUT or SDR Color Correction on an HDR color.
-float3 RestorePostProcess(float3 NonPostProcessedTargetColor, float3 NonPostProcessedSourceColor, float3 PostProcessedSourceColor)
-{
-	static const float MaxShadowsColor = pow(1.0 / 3.0, 2.2);
-	const float3 PostProcessColorRatio = SafeDivision(PostProcessedSourceColor, NonPostProcessedSourceColor);
-	const float3 PostProcessColorOffset = PostProcessedSourceColor - NonPostProcessedSourceColor;
-	const float3 PostProcessedRatioColor = NonPostProcessedTargetColor * PostProcessColorRatio;
-	const float3 PostProcessedOffsetColor = NonPostProcessedTargetColor + PostProcessColorOffset;
-	// Near black, we prefer using the "offset" (sum) pp restoration method, as otherwise any raised black from post processing would not work to apply,
-	// for example if any zero was shifted to a more raised color, "PostProcessColorRatio" would not be able to replicate that shift due to a division by zero.
-	const float3 PostProcessedTargetColor = lerp(PostProcessedOffsetColor, PostProcessedRatioColor, max(saturate(abs(NonPostProcessedTargetColor) / MaxShadowsColor), saturate(abs(NonPostProcessedSourceColor) / MaxShadowsColor)));
-	return PostProcessedTargetColor;
-}
-
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
@@ -164,25 +127,12 @@ PS_OUTPUT main(PS_INPUT input)
 		ppColor = max(0, linearColor);
 	}
 
-	// Apply bloom directly to the HDR input
-	inputColor += saturate(Param.x - inputColor) * bloomColor;
+	ppColor = GammaToLinear(ppColor);
 
-	// Eye adaptation
-	inputColor *= avgValue.y / avgValue.x;
+	// HDR tonemapping
+	float3 linearColor = max(0, ApplyHuePreservingShoulder(ppColor, 1.0 - smoothstep(0.6, 1.4, FrameParams.x)));
 
-	// Gamma to linear
-	inputColor = pow(inputColor, 2.2);
-	gameSdrColor = pow(gameSdrColor, 2.2);
-	ppColor = pow(ppColor, 2.2);
-
-	// Map SDR post-processing data to HDR
-	inputColor = max(0, RestorePostProcess(inputColor, gameSdrColor, ppColor));
-
-	// Tonemap HDR input which contains post-processing
-
-	float3 linearColor = max(0, ApplyHuePreservingShoulder(inputColor, 1.0 - smoothstep(0.6, 1.4, FrameParams.x)));
-	// Linear to gamma
-	float3 srgbColor = pow(linearColor, 1.0 / 2.2);
+	float3 srgbColor = LinearToGamma(linearColor);
 
 #		if defined(FADE)
 	srgbColor = lerp(srgbColor, Fade.xyz, Fade.w);
