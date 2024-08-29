@@ -983,7 +983,6 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #	endif
 
 #	if defined(SSS)
-#		include "SubsurfaceScattering/SubsurfaceScattering.hlsli"
 #		if defined(SKIN)
 #			undef SOFT_LIGHTING
 #		endif
@@ -2693,7 +2692,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 #		if defined(SSS) && defined(SKIN)
-	psout.Masks = float4(saturate(baseColor.a), !perPassSSS[0].IsBeastRace, 0, psout.Diffuse.w);
+	psout.Masks = float4(saturate(baseColor.a), !(ExtraShaderDescriptor & _IsBeastRace), 0, psout.Diffuse.w);
 #		elif defined(WETNESS_EFFECTS)
 	float wetnessNormalAmount = saturate(dot(float3(0, 0, 1), wetnessNormal) * saturate(flatnessAmount));
 	psout.Masks = float4(0, 0, wetnessNormalAmount, psout.Diffuse.w);

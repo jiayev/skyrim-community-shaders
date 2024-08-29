@@ -49,13 +49,6 @@ public:
 	ConstantBuffer* blurCB = nullptr;
 	BlurCB blurCBData{};
 
-	struct PerPass
-	{
-		uint IsBeastRace;
-	};
-
-	std::unique_ptr<Buffer> perPass = nullptr;
-
 	bool validMaterial = true;
 	bool updateKernels = true;
 	bool validMaterials = false;
@@ -93,8 +86,6 @@ public:
 	virtual void PostPostLoad() override;
 
 	void BSLightingShader_SetupSkin(RE::BSRenderPass* Pass);
-
-	virtual void Prepass() override;
 
 	struct Hooks
 	{

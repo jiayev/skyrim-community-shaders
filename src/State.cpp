@@ -44,8 +44,6 @@ void State::Draw()
 					// Only check against non-shader bits
 					currentPixelDescriptor &= ~modifiedPixelDescriptor;
 
-					currentExtraDescriptor = 0;
-
 					if (auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator()) {
 						// Set an unused bit to indicate if we are rendering an object in the main rendering pass
 						if (accumulator->GetRuntimeData().activeShadowSceneNode == RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0]) {
@@ -65,6 +63,8 @@ void State::Draw()
 						lastPixelDescriptor = currentPixelDescriptor;
 						lastExtraDescriptor = currentExtraDescriptor;
 					}
+
+					currentExtraDescriptor = 0;
 
 					static Util::FrameChecker frameChecker;
 					if (frameChecker.isNewFrame()) {
