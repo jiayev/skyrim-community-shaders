@@ -81,6 +81,7 @@ PS_OUTPUT main(PS_INPUT input)
 			sign(adaptDelta) * clamp(abs(Param.wz * adaptDelta), 0.00390625, abs(adaptDelta)) +
 			adaptValue;
 	}
+	downsampledColor = max(asfloat(0x00800000), downsampledColor);  // Black screen fix
 #		endif
 	psout.Color = float4(downsampledColor, BlurScale.z);
 
