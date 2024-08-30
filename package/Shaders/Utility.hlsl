@@ -528,8 +528,8 @@ PS_OUTPUT main(PS_INPUT input)
 	TexStencilSampler.GetDimensions(0, stencilDimensions.x, stencilDimensions.y, stencilDimensions.z);
 	stencilValue = TexStencilSampler.Load(float3(stencilDimensions.xy * depthUv, 0)).x;
 #			endif
-	depthUv = ConvertFromStereoUV(depthUv, eyeIndex);
-	float4 positionCS = float4(2 * float2(DynamicResolutionParams2.x * depthUv.x, -depthUv.y * DynamicResolutionParams2.y + 1) - 1, depth, 1);
+	depthUv = ConvertFromStereoUV(depthUv * DynamicResolutionParams2, eyeIndex);
+	float4 positionCS = float4(2 * float2(depthUv.x, -depthUv.y + 1) - 1, depth, 1);
 	float4 positionMS = mul(CameraViewProjInverse[eyeIndex], positionCS);
 	positionMS.xyz = positionMS.xyz / positionMS.w;
 
