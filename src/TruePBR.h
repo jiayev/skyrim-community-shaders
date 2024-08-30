@@ -37,6 +37,7 @@ public:
 	void SaveSettings(json& o_json);
 	void PrePass();
 	void PostPostLoad();
+	void DataLoaded();
 
 	void SetShaderResouces();
 	void GenerateShaderPermutations(RE::BSShader* shader);
@@ -97,6 +98,7 @@ public:
 	bool IsPBRTextureSet(const RE::TESForm* textureSet);
 
 	std::unordered_map<std::string, PBRTextureSetData> pbrTextureSets;
+	RE::BGSTextureSet* defaultPbrLandTextureSet = nullptr;
 	std::string selectedPbrTextureSetName;
 	PBRTextureSetData* selectedPbrTextureSet = nullptr;
 

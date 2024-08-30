@@ -1197,6 +1197,12 @@ void SetupLandscapeTexture(BSLightingShaderMaterialPBRLandscape& material, RE::T
 	}
 }
 
+RE::TESLandTexture* GetDefaultLandTexture()
+{
+	static RE::TESLandTexture* const defaultLandTexture = *REL::Relocation<RE::TESLandTexture**>(RELOCATION_ID(514783, 400936));
+	return defaultLandTexture;
+}
+
 bool hk_TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land);
 decltype(&hk_TESObjectLAND_SetupMaterial) ptr_TESObjectLAND_SetupMaterial;
 
@@ -1212,6 +1218,8 @@ bool hk_TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 					isPbr = true;
 					break;
 				}
+			} else if (singleton->defaultPbrLandTextureSet != nullptr) {
+				isPbr = true;
 			}
 			for (uint32_t textureIndex = 0; textureIndex < 6; ++textureIndex) {
 				if (land->loadedData->quadTextures[quadIndex][textureIndex] != nullptr) {
@@ -1257,6 +1265,8 @@ bool hk_TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 
 			if (auto defTexture = land->loadedData->defQuadTextures[quadIndex]) {
 				SetupLandscapeTexture(*material, *defTexture, 0, textureSets);
+			} else {
+				SetupLandscapeTexture(*material, *GetDefaultLandTexture(), 0, textureSets);
 			}
 			for (uint32_t textureIndex = 0; textureIndex < BSLightingShaderMaterialPBRLandscape::NumTiles - 1; ++textureIndex) {
 				if (auto landTexture = land->loadedData->quadTextures[quadIndex][textureIndex]) {
@@ -1666,6 +1676,15 @@ void TruePBR::PostPostLoad()
 
 	logger::info("Hooking TESObjectSTAT");
 	stl::write_vfunc<0x4A, TESBoundObject_Clone3D>(RE::VTABLE_TESObjectSTAT[0]);
+}
+
+void TruePBR::DataLoaded()
+{
+	defaultPbrLandTextureSet = RE::TESForm::LookupByEditorID<RE::BGSTextureSet>("DefaultPBRLand");
+	if (defaultPbrLandTextureSet != nullptr) {
+		logger::info("[TruePBR] replacing default land texture set record with {}", defaultPbrLandTextureSet->GetFormEditorID());
+		GetDefaultLandTexture()->textureSet = defaultPbrLandTextureSet;
+	}
 }
 
 void TruePBR::SetShaderResouces()
