@@ -141,8 +141,6 @@ void State::Load(ConfigMode a_configMode)
 		if (!i.is_open()) {
 			logger::info("No default config ({}), generating new one", configPath);
 			std::fill(enabledClasses, enabledClasses + RE::BSShader::Type::Total - 1, true);
-			enabledClasses[RE::BSShader::Type::ImageSpace - 1] = false;
-			enabledClasses[RE::BSShader::Type::Utility - 1] = false;
 			Save(configMode);
 			i.open(configPath);
 			if (!i.is_open()) {
