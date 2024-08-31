@@ -128,12 +128,8 @@ PS_OUTPUT main(PS_INPUT input)
 		ppColor = max(0, linearColor);
 	}
 
-	ppColor = GammaToLinear(ppColor);
-
 	// HDR tonemapping
-	float3 linearColor = ApplyHuePreservingShoulder(ppColor);
-
-	float3 srgbColor = LinearToGamma(linearColor);
+	float3 srgbColor = ApplyHuePreservingShoulder(ppColor, lerp(0.25, 0.50, Param.z));
 
 #		if defined(FADE)
 	srgbColor = lerp(srgbColor, Fade.xyz, Fade.w);
