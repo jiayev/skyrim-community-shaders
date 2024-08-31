@@ -33,12 +33,15 @@ void BSLightingShaderMaterialPBR::CopyMembers(RE::BSShaderMaterial* that)
 	projectedMaterialBaseColorScale = pbrThat->projectedMaterialBaseColorScale;
 	projectedMaterialRoughness = pbrThat->projectedMaterialRoughness;
 	projectedMaterialSpecularLevel = pbrThat->projectedMaterialSpecularLevel;
+	projectedMaterialGlintParameters = pbrThat->projectedMaterialGlintParameters;
 
 	rmaosTexture = pbrThat->rmaosTexture;
 	emissiveTexture = pbrThat->emissiveTexture;
 	displacementTexture = pbrThat->displacementTexture;
 	featuresTexture0 = pbrThat->featuresTexture0;
 	featuresTexture1 = pbrThat->featuresTexture1;
+
+	All[this] = All[pbrThat];
 }
 
 std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)
@@ -57,6 +60,10 @@ std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)
 		std::array<float, 3> projectedMaterialBaseColorScale = { 0.f, 0.f, 0.f };
 		float projectedMaterialRoughness = 0.f;
 		float projectedMaterialSpecularLevel = 0.f;
+		float projectedMaterialScreenSpaceScale = 0.f;
+		float projectedMaterialLogMicrofacetDensity = 0.f;
+		float projectedMaterialMicrofacetRoughness = 0.f;
+		float projectedMaterialDensityRandomization = 0.f;
 		uint32_t rmaodHash = 0;
 		uint32_t emissiveHash = 0;
 		uint32_t displacementHash = 0;
@@ -81,6 +88,10 @@ std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)
 	hashes.projectedMaterialBaseColorScale[2] = projectedMaterialBaseColorScale[2] * 100.f;
 	hashes.projectedMaterialRoughness = projectedMaterialRoughness * 100.f;
 	hashes.projectedMaterialSpecularLevel = projectedMaterialSpecularLevel * 100.f;
+	hashes.projectedMaterialScreenSpaceScale = projectedMaterialGlintParameters.screenSpaceScale * 100.f;
+	hashes.projectedMaterialLogMicrofacetDensity = projectedMaterialGlintParameters.logMicrofacetDensity * 100.f;
+	hashes.projectedMaterialMicrofacetRoughness = projectedMaterialGlintParameters.microfacetRoughness * 100.f;
+	hashes.projectedMaterialDensityRandomization = projectedMaterialGlintParameters.densityRandomization * 100.f;
 	if (textureSet != nullptr) {
 		hashes.rmaodHash = RE::BSCRC32<const char*>()(textureSet->GetTexturePath(RmaosTexture));
 		hashes.emissiveHash = RE::BSCRC32<const char*>()(textureSet->GetTexturePath(EmissiveTexture));
@@ -157,7 +168,7 @@ void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTex
 			textureSet->SetTexture(FeaturesTexture0, featuresTexture0);
 			textureSet->SetTexture(FeaturesTexture1, featuresTexture1);
 
-			if (auto* bgsTextureSet = netimmerse_cast<RE::BGSTextureSet*>(inTextureSet); bgsTextureSet != nullptr) {
+			if (auto* bgsTextureSet = TruePBR::GetSingleton()->currentTextureSet) {
 				if (auto* textureSetData = TruePBR::GetSingleton()->GetPBRTextureSetData(bgsTextureSet)) {
 					ApplyTextureSetData(*textureSetData);
 					All[this].textureSetData = textureSetData;

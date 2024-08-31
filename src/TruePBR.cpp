@@ -1551,11 +1551,33 @@ struct TESBoundObject_Clone3D
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
+RE::BSShaderTextureSet* hk_BGSTextureSet_ToShaderTextureSet(RE::BGSTextureSet* textureSet);
+decltype(&hk_BGSTextureSet_ToShaderTextureSet) ptr_BGSTextureSet_ToShaderTextureSet;
+RE::BSShaderTextureSet* hk_BGSTextureSet_ToShaderTextureSet(RE::BGSTextureSet* textureSet)
+{
+	TruePBR::GetSingleton()->currentTextureSet = textureSet;
+
+	return ptr_BGSTextureSet_ToShaderTextureSet(textureSet);
+}
+
+void hk_BSLightingShaderProperty_OnLoadTextureSet(RE::BSLightingShaderProperty* property, void* a2);
+decltype(&hk_BSLightingShaderProperty_OnLoadTextureSet) ptr_BSLightingShaderProperty_OnLoadTextureSet;
+void hk_BSLightingShaderProperty_OnLoadTextureSet(RE::BSLightingShaderProperty* property, void* a2)
+{
+	ptr_BSLightingShaderProperty_OnLoadTextureSet(property, a2);
+
+	TruePBR::GetSingleton()->currentTextureSet = nullptr;
+}
+
 void TruePBR::PostPostLoad()
 {
+	logger::info("Hooking BGSTextureSet");
+	*(uintptr_t*)&ptr_BGSTextureSet_ToShaderTextureSet = Detours::X64::DetourFunction(REL::RelocationID(20905, 21361).address(), (uintptr_t)&hk_BGSTextureSet_ToShaderTextureSet);
+
 	logger::info("Hooking BSLightingShaderProperty");
 	stl::write_vfunc<0x18, BSLightingShaderProperty_LoadBinary>(RE::VTABLE_BSLightingShaderProperty[0]);
 	stl::write_vfunc<0x2A, BSLightingShaderProperty_GetRenderPasses>(RE::VTABLE_BSLightingShaderProperty[0]);
+	*(uintptr_t*)&ptr_BSLightingShaderProperty_OnLoadTextureSet = Detours::X64::DetourFunction(REL::RelocationID(99865, 106510).address(), (uintptr_t)&hk_BSLightingShaderProperty_OnLoadTextureSet);
 
 	logger::info("Hooking BSLightingShader");
 	stl::write_vfunc<0x4, BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);

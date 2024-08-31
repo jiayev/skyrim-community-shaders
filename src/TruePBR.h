@@ -110,4 +110,6 @@ public:
 	std::unordered_map<std::string, PBRMaterialObjectData> pbrMaterialObjects;
 	std::string selectedPbrMaterialObjectName;
 	PBRMaterialObjectData* selectedPbrMaterialObject = nullptr;
+
+	RE::BGSTextureSet* currentTextureSet = nullptr;
 };
