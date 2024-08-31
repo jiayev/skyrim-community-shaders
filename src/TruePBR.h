@@ -47,18 +47,8 @@ public:
 
 	std::unordered_map<uint32_t, std::string> editorIDs;
 
-	float globalPBRDirectLightColorMultiplier = 1.f;
-	float globalPBRAmbientLightColorMultiplier = 1.f;
-
-	float weatherPBRDirectionalLightColorMultiplier = 1.f;
-	float weatherPBRDirectionalAmbientLightColorMultiplier = 1.f;
-
 	struct Settings
 	{
-		float directionalLightColorMultiplier = 1.f;
-		float pointLightColorMultiplier = 1.f;
-		float ambientLightColorMultiplier = 1.f;
-		float baseColorGamma = 2.2f;
 		uint32_t useMultipleScattering = true;
 		uint32_t useMultiBounceAO = true;
 		uint32_t pad[2];
@@ -108,7 +98,9 @@ public:
 		float roughness = 1.f;
 		float specularLevel = 1.f;
 
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(PBRMaterialObjectData, baseColorScale, roughness, specularLevel);
+		GlintParameters glintParameters;
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(PBRMaterialObjectData, baseColorScale, roughness, specularLevel, glintParameters);
 	};
 
 	void SetupMaterialObjectData();
@@ -116,34 +108,6 @@ public:
 	bool IsPBRMaterialObject(const RE::TESForm* materialObject);
 
 	std::unordered_map<std::string, PBRMaterialObjectData> pbrMaterialObjects;
-
-	struct PBRLightingTemplateData
-	{
-		float directionalLightColorScale = 1.f;
-		float directionalAmbientLightColorScale = 1.f;
-
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(PBRLightingTemplateData, directionalLightColorScale, directionalAmbientLightColorScale);
-	};
-
-	void SetupLightingTemplateData();
-	PBRLightingTemplateData* GetPBRLightingTemplateData(const RE::TESForm* lightingTemplate);
-	bool IsPBRLightingTemplate(const RE::TESForm* lightingTemplate);
-	void SavePBRLightingTemplateData(const std::string& editorId);
-
-	std::unordered_map<std::string, PBRLightingTemplateData> pbrLightingTemplates;
-
-	struct PBRWeatherData
-	{
-		float directionalLightColorScale = 1.f;
-		float directionalAmbientLightColorScale = 1.f;
-
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(PBRWeatherData, directionalLightColorScale, directionalAmbientLightColorScale);
-	};
-
-	void SetupWeatherData();
-	PBRWeatherData* GetPBRWeatherData(const RE::TESForm* weather);
-	bool IsPBRWeather(const RE::TESForm* weather);
-	void SavePBRWeatherData(const std::string& editorId);
-
-	std::unordered_map<std::string, PBRWeatherData> pbrWeathers;
+	std::string selectedPbrMaterialObjectName;
+	PBRMaterialObjectData* selectedPbrMaterialObject = nullptr;
 };

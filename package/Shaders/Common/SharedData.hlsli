@@ -136,13 +136,9 @@ struct SkylightingSettings
 
 struct PBRSettings
 {
-	float DirectionalLightColorMultiplier;
-	float PointLightColorMultiplier;
-	float AmbientLightColorMultiplier;
-	float BaseColorGamma;
 	uint UseMultipleScattering;
 	uint UseMultiBounceAO;
-	uint3 pad0;
+	uint2 pad0;
 };
 
 cbuffer FeatureData : register(b6)

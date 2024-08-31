@@ -10,6 +10,7 @@
 #define TruePBR_Fuzz (1 << 9)
 #define TruePBR_HairMarschner (1 << 10)
 #define TruePBR_Glint (1 << 11)
+#define TruePBR_ProjectedGlint (1 << 12)
 
 #define TruePBR_LandTile0PBR (1 << 0)
 #define TruePBR_LandTile1PBR (1 << 1)
@@ -104,21 +105,6 @@ namespace PBR
 			result.LinearCoatLightColor = result.LinearLightColor;
 		}
 		return result;
-	}
-
-	float3 AdjustDirectionalLightColor(float3 lightColor)
-	{
-		return pbrSettings.DirectionalLightColorMultiplier * GammaToLinear(lightColor);
-	}
-
-	float3 AdjustPointLightColor(float3 lightColor)
-	{
-		return pbrSettings.PointLightColorMultiplier * GammaToLinear(lightColor);
-	}
-
-	float3 AdjustAmbientLightColor(float3 lightColor)
-	{
-		return pbrSettings.AmbientLightColorMultiplier * GammaToLinear(lightColor);
 	}
 
 	// [Jimenez et al. 2016, "Practical Realtime Strategies for Accurate Indirect Occlusion"]

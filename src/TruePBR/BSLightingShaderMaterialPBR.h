@@ -11,7 +11,6 @@ enum class PBRFlags : uint32_t
 	CoatNormal = 1 << 4,
 	Fuzz = 1 << 5,
 	HairMarschner = 1 << 6,
-	Glint = 1 << 7,
 };
 
 enum class PBRShaderFlags : uint32_t
@@ -28,11 +27,18 @@ enum class PBRShaderFlags : uint32_t
 	Fuzz = 1 << 9,
 	HairMarschner = 1 << 10,
 	Glint = 1 << 11,
+	ProjectedGlint = 1 << 12,
 };
 
 class BSLightingShaderMaterialPBR : public RE::BSLightingShaderMaterialBase
 {
 public:
+	struct MaterialExtensions
+	{
+		TruePBR::PBRTextureSetData* textureSetData = nullptr;
+		TruePBR::PBRMaterialObjectData* materialObjectData = nullptr;
+	};
+
 	inline static constexpr auto FEATURE = static_cast<RE::BSShaderMaterial::Feature>(32);
 
 	inline static constexpr auto RmaosTexture = static_cast<RE::BSTextureSet::Texture>(5);
@@ -56,6 +62,9 @@ public:
 
 	static BSLightingShaderMaterialPBR* Make();
 
+	void ApplyTextureSetData(const TruePBR::PBRTextureSetData& textureSetData);
+	void ApplyMaterialObjectData(const TruePBR::PBRMaterialObjectData& materialObjectData);
+
 	float GetRoughnessScale() const;
 	float GetSpecularLevel() const;
 
@@ -72,11 +81,14 @@ public:
 	const std::array<float, 3>& GetProjectedMaterialBaseColorScale() const;
 	float GetProjectedMaterialRoughness() const;
 	float GetProjectedMaterialSpecularLevel() const;
+	const GlintParameters& GetProjectedMaterialGlintParameters() const;
 
 	const RE::NiColor& GetFuzzColor() const;
 	float GetFuzzWeight() const;
 
 	const GlintParameters& GetGlintParameters() const;
+
+	inline static std::unordered_map<BSLightingShaderMaterialPBR*, MaterialExtensions> All;
 
 	// members
 	RE::BSShaderMaterial::Feature loadedWithFeature = RE::BSShaderMaterial::Feature::kDefault;
@@ -88,10 +100,6 @@ public:
 
 	RE::NiColor fuzzColor;
 	float fuzzWeight = 0.f;
-
-	std::array<float, 3> projectedMaterialBaseColorScale = { 1.f, 1.f, 1.f };
-	float projectedMaterialRoughness = 1.f;
-	float projectedMaterialSpecularLevel = 0.04f;
 
 	GlintParameters glintParameters;
 
@@ -109,4 +117,9 @@ public:
 
 	// Fuzz map (fuzz color in rgb, fuzz weight in a) / Coat normal map (coat normal in rgb, coat roughness in a)
 	RE::NiPointer<RE::NiSourceTexture> featuresTexture1;
+
+	std::array<float, 3> projectedMaterialBaseColorScale = { 1.f, 1.f, 1.f };
+	float projectedMaterialRoughness = 1.f;
+	float projectedMaterialSpecularLevel = 0.04f;
+	GlintParameters projectedMaterialGlintParameters;
 };

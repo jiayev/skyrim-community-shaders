@@ -3,7 +3,9 @@
 #include "TruePBR.h"
 
 BSLightingShaderMaterialPBR::~BSLightingShaderMaterialPBR()
-{}
+{
+	All.erase(this);
+}
 
 BSLightingShaderMaterialPBR* BSLightingShaderMaterialPBR::Make()
 {
@@ -98,6 +100,40 @@ RE::BSShaderMaterial::Feature BSLightingShaderMaterialPBR::GetFeature() const
 	//return FEATURE;
 }
 
+void BSLightingShaderMaterialPBR::ApplyTextureSetData(const TruePBR::PBRTextureSetData& textureSetData)
+{
+	specularColorScale = textureSetData.roughnessScale;
+	specularPower = textureSetData.specularLevel;
+	rimLightPower = textureSetData.displacementScale;
+
+	if (pbrFlags.any(PBRFlags::TwoLayer)) {
+		specularColor = textureSetData.coatColor;
+		subSurfaceLightRolloff = textureSetData.coatStrength;
+		coatRoughness = textureSetData.coatRoughness;
+		coatSpecularLevel = textureSetData.coatSpecularLevel;
+	} else {
+		if (pbrFlags.any(PBRFlags::Subsurface)) {
+			specularColor = textureSetData.subsurfaceColor;
+			subSurfaceLightRolloff = textureSetData.subsurfaceOpacity;
+		}
+
+		if (pbrFlags.any(PBRFlags::Fuzz)) {
+			fuzzColor = textureSetData.fuzzColor;
+			fuzzWeight = textureSetData.fuzzWeight;
+		}
+	}
+
+	glintParameters = textureSetData.glintParameters;
+}
+
+void BSLightingShaderMaterialPBR::ApplyMaterialObjectData(const TruePBR::PBRMaterialObjectData& materialObjectData)
+{
+	projectedMaterialBaseColorScale = materialObjectData.baseColorScale;
+	projectedMaterialRoughness = materialObjectData.roughness;
+	projectedMaterialSpecularLevel = materialObjectData.specularLevel;
+	projectedMaterialGlintParameters = materialObjectData.glintParameters;
+}
+
 void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTextureSet* inTextureSet)
 {
 	const auto& stateData = RE::BSGraphics::State::GetSingleton()->GetRuntimeData();
@@ -123,30 +159,8 @@ void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTex
 
 			if (auto* bgsTextureSet = netimmerse_cast<RE::BGSTextureSet*>(inTextureSet); bgsTextureSet != nullptr) {
 				if (auto* textureSetData = TruePBR::GetSingleton()->GetPBRTextureSetData(bgsTextureSet)) {
-					specularColorScale = textureSetData->roughnessScale;
-					specularPower = textureSetData->specularLevel;
-					rimLightPower = textureSetData->displacementScale;
-
-					if (pbrFlags.any(PBRFlags::TwoLayer)) {
-						specularColor = textureSetData->coatColor;
-						subSurfaceLightRolloff = textureSetData->coatStrength;
-						coatRoughness = textureSetData->coatRoughness;
-						coatSpecularLevel = textureSetData->coatSpecularLevel;
-					} else {
-						if (pbrFlags.any(PBRFlags::Subsurface)) {
-							specularColor = textureSetData->subsurfaceColor;
-							subSurfaceLightRolloff = textureSetData->subsurfaceOpacity;
-						}
-
-						if (pbrFlags.any(PBRFlags::Fuzz)) {
-							fuzzColor = textureSetData->fuzzColor;
-							fuzzWeight = textureSetData->fuzzWeight;
-						}
-					}
-
-					if (pbrFlags.any(PBRFlags::Glint)) {
-						glintParameters = textureSetData->glintParameters;
-					}
+					ApplyTextureSetData(*textureSetData);
+					All[this].textureSetData = textureSetData;
 				}
 			}
 		}
@@ -309,6 +323,11 @@ float BSLightingShaderMaterialPBR::GetProjectedMaterialRoughness() const
 float BSLightingShaderMaterialPBR::GetProjectedMaterialSpecularLevel() const
 {
 	return projectedMaterialSpecularLevel;
+}
+
+const GlintParameters& BSLightingShaderMaterialPBR::GetProjectedMaterialGlintParameters() const
+{
+	return projectedMaterialGlintParameters;
 }
 
 const RE::NiColor& BSLightingShaderMaterialPBR::GetFuzzColor() const
