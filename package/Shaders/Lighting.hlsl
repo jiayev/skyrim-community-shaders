@@ -1034,19 +1034,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = InterleavedGradientNoise(input.Position.xy, FrameCount);
-	float3 screenNoise3D;
-	{
-		uint3 seed = pcg3d(uint3(input.Position.xy, input.Position.x * M_PI));
-		float3 rnd = R3Modified(FrameCount, seed / 4294967295.f);
-
-		float phi = rnd.x * 2 * 3.1415926535;
-		float cos_theta = rnd.y * 2 - 1;
-		float sin_theta = sqrt(1 - cos_theta);
-		float r = rnd.z;
-		float4 sincos_phi;
-		sincos(phi, sincos_phi.y, sincos_phi.x);
-		screenNoise3D = float3(r * sin_theta * sincos_phi.x, r * sin_theta * sincos_phi.y, r * cos_theta);
-	}
 
 	bool inWorld = ExtraShaderDescriptor & _InWorld;
 
@@ -2143,7 +2130,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		[branch] if (inWorld && !FrameParams.z && lightLimitFixSettings.EnableContactShadows && shadowComponent != 0.0 && lightAngle > 0.0)
 		{
 			float3 normalizedLightDirectionVS = normalize(light.positionVS[eyeIndex].xyz - viewPosition.xyz);
-			contactShadow = LightLimitFix::ContactShadows(viewPosition, screenNoise, screenNoise3D, normalizedLightDirectionVS, contactShadowSteps, eyeIndex);
+			contactShadow = LightLimitFix::ContactShadows(viewPosition, screenNoise, normalizedLightDirectionVS, contactShadowSteps, eyeIndex);
 		}
 
 		float3 refractedLightDirection = normalizedLightDirection;
