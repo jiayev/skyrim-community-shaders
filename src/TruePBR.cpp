@@ -704,8 +704,16 @@ struct BSLightingShaderProperty_LoadBinary
 					pbrMaterial->glintParameters.enabled = true;
 				}
 			}
+
+			// It was a bad idea originally to use kMenuScreen flag to enable PBR since it's actually used for world map
+			// meshes. But it was too late to move to use different flag so internally we use kVertexLighting instead
+			// as it's not used for Lighting shader.
 			property->flags.set(kVertexLighting);
+
 			property->flags.reset(kMenuScreen, kSpecular, kGlowMap, kEnvMap, kMultiLayerParallax, kSoftLighting, kRimLighting, kBackLighting, kAnisotropicLighting, kEffectLighting, kFitSlope);
+		} else {
+			// There are some modded non-PBR meshes with kVertexLighting enabled.
+			property->flags.reset(kVertexLighting);
 		}
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
@@ -1361,6 +1369,8 @@ struct BSGrassShaderProperty_ctor
 				BSLightingShaderMaterialPBR srcMaterial;
 				grassProperty->LinkMaterial(&srcMaterial, true);
 
+				// Since grass actually uses kVertexLighting flag we need to switch to some flag which it does not
+				// use, specifically kMenuScreen.
 				grassProperty->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kMenuScreen, true);
 
 				auto pbrMaterial = static_cast<BSLightingShaderMaterialPBR*>(grassProperty->material);
