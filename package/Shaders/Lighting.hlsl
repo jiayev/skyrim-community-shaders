@@ -1548,6 +1548,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		shadowColor = TexShadowMaskSampler.Sample(SampShadowMaskSampler, shadowUV);
 	}
 
+	float projectedMaterialWeight = 0;
+
 	float projWeight = 0;
 
 #	if defined(PROJECTED_UV)
@@ -1579,20 +1581,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float3 projDetailNormal = TexProjDetail.Sample(SampProjDetailSampler, projDetailNormalUv).xyz;
 		float3 finalProjNormal = normalize(TransformNormal(projDetailNormal) * float3(1, 1, projNormal.z) + float3(projNormal.xy, 0));
 		float3 projBaseColor = TexProjDiffuseSampler.Sample(SampProjDiffuseSampler, projNormalDiffuseUv).xyz * ProjectedUVParams2.xyz;
-		float projBlendWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
+		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
 #			if defined(TRUE_PBR)
 		projBaseColor = saturate(EnvmapData.xyz * projBaseColor);
-		rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(ParallaxOccData.x, 0, ParallaxOccData.y), projBlendWeight);
+		rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(ParallaxOccData.x, 0, ParallaxOccData.y), projectedMaterialWeight);
+		float4 projectedGlintParameters = 0;
 		if ((PBRFlags & TruePBR_ProjectedGlint) != 0) {
-			glintParameters = lerp(glintParameters, SparkleParams, projBlendWeight);
+			projectedGlintParameters = SparkleParams;
 		}
+		glintParameters = lerp(glintParameters, projectedGlintParameters, projectedMaterialWeight);
 #			endif
-		normal.xyz = lerp(normal.xyz, finalProjNormal, projBlendWeight);
-		baseColor.xyz = lerp(baseColor.xyz, projBaseColor, projBlendWeight);
+		normal.xyz = lerp(normal.xyz, finalProjNormal, projectedMaterialWeight);
+		baseColor.xyz = lerp(baseColor.xyz, projBaseColor, projectedMaterialWeight);
 
 #			if defined(SNOW)
 		useSnowDecalSpecular = true;
-		psout.Parameters.y = GetSnowParameterY(projBlendWeight, baseColor.w);
+		psout.Parameters.y = GetSnowParameterY(projectedMaterialWeight, baseColor.w);
 #			endif  // SNOW
 	} else {
 		if (projWeight > 0) {
@@ -1665,6 +1669,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			pbrSurfaceProperties.SubsurfaceColor *= sampledSubsurfaceProperties.xyz;
 			pbrSurfaceProperties.Thickness *= sampledSubsurfaceProperties.w;
 		}
+		pbrSurfaceProperties.Thickness = lerp(pbrSurfaceProperties.Thickness, 1, projectedMaterialWeight);
 	}
 	else if ((PBRFlags & TruePBR_TwoLayer) != 0)
 	{
@@ -1700,6 +1705,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			}
 #			endif
 		}
+		pbrSurfaceProperties.CoatStrength = lerp(pbrSurfaceProperties.CoatStrength, 0, projectedMaterialWeight);
 	}
 
 	[branch] if ((PBRFlags & TruePBR_Fuzz) != 0)
@@ -1712,6 +1718,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			pbrSurfaceProperties.FuzzColor *= sampledFuzzProperties.xyz;
 			pbrSurfaceProperties.FuzzWeight *= sampledFuzzProperties.w;
 		}
+		pbrSurfaceProperties.FuzzWeight = lerp(pbrSurfaceProperties.FuzzWeight, 0, projectedMaterialWeight);
 	}
 #		endif
 

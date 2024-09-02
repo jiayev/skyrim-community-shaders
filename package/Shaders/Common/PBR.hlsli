@@ -455,7 +455,7 @@ namespace PBR
 				float forwardScatter = exp2(saturate(-VdotL) * subsurfacePower - subsurfacePower);
 				float backScatter = saturate(satNdotL * surfaceProperties.Thickness + (1.0 - surfaceProperties.Thickness)) * 0.5;
 				float subsurface = lerp(backScatter, 1, forwardScatter) * (1.0 - surfaceProperties.Thickness);
-				transmission += surfaceProperties.SubsurfaceColor * subsurface * lightProperties.LinearLightColor;
+				transmission += surfaceProperties.SubsurfaceColor * subsurface * lightProperties.LinearLightColor * GetDiffuseDirectLightMultiplierLambert();
 			}
 			else if ((PBRFlags & TruePBR_TwoLayer) != 0)
 			{
@@ -480,7 +480,7 @@ namespace PBR
 				diffuse *= layerAttenuation;
 				specular *= layerAttenuation;
 
-				coatDiffuse += lightProperties.LinearCoatLightColor * coatNdotL;
+				coatDiffuse += lightProperties.LinearCoatLightColor * coatNdotL * GetDiffuseDirectLightMultiplierLambert();
 				specular += coatSpecular * surfaceProperties.CoatStrength;
 			}
 #endif
@@ -527,7 +527,7 @@ namespace PBR
 #if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 			[branch] if ((PBRFlags & TruePBR_Subsurface) != 0)
 			{
-				diffuseLobeWeight += surfaceProperties.SubsurfaceColor;
+				diffuseLobeWeight += surfaceProperties.SubsurfaceColor * (1 - surfaceProperties.Thickness) / PI;
 			}
 			[branch] if ((PBRFlags & TruePBR_Fuzz) != 0)
 			{
