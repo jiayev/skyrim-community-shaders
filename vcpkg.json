@@ -21,7 +21,6 @@
       "features": ["dx11-binding", "win32-binding", "docking-experimental"]
     },
     "magic-enum",
-    "magic-enum",
     "nlohmann-json",
     "pystring",
     "tracy",
