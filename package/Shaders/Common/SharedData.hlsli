@@ -36,7 +36,10 @@ struct CPMSettings
 	bool EnableComplexMaterial;
 	bool EnableParallax;
 	bool EnableTerrainParallax;
+	bool EnableHeightBlending;
 	bool EnableShadows;
+	bool ExtendShadows;
+	float2 pad0;
 };
 
 struct CubemapCreatorSettings

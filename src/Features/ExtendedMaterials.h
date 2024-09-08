@@ -22,8 +22,12 @@ struct ExtendedMaterials : Feature
 
 		uint EnableParallax = 1;
 		uint EnableTerrain = 0;
+		uint EnableHeightBlending = 1;
 
 		uint EnableShadows = 1;
+		uint ExtendShadows = 0;
+
+		float pad[2];
 	};
 
 	Settings settings;

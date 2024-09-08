@@ -1099,7 +1099,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (extendedMaterialSettings.EnableParallax) {
 		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler);
 		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, pixelOffset);
-		if (extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0f)
+		if (extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || extendedMaterialSettings.ExtendShadows))
 			sh0 = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
 	}
 #		endif  // PARALLAX
@@ -1118,7 +1118,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler);
 				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, pixelOffset);
-				if (extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0f)
+				if (extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || extendedMaterialSettings.ExtendShadows))
 					sh0 = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, mipLevel).w;
 			}
 
@@ -1153,7 +1153,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler);
 		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, refractedViewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, pixelOffset);
-		if (extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0f)
+		if (extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || extendedMaterialSettings.ExtendShadows))
 			sh0 = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
 	}
 #		endif  // TRUE_PBR
@@ -1217,7 +1217,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 		float weights[6];
 		uv = ExtendedMaterials::GetParallaxCoords(input, viewPosition.z, uv, mipLevels, viewDirection, tbnTr, screenNoise, displacementParams, pixelOffset, weights);
-		if (extendedMaterialSettings.EnableComplexMaterial) {
+		if (extendedMaterialSettings.EnableHeightBlending) {
 			input.LandBlendWeights1.x = weights[0];
 			input.LandBlendWeights1.y = weights[1];
 			input.LandBlendWeights1.z = weights[2];
@@ -1225,7 +1225,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			input.LandBlendWeights2.x = weights[4];
 			input.LandBlendWeights2.y = weights[5];
 		}
-		if (extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0f) {
+		if (extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || extendedMaterialSettings.ExtendShadows)) {
 #			if defined(TRUE_PBR)
 			sh0 = ExtendedMaterials::GetTerrainHeight(input, uv, mipLevels, displacementParams, parallaxShadowQuality, input.LandBlendWeights1, input.LandBlendWeights2, weights);
 #			else
