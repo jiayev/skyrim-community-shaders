@@ -372,20 +372,20 @@ float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatri
 #	endif
 {
 	const int sampleCount = 8;
-#	if defined(RENDER_SHADOWMASK)
-	compareValue += 0.002 * (1.0 + layerIndex);
-#	else
-	compareValue += 0.001;
-#	endif
 
-	float layerIndexRcp = rcp(1 + layerIndex);
+#	if defined(RENDER_SHADOWMASK)
+	uint onePlusLayerIndex = 1.0 + layerIndex;
+	compareValue += 0.002 * onePlusLayerIndex;
+	float layerIndexRcp = rcp(onePlusLayerIndex);
+#	endif
 
 	float visibility = 0;
 	for (int sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
 		float2 sampleOffset = mul(SpiralSampleOffsets8[sampleIndex], rotationMatrix);
+		sampleOffset *= 1.5;
 
 #	if defined(RENDER_SHADOWMASKDPB)
-		float2 sampleUV = sampleOffset * 2 + baseUV;  // Replaced radius parameter to fix sharpness
+		float2 sampleUV = sampleOffset + baseUV;
 
 		baseUV.z += noise;
 
