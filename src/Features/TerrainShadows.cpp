@@ -1,5 +1,5 @@
-#include "TerrainOcclusion.h"
 #include "Menu.h"
+#include "TerrainOcclusion.h"
 
 #include "Deferred.h"
 #include "State.h"
