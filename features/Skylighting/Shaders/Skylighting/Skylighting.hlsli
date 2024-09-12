@@ -13,10 +13,9 @@ struct SkylightingSettings
 	uint pad1;
 	int4 ValidMargin;
 
-	float4 MixParams;  // x: min diffuse visibility, y: diffuse mult, z: min specular visibility, w: specular mult
-
-	uint DirectionalDiffuse;
-	uint3 pad2;
+	float MinDiffuseVisibility;
+	float MinSpecularVisibility;
+	uint pad2[2];
 };
 
 #endif
@@ -46,18 +45,18 @@ namespace Skylighting
 
 	float mixDiffuse(SkylightingSettings params, float visibility)
 	{
-		return lerp(params.MixParams.x, 1, pow(saturate(visibility), params.MixParams.y));
+		return lerp(params.MinDiffuseVisibility, 1.0, saturate(visibility));
 	}
 
 	float mixSpecular(SkylightingSettings params, float visibility)
 	{
-		return lerp(params.MixParams.z, 1, pow(saturate(visibility), params.MixParams.w));
+		return lerp(params.MinSpecularVisibility, 1.0, saturate(visibility));
 	}
 
 	sh2 sample(SkylightingSettings params, Texture3D<sh2> probeArray, float3 positionMS, float3 normalWS)
 	{
 		const static sh2 unitSH = float4(sqrt(4 * shPI), 0, 0, 0);
-		sh2 scaledUnitSH = unitSH / (params.MixParams.y + 1e-10);
+		sh2 scaledUnitSH = unitSH / 1e-10;
 
 		float3 positionMSAdjusted = positionMS - params.PosOffset;
 		float3 uvw = positionMSAdjusted / ARRAY_SIZE + .5;
@@ -101,12 +100,7 @@ namespace Skylighting
 			wsum += w;
 		}
 
-		sh2 result = shScale(sum, rcp(wsum + 1e-10));
-
-		// fade out
-		result = lerp(scaledUnitSH, result, getFadeOutFactor(positionMS));
-
-		return result;
+		return shScale(sum, rcp(wsum + 1e-10));
 	}
 
 	float getVL(SkylightingSettings params, Texture3D<sh2> probeArray, float3 startPosWS, float3 endPosWS, float2 pxCoord)

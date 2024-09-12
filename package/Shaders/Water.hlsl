@@ -556,6 +556,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 			sh2 specularLobe = Skylighting::fauxSpecularLobeSH(normal, -viewDirection, 0.0);
 
 			float skylightingSpecular = shFuncProductIntegral(skylighting, specularLobe);
+			skylightingSpecular = lerp(1.0, skylightingSpecular, Skylighting::getFadeOutFactor(input.WPosition));
 			skylightingSpecular = Skylighting::mixSpecular(skylightingSettings, skylightingSpecular);
 
 			float3 specularIrradiance = 1;
@@ -709,6 +710,7 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 
 		sh2 skylightingSH = Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMSSkylight, float3(0, 0, 1));
 		float skylighting = shUnproject(skylightingSH, float3(0, 0, 1));
+		skylighting = lerp(1.0, skylighting, Skylighting::getFadeOutFactor(input.WPosition));
 
 		float3 refractionDiffuseColorSkylight = Skylighting::mixDiffuse(skylightingSettings, skylighting);
 		refractionDiffuseColorSkylight = LinearToGamma(GammaToLinear(refractionDiffuseColor) * refractionDiffuseColorSkylight);

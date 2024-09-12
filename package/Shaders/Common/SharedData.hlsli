@@ -118,11 +118,9 @@ struct SkylightingSettings
 	uint3 ArrayOrigin;  // xyz: array origin, w: max accum frames
 	uint pad1;
 	int4 ValidMargin;
-
-	float4 MixParams;  // x: min diffuse visibility, y: diffuse mult, z: min specular visibility, w: specular mult
-
-	uint DirectionalDiffuse;
-	uint3 pad2;
+	float MinDiffuseVisibility;
+	float MinSpecularVisibility;
+	uint pad2[2];
 };
 
 struct PBRSettings

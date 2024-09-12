@@ -448,21 +448,9 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 #	if defined(FOLIAGE)
-
-	// Randomly skips rendering foliage to depth to simulate transparency
-	float2 depthUV = (input.PositionCS.xy / 512.0);
-
-	float4 positionCS = float4(2 * float2(depthUV.x, -depthUV.y + 1) - 1, input.PositionCS.z, 1);
-	float4 positionMS = mul(CameraViewProjInverse[eyeIndex], positionCS);
-	positionMS.xyz = positionMS.xyz / positionMS.w;
-
-	positionMS.xyz += CameraPosAdjust[eyeIndex];
-
-	// https://www.shadertoy.com/view/mts3zN
-	float checkerboard = R3Sequence(1, positionMS.xyz);
-
-	//if (checkerboard > 0.25)
-	//	discard;
+	float checkerboard = InterleavedGradientNoise(0, input.PositionCS.xy);
+	if (checkerboard > 0.8)
+		discard;
 #	endif
 
 	float2 baseTexCoord = 0;

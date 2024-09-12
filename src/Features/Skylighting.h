@@ -41,12 +41,10 @@ struct Skylighting : Feature
 
 	struct Settings
 	{
-		bool DirectionalDiffuse = false;
 		float MaxZenith = 3.1415926f / 4.f;  // 45 deg
 		float MinDiffuseVisibility = 0.1f;
-		float DiffusePower = 1.f;
 		float MinSpecularVisibility = 0.f;
-		float SpecularPower = 1.f;
+		uint pad0;
 	} settings;
 
 	struct SkylightingCB
@@ -60,10 +58,9 @@ struct Skylighting : Feature
 		uint _pad1;
 		int ValidMargin[4];
 
-		float4 MixParams;  // x: min diffuse visibility, y: diffuse mult, z: min specular visibility, w: specular mult
-
-		uint DirectionalDiffuse;
-		uint _pad2[3];
+		float MinDiffuseVisibility;
+		float MinSpecularVisibility;
+		uint _pad2[2];
 	} cbData;
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 	eastl::unique_ptr<ConstantBuffer> skylightingCB = nullptr;
@@ -82,8 +79,6 @@ struct Skylighting : Feature
 	bool doOcclusion = true;
 	uint probeArrayDims[3] = { 128, 128, 64 };
 	float occlusionDistance = 10000.f;
-	bool renderTrees = false;
-	float boundSize = 1;
 
 	// cached variables
 	bool inOcclusion = false;
@@ -91,6 +86,7 @@ struct Skylighting : Feature
 	REX::W32::XMFLOAT4X4 OcclusionTransform;
 	float4 OcclusionDir;
 	uint forceFrames = 255 * 4;
+	uint frameCount = 0;
 
 	std::chrono::time_point<std::chrono::system_clock> lastUpdateTimer = std::chrono::system_clock::now();
 
