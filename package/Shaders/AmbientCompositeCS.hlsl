@@ -68,7 +68,7 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 #	endif
 
 	sh2 skylighting = Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMS.xyz, normalWS);
-	half skylightingDiffuse = shFuncProductIntegral(skylighting, shEvaluateCosineLobe(skylightingSettings.DirectionalDiffuse ? normalWS : float3(0, 0, 1))) / shPI;
+	half skylightingDiffuse = shFuncProductIntegral(skylighting, shEvaluateCosineLobe(float3(normalWS.xy, normalWS.z * 0.5 + 0.5))) / shPI;
 	skylightingDiffuse = Skylighting::mixDiffuse(skylightingSettings, skylightingDiffuse);
 
 	visibility = skylightingDiffuse;
