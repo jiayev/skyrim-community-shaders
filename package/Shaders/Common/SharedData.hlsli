@@ -52,22 +52,10 @@ struct CubemapCreatorSettings
 
 struct TerraOccSettings
 {
-	uint EnableTerrainShadow;
-	uint EnableTerrainAO;
-	float HeightBias;
-	float ShadowSofteningRadiusAngle;
-
-	float2 ZRange;
-	float2 ShadowFadeDistance;
-
-	float AOMix;
+	bool EnableTerrainShadow;
 	float3 Scale;
-
-	float AOPower;
-	float3 InvScale;
-
-	float AOFadeOutHeightRcp;
-	float3 Offset;
+	float2 ZRange;
+	float2 Offset;
 };
 
 struct WetnessEffectsSettings
