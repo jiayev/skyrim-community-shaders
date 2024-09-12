@@ -409,8 +409,8 @@ float calculateDepthMultfromUV(float2 a_uv, float a_depth, uint a_eyeIndex = 0)
 #		define SampColorSampler Normals01Sampler
 #		define LinearSampler Normals01Sampler
 
-#		if defined(TERRA_OCC)
-#			include "TerrainOcclusion/TerrainOcclusion.hlsli"
+#		if defined(TERRAIN_SHADOWS)
+#			include "TerrainShadows/TerrainShadows.hlsli"
 #		endif
 
 #		if defined(SKYLIGHTING)
@@ -878,7 +878,7 @@ PS_OUTPUT main(PS_INPUT input)
 		sunColor *= GetWaterShadow(screenNoise, input.WPosition.xyz, eyeIndex);
 	}
 
-	float specularFraction = lerp(1, fresnel * depthControl.x, distanceFactor);
+	float specularFraction = lerp(1, fresnel * depthControl.x, 1);
 	float3 finalColorPreFog = lerp(GammaToLinear(diffuseColor), GammaToLinear(specularColor), specularFraction) + GammaToLinear(sunColor) * depthControl.w;
 	finalColorPreFog = LinearToGamma(finalColorPreFog);
 	float3 finalColor = lerp(finalColorPreFog, input.FogParam.xyz, input.FogParam.w);

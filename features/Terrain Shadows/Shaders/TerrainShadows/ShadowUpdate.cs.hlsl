@@ -1,13 +1,15 @@
 Texture2D<float> TexHeight : register(t0);
 RWTexture2D<float2> RWTexShadowHeights : register(u0);
 
-cbuffer ShadowUpdateCB : register(b1)
+cbuffer ShadowUpdateCB : register(b0)
 {
 	float2 LightPxDir : packoffset(c0.x);   // direction on which light descends, from one pixel to next via dda
 	float2 LightDeltaZ : packoffset(c0.z);  // per lightUVDir, normalised, [upper, lower] penumbra, should be negative
 	uint StartPxCoord : packoffset(c1.x);
 	float2 PxSize : packoffset(c1.y);
 	float pad : packoffset(c1.w);
+	float2 PosRange : packoffset(c2.x);
+	float2 ZRange: packoffset(c2.z);
 }
 
 float GetInterpolatedHeight(float2 pxCoord, bool isVertical)
@@ -19,6 +21,12 @@ float GetInterpolatedHeight(float2 pxCoord, bool isVertical)
 	int2 lerpPxCoordB = int2(pxCoord + .5 * float2(isVertical, !isVertical));
 	float heightA = TexHeight[lerpPxCoordA];
 	float heightB = TexHeight[lerpPxCoordB];
+
+	// normalize
+	heightA = lerp(PosRange.x, PosRange.y, heightA);
+	heightB = lerp(PosRange.x, PosRange.y, heightB);
+	heightA = (heightA - ZRange.x) / (ZRange.y - ZRange.x);
+	heightB = (heightB - ZRange.x) / (ZRange.y - ZRange.x);
 
 	bool inBoundA = all(lerpPxCoordA > 0);
 	bool inBoundB = all(lerpPxCoordB < dims);
@@ -94,7 +102,7 @@ groupshared float2 g_shadowHeight[NTHREADS];
 	[unroll] for (uint offset = 1; offset < 1024; offset <<= 1)
 	{
 		if (isValid && gtid >= offset) {
-			if (all(floor(rawThreadUV - lightUVDir * offset) == floor(rawThreadUV)))  // no wraparound happend
+			if (all(floor(rawThreadUV - lightUVDir * offset) == floor(rawThreadUV)))  // no wraparound happened
 			{
 				float2 currentHeights = g_shadowHeight[gtid];
 				float2 sampleHeights = g_shadowHeight[gtid - offset] + LightDeltaZ * offset;
@@ -106,6 +114,6 @@ groupshared float2 g_shadowHeight[NTHREADS];
 
 	// save
 	if (isValid) {
-		RWTexShadowHeights[uint2(threadPxCoord)] = lerp(pastHeights, g_shadowHeight[gtid], .5f);
+		RWTexShadowHeights[uint2(threadPxCoord)] = lerp(pastHeights, g_shadowHeight[gtid], 0.5f);
 	}
 }

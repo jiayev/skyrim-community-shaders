@@ -1,17 +1,15 @@
-Texture2D<float> TexTerraOcc : register(t40);
-Texture2D<float> TexNormalisedHeight : register(t41);
 Texture2D<float2> TexShadowHeight : register(t42);
 
-namespace TerrainOcclusion
+namespace TerrainShadows
 {
-	float2 GetTerrainOcclusionUV(float2 xy)
+	float2 GetTerrainShadowUV(float2 xy)
 	{
 		return xy * terraOccSettings.Scale.xy + terraOccSettings.Offset.xy;
 	}
 
 	float GetTerrainZ(float norm_z)
 	{
-		return lerp(terraOccSettings.ZRange.x, terraOccSettings.ZRange.y, norm_z) + 1024;
+		return lerp(terraOccSettings.ZRange.x, terraOccSettings.ZRange.y, norm_z) - 1024;
 	}
 
 	float2 GetTerrainZ(float2 norm_z)
@@ -21,7 +19,7 @@ namespace TerrainOcclusion
 
 	float GetTerrainShadow(const float3 worldPos, const float viewDistance, SamplerState samp)
 	{
-		float2 terraOccUV = GetTerrainOcclusionUV(worldPos.xy);
+		float2 terraOccUV = GetTerrainShadowUV(worldPos.xy);
 
 		[flatten] if (terraOccSettings.EnableTerrainShadow)
 		{

@@ -1,5 +1,5 @@
 #include "Menu.h"
-#include "TerrainOcclusion.h"
+#include "TerrainShadows.h"
 
 #include "Deferred.h"
 #include "State.h"
@@ -11,70 +11,23 @@
 #include <pystring/pystring.h>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	TerrainOcclusion::Settings,
-	AoDistance,
-	SliceCount,
-	SampleCount,
-	EnableTerrainShadow,
-	EnableTerrainAO,
-	HeightBias,
-	ShadowSofteningRadiusAngle,
-	AOPower,
-	AOFadeOutHeight)
+	TerrainShadows::Settings,
+	EnableTerrainShadow
+)
 
-void TerrainOcclusion::LoadSettings(json& o_json)
+void TerrainShadows::LoadSettings(json& o_json)
 {
 	settings = o_json;
 }
 
-void TerrainOcclusion::SaveSettings(json& o_json)
+void TerrainShadows::SaveSettings(json& o_json)
 {
 	o_json = settings;
 }
 
-void TerrainOcclusion::DrawSettings()
+void TerrainShadows::DrawSettings()
 {
 	ImGui::Checkbox("Enable Terrain Shadow", (bool*)&settings.EnableTerrainShadow);
-	// ImGui::Checkbox("Enable Terrain AO", (bool*)&settings.EnableTerrainAO);
-
-	ImGui::SliderFloat("Height Map Bias", &settings.HeightBias, -2000.f, 0.f, "%.0f units");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Moving the height map down to compensate for its inaccuracy.");
-
-	// ImGui::SeparatorText("Shadow");
-	{
-		ImGui::SliderAngle("Softening", &settings.ShadowSofteningRadiusAngle, .1f, 10.f, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Controls the solid angle of sunlight, making terrain shadows softer.");
-
-		ImGui::SliderFloat2("Fade Distance", &settings.ShadowFadeDistance.x, 0, 10000.f, "%.0f units");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Shadows around you are and should be handled by vanilla shadow maps.");
-			if (auto settingCollection = RE::INIPrefSettingCollection::GetSingleton()) {
-				auto gameShadowDist = settingCollection->GetSetting("fShadowDistance:Display")->GetFloat();
-				ImGui::Text("Your fShadowDistance setting: %f", gameShadowDist);
-			}
-		}
-	}
-
-	// ImGui::SeparatorText("AO");
-	// {
-	// 	ImGui::SliderFloat("Mix", &settings.AOMix, 0, 1, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	// 	ImGui::SliderFloat("Power", &settings.AOPower, 0.2f, 5, "%.2f");
-	// 	ImGui::SliderFloat("Fadeout Height", &settings.AOFadeOutHeight, 500, 5000, "%.0f units");
-	// 	if (auto _tt = Util::HoverTooltipWrapper())
-	// 		ImGui::Text("On the ground AO is the most prominent. Up to a certain height it will gradually fade out.");
-
-	// 	if (ImGui::TreeNodeEx("Precomputation", ImGuiTreeNodeFlags_DefaultOpen)) {
-	// 		ImGui::SliderFloat("Distance", &settings.AoDistance, 1.f / 32, 32, "%.2f cells");
-	// 		ImGui::InputScalar("Slices", ImGuiDataType_U32, &settings.SliceCount);
-	// 		ImGui::InputScalar("Samples", ImGuiDataType_U32, &settings.SampleCount);
-	// 		if (ImGui::Button("Force Regenerate AO", { -1, 0 }))
-	// 			needPrecompute = true;
-
-	// 		ImGui::TreePop();
-	// 	}
-	// }
 
 	if (ImGui::CollapsingHeader("Debug")) {
 		std::string curr_worldspace = "N/A";
@@ -92,36 +45,30 @@ void TerrainOcclusion::DrawSettings()
 
 		ImGui::Separator();
 
-		if (texOcclusion) {
-			ImGui::BulletText("shadowUpdateCBData");
-			ImGui::Indent();
-			{
-				ImGui::Text(fmt::format("LightPxDir: ({}, {})", shadowUpdateCBData.LightPxDir.x, shadowUpdateCBData.LightPxDir.y).c_str());
-				ImGui::Text(fmt::format("LightDeltaZ: ({}, {})", shadowUpdateCBData.LightDeltaZ.x, shadowUpdateCBData.LightDeltaZ.y).c_str());
-				ImGui::Text(fmt::format("StartPxCoord: {}", shadowUpdateCBData.StartPxCoord).c_str());
-				ImGui::Text(fmt::format("PxSize: ({}, {})", shadowUpdateCBData.PxSize.x, shadowUpdateCBData.PxSize.y).c_str());
-			}
-			ImGui::Unindent();
+		ImGui::BulletText("shadowUpdateCBData");
+		ImGui::Indent();
+		{
+			ImGui::Text(fmt::format("LightPxDir: ({}, {})", shadowUpdateCBData.LightPxDir.x, shadowUpdateCBData.LightPxDir.y).c_str());
+			ImGui::Text(fmt::format("LightDeltaZ: ({}, {})", shadowUpdateCBData.LightDeltaZ.x, shadowUpdateCBData.LightDeltaZ.y).c_str());
+			ImGui::Text(fmt::format("StartPxCoord: {}", shadowUpdateCBData.StartPxCoord).c_str());
+			ImGui::Text(fmt::format("PxSize: ({}, {})", shadowUpdateCBData.PxSize.x, shadowUpdateCBData.PxSize.y).c_str());
+		}
+		ImGui::Unindent();
 
-			if (ImGui::TreeNode("Buffer Viewer")) {
-				static float debugRescale = .1f;
-				ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+		if (ImGui::TreeNode("Buffer Viewer")) {
+			static float debugRescale = .1f;
+			ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
-				BUFFER_VIEWER_NODE_BULLET(texOcclusion, debugRescale)
-				BUFFER_VIEWER_NODE_BULLET(texNormalisedHeight, debugRescale)
+			if (texShadowHeight) {
 				BUFFER_VIEWER_NODE_BULLET(texShadowHeight, debugRescale)
-				ImGui::TreePop();
 			}
+			ImGui::TreePop();
 		}
 	}
 }
 
-void TerrainOcclusion::ClearShaderCache()
+void TerrainShadows::ClearShaderCache()
 {
-	if (occlusionProgram) {
-		occlusionProgram->Release();
-		occlusionProgram = nullptr;
-	}
 	if (shadowUpdateProgram) {
 		shadowUpdateProgram->Release();
 		shadowUpdateProgram = nullptr;
@@ -130,7 +77,7 @@ void TerrainOcclusion::ClearShaderCache()
 	CompileComputeShaders();
 }
 
-void TerrainOcclusion::SetupResources()
+void TerrainShadows::SetupResources()
 {
 	logger::debug("Listing height maps...");
 	{
@@ -177,26 +124,6 @@ void TerrainOcclusion::SetupResources()
 		}
 	}
 
-	logger::debug("Creating structured buffers...");
-	{
-		D3D11_BUFFER_DESC sbDesc{};
-		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
-		sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		sbDesc.StructureByteStride = sizeof(AOGenBuffer);
-		sbDesc.ByteWidth = sizeof(AOGenBuffer);
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		srvDesc.Buffer.FirstElement = 0;
-		srvDesc.Buffer.NumElements = 1;
-
-		aoGenBuffer = std::make_unique<Buffer>(sbDesc);
-		aoGenBuffer->CreateSRV(srvDesc);
-	}
-
 	logger::debug("Creating constant buffers...");
 	{
 		shadowUpdateCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<ShadowUpdateCB>());
@@ -205,21 +132,17 @@ void TerrainOcclusion::SetupResources()
 	CompileComputeShaders();
 }
 
-void TerrainOcclusion::CompileComputeShaders()
+void TerrainShadows::CompileComputeShaders()
 {
 	logger::debug("Compiling shaders...");
 	{
-		auto program_ptr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\TerrainOcclusion\\AOGen.cs.hlsl", {}, "cs_5_0"));
-		if (program_ptr)
-			occlusionProgram.attach(program_ptr);
-
-		program_ptr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\TerrainOcclusion\\ShadowUpdate.cs.hlsl", {}, "cs_5_0"));
+		auto program_ptr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\TerrainShadows\\ShadowUpdate.cs.hlsl", {}, "cs_5_0"));
 		if (program_ptr)
 			shadowUpdateProgram.attach(program_ptr);
 	}
 }
 
-bool TerrainOcclusion::IsHeightMapReady()
+bool TerrainShadows::IsHeightMapReady()
 {
 	if (auto tes = RE::TES::GetSingleton())
 		if (auto worldspace = tes->GetRuntimeData2().worldSpace)
@@ -227,32 +150,25 @@ bool TerrainOcclusion::IsHeightMapReady()
 	return false;
 }
 
-TerrainOcclusion::PerFrame TerrainOcclusion::GetCommonBufferData()
+TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()
 {
 	bool isHeightmapReady = IsHeightMapReady();
 
 	PerFrame data = {
 		.EnableTerrainShadow = settings.EnableTerrainShadow && isHeightmapReady,
-		.EnableTerrainAO = settings.EnableTerrainAO && isHeightmapReady,
-		.HeightBias = settings.HeightBias,
-		.ShadowSofteningRadiusAngle = settings.ShadowSofteningRadiusAngle,
-		.ShadowFadeDistance = settings.ShadowFadeDistance,
-		.AOMix = settings.AOMix,
-		.AOPower = settings.AOPower,
-		.AOFadeOutHeightRcp = 1.f / settings.AOFadeOutHeight,
 	};
 
 	if (isHeightmapReady) {
-		data.InvScale = cachedHeightmap->pos1 - cachedHeightmap->pos0;
-		data.Scale = float3(1.f, 1.f, 1.f) / data.InvScale;
-		data.Offset = -cachedHeightmap->pos0 * data.Scale;
+		auto invScale = cachedHeightmap->pos1 - cachedHeightmap->pos0;
+		data.Scale = float3(1.f, 1.f, 1.f) / invScale;
+		data.Offset = -cachedHeightmap->pos0 * float2{ data.Scale.x, data.Scale.y };
 		data.ZRange = cachedHeightmap->zRange;
 	}
 
 	return data;
 }
 
-void TerrainOcclusion::LoadHeightmap()
+void TerrainShadows::LoadHeightmap()
 {
 	auto tes = RE::TES::GetSingleton();
 	if (!tes)
@@ -312,17 +228,13 @@ void TerrainOcclusion::LoadHeightmap()
 	needPrecompute = true;
 }
 
-void TerrainOcclusion::Precompute()
+void TerrainShadows::Precompute()
 {
 	if (!cachedHeightmap)
 		return;
 
-	auto& context = State::GetSingleton()->context;
-
-	logger::info("Creating occlusion texture...");
+	logger::info("Creating shadow texture...");
 	{
-		texOcclusion.release();
-		texNormalisedHeight.release();
 		texShadowHeight.release();
 
 		D3D11_TEXTURE2D_DESC texDesc = {
@@ -330,7 +242,7 @@ void TerrainOcclusion::Precompute()
 			.Height = texHeightMap->desc.Height,
 			.MipLevels = 1,
 			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R8_UNORM,
+			.Format = DXGI_FORMAT_R16G16_FLOAT,
 			.SampleDesc = { .Count = 1 },
 			.Usage = D3D11_USAGE_DEFAULT,
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
@@ -348,76 +260,15 @@ void TerrainOcclusion::Precompute()
 			.Texture2D = { .MipSlice = 0 }
 		};
 
-		texOcclusion = std::make_unique<Texture2D>(texDesc);
-		texOcclusion->CreateSRV(srvDesc);
-		texOcclusion->CreateUAV(uavDesc);
-
-		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16_FLOAT;
-		texNormalisedHeight = std::make_unique<Texture2D>(texDesc);
-		texNormalisedHeight->CreateSRV(srvDesc);
-		texNormalisedHeight->CreateUAV(uavDesc);
-
-		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
 		texShadowHeight = std::make_unique<Texture2D>(texDesc);
 		texShadowHeight->CreateSRV(srvDesc);
 		texShadowHeight->CreateUAV(uavDesc);
 	}
 
-	{
-		AOGenBuffer data = {
-			.AoDistance = settings.AoDistance * 4096.f,
-			.SliceCount = settings.SliceCount,
-			.SampleCount = settings.SampleCount,
-			.pos0 = cachedHeightmap->pos0,
-			.pos1 = cachedHeightmap->pos1,
-			.zRange = cachedHeightmap->zRange
-		};
-
-		D3D11_MAPPED_SUBRESOURCE mapped;
-		DX::ThrowIfFailed(context->Map(aoGenBuffer->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-		size_t bytes = sizeof(AOGenBuffer);
-		memcpy_s(mapped.pData, bytes, &data, bytes);
-		context->Unmap(aoGenBuffer->resource.get(), 0);
-	}
-
-	/* ---- BACKUP ---- */
-	struct ShaderState
-	{
-		ID3D11ShaderResourceView* srvs[2] = { nullptr };
-		ID3D11ComputeShader* shader = nullptr;
-		ID3D11UnorderedAccessView* uavs[2] = { nullptr };
-		ID3D11ClassInstance* instance = nullptr;
-		ID3D11SamplerState* samplers[1] = { nullptr };
-		UINT numInstances;
-	} old, newer;
-	context->CSGetShaderResources(0, ARRAYSIZE(old.srvs), old.srvs);
-	context->CSGetShader(&old.shader, &old.instance, &old.numInstances);
-	context->CSGetUnorderedAccessViews(0, ARRAYSIZE(old.uavs), old.uavs);
-	context->CSGetSamplers(0, ARRAYSIZE(old.samplers), old.samplers);
-
-	/* ---- DISPATCH ---- */
-	logger::info("Precomputation...");
-	newer.srvs[0] = aoGenBuffer->srv.get();
-	newer.srvs[1] = texHeightMap->srv.get();
-	newer.uavs[0] = texOcclusion->uav.get();
-	newer.uavs[1] = texNormalisedHeight->uav.get();
-
-	context->CSSetSamplers(0, ARRAYSIZE(newer.samplers), newer.samplers);
-	context->CSSetShaderResources(0, ARRAYSIZE(newer.srvs), newer.srvs);
-	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(newer.uavs), newer.uavs, nullptr);
-	context->CSSetShader(occlusionProgram.get(), nullptr, 0);
-	context->Dispatch(((texOcclusion->desc.Width - 1) >> 5) + 1, ((texOcclusion->desc.Height - 1) >> 5) + 1, 1);
-
-	/* ---- RESTORE ---- */
-	context->CSSetShaderResources(0, ARRAYSIZE(old.srvs), old.srvs);
-	context->CSSetShader(old.shader, &old.instance, old.numInstances);
-	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(old.uavs), old.uavs, nullptr);
-	context->CSSetSamplers(0, ARRAYSIZE(old.samplers), old.samplers);
-
 	needPrecompute = false;
 }
 
-void TerrainOcclusion::UpdateShadow()
+void TerrainShadows::UpdateShadow()
 {
 	if (!IsHeightMapReady())
 		return;
@@ -436,8 +287,8 @@ void TerrainOcclusion::UpdateShadow()
 	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Terrain Occlusion - Update Shadows");
 
 	/* ---- UPDATE CB ---- */
-	uint width = texNormalisedHeight->desc.Width;
-	uint height = texNormalisedHeight->desc.Height;
+	uint width = texHeightMap->desc.Width;
+	uint height = texHeightMap->desc.Height;
 
 	// only update direction at the start of each cycle
 	static uint edgePxCoord;
@@ -475,14 +326,18 @@ void TerrainOcclusion::UpdateShadow()
 		// soft shadow angles
 		float lenUV = float2{ dirLightDir.x, dirLightDir.y }.Length();
 		float dirLightAngle = atan2(-dirLightDir.z, lenUV);
-		float upperAngle = std::max(0.f, dirLightAngle - settings.ShadowSofteningRadiusAngle);
-		float lowerAngle = std::min(RE::NI_HALF_PI - 1e-2f, dirLightAngle + settings.ShadowSofteningRadiusAngle);
+		float shadowSofteningRadiusAngle = 4.f * RE::NI_PI / 180.f;
+		float upperAngle = std::max(0.f, dirLightAngle - shadowSofteningRadiusAngle);
+		float lowerAngle = std::min(RE::NI_HALF_PI - 1e-2f, dirLightAngle + shadowSofteningRadiusAngle);
 
 		shadowUpdateCBData.LightDeltaZ = -(lenUV / invScale.z * stepMult) * float2{ std::tan(upperAngle), std::tan(lowerAngle) };
 	}
 
 	shadowUpdateCBData.StartPxCoord = edgePxCoord + signDir * shadowUpdateIdx * updateLength;
-	shadowUpdateCBData.PxSize = { 1.f / texNormalisedHeight->desc.Width, 1.f / texNormalisedHeight->desc.Height };
+	shadowUpdateCBData.PxSize = { 1.f / texHeightMap->desc.Width, 1.f / texHeightMap->desc.Height };
+
+	shadowUpdateCBData.PosRange = { cachedHeightmap->pos0.z, cachedHeightmap->pos1.z };
+	shadowUpdateCBData.ZRange = cachedHeightmap->zRange;
 
 	shadowUpdateCB->Update(shadowUpdateCBData);
 
@@ -498,13 +353,13 @@ void TerrainOcclusion::UpdateShadow()
 	} old, newer;
 
 	/* ---- DISPATCH ---- */
-	newer.srvs[0] = texNormalisedHeight->srv.get();
+	newer.srvs[0] = texHeightMap->srv.get();
 	newer.uavs[0] = texShadowHeight->uav.get();
 	newer.buffer = shadowUpdateCB->CB();
 
 	context->CSSetShaderResources(0, ARRAYSIZE(newer.srvs), newer.srvs);
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(newer.uavs), newer.uavs, nullptr);
-	context->CSSetConstantBuffers(1, 1, &newer.buffer);
+	context->CSSetConstantBuffers(0, 1, &newer.buffer);
 	context->CSSetShader(shadowUpdateProgram.get(), nullptr, 0);
 	context->Dispatch(abs(shadowUpdateCBData.LightPxDir.x) >= abs(shadowUpdateCBData.LightPxDir.y) ? height : width, 1, 1);
 
@@ -512,29 +367,25 @@ void TerrainOcclusion::UpdateShadow()
 	context->CSSetShaderResources(0, ARRAYSIZE(old.srvs), old.srvs);
 	context->CSSetShader(old.shader, nullptr, 0);
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(old.uavs), old.uavs, nullptr);
-	context->CSSetConstantBuffers(1, 1, &old.buffer);
+	context->CSSetConstantBuffers(0, 1, &old.buffer);
 }
 
-void TerrainOcclusion::Prepass()
+void TerrainShadows::Prepass()
 {
 	LoadHeightmap();
 
-	if (!settings.EnableTerrainShadow && !settings.EnableTerrainAO)
+	if (!settings.EnableTerrainShadow)
 		return;
 
 	if (needPrecompute)
 		Precompute();
-	if (settings.EnableTerrainShadow)
-		UpdateShadow();
+
+	UpdateShadow();
 
 	{
 		auto context = State::GetSingleton()->context;
 
 		std::array<ID3D11ShaderResourceView*, 3> srvs = { nullptr };
-		if (texOcclusion)
-			srvs.at(0) = texOcclusion->srv.get();
-		if (texNormalisedHeight)
-			srvs.at(1) = texNormalisedHeight->srv.get();
 		if (texShadowHeight)
 			srvs.at(2) = texShadowHeight->srv.get();
 		context->PSSetShaderResources(40, (uint)srvs.size(), srvs.data());
