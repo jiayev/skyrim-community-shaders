@@ -983,7 +983,6 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #	endif
 
 #	if defined(SSS)
-#		include "SubsurfaceScattering/SubsurfaceScattering.hlsli"
 #		if defined(SKIN)
 #			undef SOFT_LIGHTING
 #		endif
@@ -1035,19 +1034,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = InterleavedGradientNoise(input.Position.xy, FrameCount);
-	float3 screenNoise3D;
-	{
-		uint3 seed = pcg3d(uint3(input.Position.xy, input.Position.x * M_PI));
-		float3 rnd = R3Modified(FrameCount, seed / 4294967295.f);
-
-		float phi = rnd.x * 2 * 3.1415926535;
-		float cos_theta = rnd.y * 2 - 1;
-		float sin_theta = sqrt(1 - cos_theta);
-		float r = rnd.z;
-		float4 sincos_phi;
-		sincos(phi, sincos_phi.y, sincos_phi.x);
-		screenNoise3D = float3(r * sin_theta * sincos_phi.x, r * sin_theta * sincos_phi.y, r * cos_theta);
-	}
 
 	bool inWorld = ExtraShaderDescriptor & _InWorld;
 
@@ -1113,7 +1099,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (extendedMaterialSettings.EnableParallax) {
 		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler);
 		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, pixelOffset);
-		if (extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0f)
+		if (extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || extendedMaterialSettings.ExtendShadows))
 			sh0 = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
 	}
 #		endif  // PARALLAX
@@ -1132,7 +1118,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler);
 				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, pixelOffset);
-				if (extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0f)
+				if (extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || extendedMaterialSettings.ExtendShadows))
 					sh0 = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, mipLevel).w;
 			}
 
@@ -1167,7 +1153,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler);
 		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, refractedViewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, pixelOffset);
-		if (extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0f)
+		if (extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || extendedMaterialSettings.ExtendShadows))
 			sh0 = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
 	}
 #		endif  // TRUE_PBR
@@ -1231,7 +1217,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 		float weights[6];
 		uv = ExtendedMaterials::GetParallaxCoords(input, viewPosition.z, uv, mipLevels, viewDirection, tbnTr, screenNoise, displacementParams, pixelOffset, weights);
-		if (extendedMaterialSettings.EnableComplexMaterial) {
+		if (extendedMaterialSettings.EnableHeightBlending) {
 			input.LandBlendWeights1.x = weights[0];
 			input.LandBlendWeights1.y = weights[1];
 			input.LandBlendWeights1.z = weights[2];
@@ -1239,7 +1225,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			input.LandBlendWeights2.x = weights[4];
 			input.LandBlendWeights2.y = weights[5];
 		}
-		if (extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0f) {
+		if (extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || extendedMaterialSettings.ExtendShadows)) {
 #			if defined(TRUE_PBR)
 			sh0 = ExtendedMaterials::GetTerrainHeight(input, uv, mipLevels, displacementParams, parallaxShadowQuality, input.LandBlendWeights1, input.LandBlendWeights2, weights);
 #			else
@@ -1557,9 +1543,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float4 shadowColor = 1.0;
 	if (PixelShaderDescriptor & _DefShadow && (PixelShaderDescriptor & _ShadowDir) || numShadowLights > 0) {
 		baseShadowUV = input.Position.xy * DynamicResolutionParams2.xy;
-		float2 shadowUV = min(float2(DynamicResolutionParams2.z, DynamicResolutionParams1.y), max(0.0.xx, DynamicResolutionParams1.xy * (baseShadowUV * VPOSOffset.xy + VPOSOffset.zw)));
+		float2 adjustedShadowUV = baseShadowUV * VPOSOffset.xy + VPOSOffset.zw;
+		float2 shadowUV = GetDynamicResolutionAdjustedScreenPosition(adjustedShadowUV);
 		shadowColor = TexShadowMaskSampler.Sample(SampShadowMaskSampler, shadowUV);
 	}
+
+	float projectedMaterialWeight = 0;
 
 	float projWeight = 0;
 
@@ -1592,17 +1581,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float3 projDetailNormal = TexProjDetail.Sample(SampProjDetailSampler, projDetailNormalUv).xyz;
 		float3 finalProjNormal = normalize(TransformNormal(projDetailNormal) * float3(1, 1, projNormal.z) + float3(projNormal.xy, 0));
 		float3 projBaseColor = TexProjDiffuseSampler.Sample(SampProjDiffuseSampler, projNormalDiffuseUv).xyz * ProjectedUVParams2.xyz;
-		float projBlendWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
+		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
 #			if defined(TRUE_PBR)
 		projBaseColor = saturate(EnvmapData.xyz * projBaseColor);
-		rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(ParallaxOccData.x, 0, ParallaxOccData.y), projBlendWeight);
+		rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(ParallaxOccData.x, 0, ParallaxOccData.y), projectedMaterialWeight);
+		float4 projectedGlintParameters = 0;
+		if ((PBRFlags & TruePBR_ProjectedGlint) != 0) {
+			projectedGlintParameters = SparkleParams;
+		}
+		glintParameters = lerp(glintParameters, projectedGlintParameters, projectedMaterialWeight);
 #			endif
-		normal.xyz = lerp(normal.xyz, finalProjNormal, projBlendWeight);
-		baseColor.xyz = lerp(baseColor.xyz, projBaseColor, projBlendWeight);
+		normal.xyz = lerp(normal.xyz, finalProjNormal, projectedMaterialWeight);
+		baseColor.xyz = lerp(baseColor.xyz, projBaseColor, projectedMaterialWeight);
 
 #			if defined(SNOW)
 		useSnowDecalSpecular = true;
-		psout.Parameters.y = GetSnowParameterY(projBlendWeight, baseColor.w);
+		psout.Parameters.y = GetSnowParameterY(projectedMaterialWeight, baseColor.w);
 #			endif  // SNOW
 	} else {
 		if (projWeight > 0) {
@@ -1623,7 +1617,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			endif  // SPECULAR
 #		endif      // SPARKLE
 
-#	elif defined(SNOW) && !defined(TRUE_PBR)
+#	elif defined(SNOW)
 #		if defined(LANDSCAPE)
 	psout.Parameters.y = landSnowMask;
 #		else
@@ -1677,6 +1671,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			pbrSurfaceProperties.SubsurfaceColor *= sampledSubsurfaceProperties.xyz;
 			pbrSurfaceProperties.Thickness *= sampledSubsurfaceProperties.w;
 		}
+		pbrSurfaceProperties.Thickness = lerp(pbrSurfaceProperties.Thickness, 1, projectedMaterialWeight);
 	}
 	else if ((PBRFlags & TruePBR_TwoLayer) != 0)
 	{
@@ -1712,6 +1707,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			}
 #			endif
 		}
+		pbrSurfaceProperties.CoatStrength = lerp(pbrSurfaceProperties.CoatStrength, 0, projectedMaterialWeight);
 	}
 
 	[branch] if ((PBRFlags & TruePBR_Fuzz) != 0)
@@ -1724,6 +1720,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			pbrSurfaceProperties.FuzzColor *= sampledFuzzProperties.xyz;
 			pbrSurfaceProperties.FuzzWeight *= sampledFuzzProperties.w;
 		}
+		pbrSurfaceProperties.FuzzWeight = lerp(pbrSurfaceProperties.FuzzWeight, 0, projectedMaterialWeight);
 	}
 #		endif
 
@@ -2142,7 +2139,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		[branch] if (inWorld && !FrameParams.z && lightLimitFixSettings.EnableContactShadows && shadowComponent != 0.0 && lightAngle > 0.0)
 		{
 			float3 normalizedLightDirectionVS = normalize(light.positionVS[eyeIndex].xyz - viewPosition.xyz);
-			contactShadow = LightLimitFix::ContactShadows(viewPosition, screenNoise, screenNoise3D, normalizedLightDirectionVS, contactShadowSteps, eyeIndex);
+			contactShadow = LightLimitFix::ContactShadows(viewPosition, screenNoise, normalizedLightDirectionVS, contactShadowSteps, eyeIndex);
 		}
 
 		float3 refractedLightDirection = normalizedLightDirection;
@@ -2231,7 +2228,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			CharacterLightParams.y * saturate(dot(float2(0.164398998, -0.986393988), modelNormal.yz));
 		float charLightColor = min(CharacterLightParams.w, max(0, CharacterLightParams.z * TexCharacterLightProjNoiseSampler.Sample(SampCharacterLightProjNoiseSampler, baseShadowUV).x));
 #		if defined(TRUE_PBR)
-		charLightColor = PBR::AdjustPointLightColor(charLightColor);
+		charLightColor = GammaToLinear(charLightColor);
 #		endif
 		diffuseColor += (charLightMul * charLightColor).xxx;
 	}
@@ -2513,8 +2510,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 #	endif  // defined(LOD_LAND_BLEND) && defined(TRUE_PBR)
 
-	color.xyz = max(0, color);  // Black screen fix
-
 #	if !defined(DEFERRED)
 	if (FrameParams.y && FrameParams.z)
 		color.xyz = lerp(color.xyz, input.FogParam.xyz, input.FogParam.w);
@@ -2614,6 +2609,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(SNOW)
 #		if defined(TRUE_PBR)
 	psout.Parameters.x = RGBToLuminanceAlternative(specularColorPBR);
+	psout.Parameters.y = 0;
 #		else
 	psout.Parameters.x = RGBToLuminanceAlternative(lightsSpecularColor);
 #		endif
@@ -2695,7 +2691,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 #		if defined(SSS) && defined(SKIN)
-	psout.Masks = float4(saturate(baseColor.a), !perPassSSS[0].IsBeastRace, 0, psout.Diffuse.w);
+	psout.Masks = float4(saturate(baseColor.a), !(ExtraShaderDescriptor & _IsBeastRace), 0, psout.Diffuse.w);
 #		elif defined(WETNESS_EFFECTS)
 	float wetnessNormalAmount = saturate(dot(float3(0, 0, 1), wetnessNormal) * saturate(flatnessAmount));
 	psout.Masks = float4(0, 0, wetnessNormalAmount, psout.Diffuse.w);

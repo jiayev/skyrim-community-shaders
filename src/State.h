@@ -115,6 +115,7 @@ public:
 	enum class ExtraShaderDescriptors : uint32_t
 	{
 		InWorld = 1 << 0,
+		IsBeastRace = 1 << 1,
 	};
 
 	void UpdateSharedData();

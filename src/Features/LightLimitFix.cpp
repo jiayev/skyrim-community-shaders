@@ -813,11 +813,6 @@ void LightLimitFix::UpdateLights()
 		static float _near = 0.0f, _far = 0.0f, _fov = 0.0f, _lightsNear = 0.0f, _lightsFar = 0.0f;
 		if (fabs(_near - accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear) > 1e-4 || fabs(_far - accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar) > 1e-4 || fabs(_fov - fov) > 1e-4 || fabs(_lightsNear - lightsNear) > 1e-4 || fabs(_lightsFar - lightsFar) > 1e-4) {
 			LightBuildingCB updateData{};
-			updateData.InvProjMatrix[0] = DirectX::XMMatrixInverse(nullptr, projMatrixUnjittered);
-			if (eyeCount == 1)
-				updateData.InvProjMatrix[1] = updateData.InvProjMatrix[0];
-			else
-				updateData.InvProjMatrix[1] = DirectX::XMMatrixInverse(nullptr, Util::GetCameraData(1).projMatrixUnjittered);
 			updateData.LightsNear = lightsNear;
 			updateData.LightsFar = lightsFar;
 

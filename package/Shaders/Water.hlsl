@@ -547,7 +547,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 #			if defined(DYNAMIC_CUBEMAPS)
 #				if defined(SKYLIGHTING)
 #					if defined(VR)
-			float3 positionMSSkylight = input.WPosition.xyz + CameraPosAdjust[eyeIndex].xyz - CameraPosAdjust[0].xyz;
+			float3 positionMSSkylight = input.WPosition.xyz + CameraPosAdjust[a_eyeIndex].xyz - CameraPosAdjust[0].xyz;
 #					else
 			float3 positionMSSkylight = input.WPosition.xyz;
 #					endif
@@ -702,7 +702,7 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 		float3 skylightingPosition = lerp(input.WPosition.xyz, refractionWorldPosition.xyz, noise);
 
 #					if defined(VR)
-		float3 positionMSSkylight = skylightingPosition + CameraPosAdjust[eyeIndex].xyz - CameraPosAdjust[0].xyz;
+		float3 positionMSSkylight = skylightingPosition + CameraPosAdjust[a_eyeIndex].xyz - CameraPosAdjust[0].xyz;
 #					else
 		float3 positionMSSkylight = skylightingPosition;
 #					endif

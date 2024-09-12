@@ -215,7 +215,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float dirShadow = 1;
 
 #			if defined(SCREEN_SPACE_SHADOWS)
-	dirShadow = lerp(0.5, 1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position, screenUV, screenNoise, viewPosition, eyeIndex));
+	dirShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position, screenUV, screenNoise, viewPosition, eyeIndex);
 #			endif
 
 #			if defined(TERRA_OCC)
@@ -252,7 +252,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Normal.xy = EncodeNormal(WorldToView(normal, false, eyeIndex));
 	psout.Normal.zw = 0;
 
-	psout.Albedo = float4(baseColor.xyz * 0.5, 1);
+	psout.Albedo = float4(baseColor.xyz, 1);
 	psout.Masks = float4(0, 0, 1, 0);
 #		else
 	float3 ddx = ddx_coarse(input.WorldPosition);

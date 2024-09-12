@@ -161,8 +161,6 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 
 #endif
 
-	color = max(0, color);  // Black screen fix
-
 	MainRW[dispatchID.xy] = min(color, 250);  // Vanilla bloom fix
 	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = half4(EncodeNormalVanilla(normalVS), 0.0, 0.0);
 	SnowParametersRW[dispatchID.xy] = snowParameters;

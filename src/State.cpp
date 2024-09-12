@@ -44,8 +44,6 @@ void State::Draw()
 					// Only check against non-shader bits
 					currentPixelDescriptor &= ~modifiedPixelDescriptor;
 
-					currentExtraDescriptor = 0;
-
 					if (auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator()) {
 						// Set an unused bit to indicate if we are rendering an object in the main rendering pass
 						if (accumulator->GetRuntimeData().activeShadowSceneNode == RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0]) {
@@ -65,6 +63,8 @@ void State::Draw()
 						lastPixelDescriptor = currentPixelDescriptor;
 						lastExtraDescriptor = currentExtraDescriptor;
 					}
+
+					currentExtraDescriptor = 0;
 
 					static Util::FrameChecker frameChecker;
 					if (frameChecker.isNewFrame()) {
@@ -141,8 +141,6 @@ void State::Load(ConfigMode a_configMode)
 		if (!i.is_open()) {
 			logger::info("No default config ({}), generating new one", configPath);
 			std::fill(enabledClasses, enabledClasses + RE::BSShader::Type::Total - 1, true);
-			enabledClasses[RE::BSShader::Type::ImageSpace - 1] = false;
-			enabledClasses[RE::BSShader::Type::Utility - 1] = false;
 			Save(configMode);
 			i.open(configPath);
 			if (!i.is_open()) {

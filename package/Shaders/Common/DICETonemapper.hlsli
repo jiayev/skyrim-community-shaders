@@ -131,17 +131,8 @@ float3 ApplyHuePreservingShoulder(float3 col, float linearSegmentEnd = 0.25)
 	float saturationAmount = pow(smoothstep(1.0, 0.3, ictcp.x), 1.3);
 	col = ICtCpToRGB(ictcp * float3(1, saturationAmount.xx));
 
-	// Hue-preserving mapping
-	float maxCol = max(col.x, max(col.y, col.z));
-	float mappedMax = RangeCompress(maxCol, linearSegmentEnd);
-	float3 compressedHuePreserving = col * mappedMax / maxCol;
-
 	// Non-hue preserving mapping
-	float3 perChannelCompressed = RangeCompress(col, linearSegmentEnd);
-
-	// Combine hue-preserving and non-hue-preserving colors. Absolute hue preservation looks unnatural, as bright colors *appear* to have been hue shifted.
-	// Actually doing some amount of hue shifting looks more pleasing
-	col = lerp(perChannelCompressed, compressedHuePreserving, 0.6);
+	col = RangeCompress(col, linearSegmentEnd);
 
 	float3 ictcpMapped = RGBToICtCp(col);
 

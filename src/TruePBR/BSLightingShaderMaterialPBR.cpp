@@ -3,7 +3,9 @@
 #include "TruePBR.h"
 
 BSLightingShaderMaterialPBR::~BSLightingShaderMaterialPBR()
-{}
+{
+	All.erase(this);
+}
 
 BSLightingShaderMaterialPBR* BSLightingShaderMaterialPBR::Make()
 {
@@ -31,12 +33,15 @@ void BSLightingShaderMaterialPBR::CopyMembers(RE::BSShaderMaterial* that)
 	projectedMaterialBaseColorScale = pbrThat->projectedMaterialBaseColorScale;
 	projectedMaterialRoughness = pbrThat->projectedMaterialRoughness;
 	projectedMaterialSpecularLevel = pbrThat->projectedMaterialSpecularLevel;
+	projectedMaterialGlintParameters = pbrThat->projectedMaterialGlintParameters;
 
 	rmaosTexture = pbrThat->rmaosTexture;
 	emissiveTexture = pbrThat->emissiveTexture;
 	displacementTexture = pbrThat->displacementTexture;
 	featuresTexture0 = pbrThat->featuresTexture0;
 	featuresTexture1 = pbrThat->featuresTexture1;
+
+	All[this] = All[pbrThat];
 }
 
 std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)
@@ -55,6 +60,10 @@ std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)
 		std::array<float, 3> projectedMaterialBaseColorScale = { 0.f, 0.f, 0.f };
 		float projectedMaterialRoughness = 0.f;
 		float projectedMaterialSpecularLevel = 0.f;
+		float projectedMaterialScreenSpaceScale = 0.f;
+		float projectedMaterialLogMicrofacetDensity = 0.f;
+		float projectedMaterialMicrofacetRoughness = 0.f;
+		float projectedMaterialDensityRandomization = 0.f;
 		uint32_t rmaodHash = 0;
 		uint32_t emissiveHash = 0;
 		uint32_t displacementHash = 0;
@@ -79,6 +88,10 @@ std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)
 	hashes.projectedMaterialBaseColorScale[2] = projectedMaterialBaseColorScale[2] * 100.f;
 	hashes.projectedMaterialRoughness = projectedMaterialRoughness * 100.f;
 	hashes.projectedMaterialSpecularLevel = projectedMaterialSpecularLevel * 100.f;
+	hashes.projectedMaterialScreenSpaceScale = projectedMaterialGlintParameters.screenSpaceScale * 100.f;
+	hashes.projectedMaterialLogMicrofacetDensity = projectedMaterialGlintParameters.logMicrofacetDensity * 100.f;
+	hashes.projectedMaterialMicrofacetRoughness = projectedMaterialGlintParameters.microfacetRoughness * 100.f;
+	hashes.projectedMaterialDensityRandomization = projectedMaterialGlintParameters.densityRandomization * 100.f;
 	if (textureSet != nullptr) {
 		hashes.rmaodHash = RE::BSCRC32<const char*>()(textureSet->GetTexturePath(RmaosTexture));
 		hashes.emissiveHash = RE::BSCRC32<const char*>()(textureSet->GetTexturePath(EmissiveTexture));
@@ -96,6 +109,40 @@ RE::BSShaderMaterial::Feature BSLightingShaderMaterialPBR::GetFeature() const
 {
 	return RE::BSShaderMaterial::Feature::kDefault;
 	//return FEATURE;
+}
+
+void BSLightingShaderMaterialPBR::ApplyTextureSetData(const TruePBR::PBRTextureSetData& textureSetData)
+{
+	specularColorScale = textureSetData.roughnessScale;
+	specularPower = textureSetData.specularLevel;
+	rimLightPower = textureSetData.displacementScale;
+
+	if (pbrFlags.any(PBRFlags::TwoLayer)) {
+		specularColor = textureSetData.coatColor;
+		subSurfaceLightRolloff = textureSetData.coatStrength;
+		coatRoughness = textureSetData.coatRoughness;
+		coatSpecularLevel = textureSetData.coatSpecularLevel;
+	} else {
+		if (pbrFlags.any(PBRFlags::Subsurface)) {
+			specularColor = textureSetData.subsurfaceColor;
+			subSurfaceLightRolloff = textureSetData.subsurfaceOpacity;
+		}
+
+		if (pbrFlags.any(PBRFlags::Fuzz)) {
+			fuzzColor = textureSetData.fuzzColor;
+			fuzzWeight = textureSetData.fuzzWeight;
+		}
+	}
+
+	glintParameters = textureSetData.glintParameters;
+}
+
+void BSLightingShaderMaterialPBR::ApplyMaterialObjectData(const TruePBR::PBRMaterialObjectData& materialObjectData)
+{
+	projectedMaterialBaseColorScale = materialObjectData.baseColorScale;
+	projectedMaterialRoughness = materialObjectData.roughness;
+	projectedMaterialSpecularLevel = materialObjectData.specularLevel;
+	projectedMaterialGlintParameters = materialObjectData.glintParameters;
 }
 
 void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTextureSet* inTextureSet)
@@ -121,32 +168,14 @@ void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTex
 			textureSet->SetTexture(FeaturesTexture0, featuresTexture0);
 			textureSet->SetTexture(FeaturesTexture1, featuresTexture1);
 
-			if (auto* bgsTextureSet = netimmerse_cast<RE::BGSTextureSet*>(inTextureSet); bgsTextureSet != nullptr) {
+			auto* bgsTextureSet = TruePBR::GetSingleton()->currentTextureSet;
+			if (bgsTextureSet == nullptr) {
+				bgsTextureSet = skyrim_cast<RE::BGSTextureSet*>(inTextureSet);
+			}
+			if (bgsTextureSet) {
 				if (auto* textureSetData = TruePBR::GetSingleton()->GetPBRTextureSetData(bgsTextureSet)) {
-					specularColorScale = textureSetData->roughnessScale;
-					specularPower = textureSetData->specularLevel;
-					rimLightPower = textureSetData->displacementScale;
-
-					if (pbrFlags.any(PBRFlags::TwoLayer)) {
-						specularColor = textureSetData->coatColor;
-						subSurfaceLightRolloff = textureSetData->coatStrength;
-						coatRoughness = textureSetData->coatRoughness;
-						coatSpecularLevel = textureSetData->coatSpecularLevel;
-					} else {
-						if (pbrFlags.any(PBRFlags::Subsurface)) {
-							specularColor = textureSetData->subsurfaceColor;
-							subSurfaceLightRolloff = textureSetData->subsurfaceOpacity;
-						}
-
-						if (pbrFlags.any(PBRFlags::Fuzz)) {
-							fuzzColor = textureSetData->fuzzColor;
-							fuzzWeight = textureSetData->fuzzWeight;
-						}
-					}
-
-					if (pbrFlags.any(PBRFlags::Glint)) {
-						glintParameters = textureSetData->glintParameters;
-					}
+					ApplyTextureSetData(*textureSetData);
+					All[this].textureSetData = textureSetData;
 				}
 			}
 		}
@@ -309,6 +338,11 @@ float BSLightingShaderMaterialPBR::GetProjectedMaterialRoughness() const
 float BSLightingShaderMaterialPBR::GetProjectedMaterialSpecularLevel() const
 {
 	return projectedMaterialSpecularLevel;
+}
+
+const GlintParameters& BSLightingShaderMaterialPBR::GetProjectedMaterialGlintParameters() const
+{
+	return projectedMaterialGlintParameters;
 }
 
 const RE::NiColor& BSLightingShaderMaterialPBR::GetFuzzColor() const

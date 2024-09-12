@@ -19,17 +19,18 @@ struct PerGeometry
 
 StructuredBuffer<PerGeometry> SharedPerShadow : register(t26);
 
+float GetShadowDepth(float3 positionWS, uint eyeIndex)
+{
+	float4 positionCSShifted = mul(CameraViewProj[eyeIndex], float4(positionWS, 1));
+	return positionCSShifted.z / positionCSShifted.w;
+}
+
 float3 Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 screenPosition, uint eyeIndex)
 {
 	PerGeometry sD = SharedPerShadow[0];
-	sD.EndSplitDistances.x = GetScreenDepth(sD.EndSplitDistances.x);
-	sD.EndSplitDistances.z = GetScreenDepth(sD.EndSplitDistances.z);
-	sD.StartSplitDistances.y = GetScreenDepth(sD.StartSplitDistances.y);
 
-	float shadowMapDepth = length(positionWS.xyz);
-
-	float fadeFactor = 1.0 - pow(saturate(dot(positionWS.xyz, positionWS.xyz) / sD.ShadowLightParam.z), 8);
-	uint sampleCount = ceil(8.0 * (1.0 - saturate(shadowMapDepth / sqrt(sD.ShadowLightParam.z))));
+	float fadeFactor = 1.0 - pow(saturate(dot(positionWS, positionWS) / sD.ShadowLightParam.z), 8);
+	uint sampleCount = ceil(8.0 * (1.0 - saturate(length(positionWS) / sqrt(sD.ShadowLightParam.z))));
 
 	if (sampleCount == 0)
 		return 1.0;
@@ -43,9 +44,8 @@ float3 Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 scree
 	compareValue.y = mul(transpose(sD.ShadowMapProj[eyeIndex][1]), float4(positionWS, 1)).z;
 
 	float shadow = 0.0;
-	[unroll] for (int i = 0; i < sampleCount; i++)
-	{
-		if (sD.EndSplitDistances.z >= shadowMapDepth) {
+	if (sD.EndSplitDistances.z >= GetShadowDepth(positionWS, eyeIndex)) {
+		for (int i = 0; i < sampleCount; i++) {
 			float3 rnd = R3Modified(i + FrameCount * sampleCount, seed / 4294967295.f);
 
 			// https://stats.stackexchange.com/questions/8021/how-to-generate-uniformly-distributed-points-in-the-3-d-unit-ball
@@ -58,14 +58,14 @@ float3 Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 scree
 			float3 sampleOffset = viewDirection * i * 256 * rcpSampleCount;
 			sampleOffset += float3(r * sin_theta * sincos_phi.x, r * sin_theta * sincos_phi.y, r * cos_theta) * 32;
 
-			uint cascadeIndex = (sD.EndSplitDistances.x < shadowMapDepth + dot(sampleOffset, float2(1, 1)));  // Stochastic cascade sampling
+			uint cascadeIndex = sD.EndSplitDistances.x < GetShadowDepth(positionWS.xyz + viewDirection * dot(sampleOffset, float2(1, 1)), eyeIndex);  // Stochastic cascade sampling
 			float3 positionLS = mul(transpose(sD.ShadowMapProj[eyeIndex][cascadeIndex]), float4(positionWS + sampleOffset, 1));
 
 			float4 depths = SharedTexShadowMapSampler.GatherRed(LinearSampler, float3(saturate(positionLS.xy), cascadeIndex), 0);
 			shadow += dot(depths > compareValue[cascadeIndex], 0.25);
-		} else {
-			shadow++;
 		}
+	} else {
+		shadow = 1.0;
 	}
 
 	return lerp(1.0, shadow * rcpSampleCount, fadeFactor);
@@ -100,10 +100,7 @@ float3 Get2DFilteredShadow(float noise, float2x2 rotationMatrix, float3 position
 {
 	PerGeometry sD = SharedPerShadow[0];
 
-	float4 positionCSShifted = mul(transpose(CameraViewProj[eyeIndex]), float4(positionWS, 1));
-	positionCSShifted /= positionCSShifted.w;
-
-	float shadowMapDepth = positionCSShifted.z;
+	float shadowMapDepth = GetShadowDepth(positionWS, eyeIndex);
 
 	if (sD.EndSplitDistances.z >= shadowMapDepth) {
 		float fadeFactor = 1 - pow(saturate(dot(positionWS.xyz, positionWS.xyz) / sD.ShadowLightParam.z), 8);

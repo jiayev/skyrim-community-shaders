@@ -372,20 +372,20 @@ float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatri
 #	endif
 {
 	const int sampleCount = 8;
-#	if defined(RENDER_SHADOWMASK)
-	compareValue += 0.001 * (1.0 + layerIndex);
-#	else
-	compareValue += 0.001;
-#	endif
 
-	float layerIndexRcp = rcp(1 + layerIndex);
+#	if defined(RENDER_SHADOWMASK)
+	uint onePlusLayerIndex = 1.0 + layerIndex;
+	compareValue += 0.002 * onePlusLayerIndex;
+	float layerIndexRcp = rcp(onePlusLayerIndex);
+#	endif
 
 	float visibility = 0;
 	for (int sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
 		float2 sampleOffset = mul(SpiralSampleOffsets8[sampleIndex], rotationMatrix);
+		sampleOffset *= 1.5;
 
 #	if defined(RENDER_SHADOWMASKDPB)
-		float2 sampleUV = sampleOffset * 2 + baseUV;  // Replaced radius parameter to fix sharpness
+		float2 sampleUV = sampleOffset + baseUV;
 
 		baseUV.z += noise;
 
@@ -401,10 +401,10 @@ float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatri
 
 #	elif defined(RENDER_SHADOWMASK)
 		float2 sampleUV = layerIndexRcp * sampleOffset * ShadowSampleParam.z + baseUV;
-		visibility += tex.SampleCmpLevelZero(samp, float3(sampleUV, layerIndex), compareValue + noise * 0.001).x;
+		visibility += tex.SampleCmpLevelZero(samp, float3(sampleUV, layerIndex), compareValue).x;
 #	else
 		float2 sampleUV = sampleOffset * ShadowSampleParam.z + baseUV;
-		visibility += tex.SampleCmpLevelZero(samp, float3(sampleUV, layerIndex), compareValue + noise * 0.001).x;
+		visibility += tex.SampleCmpLevelZero(samp, float3(sampleUV, layerIndex), compareValue).x;
 #	endif
 	}
 	return visibility * rcp((float)sampleCount);
@@ -528,8 +528,8 @@ PS_OUTPUT main(PS_INPUT input)
 	TexStencilSampler.GetDimensions(0, stencilDimensions.x, stencilDimensions.y, stencilDimensions.z);
 	stencilValue = TexStencilSampler.Load(float3(stencilDimensions.xy * depthUv, 0)).x;
 #			endif
-	depthUv = ConvertFromStereoUV(depthUv, eyeIndex);
-	float4 positionCS = float4(2 * float2(DynamicResolutionParams2.x * depthUv.x, -depthUv.y * DynamicResolutionParams2.y + 1) - 1, depth, 1);
+	depthUv = ConvertFromStereoUV(depthUv * DynamicResolutionParams2, eyeIndex);
+	float4 positionCS = float4(2 * float2(depthUv.x, -depthUv.y + 1) - 1, depth, 1);
 	float4 positionMS = mul(CameraViewProjInverse[eyeIndex], positionCS);
 	positionMS.xyz = positionMS.xyz / positionMS.w;
 

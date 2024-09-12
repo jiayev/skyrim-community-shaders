@@ -4,10 +4,12 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ExtendedMaterials::Settings,
+	EnableComplexMaterial,
 	EnableParallax,
 	EnableTerrain,
-	EnableComplexMaterial,
-	EnableShadows)
+	EnableHeightBlending,
+	EnableShadows,
+	ExtendShadows)
 
 void ExtendedMaterials::DataLoaded()
 {
@@ -53,6 +55,10 @@ void ExtendedMaterials::DrawSettings()
 				"Enables terrain parallax using the alpha channel of each landscape texture. "
 				"Therefore, all landscape textures must support parallax for this effect to work properly. ");
 		}
+		ImGui::Checkbox("Enable Terrain Height Blending", (bool*)&settings.EnableHeightBlending);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Enables landscape texture blending based on parallax. ");
+		}
 
 		ImGui::Spacing();
 		ImGui::Spacing();
@@ -65,6 +71,11 @@ void ExtendedMaterials::DrawSettings()
 			ImGui::Text(
 				"Enables cheap soft shadows when using parallax. "
 				"This applies to all directional and point lights. ");
+		}
+		ImGui::Checkbox("Extend Shadows", (bool*)&settings.ExtendShadows);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Extends parallax shadows beyond the range of parallax. Small performance impact.");
 		}
 
 		ImGui::Spacing();

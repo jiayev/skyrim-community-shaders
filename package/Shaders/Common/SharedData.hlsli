@@ -36,7 +36,10 @@ struct CPMSettings
 	bool EnableComplexMaterial;
 	bool EnableParallax;
 	bool EnableTerrainParallax;
+	bool EnableHeightBlending;
 	bool EnableShadows;
+	bool ExtendShadows;
+	float2 pad0;
 };
 
 struct CubemapCreatorSettings
@@ -136,13 +139,9 @@ struct SkylightingSettings
 
 struct PBRSettings
 {
-	float DirectionalLightColorMultiplier;
-	float PointLightColorMultiplier;
-	float AmbientLightColorMultiplier;
-	float BaseColorGamma;
 	uint UseMultipleScattering;
 	uint UseMultiBounceAO;
-	uint3 pad0;
+	uint2 pad0;
 };
 
 cbuffer FeatureData : register(b6)

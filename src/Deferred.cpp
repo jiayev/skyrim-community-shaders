@@ -340,6 +340,15 @@ void Deferred::StartDeferred()
 
 	deferredPass = true;
 
+	{
+		auto& context = State::GetSingleton()->context;
+
+		static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
+		ID3D11Buffer* buffers[1] = { *perFrame.get() };
+
+		context->CSSetConstantBuffers(12, 1, buffers);
+	}
+
 	PrepassPasses();
 }
 

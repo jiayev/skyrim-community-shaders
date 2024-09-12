@@ -54,10 +54,9 @@ public:
 
 	struct alignas(16) LightBuildingCB
 	{
-		float4x4 InvProjMatrix[2];
 		float LightsNear;
 		float LightsFar;
-		float pad[2];
+		uint pad0[2];
 	};
 
 	struct alignas(16) LightCullingCB
