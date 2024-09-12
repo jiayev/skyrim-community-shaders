@@ -179,14 +179,14 @@ namespace ExtendedMaterials
 #if defined(LANDSCAPE)
 // When CPM flag is disabled, will use linear blending as before.
 #	if defined(TRUE_PBR)
-		float blendFactor = extendedMaterialSettings.EnableComplexMaterial ? sqrt(saturate(1 - nearBlendToFar)) : 0;
+		float blendFactor = extendedMaterialSettings.EnableHeightBlending ? sqrt(saturate(1 - nearBlendToFar)) : 0;
 		float4 w1 = lerp(input.LandBlendWeights1, smoothstep(0, 1, input.LandBlendWeights1), blendFactor);
 		float2 w2 = lerp(input.LandBlendWeights2.xy, smoothstep(0, 1, input.LandBlendWeights2.xy), blendFactor);
 		float scale = max(params[0].HeightScale * w1.x, max(params[1].HeightScale * w1.y, max(params[2].HeightScale * w1.z, max(params[3].HeightScale * w1.w, max(params[4].HeightScale * w2.x, params[5].HeightScale * w2.y)))));
 		float scalercp = rcp(scale);
 		float maxHeight = 0.1 * scale;
 #	else
-		float blendFactor = extendedMaterialSettings.EnableComplexMaterial ? saturate(1 - nearBlendToFar) : INV_HEIGHT_POWER;
+		float blendFactor = extendedMaterialSettings.EnableHeightBlending ? saturate(1 - nearBlendToFar) : INV_HEIGHT_POWER;
 		float scale = 1;
 		float maxHeight = 0.1 * scale;
 #	endif
@@ -311,21 +311,29 @@ namespace ExtendedMaterials
 		return coords;
 	}
 
-	// https://advances.realtimerendering.com/s2006/Tatarchuk-POM.pdf
+#if defined(TRUE_PBR)
+	static const float shadowIntensity = 1.0;
+#else
+	static const float shadowIntensity = 2.0;
+#endif
 
+	// https://advances.realtimerendering.com/s2006/Tatarchuk-POM.pdf
 	// Cheap method of creating shadows using height for a given light source
 	float GetParallaxSoftShadowMultiplier(float2 coords, float mipLevel, float3 L, float sh0, Texture2D<float4> tex, SamplerState texSampler, uint channel, float quality, float noise, DisplacementParams params)
 	{
-		[branch] if (quality > 0.0)
+		[branch] if (quality > 0.0 || extendedMaterialSettings.ExtendShadows)
 		{
-			float2 rayDir = L.xy * 0.1;
-			float4 multipliers = rcp((float4(4, 3, 2, 1) + noise));
+			float2 rayDir = L.xy * 0.1 * params.HeightScale;
+			float4 multipliers = rcp((float4(1, 2, 3, 4) + noise));
 			float4 sh;
-			sh.x = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.x, mipLevel)[channel], params);
-			sh.y = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.y, mipLevel)[channel], params);
-			sh.z = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.z, mipLevel)[channel], params);
-			sh.w = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.w, mipLevel)[channel], params);
-			return 1.0 - saturate(dot(max(0, sh - sh0), 1.0) * params.HeightScale * 2.0) * quality;
+			sh = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.x, mipLevel)[channel], params);
+			if (quality > 0.25)
+				sh.y = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.y, mipLevel)[channel], params);
+			if (quality > 0.5)
+				sh.z = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.z, mipLevel)[channel], params);
+			if (quality > 0.75)
+				sh.w = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.w, mipLevel)[channel], params);
+			return 1.0 - saturate(dot(max(0, sh - sh0), 1.0) * shadowIntensity) * lerp(quality, 1.0, extendedMaterialSettings.ExtendShadows);
 		}
 		return 1.0;
 	}
@@ -333,23 +341,37 @@ namespace ExtendedMaterials
 #if defined(LANDSCAPE)
 	float GetParallaxSoftShadowMultiplierTerrain(PS_INPUT input, float2 coords, float mipLevel[6], float3 L, float sh0, float quality, float noise, DisplacementParams params[6])
 	{
+#	if defined(TRUE_PBR)
+		if (quality > 0.0 || extendedMaterialSettings.ExtendShadows) {
+#	else
 		if (quality > 0.0) {
+#	endif
 			float2 rayDir = L.xy * 0.1;
-			float4 multipliers = rcp((float4(4, 3, 2, 1) + noise));
+			float4 multipliers = rcp((float4(1, 2, 3, 4) + noise));
 			float4 sh;
 			float heights[6] = { 0, 0, 0, 0, 0, 0 };
 #	if defined(TRUE_PBR)
-			sh.x = GetTerrainHeight(input, coords + rayDir * multipliers.x, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2, heights);
-			sh.y = GetTerrainHeight(input, coords + rayDir * multipliers.y, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2, heights);
-			sh.z = GetTerrainHeight(input, coords + rayDir * multipliers.z, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2, heights);
-			sh.w = GetTerrainHeight(input, coords + rayDir * multipliers.w, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2, heights);
+			float scale = max(params[0].HeightScale * input.LandBlendWeights1.x, max(params[1].HeightScale * input.LandBlendWeights1.y, max(params[2].HeightScale * input.LandBlendWeights1.z,
+																																			max(params[3].HeightScale * input.LandBlendWeights1.w, max(params[4].HeightScale * input.LandBlendWeights2.x, params[5].HeightScale * input.LandBlendWeights2.y)))));
+			rayDir *= scale;
+			sh = GetTerrainHeight(input, coords + rayDir * multipliers.x, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2, heights);
+			if (quality > 0.25)
+				sh.y = GetTerrainHeight(input, coords + rayDir * multipliers.y, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2, heights);
+			if (quality > 0.5)
+				sh.z = GetTerrainHeight(input, coords + rayDir * multipliers.z, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2, heights);
+			if (quality > 0.75)
+				sh.w = GetTerrainHeight(input, coords + rayDir * multipliers.w, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2, heights);
+			return 1.0 - saturate(dot(max(0, sh - sh0), 1.0) * shadowIntensity) * lerp(quality, 1.0, extendedMaterialSettings.ExtendShadows);
 #	else
-			sh.x = GetTerrainHeight(input, coords + rayDir * multipliers.x, mipLevel, params, quality, heights);
-			sh.y = GetTerrainHeight(input, coords + rayDir * multipliers.y, mipLevel, params, quality, heights);
-			sh.z = GetTerrainHeight(input, coords + rayDir * multipliers.z, mipLevel, params, quality, heights);
-			sh.w = GetTerrainHeight(input, coords + rayDir * multipliers.w, mipLevel, params, quality, heights);
+			sh = GetTerrainHeight(input, coords + rayDir * multipliers.x, mipLevel, params, quality, heights);
+			if (quality > 0.25)
+				sh.y = GetTerrainHeight(input, coords + rayDir * multipliers.y, mipLevel, params, quality, heights);
+			if (quality > 0.5)
+				sh.z = GetTerrainHeight(input, coords + rayDir * multipliers.z, mipLevel, params, quality, heights);
+			if (quality > 0.75)
+				sh.w = GetTerrainHeight(input, coords + rayDir * multipliers.w, mipLevel, params, quality, heights);
+			return 1.0 - saturate(dot(max(0, sh - sh0), 1.0) * shadowIntensity) * quality;
 #	endif
-			return 1.0 - saturate(dot(max(0, sh - sh0), 1.0) * 2.0) * quality;
 		}
 		return 1.0;
 	}

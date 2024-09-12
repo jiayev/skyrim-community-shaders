@@ -1,10 +1,11 @@
+#include "../Common/FrameBuffer.hlsli"
 #include "Common.hlsli"
 
 cbuffer PerFrame : register(b0)
 {
-	row_major float4x4 InvProjMatrix[2];
 	float LightsNear;
 	float LightsFar;
+	uint b0pad0[2];
 }
 
 float3 GetPositionVS(float2 texcoord, float depth, int eyeIndex = 0)
@@ -14,7 +15,7 @@ float3 GetPositionVS(float2 texcoord, float depth, int eyeIndex = 0)
 	clipSpaceLocation.y *= -1;
 	clipSpaceLocation.z = depth;
 	clipSpaceLocation.w = 1.0f;
-	float4 homogenousLocation = mul(clipSpaceLocation, InvProjMatrix[eyeIndex]);
+	float4 homogenousLocation = mul(clipSpaceLocation, CameraProjUnjitteredInverse[eyeIndex]);
 	return homogenousLocation.xyz / homogenousLocation.w;
 }
 

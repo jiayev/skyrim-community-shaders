@@ -54,7 +54,7 @@ namespace LightLimitFix
 		return IsSaturated(value.x) && IsSaturated(value.y);
 	}
 
-	float ContactShadows(float3 viewPosition, float noise2D, float3 noise3D, float3 lightDirectionVS, uint contactShadowSteps, uint a_eyeIndex = 0)
+	float ContactShadows(float3 viewPosition, float noise2D, float3 lightDirectionVS, uint contactShadowSteps, uint a_eyeIndex = 0)
 	{
 		if (contactShadowSteps == 0)
 			return 1.0;
@@ -66,9 +66,6 @@ namespace LightLimitFix
 
 		// Offset starting position with interleaved gradient noise
 		viewPosition += lightDirectionVS * noise2D;
-
-		// Offset starting position to simulate gaussian blur
-		viewPosition += noise3D;
 
 		// Accumulate samples
 		float contactShadow = 0.0;
@@ -91,7 +88,7 @@ namespace LightLimitFix
 				contactShadow += saturate(depthDelta * depthDeltaMult.x) - saturate(depthDelta * depthDeltaMult.y);
 		}
 
-		return 1.0 - saturate(contactShadow);
+		return 1.0 - saturate(contactShadow * 0.5);
 	}
 
 	// Copyright 2019 Google LLC.

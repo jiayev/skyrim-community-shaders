@@ -1631,19 +1631,19 @@ namespace SIE
 				{ "BSImageSpaceShaderVolumetricLighting",
 					static_cast<uint32_t>(ISVolumetricLighting) },
 				{ "BSImagespaceShaderHDRDownSample4", static_cast<uint32_t>(ISHDRDownSample4) },
-				// { "BSImagespaceShaderHDRDownSample4LightAdapt",
-				// 	static_cast<uint32_t>(ISHDRDownSample4LightAdapt) },
-				// { "BSImagespaceShaderHDRDownSample4LumClamp",
-				// 	static_cast<uint32_t>(ISHDRDownSample4LumClamp) },
+				{ "BSImagespaceShaderHDRDownSample4LightAdapt",
+					static_cast<uint32_t>(ISHDRDownSample4LightAdapt) },
+				{ "BSImagespaceShaderHDRDownSample4LumClamp",
+					static_cast<uint32_t>(ISHDRDownSample4LumClamp) },
 				{ "BSImagespaceShaderHDRDownSample4RGB2Lum",
 					static_cast<uint32_t>(ISHDRDownSample4RGB2Lum) },
 				{ "BSImagespaceShaderHDRDownSample16", static_cast<uint32_t>(ISHDRDownSample16) },
-				// { "BSImagespaceShaderHDRDownSample16LightAdapt",
-				// 	static_cast<uint32_t>(ISHDRDownSample16LightAdapt) },
+				{ "BSImagespaceShaderHDRDownSample16LightAdapt",
+					static_cast<uint32_t>(ISHDRDownSample16LightAdapt) },
 				{ "BSImagespaceShaderHDRDownSample16Lum",
 					static_cast<uint32_t>(ISHDRDownSample16Lum) },
-				// { "BSImagespaceShaderHDRDownSample16LumClamp",
-				// 	static_cast<uint32_t>(ISHDRDownSample16LumClamp) },
+				{ "BSImagespaceShaderHDRDownSample16LumClamp",
+					static_cast<uint32_t>(ISHDRDownSample16LumClamp) },
 				{ "BSImagespaceShaderHDRTonemapBlendCinematic",
 					static_cast<uint32_t>(ISHDRTonemapBlendCinematic) },
 				{ "BSImagespaceShaderHDRTonemapBlendCinematicFade",
@@ -1716,13 +1716,6 @@ namespace SIE
 	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (shader.shaderType.get() == RE::BSShader::Type::Effect) {
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Lighting)) {
-			} else {
-				return nullptr;
-			}
-		}
-
 		if (shader.shaderType == RE::BSShader::Type::ImageSpace) {
 			const auto& isShader = static_cast<const RE::BSImagespaceShader&>(shader);
 			if (!SShaderCache::GetImagespaceShaderDescriptor(isShader, descriptor)) {
@@ -1765,13 +1758,6 @@ namespace SIE
 	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
-		if (shader.shaderType.get() == RE::BSShader::Type::Effect) {
-			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Lighting)) {
-			} else {
-				return nullptr;
-			}
-		}
-
 		auto state = State::GetSingleton();
 		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)) && state->enablePShaders)) {
 			return nullptr;

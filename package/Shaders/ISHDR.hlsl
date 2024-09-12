@@ -81,6 +81,7 @@ PS_OUTPUT main(PS_INPUT input)
 			sign(adaptDelta) * clamp(abs(Param.wz * adaptDelta), 0.00390625, abs(adaptDelta)) +
 			adaptValue;
 	}
+	downsampledColor = max(asfloat(0x00800000), downsampledColor);  // Black screen fix
 #		endif
 	psout.Color = float4(downsampledColor, BlurScale.z);
 
@@ -127,16 +128,14 @@ PS_OUTPUT main(PS_INPUT input)
 		ppColor = max(0, linearColor);
 	}
 
-	ppColor = GammaToLinear(ppColor);
-
 	// HDR tonemapping
-	float3 linearColor = max(0, ApplyHuePreservingShoulder(ppColor, 1.0 - smoothstep(0.6, 1.4, FrameParams.x)));
-
-	float3 srgbColor = LinearToGamma(linearColor);
+	float3 srgbColor = ApplyHuePreservingShoulder(ppColor, 0.5);
 
 #		if defined(FADE)
 	srgbColor = lerp(srgbColor, Fade.xyz, Fade.w);
 #		endif
+
+	srgbColor = ToSRGBColor(srgbColor);
 
 	psout.Color = float4(srgbColor, 1.0);
 

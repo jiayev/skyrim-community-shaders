@@ -10,6 +10,7 @@
 #define TruePBR_Fuzz (1 << 9)
 #define TruePBR_HairMarschner (1 << 10)
 #define TruePBR_Glint (1 << 11)
+#define TruePBR_ProjectedGlint (1 << 12)
 
 #define TruePBR_LandTile0PBR (1 << 0)
 #define TruePBR_LandTile1PBR (1 << 1)
@@ -104,21 +105,6 @@ namespace PBR
 			result.LinearCoatLightColor = result.LinearLightColor;
 		}
 		return result;
-	}
-
-	float3 AdjustDirectionalLightColor(float3 lightColor)
-	{
-		return pbrSettings.DirectionalLightColorMultiplier * GammaToLinear(lightColor);
-	}
-
-	float3 AdjustPointLightColor(float3 lightColor)
-	{
-		return pbrSettings.PointLightColorMultiplier * GammaToLinear(lightColor);
-	}
-
-	float3 AdjustAmbientLightColor(float3 lightColor)
-	{
-		return pbrSettings.AmbientLightColorMultiplier * GammaToLinear(lightColor);
 	}
 
 	// [Jimenez et al. 2016, "Practical Realtime Strategies for Accurate Indirect Occlusion"]
@@ -469,7 +455,7 @@ namespace PBR
 				float forwardScatter = exp2(saturate(-VdotL) * subsurfacePower - subsurfacePower);
 				float backScatter = saturate(satNdotL * surfaceProperties.Thickness + (1.0 - surfaceProperties.Thickness)) * 0.5;
 				float subsurface = lerp(backScatter, 1, forwardScatter) * (1.0 - surfaceProperties.Thickness);
-				transmission += surfaceProperties.SubsurfaceColor * subsurface * lightProperties.LinearLightColor;
+				transmission += surfaceProperties.SubsurfaceColor * subsurface * lightProperties.LinearLightColor * GetDiffuseDirectLightMultiplierLambert();
 			}
 			else if ((PBRFlags & TruePBR_TwoLayer) != 0)
 			{
@@ -494,7 +480,7 @@ namespace PBR
 				diffuse *= layerAttenuation;
 				specular *= layerAttenuation;
 
-				coatDiffuse += lightProperties.LinearCoatLightColor * coatNdotL;
+				coatDiffuse += lightProperties.LinearCoatLightColor * coatNdotL * GetDiffuseDirectLightMultiplierLambert();
 				specular += coatSpecular * surfaceProperties.CoatStrength;
 			}
 #endif
@@ -541,7 +527,7 @@ namespace PBR
 #if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 			[branch] if ((PBRFlags & TruePBR_Subsurface) != 0)
 			{
-				diffuseLobeWeight += surfaceProperties.SubsurfaceColor;
+				diffuseLobeWeight += surfaceProperties.SubsurfaceColor * (1 - surfaceProperties.Thickness) / PI;
 			}
 			[branch] if ((PBRFlags & TruePBR_Fuzz) != 0)
 			{

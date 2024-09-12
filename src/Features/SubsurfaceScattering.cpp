@@ -254,24 +254,6 @@ void SubsurfaceScattering::SetupResources()
 		blurCB = new ConstantBuffer(ConstantBufferDesc<BlurCB>());
 	}
 
-	{
-		D3D11_BUFFER_DESC sbDesc{};
-		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
-		sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		sbDesc.StructureByteStride = sizeof(PerPass);
-		sbDesc.ByteWidth = sizeof(PerPass);
-		perPass = std::make_unique<Buffer>(sbDesc);
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		srvDesc.Buffer.FirstElement = 0;
-		srvDesc.Buffer.NumElements = 1;
-		perPass->CreateSRV(srvDesc);
-	}
-
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 
 	{
@@ -372,26 +354,8 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 
 			validMaterials = true;
 
-			static PerPass perPassData{};
-
-			if (perPassData.IsBeastRace != (uint)isBeastRace) {
-				perPassData.IsBeastRace = isBeastRace;
-
-				auto& context = State::GetSingleton()->context;
-
-				D3D11_MAPPED_SUBRESOURCE mapped;
-				DX::ThrowIfFailed(context->Map(perPass->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-				size_t bytes = sizeof(PerPass);
-				memcpy_s(mapped.pData, bytes, &perPassData, bytes);
-				context->Unmap(perPass->resource.get(), 0);
-			}
+			if (isBeastRace)
+				State::GetSingleton()->currentExtraDescriptor |= (uint)State::ExtraShaderDescriptors::IsBeastRace;
 		}
 	}
-}
-
-void SubsurfaceScattering::Prepass()
-{
-	auto& context = State::GetSingleton()->context;
-	ID3D11ShaderResourceView* view = perPass->srv.get();
-	context->PSSetShaderResources(36, 1, &view);
 }
