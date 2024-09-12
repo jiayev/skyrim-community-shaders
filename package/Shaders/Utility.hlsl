@@ -449,7 +449,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if defined(FOLIAGE)
 	float checkerboard = InterleavedGradientNoise(0, input.PositionCS.xy);
-	if (checkerboard > 0.8)
+	if (checkerboard > 0.75)
 		discard;
 #	endif
 
