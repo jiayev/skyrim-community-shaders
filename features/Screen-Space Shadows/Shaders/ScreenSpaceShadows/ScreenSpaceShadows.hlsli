@@ -4,11 +4,13 @@ namespace ScreenSpaceShadows
 {
 	float4 GetBlurWeights(float4 depths, float centerDepth)
 	{
-		float4 depthDifference = (depths - centerDepth) * 1000;
+		centerDepth += 1.0;
+		float depthSharpness = saturate((1024.0 * 1024.0) / (centerDepth * centerDepth));
+		float4 depthDifference = (depths - centerDepth) * depthSharpness;
 		return exp2(-depthDifference * depthDifference);
 	}
 
-	float GetScreenSpaceShadow(float3 screenPosition, float2 uv, float noise, uint eyeIndex)
+	float GetScreenSpaceShadow(float3 screenPosition, float2 uv, float noise, float3 viewPosition, uint eyeIndex)
 	{
 		noise *= 2.0 * M_PI;
 
@@ -39,7 +41,9 @@ namespace ScreenSpaceShadows
 			shadowSamples[i] = ScreenSpaceShadowsTexture.Load(sampleCoord);
 		}
 
-		float4 blurWeights = GetBlurWeights(depthSamples, screenPosition.z);
+		depthSamples = GetScreenDepths(depthSamples);
+
+		float4 blurWeights = GetBlurWeights(depthSamples, viewPosition.z);
 		float shadow = dot(shadowSamples, blurWeights);
 
 		float blurWeightsTotal = dot(blurWeights, 1.0);
