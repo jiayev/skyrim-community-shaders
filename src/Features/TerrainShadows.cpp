@@ -1,5 +1,5 @@
-#include "Menu.h"
 #include "TerrainShadows.h"
+#include "Menu.h"
 
 #include "Deferred.h"
 #include "State.h"
@@ -12,8 +12,7 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainShadows::Settings,
-	EnableTerrainShadow
-)
+	EnableTerrainShadow)
 
 void TerrainShadows::LoadSettings(json& o_json)
 {

@@ -9,7 +9,7 @@ cbuffer ShadowUpdateCB : register(b0)
 	float2 PxSize : packoffset(c1.y);
 	float pad : packoffset(c1.w);
 	float2 PosRange : packoffset(c2.x);
-	float2 ZRange: packoffset(c2.z);
+	float2 ZRange : packoffset(c2.z);
 }
 
 float GetInterpolatedHeight(float2 pxCoord, bool isVertical)

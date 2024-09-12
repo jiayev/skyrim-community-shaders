@@ -549,7 +549,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			else
 	dirLightColor *= dirLightColorMultiplier;
 	dirLightColor *= dirShadow;
-	
+
 	lightsDiffuseColor += dirLightColor * saturate(dirLightAngle) * dirDetailShadow;
 
 	float3 albedo = max(0, baseColor.xyz * input.VertexColor.xyz);
