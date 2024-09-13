@@ -337,7 +337,6 @@ void Menu::DrawSettings()
 				State::GetSingleton()->SetDefines(shaderDefines);
 				shaderCache.Clear();
 				Deferred::GetSingleton()->ClearShaderCache();
-				VariableRateShading::GetSingleton()->ClearShaderCache();
 				for (auto* feature : Feature::GetFeatureList()) {
 					if (feature->loaded) {
 						feature->ClearShaderCache();
