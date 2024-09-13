@@ -28,6 +28,7 @@ namespace Util
 	void DumpSettingsOptions();
 	float4 GetCameraData();
 	bool GetTemporal();
+	float GetVerticalFOVRad();
 
 	inline RE::NiPoint3 GetAverageEyePosition()
 	{

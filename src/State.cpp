@@ -14,7 +14,7 @@
 #include "Features/TerrainBlending.h"
 #include "TruePBR.h"
 
-#include "VariableRateShading.h"
+#include "Streamline.h"
 
 void State::Draw()
 {
@@ -38,7 +38,6 @@ void State::Draw()
 				}
 			}
 
-			VariableRateShading::GetSingleton()->UpdateViews(type != RE::BSShader::Type::ImageSpace && type != RE::BSShader::Type::Sky && type != RE::BSShader::Type::Water);
 			if (type > 0 && type < RE::BSShader::Type::Total) {
 				if (enabledClasses[type - 1]) {
 					// Only check against non-shader bits
@@ -91,7 +90,6 @@ void State::Reset()
 			feature->Reset();
 	if (!RE::UI::GetSingleton()->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
-	VariableRateShading::GetSingleton()->UpdateVRS();
 	lastModifiedPixelDescriptor = 0;
 	lastModifiedVertexDescriptor = 0;
 	lastPixelDescriptor = 0;
@@ -107,9 +105,9 @@ void State::Setup()
 		if (feature->loaded)
 			feature->SetupResources();
 	Deferred::GetSingleton()->SetupResources();
+	Streamline::GetSingleton()->SetupFrameGeneration();
 	if (initialized)
 		return;
-	VariableRateShading::GetSingleton()->Setup();
 	initialized = true;
 }
 
@@ -273,6 +271,7 @@ void State::PostPostLoad()
 		logger::info("Skyrim Upscaler not detected");
 	Deferred::Hooks::Install();
 	TruePBR::GetSingleton()->PostPostLoad();
+	Streamline::InstallHooks();
 }
 
 bool State::ValidateCache(CSimpleIniA& a_ini)
