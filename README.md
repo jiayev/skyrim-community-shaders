@@ -31,6 +31,11 @@ SKSE core plugin for community-driven advanced graphics modifications.
 - Run `cmake`
 - Close the cmd window
 
+Or, in powershell run:
+```pwsh
+& "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" amd64
+```
+
 ## Clone and Build
 Open terminal (e.g., PowerShell) and run the following commands:
 
@@ -63,6 +68,21 @@ When using custom preset you can call BuildRelease.bat with an parameter to spec
 `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`
 
 When switching between different presets you might need to remove the build folder
+
+### Build with Docker
+For those who prefer to not install Visual Studio or other build dependencies on their machine, this encapsulates it. This uses Windows Containers, so no WSL for now.  
+1. Install [Docker](https://www.docker.com/products/docker-desktop/) first if not already there. 
+2. In a shell of your choice run to switch to Windows containers and create the build container:
+```pwsh
+& 'C:\Program Files\Docker\Docker\DockerCli.exe' -SwitchWindowsEngine; `
+docker build -t skyrim-community-shaders .
+```
+3. Then run the build: 
+```pwsh
+docker run -it --rm -v .:C:/skyrim-community-shaders skyrim-community-shaders:latest
+```
+4. Retrieve the generated build files from the `build/aio` folder.
+5. In subsequent builds only run the build step (3.)
 
 ## License
 
