@@ -69,7 +69,13 @@ When switching between different presets you might need to remove the build fold
 ### Default
 
 [GPL-3.0-or-later](COPYING) WITH [Modding Exception AND GPL-3.0 Linking Exception (with Corresponding Source)](EXCEPTIONS.md).  
-Specifically, the Modded Code is Skyrim (and its variants) and Modding Libraries include [SKSE](https://skse.silverlock.org/) and Commonlib (and variants).
+Specifically, the Modded Code includes: 
+* Skyrim (and its variants) 
+* Hardware drivers to enable additional functionality provided via proprietary SDKs, such as [Nvidia DLSS](https://developer.nvidia.com/rtx/dlss/get-started), [AMD FidelityFX FSR3](https://gpuopen.com/fidelityfx-super-resolution-3/), and [Intel XeSS](https://github.com/intel/xess)
+
+The Modding Libraries include: 
+* [SKSE](https://skse.silverlock.org/) 
+* Commonlib (and variants).
 
 ### Shaders
 
