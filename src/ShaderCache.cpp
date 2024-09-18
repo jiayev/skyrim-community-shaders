@@ -630,6 +630,23 @@ namespace SIE
 			auto& isShader = const_cast<RE::BSImagespaceShader&>(static_cast<const RE::BSImagespaceShader&>(shader));
 			auto* macros = reinterpret_cast<RE::BSImagespaceShader::ShaderMacro*>(defines);
 			isShader.GetShaderMacros(macros);
+			int lastIndex = 0;
+			while (macros[lastIndex].name != nullptr) {
+				lastIndex++;
+			}
+			for (auto* feature : Feature::GetFeatureList()) {
+				if (feature->loaded && feature->HasShaderDefine(RE::BSShader::Type::ImageSpace)) {
+					defines[lastIndex++] = { feature->GetShaderDefineName().data(), nullptr };
+					auto options = feature->GetShaderDefineOptions();
+					if (!options.empty()) {
+						for (auto& option : options) {
+							const char* definition = option.second.empty() ? nullptr : option.second.data();
+							defines[lastIndex++] = { option.first.data(), definition };
+						}
+					}
+				}
+			}
+			defines[lastIndex] = { nullptr, nullptr };
 			return;
 		}
 
