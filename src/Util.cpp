@@ -238,6 +238,15 @@ namespace Util
 		return result;
 	}
 
+	std::string WStringToString(const std::wstring& wideString)
+	{
+		std::string result;
+		std::transform(wideString.begin(), wideString.end(), std::back_inserter(result), [](wchar_t c) {
+			return (char)c;
+		});
+		return result;
+	}
+
 	float4 TryGetWaterData(float offsetX, float offsetY)
 	{
 		if (RE::BSGraphics::RendererShadowState::GetSingleton()) {

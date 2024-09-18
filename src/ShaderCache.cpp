@@ -1311,15 +1311,6 @@ namespace SIE
 			return type;
 		}
 
-		static std::string ToString(const std::wstring& wideString)
-		{
-			std::string result;
-			std::transform(wideString.begin(), wideString.end(), std::back_inserter(result), [](wchar_t c) {
-				return (char)c;
-			});
-			return result;
-		}
-
 		static ID3DBlob* CompileShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor, bool useDiskCache)
 		{
 			// check hashmap
@@ -1349,7 +1340,7 @@ namespace SIE
 						shaderBlob->Release();
 					}
 				} else {
-					logger::debug("Loaded shader from {}", ToString(diskPath));
+					logger::debug("Loaded shader from {}", Util::WStringToString(diskPath));
 					cache.AddCompletedShader(shaderClass, shader, descriptor, shaderBlob);
 					return shaderBlob;
 				}
@@ -1383,12 +1374,12 @@ namespace SIE
 				shader.shaderType == RE::BSShader::Type::ImageSpace ?
 					static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
 					shader.fxpFilename);
-
+			auto pathString = Util::WStringToString(path);
 			if (!std::filesystem::exists(path)) {
-				logger::error("Failed to compile {} shader {}::{}: {} does not exist", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor, ToString(path));
+				logger::error("Failed to compile {} shader {}::{}: {} does not exist", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor, pathString);
 				return nullptr;
 			}
-			logger::debug("Compiling {} {}:{}:{:X} to {}", ToString(path), magic_enum::enum_name(type), magic_enum::enum_name(shaderClass), descriptor, MergeDefinesString(defines));
+			logger::debug("Compiling {} {}:{}:{:X} to {}", pathString, magic_enum::enum_name(type), magic_enum::enum_name(shaderClass), descriptor, MergeDefinesString(defines));
 
 			// compile shaders
 			ID3DBlob* errorBlob = nullptr;
@@ -1443,9 +1434,9 @@ namespace SIE
 
 				const HRESULT saveResult = D3DWriteBlobToFile(shaderBlob, diskPath.c_str(), true);
 				if (FAILED(saveResult)) {
-					logger::error("Failed to save shader to {}", ToString(diskPath));
+					logger::error("Failed to save shader to {}", Util::WStringToString(diskPath));
 				} else {
-					logger::debug("Saved shader to {}", ToString(diskPath));
+					logger::debug("Saved shader to {}", Util::WStringToString(diskPath));
 				}
 			}
 			cache.AddCompletedShader(shaderClass, shader, descriptor, shaderBlob);
