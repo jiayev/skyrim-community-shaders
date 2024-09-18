@@ -59,17 +59,6 @@ float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)  // without TAA, 
 	return srcNoise.Load(uint3(noiseCoord, 0));
 }
 
-// HBIL pp.29
-float IlIntegral(float2 integral_factor, float angle_prev, float angle_new)
-{
-	float sin_prev, cos_prev, sin_new, cos_new;
-	sincos(angle_prev, sin_prev, cos_prev);
-	sincos(angle_new, sin_new, cos_new);
-
-	float delta_angle = angle_new - angle_prev;
-	return max(0, integral_factor.x * (delta_angle + sin_prev * cos_prev - sin_new * cos_new) + integral_factor.y * (cos_prev * cos_prev - cos_new * cos_new));
-}
-
 void CalculateGI(
 	uint2 dtid, float2 uv, float viewspaceZ, float3 viewspaceNormal,
 	out float4 o_currGIAO, out float4 o_currGIAOSpecular, out float3 o_bentNormal)
@@ -82,13 +71,6 @@ void CalculateGI(
 	const float rcpNumSlices = rcp(NumSlices);
 	const float rcpNumSteps = rcp(NumSteps);
 
-	const float falloffRange = EffectFalloffRange * EffectRadius;
-	const float rcpFalloffRange = rcp(falloffRange);
-	const float falloffFrom = EffectRadius * (1 - EffectFalloffRange);
-	const float falloffMul = -rcpFalloffRange;
-	const float falloffAdd = falloffFrom * rcpFalloffRange + 1.0;
-
-	// quality settings / tweaks / hacks
 	// if the offset is under approx pixel size (pixelTooCloseThreshold), push it out to the minimum distance
 	const float pixelTooCloseThreshold = 1.3;
 	// approx viewspace pixel size at pixCoord; approximation of NDCToViewspace( uv.xy + ViewportSize.xy, pixCenterPos.z ).xy - pixCenterPos.xy;
@@ -138,29 +120,16 @@ void CalculateGI(
 
 		float n = signNorm * ACos(cosNorm);
 
-#ifdef BITMASK
 		uint bitmask = 0;
-#	ifdef GI
+#ifdef GI
 		uint bitmaskGI = 0;
-#		ifdef GI_SPECULAR
+#	ifdef GI_SPECULAR
 		uint bitmaskGISpecular = 0;
 		float3 domVec = getSpecularDominantDirection(viewspaceNormal, viewVec, roughness);
 		float3 projectedDomVec = normalize(domVec - axisVec * dot(domVec, axisVec));
 		float nDom = sign(dot(orthoDirectionVec, projectedDomVec)) * ACos(saturate(dot(projectedDomVec, viewVec)));
-#		endif
 #	endif
-#else
-		// this is a lower weight target; not using -1 as in the original paper because it is under horizon, so a 'weight' has different meaning based on the normal
-		float2 sincos_n;
-		sincos(n, sincos_n.x, sincos_n.y);
-		float lowHorizonCos1 = sincos_n.x;
-		const float lowHorizonCos0 = -lowHorizonCos1;
-
-		float horizonCos0 = lowHorizonCos0;  //-1;
-		float horizonCos1 = lowHorizonCos1;  //-1;
-
-		float3 sampleRadiance = 0;
-#endif  // BITMASK
+#endif
 
 		// R1 sequence (http://extremelearning.com.au/unreasonable-effectiveness-of-quasirandom-sequences/)
 		float stepNoise = frac(noiseStep + slice * 0.6180339887498948482);
@@ -192,7 +161,6 @@ void CalculateGI(
 				float3 sampleDelta = samplePos - pixCenterPos;
 				float3 sampleHorizonVec = normalize(sampleDelta);
 
-#ifdef BITMASK
 				float3 sampleBackPos = samplePos - viewVec * Thickness;
 				float3 sampleBackHorizonVec = normalize(sampleBackPos - pixCenterPos);
 
@@ -202,28 +170,15 @@ void CalculateGI(
 				angleRange = smoothstep(0, 1, (angleRange + n) * RCP_PI + .5);  // https://discord.com/channels/586242553746030596/586245736413528082/1102228968247144570
 
 				uint2 bitsRange = uint2(round(angleRange.x * 32u), round((angleRange.y - angleRange.x) * 32u));
-				uint maskedBits = ((1 << bitsRange.y) - 1) << bitsRange.x;
-#else
-				// this is our own thickness heuristic that relies on sooner discarding samples behind the center
-				float falloffBase = length(float3(sampleDelta) * float3(1, 1, 1 + ThinOccluderCompensation));
-				float weight = saturate(falloffBase * falloffMul + falloffAdd);
-
-				// sample horizon cos
-				float shc = dot(sampleHorizonVec, viewVec);
-
-				// discard unwanted samples
-				shc = lerp(sideSign == -1 ? lowHorizonCos1 : lowHorizonCos0, shc, weight);
-				float horizonCos = sideSign == -1 ? horizonCos1 : horizonCos0;
-#endif
+				uint maskedBits = s < AORadius ? ((1 << bitsRange.y) - 1) << bitsRange.x : 0;
 
 #ifdef GI
-#	ifdef BITMASK
 				float3 sampleBackPosGI = samplePos - viewVec * 300;
 				float3 sampleBackHorizonVecGI = normalize(sampleBackPosGI - pixCenterPos);
 				float angleBackGI = ACos(dot(sampleBackHorizonVecGI, viewVec));
 				float2 angleRangeGI = -sideSign * (sideSign == -1 ? float2(angleFront, angleBackGI) : float2(angleBackGI, angleFront));
 
-#		ifdef GI_SPECULAR
+#	ifdef GI_SPECULAR
 				// thank u Olivier!
 				float coneHalfAngles = max(5e-2, specularLobeHalfAngle(roughness));  // not too small
 				float2 angleRangeSpecular = clamp((angleRangeGI + nDom) * 0.5 / coneHalfAngles, -1, 1) * 0.5 + 0.5;
@@ -237,22 +192,19 @@ void CalculateGI(
 				// angleRangeSpecular = saturate((angleRangeSpecular * specularSigns) * 0.5 + 0.5);
 
 				uint2 bitsRangeGISpecular = uint2(round(angleRangeSpecular.x * 32u), round((angleRangeSpecular.y - angleRangeSpecular.x) * 32u));
-				uint maskedBitsGISpecular = ((1 << bitsRangeGISpecular.y) - 1) << bitsRangeGISpecular.x;
-#		endif
+				uint maskedBitsGISpecular = s < GIRadius ? ((1 << bitsRangeGISpecular.y) - 1) << bitsRangeGISpecular.x : 0;
+#	endif
 
 				angleRangeGI = smoothstep(0, 1, (angleRangeGI + n) * RCP_PI + .5);  // https://discord.com/channels/586242553746030596/586245736413528082/1102228968247144570
 
 				uint2 bitsRangeGI = uint2(round(angleRangeGI.x * 32u), round((angleRangeGI.y - angleRangeGI.x) * 32u));
-				uint maskedBitsGI = ((1 << bitsRangeGI.y) - 1) << bitsRangeGI.x;
+				uint maskedBitsGI = s < GIRadius ? ((1 << bitsRangeGI.y) - 1) << bitsRangeGI.x : 0;
 
 				uint overlappedBits = maskedBitsGI & ~bitmaskGI;
 				bool checkGI = overlappedBits;
-#		ifdef GI_SPECULAR
+#	ifdef GI_SPECULAR
 				uint overlappedBitsSpecular = maskedBitsGISpecular & ~bitmaskGISpecular;
 				checkGI = checkGI || overlappedBitsSpecular;
-#		endif
-#	else
-				bool checkGI = shc > horizonCos;
 #	endif
 
 				if (checkGI) {
@@ -264,7 +216,6 @@ void CalculateGI(
 					if (dot(normalSample, sampleHorizonVec) > 0)  // backface
 						frontBackMult = BackfaceStrength;
 
-#	ifdef BITMASK
 					if (frontBackMult > 0.f) {
 						float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevel).rgb * frontBackMult * giBoost;
 
@@ -277,104 +228,32 @@ void CalculateGI(
 
 						radiance += diffuseRadiance;
 
-#		ifdef GI_SPECULAR
+#	ifdef GI_SPECULAR
 						float3 specularRadiance = sampleRadiance * countbits(overlappedBitsSpecular) * 0.03125;  // 1/32
 						specularRadiance *= NoL;
 						specularRadiance = max(0, specularRadiance);
 
 						radianceSpecular += specularRadiance;
-#		endif
-					}
-#	else
-					if (frontBackMult > 0.f) {
-						float3 newSampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevel).rgb * frontBackMult * giBoost;
-
-						float anglePrev = n + sideSign * HALF_PI - ACos(horizonCos);
-						float angleCurr = n + sideSign * HALF_PI - ACos(shc);
-						float2 integralFactor = 0.5 * float2(dot(directionVec.xy, viewspaceNormal.xy) * sideSign, viewspaceNormal.z);
-						newSampleRadiance *= IlIntegral(integralFactor, anglePrev, angleCurr);
-
-						// depth filtering. HBIL pp.38
-						float t = smoothstep(0, 1, dot(viewspaceNormal, sampleHorizonVec));
-						sampleRadiance = lerp(sampleRadiance, newSampleRadiance, t);
-
-						radiance += max(0, sampleRadiance);
-					}
-					horizonCos = shc;
 #	endif
+					}
 				}
-#else
-#	ifndef BITMASK
-				// 					// thickness heuristic - see "4.3 Implementation details, Height-field assumption considerations"
-				// #if 0    // (disabled, not used) this should match the paper
-				//                 float newhorizonCos = max( horizonCos, shc );
-
-				//                 horizonCos = (horizonCos > shc)? lerp( newhorizonCos, shc, ThinOccluderCompensation ) :newhorizonCos ;
-				// #elif 0  // (disabled, not used) this is slightly different from the paper but cheaper and provides very similar results
-				// 				horizonCos = lerp(max(horizonCos, shc), shc, ThinOccluderCompensation);
-				// #else  // this is a version where thicknessHeuristic is completely disabled
-				horizonCos = max(horizonCos, shc);
-// #endif
-#	endif
 #endif  // GI
 
-#ifdef BITMASK
 				bitmask |= maskedBits;
-#	ifdef GI
+#ifdef GI
 				bitmaskGI |= maskedBitsGI;
-#		ifdef GI_SPECULAR
+#	ifdef GI_SPECULAR
 				bitmaskGISpecular |= maskedBitsGISpecular;
-#		endif
 #	endif
-#else
-				if (sideSign == -1)
-					horizonCos1 = horizonCos;
-				else
-					horizonCos0 = horizonCos;
 #endif
 			}
 		}
 
-#ifdef BITMASK
 		visibility += countbits(bitmask) * 0.03125;
 
-#	if defined(GI) && defined(GI_SPECULAR)
+#if defined(GI) && defined(GI_SPECULAR)
 		visibilitySpecular += countbits(bitmaskGISpecular) * 0.03125;
-#	endif
-
-		// TODO: bent normal for bitmask?
-#else
-#	if 1  // I can't figure out the slight overdarkening on high slopes, so I'm adding this fudge - in the training set, 0.05 is close (PSNR 21.34) to disabled (PSNR 21.45)
-		projectedNormalVecLength = lerp(projectedNormalVecLength, 1, 0.05);
-#	endif
-
-		// line ~27, unrolled
-		float h0 = -ACos(horizonCos1);  // same, breaks stuff
-		float h1 = ACos(horizonCos0);
-#	if 0  // we can skip clamping for a tiny little bit more performance
-            h0 = n + clamp( h0-n, -HALF_PI, HALF_PI );
-            h1 = n + clamp( h1-n, -HALF_PI, HALF_PI );
-#	endif
-		float iarc0 = (cosNorm + 2 * h0 * sincos_n.x - cos(2 * h0 - n));
-		float iarc1 = (cosNorm + 2 * h1 * sincos_n.x - cos(2 * h1 - n));
-		float localVisibility = projectedNormalVecLength * (iarc0 + iarc1) * .25;
-		visibility += localVisibility;
-
-#	ifdef BENT_NORMAL
-		// see "Algorithm 2 Extension that computes bent normals b."
-		float2 sincos_3h0mn, sincos_3h1mn, sincos_h0pn, sincos_h1pn;
-		sincos(3 * h0 - n, sincos_3h0mn.x, sincos_3h0mn.y);
-		sincos(3 * h1 - n, sincos_3h1mn.x, sincos_3h1mn.y);
-		sincos(h0 + n, sincos_h0pn.x, sincos_h0pn.y);
-		sincos(h1 + n, sincos_h1pn.x, sincos_h1pn.y);
-
-		float t0 = (6 * sin(h0 - n) - sincos_3h0mn.x + 6 * sin(h1 - n) - sincos_3h1mn.x + 16 * sincos_n.x - 3 * (sincos_h0pn.x + sincos_h1pn.x)) * 0.08333333333;  // 1/12
-		float t1 = (-sincos_3h0mn.y - sincos_3h1mn.y + 8 * sincos_n.y - 3 * (sincos_h0pn.y + sincos_h1pn.y)) * 0.08333333333;
-		float3 localBentNormal = float3(directionVec.x * t0, directionVec.y * t0, -t1);
-		localBentNormal = mul(RotFromToMatrix(float3(0, 0, -1), viewVec), localBentNormal) * projectedNormalVecLength;
-		bentNormal += localBentNormal;
-#	endif
-#endif  // BITMASK
+#endif
 	}
 
 	float depthFade = GetDepthFade(viewspaceZ);

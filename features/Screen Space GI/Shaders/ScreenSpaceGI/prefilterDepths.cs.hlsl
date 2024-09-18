@@ -35,25 +35,10 @@ float ClampDepth(float depth)
 }
 
 // weighted average depth filter
+// weights are uniform now
 float DepthMIPFilter(float depth0, float depth1, float depth2, float depth3)
 {
-	float maxDepth = max(max(depth0, depth1), max(depth2, depth3));
-
-	const float depthRangeScaleFactor = 0.75;  // found empirically :)
-	const float effectRadius = depthRangeScaleFactor * EffectRadius;
-	const float falloffRange = EffectFalloffRange * effectRadius;
-	const float rcpFalloffRange = rcp(falloffRange);
-	const float falloffFrom = EffectRadius * (1 - EffectFalloffRange);
-	const float falloffMul = -rcpFalloffRange;
-	const float falloffAdd = falloffFrom * rcpFalloffRange + 1.0;
-
-	float weight0 = saturate((maxDepth - depth0) * falloffMul + falloffAdd);
-	float weight1 = saturate((maxDepth - depth1) * falloffMul + falloffAdd);
-	float weight2 = saturate((maxDepth - depth2) * falloffMul + falloffAdd);
-	float weight3 = saturate((maxDepth - depth3) * falloffMul + falloffAdd);
-
-	float weightSum = weight0 + weight1 + weight2 + weight3;
-	return (weight0 * depth0 + weight1 * depth1 + weight2 * depth2 + weight3 * depth3) / weightSum;
+	return (depth0 + depth1 + depth2 + depth3) * 0.25;
 }
 
 groupshared float g_scratchDepths[8][8];

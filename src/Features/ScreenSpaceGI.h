@@ -45,7 +45,6 @@ struct ScreenSpaceGI : Feature
 	struct Settings
 	{
 		bool Enabled = true;
-		bool UseBitmask = true;
 		bool EnableGI = true;
 		bool EnableSpecularGI = false;
 		// performance/quality
@@ -55,9 +54,8 @@ struct ScreenSpaceGI : Feature
 		bool HalfRate = true;
 		float DepthMIPSamplingOffset = 3.3f;
 		// visual
-		float EffectRadius = 500.f;
-		float EffectFalloffRange = .615f;
-		float ThinOccluderCompensation = 0.f;
+		float AORadius = 50.f;
+		float GIRadius = 500.f;
 		float Thickness = 75.f;
 		float2 DepthFadeRange = { 2e4, 3e4 };
 		// gi
@@ -95,9 +93,9 @@ struct ScreenSpaceGI : Feature
 		uint NumSteps;
 		float DepthMIPSamplingOffset;  //
 
+		float AORadius;
+		float GIRadius;
 		float EffectRadius;
-		float EffectFalloffRange;
-		float ThinOccluderCompensation;
 		float Thickness;  //
 		float2 DepthFadeRange;
 		float DepthFadeScaleConst;
