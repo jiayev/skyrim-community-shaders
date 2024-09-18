@@ -50,7 +50,7 @@ void State::Draw()
 						}
 					}
 
-					if (currentPixelDescriptor != lastPixelDescriptor || currentExtraDescriptor != lastExtraDescriptor) {
+					if (forceUpdatePermutationBuffer || currentPixelDescriptor != lastPixelDescriptor || currentExtraDescriptor != lastExtraDescriptor) {
 						PermutationCB data{};
 						data.VertexShaderDescriptor = currentVertexDescriptor;
 						data.PixelShaderDescriptor = currentPixelDescriptor;
@@ -61,6 +61,8 @@ void State::Draw()
 						lastVertexDescriptor = currentVertexDescriptor;
 						lastPixelDescriptor = currentPixelDescriptor;
 						lastExtraDescriptor = currentExtraDescriptor;
+
+						forceUpdatePermutationBuffer = false;
 					}
 
 					currentExtraDescriptor = 0;
@@ -95,6 +97,7 @@ void State::Reset()
 	lastPixelDescriptor = 0;
 	lastVertexDescriptor = 0;
 	initialized = false;
+	forceUpdatePermutationBuffer = true;
 }
 
 void State::Setup()
