@@ -3,35 +3,22 @@
 #include "Buffer.h"
 #include "Feature.h"
 
-struct TerrainOcclusion : public Feature
+struct TerrainShadows : public Feature
 {
-	static TerrainOcclusion* GetSingleton()
+	static TerrainShadows* GetSingleton()
 	{
-		static TerrainOcclusion singleton;
+		static TerrainShadows singleton;
 		return std::addressof(singleton);
 	}
 
-	virtual inline std::string GetName() override { return "Terrain Occlusion"; }
-	virtual inline std::string GetShortName() override { return "TerrainOcclusion"; }
-	virtual inline std::string_view GetShaderDefineName() override { return "TERRA_OCC"; }
+	virtual inline std::string GetName() override { return "Terrain Shadows"; }
+	virtual inline std::string GetShortName() override { return "TerrainShadows"; }
+	virtual inline std::string_view GetShaderDefineName() override { return "TERRAIN_SHADOWS"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
 
 	struct Settings
 	{
 		uint EnableTerrainShadow = true;
-		uint EnableTerrainAO = false;
-
-		float HeightBias = -1000.f;  // in game unit
-		float ShadowSofteningRadiusAngle = 1.f * RE::NI_PI / 180.f;
-		float2 ShadowFadeDistance = { 1000.f, 2000.f };
-
-		float AOMix = 1.f;
-		float AOPower = 1.f;
-		float AOFadeOutHeight = 2000;
-
-		float AoDistance = 12;  // in cells
-		uint SliceCount = 60;
-		uint SampleCount = 60;
 	} settings;
 
 	bool needPrecompute = false;
@@ -48,26 +35,15 @@ struct TerrainOcclusion : public Feature
 	std::unordered_map<std::string, HeightMapMetadata> heightmaps;
 	HeightMapMetadata* cachedHeightmap;
 
-	struct AOGenBuffer
-	{
-		float AoDistance;  // in game unit
-		uint SliceCount;
-		uint SampleCount;
-
-		float3 pos0;
-		float3 pos1;
-		float2 zRange;
-	};
-	std::unique_ptr<Buffer> aoGenBuffer = nullptr;
-
 	struct ShadowUpdateCB
 	{
 		float2 LightPxDir;   // direction on which light descends, from one pixel to next via dda
 		float2 LightDeltaZ;  // per LightUVDir, upper penumbra and lower, should be negative
 		uint StartPxCoord;
 		float2 PxSize;
-
-		float pad;
+		uint pad0[1];
+		float2 PosRange;
+		float2 ZRange;
 	} shadowUpdateCBData;
 	static_assert(sizeof(ShadowUpdateCB) % 16 == 0);
 	std::unique_ptr<ConstantBuffer> shadowUpdateCB = nullptr;
@@ -75,30 +51,16 @@ struct TerrainOcclusion : public Feature
 	struct alignas(16) PerFrame
 	{
 		uint EnableTerrainShadow;
-		uint EnableTerrainAO;
-		float HeightBias;
-		float ShadowSofteningRadiusAngle;
-
-		float2 ZRange;
-		float2 ShadowFadeDistance;
-
-		float AOMix;
 		float3 Scale;
-
-		float AOPower;
-		float3 InvScale;
-
-		float AOFadeOutHeightRcp;
-		float3 Offset;
+		float2 ZRange;
+		float2 Offset;
 	};
+
 	PerFrame GetCommonBufferData();
 
-	winrt::com_ptr<ID3D11ComputeShader> occlusionProgram = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> shadowUpdateProgram = nullptr;
 
 	std::unique_ptr<Texture2D> texHeightMap = nullptr;
-	std::unique_ptr<Texture2D> texOcclusion = nullptr;
-	std::unique_ptr<Texture2D> texNormalisedHeight = nullptr;
 	std::unique_ptr<Texture2D> texShadowHeight = nullptr;
 
 	bool IsHeightMapReady();

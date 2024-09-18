@@ -381,8 +381,8 @@ cbuffer PerMaterial : register(b1)
 #			include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
 #		endif
 
-#		if defined(TERRA_OCC)
-#			include "TerrainOcclusion/TerrainOcclusion.hlsli"
+#		if defined(TERRAIN_SHADOWS)
+#			include "TerrainShadows/TerrainShadows.hlsli"
 #		endif
 
 #		if defined(CLOUD_SHADOWS)
@@ -517,14 +517,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			endif  // SCREEN_SPACE_SHADOWS
 		}
 
-#			if defined(TERRA_OCC)
+#			if defined(TERRAIN_SHADOWS)
 		if (dirShadow > 0.0) {
-			float terrainShadow = 1;
-			float terrainAo = 1;
-			TerrainOcclusion::GetTerrainOcclusion(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, length(input.WorldPosition.xyz), SampBaseSampler, terrainShadow, terrainAo);
+			float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, length(input.WorldPosition.xyz), SampBaseSampler);
 			dirShadow *= terrainShadow;
 		}
-#			endif  // TERRA_OCC
+#			endif  // TERRAIN_SHADOWS
 
 #			if defined(CLOUD_SHADOWS)
 		if (dirShadow != 0.0) {
@@ -550,8 +548,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 #			else
 	dirLightColor *= dirLightColorMultiplier;
+	dirLightColor *= dirShadow;
 
-	lightsDiffuseColor += dirLightColor * saturate(dirLightAngle) * dirShadow;
+	lightsDiffuseColor += dirLightColor * saturate(dirLightAngle) * dirDetailShadow;
 
 	float3 albedo = max(0, baseColor.xyz * input.VertexColor.xyz);
 
@@ -636,7 +635,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #						endif
 
 	sh2 skylightingSH = Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMSSkylight, normal);
-	float skylighting = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(skylightingSettings.DirectionalDiffuse ? normal : float3(0, 0, 1))) / shPI;
+	float skylighting = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(float3(normal.xy, normal.z * 0.5 + 0.5)) / shPI;
+	skylighting = lerp(1.0, skylighting, Skylighting::getFadeOutFactor(input.WPosition));
 	skylighting = Skylighting::mixDiffuse(skylightingSettings, skylighting);
 
 	directionalAmbientColor = GammaToLinear(directionalAmbientColor);

@@ -19,6 +19,8 @@ public:
 		return &singleton;
 	}
 
+	const std::string defaultDynamicCubeMapSavePath = "Data\\textures\\DynamicCubemaps";
+
 	// Specular irradiance
 
 	ID3D11SamplerState* computeSampler = nullptr;

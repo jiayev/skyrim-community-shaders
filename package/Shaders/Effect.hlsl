@@ -505,8 +505,8 @@ cbuffer PerGeometry : register(b2)
 
 #	define LinearSampler SampBaseSampler
 
-#	if defined(TERRA_OCC)
-#		include "TerrainOcclusion/TerrainOcclusion.hlsli"
+#	if defined(TERRAIN_SHADOWS)
+#		include "TerrainShadows/TerrainShadows.hlsli"
 #	endif
 
 #	if defined(CLOUD_SHADOWS)

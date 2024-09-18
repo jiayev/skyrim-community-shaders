@@ -86,15 +86,30 @@ void DynamicCubemaps::DrawSettings()
 					}
 
 					ID3D11Texture2D* tempTexture;
-					DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, subresourceData, &tempTexture));
-
 					DirectX::ScratchImage image;
-					DX::ThrowIfFailed(CaptureTexture(device, context, tempTexture, image));
 
-					std::string filename = std::format("Data\\Textures\\DynamicCubemaps\\{:.2f}{:.2f}{:.2f}R{:.2f}.dds", settings.CubemapColor.x, settings.CubemapColor.y, settings.CubemapColor.z, settings.CubemapColor.w);
+					try {
+						DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, subresourceData, &tempTexture));
+						DX::ThrowIfFailed(CaptureTexture(device, context, tempTexture, image));
 
-					std::wstring wfilename = std::wstring(filename.begin(), filename.end());
-					DX::ThrowIfFailed(SaveToDDSFile(image.GetImages(), image.GetImageCount(), image.GetMetadata(), DirectX::DDS_FLAGS::DDS_FLAGS_NONE, wfilename.c_str()));
+						if (std::filesystem::create_directories(defaultDynamicCubeMapSavePath)) {
+							logger::info("Missing DynamicCubeMap Creator directory created: {}", defaultDynamicCubeMapSavePath);
+						}
+
+						std::filesystem::path DynamicCubeMapSavePath = defaultDynamicCubeMapSavePath;
+						std::filesystem::path filename(std::format("R{:03d}G{:03d}B{:03d}A{:03d}.dds", colorPixel.r, colorPixel.g, colorPixel.b, colorPixel.a));
+						DynamicCubeMapSavePath /= filename;
+
+						if (std::filesystem::exists(DynamicCubeMapSavePath)) {
+							logger::info("DynamicCubeMap Creator file for {} already exists, skipping.", filename.string());
+						} else {
+							DX::ThrowIfFailed(SaveToDDSFile(image.GetImages(), image.GetImageCount(), image.GetMetadata(), DirectX::DDS_FLAGS::DDS_FLAGS_NONE, DynamicCubeMapSavePath.c_str()));
+							logger::info("DynamicCubeMap Creator file for {} written", filename.string());
+						}
+
+					} catch (const std::exception& e) {
+						logger::error("Failed in DynamicCubeMap Creator file: {} {}", defaultDynamicCubeMapSavePath, e.what());
+					}
 
 					image.Release();
 					tempTexture->Release();
