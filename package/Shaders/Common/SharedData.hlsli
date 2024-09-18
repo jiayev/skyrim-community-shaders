@@ -113,11 +113,10 @@ struct SkylightingSettings
 	row_major float4x4 OcclusionViewProj;
 	float4 OcclusionDir;
 
-	float3 PosOffset;  // xyz: cell origin in camera model space
-	uint pad0;
-	uint3 ArrayOrigin;  // xyz: array origin, w: max accum frames
-	uint pad1;
+	float4 PosOffset;   // xyz: cell origin in camera model space
+	uint4 ArrayOrigin;  // xyz: array origin
 	int4 ValidMargin;
+
 	float MinDiffuseVisibility;
 	float MinSpecularVisibility;
 	uint pad2[2];

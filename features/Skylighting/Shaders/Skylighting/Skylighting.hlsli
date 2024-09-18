@@ -7,15 +7,13 @@ struct SkylightingSettings
 	row_major float4x4 OcclusionViewProj;
 	float4 OcclusionDir;
 
-	float3 PosOffset;  // xyz: cell origin in camera model space
-	uint pad0;
-	uint3 ArrayOrigin;  // xyz: array origin, w: max accum frames
-	uint pad1;
+	float4 PosOffset;   // xyz: cell origin in camera model space
+	uint4 ArrayOrigin;  // xyz: array origin
 	int4 ValidMargin;
 
 	float MinDiffuseVisibility;
 	float MinSpecularVisibility;
-	uint pad2[2];
+	uint pad[2];
 };
 
 #endif
@@ -58,7 +56,7 @@ namespace Skylighting
 		const static sh2 unitSH = float4(sqrt(4 * shPI), 0, 0, 0);
 		sh2 scaledUnitSH = unitSH / 1e-10;
 
-		float3 positionMSAdjusted = positionMS - params.PosOffset;
+		float3 positionMSAdjusted = positionMS - params.PosOffset.xyz;
 		float3 uvw = positionMSAdjusted / ARRAY_SIZE + .5;
 
 		if (any(uvw < 0) || any(uvw > 1))
