@@ -988,8 +988,8 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		endif
 #	endif
 
-#	if defined(TERRA_OCC)
-#		include "TerrainOcclusion/TerrainOcclusion.hlsli"
+#	if defined(TERRAIN_SHADOWS)
+#		include "TerrainShadows/TerrainShadows.hlsli"
 #	endif
 
 #	if defined(CLOUD_SHADOWS)
@@ -1939,10 +1939,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif  // defined(EMAT) && (defined (SKINNED) || !defined \
 				// (MODELSPACENORMALS))
 
-#	if defined(TERRA_OCC)
-		float terrainShadow = 1;
-		float terrainAo = 1;
-		TerrainOcclusion::GetTerrainOcclusion(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, length(input.WorldPosition.xyz), SampColorSampler, terrainShadow, terrainAo);
+#	if defined(TERRAIN_SHADOWS)
+		float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, length(input.WorldPosition.xyz), SampColorSampler);
 		dirShadow *= terrainShadow;
 		inDirShadow = inDirShadow || dirShadow == 0.0;
 #	endif
@@ -2261,7 +2259,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
 
 #	if defined(SKYLIGHTING)
-	float skylightingDiffuse = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(skylightingSettings.DirectionalDiffuse ? worldSpaceNormal : float3(0, 0, 1))) / shPI;
+	float skylightingDiffuse = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(float3(worldSpaceNormal.xy, worldSpaceNormal.z * 0.5 + 0.5))) / shPI;
+	skylightingDiffuse = lerp(1.0, skylightingDiffuse, Skylighting::getFadeOutFactor(input.WorldPosition));
 	skylightingDiffuse = Skylighting::mixDiffuse(skylightingSettings, skylightingDiffuse);
 #		if !defined(TRUE_PBR)
 	directionalAmbientColor = GammaToLinear(directionalAmbientColor);

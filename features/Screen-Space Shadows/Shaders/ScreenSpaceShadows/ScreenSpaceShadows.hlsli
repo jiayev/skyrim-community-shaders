@@ -4,7 +4,8 @@ namespace ScreenSpaceShadows
 {
 	float4 GetBlurWeights(float4 depths, float centerDepth)
 	{
-		static const float depthSharpness = 0.01;
+		centerDepth += 1.0;
+		float depthSharpness = saturate((1024.0 * 1024.0) / (centerDepth * centerDepth));
 		float4 depthDifference = (depths - centerDepth) * depthSharpness;
 		return exp2(-depthDifference * depthDifference);
 	}

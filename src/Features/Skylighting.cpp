@@ -2,12 +2,9 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
-	DirectionalDiffuse,
 	MaxZenith,
 	MinDiffuseVisibility,
-	DiffusePower,
-	MinSpecularVisibility,
-	SpecularPower)
+	MinSpecularVisibility)
 
 void Skylighting::LoadSettings(json& o_json)
 {
@@ -26,16 +23,13 @@ void Skylighting::RestoreDefaultSettings()
 
 void Skylighting::DrawSettings()
 {
-	ImGui::Checkbox("Directional Diffuse", &settings.DirectionalDiffuse);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(
 			"Extra darkening depending on surface orientation.\n"
 			"More physically correct, but may impact the intended visual of certain weathers.");
 
 	ImGui::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.f, 1.f, "%.2f");
-	ImGui::SliderFloat("Diffuse Power", &settings.DiffusePower, 0.3f, 3.f, "%.1f");
 	ImGui::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.f, 1.f, "%.2f");
-	ImGui::SliderFloat("Specular Power", &settings.SpecularPower, 0.3f, 3.f, "%.1f");
 
 	ImGui::Separator();
 
@@ -185,7 +179,7 @@ void Skylighting::CompileComputeShaders()
 
 	std::vector<ShaderCompileInfo>
 		shaderInfos = {
-			{ &probeUpdateCompute, "updateProbes.cs.hlsl", {} },
+			{ &probeUpdateCompute, "UpdateProbesCS.hlsl", {} },
 		};
 
 	for (auto& info : shaderInfos) {
@@ -226,8 +220,8 @@ void Skylighting::Prepass()
 				((int)cellID.y - probeArrayDims[1] / 2) % probeArrayDims[1],
 				((int)cellID.z - probeArrayDims[2] / 2) % probeArrayDims[2] },
 			.ValidMargin = { (int)cellIDDiff.x, (int)cellIDDiff.y, (int)cellIDDiff.z },
-			.MixParams = { settings.MinDiffuseVisibility, settings.DiffusePower, settings.MinSpecularVisibility, settings.SpecularPower },
-			.DirectionalDiffuse = settings.DirectionalDiffuse,
+			.MinDiffuseVisibility = settings.MinDiffuseVisibility,
+			.MinSpecularVisibility = settings.MinSpecularVisibility
 		};
 
 		skylightingCB->Update(cbData);
@@ -373,7 +367,7 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 	auto* precipitationOcclusionMapRenderPassList = &property->unk0C8;
 
 	precipitationOcclusionMapRenderPassList->Clear();
-	if (GetSingleton()->inOcclusion && !GetSingleton()->renderTrees) {
+	if (GetSingleton()->inOcclusion) {
 		if (property->flags.any(kSkinned) && property->flags.none(kTreeAnim))
 			return precipitationOcclusionMapRenderPassList;
 	} else {
@@ -382,7 +376,7 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 	}
 
 	if (property->flags.any(kZBufferWrite) && property->flags.none(kRefraction, kTempRefraction, kMultiTextureLandscape, kNoLODLandBlend, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal, kAnisotropicLighting) && !(property->flags.any(kSkinned) && property->flags.none(kTreeAnim))) {
-		if (geometry->worldBound.radius > GetSingleton()->boundSize) {
+		if (geometry->worldBound.radius > 1) {
 			stl::enumeration<RE::BSUtilityShader::Flags> technique;
 			technique.set(RenderDepth);
 
@@ -437,6 +431,7 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 				if (singleton->forceFrames || timePassed >= (1000.0f / 30.0f)) {
 					singleton->forceFrames = (uint)std::max(0, (int)singleton->forceFrames - 1);
 					singleton->lastUpdateTimer = currentTimer;
+					singleton->frameCount++;
 
 					auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 					auto& precipitation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
@@ -530,9 +525,7 @@ void Skylighting::BSUtilityShader_SetupGeometry::thunk(RE::BSShader* This, RE::B
 void Skylighting::SetViewFrustum::thunk(RE::NiCamera* a_camera, RE::NiFrustum* a_frustum)
 {
 	if (GetSingleton()->inOcclusion) {
-		static float frameCount = 0;
-
-		uint corner = (uint)frameCount % 4;
+		uint corner = GetSingleton()->frameCount % 4;
 
 		a_frustum->fBottom = (corner == 0 || corner == 1) ? -5000.0f : 0.0f;
 
@@ -540,8 +533,6 @@ void Skylighting::SetViewFrustum::thunk(RE::NiCamera* a_camera, RE::NiFrustum* a
 		a_frustum->fRight = (corner == 1 || corner == 3) ? 5000.0f : 0.0f;
 
 		a_frustum->fTop = (corner == 2 || corner == 3) ? 5000.0f : 0.0f;
-
-		frameCount += 0.5f;
 	}
 
 	func(a_camera, a_frustum);

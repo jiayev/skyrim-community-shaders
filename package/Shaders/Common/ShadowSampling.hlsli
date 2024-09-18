@@ -135,10 +135,8 @@ float3 Get2DFilteredShadow(float noise, float2x2 rotationMatrix, float3 position
 float3 GetWorldShadow(float3 positionWS, float depth, float3 offset, uint eyeIndex)
 {
 	float worldShadow = 1.0;
-#if defined(TERRA_OCC)
-	float terrainShadow = 1.0;
-	float terrainAo = 1.0;
-	TerrainOcclusion::GetTerrainOcclusion(positionWS + offset + CameraPosAdjust[eyeIndex], depth, LinearSampler, terrainShadow, terrainAo);
+#if defined(TERRAIN_SHADOWS)
+	float terrainShadow = TerrainShadows::GetTerrainShadow(positionWS + offset + CameraPosAdjust[eyeIndex], depth, LinearSampler);
 	worldShadow = terrainShadow;
 	if (worldShadow == 0.0)
 		return 0.0;

@@ -19,7 +19,7 @@
 #include "Deferred.h"
 #include "TruePBR.h"
 
-#include "VariableRateShading.h"
+#include "Streamline.h"
 
 #define SETTING_MENU_TOGGLEKEY "Toggle Key"
 #define SETTING_MENU_SKIPKEY "Skip Compilation Key"
@@ -177,7 +177,6 @@ void Menu::DrawSettings()
 			if (ImGui::Button("Clear Shader Cache", { -1, 0 })) {
 				shaderCache.Clear();
 				Deferred::GetSingleton()->ClearShaderCache();
-				VariableRateShading::GetSingleton()->ClearShaderCache();
 				for (auto* feature : Feature::GetFeatureList()) {
 					if (feature->loaded) {
 						feature->ClearShaderCache();
@@ -349,7 +348,6 @@ void Menu::DrawSettings()
 				State::GetSingleton()->SetDefines(shaderDefines);
 				shaderCache.Clear();
 				Deferred::GetSingleton()->ClearShaderCache();
-				VariableRateShading::GetSingleton()->ClearShaderCache();
 				for (auto* feature : Feature::GetFeatureList()) {
 					if (feature->loaded) {
 						feature->ClearShaderCache();
@@ -478,6 +476,10 @@ void Menu::DrawSettings()
 				ImGui::EndTable();
 			}
 		}
+
+		ImGui::Separator();
+
+		Streamline::GetSingleton()->DrawSettings();
 
 		ImGui::Separator();
 

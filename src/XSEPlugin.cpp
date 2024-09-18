@@ -77,20 +77,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
-			const std::array dlls = {
-				L"ShaderTools.dll",
-				L"SSEShaderTools.dll"
-			};
-
-			for (const auto dll : dlls) {
-				if (GetModuleHandle(dll)) {
-					auto errorMessage = std::format("Incompatible DLL {} detected", stl::utf16_to_utf8(dll).value_or("<unicode conversion error>"s));
-					logger::error("{}", errorMessage);
-
-					errors.push_back(errorMessage);
-				}
-			}
-
 			if (errors.empty()) {
 				State::GetSingleton()->PostPostLoad();
 				Hooks::Install();
@@ -99,8 +85,10 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				auto& shaderCache = SIE::ShaderCache::Instance();
 
 				shaderCache.ValidateDiskCache();
+
 				if (shaderCache.UseFileWatcher())
 					shaderCache.StartFileWatcher();
+
 				for (auto* feature : Feature::GetFeatureList()) {
 					if (feature->loaded) {
 						feature->PostPostLoad();
@@ -161,6 +149,22 @@ bool Load()
 	state->Load();
 	auto log = spdlog::default_logger();
 	log->set_level(state->GetLogLevel());
+
+	const std::array dlls = {
+		L"Data/SKSE/Plugins/ShaderTools.dll",
+		L"Data/SKSE/Plugins/SSEShaderTools.dll"
+	};
+
+	for (const auto dll : dlls) {
+		if (LoadLibrary(dll)) {
+			auto errorMessage = std::format("Incompatible DLL {} detected", stl::utf16_to_utf8(dll).value_or("<unicode conversion error>"s));
+			logger::error("{}", errorMessage);
+			errors.push_back(errorMessage);
+		}
+	}
+
+	if (errors.empty() && !REL::Module::IsVR())
+		Hooks::InstallD3DHooks();
 
 	return true;
 }

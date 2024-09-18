@@ -1,6 +1,7 @@
 [submodule "extern/CommonLibSSE-NG"]
 	path = extern/CommonLibSSE-NG
 	url = https://github.com/alandtse/CommonLibVR.git
-[submodule "extern/NVAPI"]
-	path = extern/NVAPI
-	url = https://github.com/NVIDIA/nvapi.git
+
+[submodule "extern/Streamline"]
+	path = extern/Streamline
+	url = https://github.com/FlayaN/Streamline.git
