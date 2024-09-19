@@ -1646,10 +1646,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	pbrSurfaceProperties.AO = rawRMAOS.z;
 	pbrSurfaceProperties.F0 = lerp(saturate(rawRMAOS.w), baseColor.xyz, pbrSurfaceProperties.Metallic);
 
-	pbrSurfaceProperties.GlintScreenSpaceScale = glintParameters.x;
-	pbrSurfaceProperties.GlintLogMicrofacetDensity = glintParameters.y;
-	pbrSurfaceProperties.GlintMicrofacetRoughness = glintParameters.z;
-	pbrSurfaceProperties.GlintDensityRandomization = glintParameters.w;
+	pbrSurfaceProperties.GlintScreenSpaceScale = max(1, glintParameters.x);
+	pbrSurfaceProperties.GlintLogMicrofacetDensity = clamp(40.f - glintParameters.y, 1, 40);
+	pbrSurfaceProperties.GlintMicrofacetRoughness = clamp(glintParameters.z, 0.005, 0.3);
+	pbrSurfaceProperties.GlintDensityRandomization = clamp(glintParameters.w, 0, 5);
+
+#		if defined(GLINT)
+	PBR::PrecomputeGlints(uvOriginal, ddx(uvOriginal), ddy(uvOriginal), pbrSurfaceProperties.GlintScreenSpaceScale, pbrSurfaceProperties.GlintCache);
+#		endif
 
 	baseColor.xyz *= 1 - pbrSurfaceProperties.Metallic;
 
