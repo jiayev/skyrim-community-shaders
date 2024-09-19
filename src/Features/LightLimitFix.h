@@ -37,6 +37,7 @@ public:
 		float radius;
 		PositionOpt positionWS[2];
 		PositionOpt positionVS[2];
+		float pad0[4];
 	};
 
 	struct ClusterAABB
