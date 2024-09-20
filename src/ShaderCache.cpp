@@ -1124,7 +1124,7 @@ namespace SIE
 		{
 			D3D11_SHADER_DESC desc;
 			if (FAILED(reflector.GetDesc(&desc))) {
-				logger::error("Failed to get shader descriptor for {} shader {}::{}",
+				logger::error("Failed to get shader descriptor for {} shader {}::{:X}",
 					magic_enum::enum_name(shaderClass), magic_enum::enum_name(shader.shaderType.get()),
 					descriptor);
 				return;
@@ -1138,7 +1138,7 @@ namespace SIE
 					D3D11_SIGNATURE_PARAMETER_DESC inputDesc;
 					if (FAILED(reflector.GetInputParameterDesc(inputIndex, &inputDesc))) {
 						logger::error(
-							"Failed to get input parameter {} descriptor for {} shader {}::{}",
+							"Failed to get input parameter {} descriptor for {} shader {}::{:X}",
 							inputIndex, magic_enum::enum_name(shaderClass),
 							magic_enum::enum_name(shader.shaderType.get()),
 							descriptor);
@@ -1189,7 +1189,7 @@ namespace SIE
 				[&](const char* bufferName, size_t& bufferSize) {
 					auto bufferReflector = reflector.GetConstantBufferByName(bufferName);
 					if (bufferReflector == nullptr) {
-						logger::trace("Buffer {} not found for {} shader {}::{}",
+						logger::trace("Buffer {} not found for {} shader {}::{:X}",
 							bufferName, magic_enum::enum_name(shaderClass),
 							magic_enum::enum_name(shader.shaderType.get()),
 							descriptor);
@@ -1198,7 +1198,7 @@ namespace SIE
 
 					D3D11_SHADER_BUFFER_DESC bufferDesc;
 					if (FAILED(bufferReflector->GetDesc(&bufferDesc))) {
-						logger::trace("Failed to get buffer {} descriptor for {} shader {}::{}",
+						logger::trace("Failed to get buffer {} descriptor for {} shader {}::{:X}",
 							bufferName, magic_enum::enum_name(shaderClass),
 							magic_enum::enum_name(shader.shaderType.get()),
 							descriptor);
@@ -1210,7 +1210,7 @@ namespace SIE
 
 						D3D11_SHADER_VARIABLE_DESC varDesc;
 						if (FAILED(var->GetDesc(&varDesc))) {
-							logger::trace("Failed to get variable descriptor for {} shader {}::{}",
+							logger::trace("Failed to get variable descriptor for {} shader {}::{:X}",
 								magic_enum::enum_name(shaderClass), magic_enum::enum_name(shader.shaderType.get()),
 								descriptor);
 							continue;
@@ -1222,7 +1222,7 @@ namespace SIE
 						if (variableFound) {
 							constantOffsets[variableIndex] = (int8_t)(varDesc.StartOffset / 4);
 						} else {
-							logger::trace("Unknown variable name {} in {} shader {}::{}",
+							logger::trace("Unknown variable name {} in {} shader {}::{:X}",
 								varDesc.Name, magic_enum::enum_name(shaderClass),
 								magic_enum::enum_name(shader.shaderType.get()),
 								descriptor);
@@ -1240,7 +1240,7 @@ namespace SIE
 									if (variableArrayIndex != -1) {
 										constantOffsets[variableArrayIndex] = static_cast<int8_t>(varDesc.StartOffset / 4);
 									} else {
-										logger::debug("Unknown variable name {} in {} shader {}::{}",
+										logger::debug("Unknown variable name {} in {} shader {}::{:X}",
 											arrayName, magic_enum::enum_name(shaderClass),
 											magic_enum::enum_name(shader.shaderType.get()), descriptor);
 									}
@@ -1257,7 +1257,7 @@ namespace SIE
 												static_cast<int8_t>((varDesc.StartOffset + elementSize * arrayIndex) / 4);
 										} else {
 											logger::debug(
-												"Unknown variable name {} in {} shader {}::{}", varName,
+												"Unknown variable name {} in {} shader {}::{:X}", varName,
 												magic_enum::enum_name(shaderClass),
 												magic_enum::enum_name(shader.shaderType.get()),
 												descriptor);
@@ -1334,7 +1334,7 @@ namespace SIE
 				if (cache.ShaderModifiedSince(shader.fxpFilename, diskCacheTime)) {
 					logger::debug("Diskcached shader {} older than {}", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true), std::format("{:%Y%m%d%H%M}", diskCacheTime));
 				} else if (FAILED(D3DReadFileToBlob(diskPath.c_str(), &shaderBlob))) {
-					logger::error("Failed to load {} shader {}::{}", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor);
+					logger::error("Failed to load {} shader {}::{:X}", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor);
 
 					if (shaderBlob != nullptr) {
 						shaderBlob->Release();
@@ -1376,7 +1376,7 @@ namespace SIE
 					shader.fxpFilename);
 			auto pathString = Util::WStringToString(path);
 			if (!std::filesystem::exists(path)) {
-				logger::error("Failed to compile {} shader {}::{}: {} does not exist", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor, pathString);
+				logger::error("Failed to compile {} shader {}::{:X}: {} does not exist", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor, pathString);
 				return nullptr;
 			}
 			logger::debug("Compiling {} {}:{}:{:X} to {}", pathString, magic_enum::enum_name(type), magic_enum::enum_name(shaderClass), descriptor, MergeDefinesString(defines));
@@ -1389,12 +1389,12 @@ namespace SIE
 
 			if (FAILED(compileResult)) {
 				if (errorBlob != nullptr) {
-					logger::error("Failed to compile {} shader {}::{}: {}",
+					logger::error("Failed to compile {} shader {}::{:X}:\n{}",
 						magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor,
 						static_cast<char*>(errorBlob->GetBufferPointer()));
 					errorBlob->Release();
 				} else {
-					logger::error("Failed to compile {} shader {}::{}",
+					logger::error("Failed to compile {} shader {}::{:X}",
 						magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor);
 				}
 				if (shaderBlob != nullptr) {
@@ -1469,7 +1469,7 @@ namespace SIE
 			const auto reflectionResult = D3DReflect(shaderData.GetBufferPointer(), shaderData.GetBufferSize(),
 				IID_PPV_ARGS(&reflector));
 			if (FAILED(reflectionResult)) {
-				logger::error("Failed to reflect vertex shader {}::{}", magic_enum::enum_name(shader.shaderType.get()),
+				logger::error("Failed to reflect vertex shader {}::{:X}", magic_enum::enum_name(shader.shaderType.get()),
 					descriptor);
 			} else {
 				std::array<size_t, 3> bufferSizes = { 0, 0, 0 };
@@ -1524,7 +1524,7 @@ namespace SIE
 			const auto reflectionResult = D3DReflect(shaderData.GetBufferPointer(),
 				shaderData.GetBufferSize(), IID_PPV_ARGS(&reflector));
 			if (FAILED(reflectionResult)) {
-				logger::error("Failed to reflect vertex shader {}::{}", magic_enum::enum_name(shader.shaderType.get()),
+				logger::error("Failed to reflect vertex shader {}::{:X}", magic_enum::enum_name(shader.shaderType.get()),
 					descriptor);
 			} else {
 				std::array<size_t, 3> bufferSizes = { 0, 0, 0 };
@@ -2329,7 +2329,7 @@ namespace SIE
 			const auto result = (*device)->CreateVertexShader(shaderBlob->GetBufferPointer(),
 				newShader->byteCodeSize, nullptr, reinterpret_cast<ID3D11VertexShader**>(&newShader->shader));
 			if (FAILED(result)) {
-				logger::error("Failed to create vertex shader {}::{}",
+				logger::error("Failed to create vertex shader {}::{:X}",
 					magic_enum::enum_name(shader.shaderType.get()), descriptor);
 				if (newShader->shader != nullptr) {
 					newShader->shader->Release();
@@ -2357,7 +2357,7 @@ namespace SIE
 			const auto result = (*device)->CreatePixelShader(shaderBlob->GetBufferPointer(),
 				shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11PixelShader**>(&newShader->shader));
 			if (FAILED(result)) {
-				logger::error("Failed to create pixel shader {}::{}",
+				logger::error("Failed to create pixel shader {}::{:X}",
 					magic_enum::enum_name(shader.shaderType.get()),
 					descriptor);
 				if (newShader->shader != nullptr) {
@@ -2386,7 +2386,7 @@ namespace SIE
 			const auto result = (*device)->CreateComputeShader(shaderBlob->GetBufferPointer(),
 				shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11ComputeShader**>(&newShader->shader));
 			if (FAILED(result)) {
-				logger::error("Failed to create pixel shader {}::{}",
+				logger::error("Failed to create pixel shader {}::{:X}",
 					magic_enum::enum_name(shader.shaderType.get()),
 					descriptor);
 				if (newShader->shader != nullptr) {
