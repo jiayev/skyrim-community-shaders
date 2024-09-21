@@ -131,35 +131,45 @@ void State::Load(ConfigMode a_configMode)
 {
 	ConfigMode configMode = a_configMode;
 	auto& shaderCache = SIE::ShaderCache::Instance();
+	json settings;
+
+	// Attempt to load the config file
+	auto tryLoadConfig = [&](const std::string& path) {
+		std::ifstream i(path);
+		if (!i.is_open()) {
+			return false;
+		}
+		try {
+			i >> settings;
+			i.close();  // Close the file after reading
+			return true;
+		} catch (const nlohmann::json::parse_error& e) {
+			logger::warn("Error parsing json config file ({}) : {}\n", path, e.what());
+			i.close();  // Ensure the file is closed even on error
+			return false;
+		}
+	};
 
 	std::string configPath = GetConfigPath(configMode);
-	std::ifstream i(configPath);
-	if (!i.is_open()) {
+	if (!tryLoadConfig(configPath)) {
 		logger::info("Unable to open user config file ({}); trying default ({})", configPath, defaultConfigPath);
 		configMode = ConfigMode::DEFAULT;
 		configPath = GetConfigPath(configMode);
-		i.open(configPath);
-		if (!i.is_open()) {
+
+		if (!tryLoadConfig(configPath)) {
 			logger::info("No default config ({}), generating new one", configPath);
 			std::fill(enabledClasses, enabledClasses + RE::BSShader::Type::Total - 1, true);
 			Save(configMode);
-			i.open(configPath);
-			if (!i.is_open()) {
-				logger::error("Error opening config file ({})\n", configPath);
-				return;
+			// Attempt to load the newly created config
+			configPath = GetConfigPath(configMode);
+			if (!tryLoadConfig(configPath)) {
+				logger::error("Error opening newly created config file ({})\n", configPath);
+				return;  // Exit if the new config can't be opened
 			}
 		}
 	}
-	logger::info("Loading config file ({})", configPath);
 
-	json settings;
-	try {
-		i >> settings;
-	} catch (const nlohmann::json::parse_error& e) {
-		logger::error("Error parsing json config file ({}) : {}\n", configPath, e.what());
-		return;
-	}
-
+	// Proceed with loading settings from the loaded configuration
 	if (settings["Menu"].is_object()) {
 		Menu::GetSingleton()->Load(settings["Menu"]);
 	}
@@ -213,7 +223,7 @@ void State::Load(ConfigMode a_configMode)
 
 	for (auto* feature : Feature::GetFeatureList())
 		feature->Load(settings);
-	i.close();
+
 	if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
 		logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
 		Save(configMode);
