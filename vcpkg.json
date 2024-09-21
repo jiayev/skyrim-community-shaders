@@ -44,7 +44,7 @@
       "name": "magic-enum",
       "version": "0.9.6",
       "port-version": 1
-  }
+    }
   ],
-  "builtin-baseline": "1dc5ee30eb1032221d29f281f4a94b73f06b4284"
+  "builtin-baseline": "98aa6396292d57e737a6ef999d4225ca488859d5"
 }
