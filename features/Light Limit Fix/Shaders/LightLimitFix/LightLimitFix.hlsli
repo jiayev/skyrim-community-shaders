@@ -1,19 +1,4 @@
-struct LightGrid
-{
-	uint offset;
-	uint lightCount;
-	float pad0[2];
-};
-
-struct StructuredLight
-{
-	float3 color;
-	float radius;
-	float4 positionWS[2];
-	float4 positionVS[2];
-	float pad0[4];
-};
-
+#include "LightLimitFix\Common.hlsli"
 struct StrictLightData
 {
 	StructuredLight StrictLights[15];
