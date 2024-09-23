@@ -283,7 +283,7 @@ void State::PostPostLoad()
 	else
 		logger::info("Skyrim Upscaler not detected");
 	Deferred::Hooks::Install();
-	//TruePBR::GetSingleton()->PostPostLoad();
+	TruePBR::GetSingleton()->PostPostLoad();
 	Streamline::InstallHooks();
 }
 

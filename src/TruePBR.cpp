@@ -1067,7 +1067,7 @@ struct BSLightingShader_SetupGeometry
 		}
 
 		shader->currentRawTechnique &= ~0b111000u;
-		shader->currentRawTechnique |= ((pass->numLights - 1) << 3);
+		shader->currentRawTechnique |= (std::min((pass->numLights - 1), 7) << 3);
 
 		func(shader, pass, renderFlags);
 
