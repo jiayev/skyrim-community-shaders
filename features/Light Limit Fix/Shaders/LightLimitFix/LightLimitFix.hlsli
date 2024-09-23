@@ -15,7 +15,7 @@ StructuredBuffer<StrictLightData> strictLights : register(t53);
 
 namespace LightLimitFix
 {
-	bool GetClusterIndex(in float2 uv, in float z, out uint clusterIndex)
+	bool GetClusterIndex(in float2 uv, in float z, inout uint clusterIndex)
 	{
 		const uint3 clusterSize = lightLimitFixSettings.ClusterSize.xyz;
 
