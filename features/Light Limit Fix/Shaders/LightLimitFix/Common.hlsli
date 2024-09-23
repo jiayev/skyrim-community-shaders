@@ -17,7 +17,7 @@ struct LightGrid
 {
 	uint offset;
 	uint lightCount;
-	float pad0[2];
+	uint pad0[2];
 };
 
 struct StructuredLight
@@ -26,7 +26,6 @@ struct StructuredLight
 	float radius;
 	float4 positionWS[2];
 	float4 positionVS[2];
-	float pad0[4];
 };
 
 #endif  //__LLF_COMMON_DEPENDENCY_HLSL__
