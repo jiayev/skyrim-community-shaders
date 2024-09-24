@@ -11,33 +11,6 @@ constexpr auto MIPLEVELS = 8;
 void DynamicCubemaps::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-		if (REL::Module::IsVR()) {
-			if (ImGui::BeginTable("##SettingsToggles", 3, ImGuiTableFlags_SizingStretchSame)) {
-				for (const auto& settingName : iniVRCubeMapSettings) {
-					if (auto setting = RE::INISettingCollection::GetSingleton()->GetSetting(settingName); setting) {
-						ImGui::TableNextColumn();
-						ImGui::Checkbox(settingName.c_str(), &setting->data.b);
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							//ImGui::Text(fmt::format(fmt::runtime("{} {0:x}"), settingName, &setting->data.b).c_str());
-							ImGui::Text(settingName.c_str());
-						}
-					}
-				}
-				for (const auto& settingPair : hiddenVRCubeMapSettings) {
-					const auto& settingName = settingPair.first;
-					const auto address = REL::Offset{ settingPair.second }.address();
-					bool* setting = reinterpret_cast<bool*>(address);
-					ImGui::TableNextColumn();
-					ImGui::Checkbox(settingName.c_str(), setting);
-					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::Text(settingName.c_str());
-						//ImGui::Text(fmt::format(fmt::runtime("{} {0:x}"), settingName, address).c_str());
-					}
-				}
-				ImGui::EndTable();
-			}
-		}
-
 		if (ImGui::TreeNodeEx("Dynamic Cubemap Creator", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Text("You must enable creator mode by adding the shader define CREATOR");
 			ImGui::Checkbox("Enable Creator", reinterpret_cast<bool*>(&settings.Enabled));
@@ -117,6 +90,13 @@ void DynamicCubemaps::DrawSettings()
 			}
 			ImGui::TreePop();
 		}
+		if (REL::Module::IsVR()) {
+			if (ImGui::TreeNodeEx("Advanced VR Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+				RenderImGuiSettingsTree(iniVRCubeMapSettings, "VR");
+				RenderImGuiSettingsTree(hiddenVRCubeMapSettings, "hiddenVR");
+				ImGui::TreePop();
+			}
+		}
 
 		ImGui::Spacing();
 		ImGui::Spacing();
@@ -129,23 +109,8 @@ void DynamicCubemaps::DataLoaded()
 {
 	if (REL::Module::IsVR()) {
 		// enable cubemap settings in VR
-		for (const auto& settingName : iniVRCubeMapSettings) {
-			if (auto setting = RE::INISettingCollection::GetSingleton()->GetSetting(settingName); setting) {
-				if (!setting->data.b) {
-					logger::info("[DC] Changing {} from {} to {} to support Dynamic Cubemaps", settingName, setting->data.b, true);
-					setting->data.b = true;
-				}
-			}
-		}
-		for (const auto& settingPair : hiddenVRCubeMapSettings) {
-			const auto& settingName = settingPair.first;
-			const auto address = REL::Offset{ settingPair.second }.address();
-			bool* setting = reinterpret_cast<bool*>(address);
-			if (!*setting) {
-				logger::info("[DC] Changing {} from {} to {} to support Dynamic Cubemaps", settingName, *setting, true);
-				*setting = true;
-			}
-		}
+		EnableBooleanSettings(iniVRCubeMapSettings, GetName());
+		EnableBooleanSettings(hiddenVRCubeMapSettings, GetName());
 	}
 	MenuOpenCloseEventHandler::Register();
 }

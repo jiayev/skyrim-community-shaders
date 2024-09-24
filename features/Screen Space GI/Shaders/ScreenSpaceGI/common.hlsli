@@ -39,9 +39,9 @@ cbuffer SSGICB : register(b1)
 	uint NumSteps;
 	float DepthMIPSamplingOffset;
 
+	float AORadius;
+	float GIRadius;
 	float EffectRadius;
-	float EffectFalloffRange;
-	float ThinOccluderCompensation;
 	float Thickness;
 	float2 DepthFadeRange;
 	float DepthFadeScaleConst;

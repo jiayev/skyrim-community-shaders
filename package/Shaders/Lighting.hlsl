@@ -1237,11 +1237,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif      // LANDSCAPE
 
 #	if defined(SPARKLE)
-#		if defined(VR)
 	diffuseUv = ProjectedUVParams2.yy * (input.TexCoord0.zw + (uv - uvOriginal));
-#		else
-	diffuseUv = ProjectedUVParams2.yy * (input.TexCoord0.zw + (uv - uvOriginal));
-#		endif  // VR
 #	else
 	diffuseUv = uv;
 #	endif  // SPARKLE
@@ -1573,7 +1569,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			if defined(SNOW)
 	psout.Parameters.y = 1;
 #			endif  // SNOW
-#		elif !defined(FACEGEN) && !defined(PARALLAX) && !defined(SPARKLE)
+#		elif !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX) && !defined(SPARKLE)
 	if (ProjectedUVParams3.w > 0.5) {
 		float2 projNormalDiffuseUv = ProjectedUVParams3.x * projNoiseUv;
 		float3 projNormal = TransformNormal(TexProjNormalSampler.Sample(SampProjNormalSampler, projNormalDiffuseUv).xyz);
@@ -1590,7 +1586,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			projectedGlintParameters = SparkleParams;
 		}
 		glintParameters = lerp(glintParameters, projectedGlintParameters, projectedMaterialWeight);
-#			endif
+#			endif  // TRUE_PBR
 		normal.xyz = lerp(normal.xyz, finalProjNormal, projectedMaterialWeight);
 		baseColor.xyz = lerp(baseColor.xyz, projBaseColor, projectedMaterialWeight);
 
@@ -1623,7 +1619,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		else
 	psout.Parameters.y = baseColor.w;
 #		endif  // LANDSCAPE
-#	endif
+#	endif      // SNOW
 
 #	if defined(WORLD_MAP)
 	baseColor.xyz = GetWorldMapBaseColor(rawBaseColor.xyz, baseColor.xyz, projWeight);
@@ -1646,10 +1642,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	pbrSurfaceProperties.AO = rawRMAOS.z;
 	pbrSurfaceProperties.F0 = lerp(saturate(rawRMAOS.w), baseColor.xyz, pbrSurfaceProperties.Metallic);
 
-	pbrSurfaceProperties.GlintScreenSpaceScale = glintParameters.x;
-	pbrSurfaceProperties.GlintLogMicrofacetDensity = glintParameters.y;
-	pbrSurfaceProperties.GlintMicrofacetRoughness = glintParameters.z;
-	pbrSurfaceProperties.GlintDensityRandomization = glintParameters.w;
+	pbrSurfaceProperties.GlintScreenSpaceScale = max(1, glintParameters.x);
+	pbrSurfaceProperties.GlintLogMicrofacetDensity = clamp(40.f - glintParameters.y, 1, 40);
+	pbrSurfaceProperties.GlintMicrofacetRoughness = clamp(glintParameters.z, 0.005, 0.3);
+	pbrSurfaceProperties.GlintDensityRandomization = clamp(glintParameters.w, 0, 5);
+
+#		if defined(GLINT)
+	PBR::PrecomputeGlints(uvOriginal, ddx(uvOriginal), ddy(uvOriginal), pbrSurfaceProperties.GlintScreenSpaceScale, pbrSurfaceProperties.GlintCache);
+#		endif
 
 	baseColor.xyz *= 1 - pbrSurfaceProperties.Metallic;
 
@@ -1915,7 +1915,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(SOFT_LIGHTING) || defined(BACK_LIGHTING) || defined(RIM_LIGHTING)
 		if (dirLightAngle > 0.0)
 #		endif
+		{
 			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position, screenUV, screenNoise, viewPosition, eyeIndex);
+#		if defined(TREE_ANIM)
+			PerGeometry sD = SharedPerShadow[0];
+			dirDetailShadow = lerp(1.0, dirDetailShadow, saturate(viewPosition.z / sqrt(sD.ShadowLightParam.z)));
+#		endif
+		}
 #	endif
 
 #	if defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
@@ -2358,6 +2364,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(HAIR)
 	float3 vertexColor = lerp(1, TintColor.xyz, input.Color.y);
+#	elif defined(TREE_ANIM) && defined(SKYLIGHTING)
+	float3 vertexColor = 1.0;
 #	else
 	float3 vertexColor = input.Color.xyz;
 #	endif  // defined (HAIR)

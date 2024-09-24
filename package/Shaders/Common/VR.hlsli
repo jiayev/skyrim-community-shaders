@@ -130,29 +130,36 @@ Gets VR Output
 */
 VR_OUTPUT GetVRVSOutput(float4 clipPos, uint a_eyeIndex = 0)
 {
-	VR_OUTPUT vsout;
-	vsout.VRPosition = 0.0.xxxx;
-	vsout.ClipDistance = 0.0;
-	vsout.CullDistance = 0.0;
+	VR_OUTPUT vsout = {
+		0.0.xxxx,  // VRPosition
+		0.0f,      // ClipDistance
+		0.0f       // CullDistance
+	};
+
 #	ifdef VR
-	float4 r0;
-	r0.xyzw = 0;
-	if (0 < StereoEnabled) {
-		r0.yz = dot(clipPos, EyeClipEdge[a_eyeIndex]);
+	bool isStereoEnabled = (StereoEnabled != 0);
+	float2 clipEdges;
+
+	if (isStereoEnabled) {
+		clipEdges.x = dot(clipPos, EyeClipEdge[a_eyeIndex]);
+		clipEdges.y = clipEdges.x;  // Both use the same calculation
 	} else {
-		r0.yz = float2(1, 1);
+		clipEdges = float2(1.0f, 1.0f);
 	}
 
-	r0.w = 2 + -StereoEnabled;
-	r0.x = dot(EyeOffsetScale, M_IdentityMatrix[a_eyeIndex].xy);
-	r0.xw = r0.xw * clipPos.wx;
-	r0.x = StereoEnabled * r0.x;
+	float stereoAdjustment = 2.0f - StereoEnabled;
+	float eyeOffset = dot(EyeOffsetScale, M_IdentityMatrix[a_eyeIndex].xy);
 
-	vsout.VRPosition.x = r0.w * 0.5 + r0.x;
-	vsout.VRPosition.yzw = clipPos.yzw;
+	float xPositionOffset = eyeOffset * clipPos.w * (isStereoEnabled ? 1.0f : 0.0f);
+	float xPositionBase = stereoAdjustment * clipPos.x;
 
-	vsout.ClipDistance.x = r0.z;
-	vsout.CullDistance.x = r0.y;
+	vsout.VRPosition.x = xPositionBase * 0.5f + xPositionOffset;
+	vsout.VRPosition.y = clipPos.y;
+	vsout.VRPosition.z = clipPos.z;
+	vsout.VRPosition.w = clipPos.w;
+
+	vsout.ClipDistance = clipEdges.y;
+	vsout.CullDistance = clipEdges.x;
 #	endif  // VR
 	return vsout;
 }

@@ -10,7 +10,6 @@
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ScreenSpaceGI::Settings,
 	Enabled,
-	// UseBitmask,
 	EnableGI,
 	EnableSpecularGI,
 	HalfRate,
@@ -19,9 +18,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	NumSlices,
 	NumSteps,
 	DepthMIPSamplingOffset,
-	EffectRadius,
-	// EffectFalloffRange,
-	// ThinOccluderCompensation,
+	AORadius,
+	GIRadius,
 	Thickness,
 	DepthFadeRange,
 	BackfaceStrength,
@@ -100,10 +98,6 @@ void ScreenSpaceGI::DrawSettings()
 					"Doubles the cost of denoisers.\n"
 					"Only for Complex Material or TruePBR materials.");
 		}
-		// ImGui::TableNextColumn();
-		// recompileFlag |= ImGui::Checkbox("Bitmask", &settings.UseBitmask);
-		// if (auto _tt = Util::HoverTooltipWrapper())
-		// 	ImGui::Text("An alternative way to calculate AO/GI");
 
 		ImGui::EndTable();
 	}
@@ -216,34 +210,26 @@ void ScreenSpaceGI::DrawSettings()
 
 	ImGui::Separator();
 
-	ImGui::SliderFloat("Effect radius", &settings.EffectRadius, 10.f, 800.0f, "%.1f game units");
+	ImGui::SliderFloat("AO radius", &settings.AORadius, 10.f, 800.0f, "%.1f game units");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("World (viewspace) effect radius. Depends on the scene & requirements");
+		ImGui::Text("A smaller radius produces tighter AO.");
+
+	{
+		auto _ = DisableGuard(!settings.EnableGI);
+
+		ImGui::SliderFloat("IL radius", &settings.GIRadius, 10.f, 800.0f, "%.1f game units");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("A larger radius produces wider IL.");
+	}
 
 	ImGui::SliderFloat2("Depth Fade Range", &settings.DepthFadeRange.x, 1e4, 5e4, "%.0f game units");
 
 	if (showAdvanced) {
 		ImGui::Separator();
-		// {
-		// 	auto _ = DisableGuard(settings.UseBitmask);
 
-		// 	ImGui::SliderFloat("Falloff Range", &settings.EffectFalloffRange, 0.05f, 1.0f, "%.2f");
-		// 	if (auto _tt = Util::HoverTooltipWrapper())
-		// 		ImGui::Text("Gently reduce sample impact as it gets out of 'Effect radius' bounds");
-
-		// 	if (showAdvanced) {
-		// 		ImGui::SliderFloat("Thin Occluder Compensation", &settings.ThinOccluderCompensation, 0.f, 0.7f, "%.2f");
-		// 		if (auto _tt = Util::HoverTooltipWrapper())
-		// 			ImGui::Text("Slightly reduce impact of samples further back to counter the bias from depth-based (incomplete) input scene geometry data");
-		// 	}
-		// }
-		{
-			auto _ = DisableGuard(!settings.UseBitmask);
-
-			ImGui::SliderFloat("Thickness", &settings.Thickness, 0.f, 500.0f, "%.1f game units");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("How thick the occluders are. Only affects AO.");
-		}
+		ImGui::SliderFloat("Thickness", &settings.Thickness, 0.f, 500.0f, "%.1f game units");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("How thick the occluders are. Only affects AO.");
 	}
 
 	///////////////////////////////
@@ -571,8 +557,6 @@ void ScreenSpaceGI::CompileComputeShaders()
 			info.defines.push_back({ "HALF_RATE", "" });
 		if (settings.EnableTemporalDenoiser)
 			info.defines.push_back({ "TEMPORAL_DENOISER", "" });
-		if (settings.UseBitmask)
-			info.defines.push_back({ "BITMASK", "" });
 		if (settings.EnableGI)
 			info.defines.push_back({ "GI", "" });
 		if (settings.EnableSpecularGI)
@@ -629,9 +613,9 @@ void ScreenSpaceGI::UpdateSB()
 		data.NumSteps = settings.NumSteps;
 		data.DepthMIPSamplingOffset = settings.DepthMIPSamplingOffset;
 
-		data.EffectRadius = settings.EffectRadius;
-		data.EffectFalloffRange = settings.EffectFalloffRange;
-		data.ThinOccluderCompensation = settings.ThinOccluderCompensation;
+		data.EffectRadius = std::max(settings.AORadius, settings.GIRadius);
+		data.AORadius = settings.AORadius / data.EffectRadius;
+		data.GIRadius = settings.GIRadius / data.EffectRadius;
 		data.Thickness = settings.Thickness;
 		data.DepthFadeRange = settings.DepthFadeRange;
 		data.DepthFadeScaleConst = 1 / (settings.DepthFadeRange.y - settings.DepthFadeRange.x);
@@ -639,7 +623,7 @@ void ScreenSpaceGI::UpdateSB()
 		data.BackfaceStrength = settings.BackfaceStrength;
 		data.GIBounceFade = settings.GIBounceFade;
 		data.GIDistanceCompensation = settings.GIDistanceCompensation;
-		data.GICompensationMaxDist = settings.EffectRadius;
+		data.GICompensationMaxDist = settings.AORadius;
 
 		data.AOPower = settings.AOPower;
 		data.GIStrength = settings.GIStrength;

@@ -216,23 +216,18 @@ void UnpackFloatParallel4(float4 input, out float4 a, out float4 b)
 // GLINTS TEST NOVEMBER 2022
 //=======================================================================================
 
-struct GlintInput
+struct GlintCachedVars
 {
-	float3 H;
 	float2 uv;
-	float2 duvdx;
-	float2 duvdy;
-
-	float ScreenSpaceScale;
-	float LogMicrofacetDensity;
-	float MicrofacetRoughness;
-	float DensityRandomization;
+	uint gridSeed;
+	float footprintArea;
+	float gridWeight;
 };
 
-void CustomRand4Texture(GlintInput params, float2 slope, float2 slopeRandOffset, out float4 outUniform, out float4 outGaussian, out float2 slopeLerp)
+void CustomRand4Texture(float microfacetRoughness, float2 slope, float2 slopeRandOffset, out float4 outUniform, out float4 outGaussian, out float2 slopeLerp)
 {
-	uint2 size = 512;
-	float2 slope2 = abs(slope) / params.MicrofacetRoughness;
+	uint2 size = 64;
+	float2 slope2 = abs(slope) / microfacetRoughness;
 	slope2 = slope2 + (slopeRandOffset * size);
 	slopeLerp = frac(slope2);
 	uint2 slopeCoord = uint2(floor(slope2)) % size;
@@ -256,11 +251,11 @@ float GenerateAngularBinomialValueForSurfaceCell(float4 randB, float4 randG, flo
 	return result;
 }
 
-float SampleGlintGridSimplex(GlintInput params, float2 uv, uint gridSeed, float2 slope, float footprintArea, float targetNDF, float gridWeight)
+float SampleGlintGridSimplex(float logDensity, float roughness, float densityRandomization, GlintCachedVars vars, float2 slope, float targetNDF)
 {
 	// Get surface space glint simplex grid cell
 	const float2x2 gridToSkewedGrid = float2x2(1.0, -0.57735027, 0.0, 1.15470054);
-	float2 skewedCoord = mul(gridToSkewedGrid, uv);
+	float2 skewedCoord = mul(gridToSkewedGrid, vars.uv);
 	int2 baseId = int2(floor(skewedCoord));
 	float3 temp = float3(frac(skewedCoord), 0.0);
 	temp.z = 1.0 - temp.x - temp.y;
@@ -272,24 +267,24 @@ float SampleGlintGridSimplex(GlintInput params, float2 uv, uint gridSeed, float2
 	float3 barycentrics = float3(-temp.z * s2, s - temp.y * s2, s - temp.x * s2);
 
 	// Generate per surface cell random numbers
-	float3 rand0 = pcg3dFloat(uint3(glint0 + 2147483648, gridSeed));  // TODO : optimize away manual seeds
-	float3 rand1 = pcg3dFloat(uint3(glint1 + 2147483648, gridSeed));
-	float3 rand2 = pcg3dFloat(uint3(glint2 + 2147483648, gridSeed));
+	float3 rand0 = pcg3dFloat(uint3(glint0 + 2147483648, vars.gridSeed));  // TODO : optimize away manual seeds
+	float3 rand1 = pcg3dFloat(uint3(glint1 + 2147483648, vars.gridSeed));
+	float3 rand2 = pcg3dFloat(uint3(glint2 + 2147483648, vars.gridSeed));
 
 	// Get per surface cell per slope cell random numbers
 	float4 rand0SlopesB, rand1SlopesB, rand2SlopesB, rand0SlopesG, rand1SlopesG, rand2SlopesG;
 	float2 slopeLerp0, slopeLerp1, slopeLerp2;
-	CustomRand4Texture(params, slope, rand0.yz, rand0SlopesB, rand0SlopesG, slopeLerp0);
-	CustomRand4Texture(params, slope, rand1.yz, rand1SlopesB, rand1SlopesG, slopeLerp1);
-	CustomRand4Texture(params, slope, rand2.yz, rand2SlopesB, rand2SlopesG, slopeLerp2);
+	CustomRand4Texture(roughness, slope, rand0.yz, rand0SlopesB, rand0SlopesG, slopeLerp0);
+	CustomRand4Texture(roughness, slope, rand1.yz, rand1SlopesB, rand1SlopesG, slopeLerp1);
+	CustomRand4Texture(roughness, slope, rand2.yz, rand2SlopesB, rand2SlopesG, slopeLerp2);
 
 	// Compute microfacet count with randomization
-	float3 logDensityRand = clamp(sampleNormalDistribution(float3(rand0.x, rand1.x, rand2.x), params.LogMicrofacetDensity.r, params.DensityRandomization), 0.0, 50.0);  // TODO : optimize sampleNormalDist
-	float3 microfacetCount = max(1e-8, footprintArea.rrr * exp(logDensityRand));
-	float3 microfacetCountBlended = microfacetCount * gridWeight;
+	float3 logDensityRand = clamp(sampleNormalDistribution(float3(rand0.x, rand1.x, rand2.x), logDensity.r, densityRandomization), 0.0, 50.0);  // TODO : optimize sampleNormalDist
+	float3 microfacetCount = max(1e-8, vars.footprintArea.rrr * exp(logDensityRand));
+	float3 microfacetCountBlended = microfacetCount * vars.gridWeight;
 
 	// Compute binomial properties
-	float hitProba = params.MicrofacetRoughness * targetNDF;                                           // probability of hitting desired half vector in NDF distribution
+	float hitProba = roughness * targetNDF;                                                            // probability of hitting desired half vector in NDF distribution
 	float3 footprintOneHitProba = (1.0 - pow(abs(1.0 - hitProba.rrr), microfacetCountBlended));        // probability of hitting at least one microfacet in footprint
 	float3 footprintMean = (microfacetCountBlended - 1.0) * hitProba.rrr;                              // Expected value of number of hits in the footprint given already one hit
 	float3 footprintSTD = sqrt((microfacetCountBlended - 1.0) * hitProba.rrr * (1.0 - hitProba.rrr));  // Standard deviation of number of hits in the footprint given already one hit
@@ -440,18 +435,16 @@ void GetAnisoCorrectingGridTetrahedron(bool centerSpecialCase, inout float theta
 	return;
 }
 
-float4 SampleGlints2023NDF(GlintInput params, float targetNDF, float maxNDF)
+void PrecomputeGlints(float2 uv, float2 duvdx, float2 duvdy, float screenSpaceScale, out GlintCachedVars vars[4])
 {
 	// ACCURATE PIXEL FOOTPRINT ELLIPSE
 	float2 ellipseMajor, ellipseMinor;
-	GetGradientEllipse(params.duvdx, params.duvdy, ellipseMajor, ellipseMinor);
+	GetGradientEllipse(duvdx, duvdy, ellipseMajor, ellipseMinor);
 	float ellipseRatio = length(ellipseMajor) / (length(ellipseMinor) + 1e-8);
 
 	// SHARED GLINT NDF VALUES
-	float halfScreenSpaceScaler = params.ScreenSpaceScale * 0.5;
+	float halfScreenSpaceScaler = screenSpaceScale * 0.5;
 	float footprintArea = length(ellipseMajor) * halfScreenSpaceScaler * length(ellipseMinor) * halfScreenSpaceScaler * 4.0;
-	float2 slope = params.H.xy;  // Orthogrtaphic slope projected grid
-	float rescaledTargetNDF = targetNDF / maxNDF;
 
 	// MANUAL LOD COMPENSATION
 	float lod = log2(length(ellipseMinor) * halfScreenSpaceScaler);
@@ -505,19 +498,43 @@ float4 SampleGlints2023NDF(GlintInput params, float targetNDF, float maxNDF)
 		tetraC.x = (tetraC.y == 0) ? 3 : tetraC.x;
 		tetraD.x = (tetraD.y == 0) ? 3 : tetraD.x;
 	}
-	float2 uvRotA = RotateUV(params.uv, thetaBins[tetraA.x], 0.0.rr);
-	float2 uvRotB = RotateUV(params.uv, thetaBins[tetraB.x], 0.0.rr);
-	float2 uvRotC = RotateUV(params.uv, thetaBins[tetraC.x], 0.0.rr);
-	float2 uvRotD = RotateUV(params.uv, thetaBins[tetraD.x], 0.0.rr);
+	float2 uvRotA = RotateUV(uv, thetaBins[tetraA.x], 0.0.rr);
+	float2 uvRotB = RotateUV(uv, thetaBins[tetraB.x], 0.0.rr);
+	float2 uvRotC = RotateUV(uv, thetaBins[tetraC.x], 0.0.rr);
+	float2 uvRotD = RotateUV(uv, thetaBins[tetraD.x], 0.0.rr);
 
 	// SAMPLE GLINT GRIDS
 	uint gridSeedA = HashWithoutSine13(float3(log2(divLods[tetraA.z]), fmod(thetaBins[tetraA.x], 6.28318530718), ratios[tetraA.y])) * 4294967296.0;
 	uint gridSeedB = HashWithoutSine13(float3(log2(divLods[tetraB.z]), fmod(thetaBins[tetraB.x], 6.28318530718), ratios[tetraB.y])) * 4294967296.0;
 	uint gridSeedC = HashWithoutSine13(float3(log2(divLods[tetraC.z]), fmod(thetaBins[tetraC.x], 6.28318530718), ratios[tetraC.y])) * 4294967296.0;
 	uint gridSeedD = HashWithoutSine13(float3(log2(divLods[tetraD.z]), fmod(thetaBins[tetraD.x], 6.28318530718), ratios[tetraD.y])) * 4294967296.0;
-	float sampleA = SampleGlintGridSimplex(params, uvRotA / divLods[tetraA.z] / float2(1.0, ratios[tetraA.y]), gridSeedA, slope, ratios[tetraA.y] * footprintAreas[tetraA.z], rescaledTargetNDF, tetraBarycentricWeights.x);
-	float sampleB = SampleGlintGridSimplex(params, uvRotB / divLods[tetraB.z] / float2(1.0, ratios[tetraB.y]), gridSeedB, slope, ratios[tetraB.y] * footprintAreas[tetraB.z], rescaledTargetNDF, tetraBarycentricWeights.y);
-	float sampleC = SampleGlintGridSimplex(params, uvRotC / divLods[tetraC.z] / float2(1.0, ratios[tetraC.y]), gridSeedC, slope, ratios[tetraC.y] * footprintAreas[tetraC.z], rescaledTargetNDF, tetraBarycentricWeights.z);
-	float sampleD = SampleGlintGridSimplex(params, uvRotD / divLods[tetraD.z] / float2(1.0, ratios[tetraD.y]), gridSeedD, slope, ratios[tetraD.y] * footprintAreas[tetraD.z], rescaledTargetNDF, tetraBarycentricWeights.w);
-	return min((sampleA + sampleB + sampleC + sampleD) * (1.0 / params.MicrofacetRoughness), 20) * maxNDF;  // somewhat brute force way of prevent glazing angle extremities
+
+	vars[0].uv = uvRotA / divLods[tetraA.z] / float2(1.0, ratios[tetraA.y]);
+	vars[0].gridSeed = gridSeedA;
+	vars[0].footprintArea = ratios[tetraA.y] * footprintAreas[tetraA.z];
+	vars[0].gridWeight = tetraBarycentricWeights.x;
+	vars[1].uv = uvRotB / divLods[tetraB.z] / float2(1.0, ratios[tetraB.y]);
+	vars[1].gridSeed = gridSeedB;
+	vars[1].footprintArea = ratios[tetraB.y] * footprintAreas[tetraB.z];
+	vars[1].gridWeight = tetraBarycentricWeights.y;
+	vars[2].uv = uvRotC / divLods[tetraC.z] / float2(1.0, ratios[tetraC.y]);
+	vars[2].gridSeed = gridSeedC;
+	vars[2].footprintArea = ratios[tetraC.y] * footprintAreas[tetraC.z];
+	vars[2].gridWeight = tetraBarycentricWeights.z;
+	vars[3].uv = uvRotA / divLods[tetraD.z] / float2(1.0, ratios[tetraD.y]);
+	vars[3].gridSeed = gridSeedD;
+	vars[3].footprintArea = ratios[tetraD.y] * footprintAreas[tetraD.z];
+	vars[3].gridWeight = tetraBarycentricWeights.w;
+}
+
+float4 SampleGlints2023NDF(float logDensity, float roughness, float densityRandomization, GlintCachedVars vars[4], float3 H, float targetNDF, float maxNDF)
+{
+	float2 slope = H.xy;  // Orthogrtaphic slope projected grid
+	float rescaledTargetNDF = targetNDF / maxNDF;
+
+	float sampleA = SampleGlintGridSimplex(logDensity, roughness, densityRandomization, vars[0], slope, rescaledTargetNDF);
+	float sampleB = SampleGlintGridSimplex(logDensity, roughness, densityRandomization, vars[1], slope, rescaledTargetNDF);
+	float sampleC = SampleGlintGridSimplex(logDensity, roughness, densityRandomization, vars[2], slope, rescaledTargetNDF);
+	float sampleD = SampleGlintGridSimplex(logDensity, roughness, densityRandomization, vars[3], slope, rescaledTargetNDF);
+	return min((sampleA + sampleB + sampleC + sampleD) * (1.0 / roughness), 20) * maxNDF;  // somewhat brute force way of prevent glazing angle extremities
 }

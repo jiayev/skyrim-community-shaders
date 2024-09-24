@@ -633,12 +633,16 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float4 baseTexColor = float4(1, 1, 1, 1);
 	float4 baseColor = float4(1, 1, 1, 1);
-#	if defined(TEXTURE) || (defined(ADDBLEND) && defined(VC))
-	baseTexColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-	baseColor *= baseTexColor;
-	if (PixelShaderDescriptor & _IgnoreTexAlpha || PixelShaderDescriptor & _GrayscaleToAlpha)
-		baseColor.w = 1;
+#	if !defined(TEXTURE)
+	[branch] if (PixelShaderDescriptor & _GrayscaleToColor || PixelShaderDescriptor & _GrayscaleToAlpha)
 #	endif
+	{
+		baseTexColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
+		baseColor *= baseTexColor;
+		if (PixelShaderDescriptor & _IgnoreTexAlpha || PixelShaderDescriptor & _GrayscaleToAlpha) {
+			baseColor.w = 1;
+		}
+	}
 
 #	if defined(MEMBRANE)
 	float4 baseColorMul = float4(1, 1, 1, 1);

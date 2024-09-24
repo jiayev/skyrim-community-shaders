@@ -111,6 +111,7 @@ public:
 	uint lastModifiedPixelDescriptor = 0;
 	uint currentExtraDescriptor = 0;
 	uint lastExtraDescriptor = 0;
+	bool forceUpdatePermutationBuffer = true;
 
 	enum class ExtraShaderDescriptors : uint32_t
 	{

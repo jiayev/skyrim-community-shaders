@@ -17,6 +17,7 @@ SKSE core plugin for community-driven advanced graphics modifications.
 - [Vcpkg](https://github.com/microsoft/vcpkg)
   - Install vcpkg using the directions in vcpkg's [Quick Start Guide](https://github.com/microsoft/vcpkg#quick-start-windows)
   - After install, add a new environment variable named `VCPKG_ROOT` with the value as the path to the folder containing vcpkg
+  - Make sure your local vcpkg repo matches the commit id specified in `builtin-baseline` in `vcpkg.json` otherwise you might get another version of a non pinned vcpkg dependency causing undefined behaviour
 
 ## User Requirements
 
