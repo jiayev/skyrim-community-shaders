@@ -1915,7 +1915,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(SOFT_LIGHTING) || defined(BACK_LIGHTING) || defined(RIM_LIGHTING)
 		if (dirLightAngle > 0.0)
 #		endif
+		{
 			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position, screenUV, screenNoise, viewPosition, eyeIndex);
+#		if defined(TREE_ANIM)
+			PerGeometry sD = SharedPerShadow[0];
+			dirDetailShadow = lerp(1.0, dirDetailShadow, saturate(viewPosition.z / sqrt(sD.ShadowLightParam.z)));
+#		endif
+		}
 #	endif
 
 #	if defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
@@ -2358,6 +2364,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(HAIR)
 	float3 vertexColor = lerp(1, TintColor.xyz, input.Color.y);
+#	elif defined(TREE_ANIM) && defined(SKYLIGHTING)
+	float3 vertexColor = 1.0;
 #	else
 	float3 vertexColor = input.Color.xyz;
 #	endif  // defined (HAIR)
