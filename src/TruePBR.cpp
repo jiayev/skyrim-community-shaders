@@ -289,7 +289,7 @@ void TruePBR::PrePass()
 
 void TruePBR::SetupGlintsTexture()
 {
-	constexpr uint noiseTexSize = 512;
+	constexpr uint noiseTexSize = 64;
 
 	D3D11_TEXTURE2D_DESC tex_desc{
 		.Width = noiseTexSize,
@@ -1067,7 +1067,7 @@ struct BSLightingShader_SetupGeometry
 		}
 
 		shader->currentRawTechnique &= ~0b111000u;
-		shader->currentRawTechnique |= ((pass->numLights - 1) << 3);
+		shader->currentRawTechnique |= (std::min((pass->numLights - 1), 7) << 3);
 
 		func(shader, pass, renderFlags);
 

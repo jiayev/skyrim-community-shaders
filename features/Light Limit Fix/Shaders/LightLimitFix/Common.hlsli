@@ -1,3 +1,5 @@
+#ifndef __LLF_COMMON_DEPENDENCY_HLSL__
+#define __LLF_COMMON_DEPENDENCY_HLSL__
 
 #define NUMTHREAD_X 16
 #define NUMTHREAD_Y 16
@@ -15,7 +17,7 @@ struct LightGrid
 {
 	uint offset;
 	uint lightCount;
-	float pad0[2];
+	uint pad0[2];
 };
 
 struct StructuredLight
@@ -25,3 +27,5 @@ struct StructuredLight
 	float4 positionWS[2];
 	float4 positionVS[2];
 };
+
+#endif  //__LLF_COMMON_DEPENDENCY_HLSL__

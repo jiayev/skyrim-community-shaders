@@ -1,18 +1,4 @@
-struct LightGrid
-{
-	uint offset;
-	uint lightCount;
-	float pad0[2];
-};
-
-struct StructuredLight
-{
-	float3 color;
-	float radius;
-	float4 positionWS[2];
-	float4 positionVS[2];
-};
-
+#include "LightLimitFix\Common.hlsli"
 struct StrictLightData
 {
 	StructuredLight StrictLights[15];
@@ -29,7 +15,7 @@ StructuredBuffer<StrictLightData> strictLights : register(t53);
 
 namespace LightLimitFix
 {
-	bool GetClusterIndex(in float2 uv, in float z, out uint clusterIndex)
+	bool GetClusterIndex(in float2 uv, in float z, inout uint clusterIndex)
 	{
 		const uint3 clusterSize = lightLimitFixSettings.ClusterSize.xyz;
 

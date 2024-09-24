@@ -99,18 +99,18 @@ public:
 	virtual void DrawSettings() override;
 	virtual void DataLoaded() override;
 
-	std::vector<std::string> iniVRCubeMapSettings{
-		{ "bAutoWaterSilhouetteReflections:Water" },  //IniSettings 0x1eaa018
-		{ "bForceHighDetailReflections:Water" },      //IniSettings 0x1eaa030
+	std::map<std::string, gameSetting> iniVRCubeMapSettings{
+		{ "bAutoWaterSilhouetteReflections:Water", { "Auto Water Silhouette Reflections", "Automatically reflects silhouettes on water surfaces.", 0, true, false, true } },
+		{ "bForceHighDetailReflections:Water", { "Force High Detail Reflections", "Forces the use of high-detail reflections on water surfaces.", 0, true, false, true } }
 	};
 
-	std::map<std::string, uintptr_t> hiddenVRCubeMapSettings{
-		{ "bReflectExplosions:Water", 0x1eaa000 },
-		{ "bReflectLODLand:Water", 0x1eaa060 },
-		{ "bReflectLODObjects:Water", 0x1eaa078 },
-		{ "bReflectLODTrees:Water", 0x1eaa090 },
-		{ "bReflectSky:Water", 0x1eaa0a8 },
-		{ "bUseWaterRefractions:Water", 0x1eaa0c0 },
+	std::map<std::string, gameSetting> hiddenVRCubeMapSettings{
+		{ "bReflectExplosions:Water", { "Reflect Explosions", "Enables reflection of explosions on water surfaces.", 0x1eaa000, true, false, true } },
+		{ "bReflectLODLand:Water", { "Reflect LOD Land", "Enables reflection of low-detail (LOD) terrain on water surfaces.", 0x1eaa060, true, false, true } },
+		{ "bReflectLODObjects:Water", { "Reflect LOD Objects", "Enables reflection of low-detail (LOD) objects on water surfaces.", 0x1eaa078, true, false, true } },
+		{ "bReflectLODTrees:Water", { "Reflect LOD Trees", "Enables reflection of low-detail (LOD) trees on water surfaces.", 0x1eaa090, true, false, true } },
+		{ "bReflectSky:Water", { "Reflect Sky", "Enables reflection of the sky on water surfaces.", 0x1eaa0a8, true, false, true } },
+		{ "bUseWaterRefractions:Water", { "Use Water Refractions", "Enables refractions for water surfaces, affecting how light bends through water.", 0x1eaa0c0, true, false, true } }
 	};
 
 	virtual void ClearShaderCache() override;
