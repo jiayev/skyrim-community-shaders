@@ -51,8 +51,8 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 
 	half3 directionalAmbientColor = mul(DirectionalAmbient, half4(normalWS, 1.0));
 
-	half3 linAlbedo = GammaToLinear(albedo);
-	half3 linDirectionalAmbientColor = GammaToLinear(directionalAmbientColor);
+	half3 linAlbedo = GammaToLinear(albedo) / AlbedoPreMult;
+	half3 linDirectionalAmbientColor = GammaToLinear(directionalAmbientColor) / LightPreMult;
 	half3 linDiffuseColor = GammaToLinear(diffuseColor);
 
 	half3 linAmbient = lerp(GammaToLinear(albedo * directionalAmbientColor), linAlbedo * linDirectionalAmbientColor, pbrWeight);
@@ -91,7 +91,7 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 
 	linAmbient *= visibility;
 	diffuseColor = LinearToGamma(linDiffuseColor);
-	directionalAmbientColor = LinearToGamma(linDirectionalAmbientColor * visibility);
+	directionalAmbientColor = LinearToGamma(linDirectionalAmbientColor * visibility * LightPreMult);
 
 	diffuseColor = lerp(diffuseColor + directionalAmbientColor * albedo, LinearToGamma(linDiffuseColor + linAmbient), pbrWeight);
 

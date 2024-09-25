@@ -639,9 +639,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	skylighting = lerp(1.0, skylighting, Skylighting::getFadeOutFactor(input.WPosition));
 	skylighting = Skylighting::mixDiffuse(skylightingSettings, skylighting);
 
-	directionalAmbientColor = GammaToLinear(directionalAmbientColor);
+	directionalAmbientColor = GammaToLinear(directionalAmbientColor) / LightPreMult;
 	directionalAmbientColor *= skylighting;
-	directionalAmbientColor = LinearToGamma(directionalAmbientColor);
+	directionalAmbientColor = LinearToGamma(directionalAmbientColor * LightPreMult);
 #					endif  // SKYLIGHTING
 
 	diffuseColor += directionalAmbientColor;
@@ -672,7 +672,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 normalVS = normalize(WorldToView(normal, false, eyeIndex));
 #			if defined(TRUE_PBR)
-	psout.Albedo = float4(LinearToGamma(indirectDiffuseLobeWeight), 1);
+	psout.Albedo = float4(LinearToGamma(indirectDiffuseLobeWeight * AlbedoPreMult), 1);
 	psout.NormalGlossiness = float4(EncodeNormal(normalVS), 1 - pbrSurfaceProperties.Roughness, 1);
 	psout.Reflectance = float4(indirectSpecularLobeWeight, 1);
 	psout.Parameters = float4(0, 0, 1, 1);

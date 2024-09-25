@@ -107,10 +107,10 @@ namespace PBR
 	LightProperties InitLightProperties(float3 lightColor, float3 nonParallaxShadow, float3 parallaxShadow)
 	{
 		LightProperties result;
-		result.LinearLightColor = GammaToLinear(lightColor) * nonParallaxShadow * parallaxShadow;
+		result.LinearLightColor = GammaToLinear(lightColor) * nonParallaxShadow * parallaxShadow / LightPreMult;
 		[branch] if ((PBRFlags & TruePBR_InterlayerParallax) != 0)
 		{
-			result.LinearCoatLightColor = GammaToLinear(lightColor) * nonParallaxShadow;
+			result.LinearCoatLightColor = GammaToLinear(lightColor) * nonParallaxShadow / LightPreMult;
 		}
 		else
 		{

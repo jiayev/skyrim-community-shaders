@@ -89,7 +89,7 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 		half roughness = 1.0 - glossiness;
 		half level = roughness * 7.0;
 
-		half3 directionalAmbientColor = GammaToLinear(mul(DirectionalAmbient, half4(R, 1.0)));
+		half3 directionalAmbientColor = GammaToLinear(mul(DirectionalAmbient, half4(R, 1.0))) / LightPreMult;
 		half3 finalIrradiance = 0;
 
 #	if defined(INTERIOR)
