@@ -1,7 +1,5 @@
 #include "Hooks.h"
 
-#include <detours/Detours.h>
-
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -61,49 +59,47 @@ void DumpShader(const REX::BSShader* thisClass, const ShaderType* shader, const 
 	delete[] dxbcData;
 }
 
-void hk_BSShader_LoadShaders(RE::BSShader* shader, std::uintptr_t stream);
-
-decltype(&hk_BSShader_LoadShaders) ptr_BSShader_LoadShaders;
-
-void hk_BSShader_LoadShaders(RE::BSShader* shader, std::uintptr_t stream)
+struct BSShader_LoadShaders
 {
-	(ptr_BSShader_LoadShaders)(shader, stream);
-	auto& shaderCache = SIE::ShaderCache::Instance();
+	static void thunk(RE::BSShader* shader, std::uintptr_t stream)
+	{
+		func(shader, stream);
+		auto& shaderCache = SIE::ShaderCache::Instance();
 
-	if (shaderCache.IsDiskCache() || shaderCache.IsDump()) {
-		if (shaderCache.IsDiskCache()) {
-			TruePBR::GetSingleton()->GenerateShaderPermutations(shader);
-		}
+		if (shaderCache.IsDiskCache() || shaderCache.IsDump()) {
+			if (shaderCache.IsDiskCache()) {
+				TruePBR::GetSingleton()->GenerateShaderPermutations(shader);
+			}
 
-		for (const auto& entry : shader->vertexShaders) {
-			if (entry->shader && shaderCache.IsDump()) {
-				const auto& bytecode = GetShaderBytecode(entry->shader);
-				DumpShader((REX::BSShader*)shader, entry, bytecode);
+			for (const auto& entry : shader->vertexShaders) {
+				if (entry->shader && shaderCache.IsDump()) {
+					const auto& bytecode = GetShaderBytecode(entry->shader);
+					DumpShader((REX::BSShader*)shader, entry, bytecode);
+				}
+				auto vertexShaderDesriptor = entry->id;
+				auto pixelShaderDescriptor = entry->id;
+				State::GetSingleton()->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
+				shaderCache.GetVertexShader(*shader, vertexShaderDesriptor);
 			}
-			auto vertexShaderDesriptor = entry->id;
-			auto pixelShaderDescriptor = entry->id;
-			State::GetSingleton()->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
-			shaderCache.GetVertexShader(*shader, vertexShaderDesriptor);
-		}
-		for (const auto& entry : shader->pixelShaders) {
-			if (entry->shader && shaderCache.IsDump()) {
-				const auto& bytecode = GetShaderBytecode(entry->shader);
-				DumpShader((REX::BSShader*)shader, entry, bytecode);
+			for (const auto& entry : shader->pixelShaders) {
+				if (entry->shader && shaderCache.IsDump()) {
+					const auto& bytecode = GetShaderBytecode(entry->shader);
+					DumpShader((REX::BSShader*)shader, entry, bytecode);
+				}
+				auto vertexShaderDesriptor = entry->id;
+				auto pixelShaderDescriptor = entry->id;
+				State::GetSingleton()->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
+				shaderCache.GetPixelShader(*shader, pixelShaderDescriptor);
+				State::GetSingleton()->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor, true);
+				shaderCache.GetPixelShader(*shader, pixelShaderDescriptor);
 			}
-			auto vertexShaderDesriptor = entry->id;
-			auto pixelShaderDescriptor = entry->id;
-			State::GetSingleton()->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
-			shaderCache.GetPixelShader(*shader, pixelShaderDescriptor);
-			State::GetSingleton()->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor, true);
-			shaderCache.GetPixelShader(*shader, pixelShaderDescriptor);
 		}
-	}
-	BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
+		BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
+	};
+	static inline REL::Relocation<decltype(thunk)> func;
 };
 
-decltype(&Hooks::hk_BSShader_BeginTechnique) ptr_BSShader_BeginTechnique;
-
-bool Hooks::hk_BSShader_BeginTechnique(RE::BSShader* shader, uint32_t vertexDescriptor, uint32_t pixelDescriptor, bool skipPixelShader)
+bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertexDescriptor, uint32_t pixelDescriptor, bool skipPixelShader)
 {
 	auto state = State::GetSingleton();
 
@@ -118,7 +114,7 @@ bool Hooks::hk_BSShader_BeginTechnique(RE::BSShader* shader, uint32_t vertexDesc
 
 	state->ModifyShaderLookup(*shader, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor);
 
-	bool shaderFound = (ptr_BSShader_BeginTechnique)(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
+	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
 
 	if (!shaderFound) {
 		auto& shaderCache = SIE::ShaderCache::Instance();
@@ -144,50 +140,57 @@ bool Hooks::hk_BSShader_BeginTechnique(RE::BSShader* shader, uint32_t vertexDesc
 	return shaderFound;
 }
 
-decltype(&IDXGISwapChain::Present) ptr_IDXGISwapChain_Present;
-
-HRESULT WINAPI hk_IDXGISwapChain_Present(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
+struct IDXGISwapChain_Present
 {
-	State::GetSingleton()->Reset();
-	Menu::GetSingleton()->DrawOverlay();
-	Streamline::GetSingleton()->Present();
-	auto retval = (This->*ptr_IDXGISwapChain_Present)(SyncInterval, Flags);
-	TracyD3D11Collect(State::GetSingleton()->tracyCtx);
-	return retval;
-}
+	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
+	{
+		State::GetSingleton()->Reset();
+		Menu::GetSingleton()->DrawOverlay();
+		Streamline::GetSingleton()->Present();
+		auto retval = func(This, SyncInterval, Flags);
+		TracyD3D11Collect(State::GetSingleton()->tracyCtx);
+		return retval;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
-void hk_BSGraphics_SetDirtyStates(bool isCompute);
-
-decltype(&hk_BSGraphics_SetDirtyStates) ptr_BSGraphics_SetDirtyStates;
-
-void hk_BSGraphics_SetDirtyStates(bool isCompute)
+struct BSGraphics_SetDirtyStates
 {
-	(ptr_BSGraphics_SetDirtyStates)(isCompute);
-	State::GetSingleton()->Draw();
-}
+	static void thunk(bool isCompute)
+	{
+		func(isCompute);
+		State::GetSingleton()->Draw();
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
-decltype(&ID3D11Device::CreateVertexShader) ptrCreateVertexShader;
-decltype(&ID3D11Device::CreatePixelShader) ptrCreatePixelShader;
-
-HRESULT hk_CreateVertexShader(ID3D11Device* This, const void* pShaderBytecode, SIZE_T BytecodeLength, ID3D11ClassLinkage* pClassLinkage, ID3D11VertexShader** ppVertexShader)
+struct ID3D11Device_CreateVertexShader
 {
-	HRESULT hr = (This->*ptrCreateVertexShader)(pShaderBytecode, BytecodeLength, pClassLinkage, ppVertexShader);
+	static HRESULT thunk(ID3D11Device* This, const void* pShaderBytecode, SIZE_T BytecodeLength, ID3D11ClassLinkage* pClassLinkage, ID3D11VertexShader** ppVertexShader)
+	{
+		HRESULT hr = func(This, pShaderBytecode, BytecodeLength, pClassLinkage, ppVertexShader);
 
-	if (SUCCEEDED(hr))
-		RegisterShaderBytecode(*ppVertexShader, pShaderBytecode, BytecodeLength);
+		if (SUCCEEDED(hr))
+			RegisterShaderBytecode(*ppVertexShader, pShaderBytecode, BytecodeLength);
 
-	return hr;
-}
+		return hr;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
-HRESULT STDMETHODCALLTYPE hk_CreatePixelShader(ID3D11Device* This, const void* pShaderBytecode, SIZE_T BytecodeLength, ID3D11ClassLinkage* pClassLinkage, ID3D11PixelShader** ppPixelShader)
+struct ID3D11Device_CreatePixelShader
 {
-	HRESULT hr = (This->*ptrCreatePixelShader)(pShaderBytecode, BytecodeLength, pClassLinkage, ppPixelShader);
+	static HRESULT STDMETHODCALLTYPE thunk(ID3D11Device* This, const void* pShaderBytecode, SIZE_T BytecodeLength, ID3D11ClassLinkage* pClassLinkage, ID3D11PixelShader** ppPixelShader)
+	{
+		HRESULT hr = func(This, pShaderBytecode, BytecodeLength, pClassLinkage, ppPixelShader);
 
-	if (SUCCEEDED(hr))
-		RegisterShaderBytecode(*ppPixelShader, pShaderBytecode, BytecodeLength);
+		if (SUCCEEDED(hr))
+			RegisterShaderBytecode(*ppPixelShader, pShaderBytecode, BytecodeLength);
 
-	return hr;
-}
+		return hr;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
 decltype(&CreateDXGIFactory) ptrCreateDXGIFactory;
 
@@ -252,52 +255,53 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 	return hr;
 }
 
-void hk_BSShaderRenderTargets_Create();
-
-decltype(&hk_BSShaderRenderTargets_Create) ptr_BSShaderRenderTargets_Create;
-
-void hk_BSShaderRenderTargets_Create()
+struct BSShaderRenderTargets_Create
 {
-	(ptr_BSShaderRenderTargets_Create)();
-	State::GetSingleton()->Setup();
-}
+	static void thunk()
+	{
+		func();
+		State::GetSingleton()->Setup();
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
-static void hk_PollInputDevices(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events);
-static inline REL::Relocation<decltype(hk_PollInputDevices)> _InputFunc;
-
-void hk_PollInputDevices(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events)
+struct BSInputDeviceManager_PollInputDevices
 {
-	bool blockedDevice = true;
-	auto menu = Menu::GetSingleton();
+	static void thunk(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events)
+	{
+		bool blockedDevice = true;
+		auto menu = Menu::GetSingleton();
 
-	if (a_events) {
-		menu->ProcessInputEvents(a_events);
+		if (a_events) {
+			menu->ProcessInputEvents(a_events);
 
-		if (*a_events) {
-			if (auto device = (*a_events)->GetDevice()) {
-				// Check that the device is not a Gamepad or VR controller. If it is, unblock input.
-				bool vrDevice = false;
+			if (*a_events) {
+				if (auto device = (*a_events)->GetDevice()) {
+					// Check that the device is not a Gamepad or VR controller. If it is, unblock input.
+					bool vrDevice = false;
 #ifdef ENABLE_SKYRIM_VR
-				vrDevice = (REL::Module::IsVR() && ((device == RE::INPUT_DEVICES::INPUT_DEVICE::kVivePrimary) ||
-													   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kViveSecondary) ||
-													   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kOculusPrimary) ||
-													   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kOculusSecondary) ||
-													   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kWMRPrimary) ||
-													   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kWMRSecondary)));
+					vrDevice = (REL::Module::IsVR() && ((device == RE::INPUT_DEVICES::INPUT_DEVICE::kVivePrimary) ||
+														   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kViveSecondary) ||
+														   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kOculusPrimary) ||
+														   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kOculusSecondary) ||
+														   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kWMRPrimary) ||
+														   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kWMRSecondary)));
 #endif
-				blockedDevice = !((device == RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) || vrDevice);
+					blockedDevice = !((device == RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) || vrDevice);
+				}
 			}
 		}
-	}
 
-	if (blockedDevice && menu->ShouldSwallowInput()) {  //the menu is open, eat all keypresses
-		constexpr RE::InputEvent* const dummy[] = { nullptr };
-		_InputFunc(a_dispatcher, dummy);
-		return;
-	}
+		if (blockedDevice && menu->ShouldSwallowInput()) {  //the menu is open, eat all keypresses
+			constexpr RE::InputEvent* const dummy[] = { nullptr };
+			func(a_dispatcher, dummy);
+			return;
+		}
 
-	_InputFunc(a_dispatcher, a_events);
-}
+		func(a_dispatcher, a_events);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
 namespace Hooks
 {
@@ -318,13 +322,12 @@ namespace Hooks
 			auto device = reinterpret_cast<ID3D11Device*>(manager->GetRuntimeData().forwarder);
 
 			logger::info("Detouring virtual function tables");
-
-			*(uintptr_t*)&ptr_IDXGISwapChain_Present = Detours::X64::DetourClassVTable(*(uintptr_t*)swapchain, &hk_IDXGISwapChain_Present, 8);
+			stl::detour_vfunc<8, IDXGISwapChain_Present>(swapchain);
 
 			auto& shaderCache = SIE::ShaderCache::Instance();
 			if (shaderCache.IsDump()) {
-				*(uintptr_t*)&ptrCreateVertexShader = Detours::X64::DetourClassVTable(*(uintptr_t*)device, &hk_CreateVertexShader, 12);
-				*(uintptr_t*)&ptrCreatePixelShader = Detours::X64::DetourClassVTable(*(uintptr_t*)device, &hk_CreatePixelShader, 15);
+				stl::detour_vfunc<12, ID3D11Device_CreateVertexShader>(device);
+				stl::detour_vfunc<15, ID3D11Device_CreatePixelShader>(device);
 			}
 			Menu::GetSingleton()->Init(swapchain, device, context);
 		}
@@ -527,14 +530,16 @@ namespace Hooks
 			return vlRaymarchShader;
 		}
 
-		void hk_BSImagespaceShader_DispatchComputeShader(RE::BSImagespaceShader* shader, uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ);
-		decltype(&hk_BSImagespaceShader_DispatchComputeShader) ptr_BSImagespaceShader_DispatchComputeShader;
-		void hk_BSImagespaceShader_DispatchComputeShader(RE::BSImagespaceShader* shader, uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ)
+		struct BSImagespaceShader_DispatchComputeShader
 		{
-			CurrentlyDispatchedShader = shader;
-			(ptr_BSImagespaceShader_DispatchComputeShader)(shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);
-			CurrentlyDispatchedShader = nullptr;
-		}
+			static void thunk(RE::BSImagespaceShader* shader, uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ)
+			{
+				CurrentlyDispatchedShader = shader;
+				func(shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);
+				CurrentlyDispatchedShader = nullptr;
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
 
 		struct BSComputeShader_Dispatch
 		{
@@ -549,59 +554,59 @@ namespace Hooks
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		void hk_Renderer_DispatchCSShader(RE::BSGraphics::Renderer* renderer, RE::BSGraphics::ComputeShader* shader, uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ);
-		decltype(&hk_Renderer_DispatchCSShader) ptr_Renderer_DispatchCSShader;
-		void hk_Renderer_DispatchCSShader(RE::BSGraphics::Renderer* renderer, RE::BSGraphics::ComputeShader* shader, uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ)
+		struct Renderer_DispatchCSShader
 		{
-			auto state = State::GetSingleton();
-			if (state->enabledClasses[RE::BSShader::Type::ImageSpace]) {
-				auto& shaderCache = SIE::ShaderCache::Instance();
-				RE::BSImagespaceShader* isShader = CurrentlyDispatchedShader;
-				uint32_t techniqueId = CurrentComputeShaderTechniqueId;
-				if (CurrentlyDispatchedShader == nullptr) {
-					techniqueId = 0;
-					if (CurrentlyDispatchedComputeShader->name == std::string_view("ISVolumetricLightingGenerateCS")) {
-						isShader = GetOrCreateVLGenerateShader(CurrentlyDispatchedComputeShader);
-					} else if (CurrentlyDispatchedComputeShader->name == std::string_view("ISVolumetricLightingRaymarchCS")) {
-						isShader = GetOrCreateVLRaymarchShader(CurrentlyDispatchedComputeShader);
+			static void thunk(RE::BSGraphics::Renderer* renderer, RE::BSGraphics::ComputeShader* shader, uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ)
+			{
+				auto state = State::GetSingleton();
+				if (state->enabledClasses[RE::BSShader::Type::ImageSpace]) {
+					auto& shaderCache = SIE::ShaderCache::Instance();
+					RE::BSImagespaceShader* isShader = CurrentlyDispatchedShader;
+					uint32_t techniqueId = CurrentComputeShaderTechniqueId;
+					if (CurrentlyDispatchedShader == nullptr) {
+						techniqueId = 0;
+						if (CurrentlyDispatchedComputeShader->name == std::string_view("ISVolumetricLightingGenerateCS")) {
+							isShader = GetOrCreateVLGenerateShader(CurrentlyDispatchedComputeShader);
+						} else if (CurrentlyDispatchedComputeShader->name == std::string_view("ISVolumetricLightingRaymarchCS")) {
+							isShader = GetOrCreateVLRaymarchShader(CurrentlyDispatchedComputeShader);
+						}
+					}
+					if (isShader != nullptr) {
+						if (auto* computeShader = shaderCache.GetComputeShader(*isShader, techniqueId)) {
+							shader = computeShader;
+						}
 					}
 				}
-				if (isShader != nullptr) {
-					if (auto* computeShader = shaderCache.GetComputeShader(*isShader, techniqueId)) {
-						shader = computeShader;
-					}
-				}
+				func(renderer, shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);
 			}
-			(ptr_Renderer_DispatchCSShader)(renderer, shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);
-		}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
 	}
 
 	void Install()
 	{
-		SKSE::AllocTrampoline(14);
-		auto& trampoline = SKSE::GetTrampoline();
 		logger::info("Hooking BSInputDeviceManager::PollInputDevices");
-		_InputFunc = trampoline.write_call<5>(REL::RelocationID(67315, 68617).address() + REL::Relocate(0x7B, 0x7B, 0x81), hk_PollInputDevices);  //BSInputDeviceManager::PollInputDevices -> Inputfunc
+		stl::write_thunk_call<BSInputDeviceManager_PollInputDevices>(REL::RelocationID(67315, 68617).address() + REL::Relocate(0x7B, 0x7B, 0x81));
 
 		logger::info("Hooking BSShader::LoadShaders");
-		*(uintptr_t*)&ptr_BSShader_LoadShaders = Detours::X64::DetourFunction(REL::RelocationID(101339, 108326).address(), (uintptr_t)&hk_BSShader_LoadShaders);
+		stl::detour_thunk<BSShader_LoadShaders>(REL::RelocationID(101339, 108326));
 		logger::info("Hooking BSShader::BeginTechnique");
-		*(uintptr_t*)&ptr_BSShader_BeginTechnique = Detours::X64::DetourFunction(REL::RelocationID(101341, 108328).address(), (uintptr_t)&Hooks::hk_BSShader_BeginTechnique);
+		stl::detour_thunk<BSShader_BeginTechnique>(REL::RelocationID(101341, 108328));
 
 		stl::write_thunk_call<BSShader__BeginTechnique_SetVertexShader>(REL::RelocationID(101341, 108328).address() + REL::Relocate(0xC3, 0xD5));
 		stl::write_thunk_call<BSShader__BeginTechnique_SetPixelShader>(REL::RelocationID(101341, 108328).address() + REL::Relocate(0xD7, 0xEB));
 
 		logger::info("Hooking BSGraphics::SetDirtyStates");
-		*(uintptr_t*)&ptr_BSGraphics_SetDirtyStates = Detours::X64::DetourFunction(REL::RelocationID(75580, 77386).address(), (uintptr_t)&hk_BSGraphics_SetDirtyStates);
+		stl::detour_thunk<BSGraphics_SetDirtyStates>(REL::RelocationID(75580, 77386));
 
 		logger::info("Hooking BSGraphics::Renderer::InitD3D");
 		stl::write_thunk_call<BSGraphics_Renderer_Init_InitD3D>(REL::RelocationID(75595, 77226).address() + REL::Relocate(0x50, 0x2BC));
 
 		logger::info("Hooking WndProcHandler");
-		stl::write_thunk_call_6<RegisterClassA_Hook>(REL::VariantID(75591, 77226, 0xDC4B90).address() + REL::VariantOffset(0x8E, 0x15C, 0x99).offset());
+		stl::write_thunk_call<RegisterClassA_Hook, 6>(REL::VariantID(75591, 77226, 0xDC4B90).address() + REL::VariantOffset(0x8E, 0x15C, 0x99).offset());
 
 		logger::info("Hooking BSShaderRenderTargets::Create");
-		*(uintptr_t*)&ptr_BSShaderRenderTargets_Create = Detours::X64::DetourFunction(REL::RelocationID(100458, 107175).address(), (uintptr_t)&hk_BSShaderRenderTargets_Create);
+		stl::detour_thunk<BSShaderRenderTargets_Create>(REL::RelocationID(100458, 107175));
 
 		logger::info("Hooking BSShaderRenderTargets::Create::CreateRenderTarget(s)");
 		stl::write_thunk_call<CreateRenderTarget_Main>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x3F0, 0x3F3, 0x548));
@@ -616,14 +621,15 @@ namespace Hooks
 #endif
 
 		logger::info("Hooking BSImagespaceShader");
-		*(uintptr_t*)&CSShadersSupport::ptr_BSImagespaceShader_DispatchComputeShader = Detours::X64::DetourFunction(REL::RelocationID(100952, 107734).address(), (uintptr_t)&CSShadersSupport::hk_BSImagespaceShader_DispatchComputeShader);
+		stl::detour_thunk<CSShadersSupport::BSImagespaceShader_DispatchComputeShader>(REL::RelocationID(100952, 107734));
 
 		logger::info("Hooking BSComputeShader");
 		stl::write_vfunc<0x02, CSShadersSupport::BSComputeShader_Dispatch>(RE::VTABLE_BSComputeShader[0]);
 
 		logger::info("Hooking Renderer::DispatchCSShader");
-		*(uintptr_t*)&CSShadersSupport::ptr_Renderer_DispatchCSShader = Detours::X64::DetourFunction(REL::RelocationID(75532, 77329).address(), (uintptr_t)&CSShadersSupport::hk_Renderer_DispatchCSShader);
+		stl::detour_thunk<CSShadersSupport::Renderer_DispatchCSShader>(REL::RelocationID(75532, 77329));
 	}
+
 	void InstallD3DHooks()
 	{
 		logger::info("Hooking D3D11CreateDeviceAndSwapChain");
