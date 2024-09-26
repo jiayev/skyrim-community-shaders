@@ -96,7 +96,7 @@ void readHistory(
 		float3 curr_pos = ScreenToViewPosition(screen_pos, curr_depth, eyeIndex);
 		curr_pos = ViewToWorldPosition(curr_pos, CameraViewInverse[eyeIndex]) + CameraPosAdjust[eyeIndex];
 
-		float2 prev_px_coord = prev_screen_pos * OUT_FRAME_DIM;
+		float2 prev_px_coord = prev_uv * OUT_FRAME_DIM;
 		int2 prev_px_lu = floor(prev_px_coord - 0.5);
 		float2 bilinear_weights = prev_px_coord - 0.5 - prev_px_lu;
 
