@@ -594,19 +594,6 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 
 	light.color *= dimmer;
 
-	float distantLightFadeStart = lightsFar * lightsFar * (lightFadeStart / lightFadeEnd);
-	float distantLightFadeEnd = lightsFar * lightsFar;
-
-	if (distance < distantLightFadeStart || distantLightFadeEnd == 0.0f) {
-		dimmer = 1.0f;
-	} else if (distance <= distantLightFadeEnd) {
-		dimmer = 1.0f - ((distance - distantLightFadeStart) / (distantLightFadeEnd - distantLightFadeStart));
-	} else {
-		dimmer = 0.0f;
-	}
-
-	light.color *= dimmer;
-
 	if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
 		for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++)
 			light.positionVS[eyeIndex].data = DirectX::SimpleMath::Vector3::Transform(light.positionWS[eyeIndex].data, viewMatrixCached[eyeIndex]);
@@ -670,26 +657,6 @@ void LightLimitFix::UpdateLights()
 					light.radius = runtimeData.radius.x;
 
 					SetLightPosition(light, niLight->world.translate);
-
-					static float& lightFadeStart = (*(float*)REL::RelocationID(527668, 414582).address());
-					static float& lightFadeEnd = (*(float*)REL::RelocationID(527669, 414583).address());
-
-					float distance = CalculateLightDistance(light.positionWS[0].data, light.radius);
-
-					float distantLightFadeStart = lightsFar * lightsFar * (lightFadeStart / lightFadeEnd);
-					float distantLightFadeEnd = lightsFar * lightsFar;
-
-					float dimmer;
-
-					if (distance < distantLightFadeStart || distantLightFadeEnd == 0.0f) {
-						dimmer = 1.0f;
-					} else if (distance <= distantLightFadeEnd) {
-						dimmer = 1.0f - ((distance - distantLightFadeStart) / (distantLightFadeEnd - distantLightFadeStart));
-					} else {
-						dimmer = 0.0f;
-					}
-
-					light.color *= dimmer;
 
 					if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
 						lightsData.push_back(light);
