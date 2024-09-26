@@ -1,4 +1,5 @@
 #include "DynamicCubemaps.h"
+#include "ShaderCache.h"
 
 #include "State.h"
 #include "Util.h"
@@ -8,13 +9,57 @@
 
 constexpr auto MIPLEVELS = 8;
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	DynamicCubemaps::Settings,
+	EnabledSSR,
+	EnabledCreator,
+	MaxIterations);
+
+std::vector<std::pair<std::string_view, std::string_view>> DynamicCubemaps::GetShaderDefineOptions()
+{
+	std::vector<std::pair<std::string_view, std::string_view>> result;
+	maxIterationsString = std::to_string(settings.MaxIterations);
+	if (settings.EnabledSSR) {
+		result.push_back({ "ENABLESSR", "" });
+	}
+
+	result.push_back({ "MAX_ITERATIONS", maxIterationsString });
+
+	return result;
+}
+
 void DynamicCubemaps::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::TreeNodeEx("Screen Space Reflections", ImGuiTreeNodeFlags_DefaultOpen)) {
+			recompileFlag |= ImGui::Checkbox("Enable Screen Space Reflections", reinterpret_cast<bool*>(&settings.EnabledSSR));
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Enable Screen Space Reflections on Water");
+				if (REL::Module::IsVR() && !enabledAtBoot) {
+					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
+					ImGui::Text(
+						"A restart is required to enable in VR. "
+						"Save Settings after enabling and restart the game.");
+					ImGui::PopStyleColor();
+				}
+			}
+			if (settings.EnabledSSR) {
+				recompileFlag |= ImGui::SliderInt("Max Iterations", reinterpret_cast<int*>(&settings.MaxIterations), 1, 128);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text(
+						"The maximum iterations to ray march. "
+						"Higher values result in better quality but lower performance.");
+				}
+				RenderImGuiSettingsTree(SSRSettings, "Skyrim SSR");
+				ImGui::TreePop();
+			}
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNodeEx("Dynamic Cubemap Creator", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Text("You must enable creator mode by adding the shader define CREATOR");
-			ImGui::Checkbox("Enable Creator", reinterpret_cast<bool*>(&settings.Enabled));
-			if (settings.Enabled) {
+			ImGui::Checkbox("Enable Creator", reinterpret_cast<bool*>(&settings.EnabledCreator));
+			if (settings.EnabledCreator) {
 				ImGui::ColorEdit3("Color", reinterpret_cast<float*>(&settings.CubemapColor));
 				ImGui::SliderFloat("Roughness", &settings.CubemapColor.w, 0.0f, 1.0f, "%.2f");
 				if (ImGui::Button("Export")) {
@@ -105,6 +150,36 @@ void DynamicCubemaps::DrawSettings()
 	}
 }
 
+void DynamicCubemaps::LoadSettings(json& o_json)
+{
+	settings = o_json;
+	LoadGameSettings(SSRSettings);
+	if (REL::Module::IsVR()) {
+		LoadGameSettings(iniVRCubeMapSettings);
+	}
+	recompileFlag = true;
+}
+
+void DynamicCubemaps::SaveSettings(json& o_json)
+{
+	o_json = settings;
+	SaveGameSettings(SSRSettings);
+	if (REL::Module::IsVR()) {
+		SaveGameSettings(iniVRCubeMapSettings);
+	}
+}
+
+void DynamicCubemaps::RestoreDefaultSettings()
+{
+	settings = {};
+	ResetGameSettingsToDefaults(SSRSettings);
+	if (REL::Module::IsVR()) {
+		ResetGameSettingsToDefaults(iniVRCubeMapSettings);
+		ResetGameSettingsToDefaults(hiddenVRCubeMapSettings);
+	}
+	recompileFlag = true;
+}
+
 void DynamicCubemaps::DataLoaded()
 {
 	if (REL::Module::IsVR()) {
@@ -113,6 +188,25 @@ void DynamicCubemaps::DataLoaded()
 		EnableBooleanSettings(hiddenVRCubeMapSettings, GetName());
 	}
 	MenuOpenCloseEventHandler::Register();
+}
+
+void DynamicCubemaps::PostPostLoad()
+{
+	if (REL::Module::IsVR() && settings.EnabledSSR) {
+		std::map<std::string, uintptr_t> earlyhiddenVRCubeMapSettings{
+			{ "bScreenSpaceReflectionEnabled:Display", 0x1ED5BC0 },
+		};
+		for (const auto& settingPair : earlyhiddenVRCubeMapSettings) {
+			const auto& settingName = settingPair.first;
+			const auto address = REL::Offset{ settingPair.second }.address();
+			bool* setting = reinterpret_cast<bool*>(address);
+			if (!*setting) {
+				logger::info("[PostPostLoad] Changing {} from {} to {} to support Dynamic Cubemaps", settingName, *setting, true);
+				*setting = true;
+			}
+		}
+		enabledAtBoot = true;
+	}
 }
 
 RE::BSEventNotifyControl MenuOpenCloseEventHandler::ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
@@ -349,6 +443,13 @@ void DynamicCubemaps::Irradiance(bool a_reflections)
 void DynamicCubemaps::UpdateCubemap()
 {
 	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Cubemap Update");
+	if (recompileFlag) {
+		auto& shaderCache = SIE::ShaderCache::Instance();
+		if (!shaderCache.Clear("Data//Shaders//ISReflectionsRayTracing.hlsl"))
+			// if can't find specific hlsl file cache, clear all image space files
+			shaderCache.Clear(RE::BSShader::Types::ImageSpace);
+		recompileFlag = false;
+	}
 
 	switch (nextTask) {
 	case NextTask::kInferrence:

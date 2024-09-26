@@ -134,7 +134,6 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float4 composedColor = sourceColor;
 
-#	if !defined(VR)
 	if (0.5 < SSRParams.z) {
 		float2 ssrMask = NormalsSSRMaskTex.SampleLevel(NormalsSSRMaskSampler, screenPosition, 0).zw;
 		float4 ssr = SSRSourceTex.Sample(SSRSourceSampler, screenPosition);
@@ -145,7 +144,6 @@ PS_OUTPUT main(PS_INPUT input)
 		}
 		composedColor.xyz += ssrInput;
 	}
-#	endif
 
 	float snowMask = 0;
 #	if !defined(VR)

@@ -32,7 +32,7 @@ cbuffer PerGeometry : register(b2)
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
-	uint eyeIndex = GetEyeIndexPS(float4(input.TexCoord, 0, 0));
+	uint eyeIndex = GetEyeIndexFromTexCoord(input.TexCoord);
 	float2 adjustedScreenPosition = GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 	float waterMask = waterMaskTex.Sample(waterMaskSampler, adjustedScreenPosition).z;
 	if (waterMask < 1e-4) {

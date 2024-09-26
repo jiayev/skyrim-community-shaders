@@ -597,15 +597,33 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 			reflectionColor = ReflectionTex.SampleLevel(ReflectionSampler, reflectionNormal.xy / reflectionNormal.ww, 0).xyz;
 		}
 
-#			if !defined(LOD) && NUM_SPECULAR_LIGHTS == 0 && !defined(VR)
+#			if !defined(LOD) && NUM_SPECULAR_LIGHTS == 0
 		if (PixelShaderDescriptor & _Cubemap) {
-			float2 ssrReflectionUv = GetDynamicResolutionAdjustedScreenPosition((DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw + SSRParams2.x * normal.xy);
-			float4 ssrReflectionColor1 = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUv);
-			float4 ssrReflectionColor2 = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUv);
-			float4 ssrReflectionColor = lerp(ssrReflectionColor2, ssrReflectionColor1, SSRParams.y);
+			float2 ssrReflectionUv = (DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw + SSRParams2.x * normal.xy;
+			float2 ssrReflectionUvDR = GetDynamicResolutionAdjustedScreenPosition(ssrReflectionUv);
+			float4 ssrReflectionColorBlurred = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUvDR);
+			float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
 
-			finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
-			ssrFraction = saturate(ssrReflectionColor.w * SSRParams.x * distanceFactor);
+			// calculate fog on reflection
+			float depth = DepthTex.Load(int3(ssrReflectionUvDR * BufferDim.xy, 0));
+			float fogDensity = depth == 0 ? 0.f : pow(saturate((-depth * FogParam.z + FogParam.z) / FogParam.w), FogNearColor.w);
+			float3 fogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogDensity);
+
+			bool validSSRMask = IsNonZeroColor(ssrReflectionColorRaw);
+
+			if (validSSRMask) {
+				// calculate blur on reflection
+				float effectiveBlurFactor = saturate(SSRParams.y * (1.0 + fogDensity));
+				float4 ssrReflectionColor = lerp(ssrReflectionColorRaw, ssrReflectionColorBlurred, effectiveBlurFactor);
+
+				finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
+				ssrFraction = saturate(ssrReflectionColor.w * SSRParams.x * distanceFactor);
+			} else {
+				// Use reflectionColor info only
+				finalSsrReflectionColor = reflectionColor.xyz;
+				ssrFraction = 1.f;
+			}
+			finalSsrReflectionColor = lerp(finalSsrReflectionColor, fogColor, fogDensity);
 		}
 #			endif
 

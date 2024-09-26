@@ -1308,6 +1308,8 @@ namespace SIE
 			std::string::size_type pos = a_key.find(':');
 			if (pos != std::string::npos)
 				type = a_key.substr(0, pos);
+			if (type.starts_with("IS") || type == "ReflectionsRayTracing")
+				type = "ImageSpace";  // fix type for image space shaders
 			return type;
 		}
 
