@@ -1,7 +1,7 @@
 #ifndef __VR_DEPENDENCY_HLSL__
 #define __VR_DEPENDENCY_HLSL__
 #ifdef VR
-#	ifndef COMPUTESHADER
+#	if !defined(COMPUTESHADER) && !defined(CSHADER)
 #		include "Common\Constants.hlsli"
 #		include "Common\FrameBuffer.hlsli"
 #	endif
@@ -113,6 +113,19 @@ float4 ConvertToStereoSP(float4 screenPosition, uint a_eyeIndex, float2 a_resolu
 	return float4(xy * a_resolution, screenPosition.zw);
 }
 
+/**
+Gets the eyeIndex for Compute Shaders
+@param texCoord Texcoord on the screen [0,1]
+@returns eyeIndex (0 left, 1 right)
+*/
+uint GetEyeIndexFromTexCoord(float2 texCoord)
+{
+#ifdef VR
+	return (texCoord.x >= 0.5) ? 1 : 0;
+#endif  // VR
+	return 0;
+}
+
 #ifdef PSHADER
 /**
 Gets the eyeIndex for PSHADER
@@ -130,20 +143,6 @@ uint GetEyeIndexPS(float4 position, float4 offset = 0.0.xxxx)
 	uint eyeIndex = (uint)(((int)((uint)StereoEnabled)) * (int)stereoUV.x);
 #	endif
 	return eyeIndex;
-}
-#endif  //PSHADER
-
-/**
-Gets the eyeIndex for Compute Shaders
-@param texCoord Texcoord on the screen [0,1]
-@returns eyeIndex (0 left, 1 right)
-*/
-uint GetEyeIndexFromTexCoord(float2 texCoord)
-{
-#ifdef VR
-	return (texCoord.x >= 0.5) ? 1 : 0;
-#endif  // VR
-	return 0;
 }
 
 /**
@@ -209,7 +208,7 @@ float3 ConvertStereoRayMarchUV(float3 monoUV, uint eyeIndex, out bool fromOtherE
 {
 	fromOtherEye = false;
 	float3 resultUV = monoUV;
-#ifdef VR
+#	ifdef VR
 	// Check if the UV coordinates are outside the frame
 	if (isOutsideFrame(resultUV.xy, false)) {
 		// Transition to the other eye
@@ -223,7 +222,7 @@ float3 ConvertStereoRayMarchUV(float3 monoUV, uint eyeIndex, out bool fromOtherE
 	} else {
 		resultUV = ConvertToStereoUV(resultUV, eyeIndex);
 	}
-#endif
+#	endif
 	return resultUV;
 }
 
@@ -321,7 +320,9 @@ float4 BlendEyeColors(float2 uv1, float4 color1, float2 uv2, float4 color2, bool
 {
 	return BlendEyeColors(float3(uv1, 0), color1, float3(uv2, 0), color2, dynamicres);
 }
+#endif  // PSHADER
 
+#ifdef VSHADER
 struct VR_OUTPUT
 {
 	float4 VRPosition;
@@ -329,7 +330,6 @@ struct VR_OUTPUT
 	float CullDistance;
 };
 
-#ifdef VSHADER
 /**
 Gets the eyeIndex for VSHADER
 @returns eyeIndex (0 left, 1 right)
