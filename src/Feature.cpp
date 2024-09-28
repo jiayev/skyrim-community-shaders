@@ -134,7 +134,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 	return (REL::Module::IsVR() && !State::GetSingleton()->IsDeveloperMode()) ? featuresVR : features;
 }
 
-void Feature::EnableBooleanSettings(const std::map<std::string, Feature::gameSetting>& settingsMap, const std::string& featureName)
+void Feature::SetBooleanSettings(const std::map<std::string, Feature::gameSetting>& settingsMap, const std::string& featureName, bool a_value)
 {
 	// Extract first letter from each word in featureName
 	std::string logTag;
@@ -149,75 +149,128 @@ void Feature::EnableBooleanSettings(const std::map<std::string, Feature::gameSet
 		}
 	}
 
+	// Initialize collections
+	std::vector<std::pair<RE::INISettingCollection*, std::string>> iniCollections = {
+		{ RE::INISettingCollection::GetSingleton(), "INISettingCollection" },
+		{ RE::INIPrefSettingCollection::GetSingleton(), "INIPrefSettingCollection" }
+	};
+	auto gameSettingCollection = RE::GameSettingCollection::GetSingleton();
+
 	// Handle INI settings
 	for (const auto& [settingName, settingData] : settingsMap) {
-		if (settingData.offset == 0) {
-			// This is an INI setting
-			if (auto setting = RE::INISettingCollection::GetSingleton()->GetSetting(settingName); setting) {
-				if (!setting->data.b) {
-					logger::info("[{}] Changing {} from {} to {} to support {}", logTag, settingName, setting->data.b, true, featureName);
-					setting->data.b = true;
+		if (settingData.offset == 0) {  // INI-based settings
+			bool processed = false;
+			for (const auto& [collection, collectionName] : iniCollections) {
+				if (auto setting = collection->GetSetting(settingName); setting) {
+					if (setting->data.b != a_value) {
+						logger::info("[{}] Changing {}:{} from {} to {} to support {}", logTag, collectionName, settingName, setting->data.b, a_value, featureName);
+						setting->data.b = a_value;
+					}
+					processed = true;
+					break;  // Exit once the setting is found and processed
+				}
+			}
+
+			// Handle game settings if not processed by INI collections
+			if (!processed) {
+				if (auto setting = gameSettingCollection->GetSetting(settingName.data()); setting) {
+					if (setting->data.b != a_value) {
+						logger::info("[{}] Changing {} from {} to {} to support {}", logTag, settingName, setting->data.b, a_value, featureName);
+						setting->data.b = a_value;
+					}
 				}
 			}
 		} else {
-			// This is a setting with an offset
-			const auto address = REL::Offset{ settingData.offset }.address();
+			// Handle settings with memory offsets
+			auto address = REL::Offset{ settingData.offset }.address();
 			bool* setting = reinterpret_cast<bool*>(address);
-			if (!*setting) {
-				logger::info("[{}] Changing {} from {} to {} to support {}", logTag, settingName, *setting, true, featureName);
-				*setting = true;
+			if (*setting != a_value) {
+				logger::info("[{}] Changing {} from {} to {} to support {}", logTag, settingName, *setting, a_value, featureName);
+				*setting = a_value;
 			}
 		}
 	}
 }
 
+void Feature::EnableBooleanSettings(const std::map<std::string, Feature::gameSetting>& settingsMap, const std::string& featureName)
+{
+	SetBooleanSettings(settingsMap, featureName, true);
+}
+
+void Feature::DisableBooleanSettings(const std::map<std::string, Feature::gameSetting>& settingsMap, const std::string& featureName)
+{
+	SetBooleanSettings(settingsMap, featureName, false);
+}
+
 void Feature::ResetGameSettingsToDefaults(std::map<std::string, gameSetting>& settingsMap)
 {
+	std::vector<std::pair<RE::INISettingCollection*, std::string>> iniCollections = {
+		{ RE::INISettingCollection::GetSingleton(), "INISettingCollection" },
+		{ RE::INIPrefSettingCollection::GetSingleton(), "INIPrefSettingCollection" }
+	};
+	auto gameSettingCollection = RE::GameSettingCollection::GetSingleton();
+
 	for (auto& [settingName, settingData] : settingsMap) {
 		char inputTypeChar = settingName[0];
 
-		if (settingData.offset == 0) {
-			// Handle INI settings
-			if (auto setting = RE::INISettingCollection::GetSingleton()->GetSetting(settingName); setting) {
-				switch (inputTypeChar) {
-				case 'b':
-					{
-						bool currentValue = setting->data.b;
-						bool defaultValue = std::get<bool>(settingData.defaultValue);
-						if (currentValue != defaultValue) {
-							setting->data.b = defaultValue;
-							logger::debug("Setting {}: changed from {} to default boolean value {}.", settingName, currentValue, defaultValue);
+		if (settingData.offset == 0) {  // INI-based settings
+			bool processed = false;
+			for (const auto& [collection, collectionName] : iniCollections) {
+				if (auto setting = collection->GetSetting(settingName); setting) {
+					switch (inputTypeChar) {
+					case 'b':
+						{
+							bool currentValue = setting->data.b;
+							bool defaultValue = std::get<bool>(settingData.defaultValue);
+							if (currentValue != defaultValue) {
+								setting->data.b = defaultValue;
+								logger::debug("{} Setting {}: changed from {} to default boolean value {}.", collectionName, settingName, currentValue, defaultValue);
+							}
 						}
-					}
-					break;
-				case 'f':
-					{
-						float currentValue = setting->data.f;
-						float defaultValue = std::get<float>(settingData.defaultValue);
-						if (currentValue != defaultValue) {
-							setting->data.f = defaultValue;
-							logger::debug("Setting {}: changed from {} to default float value {}.", settingName, currentValue, defaultValue);
+						break;
+					case 'f':
+						{
+							float currentValue = setting->data.f;
+							float defaultValue = std::get<float>(settingData.defaultValue);
+							if (currentValue != defaultValue) {
+								setting->data.f = defaultValue;
+								logger::debug("{} Setting {}: changed from {} to default float value {}.", collectionName, settingName, currentValue, defaultValue);
+							}
 						}
-					}
-					break;
-				case 'i':
-				case 'u':
-					{
-						int32_t currentValue = setting->data.i;
-						int32_t defaultValue = std::get<int32_t>(settingData.defaultValue);
-						if (currentValue != defaultValue) {
-							setting->data.i = defaultValue;
-							logger::debug("Setting {}: changed from {} to default integer value {}.", settingName, currentValue, defaultValue);
+						break;
+					case 'i':
+					case 'u':
+						{
+							int32_t currentValue = setting->data.i;
+							int32_t defaultValue = std::get<int32_t>(settingData.defaultValue);
+							if (currentValue != defaultValue) {
+								setting->data.i = defaultValue;
+								logger::debug("{} Setting {}: changed from {} to default integer value {}.", collectionName, settingName, currentValue, defaultValue);
+							}
 						}
+						break;
+					default:
+						logger::debug("Unknown type for {} setting {}.", collectionName, settingName);
+						break;
 					}
-					break;
-				default:
-					logger::debug("Unknown type for setting {}.", settingName);
-					break;
+					processed = true;
+					break;  // Exit once the setting is found and processed
+				}
+			}
+
+			// Handle game settings if not processed by INI collections
+			if (!processed) {
+				if (auto setting = gameSettingCollection->GetSetting(settingName.data()); setting) {
+					bool currentValue = setting->data.b;
+					bool defaultValue = std::get<bool>(settingData.defaultValue);
+					if (currentValue != defaultValue) {
+						setting->data.b = defaultValue;
+						logger::debug("GameSetting {}: changed from {} to default boolean value {}.", settingName, currentValue, defaultValue);
+					}
 				}
 			}
 		} else {
-			// Handle settings with offsets (raw memory)
+			// Handle settings with memory offsets
 			auto address = REL::Offset{ settingData.offset }.address();
 			switch (inputTypeChar) {
 			case 'b':
@@ -265,11 +318,29 @@ void Feature::ResetGameSettingsToDefaults(std::map<std::string, gameSetting>& se
 void Feature::RenderImGuiSettingsTree(const std::map<std::string, gameSetting>& settingsMap, const std::string& treeName)
 {
 	if (ImGui::TreeNode(treeName.c_str())) {  // Create a tree node
+		std::vector<std::pair<RE::INISettingCollection*, std::string>> iniCollections = {
+			{ RE::INISettingCollection::GetSingleton(), "INISettingCollection" },
+			{ RE::INIPrefSettingCollection::GetSingleton(), "INIPrefSettingCollection" }
+		};
+		auto gameSettingCollection = RE::GameSettingCollection::GetSingleton();
+
 		for (const auto& [settingName, settingData] : settingsMap) {
+			// Handle INI and INIPref settings
 			if (settingData.offset == 0) {
-				// Handle INI settings
-				if (auto setting = RE::INISettingCollection::GetSingleton()->GetSetting(settingName); setting) {
-					RenderImGuiElement(settingName, settingData, setting);
+				bool found = false;
+				for (const auto& [collection, collectionName] : iniCollections) {
+					if (auto setting = collection->GetSetting(settingName); setting) {
+						RenderImGuiElement(settingName, settingData, setting, collectionName);
+						found = true;
+						break;  // Exit once the setting is found and processed
+					}
+				}
+				// Handle game settings if not found in INI collections
+				if (!found) {
+					if (auto gameSetting = gameSettingCollection->GetSetting(settingName.data()); gameSetting) {
+						RenderImGuiElement(settingName, settingData, gameSetting, "GameSetting");
+						continue;
+					}
 				}
 			} else {
 				// Handle settings with offsets (raw memory)
@@ -294,43 +365,62 @@ void Feature::RenderImGuiSettingsTree(const std::map<std::string, gameSetting>& 
 					settingData.defaultValue);
 			}
 		}
+
 		ImGui::TreePop();  // Close the tree node
 	}
 }
 
 template <typename T>
-void Feature::RenderImGuiElement(const std::string& settingName, const gameSetting& settingData, T* valuePtr)
+void Feature::RenderImGuiElement(const std::string& settingName, const gameSetting& settingData, T* valuePtr, const std::string& collectionName)
 {
 	// Unique ID for each element
 	ImGui::PushID(settingName.c_str());  // Use settingName as unique ID
+	bool success = false;                // Flag to track if element creation is successful
 
 	if constexpr (std::is_same_v<T, bool>) {
 		ImGui::Checkbox(settingData.friendlyName.c_str(), valuePtr);
+		success = true;  // Mark as successful
 	} else if constexpr (std::is_same_v<T, float>) {
 		try {
 			auto minFloat = std::get<float>(settingData.minValue);
 			auto maxFloat = std::get<float>(settingData.maxValue);
 			ImGui::SliderFloat(settingData.friendlyName.c_str(), valuePtr, minFloat, maxFloat);
+			success = true;  // Mark as successful
 		} catch (const std::bad_variant_access&) {
-			logger::warn("Type mismatch for {}: expected float for minValue or maxValue but received other type", settingName);
+			logger::warn("Type mismatch for {} {}: expected float for minValue or maxValue but received other type", collectionName, settingName);
 		}
-	} else if constexpr (std::is_same_v<T, int> || std::is_same_v<T, unsigned int>) {
+	} else if constexpr (std::is_same_v<T, int>) {
 		try {
 			auto minInt = std::get<int32_t>(settingData.minValue);
 			auto maxInt = std::get<int32_t>(settingData.maxValue);
 			ImGui::SliderInt(settingData.friendlyName.c_str(), reinterpret_cast<int*>(valuePtr), minInt, maxInt);
+			success = true;  // Mark as successful
 		} catch (const std::bad_variant_access&) {
-			logger::warn("Type mismatch for {}: expected int for minValue or maxValue but received other type", settingName);
+			logger::warn("Type mismatch for {} {}: expected int for minValue or maxValue but received other type", collectionName, settingName);
+		}
+	} else if constexpr (std::is_same_v<T, unsigned int>) {
+		try {
+			auto minUInt = std::get<uint32_t>(settingData.minValue);  // Use uint32_t for unsigned
+			auto maxUInt = std::get<uint32_t>(settingData.maxValue);
+			ImGui::SliderScalar(settingData.friendlyName.c_str(), ImGuiDataType_U32, reinterpret_cast<unsigned int*>(valuePtr), &minUInt, &maxUInt);
+			success = true;  // Mark as successful
+		} catch (const std::bad_variant_access&) {
+			logger::warn("Type mismatch for {} {}: expected unsigned int for minValue or maxValue but received other type", collectionName, settingName);
 		}
 	} else {
-		logger::warn("Unsupported type for {}: {}", settingName, typeid(T).name());
+		logger::warn("Unsupported type for {} {}: {}", collectionName, settingName, typeid(T).name());
+	}
+
+	// Log if element creation failed
+	if (!success) {
+		logger::debug("Failed to create element for {} {} of type {}", collectionName, settingName, typeid(T).name());
 	}
 
 	// Tooltip handling
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		std::string hover = "";
 		if (settingData.offset != 0)
-			hover = std::format("{}\n\nNOTE: CS cannot save this game setting directly. Game setting '{}' might be able to be saved manually in the ini. Use the Copy button to export to clipboard.", settingData.description, settingName);
+			hover = std::format("{}\n\nNOTE: CS cannot save this game setting directly. Setting {} '{}' might be able to be saved manually in the ini. Use the Copy button to export to clipboard.", settingData.description, collectionName, settingName);
 		else
 			hover = settingData.description;
 		ImGui::Text(hover.c_str());
@@ -341,52 +431,74 @@ void Feature::RenderImGuiElement(const std::string& settingName, const gameSetti
 			ImGui::SetClipboardText(settingName.c_str());
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(std::format("Copy '{}' to clipboard.", settingName).c_str());
+			ImGui::Text(std::format("Copy {} '{}' to clipboard.", collectionName, settingName).c_str());
 		}
 	}
 	ImGui::PopID();  // End unique ID scope
 }
 
-void Feature::RenderImGuiElement(const std::string& settingName, const gameSetting& settingData, RE::Setting* setting)
+void Feature::RenderImGuiElement(const std::string& settingName, const gameSetting& settingData, RE::Setting* setting, const std::string& collectionName)
 {
 	// Determine the type of the setting
 	switch (setting->GetType()) {
 	case RE::Setting::Type::kBool:
-		RenderImGuiElement(settingName, settingData, &setting->data.b);
+		RenderImGuiElement(settingName, settingData, &setting->data.b, collectionName);
 		break;
 	case RE::Setting::Type::kFloat:
-		RenderImGuiElement(settingName, settingData, &setting->data.f);
+		RenderImGuiElement(settingName, settingData, &setting->data.f, collectionName);
 		break;
 	case RE::Setting::Type::kSignedInteger:
-		RenderImGuiElement(settingName, settingData, &setting->data.i);
+		RenderImGuiElement(settingName, settingData, &setting->data.i, collectionName);
 		break;
 	case RE::Setting::Type::kUnsignedInteger:
-		RenderImGuiElement(settingName, settingData, &setting->data.u);
+		RenderImGuiElement(settingName, settingData, &setting->data.u, collectionName);
 		break;
 	case RE::Setting::Type::kColor:
 	case RE::Setting::Type::kString:
 	case RE::Setting::Type::kUnknown:
 	default:
-		logger::warn("Unsupported type for setting '{}'", settingName);
+		logger::warn("Unsupported type for {} setting '{}'", collectionName, settingName);
 		break;
 	}
 }
 
 void Feature::SaveGameSettings(const std::map<std::string, gameSetting>& settingsMap)
 {
-	auto iniSettings = RE::INISettingCollection::GetSingleton();
+	// Initialize collections
+	std::vector<std::pair<RE::INISettingCollection*, std::string>> iniCollections = {
+		{ RE::INISettingCollection::GetSingleton(), "INISettingCollection" },
+		{ RE::INIPrefSettingCollection::GetSingleton(), "INIPrefSettingCollection" }
+	};
+	auto gameSettingCollection = RE::GameSettingCollection::GetSingleton();
 
+	// Single iteration for settings
 	for (const auto& [settingName, settingData] : settingsMap) {
 		// Only process settings without an offset (INI-based settings)
-		if (settingData.offset == 0) {
-			if (auto setting = iniSettings->GetSetting(settingName); setting) {
-				if (iniSettings->WriteSetting(setting)) {
-					logger::debug("Saved INI setting '{}'", settingName);
-				} else {
-					logger::warn("Failed to save INI setting '{}'", settingName);
+		if (settingData.offset == 0) {  // INI-based settings
+			bool processed = false;
+			for (const auto& [collection, collectionName] : iniCollections) {
+				if (auto setting = collection->GetSetting(settingName); setting) {
+					if (collection->WriteSetting(setting)) {
+						logger::debug("Saved {} setting {}", collectionName, settingName);
+					} else {
+						logger::warn("Failed to save {} setting {}", collectionName, settingName);
+					}
+					processed = true;
+					break;  // Exit once the setting is found and processed
 				}
-			} else {
-				logger::warn("INI setting '{}' not found.", settingName);
+			}
+
+			// Handle game settings if not processed by INI collections
+			if (!processed) {
+				if (auto setting = gameSettingCollection->GetSetting(settingName.data()); setting) {
+					if (gameSettingCollection->WriteSetting(setting)) {
+						logger::debug("Saved Game setting '{}'", settingName);
+					} else {
+						logger::warn("Failed to save Game setting {}", settingName);
+					}
+				} else {
+					logger::warn("Setting '{}' not found.", settingName);
+				}
 			}
 		}
 	}
@@ -394,19 +506,42 @@ void Feature::SaveGameSettings(const std::map<std::string, gameSetting>& setting
 
 void Feature::LoadGameSettings(const std::map<std::string, gameSetting>& settingsMap)
 {
-	auto iniSettings = RE::INISettingCollection::GetSingleton();
+	// Handle INI and Game settings in a single loop
+	std::vector<std::pair<RE::INISettingCollection*, std::string>> iniCollections = {
+		{ RE::INISettingCollection::GetSingleton(), "INISettingCollection" },
+		{ RE::INIPrefSettingCollection::GetSingleton(), "INIPrefSettingCollection" }
+	};
+
+	auto gameSettingCollection = RE::GameSettingCollection::GetSingleton();
 
 	for (const auto& [settingName, settingData] : settingsMap) {
-		// Only process settings without an offset (INI-based settings)
-		if (settingData.offset == 0) {
-			if (auto setting = iniSettings->GetSetting(settingName); setting) {
-				if (iniSettings->ReadSetting(setting)) {
-					logger::debug("Loaded INI setting '{}'", settingName);
-				} else {
-					logger::warn("Failed to load INI setting '{}'", settingName);
+		if (settingData.offset == 0) {  // INI-based or Game settings
+			bool found = false;
+
+			// First, check the INI and INIPref collections
+			for (const auto& [collection, collectionName] : iniCollections) {
+				if (auto setting = collection->GetSetting(settingName); setting) {
+					if (collection->ReadSetting(setting)) {
+						logger::debug("Loaded {} setting {}", collectionName, settingName);
+					} else {
+						logger::warn("Failed to load {} setting {}", collectionName, settingName);
+					}
+					found = true;
+					break;  // Exit once setting is found and processed
 				}
-			} else {
-				logger::warn("INI setting '{}' not found.", settingName);
+			}
+
+			// If not found in INI collections, check the game settings collection
+			if (!found) {
+				if (auto setting = gameSettingCollection->GetSetting(settingName.data()); setting) {
+					if (gameSettingCollection->ReadSetting(setting)) {
+						logger::debug("Loaded Game setting '{}'", settingName);
+					} else {
+						logger::warn("Failed to load Game setting {}", settingName);
+					}
+				} else {
+					logger::warn("Setting '{}' not found.", settingName);
+				}
 			}
 		}
 	}

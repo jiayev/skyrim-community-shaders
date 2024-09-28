@@ -333,19 +333,24 @@ namespace Util
 
 	void DumpSettingsOptions()
 	{
+		// List of INI setting collections to iterate over
 		std::vector<RE::SettingCollectionList<RE::Setting>*> collections = {
 			RE::INISettingCollection::GetSingleton(),
 			RE::INIPrefSettingCollection::GetSingleton(),
 		};
-		auto count = 0;
+
+		// Iterate over each collection and log the settings
 		for (const auto& collection : collections) {
-			for (const auto set : collection->settings)
-				logger::info("Setting[{}] {}", count, set->GetName());
-			count++;
+			const std::string collectionName = typeid(*collection).name();  // Get the collection name
+			for (const auto set : collection->settings) {
+				logger::info("Setting [{}] {}", collectionName, set->GetName());
+			}
 		}
+
+		// Retrieve and log settings from the GameSettingCollection
 		auto game = RE::GameSettingCollection::GetSingleton();
 		for (const auto& set : game->settings) {
-			logger::info("Game Setting {} {}", set.first, set.second->GetName());
+			logger::info("Game Setting {}", set.second->GetName());
 		}
 	}
 

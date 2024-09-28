@@ -53,43 +53,52 @@ struct Feature
 	};
 
 	/**
-	 * @brief Updates boolean settings in the provided map, setting them to true.
-	 *        This is intended to be used when features are disabled in Skyrim by default.
-	 *        Logs the changes and supports customizing the feature name in the log output.
+	 * @brief Updates boolean settings in the provided map, setting them to the specified value.
 	 * 
-	 * @param settingsMap The map containing settings to update.
+	 * @param settingsMap A map containing settings to update, where each setting is associated with its name.
+	 * @param featureName The name of the feature being enabled or disabled, used for logging purposes.
+	 * @param a_value The value to set for the boolean settings.
+	 */
+	void SetBooleanSettings(const std::map<std::string, Feature::gameSetting>& settingsMap, const std::string& featureName, bool a_value);
+
+	/**
+	 * @brief Updates boolean settings in the provided map, setting them to true.
+	 * 
+	 * This function is intended to be used when features are disabled in Skyrim by default.
+	 * It logs the changes and supports customizing the feature name in the log output.
+	 * 
+	 * @param settingsMap A map containing settings to update, where each setting is associated with its name.
 	 * @param featureName The name of the feature being enabled, used for logging purposes.
 	 */
 	void EnableBooleanSettings(const std::map<std::string, Feature::gameSetting>& settingsMap, const std::string& featureName);
 
 	/**
-	 * @brief Sets each game setting to its default value if the current value does not match the default.
+	 * @brief Updates boolean settings in the provided map, setting them to false.
 	 * 
-	 * This function iterates through all game settings in the provided map and checks whether each setting's
-	 * current value is equal to its default value. If a setting's current value differs from its default,
-	 * the function updates the setting to the default value.
-	 * 
-	 * The function assumes that the `gameSetting` structure contains the following fields:
-	 * - `defaultValue`: The default value for the setting.
-	 * - `currentValue`: The current value of the setting.
-	 * 
-	 * The function performs the following steps:
-	 * - Iterates over each setting in the `settingsMap`.
-	 * - Compares the `currentValue` of the setting to its `defaultValue`.
-	 * - If they are not equal, updates `currentValue` to `defaultValue`.
-	 * 
-	 * This function is useful for resetting settings to their defaults, typically in scenarios where
-	 * a reset operation is required, or to ensure consistency of default values across different parts of the application.
-	 * 
-	 * @param settingsMap A map of setting names to `gameSetting` objects, where each object contains
-	 *        the information for a specific game setting. The map is modified in place, with settings
-	 *        updated to their default values if necessary.
+	 * @param settingsMap A map containing settings to update, where each setting is associated with its name.
+	 * @param featureName The name of the feature being disabled, used for logging purposes.
 	 */
+	void DisableBooleanSettings(const std::map<std::string, Feature::gameSetting>& settingsMap, const std::string& featureName);
+
+	/**
+	* @brief Resets game settings to their default values if the current values do not match the defaults.
+	* 
+	* This function iterates through all game settings in the provided map and checks whether each setting's
+	* current value is equal to its default value. If they differ, the current value is updated to the default value.
+	* 
+	* The function assumes that the `gameSetting` structure contains the following fields:
+	* - `defaultValue`: The default value for the setting.
+	* - `currentValue`: The current value of the setting.
+	* 
+	* @param settingsMap A map of setting names to `gameSetting` objects, where each object contains
+	*        the information for a specific game setting. The map is modified in place.
+	*/
 	void ResetGameSettingsToDefaults(std::map<std::string, gameSetting>& settingsMap);
 
 	/**
-	 * @brief Helper function to render ImGui elements based on variable type inferred from the setting name.
-	 *        The first letter of the variable name is used to determine the type (b = bool, f = float, i = int, etc.).
+	 * @brief Renders a tree of ImGui elements for the specified settings.
+	 * 
+	 * This function generates ImGui UI elements for the settings provided in the map.
 	 * 
 	 * @param settingsMap The map of settings to be rendered.
 	 * @param tableName A unique identifier for the ImGui tree.
@@ -97,40 +106,48 @@ struct Feature
 	void RenderImGuiSettingsTree(const std::map<std::string, gameSetting>& settingsMap, const std::string& tableName);
 
 	/**
-	 * @brief Templated function to render an appropriate ImGui element (e.g., checkbox, slider) based on the type.
+	 * @brief Renders an appropriate ImGui element (e.g., checkbox, slider) based on the variable type.
 	 * 
+	 * This function determines the type of setting from its name and renders the corresponding UI element.
+	 * 
+	 * @tparam T The type of the setting value.
 	 * @param settingName The name of the setting.
+	 * @param settingData The metadata of the setting.
 	 * @param valuePtr Pointer to the value (either from an RE::Setting or direct memory access).
+	 * @param collectionName (Optional) The name of the collection for logging purposes.
 	 */
 	template <typename T>
-	void RenderImGuiElement(const std::string& settingName, const gameSetting& settingData, T* valuePtr);
+	void RenderImGuiElement(const std::string& settingName, const gameSetting& settingData, T* valuePtr, const std::string& collectionName = "");
 
 	/**
 	 * @brief Renders an appropriate ImGui element for RE::Setting data.
 	 * 
+	 * This function creates UI elements for settings that are tied to the RE::Setting structure.
+	 * 
 	 * @param settingName The name of the setting.
-	 * @param inputTypeChar Character determining the variable type (b for bool, f for float, i for int).
+	 * @param settingData The metadata of the setting.
 	 * @param setting Pointer to the RE::Setting.
+	 * @param collectionName (Optional) The name of the collection for logging purposes.
 	 */
-	void RenderImGuiElement(const std::string& settingName, const gameSetting& settingData, RE::Setting* setting);
+	void RenderImGuiElement(const std::string& settingName, const gameSetting& settingData, RE::Setting* setting, const std::string& collectionName = "");
 
 	/**
 	 * @brief Saves the provided game settings to the INI file.
 	 * 
-	 * This function iterates through the settings map, identifies settings that are managed via
-	 * the INISettingCollection (i.e., those without an offset), and saves them by calling `WriteSetting`.
+	 * This function iterates through the settings map and saves settings that are managed via
+	 * the INISettingCollection (i.e., those without an offset) by calling `WriteSetting`.
 	 * 
-	 * @param settingsMap The map of game settings.
+	 * @param settingsMap A map of game settings to be saved.
 	 */
 	void SaveGameSettings(const std::map<std::string, gameSetting>& settingsMap);
 
 	/**
 	 * @brief Loads the provided game settings from the INI file.
 	 * 
-	 * This function iterates through the settings map, identifies settings that are managed via
-	 * the INISettingCollection (i.e., those without an offset), and loads them by calling `ReadSetting`.
+	 * This function iterates through the settings map and loads settings that are managed via
+	 * the INISettingCollection (i.e., those without an offset) by calling `ReadSetting`.
 	 * 
-	 * @param settingsMap The map of game settings.
+	 * @param settingsMap A map of game settings to be loaded.
 	 */
 	void LoadGameSettings(const std::map<std::string, gameSetting>& settingsMap);
 };
