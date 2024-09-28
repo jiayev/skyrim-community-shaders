@@ -22,8 +22,9 @@ namespace LightLimitFix
 		if (z < strictLights[0].LightsNear || z > strictLights[0].LightsFar)
 			return false;
 
-		float clampedZ = clamp(z, strictLights[0].LightsNear, strictLights[0].LightsFar);
-		uint clusterZ = uint(max((log2(z) - log2(strictLights[0].LightsNear)) * clusterSize.z / log2(strictLights[0].LightsFar / strictLights[0].LightsNear), 0.0));
+		float nearVal = max(strictLights[0].LightsNear, 1e-5);
+		float clampedZ = clamp(z, nearVal, strictLights[0].LightsFar);
+		uint clusterZ = uint(max((log2(z) - log2(nearVal)) * clusterSize.z / log2(strictLights[0].LightsFar / nearVal), 0.0));
 		uint3 cluster = uint3(uint2(uv * clusterSize.xy), clusterZ);
 
 		clusterIndex = cluster.x + (clusterSize.x * cluster.y) + (clusterSize.x * clusterSize.y * cluster.z);
