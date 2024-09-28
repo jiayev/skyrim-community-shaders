@@ -638,9 +638,6 @@ void LightLimitFix::UpdateLights()
 	if (!(accumulator && accumulator->kCamera))
 		return;
 
-	lightsNear = std::max(0.0f, accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear);
-	lightsFar = std::min(16384.0f, accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar);
-
 	auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
 
 	// Cache data since cameraData can become invalid in first-person
