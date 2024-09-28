@@ -112,6 +112,8 @@ public:
 	eastl::unique_ptr<Buffer> lightGrid = nullptr;
 
 	std::uint32_t lightCount = 0;
+	float lightsNear = 1;
+	float lightsFar = 16384;
 
 	struct ParticleLightInfo
 	{

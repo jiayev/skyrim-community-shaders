@@ -356,15 +356,15 @@ namespace Util
 
 	float4 GetCameraData()
 	{
+		static float& cameraNear = (*(float*)(REL::RelocationID(517032, 403540).address() + 0x40));
+		static float& cameraFar = (*(float*)(REL::RelocationID(517032, 403540).address() + 0x44));
+
 		float4 cameraData{};
-		if (auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator()) {
-			if (accumulator->kCamera) {
-				cameraData.x = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar;
-				cameraData.y = accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
-				cameraData.z = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar - accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
-				cameraData.w = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar * accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
-			}
-		}
+		cameraData.x = cameraFar;
+		cameraData.y = cameraNear;
+		cameraData.z = cameraFar - cameraNear;
+		cameraData.w = cameraFar * cameraNear;
+
 		return cameraData;
 	}
 
