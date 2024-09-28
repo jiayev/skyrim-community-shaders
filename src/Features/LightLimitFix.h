@@ -166,9 +166,6 @@ public:
 		uint ParticleLightsOptimisationClusterRadius = 32;
 	};
 
-	float lightsNear = 0.0f;
-	float lightsFar = 16384.0f;
-
 	uint clusterSize[3] = { 16 };
 
 	Settings settings;

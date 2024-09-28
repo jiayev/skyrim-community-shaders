@@ -3,9 +3,10 @@
 #include "State.h"
 #include "Util.h"
 
-constexpr uint CLUSTER_MAX_LIGHTS = 128;
-
+static constexpr uint CLUSTER_MAX_LIGHTS = 128;
 static constexpr uint MAX_LIGHTS = 2048;
+static constexpr float LIGHTS_NEAR = 0;
+static constexpr float LIGHTS_FAR = 16384;
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LightLimitFix::Settings,
@@ -302,8 +303,8 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 	auto& context = State::GetSingleton()->context;
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 
-	strictLightDataTemp.LightsNear = lightsNear;
-	strictLightDataTemp.LightsFar = lightsFar;
+	strictLightDataTemp.LightsNear = LIGHTS_NEAR;
+	strictLightDataTemp.LightsFar = LIGHTS_FAR;
 
 	static bool wasEmpty = false;
 	static bool wasWorld = false;
@@ -594,8 +595,8 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 
 	light.color *= dimmer;
 
-	float distantLightFadeStart = lightsFar * lightsFar * (lightFadeStart / lightFadeEnd);
-	float distantLightFadeEnd = lightsFar * lightsFar;
+	float distantLightFadeStart = LIGHTS_FAR * LIGHTS_FAR * (lightFadeStart / lightFadeEnd);
+	float distantLightFadeEnd = LIGHTS_FAR * LIGHTS_FAR;
 
 	if (distance < distantLightFadeStart || distantLightFadeEnd == 0.0f) {
 		dimmer = 1.0f;
@@ -633,11 +634,6 @@ float3 LightLimitFix::Saturation(float3 color, float saturation)
 
 void LightLimitFix::UpdateLights()
 {
-	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-
-	if (!(accumulator && accumulator->kCamera))
-		return;
-
 	auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
 
 	// Cache data since cameraData can become invalid in first-person
@@ -673,8 +669,8 @@ void LightLimitFix::UpdateLights()
 
 					float distance = CalculateLightDistance(light.positionWS[0].data, light.radius);
 
-					float distantLightFadeStart = lightsFar * lightsFar * (lightFadeStart / lightFadeEnd);
-					float distantLightFadeEnd = lightsFar * lightsFar;
+					float distantLightFadeStart = LIGHTS_FAR * LIGHTS_FAR * (lightFadeStart / lightFadeEnd);
+					float distantLightFadeEnd = LIGHTS_FAR * LIGHTS_FAR;
 
 					float dimmer;
 
@@ -807,16 +803,16 @@ void LightLimitFix::UpdateLights()
 		auto projMatrixUnjittered = Util::GetCameraData(0).projMatrixUnjittered;
 		float fov = atan(1.0f / static_cast<float4x4>(projMatrixUnjittered).m[0][0]) * 2.0f * (180.0f / 3.14159265359f);
 
-		static float _near = 0.0f, _far = 0.0f, _fov = 0.0f, _lightsNear = 0.0f, _lightsFar = 0.0f;
-		if (fabs(_near - accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear) > 1e-4 || fabs(_far - accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar) > 1e-4 || fabs(_fov - fov) > 1e-4 || fabs(_lightsNear - lightsNear) > 1e-4 || fabs(_lightsFar - lightsFar) > 1e-4) {
+		static float _fov = 0.0f;
+		if (fabs(_fov - fov) > 1e-4) {
 			LightBuildingCB updateData{};
 			updateData.InvProjMatrix[0] = DirectX::XMMatrixInverse(nullptr, projMatrixUnjittered);
 			if (eyeCount == 1)
 				updateData.InvProjMatrix[1] = updateData.InvProjMatrix[0];
 			else
 				updateData.InvProjMatrix[1] = DirectX::XMMatrixInverse(nullptr, Util::GetCameraData(1).projMatrixUnjittered);
-			updateData.LightsNear = lightsNear;
-			updateData.LightsFar = lightsFar;
+			updateData.LightsNear = LIGHTS_NEAR;
+			updateData.LightsFar = LIGHTS_FAR;
 
 			lightBuildingCB->Update(updateData);
 
@@ -832,11 +828,7 @@ void LightLimitFix::UpdateLights()
 			ID3D11UnorderedAccessView* null_uav = nullptr;
 			context->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
 
-			_near = accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
-			_far = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar;
 			_fov = fov;
-			_lightsNear = lightsNear;
-			_lightsFar = lightsFar;
 		}
 	}
 
