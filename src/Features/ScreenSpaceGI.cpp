@@ -17,7 +17,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableTemporalDenoiser,
 	NumSlices,
 	NumSteps,
-	DepthMIPSamplingOffset,
+	MinScreenRadius,
 	AORadius,
 	GIRadius,
 	Thickness,
@@ -178,12 +178,6 @@ void ScreenSpaceGI::DrawSettings()
 			"How many samples does it take in one direction.\n"
 			"Controls accuracy of lighting, and noise when effect radius is large.");
 
-	if (showAdvanced) {
-		ImGui::SliderFloat("MIP Sampling Offset", &settings.DepthMIPSamplingOffset, 2.f, 6.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Mainly performance (texture memory bandwidth) setting but as a side-effect reduces overshadowing by thin objects and increases temporal instability.");
-	}
-
 	if (ImGui::BeginTable("Less Work", 2)) {
 		ImGui::TableNextColumn();
 		recompileFlag |= ImGui::Checkbox("Half Rate", &settings.HalfRate);
@@ -220,6 +214,12 @@ void ScreenSpaceGI::DrawSettings()
 		ImGui::SliderFloat("IL radius", &settings.GIRadius, 10.f, 800.0f, "%.1f game units");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("A larger radius produces wider IL.");
+	}
+
+	if (showAdvanced) {
+		ImGui::SliderFloat("Min Screen Radius", &settings.MinScreenRadius, 0.f, 0.05f, "%.3f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("The minimum screen-space effect radius as proportion of display width, to prevent far field AO being too small.");
 	}
 
 	ImGui::SliderFloat2("Depth Fade Range", &settings.DepthFadeRange.x, 1e4, 5e4, "%.0f game units");
@@ -611,7 +611,7 @@ void ScreenSpaceGI::UpdateSB()
 
 		data.NumSlices = settings.NumSlices;
 		data.NumSteps = settings.NumSteps;
-		data.DepthMIPSamplingOffset = settings.DepthMIPSamplingOffset;
+		data.MinScreenRadius = settings.MinScreenRadius * dynres.x;
 
 		data.EffectRadius = std::max(settings.AORadius, settings.GIRadius);
 		data.AORadius = settings.AORadius / data.EffectRadius;

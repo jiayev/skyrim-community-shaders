@@ -37,8 +37,8 @@ cbuffer SSGICB : register(b1)
 
 	uint NumSlices;
 	uint NumSteps;
-	float DepthMIPSamplingOffset;
 
+	float MinScreenRadius;
 	float AORadius;
 	float GIRadius;
 	float EffectRadius;

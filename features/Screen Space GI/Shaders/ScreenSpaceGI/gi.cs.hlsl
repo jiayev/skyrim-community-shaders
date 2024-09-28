@@ -77,6 +77,7 @@ void CalculateGI(
 	const float2 pixelDirRBViewspaceSizeAtCenterZ = viewspaceZ.xx * (eyeIndex == 0 ? NDCToViewMul.xy : NDCToViewMul.zw) * RCP_OUT_FRAME_DIM;
 
 	float screenspaceRadius = EffectRadius / pixelDirRBViewspaceSizeAtCenterZ.x;
+	screenspaceRadius = max(MinScreenRadius, screenspaceRadius);
 	// this is the min distance to start sampling from to avoid sampling from the center pixel (no useful data obtained from sampling center pixel)
 	const float minS = pixelTooCloseThreshold / screenspaceRadius;
 
@@ -150,7 +151,7 @@ void CalculateGI(
 				[branch] if (any(sampleScreenPos > 1.0) || any(sampleScreenPos < 0.0)) break;
 
 				float sampleOffsetLength = length(sampleOffset);
-				float mipLevel = clamp(log2(sampleOffsetLength) - DepthMIPSamplingOffset, 0, 5);
+				float mipLevel = clamp(log2(sampleOffsetLength) - 3.3, 0, 5);
 #ifdef HALF_RES
 				mipLevel = max(mipLevel, 1);
 #endif
