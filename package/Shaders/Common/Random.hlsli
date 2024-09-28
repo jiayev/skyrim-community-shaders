@@ -134,6 +134,12 @@ uint iqint3(uint2 x)
 ///////////////////////////////////////////////////////////
 
 // Derived from the interleaved gradient function from Jimenez 2014 http://goo.gl/eomGso
+float InterleavedGradientNoise(float2 pxCoord)
+{
+	float3 magic = float3(0.06711056f, 0.00583715f, 52.9829189f);
+	return frac(magic.z * frac(dot(pxCoord, magic.xy)));
+}
+
 float InterleavedGradientNoise(float2 pxCoord, uint frameCount)
 {
 	// Temporal factor
@@ -141,8 +147,7 @@ float InterleavedGradientNoise(float2 pxCoord, uint frameCount)
 	pxCoord.x += frameStep * 4.7526;
 	pxCoord.y += frameStep * 3.1914;
 
-	float3 magic = float3(0.06711056f, 0.00583715f, 52.9829189f);
-	return frac(magic.z * frac(dot(pxCoord, magic.xy)));
+	return InterleavedGradientNoise(pxCoord);
 }
 
 // https://extremelearning.com.au/unreasonable-effectiveness-of-quasirandom-sequences/
