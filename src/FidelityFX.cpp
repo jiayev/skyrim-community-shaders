@@ -26,13 +26,13 @@ FfxResource ffxGetResource(ID3D11Resource* dx11Resource,
 void FidelityFX::CreateFSRResources()
 {
 	auto state = State::GetSingleton();
-	
+
 	auto fsrDevice = ffxGetDeviceDX11(state->device);
 
 	size_t scratchBufferSize = ffxGetScratchMemorySizeDX11(FFX_FSR3UPSCALER_CONTEXT_COUNT);
 	void* scratchBuffer = calloc(scratchBufferSize, 1);
 	memset(scratchBuffer, 0, scratchBufferSize);
-	
+
 	FfxInterface fsrInterface;
 	if (ffxGetInterfaceDX11(&fsrInterface, fsrDevice, scratchBuffer, scratchBufferSize, FFX_FSR3UPSCALER_CONTEXT_COUNT) != FFX_OK)
 		logger::critical("[FidelityFX] Failed to initialize FSR3 backend interface!");
@@ -51,7 +51,7 @@ void FidelityFX::CreateFSRResources()
 	contextDescription.backendInterfaceFrameInterpolation = fsrInterface;
 
 	if (ffxFsr3ContextCreate(&fsrContext, &contextDescription) != FFX_OK)
-		logger::critical("[FidelityFX] Failed to initialize FSR3 context!");	
+		logger::critical("[FidelityFX] Failed to initialize FSR3 context!");
 }
 
 void FidelityFX::DestroyFSRResources()

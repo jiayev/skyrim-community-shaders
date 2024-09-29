@@ -13,7 +13,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void Upscaling::DrawSettings()
 {
 	if (ImGui::CollapsingHeader("Upscaling", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
-
 		const char* upscaleModes[] = { "TAA", "FSR", "DLSS" };
 
 		if (Streamline::GetSingleton()->featureDLSS) {
@@ -24,11 +23,9 @@ void Upscaling::DrawSettings()
 			settings.upscaleModeNoDLSS = std::min(1u, (uint)settings.upscaleModeNoDLSS);
 		}
 
-
 		auto upscaleMode = GetUpscaleMode();
 
-		if (upscaleMode != UpscaleMode::kTAA)
-		{
+		if (upscaleMode != UpscaleMode::kTAA) {
 			ImGui::SliderFloat("Sharpness", &settings.sharpness, 0.0f, 1.0f, "%.1f");
 			settings.sharpness = std::clamp(settings.sharpness, 0.0f, 1.0f);
 		}
@@ -65,8 +62,7 @@ void Upscaling::CheckResources()
 	auto streamline = Streamline::GetSingleton();
 	auto fidelityFX = FidelityFX::GetSingleton();
 
-	if (previousUpscaleMode != currentUpscaleMode)
-	{
+	if (previousUpscaleMode != currentUpscaleMode) {
 		if (previousUpscaleMode == UpscaleMode::kTAA)
 			CreateUpscalingResources();
 		else if (previousUpscaleMode == UpscaleMode::kDLSS)
@@ -75,7 +71,7 @@ void Upscaling::CheckResources()
 			fidelityFX->DestroyFSRResources();
 
 		if (currentUpscaleMode == UpscaleMode::kTAA)
-			DestroyUpscalingResources();		
+			DestroyUpscalingResources();
 		else if (previousUpscaleMode == UpscaleMode::kFSR)
 			fidelityFX->DestroyFSRResources();
 		else if (currentUpscaleMode == UpscaleMode::kFSR)
@@ -145,9 +141,9 @@ void Upscaling::Upscale()
 
 	if (upscaleMode == UpscaleMode::kDLSS)
 		Streamline::GetSingleton()->Upscale(upscalingTempTexture);
-	else 
+	else
 		FidelityFX::GetSingleton()->Upscale(upscalingTempTexture);
-	
+
 	context->CopyResource(inputTextureResource, upscalingTempTexture->resource.get());
 
 	state->EndPerfEvent();

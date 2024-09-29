@@ -3,8 +3,8 @@
 #include "Buffer.h"
 #include "State.h"
 
-#include "Streamline.h"
 #include "FidelityFX.h"
+#include "Streamline.h"
 
 class Upscaling
 {

@@ -465,7 +465,7 @@ void Streamline::Upscale(Texture2D* a_upscaleTexture)
 		dlssOptions.balancedPreset = dlssPreset;
 		dlssOptions.performancePreset = dlssPreset;
 		dlssOptions.ultraPerformancePreset = dlssPreset;
-	
+
 		if (SL_FAILED(result, slDLSSSetOptions(viewport, dlssOptions))) {
 			logger::critical("[Streamline] Could not enable DLSS");
 		}
