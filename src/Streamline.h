@@ -22,21 +22,6 @@ public:
 
 	inline std::string GetShortName() { return "Streamline"; }
 
-	enum class AAMode
-	{
-		kTAA,
-		kDLAA
-	};
-
-	struct Settings
-	{
-		uint aaMode = (uint)AAMode::kDLAA;
-		uint dlaaPreset = (uint)sl::DLSSPreset::ePresetC;
-		float sharpness = 0.5f;
-	};
-
-	Settings settings;
-
 	bool enabledAtBoot = false;
 	bool initialized = false;
 
@@ -89,14 +74,7 @@ public:
 	Texture2D* depthBufferShared;
 
 	ID3D11ComputeShader* copyDepthToSharedBufferCS;
-	ID3D11ComputeShader* rcasCS;
 
-	ID3D11ComputeShader* GetRCASComputeShader();
-	void ClearShaderCache();
-
-	void SaveSettings(json&);
-	void LoadSettings(json&);
-	void RestoreDefaultSettings();
 	void DrawSettings();
 
 	void LoadInterposer();
@@ -123,9 +101,11 @@ public:
 	void CopyResourcesToSharedBuffers();
 
 	void Present();
-	void Upscale();
+	void Upscale(Texture2D* a_color);
 
 	void UpdateConstants();
+
+	void DestroyDLSSResources();
 
 	struct Main_RenderWorld
 	{
@@ -147,39 +127,11 @@ public:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	bool validTaaPass = false;
-
-	struct TAA_BeginTechnique
-	{
-		static void thunk(RE::BSImagespaceShaderISTemporalAA* a_shader, RE::BSTriShape* a_null)
-		{
-			func(a_shader, a_null);
-			GetSingleton()->validTaaPass = true;
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct TAA_EndTechnique
-	{
-		static void thunk(RE::BSImagespaceShaderISTemporalAA* a_shader, RE::BSTriShape* a_null)
-		{
-			auto singleton = GetSingleton();
-			if (singleton->featureDLSS && singleton->settings.aaMode == (uint)AAMode::kDLAA && singleton->validTaaPass)
-				singleton->Upscale();
-			else
-				func(a_shader, a_null);
-			singleton->validTaaPass = false;
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
 	static void InstallHooks()
 	{
 		if (!REL::Module::IsVR()) {
 			stl::write_thunk_call<Main_RenderWorld>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x831, 0x841, 0x791));
 			stl::write_thunk_call<MenuManagerDrawInterfaceStartHook>(REL::RelocationID(79947, 82084).address() + REL::Relocate(0x7E, 0x83, 0x97));
-			stl::write_thunk_call<TAA_BeginTechnique>(REL::RelocationID(100540, 107270).address() + REL::Relocate(0x3E9, 0x3EA, 0x448));
-			stl::write_thunk_call<TAA_EndTechnique>(REL::RelocationID(100540, 107270).address() + REL::Relocate(0x3F3, 0x3F4, 0x452));
 		}
 	}
 };

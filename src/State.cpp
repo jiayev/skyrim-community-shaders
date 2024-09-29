@@ -15,6 +15,7 @@
 #include "TruePBR.h"
 
 #include "Streamline.h"
+#include "Upscaling.h"
 
 void State::Draw()
 {
@@ -221,10 +222,10 @@ void State::Load(ConfigMode a_configMode)
 	if (pbrJson.is_object())
 		truePBR->LoadSettings(pbrJson);
 
-	auto streamline = Streamline::GetSingleton();
-	auto& streamlineJson = settings[streamline->GetShortName()];
-	if (streamlineJson.is_object())
-		streamline->LoadSettings(streamlineJson);
+	auto upscaling = Upscaling::GetSingleton();
+	auto& upscalingJson = settings[upscaling->GetShortName()];
+	if (upscalingJson.is_object())
+		upscaling->LoadSettings(upscalingJson);
 
 	for (auto* feature : Feature::GetFeatureList())
 		feature->Load(settings);
@@ -265,9 +266,9 @@ void State::Save(ConfigMode a_configMode)
 	auto& pbrJson = settings[truePBR->GetShortName()];
 	truePBR->SaveSettings(pbrJson);
 
-	auto streamline = Streamline::GetSingleton();
-	auto& streamlineJson = settings[streamline->GetShortName()];
-	streamline->SaveSettings(streamlineJson);
+	auto upscaling = Upscaling::GetSingleton();
+	auto& upscalingJson = settings[upscaling->GetShortName()];
+	upscaling->SaveSettings(upscalingJson);
 
 	json originalShaders;
 	for (int classIndex = 0; classIndex < RE::BSShader::Type::Total - 1; ++classIndex) {
@@ -293,6 +294,7 @@ void State::PostPostLoad()
 		logger::info("Skyrim Upscaler not detected");
 	Deferred::Hooks::Install();
 	TruePBR::GetSingleton()->PostPostLoad();
+	Upscaling::InstallHooks();
 }
 
 bool State::ValidateCache(CSimpleIniA& a_ini)
