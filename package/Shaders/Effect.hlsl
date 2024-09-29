@@ -524,12 +524,12 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	float3 color = DLightColor.xyz;
 	if (!InInterior && !InMapMenu && (ExtraShaderDescriptor & _InWorld)) {
 		float3 viewDirection = normalize(worldPosition);
-		color = DirLightColorShared * GetEffectShadow(worldPosition, viewDirection, screenPosition, eyeIndex);
+		color = DirLightColorShared * GetEffectShadow(worldPosition, viewDirection, screenPosition, eyeIndex) * 0.5;
 
 		float3 directionalAmbientColor = DirectionalAmbientShared._14_24_34;
 		color += directionalAmbientColor;
 	} else {
-		color = DirLightColorShared;
+		color = DirLightColorShared * 0.5;
 
 		float3 directionalAmbientColor = DirectionalAmbientShared._14_24_34;
 		color += directionalAmbientColor;
