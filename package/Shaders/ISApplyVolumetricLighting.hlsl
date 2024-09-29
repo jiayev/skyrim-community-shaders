@@ -38,11 +38,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float depth = DepthTex.Sample(DepthSampler, screenPosition).x;
 	float repartition = clamp(RepartitionTex.SampleLevel(RepartitionSampler, depth, 0).x, 0, 0.9999);
 	float vl = g_IntensityX_TemporalY.x * VLTex.SampleLevel(VLSampler, float3(input.TexCoord, repartition), 0).x;
-	float multipleScattering = vl * (1.0 + vl * (0.5 + vl * 0.25));
 
 	float noiseGrad = 0.03125 * NoiseGradSamplerTex.Sample(NoiseGradSamplerSampler, 0.125 * input.Position.xy).x;
 
-	float adjustedVl = noiseGrad + multipleScattering - 0.0078125;
+	float adjustedVl = noiseGrad + vl - 0.0078125;
 
 	if (0.001 < g_IntensityX_TemporalY.y) {
 		float2 motionVector = MotionVectorsTex.Sample(MotionVectorsSampler, screenPosition).xy;
@@ -51,11 +50,12 @@ PS_OUTPUT main(PS_INPUT input)
 		float previousVl = PreviousFrameTex.Sample(PreviousFrameSampler, previousScreenPosition).x;
 		float previousDepth = PreviousDepthTex.Sample(PreviousDepthSampler, previousScreenPosition).x;
 
-		float depthDifference = abs(depth - previousDepth);
-		float temporalContribution = saturate(g_IntensityX_TemporalY.y * exp(-depthDifference * 100.0));
-		temporalContribution *= saturate(1.0 - length(motionVector) * 10.0);
+		float temporalContribution = g_IntensityX_TemporalY.y * (1 - smoothstep(0, 1, min(1, 100 * abs(depth - previousDepth))));
 
-		float isValid = (previousTexCoord.x >= 0 && previousTexCoord.x < 1 && previousTexCoord.y >= 0 && previousTexCoord.y < 1);
+		float isValid = 0;
+		if (previousTexCoord.x >= 0 && previousTexCoord.x < 1 && previousTexCoord.y >= 0 && previousTexCoord.y < 1) {
+			isValid = 1;
+		}
 		psout.VL = lerp(adjustedVl, previousVl, temporalContribution * isValid);
 	} else {
 		psout.VL = adjustedVl;

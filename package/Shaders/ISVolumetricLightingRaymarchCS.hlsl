@@ -19,12 +19,6 @@ cbuffer PerTechnique : register(b0)
 
 	float3 position = (0.5 + float3(dispatchID.xy, StepIndex)) / TextureDimensions.xyz;
 	float density = DensityTex.SampleLevel(DensitySampler, position, 0).x;
-	// Adaptive step size
-	float stepSize = 1.0 / TextureDimensions.z;
-	float gradient = abs(density - previousDensity);
-	float adaptiveStepSize = stepSize * lerp(1.0, 2.0, saturate(gradient * 10.0));
-
-	float transmittance = exp(-density * adaptiveStepSize);
-	DensityRW[uint3(dispatchID.xy, StepIndex)] = previousDensity + density * (1.0 - transmittance) / max(density, 1e-5);
+	DensityRW[uint3(dispatchID.xy, StepIndex)] = previousDensity + density;
 }
 #endif
