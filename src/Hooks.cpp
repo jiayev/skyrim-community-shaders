@@ -154,15 +154,11 @@ struct IDXGISwapChain_Present
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
-struct BSGraphics_SetDirtyStates
+void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
-	static void thunk(bool isCompute)
-	{
-		func(isCompute);
-		State::GetSingleton()->Draw();
-	}
-	static inline REL::Relocation<decltype(thunk)> func;
-};
+	func(isCompute);
+	State::GetSingleton()->Draw();
+}
 
 struct ID3D11Device_CreateVertexShader
 {
@@ -622,7 +618,7 @@ namespace Hooks
 
 	void InstallD3DHooks()
 	{
-		if (!REL::Module::VR()) {
+		if (!REL::Module::IsVR()) {
 			auto streamline = Streamline::GetSingleton();
 
 			streamline->LoadInterposer();

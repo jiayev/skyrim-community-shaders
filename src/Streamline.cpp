@@ -2,6 +2,7 @@
 
 #include <dxgi.h>
 
+#include "Hooks.h"
 #include "Util.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -525,15 +526,11 @@ void Streamline::Present()
 	slSetTag(viewport, inputs, _countof(inputs), state->context);
 }
 
-void BSGraphics_SetDirtyStates(bool isCompute);
-
-extern decltype(&BSGraphics_SetDirtyStates) ptr_BSGraphics_SetDirtyStates;
-
 void Streamline::Upscale()
 {
 	UpdateConstants();
 
-	(ptr_BSGraphics_SetDirtyStates)(false);  // Our hook skips this call so we need to call manually
+	Hooks::BSGraphics_SetDirtyStates::func(false);  // Our hook skips this call so we need to call manually
 
 	auto state = State::GetSingleton();
 	state->BeginPerfEvent("Upscaling");
