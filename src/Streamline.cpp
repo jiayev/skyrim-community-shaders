@@ -4,11 +4,7 @@
 
 #include "Util.h"
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	Streamline::Settings,
-	aaMode,
-	dlaaPreset,
-	sharpness);
+#include "Upscaling.h"
 
 void LoggingCallback(sl::LogType type, const char* msg)
 {
@@ -25,72 +21,10 @@ void LoggingCallback(sl::LogType type, const char* msg)
 	}
 }
 
-ID3D11ComputeShader* Streamline::GetRCASComputeShader()
-{
-	static auto currentSharpness = settings.sharpness;
-
-	if (currentSharpness != settings.sharpness) {
-		currentSharpness = settings.sharpness;
-
-		if (rcasCS) {
-			rcasCS->Release();
-			rcasCS = nullptr;
-		}
-	}
-
-	if (!rcasCS) {
-		logger::debug("Compiling Utility.hlsl");
-		rcasCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\Streamline\\RCAS\\RCAS.hlsl", { { "SHARPNESS", std::format("{}", settings.sharpness).c_str() } }, "cs_5_0");
-	}
-	return rcasCS;
-}
-
-void Streamline::ClearShaderCache()
-{
-	if (rcasCS) {
-		rcasCS->Release();
-		rcasCS = nullptr;
-	}
-}
-
-void Streamline::LoadSettings(json& o_json)
-{
-	settings = o_json;
-}
-
-void Streamline::SaveSettings(json& o_json)
-{
-	o_json = settings;
-}
-
-void Streamline::RestoreDefaultSettings()
-{
-	settings = {};
-}
-
 void Streamline::DrawSettings()
 {
 	auto state = State::GetSingleton();
 	if (ImGui::CollapsingHeader("Streamline", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
-		if (ImGui::TreeNodeEx("NVIDIA DLAA", ImGuiTreeNodeFlags_DefaultOpen)) {
-			if (featureDLSS) {
-				const char* aaModes[] = { "TAA", "DLAA" };
-				ImGui::SliderInt("Anti-Aliasing", (int*)&settings.aaMode, 0, 1, std::format("{}", aaModes[(uint)settings.aaMode]).c_str());
-				settings.aaMode = std::min(1u, (uint)settings.aaMode);
-
-				if (settings.aaMode == (uint)AAMode::kDLAA) {
-					ImGui::SliderFloat("DLAA Sharpness", &settings.sharpness, 0.0f, 1.0f, "%.1f");
-					settings.sharpness = std::clamp(settings.sharpness, 0.0f, 1.0f);
-					const char* dlaaPresets[] = { "Default", "Preset A", "Preset B", "Preset C", "Preset D", "Preset E", "Preset F" };
-					ImGui::SliderInt("DLAA Preset", (int*)&settings.dlaaPreset, 0, 6, std::format("{}", dlaaPresets[(uint)settings.dlaaPreset]).c_str());
-					settings.dlaaPreset = std::min(6u, (uint)settings.dlaaPreset);
-				}
-			} else {
-				ImGui::Text("To enable DLAA, enable it in your mod manager and use a compatible GPU");
-			}
-			ImGui::TreePop();
-		}
-
 		if (!state->isVR) {
 			if (ImGui::TreeNodeEx("NVIDIA DLSS Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
 				if (featureDLSSG) {
@@ -312,25 +246,6 @@ HRESULT Streamline::CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter,
 
 void Streamline::SetupResources()
 {
-	if (featureDLSS) {
-		auto state = State::GetSingleton();
-
-		sl::DLSSOptions dlssOptions{};
-		dlssOptions.mode = sl::DLSSMode::eMaxQuality;
-		dlssOptions.outputWidth = (uint)state->screenSize.x;
-		dlssOptions.outputHeight = (uint)state->screenSize.y;
-		dlssOptions.colorBuffersHDR = sl::Boolean::eFalse;
-		dlssOptions.preExposure = 1.0f;
-		dlssOptions.sharpness = 0.0f;
-		dlssOptions.dlaaPreset = (sl::DLSSPreset)settings.dlaaPreset;
-
-		if (SL_FAILED(result, slDLSSSetOptions(viewport, dlssOptions))) {
-			logger::critical("[Streamline] Could not enable DLSS");
-		} else {
-			logger::info("[Streamline] Successfully enabled DLSS");
-		}
-	}
-
 	if (featureDLSSG) {
 		sl::DLSSGOptions options{};
 		options.mode = sl::DLSSGMode::eAuto;
@@ -408,13 +323,6 @@ void Streamline::CopyResourcesToSharedBuffers()
 
 	auto& context = State::GetSingleton()->context;
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-
-	// Fix motion vectors not resetting when the game is paused
-	if (RE::UI::GetSingleton()->GameIsPaused() && !(featureDLSS && settings.aaMode == (uint)AAMode::kDLAA)) {
-		float clearColor[4] = { 0, 0, 0, 0 };
-		auto& motionVectorsBuffer = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::RENDER_TARGET::kMOTION_VECTOR];
-		context->ClearRenderTargetView(motionVectorsBuffer.RTV, clearColor);
-	}
 
 	ID3D11RenderTargetView* backupViews[8];
 	ID3D11DepthStencilView* backupDsv;
@@ -525,54 +433,23 @@ void Streamline::Present()
 	slSetTag(viewport, inputs, _countof(inputs), state->context);
 }
 
-void BSGraphics_SetDirtyStates(bool isCompute);
-
-extern decltype(&BSGraphics_SetDirtyStates) ptr_BSGraphics_SetDirtyStates;
-
-void Streamline::Upscale()
+void Streamline::Upscale(Texture2D* a_upscaleTexture)
 {
 	UpdateConstants();
 
-	(ptr_BSGraphics_SetDirtyStates)(false);  // Our hook skips this call so we need to call manually
-
 	auto state = State::GetSingleton();
-	state->BeginPerfEvent("Upscaling");
-
-	auto& context = state->context;
-
-	ID3D11ShaderResourceView* inputTextureSRV;
-	context->PSGetShaderResources(0, 1, &inputTextureSRV);
-
-	inputTextureSRV->Release();
-
-	ID3D11RenderTargetView* outputTextureRTV;
-	ID3D11DepthStencilView* dsv;
-	context->OMGetRenderTargets(1, &outputTextureRTV, &dsv);
-	context->OMSetRenderTargets(0, nullptr, nullptr);
-
-	outputTextureRTV->Release();
-
-	if (dsv)
-		dsv->Release();
 
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 	auto& motionVectorsTexture = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	auto& transparencyMaskTexture = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTEMPORAL_AA_MASK];
 
-	// Fix motion vectors not resetting when the game is paused
-	if (RE::UI::GetSingleton()->GameIsPaused()) {
-		float clearColor[4] = { 0, 0, 0, 0 };
-		auto& motionVectorsBuffer = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::RENDER_TARGET::kMOTION_VECTOR];
-		context->ClearRenderTargetView(motionVectorsBuffer.RTV, clearColor);
-	}
+	auto dlssPreset = (sl::DLSSPreset)Upscaling::GetSingleton()->settings.dlssPreset;
+	static auto previousDlssPreset = dlssPreset;
 
-	ID3D11Resource* inputTextureResource;
-	inputTextureSRV->GetResource(&inputTextureResource);
-
-	ID3D11Resource* outputTextureResource;
-	outputTextureRTV->GetResource(&outputTextureResource);
+	if (previousDlssPreset != dlssPreset)
+		DestroyDLSSResources();
+	previousDlssPreset = dlssPreset;
 
 	{
 		sl::DLSSOptions dlssOptions{};
@@ -582,15 +459,23 @@ void Streamline::Upscale()
 		dlssOptions.colorBuffersHDR = sl::Boolean::eFalse;
 		dlssOptions.preExposure = 1.0f;
 		dlssOptions.sharpness = 0.0f;
-		dlssOptions.dlaaPreset = (sl::DLSSPreset)settings.dlaaPreset;
-		slDLSSSetOptions(viewport, dlssOptions);
+
+		dlssOptions.dlaaPreset = dlssPreset;
+		dlssOptions.qualityPreset = dlssPreset;
+		dlssOptions.balancedPreset = dlssPreset;
+		dlssOptions.performancePreset = dlssPreset;
+		dlssOptions.ultraPerformancePreset = dlssPreset;
+	
+		if (SL_FAILED(result, slDLSSSetOptions(viewport, dlssOptions))) {
+			logger::critical("[Streamline] Could not enable DLSS");
+		}
 	}
 
 	{
 		sl::Extent fullExtent{ 0, 0, (uint)state->screenSize.x, (uint)state->screenSize.y };
 
-		sl::Resource colorIn = { sl::ResourceType::eTex2d, inputTextureResource, 0 };
-		sl::Resource colorOut = { sl::ResourceType::eTex2d, colorBufferShared->resource.get(), 0 };
+		sl::Resource colorIn = { sl::ResourceType::eTex2d, a_upscaleTexture->resource.get(), 0 };
+		sl::Resource colorOut = { sl::ResourceType::eTex2d, a_upscaleTexture->resource.get(), 0 };
 		sl::Resource depth = { sl::ResourceType::eTex2d, depthTexture.texture, 0 };
 		sl::Resource mvec = { sl::ResourceType::eTex2d, motionVectorsTexture.texture, 0 };
 
@@ -609,41 +494,6 @@ void Streamline::Upscale()
 	sl::ViewportHandle view(viewport);
 	const sl::BaseStructure* inputs[] = { &view };
 	slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), state->context);
-
-	context->CopyResource(inputTextureResource, colorBufferShared->resource.get());
-
-	state->EndPerfEvent();
-
-	state->BeginPerfEvent("Sharpening");
-
-	{
-		auto dispatchCount = Util::GetScreenDispatchCount(false);
-
-		{
-			ID3D11ShaderResourceView* views[1] = { inputTextureSRV };
-			context->CSSetShaderResources(0, ARRAYSIZE(views), views);
-
-			ID3D11UnorderedAccessView* uavs[1] = { colorBufferShared->uav.get() };
-			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-
-			context->CSSetShader(GetRCASComputeShader(), nullptr, 0);
-
-			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
-		}
-
-		ID3D11ShaderResourceView* views[1] = { nullptr };
-		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
-
-		ID3D11UnorderedAccessView* uavs[1] = { nullptr };
-		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-
-		ID3D11ComputeShader* shader = nullptr;
-		context->CSSetShader(shader, nullptr, 0);
-	}
-
-	context->CopyResource(outputTextureResource, colorBufferShared->resource.get());
-
-	state->EndPerfEvent();
 }
 
 void Streamline::UpdateConstants()
@@ -703,4 +553,12 @@ void Streamline::UpdateConstants()
 	if (SL_FAILED(res, slSetConstants(slConstants, *frameToken, viewport))) {
 		logger::error("[Streamline] Could not set constants");
 	}
+}
+
+void Streamline::DestroyDLSSResources()
+{
+	sl::DLSSOptions dlssOptions{};
+	dlssOptions.mode = sl::DLSSMode::eOff;
+	slDLSSSetOptions(viewport, dlssOptions);
+	slFreeResources(sl::kFeatureDLSS, viewport);
 }
