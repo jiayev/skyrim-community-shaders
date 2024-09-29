@@ -368,18 +368,22 @@ namespace Util
 		return cameraData;
 	}
 
-	float2 ConvertToDynamic(float2 size)
+	float2 ConvertToDynamic(float2 a_size)
 	{
 		auto viewport = RE::BSGraphics::State::GetSingleton();
 
 		return float2(
-			size.x * viewport->GetRuntimeData().dynamicResolutionWidthRatio,
-			size.y * viewport->GetRuntimeData().dynamicResolutionHeightRatio);
+			a_size.x * viewport->GetRuntimeData().dynamicResolutionWidthRatio,
+			a_size.y * viewport->GetRuntimeData().dynamicResolutionHeightRatio);
 	}
 
-	DispatchCount GetScreenDispatchCount()
+	DispatchCount GetScreenDispatchCount(bool a_dynamic)
 	{
-		float2 resolution = ConvertToDynamic(State::GetSingleton()->screenSize);
+		float2 resolution = State::GetSingleton()->screenSize;
+
+		if (a_dynamic)
+			ConvertToDynamic(resolution);
+
 		uint dispatchX = (uint)std::ceil(resolution.x / 8.0f);
 		uint dispatchY = (uint)std::ceil(resolution.y / 8.0f);
 

@@ -4,6 +4,7 @@
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Streamline.h"
 #include "TruePBR.h"
 
 #include "Features/ExtendedMaterials.h"
@@ -73,74 +74,46 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Query(const SKSE::QueryInterface*, 
 
 void MessageHandler(SKSE::MessagingInterface::Message* message)
 {
-	switch (message->type) {
-	case SKSE::MessagingInterface::kPostPostLoad:
-		{
-			if (errors.empty()) {
-				State::GetSingleton()->PostPostLoad();
-				Hooks::Install();
-				FrameAnnotations::OnPostPostLoad();
-
-				auto& shaderCache = SIE::ShaderCache::Instance();
-
-				shaderCache.ValidateDiskCache();
-
-				if (shaderCache.UseFileWatcher())
-					shaderCache.StartFileWatcher();
-
-				for (auto* feature : Feature::GetFeatureList()) {
-					if (feature->loaded) {
-						feature->PostPostLoad();
-					}
-				}
-			}
-
-			break;
+	if (message->type == SKSE::MessagingInterface::kDataLoaded) {
+		for (auto it = errors.begin(); it != errors.end(); ++it) {
+			auto& errorMessage = *it;
+			RE::DebugMessageBox(std::format("Community Shaders\n{}, will disable all hooks and features", errorMessage).c_str());
 		}
-	case SKSE::MessagingInterface::kDataLoaded:
-		{
-			for (auto it = errors.begin(); it != errors.end(); ++it) {
-				auto& errorMessage = *it;
-				RE::DebugMessageBox(std::format("Community Shaders\n{}, will disable all hooks and features", errorMessage).c_str());
+
+		if (errors.empty()) {
+			FrameAnnotations::OnDataLoaded();
+
+			auto& shaderCache = SIE::ShaderCache::Instance();
+			shaderCache.menuLoaded = true;
+			while (shaderCache.IsCompiling() && !shaderCache.backgroundCompilation) {
+				std::this_thread::sleep_for(100ms);
 			}
 
-			if (errors.empty()) {
-				FrameAnnotations::OnDataLoaded();
-
-				auto& shaderCache = SIE::ShaderCache::Instance();
-				shaderCache.menuLoaded = true;
-				while (shaderCache.IsCompiling() && !shaderCache.backgroundCompilation) {
-					std::this_thread::sleep_for(100ms);
-				}
-
-				if (shaderCache.IsDiskCache()) {
-					shaderCache.WriteDiskCacheInfo();
-				}
-
-				TruePBR::GetSingleton()->DataLoaded();
-				for (auto* feature : Feature::GetFeatureList()) {
-					if (feature->loaded) {
-						feature->DataLoaded();
-					}
-				}
+			if (shaderCache.IsDiskCache()) {
+				shaderCache.WriteDiskCacheInfo();
 			}
 
-			break;
+			TruePBR::GetSingleton()->DataLoaded();
+			for (auto* feature : Feature::GetFeatureList()) {
+				if (feature->loaded) {
+					feature->DataLoaded();
+				}
+			}
 		}
 	}
 }
 
 bool Load()
 {
-	if (REL::Module::IsVR()) {
+	if (REL::Module::IsVR())
 		REL::IDDatabase::get().IsVRAddressLibraryAtLeastVersion("0.146.0", true);
-	}
 
 	auto messaging = SKSE::GetMessagingInterface();
 	messaging->RegisterListener("SKSE", MessageHandler);
 
 	auto state = State::GetSingleton();
 	state->Load();
+
 	auto log = spdlog::default_logger();
 	log->set_level(state->GetLogLevel());
 
@@ -157,8 +130,27 @@ bool Load()
 		}
 	}
 
-	if (errors.empty() && !REL::Module::IsVR())
+	if (errors.empty()) {
+		State::GetSingleton()->PostPostLoad();
+
+		Hooks::Install();
 		Hooks::InstallD3DHooks();
+
+		FrameAnnotations::OnPostPostLoad();
+
+		auto& shaderCache = SIE::ShaderCache::Instance();
+
+		shaderCache.ValidateDiskCache();
+
+		if (shaderCache.UseFileWatcher())
+			shaderCache.StartFileWatcher();
+
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (feature->loaded) {
+				feature->PostPostLoad();
+			}
+		}
+	}
 
 	return true;
 }

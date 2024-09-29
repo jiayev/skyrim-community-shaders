@@ -196,8 +196,6 @@ decltype(&CreateDXGIFactory) ptrCreateDXGIFactory;
 
 HRESULT WINAPI hk_CreateDXGIFactory(REFIID, void** ppFactory)
 {
-	logger::info("Creating DXGI factory");
-
 	return Streamline::GetSingleton()->CreateDXGIFactory(__uuidof(IDXGIFactory1), ppFactory);
 }
 
@@ -217,11 +215,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 	D3D_FEATURE_LEVEL* pFeatureLevel,
 	ID3D11DeviceContext** ppImmediateContext)
 {
-	//Flags |= D3D11_CREATE_DEVICE_DEBUG;
-
-	bool streamlineProxy = false;
-
-	auto hr = Streamline::GetSingleton()->CreateDeviceAndSwapChain(
+	auto result = Streamline::GetSingleton()->CreateDeviceAndSwapChain(
 		pAdapter,
 		DriverType,
 		Software,
@@ -233,26 +227,22 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 		ppSwapChain,
 		ppDevice,
 		pFeatureLevel,
-		ppImmediateContext,
-		streamlineProxy);
-
-	if (!streamlineProxy) {
-		hr = (*ptrD3D11CreateDeviceAndSwapChain)(
-			pAdapter,
-			DriverType,
-			Software,
-			Flags,
-			pFeatureLevels,
-			FeatureLevels,
-			SDKVersion,
-			pSwapChainDesc,
-			ppSwapChain,
-			ppDevice,
-			pFeatureLevel,
-			ppImmediateContext);
+		ppImmediateContext);
+	if (SUCCEEDED(result)) {
+		return result;
 	}
-
-	return hr;
+	return ptrD3D11CreateDeviceAndSwapChain(pAdapter,
+		DriverType,
+		Software,
+		Flags,
+		pFeatureLevels,
+		FeatureLevels,
+		SDKVersion,
+		pSwapChainDesc,
+		ppSwapChain,
+		ppDevice,
+		pFeatureLevel,
+		ppImmediateContext);
 }
 
 struct BSShaderRenderTargets_Create
@@ -632,10 +622,20 @@ namespace Hooks
 
 	void InstallD3DHooks()
 	{
-		logger::info("Hooking D3D11CreateDeviceAndSwapChain");
-		*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChain = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChain, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
+		if (!REL::Module::VR()) {
+			auto streamline = Streamline::GetSingleton();
 
-		logger::info("Hooking CreateDXGIFactory");
-		*(uintptr_t*)&ptrCreateDXGIFactory = SKSE::PatchIAT(hk_CreateDXGIFactory, "dxgi.dll", "CreateDXGIFactory");
+			streamline->LoadInterposer();
+
+			if (streamline->interposer) {
+				Streamline::InstallHooks();
+
+				logger::info("Hooking D3D11CreateDeviceAndSwapChain");
+				*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChain = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChain, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
+
+				logger::info("Hooking CreateDXGIFactory");
+				*(uintptr_t*)&ptrCreateDXGIFactory = SKSE::PatchIAT(hk_CreateDXGIFactory, "dxgi.dll", !REL::Module::IsVR() ? "CreateDXGIFactory" : "CreateDXGIFactory1");
+			}
+		}
 	}
 }

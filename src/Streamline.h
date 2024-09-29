@@ -3,6 +3,7 @@
 #include "Buffer.h"
 #include "State.h"
 
+#define NV_WINDOWS
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
@@ -19,11 +20,32 @@ public:
 		return &singleton;
 	}
 
-	bool initialized = false;
-	bool streamlineActive = false;
+	inline std::string GetShortName() { return "Streamline"; }
 
-	sl::ViewportHandle viewport;
-	sl::FrameToken* currentFrame;
+	enum class AAMode
+	{
+		kTAA,
+		kDLAA
+	};
+
+	struct Settings
+	{
+		uint aaMode = (uint)AAMode::kDLAA;
+		uint dlaaPreset = (uint)sl::DLSSPreset::ePresetC;
+		float sharpness = 0.5f;
+	};
+
+	Settings settings;
+
+	bool enabledAtBoot = false;
+	bool initialized = false;
+
+	bool featureDLSS = false;
+	bool featureDLSSG = false;
+	bool featureReflex = false;
+
+	sl::ViewportHandle viewport{ 0 };
+	sl::FrameToken* frameToken;
 
 	sl::DLSSGMode frameGenerationMode = sl::DLSSGMode::eAuto;
 
@@ -48,6 +70,11 @@ public:
 	PFun_slGetNewFrameToken* slGetNewFrameToken{};
 	PFun_slSetD3DDevice* slSetD3DDevice{};
 
+	// DLSS specific functions
+	PFun_slDLSSGetOptimalSettings* slDLSSGetOptimalSettings{};
+	PFun_slDLSSGetState* slDLSSGetState{};
+	PFun_slDLSSSetOptions* slDLSSSetOptions{};
+
 	// DLSSG specific functions
 	PFun_slDLSSGGetState* slDLSSGGetState{};
 	PFun_slDLSSGSetOptions* slDLSSGSetOptions{};
@@ -62,13 +89,19 @@ public:
 	Texture2D* depthBufferShared;
 
 	ID3D11ComputeShader* copyDepthToSharedBufferCS;
+	ID3D11ComputeShader* rcasCS;
 
+	ID3D11ComputeShader* GetRCASComputeShader();
+	void ClearShaderCache();
+
+	void SaveSettings(json&);
+	void LoadSettings(json&);
+	void RestoreDefaultSettings();
 	void DrawSettings();
 
-	void Shutdown();
-
-	void Initialize_preDevice();
-	void Initialize_postDevice();
+	void LoadInterposer();
+	void Initialize();
+	void PostDevice();
 
 	HRESULT CreateDXGIFactory(REFIID riid, void** ppFactory);
 
@@ -83,27 +116,24 @@ public:
 		IDXGISwapChain** ppSwapChain,
 		ID3D11Device** ppDevice,
 		D3D_FEATURE_LEVEL* pFeatureLevel,
-		ID3D11DeviceContext** ppImmediateContext,
-		bool& o_streamlineProxy);
+		ID3D11DeviceContext** ppImmediateContext);
 
-	void CreateFrameGenerationResources();
-
-	void SetupFrameGeneration();
+	void SetupResources();
 
 	void CopyResourcesToSharedBuffers();
 
 	void Present();
+	void Upscale();
 
-	void SetConstants();
+	void UpdateConstants();
 
 	struct Main_RenderWorld
 	{
 		static void thunk(bool a1)
 		{
-			GetSingleton()->SetConstants();
+			GetSingleton()->UpdateConstants();
 			func(a1);
 		}
-
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -117,9 +147,39 @@ public:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	bool validTaaPass = false;
+
+	struct TAA_BeginTechnique
+	{
+		static void thunk(RE::BSImagespaceShaderISTemporalAA* a_shader, RE::BSTriShape* a_null)
+		{
+			func(a_shader, a_null);
+			GetSingleton()->validTaaPass = true;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct TAA_EndTechnique
+	{
+		static void thunk(RE::BSImagespaceShaderISTemporalAA* a_shader, RE::BSTriShape* a_null)
+		{
+			auto singleton = GetSingleton();
+			if (singleton->featureDLSS && singleton->settings.aaMode == (uint)AAMode::kDLAA && singleton->validTaaPass)
+				singleton->Upscale();
+			else
+				func(a_shader, a_null);
+			singleton->validTaaPass = false;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	static void InstallHooks()
 	{
-		stl::write_thunk_call<Main_RenderWorld>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x831, 0x841, 0x791));
-		stl::write_thunk_call<MenuManagerDrawInterfaceStartHook>(REL::RelocationID(79947, 82084).address() + REL::Relocate(0x7E, 0x83, 0x97));
+		if (!REL::Module::VR()) {
+			stl::write_thunk_call<Main_RenderWorld>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x831, 0x841, 0x791));
+			stl::write_thunk_call<MenuManagerDrawInterfaceStartHook>(REL::RelocationID(79947, 82084).address() + REL::Relocate(0x7E, 0x83, 0x97));
+			stl::write_thunk_call<TAA_BeginTechnique>(REL::RelocationID(100540, 107270).address() + REL::Relocate(0x3E9, 0x3EA, 0x448));
+			stl::write_thunk_call<TAA_EndTechnique>(REL::RelocationID(100540, 107270).address() + REL::Relocate(0x3F3, 0x3F4, 0x452));
+		}
 	}
 };

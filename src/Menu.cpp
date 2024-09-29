@@ -466,8 +466,6 @@ void Menu::DrawSettings()
 			}
 		}
 
-		ImGui::Separator();
-
 		Streamline::GetSingleton()->DrawSettings();
 
 		ImGui::Separator();

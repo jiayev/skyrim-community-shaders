@@ -108,7 +108,7 @@ void State::Setup()
 		if (feature->loaded)
 			feature->SetupResources();
 	Deferred::GetSingleton()->SetupResources();
-	Streamline::GetSingleton()->SetupFrameGeneration();
+	Streamline::GetSingleton()->SetupResources();
 	if (initialized)
 		return;
 	initialized = true;
@@ -221,6 +221,11 @@ void State::Load(ConfigMode a_configMode)
 	if (pbrJson.is_object())
 		truePBR->LoadSettings(pbrJson);
 
+	auto streamline = Streamline::GetSingleton();
+	auto& streamlineJson = settings[streamline->GetShortName()];
+	if (streamlineJson.is_object())
+		streamline->LoadSettings(streamlineJson);
+
 	for (auto* feature : Feature::GetFeatureList())
 		feature->Load(settings);
 
@@ -260,6 +265,10 @@ void State::Save(ConfigMode a_configMode)
 	auto& pbrJson = settings[truePBR->GetShortName()];
 	truePBR->SaveSettings(pbrJson);
 
+	auto streamline = Streamline::GetSingleton();
+	auto& streamlineJson = settings[streamline->GetShortName()];
+	streamline->SaveSettings(streamlineJson);
+
 	json originalShaders;
 	for (int classIndex = 0; classIndex < RE::BSShader::Type::Total - 1; ++classIndex) {
 		originalShaders[magic_enum::enum_name((RE::BSShader::Type)(classIndex + 1))] = enabledClasses[classIndex];
@@ -284,7 +293,6 @@ void State::PostPostLoad()
 		logger::info("Skyrim Upscaler not detected");
 	Deferred::Hooks::Install();
 	TruePBR::GetSingleton()->PostPostLoad();
-	Streamline::InstallHooks();
 }
 
 bool State::ValidateCache(CSimpleIniA& a_ini)
