@@ -29,7 +29,7 @@ public:
 		uint upscaleMode = (uint)UpscaleMode::kDLSS;
 		uint upscaleModeNoDLSS = (uint)UpscaleMode::kFSR;
 		float sharpness = 0.5f;
-		uint dlssPreset = (uint)sl::DLSSPreset::ePresetF;
+		uint dlssPreset = (uint)sl::DLSSPreset::eDefault;
 	};
 
 	Settings settings;
