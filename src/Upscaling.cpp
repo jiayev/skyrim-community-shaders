@@ -13,7 +13,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void Upscaling::DrawSettings()
 {
 	if (ImGui::CollapsingHeader("Upscaling", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
-		const char* upscaleModes[] = { "TAA", "FSR", "DLSS" };
+		const char* upscaleModes[] = { "Temporal Anti-Aliasing", "AMD FSR 3.1", "NVIDIA DLAA" };
 
 		if (Streamline::GetSingleton()->featureDLSS) {
 			ImGui::SliderInt("Mode", (int*)&settings.upscaleMode, 0, 2, std::format("{}", upscaleModes[(uint)settings.upscaleMode]).c_str());
