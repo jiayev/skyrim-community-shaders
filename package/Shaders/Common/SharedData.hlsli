@@ -58,6 +58,15 @@ struct TerraOccSettings
 	float2 Offset;
 };
 
+struct LightLimitFixSettings
+{
+	uint EnableContactShadows;
+	uint EnableLightsVisualisation;
+	uint LightsVisualisationMode;
+	float LightsFar;
+	uint4 ClusterSize;
+};
+
 struct WetnessEffectsSettings
 {
 	float Time;
@@ -65,47 +74,43 @@ struct WetnessEffectsSettings
 	float Wetness;
 	float PuddleWetness;
 
-	uint EnableWetnessEffects;
+	bool EnableWetnessEffects;
 	float MaxRainWetness;
 	float MaxPuddleWetness;
 	float MaxShoreWetness;
+
 	uint ShoreRange;
 	float PuddleRadius;
 	float PuddleMaxAngle;
 	float PuddleMinWetness;
+
 	float MinRainWetness;
 	float SkinWetness;
 	float WeatherTransitionSpeed;
+	bool EnableRaindropFx;
 
-	uint EnableRaindropFx;
-	uint EnableSplashes;
-	uint EnableRipples;
-	uint EnableChaoticRipples;
+	bool EnableSplashes;
+	bool EnableRipples;
+	bool EnableChaoticRipples;
 	float RaindropFxRange;
+
 	float RaindropGridSizeRcp;
 	float RaindropIntervalRcp;
 	float RaindropChance;
 	float SplashesLifetime;
+
 	float SplashesStrength;
 	float SplashesMinRadius;
 	float SplashesMaxRadius;
 	float RippleStrength;
+
 	float RippleRadius;
 	float RippleBreadth;
 	float RippleLifetimeRcp;
 	float ChaoticRippleStrength;
+
 	float ChaoticRippleScaleRcp;
 	float ChaoticRippleSpeed;
-};
-
-struct LightLimitFixSettings
-{
-	uint EnableContactShadows;
-	uint EnableLightsVisualisation;
-	uint LightsVisualisationMode;
-	uint pad0;
-
-	uint4 ClusterSize;
 };
 
 struct SkylightingSettings
@@ -119,14 +124,14 @@ struct SkylightingSettings
 
 	float MinDiffuseVisibility;
 	float MinSpecularVisibility;
-	uint pad2[2];
+	uint pad0[2];
 };
 
 struct PBRSettings
 {
-	uint UseMultipleScattering;
-	uint UseMultiBounceAO;
-	uint2 pad0;
+	bool UseMultipleScattering;
+	bool UseMultiBounceAO;
+	uint pad0[2];
 };
 
 cbuffer FeatureData : register(b6)
@@ -135,8 +140,8 @@ cbuffer FeatureData : register(b6)
 	CPMSettings extendedMaterialSettings;
 	CubemapCreatorSettings cubemapCreatorSettings;
 	TerraOccSettings terraOccSettings;
-	WetnessEffectsSettings wetnessEffectsSettings;
 	LightLimitFixSettings lightLimitFixSettings;
+	WetnessEffectsSettings wetnessEffectsSettings;
 	SkylightingSettings skylightingSettings;
 	PBRSettings pbrSettings;
 };

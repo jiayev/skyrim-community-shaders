@@ -33,8 +33,8 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData()
 		ExtendedMaterials::GetSingleton()->settings,
 		DynamicCubemaps::GetSingleton()->settings,
 		TerrainShadows::GetSingleton()->GetCommonBufferData(),
-		WetnessEffects::GetSingleton()->GetCommonBufferData(),
 		LightLimitFix::GetSingleton()->GetCommonBufferData(),
+		WetnessEffects::GetSingleton()->GetCommonBufferData(),
 		Skylighting::GetSingleton()->cbData,
 		TruePBR::GetSingleton()->settings);
 }

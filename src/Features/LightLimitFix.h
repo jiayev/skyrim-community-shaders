@@ -71,7 +71,7 @@ public:
 		uint EnableContactShadows;
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		uint pad0;
+		float pad0;
 		uint ClusterSize[4];
 	};
 
@@ -81,9 +81,7 @@ public:
 	{
 		LightData StrictLights[15];
 		uint NumStrictLights;
-		float LightsNear;
-		float LightsFar;
-		uint pad0;
+		uint pad0[3];
 	};
 
 	StrictLightData strictLightDataTemp;

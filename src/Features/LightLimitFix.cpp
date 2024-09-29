@@ -122,7 +122,7 @@ void LightLimitFix::SetupResources()
 		screenSize.x *= .5;
 	clusterSize[0] = ((uint)screenSize.x + 63) / 64;
 	clusterSize[1] = ((uint)screenSize.y + 63) / 64;
-	clusterSize[2] = 16;
+	clusterSize[2] = 32;
 	uint clusterCount = clusterSize[0] * clusterSize[1] * clusterSize[2];
 
 	{
@@ -300,9 +300,6 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 {
 	auto& context = State::GetSingleton()->context;
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-
-	strictLightDataTemp.LightsNear = lightsNear;
-	strictLightDataTemp.LightsFar = lightsFar;
 
 	static bool wasEmpty = false;
 	static bool wasWorld = false;
@@ -593,19 +590,6 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 
 	light.color *= dimmer;
 
-	float distantLightFadeStart = lightsFar * lightsFar * (lightFadeStart / lightFadeEnd);
-	float distantLightFadeEnd = lightsFar * lightsFar;
-
-	if (distance < distantLightFadeStart || distantLightFadeEnd == 0.0f) {
-		dimmer = 1.0f;
-	} else if (distance <= distantLightFadeEnd) {
-		dimmer = 1.0f - ((distance - distantLightFadeStart) / (distantLightFadeEnd - distantLightFadeStart));
-	} else {
-		dimmer = 0.0f;
-	}
-
-	light.color *= dimmer;
-
 	if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
 		for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++)
 			light.positionVS[eyeIndex].data = DirectX::SimpleMath::Vector3::Transform(light.positionWS[eyeIndex].data, viewMatrixCached[eyeIndex]);
@@ -635,8 +619,8 @@ void LightLimitFix::UpdateLights()
 	static float& cameraNear = (*(float*)(REL::RelocationID(517032, 403540).address() + 0x40));
 	static float& cameraFar = (*(float*)(REL::RelocationID(517032, 403540).address() + 0x44));
 
-	lightsNear = std::max(1.0f, cameraNear);
-	lightsFar = std::min(16384.0f, cameraFar);
+	lightsNear = cameraNear;
+	lightsFar = cameraFar;
 
 	auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
 
@@ -667,26 +651,6 @@ void LightLimitFix::UpdateLights()
 					light.radius = runtimeData.radius.x;
 
 					SetLightPosition(light, niLight->world.translate);
-
-					static float& lightFadeStart = (*(float*)REL::RelocationID(527668, 414582).address());
-					static float& lightFadeEnd = (*(float*)REL::RelocationID(527669, 414583).address());
-
-					float distance = CalculateLightDistance(light.positionWS[0].data, light.radius);
-
-					float distantLightFadeStart = lightsFar * lightsFar * (lightFadeStart / lightFadeEnd);
-					float distantLightFadeEnd = lightsFar * lightsFar;
-
-					float dimmer;
-
-					if (distance < distantLightFadeStart || distantLightFadeEnd == 0.0f) {
-						dimmer = 1.0f;
-					} else if (distance <= distantLightFadeEnd) {
-						dimmer = 1.0f - ((distance - distantLightFadeStart) / (distantLightFadeEnd - distantLightFadeStart));
-					} else {
-						dimmer = 0.0f;
-					}
-
-					light.color *= dimmer;
 
 					if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
 						lightsData.push_back(light);
@@ -817,7 +781,6 @@ void LightLimitFix::UpdateLights()
 				updateData.InvProjMatrix[1] = DirectX::XMMatrixInverse(nullptr, Util::GetCameraData(1).projMatrixUnjittered);
 			updateData.LightsNear = lightsNear;
 			updateData.LightsFar = lightsFar;
-			;
 
 			lightBuildingCB->Update(updateData);
 
@@ -834,6 +797,8 @@ void LightLimitFix::UpdateLights()
 			context->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
 
 			_fov = fov;
+			_lightsNear = lightsNear;
+			_lightsFar = lightsFar;
 		}
 	}
 
