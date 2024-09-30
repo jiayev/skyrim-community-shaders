@@ -30,14 +30,14 @@ void Streamline::DrawSettings()
 			if (ImGui::TreeNodeEx("NVIDIA DLSS Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
 				if (featureDLSSG) {
 					ImGui::Text("Frame Generation uses a D3D11 to D3D12 proxy which can create compatibility issues");
-					ImGui::Text("Therefore Frame Generation can only be disabled in the mod manager");
+					ImGui::Text("Frame Generation can only be disabled in the mod manager");
 
 					const char* frameGenerationModes[] = { "Off", "On", "Auto" };
 					ImGui::SliderInt("Frame Generation", (int*)&frameGenerationMode, 0, 2, std::format("{}", frameGenerationModes[(uint)frameGenerationMode]).c_str());
 					frameGenerationMode = (sl::DLSSGMode)std::min(2u, (uint)frameGenerationMode);
 				} else {
 					ImGui::Text("Frame Generation uses a D3D11 to D3D12 proxy which can create compatibility issues");
-					ImGui::Text("Therefore Frame Generation can only be enabled in the mod manager and requires a compatible GPU");
+					ImGui::Text("Frame Generation can only be enabled in the mod manager and requires a compatible GPU");
 				}
 				ImGui::TreePop();
 			}

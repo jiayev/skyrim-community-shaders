@@ -16,10 +16,10 @@ void Upscaling::DrawSettings()
 		const char* upscaleModes[] = { "Temporal Anti-Aliasing", "AMD FSR 3.1", "NVIDIA DLAA" };
 
 		if (Streamline::GetSingleton()->featureDLSS) {
-			ImGui::SliderInt("Mode", (int*)&settings.upscaleMode, 0, 2, std::format("{}", upscaleModes[(uint)settings.upscaleMode]).c_str());
+			ImGui::SliderInt("Method", (int*)&settings.upscaleMode, 0, 2, std::format("{}", upscaleModes[(uint)settings.upscaleMode]).c_str());
 			settings.upscaleMode = std::min(2u, (uint)settings.upscaleMode);
 		} else {
-			ImGui::SliderInt("Mode", (int*)&settings.upscaleModeNoDLSS, 0, 1, std::format("{}", upscaleModes[(uint)settings.upscaleModeNoDLSS]).c_str());
+			ImGui::SliderInt("Method", (int*)&settings.upscaleModeNoDLSS, 0, 1, std::format("{}", upscaleModes[(uint)settings.upscaleModeNoDLSS]).c_str());
 			settings.upscaleModeNoDLSS = std::min(1u, (uint)settings.upscaleModeNoDLSS);
 		}
 
