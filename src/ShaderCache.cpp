@@ -2013,6 +2013,7 @@ namespace SIE
 			}
 			computeShaders[static_cast<size_t>(a_type)].clear();
 		}
+		ClearShaderMap(a_type);
 		compilationSet.Clear();
 	}
 
@@ -2436,6 +2437,22 @@ namespace SIE
 	bool ShaderCache::IsHideErrors()
 	{
 		return hideError;
+	}
+
+	void ShaderCache::ClearShaderMap(RE::BSShader::Type a_type)
+	{
+		std::string_view shaderTypeStr = magic_enum::enum_name(a_type);
+
+		std::unique_lock lockM{ SIE::ShaderCache::mapMutex };
+		logger::debug("Clearing shaderMap of {}", shaderTypeStr);
+		for (auto it = shaderMap.begin(); it != shaderMap.end();) {
+			auto typeInKey = SIE::SShaderCache::GetTypeFromShaderString(it->first);
+			if (typeInKey == shaderTypeStr) {
+				it = shaderMap.erase(it);
+			} else {
+				++it;
+			}
+		}
 	}
 
 	void ShaderCache::InsertModifiedShaderMap(const std::string& a_shader, std::chrono::time_point<std::chrono::system_clock> a_time)

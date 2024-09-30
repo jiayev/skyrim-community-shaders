@@ -444,6 +444,7 @@ void DynamicCubemaps::UpdateCubemap()
 {
 	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Cubemap Update");
 	if (recompileFlag) {
+		logger::debug("Recompiling for Dynamic Cubemaps");
 		auto& shaderCache = SIE::ShaderCache::Instance();
 		if (!shaderCache.Clear("Data//Shaders//ISReflectionsRayTracing.hlsl"))
 			// if can't find specific hlsl file cache, clear all image space files
