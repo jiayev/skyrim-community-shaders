@@ -44,15 +44,7 @@ find_package(unordered_dense CONFIG REQUIRED)
 find_package(efsw CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
 add_subdirectory(${CMAKE_SOURCE_DIR}/cmake/Streamline)
-
-set(FFX_API_VK OFF)
-set(FFX_API_DX12 OFF)
-set(FFX_ALL OFF)
-set(FFX_FSR3 ON)
-set(FFX_FSR ON)
-set(FFX_AUTO_COMPILE_SHADERS 1)
-
-add_subdirectory(${CMAKE_SOURCE_DIR}/extern/FidelityFX-SDK/sdk)
+include(FidelityFX-SDK)
 
 target_compile_definitions(
 	${PROJECT_NAME}
@@ -85,11 +77,6 @@ target_link_libraries(
 	efsw::efsw
 	Tracy::TracyClient
 	Streamline
-	ffx_backend_dx11_x64
-	ffx_frameinterpolation_x64
-	ffx_fsr3_x64
-	ffx_fsr3upscaler_x64
-	ffx_opticalflow_x64
 )
 
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
