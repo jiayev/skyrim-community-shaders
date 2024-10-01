@@ -48,7 +48,6 @@ void FidelityFX::CreateFSRResources()
 	contextDescription.backBufferFormat = FFX_SURFACE_FORMAT_R8G8B8A8_UNORM;
 
 	contextDescription.backendInterfaceUpscaling = fsrInterface;
-	contextDescription.backendInterfaceFrameInterpolation = fsrInterface;
 
 	if (ffxFsr3ContextCreate(&fsrContext, &contextDescription) != FFX_OK)
 		logger::critical("[FidelityFX] Failed to initialize FSR3 context!");
@@ -110,12 +109,14 @@ void FidelityFX::Upscale(Texture2D* a_color)
 		dispatchParameters.cameraNear = cameraNear;
 
 		dispatchParameters.enableSharpening = true;
-		dispatchParameters.sharpness = 0.0f;
+		dispatchParameters.sharpness = Upscaling::GetSingleton()->settings.sharpness;
 
 		dispatchParameters.cameraFovAngleVertical = GetVerticalFOVRad();
 		dispatchParameters.viewSpaceToMetersFactor = 0.01428222656f;
 		dispatchParameters.reset = false;
 		dispatchParameters.preExposure = 1.0f;
+
+		dispatchParameters.flags = 0;
 
 		FfxErrorCode errorCode = ffxFsr3ContextDispatchUpscale(&fsrContext, &dispatchParameters);
 		if (errorCode != FFX_OK) {

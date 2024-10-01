@@ -144,40 +144,42 @@ void Upscaling::Upscale()
 	else
 		FidelityFX::GetSingleton()->Upscale(upscalingTempTexture);
 
-	context->CopyResource(inputTextureResource, upscalingTempTexture->resource.get());
-
 	state->EndPerfEvent();
 
-	state->BeginPerfEvent("Sharpening");
+	if (GetUpscaleMode() != UpscaleMode::kFSR) {
+		state->BeginPerfEvent("Sharpening");
 
-	{
-		auto dispatchCount = Util::GetScreenDispatchCount(false);
+		context->CopyResource(inputTextureResource, upscalingTempTexture->resource.get());
 
 		{
-			ID3D11ShaderResourceView* views[1] = { inputTextureSRV };
+			auto dispatchCount = Util::GetScreenDispatchCount(false);
+
+			{
+				ID3D11ShaderResourceView* views[1] = { inputTextureSRV };
+				context->CSSetShaderResources(0, ARRAYSIZE(views), views);
+
+				ID3D11UnorderedAccessView* uavs[1] = { upscalingTempTexture->uav.get() };
+				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+				context->CSSetShader(GetRCASComputeShader(), nullptr, 0);
+
+				context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+			}
+
+			ID3D11ShaderResourceView* views[1] = { nullptr };
 			context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-			ID3D11UnorderedAccessView* uavs[1] = { upscalingTempTexture->uav.get() };
+			ID3D11UnorderedAccessView* uavs[1] = { nullptr };
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-			context->CSSetShader(GetRCASComputeShader(), nullptr, 0);
-
-			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+			ID3D11ComputeShader* shader = nullptr;
+			context->CSSetShader(shader, nullptr, 0);
 		}
 
-		ID3D11ShaderResourceView* views[1] = { nullptr };
-		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
-
-		ID3D11UnorderedAccessView* uavs[1] = { nullptr };
-		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-
-		ID3D11ComputeShader* shader = nullptr;
-		context->CSSetShader(shader, nullptr, 0);
+		state->EndPerfEvent();
 	}
 
 	context->CopyResource(outputTextureResource, upscalingTempTexture->resource.get());
-
-	state->EndPerfEvent();
 }
 
 void Upscaling::CreateUpscalingResources()
