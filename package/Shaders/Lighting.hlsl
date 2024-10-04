@@ -2363,8 +2363,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(HAIR)
 	float3 vertexColor = lerp(1, TintColor.xyz, input.Color.y);
-#	elif defined(TREE_ANIM) && defined(SKYLIGHTING)
-	float3 vertexColor = 1.0;
 #	else
 	float3 vertexColor = input.Color.xyz;
 #	endif  // defined (HAIR)
