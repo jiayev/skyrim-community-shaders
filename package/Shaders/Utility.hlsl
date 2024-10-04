@@ -375,7 +375,7 @@ float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatri
 
 #	if defined(RENDER_SHADOWMASK)
 	uint onePlusLayerIndex = 1.0 + layerIndex;
-	compareValue += 0.002 * onePlusLayerIndex;
+	compareValue += 0.001 * onePlusLayerIndex;
 	float layerIndexRcp = rcp(onePlusLayerIndex);
 #	endif
 
@@ -449,7 +449,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if defined(FOLIAGE)
 	float checkerboard = InterleavedGradientNoise(0, input.PositionCS.xy);
-	if (checkerboard > 0.75)
+	if (checkerboard > 0.9)
 		discard;
 #	endif
 
