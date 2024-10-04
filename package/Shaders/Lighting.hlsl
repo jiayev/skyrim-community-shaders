@@ -1054,7 +1054,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	clip(blendFactorTerrain);
 	blendFactorTerrain = saturate(blendFactorTerrain);
-
 #	endif
 
 	float3 viewDirection = normalize(input.ViewVector.xyz);
@@ -2355,7 +2354,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	baseColor.xyz = lerp(baseColor.xyz, pow(baseColor.xyz, 1.0 + wetnessDarkeningAmount), 0.8);
 #		endif
 
-	// This also applies fresnel
 	float3 wetnessReflectance = WetnessEffects::GetWetnessAmbientSpecular(screenUV, wetnessNormal, worldSpaceVertexNormal, worldSpaceViewDirection, 1.0 - wetnessGlossinessSpecular) * wetnessGlossinessSpecular;
 
 #		if !defined(DEFERRED)
