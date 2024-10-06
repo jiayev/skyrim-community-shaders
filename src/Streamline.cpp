@@ -25,8 +25,8 @@ void LoggingCallback(sl::LogType type, const char* msg)
 void Streamline::DrawSettings()
 {
 	auto state = State::GetSingleton();
-	if (ImGui::CollapsingHeader("Streamline", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
-		if (!state->isVR) {
+	if (!state->isVR) {
+		if (ImGui::CollapsingHeader("Streamline", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 			if (ImGui::TreeNodeEx("NVIDIA DLSS Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
 				if (featureDLSSG) {
 					ImGui::Text("Frame Generation uses a D3D11 to D3D12 proxy which can create compatibility issues");
@@ -114,7 +114,7 @@ void Streamline::PostDevice()
 		slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSSetOptions", (void*&)slDLSSSetOptions);
 	}
 
-	if (featureDLSSG) {
+	if (featureDLSSG && !REL::Module::IsVR()) {
 		slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGGetState", (void*&)slDLSSGGetState);
 		slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGSetOptions", (void*&)slDLSSGSetOptions);
 	}
@@ -170,41 +170,39 @@ HRESULT Streamline::CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter,
 		}
 	}
 
-	if (!REL::Module::IsVR()) {
-		slIsFeatureLoaded(sl::kFeatureDLSS_G, featureDLSSG);
-		if (featureDLSSG) {
-			logger::info("[Streamline] DLSSG feature is loaded");
-			featureDLSSG = slIsFeatureSupported(sl::kFeatureDLSS_G, adapterInfo) == sl::Result::eOk;
-		} else {
-			logger::info("[Streamline] DLSSG feature is not loaded");
-			sl::FeatureRequirements featureRequirements;
-			sl::Result result = slGetFeatureRequirements(sl::kFeatureDLSS_G, featureRequirements);
-			if (result != sl::Result::eOk) {
-				logger::info("[Streamline] DLSSG feature failed to load due to: {}", magic_enum::enum_name(result));
-			}
+	slIsFeatureLoaded(sl::kFeatureDLSS_G, featureDLSSG);
+	if (featureDLSSG && !REL::Module::IsVR()) {
+		logger::info("[Streamline] DLSSG feature is loaded");
+		featureDLSSG = slIsFeatureSupported(sl::kFeatureDLSS_G, adapterInfo) == sl::Result::eOk;
+	} else {
+		logger::info("[Streamline] DLSSG feature is not loaded");
+		sl::FeatureRequirements featureRequirements;
+		sl::Result result = slGetFeatureRequirements(sl::kFeatureDLSS_G, featureRequirements);
+		if (result != sl::Result::eOk) {
+			logger::info("[Streamline] DLSSG feature failed to load due to: {}", magic_enum::enum_name(result));
 		}
+	}
 
-		slIsFeatureLoaded(sl::kFeatureReflex, featureReflex);
-		if (featureReflex) {
-			logger::info("[Streamline] Reflex feature is loaded");
-			featureReflex = slIsFeatureSupported(sl::kFeatureReflex, adapterInfo) == sl::Result::eOk;
-		} else {
-			logger::info("[Streamline] Reflex feature is not loaded");
-			sl::FeatureRequirements featureRequirements;
-			sl::Result result = slGetFeatureRequirements(sl::kFeatureReflex, featureRequirements);
-			if (result != sl::Result::eOk) {
-				logger::info("[Streamline] Reflex feature failed to load due to: {}", magic_enum::enum_name(result));
-			}
+	slIsFeatureLoaded(sl::kFeatureReflex, featureReflex);
+	if (featureReflex) {
+		logger::info("[Streamline] Reflex feature is loaded");
+		featureReflex = slIsFeatureSupported(sl::kFeatureReflex, adapterInfo) == sl::Result::eOk;
+	} else {
+		logger::info("[Streamline] Reflex feature is not loaded");
+		sl::FeatureRequirements featureRequirements;
+		sl::Result result = slGetFeatureRequirements(sl::kFeatureReflex, featureRequirements);
+		if (result != sl::Result::eOk) {
+			logger::info("[Streamline] Reflex feature failed to load due to: {}", magic_enum::enum_name(result));
 		}
 	}
 
 	logger::info("[Streamline] DLSS {} available", featureDLSS ? "is" : "is not");
-	logger::info("[Streamline] DLSSG {} available", featureDLSSG ? "is" : "is not");
+	logger::info("[Streamline] DLSSG {} available", featureDLSSG && !REL::Module::IsVR() ? "is" : "is not");
 	logger::info("[Streamline] Reflex {} available", featureReflex ? "is" : "is not");
 
 	HRESULT hr = S_OK;
 
-	if (featureDLSSG) {
+	if (featureDLSSG && !REL::Module::IsVR()) {
 		logger::info("[Streamline] Proxying D3D11CreateDeviceAndSwapChain to add D3D12 swapchain");
 
 		auto slD3D11CreateDeviceAndSwapChain = reinterpret_cast<decltype(&D3D11CreateDeviceAndSwapChain)>(GetProcAddress(interposer, "D3D11CreateDeviceAndSwapChain"));
@@ -247,7 +245,7 @@ HRESULT Streamline::CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter,
 
 void Streamline::SetupResources()
 {
-	if (featureDLSSG) {
+	if (featureDLSSG && !REL::Module::IsVR()) {
 		sl::DLSSGOptions options{};
 		options.mode = sl::DLSSGMode::eAuto;
 		options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
@@ -273,7 +271,7 @@ void Streamline::SetupResources()
 		}
 	}
 
-	if (featureDLSS || featureDLSSG) {
+	if (featureDLSS || featureDLSSG && !REL::Module::IsVR()) {
 		logger::info("[Streamline] Creating resources");
 
 		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -289,7 +287,7 @@ void Streamline::SetupResources()
 		main.RTV->GetDesc(&rtvDesc);
 		main.UAV->GetDesc(&uavDesc);
 
-		if (featureDLSSG) {
+		if (featureDLSSG && !REL::Module::IsVR()) {
 			texDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 
 			texDesc.Format = DXGI_FORMAT_R32_FLOAT;
@@ -319,7 +317,7 @@ void Streamline::SetupResources()
 
 void Streamline::CopyResourcesToSharedBuffers()
 {
-	if (!featureDLSSG || frameGenerationMode == sl::DLSSGMode::eOff)
+	if (!(featureDLSSG && !REL::Module::IsVR()) || frameGenerationMode == sl::DLSSGMode::eOff)
 		return;
 
 	auto& context = State::GetSingleton()->context;
@@ -377,7 +375,7 @@ void Streamline::CopyResourcesToSharedBuffers()
 
 void Streamline::Present()
 {
-	if (!featureDLSSG)
+	if (!(featureDLSSG && !REL::Module::IsVR()))
 		return;
 
 	UpdateConstants();

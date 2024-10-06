@@ -539,8 +539,8 @@ void State::UpdateSharedData()
 
 		auto viewport = RE::BSGraphics::State::GetSingleton();
 
-		auto bTAA = !REL::Module::IsVR() ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled :
-		                                   imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled;
+		auto bTAA = !isVR ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled :
+		                    imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled;
 
 		data.FrameCount = viewport->frameCount * (bTAA || State::GetSingleton()->upscalerLoaded);
 

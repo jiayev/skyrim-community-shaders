@@ -157,7 +157,7 @@ bool Load()
 		}
 	}
 
-	if (errors.empty() && !REL::Module::IsVR())
+	if (errors.empty())
 		Hooks::InstallD3DHooks();
 
 	return true;

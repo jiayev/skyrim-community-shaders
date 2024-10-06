@@ -649,23 +649,21 @@ namespace Hooks
 
 	void InstallD3DHooks()
 	{
-		if (!REL::Module::IsVR()) {
-			auto streamline = Streamline::GetSingleton();
+		auto streamline = Streamline::GetSingleton();
 
-			streamline->LoadInterposer();
+		streamline->LoadInterposer();
 
-			if (streamline->interposer) {
-				Streamline::InstallHooks();
+		if (streamline->interposer) {
+			Streamline::InstallHooks();
 
-				logger::info("Hooking D3D11CreateDeviceAndSwapChain");
-				*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChain = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChain, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
+			logger::info("Hooking D3D11CreateDeviceAndSwapChain");
+			*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChain = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChain, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
 
-				logger::info("Hooking CreateDXGIFactory");
-				*(uintptr_t*)&ptrCreateDXGIFactory = SKSE::PatchIAT(hk_CreateDXGIFactory, "dxgi.dll", !REL::Module::IsVR() ? "CreateDXGIFactory" : "CreateDXGIFactory1");
-			} else {
-				logger::info("Hooking D3D11CreateDeviceAndSwapChain");
-				*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChain = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChainNoStreamline, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
-			}
+			logger::info("Hooking CreateDXGIFactory");
+			*(uintptr_t*)&ptrCreateDXGIFactory = SKSE::PatchIAT(hk_CreateDXGIFactory, "dxgi.dll", !REL::Module::IsVR() ? "CreateDXGIFactory" : "CreateDXGIFactory1");
+		} else {
+			logger::info("Hooking D3D11CreateDeviceAndSwapChain");
+			*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChain = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChainNoStreamline, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
 		}
 	}
 }
