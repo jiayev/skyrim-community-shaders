@@ -869,6 +869,9 @@ PS_OUTPUT main(PS_INPUT input)
 		{
 			uint light_index = lightList[lightOffset + i];
 			StructuredLight light = lights[light_index];
+			if (LightLimitFix::IsLightIgnored(light)) {
+				continue;
+			}
 
 			float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WPosition.xyz;
 			float lightDist = length(lightDirection);

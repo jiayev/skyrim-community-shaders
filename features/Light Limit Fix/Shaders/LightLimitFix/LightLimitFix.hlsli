@@ -3,7 +3,8 @@ struct StrictLightData
 {
 	StructuredLight StrictLights[15];
 	uint NumStrictLights;
-	uint pad0[3];
+	int RoomIndex;
+	uint pad0[2];
 };
 
 StructuredBuffer<StructuredLight> lights : register(t50);
@@ -103,5 +104,25 @@ namespace LightLimitFix
 			dot(v4, kRedVec4) + dot(v2, kRedVec2),
 			dot(v4, kGreenVec4) + dot(v2, kGreenVec2),
 			dot(v4, kBlueVec4) + dot(v2, kBlueVec2));
+	}
+
+	bool IsLightIgnored(StructuredLight light)
+	{
+		bool lightIgnored = false;
+		if ((light.lightFlags & Llf_PortalStrictLight) && strictLights[0].RoomIndex >= 0) {
+			lightIgnored = true;
+			int roomIndex = strictLights[0].RoomIndex;
+			[unroll] for (int flagsIndex = 0; flagsIndex < 4; ++flagsIndex)
+			{
+				if (roomIndex < 32) {
+					if (((light.roomFlags[flagsIndex] >> roomIndex) & 1) == 1) {
+						lightIgnored = false;
+					}
+					break;
+				}
+				roomIndex -= 32;
+			}
+		}
+		return lightIgnored;
 	}
 }

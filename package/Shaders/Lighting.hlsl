@@ -1539,7 +1539,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float2 baseShadowUV = 1.0.xx;
 	float4 shadowColor = 1.0;
-	if (PixelShaderDescriptor & _DefShadow && (PixelShaderDescriptor & _ShadowDir) || numShadowLights > 0) {
+	if ((PixelShaderDescriptor & _DefShadow) && ((PixelShaderDescriptor & _ShadowDir) || inWorld) || numShadowLights > 0) {
 		baseShadowUV = input.Position.xy * DynamicResolutionParams2.xy;
 		float2 adjustedShadowUV = baseShadowUV * VPOSOffset.xy + VPOSOffset.zw;
 		float2 shadowUV = GetDynamicResolutionAdjustedScreenPosition(adjustedShadowUV);
@@ -2112,8 +2112,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		if (lightIndex < strictLights[0].NumStrictLights) {
 			light = strictLights[0].StrictLights[lightIndex];
 		} else {
-			uint clusterIndex = lightList[lightOffset + (lightIndex - strictLights[0].NumStrictLights)];
-			light = lights[clusterIndex];
+			uint clusteredLightIndex = lightList[lightOffset + (lightIndex - strictLights[0].NumStrictLights)];
+			light = lights[clusteredLightIndex];
+
+			if (LightLimitFix::IsLightIgnored(light)) {
+				continue;
+			}
 		}
 
 		float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
@@ -2127,11 +2131,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float lightShadow = 1.f;
 
 		float shadowComponent = 1.0;
-		if (PixelShaderDescriptor & _DefShadow) {
-			if (lightIndex < numShadowLights) {
-				shadowComponent = shadowColor[ShadowLightMaskSelect[lightIndex]];
-				lightShadow *= shadowComponent;
-			}
+		if ((PixelShaderDescriptor & _DefShadow) && (light.lightFlags & Llf_ShadowLight)) {
+			shadowComponent = shadowColor[light.shadowLightIndex];
+			lightShadow *= shadowComponent;
 		}
 
 		float3 normalizedLightDirection = normalize(lightDirection);

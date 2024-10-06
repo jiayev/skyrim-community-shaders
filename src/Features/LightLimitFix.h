@@ -25,6 +25,12 @@ public:
 
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
+	enum class LightFlags : std::uint32_t
+	{
+		PortalStrict = (1 << 0),
+		Shadow = (1 << 1),
+	};
+
 	struct PositionOpt
 	{
 		float3 data;
@@ -37,6 +43,10 @@ public:
 		float radius;
 		PositionOpt positionWS[2];
 		PositionOpt positionVS[2];
+		uint128_t roomFlags = uint32_t(0);
+		stl::enumeration<LightFlags> lightFlags;
+		uint32_t shadowMaskIndex = 0;
+		float pad0[2];
 	};
 
 	struct ClusterAABB
@@ -81,7 +91,8 @@ public:
 	{
 		LightData StrictLights[15];
 		uint NumStrictLights;
-		uint pad0[3];
+		int RoomIndex;
+		uint pad0[2];
 	};
 
 	StrictLightData strictLightDataTemp;
@@ -191,6 +202,8 @@ public:
 	eastl::vector<CachedParticleLight> cachedParticleLights;
 	std::uint32_t particleLightsDetectionHits = 0;
 
+	eastl::hash_map<RE::NiNode*, uint8_t> roomNodes;
+
 	float CalculateLuminance(CachedParticleLight& light, RE::NiPoint3& point);
 	void AddParticleLightLuminance(RE::NiPoint3& targetPosition, int& numHits, float& lightLevel);
 
@@ -264,6 +277,28 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct BSEffectShader_SetupGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+			{
+				func(This, Pass, RenderFlags);
+				GetSingleton()->BSLightingShader_SetupGeometry_Before(Pass);
+				GetSingleton()->BSLightingShader_SetupGeometry_After(Pass);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSWaterShader_SetupGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+			{
+				func(This, Pass, RenderFlags);
+				GetSingleton()->BSLightingShader_SetupGeometry_Before(Pass);
+				GetSingleton()->BSLightingShader_SetupGeometry_After(Pass);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		struct AIProcess_CalculateLightValue_GetLuminance
 		{
 			static float thunk(RE::ShadowSceneNode* shadowSceneNode, RE::NiPoint3& targetPosition, int& numHits, float& sunLightLevel, float& lightLevel, RE::NiLight& refLight, int32_t shadowBitMask)
@@ -285,6 +320,30 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct BSLightingShaderProperty_GetRenderPasses
+		{
+			static RE::BSShaderProperty::RenderPassArray* thunk(RE::BSLightingShaderProperty* property, RE::BSGeometry* geometry, std::uint32_t renderFlags, RE::BSShaderAccumulator* accumulator)
+			{
+				auto renderPasses = func(property, geometry, renderFlags, accumulator);
+				if (renderPasses == nullptr) {
+					return renderPasses;
+				}
+
+				auto currentPass = renderPasses->head;
+				while (currentPass != nullptr) {
+					if (currentPass->shader->shaderType == RE::BSShader::Type::Lighting) {
+						constexpr uint32_t LightingTechniqueStart = 0x4800002D;
+						// So that we always have shadow mask bound.
+						currentPass->passEnum = ((currentPass->passEnum - LightingTechniqueStart) | static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::DefShadow)) + LightingTechniqueStart;
+					}
+					currentPass = currentPass->next;
+				}
+
+				return renderPasses;
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		static void Install()
 		{
 			stl::write_thunk_call<ValidLight1>(REL::RelocationID(100994, 107781).address() + 0x92);
@@ -297,7 +356,11 @@ public:
 
 			stl::write_thunk_call<AIProcess_CalculateLightValue_GetLuminance>(REL::RelocationID(38900, 39946).address() + REL::Relocate(0x1C9, 0x1D3));
 
+			stl::write_vfunc<0x2A, BSLightingShaderProperty_GetRenderPasses>(RE::VTABLE_BSLightingShaderProperty[0]);
+
 			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
+			stl::write_vfunc<0x6, BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
+			stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
 
 			logger::info("[LLF] Installed hooks");
 

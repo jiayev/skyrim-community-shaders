@@ -265,9 +265,35 @@ void LightLimitFix::RestoreDefaultSettings()
 	settings = {};
 }
 
-void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass*)
+RE::NiNode* GetParentRoomNode(RE::NiAVObject* object)
+{
+	if (object == nullptr) {
+		return nullptr;
+	}
+
+	static const auto* roomRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSMultiBoundRoom }.get();
+	static const auto* portalRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSPortalSharedNode }.get();
+
+	const auto* rtti = object->GetRTTI();
+	if (rtti == roomRtti || rtti == portalRtti) {
+		return static_cast<RE::NiNode*>(object);
+	}
+
+	return GetParentRoomNode(object->parent);
+}
+
+void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass)
 {
 	strictLightDataTemp.NumStrictLights = 0;
+
+	strictLightDataTemp.RoomIndex = -1;
+	if (!roomNodes.empty()) {
+		if (RE::NiNode* roomNode = GetParentRoomNode(a_pass->geometry)) {
+			if (auto it = roomNodes.find(roomNode); it != roomNodes.cend()) {
+				strictLightDataTemp.RoomIndex = it->second;
+			}
+		}
+	}
 }
 
 void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass, DirectX::XMMATRIX&, uint32_t, uint32_t, float, Space)
@@ -275,7 +301,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 	bool inWorld = accumulator->GetRuntimeData().activeShadowSceneNode == RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
 
-	strictLightDataTemp.NumStrictLights = a_pass->numLights - 1;
+	strictLightDataTemp.NumStrictLights = inWorld ? 0 : (a_pass->numLights - 1);
 
 	for (uint32_t i = 0; i < strictLightDataTemp.NumStrictLights; i++) {
 		auto bsLight = a_pass->sceneLights[i + 1];
@@ -292,6 +318,12 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 		SetLightPosition(light, niLight->world.translate, inWorld);
 
+		if (bsLight->IsShadowLight()) {
+			auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
+			light.shadowMaskIndex = shadowLight->shadowLightIndex;
+			light.lightFlags.set(LightFlags::Shadow);
+		}
+
 		strictLightDataTemp.StrictLights[i] = light;
 	}
 }
@@ -303,11 +335,13 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 
 	static bool wasEmpty = false;
 	static bool wasWorld = false;
+	static int previousRoomIndex = -1;
 
-	bool isEmpty = strictLightDataTemp.NumStrictLights == 0;
-	bool isWorld = accumulator->GetRuntimeData().activeShadowSceneNode == RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
+	const bool isEmpty = strictLightDataTemp.NumStrictLights == 0;
+	const bool isWorld = accumulator->GetRuntimeData().activeShadowSceneNode == RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
+	const int roomIndex = strictLightDataTemp.RoomIndex;
 
-	if (!isEmpty || (isEmpty && !wasEmpty) || isWorld != wasWorld) {
+	if (!isEmpty || (isEmpty && !wasEmpty) || isWorld != wasWorld || previousRoomIndex != roomIndex) {
 		D3D11_MAPPED_SUBRESOURCE mapped;
 		DX::ThrowIfFailed(context->Map(strictLightData->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 		size_t bytes = sizeof(StrictLightData);
@@ -316,6 +350,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 
 		wasEmpty = isEmpty;
 		wasWorld = isWorld;
+		previousRoomIndex = roomIndex;
 	}
 
 	ID3D11ShaderResourceView* view = strictLightData->srv.get();
@@ -637,10 +672,24 @@ void LightLimitFix::UpdateLights()
 
 	// Process point lights
 
-	for (auto& e : shadowSceneNode->GetRuntimeData().activeLights) {
+	roomNodes.empty();
+
+	auto addRoom = [&](void* nodePtr, LightData& light) {
+		uint8_t roomIndex = 0;
+		auto* node = static_cast<RE::NiNode*>(nodePtr);
+		if (auto it = roomNodes.find(node); it == roomNodes.cend()) {
+			roomIndex = static_cast<uint8_t>(roomNodes.size());
+			roomNodes.insert_or_assign(node, roomIndex);
+		} else {
+			roomIndex = it->second;
+		}
+		light.roomFlags.SetBit(roomIndex, 1);
+	};
+
+	auto addLight = [&](const RE::NiPointer<RE::BSLight>& e) {
 		if (auto bsLight = e.get()) {
 			if (auto niLight = bsLight->light.get()) {
-				if (IsValidLight(bsLight) && IsGlobalLight(bsLight)) {
+				if (IsValidLight(bsLight)) {
 					auto& runtimeData = niLight->GetLightRuntimeData();
 
 					LightData light{};
@@ -650,6 +699,24 @@ void LightLimitFix::UpdateLights()
 
 					light.radius = runtimeData.radius.x;
 
+					if (!IsGlobalLight(bsLight)) {
+						// List of BSMultiBoundRooms affected by a light
+						for (const auto& roomPtr : bsLight->unk0D8) {
+							addRoom(roomPtr, light);
+						}
+						// List of BSPortalSharedNodes affected by a light
+						for (const auto& portalSharedNodePtr : bsLight->unk108) {
+							addRoom(portalSharedNodePtr, light);
+						}
+						light.lightFlags.set(LightFlags::PortalStrict);
+					}
+
+					if (bsLight->IsShadowLight()) {
+						auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
+						light.shadowMaskIndex = shadowLight->shadowLightIndex;
+						light.lightFlags.set(LightFlags::Shadow);
+					}
+
 					SetLightPosition(light, niLight->world.translate);
 
 					if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
@@ -658,6 +725,13 @@ void LightLimitFix::UpdateLights()
 				}
 			}
 		}
+	};
+
+	for (auto& e : shadowSceneNode->GetRuntimeData().activeLights) {
+		addLight(e);
+	}
+	for (auto& e : shadowSceneNode->GetRuntimeData().activeShadowLights) {
+		addLight(e);
 	}
 
 	{
