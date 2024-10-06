@@ -19,6 +19,7 @@ public:
 
 	enum class UpscaleMode
 	{
+		kNONE,
 		kTAA,
 		kFSR,
 		kDLSS
@@ -53,6 +54,7 @@ public:
 	void DestroyUpscalingResources();
 
 	bool validTaaPass = false;
+	std::mutex settingsMutex;  // Mutex to protect settings access
 
 	struct TAA_BeginTechnique
 	{
@@ -69,7 +71,8 @@ public:
 		static void thunk(RE::BSImagespaceShaderISTemporalAA* a_shader, RE::BSTriShape* a_null)
 		{
 			auto singleton = GetSingleton();
-			if (singleton->GetUpscaleMode() != UpscaleMode::kTAA && singleton->validTaaPass)
+			auto upscaleMode = singleton->GetUpscaleMode();
+			if ((upscaleMode != UpscaleMode::kTAA || upscaleMode != UpscaleMode::kNONE) && singleton->validTaaPass)
 				singleton->Upscale();
 			else
 				func(a_shader, a_null);

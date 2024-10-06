@@ -12,20 +12,34 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void Upscaling::DrawSettings()
 {
+	// Skyrim settings control whether any upscaling is possible
+	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+	GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
+	auto& bTAA = BSImagespaceShaderISTemporalAA->taaEnabled;  // setting used by shaders
+	if (bTAA) {
+		settings.upscaleMode = settings.upscaleMode == (uint)UpscaleMode::kNONE ? (uint)UpscaleMode::kTAA : settings.upscaleMode;
+	} else {
+		settings.upscaleMode = (uint)UpscaleMode::kNONE;
+	}
 	if (ImGui::CollapsingHeader("Upscaling", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
-		const char* upscaleModes[] = { "Temporal Anti-Aliasing", "AMD FSR 3.1", "NVIDIA DLAA" };
+		const char* upscaleModes[] = { "Disabled", "Temporal Anti-Aliasing", "AMD FSR 3.1", "NVIDIA DLAA" };
 
-		if (Streamline::GetSingleton()->featureDLSS) {
-			ImGui::SliderInt("Method", (int*)&settings.upscaleMode, 0, 2, std::format("{}", upscaleModes[(uint)settings.upscaleMode]).c_str());
-			settings.upscaleMode = std::min(2u, (uint)settings.upscaleMode);
-		} else {
-			ImGui::SliderInt("Method", (int*)&settings.upscaleModeNoDLSS, 0, 1, std::format("{}", upscaleModes[(uint)settings.upscaleModeNoDLSS]).c_str());
-			settings.upscaleModeNoDLSS = std::min(1u, (uint)settings.upscaleModeNoDLSS);
+		uint* currentUpscaleMode = Streamline::GetSingleton()->featureDLSS ? &settings.upscaleMode : &settings.upscaleModeNoDLSS;
+		ImGui::SliderInt("Method", (int*)currentUpscaleMode, 0, Streamline::GetSingleton()->featureDLSS ? 3 : 2, std::format("{}", upscaleModes[(uint)*currentUpscaleMode]).c_str());
+
+		*currentUpscaleMode = std::min(Streamline::GetSingleton()->featureDLSS ? 3u : 2u, (uint)*currentUpscaleMode);
+		bTAA = *currentUpscaleMode != (uint)UpscaleMode::kNONE;
+
+		// settings for scaleform/ini
+		auto iniSettingCollection = RE::INIPrefSettingCollection::GetSingleton();
+		if (iniSettingCollection) {
+			auto setting = iniSettingCollection->GetSetting("bUseTAA:Display");
+			if (setting)
+				setting->data.b = bTAA;
 		}
-
 		auto upscaleMode = GetUpscaleMode();
 
-		if (upscaleMode != UpscaleMode::kTAA) {
+		if (upscaleMode != UpscaleMode::kTAA && upscaleMode != UpscaleMode::kNONE) {
 			ImGui::SliderFloat("Sharpness", &settings.sharpness, 0.0f, 1.0f, "%.1f");
 			settings.sharpness = std::clamp(settings.sharpness, 0.0f, 1.0f);
 		}
@@ -40,12 +54,29 @@ void Upscaling::DrawSettings()
 
 void Upscaling::SaveSettings(json& o_json)
 {
+	std::lock_guard<std::mutex> lock(settingsMutex);
+
 	o_json = settings;
+	auto iniSettingCollection = RE::INIPrefSettingCollection::GetSingleton();
+	if (iniSettingCollection) {
+		auto setting = iniSettingCollection->GetSetting("bUseTAA:Display");
+		if (setting) {
+			iniSettingCollection->WriteSetting(setting);
+		}
+	}
 }
 
 void Upscaling::LoadSettings(json& o_json)
 {
+	std::lock_guard<std::mutex> lock(settingsMutex);
 	settings = o_json;
+	auto iniSettingCollection = RE::INIPrefSettingCollection::GetSingleton();
+	if (iniSettingCollection) {
+		auto setting = iniSettingCollection->GetSetting("bUseTAA:Display");
+		if (setting) {
+			iniSettingCollection->ReadSetting(setting);
+		}
+	}
 }
 
 Upscaling::UpscaleMode Upscaling::GetUpscaleMode()
@@ -105,6 +136,13 @@ ID3D11ComputeShader* Upscaling::GetRCASComputeShader()
 
 void Upscaling::Upscale()
 {
+	std::lock_guard<std::mutex> lock(settingsMutex);  // Lock for the duration of this function
+
+	auto upscaleMode = GetUpscaleMode();
+
+	if (upscaleMode == UpscaleMode::kNONE || upscaleMode == UpscaleMode::kTAA)
+		return;
+
 	CheckResources();
 
 	Hooks::BSGraphics_SetDirtyStates::func(false);
@@ -137,16 +175,14 @@ void Upscaling::Upscale()
 
 	context->CopyResource(upscalingTempTexture->resource.get(), inputTextureResource);
 
-	auto upscaleMode = GetUpscaleMode();
-
 	if (upscaleMode == UpscaleMode::kDLSS)
 		Streamline::GetSingleton()->Upscale(upscalingTempTexture);
-	else
+	else if (upscaleMode == UpscaleMode::kFSR)
 		FidelityFX::GetSingleton()->Upscale(upscalingTempTexture);
 
 	state->EndPerfEvent();
 
-	if (GetUpscaleMode() != UpscaleMode::kFSR) {
+	if (GetUpscaleMode() == UpscaleMode::kDLSS) {
 		state->BeginPerfEvent("Sharpening");
 
 		context->CopyResource(inputTextureResource, upscalingTempTexture->resource.get());
