@@ -1734,6 +1734,10 @@ namespace SIE
 		}
 
 		auto state = State::GetSingleton();
+		if (state->isVR && strcmp(shader.fxpFilename, "OBBOcclusionTesting") == 0)
+			// use vanilla shader
+			return nullptr;
+
 		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)) && state->enableVShaders)) {
 			return nullptr;
 		}
@@ -1769,6 +1773,10 @@ namespace SIE
 		uint32_t descriptor)
 	{
 		auto state = State::GetSingleton();
+		if (state->isVR && strcmp(shader.fxpFilename, "OBBOcclusionTesting") == 0)
+			// use vanilla shader
+			return nullptr;
+
 		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)) && state->enablePShaders)) {
 			return nullptr;
 		}
