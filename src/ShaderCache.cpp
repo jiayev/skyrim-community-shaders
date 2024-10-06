@@ -1475,10 +1475,7 @@ namespace SIE
 					descriptor);
 			} else {
 				std::array<size_t, 3> bufferSizes = { 0, 0, 0 };
-#pragma warning(push)
-#pragma warning(disable: 4244)
-				std::fill(newShader->constantTable.begin(), newShader->constantTable.end(), 0);
-#pragma warning(pop)
+				std::ranges::fill(newShader->constantTable, (int8_t)0);
 				ReflectConstantBuffers(*reflector.Get(), bufferSizes, newShader->constantTable, newShader->shaderDesc,
 					ShaderClass::Vertex, descriptor, shader);
 				if (bufferSizes[0] != 0) {
@@ -1530,10 +1527,7 @@ namespace SIE
 					descriptor);
 			} else {
 				std::array<size_t, 3> bufferSizes = { 0, 0, 0 };
-#pragma warning(push)
-#pragma warning(disable: 4244)
-				std::fill(newShader->constantTable.begin(), newShader->constantTable.end(), 0);
-#pragma warning(pop)
+				std::ranges::fill(newShader->constantTable, (int8_t)0);
 				uint64_t dummy;
 				ReflectConstantBuffers(*reflector.Get(), bufferSizes, newShader->constantTable,
 					dummy,

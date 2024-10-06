@@ -452,11 +452,8 @@ std::string ExtractTextureStem(std::string_view a_path)
 	a_path = a_path.substr(lastSeparatorPos + 1);
 	a_path.remove_suffix(4);  // Remove ".dds"
 
-#pragma warning(push)
-#pragma warning(disable: 4244)
-	auto textureNameView = a_path | std::views::transform(::tolower);
+	auto textureNameView = a_path | std::views::transform([](auto c) { return (char)::tolower(c); });
 	std::string textureName = { textureNameView.begin(), textureNameView.end() };
-#pragma warning(pop)
 
 	return textureName;
 }
