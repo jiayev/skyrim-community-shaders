@@ -423,6 +423,13 @@ namespace Util
 			ImGui::EndTooltip();
 		}
 	}
+
+	bool IsDynamicResolution()
+	{
+		const static auto address = REL::RelocationID{ 508794, 380760 }.address();
+		bool* bDynamicResolution = reinterpret_cast<bool*>(address);
+		return *bDynamicResolution;
+	}
 }
 
 namespace nlohmann

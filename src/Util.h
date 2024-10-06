@@ -125,6 +125,14 @@ namespace Util
 		}
 		inline bool isNewFrame() { return isNewFrame(RE::BSGraphics::State::GetSingleton()->frameCount); }
 	};
+
+	/**
+	 * @brief Checks if dynamic resolution is currently enabled.
+	 * 
+	 * @return true if dynamic resolution is enabled, false otherwise.
+	 */
+	bool IsDynamicResolution();
+
 }
 
 namespace nlohmann
