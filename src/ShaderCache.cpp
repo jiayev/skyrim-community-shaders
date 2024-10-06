@@ -52,13 +52,12 @@ namespace SIE
 			return 0x3F & (descriptor >> 24);
 		}
 
-		static void GetLightingShaderDefines(uint32_t descriptor,
-			D3D_SHADER_MACRO* defines)
+		static void GetLightingShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
 		{
-			static REL::Relocation<void(uint32_t, D3D_SHADER_MACRO*)> VanillaGetLightingShaderDefines(
-				RELOCATION_ID(101631, 108698));
+			static REL::Relocation<void(uint32_t, D3D_SHADER_MACRO*)> VanillaGetLightingShaderDefines(RELOCATION_ID(101631, 108698));
+			VanillaGetLightingShaderDefines(descriptor, defines.data());
 
-			int lastIndex = 0;
+			size_t lastIndex = std::ranges::find_if(defines, [](const D3D_SHADER_MACRO& macro) { return macro.Name == nullptr; }) - defines.begin();
 
 			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred)) {
 				defines[lastIndex++] = { "DEFERRED", nullptr };
@@ -76,12 +75,12 @@ namespace SIE
 				}
 			}
 
-			VanillaGetLightingShaderDefines(descriptor, defines + lastIndex);
+			defines[lastIndex] = { nullptr, nullptr };
 		}
 
-		static void GetBloodSplaterShaderDefines(uint32_t descriptor, D3D_SHADER_MACRO* defines)
+		static void GetBloodSplaterShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
 		{
-			int lastIndex = 0;
+			size_t lastIndex = 0;
 			if (descriptor == static_cast<uint32_t>(ShaderCache::BloodSplatterShaderTechniques::Splatter)) {
 				defines[lastIndex++] = { "SPLATTER", nullptr };
 			} else if (descriptor == static_cast<uint32_t>(ShaderCache::BloodSplatterShaderTechniques::Flare)) {
@@ -97,10 +96,10 @@ namespace SIE
 			defines[lastIndex] = { nullptr, nullptr };
 		}
 
-		static void GetDistantTreeShaderDefines(uint32_t descriptor, D3D_SHADER_MACRO* defines)
+		static void GetDistantTreeShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
 		{
 			const auto technique = descriptor & 1;
-			int lastIndex = 0;
+			size_t lastIndex = 0;
 			if (technique == static_cast<uint32_t>(ShaderCache::DistantTreeShaderTechniques::Depth)) {
 				defines[lastIndex++] = { "RENDER_DEPTH", nullptr };
 			}
@@ -121,12 +120,12 @@ namespace SIE
 			defines[lastIndex] = { nullptr, nullptr };
 		}
 
-		static void GetSkyShaderDefines(uint32_t descriptor, D3D_SHADER_MACRO* defines)
+		static void GetSkyShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
 		{
 			using enum ShaderCache::SkyShaderTechniques;
 
 			const auto technique = static_cast<ShaderCache::SkyShaderTechniques>(descriptor & 255);
-			int lastIndex = 0;
+			size_t lastIndex = 0;
 			switch (technique) {
 			case SunOcclude:
 				{
@@ -197,10 +196,10 @@ namespace SIE
 			defines[lastIndex] = { nullptr, nullptr };
 		}
 
-		static void GetGrassShaderDefines(uint32_t descriptor, D3D_SHADER_MACRO* defines)
+		static void GetGrassShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
 		{
 			const auto technique = descriptor & 0b1111;
-			int lastIndex = 0;
+			size_t lastIndex = 0;
 			if (technique == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::RenderDepth)) {
 				defines[lastIndex++] = { "RENDER_DEPTH", nullptr };
 			} else if (technique == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::TruePbr)) {
@@ -219,12 +218,12 @@ namespace SIE
 			defines[lastIndex] = { nullptr, nullptr };
 		}
 
-		static void GetParticleShaderDefines(uint32_t descriptor, D3D_SHADER_MACRO* defines)
+		static void GetParticleShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
 		{
 			using enum ShaderCache::ParticleShaderTechniques;
 
 			const auto technique = static_cast<ShaderCache::ParticleShaderTechniques>(descriptor);
-			int lastIndex = 0;
+			size_t lastIndex = 0;
 			switch (technique) {
 			case ParticlesGryColor:
 				{
@@ -265,131 +264,105 @@ namespace SIE
 			defines[lastIndex] = { nullptr, nullptr };
 		}
 
-		static void GetEffectShaderDefines(uint32_t descriptor, D3D_SHADER_MACRO* defines)
+		static void GetEffectShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
 		{
+			size_t lastIndex = 0;
+
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Vc)) {
-				defines[0] = { "VC", nullptr };
-				++defines;
+				defines[lastIndex++] = { "VC", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::TexCoord)) {
-				defines[0] = { "TEXCOORD", nullptr };
-				++defines;
+				defines[lastIndex++] = { "TEXCOORD", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::TexCoordIndex)) {
-				defines[0] = { "TEXCOORD_INDEX", nullptr };
-				++defines;
+				defines[lastIndex++] = { "TEXCOORD_INDEX", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Skinned)) {
-				defines[0] = { "SKINNED", nullptr };
-				++defines;
+				defines[lastIndex++] = { "SKINNED", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Normals)) {
-				defines[0] = { "NORMALS", nullptr };
-				++defines;
+				defines[lastIndex++] = { "NORMALS", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::BinormalTangent)) {
-				defines[0] = { "BINORMAL_TANGENT", nullptr };
-				++defines;
+				defines[lastIndex++] = { "BINORMAL_TANGENT", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Texture)) {
-				defines[0] = { "TEXTURE", nullptr };
-				++defines;
+				defines[lastIndex++] = { "TEXTURE", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::IndexedTexture)) {
-				defines[0] = { "INDEXED_TEXTURE", nullptr };
-				++defines;
+				defines[lastIndex++] = { "INDEXED_TEXTURE", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Falloff)) {
-				defines[0] = { "FALLOFF", nullptr };
-				++defines;
+				defines[lastIndex++] = { "FALLOFF", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::AddBlend)) {
-				defines[0] = { "ADDBLEND", nullptr };
-				++defines;
+				defines[lastIndex++] = { "ADDBLEND", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::MultBlend)) {
-				defines[0] = { "MULTBLEND", nullptr };
-				++defines;
+				defines[lastIndex++] = { "MULTBLEND", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Particles)) {
-				defines[0] = { "PARTICLES", nullptr };
-				++defines;
+				defines[lastIndex++] = { "PARTICLES", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::StripParticles)) {
-				defines[0] = { "STRIP_PARTICLES", nullptr };
-				++defines;
+				defines[lastIndex++] = { "STRIP_PARTICLES", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Blood)) {
-				defines[0] = { "BLOOD", nullptr };
-				++defines;
+				defines[lastIndex++] = { "BLOOD", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Membrane)) {
-				defines[0] = { "MEMBRANE", nullptr };
-				++defines;
+				defines[lastIndex++] = { "MEMBRANE", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Lighting)) {
-				defines[0] = { "LIGHTING", nullptr };
-				++defines;
+				defines[lastIndex++] = { "LIGHTING", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::ProjectedUv)) {
-				defines[0] = { "PROJECTED_UV", nullptr };
-				++defines;
+				defines[lastIndex++] = { "PROJECTED_UV", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Soft)) {
-				defines[0] = { "SOFT", nullptr };
-				++defines;
+				defines[lastIndex++] = { "SOFT", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::GrayscaleToColor)) {
-				defines[0] = { "GRAYSCALE_TO_COLOR", nullptr };
-				++defines;
+				defines[lastIndex++] = { "GRAYSCALE_TO_COLOR", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::GrayscaleToAlpha)) {
-				defines[0] = { "GRAYSCALE_TO_ALPHA", nullptr };
-				++defines;
+				defines[lastIndex++] = { "GRAYSCALE_TO_ALPHA", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::IgnoreTexAlpha)) {
-				defines[0] = { "IGNORE_TEX_ALPHA", nullptr };
-				++defines;
+				defines[lastIndex++] = { "IGNORE_TEX_ALPHA", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::MultBlendDecal)) {
-				defines[0] = { "MULTBLEND_DECAL", nullptr };
-				++defines;
+				defines[lastIndex++] = { "MULTBLEND_DECAL", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::AlphaTest)) {
-				defines[0] = { "ALPHA_TEST", nullptr };
-				++defines;
+				defines[lastIndex++] = { "ALPHA_TEST", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::SkyObject)) {
-				defines[0] = { "SKY_OBJECT", nullptr };
-				++defines;
+				defines[lastIndex++] = { "SKY_OBJECT", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::MsnSpuSkinned)) {
-				defines[0] = { "MSN_SPU_SKINNED", nullptr };
-				++defines;
+				defines[lastIndex++] = { "MSN_SPU_SKINNED", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::MotionVectorsNormals)) {
-				defines[0] = { "MOTIONVECTORS_NORMALS", nullptr };
-				++defines;
+				defines[lastIndex++] = { "MOTIONVECTORS_NORMALS", nullptr };
 			}
 
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Deferred)) {
-				defines[0] = { "DEFERRED", nullptr };
-				++defines;
+				defines[lastIndex++] = { "DEFERRED", nullptr };
 			}
 
 			for (auto* feature : Feature::GetFeatureList()) {
 				if (feature->loaded && feature->HasShaderDefine(RE::BSShader::Type::Effect)) {
-					defines[0] = { feature->GetShaderDefineName().data(), nullptr };
-					++defines;
+					defines[lastIndex++] = { feature->GetShaderDefineName().data(), nullptr };
 				}
 			}
 
-			defines[0] = { nullptr, nullptr };
+			defines[lastIndex] = { nullptr, nullptr };
 		}
 
-		static void GetWaterShaderDefines(uint32_t descriptor, D3D_SHADER_MACRO* defines)
+		static void GetWaterShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
 		{
-			int lastIndex = 0;
+			size_t lastIndex = 0;
 			defines[lastIndex++] = { "WATER", nullptr };
 			defines[lastIndex++] = { "FOG", nullptr };
 
@@ -452,135 +425,113 @@ namespace SIE
 			defines[lastIndex] = { nullptr, nullptr };
 		}
 
-		static void GetUtilityShaderDefines(uint32_t descriptor, D3D_SHADER_MACRO* defines)
+		static void GetUtilityShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
 		{
 			using enum ShaderCache::UtilityShaderFlags;
 
+			size_t lastIndex = 0;
+
 			if (descriptor & static_cast<uint32_t>(Vc)) {
-				defines[0] = { "VC", nullptr };
-				++defines;
+				defines[lastIndex++] = { "VC", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(Texture)) {
-				defines[0] = { "TEXTURE", nullptr };
-				++defines;
+				defines[lastIndex++] = { "TEXTURE", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(Skinned)) {
-				defines[0] = { "SKINNED", nullptr };
-				++defines;
+				defines[lastIndex++] = { "SKINNED", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(Normals)) {
-				defines[0] = { "NORMALS", nullptr };
-				++defines;
+				defines[lastIndex++] = { "NORMALS", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(AlphaTest)) {
-				defines[0] = { "ALPHA_TEST", nullptr };
-				++defines;
+				defines[lastIndex++] = { "ALPHA_TEST", nullptr };
 			}
 
 			if (descriptor & static_cast<uint32_t>(LodLandscape)) {
 				if (descriptor &
 					(static_cast<uint32_t>(RenderShadowmask) |
 						static_cast<uint32_t>(RenderShadowmaskSpot))) {
-					defines[0] = { "FOCUS_SHADOW", nullptr };
+					defines[lastIndex++] = { "FOCUS_SHADOW", nullptr };
 				} else {
-					defines[0] = { "LOD_LANDSCAPE", nullptr };
+					defines[lastIndex++] = { "LOD_LANDSCAPE", nullptr };
 				}
-				++defines;
 			}
 
 			if ((descriptor & static_cast<uint32_t>(RenderNormal)) &&
 				!(descriptor & static_cast<uint32_t>(RenderNormalClear))) {
-				defines[0] = { "RENDER_NORMAL", nullptr };
-				++defines;
+				defines[lastIndex++] = { "RENDER_NORMAL", nullptr };
+
 			} else if (!(descriptor & static_cast<uint32_t>(RenderNormal)) &&
 					   (descriptor & static_cast<uint32_t>(RenderNormalClear))) {
-				defines[0] = { "RENDER_NORMAL_CLEAR", nullptr };
-				++defines;
+				defines[lastIndex++] = { "RENDER_NORMAL_CLEAR", nullptr };
+
 			} else if ((descriptor & static_cast<uint32_t>(RenderNormal)) &&
 					   (descriptor & static_cast<uint32_t>(RenderNormalClear))) {
-				defines[0] = { "STENCIL_ABOVE_WATER", nullptr };
-				++defines;
+				defines[lastIndex++] = { "STENCIL_ABOVE_WATER", nullptr };
 			}
 
 			if (descriptor & static_cast<uint32_t>(RenderNormalFalloff)) {
-				defines[0] = { "RENDER_NORMAL_FALLOFF", nullptr };
-				++defines;
+				defines[lastIndex++] = { "RENDER_NORMAL_FALLOFF", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(RenderNormalClamp)) {
-				defines[0] = { "RENDER_NORMAL_CLAMP", nullptr };
-				++defines;
+				defines[lastIndex++] = { "RENDER_NORMAL_CLAMP", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(RenderDepth)) {
-				defines[0] = { "RENDER_DEPTH", nullptr };
-				++defines;
+				defines[lastIndex++] = { "RENDER_DEPTH", nullptr };
 			}
 
 			if (descriptor & static_cast<uint32_t>(OpaqueEffect)) {
-				defines[0] = { "OPAQUE_EFFECT", nullptr };
-				++defines;
+				defines[lastIndex++] = { "OPAQUE_EFFECT", nullptr };
+
 				if (!(descriptor & static_cast<uint32_t>(RenderShadowmap)) &&
 					(descriptor & static_cast<uint32_t>(AdditionalAlphaMask))) {
-					defines[0] = { "ADDITIONAL_ALPHA_MASK", nullptr };
-					++defines;
+					defines[lastIndex++] = { "ADDITIONAL_ALPHA_MASK", nullptr };
 				}
 				if (descriptor & static_cast<uint32_t>(GrayscaleToAlpha)) {
-					defines[0] = { "GRAYSCALE_TO_ALPHA", nullptr };
-					++defines;
+					defines[lastIndex++] = { "GRAYSCALE_TO_ALPHA", nullptr };
 				}
 			} else {
 				if (descriptor & static_cast<uint32_t>(RenderShadowmap)) {
-					defines[0] = { "RENDER_SHADOWMAP", nullptr };
-					++defines;
+					defines[lastIndex++] = { "RENDER_SHADOWMAP", nullptr };
+
 					if (descriptor & static_cast<uint32_t>(RenderShadowmapPb)) {
-						defines[0] = { "RENDER_SHADOWMAP_PB", nullptr };
-						++defines;
+						defines[lastIndex++] = { "RENDER_SHADOWMAP_PB", nullptr };
 					}
 				} else if (descriptor &
 						   static_cast<uint32_t>(AdditionalAlphaMask)) {
-					defines[0] = { "ADDITIONAL_ALPHA_MASK", nullptr };
-					++defines;
+					defines[lastIndex++] = { "ADDITIONAL_ALPHA_MASK", nullptr };
 				}
 				if (descriptor & static_cast<uint32_t>(RenderShadowmapClamped)) {
-					defines[0] = { "RENDER_SHADOWMAP_CLAMPED", nullptr };
-					++defines;
+					defines[lastIndex++] = { "RENDER_SHADOWMAP_CLAMPED", nullptr };
 				}
 			}
 
 			if (descriptor & static_cast<uint32_t>(GrayscaleMask)) {
-				defines[0] = { "GRAYSCALE_MASK", nullptr };
-				++defines;
+				defines[lastIndex++] = { "GRAYSCALE_MASK", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(RenderShadowmask)) {
-				defines[0] = { "RENDER_SHADOWMASK", nullptr };
-				++defines;
+				defines[lastIndex++] = { "RENDER_SHADOWMASK", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(RenderShadowmaskSpot)) {
-				defines[0] = { "RENDER_SHADOWMASKSPOT", nullptr };
-				++defines;
+				defines[lastIndex++] = { "RENDER_SHADOWMASKSPOT", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(RenderShadowmaskPb)) {
-				defines[0] = { "RENDER_SHADOWMASKPB", nullptr };
-				++defines;
+				defines[lastIndex++] = { "RENDER_SHADOWMASKPB", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(RenderShadowmaskDpb)) {
-				defines[0] = { "RENDER_SHADOWMASKDPB", nullptr };
-				++defines;
+				defines[lastIndex++] = { "RENDER_SHADOWMASKDPB", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(RenderBaseTexture)) {
-				defines[0] = { "RENDER_BASE_TEXTURE", nullptr };
-				++defines;
+				defines[lastIndex++] = { "RENDER_BASE_TEXTURE", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(TreeAnim)) {
-				defines[0] = { "TREE_ANIM", nullptr };
-				++defines;
+				defines[lastIndex++] = { "TREE_ANIM", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(LodObject)) {
-				defines[0] = { "LOD_OBJECT", nullptr };
-				++defines;
+				defines[lastIndex++] = { "LOD_OBJECT", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(LocalMapFogOfWar)) {
-				defines[0] = { "LOCALMAP_FOGOFWAR", nullptr };
-				++defines;
+				defines[lastIndex++] = { "LOCALMAP_FOGOFWAR", nullptr };
 			}
 
 			if (descriptor & (static_cast<uint32_t>(RenderShadowmask) |
@@ -590,50 +541,41 @@ namespace SIE
 				static constexpr std::array<const char*, 5> shadowFilters = { { "0", "1", "2",
 					"3", "4" } };
 				const size_t shadowFilterIndex = std::clamp((descriptor >> 17) & 0b111, 0u, 4u);
-				defines[0] = { "SHADOWFILTER", shadowFilters[shadowFilterIndex] };
-				++defines;
+				defines[lastIndex++] = { "SHADOWFILTER", shadowFilters[shadowFilterIndex] };
 			} else if ((!(descriptor & static_cast<uint32_t>(OpaqueEffect)) &&
 						   (descriptor &
 							   static_cast<uint32_t>(RenderShadowmap))) ||
 					   (descriptor & static_cast<uint32_t>(RenderDepth))) {
 				if (descriptor & static_cast<uint32_t>(DepthWriteDecals)) {
-					defines[0] = { "DEPTH_WRITE_DECALS", nullptr };
-					++defines;
+					defines[lastIndex++] = { "DEPTH_WRITE_DECALS", nullptr };
 				}
 			} else {
 				if (descriptor & (static_cast<uint32_t>(DepthWriteDecals) |
 									 static_cast<uint32_t>(DebugColor))) {
-					defines[0] = { "DEBUG_COLOR", nullptr };
-					++defines;
+					defines[lastIndex++] = { "DEBUG_COLOR", nullptr };
 				}
 				if (descriptor & static_cast<uint32_t>(DebugShadowSplit)) {
-					defines[0] = { "DEBUG_SHADOWSPLIT", nullptr };
-					++defines;
+					defines[lastIndex++] = { "DEBUG_SHADOWSPLIT", nullptr };
 				}
 			}
 
-			defines[0] = { "SHADOWSPLITCOUNT", "3" };
-			++defines;
+			defines[lastIndex++] = { "SHADOWSPLITCOUNT", "3" };
 
 			if ((descriptor & 0x14000) != 0x14000 &&
 				((descriptor & 0x20004000) == 0x4000 || (descriptor & 0x1E02000) == 0x2000) &&
 				!(descriptor & 0x80) && (descriptor & 0x14000) != 0x10000) {
-				defines[0] = { "NO_PIXEL_SHADER", nullptr };
-				++defines;
+				defines[lastIndex++] = { "NO_PIXEL_SHADER", nullptr };
 			}
 
-			defines[0] = { nullptr, nullptr };
+			defines[lastIndex++] = { nullptr, nullptr };
 		}
 
-		static void GetImagespaceShaderDefines(const RE::BSShader& shader, D3D_SHADER_MACRO* defines)
+		static void GetImagespaceShaderDefines(const RE::BSShader& shader, std::span<D3D_SHADER_MACRO> defines)
 		{
 			auto& isShader = const_cast<RE::BSImagespaceShader&>(static_cast<const RE::BSImagespaceShader&>(shader));
-			auto* macros = reinterpret_cast<RE::BSImagespaceShader::ShaderMacro*>(defines);
+			auto* macros = reinterpret_cast<RE::BSImagespaceShader::ShaderMacro*>(defines.data());
 			isShader.GetShaderMacros(macros);
-			int lastIndex = 0;
-			while (macros[lastIndex].name != nullptr) {
-				lastIndex++;
-			}
+			size_t lastIndex = std::ranges::find_if(defines, [](const D3D_SHADER_MACRO& macro) { return macro.Name == nullptr; }) - defines.begin();
 			for (auto* feature : Feature::GetFeatureList()) {
 				if (feature->loaded && feature->HasShaderDefine(RE::BSShader::Type::ImageSpace)) {
 					defines[lastIndex++] = { feature->GetShaderDefineName().data(), nullptr };
@@ -650,8 +592,7 @@ namespace SIE
 			return;
 		}
 
-		static void GetShaderDefines(const RE::BSShader& shader, uint32_t descriptor,
-			D3D_SHADER_MACRO* defines)
+		static void GetShaderDefines(const RE::BSShader& shader, uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
 		{
 			switch (shader.shaderType.get()) {
 			case RE::BSShader::Type::Grass:
@@ -1293,7 +1234,7 @@ namespace SIE
 		{
 			auto sourceShaderFile = shader.fxpFilename;
 			std::array<D3D_SHADER_MACRO, 64> defines{};
-			SIE::SShaderCache::GetShaderDefines(shader, descriptor, &defines[0]);
+			SIE::SShaderCache::GetShaderDefines(shader, descriptor, std::span{ defines });
 			std::string result;
 			if (hashkey)  // generate hashkey so don't include descriptor
 				result = fmt::format("{}:{}:{}", sourceShaderFile, magic_enum::enum_name(shaderClass), SIE::SShaderCache::MergeDefinesString(defines, true));
@@ -1370,7 +1311,7 @@ namespace SIE
 					defines[lastIndex++] = { shaderDefines->at(i).first.c_str(), shaderDefines->at(i).second.c_str() };
 			}
 			defines[lastIndex] = { nullptr, nullptr };  // do final entry
-			GetShaderDefines(shader, descriptor, &defines[lastIndex]);
+			GetShaderDefines(shader, descriptor, std::span{ defines }.subspan(lastIndex));
 
 			const std::wstring path = GetShaderPath(
 				shader.shaderType == RE::BSShader::Type::ImageSpace ?
@@ -2410,7 +2351,7 @@ namespace SIE
 	std::string ShaderCache::GetDefinesString(const RE::BSShader& shader, uint32_t descriptor)
 	{
 		std::array<D3D_SHADER_MACRO, 64> defines{};
-		SIE::SShaderCache::GetShaderDefines(shader, descriptor, &defines[0]);
+		SIE::SShaderCache::GetShaderDefines(shader, descriptor, std::span{ defines });
 
 		return SIE::SShaderCache::MergeDefinesString(defines, true);
 	}
