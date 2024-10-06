@@ -524,7 +524,7 @@ void ScreenSpaceGI::ClearShaderCache()
 	for (auto shader : shaderPtrs)
 		if ((*shader)) {
 			(*shader)->Release();
-			shader->detach();
+			shader = nullptr;
 		}
 
 	CompileComputeShaders();
