@@ -215,9 +215,74 @@ void Menu::DrawSettings()
 			ImGui::TableSetupColumn("##ListOfMenus", 0, 3);
 			ImGui::TableSetupColumn("##MenuConfig", 0, 7);
 
-			static size_t selectedMenu = SIZE_T_MAX;
+			static size_t selectedMenu = 0;
 
-			constexpr auto builtInMenus = std::array{ " General ", " Advanced ", " Streamline ", " Upscaling " };
+			// some type erasure bs for virtual-free polymorphism
+			struct BuiltInMenu
+			{
+				std::string name;
+				std::function<void()> func;
+			};
+			using MenuFuncInfo = std::variant<BuiltInMenu, std::string, Feature*>;
+			struct ListMenuVisitor
+			{
+				size_t listId;
+
+				void operator()(const BuiltInMenu& menu)
+				{
+					if (ImGui::Selectable(menu.name.c_str(), selectedMenu == listId, ImGuiSelectableFlags_SpanAllColumns))
+						selectedMenu = listId;
+				}
+				void operator()(const std::string& label)
+				{
+					ImGui::Text(label.c_str());
+				}
+				void operator()(Feature* feat)
+				{
+					if (feat->loaded) {
+						if (ImGui::Selectable(fmt::format(" {} ", feat->GetName()).c_str(), selectedMenu == listId, ImGuiSelectableFlags_SpanAllColumns))
+							selectedMenu = listId;
+						ImGui::SameLine();
+						ImGui::TextDisabled(fmt::format("({})", feat->version).c_str());
+					} else if (!feat->version.empty()) {
+						ImGui::TextDisabled(fmt::format(" {} ({})", feat->GetName(), feat->version).c_str());
+						if (auto _tt = Util::HoverTooltipWrapper()) {
+							ImGui::Text(feat->failedLoadedMessage.c_str());
+						}
+					}
+				}
+			};
+			struct DrawMenuVisitor
+			{
+				void operator()(const BuiltInMenu& menu)
+				{
+					if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
+						menu.func();
+					}
+					ImGui::EndChild();
+				}
+				void operator()(const std::string&)
+				{
+					// std::unreachable() from c++23
+					// you are not supposed to have selected a label!
+				}
+				void operator()(Feature* feat)
+				{
+					if (ImGui::Button("Restore Defaults", { -1, 0 })) {
+						feat->RestoreDefaultSettings();
+					}
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::Text(
+							"Restores the feature's settings back to their default values. "
+							"You will still need to Save Settings to make these changes permanent. ");
+					}
+
+					if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
+						feat->DrawSettings();
+					}
+					ImGui::EndChild();
+				}
+			};
 
 			auto& featureList = Feature::GetFeatureList();
 			auto sortedList{ featureList };  // need a copy so the load order is not lost
@@ -225,30 +290,22 @@ void Menu::DrawSettings()
 				return a->GetName() < b->GetName();
 			});
 
+			auto menuList = std::vector<MenuFuncInfo>{
+				BuiltInMenu{ " General ", [&]() { DrawGeneralSettings(); } },
+				BuiltInMenu{ " Advanced ", [&]() { DrawAdvancedSettings(); } },
+				BuiltInMenu{ " True PBR ", []() { TruePBR::GetSingleton()->DrawSettings(); } },
+				BuiltInMenu{ " Streamline ", []() { Streamline::GetSingleton()->DrawSettings(); } },
+				BuiltInMenu{ " Upscaling ", []() { Upscaling::GetSingleton()->DrawSettings(); } },
+				"-----Features-----"s
+			};
+			std::ranges::copy(sortedList, std::back_inserter(menuList));
+
 			ImGui::TableNextColumn();
 			if (ImGui::BeginListBox("##MenusList", { -FLT_MIN, -FLT_MIN })) {
 				ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));  // Selected feature header color
 
-				for (size_t i = 0; i < builtInMenus.size(); i++) {
-					if (ImGui::Selectable(builtInMenus[i], selectedMenu == i, ImGuiSelectableFlags_SpanAllColumns))
-						selectedMenu = i;
-				}
-
-				ImGui::Text("-----Features-----");
-
-				for (size_t i = 0; i < sortedList.size(); i++) {
-					auto menuId = i + builtInMenus.size();
-					if (sortedList[i]->loaded) {
-						if (ImGui::Selectable(fmt::format(" {} ", sortedList[i]->GetName()).c_str(), selectedMenu == menuId, ImGuiSelectableFlags_SpanAllColumns))
-							selectedMenu = menuId;
-						ImGui::SameLine();
-						ImGui::TextDisabled(fmt::format("({})", sortedList[i]->version).c_str());
-					} else if (!sortedList[i]->version.empty()) {
-						ImGui::TextDisabled(fmt::format(" {} ({})", sortedList[i]->GetName(), sortedList[i]->version).c_str());
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::Text(sortedList[i]->failedLoadedMessage.c_str());
-						}
-					}
+				for (size_t i = 0; i < menuList.size(); i++) {
+					std::visit(ListMenuVisitor{ i }, menuList[i]);
 				}
 
 				ImGui::PopStyleColor();
@@ -257,42 +314,11 @@ void Menu::DrawSettings()
 
 			ImGui::TableNextColumn();
 
-			bool hasSelected = selectedMenu < (builtInMenus.size() + sortedList.size());
-			bool shownFeature = hasSelected && (selectedMenu >= builtInMenus.size());
-			if (shownFeature) {
-				if (ImGui::Button("Restore Defaults", { -1, 0 })) {
-					sortedList[selectedMenu]->RestoreDefaultSettings();
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text(
-						"Restores the feature's settings back to their default values. "
-						"You will still need to Save Settings to make these changes permanent. ");
-				}
+			if (selectedMenu < menuList.size()) {
+				std::visit(DrawMenuVisitor{}, menuList[selectedMenu]);
+			} else {
+				ImGui::TextDisabled("Please select an item on the left.");
 			}
-
-			if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-				if (hasSelected) {
-					switch (selectedMenu) {
-					case 0:
-						DrawGeneralSettings();
-						break;
-					case 1:
-						DrawAdvancedSettings();
-						break;
-					case 2:
-						Streamline::GetSingleton()->DrawSettings();
-						break;
-					case 3:
-						Upscaling::GetSingleton()->DrawSettings();
-						break;
-					default:
-						sortedList[selectedMenu - builtInMenus.size()]->DrawSettings();
-						break;
-					}
-				} else
-					ImGui::TextDisabled("Please select a feature on the left.");
-			}
-			ImGui::EndChild();
 
 			ImGui::EndTable();
 		}
@@ -527,7 +553,6 @@ void Menu::DrawAdvancedSettings()
 			ImGui::TreePop();
 		}
 		ImGui::Checkbox("Extended Frame Annotations", &State::GetSingleton()->extendedFrameAnnotations);
-		TruePBR::GetSingleton()->DrawSettings();
 	}
 
 	if (ImGui::CollapsingHeader("Replace Original Shaders", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {

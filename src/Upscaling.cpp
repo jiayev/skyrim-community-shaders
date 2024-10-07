@@ -23,42 +23,40 @@ void Upscaling::DrawSettings()
 	settings.upscaleMode = bTAA ? (settings.upscaleMode == (uint)UpscaleMode::kNONE ? (uint)UpscaleMode::kTAA : settings.upscaleMode) : (uint)UpscaleMode::kNONE;
 
 	// Display upscaling options in the UI
-	if (ImGui::CollapsingHeader("Upscaling", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
-		const char* upscaleModes[] = { "Disabled", "Temporal Anti-Aliasing", "AMD FSR 3.1", "NVIDIA DLAA" };
+	const char* upscaleModes[] = { "Disabled", "Temporal Anti-Aliasing", "AMD FSR 3.1", "NVIDIA DLAA" };
 
-		// Determine available modes
-		bool featureDLSS = streamline->featureDLSS;
-		uint* currentUpscaleMode = featureDLSS ? &settings.upscaleMode : &settings.upscaleModeNoDLSS;
-		uint availableModes = (state->isVR && state->upscalerLoaded) ? (featureDLSS ? 2 : 1) : (featureDLSS ? 3 : 2);
+	// Determine available modes
+	bool featureDLSS = streamline->featureDLSS;
+	uint* currentUpscaleMode = featureDLSS ? &settings.upscaleMode : &settings.upscaleModeNoDLSS;
+	uint availableModes = (state->isVR && state->upscalerLoaded) ? (featureDLSS ? 2 : 1) : (featureDLSS ? 3 : 2);
 
-		// Slider for method selection
-		ImGui::SliderInt("Method", (int*)currentUpscaleMode, 0, availableModes, std::format("{}", upscaleModes[(uint)*currentUpscaleMode]).c_str());
+	// Slider for method selection
+	ImGui::SliderInt("Method", (int*)currentUpscaleMode, 0, availableModes, std::format("{}", upscaleModes[(uint)*currentUpscaleMode]).c_str());
 
-		*currentUpscaleMode = std::min(availableModes, (uint)*currentUpscaleMode);
-		bTAA = *currentUpscaleMode != (uint)UpscaleMode::kNONE;
+	*currentUpscaleMode = std::min(availableModes, (uint)*currentUpscaleMode);
+	bTAA = *currentUpscaleMode != (uint)UpscaleMode::kNONE;
 
-		// settings for scaleform/ini
-		if (auto iniSettingCollection = RE::INIPrefSettingCollection::GetSingleton()) {
-			if (auto setting = iniSettingCollection->GetSetting("bUseTAA:Display")) {
-				setting->data.b = bTAA;
-			}
+	// settings for scaleform/ini
+	if (auto iniSettingCollection = RE::INIPrefSettingCollection::GetSingleton()) {
+		if (auto setting = iniSettingCollection->GetSetting("bUseTAA:Display")) {
+			setting->data.b = bTAA;
 		}
+	}
 
-		// Check the current upscale mode
-		auto upscaleMode = GetUpscaleMode();
+	// Check the current upscale mode
+	auto upscaleMode = GetUpscaleMode();
 
-		// Display sharpness slider if applicable
-		if (upscaleMode != UpscaleMode::kTAA && upscaleMode != UpscaleMode::kNONE) {
-			ImGui::SliderFloat("Sharpness", &settings.sharpness, 0.0f, 1.0f, "%.1f");
-			settings.sharpness = std::clamp(settings.sharpness, 0.0f, 1.0f);
-		}
+	// Display sharpness slider if applicable
+	if (upscaleMode != UpscaleMode::kTAA && upscaleMode != UpscaleMode::kNONE) {
+		ImGui::SliderFloat("Sharpness", &settings.sharpness, 0.0f, 1.0f, "%.1f");
+		settings.sharpness = std::clamp(settings.sharpness, 0.0f, 1.0f);
+	}
 
-		// Display DLSS preset slider if using DLSS
-		if (upscaleMode == UpscaleMode::kDLSS) {
-			const char* dlssPresets[] = { "Default", "Preset A", "Preset B", "Preset C", "Preset D", "Preset E", "Preset F" };
-			ImGui::SliderInt("DLSS Preset", (int*)&settings.dlssPreset, 0, 6, std::format("{}", dlssPresets[(uint)settings.dlssPreset]).c_str());
-			settings.dlssPreset = std::min(6u, (uint)settings.dlssPreset);
-		}
+	// Display DLSS preset slider if using DLSS
+	if (upscaleMode == UpscaleMode::kDLSS) {
+		const char* dlssPresets[] = { "Default", "Preset A", "Preset B", "Preset C", "Preset D", "Preset E", "Preset F" };
+		ImGui::SliderInt("DLSS Preset", (int*)&settings.dlssPreset, 0, 6, std::format("{}", dlssPresets[(uint)settings.dlssPreset]).c_str());
+		settings.dlssPreset = std::min(6u, (uint)settings.dlssPreset);
 	}
 }
 
