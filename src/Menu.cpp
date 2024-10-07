@@ -185,7 +185,7 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset;
 
 	ImFontConfig font_config;
-	font_config.GlyphExtraSpacing.x = -1.5;
+	font_config.GlyphExtraSpacing.x = -0.5;
 
 	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Jost-Regular.ttf", 30, &font_config);
 
