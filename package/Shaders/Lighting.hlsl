@@ -2604,8 +2604,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			psout.Diffuse.xyz = LightLimitFix::TurboColormap(strictLights[0].NumStrictLights >= 7.0);
 		} else if (lightLimitFixSettings.LightsVisualisationMode == 1) {
 			psout.Diffuse.xyz = LightLimitFix::TurboColormap((float)strictLights[0].NumStrictLights / 15.0);
-		} else {
+		} else if (lightLimitFixSettings.LightsVisualisationMode == 2) {
 			psout.Diffuse.xyz = LightLimitFix::TurboColormap((float)numClusteredLights / 128.0);
+		} else {
+			psout.Diffuse.xyz = shadowColor.xyz;
 		}
 		baseColor.xyz = 0.0;
 	} else {

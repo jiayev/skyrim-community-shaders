@@ -735,7 +735,7 @@ PS_OUTPUT main(PS_INPUT input)
 	finalColor *= fogMul;
 #	endif
 	psout.Diffuse = finalColor;
-#	if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
+#	if defined(LIGHTING) && defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (lightLimitFixSettings.EnableLightsVisualisation) {
 		if (lightLimitFixSettings.LightsVisualisationMode == 0) {
 			psout.Diffuse.xyz = LightLimitFix::TurboColormap(0.0);
