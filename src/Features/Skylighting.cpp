@@ -1,4 +1,5 @@
 #include "Skylighting.h"
+#include <ShaderCache.h>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
@@ -397,10 +398,16 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 	State::GetSingleton()->BeginPerfEvent("PRECIPITATION MASK");
 	State::GetSingleton()->SetPerfMarker("PRECIPITATION MASK");
 
+	auto& shaderCache = SIE::ShaderCache::Instance();
 	auto singleton = GetSingleton();
 
+	if (!singleton->doOcclusion || !shaderCache.IsEnabled()) {
+		Main_Precipitation_RenderOcclusion::func();
+		State::GetSingleton()->EndPerfEvent();
+	}
+
 	if (auto sky = RE::Sky::GetSingleton()) {
-		if (sky->mode.get() == RE::Sky::Mode::kFull && singleton->doOcclusion) {
+		if (sky->mode.get() == RE::Sky::Mode::kFull) {
 			static bool doPrecip = false;
 
 			auto precip = sky->precip;
