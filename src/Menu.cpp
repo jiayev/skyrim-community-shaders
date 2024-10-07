@@ -5,6 +5,7 @@
 #	define DIRECTINPUT_VERSION 0x0800
 #endif
 #include <dinput.h>
+#include <imgui_internal.h>
 #include <imgui_stdlib.h>
 #include <magic_enum.hpp>
 
@@ -25,55 +26,117 @@
 #define SETTING_MENU_FONTSCALE "Font Scale"
 #define SETTING_MENU_TOGGLE_SHADERS_KEY "Toggle Effects Key"
 
+namespace ImGui
+{
+	void Spacing(std::uint32_t a_numSpaces)
+	{
+		for (std::uint32_t i = 0; i < a_numSpaces; i++) {
+			Spacing();
+		}
+	}
+
+	ImVec2 GetNativeViewportSizeScaled(float scale)
+	{
+		const auto Size = GetMainViewport()->Size;
+		return { Size.x * scale, Size.y * scale };
+	}
+}
+
 void SetupImGuiStyle()
 {
 	auto& style = ImGui::GetStyle();
 	auto& colors = style.Colors;
 
-	// Theme from https://github.com/ArranzCNL/ImprovedCameraSE-NG
+	// Theme based on https://github.com/powerof3/DialogueHistory
 
-	style.WindowTitleAlign = ImVec2(0.5, 0.5);
-	style.FramePadding = ImVec2(4, 4);
+	float bgAlpha{ 0.68f };
+	float disabledAlpha{ 0.30f };
+	float hovoredAlpha{ 0.1f };
 
-	// Rounded slider grabber
-	style.GrabRounding = 12.0f;
+	ImVec4 background{ 0.0f, 0.0f, 0.0f, bgAlpha };
 
-	// Window
-	colors[ImGuiCol_WindowBg] = ImVec4{ 0.118f, 0.118f, 0.118f, 0.784f };
-	colors[ImGuiCol_ResizeGrip] = ImVec4{ 0.2f, 0.2f, 0.2f, 0.5f };
-	colors[ImGuiCol_ResizeGripHovered] = ImVec4{ 0.3f, 0.3f, 0.3f, 0.75f };
-	colors[ImGuiCol_ResizeGripActive] = ImVec4{ 0.15f, 0.15f, 0.15f, 1.0f };
+	ImVec4 border{ 0.569f, 0.545f, 0.506f, bgAlpha };
+	ImVec4 resizeGripHovered = border;
+	resizeGripHovered.w = hovoredAlpha;
+	float borderSize{ 3.0f };
 
-	// Header
-	colors[ImGuiCol_Header] = ImVec4{ 0.2f, 0.2f, 0.2f, 1.0f };
-	colors[ImGuiCol_HeaderHovered] = ImVec4{ 0.3f, 0.3f, 0.3f, 1.0f };
-	colors[ImGuiCol_HeaderActive] = ImVec4{ 0.15f, 0.15f, 0.15f, 1.0f };
+	ImVec4 text{ 1.0f, 1.0f, 1.0f, 1.0f };
+	ImVec4 textDisabled{ 1.0f, 1.0f, 1.0f, disabledAlpha };
 
-	// Title
-	colors[ImGuiCol_TitleBg] = ImVec4{ 0.15f, 0.15f, 0.15f, 1.0f };
-	colors[ImGuiCol_TitleBgActive] = ImVec4{ 0.15f, 0.15f, 0.15f, 1.0f };
-	colors[ImGuiCol_TitleBgCollapsed] = ImVec4{ 0.15f, 0.15f, 0.15f, 1.0f };
+	ImVec4 header{ 1.0f, 1.0f, 1.0f, 0.15f };
+	ImVec4 headerHovered = header;
+	headerHovered.w = hovoredAlpha;
 
-	// Frame Background
-	colors[ImGuiCol_FrameBg] = ImVec4{ 0.2f, 0.2f, 0.2f, 1.0f };
-	colors[ImGuiCol_FrameBgHovered] = ImVec4{ 0.3f, 0.3f, 0.3f, 1.0f };
-	colors[ImGuiCol_FrameBgActive] = ImVec4{ 0.15f, 0.15f, 0.15f, 1.0f };
+	ImVec4 separator{ 0.569f, 0.545f, 0.506f, bgAlpha };
 
-	// Button
-	colors[ImGuiCol_Button] = ImVec4{ 0.2f, 0.2f, 0.2f, 1.0f };
-	colors[ImGuiCol_ButtonHovered] = ImVec4{ 0.3f, 0.3f, 0.3f, 1.0f };
-	colors[ImGuiCol_ButtonActive] = ImVec4{ 0.15f, 0.15f, 0.15f, 1.0f };
+	ImVec4 tabHovered{ 0.2f, 0.2f, 0.2f, 1.0f };
 
-	// Tab
-	colors[ImGuiCol_Tab] = ImVec4{ 0.15f, 0.15f, 0.15f, 1.0f };
-	colors[ImGuiCol_TabHovered] = ImVec4{ 0.38f, 0.38f, 0.38f, 1.0f };
-	colors[ImGuiCol_TabActive] = ImVec4{ 0.28f, 0.28f, 0.28f, 1.0f };
-	colors[ImGuiCol_TabUnfocused] = ImVec4{ 0.15f, 0.15f, 0.15f, 1.0f };
-	colors[ImGuiCol_TabUnfocusedActive] = ImVec4{ 0.2f, 0.2f, 0.2f, 1.0f };
+	ImVec4 frameBG{ 0.0f, 0.0f, 0.0f, bgAlpha };
+	ImVec4 frameBGHovored = frameBG;
+	frameBGHovored.w = hovoredAlpha;
+	float frameBorderSize{ 1.5f };
+
+	ImVec4 sliderGrab{ 1.0f, 1.0f, 1.0f, 0.245f };
+	ImVec4 sliderGrabActive{ 1.0f, 1.0f, 1.0f, 0.531f };
+
+	ImVec4 scrollbarGrab{ 0.31f, 0.31f, 0.31f, 1.0f };
+	ImVec4 scrollbarGrabHovered{ 0.41f, 0.41f, 0.41f, 1.0f };
+	ImVec4 scrollbarGrabActive{ 0.51f, 0.51f, 0.51f, 1.0f };
+
+	style.WindowBorderSize = borderSize;
+	style.ChildBorderSize = borderSize;
+	style.FrameBorderSize = frameBorderSize;
+	style.IndentSpacing = 8.0f;
+	style.FramePadding = ImVec2(4.0f, 4.0f);
+	style.CellPadding.x = 16.f;
+
+	colors[ImGuiCol_WindowBg] = background;
+	colors[ImGuiCol_ChildBg] = background;
+	colors[ImGuiCol_ScrollbarBg] = ImVec4();
+	colors[ImGuiCol_TableHeaderBg] = ImVec4();
+	colors[ImGuiCol_TableRowBg] = ImVec4();
+	colors[ImGuiCol_TableRowBgAlt] = ImVec4();
+
+	colors[ImGuiCol_Border] = border;
+	colors[ImGuiCol_Separator] = separator;
+	colors[ImGuiCol_ResizeGrip] = border;
+	colors[ImGuiCol_ResizeGripHovered] = resizeGripHovered;
+	colors[ImGuiCol_ResizeGripActive] = colors[ImGuiCol_ResizeGripHovered];
+
+	colors[ImGuiCol_Text] = text;
+	colors[ImGuiCol_TextDisabled] = textDisabled;
+
+	colors[ImGuiCol_FrameBg] = frameBG;
+	colors[ImGuiCol_FrameBgHovered] = colors[ImGuiCol_FrameBg];
+	colors[ImGuiCol_FrameBgActive] = colors[ImGuiCol_FrameBg];
+
+	colors[ImGuiCol_SliderGrab] = sliderGrab;
+	colors[ImGuiCol_SliderGrabActive] = sliderGrabActive;
+
+	colors[ImGuiCol_Header] = header;
+	colors[ImGuiCol_HeaderActive] = colors[ImGuiCol_Header];
+	colors[ImGuiCol_HeaderHovered] = headerHovered;
+
+	colors[ImGuiCol_Button] = ImVec4();
+	colors[ImGuiCol_ButtonHovered] = headerHovered;
+	colors[ImGuiCol_ButtonActive] = ImVec4();
+
+	colors[ImGuiCol_ScrollbarGrab] = scrollbarGrab;
+	colors[ImGuiCol_ScrollbarGrabHovered] = scrollbarGrabHovered;
+	colors[ImGuiCol_ScrollbarGrabActive] = scrollbarGrabActive;
+
+	colors[ImGuiCol_Tab] = ImVec4();
+	colors[ImGuiCol_TabHovered] = tabHovered;
+	colors[ImGuiCol_TabActive] = colors[ImGuiCol_TabHovered];
+	colors[ImGuiCol_TabUnfocused] = colors[ImGuiCol_Tab];
+	colors[ImGuiCol_TabUnfocusedActive] = colors[ImGuiCol_TabHovered];
+
+	colors[ImGuiCol_CheckMark] = text;
+
+	colors[ImGuiCol_NavHighlight] = ImVec4();
 }
 
 bool IsEnabled = false;
-ImVec4 TextColor = ImVec4{ 1.0f, 1.0f, 1.0f, 1.0f };
 
 Menu::~Menu()
 {
@@ -121,7 +184,10 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset;
 
-	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Atkinson-Hyperlegible-Regular-102.ttf", 24);
+	ImFontConfig font_config;
+	font_config.GlyphExtraSpacing.x = -1.5;
+
+	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Jost-Regular.ttf", 30, &font_config);
 
 	DXGI_SWAP_CHAIN_DESC desc;
 	swapchain->GetDesc(&desc);
@@ -145,10 +211,22 @@ void Menu::DrawSettings()
 
 	ImGui::DockSpaceOverViewport(NULL, ImGuiDockNodeFlags_PassthruCentralNode);
 
-	ImGui::SetNextWindowSize({ 1000, 1000 }, ImGuiCond_FirstUseEver);
-	ImGui::SetNextWindowPos({ 0, 0 }, ImGuiCond_FirstUseEver);
-	if (ImGui::Begin(std::format("Skyrim Community Shaders {}", Plugin::VERSION.string(".")).c_str(), &IsEnabled)) {
-		ImGui::PushStyleColor(ImGuiCol_Text, TextColor);
+	ImGui::SetNextWindowPos(ImGui::GetNativeViewportSizeScaled(0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSize(ImGui::GetNativeViewportSizeScaled(0.8f), ImGuiCond_FirstUseEver);
+
+	ImGui::Begin("##Main", &IsEnabled, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
+	{
+		ImGui::Spacing(2);
+		ImGui::TextUnformatted(std::format("Skyrim Community Shaders {}", Plugin::VERSION.string(".")).c_str());
+		ImGui::SameLine(ImGui::GetWindowWidth() - 70);
+		if (ImGui::Button("X", ImVec2(50, 0))) {
+			IsEnabled = false;
+		}
+
+		ImGui::Spacing(2);
+		ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
+		ImGui::Spacing(2);
+
 		auto& shaderCache = SIE::ShaderCache::Instance();
 
 		if (ImGui::BeginTable("##LeButtons", 4, ImGuiTableFlags_SizingStretchSame)) {
@@ -209,11 +287,13 @@ void Menu::DrawSettings()
 			ImGui::EndTable();
 		}
 
-		ImGui::Separator();
+		ImGui::Spacing(2);
+		ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
+		ImGui::Spacing(2);
 
 		if (ImGui::BeginTable("Menus Table", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
-			ImGui::TableSetupColumn("##ListOfMenus", 0, 3);
-			ImGui::TableSetupColumn("##MenuConfig", 0, 7);
+			ImGui::TableSetupColumn("##ListOfMenus", 0, 2);
+			ImGui::TableSetupColumn("##MenuConfig", 0, 8);
 
 			static size_t selectedMenu = 0;
 
@@ -235,7 +315,7 @@ void Menu::DrawSettings()
 				}
 				void operator()(const std::string& label)
 				{
-					ImGui::Text(label.c_str());
+					ImGui::SeparatorText(label.c_str());
 				}
 				void operator()(Feature* feat)
 				{
@@ -256,7 +336,11 @@ void Menu::DrawSettings()
 			{
 				void operator()(const BuiltInMenu& menu)
 				{
+					ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
+					ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4());
 					if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
+						ImGui::PopStyleVar();
+						ImGui::PopStyleColor();
 						menu.func();
 					}
 					ImGui::EndChild();
@@ -276,8 +360,11 @@ void Menu::DrawSettings()
 							"Restores the feature's settings back to their default values. "
 							"You will still need to Save Settings to make these changes permanent. ");
 					}
-
+					ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
+					ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4());
 					if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
+						ImGui::PopStyleVar();
+						ImGui::PopStyleColor();
 						feat->DrawSettings();
 					}
 					ImGui::EndChild();
@@ -296,19 +383,19 @@ void Menu::DrawSettings()
 				BuiltInMenu{ " True PBR ", []() { TruePBR::GetSingleton()->DrawSettings(); } },
 				BuiltInMenu{ " Streamline ", []() { Streamline::GetSingleton()->DrawSettings(); } },
 				BuiltInMenu{ " Upscaling ", []() { Upscaling::GetSingleton()->DrawSettings(); } },
-				"-----Features-----"s
+				"Features"s
 			};
 			std::ranges::copy(sortedList, std::back_inserter(menuList));
 
 			ImGui::TableNextColumn();
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+			ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4());
 			if (ImGui::BeginListBox("##MenusList", { -FLT_MIN, -FLT_MIN })) {
-				ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));  // Selected feature header color
-
+				ImGui::PopStyleVar();
+				ImGui::PopStyleColor();
 				for (size_t i = 0; i < menuList.size(); i++) {
 					std::visit(ListMenuVisitor{ i }, menuList[i]);
 				}
-
-				ImGui::PopStyleColor();
 				ImGui::EndListBox();
 			}
 
@@ -322,10 +409,9 @@ void Menu::DrawSettings()
 
 			ImGui::EndTable();
 		}
-		ImGui::PopStyleColor(1);
 	}
-
 	ImGui::End();
+
 	ImGuiStyle& style = ImGui::GetStyle();
 	style = oldStyle;
 
@@ -642,7 +728,6 @@ void Menu::DrawOverlay()
 
 		ImGui::End();
 	} else if (failed) {
-		TextColor = ImVec4{ 1.0f, 0.0f, 0.0f, 1.0f };
 		if (!hide) {
 			ImGui::SetNextWindowBgAlpha(1);
 			ImGui::SetNextWindowPos(ImVec2(10, 10));
@@ -651,12 +736,9 @@ void Menu::DrawOverlay()
 				return;
 			}
 
-			ImGui::TextColored(TextColor, "ERROR: %d shaders failed to compile. Check installation and CommunityShaders.log", failed, totalShaders);
+			ImGui::TextColored(ImVec4{ 1.0f, 0.0f, 0.0f, 1.0f }, "ERROR: %d shaders failed to compile. Check installation and CommunityShaders.log", failed, totalShaders);
 			ImGui::End();
 		}
-	} else {
-		// Done compiling with no failures
-		TextColor = ImVec4{ 1.0f, 1.0f, 1.0f, 1.0f };
 	}
 
 	if (IsEnabled) {
