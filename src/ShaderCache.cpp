@@ -1416,7 +1416,7 @@ namespace SIE
 					descriptor);
 			} else {
 				std::array<size_t, 3> bufferSizes = { 0, 0, 0 };
-				std::fill(newShader->constantTable.begin(), newShader->constantTable.end(), 0);
+				std::fill(newShader->constantTable.begin(), newShader->constantTable.end(), static_cast<uint8_t>(0));
 				ReflectConstantBuffers(*reflector.get(), bufferSizes, newShader->constantTable, newShader->shaderDesc,
 					ShaderClass::Vertex, descriptor, shader);
 				if (bufferSizes[0] != 0) {
