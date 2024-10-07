@@ -100,7 +100,7 @@ void Streamline::Initialize()
 		logger::critical("[Streamline] Failed to initialize Streamline");
 	} else {
 		initialized = true;
-		logger::info("[Streamline] Sucessfully initialized Streamline");
+		logger::info("[Streamline] Successfully initialized Streamline");
 	}
 }
 
@@ -150,6 +150,7 @@ HRESULT Streamline::CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter,
 	D3D_FEATURE_LEVEL* pFeatureLevel,
 	ID3D11DeviceContext** ppImmediateContext)
 {
+	logger::info("[Streamline] Creating Device and Swapchain");
 	DXGI_ADAPTER_DESC adapterDesc;
 	pAdapter->GetDesc(&adapterDesc);
 
@@ -271,7 +272,7 @@ void Streamline::SetupResources()
 		}
 	}
 
-	if (featureDLSS || featureDLSSG && !REL::Module::IsVR()) {
+	if (featureDLSS || (featureDLSSG && !REL::Module::IsVR())) {
 		logger::info("[Streamline] Creating resources");
 
 		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -547,6 +548,7 @@ void Streamline::UpdateConstants()
 
 	if (SL_FAILED(res, slGetNewFrameToken(frameToken, nullptr))) {
 		logger::error("[Streamline] Could not get frame token");
+		return;
 	}
 
 	if (SL_FAILED(res, slSetConstants(slConstants, *frameToken, viewport))) {

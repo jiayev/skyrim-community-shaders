@@ -111,7 +111,11 @@ public:
 	{
 		static void thunk(bool a1)
 		{
-			GetSingleton()->UpdateConstants();
+			auto state = State::GetSingleton();
+			if (!state->isVR || !state->upscalerLoaded) {
+				// With upscaler, VR hangs on this function, specifically at slSetConstants
+				GetSingleton()->UpdateConstants();
+			}
 			func(a1);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
