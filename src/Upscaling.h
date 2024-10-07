@@ -72,7 +72,7 @@ public:
 		{
 			auto singleton = GetSingleton();
 			auto upscaleMode = singleton->GetUpscaleMode();
-			if ((upscaleMode != UpscaleMode::kTAA || upscaleMode != UpscaleMode::kNONE) && singleton->validTaaPass)
+			if ((upscaleMode != UpscaleMode::kTAA && upscaleMode != UpscaleMode::kNONE) && singleton->validTaaPass)
 				singleton->Upscale();
 			else
 				func(a_shader, a_null);
