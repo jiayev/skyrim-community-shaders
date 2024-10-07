@@ -26,7 +26,7 @@ void Streamline::DrawSettings()
 {
 	auto state = State::GetSingleton();
 	if (!state->isVR) {
-		if (ImGui::CollapsingHeader("Streamline", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
+		if (ImGui::CollapsingHeader("Streamline", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 			if (ImGui::TreeNodeEx("NVIDIA DLSS Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
 				if (featureDLSSG) {
 					ImGui::Text("Frame Generation uses a D3D11 to D3D12 proxy which can create compatibility issues");

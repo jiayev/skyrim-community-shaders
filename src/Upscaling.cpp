@@ -23,7 +23,7 @@ void Upscaling::DrawSettings()
 	settings.upscaleMode = bTAA ? (settings.upscaleMode == (uint)UpscaleMode::kNONE ? (uint)UpscaleMode::kTAA : settings.upscaleMode) : (uint)UpscaleMode::kNONE;
 
 	// Display upscaling options in the UI
-	if (ImGui::CollapsingHeader("Upscaling", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
+	if (ImGui::CollapsingHeader("Upscaling", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 		const char* upscaleModes[] = { "Disabled", "Temporal Anti-Aliasing", "AMD FSR 3.1", "NVIDIA DLAA" };
 
 		// Determine available modes

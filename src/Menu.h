@@ -63,9 +63,12 @@ private:
 
 	std::chrono::steady_clock::time_point lastTestSwitch = high_resolution_clock::now();  // Time of last test switch
 
-	Menu() {}
+	Menu() = default;
 	const char* KeyIdToString(uint32_t key);
 	const ImGuiKey VirtualKeyToImGuiKey(WPARAM vkKey);
+
+	void DrawGeneralSettings();
+	void DrawAdvancedSettings();
 
 	class CharEvent : public RE::InputEvent
 	{
