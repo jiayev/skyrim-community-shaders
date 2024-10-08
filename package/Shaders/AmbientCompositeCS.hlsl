@@ -39,7 +39,7 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 	uv = VR::ConvertFromStereoUV(uv, eyeIndex);
 
 	half3 normalGlossiness = NormalRoughnessTexture[dispatchID.xy];
-	half3 normalVS = DecodeNormal(normalGlossiness.xy);
+	half3 normalVS = GBuffer::DecodeNormal(normalGlossiness.xy);
 
 	half3 diffuseColor = MainRW[dispatchID.xy];
 	half3 albedo = AlbedoTexture[dispatchID.xy];

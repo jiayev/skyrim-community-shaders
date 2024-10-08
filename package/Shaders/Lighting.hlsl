@@ -2676,13 +2676,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(TRUE_PBR)
 	psout.Reflectance = float4(indirectSpecularLobeWeight, psout.Diffuse.w);
-	psout.NormalGlossiness = float4(EncodeNormal(screenSpaceNormal), pbrGlossiness, psout.Diffuse.w);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), pbrGlossiness, psout.Diffuse.w);
 #		elif defined(WETNESS_EFFECTS)
 	psout.Reflectance = float4(wetnessReflectance, psout.Diffuse.w);
-	psout.NormalGlossiness = float4(EncodeNormal(screenSpaceNormal), lerp(outGlossiness, 1.0, wetnessGlossinessSpecular), psout.Diffuse.w);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), lerp(outGlossiness, 1.0, wetnessGlossinessSpecular), psout.Diffuse.w);
 #		else
 	psout.Reflectance = float4(0.0.xxx, psout.Diffuse.w);
-	psout.NormalGlossiness = float4(EncodeNormal(screenSpaceNormal), outGlossiness, psout.Diffuse.w);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), outGlossiness, psout.Diffuse.w);
 #		endif
 
 	psout.Parameters.w = psout.Diffuse.w;

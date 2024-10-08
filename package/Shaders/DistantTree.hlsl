@@ -247,7 +247,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	psout.MotionVector = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 
-	psout.Normal.xy = EncodeNormal(FrameBuffer::WorldToView(normal, false, eyeIndex));
+	psout.Normal.xy = GBuffer::EncodeNormal(FrameBuffer::WorldToView(normal, false, eyeIndex));
 	psout.Normal.zw = 0;
 
 	psout.Albedo = float4(baseColor.xyz, 1);

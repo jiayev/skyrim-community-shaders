@@ -90,7 +90,7 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 	float depth = READ_DEPTH(srcDepth, dtid);
 	float3 pos = ScreenToViewPosition(screenPos, depth, eyeIndex);
 	float4 normalRoughness = FULLRES_LOAD(srcNormalRoughness, dtid, uv, samplerLinearClamp);
-	float3 normal = DecodeNormal(normalRoughness.xy);
+	float3 normal = GBuffer::DecodeNormal(normalRoughness.xy);
 #ifdef SPECULAR_BLUR
 	float roughness = 1 - normalRoughness.z;
 #endif
@@ -144,7 +144,7 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 		float3 posSample = ScreenToViewPosition(screenPosSample, depthSample, eyeIndex);
 
 		float4 normalRoughnessSample = srcNormalRoughness.SampleLevel(samplerLinearClamp, uvSample * frameScale, 0);
-		float3 normalSample = DecodeNormal(normalRoughnessSample.xy);
+		float3 normalSample = GBuffer::DecodeNormal(normalRoughnessSample.xy);
 #ifdef SPECULAR_BLUR
 		float roughnessSample = 1 - normalRoughnessSample.z;
 #endif

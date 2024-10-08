@@ -34,7 +34,7 @@ void readHistory(
 
 	const half3 prev_geo = srcPrevGeo[pixCoord];
 	const float prev_depth = prev_geo.x;
-	// const float3 prev_normal = DecodeNormal(prev_geo.yz);  // prev normal is already world
+	// const float3 prev_normal = GBuffer::DecodeNormal(prev_geo.yz);  // prev normal is already world
 	float3 prev_pos = ScreenToViewPosition(screen_pos, prev_depth, eyeIndex);
 	prev_pos = ViewToWorldPosition(prev_pos, PrevInvViewMat[eyeIndex]) + CameraPreviousPosAdjust[eyeIndex];
 
@@ -91,7 +91,7 @@ void readHistory(
 
 #ifdef REPROJECTION
 	if ((curr_depth <= DepthFadeRange.y) && !(any(prev_screen_pos < 0) || any(prev_screen_pos > 1))) {
-		// float3 curr_normal = DecodeNormal(srcCurrNormal[pixCoord]);
+		// float3 curr_normal = GBuffer::DecodeNormal(srcCurrNormal[pixCoord]);
 		// curr_normal = ViewToWorldVector(curr_normal, CameraViewInverse[eyeIndex]);
 		float3 curr_pos = ScreenToViewPosition(screen_pos, curr_depth, eyeIndex);
 		curr_pos = ViewToWorldPosition(curr_pos, CameraViewInverse[eyeIndex]) + CameraPosAdjust[eyeIndex];

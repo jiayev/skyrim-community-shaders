@@ -48,7 +48,7 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 	uv = VR::ConvertFromStereoUV(uv, eyeIndex);
 
 	half3 normalGlossiness = NormalRoughnessTexture[dispatchID.xy];
-	half3 normalVS = DecodeNormal(normalGlossiness.xy);
+	half3 normalVS = GBuffer::DecodeNormal(normalGlossiness.xy);
 
 	half3 diffuseColor = MainRW[dispatchID.xy];
 	half3 specularColor = SpecularTexture[dispatchID.xy];
@@ -162,6 +162,6 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 #endif
 
 	MainRW[dispatchID.xy] = min(color, 250);  // Vanilla bloom fix
-	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = half4(EncodeNormalVanilla(normalVS), 0.0, 0.0);
+	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = half4(GBuffer::EncodeNormalVanilla(normalVS), 0.0, 0.0);
 	SnowParametersRW[dispatchID.xy] = snowParameters;
 }

@@ -213,7 +213,7 @@ void CalculateGI(
 
 					// IL
 					float frontBackMult = 1.f;
-					float3 normalSample = DecodeNormal(srcNormalRoughness.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).xy);
+					float3 normalSample = GBuffer::DecodeNormal(srcNormalRoughness.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).xy);
 					if (dot(normalSample, sampleHorizonVec) > 0)  // backface
 						frontBackMult = BackfaceStrength;
 
@@ -307,9 +307,9 @@ void CalculateGI(
 	float viewspaceZ = READ_DEPTH(srcWorkingDepth, pxCoord);
 
 	float2 normalSample = FULLRES_LOAD(srcNormalRoughness, pxCoord, uv * frameScale, samplerLinearClamp).xy;
-	float3 viewspaceNormal = DecodeNormal(normalSample);
+	float3 viewspaceNormal = GBuffer::DecodeNormal(normalSample);
 
-	half2 encodedWorldNormal = EncodeNormal(ViewToWorldVector(viewspaceNormal, CameraViewInverse[eyeIndex]));
+	half2 encodedWorldNormal = GBuffer::EncodeNormal(ViewToWorldVector(viewspaceNormal, CameraViewInverse[eyeIndex]));
 	outPrevGeo[pxCoord] = half3(viewspaceZ, encodedWorldNormal);
 
 	// Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used
@@ -347,6 +347,6 @@ void CalculateGI(
 	outGISpecular[pxCoord] = currGIAOSpecular;
 #endif
 #ifdef BENT_NORMAL
-	outBentNormal[pxCoord] = EncodeNormal(bentNormal);
+	outBentNormal[pxCoord] = GBuffer::EncodeNormal(bentNormal);
 #endif
 }

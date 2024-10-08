@@ -755,7 +755,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			else
 	float3 screenSpaceNormal = normalize(input.ScreenSpaceNormal);
 #			endif
-	psout.NormalGlossiness = float4(EncodeNormal(screenSpaceNormal), 0.0, psout.Diffuse.w);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), 0.0, psout.Diffuse.w);
 	float2 screenMotionVector = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 	psout.MotionVectors = float4(screenMotionVector, 0.0, psout.Diffuse.w);
 #		endif
