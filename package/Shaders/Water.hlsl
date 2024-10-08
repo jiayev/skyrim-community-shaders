@@ -563,17 +563,17 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 
 			if (skylightingSpecular < 1.0) {
 				specularIrradiance = specularTextureNoReflections.SampleLevel(CubeMapSampler, R, 0).xyz;
-				specularIrradiance = GammaToLinear(specularIrradiance);
+				specularIrradiance = Color::GammaToLinear(specularIrradiance);
 			}
 
 			float3 specularIrradianceReflections = 1.0;
 
 			if (skylightingSpecular > 0.0) {
 				specularIrradianceReflections = specularTexture.SampleLevel(CubeMapSampler, R, 0).xyz;
-				specularIrradianceReflections = GammaToLinear(specularIrradianceReflections);
+				specularIrradianceReflections = Color::GammaToLinear(specularIrradianceReflections);
 			}
 
-			float3 dynamicCubemap = LinearToGamma(lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular));
+			float3 dynamicCubemap = Color::LinearToGamma(lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular));
 #				else
 			float3 dynamicCubemap = specularTexture.SampleLevel(CubeMapSampler, R, 0);
 #				endif
@@ -731,7 +731,7 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 		skylighting = lerp(1.0, skylighting, Skylighting::getFadeOutFactor(input.WPosition));
 
 		float3 refractionDiffuseColorSkylight = Skylighting::mixDiffuse(skylightingSettings, skylighting);
-		refractionDiffuseColorSkylight = LinearToGamma(GammaToLinear(refractionDiffuseColor) * refractionDiffuseColorSkylight);
+		refractionDiffuseColorSkylight = Color::LinearToGamma(Color::GammaToLinear(refractionDiffuseColor) * refractionDiffuseColorSkylight);
 #				endif
 	}
 
@@ -902,8 +902,8 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 	float specularFraction = lerp(1, fresnel * depthControl.x, 1);
-	float3 finalColorPreFog = lerp(GammaToLinear(diffuseColor), GammaToLinear(specularColor), specularFraction) + GammaToLinear(sunColor) * depthControl.w;
-	finalColorPreFog = LinearToGamma(finalColorPreFog);
+	float3 finalColorPreFog = lerp(Color::GammaToLinear(diffuseColor), Color::GammaToLinear(specularColor), specularFraction) + Color::GammaToLinear(sunColor) * depthControl.w;
+	finalColorPreFog = Color::LinearToGamma(finalColorPreFog);
 	float3 finalColor = lerp(finalColorPreFog, input.FogParam.xyz, input.FogParam.w);
 #				endif
 #			endif

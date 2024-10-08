@@ -63,7 +63,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 		sssColor += iterationParameters[iterationIndex].xyz * lerp(iterationSourceColor, sourceColor, iterationDiffuseFactor);
 	}
-	float sssLuminance = RGBToLuminanceAlternative(sssColor);
+	float sssLuminance = Color::RGBToLuminanceAlternative(sssColor);
 	float3 darkColor = max(0, lerp(g_SSSDarkColor.xyz * g_SSSDarkColor.w, sourceColor, sssLuminance));
 	float3 snowColor = lerp(darkColor, sssColor, sssLuminance);
 

@@ -554,7 +554,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 albedo = max(0, baseColor.xyz * input.VertexColor.xyz);
 
-	float3 subsurfaceColor = lerp(RGBToLuminance(albedo.xyz), albedo.xyz, 2.0) * input.SphereNormal.w;
+	float3 subsurfaceColor = lerp(Color::RGBToLuminance(albedo.xyz), albedo.xyz, 2.0) * input.SphereNormal.w;
 
 	float3 sss = dirLightColor * saturate(-dirLightAngle);
 
@@ -620,8 +620,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	diffuseColor.xyz += transmissionColor;
 	specularColor.xyz += specularColorPBR;
-	specularColor.xyz = LinearToGamma(specularColor.xyz);
-	diffuseColor.xyz = LinearToGamma(diffuseColor.xyz);
+	specularColor.xyz = Color::LinearToGamma(specularColor.xyz);
+	diffuseColor.xyz = Color::LinearToGamma(diffuseColor.xyz);
 #			else
 
 #				if !defined(SSGI)
@@ -639,9 +639,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	skylighting = lerp(1.0, skylighting, Skylighting::getFadeOutFactor(input.WPosition));
 	skylighting = Skylighting::mixDiffuse(skylightingSettings, skylighting);
 
-	directionalAmbientColor = GammaToLinear(directionalAmbientColor) / LightPreMult;
+	directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor) / Color::LightPreMult;
 	directionalAmbientColor *= skylighting;
-	directionalAmbientColor = LinearToGamma(directionalAmbientColor * LightPreMult);
+	directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor * Color::LightPreMult);
 #					endif  // SKYLIGHTING
 
 	diffuseColor += directionalAmbientColor;
@@ -672,7 +672,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 normalVS = normalize(WorldToView(normal, false, eyeIndex));
 #			if defined(TRUE_PBR)
-	psout.Albedo = float4(LinearToGamma(indirectDiffuseLobeWeight * AlbedoPreMult), 1);
+	psout.Albedo = float4(Color::LinearToGamma(indirectDiffuseLobeWeight * Color::AlbedoPreMult), 1);
 	psout.NormalGlossiness = float4(EncodeNormal(normalVS), 1 - pbrSurfaceProperties.Roughness, 1);
 	psout.Reflectance = float4(indirectSpecularLobeWeight, 1);
 	psout.Parameters = float4(0, 0, 1, 1);

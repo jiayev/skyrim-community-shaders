@@ -85,14 +85,13 @@ cbuffer PerFrame3 : register(b2)
 	float4x3 FocusShadowMapProj[4] : packoffset(c4);
 	float4x3 ShadowMapProj[1][3] : packoffset(c16);  // 16, 19, 22
 #else
-	float4 VRUnknown : packoffset(c4);                    // used to multiply by identity matrix, see e.g., 4202499.ps.bin.hlsl
-														  /*
-										r1.x = dot(cb2[4].xz, icb[r0.w+0].xz);
-										r1.x = r0.x * cb12[86].x + -r1.x;
-										r0.w = (int)r0.w + 1;
-										r0.w = (int)r0.w + -1;
-										r0.w = dot(cb2[4].yw, icb[r0.w+0].xz);
-										*/
+	float4 VRUnknown : packoffset(c4); /* used to multiply by identity matrix, see e.g., 4202499.ps.bin.hlsl
+									   r1.x = dot(cb2[4].xz, icb[r0.w+0].xz);
+									   r1.x = r0.x * cb12[86].x + -r1.x;
+									   r0.w = (int)r0.w + 1;
+									   r0.w = (int)r0.w + -1;
+									   r0.w = dot(cb2[4].yw, icb[r0.w+0].xz);
+									   */
 	float4x3 FocusShadowMapProj[4] : packoffset(c5);
 	float4x3 ShadowMapProj[2][3] : packoffset(c29);  // VR has a couple of offsets of 3, e.g., {29, 32, 35} and {38, 41, 44}, compare to Flat which does [16, 19, 22]
 #endif  // VR

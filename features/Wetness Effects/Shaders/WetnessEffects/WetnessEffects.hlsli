@@ -146,7 +146,7 @@ namespace WetnessEffects
 		float3 specularIrradiance = 1.0;
 #	else
 		float level = roughness * 7.0;
-		float3 specularIrradiance = GammaToLinear(specularTexture.SampleLevel(SampColorSampler, R, level));
+		float3 specularIrradiance = Color::GammaToLinear(specularTexture.SampleLevel(SampColorSampler, R, level));
 #	endif
 #else
 		float3 specularIrradiance = 1.0;

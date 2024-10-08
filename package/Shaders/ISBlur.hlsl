@@ -63,7 +63,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 #	if defined(BRIGHTPASS)
-	float avgLum = RGBToLuminance(AvgLumTex.Sample(AvgLumSampler, input.TexCoord.xy).xyz);
+	float avgLum = Color::RGBToLuminance(AvgLumTex.Sample(AvgLumSampler, input.TexCoord.xy).xyz);
 	color.w = avgLum;
 #	endif
 

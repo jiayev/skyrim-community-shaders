@@ -45,7 +45,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 colorResulting = refractedMask != 0 ? colorRefracted : colorOriginal;
 
 	if (normalOriginal.w > 0.8 && normalOriginal.w < 1) {
-		psout.Color.xyz = lerp(colorResulting.xyz, Tint.xyz * RGBToLuminance2(colorRefracted.xyz), Tint.w);
+		psout.Color.xyz = lerp(colorResulting.xyz, Tint.xyz * Color::RGBToLuminance2(colorRefracted.xyz), Tint.w);
 	} else {
 		psout.Color.xyz = colorResulting.xyz;
 	}

@@ -41,7 +41,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(DYNAMIC_SOURCE)
 		downsampledColor += sourceColor;
 #	else
-		float sampleLuminance = RGBToLuminanceAlternative(sourceColor.xyz);
+		float sampleLuminance = Color::RGBToLuminanceAlternative(sourceColor.xyz);
 		if (sampleLuminance > luminance) {
 			downsampledColor = sourceColor;
 			luminance = sampleLuminance;

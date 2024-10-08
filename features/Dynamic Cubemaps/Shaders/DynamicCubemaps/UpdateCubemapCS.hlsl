@@ -168,7 +168,7 @@ float smoothbumpstep(float edge0, float edge1, float x)
 
 		if (linearDepth > 16.5) {  // Ignore objects which are too close
 			float3 color = ColorTexture.SampleLevel(LinearSampler, uv, 0);
-			float4 output = float4(GammaToLinear(color), 1.0);
+			float4 output = float4(Color::GammaToLinear(color), 1.0);
 			float lerpFactor = 1.0 / 64.0;
 
 			half4 positionCS = half4(2 * half2(uv.x, -uv.y + 1) - 1, depth, 1);

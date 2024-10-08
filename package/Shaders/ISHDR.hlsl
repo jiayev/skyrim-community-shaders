@@ -48,7 +48,7 @@ float GetTonemapFactorHejlBurgessDawson(float luminance)
 {
 	float tmp = max(0, luminance - 0.004);
 	return Param.y *
-	       pow(((tmp * 6.2 + 0.5) * tmp) / (tmp * (tmp * 6.2 + 1.7) + 0.06), GammaCorrectionValue);
+	       pow(((tmp * 6.2 + 0.5) * tmp) / (tmp * (tmp * 6.2 + 1.7) + 0.06), Color::GammaCorrectionValue);
 }
 
 PS_OUTPUT main(PS_INPUT input)
@@ -65,7 +65,7 @@ PS_OUTPUT main(PS_INPUT input)
 		}
 		float3 imageColor = ImageTex.Sample(ImageSampler, texCoord).xyz;
 #		if defined(RGB2LUM)
-		imageColor = RGBToLuminance(imageColor);
+		imageColor = Color::RGBToLuminance(imageColor);
 #		elif (defined(LUM) || defined(LUMCLAMP)) && !defined(DOWNADAPT)
 		imageColor = imageColor.x;
 #		endif
@@ -103,7 +103,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 gameSdrColor = 0.0;
 	float3 ppColor = 0.0;
 	{
-		float luminance = max(1e-5, RGBToLuminance(inputColor));
+		float luminance = max(1e-5, Color::RGBToLuminance(inputColor));
 		float exposureAdjustedLuminance = (avgValue.y / avgValue.x) * luminance;
 		float blendFactor;
 		if (Param.z > 0.5) {
@@ -117,7 +117,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 		gameSdrColor = blendedColor;
 
-		float blendedLuminance = RGBToLuminance(blendedColor);
+		float blendedLuminance = Color::RGBToLuminance(blendedColor);
 
 		float3 linearColor = Cinematic.w * lerp(lerp(blendedLuminance, float4(blendedColor, 1), Cinematic.x), blendedLuminance * Tint, Tint.w);
 
