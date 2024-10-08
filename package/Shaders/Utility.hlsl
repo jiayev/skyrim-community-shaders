@@ -381,7 +381,7 @@ float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatri
 
 	float visibility = 0;
 	for (int sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
-		float2 sampleOffset = mul(SpiralSampleOffsets8[sampleIndex], rotationMatrix);
+		float2 sampleOffset = mul(Random::SpiralSampleOffsets8[sampleIndex], rotationMatrix);
 		sampleOffset *= 1.5;
 
 #	if defined(RENDER_SHADOWMASKDPB)
@@ -448,7 +448,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 #	if defined(FOLIAGE)
-	float checkerboard = InterleavedGradientNoise(0, input.PositionCS.xy);
+	float checkerboard = Random::InterleavedGradientNoise(0, input.PositionCS.xy);
 	if (checkerboard > 0.75)
 		discard;
 #	endif
@@ -530,7 +530,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float fadeFactor = input.Alpha.x;
 #		endif
 
-	float noise = InterleavedGradientNoise(input.PositionCS.xy, FrameCount);
+	float noise = Random::InterleavedGradientNoise(input.PositionCS.xy, FrameCount);
 
 	float2 rotation;
 	sincos(M_2PI * noise, rotation.y, rotation.x);

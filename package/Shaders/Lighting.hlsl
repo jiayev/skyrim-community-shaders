@@ -1013,7 +1013,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
-	float screenNoise = InterleavedGradientNoise(input.Position.xy, FrameCount);
+	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, FrameCount);
 
 	bool inWorld = ExtraShaderDescriptor & _InWorld;
 
@@ -1821,7 +1821,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float puddle = wetness;
 	if (wetness > 0.0 || puddleWetness > 0) {
 #		if !defined(SKINNED)
-		puddle = perlinNoise(puddleCoords) * .5 + .5;
+		puddle = Random::perlinNoise(puddleCoords) * .5 + .5;
 		puddle = puddle * ((minWetnessAngle / wetnessEffectsSettings.PuddleMaxAngle) * wetnessEffectsSettings.MaxPuddleWetness * 0.25) + 0.5;
 		wetness = lerp(wetness, puddleWetness, saturate(puddle - 0.25));
 #		endif

@@ -109,7 +109,7 @@ namespace Skylighting
 		float3 worldDir = endPosWS - startPosWS;
 		float3 worldDirNormalised = normalize(worldDir);
 
-		float noise = InterleavedGradientNoise(pxCoord, FrameCount);
+		float noise = Random::InterleavedGradientNoise(pxCoord, FrameCount);
 
 		float vl = 0;
 
