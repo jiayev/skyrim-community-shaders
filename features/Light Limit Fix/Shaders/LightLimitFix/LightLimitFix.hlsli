@@ -65,7 +65,7 @@ namespace LightLimitFix
 				break;
 
 			// Compute the difference between the ray's and the camera's depth
-			float rayDepth = GetScreenDepth(rayUV, a_eyeIndex);
+			float rayDepth = SharedData::GetScreenDepth(rayUV, a_eyeIndex);
 
 			// Difference between the current ray distance and the marched light
 			float depthDelta = viewPosition.z - rayDepth;

@@ -185,9 +185,9 @@ float GetVL(float3 startPosWS, float3 endPosWS, float3 normal, float noise, inou
 	// Offset starting position
 	startPosWS += worldDir * stepSize * noise;
 
-	sD.EndSplitDistances.x = GetScreenDepth(sD.EndSplitDistances.x);
-	sD.EndSplitDistances.y = GetScreenDepth(sD.EndSplitDistances.y);
-	sD.StartSplitDistances.y = GetScreenDepth(sD.StartSplitDistances.y);
+	sD.EndSplitDistances.x = SharedData::GetScreenDepth(sD.EndSplitDistances.x);
+	sD.EndSplitDistances.y = SharedData::GetScreenDepth(sD.EndSplitDistances.y);
+	sD.StartSplitDistances.y = SharedData::GetScreenDepth(sD.StartSplitDistances.y);
 
 	float vlShadow = 0;
 

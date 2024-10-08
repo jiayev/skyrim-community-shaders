@@ -1044,8 +1044,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float depthSampled = TerrainBlending::GetTerrainOffsetDepth(screenUV, eyeIndex);
 	float depthComp = input.Position.z - depthSampled;
 
-	float depthSampledLinear = GetScreenDepth(depthSampled);
-	float depthPixelLinear = GetScreenDepth(input.Position.z);
+	float depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
+	float depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
 
 	float blendFactorTerrain = saturate((depthSampledLinear - depthPixelLinear) / 5.0);
 
@@ -1760,7 +1760,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	endif
 
-	float4 waterData = GetWaterData(input.WorldPosition.xyz);
+	float4 waterData = SharedData::GetWaterData(input.WorldPosition.xyz);
 	float waterHeight = waterData.w;
 
 	float waterRoughnessSpecular = 1;
