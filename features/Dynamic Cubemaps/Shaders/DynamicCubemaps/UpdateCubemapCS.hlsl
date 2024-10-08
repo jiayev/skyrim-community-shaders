@@ -164,7 +164,7 @@ float smoothbumpstep(float edge0, float edge1, float x)
 		uv = VR::ConvertToStereoUV(uv, 0);
 
 		float depth = DepthTexture.SampleLevel(LinearSampler, uv, 0);
-		float linearDepth = GetScreenDepth(depth);
+		float linearDepth = DeferredShared::GetScreenDepth(depth);
 
 		if (linearDepth > 16.5) {  // Ignore objects which are too close
 			float3 color = ColorTexture.SampleLevel(LinearSampler, uv, 0);
