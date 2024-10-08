@@ -74,7 +74,7 @@ cbuffer PerGeometry : register(b2)
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
-	uint eyeIndex = GetEyeIndexVS(
+	uint eyeIndex = VR::GetEyeIndexVS(
 #	if defined(VR)
 		input.InstanceID
 #	endif
@@ -139,7 +139,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	ifdef VR
 	vsout.EyeIndex = eyeIndex;
-	VR_OUTPUT VRout = GetVRVSOutput(vsout.Position, eyeIndex);
+	VR_OUTPUT VRout = VR::GetVRVSOutput(vsout.Position, eyeIndex);
 	vsout.Position = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;

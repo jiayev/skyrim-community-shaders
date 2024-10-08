@@ -166,7 +166,7 @@ VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
 
-	uint eyeIndex = GetEyeIndexVS(
+	uint eyeIndex = VR::GetEyeIndexVS(
 #		if defined(VR)
 		input.InstanceID
 #		endif
@@ -275,7 +275,7 @@ VS_OUTPUT main(VS_INPUT input)
 #		endif
 
 #		ifdef VR
-	VR_OUTPUT VRout = GetVRVSOutput(vsout.HPosition, eyeIndex);
+	VR_OUTPUT VRout = VR::GetVRVSOutput(vsout.HPosition, eyeIndex);
 	vsout.HPosition = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;
@@ -609,7 +609,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 			float fogDensity = depth == 0 ? 0.f : pow(saturate((-depth * FogParam.z + FogParam.z) / FogParam.w), FogNearColor.w);
 			float3 fogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogDensity);
 
-			bool validSSRMask = IsNonZeroColor(ssrReflectionColorRaw);
+			bool validSSRMask = VR::IsNonZeroColor(ssrReflectionColorRaw);
 
 			if (validSSRMask) {
 				// calculate blur on reflection
@@ -674,7 +674,7 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	float4 refractionNormal = mul(transpose(TextureProj[a_eyeIndex]), float4((VarAmounts.w * refractionsDepthFactor).xx * normal.xy + input.MPosition.xy, input.MPosition.z, 1));
 
 	float2 refractionUvRaw = float2(refractionNormal.x, refractionNormal.w - refractionNormal.y) / refractionNormal.ww;
-	refractionUvRaw = ConvertToStereoUV(refractionUvRaw, a_eyeIndex);  // need to convert here for VR due to refractionNormal values
+	refractionUvRaw = VR::ConvertToStereoUV(refractionUvRaw, a_eyeIndex);  // need to convert here for VR due to refractionNormal values
 
 	float2 screenPosition = DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy);
 	float depth = GetScreenDepthWater(screenPosition,
@@ -772,7 +772,7 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
-	uint eyeIndex = GetEyeIndexPS(input.HPosition, VPOSOffset);
+	uint eyeIndex = VR::GetEyeIndexPS(input.HPosition, VPOSOffset);
 	float2 screenPosition = DynamicResolutionParams1.xy * (DynamicResolutionParams2.xy * input.HPosition.xy);
 
 #		if defined(SIMPLE) || defined(UNDERWATER) || defined(LOD) || defined(SPECULAR)
@@ -800,7 +800,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float depthMul = length(float3((depthOffset * 2 - 1) * depth / ProjData.xy, depth));
 #					else
 	float VRDepth = GetScreenDepthWater(screenPosition, 1);  // VR uses special hardcoded depth for this calculation
-	float depthMul = calculateDepthMultfromUV(ConvertFromStereoUV(depthOffset, eyeIndex, 1), VRDepth, eyeIndex);
+	float depthMul = calculateDepthMultfromUV(VR::ConvertFromStereoUV(depthOffset, eyeIndex, 1), VRDepth, eyeIndex);
 #					endif  //VR
 	float3 depthAdjustedViewDirection = -viewDirection * depthMul;
 	float viewSurfaceAngle = dot(depthAdjustedViewDirection, ReflectPlane[eyeIndex].xyz);

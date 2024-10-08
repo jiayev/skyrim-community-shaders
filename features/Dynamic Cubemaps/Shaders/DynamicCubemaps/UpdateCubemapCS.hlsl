@@ -161,7 +161,7 @@ float smoothbumpstep(float edge0, float edge1, float x)
 		uv = saturate(uv);
 
 		uv = GetDynamicResolutionAdjustedScreenPosition(uv);
-		uv = ConvertToStereoUV(uv, 0);
+		uv = VR::ConvertToStereoUV(uv, 0);
 
 		float depth = DepthTexture.SampleLevel(LinearSampler, uv, 0);
 		float linearDepth = GetScreenDepth(depth);

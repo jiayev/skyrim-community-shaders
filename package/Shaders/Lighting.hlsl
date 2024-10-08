@@ -189,7 +189,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	precise float4 inputPosition = float4(input.Position.xyz, 1.0);
 
-	uint eyeIndex = GetEyeIndexVS(
+	uint eyeIndex = VR::GetEyeIndexVS(
 #	if defined(VR)
 		input.InstanceID
 #	endif
@@ -366,7 +366,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #	if defined(VR)
-	VR_OUTPUT VRout = GetVRVSOutput(vsout.Position, eyeIndex);
+	VR_OUTPUT VRout = VR::GetVRVSOutput(vsout.Position, eyeIndex);
 	vsout.Position = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;
@@ -1009,7 +1009,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			   : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;
-	uint eyeIndex = GetEyeIndexPS(input.Position, VPOSOffset);
+	uint eyeIndex = VR::GetEyeIndexPS(input.Position, VPOSOffset);
 
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
