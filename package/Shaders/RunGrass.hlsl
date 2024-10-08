@@ -447,7 +447,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 normal = normalize(input.VertexNormal.xyz);
 
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
-	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
+	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = InterleavedGradientNoise(input.HPosition.xy, FrameCount);
 
 	// Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
@@ -670,7 +670,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	psout.Diffuse.xyz = float4(diffuseColor, 1);
 #			endif
 
-	float3 normalVS = normalize(WorldToView(normal, false, eyeIndex));
+	float3 normalVS = normalize(FrameBuffer::WorldToView(normal, false, eyeIndex));
 #			if defined(TRUE_PBR)
 	psout.Albedo = float4(Color::LinearToGamma(indirectDiffuseLobeWeight * Color::AlbedoPreMult), 1);
 	psout.NormalGlossiness = float4(EncodeNormal(normalVS), 1 - pbrSurfaceProperties.Roughness, 1);
@@ -725,7 +725,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Diffuse.w = 1;
 
 	psout.MotionVectors = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, 0);
-	psout.Normal.xy = EncodeNormal(WorldToView(normal, false, 0));
+	psout.Normal.xy = EncodeNormal(FrameBuffer::WorldToView(normal, false, 0));
 	psout.Normal.zw = 0;
 
 	psout.Albedo = float4(albedo, 1);

@@ -50,7 +50,7 @@ PS_OUTPUT main(PS_INPUT input)
 		float4 imageColor = 0;
 		[branch] if (BlurScale.x < 0.5)
 		{
-			imageColor = GetImageColor(GetDynamicResolutionAdjustedScreenPosition(screenPosition), blurScale.y);
+			imageColor = GetImageColor(FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(screenPosition), blurScale.y);
 		}
 		else
 		{

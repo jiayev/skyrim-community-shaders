@@ -78,8 +78,8 @@ float smoothbumpstep(float edge0, float edge1, float x)
 [numthreads(8, 8, 1)] void main(uint3 ThreadID
 								: SV_DispatchThreadID) {
 	float3 captureDirection = -GetSamplingVector(ThreadID, DynamicCubemap);
-	float3 viewDirection = WorldToView(captureDirection, false);
-	float2 uv = ViewToUV(viewDirection, false);
+	float3 viewDirection = FrameBuffer::WorldToView(captureDirection, false);
+	float2 uv = FrameBuffer::ViewToUV(viewDirection, false);
 
 	if (Reset) {
 		DynamicCubemap[ThreadID] = 0.0;
@@ -160,7 +160,7 @@ float smoothbumpstep(float edge0, float edge1, float x)
 		uv += (PoissonDisc[FrameCountAlwaysActive % 64] * 2.0 - 1.0) * BufferDim.zw * max(1.0, float2(BufferDim.x / 128.0, BufferDim.y / 128.0)) * 0.5;
 		uv = saturate(uv);
 
-		uv = GetDynamicResolutionAdjustedScreenPosition(uv);
+		uv = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(uv);
 		uv = VR::ConvertToStereoUV(uv, 0);
 
 		float depth = DepthTexture.SampleLevel(LinearSampler, uv, 0);

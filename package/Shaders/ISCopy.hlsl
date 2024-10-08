@@ -29,7 +29,7 @@ PS_OUTPUT main(PS_INPUT input)
 	PS_OUTPUT psout;
 
 #	if !defined(DISABLE_DYNAMIC)
-	float2 screenPosition = GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
+	float2 screenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 #	else
 	float2 screenPosition = input.TexCoord;
 #	endif

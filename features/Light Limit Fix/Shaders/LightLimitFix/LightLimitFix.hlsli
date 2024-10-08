@@ -58,7 +58,7 @@ namespace LightLimitFix
 			// Step the ray
 			viewPosition += lightDirectionVS;
 
-			float2 rayUV = ViewToUV(viewPosition, true, a_eyeIndex);
+			float2 rayUV = FrameBuffer::ViewToUV(viewPosition, true, a_eyeIndex);
 
 			// Ensure the UV coordinates are inside the screen
 			if (!IsSaturated(rayUV))

@@ -33,7 +33,7 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 	uint eyeIndex = VR::GetEyeIndexFromTexCoord(input.TexCoord);
-	float2 adjustedScreenPosition = GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
+	float2 adjustedScreenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 	float waterMask = waterMaskTex.Sample(waterMaskSampler, adjustedScreenPosition).z;
 	if (waterMask < 1e-4) {
 		discard;
@@ -43,7 +43,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 motion = motionBufferTex.Sample(motionBufferSampler, adjustedScreenPosition).xy;
 	float2 motionScreenPosition = VR::ConvertToStereoUV(VR::ConvertFromStereoUV(input.TexCoord, eyeIndex) + motion, eyeIndex);
 	float2 motionAdjustedScreenPosition =
-		GetPreviousDynamicResolutionAdjustedScreenPosition(motionScreenPosition);
+		FrameBuffer::GetPreviousDynamicResolutionAdjustedScreenPosition(motionScreenPosition);
 	float4 waterHistory =
 		waterHistoryTex.Sample(waterHistorySampler, motionAdjustedScreenPosition).xyzw;
 

@@ -61,7 +61,7 @@ PS_OUTPUT main(PS_INPUT input)
 		float2 texCoord = BlurOffsets[sampleIndex].xy * BlurScale.xy + input.TexCoord;
 		[branch] if (Flags.x > 0.5)
 		{
-			texCoord = GetDynamicResolutionAdjustedScreenPosition(texCoord);
+			texCoord = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(texCoord);
 		}
 		float3 imageColor = ImageTex.Sample(ImageSampler, texCoord).xyz;
 #		if defined(RGB2LUM)
@@ -86,7 +86,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color = float4(downsampledColor, BlurScale.z);
 
 #	elif defined(BLEND)
-	float2 uv = GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
+	float2 uv = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 
 	float3 inputColor = BlendTex.Sample(BlendSampler, uv).xyz;
 
@@ -135,7 +135,7 @@ PS_OUTPUT main(PS_INPUT input)
 	srgbColor = lerp(srgbColor, Fade.xyz, Fade.w);
 #		endif
 
-	srgbColor = ToSRGBColor(srgbColor);
+	srgbColor = FrameBuffer::ToSRGBColor(srgbColor);
 
 	psout.Color = float4(srgbColor, 1.0);
 

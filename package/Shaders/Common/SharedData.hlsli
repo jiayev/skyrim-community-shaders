@@ -152,7 +152,7 @@ Texture2D<float4> TexDepthSampler : register(t20);
 int3 ConvertUVToSampleCoord(float2 uv, uint a_eyeIndex)
 {
 	uv = VR::ConvertToStereoUV(uv, a_eyeIndex);
-	uv = GetDynamicResolutionAdjustedScreenPosition(uv);
+	uv = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(uv);
 	return int3(uv * BufferDim.xy, 0);
 }
 

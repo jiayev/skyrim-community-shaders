@@ -128,7 +128,7 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
-	float2 screenPosition = GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
+	float2 screenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 	float ao = SAOTex.Sample(SAOSampler, screenPosition).x;
 	float4 sourceColor = sourceTex.SampleLevel(sourceSampler, screenPosition, 0);
 
