@@ -119,7 +119,7 @@ void CalculateGI(
 		float signNorm = sign(dot(orthoDirectionVec, projectedNormalVec));
 		float cosNorm = saturate(dot(projectedNormalVec, viewVec) / projectedNormalVecLength);
 
-		float n = signNorm * ACos(cosNorm);
+		float n = signNorm * FastMath::ACos(cosNorm);
 
 		uint bitmask = 0;
 #ifdef GI
@@ -128,7 +128,7 @@ void CalculateGI(
 		uint bitmaskGISpecular = 0;
 		float3 domVec = getSpecularDominantDirection(viewspaceNormal, viewVec, roughness);
 		float3 projectedDomVec = normalize(domVec - axisVec * dot(domVec, axisVec));
-		float nDom = sign(dot(orthoDirectionVec, projectedDomVec)) * ACos(saturate(dot(projectedDomVec, viewVec)));
+		float nDom = sign(dot(orthoDirectionVec, projectedDomVec)) * FastMath::ACos(saturate(dot(projectedDomVec, viewVec)));
 #	endif
 #endif
 
@@ -165,8 +165,8 @@ void CalculateGI(
 				float3 sampleBackPos = samplePos - viewVec * Thickness;
 				float3 sampleBackHorizonVec = normalize(sampleBackPos - pixCenterPos);
 
-				float angleFront = ACos(dot(sampleHorizonVec, viewVec));  // either clamp or use float version for whatever reason
-				float angleBack = ACos(dot(sampleBackHorizonVec, viewVec));
+				float angleFront = FastMath::ACos(dot(sampleHorizonVec, viewVec));  // either clamp or use float version for whatever reason
+				float angleBack = FastMath::ACos(dot(sampleBackHorizonVec, viewVec));
 				float2 angleRange = -sideSign * (sideSign == -1 ? float2(angleFront, angleBack) : float2(angleBack, angleFront));
 				angleRange = smoothstep(0, 1, (angleRange + n) * RCP_PI + .5);  // https://discord.com/channels/586242553746030596/586245736413528082/1102228968247144570
 
@@ -176,7 +176,7 @@ void CalculateGI(
 #ifdef GI
 				float3 sampleBackPosGI = samplePos - viewVec * 300;
 				float3 sampleBackHorizonVecGI = normalize(sampleBackPosGI - pixCenterPos);
-				float angleBackGI = ACos(dot(sampleBackHorizonVecGI, viewVec));
+				float angleBackGI = FastMath::ACos(dot(sampleBackHorizonVecGI, viewVec));
 				float2 angleRangeGI = -sideSign * (sideSign == -1 ? float2(angleFront, angleBackGI) : float2(angleBackGI, angleFront));
 
 #	ifdef GI_SPECULAR

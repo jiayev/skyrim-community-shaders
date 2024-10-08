@@ -102,7 +102,7 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 	float halfAngle = specularLobeHalfAngle(roughness);
 #else
 	float2x3 TvBv = getKernelBasis(normal, normal);  // D = N
-	float halfAngle = fsl_HALF_PI * .5f;
+	float halfAngle = FastMath::fsl_HALF_PI * .5f;
 #endif
 	TvBv[0] *= worldRadius;
 	TvBv[1] *= worldRadius;
@@ -154,7 +154,7 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 		// geometry weight
 		w *= saturate(1 - abs(dot(normal, posSample - pos)) * DistanceNormalisation);
 		// normal weight
-		w *= 1 - saturate(acosFast4(saturate(dot(normalSample, normal))) / halfAngle);
+		w *= 1 - saturate(FastMath::acosFast4(saturate(dot(normalSample, normal))) / halfAngle);
 #ifdef SPECULAR_BLUR
 		// roughness weight
 		w *= abs(roughness - roughnessSample) / (roughness * roughness * 0.99 + 0.01);
