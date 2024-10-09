@@ -49,7 +49,7 @@ void SetupImGuiStyle()
 
 	// Theme based on https://github.com/powerof3/DialogueHistory
 
-	float bgAlpha{ 0.68f };
+	float bgAlpha{ 0.52f };
 	float disabledAlpha{ 0.30f };
 	float hovoredAlpha{ 0.1f };
 
@@ -89,6 +89,8 @@ void SetupImGuiStyle()
 	style.IndentSpacing = 8.0f;
 	style.FramePadding = ImVec2(4.0f, 4.0f);
 	style.CellPadding.x = 16.f;
+	style.ItemSpacing.y = 12.0f;
+	style.WindowPadding = ImVec2(16.0f, 8.0f);
 
 	colors[ImGuiCol_WindowBg] = background;
 	colors[ImGuiCol_ChildBg] = background;
@@ -187,7 +189,7 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	ImFontConfig font_config;
 	font_config.GlyphExtraSpacing.x = -0.5;
 
-	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Jost-Regular.ttf", 30, &font_config);
+	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Jost-Regular.ttf", 36, &font_config);
 
 	DXGI_SWAP_CHAIN_DESC desc;
 	swapchain->GetDesc(&desc);
@@ -217,7 +219,9 @@ void Menu::DrawSettings()
 	ImGui::Begin("##Main", &IsEnabled, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
 	{
 		ImGui::Spacing(2);
+		ImGui::SetWindowFontScale(1.5f);
 		ImGui::TextUnformatted(std::format("Skyrim Community Shaders {}", Plugin::VERSION.string(".")).c_str());
+		ImGui::SetWindowFontScale(1.f);
 		ImGui::SameLine(ImGui::GetWindowWidth() - 70);
 		if (ImGui::Button("X", ImVec2(50, 0))) {
 			IsEnabled = false;
@@ -1100,6 +1104,9 @@ void Menu::ProcessInputEventQueue()
 				} else if (key == nextShaderKey && State::GetSingleton()->IsDeveloperMode()) {
 					auto& shaderCache = SIE::ShaderCache::Instance();
 					shaderCache.IterateShaderBlock(false);
+				}
+				if (key == VK_ESCAPE && IsEnabled) {
+					IsEnabled = false;
 				}
 			}
 
