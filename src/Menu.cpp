@@ -49,7 +49,7 @@ void SetupImGuiStyle()
 
 	// Theme based on https://github.com/powerof3/DialogueHistory
 
-	float bgAlpha{ 0.52f };
+	float bgAlpha{ 0.34f };
 	float disabledAlpha{ 0.30f };
 	float hovoredAlpha{ 0.1f };
 
@@ -691,6 +691,13 @@ void Menu::DrawOverlay()
 {
 	ProcessInputEventQueue();  //Synchronize Inputs to frame
 
+	auto& shaderCache = SIE::ShaderCache::Instance();
+	auto failed = shaderCache.GetFailedTasks();
+	auto hide = shaderCache.IsHideErrors();
+
+	if (!(shaderCache.IsCompiling() || IsEnabled || inTestMode || (failed && !hide)))
+		return;
+
 	// Start the Dear ImGui frame
 	ImGui_ImplDX11_NewFrame();
 	ImGui_ImplWin32_NewFrame();
@@ -699,15 +706,11 @@ void Menu::DrawOverlay()
 	uint64_t totalShaders = 0;
 	uint64_t compiledShaders = 0;
 
-	auto& shaderCache = SIE::ShaderCache::Instance();
-
 	compiledShaders = shaderCache.GetCompletedTasks();
 	totalShaders = shaderCache.GetTotalTasks();
 
 	auto state = State::GetSingleton();
 
-	auto failed = shaderCache.GetFailedTasks();
-	auto hide = shaderCache.IsHideErrors();
 	auto progressTitle = fmt::format("{}Compiling Shaders: {}",
 		shaderCache.backgroundCompilation ? "Background " : "",
 		shaderCache.GetShaderStatsString(!state->IsDeveloperMode()).c_str());
