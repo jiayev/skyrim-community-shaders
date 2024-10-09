@@ -51,7 +51,6 @@ void DynamicCubemaps::DrawSettings()
 						"Higher values result in better quality but lower performance.");
 				}
 				RenderImGuiSettingsTree(SSRSettings, "Skyrim SSR");
-				ImGui::TreePop();
 			}
 			ImGui::TreePop();
 		}
