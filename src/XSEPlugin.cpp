@@ -1,10 +1,12 @@
 #include "Hooks.h"
 
+#include "Deferred.h"
 #include "FrameAnnotations.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
+#include "Upscaling.h"
 
 #include "Features/ExtendedMaterials.h"
 #include "Features/LightLimitFIx/ParticleLights.h"
@@ -77,7 +79,11 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
-				State::GetSingleton()->PostPostLoad();
+				auto state = State::GetSingleton();
+				state->PostPostLoad();  // state should load first so basic information is populated
+				Deferred::Hooks::Install();
+				TruePBR::GetSingleton()->PostPostLoad();
+				Upscaling::InstallHooks();
 				Hooks::Install();
 				FrameAnnotations::OnPostPostLoad();
 
@@ -159,6 +165,5 @@ bool Load()
 
 	if (errors.empty())
 		Hooks::InstallD3DHooks();
-
 	return true;
 }

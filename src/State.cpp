@@ -292,9 +292,7 @@ void State::PostPostLoad()
 		logger::info("Skyrim Upscaler detected");
 	else
 		logger::info("Skyrim Upscaler not detected");
-	Deferred::Hooks::Install();
-	TruePBR::GetSingleton()->PostPostLoad();
-	Upscaling::InstallHooks();
+	// No hooks should be here, hook in XSEPlugin::MessageHandler()
 }
 
 bool State::ValidateCache(CSimpleIniA& a_ini)
