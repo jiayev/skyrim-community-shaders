@@ -330,7 +330,8 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 		if (bsLight->IsShadowLight()) {
 			auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-			light.shadowMaskIndex = shadowLight->shadowLightIndex;
+			GET_INSTANCE_MEMBER(shadowLightIndex, shadowLight);
+			light.shadowMaskIndex = shadowLightIndex;
 			light.lightFlags.set(LightFlags::Shadow);
 		}
 
@@ -720,7 +721,8 @@ void LightLimitFix::UpdateLights()
 
 					if (bsLight->IsShadowLight()) {
 						auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-						light.shadowMaskIndex = shadowLight->shadowLightIndex;
+						GET_INSTANCE_MEMBER(shadowLightIndex, shadowLight);
+						light.shadowMaskIndex = shadowLightIndex;
 						light.lightFlags.set(LightFlags::Shadow);
 					}
 
