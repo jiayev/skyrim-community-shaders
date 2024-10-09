@@ -58,14 +58,14 @@ namespace LightLimitFix
 			// Step the ray
 			viewPosition += lightDirectionVS;
 
-			float2 rayUV = ViewToUV(viewPosition, true, a_eyeIndex);
+			float2 rayUV = FrameBuffer::ViewToUV(viewPosition, true, a_eyeIndex);
 
 			// Ensure the UV coordinates are inside the screen
 			if (!IsSaturated(rayUV))
 				break;
 
 			// Compute the difference between the ray's and the camera's depth
-			float rayDepth = GetScreenDepth(rayUV, a_eyeIndex);
+			float rayDepth = SharedData::GetScreenDepth(rayUV, a_eyeIndex);
 
 			// Difference between the current ray distance and the marched light
 			float depthDelta = viewPosition.z - rayDepth;

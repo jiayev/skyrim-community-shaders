@@ -37,7 +37,7 @@ float3 Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 scree
 
 	float rcpSampleCount = rcp(sampleCount);
 
-	uint3 seed = pcg3d(uint3(screenPosition.xy, screenPosition.x * M_PI));
+	uint3 seed = Random::pcg3d(uint3(screenPosition.xy, screenPosition.x * M_PI));
 
 	float2 compareValue;
 	compareValue.x = mul(transpose(sD.ShadowMapProj[eyeIndex][0]), float4(positionWS, 1)).z;
@@ -46,7 +46,7 @@ float3 Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 scree
 	float shadow = 0.0;
 	if (sD.EndSplitDistances.z >= GetShadowDepth(positionWS, eyeIndex)) {
 		for (int i = 0; i < sampleCount; i++) {
-			float3 rnd = R3Modified(i + FrameCount * sampleCount, seed / 4294967295.f);
+			float3 rnd = Random::R3Modified(i + FrameCount * sampleCount, seed / 4294967295.f);
 
 			// https://stats.stackexchange.com/questions/8021/how-to-generate-uniformly-distributed-points-in-the-3-d-unit-ball
 			float phi = rnd.x * 2 * 3.1415926535;
@@ -85,7 +85,7 @@ float3 Get2DFilteredShadowCascade(float noise, float2x2 rotationMatrix, float sa
 #endif
 
 	for (int sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
-		float2 sampleOffset = mul(SpiralSampleOffsets8[sampleIndex], rotationMatrix);
+		float2 sampleOffset = mul(Random::SpiralSampleOffsets8[sampleIndex], rotationMatrix);
 
 		float2 sampleUV = layerIndexRcp * sampleOffset * sampleOffsetScale + baseUV;
 
@@ -185,15 +185,15 @@ float GetVL(float3 startPosWS, float3 endPosWS, float3 normal, float noise, inou
 	// Offset starting position
 	startPosWS += worldDir * stepSize * noise;
 
-	sD.EndSplitDistances.x = GetScreenDepth(sD.EndSplitDistances.x);
-	sD.EndSplitDistances.y = GetScreenDepth(sD.EndSplitDistances.y);
-	sD.StartSplitDistances.y = GetScreenDepth(sD.StartSplitDistances.y);
+	sD.EndSplitDistances.x = SharedData::GetScreenDepth(sD.EndSplitDistances.x);
+	sD.EndSplitDistances.y = SharedData::GetScreenDepth(sD.EndSplitDistances.y);
+	sD.StartSplitDistances.y = SharedData::GetScreenDepth(sD.StartSplitDistances.y);
 
 	float vlShadow = 0;
 
 	for (uint i = 0; i < sampleCount; i++) {
 		float3 samplePositionWS = startPosWS + worldDir * saturate(i * stepSize);
-		float2 sampleOffset = mul(SpiralSampleOffsets8[(float(i * 2) + noise * 8) % 8].xy, rotationMatrix);
+		float2 sampleOffset = mul(Random::SpiralSampleOffsets8[(float(i * 2) + noise * 8) % 8].xy, rotationMatrix);
 
 		float cascadeIndex = 0;
 		float4x3 lightProjectionMatrix = sD.ShadowMapProj[eyeIndex][0];

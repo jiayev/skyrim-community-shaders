@@ -28,13 +28,13 @@ void readHistory(
 	inout half4 prev_gi, inout half4 prev_gi_specular, inout half3 prev_ambient, inout float accum_frames, inout float wsum)
 {
 	const float2 uv = (pixCoord + .5) * RCP_OUT_FRAME_DIM;
-	const float2 screen_pos = ConvertFromStereoUV(uv, eyeIndex);
+	const float2 screen_pos = VR::ConvertFromStereoUV(uv, eyeIndex);
 	if (any(screen_pos < 0) || any(screen_pos > 1))
 		return;
 
 	const half3 prev_geo = srcPrevGeo[pixCoord];
 	const float prev_depth = prev_geo.x;
-	// const float3 prev_normal = DecodeNormal(prev_geo.yz);  // prev normal is already world
+	// const float3 prev_normal = GBuffer::DecodeNormal(prev_geo.yz);  // prev normal is already world
 	float3 prev_pos = ScreenToViewPosition(screen_pos, prev_depth, eyeIndex);
 	prev_pos = ViewToWorldPosition(prev_pos, PrevInvViewMat[eyeIndex]) + CameraPreviousPosAdjust[eyeIndex];
 
@@ -65,14 +65,14 @@ void readHistory(
 	const float2 frameScale = FrameDim * RcpTexDim;
 
 	const float2 uv = (pixCoord + .5) * RCP_OUT_FRAME_DIM;
-	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
-	const float2 screen_pos = ConvertFromStereoUV(uv, eyeIndex);
+	uint eyeIndex = VR::GetEyeIndexFromTexCoord(uv);
+	const float2 screen_pos = VR::ConvertFromStereoUV(uv, eyeIndex);
 
 	float2 prev_uv = uv;
 #ifdef REPROJECTION
 	prev_uv += FULLRES_LOAD(srcMotionVec, pixCoord, uv * frameScale, samplerLinearClamp).xy;
 #endif
-	float2 prev_screen_pos = ConvertFromStereoUV(prev_uv, eyeIndex);
+	float2 prev_screen_pos = VR::ConvertFromStereoUV(prev_uv, eyeIndex);
 
 	half3 prev_ambient = 0;
 	half4 prev_gi = 0;
@@ -91,7 +91,7 @@ void readHistory(
 
 #ifdef REPROJECTION
 	if ((curr_depth <= DepthFadeRange.y) && !(any(prev_screen_pos < 0) || any(prev_screen_pos > 1))) {
-		// float3 curr_normal = DecodeNormal(srcCurrNormal[pixCoord]);
+		// float3 curr_normal = GBuffer::DecodeNormal(srcCurrNormal[pixCoord]);
 		// curr_normal = ViewToWorldVector(curr_normal, CameraViewInverse[eyeIndex]);
 		float3 curr_pos = ScreenToViewPosition(screen_pos, curr_depth, eyeIndex);
 		curr_pos = ViewToWorldPosition(curr_pos, CameraViewInverse[eyeIndex]) + CameraPosAdjust[eyeIndex];
@@ -131,7 +131,7 @@ void readHistory(
 
 	half3 radiance = 0;
 #ifdef GI
-	radiance = GammaToLinear(FULLRES_LOAD(srcDiffuse, pixCoord, uv * frameScale, samplerLinearClamp).rgb * GIStrength);
+	radiance = Color::GammaToLinear(FULLRES_LOAD(srcDiffuse, pixCoord, uv * frameScale, samplerLinearClamp).rgb * GIStrength);
 #	ifdef GI_BOUNCE
 	radiance += prev_ambient.rgb * GIBounceFade;
 #	endif

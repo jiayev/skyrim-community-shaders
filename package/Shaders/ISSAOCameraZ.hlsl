@@ -23,7 +23,7 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
-	float2 screenPosition = GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
+	float2 screenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 	float4 depth = DepthTex.Sample(DepthSampler, screenPosition).x;
 
 	psout.ClippedDepth = clamp(g_ClipInfos.x / (g_ClipInfos.y * depth + g_ClipInfos.z), 0, g_ClipInfos.w);

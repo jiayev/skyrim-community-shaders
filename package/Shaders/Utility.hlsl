@@ -123,7 +123,7 @@ VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
 
-	uint eyeIndex = GetEyeIndexVS(
+	uint eyeIndex = VR::GetEyeIndexVS(
 #	if defined(VR)
 		input.InstanceID
 #	endif
@@ -276,7 +276,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	ifdef VR
 	vsout.EyeIndex = eyeIndex;
-	VR_OUTPUT VRout = GetVRVSOutput(vsout.PositionCS, eyeIndex);
+	VR_OUTPUT VRout = VR::GetVRVSOutput(vsout.PositionCS, eyeIndex);
 	vsout.PositionCS = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;
@@ -381,7 +381,7 @@ float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatri
 
 	float visibility = 0;
 	for (int sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
-		float2 sampleOffset = mul(SpiralSampleOffsets8[sampleIndex], rotationMatrix);
+		float2 sampleOffset = mul(Random::SpiralSampleOffsets8[sampleIndex], rotationMatrix);
 		sampleOffset *= 1.5;
 
 #	if defined(RENDER_SHADOWMASKDPB)
@@ -448,7 +448,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 #	if defined(FOLIAGE)
-	float checkerboard = InterleavedGradientNoise(0, input.PositionCS.xy);
+	float checkerboard = Random::InterleavedGradientNoise(0, input.PositionCS.xy);
 	if (checkerboard > 0.75)
 		discard;
 #	endif
@@ -516,7 +516,7 @@ PS_OUTPUT main(PS_INPUT input)
 	TexStencilSampler.GetDimensions(0, stencilDimensions.x, stencilDimensions.y, stencilDimensions.z);
 	stencilValue = TexStencilSampler.Load(float3(stencilDimensions.xy * depthUv, 0)).x;
 #			endif
-	depthUv = ConvertFromStereoUV(depthUv * DynamicResolutionParams2, eyeIndex);
+	depthUv = VR::ConvertFromStereoUV(depthUv * DynamicResolutionParams2, eyeIndex);
 	float4 positionCS = float4(2 * float2(depthUv.x, -depthUv.y + 1) - 1, depth, 1);
 	float4 positionMS = mul(CameraViewProjInverse[eyeIndex], positionCS);
 	positionMS.xyz = positionMS.xyz / positionMS.w;
@@ -530,7 +530,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float fadeFactor = input.Alpha.x;
 #		endif
 
-	float noise = InterleavedGradientNoise(input.PositionCS.xy, FrameCount);
+	float noise = Random::InterleavedGradientNoise(input.PositionCS.xy, FrameCount);
 
 	float2 rotation;
 	sincos(M_2PI * noise, rotation.y, rotation.x);

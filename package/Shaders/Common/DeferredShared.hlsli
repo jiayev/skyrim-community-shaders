@@ -1,3 +1,6 @@
+#ifndef __DEFERRED_SHARED_DEPENDENCY_HLSL__
+#define __DEFERRED_SHARED_DEPENDENCY_HLSL__
+
 cbuffer PerFrameDeferredShared : register(b11)
 {
 	float4 BufferDim;
@@ -7,7 +10,12 @@ cbuffer PerFrameDeferredShared : register(b11)
 	uint FrameCountAlwaysActive;
 };
 
-float GetScreenDepth(float depth)
+namespace DeferredShared
 {
-	return (CameraData.w / (-depth * CameraData.z + CameraData.x));
+	float GetScreenDepth(float depth)
+	{
+		return (CameraData.w / (-depth * CameraData.z + CameraData.x));
+	}
 }
+
+#endif  // __DEFERRED_SHARED_DEPENDENCY_HLSL__

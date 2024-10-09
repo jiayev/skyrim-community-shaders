@@ -107,10 +107,10 @@ namespace PBR
 	LightProperties InitLightProperties(float3 lightColor, float3 nonParallaxShadow, float3 parallaxShadow)
 	{
 		LightProperties result;
-		result.LinearLightColor = GammaToLinear(lightColor) * nonParallaxShadow * parallaxShadow / LightPreMult;
+		result.LinearLightColor = Color::GammaToLinear(lightColor) * nonParallaxShadow * parallaxShadow / Color::LightPreMult;
 		[branch] if ((PBRFlags & TruePBR_InterlayerParallax) != 0)
 		{
-			result.LinearCoatLightColor = GammaToLinear(lightColor) * nonParallaxShadow / LightPreMult;
+			result.LinearCoatLightColor = Color::GammaToLinear(lightColor) * nonParallaxShadow / Color::LightPreMult;
 		}
 		else
 		{
@@ -373,7 +373,7 @@ namespace PBR
 		const float wrap = 1;
 		float wrappedNdotL = saturate((dot(fakeN, L) + wrap) / ((1 + wrap) * (1 + wrap)));
 		float diffuseScatter = (1 / PI) * lerp(wrappedNdotL, diffuseKajiya, 0.33);
-		float luma = RGBToLuminance(surfaceProperties.BaseColor);
+		float luma = Color::RGBToLuminance(surfaceProperties.BaseColor);
 		float3 scatterTint = pow(surfaceProperties.BaseColor / luma, 1 - shadow);
 		S += sqrt(surfaceProperties.BaseColor) * diffuseScatter * scatterTint;
 

@@ -44,11 +44,11 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
 	half2 uv = half2(dispatchID.xy + 0.5) * BufferDim.zw * DynamicResolutionParams2.xy;
-	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
-	uv = ConvertFromStereoUV(uv, eyeIndex);
+	uint eyeIndex = VR::GetEyeIndexFromTexCoord(uv);
+	uv = VR::ConvertFromStereoUV(uv, eyeIndex);
 
 	half3 normalGlossiness = NormalRoughnessTexture[dispatchID.xy];
-	half3 normalVS = DecodeNormal(normalGlossiness.xy);
+	half3 normalVS = GBuffer::DecodeNormal(normalGlossiness.xy);
 
 	half3 diffuseColor = MainRW[dispatchID.xy];
 	half3 specularColor = SpecularTexture[dispatchID.xy];
@@ -60,7 +60,7 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 
 	half glossiness = normalGlossiness.z;
 
-	half3 color = lerp(diffuseColor + specularColor, LinearToGamma(GammaToLinear(diffuseColor) + GammaToLinear(specularColor)), pbrWeight);
+	half3 color = lerp(diffuseColor + specularColor, Color::LinearToGamma(Color::GammaToLinear(diffuseColor) + Color::GammaToLinear(specularColor)), pbrWeight);
 
 #if defined(DYNAMIC_CUBEMAPS)
 
@@ -73,7 +73,7 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 
 		normalWS = lerp(normalWS, float3(0, 0, 1), wetnessMask);
 
-		color = GammaToLinear(color);
+		color = Color::GammaToLinear(color);
 
 		half depth = DepthTexture[dispatchID.xy];
 
@@ -89,12 +89,12 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 		half roughness = 1.0 - glossiness;
 		half level = roughness * 7.0;
 
-		half3 directionalAmbientColor = GammaToLinear(mul(DirectionalAmbient, half4(R, 1.0))) / LightPreMult;
+		half3 directionalAmbientColor = Color::GammaToLinear(mul(DirectionalAmbient, half4(R, 1.0))) / Color::LightPreMult;
 		half3 finalIrradiance = 0;
 
 #	if defined(INTERIOR)
 		half3 specularIrradiance = EnvTexture.SampleLevel(LinearSampler, R, level).xyz;
-		specularIrradiance = GammaToLinear(specularIrradiance);
+		specularIrradiance = Color::GammaToLinear(specularIrradiance);
 
 		finalIrradiance += specularIrradiance;
 #	elif defined(SKYLIGHTING)
@@ -114,19 +114,19 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 
 		if (skylightingSpecular < 1.0) {
 			specularIrradiance = EnvTexture.SampleLevel(LinearSampler, R, level).xyz;
-			specularIrradiance = GammaToLinear(specularIrradiance);
+			specularIrradiance = Color::GammaToLinear(specularIrradiance);
 		}
 
 		half3 specularIrradianceReflections = 1.0;
 
 		if (skylightingSpecular > 0.0) {
 			specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level).xyz;
-			specularIrradianceReflections = GammaToLinear(specularIrradianceReflections);
+			specularIrradianceReflections = Color::GammaToLinear(specularIrradianceReflections);
 		}
 		finalIrradiance = finalIrradiance * skylightingSpecular + lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
 #	else
 		half3 specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level).xyz;
-		specularIrradianceReflections = GammaToLinear(specularIrradianceReflections);
+		specularIrradianceReflections = Color::GammaToLinear(specularIrradianceReflections);
 
 		finalIrradiance += specularIrradianceReflections;
 #	endif
@@ -138,7 +138,7 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 
 		color += reflectance * finalIrradiance;
 
-		color = LinearToGamma(color);
+		color = Color::LinearToGamma(color);
 	}
 
 #endif
@@ -162,6 +162,6 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 #endif
 
 	MainRW[dispatchID.xy] = min(color, 250);  // Vanilla bloom fix
-	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = half4(EncodeNormalVanilla(normalVS), 0.0, 0.0);
+	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = half4(GBuffer::EncodeNormalVanilla(normalVS), 0.0, 0.0);
 	SnowParametersRW[dispatchID.xy] = snowParameters;
 }

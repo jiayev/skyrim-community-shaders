@@ -69,7 +69,7 @@ namespace WetnessEffects
 			for (int i = -1; i <= 1; i++)
 				for (int j = -1; j <= 1; j++) {
 					int2 gridCurr = grid + int2(i, j);
-					float tOffset = float(iqint3(gridCurr)) * uintToFloat;
+					float tOffset = float(Random::iqint3(gridCurr)) * uintToFloat;
 
 					// splashes
 					if (wetnessEffectsSettings.EnableSplashes) {
@@ -77,14 +77,14 @@ namespace WetnessEffects
 						uint timestep = residual;
 						residual = residual - timestep;
 
-						uint3 hash = pcg3d(uint3(asuint(gridCurr), timestep));
+						uint3 hash = Random::pcg3d(uint3(asuint(gridCurr), timestep));
 						float3 floatHash = float3(hash) * uintToFloat;
 
 						if (floatHash.z < (wetnessEffectsSettings.RaindropChance)) {
 							float2 vec2Centre = int2(i, j) + floatHash.xy - gridUV;
 							float distSqr = dot(vec2Centre, vec2Centre);
 							float drop_radius = lerp(wetnessEffectsSettings.SplashesMinRadius, wetnessEffectsSettings.SplashesMaxRadius,
-								float(iqint3(hash.yz)) * uintToFloat);
+								float(Random::iqint3(hash.yz)) * uintToFloat);
 							if (distSqr < drop_radius * drop_radius)
 								wetness = max(wetness, RainFade(residual));
 						}
@@ -96,7 +96,7 @@ namespace WetnessEffects
 						uint timestep = residual;
 						residual = residual - timestep;
 
-						uint3 hash = pcg3d(uint3(asuint(gridCurr), timestep));
+						uint3 hash = Random::pcg3d(uint3(asuint(gridCurr), timestep));
 						float3 floatHash = float3(hash) * uintToFloat;
 
 						if (floatHash.z < (wetnessEffectsSettings.RaindropChance)) {
@@ -124,7 +124,7 @@ namespace WetnessEffects
 				}
 
 		if (wetnessEffectsSettings.EnableChaoticRipples) {
-			float3 turbulenceNormal = perlinNoise(float3(worldPos.xy * wetnessEffectsSettings.ChaoticRippleScaleRcp, t * wetnessEffectsSettings.ChaoticRippleSpeed));
+			float3 turbulenceNormal = Random::perlinNoise(float3(worldPos.xy * wetnessEffectsSettings.ChaoticRippleScaleRcp, t * wetnessEffectsSettings.ChaoticRippleSpeed));
 			turbulenceNormal.z = turbulenceNormal.z * .5 + 5;
 			turbulenceNormal = normalize(turbulenceNormal);
 			rippleNormal = normalize(rippleNormal + float3(turbulenceNormal.xy * wetnessEffectsSettings.ChaoticRippleStrength, 0));
@@ -146,7 +146,7 @@ namespace WetnessEffects
 		float3 specularIrradiance = 1.0;
 #	else
 		float level = roughness * 7.0;
-		float3 specularIrradiance = GammaToLinear(specularTexture.SampleLevel(SampColorSampler, R, level));
+		float3 specularIrradiance = Color::GammaToLinear(specularTexture.SampleLevel(SampColorSampler, R, level));
 #	endif
 #else
 		float3 specularIrradiance = 1.0;

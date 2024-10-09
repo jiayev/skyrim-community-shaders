@@ -78,8 +78,8 @@ float smoothbumpstep(float edge0, float edge1, float x)
 [numthreads(8, 8, 1)] void main(uint3 ThreadID
 								: SV_DispatchThreadID) {
 	float3 captureDirection = -GetSamplingVector(ThreadID, DynamicCubemap);
-	float3 viewDirection = WorldToView(captureDirection, false);
-	float2 uv = ViewToUV(viewDirection, false);
+	float3 viewDirection = FrameBuffer::WorldToView(captureDirection, false);
+	float2 uv = FrameBuffer::ViewToUV(viewDirection, false);
 
 	if (Reset) {
 		DynamicCubemap[ThreadID] = 0.0;
@@ -160,15 +160,15 @@ float smoothbumpstep(float edge0, float edge1, float x)
 		uv += (PoissonDisc[FrameCountAlwaysActive % 64] * 2.0 - 1.0) * BufferDim.zw * max(1.0, float2(BufferDim.x / 128.0, BufferDim.y / 128.0)) * 0.5;
 		uv = saturate(uv);
 
-		uv = GetDynamicResolutionAdjustedScreenPosition(uv);
-		uv = ConvertToStereoUV(uv, 0);
+		uv = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(uv);
+		uv = VR::ConvertToStereoUV(uv, 0);
 
 		float depth = DepthTexture.SampleLevel(LinearSampler, uv, 0);
-		float linearDepth = GetScreenDepth(depth);
+		float linearDepth = DeferredShared::GetScreenDepth(depth);
 
 		if (linearDepth > 16.5) {  // Ignore objects which are too close
 			float3 color = ColorTexture.SampleLevel(LinearSampler, uv, 0);
-			float4 output = float4(GammaToLinear(color), 1.0);
+			float4 output = float4(Color::GammaToLinear(color), 1.0);
 			float lerpFactor = 1.0 / 64.0;
 
 			half4 positionCS = half4(2 * half2(uv.x, -uv.y + 1) - 1, depth, 1);

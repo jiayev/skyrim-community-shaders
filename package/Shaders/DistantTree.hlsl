@@ -61,7 +61,7 @@ cbuffer PerGeometry : register(b2)
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
-	uint eyeIndex = GetEyeIndexVS(
+	uint eyeIndex = VR::GetEyeIndexVS(
 #	if defined(VR)
 		input.InstanceID
 #	endif  // VR
@@ -89,7 +89,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	ifdef VR
 	vsout.EyeIndex = eyeIndex;
-	VR_OUTPUT VRout = GetVRVSOutput(vsout.Position, eyeIndex);
+	VR_OUTPUT VRout = VR::GetVRVSOutput(vsout.Position, eyeIndex);
 	vsout.Position = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;
@@ -209,8 +209,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		if defined(DEFERRED)
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
-	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
-	float screenNoise = InterleavedGradientNoise(input.Position.xy, FrameCount);
+	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
+	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, FrameCount);
 
 	float dirShadow = 1;
 
@@ -247,7 +247,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	psout.MotionVector = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 
-	psout.Normal.xy = EncodeNormal(WorldToView(normal, false, eyeIndex));
+	psout.Normal.xy = GBuffer::EncodeNormal(FrameBuffer::WorldToView(normal, false, eyeIndex));
 	psout.Normal.zw = 0;
 
 	psout.Albedo = float4(baseColor.xyz, 1);

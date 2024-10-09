@@ -194,7 +194,7 @@ float GetProjectedV(float3 worldPosition, uint a_eyeIndex = 0)
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
-	uint eyeIndex = GetEyeIndexVS(
+	uint eyeIndex = VR::GetEyeIndexVS(
 #	if defined(VR)
 		input.InstanceID
 #	endif  // VR
@@ -394,7 +394,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	ifdef VR
 	vsout.EyeIndex = eyeIndex;
-	VR_OUTPUT VRout = GetVRVSOutput(vsout.Position, eyeIndex);
+	VR_OUTPUT VRout = VR::GetVRVSOutput(vsout.Position, eyeIndex);
 	vsout.Position = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;
@@ -605,7 +605,7 @@ PS_OUTPUT main(PS_INPUT input)
 	uint lightCount = 0;
 	if (LightingInfluence.x > 0.0) {
 		float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
-		float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
+		float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 		bool inWorld = ExtraShaderDescriptor & _InWorld;
 
 		uint clusterIndex = 0;
@@ -755,7 +755,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			else
 	float3 screenSpaceNormal = normalize(input.ScreenSpaceNormal);
 #			endif
-	psout.NormalGlossiness = float4(EncodeNormal(screenSpaceNormal), 0.0, psout.Diffuse.w);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), 0.0, psout.Diffuse.w);
 	float2 screenMotionVector = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 	psout.MotionVectors = float4(screenMotionVector, 0.0, psout.Diffuse.w);
 #		endif

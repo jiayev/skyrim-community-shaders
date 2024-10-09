@@ -189,7 +189,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	precise float4 inputPosition = float4(input.Position.xyz, 1.0);
 
-	uint eyeIndex = GetEyeIndexVS(
+	uint eyeIndex = VR::GetEyeIndexVS(
 #	if defined(VR)
 		input.InstanceID
 #	endif
@@ -366,7 +366,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #	if defined(VR)
-	VR_OUTPUT VRout = GetVRVSOutput(vsout.Position, eyeIndex);
+	VR_OUTPUT VRout = VR::GetVRVSOutput(vsout.Position, eyeIndex);
 	vsout.Position = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;
@@ -1009,11 +1009,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			   : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;
-	uint eyeIndex = GetEyeIndexPS(input.Position, VPOSOffset);
+	uint eyeIndex = VR::GetEyeIndexPS(input.Position, VPOSOffset);
 
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
-	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
-	float screenNoise = InterleavedGradientNoise(input.Position.xy, FrameCount);
+	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
+	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, FrameCount);
 
 	bool inWorld = ExtraShaderDescriptor & _InWorld;
 
@@ -1044,8 +1044,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float depthSampled = TerrainBlending::GetTerrainOffsetDepth(screenUV, eyeIndex);
 	float depthComp = input.Position.z - depthSampled;
 
-	float depthSampledLinear = GetScreenDepth(depthSampled);
-	float depthPixelLinear = GetScreenDepth(input.Position.z);
+	float depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
+	float depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
 
 	float blendFactorTerrain = saturate((depthSampledLinear - depthPixelLinear) / 5.0);
 
@@ -1260,7 +1260,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(TRUE_PBR) && defined(LANDSCAPE)
 		[branch] if ((PBRFlags & TruePBR_LandTile0PBR) == 0)
 		{
-			rawBaseColor.rgb = GammaToLinear(rawBaseColor.rgb) / AlbedoPreMult;
+			rawBaseColor.rgb = Color::GammaToLinear(rawBaseColor.rgb) / Color::AlbedoPreMult;
 		}
 #	endif
 		baseColor = rawBaseColor;
@@ -1370,7 +1370,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		else
 		{
-			landColor2.rgb = GammaToLinear(landColor2.rgb) / AlbedoPreMult;
+			landColor2.rgb = Color::GammaToLinear(landColor2.rgb) / Color::AlbedoPreMult;
 			rawRMAOS += input.LandBlendWeights1.y * float4(1 - landNormal2.w, 0, 1, 0.04);
 		}
 #		endif
@@ -1398,7 +1398,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		else
 		{
-			landColor3.rgb = GammaToLinear(landColor3.rgb) / AlbedoPreMult;
+			landColor3.rgb = Color::GammaToLinear(landColor3.rgb) / Color::AlbedoPreMult;
 			rawRMAOS += input.LandBlendWeights1.z * float4(1 - landNormal3.w, 0, 1, 0.04);
 		}
 #		endif
@@ -1426,7 +1426,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		else
 		{
-			landColor4.rgb = GammaToLinear(landColor4.rgb) / AlbedoPreMult;
+			landColor4.rgb = Color::GammaToLinear(landColor4.rgb) / Color::AlbedoPreMult;
 			rawRMAOS += input.LandBlendWeights1.w * float4(1 - landNormal4.w, 0, 1, 0.04);
 		}
 #		endif
@@ -1454,7 +1454,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		else
 		{
-			landColor5.rgb = GammaToLinear(landColor5.rgb) / AlbedoPreMult;
+			landColor5.rgb = Color::GammaToLinear(landColor5.rgb) / Color::AlbedoPreMult;
 			rawRMAOS += input.LandBlendWeights2.x * float4(1 - landNormal5.w, 0, 1, 0.04);
 		}
 #		endif
@@ -1482,7 +1482,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		else
 		{
-			landColor6.rgb = GammaToLinear(landColor6.rgb) / AlbedoPreMult;
+			landColor6.rgb = Color::GammaToLinear(landColor6.rgb) / Color::AlbedoPreMult;
 			rawRMAOS += input.LandBlendWeights2.y * float4(1 - landNormal6.w, 0, 1, 0.04);
 		}
 #		endif
@@ -1542,7 +1542,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if ((PixelShaderDescriptor & _DefShadow) && ((PixelShaderDescriptor & _ShadowDir) || inWorld) || numShadowLights > 0) {
 		baseShadowUV = input.Position.xy * DynamicResolutionParams2.xy;
 		float2 adjustedShadowUV = baseShadowUV * VPOSOffset.xy + VPOSOffset.zw;
-		float2 shadowUV = GetDynamicResolutionAdjustedScreenPosition(adjustedShadowUV);
+		float2 shadowUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(adjustedShadowUV);
 		shadowColor = TexShadowMaskSampler.Sample(SampShadowMaskSampler, shadowUV);
 	}
 
@@ -1634,7 +1634,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		worldSpaceNormal = normalize(mul(input.World[eyeIndex], float4(worldSpaceNormal, 0)));
 #	endif
 
-	float3 screenSpaceNormal = normalize(WorldToView(worldSpaceNormal, false, eyeIndex));
+	float3 screenSpaceNormal = normalize(FrameBuffer::WorldToView(worldSpaceNormal, false, eyeIndex));
 
 #	if defined(TRUE_PBR)
 	PBR::SurfaceProperties pbrSurfaceProperties = PBR::InitSurfaceProperties();
@@ -1760,7 +1760,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	endif
 
-	float4 waterData = GetWaterData(input.WorldPosition.xyz);
+	float4 waterData = SharedData::GetWaterData(input.WorldPosition.xyz);
 	float waterHeight = waterData.w;
 
 	float waterRoughnessSpecular = 1;
@@ -1821,7 +1821,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float puddle = wetness;
 	if (wetness > 0.0 || puddleWetness > 0) {
 #		if !defined(SKINNED)
-		puddle = perlinNoise(puddleCoords) * .5 + .5;
+		puddle = Random::perlinNoise(puddleCoords) * .5 + .5;
 		puddle = puddle * ((minWetnessAngle / wetnessEffectsSettings.PuddleMaxAngle) * wetnessEffectsSettings.MaxPuddleWetness * 0.25) + 0.5;
 		wetness = lerp(wetness, puddleWetness, saturate(puddle - 0.25));
 #		endif
@@ -2021,7 +2021,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1.0)
-		wetnessSpecular += WetnessEffects::GetWetnessSpecular(wetnessNormal, normalizedDirLightDirectionWS, worldSpaceViewDirection, GammaToLinear(dirLightColor * dirDetailShadow) / LightPreMult, waterRoughnessSpecular);
+		wetnessSpecular += WetnessEffects::GetWetnessSpecular(wetnessNormal, normalizedDirLightDirectionWS, worldSpaceViewDirection, Color::GammaToLinear(dirLightColor * dirDetailShadow) / Color::LightPreMult, waterRoughnessSpecular);
 #		endif
 #	endif
 
@@ -2216,7 +2216,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #			if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1.0)
-			wetnessSpecular += WetnessEffects::GetWetnessSpecular(wetnessNormal, normalizedLightDirection, worldSpaceViewDirection, GammaToLinear(lightColor) / LightPreMult, waterRoughnessSpecular);
+			wetnessSpecular += WetnessEffects::GetWetnessSpecular(wetnessNormal, normalizedLightDirection, worldSpaceViewDirection, Color::GammaToLinear(lightColor) / Color::LightPreMult, waterRoughnessSpecular);
 #			endif
 	}
 #		endif
@@ -2232,7 +2232,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			CharacterLightParams.y * saturate(dot(float2(0.164398998, -0.986393988), modelNormal.yz));
 		float charLightColor = min(CharacterLightParams.w, max(0, CharacterLightParams.z * TexCharacterLightProjNoiseSampler.Sample(SampCharacterLightProjNoiseSampler, baseShadowUV).x));
 #		if defined(TRUE_PBR)
-		charLightColor = GammaToLinear(charLightColor) / LightPreMult;
+		charLightColor = Color::GammaToLinear(charLightColor) / Color::LightPreMult;
 #		endif
 		diffuseColor += (charLightMul * charLightColor).xxx;
 	}
@@ -2261,7 +2261,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 directionalAmbientColor = mul(DirectionalAmbient, modelNormal);
 #	if defined(TRUE_PBR)
-	directionalAmbientColor = GammaToLinear(directionalAmbientColor) / LightPreMult;
+	directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor) / Color::LightPreMult;
 #	endif
 
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
@@ -2271,11 +2271,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	skylightingDiffuse = lerp(1.0, skylightingDiffuse, Skylighting::getFadeOutFactor(input.WorldPosition));
 	skylightingDiffuse = Skylighting::mixDiffuse(skylightingSettings, skylightingDiffuse);
 #		if !defined(TRUE_PBR)
-	directionalAmbientColor = GammaToLinear(directionalAmbientColor) / LightPreMult;
+	directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor) / Color::LightPreMult;
 #		endif
 	directionalAmbientColor *= skylightingDiffuse;
 #		if !defined(TRUE_PBR)
-	directionalAmbientColor = LinearToGamma(directionalAmbientColor * LightPreMult);
+	directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor * Color::LightPreMult);
 #		endif
 #	endif
 
@@ -2306,7 +2306,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		dynamicCubemap = true;
 		envColorBase = TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 0);
 		if (envColorBase.a < 1.0) {
-			F0 = (GammaToLinear(envColorBase.rgb) + GammaToLinear(baseColor.rgb)) / AlbedoPreMult;
+			F0 = (Color::GammaToLinear(envColorBase.rgb) + Color::GammaToLinear(baseColor.rgb)) / Color::AlbedoPreMult;
 			envRoughness = envColorBase.a;
 		} else {
 			F0 = 1.0;
@@ -2317,7 +2317,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			if defined(CREATOR)
 	if (cubemapCreatorSettings.Enabled) {
 		dynamicCubemap = true;
-		F0 = (GammaToLinear(cubemapCreatorSettings.CubemapColor.rgb) + GammaToLinear(baseColor.xyz)) / AlbedoPreMult;
+		F0 = (Color::GammaToLinear(cubemapCreatorSettings.CubemapColor.rgb) + Color::GammaToLinear(baseColor.xyz)) / Color::AlbedoPreMult;
 		envRoughness = cubemapCreatorSettings.CubemapColor.a;
 	}
 #			endif
@@ -2326,7 +2326,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			if defined(EMAT)
 		envRoughness = lerp(envRoughness, 1.0 - complexMaterialColor.y, (float)complexMaterial);
 		envRoughness *= envRoughness;
-		F0 = lerp(F0, GammaToLinear(complexSpecular), (float)complexMaterial);
+		F0 = lerp(F0, Color::GammaToLinear(complexSpecular), (float)complexMaterial);
 #			endif
 
 		envColor = DynamicCubemaps::GetDynamicCubemap(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, envRoughness, F0, diffuseColor, viewPosition.z) * envMask;
@@ -2461,7 +2461,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			else
 		diffuseColor = 1.0;
 #			endif
-		specularColor = GammaToLinear(specularColor);
+		specularColor = Color::GammaToLinear(specularColor);
 	}
 #		endif
 
@@ -2478,7 +2478,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 #		if defined(DYNAMIC_CUBEMAPS)
 	if (dynamicCubemap)
-		specularColor = LinearToGamma(specularColor);
+		specularColor = Color::LinearToGamma(specularColor);
 #		endif
 #	endif
 
@@ -2490,7 +2490,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if !defined(DEFERRED)
 	color.xyz += specularColor;
 #		endif
-	color.xyz = GammaToLinear(color.xyz);
+	color.xyz = Color::GammaToLinear(color.xyz);
 #	endif
 
 #	if defined(WETNESS_EFFECTS) && !defined(TRUE_PBR)
@@ -2501,7 +2501,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	color.xyz += specularColorPBR;
 #	endif
 
-	color.xyz = LinearToGamma(color.xyz);
+	color.xyz = Color::LinearToGamma(color.xyz);
 
 #	if defined(LOD_LAND_BLEND) && defined(TRUE_PBR)
 	{
@@ -2512,7 +2512,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(DEFERRED)
 		specularColorPBR = lerp(specularColorPBR, 0, lodLandBlendFactor);
-		indirectDiffuseLobeWeight = lerp(indirectDiffuseLobeWeight, GammaToLinear(input.Color.xyz * lodLandColor * lodLandFadeFactor) / AlbedoPreMult, lodLandBlendFactor);
+		indirectDiffuseLobeWeight = lerp(indirectDiffuseLobeWeight, Color::GammaToLinear(input.Color.xyz * lodLandColor * lodLandFadeFactor) / Color::AlbedoPreMult, lodLandBlendFactor);
 		indirectSpecularLobeWeight = lerp(indirectSpecularLobeWeight, 0, lodLandBlendFactor);
 		pbrGlossiness = lerp(pbrGlossiness, 0, lodLandBlendFactor);
 #		endif
@@ -2619,10 +2619,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(SNOW)
 #		if defined(TRUE_PBR)
-	psout.Parameters.x = RGBToLuminanceAlternative(specularColorPBR);
+	psout.Parameters.x = Color::RGBToLuminanceAlternative(specularColorPBR);
 	psout.Parameters.y = 0;
 #		else
-	psout.Parameters.x = RGBToLuminanceAlternative(lightsSpecularColor);
+	psout.Parameters.x = Color::RGBToLuminanceAlternative(lightsSpecularColor);
 #		endif
 #	endif  // SNOW && !PBR
 
@@ -2632,7 +2632,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if !defined(DEFERRED)
 	float ssrMask = glossiness;
 #		if defined(TRUE_PBR)
-	ssrMask = RGBToLuminanceAlternative(pbrSurfaceProperties.F0);
+	ssrMask = Color::RGBToLuminanceAlternative(pbrSurfaceProperties.F0);
 #		endif
 	psout.ScreenSpaceNormals.w = smoothstep(-1e-5 + SSRParams.x, SSRParams.y, ssrMask) * SSRParams.w;
 
@@ -2656,13 +2656,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 outputSpecular = specularColor.xyz;
 #		if defined(TRUE_PBR)
-	outputSpecular = LinearToGamma(specularColorPBR.xyz);
+	outputSpecular = Color::LinearToGamma(specularColorPBR.xyz);
 #		endif
 	psout.Specular = float4(outputSpecular, psout.Diffuse.w);
 
 	float3 outputAlbedo = baseColor.xyz * vertexColor;
 #		if defined(TRUE_PBR)
-	outputAlbedo = LinearToGamma(indirectDiffuseLobeWeight * AlbedoPreMult);
+	outputAlbedo = Color::LinearToGamma(indirectDiffuseLobeWeight * Color::AlbedoPreMult);
 #		endif
 	psout.Albedo = float4(outputAlbedo, psout.Diffuse.w);
 
@@ -2676,13 +2676,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(TRUE_PBR)
 	psout.Reflectance = float4(indirectSpecularLobeWeight, psout.Diffuse.w);
-	psout.NormalGlossiness = float4(EncodeNormal(screenSpaceNormal), pbrGlossiness, psout.Diffuse.w);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), pbrGlossiness, psout.Diffuse.w);
 #		elif defined(WETNESS_EFFECTS)
 	psout.Reflectance = float4(wetnessReflectance, psout.Diffuse.w);
-	psout.NormalGlossiness = float4(EncodeNormal(screenSpaceNormal), lerp(outGlossiness, 1.0, wetnessGlossinessSpecular), psout.Diffuse.w);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), lerp(outGlossiness, 1.0, wetnessGlossinessSpecular), psout.Diffuse.w);
 #		else
 	psout.Reflectance = float4(0.0.xxx, psout.Diffuse.w);
-	psout.NormalGlossiness = float4(EncodeNormal(screenSpaceNormal), outGlossiness, psout.Diffuse.w);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), outGlossiness, psout.Diffuse.w);
 #		endif
 
 	psout.Parameters.w = psout.Diffuse.w;
