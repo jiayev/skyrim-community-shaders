@@ -28,7 +28,7 @@ void readHistory(
 	inout half4 prev_gi, inout half4 prev_gi_specular, inout half3 prev_ambient, inout float accum_frames, inout float wsum)
 {
 	const float2 uv = (pixCoord + .5) * RCP_OUT_FRAME_DIM;
-	const float2 screen_pos = VR::ConvertFromStereoUV(uv, eyeIndex);
+	const float2 screen_pos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 	if (any(screen_pos < 0) || any(screen_pos > 1))
 		return;
 
@@ -65,14 +65,14 @@ void readHistory(
 	const float2 frameScale = FrameDim * RcpTexDim;
 
 	const float2 uv = (pixCoord + .5) * RCP_OUT_FRAME_DIM;
-	uint eyeIndex = VR::GetEyeIndexFromTexCoord(uv);
-	const float2 screen_pos = VR::ConvertFromStereoUV(uv, eyeIndex);
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
+	const float2 screen_pos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
 	float2 prev_uv = uv;
 #ifdef REPROJECTION
 	prev_uv += FULLRES_LOAD(srcMotionVec, pixCoord, uv * frameScale, samplerLinearClamp).xy;
 #endif
-	float2 prev_screen_pos = VR::ConvertFromStereoUV(prev_uv, eyeIndex);
+	float2 prev_screen_pos = Stereo::ConvertFromStereoUV(prev_uv, eyeIndex);
 
 	half3 prev_ambient = 0;
 	half4 prev_gi = 0;

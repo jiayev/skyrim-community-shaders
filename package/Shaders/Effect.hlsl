@@ -194,7 +194,7 @@ float GetProjectedV(float3 worldPosition, uint a_eyeIndex = 0)
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
-	uint eyeIndex = VR::GetEyeIndexVS(
+	uint eyeIndex = Stereo::GetEyeIndexVS(
 #	if defined(VR)
 		input.InstanceID
 #	endif  // VR
@@ -394,7 +394,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	ifdef VR
 	vsout.EyeIndex = eyeIndex;
-	VR_OUTPUT VRout = VR::GetVRVSOutput(vsout.Position, eyeIndex);
+	Stereo::VR_OUTPUT VRout = Stereo::GetVRVSOutput(vsout.Position, eyeIndex);
 	vsout.Position = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;

@@ -174,7 +174,7 @@ VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
 
-	uint eyeIndex = VR::GetEyeIndexVS(
+	uint eyeIndex = Stereo::GetEyeIndexVS(
 #		if defined(VR)
 		input.InstanceID
 #		endif  // VR
@@ -223,7 +223,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], previousMsPosition);
 #		if defined(VR)
-	VR_OUTPUT VRout = VR::GetVRVSOutput(projSpacePosition, eyeIndex);
+	Stereo::VR_OUTPUT VRout = Stereo::GetVRVSOutput(projSpacePosition, eyeIndex);
 	vsout.HPosition = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;
@@ -440,7 +440,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			endif
 	float dirShadowColor = !InInterior ? TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0)) : 1.0;
 
-	uint eyeIndex = VR::GetEyeIndexPS(input.HPosition, VPOSOffset);
+	uint eyeIndex = Stereo::GetEyeIndexPS(input.HPosition, VPOSOffset);
 	psout.MotionVectors = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 
 	float3 viewDirection = -normalize(input.WorldPosition.xyz);

@@ -65,8 +65,8 @@ void CalculateGI(
 {
 	const float2 frameScale = FrameDim * RcpTexDim;
 
-	uint eyeIndex = VR::GetEyeIndexFromTexCoord(uv);
-	float2 normalizedScreenPos = VR::ConvertFromStereoUV(uv, eyeIndex);
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
+	float2 normalizedScreenPos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
 	const float rcpNumSlices = rcp(NumSlices);
 	const float rcpNumSteps = rcp(NumSteps);
@@ -147,7 +147,7 @@ void CalculateGI(
 
 				float2 samplePxCoord = dtid + .5 + sampleOffset * sideSign;
 				float2 sampleUV = samplePxCoord * RCP_OUT_FRAME_DIM;
-				float2 sampleScreenPos = VR::ConvertFromStereoUV(sampleUV, eyeIndex);
+				float2 sampleScreenPos = Stereo::ConvertFromStereoUV(sampleUV, eyeIndex);
 				[branch] if (any(sampleScreenPos > 1.0) || any(sampleScreenPos < 0.0)) break;
 
 				float sampleOffsetLength = length(sampleOffset);
@@ -302,7 +302,7 @@ void CalculateGI(
 #endif
 
 	float2 uv = (pxCoord + .5) * RCP_OUT_FRAME_DIM;
-	uint eyeIndex = VR::GetEyeIndexFromTexCoord(uv);
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
 
 	float viewspaceZ = READ_DEPTH(srcWorkingDepth, pxCoord);
 

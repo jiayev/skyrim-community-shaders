@@ -84,8 +84,8 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 	const uint numSamples = 8;
 
 	const float2 uv = (dtid + .5) * RCP_OUT_FRAME_DIM;
-	uint eyeIndex = VR::GetEyeIndexFromTexCoord(uv);
-	const float2 screenPos = VR::ConvertFromStereoUV(uv, eyeIndex);
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
+	const float2 screenPos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
 	float depth = READ_DEPTH(srcDepth, dtid);
 	float3 pos = ScreenToViewPosition(screenPos, depth, eyeIndex);
@@ -132,12 +132,12 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 		// float2 pxOffset = radius * poissonOffset.xy;
 		// float2 pxSample = dtid + .5 + pxOffset;
 		// float2 uvSample = (floor(pxSample) + 0.5) * RCP_OUT_FRAME_DIM;  // Snap to the pixel centre
-		// float2 screenPosSample = VR::ConvertFromStereoUV(uvSample, eyeIndex);
+		// float2 screenPosSample = Stereo::ConvertFromStereoUV(uvSample, eyeIndex);
 
 		if (any(screenPosSample.xy < 0) || any(screenPosSample.xy > 1))
 			continue;
 
-		float2 uvSample = VR::ConvertToStereoUV(screenPosSample.xy, eyeIndex);
+		float2 uvSample = Stereo::ConvertToStereoUV(screenPosSample.xy, eyeIndex);
 		uvSample = (floor(uvSample * OUT_FRAME_DIM) + 0.5) * RCP_OUT_FRAME_DIM;  // Snap to the pixel centre
 
 		float depthSample = srcDepth.SampleLevel(samplerLinearClamp, uvSample * frameScale, 0);

@@ -123,7 +123,7 @@ VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
 
-	uint eyeIndex = VR::GetEyeIndexVS(
+	uint eyeIndex = Stereo::GetEyeIndexVS(
 #	if defined(VR)
 		input.InstanceID
 #	endif
@@ -276,7 +276,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	ifdef VR
 	vsout.EyeIndex = eyeIndex;
-	VR_OUTPUT VRout = VR::GetVRVSOutput(vsout.PositionCS, eyeIndex);
+	Stereo::VR_OUTPUT VRout = Stereo::GetVRVSOutput(vsout.PositionCS, eyeIndex);
 	vsout.PositionCS = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;
@@ -516,7 +516,7 @@ PS_OUTPUT main(PS_INPUT input)
 	TexStencilSampler.GetDimensions(0, stencilDimensions.x, stencilDimensions.y, stencilDimensions.z);
 	stencilValue = TexStencilSampler.Load(float3(stencilDimensions.xy * depthUv, 0)).x;
 #			endif
-	depthUv = VR::ConvertFromStereoUV(depthUv * DynamicResolutionParams2, eyeIndex);
+	depthUv = Stereo::ConvertFromStereoUV(depthUv * DynamicResolutionParams2, eyeIndex);
 	float4 positionCS = float4(2 * float2(depthUv.x, -depthUv.y + 1) - 1, depth, 1);
 	float4 positionMS = mul(CameraViewProjInverse[eyeIndex], positionCS);
 	positionMS.xyz = positionMS.xyz / positionMS.w;

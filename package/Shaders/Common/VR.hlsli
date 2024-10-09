@@ -14,7 +14,7 @@ cbuffer VRValues : register(b13)
 }
 #endif
 
-namespace VR
+namespace Stereo
 {
 	/**
 	Converts to the eye specific uv [0,1].

@@ -67,7 +67,7 @@ PS_OUTPUT main(PS_INPUT input)
 	// Disable SSR raymarch
 	return psout;
 #	endif
-	uint eyeIndex = VR::GetEyeIndexFromTexCoord(input.TexCoord);
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(input.TexCoord);
 	float2 uvStart = input.TexCoord;
 	float2 uvStartDR = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(uvStart);
 
@@ -100,7 +100,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 normal = float4(lerp(decodedNormal, DefaultNormal, isDefaultNormal), 0);
 
 	float3 uvDepthStart = float3(uvStart, depthStart);
-	uvDepthStart.xy = VR::ConvertFromStereoUV(uvStart.xy, eyeIndex, 0);
+	uvDepthStart.xy = Stereo::ConvertFromStereoUV(uvStart.xy, eyeIndex, 0);
 	float3 vsStart = UVDepthToView(uvDepthStart);
 
 	float4 csStart = mul(CameraProjInverse[eyeIndex], float4(vsStart, 1));
@@ -148,7 +148,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		ifdef VR
 			// Apply dynamic resolution adjustments and stereo UV conversions
 			FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(
-				VR::ConvertStereoRayMarchUV(
+				Stereo::ConvertStereoRayMarchUV(
 					FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition(iterationUvDepthDR),
 					eyeIndex,
 					fromOtherEye));
@@ -163,7 +163,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		ifdef VR
 				// In VR, it could be coming from the other eye
 				&& !fromOtherEye ||
-			(fromOtherEye && FrameBuffer::isOutsideFrame(VR::ConvertMonoUVToOtherEye(iterationUvDepthDR, eyeIndex, true).xy, true))
+			(fromOtherEye && FrameBuffer::isOutsideFrame(Stereo::ConvertMonoUVToOtherEye(iterationUvDepthDR, eyeIndex, true).xy, true))
 #		endif
 		) {
 			// out of screen, no ray ssr possible
@@ -226,7 +226,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		ifdef VR
 				// Apply dynamic resolution adjustments and stereo UV conversions
 				FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(
-					VR::ConvertStereoRayMarchUV(
+					Stereo::ConvertStereoRayMarchUV(
 						FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition(uvDepthFinalDR),
 						eyeIndex,
 						fromOtherEye));
@@ -249,7 +249,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 	float2 uvFinal = FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition(uvDepthFinalDR.xy);
-	uvFinal = VR::ConvertToStereoUV(uvFinal, eyeIndex);
+	uvFinal = Stereo::ConvertToStereoUV(uvFinal, eyeIndex);
 	float2 previousUvFinalDR = FrameBuffer::GetPreviousDynamicResolutionAdjustedScreenPosition(uvFinal);
 	float3 alpha = AlphaTex.Sample(AlphaSampler, previousUvFinalDR).xyz;
 
@@ -309,8 +309,8 @@ PS_OUTPUT main(PS_INPUT input)
 	alpha = useAlpha ? alpha : float3(0, 0, 0);
 
 	// for fade calculation from eye center, need to adjust to monoUV
-	uvFinal = VR::ConvertFromStereoUV(uvFinal, eyeIndex);
-	uvStart = VR::ConvertFromStereoUV(uvStart, eyeIndex);
+	uvFinal = Stereo::ConvertFromStereoUV(uvFinal, eyeIndex);
+	uvStart = Stereo::ConvertFromStereoUV(uvStart, eyeIndex);
 #		endif
 
 	float3 ssrColor = SSRParams.z * alpha + color;
@@ -353,7 +353,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		ifdef VR
 	// Make VR fades consistent by taking the closer of the two eyes
 	// Based on concepts from https://cuteloong.github.io/publications/scssr24/
-	float2 otherEyeUvResultScreenCenterOffset = VR::ConvertMonoUVToOtherEye(FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition(uvDepthFinalDR), eyeIndex).xy - 0.5;
+	float2 otherEyeUvResultScreenCenterOffset = Stereo::ConvertMonoUVToOtherEye(FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition(uvDepthFinalDR), eyeIndex).xy - 0.5;
 	centerDistance = min(centerDistance, 2 * length(otherEyeUvResultScreenCenterOffset));
 #		endif
 
