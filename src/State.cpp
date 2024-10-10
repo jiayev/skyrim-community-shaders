@@ -243,7 +243,7 @@ void State::Save(ConfigMode a_configMode)
 	std::ofstream o{ configPath };
 	json settings;
 
-	Menu::GetSingleton()->Save(settings);
+	Menu::GetSingleton()->Save(settings["Menu"]);
 
 	json advanced;
 	advanced["Dump Shaders"] = shaderCache.IsDump();

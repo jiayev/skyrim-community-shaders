@@ -21,10 +21,39 @@
 #include "Streamline.h"
 #include "Upscaling.h"
 
-#define SETTING_MENU_TOGGLEKEY "Toggle Key"
-#define SETTING_MENU_SKIPKEY "Skip Compilation Key"
-#define SETTING_MENU_FONTSCALE "Font Scale"
-#define SETTING_MENU_TOGGLE_SHADERS_KEY "Toggle Effects Key"
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	ImVec2,
+	x,
+	y)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	ImVec4,
+	x,
+	y,
+	z,
+	w)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Menu::ThemeSettings,
+	FontScale,
+	BackgroundColor,
+	TextColor,
+	BorderColor,
+	BorderSize,
+	FrameBorderSize,
+	WindowPadding,
+	WindowRounding,
+	IndentSpacing,
+	FramePadding,
+	CellPadding,
+	ItemSpacing)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Menu::Settings,
+	ToggleKey,
+	SkipCompilationKey,
+	EffectToggleKey,
+	Theme)
 
 namespace ImGui
 {
@@ -42,39 +71,28 @@ namespace ImGui
 	}
 }
 
-void SetupImGuiStyle()
+void Menu::SetupImGuiStyle() const
 {
 	auto& style = ImGui::GetStyle();
 	auto& colors = style.Colors;
 
 	// Theme based on https://github.com/powerof3/DialogueHistory
 
-	float bgAlpha{ 0.34f };
-	float disabledAlpha{ 0.30f };
 	float hovoredAlpha{ 0.1f };
 
-	ImVec4 background{ 0.0f, 0.0f, 0.0f, bgAlpha };
+	ThemeSettings themeSettings = settings.Theme;
 
-	ImVec4 border{ 0.569f, 0.545f, 0.506f, bgAlpha };
-	ImVec4 resizeGripHovered = border;
+	ImVec4 resizeGripHovered = themeSettings.BorderColor;
 	resizeGripHovered.w = hovoredAlpha;
-	float borderSize{ 3.0f };
 
-	ImVec4 text{ 1.0f, 1.0f, 1.0f, 1.0f };
-	ImVec4 textDisabled{ 1.0f, 1.0f, 1.0f, disabledAlpha };
+	ImVec4 textDisabled = themeSettings.TextColor;
+	textDisabled.w = 0.3f;
 
 	ImVec4 header{ 1.0f, 1.0f, 1.0f, 0.15f };
 	ImVec4 headerHovered = header;
 	headerHovered.w = hovoredAlpha;
 
-	ImVec4 separator{ 0.569f, 0.545f, 0.506f, bgAlpha };
-
 	ImVec4 tabHovered{ 0.2f, 0.2f, 0.2f, 1.0f };
-
-	ImVec4 frameBG{ 0.0f, 0.0f, 0.0f, bgAlpha };
-	ImVec4 frameBGHovored = frameBG;
-	frameBGHovored.w = hovoredAlpha;
-	float frameBorderSize{ 1.5f };
 
 	ImVec4 sliderGrab{ 1.0f, 1.0f, 1.0f, 0.245f };
 	ImVec4 sliderGrabActive{ 1.0f, 1.0f, 1.0f, 0.531f };
@@ -83,34 +101,40 @@ void SetupImGuiStyle()
 	ImVec4 scrollbarGrabHovered{ 0.41f, 0.41f, 0.41f, 1.0f };
 	ImVec4 scrollbarGrabActive{ 0.51f, 0.51f, 0.51f, 1.0f };
 
-	style.WindowBorderSize = borderSize;
-	style.ChildBorderSize = borderSize;
-	style.FrameBorderSize = frameBorderSize;
-	style.IndentSpacing = 8.0f;
-	style.FramePadding = ImVec2(4.0f, 4.0f);
-	style.CellPadding.x = 16.f;
-	style.ItemSpacing.y = 12.0f;
-	style.WindowPadding = ImVec2(16.0f, 8.0f);
+	style.WindowBorderSize = themeSettings.BorderSize;
+	style.ChildBorderSize = themeSettings.BorderSize;
+	style.FrameBorderSize = themeSettings.FrameBorderSize;
+	style.WindowPadding = themeSettings.WindowPadding;
+	style.WindowRounding = themeSettings.WindowRounding;
+	style.IndentSpacing = themeSettings.IndentSpacing;
+	style.FramePadding = themeSettings.FramePadding;
+	style.CellPadding = themeSettings.CellPadding;
+	style.ItemSpacing = themeSettings.ItemSpacing;
 
-	colors[ImGuiCol_WindowBg] = background;
-	colors[ImGuiCol_ChildBg] = background;
+	colors[ImGuiCol_WindowBg] = themeSettings.BackgroundColor;
+	colors[ImGuiCol_ChildBg] = colors[ImGuiCol_WindowBg];
 	colors[ImGuiCol_ScrollbarBg] = ImVec4();
 	colors[ImGuiCol_TableHeaderBg] = ImVec4();
 	colors[ImGuiCol_TableRowBg] = ImVec4();
 	colors[ImGuiCol_TableRowBgAlt] = ImVec4();
 
-	colors[ImGuiCol_Border] = border;
-	colors[ImGuiCol_Separator] = separator;
-	colors[ImGuiCol_ResizeGrip] = border;
+	colors[ImGuiCol_Border] = themeSettings.BorderColor;
+	colors[ImGuiCol_Separator] = colors[ImGuiCol_Border];
+	colors[ImGuiCol_ResizeGrip] = colors[ImGuiCol_Border];
 	colors[ImGuiCol_ResizeGripHovered] = resizeGripHovered;
 	colors[ImGuiCol_ResizeGripActive] = colors[ImGuiCol_ResizeGripHovered];
 
-	colors[ImGuiCol_Text] = text;
+	colors[ImGuiCol_Text] = themeSettings.TextColor;
 	colors[ImGuiCol_TextDisabled] = textDisabled;
 
-	colors[ImGuiCol_FrameBg] = frameBG;
+	colors[ImGuiCol_FrameBg] = themeSettings.BackgroundColor;
 	colors[ImGuiCol_FrameBgHovered] = colors[ImGuiCol_FrameBg];
 	colors[ImGuiCol_FrameBgActive] = colors[ImGuiCol_FrameBg];
+
+	colors[ImGuiCol_DockingEmptyBg] = themeSettings.BorderColor;
+	colors[ImGuiCol_DockingPreview] = themeSettings.BorderColor;
+
+	colors[ImGuiCol_PlotHistogram] = themeSettings.BorderColor;
 
 	colors[ImGuiCol_SliderGrab] = sliderGrab;
 	colors[ImGuiCol_SliderGrabActive] = sliderGrabActive;
@@ -127,13 +151,17 @@ void SetupImGuiStyle()
 	colors[ImGuiCol_ScrollbarGrabHovered] = scrollbarGrabHovered;
 	colors[ImGuiCol_ScrollbarGrabActive] = scrollbarGrabActive;
 
+	colors[ImGuiCol_TitleBg] = themeSettings.BackgroundColor;
+	colors[ImGuiCol_TitleBgActive] = colors[ImGuiCol_TitleBg];
+	colors[ImGuiCol_TitleBgCollapsed] = colors[ImGuiCol_TitleBg];
+
 	colors[ImGuiCol_Tab] = ImVec4();
 	colors[ImGuiCol_TabHovered] = tabHovered;
 	colors[ImGuiCol_TabActive] = colors[ImGuiCol_TabHovered];
 	colors[ImGuiCol_TabUnfocused] = colors[ImGuiCol_Tab];
 	colors[ImGuiCol_TabUnfocusedActive] = colors[ImGuiCol_TabHovered];
 
-	colors[ImGuiCol_CheckMark] = text;
+	colors[ImGuiCol_CheckMark] = themeSettings.TextColor;
 
 	colors[ImGuiCol_NavHighlight] = ImVec4();
 }
@@ -149,29 +177,12 @@ Menu::~Menu()
 
 void Menu::Load(json& o_json)
 {
-	if (o_json[SETTING_MENU_TOGGLEKEY].is_number_unsigned()) {
-		toggleKey = o_json[SETTING_MENU_TOGGLEKEY];
-	}
-	if (o_json[SETTING_MENU_SKIPKEY].is_number_unsigned()) {
-		skipCompilationKey = o_json[SETTING_MENU_SKIPKEY];
-	}
-	if (o_json[SETTING_MENU_FONTSCALE].is_number_float()) {
-		fontScale = o_json[SETTING_MENU_FONTSCALE];
-	}
-	if (o_json[SETTING_MENU_TOGGLE_SHADERS_KEY].is_number_unsigned()) {
-		effectToggleKey = o_json[SETTING_MENU_TOGGLE_SHADERS_KEY];
-	}
+	settings = o_json;
 }
 
 void Menu::Save(json& o_json)
 {
-	json menu;
-	menu[SETTING_MENU_TOGGLEKEY] = toggleKey;
-	menu[SETTING_MENU_SKIPKEY] = skipCompilationKey;
-	menu[SETTING_MENU_FONTSCALE] = fontScale;
-	menu[SETTING_MENU_TOGGLE_SHADERS_KEY] = effectToggleKey;
-
-	o_json["Menu"] = menu;
+	o_json = settings;
 }
 
 #define IM_VK_KEYPAD_ENTER (VK_RETURN + 256)
@@ -198,7 +209,7 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	ImGui_ImplWin32_Init(desc.OutputWindow);
 	ImGui_ImplDX11_Init(device, context);
 
-	float trueScale = exp2(fontScale);
+	float trueScale = exp2(settings.Theme.FontScale);
 	auto& style = ImGui::GetStyle();
 	style.ScaleAllSizes(trueScale);
 	style.MouseCursorScale = 1.f;
@@ -210,28 +221,28 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 
 void Menu::DrawSettings()
 {
-	ImGuiStyle oldStyle = ImGui::GetStyle();
-	SetupImGuiStyle();
-
 	ImGui::DockSpaceOverViewport(NULL, ImGuiDockNodeFlags_PassthruCentralNode);
 
 	ImGui::SetNextWindowPos(ImGui::GetNativeViewportSizeScaled(0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
 	ImGui::SetNextWindowSize(ImGui::GetNativeViewportSizeScaled(0.8f), ImGuiCond_FirstUseEver);
 
-	ImGui::Begin("##Main", &IsEnabled, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
-	{
-		ImGui::Spacing(2);
-		ImGui::SetWindowFontScale(1.5f);
-		ImGui::TextUnformatted(std::format("Skyrim Community Shaders {}", Plugin::VERSION.string(".")).c_str());
-		ImGui::SetWindowFontScale(1.f);
-		ImGui::SameLine(ImGui::GetWindowWidth() - 70);
-		if (ImGui::Button("X", ImVec2(50, 0))) {
-			IsEnabled = false;
-		}
+	auto title = std::format("Skyrim Community Shaders {}", Plugin::VERSION.string("."));
 
-		ImGui::Spacing(2);
-		ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
-		ImGui::Spacing(2);
+	ImGui::Begin(title.c_str(), &IsEnabled, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
+	{
+		if (!ImGui::IsWindowDocked()) {
+			ImGui::SetWindowFontScale(1.5f);
+			ImGui::TextUnformatted(title.c_str());
+			ImGui::SetWindowFontScale(1.f);
+			ImGui::SameLine(ImGui::GetWindowWidth() - 70);
+			if (ImGui::Button("X", ImVec2(50, 0))) {
+				IsEnabled = false;
+			}
+
+			ImGui::Spacing(2);
+			ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
+			ImGui::Spacing(2);
+		}
 
 		auto& shaderCache = SIE::ShaderCache::Instance();
 
@@ -417,12 +428,6 @@ void Menu::DrawSettings()
 		}
 	}
 	ImGui::End();
-
-	ImGuiStyle& style = ImGui::GetStyle();
-	style = oldStyle;
-
-	ImGui::Render();
-	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 }
 
 void Menu::DrawGeneralSettings()
@@ -462,7 +467,7 @@ void Menu::DrawGeneralSettings()
 		}
 	}
 
-	if (ImGui::CollapsingHeader("Menu", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
+	if (ImGui::CollapsingHeader("Keybindings", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 		if (settingToggleKey) {
 			ImGui::Text("Press any key to set as toggle key...");
 		} else {
@@ -470,7 +475,7 @@ void Menu::DrawGeneralSettings()
 			ImGui::Text("Toggle Key:");
 			ImGui::SameLine();
 			ImGui::AlignTextToFramePadding();
-			ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", KeyIdToString(toggleKey));
+			ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", KeyIdToString(settings.ToggleKey));
 
 			ImGui::AlignTextToFramePadding();
 			ImGui::SameLine();
@@ -485,7 +490,7 @@ void Menu::DrawGeneralSettings()
 			ImGui::Text("Effect Toggle Key:");
 			ImGui::SameLine();
 			ImGui::AlignTextToFramePadding();
-			ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", KeyIdToString(effectToggleKey));
+			ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", KeyIdToString(settings.EffectToggleKey));
 
 			ImGui::AlignTextToFramePadding();
 			ImGui::SameLine();
@@ -500,7 +505,7 @@ void Menu::DrawGeneralSettings()
 			ImGui::Text("Skip Compilation Key:");
 			ImGui::SameLine();
 			ImGui::AlignTextToFramePadding();
-			ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", KeyIdToString(skipCompilationKey));
+			ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", KeyIdToString(settings.SkipCompilationKey));
 
 			ImGui::AlignTextToFramePadding();
 			ImGui::SameLine();
@@ -508,15 +513,30 @@ void Menu::DrawGeneralSettings()
 				settingSkipCompilationKey = true;
 			}
 		}
+	}
 
-		if (ImGui::SliderFloat("Font Scale", &fontScale, -2.f, 2.f, "%.2f")) {
-			float trueScale = exp2(fontScale);
+	if (ImGui::CollapsingHeader("Theme", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
+		auto& themeSettings = settings.Theme;
+
+		if (ImGui::SliderFloat("Font Scale", &themeSettings.FontScale, -2.f, 2.f, "%.2f")) {
+			float trueScale = exp2(themeSettings.FontScale);
 			auto& style = ImGui::GetStyle();
 			style.ScaleAllSizes(trueScale);
 			style.MouseCursorScale = 1.f;
 			auto& io = ImGui::GetIO();
 			io.FontGlobalScale = trueScale;
 		}
+		ImGui::ColorEdit4("Background", (float*)&themeSettings.BackgroundColor);
+		ImGui::ColorEdit4("Text", (float*)&themeSettings.TextColor);
+		ImGui::ColorEdit4("Border", (float*)&themeSettings.BorderColor);
+		ImGui::SliderFloat("Border size", &themeSettings.BorderSize, 0.f, 5.f, "%.1f");
+		ImGui::SliderFloat("Frame border size", &themeSettings.FrameBorderSize, 0.f, 5.f, "%.1f");
+		ImGui::SliderFloat2("Window padding", (float*)&themeSettings.WindowPadding, 0.f, 32.f, "%.1f");
+		ImGui::SliderFloat("Window rounding", &themeSettings.WindowRounding, 0.f, 5.f, "%.1f");
+		ImGui::SliderFloat("Indent spacing", &themeSettings.IndentSpacing, 0.f, 32.f, "%.1f");
+		ImGui::SliderFloat2("Frame padding", (float*)&themeSettings.FramePadding, 0.f, 32.f, "%.1f");
+		ImGui::SliderFloat2("Cell padding", (float*)&themeSettings.CellPadding, 0.f, 32.f, "%.1f");
+		ImGui::SliderFloat2("Item spacing", (float*)&themeSettings.ItemSpacing, 0.f, 32.f, "%.1f");
 	}
 }
 
@@ -705,6 +725,9 @@ void Menu::DrawOverlay()
 	ImGui_ImplWin32_NewFrame();
 	ImGui::NewFrame();
 
+	ImGuiStyle oldStyle = ImGui::GetStyle();
+	SetupImGuiStyle();
+
 	uint64_t totalShaders = 0;
 	uint64_t compiledShaders = 0;
 
@@ -731,7 +754,7 @@ void Menu::DrawOverlay()
 			auto skipShadersText = fmt::format(
 				"Press {} to proceed without completing shader compilation. "
 				"WARNING: Uncompiled shaders will have visual errors or cause stuttering when loading.",
-				KeyIdToString(skipCompilationKey));
+				KeyIdToString(settings.SkipCompilationKey));
 			ImGui::TextUnformatted(skipShadersText.c_str());
 		}
 
@@ -775,6 +798,9 @@ void Menu::DrawOverlay()
 		ImGui::Text(fmt::format("{} Mode : {:.1f} seconds left", usingTestConfig ? "Test" : "User", remaining).c_str());
 		ImGui::End();
 	}
+
+	ImGuiStyle& style = ImGui::GetStyle();
+	style = oldStyle;
 
 	ImGui::Render();
 	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
@@ -1087,20 +1113,20 @@ void Menu::ProcessInputEventQueue()
 				key = MapVirtualKeyEx(event.keyCode, MAPVK_VSC_TO_VK_EX, GetKeyboardLayout(0));
 			if (!event.IsPressed()) {
 				if (settingToggleKey) {
-					toggleKey = key;
+					settings.ToggleKey = key;
 					settingToggleKey = false;
 				} else if (settingSkipCompilationKey) {
-					skipCompilationKey = key;
+					settings.SkipCompilationKey = key;
 					settingSkipCompilationKey = false;
 				} else if (settingsEffectsToggle) {
-					effectToggleKey = key;
+					settings.EffectToggleKey = key;
 					settingsEffectsToggle = false;
-				} else if (key == toggleKey) {
+				} else if (key == settings.ToggleKey) {
 					IsEnabled = !IsEnabled;
-				} else if (key == skipCompilationKey) {
+				} else if (key == settings.SkipCompilationKey) {
 					auto& shaderCache = SIE::ShaderCache::Instance();
 					shaderCache.backgroundCompilation = true;
-				} else if (key == effectToggleKey) {
+				} else if (key == settings.EffectToggleKey) {
 					auto& shaderCache = SIE::ShaderCache::Instance();
 					shaderCache.SetEnabled(!shaderCache.IsEnabled());
 				} else if (key == priorShaderKey && State::GetSingleton()->IsDeveloperMode()) {

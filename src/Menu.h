@@ -48,17 +48,39 @@ public:
 	bool ShouldSwallowInput();
 	void OnFocusLost();
 
+	struct ThemeSettings
+	{
+		float FontScale = REL::Module::IsVR() ? -0.5f : 0.f;  // exponential
+		ImVec4 BackgroundColor{ 0.f, 0.f, 0.f, 0.5f };
+		ImVec4 TextColor{ 1.f, 1.f, 1.f, 1.f };
+		ImVec4 BorderColor{ 0.569f, 0.545f, 0.506f, 0.5f };
+		float BorderSize{ 3.f };
+		float FrameBorderSize{ 1.5f };
+		ImVec2 WindowPadding{ 16.f, 16.f };
+		float WindowRounding{ 0.f };
+		float IndentSpacing{ 8.f };
+		ImVec2 FramePadding{ 4.0f, 4.0f };
+		ImVec2 CellPadding{ 16.f, 2.f };
+		ImVec2 ItemSpacing{ 8.f, 12.f };
+	};
+
+	struct Settings
+	{
+		uint32_t ToggleKey = VK_END;
+		uint32_t SkipCompilationKey = VK_ESCAPE;
+		uint32_t EffectToggleKey = VK_MULTIPLY;  // toggle all effects
+		ThemeSettings Theme;
+	};
+
 private:
-	uint32_t toggleKey = VK_END;
-	uint32_t effectToggleKey = VK_MULTIPLY;  //toggle all effects
-	uint32_t skipCompilationKey = VK_ESCAPE;
+	Settings settings;
+
 	uint32_t priorShaderKey = VK_PRIOR;  // used for blocking shaders in debugging
 	uint32_t nextShaderKey = VK_NEXT;    // used for blocking shaders in debugging
 
 	bool settingToggleKey = false;
 	bool settingSkipCompilationKey = false;
 	bool settingsEffectsToggle = false;
-	float fontScale = 0.f;         // exponential
 	uint32_t testInterval = 0;     // Seconds to wait before toggling user/test settings
 	bool inTestMode = false;       // Whether we're in test mode
 	bool usingTestConfig = false;  // Whether we're using the test config
@@ -66,6 +88,7 @@ private:
 	std::chrono::steady_clock::time_point lastTestSwitch = high_resolution_clock::now();  // Time of last test switch
 
 	Menu() = default;
+	void SetupImGuiStyle() const;
 	const char* KeyIdToString(uint32_t key);
 	const ImGuiKey VirtualKeyToImGuiKey(WPARAM vkKey);
 
