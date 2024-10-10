@@ -154,11 +154,16 @@ void Upscaling::UpdateJitter()
 	auto upscaleMethod = GetUpscaleMethod();
 	if (upscaleMethod != UpscaleMethod::kTAA) {
 		static auto gameViewport = RE::BSGraphics::State::GetSingleton();
+		auto state = State::GetSingleton();
 
 		ffxFsr3UpscalerGetJitterOffset(&jitter.x, &jitter.y, gameViewport->frameCount, 8);
 
-		gameViewport->projectionPosScaleX = -2.0f * jitter.x / (float)gameViewport->screenWidth;
-		gameViewport->projectionPosScaleY = 2.0f * jitter.y / (float)gameViewport->screenHeight;
+		if (state->isVR)
+			gameViewport->projectionPosScaleX = -jitter.x / state->screenSize.x;
+		else
+			gameViewport->projectionPosScaleX = -2.0f * jitter.x / state->screenSize.x;
+
+		gameViewport->projectionPosScaleY = 2.0f * jitter.y / state->screenSize.y;
 	}
 }
 
