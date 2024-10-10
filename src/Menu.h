@@ -35,6 +35,8 @@ public:
 		return &menu;
 	}
 
+	bool initialized = false;
+
 	void Load(json& o_json);
 	void Save(json& o_json);
 

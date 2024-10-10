@@ -204,6 +204,8 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	style.MouseCursorScale = 1.f;
 	auto& io = ImGui::GetIO();
 	io.FontGlobalScale = trueScale;
+
+	initialized = true;
 }
 
 void Menu::DrawSettings()
