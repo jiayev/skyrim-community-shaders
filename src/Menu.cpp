@@ -398,8 +398,8 @@ void Menu::DrawSettings()
 				BuiltInMenu{ " General ", [&]() { DrawGeneralSettings(); } },
 				BuiltInMenu{ " Advanced ", [&]() { DrawAdvancedSettings(); } },
 				BuiltInMenu{ " True PBR ", []() { TruePBR::GetSingleton()->DrawSettings(); } },
-				BuiltInMenu{ " Streamline ", []() { Streamline::GetSingleton()->DrawSettings(); } },
 				BuiltInMenu{ " Upscaling ", []() { Upscaling::GetSingleton()->DrawSettings(); } },
+				BuiltInMenu{ " Frame Generation ", []() { Streamline::GetSingleton()->DrawSettings(); } },
 				"Features"s
 			};
 			std::ranges::copy(sortedList, std::back_inserter(menuList));
