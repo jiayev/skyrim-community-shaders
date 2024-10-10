@@ -99,10 +99,9 @@ public:
 	void SetupResources();
 
 	void CopyResourcesToSharedBuffers();
-
 	void Present();
-	void Upscale(Texture2D* a_color);
 
+	void Upscale(Texture2D* a_color, Texture2D* a_alphaMask, sl::DLSSPreset a_preset);
 	void UpdateConstants();
 
 	void DestroyDLSSResources();

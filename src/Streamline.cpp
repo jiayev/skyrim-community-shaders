@@ -431,7 +431,7 @@ void Streamline::Present()
 	slSetTag(viewport, inputs, _countof(inputs), state->context);
 }
 
-void Streamline::Upscale(Texture2D* a_upscaleTexture)
+void Streamline::Upscale(Texture2D* a_upscaleTexture, Texture2D* a_alphaMask, sl::DLSSPreset a_preset)
 {
 	UpdateConstants();
 
@@ -440,14 +440,12 @@ void Streamline::Upscale(Texture2D* a_upscaleTexture)
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 	auto& motionVectorsTexture = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-	auto& transparencyMaskTexture = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTEMPORAL_AA_MASK];
 
-	auto dlssPreset = (sl::DLSSPreset)Upscaling::GetSingleton()->settings.dlssPreset;
-	static auto previousDlssPreset = dlssPreset;
+	static auto previousDlssPreset = a_preset;
 
-	if (previousDlssPreset != dlssPreset)
+	if (previousDlssPreset != a_preset)
 		DestroyDLSSResources();
-	previousDlssPreset = dlssPreset;
+	previousDlssPreset = a_preset;
 
 	{
 		sl::DLSSOptions dlssOptions{};
@@ -458,11 +456,11 @@ void Streamline::Upscale(Texture2D* a_upscaleTexture)
 		dlssOptions.preExposure = 1.0f;
 		dlssOptions.sharpness = 0.0f;
 
-		dlssOptions.dlaaPreset = dlssPreset;
-		dlssOptions.qualityPreset = dlssPreset;
-		dlssOptions.balancedPreset = dlssPreset;
-		dlssOptions.performancePreset = dlssPreset;
-		dlssOptions.ultraPerformancePreset = dlssPreset;
+		dlssOptions.dlaaPreset = a_preset;
+		dlssOptions.qualityPreset = a_preset;
+		dlssOptions.balancedPreset = a_preset;
+		dlssOptions.performancePreset = a_preset;
+		dlssOptions.ultraPerformancePreset = a_preset;
 
 		if (SL_FAILED(result, slDLSSSetOptions(viewport, dlssOptions))) {
 			logger::critical("[Streamline] Could not enable DLSS");
@@ -482,10 +480,12 @@ void Streamline::Upscale(Texture2D* a_upscaleTexture)
 		sl::ResourceTag depthTag = sl::ResourceTag{ &depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &fullExtent };
 		sl::ResourceTag mvecTag = sl::ResourceTag{ &mvec, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &fullExtent };
 
-		sl::Resource transparencyMask = { sl::ResourceType::eTex2d, transparencyMaskTexture.texture, 0 };
-		sl::ResourceTag transparencyMaskTag = sl::ResourceTag{ &transparencyMask, sl::kBufferTypeTransparencyHint, sl::ResourceLifecycle::eValidUntilPresent, &fullExtent };
+		bool needsMask = a_preset != sl::DLSSPreset::ePresetA && a_preset != sl::DLSSPreset::ePresetB;
 
-		sl::ResourceTag resourceTags[] = { colorInTag, colorOutTag, depthTag, mvecTag, transparencyMaskTag };
+		sl::Resource alpha = { sl::ResourceType::eTex2d, needsMask ? a_alphaMask->resource.get() : nullptr, 0 };
+		sl::ResourceTag alphaTag = sl::ResourceTag{ &alpha, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent, &fullExtent };
+
+		sl::ResourceTag resourceTags[] = { colorInTag, colorOutTag, depthTag, mvecTag, alphaTag };
 		slSetTag(viewport, resourceTags, _countof(resourceTags), state->context);
 	}
 
@@ -509,8 +509,6 @@ void Streamline::UpdateConstants()
 	auto cameraToWorld = cameraData.viewProjMatrixUnjittered.Invert();
 	auto cameraToWorldPrev = cameraData.previousViewProjMatrixUnjittered.Invert();
 
-	auto gameViewport = RE::BSGraphics::State::GetSingleton();
-
 	float4x4 cameraToPrevCamera;
 
 	calcCameraToPrevCamera(*(sl::float4x4*)&cameraToPrevCamera, *(sl::float4x4*)&cameraToWorld, *(sl::float4x4*)&cameraToWorldPrev);
@@ -522,9 +520,14 @@ void Streamline::UpdateConstants()
 	sl::Constants slConstants = {};
 	slConstants.cameraAspectRatio = state->screenSize.x / state->screenSize.y;
 	slConstants.cameraFOV = Util::GetVerticalFOVRad();
-	slConstants.cameraFar = (*(float*)(REL::RelocationID(517032, 403540).address() + 0x44));
+
+	static auto& cameraNear = (*(float*)(REL::RelocationID(517032, 403540).address() + 0x40));
+	static auto& cameraFar = (*(float*)(REL::RelocationID(517032, 403540).address() + 0x44));
+
+	slConstants.cameraNear = cameraNear;
+	slConstants.cameraFar = cameraFar;
+
 	slConstants.cameraMotionIncluded = sl::Boolean::eTrue;
-	slConstants.cameraNear = (*(float*)(REL::RelocationID(517032, 403540).address() + 0x40));
 	slConstants.cameraPinholeOffset = { 0.f, 0.f };
 	slConstants.cameraPos = *(sl::float3*)&eyePosition;
 	slConstants.cameraFwd = *(sl::float3*)&cameraData.viewForward;
@@ -534,10 +537,14 @@ void Streamline::UpdateConstants()
 	slConstants.clipToCameraView = *(sl::float4x4*)&clipToCameraView;
 	slConstants.clipToPrevClip = *(sl::float4x4*)&cameraToPrevCamera;
 	slConstants.depthInverted = sl::Boolean::eFalse;
-	slConstants.jitterOffset = { gameViewport->projectionPosScaleX * (state->isVR ? 0.5f : 1.0f), gameViewport->projectionPosScaleY };
+
+	auto upscaling = Upscaling::GetSingleton();
+	auto jitter = upscaling->jitter;
+	slConstants.jitterOffset = { -jitter.x, -jitter.y };
+	slConstants.reset = upscaling->reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+
 	slConstants.mvecScale = { (state->isVR ? 0.5f : 1.0f), 1 };
 	slConstants.prevClipToClip = *(sl::float4x4*)&prevCameraToCamera;
-	slConstants.reset = sl::Boolean::eFalse;
 	slConstants.motionVectors3D = sl::Boolean::eTrue;
 	slConstants.motionVectorsInvalidValue = FLT_MIN;
 	slConstants.orthographicProjection = sl::Boolean::eFalse;
