@@ -28,7 +28,7 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
-#	if !defined(DISABLE_DYNAMIC)
+#	if !defined(DISABLE_DYNAMIC) || (defined(DEPTHBUFFER_COPY) && defined(DEPTHBUFFER_4X_DOWNSAMPLE))
 	float2 screenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 #	else
 	float2 screenPosition = input.TexCoord;

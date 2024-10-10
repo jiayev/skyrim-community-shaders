@@ -128,6 +128,24 @@ namespace Stereo
 		return 0;
 	}
 
+	/**
+	* @brief Converts UV coordinates from the range [0, 1] to normalized screen space [-1, 1].
+	*
+	* This function takes texture coordinates and transforms them into a normalized
+	* coordinate system centered at the origin. This is useful for various graphical
+	* calculations, especially in shaders that require symmetry around the center.
+	*
+	* @param uv The input UV coordinates in the range [0, 1].
+	* @return float2 Normalized screen space coordinates in the range [-1, 1].
+	*/
+	float2 ConvertUVToNormalizedScreenSpace(float2 uv)
+	{
+		float2 normalizedCoord;
+		normalizedCoord.x = 2.0 * (-0.5 + abs(2.0 * (uv.x - 0.5)));  // Convert UV.x
+		normalizedCoord.y = 2.0 * uv.y - 1.0;                        // Convert UV.y
+		return normalizedCoord;
+	}
+
 #ifdef PSHADER
 	/**
 	Gets the eyeIndex for PSHADER
@@ -147,6 +165,25 @@ namespace Stereo
 		return eyeIndex;
 	}
 
+	/**
+	* @brief Checks if the color is non zero by testing if the color is greater than 0 by epsilon.
+	*
+	* This function check is a color is non black. It uses a small epsilon value to allow for 
+	* floating point imprecision.
+	*
+	* For screen-space reflection (SSR), this acts as a mask and checks for an invalid reflection by
+	* checking if the reflection color is essentially black (close to zero). 
+	*
+	* @param[in] ssrColor The color to check.
+	* @param[in] epsilon Small tolerance value used to determine if the color is close to zero.
+	* @return True if color is non zero, otherwise false.
+	*/
+	bool IsNonZeroColor(float4 ssrColor, float epsilon = 0.001)
+	{
+		return dot(ssrColor.xyz, ssrColor.xyz) > epsilon * epsilon;
+	}
+
+#	ifdef VR
 	/**
 	* @brief Converts mono UV coordinates from one eye to the corresponding mono UV coordinates of the other eye.
 	*
@@ -210,7 +247,7 @@ namespace Stereo
 	{
 		fromOtherEye = false;
 		float3 resultUV = monoUV;
-#	ifdef VR
+#		ifdef VR
 		// Check if the UV coordinates are outside the frame
 		if (FrameBuffer::isOutsideFrame(resultUV.xy, false)) {
 			// Transition to the other eye
@@ -224,7 +261,7 @@ namespace Stereo
 		} else {
 			resultUV = ConvertToStereoUV(resultUV, eyeIndex);
 		}
-#	endif
+#		endif
 		return resultUV;
 	}
 
@@ -256,24 +293,6 @@ namespace Stereo
 		if (dynamicres)
 			stereoUV.xy *= DynamicResolutionParams1.xy;
 		return stereoUV;
-	}
-
-	/**
-	* @brief Checks if the color is non zero by testing if the color is greater than 0 by epsilon.
-	*
-	* This function check is a color is non black. It uses a small epsilon value to allow for 
-	* floating point imprecision.
-	*
-	* For screen-space reflection (SSR), this acts as a mask and checks for an invalid reflection by
-	* checking if the reflection color is essentially black (close to zero). 
-	*
-	* @param[in] ssrColor The color to check.
-	* @param[in] epsilon Small tolerance value used to determine if the color is close to zero.
-	* @return True if color is non zero, otherwise false.
-	*/
-	bool IsNonZeroColor(float4 ssrColor, float epsilon = 0.001)
-	{
-		return dot(ssrColor.xyz, ssrColor.xyz) > epsilon * epsilon;
 	}
 
 	/**
@@ -322,7 +341,8 @@ namespace Stereo
 	{
 		return BlendEyeColors(float3(uv1, 0), color1, float3(uv2, 0), color2, dynamicres);
 	}
-#endif  // PSHADER
+#	endif  // VR
+#endif      // PSHADER
 
 #ifdef VSHADER
 	struct VR_OUTPUT

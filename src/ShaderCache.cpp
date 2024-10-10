@@ -1647,6 +1647,11 @@ namespace SIE
 
 				{ "BSImagespaceShaderVolumetricLightingRaymarchCS", 256 },
 				{ "BSImagespaceShaderVolumetricLightingGenerateCS", 257 },
+				{ "BSImagespaceShaderCopyDepthBuffer", 98 },
+				{ "BSImagespaceShaderCopyDepthBuffer", 99 },
+				{ "BSImagespaceShaderCopyDepthBuffer", 100 },
+				{ "BSImagespaceShaderISFullScreenVR", 129 },
+
 			};
 
 			auto it = descriptors.find(imagespaceShader.name);
