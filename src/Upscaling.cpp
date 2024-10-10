@@ -242,6 +242,8 @@ void Upscaling::Upscale()
 		else if (upscaleMethod == UpscaleMethod::kFSR)
 			FidelityFX::GetSingleton()->Upscale(upscalingTexture, alphaMaskTexture, jitter, reset, settings.sharpness);
 
+		reset = false;
+
 		state->EndPerfEvent();
 	}
 
