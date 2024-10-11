@@ -152,7 +152,7 @@ ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
 void Upscaling::UpdateJitter()
 {
 	auto upscaleMethod = GetUpscaleMethod();
-	if (upscaleMethod != UpscaleMethod::kTAA) {
+	if (upscaleMethod == UpscaleMethod::kFSR || upscaleMethod == UpscaleMethod::kDLSS) {
 		static auto gameViewport = RE::BSGraphics::State::GetSingleton();
 		auto state = State::GetSingleton();
 
@@ -214,7 +214,7 @@ void Upscaling::Upscale()
 		static auto& temporalAAMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTEMPORAL_AA_MASK];
 
 		{
-			ID3D11ShaderResourceView* views[2] = { temporalAAMask.SRV };
+			ID3D11ShaderResourceView* views[1] = { temporalAAMask.SRV };
 			context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 			ID3D11UnorderedAccessView* uavs[1] = { alphaMaskTexture->uav.get() };
@@ -252,7 +252,7 @@ void Upscaling::Upscale()
 		state->EndPerfEvent();
 	}
 
-	if (upscaleMethod == UpscaleMethod::kFSR && settings.sharpness > 0.0f) {
+	if (upscaleMethod != UpscaleMethod::kFSR && settings.sharpness > 0.0f) {
 		state->BeginPerfEvent("Sharpening");
 
 		context->CopyResource(inputTextureResource, upscalingTexture->resource.get());
