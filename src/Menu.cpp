@@ -319,6 +319,7 @@ void Menu::DrawSettings()
 			{
 				std::string name;
 				std::function<void()> func;
+				bool supportsVR = true;
 			};
 			using MenuFuncInfo = std::variant<BuiltInMenu, std::string, Feature*>;
 			struct ListMenuVisitor
@@ -327,6 +328,8 @@ void Menu::DrawSettings()
 
 				void operator()(const BuiltInMenu& menu)
 				{
+					if (REL::Module::IsVR() && !menu.supportsVR)
+						return;
 					if (ImGui::Selectable(menu.name.c_str(), selectedMenu == listId, ImGuiSelectableFlags_SpanAllColumns))
 						selectedMenu = listId;
 				}
@@ -399,7 +402,7 @@ void Menu::DrawSettings()
 				BuiltInMenu{ " Advanced ", [&]() { DrawAdvancedSettings(); } },
 				BuiltInMenu{ " True PBR ", []() { TruePBR::GetSingleton()->DrawSettings(); } },
 				BuiltInMenu{ " Upscaling ", []() { Upscaling::GetSingleton()->DrawSettings(); } },
-				BuiltInMenu{ " Frame Generation ", []() { Streamline::GetSingleton()->DrawSettings(); } },
+				BuiltInMenu{ " Frame Generation ", []() { Streamline::GetSingleton()->DrawSettings(); }, false },
 				"Features"s
 			};
 			std::ranges::copy(sortedList, std::back_inserter(menuList));
