@@ -448,7 +448,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 #	if defined(FOLIAGE)
-	float checkerboard = Random::InterleavedGradientNoise(0, input.PositionCS.xy);
+	float checkerboard = Random::InterleavedGradientNoise(input.PositionCS.xy, 0);
 	if (checkerboard > 0.75)
 		discard;
 #	endif
