@@ -703,10 +703,10 @@ void Menu::DrawAdvancedSettings()
 
 void Menu::DrawDisplaySettings()
 {
-	if (ImGui::CollapsingHeader("Upscaling", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
+	if (ImGui::CollapsingHeader("Upscaling", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 		Upscaling::GetSingleton()->DrawSettings();
 	}
-	if (!REL::Module::IsVR() && ImGui::CollapsingHeader("Frame Generation", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
+	if (!REL::Module::IsVR() && ImGui::CollapsingHeader("Frame Generation", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 		Streamline::GetSingleton()->DrawSettings();
 	}
 }
