@@ -26,6 +26,7 @@ public:
 	bool updateShader = true;
 	bool settingCustomShader = false;
 	RE::BSShader* currentShader = nullptr;
+	std::string adapterDescription = "";
 
 	uint32_t currentVertexDescriptor = 0;
 	uint32_t currentPixelDescriptor = 0;
@@ -100,6 +101,8 @@ public:
 	void BeginPerfEvent(std::string_view title);
 	void EndPerfEvent();
 	void SetPerfMarker(std::string_view title);
+
+	void SetAdapterDescription(const std::wstring& description);
 
 	bool extendedFrameAnnotations = false;
 

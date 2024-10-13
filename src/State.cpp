@@ -1,5 +1,7 @@
 #include "State.h"
 
+#include <codecvt>
+
 #include <magic_enum.hpp>
 #include <pystring/pystring.h>
 
@@ -508,6 +510,12 @@ void State::EndPerfEvent()
 void State::SetPerfMarker(std::string_view title)
 {
 	pPerf->SetMarker(std::wstring(title.begin(), title.end()).c_str());
+}
+
+void State::SetAdapterDescription(const std::wstring& description)
+{
+	std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+	adapterDescription = converter.to_bytes(description);
 }
 
 void State::UpdateSharedData()
