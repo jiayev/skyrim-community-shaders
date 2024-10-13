@@ -249,8 +249,6 @@ void TruePBR::DrawSettings()
 		if (ImGui::Checkbox("Use Multi-bounce AO", &useMultiBounceAO)) {
 			settings.useMultiBounceAO = useMultiBounceAO;
 		}
-
-		ImGui::TreePop();
 	}
 }
 
