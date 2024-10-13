@@ -32,6 +32,20 @@ void Upscaling::DrawSettings()
 
 	// Slider for method selection
 	ImGui::SliderInt("Method", (int*)currentUpscaleMode, 0, availableModes, std::format("{}", upscaleModes[(uint)*currentUpscaleMode]).c_str());
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text(
+			"Disabled:\n"
+			"Disable all methods. Same as disabling Skyrim's TAA.\n"
+			"\n"
+			"Temporal Anti-Aliasing:\n"
+			"Uses Skyrim's TAA which uses frame history to smooth out jagged edges, reducing flickering and improving image stability.\n"
+			"\n"
+			"AMD FSR 3.1:\n"
+			"AMD's open-source FSR spatial upscaling algorithm designed to enhance performance while maintaining high visual quality.\n"
+			"\n"
+			"NVIDIA DLAA:\n"
+			"NVIDIA's Deep Learning Anti-Aliasing leverages AI to provide high-quality anti-aliasing without sacrificing performance. Requires NVIDIA RTX GPU.");
+	}
 
 	*currentUpscaleMode = std::min(availableModes, (uint)*currentUpscaleMode);
 	bTAA = *currentUpscaleMode != (uint)UpscaleMethod::kNONE;
@@ -57,6 +71,23 @@ void Upscaling::DrawSettings()
 		const char* dlssPresets[] = { "Default", "Preset A", "Preset B", "Preset C", "Preset D", "Preset E", "Preset F" };
 		ImGui::SliderInt("DLSS Preset", (int*)&settings.dlssPreset, 0, 6, std::format("{}", dlssPresets[(uint)settings.dlssPreset]).c_str());
 		settings.dlssPreset = std::min(6u, (uint)settings.dlssPreset);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Default:\n"
+				"Preset E\n\n"
+				"Preset A (intended for Perf/Balanced/Quality modes):\n"
+				"An older variant best suited to combat ghosting for elements with missing inputs (such as motion vectors)\n\n"
+				"Preset B (intended for Ultra Perf mode):\n"
+				"Similar to Preset A but for Ultra Performance mode\n\n"
+				"Preset C (intended for Perf/Balanced/Quality modes):\n"
+				"Preset which generally favors current frame information. Generally well-suited for fast-paced game content\n\n"
+				"Preset D (intended for Perf/Balanced/Quality modes):\n"
+				"Similar to Preset E. Preset E is generally recommended over Preset D.\n\n"
+				"Preset E (intended for Perf/Balanced/Quality modes):\n"
+				"The CS default preset. Default preset for Perf/Balanced/Quality mode. Generally favors image stability\n\n"
+				"Preset F (intended for Ultra Perf/DLAA modes):\n"
+				"The default preset for Ultra Perf and DLAA modes.");
+		}
 	}
 }
 

@@ -57,13 +57,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace ImGui
 {
-	void Spacing(std::uint32_t a_numSpaces)
-	{
-		for (std::uint32_t i = 0; i < a_numSpaces; i++) {
-			Spacing();
-		}
-	}
-
 	ImVec2 GetNativeViewportSizeScaled(float scale)
 	{
 		const auto Size = GetMainViewport()->Size;
@@ -102,7 +95,7 @@ void Menu::SetupImGuiStyle() const
 	ImVec4 scrollbarGrabActive{ 0.51f, 0.51f, 0.51f, 1.0f };
 
 	style.WindowBorderSize = themeSettings.BorderSize;
-	style.ChildBorderSize = themeSettings.BorderSize;
+	style.ChildBorderSize = 0.f;
 	style.FrameBorderSize = themeSettings.FrameBorderSize;
 	style.WindowPadding = themeSettings.WindowPadding;
 	style.WindowRounding = themeSettings.WindowRounding;
@@ -112,7 +105,7 @@ void Menu::SetupImGuiStyle() const
 	style.ItemSpacing = themeSettings.ItemSpacing;
 
 	colors[ImGuiCol_WindowBg] = themeSettings.BackgroundColor;
-	colors[ImGuiCol_ChildBg] = colors[ImGuiCol_WindowBg];
+	colors[ImGuiCol_ChildBg] = ImVec4();
 	colors[ImGuiCol_ScrollbarBg] = ImVec4();
 	colors[ImGuiCol_TableHeaderBg] = ImVec4();
 	colors[ImGuiCol_TableRowBg] = ImVec4();
@@ -226,22 +219,18 @@ void Menu::DrawSettings()
 	ImGui::SetNextWindowPos(ImGui::GetNativeViewportSizeScaled(0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
 	ImGui::SetNextWindowSize(ImGui::GetNativeViewportSizeScaled(0.8f), ImGuiCond_FirstUseEver);
 
-	auto title = std::format("Skyrim Community Shaders {}", Plugin::VERSION.string("."));
+	auto title = "Community Shaders";
 
-	ImGui::Begin(title.c_str(), &IsEnabled, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
+	ImGui::Begin(title, &IsEnabled, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
 	{
 		if (!ImGui::IsWindowDocked()) {
 			ImGui::SetWindowFontScale(1.5f);
-			ImGui::TextUnformatted(title.c_str());
+			ImGui::TextUnformatted(title);
 			ImGui::SetWindowFontScale(1.f);
-			ImGui::SameLine(ImGui::GetWindowWidth() - 70);
-			if (ImGui::Button("X", ImVec2(50, 0))) {
-				IsEnabled = false;
-			}
 
-			ImGui::Spacing(2);
+			ImGui::Spacing();
 			ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
-			ImGui::Spacing(2);
+			ImGui::Spacing();
 		}
 
 		auto& shaderCache = SIE::ShaderCache::Instance();
@@ -304,10 +293,14 @@ void Menu::DrawSettings()
 			ImGui::EndTable();
 		}
 
-		ImGui::Spacing(2);
+		ImGui::Spacing();
 		ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
-		ImGui::Spacing(2);
+		ImGui::Spacing();
 
+		float footer_height = ImGui::GetTextLineHeightWithSpacing() + 76 - ImGui::GetStyle().WindowPadding.y;
+		float content_height = ImGui::GetContentRegionAvail().y - footer_height;
+
+		ImGui::BeginChild("Menus Table", ImVec2(0, content_height));
 		if (ImGui::BeginTable("Menus Table", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
 			ImGui::TableSetupColumn("##ListOfMenus", 0, 2);
 			ImGui::TableSetupColumn("##MenuConfig", 0, 8);
@@ -319,7 +312,6 @@ void Menu::DrawSettings()
 			{
 				std::string name;
 				std::function<void()> func;
-				bool supportsVR = true;
 			};
 			using MenuFuncInfo = std::variant<BuiltInMenu, std::string, Feature*>;
 			struct ListMenuVisitor
@@ -328,9 +320,7 @@ void Menu::DrawSettings()
 
 				void operator()(const BuiltInMenu& menu)
 				{
-					if (REL::Module::IsVR() && !menu.supportsVR)
-						return;
-					if (ImGui::Selectable(menu.name.c_str(), selectedMenu == listId, ImGuiSelectableFlags_SpanAllColumns))
+					if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenu == listId, ImGuiSelectableFlags_SpanAllColumns))
 						selectedMenu = listId;
 				}
 				void operator()(const std::string& label)
@@ -356,11 +346,7 @@ void Menu::DrawSettings()
 			{
 				void operator()(const BuiltInMenu& menu)
 				{
-					ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
-					ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4());
 					if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-						ImGui::PopStyleVar();
-						ImGui::PopStyleColor();
 						menu.func();
 					}
 					ImGui::EndChild();
@@ -380,11 +366,7 @@ void Menu::DrawSettings()
 							"Restores the feature's settings back to their default values. "
 							"You will still need to Save Settings to make these changes permanent. ");
 					}
-					ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
-					ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4());
 					if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-						ImGui::PopStyleVar();
-						ImGui::PopStyleColor();
 						feat->DrawSettings();
 					}
 					ImGui::EndChild();
@@ -392,20 +374,18 @@ void Menu::DrawSettings()
 			};
 
 			auto& featureList = Feature::GetFeatureList();
-			auto sortedList{ featureList };  // need a copy so the load order is not lost
-			std::sort(sortedList.begin(), sortedList.end(), [](Feature* a, Feature* b) {
+			auto sortedFeatureList{ featureList };  // need a copy so the load order is not lost
+			std::sort(sortedFeatureList.begin(), sortedFeatureList.end(), [](Feature* a, Feature* b) {
 				return a->GetName() < b->GetName();
 			});
 
 			auto menuList = std::vector<MenuFuncInfo>{
-				BuiltInMenu{ " General ", [&]() { DrawGeneralSettings(); } },
-				BuiltInMenu{ " Advanced ", [&]() { DrawAdvancedSettings(); } },
-				BuiltInMenu{ " True PBR ", []() { TruePBR::GetSingleton()->DrawSettings(); } },
-				BuiltInMenu{ " Upscaling ", []() { Upscaling::GetSingleton()->DrawSettings(); } },
-				BuiltInMenu{ " Frame Generation ", []() { Streamline::GetSingleton()->DrawSettings(); }, false },
+				BuiltInMenu{ "General", [&]() { DrawGeneralSettings(); } },
+				BuiltInMenu{ "Advanced", [&]() { DrawAdvancedSettings(); } },
+				BuiltInMenu{ "Display", [&]() { DrawDisplaySettings(); } },
 				"Features"s
 			};
-			std::ranges::copy(sortedList, std::back_inserter(menuList));
+			std::ranges::copy(sortedFeatureList, std::back_inserter(menuList));
 
 			ImGui::TableNextColumn();
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
@@ -429,6 +409,13 @@ void Menu::DrawSettings()
 
 			ImGui::EndTable();
 		}
+		ImGui::EndChild();
+
+		ImGui::Spacing();
+		ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
+		ImGui::Spacing();
+
+		DrawFooter();
 	}
 	ImGui::End();
 }
@@ -709,6 +696,43 @@ void Menu::DrawAdvancedSettings()
 			}
 			ImGui::EndTable();
 		}
+	}
+
+	TruePBR::GetSingleton()->DrawSettings();
+}
+
+void Menu::DrawDisplaySettings()
+{
+	if (ImGui::CollapsingHeader("Upscaling", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
+		Upscaling::GetSingleton()->DrawSettings();
+	}
+	if (!REL::Module::IsVR() && ImGui::CollapsingHeader("Frame Generation", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
+		Streamline::GetSingleton()->DrawSettings();
+	}
+}
+
+static std::string GetFormattedVersion(const REL::Version& version)
+{
+	const auto& v = version.string(".");
+	return v.substr(0, v.find_last_of("."));
+}
+
+void Menu::DrawFooter()
+{
+	if (ImGui::BeginTable("##Footer", 4, ImGuiTableFlags_SizingStretchSame)) {
+		ImGui::TableNextColumn();
+		ImGui::TextUnformatted(std::format("CS Version: {}", GetFormattedVersion(Plugin::VERSION).c_str()).c_str());
+
+		ImGui::TableNextColumn();
+		ImGui::TextUnformatted(std::format("Game Version: {} {}", magic_enum::enum_name(REL::Module::GetRuntime()), GetFormattedVersion(REL::Module::get().version()).c_str()).c_str());
+
+		ImGui::TableNextColumn();
+		ImGui::TextUnformatted(std::format("D3D12 Interop: {}", Streamline::GetSingleton()->featureDLSSG && !REL::Module::IsVR() ? "Active" : "Inactive").c_str());
+
+		ImGui::TableNextColumn();
+		ImGui::TextUnformatted(std::format("GPU: {}", State::GetSingleton()->adapterDescription.c_str()).c_str());
+
+		ImGui::EndTable();
 	}
 }
 

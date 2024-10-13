@@ -522,9 +522,10 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 
 	float3 color = DLightColor.xyz;
+#		if defined(EFFECT_WEATHER)
+#			if defined(EFFECT_SHADOWS)
 	if (!InInterior && !InMapMenu && (ExtraShaderDescriptor & _InWorld)) {
-		float3 viewDirection = normalize(worldPosition);
-		color = DirLightColorShared * GetEffectShadow(worldPosition, viewDirection, screenPosition, eyeIndex) * 0.5;
+		color = DirLightColorShared * GetEffectShadow(worldPosition, normalize(worldPosition), screenPosition, eyeIndex) * 0.5;
 
 		float3 directionalAmbientColor = DirectionalAmbientShared._14_24_34;
 		color += directionalAmbientColor;
@@ -534,6 +535,14 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 		float3 directionalAmbientColor = DirectionalAmbientShared._14_24_34;
 		color += directionalAmbientColor;
 	}
+#			else
+	color = DirLightColorShared * 0.5;
+
+	float3 directionalAmbientColor = DirectionalAmbientShared._14_24_34;
+	color += directionalAmbientColor;
+#			endif
+#		endif
+
 	color.x += dot(PLightColorR * lightFadeMul, 1.0.xxxx);
 	color.y += dot(PLightColorG * lightFadeMul, 1.0.xxxx);
 	color.z += dot(PLightColorB * lightFadeMul, 1.0.xxxx);

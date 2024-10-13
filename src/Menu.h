@@ -94,6 +94,8 @@ private:
 
 	void DrawGeneralSettings();
 	void DrawAdvancedSettings();
+	void DrawDisplaySettings();
+	void DrawFooter();
 
 	class CharEvent : public RE::InputEvent
 	{
