@@ -444,7 +444,7 @@ void Menu::DrawGeneralSettings()
 		}
 	}
 
-	if (ImGui::CollapsingHeader("Keybindings", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
+	if (ImGui::CollapsingHeader("Keybindings", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 		if (settingToggleKey) {
 			ImGui::Text("Press any key to set as toggle key...");
 		} else {
