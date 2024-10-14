@@ -413,6 +413,7 @@ void Menu::DrawSettings()
 void Menu::DrawGeneralSettings()
 {
 	auto& shaderCache = SIE::ShaderCache::Instance();
+	auto& themeSettings = Menu::GetSingleton()->settings.Theme;
 
 	if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 		bool useCustomShaders = shaderCache.IsEnabled();
