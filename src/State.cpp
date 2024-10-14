@@ -140,6 +140,7 @@ void State::Load(ConfigMode a_configMode)
 	auto tryLoadConfig = [&](const std::string& path) {
 		std::ifstream i(path);
 		if (!i.is_open()) {
+			logger::warn("Unable to open config file: {}", path);
 			return false;
 		}
 		try {
@@ -181,9 +182,8 @@ void State::Load(ConfigMode a_configMode)
 		json& advanced = settings["Advanced"];
 		if (advanced["Dump Shaders"].is_boolean())
 			shaderCache.SetDump(advanced["Dump Shaders"]);
-		if (advanced["Log Level"].is_number_integer()) {
+		if (advanced["Log Level"].is_number_integer())
 			logLevel = static_cast<spdlog::level::level_enum>((int)advanced["Log Level"]);
-		}
 		if (advanced["Shader Defines"].is_string())
 			SetDefines(advanced["Shader Defines"]);
 		if (advanced["Compiler Threads"].is_number_integer())
@@ -215,23 +215,39 @@ void State::Load(ConfigMode a_configMode)
 			auto name = magic_enum::enum_name((RE::BSShader::Type)(classIndex + 1));
 			if (originalShaders[name].is_boolean()) {
 				enabledClasses[classIndex] = originalShaders[name];
+			} else {
+				logger::warn("Invalid entry for shader class '{}', using default", name);
 			}
 		}
 	}
 
 	auto truePBR = TruePBR::GetSingleton();
 	auto& pbrJson = settings[truePBR->GetShortName()];
-	if (pbrJson.is_object())
+	if (pbrJson.is_object()) {
 		truePBR->LoadSettings(pbrJson);
+	} else {
+		logger::warn("Missing settings for TruePBR, using default.");
+	}
 
 	auto upscaling = Upscaling::GetSingleton();
 	auto& upscalingJson = settings[upscaling->GetShortName()];
-	if (upscalingJson.is_object())
+	if (upscalingJson.is_object()) {
 		upscaling->LoadSettings(upscalingJson);
+	} else {
+		logger::warn("Missing settings for Upscaling, using default.");
+	}
 
-	for (auto* feature : Feature::GetFeatureList())
-		feature->Load(settings);
-
+	try {
+		for (auto* feature : Feature::GetFeatureList()) {
+			try {
+				feature->Load(settings);
+			} catch (const std::exception& e) {
+				logger::warn("Error loading setting for feature '{}': {}", feature->GetShortName(), e.what());
+			}
+		}
+	} catch (const std::exception& e) {
+		logger::warn("Unexpected error while loading feature settings: {}", e.what());
+	}
 	if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
 		logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
 		Save(configMode);
@@ -243,6 +259,13 @@ void State::Save(ConfigMode a_configMode)
 	const auto& shaderCache = SIE::ShaderCache::Instance();
 	std::string configPath = GetConfigPath(a_configMode);
 	std::ofstream o{ configPath };
+
+	// Check if the file opened successfully
+	if (!o.is_open()) {
+		logger::warn("Failed to open config file for saving: {}", configPath);
+		return;  // Exit early if file cannot be opened
+	}
+
 	json settings;
 
 	Menu::GetSingleton()->Save(settings["Menu"]);
@@ -283,8 +306,12 @@ void State::Save(ConfigMode a_configMode)
 	for (auto* feature : Feature::GetFeatureList())
 		feature->Save(settings);
 
-	o << settings.dump(1);
-	logger::info("Saving settings to {}", configPath);
+	try {
+		o << settings.dump(1);
+		logger::info("Saving settings to {}", configPath);
+	} catch (const std::exception& e) {
+		logger::warn("Failed to write settings to file: {}. Error: {}", configPath, e.what());
+	}
 }
 
 void State::PostPostLoad()
