@@ -22,18 +22,6 @@
 #include "Upscaling.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	ImVec2,
-	x,
-	y)
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	ImVec4,
-	x,
-	y,
-	z,
-	w)
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings,
 	FontScale,
 	BackgroundColor,
