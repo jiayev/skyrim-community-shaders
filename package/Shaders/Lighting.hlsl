@@ -1068,27 +1068,26 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(LANDSCAPE)
 	float mipLevels[6];
-	float sh0;
-	float pixelOffset;
+#	else
+	float mipLevel = 0;
+#	endif  // LANDSCAPE
+	float sh0 = 0;
+	float pixelOffset = 0;
 
-#		if defined(EMAT)
+#	if defined(EMAT)
+#		if defined(LANDSCAPE)
 	DisplacementParams displacementParams[6];
 	displacementParams[0].DisplacementScale = 1.f;
 	displacementParams[0].DisplacementOffset = 0.f;
 	displacementParams[0].HeightScale = 1.f;
-#		endif
-#	else
-	float mipLevel;
-	float sh0;
-	float pixelOffset;
-
-#		if defined(EMAT)
+#		else
 	DisplacementParams displacementParams;
 	displacementParams.DisplacementScale = 1.f;
 	displacementParams.DisplacementOffset = 0.f;
 	displacementParams.HeightScale = 1.f;
 #		endif
-#	endif  // LANDSCAPE
+
+#	endif
 
 	float3 entryNormal = 0;
 	float3 entryNormalTS = 0;
@@ -1246,7 +1245,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float4 baseColor = 0;
 	float4 normal = 0;
-	float4 glossiness = 0;
+	float glossiness = 0;
 
 	float4 rawRMAOS = 0;
 
@@ -1627,7 +1626,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	baseColor.xyz = GetWorldMapBaseColor(rawBaseColor.xyz, baseColor.xyz, projWeight);
 #	endif  // WORLD_MAP
 
-	float3 worldSpaceNormal = modelNormal;
+	float3 worldSpaceNormal = modelNormal.xyz;
 
 #	if !defined(DRAW_IN_WORLDSPACE)
 	[flatten] if (!input.WorldSpace)
@@ -1791,11 +1790,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		(dot(input.WorldPosition, input.WorldPosition) < wetnessEffectsSettings.RaindropFxRange * wetnessEffectsSettings.RaindropFxRange)) {
 		if (wetnessOcclusion > 0.0)
 #		if defined(SKINNED)
-			raindropInfo = WetnessEffects::GetRainDrops(input.ModelPosition, wetnessEffectsSettings.Time, worldSpaceNormal);
+			raindropInfo = WetnessEffects::GetRainDrops(input.ModelPosition.xyz, wetnessEffectsSettings.Time, worldSpaceNormal);
 #		elif defined(DEFERRED)
-			raindropInfo = WetnessEffects::GetRainDrops(input.WorldPosition + CameraPosAdjust[eyeIndex], wetnessEffectsSettings.Time, worldSpaceNormal);
+			raindropInfo = WetnessEffects::GetRainDrops(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, wetnessEffectsSettings.Time, worldSpaceNormal);
 #		else
-			raindropInfo = WetnessEffects::GetRainDrops(!FrameParams.y ? input.ModelPosition : input.WorldPosition + CameraPosAdjust[eyeIndex], wetnessEffectsSettings.Time, worldSpaceNormal);
+			raindropInfo = WetnessEffects::GetRainDrops(!FrameParams.y ? input.ModelPosition.xyz : input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, wetnessEffectsSettings.Time, worldSpaceNormal);
 #		endif
 	}
 
@@ -1873,7 +1872,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 #	if !defined(DEFERRED)
 	else if (!InInterior && inWorld) {
-		dirLightColorMultiplier *= GetLightingShadow(screenNoise, input.WorldPosition, eyeIndex);
+		dirLightColorMultiplier *= GetLightingShadow(screenNoise, input.WorldPosition.xyz, eyeIndex);
 	}
 #	endif
 
@@ -1916,7 +1915,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		if (dirLightAngle > 0.0)
 #		endif
 		{
-			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position, screenUV, screenNoise, viewPosition, eyeIndex);
+			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, screenUV, screenNoise, viewPosition, eyeIndex);
 #		if defined(TREE_ANIM)
 			PerGeometry sD = SharedPerShadow[0];
 			dirDetailShadow = lerp(1.0, dirDetailShadow, saturate(viewPosition.z / sqrt(sD.ShadowLightParam.z)));
@@ -2268,7 +2267,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(SKYLIGHTING)
 	float skylightingDiffuse = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(float3(worldSpaceNormal.xy, worldSpaceNormal.z * 0.5 + 0.5))) / shPI;
-	skylightingDiffuse = lerp(1.0, skylightingDiffuse, Skylighting::getFadeOutFactor(input.WorldPosition));
+	skylightingDiffuse = lerp(1.0, skylightingDiffuse, Skylighting::getFadeOutFactor(input.WorldPosition.xyz));
 	skylightingDiffuse = Skylighting::mixDiffuse(skylightingSettings, skylightingDiffuse);
 #		if !defined(TRUE_PBR)
 	directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor) / Color::LightPreMult;
@@ -2293,7 +2292,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float viewNormalAngle = dot(worldSpaceNormal.xyz, viewDirection);
 	float3 envSamplingPoint = (viewNormalAngle * 2) * modelNormal.xyz - viewDirection;
 	float4 envColorBase = TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint);
-	float3 envColor = envColorBase * envMask;
+	float3 envColor = envColorBase.xyz * envMask;
 #		if defined(DYNAMIC_CUBEMAPS)
 	float3 F0 = 0.0;
 	float envRoughness = 1.0;
