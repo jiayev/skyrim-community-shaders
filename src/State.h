@@ -159,6 +159,19 @@ public:
 
 	TracyD3D11Ctx tracyCtx = nullptr;  // Tracy context
 
+	void ClearDisabledFeatures();
+	bool SetFeatureDisabled(const std::string& featureName, bool isDisabled);
+	bool IsFeatureDisabled(const std::string& featureName);
+	std::unordered_map<std::string, bool>& GetDisabledFeatures();
+
+	// Features that are more special then others
+	std::unordered_map<std::string, bool> specialFeatures = {
+		{ "Frame Generation", false },
+		{ "Upscaling", false },
+		{ "TruePBR", false },
+	};
+	std::unordered_map<std::string, bool> disabledFeatures;
+
 	inline ~State()
 	{
 #ifdef TRACY_ENABLE

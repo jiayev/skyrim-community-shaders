@@ -220,6 +220,21 @@ void State::Load(ConfigMode a_configMode)
 			}
 		}
 	}
+	// Ensure 'Disable at Boot' section exists in the JSON
+	if (!settings.contains("Disable at Boot") || !settings["Disable at Boot"].is_object()) {
+		// Initialize to an empty object if it doesn't exist
+		settings["Disable at Boot"] = json::object();
+	}
+
+	json& disabledFeaturesJson = settings["Disable at Boot"];
+
+	for (auto& [featureName, featureStatus] : disabledFeaturesJson.items()) {
+		if (featureStatus.is_boolean()) {
+			disabledFeatures[featureName] = featureStatus.get<bool>();
+		} else {
+			logger::warn("Invalid entry for feature '{}' in 'Disable at Boot', expected boolean.", featureName);
+		}
+	}
 
 	auto truePBR = TruePBR::GetSingleton();
 	auto& pbrJson = settings[truePBR->GetShortName()];
@@ -237,16 +252,22 @@ void State::Load(ConfigMode a_configMode)
 		logger::warn("Missing settings for Upscaling, using default.");
 	}
 
-	try {
-		for (auto* feature : Feature::GetFeatureList()) {
-			try {
+	for (auto* feature : Feature::GetFeatureList()) {
+		try {
+			const std::string featureName = feature->GetShortName();
+			bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
+			if (!isDisabled) {
 				feature->Load(settings);
-			} catch (const std::exception& e) {
-				logger::warn("Error loading setting for feature '{}': {}", feature->GetShortName(), e.what());
+			} else {
+				logger::info("Feature '{}' is disabled at boot.", featureName);
 			}
+		} catch (const std::exception& e) {
+			feature->failedLoadedMessage = std::format(
+				"{}{} failed to load. Check CommunityShaders.log",
+				feature->failedLoadedMessage.empty() ? "" : feature->failedLoadedMessage + "\n",
+				feature->GetName());
+			logger::warn("Error loading setting for feature '{}': {}", feature->GetShortName(), e.what());
 		}
-	} catch (const std::exception& e) {
-		logger::warn("Unexpected error while loading feature settings: {}", e.what());
 	}
 	if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
 		logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
@@ -300,6 +321,12 @@ void State::Save(ConfigMode a_configMode)
 		originalShaders[magic_enum::enum_name((RE::BSShader::Type)(classIndex + 1))] = enabledClasses[classIndex];
 	}
 	settings["Replace Original Shaders"] = originalShaders;
+
+	json disabledFeaturesJson;
+	for (const auto& [featureName, isDisabled] : disabledFeatures) {
+		disabledFeaturesJson[featureName] = isDisabled;
+	}
+	settings["Disable at Boot"] = disabledFeaturesJson;
 
 	settings["Version"] = Plugin::VERSION.string();
 
@@ -610,4 +637,34 @@ void State::UpdateSharedData()
 	auto srv = (terrainBlending->loaded ? terrainBlending->blendedDepthTexture16->srv.get() : depth.depthSRV);
 
 	context->PSSetShaderResources(20, 1, &srv);
+}
+
+void State::ClearDisabledFeatures()
+{
+	disabledFeatures.clear();
+}
+
+bool State::SetFeatureDisabled(const std::string& featureName, bool isDisabled)
+{
+	bool wasPreviouslyDisabled = disabledFeatures.count(featureName) > 0 ? disabledFeatures[featureName] : false;  // Properly check if it exists
+	disabledFeatures[featureName] = isDisabled;
+
+	// Log the change
+	if (wasPreviouslyDisabled != isDisabled) {
+		logger::info("Set feature '{}' to: {}", featureName, isDisabled ? "Disabled" : "Enabled");
+	} else {
+		logger::info("Feature '{}' state remains: {}", featureName, isDisabled ? "Disabled" : "Enabled");
+	}
+
+	return disabledFeatures[featureName];  // Return the current state instead of the input parameter
+}
+
+bool State::IsFeatureDisabled(const std::string& featureName)
+{
+	return disabledFeatures.contains(featureName) && disabledFeatures[featureName];
+}
+
+std::unordered_map<std::string, bool>& State::GetDisabledFeatures()
+{
+	return disabledFeatures;
 }
