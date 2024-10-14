@@ -732,8 +732,12 @@ void Menu::DrawOverlay()
 	auto failed = shaderCache.GetFailedTasks();
 	auto hide = shaderCache.IsHideErrors();
 
-	if (!(shaderCache.IsCompiling() || IsEnabled || inTestMode || (failed && !hide)))
+	if (!(shaderCache.IsCompiling() || IsEnabled || inTestMode || (failed && !hide))) {
+		auto& io = ImGui::GetIO();
+		io.ClearInputKeys();
+		io.ClearEventsQueue();
 		return;
+	}
 
 	// Start the Dear ImGui frame
 	ImGui_ImplDX11_NewFrame();
