@@ -15,6 +15,12 @@
 
 namespace Util
 {
+	inline std::string GetFormattedVersion(const REL::Version& version)
+	{
+		const auto& v = version.string(".");
+		return v.substr(0, v.find_last_of("."));
+	}
+
 	void StoreTransform3x4NoScale(DirectX::XMFLOAT3X4& Dest, const RE::NiTransform& Source);
 	ID3D11ShaderResourceView* GetSRVFromRTV(ID3D11RenderTargetView* a_rtv);
 	ID3D11RenderTargetView* GetRTVFromSRV(ID3D11ShaderResourceView* a_srv);
