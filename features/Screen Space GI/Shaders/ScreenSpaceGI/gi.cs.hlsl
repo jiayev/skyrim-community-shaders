@@ -59,6 +59,23 @@ float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)  // without TAA, 
 	return srcNoise.Load(uint3(noiseCoord, 0));
 }
 
+// [Walter et al. 2007, "Microfacet models for refraction through rough surfaces"]
+float GetNormalDistributionFunctionGGX(float roughness, float NdotH)
+{
+	float a2 = pow(roughness, 4);
+	float d = max((NdotH * a2 - NdotH) * NdotH + 1, 1e-5);
+	return a2 / (PI * d * d);
+}
+
+// [Heitz 2014, "Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs"]
+float GetVisibilityFunctionSmithJointApprox(float roughness, float NdotV, float NdotL)
+{
+	float a = roughness * roughness;
+	float visSmithV = NdotL * (NdotV * (1 - a) + a);
+	float visSmithL = NdotV * (NdotL * (1 - a) + a);
+	return 0.5 * rcp(visSmithV + visSmithL);
+}
+
 void CalculateGI(
 	uint2 dtid, float2 uv, float viewspaceZ, float3 viewspaceNormal,
 	out float4 o_currGIAO, out float4 o_currGIAOSpecular, out float3 o_bentNormal)
@@ -230,8 +247,11 @@ void CalculateGI(
 						radiance += diffuseRadiance;
 
 #	ifdef GI_SPECULAR
+						float NoH = clamp(dot(viewspaceNormal, normalize(viewVec + sampleHorizonVec)), 1e-5, 1);
+
 						float3 specularRadiance = sampleRadiance * countbits(overlappedBitsSpecular) * 0.03125;  // 1/32
 						specularRadiance *= NoL;
+						specularRadiance *= GetNormalDistributionFunctionGGX(roughness, NoH) * GetVisibilityFunctionSmithJointApprox(roughness, cosNorm, NoL);
 						specularRadiance = max(0, specularRadiance);
 
 						radianceSpecular += specularRadiance;
