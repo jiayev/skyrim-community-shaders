@@ -235,6 +235,11 @@ void State::Load(ConfigMode a_configMode)
 			logger::warn("Invalid entry for feature '{}' in 'Disable at Boot', expected boolean.", featureName);
 		}
 	}
+	for (const auto& [featureName, _] : specialFeatures) {
+		if (IsFeatureDisabled(featureName)) {
+			logger::info("Special Feature '{}' disabled at boot", featureName);
+		}
+	}
 
 	auto truePBR = TruePBR::GetSingleton();
 	auto& pbrJson = settings[truePBR->GetShortName()];

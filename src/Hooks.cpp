@@ -658,10 +658,11 @@ namespace Hooks
 	void InstallD3DHooks()
 	{
 		auto streamline = Streamline::GetSingleton();
+		auto state = State::GetSingleton();
 
 		streamline->LoadInterposer();
 
-		if (streamline->interposer) {
+		if (streamline->interposer && !state->IsFeatureDisabled("Frame Generation")) {
 			Streamline::InstallHooks();
 
 			logger::info("Hooking D3D11CreateDeviceAndSwapChain");
@@ -669,7 +670,7 @@ namespace Hooks
 
 			logger::info("Hooking CreateDXGIFactory");
 			*(uintptr_t*)&ptrCreateDXGIFactory = SKSE::PatchIAT(hk_CreateDXGIFactory, "dxgi.dll", !REL::Module::IsVR() ? "CreateDXGIFactory" : "CreateDXGIFactory1");
-		} else {
+		} else if (!state->IsFeatureDisabled("Upscaling")) {
 			logger::info("Hooking D3D11CreateDeviceAndSwapChain");
 			*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChain = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChainNoStreamline, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
 		}

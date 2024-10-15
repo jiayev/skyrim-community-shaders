@@ -828,11 +828,35 @@ void Menu::DrawDisableAtBootSettings()
 
 void Menu::DrawDisplaySettings()
 {
-	if (ImGui::CollapsingHeader("Upscaling", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
-		Upscaling::GetSingleton()->DrawSettings();
-	}
-	if (!REL::Module::IsVR() && ImGui::CollapsingHeader("Frame Generation", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
-		Streamline::GetSingleton()->DrawSettings();
+	auto& themeSettings = Menu::GetSingleton()->settings.Theme;
+
+	const std::vector<std::pair<std::string, std::function<void()>>> features = {
+		{ "Upscaling", []() { Upscaling::GetSingleton()->DrawSettings(); } },
+		{ "Frame Generation", []() { Streamline::GetSingleton()->DrawSettings(); } }
+	};
+
+	for (const auto& [featureName, drawFunc] : features) {
+		bool isDisabled = State::GetSingleton()->IsFeatureDisabled(featureName);
+
+		if (featureName == "Frame Generation" && REL::Module::IsVR()) {
+			isDisabled = true;
+		}
+
+		if (!isDisabled) {
+			if (ImGui::CollapsingHeader(featureName.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
+				drawFunc();
+			}
+		} else {
+			ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.DisableColor);
+			ImGui::CollapsingHeader(featureName.c_str(), ImGuiTreeNodeFlags_NoTreePushOnOpen);
+			ImGui::PopStyleColor();
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text(
+					"%s has been disabled at boot. "
+					"Reenable in the Advanced -> Disable at Boot Menu.",
+					featureName.c_str());
+			}
+		}
 	}
 }
 

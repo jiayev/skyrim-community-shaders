@@ -47,6 +47,10 @@ void Streamline::DrawSettings()
 
 void Streamline::LoadInterposer()
 {
+	if (State::GetSingleton()->IsFeatureDisabled("Frame Generation")) {
+		return;
+	}
+
 	interposer = LoadLibraryW(L"Data/SKSE/Plugins/Streamline/sl.interposer.dll");
 	if (interposer == nullptr) {
 		DWORD errorCode = GetLastError();

@@ -83,7 +83,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				state->PostPostLoad();  // state should load first so basic information is populated
 				Deferred::Hooks::Install();
 				TruePBR::GetSingleton()->PostPostLoad();
-				Upscaling::InstallHooks();
+				if (!state->IsFeatureDisabled("Upscaling")) {
+					Upscaling::InstallHooks();
+				}
 				Hooks::Install();
 				FrameAnnotations::OnPostPostLoad();
 
