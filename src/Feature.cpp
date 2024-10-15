@@ -548,3 +548,13 @@ void Feature::LoadGameSettings(const std::map<std::string, gameSetting>& setting
 		}
 	}
 }
+
+bool Feature::ToggleAtBootSetting()
+{
+	auto state = State::GetSingleton();
+	const std::string featureName = GetShortName();
+	auto disabled = state->IsFeatureDisabled(featureName);
+	state->SetFeatureDisabled(featureName, !disabled);
+
+	return state->IsFeatureDisabled(featureName);  // Return the new state
+}

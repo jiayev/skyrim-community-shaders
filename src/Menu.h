@@ -55,6 +55,7 @@ public:
 		ImVec4 TextColor{ 1.f, 1.f, 1.f, 1.f };
 		ImVec4 DisableColor{ 0.5f, 0.5f, 0.5f, 1.f };
 		ImVec4 ErrorColor{ 1.f, 0.5f, 0.5f, 1.f };
+		ImVec4 RestartNeededColor{ 0.5f, 1.f, 0.5f, 1.f };
 		ImVec4 CurrentHotkeyColor{ 1.f, 1.f, 0.f, 1.f };
 		ImVec4 BorderColor{ 0.569f, 0.545f, 0.506f, 0.5f };
 		float BorderSize{ 3.f };
@@ -98,6 +99,7 @@ private:
 	void DrawGeneralSettings();
 	void DrawAdvancedSettings();
 	void DrawDisplaySettings();
+	void DrawDisableAtBootSettings();
 	void DrawFooter();
 
 	class CharEvent : public RE::InputEvent

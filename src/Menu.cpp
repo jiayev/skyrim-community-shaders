@@ -27,6 +27,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	BackgroundColor,
 	TextColor,
 	DisableColor,
+	RestartNeededColor,
 	ErrorColor,
 	CurrentHotkeyColor,
 	BorderColor,
@@ -319,16 +320,51 @@ void Menu::DrawSettings()
 				}
 				void operator()(Feature* feat)
 				{
-					if (feat->loaded) {
-						if (ImGui::Selectable(fmt::format(" {} ", feat->GetName()).c_str(), selectedMenu == listId, ImGuiSelectableFlags_SpanAllColumns))
-							selectedMenu = listId;
+					const auto featureName = feat->GetShortName();
+					bool isDisabled = State::GetSingleton()->IsFeatureDisabled(featureName);
+					bool isLoaded = feat->loaded;
+					bool hasFailedMessage = !feat->failedLoadedMessage.empty();
+					auto& themeSettings = Menu::GetSingleton()->settings.Theme;
+
+					ImVec4 textColor;
+
+					// Determine the text color based on the state
+					if (isDisabled) {
+						textColor = themeSettings.DisableColor;
+					} else if (isLoaded) {
+						textColor = themeSettings.TextColor;
+					} else if (hasFailedMessage) {
+						textColor = themeSettings.ErrorColor;
+					} else {
+						textColor = themeSettings.RestartNeededColor;
+					}
+
+					// Set text color
+					ImGui::PushStyleColor(ImGuiCol_Text, textColor);
+
+					// Create selectable item
+					if (ImGui::Selectable(fmt::format(" {} ", feat->GetName()).c_str(), selectedMenu == listId, ImGuiSelectableFlags_SpanAllColumns)) {
+						selectedMenu = listId;
+					}
+
+					// Restore original text color
+					ImGui::PopStyleColor();
+
+					// Show tooltip based on the state
+					if (isDisabled) {
+						if (auto _tt = Util::HoverTooltipWrapper()) {
+							ImGui::Text("Disabled at boot. Reenable, save settings, and restart.");
+						}
+					} else if (!isLoaded) {
+						if (auto _tt = Util::HoverTooltipWrapper()) {
+							ImGui::Text(hasFailedMessage ? feat->failedLoadedMessage.c_str() : "Feature pending restart.");
+						}
+					}
+
+					// Display version if loaded
+					if (isLoaded) {
 						ImGui::SameLine();
 						ImGui::TextDisabled(fmt::format("({})", feat->version).c_str());
-					} else if (!feat->version.empty()) {
-						ImGui::TextDisabled(fmt::format(" {} ({})", feat->GetName(), feat->version).c_str());
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::Text(feat->failedLoadedMessage.c_str());
-						}
 					}
 				}
 			};
@@ -348,18 +384,60 @@ void Menu::DrawSettings()
 				}
 				void operator()(Feature* feat)
 				{
-					if (ImGui::Button("Restore Defaults", { -1, 0 })) {
-						feat->RestoreDefaultSettings();
+					const auto featureName = feat->GetShortName();
+					bool isDisabled = State::GetSingleton()->IsFeatureDisabled(featureName);
+					bool isLoaded = feat->loaded;
+					bool hasFailedMessage = !feat->failedLoadedMessage.empty();
+					auto& themeSettings = Menu::GetSingleton()->settings.Theme;
+
+					ImVec4 textColor;
+
+					// Determine the text color based on the state
+					if (isDisabled) {
+						textColor = themeSettings.DisableColor;
+					} else if (hasFailedMessage) {
+						textColor = themeSettings.ErrorColor;
+					} else {
+						textColor = themeSettings.TextColor;
 					}
+					ImGui::PushStyleColor(ImGuiCol_Text, textColor);
+
+					if (ImGui::Button(isDisabled ? "Enable at Boot" : "Disable at Boot", { -1, 0 })) {
+						bool newState = feat->ToggleAtBootSetting();
+						logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
+					}
+
 					if (auto _tt = Util::HoverTooltipWrapper()) {
 						ImGui::Text(
-							"Restores the feature's settings back to their default values. "
-							"You will still need to Save Settings to make these changes permanent. ");
+							"Current State: %s\n"
+							"%s the feature settings at boot. "
+							"Restart will be required to reenable. "
+							"This is the same as deleting the ini file. "
+							"This should remove any performance impact for the feature.",
+							isDisabled ? "Disabled" : "Enabled",
+							isDisabled ? "Enable" : "Disable");
 					}
-					if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-						feat->DrawSettings();
+
+					ImGui::PopStyleColor();
+
+					if (hasFailedMessage) {
+						ImGui::TextColored(themeSettings.ErrorColor, feat->failedLoadedMessage.c_str());
 					}
-					ImGui::EndChild();
+
+					if (!isDisabled && isLoaded) {
+						if (ImGui::Button("Restore Defaults", { -1, 0 })) {
+							feat->RestoreDefaultSettings();
+						}
+						if (auto _tt = Util::HoverTooltipWrapper()) {
+							ImGui::Text(
+								"Restores the feature's settings back to their default values. "
+								"You will still need to Save Settings to make these changes permanent.");
+						}
+						if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
+							feat->DrawSettings();
+						}
+						ImGui::EndChild();
+					}
 				}
 			};
 
@@ -509,6 +587,7 @@ void Menu::DrawGeneralSettings()
 		ImGui::ColorEdit4("Text", (float*)&themeSettings.TextColor);
 		ImGui::ColorEdit4("Disabled Text", (float*)&themeSettings.DisableColor);
 		ImGui::ColorEdit4("Error Text", (float*)&themeSettings.ErrorColor);
+		ImGui::ColorEdit4("Restart Needed Text", (float*)&themeSettings.RestartNeededColor);
 		ImGui::ColorEdit4("Current Hotkey Text", (float*)&themeSettings.CurrentHotkeyColor);
 		ImGui::ColorEdit4("Border", (float*)&themeSettings.BorderColor);
 		ImGui::SliderFloat("Border size", &themeSettings.BorderSize, 0.f, 5.f, "%.1f");
@@ -691,6 +770,60 @@ void Menu::DrawAdvancedSettings()
 	}
 
 	TruePBR::GetSingleton()->DrawSettings();
+	Menu::DrawDisableAtBootSettings();
+}
+
+void Menu::DrawDisableAtBootSettings()
+{
+	auto state = State::GetSingleton();
+	auto& disabledFeatures = state->GetDisabledFeatures();
+
+	if (ImGui::CollapsingHeader("Disable at Boot", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
+		ImGui::Text(
+			"Select features to disable at boot. "
+			"This is the same as deleting a feature.ini file. "
+			"Restart will be required to reenable.");
+
+		if (ImGui::CollapsingHeader("Special Features")) {
+			// Prepare a sorted list of special feature names
+			std::vector<std::string> specialFeatureNames;
+			for (const auto& [featureName, _] : state->specialFeatures) {
+				specialFeatureNames.push_back(featureName);
+			}
+			std::sort(specialFeatureNames.begin(), specialFeatureNames.end());
+
+			// Display sorted special features
+			for (const auto& featureName : specialFeatureNames) {
+				// Check if the feature is currently disabled
+				bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
+
+				// Create a checkbox for each feature
+				if (ImGui::Checkbox(featureName.c_str(), &isDisabled)) {
+					// Update the disabledFeatures map based on user interaction
+					disabledFeatures[featureName] = isDisabled;
+				}
+			}
+		}
+
+		if (ImGui::CollapsingHeader("Features")) {
+			// Prepare a sorted list of feature pointers
+			auto featureList = Feature::GetFeatureList();
+			std::sort(featureList.begin(), featureList.end(), [](Feature* a, Feature* b) {
+				return a->GetShortName() < b->GetShortName();
+			});
+
+			// Display sorted features
+			for (auto* feature : featureList) {
+				const std::string featureName = feature->GetShortName();
+				bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
+
+				if (ImGui::Checkbox(featureName.c_str(), &isDisabled)) {
+					// Update the disabledFeatures map based on user interaction
+					disabledFeatures[featureName] = isDisabled;
+				}
+			}
+		}
+	}
 }
 
 void Menu::DrawDisplaySettings()
