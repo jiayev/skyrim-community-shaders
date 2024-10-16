@@ -62,7 +62,8 @@ float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)  // without TAA, 
 // [Walter et al. 2007, "Microfacet models for refraction through rough surfaces"]
 float GetNormalDistributionFunctionGGX(float roughness, float NdotH)
 {
-	float a2 = pow(roughness, 4);
+	float a = roughness * roughness;
+	float a2 = a * a;
 	float d = max((NdotH * a2 - NdotH) * NdotH + 1, 1e-5);
 	return a2 / (PI * d * d);
 }
@@ -73,7 +74,8 @@ float GetVisibilityFunctionSmithJointApprox(float roughness, float NdotV, float 
 	float a = roughness * roughness;
 	float visSmithV = NdotL * (NdotV * (1 - a) + a);
 	float visSmithL = NdotV * (NdotL * (1 - a) + a);
-	return 0.5 * rcp(visSmithV + visSmithL);
+	float vis = visSmithV + visSmithL;
+	return vis > 0 ? (0.5 / vis) : 0;
 }
 
 void CalculateGI(
@@ -108,7 +110,7 @@ void CalculateGI(
 
 	const float3 pixCenterPos = ScreenToViewPosition(normalizedScreenPos, viewspaceZ, eyeIndex);
 	const float3 viewVec = normalize(-pixCenterPos);
-	const float NoV = abs(dot(viewVec, viewspaceNormal));
+	const float NoV = clamp(dot(viewVec, viewspaceNormal), 1e-5, 1);
 
 	float visibility = 0;
 	float visibilitySpecular = 0;
@@ -229,16 +231,14 @@ void CalculateGI(
 					float giBoost = 1 + GIDistanceCompensation * smoothstep(0, GICompensationMaxDist, s * EffectRadius);
 
 					// IL
-					float frontBackMult = 1.f;
 					float3 normalSample = GBuffer::DecodeNormal(srcNormalRoughness.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).xy);
-					if (dot(normalSample, sampleHorizonVec) > 0)  // backface
-						frontBackMult = BackfaceStrength;
+					float frontBackMult = saturate(-dot(normalSample, sampleHorizonVec));
+					frontBackMult = frontBackMult < 0 ? abs(frontBackMult) * BackfaceStrength : frontBackMult;  // backface
 
-					if (frontBackMult > 0.f) {
+					float NoL = clamp(dot(viewspaceNormal, sampleHorizonVec), 1e-5, 1);
+
+					if (frontBackMult > 0.f && NoL > 0.001f) {
 						float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevel).rgb * frontBackMult * giBoost;
-
-						// float sourceMult = saturate(-dot(normalSample, sampleHorizonVec));
-						float NoL = clamp(dot(viewspaceNormal, sampleHorizonVec), 1e-5, 1);
 
 						float3 diffuseRadiance = sampleRadiance * countbits(overlappedBits) * 0.03125;  // 1/32
 						diffuseRadiance *= NoL;
@@ -250,8 +250,7 @@ void CalculateGI(
 						float NoH = clamp(dot(viewspaceNormal, normalize(viewVec + sampleHorizonVec)), 1e-5, 1);
 
 						float3 specularRadiance = sampleRadiance * countbits(overlappedBitsSpecular) * 0.03125;  // 1/32
-						specularRadiance *= NoL;
-						specularRadiance *= GetNormalDistributionFunctionGGX(roughness, NoH) * GetVisibilityFunctionSmithJointApprox(roughness, cosNorm, NoL);
+						specularRadiance *= GetNormalDistributionFunctionGGX(roughness, NoH) * GetVisibilityFunctionSmithJointApprox(roughness, NoV, NoL);
 						specularRadiance = max(0, specularRadiance);
 
 						radianceSpecular += specularRadiance;
