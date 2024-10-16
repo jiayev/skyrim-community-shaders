@@ -119,7 +119,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 		float blendedLuminance = Color::RGBToLuminance(blendedColor);
 
-		float3 linearColor = Cinematic.w * lerp(lerp(blendedLuminance, float4(blendedColor, 1), Cinematic.x), blendedLuminance * Tint, Tint.w);
+		float3 linearColor = Cinematic.w * lerp(lerp(blendedLuminance, float4(blendedColor, 1), Cinematic.x), blendedLuminance * Tint, Tint.w).xyz;
 
 		// Contrast modified to fix crushed shadows
 		linearColor = pow(abs(linearColor) / avgValue.x, Cinematic.z) * avgValue.x * sign(linearColor);

@@ -141,7 +141,7 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 		uvSample = (floor(uvSample * OUT_FRAME_DIM) + 0.5) * RCP_OUT_FRAME_DIM;  // Snap to the pixel centre
 
 		float depthSample = srcDepth.SampleLevel(samplerLinearClamp, uvSample * frameScale, 0);
-		float3 posSample = ScreenToViewPosition(screenPosSample, depthSample, eyeIndex);
+		float3 posSample = ScreenToViewPosition(screenPosSample.xy, depthSample, eyeIndex);
 
 		float4 normalRoughnessSample = srcNormalRoughness.SampleLevel(samplerLinearClamp, uvSample * frameScale, 0);
 		float3 normalSample = GBuffer::DecodeNormal(normalRoughnessSample.xy);

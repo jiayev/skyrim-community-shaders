@@ -215,26 +215,26 @@ PS_OUTPUT main(PS_INPUT input)
 	float dirShadow = 1;
 
 #			if defined(SCREEN_SPACE_SHADOWS)
-	dirShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position, screenUV, screenNoise, viewPosition, eyeIndex);
+	dirShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, screenUV, screenNoise, viewPosition, eyeIndex);
 #			endif
 
 #			if defined(TERRAIN_SHADOWS)
 	if (dirShadow > 0.0) {
-		float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex], length(input.WorldPosition.xyz), SampDiffuse);
+		float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, length(input.WorldPosition.xyz), SampDiffuse);
 		dirShadow = min(dirShadow, terrainShadow);
 	}
 #			endif
 
 #			if defined(CLOUD_SHADOWS)
 	if (dirShadow > 0.0) {
-		dirShadow *= CloudShadows::GetCloudShadowMult(input.WorldPosition, SampDiffuse);
+		dirShadow *= CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, SampDiffuse);
 	}
 #			endif
 
 	float3 diffuseColor = DirLightColorShared.xyz * dirShadow;
 
-	float3 ddx = ddx_coarse(input.WorldPosition);
-	float3 ddy = ddy_coarse(input.WorldPosition);
+	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
+	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = normalize(cross(ddx, ddy));
 
 #			if !defined(SSGI)
@@ -253,8 +253,8 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Albedo = float4(baseColor.xyz, 1);
 	psout.Masks = float4(0, 0, 1, 0);
 #		else
-	float3 ddx = ddx_coarse(input.WorldPosition);
-	float3 ddy = ddy_coarse(input.WorldPosition);
+	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
+	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = normalize(cross(ddx, ddy));
 
 	float3 color = baseColor.xyz * (DiffuseColor.xyz + AmbientColor.xyz);

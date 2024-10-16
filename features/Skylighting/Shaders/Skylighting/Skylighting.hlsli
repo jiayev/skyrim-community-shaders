@@ -75,7 +75,7 @@ namespace Skylighting
 			int3 offset = int3(i, j, k);
 			int3 cellID = cell000 + offset;
 
-			if (any(cellID < 0) || any(cellID >= ARRAY_DIM))
+			if (any(cellID < 0) || any((uint3)cellID >= ARRAY_DIM))
 				continue;
 
 			float3 cellCentreMS = cellID + 0.5 - ARRAY_DIM / 2;

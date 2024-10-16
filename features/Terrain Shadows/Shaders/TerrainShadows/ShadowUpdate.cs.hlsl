@@ -17,8 +17,8 @@ float GetInterpolatedHeight(float2 pxCoord, bool isVertical)
 	uint2 dims;
 	TexHeight.GetDimensions(dims.x, dims.y);
 
-	int2 lerpPxCoordA = int2(pxCoord - .5 * float2(isVertical, !isVertical));
-	int2 lerpPxCoordB = int2(pxCoord + .5 * float2(isVertical, !isVertical));
+	int2 lerpPxCoordA = min(0, int2(pxCoord - .5 * float2(isVertical, !isVertical)));
+	int2 lerpPxCoordB = min(0, int2(pxCoord + .5 * float2(isVertical, !isVertical)));
 	float heightA = TexHeight[lerpPxCoordA];
 	float heightB = TexHeight[lerpPxCoordB];
 
@@ -31,7 +31,7 @@ float GetInterpolatedHeight(float2 pxCoord, bool isVertical)
 	bool inBoundA = all(lerpPxCoordA > 0);
 	bool inBoundB = all(lerpPxCoordB < dims);
 	if (inBoundA && inBoundB)
-		return lerp(heightA, heightB, frac(pxCoord - .5));
+		return lerp(heightA, heightB, frac(pxCoord.x - .5));
 	else if (!inBoundA)
 		return heightB;
 	else

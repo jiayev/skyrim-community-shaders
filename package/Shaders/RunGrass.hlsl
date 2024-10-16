@@ -438,7 +438,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			else
 	float4 specColor = TexNormalSampler.Sample(SampNormalSampler, input.TexCoord.xy);
 #			endif
-	float dirShadowColor = !InInterior ? TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0)) : 1.0;
+	float dirShadowColor = !InInterior ? TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0)).r : 1.0;
 
 	uint eyeIndex = Stereo::GetEyeIndexPS(input.HPosition, VPOSOffset);
 	psout.MotionVectors = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
@@ -513,7 +513,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (dirShadowColor > 0.0) {
 		if (dirLightAngle > 0.0) {
 #			if defined(SCREEN_SPACE_SHADOWS)
-			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition, screenUV, screenNoise, viewPosition, eyeIndex);
+			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, viewPosition, eyeIndex);
 #			endif  // SCREEN_SPACE_SHADOWS
 		}
 
@@ -667,7 +667,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		psout.Diffuse = float4(diffuseColor, 1);
 	}
 #			else
-	psout.Diffuse.xyz = float4(diffuseColor, 1);
+	psout.Diffuse.xyz = diffuseColor;
 #			endif
 
 	float3 normalVS = normalize(FrameBuffer::WorldToView(normal, false, eyeIndex));

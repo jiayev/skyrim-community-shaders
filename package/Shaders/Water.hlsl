@@ -556,7 +556,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 			sh2 specularLobe = Skylighting::fauxSpecularLobeSH(normal, -viewDirection, 0.0);
 
 			float skylightingSpecular = shFuncProductIntegral(skylighting, specularLobe);
-			skylightingSpecular = lerp(1.0, skylightingSpecular, Skylighting::getFadeOutFactor(input.WPosition));
+			skylightingSpecular = lerp(1.0, skylightingSpecular, Skylighting::getFadeOutFactor(input.WPosition.xyz));
 			skylightingSpecular = Skylighting::mixSpecular(skylightingSettings, skylightingSpecular);
 
 			float3 specularIrradiance = 1;
@@ -605,7 +605,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 			float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
 
 			// calculate fog on reflection
-			float depth = DepthTex.Load(int3(ssrReflectionUvDR * BufferDim.xy, 0));
+			float depth = DepthTex.Load(int3(ssrReflectionUvDR * BufferDim.xy, 0)).r;
 			float fogDensity = depth == 0 ? 0.f : pow(saturate((-depth * FogParam.z + FogParam.z) / FogParam.w), FogNearColor.w);
 			float3 fogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogDensity);
 
@@ -728,7 +728,7 @@ float3 GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection,
 
 		sh2 skylightingSH = Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMSSkylight, float3(0, 0, 1));
 		float skylighting = shUnproject(skylightingSH, float3(0, 0, 1));
-		skylighting = lerp(1.0, skylighting, Skylighting::getFadeOutFactor(input.WPosition));
+		skylighting = lerp(1.0, skylighting, Skylighting::getFadeOutFactor(input.WPosition.xyz));
 
 		float3 refractionDiffuseColorSkylight = Skylighting::mixDiffuse(skylightingSettings, skylighting);
 		refractionDiffuseColorSkylight = Color::LinearToGamma(Color::GammaToLinear(refractionDiffuseColor) * refractionDiffuseColorSkylight);

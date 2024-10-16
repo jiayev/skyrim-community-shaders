@@ -93,7 +93,7 @@ struct VS_OUTPUT
 cbuffer VS_PerFrame : register(b12)
 {
 #	if !defined(VR)
-	row_major float4x3 ScreenProj[1] : packoffset(c0);
+	row_major float4x4 ScreenProj[1] : packoffset(c0);
 	row_major float4x4 ViewProj[1] : packoffset(c8);
 #		if defined(SKINNED)
 	float3 BonesPivot[1] : packoffset(c40);
@@ -102,7 +102,7 @@ cbuffer VS_PerFrame : register(b12)
 #			endif  // MOTIONVECTORS_NORMALS
 #		endif      // SKINNED
 #	else
-	row_major float4x3 ScreenProj[2] : packoffset(c0);
+	row_major float4x4 ScreenProj[2] : packoffset(c0);
 	row_major float4x4 ViewProj[2] : packoffset(c16);
 #		if defined(SKINNED)
 	float3 BonesPivot[2] : packoffset(c80);
@@ -608,7 +608,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 propertyColor = PropertyColor.xyz;
 
 #	if defined(LIGHTING)
-	propertyColor = GetLightingColor(input.MSPosition, input.WorldPosition, input.Position, eyeIndex);
+	propertyColor = GetLightingColor(input.MSPosition.xyz, input.WorldPosition.xyz, input.Position.xyzw, eyeIndex);
 
 #		if defined(LIGHT_LIMIT_FIX)
 	uint lightCount = 0;

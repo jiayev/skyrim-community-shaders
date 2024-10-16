@@ -163,7 +163,7 @@ cbuffer VS_PerFrame : register(b12)
 	float3 PreviousBonesPivot[1] : packoffset(c41);
 #		endif  // SKINNED
 #	else
-	row_major float4x4 ScreenProj[2] : packoffset(c0);
+	row_major float3x3 ScreenProj[2] : packoffset(c0);
 	row_major float4x4 ViewProj[2] : packoffset(c16);
 #		if defined(SKINNED)
 	float3 BonesPivot[2] : packoffset(c80);
@@ -1228,7 +1228,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		if (extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || extendedMaterialSettings.ExtendShadows)) {
 #			if defined(TRUE_PBR)
-			sh0 = ExtendedMaterials::GetTerrainHeight(input, uv, mipLevels, displacementParams, parallaxShadowQuality, input.LandBlendWeights1, input.LandBlendWeights2, weights);
+			sh0 = ExtendedMaterials::GetTerrainHeight(input, uv, mipLevels, displacementParams, parallaxShadowQuality, input.LandBlendWeights1, input.LandBlendWeights2.xy, weights);
 #			else
 			sh0 = ExtendedMaterials::GetTerrainHeight(input, uv, mipLevels, displacementParams, parallaxShadowQuality, weights);
 #			endif
@@ -2231,7 +2231,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			CharacterLightParams.y * saturate(dot(float2(0.164398998, -0.986393988), modelNormal.yz));
 		float charLightColor = min(CharacterLightParams.w, max(0, CharacterLightParams.z * TexCharacterLightProjNoiseSampler.Sample(SampCharacterLightProjNoiseSampler, baseShadowUV).x));
 #		if defined(TRUE_PBR)
-		charLightColor = Color::GammaToLinear(charLightColor) / Color::LightPreMult;
+		charLightColor = Color::GammaToLinear(charLightColor).x / Color::LightPreMult;
 #		endif
 		diffuseColor += (charLightMul * charLightColor).xxx;
 	}
@@ -2506,7 +2506,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	{
 		pbrWeight = 1 - lodLandBlendFactor;
 
-		float3 litLodLandColor = vertexColor * lodLandColor * lodLandFadeFactor * lodLandDiffuseColor;
+		float3 litLodLandColor = vertexColor * lodLandColor.xyz * lodLandFadeFactor * lodLandDiffuseColor;
 		color.xyz = lerp(color.xyz, litLodLandColor, lodLandBlendFactor);
 
 #		if defined(DEFERRED)

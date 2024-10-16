@@ -106,7 +106,7 @@ float smoothbumpstep(float edge0, float edge1, float x)
 
 			position += positionCS.xyz;
 
-			color += ColorTexture.SampleLevel(LinearSampler, uv, 0);
+			color += ColorTexture.SampleLevel(LinearSampler, uv, 0).rgb;
 			weight++;
 		}
 

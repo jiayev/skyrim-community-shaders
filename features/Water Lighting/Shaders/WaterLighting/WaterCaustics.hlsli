@@ -43,7 +43,7 @@ namespace WaterLighting
 			float causticsFade = 1.0 - saturate(causticsDistToWater / 1024.0);
 			causticsFade *= causticsFade;
 
-			float2 causticsUV = (worldPosition.xyz + CameraPosAdjust[0].xyz) * 0.005;
+			float2 causticsUV = (worldPosition.xy + CameraPosAdjust[0].xy) * 0.005;
 
 			float2 causticsUV1 = PanCausticsUV(causticsUV, 0.5 * 0.2, 1.0);
 			float2 causticsUV2 = PanCausticsUV(causticsUV, 1.0 * 0.2, -0.5);
