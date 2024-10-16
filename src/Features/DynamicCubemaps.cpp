@@ -50,7 +50,7 @@ void DynamicCubemaps::DrawSettings()
 						"The maximum iterations to ray march. "
 						"Higher values result in better quality but lower performance.");
 				}
-				RenderImGuiSettingsTree(SSRSettings, "Skyrim SSR");
+				Util::RenderImGuiSettingsTree(SSRSettings, "Skyrim SSR");
 			}
 			ImGui::TreePop();
 		}
@@ -136,8 +136,8 @@ void DynamicCubemaps::DrawSettings()
 		}
 		if (REL::Module::IsVR()) {
 			if (ImGui::TreeNodeEx("Advanced VR Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-				RenderImGuiSettingsTree(iniVRCubeMapSettings, "VR");
-				RenderImGuiSettingsTree(hiddenVRCubeMapSettings, "hiddenVR");
+				Util::RenderImGuiSettingsTree(iniVRCubeMapSettings, "VR");
+				Util::RenderImGuiSettingsTree(hiddenVRCubeMapSettings, "hiddenVR");
 				ImGui::TreePop();
 			}
 		}
@@ -152,9 +152,9 @@ void DynamicCubemaps::DrawSettings()
 void DynamicCubemaps::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	LoadGameSettings(SSRSettings);
+	Util::LoadGameSettings(SSRSettings);
 	if (REL::Module::IsVR()) {
-		LoadGameSettings(iniVRCubeMapSettings);
+		Util::LoadGameSettings(iniVRCubeMapSettings);
 	}
 	recompileFlag = true;
 }
@@ -162,19 +162,19 @@ void DynamicCubemaps::LoadSettings(json& o_json)
 void DynamicCubemaps::SaveSettings(json& o_json)
 {
 	o_json = settings;
-	SaveGameSettings(SSRSettings);
+	Util::SaveGameSettings(SSRSettings);
 	if (REL::Module::IsVR()) {
-		SaveGameSettings(iniVRCubeMapSettings);
+		Util::SaveGameSettings(iniVRCubeMapSettings);
 	}
 }
 
 void DynamicCubemaps::RestoreDefaultSettings()
 {
 	settings = {};
-	ResetGameSettingsToDefaults(SSRSettings);
+	Util::ResetGameSettingsToDefaults(SSRSettings);
 	if (REL::Module::IsVR()) {
-		ResetGameSettingsToDefaults(iniVRCubeMapSettings);
-		ResetGameSettingsToDefaults(hiddenVRCubeMapSettings);
+		Util::ResetGameSettingsToDefaults(iniVRCubeMapSettings);
+		Util::ResetGameSettingsToDefaults(hiddenVRCubeMapSettings);
 	}
 	recompileFlag = true;
 }
@@ -183,8 +183,8 @@ void DynamicCubemaps::DataLoaded()
 {
 	if (REL::Module::IsVR()) {
 		// enable cubemap settings in VR
-		EnableBooleanSettings(iniVRCubeMapSettings, GetName());
-		EnableBooleanSettings(hiddenVRCubeMapSettings, GetName());
+		Util::EnableBooleanSettings(iniVRCubeMapSettings, GetName());
+		Util::EnableBooleanSettings(hiddenVRCubeMapSettings, GetName());
 	}
 	MenuOpenCloseEventHandler::Register();
 }

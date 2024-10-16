@@ -8,6 +8,37 @@
 #include "State.h"
 #include "Util.h"
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	GlintParameters,
+	enabled,
+	screenSpaceScale,
+	logMicrofacetDensity,
+	microfacetRoughness,
+	densityRandomization);
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	TruePBR::PBRTextureSetData,
+	roughnessScale,
+	displacementScale,
+	specularLevel,
+	subsurfaceColor,
+	subsurfaceOpacity,
+	coatColor,
+	coatStrength,
+	coatRoughness,
+	coatSpecularLevel,
+	innerLayerDisplacementOffset,
+	fuzzColor,
+	fuzzWeight,
+	glintParameters);
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	TruePBR::PBRMaterialObjectData,
+	baseColorScale,
+	roughness,
+	specularLevel,
+	glintParameters);
+
 namespace PNState
 {
 	void ReadPBRRecordConfigs(const std::string& rootPath, std::function<void(const std::string&, const json&)> recordReader)
@@ -60,27 +91,6 @@ namespace PNState
 		} catch (const nlohmann::json::type_error& e) {
 			logger::error("[TruePBR] failed to serialize {} : {}", outputPath, e.what());
 			return;
-		}
-	}
-}
-
-namespace nlohmann
-{
-	void to_json(json& section, const RE::NiColor& result)
-	{
-		section = { result[0],
-			result[1],
-			result[2] };
-	}
-
-	void from_json(const json& section, RE::NiColor& result)
-	{
-		if (section.is_array() && section.size() == 3 &&
-			section[0].is_number_float() && section[1].is_number_float() &&
-			section[2].is_number_float()) {
-			result[0] = section[0];
-			result[1] = section[1];
-			result[2] = section[2];
 		}
 	}
 }

@@ -34,7 +34,7 @@ public:
 	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;
 
-	std::map<std::string, gameSetting> VLSettings{
+	std::map<std::string, Util::GameSetting> VLSettings{
 		{ "bEnableVolumetricLighting:Display", { "Enable Volumetric Lighting (INI)", "Enables or disables volumetric lighting effects.", 0, true, false, true } },
 		{ "bVolumetricLightingDisableInterior:Display", { "Disable Interior Volumetric Lighting", "Disables volumetric lighting effects for interior spaces.", REL::Relocate<uintptr_t>(0, 0, 0x1ed4038), true, false, true } },
 		{ "bVolumetricLightingUpdateWeather:Display", { "Update Volumetric Lighting with Weather", "Updates volumetric lighting based on weather conditions.", 0, true, false, true } },
@@ -67,7 +67,7 @@ public:
 		// { "iVolumetricLightingTextureWidthLow:Display", { "Low Texture Width", "Sets the width for the low-quality volumetric lighting texture.", 0, 160, 1, 512 } },
 	};
 
-	std::map<std::string, gameSetting> hiddenVRSettings{
+	std::map<std::string, Util::GameSetting> hiddenVRSettings{
 		{ "bEnableVolumetricLighting:Display", { "Enable VL Shaders (INI) ",
 												   "Enables volumetric lighting effects by creating shaders. "
 												   "Needed at startup. ",

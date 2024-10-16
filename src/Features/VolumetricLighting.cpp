@@ -32,21 +32,21 @@ void VolumetricLighting::DrawSettings()
 void VolumetricLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	LoadGameSettings(VLSettings);
+	Util::LoadGameSettings(VLSettings);
 }
 
 void VolumetricLighting::SaveSettings(json& o_json)
 {
 	o_json = settings;
-	SaveGameSettings(VLSettings);
+	Util::SaveGameSettings(VLSettings);
 }
 
 void VolumetricLighting::RestoreDefaultSettings()
 {
 	settings = {};
-	ResetGameSettingsToDefaults(VLSettings);
+	Util::ResetGameSettingsToDefaults(VLSettings);
 	if (State::GetSingleton()->isVR) {
-		ResetGameSettingsToDefaults(hiddenVRSettings);
+		Util::ResetGameSettingsToDefaults(hiddenVRSettings);
 	}
 }
 
