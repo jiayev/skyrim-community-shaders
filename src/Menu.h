@@ -50,22 +50,95 @@ public:
 
 	struct ThemeSettings
 	{
-		float FontScale = REL::Module::IsVR() ? -0.5f : 0.f;  // exponential
-		ImVec4 BackgroundColor{ 0.f, 0.f, 0.f, 0.5f };
-		ImVec4 TextColor{ 1.f, 1.f, 1.f, 1.f };
-		ImVec4 DisableColor{ 0.5f, 0.5f, 0.5f, 1.f };
-		ImVec4 ErrorColor{ 1.f, 0.5f, 0.5f, 1.f };
-		ImVec4 RestartNeededColor{ 0.5f, 1.f, 0.5f, 1.f };
-		ImVec4 CurrentHotkeyColor{ 1.f, 1.f, 0.f, 1.f };
-		ImVec4 BorderColor{ 0.569f, 0.545f, 0.506f, 0.5f };
-		float BorderSize{ 3.f };
-		float FrameBorderSize{ 1.5f };
-		ImVec2 WindowPadding{ 16.f, 16.f };
-		float WindowRounding{ 0.f };
-		float IndentSpacing{ 8.f };
-		ImVec2 FramePadding{ 4.0f, 4.0f };
-		ImVec2 CellPadding{ 16.f, 2.f };
-		ImVec2 ItemSpacing{ 8.f, 12.f };
+		float GlobalScale = REL::Module::IsVR() ? -0.5f : 0.f;  // exponential
+
+		bool UseSimplePalette = true;  // simple palette or full customization
+		struct PaletteColors
+		{
+			ImVec4 Background{ 0.f, 0.f, 0.f, 0.5f };
+			ImVec4 Text{ 1.f, 1.f, 1.f, 1.f };
+			ImVec4 Border{ 0.569f, 0.545f, 0.506f, 0.5f };
+		} Palette;
+		struct StatusPaletteColors
+		{
+			ImVec4 Disable{ 0.5f, 0.5f, 0.5f, 1.f };
+			ImVec4 Error{ 1.f, 0.5f, 0.5f, 1.f };
+			ImVec4 RestartNeeded{ 0.5f, 1.f, 0.5f, 1.f };
+			ImVec4 CurrentHotkey{ 1.f, 1.f, 0.f, 1.f };
+		} StatusPalette;
+
+		ImGuiStyle Style = []() {
+			ImGuiStyle style = {};
+			style.WindowBorderSize = 3.f;
+			style.ChildBorderSize = 0.f;
+			style.FrameBorderSize = 1.5f;
+			style.WindowPadding = { 16.f, 16.f };
+			style.WindowRounding = 0.f;
+			style.IndentSpacing = 8.f;
+			style.FramePadding = { 4.0f, 4.0f };
+			style.CellPadding = { 16.f, 2.f };
+			style.ItemSpacing = { 8.f, 12.f };
+			return std::move(style);
+		}();
+		// Theme by @Maksasj, edited by FiveLimbedCat
+		// url: https://github.com/ocornut/imgui/issues/707#issuecomment-1494706165
+		std::array<ImVec4, ImGuiCol_COUNT> FullPalette = {
+			ImVec4(0.9f, 0.9f, 0.9f, 0.9f),
+			ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+			ImVec4(0.1f, 0.1f, 0.15f, 1.0f),
+			ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
+			ImVec4(0.05f, 0.05f, 0.1f, 0.85f),
+			ImVec4(0.7f, 0.7f, 0.7f, 0.65f),
+			ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
+			ImVec4(0.0f, 0.0f, 0.0f, 1.0f),
+			ImVec4(0.9f, 0.8f, 0.8f, 0.4f),
+			ImVec4(0.9f, 0.65f, 0.65f, 0.45f),
+			ImVec4(0.0f, 0.0f, 0.0f, 0.83f),
+			ImVec4(0.0f, 0.0f, 0.0f, 0.87f),
+			ImVec4(0.4f, 0.4f, 0.8f, 0.2f),
+			ImVec4(0.01f, 0.01f, 0.02f, 0.8f),
+			ImVec4(0.2f, 0.25f, 0.3f, 0.6f),
+			ImVec4(0.55f, 0.53f, 0.55f, 0.51f),
+			ImVec4(0.56f, 0.56f, 0.56f, 1.0f),
+			ImVec4(0.56f, 0.56f, 0.56f, 0.91f),
+			ImVec4(0.9f, 0.9f, 0.9f, 0.83f),
+			ImVec4(0.7f, 0.7f, 0.7f, 0.62f),
+			ImVec4(0.3f, 0.3f, 0.3f, 0.84f),
+			ImVec4(0.48f, 0.72f, 0.89f, 0.49f),
+			ImVec4(0.5f, 0.69f, 0.99f, 0.68f),
+			ImVec4(0.8f, 0.5f, 0.5f, 1.0f),
+			ImVec4(0.3f, 0.69f, 1.0f, 0.53f),
+			ImVec4(0.44f, 0.61f, 0.86f, 1.0f),
+			ImVec4(0.38f, 0.62f, 0.83f, 1.0f),
+			ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
+			ImVec4(0.7f, 0.6f, 0.6f, 1.0f),
+			ImVec4(0.9f, 0.7f, 0.7f, 1.0f),
+			ImVec4(1.0f, 1.0f, 1.0f, 0.85f),
+			ImVec4(1.0f, 1.0f, 1.0f, 0.6f),
+			ImVec4(1.0f, 1.0f, 1.0f, 0.9f),
+			ImVec4(0.4f, 0.52f, 0.67f, 0.84f),  // Tab
+			ImVec4(0.0f, 0.46f, 1.0f, 0.8f),    // TabHovered
+			ImVec4(0.2f, 0.41f, 0.68f, 1.0f),   // TabActive
+			ImVec4(0.07f, 0.1f, 0.15f, 0.97f),  // TabUnfocused
+			ImVec4(0.13f, 0.26f, 0.42f, 1.0f),  // TabUnfocusedActive
+			ImVec4(0.7f, 0.6f, 0.6f, 0.5f),     // DockingPreview
+			ImVec4(0.0f, 0.0f, 0.0f, 0.0f),     // DockingEmptyBg
+			ImVec4(1.0f, 1.0f, 1.0f, 1.0f),     // PlotLines
+			ImVec4(0.0f, 0.87f, 1.0f, 1.0f),
+			ImVec4(0.22f, 0.26f, 0.7f, 1.0f),
+			ImVec4(0.8f, 0.26f, 0.26f, 1.0f),
+			ImVec4(0.48f, 0.72f, 0.89f, 0.49f),
+			ImVec4(0.3f, 0.3f, 0.35f, 1.0f),
+			ImVec4(0.23f, 0.23f, 0.25f, 1.0f),
+			ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
+			ImVec4(1.0f, 1.0f, 1.0f, 0.06f),
+			ImVec4(0.0f, 0.0f, 1.0f, 0.35f),  // TextSelectedBg
+			ImVec4(0.8f, 0.5f, 0.5f, 1.0f),
+			ImVec4(0.44f, 0.61f, 0.86f, 1.0f),
+			ImVec4(0.3f, 0.3f, 0.3f, 0.56f),
+			ImVec4(0.2f, 0.2f, 0.2f, 0.35f),
+			ImVec4(0.2f, 0.2f, 0.2f, 0.35f),
+		};
 	};
 
 	struct Settings

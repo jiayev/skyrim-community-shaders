@@ -22,23 +22,62 @@
 #include "Upscaling.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	Menu::ThemeSettings,
-	FontScale,
-	BackgroundColor,
-	TextColor,
-	DisableColor,
-	RestartNeededColor,
-	ErrorColor,
-	CurrentHotkeyColor,
-	BorderColor,
-	BorderSize,
-	FrameBorderSize,
+	Menu::ThemeSettings::PaletteColors,
+	Background,
+	Text,
+	Border)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Menu::ThemeSettings::StatusPaletteColors,
+	Disable,
+	RestartNeeded,
+	Error,
+	CurrentHotkey)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	ImGuiStyle,
 	WindowPadding,
 	WindowRounding,
-	IndentSpacing,
+	WindowBorderSize,
+	WindowMinSize,
+	ChildRounding,
+	ChildBorderSize,
+	PopupRounding,
+	PopupBorderSize,
 	FramePadding,
+	FrameRounding,
+	FrameBorderSize,
+	ItemSpacing,
+	ItemInnerSpacing,
 	CellPadding,
-	ItemSpacing)
+	IndentSpacing,
+	ColumnsMinSpacing,
+	ScrollbarSize,
+	ScrollbarRounding,
+	GrabMinSize,
+	GrabRounding,
+	LogSliderDeadzone,
+	TabRounding,
+	TabBorderSize,
+	TabMinWidthForCloseButton,
+	TabBarBorderSize,
+	TableAngledHeadersAngle,
+	ColorButtonPosition,
+	ButtonTextAlign,
+	SelectableTextAlign,
+	SeparatorTextBorderSize,
+	SeparatorTextAlign,
+	SeparatorTextPadding,
+	DockingSeparatorSize,
+	MouseCursorScale)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Menu::ThemeSettings,
+	GlobalScale,
+	UseSimplePalette,
+	Palette,
+	Style,
+	FullPalette)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::Settings,
@@ -62,93 +101,92 @@ void Menu::SetupImGuiStyle() const
 	auto& colors = style.Colors;
 
 	// Theme based on https://github.com/powerof3/DialogueHistory
+	auto& themeSettings = settings.Theme;
 
-	float hovoredAlpha{ 0.1f };
+	// rescale here
+	auto styleCopy = themeSettings.Style;
+	styleCopy.ScaleAllSizes(exp2(settings.Theme.GlobalScale));
+	styleCopy.MouseCursorScale = 1.f;
+	style = styleCopy;
 
-	ThemeSettings themeSettings = settings.Theme;
+	if (themeSettings.UseSimplePalette) {
+		float hovoredAlpha{ 0.1f };
 
-	ImVec4 resizeGripHovered = themeSettings.BorderColor;
-	resizeGripHovered.w = hovoredAlpha;
+		ImVec4 resizeGripHovered = themeSettings.Palette.Border;
+		resizeGripHovered.w = hovoredAlpha;
 
-	ImVec4 textDisabled = themeSettings.TextColor;
-	textDisabled.w = 0.3f;
+		ImVec4 textDisabled = themeSettings.Palette.Text;
+		textDisabled.w = 0.3f;
 
-	ImVec4 header{ 1.0f, 1.0f, 1.0f, 0.15f };
-	ImVec4 headerHovered = header;
-	headerHovered.w = hovoredAlpha;
+		ImVec4 header{ 1.0f, 1.0f, 1.0f, 0.15f };
+		ImVec4 headerHovered = header;
+		headerHovered.w = hovoredAlpha;
 
-	ImVec4 tabHovered{ 0.2f, 0.2f, 0.2f, 1.0f };
+		ImVec4 tabHovered{ 0.2f, 0.2f, 0.2f, 1.0f };
 
-	ImVec4 sliderGrab{ 1.0f, 1.0f, 1.0f, 0.245f };
-	ImVec4 sliderGrabActive{ 1.0f, 1.0f, 1.0f, 0.531f };
+		ImVec4 sliderGrab{ 1.0f, 1.0f, 1.0f, 0.245f };
+		ImVec4 sliderGrabActive{ 1.0f, 1.0f, 1.0f, 0.531f };
 
-	ImVec4 scrollbarGrab{ 0.31f, 0.31f, 0.31f, 1.0f };
-	ImVec4 scrollbarGrabHovered{ 0.41f, 0.41f, 0.41f, 1.0f };
-	ImVec4 scrollbarGrabActive{ 0.51f, 0.51f, 0.51f, 1.0f };
+		ImVec4 scrollbarGrab{ 0.31f, 0.31f, 0.31f, 1.0f };
+		ImVec4 scrollbarGrabHovered{ 0.41f, 0.41f, 0.41f, 1.0f };
+		ImVec4 scrollbarGrabActive{ 0.51f, 0.51f, 0.51f, 1.0f };
 
-	style.WindowBorderSize = themeSettings.BorderSize;
-	style.ChildBorderSize = 0.f;
-	style.FrameBorderSize = themeSettings.FrameBorderSize;
-	style.WindowPadding = themeSettings.WindowPadding;
-	style.WindowRounding = themeSettings.WindowRounding;
-	style.IndentSpacing = themeSettings.IndentSpacing;
-	style.FramePadding = themeSettings.FramePadding;
-	style.CellPadding = themeSettings.CellPadding;
-	style.ItemSpacing = themeSettings.ItemSpacing;
+		colors[ImGuiCol_WindowBg] = themeSettings.Palette.Background;
+		colors[ImGuiCol_ChildBg] = ImVec4();
+		colors[ImGuiCol_ScrollbarBg] = ImVec4();
+		colors[ImGuiCol_TableHeaderBg] = ImVec4();
+		colors[ImGuiCol_TableRowBg] = ImVec4();
+		colors[ImGuiCol_TableRowBgAlt] = ImVec4();
 
-	colors[ImGuiCol_WindowBg] = themeSettings.BackgroundColor;
-	colors[ImGuiCol_ChildBg] = ImVec4();
-	colors[ImGuiCol_ScrollbarBg] = ImVec4();
-	colors[ImGuiCol_TableHeaderBg] = ImVec4();
-	colors[ImGuiCol_TableRowBg] = ImVec4();
-	colors[ImGuiCol_TableRowBgAlt] = ImVec4();
+		colors[ImGuiCol_Border] = themeSettings.Palette.Border;
+		colors[ImGuiCol_Separator] = colors[ImGuiCol_Border];
+		colors[ImGuiCol_ResizeGrip] = colors[ImGuiCol_Border];
+		colors[ImGuiCol_ResizeGripHovered] = resizeGripHovered;
+		colors[ImGuiCol_ResizeGripActive] = colors[ImGuiCol_ResizeGripHovered];
 
-	colors[ImGuiCol_Border] = themeSettings.BorderColor;
-	colors[ImGuiCol_Separator] = colors[ImGuiCol_Border];
-	colors[ImGuiCol_ResizeGrip] = colors[ImGuiCol_Border];
-	colors[ImGuiCol_ResizeGripHovered] = resizeGripHovered;
-	colors[ImGuiCol_ResizeGripActive] = colors[ImGuiCol_ResizeGripHovered];
+		colors[ImGuiCol_Text] = themeSettings.Palette.Text;
+		colors[ImGuiCol_TextDisabled] = textDisabled;
 
-	colors[ImGuiCol_Text] = themeSettings.TextColor;
-	colors[ImGuiCol_TextDisabled] = textDisabled;
+		colors[ImGuiCol_FrameBg] = themeSettings.Palette.Background;
+		colors[ImGuiCol_FrameBgHovered] = colors[ImGuiCol_FrameBg];
+		colors[ImGuiCol_FrameBgActive] = colors[ImGuiCol_FrameBg];
 
-	colors[ImGuiCol_FrameBg] = themeSettings.BackgroundColor;
-	colors[ImGuiCol_FrameBgHovered] = colors[ImGuiCol_FrameBg];
-	colors[ImGuiCol_FrameBgActive] = colors[ImGuiCol_FrameBg];
+		colors[ImGuiCol_DockingEmptyBg] = themeSettings.Palette.Border;
+		colors[ImGuiCol_DockingPreview] = themeSettings.Palette.Border;
 
-	colors[ImGuiCol_DockingEmptyBg] = themeSettings.BorderColor;
-	colors[ImGuiCol_DockingPreview] = themeSettings.BorderColor;
+		colors[ImGuiCol_PlotHistogram] = themeSettings.Palette.Border;
 
-	colors[ImGuiCol_PlotHistogram] = themeSettings.BorderColor;
+		colors[ImGuiCol_SliderGrab] = sliderGrab;
+		colors[ImGuiCol_SliderGrabActive] = sliderGrabActive;
 
-	colors[ImGuiCol_SliderGrab] = sliderGrab;
-	colors[ImGuiCol_SliderGrabActive] = sliderGrabActive;
+		colors[ImGuiCol_Header] = header;
+		colors[ImGuiCol_HeaderActive] = colors[ImGuiCol_Header];
+		colors[ImGuiCol_HeaderHovered] = headerHovered;
 
-	colors[ImGuiCol_Header] = header;
-	colors[ImGuiCol_HeaderActive] = colors[ImGuiCol_Header];
-	colors[ImGuiCol_HeaderHovered] = headerHovered;
+		colors[ImGuiCol_Button] = ImVec4();
+		colors[ImGuiCol_ButtonHovered] = headerHovered;
+		colors[ImGuiCol_ButtonActive] = ImVec4();
 
-	colors[ImGuiCol_Button] = ImVec4();
-	colors[ImGuiCol_ButtonHovered] = headerHovered;
-	colors[ImGuiCol_ButtonActive] = ImVec4();
+		colors[ImGuiCol_ScrollbarGrab] = scrollbarGrab;
+		colors[ImGuiCol_ScrollbarGrabHovered] = scrollbarGrabHovered;
+		colors[ImGuiCol_ScrollbarGrabActive] = scrollbarGrabActive;
 
-	colors[ImGuiCol_ScrollbarGrab] = scrollbarGrab;
-	colors[ImGuiCol_ScrollbarGrabHovered] = scrollbarGrabHovered;
-	colors[ImGuiCol_ScrollbarGrabActive] = scrollbarGrabActive;
+		colors[ImGuiCol_TitleBg] = themeSettings.Palette.Background;
+		colors[ImGuiCol_TitleBgActive] = colors[ImGuiCol_TitleBg];
+		colors[ImGuiCol_TitleBgCollapsed] = colors[ImGuiCol_TitleBg];
 
-	colors[ImGuiCol_TitleBg] = themeSettings.BackgroundColor;
-	colors[ImGuiCol_TitleBgActive] = colors[ImGuiCol_TitleBg];
-	colors[ImGuiCol_TitleBgCollapsed] = colors[ImGuiCol_TitleBg];
+		colors[ImGuiCol_Tab] = ImVec4();
+		colors[ImGuiCol_TabHovered] = tabHovered;
+		colors[ImGuiCol_TabActive] = colors[ImGuiCol_TabHovered];
+		colors[ImGuiCol_TabUnfocused] = colors[ImGuiCol_Tab];
+		colors[ImGuiCol_TabUnfocusedActive] = colors[ImGuiCol_TabHovered];
 
-	colors[ImGuiCol_Tab] = ImVec4();
-	colors[ImGuiCol_TabHovered] = tabHovered;
-	colors[ImGuiCol_TabActive] = colors[ImGuiCol_TabHovered];
-	colors[ImGuiCol_TabUnfocused] = colors[ImGuiCol_Tab];
-	colors[ImGuiCol_TabUnfocusedActive] = colors[ImGuiCol_TabHovered];
+		colors[ImGuiCol_CheckMark] = themeSettings.Palette.Text;
 
-	colors[ImGuiCol_CheckMark] = themeSettings.TextColor;
-
-	colors[ImGuiCol_NavHighlight] = ImVec4();
+		colors[ImGuiCol_NavHighlight] = ImVec4();
+	} else {
+		std::copy(themeSettings.FullPalette.begin(), themeSettings.FullPalette.end(), std::span(colors).begin());
+	}
 }
 
 bool IsEnabled = false;
@@ -194,12 +232,8 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	ImGui_ImplWin32_Init(desc.OutputWindow);
 	ImGui_ImplDX11_Init(device, context);
 
-	float trueScale = exp2(settings.Theme.FontScale);
-	auto& style = ImGui::GetStyle();
-	style.ScaleAllSizes(trueScale);
-	style.MouseCursorScale = 1.f;
 	auto& io = ImGui::GetIO();
-	io.FontGlobalScale = trueScale;
+	io.FontGlobalScale = exp2(settings.Theme.GlobalScale);
 
 	initialized = true;
 }
@@ -289,7 +323,7 @@ void Menu::DrawSettings()
 		ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
 		ImGui::Spacing();
 
-		float footer_height = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y * 2 + 3.0f;  // text + separator
+		float footer_height = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y * 3 + 3.0f;  // text + separator
 
 		ImGui::BeginChild("Menus Table", ImVec2(0, -footer_height));
 		if (ImGui::BeginTable("Menus Table", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
@@ -330,13 +364,13 @@ void Menu::DrawSettings()
 
 					// Determine the text color based on the state
 					if (isDisabled) {
-						textColor = themeSettings.DisableColor;
+						textColor = themeSettings.StatusPalette.Disable;
 					} else if (isLoaded) {
-						textColor = themeSettings.TextColor;
+						textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
 					} else if (hasFailedMessage) {
-						textColor = themeSettings.ErrorColor;
+						textColor = themeSettings.StatusPalette.Error;
 					} else {
-						textColor = themeSettings.RestartNeededColor;
+						textColor = themeSettings.StatusPalette.RestartNeeded;
 					}
 
 					// Set text color
@@ -394,11 +428,11 @@ void Menu::DrawSettings()
 
 					// Determine the text color based on the state
 					if (isDisabled) {
-						textColor = themeSettings.DisableColor;
+						textColor = themeSettings.StatusPalette.Disable;
 					} else if (hasFailedMessage) {
-						textColor = themeSettings.ErrorColor;
+						textColor = themeSettings.StatusPalette.Error;
 					} else {
-						textColor = themeSettings.TextColor;
+						textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
 					}
 					ImGui::PushStyleColor(ImGuiCol_Text, textColor);
 
@@ -421,7 +455,7 @@ void Menu::DrawSettings()
 					ImGui::PopStyleColor();
 
 					if (hasFailedMessage) {
-						ImGui::TextColored(themeSettings.ErrorColor, feat->failedLoadedMessage.c_str());
+						ImGui::TextColored(themeSettings.StatusPalette.Error, feat->failedLoadedMessage.c_str());
 					}
 
 					if (!isDisabled && isLoaded) {
@@ -534,7 +568,7 @@ void Menu::DrawGeneralSettings()
 			ImGui::Text("Toggle Key:");
 			ImGui::SameLine();
 			ImGui::AlignTextToFramePadding();
-			ImGui::TextColored(themeSettings.CurrentHotkeyColor, "%s", KeyIdToString(settings.ToggleKey));
+			ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s", KeyIdToString(settings.ToggleKey));
 
 			ImGui::AlignTextToFramePadding();
 			ImGui::SameLine();
@@ -549,7 +583,7 @@ void Menu::DrawGeneralSettings()
 			ImGui::Text("Effect Toggle Key:");
 			ImGui::SameLine();
 			ImGui::AlignTextToFramePadding();
-			ImGui::TextColored(themeSettings.CurrentHotkeyColor, "%s", KeyIdToString(settings.EffectToggleKey));
+			ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s", KeyIdToString(settings.EffectToggleKey));
 
 			ImGui::AlignTextToFramePadding();
 			ImGui::SameLine();
@@ -564,7 +598,7 @@ void Menu::DrawGeneralSettings()
 			ImGui::Text("Skip Compilation Key:");
 			ImGui::SameLine();
 			ImGui::AlignTextToFramePadding();
-			ImGui::TextColored(themeSettings.CurrentHotkeyColor, "%s", KeyIdToString(settings.SkipCompilationKey));
+			ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s", KeyIdToString(settings.SkipCompilationKey));
 
 			ImGui::AlignTextToFramePadding();
 			ImGui::SameLine();
@@ -575,29 +609,104 @@ void Menu::DrawGeneralSettings()
 	}
 
 	if (ImGui::CollapsingHeader("Theme", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
-		if (ImGui::SliderFloat("Font Scale", &themeSettings.FontScale, -2.f, 2.f, "%.2f")) {
-			float trueScale = exp2(themeSettings.FontScale);
-			auto& style = ImGui::GetStyle();
-			style.ScaleAllSizes(trueScale);
-			style.MouseCursorScale = 1.f;
-			auto& io = ImGui::GetIO();
-			io.FontGlobalScale = trueScale;
+		auto& style = themeSettings.Style;
+		auto& colors = themeSettings.FullPalette;
+
+		if (ImGui::BeginTabBar("##tabs", ImGuiTabBarFlags_None)) {
+			if (ImGui::BeginTabItem("Sizes")) {
+				if (ImGui::SliderFloat("Global Scale", &themeSettings.GlobalScale, -1.f, 1.f, "%.2f")) {
+					float trueScale = exp2(themeSettings.GlobalScale);
+
+					auto& io = ImGui::GetIO();
+					io.FontGlobalScale = trueScale;
+				}
+
+				ImGui::SeparatorText("Main");
+				ImGui::SliderFloat2("Window Padding", (float*)&style.WindowPadding, 0.0f, 20.0f, "%.0f");
+				ImGui::SliderFloat2("Frame Padding", (float*)&style.FramePadding, 0.0f, 20.0f, "%.0f");
+				ImGui::SliderFloat2("Item Spacing", (float*)&style.ItemSpacing, 0.0f, 20.0f, "%.0f");
+				ImGui::SliderFloat2("Item Inner Spacing", (float*)&style.ItemInnerSpacing, 0.0f, 20.0f, "%.0f");
+				ImGui::SliderFloat("Indent Spacing", &style.IndentSpacing, 0.0f, 30.0f, "%.0f");
+				ImGui::SliderFloat("Scrollbar Size", &style.ScrollbarSize, 1.0f, 20.0f, "%.0f");
+				ImGui::SliderFloat("Grab Min Size", &style.GrabMinSize, 1.0f, 20.0f, "%.0f");
+
+				ImGui::SeparatorText("Borders");
+				ImGui::SliderFloat("Window Border Size", &style.WindowBorderSize, 0.0f, 5.0f, "%.0f");
+				ImGui::SliderFloat("Child Border Size", &style.ChildBorderSize, 0.0f, 5.0f, "%.0f");
+				ImGui::SliderFloat("Popup Border Size", &style.PopupBorderSize, 0.0f, 5.0f, "%.0f");
+				ImGui::SliderFloat("Frame Border Size", &style.FrameBorderSize, 0.0f, 5.0f, "%.0f");
+				ImGui::SliderFloat("Tab Border Size", &style.TabBorderSize, 0.0f, 5.0f, "%.0f");
+				ImGui::SliderFloat("Tab Bar Border Size", &style.TabBarBorderSize, 0.0f, 5.0f, "%.0f");
+
+				ImGui::SeparatorText("Rounding");
+				ImGui::SliderFloat("Window Rounding", &style.WindowRounding, 0.0f, 12.0f, "%.0f");
+				ImGui::SliderFloat("Child Rounding", &style.ChildRounding, 0.0f, 12.0f, "%.0f");
+				ImGui::SliderFloat("Frame Rounding", &style.FrameRounding, 0.0f, 12.0f, "%.0f");
+				ImGui::SliderFloat("Popup Rounding", &style.PopupRounding, 0.0f, 12.0f, "%.0f");
+				ImGui::SliderFloat("Scrollbar Rounding", &style.ScrollbarRounding, 0.0f, 12.0f, "%.0f");
+				ImGui::SliderFloat("Grab Rounding", &style.GrabRounding, 0.0f, 12.0f, "%.0f");
+				ImGui::SliderFloat("Tab Rounding", &style.TabRounding, 0.0f, 12.0f, "%.0f");
+
+				ImGui::SeparatorText("Tables");
+				ImGui::SliderFloat2("Cell Padding", (float*)&style.CellPadding, 0.0f, 20.0f, "%.0f");
+				ImGui::SliderAngle("Table Angled Headers Angle", &style.TableAngledHeadersAngle, -50.0f, +50.0f);
+
+				ImGui::SeparatorText("Widgets");
+				ImGui::Combo("ColorButtonPosition", (int*)&style.ColorButtonPosition, "Left\0Right\0");
+				ImGui::SliderFloat2("Button Text Align", (float*)&style.ButtonTextAlign, 0.0f, 1.0f, "%.2f");
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Alignment applies when a button is larger than its text content.");
+				ImGui::SliderFloat2("Selectable Text Align", (float*)&style.SelectableTextAlign, 0.0f, 1.0f, "%.2f");
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Alignment applies when a selectable is larger than its text content.");
+				ImGui::SliderFloat("Separator Text Border Size", &style.SeparatorTextBorderSize, 0.0f, 10.0f, "%.0f");
+				ImGui::SliderFloat2("Separator Text Align", (float*)&style.SeparatorTextAlign, 0.0f, 1.0f, "%.2f");
+				ImGui::SliderFloat2("Separator Text Padding", (float*)&style.SeparatorTextPadding, 0.0f, 40.0f, "%.0f");
+				ImGui::SliderFloat("Log Slider Deadzone", &style.LogSliderDeadzone, 0.0f, 12.0f, "%.0f");
+
+				ImGui::SeparatorText("Docking");
+				ImGui::SliderFloat("Docking Splitter Size", &style.DockingSeparatorSize, 0.0f, 12.0f, "%.0f");
+
+				ImGui::EndTabItem();
+			}
+
+			if (ImGui::BeginTabItem("Colors")) {
+				ImGui::SeparatorText("Status");
+
+				ImGui::ColorEdit4("Disabled Text", (float*)&themeSettings.StatusPalette.Disable);
+				ImGui::ColorEdit4("Error Text", (float*)&themeSettings.StatusPalette.Error);
+				ImGui::ColorEdit4("Restart Needed Text", (float*)&themeSettings.StatusPalette.RestartNeeded);
+				ImGui::ColorEdit4("Current Hotkey Text", (float*)&themeSettings.StatusPalette.CurrentHotkey);
+
+				ImGui::SeparatorText("Palette");
+
+				if (ImGui::RadioButton("Simple Palette", themeSettings.UseSimplePalette))
+					themeSettings.UseSimplePalette = true;
+				ImGui::SameLine();
+				if (ImGui::RadioButton("Full Palette", !themeSettings.UseSimplePalette))
+					themeSettings.UseSimplePalette = false;
+
+				if (themeSettings.UseSimplePalette) {
+					ImGui::ColorEdit4("Background", (float*)&themeSettings.Palette.Background);
+					ImGui::ColorEdit4("Text", (float*)&themeSettings.Palette.Text);
+					ImGui::ColorEdit4("Border", (float*)&themeSettings.Palette.Border);
+				} else {
+					static ImGuiTextFilter filter;
+					filter.Draw("Filter colors", ImGui::GetFontSize() * 16);
+
+					for (int i = 0; i < ImGuiCol_COUNT; i++) {
+						const char* name = ImGui::GetStyleColorName(i);
+						if (!filter.PassFilter(name))
+							continue;
+						ImGui::ColorEdit4(name, (float*)&colors[i], ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf);
+					}
+				}
+
+				ImGui::EndTabItem();
+			}
+
+			ImGui::EndTabBar();
 		}
-		ImGui::ColorEdit4("Background", (float*)&themeSettings.BackgroundColor);
-		ImGui::ColorEdit4("Text", (float*)&themeSettings.TextColor);
-		ImGui::ColorEdit4("Disabled Text", (float*)&themeSettings.DisableColor);
-		ImGui::ColorEdit4("Error Text", (float*)&themeSettings.ErrorColor);
-		ImGui::ColorEdit4("Restart Needed Text", (float*)&themeSettings.RestartNeededColor);
-		ImGui::ColorEdit4("Current Hotkey Text", (float*)&themeSettings.CurrentHotkeyColor);
-		ImGui::ColorEdit4("Border", (float*)&themeSettings.BorderColor);
-		ImGui::SliderFloat("Border size", &themeSettings.BorderSize, 0.f, 5.f, "%.1f");
-		ImGui::SliderFloat("Frame border size", &themeSettings.FrameBorderSize, 0.f, 5.f, "%.1f");
-		ImGui::SliderFloat2("Window padding", (float*)&themeSettings.WindowPadding, 0.f, 32.f, "%.1f");
-		ImGui::SliderFloat("Window rounding", &themeSettings.WindowRounding, 0.f, 5.f, "%.1f");
-		ImGui::SliderFloat("Indent spacing", &themeSettings.IndentSpacing, 0.f, 32.f, "%.1f");
-		ImGui::SliderFloat2("Frame padding", (float*)&themeSettings.FramePadding, 0.f, 32.f, "%.1f");
-		ImGui::SliderFloat2("Cell padding", (float*)&themeSettings.CellPadding, 0.f, 32.f, "%.1f");
-		ImGui::SliderFloat2("Item spacing", (float*)&themeSettings.ItemSpacing, 0.f, 32.f, "%.1f");
 	}
 }
 
@@ -847,7 +956,7 @@ void Menu::DrawDisplaySettings()
 				drawFunc();
 			}
 		} else {
-			ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.DisableColor);
+			ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Disable);
 			ImGui::CollapsingHeader(featureName.c_str(), ImGuiTreeNodeFlags_NoTreePushOnOpen);
 			ImGui::PopStyleColor();
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -933,7 +1042,7 @@ void Menu::DrawOverlay()
 				return;
 			}
 
-			ImGui::TextColored(themeSettings.ErrorColor, "ERROR: %d shaders failed to compile. Check installation and CommunityShaders.log", failed, totalShaders);
+			ImGui::TextColored(themeSettings.StatusPalette.Error, "ERROR: %d shaders failed to compile. Check installation and CommunityShaders.log", failed, totalShaders);
 			ImGui::End();
 		}
 	}
