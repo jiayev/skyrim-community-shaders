@@ -52,7 +52,7 @@ public:
 	void Reset();
 	void Setup();
 
-	void Load(ConfigMode a_configMode = ConfigMode::USER);
+	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);
 	void Save(ConfigMode a_configMode = ConfigMode::USER);
 	void PostPostLoad();
 

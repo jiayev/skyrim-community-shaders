@@ -130,15 +130,17 @@ static const std::string& GetConfigPath(State::ConfigMode a_configMode)
 	}
 }
 
-void State::Load(ConfigMode a_configMode)
+void State::Load(ConfigMode a_configMode, bool a_allowReload)
 {
 	ConfigMode configMode = a_configMode;
 	auto& shaderCache = SIE::ShaderCache::Instance();
 	json settings;
+	bool errorDetected = false;
 
 	// Attempt to load the config file
 	auto tryLoadConfig = [&](const std::string& path) {
 		std::ifstream i(path);
+		logger::info("Attempting to open config file: {}", path);
 		if (!i.is_open()) {
 			logger::warn("Unable to open config file: {}", path);
 			return false;
@@ -174,110 +176,134 @@ void State::Load(ConfigMode a_configMode)
 	}
 
 	// Proceed with loading settings from the loaded configuration
-	if (settings["Menu"].is_object()) {
-		Menu::GetSingleton()->Load(settings["Menu"]);
-	}
 
-	if (settings["Advanced"].is_object()) {
-		json& advanced = settings["Advanced"];
-		if (advanced["Dump Shaders"].is_boolean())
-			shaderCache.SetDump(advanced["Dump Shaders"]);
-		if (advanced["Log Level"].is_number_integer())
-			logLevel = static_cast<spdlog::level::level_enum>((int)advanced["Log Level"]);
-		if (advanced["Shader Defines"].is_string())
-			SetDefines(advanced["Shader Defines"]);
-		if (advanced["Compiler Threads"].is_number_integer())
-			shaderCache.compilationThreadCount = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
-		if (advanced["Background Compiler Threads"].is_number_integer())
-			shaderCache.backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
-		if (advanced["Use FileWatcher"].is_boolean())
-			shaderCache.SetFileWatcher(advanced["Use FileWatcher"]);
-		if (advanced["Extended Frame Annotations"].is_boolean())
-			extendedFrameAnnotations = advanced["Extended Frame Annotations"];
-	}
+	try {
+		// Load Menu settings
 
-	if (settings["General"].is_object()) {
-		json& general = settings["General"];
+		if (settings["Menu"].is_object()) {
+			logger::info("Loading 'Menu' settings");
+			Menu::GetSingleton()->Load(settings["Menu"]);
+		}
 
-		if (general["Enable Shaders"].is_boolean())
-			shaderCache.SetEnabled(general["Enable Shaders"]);
+		if (settings["Advanced"].is_object()) {
+			logger::info("Loading 'Advanced' settings");
+			json& advanced = settings["Advanced"];
+			if (advanced["Dump Shaders"].is_boolean())
+				shaderCache.SetDump(advanced["Dump Shaders"]);
+			if (advanced["Log Level"].is_number_integer())
+				logLevel = static_cast<spdlog::level::level_enum>((int)advanced["Log Level"]);
+			if (advanced["Shader Defines"].is_string())
+				SetDefines(advanced["Shader Defines"]);
+			if (advanced["Compiler Threads"].is_number_integer())
+				shaderCache.compilationThreadCount = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+			if (advanced["Background Compiler Threads"].is_number_integer())
+				shaderCache.backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+			if (advanced["Use FileWatcher"].is_boolean())
+				shaderCache.SetFileWatcher(advanced["Use FileWatcher"]);
+			if (advanced["Extended Frame Annotations"].is_boolean())
+				extendedFrameAnnotations = advanced["Extended Frame Annotations"];
+		}
 
-		if (general["Enable Disk Cache"].is_boolean())
-			shaderCache.SetDiskCache(general["Enable Disk Cache"]);
+		if (settings["General"].is_object()) {
+			logger::info("Loading 'General' settings");
+			json& general = settings["General"];
 
-		if (general["Enable Async"].is_boolean())
-			shaderCache.SetAsync(general["Enable Async"]);
-	}
+			if (general["Enable Shaders"].is_boolean())
+				shaderCache.SetEnabled(general["Enable Shaders"]);
 
-	if (settings["Replace Original Shaders"].is_object()) {
-		json& originalShaders = settings["Replace Original Shaders"];
-		for (int classIndex = 0; classIndex < RE::BSShader::Type::Total - 1; ++classIndex) {
-			auto name = magic_enum::enum_name((RE::BSShader::Type)(classIndex + 1));
-			if (originalShaders[name].is_boolean()) {
-				enabledClasses[classIndex] = originalShaders[name];
-			} else {
-				logger::warn("Invalid entry for shader class '{}', using default", name);
+			if (general["Enable Disk Cache"].is_boolean())
+				shaderCache.SetDiskCache(general["Enable Disk Cache"]);
+
+			if (general["Enable Async"].is_boolean())
+				shaderCache.SetAsync(general["Enable Async"]);
+		}
+
+		if (settings["Replace Original Shaders"].is_object()) {
+			logger::info("Loading 'Replace Original Shaders' settings");
+			json& originalShaders = settings["Replace Original Shaders"];
+			for (int classIndex = 0; classIndex < RE::BSShader::Type::Total - 1; ++classIndex) {
+				auto name = magic_enum::enum_name((RE::BSShader::Type)(classIndex + 1));
+				if (originalShaders[name].is_boolean()) {
+					enabledClasses[classIndex] = originalShaders[name];
+				} else {
+					logger::warn("Invalid entry for shader class '{}', using default", name);
+				}
 			}
 		}
-	}
-	// Ensure 'Disable at Boot' section exists in the JSON
-	if (!settings.contains("Disable at Boot") || !settings["Disable at Boot"].is_object()) {
-		// Initialize to an empty object if it doesn't exist
-		settings["Disable at Boot"] = json::object();
-	}
+		// Ensure 'Disable at Boot' section exists in the JSON
+		if (!settings.contains("Disable at Boot") || !settings["Disable at Boot"].is_object()) {
+			// Initialize to an empty object if it doesn't exist
+			settings["Disable at Boot"] = json::object();
+		}
 
-	json& disabledFeaturesJson = settings["Disable at Boot"];
+		json& disabledFeaturesJson = settings["Disable at Boot"];
+		logger::info("Loading 'Disable at Boot' settings");
 
-	for (auto& [featureName, featureStatus] : disabledFeaturesJson.items()) {
-		if (featureStatus.is_boolean()) {
-			disabledFeatures[featureName] = featureStatus.get<bool>();
+		for (auto& [featureName, featureStatus] : disabledFeaturesJson.items()) {
+			if (featureStatus.is_boolean()) {
+				disabledFeatures[featureName] = featureStatus.get<bool>();
+			} else {
+				logger::warn("Invalid entry for feature '{}' in 'Disable at Boot', expected boolean.", featureName);
+			}
+		}
+		for (const auto& [featureName, _] : specialFeatures) {
+			if (IsFeatureDisabled(featureName)) {
+				logger::info("Special Feature '{}' disabled at boot", featureName);
+			}
+		}
+
+		auto truePBR = TruePBR::GetSingleton();
+		auto& pbrJson = settings[truePBR->GetShortName()];
+		if (pbrJson.is_object()) {
+			logger::info("Loading 'TruePBR' settings");
+			truePBR->LoadSettings(pbrJson);
 		} else {
-			logger::warn("Invalid entry for feature '{}' in 'Disable at Boot', expected boolean.", featureName);
+			logger::warn("Missing settings for TruePBR, using default.");
 		}
-	}
-	for (const auto& [featureName, _] : specialFeatures) {
-		if (IsFeatureDisabled(featureName)) {
-			logger::info("Special Feature '{}' disabled at boot", featureName);
+
+		auto upscaling = Upscaling::GetSingleton();
+		auto& upscalingJson = settings[upscaling->GetShortName()];
+		if (upscalingJson.is_object()) {
+			logger::info("Loading 'Upscaling' settings");
+			upscaling->LoadSettings(upscalingJson);
+		} else {
+			logger::warn("Missing settings for Upscaling, using default.");
 		}
-	}
 
-	auto truePBR = TruePBR::GetSingleton();
-	auto& pbrJson = settings[truePBR->GetShortName()];
-	if (pbrJson.is_object()) {
-		truePBR->LoadSettings(pbrJson);
-	} else {
-		logger::warn("Missing settings for TruePBR, using default.");
-	}
-
-	auto upscaling = Upscaling::GetSingleton();
-	auto& upscalingJson = settings[upscaling->GetShortName()];
-	if (upscalingJson.is_object()) {
-		upscaling->LoadSettings(upscalingJson);
-	} else {
-		logger::warn("Missing settings for Upscaling, using default.");
-	}
-
-	for (auto* feature : Feature::GetFeatureList()) {
-		try {
-			const std::string featureName = feature->GetShortName();
-			bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
-			if (!isDisabled) {
-				feature->Load(settings);
-			} else {
-				logger::info("Feature '{}' is disabled at boot.", featureName);
+		for (auto* feature : Feature::GetFeatureList()) {
+			try {
+				const std::string featureName = feature->GetShortName();
+				bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
+				if (!isDisabled) {
+					logger::info("Loading Feature: '{}'", featureName);
+					feature->Load(settings);
+				} else {
+					logger::info("Feature '{}' is disabled at boot.", featureName);
+				}
+			} catch (const std::exception& e) {
+				feature->failedLoadedMessage = std::format(
+					"{}{} failed to load. Check CommunityShaders.log",
+					feature->failedLoadedMessage.empty() ? "" : feature->failedLoadedMessage + "\n",
+					feature->GetName());
+				logger::warn("Error loading setting for feature '{}': {}", feature->GetShortName(), e.what());
 			}
-		} catch (const std::exception& e) {
-			feature->failedLoadedMessage = std::format(
-				"{}{} failed to load. Check CommunityShaders.log",
-				feature->failedLoadedMessage.empty() ? "" : feature->failedLoadedMessage + "\n",
-				feature->GetName());
-			logger::warn("Error loading setting for feature '{}': {}", feature->GetShortName(), e.what());
 		}
+		if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
+			logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
+			Save(configMode);
+		}
+		logger::info("Loading Settings Complete");
+	} catch (const json::exception& e) {
+		logger::info("General JSON error accessing settings: {}; recreating config", e.what());
+		Save(a_configMode);
+		errorDetected = true;
+	} catch (const std::exception& e) {
+		logger::info("General error accessing settings: {}; recreating config", e.what());
+		Save(a_configMode);
+		errorDetected = true;
 	}
-	if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
-		logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
-		Save(configMode);
-	}
+	if (errorDetected && a_allowReload)
+		Load(a_configMode, false);
 }
 
 void State::Save(ConfigMode a_configMode)
