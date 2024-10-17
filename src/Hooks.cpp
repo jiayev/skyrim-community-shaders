@@ -506,6 +506,23 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	// Sky Reflection Fix
+	struct TESWaterReflections_Update_Actor_GetLOSPosition
+	{
+		static RE::NiPoint3* thunk(RE::PlayerCharacter* a_player, RE::NiPoint3* a_target, int unk1, float unk2)
+		{
+			auto ret = func(a_player, a_target, unk1, unk2);
+
+			auto camera = RE::PlayerCamera::GetSingleton();
+			ret->x = camera->cameraRoot->world.translate.x;
+			ret->y = camera->cameraRoot->world.translate.y;
+			ret->z = camera->cameraRoot->world.translate.z;
+
+			return ret;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 #ifdef TRACY_ENABLE
 	struct Main_Update
 	{
@@ -653,6 +670,9 @@ namespace Hooks
 
 		logger::info("Hooking Renderer::DispatchCSShader");
 		stl::detour_thunk<CSShadersSupport::Renderer_DispatchCSShader>(REL::RelocationID(75532, 77329));
+
+		logger::info("Hooking TESWaterReflections::Update_Actor::GetLOSPosition for Sky Reflection Fix");
+		stl::write_thunk_call<TESWaterReflections_Update_Actor_GetLOSPosition>(REL::RelocationID(31373, 32160).address() + REL::Relocate(0x1AD, 0x1CA, 0x1ed));
 	}
 
 	void InstallD3DHooks()
