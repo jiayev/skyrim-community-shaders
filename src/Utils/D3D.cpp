@@ -90,12 +90,17 @@ namespace Util
 	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program)
 	{
 		auto& device = State::GetSingleton()->device;
-
 		// Build defines (aka convert vector->D3DCONSTANT array)
 		std::vector<D3D_SHADER_MACRO> macros;
+		std::string str = Util::WStringToString(FilePath);
 
-		for (auto& i : Defines)
-			macros.push_back({ i.first, i.second });
+		for (auto& i : Defines) {
+			if (i.first && i.second) {
+				macros.push_back({ i.first, i.second });
+			} else {
+				logger::error("Failed to process shader defines for {}", str);
+			}
+		}
 
 		if (REL::Module::IsVR())
 			macros.push_back({ "VR", "" });
@@ -136,11 +141,6 @@ namespace Util
 		ID3DBlob* shaderBlob;
 		ID3DBlob* shaderErrors;
 
-		std::string str;
-		std::wstring path{ FilePath };
-		std::transform(path.begin(), path.end(), std::back_inserter(str), [](wchar_t c) {
-			return (char)c;
-		});
 		if (!std::filesystem::exists(FilePath)) {
 			logger::error("Failed to compile shader; {} does not exist", str);
 			return nullptr;
