@@ -74,6 +74,7 @@ void State::Draw()
 					if (frameChecker.isNewFrame()) {
 						ID3D11Buffer* buffers[3] = { permutationCB->CB(), sharedDataCB->CB(), featureDataCB->CB() };
 						context->PSSetConstantBuffers(4, 3, buffers);
+						context->CSSetConstantBuffers(5, 2, buffers + 1);
 					}
 
 					if (IsDeveloperMode()) {
@@ -634,6 +635,7 @@ void State::UpdateSharedData()
 		                    imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled;
 
 		data.FrameCount = viewport->frameCount * (bTAA || State::GetSingleton()->upscalerLoaded);
+		data.FrameCountAlwaysActive = viewport->frameCount;
 
 		for (int i = -2; i <= 2; i++) {
 			for (int k = -2; k <= 2; k++) {

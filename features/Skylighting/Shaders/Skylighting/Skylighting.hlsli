@@ -1,31 +1,10 @@
-// Define SL_INCL_STRUCT and SL_INCL_METHODS to include different parts
-// Because this file is included by both forward and deferred shaders
+#include "Common/Random.hlsli"
+#include "Common/SharedData.hlsli"
+#include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 
-#ifdef SL_INCL_STRUCT
-struct SkylightingSettings
-{
-	row_major float4x4 OcclusionViewProj;
-	float4 OcclusionDir;
-
-	float4 PosOffset;   // xyz: cell origin in camera model space
-	uint4 ArrayOrigin;  // xyz: array origin
-	int4 ValidMargin;
-
-	float MinDiffuseVisibility;
-	float MinSpecularVisibility;
-	uint pad[2];
-};
-
-#endif
-
-#ifdef SL_INCL_METHODS
-
-#	include "Common/Random.hlsli"
-#	include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
-
-#	ifdef PSHADER
+#ifdef PSHADER
 Texture3D<sh2> SkylightingProbeArray : register(t29);
-#	endif
+#endif
 
 namespace Skylighting
 {
@@ -150,5 +129,3 @@ namespace Skylighting
 		return result;
 	}
 }
-
-#endif

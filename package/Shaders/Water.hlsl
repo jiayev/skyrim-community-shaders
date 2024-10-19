@@ -414,7 +414,6 @@ float calculateDepthMultfromUV(float2 a_uv, float a_depth, uint a_eyeIndex = 0)
 #		endif
 
 #		if defined(SKYLIGHTING)
-#			define SL_INCL_METHODS
 #			include "Skylighting/Skylighting.hlsli"
 #		endif
 

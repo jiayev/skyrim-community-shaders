@@ -1,5 +1,5 @@
 
-#include "Common/DeferredShared.hlsli"
+#include "Common/SharedData.hlsli"
 
 #include "ScreenSpaceShadows/bend_sss_gpu.hlsli"
 

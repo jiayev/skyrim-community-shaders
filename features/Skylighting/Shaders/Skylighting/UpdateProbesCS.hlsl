@@ -1,14 +1,4 @@
-#define SL_INCL_STRUCT
 #include "Skylighting/Skylighting.hlsli"
-
-#include "Common/DeferredShared.hlsli"
-#include "Common/FrameBuffer.hlsli"
-#include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
-
-cbuffer SkylightingCB : register(b1)
-{
-	SkylightingSettings settings;
-};
 
 Texture2D<unorm float> srcOcclusionDepth : register(t0);
 
@@ -24,6 +14,7 @@ SamplerState samplerPointClamp : register(s0);
 								: SV_DispatchThreadID) {
 	const float fadeInThreshold = 255;
 	const static sh2 unitSH = float4(sqrt(4.0 * shPI), 0, 0, 0);
+	const SkylightingSettings settings = skylightingSettings;
 
 	uint3 cellID = (int3(dtid) - settings.ArrayOrigin.xyz) % ARRAY_DIM;
 	bool isValid = all(cellID >= max(0, settings.ValidMargin.xyz)) && all(cellID <= ARRAY_DIM - 1 + min(0, settings.ValidMargin.xyz));  // check if the cell is newly added

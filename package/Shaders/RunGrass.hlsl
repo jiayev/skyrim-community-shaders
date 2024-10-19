@@ -390,7 +390,6 @@ cbuffer PerMaterial : register(b1)
 #		endif
 
 #		if defined(SKYLIGHTING)
-#			define SL_INCL_METHODS
 #			include "Skylighting/Skylighting.hlsli"
 #		endif
 

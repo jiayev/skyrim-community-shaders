@@ -16,8 +16,8 @@ cbuffer PerFrameSSS : register(b1)
 
 #include "Common/Color.hlsli"
 #include "Common/Constants.hlsli"
-#include "Common/DeferredShared.hlsli"
 #include "Common/Random.hlsli"
+#include "Common/SharedData.hlsli"
 
 #include "SubsurfaceScattering/SeparableSSS.hlsli"
 

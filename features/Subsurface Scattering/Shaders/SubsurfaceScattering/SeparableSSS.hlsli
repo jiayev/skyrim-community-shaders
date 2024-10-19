@@ -108,7 +108,7 @@ float4 SSSSBlurCS(
 
 	// Fetch linear depth of current pixel:
 	float depthM = DepthTexture[DTid.xy].r;
-	depthM = DeferredShared::GetScreenDepth(depthM);
+	depthM = SharedData::GetScreenDepth(depthM);
 
 	float2 profile = humanProfile ? HumanProfile.xy : BaseProfile.xy;
 	uint kernelOffset = humanProfile ? SSSS_N_SAMPLES : 0;
@@ -161,7 +161,7 @@ float4 SSSSBlurCS(
 #endif
 
 		float depth = DepthTexture[coords].r;
-		depth = DeferredShared::GetScreenDepth(depth);
+		depth = SharedData::GetScreenDepth(depth);
 
 		// If the difference in depth is huge, we lerp color back to "colorM":
 		float s = saturate(profile.y * distanceToProjectionWindow * abs(depthM - depth));

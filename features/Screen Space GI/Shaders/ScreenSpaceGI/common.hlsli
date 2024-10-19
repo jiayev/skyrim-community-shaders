@@ -20,7 +20,7 @@
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#include "Common/DeferredShared.hlsli"
+#include "Common/SharedData.hlsli"
 
 cbuffer SSGICB : register(b1)
 {

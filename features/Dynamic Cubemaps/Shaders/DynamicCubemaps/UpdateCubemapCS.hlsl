@@ -1,7 +1,7 @@
 #include "Common/Color.hlsli"
 #include "Common/Constants.hlsli"
-#include "Common/DeferredShared.hlsli"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/SharedData.hlsli"
 #include "Common/VR.hlsli"
 
 RWTexture2DArray<float4> DynamicCubemap : register(u0);
@@ -97,7 +97,7 @@ float smoothbumpstep(float edge0, float edge1, float x)
 		uv = Stereo::ConvertToStereoUV(uv, 0);
 
 		float depth = DepthTexture.SampleLevel(LinearSampler, uv, 0);
-		float linearDepth = DeferredShared::GetScreenDepth(depth);
+		float linearDepth = SharedData::GetScreenDepth(depth);
 
 		if (linearDepth > 16.5) {  // Ignore objects which are too close
 			half4 positionCS = half4(2 * half2(uv.x, -uv.y + 1) - 1, depth, 1);

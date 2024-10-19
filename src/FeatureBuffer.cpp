@@ -35,6 +35,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData()
 		TerrainShadows::GetSingleton()->GetCommonBufferData(),
 		LightLimitFix::GetSingleton()->GetCommonBufferData(),
 		WetnessEffects::GetSingleton()->GetCommonBufferData(),
-		Skylighting::GetSingleton()->cbData,
+		Skylighting::GetSingleton()->GetCommonBufferData(),
 		TruePBR::GetSingleton()->settings);
 }

@@ -997,7 +997,6 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #	endif
 
 #	if defined(SKYLIGHTING)
-#		define SL_INCL_METHODS
 #		include "Skylighting/Skylighting.hlsli"
 #	endif
 
