@@ -130,9 +130,15 @@ namespace Util
 
 		// Build defines (aka convert vector->D3DCONSTANT array)
 		std::vector<D3D_SHADER_MACRO> macros;
+		std::string str = Util::WStringToString(FilePath);
 
-		for (auto& i : Defines)
-			macros.push_back({ i.first, i.second });
+		for (auto& i : Defines) {
+			if (i.first && _stricmp(i.first, "") != 0) {
+				macros.push_back({ i.first, i.second });
+			} else {
+				logger::error("Failed to process shader defines for {}", str);
+			}
+		}
 
 		if (REL::Module::IsVR())
 			macros.push_back({ "VR", "" });
@@ -173,11 +179,6 @@ namespace Util
 		ID3DBlob* shaderBlob;
 		ID3DBlob* shaderErrors;
 
-		std::string str;
-		std::wstring path{ FilePath };
-		std::transform(path.begin(), path.end(), std::back_inserter(str), [](wchar_t c) {
-			return (char)c;
-		});
 		if (!std::filesystem::exists(FilePath)) {
 			logger::error("Failed to compile shader; {} does not exist", str);
 			return nullptr;
