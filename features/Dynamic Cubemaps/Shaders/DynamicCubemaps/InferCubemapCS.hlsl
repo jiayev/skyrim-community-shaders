@@ -1,4 +1,4 @@
-#include "../Common/Color.hlsli"
+#include "Common/Color.hlsli"
 
 TextureCube<float4> EnvCaptureTexture : register(t0);
 TextureCube<float4> ReflectionsTexture : register(t1);

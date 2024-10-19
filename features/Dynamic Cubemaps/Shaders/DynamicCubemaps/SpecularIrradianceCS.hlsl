@@ -4,7 +4,7 @@
 // Pre-filters environment cube map using GGX NDF importance sampling.
 // Part of specular IBL split-sum approximation.
 
-#include "../Common/Color.hlsli"
+#include "Common/Color.hlsli"
 
 static const float PI = 3.141592;
 static const float TwoPI = 2 * PI;

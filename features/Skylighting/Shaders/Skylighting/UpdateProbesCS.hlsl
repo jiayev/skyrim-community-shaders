@@ -1,9 +1,9 @@
 #define SL_INCL_STRUCT
-#include "Skylighting.hlsli"
+#include "Skylighting/Skylighting.hlsli"
 
-#include "../Common/DeferredShared.hlsli"
-#include "../Common/FrameBuffer.hlsli"
-#include "../Common/Spherical Harmonics/SphericalHarmonics.hlsli"
+#include "Common/DeferredShared.hlsli"
+#include "Common/FrameBuffer.hlsli"
+#include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 
 cbuffer SkylightingCB : register(b1)
 {

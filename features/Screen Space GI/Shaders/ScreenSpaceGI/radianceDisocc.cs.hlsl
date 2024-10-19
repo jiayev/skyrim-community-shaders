@@ -1,8 +1,8 @@
-#include "../Common/Color.hlsli"
-#include "../Common/FrameBuffer.hlsli"
-#include "../Common/GBuffer.hlsli"
-#include "../Common/VR.hlsli"
-#include "common.hlsli"
+#include "Common/Color.hlsli"
+#include "Common/FrameBuffer.hlsli"
+#include "Common/GBuffer.hlsli"
+#include "Common/VR.hlsli"
+#include "ScreenSpaceGI/common.hlsli"
 
 Texture2D<half4> srcDiffuse : register(t0);
 Texture2D<half4> srcPrevGI : register(t1);          // maybe half-res

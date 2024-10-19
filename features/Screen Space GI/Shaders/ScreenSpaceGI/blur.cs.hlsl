@@ -1,11 +1,11 @@
 // FAST DENOISING WITH SELF-STABILIZING RECURRENT BLURS
 // 	https://developer.download.nvidia.com/video/gputechconf/gtc/2020/presentations/s22699-fast-denoising-with-self-stabilizing-recurrent-blurs.pdf
 
-#include "../Common/FastMath.hlsli"
-#include "../Common/FrameBuffer.hlsli"
-#include "../Common/GBuffer.hlsli"
-#include "../Common/VR.hlsli"
-#include "common.hlsli"
+#include "Common/FastMath.hlsli"
+#include "Common/FrameBuffer.hlsli"
+#include "Common/GBuffer.hlsli"
+#include "Common/VR.hlsli"
+#include "ScreenSpaceGI/common.hlsli"
 
 Texture2D<float4> srcGI : register(t0);                // maybe half-res
 Texture2D<unorm float> srcAccumFrames : register(t1);  // maybe half-res
