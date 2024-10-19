@@ -136,7 +136,7 @@ float GetWorldShadow(float3 positionWS, float depth, float3 offset, uint eyeInde
 {
 	float worldShadow = 1.0;
 #if defined(TERRAIN_SHADOWS)
-	float terrainShadow = TerrainShadows::GetTerrainShadow(positionWS + offset + CameraPosAdjust[eyeIndex].xyz, depth, LinearSampler);
+	float terrainShadow = TerrainShadows::GetTerrainShadow(positionWS + offset + CameraPosAdjust[eyeIndex].xyz, LinearSampler);
 	worldShadow = terrainShadow;
 	if (worldShadow == 0.0)
 		return 0.0;

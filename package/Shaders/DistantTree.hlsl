@@ -220,7 +220,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #			if defined(TERRAIN_SHADOWS)
 	if (dirShadow > 0.0) {
-		float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, length(input.WorldPosition.xyz), SampDiffuse);
+		float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, SampDiffuse);
 		dirShadow = min(dirShadow, terrainShadow);
 	}
 #			endif

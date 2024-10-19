@@ -1945,7 +1945,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				// (MODELSPACENORMALS))
 
 #	if defined(TERRAIN_SHADOWS)
-		float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, length(input.WorldPosition.xyz), SampColorSampler);
+		float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, SampColorSampler);
 		dirShadow *= terrainShadow;
 		inDirShadow = inDirShadow || dirShadow == 0.0;
 #	endif
