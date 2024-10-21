@@ -19,6 +19,14 @@ struct Feature
 	 */
 	virtual bool SupportsVR() { return false; }
 
+	/**
+	 * Whether the feature is a CORE feature
+	 * This will place it under "Core Features" in UI
+	 * Also need to create a file named "CORE" in the root of the feature folder
+	 * if it should be merged into main cs zip file
+	 */
+	virtual bool IsCore() const { return false; }
+
 	virtual void SetupResources() {}
 	virtual void Reset() {}
 

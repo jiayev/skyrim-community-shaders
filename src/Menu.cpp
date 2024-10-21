@@ -148,7 +148,7 @@ void Menu::SetupImGuiStyle() const
 		colors[ImGuiCol_TextDisabled] = textDisabled;
 
 		colors[ImGuiCol_FrameBg] = themeSettings.Palette.Background;
-		colors[ImGuiCol_FrameBgHovered] = colors[ImGuiCol_FrameBg];
+		colors[ImGuiCol_FrameBgHovered] = headerHovered;
 		colors[ImGuiCol_FrameBgActive] = colors[ImGuiCol_FrameBg];
 
 		colors[ImGuiCol_DockingEmptyBg] = themeSettings.Palette.Border;
@@ -424,49 +424,60 @@ void Menu::DrawSettings()
 					bool hasFailedMessage = !feat->failedLoadedMessage.empty();
 					auto& themeSettings = Menu::GetSingleton()->settings.Theme;
 
-					ImVec4 textColor;
+					if (ImGui::BeginTable("##FeatureButtons", 2, ImGuiTableFlags_SizingStretchSame)) {
+						ImGui::TableNextColumn();
 
-					// Determine the text color based on the state
-					if (isDisabled) {
-						textColor = themeSettings.StatusPalette.Disable;
-					} else if (hasFailedMessage) {
-						textColor = themeSettings.StatusPalette.Error;
-					} else {
-						textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+						ImVec4 textColor;
+
+						// Determine the text color based on the state
+						if (isDisabled) {
+							textColor = themeSettings.StatusPalette.Disable;
+						} else if (hasFailedMessage) {
+							textColor = themeSettings.StatusPalette.Error;
+						} else {
+							textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+						}
+						ImGui::PushStyleColor(ImGuiCol_Text, textColor);
+
+						if (ImGui::Button(isDisabled ? "Enable at Boot" : "Disable at Boot", { -1, 0 })) {
+							bool newState = feat->ToggleAtBootSetting();
+							logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
+						}
+
+						if (auto _tt = Util::HoverTooltipWrapper()) {
+							ImGui::Text(
+								"Current State: %s\n"
+								"%s the feature settings at boot. "
+								"Restart will be required to reenable. "
+								"This is the same as deleting the ini file. "
+								"This should remove any performance impact for the feature.",
+								isDisabled ? "Disabled" : "Enabled",
+								isDisabled ? "Enable" : "Disable");
+						}
+
+						ImGui::PopStyleColor();
+
+						ImGui::TableNextColumn();
+
+						if (!isDisabled && isLoaded) {
+							if (ImGui::Button("Restore Defaults", { -1, 0 })) {
+								feat->RestoreDefaultSettings();
+							}
+							if (auto _tt = Util::HoverTooltipWrapper()) {
+								ImGui::Text(
+									"Restores the feature's settings back to their default values. "
+									"You will still need to Save Settings to make these changes permanent.");
+							}
+						}
+
+						ImGui::EndTable();
 					}
-					ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-
-					if (ImGui::Button(isDisabled ? "Enable at Boot" : "Disable at Boot", { -1, 0 })) {
-						bool newState = feat->ToggleAtBootSetting();
-						logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
-					}
-
-					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::Text(
-							"Current State: %s\n"
-							"%s the feature settings at boot. "
-							"Restart will be required to reenable. "
-							"This is the same as deleting the ini file. "
-							"This should remove any performance impact for the feature.",
-							isDisabled ? "Disabled" : "Enabled",
-							isDisabled ? "Enable" : "Disable");
-					}
-
-					ImGui::PopStyleColor();
 
 					if (hasFailedMessage) {
 						ImGui::TextColored(themeSettings.StatusPalette.Error, feat->failedLoadedMessage.c_str());
 					}
 
 					if (!isDisabled && isLoaded) {
-						if (ImGui::Button("Restore Defaults", { -1, 0 })) {
-							feat->RestoreDefaultSettings();
-						}
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::Text(
-								"Restores the feature's settings back to their default values. "
-								"You will still need to Save Settings to make these changes permanent.");
-						}
 						if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
 							feat->DrawSettings();
 						}
@@ -477,17 +488,29 @@ void Menu::DrawSettings()
 
 			auto& featureList = Feature::GetFeatureList();
 			auto sortedFeatureList{ featureList };  // need a copy so the load order is not lost
-			std::sort(sortedFeatureList.begin(), sortedFeatureList.end(), [](Feature* a, Feature* b) {
+			std::ranges::sort(sortedFeatureList, [](Feature* a, Feature* b) {
 				return a->GetName() < b->GetName();
 			});
 
 			auto menuList = std::vector<MenuFuncInfo>{
 				BuiltInMenu{ "General", [&]() { DrawGeneralSettings(); } },
 				BuiltInMenu{ "Advanced", [&]() { DrawAdvancedSettings(); } },
-				BuiltInMenu{ "Display", [&]() { DrawDisplaySettings(); } },
-				"Features"s
+				BuiltInMenu{ "Display", [&]() { DrawDisplaySettings(); } }
 			};
-			std::ranges::copy(sortedFeatureList, std::back_inserter(menuList));
+
+			menuList.push_back("Core Features"s);
+			std::ranges::copy(
+				sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
+					return feat->IsCore();
+				}),
+				std::back_inserter(menuList));
+
+			menuList.push_back("Features"s);
+			std::ranges::copy(
+				sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
+					return !feat->IsCore();
+				}),
+				std::back_inserter(menuList));
 
 			ImGui::TableNextColumn();
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);

@@ -162,6 +162,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
 		COMMAND ${CMAKE_COMMAND} -E copy_directory ${FEATURE_PATHS} "${AIO_DIR}"
 		COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${PROJECT_NAME}> "${AIO_DIR}/SKSE/Plugins/"
 		COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_PDB_FILE:${PROJECT_NAME}> "${AIO_DIR}/SKSE/Plugins/"
+		COMMAND ${CMAKE_COMMAND} -E remove "${AIO_DIR}/CORE"
 	)
 
 	add_custom_command(
@@ -209,16 +210,23 @@ endif()
 # Zip base CommunityShaders and all addons as their own 7z in dist folder
 if(ZIP_TO_DIST)
 	set(ZIP_DIR "${CMAKE_CURRENT_BINARY_DIR}/zip")
+	message("Copying base CommunityShader into ${ZIP_DIR}.")
 	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}" ${CMAKE_SOURCE_DIR}/dist
 		COMMAND ${CMAKE_COMMAND} -E make_directory "${ZIP_DIR}/SKSE/Plugins" ${CMAKE_SOURCE_DIR}/dist
-	)
-
-	message("Copying base CommunityShader into ${ZIP_DIR}.")
-	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/package "${ZIP_DIR}"
 		COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${PROJECT_NAME}> "${ZIP_DIR}/SKSE/Plugins/"
 		COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_PDB_FILE:${PROJECT_NAME}> "${ZIP_DIR}/SKSE/Plugins/"
+	)
+	foreach(FEATURE_PATH ${FEATURE_PATHS})
+		if (EXISTS "${FEATURE_PATH}/CORE")
+			add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_directory ${FEATURE_PATH} "${ZIP_DIR}"
+			)
+		endif()
+	endforeach()
+	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E remove "${ZIP_DIR}/CORE"
 	)
 
 	set(TARGET_ZIP "${PROJECT_NAME}-${UTC_NOW}.7z")
@@ -229,6 +237,9 @@ if(ZIP_TO_DIST)
 	)
 
 	foreach(FEATURE_PATH ${FEATURE_PATHS})
+		if (EXISTS "${FEATURE_PATH}/CORE")
+			continue()
+		endif()
 		get_filename_component(FEATURE ${FEATURE_PATH} NAME)
 		message("Zipping ${FEATURE_PATH} to ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z")
 		add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
