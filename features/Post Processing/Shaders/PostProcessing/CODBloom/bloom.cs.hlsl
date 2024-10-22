@@ -2,7 +2,7 @@
 /// ref:
 /// http://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare
 
-#include "../common.hlsli"
+#include "PostProcessing/common.hlsli"
 
 Texture2D<float4> TexColor : register(t0);
 Texture2D<float4> TexBloomIn : register(t1);

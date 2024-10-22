@@ -1,6 +1,6 @@
 /// By ProfJack/五脚猫, 2024-2-17 UTC
 
-#include "../common.hlsli"
+#include "PostProcessing/common.hlsli"
 
 #define PI 3.1415926535
 

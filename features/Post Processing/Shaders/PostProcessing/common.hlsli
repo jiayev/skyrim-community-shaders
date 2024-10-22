@@ -1,4 +1,4 @@
-#include "../../Common/Color.hlsli"
+#include "Common/Color.hlsli"
 
 float4 KarisAverage(float4 a, float4 b, float4 c, float4 d)
 {
