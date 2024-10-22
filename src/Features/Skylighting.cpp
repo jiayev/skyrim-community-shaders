@@ -1,4 +1,5 @@
 #include "Skylighting.h"
+#include <ShaderCache.h>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
@@ -73,10 +74,6 @@ void Skylighting::SetupResources()
 {
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto& device = State::GetSingleton()->device;
-
-	{
-		skylightingCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<SkylightingCB>());
-	}
 
 	{
 		auto& precipitationOcclusion = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
@@ -156,10 +153,7 @@ void Skylighting::ClearShaderCache()
 	};
 
 	for (auto shader : shaderPtrs)
-		if (*shader) {
-			(*shader)->Release();
-			shader->detach();
-		}
+		shader = nullptr;
 
 	CompileComputeShaders();
 	if (foliagePixelShader) {
@@ -189,54 +183,50 @@ void Skylighting::CompileComputeShaders()
 	}
 }
 
+Skylighting::SkylightingCB Skylighting::GetCommonBufferData()
+{
+	static float3 prevCellID = { 0, 0, 0 };
+
+	auto eyePosNI = Util::GetEyePosition(0);
+	auto eyePos = float3{ eyePosNI.x, eyePosNI.y, eyePosNI.z };
+
+	float3 cellSize = {
+		occlusionDistance / probeArrayDims[0],
+		occlusionDistance / probeArrayDims[1],
+		occlusionDistance * .5f / probeArrayDims[2]
+	};
+	auto cellID = eyePos / cellSize;
+	cellID = { round(cellID.x), round(cellID.y), round(cellID.z) };
+	auto cellOrigin = cellID * cellSize;
+	float3 cellIDDiff = prevCellID - cellID;
+	prevCellID = cellID;
+
+	return {
+		.OcclusionViewProj = OcclusionTransform,
+		.OcclusionDir = OcclusionDir,
+		.PosOffset = cellOrigin - eyePos,
+		.ArrayOrigin = {
+			((int)cellID.x - probeArrayDims[0] / 2) % probeArrayDims[0],
+			((int)cellID.y - probeArrayDims[1] / 2) % probeArrayDims[1],
+			((int)cellID.z - probeArrayDims[2] / 2) % probeArrayDims[2] },
+		.ValidMargin = { (int)cellIDDiff.x, (int)cellIDDiff.y, (int)cellIDDiff.z },
+		.MinDiffuseVisibility = settings.MinDiffuseVisibility,
+		.MinSpecularVisibility = settings.MinSpecularVisibility
+	};
+}
+
 void Skylighting::Prepass()
 {
 	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Skylighting - Update Probes");
 
 	auto& context = State::GetSingleton()->context;
 
-	{
-		static float3 prevCellID = { 0, 0, 0 };
-
-		auto eyePosNI = Util::GetEyePosition(0);
-		auto eyePos = float3{ eyePosNI.x, eyePosNI.y, eyePosNI.z };
-
-		float3 cellSize = {
-			occlusionDistance / probeArrayDims[0],
-			occlusionDistance / probeArrayDims[1],
-			occlusionDistance * .5f / probeArrayDims[2]
-		};
-		auto cellID = eyePos / cellSize;
-		cellID = { round(cellID.x), round(cellID.y), round(cellID.z) };
-		auto cellOrigin = cellID * cellSize;
-		float3 cellIDDiff = prevCellID - cellID;
-
-		cbData = {
-			.OcclusionViewProj = OcclusionTransform,
-			.OcclusionDir = OcclusionDir,
-			.PosOffset = cellOrigin - eyePos,
-			.ArrayOrigin = {
-				((int)cellID.x - probeArrayDims[0] / 2) % probeArrayDims[0],
-				((int)cellID.y - probeArrayDims[1] / 2) % probeArrayDims[1],
-				((int)cellID.z - probeArrayDims[2] / 2) % probeArrayDims[2] },
-			.ValidMargin = { (int)cellIDDiff.x, (int)cellIDDiff.y, (int)cellIDDiff.z },
-			.MinDiffuseVisibility = settings.MinDiffuseVisibility,
-			.MinSpecularVisibility = settings.MinSpecularVisibility
-		};
-
-		skylightingCB->Update(cbData);
-
-		prevCellID = cellID;
-	}
-
 	std::array<ID3D11ShaderResourceView*, 1> srvs = { texOcclusion->srv.get() };
 	std::array<ID3D11UnorderedAccessView*, 2> uavs = { texProbeArray->uav.get(), texAccumFramesArray->uav.get() };
 	std::array<ID3D11SamplerState*, 1> samplers = { pointClampSampler.get() };
-	auto cb = skylightingCB->CB();
 
 	// update probe array
 	{
-		context->CSSetConstantBuffers(1, 1, &cb);
 		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
@@ -249,9 +239,7 @@ void Skylighting::Prepass()
 		srvs.fill(nullptr);
 		uavs.fill(nullptr);
 		samplers.fill(nullptr);
-		cb = nullptr;
 
-		context->CSSetConstantBuffers(1, 1, &cb);
 		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
@@ -397,10 +385,16 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 	State::GetSingleton()->BeginPerfEvent("PRECIPITATION MASK");
 	State::GetSingleton()->SetPerfMarker("PRECIPITATION MASK");
 
+	auto& shaderCache = SIE::ShaderCache::Instance();
 	auto singleton = GetSingleton();
 
+	if (!singleton->doOcclusion || !shaderCache.IsEnabled()) {
+		Main_Precipitation_RenderOcclusion::func();
+		State::GetSingleton()->EndPerfEvent();
+	}
+
 	if (auto sky = RE::Sky::GetSingleton()) {
-		if (sky->mode.get() == RE::Sky::Mode::kFull && singleton->doOcclusion) {
+		if (sky->mode.get() == RE::Sky::Mode::kFull) {
 			static bool doPrecip = false;
 
 			auto precip = sky->precip;

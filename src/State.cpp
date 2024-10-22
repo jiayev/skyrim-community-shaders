@@ -1,5 +1,7 @@
 #include "State.h"
 
+#include <codecvt>
+
 #include <magic_enum.hpp>
 #include <pystring/pystring.h>
 
@@ -15,6 +17,7 @@
 #include "TruePBR.h"
 
 #include "Streamline.h"
+#include "Upscaling.h"
 
 void State::Draw()
 {
@@ -71,10 +74,11 @@ void State::Draw()
 					if (frameChecker.isNewFrame()) {
 						ID3D11Buffer* buffers[3] = { permutationCB->CB(), sharedDataCB->CB(), featureDataCB->CB() };
 						context->PSSetConstantBuffers(4, 3, buffers);
+						context->CSSetConstantBuffers(5, 2, buffers + 1);
 					}
 
 					if (IsDeveloperMode()) {
-						BeginPerfEvent(std::format("Draw: CS {}::{:x}", magic_enum::enum_name(currentShader->shaderType.get()), currentPixelDescriptor));
+						BeginPerfEvent(std::format("Draw: CS {}::{:x}::{}", magic_enum::enum_name(currentShader->shaderType.get()), currentPixelDescriptor, currentShader->fxpFilename));
 						SetPerfMarker(std::format("Defines: {}", SIE::ShaderCache::GetDefinesString(*currentShader, currentPixelDescriptor)));
 						EndPerfEvent();
 					}
@@ -108,7 +112,7 @@ void State::Setup()
 		if (feature->loaded)
 			feature->SetupResources();
 	Deferred::GetSingleton()->SetupResources();
-	Streamline::GetSingleton()->SetupFrameGeneration();
+	Streamline::GetSingleton()->SetupResources();
 	if (initialized)
 		return;
 	initialized = true;
@@ -127,16 +131,19 @@ static const std::string& GetConfigPath(State::ConfigMode a_configMode)
 	}
 }
 
-void State::Load(ConfigMode a_configMode)
+void State::Load(ConfigMode a_configMode, bool a_allowReload)
 {
 	ConfigMode configMode = a_configMode;
 	auto& shaderCache = SIE::ShaderCache::Instance();
 	json settings;
+	bool errorDetected = false;
 
 	// Attempt to load the config file
 	auto tryLoadConfig = [&](const std::string& path) {
 		std::ifstream i(path);
+		logger::info("Attempting to open config file: {}", path);
 		if (!i.is_open()) {
+			logger::warn("Unable to open config file: {}", path);
 			return false;
 		}
 		try {
@@ -170,64 +177,134 @@ void State::Load(ConfigMode a_configMode)
 	}
 
 	// Proceed with loading settings from the loaded configuration
-	if (settings["Menu"].is_object()) {
-		Menu::GetSingleton()->Load(settings["Menu"]);
-	}
 
-	if (settings["Advanced"].is_object()) {
-		json& advanced = settings["Advanced"];
-		if (advanced["Dump Shaders"].is_boolean())
-			shaderCache.SetDump(advanced["Dump Shaders"]);
-		if (advanced["Log Level"].is_number_integer()) {
-			logLevel = static_cast<spdlog::level::level_enum>((int)advanced["Log Level"]);
+	try {
+		// Load Menu settings
+
+		if (settings["Menu"].is_object()) {
+			logger::info("Loading 'Menu' settings");
+			Menu::GetSingleton()->Load(settings["Menu"]);
 		}
-		if (advanced["Shader Defines"].is_string())
-			SetDefines(advanced["Shader Defines"]);
-		if (advanced["Compiler Threads"].is_number_integer())
-			shaderCache.compilationThreadCount = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
-		if (advanced["Background Compiler Threads"].is_number_integer())
-			shaderCache.backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
-		if (advanced["Use FileWatcher"].is_boolean())
-			shaderCache.SetFileWatcher(advanced["Use FileWatcher"]);
-		if (advanced["Extended Frame Annotations"].is_boolean())
-			extendedFrameAnnotations = advanced["Extended Frame Annotations"];
-	}
 
-	if (settings["General"].is_object()) {
-		json& general = settings["General"];
+		if (settings["Advanced"].is_object()) {
+			logger::info("Loading 'Advanced' settings");
+			json& advanced = settings["Advanced"];
+			if (advanced["Dump Shaders"].is_boolean())
+				shaderCache.SetDump(advanced["Dump Shaders"]);
+			if (advanced["Log Level"].is_number_integer())
+				logLevel = static_cast<spdlog::level::level_enum>((int)advanced["Log Level"]);
+			if (advanced["Shader Defines"].is_string())
+				SetDefines(advanced["Shader Defines"]);
+			if (advanced["Compiler Threads"].is_number_integer())
+				shaderCache.compilationThreadCount = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+			if (advanced["Background Compiler Threads"].is_number_integer())
+				shaderCache.backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+			if (advanced["Use FileWatcher"].is_boolean())
+				shaderCache.SetFileWatcher(advanced["Use FileWatcher"]);
+			if (advanced["Extended Frame Annotations"].is_boolean())
+				extendedFrameAnnotations = advanced["Extended Frame Annotations"];
+		}
 
-		if (general["Enable Shaders"].is_boolean())
-			shaderCache.SetEnabled(general["Enable Shaders"]);
+		if (settings["General"].is_object()) {
+			logger::info("Loading 'General' settings");
+			json& general = settings["General"];
 
-		if (general["Enable Disk Cache"].is_boolean())
-			shaderCache.SetDiskCache(general["Enable Disk Cache"]);
+			if (general["Enable Shaders"].is_boolean())
+				shaderCache.SetEnabled(general["Enable Shaders"]);
 
-		if (general["Enable Async"].is_boolean())
-			shaderCache.SetAsync(general["Enable Async"]);
-	}
+			if (general["Enable Disk Cache"].is_boolean())
+				shaderCache.SetDiskCache(general["Enable Disk Cache"]);
 
-	if (settings["Replace Original Shaders"].is_object()) {
-		json& originalShaders = settings["Replace Original Shaders"];
-		for (int classIndex = 0; classIndex < RE::BSShader::Type::Total - 1; ++classIndex) {
-			auto name = magic_enum::enum_name((RE::BSShader::Type)(classIndex + 1));
-			if (originalShaders[name].is_boolean()) {
-				enabledClasses[classIndex] = originalShaders[name];
+			if (general["Enable Async"].is_boolean())
+				shaderCache.SetAsync(general["Enable Async"]);
+		}
+
+		if (settings["Replace Original Shaders"].is_object()) {
+			logger::info("Loading 'Replace Original Shaders' settings");
+			json& originalShaders = settings["Replace Original Shaders"];
+			for (int classIndex = 0; classIndex < RE::BSShader::Type::Total - 1; ++classIndex) {
+				auto name = magic_enum::enum_name((RE::BSShader::Type)(classIndex + 1));
+				if (originalShaders[name].is_boolean()) {
+					enabledClasses[classIndex] = originalShaders[name];
+				} else {
+					logger::warn("Invalid entry for shader class '{}', using default", name);
+				}
 			}
 		}
+		// Ensure 'Disable at Boot' section exists in the JSON
+		if (!settings.contains("Disable at Boot") || !settings["Disable at Boot"].is_object()) {
+			// Initialize to an empty object if it doesn't exist
+			settings["Disable at Boot"] = json::object();
+		}
+
+		json& disabledFeaturesJson = settings["Disable at Boot"];
+		logger::info("Loading 'Disable at Boot' settings");
+
+		for (auto& [featureName, featureStatus] : disabledFeaturesJson.items()) {
+			if (featureStatus.is_boolean()) {
+				disabledFeatures[featureName] = featureStatus.get<bool>();
+			} else {
+				logger::warn("Invalid entry for feature '{}' in 'Disable at Boot', expected boolean.", featureName);
+			}
+		}
+		for (const auto& [featureName, _] : specialFeatures) {
+			if (IsFeatureDisabled(featureName)) {
+				logger::info("Special Feature '{}' disabled at boot", featureName);
+			}
+		}
+
+		auto truePBR = TruePBR::GetSingleton();
+		auto& pbrJson = settings[truePBR->GetShortName()];
+		if (pbrJson.is_object()) {
+			logger::info("Loading 'TruePBR' settings");
+			truePBR->LoadSettings(pbrJson);
+		} else {
+			logger::warn("Missing settings for TruePBR, using default.");
+		}
+
+		auto upscaling = Upscaling::GetSingleton();
+		auto& upscalingJson = settings[upscaling->GetShortName()];
+		if (upscalingJson.is_object()) {
+			logger::info("Loading 'Upscaling' settings");
+			upscaling->LoadSettings(upscalingJson);
+		} else {
+			logger::warn("Missing settings for Upscaling, using default.");
+		}
+
+		for (auto* feature : Feature::GetFeatureList()) {
+			try {
+				const std::string featureName = feature->GetShortName();
+				bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
+				if (!isDisabled) {
+					logger::info("Loading Feature: '{}'", featureName);
+					feature->Load(settings);
+				} else {
+					logger::info("Feature '{}' is disabled at boot.", featureName);
+				}
+			} catch (const std::exception& e) {
+				feature->failedLoadedMessage = std::format(
+					"{}{} failed to load. Check CommunityShaders.log",
+					feature->failedLoadedMessage.empty() ? "" : feature->failedLoadedMessage + "\n",
+					feature->GetName());
+				logger::warn("Error loading setting for feature '{}': {}", feature->GetShortName(), e.what());
+			}
+		}
+		if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
+			logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
+			Save(configMode);
+		}
+		logger::info("Loading Settings Complete");
+	} catch (const json::exception& e) {
+		logger::info("General JSON error accessing settings: {}; recreating config", e.what());
+		Save(a_configMode);
+		errorDetected = true;
+	} catch (const std::exception& e) {
+		logger::info("General error accessing settings: {}; recreating config", e.what());
+		Save(a_configMode);
+		errorDetected = true;
 	}
-
-	auto truePBR = TruePBR::GetSingleton();
-	auto& pbrJson = settings[truePBR->GetShortName()];
-	if (pbrJson.is_object())
-		truePBR->LoadSettings(pbrJson);
-
-	for (auto* feature : Feature::GetFeatureList())
-		feature->Load(settings);
-
-	if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
-		logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
-		Save(configMode);
-	}
+	if (errorDetected && a_allowReload)
+		Load(a_configMode, false);
 }
 
 void State::Save(ConfigMode a_configMode)
@@ -235,9 +312,16 @@ void State::Save(ConfigMode a_configMode)
 	const auto& shaderCache = SIE::ShaderCache::Instance();
 	std::string configPath = GetConfigPath(a_configMode);
 	std::ofstream o{ configPath };
+
+	// Check if the file opened successfully
+	if (!o.is_open()) {
+		logger::warn("Failed to open config file for saving: {}", configPath);
+		return;  // Exit early if file cannot be opened
+	}
+
 	json settings;
 
-	Menu::GetSingleton()->Save(settings);
+	Menu::GetSingleton()->Save(settings["Menu"]);
 
 	json advanced;
 	advanced["Dump Shaders"] = shaderCache.IsDump();
@@ -260,19 +344,33 @@ void State::Save(ConfigMode a_configMode)
 	auto& pbrJson = settings[truePBR->GetShortName()];
 	truePBR->SaveSettings(pbrJson);
 
+	auto upscaling = Upscaling::GetSingleton();
+	auto& upscalingJson = settings[upscaling->GetShortName()];
+	upscaling->SaveSettings(upscalingJson);
+
 	json originalShaders;
 	for (int classIndex = 0; classIndex < RE::BSShader::Type::Total - 1; ++classIndex) {
 		originalShaders[magic_enum::enum_name((RE::BSShader::Type)(classIndex + 1))] = enabledClasses[classIndex];
 	}
 	settings["Replace Original Shaders"] = originalShaders;
 
+	json disabledFeaturesJson;
+	for (const auto& [featureName, isDisabled] : disabledFeatures) {
+		disabledFeaturesJson[featureName] = isDisabled;
+	}
+	settings["Disable at Boot"] = disabledFeaturesJson;
+
 	settings["Version"] = Plugin::VERSION.string();
 
 	for (auto* feature : Feature::GetFeatureList())
 		feature->Save(settings);
 
-	o << settings.dump(1);
-	logger::info("Saving settings to {}", configPath);
+	try {
+		o << settings.dump(1);
+		logger::info("Saving settings to {}", configPath);
+	} catch (const std::exception& e) {
+		logger::warn("Failed to write settings to file: {}. Error: {}", configPath, e.what());
+	}
 }
 
 void State::PostPostLoad()
@@ -282,9 +380,7 @@ void State::PostPostLoad()
 		logger::info("Skyrim Upscaler detected");
 	else
 		logger::info("Skyrim Upscaler not detected");
-	Deferred::Hooks::Install();
-	TruePBR::GetSingleton()->PostPostLoad();
-	Streamline::InstallHooks();
+	// No hooks should be here, hook in XSEPlugin::MessageHandler()
 }
 
 bool State::ValidateCache(CSimpleIniA& a_ini)
@@ -502,6 +598,12 @@ void State::SetPerfMarker(std::string_view title)
 	pPerf->SetMarker(std::wstring(title.begin(), title.end()).c_str());
 }
 
+void State::SetAdapterDescription(const std::wstring& description)
+{
+	std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+	adapterDescription = converter.to_bytes(description);
+}
+
 void State::UpdateSharedData()
 {
 	{
@@ -529,10 +631,11 @@ void State::UpdateSharedData()
 
 		auto viewport = RE::BSGraphics::State::GetSingleton();
 
-		auto bTAA = !REL::Module::IsVR() ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled :
-		                                   imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled;
+		auto bTAA = !isVR ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled :
+		                    imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled;
 
 		data.FrameCount = viewport->frameCount * (bTAA || State::GetSingleton()->upscalerLoaded);
+		data.FrameCountAlwaysActive = viewport->frameCount;
 
 		for (int i = -2; i <= 2; i++) {
 			for (int k = -2; k <= 2; k++) {
@@ -567,4 +670,34 @@ void State::UpdateSharedData()
 	auto srv = (terrainBlending->loaded ? terrainBlending->blendedDepthTexture16->srv.get() : depth.depthSRV);
 
 	context->PSSetShaderResources(20, 1, &srv);
+}
+
+void State::ClearDisabledFeatures()
+{
+	disabledFeatures.clear();
+}
+
+bool State::SetFeatureDisabled(const std::string& featureName, bool isDisabled)
+{
+	bool wasPreviouslyDisabled = disabledFeatures.count(featureName) > 0 ? disabledFeatures[featureName] : false;  // Properly check if it exists
+	disabledFeatures[featureName] = isDisabled;
+
+	// Log the change
+	if (wasPreviouslyDisabled != isDisabled) {
+		logger::info("Set feature '{}' to: {}", featureName, isDisabled ? "Disabled" : "Enabled");
+	} else {
+		logger::info("Feature '{}' state remains: {}", featureName, isDisabled ? "Disabled" : "Enabled");
+	}
+
+	return disabledFeatures[featureName];  // Return the current state instead of the input parameter
+}
+
+bool State::IsFeatureDisabled(const std::string& featureName)
+{
+	return disabledFeatures.contains(featureName) && disabledFeatures[featureName];
+}
+
+std::unordered_map<std::string, bool>& State::GetDisabledFeatures()
+{
+	return disabledFeatures;
 }

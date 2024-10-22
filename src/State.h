@@ -26,6 +26,7 @@ public:
 	bool updateShader = true;
 	bool settingCustomShader = false;
 	RE::BSShader* currentShader = nullptr;
+	std::string adapterDescription = "";
 
 	uint32_t currentVertexDescriptor = 0;
 	uint32_t currentPixelDescriptor = 0;
@@ -51,7 +52,7 @@ public:
 	void Reset();
 	void Setup();
 
-	void Load(ConfigMode a_configMode = ConfigMode::USER);
+	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);
 	void Save(ConfigMode a_configMode = ConfigMode::USER);
 	void PostPostLoad();
 
@@ -101,6 +102,8 @@ public:
 	void EndPerfEvent();
 	void SetPerfMarker(std::string_view title);
 
+	void SetAdapterDescription(const std::wstring& description);
+
 	bool extendedFrameAnnotations = false;
 
 	uint lastVertexDescriptor = 0;
@@ -141,8 +144,10 @@ public:
 		float4 BufferDim;
 		float Timer;
 		uint FrameCount;
+		uint FrameCountAlwaysActive;
 		uint InInterior;
 		uint InMapMenu;
+		float3 pad0;
 	};
 
 	ConstantBuffer* sharedDataCB = nullptr;
@@ -155,6 +160,19 @@ public:
 	ID3D11Device* device = nullptr;
 
 	TracyD3D11Ctx tracyCtx = nullptr;  // Tracy context
+
+	void ClearDisabledFeatures();
+	bool SetFeatureDisabled(const std::string& featureName, bool isDisabled);
+	bool IsFeatureDisabled(const std::string& featureName);
+	std::unordered_map<std::string, bool>& GetDisabledFeatures();
+
+	// Features that are more special then others
+	std::unordered_map<std::string, bool> specialFeatures = {
+		{ "Frame Generation", false },
+		{ "Upscaling", false },
+		{ "TruePBR", false },
+	};
+	std::unordered_map<std::string, bool> disabledFeatures;
 
 	inline ~State()
 	{

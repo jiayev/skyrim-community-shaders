@@ -1,11 +1,11 @@
 // FAST DENOISING WITH SELF-STABILIZING RECURRENT BLURS
 // 	https://developer.download.nvidia.com/video/gputechconf/gtc/2020/presentations/s22699-fast-denoising-with-self-stabilizing-recurrent-blurs.pdf
 
-#include "../Common/FastMath.hlsli"
-#include "../Common/FrameBuffer.hlsli"
-#include "../Common/GBuffer.hlsli"
-#include "../Common/VR.hlsli"
-#include "common.hlsli"
+#include "Common/FastMath.hlsli"
+#include "Common/FrameBuffer.hlsli"
+#include "Common/GBuffer.hlsli"
+#include "Common/VR.hlsli"
+#include "ScreenSpaceGI/common.hlsli"
 
 Texture2D<float4> srcGI : register(t0);                // maybe half-res
 Texture2D<unorm float> srcAccumFrames : register(t1);  // maybe half-res
@@ -84,13 +84,13 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 	const uint numSamples = 8;
 
 	const float2 uv = (dtid + .5) * RCP_OUT_FRAME_DIM;
-	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
-	const float2 screenPos = ConvertFromStereoUV(uv, eyeIndex);
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
+	const float2 screenPos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
 	float depth = READ_DEPTH(srcDepth, dtid);
 	float3 pos = ScreenToViewPosition(screenPos, depth, eyeIndex);
 	float4 normalRoughness = FULLRES_LOAD(srcNormalRoughness, dtid, uv, samplerLinearClamp);
-	float3 normal = DecodeNormal(normalRoughness.xy);
+	float3 normal = GBuffer::DecodeNormal(normalRoughness.xy);
 #ifdef SPECULAR_BLUR
 	float roughness = 1 - normalRoughness.z;
 #endif
@@ -102,7 +102,7 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 	float halfAngle = specularLobeHalfAngle(roughness);
 #else
 	float2x3 TvBv = getKernelBasis(normal, normal);  // D = N
-	float halfAngle = fsl_HALF_PI * .5f;
+	float halfAngle = FastMath::fsl_HALF_PI * .5f;
 #endif
 	TvBv[0] *= worldRadius;
 	TvBv[1] *= worldRadius;
@@ -132,19 +132,19 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 		// float2 pxOffset = radius * poissonOffset.xy;
 		// float2 pxSample = dtid + .5 + pxOffset;
 		// float2 uvSample = (floor(pxSample) + 0.5) * RCP_OUT_FRAME_DIM;  // Snap to the pixel centre
-		// float2 screenPosSample = ConvertFromStereoUV(uvSample, eyeIndex);
+		// float2 screenPosSample = Stereo::ConvertFromStereoUV(uvSample, eyeIndex);
 
 		if (any(screenPosSample.xy < 0) || any(screenPosSample.xy > 1))
 			continue;
 
-		float2 uvSample = ConvertToStereoUV(screenPosSample.xy, eyeIndex);
+		float2 uvSample = Stereo::ConvertToStereoUV(screenPosSample.xy, eyeIndex);
 		uvSample = (floor(uvSample * OUT_FRAME_DIM) + 0.5) * RCP_OUT_FRAME_DIM;  // Snap to the pixel centre
 
 		float depthSample = srcDepth.SampleLevel(samplerLinearClamp, uvSample * frameScale, 0);
-		float3 posSample = ScreenToViewPosition(screenPosSample, depthSample, eyeIndex);
+		float3 posSample = ScreenToViewPosition(screenPosSample.xy, depthSample, eyeIndex);
 
 		float4 normalRoughnessSample = srcNormalRoughness.SampleLevel(samplerLinearClamp, uvSample * frameScale, 0);
-		float3 normalSample = DecodeNormal(normalRoughnessSample.xy);
+		float3 normalSample = GBuffer::DecodeNormal(normalRoughnessSample.xy);
 #ifdef SPECULAR_BLUR
 		float roughnessSample = 1 - normalRoughnessSample.z;
 #endif
@@ -154,7 +154,7 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 		// geometry weight
 		w *= saturate(1 - abs(dot(normal, posSample - pos)) * DistanceNormalisation);
 		// normal weight
-		w *= 1 - saturate(acosFast4(saturate(dot(normalSample, normal))) / halfAngle);
+		w *= 1 - saturate(FastMath::acosFast4(saturate(dot(normalSample, normal))) / halfAngle);
 #ifdef SPECULAR_BLUR
 		// roughness weight
 		w *= abs(roughness - roughnessSample) / (roughness * roughness * 0.99 + 0.01);

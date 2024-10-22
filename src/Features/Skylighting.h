@@ -61,9 +61,10 @@ struct Skylighting : Feature
 		float MinDiffuseVisibility;
 		float MinSpecularVisibility;
 		uint _pad2[2];
-	} cbData;
+	};
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
-	eastl::unique_ptr<ConstantBuffer> skylightingCB = nullptr;
+
+	SkylightingCB GetCommonBufferData();
 
 	winrt::com_ptr<ID3D11SamplerState> pointClampSampler = nullptr;
 

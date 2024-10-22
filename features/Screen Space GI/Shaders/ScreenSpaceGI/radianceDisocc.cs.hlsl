@@ -1,8 +1,8 @@
-#include "../Common/Color.hlsli"
-#include "../Common/FrameBuffer.hlsli"
-#include "../Common/GBuffer.hlsli"
-#include "../Common/VR.hlsli"
-#include "common.hlsli"
+#include "Common/Color.hlsli"
+#include "Common/FrameBuffer.hlsli"
+#include "Common/GBuffer.hlsli"
+#include "Common/VR.hlsli"
+#include "ScreenSpaceGI/common.hlsli"
 
 Texture2D<half4> srcDiffuse : register(t0);
 Texture2D<half4> srcPrevGI : register(t1);          // maybe half-res
@@ -28,15 +28,15 @@ void readHistory(
 	inout half4 prev_gi, inout half4 prev_gi_specular, inout half3 prev_ambient, inout float accum_frames, inout float wsum)
 {
 	const float2 uv = (pixCoord + .5) * RCP_OUT_FRAME_DIM;
-	const float2 screen_pos = ConvertFromStereoUV(uv, eyeIndex);
+	const float2 screen_pos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 	if (any(screen_pos < 0) || any(screen_pos > 1))
 		return;
 
 	const half3 prev_geo = srcPrevGeo[pixCoord];
 	const float prev_depth = prev_geo.x;
-	// const float3 prev_normal = DecodeNormal(prev_geo.yz);  // prev normal is already world
+	// const float3 prev_normal = GBuffer::DecodeNormal(prev_geo.yz);  // prev normal is already world
 	float3 prev_pos = ScreenToViewPosition(screen_pos, prev_depth, eyeIndex);
-	prev_pos = ViewToWorldPosition(prev_pos, PrevInvViewMat[eyeIndex]) + CameraPreviousPosAdjust[eyeIndex];
+	prev_pos = ViewToWorldPosition(prev_pos, PrevInvViewMat[eyeIndex]) + CameraPreviousPosAdjust[eyeIndex].xyz;
 
 	float3 delta_pos = curr_pos - prev_pos;
 	// float normal_prod = dot(curr_normal, prev_normal);
@@ -65,14 +65,14 @@ void readHistory(
 	const float2 frameScale = FrameDim * RcpTexDim;
 
 	const float2 uv = (pixCoord + .5) * RCP_OUT_FRAME_DIM;
-	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
-	const float2 screen_pos = ConvertFromStereoUV(uv, eyeIndex);
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
+	const float2 screen_pos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
-	float2 prev_uv = uv;
+	float2 prev_screen_pos = screen_pos;
 #ifdef REPROJECTION
-	prev_uv += FULLRES_LOAD(srcMotionVec, pixCoord, uv * frameScale, samplerLinearClamp).xy;
+	prev_screen_pos += FULLRES_LOAD(srcMotionVec, pixCoord, uv * frameScale, samplerLinearClamp).xy;
 #endif
-	float2 prev_screen_pos = ConvertFromStereoUV(prev_uv, eyeIndex);
+	float2 prev_uv = Stereo::ConvertToStereoUV(prev_screen_pos, eyeIndex);
 
 	half3 prev_ambient = 0;
 	half4 prev_gi = 0;
@@ -91,12 +91,12 @@ void readHistory(
 
 #ifdef REPROJECTION
 	if ((curr_depth <= DepthFadeRange.y) && !(any(prev_screen_pos < 0) || any(prev_screen_pos > 1))) {
-		// float3 curr_normal = DecodeNormal(srcCurrNormal[pixCoord]);
+		// float3 curr_normal = GBuffer::DecodeNormal(srcCurrNormal[pixCoord]);
 		// curr_normal = ViewToWorldVector(curr_normal, CameraViewInverse[eyeIndex]);
 		float3 curr_pos = ScreenToViewPosition(screen_pos, curr_depth, eyeIndex);
-		curr_pos = ViewToWorldPosition(curr_pos, CameraViewInverse[eyeIndex]) + CameraPosAdjust[eyeIndex];
+		curr_pos = ViewToWorldPosition(curr_pos, CameraViewInverse[eyeIndex]) + CameraPosAdjust[eyeIndex].xyz;
 
-		float2 prev_px_coord = prev_screen_pos * OUT_FRAME_DIM;
+		float2 prev_px_coord = prev_uv * OUT_FRAME_DIM;
 		int2 prev_px_lu = floor(prev_px_coord - 0.5);
 		float2 bilinear_weights = prev_px_coord - 0.5 - prev_px_lu;
 
@@ -131,7 +131,7 @@ void readHistory(
 
 	half3 radiance = 0;
 #ifdef GI
-	radiance = GammaToLinear(FULLRES_LOAD(srcDiffuse, pixCoord, uv * frameScale, samplerLinearClamp).rgb * GIStrength);
+	radiance = Color::GammaToLinear(FULLRES_LOAD(srcDiffuse, pixCoord, uv * frameScale, samplerLinearClamp).rgb * GIStrength);
 #	ifdef GI_BOUNCE
 	radiance += prev_ambient.rgb * GIBounceFade;
 #	endif

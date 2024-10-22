@@ -52,12 +52,12 @@ struct ScreenSpaceGI : Feature
 		uint NumSteps = 4;
 		bool HalfRes = true;
 		bool HalfRate = true;
-		float DepthMIPSamplingOffset = 3.3f;
 		// visual
+		float MinScreenRadius = 0.01f;
 		float AORadius = 50.f;
 		float GIRadius = 500.f;
 		float Thickness = 75.f;
-		float2 DepthFadeRange = { 2e4, 3e4 };
+		float2 DepthFadeRange = { 4e4, 5e4 };
 		// gi
 		float BackfaceStrength = 0.f;
 		bool EnableGIBounce = true;
@@ -91,8 +91,8 @@ struct ScreenSpaceGI : Feature
 
 		uint NumSlices;
 		uint NumSteps;
-		float DepthMIPSamplingOffset;  //
 
+		float MinScreenRadius;  //
 		float AORadius;
 		float GIRadius;
 		float EffectRadius;

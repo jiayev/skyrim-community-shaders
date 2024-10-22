@@ -381,6 +381,14 @@ namespace SIE
 		void IterateShaderBlock(bool a_forward = true);
 		bool IsHideErrors();
 
+		/**
+		 * @brief Clears all shaders of a specific type from the shader map.
+		 * 
+		 * This function removes all shaders of the specified type (`RE::BSShader::Type`) from the shader map. 
+		 * 
+		 * @param a_type The shader type (e.g., Grass, Sky, Water) to be cleared from the map.
+		 */
+		void ClearShaderMap(RE::BSShader::Type a_type);
 		void InsertModifiedShaderMap(const std::string& a_shader, std::chrono::time_point<std::chrono::system_clock> a_time);
 		std::chrono::time_point<std::chrono::system_clock> GetModifiedShaderMapTime(const std::string& a_shader);
 

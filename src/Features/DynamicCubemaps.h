@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 #include "Feature.h"
+#include "Util.h"
 
 class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
 {
@@ -61,6 +62,7 @@ public:
 
 	bool activeReflections = false;
 	bool resetCapture = true;
+	bool recompileFlag = false;
 
 	enum class NextTask
 	{
@@ -77,13 +79,16 @@ public:
 
 	struct Settings
 	{
-		uint Enabled = false;
-		uint pad0[3]{};
+		uint EnabledCreator = false;
+		uint EnabledSSR = true;
+		uint MaxIterations = static_cast<uint>(REL::Relocate(16, 16, 48));
+		uint pad0{};
 		float4 CubemapColor{ 1.0f, 1.0f, 1.0f, 0.0f };
 	};
 
 	Settings settings;
-
+	std::string maxIterationsString = "";  // required to avoid string going out of scope for defines
+	bool enabledAtBoot = false;
 	void UpdateCubemap();
 
 	void PostDeferred();
@@ -91,20 +96,33 @@ public:
 	virtual inline std::string GetName() override { return "Dynamic Cubemaps"; }
 	virtual inline std::string GetShortName() override { return "DynamicCubemaps"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "DYNAMIC_CUBEMAPS"; }
+	virtual inline std::vector<std::pair<std::string_view, std::string_view>> GetShaderDefineOptions() override;
+
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
 	virtual void SetupResources() override;
 	virtual void Reset() override;
 
+	virtual void SaveSettings(json&) override;
+	virtual void LoadSettings(json&) override;
+	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
 	virtual void DataLoaded() override;
+	virtual void PostPostLoad() override;
 
-	std::map<std::string, gameSetting> iniVRCubeMapSettings{
+	std::map<std::string, Util::GameSetting> SSRSettings{
+		{ "fWaterSSRNormalPerturbationScale:Display", { "Water Normal Perturbation Scale", "Controls the scale of normal perturbations for Screen Space Reflections (SSR) on water surfaces.", 0, 0.05f, 0.f, 1.f } },
+		{ "fWaterSSRBlurAmount:Display", { "Water SSR Blur Amount", "Defines the amount of blur applied to Screen Space Reflections on water surfaces.", 0, 0.3f, 0.f, 1.f } },
+		{ "fWaterSSRIntensity:Display", { "Water SSR Intensity", "Adjusts the intensity or strength of Screen Space Reflections on water.", 0, 1.3f, 0.f, 5.f } },
+		{ "bDownSampleNormalSSR:Display", { "Down Sample Normal SSR", "Enables or disables downsampling of normals for SSR to improve performance.", 0, true, false, true } }
+	};
+
+	std::map<std::string, Util::GameSetting> iniVRCubeMapSettings{
 		{ "bAutoWaterSilhouetteReflections:Water", { "Auto Water Silhouette Reflections", "Automatically reflects silhouettes on water surfaces.", 0, true, false, true } },
 		{ "bForceHighDetailReflections:Water", { "Force High Detail Reflections", "Forces the use of high-detail reflections on water surfaces.", 0, true, false, true } }
 	};
 
-	std::map<std::string, gameSetting> hiddenVRCubeMapSettings{
+	std::map<std::string, Util::GameSetting> hiddenVRCubeMapSettings{
 		{ "bReflectExplosions:Water", { "Reflect Explosions", "Enables reflection of explosions on water surfaces.", 0x1eaa000, true, false, true } },
 		{ "bReflectLODLand:Water", { "Reflect LOD Land", "Enables reflection of low-detail (LOD) terrain on water surfaces.", 0x1eaa060, true, false, true } },
 		{ "bReflectLODObjects:Water", { "Reflect LOD Objects", "Enables reflection of low-detail (LOD) objects on water surfaces.", 0x1eaa078, true, false, true } },
@@ -126,4 +144,5 @@ public:
 	void Irradiance(bool a_reflections);
 
 	virtual bool SupportsVR() override { return true; };
+	virtual bool IsCore() const override { return true; };
 };

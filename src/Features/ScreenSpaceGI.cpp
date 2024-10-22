@@ -17,7 +17,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableTemporalDenoiser,
 	NumSlices,
 	NumSteps,
-	DepthMIPSamplingOffset,
+	MinScreenRadius,
 	AORadius,
 	GIRadius,
 	Thickness,
@@ -34,33 +34,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	BlurRadius,
 	BlurPasses,
 	DistanceNormalisation)
-
-class DisableGuard
-{
-private:
-	bool disable;
-
-public:
-	DisableGuard(bool disable) :
-		disable(disable)
-	{
-		if (disable)
-			ImGui::BeginDisabled();
-	}
-	~DisableGuard()
-	{
-		if (disable)
-			ImGui::EndDisabled();
-	}
-};
-
-bool percentageSlider(const char* label, float* data, float lb = 0.f, float ub = 100.f, const char* format = "%.1f %%")
-{
-	float percentageData = (*data) * 1e2f;
-	bool retval = ImGui::SliderFloat(label, &percentageData, lb, ub, format);
-	(*data) = percentageData * 1e-2f;
-	return retval;
-}
 
 ////////////////////////////////////////////////////////////////////////////////////
 
@@ -90,7 +63,7 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::Text("Simulates indirect diffuse lighting.");
 		ImGui::TableNextColumn();
 		{
-			auto _ = DisableGuard(!settings.EnableGI);
+			auto _ = Util::DisableGuard(!settings.EnableGI);
 			recompileFlag |= ImGui::Checkbox("Specular IL", &settings.EnableSpecularGI);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text(
@@ -178,12 +151,6 @@ void ScreenSpaceGI::DrawSettings()
 			"How many samples does it take in one direction.\n"
 			"Controls accuracy of lighting, and noise when effect radius is large.");
 
-	if (showAdvanced) {
-		ImGui::SliderFloat("MIP Sampling Offset", &settings.DepthMIPSamplingOffset, 2.f, 6.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Mainly performance (texture memory bandwidth) setting but as a side-effect reduces overshadowing by thin objects and increases temporal instability.");
-	}
-
 	if (ImGui::BeginTable("Less Work", 2)) {
 		ImGui::TableNextColumn();
 		recompileFlag |= ImGui::Checkbox("Half Rate", &settings.HalfRate);
@@ -204,7 +171,7 @@ void ScreenSpaceGI::DrawSettings()
 	ImGui::SliderFloat("AO Power", &settings.AOPower, 0.f, 6.f, "%.2f");
 
 	{
-		auto _ = DisableGuard(!settings.EnableGI);
+		auto _ = Util::DisableGuard(!settings.EnableGI);
 		ImGui::SliderFloat("IL Source Brightness", &settings.GIStrength, 0.f, 10.f, "%.2f");
 	}
 
@@ -215,11 +182,17 @@ void ScreenSpaceGI::DrawSettings()
 		ImGui::Text("A smaller radius produces tighter AO.");
 
 	{
-		auto _ = DisableGuard(!settings.EnableGI);
+		auto _ = Util::DisableGuard(!settings.EnableGI);
 
 		ImGui::SliderFloat("IL radius", &settings.GIRadius, 10.f, 800.0f, "%.1f game units");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("A larger radius produces wider IL.");
+	}
+
+	if (showAdvanced) {
+		ImGui::SliderFloat("Min Screen Radius", &settings.MinScreenRadius, 0.f, 0.05f, "%.3f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("The minimum screen-space effect radius as proportion of display width, to prevent far field AO being too small.");
 	}
 
 	ImGui::SliderFloat2("Depth Fade Range", &settings.DepthFadeRange.x, 1e4, 5e4, "%.0f game units");
@@ -236,7 +209,7 @@ void ScreenSpaceGI::DrawSettings()
 	ImGui::SeparatorText("Visual - IL");
 
 	{
-		auto _ = DisableGuard(!settings.EnableGI);
+		auto _ = Util::DisableGuard(!settings.EnableGI);
 
 		if (showAdvanced) {
 			ImGui::SliderFloat("IL Distance Compensation", &settings.GIDistanceCompensation, -5.0f, 5.0f, "%.1f");
@@ -253,9 +226,9 @@ void ScreenSpaceGI::DrawSettings()
 				"Mandatory if you want ambient as part of the light source for IL calculation.");
 
 		{
-			auto __ = DisableGuard(!settings.EnableGIBounce);
+			auto __ = Util::DisableGuard(!settings.EnableGIBounce);
 			ImGui::Indent();
-			percentageSlider("Ambient Bounce Strength", &settings.GIBounceFade);
+			Util::PercentageSlider("Ambient Bounce Strength", &settings.GIBounceFade);
 			ImGui::Unindent();
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("How much of this frame's ambient+IL get carried to the next frame as source.");
@@ -264,7 +237,7 @@ void ScreenSpaceGI::DrawSettings()
 		if (showAdvanced) {
 			ImGui::Separator();
 
-			percentageSlider("Backface Lighting Mix", &settings.BackfaceStrength);
+			Util::PercentageSlider("Backface Lighting Mix", &settings.BackfaceStrength);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("How bright at the back of objects is compared to the front. A small value to make up for foliage translucency.");
 		}
@@ -287,7 +260,7 @@ void ScreenSpaceGI::DrawSettings()
 		ImGui::Separator();
 
 		{
-			auto _ = DisableGuard(!settings.EnableTemporalDenoiser);
+			auto _ = Util::DisableGuard(!settings.EnableTemporalDenoiser);
 			ImGui::SliderInt("Max Frame Accumulation", (int*)&settings.MaxAccumFrames, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("How many past frames to accumulate results with. Higher values are less noisy but potentially cause ghosting.");
@@ -296,9 +269,9 @@ void ScreenSpaceGI::DrawSettings()
 		ImGui::Separator();
 
 		{
-			auto _ = DisableGuard(!settings.EnableTemporalDenoiser && !(settings.EnableGI || settings.EnableGIBounce));
+			auto _ = Util::DisableGuard(!settings.EnableTemporalDenoiser && !(settings.EnableGI || settings.EnableGIBounce));
 
-			percentageSlider("Movement Disocclusion", &settings.DepthDisocclusion, 0.f, 10.f);
+			Util::PercentageSlider("Movement Disocclusion", &settings.DepthDisocclusion, 0.f, 10.f);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text(
 					"If a pixel has moved too far from the last frame, its radiance will not be carried to this frame.\n"
@@ -308,7 +281,7 @@ void ScreenSpaceGI::DrawSettings()
 		}
 
 		{
-			auto _ = DisableGuard(!settings.EnableBlur);
+			auto _ = Util::DisableGuard(!settings.EnableBlur);
 			ImGui::SliderFloat("Blur Radius", &settings.BlurRadius, 0.f, 30.f, "%.1f px");
 
 			ImGui::SliderInt("Blur Passes", (int*)&settings.BlurPasses, 1, 3, "%d", ImGuiSliderFlags_AlwaysClamp);
@@ -522,10 +495,7 @@ void ScreenSpaceGI::ClearShaderCache()
 	};
 
 	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+		*shader = nullptr;
 
 	CompileComputeShaders();
 }
@@ -611,7 +581,7 @@ void ScreenSpaceGI::UpdateSB()
 
 		data.NumSlices = settings.NumSlices;
 		data.NumSteps = settings.NumSteps;
-		data.DepthMIPSamplingOffset = settings.DepthMIPSamplingOffset;
+		data.MinScreenRadius = settings.MinScreenRadius * dynres.x;
 
 		data.EffectRadius = std::max(settings.AORadius, settings.GIRadius);
 		data.AORadius = settings.AORadius / data.EffectRadius;

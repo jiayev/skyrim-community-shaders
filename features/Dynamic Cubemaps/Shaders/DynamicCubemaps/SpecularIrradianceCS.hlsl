@@ -4,7 +4,7 @@
 // Pre-filters environment cube map using GGX NDF importance sampling.
 // Part of specular IBL split-sum approximation.
 
-#include "../Common/Color.hlsli"
+#include "Common/Color.hlsli"
 
 static const float PI = 3.141592;
 static const float TwoPI = 2 * PI;
@@ -173,11 +173,11 @@ float3 tangentToWorld(const float3 v, const float3 N, const float3 S, const floa
 			// Mip level to sample from.
 			float mipLevel = max(0.5 * log2(ws / wt) + 1.0, 0.0);
 
-			color += GammaToLinear(inputTexture.SampleLevel(linear_wrap_sampler, Li, mipLevel).rgb) * cosLi;
+			color += Color::GammaToLinear(inputTexture.SampleLevel(linear_wrap_sampler, Li, mipLevel).rgb) * cosLi;
 			weight += cosLi;
 		}
 	}
 	color /= weight;
 
-	outputTexture[ThreadID] = float4(LinearToGamma(color), 1.0);
+	outputTexture[ThreadID] = float4(Color::LinearToGamma(color), 1.0);
 }

@@ -59,7 +59,8 @@ If you want an example CMakeUserPreset to start off with you can copy the `CMake
 #### ZIP_TO_DIST
 * This option is default `"ON"`
 * Make sure `"ZIP_TO_DIST"` is set to `"ON"` in `CMakeUserPresets.json`
-* This will create a zip for each feature and one for the base Community shaders in /dist containing
+* This will create a zip for each feature and one for the base Community shaders in /dist
+* If having a file with name `CORE` in the root of the features folder it will instead be merged into the core zip
 #### TRACY_SUPPORT
 * This option is default `"OFF"`
 * This will enable tracy support, might need to delete build folder when this option is changed

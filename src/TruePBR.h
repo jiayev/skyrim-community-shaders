@@ -9,16 +9,7 @@ struct GlintParameters
 	float logMicrofacetDensity = 40.f;
 	float microfacetRoughness = .015f;
 	float densityRandomization = 2.f;
-
-	NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(GlintParameters, enabled, screenSpaceScale, logMicrofacetDensity,
-		microfacetRoughness, densityRandomization);
 };
-
-namespace nlohmann
-{
-	void to_json(json&, const RE::NiColor&);
-	void from_json(const json&, RE::NiColor&);
-}
 
 struct TruePBR
 {
@@ -74,10 +65,6 @@ public:
 		float fuzzWeight = 0.f;
 
 		GlintParameters glintParameters;
-
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(PBRTextureSetData, roughnessScale, displacementScale, specularLevel,
-			subsurfaceColor, subsurfaceOpacity, coatColor, coatStrength, coatRoughness, coatSpecularLevel,
-			innerLayerDisplacementOffset, fuzzColor, fuzzWeight, glintParameters);
 	};
 
 	void SetupFrame();
@@ -99,8 +86,6 @@ public:
 		float specularLevel = 1.f;
 
 		GlintParameters glintParameters;
-
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(PBRMaterialObjectData, baseColorScale, roughness, specularLevel, glintParameters);
 	};
 
 	void SetupMaterialObjectData();

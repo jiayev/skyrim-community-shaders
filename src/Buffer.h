@@ -53,10 +53,10 @@ public:
 		desc(a_desc)
 	{
 		auto device = reinterpret_cast<ID3D11Device*>(RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().forwarder);
-		DX::ThrowIfFailed(device->CreateBuffer(&desc, nullptr, resource.ReleaseAndGetAddressOf()));
+		DX::ThrowIfFailed(device->CreateBuffer(&desc, nullptr, resource.put()));
 	}
 
-	ID3D11Buffer* CB() const { return resource.Get(); }
+	ID3D11Buffer* CB() const { return resource.get(); }
 
 	void Update(void const* src_data, size_t data_size)
 	{
@@ -64,11 +64,11 @@ public:
 		if (desc.Usage & D3D11_USAGE_DYNAMIC) {
 			D3D11_MAPPED_SUBRESOURCE mapped_buffer{};
 			ZeroMemory(&mapped_buffer, sizeof(D3D11_MAPPED_SUBRESOURCE));
-			DX::ThrowIfFailed(ctx->Map(resource.Get(), 0u, D3D11_MAP_WRITE_DISCARD, 0u, &mapped_buffer));
+			DX::ThrowIfFailed(ctx->Map(resource.get(), 0u, D3D11_MAP_WRITE_DISCARD, 0u, &mapped_buffer));
 			memcpy(mapped_buffer.pData, src_data, data_size);
-			ctx->Unmap(resource.Get(), 0);
+			ctx->Unmap(resource.get(), 0);
 		} else
-			ctx->UpdateSubresource(resource.Get(), 0, nullptr, src_data, 0, 0);
+			ctx->UpdateSubresource(resource.get(), 0, nullptr, src_data, 0, 0);
 	}
 
 	template <typename T>
@@ -78,7 +78,7 @@ public:
 	}
 
 private:
-	Microsoft::WRL::ComPtr<ID3D11Buffer> resource;
+	winrt::com_ptr<ID3D11Buffer> resource;
 	D3D11_BUFFER_DESC desc;
 };
 
@@ -105,11 +105,11 @@ public:
 		desc(a_desc), count(a_count)
 	{
 		auto device = reinterpret_cast<ID3D11Device*>(RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().forwarder);
-		DX::ThrowIfFailed(device->CreateBuffer(&desc, nullptr, resource.ReleaseAndGetAddressOf()));
+		DX::ThrowIfFailed(device->CreateBuffer(&desc, nullptr, resource.put()));
 	}
 
-	ID3D11ShaderResourceView* SRV(size_t i = 0) const { return srvs[i].Get(); }
-	ID3D11UnorderedAccessView* UAV(size_t i = 0) const { return uavs[i].Get(); }
+	ID3D11ShaderResourceView* SRV(size_t i = 0) const { return srvs[i].get(); }
+	ID3D11UnorderedAccessView* UAV(size_t i = 0) const { return uavs[i].get(); }
 
 	virtual void CreateSRV()
 	{
@@ -119,8 +119,8 @@ public:
 		srv_desc.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
 		srv_desc.Buffer.FirstElement = 0;
 		srv_desc.Buffer.NumElements = count;
-		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
-		DX::ThrowIfFailed(device->CreateShaderResourceView(resource.Get(), &srv_desc, &srv));
+		winrt::com_ptr<ID3D11ShaderResourceView> srv;
+		DX::ThrowIfFailed(device->CreateShaderResourceView(resource.get(), &srv_desc, srv.put()));
 		srvs.push_back(srv);
 	}
 
@@ -133,8 +133,8 @@ public:
 		uav_desc.Buffer.Flags = 0;
 		uav_desc.Buffer.FirstElement = 0;
 		uav_desc.Buffer.NumElements = count;
-		Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> uav;
-		DX::ThrowIfFailed(device->CreateUnorderedAccessView(resource.Get(), &uav_desc, &uav));
+		winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(resource.get(), &uav_desc, uav.put()));
 		uavs.push_back(uav);
 	}
 
@@ -143,20 +143,20 @@ public:
 		ID3D11DeviceContext* ctx = reinterpret_cast<ID3D11DeviceContext*>(RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context);
 		D3D11_MAPPED_SUBRESOURCE mapped_buffer{};
 		ZeroMemory(&mapped_buffer, sizeof(D3D11_MAPPED_SUBRESOURCE));
-		DX::ThrowIfFailed(ctx->Map(resource.Get(), 0u, D3D11_MAP_WRITE_DISCARD, 0u, &mapped_buffer));
+		DX::ThrowIfFailed(ctx->Map(resource.get(), 0u, D3D11_MAP_WRITE_DISCARD, 0u, &mapped_buffer));
 		memcpy(mapped_buffer.pData, src_data, desc.ByteWidth);
-		ctx->Unmap(resource.Get(), 0);
+		ctx->Unmap(resource.get(), 0);
 	}
 	template <typename T>
 	void UpdateList(T const& src_data, std::int64_t count)
 	{
 		Update(&src_data, sizeof(T) * count);
 	}
-	std::vector<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>> srvs;
-	std::vector<Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView>> uavs;
+	std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> srvs;
+	std::vector<winrt::com_ptr<ID3D11UnorderedAccessView>> uavs;
 
 private:
-	Microsoft::WRL::ComPtr<ID3D11Buffer> resource;
+	winrt::com_ptr<ID3D11Buffer> resource;
 	D3D11_BUFFER_DESC desc;
 	UINT count;
 };

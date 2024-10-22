@@ -35,13 +35,13 @@ namespace ScreenSpaceShadows
 			float2 sampleUV = uv + offset;
 			sampleUV = saturate(sampleUV);
 
-			int3 sampleCoord = ConvertUVToSampleCoord(sampleUV, eyeIndex);
+			int3 sampleCoord = SharedData::ConvertUVToSampleCoord(sampleUV, eyeIndex);
 
 			depthSamples[i] = TexDepthSampler.Load(sampleCoord).x;
 			shadowSamples[i] = ScreenSpaceShadowsTexture.Load(sampleCoord);
 		}
 
-		depthSamples = GetScreenDepths(depthSamples);
+		depthSamples = SharedData::GetScreenDepths(depthSamples);
 
 		float4 blurWeights = GetBlurWeights(depthSamples, viewPosition.z);
 		float shadow = dot(shadowSamples, blurWeights);

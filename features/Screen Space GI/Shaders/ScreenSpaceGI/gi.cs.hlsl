@@ -22,11 +22,11 @@
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "../Common/FastMath.hlsli"
-#include "../Common/FrameBuffer.hlsli"
-#include "../Common/GBuffer.hlsli"
-#include "../Common/VR.hlsli"
-#include "common.hlsli"
+#include "Common/FastMath.hlsli"
+#include "Common/FrameBuffer.hlsli"
+#include "Common/GBuffer.hlsli"
+#include "Common/VR.hlsli"
+#include "ScreenSpaceGI/common.hlsli"
 
 #define PI (3.1415926535897932384626433832795)
 #define HALF_PI (1.5707963267948966192313216916398)
@@ -59,14 +59,33 @@ float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)  // without TAA, 
 	return srcNoise.Load(uint3(noiseCoord, 0));
 }
 
+// [Walter et al. 2007, "Microfacet models for refraction through rough surfaces"]
+float GetNormalDistributionFunctionGGX(float roughness, float NdotH)
+{
+	float a = roughness * roughness;
+	float a2 = a * a;
+	float d = max((NdotH * a2 - NdotH) * NdotH + 1, 1e-5);
+	return a2 / (PI * d * d);
+}
+
+// [Heitz 2014, "Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs"]
+float GetVisibilityFunctionSmithJointApprox(float roughness, float NdotV, float NdotL)
+{
+	float a = roughness * roughness;
+	float visSmithV = NdotL * (NdotV * (1 - a) + a);
+	float visSmithL = NdotV * (NdotL * (1 - a) + a);
+	float vis = visSmithV + visSmithL;
+	return vis > 0 ? (0.5 / vis) : 0;
+}
+
 void CalculateGI(
 	uint2 dtid, float2 uv, float viewspaceZ, float3 viewspaceNormal,
 	out float4 o_currGIAO, out float4 o_currGIAOSpecular, out float3 o_bentNormal)
 {
 	const float2 frameScale = FrameDim * RcpTexDim;
 
-	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
-	float2 normalizedScreenPos = ConvertFromStereoUV(uv, eyeIndex);
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
+	float2 normalizedScreenPos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
 	const float rcpNumSlices = rcp(NumSlices);
 	const float rcpNumSteps = rcp(NumSteps);
@@ -77,6 +96,7 @@ void CalculateGI(
 	const float2 pixelDirRBViewspaceSizeAtCenterZ = viewspaceZ.xx * (eyeIndex == 0 ? NDCToViewMul.xy : NDCToViewMul.zw) * RCP_OUT_FRAME_DIM;
 
 	float screenspaceRadius = EffectRadius / pixelDirRBViewspaceSizeAtCenterZ.x;
+	screenspaceRadius = max(MinScreenRadius, screenspaceRadius);
 	// this is the min distance to start sampling from to avoid sampling from the center pixel (no useful data obtained from sampling center pixel)
 	const float minS = pixelTooCloseThreshold / screenspaceRadius;
 
@@ -90,7 +110,7 @@ void CalculateGI(
 
 	const float3 pixCenterPos = ScreenToViewPosition(normalizedScreenPos, viewspaceZ, eyeIndex);
 	const float3 viewVec = normalize(-pixCenterPos);
-	const float NoV = abs(dot(viewVec, viewspaceNormal));
+	const float NoV = clamp(dot(viewVec, viewspaceNormal), 1e-5, 1);
 
 	float visibility = 0;
 	float visibilitySpecular = 0;
@@ -118,7 +138,7 @@ void CalculateGI(
 		float signNorm = sign(dot(orthoDirectionVec, projectedNormalVec));
 		float cosNorm = saturate(dot(projectedNormalVec, viewVec) / projectedNormalVecLength);
 
-		float n = signNorm * ACos(cosNorm);
+		float n = signNorm * FastMath::ACos(cosNorm);
 
 		uint bitmask = 0;
 #ifdef GI
@@ -127,7 +147,7 @@ void CalculateGI(
 		uint bitmaskGISpecular = 0;
 		float3 domVec = getSpecularDominantDirection(viewspaceNormal, viewVec, roughness);
 		float3 projectedDomVec = normalize(domVec - axisVec * dot(domVec, axisVec));
-		float nDom = sign(dot(orthoDirectionVec, projectedDomVec)) * ACos(saturate(dot(projectedDomVec, viewVec)));
+		float nDom = sign(dot(orthoDirectionVec, projectedDomVec)) * FastMath::ACos(saturate(dot(projectedDomVec, viewVec)));
 #	endif
 #endif
 
@@ -146,11 +166,11 @@ void CalculateGI(
 
 				float2 samplePxCoord = dtid + .5 + sampleOffset * sideSign;
 				float2 sampleUV = samplePxCoord * RCP_OUT_FRAME_DIM;
-				float2 sampleScreenPos = ConvertFromStereoUV(sampleUV, eyeIndex);
+				float2 sampleScreenPos = Stereo::ConvertFromStereoUV(sampleUV, eyeIndex);
 				[branch] if (any(sampleScreenPos > 1.0) || any(sampleScreenPos < 0.0)) break;
 
 				float sampleOffsetLength = length(sampleOffset);
-				float mipLevel = clamp(log2(sampleOffsetLength) - DepthMIPSamplingOffset, 0, 5);
+				float mipLevel = clamp(log2(sampleOffsetLength) - 3.3, 0, 5);
 #ifdef HALF_RES
 				mipLevel = max(mipLevel, 1);
 #endif
@@ -164,8 +184,8 @@ void CalculateGI(
 				float3 sampleBackPos = samplePos - viewVec * Thickness;
 				float3 sampleBackHorizonVec = normalize(sampleBackPos - pixCenterPos);
 
-				float angleFront = ACos(dot(sampleHorizonVec, viewVec));  // either clamp or use float version for whatever reason
-				float angleBack = ACos(dot(sampleBackHorizonVec, viewVec));
+				float angleFront = FastMath::ACos(dot(sampleHorizonVec, viewVec));  // either clamp or use float version for whatever reason
+				float angleBack = FastMath::ACos(dot(sampleBackHorizonVec, viewVec));
 				float2 angleRange = -sideSign * (sideSign == -1 ? float2(angleFront, angleBack) : float2(angleBack, angleFront));
 				angleRange = smoothstep(0, 1, (angleRange + n) * RCP_PI + .5);  // https://discord.com/channels/586242553746030596/586245736413528082/1102228968247144570
 
@@ -175,7 +195,7 @@ void CalculateGI(
 #ifdef GI
 				float3 sampleBackPosGI = samplePos - viewVec * 300;
 				float3 sampleBackHorizonVecGI = normalize(sampleBackPosGI - pixCenterPos);
-				float angleBackGI = ACos(dot(sampleBackHorizonVecGI, viewVec));
+				float angleBackGI = FastMath::ACos(dot(sampleBackHorizonVecGI, viewVec));
 				float2 angleRangeGI = -sideSign * (sideSign == -1 ? float2(angleFront, angleBackGI) : float2(angleBackGI, angleFront));
 
 #	ifdef GI_SPECULAR
@@ -211,16 +231,14 @@ void CalculateGI(
 					float giBoost = 1 + GIDistanceCompensation * smoothstep(0, GICompensationMaxDist, s * EffectRadius);
 
 					// IL
-					float frontBackMult = 1.f;
-					float3 normalSample = DecodeNormal(srcNormalRoughness.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).xy);
-					if (dot(normalSample, sampleHorizonVec) > 0)  // backface
-						frontBackMult = BackfaceStrength;
+					float3 normalSample = GBuffer::DecodeNormal(srcNormalRoughness.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).xy);
+					float frontBackMult = saturate(-dot(normalSample, sampleHorizonVec));
+					frontBackMult = frontBackMult < 0 ? abs(frontBackMult) * BackfaceStrength : frontBackMult;  // backface
 
-					if (frontBackMult > 0.f) {
+					float NoL = clamp(dot(viewspaceNormal, sampleHorizonVec), 1e-5, 1);
+
+					if (frontBackMult > 0.f && NoL > 0.001f) {
 						float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevel).rgb * frontBackMult * giBoost;
-
-						// float sourceMult = saturate(-dot(normalSample, sampleHorizonVec));
-						float NoL = clamp(dot(viewspaceNormal, sampleHorizonVec), 1e-5, 1);
 
 						float3 diffuseRadiance = sampleRadiance * countbits(overlappedBits) * 0.03125;  // 1/32
 						diffuseRadiance *= NoL;
@@ -229,8 +247,10 @@ void CalculateGI(
 						radiance += diffuseRadiance;
 
 #	ifdef GI_SPECULAR
+						float NoH = clamp(dot(viewspaceNormal, normalize(viewVec + sampleHorizonVec)), 1e-5, 1);
+
 						float3 specularRadiance = sampleRadiance * countbits(overlappedBitsSpecular) * 0.03125;  // 1/32
-						specularRadiance *= NoL;
+						specularRadiance *= GetNormalDistributionFunctionGGX(roughness, NoH) * GetVisibilityFunctionSmithJointApprox(roughness, NoV, NoL);
 						specularRadiance = max(0, specularRadiance);
 
 						radianceSpecular += specularRadiance;
@@ -301,14 +321,14 @@ void CalculateGI(
 #endif
 
 	float2 uv = (pxCoord + .5) * RCP_OUT_FRAME_DIM;
-	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
 
 	float viewspaceZ = READ_DEPTH(srcWorkingDepth, pxCoord);
 
 	float2 normalSample = FULLRES_LOAD(srcNormalRoughness, pxCoord, uv * frameScale, samplerLinearClamp).xy;
-	float3 viewspaceNormal = DecodeNormal(normalSample);
+	float3 viewspaceNormal = GBuffer::DecodeNormal(normalSample);
 
-	half2 encodedWorldNormal = EncodeNormal(ViewToWorldVector(viewspaceNormal, CameraViewInverse[eyeIndex]));
+	half2 encodedWorldNormal = GBuffer::EncodeNormal(ViewToWorldVector(viewspaceNormal, CameraViewInverse[eyeIndex]));
 	outPrevGeo[pxCoord] = half3(viewspaceZ, encodedWorldNormal);
 
 	// Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used
@@ -346,6 +366,6 @@ void CalculateGI(
 	outGISpecular[pxCoord] = currGIAOSpecular;
 #endif
 #ifdef BENT_NORMAL
-	outBentNormal[pxCoord] = EncodeNormal(bentNormal);
+	outBentNormal[pxCoord] = GBuffer::EncodeNormal(bentNormal);
 #endif
 }

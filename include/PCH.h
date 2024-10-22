@@ -9,6 +9,8 @@ void* operator new[](size_t size, size_t alignment, size_t alignmentOffset, cons
 #include "SKSE/SKSE.h"
 #include <xbyak/xbyak.h>
 
+#include <detours/Detours.h>
+
 #ifdef NDEBUG
 #	include <spdlog/sinks/basic_file_sink.h>
 #else
@@ -28,20 +30,16 @@ namespace stl
 {
 	using namespace SKSE::stl;
 
-	template <class T>
+	template <class T, std::size_t Size = 5>
 	void write_thunk_call(std::uintptr_t a_src)
 	{
 		SKSE::AllocTrampoline(14);
 		auto& trampoline = SKSE::GetTrampoline();
-		T::func = trampoline.write_call<5>(a_src, T::thunk);
-	}
-
-	template <class T>
-	void write_thunk_call_6(std::uintptr_t a_src)
-	{
-		SKSE::AllocTrampoline(14);
-		auto& trampoline = SKSE::GetTrampoline();
-		T::func = *(uintptr_t*)trampoline.write_call<6>(a_src, T::thunk);
+		if (Size == 6) {
+			T::func = *(uintptr_t*)trampoline.write_call<6>(a_src, T::thunk);
+		} else {
+			T::func = trampoline.write_call<Size>(a_src, T::thunk);
+		}
 	}
 
 	template <class F, size_t index, class T>
@@ -70,6 +68,24 @@ namespace stl
 	void write_vfunc()
 	{
 		write_vfunc<F, 0, T>();
+	}
+
+	template <class T>
+	void detour_thunk(REL::RelocationID a_relId)
+	{
+		*(uintptr_t*)&T::func = Detours::X64::DetourFunction(a_relId.address(), (uintptr_t)&T::thunk);
+	}
+
+	template <class T>
+	void detour_thunk_ignore_func(REL::RelocationID a_relId)
+	{
+		std::ignore = Detours::X64::DetourFunction(a_relId.address(), (uintptr_t)&T::thunk);
+	}
+
+	template <std::size_t idx, class T>
+	void detour_vfunc(void* target)
+	{
+		*(uintptr_t*)&T::func = Detours::X64::DetourClassVTable(*(uintptr_t*)target, &T::thunk, idx);
 	}
 }
 

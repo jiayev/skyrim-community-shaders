@@ -27,7 +27,6 @@ public:
 	void ResetBlendStates();
 	void DeferredPasses();
 	void EndDeferred();
-	void UpdateConstantBuffer();
 
 	void PrepassPasses();
 
@@ -52,18 +51,6 @@ public:
 	bool deferredPass = false;
 
 	Texture2D* prevDiffuseAmbientTexture = nullptr;
-
-	struct alignas(16) DeferredCB
-	{
-		float4 BufferDim;
-		float4 CameraData;
-		DirectX::XMFLOAT3X4 DirectionalAmbient;
-		uint FrameCount;
-		uint FrameCountAlwaysActive;
-		uint pad0[2];
-	};
-
-	ConstantBuffer* deferredCB = nullptr;
 
 	ID3D11SamplerState* linearSampler = nullptr;
 

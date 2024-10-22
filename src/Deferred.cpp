@@ -113,10 +113,6 @@ void Deferred::SetupResources()
 	}
 
 	{
-		deferredCB = new ConstantBuffer(ConstantBufferDesc<DeferredCB>());
-	}
-
-	{
 		auto& device = State::GetSingleton()->device;
 
 		D3D11_SAMPLER_DESC samplerDesc = {};
@@ -228,32 +224,6 @@ void Deferred::CopyShadowData()
 	}
 }
 
-void Deferred::UpdateConstantBuffer()
-{
-	DeferredCB data{};
-
-	auto state = State::GetSingleton();
-
-	data.BufferDim.x = state->screenSize.x;
-	data.BufferDim.y = state->screenSize.y;
-	data.BufferDim.z = 1.0f / data.BufferDim.x;
-	data.BufferDim.w = 1.0f / data.BufferDim.y;
-
-	data.CameraData = Util::GetCameraData();
-
-	const auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
-	const RE::NiTransform& dalcTransform = shaderManager.directionalAmbientTransform;
-	Util::StoreTransform3x4NoScale(data.DirectionalAmbient, dalcTransform);
-
-	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-
-	auto useTAA = !REL::Module::IsVR() ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled : imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled;
-	data.FrameCount = useTAA ? RE::BSGraphics::State::GetSingleton()->frameCount : 0;
-	data.FrameCountAlwaysActive = RE::BSGraphics::State::GetSingleton()->frameCount;
-
-	deferredCB->Update(data);
-}
-
 void Deferred::PrepassPasses()
 {
 	ZoneScoped;
@@ -360,13 +330,10 @@ void Deferred::DeferredPasses()
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto& context = State::GetSingleton()->context;
 
-	UpdateConstantBuffer();
-
 	{
 		static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
-		ID3D11Buffer* buffers[2] = { deferredCB->CB(), *perFrame.get() };
-
-		context->CSSetConstantBuffers(11, 2, buffers);
+		ID3D11Buffer* buffers[1] = { *perFrame.get() };
+		context->CSSetConstantBuffers(12, 1, buffers);
 	}
 
 	auto specular = renderer->GetRuntimeData().renderTargets[SPECULAR];
@@ -399,9 +366,6 @@ void Deferred::DeferredPasses()
 		{
 			TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Ambient Composite");
 
-			ID3D11Buffer* buffer = skylighting->loaded ? skylighting->skylightingCB->CB() : nullptr;
-			context->CSSetConstantBuffers(1, 1, &buffer);
-
 			ID3D11ShaderResourceView* srvs[6]{
 				albedo.SRV,
 				normalRoughness.SRV,
@@ -430,9 +394,6 @@ void Deferred::DeferredPasses()
 			ID3D11UnorderedAccessView* uavs[2]{ nullptr, nullptr };
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-			ID3D11Buffer* buffer = nullptr;
-			context->CSSetConstantBuffers(0, 1, &buffer);
-
 			context->CSSetShader(nullptr, nullptr, 0);
 		}
 	}
@@ -450,9 +411,6 @@ void Deferred::DeferredPasses()
 	// Deferred Composite
 	{
 		TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Deferred Composite");
-
-		ID3D11Buffer* buffer = skylighting->loaded ? skylighting->skylightingCB->CB() : nullptr;
-		context->CSSetConstantBuffers(1, 1, &buffer);
 
 		bool doSSGISpecular = ssgi->loaded && ssgi->settings.Enabled && ssgi->settings.EnableGI && ssgi->settings.EnableSpecularGI;
 
@@ -482,9 +440,6 @@ void Deferred::DeferredPasses()
 		context->CSSetShader(shader, nullptr, 0);
 
 		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
-
-		buffer = nullptr;
-		context->CSSetConstantBuffers(0, 1, &buffer);
 	}
 
 	// Clear
@@ -495,8 +450,8 @@ void Deferred::DeferredPasses()
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-		ID3D11Buffer* buffer = nullptr;
-		context->CSSetConstantBuffers(0, 1, &buffer);
+		ID3D11Buffer* buffers[1] = { nullptr };
+		context->CSSetConstantBuffers(12, 1, buffers);
 
 		context->CSSetShader(nullptr, nullptr, 0);
 	}

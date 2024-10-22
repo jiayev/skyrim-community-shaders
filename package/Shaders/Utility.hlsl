@@ -123,7 +123,7 @@ VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
 
-	uint eyeIndex = GetEyeIndexVS(
+	uint eyeIndex = Stereo::GetEyeIndexVS(
 #	if defined(VR)
 		input.InstanceID
 #	endif
@@ -276,7 +276,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	ifdef VR
 	vsout.EyeIndex = eyeIndex;
-	VR_OUTPUT VRout = GetVRVSOutput(vsout.PositionCS, eyeIndex);
+	Stereo::VR_OUTPUT VRout = Stereo::GetVRVSOutput(vsout.PositionCS, eyeIndex);
 	vsout.PositionCS = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;
@@ -375,17 +375,17 @@ float GetPoissonDiskFilteredShadowVisibility(float noise, float2x2 rotationMatri
 
 #	if defined(RENDER_SHADOWMASK)
 	uint onePlusLayerIndex = 1.0 + layerIndex;
-	compareValue += 0.002 * onePlusLayerIndex;
+	compareValue += 0.001 * onePlusLayerIndex;
 	float layerIndexRcp = rcp(onePlusLayerIndex);
 #	endif
 
 	float visibility = 0;
 	for (int sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
-		float2 sampleOffset = mul(SpiralSampleOffsets8[sampleIndex], rotationMatrix);
+		float2 sampleOffset = mul(Random::SpiralSampleOffsets8[sampleIndex], rotationMatrix);
 		sampleOffset *= 1.5;
 
 #	if defined(RENDER_SHADOWMASKDPB)
-		float2 sampleUV = sampleOffset + baseUV;
+		float2 sampleUV = sampleOffset + baseUV.xy;
 
 		baseUV.z += noise;
 
@@ -448,7 +448,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 #	if defined(FOLIAGE)
-	float checkerboard = InterleavedGradientNoise(0, input.PositionCS.xy);
+	float checkerboard = Random::InterleavedGradientNoise(input.PositionCS.xy, 0);
 	if (checkerboard > 0.75)
 		discard;
 #	endif
@@ -516,7 +516,7 @@ PS_OUTPUT main(PS_INPUT input)
 	TexStencilSampler.GetDimensions(0, stencilDimensions.x, stencilDimensions.y, stencilDimensions.z);
 	stencilValue = TexStencilSampler.Load(float3(stencilDimensions.xy * depthUv, 0)).x;
 #			endif
-	depthUv = ConvertFromStereoUV(depthUv * DynamicResolutionParams2, eyeIndex);
+	depthUv = Stereo::ConvertFromStereoUV(depthUv * DynamicResolutionParams2.xy, eyeIndex);
 	float4 positionCS = float4(2 * float2(depthUv.x, -depthUv.y + 1) - 1, depth, 1);
 	float4 positionMS = mul(CameraViewProjInverse[eyeIndex], positionCS);
 	positionMS.xyz = positionMS.xyz / positionMS.w;
@@ -530,7 +530,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float fadeFactor = input.Alpha.x;
 #		endif
 
-	float noise = InterleavedGradientNoise(input.PositionCS.xy, FrameCount);
+	float noise = Random::InterleavedGradientNoise(input.PositionCS.xy, FrameCount);
 
 	float2 rotation;
 	sincos(M_2PI * noise, rotation.y, rotation.x);
@@ -670,7 +670,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	shadowColor.xyzw = fadeFactor * shadowVisibility;
 #		elif defined(RENDER_SHADOWMASKDPB)
-	float3 positionLS = mul(transpose(ShadowMapProj[eyeIndex][0]), float4(positionMS.xyz, 1));
+	float3 positionLS = mul(transpose(ShadowMapProj[eyeIndex][0]), float4(positionMS.xyz, 1)).xyz;
 
 	bool lowerHalf = positionLS.z * 0.5 + 0.5 < 0;
 	float3 normalizedPositionLS = normalize(positionLS);

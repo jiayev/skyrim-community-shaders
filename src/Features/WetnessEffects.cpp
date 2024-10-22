@@ -275,7 +275,7 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
 						float seconds = currentGameTime - lastGameTimeValue;
 						lastGameTimeValue = currentGameTime;
 
-						if (abs(seconds) >= MAX_TIME_DELTA) {
+						if (seconds >= MAX_TIME_DELTA || seconds < 0) {
 							// If too much time has passed, snap wetness depths to the current weather.
 							seconds = 0.0f;
 							currentWeatherWetnessDepth = 0.0f;
@@ -286,7 +286,7 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
 							puddleDepth = currentWeatherPuddleDepth > 0 ? MAX_PUDDLE_DEPTH : 0.0f;
 						}
 
-						if (seconds > 0 || (seconds < 0 && (wetnessDepth > 0 || puddleDepth > 0))) {
+						if (seconds > 0) {
 							weatherTransitionPercentage = DEFAULT_TRANSITION_PERCENTAGE;
 							float lastWeatherWetnessDepth = wetnessDepth;
 							float lastWeatherPuddleDepth = puddleDepth;

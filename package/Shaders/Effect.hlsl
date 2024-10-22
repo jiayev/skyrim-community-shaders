@@ -93,7 +93,7 @@ struct VS_OUTPUT
 cbuffer VS_PerFrame : register(b12)
 {
 #	if !defined(VR)
-	row_major float4x3 ScreenProj[1] : packoffset(c0);
+	row_major float4x4 ScreenProj[1] : packoffset(c0);
 	row_major float4x4 ViewProj[1] : packoffset(c8);
 #		if defined(SKINNED)
 	float3 BonesPivot[1] : packoffset(c40);
@@ -102,7 +102,7 @@ cbuffer VS_PerFrame : register(b12)
 #			endif  // MOTIONVECTORS_NORMALS
 #		endif      // SKINNED
 #	else
-	row_major float4x3 ScreenProj[2] : packoffset(c0);
+	row_major float4x4 ScreenProj[2] : packoffset(c0);
 	row_major float4x4 ViewProj[2] : packoffset(c16);
 #		if defined(SKINNED)
 	float3 BonesPivot[2] : packoffset(c80);
@@ -194,7 +194,7 @@ float GetProjectedV(float3 worldPosition, uint a_eyeIndex = 0)
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
-	uint eyeIndex = GetEyeIndexVS(
+	uint eyeIndex = Stereo::GetEyeIndexVS(
 #	if defined(VR)
 		input.InstanceID
 #	endif  // VR
@@ -394,7 +394,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	ifdef VR
 	vsout.EyeIndex = eyeIndex;
-	VR_OUTPUT VRout = GetVRVSOutput(vsout.Position, eyeIndex);
+	Stereo::VR_OUTPUT VRout = Stereo::GetVRVSOutput(vsout.Position, eyeIndex);
 	vsout.Position = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;
@@ -522,18 +522,27 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 
 	float3 color = DLightColor.xyz;
+#		if defined(EFFECT_WEATHER)
+#			if defined(EFFECT_SHADOWS)
 	if (!InInterior && !InMapMenu && (ExtraShaderDescriptor & _InWorld)) {
-		float3 viewDirection = normalize(worldPosition);
-		color = DirLightColorShared * GetEffectShadow(worldPosition, viewDirection, screenPosition, eyeIndex);
+		color = DirLightColorShared * GetEffectShadow(worldPosition, normalize(worldPosition), screenPosition, eyeIndex) * 0.5;
 
 		float3 directionalAmbientColor = DirectionalAmbientShared._14_24_34;
 		color += directionalAmbientColor;
 	} else {
-		color = DirLightColorShared;
+		color = DirLightColorShared * 0.5;
 
 		float3 directionalAmbientColor = DirectionalAmbientShared._14_24_34;
 		color += directionalAmbientColor;
 	}
+#			else
+	color = DirLightColorShared * 0.5;
+
+	float3 directionalAmbientColor = DirectionalAmbientShared._14_24_34;
+	color += directionalAmbientColor;
+#			endif
+#		endif
+
 	color.x += dot(PLightColorR * lightFadeMul, 1.0.xxxx);
 	color.y += dot(PLightColorG * lightFadeMul, 1.0.xxxx);
 	color.z += dot(PLightColorB * lightFadeMul, 1.0.xxxx);
@@ -599,13 +608,13 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 propertyColor = PropertyColor.xyz;
 
 #	if defined(LIGHTING)
-	propertyColor = GetLightingColor(input.MSPosition, input.WorldPosition, input.Position, eyeIndex);
+	propertyColor = GetLightingColor(input.MSPosition.xyz, input.WorldPosition.xyz, input.Position.xyzw, eyeIndex);
 
 #		if defined(LIGHT_LIMIT_FIX)
 	uint lightCount = 0;
 	if (LightingInfluence.x > 0.0) {
 		float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
-		float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
+		float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 		bool inWorld = ExtraShaderDescriptor & _InWorld;
 
 		uint clusterIndex = 0;
@@ -616,6 +625,9 @@ PS_OUTPUT main(PS_INPUT input)
 			{
 				uint light_index = lightList[lightOffset + i];
 				StructuredLight light = lights[light_index];
+				if (LightLimitFix::IsLightIgnored(light)) {
+					continue;
+				}
 				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightDirection);
 				float intensityFactor = saturate(lightDist / light.radius);
@@ -732,7 +744,7 @@ PS_OUTPUT main(PS_INPUT input)
 	finalColor *= fogMul;
 #	endif
 	psout.Diffuse = finalColor;
-#	if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
+#	if defined(LIGHTING) && defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (lightLimitFixSettings.EnableLightsVisualisation) {
 		if (lightLimitFixSettings.LightsVisualisationMode == 0) {
 			psout.Diffuse.xyz = LightLimitFix::TurboColormap(0.0);
@@ -752,7 +764,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			else
 	float3 screenSpaceNormal = normalize(input.ScreenSpaceNormal);
 #			endif
-	psout.NormalGlossiness = float4(EncodeNormal(screenSpaceNormal), 0.0, psout.Diffuse.w);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), 0.0, psout.Diffuse.w);
 	float2 screenMotionVector = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 	psout.MotionVectors = float4(screenMotionVector, 0.0, psout.Diffuse.w);
 #		endif

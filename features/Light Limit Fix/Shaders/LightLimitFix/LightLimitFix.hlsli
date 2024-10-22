@@ -3,9 +3,8 @@ struct StrictLightData
 {
 	StructuredLight StrictLights[15];
 	uint NumStrictLights;
-	float LightsNear;
-	float LightsFar;
-	uint pad0;
+	int RoomIndex;
+	uint pad0[2];
 };
 
 StructuredBuffer<StructuredLight> lights : register(t50);
@@ -19,11 +18,11 @@ namespace LightLimitFix
 	{
 		const uint3 clusterSize = lightLimitFixSettings.ClusterSize.xyz;
 
-		if (z < strictLights[0].LightsNear || z > strictLights[0].LightsFar)
+		if (z < CameraData.y || z > CameraData.x)
 			return false;
 
-		float clampedZ = clamp(z, strictLights[0].LightsNear, strictLights[0].LightsFar);
-		uint clusterZ = uint(max((log2(z) - log2(strictLights[0].LightsNear)) * clusterSize.z / log2(strictLights[0].LightsFar / strictLights[0].LightsNear), 0.0));
+		float clampedZ = clamp(z, CameraData.y, CameraData.x);
+		uint clusterZ = uint(max((log2(z) - log2(CameraData.y)) * clusterSize.z / log2(CameraData.x / CameraData.y), 0.0));
 		uint3 cluster = uint3(uint2(uv * clusterSize.xy), clusterZ);
 
 		clusterIndex = cluster.x + (clusterSize.x * cluster.y) + (clusterSize.x * clusterSize.y * cluster.z);
@@ -59,14 +58,14 @@ namespace LightLimitFix
 			// Step the ray
 			viewPosition += lightDirectionVS;
 
-			float2 rayUV = ViewToUV(viewPosition, true, a_eyeIndex);
+			float2 rayUV = FrameBuffer::ViewToUV(viewPosition, true, a_eyeIndex);
 
 			// Ensure the UV coordinates are inside the screen
 			if (!IsSaturated(rayUV))
 				break;
 
 			// Compute the difference between the ray's and the camera's depth
-			float rayDepth = GetScreenDepth(rayUV, a_eyeIndex);
+			float rayDepth = SharedData::GetScreenDepth(rayUV, a_eyeIndex);
 
 			// Difference between the current ray distance and the marched light
 			float depthDelta = viewPosition.z - rayDepth;
@@ -105,5 +104,25 @@ namespace LightLimitFix
 			dot(v4, kRedVec4) + dot(v2, kRedVec2),
 			dot(v4, kGreenVec4) + dot(v2, kGreenVec2),
 			dot(v4, kBlueVec4) + dot(v2, kBlueVec2));
+	}
+
+	bool IsLightIgnored(StructuredLight light)
+	{
+		bool lightIgnored = false;
+		if ((light.lightFlags & Llf_PortalStrictLight) && strictLights[0].RoomIndex >= 0) {
+			lightIgnored = true;
+			int roomIndex = strictLights[0].RoomIndex;
+			[unroll] for (int flagsIndex = 0; flagsIndex < 4; ++flagsIndex)
+			{
+				if (roomIndex < 32) {
+					if (((light.roomFlags[flagsIndex] >> roomIndex) & 1) == 1) {
+						lightIgnored = false;
+					}
+					break;
+				}
+				roomIndex -= 32;
+			}
+		}
+		return lightIgnored;
 	}
 }
