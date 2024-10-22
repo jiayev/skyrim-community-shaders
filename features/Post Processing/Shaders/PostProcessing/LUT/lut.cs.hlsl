@@ -1,5 +1,5 @@
 
-#include "../../Common/Color.hlsli"
+#include "Common/Color.hlsli"
 
 RWTexture2D<float4> RWTexOut : register(u0);
 

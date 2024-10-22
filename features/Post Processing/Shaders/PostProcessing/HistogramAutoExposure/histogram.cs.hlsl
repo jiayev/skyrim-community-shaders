@@ -5,7 +5,7 @@
 
 #include "common.hlsli"
 
-#include "../../Common/Color.hlsli"
+#include "Common/Color.hlsli"
 
 RWStructuredBuffer<uint> RWBufferHistogram : register(u0);
 RWStructuredBuffer<float> RWBufferAdaptation : register(u1);

@@ -1,6 +1,6 @@
 /// By ProfJack/五脚猫, 2024-2-17 UTC
 
-#include "common.hlsli"
+#include "PostProcessing/HistogramAutoExposure/common.hlsli"
 
 RWTexture2D<float4> RWTexOut : register(u0);
 
