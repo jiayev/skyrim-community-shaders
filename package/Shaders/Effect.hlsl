@@ -521,27 +521,26 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	float4 lightDistanceSquared = (PLightPositionX[eyeIndex] - msPosition.xxxx) * (PLightPositionX[eyeIndex] - msPosition.xxxx) + (PLightPositionY[eyeIndex] - msPosition.yyyy) * (PLightPositionY[eyeIndex] - msPosition.yyyy) + (PLightPositionZ[eyeIndex] - msPosition.zzzz) * (PLightPositionZ[eyeIndex] - msPosition.zzzz);
 	float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 
-	float3 color = DLightColor.xyz;
-#		if defined(EFFECT_WEATHER)
-#			if defined(EFFECT_SHADOWS)
-	if (!InInterior && !InMapMenu && (ExtraShaderDescriptor & _InWorld)) {
-		color = DirLightColorShared * GetEffectShadow(worldPosition, normalize(worldPosition), screenPosition, eyeIndex) * 0.5;
+	float3 color = 0.0;
+	float angleShadow = saturate(DirLightDirectionShared.z) * saturate(DirLightDirectionShared.z);
 
-		float3 directionalAmbientColor = DirectionalAmbientShared._14_24_34;
-		color += directionalAmbientColor;
-	} else {
+#		if defined(EFFECT_SHADOWS)
+	if (InMapMenu)
+		color = DirLightColorShared * angleShadow;
+	else if (!InInterior && (ExtraShaderDescriptor & _InWorld))
+		color = DirLightColorShared * GetEffectShadow(worldPosition, normalize(worldPosition), screenPosition, eyeIndex);
+	else
 		color = DirLightColorShared * 0.5;
-
-		float3 directionalAmbientColor = DirectionalAmbientShared._14_24_34;
-		color += directionalAmbientColor;
-	}
-#			else
-	color = DirLightColorShared * 0.5;
-
-	float3 directionalAmbientColor = DirectionalAmbientShared._14_24_34;
-	color += directionalAmbientColor;
-#			endif
+#		else
+	if (InMapMenu)
+		color = DirLightColorShared * angleShadow;
+	else if (!InInterior && (ExtraShaderDescriptor & _InWorld))
+		color = DirLightColorShared * GetWorldShadow(worldPosition, length(worldPosition), 0.0, eyeIndex) * angleShadow * 0.5;
+	else
+		color = DirLightColorShared * 0.5;
 #		endif
+
+	color += DirectionalAmbientShared._14_24_34;
 
 	color.x += dot(PLightColorR * lightFadeMul, 1.0.xxxx);
 	color.y += dot(PLightColorG * lightFadeMul, 1.0.xxxx);
