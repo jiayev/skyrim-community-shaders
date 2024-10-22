@@ -1,31 +1,10 @@
-// Define SL_INCL_STRUCT and SL_INCL_METHODS to include different parts
-// Because this file is included by both forward and deferred shaders
+#include "Common/Random.hlsli"
+#include "Common/SharedData.hlsli"
+#include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 
-#ifdef SL_INCL_STRUCT
-struct SkylightingSettings
-{
-	row_major float4x4 OcclusionViewProj;
-	float4 OcclusionDir;
-
-	float4 PosOffset;   // xyz: cell origin in camera model space
-	uint4 ArrayOrigin;  // xyz: array origin
-	int4 ValidMargin;
-
-	float MinDiffuseVisibility;
-	float MinSpecularVisibility;
-	uint pad[2];
-};
-
-#endif
-
-#ifdef SL_INCL_METHODS
-
-#	include "Common/Random.hlsli"
-#	include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
-
-#	ifdef PSHADER
+#ifdef PSHADER
 Texture3D<sh2> SkylightingProbeArray : register(t29);
-#	endif
+#endif
 
 namespace Skylighting
 {
@@ -75,7 +54,7 @@ namespace Skylighting
 			int3 offset = int3(i, j, k);
 			int3 cellID = cell000 + offset;
 
-			if (any(cellID < 0) || any(cellID >= ARRAY_DIM))
+			if (any(cellID < 0) || any((uint3)cellID >= ARRAY_DIM))
 				continue;
 
 			float3 cellCentreMS = cellID + 0.5 - ARRAY_DIM / 2;
@@ -109,7 +88,7 @@ namespace Skylighting
 		float3 worldDir = endPosWS - startPosWS;
 		float3 worldDirNormalised = normalize(worldDir);
 
-		float noise = InterleavedGradientNoise(pxCoord, FrameCount);
+		float noise = Random::InterleavedGradientNoise(pxCoord, FrameCount);
 
 		float vl = 0;
 
@@ -150,5 +129,3 @@ namespace Skylighting
 		return result;
 	}
 }
-
-#endif

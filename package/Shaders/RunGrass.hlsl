@@ -174,7 +174,7 @@ VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
 
-	uint eyeIndex = GetEyeIndexVS(
+	uint eyeIndex = Stereo::GetEyeIndexVS(
 #		if defined(VR)
 		input.InstanceID
 #		endif  // VR
@@ -223,7 +223,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], previousMsPosition);
 #		if defined(VR)
-	VR_OUTPUT VRout = GetVRVSOutput(projSpacePosition, eyeIndex);
+	Stereo::VR_OUTPUT VRout = Stereo::GetVRVSOutput(projSpacePosition, eyeIndex);
 	vsout.HPosition = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;
@@ -390,7 +390,6 @@ cbuffer PerMaterial : register(b1)
 #		endif
 
 #		if defined(SKYLIGHTING)
-#			define SL_INCL_METHODS
 #			include "Skylighting/Skylighting.hlsli"
 #		endif
 
@@ -438,17 +437,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			else
 	float4 specColor = TexNormalSampler.Sample(SampNormalSampler, input.TexCoord.xy);
 #			endif
-	float dirShadowColor = !InInterior ? TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0)) : 1.0;
+	float dirShadowColor = !InInterior ? TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0)).r : 1.0;
 
-	uint eyeIndex = GetEyeIndexPS(input.HPosition, VPOSOffset);
+	uint eyeIndex = Stereo::GetEyeIndexPS(input.HPosition, VPOSOffset);
 	psout.MotionVectors = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 
 	float3 viewDirection = -normalize(input.WorldPosition.xyz);
 	float3 normal = normalize(input.VertexNormal.xyz);
 
 	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
-	float2 screenUV = ViewToUV(viewPosition, true, eyeIndex);
-	float screenNoise = InterleavedGradientNoise(input.HPosition.xy, FrameCount);
+	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
+	float screenNoise = Random::InterleavedGradientNoise(input.HPosition.xy, FrameCount);
 
 	// Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
 	if (!frontFace)
@@ -513,13 +512,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (dirShadowColor > 0.0) {
 		if (dirLightAngle > 0.0) {
 #			if defined(SCREEN_SPACE_SHADOWS)
-			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition, screenUV, screenNoise, viewPosition, eyeIndex);
+			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, viewPosition, eyeIndex);
 #			endif  // SCREEN_SPACE_SHADOWS
 		}
 
 #			if defined(TERRAIN_SHADOWS)
 		if (dirShadow > 0.0) {
-			float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, length(input.WorldPosition.xyz), SampBaseSampler);
+			float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, SampBaseSampler);
 			dirShadow *= terrainShadow;
 		}
 #			endif  // TERRAIN_SHADOWS
@@ -554,7 +553,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 albedo = max(0, baseColor.xyz * input.VertexColor.xyz);
 
-	float3 subsurfaceColor = lerp(RGBToLuminance(albedo.xyz), albedo.xyz, 2.0) * input.SphereNormal.w;
+	float3 subsurfaceColor = lerp(Color::RGBToLuminance(albedo.xyz), albedo.xyz, 2.0) * input.SphereNormal.w;
 
 	float3 sss = dirLightColor * saturate(-dirLightAngle);
 
@@ -620,8 +619,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	diffuseColor.xyz += transmissionColor;
 	specularColor.xyz += specularColorPBR;
-	specularColor.xyz = LinearToGamma(specularColor.xyz);
-	diffuseColor.xyz = LinearToGamma(diffuseColor.xyz);
+	specularColor.xyz = Color::LinearToGamma(specularColor.xyz);
+	diffuseColor.xyz = Color::LinearToGamma(diffuseColor.xyz);
 #			else
 
 #				if !defined(SSGI)
@@ -639,9 +638,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	skylighting = lerp(1.0, skylighting, Skylighting::getFadeOutFactor(input.WPosition));
 	skylighting = Skylighting::mixDiffuse(skylightingSettings, skylighting);
 
-	directionalAmbientColor = GammaToLinear(directionalAmbientColor);
+	directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor) / Color::LightPreMult;
 	directionalAmbientColor *= skylighting;
-	directionalAmbientColor = LinearToGamma(directionalAmbientColor);
+	directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor * Color::LightPreMult);
 #					endif  // SKYLIGHTING
 
 	diffuseColor += directionalAmbientColor;
@@ -667,18 +666,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		psout.Diffuse = float4(diffuseColor, 1);
 	}
 #			else
-	psout.Diffuse.xyz = float4(diffuseColor, 1);
+	psout.Diffuse.xyz = diffuseColor;
 #			endif
 
-	float3 normalVS = normalize(WorldToView(normal, false, eyeIndex));
+	float3 normalVS = normalize(FrameBuffer::WorldToView(normal, false, eyeIndex));
 #			if defined(TRUE_PBR)
-	psout.Albedo = float4(LinearToGamma(indirectDiffuseLobeWeight), 1);
-	psout.NormalGlossiness = float4(EncodeNormal(normalVS), 1 - pbrSurfaceProperties.Roughness, 1);
+	psout.Albedo = float4(Color::LinearToGamma(indirectDiffuseLobeWeight * Color::AlbedoPreMult), 1);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), 1 - pbrSurfaceProperties.Roughness, 1);
 	psout.Reflectance = float4(indirectSpecularLobeWeight, 1);
 	psout.Parameters = float4(0, 0, 1, 1);
 #			else
 	psout.Albedo = float4(albedo, 1);
-	psout.NormalGlossiness = float4(EncodeNormal(normalVS), specColor.w, 1);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), specColor.w, 1);
 #			endif
 
 	psout.Specular = float4(specularColor, 1);
@@ -725,7 +724,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Diffuse.w = 1;
 
 	psout.MotionVectors = GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, 0);
-	psout.Normal.xy = EncodeNormal(WorldToView(normal, false, 0));
+	psout.Normal.xy = GBuffer::EncodeNormal(FrameBuffer::WorldToView(normal, false, 0));
 	psout.Normal.zw = 0;
 
 	psout.Albedo = float4(albedo, 1);

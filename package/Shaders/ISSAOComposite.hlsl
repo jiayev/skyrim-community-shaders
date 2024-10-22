@@ -128,13 +128,12 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
-	float2 screenPosition = GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
+	float2 screenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 	float ao = SAOTex.Sample(SAOSampler, screenPosition).x;
 	float4 sourceColor = sourceTex.SampleLevel(sourceSampler, screenPosition, 0);
 
 	float4 composedColor = sourceColor;
 
-#	if !defined(VR)
 	if (0.5 < SSRParams.z) {
 		float2 ssrMask = NormalsSSRMaskTex.SampleLevel(NormalsSSRMaskSampler, screenPosition, 0).zw;
 		float4 ssr = SSRSourceTex.Sample(SSRSourceSampler, screenPosition);
@@ -145,7 +144,6 @@ PS_OUTPUT main(PS_INPUT input)
 		}
 		composedColor.xyz += ssrInput;
 	}
-#	endif
 
 	float snowMask = 0;
 #	if !defined(VR)

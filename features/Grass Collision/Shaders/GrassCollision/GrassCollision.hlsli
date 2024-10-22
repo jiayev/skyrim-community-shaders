@@ -19,9 +19,9 @@ namespace GrassCollision
 			float3 displacement = 0.0;
 
 			for (uint i = 0; i < numCollisions; i++) {
-				float dist = distance(collisionData[i].centre[eyeIndex], worldPosition);
+				float dist = distance(collisionData[i].centre[eyeIndex].xyz, worldPosition);
 				float power = 1.0 - saturate(dist / collisionData[i].centre[0].w);
-				float3 direction = worldPosition - collisionData[i].centre[eyeIndex];
+				float3 direction = worldPosition - collisionData[i].centre[eyeIndex].xyz;
 				float3 shift = power * direction;
 				displacement += shift;
 				displacement.z -= length(shift.xy);

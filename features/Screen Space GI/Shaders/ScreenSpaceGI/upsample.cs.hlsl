@@ -1,7 +1,7 @@
 // depth-aware upsampling: https://gist.github.com/pixelmager/a4364ea18305ed5ca707d89ddc5f8743
 
-#include "../Common/FastMath.hlsli"
-#include "common.hlsli"
+#include "Common/FastMath.hlsli"
+#include "ScreenSpaceGI/common.hlsli"
 
 Texture2D<half> srcDepth : register(t0);
 Texture2D<half4> srcGI : register(t1);  // half-res

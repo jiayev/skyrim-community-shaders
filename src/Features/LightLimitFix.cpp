@@ -1,10 +1,10 @@
 #include "LightLimitFix.h"
 
+#include "Shadercache.h"
 #include "State.h"
 #include "Util.h"
 
-constexpr uint CLUSTER_MAX_LIGHTS = 128;
-
+static constexpr uint CLUSTER_MAX_LIGHTS = 128;
 static constexpr uint MAX_LIGHTS = 2048;
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -76,6 +76,8 @@ void LightLimitFix::DrawSettings()
 		ImGui::TreePop();
 	}
 
+	auto& shaderCache = SIE::ShaderCache::Instance();
+
 	if (ImGui::TreeNodeEx("Light Limit Visualization", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Lights Visualisation", &settings.EnableLightsVisualisation);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -83,14 +85,21 @@ void LightLimitFix::DrawSettings()
 		}
 
 		{
-			static const char* comboOptions[] = { "Light Limit", "Strict Lights Count", "Clustered Lights Count" };
-			ImGui::Combo("Lights Visualisation Mode", (int*)&settings.LightsVisualisationMode, comboOptions, 3);
+			static const char* comboOptions[] = { "Light Limit", "Strict Lights Count", "Clustered Lights Count", "Shadow Mask" };
+			ImGui::Combo("Lights Visualisation Mode", (int*)&settings.LightsVisualisationMode, comboOptions, 4);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					" - Visualise the light limit. Red when the \"strict\" light limit is reached (portal-strict lights). "
-					" - Visualise the number of strict lights. "
-					" - Visualise the number of clustered lights. ");
+					" - Visualise the light limit. Red when the \"strict\" light limit is reached (portal-strict lights).\n"
+					" - Visualise the number of strict lights.\n"
+					" - Visualise the number of clustered lights.\n"
+					" - Visualize the Shadow Mask.\n");
 			}
+		}
+		currentEnableLightsVisualisation = settings.EnableLightsVisualisation;
+		if (previousEnableLightsVisualisation != currentEnableLightsVisualisation) {
+			State::GetSingleton()->SetDefines(settings.EnableLightsVisualisation ? "LLFDEBUG" : "");
+			shaderCache.Clear(RE::BSShader::Type::Lighting);
+			previousEnableLightsVisualisation = currentEnableLightsVisualisation;
 		}
 
 		ImGui::Spacing();
@@ -123,7 +132,7 @@ void LightLimitFix::SetupResources()
 		screenSize.x *= .5;
 	clusterSize[0] = ((uint)screenSize.x + 63) / 64;
 	clusterSize[1] = ((uint)screenSize.y + 63) / 64;
-	clusterSize[2] = 16;
+	clusterSize[2] = 32;
 	uint clusterCount = clusterSize[0] * clusterSize[1] * clusterSize[2];
 
 	{
@@ -266,9 +275,35 @@ void LightLimitFix::RestoreDefaultSettings()
 	settings = {};
 }
 
-void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass*)
+RE::NiNode* GetParentRoomNode(RE::NiAVObject* object)
+{
+	if (object == nullptr) {
+		return nullptr;
+	}
+
+	static const auto* roomRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSMultiBoundRoom }.get();
+	static const auto* portalRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSPortalSharedNode }.get();
+
+	const auto* rtti = object->GetRTTI();
+	if (rtti == roomRtti || rtti == portalRtti) {
+		return static_cast<RE::NiNode*>(object);
+	}
+
+	return GetParentRoomNode(object->parent);
+}
+
+void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass)
 {
 	strictLightDataTemp.NumStrictLights = 0;
+
+	strictLightDataTemp.RoomIndex = -1;
+	if (!roomNodes.empty()) {
+		if (RE::NiNode* roomNode = GetParentRoomNode(a_pass->geometry)) {
+			if (auto it = roomNodes.find(roomNode); it != roomNodes.cend()) {
+				strictLightDataTemp.RoomIndex = it->second;
+			}
+		}
+	}
 }
 
 void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass, DirectX::XMMATRIX&, uint32_t, uint32_t, float, Space)
@@ -276,7 +311,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 	bool inWorld = accumulator->GetRuntimeData().activeShadowSceneNode == RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
 
-	strictLightDataTemp.NumStrictLights = a_pass->numLights - 1;
+	strictLightDataTemp.NumStrictLights = inWorld ? 0 : (a_pass->numLights - 1);
 
 	for (uint32_t i = 0; i < strictLightDataTemp.NumStrictLights; i++) {
 		auto bsLight = a_pass->sceneLights[i + 1];
@@ -293,6 +328,13 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 		SetLightPosition(light, niLight->world.translate, inWorld);
 
+		if (bsLight->IsShadowLight()) {
+			auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
+			GET_INSTANCE_MEMBER(shadowLightIndex, shadowLight);
+			light.shadowMaskIndex = shadowLightIndex;
+			light.lightFlags.set(LightFlags::Shadow);
+		}
+
 		strictLightDataTemp.StrictLights[i] = light;
 	}
 }
@@ -302,16 +344,15 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 	auto& context = State::GetSingleton()->context;
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 
-	strictLightDataTemp.LightsNear = lightsNear;
-	strictLightDataTemp.LightsFar = lightsFar;
-
 	static bool wasEmpty = false;
 	static bool wasWorld = false;
+	static int previousRoomIndex = -1;
 
-	bool isEmpty = strictLightDataTemp.NumStrictLights == 0;
-	bool isWorld = accumulator->GetRuntimeData().activeShadowSceneNode == RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
+	const bool isEmpty = strictLightDataTemp.NumStrictLights == 0;
+	const bool isWorld = accumulator->GetRuntimeData().activeShadowSceneNode == RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
+	const int roomIndex = strictLightDataTemp.RoomIndex;
 
-	if (!isEmpty || (isEmpty && !wasEmpty) || isWorld != wasWorld) {
+	if (!isEmpty || (isEmpty && !wasEmpty) || isWorld != wasWorld || previousRoomIndex != roomIndex) {
 		D3D11_MAPPED_SUBRESOURCE mapped;
 		DX::ThrowIfFailed(context->Map(strictLightData->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 		size_t bytes = sizeof(StrictLightData);
@@ -320,6 +361,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 
 		wasEmpty = isEmpty;
 		wasWorld = isWorld;
+		previousRoomIndex = roomIndex;
 	}
 
 	ID3D11ShaderResourceView* view = strictLightData->srv.get();
@@ -421,11 +463,8 @@ std::string ExtractTextureStem(std::string_view a_path)
 	a_path = a_path.substr(lastSeparatorPos + 1);
 	a_path.remove_suffix(4);  // Remove ".dds"
 
-#pragma warning(push)
-#pragma warning(disable: 4244)
-	auto textureNameView = a_path | std::views::transform(::tolower);
+	auto textureNameView = a_path | std::views::transform([](auto c) { return (char)::tolower(c); });
 	std::string textureName = { textureNameView.begin(), textureNameView.end() };
-#pragma warning(pop)
 
 	return textureName;
 }
@@ -594,19 +633,6 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 
 	light.color *= dimmer;
 
-	float distantLightFadeStart = lightsFar * lightsFar * (lightFadeStart / lightFadeEnd);
-	float distantLightFadeEnd = lightsFar * lightsFar;
-
-	if (distance < distantLightFadeStart || distantLightFadeEnd == 0.0f) {
-		dimmer = 1.0f;
-	} else if (distance <= distantLightFadeEnd) {
-		dimmer = 1.0f - ((distance - distantLightFadeStart) / (distantLightFadeEnd - distantLightFadeStart));
-	} else {
-		dimmer = 0.0f;
-	}
-
-	light.color *= dimmer;
-
 	if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
 		for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++)
 			light.positionVS[eyeIndex].data = DirectX::SimpleMath::Vector3::Transform(light.positionWS[eyeIndex].data, viewMatrixCached[eyeIndex]);
@@ -633,13 +659,11 @@ float3 LightLimitFix::Saturation(float3 color, float saturation)
 
 void LightLimitFix::UpdateLights()
 {
-	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
+	static float& cameraNear = (*(float*)(REL::RelocationID(517032, 403540).address() + 0x40));
+	static float& cameraFar = (*(float*)(REL::RelocationID(517032, 403540).address() + 0x44));
 
-	if (!(accumulator && accumulator->kCamera))
-		return;
-
-	lightsNear = std::max(0.0f, accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear);
-	lightsFar = std::min(16384.0f, accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar);
+	lightsNear = cameraNear;
+	lightsFar = cameraFar;
 
 	auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
 
@@ -656,10 +680,24 @@ void LightLimitFix::UpdateLights()
 
 	// Process point lights
 
-	for (auto& e : shadowSceneNode->GetRuntimeData().activeLights) {
+	roomNodes.empty();
+
+	auto addRoom = [&](void* nodePtr, LightData& light) {
+		uint8_t roomIndex = 0;
+		auto* node = static_cast<RE::NiNode*>(nodePtr);
+		if (auto it = roomNodes.find(node); it == roomNodes.cend()) {
+			roomIndex = static_cast<uint8_t>(roomNodes.size());
+			roomNodes.insert_or_assign(node, roomIndex);
+		} else {
+			roomIndex = it->second;
+		}
+		light.roomFlags.SetBit(roomIndex, 1);
+	};
+
+	auto addLight = [&](const RE::NiPointer<RE::BSLight>& e) {
 		if (auto bsLight = e.get()) {
 			if (auto niLight = bsLight->light.get()) {
-				if (IsValidLight(bsLight) && IsGlobalLight(bsLight)) {
+				if (IsValidLight(bsLight)) {
 					auto& runtimeData = niLight->GetLightRuntimeData();
 
 					LightData light{};
@@ -669,27 +707,26 @@ void LightLimitFix::UpdateLights()
 
 					light.radius = runtimeData.radius.x;
 
-					SetLightPosition(light, niLight->world.translate);
-
-					static float& lightFadeStart = (*(float*)REL::RelocationID(527668, 414582).address());
-					static float& lightFadeEnd = (*(float*)REL::RelocationID(527669, 414583).address());
-
-					float distance = CalculateLightDistance(light.positionWS[0].data, light.radius);
-
-					float distantLightFadeStart = lightsFar * lightsFar * (lightFadeStart / lightFadeEnd);
-					float distantLightFadeEnd = lightsFar * lightsFar;
-
-					float dimmer;
-
-					if (distance < distantLightFadeStart || distantLightFadeEnd == 0.0f) {
-						dimmer = 1.0f;
-					} else if (distance <= distantLightFadeEnd) {
-						dimmer = 1.0f - ((distance - distantLightFadeStart) / (distantLightFadeEnd - distantLightFadeStart));
-					} else {
-						dimmer = 0.0f;
+					if (!IsGlobalLight(bsLight)) {
+						// List of BSMultiBoundRooms affected by a light
+						for (const auto& roomPtr : bsLight->unk0D8) {
+							addRoom(roomPtr, light);
+						}
+						// List of BSPortalSharedNodes affected by a light
+						for (const auto& portalSharedNodePtr : bsLight->unk108) {
+							addRoom(portalSharedNodePtr, light);
+						}
+						light.lightFlags.set(LightFlags::PortalStrict);
 					}
 
-					light.color *= dimmer;
+					if (bsLight->IsShadowLight()) {
+						auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
+						GET_INSTANCE_MEMBER(shadowLightIndex, shadowLight);
+						light.shadowMaskIndex = shadowLightIndex;
+						light.lightFlags.set(LightFlags::Shadow);
+					}
+
+					SetLightPosition(light, niLight->world.translate);
 
 					if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
 						lightsData.push_back(light);
@@ -697,6 +734,13 @@ void LightLimitFix::UpdateLights()
 				}
 			}
 		}
+	};
+
+	for (auto& e : shadowSceneNode->GetRuntimeData().activeLights) {
+		addLight(e);
+	}
+	for (auto& e : shadowSceneNode->GetRuntimeData().activeShadowLights) {
+		addLight(e);
 	}
 
 	{
@@ -810,8 +854,8 @@ void LightLimitFix::UpdateLights()
 		auto projMatrixUnjittered = Util::GetCameraData(0).projMatrixUnjittered;
 		float fov = atan(1.0f / static_cast<float4x4>(projMatrixUnjittered).m[0][0]) * 2.0f * (180.0f / 3.14159265359f);
 
-		static float _near = 0.0f, _far = 0.0f, _fov = 0.0f, _lightsNear = 0.0f, _lightsFar = 0.0f;
-		if (fabs(_near - accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear) > 1e-4 || fabs(_far - accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar) > 1e-4 || fabs(_fov - fov) > 1e-4 || fabs(_lightsNear - lightsNear) > 1e-4 || fabs(_lightsFar - lightsFar) > 1e-4) {
+		static float _lightsNear = 0.0f, _lightsFar = 0.0f, _fov = 0.0f;
+		if (fabs(_fov - fov) > 1e-4 || fabs(_lightsNear - lightsNear) > 1e-4 || fabs(_lightsFar - lightsFar) > 1e-4) {
 			LightBuildingCB updateData{};
 			updateData.InvProjMatrix[0] = DirectX::XMMatrixInverse(nullptr, projMatrixUnjittered);
 			if (eyeCount == 1)
@@ -835,8 +879,6 @@ void LightLimitFix::UpdateLights()
 			ID3D11UnorderedAccessView* null_uav = nullptr;
 			context->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
 
-			_near = accumulator->kCamera->GetRuntimeData2().viewFrustum.fNear;
-			_far = accumulator->kCamera->GetRuntimeData2().viewFrustum.fFar;
 			_fov = fov;
 			_lightsNear = lightsNear;
 			_lightsFar = lightsFar;

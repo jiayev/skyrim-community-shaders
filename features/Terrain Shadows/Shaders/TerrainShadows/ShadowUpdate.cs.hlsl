@@ -17,6 +17,7 @@ float GetInterpolatedHeight(float2 pxCoord, bool isVertical)
 	uint2 dims;
 	TexHeight.GetDimensions(dims.x, dims.y);
 
+	// oob is fine
 	int2 lerpPxCoordA = int2(pxCoord - .5 * float2(isVertical, !isVertical));
 	int2 lerpPxCoordB = int2(pxCoord + .5 * float2(isVertical, !isVertical));
 	float heightA = TexHeight[lerpPxCoordA];
@@ -29,9 +30,9 @@ float GetInterpolatedHeight(float2 pxCoord, bool isVertical)
 	heightB = (heightB - ZRange.x) / (ZRange.y - ZRange.x);
 
 	bool inBoundA = all(lerpPxCoordA > 0);
-	bool inBoundB = all(lerpPxCoordB < dims);
+	bool inBoundB = all(lerpPxCoordB < int2(dims));
 	if (inBoundA && inBoundB)
-		return lerp(heightA, heightB, frac(pxCoord - .5));
+		return lerp(heightA, heightB, frac((isVertical ? pxCoord.x : pxCoord.y) - .5));
 	else if (!inBoundA)
 		return heightB;
 	else
@@ -49,9 +50,9 @@ float2 GetInterpolatedHeightRW(float2 pxCoord, bool isVertical)
 	float2 heightB = RWTexShadowHeights[lerpPxCoordB];
 
 	bool inBoundA = all(lerpPxCoordA > 0);
-	bool inBoundB = all(lerpPxCoordB < dims);
+	bool inBoundB = all(lerpPxCoordB < int2(dims));
 	if (inBoundA && inBoundB)
-		return lerp(heightA, heightB, frac(pxCoord - .5));
+		return lerp(heightA, heightB, frac((isVertical ? pxCoord.x : pxCoord.y) - .5));
 	else if (!inBoundA)
 		return heightB;
 	else

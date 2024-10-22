@@ -116,7 +116,7 @@ namespace ExtendedMaterials
 			wsum += weights[i];
 		}
 		float invwsum = rcp(wsum);
-		[unroll] for (int i = 0; i < 6; i++)
+		[unroll] for (i = 0; i < 6; i++)
 		{
 			weights[i] *= invwsum;
 		}
@@ -156,7 +156,7 @@ namespace ExtendedMaterials
 			total += pixelOffset[i];
 		}
 		float invtotal = rcp(total);
-		[unroll] for (int i = 0; i < 6; i++)
+		[unroll] for (i = 0; i < 6; i++)
 		{
 			pixelOffset[i] *= invtotal;
 		}
@@ -354,13 +354,13 @@ namespace ExtendedMaterials
 			float scale = max(params[0].HeightScale * input.LandBlendWeights1.x, max(params[1].HeightScale * input.LandBlendWeights1.y, max(params[2].HeightScale * input.LandBlendWeights1.z,
 																																			max(params[3].HeightScale * input.LandBlendWeights1.w, max(params[4].HeightScale * input.LandBlendWeights2.x, params[5].HeightScale * input.LandBlendWeights2.y)))));
 			rayDir *= scale;
-			sh = GetTerrainHeight(input, coords + rayDir * multipliers.x, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2, heights);
+			sh = GetTerrainHeight(input, coords + rayDir * multipliers.x, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2.xy, heights);
 			if (quality > 0.25)
-				sh.y = GetTerrainHeight(input, coords + rayDir * multipliers.y, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2, heights);
+				sh.y = GetTerrainHeight(input, coords + rayDir * multipliers.y, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2.xy, heights);
 			if (quality > 0.5)
-				sh.z = GetTerrainHeight(input, coords + rayDir * multipliers.z, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2, heights);
+				sh.z = GetTerrainHeight(input, coords + rayDir * multipliers.z, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2.xy, heights);
 			if (quality > 0.75)
-				sh.w = GetTerrainHeight(input, coords + rayDir * multipliers.w, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2, heights);
+				sh.w = GetTerrainHeight(input, coords + rayDir * multipliers.w, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2.xy, heights);
 			return 1.0 - saturate(dot(max(0, sh - sh0), 1.0) * shadowIntensity) * lerp(quality, 1.0, extendedMaterialSettings.ExtendShadows);
 #	else
 			sh = GetTerrainHeight(input, coords + rayDir * multipliers.x, mipLevel, params, quality, heights);

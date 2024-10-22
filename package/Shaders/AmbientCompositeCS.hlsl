@@ -1,21 +1,14 @@
 #include "Common/Color.hlsli"
-#include "Common/DeferredShared.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
+#include "Common/SharedData.hlsli"
 #include "Common/VR.hlsli"
 
 Texture2D<unorm half3> AlbedoTexture : register(t0);
 Texture2D<unorm half3> NormalRoughnessTexture : register(t1);
 
 #if defined(SKYLIGHTING)
-#	define SL_INCL_STRUCT
-#	define SL_INCL_METHODS
 #	include "Skylighting/Skylighting.hlsli"
-
-cbuffer SkylightingCB : register(b1)
-{
-	SkylightingSettings skylightingSettings;
-};
 
 Texture2D<unorm float> DepthTexture : register(t2);
 Texture3D<sh2> SkylightingProbeArray : register(t3);
@@ -35,11 +28,11 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
 	half2 uv = half2(dispatchID.xy + 0.5) * BufferDim.zw * DynamicResolutionParams2.xy;
-	uint eyeIndex = GetEyeIndexFromTexCoord(uv);
-	uv = ConvertFromStereoUV(uv, eyeIndex);
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
+	uv = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
 	half3 normalGlossiness = NormalRoughnessTexture[dispatchID.xy];
-	half3 normalVS = DecodeNormal(normalGlossiness.xy);
+	half3 normalVS = GBuffer::DecodeNormal(normalGlossiness.xy);
 
 	half3 diffuseColor = MainRW[dispatchID.xy];
 	half3 albedo = AlbedoTexture[dispatchID.xy];
@@ -49,13 +42,13 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 
 	half3 normalWS = normalize(mul(CameraViewInverse[eyeIndex], half4(normalVS, 0)).xyz);
 
-	half3 directionalAmbientColor = mul(DirectionalAmbient, half4(normalWS, 1.0));
+	half3 directionalAmbientColor = mul(DirectionalAmbientShared, half4(normalWS, 1.0));
 
-	half3 linAlbedo = GammaToLinear(albedo);
-	half3 linDirectionalAmbientColor = GammaToLinear(directionalAmbientColor);
-	half3 linDiffuseColor = GammaToLinear(diffuseColor);
+	half3 linAlbedo = Color::GammaToLinear(albedo) / Color::AlbedoPreMult;
+	half3 linDirectionalAmbientColor = Color::GammaToLinear(directionalAmbientColor) / Color::LightPreMult;
+	half3 linDiffuseColor = Color::GammaToLinear(diffuseColor);
 
-	half3 linAmbient = lerp(GammaToLinear(albedo * directionalAmbientColor), linAlbedo * linDirectionalAmbientColor, pbrWeight);
+	half3 linAmbient = lerp(Color::GammaToLinear(albedo * directionalAmbientColor), linAlbedo * linDirectionalAmbientColor, pbrWeight);
 
 	half visibility = 1.0;
 #if defined(SKYLIGHTING)
@@ -90,10 +83,10 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 #endif
 
 	linAmbient *= visibility;
-	diffuseColor = LinearToGamma(linDiffuseColor);
-	directionalAmbientColor = LinearToGamma(linDirectionalAmbientColor * visibility);
+	diffuseColor = Color::LinearToGamma(linDiffuseColor);
+	directionalAmbientColor = Color::LinearToGamma(linDirectionalAmbientColor * visibility * Color::LightPreMult);
 
-	diffuseColor = lerp(diffuseColor + directionalAmbientColor * albedo, LinearToGamma(linDiffuseColor + linAmbient), pbrWeight);
+	diffuseColor = lerp(diffuseColor + directionalAmbientColor * albedo, Color::LinearToGamma(linDiffuseColor + linAmbient), pbrWeight);
 
 	MainRW[dispatchID.xy] = diffuseColor;
 };

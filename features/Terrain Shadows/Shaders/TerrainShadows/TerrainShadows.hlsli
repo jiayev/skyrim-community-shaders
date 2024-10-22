@@ -17,7 +17,7 @@ namespace TerrainShadows
 		return float2(GetTerrainZ(norm_z.x), GetTerrainZ(norm_z.y));
 	}
 
-	float GetTerrainShadow(const float3 worldPos, const float viewDistance, SamplerState samp)
+	float GetTerrainShadow(const float3 worldPos, SamplerState samp)
 	{
 		float2 terraOccUV = GetTerrainShadowUV(worldPos.xy);
 

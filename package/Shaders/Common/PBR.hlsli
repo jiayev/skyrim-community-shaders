@@ -107,10 +107,10 @@ namespace PBR
 	LightProperties InitLightProperties(float3 lightColor, float3 nonParallaxShadow, float3 parallaxShadow)
 	{
 		LightProperties result;
-		result.LinearLightColor = GammaToLinear(lightColor) * nonParallaxShadow * parallaxShadow;
+		result.LinearLightColor = Color::GammaToLinear(lightColor) * nonParallaxShadow * parallaxShadow / Color::LightPreMult;
 		[branch] if ((PBRFlags & TruePBR_InterlayerParallax) != 0)
 		{
-			result.LinearCoatLightColor = GammaToLinear(lightColor) * nonParallaxShadow;
+			result.LinearCoatLightColor = Color::GammaToLinear(lightColor) * nonParallaxShadow / Color::LightPreMult;
 		}
 		else
 		{
@@ -339,14 +339,14 @@ namespace PBR
 		// R
 		Mp = HairGaussian(B[0], ThetaH - Alpha[0]);
 		Np = 0.25 * cosHalfPhi;
-		Fp = GetFresnelFactorSchlick(specularColor, sqrt(saturate(0.5 + 0.5 * VdotL)));
+		Fp = GetFresnelFactorSchlick(specularColor, sqrt(saturate(0.5 + 0.5 * VdotL))).x;
 		S += (Mp * Np) * (Fp * lerp(1, backlit, saturate(-VdotL)));
 
 		// TT
 		Mp = HairGaussian(B[1], ThetaH - Alpha[1]);
 		a = (1.55f / hairIOR) * rcp(n_prime);
 		h = cosHalfPhi * (1 + a * (0.6 - 0.8 * cosPhi));
-		f = GetFresnelFactorSchlick(specularColor, cosThetaD * sqrt(saturate(1 - h * h)));
+		f = GetFresnelFactorSchlick(specularColor, cosThetaD * sqrt(saturate(1 - h * h))).x;
 		Fp = (1 - f) * (1 - f);
 		Tp = pow(surfaceProperties.BaseColor, 0.5 * sqrt(1 - (h * a) * (h * a)) / cosThetaD);
 		Np = exp(-3.65 * cosPhi - 3.98);
@@ -354,7 +354,7 @@ namespace PBR
 
 		// TRT
 		Mp = HairGaussian(B[2], ThetaH - Alpha[2]);
-		f = GetFresnelFactorSchlick(specularColor, cosThetaD * 0.5f);
+		f = GetFresnelFactorSchlick(specularColor, cosThetaD * 0.5f).x;
 		Fp = (1 - f) * (1 - f) * f;
 		Tp = pow(surfaceProperties.BaseColor, 0.8 / cosThetaD);
 		Np = exp(17 * cosPhi - 16.78);
@@ -373,7 +373,7 @@ namespace PBR
 		const float wrap = 1;
 		float wrappedNdotL = saturate((dot(fakeN, L) + wrap) / ((1 + wrap) * (1 + wrap)));
 		float diffuseScatter = (1 / PI) * lerp(wrappedNdotL, diffuseKajiya, 0.33);
-		float luma = RGBToLuminance(surfaceProperties.BaseColor);
+		float luma = Color::RGBToLuminance(surfaceProperties.BaseColor);
 		float3 scatterTint = pow(surfaceProperties.BaseColor / luma, 1 - shadow);
 		S += sqrt(surfaceProperties.BaseColor) * diffuseScatter * scatterTint;
 
