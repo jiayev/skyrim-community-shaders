@@ -1,6 +1,7 @@
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
+#include "Common/Math.hlsli"
 #include "Common/MotionBlur.hlsli"
 #include "Common/Permutation.hlsli"
 #include "Common/Random.hlsli"
@@ -165,14 +166,14 @@ float GetProjectedU(float3 worldPosition, float4 texCoordOffset)
 		0.999866009;
 	float projUvTmp5;
 	if (abs(worldPosition.x) > abs(worldPosition.y)) {
-		projUvTmp5 = projUvTmp * projUvTmp2 * -2 + M_HALFPI;
+		projUvTmp5 = projUvTmp * projUvTmp2 * -2 + Math::HALF_PI;
 	} else {
 		projUvTmp5 = 0;
 	}
 	float projUvTmp6 = projUvTmp * projUvTmp2 + projUvTmp5;
 	float projUvTmp7;
 	if (worldPosition.y < -worldPosition.y) {
-		projUvTmp7 = -M_PI;
+		projUvTmp7 = -Math::PI;
 	} else {
 		projUvTmp7 = 0;
 	}

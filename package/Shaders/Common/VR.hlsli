@@ -1,9 +1,13 @@
 #ifndef __VR_DEPENDENCY_HLSL__
 #define __VR_DEPENDENCY_HLSL__
 #ifdef VR
+
+#	if defined(VSHADER)
+#		include "Common/Math.hlsli"
+#	endif  // VSHADER
+
 #	if !defined(COMPUTESHADER) && !defined(CSHADER)
-#		include "Common\Constants.hlsli"
-#		include "Common\FrameBuffer.hlsli"
+#		include "Common/FrameBuffer.hlsli"
 #	endif
 cbuffer VRValues : register(b13)
 {
@@ -390,7 +394,7 @@ namespace Stereo
 		}
 
 		float stereoAdjustment = 2.0f - StereoEnabled;
-		float eyeOffset = dot(EyeOffsetScale, M_IdentityMatrix[a_eyeIndex].xy);
+		float eyeOffset = dot(EyeOffsetScale, Math::IdentityMatrix[a_eyeIndex].xy);
 
 		float xPositionOffset = eyeOffset * clipPos.w * (isStereoEnabled ? 1.0f : 0.0f);
 		float xPositionBase = stereoAdjustment * clipPos.x;

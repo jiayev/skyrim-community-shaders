@@ -1,3 +1,5 @@
+#include "Common/Math.hlsli"
+
 Texture2DArray<float4> SharedTexShadowMapSampler : register(t25);
 
 struct PerGeometry
@@ -37,7 +39,7 @@ float Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 screen
 
 	float rcpSampleCount = rcp(sampleCount);
 
-	uint3 seed = Random::pcg3d(uint3(screenPosition.xy, screenPosition.x * M_PI));
+	uint3 seed = Random::pcg3d(uint3(screenPosition.xy, screenPosition.x * Math::PI));
 
 	float2 compareValue;
 	compareValue.x = mul(transpose(sD.ShadowMapProj[eyeIndex][0]), float4(positionWS, 1)).z;
@@ -49,7 +51,7 @@ float Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 screen
 			float3 rnd = Random::R3Modified(i + FrameCount * sampleCount, seed / 4294967295.f);
 
 			// https://stats.stackexchange.com/questions/8021/how-to-generate-uniformly-distributed-points-in-the-3-d-unit-ball
-			float phi = rnd.x * 2 * 3.1415926535;
+			float phi = rnd.x * Math::TAU;
 			float cos_theta = rnd.y * 2 - 1;
 			float sin_theta = sqrt(1 - cos_theta);
 			float r = rnd.z;
@@ -175,7 +177,7 @@ float GetVL(float3 startPosWS, float3 endPosWS, float3 normal, float noise, inou
 		return worldShadow;
 
 	float2 rotation;
-	sincos(M_2PI * noise, rotation.y, rotation.x);
+	sincos(Math::TAU * noise, rotation.y, rotation.x);
 	float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
 
 	float stepSize = rcp(sampleCount);
@@ -231,7 +233,7 @@ float GetEffectShadow(float3 worldPosition, float3 viewDirection, float2 screenP
 float GetLightingShadow(float noise, float3 worldPosition, uint eyeIndex)
 {
 	float2 rotation;
-	sincos(M_2PI * noise, rotation.y, rotation.x);
+	sincos(Math::TAU * noise, rotation.y, rotation.x);
 	float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
 	return Get2DFilteredShadow(noise, rotationMatrix, worldPosition, eyeIndex);
 }
@@ -241,7 +243,7 @@ float GetWaterShadow(float noise, float3 worldPosition, uint eyeIndex)
 	float worldShadow = GetWorldShadow(worldPosition, length(worldPosition), 0.0, eyeIndex);
 	if (worldShadow != 0.0) {
 		float2 rotation;
-		sincos(M_2PI * noise, rotation.y, rotation.x);
+		sincos(Math::TAU * noise, rotation.y, rotation.x);
 		float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
 		float shadow = Get2DFilteredShadow(noise, rotationMatrix, worldPosition, eyeIndex);
 		return shadow;

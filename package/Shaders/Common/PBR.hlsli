@@ -33,6 +33,7 @@
 
 namespace PBR
 {
+#include "Common/Math.hlsli"
 #if defined(GLINT)
 #	include "Common/Glints/Glints2023.hlsli"
 #else
@@ -161,7 +162,7 @@ namespace PBR
 	{
 		float a2 = pow(roughness, 4);
 		float d = max((NdotH * a2 - NdotH) * NdotH + 1, 1e-5);
-		return a2 / (PI * d * d);
+		return a2 / (Math::PI * d * d);
 	}
 
 	// [Estevez et al. 2017, "Production Friendly Microfacet Sheen BRDF"]
@@ -170,7 +171,7 @@ namespace PBR
 		float invAlpha = pow(roughness, -4);
 		float cos2h = NdotH * NdotH;
 		float sin2h = max(1.0 - cos2h, 1e-5);
-		return (2.0 + invAlpha) * pow(sin2h, invAlpha * 0.5) / (2.0 * PI);
+		return (2.0 + invAlpha) * pow(sin2h, invAlpha * 0.5) / Math::TAU;
 	}
 
 #if defined(GLINT)
@@ -211,7 +212,7 @@ namespace PBR
 
 	float GetDiffuseDirectLightMultiplierLambert()
 	{
-		return 1 / PI;
+		return 1 / Math::PI;
 	}
 
 	// [Burley 2012, "Physically-Based Shading at Disney"]
@@ -220,7 +221,7 @@ namespace PBR
 		float Fd90 = 0.5 + 2 * VdotH * VdotH * roughness;
 		float FdV = 1 + (Fd90 - 1) * pow(1 - NdotV, 5);
 		float FdL = 1 + (Fd90 - 1) * pow(1 - NdotL, 5);
-		return (1 / PI) * FdV * FdL;
+		return (1 / Math::PI) * FdV * FdL;
 	}
 
 	// [Oren et al. 1994, "Generalization of Lambert’s Reflectance Model"]
@@ -236,7 +237,7 @@ namespace PBR
 		float2 sin_alpha_beta = sqrt(saturate(1.0 - cos_alpha_beta * cos_alpha_beta));
 		float C = sin_alpha_beta.x * sin_alpha_beta.y / (1e-6 + cos_alpha_beta.y);
 
-		return (1 / PI) * (A + B * max(0.0, gamma) * C);
+		return (1 / Math::PI) * (A + B * max(0.0, gamma) * C);
 	}
 
 	// [Gotanda 2014, "Designing Reflectance Models for New Consoles"]
@@ -251,7 +252,7 @@ namespace PBR
 		float Vd = (a2 / ((a2 + 0.09) * (1.31072 + 0.995584 * NdotV))) * (1 - pow(1 - NdotL, (1 - 0.3726732 * NdotV * NdotV) / (0.188566 + 0.38841 * NdotV)));
 		float Bp = Cosri < 0 ? 1.4 * NdotV * NdotL * Cosri : Cosri;
 		float Lr = (21.0 / 20.0) * (1 - F0) * (Fr * Lm + Vd + Bp);
-		return (1 / PI) * Lr;
+		return (1 / Math::PI) * Lr;
 	}
 
 	// [Chan 2018, "Material Advances in Call of Duty: WWII"]
@@ -269,7 +270,7 @@ namespace PBR
 
 		float Fb = ((34.5 * g - 59) * g + 24.5) * VdotH * exp2(-max(73.2 * g - 21.2, 8.9) * sqrt(NdotH));
 
-		return (1 / PI) * (Fd + Fb);
+		return (1 / Math::PI) * (Fd + Fb);
 	}
 
 	// [Lazarov 2013, "Getting More Physical in Call of Duty: Black Ops II"]
@@ -300,7 +301,7 @@ namespace PBR
 
 	inline float HairGaussian(float B, float Theta)
 	{
-		return exp(-0.5 * Theta * Theta / (B * B)) / (sqrt(2 * PI) * B);
+		return exp(-0.5 * Theta * Theta / (B * B)) / (sqrt(Math::TAU) * B);
 	}
 
 	float3 GetHairDiffuseColorMarschner(float3 N, float3 V, float3 L, float NdotL, float NdotV, float VdotL, float backlit, float area, SurfaceProperties surfaceProperties)
@@ -372,7 +373,7 @@ namespace PBR
 		float3 fakeN = normalize(V - N * NdotV);
 		const float wrap = 1;
 		float wrappedNdotL = saturate((dot(fakeN, L) + wrap) / ((1 + wrap) * (1 + wrap)));
-		float diffuseScatter = (1 / PI) * lerp(wrappedNdotL, diffuseKajiya, 0.33);
+		float diffuseScatter = (1 / Math::PI) * lerp(wrappedNdotL, diffuseKajiya, 0.33);
 		float luma = Color::RGBToLuminance(surfaceProperties.BaseColor);
 		float3 scatterTint = pow(surfaceProperties.BaseColor / luma, 1 - shadow);
 		S += sqrt(surfaceProperties.BaseColor) * diffuseScatter * scatterTint;
@@ -531,7 +532,7 @@ namespace PBR
 #if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 			[branch] if ((PBRFlags & TruePBR_Subsurface) != 0)
 			{
-				diffuseLobeWeight += surfaceProperties.SubsurfaceColor * (1 - surfaceProperties.Thickness) / PI;
+				diffuseLobeWeight += surfaceProperties.SubsurfaceColor * (1 - surfaceProperties.Thickness) / Math::PI;
 			}
 			[branch] if ((PBRFlags & TruePBR_Fuzz) != 0)
 			{
@@ -589,7 +590,7 @@ namespace PBR
 			specularAO = MultiBounceAO(surfaceProperties.F0, specularAO.x).y;
 		}
 
-		diffuseLobeWeight *= diffuseAO / PI;
+		diffuseLobeWeight *= diffuseAO / Math::PI;
 		specularLobeWeight *= specularAO;
 	}
 

@@ -1,3 +1,4 @@
+#include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
@@ -32,7 +33,7 @@ namespace Skylighting
 
 	sh2 sample(SkylightingSettings params, Texture3D<sh2> probeArray, float3 positionMS, float3 normalWS)
 	{
-		const static sh2 unitSH = float4(sqrt(4 * shPI), 0, 0, 0);
+		const static sh2 unitSH = float4(sqrt(4 * Math::PI), 0, 0, 0);
 		sh2 scaledUnitSH = unitSH / 1e-10;
 
 		float3 positionMSAdjusted = positionMS - params.PosOffset.xyz;
@@ -120,10 +121,10 @@ namespace Skylighting
 		// lobe half angle
 		// credit: Olivier Therrien
 		float roughness2 = roughness * roughness;
-		float halfAngle = clamp(4.1679 * roughness2 * roughness2 - 9.0127 * roughness2 * roughness + 4.6161 * roughness2 + 1.7048 * roughness + 0.1, 0, 1.57079632679);
-		float lerpFactor = halfAngle / 1.57079632679;
+		float halfAngle = clamp(4.1679 * roughness2 * roughness2 - 9.0127 * roughness2 * roughness + 4.6161 * roughness2 + 1.7048 * roughness + 0.1, 0, Math::HALF_PI);
+		float lerpFactor = halfAngle / Math::HALF_PI;
 		sh2 directional = shEvaluate(dominantDir);
-		sh2 cosineLobe = shEvaluateCosineLobe(dominantDir) / shPI;
+		sh2 cosineLobe = shEvaluateCosineLobe(dominantDir) / Math::PI;
 		sh2 result = shAdd(shScale(directional, lerpFactor), shScale(cosineLobe, 1 - lerpFactor));
 
 		return result;

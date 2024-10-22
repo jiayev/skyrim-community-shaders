@@ -1,6 +1,7 @@
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
+#include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/VR.hlsli"
 
@@ -61,7 +62,7 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 #	endif
 
 	sh2 skylighting = Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMS.xyz, normalWS);
-	half skylightingDiffuse = shFuncProductIntegral(skylighting, shEvaluateCosineLobe(float3(normalWS.xy, normalWS.z * 0.5 + 0.5))) / shPI;
+	half skylightingDiffuse = shFuncProductIntegral(skylighting, shEvaluateCosineLobe(float3(normalWS.xy, normalWS.z * 0.5 + 0.5))) / Math::PI;
 	skylightingDiffuse = Skylighting::mixDiffuse(skylightingSettings, skylightingDiffuse);
 
 	visibility = skylightingDiffuse;

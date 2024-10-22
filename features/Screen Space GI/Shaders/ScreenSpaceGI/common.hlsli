@@ -20,6 +20,7 @@
 
 ///////////////////////////////////////////////////////////////////////////////
 
+#include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
 
 cbuffer SSGICB : register(b1)
@@ -166,7 +167,7 @@ float3x3 RotFromToMatrix(float3 from, float3 to)
 float specularLobeHalfAngle(float roughness)
 {
 	float roughness2 = roughness * roughness;
-	return clamp(4.1679 * roughness2 * roughness2 - 9.0127 * roughness2 * roughness + 4.6161 * roughness2 + 1.7048 * roughness + 0.1, 0, 1.57079632679);
+	return clamp(4.1679 * roughness2 * roughness2 - 9.0127 * roughness2 * roughness + 4.6161 * roughness2 + 1.7048 * roughness + 0.1, 0, Math::HALF_PI);
 }
 
 // https://www.gdcvault.com/play/1026701/Fast-Denoising-With-Self-Stabilizing

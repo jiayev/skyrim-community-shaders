@@ -25,11 +25,10 @@
 #include "Common/FastMath.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
+#include "Common/Math.hlsli"
 #include "Common/VR.hlsli"
 #include "ScreenSpaceGI/common.hlsli"
 
-#define PI (3.1415926535897932384626433832795)
-#define HALF_PI (1.5707963267948966192313216916398)
 #define RCP_PI (0.31830988618)
 
 Texture2D<float> srcWorkingDepth : register(t0);
@@ -65,7 +64,7 @@ float GetNormalDistributionFunctionGGX(float roughness, float NdotH)
 	float a = roughness * roughness;
 	float a2 = a * a;
 	float d = max((NdotH * a2 - NdotH) * NdotH + 1, 1e-5);
-	return a2 / (PI * d * d);
+	return a2 / (Math::PI * d * d);
 }
 
 // [Heitz 2014, "Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs"]
@@ -123,7 +122,7 @@ void CalculateGI(
 #endif
 
 	for (uint slice = 0; slice < NumSlices; slice++) {
-		float phi = (PI * rcpNumSlices) * (slice + noiseSlice);
+		float phi = (Math::PI * rcpNumSlices) * (slice + noiseSlice);
 		float3 directionVec = 0;
 		sincos(phi, directionVec.y, directionVec.x);
 

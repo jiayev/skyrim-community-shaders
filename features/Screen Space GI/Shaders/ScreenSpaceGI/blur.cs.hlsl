@@ -4,6 +4,7 @@
 #include "Common/FastMath.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
+#include "Common/Math.hlsli"
 #include "Common/VR.hlsli"
 #include "ScreenSpaceGI/common.hlsli"
 
@@ -102,7 +103,7 @@ float2x3 getKernelBasis(float3 D, float3 N, float roughness = 1.0, float anisoFa
 	float halfAngle = specularLobeHalfAngle(roughness);
 #else
 	float2x3 TvBv = getKernelBasis(normal, normal);  // D = N
-	float halfAngle = FastMath::fsl_HALF_PI * .5f;
+	float halfAngle = Math::HALF_PI * .5f;
 #endif
 	TvBv[0] *= worldRadius;
 	TvBv[1] *= worldRadius;

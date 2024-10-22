@@ -1,3 +1,5 @@
+#include "Common/Math.hlsli"
+
 Texture2D<unorm half> ScreenSpaceShadowsTexture : register(t17);
 
 namespace ScreenSpaceShadows
@@ -12,7 +14,7 @@ namespace ScreenSpaceShadows
 
 	float GetScreenSpaceShadow(float3 screenPosition, float2 uv, float noise, float3 viewPosition, uint eyeIndex)
 	{
-		noise *= 2.0 * M_PI;
+		noise *= Math::TAU;
 
 		half2x2 rotationMatrix = half2x2(cos(noise), sin(noise), -sin(noise), cos(noise));
 

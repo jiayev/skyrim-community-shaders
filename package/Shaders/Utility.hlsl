@@ -1,6 +1,6 @@
-#include "Common/Constants.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/LodLandscape.hlsli"
+#include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
@@ -533,7 +533,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float noise = Random::InterleavedGradientNoise(input.PositionCS.xy, FrameCount);
 
 	float2 rotation;
-	sincos(M_2PI * noise, rotation.y, rotation.x);
+	sincos(Math::TAU * noise, rotation.y, rotation.x);
 	float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
 
 	noise = noise * 2.0 - 1.0;

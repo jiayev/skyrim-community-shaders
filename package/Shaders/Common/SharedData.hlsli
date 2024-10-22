@@ -1,7 +1,6 @@
 #ifndef SHARED_DATA
 #define SHARED_DATA
 
-#include "Common/Constants.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/VR.hlsli"
 

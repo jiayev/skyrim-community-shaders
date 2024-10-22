@@ -1,3 +1,5 @@
+#include "Common/Math.hlsli"
+
 Texture2D<float4> _Glint2023NoiseMap : register(t28);
 
 //=======================================================================================
@@ -465,14 +467,14 @@ void PrecomputeGlints(float2 uv, float2 duvdx, float2 duvdy, float screenSpaceSc
 	float2 v1 = float2(0.0, 1.0);
 	float2 v2 = normalize(ellipseMajor);
 	float theta = atan2(v1.x * v2.y - v1.y * v2.x, v1.x * v2.x + v1.y * v2.y);
-	float thetaGrid = 1.57079632679 / max(ratio0, 2.0);
+	float thetaGrid = Math::HALF_PI / max(ratio0, 2.0);
 	float thetaBin = (int)(theta / thetaGrid) * thetaGrid;
 	thetaBin = thetaBin + (thetaGrid / 2.0);
 	float thetaBin0 = theta < thetaBin ? thetaBin - thetaGrid / 2.0 : thetaBin;
 	float thetaBinH = thetaBin0 + thetaGrid / 4.0;
 	float thetaBin1 = thetaBin0 + thetaGrid / 2.0;
 	float thetaBinLerp = Remap(theta, thetaBin0, thetaBin1, 0.0, 1.0);
-	thetaBin0 = thetaBin0 <= 0.0 ? 3.1415926535 + thetaBin0 : thetaBin0;
+	thetaBin0 = thetaBin0 <= 0.0 ? Math::PI + thetaBin0 : thetaBin0;
 
 	// TETRAHEDRONIZATION OF ROTATION + RATIO + LOD GRID
 	bool centerSpecialCase = (ratio0.x == 1.0);
@@ -504,10 +506,10 @@ void PrecomputeGlints(float2 uv, float2 duvdx, float2 duvdy, float screenSpaceSc
 	float2 uvRotD = RotateUV(uv, thetaBins[tetraD.x], 0.0.rr);
 
 	// SAMPLE GLINT GRIDS
-	uint gridSeedA = HashWithoutSine13(float3(log2(divLods[tetraA.z]), fmod(thetaBins[tetraA.x], 6.28318530718), ratios[tetraA.y])) * 4294967296.0;
-	uint gridSeedB = HashWithoutSine13(float3(log2(divLods[tetraB.z]), fmod(thetaBins[tetraB.x], 6.28318530718), ratios[tetraB.y])) * 4294967296.0;
-	uint gridSeedC = HashWithoutSine13(float3(log2(divLods[tetraC.z]), fmod(thetaBins[tetraC.x], 6.28318530718), ratios[tetraC.y])) * 4294967296.0;
-	uint gridSeedD = HashWithoutSine13(float3(log2(divLods[tetraD.z]), fmod(thetaBins[tetraD.x], 6.28318530718), ratios[tetraD.y])) * 4294967296.0;
+	uint gridSeedA = HashWithoutSine13(float3(log2(divLods[tetraA.z]), fmod(thetaBins[tetraA.x], Math::TAU), ratios[tetraA.y])) * 4294967296.0;
+	uint gridSeedB = HashWithoutSine13(float3(log2(divLods[tetraB.z]), fmod(thetaBins[tetraB.x], Math::TAU), ratios[tetraB.y])) * 4294967296.0;
+	uint gridSeedC = HashWithoutSine13(float3(log2(divLods[tetraC.z]), fmod(thetaBins[tetraC.x], Math::TAU), ratios[tetraC.y])) * 4294967296.0;
+	uint gridSeedD = HashWithoutSine13(float3(log2(divLods[tetraD.z]), fmod(thetaBins[tetraD.x], Math::TAU), ratios[tetraD.y])) * 4294967296.0;
 
 	vars[0].uv = uvRotA / divLods[tetraA.z] / float2(1.0, ratios[tetraA.y]);
 	vars[0].gridSeed = gridSeedA;

@@ -1,3 +1,4 @@
+#include "Common/Math.hlsli"
 #include "Skylighting/Skylighting.hlsli"
 
 Texture2D<unorm float> srcOcclusionDepth : register(t0);
@@ -13,7 +14,7 @@ SamplerState samplerPointClamp : register(s0);
 [numthreads(8, 8, 1)] void main(uint3 dtid
 								: SV_DispatchThreadID) {
 	const float fadeInThreshold = 255;
-	const static sh2 unitSH = float4(sqrt(4.0 * shPI), 0, 0, 0);
+	const static sh2 unitSH = float4(sqrt(4.0 * Math::PI), 0, 0, 0);
 	const SkylightingSettings settings = skylightingSettings;
 
 	uint3 cellID = (int3(dtid) - settings.ArrayOrigin.xyz) % ARRAY_DIM;
@@ -32,7 +33,7 @@ SamplerState samplerPointClamp : register(s0);
 			float occlusionDepth = srcOcclusionDepth.SampleLevel(samplerPointClamp, occlusionUV, 0);
 			float visibility = saturate((occlusionDepth + 0.0005 - cellCentreOS.z) * 1024);
 
-			sh2 occlusionSH = shScale(shEvaluate(settings.OcclusionDir.xyz), visibility * 4.0 * shPI);  // 4 pi from monte carlo
+			sh2 occlusionSH = shScale(shEvaluate(settings.OcclusionDir.xyz), visibility * 4.0 * Math::PI);  // 4 pi from monte carlo
 			if (isValid) {
 				float lerpFactor = rcp(accumFrames);
 				sh2 prevProbeSH = unitSH;

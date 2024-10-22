@@ -89,6 +89,8 @@
 
 //-----------------------------------------------------------------------------
 
+#include "Common/Math.hlsli"
+
 float4 SSSSBlurCS(
 	uint2 DTid,
 	float2 texcoord,
@@ -138,7 +140,7 @@ float4 SSSSBlurCS(
 	uint2 maxCoord = uint2(BufferDim.x, BufferDim.y);
 #endif
 
-	float jitter = Random::InterleavedGradientNoise(DTid.xy, FrameCount) * M_2PI;
+	float jitter = Random::InterleavedGradientNoise(DTid.xy, FrameCount) * Math::TAU;
 	float2x2 rotationMatrix = float2x2((jitter), sin(jitter), -sin(jitter), cos(jitter));
 	float2x2 identityMatrix = float2x2(1.0, 0.0, 0.0, 1.0);
 

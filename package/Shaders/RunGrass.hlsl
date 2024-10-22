@@ -1,6 +1,7 @@
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
+#include "Common/Math.hlsli"
 #include "Common/MotionBlur.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
@@ -141,9 +142,9 @@ float4 GetMSPosition(VS_INPUT input, float windTimer)
 	float windAngleSin, windAngleCos;
 	sincos(windAngle, windAngleSin, windAngleCos);
 
-	float windTmp3 = 0.2 * cos(M_PI * windAngleCos);
-	float windTmp1 = sin(M_PI * windAngleSin);
-	float windTmp2 = sin(M_2PI * windAngleSin);
+	float windTmp3 = 0.2 * cos(Math::PI * windAngleCos);
+	float windTmp1 = sin(Math::PI * windAngleSin);
+	float windTmp2 = sin(Math::TAU * windAngleSin);
 	float windPower = WindVector.z * (((windTmp1 + windTmp2) * 0.3 + windTmp3) *
 										 (0.5 * (input.Color.w * input.Color.w)));
 
@@ -202,7 +203,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float dirLightAngle = dot(DirLightDirection.xyz, instanceNormal);
 	float3 diffuseMultiplier = input.InstanceData1.www * input.Color.xyz * saturate(dirLightAngle.xxx);
 #		endif  // VR
-	float perInstanceFade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, M_IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
+	float perInstanceFade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, Math::IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
 	float distanceFade = 1 - saturate((length(mul(WorldViewProj[0], msPosition).xyz) - AlphaParam1) / AlphaParam2);
 
 	// Note: input.Color.w is used for wind speed
@@ -254,7 +255,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float dirLightAngle = dot(DirLightDirection.xyz, instanceNormal);
 	float3 diffuseMultiplier = input.InstanceData1.www * input.Color.xyz;
 
-	float perInstanceFade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, M_IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
+	float perInstanceFade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, Math::IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
 	float distanceFade = 1 - saturate((length(projSpacePosition.xyz) - AlphaParam1) / AlphaParam2);
 
 	vsout.DiffuseColor.xyz = diffuseMultiplier;
@@ -371,7 +372,6 @@ cbuffer PerMaterial : register(b1)
 #		endif
 
 #		define SampColorSampler SampBaseSampler
-#		define PI 3.1415927
 
 #		if defined(DYNAMIC_CUBEMAPS)
 #			include "DynamicCubemaps/DynamicCubemaps.hlsli"
@@ -634,7 +634,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #						endif
 
 	sh2 skylightingSH = Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMSSkylight, normal);
-	float skylighting = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(float3(normal.xy, normal.z * 0.5 + 0.5))) / shPI;
+	float skylighting = shFuncProductIntegral(skylightingSH, shEvaluateCosineLobe(float3(normal.xy, normal.z * 0.5 + 0.5))) / Math::PI;
 	skylighting = lerp(1.0, skylighting, Skylighting::getFadeOutFactor(input.WPosition));
 	skylighting = Skylighting::mixDiffuse(skylightingSettings, skylighting);
 

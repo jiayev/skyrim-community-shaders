@@ -1,4 +1,4 @@
-#include "Common/Constants.hlsli"
+#include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/VR.hlsli"
 
@@ -124,7 +124,7 @@ cbuffer PerTechnique : register(b0)
 	float densityContribution = lerp(1, densityFactor, DensityContribution);
 
 	float LdotN = dot(normalize(-positionWS.xyz), normalize(DirLightDirection));
-	float phaseFactor = (1 - PhaseScattering * PhaseScattering) / (4 * M_PI * (1 - LdotN * PhaseScattering));
+	float phaseFactor = (1 - PhaseScattering * PhaseScattering) / (4 * Math::PI * (1 - LdotN * PhaseScattering));
 	float phaseContribution = lerp(1, phaseFactor, PhaseContribution);
 
 	float vl = shadowContribution * densityContribution * phaseContribution;

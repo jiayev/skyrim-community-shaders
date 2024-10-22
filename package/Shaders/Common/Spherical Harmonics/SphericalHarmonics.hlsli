@@ -40,7 +40,7 @@
 //			}
 //
 //		// integrating over a sphere so each sample has a weight of 4*PI/samplecount (uniform solid angle, for each sample)
-//		float shFactor = 4.0 * shPI / (axisSampleCount * axisSampleCount);
+//		float shFactor = 4.0 * Math::PI / (axisSampleCount * axisSampleCount);
 //		shR = shScale(shR, shFactor );
 //		shG = shScale(shG, shFactor );
 //		shB = shScale(shB, shFactor );
@@ -58,7 +58,7 @@
 #ifndef SPHERICAL_HARMONICS_HLSL
 #define SPHERICAL_HARMONICS_HLSL
 
-#define shPI 3.1415926536f
+#include "Common/Math.hlsli"
 
 // Generates a uniform distribution of directions over a unit sphere.
 // Adapted from http://www.pbr-book.org/3ed-2018/Monte_Carlo_Integration/2D_Sampling_with_Multidimensional_Transformations.html#fragment-SamplingFunctionDefinitions-6
@@ -66,7 +66,7 @@
 // Top and bottom sphere pole (+-zenith) are along the Y axis.
 float3 shGetUniformSphereSample(float azimuthX, float zenithY)
 {
-	float phi = 2.0f * shPI * azimuthX;
+	float phi = 2.0f * Math::PI * azimuthX;
 	float z = 1.0f - 2.0f * zenithY;
 	float r = sqrt(max(0.0f, 1.0f - z * z));
 	return float3(r * cos(phi), z, r * sin(phi));
@@ -167,7 +167,7 @@ float shFuncProductIntegral(sh2 shL, sh2 shR)
 //		 - !!! Be aware that this code has note yet be tested !!!
 sh2 shProduct(sh2 shL, sh2 shR)
 {
-	const float factor = 1.0f / (2.0f * sqrt(shPI));
+	const float factor = 1.0f / (2.0f * sqrt(Math::PI));
 	return factor * sh2(
 						dot(shL, shR),
 						shL.y * shR.w + shL.w * shR.y,
@@ -181,7 +181,7 @@ sh2 shHanningConvolution(sh2 sh, float w)
 {
 	sh2 result = sh;
 	float invW = 1.0 / w;
-	float factorBand1 = (1.0 + cos(shPI * invW)) / 2.0f;
+	float factorBand1 = (1.0 + cos(Math::PI * invW)) / 2.0f;
 	result.y *= factorBand1;
 	result.z *= factorBand1;
 	result.w *= factorBand1;
@@ -193,7 +193,7 @@ sh2 shDiffuseConvolution(sh2 sh)
 {
 	sh2 result = sh;
 	// L0
-	result.x *= shPI;
+	result.x *= Math::PI;
 	// L1
 	result.yzw *= 2.0943951023931954923f;
 	return result;
