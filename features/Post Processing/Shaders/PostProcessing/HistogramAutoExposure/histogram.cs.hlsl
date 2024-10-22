@@ -41,7 +41,7 @@ groupshared uint histogramShared[256];
 		uint bin = 0;
 
 		float3 color = TexColor[pxCoord].rgb;
-		float luma = RGBToLuminance(color);
+		float luma = Color::RGBToLuminance(color);
 		if (luma > 1e-10) {
 			float logLuma = saturate((log2(luma) - MinLogLum) * RcpLogLumRange);
 			bin = uint(lerp(1, 255, logLuma));

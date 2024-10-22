@@ -2,10 +2,10 @@
 
 float4 KarisAverage(float4 a, float4 b, float4 c, float4 d)
 {
-	float wa = rcp(1 + RGBToLuminance(a.rgb));
-	float wb = rcp(1 + RGBToLuminance(b.rgb));
-	float wc = rcp(1 + RGBToLuminance(c.rgb));
-	float wd = rcp(1 + RGBToLuminance(d.rgb));
+	float wa = rcp(1 + Color::RGBToLuminance(a.rgb));
+	float wb = rcp(1 + Color::RGBToLuminance(b.rgb));
+	float wc = rcp(1 + Color::RGBToLuminance(c.rgb));
+	float wd = rcp(1 + Color::RGBToLuminance(d.rgb));
 	float wsum = wa + wb + wc + wd;
 	return (a * wa + b * wb + c * wc + d * wd) / wsum;
 }
@@ -113,7 +113,7 @@ float3 Gamma(float3 col, float3 gamma, float3 black_pivot, float3 white_pivot)
 
 float3 Saturation(float3 col, float sat)
 {
-	float luma = RGBToLuminance(col);
+	float luma = Color::RGBToLuminance(col);
 	return lerp(luma, col, sat);
 }
 

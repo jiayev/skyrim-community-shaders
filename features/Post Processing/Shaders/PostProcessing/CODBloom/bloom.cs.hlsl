@@ -37,7 +37,7 @@ float3 Sanitise(float3 v)
 
 float3 ThresholdColor(float3 col, float threshold)
 {
-	float luma = RGBToLuminance(col);
+	float luma = Color::RGBToLuminance(col);
 	if (luma < 1e-3)
 		return 0;
 	return col * (max(0, luma - threshold) / luma);

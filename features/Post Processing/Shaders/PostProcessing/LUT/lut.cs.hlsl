@@ -38,7 +38,7 @@ float3 biLerp(in float3 values[8], in float3 lerpFactors)
 	float3 color = TexColor[tid].rgb;
 	[branch] if (LutType == 0)
 	{
-		float luma = RGBToLuminance(color);
+		float luma = Color::RGBToLuminance(color);
 		float pxCoord = (luma - InputMin.x) / (InputMax.x - InputMin.x) * (dims.x - 1);
 		int px0 = clamp(int(pxCoord), 0, dims.x - 1);
 		int px1 = min(px0 + 1, dims.x - 1);

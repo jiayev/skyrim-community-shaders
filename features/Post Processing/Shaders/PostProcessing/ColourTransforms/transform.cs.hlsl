@@ -20,12 +20,12 @@ float3 LiftGammaGain(float3 rgb, float4 lift, float4 gamma, float4 gain)
 {
 	float4 liftt = 1.0 - pow(1.0 - lift, log2(gain + 1.0));
 
-	float4 gammat = gamma.rgba - float4(0.0, 0.0, 0.0, RGBToLuminance(gamma.rgb));
+	float4 gammat = gamma.rgba - float4(0.0, 0.0, 0.0, Color::RGBToLuminance(gamma.rgb));
 	float4 gammatTemp = 1.0 + 4.0 * abs(gammat);
 	gammat = lerp(gammatTemp, 1.0 / gammatTemp, step(0.0, gammat));
 
 	float3 col = rgb;
-	float luma = RGBToLuminance(col);
+	float luma = Color::RGBToLuminance(col);
 
 	col = pow(col, gammat.rgb);
 	col *= pow(gain.rgb, gammat.rgb);
@@ -35,7 +35,7 @@ float3 LiftGammaGain(float3 rgb, float4 lift, float4 gamma, float4 gain)
 	luma *= pow(gain.a, gammat.a);
 	luma = max(lerp(2.0 * liftt.a, 1.0, luma), 0.0);
 
-	col += luma - RGBToLuminance(col);
+	col += luma - Color::RGBToLuminance(col);
 
 	return col;
 }
@@ -170,7 +170,7 @@ float3 ExposureContrast(float3 val)
 float3 Reinhard(float3 val)
 {
 	val *= Params[0].x;
-	float luma = RGBToLuminance(val);
+	float luma = Color::RGBToLuminance(val);
 	float lumaOut = luma / (1 + luma);
 	val = val / (luma + 1e-10) * lumaOut;
 	val = saturate(val);
@@ -180,7 +180,7 @@ float3 Reinhard(float3 val)
 float3 ReinhardExt(float3 val)
 {
 	val *= Params[0].x;
-	float luma = RGBToLuminance(val);
+	float luma = Color::RGBToLuminance(val);
 	float lumaOut = luma * (1 + luma / (Params[0].y * Params[0].y)) / (1 + luma);
 	val = val / (luma + 1e-10) * lumaOut;
 	val = saturate(val);
@@ -494,7 +494,7 @@ float3 KajiyaTonemap(float3 col)
 	float3 desat_col = lerp(col, ycbcr.x, desat);
 
 	float tm_luma = KajiyaCurve(ycbcr.x);
-	float3 tm0 = col * max(tm_luma / max(RGBToLuminance(col), 1e-5), 0);
+	float3 tm0 = col * max(tm_luma / max(Color::RGBToLuminance(col), 1e-5), 0);
 	float final_mult = 0.97;
 	float3 tm1 = KajiyaCurve(desat_col);
 
