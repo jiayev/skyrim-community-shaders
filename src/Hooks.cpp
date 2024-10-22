@@ -140,6 +140,53 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	return shaderFound;
 }
 
+namespace EffectExtensions
+{
+	struct BSEffectShader_SetupGeometry
+	{
+		static inline RE::BSRenderPass* CurrentRenderPass = nullptr;
+
+		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+		{
+			CurrentRenderPass = pass;
+			func(shader, pass, renderFlags);
+			CurrentRenderPass = nullptr;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	enum class EffectExtendedFlags : uint32_t
+	{
+		Shadows = 1 << 0,
+	};
+
+	void EffectSetupGeometry(ID3D11Resource* pResource)
+	{
+		if (RE::BSRenderPass* EffectRenderPass = BSEffectShader_SetupGeometry::CurrentRenderPass; EffectRenderPass && EffectRenderPass->geometry && pResource == static_cast<void*>(RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().currentPixelShader->constantBuffers[2].buffer)) {
+			if (auto* shaderProperty = static_cast<RE::BSShaderProperty*>(EffectRenderPass->geometry->GetGeometryRuntimeData().properties[1].get())) {
+				stl::enumeration<EffectExtendedFlags> flags;
+				if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kUniformScale)) {
+					flags.set(EffectExtendedFlags::Shadows);
+				}
+
+				const auto& effectPSConstants = ShaderConstants::EffectPS::Get();
+				auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+				shadowState->SetPSConstant(flags, RE::BSGraphics::ConstantGroupLevel::PerGeometry, effectPSConstants.ExtendedFlags);
+			}
+		}
+	}
+}
+
+struct ID3D11DeviceContext_Unmap
+{
+	static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource)
+	{
+		EffectExtensions::EffectSetupGeometry(pResource);
+		func(This, pResource, Subresource);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
 struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
@@ -348,6 +395,8 @@ namespace Hooks
 			logger::info("Detouring virtual function tables");
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(swapchain);
 
+			stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(context);
+
 			auto& shaderCache = SIE::ShaderCache::Instance();
 			if (shaderCache.IsDump()) {
 				stl::detour_vfunc<12, ID3D11Device_CreateVertexShader>(device);
@@ -430,7 +479,6 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::BSGraphics::VertexShader* a_vertexShader)
 		{
-			func(This, a_vertexShader);  // TODO: Remove original call
 			auto state = State::GetSingleton();
 			if (!state->settingCustomShader) {
 				auto& shaderCache = SIE::ShaderCache::Instance();
@@ -441,16 +489,20 @@ namespace Hooks
 						if (state->enabledClasses[type - 1]) {
 							RE::BSGraphics::VertexShader* vertexShader = shaderCache.GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
 							if (vertexShader) {
+								a_vertexShader = vertexShader;
 								state->context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
 								auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 								GET_INSTANCE_MEMBER(currentVertexShader, shadowState)
 								currentVertexShader = a_vertexShader;
+								GET_INSTANCE_MEMBER(stateUpdateFlags, shadowState)
+								stateUpdateFlags.set(RE::BSGraphics::DIRTY_VERTEX_DESC);
 								return;
 							}
 						}
 					}
 				}
 			}
+			func(This, a_vertexShader);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -469,6 +521,7 @@ namespace Hooks
 						if (state->enabledClasses[type - 1]) {
 							RE::BSGraphics::PixelShader* pixelShader = shaderCache.GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
 							if (pixelShader) {
+								a_pixelShader = pixelShader;
 								state->context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 								auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 								GET_INSTANCE_MEMBER(currentPixelShader, shadowState)
@@ -673,6 +726,9 @@ namespace Hooks
 
 		logger::info("Hooking TESWaterReflections::Update_Actor::GetLOSPosition for Sky Reflection Fix");
 		stl::write_thunk_call<TESWaterReflections_Update_Actor_GetLOSPosition>(REL::RelocationID(31373, 32160).address() + REL::Relocate(0x1AD, 0x1CA, 0x1ed));
+
+		logger::info("Hooking BSEffectShader");
+		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 	}
 
 	void InstallD3DHooks()

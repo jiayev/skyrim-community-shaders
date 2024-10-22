@@ -862,27 +862,31 @@ namespace SIE
 				{ "MatProj", 13 },
 			};
 
+			const auto& effectPSConstants = ShaderConstants::EffectPS::Get();
+
 			auto& effectPS = result[static_cast<size_t>(RE::BSShader::Type::Effect)]
 								   [static_cast<size_t>(ShaderClass::Pixel)];
 			effectPS = {
-				{ "PropertyColor", 0 },
-				{ "AlphaTestRef", 1 },
-				{ "MembraneRimColor", 2 },
-				{ "MembraneVars", 3 },
-				{ "PLightPositionX", 4 },
-				{ "PLightPositionY", 5 },
-				{ "PLightPositionZ", 6 },
-				{ "PLightingRadiusInverseSquared", 7 },
-				{ "PLightColorR", 8 },
-				{ "PLightColorG", 9 },
-				{ "PLightColorB", 10 },
-				{ "DLightColor", 11 },
-				{ "VPOSOffset", 12 },
-				{ "CameraData", 13 },
-				{ "FilteringParam", 14 },
-				{ "BaseColor", 15 },
-				{ "BaseColorScale", 16 },
-				{ "LightingInfluence", 17 },
+				{ "PropertyColor", effectPSConstants.PropertyColor },
+				{ "AlphaTestRef", effectPSConstants.AlphaTestRef },
+				{ "MembraneRimColor", effectPSConstants.MembraneRimColor },
+				{ "MembraneVars", effectPSConstants.MembraneVars },
+				{ "PLightPositionX", effectPSConstants.PLightPositionX },
+				{ "PLightPositionY", effectPSConstants.PLightPositionY },
+				{ "PLightPositionZ", effectPSConstants.PLightPositionZ },
+				{ "PLightingRadiusInverseSquared", effectPSConstants.PLightingRadiusInverseSquared },
+				{ "PLightColorR", effectPSConstants.PLightColorR },
+				{ "PLightColorG", effectPSConstants.PLightColorG },
+				{ "PLightColorB", effectPSConstants.PLightColorB },
+				{ "DLightColor", effectPSConstants.DLightColor },
+				{ "VPOSOffset", effectPSConstants.VPOSOffset },
+				{ "CameraData", effectPSConstants.CameraData },
+				{ "FilteringParam", effectPSConstants.FilteringParam },
+				{ "BaseColor", effectPSConstants.BaseColor },
+				{ "BaseColorScale", effectPSConstants.BaseColorScale },
+				{ "LightingInfluence", effectPSConstants.LightingInfluence },
+
+				{ "ExtendedFlags", effectPSConstants.ExtendedFlags },
 			};
 
 			auto& waterVS = result[static_cast<size_t>(RE::BSShader::Type::Water)]
@@ -1473,6 +1477,9 @@ namespace SIE
 				ReflectConstantBuffers(*reflector.get(), bufferSizes, newShader->constantTable,
 					dummy,
 					ShaderClass::Pixel, descriptor, shader);
+				if (shader.shaderType == RE::BSShader::Type::Effect) {
+					logger::info("{}: {}", descriptor, bufferSizes[2]);
+				}
 				if (bufferSizes[0] != 0) {
 					newShader->constantBuffers[0].buffer =
 						(REX::W32::ID3D11Buffer*)perTechniqueBuffersArray.get()[bufferSizes[0]];

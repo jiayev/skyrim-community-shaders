@@ -158,6 +158,45 @@ namespace ShaderConstants
 		const int32_t PBRParams1 = 1;
 		const int32_t PBRParams2 = 2;
 	};
+
+	struct EffectPS
+	{
+		static const EffectPS& Get()
+		{
+			static EffectPS instance = REL::Module::IsVR() ? GetVR() : GetFlat();
+			return instance;
+		}
+
+		static EffectPS GetFlat()
+		{
+			return EffectPS{};
+		}
+
+		static EffectPS GetVR()
+		{
+			return EffectPS{};
+		}
+
+		const int32_t PropertyColor = 0;
+		const int32_t AlphaTestRef = 1;
+		const int32_t MembraneRimColor = 2;
+		const int32_t MembraneVars = 3;
+		const int32_t PLightPositionX = 4;
+		const int32_t PLightPositionY = 5;
+		const int32_t PLightPositionZ = 6;
+		const int32_t PLightingRadiusInverseSquared = 7;
+		const int32_t PLightColorR = 8;
+		const int32_t PLightColorG = 9;
+		const int32_t PLightColorB = 10;
+		const int32_t DLightColor = 11;
+		const int32_t VPOSOffset = 12;
+		const int32_t CameraData = 13;
+		const int32_t FilteringParam = 14;
+		const int32_t BaseColor = 15;
+		const int32_t BaseColorScale = 16;
+		const int32_t LightingInfluence = 17;
+		const int32_t ExtendedFlags = 18;
+	};
 }
 
 namespace SIE
