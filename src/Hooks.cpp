@@ -162,7 +162,11 @@ namespace EffectExtensions
 
 	void EffectSetupGeometry(ID3D11Resource* pResource)
 	{
-		if (RE::BSRenderPass* EffectRenderPass = BSEffectShader_SetupGeometry::CurrentRenderPass; EffectRenderPass && EffectRenderPass->geometry && pResource == static_cast<void*>(RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().currentPixelShader->constantBuffers[2].buffer)) {
+		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+		GET_INSTANCE_MEMBER(currentPixelShader, shadowState)
+		if (RE::BSRenderPass* EffectRenderPass = BSEffectShader_SetupGeometry::CurrentRenderPass;
+			EffectRenderPass && EffectRenderPass->geometry &&
+			pResource == static_cast<void*>(currentPixelShader->constantBuffers[2].buffer)) {
 			if (auto* shaderProperty = static_cast<RE::BSShaderProperty*>(EffectRenderPass->geometry->GetGeometryRuntimeData().properties[1].get())) {
 				stl::enumeration<EffectExtendedFlags> flags;
 				if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kUniformScale)) {
@@ -170,7 +174,6 @@ namespace EffectExtensions
 				}
 
 				const auto& effectPSConstants = ShaderConstants::EffectPS::Get();
-				auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 				shadowState->SetPSConstant(flags, RE::BSGraphics::ConstantGroupLevel::PerGeometry, effectPSConstants.ExtendedFlags);
 			}
 		}
