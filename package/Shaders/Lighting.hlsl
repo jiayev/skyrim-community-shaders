@@ -1989,19 +1989,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 dirDiffuseColor = dirLightColor * saturate(dirLightAngle) * dirDetailShadow;
 
 #		if defined(SOFT_LIGHTING) || defined(RIM_LIGHTING) || defined(BACK_LIGHTING)
-	float backlighting = 1.0 + saturate(dot(viewDirection, -DirLightDirection.xyz));
+	float dirLightBacklighting = 1.0 + saturate(dot(viewDirection, -DirLightDirection.xyz));
 #		endif
 
 #		if defined(SOFT_LIGHTING)
-	lightsDiffuseColor += dirLightColor * GetSoftLightMultiplier(dirLightAngle) * rimSoftLightColor.xyz * backlighting;
+	lightsDiffuseColor += dirLightColor * GetSoftLightMultiplier(dirLightAngle) * rimSoftLightColor.xyz * dirLightBacklighting;
 #		endif
 
 #		if defined(RIM_LIGHTING)
-	lightsDiffuseColor += dirLightColor * GetRimLightMultiplier(DirLightDirection, viewDirection, modelNormal.xyz) * rimSoftLightColor.xyz * backlighting;
+	lightsDiffuseColor += dirLightColor * GetRimLightMultiplier(DirLightDirection, viewDirection, modelNormal.xyz) * rimSoftLightColor.xyz * dirLightBacklighting;
 #		endif
 
 #		if defined(BACK_LIGHTING)
-	lightsDiffuseColor += dirLightColor * saturate(-dirLightAngle) * backLightColor.xyz * backlighting;
+	lightsDiffuseColor += dirLightColor * saturate(-dirLightAngle) * backLightColor.xyz * dirLightBacklighting;
 #		endif
 
 	if (useSnowSpecular && useSnowDecalSpecular) {
@@ -2063,16 +2063,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float lightAngle = dot(modelNormal.xyz, normalizedLightDirection.xyz);
 		float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
+#				if defined(SOFT_LIGHTING) || defined(RIM_LIGHTING) || defined(BACK_LIGHTING)
+		float lightBacklighting = 1.0 + saturate(dot(viewDirection, -normalizedLightDirection.xyz));
+#				endif
+
 #				if defined(SOFT_LIGHTING)
-		lightDiffuseColor += lightColor * GetSoftLightMultiplier(lightAngle) * rimSoftLightColor.xyz;
+		lightDiffuseColor += lightColor * GetSoftLightMultiplier(lightAngle) * rimSoftLightColor.xyz * lightBacklighting;
 #				endif  // SOFT_LIGHTING
 
 #				if defined(RIM_LIGHTING)
-		lightDiffuseColor += lightColor * GetRimLightMultiplier(normalizedLightDirection, viewDirection, modelNormal.xyz) * rimSoftLightColor.xyz;
+		lightDiffuseColor += lightColor * GetRimLightMultiplier(normalizedLightDirection, viewDirection, modelNormal.xyz) * rimSoftLightColor.xyz * lightBacklighting;
 #				endif  // RIM_LIGHTING
 
 #				if defined(BACK_LIGHTING)
-		lightDiffuseColor += lightColor * saturate(-lightAngle) * backLightColor.xyz;
+		lightDiffuseColor += lightColor * saturate(-lightAngle) * backLightColor.xyz * lightBacklighting;
 #				endif  // BACK_LIGHTING
 
 #				if defined(SPECULAR) || (defined(SPARKLE) && !defined(SNOW))
@@ -2192,16 +2196,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 		float3 lightDiffuseColor = lightColor * contactShadow * saturate(lightAngle.xxx);
 
+#				if defined(SOFT_LIGHTING) || defined(RIM_LIGHTING) || defined(BACK_LIGHTING)
+		float lightBacklighting = 1.0 + saturate(dot(worldSpaceViewDirection, -normalizedLightDirection.xyz));
+#				endif
+
 #				if defined(SOFT_LIGHTING)
-		lightDiffuseColor += lightColor * GetSoftLightMultiplier(lightAngle) * rimSoftLightColor.xyz;
+		lightDiffuseColor += lightColor * GetSoftLightMultiplier(lightAngle) * rimSoftLightColor.xyz * lightBacklighting;
 #				endif
 
 #				if defined(RIM_LIGHTING)
-		lightDiffuseColor += lightColor * GetRimLightMultiplier(normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz) * rimSoftLightColor.xyz;
+		lightDiffuseColor += lightColor * GetRimLightMultiplier(normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz) * rimSoftLightColor.xyz * lightBacklighting;
 #				endif
 
 #				if defined(BACK_LIGHTING)
-		lightDiffuseColor += lightColor * saturate(-lightAngle) * backLightColor.xyz;
+		lightDiffuseColor += lightColor * saturate(-lightAngle) * backLightColor.xyz * lightBacklighting;
 #				endif
 
 #				if defined(SPECULAR) || (defined(SPARKLE) && !defined(SNOW))
