@@ -1854,6 +1854,12 @@ namespace SIE
 			hlslToShaderMap.clear();
 		}
 		compilationSet.Clear();
+		Deferred::GetSingleton()->ClearShaderCache();
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (feature->loaded) {
+				feature->ClearShaderCache();
+			}
+		}
 	}
 
 	template <typename ShaderType, typename MutexType>

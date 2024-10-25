@@ -276,12 +276,7 @@ void Menu::DrawSettings()
 			ImGui::TableNextColumn();
 			if (ImGui::Button("Clear Shader Cache", { -1, 0 })) {
 				shaderCache.Clear();
-				Deferred::GetSingleton()->ClearShaderCache();
-				for (auto* feature : Feature::GetFeatureList()) {
-					if (feature->loaded) {
-						feature->ClearShaderCache();
-					}
-				}
+				// any features should be added to shadercache's clear.
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
@@ -772,12 +767,6 @@ void Menu::DrawAdvancedSettings()
 														   ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_KeypadEnter))))) {
 			State::GetSingleton()->SetDefines(shaderDefines);
 			shaderCache.Clear();
-			Deferred::GetSingleton()->ClearShaderCache();
-			for (auto* feature : Feature::GetFeatureList()) {
-				if (feature->loaded) {
-					feature->ClearShaderCache();
-				}
-			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Defines for Shader Compiler. Semicolon \";\" separated. Clear with space. Rebuild shaders after making change. Compute Shaders require a restart to recompile.");
