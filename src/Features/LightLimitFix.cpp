@@ -712,9 +712,14 @@ void LightLimitFix::UpdateLights()
 						for (const auto& roomPtr : bsLight->unk0D8) {
 							addRoom(roomPtr, light);
 						}
-						// List of BSPortalSharedNodes affected by a light
-						for (const auto& portalSharedNodePtr : bsLight->unk108) {
-							addRoom(portalSharedNodePtr, light);
+						// List of BSPortals affected by a light
+						for (const auto& portalPtr : bsLight->unk0F0) {
+							struct BSPortal
+							{
+								uint8_t data[0x128];
+								void* portalSharedNode;
+							};
+							addRoom(static_cast<BSPortal*>(portalPtr)->portalSharedNode, light);
 						}
 						light.lightFlags.set(LightFlags::PortalStrict);
 					}
