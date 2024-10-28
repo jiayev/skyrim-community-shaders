@@ -29,6 +29,9 @@ public:
 	{
 		PortalStrict = (1 << 0),
 		Shadow = (1 << 1),
+		Simple = (1 << 2),
+		Particle = (1 << 3),
+		Billboard = (1 << 4)
 	};
 
 	struct PositionOpt
@@ -128,12 +131,25 @@ public:
 
 	struct ParticleLightInfo
 	{
+		bool billboard;
+		RE::BSGeometry* node;
 		RE::NiColorA color;
-		ParticleLights::Config& config;
 	};
 
-	eastl::hash_map<RE::BSGeometry*, ParticleLightInfo> queuedParticleLights;
-	eastl::hash_map<RE::BSGeometry*, ParticleLightInfo> particleLights;
+	struct ParticleLightReference
+	{
+		bool valid;
+		bool billboard;
+		ParticleLights::Config* config;
+		ParticleLights::GradientConfig* gradientConfig;
+		RE::NiColorA baseColor;
+	};
+
+	eastl::hash_map<RE::NiNode*, ParticleLightReference> particleLightsReferences;
+	eastl::vector<ParticleLightInfo> queuedParticleLights;
+	eastl::vector<ParticleLightInfo> particleLights;
+
+	void CleanupParticleLights(RE::NiNode* a_node);
 
 	RE::NiPoint3 eyePositionCached[2]{};
 	Matrix viewMatrixCached[2]{};
@@ -176,16 +192,14 @@ public:
 		float BillboardBrightness = 1.0f;
 		float BillboardRadius = 1.0f;
 		bool EnableParticleLightsOptimization = true;
-		uint ParticleLightsOptimisationClusterRadius = 32;
 	};
 
 	uint clusterSize[3] = { 16 };
 
 	Settings settings;
 
-	using ConfigPair = std::pair<ParticleLights::Config*, ParticleLights::GradientConfig*>;
-	std::optional<ConfigPair> GetParticleLightConfigs(RE::BSRenderPass* a_pass);
-	bool AddParticleLight(RE::BSRenderPass* a_pass, ConfigPair a_config);
+	ParticleLightReference GetParticleLightConfigs(RE::BSRenderPass* a_pass);
+	bool AddParticleLight(RE::BSRenderPass* a_pass, ParticleLightReference a_reference);
 	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique);
 
 	void BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass);
@@ -202,7 +216,6 @@ public:
 
 	std::shared_mutex cachedParticleLightsMutex;
 	eastl::vector<CachedParticleLight> cachedParticleLights;
-	std::uint32_t particleLightsDetectionHits = 0;
 
 	eastl::hash_map<RE::NiNode*, uint8_t> roomNodes;
 
@@ -295,26 +308,12 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct BSLightingShaderProperty_GetRenderPasses
+		struct NiNode_Destroy
 		{
-			static RE::BSShaderProperty::RenderPassArray* thunk(RE::BSLightingShaderProperty* property, RE::BSGeometry* geometry, std::uint32_t renderFlags, RE::BSShaderAccumulator* accumulator)
+			static void thunk(RE::NiNode* This)
 			{
-				auto renderPasses = func(property, geometry, renderFlags, accumulator);
-				if (renderPasses == nullptr) {
-					return renderPasses;
-				}
-
-				auto currentPass = renderPasses->head;
-				while (currentPass != nullptr) {
-					if (currentPass->shader->shaderType == RE::BSShader::Type::Lighting) {
-						constexpr uint32_t LightingTechniqueStart = 0x4800002D;
-						// So that we always have shadow mask bound.
-						currentPass->passEnum = ((currentPass->passEnum - LightingTechniqueStart) | static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::DefShadow)) + LightingTechniqueStart;
-					}
-					currentPass = currentPass->next;
-				}
-
-				return renderPasses;
+				GetSingleton()->CleanupParticleLights(This);
+				func(This);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -327,15 +326,15 @@ public:
 
 			stl::write_thunk_call<AIProcess_CalculateLightValue_GetLuminance>(REL::RelocationID(38900, 39946).address() + REL::Relocate(0x1C9, 0x1D3));
 
-			//stl::write_vfunc<0x2A, BSLightingShaderProperty_GetRenderPasses>(RE::VTABLE_BSLightingShaderProperty[0]);
-
 			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 			stl::write_vfunc<0x6, BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 			stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
 
-			logger::info("[LLF] Installed hooks");
-
 			stl::write_thunk_call<BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights>(REL::RelocationID(100565, 107300).address() + REL::Relocate(0x523, 0xB0E, 0x5fe));
+
+			stl::detour_thunk<NiNode_Destroy>(REL::RelocationID(68937, 70288));
+
+			logger::info("[LLF] Installed hooks");
 		}
 	};
 
