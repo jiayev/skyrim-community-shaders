@@ -510,12 +510,18 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::Specular |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::AnisoLighting |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow);
+										(uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow |
+										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr);
 
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::DefShadow |
-									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::CharacterLight);
+									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::CharacterLight |
+									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow);
+				if (a_pixelDescriptor & (uint32_t)SIE::ShaderCache::LightingShaderFlags::AdditionalAlphaMask) {
+					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::DoAlphaTest;
+					a_pixelDescriptor &= ~(uint32_t)SIE::ShaderCache::LightingShaderFlags::AdditionalAlphaMask;
+				}
 
 				static auto enableImprovedSnow = RE::GetINISetting("bEnableImprovedSnow:Display");
 				static bool vr = REL::Module::IsVR();
@@ -577,6 +583,16 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			{
 				if (Deferred::GetSingleton()->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= 256;
+			}
+			break;
+		case RE::BSShader::Type::Grass:
+			{
+				auto technique = a_vertexDescriptor & 0xF;
+				auto flags = a_vertexDescriptor & ~0xF;
+				if (technique == static_cast<uint32_t>(SIE::ShaderCache::GrassShaderTechniques::TruePbr)) {
+					technique = 0;
+				}
+				a_vertexDescriptor = flags | technique;
 			}
 			break;
 		}
