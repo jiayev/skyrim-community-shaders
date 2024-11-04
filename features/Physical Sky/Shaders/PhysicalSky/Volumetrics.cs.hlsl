@@ -364,9 +364,9 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 
 			// multiscatter
 			float3 ms_volume = saturate((ndf.dimension_profile - 0.1) / (1.0 - 0.1)) * pow(ndf.coverage * ndf.cloud_type, 0.25);
-			ms_volume *= pow(cloud_transmittance, info.cloud_ms_transmittance_power);
-			ms_volume *= pow(ndf.height_fraction, info.cloud_ms_height_power);
-			ms_volume *= info.cloud_ms_mult;
+			ms_volume *= pow(cloud_transmittance, info.cloud_layer.ms_transmittance_power);
+			ms_volume *= pow(ndf.height_fraction, info.cloud_layer.ms_height_power);
+			ms_volume *= info.cloud_layer.ms_mult;
 			in_scatter += (sun_transmittance / max(1e-8, cloud_transmittance)) * cloud_scatter * cloud_secondary_phase * ms_volume * info.dirlight_color;
 
 			// ambient

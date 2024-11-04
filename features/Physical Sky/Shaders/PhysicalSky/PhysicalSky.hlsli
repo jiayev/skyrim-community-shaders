@@ -20,6 +20,11 @@ struct CloudLayer
 	// density
 	float3 scatter;
 	float3 absorption;
+
+	// visual
+	float ms_mult;
+	float ms_transmittance_power;
+	float ms_height_power;
 };
 
 struct PhySkyBufferContent
@@ -45,10 +50,6 @@ struct PhySkyBufferContent
 	// LIGHTING
 	uint override_dirlight_color;
 	float dirlight_transmittance_mix;
-
-	float cloud_ms_mult;
-	float cloud_ms_transmittance_power;
-	float cloud_ms_height_power;
 
 	uint enable_vanilla_clouds;
 	float cloud_height;

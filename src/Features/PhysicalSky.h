@@ -49,6 +49,11 @@ struct CloudLayer
 	// density
 	float3 scatter{ 90.f };
 	float3 absorption{ 10.f };
+
+	// visuals
+	float ms_mult = 5.0;
+	float ms_transmittance_power = 0.15;
+	float ms_height_power = 0.7;
 };
 
 struct CloudLayerSettings
@@ -137,10 +142,6 @@ struct PhysicalSky : public Feature
 		float3 secunda_moonlight_color = float3{ .9f, .9f, 1.f } * .03f;
 
 		float2 light_transition_angles = float2{ -10.f, -14.f } * RE::NI_PI / 180.0;
-
-		float cloud_ms_mult = 5.0;
-		float cloud_ms_transmittance_power = 0.15;
-		float cloud_ms_height_power = 0.7;
 
 		bool enable_vanilla_clouds = false;
 		float cloud_height = 4.f;  // km
@@ -244,10 +245,6 @@ struct PhysicalSky : public Feature
 		// LIGHTING
 		uint override_dirlight_color;
 		float dirlight_transmittance_mix;
-
-		float cloud_ms_mult;
-		float cloud_ms_transmittance_power;
-		float cloud_ms_height_power;
 
 		uint enable_vanilla_clouds;
 		float cloud_height;
@@ -359,7 +356,6 @@ struct PhysicalSky : public Feature
 
 	virtual void DrawSettings() override;
 	void SettingsGeneral();
-	void SettingsWorld();
 	void SettingsLighting();
 	void SettingsClouds();
 	void SettingsCelestials();
