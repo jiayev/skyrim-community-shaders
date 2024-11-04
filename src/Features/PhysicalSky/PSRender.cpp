@@ -138,47 +138,57 @@ void PhysicalSky::SetupResources()
 
 	logger::debug("Creating render textures...");
 	{
-		D3D11_TEXTURE2D_DESC texDesc;
+		D3D11_TEXTURE2D_DESC tex_desc;
 		auto mainTex = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-		mainTex.texture->GetDesc(&texDesc);
-		texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		texDesc.MipLevels = 1;
+		mainTex.texture->GetDesc(&tex_desc);
+		tex_desc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+		tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		tex_desc.MipLevels = 1;
 
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = texDesc.Format,
+		D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {
+			.Format = tex_desc.Format,
 			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
 			.Texture2D = {
 				.MostDetailedMip = 0,
-				.MipLevels = texDesc.MipLevels }
+				.MipLevels = tex_desc.MipLevels }
 		};
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-			.Format = texDesc.Format,
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {
+			.Format = tex_desc.Format,
 			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 }
 		};
 
 		{
-			main_view_tr_tex = eastl::make_unique<Texture2D>(texDesc);
-			main_view_tr_tex->CreateSRV(srvDesc);
-			main_view_tr_tex->CreateUAV(uavDesc);
+			main_view_tr_tex = eastl::make_unique<Texture2D>(tex_desc);
+			main_view_tr_tex->CreateSRV(srv_desc);
+			main_view_tr_tex->CreateUAV(uav_desc);
 
-			main_view_lum_tex = eastl::make_unique<Texture2D>(texDesc);
-			main_view_lum_tex->CreateSRV(srvDesc);
-			main_view_lum_tex->CreateUAV(uavDesc);
+			main_view_lum_tex = eastl::make_unique<Texture2D>(tex_desc);
+			main_view_lum_tex->CreateSRV(srv_desc);
+			main_view_lum_tex->CreateUAV(uav_desc);
 		}
 
-		texDesc.Width = s_shadow_map_width;
-		texDesc.Height = s_shadow_map_height;
-		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET;
-		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 5;
-		texDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+		D3D11_TEXTURE3D_DESC tex3d_desc{
+			.Width = s_shadow_volume_size,
+			.Height = s_shadow_volume_size,
+			.Depth = s_shadow_volume_height,
+			.MipLevels = 1,
+			.Format = DXGI_FORMAT_R16_FLOAT,
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+			.CPUAccessFlags = 0,
+			.MiscFlags = 0
+		};
+		srv_desc.Format = uav_desc.Format = tex3d_desc.Format;
+		srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D;
+		srv_desc.Texture3D = { .MostDetailedMip = 0, .MipLevels = 1 };
+		uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D,
+		uav_desc.Texture3D = { .MipSlice = 0, .FirstWSlice = 0, .WSize = tex3d_desc.Depth };
 
 		{
-			shadow_map_tex = eastl::make_unique<Texture2D>(texDesc);
-			shadow_map_tex->CreateSRV(srvDesc);
-			shadow_map_tex->CreateUAV(uavDesc);
+			shadow_volume_tex = eastl::make_unique<Texture3D>(tex3d_desc);
+			shadow_volume_tex->CreateSRV(srv_desc);
+			shadow_volume_tex->CreateUAV(uav_desc);
 		}
 	}
 
@@ -214,7 +224,7 @@ void PhysicalSky::CompileComputeShaders()
 		{ &sky_view_program, "LUTGen.cs.hlsl", { { "LUTGEN", "2" } } },
 		{ &aerial_perspective_program, "LUTGen.cs.hlsl", { { "LUTGEN", "3" } } },
 		{ &main_view_program, "Volumetrics.cs.hlsl" },
-		{ &shadow_map_program, "Volumetrics.cs.hlsl", {}, "renderBeerShadowMap" }
+		{ &shadow_volume_program, "Volumetrics.cs.hlsl", {}, "renderShadowVolume" }
 	};
 
 	for (auto& info : shaderInfos) {
@@ -227,7 +237,7 @@ void PhysicalSky::CompileComputeShaders()
 void PhysicalSky::ClearShaderCache()
 {
 	const auto shaderPtrs = std::array{
-		&transmittance_program, &multiscatter_program, &sky_view_program, &aerial_perspective_program, &main_view_program, &shadow_map_program
+		&transmittance_program, &multiscatter_program, &sky_view_program, &aerial_perspective_program, &main_view_program, &shadow_volume_program
 	};
 
 	for (auto shader : shaderPtrs)
@@ -275,7 +285,7 @@ void PhysicalSky::Prepass()
 		aerial_perspective_lut->srv.get(),
 		nullptr,
 		nullptr,
-		shadow_map_tex->srv.get()
+		shadow_volume_tex->srv.get()
 	};
 
 	if (phys_sky_sb_data.enable_sky) {
@@ -387,6 +397,7 @@ bool PhysicalSky::GenerateNoise(const std::filesystem::path& filename, uint type
 
 void PhysicalSky::GenerateLuts()
 {
+	auto state = State::GetSingleton();
 	auto context = State::GetSingleton()->context;
 
 	/* ---- BACKUP ---- */
@@ -405,6 +416,8 @@ void PhysicalSky::GenerateLuts()
 	context->CSGetConstantBuffers(0, 1, &old.buffer);
 	context->CSGetUnorderedAccessViews(0, ARRAYSIZE(old.uavs), old.uavs);
 	context->CSGetSamplers(2, ARRAYSIZE(old.samplers), old.samplers);
+
+	state->BeginPerfEvent("Physical Sky: LUT Generation");
 
 	/* ---- DISPATCH ---- */
 	newer.srvs[0] = phys_sky_sb->SRV(0);
@@ -449,15 +462,18 @@ void PhysicalSky::GenerateLuts()
 	context->CSSetConstantBuffers(0, 1, &old.buffer);
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(old.uavs), old.uavs, nullptr);
 	context->CSSetSamplers(3, ARRAYSIZE(old.samplers), old.samplers);
+
+	state->EndPerfEvent();
 }
 
 void PhysicalSky::RenderShadowMapMainView()
 {
-	auto& context = State::GetSingleton()->context;
+	auto state = State::GetSingleton();
+	auto& context = state->context;
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto deferred = Deferred::GetSingleton();
 
-	float2 size = Util::ConvertToDynamic(State::GetSingleton()->screenSize);
+	float2 size = Util::ConvertToDynamic(state->screenSize);
 	uint resolution[2] = { (uint)size.x, (uint)size.y };
 
 	auto srvs = std::array{
@@ -477,28 +493,51 @@ void PhysicalSky::RenderShadowMapMainView()
 		TerrainShadows::GetSingleton()->IsHeightMapReady() ? TerrainShadows::GetSingleton()->texShadowHeight->srv.get() : nullptr,
 		nullptr,
 	};
-	std::array<ID3D11UnorderedAccessView*, 2> uavs = { shadow_map_tex->uav.get(), nullptr };
+	std::array<ID3D11UnorderedAccessView*, 2> uavs = { shadow_volume_tex->uav.get(), nullptr };
 	std::array<ID3D11SamplerState*, 3> samplers = { tileable_sampler.get(), transmittance_sampler.get(), sky_view_sampler.get() };
 
 	context->CSSetSamplers(2, (uint)samplers.size(), samplers.data());
 
-	// shadow map
-	context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-	context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-	context->CSSetShaderResources(20, (uint)shadow_srvs.size(), shadow_srvs.data());
-	context->CSSetShader(shadow_map_program.get(), nullptr, 0);
-	context->Dispatch((s_shadow_map_width + 7u) >> 3, (s_shadow_map_height + 7u) >> 3, 1);
+	// shadow volume
+	{
+		state->BeginPerfEvent("Physical Sky: Shadow Volume");
 
-	context->GenerateMips(shadow_map_tex->srv.get());
+		float3 ray_px_dir = -phys_sky_sb_data.dirlight_dir;
+		ray_px_dir.x *= s_shadow_volume_size / phys_sky_sb_data.shadow_volume_range;
+		ray_px_dir.y *= s_shadow_volume_size / phys_sky_sb_data.shadow_volume_range;
+		ray_px_dir.z *= s_shadow_volume_height / phys_sky_sb_data.cloud_layer.thickness;
+		float dir_max_component = std::max(std::max(abs(ray_px_dir.x), abs(ray_px_dir.y)), abs(ray_px_dir.z));
+		uint dispatch_size[2];
+		if (abs(ray_px_dir.x) == dir_max_component || abs(ray_px_dir.y) == dir_max_component) {
+			dispatch_size[0] = s_shadow_volume_size;
+			dispatch_size[1] = s_shadow_volume_height;
+		} else {
+			dispatch_size[0] = dispatch_size[1] = s_shadow_volume_size;
+		}
+
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetShaderResources(20, (uint)shadow_srvs.size(), shadow_srvs.data());
+		context->CSSetShader(shadow_volume_program.get(), nullptr, 0);
+		context->Dispatch(dispatch_size[0], dispatch_size[1], 1);
+
+		state->EndPerfEvent();
+	}
 
 	// main view
-	uavs = { main_view_tr_tex->uav.get(), main_view_lum_tex->uav.get() };
-	shadow_srvs.at(3) = shadow_map_tex->srv.get();
+	{
+		state->BeginPerfEvent("Physical Sky: Main View");
 
-	context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);  // uav first!
-	context->CSSetShaderResources(20, (uint)shadow_srvs.size(), shadow_srvs.data());
-	context->CSSetShader(main_view_program.get(), nullptr, 0);
-	context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
+		uavs = { main_view_tr_tex->uav.get(), main_view_lum_tex->uav.get() };
+		shadow_srvs.at(3) = shadow_volume_tex->srv.get();
+
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);  // uav first!
+		context->CSSetShaderResources(20, (uint)shadow_srvs.size(), shadow_srvs.data());
+		context->CSSetShader(main_view_program.get(), nullptr, 0);
+		context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
+
+		state->EndPerfEvent();
+	}
 
 	// cleanup
 	samplers.fill(nullptr);

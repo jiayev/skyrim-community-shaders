@@ -32,6 +32,7 @@ struct PhySkyBufferContent
 	uint multiscatter_sqrt_samples;
 	uint skyview_step;
 	float aerial_perspective_max_dist;
+	float shadow_volume_range;
 
 	// WORLD
 	float bottom_z;
@@ -132,7 +133,7 @@ Texture2D<float4> TexSkyView : register(t103);
 Texture3D<float4> TexAerialPerspective : register(t104);
 Texture2D<float4> TexMasser : register(t105);
 Texture2D<float4> TexSecunda : register(t106);
-Texture2D<float4> TexBeerShadowMap : register(t107);
+Texture3D<float> TexShadowVolume : register(t107);
 #endif
 
 #ifndef RCP_PI
@@ -176,6 +177,40 @@ float rayIntersectSphere(float3 orig, float3 dir, float3 center, float r)
 float rayIntersectSphere(float3 orig, float3 dir, float r)
 {
 	return rayIntersectSphere(orig, dir, float3(0, 0, 0), r);
+}
+
+// https://gist.github.com/DomNomNom/46bb1ce47f68d255fd5d
+// compute the near and far intersections of the cube (stored in the x and y components) using the slab method
+// no intersection means vec.x > vec.y (really tNear > tFar)
+float2 rayIntersectAABB(float3 ray_origin, float3 ray_dir, float3 box_min, float3 box_max)
+{
+	float3 t_min = (box_min - ray_origin) / ray_dir;
+	float3 t_max = (box_max - ray_origin) / ray_dir;
+	float3 t1 = min(t_min, t_max);
+	float3 t2 = max(t_min, t_max);
+	float t_near = max(max(t1.x, t1.y), t1.z);
+	float t_far = min(min(t2.x, t2.y), t2.z);
+	return float2(t_near, t_far);
+};
+
+float3 getShadowVolumeSampleUvw(float3 pos, float3 ray_dir)
+{
+	float3 shadow_bounds_min = float3(CameraPosAdjust[0].xy - 0.5 * PhysSkyBuffer[0].shadow_volume_range, PhysSkyBuffer[0].cloud_layer.bottom);
+	float3 shadow_bounds_max = float3(CameraPosAdjust[0].xy + 0.5 * PhysSkyBuffer[0].shadow_volume_range, PhysSkyBuffer[0].cloud_layer.bottom + PhysSkyBuffer[0].cloud_layer.thickness);
+
+	float3 shadow_sample_pos = pos;
+	if (any(pos < shadow_bounds_min) || any(pos > shadow_bounds_max)) {
+		// outside
+		float2 hit_dists = rayIntersectAABB(pos, ray_dir, shadow_bounds_min, shadow_bounds_max);
+		if (hit_dists.x > hit_dists.y)
+			return -1;
+		shadow_sample_pos += (hit_dists.x + 128) * ray_dir;
+	}
+
+	float3 shadow_sample_uvw = shadow_sample_pos - float3(CameraPosAdjust[0].xy, PhysSkyBuffer[0].cloud_layer.bottom);
+	shadow_sample_uvw /= float3(PhysSkyBuffer[0].shadow_volume_range.xx, PhysSkyBuffer[0].cloud_layer.thickness);
+	shadow_sample_uvw.xy += 0.5;
+	return shadow_sample_uvw;
 }
 
 float3 sphericalDir(float azimuth, float zenith)
@@ -505,13 +540,10 @@ float3 getDirlightTransmittance(float3 world_pos_abs, SamplerState samp)
 	// fog
 	transmittance *= analyticFogTransmittance(world_pos_abs.z);
 
-	// beer shadow
-	float2 uv;
-	float depth;
-	getOrthographicUV(world_pos_abs, uv, depth);
-	if (all(uv > 0) && all(uv < 1)) {
-		float3 cloud_shadow_sample = TexBeerShadowMap.SampleLevel(samp, uv, 0);
-		float cloud_density = min(cloud_shadow_sample.b, cloud_shadow_sample.g * max(0, depth - cloud_shadow_sample.r));
+	// shadow volume
+	float3 pos_sample_shadow_uvw = getShadowVolumeSampleUvw(world_pos_abs, PhysSkyBuffer[0].dirlight_dir);
+	if (all(pos_sample_shadow_uvw > 0)) {
+		float cloud_density = TexShadowVolume.SampleLevel(samp, pos_sample_shadow_uvw, 0);
 		transmittance *= exp(-(PhysSkyBuffer[0].cloud_layer.scatter + PhysSkyBuffer[0].cloud_layer.absorption) * cloud_density);
 	}
 

@@ -31,12 +31,14 @@ struct PerShadow
 StructuredBuffer<PerShadow> SharedPerShadow : register(t21);
 #define TERRAIN_SHADOW_REGISTER t22
 #include "TerrainShadows/TerrainShadows.hlsli"
-Texture2D<float3> TexBeerShadowMap : register(t23);
+Texture3D<float> TexShadowVolume : register(t23);
 
 RWTexture2D<float3> RWTexTr : register(u0);
 RWTexture2D<float3> RWTexLum : register(u1);
 
-RWTexture2D<float3> RWBeerShadowMap : register(u0);
+RWTexture3D<float> RWShadowVolume : register(u0);
+
+#define ISNAN(x) (!(x < 0.f || x > 0.f || x == 0.f))
 
 // TODO: horizon transmittance
 
@@ -235,7 +237,8 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	// analytic fog
 	{
 		float3 sun_fog_ceil_pos = pos + sun_dir * clamp((info.fog_h_max - pos.z) / sun_dir.z, 0, 10);
-		shadow *= analyticFogTransmittance(pos, sun_fog_ceil_pos);
+		float fog_transmittance = analyticFogTransmittance(pos, sun_fog_ceil_pos);
+		shadow *= fog_transmittance;
 	}
 	[branch] if (all(shadow < 1e-8)) return 0;
 
@@ -248,7 +251,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 
 	// cloud
 	{
-		const static uint visibility_step = 8;
+		const static uint visibility_step = 2;
 		const static float visibility_stride = 0.05 / 1.428e-5f;
 		const float3 jitter = Random::R3Modified(FrameCountAlwaysActive, seed / 4294967295.f) * 2 - 1;
 
@@ -259,22 +262,22 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 			NDFInfo _;
 			cloud_density += sampleCloudDensity(vis_pos, info.cloud_layer, i * 0.5, true, _) * visibility_stride;
 		}
-		cloud_transmittance = exp(-(info.cloud_layer.scatter + info.cloud_layer.absorption) * cloud_density);
 
-		// long range (buggeed for now)
-		// float2 uv;
-		// float depth;
-		// float3 vis_pos = pos + sun_dir * visibility_stride * (visibility_step + 1);
-		// getOrthographicUV(vis_pos, uv, depth);
-		// if (all(uv > 0) && all(uv < 1)) {
-		// 	float3 cloud_shadow_sample = TexBeerShadowMap.SampleLevel(TransmittanceSampler, uv, 1 + length(vis_pos - CameraPosAdjust[eye_index].xyz) / 1.428e-5f);
-		// 	cloud_density += min(cloud_shadow_sample.b, cloud_shadow_sample.g * max(0, depth - cloud_shadow_sample.r));
-		// }
+		// long range
+		float3 vis_pos = pos + sun_dir * visibility_stride * visibility_step;
+		float3 pos_sample_shadow_uvw = getShadowVolumeSampleUvw(vis_pos, info.dirlight_dir);
+		if (all(pos_sample_shadow_uvw > 0))
+			cloud_density += TexShadowVolume.SampleLevel(TransmittanceSampler, pos_sample_shadow_uvw, 0);
+		else {
+			// compensate with one more sample
+			NDFInfo _;
+			cloud_density += sampleCloudDensity(vis_pos + (sun_dir + jitter) * visibility_stride * 2, info.cloud_layer, 1 + visibility_step * 0.5, true, _) * visibility_stride * 2;
+		}
 
 		float3 scaled_density = (info.cloud_layer.scatter + info.cloud_layer.absorption) * cloud_density;
 
-		// cloud_transmittance = exp(-scaled_density);
-		shadow *= exp(-scaled_density);
+		cloud_transmittance = exp(-scaled_density);
+		shadow *= cloud_transmittance;
 		// shadow *= exp(-scaled_density) - exp(-scaled_density * 3);  // beers-powder, 2015, horizon zero dawn
 		// shadow *= max(exp(-scaled_density), exp(-scaled_density * 0.25) * 0.7);  // Wrenninge, 2013, multiscatter approx
 	}
@@ -350,7 +353,6 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 		[branch] if (max(extinction.x, max(extinction.y, extinction.z)) > 1e-8)
 		{
 			// dir light
-			float3 scatter_phaseless = fog_scatter + cloud_scatter;
 			float3 scatter = fog_scatter * fog_phase +
 			                 cloud_scatter * cloud_phase;
 			float3 cloud_transmittance;
@@ -369,7 +371,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 
 			// ambient
 			float3 ambient = Color::GammaToLinear(DirectionalAmbientShared._14_24_34) / Color::LightPreMult;
-			in_scatter += scatter_phaseless * sqrt(1.0 - ndf.dimension_profile) * ambient * RCP_PI;
+			in_scatter += cloud_scatter * sqrt(1.0 - ndf.dimension_profile) * ambient * RCP_PI;
 
 			const float3 sample_transmittance = exp(-dt * extinction);
 			const float3 scatter_factor = (1 - sample_transmittance) / max(extinction, 1e-8);
@@ -407,67 +409,78 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	RWTexLum[px_coords] = ray.lum;
 };
 
-[numthreads(8, 8, 1)] void renderBeerShadowMap(uint2 tid
-											   : SV_DispatchThreadID) {
+#define NTHREADS 256
+groupshared float g_density[NTHREADS];
+
+[numthreads(NTHREADS, 1, 1)] void renderShadowVolume(const uint gtid
+													 : SV_GroupThreadID, const uint2 gid
+													 : SV_GroupID) {
 	const PhySkyBufferContent info = PhysSkyBuffer[0];
-	const static uint steps = 50;
 
-	const uint2 px_coords = tid;
+	uint3 dims;
+	RWShadowVolume.GetDimensions(dims.x, dims.y, dims.z);
+	const float3 rcp_dims = rcp(dims);
+	const float3 scale = float3(info.shadow_volume_range.xx, info.cloud_layer.thickness);
+	const float3 rcp_scale = rcp(scale);
 
-	uint2 dims;
-	RWBeerShadowMap.GetDimensions(dims.x, dims.y);
-	const float2 rcp_dims = rcp(dims);
-	const float2 uv = (px_coords + 0.5) * rcp_dims;
+	const float3 ray_dir = -info.dirlight_dir;  // from sun
 
-	const float3 target = CameraPosAdjust[0].xyz - float3(0, 0, info.bottom_z);
-	const float3 eye = target + info.dirlight_dir * 1000 / 1.428e-5f;
-	const float3 up = abs(info.dirlight_dir.z) == 1 ? float3(1, 0, 0) : float3(0, 0, 1);
+	float3 ray_px_increment = ray_dir * rcp_scale * dims;
+	const float dir_max_component = max(max(abs(ray_px_increment.x), abs(ray_px_increment.y)), abs(ray_px_increment.z));
 
-	float3 eye_pos, ray_dir;
-	orthographicRay(uv, eye, target, up, eye_pos, ray_dir);
+	uint3 start_px;
+	bool3 component_mask = false;
+	if (abs(ray_px_increment.x) == dir_max_component) {
+		start_px = uint3(ray_px_increment.x > 0 ? 0 : dims.x - 1, gid);
+		component_mask.x = true;
+	} else if (abs(ray_px_increment.y) == dir_max_component) {
+		start_px = uint3(gid.x, ray_px_increment.y > 0 ? 0 : dims.y - 1, gid.y);
+		component_mask.y = true;
+	} else {
+		start_px = uint3(gid, ray_px_increment.z > 0 ? 0 : dims.z - 1);
+		component_mask.z = true;
+	}
+	ray_px_increment /= dir_max_component;
+	const float3 ray_uv_increment = ray_px_increment * rcp_dims;
+	const float3 start_uv = (start_px + 0.5) * rcp_dims;
+	const float3 raw_thread_uv = start_uv + gtid * ray_uv_increment;
 
-	const float bottom = info.cloud_layer.bottom;
-	const float ceil = info.cloud_layer.bottom + info.cloud_layer.thickness;
-	float3 start_pos, end_pos;
-	float start_dist, end_dist, march_dist;
-	snapMarch(bottom, ceil, eye_pos, ray_dir, 2000 / 1.428e-5f,
-		start_pos, end_pos, march_dist, start_dist, end_dist);
+	const bool3 is_uv_in_range = (raw_thread_uv > 0) && (raw_thread_uv < 1);
+	// const bool is_valid = dot(is_uv_in_range, component_mask);
+	bool is_valid = true;
 
-	uint n_samples = 0;
-	float front_depth = -1;
-	float mean_density = 0;
-	float max_optical_depth = 0;
-	float sum_density = 0;
+	const float3 thread_uv = raw_thread_uv - floor(raw_thread_uv);  // wraparound
+	const uint3 thread_px_coord = thread_uv * dims;
 
-	float stride = march_dist / (steps + 1);
-	for (uint i = 0; i < steps; i++) {
-		float3 pos = start_pos + (i + 1) * stride * ray_dir;
+	float past_density = RWShadowVolume[thread_px_coord];
+	if (ISNAN(past_density))
+		past_density = 0;
 
+	if (is_valid) {
+		const float3 pos = float3(CameraPosAdjust[0].xy + (thread_uv.xy - 0.5) * info.shadow_volume_range,
+			info.cloud_layer.bottom + info.cloud_layer.thickness * thread_uv.z);
+		// fetch density using only ndf
 		NDFInfo _;
-		float density = sampleCloudDensity(pos, info.cloud_layer, 0, true, _);
+		g_density[gtid] = sampleCloudDensity(pos, info.cloud_layer, 2, false, _);
+	}
+	GroupMemoryBarrierWithGroupSync();
 
-		if (density > 0.01) {
-			front_depth = front_depth < 0 ? length(pos - eye_pos) : front_depth;
-
-			sum_density += density;
-			max_optical_depth += density * stride;  // here, weight optical depth by sample
-
-			n_samples++;
-
-			// early break
-			float3 sum_extinction = sum_density * (info.cloud_layer.scatter + info.cloud_layer.absorption);
-			if (max(sum_extinction.r, max(sum_extinction.g, sum_extinction.b)) >= 7.0f) {
-				break;
+	// parallel summation
+	[unroll] for (uint offset = 1; offset < NTHREADS; offset <<= 1)
+	{
+		if (is_valid && gtid >= offset) {
+			if (all(floor(raw_thread_uv - ray_uv_increment * offset) == floor(raw_thread_uv)))  // no wraparound happened
+			{
+				float current_density = g_density[gtid];
+				float sample_density = g_density[gtid - offset];
+				g_density[gtid] = current_density + sample_density;
 			}
 		}
-	}
-	if (n_samples > 0) {
-		mean_density = sum_density / n_samples;
-	} else {
-		mean_density = 0.0f;
-		front_depth = length(end_pos - eye_pos);
-		max_optical_depth = 0;
+		GroupMemoryBarrierWithGroupSync();
 	}
 
-	RWBeerShadowMap[px_coords.xy] = float3(front_depth, mean_density, max_optical_depth);
+	// save
+	if (is_valid) {
+		RWShadowVolume[thread_px_coord] = lerp(past_density, g_density[gtid] * length(ray_uv_increment * scale), 0.1f);  // scaled by ray length
+	}
 }

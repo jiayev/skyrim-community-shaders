@@ -155,6 +155,7 @@ void PhysicalSky::UpdateBuffer()
 		.multiscatter_sqrt_samples = settings.multiscatter_sqrt_samples,
 		.skyview_step = settings.skyview_step,
 		.aerial_perspective_max_dist = settings.aerial_perspective_max_dist,
+		.shadow_volume_range = settings.shadow_volume_range,
 		.bottom_z = settings.bottom_z,
 		.planet_radius = settings.planet_radius,
 		.atmos_thickness = settings.atmos_thickness,
@@ -216,6 +217,7 @@ void PhysicalSky::UpdateBuffer()
 	};
 
 	phys_sky_sb_data.aerial_perspective_max_dist *= g_km_2_game_unit;
+	phys_sky_sb_data.shadow_volume_range *= g_km_2_game_unit;
 	phys_sky_sb_data.planet_radius *= g_km_2_game_unit;
 	phys_sky_sb_data.atmos_thickness *= g_km_2_game_unit;
 	phys_sky_sb_data.cloud_height *= g_km_2_game_unit;

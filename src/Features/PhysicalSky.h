@@ -87,8 +87,8 @@ struct PhysicalSky : public Feature
 	constexpr static uint16_t s_aerial_perspective_width = 32;
 	constexpr static uint16_t s_aerial_perspective_height = 32;
 	constexpr static uint16_t s_aerial_perspective_depth = 32;
-	constexpr static uint16_t s_shadow_map_width = 768;  // from rdr2
-	constexpr static uint16_t s_shadow_map_height = 768;
+	constexpr static uint16_t s_shadow_volume_size = 256;
+	constexpr static uint16_t s_shadow_volume_height = 64;
 	constexpr static uint16_t s_noise_size = 128;  // from nubis
 
 	static PhysicalSky* GetSingleton()
@@ -115,6 +115,8 @@ struct PhysicalSky : public Feature
 		uint multiscatter_sqrt_samples = 4;
 		uint skyview_step = 30;
 		float aerial_perspective_max_dist = 80;  // in km
+
+		float shadow_volume_range = 8;  // in km
 
 		// WORLD
 		float bottom_z = -15000;        // in game unit
@@ -229,6 +231,7 @@ struct PhysicalSky : public Feature
 		uint multiscatter_sqrt_samples;
 		uint skyview_step;
 		float aerial_perspective_max_dist;
+		float shadow_volume_range;
 
 		// WORLD
 		float bottom_z;
@@ -318,7 +321,7 @@ struct PhysicalSky : public Feature
 	eastl::unique_ptr<Texture3D> aerial_perspective_lut = nullptr;
 	eastl::unique_ptr<Texture2D> main_view_tr_tex = nullptr;
 	eastl::unique_ptr<Texture2D> main_view_lum_tex = nullptr;
-	eastl::unique_ptr<Texture2D> shadow_map_tex = nullptr;
+	eastl::unique_ptr<Texture3D> shadow_volume_tex = nullptr;
 
 	winrt::com_ptr<ID3D11ShaderResourceView> ndf_tex_srv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> cloud_top_lut_srv = nullptr;
@@ -331,7 +334,7 @@ struct PhysicalSky : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> sky_view_program = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> aerial_perspective_program = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> main_view_program = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> shadow_map_program = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> shadow_volume_program = nullptr;
 
 	winrt::com_ptr<ID3D11SamplerState> tileable_sampler = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> transmittance_sampler = nullptr;
@@ -345,7 +348,7 @@ struct PhysicalSky : public Feature
 
 	inline bool CheckComputeShaders()
 	{
-		bool result = transmittance_program && multiscatter_program && sky_view_program && aerial_perspective_program && shadow_map_program;
+		bool result = transmittance_program && multiscatter_program && sky_view_program && aerial_perspective_program && shadow_volume_program;
 		return result;
 	}
 	bool NeedLutsUpdate();

@@ -66,8 +66,8 @@ void TextureCombo(const char* label, std::string& target, const TextureManager& 
 
 void CloudLayerEdit(CloudLayerSettings& cloud)
 {
-	ImGui::SliderFloat("Layer Bottom", &cloud.layer.bottom, 0.f, 8.f, "%.2f km");
-	ImGui::SliderFloat("Layer Thickness", &cloud.layer.thickness, 0.f, 2.f, "%.2f km");
+	ImGui::SliderFloat("Layer Bottom", &cloud.layer.bottom, 0.f, 2.f, "%.2f km");
+	ImGui::SliderFloat("Layer Thickness", &cloud.layer.thickness, 0.05f, 2.f, "%.2f km");
 
 	ImGui::Separator();
 
@@ -150,6 +150,7 @@ void PhysicalSky::SettingsGeneral()
 		ImGui::DragScalar("Multiscatter Sqrt Samples", ImGuiDataType_U32, &settings.multiscatter_sqrt_samples);
 		ImGui::DragScalar("Sky View Steps", ImGuiDataType_U32, &settings.skyview_step);
 		ImGui::SliderFloat("Aerial Perspective Max Dist", &settings.aerial_perspective_max_dist, 0, settings.atmos_thickness, "%.3f km");
+		ImGui::SliderFloat("Shadow Volume Range", &settings.shadow_volume_range, 0, 16, "%.1f km");
 	}
 }
 void PhysicalSky::SettingsWorld()
@@ -666,8 +667,5 @@ void PhysicalSky::SettingsDebug()
 
 		ImGui::BulletText("Main View Luminance");
 		ImGui::Image((void*)(main_view_lum_tex->srv.get()), { main_view_lum_tex->desc.Width * 0.2f, main_view_lum_tex->desc.Height * 0.2f });
-
-		ImGui::BulletText("Shadow Map");
-		ImGui::Image((void*)(shadow_map_tex->srv.get()), { s_shadow_map_width, s_shadow_map_height });
 	}
 }
