@@ -34,6 +34,11 @@ Texture3D<sh2> SkylightingProbeArray : register(t9);
 Texture2D<half4> SpecularSSGITexture : register(t10);
 #endif
 
+#if defined(PHYS_SKY)
+Texture2D<float3> PhysSkyTrTexture : register(t11);
+Texture2D<float3> PhysSkyLumTexture : register(t12);
+#endif
+
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
 	half2 uv = half2(dispatchID.xy + 0.5) * BufferDim.zw * DynamicResolutionParams2.xy;
@@ -133,6 +138,10 @@ Texture2D<half4> SpecularSSGITexture : register(t10);
 		color = Color::LinearToGamma(color);
 	}
 
+#endif
+
+#if defined(PHYS_SKY)
+	color = Color::LinearToGamma(Color::GammaToLinear(color) * PhysSkyTrTexture[dispatchID.xy] + PhysSkyLumTexture[dispatchID.xy]);
 #endif
 
 #if defined(DEBUG)

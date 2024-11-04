@@ -518,6 +518,10 @@ static const uint Effect_Shadows = 1 << 0;
 #		include "CloudShadows/CloudShadows.hlsli"
 #	endif
 
+#	if defined(PHYS_SKY)
+#		include "PhysicalSky/PhysicalSky.hlsli"
+#	endif
+
 #	include "Common/ShadowSampling.hlsli"
 
 #	if defined(LIGHTING)
@@ -526,23 +530,32 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	float4 lightDistanceSquared = (PLightPositionX[eyeIndex] - msPosition.xxxx) * (PLightPositionX[eyeIndex] - msPosition.xxxx) + (PLightPositionY[eyeIndex] - msPosition.yyyy) * (PLightPositionY[eyeIndex] - msPosition.yyyy) + (PLightPositionZ[eyeIndex] - msPosition.zzzz) * (PLightPositionZ[eyeIndex] - msPosition.zzzz);
 	float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 
-	float3 color = 0.0;
+	float3 color = DirLightColorShared.rgb;
+
+#		if defined(PHYS_SKY)
+	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
+		color = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
+		color *= getDirlightTransmittance(worldPosition + CameraPosAdjust[eyeIndex], SampDepthSampler);
+		color = Color::LinearToGamma(color) / Color::LightPreMult;
+	}
+#		endif
+
 	float angleShadow = saturate(DirLightDirectionShared.z) * saturate(DirLightDirectionShared.z);
 
 	if ((ExtendedFlags & Effect_Shadows) != 0) {
 		if (InMapMenu)
-			color = DirLightColorShared * angleShadow;
+			color *= angleShadow;
 		else if (!InInterior && (ExtraShaderDescriptor & ExtraFlags::InWorld))
-			color = DirLightColorShared * GetEffectShadow(worldPosition, normalize(worldPosition), screenPosition, eyeIndex);
+			color *= GetEffectShadow(worldPosition, normalize(worldPosition), screenPosition, eyeIndex);
 		else
-			color = DirLightColorShared * 0.5;
+			color *= 0.5;
 	} else {
 		if (InMapMenu)
-			color = DirLightColorShared * angleShadow;
+			color *= angleShadow;
 		else if (!InInterior && (ExtraShaderDescriptor & ExtraFlags::InWorld))
-			color = DirLightColorShared * GetWorldShadow(worldPosition, length(worldPosition), 0.0, eyeIndex) * angleShadow * 0.5;
+			color *= GetWorldShadow(worldPosition, length(worldPosition), 0.0, eyeIndex) * angleShadow * 0.5;
 		else
-			color = DirLightColorShared * 0.5;
+			color *= 0.5;
 	}
 
 	color += DirectionalAmbientShared._14_24_34;

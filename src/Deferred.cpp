@@ -6,6 +6,7 @@
 #include "Util.h"
 
 #include "Features/DynamicCubemaps.h"
+#include "Features/PhysicalSky.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -407,6 +408,7 @@ void Deferred::DeferredPasses()
 		dynamicCubemaps->UpdateCubemap();
 
 	auto terrainBlending = TerrainBlending::GetSingleton();
+	auto physSky = PhysicalSky::GetSingleton();
 
 	// Deferred Composite
 	{
@@ -414,7 +416,7 @@ void Deferred::DeferredPasses()
 
 		bool doSSGISpecular = ssgi->loaded && ssgi->settings.Enabled && ssgi->settings.EnableGI && ssgi->settings.EnableSpecularGI;
 
-		ID3D11ShaderResourceView* srvs[11]{
+		ID3D11ShaderResourceView* srvs[13]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
@@ -426,6 +428,8 @@ void Deferred::DeferredPasses()
 			dynamicCubemaps->loaded ? dynamicCubemaps->envReflectionsTexture->srv.get() : nullptr,
 			dynamicCubemaps->loaded && skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
 			doSSGISpecular ? ssgi->texGISpecular[ssgi->outputGIIdx]->srv.get() : nullptr,
+			physSky->loaded ? physSky->main_view_tr_tex->srv.get() : nullptr,
+			physSky->loaded ? physSky->main_view_lum_tex->srv.get() : nullptr,
 		};
 
 		if (dynamicCubemaps->loaded)
@@ -606,6 +610,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 
 		if (ScreenSpaceGI::GetSingleton()->loaded)
 			defines.push_back({ "SSGI", nullptr });
+
+		if (PhysicalSky::GetSingleton()->loaded)
+			defines.push_back({ "PHYS_SKY", nullptr });
 
 		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}
