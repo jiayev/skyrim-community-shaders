@@ -266,13 +266,13 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 		// long range
 		float3 vis_pos = pos + sun_dir * visibility_stride * visibility_step;
 		float3 pos_sample_shadow_uvw = getShadowVolumeSampleUvw(vis_pos, info.dirlight_dir);
-		if (all(pos_sample_shadow_uvw > 0))
-			cloud_density += TexShadowVolume.SampleLevel(TransmittanceSampler, pos_sample_shadow_uvw, 0);
-		else {
-			// compensate with one more sample
-			NDFInfo _;
-			cloud_density += sampleCloudDensity(vis_pos + (sun_dir + jitter) * visibility_stride * 2, info.cloud_layer, 1 + visibility_step * 0.5, true, _) * visibility_stride * 2;
-		}
+		if (all(pos_sample_shadow_uvw.xyz > 0))
+			cloud_density += TexShadowVolume.SampleLevel(TransmittanceSampler, pos_sample_shadow_uvw.xyz, 0);
+		else
+			cloud_density += inBetweenSphereDistance(
+								 vis_pos + float3(-CameraPosAdjust[eye_index].xy, info.planet_radius), info.dirlight_dir,
+								 info.planet_radius + info.cloud_layer.bottom, info.planet_radius + info.cloud_layer.bottom + info.cloud_layer.thickness) *
+			                 info.cloud_layer.average_density;
 
 		float3 scaled_density = (info.cloud_layer.scatter + info.cloud_layer.absorption) * cloud_density;
 
@@ -416,11 +416,12 @@ groupshared float g_density[NTHREADS];
 													 : SV_GroupThreadID, const uint2 gid
 													 : SV_GroupID) {
 	const PhySkyBufferContent info = PhysSkyBuffer[0];
+	const CloudLayer cloud = info.cloud_layer;
 
 	uint3 dims;
 	RWShadowVolume.GetDimensions(dims.x, dims.y, dims.z);
 	const float3 rcp_dims = rcp(dims);
-	const float3 scale = float3(info.shadow_volume_range.xx, info.cloud_layer.thickness);
+	const float3 scale = float3(info.shadow_volume_range.xx, cloud.thickness);
 	const float3 rcp_scale = rcp(scale);
 
 	const float3 ray_dir = -info.dirlight_dir;  // from sun
@@ -457,11 +458,19 @@ groupshared float g_density[NTHREADS];
 		past_density = 0;
 
 	if (is_valid) {
-		const float3 pos = float3(CameraPosAdjust[0].xy + (thread_uv.xy - 0.5) * info.shadow_volume_range,
-			info.cloud_layer.bottom + info.cloud_layer.thickness * thread_uv.z);
+		const float3 pos = float3(CameraPosAdjust[0].xy + (thread_uv.xy - 0.5) * info.shadow_volume_range, cloud.bottom + cloud.thickness * thread_uv.z);
+
 		// fetch density using only ndf
 		NDFInfo _;
-		g_density[gtid] = sampleCloudDensity(pos, info.cloud_layer, 2, false, _);
+		float density = sampleCloudDensity(pos, cloud, 2, false, _);
+
+		// average visibility
+		if (gtid == NTHREADS - 1)
+			density += inBetweenSphereDistance(
+						   pos + float3(-CameraPosAdjust[0].xy, info.planet_radius), info.dirlight_dir,
+						   info.planet_radius + cloud.bottom, info.planet_radius + cloud.bottom + cloud.thickness) *
+			           cloud.average_density;
+		g_density[gtid] = density;
 	}
 	GroupMemoryBarrierWithGroupSync();
 

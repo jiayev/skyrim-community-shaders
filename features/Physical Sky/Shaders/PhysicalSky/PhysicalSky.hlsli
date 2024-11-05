@@ -22,6 +22,8 @@ struct CloudLayer
 	float3 absorption;
 
 	// visual
+	float average_density;
+
 	float ms_mult;
 	float ms_transmittance_power;
 	float ms_height_power;
@@ -178,6 +180,15 @@ float rayIntersectSphere(float3 orig, float3 dir, float3 center, float r)
 float rayIntersectSphere(float3 orig, float3 dir, float r)
 {
 	return rayIntersectSphere(orig, dir, float3(0, 0, 0), r);
+}
+
+float inBetweenSphereDistance(float3 orig, float3 dir, float r_inner, float r_outer)
+{
+	float inner_dist = rayIntersectSphere(orig, dir, r_inner);
+	float outer_dist = rayIntersectSphere(orig, dir, r_outer);
+	inner_dist = max(inner_dist, 0);
+	outer_dist = max(outer_dist, 0);
+	return outer_dist - inner_dist;
 }
 
 // https://gist.github.com/DomNomNom/46bb1ce47f68d255fd5d
@@ -543,8 +554,8 @@ float3 getDirlightTransmittance(float3 world_pos_abs, SamplerState samp)
 
 	// shadow volume
 	float3 pos_sample_shadow_uvw = getShadowVolumeSampleUvw(world_pos_abs, PhysSkyBuffer[0].dirlight_dir);
-	if (all(pos_sample_shadow_uvw > 0)) {
-		float cloud_density = TexShadowVolume.SampleLevel(samp, pos_sample_shadow_uvw, 0);
+	if (all(pos_sample_shadow_uvw.xyz > 0)) {
+		float cloud_density = TexShadowVolume.SampleLevel(samp, pos_sample_shadow_uvw.xyz, 0);
 		transmittance *= exp(-(PhysSkyBuffer[0].cloud_layer.scatter + PhysSkyBuffer[0].cloud_layer.absorption) * cloud_density);
 	}
 

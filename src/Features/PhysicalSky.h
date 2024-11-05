@@ -51,6 +51,8 @@ struct CloudLayer
 	float3 absorption{ 10.f };
 
 	// visuals
+	float average_density = 0.01;
+
 	float ms_mult = 5.0;
 	float ms_transmittance_power = 0.15;
 	float ms_height_power = 0.7;

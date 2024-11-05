@@ -87,6 +87,10 @@ void CloudLayerEdit(CloudLayerSettings& cloud)
 
 	ImGui::SeparatorText("Lighting");
 
+	ImGui::SliderFloat("Average Density", &cloud.layer.average_density, 0.f, 0.1f, "%.3f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("For approximating shadowing on far away clouds.");
+
 	ImGui::SliderFloat("Multiscatter Mult", &cloud.layer.ms_mult, 0.1f, 10.f, "%.2f");
 	ImGui::SliderFloat("Multiscatter Transmittance Power", &cloud.layer.ms_transmittance_power, 0.1f, 1.f, "%.2f");
 	ImGui::SliderFloat("Multiscatter Altitude Power", &cloud.layer.ms_height_power, 0.2f, 5.f, "%.2f");
