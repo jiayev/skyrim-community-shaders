@@ -14,8 +14,6 @@ struct CloudLayer
 	float noise_scale_or_freq;
 	float3 noise_offset_or_speed;
 
-	float2 remap_in;
-	float2 remap_out;
 	float power;
 	// density
 	float3 scatter;
@@ -27,6 +25,8 @@ struct CloudLayer
 	float ms_mult;
 	float ms_transmittance_power;
 	float ms_height_power;
+
+	float ambient_mult;
 };
 
 struct PhySkyBufferContent
@@ -46,8 +46,6 @@ struct PhySkyBufferContent
 	float planet_radius;
 	float atmos_thickness;
 	float3 ground_albedo;
-
-	float ap_enhancement;
 
 	// LIGHTING
 	uint override_dirlight_color;
@@ -95,6 +93,7 @@ struct PhySkyBufferContent
 	float3 fog_absorption;
 	float fog_decay;
 	float fog_h_max;
+	float fog_ambient_mult;
 
 	CloudLayer cloud_layer;
 
@@ -188,7 +187,7 @@ float inBetweenSphereDistance(float3 orig, float3 dir, float r_inner, float r_ou
 	float outer_dist = rayIntersectSphere(orig, dir, r_outer);
 	inner_dist = max(inner_dist, 0);
 	outer_dist = max(outer_dist, 0);
-	return outer_dist - inner_dist;
+	return abs(outer_dist - inner_dist);
 }
 
 // https://gist.github.com/DomNomNom/46bb1ce47f68d255fd5d
@@ -554,10 +553,18 @@ float3 getDirlightTransmittance(float3 world_pos_abs, SamplerState samp)
 
 	// shadow volume
 	float3 pos_sample_shadow_uvw = getShadowVolumeSampleUvw(world_pos_abs, PhysSkyBuffer[0].dirlight_dir);
-	if (all(pos_sample_shadow_uvw.xyz > 0)) {
-		float cloud_density = TexShadowVolume.SampleLevel(samp, pos_sample_shadow_uvw.xyz, 0);
-		transmittance *= exp(-(PhysSkyBuffer[0].cloud_layer.scatter + PhysSkyBuffer[0].cloud_layer.absorption) * cloud_density);
-	}
+	float cloud_density = 0;
+	if (all(pos_sample_shadow_uvw.xyz > 0))
+		cloud_density = TexShadowVolume.SampleLevel(samp, pos_sample_shadow_uvw.xyz, 0);
+	else
+		cloud_density += inBetweenSphereDistance(
+							 world_pos_abs + float3(-CameraPosAdjust[0].xy, PhysSkyBuffer[0].planet_radius),
+							 PhysSkyBuffer[0].dirlight_dir,
+							 PhysSkyBuffer[0].planet_radius + PhysSkyBuffer[0].cloud_layer.bottom,
+							 PhysSkyBuffer[0].planet_radius + PhysSkyBuffer[0].cloud_layer.bottom + PhysSkyBuffer[0].cloud_layer.thickness) *
+		                 PhysSkyBuffer[0].cloud_layer.average_density;
+
+	transmittance *= exp(-(PhysSkyBuffer[0].cloud_layer.scatter + PhysSkyBuffer[0].cloud_layer.absorption) * cloud_density);
 
 	return transmittance;
 }

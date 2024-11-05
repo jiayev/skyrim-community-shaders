@@ -160,7 +160,6 @@ void PhysicalSky::UpdateBuffer()
 		.planet_radius = settings.planet_radius,
 		.atmos_thickness = settings.atmos_thickness,
 		.ground_albedo = settings.ground_albedo,
-		.ap_enhancement = settings.ap_enhancement,
 		.override_dirlight_color = settings.override_dirlight_color,
 		.dirlight_transmittance_mix = settings.override_dirlight_color ? 1.f : settings.dirlight_transmittance_mix,
 		.enable_vanilla_clouds = settings.enable_vanilla_clouds,
@@ -194,6 +193,7 @@ void PhysicalSky::UpdateBuffer()
 		.fog_absorption = settings.fog_absorption * fog_mult,
 		.fog_decay = settings.fog_decay,
 		.fog_h_max = settings.fog_bottom + settings.fog_thickness,
+		.fog_ambient_mult = settings.fog_ambient_mult,
 		.cloud_layer = settings.cloud_layer.layer,
 
 		.tex_dim = res,

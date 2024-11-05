@@ -78,12 +78,12 @@ void CloudLayerEdit(CloudLayerSettings& cloud)
 
 	ImGui::SeparatorText("Composition");
 
-	ImGui::SliderFloat2("Remap In", &cloud.layer.remap_in.x, -1.f, 2.f, "%.3f");
-	ImGui::SliderFloat2("Remap Out", &cloud.layer.remap_out.x, 0.f, 1.f, "%.3f");
-	ImGui::SliderFloat("Power", &cloud.layer.power, 0.2, 5, "%.3f");
+	ImGui::SliderFloat2("NDF Scale", &cloud.layer.ndf_scale_or_freq.x, 1.f, 50.f, "%.2f km");
 
 	ImGui::SliderFloat("Noise Scale", &cloud.layer.noise_scale_or_freq, 0.01f, 5.f, "%.3f km");
 	ImGui::SliderFloat3("Noise Velocity", &cloud.layer.noise_offset_or_speed.x, -30.f, 30.f, "%.3f m/s");
+
+	ImGui::SliderFloat("Post Power", &cloud.layer.power, 0.2, 5, "%.3f");
 
 	ImGui::SeparatorText("Lighting");
 
@@ -94,6 +94,8 @@ void CloudLayerEdit(CloudLayerSettings& cloud)
 	ImGui::SliderFloat("Multiscatter Mult", &cloud.layer.ms_mult, 0.1f, 10.f, "%.2f");
 	ImGui::SliderFloat("Multiscatter Transmittance Power", &cloud.layer.ms_transmittance_power, 0.1f, 1.f, "%.2f");
 	ImGui::SliderFloat("Multiscatter Altitude Power", &cloud.layer.ms_height_power, 0.2f, 5.f, "%.2f");
+
+	ImGui::SliderFloat("Ambient Strength", &cloud.layer.ambient_mult, 0.f, 5.f);
 }
 
 void PhysicalSky::DrawSettings()
@@ -231,8 +233,6 @@ void PhysicalSky::SettingsLighting()
 				ImGui::Text("Applying the filtering effect of light going through the atmosphere.");
 		}
 		ImGui::EndDisabled();
-
-		ImGui::SliderFloat("Aerial Perspective Enhancement", &settings.ap_enhancement, 1.f, 10.f);
 
 		ImGui::ColorEdit3("Ground Albedo", &settings.ground_albedo.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_DisplayHSV);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -462,6 +462,7 @@ void PhysicalSky::SettingsLayers()
 		ImGui::SliderFloat("Layer Height", &settings.fog_thickness, 0.f, 1.f, "%.3f km");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("For optimization purposes.");
+		ImGui::SliderFloat("Ambient Strength", &settings.fog_ambient_mult, 0.f, 5.f);
 	}
 
 	if (ImGui::CollapsingHeader("Cloud")) {
@@ -479,7 +480,6 @@ void PhysicalSky::SettingsTextures()
 		ImGui::Text("NDF Tex Status: Loaded");
 	else
 		ImGui::Text("NDF Tex Status: Incomplete");
-	ImGui::SliderFloat2("NDF Scale", &settings.cloud_layer.layer.ndf_scale_or_freq.x, 1.f, 50.f, "%.2f km");
 
 	if (ImGui::TreeNodeEx("Noise Generator")) {
 		constexpr auto noise_types = std::array{

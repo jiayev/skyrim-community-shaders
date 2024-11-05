@@ -136,20 +136,23 @@ void initNDFInfo(out NDFInfo ndf)
 }
 
 NDFInfo sampleNDF(
-	float3 pos, CloudLayer params,
+	float3 pos, CloudLayer cloud,
 	Texture2DArray<unorm float> tex_ndf, Texture2D<unorm float> tex_top, Texture2D<unorm float> tex_bottom)
 {
 	NDFInfo ndf;
 	initNDFInfo(ndf);
 
-	const float2 uv = pos.xy * params.ndf_freq;
+	if (pos.z < cloud.bottom || pos.z > cloud.bottom + cloud.thickness)
+		return ndf;
+
+	const float2 uv = pos.xy * cloud.ndf_freq;
 
 	ndf.coverage = tex_ndf.SampleLevel(TileableSampler, float3(uv, 2), 0);
 	if (ndf.coverage < 1e-8)
 		return ndf;
 
-	const float min_h = lerp(params.bottom, params.bottom + params.thickness, tex_ndf.SampleLevel(TileableSampler, float3(uv, 0), 0));
-	const float max_h = lerp(params.bottom, params.bottom + params.thickness, tex_ndf.SampleLevel(TileableSampler, float3(uv, 1), 0));
+	const float min_h = lerp(cloud.bottom, cloud.bottom + cloud.thickness, tex_ndf.SampleLevel(TileableSampler, float3(uv, 0), 0));
+	const float max_h = lerp(cloud.bottom, cloud.bottom + cloud.thickness, tex_ndf.SampleLevel(TileableSampler, float3(uv, 1), 0));
 
 	ndf.height_fraction = (pos.z - min_h) / (max_h - min_h);
 
@@ -169,34 +172,46 @@ NDFInfo sampleNDF(
 }
 
 float sampleCloudDensity(
-	float3 pos, CloudLayer params, float mip_level, bool is_expensive,
+	float3 pos, float eye_dist, CloudLayer cloud, float mip_level, bool is_expensive,
 	out NDFInfo ndf)
 {
-	if (pos.z > params.bottom && pos.z < params.bottom + params.thickness) {
-		ndf = sampleNDF(pos, params, TexCloudNDF, TexCloudTopLUT, TexCloudBottomLUT);
-		if (ndf.dimension_profile < 1e-8)
-			return 0;
-
-		float4 noise = TexNubisNoise.SampleLevel(TileableSampler, (pos + params.noise_offset_or_speed) * params.noise_scale_or_freq, mip_level);
-		// Define wispy noise
-		float wispy_noise = lerp(noise.r, noise.g, ndf.dimension_profile);
-		// Define billowy noise
-		float billowy_type_gradient = pow(ndf.dimension_profile, 0.25);
-		float billowy_noise = lerp(noise.b * 0.3, noise.a * 0.3, billowy_type_gradient);
-		// Define Noise composite - blend to wispy as the density scale decreases.
-		float noise_composite = lerp(wispy_noise, billowy_noise, ndf.bottom_value);
-
-		float density = saturate((ndf.dimension_profile - noise_composite) / (1 - noise_composite));
-
-		density = saturate((clamp(density, params.remap_in.x, params.remap_in.y) - params.remap_in.x) / (params.remap_in.y - params.remap_in.x));
-		density = pow(density, params.power);
-		density = lerp(params.remap_out.x, params.remap_out.y, density);
-
-		return saturate(density);
-	} else {
-		initNDFInfo(ndf);
+	// sample NDF
+	ndf = sampleNDF(pos, cloud, TexCloudNDF, TexCloudTopLUT, TexCloudBottomLUT);
+	if (ndf.dimension_profile < 1e-8)
 		return 0;
+
+	// sample noise
+	float4 noise = TexNubisNoise.SampleLevel(TileableSampler, (pos + cloud.noise_offset_or_speed) * cloud.noise_scale_or_freq, mip_level);
+	// Define wispy noise
+	float wispy_noise = lerp(noise.r, noise.g, ndf.dimension_profile);
+	// Define billowy noise
+	float billowy_type_gradient = pow(ndf.dimension_profile, 0.25);
+	float billowy_noise = lerp(noise.b * 0.3, noise.a * 0.3, billowy_type_gradient);
+	// Define Noise composite - blend to wispy as the density scale decreases.
+	float noise_composite = lerp(wispy_noise, billowy_noise, ndf.bottom_value);
+
+	// Upres
+	float hhf_fraction;
+	bool close_range = eye_dist < 0.15 / 1.428e-5f;
+	if (close_range) {
+		// Get the hf noise by folding the highest frequency billowy noise.
+		float hhf_noise = saturate(lerp(1.0 - pow(abs(abs(noise.g * 2.0 - 1.0) * 2.0 - 1.0), 4.0), pow(abs(abs(noise.a * 2.0 - 1.0) * 2.0 - 1.0), 2.0), ndf.bottom_value));
+
+		// Apply the HF nosie near camera.
+		hhf_fraction = (eye_dist - 0.05 / 1.428e-5f) / (0.15 / 1.428e-5f - 0.05 / 1.428e-5f);
+		float hhf_noise_distance_range_blender = lerp(0.9, 1.0, hhf_fraction);
+		noise_composite = lerp(hhf_noise, noise_composite, hhf_noise_distance_range_blender);
 	}
+
+	float density = saturate((ndf.dimension_profile - noise_composite) / (1 - noise_composite));
+
+	// Sharpen result
+	density = pow(density, cloud.power);
+	if (close_range) {
+		density = pow(density, lerp(0.5, 1.0, hhf_fraction)) * lerp(0.666, 1.0, hhf_fraction);
+	}
+
+	return saturate(density);
 }
 
 // sample sun ray.transmittance / shadowing
@@ -210,7 +225,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 
 	float3 pos_world = pos + float3(0, 0, info.bottom_z);
 	float3 pos_world_relative = pos_world - CameraPosAdjust[eye_index].xyz;
-	float3 pos_planet = pos_world_relative + float3(0, 0, info.planet_radius - info.bottom_z);
+	float3 pos_planet = pos + float3(-CameraPosAdjust[eye_index].xy, info.planet_radius);
 
 	// earth shadowing
 	[branch] if (rayIntersectSphere(pos_planet, sun_dir, info.planet_radius) > 0.0) return 0;
@@ -237,7 +252,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	// analytic fog
 	{
 		float3 sun_fog_ceil_pos = pos + sun_dir * clamp((info.fog_h_max - pos.z) / sun_dir.z, 0, 10);
-		float fog_transmittance = analyticFogTransmittance(pos, sun_fog_ceil_pos);
+		float3 fog_transmittance = analyticFogTransmittance(pos, sun_fog_ceil_pos);
 		shadow *= fog_transmittance;
 	}
 	[branch] if (all(shadow < 1e-8)) return 0;
@@ -260,17 +275,17 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 		for (uint i = 0; i < visibility_step; i++) {
 			float3 vis_pos = pos + sun_dir * visibility_stride * (i + 1) + jitter * visibility_stride * (i + 1) / visibility_step;
 			NDFInfo _;
-			cloud_density += sampleCloudDensity(vis_pos, info.cloud_layer, i * 0.5, true, _) * visibility_stride;
+			cloud_density += sampleCloudDensity(vis_pos, 1e8, info.cloud_layer, i * 0.5, true, _) * visibility_stride;
 		}
 
 		// long range
 		float3 vis_pos = pos + sun_dir * visibility_stride * visibility_step;
-		float3 pos_sample_shadow_uvw = getShadowVolumeSampleUvw(vis_pos, info.dirlight_dir);
+		float3 pos_sample_shadow_uvw = getShadowVolumeSampleUvw(vis_pos, sun_dir);
 		if (all(pos_sample_shadow_uvw.xyz > 0))
 			cloud_density += TexShadowVolume.SampleLevel(TransmittanceSampler, pos_sample_shadow_uvw.xyz, 0);
 		else
 			cloud_density += inBetweenSphereDistance(
-								 vis_pos + float3(-CameraPosAdjust[eye_index].xy, info.planet_radius), info.dirlight_dir,
+								 vis_pos + float3(-CameraPosAdjust[eye_index].xy, info.planet_radius), sun_dir,
 								 info.planet_radius + info.cloud_layer.bottom, info.planet_radius + info.cloud_layer.bottom + info.cloud_layer.thickness) *
 			                 info.cloud_layer.average_density;
 
@@ -344,7 +359,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 		sampleExponentialFog(ray.pos.z, fog_scatter, fog_extinction);
 
 		NDFInfo ndf;
-		float cloud_density = sampleCloudDensity(ray.pos, info.cloud_layer, (ray.start_dist + ray.ray_dist) * 1.428e-5f, true, ndf);
+		float cloud_density = sampleCloudDensity(ray.pos, ray.start_dist + ray.ray_dist, info.cloud_layer, (ray.start_dist + ray.ray_dist) * 1.428e-5f, true, ndf);
 		float3 cloud_scatter = cloud_density * info.cloud_layer.scatter;
 
 		const float3 extinction = fog_extinction + cloud_density * (info.cloud_layer.scatter + info.cloud_layer.absorption);
@@ -371,7 +386,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 
 			// ambient
 			float3 ambient = Color::GammaToLinear(DirectionalAmbientShared._14_24_34) / Color::LightPreMult;
-			in_scatter += cloud_scatter * sqrt(1.0 - ndf.dimension_profile) * ambient * RCP_PI;
+			in_scatter += (cloud_scatter * sqrt(1.0 - ndf.dimension_profile) * info.cloud_layer.ambient_mult + fog_scatter * info.fog_ambient_mult) * ambient * RCP_PI;
 
 			const float3 sample_transmittance = exp(-dt * extinction);
 			const float3 scatter_factor = (1 - sample_transmittance) / max(extinction, 1e-8);
@@ -393,9 +408,9 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	uint3 ap_dims;
 	TexAerialPerspective.GetDimensions(ap_dims.x, ap_dims.y, ap_dims.z);
 	float2 ap_uv = cylinderMapAdjusted(ray.ray_dir);
-	const float depth_slice = lerp(.5 / ap_dims.z, 1 - .5 / ap_dims.z, saturate(solid_dist * info.ap_enhancement / info.aerial_perspective_max_dist));
+	const float depth_slice = lerp(.5 / ap_dims.z, 1 - .5 / ap_dims.z, saturate(solid_dist / info.aerial_perspective_max_dist));
 	const float4 ap_sample = TexAerialPerspective.SampleLevel(SkyViewSampler, float3(ap_uv, depth_slice), 0);
-	const float vol_depth_slice = lerp(.5 / ap_dims.z, 1 - .5 / ap_dims.z, saturate(ap_dist * info.ap_enhancement / info.aerial_perspective_max_dist));
+	const float vol_depth_slice = lerp(.5 / ap_dims.z, 1 - .5 / ap_dims.z, saturate(ap_dist / info.aerial_perspective_max_dist));
 	const float4 vol_ap_sample = TexAerialPerspective.SampleLevel(SkyViewSampler, float3(ap_uv, vol_depth_slice), 0);
 
 	if (!is_sky) {
@@ -447,8 +462,7 @@ groupshared float g_density[NTHREADS];
 	const float3 raw_thread_uv = start_uv + gtid * ray_uv_increment;
 
 	const bool3 is_uv_in_range = (raw_thread_uv > 0) && (raw_thread_uv < 1);
-	// const bool is_valid = dot(is_uv_in_range, component_mask);
-	bool is_valid = true;
+	const bool is_valid = dot(is_uv_in_range, component_mask);
 
 	const float3 thread_uv = raw_thread_uv - floor(raw_thread_uv);  // wraparound
 	const uint3 thread_px_coord = thread_uv * dims;
@@ -462,14 +476,17 @@ groupshared float g_density[NTHREADS];
 
 		// fetch density using only ndf
 		NDFInfo _;
-		float density = sampleCloudDensity(pos, cloud, 2, false, _);
+		float density = sampleCloudDensity(pos, 1e8, cloud, 2, false, _);
 
-		// average visibility
-		if (gtid == NTHREADS - 1)
+		// average visibility for boundary
+		float3 prev_uv = thread_uv - ray_uv_increment;
+		float prev_z = cloud.bottom + cloud.thickness * prev_uv.z;
+		if (!dot((prev_uv > 0) && (prev_uv < 1), component_mask) && prev_z > cloud.bottom && prev_z < cloud.bottom + cloud.thickness)
 			density += inBetweenSphereDistance(
 						   pos + float3(-CameraPosAdjust[0].xy, info.planet_radius), info.dirlight_dir,
 						   info.planet_radius + cloud.bottom, info.planet_radius + cloud.bottom + cloud.thickness) *
 			           cloud.average_density;
+
 		g_density[gtid] = density;
 	}
 	GroupMemoryBarrierWithGroupSync();

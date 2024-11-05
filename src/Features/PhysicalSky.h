@@ -39,23 +39,23 @@ struct CloudLayer
 	// ndf
 	float2 ndf_scale_or_freq = { 16.f, 16.f };  // km
 	// noise
-	float noise_scale_or_freq = 0.3f;     // km^-1
+	float noise_scale_or_freq = 0.2f;     // km^-1
 	float3 noise_offset_or_speed{ 0.f };  // moving speed in settings, offset in game
 
-	float2 remap_in = { 0.f, 1.f };
-	float2 remap_out = { 0.f, 1.f };
-	float power = 1.f;
+	float power = 1.0f;
 
 	// density
-	float3 scatter{ 90.f };
-	float3 absorption{ 10.f };
+	float3 scatter{ 150.f };
+	float3 absorption{ 0.f };
 
 	// visuals
-	float average_density = 0.01;
+	float average_density = 0.1;
 
-	float ms_mult = 5.0;
-	float ms_transmittance_power = 0.15;
-	float ms_height_power = 0.7;
+	float ms_mult = 5.0f;
+	float ms_transmittance_power = 0.15f;
+	float ms_height_power = 0.7f;
+
+	float ambient_mult = 1.0f;
 };
 
 struct CloudLayerSettings
@@ -130,8 +130,6 @@ struct PhysicalSky : public Feature
 		float planet_radius = 6.36e3f;  // 6360 km
 		float atmos_thickness = 100.f;  // 20 km
 		float3 ground_albedo = { .2f, .2f, .2f };
-
-		float ap_enhancement = 3.f;
 
 		// LIGHTING
 		float3 sunlight_color = float3{ 1.0f, 0.949f, 0.937f } * 6.f;
@@ -215,11 +213,12 @@ struct PhysicalSky : public Feature
 		float ozone_thickness = 35.66071f;
 
 		// OTHER VOLUMETRICS
-		float3 fog_scatter = { .3f, .3f, .3f };  // in km^-1
-		float3 fog_absorption = { .03f, .03f, .03f };
+		float3 fog_scatter = { 1.f, 1.f, 1.f };  // in km^-1
+		float3 fog_absorption = { .1f, .1f, .1f };
 		float fog_decay = 10.f;
 		float fog_bottom = 0.f;
 		float fog_thickness = .5f;
+		float fog_ambient_mult = 0.5f;
 
 		CloudLayerSettings cloud_layer = {};
 	} settings;
@@ -241,8 +240,6 @@ struct PhysicalSky : public Feature
 		float planet_radius;
 		float atmos_thickness;
 		float3 ground_albedo;
-
-		float ap_enhancement;
 
 		// LIGHTING
 		uint override_dirlight_color;
@@ -290,6 +287,7 @@ struct PhysicalSky : public Feature
 		float3 fog_absorption;
 		float fog_decay;
 		float fog_h_max;
+		float fog_ambient_mult;
 
 		CloudLayer cloud_layer;
 
