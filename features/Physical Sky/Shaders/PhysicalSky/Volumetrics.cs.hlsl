@@ -40,8 +40,6 @@ RWTexture3D<float> RWShadowVolume : register(u0);
 
 #define ISNAN(x) (!(x < 0.f || x > 0.f || x == 0.f))
 
-// TODO: horizon transmittance
-
 struct RayMarchInfo
 {
 	// constant
@@ -142,19 +140,22 @@ NDFInfo sampleNDF(
 	NDFInfo ndf;
 	initNDFInfo(ndf);
 
-	if (pos.z < cloud.bottom || pos.z > cloud.bottom + cloud.thickness)
+	float planet_z = length(pos + float3(-CameraPosAdjust[0].xy, PhysSkyBuffer[0].planet_radius)) - PhysSkyBuffer[0].planet_radius;
+	if (planet_z < cloud.bottom || planet_z > cloud.bottom + cloud.thickness)
 		return ndf;
 
 	const float2 uv = pos.xy * cloud.ndf_freq;
 
 	ndf.coverage = tex_ndf.SampleLevel(TileableSampler, float3(uv, 2), 0);
+	// clear weather effect
+	// ndf.coverage *= saturate((length(pos.xy - CameraPosAdjust[0].xy) - (fmod(Timer, 15) * 0.3 / 1.428e-5f)) / (0.5 / 1.428e-5f));
 	if (ndf.coverage < 1e-8)
 		return ndf;
 
 	const float min_h = lerp(cloud.bottom, cloud.bottom + cloud.thickness, tex_ndf.SampleLevel(TileableSampler, float3(uv, 0), 0));
 	const float max_h = lerp(cloud.bottom, cloud.bottom + cloud.thickness, tex_ndf.SampleLevel(TileableSampler, float3(uv, 1), 0));
 
-	ndf.height_fraction = (pos.z - min_h) / (max_h - min_h);
+	ndf.height_fraction = (planet_z - min_h) / (max_h - min_h);
 
 	if (ndf.height_fraction < 0 || ndf.height_fraction > 1)
 		return ndf;
@@ -225,7 +226,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 
 	float3 pos_world = pos + float3(0, 0, info.bottom_z);
 	float3 pos_world_relative = pos_world - CameraPosAdjust[eye_index].xyz;
-	float3 pos_planet = pos + float3(-CameraPosAdjust[eye_index].xy, info.planet_radius);
+	float3 pos_planet = pos + float3(-CameraPosAdjust[0].xy, info.planet_radius);
 
 	// earth shadowing
 	[branch] if (rayIntersectSphere(pos_planet, sun_dir, info.planet_radius) > 0.0) return 0;
@@ -259,7 +260,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 
 	// atmosphere
 	{
-		float2 lut_uv = getHeightZenithLutUv(pos.z + info.planet_radius, sun_dir);
+		float2 lut_uv = getHeightZenithLutUv(pos_planet.z, sun_dir);
 		shadow *= TexTransmittance.SampleLevel(TransmittanceSampler, lut_uv, 0).rgb;
 	}
 	[branch] if (all(shadow < 1e-8)) return 0;
@@ -285,7 +286,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 			cloud_density += TexShadowVolume.SampleLevel(TransmittanceSampler, pos_sample_shadow_uvw.xyz, 0);
 		else
 			cloud_density += inBetweenSphereDistance(
-								 vis_pos + float3(-CameraPosAdjust[eye_index].xy, info.planet_radius), sun_dir,
+								 vis_pos + float3(-CameraPosAdjust[0].xy, info.planet_radius), sun_dir,
 								 info.planet_radius + info.cloud_layer.bottom, info.planet_radius + info.cloud_layer.bottom + info.cloud_layer.thickness) *
 			                 info.cloud_layer.average_density;
 
@@ -304,7 +305,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 								: SV_DispatchThreadID) {
 	const PhySkyBufferContent info = PhysSkyBuffer[0];
 	const static float start_stride = 0.003 / 1.428e-5f;
-	const static float far_stride = 1.0 / 1.428e-5f;
+	const static float far_stride = 0.5 / 1.428e-5f;
 	const static float far_stride_dist = 5 / 1.428e-5f;
 	const static uint max_step = 96;
 
@@ -335,7 +336,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	const float solid_dist = length(pos_world.xyz);
 	ray.eye_pos = CameraPosAdjust[eye_index].xyz - float3(0, 0, info.bottom_z);
 	ray.ray_dir = pos_world.xyz / solid_dist;
-	snapMarch(ray, bottom, ceil, is_sky ? 16 / 1.428e-5f : min(16 / 1.428e-5f, solid_dist));
+	snapMarch(ray, bottom, ceil, is_sky ? 32 / 1.428e-5f : min(32 / 1.428e-5f, solid_dist));
 
 	///////////// precalc
 	const float cos_theta = dot(ray.ray_dir, info.dirlight_dir);
@@ -365,7 +366,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 		const float3 extinction = fog_extinction + cloud_density * (info.cloud_layer.scatter + info.cloud_layer.absorption);
 
 		// scattering
-		[branch] if (max(extinction.x, max(extinction.y, extinction.z)) > 1e-8)
+		[branch] if (max(extinction.x, max(extinction.y, extinction.z)) > 1e-7)
 		{
 			// dir light
 			float3 scatter = fog_scatter * fog_phase +
@@ -476,14 +477,14 @@ groupshared float g_density[NTHREADS];
 
 		// fetch density using only ndf
 		NDFInfo _;
-		float density = sampleCloudDensity(pos, 1e8, cloud, 2, false, _);
+		float density = sampleCloudDensity(pos, 1e8, cloud, 2, false, _) * length(ray_uv_increment * scale);  // scaled by ray length
 
 		// average visibility for boundary
 		float3 prev_uv = thread_uv - ray_uv_increment;
-		float prev_z = cloud.bottom + cloud.thickness * prev_uv.z;
-		if (!dot((prev_uv > 0) && (prev_uv < 1), component_mask) && prev_z > cloud.bottom && prev_z < cloud.bottom + cloud.thickness)
+		float3 prev_pos = float3(CameraPosAdjust[0].xy + (prev_uv.xy - 0.5) * info.shadow_volume_range, cloud.bottom + cloud.thickness * prev_uv.z);
+		if ((any(prev_uv < 0) || any(prev_uv > 1)) && prev_pos.z > cloud.bottom && prev_pos.z < cloud.bottom + cloud.thickness)
 			density += inBetweenSphereDistance(
-						   pos + float3(-CameraPosAdjust[0].xy, info.planet_radius), info.dirlight_dir,
+						   prev_pos + float3(-CameraPosAdjust[0].xy, info.planet_radius), info.dirlight_dir,
 						   info.planet_radius + cloud.bottom, info.planet_radius + cloud.bottom + cloud.thickness) *
 			           cloud.average_density;
 
@@ -507,6 +508,6 @@ groupshared float g_density[NTHREADS];
 
 	// save
 	if (is_valid) {
-		RWShadowVolume[thread_px_coord] = lerp(past_density, g_density[gtid] * length(ray_uv_increment * scale), 0.1f);  // scaled by ray length
+		RWShadowVolume[thread_px_coord] = lerp(past_density, g_density[gtid], 0.1f);
 	}
 }

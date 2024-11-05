@@ -106,6 +106,11 @@ void PhysicalSky::DrawSettings()
 			ImGui::EndTabItem();
 		}
 
+		if (ImGui::BeginTabItem("Worldspace")) {
+			SettingsWorldspace();
+			ImGui::EndTabItem();
+		}
+
 		if (ImGui::BeginTabItem("Lighting")) {
 			SettingsLighting();
 			ImGui::EndTabItem();
@@ -162,18 +167,58 @@ void PhysicalSky::SettingsGeneral()
 	}
 
 	if (ImGui::CollapsingHeader("Scale")) {
-		ImGui::InputFloat("Bottom Z", &settings.bottom_z, 0, 0, "%.3f game unit");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(
-				"The lowest elevation of the worldspace you shall reach. "
-				"You can check it by standing at sea level and using \"getpos z\" console command.");
-
 		ImGui::SliderFloat("Planet Radius", &settings.planet_radius, 0.f, 1e4f, "%.1f km");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("The supposed radius of the planet Nirn, or whatever rock you are on.");
 		ImGui::SliderFloat("Atmosphere Thickness", &settings.atmos_thickness, 0.f, 200.f, "%.1f km");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("The thickness of atmosphere that contributes to lighting.");
+	}
+}
+
+void PhysicalSky::SettingsWorldspace()
+{
+	ImGui::TextWrapped("Register worldspaces that has physical sky enabled.");
+
+	if (ImGui::BeginTable("Worldspace List", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable)) {
+		ImGui::TableSetupColumn("Editor ID");
+		ImGui::TableSetupColumn("Bottom Z");
+		ImGui::TableSetupColumn("Action");
+		ImGui::TableHeadersRow();
+
+		int i = 0;
+		std::optional<int> mark_delete = std::nullopt;
+		for (auto& worldspace : settings.worldspace_whitelist) {
+			ImGui::PushID(i);
+
+			ImGui::TableNextColumn();
+			ImGui::SetNextItemWidth(-FLT_MIN);
+			ImGui::InputText("##name", &worldspace.name);
+
+			ImGui::TableNextColumn();
+			ImGui::SetNextItemWidth(-FLT_MIN);
+			ImGui::InputFloat("##Bottom Z", &worldspace.bottom_z, 0, 0, "%.1f game unit");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text(
+					"The lowest elevation of the worldspace you can reach. "
+					"You can check it by standing at sea level and using \"getpos z\" console command.");
+
+			ImGui::TableNextColumn();
+			if (ImGui::Button("Delete"))
+				mark_delete = i;
+
+			ImGui::PopID();
+
+			i++;
+		}
+		if (mark_delete.has_value())
+			settings.worldspace_whitelist.erase(settings.worldspace_whitelist.begin() + mark_delete.value());
+
+		ImGui::TableNextColumn();
+		if (ImGui::Selectable("Add New Entry"))
+			settings.worldspace_whitelist.push_back({});
+
+		ImGui::EndTable();
 	}
 }
 

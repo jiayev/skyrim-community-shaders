@@ -5,6 +5,12 @@
 
 //////////////////////////////////////////////////////////////////////////
 
+struct WorldspaceInfo
+{
+	std::string name = "EDITOR ID";
+	float bottom_z = -14000.f;
+};
+
 struct Orbit
 {
 	// in rad
@@ -49,7 +55,7 @@ struct CloudLayer
 	float3 absorption{ 0.f };
 
 	// visuals
-	float average_density = 0.1;
+	float average_density = 0.05;
 
 	float ms_mult = 5.0f;
 	float ms_transmittance_power = 0.15f;
@@ -126,10 +132,13 @@ struct PhysicalSky : public Feature
 		float shadow_volume_range = 8;  // in km
 
 		// WORLD
-		float bottom_z = -15000;        // in game unit
 		float planet_radius = 6.36e3f;  // 6360 km
 		float atmos_thickness = 100.f;  // 20 km
 		float3 ground_albedo = { .2f, .2f, .2f };
+
+		std::vector<WorldspaceInfo> worldspace_whitelist = {
+			{ "Tamriel", -14000.f }
+		};
 
 		// LIGHTING
 		float3 sunlight_color = float3{ 1.0f, 0.949f, 0.937f } * 6.f;
@@ -348,7 +357,6 @@ struct PhysicalSky : public Feature
 		bool result = transmittance_program && multiscatter_program && sky_view_program && aerial_perspective_program && shadow_volume_program;
 		return result;
 	}
-	bool NeedLutsUpdate();
 
 	virtual void Reset() override;
 	void UpdateBuffer();
@@ -356,6 +364,7 @@ struct PhysicalSky : public Feature
 
 	virtual void DrawSettings() override;
 	void SettingsGeneral();
+	void SettingsWorldspace();
 	void SettingsLighting();
 	void SettingsClouds();
 	void SettingsCelestials();

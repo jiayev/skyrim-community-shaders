@@ -246,13 +246,6 @@ void PhysicalSky::ClearShaderCache()
 	CompileComputeShaders();
 }
 
-bool PhysicalSky::NeedLutsUpdate()
-{
-	return (RE::Sky::GetSingleton()->mode.get() == RE::Sky::Mode::kFull) &&
-	       RE::Sky::GetSingleton()->currentClimate &&
-	       CheckComputeShaders();
-}
-
 void PhysicalSky::Reset()
 {
 	UpdateBuffer();

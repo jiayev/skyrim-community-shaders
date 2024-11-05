@@ -190,6 +190,15 @@ float inBetweenSphereDistance(float3 orig, float3 dir, float r_inner, float r_ou
 	return abs(outer_dist - inner_dist);
 }
 
+float inBetweenSphereDistance(float3 orig, float3 dir, float r_inner, float r_outer, float dist_cap)
+{
+	float inner_dist = rayIntersectSphere(orig, dir, r_inner);
+	float outer_dist = rayIntersectSphere(orig, dir, r_outer);
+	inner_dist = clamp(inner_dist, 0, dist_cap);
+	outer_dist = clamp(outer_dist, 0, dist_cap);
+	return abs(outer_dist - inner_dist);
+}
+
 // https://gist.github.com/DomNomNom/46bb1ce47f68d255fd5d
 // compute the near and far intersections of the cube (stored in the x and y components) using the slab method
 // no intersection means vec.x > vec.y (really tNear > tFar)
