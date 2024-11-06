@@ -2606,17 +2606,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	alpha *= input.Color.w;
 #		endif  // !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
 #		if defined(DO_ALPHA_TEST)
-	[branch] if ((PixelShaderDescriptor & LightingFlags::DoAlphaTest) != 0)
-	{
 #			if defined(DEPTH_WRITE_DECALS)
-		if (alpha - 0.0156862754 < 0) {
-			discard;
-		}
-		alpha = saturate(1.05 * alpha);
+	if (alpha - 0.0156862754 < 0) {
+		discard;
+	}
+	alpha = saturate(1.05 * alpha);
 #			endif  // DEPTH_WRITE_DECALS
-		if (alpha - AlphaTestRefRS < 0) {
-			discard;
-		}
+	if (alpha - AlphaTestRefRS < 0) {
+		discard;
 	}
 #		endif      // DO_ALPHA_TEST
 	psout.Diffuse.w = alpha;
