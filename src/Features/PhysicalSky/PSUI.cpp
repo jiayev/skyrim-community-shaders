@@ -164,6 +164,11 @@ void PhysicalSky::SettingsGeneral()
 		ImGui::DragScalar("Sky View Steps", ImGuiDataType_U32, &settings.skyview_step);
 		ImGui::SliderFloat("Aerial Perspective Max Dist", &settings.aerial_perspective_max_dist, 0, settings.atmos_thickness, "%.3f km");
 		ImGui::SliderFloat("Shadow Volume Range", &settings.shadow_volume_range, 0, 16, "%.1f km");
+
+		ImGui::SliderFloat("Ray March Range", &settings.ray_march_range, 0, 64, "%.1f km");
+		uint min_step = 1, max_step = 120;
+		ImGui::SliderScalar("Fog Max Steps", ImGuiDataType_U32, &settings.fog_max_step, &min_step, &max_step);
+		ImGui::SliderScalar("Cloud Max Steps", ImGuiDataType_U32, &settings.cloud_max_step, &min_step, &max_step);
 	}
 
 	if (ImGui::CollapsingHeader("Scale")) {

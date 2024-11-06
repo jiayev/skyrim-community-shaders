@@ -51,11 +51,11 @@ struct CloudLayer
 	float power = 1.0f;
 
 	// density
-	float3 scatter{ 150.f };
+	float3 scatter{ 100.f };
 	float3 absorption{ 0.f };
 
 	// visuals
-	float average_density = 0.05;
+	float average_density = 0.02;
 
 	float ms_mult = 5.0f;
 	float ms_transmittance_power = 0.15f;
@@ -130,6 +130,10 @@ struct PhysicalSky : public Feature
 		float aerial_perspective_max_dist = 80;  // in km
 
 		float shadow_volume_range = 8;  // in km
+
+		float ray_march_range = 32;  // in km
+		uint fog_max_step = 45;
+		uint cloud_max_step = 97;
 
 		// WORLD
 		float planet_radius = 6.36e3f;  // 6360 km
@@ -243,6 +247,10 @@ struct PhysicalSky : public Feature
 		uint skyview_step;
 		float aerial_perspective_max_dist;
 		float shadow_volume_range;
+
+		float ray_march_range;
+		uint fog_max_step;
+		uint cloud_max_step;
 
 		// WORLD
 		float bottom_z;

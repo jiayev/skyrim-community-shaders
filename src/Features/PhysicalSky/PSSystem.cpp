@@ -153,7 +153,7 @@ void PhysicalSky::UpdateBuffer()
 	all_set = worldspace_it != settings.worldspace_whitelist.end();
 
 	float sun_aperture_cos = cos(settings.celestials.sun_angular_radius);
-	float sun_aperture_rcp_sin = 1.f / sqrt(1 - sun_aperture_cos * sun_aperture_cos);  // I trust u compiler
+	float sun_aperture_rcp_sin = 1.f / sqrt(1 - sun_aperture_cos * sun_aperture_cos);
 
 	float2 res = State::GetSingleton()->screenSize;
 	float2 dynres = Util::ConvertToDynamic(res);
@@ -169,6 +169,9 @@ void PhysicalSky::UpdateBuffer()
 		.skyview_step = settings.skyview_step,
 		.aerial_perspective_max_dist = settings.aerial_perspective_max_dist,
 		.shadow_volume_range = settings.shadow_volume_range,
+		.ray_march_range = settings.ray_march_range,
+		.fog_max_step = settings.fog_max_step,
+		.cloud_max_step = settings.cloud_max_step,
 		.bottom_z = worldspace_it != settings.worldspace_whitelist.end() ? worldspace_it->bottom_z : 0,
 		.planet_radius = settings.planet_radius,
 		.atmos_thickness = settings.atmos_thickness,
@@ -228,6 +231,7 @@ void PhysicalSky::UpdateBuffer()
 
 	phys_sky_sb_data.aerial_perspective_max_dist *= g_km_2_game_unit;
 	phys_sky_sb_data.shadow_volume_range *= g_km_2_game_unit;
+	phys_sky_sb_data.ray_march_range *= g_km_2_game_unit;
 	phys_sky_sb_data.planet_radius *= g_km_2_game_unit;
 	phys_sky_sb_data.atmos_thickness *= g_km_2_game_unit;
 	phys_sky_sb_data.cloud_height *= g_km_2_game_unit;

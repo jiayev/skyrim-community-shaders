@@ -41,6 +41,10 @@ struct PhySkyBufferContent
 	float aerial_perspective_max_dist;
 	float shadow_volume_range;
 
+	float ray_march_range;
+	uint fog_max_step;
+	uint cloud_max_step;
+
 	// WORLD
 	float bottom_z;
 	float planet_radius;

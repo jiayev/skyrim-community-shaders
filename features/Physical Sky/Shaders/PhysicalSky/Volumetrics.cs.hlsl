@@ -118,6 +118,7 @@ void advanceRay(inout RayMarchInfo ray, float dist, float jitter)
 
 struct NDFInfo
 {
+	bool in_layer;
 	float dimension_profile;
 	float coverage;
 	float height_fraction;
@@ -130,6 +131,7 @@ struct NDFInfo
 
 void initNDFInfo(out NDFInfo ndf)
 {
+	ndf.in_layer = false;
 	ndf.dimension_profile = ndf.coverage = ndf.height_fraction = ndf.cloud_type = ndf.bottom_type = ndf.top_value = ndf.bottom_value = ndf.lut_value = 0;
 }
 
@@ -143,6 +145,8 @@ NDFInfo sampleNDF(
 	float planet_z = length(pos + float3(-CameraPosAdjust[0].xy, PhysSkyBuffer[0].planet_radius)) - PhysSkyBuffer[0].planet_radius;
 	if (planet_z < cloud.bottom || planet_z > cloud.bottom + cloud.thickness)
 		return ndf;
+
+	ndf.in_layer = true;
 
 	const float2 uv = pos.xy * cloud.ndf_freq;
 
@@ -304,10 +308,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 [numthreads(8, 8, 1)] void main(uint2 tid
 								: SV_DispatchThreadID) {
 	const PhySkyBufferContent info = PhysSkyBuffer[0];
-	const static float start_stride = 0.003 / 1.428e-5f;
-	const static float far_stride = 0.5 / 1.428e-5f;
-	const static float far_stride_dist = 5 / 1.428e-5f;
-	const static uint max_step = 96;
+	const static float zero_density_stride_mult = 1.5;
 
 	const uint2 px_coords = tid;
 
@@ -336,7 +337,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	const float solid_dist = length(pos_world.xyz);
 	ray.eye_pos = CameraPosAdjust[eye_index].xyz - float3(0, 0, info.bottom_z);
 	ray.ray_dir = pos_world.xyz / solid_dist;
-	snapMarch(ray, bottom, ceil, is_sky ? 32 / 1.428e-5f : min(32 / 1.428e-5f, solid_dist));
+	snapMarch(ray, bottom, ceil, is_sky ? info.ray_march_range : min(info.ray_march_range, solid_dist));
 
 	///////////// precalc
 	const float cos_theta = dot(ray.ray_dir, info.dirlight_dir);
@@ -349,9 +350,10 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	float3 mean_shadowing = 0.0;
 	float sum_shadowing_weights = 0.0;
 
-	advanceRay(ray, lerp(start_stride, far_stride, saturate((ray.segment_dist + ray.start_dist) / far_stride_dist)), rnd.z);
-	[loop] for (ray.step = 0; ray.step < max_step && ray.ray_dist < ray.march_dist;
-				advanceRay(ray, lerp(start_stride, far_stride, saturate((ray.segment_dist + ray.start_dist) / far_stride_dist)), rnd.z))
+	float stride = 0.003 / 1.428e-5f;
+
+	advanceRay(ray, stride, rnd.z);
+	[loop] for (ray.step = 0; ray.step < 150 && ray.ray_dist < ray.march_dist; advanceRay(ray, stride, rnd.z))
 	{
 		const float dt = ray.ray_dist - ray.last_ray_dist;
 
@@ -381,7 +383,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 			// multiscatter
 			float3 ms_volume = saturate((ndf.dimension_profile - 0.1) / (1.0 - 0.1)) * pow(ndf.coverage * ndf.cloud_type, 0.25);
 			ms_volume *= pow(cloud_transmittance, info.cloud_layer.ms_transmittance_power);
-			ms_volume *= pow(ndf.height_fraction, info.cloud_layer.ms_height_power);
+			ms_volume *= pow(saturate(ndf.height_fraction), info.cloud_layer.ms_height_power);
 			ms_volume *= info.cloud_layer.ms_mult;
 			in_scatter += (sun_transmittance / max(1e-8, cloud_transmittance)) * cloud_scatter * cloud_secondary_phase * ms_volume * info.dirlight_color;
 
@@ -397,6 +399,11 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 			ray.lum += scatter_integeral * ray.transmittance;
 			ray.transmittance *= sample_transmittance;
 		}
+
+		// stride
+		float rcp_step = ndf.in_layer ? rcp(info.cloud_max_step) * (ndf.dimension_profile > 1e-8 ? 1 : zero_density_stride_mult) : rcp(info.fog_max_step);
+		float march_prop = (ray.start_dist + ray.march_dist) / info.ray_march_range;
+		stride = (pow(sqrt(march_prop) + rcp_step, 2) - march_prop) * info.ray_march_range;
 
 		const float tr = max(ray.transmittance.x, max(ray.transmittance.y, ray.transmittance.z));
 		ap_dist += tr * dt;
