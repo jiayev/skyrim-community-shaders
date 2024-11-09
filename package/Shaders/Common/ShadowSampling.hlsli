@@ -42,8 +42,8 @@ float Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 screen
 	uint3 seed = Random::pcg3d(uint3(screenPosition.xy, screenPosition.x * Math::PI));
 
 	float2 compareValue;
-	compareValue.x = mul(transpose(sD.ShadowMapProj[eyeIndex][0]), float4(positionWS, 1)).z;
-	compareValue.y = mul(transpose(sD.ShadowMapProj[eyeIndex][1]), float4(positionWS, 1)).z;
+	compareValue.x = mul(transpose(sD.ShadowMapProj[eyeIndex][0]), float4(positionWS, 1)).z - 0.01;
+	compareValue.y = mul(transpose(sD.ShadowMapProj[eyeIndex][1]), float4(positionWS, 1)).z - 0.01;
 
 	float shadow = 0.0;
 	if (sD.EndSplitDistances.z >= GetShadowDepth(positionWS, eyeIndex)) {
@@ -57,10 +57,11 @@ float Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 screen
 			float r = rnd.z;
 			float4 sincos_phi;
 			sincos(phi, sincos_phi.y, sincos_phi.x);
-			float3 sampleOffset = viewDirection * i * 256 * rcpSampleCount;
-			sampleOffset += float3(r * sin_theta * sincos_phi.x, r * sin_theta * sincos_phi.y, r * cos_theta) * 16;
+			float3 sampleOffset = viewDirection * i * 128 * rcpSampleCount;
+			sampleOffset += (float3(r * sin_theta * sincos_phi.x, r * sin_theta * sincos_phi.y, r * cos_theta) * 0.5 + 0.5) * 128;
 
 			uint cascadeIndex = sD.EndSplitDistances.x < GetShadowDepth(positionWS.xyz + viewDirection * (sampleOffset.x + sampleOffset.y), eyeIndex);  // Stochastic cascade sampling
+
 			float3 positionLS = mul(transpose(sD.ShadowMapProj[eyeIndex][cascadeIndex]), float4(positionWS + sampleOffset, 1));
 
 			float4 depths = SharedTexShadowMapSampler.GatherRed(LinearSampler, float3(saturate(positionLS.xy), cascadeIndex), 0);
