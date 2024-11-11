@@ -923,7 +923,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	finalColorPreFog = lerp(Color::GammaToLinear(refractionColor), finalColorPreFog, diffuseOutput.refractionMul);
 
-	float3 finalColor = Color::LinearToGamma(finalColorPreFog);
+	float3 finalColor = Color::LinearToGamma(finalColorPreFog) * PosAdjust[eyeIndex].w;
 #				endif
 #			endif
 	psout.Lighting = saturate(float4(finalColor, isSpecular));
