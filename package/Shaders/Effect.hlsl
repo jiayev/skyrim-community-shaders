@@ -537,12 +537,12 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 		if (InMapMenu)
 			color = dirLightBacklighting * DirLightColorShared * angleShadow;
 		else if (!InInterior && (ExtraShaderDescriptor & ExtraFlags::InWorld))
-			color = dirLightBacklighting * DirLightColorShared * GetWorldShadow(worldPosition, length(worldPosition), 0.0, eyeIndex) * angleShadow * 0.5;
+			color = dirLightBacklighting * DirLightColorShared * GetWorldShadow(worldPosition, length(worldPosition), 0.0, eyeIndex) * angleShadow;
 		else
 			color = dirLightBacklighting * DirLightColorShared * 0.5;
 	}
 
-	color += DirectionalAmbientShared._14_24_34;
+	color += mul(DirectionalAmbientShared, float4(0, 0, 1, 1));
 
 	color.x += dot(PLightColorR * lightFadeMul, 1.0.xxxx);
 	color.y += dot(PLightColorG * lightFadeMul, 1.0.xxxx);
