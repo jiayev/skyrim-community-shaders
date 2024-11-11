@@ -341,10 +341,12 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 		SetLightPosition(light, niLight->world.translate, inWorld);
 
+		light.lightFlags = static_cast<LightFlags>(runtimeData.radius.y);
+
 		if (bsLight->IsShadowLight()) {
 			auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
 			GET_INSTANCE_MEMBER(shadowLightIndex, shadowLight);
-			light.shadowMaskIndex = std::min(3u, shadowLightIndex);
+			light.shadowMaskIndex = shadowLightIndex;
 			light.lightFlags.set(LightFlags::Shadow);
 		}
 
@@ -791,6 +793,8 @@ void LightLimitFix::UpdateLights()
 
 					light.radius = runtimeData.radius.x;
 
+					light.lightFlags = static_cast<LightFlags>(runtimeData.radius.y);
+
 					if (!IsGlobalLight(bsLight)) {
 						// List of BSMultiBoundRooms affected by a light
 						for (const auto& roomPtr : bsLight->rooms) {
@@ -806,14 +810,17 @@ void LightLimitFix::UpdateLights()
 					if (bsLight->IsShadowLight()) {
 						auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
 						GET_INSTANCE_MEMBER(shadowLightIndex, shadowLight);
-						light.shadowMaskIndex = std::min(3u, shadowLightIndex);
+						light.shadowMaskIndex = shadowLightIndex;
 						light.lightFlags.set(LightFlags::Shadow);
 					}
 
-					SetLightPosition(light, niLight->world.translate);
+					// Check for inactive shadow light
+					if (light.shadowMaskIndex != 255) {
+						SetLightPosition(light, niLight->world.translate);
 
-					if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
-						lightsData.push_back(light);
+						if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
+							lightsData.push_back(light);
+						}
 					}
 				}
 			}
@@ -842,13 +849,15 @@ void LightLimitFix::UpdateLights()
 				if (particleSystem && particleSystem->GetParticleRuntimeData().particleData.get()) {
 					// Process BSGeometry
 					auto particleData = particleSystem->GetParticleRuntimeData().particleData.get();
+					auto& particleSystemRuntimeData = particleSystem->GetParticleSystemRuntimeData();
+					auto& particleRuntimeData = particleData->GetParticlesRuntimeData();
 
 					auto numVertices = particleData->GetActiveVertexCount();
 					for (std::uint32_t p = 0; p < numVertices; p++) {
-						float radius = particleData->GetParticlesRuntimeData().sizes[p] * 70.0f;
+						float radius = particleRuntimeData.sizes[p] * 70.0f;
 
-						auto initialPosition = particleData->GetParticlesRuntimeData().positions[p];
-						if (!particleSystem->GetParticleSystemRuntimeData().isWorldspace) {
+						auto initialPosition = particleRuntimeData.positions[p];
+						if (!particleSystemRuntimeData.isWorldspace) {
 							// Detect first-person meshes
 							if ((particleLight.node->GetModelData().modelBound.radius * particleLight.node->world.scale) != particleLight.node->worldBound.radius)
 								initialPosition += particleLight.node->worldBound.center;
@@ -887,14 +896,28 @@ void LightLimitFix::UpdateLights()
 							}
 						}
 
-						float alpha = particleLight.color.alpha * particleData->GetParticlesRuntimeData().color[p].alpha;
-						float3 color;
-						color.x = particleLight.color.red * particleData->GetParticlesRuntimeData().color[p].red;
-						color.y = particleLight.color.green * particleData->GetParticlesRuntimeData().color[p].green;
-						color.z = particleLight.color.blue * particleData->GetParticlesRuntimeData().color[p].blue;
-						clusteredLight.color += Saturation(color, settings.ParticleLightsSaturation) * alpha * settings.ParticleBrightness;
+						if (particleRuntimeData.color) {
+							float alpha = particleLight.color.alpha * particleRuntimeData.color[p].alpha;
+
+							float3 color;
+							color.x = particleLight.color.red * particleRuntimeData.color[p].red;
+							color.y = particleLight.color.green * particleRuntimeData.color[p].green;
+							color.z = particleLight.color.blue * particleRuntimeData.color[p].blue;
+
+							clusteredLight.color += Saturation(color, settings.ParticleLightsSaturation) * alpha * settings.ParticleBrightness;
+						} else {
+							float alpha = particleLight.color.alpha;
+
+							float3 color;
+							color.x = particleLight.color.red;
+							color.y = particleLight.color.green;
+							color.z = particleLight.color.blue;
+
+							clusteredLight.color += Saturation(color, settings.ParticleLightsSaturation) * alpha * settings.ParticleBrightness;
+						}
 
 						clusteredLight.radius += radius * particleLight.color.alpha * settings.ParticleRadius;
+
 						clusteredLight.positionWS[0].data.x += positionWS.x;
 						clusteredLight.positionWS[0].data.y += positionWS.y;
 						clusteredLight.positionWS[0].data.z += positionWS.z;

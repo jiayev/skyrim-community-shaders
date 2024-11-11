@@ -144,51 +144,18 @@ namespace EffectExtensions
 {
 	struct BSEffectShader_SetupGeometry
 	{
-		static inline RE::BSRenderPass* CurrentRenderPass = nullptr;
-
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
-			CurrentRenderPass = pass;
 			func(shader, pass, renderFlags);
-			CurrentRenderPass = nullptr;
+			if (auto* shaderProperty = static_cast<RE::BSShaderProperty*>(pass->geometry->GetGeometryRuntimeData().properties[1].get())) {
+				if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kUniformScale)) {
+					State::GetSingleton()->currentExtraDescriptor |= (uint)State::ExtraShaderDescriptors::EffectShadows;
+				}
+			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
-
-	enum class EffectExtendedFlags : uint32_t
-	{
-		Shadows = 1 << 0,
-	};
-
-	void EffectSetupGeometry(ID3D11Resource* pResource)
-	{
-		auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
-		GET_INSTANCE_MEMBER(currentPixelShader, shadowState)
-		if (RE::BSRenderPass* EffectRenderPass = BSEffectShader_SetupGeometry::CurrentRenderPass;
-			EffectRenderPass && EffectRenderPass->geometry &&
-			pResource == static_cast<void*>(currentPixelShader->constantBuffers[2].buffer)) {
-			if (auto* shaderProperty = static_cast<RE::BSShaderProperty*>(EffectRenderPass->geometry->GetGeometryRuntimeData().properties[1].get())) {
-				stl::enumeration<EffectExtendedFlags> flags;
-				if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kUniformScale)) {
-					flags.set(EffectExtendedFlags::Shadows);
-				}
-
-				const auto& effectPSConstants = ShaderConstants::EffectPS::Get();
-				shadowState->SetPSConstant(flags, RE::BSGraphics::ConstantGroupLevel::PerGeometry, effectPSConstants.ExtendedFlags);
-			}
-		}
-	}
 }
-
-struct ID3D11DeviceContext_Unmap
-{
-	static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource)
-	{
-		EffectExtensions::EffectSetupGeometry(pResource);
-		func(This, pResource, Subresource);
-	}
-	static inline REL::Relocation<decltype(thunk)> func;
-};
 
 struct IDXGISwapChain_Present
 {
@@ -398,8 +365,6 @@ namespace Hooks
 			logger::info("Detouring virtual function tables");
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(swapchain);
 
-			stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(context);
-
 			auto& shaderCache = SIE::ShaderCache::Instance();
 			if (shaderCache.IsDump()) {
 				stl::detour_vfunc<12, ID3D11Device_CreateVertexShader>(device);
@@ -492,7 +457,6 @@ namespace Hooks
 						if (state->enabledClasses[type - 1]) {
 							RE::BSGraphics::VertexShader* vertexShader = shaderCache.GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
 							if (vertexShader) {
-								a_vertexShader = vertexShader;
 								state->context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
 								auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 								GET_INSTANCE_MEMBER(currentVertexShader, shadowState)
@@ -524,7 +488,6 @@ namespace Hooks
 						if (state->enabledClasses[type - 1]) {
 							RE::BSGraphics::PixelShader* pixelShader = shaderCache.GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
 							if (pixelShader) {
-								a_pixelShader = pixelShader;
 								state->context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 								auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 								GET_INSTANCE_MEMBER(currentPixelShader, shadowState)
