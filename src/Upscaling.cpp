@@ -79,12 +79,12 @@ void Upscaling::DrawSettings()
 				"An older variant best suited to combat ghosting for elements with missing inputs (such as motion vectors)\n\n"
 				"Preset B (intended for Ultra Perf mode):\n"
 				"Similar to Preset A but for Ultra Performance mode\n\n"
-				"Preset C (intended for Perf/Balanced/Quality modes):\n"
+				"The CS default preset. Preset C (intended for Perf/Balanced/Quality modes):\n"
 				"Preset which generally favors current frame information. Generally well-suited for fast-paced game content\n\n"
 				"Preset D (intended for Perf/Balanced/Quality modes):\n"
 				"Similar to Preset E. Preset E is generally recommended over Preset D.\n\n"
 				"Preset E (intended for Perf/Balanced/Quality modes):\n"
-				"The CS default preset. Default preset for Perf/Balanced/Quality mode. Generally favors image stability\n\n"
+				"Default preset for Perf/Balanced/Quality mode. Generally favors image stability\n\n"
 				"Preset F (intended for Ultra Perf/DLAA modes):\n"
 				"The default preset for Ultra Perf and DLAA modes.");
 		}
