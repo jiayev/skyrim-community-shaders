@@ -276,11 +276,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color.xyz = ColorScale * baseColor.xyz;
 	psout.Color.w = baseColor.w;
 	psout.Normal.w = baseColor.w;
-#	if defined(ENVCUBE)
 	psout.Normal.xyz = float3(0, 1, 0);
-#	else
-	psout.Normal.xyz = float3(1, 0, 0);
-#	endif
 
 	return psout;
 }
