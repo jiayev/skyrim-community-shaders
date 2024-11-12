@@ -44,7 +44,7 @@ public:
 		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
 		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
 		float sharpness = 0.5f;
-		uint dlssPreset = (uint)sl::DLSSPreset::ePresetE;
+		uint dlssPreset = (uint)sl::DLSSPreset::ePresetC;
 	};
 
 	Settings settings;
