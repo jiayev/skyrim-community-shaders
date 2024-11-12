@@ -316,7 +316,18 @@ void Deferred::StartDeferred()
 		static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
 		ID3D11Buffer* buffers[1] = { *perFrame.get() };
 
-		context->CSSetConstantBuffers(12, 1, buffers);
+		ID3D11Buffer* vrBuffer = nullptr;
+
+		if (REL::Module::IsVR()) {
+			static REL::Relocation<ID3D11Buffer**> VRValues{ REL::Offset(0x3180688) };
+			vrBuffer = *VRValues.get();
+		}
+		if (vrBuffer) {
+			context->CSSetConstantBuffers(12, 1, buffers);
+			context->CSSetConstantBuffers(13, 1, &vrBuffer);
+		} else {
+			context->CSSetConstantBuffers(12, 1, buffers);
+		}
 	}
 
 	PrepassPasses();
@@ -333,7 +344,18 @@ void Deferred::DeferredPasses()
 	{
 		static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
 		ID3D11Buffer* buffers[1] = { *perFrame.get() };
-		context->CSSetConstantBuffers(12, 1, buffers);
+		ID3D11Buffer* vrBuffer = nullptr;
+
+		if (REL::Module::IsVR()) {
+			static REL::Relocation<ID3D11Buffer**> VRValues{ REL::Offset(0x3180688) };
+			vrBuffer = *VRValues.get();
+		}
+		if (vrBuffer) {
+			context->CSSetConstantBuffers(12, 1, buffers);
+			context->CSSetConstantBuffers(13, 1, &vrBuffer);
+		} else {
+			context->CSSetConstantBuffers(12, 1, buffers);
+		}
 	}
 
 	auto specular = renderer->GetRuntimeData().renderTargets[SPECULAR];
@@ -369,7 +391,7 @@ void Deferred::DeferredPasses()
 			ID3D11ShaderResourceView* srvs[6]{
 				albedo.SRV,
 				normalRoughness.SRV,
-				skylighting->loaded ? depth.depthSRV : nullptr,
+				skylighting->loaded || REL::Module::IsVR() ? depth.depthSRV : nullptr,
 				skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
 				ssgi->settings.Enabled ? ssgi->texGI[ssgi->outputGIIdx]->srv.get() : nullptr,
 				masks2.SRV,
@@ -420,7 +442,7 @@ void Deferred::DeferredPasses()
 			normalRoughness.SRV,
 			masks.SRV,
 			masks2.SRV,
-			dynamicCubemaps->loaded ? (terrainBlending->loaded ? terrainBlending->blendedDepthTexture16->srv.get() : depth.depthSRV) : nullptr,
+			dynamicCubemaps->loaded || REL::Module::IsVR() ? (terrainBlending->loaded ? terrainBlending->blendedDepthTexture16->srv.get() : depth.depthSRV) : nullptr,
 			dynamicCubemaps->loaded ? reflectance.SRV : nullptr,
 			dynamicCubemaps->loaded ? dynamicCubemaps->envTexture->srv.get() : nullptr,
 			dynamicCubemaps->loaded ? dynamicCubemaps->envReflectionsTexture->srv.get() : nullptr,
@@ -570,6 +592,9 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientComposite()
 		if (ScreenSpaceGI::GetSingleton()->loaded)
 			defines.push_back({ "SSGI", nullptr });
 
+		if (REL::Module::IsVR())
+			defines.push_back({ "FRAMEBUFFER", nullptr });
+
 		ambientCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return ambientCompositeCS;
@@ -585,6 +610,9 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientCompositeInterior()
 
 		if (ScreenSpaceGI::GetSingleton()->loaded)
 			defines.push_back({ "SSGI", nullptr });
+
+		if (REL::Module::IsVR())
+			defines.push_back({ "FRAMEBUFFER", nullptr });
 
 		ambientCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
 	}
@@ -607,6 +635,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		if (ScreenSpaceGI::GetSingleton()->loaded)
 			defines.push_back({ "SSGI", nullptr });
 
+		if (REL::Module::IsVR())
+			defines.push_back({ "FRAMEBUFFER", nullptr });
+
 		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return mainCompositeCS;
@@ -625,6 +656,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 
 		if (ScreenSpaceGI::GetSingleton()->loaded)
 			defines.push_back({ "SSGI", nullptr });
+
+		if (REL::Module::IsVR())
+			defines.push_back({ "FRAMEBUFFER", nullptr });
 
 		mainCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}

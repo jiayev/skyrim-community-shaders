@@ -6,7 +6,7 @@
 #		include "Common/Math.hlsli"
 #	endif  // VSHADER
 
-#	if !defined(COMPUTESHADER) && !defined(CSHADER)
+#	if (!defined(COMPUTESHADER) && !defined(CSHADER)) || defined(FRAMEBUFFER)
 #		include "Common/FrameBuffer.hlsli"
 #	endif
 cbuffer VRValues : register(b13)
@@ -150,7 +150,8 @@ namespace Stereo
 		return normalizedCoord;
 	}
 
-#ifdef PSHADER
+#if defined(PSHADER) || defined(FRAMEBUFFER)
+	// These functions require the framebuffer which is typically provided with the PSHADER
 	/**
 	Gets the eyeIndex for PSHADER
 	@returns eyeIndex (0 left, 1 right)
@@ -192,32 +193,39 @@ namespace Stereo
 	* @brief Converts mono UV coordinates from one eye to the corresponding mono UV coordinates of the other eye.
 	*
 	* This function is used to transition UV coordinates from one eye's perspective to the other eye in a stereo rendering setup.
-	* It works by converting the mono UV to clip space, transforming it into view space, and then reprojecting it into the other eye's
-	* clip space before converting back to UV coordinates. It also supports dynamic resolution.
+	* It operates by converting the mono UV to clip space, transforming it into world space, and then reprojecting it 
+	* into the other eye's clip space before converting back to UV coordinates. It supports dynamic resolution adjustments 
+	* and applies eye offset adjustments for correct stereo separation.
+	*
+	* The function considers the aspect of VR by modifying the NDC to view space conversion based on the stereo setup, 
+	* ensuring accurate rendering across both eyes.
 	*
 	* @param[in] monoUV The UV coordinates and depth value (Z component) for the current eye, in the range [0,1].
-	* @param[in] eyeIndex Index of the source/current eye (0 or 1).
+	* @param[in] eyeIndex Index of the source/current eye (0 for left, 1 for right).
 	* @param[in] dynamicres Optional flag indicating whether dynamic resolution is applied. Default is false.
 	* @return UV coordinates adjusted to the other eye, with depth.
 	*/
 	float3 ConvertMonoUVToOtherEye(float3 monoUV, uint eyeIndex, bool dynamicres = false)
 	{
-		// Convert from dynamic res to true UV space
+		// Convert from dynamic res to true UV space if necessary
 		if (dynamicres)
 			monoUV.xy *= DynamicResolutionParams2.xy;
 
-		// Step 1: Convert UV to Clip Space
+		// Convert UV to Clip Space
 		float4 clipPos = float4(monoUV.xy * float2(2, -2) - float2(1, -1), monoUV.z, 1);
 
-		// Step 2: Convert Clip Space to View Space for the current eye
-		float4 viewPosCurrentEye = mul(CameraProjInverse[eyeIndex], clipPos);
-		viewPosCurrentEye /= viewPosCurrentEye.w;
+		// Convert Clip Space to World Space for the current eye
+		float4 worldPos = mul(CameraViewProjInverse[eyeIndex], clipPos);
+		worldPos /= worldPos.w;
 
-		// Step 3: Convert View Space to Clip Space for the other eye
-		float4 clipPosOtherEye = mul(CameraProj[1 - eyeIndex], viewPosCurrentEye);
+		// Apply eye offset adjustment in world space
+		worldPos.xyz += CameraPosAdjust[eyeIndex].xyz - CameraPosAdjust[1 - eyeIndex].xyz;
+
+		// Convert World Space to Clip Space for the other eye
+		float4 clipPosOtherEye = mul(CameraViewProj[1 - eyeIndex], worldPos);
 		clipPosOtherEye /= clipPosOtherEye.w;
 
-		// Step 4: Convert Clip Space to UV
+		// Convert Clip Space to UV
 		float3 monoUVOtherEye = float3((clipPosOtherEye.xy * 0.5f) + 0.5f, clipPosOtherEye.z);
 
 		// Convert back to dynamic res space if necessary
