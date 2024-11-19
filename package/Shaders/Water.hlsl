@@ -441,7 +441,7 @@ float3 GetFlowmapNormal(PS_INPUT input, float2 uvShift, float multiplier, float 
 #				undef WATER_LIGHTING
 #			endif
 
-#			if defined(WATER_LIGHTING)
+#			if defined(WATER_LIGHTING) && !defined(VC)
 #				define WATER_PARALLAX
 #				include "WaterLighting/WaterParallax.hlsli"
 #			endif
