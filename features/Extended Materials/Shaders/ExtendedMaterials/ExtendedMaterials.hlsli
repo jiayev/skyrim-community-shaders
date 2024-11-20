@@ -40,6 +40,10 @@ namespace ExtendedMaterials
 		textureDims /= 2.0;
 #endif
 
+#if defined(VR)
+		textureDims /= 2.0;
+#endif
+
 		float2 texCoordsPerSize = coords * textureDims;
 
 		float2 dxSize = ddx(texCoordsPerSize);
@@ -55,6 +59,10 @@ namespace ExtendedMaterials
 		float mipLevel = max(0.5 * log2(minTexCoordDelta), 0);
 
 #if !defined(PARALLAX) && !defined(TRUE_PBR)
+		mipLevel++;
+#endif
+
+#if defined(VR)
 		mipLevel++;
 #endif
 
@@ -321,7 +329,7 @@ namespace ExtendedMaterials
 	// Cheap method of creating shadows using height for a given light source
 	float GetParallaxSoftShadowMultiplier(float2 coords, float mipLevel, float3 L, float sh0, Texture2D<float4> tex, SamplerState texSampler, uint channel, float quality, float noise, DisplacementParams params)
 	{
-		[branch] if (quality > 0.0 || extendedMaterialSettings.ExtendShadows)
+		[branch] if (quality > 0.0)
 		{
 			float2 rayDir = L.xy * 0.1 * params.HeightScale;
 			float4 multipliers = rcp((float4(1, 2, 3, 4) + noise));
@@ -333,7 +341,7 @@ namespace ExtendedMaterials
 				sh.z = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.z, mipLevel)[channel], params);
 			if (quality > 0.75)
 				sh.w = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.w, mipLevel)[channel], params);
-			return 1.0 - saturate(dot(max(0, sh - sh0), 1.0) * shadowIntensity) * lerp(quality, 1.0, extendedMaterialSettings.ExtendShadows);
+			return 1.0 - saturate(dot(max(0, sh - sh0), 1.0) * shadowIntensity) * quality;
 		}
 		return 1.0;
 	}
@@ -341,11 +349,7 @@ namespace ExtendedMaterials
 #if defined(LANDSCAPE)
 	float GetParallaxSoftShadowMultiplierTerrain(PS_INPUT input, float2 coords, float mipLevel[6], float3 L, float sh0, float quality, float noise, DisplacementParams params[6])
 	{
-#	if defined(TRUE_PBR)
-		if (quality > 0.0 || extendedMaterialSettings.ExtendShadows) {
-#	else
 		if (quality > 0.0) {
-#	endif
 			float2 rayDir = L.xy * 0.1;
 			float4 multipliers = rcp((float4(1, 2, 3, 4) + noise));
 			float4 sh;
@@ -361,7 +365,7 @@ namespace ExtendedMaterials
 				sh.z = GetTerrainHeight(input, coords + rayDir * multipliers.z, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2.xy, heights);
 			if (quality > 0.75)
 				sh.w = GetTerrainHeight(input, coords + rayDir * multipliers.w, mipLevel, params, quality, input.LandBlendWeights1, input.LandBlendWeights2.xy, heights);
-			return 1.0 - saturate(dot(max(0, sh - sh0), 1.0) * shadowIntensity) * lerp(quality, 1.0, extendedMaterialSettings.ExtendShadows);
+			return 1.0 - saturate(dot(max(0, sh - sh0), 1.0) * shadowIntensity) * quality;
 #	else
 			sh = GetTerrainHeight(input, coords + rayDir * multipliers.x, mipLevel, params, quality, heights);
 			if (quality > 0.25)
