@@ -509,7 +509,7 @@ void Deferred::OverrideBlendStates()
 							blendDesc.IndependentBlendEnable = true;
 
 							// Start at 1 to ignore Diffuse
-							for (int i = 0; i < 8; i++) {
+							for (int i = 1; i < 8; i++) {
 								blendDesc.RenderTarget[i].BlendEnable = blendDesc.RenderTarget[0].BlendEnable;
 								blendDesc.RenderTarget[i].SrcBlend = D3D11_BLEND_SRC_ALPHA;
 								blendDesc.RenderTarget[i].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
