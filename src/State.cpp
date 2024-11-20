@@ -493,8 +493,6 @@ void State::SetupResources()
 	context->QueryInterface(__uuidof(pPerf), reinterpret_cast<void**>(&pPerf));
 
 	tracyCtx = TracyD3D11Context(device, context);
-
-	RE::GetINISetting("iVolumetricLightingQuality:Display")->data.i = 0;
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred)
