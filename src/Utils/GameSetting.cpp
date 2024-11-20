@@ -4,6 +4,8 @@
 
 namespace Util
 {
+	static constexpr std::string_view CS_SETTINGS_PATH{ "Data/SKSE/Plugins/CommunityShaders/SkyrimOverwrite.ini"sv };
+
 	void DumpSettingsOptions()
 	{
 		// List of INI setting collections to iterate over
@@ -357,11 +359,24 @@ namespace Util
 
 	void SaveGameSettings(const std::map<std::string, GameSetting>& settingsMap)
 	{
+		auto ini = RE::INISettingCollection::GetSingleton();
+
+		char subKeyBackup[0x104];
+		strcpy_s(subKeyBackup, 260, ini->subKey);
+		strcpy_s(ini->subKey, 260, CS_SETTINGS_PATH.data());
+
+		auto iniPref = RE::INIPrefSettingCollection::GetSingleton();
+
+		char subKeyPrefBackup[0x104];
+		strcpy_s(subKeyPrefBackup, 260, iniPref->subKey);
+		strcpy_s(iniPref->subKey, 260, CS_SETTINGS_PATH.data());
+
 		// Initialize collections
 		std::vector<std::pair<RE::INISettingCollection*, std::string>> iniCollections = {
-			{ RE::INISettingCollection::GetSingleton(), "INISettingCollection" },
-			{ RE::INIPrefSettingCollection::GetSingleton(), "INIPrefSettingCollection" }
+			{ ini, "INISettingCollection" },
+			{ iniPref, "INIPrefSettingCollection" }
 		};
+
 		auto gameSettingCollection = RE::GameSettingCollection::GetSingleton();
 
 		// Single iteration for settings
@@ -395,14 +410,28 @@ namespace Util
 				}
 			}
 		}
+		strcpy_s(ini->subKey, 260, subKeyBackup);
+		strcpy_s(iniPref->subKey, 260, subKeyPrefBackup);
 	}
 
 	void LoadGameSettings(const std::map<std::string, GameSetting>& settingsMap)
 	{
+		auto ini = RE::INISettingCollection::GetSingleton();
+
+		char subKeyBackup[0x104];
+		strcpy_s(subKeyBackup, 260, ini->subKey);
+		strcpy_s(ini->subKey, 260, CS_SETTINGS_PATH.data());
+
+		auto iniPref = RE::INIPrefSettingCollection::GetSingleton();
+
+		char subKeyPrefBackup[0x104];
+		strcpy_s(subKeyPrefBackup, 260, iniPref->subKey);
+		strcpy_s(iniPref->subKey, 260, CS_SETTINGS_PATH.data());
+
 		// Handle INI and Game settings in a single loop
 		std::vector<std::pair<RE::INISettingCollection*, std::string>> iniCollections = {
-			{ RE::INISettingCollection::GetSingleton(), "INISettingCollection" },
-			{ RE::INIPrefSettingCollection::GetSingleton(), "INIPrefSettingCollection" }
+			{ ini, "INISettingCollection" },
+			{ iniPref, "INIPrefSettingCollection" }
 		};
 
 		auto gameSettingCollection = RE::GameSettingCollection::GetSingleton();
@@ -438,5 +467,7 @@ namespace Util
 				}
 			}
 		}
+		strcpy_s(ini->subKey, 260, subKeyBackup);
+		strcpy_s(iniPref->subKey, 260, subKeyPrefBackup);
 	}
 }  // namespace Util
