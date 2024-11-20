@@ -125,8 +125,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 
 				if (!REL::Module::IsVR()) {
-					auto bEnableImprovedSnow = RE::GetINISetting("bEnableImprovedSnow:Display");
-					bEnableImprovedSnow->data.b = false;
+					RE::GetINISetting("bEnableImprovedSnow:Display")->data.b = false;
+					RE::GetINISetting("bIBLFEnable:Display")->data.b = false;
 				}
 
 				TruePBR::GetSingleton()->DataLoaded();
