@@ -310,7 +310,7 @@ void Menu::DrawSettings()
 						"Hide or show the shader failure message. "
 						"Your installation is broken and will likely see errors in game. "
 						"Please double check you have updated all features and that your load order is correct. "
-						"See CommunityShaders.log for details and check the NexusMods page or Discord server. ");
+						"See CommunityShaders.log for details and check the Nexus Mods page or Discord server. ");
 				}
 			}
 			ImGui::EndTable();
