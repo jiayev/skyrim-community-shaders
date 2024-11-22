@@ -12,7 +12,7 @@ namespace ScreenSpaceShadows
 		return exp2(-depthDifference * depthDifference);
 	}
 
-	float GetScreenSpaceShadow(float3 screenPosition, float2 uv, float noise, float3 viewPosition, uint eyeIndex)
+	float GetScreenSpaceShadow(float3 screenPosition, float2 uv, float noise, uint eyeIndex)
 	{
 #if defined(VR)
 		return ScreenSpaceShadowsTexture.Load(int3(screenPosition.xy, 0));
@@ -53,7 +53,7 @@ namespace ScreenSpaceShadows
 
 		depthSamples = SharedData::GetScreenDepths(depthSamples);
 
-		float4 blurWeights = GetBlurWeights(depthSamples, viewPosition.z);
+		float4 blurWeights = GetBlurWeights(depthSamples, depthSamples[0]);
 		float shadow = dot(shadowSamples, blurWeights);
 
 		float blurWeightsTotal = dot(blurWeights, 1.0);
