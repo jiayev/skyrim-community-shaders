@@ -87,10 +87,10 @@ namespace ShadowSampling
 
 		float layerIndexRcp = rcp(1 + cascadeIndex);
 
-		float visibility = 0;
+		float visibility = 0.0;
 
 #if defined(WATER)
-		sampleOffsetScale *= 8;
+		sampleOffsetScale *= 2.0;
 #endif
 
 		for (uint sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
