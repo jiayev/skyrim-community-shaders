@@ -110,11 +110,8 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 blendFactor;
 		if (Param.z > 0.5) {
 			blendedColor = HuePreservingHejlBurgessDawson(inputColor);
-			float blendedLuminance = Color::RGBToLuminance(blendedColor);
-			// Compensate for modified tonemapping desaturating colors
-			blendedColor = lerp(blendedLuminance, blendedColor, 1.2);
 		} else {
-			blendedColor = GetTonemapFactorReinhard(inputColor);
+			blendedColor = HuePreservingReinhard(inputColor);
 		}
 
 		blendedColor += saturate(Param.x - blendedColor) * bloomColor;
