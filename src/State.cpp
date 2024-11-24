@@ -141,6 +141,13 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 	json settings;
 	bool errorDetected = false;
 
+	try {
+		std::filesystem::create_directories(folderPath);
+	} catch (const std::filesystem::filesystem_error& e) {
+		logger::warn("Error creating directory during Load ({}) : {}\n", folderPath, e.what());
+		errorDetected = true;
+	}
+
 	// Attempt to load the config file
 	auto tryLoadConfig = [&](const std::string& path) {
 		std::ifstream i(path);
@@ -311,6 +318,13 @@ void State::Save(ConfigMode a_configMode)
 	const auto& shaderCache = SIE::ShaderCache::Instance();
 	std::string configPath = GetConfigPath(a_configMode);
 	std::ofstream o{ configPath };
+
+	try {
+		std::filesystem::create_directories(folderPath);
+	} catch (const std::filesystem::filesystem_error& e) {
+		logger::warn("Error creating directory during Save ({}) : {}\n", folderPath, e.what());
+		return;
+	}
 
 	// Check if the file opened successfully
 	if (!o.is_open()) {
