@@ -28,7 +28,7 @@ cbuffer PerGeometry : register(b2)
 	float3 DefaultNormal : packoffset(c1);
 };
 
-static const int iterations = 32.0;
+static const int iterations = 128.0;
 static const float rayLength = 1.0;
 
 float2 ConvertRaySample(float2 raySample, uint eyeIndex)
@@ -49,7 +49,7 @@ float4 GetReflectionColor(
 	float3 prevRaySample;
 	float3 raySample = projPosition;
 
-	for (int i = 0; i <= iterations; i++) {
+	for (int i = 0; i < iterations - 1; i++) {
 		prevRaySample = raySample;
 		raySample = projPosition + (float(i) / float(iterations)) * projReflectionDirection;
 
@@ -58,23 +58,27 @@ float4 GetReflectionColor(
 
 		float iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(raySample.xy, eyeIndex), 0);
 
-		if (raySample.z > iterationDepth) {
+		if (saturate((raySample.z - iterationDepth) / SSRParams.y) > 0.0) {
 			float3 binaryMinRaySample = prevRaySample;
 			float3 binaryMaxRaySample = raySample;
-			float3 binaryRaySample;
+			float3 binaryRaySample = raySample;
+			uint2 binaryRaySampleCoords = round(ConvertRaySample(binaryRaySample.xy, eyeIndex) * BufferDim);
+			uint2 prevBinaryRaySampleCoords;
 			float depthThicknessFactor;
 
-			for (int k = 0; k < iterations; k++) {
+			for (int k = i; k < iterations; k++) {
+				prevBinaryRaySampleCoords = binaryRaySampleCoords;
 				binaryRaySample = lerp(binaryMinRaySample, binaryMaxRaySample, 0.5);
+				binaryRaySampleCoords = round(ConvertRaySample(binaryRaySample.xy, eyeIndex) * BufferDim);
+
+				// Check if the optimal sampling location has already been found
+				if (all(binaryRaySampleCoords == prevBinaryRaySampleCoords))
+					break;
 
 				iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(binaryRaySample.xy, eyeIndex), 0);
 
 				// Compute expected depth vs actual depth
-				depthThicknessFactor = 1.0 - smoothstep(0.0, 0.5, abs(binaryRaySample.z - iterationDepth) / SSRParams.y);
-
-				// Early exit
-				if (depthThicknessFactor == 1.0)
-					break;
+				depthThicknessFactor = 1.0 - saturate(abs(binaryRaySample.z - iterationDepth) / SSRParams.y);
 
 				if (iterationDepth < binaryRaySample.z)
 					binaryMaxRaySample = binaryRaySample;
@@ -82,26 +86,37 @@ float4 GetReflectionColor(
 					binaryMinRaySample = binaryRaySample;
 			}
 
-			// SSR Marching Radius Fade Factor (based on ray length)
-			float ssrMarchingRadiusFadeFactor = 1.0 - saturate(length(binaryRaySample.xy - projPosition.xy) / rayLength);
+			// Early exit
+			if (depthThicknessFactor <= 0.0)
+				return 0.0;
 
-			// Screen Center Distance Fade Factor
+			// Cubemap skies blend better
+			float skyFadeFactor = iterationDepth != 1.0;
+
+			// Early exit
+			if (skyFadeFactor <= 0.0)
+				return 0.0;
+
+			// Fade based on ray length)
+			float ssrMarchingRadiusFadeFactor = 1.0 - saturate(length(binaryRaySample - projPosition) / rayLength);
+
 			float2 uvResultScreenCenterOffset = binaryRaySample.xy - 0.5;
 
 #	ifdef VR
-			float centerDistance = min(1.0, 2.0 * length(uvResultScreenCenterOffset.xy));
+			float centerDistance = abs(uvResultScreenCenterOffset.xy * 2.0);
 
 			// Make VR fades consistent by taking the closer of the two eyes
 			// Based on concepts from https://cuteloong.github.io/publications/scssr24/
 			float2 otherEyeUvResultScreenCenterOffset = Stereo::ConvertMonoUVToOtherEye(float3(binaryRaySample.xy, iterationDepth), eyeIndex).xy - 0.5;
-			centerDistance = min(centerDistance, 2.0 * length(otherEyeUvResultScreenCenterOffset));
+			centerDistance = min(centerDistance, abs(otherEyeUvResultScreenCenterOffset * 2.0));
 #	else
-			float centerDistance = min(1.0, 2.0 * length(uvResultScreenCenterOffset.xy));
+			float2 centerDistance = abs(uvResultScreenCenterOffset.xy * 2.0);
 #	endif
 
-			// Fade out around 10% of screen area
-			float centerDistanceFadeFactor = smoothstep(0.0, 0.1, 1.0 - centerDistance);
-			float fadeFactor = (depthThicknessFactor > 0.0) * ssrMarchingRadiusFadeFactor * centerDistanceFadeFactor;
+			// Fade out around screen edges
+			float2 centerDistanceFadeFactor = pow(saturate(1.0 - centerDistance), 0.25);
+
+			float fadeFactor = depthThicknessFactor * skyFadeFactor * sqrt(ssrMarchingRadiusFadeFactor) * min(centerDistanceFadeFactor.x, centerDistanceFadeFactor.y);
 
 			if (fadeFactor > 0.0) {
 				float3 color = ColorTex.SampleLevel(ColorSampler, ConvertRaySample(binaryRaySample.xy, eyeIndex), 0);
@@ -162,8 +177,8 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 viewDirection = normalize(viewPosition);
 
 	float3 reflectionDirection = reflect(viewDirection, viewNormal);
-	float VdotN = dot(-viewDirection, reflectionDirection);
-	[branch] if (reflectionDirection.z < 0 || 0 < VdotN)
+	float viewAttenuation = saturate(dot(viewDirection, reflectionDirection));
+	[branch] if (viewAttenuation < 0)
 	{
 		return psout;
 	}
