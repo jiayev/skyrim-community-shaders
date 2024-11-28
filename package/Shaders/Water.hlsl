@@ -628,7 +628,7 @@ float GetScreenDepthWater(float2 screenPosition, uint a_useVR = 0)
 #			if defined(VR)  // VR appears to use hard coded values
 	return depth * 1.01 + -0.01;
 #			else
-	return (CameraData.w / (-depth * CameraData.z + CameraData.x));
+	return (CameraDataWater.w / (-depth * CameraDataWater.z + CameraDataWater.x));
 #			endif
 }
 
