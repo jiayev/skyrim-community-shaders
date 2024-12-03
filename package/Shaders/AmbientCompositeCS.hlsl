@@ -32,7 +32,7 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
-	half2 uv = half2(dispatchID.xy + 0.5) * BufferDim.zw;
+	half2 uv = half2(dispatchID.xy + 0.5) * SharedData::BufferDim.zw;
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
 	uv *= FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
 	uv = Stereo::ConvertFromStereoUV(uv, eyeIndex);
@@ -48,7 +48,7 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 
 	half3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], half4(normalVS, 0)).xyz);
 
-	half3 directionalAmbientColor = mul(DirectionalAmbientShared, half4(normalWS, 1.0));
+	half3 directionalAmbientColor = mul(SharedData::DirectionalAmbient, half4(normalWS, 1.0));
 
 	half3 linAlbedo = Color::GammaToLinear(albedo) / Color::AlbedoPreMult;
 	half3 linDirectionalAmbientColor = Color::GammaToLinear(directionalAmbientColor) / Color::LightPreMult;
@@ -66,20 +66,21 @@ RWTexture2D<half3> DiffuseAmbientRW : register(u1);
 	positionMS.xyz += FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
 #	endif
 
-	sh2 skylighting = Skylighting::sample(skylightingSettings, SkylightingProbeArray, positionMS.xyz, normalWS);
+	sh2 skylighting = Skylighting::sample(SharedData::skylightingSettings, SkylightingProbeArray, positionMS.xyz, normalWS);
 	half skylightingDiffuse = SphericalHarmonics::FuncProductIntegral(skylighting, SphericalHarmonics::EvaluateCosineLobe(float3(normalWS.xy, normalWS.z * 0.5 + 0.5))) / Math::PI;
-	skylightingDiffuse = Skylighting::mixDiffuse(skylightingSettings, skylightingDiffuse);
+	skylightingDiffuse = lerp(1.0, skylightingDiffuse, Skylighting::getFadeOutFactor(positionMS.xyz));
+	skylightingDiffuse = Skylighting::mixDiffuse(SharedData::skylightingSettings, skylightingDiffuse);
 
 	visibility = skylightingDiffuse;
 #endif
 
 #if defined(SSGI)
 #	if defined(VR)
-	float3 uvF = float3((dispatchID.xy + 0.5) * BufferDim.zw, DepthTexture[dispatchID.xy]);  // calculate high precision uv of initial eye
-	float3 uv2 = Stereo::ConvertStereoUVToOtherEyeStereoUV(uvF, eyeIndex, false);            // calculate other eye uv
+	float3 uvF = float3((dispatchID.xy + 0.5) * SharedData::BufferDim.zw, DepthTexture[dispatchID.xy]);  // calculate high precision uv of initial eye
+	float3 uv2 = Stereo::ConvertStereoUVToOtherEyeStereoUV(uvF, eyeIndex, false);                        // calculate other eye uv
 	float3 uv1Mono = Stereo::ConvertFromStereoUV(uvF, eyeIndex);
 	float3 uv2Mono = Stereo::ConvertFromStereoUV(uv2, (1 - eyeIndex));
-	uint2 pixCoord2 = (uint2)(uv2.xy / BufferDim.zw - 0.5);
+	uint2 pixCoord2 = (uint2)(uv2.xy / SharedData::BufferDim.zw - 0.5);
 #	endif
 
 	half4 ssgiDiffuse = SSGITexture[dispatchID.xy];
