@@ -47,8 +47,7 @@ struct VS_OUTPUT
 #	endif  // RENDER_DEPTH
 	float4 WorldPosition : POSITION1;
 	float4 PreviousWorldPosition : POSITION2;
-	float3 VertexNormal : POSITION4;
-	float4 SphereNormal : POSITION5;
+	float4 VertexNormal : POSITION4;
 #	ifdef VR
 	float ClipDistance : SV_ClipDistance0;
 	float CullDistance : SV_CullDistance0;
@@ -234,8 +233,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	// Vertex normal needs to be transformed to world-space for lighting calculations.
 	vsout.VertexNormal.xyz = mul(world3x3, input.Normal.xyz * 2.0 - 1.0);
-	vsout.SphereNormal.xyz = mul(world3x3, normalize(input.Position.xyz));
-	vsout.SphereNormal.w = saturate(sqrt(input.Color.w));
+	vsout.VertexNormal.w = saturate(sqrt(input.Color.w));
 
 	return vsout;
 }
@@ -479,15 +477,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 viewDirection = -normalize(input.WorldPosition.xyz);
 	float3 normal = normalize(input.VertexNormal.xyz);
 
-	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
+	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = Random::InterleavedGradientNoise(input.HPosition.xy, FrameCount);
 
 	// Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
 	if (!frontFace)
 		normal = -normal;
-
-	normal = normalize(lerp(normal, normalize(input.SphereNormal.xyz), input.SphereNormal.w * input.SphereNormal.w));
 
 	float3x3 tbn = 0;
 
@@ -553,7 +549,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #			if defined(TERRAIN_SHADOWS)
 		if (dirShadow > 0.0) {
-			float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, SampBaseSampler);
+			float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, SampBaseSampler);
 			dirShadow *= terrainShadow;
 		}
 #			endif  // TERRAIN_SHADOWS
@@ -591,7 +587,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	dirLightColor *= dirLightColorMultiplier;
 	dirLightColor *= dirShadow;
 
-	float wrapAmount = saturate(input.SphereNormal.w);
+	float wrapAmount = saturate(input.VertexNormal.w);
 	float wrapMultiplier = rcp((1.0 + wrapAmount) * (1.0 + wrapAmount));
 
 	float dirDiffuse = (dirLightAngle + wrapAmount) * wrapMultiplier;
@@ -599,7 +595,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 albedo = max(0, baseColor.xyz * input.VertexColor.xyz);
 
-	float3 subsurfaceColor = lerp(Color::RGBToLuminance(albedo.xyz), albedo.xyz, 2.0) * input.SphereNormal.w * input.SphereNormal.w;
+	float3 subsurfaceColor = lerp(Color::RGBToLuminance(albedo.xyz), albedo.xyz, 2.0) * input.VertexNormal.w;
 
 	float dirLightBacklighting = 1.0 + saturate(dot(viewDirection, -DirLightDirectionShared.xyz));
 	float3 sss = dirLightColor * saturate(-dirLightAngle) * dirLightBacklighting;
@@ -688,7 +684,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #					if defined(SKYLIGHTING)
 #						if defined(VR)
-	float3 positionMSSkylight = input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz - CameraPosAdjust[0].xyz;
+	float3 positionMSSkylight = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
 #						else
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 #						endif
@@ -768,7 +764,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	uint eyeIndex = Stereo::GetEyeIndexPS(input.HPosition, VPOSOffset);
 
-	float3 viewPosition = mul(CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
+	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = Random::InterleavedGradientNoise(input.HPosition.xy, FrameCount);
 
@@ -784,7 +780,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #			if defined(TERRAIN_SHADOWS)
 		if (dirShadow > 0.0) {
-			float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + CameraPosAdjust[eyeIndex].xyz, SampBaseSampler);
+			float terrainShadow = TerrainShadows::GetTerrainShadow(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, SampBaseSampler);
 			dirShadow *= terrainShadow;
 		}
 #			endif  // TERRAIN_SHADOWS
