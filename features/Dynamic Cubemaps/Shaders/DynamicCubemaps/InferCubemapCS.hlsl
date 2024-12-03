@@ -54,7 +54,7 @@ float3 GetSamplingVector(uint3 ThreadID, in RWTexture2DArray<float4> OutputTextu
 	float mipLevel = 0.0;
 
 #if !defined(REFLECTIONS)
-	float k = 2;
+	float k = 1.5;
 	float brightness = k;
 #endif
 
