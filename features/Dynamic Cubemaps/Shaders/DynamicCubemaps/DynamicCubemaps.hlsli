@@ -27,8 +27,8 @@ namespace DynamicCubemaps
 		horizon *= horizon * horizon;
 
 		float3 specularIrradiance = EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level).xyz;
-		specularIrradiance *= horizon;
 		specularIrradiance = Color::GammaToLinear(specularIrradiance);
+		specularIrradiance *= horizon;
 
 		return specularIrradiance;
 	}
@@ -47,37 +47,14 @@ namespace DynamicCubemaps
 		float horizon = min(1.0 + dot(R, VN), 1.0);
 		horizon *= horizon * horizon;
 
-		// Roughness dependent fresnel
-		// https://www.jcgt.org/published/0008/01/03/paper.pdf
-		float3 Fr = max(1.0.xxx - roughness.xxx, F0) - F0;
-		float3 S = Fr * pow(1.0 - NoV, 5.0);
-
 #	if defined(DEFERRED)
-		return horizon * ((F0 + S) * specularBRDF.x + specularBRDF.y);
+		return horizon * (1 + F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1));
 #	else
 		float3 specularIrradiance = EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level).xyz;
 		specularIrradiance = Color::GammaToLinear(specularIrradiance);
 
-		return specularIrradiance * ((F0 + S) * specularBRDF.x + specularBRDF.y);
+		return specularIrradiance * (1 + F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1));
 #	endif
-	}
-
-	float3 GetDynamicCubemapFresnel(float2 uv, float3 N, float3 VN, float3 V, float roughness, float level, float3 diffuseColor, float distance)
-	{
-		float NoV = saturate(dot(N, V));
-		float2 specularBRDF = EnvBRDFApprox(roughness, NoV);
-		if (specularBRDF.y > 0.001) {
-			float3 R = reflect(-V, N);
-			float3 specularIrradiance = EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level).xyz;
-
-			// Horizon specular occlusion
-			// https://marmosetco.tumblr.com/post/81245981087
-			float horizon = min(1.0 + dot(R, VN), 1.0);
-			specularIrradiance *= horizon * horizon;
-
-			return specularIrradiance * specularBRDF.y;
-		}
-		return 0.0;
 	}
 #endif  // !WATER
 }
