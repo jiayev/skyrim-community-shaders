@@ -145,7 +145,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 bool Load()
 {
 	if (REL::Module::IsVR()) {
-		REL::IDDatabase::get().IsVRAddressLibraryAtLeastVersion("0.158.0", true);
+		REL::IDDatabase::get().IsVRAddressLibraryAtLeastVersion("0.159.0", true);
 	}
 
 	auto privateProfileRedirectorVersion = Util::GetDllVersion(L"Data/SKSE/Plugins/PrivateProfileRedirector.dll");
