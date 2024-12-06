@@ -57,9 +57,9 @@ public:
 		bool UseSimplePalette = true;  // simple palette or full customization
 		struct PaletteColors
 		{
-			ImVec4 Background{ 0.f, 0.f, 0.f, 0.5f };
+			ImVec4 Background{ 0.f, 0.f, 0.f, 0.5882353186607361f };
 			ImVec4 Text{ 1.f, 1.f, 1.f, 1.f };
-			ImVec4 Border{ 0.569f, 0.545f, 0.506f, 0.5f };
+			ImVec4 Border{ 0.5882353186607361f, 0.5882353186607361f, 0.5882353186607361f, 0.5882353186607361f };
 		} Palette;
 		struct StatusPaletteColors
 		{

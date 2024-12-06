@@ -41,6 +41,7 @@ void Streamline::DrawSettings()
 		}
 		if (ImGui::TreeNodeEx("AMD FSR 3.1 Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Text("Not currently supported");
+			ImGui::TreePop();
 		}
 	}
 }
