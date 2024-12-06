@@ -49,6 +49,7 @@ public:
 	ID3D11ComputeShader* mainCompositeInteriorCS = nullptr;
 
 	bool inWorld = false;
+	bool inBlendedDecals = false;
 	bool inDecals = false;
 	bool deferredPass = false;
 
@@ -102,16 +103,63 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct Main_RenderWorld_Decals
+		struct Main_RenderWorld_BlendedDecals
 		{
 			static void thunk(RE::BSShaderAccumulator* This, uint32_t RenderFlags)
 			{
+				// Deferred blended decals
+				GetSingleton()->inBlendedDecals = true;
+				func(This, RenderFlags);
+				GetSingleton()->inBlendedDecals = false;
+
 				GetSingleton()->EndDeferred();
-				// After this point, blended decals start rendering
+
+				// Blended decals
 				GetSingleton()->inDecals = true;
 				func(This, RenderFlags);
 				GetSingleton()->inDecals = false;
+
 				// After this point, water starts rendering
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSShaderAccumulator_BlendedDecals_RenderGeometryGroup
+		{
+			static void thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges, uint32_t RenderFlags, int GeometryGroup)
+			{
+				if (GetSingleton()->inBlendedDecals) {
+					func(This, StartRange, EndRanges, RenderFlags, 12);
+				} else {
+					func(This, StartRange, EndRanges, RenderFlags, GeometryGroup);
+				}
+			}
+
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSShaderAccumulator_FirstPerson_BlendedDecals
+		{
+			static void thunk(RE::BSShaderAccumulator* This, uint32_t RenderFlags)
+			{
+				GetSingleton()->inBlendedDecals = true;
+				func(This, RenderFlags);
+				GetSingleton()->inBlendedDecals = false;
+				func(This, RenderFlags);
+				GetSingleton()->inDecals = false;
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSShaderAccumulator_ShadowMapOrMask_BlendedDecals
+		{
+			static void thunk(RE::BSShaderAccumulator* This, uint32_t RenderFlags)
+			{
+				GetSingleton()->inBlendedDecals = true;
+				func(This, RenderFlags);
+				GetSingleton()->inBlendedDecals = false;
+				func(This, RenderFlags);
+				GetSingleton()->inDecals = false;
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -120,7 +168,13 @@ public:
 		{
 			stl::write_thunk_call<Main_RenderWorld>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x831, 0x841, 0x791));
 			stl::write_thunk_call<Main_RenderWorld_Start>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x8E, 0x84));
-			stl::write_thunk_call<Main_RenderWorld_Decals>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x319, 0x308, 0x321));
+			stl::write_thunk_call<Main_RenderWorld_BlendedDecals>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x319, 0x308, 0x321));
+
+			stl::write_thunk_call<BSShaderAccumulator_BlendedDecals_RenderGeometryGroup>(REL::RelocationID(99942, 106587).address() + REL::Relocate(0x111, 0x112));
+
+			stl::write_thunk_call<BSShaderAccumulator_FirstPerson_BlendedDecals>(REL::RelocationID(99943, 106588).address() + REL::Relocate(0xFE, 0xF4));
+			stl::write_thunk_call<BSShaderAccumulator_ShadowMapOrMask_BlendedDecals>(REL::RelocationID(99947, 106592).address() + 0x107);
+
 			logger::info("[Deferred] Installed hooks");
 		}
 	};

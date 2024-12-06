@@ -1,9 +1,5 @@
 namespace WaterEffects
 {
-	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	// PARALLAX
-	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 	// https://github.com/tgjones/slimshader-cpp/blob/master/src/Shaders/Sdk/Direct3D11/DetailTessellation11/POM.hlsl
 	// https://github.com/alandtse/SSEShaderTools/blob/main/shaders_vr/ParallaxEffect.h
 
@@ -46,7 +42,8 @@ namespace WaterEffects
 		heights.x = Normals01Tex.SampleLevel(Normals01Sampler, input.TexCoord1.xy + currentOffset * normalScalesRcp.x, mipLevels.x).w;
 		heights.y = Normals02Tex.SampleLevel(Normals02Sampler, input.TexCoord1.zw + currentOffset * normalScalesRcp.y, mipLevels.y).w;
 		heights.z = Normals03Tex.SampleLevel(Normals03Sampler, input.TexCoord2.xy + currentOffset * normalScalesRcp.z, mipLevels.z).w;
-		return 1.0 - length(heights);
+		heights *= NormalsAmplitude.xyz;
+		return 1.0 - (heights.x + heights.y + heights.z);
 	}
 
 	float2 GetParallaxOffset(PS_INPUT input, float3 normalScalesRcp)

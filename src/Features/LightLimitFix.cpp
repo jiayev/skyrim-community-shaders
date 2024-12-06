@@ -935,7 +935,7 @@ void LightLimitFix::UpdateLights()
 				light.color = Saturation(light.color, settings.ParticleLightsSaturation);
 
 				light.color *= particleLight.color.alpha * settings.BillboardBrightness;
-				light.radius = particleLight.node->worldBound.radius * particleLight.color.alpha * settings.BillboardRadius;
+				light.radius = particleLight.node->worldBound.radius * particleLight.color.alpha * settings.BillboardRadius * 0.5f;
 
 				auto position = particleLight.node->world.translate;
 
