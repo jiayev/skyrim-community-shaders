@@ -4,24 +4,24 @@ namespace LightLimitFix
 
 #include "LightLimitFix/Common.hlsli"
 
-	struct StrictLightData
+	cbuffer StrictLightData : register(b3)
 	{
-		Light StrictLights[15];
 		uint NumStrictLights;
 		int RoomIndex;
-		uint pad0[2];
+		Light StrictLights[15];
 	};
 
 	StructuredBuffer<Light> lights : register(t35);
 	StructuredBuffer<uint> lightList : register(t36);       //MAX_CLUSTER_LIGHTS * 16^3
 	StructuredBuffer<LightGrid> lightGrid : register(t37);  //16^3
-	StructuredBuffer<StrictLightData> strictLights : register(t38);
 
 	bool GetClusterIndex(in float2 uv, in float z, inout uint clusterIndex)
 	{
 		const uint3 clusterSize = SharedData::lightLimitFixSettings.ClusterSize.xyz;
 
-		if (z < SharedData::CameraData.y || z > SharedData::CameraData.x)
+		z = max(z, SharedData::CameraData.y);
+
+		if (z > SharedData::CameraData.x)
 			return false;
 
 		float clampedZ = clamp(z, SharedData::CameraData.y, SharedData::CameraData.x);
@@ -114,9 +114,9 @@ namespace LightLimitFix
 	bool IsLightIgnored(Light light)
 	{
 		bool lightIgnored = false;
-		if ((light.lightFlags & LightFlags::PortalStrict) && strictLights[0].RoomIndex >= 0) {
+		if ((light.lightFlags & LightFlags::PortalStrict) && RoomIndex >= 0) {
 			lightIgnored = true;
-			int roomIndex = strictLights[0].RoomIndex;
+			int roomIndex = RoomIndex;
 			[unroll] for (int flagsIndex = 0; flagsIndex < 4; ++flagsIndex)
 			{
 				if (roomIndex < 32) {
