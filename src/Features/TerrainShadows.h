@@ -18,7 +18,7 @@ struct TerrainShadows : public Feature
 
 	struct Settings
 	{
-		uint EnableTerrainShadow = true;
+		bool EnableTerrainShadow = true;
 	} settings;
 
 	bool needPrecompute = false;
