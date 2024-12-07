@@ -1,7 +1,6 @@
 Texture naming scheme:
-[worldspace editorID].HeigthMap.[West cell].[South cell].[East cell].[North cell].[z black].[z white].[z min].[z max].dds
+[worldspace editorID].HeightMap.[West cell].[South cell].[East cell].[North cell].[z black].[z white].[z min].[z max].dds
 
-- Notice the prefix is HeigthMap, not HeigthMap.Terrain from xLodGen.
 - The min/max cell coordinates are the actual cells that contain terrain height data.
 - All z values are actual z values divided by 8.
 - z black/white are the lowest and highest possible z value your texture might represent, i.e. the z values of pure black and pure white pixels.
