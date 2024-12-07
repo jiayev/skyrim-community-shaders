@@ -26,7 +26,7 @@ void TerrainShadows::SaveSettings(json& o_json)
 
 void TerrainShadows::DrawSettings()
 {
-	ImGui::Checkbox("Enable Terrain Shadow", (bool*)&settings.EnableTerrainShadow);
+	ImGui::Checkbox("Enable Terrain Shadow", &settings.EnableTerrainShadow);
 
 	if (ImGui::CollapsingHeader("Debug")) {
 		std::string curr_worldspace = "N/A";
@@ -384,9 +384,7 @@ void TerrainShadows::Prepass()
 	{
 		auto context = State::GetSingleton()->context;
 
-		std::array<ID3D11ShaderResourceView*, 3> srvs = { nullptr };
-		if (texShadowHeight)
-			srvs.at(2) = texShadowHeight->srv.get();
+		std::array<ID3D11ShaderResourceView*, 1> srvs = { texShadowHeight->srv.get() };
 		context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
 	}
 }
