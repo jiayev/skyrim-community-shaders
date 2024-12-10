@@ -207,7 +207,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	float3 shadow = 1.0;
 
 	float3 pos_world = pos + float3(0, 0, info.bottom_z);
-	float3 pos_world_relative = pos_world - CameraPosAdjust[eye_index].xyz;
+	float3 pos_world_relative = pos_world - FrameBuffer::CameraPosAdjust[eye_index].xyz;
 	float3 pos_planet = pos_world_relative + float3(0, 0, info.planet_radius - info.bottom_z);
 
 	// earth shadowing
@@ -267,7 +267,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 		// float3 vis_pos = pos + sun_dir * visibility_stride * (visibility_step + 1);
 		// getOrthographicUV(vis_pos, uv, depth);
 		// if (all(uv > 0) && all(uv < 1)) {
-		// 	float3 cloud_shadow_sample = TexBeerShadowMap.SampleLevel(TransmittanceSampler, uv, 1 + length(vis_pos - CameraPosAdjust[eye_index].xyz) / 1.428e-5f);
+		// 	float3 cloud_shadow_sample = TexBeerShadowMap.SampleLevel(TransmittanceSampler, uv, 1 + length(vis_pos - FrameBuffer::CameraPosAdjust[eye_index].xyz) / 1.428e-5f);
 		// 	cloud_density += min(cloud_shadow_sample.b, cloud_shadow_sample.g * max(0, depth - cloud_shadow_sample.r));
 		// }
 
@@ -315,7 +315,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	initRayMarchInfo(ray);
 
 	const float solid_dist = length(pos_world.xyz);
-	ray.eye_pos = CameraPosAdjust[eye_index].xyz - float3(0, 0, info.bottom_z);
+	ray.eye_pos = FrameBuffer::CameraPosAdjust[eye_index].xyz - float3(0, 0, info.bottom_z);
 	ray.ray_dir = pos_world.xyz / solid_dist;
 	snapMarch(ray, bottom, ceil, is_sky ? 16 / 1.428e-5f : min(16 / 1.428e-5f, solid_dist));
 
@@ -419,7 +419,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	const float2 rcp_dims = rcp(dims);
 	const float2 uv = (px_coords + 0.5) * rcp_dims;
 
-	const float3 target = CameraPosAdjust[0].xyz - float3(0, 0, info.bottom_z);
+	const float3 target = FrameBuffer::CameraPosAdjust[0].xyz - float3(0, 0, info.bottom_z);
 	const float3 eye = target + info.dirlight_dir * 1000 / 1.428e-5f;
 	const float3 up = abs(info.dirlight_dir.z) == 1 ? float3(1, 0, 0) : float3(0, 0, 1);
 
