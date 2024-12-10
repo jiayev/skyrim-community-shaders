@@ -531,7 +531,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 #		if defined(PHYS_SKY)
 	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
 		color = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
-		color *= getDirlightTransmittance(worldPosition + CameraPosAdjust[eyeIndex], SampDepthSampler);
+		color *= getDirlightTransmittance(worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex], SampDepthSampler);
 		color = Color::LinearToGamma(color) / Color::LightPreMult;
 	}
 #		endif
