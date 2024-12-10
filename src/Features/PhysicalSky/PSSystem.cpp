@@ -8,6 +8,8 @@
 constexpr float g_game_unit_2_km = 1.428e-5f;
 constexpr float g_km_2_game_unit = 1 / g_game_unit_2_km;
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(WorldspaceInfo, name, bottom_z)
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Orbit, azimuth, zenith, drift);
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Trajectory,
 	minima, maxima,
@@ -35,10 +37,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PhysicalSky::Settings,
 	multiscatter_sqrt_samples,
 	skyview_step,
 	aerial_perspective_max_dist,
-	bottom_z,
 	planet_radius,
 	atmos_thickness,
 	ground_albedo,
+	worldspace_whitelist,
 	enable_vanilla_clouds,
 	cloud_height,
 	cloud_saturation,
@@ -139,8 +141,19 @@ void PhysicalSky::SaveSettings(json& o_json)
 
 void PhysicalSky::UpdateBuffer()
 {
+	bool all_set = CheckComputeShaders();
+
+	// check worldspace
+	auto worldspace_it = std::ranges::find_if(settings.worldspace_whitelist, [](const auto& info) {
+		if (auto tes = RE::TES::GetSingleton(); tes)
+			if (auto worldspace = tes->GetRuntimeData2().worldSpace; worldspace)
+				return info.name == worldspace->GetFormEditorID();
+		return false;
+	});
+	all_set = worldspace_it != settings.worldspace_whitelist.end();
+
 	float sun_aperture_cos = cos(settings.celestials.sun_angular_radius);
-	float sun_aperture_rcp_sin = 1.f / sqrt(1 - sun_aperture_cos * sun_aperture_cos);  // I trust u compiler
+	float sun_aperture_rcp_sin = 1.f / sqrt(1 - sun_aperture_cos * sun_aperture_cos);
 
 	float2 res = State::GetSingleton()->screenSize;
 	float2 dynres = Util::ConvertToDynamic(res);
@@ -149,22 +162,22 @@ void PhysicalSky::UpdateBuffer()
 	float fog_mult = exp(settings.fog_bottom * settings.fog_decay);
 
 	phys_sky_sb_data = {
-		.enable_sky = settings.enable_sky && NeedLutsUpdate(),
+		.enable_sky = settings.enable_sky && all_set,
 		.transmittance_step = settings.transmittance_step,
 		.multiscatter_step = settings.multiscatter_step,
 		.multiscatter_sqrt_samples = settings.multiscatter_sqrt_samples,
 		.skyview_step = settings.skyview_step,
 		.aerial_perspective_max_dist = settings.aerial_perspective_max_dist,
-		.bottom_z = settings.bottom_z,
+		.shadow_volume_range = settings.shadow_volume_range,
+		.ray_march_range = settings.ray_march_range,
+		.fog_max_step = settings.fog_max_step,
+		.cloud_max_step = settings.cloud_max_step,
+		.bottom_z = worldspace_it != settings.worldspace_whitelist.end() ? worldspace_it->bottom_z : 0,
 		.planet_radius = settings.planet_radius,
 		.atmos_thickness = settings.atmos_thickness,
 		.ground_albedo = settings.ground_albedo,
-		.ap_enhancement = settings.ap_enhancement,
 		.override_dirlight_color = settings.override_dirlight_color,
 		.dirlight_transmittance_mix = settings.override_dirlight_color ? 1.f : settings.dirlight_transmittance_mix,
-		.cloud_ms_mult = settings.cloud_ms_mult,
-		.cloud_ms_transmittance_power = settings.cloud_ms_transmittance_power,
-		.cloud_ms_height_power = settings.cloud_ms_height_power,
 		.enable_vanilla_clouds = settings.enable_vanilla_clouds,
 		.cloud_height = settings.cloud_height,
 		.cloud_saturation = settings.cloud_saturation,
@@ -196,6 +209,7 @@ void PhysicalSky::UpdateBuffer()
 		.fog_absorption = settings.fog_absorption * fog_mult,
 		.fog_decay = settings.fog_decay,
 		.fog_h_max = settings.fog_bottom + settings.fog_thickness,
+		.fog_ambient_mult = settings.fog_ambient_mult,
 		.cloud_layer = settings.cloud_layer.layer,
 
 		.tex_dim = res,
@@ -216,6 +230,8 @@ void PhysicalSky::UpdateBuffer()
 	};
 
 	phys_sky_sb_data.aerial_perspective_max_dist *= g_km_2_game_unit;
+	phys_sky_sb_data.shadow_volume_range *= g_km_2_game_unit;
+	phys_sky_sb_data.ray_march_range *= g_km_2_game_unit;
 	phys_sky_sb_data.planet_radius *= g_km_2_game_unit;
 	phys_sky_sb_data.atmos_thickness *= g_km_2_game_unit;
 	phys_sky_sb_data.cloud_height *= g_km_2_game_unit;
@@ -249,7 +265,7 @@ void PhysicalSky::UpdateOrbitsAndHeight()
 	RE::NiPoint3 cam_pos = { 0, 0, 0 };
 	if (auto cam = RE::PlayerCamera::GetSingleton(); cam && cam->cameraRoot) {
 		cam_pos = cam->cameraRoot->world.translate;
-		phys_sky_sb_data.cam_height_planet = (cam_pos.z - settings.bottom_z) + settings.planet_radius * g_km_2_game_unit;
+		phys_sky_sb_data.cam_height_planet = (cam_pos.z - phys_sky_sb_data.bottom_z) + settings.planet_radius * g_km_2_game_unit;
 	}
 
 	// orbits

@@ -5,6 +5,12 @@
 
 //////////////////////////////////////////////////////////////////////////
 
+struct WorldspaceInfo
+{
+	std::string name = "EDITOR ID";
+	float bottom_z = -14000.f;
+};
+
 struct Orbit
 {
 	// in rad
@@ -39,16 +45,23 @@ struct CloudLayer
 	// ndf
 	float2 ndf_scale_or_freq = { 16.f, 16.f };  // km
 	// noise
-	float noise_scale_or_freq = 0.3f;     // km^-1
+	float noise_scale_or_freq = 0.2f;     // km^-1
 	float3 noise_offset_or_speed{ 0.f };  // moving speed in settings, offset in game
 
-	float2 remap_in = { 0.f, 1.f };
-	float2 remap_out = { 0.f, 1.f };
-	float power = 1.f;
+	float power = 1.0f;
 
 	// density
-	float3 scatter{ 90.f };
-	float3 absorption{ 10.f };
+	float3 scatter{ 100.f };
+	float3 absorption{ 0.f };
+
+	// visuals
+	float average_density = 0.02;
+
+	float ms_mult = 5.0f;
+	float ms_transmittance_power = 0.15f;
+	float ms_height_power = 0.7f;
+
+	float ambient_mult = 1.0f;
 };
 
 struct CloudLayerSettings
@@ -87,8 +100,8 @@ struct PhysicalSky : public Feature
 	constexpr static uint16_t s_aerial_perspective_width = 32;
 	constexpr static uint16_t s_aerial_perspective_height = 32;
 	constexpr static uint16_t s_aerial_perspective_depth = 32;
-	constexpr static uint16_t s_shadow_map_width = 768;  // from rdr2
-	constexpr static uint16_t s_shadow_map_height = 768;
+	constexpr static uint16_t s_shadow_volume_size = 256;
+	constexpr static uint16_t s_shadow_volume_height = 64;
 	constexpr static uint16_t s_noise_size = 128;  // from nubis
 
 	static PhysicalSky* GetSingleton()
@@ -116,13 +129,20 @@ struct PhysicalSky : public Feature
 		uint skyview_step = 30;
 		float aerial_perspective_max_dist = 80;  // in km
 
+		float shadow_volume_range = 8;  // in km
+
+		float ray_march_range = 32;  // in km
+		uint fog_max_step = 45;
+		uint cloud_max_step = 97;
+
 		// WORLD
-		float bottom_z = -15000;        // in game unit
 		float planet_radius = 6.36e3f;  // 6360 km
 		float atmos_thickness = 100.f;  // 20 km
 		float3 ground_albedo = { .2f, .2f, .2f };
 
-		float ap_enhancement = 3.f;
+		std::vector<WorldspaceInfo> worldspace_whitelist = {
+			{ "Tamriel", -14000.f }
+		};
 
 		// LIGHTING
 		float3 sunlight_color = float3{ 1.0f, 0.949f, 0.937f } * 6.f;
@@ -135,10 +155,6 @@ struct PhysicalSky : public Feature
 		float3 secunda_moonlight_color = float3{ .9f, .9f, 1.f } * .03f;
 
 		float2 light_transition_angles = float2{ -10.f, -14.f } * RE::NI_PI / 180.0;
-
-		float cloud_ms_mult = 5.0;
-		float cloud_ms_transmittance_power = 0.15;
-		float cloud_ms_height_power = 0.7;
 
 		bool enable_vanilla_clouds = false;
 		float cloud_height = 4.f;  // km
@@ -210,11 +226,12 @@ struct PhysicalSky : public Feature
 		float ozone_thickness = 35.66071f;
 
 		// OTHER VOLUMETRICS
-		float3 fog_scatter = { .3f, .3f, .3f };  // in km^-1
-		float3 fog_absorption = { .03f, .03f, .03f };
+		float3 fog_scatter = { 1.f, 1.f, 1.f };  // in km^-1
+		float3 fog_absorption = { .1f, .1f, .1f };
 		float fog_decay = 10.f;
 		float fog_bottom = 0.f;
 		float fog_thickness = .5f;
+		float fog_ambient_mult = 0.5f;
 
 		CloudLayerSettings cloud_layer = {};
 	} settings;
@@ -229,6 +246,11 @@ struct PhysicalSky : public Feature
 		uint multiscatter_sqrt_samples;
 		uint skyview_step;
 		float aerial_perspective_max_dist;
+		float shadow_volume_range;
+
+		float ray_march_range;
+		uint fog_max_step;
+		uint cloud_max_step;
 
 		// WORLD
 		float bottom_z;
@@ -236,15 +258,9 @@ struct PhysicalSky : public Feature
 		float atmos_thickness;
 		float3 ground_albedo;
 
-		float ap_enhancement;
-
 		// LIGHTING
 		uint override_dirlight_color;
 		float dirlight_transmittance_mix;
-
-		float cloud_ms_mult;
-		float cloud_ms_transmittance_power;
-		float cloud_ms_height_power;
 
 		uint enable_vanilla_clouds;
 		float cloud_height;
@@ -288,6 +304,7 @@ struct PhysicalSky : public Feature
 		float3 fog_absorption;
 		float fog_decay;
 		float fog_h_max;
+		float fog_ambient_mult;
 
 		CloudLayer cloud_layer;
 
@@ -318,7 +335,7 @@ struct PhysicalSky : public Feature
 	eastl::unique_ptr<Texture3D> aerial_perspective_lut = nullptr;
 	eastl::unique_ptr<Texture2D> main_view_tr_tex = nullptr;
 	eastl::unique_ptr<Texture2D> main_view_lum_tex = nullptr;
-	eastl::unique_ptr<Texture2D> shadow_map_tex = nullptr;
+	eastl::unique_ptr<Texture3D> shadow_volume_tex = nullptr;
 
 	winrt::com_ptr<ID3D11ShaderResourceView> ndf_tex_srv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> cloud_top_lut_srv = nullptr;
@@ -331,7 +348,7 @@ struct PhysicalSky : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> sky_view_program = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> aerial_perspective_program = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> main_view_program = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> shadow_map_program = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> shadow_volume_program = nullptr;
 
 	winrt::com_ptr<ID3D11SamplerState> tileable_sampler = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> transmittance_sampler = nullptr;
@@ -345,10 +362,9 @@ struct PhysicalSky : public Feature
 
 	inline bool CheckComputeShaders()
 	{
-		bool result = transmittance_program && multiscatter_program && sky_view_program && aerial_perspective_program && shadow_map_program;
+		bool result = transmittance_program && multiscatter_program && sky_view_program && aerial_perspective_program && shadow_volume_program;
 		return result;
 	}
-	bool NeedLutsUpdate();
 
 	virtual void Reset() override;
 	void UpdateBuffer();
@@ -356,7 +372,7 @@ struct PhysicalSky : public Feature
 
 	virtual void DrawSettings() override;
 	void SettingsGeneral();
-	void SettingsWorld();
+	void SettingsWorldspace();
 	void SettingsLighting();
 	void SettingsClouds();
 	void SettingsCelestials();

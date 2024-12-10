@@ -66,22 +66,36 @@ void TextureCombo(const char* label, std::string& target, const TextureManager& 
 
 void CloudLayerEdit(CloudLayerSettings& cloud)
 {
-	ImGui::SliderFloat("Layer Bottom", &cloud.layer.bottom, 0.f, 8.f, "%.2f km");
-	ImGui::SliderFloat("Layer Thickness", &cloud.layer.thickness, 0.f, 2.f, "%.2f km");
+	ImGui::SeparatorText("Placement");
 
-	ImGui::Separator();
+	ImGui::SliderFloat("Layer Bottom", &cloud.layer.bottom, 0.f, 2.f, "%.2f km");
+	ImGui::SliderFloat("Layer Thickness", &cloud.layer.thickness, 0.05f, 2.f, "%.2f km");
+
+	ImGui::SeparatorText("Optics");
 
 	ImGui::ColorEdit3("Scatter", &cloud.layer.scatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 	ImGui::ColorEdit3("Absorption", &cloud.layer.absorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 
-	ImGui::Separator();
+	ImGui::SeparatorText("Composition");
 
-	ImGui::SliderFloat2("Remap In", &cloud.layer.remap_in.x, -1.f, 2.f, "%.3f");
-	ImGui::SliderFloat2("Remap Out", &cloud.layer.remap_out.x, 0.f, 1.f, "%.3f");
-	ImGui::SliderFloat("Power", &cloud.layer.power, 0.2, 5, "%.3f");
+	ImGui::SliderFloat2("NDF Scale", &cloud.layer.ndf_scale_or_freq.x, 1.f, 50.f, "%.2f km");
 
 	ImGui::SliderFloat("Noise Scale", &cloud.layer.noise_scale_or_freq, 0.01f, 5.f, "%.3f km");
 	ImGui::SliderFloat3("Noise Velocity", &cloud.layer.noise_offset_or_speed.x, -30.f, 30.f, "%.3f m/s");
+
+	ImGui::SliderFloat("Post Power", &cloud.layer.power, 0.2, 5, "%.3f");
+
+	ImGui::SeparatorText("Lighting");
+
+	ImGui::SliderFloat("Average Density", &cloud.layer.average_density, 0.f, 0.1f, "%.3f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("For approximating shadowing on far away clouds.");
+
+	ImGui::SliderFloat("Multiscatter Mult", &cloud.layer.ms_mult, 0.1f, 10.f, "%.2f");
+	ImGui::SliderFloat("Multiscatter Transmittance Power", &cloud.layer.ms_transmittance_power, 0.1f, 1.f, "%.2f");
+	ImGui::SliderFloat("Multiscatter Altitude Power", &cloud.layer.ms_height_power, 0.2f, 5.f, "%.2f");
+
+	ImGui::SliderFloat("Ambient Strength", &cloud.layer.ambient_mult, 0.f, 5.f);
 }
 
 void PhysicalSky::DrawSettings()
@@ -92,8 +106,8 @@ void PhysicalSky::DrawSettings()
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem("World")) {
-			SettingsWorld();
+		if (ImGui::BeginTabItem("Worldspace")) {
+			SettingsWorldspace();
 			ImGui::EndTabItem();
 		}
 
@@ -143,27 +157,21 @@ void PhysicalSky::SettingsGeneral()
 
 	ImGui::Checkbox("Enable Physcial Sky", &settings.enable_sky);
 
-	ImGui::SeparatorText("Performance");
-	{
+	if (ImGui::CollapsingHeader("Performance")) {
 		ImGui::DragScalar("Transmittance Steps", ImGuiDataType_U32, &settings.transmittance_step);
 		ImGui::DragScalar("Multiscatter Steps", ImGuiDataType_U32, &settings.multiscatter_step);
 		ImGui::DragScalar("Multiscatter Sqrt Samples", ImGuiDataType_U32, &settings.multiscatter_sqrt_samples);
 		ImGui::DragScalar("Sky View Steps", ImGuiDataType_U32, &settings.skyview_step);
 		ImGui::SliderFloat("Aerial Perspective Max Dist", &settings.aerial_perspective_max_dist, 0, settings.atmos_thickness, "%.3f km");
+		ImGui::SliderFloat("Shadow Volume Range", &settings.shadow_volume_range, 0, 16, "%.1f km");
+
+		ImGui::SliderFloat("Ray March Range", &settings.ray_march_range, 0, 64, "%.1f km");
+		uint min_step = 1, max_step = 120;
+		ImGui::SliderScalar("Fog Max Steps", ImGuiDataType_U32, &settings.fog_max_step, &min_step, &max_step);
+		ImGui::SliderScalar("Cloud Max Steps", ImGuiDataType_U32, &settings.cloud_max_step, &min_step, &max_step);
 	}
-}
-void PhysicalSky::SettingsWorld()
-{
-	ImGui::TextWrapped("The planetary properties of Nirn, or the nearest macroscopic part of it.");
 
-	ImGui::SeparatorText("Scale");
-	{
-		ImGui::InputFloat("Bottom Z", &settings.bottom_z, 0, 0, "%.3f game unit");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(
-				"The lowest elevation of the worldspace you shall reach. "
-				"You can check it by standing at sea level and using \"getpos z\" console command.");
-
+	if (ImGui::CollapsingHeader("Scale")) {
 		ImGui::SliderFloat("Planet Radius", &settings.planet_radius, 0.f, 1e4f, "%.1f km");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("The supposed radius of the planet Nirn, or whatever rock you are on.");
@@ -171,69 +179,51 @@ void PhysicalSky::SettingsWorld()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("The thickness of atmosphere that contributes to lighting.");
 	}
+}
 
-	ImGui::SeparatorText("Misc");
+void PhysicalSky::SettingsWorldspace()
+{
+	ImGui::TextWrapped("Register worldspaces that has physical sky enabled.");
 
-	ImGui::SliderFloat("Aerial Perspective Enhancement", &settings.ap_enhancement, 1.f, 10.f);
+	if (ImGui::BeginTable("Worldspace List", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable)) {
+		ImGui::TableSetupColumn("Editor ID");
+		ImGui::TableSetupColumn("Bottom Z");
+		ImGui::TableSetupColumn("Action");
+		ImGui::TableHeadersRow();
 
-	ImGui::ColorEdit3("Ground Albedo", &settings.ground_albedo.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_DisplayHSV);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("How much light gets reflected from the ground far away.");
-		ImGui::Text("A neat chart from wiki and other sources:");
-		// http://www.climatedata.info/forcing/albedo/
-		if (ImGui::BeginTable("Albedo Table", 2)) {
-			ImGui::TableNextColumn();
-			ImGui::Text("Open ocean");
-			ImGui::TableNextColumn();
-			ImGui::Text("0.06");
-
-			ImGui::TableNextColumn();
-			ImGui::Text("Conifer forest, summer");
-			ImGui::TableNextColumn();
-			ImGui::Text("0.08 to 0.15");
+		int i = 0;
+		std::optional<int> mark_delete = std::nullopt;
+		for (auto& worldspace : settings.worldspace_whitelist) {
+			ImGui::PushID(i);
 
 			ImGui::TableNextColumn();
-			ImGui::Text("Deciduous forest");
-			ImGui::TableNextColumn();
-			ImGui::Text("0.15 to 0.18");
+			ImGui::SetNextItemWidth(-FLT_MIN);
+			ImGui::InputText("##name", &worldspace.name);
 
 			ImGui::TableNextColumn();
-			ImGui::Text("Bare soil");
-			ImGui::TableNextColumn();
-			ImGui::Text("0.17");
+			ImGui::SetNextItemWidth(-FLT_MIN);
+			ImGui::InputFloat("##Bottom Z", &worldspace.bottom_z, 0, 0, "%.1f game unit");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text(
+					"The lowest elevation of the worldspace you can reach. "
+					"You can check it by standing at sea level and using \"getpos z\" console command.");
 
 			ImGui::TableNextColumn();
-			ImGui::Text("Tundra");
-			ImGui::TableNextColumn();
-			ImGui::Text("0.20");
+			if (ImGui::Button("Delete"))
+				mark_delete = i;
 
-			ImGui::TableNextColumn();
-			ImGui::Text("Green grass");
-			ImGui::TableNextColumn();
-			ImGui::Text("0.25");
+			ImGui::PopID();
 
-			ImGui::TableNextColumn();
-			ImGui::Text("Desert sand");
-			ImGui::TableNextColumn();
-			ImGui::Text("0.40");
-
-			ImGui::TableNextColumn();
-			ImGui::Text("Old/melting snow");
-			ImGui::TableNextColumn();
-			ImGui::Text("0.40 to 0.80");
-
-			ImGui::TableNextColumn();
-			ImGui::Text("Ocean ice");
-			ImGui::TableNextColumn();
-			ImGui::Text("0.50 to 0.70");
-
-			ImGui::TableNextColumn();
-			ImGui::Text("Fresh snow");
-			ImGui::TableNextColumn();
-			ImGui::Text("0.80");
-
-			ImGui::EndTable();
+			i++;
 		}
+		if (mark_delete.has_value())
+			settings.worldspace_whitelist.erase(settings.worldspace_whitelist.begin() + mark_delete.value());
+
+		ImGui::TableNextColumn();
+		if (ImGui::Selectable("Add New Entry"))
+			settings.worldspace_whitelist.push_back({});
+
+		ImGui::EndTable();
 	}
 }
 
@@ -241,8 +231,7 @@ void PhysicalSky::SettingsLighting()
 {
 	ImGui::TextWrapped("How the sky is lit, as well as everything under the sun (or moon).");
 
-	ImGui::SeparatorText("Syncing");
-	{
+	if (ImGui::CollapsingHeader("Syncing", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Override Light Direction", &settings.override_dirlight_dir);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(
@@ -259,8 +248,7 @@ void PhysicalSky::SettingsLighting()
 				"With this on, everything will be lit by colors specified below.");
 	}
 
-	ImGui::SeparatorText("Sky");
-	{
+	if (ImGui::CollapsingHeader("Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::ColorEdit3("Sunlight Color", &settings.sunlight_color.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 
 		ImGui::BeginDisabled(settings.phase_dep_moonlight);
@@ -287,8 +275,7 @@ void PhysicalSky::SettingsLighting()
 			ImGui::Text("When the sun dips this much below the horizon, the sky will completely transition to being lit by moonlight.");
 	}
 
-	ImGui::SeparatorText("Misc");
-	{
+	if (ImGui::CollapsingHeader("Misc")) {
 		ImGui::BeginDisabled(settings.override_dirlight_color);
 		{
 			ImGui::SliderFloat("Light Transmittance Mix", &settings.dirlight_transmittance_mix, 0.f, 1.f, "%.2f");
@@ -297,9 +284,65 @@ void PhysicalSky::SettingsLighting()
 		}
 		ImGui::EndDisabled();
 
-		ImGui::SliderFloat("Cloud Multiscatter Mult", &settings.cloud_ms_mult, 0.1f, 10.f, "%.2f");
-		ImGui::SliderFloat("Cloud Multiscatter Transmittance Power", &settings.cloud_ms_transmittance_power, 0.1f, 1.f, "%.2f");
-		ImGui::SliderFloat("Cloud Multiscatter Altitude Power", &settings.cloud_ms_height_power, 0.2f, 5.f, "%.2f");
+		ImGui::ColorEdit3("Ground Albedo", &settings.ground_albedo.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_DisplayHSV);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("How much light gets reflected from the ground far away.");
+			ImGui::Text("A neat chart from wiki and other sources:");
+			// http://www.climatedata.info/forcing/albedo/
+			if (ImGui::BeginTable("Albedo Table", 2)) {
+				ImGui::TableNextColumn();
+				ImGui::Text("Open ocean");
+				ImGui::TableNextColumn();
+				ImGui::Text("0.06");
+
+				ImGui::TableNextColumn();
+				ImGui::Text("Conifer forest, summer");
+				ImGui::TableNextColumn();
+				ImGui::Text("0.08 to 0.15");
+
+				ImGui::TableNextColumn();
+				ImGui::Text("Deciduous forest");
+				ImGui::TableNextColumn();
+				ImGui::Text("0.15 to 0.18");
+
+				ImGui::TableNextColumn();
+				ImGui::Text("Bare soil");
+				ImGui::TableNextColumn();
+				ImGui::Text("0.17");
+
+				ImGui::TableNextColumn();
+				ImGui::Text("Tundra");
+				ImGui::TableNextColumn();
+				ImGui::Text("0.20");
+
+				ImGui::TableNextColumn();
+				ImGui::Text("Green grass");
+				ImGui::TableNextColumn();
+				ImGui::Text("0.25");
+
+				ImGui::TableNextColumn();
+				ImGui::Text("Desert sand");
+				ImGui::TableNextColumn();
+				ImGui::Text("0.40");
+
+				ImGui::TableNextColumn();
+				ImGui::Text("Old/melting snow");
+				ImGui::TableNextColumn();
+				ImGui::Text("0.40 to 0.80");
+
+				ImGui::TableNextColumn();
+				ImGui::Text("Ocean ice");
+				ImGui::TableNextColumn();
+				ImGui::Text("0.50 to 0.70");
+
+				ImGui::TableNextColumn();
+				ImGui::Text("Fresh snow");
+				ImGui::TableNextColumn();
+				ImGui::Text("0.80");
+
+				ImGui::EndTable();
+			}
+		}
 	}
 }
 
@@ -307,8 +350,7 @@ void PhysicalSky::SettingsClouds()
 {
 	ImGui::TextWrapped("Little fluffy clouds.");
 
-	ImGui::SeparatorText("Vanilla Clouds");
-	{
+	if (ImGui::CollapsingHeader("Vanilla Clouds")) {
 		ImGui::Checkbox("Enable Vanilla Clouds", &settings.enable_vanilla_clouds);
 
 		if (!(settings.enable_vanilla_clouds && settings.override_dirlight_color)) {
@@ -345,9 +387,8 @@ void PhysicalSky::SettingsCelestials()
 
 	ImGui::TextWrapped("How celestials look and move.");
 
-	ImGui::SeparatorText("Sun Disc");
-	ImGui::PushID("Sun");
-	{
+	if (ImGui::CollapsingHeader("Sun Disc", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::PushID("Sun");
 		ImGui::ColorEdit3("Color", &celestials.sun_disc_color.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		ImGui::SliderAngle("Angular Radius", &celestials.sun_angular_radius, 0.05, 5, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -365,12 +406,11 @@ void PhysicalSky::SettingsCelestials()
 
 			ImGui::TreePop();
 		}
+		ImGui::PopID();
 	}
-	ImGui::PopID();
 
-	ImGui::SeparatorText("Masser");
-	ImGui::PushID("Masser");
-	{
+	if (ImGui::CollapsingHeader("Masser", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::PushID("Masser");
 		ImGui::SliderFloat("Brightness", &celestials.masser_brightness, 0.f, 10.f, "%.2f");
 		ImGui::SliderAngle("Angular Radius", &celestials.masser_angular_radius, 0.05, 30, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
 
@@ -386,12 +426,11 @@ void PhysicalSky::SettingsCelestials()
 
 			ImGui::TreePop();
 		}
+		ImGui::PopID();
 	}
-	ImGui::PopID();
 
-	ImGui::SeparatorText("Secunda");
-	ImGui::PushID("Secunda");
-	{
+	if (ImGui::CollapsingHeader("Secunda", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::PushID("Secunda");
 		ImGui::SliderFloat("Brightness", &celestials.secunda_brightness, 0.f, 10.f, "%.2f");
 		ImGui::SliderAngle("Angular Radius", &celestials.secunda_angular_radius, 0.05, 30, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
 
@@ -407,23 +446,20 @@ void PhysicalSky::SettingsCelestials()
 
 			ImGui::TreePop();
 		}
+		ImGui::PopID();
 	}
-	ImGui::PopID();
 }
 
 void PhysicalSky::SettingsAtmosphere()
 {
 	ImGui::TextWrapped("The composition and physical properties of the atmosphere.");
 
-	ImGui::SeparatorText("Misc");
-
 	ImGui::SliderFloat("Atmosphere Thickness", &settings.atmos_thickness, 0.f, 200.f, "%.1f km");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("The thickness of atmosphere that contributes to lighting.");
 
-	ImGui::SeparatorText("Air Molecules (Rayleigh)");
-	ImGui::PushID("Rayleigh");
-	{
+	if (ImGui::CollapsingHeader("Air Molecules (Rayleigh)")) {
+		ImGui::PushID("Rayleigh");
 		ImGui::TextWrapped(
 			"Particles much smaller than the wavelength of light. They have almost complete symmetry in forward and backward scattering (Rayleigh Scattering). "
 			"On earth, they are what makes the sky blue and, at sunset, red. Usually needs no extra change.");
@@ -433,12 +469,11 @@ void PhysicalSky::SettingsAtmosphere()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Usually zero.");
 		ImGui::SliderFloat("Height Decay", &settings.rayleigh_decay, 0.f, 2.f);
+		ImGui::PopID();
 	}
-	ImGui::PopID();
 
-	ImGui::SeparatorText("Aerosol (Mie)");
-	ImGui::PushID("Mie");
-	{
+	if (ImGui::CollapsingHeader("Aerosol (Mie)")) {
+		ImGui::PushID("Mie");
 		ImGui::TextWrapped(
 			"Solid and liquid particles greater than 1/10 of the light wavelength but not too much, like dust. Strongly anisotropic (Mie Scattering). "
 			"They contributes to the aureole around bright celestial bodies.");
@@ -449,12 +484,11 @@ void PhysicalSky::SettingsAtmosphere()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Usually 1/9 of scatter coefficient. Dust/pollution is lower, fog is higher.");
 		ImGui::SliderFloat("Height Decay", &settings.aerosol_decay, 0.f, 2.f);
+		ImGui::PopID();
 	}
-	ImGui::PopID();
 
-	ImGui::SeparatorText("Ozone");
-	ImGui::PushID("Ozone");
-	{
+	if (ImGui::CollapsingHeader("Ozone")) {
+		ImGui::PushID("Ozone");
 		ImGui::TextWrapped(
 			"The ozone layer high up in the sky that mainly absorbs light of certain wavelength. "
 			"It keeps the zenith sky blue, especially at sunrise or sunset.");
@@ -462,26 +496,26 @@ void PhysicalSky::SettingsAtmosphere()
 		ImGui::ColorEdit3("Absorption", &settings.ozone_absorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		ImGui::DragFloat("Layer Altitude", &settings.ozone_altitude, .1f, 0.f, 100.f, "%.3f km");
 		ImGui::DragFloat("Layer Thickness", &settings.ozone_thickness, .1f, 0.f, 50.f, "%.3f km");
+		ImGui::PopID();
 	}
-	ImGui::PopID();
 }
 
 void PhysicalSky::SettingsLayers()
 {
 	ImGui::TextWrapped("Volumetric layers. Cloud, fog, mist, smog, toxic volcanic ash cloud, etc.");
 
-	ImGui::SeparatorText("Fog");
+	if (ImGui::CollapsingHeader("Fog")) {
+		ImGui::ColorEdit3("Scatter", &settings.fog_scatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3("Absorption", &settings.fog_absorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::SliderFloat("Height Decay", &settings.fog_decay, 0.1f, 30.f);
+		ImGui::SliderFloat("Layer Offset", &settings.fog_bottom, 0.f, 2.f, "%.3f km");
+		ImGui::SliderFloat("Layer Height", &settings.fog_thickness, 0.f, 1.f, "%.3f km");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("For optimization purposes.");
+		ImGui::SliderFloat("Ambient Strength", &settings.fog_ambient_mult, 0.f, 5.f);
+	}
 
-	ImGui::ColorEdit3("Scatter", &settings.fog_scatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-	ImGui::ColorEdit3("Absorption", &settings.fog_absorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-	ImGui::SliderFloat("Height Decay", &settings.fog_decay, 0.1f, 30.f);
-	ImGui::SliderFloat("Layer Offset", &settings.fog_bottom, 0.f, 2.f, "%.3f km");
-	ImGui::SliderFloat("Layer Height", &settings.fog_thickness, 0.f, 1.f, "%.3f km");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("For optimization purposes.");
-
-	ImGui::SeparatorText("Cloud");
-	{
+	if (ImGui::CollapsingHeader("Cloud")) {
 		ImGui::PushID("Cloud");
 		CloudLayerEdit(settings.cloud_layer);
 		ImGui::PopID();
@@ -496,7 +530,6 @@ void PhysicalSky::SettingsTextures()
 		ImGui::Text("NDF Tex Status: Loaded");
 	else
 		ImGui::Text("NDF Tex Status: Incomplete");
-	ImGui::SliderFloat2("NDF Scale", &settings.cloud_layer.layer.ndf_scale_or_freq.x, 1.f, 50.f, "%.2f km");
 
 	if (ImGui::TreeNodeEx("Noise Generator")) {
 		constexpr auto noise_types = std::array{
@@ -583,91 +616,95 @@ void PhysicalSky::SettingsDebug()
 {
 	ImGui::TextWrapped("Beep Boop.");
 
-	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
-	auto calendar = RE::Calendar::GetSingleton();
-	auto sky = RE::Sky::GetSingleton();
-	auto sun = sky->sun;
-	auto climate = sky->currentClimate;
-	auto dir_light = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
-
-	RE::NiPoint3 cam_pos = { 0, 0, 0 };
-	if (auto cam = RE::PlayerCamera::GetSingleton(); cam && cam->cameraRoot)
-		cam_pos = cam->cameraRoot->world.translate;
-
-	// ImGui::InputFloat("Timer", &phys_sky_sb_data.timer, 0, 0, "%.6f", ImGuiInputTextFlags_ReadOnly);
-
-	if (calendar) {
-		ImGui::SeparatorText("Calendar");
-
-		auto game_time = calendar->GetCurrentGameTime();
-		auto game_hour = calendar->GetHour();
-		auto game_day = calendar->GetDay();
-		auto game_month = calendar->GetMonth();
-		auto day_in_year = getDayInYear();
-		ImGui::Text("Game Time: %.3f", game_time);
-		ImGui::SameLine();
-		ImGui::Text("Hour: %.3f", game_hour);
-		ImGui::SameLine();
-		ImGui::Text("Day: %.3f", game_day);
-		ImGui::SameLine();
-		ImGui::Text("Month: %u", game_month);
-		ImGui::SameLine();
-		ImGui::Text("Day in Year: %.3f", day_in_year);
-
-		if (climate) {
-			auto sunrise = climate->timing.sunrise;
-			auto sunset = climate->timing.sunset;
-			ImGui::Text("Sunrise: %u-%u", sunrise.GetBeginTime().tm_hour, sunrise.GetEndTime().tm_hour);
-			ImGui::SameLine();
-			ImGui::Text("Sunset: %u-%u", sunset.GetBeginTime().tm_hour, sunset.GetEndTime().tm_hour);
-			ImGui::SameLine();
-		}
-
-		auto vanilla_sun_lerp = getVanillaSunLerpFactor();
-		ImGui::SameLine();
-		ImGui::Text("Vanilla sun lerp: %.3f", vanilla_sun_lerp);
+	if (ImGui::CollapsingHeader("Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::Button("Recompile Shaders"))
+			ClearShaderCache();
 	}
 
-	ImGui::SeparatorText("Celestials");
-	{
-		ImGui::InputFloat3("Mod Sun Direction", &phys_sky_sb_data.sun_dir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
-		if (sun) {
-			auto sun_dir = sun->sunBase->world.translate - cam_pos;
-			sun_dir.Unitize();
-			ImGui::InputFloat3("Vanilla Sun Mesh Direction", &sun_dir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+	if (ImGui::CollapsingHeader("Info")) {
+		auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
+		auto calendar = RE::Calendar::GetSingleton();
+		auto sky = RE::Sky::GetSingleton();
+		auto sun = sky->sun;
+		auto climate = sky->currentClimate;
+		auto dir_light = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
+
+		RE::NiPoint3 cam_pos = { 0, 0, 0 };
+		if (auto cam = RE::PlayerCamera::GetSingleton(); cam && cam->cameraRoot)
+			cam_pos = cam->cameraRoot->world.translate;
+
+		// ImGui::InputFloat("Timer", &phys_sky_sb_data.timer, 0, 0, "%.6f", ImGuiInputTextFlags_ReadOnly);
+
+		if (calendar) {
+			ImGui::SeparatorText("Calendar");
+
+			auto game_time = calendar->GetCurrentGameTime();
+			auto game_hour = calendar->GetHour();
+			auto game_day = calendar->GetDay();
+			auto game_month = calendar->GetMonth();
+			auto day_in_year = getDayInYear();
+			ImGui::Text("Game Time: %.3f", game_time);
+			ImGui::SameLine();
+			ImGui::Text("Hour: %.3f", game_hour);
+			ImGui::SameLine();
+			ImGui::Text("Day: %.3f", game_day);
+			ImGui::SameLine();
+			ImGui::Text("Month: %u", game_month);
+			ImGui::SameLine();
+			ImGui::Text("Day in Year: %.3f", day_in_year);
+
+			if (climate) {
+				auto sunrise = climate->timing.sunrise;
+				auto sunset = climate->timing.sunset;
+				ImGui::Text("Sunrise: %u-%u", sunrise.GetBeginTime().tm_hour, sunrise.GetEndTime().tm_hour);
+				ImGui::SameLine();
+				ImGui::Text("Sunset: %u-%u", sunset.GetBeginTime().tm_hour, sunset.GetEndTime().tm_hour);
+				ImGui::SameLine();
+			}
+
+			auto vanilla_sun_lerp = getVanillaSunLerpFactor();
+			ImGui::SameLine();
+			ImGui::Text("Vanilla sun lerp: %.3f", vanilla_sun_lerp);
 		}
-		if (dir_light) {
-			auto dirlight_dir = -dir_light->GetWorldDirection();
-			ImGui::InputFloat3("Vanilla Light Direction", &dirlight_dir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+
+		ImGui::SeparatorText("Celestials");
+		{
+			ImGui::InputFloat3("Mod Sun Direction", &phys_sky_sb_data.sun_dir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+			if (sun) {
+				auto sun_dir = sun->sunBase->world.translate - cam_pos;
+				sun_dir.Unitize();
+				ImGui::InputFloat3("Vanilla Sun Mesh Direction", &sun_dir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+			}
+			if (dir_light) {
+				auto dirlight_dir = -dir_light->GetWorldDirection();
+				ImGui::InputFloat3("Vanilla Light Direction", &dirlight_dir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+			}
+
+			ImGui::Text("Masser Phase: %s", magic_enum::enum_name((RE::Moon::Phase)current_moon_phases[0]).data());
+			ImGui::InputFloat3("Mod Masser Direction", &phys_sky_sb_data.masser_dir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+			ImGui::InputFloat3("Mod Masser Up", &phys_sky_sb_data.masser_upvec.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+
+			ImGui::Text("Secunda Phase: %s", magic_enum::enum_name((RE::Moon::Phase)current_moon_phases[1]).data());
+			ImGui::InputFloat3("Mod Secunda Direction", &phys_sky_sb_data.secunda_dir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+			ImGui::InputFloat3("Mod Secunda Up", &phys_sky_sb_data.secunda_upvec.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
 		}
 
-		ImGui::Text("Masser Phase: %s", magic_enum::enum_name((RE::Moon::Phase)current_moon_phases[0]).data());
-		ImGui::InputFloat3("Mod Masser Direction", &phys_sky_sb_data.masser_dir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
-		ImGui::InputFloat3("Mod Masser Up", &phys_sky_sb_data.masser_upvec.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+		ImGui::SeparatorText("Textures");
+		{
+			ImGui::BulletText("Transmittance LUT");
+			ImGui::Image((void*)(transmittance_lut->srv.get()), { s_transmittance_width, s_transmittance_height });
 
-		ImGui::Text("Secunda Phase: %s", magic_enum::enum_name((RE::Moon::Phase)current_moon_phases[1]).data());
-		ImGui::InputFloat3("Mod Secunda Direction", &phys_sky_sb_data.secunda_dir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
-		ImGui::InputFloat3("Mod Secunda Up", &phys_sky_sb_data.secunda_upvec.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
-	}
+			ImGui::BulletText("Multiscatter LUT");
+			ImGui::Image((void*)(multiscatter_lut->srv.get()), { s_multiscatter_width, s_multiscatter_height });
 
-	ImGui::SeparatorText("Textures");
-	{
-		ImGui::BulletText("Transmittance LUT");
-		ImGui::Image((void*)(transmittance_lut->srv.get()), { s_transmittance_width, s_transmittance_height });
+			ImGui::BulletText("Sky-View LUT");
+			ImGui::Image((void*)(sky_view_lut->srv.get()), { s_sky_view_width, s_sky_view_height });
 
-		ImGui::BulletText("Multiscatter LUT");
-		ImGui::Image((void*)(multiscatter_lut->srv.get()), { s_multiscatter_width, s_multiscatter_height });
+			ImGui::BulletText("Main View Transmittance");
+			ImGui::Image((void*)(main_view_tr_tex->srv.get()), { main_view_tr_tex->desc.Width * 0.2f, main_view_tr_tex->desc.Height * 0.2f });
 
-		ImGui::BulletText("Sky-View LUT");
-		ImGui::Image((void*)(sky_view_lut->srv.get()), { s_sky_view_width, s_sky_view_height });
-
-		ImGui::BulletText("Main View Transmittance");
-		ImGui::Image((void*)(main_view_tr_tex->srv.get()), { main_view_tr_tex->desc.Width * 0.2f, main_view_tr_tex->desc.Height * 0.2f });
-
-		ImGui::BulletText("Main View Luminance");
-		ImGui::Image((void*)(main_view_lum_tex->srv.get()), { main_view_lum_tex->desc.Width * 0.2f, main_view_lum_tex->desc.Height * 0.2f });
-
-		ImGui::BulletText("Shadow Map");
-		ImGui::Image((void*)(shadow_map_tex->srv.get()), { s_shadow_map_width, s_shadow_map_height });
+			ImGui::BulletText("Main View Luminance");
+			ImGui::Image((void*)(main_view_lum_tex->srv.get()), { main_view_lum_tex->desc.Width * 0.2f, main_view_lum_tex->desc.Height * 0.2f });
+		}
 	}
 }
