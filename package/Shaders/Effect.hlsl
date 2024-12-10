@@ -514,6 +514,10 @@ cbuffer PerGeometry : register(b2)
 #		include "CloudShadows/CloudShadows.hlsli"
 #	endif
 
+#	if defined(PHYS_SKY)
+#		include "PhysicalSky/PhysicalSky.hlsli"
+#	endif
+
 #	include "Common/ShadowSampling.hlsli"
 
 #	if defined(LIGHTING)
@@ -523,6 +527,14 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 
 	float3 color = DLightColor.xyz;
+
+#		if defined(PHYS_SKY)
+	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
+		color = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
+		color *= getDirlightTransmittance(worldPosition + CameraPosAdjust[eyeIndex], SampDepthSampler);
+		color = Color::LinearToGamma(color) / Color::LightPreMult;
+	}
+#		endif
 
 	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::EffectShadows) && !SharedData::InMapMenu && !SharedData::InInterior) {
 		float3 dirLightColor = SharedData::DirLightColor * 0.5;
