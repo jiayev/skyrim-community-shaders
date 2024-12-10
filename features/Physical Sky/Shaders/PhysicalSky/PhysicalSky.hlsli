@@ -1,6 +1,7 @@
 #include "Common/Color.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
+#include "Common/FrameBuffer.hlsli"
 #include "PhysicalSky/gpu_noise_lib.hlsl"
 
 struct CloudLayer
@@ -258,7 +259,7 @@ void getOrthographicUV(float3 pos, float3 eye, float3 target, float3 up, out flo
 
 void getOrthographicUV(float3 pos, out float2 uv, out float depth)
 {
-	const float3 target = CameraPosAdjust[0].xyz - float3(0, 0, PhysSkyBuffer[0].bottom_z);
+	const float3 target = FrameBuffer::CameraPosAdjust[0].xyz - float3(0, 0, PhysSkyBuffer[0].bottom_z);
 	const float3 eye = target + PhysSkyBuffer[0].dirlight_dir * 1000 / 1.428e-5f;
 	const float3 up = abs(PhysSkyBuffer[0].dirlight_dir.z) == 1 ? float3(1, 0, 0) : float3(0, 0, 1);
 	getOrthographicUV(pos, eye, target, up, uv, depth);
