@@ -1,3 +1,4 @@
+#include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
 #include "Common/MotionBlur.hlsli"
@@ -170,6 +171,10 @@ const static float DepthOffsets[16] = {
 #		include "CloudShadows/CloudShadows.hlsli"
 #	endif
 
+#	if defined(PHYS_SKY)
+#		include "PhysicalSky/PhysicalSky.hlsli"
+#	endif
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
@@ -211,6 +216,19 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 
+	// dirLightColor start
+	float3 dirLightColor = DirLightColorShared.xyz;
+
+#			if defined(PHYS_SKY)
+	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
+		dirLightColor = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
+		dirLightColor *= getDirlightTransmittance(input.WorldPosition + CameraPosAdjust[eyeIndex], SampDiffuse);
+		dirLightColor = Color::LinearToGamma(dirLightColor) / Color::LightPreMult;
+	}
+#			endif
+	// dirLightColor end
+
+	// dirShadow start
 	float dirShadow = 1;
 
 #			if defined(SCREEN_SPACE_SHADOWS)
@@ -229,6 +247,7 @@ PS_OUTPUT main(PS_INPUT input)
 		dirShadow *= CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, SampDiffuse);
 	}
 #			endif
+	// dirShadow end
 
 	float3 diffuseColor = SharedData::DirLightColor.xyz * dirShadow * 0.5;
 

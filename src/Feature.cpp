@@ -8,6 +8,7 @@
 #include "Features/GrassLighting.h"
 #include "Features/LightLimitFix.h"
 #include "Features/PostProcessing.h"
+#include "Features/PhysicalSky.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skylighting.h"
@@ -129,6 +130,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		DynamicCubemaps::GetSingleton(),
 		CloudShadows::GetSingleton(),
 		WaterEffects::GetSingleton(),
+		PhysicalSky::GetSingleton(),
 		SubsurfaceScattering::GetSingleton(),
 		TerrainShadows::GetSingleton(),
 		ScreenSpaceGI::GetSingleton(),

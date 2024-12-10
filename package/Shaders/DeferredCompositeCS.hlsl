@@ -41,6 +41,11 @@ Texture2D<half4> SsgiYTexture : register(t10);
 Texture2D<half4> SsgiCoCgTexture : register(t11);
 #endif
 
+#if defined(PHYS_SKY)
+Texture2D<float3> PhysSkyTrTexture : register(t11);
+Texture2D<float3> PhysSkyLumTexture : register(t12);
+#endif
+
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
 	half2 uv = half2(dispatchID.xy + 0.5) * SharedData::BufferDim.zw;
@@ -163,6 +168,10 @@ Texture2D<half4> SsgiCoCgTexture : register(t11);
 		color = Color::LinearToGamma(color);
 	}
 
+#endif
+
+#if defined(PHYS_SKY)
+	color = Color::LinearToGamma(Color::GammaToLinear(color) * PhysSkyTrTexture[dispatchID.xy] + PhysSkyLumTexture[dispatchID.xy]);
 #endif
 
 #if defined(DEBUG)
