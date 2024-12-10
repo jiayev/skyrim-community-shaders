@@ -217,12 +217,12 @@ PS_OUTPUT main(PS_INPUT input)
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 
 	// dirLightColor start
-	float3 dirLightColor = DirLightColor.xyz;
+	float3 dirLightColor = SharedData::DirLightColor.xyz;
 
 #			if defined(PHYS_SKY)
 	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
 		dirLightColor = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
-		dirLightColor *= getDirlightTransmittance(input.WorldPosition + CameraPosAdjust[eyeIndex], SampDiffuse);
+		dirLightColor *= getDirlightTransmittance(input.WorldPosition + FrameBuffer::CameraPosAdjust[eyeIndex], SampDiffuse);
 		dirLightColor = Color::LinearToGamma(dirLightColor) / Color::LightPreMult;
 	}
 #			endif
