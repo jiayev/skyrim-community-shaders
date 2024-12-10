@@ -99,6 +99,8 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
 
 	float3 srgbColor;
+
+#   if !defined(POSTPROCESS)
 	{
 		inputColor *= avgValue.y / avgValue.x;
 		inputColor = max(0, inputColor);
@@ -120,6 +122,11 @@ PS_OUTPUT main(PS_INPUT input)
 		srgbColor = lerp(avgValue.x, srgbColor, Cinematic.z);
 		srgbColor = max(0, srgbColor);
 	}
+#   else
+	{
+		srgbColor = inputColor;
+	}
+#   endif
 
 #		if defined(FADE)
 	srgbColor = lerp(srgbColor, Fade.xyz, Fade.w);

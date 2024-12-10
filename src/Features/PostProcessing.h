@@ -15,6 +15,11 @@ struct PostProcessing : Feature
 
 	virtual inline std::string GetName() override { return "Post Processing"; }
 	virtual inline std::string GetShortName() override { return "PostProcessing"; }
+	virtual inline std::string_view GetShaderDefineName() override { return "POSTPROCESS"; }
+	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override
+	{
+		return t == RE::BSShader::Type::ImageSpace;
+	};
 
 	virtual bool SupportsVR() { return true; }
 
