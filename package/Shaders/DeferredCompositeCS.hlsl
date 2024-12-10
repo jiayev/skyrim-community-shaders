@@ -42,8 +42,8 @@ Texture2D<half4> SsgiCoCgTexture : register(t11);
 #endif
 
 #if defined(PHYS_SKY)
-Texture2D<float3> PhysSkyTrTexture : register(t11);
-Texture2D<float3> PhysSkyLumTexture : register(t12);
+Texture2D<float3> PhysSkyTrTexture : register(t12);
+Texture2D<float3> PhysSkyLumTexture : register(t13);
 #endif
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID

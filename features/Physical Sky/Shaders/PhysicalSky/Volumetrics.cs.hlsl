@@ -3,6 +3,8 @@
 #include "PhysicalSky/PhysicalSky.hlsli"
 
 #include "Common/VR.hlsli"
+#include "Common/FrameBuffer.hlsli"
+#include "Common/SharedData.hlsli"
 
 Texture2D<float> TexDepth : register(t4);
 
@@ -216,7 +218,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	// dir shadow map
 	{
 		PerShadow sD = SharedPerShadow[0];
-		float4 pos_camera_shifted = mul(CameraViewProj[eye_index], float4(pos_world_relative, 1));
+		float4 pos_camera_shifted = mul(FrameBuffer::CameraViewProj[eye_index], float4(pos_world_relative, 1));
 		float shadow_depth = pos_camera_shifted.z / pos_camera_shifted.w;
 		[branch] if (sD.EndSplitDistances.z >= shadow_depth)
 		{
@@ -250,7 +252,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	{
 		const static uint visibility_step = 8;
 		const static float visibility_stride = 0.05 / 1.428e-5f;
-		const float3 jitter = Random::R3Modified(FrameCountAlwaysActive, seed / 4294967295.f) * 2 - 1;
+		const float3 jitter = Random::R3Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f) * 2 - 1;
 
 		float cloud_density = 0;
 
@@ -293,7 +295,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	const uint2 px_coords = tid;
 
 	const uint3 seed = Random::pcg3d(uint3(px_coords.xy, px_coords.x ^ 0xf874));
-	const float3 rnd = Random::R3Modified(FrameCountAlwaysActive, seed / 4294967295.f);
+	const float3 rnd = Random::R3Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
 
 	///////////// get start and end
 	const float depth = TexDepth[px_coords.xy];
@@ -304,7 +306,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	const float2 uv = Stereo::ConvertFromStereoUV(stereo_uv, eye_index);
 
 	float4 pos_world = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
-	pos_world = mul(CameraViewProjInverse[eye_index], pos_world);
+	pos_world = mul(FrameBuffer::CameraViewProjInverse[eye_index], pos_world);
 	pos_world.xyz = pos_world.xyz / pos_world.w;
 
 	float ceil = info.fog_h_max;
@@ -368,7 +370,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 			in_scatter += (sun_transmittance / max(1e-8, cloud_transmittance)) * cloud_scatter * cloud_secondary_phase * ms_volume * info.dirlight_color;
 
 			// ambient
-			float3 ambient = Color::GammaToLinear(DirectionalAmbientShared._14_24_34) / Color::LightPreMult;
+			float3 ambient = Color::GammaToLinear(SharedData::DirectionalAmbient._14_24_34) / Color::LightPreMult;
 			in_scatter += scatter_phaseless * sqrt(1.0 - ndf.dimension_profile) * ambient * RCP_PI;
 
 			const float3 sample_transmittance = exp(-dt * extinction);

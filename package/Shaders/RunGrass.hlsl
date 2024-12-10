@@ -430,36 +430,6 @@ cbuffer PerMaterial : register(b1)
 
 #		include "GrassLighting/GrassLighting.hlsli"
 
-#		if defined(LIGHT_LIMIT_FIX)
-#			include "LightLimitFix/LightLimitFix.hlsli"
-#		endif
-
-#		define SampColorSampler SampBaseSampler
-
-#		if defined(DYNAMIC_CUBEMAPS)
-#			include "DynamicCubemaps/DynamicCubemaps.hlsli"
-#		endif
-
-#		if defined(SCREEN_SPACE_SHADOWS)
-#			include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
-#		endif
-
-#		if defined(TERRAIN_SHADOWS)
-#			include "TerrainShadows/TerrainShadows.hlsli"
-#		endif
-
-#		if defined(CLOUD_SHADOWS)
-#			include "CloudShadows/CloudShadows.hlsli"
-#		endif
-
-#		if defined(SKYLIGHTING)
-#			include "Skylighting/Skylighting.hlsli"
-#		endif
-
-#		if defined(TRUE_PBR)
-#			include "Common/PBR.hlsli"
-#		endif
-
 #		if defined(PHYS_SKY)
 #			include "PhysicalSky/PhysicalSky.hlsli"
 #		endif
@@ -570,7 +540,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
 		dirLightColor = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
 
-		dirLightColor *= getDirlightTransmittance(input.WorldPosition + CameraPosAdjust[eyeIndex], SampBaseSampler);
+		dirLightColor *= getDirlightTransmittance(input.WorldPosition + FrameBuffer::CameraPosAdjust[eyeIndex], SampBaseSampler);
 
 		dirLightColor = Color::LinearToGamma(dirLightColor) / Color::LightPreMult;
 	}

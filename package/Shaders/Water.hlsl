@@ -449,10 +449,6 @@ float3 GetFlowmapNormal(PS_INPUT input, float2 uvShift, float multiplier, float 
 #				include "PhysicalSky/PhysicalSky.hlsli"
 #			endif
 
-#			if defined(PHYS_SKY)
-#				include "PhysicalSky/PhysicalSky.hlsli"
-#			endif
-
 float3 GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFactor, float3 viewDirection, float depth, uint eyeIndex)
 {
 	float3 normalScalesRcp = rcp(input.NormalsScale.xyz);
@@ -769,7 +765,7 @@ float3 GetSunColor(float3 normal, float3 viewDirection, uint eyeIndex, PS_INPUT 
 	float3 reflectionDirection = reflect(viewDirection, normal);
 	float reflectionMul = exp2(VarAmounts.x * log2(saturate(dot(reflectionDirection, SunDir.xyz))));
 
-	return reflectionMul * SunColor.rgb * SunDir.w * DeepColor.w;
+	return reflectionMul * SunColor.xyz * SunDir.w * DeepColor.w;
 #			endif
 }
 #		endif
