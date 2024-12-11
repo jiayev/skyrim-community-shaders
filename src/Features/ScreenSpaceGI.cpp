@@ -11,10 +11,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ScreenSpaceGI::Settings,
 	Enabled,
 	EnableGI,
-	HalfRes,
-	EnableTemporalDenoiser,
 	NumSlices,
 	NumSteps,
+	HalfRes,
 	MinScreenRadius,
 	AORadius,
 	GIRadius,
@@ -26,6 +25,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	GIDistanceCompensation,
 	AOPower,
 	GIStrength,
+	EnableTemporalDenoiser,
+	EnableBlur,
 	DepthDisocclusion,
 	NormalDisocclusion,
 	MaxAccumFrames,
@@ -245,7 +246,7 @@ void ScreenSpaceGI::DrawSettings()
 		{
 			auto _ = Util::DisableGuard(!settings.EnableTemporalDenoiser && !(settings.EnableGI || settings.EnableGIBounce));
 
-			Util::PercentageSlider("Movement Disocclusion", &settings.DepthDisocclusion, 0.f, 10.f);
+			Util::PercentageSlider("Movement Disocclusion", &settings.DepthDisocclusion, 0.f, 20.f);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text(
 					"If a pixel has moved too far from the last frame, its radiance will not be carried to this frame.\n"
@@ -493,7 +494,7 @@ void ScreenSpaceGI::CompileComputeShaders()
 
 	std::vector<ShaderCompileInfo>
 		shaderInfos = {
-			{ &prefilterDepthsCompute, "prefilterDepths.cs.hlsl", {} },
+			{ &prefilterDepthsCompute, "prefilterDepths.cs.hlsl", { { "LINEAR_FILTER", "" } } },
 			{ &radianceDisoccCompute, "radianceDisocc.cs.hlsl", {} },
 			{ &giCompute, "gi.cs.hlsl", {} },
 			{ &blurCompute, "blur.cs.hlsl", {} },
