@@ -99,17 +99,22 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
 
 	float3 srgbColor;
+
 	{
 		inputColor *= avgValue.y / avgValue.x;
 		inputColor = max(0, inputColor);
 
 		float luminance = max(1e-5, Color::RGBToLuminance(inputColor));
 		float blendFactor;
+#		if !defined(POSTPROCESS)
 		if (Param.z > 0.5) {
 			blendFactor = GetTonemapFactorHejlBurgessDawson(luminance);
 		} else {
 			blendFactor = GetTonemapFactorReinhard(luminance);
 		}
+#		else
+		blendFactor = luminance;
+#		endif
 
 		float3 blendedColor = inputColor * (blendFactor / luminance);
 		blendedColor += saturate(Param.x - blendFactor) * bloomColor;
