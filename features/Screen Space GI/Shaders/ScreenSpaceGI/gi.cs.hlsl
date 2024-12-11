@@ -115,7 +115,10 @@ void CalculateGI(
 
 	const float3 pixCenterPos = ScreenToViewPosition(normalizedScreenPos, viewspaceZ, eyeIndex);
 	const float3 viewVec = normalize(-pixCenterPos);
-	const float NoV = clamp(dot(viewVec, viewspaceNormal), 1e-5, 1);
+
+	// flip foliage normal
+	if (dot(viewVec, pixCenterPos) > 0)
+		viewspaceNormal = -viewspaceNormal;
 
 	float visibility = 0;
 	float4 radianceY = 0;
@@ -204,7 +207,9 @@ void CalculateGI(
 
 					// IL
 					float3 normalSample = GBuffer::DecodeNormal(srcNormalRoughness.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).xy);
-					float frontBackMult = saturate(-dot(normalSample, sampleHorizonVec));
+					if (dot(samplePos, normalSample) > 0)
+						normalSample = -normalSample;
+					float frontBackMult = -dot(normalSample, sampleHorizonVec);
 					frontBackMult = frontBackMult < 0 ? abs(frontBackMult) * BackfaceStrength : frontBackMult;  // backface
 
 					if (frontBackMult > 0.f) {
