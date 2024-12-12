@@ -111,6 +111,8 @@ void State::Setup()
 			feature->SetupResources();
 	Deferred::GetSingleton()->SetupResources();
 	Streamline::GetSingleton()->SetupResources();
+	if (!upscalerLoaded)
+		Upscaling::GetSingleton()->CreateUpscalingResources();
 	if (initialized)
 		return;
 	initialized = true;
@@ -492,6 +494,8 @@ void State::SetupResources()
 	context = reinterpret_cast<ID3D11DeviceContext*>(renderer->GetRuntimeData().context);
 	device = reinterpret_cast<ID3D11Device*>(renderer->GetRuntimeData().forwarder);
 	context->QueryInterface(__uuidof(pPerf), reinterpret_cast<void**>(&pPerf));
+
+	featureLevel = device->GetFeatureLevel();
 
 	tracyCtx = TracyD3D11Context(device, context);
 }

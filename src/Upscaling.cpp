@@ -7,6 +7,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
 	upscaleMethod,
 	upscaleMethodNoDLSS,
+	upscaleMethodNoFSR,
 	sharpness,
 	dlssPreset);
 
@@ -29,6 +30,9 @@ void Upscaling::DrawSettings()
 	bool featureDLSS = streamline->featureDLSS;
 	uint* currentUpscaleMode = featureDLSS ? &settings.upscaleMethod : &settings.upscaleMethodNoDLSS;
 	uint availableModes = (state->isVR && state->upscalerLoaded) ? (featureDLSS ? 2 : 1) : (featureDLSS ? 3 : 2);
+
+	if (State::GetSingleton()->featureLevel != D3D_FEATURE_LEVEL_11_1)
+		availableModes = 1;
 
 	// Slider for method selection
 	ImGui::SliderInt("Method", (int*)currentUpscaleMode, 0, availableModes, std::format("{}", upscaleModes[(uint)*currentUpscaleMode]).c_str());
@@ -61,7 +65,7 @@ void Upscaling::DrawSettings()
 	auto upscaleMethod = GetUpscaleMethod();
 
 	// Display sharpness slider if applicable
-	if (upscaleMethod != UpscaleMethod::kTAA && upscaleMethod != UpscaleMethod::kNONE) {
+	if (upscaleMethod != UpscaleMethod::kNONE) {
 		ImGui::SliderFloat("Sharpness", &settings.sharpness, 0.0f, 1.0f, "%.1f");
 		settings.sharpness = std::clamp(settings.sharpness, 0.0f, 1.0f);
 	}
@@ -125,8 +129,13 @@ void Upscaling::RestoreDefaultSettings()
 
 Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod()
 {
-	auto streamline = Streamline::GetSingleton();
-	return streamline->featureDLSS ? (Upscaling::UpscaleMethod)settings.upscaleMethod : (Upscaling::UpscaleMethod)settings.upscaleMethodNoDLSS;
+	if (State::GetSingleton()->featureLevel != D3D_FEATURE_LEVEL_11_1)
+		return (Upscaling::UpscaleMethod)settings.upscaleMethodNoFSR;
+
+	if (Streamline::GetSingleton()->featureDLSS)
+		return (Upscaling::UpscaleMethod)settings.upscaleMethod;
+
+	return (Upscaling::UpscaleMethod)settings.upscaleMethodNoDLSS;
 }
 
 void Upscaling::CheckResources()
@@ -138,16 +147,12 @@ void Upscaling::CheckResources()
 	auto fidelityFX = FidelityFX::GetSingleton();
 
 	if (previousUpscaleMode != currentUpscaleMode) {
-		if (previousUpscaleMode == UpscaleMethod::kTAA)
-			CreateUpscalingResources();
-		else if (previousUpscaleMode == UpscaleMethod::kDLSS)
+		if (previousUpscaleMode == UpscaleMethod::kDLSS)
 			streamline->DestroyDLSSResources();
 		else if (previousUpscaleMode == UpscaleMethod::kFSR)
 			fidelityFX->DestroyFSRResources();
 
-		if (currentUpscaleMode == UpscaleMethod::kTAA)
-			DestroyUpscalingResources();
-		else if (currentUpscaleMode == UpscaleMethod::kFSR)
+		if (currentUpscaleMode == UpscaleMethod::kFSR)
 			fidelityFX->CreateFSRResources();
 
 		previousUpscaleMode = currentUpscaleMode;
@@ -327,6 +332,73 @@ void Upscaling::Upscale()
 
 		state->EndPerfEvent();
 	}
+
+	context->CopyResource(outputTextureResource, upscalingTexture->resource.get());
+}
+
+void Upscaling::SharpenTAA()
+{
+	std::lock_guard<std::mutex> lock(settingsMutex);  // Lock for the duration of this function
+
+	CheckResources();
+
+	Hooks::BSGraphics_SetDirtyStates::func(false);
+
+	auto state = State::GetSingleton();
+
+	auto& context = state->context;
+
+	ID3D11ShaderResourceView* inputTextureSRV;
+	context->PSGetShaderResources(0, 1, &inputTextureSRV);
+
+	inputTextureSRV->Release();
+
+	ID3D11RenderTargetView* outputTextureRTV;
+	ID3D11DepthStencilView* dsv;
+	context->OMGetRenderTargets(1, &outputTextureRTV, &dsv);
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+
+	outputTextureRTV->Release();
+
+	if (dsv)
+		dsv->Release();
+
+	ID3D11Resource* inputTextureResource;
+	inputTextureSRV->GetResource(&inputTextureResource);
+
+	ID3D11Resource* outputTextureResource;
+	outputTextureRTV->GetResource(&outputTextureResource);
+
+	auto dispatchCount = Util::GetScreenDispatchCount(false);
+
+	state->BeginPerfEvent("Sharpening");
+
+	context->CopyResource(inputTextureResource, outputTextureResource);
+
+	{
+		{
+			ID3D11ShaderResourceView* views[1] = { inputTextureSRV };
+			context->CSSetShaderResources(0, ARRAYSIZE(views), views);
+
+			ID3D11UnorderedAccessView* uavs[1] = { upscalingTexture->uav.get() };
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+			context->CSSetShader(GetRCASCS(), nullptr, 0);
+
+			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+		}
+
+		ID3D11ShaderResourceView* views[1] = { nullptr };
+		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
+
+		ID3D11UnorderedAccessView* uavs[1] = { nullptr };
+		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+		ID3D11ComputeShader* shader = nullptr;
+		context->CSSetShader(shader, nullptr, 0);
+	}
+
+	state->EndPerfEvent();
 
 	context->CopyResource(outputTextureResource, upscalingTexture->resource.get());
 }
