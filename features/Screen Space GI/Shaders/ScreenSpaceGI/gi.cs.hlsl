@@ -169,6 +169,8 @@ void CalculateGI(
 				float mipLevel = clamp(log2(sampleOffsetLength) - 3.3, 0, 5);
 #ifdef HALF_RES
 				mipLevel = max(mipLevel, 1);
+#elif defined(QUARTER_RES)
+				mipLevel = max(mipLevel, 2);
 #endif
 
 				float SZ = srcWorkingDepth.SampleLevel(samplerPointClamp, sampleUV * frameScale, mipLevel);
@@ -215,13 +217,12 @@ void CalculateGI(
 					if (frontBackMult > 0.f) {
 						float3 sampleHorizonVecWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], half4(sampleHorizonVec, 0)).xyz);
 
-						float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevel).rgb * frontBackMult * giBoost;
+						float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevel).rgb * frontBackMult * giBoost * countbits(validBits) * 0.03125;
 						sampleRadiance = max(sampleRadiance, 0);
 						float3 sampleRadianceYCoCg = Color::RGBToYCoCg(sampleRadiance);
 
-						float bitmaskWeight = countbits(validBits) * 0.03125;
-						radianceY += sampleRadianceYCoCg.r * SphericalHarmonics::Evaluate(sampleHorizonVecWS) * bitmaskWeight;
-						radianceCoCg += sampleRadianceYCoCg.gb * bitmaskWeight;
+						radianceY += sampleRadianceYCoCg.r * SphericalHarmonics::Evaluate(sampleHorizonVecWS);
+						radianceCoCg += sampleRadianceYCoCg.gb;
 					}
 				}
 #endif  // GI
