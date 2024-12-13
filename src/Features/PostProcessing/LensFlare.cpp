@@ -1,5 +1,5 @@
 #include "LensFlare.h"
-
+#include "Menu.h"
 #include "State.h"
 #include "Util.h"
 
@@ -12,6 +12,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     LensFlareCA,
     LFStrength,
     GLocalMask
+)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+    LensFlare::debugSettings,
+    showDebug,
+    disableDownsample,
+    disableUpsample
 )
 
 void LensFlare::DrawSettings()
@@ -51,6 +58,19 @@ void LensFlare::DrawSettings()
     ImGui::Separator();
     
     ImGui::SliderFloat("CA Amount", &settings.LensFlareCA, 0.0f, 2.0f, "%.3f");
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::Checkbox("Show Debug", &debugsettings.showDebug);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Show debug information for lens flare");
+    }
+    if (debugsettings.showDebug) {
+        ImGui::Checkbox("Disable Downsample", &debugsettings.disableDownsample);
+        ImGui::Checkbox("Disable Upsample", &debugsettings.disableUpsample);
+    }
 }
 
 void LensFlare::RestoreDefaultSettings()
@@ -103,19 +123,30 @@ void LensFlare::SetupResources()
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		texDesc.MiscFlags = 0;
 
-        if (!(texDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS)) {
-            logger::error("Texture format doesn't support UAV!");
-        }
 		texOutput = eastl::make_unique<Texture2D>(texDesc);
 		texOutput->CreateSRV(srvDesc);
 		texOutput->CreateUAV(uavDesc);
-    }
 
-    if (!texOutput || !texOutput->resource || !texOutput->uav || !texOutput->srv) {
-        logger::error("Failed to create output texture!");
-        return;
+        texFlare = eastl::make_unique<Texture2D>(texDesc);
+        texFlare->CreateSRV(srvDesc);
+        texFlare->CreateUAV(uavDesc);
+
+        texFlareD = eastl::make_unique<Texture2D>(texDesc);
+        texFlareD->CreateSRV(srvDesc);
+        texFlareD->CreateUAV(uavDesc);
+
+        texFlareDCopy = eastl::make_unique<Texture2D>(texDesc);
+        texFlareDCopy->CreateSRV(srvDesc);
+        texFlareDCopy->CreateUAV(uavDesc);
+
+        texFlareU = eastl::make_unique<Texture2D>(texDesc);
+        texFlareU->CreateSRV(srvDesc);
+        texFlareU->CreateUAV(uavDesc);
+
+        texFlareUCopy = eastl::make_unique<Texture2D>(texDesc);
+        texFlareUCopy->CreateSRV(srvDesc);
+        texFlareUCopy->CreateUAV(uavDesc);
     }
-    logger::debug("Output texture size: {}x{}", texOutput->desc.Width, texOutput->desc.Height);
 
     logger::debug("Creating samplers...");
 	{
@@ -162,7 +193,10 @@ void LensFlare::CompileComputeShaders()
 
     std::vector<ShaderCompileInfo>
 		shaderInfos = {
-			{ &lensFlareCS, "lensflare.cs.hlsl" },
+			{ &lensFlareCS, "lensflare.cs.hlsl", {}, "CSLensflare" },
+            { &downsampleCS, "lensflare.cs.hlsl", {}, "CSFlareDown" },
+            { &upsampleCS, "lensflare.cs.hlsl", {}, "CSFlareUp" },
+            { &compositeCS, "lensflare.cs.hlsl", {}, "CSComposite" }
 		};
 
     for (auto& info : shaderInfos) {
@@ -179,19 +213,13 @@ void LensFlare::CompileComputeShaders()
 
 void LensFlare::Draw(TextureInfo& inout_tex)
 {
-	auto context = State::GetSingleton()->context;
+	auto state = State::GetSingleton();
+	auto context = state->context;
+
+    state->BeginPerfEvent("Lens Flare");
 
     uint width = texOutput->desc.Width;
     uint height = texOutput->desc.Height;
-
-    D3D11_BOX sourceRegion = {
-        .left = 0,
-        .top = 0,
-        .front = 0,
-        .right = width,
-        .bottom = height,
-        .back = 1
-    };
 
     LensFlareCB data = {
         .settings = settings,
@@ -200,42 +228,96 @@ void LensFlare::Draw(TextureInfo& inout_tex)
     };
     lensFlareCB->Update(data);
 
-    ID3D11ShaderResourceView* srv = inout_tex.srv;
-	ID3D11UnorderedAccessView* uav = texOutput->uav.get();
+    std::array<ID3D11ShaderResourceView*, 2> srvs = { nullptr };
+    std::array<ID3D11UnorderedAccessView*, 1> uavs = { nullptr };
     std::array<ID3D11SamplerState*, 1> samplers = { colorSampler.get() };
 	auto cb = lensFlareCB->CB();
 
+    auto resetViews = [&]() {
+		srvs.fill(nullptr);
+		uavs.fill(nullptr);
+
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+	};
+
 	context->CSSetConstantBuffers(1, 1, &cb);
     context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, 1, &srv);
-	context->CSSetShader(lensFlareCS.get(), nullptr, 0);
 
+    // Get Lens Flare
+    srvs.at(0) = inout_tex.srv;
+    uavs.at(0) = texFlare->uav.get();
+
+    context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+    context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+    context->CSSetShader(lensFlareCS.get(), nullptr, 0);
     uint dispatchX = (width + 7) >> 3;
     uint dispatchY = (height + 7) >> 3;
     context->Dispatch(dispatchX, dispatchY, 1);
-    if (!inout_tex.srv || !inout_tex.tex) {
-        logger::error("Invalid input texture!");
-        return;
+    resetViews();
+
+    int numDownsamples = 1;
+    if (height > 1024) numDownsamples = 2;
+    if (height > 2048) numDownsamples = 3;
+    if (height > 4096) numDownsamples = 4;
+
+    context->CopyResource(texFlareD->resource.get(), texFlare->resource.get());
+    context->CopyResource(texFlareDCopy->resource.get(), texFlare->resource.get());
+
+    if (!debugsettings.disableDownsample) {
+        // Downsample passes
+        context->CSSetShader(downsampleCS.get(), nullptr, 0);
+        for (int i = 0; i < numDownsamples; i++) {
+            srvs.at(1) = texFlareD->srv.get();
+            uavs.at(0) = texFlareDCopy->uav.get();
+            context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+            context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+            context->Dispatch(dispatchX, dispatchY, 1);
+            context->CopyResource(texFlareD->resource.get(), texFlareDCopy->resource.get());
+            resetViews();
+        }
+        context->CopyResource(texFlare->resource.get(), texFlareD->resource.get());
     }
 
-    // Cleanup
-    srv = nullptr;
-	uav = nullptr;
-	cb = nullptr;
+    context->CopyResource(texFlareU->resource.get(), texFlareD->resource.get());
+    context->CopyResource(texFlareUCopy->resource.get(), texFlareD->resource.get());
 
-    context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, 1, &srv);
+    if (!debugsettings.disableUpsample) {
+        // Upsample passes
+        context->CSSetShader(upsampleCS.get(), nullptr, 0);
+        for (int i = 0; i < 4; i++) {
+            srvs.at(1) = texFlareU->srv.get();
+            uavs.at(0) = texFlareUCopy->uav.get();
+            context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+            context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+            context->Dispatch(dispatchX, dispatchY, 1);
+            context->CopyResource(texFlareU->resource.get(), texFlareUCopy->resource.get());
+            resetViews();
+        }
+        context->CopyResource(texFlare->resource.get(), texFlareU->resource.get());
+    }
+
+    
+
+    // Final composite
+    srvs.at(0) = inout_tex.srv;
+    srvs.at(1) = texFlare->srv.get();
+    uavs.at(0) = texOutput->uav.get();
+    context->CSSetShader(compositeCS.get(), nullptr, 0);
+    context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+    context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+    context->Dispatch(dispatchX, dispatchY, 1);
+
+    // Cleanup
+    resetViews();
+	cb = nullptr;
+    samplers.fill(nullptr);
+
 	context->CSSetConstantBuffers(0, 1, &cb);
     context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 	context->CSSetShader(nullptr, nullptr, 0);
 
-    // context->CopySubresourceRegion(
-    //     texOutput->resource.get(), 0,
-    //     0, 0, 0,
-    //     inout_tex.resource, 0,
-    //     &sourceRegion);
-
     inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
+    state->EndPerfEvent();
 }
 
