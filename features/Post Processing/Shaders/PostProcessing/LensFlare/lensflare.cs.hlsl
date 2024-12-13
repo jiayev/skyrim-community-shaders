@@ -46,7 +46,7 @@ cbuffer LensFlareConstants : register(b1)
     float ScreenHeight;
 }
 
-float4 GhostColors[8] = 
+static const float4 GHOST_COLORS[8] = 
 {
     float4(1.0f, 0.8f, 0.4f, 1.0f),  // Ghost 1
     float4(1.0f, 1.0f, 0.6f, 1.0f),  // Ghost 2
@@ -58,7 +58,7 @@ float4 GhostColors[8] =
     float4(0.9f, 0.7f, 0.7f, 1.0f)   // Ghost 8
 };
 
-float GhostScales[8] = 
+static const float GHOST_SCALES[8] = 
 {
     -1.5f, 2.5f, -5.0f, 10.0f, 0.7f, -0.4f, -0.2f, -0.1f
 };
@@ -80,47 +80,56 @@ float4 SampleCA(Texture2D tex, SamplerState samp, float2 texcoord, float strengt
 [numthreads(8, 8, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
-    // if (DTid.x >= (uint)ScreenSize.x || DTid.y >= (uint)ScreenSize.y)
-    //     return;
-    float3 dtidTestColor = float3(ScreenWidth / 2560, ScreenHeight / 1440, 0.0);
+    if (DTid.x >= (uint)ScreenWidth || DTid.y >= (uint)ScreenHeight)
+        return;
     float2 texcoord = (DTid.xy + 0.5) / float2(ScreenWidth, ScreenHeight);
     float4 debug_color = InputTexture.SampleLevel(ColorSampler, texcoord, 0);
     float weight;
     float4 s = 0.0;
     float3 color = 0.0;
-    color = debug_color.rgb;
     float2 texcoord_clean = texcoord;
     float2 radiant_vector = texcoord - 0.5;
-
+    float2 halo_vector = texcoord_clean;
     // Ghosts
     [branch]
-    if (GhostStrength > EPSILON)
+    if (GhostStrength != 0.0)
     {
+        
         for(int i = 0; i < 8; i++)
         {
-            if(abs(GhostColors[i].a * GhostScales[i]) > EPSILON)
+            if(abs(GHOST_COLORS[i].a * GHOST_SCALES[i]) > 0.00001f)
             {
-                float2 ghost_vector = radiant_vector * GhostScales[i];
-                float distance_mask = 1.0 - length(ghost_vector);
-                weight = distance_mask;
+                float2 ghost_vector = radiant_vector * GHOST_SCALES[i];
+                // color += float3(texcoord, 1.0f);
 
-                float4 s = InputTexture.SampleLevel(ColorSampler, ghost_vector + 0.5, 0);
-                color += s.rgb * s.a * GhostColors[i].rgb * GhostColors[i].a * weight;
+                float distance_mask = 1.0 - length(ghost_vector);
+                if (GLocalMask)
+				{
+            		float mask1 = smoothstep(0.5, 0.9, distance_mask);
+            		float mask2 = smoothstep(0.75, 1.0, distance_mask) * 0.95 + 0.05;
+					weight = mask1 * mask2;
+				}
+				else
+				{
+					weight = distance_mask;
+				}
+                float4 s1 = 0.0f;
+                s1 = InputTexture.SampleLevel(ColorSampler, ghost_vector + 0.5f, 0);
+                color += s1.rgb * GHOST_COLORS[i].rgb * GHOST_COLORS[i].a * weight;
+                // color += float3((ghost_vector), 0.0f);
             }
         }
 
+        //Screen border mask
         static const float SBMASK_SIZE = 0.9;
         float sb_mask = clamp(length(float2(abs(SBMASK_SIZE * texcoord_clean.x - 0.5), 
                                           abs(SBMASK_SIZE * texcoord_clean.y - 0.5))), 0.0, 1.0);
-        float3 color2 = color;
         color *= sb_mask * (GhostStrength * GhostStrength);
-        color += color2;
     }
 
     // Halo
     if (HaloStrength > EPSILON)
     {
-        float2 halo_vector = texcoord;
         halo_vector -= normalize(radiant_vector) * HaloRadius;
         weight = 1.0 - min(rcp(HaloWidth + EPSILON) * length(0.5 - halo_vector), 1.0);
         weight = pow(abs(weight), 5.0);
@@ -129,6 +138,9 @@ void main(uint3 DTid : SV_DispatchThreadID)
         color += s.rgb * s.a * weight * (HaloStrength * HaloStrength);
     }
 
+    color *= LFStrength * LFStrength;
+
+    float3 outputcolor = color + debug_color.rgb;
     // Final output
-    OutputTexture[DTid.xy] = float4(color, 1.0f);
+    OutputTexture[DTid.xy] = float4(outputcolor, 1.0f);
 }
