@@ -214,6 +214,22 @@ HRESULT WINAPI hk_CreateDXGIFactory(REFIID, void** ppFactory)
 	return Streamline::GetSingleton()->CreateDXGIFactory(__uuidof(IDXGIFactory1), ppFactory);
 }
 
+struct ID3D11Device_CreateBuffer
+{
+	static HRESULT thunk(ID3D11Device* This, const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer)
+	{
+		HRESULT hr = func(This, pDesc, pInitialData, ppBuffer);
+
+		if (pDesc->BindFlags & D3D11_BIND_VERTEX_BUFFER)
+		{
+			logger::info("HMMMM");
+		}
+
+		return hr;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChain;
 
 HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainNoStreamline(
@@ -374,6 +390,9 @@ namespace Hooks
 				stl::detour_vfunc<12, ID3D11Device_CreateVertexShader>(device);
 				stl::detour_vfunc<15, ID3D11Device_CreatePixelShader>(device);
 			}
+
+			stl::detour_vfunc<3, ID3D11Device_CreateBuffer>(device);
+
 			Menu::GetSingleton()->Init(swapchain, device, context);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

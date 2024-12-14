@@ -144,16 +144,16 @@ void Upscaling::CheckResources()
 	auto currentUpscaleMode = GetUpscaleMethod();
 
 	auto streamline = Streamline::GetSingleton();
-	auto fidelityFX = FidelityFX::GetSingleton();
+	//auto fidelityFX = FidelityFX::GetSingleton();
 
 	if (previousUpscaleMode != currentUpscaleMode) {
 		if (previousUpscaleMode == UpscaleMethod::kDLSS)
 			streamline->DestroyDLSSResources();
-		else if (previousUpscaleMode == UpscaleMethod::kFSR)
-			fidelityFX->DestroyFSRResources();
+		//else if (previousUpscaleMode == UpscaleMethod::kFSR)
+		//	fidelityFX->DestroyFSRResources();
 
-		if (currentUpscaleMode == UpscaleMethod::kFSR)
-			fidelityFX->CreateFSRResources();
+		//if (currentUpscaleMode == UpscaleMethod::kFSR)
+		//	fidelityFX->CreateFSRResources();
 
 		previousUpscaleMode = currentUpscaleMode;
 	}
@@ -206,7 +206,7 @@ void Upscaling::UpdateJitter()
 		static auto gameViewport = RE::BSGraphics::State::GetSingleton();
 		auto state = State::GetSingleton();
 
-		ffxFsr3UpscalerGetJitterOffset(&jitter.x, &jitter.y, gameViewport->frameCount, 8);
+	//	ffxFsr3UpscalerGetJitterOffset(&jitter.x, &jitter.y, gameViewport->frameCount, 8);
 
 		if (state->isVR)
 			gameViewport->projectionPosScaleX = -jitter.x / state->screenSize.x;
@@ -294,8 +294,8 @@ void Upscaling::Upscale()
 
 		if (upscaleMethod == UpscaleMethod::kDLSS)
 			Streamline::GetSingleton()->Upscale(upscalingTexture, alphaMaskTexture, (sl::DLSSPreset)settings.dlssPreset);
-		else if (upscaleMethod == UpscaleMethod::kFSR)
-			FidelityFX::GetSingleton()->Upscale(upscalingTexture, alphaMaskTexture, jitter, reset, settings.sharpness);
+		//else if (upscaleMethod == UpscaleMethod::kFSR)
+		//	FidelityFX::GetSingleton()->Upscale(upscalingTexture, alphaMaskTexture, jitter, reset, settings.sharpness);
 
 		reset = false;
 
