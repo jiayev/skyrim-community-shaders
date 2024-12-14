@@ -41,8 +41,9 @@ public:
 
 	struct Settings
 	{
-		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
-		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
+		uint upscaleMethod = (uint)UpscaleMethod::kTAA;
+		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kTAA;
+		uint upscaleMethodNoFSR = (uint)UpscaleMethod::kTAA;
 		float sharpness = 0.5f;
 		uint dlssPreset = (uint)sl::DLSSPreset::ePresetC;
 	};
@@ -68,6 +69,7 @@ public:
 
 	void UpdateJitter();
 	void Upscale();
+	void SharpenTAA();
 
 	Texture2D* upscalingTexture;
 	Texture2D* alphaMaskTexture;
@@ -108,6 +110,19 @@ public:
 				singleton->Upscale();
 			else
 				func(a_shader, a_null);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSImageSpacerShader_RenderPassImmediately
+	{
+		static void thunk(RE::BSRenderPass* Pass, uint32_t Technique, bool AlphaTest, uint32_t RenderFlags)
+		{
+			func(Pass, Technique, AlphaTest, RenderFlags);
+			auto singleton = GetSingleton();
+			auto upscaleMode = singleton->GetUpscaleMethod();
+			if (singleton->validTaaPass && upscaleMode == UpscaleMethod::kTAA)
+				singleton->SharpenTAA();
 			singleton->validTaaPass = false;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -121,6 +136,8 @@ public:
 			stl::write_thunk_call<Main_UpdateJitter>(REL::RelocationID(75460, 77245).address() + REL::Relocate(0xE5, isGOG ? 0x133 : 0xE2, 0x104));
 			stl::write_thunk_call<TAA_BeginTechnique>(REL::RelocationID(100540, 107270).address() + REL::Relocate(0x3E9, 0x3EA, 0x448));
 			stl::write_thunk_call<TAA_EndTechnique>(REL::RelocationID(100540, 107270).address() + REL::Relocate(0x3F3, 0x3F4, 0x452));
+			stl::write_thunk_call<BSImageSpacerShader_RenderPassImmediately>(REL::RelocationID(100951, 107733).address() + REL::Relocate(0x82, 0x78, 0x7E));
+
 			logger::info("[Upscaling] Installed hooks");
 
 			RE::UI::GetSingleton()->GetEventSource<RE::MenuOpenCloseEvent>()->AddEventSink(Upscaling::GetSingleton());

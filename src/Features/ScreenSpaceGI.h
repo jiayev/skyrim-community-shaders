@@ -48,29 +48,29 @@ struct ScreenSpaceGI : Feature
 		bool Enabled = true;
 		bool EnableGI = true;
 		// performance/quality
-		uint NumSlices = 2;
-		uint NumSteps = 4;
-		bool HalfRes = true;
+		uint NumSlices = 5;
+		uint NumSteps = 8;
+		int ResolutionMode = 1;  // 0-full, 1-half, 2-quarter
 		// visual
 		float MinScreenRadius = 0.01f;
 		float AORadius = 100.f;
-		float GIRadius = 500.f;
+		float GIRadius = 400.f;
 		float Thickness = 75.f;
 		float2 DepthFadeRange = { 4e4, 5e4 };
 		// gi
-		float BackfaceStrength = 0.f;
+		float GISaturation = .9f;
 		bool EnableGIBounce = true;
-		float GIBounceFade = 1.f;
+		float GIBounceFade = .3f;
 		float GIDistanceCompensation = 0.f;
 		// mix
 		float AOPower = 2.f;
-		float GIStrength = 1.f;
+		float GIStrength = 1.5f;
 		// denoise
 		bool EnableTemporalDenoiser = true;
 		bool EnableBlur = true;
-		float DepthDisocclusion = REL::Module::IsVR() ? .1f : .03f;
+		float DepthDisocclusion = .1f;
 		float NormalDisocclusion = .1f;
-		uint MaxAccumFrames = 10;
+		uint MaxAccumFrames = 16;
 		float BlurRadius = 5.f;
 		float DistanceNormalisation = 2.f;
 	} settings;
@@ -98,7 +98,7 @@ struct ScreenSpaceGI : Feature
 		float2 DepthFadeRange;
 		float DepthFadeScaleConst;
 
-		float BackfaceStrength;  //
+		float GISaturation;  //
 		float GIBounceFade;
 		float GIDistanceCompensation;
 		float GICompensationMaxDist;

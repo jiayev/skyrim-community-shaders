@@ -13,13 +13,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableGI,
 	NumSlices,
 	NumSteps,
-	HalfRes,
+	ResolutionMode,
 	MinScreenRadius,
 	AORadius,
 	GIRadius,
 	Thickness,
 	DepthFadeRange,
-	BackfaceStrength,
+	GISaturation,
 	EnableGIBounce,
 	GIBounceFade,
 	GIDistanceCompensation,
@@ -38,6 +38,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void ScreenSpaceGI::RestoreDefaultSettings()
 {
 	settings = {};
+	recompileFlag = true;
 }
 
 void ScreenSpaceGI::DrawSettings()
@@ -78,64 +79,76 @@ void ScreenSpaceGI::DrawSettings()
 
 		ImGui::TableNextColumn();
 		if (ImGui::Button("Low", { -1, 0 })) {
-			settings.NumSlices = 2;
-			settings.NumSteps = 4;
+			settings.NumSlices = 10;
+			settings.NumSteps = 12;
+			settings.ResolutionMode = 2;
+			settings.EnableBlur = true;
 			settings.EnableGI = true;
 			recompileFlag = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("2 Slices, 4 Steps");
+			ImGui::Text("Quarter res and blurry.");
 
 		ImGui::TableNextColumn();
 		if (ImGui::Button("Medium", { -1, 0 })) {
-			settings.NumSlices = 3;
-			settings.NumSteps = 6;
+			settings.NumSlices = 5;
+			settings.NumSteps = 8;
+			settings.ResolutionMode = 1;
+			settings.EnableBlur = true;
 			settings.EnableGI = true;
 			recompileFlag = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("3 Slices, 6 Steps");
+			ImGui::Text("Half res and somewhat stable.");
 
 		ImGui::TableNextColumn();
 		if (ImGui::Button("High", { -1, 0 })) {
 			settings.NumSlices = 4;
 			settings.NumSteps = 8;
+			settings.ResolutionMode = 0;
+			settings.EnableBlur = true;
 			settings.EnableGI = true;
 			recompileFlag = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("4 Slices, 8 Steps");
+			ImGui::Text("Full res and clean.");
 
 		ImGui::TableNextColumn();
 		if (ImGui::Button("Ultra", { -1, 0 })) {
-			settings.NumSlices = 6;
+			settings.NumSlices = 8;
 			settings.NumSteps = 10;
+			settings.ResolutionMode = 0;
+			settings.EnableBlur = false;
 			settings.EnableGI = true;
 			recompileFlag = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("6 Slices, 10 Steps");
+			ImGui::Text("Reference mode.");
 
 		ImGui::EndTable();
 	}
 
-	ImGui::SliderInt("Slices", (int*)&settings.NumSlices, 1, 10);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(
-			"How many directions do the samples take.\n"
-			"Controls noise.");
-
-	ImGui::SliderInt("Steps Per Slice", (int*)&settings.NumSteps, 1, 20);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(
-			"How many samples does it take in one direction.\n"
-			"Controls accuracy of lighting, and noise when effect radius is large.");
-
-	if (ImGui::BeginTable("Less Work", 2)) {
-		ImGui::TableNextColumn();
-		recompileFlag |= ImGui::Checkbox("Half Resolution", &settings.HalfRes);
+	if (showAdvanced) {
+		ImGui::SliderInt("Slices", (int*)&settings.NumSlices, 1, 10);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Rendering internally with half resolution. Vastly cheaper but quite more noise.");
+			ImGui::Text(
+				"How many directions do the samples take.\n"
+				"Controls noise.");
+
+		ImGui::SliderInt("Steps Per Slice", (int*)&settings.NumSteps, 1, 20);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(
+				"How many samples does it take in one direction.\n"
+				"Controls accuracy of lighting, and noise when effect radius is large.");
+	}
+
+	if (ImGui::BeginTable("Less Work", 3)) {
+		ImGui::TableNextColumn();
+		recompileFlag |= ImGui::RadioButton("Full Res", &settings.ResolutionMode, 0);
+		ImGui::TableNextColumn();
+		recompileFlag |= ImGui::RadioButton("Half Res", &settings.ResolutionMode, 1);
+		ImGui::TableNextColumn();
+		recompileFlag |= ImGui::RadioButton("Quarter Res", &settings.ResolutionMode, 2);
 
 		ImGui::EndTable();
 	}
@@ -194,6 +207,8 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::Separator();
 		}
 
+		Util::PercentageSlider("IL Saturation", &settings.GISaturation);
+
 		recompileFlag |= ImGui::Checkbox("Ambient Bounce", &settings.EnableGIBounce);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(
@@ -207,14 +222,6 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::Unindent();
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("How much of this frame's ambient+IL get carried to the next frame as source.");
-		}
-
-		if (showAdvanced) {
-			ImGui::Separator();
-
-			Util::PercentageSlider("Backface Lighting Mix", &settings.BackfaceStrength);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("How bright at the back of objects is compared to the front. A small value to make up for foliage translucency.");
 		}
 	}
 
@@ -509,8 +516,10 @@ void ScreenSpaceGI::CompileComputeShaders()
 	for (auto& info : shaderInfos) {
 		if (REL::Module::IsVR())
 			info.defines.push_back({ "VR", "" });
-		if (settings.HalfRes)
+		if (settings.ResolutionMode == 1)
 			info.defines.push_back({ "HALF_RES", "" });
+		if (settings.ResolutionMode == 2)
+			info.defines.push_back({ "QUARTER_RES", "" });
 		if (settings.EnableTemporalDenoiser)
 			info.defines.push_back({ "TEMPORAL_DENOISER", "" });
 		if (settings.EnableGI)
@@ -574,7 +583,7 @@ void ScreenSpaceGI::UpdateSB()
 		data.DepthFadeRange = settings.DepthFadeRange;
 		data.DepthFadeScaleConst = 1 / (settings.DepthFadeRange.y - settings.DepthFadeRange.x);
 
-		data.BackfaceStrength = settings.BackfaceStrength;
+		data.GISaturation = settings.GISaturation;
 		data.GIBounceFade = settings.GIBounceFade;
 		data.GIDistanceCompensation = settings.GIDistanceCompensation;
 		data.GICompensationMaxDist = settings.AORadius;
@@ -627,9 +636,11 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 	auto deferred = Deferred::GetSingleton();
 
 	float2 size = Util::ConvertToDynamic(State::GetSingleton()->screenSize);
-	uint resolution[2] = { (uint)size.x, (uint)size.y };
-	uint halfRes[2] = { resolution[0] >> 1, resolution[1] >> 1 };
-	auto internalRes = settings.HalfRes ? halfRes : resolution;
+	auto resolution = std::array{ (uint)size.x, (uint)size.y };
+	auto resChoices = std::array{
+		resolution, std::array{ resolution[0] >> 1, resolution[1] >> 1 }, std::array{ resolution[0] >> 2, resolution[1] >> 2 }
+	};
+	auto internalRes = resChoices[settings.ResolutionMode];
 
 	std::array<ID3D11ShaderResourceView*, 10> srvs = { nullptr };
 	std::array<ID3D11UnorderedAccessView*, 5> uavs = { nullptr };
@@ -753,7 +764,7 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 	}
 
 	// upsasmple
-	if (settings.HalfRes) {
+	if (settings.ResolutionMode != 0) {
 		resetViews();
 		srvs.at(0) = texWorkingDepth->srv.get();
 		srvs.at(1) = texAo[inputAoTexIdx]->srv.get();
