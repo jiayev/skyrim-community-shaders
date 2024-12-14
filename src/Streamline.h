@@ -32,7 +32,7 @@ public:
 	sl::ViewportHandle viewport{ 0 };
 	sl::FrameToken* frameToken;
 
-	sl::DLSSGMode frameGenerationMode = sl::DLSSGMode::eAuto;
+	sl::DLSSGMode frameGenerationMode = sl::DLSSGMode::eOn;
 
 	HMODULE interposer = NULL;
 
