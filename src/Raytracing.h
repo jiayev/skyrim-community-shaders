@@ -10,6 +10,9 @@
 #include <FidelityFX/host/ffx_fsr3.h>
 #include <FidelityFX/host/ffx_interface.h>
 
+#include <FidelityFX/host/ffx_brixelizer.h>
+#include <FidelityFX/host/ffx_brixelizergi.h>
+
 #include "Buffer.h"
 #include "State.h"
 
@@ -22,6 +25,19 @@ public:
 		return &singleton;
 	}
 
+	// FidelityFX Brixelizer information
+	//FfxBrixelizerContextDescription m_InitializationParameters = {};
+	//FfxBrixelizerContext m_BrixelizerContext = {};
+	//FfxBrixelizerBakedUpdateDescription m_BrixelizerBakedUpdateDesc = {};
+
+	////const cauldron::Texture* m_pSdfAtlas = nullptr;
+	////const cauldron::Buffer* m_pBrickAABBs = nullptr;
+	////const cauldron::Buffer* m_pCascadeAABBTrees[FFX_BRIXELIZER_MAX_CASCADES] = {};
+	////const cauldron::Buffer* m_pCascadeBrickMaps[FFX_BRIXELIZER_MAX_CASCADES] = {};
+	////const cauldron::Buffer* m_pGpuScratchBuffer = nullptr;
+	//std::vector<BrixelizerInstanceInfo> m_Instances = {};
+	//std::vector<BrixelizerBufferInfo> m_Buffers = {};
+
 	winrt::com_ptr<IDXGIAdapter3> dxgiAdapter3;
 	winrt::com_ptr<ID3D12Device> d3d12Device;
 	winrt::com_ptr<ID3D12CommandQueue> commandQueue;
@@ -32,7 +48,18 @@ public:
 
 	void OpenSharedHandles();
 
-	eastl::hash_set<RE::BSGeometry*> geometries;
+	struct Vertex
+	{
+		float4 position;
+	};
+
+	struct BufferData
+	{
+		ID3D12Resource* vertexBuffer;
+		ID3D12Resource* indexBuffer;
+	};
+
+	eastl::hash_map<RE::BSGeometry*, BufferData> geometries;
 
 	void UpdateGeometry(RE::BSGeometry* a_geometry);
 	void RemoveGeometry(RE::BSGeometry* a_geometry);
