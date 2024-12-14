@@ -121,7 +121,7 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 			//// TODO : Might be 16bit not 32bit
 
 			//eastl::vector<float3> vertexData;
-		
+
 			//uint vertexCount = 0;
 			//uint triangleCount = 0;
 

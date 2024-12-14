@@ -220,8 +220,7 @@ struct ID3D11Device_CreateBuffer
 	{
 		HRESULT hr = func(This, pDesc, pInitialData, ppBuffer);
 
-		if (pDesc->BindFlags & D3D11_BIND_VERTEX_BUFFER)
-		{
+		if (pDesc->BindFlags & D3D11_BIND_VERTEX_BUFFER) {
 			logger::info("HMMMM");
 		}
 
