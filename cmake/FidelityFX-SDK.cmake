@@ -1,5 +1,5 @@
 set(FFX_API_VK OFF)
-set(FFX_API_DX12 OFF)
+set(FFX_API_DX12 ON)
 set(FFX_ALL OFF)
 set(FFX_FSR3 ON)
 set(FFX_FSR ON)
