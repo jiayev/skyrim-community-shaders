@@ -1,7 +1,7 @@
 #pragma once
 
-#include <unordered_set>
 #include <eastl/set.h>
+#include <unordered_set>
 
 #include <d3d12.h>
 
@@ -70,7 +70,7 @@ public:
 	{
 		stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 
-	//	stl::detour_thunk<NiNode_Destroy>(REL::RelocationID(68937, 70288));
+		//	stl::detour_thunk<NiNode_Destroy>(REL::RelocationID(68937, 70288));
 
 		logger::info("[Raytracing] Installed hooks");
 	}

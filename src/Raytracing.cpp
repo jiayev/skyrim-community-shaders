@@ -80,8 +80,7 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 
 void Raytracing::RemoveGeometry(RE::BSGeometry* a_geometry)
 {
-	if (geometries.erase(a_geometry))
-	{
+	if (geometries.erase(a_geometry)) {
 		// Remove Event
 	}
 }
