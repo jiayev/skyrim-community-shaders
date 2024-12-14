@@ -121,4 +121,4 @@ struct CinematicDOF : public PostProcessFeature
 	virtual void DrawSettings() override;
 
 	virtual void Draw(TextureInfo&) override;
-}
+};
