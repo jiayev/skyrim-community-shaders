@@ -17,6 +17,7 @@
 
 #include "Streamline.h"
 #include "Upscaling.h"
+#include "Raytracing.h"
 
 void State::Draw()
 {
@@ -111,6 +112,7 @@ void State::Setup()
 			feature->SetupResources();
 	Deferred::GetSingleton()->SetupResources();
 	Streamline::GetSingleton()->SetupResources();
+	Raytracing::GetSingleton()->OpenSharedHandles();
 	if (!upscalerLoaded)
 		Upscaling::GetSingleton()->CreateUpscalingResources();
 	if (initialized)

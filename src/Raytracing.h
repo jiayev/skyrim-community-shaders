@@ -26,4 +26,15 @@ public:
 	winrt::com_ptr<ID3D12GraphicsCommandList> commandList;
 
 	void InitD3D12();
+
+	void OpenSharedHandles();
+
+	struct RenderTargetDataD3D12
+	{
+		// D3D12 Resource
+		winrt::com_ptr<ID3D12Resource> d3d12Resource;
+	};
+
+	RenderTargetDataD3D12 renderTargetsD3D12[RE::RENDER_TARGET::kTOTAL];
+	RenderTargetDataD3D12 ConvertD3D11TextureToD3D12(RE::BSGraphics::RenderTargetData* rtData);
 };

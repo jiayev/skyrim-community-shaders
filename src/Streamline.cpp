@@ -294,7 +294,7 @@ void Streamline::SetupResources()
 		main.UAV->GetDesc(&uavDesc);
 
 		if (featureDLSSG && !REL::Module::IsVR()) {
-			texDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+			texDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 
 			texDesc.Format = DXGI_FORMAT_R32_FLOAT;
 			srvDesc.Format = texDesc.Format;
