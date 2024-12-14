@@ -15,9 +15,9 @@
 #include "Features/TerrainBlending.h"
 #include "TruePBR.h"
 
+#include "Raytracing.h"
 #include "Streamline.h"
 #include "Upscaling.h"
-#include "Raytracing.h"
 
 void State::Draw()
 {

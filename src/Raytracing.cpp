@@ -37,7 +37,7 @@ Raytracing::RenderTargetDataD3D12 Raytracing::ConvertD3D11TextureToD3D12(RE::BSG
 	D3D11_TEXTURE2D_DESC texDesc{};
 	rtData->texture->GetDesc(&texDesc);
 
-	if (!(texDesc.MiscFlags& D3D11_RESOURCE_MISC_SHARED_NTHANDLE))
+	if (!(texDesc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_NTHANDLE))
 		return renderTargetData;
 
 	// Query the DXGIResource1 interface to access shared NT handle
@@ -60,8 +60,7 @@ void Raytracing::OpenSharedHandles()
 {
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 
-	for (int i = 0; i < RE::RENDER_TARGET::kTOTAL; i++)
-	{
+	for (int i = 0; i < RE::RENDER_TARGET::kTOTAL; i++) {
 		renderTargetsD3D12[i] = ConvertD3D11TextureToD3D12(&renderer->GetRuntimeData().renderTargets[i]);
 	}
 }
