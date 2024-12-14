@@ -9,6 +9,7 @@
 #include "Feature.h"
 #include "ShaderCache.h"
 #include <Features/LightLimitFix/ParticleLights.h>
+#include "Raytracing.h"
 
 struct LightLimitFix : Feature
 {
@@ -311,6 +312,8 @@ public:
 			static void thunk(RE::NiNode* This)
 			{
 				GetSingleton()->CleanupParticleLights(This);
+				Raytracing::GetSingleton()->RemoveGeometry((RE::BSGeometry*)This);
+
 				func(This);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;

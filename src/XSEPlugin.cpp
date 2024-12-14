@@ -8,6 +8,7 @@
 #include "State.h"
 #include "TruePBR.h"
 #include "Upscaling.h"
+#include "Raytracing.h"
 
 #include "ENB/ENBSeriesAPI.h"
 
@@ -88,6 +89,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 				Hooks::Install();
 				FrameAnnotations::OnPostPostLoad();
+				Raytracing::InstallHooks();
 
 				auto& shaderCache = SIE::ShaderCache::Instance();
 

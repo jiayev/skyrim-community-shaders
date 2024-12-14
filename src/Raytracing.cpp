@@ -1,5 +1,7 @@
 #include "Raytracing.h"
 
+#include "Deferred.h"
+
 void Raytracing::InitD3D12()
 {
 	auto manager = RE::BSGraphics::Renderer::GetSingleton();
@@ -62,5 +64,24 @@ void Raytracing::OpenSharedHandles()
 
 	for (int i = 0; i < RE::RENDER_TARGET::kTOTAL; i++) {
 		renderTargetsD3D12[i] = ConvertD3D11TextureToD3D12(&renderer->GetRuntimeData().renderTargets[i]);
+	}
+}
+
+void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
+{
+	if (Deferred::GetSingleton()->inWorld) {
+		auto it = geometries.find(a_geometry);
+		if (it == geometries.end()) {
+			geometries.insert(a_geometry);
+			// Insert Event
+		}
+	}
+}
+
+void Raytracing::RemoveGeometry(RE::BSGeometry* a_geometry)
+{
+	if (geometries.erase(a_geometry))
+	{
+		// Remove Event
 	}
 }
