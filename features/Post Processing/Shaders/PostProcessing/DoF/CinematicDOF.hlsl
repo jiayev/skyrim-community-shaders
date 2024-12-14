@@ -1,3 +1,40 @@
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Cinematic Depth of Field shader, using scatter-as-gather for ReShade 3.x+
+// By Frans Bouma, aka Otis / Infuse Project (Otis_Inf)
+// https://fransbouma.com 
+//
+// This shader has been released under the following license:
+//
+// Copyright (c) 2018-2022 Frans Bouma
+// All rights reserved.
+// 
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+// 
+// * Redistributions of source code must retain the above copyright notice, this
+//   list of conditions and the following disclaimer. 
+// 
+// * Redistributions in binary form must reproduce the above copyright notice,
+//   this list of conditions and the following disclaimer in the documentation
+//   and/or other materials provided with the distribution.
+// 
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Modified by Jiaye for use in Community Shaders
+//
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 struct VSFOCUSINFO
 {
     float4 vpos : SV_Position;
@@ -46,16 +83,17 @@ Texture2D<float4> NoiseTexture : register(t16);
 Texture2D<float4> ColorTexture : register(t17);
 
 RWTexture2D<float4> OutputTexture : register(u0);
-RWTexture2D<float> OutputCoC : register(u1);
 
 SamplerState ColorSampler : register(s0);
+SamplerState BufferSampler : register(s1);
+SamplerState CoCSampler : register(s2);
+SamplerState NoiseSampler : register(s3);
 
 cbuffer DoFCBuffer : register(b1)
 {
     bool UseAutoFocus;
     float2 AutoFocusPoint;
     float AutoFocusTransitionSpeed;
-    float ManualFocusPlaneMaxRange;
     float ManualFocusPlane;
     float FocalLength;
     float FNumber;
@@ -172,9 +210,9 @@ float PerformTileGatherHorizontal(Texture2D<float> tex, float2 texcoord)
     float2 coordOffset = float2(BUFFER_PIXEL_SIZE.x, 0);
     for(float i = 0; i <= tileSize; ++i) 
     {
-        coc = tex.SampleLevel(ColorSampler, texcoord + coordOffset, 0);
+        coc = tex.SampleLevel(CoCSampler, texcoord + coordOffset, 0);
         minCoC = min(minCoC, coc);
-        coc = tex.SampleLevel(ColorSampler, texcoord - coordOffset, 0);
+        coc = tex.SampleLevel(CoCSampler, texcoord - coordOffset, 0);
         minCoC = min(minCoC, coc);
         coordOffset.x+=BUFFER_PIXEL_SIZE.x;
     }
@@ -191,9 +229,9 @@ float PerformTileGatherVertical(Texture2D<float> tex, float2 texcoord)
     float2 coordOffset = float2(0, BUFFER_PIXEL_SIZE.y);
     for(float i = 0; i <= tileSize; ++i) 
     {
-        coc = tex.SampleLevel(ColorSampler, texcoord + coordOffset, 0).r;
+        coc = tex.SampleLevel(CoCSampler, texcoord + coordOffset, 0).r;
         minCoC = min(minCoC, coc);
-        coc = tex.SampleLevel(ColorSampler, texcoord - coordOffset, 0).r;
+        coc = tex.SampleLevel(CoCSampler, texcoord - coordOffset, 0).r;
         minCoC = min(minCoC, coc);
         coordOffset.y+=BUFFER_PIXEL_SIZE.y;
     }
@@ -214,7 +252,7 @@ float PerformNeighborTileGather(Texture2D<float> tex, float2 texcoord)
         for(float j=-1;j<2;j++)
         {
             float2 coordOffset = float2(baseCoordOffset.x * i, baseCoordOffset.y * j);
-            float coc = tex.SampleLevel(ColorSampler, texcoord + coordOffset, 0).r;
+            float coc = tex.SampleLevel(CoCSampler, texcoord + coordOffset, 0).r;
             minCoC = min(minCoC, coc);
         }
     }
@@ -292,9 +330,9 @@ float CalculateSampleWeight(float sampleRadiusInCoC, float ringDistanceInCoC)
 // to blend with.
 float4 PerformNearPlaneDiscBlur(VSDISCBLURINFO blurInfo, Texture2D tex, Texture2D shapetex)
 {
-    float4 fragment = tex.SampleLevel(ColorSampler, blurInfo.texcoord, 0);
+    float4 fragment = tex.SampleLevel(BufferSampler, blurInfo.texcoord, 0);
     // r contains blurred CoC, g contains original CoC. Original is negative.
-    float2 fragmentRadii = CoCBlurredTexture.SampleLevel(ColorSampler, blurInfo.texcoord, 0).rg;
+    float2 fragmentRadii = CoCBlurredTexture.SampleLevel(CoCSampler, blurInfo.texcoord, 0).rg;
     float fragmentRadiusToUse = fragmentRadii.r;
 
     if(fragmentRadii.r <=0)
@@ -336,10 +374,10 @@ float4 PerformNearPlaneDiscBlur(VSDISCBLURINFO blurInfo, Texture2D tex, Texture2
             // bending around the center of the screen.
             pointOffset = useShape ? pointOffset : MorphPointOffsetWithAnamorphicDeltas(pointOffset, anamorphicFactors, anamorphicRotationMatrix);
             float4 tapCoords = float4(blurInfo.texcoord + (pointOffset * currentRingRadiusCoords), 0, 0);
-            float4 tap = tex.SampleLevel(ColorSampler, tapCoords.xy, 0);
+            float4 tap = tex.SampleLevel(BufferSampler, tapCoords.xy, 0);
             tap.rgb *= useShape ? (shapeTap.rgb * HighlightShapeGamma) : 1.0f;
             // r contains blurred CoC, g contains original CoC. Original can be negative
-            float2 sampleRadii = CoCBlurredTexture.SampleLevel(ColorSampler, tapCoords.xy, 0).rg;
+            float2 sampleRadii = CoCBlurredTexture.SampleLevel(CoCSampler, tapCoords.xy, 0).rg;
             float blurredSampleRadius = sampleRadii.r;
             float sampleWeight = weight * (shapeTap.a > 0.01 ? 1.0f : 0.0f);
             average.rgb += tap.rgb * sampleWeight;
@@ -379,8 +417,8 @@ float4 PerformNearPlaneDiscBlur(VSDISCBLURINFO blurInfo, Texture2D tex, Texture2
 float4 PerformDiscBlur(VSDISCBLURINFO blurInfo, Texture2D tex, Texture2D shapetex)
 {
     const float pointsFirstRing = 7; 	// each ring has a multiple of this value of sample points. 
-    float4 fragment = tex.SampleLevel(ColorSampler, blurInfo.texcoord, 0);
-    float fragmentRadius = CoCTexture.SampleLevel(ColorSampler, blurInfo.texcoord, 0).r;
+    float4 fragment = tex.SampleLevel(BufferSampler, blurInfo.texcoord, 0);
+    float fragmentRadius = CoCTexture.SampleLevel(CoCSampler, blurInfo.texcoord, 0).r;
     // we'll not process near plane fragments as they're processed in a separate pass. 
     if(fragmentRadius < 0 || blurInfo.farPlaneMaxBlurInPixels <=0)
     {
@@ -414,12 +452,12 @@ float4 PerformDiscBlur(VSDISCBLURINFO blurInfo, Texture2D tex, Texture2D shapete
             // bending around the center of the screen.
             pointOffset = useShape ? pointOffset : MorphPointOffsetWithAnamorphicDeltas(pointOffset, anamorphicFactors, anamorphicRotationMatrix);
             float4 tapCoords = float4(blurInfo.texcoord + (pointOffset * currentRingRadiusCoords), 0, 0);
-            float sampleRadius = CoCTexture.SampleLevel(ColorSampler, tapCoords.xy, 0).r;
+            float sampleRadius = CoCTexture.SampleLevel(CoCSampler, tapCoords.xy, 0).r;
             float weight = (sampleRadius >=0) * ringWeight * CalculateSampleWeight(sampleRadius * FarPlaneMaxBlur, ringDistance) * (shapeTap.a > 0.01 ? 1.0f : 0.0f);
             // adjust the weight for samples which are in front of the fragment, as they have to get their weight boosted so we don't see edges bleeding through. 
             // as otherwise they'll get a weight that's too low relatively to the pixels sampled from the plane the fragment is in.The 3.0 value is empirically determined.
             weight *= (1.0 + min(FarPlaneMaxBlur, 3.0f) * saturate(fragmentRadius - sampleRadius));
-            float4 tap = tex.SampleLevel(ColorSampler, tapCoords.xy, 0);
+            float4 tap = tex.SampleLevel(BufferSampler, tapCoords.xy, 0);
             tap.rgb *= useShape ? (shapeTap.rgb * HighlightShapeGamma) : 1.0f;
             average.rgb += tap.rgb * weight;
             average.w += weight;
@@ -443,7 +481,7 @@ float4 PerformPreDiscBlur(VSDISCBLURINFO blurInfo, Texture2D tex)
     const float radiusFactor = 1.0/max(blurInfo.numberOfRings, 1);
     const float pointsFirstRing = max(blurInfo.numberOfRings-3, 2); 	// each ring has a multiple of this value of sample points. 
     
-    float4 fragment = tex.SampleLevel(ColorSampler, blurInfo.texcoord, 0);
+    float4 fragment = tex.SampleLevel(BufferSampler, blurInfo.texcoord, 0);
     fragment.rgb = AccentuateWhites(fragment.rgb);
     if(!MitigateUndersampling)
     {
@@ -451,7 +489,7 @@ float4 PerformPreDiscBlur(VSDISCBLURINFO blurInfo, Texture2D tex)
         return fragment;
     }
 
-    float signedFragmentRadius = CoCTexture.SampleLevel(ColorSampler, blurInfo.texcoord, 0).r;
+    float signedFragmentRadius = CoCTexture.SampleLevel(CoCSampler, blurInfo.texcoord, 0).r;
     float absoluteFragmentRadius = abs(signedFragmentRadius);
     bool isNearPlaneFragment = signedFragmentRadius < 0;
     float blurFactorToUse = isNearPlaneFragment ? NearPlaneMaxBlur : FarPlaneMaxBlur;
@@ -475,12 +513,12 @@ float4 PerformPreDiscBlur(VSDISCBLURINFO blurInfo, Texture2D tex)
         {
             sincos(angle, pointOffset.y, pointOffset.x);
             float4 tapCoords = float4(blurInfo.texcoord + (pointOffset * currentRingRadiusCoords), 0, 0);
-            float signedSampleRadius = CoCTexture.SampleLevel(ColorSampler, tapCoords.xy, 0).r;
+            float signedSampleRadius = CoCTexture.SampleLevel(CoCSampler, tapCoords.xy, 0).r;
             float absoluteSampleRadius = abs(signedSampleRadius);
             float isSamePlaneAsFragment = ((signedSampleRadius > 0 && !isNearPlaneFragment) || (signedSampleRadius <= 0 && isNearPlaneFragment));
             float weight = CalculateSampleWeight(absoluteSampleRadius * blurFactorToUse, ringDistance) * isSamePlaneAsFragment * 
                             (absoluteFragmentRadius - absoluteSampleRadius < 0.001);
-            float3 tap = tex.SampleLevel(ColorSampler, tapCoords.xy, 0).rgb;
+            float3 tap = tex.SampleLevel(BufferSampler, tapCoords.xy, 0).rgb;
             average.rgb += AccentuateWhites(tap.rgb) * weight;
             average.w += weight;
             angle+=anglePerPoint;
@@ -502,7 +540,7 @@ float4 PerformPreDiscBlur(VSDISCBLURINFO blurInfo, Texture2D tex)
 // Out: processed blur disc radius for the pixel at texcoord in source.
 float GetBlurDiscRadiusFromSource(Texture2D<float> tex, float2 texcoord, bool flattenToZero)
 {
-    float coc = tex.SampleLevel(ColorSampler, texcoord, 0).r;
+    float coc = tex.SampleLevel(CoCSampler, texcoord, 0).r;
     // we're only interested in negative coc's (near plane). All coc's in focus/far plane are flattened to 0. Return the
     // absolute value of the coc as we're working with positive blurred CoCs (as the sign is no longer needed)
     return (flattenToZero && coc >= 0) ? 0 : abs(coc);
@@ -549,8 +587,8 @@ float4 PerformFullFragmentGaussianBlur(Texture2D tex, float2 texcoord, float2 of
     float weight[6] = { 0.13298, 0.23227575, 0.1353261595, 0.0511557427, 0.01253922, 0.0019913644 };
     const float3 lumaDotWeight = float3(0.3, 0.59, 0.11);
     
-    float coc = CoCTexture.SampleLevel(ColorSampler, texcoord, 0).r;
-    float4 fragment = tex.SampleLevel(ColorSampler, texcoord, 0);
+    float coc = CoCTexture.SampleLevel(CoCSampler, texcoord, 0).r;
+    float4 fragment = tex.SampleLevel(BufferSampler, texcoord, 0);
     float fragmentLuma = dot(fragment.rgb, lumaDotWeight);
     float4 originalFragment = fragment;
     float absoluteCoC = abs(coc);
@@ -566,14 +604,14 @@ float4 PerformFullFragmentGaussianBlur(Texture2D tex, float2 texcoord, float2 of
     {
         float2 coordOffset = factorToUse * offset[i];
         float weightSample = weight[i];
-        float sampleCoC = CoCTexture.SampleLevel(ColorSampler, texcoord + coordOffset, 0).r;
+        float sampleCoC = CoCTexture.SampleLevel(CoCSampler, texcoord + coordOffset, 0).r;
         float maskFactor = abs(sampleCoC) < 0.2;		// mask factor to avoid near/in focus bleed.
         fragment.rgb += (originalFragment.rgb * maskFactor * weightSample) + 
-                        (tex.SampleLevel(ColorSampler, texcoord + coordOffset, 0).rgb * (1-maskFactor) * weightSample);
-        sampleCoC = CoCTexture.SampleLevel(ColorSampler, texcoord - coordOffset, 0).r;
+                        (tex.SampleLevel(BufferSampler, texcoord + coordOffset, 0).rgb * (1-maskFactor) * weightSample);
+        sampleCoC = CoCTexture.SampleLevel(CoCSampler, texcoord - coordOffset, 0).r;
         maskFactor = abs(sampleCoC) < 0.2;
         fragment.rgb += (originalFragment.rgb * maskFactor * weightSample) + 
-                        (tex.SampleLevel(ColorSampler, texcoord - coordOffset, 0).rgb * (1-maskFactor) * weightSample);
+                        (tex.SampleLevel(BufferSampler, texcoord - coordOffset, 0).rgb * (1-maskFactor) * weightSample);
     }
     return saturate(fragment);
 }
@@ -603,16 +641,16 @@ void FillFocusInfoData(inout VSFOCUSINFO toFill)
 // Adjusted for dof usage. Returns in a the # of taps accepted: a tap is accepted if it has a coc in the same plane as center.
 float4 SharpeningPass_BlurSample(in Texture2D tex, in float2 texcoord, in float2 xoff, in float2 yoff, in float centerCoC, inout float3 minv, inout float3 maxv)
 {
-    float3 v11 = tex.SampleLevel(ColorSampler, texcoord + xoff, 0).rgb;
-    float3 v12 = tex.SampleLevel(ColorSampler, texcoord + yoff, 0).rgb;
-    float3 v21 = tex.SampleLevel(ColorSampler, texcoord - xoff, 0).rgb;
-    float3 v22 = tex.SampleLevel(ColorSampler, texcoord - yoff, 0).rgb;
-    float3 center = tex.SampleLevel(ColorSampler, texcoord, 0).rgb;
+    float3 v11 = tex.SampleLevel(BufferSampler, texcoord + xoff, 0).rgb;
+    float3 v12 = tex.SampleLevel(BufferSampler, texcoord + yoff, 0).rgb;
+    float3 v21 = tex.SampleLevel(BufferSampler, texcoord - xoff, 0).rgb;
+    float3 v22 = tex.SampleLevel(BufferSampler, texcoord - yoff, 0).rgb;
+    float3 center = tex.SampleLevel(BufferSampler, texcoord, 0).rgb;
 
-    float v11CoC = CoCTexture.SampleLevel(ColorSampler, texcoord + xoff, 0).r;
-    float v12CoC = CoCTexture.SampleLevel(ColorSampler, texcoord + yoff, 0).r;
-    float v21CoC = CoCTexture.SampleLevel(ColorSampler, texcoord - xoff, 0).r;
-    float v22CoC = CoCTexture.SampleLevel(ColorSampler, texcoord - yoff, 0).r;
+    float v11CoC = CoCTexture.SampleLevel(BufferSampler, texcoord + xoff, 0).r;
+    float v12CoC = CoCTexture.SampleLevel(BufferSampler, texcoord + yoff, 0).r;
+    float v21CoC = CoCTexture.SampleLevel(BufferSampler, texcoord - xoff, 0).r;
+    float v22CoC = CoCTexture.SampleLevel(BufferSampler, texcoord - yoff, 0).r;
 
     float accepted = sign(centerCoC)==sign(v11CoC)? 1.0f: 0.0f;
     accepted+= sign(centerCoC)==sign(v12CoC)? 1.0f: 0.0f;
@@ -644,7 +682,7 @@ float3 SharpeningPass_EdgeStrength(in float3 fragment, in Texture2D tex, in floa
     float3 minv = 1000000000;
     float3 maxv = 0;
 
-    float centerCoC = CoCTexture.SampleLevel(ColorSampler, texcoord, 0).r;
+    float centerCoC = CoCTexture.SampleLevel(CoCSampler, texcoord, 0).r;
     float4 v12 = SharpeningPass_BlurSample(tex, texcoord + up, 	right, up, centerCoC, minv, maxv);
     float4 v21 = SharpeningPass_BlurSample(tex, texcoord - right,right, up, centerCoC, minv, maxv);
     float4 v22 = SharpeningPass_BlurSample(tex, texcoord, 		right, up, centerCoC, minv, maxv);
@@ -787,7 +825,7 @@ void CS_CoCGaussian1(uint3 DTid : SV_DispatchThreadID)
 [numthreads(8, 8, 1)]
 void CS_CoCGaussian2(uint3 DTid : SV_DispatchThreadID)
 {
-    OutputTexture[DTid.xy] = float2(PerformSingleValueGaussianBlur(CoCTmp1Texture, TEXCOORD, float2(0.0f, BUFFER_PIXEL_SIZE.y * (BUFFER_SCREEN_SIZE.y/GROUND_TRUTH_SCREEN_HEIGHT)), false), CoCTileNeighborTexture.SampleLevel(ColorSampler, TEXCOORD, 0).r);
+    OutputTexture[DTid.xy] = float2(PerformSingleValueGaussianBlur(CoCTmp1Texture, TEXCOORD, float2(0.0f, BUFFER_PIXEL_SIZE.y * (BUFFER_SCREEN_SIZE.y/GROUND_TRUTH_SCREEN_HEIGHT)), false), CoCTileNeighborTexture.SampleLevel(CoCSampler, TEXCOORD, 0).r);
 }
 
 // Compute shader which combines 2 half-res sources to a full res output. From texCDBuffer1 & 2 to texCDBuffer4.
@@ -798,9 +836,9 @@ void CS_Combiner(uint3 DTid : SV_DispatchThreadID)
     // first blend far plane with original buffer, then near plane on top of that. 
     float4 originalFragment = ColorTexture.SampleLevel(ColorSampler, TEXCOORD, 0);
     originalFragment.rgb = AccentuateWhites(originalFragment.rgb);
-    float4 farFragment = Buffer3Texture.SampleLevel(ColorSampler, TEXCOORD, 0);
-    float4 nearFragment = Buffer1Texture.SampleLevel(ColorSampler, TEXCOORD, 0);
-    float pixelCoC = CoCTexture.SampleLevel(ColorSampler, TEXCOORD, 0).r;
+    float4 farFragment = Buffer3Texture.SampleLevel(BufferSampler, TEXCOORD, 0);
+    float4 nearFragment = Buffer1Texture.SampleLevel(BufferSampler, TEXCOORD, 0);
+    float pixelCoC = CoCTexture.SampleLevel(CoCSampler, TEXCOORD, 0).r;
     // multiply with far plane max blur so if we need to have 0 blur we get full res
     float realCoC = pixelCoC * clamp(0, 1, FarPlaneMaxBlur);
     if(HighlightSharpeningFactor > 0.0f)
@@ -828,22 +866,22 @@ void CS_TentFilter(uint3 DTid : SV_DispatchThreadID)
 {
     float4 coord = BUFFER_PIXEL_SIZE.xyxy * float4(1, 1, -1, 0);
 	float4 average;
-    average = Buffer2Texture.SampleLevel(ColorSampler, TEXCOORD - coord.xy, 0);
-    average += Buffer2Texture.SampleLevel(ColorSampler, TEXCOORD - coord.wy, 0) * 2;
-    average += Buffer2Texture.SampleLevel(ColorSampler, TEXCOORD - coord.zy, 0);
-    average += Buffer2Texture.SampleLevel(ColorSampler, TEXCOORD + coord.zw, 0) * 2;
-    average += Buffer2Texture.SampleLevel(ColorSampler, TEXCOORD, 0) * 4;
-    average += Buffer2Texture.SampleLevel(ColorSampler, TEXCOORD + coord.xw, 0) * 2;
-    average += Buffer2Texture.SampleLevel(ColorSampler, TEXCOORD + coord.zy, 0);
-    average += Buffer2Texture.SampleLevel(ColorSampler, TEXCOORD + coord.wy, 0) * 2;
-    average += Buffer2Texture.SampleLevel(ColorSampler, TEXCOORD + coord.xy, 0);
+    average = Buffer2Texture.SampleLevel(BufferSampler, TEXCOORD - coord.xy, 0);
+    average += Buffer2Texture.SampleLevel(BufferSampler, TEXCOORD - coord.wy, 0) * 2;
+    average += Buffer2Texture.SampleLevel(BufferSampler, TEXCOORD - coord.zy, 0);
+    average += Buffer2Texture.SampleLevel(BufferSampler, TEXCOORD + coord.zw, 0) * 2;
+    average += Buffer2Texture.SampleLevel(BufferSampler, TEXCOORD, 0) * 4;
+    average += Buffer2Texture.SampleLevel(BufferSampler, TEXCOORD + coord.xw, 0) * 2;
+    average += Buffer2Texture.SampleLevel(BufferSampler, TEXCOORD + coord.zy, 0);
+    average += Buffer2Texture.SampleLevel(BufferSampler, TEXCOORD + coord.wy, 0) * 2;
+    average += Buffer2Texture.SampleLevel(BufferSampler, TEXCOORD + coord.xy, 0);
 
     OutputTexture[DTid.xy] = average / 16;
 }
 
 // Compute shader which performs the first part of the gaussian post-blur smoothing pass, to iron out undersampling issues with the disc blur
 [numthreads(8, 8, 1)]
-void PS_PostSmoothing1(uint3 DTid : SV_DispatchThreadID)
+void CS_PostSmoothing1(uint3 DTid : SV_DispatchThreadID)
 {
     OutputTexture[DTid.xy] = PerformFullFragmentGaussianBlur(Buffer4Texture, TEXCOORD, float2(BUFFER_PIXEL_SIZE.x, 0.0));
 }
@@ -866,14 +904,14 @@ void CS_PostSmoothing2AndFocusing(uint3 DTid : SV_DispatchThreadID)
     float4 fragment;
     
     fragment = PerformFullFragmentGaussianBlur(Buffer5Texture, focusInfo.texcoord, float2(0.0, BUFFER_PIXEL_SIZE.y));
-    float4 originalFragment = Buffer4Texture.SampleLevel(ColorSampler, focusInfo.texcoord, 0);
+    float4 originalFragment = Buffer4Texture.SampleLevel(BufferSampler, focusInfo.texcoord, 0);
     
     float2 uv = float2(BUFFER_WIDTH, BUFFER_HEIGHT) / float2(512.0f, 512.0f);
     uv.xy = uv.xy * focusInfo.texcoord.xy;
-    float noise = NoiseTexture.SampleLevel(ColorSampler, uv, 0).x;
+    float noise = NoiseTexture.SampleLevel(NoiseSampler, uv, 0).x;
     fragment.xyz = saturate(fragment.xyz + lerp(-0.5/255.0, 0.5/255.0, noise));
     
-    float coc = abs(CoCTexture.SampleLevel(ColorSampler, focusInfo.texcoord, 0).r);
+    float coc = abs(CoCTexture.SampleLevel(CoCSampler, focusInfo.texcoord, 0).r);
     fragment.rgb = lerp(originalFragment.rgb, fragment.rgb, saturate(coc < length(BUFFER_PIXEL_SIZE) ? 0 : 4 * coc));
     fragment.w = 1.0;
 
