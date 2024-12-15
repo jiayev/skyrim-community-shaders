@@ -194,13 +194,16 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 
 			for (uint i = 0; i < 8; i++) {
 				auto transformed = transform * aabbCorners[i];
-				float3 transformedF = { transformed.x, transformed.y, transformed.z };
+				float4 transformedF = { transformed.x, transformed.y, transformed.z, 0 };
 
 				minExtents = (float4)_mm_min_ps(minExtents, transformedF);
-				maxExtents = (float4)_mm_min_ps(maxExtents, transformedF);
+				maxExtents = (float4)_mm_max_ps(maxExtents, transformedF);
 			}
 
-			auto& rendererData = a_geometry->GetGeometryRuntimeData().rendererData;
+			auto rendererData = a_geometry->GetGeometryRuntimeData().rendererData;
+
+			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+				return;
 
 			BufferData* vertexBuffer;
 			BufferData* indexBuffer;
