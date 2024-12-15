@@ -214,7 +214,7 @@ HRESULT WINAPI hk_CreateDXGIFactory(REFIID, void** ppFactory)
 	return Streamline::GetSingleton()->CreateDXGIFactory(__uuidof(IDXGIFactory1), ppFactory);
 }
 
-struct ID3D11Device_CreateBuffer
+struct ID3D11Device_GetBuffer
 {
 	static HRESULT thunk(ID3D11Device* This, const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer)
 	{
@@ -235,37 +235,117 @@ struct ID3D11Device_CreateBuffer
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChain;
 
+#include "d3d12.h"
+#include "d3d11on12.h"
+
+winrt::com_ptr<ID3D11On12Device> d3d11On12Device;
+
+struct IDXGISwapChain_GetBuffer
+{
+	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT index, REFIID, void** buffer)
+	{
+		static bool created[3];
+
+		static winrt::com_ptr<ID3D12Resource> resource[3];
+		static winrt::com_ptr<ID3D11Texture2D> resource11[3];
+
+		if (!created) {
+			created[index] = true;
+
+			D3D11_RESOURCE_FLAGS d3d11Flags = { D3D11_BIND_RENDER_TARGET };
+
+			func(This, 0, IID_PPV_ARGS(&resource[index]));
+			d3d11On12Device->CreateWrappedResource(resource[index].get(), &d3d11Flags, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT, IID_PPV_ARGS(&resource11[index]));
+		}
+
+		*buffer = resource11[index].get();
+
+		return S_OK;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
 HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainNoStreamline(
 	IDXGIAdapter* pAdapter,
-	D3D_DRIVER_TYPE DriverType,
-	HMODULE Software,
-	UINT Flags,
+	[[maybe_unused]] D3D_DRIVER_TYPE DriverType,
+	[[maybe_unused]] HMODULE Software,
+	[[maybe_unused]] UINT Flags,
 	[[maybe_unused]] const D3D_FEATURE_LEVEL* pFeatureLevels,
 	[[maybe_unused]] UINT FeatureLevels,
-	UINT SDKVersion,
-	const DXGI_SWAP_CHAIN_DESC* pSwapChainDesc,
+	[[maybe_unused]] UINT SDKVersion,
+	DXGI_SWAP_CHAIN_DESC* pSwapChainDesc,
 	IDXGISwapChain** ppSwapChain,
 	ID3D11Device** ppDevice,
-	D3D_FEATURE_LEVEL* pFeatureLevel,
+	[[maybe_unused]] D3D_FEATURE_LEVEL* pFeatureLevel,
 	ID3D11DeviceContext** ppImmediateContext)
 {
+	Raytracing::GetSingleton()->InitD3D12(pAdapter);
+
+	winrt::com_ptr<IDXGIFactory4> dxgiFactory;
+
+	CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory));
+
+	DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
+	swapChainDesc.Width = pSwapChainDesc->BufferDesc.Width;
+	swapChainDesc.Height = pSwapChainDesc->BufferDesc.Height;
+	swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+	swapChainDesc.BufferCount = 2;
+	swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
+	DX::ThrowIfFailed(dxgiFactory->CreateSwapChainForHwnd(
+		Raytracing::GetSingleton()->commandQueue.get(),
+		pSwapChainDesc->OutputWindow,
+		&swapChainDesc,
+		nullptr,
+		nullptr,
+		reinterpret_cast<IDXGISwapChain1**>(ppSwapChain)));
+
+	 //dxgiFactory->CreateSwapChain(
+		//Raytracing::GetSingleton()->commandQueue.get(),
+		//pSwapChainDesc,
+		//ppSwapChain);
+
+	IUnknown* commandQueue = Raytracing::GetSingleton()->commandQueue.get();
+
+
+	auto hr = D3D11On12CreateDevice(
+		Raytracing::GetSingleton()->d3d12Device.get(),
+		0,
+		nullptr,
+		0,
+		&commandQueue,
+		1,
+		0,
+		ppDevice,
+		ppImmediateContext,
+		nullptr);
+
+	(*ppDevice)->QueryInterface(IID_PPV_ARGS(&d3d11On12Device));
+
 	DXGI_ADAPTER_DESC adapterDesc;
 	pAdapter->GetDesc(&adapterDesc);
 	State::GetSingleton()->SetAdapterDescription(adapterDesc.Description);
 
-	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;  // Create a device with only the latest feature level
-	return ptrD3D11CreateDeviceAndSwapChain(pAdapter,
-		DriverType,
-		Software,
-		Flags,
-		&featureLevel,
-		1,
-		SDKVersion,
-		pSwapChainDesc,
-		ppSwapChain,
-		ppDevice,
-		pFeatureLevel,
-		ppImmediateContext);
+	stl::detour_vfunc<9, IDXGISwapChain_GetBuffer>(*ppSwapChain);
+
+	//	winrt::com_ptr<ID3D11Texture2D> backbuffer;
+//	(*ppSwapChain)->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)backbuffer.put());
+
+	//const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;  // Create a device with only the latest feature level
+	//return ptrD3D11CreateDeviceAndSwapChain(pAdapter,
+	//	DriverType,
+	//	Software,
+	//	Flags,
+	//	&featureLevel,
+	//	1,
+	//	SDKVersion,
+	//	pSwapChainDesc,
+	//	ppSwapChain,
+	//	ppDevice,
+	//	pFeatureLevel,
+	//	ppImmediateContext);
+	return hr;
 }
 
 HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
@@ -383,7 +463,7 @@ namespace Hooks
 			auto swapchain = reinterpret_cast<IDXGISwapChain*>(manager->GetRuntimeData().renderWindows->swapChain);
 			auto device = reinterpret_cast<ID3D11Device*>(manager->GetRuntimeData().forwarder);
 
-			Raytracing::GetSingleton()->InitD3D12();
+		//	Raytracing::GetSingleton()->InitD3D12();
 
 			logger::info("Detouring virtual function tables");
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(swapchain);
@@ -394,7 +474,7 @@ namespace Hooks
 				stl::detour_vfunc<15, ID3D11Device_CreatePixelShader>(device);
 			}
 
-			stl::detour_vfunc<3, ID3D11Device_CreateBuffer>(device);
+			stl::detour_vfunc<3, ID3D11Device_GetBuffer>(device);
 
 			Menu::GetSingleton()->Init(swapchain, device, context);
 		}

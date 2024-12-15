@@ -59,6 +59,7 @@ public:
 	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeBrickMaps;
 
 	void InitD3D12();
+	void InitD3D12(IDXGIAdapter* a_adapter);
 
 	winrt::com_ptr<ID3D12Resource> CreateBuffer(UINT size, D3D12_RESOURCE_STATES resourceState, D3D12_RESOURCE_FLAGS flags);
 
