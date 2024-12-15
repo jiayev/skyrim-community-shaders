@@ -1,6 +1,7 @@
 #include "Raytracing.h"
 
 #include "Deferred.h"
+#include <FidelityFX/host/backends/dx12/d3dx12.h>
 
 void Raytracing::InitD3D12()
 {
@@ -28,6 +29,25 @@ void Raytracing::InitD3D12()
 	DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.get(), nullptr, IID_PPV_ARGS(&commandList)));
 
 	InitBrixelizer();
+}
+
+
+// Helper function to create a committed resource
+winrt::com_ptr<ID3D12Resource> Raytracing::CreateBuffer(UINT size, D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE)
+{
+	winrt::com_ptr<ID3D12Resource> buffer;
+	CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
+	CD3DX12_RESOURCE_DESC bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(size, flags);
+
+	DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
+		&heapProperties,
+		D3D12_HEAP_FLAG_NONE,
+		&bufferDesc,
+		D3D12_RESOURCE_STATE_COMMON,
+		nullptr,
+		IID_PPV_ARGS(&buffer)));
+
+	return buffer;
 }
 
 void Raytracing::InitBrixelizer()
@@ -59,6 +79,30 @@ void Raytracing::InitBrixelizer()
 	if (error != FFX_OK) {
 		logger::info("error");
 	}
+
+	D3D12_RESOURCE_DESC sdfAtlasDesc = {};
+	sdfAtlasDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+	sdfAtlasDesc.Width = FFX_BRIXELIZER_STATIC_CONFIG_SDF_ATLAS_SIZE;
+	sdfAtlasDesc.Height = FFX_BRIXELIZER_STATIC_CONFIG_SDF_ATLAS_SIZE;
+	sdfAtlasDesc.DepthOrArraySize = FFX_BRIXELIZER_STATIC_CONFIG_SDF_ATLAS_SIZE;
+	sdfAtlasDesc.MipLevels = 1;
+	sdfAtlasDesc.Format = DXGI_FORMAT_R8_UNORM;
+	sdfAtlasDesc.SampleDesc.Count = 1;
+	sdfAtlasDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+	sdfAtlasDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+	CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
+	DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
+		&heapProperties,
+		D3D12_HEAP_FLAG_NONE,
+		&sdfAtlasDesc,
+		D3D12_RESOURCE_STATE_COMMON,
+		nullptr,
+		IID_PPV_ARGS(&sdfAtlas)));
+
+	brickAABBs = CreateBuffer(FFX_BRIXELIZER_BRICK_AABBS_SIZE);
+	cascadeAABBTree = CreateBuffer(FFX_BRIXELIZER_CASCADE_AABB_TREE_SIZE);
+	cascadeBrickMap = CreateBuffer(FFX_BRIXELIZER_CASCADE_BRICK_MAP_SIZE);
 }
 
 // Function to check for shared NT handle support and convert to D3D12 resource

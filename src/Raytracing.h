@@ -25,32 +25,25 @@ public:
 		return &singleton;
 	}
 
-	// FidelityFX Brixelizer information
-	FfxBrixelizerContextDescription initializationParameters = {};
-	FfxBrixelizerContext brixelizerContext = {};
-	FfxBrixelizerBakedUpdateDescription brixelizerBakedUpdateDesc = {};
-
-	struct BrixelizerBufferInfo
-	{
-		uint32_t index;
-		const ID3D12Resource* buffer;
-	};
-
-	////const cauldron::Texture* m_pSdfAtlas = nullptr;
-	////const cauldron::Buffer* m_pBrickAABBs = nullptr;
-	////const cauldron::Buffer* m_pCascadeAABBTrees[FFX_BRIXELIZER_MAX_CASCADES] = {};
-	////const cauldron::Buffer* m_pCascadeBrickMaps[FFX_BRIXELIZER_MAX_CASCADES] = {};
-	////const cauldron::Buffer* m_pGpuScratchBuffer = nullptr;
-	//std::vector<BrixelizerInstanceInfo> m_Instances = {};
-	//std::vector<BrixelizerBufferInfo> m_Buffers = {};
-
+	
 	winrt::com_ptr<IDXGIAdapter3> dxgiAdapter3;
 	winrt::com_ptr<ID3D12Device> d3d12Device;
 	winrt::com_ptr<ID3D12CommandQueue> commandQueue;
 	winrt::com_ptr<ID3D12CommandAllocator> commandAllocator;
 	winrt::com_ptr<ID3D12GraphicsCommandList> commandList;
 
+	FfxBrixelizerContextDescription initializationParameters = {};
+	FfxBrixelizerContext brixelizerContext = {};
+	FfxBrixelizerBakedUpdateDescription brixelizerBakedUpdateDesc = {};
+
+	winrt::com_ptr<ID3D12Resource> sdfAtlas;
+	winrt::com_ptr<ID3D12Resource> brickAABBs;
+	winrt::com_ptr<ID3D12Resource> cascadeAABBTree;
+	winrt::com_ptr<ID3D12Resource> cascadeBrickMap;
+
 	void InitD3D12();
+
+	winrt::com_ptr<ID3D12Resource> CreateBuffer(UINT size, D3D12_RESOURCE_FLAGS flags);
 
 	void InitBrixelizer();
 
