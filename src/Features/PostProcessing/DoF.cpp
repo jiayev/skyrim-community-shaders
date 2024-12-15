@@ -50,10 +50,10 @@ void CinematicDOF::DrawSettings()
     ImGui::SliderFloat("Manual-focus plane", &settings.ManualFocusPlane, 0.0f, 1.0f, "%.3f");
     if (auto _tt = Util::HoverTooltipWrapper())
         ImGui::Text("The depth of focal plane related to the camera when 'Use auto-focus' is off.\n'1.0' means the ManualFocusPlaneMaxRange. 0 means at the camera.\nOnly used if 'Use auto-focus' is disabled.");
-    ImGui::SliderFloat("Focal length (mm)", &settings.FocalLength, 10.0f, 300.0f, "%.1f");
+    ImGui::SliderFloat("Focal length (mm)", &settings.FocalLength, 10.0f, 300.0f, "%.1f mm");
     if (auto _tt = Util::HoverTooltipWrapper())
         ImGui::Text("Focal length of the used lens. The longer the focal length, the narrower the\ndepth of field and thus the more is out of focus. For portraits, start with 120 or 150.");
-    ImGui::SliderFloat("Aperture (f-number)", &settings.FNumber, 1.0f, 22.0f);
+    ImGui::SliderFloat("Aperture (f-number)", &settings.FNumber, 1.0f, 22.0f, "%.1f");
     if (auto _tt = Util::HoverTooltipWrapper())
         ImGui::Text("The f-number (also known as f-stop) to use. The higher the number, the wider\nthe depth of field, meaning the more is in-focus and thus the less is out of focus.\nFor portraits, start with 2.8.");
 
@@ -552,7 +552,7 @@ void CinematicDOF::Draw(TextureInfo& inout_tex)
     auto context = state->context;
     auto renderer = RE::BSGraphics::Renderer::GetSingleton();
     logger::debug("Drawing Cinematic DOF...");
-    
+
     float2 ScreenSize = state->screenSize;
     state->BeginPerfEvent("Cinematic DOF");
 
