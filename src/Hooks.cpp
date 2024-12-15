@@ -235,8 +235,8 @@ struct ID3D11Device_GetBuffer
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChain;
 
-#include "d3d12.h"
 #include "d3d11on12.h"
+#include "d3d12.h"
 
 winrt::com_ptr<ID3D11On12Device> d3d11On12Device;
 
@@ -301,13 +301,12 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainNoStreamline(
 		nullptr,
 		reinterpret_cast<IDXGISwapChain1**>(ppSwapChain)));
 
-	 //dxgiFactory->CreateSwapChain(
-		//Raytracing::GetSingleton()->commandQueue.get(),
-		//pSwapChainDesc,
-		//ppSwapChain);
+	//dxgiFactory->CreateSwapChain(
+	//Raytracing::GetSingleton()->commandQueue.get(),
+	//pSwapChainDesc,
+	//ppSwapChain);
 
 	IUnknown* commandQueue = Raytracing::GetSingleton()->commandQueue.get();
-
 
 	auto hr = D3D11On12CreateDevice(
 		Raytracing::GetSingleton()->d3d12Device.get(),
@@ -330,7 +329,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainNoStreamline(
 	stl::detour_vfunc<9, IDXGISwapChain_GetBuffer>(*ppSwapChain);
 
 	//	winrt::com_ptr<ID3D11Texture2D> backbuffer;
-//	(*ppSwapChain)->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)backbuffer.put());
+	//	(*ppSwapChain)->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)backbuffer.put());
 
 	//const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;  // Create a device with only the latest feature level
 	//return ptrD3D11CreateDeviceAndSwapChain(pAdapter,
@@ -463,7 +462,7 @@ namespace Hooks
 			auto swapchain = reinterpret_cast<IDXGISwapChain*>(manager->GetRuntimeData().renderWindows->swapChain);
 			auto device = reinterpret_cast<ID3D11Device*>(manager->GetRuntimeData().forwarder);
 
-		//	Raytracing::GetSingleton()->InitD3D12();
+			//	Raytracing::GetSingleton()->InitD3D12();
 
 			logger::info("Detouring virtual function tables");
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(swapchain);
