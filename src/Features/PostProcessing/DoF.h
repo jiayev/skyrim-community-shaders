@@ -94,35 +94,7 @@ struct CinematicDOF : public PostProcessFeature
     eastl::unique_ptr<Texture2D> texCDBuffer5 = nullptr;
     eastl::unique_ptr<Texture2D> texCDNoise = nullptr;
 
-    eastl::unique_ptr<Texture2D> texCDCurrentFocusCopy = nullptr;
-    eastl::unique_ptr<Texture2D> texCDPreviousFocusCopy = nullptr;
-    eastl::unique_ptr<Texture2D> texCDCoCCopy = nullptr;
-    eastl::unique_ptr<Texture2D> texCDCoCTileTmpCopy = nullptr;
-    eastl::unique_ptr<Texture2D> texCDCoCTileCopy = nullptr;
-    eastl::unique_ptr<Texture2D> texCDCoCTileNeighborCopy = nullptr;
-    eastl::unique_ptr<Texture2D> texCDCoCTmp1Copy = nullptr;
-    eastl::unique_ptr<Texture2D> texCDCoCBlurredCopy = nullptr;
-    eastl::unique_ptr<Texture2D> texCDBuffer1Copy = nullptr;
-    eastl::unique_ptr<Texture2D> texCDBuffer2Copy = nullptr;
-    eastl::unique_ptr<Texture2D> texCDBuffer3Copy = nullptr;
-    eastl::unique_ptr<Texture2D> texCDBuffer4Copy = nullptr;
-    eastl::unique_ptr<Texture2D> texCDBuffer5Copy = nullptr;
-
-    winrt::com_ptr<ID3D11ComputeShader> determineCurrentFocusCS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> copyCurrentFocusCS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> calculateCoCValuesCS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> preBlurCS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> bokehBlurCS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> nearBokehBlurCS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> cocTile1CS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> cocTile2CS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> cocTileNeighborCS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> cocGaussian1CS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> cocGaussian2CS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> combinerCS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> tentFilterCS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> postSmoothing1CS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> postSmoothing2AndFocusingCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> cdofCS = nullptr;
 
     virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;

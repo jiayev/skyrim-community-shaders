@@ -5,8 +5,6 @@
 #include "Util.h"
 #include "Menu.h"
 
-
-
 #define BUFFER_WIDTH ScreenSize.x
 #define BUFFER_HEIGHT ScreenSize.y
 #define TILE_SIZE 1
@@ -14,6 +12,7 @@
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     CinematicDOF::Settings,
     UseAutoFocus,
+    MitigateUndersampling,
     AutoFocusPoint,
     AutoFocusTransitionSpeed,
     ManualFocusPlane,
@@ -33,8 +32,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     HighlightSharpeningFactor,
     HighlightShape,
     HighlightShapeRotationAngle,
-    HighlightShapeGamma,
-    MitigateUndersampling)
+    HighlightShapeGamma
+    )
 
 void CinematicDOF::DrawSettings()
 {
@@ -157,15 +156,6 @@ void CinematicDOF::SetupResources()
     {
         DirectX::ScratchImage image;
 
-
-        std::filesystem::path path = { "data/texture/noise/monochrome_gaussnoise.png" };
-        try {
-            DX::ThrowIfFailed(LoadFromWICFile(path.c_str(), DirectX::WIC_FLAGS_NONE, nullptr, image));
-        } catch (std::runtime_error& e) {
-            logger::error("Failed to load noise texture! Error: {}", e.what());
-        }
-        bool noiseFailed = false;
-        ID3D11Resource* pRsrc = nullptr;
         D3D11_TEXTURE2D_DESC texDesc = {
             .Width = 512,
             .Height = 512,
@@ -184,23 +174,29 @@ void CinematicDOF::SetupResources()
             .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
             .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
         };
-
+        std::filesystem::path path = { "data/texture/noise/monochrome_gaussnoise.png" };
+        try {
+            DX::ThrowIfFailed(LoadFromWICFile(path.c_str(), DirectX::WIC_FLAGS_NONE, nullptr, image));
+        } catch (std::runtime_error& e) {
+            logger::error("Failed to load noise texture! Error: {}", e.what());
+            texCDNoise = eastl::make_unique<Texture2D>(texDesc);
+            texCDNoise->CreateSRV(srvDesc);
+            return;
+        }
+        ID3D11Resource* pRsrc = nullptr;
+        
         try {
             DX::ThrowIfFailed(CreateTexture(device, image.GetImages(), image.GetImageCount(), image.GetMetadata(), &pRsrc));
         } catch (std::runtime_error& e) {
             logger::error("Failed to create texture! Error: {}", e.what());
-            noiseFailed = true;
-        }
-        if (!noiseFailed) {
-            texCDNoise = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pRsrc));
-            texCDNoise->CreateSRV(srvDesc);
-        }
-        else {
-            logger::error("Failed to create noise texture!");
             // Create a dummy texture
             texCDNoise = eastl::make_unique<Texture2D>(texDesc);
             texCDNoise->CreateSRV(srvDesc);
+            return;
         }
+
+        texCDNoise = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pRsrc));
+        texCDNoise->CreateSRV(srvDesc);
     }
 
     logger::debug("Creating 2D textures...");
@@ -260,17 +256,9 @@ void CinematicDOF::SetupResources()
         texCDCurrentFocus->CreateSRV(srvCDCurrentFocusDesc);
         texCDCurrentFocus->CreateUAV(uavCDCurrentFocusDesc);
 
-        texCDCurrentFocusCopy = eastl::make_unique<Texture2D>(texCDCurrentFocusDesc);
-        texCDCurrentFocusCopy->CreateSRV(srvCDCurrentFocusDesc);
-        texCDCurrentFocusCopy->CreateUAV(uavCDCurrentFocusDesc);
-
         texCDPreviousFocus = eastl::make_unique<Texture2D>(texCDCurrentFocusDesc);
         texCDPreviousFocus->CreateSRV(srvCDCurrentFocusDesc);
         texCDPreviousFocus->CreateUAV(uavCDCurrentFocusDesc);
-
-        texCDPreviousFocusCopy = eastl::make_unique<Texture2D>(texCDCurrentFocusDesc);
-        texCDPreviousFocusCopy->CreateSRV(srvCDCurrentFocusDesc);
-        texCDPreviousFocusCopy->CreateUAV(uavCDCurrentFocusDesc);
 
         D3D11_TEXTURE2D_DESC texCDCoCDesc = {
             .Width = uint(BUFFER_WIDTH),
@@ -338,18 +326,6 @@ void CinematicDOF::SetupResources()
         texCDCoCTileNeighbor->CreateSRV(srvCDCoCTileTmpDesc);
         texCDCoCTileNeighbor->CreateUAV(uavCDCoCTileTmpDesc);
 
-        texCDCoCTileTmpCopy = eastl::make_unique<Texture2D>(texCDCoCTileTmpDesc);
-        texCDCoCTileTmpCopy->CreateSRV(srvCDCoCTileTmpDesc);
-        texCDCoCTileTmpCopy->CreateUAV(uavCDCoCTileTmpDesc);
-
-        texCDCoCTileCopy = eastl::make_unique<Texture2D>(texCDCoCTileTmpDesc);
-        texCDCoCTileCopy->CreateSRV(srvCDCoCTileTmpDesc);
-        texCDCoCTileCopy->CreateUAV(uavCDCoCTileTmpDesc);
-
-        texCDCoCTileNeighborCopy = eastl::make_unique<Texture2D>(texCDCoCTileTmpDesc);
-        texCDCoCTileNeighborCopy->CreateSRV(srvCDCoCTileTmpDesc);
-        texCDCoCTileNeighborCopy->CreateUAV(uavCDCoCTileTmpDesc);
-
         D3D11_TEXTURE2D_DESC texCDCoCTmp1Desc = {
             .Width = uint(BUFFER_WIDTH) / 2,
             .Height = uint(BUFFER_HEIGHT) / 2,
@@ -408,10 +384,6 @@ void CinematicDOF::SetupResources()
         texCDCoCBlurred->CreateSRV(srvCDCoCBlurredDesc);
         texCDCoCBlurred->CreateUAV(uavCDCoCBlurredDesc);
 
-        texCDCoCBlurredCopy = eastl::make_unique<Texture2D>(texCDCoCBlurredDesc);
-        texCDCoCBlurredCopy->CreateSRV(srvCDCoCBlurredDesc);
-        texCDCoCBlurredCopy->CreateUAV(uavCDCoCBlurredDesc);
-
         D3D11_TEXTURE2D_DESC texCDBuffer1Desc = {
             .Width = uint(BUFFER_WIDTH) / 2,
             .Height = uint(BUFFER_HEIGHT) / 2,
@@ -449,18 +421,6 @@ void CinematicDOF::SetupResources()
         texCDBuffer3->CreateSRV(srvCDBuffer1Desc);
         texCDBuffer3->CreateUAV(uavCDBuffer1Desc);
 
-        texCDBuffer1Copy = eastl::make_unique<Texture2D>(texCDBuffer1Desc);
-        texCDBuffer1Copy->CreateSRV(srvCDBuffer1Desc);
-        texCDBuffer1Copy->CreateUAV(uavCDBuffer1Desc);
-
-        texCDBuffer2Copy = eastl::make_unique<Texture2D>(texCDBuffer1Desc);
-        texCDBuffer2Copy->CreateSRV(srvCDBuffer1Desc);
-        texCDBuffer2Copy->CreateUAV(uavCDBuffer1Desc);
-
-        texCDBuffer3 = eastl::make_unique<Texture2D>(texCDBuffer1Desc);
-        texCDBuffer3->CreateSRV(srvCDBuffer1Desc);
-        texCDBuffer3->CreateUAV(uavCDBuffer1Desc);
-
         D3D11_TEXTURE2D_DESC texCDBuffer4Desc = {
             .Width = uint(BUFFER_WIDTH),
             .Height = uint(BUFFER_HEIGHT),
@@ -493,14 +453,6 @@ void CinematicDOF::SetupResources()
         texCDBuffer5 = eastl::make_unique<Texture2D>(texCDBuffer4Desc);
         texCDBuffer5->CreateSRV(srvCDBuffer4Desc);
         texCDBuffer5->CreateUAV(uavCDBuffer4Desc);
-
-        texCDBuffer4Copy = eastl::make_unique<Texture2D>(texCDBuffer4Desc);
-        texCDBuffer4Copy->CreateSRV(srvCDBuffer4Desc);
-        texCDBuffer4Copy->CreateUAV(uavCDBuffer4Desc);
-
-        texCDBuffer5Copy = eastl::make_unique<Texture2D>(texCDBuffer4Desc);
-        texCDBuffer5Copy->CreateSRV(srvCDBuffer4Desc);
-        texCDBuffer5Copy->CreateUAV(uavCDBuffer4Desc);
     }
 
     logger::debug("Creating samplers...");
@@ -560,9 +512,7 @@ void CinematicDOF::SetupResources()
 void CinematicDOF::ClearShaderCache()
 {
     auto const shaderPtrs = std::array{
-        &determineCurrentFocusCS, &copyCurrentFocusCS, &calculateCoCValuesCS, &preBlurCS, &bokehBlurCS,
-        &nearBokehBlurCS, &cocTile1CS, &cocTile2CS, &cocTileNeighborCS, &cocGaussian1CS, &cocGaussian2CS,
-        &combinerCS, &tentFilterCS, &postSmoothing1CS, &postSmoothing2AndFocusingCS
+        &cdofCS,
     };
 
     for (auto shader : shaderPtrs)
@@ -586,21 +536,7 @@ void CinematicDOF::CompileComputeShaders()
 
     std::vector<ShaderCompileInfo>
         shaderInfos = {
-            { &determineCurrentFocusCS, "CinematicDOF.hlsl", {}, "CS_DetermineCurrentFocus" },
-            { &copyCurrentFocusCS, "CinematicDOF.hlsl", {}, "CS_CopyCurrentFocus" },
-            { &calculateCoCValuesCS, "CinematicDOF.hlsl", {}, "CS_CalculateCoCValues" },
-            { &preBlurCS, "CinematicDOF.hlsl", {}, "CS_PreBlur" },
-            { &bokehBlurCS, "CinematicDOF.hlsl", {}, "CS_BokehBlur" },
-            { &nearBokehBlurCS, "CinematicDOF.hlsl", {}, "CS_NearBokehBlur" },
-            { &cocTile1CS, "CinematicDOF.hlsl", {}, "CS_CoCTile1" },
-            { &cocTile2CS, "CinematicDOF.hlsl", {}, "CS_CoCTile2" },
-            { &cocTileNeighborCS, "CinematicDOF.hlsl", {}, "CS_CoCTileNeighbor" },
-            { &cocGaussian1CS, "CinematicDOF.hlsl", {}, "CS_CoCGaussian1" },
-            { &cocGaussian2CS, "CinematicDOF.hlsl", {}, "CS_CoCGaussian2" },
-            { &combinerCS, "CinematicDOF.hlsl", {}, "CS_Combiner" },
-            { &tentFilterCS, "CinematicDOF.hlsl", {}, "CS_TentFilter" },
-            { &postSmoothing1CS, "CinematicDOF.hlsl", {}, "CS_PostSmoothing1" },
-            { &postSmoothing2AndFocusingCS, "CinematicDOF.hlsl", {}, "CS_PostSmoothing2AndFocusing" }
+            { &cdofCS, "CinematicDOF.hlsl", {}, "CS_CinematicDOF" },
         };
     
     for (auto& info : shaderInfos) {
@@ -615,7 +551,8 @@ void CinematicDOF::Draw(TextureInfo& inout_tex)
     auto state = State::GetSingleton();
     auto context = state->context;
     auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-
+    logger::debug("Drawing Cinematic DOF...");
+    
     float2 ScreenSize = state->screenSize;
     state->BeginPerfEvent("Cinematic DOF");
 
@@ -640,7 +577,7 @@ void CinematicDOF::Draw(TextureInfo& inout_tex)
         .HighlightBoost = settings.HighlightBoost,
         .HighlightGammaFactor = settings.HighlightGammaFactor,
         .HighlightSharpeningFactor = settings.HighlightSharpeningFactor,
-        .HighlightShape = settings.HighlightShape,
+        .HighlightShape = 0,
         .HighlightShapeRotationAngle = settings.HighlightShapeRotationAngle,
         .HighlightShapeGamma = settings.HighlightShapeGamma,
         .ScreenWidth = BUFFER_WIDTH,
@@ -648,31 +585,34 @@ void CinematicDOF::Draw(TextureInfo& inout_tex)
     };
     dofCB->Update(cbData);
 
-    std::array<ID3D11ShaderResourceView*, 17> srvs = { nullptr };
-	std::array<ID3D11UnorderedAccessView*, 1> uavs = { nullptr };
+    std::array<ID3D11ShaderResourceView*, 3> srvs = { nullptr };
+	std::array<ID3D11UnorderedAccessView*, 14> uavs = { nullptr };
 	std::array<ID3D11SamplerState*, 4> samplers = { colorSampler.get(), bufferSampler.get(), cocSampler.get(), noiseSampler.get() };
 
     auto cb = dofCB->CB();
 
     srvs[0] = inout_tex.srv;
     srvs[1] = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
-    srvs[2] = texCDCurrentFocus->srv.get();
-    srvs[3] = texCDPreviousFocus->srv.get();
-    srvs[4] = texCDBuffer1->srv.get();
-    srvs[5] = texCDBuffer2->srv.get();
-    srvs[6] = texCDBuffer3->srv.get();
-    srvs[7] = texCDBuffer4->srv.get();
-    srvs[8] = texCDBuffer5->srv.get();
-    srvs[9] = texCDCoC->srv.get();
-    srvs[10] = texCDCoCTmp1->srv.get();
-    srvs[11] = texCDCoCBlurred->srv.get();
-    srvs[12] = texCDCoCTileTmp->srv.get();
-    srvs[13] = texCDCoCTile->srv.get();
-    srvs[14] = texCDCoCTileNeighbor->srv.get();
-    srvs[15] = nullptr;
-    srvs[16] = texCDNoise->srv.get();
+    srvs[2] = texCDNoise->srv.get();
+    
+    uavs[0] = texOutput->uav.get();
+    uavs[1] = texCDCurrentFocus->uav.get();
+    uavs[2] = texCDPreviousFocus->uav.get();
+    uavs[3] = texCDCoC->uav.get();
+    uavs[4] = texCDCoCTileTmp->uav.get();
+    uavs[5] = texCDCoCTile->uav.get();
+    uavs[6] = texCDCoCTileNeighbor->uav.get();
+    uavs[7] = texCDCoCTmp1->uav.get();
+    uavs[8] = texCDCoCBlurred->uav.get();
+    uavs[9] = texCDBuffer1->uav.get();
+    uavs[10] = texCDBuffer2->uav.get();
+    uavs[11] = texCDBuffer3->uav.get();
+    uavs[12] = texCDBuffer4->uav.get();
+    uavs[13] = texCDBuffer5->uav.get();
 
     auto resetViews = [&]() {
+        srvs.fill(nullptr);
+        uavs.fill(nullptr);
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 	};
@@ -701,176 +641,16 @@ void CinematicDOF::Draw(TextureInfo& inout_tex)
 
     uint32_t dispatchX = ((uint)BUFFER_WIDTH + 7) >> 3;
     uint32_t dispatchY = ((uint)BUFFER_HEIGHT + 7) >> 3;
-    // Determine current focus
-    {
-        uavs[0] = texCDCurrentFocusCopy->uav.get();
-        context->CSSetShader(determineCurrentFocusCS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX, dispatchY, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDCurrentFocus->resource.get(), texCDCurrentFocusCopy->resource.get());
-
-    // Copy current focus
-    {
-        uavs[0] = texCDPreviousFocusCopy->uav.get();
-        context->CSSetShader(copyCurrentFocusCS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX, dispatchY, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDPreviousFocus->resource.get(), texCDPreviousFocusCopy->resource.get());
-
-    // Calculate CoC
-    {
-        uavs[0] = texCDCoCCopy->uav.get();
-        context->CSSetShader(calculateCoCValuesCS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX, dispatchY, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDCoC->resource.get(), texCDCoCCopy->resource.get());
-
-    // CoC Tile 1
-    {
-        uavs[0] = texCDCoCTileTmpCopy->uav.get();
-        context->CSSetShader(cocTile1CS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX / TILE_SIZE, dispatchY / TILE_SIZE, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDCoCTileTmp->resource.get(), texCDCoCTileTmpCopy->resource.get());
-
-    // CoC Tile 2
-    {
-        uavs[0] = texCDCoCTileCopy->uav.get();
-        context->CSSetShader(cocTile2CS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX / TILE_SIZE, dispatchY / TILE_SIZE, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDCoCTile->resource.get(), texCDCoCTileCopy->resource.get());
-
-    // CoC Tile Neighbor
-    {
-        uavs[0] = texCDCoCTileNeighborCopy->uav.get();
-        context->CSSetShader(cocTileNeighborCS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX / TILE_SIZE, dispatchY / TILE_SIZE, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDCoCTileNeighbor->resource.get(), texCDCoCTileNeighborCopy->resource.get());
-
-    // CoC Blur 1
-    {
-        uavs[0] = texCDCoCTmp1Copy->uav.get();
-        context->CSSetShader(cocGaussian1CS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX / 2, dispatchY / 2, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDCoCTmp1->resource.get(), texCDCoCTmp1Copy->resource.get());
-
-    // CoC Blur 2
-    {
-        uavs[0] = texCDCoCBlurredCopy->uav.get();
-        context->CSSetShader(cocGaussian2CS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX / 2, dispatchY / 2, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDCoCBlurred->resource.get(), texCDCoCBlurredCopy->resource.get());
-
-    // Pre-Blur
-    {
-        uavs[0] = texCDBuffer1Copy->uav.get();
-        context->CSSetShader(preBlurCS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX / 2, dispatchY / 2, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDBuffer1->resource.get(), texCDBuffer1Copy->resource.get());
-
-    // Bokeh Blur
-    {
-        uavs[0] = texCDBuffer2Copy->uav.get();
-        context->CSSetShader(bokehBlurCS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX / 2, dispatchY / 2, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDBuffer2->resource.get(), texCDBuffer2Copy->resource.get());
-
-    // Near Bokeh Blur
-    {
-        uavs[0] = texCDBuffer1Copy->uav.get();
-        context->CSSetShader(nearBokehBlurCS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX / 2, dispatchY / 2, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDBuffer1->resource.get(), texCDBuffer1Copy->resource.get());
-
-    // Tent Filter
-    {
-        uavs[0] = texCDBuffer3Copy->uav.get();
-        context->CSSetShader(tentFilterCS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX, dispatchY, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDBuffer3->resource.get(), texCDBuffer3Copy->resource.get());
-
-    // Combiner
-    {
-        uavs[0] = texCDBuffer4Copy->uav.get();
-        context->CSSetShader(combinerCS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX, dispatchY, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDBuffer4->resource.get(), texCDBuffer4Copy->resource.get());
-
-    // Post Smoothing 1
-    {
-        uavs[0] = texCDBuffer5Copy->uav.get();
-        context->CSSetShader(postSmoothing1CS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX, dispatchY, 1);
-    }
-
-    context->Flush();
-    context->CopyResource(texCDBuffer5->resource.get(), texCDBuffer5Copy->resource.get());
-
-    // Post Smoothing 2 and Focusing
-    {
-        uavs[0] = texOutput->uav.get();
-        context->CSSetShader(postSmoothing2AndFocusingCS.get(), nullptr, 0);
-        resetViews();
-        context->Dispatch(dispatchX, dispatchY, 1);
-    }
-
-    context->Flush();
+    if (!(dispatchX && dispatchY))
+        return;
+    context->CSSetShader(cdofCS.get(), nullptr, 0);
+    context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+    context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+    context->Dispatch(dispatchX, dispatchY, 1);
 
     samplers.fill(nullptr);
-    srvs.fill(nullptr);
-    uavs.fill(nullptr);
     context->CSSetShader(nullptr, nullptr, 0);
-    context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-    context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+    resetViews();
     context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
     cb = nullptr;
     context->CSSetConstantBuffers(1, 1, &cb);
