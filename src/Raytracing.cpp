@@ -64,10 +64,10 @@ void Raytracing::InitBrixelizer()
 	initializationParameters.sdfCenter[1] = 0.0f;
 	initializationParameters.sdfCenter[2] = 0.0f;
 	initializationParameters.flags = FFX_BRIXELIZER_CONTEXT_FLAG_ALL_DEBUG;
-	initializationParameters.numCascades = 1;
+	initializationParameters.numCascades = NUM_BRIXELIZER_CASCADES;
 
 	float voxelSize = 1.0f;
-	for (uint32_t i = 0; i < initializationParameters.numCascades; ++i) {
+	for (uint32_t i = 0; i < NUM_BRIXELIZER_CASCADES; ++i) {
 		FfxBrixelizerCascadeDescription* cascadeDesc = &initializationParameters.cascadeDescs[i];
 		cascadeDesc->flags = (FfxBrixelizerCascadeFlag)(FFX_BRIXELIZER_CASCADE_STATIC | FFX_BRIXELIZER_CASCADE_DYNAMIC);
 		cascadeDesc->voxelSize = voxelSize;
@@ -76,7 +76,7 @@ void Raytracing::InitBrixelizer()
 
 	FfxErrorCode error = ffxBrixelizerContextCreate(&initializationParameters, &brixelizerContext);
 	if (error != FFX_OK) {
-		logger::info("error");
+		logger::critical("[Raytracing] Failed to initialize Brixelizer context!");
 	}
 
 	D3D12_RESOURCE_DESC sdfAtlasDesc = {};
@@ -88,7 +88,7 @@ void Raytracing::InitBrixelizer()
 	sdfAtlasDesc.Format = DXGI_FORMAT_R8_UNORM;
 	sdfAtlasDesc.SampleDesc.Count = 1;
 	sdfAtlasDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-	sdfAtlasDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+	sdfAtlasDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
 	CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
 	DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
@@ -99,9 +99,14 @@ void Raytracing::InitBrixelizer()
 		nullptr,
 		IID_PPV_ARGS(&sdfAtlas)));
 
-	brickAABBs = CreateBuffer(FFX_BRIXELIZER_BRICK_AABBS_SIZE);
-	cascadeAABBTree = CreateBuffer(FFX_BRIXELIZER_CASCADE_AABB_TREE_SIZE);
-	cascadeBrickMap = CreateBuffer(FFX_BRIXELIZER_CASCADE_BRICK_MAP_SIZE);
+	brickAABBs = CreateBuffer(FFX_BRIXELIZER_BRICK_AABBS_SIZE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+	gpuScratchBuffer = CreateBuffer(GPU_SCRATCH_BUFFER_SIZE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+	for (int i = 0; i < NUM_BRIXELIZER_CASCADES; i++) {
+		cascadeAABBTrees.push_back(CreateBuffer(FFX_BRIXELIZER_CASCADE_AABB_TREE_SIZE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
+		cascadeBrickMaps.push_back(CreateBuffer(FFX_BRIXELIZER_CASCADE_BRICK_MAP_SIZE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
+	}
 }
 
 // Function to check for shared NT handle support and convert to D3D12 resource
@@ -378,4 +383,60 @@ void Raytracing::RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11
 {
 	BufferData data = AllocateBuffer(pDesc, pInitialData);
 	indexBuffers.insert({ *ppBuffer, data });
+}
+
+void Raytracing::FrameUpdate()
+{
+	auto viewport = RE::BSGraphics::State::GetSingleton();
+
+    // Fill out the Brixelizer update description.
+	FfxBrixelizerUpdateDescription updateDesc = {};
+
+	// Pass in the externally created output resources as FfxResource objects.
+	updateDesc.resources.sdfAtlas = ffxGetResourceDX12(sdfAtlas.get(), ffxGetResourceDescriptionDX12(sdfAtlas.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+	
+	auto brickAABBResourceDescription = ffxGetResourceDescriptionDX12(brickAABBs.get(), FFX_RESOURCE_USAGE_UAV);
+	brickAABBResourceDescription.stride = FFX_BRIXELIZER_BRICK_AABBS_STRIDE;
+
+	updateDesc.resources.brickAABBs = ffxGetResourceDX12(brickAABBs.get(), brickAABBResourceDescription, nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+
+	for (uint32_t i = 0; i < NUM_BRIXELIZER_CASCADES; ++i) {
+		auto cascadeResourceDescription = ffxGetResourceDescriptionDX12(cascadeAABBTrees[i].get(), FFX_RESOURCE_USAGE_UAV);
+		cascadeResourceDescription.stride = FFX_BRIXELIZER_CASCADE_AABB_TREE_STRIDE;
+
+		updateDesc.resources.cascadeResources[i].aabbTree = ffxGetResourceDX12(cascadeAABBTrees[i].get(), cascadeResourceDescription, nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+		
+		cascadeResourceDescription = ffxGetResourceDescriptionDX12(cascadeBrickMaps[i].get(), FFX_RESOURCE_USAGE_UAV);
+		cascadeResourceDescription.stride = FFX_BRIXELIZER_CASCADE_BRICK_MAP_STRIDE;
+
+		updateDesc.resources.cascadeResources[i].brickMap = ffxGetResourceDX12(cascadeBrickMaps[i].get(), cascadeResourceDescription, nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+	}
+
+	FfxBrixelizerUpdateDescription updateDesc = {};
+	updateDesc.frameIndex = viewport->frameCount;
+	updateDesc.debugVisualizationDesc = nullptr;
+	updateDesc.populateDebugAABBsFlags = FFX_BRIXELIZER_POPULATE_AABBS_NONE;
+	updateDesc.maxReferences = 32 * (1 << 20);
+	updateDesc.maxBricksPerBake = 1 << 14;
+	updateDesc.triangleSwapSize = 300 * (1 << 20);
+	updateDesc.outStats = &stats;
+
+	for (uint32_t i = 0; i < 3; ++i)
+		updateDesc.sdfCenter[i] = 0;
+
+	FfxResource ffxGpuScratchBuffer = ffxGetResourceDX12(gpuScratchBuffer.get(), ffxGetResourceDescriptionDX12(gpuScratchBuffer.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+	ffxGpuScratchBuffer.description.stride = sizeof(uint32_t);
+
+    size_t scratchBufferSize = 0;
+	updateDesc.outScratchBufferSize = &scratchBufferSize;
+
+	FfxBrixelizerBakedUpdateDescription bakedUpdateDesc = {};
+	FfxErrorCode error = ffxBrixelizerBakeUpdate(&brixelizerContext, &updateDesc, &bakedUpdateDesc);
+	if (error != FFX_OK)
+		logger::critical("error");
+
+	// call frame update
+	error = ffxBrixelizerUpdate(&brixelizerContext, &bakedUpdateDesc, ffxGpuScratchBuffer, ffxGetCommandListDX12(commandList.get()));
+	if (error != FFX_OK)
+		logger::critical("error");
 }

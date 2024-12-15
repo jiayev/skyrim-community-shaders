@@ -16,6 +16,17 @@
 #include "Buffer.h"
 #include "State.h"
 
+// Brixelizer supports a maximum of 24 raw cascades
+// In the sample each cascade level we build is created by building a static cascade,
+// a dynamic cascade, and then merging those into a merged cascade. Hence we require
+// 3 raw cascades per cascade level.
+#define NUM_BRIXELIZER_CASCADES (FFX_BRIXELIZER_MAX_CASCADES / 3)
+// Brixelizer makes use of a scratch buffer for calculating cascade updates. Hence in
+// this sample we allocate a buffer to be used as scratch space. Here we have chosen
+// a somewhat arbitrary large size for use as scratch space, in a real application this
+// value should be tuned to what is required by Brixelizer.
+#define GPU_SCRATCH_BUFFER_SIZE (1 << 30)
+
 class Raytracing
 {
 public:
@@ -34,11 +45,14 @@ public:
 	FfxBrixelizerContextDescription initializationParameters = {};
 	FfxBrixelizerContext brixelizerContext = {};
 	FfxBrixelizerBakedUpdateDescription brixelizerBakedUpdateDesc = {};
+	FfxBrixelizerStats stats = {};
 
 	winrt::com_ptr<ID3D12Resource> sdfAtlas;
 	winrt::com_ptr<ID3D12Resource> brickAABBs;
-	winrt::com_ptr<ID3D12Resource> cascadeAABBTree;
-	winrt::com_ptr<ID3D12Resource> cascadeBrickMap;
+	winrt::com_ptr<ID3D12Resource> gpuScratchBuffer;
+
+	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeAABBTrees;
+	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeBrickMaps;
 
 	void InitD3D12();
 
@@ -75,6 +89,8 @@ public:
 
 	void RegisterVertexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer);
 	void RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer);
+
+	void FrameUpdate();
 
 	struct RenderTargetDataD3D12
 	{
