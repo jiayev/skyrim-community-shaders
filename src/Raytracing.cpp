@@ -77,7 +77,7 @@ inline const float4 minPerElem(const float4& vec0, const float4& vec1)
 	return float4(_mm_max_ps(vec0, vec1));
 }
 
-uint32_t Raytracing::GetBufferIndex(BufferData& a_bufferData)
+uint Raytracing::GetBufferIndex(BufferData& a_bufferData)
 {
 	if (a_bufferData.registered)
 		return a_bufferData.index;
@@ -169,7 +169,7 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 			float4 minExtents = float4(INFINITY, INFINITY, INFINITY, INFINITY);
 			float4 maxExtents = float4(-INFINITY, -INFINITY, -INFINITY, -INFINITY);
 
-			for (uint32_t i = 0; i < 8; i++) {
+			for (uint i = 0; i < 8; i++) {
 				auto transformed = transform * aabbCorners[i];
 				float3 transformedF = { transformed.x, transformed.y, transformed.z };
 
@@ -199,8 +199,8 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 			uint vertexCount = vertexBuffer->width / rendererData->vertexDesc.GetSize();
 			uint triangleCount = indexBuffer->width / (sizeof(uint16_t) * 3);
 
-			uint32_t vertexBufferIndex = GetBufferIndex(*vertexBuffer);
-			uint32_t indexBufferIndex = GetBufferIndex(*indexBuffer);
+			uint vertexBufferIndex = GetBufferIndex(*vertexBuffer);
+			uint indexBufferIndex = GetBufferIndex(*indexBuffer);
 
 			FfxBrixelizerInstanceDescription instanceDesc = {};
 
@@ -217,8 +217,8 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 
 			float4x4 xmmTransform = GetXMFromNiTransform(transform);
 
-			for (uint32_t row = 0; row < 3; ++row) {
-				for (uint32_t col = 0; col < 4; ++col) {
+			for (uint row = 0; row < 3; ++row) {
+				for (uint col = 0; col < 4; ++col) {
 					instanceDesc.transform[row * 4 + col] = xmmTransform.m[col][row];
 				}
 			}

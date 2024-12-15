@@ -63,8 +63,8 @@ public:
 	{
 		winrt::com_ptr<ID3D12Resource> buffer;
 		bool registered = false;
-		uint32_t width;
-		uint32_t index;
+		uint width;
+		uint index;
 	};
 
 	BufferData AllocateBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData);
@@ -74,7 +74,7 @@ public:
 	eastl::hash_map<ID3D11Buffer*, BufferData> vertexBuffers;
 	eastl::hash_map<ID3D11Buffer*, BufferData> indexBuffers;
 
-	uint32_t GetBufferIndex(BufferData& a_bufferData);
+	uint GetBufferIndex(BufferData& a_bufferData);
 
 	void UpdateGeometry(RE::BSGeometry* a_geometry);
 	void RemoveGeometry(RE::BSGeometry* a_geometry);
