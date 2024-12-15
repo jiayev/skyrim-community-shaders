@@ -178,7 +178,7 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 			}
 
 			auto& rendererData = a_geometry->GetGeometryRuntimeData().rendererData;
-		
+
 			BufferData* vertexBuffer;
 			BufferData* indexBuffer;
 
