@@ -387,8 +387,6 @@ void Raytracing::RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11
 
 void Raytracing::FrameUpdate()
 {
-	auto viewport = RE::BSGraphics::State::GetSingleton();
-
 	// Fill out the Brixelizer update description.
 	FfxBrixelizerUpdateDescription updateDesc = {};
 
@@ -406,7 +404,7 @@ void Raytracing::FrameUpdate()
 		updateDesc.resources.cascadeResources[i].brickMap.description.stride = FFX_BRIXELIZER_CASCADE_BRICK_MAP_STRIDE;
 	}
 
-	updateDesc.frameIndex = viewport->frameCount;
+	updateDesc.frameIndex = RE::BSGraphics::State::GetSingleton()->frameCount;
 	updateDesc.debugVisualizationDesc = nullptr;
 	updateDesc.populateDebugAABBsFlags = FFX_BRIXELIZER_POPULATE_AABBS_NONE;
 	updateDesc.maxReferences = 32 * (1 << 20);
