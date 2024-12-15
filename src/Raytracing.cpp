@@ -272,11 +272,9 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 				indexBuffer = &it2->second;
 			}
 
-			uint vertexCount = vertexBuffer->width / rendererData->vertexDesc.GetSize();
-			uint triangleCount = indexBuffer->width / (sizeof(uint16_t) * 3);
-
-			uint vertexBufferIndex = GetBufferIndex(*vertexBuffer);
-			uint indexBufferIndex = GetBufferIndex(*indexBuffer);
+			auto triShape = a_geometry->AsTriShape();
+			if (!triShape)
+				return;
 
 			FfxBrixelizerInstanceDescription instanceDesc = {};
 
@@ -300,14 +298,14 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 			}
 
 			instanceDesc.indexFormat = FFX_INDEX_TYPE_UINT16;
-			instanceDesc.indexBuffer = indexBufferIndex;
+			instanceDesc.indexBuffer = GetBufferIndex(*indexBuffer);
 			instanceDesc.indexBufferOffset = 0;
-			instanceDesc.triangleCount = triangleCount;
+			instanceDesc.triangleCount = triShape->GetTrishapeRuntimeData().triangleCount;
 
-			instanceDesc.vertexBuffer = vertexBufferIndex;
+			instanceDesc.vertexBuffer = GetBufferIndex(*vertexBuffer);
 			instanceDesc.vertexStride = rendererData->vertexDesc.GetSize();
 			instanceDesc.vertexBufferOffset = 0;
-			instanceDesc.vertexCount = vertexCount;
+			instanceDesc.vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
 			instanceDesc.vertexFormat = FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT;
 
 			uint outInstanceID;
