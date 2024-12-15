@@ -406,7 +406,6 @@ void Raytracing::FrameUpdate()
 		updateDesc.resources.cascadeResources[i].brickMap.description.stride = FFX_BRIXELIZER_CASCADE_BRICK_MAP_STRIDE;
 	}
 
-	FfxBrixelizerUpdateDescription updateDesc = {};
 	updateDesc.frameIndex = viewport->frameCount;
 	updateDesc.debugVisualizationDesc = nullptr;
 	updateDesc.populateDebugAABBsFlags = FFX_BRIXELIZER_POPULATE_AABBS_NONE;
@@ -418,9 +417,6 @@ void Raytracing::FrameUpdate()
 	for (uint32_t i = 0; i < 3; ++i)
 		updateDesc.sdfCenter[i] = 0;
 
-	FfxResource ffxGpuScratchBuffer = ffxGetResourceDX12(gpuScratchBuffer.get(), ffxGetResourceDescriptionDX12(gpuScratchBuffer.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-	ffxGpuScratchBuffer.description.stride = sizeof(uint32_t);
-
 	size_t scratchBufferSize = 0;
 	updateDesc.outScratchBufferSize = &scratchBufferSize;
 
@@ -429,7 +425,10 @@ void Raytracing::FrameUpdate()
 	if (error != FFX_OK)
 		logger::critical("error");
 
-	// call frame update
+	FfxResource ffxGpuScratchBuffer = ffxGetResourceDX12(gpuScratchBuffer.get(), ffxGetResourceDescriptionDX12(gpuScratchBuffer.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+	ffxGpuScratchBuffer.description.stride = sizeof(uint32_t);
+
+	// Call frame update
 	error = ffxBrixelizerUpdate(&brixelizerContext, &bakedUpdateDesc, ffxGpuScratchBuffer, ffxGetCommandListDX12(commandList.get()));
 	if (error != FFX_OK)
 		logger::critical("error");
