@@ -389,12 +389,12 @@ void Raytracing::FrameUpdate()
 {
 	auto viewport = RE::BSGraphics::State::GetSingleton();
 
-    // Fill out the Brixelizer update description.
+	// Fill out the Brixelizer update description.
 	FfxBrixelizerUpdateDescription updateDesc = {};
 
 	// Pass in the externally created output resources as FfxResource objects.
 	updateDesc.resources.sdfAtlas = ffxGetResourceDX12(sdfAtlas.get(), ffxGetResourceDescriptionDX12(sdfAtlas.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-	
+
 	auto brickAABBResourceDescription = ffxGetResourceDescriptionDX12(brickAABBs.get(), FFX_RESOURCE_USAGE_UAV);
 	brickAABBResourceDescription.stride = FFX_BRIXELIZER_BRICK_AABBS_STRIDE;
 
@@ -405,7 +405,7 @@ void Raytracing::FrameUpdate()
 		cascadeResourceDescription.stride = FFX_BRIXELIZER_CASCADE_AABB_TREE_STRIDE;
 
 		updateDesc.resources.cascadeResources[i].aabbTree = ffxGetResourceDX12(cascadeAABBTrees[i].get(), cascadeResourceDescription, nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-		
+
 		cascadeResourceDescription = ffxGetResourceDescriptionDX12(cascadeBrickMaps[i].get(), FFX_RESOURCE_USAGE_UAV);
 		cascadeResourceDescription.stride = FFX_BRIXELIZER_CASCADE_BRICK_MAP_STRIDE;
 
@@ -427,7 +427,7 @@ void Raytracing::FrameUpdate()
 	FfxResource ffxGpuScratchBuffer = ffxGetResourceDX12(gpuScratchBuffer.get(), ffxGetResourceDescriptionDX12(gpuScratchBuffer.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 	ffxGpuScratchBuffer.description.stride = sizeof(uint32_t);
 
-    size_t scratchBufferSize = 0;
+	size_t scratchBufferSize = 0;
 	updateDesc.outScratchBufferSize = &scratchBufferSize;
 
 	FfxBrixelizerBakedUpdateDescription bakedUpdateDesc = {};
