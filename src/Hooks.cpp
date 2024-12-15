@@ -220,9 +220,13 @@ struct ID3D11Device_CreateBuffer
 	{
 		HRESULT hr = func(This, pDesc, pInitialData, ppBuffer);
 
-		if (pDesc->BindFlags & D3D11_BIND_VERTEX_BUFFER)
+		if (pInitialData)
 		{
-			logger::info("HMMMM");
+			if (pDesc->BindFlags & D3D11_BIND_VERTEX_BUFFER) {
+				Raytracing::GetSingleton()->RegisterVertexBuffer(pDesc, pInitialData, ppBuffer);
+			} else if (pDesc->BindFlags & D3D11_BIND_INDEX_BUFFER) {
+				Raytracing::GetSingleton()->RegisterIndexBuffer(pDesc, pInitialData, ppBuffer);
+			}
 		}
 
 		return hr;

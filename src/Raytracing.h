@@ -26,9 +26,15 @@ public:
 	}
 
 	// FidelityFX Brixelizer information
-	//FfxBrixelizerContextDescription m_InitializationParameters = {};
-	//FfxBrixelizerContext m_BrixelizerContext = {};
-	//FfxBrixelizerBakedUpdateDescription m_BrixelizerBakedUpdateDesc = {};
+	FfxBrixelizerContextDescription initializationParameters = {};
+	FfxBrixelizerContext brixelizerContext = {};
+	FfxBrixelizerBakedUpdateDescription brixelizerBakedUpdateDesc = {};
+
+	struct BrixelizerBufferInfo
+	{
+		uint32_t index;
+		const ID3D12Resource* buffer;
+	};
 
 	////const cauldron::Texture* m_pSdfAtlas = nullptr;
 	////const cauldron::Buffer* m_pBrickAABBs = nullptr;
@@ -55,14 +61,26 @@ public:
 
 	struct BufferData
 	{
-		ID3D12Resource* vertexBuffer;
-		ID3D12Resource* indexBuffer;
+		winrt::com_ptr<ID3D12Resource> buffer;
+		bool registered = false;
+		uint32_t width;
+		uint32_t index;
 	};
 
-	eastl::hash_map<RE::BSGeometry*, BufferData> geometries;
+	BufferData AllocateBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData);
+
+	eastl::hash_set<RE::BSGeometry*> geometries;
+
+	eastl::hash_map<ID3D11Buffer*, BufferData> vertexBuffers;
+	eastl::hash_map<ID3D11Buffer*, BufferData> indexBuffers;
+
+	uint32_t GetBufferIndex(BufferData& a_bufferData);
 
 	void UpdateGeometry(RE::BSGeometry* a_geometry);
 	void RemoveGeometry(RE::BSGeometry* a_geometry);
+
+	void RegisterVertexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer);
+	void RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer);
 
 	struct RenderTargetDataD3D12
 	{
