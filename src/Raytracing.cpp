@@ -179,28 +179,28 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 
 			auto& rendererData = a_geometry->GetGeometryRuntimeData().rendererData;
 		
-			BufferData vertexBuffer{};
-			BufferData indexBuffer{};
+			BufferData* vertexBuffer;
+			BufferData* indexBuffer;
 
 			{
 				auto it2 = vertexBuffers.find((ID3D11Buffer*)rendererData->vertexBuffer);
 				if (it2 == vertexBuffers.end())
 					return;
-				vertexBuffer = (*it2).second;
+				vertexBuffer = &it2->second;
 			}
 
 			{
 				auto it2 = indexBuffers.find((ID3D11Buffer*)rendererData->indexBuffer);
 				if (it2 == indexBuffers.end())
 					return;
-				indexBuffer = (*it2).second;
+				indexBuffer = &it2->second;
 			}
 
-			uint vertexCount = vertexBuffer.width / rendererData->vertexDesc.GetSize();
-			uint triangleCount = indexBuffer.width / (sizeof(uint16_t) * 3);
+			uint vertexCount = vertexBuffer->width / rendererData->vertexDesc.GetSize();
+			uint triangleCount = indexBuffer->width / (sizeof(uint16_t) * 3);
 
-			uint32_t vertexBufferIndex = GetBufferIndex(vertexBuffer);
-			uint32_t indexBufferIndex = GetBufferIndex(indexBuffer);
+			uint32_t vertexBufferIndex = GetBufferIndex(*vertexBuffer);
+			uint32_t indexBufferIndex = GetBufferIndex(*indexBuffer);
 
 			FfxBrixelizerInstanceDescription instanceDesc = {};
 
@@ -213,9 +213,6 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 
 				instanceDesc.aabb.min[2] = minExtents.z;
 				instanceDesc.aabb.max[2] = maxExtents.z;
-
-				instanceDesc.aabb.min[3] = minExtents.w;
-				instanceDesc.aabb.max[3] = maxExtents.w;
 			}
 
 			float4x4 xmmTransform = GetXMFromNiTransform(transform);
