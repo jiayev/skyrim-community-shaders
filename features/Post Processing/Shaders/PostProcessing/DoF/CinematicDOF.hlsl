@@ -80,8 +80,6 @@ Texture2D<float> CoCTileNeighborTexture : register(t14);
 Texture2D<float4> ShapeTexture : register(t15);
 Texture2D<float4> NoiseTexture : register(t16);
 
-Texture2D<float4> ColorTexture : register(t17);
-
 RWTexture2D<float4> OutputTexture : register(u0);
 
 SamplerState ColorSampler : register(s0);
@@ -755,7 +753,7 @@ void CS_PreBlur(uint3 DTid : SV_DispatchThreadID)
     blurInfo.nearPlaneMaxBlurInPixels = (NearPlaneMaxBlur / 100.0) / pixelSizeLength;
     blurInfo.cocFactorPerPixel = length(BUFFER_PIXEL_SIZE) * blurInfo.farPlaneMaxBlurInPixels;	// not needed for near plane.
 
-    OutputTexture[DTid.xy] = PerformPreDiscBlur(blurInfo, ColorTexture);
+    OutputTexture[DTid.xy] = PerformPreDiscBlur(blurInfo, InputTexture);
 }
 
 // Compute shader which performs the far plane blur pass.
@@ -834,7 +832,7 @@ void CS_Combiner(uint3 DTid : SV_DispatchThreadID)
 {
     float4 fragment;
     // first blend far plane with original buffer, then near plane on top of that. 
-    float4 originalFragment = ColorTexture.SampleLevel(ColorSampler, TEXCOORD, 0);
+    float4 originalFragment = InputTexture.SampleLevel(ColorSampler, TEXCOORD, 0);
     originalFragment.rgb = AccentuateWhites(originalFragment.rgb);
     float4 farFragment = Buffer3Texture.SampleLevel(BufferSampler, TEXCOORD, 0);
     float4 nearFragment = Buffer1Texture.SampleLevel(BufferSampler, TEXCOORD, 0);
