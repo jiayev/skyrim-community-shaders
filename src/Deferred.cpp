@@ -408,7 +408,7 @@ void Deferred::DeferredPasses()
 	{
 		TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Deferred Composite");
 
-		ID3D11ShaderResourceView* srvs[12]{
+		ID3D11ShaderResourceView* srvs[13]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
@@ -419,6 +419,7 @@ void Deferred::DeferredPasses()
 			dynamicCubemaps->loaded ? dynamicCubemaps->envTexture->srv.get() : nullptr,
 			dynamicCubemaps->loaded ? dynamicCubemaps->envReflectionsTexture->srv.get() : nullptr,
 			dynamicCubemaps->loaded && skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
+			ssgi_ao,
 			ssgi_y,
 			ssgi_cocg,
 		};
