@@ -286,7 +286,7 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 					instanceDesc.transform[row * 4 + col] = xmmTransform.m[col][row];
 				}
 			}
-			 
+
 			instanceDesc.indexFormat = FFX_INDEX_TYPE_UINT16;
 			instanceDesc.indexBuffer = GetBufferIndex(*indexBuffer);
 			instanceDesc.indexBufferOffset = 0;
