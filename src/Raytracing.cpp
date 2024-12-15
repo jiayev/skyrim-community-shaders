@@ -306,7 +306,7 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 			instanceDesc.vertexStride = rendererData->vertexDesc.GetSize();
 			instanceDesc.vertexBufferOffset = 0;
 			instanceDesc.vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
-			instanceDesc.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32A32_FLOAT;
+			instanceDesc.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
 
 			uint outInstanceID;
 			instanceDesc.outInstanceID = &outInstanceID;
