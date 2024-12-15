@@ -10,9 +10,7 @@
 #define TILE_SIZE 1
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-    CinematicDOF::Settings,
-    UseAutoFocus,
-    MitigateUndersampling,
+    CinematicDOF::Settings, 
     AutoFocusPoint,
     AutoFocusTransitionSpeed,
     ManualFocusPlane,
@@ -32,7 +30,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     HighlightSharpeningFactor,
     HighlightShape,
     HighlightShapeRotationAngle,
-    HighlightShapeGamma
+    HighlightShapeGamma,
+    UseAutoFocus,
+    MitigateUndersampling
     )
 
 void CinematicDOF::DrawSettings()
@@ -107,7 +107,6 @@ void CinematicDOF::DrawSettings()
 	if (ImGui::TreeNode("Buffer Viewer")) {
         static float debugRescale = .3f;
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
-        BUFFER_VIEWER_NODE(texOutput, debugRescale)
         BUFFER_VIEWER_NODE(texDepth, debugRescale)
         BUFFER_VIEWER_NODE(texCDCurrentFocus, debugRescale)
         BUFFER_VIEWER_NODE(texCDPreviousFocus, debugRescale)
@@ -123,6 +122,7 @@ void CinematicDOF::DrawSettings()
         BUFFER_VIEWER_NODE(texCDBuffer4, debugRescale)
         BUFFER_VIEWER_NODE(texCDBuffer5, debugRescale)
         BUFFER_VIEWER_NODE(texCDNoise, debugRescale)
+        BUFFER_VIEWER_NODE(texOutput, debugRescale)
         ImGui::TreePop();
     }
 }
@@ -469,30 +469,6 @@ void CinematicDOF::SetupResources()
 
         DX::ThrowIfFailed(device->CreateSamplerState(&colorSamplerDesc, colorSampler.put()));
 
-        D3D11_SAMPLER_DESC bufferSamplerDesc = {
-            .Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-            .AddressU = D3D11_TEXTURE_ADDRESS_MIRROR,
-            .AddressV = D3D11_TEXTURE_ADDRESS_MIRROR,
-            .AddressW = D3D11_TEXTURE_ADDRESS_MIRROR,
-            .MaxAnisotropy = 1,
-            .MinLOD = 0,
-            .MaxLOD = D3D11_FLOAT32_MAX
-        };
-
-        DX::ThrowIfFailed(device->CreateSamplerState(&bufferSamplerDesc, bufferSampler.put()));
-
-        D3D11_SAMPLER_DESC cocSamplerDesc = {
-            .Filter = D3D11_FILTER_MIN_MAG_MIP_POINT,
-            .AddressU = D3D11_TEXTURE_ADDRESS_MIRROR,
-            .AddressV = D3D11_TEXTURE_ADDRESS_MIRROR,
-            .AddressW = D3D11_TEXTURE_ADDRESS_MIRROR,
-            .MaxAnisotropy = 1,
-            .MinLOD = 0,
-            .MaxLOD = D3D11_FLOAT32_MAX
-        };
-
-        DX::ThrowIfFailed(device->CreateSamplerState(&cocSamplerDesc, cocSampler.put()));
-
         D3D11_SAMPLER_DESC noiseSamplerDesc = {
             .Filter = D3D11_FILTER_MIN_MAG_MIP_POINT,
             .AddressU = D3D11_TEXTURE_ADDRESS_WRAP,
@@ -558,8 +534,6 @@ void CinematicDOF::Draw(TextureInfo& inout_tex)
 
     // update cb
     DOFCB cbData = {
-        .UseAutoFocus = settings.UseAutoFocus,
-        .MitigateUndersampling = settings.MitigateUndersampling,
         .AutoFocusPoint = settings.AutoFocusPoint,
         .AutoFocusTransitionSpeed = settings.AutoFocusTransitionSpeed,
         .ManualFocusPlane = settings.ManualFocusPlane,
@@ -581,13 +555,15 @@ void CinematicDOF::Draw(TextureInfo& inout_tex)
         .HighlightShapeRotationAngle = settings.HighlightShapeRotationAngle,
         .HighlightShapeGamma = settings.HighlightShapeGamma,
         .ScreenWidth = BUFFER_WIDTH,
-        .ScreenHeight = BUFFER_HEIGHT
+        .ScreenHeight = BUFFER_HEIGHT,
+        .UseAutoFocus = settings.UseAutoFocus,
+        .MitigateUndersampling = settings.MitigateUndersampling
     };
     dofCB->Update(cbData);
 
     std::array<ID3D11ShaderResourceView*, 3> srvs = { nullptr };
 	std::array<ID3D11UnorderedAccessView*, 14> uavs = { nullptr };
-	std::array<ID3D11SamplerState*, 4> samplers = { colorSampler.get(), bufferSampler.get(), cocSampler.get(), noiseSampler.get() };
+	std::array<ID3D11SamplerState*, 2> samplers = { colorSampler.get(), noiseSampler.get() };
 
     auto cb = dofCB->CB();
 

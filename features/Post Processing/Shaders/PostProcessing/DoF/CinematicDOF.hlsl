@@ -83,13 +83,10 @@ RWTexture2D<float4> Buffer4Texture : register(u12);
 RWTexture2D<float4> Buffer5Texture : register(u13);
 
 SamplerState ColorSampler : register(s0);
-SamplerState BufferSampler : register(s1);
-SamplerState CoCSampler : register(s2);
-SamplerState NoiseSampler : register(s3);
+SamplerState NoiseSampler : register(s1);
 
 cbuffer DoFCBuffer : register(b1)
 {
-    bool UseAutoFocus;
     float2 AutoFocusPoint;
     float AutoFocusTransitionSpeed;
     float ManualFocusPlane;
@@ -110,9 +107,10 @@ cbuffer DoFCBuffer : register(b1)
     int HighlightShape;
     float HighlightShapeRotationAngle;
     float HighlightShapeGamma;
-    bool MitigateUndersampling;
     float ScreenWidth;
     float ScreenHeight;
+    bool UseAutoFocus;
+    bool MitigateUndersampling;
 }
 
 

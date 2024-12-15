@@ -11,8 +11,6 @@ struct CinematicDOF : public PostProcessFeature
 
     struct Settings
     {
-        bool UseAutoFocus = true;
-        bool MitigateUndersampling = false;
         float2 AutoFocusPoint = { 0.5f, 0.5f };
         float AutoFocusTransitionSpeed = 0.2f;
         float ManualFocusPlane = 10.f;
@@ -33,47 +31,42 @@ struct CinematicDOF : public PostProcessFeature
         int HighlightShape = 0;
         float HighlightShapeRotationAngle = 0.0f;
         float HighlightShapeGamma = 2.2f;
+        bool UseAutoFocus = true;
+        bool MitigateUndersampling = false;
     } settings;
 
     struct alignas(16) DOFCB
-    {
-        bool UseAutoFocus;
-        bool MitigateUndersampling;
-        uint8_t pad[2];
+    {        
         float2 AutoFocusPoint;
         float AutoFocusTransitionSpeed;
-
         float ManualFocusPlane;
         float FocalLength;
         float FNumber;
         float FarPlaneMaxBlur;
-
         float NearPlaneMaxBlur;
         float BlurQuality;
         float BokehBusyFactor;
         float PostBlurSmoothing;
-
         float NearFarDistanceCompensation;
         float HighlightAnamorphicFactor;
         float HighlightAnamorphicSpreadFactor;
         float HighlightAnamorphicAlignmentFactor;
-
         float HighlightBoost;
         float HighlightGammaFactor;
         float HighlightSharpeningFactor;
         int HighlightShape;
-
         float HighlightShapeRotationAngle;
         float HighlightShapeGamma;
-
         float ScreenWidth;
         float ScreenHeight;
+        bool UseAutoFocus;
+        bool MitigateUndersampling;
+
+        uint8_t pad[2];
     };
     eastl::unique_ptr<ConstantBuffer> dofCB = nullptr;
 
     winrt::com_ptr<ID3D11SamplerState> colorSampler = nullptr;
-    winrt::com_ptr<ID3D11SamplerState> bufferSampler = nullptr;
-    winrt::com_ptr<ID3D11SamplerState> cocSampler = nullptr;
     winrt::com_ptr<ID3D11SamplerState> noiseSampler = nullptr;
 
     eastl::unique_ptr<Texture2D> texOutput = nullptr;
