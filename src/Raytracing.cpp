@@ -385,43 +385,46 @@ void Raytracing::RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11
 	indexBuffers.insert({ *ppBuffer, data });
 }
 
+void Raytracing::TransitionResources(D3D12_RESOURCE_STATES stateBefore, D3D12_RESOURCE_STATES stateAfter)
+{
+	// Transition the SDF Atlas
+	barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+		sdfAtlas.get(),
+		stateBefore,
+		stateAfter));
+
+	// Transition the Brick AABBs
+	barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+		brickAABBs.get(),
+		stateBefore,
+		stateAfter));
+
+	// Transition each Cascade AABB Tree
+	for (const auto aabbTree : cascadeAABBTrees) {
+		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+			aabbTree.get(),
+			stateBefore,
+			stateAfter));
+	}
+
+	// Transition each Cascade Brick Map
+	for (const auto brickMap : cascadeBrickMaps) {
+		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+			brickMap.get(),
+			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+			stateAfter));
+	}
+
+	// Execute the resource barriers on the command list
+	commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+
+	barriers.clear();
+}
+
 void Raytracing::FrameUpdate()
 {
 	// Transition all resources to resource state expected by Brixelizer
-	{
-		// Transition the SDF Atlas
-		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
-			sdfAtlas.get(),
-			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-			D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
-
-		// Transition the Brick AABBs
-		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
-			brickAABBs.get(),
-			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-			D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
-
-		// Transition each Cascade AABB Tree
-		for (const auto aabbTree : cascadeAABBTrees) {
-			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
-				aabbTree.get(),
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-				D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
-		}
-
-		// Transition each Cascade Brick Map
-		for (const auto brickMap : cascadeBrickMaps) {
-			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
-				brickMap.get(),
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-				D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
-		}
-
-		// Execute the resource barriers on the command list
-		commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-
-		barriers.clear();
-	}
+	TransitionResources(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
 	// Fill out the Brixelizer update description.
 	// Pass in the externally created output resources as FfxResource objects.
@@ -465,38 +468,5 @@ void Raytracing::FrameUpdate()
 		logger::critical("error");
 
 	// Transition all resources to the Non-Pixel Shader Resource state after the Brixelizer
-	{
-		// Transition the SDF Atlas
-		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
-			sdfAtlas.get(),
-			D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
-
-		// Transition the Brick AABBs
-		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
-			brickAABBs.get(),
-			D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
-
-		// Transition each Cascade AABB Tree
-		for (const auto aabbTree : cascadeAABBTrees) {
-			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
-				aabbTree.get(),
-				D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
-		}
-
-		// Transition each Cascade Brick Map
-		for (const auto brickMap : cascadeBrickMaps) {
-			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
-				brickMap.get(),
-				D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
-		}
-
-		// Execute the resource barriers on the command list
-		commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-
-		barriers.clear();
-	}
+	TransitionResources(D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 }
