@@ -395,21 +395,15 @@ void Raytracing::FrameUpdate()
 	// Pass in the externally created output resources as FfxResource objects.
 	updateDesc.resources.sdfAtlas = ffxGetResourceDX12(sdfAtlas.get(), ffxGetResourceDescriptionDX12(sdfAtlas.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 	
-	auto brickAABBResourceDescription = ffxGetResourceDescriptionDX12(brickAABBs.get(), FFX_RESOURCE_USAGE_UAV);
-	brickAABBResourceDescription.stride = FFX_BRIXELIZER_BRICK_AABBS_STRIDE;
-
-	updateDesc.resources.brickAABBs = ffxGetResourceDX12(brickAABBs.get(), brickAABBResourceDescription, nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+	updateDesc.resources.brickAABBs = ffxGetResourceDX12(brickAABBs.get(), ffxGetResourceDescriptionDX12(brickAABBs.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+	updateDesc.resources.brickAABBs.description.stride = FFX_BRIXELIZER_BRICK_AABBS_STRIDE;
 
 	for (uint32_t i = 0; i < NUM_BRIXELIZER_CASCADES; ++i) {
-		auto cascadeResourceDescription = ffxGetResourceDescriptionDX12(cascadeAABBTrees[i].get(), FFX_RESOURCE_USAGE_UAV);
-		cascadeResourceDescription.stride = FFX_BRIXELIZER_CASCADE_AABB_TREE_STRIDE;
+		updateDesc.resources.cascadeResources[i].aabbTree = ffxGetResourceDX12(cascadeAABBTrees[i].get(), ffxGetResourceDescriptionDX12(cascadeAABBTrees[i].get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+		updateDesc.resources.cascadeResources[i].aabbTree.description.stride = FFX_BRIXELIZER_CASCADE_AABB_TREE_STRIDE;
 
-		updateDesc.resources.cascadeResources[i].aabbTree = ffxGetResourceDX12(cascadeAABBTrees[i].get(), cascadeResourceDescription, nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-		
-		cascadeResourceDescription = ffxGetResourceDescriptionDX12(cascadeBrickMaps[i].get(), FFX_RESOURCE_USAGE_UAV);
-		cascadeResourceDescription.stride = FFX_BRIXELIZER_CASCADE_BRICK_MAP_STRIDE;
-
-		updateDesc.resources.cascadeResources[i].brickMap = ffxGetResourceDX12(cascadeBrickMaps[i].get(), cascadeResourceDescription, nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+		updateDesc.resources.cascadeResources[i].brickMap = ffxGetResourceDX12(cascadeBrickMaps[i].get(), ffxGetResourceDescriptionDX12(cascadeBrickMaps[i].get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+		updateDesc.resources.cascadeResources[i].brickMap.description.stride = FFX_BRIXELIZER_CASCADE_BRICK_MAP_STRIDE;
 	}
 
 	FfxBrixelizerUpdateDescription updateDesc = {};
