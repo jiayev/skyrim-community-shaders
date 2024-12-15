@@ -33,7 +33,7 @@ void Raytracing::InitD3D12()
 void Raytracing::InitBrixelizer()
 {
 	FfxBrixelizerContextDescription desc = {};
-	
+
 	auto ffxDevice = ffxGetDeviceDX12(d3d12Device.get());
 
 	size_t scratchBufferSize = ffxGetScratchMemorySizeDX12(2);
@@ -44,7 +44,7 @@ void Raytracing::InitBrixelizer()
 	if (ffxGetInterfaceDX12(&fsrInterface, ffxDevice, scratchBuffer, scratchBufferSize, FFX_FSR3UPSCALER_CONTEXT_COUNT) != FFX_OK)
 		logger::critical("[Raytracing] Failed to initialize Brixelizer backend interface!");
 
-    initializationParameters.sdfCenter[0] = 0.0f;
+	initializationParameters.sdfCenter[0] = 0.0f;
 	initializationParameters.sdfCenter[1] = 0.0f;
 	initializationParameters.sdfCenter[2] = 0.0f;
 	initializationParameters.flags = FFX_BRIXELIZER_CONTEXT_FLAG_ALL_DEBUG;
@@ -63,7 +63,6 @@ void Raytracing::InitBrixelizer()
 		logger::info("error");
 	}
 }
-
 
 // Function to check for shared NT handle support and convert to D3D12 resource
 Raytracing::RenderTargetDataD3D12 Raytracing::ConvertD3D11TextureToD3D12(RE::BSGraphics::RenderTargetData* rtData)
