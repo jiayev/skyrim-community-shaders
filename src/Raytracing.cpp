@@ -389,7 +389,7 @@ void Raytracing::FrameUpdate()
 {
 	auto viewport = RE::BSGraphics::State::GetSingleton();
 
-    // Fill out the Brixelizer update description.
+	// Fill out the Brixelizer update description.
 	FfxBrixelizerUpdateDescription updateDesc = {};
 
 	// Pass in the externally created output resources as FfxResource objects.
@@ -421,7 +421,7 @@ void Raytracing::FrameUpdate()
 	FfxResource ffxGpuScratchBuffer = ffxGetResourceDX12(gpuScratchBuffer.get(), ffxGetResourceDescriptionDX12(gpuScratchBuffer.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 	ffxGpuScratchBuffer.description.stride = sizeof(uint32_t);
 
-    size_t scratchBufferSize = 0;
+	size_t scratchBufferSize = 0;
 	updateDesc.outScratchBufferSize = &scratchBufferSize;
 
 	FfxBrixelizerBakedUpdateDescription bakedUpdateDesc = {};
