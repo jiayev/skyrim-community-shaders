@@ -163,7 +163,9 @@ uint Raytracing::GetBufferIndex(BufferData& a_bufferData)
 	FfxBrixelizerBufferDescription brixelizerBufferDesc = {};
 	brixelizerBufferDesc.buffer = ffxResource;
 	brixelizerBufferDesc.outIndex = &a_bufferData.index;
-	ffxBrixelizerRegisterBuffers(&brixelizerContext, &brixelizerBufferDesc, 1);
+	auto error = ffxBrixelizerRegisterBuffers(&brixelizerContext, &brixelizerBufferDesc, 1);
+	if (error != FFX_OK)
+		logger::critical("error");
 
 	a_bufferData.registered = true;
 
@@ -311,7 +313,7 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 			// Static instances are persistent across frames. Dynamic instances are discarded after a single frame.
 			FfxErrorCode error = ffxBrixelizerCreateInstances(&brixelizerContext, &instanceDesc, 1);
 			if (error != FFX_OK)
-				logger::error("error");
+				logger::critical("error");
 		}
 	}
 }
