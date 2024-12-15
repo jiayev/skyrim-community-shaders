@@ -153,17 +153,7 @@ uint Raytracing::GetBufferIndex(BufferData& a_bufferData)
 	if (a_bufferData.registered)
 		return a_bufferData.index;
 
-	FfxResourceDescription resourceDescription = {};
-	resourceDescription.flags = FFX_RESOURCE_FLAGS_NONE;
-	resourceDescription.usage = FFX_RESOURCE_USAGE_READ_ONLY;
-	resourceDescription.width = a_bufferData.width;
-	resourceDescription.height = 1;
-	resourceDescription.format = FFX_SURFACE_FORMAT_UNKNOWN;
-	resourceDescription.depth = 0;
-	resourceDescription.mipCount = 0;
-	resourceDescription.type = FFX_RESOURCE_TYPE_BUFFER;
-
-	FfxResource ffxResource = ffxGetResourceDX12(a_bufferData.buffer.get(), resourceDescription, nullptr, FFX_RESOURCE_STATE_PIXEL_COMPUTE_READ);
+	FfxResource ffxResource = ffxGetResourceDX12(a_bufferData.buffer.get(), ffxGetResourceDescriptionDX12(a_bufferData.buffer.get(), FFX_RESOURCE_USAGE_READ_ONLY), nullptr, FFX_RESOURCE_STATE_PIXEL_COMPUTE_READ);
 
 	FfxBrixelizerBufferDescription brixelizerBufferDesc = {};
 	brixelizerBufferDesc.buffer = ffxResource;
@@ -296,7 +286,7 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 					instanceDesc.transform[row * 4 + col] = xmmTransform.m[col][row];
 				}
 			}
-
+			 
 			instanceDesc.indexFormat = FFX_INDEX_TYPE_UINT16;
 			instanceDesc.indexBuffer = GetBufferIndex(*indexBuffer);
 			instanceDesc.indexBufferOffset = 0;
