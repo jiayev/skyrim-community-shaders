@@ -26,7 +26,44 @@ void Raytracing::InitD3D12()
 	DX::ThrowIfFailed(d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator)));
 
 	DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.get(), nullptr, IID_PPV_ARGS(&commandList)));
+
+	InitBrixelizer();
 }
+
+void Raytracing::InitBrixelizer()
+{
+	FfxBrixelizerContextDescription desc = {};
+	
+	auto ffxDevice = ffxGetDeviceDX12(d3d12Device.get());
+
+	size_t scratchBufferSize = ffxGetScratchMemorySizeDX12(2);
+	void* scratchBuffer = calloc(scratchBufferSize, 1);
+	memset(scratchBuffer, 0, scratchBufferSize);
+
+	FfxInterface fsrInterface;
+	if (ffxGetInterfaceDX12(&fsrInterface, ffxDevice, scratchBuffer, scratchBufferSize, FFX_FSR3UPSCALER_CONTEXT_COUNT) != FFX_OK)
+		logger::critical("[Raytracing] Failed to initialize Brixelizer backend interface!");
+
+    initializationParameters.sdfCenter[0] = 0.0f;
+	initializationParameters.sdfCenter[1] = 0.0f;
+	initializationParameters.sdfCenter[2] = 0.0f;
+	initializationParameters.flags = FFX_BRIXELIZER_CONTEXT_FLAG_ALL_DEBUG;
+	initializationParameters.numCascades = 1;
+
+	float voxelSize = 1.0f;
+	for (uint32_t i = 0; i < initializationParameters.numCascades; ++i) {
+		FfxBrixelizerCascadeDescription* cascadeDesc = &initializationParameters.cascadeDescs[i];
+		cascadeDesc->flags = (FfxBrixelizerCascadeFlag)(FFX_BRIXELIZER_CASCADE_STATIC | FFX_BRIXELIZER_CASCADE_DYNAMIC);
+		cascadeDesc->voxelSize = voxelSize;
+		voxelSize *= 2.0f;
+	}
+
+	FfxErrorCode error = ffxBrixelizerContextCreate(&desc, &brixelizerContext);
+	if (error != FFX_OK) {
+		logger::info("error");
+	}
+}
+
 
 // Function to check for shared NT handle support and convert to D3D12 resource
 Raytracing::RenderTargetDataD3D12 Raytracing::ConvertD3D11TextureToD3D12(RE::BSGraphics::RenderTargetData* rtData)
@@ -65,16 +102,6 @@ void Raytracing::OpenSharedHandles()
 	for (int i = 0; i < RE::RENDER_TARGET::kTOTAL; i++) {
 		renderTargetsD3D12[i] = ConvertD3D11TextureToD3D12(&renderer->GetRuntimeData().renderTargets[i]);
 	}
-}
-
-inline const float4 MinPerElem(const float4& vec0, const float4& vec1)
-{
-	return float4(_mm_min_ps(vec0, vec1));
-}
-
-inline const float4 minPerElem(const float4& vec0, const float4& vec1)
-{
-	return float4(_mm_max_ps(vec0, vec1));
 }
 
 uint Raytracing::GetBufferIndex(BufferData& a_bufferData)
@@ -237,6 +264,12 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 			uint outInstanceID;
 			instanceDesc.outInstanceID = &outInstanceID;
 			instanceDesc.flags = FFX_BRIXELIZER_INSTANCE_FLAG_NONE;
+
+			// Create instances for a given context with the ffxBrixelizerCreateInstance function.
+			// Static instances are persistent across frames. Dynamic instances are discarded after a single frame.
+			FfxErrorCode error = ffxBrixelizerCreateInstances(&brixelizerContext, &instanceDesc, 1);
+			if (error != FFX_OK)
+				logger::error("error");
 		}
 	}
 }

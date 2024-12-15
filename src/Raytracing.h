@@ -52,6 +52,8 @@ public:
 
 	void InitD3D12();
 
+	void InitBrixelizer();
+
 	void OpenSharedHandles();
 
 	struct Vertex
