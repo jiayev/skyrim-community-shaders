@@ -411,7 +411,7 @@ void Raytracing::TransitionResources(D3D12_RESOURCE_STATES stateBefore, D3D12_RE
 	for (const auto brickMap : cascadeBrickMaps) {
 		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
 			brickMap.get(),
-			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+			stateBefore,
 			stateAfter));
 	}
 
