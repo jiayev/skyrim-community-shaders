@@ -40,6 +40,7 @@ Texture3D<sh2> SkylightingProbeArray : register(t9);
 Texture2D<half4> SsgiAoTexture : register(t10);
 Texture2D<half4> SsgiYTexture : register(t11);
 Texture2D<half4> SsgiCoCgTexture : register(t12);
+Texture2D<half4> SsgiSpecularTexture : register(t13);
 
 void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half ao, out half3 il)
 {
@@ -57,6 +58,11 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half ao, out half3 il)
 	// i don't think there really should be a 1/PI but without it the specular is too strong
 	// reflectance being ambient reflectance doesn't help either
 	il = max(0, Color::YCoCgToRGB(float3(ssgiIlY, ssgiIlCoCg / Math::PI)));
+
+	// HQ spec
+	half4 hq_spec = SsgiSpecularTexture[pixCoord];
+	ao *= 1 - hq_spec.a;
+	il += hq_spec.rgb;
 }
 #endif
 
