@@ -46,6 +46,10 @@ public:
 	FfxBrixelizerContext brixelizerContext = {};
 	FfxBrixelizerBakedUpdateDescription brixelizerBakedUpdateDesc = {};
 	FfxBrixelizerStats stats = {};
+	FfxBrixelizerUpdateDescription updateDesc = {};
+	FfxBrixelizerBakedUpdateDescription bakedUpdateDesc = {};
+
+	std::vector<D3D12_RESOURCE_BARRIER> barriers;
 
 	winrt::com_ptr<ID3D12Resource> sdfAtlas;
 	winrt::com_ptr<ID3D12Resource> brickAABBs;

@@ -389,8 +389,6 @@ void Raytracing::FrameUpdate()
 {
 	// Transition all resources to resource state expected by Brixelizer
 	{
-		std::vector<D3D12_RESOURCE_BARRIER> barriers;
-
 		// Transition the SDF Atlas
 		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
 			sdfAtlas.get(),
@@ -421,11 +419,11 @@ void Raytracing::FrameUpdate()
 
 		// Execute the resource barriers on the command list
 		commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+
+		barriers.clear();
 	}
 
 	// Fill out the Brixelizer update description.
-	FfxBrixelizerUpdateDescription updateDesc = {};
-
 	// Pass in the externally created output resources as FfxResource objects.
 	updateDesc.resources.sdfAtlas = ffxGetResourceDX12(sdfAtlas.get(), ffxGetResourceDescriptionDX12(sdfAtlas.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 
@@ -454,7 +452,6 @@ void Raytracing::FrameUpdate()
 	size_t scratchBufferSize = 0;
 	updateDesc.outScratchBufferSize = &scratchBufferSize;
 
-	FfxBrixelizerBakedUpdateDescription bakedUpdateDesc = {};
 	FfxErrorCode error = ffxBrixelizerBakeUpdate(&brixelizerContext, &updateDesc, &bakedUpdateDesc);
 	if (error != FFX_OK)
 		logger::critical("error");
@@ -469,8 +466,6 @@ void Raytracing::FrameUpdate()
 
 	// Transition all resources to the Non-Pixel Shader Resource state after the Brixelizer
 	{
-		std::vector<D3D12_RESOURCE_BARRIER> barriers;
-
 		// Transition the SDF Atlas
 		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
 			sdfAtlas.get(),
@@ -501,5 +496,7 @@ void Raytracing::FrameUpdate()
 
 		// Execute the resource barriers on the command list
 		commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+
+		barriers.clear();
 	}
 }

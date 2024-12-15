@@ -11,6 +11,8 @@
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 
+#include "Raytracing.h"
+
 struct DepthStates
 {
 	ID3D11DepthStencilState* a[6][40];
@@ -459,6 +461,8 @@ void Deferred::EndDeferred()
 {
 	if (!inWorld)
 		return;
+
+	Raytracing::GetSingleton()->FrameUpdate();
 
 	auto& shaderCache = SIE::ShaderCache::Instance();
 
