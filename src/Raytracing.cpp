@@ -66,7 +66,7 @@ void Raytracing::InitBrixelizer()
 	initializationParameters.flags = FFX_BRIXELIZER_CONTEXT_FLAG_ALL_DEBUG;
 	initializationParameters.numCascades = NUM_BRIXELIZER_CASCADES;
 
-	float voxelSize = 1.0f;
+	float voxelSize = 0.2f;
 	for (uint32_t i = 0; i < NUM_BRIXELIZER_CASCADES; ++i) {
 		FfxBrixelizerCascadeDescription* cascadeDesc = &initializationParameters.cascadeDescs[i];
 		cascadeDesc->flags = (FfxBrixelizerCascadeFlag)(FFX_BRIXELIZER_CASCADE_STATIC | FFX_BRIXELIZER_CASCADE_DYNAMIC);
@@ -243,7 +243,7 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 			float4 maxExtents = float4(-INFINITY, -INFINITY, -INFINITY, -INFINITY);
 
 			for (uint i = 0; i < 8; i++) {
-				auto transformed = transform * aabbCorners[i];
+				auto transformed = aabbCorners[i];
 				float4 transformedF = { transformed.x, transformed.y, transformed.z, 0 };
 
 				minExtents = (float4)_mm_min_ps(minExtents, transformedF);
@@ -449,8 +449,10 @@ void Raytracing::FrameUpdate()
 	updateDesc.triangleSwapSize = 300 * (1 << 20);
 	updateDesc.outStats = &stats;
 
-	for (uint32_t i = 0; i < 3; ++i)
-		updateDesc.sdfCenter[i] = 0;
+	auto eyePosition = Util::GetEyePosition(0);
+	updateDesc.sdfCenter[0] = eyePosition.x;
+	updateDesc.sdfCenter[1] = eyePosition.y;
+	updateDesc.sdfCenter[2] = eyePosition.z;
 
 	size_t scratchBufferSize = 0;
 	updateDesc.outScratchBufferSize = &scratchBufferSize;
