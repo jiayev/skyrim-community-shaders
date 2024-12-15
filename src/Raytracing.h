@@ -25,7 +25,6 @@ public:
 		return &singleton;
 	}
 
-	
 	winrt::com_ptr<IDXGIAdapter3> dxgiAdapter3;
 	winrt::com_ptr<ID3D12Device> d3d12Device;
 	winrt::com_ptr<ID3D12CommandQueue> commandQueue;

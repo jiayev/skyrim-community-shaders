@@ -31,7 +31,6 @@ void Raytracing::InitD3D12()
 	InitBrixelizer();
 }
 
-
 // Helper function to create a committed resource
 winrt::com_ptr<ID3D12Resource> Raytracing::CreateBuffer(UINT size, D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE)
 {
