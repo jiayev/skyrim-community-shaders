@@ -91,7 +91,7 @@ uint32_t Raytracing::GetBufferIndex(BufferData& a_bufferData)
 	resourceDescription.depth = 0;
 	resourceDescription.mipCount = 0;
 	resourceDescription.type = FFX_RESOURCE_TYPE_BUFFER;
-	
+
 	FfxResource ffxResource = ffxGetResourceDX12(a_bufferData.buffer.get(), resourceDescription, nullptr, FFX_RESOURCE_STATE_PIXEL_COMPUTE_READ);
 
 	FfxBrixelizerBufferDescription brixelizerBufferDesc = {};
@@ -112,24 +112,24 @@ DirectX::XMMATRIX GetXMFromNiTransform(const RE::NiTransform& Transform)
 	const float scale = Transform.scale;
 
 	temp.r[0] = DirectX::XMVectorScale(DirectX::XMVectorSet(
-								  m.entry[0][0],
+										   m.entry[0][0],
 										   m.entry[1][0],
 										   m.entry[2][0],
-								  0.0f),
+										   0.0f),
 		scale);
 
 	temp.r[1] = DirectX::XMVectorScale(DirectX::XMVectorSet(
 										   m.entry[0][1],
 										   m.entry[1][1],
 										   m.entry[2][1],
-								  0.0f),
+										   0.0f),
 		scale);
 
 	temp.r[2] = DirectX::XMVectorScale(DirectX::XMVectorSet(
 										   m.entry[0][2],
 										   m.entry[1][2],
 										   m.entry[2][2],
-								  0.0f),
+										   0.0f),
 		scale);
 
 	temp.r[3] = DirectX::XMVectorSet(
@@ -178,7 +178,7 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 			}
 
 			auto& rendererData = a_geometry->GetGeometryRuntimeData().rendererData;
-		
+
 			BufferData vertexBuffer{};
 			BufferData indexBuffer{};
 
