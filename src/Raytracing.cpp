@@ -31,17 +31,14 @@ void Raytracing::InitD3D12()
 }
 
 void Raytracing::InitBrixelizer()
-{
-	FfxBrixelizerContextDescription desc = {};
-	
+{	
 	auto ffxDevice = ffxGetDeviceDX12(d3d12Device.get());
 
 	size_t scratchBufferSize = ffxGetScratchMemorySizeDX12(2);
 	void* scratchBuffer = calloc(scratchBufferSize, 1);
 	memset(scratchBuffer, 0, scratchBufferSize);
 
-	FfxInterface fsrInterface;
-	if (ffxGetInterfaceDX12(&fsrInterface, ffxDevice, scratchBuffer, scratchBufferSize, FFX_FSR3UPSCALER_CONTEXT_COUNT) != FFX_OK)
+	if (ffxGetInterfaceDX12(&initializationParameters.backendInterface, ffxDevice, scratchBuffer, scratchBufferSize, FFX_FSR3UPSCALER_CONTEXT_COUNT) != FFX_OK)
 		logger::critical("[Raytracing] Failed to initialize Brixelizer backend interface!");
 
     initializationParameters.sdfCenter[0] = 0.0f;
@@ -58,7 +55,7 @@ void Raytracing::InitBrixelizer()
 		voxelSize *= 2.0f;
 	}
 
-	FfxErrorCode error = ffxBrixelizerContextCreate(&desc, &brixelizerContext);
+	FfxErrorCode error = ffxBrixelizerContextCreate(&initializationParameters, &brixelizerContext);
 	if (error != FFX_OK) {
 		logger::info("error");
 	}
