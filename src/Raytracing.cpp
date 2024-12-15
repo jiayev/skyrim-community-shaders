@@ -31,7 +31,7 @@ void Raytracing::InitD3D12()
 }
 
 void Raytracing::InitBrixelizer()
-{	
+{
 	auto ffxDevice = ffxGetDeviceDX12(d3d12Device.get());
 
 	size_t scratchBufferSize = ffxGetScratchMemorySizeDX12(2);
