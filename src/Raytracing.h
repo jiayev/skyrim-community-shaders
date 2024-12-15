@@ -56,7 +56,7 @@ public:
 
 	void InitD3D12();
 
-	winrt::com_ptr<ID3D12Resource> CreateBuffer(UINT size, D3D12_RESOURCE_FLAGS flags);
+	winrt::com_ptr<ID3D12Resource> CreateBuffer(UINT size, D3D12_RESOURCE_STATES resourceState, D3D12_RESOURCE_FLAGS flags);
 
 	void InitBrixelizer();
 

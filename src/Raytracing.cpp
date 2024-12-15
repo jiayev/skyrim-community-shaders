@@ -32,7 +32,7 @@ void Raytracing::InitD3D12()
 }
 
 // Helper function to create a committed resource
-winrt::com_ptr<ID3D12Resource> Raytracing::CreateBuffer(UINT size, D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE)
+winrt::com_ptr<ID3D12Resource> Raytracing::CreateBuffer(UINT size, D3D12_RESOURCE_STATES resourceState = D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE)
 {
 	winrt::com_ptr<ID3D12Resource> buffer;
 	CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
@@ -42,7 +42,7 @@ winrt::com_ptr<ID3D12Resource> Raytracing::CreateBuffer(UINT size, D3D12_RESOURC
 		&heapProperties,
 		D3D12_HEAP_FLAG_NONE,
 		&bufferDesc,
-		D3D12_RESOURCE_STATE_COMMON,
+		resourceState,
 		nullptr,
 		IID_PPV_ARGS(&buffer)));
 
@@ -95,17 +95,17 @@ void Raytracing::InitBrixelizer()
 		&heapProperties,
 		D3D12_HEAP_FLAG_NONE,
 		&sdfAtlasDesc,
-		D3D12_RESOURCE_STATE_COMMON,
+		D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
 		nullptr,
 		IID_PPV_ARGS(&sdfAtlas)));
 
-	brickAABBs = CreateBuffer(FFX_BRIXELIZER_BRICK_AABBS_SIZE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+	brickAABBs = CreateBuffer(FFX_BRIXELIZER_BRICK_AABBS_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 
-	gpuScratchBuffer = CreateBuffer(GPU_SCRATCH_BUFFER_SIZE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+	gpuScratchBuffer = CreateBuffer(GPU_SCRATCH_BUFFER_SIZE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 
 	for (int i = 0; i < NUM_BRIXELIZER_CASCADES; i++) {
-		cascadeAABBTrees.push_back(CreateBuffer(FFX_BRIXELIZER_CASCADE_AABB_TREE_SIZE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
-		cascadeBrickMaps.push_back(CreateBuffer(FFX_BRIXELIZER_CASCADE_BRICK_MAP_SIZE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
+		cascadeAABBTrees.push_back(CreateBuffer(FFX_BRIXELIZER_CASCADE_AABB_TREE_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
+		cascadeBrickMaps.push_back(CreateBuffer(FFX_BRIXELIZER_CASCADE_BRICK_MAP_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
 	}
 }
 
@@ -387,6 +387,42 @@ void Raytracing::RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11
 
 void Raytracing::FrameUpdate()
 {
+	// Transition all resources to resource state expected by Brixelizer
+	{
+		std::vector<D3D12_RESOURCE_BARRIER> barriers;
+
+		// Transition the SDF Atlas
+		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+			sdfAtlas.get(),
+			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+			D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+
+		// Transition the Brick AABBs
+		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+			brickAABBs.get(),
+			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+			D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+
+		// Transition each Cascade AABB Tree
+		for (const auto aabbTree : cascadeAABBTrees) {
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+				aabbTree.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+		}
+
+		// Transition each Cascade Brick Map
+		for (const auto brickMap : cascadeBrickMaps) {
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+				brickMap.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+		}
+
+		// Execute the resource barriers on the command list
+		commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+	}
+
 	// Fill out the Brixelizer update description.
 	FfxBrixelizerUpdateDescription updateDesc = {};
 
@@ -430,4 +466,40 @@ void Raytracing::FrameUpdate()
 	error = ffxBrixelizerUpdate(&brixelizerContext, &bakedUpdateDesc, ffxGpuScratchBuffer, ffxGetCommandListDX12(commandList.get()));
 	if (error != FFX_OK)
 		logger::critical("error");
+
+	// Transition all resources to the Non-Pixel Shader Resource state after the Brixelizer
+	{
+		std::vector<D3D12_RESOURCE_BARRIER> barriers;
+
+		// Transition the SDF Atlas
+		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+			sdfAtlas.get(),
+			D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+
+		// Transition the Brick AABBs
+		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+			brickAABBs.get(),
+			D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+
+		// Transition each Cascade AABB Tree
+		for (const auto aabbTree : cascadeAABBTrees) {
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+				aabbTree.get(),
+				D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+		}
+
+		// Transition each Cascade Brick Map
+		for (const auto brickMap : cascadeBrickMaps) {
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+				brickMap.get(),
+				D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+		}
+
+		// Execute the resource barriers on the command list
+		commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+	}
 }
