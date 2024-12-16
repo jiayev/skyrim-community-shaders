@@ -135,7 +135,7 @@ void CSLensflare(uint3 DTid : SV_DispatchThreadID)
     if (DTid.x >= (uint)ScreenWidth || DTid.y >= (uint)ScreenHeight)
         return;
     // float2 texcoord = (DTid.xy + 0.5f) / float2(ScreenWidth, ScreenHeight);
-    float2 texcoord = (DTid.xy + 0.5f) / float2(ScreenWidth, ScreenHeight);
+    float2 texcoord = (floor((DTid.xy / 4)) * 4 + 2.0f) / float2(ScreenWidth, ScreenHeight);
     float4 input_color = InputTexture.SampleLevel(ColorSampler, texcoord, 0);
     float weight;
     float4 s = 0.0f;
