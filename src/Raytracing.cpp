@@ -11,8 +11,7 @@ void Raytracing::DrawSettings()
 
 	static FfxBrixelizerStats statsFirstCascade{};
 
-	if (stats.cascadeIndex == 0)
-	{
+	if (stats.cascadeIndex == 0) {
 		statsFirstCascade = stats;
 	}
 
@@ -53,7 +52,7 @@ void Raytracing::InitD3D12(IDXGIAdapter* a_adapter)
 
 	InitBrixelizer();
 	InitFenceAndEvent();
-	
+
 	debugAvailable = DXGIGetDebugInterface1(0, IID_PPV_ARGS(&ga)) == S_OK;
 }
 
@@ -134,7 +133,6 @@ void Raytracing::InitBrixelizer()
 		cascadeBrickMaps.push_back(CreateBuffer(FFX_BRIXELIZER_CASCADE_BRICK_MAP_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
 	}
 
-
 	{
 		Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap;
 		UINT rtvDescriptorSize;
@@ -181,8 +179,6 @@ void Raytracing::InitBrixelizer()
 		// 3. Create the render target view (RTV)
 		debugRTVHandle = rtvHeap->GetCPUDescriptorHandleForHeapStart();
 		d3d12Device->CreateRenderTargetView(debugRenderTarget.get(), nullptr, debugRTVHandle);
-
-
 	}
 }
 

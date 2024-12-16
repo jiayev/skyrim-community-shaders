@@ -18,9 +18,9 @@
 #include "Deferred.h"
 #include "TruePBR.h"
 
+#include "Raytracing.h"
 #include "Streamline.h"
 #include "Upscaling.h"
-#include "Raytracing.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
