@@ -52,7 +52,7 @@ void Raytracing::InitD3D12(IDXGIAdapter* a_adapter)
 	DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.get(), nullptr, IID_PPV_ARGS(&commandList)));
 
 	InitFenceAndEvent();
-	
+
 	debugAvailable = DXGIGetDebugInterface1(0, IID_PPV_ARGS(&ga)) == S_OK;
 }
 

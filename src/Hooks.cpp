@@ -344,7 +344,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainNoStreamline(
 		ppDevice,
 		pFeatureLevel,
 		ppImmediateContext);
-//	return hr;
+	//	return hr;
 }
 
 HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
