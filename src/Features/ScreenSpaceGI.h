@@ -47,6 +47,7 @@ struct ScreenSpaceGI : Feature
 	{
 		bool Enabled = true;
 		bool EnableGI = true;
+		bool EnableExperimentalSpecularGI = false;
 		// performance/quality
 		uint NumSlices = 5;
 		uint NumSteps = 8;
@@ -126,12 +127,17 @@ struct ScreenSpaceGI : Feature
 	eastl::unique_ptr<Texture2D> texAo[2] = { nullptr };
 	eastl::unique_ptr<Texture2D> texIlY[2] = { nullptr };
 	eastl::unique_ptr<Texture2D> texIlCoCg[2] = { nullptr };
+	eastl::unique_ptr<Texture2D> texGiSpecular[2] = { nullptr };
 
 	inline auto GetOutputTextures()
 	{
 		return (loaded && settings.Enabled) ?
-		           std::make_tuple(texAo[outputAoIdx]->srv.get(), texIlY[outputIlIdx]->srv.get(), texIlCoCg[outputIlIdx]->srv.get()) :
-		           std::make_tuple(nullptr, nullptr, nullptr);
+		           std::make_tuple(
+					   texAo[outputAoIdx]->srv.get(),
+					   texIlY[outputIlIdx]->srv.get(),
+					   texIlCoCg[outputIlIdx]->srv.get(),
+					   texGiSpecular[outputAoIdx]->srv.get()) :
+		           std::make_tuple(nullptr, nullptr, nullptr, nullptr);
 	}
 
 	winrt::com_ptr<ID3D11SamplerState> linearClampSampler = nullptr;

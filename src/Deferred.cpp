@@ -352,7 +352,8 @@ void Deferred::DeferredPasses()
 	auto ssgi = ScreenSpaceGI::GetSingleton();
 	if (ssgi->loaded)
 		ssgi->DrawSSGI(prevDiffuseAmbientTexture);
-	auto [ssgi_ao, ssgi_y, ssgi_cocg] = ssgi->GetOutputTextures();
+	auto [ssgi_ao, ssgi_y, ssgi_cocg, ssgi_gi_spec] = ssgi->GetOutputTextures();
+	bool ssgi_hq_spec = ssgi->settings.EnableExperimentalSpecularGI;
 
 	auto dispatchCount = Util::GetScreenDispatchCount();
 
@@ -410,7 +411,7 @@ void Deferred::DeferredPasses()
 	{
 		TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Deferred Composite");
 
-		ID3D11ShaderResourceView* srvs[14]{
+		ID3D11ShaderResourceView* srvs[16]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
@@ -421,10 +422,15 @@ void Deferred::DeferredPasses()
 			dynamicCubemaps->loaded ? dynamicCubemaps->envTexture->srv.get() : nullptr,
 			dynamicCubemaps->loaded ? dynamicCubemaps->envReflectionsTexture->srv.get() : nullptr,
 			dynamicCubemaps->loaded && skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
-			ssgi_y,
-			ssgi_cocg,
+			ssgi_ao,
+			ssgi_hq_spec ? nullptr : ssgi_y,
+			ssgi_hq_spec ? nullptr : ssgi_cocg,
+			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
+<<<<<<< HEAD
 			physSky->loaded ? physSky->main_view_tr_tex->srv.get() : nullptr,
 			physSky->loaded ? physSky->main_view_lum_tex->srv.get() : nullptr,
+=======
+>>>>>>> pentalimbed/dev-ssgi-specular-ao
 		};
 
 		if (dynamicCubemaps->loaded)

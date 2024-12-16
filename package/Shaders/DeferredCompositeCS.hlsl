@@ -37,11 +37,16 @@ Texture3D<sh2> SkylightingProbeArray : register(t9);
 #endif
 
 #if defined(SSGI)
-Texture2D<half4> SsgiYTexture : register(t10);
-Texture2D<half4> SsgiCoCgTexture : register(t11);
+Texture2D<half4> SsgiAoTexture : register(t10);
+Texture2D<half4> SsgiYTexture : register(t11);
+Texture2D<half4> SsgiCoCgTexture : register(t12);
+Texture2D<half4> SsgiSpecularTexture : register(t13);
 
-void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half3 il)
+void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half ao, out half3 il)
 {
+	ao = 1 - SsgiAoTexture[pixCoord];
+	ao = pow(ao, 0.25);
+
 	half4 ssgiIlYSh = SsgiYTexture[pixCoord];
 	half ssgiIlY = SphericalHarmonics::FuncProductIntegral(ssgiIlYSh, lobe);
 	half2 ssgiIlCoCg = SsgiCoCgTexture[pixCoord];
@@ -53,12 +58,17 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half3 il)
 	// i don't think there really should be a 1/PI but without it the specular is too strong
 	// reflectance being ambient reflectance doesn't help either
 	il = max(0, Color::YCoCgToRGB(float3(ssgiIlY, ssgiIlCoCg / Math::PI)));
+
+	// HQ spec
+	half4 hq_spec = SsgiSpecularTexture[pixCoord];
+	ao *= 1 - hq_spec.a;
+	il += hq_spec.rgb;
 }
 #endif
 
 #if defined(PHYS_SKY)
-Texture2D<float3> PhysSkyTrTexture : register(t12);
-Texture2D<float3> PhysSkyLumTexture : register(t13);
+Texture2D<float3> PhysSkyTrTexture : register(t14);
+Texture2D<float3> PhysSkyLumTexture : register(t15);
 #endif
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
@@ -161,16 +171,20 @@ Texture2D<float3> PhysSkyLumTexture : register(t13);
 		uint2 pixCoord2 = (uint2)(uv2.xy / SharedData::BufferDim.zw - 0.5);
 #		endif
 
+		half ssgiAo;
 		half3 ssgiIlSpecular;
-		SampleSSGISpecular(dispatchID.xy, specularLobe, ssgiIlSpecular);
+		SampleSSGISpecular(dispatchID.xy, specularLobe, ssgiAo, ssgiIlSpecular);
 
 #		if defined(VR)
+		half ssgiAo2;
 		half3 ssgiIlSpecular2;
-		SampleSSGISpecular(pixCoord2, specularLobe, ssgiIlSpecular2);
-		ssgiIlSpecular = Stereo::BlendEyeColors(uv1Mono, float4(ssgiIlSpecular, 0), uv2Mono, float4(ssgiIlSpecular2, 0)).rgb;
+		SampleSSGISpecular(pixCoord2, specularLobe, ssgiAo2, ssgiIlSpecular2);
+		half4 ssgiMixed = Stereo::BlendEyeColors(uv1Mono, float4(ssgiIlSpecular, ssgiAo), uv2Mono, float4(ssgiIlSpecular2, ssgiAo2));
+		ssgiAo = ssgiMixed.a;
+		ssgiIlSpecular = ssgiMixed.rgb;
 #		endif
 
-		finalIrradiance += ssgiIlSpecular;
+		finalIrradiance = finalIrradiance * ssgiAo + ssgiIlSpecular;
 #	endif
 
 		color += reflectance * finalIrradiance;
