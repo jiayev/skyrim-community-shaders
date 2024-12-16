@@ -16,11 +16,11 @@ struct VanillaImagespace : public PostProcessFeature
     {
         float blendFactor;
         float2 res;
-        uint8_t pad[4];
+        float3 cinematic;
+        uint8_t pad[8];
     };
 
     eastl::unique_ptr<ConstantBuffer> vanillaImagespaceCB = nullptr;
-    REL::Relocation<ID3D11Buffer**> perGeometryBuffersArray;
 
     eastl::unique_ptr<Texture2D> texOutput = nullptr;
 

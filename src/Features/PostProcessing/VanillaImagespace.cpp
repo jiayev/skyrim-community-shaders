@@ -39,8 +39,6 @@ void VanillaImagespace::SetupResources()
     logger::debug("Creating buffers...");
     {
         vanillaImagespaceCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<VanillaImagespaceCB>());
-
-        perGeometryBuffersArray = REL::Relocation<ID3D11Buffer**>(RELOCATION_ID(524765, 411381));
     }
 
 	logger::debug("Creating 2D textures...");
@@ -138,19 +136,24 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
 {
     auto context = State::GetSingleton()->context;
     float2 res = { (float)texOutput->desc.Width, (float)texOutput->desc.Height };
+    float3 cinematic;
+    cinematic.x = RE::ImageSpaceManager::GetSingleton()->GetRuntimeData().data.baseData.cinematic.saturation;
+    cinematic.y = RE::ImageSpaceManager::GetSingleton()->GetRuntimeData().data.baseData.cinematic.brightness;
+    cinematic.z = RE::ImageSpaceManager::GetSingleton()->GetRuntimeData().data.baseData.cinematic.contrast;
 	res = Util::ConvertToDynamic(res);
 
     VanillaImagespaceCB data = {
         .blendFactor = settings.blendFactor,
-        .res = res
+        .res = res,
+        .cinematic = cinematic
     };
     vanillaImagespaceCB->Update(data);
 
     ID3D11ShaderResourceView* srv = inout_tex.srv;
     ID3D11UnorderedAccessView* uav = texOutput->uav.get();
-    std::array<ID3D11Buffer*,2> cb = { vanillaImagespaceCB->CB(), perGeometryBuffersArray.get()[1] };
+    ID3D11Buffer* cb = vanillaImagespaceCB->CB();
 
-    context->CSSetConstantBuffers(1, 2, cb.data());
+    context->CSSetConstantBuffers(1, 1, &cb);
     context->CSSetShaderResources(0, 1, &srv);
     context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
@@ -159,10 +162,12 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
 
     srv = nullptr;
 	uav = nullptr;
-	cb.fill(nullptr);
+	cb = nullptr;
+
+    inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 	context->CSSetShaderResources(0, 1, &srv);
-	context->CSSetConstantBuffers(1, 2, cb.data());
+	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
