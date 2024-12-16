@@ -153,28 +153,26 @@ void Raytracing::InitBrixelizer()
 		textureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
 
 		DX::ThrowIfFailed(d3d11Device->CreateTexture2D(&textureDesc, nullptr, &debugRenderTargetd3d11));
-		
+
 		IDXGIResource1* dxgiResource = nullptr;
 		DX::ThrowIfFailed(debugRenderTargetd3d11->QueryInterface(IID_PPV_ARGS(&dxgiResource)));
 
 		HANDLE sharedHandle = nullptr;
 		DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(
-			nullptr,                                                 
-			DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, 
-			nullptr,                                                
-			&sharedHandle                                          
-		));
+			nullptr,
+			DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+			nullptr,
+			&sharedHandle));
 
 		DX::ThrowIfFailed(d3d12Device->OpenSharedHandle(
-			sharedHandle,               
-			IID_PPV_ARGS(&debugRenderTarget) 
-		));
+			sharedHandle,
+			IID_PPV_ARGS(&debugRenderTarget)));
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-		srvDesc.Format = textureDesc.Format;                   
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;  
-		srvDesc.Texture2D.MostDetailedMip = 0;                
-		srvDesc.Texture2D.MipLevels = 1;                       
+		srvDesc.Format = textureDesc.Format;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.MipLevels = 1;
 
 		DX::ThrowIfFailed(d3d11Device->CreateShaderResourceView(debugRenderTargetd3d11, &srvDesc, &debugSRV));
 	}
@@ -527,7 +525,7 @@ void Raytracing::SetupDebugVisualization(FfxBrixelizerDebugVisualizationDescript
 
 	memcpy(&debugVisDesc.inverseViewMatrix, &inverseView, sizeof(debugVisDesc.inverseViewMatrix));
 	memcpy(&debugVisDesc.inverseProjectionMatrix, &inverseProjection, sizeof(debugVisDesc.inverseProjectionMatrix));
-	
+
 	debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_DISTANCE;
 
 	uint32_t cascadeIndexOffset = 0;
@@ -560,7 +558,7 @@ void Raytracing::FrameUpdate()
 
 	// Transition all resources to resource state expected by Brixelizer
 	TransitionResources(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-	
+
 	updateDesc.debugVisualizationDesc = nullptr;
 	updateDesc.populateDebugAABBsFlags = FFX_BRIXELIZER_POPULATE_AABBS_NONE;
 
