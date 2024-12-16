@@ -25,15 +25,17 @@ struct LensFlare : public PostProcessFeature
         Settings settings;
         float ScreenWidth;
         float ScreenHeight;
-        uint8_t pad1[12];
+        int downsizeScale;
+        uint8_t pad1[8];
     };
 
     struct debugSettings
     {
-        bool showDebug = false;
+        int downsampleTimes = 2;
+        int upsampleTimes = 6;
         bool disableDownsample = false;
         bool disableUpsample = false;
-        uint8_t pad;
+        uint8_t pad[2];
     } debugsettings;
 
     eastl::unique_ptr<ConstantBuffer> lensFlareCB = nullptr;
@@ -44,7 +46,9 @@ struct LensFlare : public PostProcessFeature
     eastl::unique_ptr<Texture2D> texFlareDCopy = nullptr;
     eastl::unique_ptr<Texture2D> texFlareU = nullptr;
     eastl::unique_ptr<Texture2D> texFlareUCopy = nullptr;
+
     winrt::com_ptr<ID3D11SamplerState> colorSampler = nullptr;
+    winrt::com_ptr<ID3D11SamplerState> resizeSampler = nullptr;
 
     winrt::com_ptr<ID3D11ComputeShader> lensFlareCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> downsampleCS = nullptr;

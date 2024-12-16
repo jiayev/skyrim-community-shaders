@@ -16,7 +16,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     LensFlare::debugSettings,
-    showDebug,
+    downsampleTimes,
+    upsampleTimes,
     disableDownsample,
     disableUpsample
 )
@@ -63,13 +64,11 @@ void LensFlare::DrawSettings()
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::Checkbox("Show Debug", &debugsettings.showDebug);
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Show debug information for lens flare");
-    }
-    if (debugsettings.showDebug) {
+    if (ImGui::CollapsingHeader("Debug")) {
         ImGui::Checkbox("Disable Downsample", &debugsettings.disableDownsample);
         ImGui::Checkbox("Disable Upsample", &debugsettings.disableUpsample);
+        ImGui::SliderInt("Downsample Times", &debugsettings.downsampleTimes, 1, 8);
+        ImGui::SliderInt("Upsample Times", &debugsettings.upsampleTimes, 1, 8);
     }
 }
 
@@ -161,6 +160,18 @@ void LensFlare::SetupResources()
 		};
 
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, colorSampler.put()));
+
+        D3D11_SAMPLER_DESC resizesamplerDesc = {
+			.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+			.AddressU = D3D11_TEXTURE_ADDRESS_MIRROR,
+			.AddressV = D3D11_TEXTURE_ADDRESS_MIRROR,
+			.AddressW = D3D11_TEXTURE_ADDRESS_MIRROR,
+			.MaxAnisotropy = 1,
+			.MinLOD = 0,
+			.MaxLOD = D3D11_FLOAT32_MAX
+		};
+
+        DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, resizeSampler.put()));
 	}
 
     CompileComputeShaders();
@@ -224,21 +235,28 @@ void LensFlare::Draw(TextureInfo& inout_tex)
     LensFlareCB data = {
         .settings = settings,
         .ScreenWidth = (float)width,
-        .ScreenHeight = (float)height
+        .ScreenHeight = (float)height,
+        .downsizeScale = 1
     };
+
+    int downsampleTimes = debugsettings.downsampleTimes;
+    int upsampleTimes = debugsettings.upsampleTimes;
+
     lensFlareCB->Update(data);
 
     std::array<ID3D11ShaderResourceView*, 2> srvs = { nullptr };
     std::array<ID3D11UnorderedAccessView*, 1> uavs = { nullptr };
-    std::array<ID3D11SamplerState*, 1> samplers = { colorSampler.get() };
+    std::array<ID3D11SamplerState*, 2> samplers = { colorSampler.get(), resizeSampler.get() };
 	auto cb = lensFlareCB->CB();
 
     auto resetViews = [&]() {
 		srvs.fill(nullptr);
 		uavs.fill(nullptr);
+        cb = nullptr;
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+        context->CSSetConstantBuffers(1, 1, &cb);
 	};
 
 	context->CSSetConstantBuffers(1, 1, &cb);
@@ -256,10 +274,10 @@ void LensFlare::Draw(TextureInfo& inout_tex)
     context->Dispatch(dispatchX, dispatchY, 1);
     resetViews();
 
-    int numDownsamples = 1;
-    if (height > 1024) numDownsamples = 2;
-    if (height > 2048) numDownsamples = 3;
-    if (height > 4096) numDownsamples = 4;
+    // int numDownsamples = 1;
+    // if (height > 1024) numDownsamples = 2;
+    // if (height > 2048) numDownsamples = 3;
+    // if (height > 4096) numDownsamples = 4;
 
     context->CopyResource(texFlareD->resource.get(), texFlare->resource.get());
     context->CopyResource(texFlareDCopy->resource.get(), texFlare->resource.get());
@@ -267,7 +285,13 @@ void LensFlare::Draw(TextureInfo& inout_tex)
     if (!debugsettings.disableDownsample) {
         // Downsample passes
         context->CSSetShader(downsampleCS.get(), nullptr, 0);
-        for (int i = 0; i < numDownsamples; i++) {
+        for (int i = 0; i < downsampleTimes; i++) {
+            // When i == 0, downsizeScale is 8.
+            // When i == 3, downsizeScale is 64.
+            data.downsizeScale = 2 ^ (i + 3);
+            lensFlareCB->Update(data);
+            cb = lensFlareCB->CB();
+            context->CSSetConstantBuffers(1, 1, &cb);
             srvs.at(1) = texFlareD->srv.get();
             uavs.at(0) = texFlareDCopy->uav.get();
             context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
@@ -277,6 +301,7 @@ void LensFlare::Draw(TextureInfo& inout_tex)
             resetViews();
         }
         context->CopyResource(texFlare->resource.get(), texFlareD->resource.get());
+        context->Flush();
     }
 
     context->CopyResource(texFlareU->resource.get(), texFlareD->resource.get());
@@ -285,7 +310,13 @@ void LensFlare::Draw(TextureInfo& inout_tex)
     if (!debugsettings.disableUpsample) {
         // Upsample passes
         context->CSSetShader(upsampleCS.get(), nullptr, 0);
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < upsampleTimes; i++) {
+            // When i == 3, downsizeScale is 8.
+            // When i == 0, downsizeScale is 64.
+            data.downsizeScale = 2 ^ (6 - i);
+            lensFlareCB->Update(data);
+            cb = lensFlareCB->CB();
+            context->CSSetConstantBuffers(1, 1, &cb);
             srvs.at(1) = texFlareU->srv.get();
             uavs.at(0) = texFlareUCopy->uav.get();
             context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
@@ -295,14 +326,17 @@ void LensFlare::Draw(TextureInfo& inout_tex)
             resetViews();
         }
         context->CopyResource(texFlare->resource.get(), texFlareU->resource.get());
+        context->Flush();
     }
 
     
 
     // Final composite
+    cb = lensFlareCB->CB();
     srvs.at(0) = inout_tex.srv;
     srvs.at(1) = texFlare->srv.get();
     uavs.at(0) = texOutput->uav.get();
+    context->CSSetConstantBuffers(1, 1, &cb);
     context->CSSetShader(compositeCS.get(), nullptr, 0);
     context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
     context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
