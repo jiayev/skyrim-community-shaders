@@ -56,6 +56,8 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half3 il)
 }
 #endif
 
+Texture2D<float4> DebugTexture : register(t12);
+
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
 	half2 uv = half2(dispatchID.xy + 0.5) * SharedData::BufferDim.zw;
@@ -193,6 +195,6 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half3 il)
 
 #endif
 
-	MainRW[dispatchID.xy] = color;
+	MainRW[dispatchID.xy] = DebugTexture[dispatchID.xy];
 	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = half4(GBuffer::EncodeNormalVanilla(normalVS), 0.0, 0.0);
 }

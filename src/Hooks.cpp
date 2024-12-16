@@ -462,7 +462,7 @@ namespace Hooks
 			auto swapchain = reinterpret_cast<IDXGISwapChain*>(manager->GetRuntimeData().renderWindows->swapChain);
 			auto device = reinterpret_cast<ID3D11Device*>(manager->GetRuntimeData().forwarder);
 
-			//	Raytracing::GetSingleton()->InitD3D12();
+			Raytracing::GetSingleton()->InitBrixelizer();
 
 			logger::info("Detouring virtual function tables");
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(swapchain);

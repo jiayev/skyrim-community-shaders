@@ -77,8 +77,9 @@ public:
 	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeAABBTrees;
 	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeBrickMaps;
 
-	winrt::com_ptr<ID3D12Resource> debugRenderTarget;
-	CD3DX12_CPU_DESCRIPTOR_HANDLE debugRTVHandle;
+	ID3D11Texture2D* debugRenderTargetd3d11;
+	ID3D11ShaderResourceView* debugSRV;
+	ID3D12Resource* debugRenderTarget;
 
 	void DrawSettings();
 	void InitD3D12(IDXGIAdapter* a_adapter);
@@ -121,6 +122,8 @@ public:
 
 	void InitFenceAndEvent();
 	void WaitForGPU();
+
+	void SetupDebugVisualization(FfxBrixelizerDebugVisualizationDescription& debugVisDesc);
 
 	void FrameUpdate();
 
