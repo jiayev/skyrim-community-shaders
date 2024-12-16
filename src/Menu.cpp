@@ -20,6 +20,7 @@
 
 #include "Streamline.h"
 #include "Upscaling.h"
+#include "Raytracing.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
@@ -963,6 +964,7 @@ void Menu::DrawDisplaySettings()
 		auto& themeSettings = Menu::GetSingleton()->settings.Theme;
 
 		const std::vector<std::pair<std::string, std::function<void()>>> features = {
+			{ "Raytracing", []() { Raytracing::GetSingleton()->DrawSettings(); } },
 			{ "Upscaling", []() { Upscaling::GetSingleton()->DrawSettings(); } },
 			{ "Frame Generation", []() { Streamline::GetSingleton()->DrawSettings(); } }
 		};

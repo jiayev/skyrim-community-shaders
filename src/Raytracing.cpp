@@ -1,34 +1,40 @@
 #include "Raytracing.h"
 
 #include "Deferred.h"
-#include <FidelityFX/host/backends/dx12/d3dx12.h>
 
-void Raytracing::InitD3D12()
+void Raytracing::DrawSettings()
 {
-	auto manager = RE::BSGraphics::Renderer::GetSingleton();
-	auto device = reinterpret_cast<ID3D11Device*>(manager->GetRuntimeData().forwarder);
+	ImGui::Text("Debug capture requires that PIX is attached.");
+	if (ImGui::Button("Take Debug Capture")) {
+		debugCapture = true;
+	}
 
-	winrt::com_ptr<IDXGIDevice> dxgiDevice;
-	DX::ThrowIfFailed(device->QueryInterface(dxgiDevice.put()));
+	static FfxBrixelizerStats statsFirstCascade{};
 
-	winrt::com_ptr<IDXGIAdapter> dxgiAdapter;
-	DX::ThrowIfFailed(dxgiDevice->GetAdapter(dxgiAdapter.put()));
+	if (stats.cascadeIndex == 0)
+	{
+		statsFirstCascade = stats;
+	}
 
-	dxgiAdapter->QueryInterface(dxgiAdapter3.put());
+	ImGui::NewLine();
+	ImGui::Text("Stats:");
+	ImGui::Text(std::format("	cascadeIndex : {}", statsFirstCascade.cascadeIndex).c_str());
+	ImGui::Text("	staticCascadeStats:");
+	ImGui::Text(std::format("	bricksAllocated : {}", statsFirstCascade.staticCascadeStats.bricksAllocated).c_str());
+	ImGui::Text(std::format("	referencesAllocated : {}", statsFirstCascade.staticCascadeStats.referencesAllocated).c_str());
+	ImGui::Text(std::format("	trianglesAllocated : {}", statsFirstCascade.staticCascadeStats.trianglesAllocated).c_str());
 
-	DX::ThrowIfFailed(D3D12CreateDevice(dxgiAdapter3.get(), D3D_FEATURE_LEVEL_12_2, IID_PPV_ARGS(&d3d12Device)));
+	//ImGui::Text("	dynamicCascadeStats:");
+	//ImGui::Text(std::format("	bricksAllocated : {}", stats.dynamicCascadeStats.bricksAllocated).c_str());
+	//ImGui::Text(std::format("	referencesAllocated : {}", stats.dynamicCascadeStats.referencesAllocated).c_str());
+	//ImGui::Text(std::format("	trianglesAllocated : {}", stats.dynamicCascadeStats.trianglesAllocated).c_str());
 
-	D3D12_COMMAND_QUEUE_DESC queueDesc = {};
-	queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-	queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-
-	DX::ThrowIfFailed(d3d12Device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&commandQueue)));
-
-	DX::ThrowIfFailed(d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator)));
-
-	DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.get(), nullptr, IID_PPV_ARGS(&commandList)));
-
-	InitBrixelizer();
+	ImGui::Text("	contextStats:");
+	ImGui::Text(std::format("	contextStats : {}", statsFirstCascade.contextStats.brickAllocationsAttempted).c_str());
+	ImGui::Text(std::format("	contextStats : {}", statsFirstCascade.contextStats.brickAllocationsSucceeded).c_str());
+	ImGui::Text(std::format("	contextStats : {}", statsFirstCascade.contextStats.bricksCleared).c_str());
+	ImGui::Text(std::format("	contextStats : {}", statsFirstCascade.contextStats.bricksMerged).c_str());
+	ImGui::Text(std::format("	contextStats : {}", statsFirstCascade.contextStats.freeBricks).c_str());
 }
 
 void Raytracing::InitD3D12(IDXGIAdapter* a_adapter)
@@ -46,6 +52,9 @@ void Raytracing::InitD3D12(IDXGIAdapter* a_adapter)
 	DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.get(), nullptr, IID_PPV_ARGS(&commandList)));
 
 	InitBrixelizer();
+	InitFenceAndEvent();
+	
+	debugAvailable = DXGIGetDebugInterface1(0, IID_PPV_ARGS(&ga)) == S_OK;
 }
 
 // Helper function to create a committed resource
@@ -123,6 +132,57 @@ void Raytracing::InitBrixelizer()
 	for (int i = 0; i < NUM_BRIXELIZER_CASCADES; i++) {
 		cascadeAABBTrees.push_back(CreateBuffer(FFX_BRIXELIZER_CASCADE_AABB_TREE_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
 		cascadeBrickMaps.push_back(CreateBuffer(FFX_BRIXELIZER_CASCADE_BRICK_MAP_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
+	}
+
+
+	{
+		Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap;
+		UINT rtvDescriptorSize;
+
+		// 1. Create a descriptor heap for the RTV
+		D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
+		rtvHeapDesc.NumDescriptors = 1;  // Single render target
+		rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+		rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+		d3d12Device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&rtvHeap));
+
+		// Get the size of an RTV descriptor
+		rtvDescriptorSize = d3d12Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+		// 2. Create a render target resource
+		D3D12_RESOURCE_DESC renderTargetDesc = {};
+		renderTargetDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+		renderTargetDesc.Width = 1280;  // Render target width
+		renderTargetDesc.Height = 720;  // Render target height
+		renderTargetDesc.DepthOrArraySize = 1;
+		renderTargetDesc.MipLevels = 1;
+		renderTargetDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		renderTargetDesc.SampleDesc.Count = 1;  // No multisampling
+		renderTargetDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+		renderTargetDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+		// Specify a clear color for the render target
+		D3D12_CLEAR_VALUE clearValue = {};
+		clearValue.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		clearValue.Color[0] = 0.0f;  // Red
+		clearValue.Color[1] = 0.0f;  // Green
+		clearValue.Color[2] = 0.0f;  // Blue
+		clearValue.Color[3] = 1.0f;  // Alpha
+
+		// Create the render target resource
+		DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
+			&heapProperties,
+			D3D12_HEAP_FLAG_NONE,
+			&renderTargetDesc,
+			D3D12_RESOURCE_STATE_RENDER_TARGET,
+			&clearValue,
+			IID_PPV_ARGS(&debugRenderTarget)));
+
+		// 3. Create the render target view (RTV)
+		debugRTVHandle = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+		d3d12Device->CreateRenderTargetView(debugRenderTarget.get(), nullptr, debugRTVHandle);
+
+
 	}
 }
 
@@ -246,8 +306,8 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 				aabbMinVec + RE::NiPoint3(extents.x, extents.y, extents.z),
 			};
 
-			float4 minExtents = float4(INFINITY, INFINITY, INFINITY, INFINITY);
-			float4 maxExtents = float4(-INFINITY, -INFINITY, -INFINITY, -INFINITY);
+			float4 minExtents = float4(FLT_MAX, FLT_MAX, FLT_MAX, FLT_MAX);
+			float4 maxExtents = float4(-FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX);
 
 			for (uint i = 0; i < 8; i++) {
 				auto transformed = aabbCorners[i];
@@ -426,8 +486,59 @@ void Raytracing::TransitionResources(D3D12_RESOURCE_STATES stateBefore, D3D12_RE
 	barriers.clear();
 }
 
+// Initialize Fence and Event
+void Raytracing::InitFenceAndEvent()
+{
+	HRESULT hr = d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
+	if (FAILED(hr)) {
+		throw std::runtime_error("Failed to create fence.");
+	}
+
+	fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+	if (!fenceEvent) {
+		throw std::runtime_error("Failed to create fence event.");
+	}
+}
+
+// WaitForGPU Function
+void Raytracing::WaitForGPU()
+{
+	// Increment the fence value
+	const UINT64 currentFenceValue = ++fenceValue;
+
+	// Signal the command queue with the current fence value
+	HRESULT hr = commandQueue->Signal(fence.get(), currentFenceValue);
+	if (FAILED(hr)) {
+		throw std::runtime_error("Failed to signal the command queue.");
+	}
+
+	// Check if the fence has been reached
+	if (fence->GetCompletedValue() < currentFenceValue) {
+		// Wait until the fence is signaled
+		hr = fence->SetEventOnCompletion(currentFenceValue, fenceEvent);
+		if (FAILED(hr)) {
+			throw std::runtime_error("Failed to set event on fence completion.");
+		}
+
+		// Block the CPU until the event is signaled
+		WaitForSingleObject(fenceEvent, INFINITE);
+	}
+}
+
 void Raytracing::FrameUpdate()
 {
+	if (debugAvailable && debugCapture)
+		ga->BeginCapture();
+
+	// Simple D3D12 command to clear a render target view (for debugging visibility)
+	//{
+	//	// Define a clear color (e.g., bright green)
+	//	FLOAT clearColor[4] = { 0.0f, 1.0f, 0.0f, 1.0f };
+
+	//	// Get the RTV handle (this assumes 'rtvHandle' is a valid D3D12_CPU_DESCRIPTOR_HANDLE for your target)
+	//	commandList->ClearRenderTargetView(debugRTVHandle, clearColor, 0, nullptr);
+	//}
+
 	// Transition all resources to resource state expected by Brixelizer
 	TransitionResources(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
@@ -476,4 +587,16 @@ void Raytracing::FrameUpdate()
 
 	// Transition all resources to the Non-Pixel Shader Resource state after the Brixelizer
 	TransitionResources(D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+	commandList->Close();
+	ID3D12CommandList* ppCommandLists[] = { commandList.get() };
+	commandQueue->ExecuteCommandLists(1, ppCommandLists);
+
+	// Wait for the GPU to finish executing the commands
+	WaitForGPU();
+
+	if (debugAvailable && debugCapture)
+		ga->EndCapture();
+
+	debugCapture = false;
 }

@@ -15,6 +15,18 @@
 
 #include "Buffer.h"
 #include "State.h"
+#include <FidelityFX/host/backends/dx12/d3dx12.h>
+
+interface DECLSPEC_UUID("9f251514-9d4d-4902-9d60-18988ab7d4b5") DECLSPEC_NOVTABLE
+
+IDXGraphicsAnalysis : public IUnknown
+{
+	STDMETHOD_(void, BeginCapture)
+	() PURE;
+
+	STDMETHOD_(void, EndCapture)
+	() PURE;
+};
 
 // Brixelizer supports a maximum of 24 raw cascades
 // In the sample each cascade level we build is created by building a static cascade,
@@ -36,11 +48,18 @@ public:
 		return &singleton;
 	}
 
-	winrt::com_ptr<IDXGIAdapter3> dxgiAdapter3;
+	winrt::com_ptr<IDXGraphicsAnalysis> ga;
+	bool debugAvailable = false;
+	bool debugCapture = false;
+
 	winrt::com_ptr<ID3D12Device> d3d12Device;
 	winrt::com_ptr<ID3D12CommandQueue> commandQueue;
 	winrt::com_ptr<ID3D12CommandAllocator> commandAllocator;
 	winrt::com_ptr<ID3D12GraphicsCommandList> commandList;
+
+	winrt::com_ptr<ID3D12Fence> fence;
+	UINT64 fenceValue = 0;
+	HANDLE fenceEvent = nullptr;
 
 	FfxBrixelizerContextDescription initializationParameters = {};
 	FfxBrixelizerContext brixelizerContext = {};
@@ -58,7 +77,10 @@ public:
 	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeAABBTrees;
 	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeBrickMaps;
 
-	void InitD3D12();
+	winrt::com_ptr<ID3D12Resource> debugRenderTarget;
+	CD3DX12_CPU_DESCRIPTOR_HANDLE debugRTVHandle;
+
+	void DrawSettings();
 	void InitD3D12(IDXGIAdapter* a_adapter);
 
 	winrt::com_ptr<ID3D12Resource> CreateBuffer(UINT size, D3D12_RESOURCE_STATES resourceState, D3D12_RESOURCE_FLAGS flags);
@@ -96,6 +118,9 @@ public:
 	void RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer);
 
 	void TransitionResources(D3D12_RESOURCE_STATES stateBefore, D3D12_RESOURCE_STATES stateAfter);
+
+	void InitFenceAndEvent();
+	void WaitForGPU();
 
 	void FrameUpdate();
 
