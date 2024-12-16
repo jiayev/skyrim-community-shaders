@@ -5,6 +5,7 @@
 #include "HistogramAutoExposure.h"
 #include "LUT.h"
 #include "Vignette.h"
+#include "LensFlare.h"
 
 template <class T>
 std::pair<std::string, PostProcessFeatureConstructor> GetFeatureConstructorPair()
@@ -20,6 +21,7 @@ const ankerl::unordered_dense::map<std::string, PostProcessFeatureConstructor>& 
 		GetFeatureConstructorPair<Vignette>(),
 		GetFeatureConstructorPair<ColourTransforms>(),
 		GetFeatureConstructorPair<LUT>(),
+		GetFeatureConstructorPair<LensFlare>(),
 	};
 	return retval;
 }
