@@ -528,7 +528,7 @@ void Raytracing::WaitForD3D12()
 
 FfxBrixelizerDebugVisualizationDescription Raytracing::GetDebugVisualization()
 {
-	FfxBrixelizerDebugVisualizationDescription debugVisDesc;
+	FfxBrixelizerDebugVisualizationDescription debugVisDesc{};
 
 	auto camera = Util::GetCameraData(0);
 	auto inverseView = camera.viewMat.Invert();
