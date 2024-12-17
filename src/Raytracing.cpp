@@ -565,13 +565,13 @@ void Raytracing::PopulateCommandList()
 
 	FfxBrixelizerDebugVisualizationDescription debugVisDesc = GetDebugVisualization();
 
-	// update desc
-	auto eyePosition = Util::GetEyePosition(0);
 	size_t scratchBufferSize = 0;
+
+	float4 cameraPosAdjust = frameBufferCached.CameraPosAdjust;
 
 	FfxBrixelizerUpdateDescription updateDesc = {
 		.frameIndex = RE::BSGraphics::State::GetSingleton()->frameCount,
-		.sdfCenter = { eyePosition.x, eyePosition.y, eyePosition.z },
+		.sdfCenter = { -cameraPosAdjust.x, -cameraPosAdjust.y, -cameraPosAdjust.z },
 		.populateDebugAABBsFlags = FFX_BRIXELIZER_POPULATE_AABBS_INSTANCES,
 		.debugVisualizationDesc = &debugVisDesc,
 		.maxReferences = 32 * (1 << 20),
