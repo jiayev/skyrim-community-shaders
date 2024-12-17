@@ -48,23 +48,23 @@ public:
 		return &singleton;
 	}
 
-	struct alignas(16) FrameBuffer
+	struct FrameBuffer
 	{
-		DirectX::XMMATRIX CameraView;
-		DirectX::XMMATRIX CameraProj;
-		DirectX::XMMATRIX CameraViewProj;
-		DirectX::XMMATRIX CameraViewProjUnjittered;
-		DirectX::XMMATRIX CameraPreviousViewProjUnjittered;
-		DirectX::XMMATRIX CameraProjUnjittered;
-		DirectX::XMMATRIX CameraProjUnjitteredInverse;
-		DirectX::XMMATRIX CameraViewInverse;
-		DirectX::XMMATRIX CameraViewProjInverse;
-		DirectX::XMMATRIX CameraProjInverse;
-		DirectX::XMVECTOR CameraPosAdjust;
-		DirectX::XMVECTOR CameraPreviousPosAdjust;
-		DirectX::XMVECTOR FrameParams;
-		DirectX::XMVECTOR DynamicResolutionParams1;
-		DirectX::XMVECTOR DynamicResolutionParams2;
+		Matrix CameraView;
+		Matrix CameraProj;
+		Matrix CameraViewProj;
+		Matrix CameraViewProjUnjittered;
+		Matrix CameraPreviousViewProjUnjittered;
+		Matrix CameraProjUnjittered;
+		Matrix CameraProjUnjitteredInverse;
+		Matrix CameraViewInverse;
+		Matrix CameraViewProjInverse;
+		Matrix CameraProjInverse;
+		float4 CameraPosAdjust;
+		float4 CameraPreviousPosAdjust;
+		float4 FrameParams;
+		float4 DynamicResolutionParams1;
+		float4 DynamicResolutionParams2;
 	};
 
 	D3D11_MAPPED_SUBRESOURCE* mappedFrameBuffer = nullptr;
@@ -88,40 +88,20 @@ public:
 	FfxBrixelizerContextDescription initializationParameters = {};
 	FfxBrixelizerContext brixelizerContext = {};
 	FfxBrixelizerBakedUpdateDescription brixelizerBakedUpdateDesc = {};
+	FfxBrixelizerStats stats = {};
 	FfxBrixelizerBakedUpdateDescription bakedUpdateDesc = {};
 
 	winrt::com_ptr<ID3D12Resource> sdfAtlas;
 	winrt::com_ptr<ID3D12Resource> brickAABBs;
 	winrt::com_ptr<ID3D12Resource> gpuScratchBuffer;
 
-	winrt::com_ptr<ID3D12Resource> cascadeAABBTrees[FFX_BRIXELIZER_MAX_CASCADES];
-	winrt::com_ptr<ID3D12Resource> cascadeBrickMaps[FFX_BRIXELIZER_MAX_CASCADES];
+	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeAABBTrees;
+	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeBrickMaps;
 
 	ID3D11Texture2D* debugRenderTargetd3d11;
 	ID3D11ShaderResourceView* debugSRV;
 	ID3D12Resource* debugRenderTarget;
 
-	// Enum representing the Brixelizer cascade types.
-	enum class CascadeType
-	{
-		Static = 0,
-		Dynamic,
-		Merged
-	};
-
-	// Enum representing the Debug Visualization pass output types.
-	enum class DebugVisOutputType
-	{
-		Distance = 0,
-		UVW,
-		Iterations,
-		Gradient,
-		BrickID,
-		CascadeID
-	};
-
-	CascadeType m_CascadeType = CascadeType::Merged;
-	DebugVisOutputType m_DebugVisOutputType = DebugVisOutputType::Gradient;
 	int m_StartCascadeIdx = 0;
 	int m_EndCascadeIdx = NUM_BRIXELIZER_CASCADES - 1;
 
@@ -177,7 +157,7 @@ public:
 	void WaitForD3D11();
 	void WaitForD3D12();
 
-	FfxBrixelizerDebugVisualizationDescription SetupDebugVisualization(FfxBrixelizerUpdateDescription& updateDesc, FfxBrixelizerDebugVisualizationDescription& debugVisDesc);
+	FfxBrixelizerDebugVisualizationDescription GetDebugVisualization();
 
 	void FrameUpdate();
 	void PopulateCommandList();

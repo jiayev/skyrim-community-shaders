@@ -25,33 +25,6 @@ void Raytracing::DrawSettings()
 	ImGui::Checkbox("Show Dynamic Instance AABBs", &m_ShowDynamicInstanceAABBs);
 	ImGui::Checkbox("Show Cascade AABBs", &m_ShowCascadeAABBs);
 	ImGui::SliderInt("Show AABB Tree Index", &m_ShowAABBTreeIndex, -1, NUM_BRIXELIZER_CASCADES - 1);
-
-	//static FfxBrixelizerStats statsFirstCascade{};
-
-	//if (stats.cascadeIndex == 0)
-	//{
-	//	statsFirstCascade = stats;
-	//}
-
-	//ImGui::NewLine();
-	//ImGui::Text("Stats:");
-	//ImGui::Text(std::format("	cascadeIndex : {}", statsFirstCascade.cascadeIndex).c_str());
-	//ImGui::Text("	staticCascadeStats:");
-	//ImGui::Text(std::format("	bricksAllocated : {}", statsFirstCascade.staticCascadeStats.bricksAllocated).c_str());
-	//ImGui::Text(std::format("	referencesAllocated : {}", statsFirstCascade.staticCascadeStats.referencesAllocated).c_str());
-	//ImGui::Text(std::format("	trianglesAllocated : {}", statsFirstCascade.staticCascadeStats.trianglesAllocated).c_str());
-
-	////ImGui::Text("	dynamicCascadeStats:");
-	////ImGui::Text(std::format("	bricksAllocated : {}", stats.dynamicCascadeStats.bricksAllocated).c_str());
-	////ImGui::Text(std::format("	referencesAllocated : {}", stats.dynamicCascadeStats.referencesAllocated).c_str());
-	////ImGui::Text(std::format("	trianglesAllocated : {}", stats.dynamicCascadeStats.trianglesAllocated).c_str());
-
-	//ImGui::Text("	contextStats:");
-	//ImGui::Text(std::format("	contextStats : {}", statsFirstCascade.contextStats.brickAllocationsAttempted).c_str());
-	//ImGui::Text(std::format("	contextStats : {}", statsFirstCascade.contextStats.brickAllocationsSucceeded).c_str());
-	//ImGui::Text(std::format("	contextStats : {}", statsFirstCascade.contextStats.bricksCleared).c_str());
-	//ImGui::Text(std::format("	contextStats : {}", statsFirstCascade.contextStats.bricksMerged).c_str());
-	//ImGui::Text(std::format("	contextStats : {}", statsFirstCascade.contextStats.freeBricks).c_str());
 }
 
 void Raytracing::InitD3D12(IDXGIAdapter* a_adapter)
@@ -112,7 +85,7 @@ void Raytracing::InitBrixelizer()
 	float voxelSize = 0.2f;
 	for (uint32_t i = 0; i < NUM_BRIXELIZER_CASCADES; ++i) {
 		FfxBrixelizerCascadeDescription* cascadeDesc = &initializationParameters.cascadeDescs[i];
-		cascadeDesc->flags = (FfxBrixelizerCascadeFlag)(FFX_BRIXELIZER_CASCADE_STATIC | FFX_BRIXELIZER_CASCADE_DYNAMIC);
+		cascadeDesc->flags = FFX_BRIXELIZER_CASCADE_DYNAMIC;
 		cascadeDesc->voxelSize = voxelSize;
 		voxelSize *= 2.0f;
 	}
@@ -148,9 +121,9 @@ void Raytracing::InitBrixelizer()
 
 	gpuScratchBuffer = CreateBuffer(GPU_SCRATCH_BUFFER_SIZE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 
-	for (int i = 0; i < FFX_BRIXELIZER_MAX_CASCADES; i++) {
-		cascadeAABBTrees[i] = CreateBuffer(FFX_BRIXELIZER_CASCADE_AABB_TREE_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-		cascadeBrickMaps[i] = CreateBuffer(FFX_BRIXELIZER_CASCADE_BRICK_MAP_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+	for (int i = 0; i < NUM_BRIXELIZER_CASCADES; i++) {
+		cascadeAABBTrees.push_back(CreateBuffer(FFX_BRIXELIZER_CASCADE_AABB_TREE_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
+		cascadeBrickMaps.push_back(CreateBuffer(FFX_BRIXELIZER_CASCADE_BRICK_MAP_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
 	}
 
 	{
@@ -381,15 +354,13 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 
 			instanceDesc.vertexBuffer = GetBufferIndex(*vertexBuffer);
 			instanceDesc.vertexStride = rendererData->vertexDesc.GetSize();
-			instanceDesc.vertexBufferOffset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_POSITION);
+			instanceDesc.vertexBufferOffset = 0;
 			instanceDesc.vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
 			instanceDesc.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
 
 			uint outInstanceID;
 			instanceDesc.outInstanceID = &outInstanceID;
 			instanceDesc.flags = FFX_BRIXELIZER_INSTANCE_FLAG_NONE;
-
-			instanceDesc.maxCascade = NUM_BRIXELIZER_CASCADES - 1;
 
 			// Create instances for a given context with the ffxBrixelizerCreateInstance function.
 			// Static instances are persistent across frames. Dynamic instances are discarded after a single frame.
@@ -545,54 +516,20 @@ void Raytracing::WaitForD3D12()
 	}
 }
 
-FfxBrixelizerDebugVisualizationDescription Raytracing::SetupDebugVisualization(FfxBrixelizerUpdateDescription& updateDesc, FfxBrixelizerDebugVisualizationDescription& debugVisDesc)
+FfxBrixelizerDebugVisualizationDescription Raytracing::GetDebugVisualization()
 {
+	FfxBrixelizerDebugVisualizationDescription debugVisDesc{};
+
+	auto cameraViewInverseAdjusted = frameBufferCached.CameraViewInverse;
+	cameraViewInverseAdjusted._41 += frameBufferCached.CameraPosAdjust.x;
+	cameraViewInverseAdjusted._42 += frameBufferCached.CameraPosAdjust.y;
+	cameraViewInverseAdjusted._43 += frameBufferCached.CameraPosAdjust.z;
 	memcpy(&debugVisDesc.inverseViewMatrix, &frameBufferCached.CameraViewInverse, sizeof(debugVisDesc.inverseViewMatrix));
 	memcpy(&debugVisDesc.inverseProjectionMatrix, &frameBufferCached.CameraProjInverse, sizeof(debugVisDesc.inverseProjectionMatrix));
 
-	float4 posadjust = frameBufferCached.CameraPosAdjust;
-	posadjust *= 0;
-	memcpy(&debugVisDesc.posAdjust, &posadjust, sizeof(debugVisDesc.posAdjust));
-
-	switch (m_DebugVisOutputType) {
-	case DebugVisOutputType::Distance:
-		debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_DISTANCE;
-		break;
-	case DebugVisOutputType::UVW:
-		debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_UVW;
-		break;
-	case DebugVisOutputType::Iterations:
-		debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_ITERATIONS;
-		break;
-	case DebugVisOutputType::Gradient:
-		debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_GRAD;
-		break;
-	case DebugVisOutputType::BrickID:
-		debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_BRICK_ID;
-		break;
-	case DebugVisOutputType::CascadeID:
-		debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_CASCADE_ID;
-		break;
-	default:
-		logger::critical("Unknown debug visualization output type.");
-		break;
-	}
+	debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_GRAD;
 
 	uint32_t cascadeIndexOffset = 0;
-	switch (m_CascadeType) {
-	case CascadeType::Static:
-		cascadeIndexOffset = 0;
-		break;
-	case CascadeType::Dynamic:
-		cascadeIndexOffset = NUM_BRIXELIZER_CASCADES;
-		break;
-	case CascadeType::Merged:
-		cascadeIndexOffset = 2 * NUM_BRIXELIZER_CASCADES;
-		break;
-	default:
-		logger::critical("Unknown cascade type.");
-		break;
-	}
 
 	debugVisDesc.startCascadeIndex = cascadeIndexOffset + m_StartCascadeIdx;
 	debugVisDesc.endCascadeIndex = cascadeIndexOffset + m_EndCascadeIdx;
@@ -603,23 +540,6 @@ FfxBrixelizerDebugVisualizationDescription Raytracing::SetupDebugVisualization(F
 	debugVisDesc.renderWidth = 1920;
 	debugVisDesc.renderHeight = 1080;
 	debugVisDesc.output = ffxGetResourceDX12(debugRenderTarget, ffxGetResourceDescriptionDX12(debugRenderTarget, FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-
-	FfxBrixelizerPopulateDebugAABBsFlags populateDebugAABBFlags = FFX_BRIXELIZER_POPULATE_AABBS_NONE;
-
-	if (m_ShowStaticInstanceAABBs)
-		populateDebugAABBFlags = (FfxBrixelizerPopulateDebugAABBsFlags)(populateDebugAABBFlags | FFX_BRIXELIZER_POPULATE_AABBS_STATIC_INSTANCES);
-
-	if (m_ShowDynamicInstanceAABBs)
-		populateDebugAABBFlags = (FfxBrixelizerPopulateDebugAABBsFlags)(populateDebugAABBFlags | FFX_BRIXELIZER_POPULATE_AABBS_DYNAMIC_INSTANCES);
-
-	if (m_ShowCascadeAABBs)
-		populateDebugAABBFlags = (FfxBrixelizerPopulateDebugAABBsFlags)(populateDebugAABBFlags | FFX_BRIXELIZER_POPULATE_AABBS_CASCADE_AABBS);
-
-	if (m_ShowAABBTreeIndex != -1)
-		debugVisDesc.cascadeDebugAABB[2 * NUM_BRIXELIZER_CASCADES + m_ShowAABBTreeIndex] = FFX_BRIXELIZER_CASCADE_DEBUG_AABB_AABB_TREE;
-
-	updateDesc.debugVisualizationDesc = &debugVisDesc;
-	updateDesc.populateDebugAABBsFlags = populateDebugAABBFlags;
 
 	return debugVisDesc;
 }
@@ -632,47 +552,47 @@ void Raytracing::PopulateCommandList()
 	// Transition all resources to resource state expected by Brixelizer
 	TransitionResources(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-	FfxBrixelizerStats stats = {};
+	FfxBrixelizerDebugVisualizationDescription debugVisDesc = GetDebugVisualization();
 
-	// Fill out the Brixelizer update description.
-	FfxBrixelizerUpdateDescription updateDesc = {};
+	// update desc
+	auto eyePosition = Util::GetEyePosition(0);
+	size_t scratchBufferSize = 0;
+
+	FfxBrixelizerPopulateDebugAABBsFlags populateDebugAABBFlags = FFX_BRIXELIZER_POPULATE_AABBS_NONE;
+	if (m_ShowStaticInstanceAABBs)
+		populateDebugAABBFlags = (FfxBrixelizerPopulateDebugAABBsFlags)(populateDebugAABBFlags | FFX_BRIXELIZER_POPULATE_AABBS_STATIC_INSTANCES);
+	if (m_ShowDynamicInstanceAABBs)
+		populateDebugAABBFlags = (FfxBrixelizerPopulateDebugAABBsFlags)(populateDebugAABBFlags | FFX_BRIXELIZER_POPULATE_AABBS_DYNAMIC_INSTANCES);
+	if (m_ShowCascadeAABBs)
+		populateDebugAABBFlags = (FfxBrixelizerPopulateDebugAABBsFlags)(populateDebugAABBFlags | FFX_BRIXELIZER_POPULATE_AABBS_CASCADE_AABBS);
+
+	FfxBrixelizerUpdateDescription updateDesc = {
+		.frameIndex = RE::BSGraphics::State::GetSingleton()->frameCount,
+		.sdfCenter = { eyePosition.x, eyePosition.y, eyePosition.z },
+		.populateDebugAABBsFlags = populateDebugAABBFlags,
+		.debugVisualizationDesc = &debugVisDesc,
+		.maxReferences = 32 * (1 << 20),
+		.triangleSwapSize = 300 * (1 << 20),
+		.maxBricksPerBake = 1 << 14,
+		.outScratchBufferSize = &scratchBufferSize,
+		.outStats = &stats,
+	};
 
 	// Fill out the Brixelizer update description resources.
 	// Pass in the externally created output resources as FfxResource objects.
 	updateDesc.resources.sdfAtlas = ffxGetResourceDX12(sdfAtlas.get(), ffxGetResourceDescriptionDX12(sdfAtlas.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 	updateDesc.resources.brickAABBs = ffxGetResourceDX12(brickAABBs.get(), ffxGetResourceDescriptionDX12(brickAABBs.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-
-	for (uint32_t i = 0; i < FFX_BRIXELIZER_MAX_CASCADES; ++i) {
-		updateDesc.resources.cascadeResources[i].aabbTree = ffxGetResourceDX12(nullptr, ffxGetResourceDescriptionDX12(nullptr, FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-		updateDesc.resources.cascadeResources[i].brickMap = ffxGetResourceDX12(nullptr, ffxGetResourceDescriptionDX12(nullptr, FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+	for (uint32_t i = 0; i < NUM_BRIXELIZER_CASCADES; ++i) {
+		updateDesc.resources.cascadeResources[i].aabbTree = ffxGetResourceDX12(cascadeAABBTrees[i].get(), ffxGetResourceDescriptionDX12(cascadeAABBTrees[i].get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+		updateDesc.resources.cascadeResources[i].brickMap = ffxGetResourceDX12(cascadeBrickMaps[i].get(), ffxGetResourceDescriptionDX12(cascadeBrickMaps[i].get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 	}
-
-	float4 cameraPosAdjust = frameBufferCached.CameraPosAdjust;
-
-	updateDesc.frameIndex = RE::BSGraphics::State::GetSingleton()->frameCount;
-	updateDesc.debugVisualizationDesc = nullptr;
-	updateDesc.populateDebugAABBsFlags = FFX_BRIXELIZER_POPULATE_AABBS_NONE;
-	updateDesc.maxReferences = 32 * (1 << 20);
-	updateDesc.maxBricksPerBake = 1 << 14;
-	updateDesc.triangleSwapSize = 300 * (1 << 20);
-	updateDesc.outStats = &stats;
-
-	size_t scratchBufferSize = 0;
-	updateDesc.outScratchBufferSize = &scratchBufferSize;
-
-	FfxBrixelizerDebugVisualizationDescription debugVisDesc = {};
-	SetupDebugVisualization(updateDesc, debugVisDesc);
-
-	FfxResource ffxGpuScratchBuffer = ffxGetResourceDX12(gpuScratchBuffer.get(), ffxGetResourceDescriptionDX12(gpuScratchBuffer.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-	ffxGpuScratchBuffer.description.stride = sizeof(uint32_t);
 
 	FfxErrorCode error = ffxBrixelizerBakeUpdate(&brixelizerContext, &updateDesc, &bakedUpdateDesc);
 	if (error != FFX_OK)
 		logger::critical("error");
 
-	if (scratchBufferSize < GPU_SCRATCH_BUFFER_SIZE) {
-		logger::critical("Required Brixelizer scratch memory size larger than available GPU buffer.");
-	}
+	FfxResource ffxGpuScratchBuffer = ffxGetResourceDX12(gpuScratchBuffer.get(), ffxGetResourceDescriptionDX12(gpuScratchBuffer.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+	ffxGpuScratchBuffer.description.stride = sizeof(uint32_t);
 
 	// Call frame update
 	error = ffxBrixelizerUpdate(&brixelizerContext, &bakedUpdateDesc, ffxGpuScratchBuffer, ffxGetCommandListDX12(commandList.get()));
