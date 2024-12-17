@@ -543,7 +543,7 @@ FfxBrixelizerDebugVisualizationDescription Raytracing::GetDebugVisualization()
 
 	//auto eyePosition = Util::GetEyePosition(0);
 	//auto translation = Matrix::CreateTranslation(-eyePosition.x / 0.00142875f, -eyePosition.y / 0.00142875f, -eyePosition.z / 0.00142875f);
-	
+
 	float inverseView[16];
 	inverseView[0] = frameBufferCached.CameraViewInverse.m[0][0];
 	inverseView[1] = frameBufferCached.CameraViewInverse.m[0][1];

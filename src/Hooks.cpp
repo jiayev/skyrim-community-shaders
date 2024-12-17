@@ -181,10 +181,10 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 
 struct ID3D11DeviceContext_Map
 {
-	static HRESULT thunk(ID3D11DeviceContext* This, ID3D11Resource *pResource, UINT Subresource, D3D11_MAP MapType, UINT MapFlags, D3D11_MAPPED_SUBRESOURCE *pMappedResource)
+	static HRESULT thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource, D3D11_MAP MapType, UINT MapFlags, D3D11_MAPPED_SUBRESOURCE* pMappedResource)
 	{
 		HRESULT hr = func(This, pResource, Subresource, MapType, MapFlags, pMappedResource);
-		
+
 		static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
 
 		if (*perFrame.get() == pResource) {
@@ -201,7 +201,7 @@ struct ID3D11DeviceContext_Unmap
 	static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource)
 	{
 		static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
-	
+
 		if (*perFrame.get() == pResource && Raytracing::GetSingleton()->mappedFrameBuffer)
 			Raytracing::GetSingleton()->CacheFramebuffer();
 
@@ -209,7 +209,6 @@ struct ID3D11DeviceContext_Unmap
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
-
 
 struct ID3D11Device_CreateVertexShader
 {
