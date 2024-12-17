@@ -1,4 +1,4 @@
-// Originally from PotatoFX by Gimle Larpes
+// Originally from PotatoFX by Gimle Larpes, modified by Jiaye for Community Shaders
 /*
 MIT License
 
@@ -22,7 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-
+#include "PostProcessing/common.hlsli"
 
 // Constants
 static const float PI = 3.14159265359;
@@ -67,69 +67,6 @@ static const float GHOST_SCALES[8] =
     -1.5f, 2.5f, -5.0f, 10.0f, 0.7f, -0.4f, -0.2f, -0.1f
 };
 
-float4 SampleCA(Texture2D tex, SamplerState samp, float2 texcoord, float strength, uint mipLevel)
-{
-    float3 influence = float3(0.04, 0.0, 0.03);
-    float2 CAr = (texcoord - 0.5) * (1.0 - strength * influence.r) + 0.5;
-    float2 CAb = (texcoord - 0.5) * (1.0 + strength * influence.b) + 0.5;
-
-    float4 color;
-    color.r = tex.SampleLevel(samp, CAr, mipLevel).r;
-    color.ga = tex.SampleLevel(samp, texcoord, mipLevel).ga;
-    color.b = tex.SampleLevel(samp, CAb, mipLevel).b;
-
-    return color;
-}
-
-float4 KawaseBlurDownSample(Texture2D tex, SamplerState samp, uint2 DTid, int scale)
-{
-    int DownsizeFrom = max(scale, 1);
-    float2 texcoord = (floor((DTid.xy / DownsizeFrom)) * DownsizeFrom + DownsizeFrom * 0.5f) / float2(ScreenWidth, ScreenHeight);
-    float2 HALF_TEXEL = float2(1.0f / float2(ScreenWidth, ScreenHeight)) * float(DownsizeFrom);
-
-    float2 DirDiag1 = float2(-HALF_TEXEL.x,  HALF_TEXEL.y); // Top left
-    float2 DirDiag2 = float2( HALF_TEXEL.x,  HALF_TEXEL.y); // Top right
-    float2 DirDiag3 = float2( HALF_TEXEL.x, -HALF_TEXEL.y); // Bottom right
-    float2 DirDiag4 = float2(-HALF_TEXEL.x, -HALF_TEXEL.y); // Bottom left
-
-    float4 color = tex.SampleLevel(samp, texcoord, 0) * 4.0f;
-    color += tex.SampleLevel(samp, texcoord + DirDiag1, 0);
-    color += tex.SampleLevel(samp, texcoord + DirDiag2, 0);
-    color += tex.SampleLevel(samp, texcoord + DirDiag3, 0);
-    color += tex.SampleLevel(samp, texcoord + DirDiag4, 0);
-
-    return color * 0.125f;
-}
-
-float4 KawaseBlurUpSample(Texture2D tex, SamplerState samp, uint2 DTid, int scale)
-{
-    int Upscale = max(scale, 1);
-    float2 texcoord = (floor((DTid.xy / Upscale)) * Upscale + Upscale * 0.5f) / float2(ScreenWidth, ScreenHeight);
-    float2 HALF_TEXEL = float2(1.0f / float2(ScreenWidth, ScreenHeight)) * Upscale;
-
-    float2 DirDiag1 = float2(-HALF_TEXEL.x,  HALF_TEXEL.y); // Top left
-    float2 DirDiag2 = float2( HALF_TEXEL.x,  HALF_TEXEL.y); // Top right
-    float2 DirDiag3 = float2( HALF_TEXEL.x, -HALF_TEXEL.y); // Bottom right
-    float2 DirDiag4 = float2(-HALF_TEXEL.x, -HALF_TEXEL.y); // Bottom left
-    float2 DirAxis1 = float2(-HALF_TEXEL.x,  0.0f);          // Left
-    float2 DirAxis2 = float2( HALF_TEXEL.x,  0.0f);          // Right
-    float2 DirAxis3 = float2(0.0f,  HALF_TEXEL.y);           // Top
-    float2 DirAxis4 = float2(0.0f, -HALF_TEXEL.y);           // Bottom
-
-    float4 color = 0.0;
-    color += tex.SampleLevel(samp, texcoord + DirDiag1, 2);
-    color += tex.SampleLevel(samp, texcoord + DirDiag2, 2);
-    color += tex.SampleLevel(samp, texcoord + DirDiag3, 2);
-    color += tex.SampleLevel(samp, texcoord + DirDiag4, 2);
-
-    color += tex.SampleLevel(samp, texcoord + DirAxis1, 2) * 2.0f;
-    color += tex.SampleLevel(samp, texcoord + DirAxis2, 2) * 2.0f;
-    color += tex.SampleLevel(samp, texcoord + DirAxis3, 2) * 2.0f;
-    color += tex.SampleLevel(samp, texcoord + DirAxis4, 2) * 2.0f;
-
-    return color / 12.0f;
-}
-
 float3 HighPassFilter(float3 color, float curve)
 {
     float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
@@ -143,7 +80,7 @@ float3 HighPassFilter(float3 color, float curve)
 [numthreads(8, 8, 1)]
 void CSLensflare(uint3 DTid : SV_DispatchThreadID)
 {
-    if (DTid.x >= (uint)ScreenWidth || DTid.y >= (uint)ScreenHeight)
+    if (DTid.x >= (uint)ScreenWidth || DTid.y >= (uint)ScreenHeight || LFStrength < EPSILON)
         return;
     float2 texcoord = (DTid.xy + 0.5f) / float2(ScreenWidth, ScreenHeight);
     // float2 texcoord = (floor((DTid.xy / 4)) * 4 + 2.0f) / float2(ScreenWidth, ScreenHeight);
@@ -210,13 +147,17 @@ void CSLensflare(uint3 DTid : SV_DispatchThreadID)
 [numthreads(8, 8, 1)]
 void CSFlareDown(uint3 DTid : SV_DispatchThreadID)
 {
-    OutputTexture[DTid.xy] = KawaseBlurDownSample(FlareTexture, ResizeSampler, DTid.xy, DownsizeScale);
+    if (LFStrength < EPSILON)
+        return;
+    OutputTexture[DTid.xy] = KawaseBlurDownSample(FlareTexture, ResizeSampler, DTid.xy, DownsizeScale, ScreenWidth, ScreenHeight);
 }
 
 [numthreads(8, 8, 1)]
 void CSFlareUp(uint3 DTid : SV_DispatchThreadID)
 {
-    OutputTexture[DTid.xy] = KawaseBlurUpSample(FlareTexture, ResizeSampler, DTid.xy, DownsizeScale);
+    if (LFStrength < EPSILON)
+        return;
+    OutputTexture[DTid.xy] = KawaseBlurUpSample(FlareTexture, ResizeSampler, DTid.xy, DownsizeScale, ScreenWidth, ScreenHeight);
 }
 
 [numthreads(8, 8, 1)]
