@@ -371,13 +371,15 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 
 			instanceDesc.vertexBuffer = GetBufferIndex(*vertexBuffer);
 			instanceDesc.vertexStride = rendererData->vertexDesc.GetSize();
-			instanceDesc.vertexBufferOffset = 0;
+			instanceDesc.vertexBufferOffset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_POSITION);
 			instanceDesc.vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
 			instanceDesc.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
 
 			uint outInstanceID;
 			instanceDesc.outInstanceID = &outInstanceID;
 			instanceDesc.flags = FFX_BRIXELIZER_INSTANCE_FLAG_NONE;
+
+			instanceDesc.maxCascade = NUM_BRIXELIZER_CASCADES - 1;
 
 			// Create instances for a given context with the ffxBrixelizerCreateInstance function.
 			// Static instances are persistent across frames. Dynamic instances are discarded after a single frame.
