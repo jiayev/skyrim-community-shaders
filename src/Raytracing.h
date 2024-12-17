@@ -48,23 +48,23 @@ public:
 		return &singleton;
 	}
 
-	struct FrameBuffer
+	struct alignas(16) FrameBuffer
 	{
-		Matrix CameraView;
-		Matrix CameraProj;
-		Matrix CameraViewProj;
-		Matrix CameraViewProjUnjittered;
-		Matrix CameraPreviousViewProjUnjittered;
-		Matrix CameraProjUnjittered;
-		Matrix CameraProjUnjitteredInverse;
-		Matrix CameraViewInverse;
-		Matrix CameraViewProjInverse;
-		Matrix CameraProjInverse;
-		float4 CameraPosAdjust;
-		float4 CameraPreviousPosAdjust;
-		float4 FrameParams;
-		float4 DynamicResolutionParams1;
-		float4 DynamicResolutionParams2;
+		DirectX::XMMATRIX CameraView;
+		DirectX::XMMATRIX CameraProj;
+		DirectX::XMMATRIX CameraViewProj;
+		DirectX::XMMATRIX CameraViewProjUnjittered;
+		DirectX::XMMATRIX CameraPreviousViewProjUnjittered;
+		DirectX::XMMATRIX CameraProjUnjittered;
+		DirectX::XMMATRIX CameraProjUnjitteredInverse;
+		DirectX::XMMATRIX CameraViewInverse;
+		DirectX::XMMATRIX CameraViewProjInverse;
+		DirectX::XMMATRIX CameraProjInverse;
+		DirectX::XMVECTOR CameraPosAdjust;
+		DirectX::XMVECTOR CameraPreviousPosAdjust;
+		DirectX::XMVECTOR FrameParams;
+		DirectX::XMVECTOR DynamicResolutionParams1;
+		DirectX::XMVECTOR DynamicResolutionParams2;
 	};
 
 	D3D11_MAPPED_SUBRESOURCE* mappedFrameBuffer = nullptr;

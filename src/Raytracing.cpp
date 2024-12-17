@@ -537,51 +537,8 @@ FfxBrixelizerDebugVisualizationDescription Raytracing::GetDebugVisualization()
 {
 	FfxBrixelizerDebugVisualizationDescription debugVisDesc{};
 
-	//auto camera = Util::GetCameraData(0);
-	//auto inverseView = camera.viewMat.Invert();
-	//auto inverseProjection = camera.projMat.Invert();
-
-	//auto eyePosition = Util::GetEyePosition(0);
-	//auto translation = Matrix::CreateTranslation(-eyePosition.x / 0.00142875f, -eyePosition.y / 0.00142875f, -eyePosition.z / 0.00142875f);
-	
-	float inverseView[16];
-	inverseView[0] = frameBufferCached.CameraViewInverse.m[0][0];
-	inverseView[1] = frameBufferCached.CameraViewInverse.m[0][1];
-	inverseView[2] = frameBufferCached.CameraViewInverse.m[0][2];
-	inverseView[3] = frameBufferCached.CameraViewInverse.m[0][3];
-	inverseView[4] = frameBufferCached.CameraViewInverse.m[1][0];
-	inverseView[5] = frameBufferCached.CameraViewInverse.m[1][1];
-	inverseView[6] = frameBufferCached.CameraViewInverse.m[1][2];
-	inverseView[7] = frameBufferCached.CameraViewInverse.m[1][3];
-	inverseView[8] = frameBufferCached.CameraViewInverse.m[2][0];
-	inverseView[9] = frameBufferCached.CameraViewInverse.m[2][1];
-	inverseView[10] = frameBufferCached.CameraViewInverse.m[2][2];
-	inverseView[11] = frameBufferCached.CameraViewInverse.m[2][3];
-	inverseView[12] = frameBufferCached.CameraViewInverse.m[3][0];
-	inverseView[13] = frameBufferCached.CameraViewInverse.m[3][1];
-	inverseView[14] = frameBufferCached.CameraViewInverse.m[3][2];
-	inverseView[15] = frameBufferCached.CameraViewInverse.m[3][3];
-
-	float inverseProj[16];
-	inverseProj[0] = frameBufferCached.CameraProjUnjitteredInverse.m[0][0];
-	inverseProj[1] = frameBufferCached.CameraProjUnjitteredInverse.m[0][1];
-	inverseProj[2] = frameBufferCached.CameraProjUnjitteredInverse.m[0][2];
-	inverseProj[3] = frameBufferCached.CameraProjUnjitteredInverse.m[0][3];
-	inverseProj[4] = frameBufferCached.CameraProjUnjitteredInverse.m[1][0];
-	inverseProj[5] = frameBufferCached.CameraProjUnjitteredInverse.m[1][1];
-	inverseProj[6] = frameBufferCached.CameraProjUnjitteredInverse.m[1][2];
-	inverseProj[7] = frameBufferCached.CameraProjUnjitteredInverse.m[1][3];
-	inverseProj[8] = frameBufferCached.CameraProjUnjitteredInverse.m[2][0];
-	inverseProj[9] = frameBufferCached.CameraProjUnjitteredInverse.m[2][1];
-	inverseProj[10] = frameBufferCached.CameraProjUnjitteredInverse.m[2][2];
-	inverseProj[11] = frameBufferCached.CameraProjUnjitteredInverse.m[2][3];
-	inverseProj[12] = frameBufferCached.CameraProjUnjitteredInverse.m[3][0];
-	inverseProj[13] = frameBufferCached.CameraProjUnjitteredInverse.m[3][1];
-	inverseProj[14] = frameBufferCached.CameraProjUnjitteredInverse.m[3][2];
-	inverseProj[15] = frameBufferCached.CameraProjUnjitteredInverse.m[3][3];
-
-	memcpy(&debugVisDesc.inverseViewMatrix, &inverseView, sizeof(debugVisDesc.inverseViewMatrix));
-	memcpy(&debugVisDesc.inverseProjectionMatrix, &inverseProj, sizeof(debugVisDesc.inverseProjectionMatrix));
+	memcpy(&debugVisDesc.inverseViewMatrix, &frameBufferCached.CameraViewInverse, sizeof(debugVisDesc.inverseViewMatrix));
+	memcpy(&debugVisDesc.inverseProjectionMatrix, &frameBufferCached.CameraProjInverse, sizeof(debugVisDesc.inverseProjectionMatrix));
 
 	debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_GRAD;
 
