@@ -542,6 +542,8 @@ FfxBrixelizerDebugVisualizationDescription Raytracing::GetDebugVisualization()
 	memcpy(&debugVisDesc.inverseViewMatrix, &frameBufferCached.CameraViewInverse, sizeof(debugVisDesc.inverseViewMatrix));
 	memcpy(&debugVisDesc.inverseProjectionMatrix, &frameBufferCached.CameraProjInverse, sizeof(debugVisDesc.inverseProjectionMatrix));
 
+	memcpy(&debugVisDesc.posAdjust, &frameBufferCached.CameraPosAdjust, sizeof(debugVisDesc.posAdjust));
+
 	debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_GRAD;
 
 	debugVisDesc.startCascadeIndex = 0;
