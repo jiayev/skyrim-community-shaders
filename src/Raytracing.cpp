@@ -553,45 +553,45 @@ FfxBrixelizerDebugVisualizationDescription Raytracing::SetupDebugVisualization(F
 	float4 posadjust = frameBufferCached.CameraPosAdjust;
 	posadjust *= 0;
 	memcpy(&debugVisDesc.posAdjust, &posadjust, sizeof(debugVisDesc.posAdjust));
-	 
+
 	switch (m_DebugVisOutputType) {
-		case DebugVisOutputType::Distance:
-			debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_DISTANCE;
-			break;
-		case DebugVisOutputType::UVW:
-			debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_UVW;
-			break;
-		case DebugVisOutputType::Iterations:
-			debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_ITERATIONS;
-			break;
-		case DebugVisOutputType::Gradient:
-			debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_GRAD;
-			break;
-		case DebugVisOutputType::BrickID:
-			debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_BRICK_ID;
-			break;
-		case DebugVisOutputType::CascadeID:
-			debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_CASCADE_ID;
-			break;
-		default:
-			logger::critical("Unknown debug visualization output type.");
-			break;
+	case DebugVisOutputType::Distance:
+		debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_DISTANCE;
+		break;
+	case DebugVisOutputType::UVW:
+		debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_UVW;
+		break;
+	case DebugVisOutputType::Iterations:
+		debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_ITERATIONS;
+		break;
+	case DebugVisOutputType::Gradient:
+		debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_GRAD;
+		break;
+	case DebugVisOutputType::BrickID:
+		debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_BRICK_ID;
+		break;
+	case DebugVisOutputType::CascadeID:
+		debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_CASCADE_ID;
+		break;
+	default:
+		logger::critical("Unknown debug visualization output type.");
+		break;
 	}
 
 	uint32_t cascadeIndexOffset = 0;
-		switch (m_CascadeType) {
-		case CascadeType::Static:
-			cascadeIndexOffset = 0;
-			break;
-		case CascadeType::Dynamic:
-			cascadeIndexOffset = NUM_BRIXELIZER_CASCADES;
-			break;
-		case CascadeType::Merged:
-			cascadeIndexOffset = 2 * NUM_BRIXELIZER_CASCADES;
-			break;
-		default:
-			logger::critical("Unknown cascade type.");
-			break;
+	switch (m_CascadeType) {
+	case CascadeType::Static:
+		cascadeIndexOffset = 0;
+		break;
+	case CascadeType::Dynamic:
+		cascadeIndexOffset = NUM_BRIXELIZER_CASCADES;
+		break;
+	case CascadeType::Merged:
+		cascadeIndexOffset = 2 * NUM_BRIXELIZER_CASCADES;
+		break;
+	default:
+		logger::critical("Unknown cascade type.");
+		break;
 	}
 
 	debugVisDesc.startCascadeIndex = cascadeIndexOffset + m_StartCascadeIdx;
@@ -641,7 +641,7 @@ void Raytracing::PopulateCommandList()
 	// Pass in the externally created output resources as FfxResource objects.
 	updateDesc.resources.sdfAtlas = ffxGetResourceDX12(sdfAtlas.get(), ffxGetResourceDescriptionDX12(sdfAtlas.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 	updateDesc.resources.brickAABBs = ffxGetResourceDX12(brickAABBs.get(), ffxGetResourceDescriptionDX12(brickAABBs.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-	
+
 	for (uint32_t i = 0; i < FFX_BRIXELIZER_MAX_CASCADES; ++i) {
 		updateDesc.resources.cascadeResources[i].aabbTree = ffxGetResourceDX12(nullptr, ffxGetResourceDescriptionDX12(nullptr, FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 		updateDesc.resources.cascadeResources[i].brickMap = ffxGetResourceDX12(nullptr, ffxGetResourceDescriptionDX12(nullptr, FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
