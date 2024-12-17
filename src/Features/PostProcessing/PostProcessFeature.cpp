@@ -5,6 +5,7 @@
 #include "HistogramAutoExposure.h"
 #include "LUT.h"
 #include "Vignette.h"
+#include "pCamera.h"
 #include "LensFlare.h"
 #include "VanillaImagespace.h"
 
@@ -22,6 +23,7 @@ const ankerl::unordered_dense::map<std::string, PostProcessFeatureConstructor>& 
 		GetFeatureConstructorPair<Vignette>(),
 		GetFeatureConstructorPair<ColourTransforms>(),
 		GetFeatureConstructorPair<LUT>(),
+		GetFeatureConstructorPair<Camera>(),
 		GetFeatureConstructorPair<LensFlare>(),
 		GetFeatureConstructorPair<VanillaImagespace>(),
 	};

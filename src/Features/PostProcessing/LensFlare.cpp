@@ -5,6 +5,7 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     LensFlare::Settings,
+    LensFlareCurve,
     GhostStrength,
     HaloStrength,
     HaloRadius,
@@ -24,6 +25,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void LensFlare::DrawSettings()
 {
+    ImGui::SliderFloat("Lens Flare Curve", &settings.LensFlareCurve, 0.0f, 2.0f, "%.3f");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("What parts of the image produce lens flares");
+    }
+
     ImGui::SliderFloat("Lens Flare Strength", &settings.LFStrength, 0.0f, 1.0f, "%.3f");
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Master intensity control for the entire lens flare effect");
