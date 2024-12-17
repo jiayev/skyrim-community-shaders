@@ -132,14 +132,11 @@ float4 KawaseBlurUpSample(Texture2D tex, SamplerState samp, uint2 DTid, int scal
 
 float3 HighPassFilter(float3 color, float curve)
 {
-    if (curve < EPSILON)
-        return color;
     float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
     
-    float curve_squared = curve * curve;
-    float adapted_luminance = pow(abs(luminance), curve_squared);
+    float strength = pow(luminance / (1.0 + luminance), curve * curve * curve);
     
-    return clamp(color * adapted_luminance, 0.0f, 1.0f);
+    return color * min(strength, 1.0f);
 }
 
 
@@ -148,9 +145,9 @@ void CSLensflare(uint3 DTid : SV_DispatchThreadID)
 {
     if (DTid.x >= (uint)ScreenWidth || DTid.y >= (uint)ScreenHeight)
         return;
-    // float2 texcoord = (DTid.xy + 0.5f) / float2(ScreenWidth, ScreenHeight);
-    float2 texcoord = (floor((DTid.xy / 4)) * 4 + 2.0f) / float2(ScreenWidth, ScreenHeight);
-    float4 input_color = InputTexture.SampleLevel(ColorSampler, texcoord, 0);
+    float2 texcoord = (DTid.xy + 0.5f) / float2(ScreenWidth, ScreenHeight);
+    // float2 texcoord = (floor((DTid.xy / 4)) * 4 + 2.0f) / float2(ScreenWidth, ScreenHeight);
+    float4 input_color = InputTexture.SampleLevel(ColorSampler, texcoord, 4);
     float weight;
     float4 s = 0.0f;
     float3 color = 0.0f;
