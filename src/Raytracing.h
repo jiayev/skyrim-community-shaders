@@ -88,19 +88,51 @@ public:
 	FfxBrixelizerContextDescription initializationParameters = {};
 	FfxBrixelizerContext brixelizerContext = {};
 	FfxBrixelizerBakedUpdateDescription brixelizerBakedUpdateDesc = {};
-	FfxBrixelizerStats stats = {};
 	FfxBrixelizerBakedUpdateDescription bakedUpdateDesc = {};
 
 	winrt::com_ptr<ID3D12Resource> sdfAtlas;
 	winrt::com_ptr<ID3D12Resource> brickAABBs;
 	winrt::com_ptr<ID3D12Resource> gpuScratchBuffer;
 
-	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeAABBTrees;
-	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeBrickMaps;
+	winrt::com_ptr<ID3D12Resource> cascadeAABBTrees[FFX_BRIXELIZER_MAX_CASCADES];
+	winrt::com_ptr<ID3D12Resource> cascadeBrickMaps[FFX_BRIXELIZER_MAX_CASCADES];
 
 	ID3D11Texture2D* debugRenderTargetd3d11;
 	ID3D11ShaderResourceView* debugSRV;
 	ID3D12Resource* debugRenderTarget;
+
+	// Enum representing the Brixelizer cascade types.
+	enum class CascadeType
+	{
+		Static = 0,
+		Dynamic,
+		Merged
+	};
+
+	// Enum representing the Debug Visualization pass output types.
+	enum class DebugVisOutputType
+	{
+		Distance = 0,
+		UVW,
+		Iterations,
+		Gradient,
+		BrickID,
+		CascadeID
+	};
+
+	CascadeType m_CascadeType = CascadeType::Merged;
+	DebugVisOutputType m_DebugVisOutputType = DebugVisOutputType::Gradient;
+	int m_StartCascadeIdx = 0;
+	int m_EndCascadeIdx = NUM_BRIXELIZER_CASCADES - 1;
+
+	float m_TMin = 0.0f;
+	float m_TMax = 10000.0f;
+	float m_SdfSolveEps = 0.5f;
+
+	bool m_ShowStaticInstanceAABBs = false;
+	bool m_ShowDynamicInstanceAABBs = false;
+	bool m_ShowCascadeAABBs = false;
+	int m_ShowAABBTreeIndex = -1;
 
 	void DrawSettings();
 	void InitD3D12(IDXGIAdapter* a_adapter);
@@ -145,7 +177,7 @@ public:
 	void WaitForD3D11();
 	void WaitForD3D12();
 
-	FfxBrixelizerDebugVisualizationDescription GetDebugVisualization();
+	FfxBrixelizerDebugVisualizationDescription SetupDebugVisualization(FfxBrixelizerUpdateDescription& updateDesc, FfxBrixelizerDebugVisualizationDescription& debugVisDesc);
 
 	void FrameUpdate();
 	void PopulateCommandList();
