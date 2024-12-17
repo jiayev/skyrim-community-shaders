@@ -9,4 +9,4 @@
 	url = https://github.com/MapleHinata/FidelityFX-SDK.git
 [submodule "extern/FidelityFX-SDK-DX12"]
 	path = extern/FidelityFX-SDK-DX12
-	url = https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK
+	url = https://github.com/doodlum/FidelityFX-SDK
