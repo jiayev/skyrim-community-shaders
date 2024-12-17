@@ -15,7 +15,6 @@ cbuffer VanillaISCB : register(b1)
 };
 
 #define EPSILON 1e-6
-static const float3 LuminanceCoeff = float3(0.2126f, 0.7152f, 0.0722f);
 
 [numthreads(8, 8, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
@@ -37,7 +36,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float grayPoint = 0.1f;
 
     ppColor = Cinematic.y * lerp(luminance, ppColor, Cinematic.x);
-    ppColor = clamp(pow(ppColor, pow(2.0f, Cinematic.z - 1.0f)), 0.0f, 16.0f);
+    ppColor = clamp(pow(clamp(ppColor, 0.0f, 16.0f), pow(2.0f, Cinematic.z - 1.0f)), 0.0f, 16.0f);
     float3 finalColor = lerp(color.rgb, ppColor, BlendFactor);
     
     RWTexOut[DTid.xy] = float4(finalColor, color.a);
