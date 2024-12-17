@@ -1,5 +1,5 @@
 #pragma once
-
+#pragma warning(disable:4324)
 #include "Buffer.h"
 #include "PostProcessFeature.h"
 
@@ -15,8 +15,8 @@ struct VanillaImagespace : public PostProcessFeature
     struct alignas(16) VanillaImagespaceCB
     {
         float blendFactor;
-        float2 res;
         float3 cinematic;
+        float2 res; 
         uint8_t pad[8];
     };
 
@@ -27,6 +27,8 @@ struct VanillaImagespace : public PostProcessFeature
     winrt::com_ptr<ID3D11ComputeShader> vanillaImagespaceCS = nullptr;
 
     winrt::com_ptr<ID3D11SamplerState> colorSampler = nullptr;
+
+    VanillaImagespaceCB vanillaImagespaceData;
 
     virtual void SetupResources() override;
     virtual void ClearShaderCache() override;

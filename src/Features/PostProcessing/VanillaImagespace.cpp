@@ -2,6 +2,7 @@
 
 #include "State.h"
 #include "Util.h"
+#include "Menu.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     VanillaImagespace::Settings,
@@ -14,6 +15,10 @@ void VanillaImagespace::DrawSettings()
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Blend factor for the vanilla imagespace effect");
     }
+    ImGui::Text("ImageSpace Values:");
+    ImGui::Text("Saturation: %.3f", vanillaImagespaceData.cinematic.x);
+    ImGui::Text("Brightness: %.3f", vanillaImagespaceData.cinematic.y);
+    ImGui::Text("Contrast: %.3f", vanillaImagespaceData.cinematic.z);
 }
 
 void VanillaImagespace::RestoreDefaultSettings()
@@ -137,16 +142,25 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
     auto context = State::GetSingleton()->context;
     float2 res = { (float)texOutput->desc.Width, (float)texOutput->desc.Height };
     float3 cinematic;
-    cinematic.x = RE::ImageSpaceManager::GetSingleton()->GetRuntimeData().data.baseData.cinematic.saturation;
-    cinematic.y = RE::ImageSpaceManager::GetSingleton()->GetRuntimeData().data.baseData.cinematic.brightness;
-    cinematic.z = RE::ImageSpaceManager::GetSingleton()->GetRuntimeData().data.baseData.cinematic.contrast;
+    auto ImageSpace = RE::ImageSpaceManager::GetSingleton();
+    RE::ImageSpaceBaseData::Cinematic cinematicdata;
+    if (!REL::Module::IsVR()) {
+        cinematicdata = ImageSpace->GetRuntimeData().currentBaseData->cinematic;
+    }
+    else {
+        cinematicdata = ImageSpace->GetVRRuntimeData().currentBaseData->cinematic;
+    }
+    cinematic.x = cinematicdata.saturation;
+    cinematic.y = cinematicdata.brightness;
+    cinematic.z = cinematicdata.contrast;
 	res = Util::ConvertToDynamic(res);
 
     VanillaImagespaceCB data = {
         .blendFactor = settings.blendFactor,
-        .res = res,
-        .cinematic = cinematic
+        .cinematic = cinematic,
+        .res = res
     };
+    vanillaImagespaceData = data;
     vanillaImagespaceCB->Update(data);
 
     ID3D11ShaderResourceView* srv = inout_tex.srv;

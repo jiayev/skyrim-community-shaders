@@ -1,3 +1,6 @@
+#include "Common/Color.hlsli"
+#include "Common/FrameBuffer.hlsli"
+
 RWTexture2D<float4> RWTexOut : register(u0);
 
 SamplerState ImageSampler : register(s0);
@@ -7,47 +10,35 @@ Texture2D<float4> TexColor : register(t0);
 cbuffer VanillaISCB : register(b1)
 {
     float BlendFactor;
-    float2 Resolution;
     float3 Cinematic;
+    float2 Resolution;
 };
 
-static const float3 LuminanceWeight = float3(0.2126f, 0.7152f, 0.0722f);
+#define EPSILON 1e-6
+static const float3 LuminanceCoeff = float3(0.2126f, 0.7152f, 0.0722f);
 
-float GetLuminance(float3 color)
+[numthreads(8, 8, 1)]
+void main(uint3 DTid : SV_DispatchThreadID)
 {
-    return dot(color, LuminanceWeight);
-}
-
-float3 AdjustSaturation(float3 color, float saturation)
-{
-    float luminance = GetLuminance(color);
-    return lerp(float3(luminance, luminance, luminance), color, saturation);
-}
-
-float3 AdjustBrightness(float3 color, float brightness)
-{
-    return color * brightness;
-}
-
-float3 AdjustContrast(float3 color, float contrast)
-{
-    const float midPoint = 1.0f;
-    return (color - midPoint) * contrast + midPoint;
-}
-
-[numthreads(8, 8, 1)] void main(uint2 DTid
-                                : SV_DispatchThreadID) {
     if (DTid.x >= (uint)Resolution.x || DTid.y >= (uint)Resolution.y)
         return;
+    float2 uv = (DTid.xy + 0.5f) / Resolution;
+    float4 color = TexColor.SampleLevel(ImageSampler, uv, 0);
 
-    float4 originalColor = TexColor.SampleLevel(ImageSampler, DTid + 0.5 / Resolution, 0);
-    float3 color = originalColor.rgb;
+    if (Cinematic.y + Cinematic.z < EPSILON)
+    {
+        RWTexOut[DTid.xy] = color;
+        return;
+    }
 
-    color = AdjustSaturation(color, Cinematic.x);
-    color = AdjustBrightness(color, Cinematic.y);
-    color = AdjustContrast(color, Cinematic.z);
+    float luminance = Color::RGBToLuminance(color.rgb);
+    float3 ppColor = color.rgb;
+    
+    float grayPoint = 0.1f;
 
-    color = lerp(originalColor.rgb, color, BlendFactor);
-
-    RWTexOut[DTid.xy] = float4(color, originalColor.a);
+    ppColor = Cinematic.y * lerp(luminance, ppColor, Cinematic.x);
+    ppColor = clamp(pow(ppColor, pow(2.0f, Cinematic.z - 1.0f)), 0.0f, 16.0f);
+    float3 finalColor = lerp(color.rgb, ppColor, BlendFactor);
+    
+    RWTexOut[DTid.xy] = float4(finalColor, color.a);
 }
