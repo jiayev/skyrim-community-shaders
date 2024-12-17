@@ -37,6 +37,7 @@ RWTexture2D<float4> OutputTexture : register(u0);
 
 cbuffer LensFlareConstants : register(b1)
 {
+    float LensFlareCurve;
     float GhostStrength;
     float HaloStrength;
     float HaloRadius;
@@ -129,6 +130,19 @@ float4 KawaseBlurUpSample(Texture2D tex, SamplerState samp, uint2 DTid, int scal
     return color / 12.0f;
 }
 
+float3 HighPassFilter(float3 color, float curve)
+{
+    if (curve < EPSILON)
+        return color;
+    float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
+    
+    float curve_squared = curve * curve;
+    float adapted_luminance = pow(abs(luminance), curve_squared);
+    
+    return clamp(color * adapted_luminance, 0.0f, 1.0f);
+}
+
+
 [numthreads(8, 8, 1)]
 void CSLensflare(uint3 DTid : SV_DispatchThreadID)
 {
@@ -167,6 +181,7 @@ void CSLensflare(uint3 DTid : SV_DispatchThreadID)
 				}
                 float4 s1 = 0.0f;
                 s1 = InputTexture.SampleLevel(ColorSampler, ghost_vector + 0.5f, 2);
+                s1.rgb = HighPassFilter(s1.rgb, LensFlareCurve);
                 color += s1.rgb * GHOST_COLORS[i].rgb * GHOST_COLORS[i].a * weight;
             }
         }
@@ -186,6 +201,7 @@ void CSLensflare(uint3 DTid : SV_DispatchThreadID)
         weight = pow(abs(weight), 5.0);
 
         s = SampleCA(InputTexture, ColorSampler, halo_vector, 8.0 * LensFlareCA, 2);
+        s.rgb = HighPassFilter(s.rgb, LensFlareCurve);
         color += s.rgb * s.a * weight * (HaloStrength * HaloStrength);
     }
 

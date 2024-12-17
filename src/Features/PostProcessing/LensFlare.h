@@ -10,6 +10,7 @@ struct LensFlare : public PostProcessFeature
 
     struct Settings
 	{
+        float LensFlareCurve = 0.5f;
         float GhostStrength = 0.3f;
         float HaloStrength = 0.2f;
         float HaloRadius = 0.5f;
@@ -26,7 +27,7 @@ struct LensFlare : public PostProcessFeature
         float ScreenWidth;
         float ScreenHeight;
         int downsizeScale;
-        uint8_t pad1[8];
+        uint8_t pad[4];
     };
 
     struct debugSettings
