@@ -6,6 +6,7 @@
 #include "LUT.h"
 #include "Vignette.h"
 #include "LensFlare.h"
+#include "VanillaImagespace.h"
 
 template <class T>
 std::pair<std::string, PostProcessFeatureConstructor> GetFeatureConstructorPair()
@@ -22,6 +23,7 @@ const ankerl::unordered_dense::map<std::string, PostProcessFeatureConstructor>& 
 		GetFeatureConstructorPair<ColourTransforms>(),
 		GetFeatureConstructorPair<LUT>(),
 		GetFeatureConstructorPair<LensFlare>(),
+		GetFeatureConstructorPair<VanillaImagespace>(),
 	};
 	return retval;
 }
