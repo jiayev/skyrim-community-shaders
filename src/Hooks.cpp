@@ -179,6 +179,38 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	State::GetSingleton()->Draw();
 }
 
+struct ID3D11DeviceContext_Map
+{
+	static HRESULT thunk(ID3D11DeviceContext* This, ID3D11Resource *pResource, UINT Subresource, D3D11_MAP MapType, UINT MapFlags, D3D11_MAPPED_SUBRESOURCE *pMappedResource)
+	{
+		HRESULT hr = func(This, pResource, Subresource, MapType, MapFlags, pMappedResource);
+		
+		static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
+
+		if (*perFrame.get() == pResource) {
+			Raytracing::GetSingleton()->mappedFrameBuffer = pMappedResource;
+		}
+
+		return hr;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+struct ID3D11DeviceContext_Unmap
+{
+	static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource)
+	{
+		static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
+	
+		if (*perFrame.get() == pResource && Raytracing::GetSingleton()->mappedFrameBuffer)
+			Raytracing::GetSingleton()->CacheFramebuffer();
+
+		func(This, pResource, Subresource);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+
 struct ID3D11Device_CreateVertexShader
 {
 	static HRESULT thunk(ID3D11Device* This, const void* pShaderBytecode, SIZE_T BytecodeLength, ID3D11ClassLinkage* pClassLinkage, ID3D11VertexShader** ppVertexShader)
@@ -214,7 +246,7 @@ HRESULT WINAPI hk_CreateDXGIFactory(REFIID, void** ppFactory)
 	return Streamline::GetSingleton()->CreateDXGIFactory(__uuidof(IDXGIFactory1), ppFactory);
 }
 
-struct ID3D11Device_GetBuffer
+struct ID3D11Device_CreateBuffer
 {
 	static HRESULT thunk(ID3D11Device* This, const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer)
 	{
@@ -473,7 +505,10 @@ namespace Hooks
 				stl::detour_vfunc<15, ID3D11Device_CreatePixelShader>(device);
 			}
 
-			stl::detour_vfunc<3, ID3D11Device_GetBuffer>(device);
+			stl::detour_vfunc<3, ID3D11Device_CreateBuffer>(device);
+
+			stl::detour_vfunc<14, ID3D11DeviceContext_Map>(context);
+			stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(context);
 
 			Menu::GetSingleton()->Init(swapchain, device, context);
 		}

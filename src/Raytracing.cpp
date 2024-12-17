@@ -2,6 +2,13 @@
 
 #include "Deferred.h"
 
+void Raytracing::CacheFramebuffer()
+{
+	auto frameBuffer = (FrameBuffer*)mappedFrameBuffer->pData;
+	frameBufferCached = *frameBuffer;
+	mappedFrameBuffer = nullptr;
+}
+
 void Raytracing::DrawSettings()
 {
 	ImGui::Text("Debug capture requires that PIX is attached.");
@@ -530,28 +537,60 @@ FfxBrixelizerDebugVisualizationDescription Raytracing::GetDebugVisualization()
 {
 	FfxBrixelizerDebugVisualizationDescription debugVisDesc{};
 
-	auto camera = Util::GetCameraData(0);
-	auto inverseView = camera.viewMat.Invert();
-	auto inverseProjection = camera.projMat.Invert();
+	//auto camera = Util::GetCameraData(0);
+	//auto inverseView = camera.viewMat.Invert();
+	//auto inverseProjection = camera.projMat.Invert();
+
+	//auto eyePosition = Util::GetEyePosition(0);
+	//auto translation = Matrix::CreateTranslation(-eyePosition.x / 0.00142875f, -eyePosition.y / 0.00142875f, -eyePosition.z / 0.00142875f);
+	
+	float inverseView[16];
+	inverseView[0] = frameBufferCached.CameraViewInverse.m[0][0];
+	inverseView[1] = frameBufferCached.CameraViewInverse.m[0][1];
+	inverseView[2] = frameBufferCached.CameraViewInverse.m[0][2];
+	inverseView[3] = frameBufferCached.CameraViewInverse.m[0][3];
+	inverseView[4] = frameBufferCached.CameraViewInverse.m[1][0];
+	inverseView[5] = frameBufferCached.CameraViewInverse.m[1][1];
+	inverseView[6] = frameBufferCached.CameraViewInverse.m[1][2];
+	inverseView[7] = frameBufferCached.CameraViewInverse.m[1][3];
+	inverseView[8] = frameBufferCached.CameraViewInverse.m[2][0];
+	inverseView[9] = frameBufferCached.CameraViewInverse.m[2][1];
+	inverseView[10] = frameBufferCached.CameraViewInverse.m[2][2];
+	inverseView[11] = frameBufferCached.CameraViewInverse.m[2][3];
+	inverseView[12] = frameBufferCached.CameraViewInverse.m[3][0];
+	inverseView[13] = frameBufferCached.CameraViewInverse.m[3][1];
+	inverseView[14] = frameBufferCached.CameraViewInverse.m[3][2];
+	inverseView[15] = frameBufferCached.CameraViewInverse.m[3][3];
+
+	float inverseProj[16];
+	inverseProj[0] = frameBufferCached.CameraProjUnjitteredInverse.m[0][0];
+	inverseProj[1] = frameBufferCached.CameraProjUnjitteredInverse.m[0][1];
+	inverseProj[2] = frameBufferCached.CameraProjUnjitteredInverse.m[0][2];
+	inverseProj[3] = frameBufferCached.CameraProjUnjitteredInverse.m[0][3];
+	inverseProj[4] = frameBufferCached.CameraProjUnjitteredInverse.m[1][0];
+	inverseProj[5] = frameBufferCached.CameraProjUnjitteredInverse.m[1][1];
+	inverseProj[6] = frameBufferCached.CameraProjUnjitteredInverse.m[1][2];
+	inverseProj[7] = frameBufferCached.CameraProjUnjitteredInverse.m[1][3];
+	inverseProj[8] = frameBufferCached.CameraProjUnjitteredInverse.m[2][0];
+	inverseProj[9] = frameBufferCached.CameraProjUnjitteredInverse.m[2][1];
+	inverseProj[10] = frameBufferCached.CameraProjUnjitteredInverse.m[2][2];
+	inverseProj[11] = frameBufferCached.CameraProjUnjitteredInverse.m[2][3];
+	inverseProj[12] = frameBufferCached.CameraProjUnjitteredInverse.m[3][0];
+	inverseProj[13] = frameBufferCached.CameraProjUnjitteredInverse.m[3][1];
+	inverseProj[14] = frameBufferCached.CameraProjUnjitteredInverse.m[3][2];
+	inverseProj[15] = frameBufferCached.CameraProjUnjitteredInverse.m[3][3];
 
 	memcpy(&debugVisDesc.inverseViewMatrix, &inverseView, sizeof(debugVisDesc.inverseViewMatrix));
-	memcpy(&debugVisDesc.inverseProjectionMatrix, &inverseProjection, sizeof(debugVisDesc.inverseProjectionMatrix));
+	memcpy(&debugVisDesc.inverseProjectionMatrix, &inverseProj, sizeof(debugVisDesc.inverseProjectionMatrix));
 
 	debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_GRAD;
 
-	uint32_t cascadeIndexOffset = 0;
-	uint32_t m_StartCascadeIdx = 0;
-	uint32_t m_EndCascadeIdx = NUM_BRIXELIZER_CASCADES - 1;
-	float m_TMin = 0.0f;
-	float m_TMax = 10000.0f;
-	float m_SdfSolveEps = 0.5f;
+	debugVisDesc.startCascadeIndex = 0;
+	debugVisDesc.endCascadeIndex = NUM_BRIXELIZER_CASCADES - 1;
 
-	debugVisDesc.startCascadeIndex = cascadeIndexOffset + m_StartCascadeIdx;
-	debugVisDesc.endCascadeIndex = cascadeIndexOffset + m_EndCascadeIdx;
-
-	debugVisDesc.tMin = m_TMin;
-	debugVisDesc.tMax = m_TMax;
-	debugVisDesc.sdfSolveEps = m_SdfSolveEps;
+	debugVisDesc.tMin = 0.0f;
+	debugVisDesc.tMax = 10000.0f;
+	debugVisDesc.sdfSolveEps = 0.5f;
 	debugVisDesc.renderWidth = 1920;
 	debugVisDesc.renderHeight = 1080;
 	debugVisDesc.output = ffxGetResourceDX12(debugRenderTarget, ffxGetResourceDescriptionDX12(debugRenderTarget, FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
