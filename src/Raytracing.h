@@ -95,8 +95,8 @@ public:
 	winrt::com_ptr<ID3D12Resource> brickAABBs;
 	winrt::com_ptr<ID3D12Resource> gpuScratchBuffer;
 
-	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeAABBTrees;
-	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeBrickMaps;
+	winrt::com_ptr<ID3D12Resource> cascadeAABBTrees[FFX_BRIXELIZER_MAX_CASCADES];
+	winrt::com_ptr<ID3D12Resource> cascadeBrickMaps[FFX_BRIXELIZER_MAX_CASCADES];
 
 	std::vector<FfxBrixelizerInstanceDescription> instanceDescs;
 	std::vector<FfxBrixelizerInstanceID> instanceIds;

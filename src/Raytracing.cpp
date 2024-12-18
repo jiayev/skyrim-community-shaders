@@ -150,9 +150,9 @@ void Raytracing::InitBrixelizer()
 
 	gpuScratchBuffer = CreateBuffer(GPU_SCRATCH_BUFFER_SIZE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 
-	for (int i = 0; i < NUM_BRIXELIZER_CASCADES; i++) {
-		cascadeAABBTrees.push_back(CreateBuffer(FFX_BRIXELIZER_CASCADE_AABB_TREE_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
-		cascadeBrickMaps.push_back(CreateBuffer(FFX_BRIXELIZER_CASCADE_BRICK_MAP_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
+	for (int i = 0; i < FFX_BRIXELIZER_MAX_CASCADES; i++) {
+		cascadeAABBTrees[i] = (CreateBuffer(FFX_BRIXELIZER_CASCADE_AABB_TREE_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
+		cascadeBrickMaps[i] = (CreateBuffer(FFX_BRIXELIZER_CASCADE_BRICK_MAP_SIZE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
 	}
 
 	{
@@ -376,6 +376,9 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 				}
 			}
 
+			if (triShape->GetTrishapeRuntimeData().vertexCount > 1000)
+				return;
+
 			instanceDesc.indexFormat = FFX_INDEX_TYPE_UINT16;
 			instanceDesc.indexBuffer = GetBufferIndex(*indexBuffer);
 			instanceDesc.indexBufferOffset = 0;
@@ -390,8 +393,6 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 			uint outInstanceID;
 			instanceDesc.outInstanceID = &outInstanceID;
 			instanceDesc.flags = FFX_BRIXELIZER_INSTANCE_FLAG_NONE;
-
-			instanceDesc.maxCascade = NUM_BRIXELIZER_CASCADES - 1;
 
 			instanceDescs.push_back(instanceDesc);
 		}
@@ -610,7 +611,7 @@ void Raytracing::PopulateCommandList()
 	// Pass in the externally created output resources as FfxResource objects.
 	updateDesc.resources.sdfAtlas = ffxGetResourceDX12(sdfAtlas.get(), ffxGetResourceDescriptionDX12(sdfAtlas.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 	updateDesc.resources.brickAABBs = ffxGetResourceDX12(brickAABBs.get(), ffxGetResourceDescriptionDX12(brickAABBs.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-	for (uint32_t i = 0; i < NUM_BRIXELIZER_CASCADES; ++i) {
+	for (uint32_t i = 0; i < FFX_BRIXELIZER_MAX_CASCADES; ++i) {
 		updateDesc.resources.cascadeResources[i].aabbTree = ffxGetResourceDX12(cascadeAABBTrees[i].get(), ffxGetResourceDescriptionDX12(cascadeAABBTrees[i].get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 		updateDesc.resources.cascadeResources[i].brickMap = ffxGetResourceDX12(cascadeBrickMaps[i].get(), ffxGetResourceDescriptionDX12(cascadeBrickMaps[i].get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 	}
@@ -643,14 +644,12 @@ void Raytracing::FrameUpdate()
 	if (debugAvailable && debugCapture)
 		ga->BeginCapture();
 
-	static std::once_flag f = {};
-	std::call_once(f, [&]() {
-		if (instanceDescs.size()) {
-			FfxErrorCode errorCode = ffxBrixelizerCreateInstances(&brixelizerContext, instanceDescs.data(), static_cast<uint32_t>(instanceDescs.size()));
-			if (errorCode != FFX_OK)
-				logger::critical("Error {:x}", *(uint32_t*)(&errorCode));
-		}
-	});
+	if (instanceDescs.size()) {
+		FfxErrorCode errorCode = ffxBrixelizerCreateInstances(&brixelizerContext, instanceDescs.data(), static_cast<uint32_t>(instanceDescs.size()));
+		if (errorCode != FFX_OK)
+			logger::critical("Error {:x}", *(uint32_t*)(&errorCode));
+		instanceDescs.clear();
+	}
 
 	PopulateCommandList();
 
