@@ -184,7 +184,7 @@ public:
 
 	RenderTargetDataD3D12 renderTargetsD3D12[RE::RENDER_TARGET::kTOTAL];
 	RenderTargetDataD3D12 ConvertD3D11TextureToD3D12(RE::BSGraphics::RenderTargetData* rtData);
-	
+
 	void BSTriShape_UpdateWorldData(RE::BSTriShape* This, RE::NiUpdateData* a_data);
 	void BSTriShape_SetAppCulled(RE::BSTriShape* This, bool a_cull);
 

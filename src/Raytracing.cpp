@@ -333,7 +333,7 @@ void Raytracing::UpdateGeometry(RE::BSRenderPass* a_pass)
 
 	if (Deferred::GetSingleton()->inWorld) {
 		auto it = instances.find(geometry);
-		
+
 		if (it != instances.end()) {
 			auto instanceData = (*it).second;
 			auto worldUpdate = std::memcmp(&geometry->world, &geometry->previousWorld, sizeof(geometry->world)) != 0;
@@ -345,9 +345,7 @@ void Raytracing::UpdateGeometry(RE::BSRenderPass* a_pass)
 					logger::critical("error");
 				instances.erase(it);
 				it = instances.end();
-			}
-			else if (worldUpdate)
-			{
+			} else if (worldUpdate) {
 				auto error = ffxBrixelizerDeleteInstances(&brixelizerContext, &instanceData.instanceID, 1);
 				if (error != FFX_OK)
 					logger::critical("error");
@@ -355,7 +353,7 @@ void Raytracing::UpdateGeometry(RE::BSRenderPass* a_pass)
 				it = instances.end();
 			}
 		}
-		
+
 		if (it == instances.end()) {
 			if (a_pass->shaderProperty->flags.none(RE::BSShaderProperty::EShaderPropertyFlag::kZBufferWrite))
 				return;
