@@ -275,7 +275,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	{
 		const static uint visibility_step = 2;
 		const static float visibility_stride = 0.05 / 1.428e-5f;
-		const float3 jitter = Random::R3Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f) * 2 - 1;
+		const float3 jitter = Random::R3Modified(SharedData::FrameCount, seed / 4294967295.f) * 2 - 1;
 
 		float cloud_density = 0;
 
@@ -309,13 +309,19 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 
 [numthreads(8, 8, 1)] void main(uint2 tid
 								: SV_DispatchThreadID) {
+	if (PhysSkyBuffer[0].enable_vanilla_clouds)
+	{
+		RWTexTr[tid] = 1.0;
+		RWTexLum[tid] = 0.0;
+		return;
+	}
 	const PhySkyBufferContent info = PhysSkyBuffer[0];
 	const static float zero_density_stride_mult = 1.5;
 
 	const uint2 px_coords = tid;
 
 	const uint3 seed = Random::pcg3d(uint3(px_coords.xy, px_coords.x ^ 0xf874));
-	const float3 rnd = Random::R3Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
+	const float3 rnd = Random::R3Modified(SharedData::FrameCount, seed / 4294967295.f);
 
 	///////////// get start and end
 	const float depth = TexDepth[px_coords.xy];
@@ -439,7 +445,7 @@ groupshared float g_density[NTHREADS];
 
 [numthreads(NTHREADS, 1, 1)] void renderShadowVolume(const uint gtid
 													 : SV_GroupThreadID, const uint2 gid
-													 : SV_GroupID) {
+													 : SV_GroupID) {												
 	const PhySkyBufferContent info = PhysSkyBuffer[0];
 	const CloudLayer cloud = info.cloud_layer;
 
@@ -476,6 +482,12 @@ groupshared float g_density[NTHREADS];
 
 	const float3 thread_uv = raw_thread_uv - floor(raw_thread_uv);  // wraparound
 	const uint3 thread_px_coord = thread_uv * dims;
+
+	if (PhysSkyBuffer[0].enable_vanilla_clouds)
+	{
+		RWShadowVolume[thread_px_coord] = 0.0f;
+		return;
+	}
 
 	float past_density = RWShadowVolume[thread_px_coord];
 	if (ISNAN(past_density))
