@@ -365,6 +365,8 @@ void Raytracing::UpdateGeometry(RE::BSRenderPass* a_pass)
 				return;
 			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape))
 				return;
+			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSkinned))
+				return;
 			const auto& transform = geometry->world;
 			const auto& modelData = geometry->GetModelData().modelBound;
 			if (geometry->worldBound.radius == 0)
