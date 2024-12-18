@@ -307,14 +307,7 @@ void Raytracing::UpdateGeometry(RE::BSRenderPass* a_pass)
 				return;
 			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kLODObjects))
 				return;
-			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kCloudLOD))
-				return;
-			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiIndexSnow))
-				return;
-			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultipleTextures))
-				return;
-			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape))
-				return;
+
 			const auto& transform = geometry->world;
 			const RE::NiPoint3 c = { geometry->worldBound.center.x, geometry->worldBound.center.y, geometry->worldBound.center.z };
 			const RE::NiPoint3 r = { geometry->worldBound.radius, geometry->worldBound.radius, geometry->worldBound.radius };
@@ -397,8 +390,8 @@ void Raytracing::UpdateGeometry(RE::BSRenderPass* a_pass)
 			instanceDesc.triangleCount = triShape->GetTrishapeRuntimeData().triangleCount;
 
 			instanceDesc.vertexBuffer = GetBufferIndex(*vertexBuffer);
-			instanceDesc.vertexStride = rendererData->vertexDesc.GetSize();
-			instanceDesc.vertexBufferOffset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_POSITION);
+			instanceDesc.vertexStride = ((*(uint64_t*)&rendererData->vertexDesc) << 2) & 0x3C;
+			instanceDesc.vertexBufferOffset = 0;
 			instanceDesc.vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
 			instanceDesc.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
 
