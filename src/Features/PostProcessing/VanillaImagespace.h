@@ -9,15 +9,19 @@ struct VanillaImagespace : public PostProcessFeature
 	virtual inline std::string GetDesc() const override { return "Simple node to apply vanilla imagespace settings."; }
     struct Settings
 	{
-		float blendFactor = 1.0f;
+		float3 blendFactor = float3(1.0f, 1.0f, 1.0f);
+        float3 InteriorMultiplier = float3(1.0f, 1.0f, 1.0f);
+        float3 ExteriorMultiplier = float3(1.0f, 1.0f, 1.0f);
+        bool enableInExMultiplier = false;
+        uint8_t pad[3];
 	} settings;
 
     struct alignas(16) VanillaImagespaceCB
     {
-        float blendFactor;
         float3 cinematic;
-        float2 res; 
-        uint8_t pad[8];
+        float width;
+        float height;
+        uint8_t pad[12];
     };
 
     eastl::unique_ptr<ConstantBuffer> vanillaImagespaceCB = nullptr;
@@ -29,6 +33,9 @@ struct VanillaImagespace : public PostProcessFeature
     winrt::com_ptr<ID3D11SamplerState> colorSampler = nullptr;
 
     VanillaImagespaceCB vanillaImagespaceData;
+
+    float3 actualValues = float3(1.0f, 1.0f, 1.0f);
+    bool isInInterior = false;
 
     virtual void SetupResources() override;
     virtual void ClearShaderCache() override;
