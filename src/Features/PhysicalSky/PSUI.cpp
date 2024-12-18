@@ -515,6 +515,10 @@ void PhysicalSky::SettingsLayers()
 		ImGui::SliderFloat("Ambient Strength", &settings.fog_ambient_mult, 0.f, 5.f);
 	}
 
+	if (ImGui::CollapsingHeader("Vanilla Clouds")) {
+		ImGui::Checkbox("Enable Vanilla Clouds", &settings.enable_vanilla_clouds);
+	}
+
 	if (ImGui::CollapsingHeader("Cloud")) {
 		ImGui::PushID("Cloud");
 		CloudLayerEdit(settings.cloud_layer);

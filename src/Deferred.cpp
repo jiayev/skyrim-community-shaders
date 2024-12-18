@@ -426,11 +426,8 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? nullptr : ssgi_y,
 			ssgi_hq_spec ? nullptr : ssgi_cocg,
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
-<<<<<<< HEAD
 			physSky->loaded ? physSky->main_view_tr_tex->srv.get() : nullptr,
 			physSky->loaded ? physSky->main_view_lum_tex->srv.get() : nullptr,
-=======
->>>>>>> pentalimbed/dev-ssgi-specular-ao
 		};
 
 		if (dynamicCubemaps->loaded)
