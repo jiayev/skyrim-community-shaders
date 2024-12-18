@@ -6,19 +6,43 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     VanillaImagespace::Settings,
-    blendFactor
+    blendFactor,
+    InteriorMultiplier,
+    ExteriorMultiplier,
+    enableInExMultiplier
 )
 
 void VanillaImagespace::DrawSettings()
 {
-    ImGui::SliderFloat("Blend Factor", &settings.blendFactor, 0.0f, 1.0f, "%.3f");
+    ImGui::SliderFloat3("Blend Factor", &settings.blendFactor.x, 0.0f, 1.0f, "%.3f");
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Blend factor for the vanilla imagespace effect");
+        ImGui::SetTooltip("Blend factor for the vanilla imagespace effect (saturation, brightness, contrast).");
     }
-    ImGui::Text("ImageSpace Values:");
+
+    ImGui::Checkbox("Enable Interior/Exterior Multiplier", &settings.enableInExMultiplier);
+
+    if (settings.enableInExMultiplier) {
+        ImGui::SliderFloat3("Exterior Multiplier", &settings.ExteriorMultiplier.x, 0.0f, 2.0f, "%.3f");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Multiplier for the exterior imagespace effect (saturation, brightness, contrast).");
+        }
+
+        ImGui::SliderFloat3("Interior Multiplier", &settings.InteriorMultiplier.x, 0.0f, 2.0f, "%.3f");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Multiplier for the interior imagespace effect (saturation, brightness, contrast).");
+        }
+    }
+
+    ImGui::Text("Original ImageSpace Values:");
     ImGui::Text("Saturation: %.3f", vanillaImagespaceData.cinematic.x);
     ImGui::Text("Brightness: %.3f", vanillaImagespaceData.cinematic.y);
     ImGui::Text("Contrast: %.3f", vanillaImagespaceData.cinematic.z);
+
+    ImGui::Text("Current Location: %s", isInInterior ? "Interior" : "Exterior");
+    ImGui::Text("Actual Values:");
+    ImGui::Text("Saturation: %.3f", actualValues.x);
+    ImGui::Text("Brightness: %.3f", actualValues.y);
+    ImGui::Text("Contrast: %.3f", actualValues.z);
 }
 
 void VanillaImagespace::RestoreDefaultSettings()
@@ -150,17 +174,25 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
     else {
         cinematicdata = ImageSpace->GetVRRuntimeData().currentBaseData->cinematic;
     }
+    if (auto sky = RE::Sky::GetSingleton())
+        isInInterior = sky->mode.get() != RE::Sky::Mode::kFull;
+    else
+        isInInterior = true;
     cinematic.x = cinematicdata.saturation;
     cinematic.y = cinematicdata.brightness;
     cinematic.z = cinematicdata.contrast;
-	res = Util::ConvertToDynamic(res);
 
     VanillaImagespaceCB data = {
-        .blendFactor = settings.blendFactor,
         .cinematic = cinematic,
-        .res = res
+        .width = res.x,
+        .height = res.y
     };
     vanillaImagespaceData = data;
+
+    actualValues = (float3(1.0f) - settings.blendFactor) + vanillaImagespaceData.cinematic * settings.blendFactor;
+    
+    actualValues = actualValues * (settings.enableInExMultiplier ? (isInInterior ? settings.InteriorMultiplier : settings.ExteriorMultiplier) : float3(1.0f));
+    data.cinematic = actualValues;
     vanillaImagespaceCB->Update(data);
 
     ID3D11ShaderResourceView* srv = inout_tex.srv;
