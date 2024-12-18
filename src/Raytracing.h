@@ -98,9 +98,6 @@ public:
 	winrt::com_ptr<ID3D12Resource> cascadeAABBTrees[FFX_BRIXELIZER_MAX_CASCADES];
 	winrt::com_ptr<ID3D12Resource> cascadeBrickMaps[FFX_BRIXELIZER_MAX_CASCADES];
 
-	std::vector<FfxBrixelizerInstanceDescription> instanceDescs;
-	std::vector<FfxBrixelizerInstanceID> instanceIds;
-
 	ID3D11Texture2D* debugRenderTargetd3d11;
 	ID3D11ShaderResourceView* debugSRV;
 	ID3D12Resource* debugRenderTarget;
@@ -143,10 +140,22 @@ public:
 
 	BufferData AllocateBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData);
 
-	eastl::hash_set<RE::BSGeometry*> geometries;
-
 	eastl::hash_map<ID3D11Buffer*, BufferData> vertexBuffers;
 	eastl::hash_map<ID3D11Buffer*, BufferData> indexBuffers;
+
+	struct LODMode
+	{
+		std::uint8_t index: 7;
+		bool singleLevel: 1;
+	};
+
+	struct InstanceData
+	{
+		FfxBrixelizerInstanceID instanceID;
+		LODMode LODMode;
+	};
+
+	eastl::hash_map<RE::BSGeometry*, InstanceData> instances;
 
 	uint GetBufferIndex(BufferData& a_bufferData);
 
@@ -175,33 +184,65 @@ public:
 
 	RenderTargetDataD3D12 renderTargetsD3D12[RE::RENDER_TARGET::kTOTAL];
 	RenderTargetDataD3D12 ConvertD3D11TextureToD3D12(RE::BSGraphics::RenderTargetData* rtData);
+	
+	void BSTriShape_UpdateWorldData(RE::BSTriShape* This, RE::NiUpdateData* a_data);
+	void BSTriShape_SetAppCulled(RE::BSTriShape* This, bool a_cull);
 
-	struct BSLightingShader_SetupGeometry
+	struct Hooks
 	{
-		static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+		struct BSLightingShader_SetupGeometry
 		{
-			func(This, Pass, RenderFlags);
-			GetSingleton()->UpdateGeometry(Pass);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+			{
+				func(This, Pass, RenderFlags);
+				GetSingleton()->UpdateGeometry(Pass);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
 
-	struct NiNode_Destroy
-	{
-		static void thunk(RE::NiNode* This)
+		struct NiNode_Destroy
 		{
-			GetSingleton()->RemoveGeometry((RE::BSGeometry*)This);
-			func(This);
+			static void thunk(RE::NiNode* This)
+			{
+				GetSingleton()->RemoveGeometry((RE::BSGeometry*)This);
+				func(This);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSTriShape_UpdateWorldData
+		{
+			static void thunk(RE::BSTriShape* This, RE::NiUpdateData* a_data)
+			{
+				GetSingleton()->BSTriShape_UpdateWorldData(This, a_data);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSTriShape_SetAppCulled
+		{
+			static void thunk(RE::BSTriShape* This, bool a_cull)
+			{
+				GetSingleton()->BSTriShape_SetAppCulled(This, a_cull);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		static void Install()
+		{
+			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
+
+			if (REL::Module::IsAE()) {
+				stl::write_vfunc<0x31, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
+			} else {
+				stl::write_vfunc<0x30, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
+			}
+
+			stl::write_vfunc<0x42, BSTriShape_SetAppCulled>(RE::VTABLE_BSTriShape[0]);
+
+			//	stl::detour_thunk<NiNode_Destroy>(REL::RelocationID(68937, 70288));
+
+			logger::info("[Raytracing] Installed hooks");
 		}
-		static inline REL::Relocation<decltype(thunk)> func;
 	};
-
-	static void InstallHooks()
-	{
-		stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
-
-		//	stl::detour_thunk<NiNode_Destroy>(REL::RelocationID(68937, 70288));
-
-		logger::info("[Raytracing] Installed hooks");
-	}
 };

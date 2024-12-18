@@ -228,6 +228,38 @@ Raytracing::RenderTargetDataD3D12 Raytracing::ConvertD3D11TextureToD3D12(RE::BSG
 	return renderTargetData;
 }
 
+void Raytracing::BSTriShape_UpdateWorldData(RE::BSTriShape* This, RE::NiUpdateData* a_data)
+{
+	Hooks::BSTriShape_UpdateWorldData::func(This, a_data);
+
+	if (std::memcmp(&This->world, &This->previousWorld, sizeof(This->world)) != 0) {
+		auto it = instances.find(This);
+		if (it != instances.end()) {
+			auto& instanceData = (*it).second;
+			auto error = ffxBrixelizerDeleteInstances(&brixelizerContext, &instanceData.instanceID, 1);
+			if (error != FFX_OK)
+				logger::critical("error");
+			instances.erase(it);
+		}
+	}
+}
+
+void Raytracing::BSTriShape_SetAppCulled(RE::BSTriShape* This, bool a_cull)
+{
+	if (a_cull) {
+		auto it = instances.find(This);
+		if (it != instances.end()) {
+			auto& instanceData = (*it).second;
+			auto error = ffxBrixelizerDeleteInstances(&brixelizerContext, &instanceData.instanceID, 1);
+			if (error != FFX_OK)
+				logger::critical("error");
+			instances.erase(it);
+		}
+	}
+
+	Hooks::BSTriShape_SetAppCulled::func(This, a_cull);
+}
+
 void Raytracing::OpenSharedHandles()
 {
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -295,22 +327,53 @@ DirectX::XMMATRIX GetXMFromNiTransform(const RE::NiTransform& Transform)
 
 void Raytracing::UpdateGeometry(RE::BSRenderPass* a_pass)
 {
-	auto geometry = a_pass->geometry;
-	if (Deferred::GetSingleton()->inWorld) {
-		auto it = geometries.find(geometry);
-		if (it == geometries.end()) {
-			geometries.insert(geometry);
+	auto geometry = a_pass->geometry->AsTriShape();
+	if (!geometry)
+		return;
 
+	if (Deferred::GetSingleton()->inWorld) {
+		auto it = instances.find(geometry);
+		
+		if (it != instances.end()) {
+			auto instanceData = (*it).second;
+			auto worldUpdate = std::memcmp(&geometry->world, &geometry->previousWorld, sizeof(geometry->world)) != 0;
+			auto lodUpdate = std::memcmp(&a_pass->LODMode, &instanceData.LODMode, sizeof(a_pass->LODMode)) != 0;
+
+			if (lodUpdate) {
+				auto error = ffxBrixelizerDeleteInstances(&brixelizerContext, &instanceData.instanceID, 1);
+				if (error != FFX_OK)
+					logger::critical("error");
+				instances.erase(it);
+				it = instances.end();
+			}
+			else if (worldUpdate)
+			{
+				auto error = ffxBrixelizerDeleteInstances(&brixelizerContext, &instanceData.instanceID, 1);
+				if (error != FFX_OK)
+					logger::critical("error");
+				instances.erase(it);
+				it = instances.end();
+			}
+		}
+		
+		if (it == instances.end()) {
 			if (a_pass->shaderProperty->flags.none(RE::BSShaderProperty::EShaderPropertyFlag::kZBufferWrite))
 				return;
 			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kLODLandscape))
 				return;
 			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kLODObjects))
 				return;
-
+			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiIndexSnow))
+				return;
+			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape))
+				return;
 			const auto& transform = geometry->world;
-			const RE::NiPoint3 c = { geometry->worldBound.center.x, geometry->worldBound.center.y, geometry->worldBound.center.z };
-			const RE::NiPoint3 r = { geometry->worldBound.radius, geometry->worldBound.radius, geometry->worldBound.radius };
+			const auto& modelData = geometry->GetModelData().modelBound;
+			if (geometry->worldBound.radius == 0)
+				return;
+
+			const RE::NiPoint3 c = { modelData.center.x, modelData.center.y, modelData.center.z };
+			const RE::NiPoint3 r = { modelData.radius, modelData.radius, modelData.radius };
 			const RE::NiPoint3 aabbMinVec = c - r;
 			const RE::NiPoint3 aabbMaxVec = c + r;
 			const RE::NiPoint3 extents = aabbMaxVec - aabbMinVec;
@@ -330,7 +393,7 @@ void Raytracing::UpdateGeometry(RE::BSRenderPass* a_pass)
 			float4 maxExtents = float4(-FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX);
 
 			for (uint i = 0; i < 8; i++) {
-				auto transformed = aabbCorners[i];
+				auto transformed = transform * aabbCorners[i];
 				float4 transformedF = { transformed.x, transformed.y, transformed.z, 0 };
 
 				minExtents = (float4)_mm_min_ps(minExtents, transformedF);
@@ -359,10 +422,6 @@ void Raytracing::UpdateGeometry(RE::BSRenderPass* a_pass)
 				indexBuffer = &it2->second;
 			}
 
-			auto triShape = geometry->AsTriShape();
-			if (!triShape)
-				return;
-
 			FfxBrixelizerInstanceDescription instanceDesc = {};
 
 			{
@@ -387,27 +446,39 @@ void Raytracing::UpdateGeometry(RE::BSRenderPass* a_pass)
 			instanceDesc.indexFormat = FFX_INDEX_TYPE_UINT16;
 			instanceDesc.indexBuffer = GetBufferIndex(*indexBuffer);
 			instanceDesc.indexBufferOffset = 0;
-			instanceDesc.triangleCount = triShape->GetTrishapeRuntimeData().triangleCount;
+			instanceDesc.triangleCount = geometry->GetTrishapeRuntimeData().triangleCount;
 
 			instanceDesc.vertexBuffer = GetBufferIndex(*vertexBuffer);
 			instanceDesc.vertexStride = ((*(uint64_t*)&rendererData->vertexDesc) << 2) & 0x3C;
-			instanceDesc.vertexBufferOffset = 0;
-			instanceDesc.vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
+			instanceDesc.vertexBufferOffset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_POSITION);
+			instanceDesc.vertexCount = geometry->GetTrishapeRuntimeData().vertexCount;
 			instanceDesc.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
 
-			uint outInstanceID;
-			instanceDesc.outInstanceID = &outInstanceID;
+			InstanceData instanceData{};
+			instanceDesc.outInstanceID = &instanceData.instanceID;
 			instanceDesc.flags = FFX_BRIXELIZER_INSTANCE_FLAG_NONE;
 
-			instanceDescs.push_back(instanceDesc);
+			FfxErrorCode error = ffxBrixelizerCreateInstances(&brixelizerContext, &instanceDesc, 1);
+			if (error != FFX_OK)
+				logger::critical("error");
+
+			instanceData.LODMode.index = a_pass->LODMode.index;
+			instanceData.LODMode.singleLevel = a_pass->LODMode.singleLevel;
+
+			instances.insert({ geometry, instanceData });
 		}
 	}
 }
 
-void Raytracing::RemoveGeometry(RE::BSGeometry* a_geometry)
+void Raytracing::RemoveGeometry(RE::BSGeometry* This)
 {
-	if (geometries.erase(a_geometry)) {
-		// Remove Event
+	auto it = instances.find(This);
+	if (it != instances.end()) {
+		auto& instanceData = (*it).second;
+		auto error = ffxBrixelizerDeleteInstances(&brixelizerContext, &instanceData.instanceID, 1);
+		if (error != FFX_OK)
+			logger::critical("error");
+		instances.erase(it);
 	}
 }
 
@@ -649,12 +720,12 @@ void Raytracing::FrameUpdate()
 	if (debugAvailable && debugCapture)
 		ga->BeginCapture();
 
-	if (instanceDescs.size()) {
-		FfxErrorCode errorCode = ffxBrixelizerCreateInstances(&brixelizerContext, instanceDescs.data(), static_cast<uint32_t>(instanceDescs.size()));
-		if (errorCode != FFX_OK)
-			logger::critical("Error {:x}", *(uint32_t*)(&errorCode));
-		instanceDescs.clear();
-	}
+	//if (instanceDescs.size()) {
+	//	FfxErrorCode errorCode = ffxBrixelizerCreateInstances(&brixelizerContext, instanceDescs.data(), static_cast<uint32_t>(instanceDescs.size()));
+	//	if (errorCode != FFX_OK)
+	//		logger::critical("Error {:x}", *(uint32_t*)(&errorCode));
+	//	instanceDescs.clear();
+	//}
 
 	PopulateCommandList();
 
@@ -667,7 +738,5 @@ void Raytracing::FrameUpdate()
 	// Wait for the GPU to finish executing the commands
 	WaitForD3D12();
 
-	instanceDescs.clear();
-	instanceIds.clear();
 	debugCapture = false;
 }

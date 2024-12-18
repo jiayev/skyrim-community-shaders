@@ -89,7 +89,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 				Hooks::Install();
 				FrameAnnotations::OnPostPostLoad();
-				Raytracing::InstallHooks();
+				Raytracing::Hooks::Install();
 
 				auto& shaderCache = SIE::ShaderCache::Instance();
 
