@@ -293,16 +293,31 @@ DirectX::XMMATRIX GetXMFromNiTransform(const RE::NiTransform& Transform)
 	return temp;
 }
 
-void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
+void Raytracing::UpdateGeometry(RE::BSRenderPass* a_pass)
 {
+	auto geometry = a_pass->geometry;
 	if (Deferred::GetSingleton()->inWorld) {
-		auto it = geometries.find(a_geometry);
+		auto it = geometries.find(geometry);
 		if (it == geometries.end()) {
-			geometries.insert(a_geometry);
+			geometries.insert(geometry);
 
-			const auto& transform = a_geometry->world;
-			const RE::NiPoint3 c = { a_geometry->worldBound.center.x, a_geometry->worldBound.center.y, a_geometry->worldBound.center.z };
-			const RE::NiPoint3 r = { a_geometry->worldBound.radius, a_geometry->worldBound.radius, a_geometry->worldBound.radius };
+			if (a_pass->shaderProperty->flags.none(RE::BSShaderProperty::EShaderPropertyFlag::kZBufferWrite))
+				return;
+			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kLODLandscape))
+				return;
+			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kLODObjects))
+				return;
+			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kCloudLOD))
+				return;
+			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiIndexSnow))
+				return;
+			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultipleTextures))
+				return;
+			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape))
+				return;
+			const auto& transform = geometry->world;
+			const RE::NiPoint3 c = { geometry->worldBound.center.x, geometry->worldBound.center.y, geometry->worldBound.center.z };
+			const RE::NiPoint3 r = { geometry->worldBound.radius, geometry->worldBound.radius, geometry->worldBound.radius };
 			const RE::NiPoint3 aabbMinVec = c - r;
 			const RE::NiPoint3 aabbMaxVec = c + r;
 			const RE::NiPoint3 extents = aabbMaxVec - aabbMinVec;
@@ -329,7 +344,7 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 				maxExtents = (float4)_mm_max_ps(maxExtents, transformedF);
 			}
 
-			auto rendererData = a_geometry->GetGeometryRuntimeData().rendererData;
+			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
 
 			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
 				return;
@@ -351,7 +366,7 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 				indexBuffer = &it2->second;
 			}
 
-			auto triShape = a_geometry->AsTriShape();
+			auto triShape = geometry->AsTriShape();
 			if (!triShape)
 				return;
 

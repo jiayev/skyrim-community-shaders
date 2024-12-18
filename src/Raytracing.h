@@ -150,7 +150,7 @@ public:
 
 	uint GetBufferIndex(BufferData& a_bufferData);
 
-	void UpdateGeometry(RE::BSGeometry* a_geometry);
+	void UpdateGeometry(RE::BSRenderPass* a_pass);
 	void RemoveGeometry(RE::BSGeometry* a_geometry);
 
 	void RegisterVertexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer);
@@ -181,7 +181,7 @@ public:
 		static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 		{
 			func(This, Pass, RenderFlags);
-			GetSingleton()->UpdateGeometry(Pass->geometry);
+			GetSingleton()->UpdateGeometry(Pass);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
