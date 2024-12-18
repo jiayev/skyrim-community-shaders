@@ -98,9 +98,14 @@ public:
 	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeAABBTrees;
 	std::vector<winrt::com_ptr<ID3D12Resource>> cascadeBrickMaps;
 
+	std::vector<FfxBrixelizerInstanceDescription> instanceDescs;
+	std::vector<FfxBrixelizerInstanceID> instanceIds;
+
 	ID3D11Texture2D* debugRenderTargetd3d11;
 	ID3D11ShaderResourceView* debugSRV;
 	ID3D12Resource* debugRenderTarget;
+
+	FfxBrixelizerTraceDebugModes m_DebugMode = FFX_BRIXELIZER_TRACE_DEBUG_MODE_GRAD;
 
 	int m_StartCascadeIdx = 0;
 	int m_EndCascadeIdx = NUM_BRIXELIZER_CASCADES - 1;

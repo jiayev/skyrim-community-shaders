@@ -15,6 +15,9 @@ void Raytracing::DrawSettings()
 	if (ImGui::Button("Take Debug Capture") && !debugCapture) {
 		debugCapture = true;
 	}
+	ImGui::SliderInt("Debug Mode", (int*)&m_DebugMode, 0, FFX_BRIXELIZER_TRACE_DEBUG_MODE_CASCADE_ID, "%d", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", magic_enum::enum_name(m_DebugMode).data());
 
 	ImGui::SliderInt("Start Cascade", &m_StartCascadeIdx, 0, NUM_BRIXELIZER_CASCADES - 1);
 	ImGui::SliderInt("End Cascade", &m_EndCascadeIdx, 0, NUM_BRIXELIZER_CASCADES - 1);
@@ -25,6 +28,32 @@ void Raytracing::DrawSettings()
 	ImGui::Checkbox("Show Dynamic Instance AABBs", &m_ShowDynamicInstanceAABBs);
 	ImGui::Checkbox("Show Cascade AABBs", &m_ShowCascadeAABBs);
 	ImGui::SliderInt("Show AABB Tree Index", &m_ShowAABBTreeIndex, -1, NUM_BRIXELIZER_CASCADES - 1);
+
+	static FfxBrixelizerStats statsFirstCascade{};
+
+	if (stats.cascadeIndex == 0) {
+		statsFirstCascade = stats;
+	}
+
+	ImGui::NewLine();
+	ImGui::Text("Stats:");
+	ImGui::Text(std::format("	cascadeIndex : {}", statsFirstCascade.cascadeIndex).c_str());
+	ImGui::Text("	staticCascadeStats:");
+	ImGui::Text(std::format("	bricksAllocated : {}", statsFirstCascade.staticCascadeStats.bricksAllocated).c_str());
+	ImGui::Text(std::format("	referencesAllocated : {}", statsFirstCascade.staticCascadeStats.referencesAllocated).c_str());
+	ImGui::Text(std::format("	trianglesAllocated : {}", statsFirstCascade.staticCascadeStats.trianglesAllocated).c_str());
+
+	ImGui::Text("	dynamicCascadeStats:");
+	ImGui::Text(std::format("	bricksAllocated : {}", statsFirstCascade.dynamicCascadeStats.bricksAllocated).c_str());
+	ImGui::Text(std::format("	referencesAllocated : {}", statsFirstCascade.dynamicCascadeStats.referencesAllocated).c_str());
+	ImGui::Text(std::format("	trianglesAllocated : {}", statsFirstCascade.dynamicCascadeStats.trianglesAllocated).c_str());
+
+	ImGui::Text("	contextStats:");
+	ImGui::Text(std::format("	brickAllocationsAttempted : {}", statsFirstCascade.contextStats.brickAllocationsAttempted).c_str());
+	ImGui::Text(std::format("	brickAllocationsSucceeded : {}", statsFirstCascade.contextStats.brickAllocationsSucceeded).c_str());
+	ImGui::Text(std::format("	bricksCleared : {}", statsFirstCascade.contextStats.bricksCleared).c_str());
+	ImGui::Text(std::format("	bricksMerged : {}", statsFirstCascade.contextStats.bricksMerged).c_str());
+	ImGui::Text(std::format("	freeBricks : {}", statsFirstCascade.contextStats.freeBricks).c_str());
 }
 
 void Raytracing::InitD3D12(IDXGIAdapter* a_adapter)
@@ -82,10 +111,10 @@ void Raytracing::InitBrixelizer()
 	initializationParameters.flags = FFX_BRIXELIZER_CONTEXT_FLAG_ALL_DEBUG;
 	initializationParameters.numCascades = NUM_BRIXELIZER_CASCADES;
 
-	float voxelSize = 0.2f;
+	float voxelSize = 10.f;
 	for (uint32_t i = 0; i < NUM_BRIXELIZER_CASCADES; ++i) {
 		FfxBrixelizerCascadeDescription* cascadeDesc = &initializationParameters.cascadeDescs[i];
-		cascadeDesc->flags = FFX_BRIXELIZER_CASCADE_DYNAMIC;
+		cascadeDesc->flags = FfxBrixelizerCascadeFlag(FFX_BRIXELIZER_CASCADE_DYNAMIC | FFX_BRIXELIZER_CASCADE_STATIC);
 		cascadeDesc->voxelSize = voxelSize;
 		voxelSize *= 2.0f;
 	}
@@ -354,7 +383,7 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 
 			instanceDesc.vertexBuffer = GetBufferIndex(*vertexBuffer);
 			instanceDesc.vertexStride = rendererData->vertexDesc.GetSize();
-			instanceDesc.vertexBufferOffset = 0;
+			instanceDesc.vertexBufferOffset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_POSITION);
 			instanceDesc.vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
 			instanceDesc.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
 
@@ -362,11 +391,9 @@ void Raytracing::UpdateGeometry(RE::BSGeometry* a_geometry)
 			instanceDesc.outInstanceID = &outInstanceID;
 			instanceDesc.flags = FFX_BRIXELIZER_INSTANCE_FLAG_NONE;
 
-			// Create instances for a given context with the ffxBrixelizerCreateInstance function.
-			// Static instances are persistent across frames. Dynamic instances are discarded after a single frame.
-			FfxErrorCode error = ffxBrixelizerCreateInstances(&brixelizerContext, &instanceDesc, 1);
-			if (error != FFX_OK)
-				logger::critical("error");
+			instanceDesc.maxCascade = NUM_BRIXELIZER_CASCADES - 1;
+
+			instanceDescs.push_back(instanceDesc);
 		}
 	}
 }
@@ -520,14 +547,16 @@ FfxBrixelizerDebugVisualizationDescription Raytracing::GetDebugVisualization()
 {
 	FfxBrixelizerDebugVisualizationDescription debugVisDesc{};
 
-	auto cameraViewInverseAdjusted = frameBufferCached.CameraViewInverse;
+	auto cameraViewInverseAdjusted = frameBufferCached.CameraViewInverse.Transpose();
 	cameraViewInverseAdjusted._41 += frameBufferCached.CameraPosAdjust.x;
 	cameraViewInverseAdjusted._42 += frameBufferCached.CameraPosAdjust.y;
 	cameraViewInverseAdjusted._43 += frameBufferCached.CameraPosAdjust.z;
-	memcpy(&debugVisDesc.inverseViewMatrix, &frameBufferCached.CameraViewInverse, sizeof(debugVisDesc.inverseViewMatrix));
-	memcpy(&debugVisDesc.inverseProjectionMatrix, &frameBufferCached.CameraProjInverse, sizeof(debugVisDesc.inverseProjectionMatrix));
+	auto cameraProjInverse = frameBufferCached.CameraProjInverse.Transpose();
 
-	debugVisDesc.debugState = FFX_BRIXELIZER_TRACE_DEBUG_MODE_GRAD;
+	memcpy(&debugVisDesc.inverseViewMatrix, &cameraViewInverseAdjusted, sizeof(debugVisDesc.inverseViewMatrix));
+	memcpy(&debugVisDesc.inverseProjectionMatrix, &cameraProjInverse, sizeof(debugVisDesc.inverseProjectionMatrix));
+
+	debugVisDesc.debugState = m_DebugMode;
 
 	uint32_t cascadeIndexOffset = 0;
 
@@ -550,12 +579,11 @@ void Raytracing::PopulateCommandList()
 	DX::ThrowIfFailed(commandList->Reset(commandAllocator.get(), nullptr));
 
 	// Transition all resources to resource state expected by Brixelizer
-	TransitionResources(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	// TransitionResources(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
 	FfxBrixelizerDebugVisualizationDescription debugVisDesc = GetDebugVisualization();
 
 	// update desc
-	auto eyePosition = Util::GetEyePosition(0);
 	size_t scratchBufferSize = 0;
 
 	FfxBrixelizerPopulateDebugAABBsFlags populateDebugAABBFlags = FFX_BRIXELIZER_POPULATE_AABBS_NONE;
@@ -568,7 +596,7 @@ void Raytracing::PopulateCommandList()
 
 	FfxBrixelizerUpdateDescription updateDesc = {
 		.frameIndex = RE::BSGraphics::State::GetSingleton()->frameCount,
-		.sdfCenter = { eyePosition.x, eyePosition.y, eyePosition.z },
+		.sdfCenter = { frameBufferCached.CameraPosAdjust.x, frameBufferCached.CameraPosAdjust.y, frameBufferCached.CameraPosAdjust.z },
 		.populateDebugAABBsFlags = populateDebugAABBFlags,
 		.debugVisualizationDesc = &debugVisDesc,
 		.maxReferences = 32 * (1 << 20),
@@ -591,6 +619,9 @@ void Raytracing::PopulateCommandList()
 	if (error != FFX_OK)
 		logger::critical("error");
 
+	if (scratchBufferSize >= GPU_SCRATCH_BUFFER_SIZE)
+		logger::critical("Required Brixelizer scratch memory size larger than available GPU buffer.");
+
 	FfxResource ffxGpuScratchBuffer = ffxGetResourceDX12(gpuScratchBuffer.get(), ffxGetResourceDescriptionDX12(gpuScratchBuffer.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 	ffxGpuScratchBuffer.description.stride = sizeof(uint32_t);
 
@@ -600,7 +631,7 @@ void Raytracing::PopulateCommandList()
 		logger::critical("error");
 
 	// Transition all resources to the Non-Pixel Shader Resource state after the Brixelizer
-	TransitionResources(D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+	// TransitionResources(D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
 	DX::ThrowIfFailed(commandList->Close());
 }
@@ -611,6 +642,15 @@ void Raytracing::FrameUpdate()
 
 	if (debugAvailable && debugCapture)
 		ga->BeginCapture();
+
+	static std::once_flag f = {};
+	std::call_once(f, [&]() {
+		if (instanceDescs.size()) {
+			FfxErrorCode errorCode = ffxBrixelizerCreateInstances(&brixelizerContext, instanceDescs.data(), static_cast<uint32_t>(instanceDescs.size()));
+			if (errorCode != FFX_OK)
+				logger::critical("Error {:x}", *(uint32_t*)(&errorCode));
+		}
+	});
 
 	PopulateCommandList();
 
@@ -623,5 +663,7 @@ void Raytracing::FrameUpdate()
 	// Wait for the GPU to finish executing the commands
 	WaitForD3D12();
 
+	instanceDescs.clear();
+	instanceIds.clear();
 	debugCapture = false;
 }
