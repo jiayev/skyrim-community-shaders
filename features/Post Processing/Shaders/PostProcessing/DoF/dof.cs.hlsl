@@ -9,6 +9,7 @@ SamplerState DepthSampler : register(s1);
 
 Texture2D<float4> TexColor : register(t0);
 Texture2D<float> TexPreviousFocus : register(t1);
+Texture2D<float> DepthTexture : register(t2);
 
 cbuffer DoFCB : register(b1)
 {
@@ -41,7 +42,8 @@ struct FOCUSINFO
 
 float GetDepth(float2 uv)
 {
-    return SharedData::DepthTexture.SampleLevel(DepthSampler, uv, 0).x;
+    float depth = DepthTexture.SampleLevel(DepthSampler, uv, 0);
+    return depth;
 }
 
 float PreviousFocus()
@@ -91,9 +93,6 @@ float CalculateBlurDiscSize(FOCUSINFO focusInfo)
 [numthreads(1, 1, 1)]
 void CS_UpdateFocus(uint2 DTid : SV_DispatchThreadID)
 {
-    if (DTid.x >= (uint)Width || DTid.y >= (uint)Height)
-        return;
-
     float depth = AutoFocus? GetDepth(FocusCoord): ManualFocusPlane / 1000.0f;
 
     RWFocus[DTid] = lerp(TexPreviousFocus.SampleLevel(DepthSampler, (0.5f, 0.5f), 0), depth, TransitionSpeed);
@@ -113,6 +112,7 @@ void CS_CalculateCoC(uint2 DTid : SV_DispatchThreadID)
     FillFocusInfoData(focusInfo);
 
     float coc = CalculateBlurDiscSize(focusInfo);
-    RWTexCoC[DTid] = coc;
+    // RWTexCoC[DTid] = coc;
+    RWTexCoC[DTid] = GetDepth(uv);
 }
 

@@ -21,7 +21,7 @@ void DoF::DrawSettings()
 {
     ImGui::Checkbox("Auto Focus", &settings.AutoFocus);
 
-    if (!settings.AutoFocus) {
+    if (settings.AutoFocus) {
         ImGui::SliderFloat("Transition Speed", &settings.TransitionSpeed, 0.1f, 1.0f, "%.2f");
 
         ImGui::SliderFloat2("Focus Point", &settings.FocusCoord.x, 0.0f, 1.0f, "%.2f");
@@ -72,7 +72,7 @@ void DoF::SetupResources()
 
 	logger::debug("Creating buffers...");
 	{
-        dofCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<DoFCB>());
+        dofCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<DoFCB>());
     }
 
     logger::debug("Creating 2D textures...");
@@ -187,7 +187,11 @@ void DoF::Draw(TextureInfo& inout_tex)
 {
     auto state = State::GetSingleton();
 	auto context = state->context;
+    auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+    auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
     float2 res = { (float)texOutput->desc.Width, (float)texOutput->desc.Height };
+
     state->BeginPerfEvent("Depth of Field");
 
     DoFCB dofData = {
@@ -205,7 +209,7 @@ void DoF::Draw(TextureInfo& inout_tex)
     };
     dofCB->Update(dofData);
 
-    std::array<ID3D11ShaderResourceView*, 2> srvs = { inout_tex.srv, texPreFocus->srv.get() };
+    std::array<ID3D11ShaderResourceView*, 3> srvs = { inout_tex.srv, texPreFocus->srv.get(), depth.depthSRV };
     std::array<ID3D11UnorderedAccessView*, 3> uavs = { texOutput->uav.get(), texFocus->uav.get(), texCoC->uav.get() };
     std::array<ID3D11SamplerState*, 2> samplers = { colorSampler.get(), depthSampler.get() };
     auto cb = dofCB->CB();
@@ -224,6 +228,7 @@ void DoF::Draw(TextureInfo& inout_tex)
     {
         srvs.at(0) = inout_tex.srv;
         srvs.at(1) = texPreFocus->srv.get();
+        srvs.at(2) = depth.depthSRV;
         uavs.at(1) = texFocus->uav.get();
 
         context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
@@ -234,11 +239,13 @@ void DoF::Draw(TextureInfo& inout_tex)
     }
 
     resetViews();
+    context->CopyResource(texPreFocus->resource.get(), texFocus->resource.get());
 
     // Calculate CoC
     {
         srvs.at(0) = inout_tex.srv;
         srvs.at(1) = texPreFocus->srv.get();
+        srvs.at(2) = depth.depthSRV;
         uavs.at(2) = texCoC->uav.get();
 
         context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
