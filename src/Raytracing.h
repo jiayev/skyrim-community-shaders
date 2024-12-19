@@ -17,7 +17,6 @@
 #include "Buffer.h"
 #include "State.h"
 #include <FidelityFX/host/backends/dx12/d3dx12.h>
-#include <RE/A/AnimationObjects.h>
 
 interface DECLSPEC_UUID("9f251514-9d4d-4902-9d60-18988ab7d4b5") DECLSPEC_NOVTABLE
 
@@ -145,12 +144,6 @@ public:
 	eastl::hash_map<ID3D11Buffer*, BufferData> vertexBuffers;
 	eastl::hash_map<ID3D11Buffer*, BufferData> indexBuffers;
 
-	struct LODMode
-	{
-		std::uint8_t index: 7;
-		bool singleLevel: 1;
-	};
-
 	bool visibleState = true;
 
 	struct InstanceData
@@ -276,11 +269,11 @@ public:
 		{
 			//stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 
-			//if (REL::Module::IsAE()) {
-			//	stl::write_vfunc<0x31, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
-			//} else {
-			//	stl::write_vfunc<0x30, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
-			//}
+			if (REL::Module::IsAE()) {
+				stl::write_vfunc<0x31, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
+			} else {
+				stl::write_vfunc<0x30, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
+			}
 
 			//stl::write_vfunc<0x16, NiCullingProcess_Process1>(RE::VTABLE_NiCullingProcess[0]);
 			//	stl::write_vfunc<0x16, BSCullingProcess_Process1>(RE::VTABLE_BSCullingProcess[0]);

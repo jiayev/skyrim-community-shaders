@@ -233,9 +233,13 @@ void Raytracing::BSTriShape_UpdateWorldData(RE::BSTriShape* This, RE::NiUpdateDa
 {
 	std::lock_guard lck{ mutex };
 
+	RE::NiPoint3 pointA = This->world * RE::NiPoint3{ 1.0f, 1.0f, 1.0f };
+
 	Hooks::BSTriShape_UpdateWorldData::func(This, a_data);
 
-	if (std::memcmp(&This->world, &This->previousWorld, sizeof(This->world)) != 0) {
+	RE::NiPoint3 pointB = This->world * RE::NiPoint3{ 1.0f, 1.0f, 1.0f };
+
+	if (pointA.GetDistance(pointB) > 0.1f) {
 		auto it = instances.find(This);
 		if (it != instances.end()) {
 			auto& instanceData = (*it).second;
