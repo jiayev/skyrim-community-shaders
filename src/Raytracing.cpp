@@ -230,6 +230,8 @@ Raytracing::RenderTargetDataD3D12 Raytracing::ConvertD3D11TextureToD3D12(RE::BSG
 
 void Raytracing::BSTriShape_UpdateWorldData(RE::BSTriShape* This, RE::NiUpdateData* a_data)
 {
+	std::lock_guard lck{ mutex };
+
 	Hooks::BSTriShape_UpdateWorldData::func(This, a_data);
 
 	if (std::memcmp(&This->world, &This->previousWorld, sizeof(This->world)) != 0) {
@@ -325,153 +327,142 @@ DirectX::XMMATRIX GetXMFromNiTransform(const RE::NiTransform& Transform)
 	return temp;
 }
 
-void Raytracing::UpdateGeometry(RE::BSRenderPass* a_pass)
+void Raytracing::AddInstance(RE::BSTriShape* a_geometry)
 {
-	auto geometry = a_pass->geometry->AsTriShape();
-	if (!geometry)
+	const auto& transform = a_geometry->world;
+	const auto& modelData = a_geometry->GetModelData().modelBound;
+	if (a_geometry->worldBound.radius == 0)
 		return;
 
-	if (Deferred::GetSingleton()->inWorld) {
-		auto it = instances.find(geometry);
+	auto effect = a_geometry->GetGeometryRuntimeData().properties[RE::BSGeometry::States::kEffect];
+	auto lightingShader = netimmerse_cast<RE::BSLightingShaderProperty*>(effect.get());
 
-		if (it != instances.end()) {
-			auto instanceData = (*it).second;
-			auto worldUpdate = std::memcmp(&geometry->world, &geometry->previousWorld, sizeof(geometry->world)) != 0;
-			auto lodUpdate = std::memcmp(&a_pass->LODMode, &instanceData.LODMode, sizeof(a_pass->LODMode)) != 0;
+	if (!lightingShader)
+		return;
 
-			if (lodUpdate) {
-				auto error = ffxBrixelizerDeleteInstances(&brixelizerContext, &instanceData.instanceID, 1);
-				if (error != FFX_OK)
-					logger::critical("error");
-				instances.erase(it);
-				it = instances.end();
-			} else if (worldUpdate) {
-				auto error = ffxBrixelizerDeleteInstances(&brixelizerContext, &instanceData.instanceID, 1);
-				if (error != FFX_OK)
-					logger::critical("error");
-				instances.erase(it);
-				it = instances.end();
-			}
+	if (!lightingShader->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kZBufferWrite, RE::BSShaderProperty::EShaderPropertyFlag::kZBufferTest))
+		return;
+
+	if (lightingShader->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kLODObjects, RE::BSShaderProperty::EShaderPropertyFlag::kLODLandscape, RE::BSShaderProperty::EShaderPropertyFlag::kHDLODObjects))
+		return;
+
+	if (lightingShader->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSkinned))
+		return;
+
+	// TODO: FIX THIS
+	if (lightingShader->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape, RE::BSShaderProperty::EShaderPropertyFlag::kMultipleTextures, RE::BSShaderProperty::EShaderPropertyFlag::kMultiIndexSnow))
+		return;
+
+	const RE::NiPoint3 c = { modelData.center.x, modelData.center.y, modelData.center.z };
+	const RE::NiPoint3 r = { modelData.radius, modelData.radius, modelData.radius };
+	const RE::NiPoint3 aabbMinVec = c - r;
+	const RE::NiPoint3 aabbMaxVec = c + r;
+	const RE::NiPoint3 extents = aabbMaxVec - aabbMinVec;
+
+	const RE::NiPoint3 aabbCorners[8] = {
+		aabbMinVec + RE::NiPoint3(0.0f, 0.0f, 0.0f),
+		aabbMinVec + RE::NiPoint3(extents.x, 0.0f, 0.0f),
+		aabbMinVec + RE::NiPoint3(0.0f, 0.0f, extents.z),
+		aabbMinVec + RE::NiPoint3(extents.x, 0.0f, extents.z),
+		aabbMinVec + RE::NiPoint3(0.0f, extents.y, 0.0f),
+		aabbMinVec + RE::NiPoint3(extents.x, extents.y, 0.0f),
+		aabbMinVec + RE::NiPoint3(0.0f, extents.y, extents.z),
+		aabbMinVec + RE::NiPoint3(extents.x, extents.y, extents.z),
+	};
+
+	float4 minExtents = float4(FLT_MAX, FLT_MAX, FLT_MAX, FLT_MAX);
+	float4 maxExtents = float4(-FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX);
+
+	for (uint i = 0; i < 8; i++) {
+		auto transformed = transform * aabbCorners[i];
+		float4 transformedF = { transformed.x, transformed.y, transformed.z, 0 };
+
+		minExtents = (float4)_mm_min_ps(minExtents, transformedF);
+		maxExtents = (float4)_mm_max_ps(maxExtents, transformedF);
+	}
+
+	auto rendererData = a_geometry->GetGeometryRuntimeData().rendererData;
+
+	if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+		return;
+
+	BufferData* vertexBuffer;
+	BufferData* indexBuffer;
+
+	{
+		auto it2 = vertexBuffers.find((ID3D11Buffer*)rendererData->vertexBuffer);
+		if (it2 == vertexBuffers.end())
+			return;
+		vertexBuffer = &it2->second;
+	}
+
+	{
+		auto it2 = indexBuffers.find((ID3D11Buffer*)rendererData->indexBuffer);
+		if (it2 == indexBuffers.end())
+			return;
+		indexBuffer = &it2->second;
+	}
+
+	FfxBrixelizerInstanceDescription instanceDesc = {};
+
+	{
+		instanceDesc.aabb.min[0] = minExtents.x;
+		instanceDesc.aabb.max[0] = maxExtents.x;
+
+		instanceDesc.aabb.min[1] = minExtents.y;
+		instanceDesc.aabb.max[1] = maxExtents.y;
+
+		instanceDesc.aabb.min[2] = minExtents.z;
+		instanceDesc.aabb.max[2] = maxExtents.z;
+	}
+
+	float4x4 xmmTransform = GetXMFromNiTransform(transform);
+
+	for (uint row = 0; row < 3; ++row) {
+		for (uint col = 0; col < 4; ++col) {
+			instanceDesc.transform[row * 4 + col] = xmmTransform.m[col][row];
 		}
+	}
 
-		if (it == instances.end()) {
-			if (a_pass->shaderProperty->flags.none(RE::BSShaderProperty::EShaderPropertyFlag::kZBufferWrite))
-				return;
-			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kLODLandscape))
-				return;
-			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kLODObjects))
-				return;
-			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiIndexSnow))
-				return;
-			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape))
-				return;
-			if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSkinned))
-				return;
-			const auto& transform = geometry->world;
-			const auto& modelData = geometry->GetModelData().modelBound;
-			if (geometry->worldBound.radius == 0)
-				return;
+	instanceDesc.indexFormat = FFX_INDEX_TYPE_UINT16;
+	instanceDesc.indexBuffer = GetBufferIndex(*indexBuffer);
+	instanceDesc.indexBufferOffset = 0;
+	instanceDesc.triangleCount = a_geometry->GetTrishapeRuntimeData().triangleCount;
 
-			const RE::NiPoint3 c = { modelData.center.x, modelData.center.y, modelData.center.z };
-			const RE::NiPoint3 r = { modelData.radius, modelData.radius, modelData.radius };
-			const RE::NiPoint3 aabbMinVec = c - r;
-			const RE::NiPoint3 aabbMaxVec = c + r;
-			const RE::NiPoint3 extents = aabbMaxVec - aabbMinVec;
+	instanceDesc.vertexBuffer = GetBufferIndex(*vertexBuffer);
+	instanceDesc.vertexStride = ((*(uint64_t*)&rendererData->vertexDesc) << 2) & 0x3C;
+	instanceDesc.vertexBufferOffset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_POSITION);
+	instanceDesc.vertexCount = a_geometry->GetTrishapeRuntimeData().vertexCount;
+	instanceDesc.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
 
-			const RE::NiPoint3 aabbCorners[8] = {
-				aabbMinVec + RE::NiPoint3(0.0f, 0.0f, 0.0f),
-				aabbMinVec + RE::NiPoint3(extents.x, 0.0f, 0.0f),
-				aabbMinVec + RE::NiPoint3(0.0f, 0.0f, extents.z),
-				aabbMinVec + RE::NiPoint3(extents.x, 0.0f, extents.z),
-				aabbMinVec + RE::NiPoint3(0.0f, extents.y, 0.0f),
-				aabbMinVec + RE::NiPoint3(extents.x, extents.y, 0.0f),
-				aabbMinVec + RE::NiPoint3(0.0f, extents.y, extents.z),
-				aabbMinVec + RE::NiPoint3(extents.x, extents.y, extents.z),
-			};
+	InstanceData instanceData{};
+	instanceDesc.outInstanceID = &instanceData.instanceID;
+	instanceDesc.flags = FFX_BRIXELIZER_INSTANCE_FLAG_NONE;
 
-			float4 minExtents = float4(FLT_MAX, FLT_MAX, FLT_MAX, FLT_MAX);
-			float4 maxExtents = float4(-FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX);
+	FfxErrorCode error = ffxBrixelizerCreateInstances(&brixelizerContext, &instanceDesc, 1);
+	if (error != FFX_OK)
+		logger::critical("error");
 
-			for (uint i = 0; i < 8; i++) {
-				auto transformed = transform * aabbCorners[i];
-				float4 transformedF = { transformed.x, transformed.y, transformed.z, 0 };
+	instances.insert({ a_geometry, instanceData });
+}
 
-				minExtents = (float4)_mm_min_ps(minExtents, transformedF);
-				maxExtents = (float4)_mm_max_ps(maxExtents, transformedF);
-			}
+void Raytracing::SeenInstance(RE::BSTriShape* a_geometry)
+{
+	std::lock_guard lck{ mutex };
 
-			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-
-			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-				return;
-
-			BufferData* vertexBuffer;
-			BufferData* indexBuffer;
-
-			{
-				auto it2 = vertexBuffers.find((ID3D11Buffer*)rendererData->vertexBuffer);
-				if (it2 == vertexBuffers.end())
-					return;
-				vertexBuffer = &it2->second;
-			}
-
-			{
-				auto it2 = indexBuffers.find((ID3D11Buffer*)rendererData->indexBuffer);
-				if (it2 == indexBuffers.end())
-					return;
-				indexBuffer = &it2->second;
-			}
-
-			FfxBrixelizerInstanceDescription instanceDesc = {};
-
-			{
-				instanceDesc.aabb.min[0] = minExtents.x;
-				instanceDesc.aabb.max[0] = maxExtents.x;
-
-				instanceDesc.aabb.min[1] = minExtents.y;
-				instanceDesc.aabb.max[1] = maxExtents.y;
-
-				instanceDesc.aabb.min[2] = minExtents.z;
-				instanceDesc.aabb.max[2] = maxExtents.z;
-			}
-
-			float4x4 xmmTransform = GetXMFromNiTransform(transform);
-
-			for (uint row = 0; row < 3; ++row) {
-				for (uint col = 0; col < 4; ++col) {
-					instanceDesc.transform[row * 4 + col] = xmmTransform.m[col][row];
-				}
-			}
-
-			instanceDesc.indexFormat = FFX_INDEX_TYPE_UINT16;
-			instanceDesc.indexBuffer = GetBufferIndex(*indexBuffer);
-			instanceDesc.indexBufferOffset = 0;
-			instanceDesc.triangleCount = geometry->GetTrishapeRuntimeData().triangleCount;
-
-			instanceDesc.vertexBuffer = GetBufferIndex(*vertexBuffer);
-			instanceDesc.vertexStride = ((*(uint64_t*)&rendererData->vertexDesc) << 2) & 0x3C;
-			instanceDesc.vertexBufferOffset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_POSITION);
-			instanceDesc.vertexCount = geometry->GetTrishapeRuntimeData().vertexCount;
-			instanceDesc.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
-
-			InstanceData instanceData{};
-			instanceDesc.outInstanceID = &instanceData.instanceID;
-			instanceDesc.flags = FFX_BRIXELIZER_INSTANCE_FLAG_NONE;
-
-			FfxErrorCode error = ffxBrixelizerCreateInstances(&brixelizerContext, &instanceDesc, 1);
-			if (error != FFX_OK)
-				logger::critical("error");
-
-			instanceData.LODMode.index = a_pass->LODMode.index;
-			instanceData.LODMode.singleLevel = a_pass->LODMode.singleLevel;
-
-			instances.insert({ geometry, instanceData });
-		}
+	auto it = instances.find(a_geometry);
+	if (it != instances.end()) {
+		auto& instanceData = (*it).second;
+		instanceData.state = visibleState;
+	} else {
+		queuedInstances.insert(a_geometry);
 	}
 }
 
-void Raytracing::RemoveGeometry(RE::BSGeometry* This)
+void Raytracing::RemoveInstance(RE::BSTriShape* This)
 {
+	std::lock_guard lck{ mutex };
+
 	auto it = instances.find(This);
 	if (it != instances.end()) {
 		auto& instanceData = (*it).second;
@@ -656,7 +647,7 @@ void Raytracing::PopulateCommandList()
 	DX::ThrowIfFailed(commandList->Reset(commandAllocator.get(), nullptr));
 
 	// Transition all resources to resource state expected by Brixelizer
-	// TransitionResources(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	TransitionResources(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
 	FfxBrixelizerDebugVisualizationDescription debugVisDesc = GetDebugVisualization();
 
@@ -708,24 +699,40 @@ void Raytracing::PopulateCommandList()
 		logger::critical("error");
 
 	// Transition all resources to the Non-Pixel Shader Resource state after the Brixelizer
-	// TransitionResources(D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+	TransitionResources(D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
 	DX::ThrowIfFailed(commandList->Close());
 }
 
+
 void Raytracing::FrameUpdate()
 {
+	std::lock_guard lck{ mutex };
+
 	WaitForD3D11();
 
 	if (debugAvailable && debugCapture)
 		ga->BeginCapture();
 
-	//if (instanceDescs.size()) {
-	//	FfxErrorCode errorCode = ffxBrixelizerCreateInstances(&brixelizerContext, instanceDescs.data(), static_cast<uint32_t>(instanceDescs.size()));
-	//	if (errorCode != FFX_OK)
-	//		logger::critical("Error {:x}", *(uint32_t*)(&errorCode));
-	//	instanceDescs.clear();
-	//}
+	for (auto it = instances.begin(); it != instances.end();) {
+		if (it->second.state != visibleState) {
+			auto error = ffxBrixelizerDeleteInstances(&brixelizerContext, &it->second.instanceID, 1);
+			if (error != FFX_OK) 
+				logger::critical("error");
+	
+			it = instances.erase(it);
+
+		} else {
+			++it;
+		}
+	}
+
+	for (auto& queuedInstance : queuedInstances)
+	{
+		AddInstance(queuedInstance);
+	}
+
+	queuedInstances.clear();
 
 	PopulateCommandList();
 
@@ -739,4 +746,6 @@ void Raytracing::FrameUpdate()
 	WaitForD3D12();
 
 	debugCapture = false;
+
+	visibleState = !visibleState;
 }

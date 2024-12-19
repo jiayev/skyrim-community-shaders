@@ -312,7 +312,8 @@ public:
 			static void thunk(RE::NiNode* This)
 			{
 				GetSingleton()->CleanupParticleLights(This);
-				Raytracing::GetSingleton()->RemoveGeometry((RE::BSGeometry*)This);
+				if (auto triShape = This->AsTriShape())
+					Raytracing::GetSingleton()->RemoveInstance(triShape);
 
 				func(This);
 			}
