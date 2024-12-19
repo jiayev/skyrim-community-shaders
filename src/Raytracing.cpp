@@ -343,7 +343,7 @@ struct int4
 float4x4 GetBoneTransformMatrix(float4 bonePositions[240], float4 boneIndices, float4 pivot, float4 boneWeights)
 {
 	int4 boneIndicesInt;
-	
+
 	boneIndices *= 765.01f;
 
 	boneIndicesInt = { (int)boneIndices.x, (int)boneIndices.y, (int)boneIndices.z, (int)boneIndices.w };
@@ -593,9 +593,7 @@ struct ID3D11Buffer_Release
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
-
 bool hooked = false;
-
 
 void Raytracing::RegisterVertexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer)
 {
