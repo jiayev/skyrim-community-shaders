@@ -1,8 +1,8 @@
 #pragma once
 
 #include <eastl/set.h>
-#include <unordered_set>
 #include <shared_mutex>
+#include <unordered_set>
 
 #include <d3d12.h>
 
@@ -166,7 +166,6 @@ public:
 
 	void UpdateGeometry(RE::BSRenderPass* a_pass);
 
-
 	void CheckInstance(RE::BSTriShape* geometry, InstanceData& instanceData);
 	void AddInstance(RE::BSTriShape* geometry);
 	void SeenInstance(RE::BSTriShape* geometry);
@@ -276,7 +275,7 @@ public:
 			//}
 
 			//stl::write_vfunc<0x16, NiCullingProcess_Process1>(RE::VTABLE_NiCullingProcess[0]);
-		//	stl::write_vfunc<0x16, BSCullingProcess_Process1>(RE::VTABLE_BSCullingProcess[0]);
+			//	stl::write_vfunc<0x16, BSCullingProcess_Process1>(RE::VTABLE_BSCullingProcess[0]);
 			stl::write_vfunc<0x16, BSGeometryListCullingProcess_Process1>(RE::VTABLE_BSGeometryListCullingProcess[0]);
 
 			//	stl::detour_thunk<NiNode_Destroy>(REL::RelocationID(68937, 70288));

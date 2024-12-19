@@ -704,7 +704,6 @@ void Raytracing::PopulateCommandList()
 	DX::ThrowIfFailed(commandList->Close());
 }
 
-
 void Raytracing::FrameUpdate()
 {
 	std::lock_guard lck{ mutex };
@@ -717,9 +716,9 @@ void Raytracing::FrameUpdate()
 	for (auto it = instances.begin(); it != instances.end();) {
 		if (it->second.state != visibleState) {
 			auto error = ffxBrixelizerDeleteInstances(&brixelizerContext, &it->second.instanceID, 1);
-			if (error != FFX_OK) 
+			if (error != FFX_OK)
 				logger::critical("error");
-	
+
 			it = instances.erase(it);
 
 		} else {
@@ -727,8 +726,7 @@ void Raytracing::FrameUpdate()
 		}
 	}
 
-	for (auto& queuedInstance : queuedInstances)
-	{
+	for (auto& queuedInstance : queuedInstances) {
 		AddInstance(queuedInstance);
 	}
 
