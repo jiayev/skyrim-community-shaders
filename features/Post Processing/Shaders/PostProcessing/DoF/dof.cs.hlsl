@@ -56,8 +56,10 @@ struct DISCBLURINFO
 float GetDepth(float2 uv)
 {
     float depth = DepthTexture.SampleLevel(DepthSampler, uv, 0);
-    float linearDepth = SharedData::GetScreenDepth(depth);
-    return depth * 2.0f;
+    float zNear = 0.01f;
+    float zFar = 1.0f;
+    depth = zNear * zFar / (zFar + depth * (zNear - zFar));
+    return depth;
 }
 
 float PreviousFocus()
@@ -144,7 +146,7 @@ float3 AccentuateWhites(float3 fragment)
 {
     // apply small tow to the incoming fragment, so the whitepoint gets slightly lower than max.
     // De-tonemap color (reinhard). Thanks Marty :) 
-    fragment = pow(abs(ConeOverlap(fragment)), 2.2);
+    // fragment = pow(abs(ConeOverlap(fragment)), 1);
     return fragment / max((1.001 - (HighlightBoost * fragment)), 0.001);
 }
 
@@ -199,46 +201,6 @@ float4 PerformPreDiscBlur(DISCBLURINFO blurInfo, Texture2D source, SamplerState 
     
     float4 fragment = source.SampleLevel(samp, blurInfo.texcoord, 0);
     fragment.rgb = AccentuateWhites(fragment.rgb);
-    
-    float signedFragmentRadius = TexCoCInput.SampleLevel(DepthSampler, blurInfo.texcoord, 0).x * radiusFactor;
-    float absoluteFragmentRadius = abs(signedFragmentRadius);
-    bool isNearPlaneFragment = signedFragmentRadius < 0;
-    float blurFactorToUse = 1.0f;
-    // Substract 2 as we blur on a smaller range. Don't limit the rings based on radius here, as that will kill the pre-blur.
-    float numberOfRings = max(blurInfo.numberOfRings-2, 1);
-    float4 average = absoluteFragmentRadius == 0 ? fragment : float4(fragment.rgb * absoluteFragmentRadius, absoluteFragmentRadius);
-    float2 pointOffset = float2(0,0);
-    // pre blur blurs near plane fragments with near plane samples and far plane fragments with far plane samples [Jimenez2014].
-    float2 ringRadiusDeltaCoords = float2(1.0f / Width, 1.0f / Height) 
-                                            * ((isNearPlaneFragment ? blurInfo.nearPlaneMaxBlurInPixels : blurInfo.farPlaneMaxBlurInPixels) *  absoluteFragmentRadius) 
-                                            * rcp((numberOfRings-1) + (numberOfRings==1));
-    float pointsOnRing = pointsFirstRing;
-    float2 currentRingRadiusCoords = ringRadiusDeltaCoords;
-    float cocPerRing = (signedFragmentRadius * blurFactorToUse) / numberOfRings;
-    for(float ringIndex = 0; ringIndex < numberOfRings; ringIndex++)
-    {
-        float anglePerPoint = 6.28318530717958 / pointsOnRing;
-        float angle = anglePerPoint;
-        float ringDistance = cocPerRing * ringIndex;
-        for(float pointNumber = 0; pointNumber < pointsOnRing; pointNumber++)
-        {
-            sincos(angle, pointOffset.y, pointOffset.x);
-            float4 tapCoords = float4(blurInfo.texcoord + (pointOffset * currentRingRadiusCoords), 0, 0);
-            float signedSampleRadius = TexCoCInput.SampleLevel(DepthSampler, tapCoords.xy, 0).x * radiusFactor;
-            float absoluteSampleRadius = abs(signedSampleRadius);
-            float isSamePlaneAsFragment = ((signedSampleRadius > 0 && !isNearPlaneFragment) || (signedSampleRadius <= 0 && isNearPlaneFragment));
-            float weight = CalculateSampleWeight(absoluteSampleRadius * blurFactorToUse, ringDistance) * isSamePlaneAsFragment * 
-                            (absoluteFragmentRadius - absoluteSampleRadius < 0.001);
-            float3 tap = source.SampleLevel(samp, tapCoords.xy, 0).rgb;
-            average.rgb += AccentuateWhites(tap.rgb) * weight;
-            average.w += weight;
-            angle+=anglePerPoint;
-        }
-        pointsOnRing+=pointsFirstRing;
-        currentRingRadiusCoords += ringRadiusDeltaCoords;
-    }
-    fragment.rgb = average.rgb/(average.w + (average.w==0));
-
     return fragment;
 }
 
@@ -416,7 +378,7 @@ void CS_Blur(uint2 DTid : SV_DispatchThreadID)
     DISCBLURINFO blurInfo;
     blurInfo.texcoord = (DTid.xy + 0.5f) / float2(Width, Height);
     blurInfo.numberOfRings = round(BlurQuality);
-    float pixelSizeLength = length(float2(1.0f / Width, 1.0f / Height));
+    float pixelSizeLength = length(float2(1.0f / Width, 1.0f / Height)) * 0.5f;
     blurInfo.farPlaneMaxBlurInPixels = (1.0f / 100.0f) / pixelSizeLength;
     blurInfo.nearPlaneMaxBlurInPixels = (1.0f / 100.0f) / pixelSizeLength;
     blurInfo.cocFactorPerPixel = pixelSizeLength * blurInfo.farPlaneMaxBlurInPixels;	// not needed for near plane.
@@ -431,7 +393,7 @@ void CS_FarBlur(uint2 DTid : SV_DispatchThreadID)
     DISCBLURINFO blurInfo;
     blurInfo.texcoord = (DTid.xy + 0.5f) / float2(Width, Height);
     blurInfo.numberOfRings = round(BlurQuality);
-    float pixelSizeLength = length(float2(1.0f / Width, 1.0f / Height));
+    float pixelSizeLength = length(float2(1.0f / Width, 1.0f / Height)) * 0.5f;
     blurInfo.farPlaneMaxBlurInPixels = (1.0f / 100.0f) / pixelSizeLength;
     blurInfo.nearPlaneMaxBlurInPixels = (1.0f / 100.0f) / pixelSizeLength;
     blurInfo.cocFactorPerPixel = pixelSizeLength * blurInfo.farPlaneMaxBlurInPixels;	// not needed for near plane.

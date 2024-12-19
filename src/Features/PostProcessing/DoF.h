@@ -20,7 +20,7 @@ struct DoF : public PostProcessFeature
         float BlurQuality = 7.0f;
         float NearFarDistanceCompensation = 1.0f;
         float BokehBusyFactor = 0.5f;
-        float HighlightBoost = 0.9f;
+        float HighlightBoost = 0.0f;
     } settings;
 
     struct alignas(16) DoFCB
