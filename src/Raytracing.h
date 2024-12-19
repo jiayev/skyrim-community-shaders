@@ -1,8 +1,8 @@
 #pragma once
 
 #include <eastl/set.h>
-#include <unordered_set>
 #include <shared_mutex>
+#include <unordered_set>
 
 #include <d3d12.h>
 
@@ -283,7 +283,7 @@ public:
 			//}
 
 			//stl::write_vfunc<0x16, NiCullingProcess_Process1>(RE::VTABLE_NiCullingProcess[0]);
-		//	stl::write_vfunc<0x16, BSCullingProcess_Process1>(RE::VTABLE_BSCullingProcess[0]);
+			//	stl::write_vfunc<0x16, BSCullingProcess_Process1>(RE::VTABLE_BSCullingProcess[0]);
 			stl::write_vfunc<0x16, BSGeometryListCullingProcess_Process1>(RE::VTABLE_BSGeometryListCullingProcess[0]);
 			stl::write_thunk_call<DirtyStates_CreateInputLayoutFromVertexDesc>(REL::RelocationID(75580, 75580).address() + REL::Relocate(0x465, 0x465));
 
