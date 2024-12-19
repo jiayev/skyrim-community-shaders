@@ -499,8 +499,7 @@ void Raytracing::AddInstance(RE::BSTriShape* a_geometry)
 void Raytracing::SeenInstance(RE::BSTriShape* a_geometry)
 {
 	auto& flags = a_geometry->GetFlags();
-	if (flags.none(RE::NiAVObject::Flag::kHidden) && flags.all(RE::NiAVObject::Flag::kRenderUse))
-	{
+	if (flags.none(RE::NiAVObject::Flag::kHidden) && flags.all(RE::NiAVObject::Flag::kRenderUse)) {
 		auto it = instances.find(a_geometry);
 		if (it != instances.end()) {
 			auto& instanceData = (*it).second;
