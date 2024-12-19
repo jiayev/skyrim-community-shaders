@@ -18,8 +18,9 @@ struct DoF : public PostProcessFeature
         float FocalLength = 50.0f;
         float FNumber = 2.8f;
         float BlurQuality = 7.0f;
+        float NearFarDistanceCompensation = 1.0f;
+        float BokehBusyFactor = 0.5f;
         float HighlightBoost = 0.9f;
-        float Bokeh = 0.5f;
     } settings;
 
     struct alignas(16) DoFCB
@@ -30,23 +31,33 @@ struct DoF : public PostProcessFeature
         float FocalLength;
         float FNumber;
         float BlurQuality;
+        float NearFarDistanceCompensation;
+        float BokehBusyFactor;
         float HighlightBoost;
-        float Bokeh;
         float Width;
         float Height;
         bool AutoFocus;
-        uint8_t pad[3];
+        uint8_t pad[15];
     };
 
     eastl::unique_ptr<ConstantBuffer> dofCB = nullptr;
 
     eastl::unique_ptr<Texture2D> texOutput = nullptr;
+    eastl::unique_ptr<Texture2D> texPreBlurred = nullptr;
+    eastl::unique_ptr<Texture2D> texFarBlurred = nullptr;
     eastl::unique_ptr<Texture2D> texFocus = nullptr;
     eastl::unique_ptr<Texture2D> texPreFocus = nullptr;
     eastl::unique_ptr<Texture2D> texCoC = nullptr;
+    eastl::unique_ptr<Texture2D> texCoCBlur1 = nullptr;
+    eastl::unique_ptr<Texture2D> texCoCBlur2 = nullptr;
 
     winrt::com_ptr<ID3D11ComputeShader> UpdateFocusCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> CalculateCoCCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> CoCGaussian1CS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> CoCGaussian2CS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> BlurCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> FarBlurCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> NearBlurCS = nullptr;
 
     winrt::com_ptr<ID3D11SamplerState> colorSampler = nullptr;
     winrt::com_ptr<ID3D11SamplerState> depthSampler = nullptr;

@@ -13,8 +13,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     FocalLength,
     FNumber,
     BlurQuality,
+    NearFarDistanceCompensation,
     HighlightBoost,
-    Bokeh
+    BokehBusyFactor
 )
 
 void DoF::DrawSettings()
@@ -22,22 +23,16 @@ void DoF::DrawSettings()
     ImGui::Checkbox("Auto Focus", &settings.AutoFocus);
 
     if (settings.AutoFocus) {
-        ImGui::SliderFloat("Transition Speed", &settings.TransitionSpeed, 0.1f, 1.0f, "%.2f");
-
         ImGui::SliderFloat2("Focus Point", &settings.FocusCoord.x, 0.0f, 1.0f, "%.2f");
     }
-
+    ImGui::SliderFloat("Transition Speed", &settings.TransitionSpeed, 0.1f, 1.0f, "%.2f");
     ImGui::SliderFloat("Manual Focus", &settings.ManualFocusPlane, 0.0f, 1.0f, "%.2f");
-
     ImGui::SliderFloat("Focal Length", &settings.FocalLength, 1.0f, 300.0f, "%.1f mm");
-
     ImGui::SliderFloat("F-Number", &settings.FNumber, 1.0f, 22.0f, "f/%.1f");
-
     ImGui::SliderFloat("Blur Quality", &settings.BlurQuality, 2.0f, 30.0f, "%.1f");
-
+    ImGui::SliderFloat("Near-Far Plane Distance Compenation", &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
+    ImGui::SliderFloat("Bokeh Busy Factor", &settings.BokehBusyFactor, 0.0f, 1.0f, "%.2f");
     ImGui::SliderFloat("Highlight Boost", &settings.HighlightBoost, 0.0f, 1.0f, "%.2f");
-
-    ImGui::SliderFloat("Bokeh", &settings.Bokeh, 0.0f, 1.0f, "%.2f");
 
     if (ImGui::CollapsingHeader("Debug")) {
         static float debugRescale = .3f;
@@ -47,6 +42,11 @@ void DoF::DrawSettings()
         BUFFER_VIEWER_NODE(texPreFocus, 64.0f)
 
         BUFFER_VIEWER_NODE(texCoC, debugRescale)
+        BUFFER_VIEWER_NODE(texCoCBlur1, debugRescale)
+        BUFFER_VIEWER_NODE(texCoCBlur2, debugRescale)
+
+        BUFFER_VIEWER_NODE(texPreBlurred, debugRescale)
+        BUFFER_VIEWER_NODE(texFarBlurred, debugRescale)
     }
 }
 
@@ -102,6 +102,14 @@ void DoF::SetupResources()
 		texOutput->CreateSRV(srvDesc);
 		texOutput->CreateUAV(uavDesc);
 
+        texPreBlurred = eastl::make_unique<Texture2D>(texDesc);
+        texPreBlurred->CreateSRV(srvDesc);
+        texPreBlurred->CreateUAV(uavDesc);
+
+        texFarBlurred = eastl::make_unique<Texture2D>(texDesc);
+        texFarBlurred->CreateSRV(srvDesc);
+        texFarBlurred->CreateUAV(uavDesc);
+
         texDesc.Format = DXGI_FORMAT_R32_FLOAT;
         srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
         uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
@@ -109,6 +117,14 @@ void DoF::SetupResources()
         texCoC = eastl::make_unique<Texture2D>(texDesc);
         texCoC->CreateSRV(srvDesc);
         texCoC->CreateUAV(uavDesc);
+
+        texCoCBlur1 = eastl::make_unique<Texture2D>(texDesc);
+        texCoCBlur1->CreateSRV(srvDesc);
+        texCoCBlur1->CreateUAV(uavDesc);
+
+        texCoCBlur2 = eastl::make_unique<Texture2D>(texDesc);
+        texCoCBlur2->CreateSRV(srvDesc);
+        texCoCBlur2->CreateUAV(uavDesc);
 
         texDesc.Width = 1;
         texDesc.Height = 1;
@@ -148,7 +164,12 @@ void DoF::ClearShaderCache()
 {
     const auto shaderPtrs = std::array{
         &UpdateFocusCS,
-        &CalculateCoCCS
+        &CalculateCoCCS,
+        &CoCGaussian1CS,
+        &CoCGaussian2CS,
+        &BlurCS,
+        &FarBlurCS,
+        &NearBlurCS
     };
 
     for (auto shader : shaderPtrs)
@@ -173,7 +194,12 @@ void DoF::CompileComputeShaders()
     std::vector<ShaderCompileInfo>
         shaderInfos = {
             { &UpdateFocusCS, "dof.cs.hlsl", {}, "CS_UpdateFocus" },
-            { &CalculateCoCCS, "dof.cs.hlsl", {}, "CS_CalculateCoC" }
+            { &CalculateCoCCS, "dof.cs.hlsl", {}, "CS_CalculateCoC" },
+            { &CoCGaussian1CS, "dof.cs.hlsl", {}, "CS_CoCGaussian1" },
+            { &CoCGaussian2CS, "dof.cs.hlsl", {}, "CS_CoCGaussian2" },
+            { &BlurCS, "dof.cs.hlsl", {}, "CS_Blur" },
+            { &FarBlurCS, "dof.cs.hlsl", {}, "CS_FarBlur" },
+            { &NearBlurCS, "dof.cs.hlsl", {}, "CS_NearBlur" }
     };
 
     for (auto& info : shaderInfos) {
@@ -201,15 +227,16 @@ void DoF::Draw(TextureInfo& inout_tex)
         .FocalLength = settings.FocalLength,
         .FNumber = settings.FNumber,
         .BlurQuality = settings.BlurQuality,
+        .NearFarDistanceCompensation = settings.NearFarDistanceCompensation,
+        .BokehBusyFactor = settings.BokehBusyFactor,
         .HighlightBoost = settings.HighlightBoost,
-        .Bokeh = settings.Bokeh,
         .Width = res.x,
         .Height = res.y,
         .AutoFocus = settings.AutoFocus
     };
     dofCB->Update(dofData);
 
-    std::array<ID3D11ShaderResourceView*, 3> srvs = { inout_tex.srv, texPreFocus->srv.get(), depth.depthSRV };
+    std::array<ID3D11ShaderResourceView*, 5> srvs = { inout_tex.srv, texPreFocus->srv.get(), depth.depthSRV, nullptr, nullptr };
     std::array<ID3D11UnorderedAccessView*, 3> uavs = { texOutput->uav.get(), texFocus->uav.get(), texCoC->uav.get() };
     std::array<ID3D11SamplerState*, 2> samplers = { colorSampler.get(), depthSampler.get() };
     auto cb = dofCB->CB();
@@ -257,6 +284,73 @@ void DoF::Draw(TextureInfo& inout_tex)
 
     resetViews();
 
+    // CoC Gaussian Blur (coc uses srv3 and uav2)
+    {
+        srvs.at(3) = texCoC->srv.get();
+        uavs.at(2) = texCoCBlur1->uav.get();
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+        context->CSSetShader(CoCGaussian1CS.get(), nullptr, 0);
+        context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+
+        resetViews();
+
+        srvs.at(3) = texCoCBlur1->srv.get();
+        uavs.at(2) = texCoCBlur2->uav.get();
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+        context->CSSetShader(CoCGaussian2CS.get(), nullptr, 0);
+        context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+
+        resetViews();
+    }
+
+    // Blur
+    {
+        srvs.at(0) = inout_tex.srv;
+        srvs.at(3) = texCoC->srv.get();
+        srvs.at(4) = texCoCBlur2->srv.get();
+        uavs.at(0) = texPreBlurred->uav.get();
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+        context->CSSetShader(BlurCS.get(), nullptr, 0);
+        context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+
+        resetViews();
+
+        srvs.at(0) = texPreBlurred->srv.get();
+        srvs.at(3) = texCoC->srv.get();
+        srvs.at(4) = texCoCBlur2->srv.get();
+        uavs.at(0) = texFarBlurred->uav.get();
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+        context->CSSetShader(FarBlurCS.get(), nullptr, 0);
+        context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+
+        resetViews();
+
+        srvs.at(0) = texFarBlurred->srv.get();
+        srvs.at(3) = texCoC->srv.get();
+        srvs.at(4) = texCoCBlur2->srv.get();
+        uavs.at(0) = texOutput->uav.get();
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+        context->CSSetShader(NearBlurCS.get(), nullptr, 0);
+        context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+
+        resetViews();
+    }
+
     samplers.fill(nullptr);
 	cb = nullptr;
 
@@ -264,5 +358,6 @@ void DoF::Draw(TextureInfo& inout_tex)
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 	context->CSSetShader(nullptr, nullptr, 0);
 
+    inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
 	state->EndPerfEvent();
 }
