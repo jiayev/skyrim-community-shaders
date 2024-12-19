@@ -192,6 +192,9 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
     actualValues = (float3(1.0f) - settings.blendFactor) + vanillaImagespaceData.cinematic * settings.blendFactor;
     
     actualValues = actualValues * (settings.enableInExMultiplier ? (isInInterior ? settings.InteriorMultiplier : settings.ExteriorMultiplier) : float3(1.0f));
+    if (cinematic.x == 0.0f && cinematic.y == 0.0f && cinematic.z == 0.0f) {
+        actualValues = float3(1.0f);
+    }
     data.cinematic = actualValues;
     vanillaImagespaceCB->Update(data);
 
