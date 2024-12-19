@@ -1,6 +1,7 @@
 set(FFX_API_VK OFF)
 set(FFX_API_BACKEND DX12_X64)
 set(FFX_BRIXELIZER ON)
+set(FFX_BRIXELIZER_GI ON)
 set(FFX_ALL OFF)
 set(FFX_FSR3 ON)
 set(FFX_FSR ON)
@@ -17,4 +18,5 @@ target_link_libraries(
   ffx_opticalflow_x64
   ffx_backend_dx12_x64
   ffx_brixelizer_x64
+  ffx_brixelizergi_x64
 )

@@ -218,4 +218,24 @@ namespace Util
 
 		return nullptr;
 	}
+
+	ID3D12Resource* Convert11To12Resource(ID3D12Device* device, ID3D11Resource* rsrc)
+	{
+		IDXGIResource1* dxgiResource = nullptr;
+		DX::ThrowIfFailed(rsrc->QueryInterface(IID_PPV_ARGS(&dxgiResource)));
+
+		HANDLE sharedHandle = nullptr;
+		DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(
+			nullptr,
+			DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+			nullptr,
+			&sharedHandle));
+
+		ID3D12Resource* retval;
+		DX::ThrowIfFailed(device->OpenSharedHandle(
+			sharedHandle,
+			IID_PPV_ARGS(&retval)));
+
+		return retval;
+	}
 }  // namespace Util
