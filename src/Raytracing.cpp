@@ -498,8 +498,7 @@ void Raytracing::AddInstance(RE::BSTriShape* a_geometry)
 
 RE::BSFadeNode* FindBSFadeNode(RE::NiNode* a_niNode)
 {
-	if (auto fadeNode = a_niNode->AsFadeNode())
-	{
+	if (auto fadeNode = a_niNode->AsFadeNode()) {
 		return fadeNode;
 	}
 	return a_niNode->parent ? FindBSFadeNode(a_niNode->parent) : nullptr;
@@ -508,8 +507,7 @@ RE::BSFadeNode* FindBSFadeNode(RE::NiNode* a_niNode)
 void Raytracing::SeenInstance(RE::BSTriShape* a_geometry)
 {
 	auto& flags = a_geometry->GetFlags();
-	if (flags.none(RE::NiAVObject::Flag::kHidden) && flags.all(RE::NiAVObject::Flag::kRenderUse))
-	{
+	if (flags.none(RE::NiAVObject::Flag::kHidden) && flags.all(RE::NiAVObject::Flag::kRenderUse)) {
 		if (auto fadeNode = FindBSFadeNode((RE::NiNode*)a_geometry)) {
 			if (auto extraData = fadeNode->GetExtraData("BSX")) {
 				auto bsxFlags = (RE::BSXFlags*)extraData;
