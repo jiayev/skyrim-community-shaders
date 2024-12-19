@@ -15,7 +15,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     BlurQuality,
     NearFarDistanceCompensation,
     HighlightBoost,
-    BokehBusyFactor
+    BokehBusyFactor,
+    PostBlurSmoothing
 )
 
 void DoF::DrawSettings()
@@ -33,6 +34,7 @@ void DoF::DrawSettings()
     ImGui::SliderFloat("Near-Far Plane Distance Compenation", &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
     ImGui::SliderFloat("Bokeh Busy Factor", &settings.BokehBusyFactor, 0.0f, 1.0f, "%.2f");
     ImGui::SliderFloat("Highlight Boost", &settings.HighlightBoost, 0.0f, 1.0f, "%.2f");
+    ImGui::SliderFloat("Post Blur Smoothing", &settings.PostBlurSmoothing, 0.0f, 2.0f, "%.2f");
 
     if (ImGui::CollapsingHeader("Debug")) {
         static float debugRescale = .3f;
@@ -42,11 +44,19 @@ void DoF::DrawSettings()
         BUFFER_VIEWER_NODE(texPreFocus, 64.0f)
 
         BUFFER_VIEWER_NODE(texCoC, debugRescale)
+        BUFFER_VIEWER_NODE(texCoCTileTmp, debugRescale)
+        BUFFER_VIEWER_NODE(texCoCTileTmp2, debugRescale)
+        BUFFER_VIEWER_NODE(texCoCTileNeighbor, debugRescale)
         BUFFER_VIEWER_NODE(texCoCBlur1, debugRescale)
         BUFFER_VIEWER_NODE(texCoCBlur2, debugRescale)
 
         BUFFER_VIEWER_NODE(texPreBlurred, debugRescale)
         BUFFER_VIEWER_NODE(texFarBlurred, debugRescale)
+        BUFFER_VIEWER_NODE(texNearBlurred, debugRescale)
+
+        BUFFER_VIEWER_NODE(texBlurredFiltered, debugRescale)
+        BUFFER_VIEWER_NODE(texPostSmooth, debugRescale)
+        BUFFER_VIEWER_NODE(texPostSmooth2, debugRescale)
     }
 }
 
@@ -102,15 +112,40 @@ void DoF::SetupResources()
 		texOutput->CreateSRV(srvDesc);
 		texOutput->CreateUAV(uavDesc);
 
-        texPreBlurred = eastl::make_unique<Texture2D>(texDesc);
+        texBlurredFull = eastl::make_unique<Texture2D>(texDesc);
+        texBlurredFull->CreateSRV(srvDesc);
+        texBlurredFull->CreateUAV(uavDesc);
+
+        texPostSmooth = eastl::make_unique<Texture2D>(texDesc);
+        texPostSmooth->CreateSRV(srvDesc);
+        texPostSmooth->CreateUAV(uavDesc);
+
+        texPostSmooth2 = eastl::make_unique<Texture2D>(texDesc);
+        texPostSmooth2->CreateSRV(srvDesc);
+        texPostSmooth2->CreateUAV(uavDesc);
+
+        D3D11_TEXTURE2D_DESC texDescHalf = texDesc;
+        texDescHalf.Width /= 2;
+        texDescHalf.Height /= 2;
+
+        texPreBlurred = eastl::make_unique<Texture2D>(texDescHalf);
         texPreBlurred->CreateSRV(srvDesc);
         texPreBlurred->CreateUAV(uavDesc);
 
-        texFarBlurred = eastl::make_unique<Texture2D>(texDesc);
+        texFarBlurred = eastl::make_unique<Texture2D>(texDescHalf);
         texFarBlurred->CreateSRV(srvDesc);
         texFarBlurred->CreateUAV(uavDesc);
 
+        texNearBlurred = eastl::make_unique<Texture2D>(texDescHalf);
+        texNearBlurred->CreateSRV(srvDesc);
+        texNearBlurred->CreateUAV(uavDesc);
+
+        texBlurredFiltered = eastl::make_unique<Texture2D>(texDescHalf);
+        texBlurredFiltered->CreateSRV(srvDesc);
+        texBlurredFiltered->CreateUAV(uavDesc);
+
         texDesc.Format = DXGI_FORMAT_R32_FLOAT;
+        texDescHalf.Format = DXGI_FORMAT_R32_FLOAT;
         srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
         uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
 
@@ -118,11 +153,23 @@ void DoF::SetupResources()
         texCoC->CreateSRV(srvDesc);
         texCoC->CreateUAV(uavDesc);
 
-        texCoCBlur1 = eastl::make_unique<Texture2D>(texDesc);
+        texCoCTileTmp = eastl::make_unique<Texture2D>(texDesc);
+        texCoCTileTmp->CreateSRV(srvDesc);
+        texCoCTileTmp->CreateUAV(uavDesc);
+
+        texCoCTileTmp2 = eastl::make_unique<Texture2D>(texDesc);
+        texCoCTileTmp2->CreateSRV(srvDesc);
+        texCoCTileTmp2->CreateUAV(uavDesc);
+
+        texCoCTileNeighbor = eastl::make_unique<Texture2D>(texDesc);
+        texCoCTileNeighbor->CreateSRV(srvDesc);
+        texCoCTileNeighbor->CreateUAV(uavDesc);
+
+        texCoCBlur1 = eastl::make_unique<Texture2D>(texDescHalf);
         texCoCBlur1->CreateSRV(srvDesc);
         texCoCBlur1->CreateUAV(uavDesc);
 
-        texCoCBlur2 = eastl::make_unique<Texture2D>(texDesc);
+        texCoCBlur2 = eastl::make_unique<Texture2D>(texDescHalf);
         texCoCBlur2->CreateSRV(srvDesc);
         texCoCBlur2->CreateUAV(uavDesc);
 
@@ -165,11 +212,18 @@ void DoF::ClearShaderCache()
     const auto shaderPtrs = std::array{
         &UpdateFocusCS,
         &CalculateCoCCS,
+        &CoCTile1CS,
+        &CoCTile2CS,
+        &CoCTileNeighbor,
         &CoCGaussian1CS,
         &CoCGaussian2CS,
         &BlurCS,
         &FarBlurCS,
-        &NearBlurCS
+        &NearBlurCS,
+        &TentFilterCS,
+        &CombinerCS,
+        &PostSmoothing1CS,
+        &PostSmoothing2AndFocusingCS
     };
 
     for (auto shader : shaderPtrs)
@@ -195,11 +249,18 @@ void DoF::CompileComputeShaders()
         shaderInfos = {
             { &UpdateFocusCS, "dof.cs.hlsl", {}, "CS_UpdateFocus" },
             { &CalculateCoCCS, "dof.cs.hlsl", {}, "CS_CalculateCoC" },
+            { &CoCTile1CS, "dof.cs.hlsl", {}, "CS_CoCTile1" },
+            { &CoCTile2CS, "dof.cs.hlsl", {}, "CS_CoCTile2" },
+            { &CoCTileNeighbor, "dof.cs.hlsl", {}, "CS_CoCTileNeighbor" },
             { &CoCGaussian1CS, "dof.cs.hlsl", {}, "CS_CoCGaussian1" },
             { &CoCGaussian2CS, "dof.cs.hlsl", {}, "CS_CoCGaussian2" },
             { &BlurCS, "dof.cs.hlsl", {}, "CS_Blur" },
             { &FarBlurCS, "dof.cs.hlsl", {}, "CS_FarBlur" },
-            { &NearBlurCS, "dof.cs.hlsl", {}, "CS_NearBlur" }
+            { &NearBlurCS, "dof.cs.hlsl", {}, "CS_NearBlur" },
+            { &TentFilterCS, "dof.cs.hlsl", {}, "CS_TentFilter" },
+            { &CombinerCS, "dof.cs.hlsl", {}, "CS_Combiner" },
+            { &PostSmoothing1CS, "dof.cs.hlsl", {}, "CS_PostSmoothing1" },
+            { &PostSmoothing2AndFocusingCS, "dof.cs.hlsl", {}, "CS_PostSmoothing2AndFocusing" }
     };
 
     for (auto& info : shaderInfos) {
@@ -230,13 +291,14 @@ void DoF::Draw(TextureInfo& inout_tex)
         .NearFarDistanceCompensation = settings.NearFarDistanceCompensation,
         .BokehBusyFactor = settings.BokehBusyFactor,
         .HighlightBoost = settings.HighlightBoost,
+        .PostBlurSmoothing = settings.PostBlurSmoothing,
         .Width = res.x,
         .Height = res.y,
         .AutoFocus = settings.AutoFocus
     };
     dofCB->Update(dofData);
 
-    std::array<ID3D11ShaderResourceView*, 5> srvs = { inout_tex.srv, texPreFocus->srv.get(), depth.depthSRV, nullptr, nullptr };
+    std::array<ID3D11ShaderResourceView*, 8> srvs = { inout_tex.srv, texPreFocus->srv.get(), depth.depthSRV, nullptr, nullptr, nullptr, nullptr, nullptr };
     std::array<ID3D11UnorderedAccessView*, 3> uavs = { texOutput->uav.get(), texFocus->uav.get(), texCoC->uav.get() };
     std::array<ID3D11SamplerState*, 2> samplers = { colorSampler.get(), depthSampler.get() };
     auto cb = dofCB->CB();
@@ -250,6 +312,10 @@ void DoF::Draw(TextureInfo& inout_tex)
 
     context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
+    uint dispatchWidth = ((uint)res.x + 7) >> 3;
+    uint dispatchHeight = ((uint)res.y + 7) >> 3;
+    uint dispatchWidthBlur = ((uint)(res.x / 2) + 7) >> 3;
+    uint dispatchHeightBlur = ((uint)(res.y / 2) + 7) >> 3;
 
     // Update Focus
     {
@@ -279,21 +345,57 @@ void DoF::Draw(TextureInfo& inout_tex)
         context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
         context->CSSetShader(CalculateCoCCS.get(), nullptr, 0);
-        context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+        context->Dispatch(dispatchWidth, dispatchHeight, 1);
     }
 
     resetViews();
 
-    // CoC Gaussian Blur (coc uses srv3 and uav2)
+    // CoC Tile
     {
         srvs.at(3) = texCoC->srv.get();
+        uavs.at(2) = texCoCTileTmp->uav.get();
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+        context->CSSetShader(CoCTile1CS.get(), nullptr, 0);
+        context->Dispatch(dispatchWidth, dispatchHeight, 1);
+
+        resetViews();
+
+        srvs.at(3) = texCoCTileTmp->srv.get();
+        uavs.at(2) = texCoCTileTmp2->uav.get();
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+        context->CSSetShader(CoCTile2CS.get(), nullptr, 0);
+        context->Dispatch(dispatchWidth, dispatchHeight, 1);
+
+        resetViews();
+
+        srvs.at(3) = texCoCTileTmp2->srv.get();
+        uavs.at(2) = texCoCTileNeighbor->uav.get();
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+        context->CSSetShader(CoCTileNeighbor.get(), nullptr, 0);
+        context->Dispatch(dispatchWidth, dispatchHeight, 1);
+
+        resetViews();
+    }
+
+    // CoC Gaussian Blur (coc uses srv3 and uav2)
+    {
+        srvs.at(3) = texCoCTileNeighbor->srv.get();
         uavs.at(2) = texCoCBlur1->uav.get();
 
         context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
         context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
         context->CSSetShader(CoCGaussian1CS.get(), nullptr, 0);
-        context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+        context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
         resetViews();
 
@@ -304,7 +406,7 @@ void DoF::Draw(TextureInfo& inout_tex)
         context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
         context->CSSetShader(CoCGaussian2CS.get(), nullptr, 0);
-        context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+        context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
         resetViews();
     }
@@ -320,7 +422,7 @@ void DoF::Draw(TextureInfo& inout_tex)
         context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
         context->CSSetShader(BlurCS.get(), nullptr, 0);
-        context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+        context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
         resetViews();
 
@@ -333,20 +435,79 @@ void DoF::Draw(TextureInfo& inout_tex)
         context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
         context->CSSetShader(FarBlurCS.get(), nullptr, 0);
-        context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+        context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
         resetViews();
 
         srvs.at(0) = texFarBlurred->srv.get();
-        srvs.at(3) = texCoC->srv.get();
+        srvs.at(3) = texCoCTileNeighbor->srv.get();
         srvs.at(4) = texCoCBlur2->srv.get();
-        uavs.at(0) = texOutput->uav.get();
+        uavs.at(0) = texNearBlurred->uav.get();
 
         context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
         context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
         context->CSSetShader(NearBlurCS.get(), nullptr, 0);
-        context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+        context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
+
+        resetViews();
+    }
+
+    // Tent Filter
+    {
+        srvs.at(0) = texFarBlurred->srv.get();
+        uavs.at(0) = texBlurredFiltered->uav.get();
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+        context->CSSetShader(TentFilterCS.get(), nullptr, 0);
+        context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
+
+        resetViews();
+    }
+
+    // Combiner
+    {
+        srvs.at(0) = inout_tex.srv;
+        srvs.at(3) = texCoC->srv.get();
+        srvs.at(5) = texBlurredFiltered->srv.get();
+        srvs.at(6) = texNearBlurred->srv.get();
+        uavs.at(0) = texPostSmooth->uav.get();
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+        context->CSSetShader(CombinerCS.get(), nullptr, 0);
+        context->Dispatch(dispatchWidth, dispatchHeight, 1);
+
+        resetViews();
+    }
+
+    // Post Smooth
+    {
+        srvs.at(0) = texPostSmooth->srv.get();
+        srvs.at(3) = texCoC->srv.get();
+        uavs.at(0) = texPostSmooth2->uav.get();
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+        context->CSSetShader(PostSmoothing1CS.get(), nullptr, 0);
+        context->Dispatch(dispatchWidth, dispatchHeight, 1);
+
+        resetViews();
+
+        srvs.at(0) = texPostSmooth->srv.get();
+        srvs.at(3) = texCoC->srv.get();
+        srvs.at(7) = texPostSmooth2->srv.get();
+        uavs.at(0) = texOutput->uav.get();
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+        context->CSSetShader(PostSmoothing2AndFocusingCS.get(), nullptr, 0);
+        context->Dispatch(dispatchWidth, dispatchHeight, 1);
 
         resetViews();
     }

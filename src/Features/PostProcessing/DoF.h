@@ -21,6 +21,7 @@ struct DoF : public PostProcessFeature
         float NearFarDistanceCompensation = 1.0f;
         float BokehBusyFactor = 0.5f;
         float HighlightBoost = 0.0f;
+        float PostBlurSmoothing = 0.0f;
     } settings;
 
     struct alignas(16) DoFCB
@@ -34,10 +35,11 @@ struct DoF : public PostProcessFeature
         float NearFarDistanceCompensation;
         float BokehBusyFactor;
         float HighlightBoost;
+        float PostBlurSmoothing;
         float Width;
         float Height;
         bool AutoFocus;
-        uint8_t pad[15];
+        uint8_t pad[11];
     };
 
     eastl::unique_ptr<ConstantBuffer> dofCB = nullptr;
@@ -45,19 +47,34 @@ struct DoF : public PostProcessFeature
     eastl::unique_ptr<Texture2D> texOutput = nullptr;
     eastl::unique_ptr<Texture2D> texPreBlurred = nullptr;
     eastl::unique_ptr<Texture2D> texFarBlurred = nullptr;
+    eastl::unique_ptr<Texture2D> texNearBlurred = nullptr;
+    eastl::unique_ptr<Texture2D> texBlurredFiltered = nullptr;
+    eastl::unique_ptr<Texture2D> texBlurredFull = nullptr;
+    eastl::unique_ptr<Texture2D> texPostSmooth = nullptr;
+    eastl::unique_ptr<Texture2D> texPostSmooth2 = nullptr;
     eastl::unique_ptr<Texture2D> texFocus = nullptr;
     eastl::unique_ptr<Texture2D> texPreFocus = nullptr;
     eastl::unique_ptr<Texture2D> texCoC = nullptr;
+    eastl::unique_ptr<Texture2D> texCoCTileTmp = nullptr;
+    eastl::unique_ptr<Texture2D> texCoCTileTmp2 = nullptr;
+    eastl::unique_ptr<Texture2D> texCoCTileNeighbor = nullptr;
     eastl::unique_ptr<Texture2D> texCoCBlur1 = nullptr;
     eastl::unique_ptr<Texture2D> texCoCBlur2 = nullptr;
 
     winrt::com_ptr<ID3D11ComputeShader> UpdateFocusCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> CalculateCoCCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> CoCTile1CS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> CoCTile2CS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> CoCTileNeighbor = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> CoCGaussian1CS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> CoCGaussian2CS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> BlurCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> FarBlurCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> NearBlurCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> TentFilterCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> CombinerCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> PostSmoothing1CS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> PostSmoothing2AndFocusingCS = nullptr;
 
     winrt::com_ptr<ID3D11SamplerState> colorSampler = nullptr;
     winrt::com_ptr<ID3D11SamplerState> depthSampler = nullptr;

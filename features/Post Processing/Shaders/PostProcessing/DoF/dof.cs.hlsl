@@ -12,6 +12,9 @@ Texture2D<float> TexPreviousFocus : register(t1);
 Texture2D<float> DepthTexture : register(t2);
 Texture2D<float> TexCoCInput : register(t3);
 Texture2D<float> TexCoCBlurredInput : register(t4);
+Texture2D<float4> TexFarBlur : register(t5);
+Texture2D<float4> TexNearBlur : register(t6);
+Texture2D<float4> TexPostSmoothInput : register(t7);
 
 cbuffer DoFCB : register(b1)
 {
@@ -24,6 +27,7 @@ cbuffer DoFCB : register(b1)
     float NearFarDistanceCompensation;
     float BokehBusyFactor;
     float HighlightBoost;
+    float PostBlurSmoothing;
     float Width;
     float Height;
     bool AutoFocus;
@@ -189,6 +193,65 @@ float2 MorphPointOffsetWithAnamorphicDeltas(float2 pointOffset, float4 anamorphi
     return mul(pointOffset, anamorphicRotationMatrix);
 }
 
+// Gathers min CoC from a horizontal range of pixels around the pixel at texcoord, for a range of -TILE_SIZE+1 to +TILE_SIZE+1.
+// returns minCoC
+float PerformTileGatherHorizontal(float2 texcoord)
+{
+    float tileSize = 1;
+    float minCoC = 10;
+    float coc;
+    float2 coordOffset = float2(1.0f / Width, 0);
+    for(float i = 0; i <= tileSize; ++i) 
+    {
+        coc = TexCoCInput.SampleLevel(DepthSampler, texcoord + coordOffset, 0);
+        minCoC = min(minCoC, coc);
+        coc = TexCoCInput.SampleLevel(DepthSampler, texcoord - coordOffset, 0);
+        minCoC = min(minCoC, coc);
+        coordOffset.x+=1.0f / Width;
+    }
+    return minCoC;
+}
+
+// Gathers min CoC from a vertical range of pixels around the pixel at texcoord from the high-res focus plane, for a range of -TILE_SIZE+1 to +TILE_SIZE+1.
+// returns min CoC
+float PerformTileGatherVertical(float2 texcoord)
+{
+    float tileSize = 1;
+    float minCoC = 10;
+    float coc;
+    float2 coordOffset = float2(0, 1.0f / Height);
+    for(float i = 0; i <= tileSize; ++i) 
+    {
+        coc = TexCoCInput.SampleLevel(DepthSampler, texcoord + coordOffset, 0);
+        minCoC = min(minCoC, coc);
+        coc = TexCoCInput.SampleLevel(DepthSampler, texcoord - coordOffset, 0);
+        minCoC = min(minCoC, coc);
+        coordOffset.y+=1.0f / Height;
+    }
+    return minCoC;
+}
+
+// Gathers the min CoC of the tile at texcoord and the 8 tiles around it. 
+float PerformNeighborTileGather(float2 texcoord)
+{
+    float minCoC = 10;
+    float tileSizeX = 1;
+    float tileSizeY = 1;
+    // tile is TILE_SIZE*2+1 wide. So add that and substract that to get to neighbor tile right/left.
+    // 3x3 around center.
+    float2 baseCoordOffset = float2(1.0f / Width * (tileSizeX*2+1), 1.0f / Height * (tileSizeY*2+1));
+    for(float i=-1;i<2;i++)
+    {
+        for(float j=-1;j<2;j++)
+        {
+            float2 coordOffset = float2(baseCoordOffset.x * i, baseCoordOffset.y * j);
+            float coc = TexCoCInput.SampleLevel(DepthSampler, texcoord + coordOffset, 0);
+            minCoC = min(minCoC, coc);
+        }
+    }
+    return minCoC;
+}
+
 // Performs a small blur to the out of focus areas using a lower amount of rings. Additionally it calculates the luma of the fragment into alpha
 // and makes sure the fragment post-blur has the maximum luminosity from the taken samples to preserve harder edges on highlights. 
 // In:	blurInfo, the pre-calculated disc blur information from the vertex shader.
@@ -332,6 +395,45 @@ float4 PerformNearPlaneDiscBlur(DISCBLURINFO blurInfo, Texture2D source, Sampler
     return fragment;
 }
 
+float4 PerformFullFragmentGaussianBlur(Texture2D source, SamplerState samp, float2 texcoord, float2 offsetWeight)
+{
+    float offset[6] = { 0.0, 1.4584295168, 3.40398480678, 5.3518057801, 7.302940716, 9.2581597095 };
+    float weight[6] = { 0.13298, 0.23227575, 0.1353261595, 0.0511557427, 0.01253922, 0.0019913644 };
+    
+    float coc = TexCoCInput.SampleLevel(DepthSampler, texcoord, 0).r;
+    float4 fragment = source.SampleLevel(samp, texcoord, 0);
+    float4 originalFragment = fragment;
+    float absoluteCoC = abs(coc);
+    float lengthPixelSize = length(float2(1.0f / Width, 1.0f / Height));
+    
+    if(absoluteCoC < 0.2 || PostBlurSmoothing < 0.01)
+    {
+        // in focus or postblur smoothing isn't enabled, ignore
+        return fragment;
+    }
+    
+    fragment *= weight[0];
+    float2 factorToUse = offsetWeight * PostBlurSmoothing;
+    
+    for(int i = 1; i < 6; ++i)
+    {
+        float2 coordOffset = factorToUse * offset[i];
+        float weightSample = weight[i];
+        float sampleCoC = TexCoCInput.SampleLevel(DepthSampler, texcoord + coordOffset, 0).r;
+        float maskFactor = abs(sampleCoC) < 0.2;
+        
+        fragment += (originalFragment * maskFactor * weightSample) + 
+                   (source.SampleLevel(samp, texcoord + coordOffset, 0) * (1-maskFactor) * weightSample);
+                   
+        sampleCoC = TexCoCInput.SampleLevel(DepthSampler, texcoord - coordOffset, 0).r;
+        maskFactor = abs(sampleCoC) < 0.2;
+        
+        fragment += (originalFragment * maskFactor * weightSample) + 
+                   (source.SampleLevel(samp, texcoord - coordOffset, 0) * (1-maskFactor) * weightSample);
+    }
+    return fragment;
+}
+
 [numthreads(1, 1, 1)]
 void CS_UpdateFocus(uint2 DTid : SV_DispatchThreadID)
 {
@@ -359,24 +461,45 @@ void CS_CalculateCoC(uint2 DTid : SV_DispatchThreadID)
 }
 
 [numthreads(8, 8, 1)]
-void CS_CoCGaussian1(uint2 DTid : SV_DispatchThreadID)
+void CS_CoCTile1(uint2 DTid : SV_DispatchThreadID)
 {
     float2 uv = (DTid.xy + 0.5f) / float2(Width, Height);
-    RWTexCoC[DTid] = PerformSingleValueGaussianBlur(TexCoCInput, DepthSampler, uv, float2(1.0f / Width, 0.0f), true);
+    RWTexCoC[DTid] = PerformTileGatherHorizontal(uv);
+}
+
+[numthreads(8, 8, 1)]
+void CS_CoCTile2(uint2 DTid : SV_DispatchThreadID)
+{
+    float2 uv = (DTid.xy + 0.5f) / float2(Width, Height);
+    RWTexCoC[DTid] = PerformTileGatherVertical(uv);
+}
+
+[numthreads(8, 8, 1)]
+void CS_CoCTileNeighbor(uint2 DTid : SV_DispatchThreadID)
+{
+    float2 uv = (DTid.xy + 0.5f) / float2(Width, Height);
+    RWTexCoC[DTid] = PerformNeighborTileGather(uv);
+}
+
+[numthreads(8, 8, 1)]
+void CS_CoCGaussian1(uint2 DTid : SV_DispatchThreadID)
+{
+    float2 uv = 2.0f * (DTid.xy + 0.5f) / float2(Width, Height);
+    RWTexCoC[DTid] = PerformSingleValueGaussianBlur(TexCoCInput, DepthSampler, uv, float2(2.0f / Width, 0.0f), true);
 }
 
 [numthreads(8, 8, 1)]
 void CS_CoCGaussian2(uint2 DTid : SV_DispatchThreadID)
 {
-    float2 uv = (DTid.xy + 0.5f) / float2(Width, Height);
-    RWTexCoC[DTid] = PerformSingleValueGaussianBlur(TexCoCInput, DepthSampler, uv, float2(0.0f, 1.0f / Height), false);
+    float2 uv = 2.0f * (DTid.xy + 0.5f) / float2(Width, Height);
+    RWTexCoC[DTid] = PerformSingleValueGaussianBlur(TexCoCInput, DepthSampler, uv, float2(0.0f, 2.0f / Height), false);
 }
 
 [numthreads(8, 8, 1)]
 void CS_Blur(uint2 DTid : SV_DispatchThreadID)
 {
     DISCBLURINFO blurInfo;
-    blurInfo.texcoord = (DTid.xy + 0.5f) / float2(Width, Height);
+    blurInfo.texcoord = 2.0f * (DTid.xy + 0.5f) / float2(Width, Height);
     blurInfo.numberOfRings = round(BlurQuality);
     float pixelSizeLength = length(float2(1.0f / Width, 1.0f / Height)) * 0.5f;
     blurInfo.farPlaneMaxBlurInPixels = (1.0f / 100.0f) / pixelSizeLength;
@@ -391,7 +514,7 @@ void CS_Blur(uint2 DTid : SV_DispatchThreadID)
 void CS_FarBlur(uint2 DTid : SV_DispatchThreadID)
 {
     DISCBLURINFO blurInfo;
-    blurInfo.texcoord = (DTid.xy + 0.5f) / float2(Width, Height);
+    blurInfo.texcoord = 2.0f * (DTid.xy + 0.5f) / float2(Width, Height);
     blurInfo.numberOfRings = round(BlurQuality);
     float pixelSizeLength = length(float2(1.0f / Width, 1.0f / Height)) * 0.5f;
     blurInfo.farPlaneMaxBlurInPixels = (1.0f / 100.0f) / pixelSizeLength;
@@ -405,7 +528,7 @@ void CS_FarBlur(uint2 DTid : SV_DispatchThreadID)
 void CS_NearBlur(uint2 DTid : SV_DispatchThreadID)
 {
     DISCBLURINFO blurInfo;
-    blurInfo.texcoord = (DTid.xy + 0.5f) / float2(Width, Height);
+    blurInfo.texcoord = 2.0f * (DTid.xy + 0.5f) / float2(Width, Height);
     blurInfo.numberOfRings = round(BlurQuality);
     float pixelSizeLength = length(float2(1.0f / Width, 1.0f / Height)) * 0.5f;
     blurInfo.farPlaneMaxBlurInPixels = (1.0f / 100.0f) / pixelSizeLength;
@@ -415,3 +538,65 @@ void CS_NearBlur(uint2 DTid : SV_DispatchThreadID)
     RWTexOut[DTid] = color;
 }
 
+[numthreads(8, 8, 1)]
+void CS_TentFilter(uint2 DTid : SV_DispatchThreadID)
+{
+    float4 coord = (0.5f / float4(Width, Height, Width, Height)) * float4(1, 1, -1, 0);
+    float4 average;
+    float2 uv = 2.0f * (DTid.xy + 0.5f) / float2(Width, Height);
+    average = TexColor.SampleLevel(ImageSampler, (uv - coord.xy), 0);
+    average += TexColor.SampleLevel(ImageSampler, (uv - coord.wy), 0) * 2;
+    average += TexColor.SampleLevel(ImageSampler, (uv - coord.zy), 0);
+    average += TexColor.SampleLevel(ImageSampler, (uv + coord.zw), 0) * 2;
+    average += TexColor.SampleLevel(ImageSampler, uv, 0) * 4;
+    average += TexColor.SampleLevel(ImageSampler, (uv + coord.xw), 0) * 2;
+    average += TexColor.SampleLevel(ImageSampler, (uv + coord.zy), 0);
+    average += TexColor.SampleLevel(ImageSampler, (uv + coord.wy), 0) * 2;
+    average += TexColor.SampleLevel(ImageSampler, (uv + coord.xy), 0);
+    average /= 16;
+    RWTexOut[DTid] = average;
+}
+
+[numthreads(8, 8, 1)]
+void CS_Combiner(uint2 DTid : SV_DispatchThreadID)
+{   
+    float2 uv = (DTid.xy + 0.5f) / float2(Width, Height);
+    // first blend far plane with original buffer, then near plane on top of that. 
+    float4 originalFragment = TexColor.SampleLevel(ImageSampler, uv, 0);
+    originalFragment.rgb = AccentuateWhites(originalFragment.rgb);
+    float4 farFragment = TexFarBlur.SampleLevel(ImageSampler, uv, 0);
+    float4 nearFragment = TexNearBlur.SampleLevel(ImageSampler, uv, 0);
+    float pixelCoC = TexCoCInput.SampleLevel(DepthSampler, uv, 0).r;
+    // multiply with far plane max blur so if we need to have 0 blur we get full res 
+    float realCoC = pixelCoC * clamp(0, 1, 1);
+    // all CoC's > 0.1 are full far fragment, below that, we're going to blend. This avoids shimmering far plane without the need of a 
+    // 'magic' number to boost up the alpha.
+    float blendFactor = (realCoC > 0.1) ? 1 : smoothstep(0, 1, (realCoC / 0.1));
+    float4 color;
+    color = lerp(originalFragment, farFragment, blendFactor);
+    color.rgb = lerp(color.rgb, nearFragment.rgb, nearFragment.a);
+    color.a = 1.0;
+    RWTexOut[DTid] = color;
+}
+
+[numthreads(8, 8, 1)]
+void CS_PostSmoothing1(uint2 DTid : SV_DispatchThreadID)
+{
+    float2 uv = (DTid.xy + 0.5f) / float2(Width, Height);
+
+    RWTexOut[DTid] = PerformFullFragmentGaussianBlur(TexColor, ImageSampler, uv, float2((1.0f / Width), 0.0));
+}
+
+[numthreads(8, 8, 1)]
+void CS_PostSmoothing2AndFocusing(uint2 DTid : SV_DispatchThreadID)
+{
+    float2 texcoord = (DTid.xy + 0.5f) / float2(Width, Height);
+
+    float4 color = PerformFullFragmentGaussianBlur(TexPostSmoothInput, ImageSampler, texcoord, float2(0.0, (1.0f / Height)));
+    float4 originalColor = TexColor.SampleLevel(ImageSampler, texcoord, 0);
+
+    float coc = abs(TexCoCInput.SampleLevel(DepthSampler, texcoord, 0).r);
+    color.rgb = lerp(originalColor.rgb, color.rgb, saturate(coc < length(float2(1.0f / Width, 1.0f / Height)) ? 0 : 4 * coc));
+
+    RWTexOut[DTid] = float4(color.rgb, 1.0f);
+}
