@@ -556,8 +556,18 @@ void Raytracing::RegisterInputLayout(ID3D11InputLayout* ppInputLayout, D3D11_INP
 	{
 		if (strcmp(pInputElementDescs[i].SemanticName, "POSITION") == 0)
 		{
-			data.vertexStride = pInputElementDescs[NumElements - 1].AlignedByteOffset + (UINT)DirectX::BytesPerElement(pInputElementDescs[NumElements - 1].Format);
-			data.vertexBufferOffset = pInputElementDescs[i].AlignedByteOffset;
+			data.vertexStride = 0;
+
+			for (UINT k = 0; k < NumElements; k++)
+			{
+				data.vertexStride += (UINT)DirectX::BytesPerElement(pInputElementDescs[k].Format);
+			}
+
+			data.vertexBufferOffset = 0;
+
+			for (UINT k = 0; k < i; k++) {
+				data.vertexBufferOffset += (UINT)DirectX::BytesPerElement(pInputElementDescs[k].Format);
+			}
 
 			auto format = pInputElementDescs[i].Format;
 			if (format == DXGI_FORMAT_R32G32B32A32_FLOAT || format == DXGI_FORMAT_R32G32B32_FLOAT)
