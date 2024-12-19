@@ -496,11 +496,29 @@ void Raytracing::AddInstance(RE::BSTriShape* a_geometry)
 	instances.insert({ a_geometry, instanceData });
 }
 
+RE::BSFadeNode* FindBSFadeNode(RE::NiNode* a_niNode)
+{
+	if (auto fadeNode = a_niNode->AsFadeNode())
+	{
+		return fadeNode;
+	}
+	return a_niNode->parent ? FindBSFadeNode(a_niNode->parent) : nullptr;
+}
+
 void Raytracing::SeenInstance(RE::BSTriShape* a_geometry)
 {
 	auto& flags = a_geometry->GetFlags();
 	if (flags.none(RE::NiAVObject::Flag::kHidden) && flags.all(RE::NiAVObject::Flag::kRenderUse))
 	{
+		if (auto fadeNode = FindBSFadeNode((RE::NiNode*)a_geometry)) {
+			if (auto extraData = fadeNode->GetExtraData("BSX")) {
+				auto bsxFlags = (RE::BSXFlags*)extraData;
+				auto value = static_cast<int32_t>(bsxFlags->value);
+				if (value & (int32_t)RE::BSXFlags::Flag::kEditorMarker)
+					return;
+			}
+		}
+
 		auto it = instances.find(a_geometry);
 		if (it != instances.end()) {
 			auto& instanceData = (*it).second;
