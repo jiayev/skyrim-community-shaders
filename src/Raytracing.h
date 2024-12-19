@@ -166,6 +166,9 @@ public:
 
 	void RegisterInputLayout(ID3D11InputLayout* ppInputLayout, D3D11_INPUT_ELEMENT_DESC* pInputElementDescs, UINT NumElements);
 
+	void UnregisterVertexBuffer(ID3D11Buffer* ppBuffer);
+	void UnregisterIndexBuffer(ID3D11Buffer* ppBuffer);
+
 	void TransitionResources(D3D12_RESOURCE_STATES stateBefore, D3D12_RESOURCE_STATES stateAfter);
 
 	void InitFenceAndEvent();

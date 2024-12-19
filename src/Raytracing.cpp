@@ -340,24 +340,25 @@ struct int4
 	int w;
 };
 
-float4x4 GetBoneTransformMatrix(float4 bonePositions[240], int4 boneIndices, float4 pivot, float4 boneWeights)
+float4x4 GetBoneTransformMatrix(float4 bonePositions[240], float4 boneIndices, float4 pivot, float4 boneWeights)
 {
-	boneIndices.x *= 765.01;
-	boneIndices.y *= 765.01;
-	boneIndices.z *= 765.01;
-	boneIndices.w *= 765.01;
+	int4 boneIndicesInt;
+	
+	boneIndices *= 765.01f;
+
+	boneIndicesInt = { (int)boneIndices.x, (int)boneIndices.y, (int)boneIndices.z, (int)boneIndices.w };
 
 	float4 zeroes = { 0, 0, 0, 0 };
 	float4x4 pivotMatrix = float4x4(zeroes, zeroes, zeroes, pivot).Transpose();
 
 	float4x4 boneMatrix1 =
-		float4x4(bonePositions[boneIndices.x], bonePositions[boneIndices.x + 1], bonePositions[boneIndices.x + 2], zeroes);
+		float4x4(bonePositions[boneIndicesInt.x], bonePositions[boneIndicesInt.x + 1], bonePositions[boneIndicesInt.x + 2], zeroes);
 	float4x4 boneMatrix2 =
-		float4x4(bonePositions[boneIndices.y], bonePositions[boneIndices.y + 1], bonePositions[boneIndices.y + 2], zeroes);
+		float4x4(bonePositions[boneIndicesInt.y], bonePositions[boneIndicesInt.y + 1], bonePositions[boneIndicesInt.y + 2], zeroes);
 	float4x4 boneMatrix3 =
-		float4x4(bonePositions[boneIndices.z], bonePositions[boneIndices.z + 1], bonePositions[boneIndices.z + 2], zeroes);
+		float4x4(bonePositions[boneIndicesInt.z], bonePositions[boneIndicesInt.z + 1], bonePositions[boneIndicesInt.z + 2], zeroes);
 	float4x4 boneMatrix4 =
-		float4x4(bonePositions[boneIndices.w], bonePositions[boneIndices.w + 1], bonePositions[boneIndices.w + 2], zeroes);
+		float4x4(bonePositions[boneIndicesInt.w], bonePositions[boneIndicesInt.w + 1], bonePositions[boneIndicesInt.w + 2], zeroes);
 
 	float4 ones = { 1.0, 1.0, 1.0, 1.0 };
 	float4x4 unitMatrix = float4x4(ones, ones, ones, ones);
@@ -581,16 +582,39 @@ Raytracing::BufferData Raytracing::AllocateBuffer(const D3D11_BUFFER_DESC* pDesc
 	return data;
 }
 
+struct ID3D11Buffer_Release
+{
+	static void thunk(ID3D11Buffer* This)
+	{
+		Raytracing::GetSingleton()->UnregisterVertexBuffer(This);
+		Raytracing::GetSingleton()->UnregisterIndexBuffer(This);
+		func(This);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+
+bool hooked = false;
+
+
 void Raytracing::RegisterVertexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer)
 {
 	BufferData data = AllocateBuffer(pDesc, pInitialData);
 	vertexBuffers.insert({ *ppBuffer, data });
+	if (!hooked) {
+		stl::detour_vfunc<2, ID3D11Buffer_Release>(*ppBuffer);
+		hooked = true;
+	}
 }
 
 void Raytracing::RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer)
 {
 	BufferData data = AllocateBuffer(pDesc, pInitialData);
 	indexBuffers.insert({ *ppBuffer, data });
+	if (!hooked) {
+		stl::detour_vfunc<2, ID3D11Buffer_Release>(*ppBuffer);
+		hooked = true;
+	}
 }
 
 void Raytracing::RegisterInputLayout(ID3D11InputLayout* ppInputLayout, D3D11_INPUT_ELEMENT_DESC* pInputElementDescs, UINT NumElements)
@@ -622,6 +646,16 @@ void Raytracing::RegisterInputLayout(ID3D11InputLayout* ppInputLayout, D3D11_INP
 			inputLayouts.insert({ ppInputLayout, data });
 		}
 	}
+}
+
+void Raytracing::UnregisterVertexBuffer(ID3D11Buffer* ppBuffer)
+{
+	vertexBuffers.erase(ppBuffer);
+}
+
+void Raytracing::UnregisterIndexBuffer(ID3D11Buffer* ppBuffer)
+{
+	indexBuffers.erase(ppBuffer);
 }
 
 void Raytracing::TransitionResources(D3D12_RESOURCE_STATES stateBefore, D3D12_RESOURCE_STATES stateAfter)
