@@ -251,22 +251,6 @@ void Raytracing::BSTriShape_UpdateWorldData(RE::BSTriShape* This, RE::NiUpdateDa
 	}
 }
 
-void Raytracing::BSTriShape_SetAppCulled(RE::BSTriShape* This, bool a_cull)
-{
-	if (a_cull) {
-		auto it = instances.find(This);
-		if (it != instances.end()) {
-			auto& instanceData = (*it).second;
-			auto error = ffxBrixelizerDeleteInstances(&brixelizerContext, &instanceData.instanceID, 1);
-			if (error != FFX_OK)
-				logger::critical("error");
-			instances.erase(it);
-		}
-	}
-
-	Hooks::BSTriShape_SetAppCulled::func(This, a_cull);
-}
-
 void Raytracing::OpenSharedHandles()
 {
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -514,14 +498,15 @@ void Raytracing::AddInstance(RE::BSTriShape* a_geometry)
 
 void Raytracing::SeenInstance(RE::BSTriShape* a_geometry)
 {
-	std::lock_guard lck{ mutex };
-
-	auto it = instances.find(a_geometry);
-	if (it != instances.end()) {
-		auto& instanceData = (*it).second;
-		instanceData.state = visibleState;
-	} else {
-		queuedInstances.insert(a_geometry);
+	if (a_geometry->GetFlags().none(RE::NiAVObject::Flag::kHidden))
+	{
+		auto it = instances.find(a_geometry);
+		if (it != instances.end()) {
+			auto& instanceData = (*it).second;
+			instanceData.state = visibleState;
+		} else {
+			queuedInstances.insert(a_geometry);
+		}
 	}
 }
 
@@ -840,6 +825,15 @@ void Raytracing::FrameUpdate()
 
 	if (debugAvailable && debugCapture)
 		ga->BeginCapture();
+
+	static auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
+
+	RE::BSVisit::TraverseScenegraphGeometries(shadowSceneNode, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
+		if (auto triShape = a_geometry->AsTriShape()) {
+			SeenInstance(triShape);
+		}
+		return RE::BSVisit::BSVisitControl::kContinue;
+	});
 
 	for (auto it = instances.begin(); it != instances.end();) {
 		if (it->second.state != visibleState) {

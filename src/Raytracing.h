@@ -202,7 +202,6 @@ public:
 	RenderTargetDataD3D12 ConvertD3D11TextureToD3D12(RE::BSGraphics::RenderTargetData* rtData);
 
 	void BSTriShape_UpdateWorldData(RE::BSTriShape* This, RE::NiUpdateData* a_data);
-	void BSTriShape_SetAppCulled(RE::BSTriShape* This, bool a_cull);
 
 	struct Hooks
 	{
@@ -211,48 +210,6 @@ public:
 			static void thunk(RE::BSTriShape* This, RE::NiUpdateData* a_data)
 			{
 				GetSingleton()->BSTriShape_UpdateWorldData(This, a_data);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct BSTriShape_SetAppCulled
-		{
-			static void thunk(RE::BSTriShape* This, bool a_cull)
-			{
-				GetSingleton()->BSTriShape_SetAppCulled(This, a_cull);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct NiCullingProcess_Process1
-		{
-			static void thunk(RE::NiCullingProcess* This, RE::NiAVObject* a_object, std::uint32_t a_arg2)
-			{
-				if (auto triShape = a_object->AsTriShape())
-					GetSingleton()->SeenInstance(triShape);
-				func(This, a_object, a_arg2);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct BSCullingProcess_Process1
-		{
-			static void thunk(RE::NiCullingProcess* This, RE::NiAVObject* a_object, std::uint32_t a_arg2)
-			{
-				if (auto triShape = a_object->AsTriShape())
-					GetSingleton()->SeenInstance(triShape);
-				func(This, a_object, a_arg2);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct BSGeometryListCullingProcess_Process1
-		{
-			static void thunk(RE::NiCullingProcess* This, RE::NiAVObject* a_object, std::uint32_t a_arg2)
-			{
-				if (auto triShape = a_object->AsTriShape())
-					GetSingleton()->SeenInstance(triShape);
-				func(This, a_object, a_arg2);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -270,20 +227,12 @@ public:
 
 		static void Install()
 		{
-			//stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
-
 			if (REL::Module::IsAE()) {
 				stl::write_vfunc<0x31, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
 			} else {
 				stl::write_vfunc<0x30, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
 			}
-
-			//stl::write_vfunc<0x16, NiCullingProcess_Process1>(RE::VTABLE_NiCullingProcess[0]);
-			//	stl::write_vfunc<0x16, BSCullingProcess_Process1>(RE::VTABLE_BSCullingProcess[0]);
-			stl::write_vfunc<0x16, BSGeometryListCullingProcess_Process1>(RE::VTABLE_BSGeometryListCullingProcess[0]);
 			stl::write_thunk_call<DirtyStates_CreateInputLayoutFromVertexDesc>(REL::RelocationID(75580, 75580).address() + REL::Relocate(0x465, 0x465));
-
-			//	stl::detour_thunk<NiNode_Destroy>(REL::RelocationID(68937, 70288));
 
 			logger::info("[Raytracing] Installed hooks");
 		}
