@@ -11,12 +11,12 @@
 #include <FidelityFX/host/ffx_fsr3.h>
 #include <FidelityFX/host/ffx_interface.h>
 
+#include <FidelityFX/host/backends/dx12/d3dx12.h>
 #include <FidelityFX/host/ffx_brixelizer.h>
 #include <FidelityFX/host/ffx_brixelizergi.h>
 
 #include "Buffer.h"
 #include "State.h"
-#include <FidelityFX/host/backends/dx12/d3dx12.h>
 
 interface DECLSPEC_UUID("9f251514-9d4d-4902-9d60-18988ab7d4b5") DECLSPEC_NOVTABLE
 
@@ -99,6 +99,14 @@ public:
 	winrt::com_ptr<ID3D12Resource> cascadeAABBTrees[FFX_BRIXELIZER_MAX_CASCADES];
 	winrt::com_ptr<ID3D12Resource> cascadeBrickMaps[FFX_BRIXELIZER_MAX_CASCADES];
 
+	FfxBrixelizerGIContextDescription giInitializationParameters = {};
+	FfxBrixelizerGIDispatchDescription giDispatchDesc = {};
+	FfxBrixelizerGIContext brixelizerGIContext = {};
+
+	winrt::com_ptr<ID3D12Resource> diffuseGi;
+	winrt::com_ptr<ID3D12Resource> specularGi;
+	winrt::com_ptr<ID3D12Resource> historyDepth;
+
 	ID3D11Texture2D* debugRenderTargetd3d11;
 	ID3D11ShaderResourceView* debugSRV;
 	ID3D12Resource* debugRenderTarget;
@@ -117,12 +125,20 @@ public:
 	bool m_ShowCascadeAABBs = false;
 	int m_ShowAABBTreeIndex = -1;
 
+	float m_RayPushoff = 0.25f;
+
 	void DrawSettings();
 	void InitD3D12(IDXGIAdapter* a_adapter);
 
 	winrt::com_ptr<ID3D12Resource> CreateBuffer(UINT64 size, D3D12_RESOURCE_STATES resourceState, D3D12_RESOURCE_FLAGS flags);
 
+	inline void Init()
+	{
+		InitBrixelizer();
+		InitBrixelizerGI();
+	}
 	void InitBrixelizer();
+	void InitBrixelizerGI();
 
 	void OpenSharedHandles();
 
@@ -178,7 +194,8 @@ public:
 	FfxBrixelizerDebugVisualizationDescription GetDebugVisualization();
 
 	void FrameUpdate();
-	void PopulateCommandList();
+	void UpdateBrixelizerContext();
+	void UpdateBrixelizerGIContext();
 
 	struct InputLayoutData
 	{
