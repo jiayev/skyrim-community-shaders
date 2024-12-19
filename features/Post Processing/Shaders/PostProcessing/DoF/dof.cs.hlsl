@@ -407,7 +407,7 @@ void CS_NearBlur(uint2 DTid : SV_DispatchThreadID)
     DISCBLURINFO blurInfo;
     blurInfo.texcoord = (DTid.xy + 0.5f) / float2(Width, Height);
     blurInfo.numberOfRings = round(BlurQuality);
-    float pixelSizeLength = length(float2(1.0f / Width, 1.0f / Height));
+    float pixelSizeLength = length(float2(1.0f / Width, 1.0f / Height)) * 0.5f;
     blurInfo.farPlaneMaxBlurInPixels = (1.0f / 100.0f) / pixelSizeLength;
     blurInfo.nearPlaneMaxBlurInPixels = (1.0f / 100.0f) / pixelSizeLength;
     blurInfo.cocFactorPerPixel = pixelSizeLength * blurInfo.farPlaneMaxBlurInPixels;	// not needed for near plane.
