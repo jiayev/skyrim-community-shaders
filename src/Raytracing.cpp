@@ -552,14 +552,11 @@ void Raytracing::RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11
 void Raytracing::RegisterInputLayout(ID3D11InputLayout* ppInputLayout, D3D11_INPUT_ELEMENT_DESC* pInputElementDescs, UINT NumElements)
 {
 	InputLayoutData data = {};
-	for (UINT i = 0; i < NumElements; i++)
-	{
-		if (strcmp(pInputElementDescs[i].SemanticName, "POSITION") == 0)
-		{
+	for (UINT i = 0; i < NumElements; i++) {
+		if (strcmp(pInputElementDescs[i].SemanticName, "POSITION") == 0) {
 			data.vertexStride = 0;
 
-			for (UINT k = 0; k < NumElements; k++)
-			{
+			for (UINT k = 0; k < NumElements; k++) {
 				data.vertexStride += (UINT)DirectX::BytesPerElement(pInputElementDescs[k].Format);
 			}
 
