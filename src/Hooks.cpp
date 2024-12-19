@@ -264,6 +264,21 @@ struct ID3D11Device_CreateBuffer
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
+struct ID3D11Device_CreateInputLayout
+{
+	static HRESULT thunk(ID3D11Device* This, D3D11_INPUT_ELEMENT_DESC* pInputElementDescs, UINT NumElements, void *pShaderBytecodeWithInputSignature, SIZE_T BytecodeLength, ID3D11InputLayout** ppInputLayout)
+	{
+		HRESULT hr = func(This, pInputElementDescs, NumElements, pShaderBytecodeWithInputSignature, BytecodeLength, ppInputLayout);
+
+		if (pInputElementDescs && NumElements > 0) {
+			Raytracing::GetSingleton()->RegisterInputLayout(*ppInputLayout, pInputElementDescs, NumElements);
+		}
+
+		return hr;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChain;
 
 #include "d3d11on12.h"
@@ -505,6 +520,7 @@ namespace Hooks
 			}
 
 			stl::detour_vfunc<3, ID3D11Device_CreateBuffer>(device);
+			stl::detour_vfunc<11, ID3D11Device_CreateInputLayout>(device);
 
 			stl::detour_vfunc<14, ID3D11DeviceContext_Map>(context);
 			stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(context);

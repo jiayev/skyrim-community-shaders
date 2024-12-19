@@ -25,7 +25,8 @@
     "pystring",
     "tracy",
     "unordered-dense",
-    "xbyak"
+    "xbyak",
+    "directxmesh"
   ],
   "overrides": [
     {

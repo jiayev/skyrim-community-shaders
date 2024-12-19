@@ -43,6 +43,8 @@ find_package(cppwinrt CONFIG REQUIRED)
 find_package(unordered_dense CONFIG REQUIRED)
 find_package(efsw CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
+find_package(directxmesh CONFIG REQUIRED)
+
 add_subdirectory(${CMAKE_SOURCE_DIR}/cmake/Streamline)
 # include(FidelityFX-SDK)
 include(FidelityFX-SDK-DX12)
@@ -73,6 +75,7 @@ target_link_libraries(
 	EASTL
 	Microsoft::DirectXTK
 	Microsoft::DirectXTex
+	Microsoft::DirectXMesh
 	pystring::pystring
 	unordered_dense::unordered_dense
 	efsw::efsw

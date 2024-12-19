@@ -1,6 +1,7 @@
 #include "Raytracing.h"
 
 #include "Deferred.h"
+#include <DirectXMesh.h>
 
 void Raytracing::CacheFramebuffer()
 {
@@ -403,6 +404,21 @@ void Raytracing::AddInstance(RE::BSTriShape* a_geometry)
 		indexBuffer = &it2->second;
 	}
 
+	auto vertexDesc = *(uint64_t*)&rendererData->vertexDesc;
+
+	InputLayoutData* inputLayoutData;
+
+	{
+		auto it2 = vertexDescToInputLayout.find(vertexDesc);
+		if (it2 == vertexDescToInputLayout.end())
+			return;
+		auto inputLayout = it2->second;
+		auto it3 = inputLayouts.find(inputLayout);
+		if (it3 == inputLayouts.end())
+			return;
+		inputLayoutData = &it3->second;
+	}
+
 	FfxBrixelizerInstanceDescription instanceDesc = {};
 
 	{
@@ -434,6 +450,11 @@ void Raytracing::AddInstance(RE::BSTriShape* a_geometry)
 	instanceDesc.vertexBufferOffset = rendererData->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_POSITION);
 	instanceDesc.vertexCount = a_geometry->GetTrishapeRuntimeData().vertexCount;
 	instanceDesc.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
+
+	instanceDesc.vertexStride = inputLayoutData->vertexStride;
+	instanceDesc.vertexBufferOffset = inputLayoutData->vertexBufferOffset;
+	instanceDesc.vertexCount = a_geometry->GetTrishapeRuntimeData().vertexCount;
+	instanceDesc.vertexFormat = inputLayoutData->vertexFormat;
 
 	InstanceData instanceData{};
 	instanceDesc.outInstanceID = &instanceData.instanceID;
@@ -526,6 +547,33 @@ void Raytracing::RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11
 {
 	BufferData data = AllocateBuffer(pDesc, pInitialData);
 	indexBuffers.insert({ *ppBuffer, data });
+}
+
+void Raytracing::RegisterInputLayout(ID3D11InputLayout* ppInputLayout, D3D11_INPUT_ELEMENT_DESC* pInputElementDescs, UINT NumElements)
+{
+	InputLayoutData data = {};
+	for (UINT i = 0; i < NumElements; i++)
+	{
+		if (strcmp(pInputElementDescs[i].SemanticName, "POSITION") == 0)
+		{
+			data.vertexStride = pInputElementDescs[NumElements - 1].AlignedByteOffset + (UINT)DirectX::BytesPerElement(pInputElementDescs[NumElements - 1].Format);
+			data.vertexBufferOffset = pInputElementDescs[i].AlignedByteOffset;
+
+			auto format = pInputElementDescs[i].Format;
+			if (format == DXGI_FORMAT_R32G32B32A32_FLOAT || format == DXGI_FORMAT_R32G32B32_FLOAT)
+			{
+				data.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
+			}
+			else if (format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+			{
+				data.vertexFormat = FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT;
+			} else {
+				return;
+			}
+			 
+			inputLayouts.insert({ ppInputLayout, data });
+		}
+	}
 }
 
 void Raytracing::TransitionResources(D3D12_RESOURCE_STATES stateBefore, D3D12_RESOURCE_STATES stateAfter)

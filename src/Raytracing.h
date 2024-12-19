@@ -164,16 +164,14 @@ public:
 
 	uint GetBufferIndex(BufferData& a_bufferData);
 
-	void UpdateGeometry(RE::BSRenderPass* a_pass);
-
-
-	void CheckInstance(RE::BSTriShape* geometry, InstanceData& instanceData);
 	void AddInstance(RE::BSTriShape* geometry);
 	void SeenInstance(RE::BSTriShape* geometry);
 	void RemoveInstance(RE::BSTriShape* a_geometry);
 
 	void RegisterVertexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer);
 	void RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer);
+
+	void RegisterInputLayout(ID3D11InputLayout* ppInputLayout, D3D11_INPUT_ELEMENT_DESC* pInputElementDescs, UINT NumElements);
 
 	void TransitionResources(D3D12_RESOURCE_STATES stateBefore, D3D12_RESOURCE_STATES stateAfter);
 
@@ -186,7 +184,15 @@ public:
 	void FrameUpdate();
 	void PopulateCommandList();
 
-	void RecurseSceneGraph(RE::NiAVObject* a_object);
+	struct InputLayoutData
+	{
+		uint32_t vertexStride;
+		uint32_t vertexBufferOffset;
+		FfxSurfaceFormat vertexFormat;
+	};
+
+	eastl::hash_map<ID3D11InputLayout*, InputLayoutData> inputLayouts;
+	eastl::hash_map<uint64_t, ID3D11InputLayout*> vertexDescToInputLayout;
 
 	struct RenderTargetDataD3D12
 	{
@@ -204,16 +210,6 @@ public:
 
 	struct Hooks
 	{
-		struct BSLightingShader_SetupGeometry
-		{
-			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
-			{
-				func(This, Pass, RenderFlags);
-				GetSingleton()->UpdateGeometry(Pass);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
 		struct BSTriShape_UpdateWorldData
 		{
 			static void thunk(RE::BSTriShape* This, RE::NiUpdateData* a_data)
@@ -265,6 +261,17 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct DirtyStates_CreateInputLayoutFromVertexDesc
+		{
+			static ID3D11InputLayout* thunk(uint64_t a_vertexDesc)
+			{
+				auto inputLayout = func(a_vertexDesc);
+				GetSingleton()->vertexDescToInputLayout.insert({ a_vertexDesc, inputLayout });
+				return inputLayout;
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		static void Install()
 		{
 			//stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
@@ -278,6 +285,7 @@ public:
 			//stl::write_vfunc<0x16, NiCullingProcess_Process1>(RE::VTABLE_NiCullingProcess[0]);
 		//	stl::write_vfunc<0x16, BSCullingProcess_Process1>(RE::VTABLE_BSCullingProcess[0]);
 			stl::write_vfunc<0x16, BSGeometryListCullingProcess_Process1>(RE::VTABLE_BSGeometryListCullingProcess[0]);
+			stl::write_thunk_call<DirtyStates_CreateInputLayoutFromVertexDesc>(REL::RelocationID(75580, 75580).address() + REL::Relocate(0x465, 0x465));
 
 			//	stl::detour_thunk<NiNode_Destroy>(REL::RelocationID(68937, 70288));
 
