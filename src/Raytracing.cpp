@@ -570,17 +570,14 @@ void Raytracing::RegisterInputLayout(ID3D11InputLayout* ppInputLayout, D3D11_INP
 			}
 
 			auto format = pInputElementDescs[i].Format;
-			if (format == DXGI_FORMAT_R32G32B32A32_FLOAT || format == DXGI_FORMAT_R32G32B32_FLOAT)
-			{
+			if (format == DXGI_FORMAT_R32G32B32A32_FLOAT || format == DXGI_FORMAT_R32G32B32_FLOAT) {
 				data.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
-			}
-			else if (format == DXGI_FORMAT_R16G16B16A16_FLOAT)
-			{
+			} else if (format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
 				data.vertexFormat = FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT;
 			} else {
 				return;
 			}
-			 
+
 			inputLayouts.insert({ ppInputLayout, data });
 		}
 	}
