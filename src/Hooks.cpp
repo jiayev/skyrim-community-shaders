@@ -266,7 +266,7 @@ struct ID3D11Device_CreateBuffer
 
 struct ID3D11Device_CreateInputLayout
 {
-	static HRESULT thunk(ID3D11Device* This, D3D11_INPUT_ELEMENT_DESC* pInputElementDescs, UINT NumElements, void *pShaderBytecodeWithInputSignature, SIZE_T BytecodeLength, ID3D11InputLayout** ppInputLayout)
+	static HRESULT thunk(ID3D11Device* This, D3D11_INPUT_ELEMENT_DESC* pInputElementDescs, UINT NumElements, void* pShaderBytecodeWithInputSignature, SIZE_T BytecodeLength, ID3D11InputLayout** ppInputLayout)
 	{
 		HRESULT hr = func(This, pInputElementDescs, NumElements, pShaderBytecodeWithInputSignature, BytecodeLength, ppInputLayout);
 

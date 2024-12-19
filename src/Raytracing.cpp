@@ -552,25 +552,20 @@ void Raytracing::RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11
 void Raytracing::RegisterInputLayout(ID3D11InputLayout* ppInputLayout, D3D11_INPUT_ELEMENT_DESC* pInputElementDescs, UINT NumElements)
 {
 	InputLayoutData data = {};
-	for (UINT i = 0; i < NumElements; i++)
-	{
-		if (strcmp(pInputElementDescs[i].SemanticName, "POSITION") == 0)
-		{
+	for (UINT i = 0; i < NumElements; i++) {
+		if (strcmp(pInputElementDescs[i].SemanticName, "POSITION") == 0) {
 			data.vertexStride = pInputElementDescs[NumElements - 1].AlignedByteOffset + (UINT)DirectX::BytesPerElement(pInputElementDescs[NumElements - 1].Format);
 			data.vertexBufferOffset = pInputElementDescs[i].AlignedByteOffset;
 
 			auto format = pInputElementDescs[i].Format;
-			if (format == DXGI_FORMAT_R32G32B32A32_FLOAT || format == DXGI_FORMAT_R32G32B32_FLOAT)
-			{
+			if (format == DXGI_FORMAT_R32G32B32A32_FLOAT || format == DXGI_FORMAT_R32G32B32_FLOAT) {
 				data.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
-			}
-			else if (format == DXGI_FORMAT_R16G16B16A16_FLOAT)
-			{
+			} else if (format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
 				data.vertexFormat = FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT;
 			} else {
 				return;
 			}
-			 
+
 			inputLayouts.insert({ ppInputLayout, data });
 		}
 	}
