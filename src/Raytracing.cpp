@@ -332,6 +332,46 @@ DirectX::XMMATRIX GetXMFromNiTransform(const RE::NiTransform& Transform)
 	return temp;
 }
 
+struct int4
+{
+	int x;
+	int y;
+	int z;
+	int w;
+};
+
+float4x4 GetBoneTransformMatrix(float4 bonePositions[240], int4 boneIndices, float4 pivot, float4 boneWeights)
+{
+	boneIndices.x *= 765.01;
+	boneIndices.y *= 765.01;
+	boneIndices.z *= 765.01;
+	boneIndices.w *= 765.01;
+
+	float4 zeroes = { 0, 0, 0, 0 };
+	float4x4 pivotMatrix = float4x4(zeroes, zeroes, zeroes, pivot).Transpose();
+
+	float4x4 boneMatrix1 =
+		float4x4(bonePositions[boneIndices.x], bonePositions[boneIndices.x + 1], bonePositions[boneIndices.x + 2], zeroes);
+	float4x4 boneMatrix2 =
+		float4x4(bonePositions[boneIndices.y], bonePositions[boneIndices.y + 1], bonePositions[boneIndices.y + 2], zeroes);
+	float4x4 boneMatrix3 =
+		float4x4(bonePositions[boneIndices.z], bonePositions[boneIndices.z + 1], bonePositions[boneIndices.z + 2], zeroes);
+	float4x4 boneMatrix4 =
+		float4x4(bonePositions[boneIndices.w], bonePositions[boneIndices.w + 1], bonePositions[boneIndices.w + 2], zeroes);
+
+	float4 ones = { 1.0, 1.0, 1.0, 1.0 };
+	float4x4 unitMatrix = float4x4(ones, ones, ones, ones);
+	float4x4 weightMatrix1 = unitMatrix * boneWeights.x;
+	float4x4 weightMatrix2 = unitMatrix * boneWeights.y;
+	float4x4 weightMatrix3 = unitMatrix * boneWeights.z;
+	float4x4 weightMatrix4 = unitMatrix * boneWeights.w;
+
+	return (boneMatrix1 - pivotMatrix) * weightMatrix1 +
+	       (boneMatrix2 - pivotMatrix) * weightMatrix2 +
+	       (boneMatrix3 - pivotMatrix) * weightMatrix3 +
+	       (boneMatrix4 - pivotMatrix) * weightMatrix4;
+}
+
 void Raytracing::AddInstance(RE::BSTriShape* a_geometry)
 {
 	const auto& transform = a_geometry->world;
