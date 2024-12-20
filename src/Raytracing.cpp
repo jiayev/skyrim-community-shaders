@@ -160,48 +160,128 @@ void Raytracing::InitBrixelizer()
 	}
 
 	{
-		auto manager = RE::BSGraphics::Renderer::GetSingleton();
-		auto d3d11Device = reinterpret_cast<ID3D11Device*>(manager->GetRuntimeData().forwarder);
+		D3D11_TEXTURE2D_DESC texDesc;
+		texDesc.Width = 1920;
+		texDesc.Height = 1080;
+		texDesc.MipLevels = 1;
+		texDesc.ArraySize = 1;
+		texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+		texDesc.SampleDesc.Count = 1;
+		texDesc.SampleDesc.Quality = 0;
+		texDesc.Usage = D3D11_USAGE_DEFAULT;
+		texDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		texDesc.CPUAccessFlags = 0;
+		texDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
 
-		D3D11_TEXTURE2D_DESC textureDesc;
-		textureDesc.Width = 1920;
-		textureDesc.Height = 1080;
-		textureDesc.MipLevels = 1;
-		textureDesc.ArraySize = 1;
-		textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-		textureDesc.SampleDesc.Count = 1;
-		textureDesc.SampleDesc.Quality = 0;
-		textureDesc.Usage = D3D11_USAGE_DEFAULT;
-		textureDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		textureDesc.CPUAccessFlags = 0;
-		textureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
+		CreatedWrappedResource(texDesc, debugRenderTarget);
+	}
+}
 
-		DX::ThrowIfFailed(d3d11Device->CreateTexture2D(&textureDesc, nullptr, &debugRenderTargetd3d11));
+void Raytracing::CreatedWrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, Raytracing::WrappedResource& a_resource)
+{
+	auto manager = RE::BSGraphics::Renderer::GetSingleton();
+	auto d3d11Device = reinterpret_cast<ID3D11Device*>(manager->GetRuntimeData().forwarder);
 
-		IDXGIResource1* dxgiResource = nullptr;
-		DX::ThrowIfFailed(debugRenderTargetd3d11->QueryInterface(IID_PPV_ARGS(&dxgiResource)));
+	DX::ThrowIfFailed(d3d11Device->CreateTexture2D(&a_texDesc, nullptr, &a_resource.resource11));
 
-		HANDLE sharedHandle = nullptr;
-		DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(
-			nullptr,
-			DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
-			nullptr,
-			&sharedHandle));
+	IDXGIResource1* dxgiResource = nullptr;
+	DX::ThrowIfFailed(a_resource.resource11->QueryInterface(IID_PPV_ARGS(&dxgiResource)));
 
-		DX::ThrowIfFailed(d3d12Device->OpenSharedHandle(
-			sharedHandle,
-			IID_PPV_ARGS(&debugRenderTarget)));
+	HANDLE sharedHandle = nullptr;
+	DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(
+		nullptr,
+		DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+		nullptr,
+		&sharedHandle));
 
+	DX::ThrowIfFailed(d3d12Device->OpenSharedHandle(
+		sharedHandle,
+		IID_PPV_ARGS(&a_resource.resource)));
+
+	CloseHandle(sharedHandle);
+
+	if (a_texDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-		srvDesc.Format = textureDesc.Format;
+		srvDesc.Format = a_texDesc.Format;
 		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 		srvDesc.Texture2D.MostDetailedMip = 0;
 		srvDesc.Texture2D.MipLevels = 1;
 
-		DX::ThrowIfFailed(d3d11Device->CreateShaderResourceView(debugRenderTargetd3d11, &srvDesc, &debugSRV));
+		DX::ThrowIfFailed(d3d11Device->CreateShaderResourceView(a_resource.resource11, &srvDesc, &a_resource.srv));
 	}
 
-	CreateNoiseTextures();
+	if (a_texDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) {
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+		uavDesc.Format = a_texDesc.Format;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+		uavDesc.Texture2D.MipSlice = 0;
+
+		DX::ThrowIfFailed(d3d11Device->CreateUnorderedAccessView(a_resource.resource11, &uavDesc, &a_resource.uav));
+	}
+}
+
+void Raytracing::CreateMiscTextures()
+{
+	const auto displaySize = State::GetSingleton()->screenSize;
+
+	D3D12_RESOURCE_DESC texDesc = {};
+	texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	texDesc.Width = (UINT64)displaySize.x;
+	texDesc.Height = (UINT64)displaySize.y;
+	texDesc.DepthOrArraySize = 1;
+	texDesc.MipLevels = 1;
+	texDesc.Format = DXGI_FORMAT_R32_FLOAT;
+	texDesc.SampleDesc.Count = 1;
+	texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+	texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+	D3D11_TEXTURE2D_DESC texDesc11;
+	texDesc11.Width = (UINT)displaySize.x;
+	texDesc11.Height = (UINT)displaySize.y;
+	texDesc11.MipLevels = 1;
+	texDesc11.ArraySize = 1;
+	texDesc11.Format = DXGI_FORMAT_R32_FLOAT;
+	texDesc11.SampleDesc.Count = 1;
+	texDesc11.SampleDesc.Quality = 0;
+	texDesc11.Usage = D3D11_USAGE_DEFAULT;
+	texDesc11.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	texDesc11.CPUAccessFlags = 0;
+	texDesc11.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
+
+	CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
+	
+	CreatedWrappedResource(texDesc11, depth);
+
+	DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
+		&heapProperties,
+		D3D12_HEAP_FLAG_NONE,
+		&texDesc,
+		D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+		nullptr,
+		IID_PPV_ARGS(&historyDepth)));
+
+	texDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+	texDesc11.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+
+	CreatedWrappedResource(texDesc11, normal);
+
+	DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
+		&heapProperties,
+		D3D12_HEAP_FLAG_NONE,
+		&texDesc,
+		D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+		nullptr,
+		IID_PPV_ARGS(&historyNormal)));
+
+	texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+	DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
+		&heapProperties,
+		D3D12_HEAP_FLAG_NONE,
+		&texDesc,
+		D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+		nullptr,
+		IID_PPV_ARGS(&prevLitOutput)));
 }
 
 void Raytracing::CreateNoiseTextures()
@@ -320,6 +400,7 @@ void Raytracing::InitBrixelizerGI()
 		.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
 		.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
 	};
+	 
 	CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
 
 	for (auto target : { &diffuseGi, &specularGi }) {
@@ -332,14 +413,8 @@ void Raytracing::InitBrixelizerGI()
 			IID_PPV_ARGS(target)));
 	}
 
-	texDesc.Format = DXGI_FORMAT_R16_UNORM;
-	DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
-		&heapProperties,
-		D3D12_HEAP_FLAG_NONE,
-		&texDesc,
-		D3D12_RESOURCE_STATE_GENERIC_READ,
-		nullptr,
-		IID_PPV_ARGS(&historyDepth)));
+	CreateMiscTextures();
+	CreateNoiseTextures();
 }
 
 // Function to check for shared NT handle support and convert to D3D12 resource
@@ -953,7 +1028,7 @@ FfxBrixelizerDebugVisualizationDescription Raytracing::GetDebugVisualization()
 	debugVisDesc.sdfSolveEps = m_SdfSolveEps;
 	debugVisDesc.renderWidth = 1920;
 	debugVisDesc.renderHeight = 1080;
-	debugVisDesc.output = ffxGetResourceDX12(debugRenderTarget, ffxGetResourceDescriptionDX12(debugRenderTarget, FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+	debugVisDesc.output = ffxGetResourceDX12(debugRenderTarget.resource.get(), ffxGetResourceDescriptionDX12(debugRenderTarget.resource.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 
 	return debugVisDesc;
 }
@@ -1084,7 +1159,7 @@ void Raytracing::UpdateBrixelizerGIContext()
 		giDispatchDesc.motionVectors = ffxGetResourceDX12(motionVectors.get(), ffxGetResourceDescriptionDX12(motionVectors.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"MotionVectors", FFX_RESOURCE_STATE_COMPUTE_READ);
 
 		giDispatchDesc.historyDepth = ffxGetResourceDX12(historyDepth.get(), ffxGetResourceDescriptionDX12(historyDepth.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"HistoryDepth", FFX_RESOURCE_STATE_COMPUTE_READ);
-		giDispatchDesc.historyNormal = ffxGetResourceDX12(historyNormals.get(), ffxGetResourceDescriptionDX12(historyNormals.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"HistoryNormal", FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.historyNormal = ffxGetResourceDX12(historyNormal.get(), ffxGetResourceDescriptionDX12(historyNormal.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"HistoryNormal", FFX_RESOURCE_STATE_COMPUTE_READ);
 		giDispatchDesc.prevLitOutput = ffxGetResourceDX12(prevLitOutput.get(), ffxGetResourceDescriptionDX12(prevLitOutput.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"PrevLitOutput", FFX_RESOURCE_STATE_COMPUTE_READ);
 
 		uint noiseIndex = RE::BSGraphics::State::GetSingleton()->frameCount % 16u;
@@ -1128,7 +1203,7 @@ void Raytracing::CopyHistoryResources()
 			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.get(),
 				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
 				D3D12_RESOURCE_STATE_COPY_DEST),
-			CD3DX12_RESOURCE_BARRIER::Transition(historyNormals.get(),
+			CD3DX12_RESOURCE_BARRIER::Transition(historyNormal.get(),
 				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
 				D3D12_RESOURCE_STATE_COPY_DEST),
 			CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.get(),
@@ -1149,7 +1224,7 @@ void Raytracing::CopyHistoryResources()
 	}
 
 	commandList->CopyResource(historyDepth.get(), depth.resource.get());
-	commandList->CopyResource(historyNormals.get(), normal.resource.get());
+	commandList->CopyResource(historyNormal.get(), normal.resource.get());
 	commandList->CopyResource(prevLitOutput.get(), litOutputCopy.resource.get());
 
 	{
@@ -1157,7 +1232,7 @@ void Raytracing::CopyHistoryResources()
 			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.get(),
 				D3D12_RESOURCE_STATE_COPY_DEST,
 				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-			CD3DX12_RESOURCE_BARRIER::Transition(historyNormals.get(),
+			CD3DX12_RESOURCE_BARRIER::Transition(historyNormal.get(),
 				D3D12_RESOURCE_STATE_COPY_DEST,
 				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
 			CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.get(),

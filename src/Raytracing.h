@@ -103,10 +103,6 @@ public:
 	FfxBrixelizerGIDispatchDescription giDispatchDesc = {};
 	FfxBrixelizerGIContext brixelizerGIContext = {};
 
-	ID3D11Texture2D* debugRenderTargetd3d11;
-	ID3D11ShaderResourceView* debugSRV;
-	ID3D12Resource* debugRenderTarget;
-
 	struct WrappedResource
 	{
 		ID3D11Texture2D* resource11;
@@ -114,6 +110,8 @@ public:
 		ID3D11UnorderedAccessView* uav;
 		winrt::com_ptr<ID3D12Resource> resource;
 	};
+
+	WrappedResource debugRenderTarget;
 
 	winrt::com_ptr<ID3D12Resource> diffuseGi;
 	winrt::com_ptr<ID3D12Resource> specularGi;
@@ -123,7 +121,7 @@ public:
 	WrappedResource litOutputCopy;
 
 	winrt::com_ptr<ID3D12Resource> historyDepth;
-	winrt::com_ptr<ID3D12Resource> historyNormals;
+	winrt::com_ptr<ID3D12Resource> historyNormal;
 	winrt::com_ptr<ID3D12Resource> prevLitOutput;
 
 	winrt::com_ptr<ID3D12Resource> noiseTextures[16];
@@ -155,6 +153,8 @@ public:
 		InitBrixelizerGI();
 	}
 	void InitBrixelizer();
+	void CreatedWrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, Raytracing::WrappedResource& a_resource);
+	void CreateMiscTextures();
 	void CreateNoiseTextures();
 	void InitBrixelizerGI();
 

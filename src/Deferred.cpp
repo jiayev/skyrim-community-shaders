@@ -423,7 +423,7 @@ void Deferred::DeferredPasses()
 			dynamicCubemaps->loaded && skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
 			ssgi_y,
 			ssgi_cocg,
-			Raytracing::GetSingleton()->debugSRV
+			Raytracing::GetSingleton()->debugRenderTarget.srv
 		};
 
 		if (dynamicCubemaps->loaded)
