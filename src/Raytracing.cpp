@@ -213,7 +213,7 @@ void Raytracing::CreateNoiseTextures()
 		winrt::com_ptr<ID3D11Resource> noiseTexture11;
 
 		wchar_t filePath[128];
-		swprintf(filePath, 128, L"Data\\Shaders\\Brixelizer\\Noise\\LDR_RG01_%d.png", i);
+		swprintf(filePath, 128, L"Data\\Shaders\\Brixelizer\\Noise\\LDR_RG01_%d.dds", i);
 
 		DirectX::CreateDDSTextureFromFileEx(
 			device,
