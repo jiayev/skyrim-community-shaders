@@ -886,17 +886,16 @@ void Raytracing::UpdateBrixelizerContext()
 
 void Raytracing::UpdateBrixelizerGIContext()
 {
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-
-	auto depth = Util::Convert11To12Resource(d3d12Device.get(), renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].texture);
-	auto mv = Util::Convert11To12Resource(d3d12Device.get(), renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kMOTION_VECTOR].texture);
-	auto envMap = Util::Convert11To12Resource(d3d12Device.get(), DynamicCubemaps::GetSingleton()->envTexture->resource.get());
+	auto& motionVectors = renderTargetsD3D12[RE::RENDER_TARGET::kMOTION_VECTOR].d3d12Resource;
+	auto& environmentMap = renderTargetsCubemapD3D12[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS].d3d12Resource;
 
 	auto view = frameBufferCached.CameraView.Transpose();
 	view._41 -= frameBufferCached.CameraPosAdjust.x;
 	view._42 -= frameBufferCached.CameraPosAdjust.y;
 	view._43 -= frameBufferCached.CameraPosAdjust.z;
+
 	auto projection = frameBufferCached.CameraProj.Transpose();
+
 	static auto prevView = view;
 	static auto prevProjection = projection;
 
@@ -921,7 +920,7 @@ void Raytracing::UpdateBrixelizerGIContext()
 		prevView = view;
 		prevProjection = projection;
 
-		memcpy(&giDispatchDesc.cameraPosition, &frameBufferCached.CameraPosAdjust.x, sizeof(giDispatchDesc.cameraPosition));
+		memcpy(&giDispatchDesc.cameraPosition, &frameBufferCached.CameraPosAdjust, sizeof(giDispatchDesc.cameraPosition));
 
 		giDispatchDesc.startCascade = m_StartCascadeIdx + (2 * NUM_BRIXELIZER_CASCADES);
 		giDispatchDesc.endCascade = m_EndCascadeIdx + (2 * NUM_BRIXELIZER_CASCADES);
@@ -935,30 +934,28 @@ void Raytracing::UpdateBrixelizerGIContext()
 		giDispatchDesc.normalsUnpackMul = 2.0f;
 		giDispatchDesc.normalsUnpackAdd = -1.0f;
 		giDispatchDesc.isRoughnessPerceptual = false;
-		giDispatchDesc.roughnessChannel = 1;
+		giDispatchDesc.roughnessChannel = 0;
 		giDispatchDesc.roughnessThreshold = 0.9f;
 		giDispatchDesc.environmentMapIntensity = 0.1f;
 		giDispatchDesc.motionVectorScale = { 1.0f, 1.0f };
 
-		giDispatchDesc.depth = ffxGetResourceDX12(depth, ffxGetResourceDescriptionDX12(depth, FFX_RESOURCE_USAGE_READ_ONLY), L"Depth", FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.depth = ffxGetResourceDX12(depth.resource.get(), ffxGetResourceDescriptionDX12(depth.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Depth", FFX_RESOURCE_STATE_COMPUTE_READ);
 
-		// TODO unpack normal roughness
-		// giDispatchDesc.normal = ffxGetResourceDX12(m_pNormalTarget->GetResource(), L"Normal");
-		// giDispatchDesc.roughness = ffxGetResourceDX12(m_pRoughnessTarget->GetResource(), L"Roughness");
+		giDispatchDesc.normal = ffxGetResourceDX12(normal.resource.get(), ffxGetResourceDescriptionDX12(normal.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Normal", FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.roughness = ffxGetResourceDX12(roughness.resource.get(), ffxGetResourceDescriptionDX12(roughness.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Roughness", FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.motionVectors = ffxGetResourceDX12(motionVectors.get(), ffxGetResourceDescriptionDX12(motionVectors.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"MotionVectors", FFX_RESOURCE_STATE_COMPUTE_READ);
 
-		giDispatchDesc.motionVectors = ffxGetResourceDX12(mv, ffxGetResourceDescriptionDX12(mv, FFX_RESOURCE_USAGE_READ_ONLY), L"MotionVectors", FFX_RESOURCE_STATE_COMPUTE_READ);
-
-		// TODO histories
 		giDispatchDesc.historyDepth = ffxGetResourceDX12(historyDepth.get(), ffxGetResourceDescriptionDX12(historyDepth.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"HistoryDepth", FFX_RESOURCE_STATE_COMPUTE_READ);
-		// giDispatchDesc.historyNormal = ffxGetResourceDX12(m_pHistoryNormals->GetResource(), L"HistoryNormal");
-		// giDispatchDesc.prevLitOutput = ffxGetResourceDX12(m_pHistoryLitOutput->GetResource(), L"PrevLitOutput");
+		giDispatchDesc.historyNormal = ffxGetResourceDX12(historyNormals.get(), ffxGetResourceDescriptionDX12(historyNormals.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"HistoryNormal", FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.prevLitOutput = ffxGetResourceDX12(prevLitOutput.get(), ffxGetResourceDescriptionDX12(prevLitOutput.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"PrevLitOutput", FFX_RESOURCE_STATE_COMPUTE_READ);
 
-		// TODO noise
-		// giDispatchDesc.noiseTexture = ffxGetResourceDX12(m_NoiseTextures[m_FrameIndex % g_NumNoiseTextures]->GetResource(), L"NoiseTexture");
-		giDispatchDesc.environmentMap = ffxGetResourceDX12(envMap, ffxGetResourceDescriptionDX12(envMap, FFX_RESOURCE_USAGE_READ_ONLY), L"EnvironmentMap", FFX_RESOURCE_STATE_COMPUTE_READ);
+		uint noiseIndex = RE::BSGraphics::State::GetSingleton()->frameCount % (uint)noiseTextures.size();
+		giDispatchDesc.noiseTexture = ffxGetResourceDX12(noiseTextures[noiseIndex].get(), ffxGetResourceDescriptionDX12(noiseTextures[noiseIndex].get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Noise", FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.environmentMap = ffxGetResourceDX12(environmentMap.get(), ffxGetResourceDescriptionDX12(environmentMap.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"EnvironmentMap", FFX_RESOURCE_STATE_COMPUTE_READ);
 
 		giDispatchDesc.sdfAtlas = ffxGetResourceDX12(sdfAtlas.get(), ffxGetResourceDescriptionDX12(sdfAtlas.get(), FFX_RESOURCE_USAGE_READ_ONLY), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
 		giDispatchDesc.bricksAABBs = ffxGetResourceDX12(brickAABBs.get(), ffxGetResourceDescriptionDX12(brickAABBs.get(), FFX_RESOURCE_USAGE_READ_ONLY), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
+
 		for (uint32_t i = 0; i < FFX_BRIXELIZER_MAX_CASCADES; ++i) {
 			giDispatchDesc.cascadeAABBTrees[i] = ffxGetResourceDX12(cascadeAABBTrees[i].get(), ffxGetResourceDescriptionDX12(cascadeAABBTrees[i].get(), FFX_RESOURCE_USAGE_READ_ONLY), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
 			giDispatchDesc.cascadeBrickMaps[i] = ffxGetResourceDX12(cascadeBrickMaps[i].get(), ffxGetResourceDescriptionDX12(cascadeBrickMaps[i].get(), FFX_RESOURCE_USAGE_READ_ONLY), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
@@ -984,66 +981,71 @@ void Raytracing::UpdateBrixelizerGIContext()
 			commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 		}
 	}
+}
 
-	// TODO debug desc
-	// if (m_OutputMode == OutputMode::RadianceCache || m_OutputMode == OutputMode::IrradianceCache) {
-	// 	GPUScopedProfileCapture marker(pCmdList, L"Brixelizer GI Debug Visualization");
+void Raytracing::CopyHistoryResources()
+{
+	{
+		{
+			std::vector<D3D12_RESOURCE_BARRIER> barriers{
+				CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.get(),
+					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+					D3D12_RESOURCE_STATE_COPY_DEST),
+				CD3DX12_RESOURCE_BARRIER::Transition(historyNormals.get(),
+					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+					D3D12_RESOURCE_STATE_COPY_DEST),
+				CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.get(),
+					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+					D3D12_RESOURCE_STATE_COPY_DEST),
 
-	// 	const ResourceState debugVisState = m_pDiffuseGI->GetResource()->GetCurrentResourceState();
+				CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(),
+						D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+						D3D12_RESOURCE_STATE_COPY_SOURCE),
+				CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(),
+					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+					D3D12_RESOURCE_STATE_COPY_SOURCE),
+				CD3DX12_RESOURCE_BARRIER::Transition(litOutputCopy.resource.get(),
+					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+					D3D12_RESOURCE_STATE_COPY_SOURCE)
+			};
+			commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+		}
+	}
 
-	// 	{
-	// 		Barrier barriers[] = { Barrier::Transition(m_pDebugVisualization->GetResource(), debugVisState, ResourceState::UnorderedAccess) };
-	// 		ResourceBarrier(pCmdList, 1, barriers);
-	// 	}
+	commandList->CopyResource(historyDepth.get(), depth.resource.get());
+	commandList->CopyResource(historyNormals.get(), normal.resource.get());
+	commandList->CopyResource(prevLitOutput.get(), litOutputCopy.resource.get());
 
-	// 	FfxBrixelizerGIDebugDescription debug_desc = {};
+	{
+		{
+			std::vector<D3D12_RESOURCE_BARRIER> barriers{
+				CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.get(),
+					D3D12_RESOURCE_STATE_COPY_DEST,
+					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+				CD3DX12_RESOURCE_BARRIER::Transition(historyNormals.get(),
+					D3D12_RESOURCE_STATE_COPY_DEST,
+					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+				CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.get(),
+					D3D12_RESOURCE_STATE_COPY_DEST,
+					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
 
-	// 	memcpy(&debug_desc.view, &view, sizeof(debug_desc.view));
-	// 	memcpy(&debug_desc.projection, &projection, sizeof(debug_desc.projection));
-
-	// 	TextureDesc desc = m_pColorTarget->GetDesc();
-	// 	debug_desc.outputSize[0] = desc.Width;
-	// 	debug_desc.outputSize[1] = desc.Height;
-	// 	debug_desc.normalsUnpackMul = 2.0f;
-	// 	debug_desc.normalsUnpackAdd = -1.0f;
-
-	// 	if (m_OutputMode == OutputMode::RadianceCache)
-	// 		debug_desc.debugMode = FFX_BRIXELIZER_GI_DEBUG_MODE_RADIANCE_CACHE;
-	// 	else if (m_OutputMode == OutputMode::IrradianceCache)
-	// 		debug_desc.debugMode = FFX_BRIXELIZER_GI_DEBUG_MODE_IRRADIANCE_CACHE;
-
-	// 	debug_desc.startCascade = m_StartCascadeIdx + (2 * NUM_BRIXELIZER_CASCADES);
-	// 	debug_desc.endCascade = m_EndCascadeIdx + (2 * NUM_BRIXELIZER_CASCADES);
-	// 	debug_desc.depth = ffxGetResourceDX12(m_pDepthBuffer->GetResource(), L"Depth");
-	// 	debug_desc.normal = ffxGetResourceDX12(m_pNormalTarget->GetResource(), L"Normal");
-
-	// 	debug_desc.sdfAtlas = ffxGetResourceDX12(m_pSdfAtlas->GetResource(), (wchar_t*)m_pSdfAtlas->GetDesc().Name.c_str(), FFX_RESOURCE_STATE_COMPUTE_READ);
-	// 	debug_desc.bricksAABBs = ffxGetResourceDX12(m_pBrickAABBs->GetResource(), (wchar_t*)m_pBrickAABBs->GetDesc().Name.c_str(), FFX_RESOURCE_STATE_COMPUTE_READ);
-
-	// 	for (uint32_t i = 0; i < FFX_BRIXELIZER_MAX_CASCADES; ++i) {
-	// 		debug_desc.cascadeAABBTrees[i] = ffxGetResourceDX12(m_pCascadeAABBTrees[i]->GetResource(), (wchar_t*)m_pCascadeAABBTrees[i]->GetDesc().Name.c_str(), FFX_RESOURCE_STATE_COMPUTE_READ);
-	// 		debug_desc.cascadeBrickMaps[i] = ffxGetResourceDX12(m_pCascadeBrickMaps[i]->GetResource(), (wchar_t*)m_pCascadeBrickMaps[i]->GetDesc().Name.c_str(), FFX_RESOURCE_STATE_COMPUTE_READ);
-	// 	}
-
-	// 	debug_desc.outputDebug = ffxGetResourceDX12(m_pDebugVisualization->GetResource(), L"OutputDebugVisualization", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-
-	// 	FfxErrorCode error = ffxBrixelizerGetRawContext(&m_BrixelizerContext, &debug_desc.brixelizerContext);
-	// 	CauldronAssert(AssertLevel::ASSERT_ERROR, error == FFX_OK, L"Failed to get Brixelizer context pointer.");
-
-	// 	ffxBrixelizerGIContextDebugVisualization(&brixelizerGIContext, &debug_desc, SDKWrapper::ffxGetCommandList(pCmdList));
-
-	// 	{
-	// 		Barrier barriers[] = { Barrier::Transition(m_pDebugVisualization->GetResource(), ResourceState::UnorderedAccess, debugVisState) };
-	// 		ResourceBarrier(pCmdList, 1, barriers);
-	// 	}
-	// }
-
-	// Post
-	commandList->CopyResource(historyDepth.get(), depth);
+				CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(),
+					D3D12_RESOURCE_STATE_COPY_SOURCE,
+					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+				CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(),
+					D3D12_RESOURCE_STATE_COPY_SOURCE,
+					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+				CD3DX12_RESOURCE_BARRIER::Transition(litOutputCopy.resource.get(),
+					D3D12_RESOURCE_STATE_COPY_SOURCE,
+					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)
+			};
+			commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+		}
+	}
 }
 
 void Raytracing::FrameUpdate()
-{
+	{
 	std::lock_guard lck{ mutex };
 
 	WaitForD3D11();
@@ -1078,9 +1080,12 @@ void Raytracing::FrameUpdate()
 	}
 
 	queuedInstances.clear();
+
 	UpdateBrixelizerContext();
 
 	UpdateBrixelizerGIContext();
+
+	CopyHistoryResources();
 
 	ID3D12CommandList* ppCommandLists[] = { commandList.get() };
 	commandQueue->ExecuteCommandLists(1, ppCommandLists);

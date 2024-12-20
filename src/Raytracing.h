@@ -103,13 +103,31 @@ public:
 	FfxBrixelizerGIDispatchDescription giDispatchDesc = {};
 	FfxBrixelizerGIContext brixelizerGIContext = {};
 
-	winrt::com_ptr<ID3D12Resource> diffuseGi;
-	winrt::com_ptr<ID3D12Resource> specularGi;
-	winrt::com_ptr<ID3D12Resource> historyDepth;
-
 	ID3D11Texture2D* debugRenderTargetd3d11;
 	ID3D11ShaderResourceView* debugSRV;
 	ID3D12Resource* debugRenderTarget;
+
+	struct WrappedResource
+	{
+		ID3D11Texture2D* resource11;
+		ID3D11ShaderResourceView* srv;
+		ID3D11UnorderedAccessView* uav;
+		winrt::com_ptr<ID3D12Resource> resource;
+	};
+
+	winrt::com_ptr<ID3D12Resource> diffuseGi;
+	winrt::com_ptr<ID3D12Resource> specularGi;
+
+	WrappedResource depth;
+	WrappedResource normal;
+	WrappedResource roughness;
+	WrappedResource litOutputCopy;
+
+	winrt::com_ptr<ID3D12Resource> historyDepth;
+	winrt::com_ptr<ID3D12Resource> historyNormals;
+	winrt::com_ptr<ID3D12Resource> prevLitOutput;
+
+	std::vector<winrt::com_ptr<ID3D12Resource>> noiseTextures;
 
 	FfxBrixelizerTraceDebugModes m_DebugMode = FFX_BRIXELIZER_TRACE_DEBUG_MODE_GRAD;
 
@@ -197,6 +215,8 @@ public:
 	void UpdateBrixelizerContext();
 	void UpdateBrixelizerGIContext();
 
+	void CopyHistoryResources();
+
 	struct InputLayoutData
 	{
 		uint32_t vertexStride;
@@ -216,6 +236,8 @@ public:
 	std::shared_mutex mutex;
 
 	RenderTargetDataD3D12 renderTargetsD3D12[RE::RENDER_TARGET::kTOTAL];
+	RenderTargetDataD3D12 renderTargetsCubemapD3D12[RE::RENDER_TARGETS_CUBEMAP::kTOTAL];
+
 	RenderTargetDataD3D12 ConvertD3D11TextureToD3D12(RE::BSGraphics::RenderTargetData* rtData);
 
 	void BSTriShape_UpdateWorldData(RE::BSTriShape* This, RE::NiUpdateData* a_data);
