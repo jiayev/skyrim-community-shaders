@@ -126,7 +126,7 @@ public:
 	winrt::com_ptr<ID3D12Resource> historyNormals;
 	winrt::com_ptr<ID3D12Resource> prevLitOutput;
 
-	std::vector<winrt::com_ptr<ID3D12Resource>> noiseTextures;
+	winrt::com_ptr<ID3D12Resource> noiseTextures[16];
 
 	FfxBrixelizerTraceDebugModes m_DebugMode = FFX_BRIXELIZER_TRACE_DEBUG_MODE_GRAD;
 
@@ -155,6 +155,7 @@ public:
 		InitBrixelizerGI();
 	}
 	void InitBrixelizer();
+	void CreateNoiseTextures();
 	void InitBrixelizerGI();
 
 	void OpenSharedHandles();
@@ -203,6 +204,12 @@ public:
 	void UnregisterIndexBuffer(ID3D11Buffer* ppBuffer);
 
 	void TransitionResources(D3D12_RESOURCE_STATES stateBefore, D3D12_RESOURCE_STATES stateAfter);
+
+	ID3D11ComputeShader* copyToSharedBufferCS;
+	ID3D11ComputeShader* GetCopyToSharedBufferCS();
+
+	void ClearShaderCache();
+	void CopyResourcesToSharedBuffers();
 
 	void InitFenceAndEvent();
 	void WaitForD3D11();

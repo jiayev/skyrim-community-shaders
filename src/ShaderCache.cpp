@@ -10,6 +10,7 @@
 #include "Deferred.h"
 #include "Feature.h"
 #include "State.h"
+#include "Raytracing.h"
 
 #include "Features/DynamicCubemaps.h"
 
@@ -1851,6 +1852,7 @@ namespace SIE
 		}
 		compilationSet.Clear();
 		Deferred::GetSingleton()->ClearShaderCache();
+		Raytracing::GetSingleton()->ClearShaderCache();
 		for (auto* feature : Feature::GetFeatureList()) {
 			if (feature->loaded) {
 				feature->ClearShaderCache();
