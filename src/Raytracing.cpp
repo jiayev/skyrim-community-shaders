@@ -1,10 +1,10 @@
 #include "Raytracing.h"
 
-#include "Deferred.h"
 #include <DirectXMesh.h>
-
-#include "Features/DynamicCubemaps.h"
 #include <DDSTextureLoader.h>
+
+#include "Util.h"
+#include "Deferred.h"
 
 void Raytracing::CacheFramebuffer()
 {
@@ -206,90 +206,88 @@ void Raytracing::InitBrixelizer()
 
 void Raytracing::CreateNoiseTextures()
 {
-	{
-		auto& device = State::GetSingleton()->device;
-		auto& context = State::GetSingleton()->context;
+	auto& device = State::GetSingleton()->device;
+	auto& context = State::GetSingleton()->context;
 
-		for (int i = 0; i < 16; i++) {
-			winrt::com_ptr<ID3D11Resource> noiseTexture11;
+	for (int i = 0; i < 16; i++) {
+		winrt::com_ptr<ID3D11Resource> noiseTexture11;
 
-			wchar_t filePath[128];
-			swprintf(filePath, 128, L"Data\\Shaders\\Brixelizer\\Noise\\LDR_RG01_%d.png", i);
+		wchar_t filePath[128];
+		swprintf(filePath, 128, L"Data\\Shaders\\Brixelizer\\Noise\\LDR_RG01_%d.png", i);
 
-			DirectX::CreateDDSTextureFromFileEx(
-				device,
-				context,
-				filePath,
-				SIZE_T_MAX,
-				D3D11_USAGE_DEFAULT,
-				D3D11_BIND_SHADER_RESOURCE,
-				0u,
-				D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED,
-				DirectX::DDS_LOADER_FLAGS::DDS_LOADER_DEFAULT,
-				noiseTexture11.put(),
-				nullptr);
+		DirectX::CreateDDSTextureFromFileEx(
+			device,
+			context,
+			filePath,
+			SIZE_T_MAX,
+			D3D11_USAGE_DEFAULT,
+			D3D11_BIND_SHADER_RESOURCE,
+			0u,
+			D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED,
+			DirectX::DDS_LOADER_FLAGS::DDS_LOADER_DEFAULT,
+			noiseTexture11.put(),
+			nullptr);
 
-			// Query the DXGIResource1 interface to access shared NT handle
-			winrt::com_ptr<IDXGIResource1> dxgiResource1;
-			DX::ThrowIfFailed(noiseTexture11->QueryInterface(IID_PPV_ARGS(&dxgiResource1)));
+		// Query the DXGIResource1 interface to access shared NT handle
+		winrt::com_ptr<IDXGIResource1> dxgiResource1;
+		DX::ThrowIfFailed(noiseTexture11->QueryInterface(IID_PPV_ARGS(&dxgiResource1)));
 
-			// Create the shared NT handle
-			HANDLE sharedNtHandle = nullptr;
-			DX::ThrowIfFailed(dxgiResource1->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ, nullptr, &sharedNtHandle));
+		// Create the shared NT handle
+		HANDLE sharedNtHandle = nullptr;
+		DX::ThrowIfFailed(dxgiResource1->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ, nullptr, &sharedNtHandle));
 
-			// Open the shared handle in D3D12
-			winrt::com_ptr<ID3D12Resource> d3d12Resource;
-			DX::ThrowIfFailed(d3d12Device->OpenSharedHandle(sharedNtHandle, IID_PPV_ARGS(&d3d12Resource)));
-			CloseHandle(sharedNtHandle);  // Close the handle after opening it in D3D12
+		// Open the shared handle in D3D12
+		winrt::com_ptr<ID3D12Resource> d3d12Resource;
+		DX::ThrowIfFailed(d3d12Device->OpenSharedHandle(sharedNtHandle, IID_PPV_ARGS(&d3d12Resource)));
+		CloseHandle(sharedNtHandle);  // Close the handle after opening it in D3D12
 
-			winrt::com_ptr<ID3D11Texture2D> texture11;
-			DX::ThrowIfFailed(noiseTexture11->QueryInterface(IID_PPV_ARGS(&texture11)));
+		winrt::com_ptr<ID3D11Texture2D> texture11;
+		DX::ThrowIfFailed(noiseTexture11->QueryInterface(IID_PPV_ARGS(&texture11)));
 
-			D3D11_TEXTURE2D_DESC texDesc11{};
-			texture11->GetDesc(&texDesc11);
+		D3D11_TEXTURE2D_DESC texDesc11{};
+		texture11->GetDesc(&texDesc11);
 
-			D3D12_RESOURCE_DESC texDesc = {};
-			texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-			texDesc.Width = texDesc11.Width;
-			texDesc.Height = texDesc11.Height;
-			texDesc.DepthOrArraySize = 1;
-			texDesc.MipLevels = 1;
-			texDesc.Format = texDesc11.Format;
-			texDesc.SampleDesc.Count = 1;
-			texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-			texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+		D3D12_RESOURCE_DESC texDesc = {};
+		texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+		texDesc.Width = texDesc11.Width;
+		texDesc.Height = texDesc11.Height;
+		texDesc.DepthOrArraySize = 1;
+		texDesc.MipLevels = 1;
+		texDesc.Format = texDesc11.Format;
+		texDesc.SampleDesc.Count = 1;
+		texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+		texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
-			CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
-			DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
-				&heapProperties,
-				D3D12_HEAP_FLAG_NONE,
-				&texDesc,
-				D3D12_RESOURCE_STATE_COPY_DEST,
-				nullptr,
-				IID_PPV_ARGS(&noiseTextures[i])));
+		CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
+		DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
+			&heapProperties,
+			D3D12_HEAP_FLAG_NONE,
+			&texDesc,
+			D3D12_RESOURCE_STATE_COPY_DEST,
+			nullptr,
+			IID_PPV_ARGS(&noiseTextures[i])));
 
-			{
-				std::vector<D3D12_RESOURCE_BARRIER> barriers{
-					CD3DX12_RESOURCE_BARRIER::Transition(d3d12Resource.get(),
-						D3D12_RESOURCE_STATE_COMMON,
-						D3D12_RESOURCE_STATE_COPY_SOURCE)
-				};
-				commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-			}
+		{
+			std::vector<D3D12_RESOURCE_BARRIER> barriers{
+				CD3DX12_RESOURCE_BARRIER::Transition(d3d12Resource.get(),
+					D3D12_RESOURCE_STATE_COMMON,
+					D3D12_RESOURCE_STATE_COPY_SOURCE)
+			};
+			commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+		}
 
-			commandList->CopyResource(noiseTextures[i].get(), d3d12Resource.get());
+		commandList->CopyResource(noiseTextures[i].get(), d3d12Resource.get());
 
-			{
-				std::vector<D3D12_RESOURCE_BARRIER> barriers{
-					CD3DX12_RESOURCE_BARRIER::Transition(d3d12Resource.get(),
-						D3D12_RESOURCE_STATE_COPY_SOURCE,
-						D3D12_RESOURCE_STATE_COMMON),
-					CD3DX12_RESOURCE_BARRIER::Transition(noiseTextures[i].get(),
-						D3D12_RESOURCE_STATE_COPY_DEST,
-						D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-				};
-				commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-			}
+		{
+			std::vector<D3D12_RESOURCE_BARRIER> barriers{
+				CD3DX12_RESOURCE_BARRIER::Transition(d3d12Resource.get(),
+					D3D12_RESOURCE_STATE_COPY_SOURCE,
+					D3D12_RESOURCE_STATE_COMMON),
+				CD3DX12_RESOURCE_BARRIER::Transition(noiseTextures[i].get(),
+					D3D12_RESOURCE_STATE_COPY_DEST,
+					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			};
+			commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 		}
 	}
 }

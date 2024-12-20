@@ -1,10 +1,10 @@
 #pragma once
 
-#include <eastl/set.h>
 #include <shared_mutex>
 #include <unordered_set>
 
 #include <d3d12.h>
+#include <eastl/set.h>
 
 #include <FidelityFX/host/backends/dx12/ffx_dx12.h>
 
