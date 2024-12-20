@@ -1,10 +1,10 @@
 #include "Raytracing.h"
 
-#include <DirectXMesh.h>
 #include <DDSTextureLoader.h>
+#include <DirectXMesh.h>
 
-#include "Util.h"
 #include "Deferred.h"
+#include "Util.h"
 
 void Raytracing::CacheFramebuffer()
 {
