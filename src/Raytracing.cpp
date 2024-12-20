@@ -999,8 +999,8 @@ void Raytracing::CopyHistoryResources()
 					D3D12_RESOURCE_STATE_COPY_DEST),
 
 				CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(),
-						D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-						D3D12_RESOURCE_STATE_COPY_SOURCE),
+					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+					D3D12_RESOURCE_STATE_COPY_SOURCE),
 				CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(),
 					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
 					D3D12_RESOURCE_STATE_COPY_SOURCE),
@@ -1045,7 +1045,7 @@ void Raytracing::CopyHistoryResources()
 }
 
 void Raytracing::FrameUpdate()
-	{
+{
 	std::lock_guard lck{ mutex };
 
 	WaitForD3D11();
