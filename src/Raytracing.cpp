@@ -887,7 +887,7 @@ void Raytracing::UpdateBrixelizerContext()
 void Raytracing::UpdateBrixelizerGIContext()
 {
 	auto& motionVectors = renderTargetsD3D12[RE::RENDER_TARGET::kMOTION_VECTOR].d3d12Resource;
-	auto& environmentMap = renderTargetsCubemapD3D12[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS].d3d12Resource;
+//	auto& environmentMap = renderTargetsCubemapD3D12[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS].d3d12Resource;
 	auto& normalsRoughness = renderTargetsD3D12[NORMALROUGHNESS].d3d12Resource;
 
 	auto view = frameBufferCached.CameraView.Transpose();
@@ -952,7 +952,7 @@ void Raytracing::UpdateBrixelizerGIContext()
 
 		uint noiseIndex = RE::BSGraphics::State::GetSingleton()->frameCount % (uint)noiseTextures.size();
 		giDispatchDesc.noiseTexture = ffxGetResourceDX12(noiseTextures[noiseIndex].get(), ffxGetResourceDescriptionDX12(noiseTextures[noiseIndex].get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Noise", FFX_RESOURCE_STATE_COMPUTE_READ);
-		giDispatchDesc.environmentMap = ffxGetResourceDX12(environmentMap.get(), ffxGetResourceDescriptionDX12(environmentMap.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"EnvironmentMap", FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.environmentMap = ffxGetResourceDX12(nullptr, ffxGetResourceDescriptionDX12(nullptr, FFX_RESOURCE_USAGE_READ_ONLY), L"EnvironmentMap", FFX_RESOURCE_STATE_COMPUTE_READ);
 
 		giDispatchDesc.sdfAtlas = ffxGetResourceDX12(sdfAtlas.get(), ffxGetResourceDescriptionDX12(sdfAtlas.get(), FFX_RESOURCE_USAGE_READ_ONLY), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
 		giDispatchDesc.bricksAABBs = ffxGetResourceDX12(brickAABBs.get(), ffxGetResourceDescriptionDX12(brickAABBs.get(), FFX_RESOURCE_USAGE_READ_ONLY), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
