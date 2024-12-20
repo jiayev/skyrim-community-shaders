@@ -985,63 +985,60 @@ void Raytracing::UpdateBrixelizerGIContext()
 
 void Raytracing::CopyHistoryResources()
 {
+	
 	{
-		{
-			std::vector<D3D12_RESOURCE_BARRIER> barriers{
-				CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.get(),
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-					D3D12_RESOURCE_STATE_COPY_DEST),
-				CD3DX12_RESOURCE_BARRIER::Transition(historyNormals.get(),
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-					D3D12_RESOURCE_STATE_COPY_DEST),
-				CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.get(),
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-					D3D12_RESOURCE_STATE_COPY_DEST),
+		std::vector<D3D12_RESOURCE_BARRIER> barriers{
+			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COPY_DEST),
+			CD3DX12_RESOURCE_BARRIER::Transition(historyNormals.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COPY_DEST),
+			CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COPY_DEST),
 
-				CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(),
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-					D3D12_RESOURCE_STATE_COPY_SOURCE),
-				CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(),
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-					D3D12_RESOURCE_STATE_COPY_SOURCE),
-				CD3DX12_RESOURCE_BARRIER::Transition(litOutputCopy.resource.get(),
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-					D3D12_RESOURCE_STATE_COPY_SOURCE)
-			};
-			commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-		}
+			CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COPY_SOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COPY_SOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(litOutputCopy.resource.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COPY_SOURCE)
+		};
+		commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 	}
 
 	commandList->CopyResource(historyDepth.get(), depth.resource.get());
 	commandList->CopyResource(historyNormals.get(), normal.resource.get());
 	commandList->CopyResource(prevLitOutput.get(), litOutputCopy.resource.get());
-
+	
 	{
-		{
-			std::vector<D3D12_RESOURCE_BARRIER> barriers{
-				CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.get(),
-					D3D12_RESOURCE_STATE_COPY_DEST,
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-				CD3DX12_RESOURCE_BARRIER::Transition(historyNormals.get(),
-					D3D12_RESOURCE_STATE_COPY_DEST,
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-				CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.get(),
-					D3D12_RESOURCE_STATE_COPY_DEST,
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+		std::vector<D3D12_RESOURCE_BARRIER> barriers{
+			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.get(),
+				D3D12_RESOURCE_STATE_COPY_DEST,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(historyNormals.get(),
+				D3D12_RESOURCE_STATE_COPY_DEST,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.get(),
+				D3D12_RESOURCE_STATE_COPY_DEST,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
 
-				CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(),
-					D3D12_RESOURCE_STATE_COPY_SOURCE,
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-				CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(),
-					D3D12_RESOURCE_STATE_COPY_SOURCE,
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-				CD3DX12_RESOURCE_BARRIER::Transition(litOutputCopy.resource.get(),
-					D3D12_RESOURCE_STATE_COPY_SOURCE,
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)
-			};
-			commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-		}
-	}
+			CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(),
+				D3D12_RESOURCE_STATE_COPY_SOURCE,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(),
+				D3D12_RESOURCE_STATE_COPY_SOURCE,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(litOutputCopy.resource.get(),
+				D3D12_RESOURCE_STATE_COPY_SOURCE,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)
+		};
+		commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+	}	
 }
 
 void Raytracing::FrameUpdate()
