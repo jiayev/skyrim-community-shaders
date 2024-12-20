@@ -294,7 +294,6 @@ void Raytracing::CreateNoiseTextures()
 	}
 }
 
-
 void Raytracing::InitBrixelizerGI()
 {
 	const auto displaySize = State::GetSingleton()->screenSize;
@@ -883,7 +882,7 @@ void Raytracing::CopyResourcesToSharedBuffers()
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 	ID3D11ComputeShader* shader = nullptr;
-	context->CSSetShader(shader, nullptr, 0);	
+	context->CSSetShader(shader, nullptr, 0);
 }
 
 // Initialize Fence and Event
