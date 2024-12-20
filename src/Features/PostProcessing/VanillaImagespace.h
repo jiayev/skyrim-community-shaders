@@ -12,8 +12,11 @@ struct VanillaImagespace : public PostProcessFeature
 		float3 blendFactor = float3(1.0f, 1.0f, 1.0f);
         float3 InteriorMultiplier = float3(1.0f, 1.0f, 1.0f);
         float3 ExteriorMultiplier = float3(1.0f, 1.0f, 1.0f);
+        float3 InteriorOverride = float3(1.0f, 1.0f, 1.0f);
+        float3 ExteriorOverride = float3(1.0f, 1.0f, 1.0f);
         bool enableInExMultiplier = false;
-        uint8_t pad[3];
+        bool enableInExOverride = false;
+        uint8_t pad[2];
 	} settings;
 
     struct alignas(16) VanillaImagespaceCB

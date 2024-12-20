@@ -189,18 +189,18 @@ void DoF::SetupResources()
 	{
 		D3D11_SAMPLER_DESC samplerDesc = {
 			.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-			.AddressU = D3D11_TEXTURE_ADDRESS_BORDER,
-			.AddressV = D3D11_TEXTURE_ADDRESS_BORDER,
-			.AddressW = D3D11_TEXTURE_ADDRESS_BORDER,
+			.AddressU = D3D11_TEXTURE_ADDRESS_MIRROR,
+			.AddressV = D3D11_TEXTURE_ADDRESS_MIRROR,
+			.AddressW = D3D11_TEXTURE_ADDRESS_MIRROR,
 			.MaxAnisotropy = 1,
 			.MinLOD = 0,
 			.MaxLOD = D3D11_FLOAT32_MAX
 		};
         DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, colorSampler.put()));
 
-        samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-        samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-        samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_MIRROR;
+        samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_MIRROR;
+        samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_MIRROR;
         DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, depthSampler.put()));
     }
 
