@@ -19,7 +19,7 @@ RWTexture2D<unorm float3> Normal : register(u1);
 
 	float3 normalGlossiness = NormalRoughnessTexture[dispatchID.xy];
 	float3 normalVS = GBuffer::DecodeNormal(normalGlossiness.xy);
-	
+
 	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
 
 	DepthTexture12[dispatchID.xy] = DepthTexture11[dispatchID.xy];

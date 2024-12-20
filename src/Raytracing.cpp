@@ -249,7 +249,7 @@ void Raytracing::CreateMiscTextures()
 	texDesc11.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
 
 	CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
-	
+
 	CreatedWrappedResource(texDesc11, depth);
 
 	DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
@@ -400,7 +400,7 @@ void Raytracing::InitBrixelizerGI()
 		.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
 		.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
 	};
-	 
+
 	CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
 
 	for (auto target : { &diffuseGi, &specularGi }) {
