@@ -120,7 +120,6 @@ public:
 
 	WrappedResource depth;
 	WrappedResource normal;
-	WrappedResource roughness;
 	WrappedResource litOutputCopy;
 
 	winrt::com_ptr<ID3D12Resource> historyDepth;

@@ -888,6 +888,7 @@ void Raytracing::UpdateBrixelizerGIContext()
 {
 	auto& motionVectors = renderTargetsD3D12[RE::RENDER_TARGET::kMOTION_VECTOR].d3d12Resource;
 	auto& environmentMap = renderTargetsCubemapD3D12[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS].d3d12Resource;
+	auto& normalsRoughness = renderTargetsD3D12[NORMALROUGHNESS].d3d12Resource;
 
 	auto view = frameBufferCached.CameraView.Transpose();
 	view._41 -= frameBufferCached.CameraPosAdjust.x;
@@ -934,7 +935,7 @@ void Raytracing::UpdateBrixelizerGIContext()
 		giDispatchDesc.normalsUnpackMul = 2.0f;
 		giDispatchDesc.normalsUnpackAdd = -1.0f;
 		giDispatchDesc.isRoughnessPerceptual = false;
-		giDispatchDesc.roughnessChannel = 0;
+		giDispatchDesc.roughnessChannel = 1;
 		giDispatchDesc.roughnessThreshold = 0.9f;
 		giDispatchDesc.environmentMapIntensity = 0.1f;
 		giDispatchDesc.motionVectorScale = { 1.0f, 1.0f };
@@ -942,7 +943,7 @@ void Raytracing::UpdateBrixelizerGIContext()
 		giDispatchDesc.depth = ffxGetResourceDX12(depth.resource.get(), ffxGetResourceDescriptionDX12(depth.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Depth", FFX_RESOURCE_STATE_COMPUTE_READ);
 
 		giDispatchDesc.normal = ffxGetResourceDX12(normal.resource.get(), ffxGetResourceDescriptionDX12(normal.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Normal", FFX_RESOURCE_STATE_COMPUTE_READ);
-		giDispatchDesc.roughness = ffxGetResourceDX12(roughness.resource.get(), ffxGetResourceDescriptionDX12(roughness.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Roughness", FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.roughness = ffxGetResourceDX12(normalsRoughness.get(), ffxGetResourceDescriptionDX12(normalsRoughness.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Roughness", FFX_RESOURCE_STATE_COMPUTE_READ);
 		giDispatchDesc.motionVectors = ffxGetResourceDX12(motionVectors.get(), ffxGetResourceDescriptionDX12(motionVectors.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"MotionVectors", FFX_RESOURCE_STATE_COMPUTE_READ);
 
 		giDispatchDesc.historyDepth = ffxGetResourceDX12(historyDepth.get(), ffxGetResourceDescriptionDX12(historyDepth.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"HistoryDepth", FFX_RESOURCE_STATE_COMPUTE_READ);
