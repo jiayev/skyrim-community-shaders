@@ -985,7 +985,6 @@ void Raytracing::UpdateBrixelizerGIContext()
 
 void Raytracing::CopyHistoryResources()
 {
-	
 	{
 		std::vector<D3D12_RESOURCE_BARRIER> barriers{
 			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.get(),
@@ -1014,7 +1013,7 @@ void Raytracing::CopyHistoryResources()
 	commandList->CopyResource(historyDepth.get(), depth.resource.get());
 	commandList->CopyResource(historyNormals.get(), normal.resource.get());
 	commandList->CopyResource(prevLitOutput.get(), litOutputCopy.resource.get());
-	
+
 	{
 		std::vector<D3D12_RESOURCE_BARRIER> barriers{
 			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.get(),
@@ -1038,7 +1037,7 @@ void Raytracing::CopyHistoryResources()
 				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)
 		};
 		commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-	}	
+	}
 }
 
 void Raytracing::FrameUpdate()
