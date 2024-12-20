@@ -1027,7 +1027,7 @@ void Raytracing::UpdateBrixelizerContext()
 void Raytracing::UpdateBrixelizerGIContext()
 {
 	auto& motionVectors = renderTargetsD3D12[RE::RENDER_TARGET::kMOTION_VECTOR].d3d12Resource;
-//	auto& environmentMap = renderTargetsCubemapD3D12[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS].d3d12Resource;
+	//	auto& environmentMap = renderTargetsCubemapD3D12[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS].d3d12Resource;
 	auto& normalsRoughness = renderTargetsD3D12[NORMALROUGHNESS].d3d12Resource;
 
 	auto view = frameBufferCached.CameraView.Transpose();

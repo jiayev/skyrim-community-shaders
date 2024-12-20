@@ -274,11 +274,10 @@ public:
 		{
 			a_pDesc->MiscFlags = 0;  // Original code we wrote over
 
-			if (a_targetIndex == RE::RENDER_TARGET::kMOTION_VECTOR || 
+			if (a_targetIndex == RE::RENDER_TARGET::kMOTION_VECTOR ||
 				a_targetIndex == RE::RENDER_TARGET::kNORMAL_TAAMASK_SSRMASK ||
 				a_targetIndex == RE::RENDER_TARGET::kNORMAL_TAAMASK_SSRMASK_SWAP ||
-				a_targetIndex == RE::RENDER_TARGET::kMAIN
-				) {
+				a_targetIndex == RE::RENDER_TARGET::kMAIN) {
 				a_pDesc->MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 			}
 		}
