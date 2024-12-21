@@ -589,6 +589,8 @@ void BrixelizerContext::UpdateBrixelizerContext()
 		AddInstance(queuedInstance);
 	}
 
+	queuedInstances.clear();
+
 	// Transition all resources to resource state expected by Brixelizer
 	TransitionResources(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
