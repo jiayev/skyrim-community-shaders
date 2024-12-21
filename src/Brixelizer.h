@@ -6,6 +6,8 @@
 #include <d3d12.h>
 #include <eastl/set.h>
 
+#include <d3d11_4.h>
+
 #include <FidelityFX/host/backends/dx12/ffx_dx12.h>
 
 #include <FidelityFX/host/ffx_fsr3.h>
@@ -81,6 +83,12 @@ public:
 	winrt::com_ptr<ID3D12CommandQueue> commandQueue;
 	winrt::com_ptr<ID3D12CommandAllocator> commandAllocator;
 	winrt::com_ptr<ID3D12GraphicsCommandList> commandList;
+	
+	winrt::com_ptr<ID3D11Device5> d3d11Device;
+	winrt::com_ptr<ID3D11DeviceContext4> d3d11Context;
+	winrt::com_ptr<ID3D11Fence> d3d11Fence;
+	winrt::com_ptr<ID3D12Fence> d3d12Fence;
+	UINT64 currentFenceValue = 0;
 
 	winrt::com_ptr<ID3D12Fence> fence;
 	UINT64 fenceValue = 0;
@@ -105,10 +113,7 @@ public:
 
 	void ClearShaderCache();
 
-	void InitFenceAndEvent();
-
-	void WaitForD3D11();
-	void WaitForD3D12();
+	void InitializeSharedFence();
 
 	void FrameUpdate();
 

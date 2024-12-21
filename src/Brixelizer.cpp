@@ -18,10 +18,10 @@ void Brixelizer::CacheFramebuffer()
 
 void Brixelizer::DrawSettings()
 {
-	//ImGui::Text("Debug capture requires that PIX is attached.");
-	//if (ImGui::Button("Take Debug Capture") && !debugCapture) {
-	//	debugCapture = true;
-	//}
+	ImGui::Text("Debug capture requires that PIX is attached.");
+	if (ImGui::Button("Take Debug Capture") && !debugCapture) {
+		debugCapture = true;
+	}
 	//ImGui::SliderInt("Debug Mode", (int*)&m_DebugMode, 0, FFX_BRIXELIZER_TRACE_DEBUG_MODE_CASCADE_ID, "%d", ImGuiSliderFlags_AlwaysClamp);
 	//if (auto _tt = Util::HoverTooltipWrapper())
 	//	ImGui::Text("%s", magic_enum::enum_name(m_DebugMode).data());
@@ -78,19 +78,23 @@ void Brixelizer::InitD3D12(IDXGIAdapter* a_adapter)
 	DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.get(), nullptr, IID_PPV_ARGS(&commandList)));
 	DX::ThrowIfFailed(commandList->Close());
 
-	InitFenceAndEvent();
-
 	debugAvailable = DXGIGetDebugInterface1(0, IID_PPV_ARGS(&ga)) == S_OK;
 }
 
 void Brixelizer::InitBrixelizer()
 {
 	auto manager = RE::BSGraphics::Renderer::GetSingleton();
+
+	auto device = reinterpret_cast<ID3D11Device*>(manager->GetRuntimeData().forwarder);
 	auto context = reinterpret_cast<ID3D11DeviceContext*>(manager->GetRuntimeData().context);
+	
+	DX::ThrowIfFailed(device->QueryInterface(IID_PPV_ARGS(&d3d11Device)));
+	DX::ThrowIfFailed(context->QueryInterface(IID_PPV_ARGS(&d3d11Context)));
 
 	stl::detour_vfunc<14, Brixelizer::Hooks::ID3D11DeviceContext_Map>(context);
 	stl::detour_vfunc<15, Brixelizer::Hooks::ID3D11DeviceContext_Unmap>(context);
-
+	
+	InitializeSharedFence();
 	OpenSharedHandles();
 	BrixelizerContext::GetSingleton()->InitBrixelizerContext();
 	BrixelizerGIContext::GetSingleton()->InitBrixelizerGIContext();
@@ -98,8 +102,7 @@ void Brixelizer::InitBrixelizer()
 
 void Brixelizer::CreatedWrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, Brixelizer::WrappedResource& a_resource)
 {
-	auto manager = RE::BSGraphics::Renderer::GetSingleton();
-	auto d3d11Device = reinterpret_cast<ID3D11Device*>(manager->GetRuntimeData().forwarder);
+	auto& d3d11Device = GetSingleton()->d3d11Device;
 
 	DX::ThrowIfFailed(d3d11Device->CreateTexture2D(&a_texDesc, nullptr, &a_resource.resource11));
 
@@ -117,7 +120,7 @@ void Brixelizer::CreatedWrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, Brixeliz
 		sharedHandle,
 		IID_PPV_ARGS(&a_resource.resource)));
 
-	CloseHandle(sharedHandle);
+	//CloseHandle(sharedHandle);
 
 	if (a_texDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
@@ -136,6 +139,15 @@ void Brixelizer::CreatedWrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, Brixeliz
 		uavDesc.Texture2D.MipSlice = 0;
 
 		DX::ThrowIfFailed(d3d11Device->CreateUnorderedAccessView(a_resource.resource11, &uavDesc, &a_resource.uav));
+	}
+
+	{
+		std::vector<D3D12_RESOURCE_BARRIER> barriers{
+			CD3DX12_RESOURCE_BARRIER::Transition(a_resource.resource.get(),
+				D3D12_RESOURCE_STATE_COMMON,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)
+		};
+		GetSingleton()->commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 	}
 }
 
@@ -163,7 +175,16 @@ Brixelizer::RenderTargetDataD3D12 Brixelizer::ConvertD3D11TextureToD3D12(RE::BSG
 
 	// Open the shared handle in D3D12
 	DX::ThrowIfFailed(d3d12Device->OpenSharedHandle(sharedNtHandle, IID_PPV_ARGS(&renderTargetData.d3d12Resource)));
-	CloseHandle(sharedNtHandle);  // Close the handle after opening it in D3D12
+	//CloseHandle(sharedNtHandle);  // Close the handle after opening it in D3D12
+
+	{
+		std::vector<D3D12_RESOURCE_BARRIER> barriers{
+			CD3DX12_RESOURCE_BARRIER::Transition(renderTargetData.d3d12Resource.get(),
+				D3D12_RESOURCE_STATE_COMMON,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)
+		};
+		GetSingleton()->commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+	}
 
 	return renderTargetData;
 }
@@ -181,53 +202,33 @@ void Brixelizer::ClearShaderCache()
 {
 }
 
-void Brixelizer::InitFenceAndEvent()
+void Brixelizer::InitializeSharedFence()
 {
-	HRESULT hr = d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-	if (FAILED(hr)) {
-		throw std::runtime_error("Failed to create fence.");
-	}
+	DX::ThrowIfFailed(d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&d3d12Fence)));
 
-	fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-	if (!fenceEvent) {
-		throw std::runtime_error("Failed to create fence event.");
-	}
+	HANDLE sharedFenceHandle;
+
+	DX::ThrowIfFailed(d3d12Device->CreateSharedHandle(d3d12Fence.get(), nullptr, GENERIC_ALL, nullptr, &sharedFenceHandle));
+	DX::ThrowIfFailed(d3d11Device->OpenSharedFence(sharedFenceHandle, IID_PPV_ARGS(&d3d11Fence)));
 }
 
-void Brixelizer::WaitForD3D11()
+void WaitForD3D11(ID3D11DeviceContext4* d3d11Context, ID3D11Fence* d3d11Fence, UINT64 fenceValue)
 {
-	auto state = State::GetSingleton();
-
-	D3D11_QUERY_DESC queryDesc = { .Query = D3D11_QUERY_EVENT, .MiscFlags = 0 };
-	winrt::com_ptr<ID3D11Query> query;
-	DX::ThrowIfFailed(state->device->CreateQuery(&queryDesc, query.put()));
-
-	// https://github.com/niessner/VoxelHashing/blob/master/DepthSensingCUDA/Source/GlobalAppState.cpp
-	state->context->Flush();
-	state->context->End(query.get());
-	state->context->Flush();
-
-	while (state->context->GetData(query.get(), nullptr, 0, 0) != S_OK) {}
+	// Wait on the D3D11 context until the shared fence reaches the given value
+	DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence, fenceValue));
 }
 
-// WaitForD3D12 Function
-void Brixelizer::WaitForD3D12()
+void WaitForD3D12(ID3D12CommandQueue* commandQueue, ID3D12Fence* d3d12Fence, UINT64& currentFenceValue)
 {
-	// Increment the fence value
-	const UINT64 currentFenceValue = fenceValue;
-	DX::ThrowIfFailed(commandQueue->Signal(fence.get(), currentFenceValue));
-	fenceValue++;
-
-	// Check if the fence has been reached
-	if (fence->GetCompletedValue() < currentFenceValue) {
-		DX::ThrowIfFailed(fence->SetEventOnCompletion(currentFenceValue, fenceEvent));
-		WaitForSingleObject(fenceEvent, INFINITE);
-	}
+	// Increment and signal the fence value
+	const UINT64 fenceValueToWaitFor = ++currentFenceValue;
+	DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence, fenceValueToWaitFor));
 }
 
 void Brixelizer::FrameUpdate()
 {
-	WaitForD3D11();
+	// Wait for D3D11 to complete prior work
+	WaitForD3D11(d3d11Context.get(), d3d11Fence.get(), currentFenceValue);
 
 	if (debugAvailable && debugCapture)
 		ga->BeginCapture();
@@ -236,7 +237,7 @@ void Brixelizer::FrameUpdate()
 	DX::ThrowIfFailed(commandList->Reset(commandAllocator.get(), nullptr));
 
 	BrixelizerContext::GetSingleton()->UpdateBrixelizerContext();
-	//BrixelizerGIContext::GetSingleton()->UpdateBrixelizerGIContext();
+	BrixelizerGIContext::GetSingleton()->UpdateBrixelizerGIContext();
 
 	DX::ThrowIfFailed(commandList->Close());
 
@@ -246,7 +247,8 @@ void Brixelizer::FrameUpdate()
 	if (debugAvailable && debugCapture)
 		ga->EndCapture();
 
-	WaitForD3D12();
+    // Signal and wait for D3D12 to complete this frame's work
+	WaitForD3D12(commandQueue.get(), d3d12Fence.get(), currentFenceValue);
 
 	debugCapture = false;
 }
