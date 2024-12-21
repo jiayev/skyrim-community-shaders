@@ -1024,7 +1024,7 @@ void Raytracing::UpdateBrixelizerContext()
 	// Pass in the externally created output resources as FfxResource objects.
 	updateDesc.resources.sdfAtlas = ffxGetResourceDX12(sdfAtlas.get(), ffxGetResourceDescriptionDX12(sdfAtlas.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 	updateDesc.resources.brickAABBs = ffxGetResourceDX12(brickAABBs.get(), ffxGetResourceDescriptionDX12(brickAABBs.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-	
+
 	for (uint32_t i = 0; i < FFX_BRIXELIZER_MAX_CASCADES; ++i) {
 		updateDesc.resources.cascadeResources[i].aabbTree = ffxGetResourceDX12(cascadeAABBTrees[i].get(), ffxGetResourceDescriptionDX12(cascadeAABBTrees[i].get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 		updateDesc.resources.cascadeResources[i].brickMap = ffxGetResourceDX12(cascadeBrickMaps[i].get(), ffxGetResourceDescriptionDX12(cascadeBrickMaps[i].get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -1069,7 +1069,6 @@ void Raytracing::UpdateBrixelizerGIContext()
 
 	uint noiseIndex = RE::BSGraphics::State::GetSingleton()->frameCount % 16u;
 
-	
 	{
 		std::vector<D3D12_RESOURCE_BARRIER> barriers{
 			CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(),
@@ -1105,7 +1104,7 @@ void Raytracing::UpdateBrixelizerGIContext()
 		};
 		commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 	}
-	
+
 	{
 		memcpy(&giDispatchDesc.view, &view, sizeof(giDispatchDesc.view));
 		memcpy(&giDispatchDesc.projection, &projection, sizeof(giDispatchDesc.projection));
@@ -1163,7 +1162,6 @@ void Raytracing::UpdateBrixelizerGIContext()
 
 		if (ffxBrixelizerGIContextDispatch(&brixelizerGIContext, &giDispatchDesc, ffxGetCommandListDX12(commandList.get())) != FFX_OK)
 			logger::error("Failed to dispatch Brixelizer GI.");
-
 	}
 
 	{
