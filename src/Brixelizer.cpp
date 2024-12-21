@@ -87,13 +87,13 @@ void Brixelizer::InitBrixelizer()
 
 	auto device = reinterpret_cast<ID3D11Device*>(manager->GetRuntimeData().forwarder);
 	auto context = reinterpret_cast<ID3D11DeviceContext*>(manager->GetRuntimeData().context);
-	
+
 	DX::ThrowIfFailed(device->QueryInterface(IID_PPV_ARGS(&d3d11Device)));
 	DX::ThrowIfFailed(context->QueryInterface(IID_PPV_ARGS(&d3d11Context)));
 
 	stl::detour_vfunc<14, Brixelizer::Hooks::ID3D11DeviceContext_Map>(context);
 	stl::detour_vfunc<15, Brixelizer::Hooks::ID3D11DeviceContext_Unmap>(context);
-	
+
 	InitializeSharedFence();
 	OpenSharedHandles();
 	BrixelizerContext::GetSingleton()->InitBrixelizerContext();
@@ -247,7 +247,7 @@ void Brixelizer::FrameUpdate()
 	if (debugAvailable && debugCapture)
 		ga->EndCapture();
 
-    // Signal and wait for D3D12 to complete this frame's work
+	// Signal and wait for D3D12 to complete this frame's work
 	WaitForD3D12(commandQueue.get(), d3d12Fence.get(), currentFenceValue);
 
 	debugCapture = false;

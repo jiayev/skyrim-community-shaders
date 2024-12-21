@@ -83,7 +83,7 @@ public:
 	winrt::com_ptr<ID3D12CommandQueue> commandQueue;
 	winrt::com_ptr<ID3D12CommandAllocator> commandAllocator;
 	winrt::com_ptr<ID3D12GraphicsCommandList> commandList;
-	
+
 	winrt::com_ptr<ID3D11Device5> d3d11Device;
 	winrt::com_ptr<ID3D11DeviceContext4> d3d11Context;
 	winrt::com_ptr<ID3D11Fence> d3d11Fence;
