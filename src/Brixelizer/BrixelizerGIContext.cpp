@@ -3,9 +3,9 @@
 #include <DDSTextureLoader.h>
 #include <DirectXMesh.h>
 
+#include "BrixelizerContext.h"
 #include "Deferred.h"
 #include "Util.h"
-#include "BrixelizerContext.h"
 
 void BrixelizerGIContext::CreateMiscTextures()
 {

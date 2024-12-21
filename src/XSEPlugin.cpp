@@ -1,5 +1,7 @@
 #include "Hooks.h"
 
+#include "Brixelizer.h"
+#include "Brixelizer/BrixelizerContext.h"
 #include "Deferred.h"
 #include "Feature.h"
 #include "FrameAnnotations.h"
@@ -8,8 +10,6 @@
 #include "State.h"
 #include "TruePBR.h"
 #include "Upscaling.h"
-#include "Brixelizer.h"
-#include "Brixelizer/BrixelizerContext.h"
 
 #include "ENB/ENBSeriesAPI.h"
 

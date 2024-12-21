@@ -7,9 +7,9 @@
 #include <fmt/std.h>
 #include <wrl/client.h>
 
+#include "Brixelizer.h"
 #include "Deferred.h"
 #include "Feature.h"
-#include "Brixelizer.h"
 #include "State.h"
 
 #include "Features/DynamicCubemaps.h"

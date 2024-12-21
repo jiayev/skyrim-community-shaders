@@ -7,8 +7,8 @@
 #include <shared_mutex>
 
 #include "Feature.h"
-#include "ShaderCache.h"
 #include "Features/LightLimitFix/ParticleLights.h"
+#include "ShaderCache.h"
 
 struct LightLimitFix : Feature
 {

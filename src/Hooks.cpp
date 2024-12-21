@@ -454,7 +454,7 @@ namespace Hooks
 				stl::detour_vfunc<12, ID3D11Device_CreateVertexShader>(device);
 				stl::detour_vfunc<15, ID3D11Device_CreatePixelShader>(device);
 			}
-			
+
 			Brixelizer::GetSingleton()->InitBrixelizer();
 
 			Menu::GetSingleton()->Init(swapchain, device, context);

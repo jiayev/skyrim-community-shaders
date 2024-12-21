@@ -124,7 +124,7 @@ public:
 	RenderTargetDataD3D12 ConvertD3D11TextureToD3D12(RE::BSGraphics::RenderTargetData* rtData);
 
 	struct Hooks
-	{	
+	{
 		struct ID3D11DeviceContext_Map
 		{
 			static HRESULT thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource, D3D11_MAP MapType, UINT MapFlags, D3D11_MAPPED_SUBRESOURCE* pMappedResource)
@@ -133,7 +133,7 @@ public:
 
 				static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
 
-				if (*perFrame.get() == pResource) 
+				if (*perFrame.get() == pResource)
 					GetSingleton()->mappedFrameBuffer = pMappedResource;
 
 				return hr;
