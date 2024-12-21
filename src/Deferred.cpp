@@ -11,7 +11,9 @@
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 
-#include "Raytracing.h"
+#include "Brixelizer.h"
+#include "Brixelizer/BrixelizerContext.h"
+#include "Brixelizer/BrixelizerGIContext.h"
 
 struct DepthStates
 {
@@ -331,7 +333,7 @@ void Deferred::DeferredPasses()
 		}
 	}
 
-	Raytracing::GetSingleton()->FrameUpdate();
+	Brixelizer::GetSingleton()->FrameUpdate();
 
 	auto specular = renderer->GetRuntimeData().renderTargets[SPECULAR];
 	auto albedo = renderer->GetRuntimeData().renderTargets[ALBEDO];
@@ -425,9 +427,9 @@ void Deferred::DeferredPasses()
 			dynamicCubemaps->loaded && skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
 			ssgi_y,
 			ssgi_cocg,
-			Raytracing::GetSingleton()->debugRenderTarget.srv,
-			Raytracing::GetSingleton()->diffuseGi.srv,
-			Raytracing::GetSingleton()->specularGi.srv,
+			BrixelizerContext::GetSingleton()->debugRenderTarget.srv,
+			BrixelizerGIContext::GetSingleton()->diffuseGi.srv,
+			BrixelizerGIContext::GetSingleton()->specularGi.srv,
 		};
 
 		if (dynamicCubemaps->loaded)
@@ -495,8 +497,6 @@ void Deferred::EndDeferred()
 	deferredPass = false;
 
 	ResetBlendStates();
-
-	Raytracing::GetSingleton()->PostFrameUpdate();
 }
 
 void Deferred::OverrideBlendStates()

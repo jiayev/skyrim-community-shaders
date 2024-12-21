@@ -7,9 +7,8 @@
 #include <shared_mutex>
 
 #include "Feature.h"
-#include "Raytracing.h"
 #include "ShaderCache.h"
-#include <Features/LightLimitFix/ParticleLights.h>
+#include "Features/LightLimitFix/ParticleLights.h"
 
 struct LightLimitFix : Feature
 {
@@ -307,19 +306,6 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct NiNode_Destroy
-		{
-			static void thunk(RE::NiNode* This)
-			{
-				GetSingleton()->CleanupParticleLights(This);
-				if (auto triShape = This->AsTriShape())
-					Raytracing::GetSingleton()->RemoveInstance(triShape);
-
-				func(This);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
 		static void Install()
 		{
 			stl::write_thunk_call<BSBatchRenderer__RenderPassImmediately1>(REL::RelocationID(100877, 107673).address() + REL::Relocate(0x1E5, 0x1EE));
@@ -333,8 +319,6 @@ public:
 			stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
 
 			stl::write_thunk_call<BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights>(REL::RelocationID(100565, 107300).address() + REL::Relocate(0x523, 0xB0E, 0x5fe));
-
-			stl::detour_thunk<NiNode_Destroy>(REL::RelocationID(68937, 70288));
 
 			logger::info("[LLF] Installed hooks");
 		}

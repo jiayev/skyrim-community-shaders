@@ -4,11 +4,12 @@
 #include "Feature.h"
 #include "FrameAnnotations.h"
 #include "Menu.h"
-#include "Raytracing.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
 #include "Upscaling.h"
+#include "Brixelizer.h"
+#include "Brixelizer/BrixelizerContext.h"
 
 #include "ENB/ENBSeriesAPI.h"
 
@@ -89,7 +90,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 				Hooks::Install();
 				FrameAnnotations::OnPostPostLoad();
-				Raytracing::Hooks::Install();
+				Brixelizer::Hooks::Install();
+				BrixelizerContext::Hooks::Install();
 
 				auto& shaderCache = SIE::ShaderCache::Instance();
 

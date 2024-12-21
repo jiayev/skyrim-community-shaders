@@ -15,7 +15,6 @@
 #include "Features/TerrainBlending.h"
 #include "TruePBR.h"
 
-#include "Raytracing.h"
 #include "Streamline.h"
 #include "Upscaling.h"
 
@@ -112,7 +111,6 @@ void State::Setup()
 			feature->SetupResources();
 	Deferred::GetSingleton()->SetupResources();
 	Streamline::GetSingleton()->SetupResources();
-	Raytracing::GetSingleton()->OpenSharedHandles();
 	if (!upscalerLoaded)
 		Upscaling::GetSingleton()->CreateUpscalingResources();
 	if (initialized)

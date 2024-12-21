@@ -10,7 +10,10 @@
 
 #include "Streamline.h"
 
-#include "Raytracing.h"
+#include "Brixelizer.h"
+#include "Brixelizer/BrixelizerContext.h"
+
+#include "Features/LightLimitFix.h"
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
 
@@ -179,37 +182,6 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	State::GetSingleton()->Draw();
 }
 
-struct ID3D11DeviceContext_Map
-{
-	static HRESULT thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource, D3D11_MAP MapType, UINT MapFlags, D3D11_MAPPED_SUBRESOURCE* pMappedResource)
-	{
-		HRESULT hr = func(This, pResource, Subresource, MapType, MapFlags, pMappedResource);
-
-		static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
-
-		if (*perFrame.get() == pResource) {
-			Raytracing::GetSingleton()->mappedFrameBuffer = pMappedResource;
-		}
-
-		return hr;
-	}
-	static inline REL::Relocation<decltype(thunk)> func;
-};
-
-struct ID3D11DeviceContext_Unmap
-{
-	static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource)
-	{
-		static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
-
-		if (*perFrame.get() == pResource && Raytracing::GetSingleton()->mappedFrameBuffer)
-			Raytracing::GetSingleton()->CacheFramebuffer();
-
-		func(This, pResource, Subresource);
-	}
-	static inline REL::Relocation<decltype(thunk)> func;
-};
-
 struct ID3D11Device_CreateVertexShader
 {
 	static HRESULT thunk(ID3D11Device* This, const void* pShaderBytecode, SIZE_T BytecodeLength, ID3D11ClassLinkage* pClassLinkage, ID3D11VertexShader** ppVertexShader)
@@ -244,40 +216,6 @@ HRESULT WINAPI hk_CreateDXGIFactory(REFIID, void** ppFactory)
 {
 	return Streamline::GetSingleton()->CreateDXGIFactory(__uuidof(IDXGIFactory1), ppFactory);
 }
-
-struct ID3D11Device_CreateBuffer
-{
-	static HRESULT thunk(ID3D11Device* This, const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer)
-	{
-		HRESULT hr = func(This, pDesc, pInitialData, ppBuffer);
-
-		if (pInitialData) {
-			if (pDesc->BindFlags & D3D11_BIND_VERTEX_BUFFER) {
-				Raytracing::GetSingleton()->RegisterVertexBuffer(pDesc, pInitialData, ppBuffer);
-			} else if (pDesc->BindFlags & D3D11_BIND_INDEX_BUFFER) {
-				Raytracing::GetSingleton()->RegisterIndexBuffer(pDesc, pInitialData, ppBuffer);
-			}
-		}
-
-		return hr;
-	}
-	static inline REL::Relocation<decltype(thunk)> func;
-};
-
-struct ID3D11Device_CreateInputLayout
-{
-	static HRESULT thunk(ID3D11Device* This, D3D11_INPUT_ELEMENT_DESC* pInputElementDescs, UINT NumElements, void* pShaderBytecodeWithInputSignature, SIZE_T BytecodeLength, ID3D11InputLayout** ppInputLayout)
-	{
-		HRESULT hr = func(This, pInputElementDescs, NumElements, pShaderBytecodeWithInputSignature, BytecodeLength, ppInputLayout);
-
-		if (pInputElementDescs && NumElements > 0) {
-			Raytracing::GetSingleton()->RegisterInputLayout(*ppInputLayout, pInputElementDescs, NumElements);
-		}
-
-		return hr;
-	}
-	static inline REL::Relocation<decltype(thunk)> func;
-};
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChain;
 
@@ -325,7 +263,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainNoStreamline(
 	[[maybe_unused]] D3D_FEATURE_LEVEL* pFeatureLevel,
 	ID3D11DeviceContext** ppImmediateContext)
 {
-	Raytracing::GetSingleton()->InitD3D12(pAdapter);
+	Brixelizer::GetSingleton()->InitD3D12(pAdapter);
 
 	//winrt::com_ptr<IDXGIFactory4> dxgiFactory;
 
@@ -508,8 +446,6 @@ namespace Hooks
 			auto swapchain = reinterpret_cast<IDXGISwapChain*>(manager->GetRuntimeData().renderWindows->swapChain);
 			auto device = reinterpret_cast<ID3D11Device*>(manager->GetRuntimeData().forwarder);
 
-			Raytracing::GetSingleton()->Init();
-
 			logger::info("Detouring virtual function tables");
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(swapchain);
 
@@ -518,12 +454,8 @@ namespace Hooks
 				stl::detour_vfunc<12, ID3D11Device_CreateVertexShader>(device);
 				stl::detour_vfunc<15, ID3D11Device_CreatePixelShader>(device);
 			}
-
-			stl::detour_vfunc<3, ID3D11Device_CreateBuffer>(device);
-			stl::detour_vfunc<11, ID3D11Device_CreateInputLayout>(device);
-
-			stl::detour_vfunc<14, ID3D11DeviceContext_Map>(context);
-			stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(context);
+			
+			Brixelizer::GetSingleton()->InitBrixelizer();
 
 			Menu::GetSingleton()->Init(swapchain, device, context);
 		}
@@ -809,6 +741,18 @@ namespace Hooks
 		};
 	}
 
+	struct NiNode_Destroy
+	{
+		static void thunk(RE::NiNode* This)
+		{
+			LightLimitFix::GetSingleton()->CleanupParticleLights(This);
+			if (auto triShape = This->AsTriShape())
+				BrixelizerContext::GetSingleton()->RemoveInstance(triShape);
+			func(This);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	void Install()
 	{
 		logger::info("Hooking BSInputDeviceManager::PollInputDevices");
@@ -861,6 +805,8 @@ namespace Hooks
 
 		logger::info("Hooking BSEffectShader");
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
+
+		stl::detour_thunk<NiNode_Destroy>(REL::RelocationID(68937, 70288));
 	}
 
 	void InstallD3DHooks()

@@ -40,12 +40,12 @@ interface DECLSPEC_UUID("9f251514-9d4d-4902-9d60-18988ab7d4b5") DECLSPEC_NOVTABL
 // value should be tuned to what is required by Brixelizer.
 constexpr UINT64 GPU_SCRATCH_BUFFER_SIZE = 1ull << 30;
 
-class Raytracing
+class Brixelizer
 {
 public:
-	static Raytracing* GetSingleton()
+	static Brixelizer* GetSingleton()
 	{
-		static Raytracing singleton;
+		static Brixelizer singleton;
 		return &singleton;
 	}
 
@@ -86,23 +86,6 @@ public:
 	UINT64 fenceValue = 0;
 	HANDLE fenceEvent = nullptr;
 
-	FfxBrixelizerContextDescription initializationParameters = {};
-	FfxBrixelizerContext brixelizerContext = {};
-	FfxBrixelizerBakedUpdateDescription brixelizerBakedUpdateDesc = {};
-	FfxBrixelizerStats stats = {};
-	FfxBrixelizerBakedUpdateDescription bakedUpdateDesc = {};
-
-	winrt::com_ptr<ID3D12Resource> sdfAtlas;
-	winrt::com_ptr<ID3D12Resource> brickAABBs;
-	winrt::com_ptr<ID3D12Resource> gpuScratchBuffer;
-
-	winrt::com_ptr<ID3D12Resource> cascadeAABBTrees[FFX_BRIXELIZER_MAX_CASCADES];
-	winrt::com_ptr<ID3D12Resource> cascadeBrickMaps[FFX_BRIXELIZER_MAX_CASCADES];
-
-	FfxBrixelizerGIContextDescription giInitializationParameters = {};
-	FfxBrixelizerGIDispatchDescription giDispatchDesc = {};
-	FfxBrixelizerGIContext brixelizerGIContext = {};
-
 	struct WrappedResource
 	{
 		ID3D11Texture2D* resource11;
@@ -111,127 +94,23 @@ public:
 		winrt::com_ptr<ID3D12Resource> resource;
 	};
 
-	WrappedResource debugRenderTarget;
-
-	WrappedResource diffuseGi;
-	WrappedResource specularGi;
-
-	WrappedResource depth;
-	WrappedResource normal;
-
-	WrappedResource historyDepth;
-	WrappedResource historyNormal;
-	WrappedResource prevLitOutput;
-
-	winrt::com_ptr<ID3D12Resource> noiseTextures[16];
-
-	FfxBrixelizerTraceDebugModes m_DebugMode = FFX_BRIXELIZER_TRACE_DEBUG_MODE_GRAD;
-
-	int m_StartCascadeIdx = 0;
-	int m_EndCascadeIdx = NUM_BRIXELIZER_CASCADES - 1;
-
-	float m_TMin = 0.0f;
-	float m_TMax = 10000.0f;
-	float m_SdfSolveEps = 0.5f;
-
-	bool m_ShowStaticInstanceAABBs = false;
-	bool m_ShowDynamicInstanceAABBs = false;
-	bool m_ShowCascadeAABBs = false;
-	int m_ShowAABBTreeIndex = -1;
-
-	float m_RayPushoff = 0.25f;
-
 	void DrawSettings();
+
 	void InitD3D12(IDXGIAdapter* a_adapter);
-
-	winrt::com_ptr<ID3D12Resource> CreateBuffer(UINT64 size, D3D12_RESOURCE_STATES resourceState, D3D12_RESOURCE_FLAGS flags);
-
-	inline void Init()
-	{
-		InitBrixelizer();
-		InitBrixelizerGI();
-	}
 	void InitBrixelizer();
-	void CreatedWrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, Raytracing::WrappedResource& a_resource);
-	void CreateMiscTextures();
-	void CreateNoiseTextures();
-	void InitBrixelizerGI();
+
+	static void CreatedWrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, Brixelizer::WrappedResource& a_resource);
 
 	void OpenSharedHandles();
 
-	struct Vertex
-	{
-		float4 position;
-	};
-
-	struct BufferData
-	{
-		winrt::com_ptr<ID3D12Resource> buffer;
-		bool registered = false;
-		uint width;
-		uint index;
-	};
-
-	BufferData AllocateBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData);
-
-	eastl::hash_map<ID3D11Buffer*, BufferData> vertexBuffers;
-	eastl::hash_map<ID3D11Buffer*, BufferData> indexBuffers;
-
-	bool visibleState = true;
-
-	struct InstanceData
-	{
-		FfxBrixelizerInstanceID instanceID;
-		bool state = false;
-	};
-
-	eastl::hash_set<RE::BSTriShape*> queuedInstances;
-	eastl::hash_map<RE::BSTriShape*, InstanceData> instances;
-
-	uint GetBufferIndex(BufferData& a_bufferData);
-
-	void AddInstance(RE::BSTriShape* geometry);
-	void SeenInstance(RE::BSTriShape* geometry);
-	void RemoveInstance(RE::BSTriShape* a_geometry);
-
-	void RegisterVertexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer);
-	void RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer);
-
-	void RegisterInputLayout(ID3D11InputLayout* ppInputLayout, D3D11_INPUT_ELEMENT_DESC* pInputElementDescs, UINT NumElements);
-
-	void UnregisterVertexBuffer(ID3D11Buffer* ppBuffer);
-	void UnregisterIndexBuffer(ID3D11Buffer* ppBuffer);
-
-	void TransitionResources(D3D12_RESOURCE_STATES stateBefore, D3D12_RESOURCE_STATES stateAfter);
-
-	ID3D11ComputeShader* copyToSharedBufferCS;
-	ID3D11ComputeShader* GetCopyToSharedBufferCS();
-
 	void ClearShaderCache();
-	void CopyResourcesToSharedBuffers();
 
 	void InitFenceAndEvent();
+
 	void WaitForD3D11();
 	void WaitForD3D12();
 
-	FfxBrixelizerDebugVisualizationDescription GetDebugVisualization();
-
 	void FrameUpdate();
-	void PostFrameUpdate();
-	void UpdateBrixelizerContext();
-	void UpdateBrixelizerGIContext();
-
-	void CopyHistoryResources();
-
-	struct InputLayoutData
-	{
-		uint32_t vertexStride;
-		uint32_t vertexBufferOffset;
-		FfxSurfaceFormat vertexFormat;
-	};
-
-	eastl::hash_map<ID3D11InputLayout*, InputLayoutData> inputLayouts;
-	eastl::hash_map<uint64_t, ID3D11InputLayout*> vertexDescToInputLayout;
 
 	struct RenderTargetDataD3D12
 	{
@@ -239,33 +118,39 @@ public:
 		winrt::com_ptr<ID3D12Resource> d3d12Resource;
 	};
 
-	std::shared_mutex mutex;
-
 	RenderTargetDataD3D12 renderTargetsD3D12[RE::RENDER_TARGET::kTOTAL];
 	RenderTargetDataD3D12 renderTargetsCubemapD3D12[RE::RENDER_TARGETS_CUBEMAP::kTOTAL];
 
 	RenderTargetDataD3D12 ConvertD3D11TextureToD3D12(RE::BSGraphics::RenderTargetData* rtData);
 
-	void BSTriShape_UpdateWorldData(RE::BSTriShape* This, RE::NiUpdateData* a_data);
-
 	struct Hooks
-	{
-		struct BSTriShape_UpdateWorldData
+	{	
+		struct ID3D11DeviceContext_Map
 		{
-			static void thunk(RE::BSTriShape* This, RE::NiUpdateData* a_data)
+			static HRESULT thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource, D3D11_MAP MapType, UINT MapFlags, D3D11_MAPPED_SUBRESOURCE* pMappedResource)
 			{
-				GetSingleton()->BSTriShape_UpdateWorldData(This, a_data);
+				HRESULT hr = func(This, pResource, Subresource, MapType, MapFlags, pMappedResource);
+
+				static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
+
+				if (*perFrame.get() == pResource) 
+					GetSingleton()->mappedFrameBuffer = pMappedResource;
+
+				return hr;
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct DirtyStates_CreateInputLayoutFromVertexDesc
+		struct ID3D11DeviceContext_Unmap
 		{
-			static ID3D11InputLayout* thunk(uint64_t a_vertexDesc)
+			static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource)
 			{
-				auto inputLayout = func(a_vertexDesc);
-				GetSingleton()->vertexDescToInputLayout.insert({ a_vertexDesc, inputLayout });
-				return inputLayout;
+				static REL::Relocation<ID3D11Buffer**> perFrame{ REL::RelocationID(524768, 411384) };
+
+				if (*perFrame.get() == pResource && GetSingleton()->mappedFrameBuffer)
+					GetSingleton()->CacheFramebuffer();
+
+				func(This, pResource, Subresource);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -359,14 +244,13 @@ public:
 
 		static void Install()
 		{
-			if (REL::Module::IsAE()) {
-				stl::write_vfunc<0x31, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
-			} else {
-				stl::write_vfunc<0x30, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
-			}
-			stl::write_thunk_call<DirtyStates_CreateInputLayoutFromVertexDesc>(REL::RelocationID(75580, 75580).address() + REL::Relocate(0x465, 0x465));
 			PatchCreateRenderTarget();
-			logger::info("[Raytracing] Installed hooks");
+
+			//static REL::Relocation<uintptr_t> func{ REL::VariantID(75471, 77257, 0xDBCCD0) };  // D6B0C0, DA69B0, DBCCD0
+			//auto offset = REL::VariantOffset(0x7B, 0x7B, 0x73);
+			//REL::safe_write<uint8_t>(func.address() + offset.offset(), 0x8);  // add the D3D11_RESOURCE_MISC_SHARED_NTHANDLE flag
+
+			logger::info("[Brixelizer] Installed hooks");
 		}
 	};
 };
