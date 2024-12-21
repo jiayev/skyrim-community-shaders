@@ -331,6 +331,8 @@ void Deferred::DeferredPasses()
 		}
 	}
 
+	Raytracing::GetSingleton()->FrameUpdate();
+
 	auto specular = renderer->GetRuntimeData().renderTargets[SPECULAR];
 	auto albedo = renderer->GetRuntimeData().renderTargets[ALBEDO];
 	auto normalRoughness = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
@@ -410,7 +412,7 @@ void Deferred::DeferredPasses()
 	{
 		TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Deferred Composite");
 
-		ID3D11ShaderResourceView* srvs[14]{
+		ID3D11ShaderResourceView* srvs[16]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
@@ -423,7 +425,9 @@ void Deferred::DeferredPasses()
 			dynamicCubemaps->loaded && skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
 			ssgi_y,
 			ssgi_cocg,
-			Raytracing::GetSingleton()->debugRenderTarget.srv
+			Raytracing::GetSingleton()->debugRenderTarget.srv,
+			Raytracing::GetSingleton()->diffuseGi.srv,
+			Raytracing::GetSingleton()->specularGi.srv,
 		};
 
 		if (dynamicCubemaps->loaded)
@@ -463,8 +467,6 @@ void Deferred::EndDeferred()
 	if (!inWorld)
 		return;
 
-	Raytracing::GetSingleton()->FrameUpdate();
-
 	auto& shaderCache = SIE::ShaderCache::Instance();
 
 	if (!shaderCache.IsEnabled())
@@ -493,6 +495,8 @@ void Deferred::EndDeferred()
 	deferredPass = false;
 
 	ResetBlendStates();
+
+	Raytracing::GetSingleton()->PostFrameUpdate();
 }
 
 void Deferred::OverrideBlendStates()

@@ -224,64 +224,32 @@ void Raytracing::CreateMiscTextures()
 {
 	const auto displaySize = State::GetSingleton()->screenSize;
 
-	D3D12_RESOURCE_DESC texDesc = {};
-	texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-	texDesc.Width = (UINT64)displaySize.x;
-	texDesc.Height = (UINT64)displaySize.y;
-	texDesc.DepthOrArraySize = 1;
+	D3D11_TEXTURE2D_DESC texDesc;
+	texDesc.Width = (UINT)displaySize.x;
+	texDesc.Height = (UINT)displaySize.y;
 	texDesc.MipLevels = 1;
+	texDesc.ArraySize = 1;
 	texDesc.Format = DXGI_FORMAT_R32_FLOAT;
 	texDesc.SampleDesc.Count = 1;
-	texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-	texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-
-	D3D11_TEXTURE2D_DESC texDesc11;
-	texDesc11.Width = (UINT)displaySize.x;
-	texDesc11.Height = (UINT)displaySize.y;
-	texDesc11.MipLevels = 1;
-	texDesc11.ArraySize = 1;
-	texDesc11.Format = DXGI_FORMAT_R32_FLOAT;
-	texDesc11.SampleDesc.Count = 1;
-	texDesc11.SampleDesc.Quality = 0;
-	texDesc11.Usage = D3D11_USAGE_DEFAULT;
-	texDesc11.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	texDesc11.CPUAccessFlags = 0;
-	texDesc11.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
+	texDesc.SampleDesc.Quality = 0;
+	texDesc.Usage = D3D11_USAGE_DEFAULT;
+	texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	texDesc.CPUAccessFlags = 0;
+	texDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
 
 	CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
 
-	CreatedWrappedResource(texDesc11, depth);
-
-	DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
-		&heapProperties,
-		D3D12_HEAP_FLAG_NONE,
-		&texDesc,
-		D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-		nullptr,
-		IID_PPV_ARGS(&historyDepth)));
-
-	texDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
-	texDesc11.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
-
-	CreatedWrappedResource(texDesc11, normal);
-
-	DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
-		&heapProperties,
-		D3D12_HEAP_FLAG_NONE,
-		&texDesc,
-		D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-		nullptr,
-		IID_PPV_ARGS(&historyNormal)));
+	CreatedWrappedResource(texDesc, depth);
+	CreatedWrappedResource(texDesc, historyDepth);
 
 	texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-	DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
-		&heapProperties,
-		D3D12_HEAP_FLAG_NONE,
-		&texDesc,
-		D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-		nullptr,
-		IID_PPV_ARGS(&prevLitOutput)));
+	CreatedWrappedResource(texDesc, normal);
+	CreatedWrappedResource(texDesc, historyNormal);
+
+	CreatedWrappedResource(texDesc, prevLitOutput);
+	CreatedWrappedResource(texDesc, diffuseGi);
+	CreatedWrappedResource(texDesc, specularGi);
 }
 
 void Raytracing::CreateNoiseTextures()
@@ -365,7 +333,7 @@ void Raytracing::CreateNoiseTextures()
 					D3D12_RESOURCE_STATE_COMMON),
 				CD3DX12_RESOURCE_BARRIER::Transition(noiseTextures[i].get(),
 					D3D12_RESOURCE_STATE_COPY_DEST,
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+					D3D12_RESOURCE_STATE_COMMON),
 			};
 			commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 		}
@@ -403,16 +371,6 @@ void Raytracing::InitBrixelizerGI()
 
 	CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
 
-	for (auto target : { &diffuseGi, &specularGi }) {
-		DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(
-			&heapProperties,
-			D3D12_HEAP_FLAG_NONE,
-			&texDesc,
-			D3D12_RESOURCE_STATE_GENERIC_READ,
-			nullptr,
-			IID_PPV_ARGS(target)));
-	}
-
 	CreateMiscTextures();
 	CreateNoiseTextures();
 }
@@ -440,8 +398,7 @@ Raytracing::RenderTargetDataD3D12 Raytracing::ConvertD3D11TextureToD3D12(RE::BSG
 	DX::ThrowIfFailed(dxgiResource1->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, &sharedNtHandle));
 
 	// Open the shared handle in D3D12
-	winrt::com_ptr<ID3D12Resource> d3d12Resource;
-	DX::ThrowIfFailed(d3d12Device->OpenSharedHandle(sharedNtHandle, IID_PPV_ARGS(&d3d12Resource)));
+	DX::ThrowIfFailed(d3d12Device->OpenSharedHandle(sharedNtHandle, IID_PPV_ARGS(&renderTargetData.d3d12Resource)));
 	CloseHandle(sharedNtHandle);  // Close the handle after opening it in D3D12
 
 	return renderTargetData;
@@ -1035,9 +992,6 @@ FfxBrixelizerDebugVisualizationDescription Raytracing::GetDebugVisualization()
 
 void Raytracing::UpdateBrixelizerContext()
 {
-	DX::ThrowIfFailed(commandAllocator->Reset());
-	DX::ThrowIfFailed(commandList->Reset(commandAllocator.get(), nullptr));
-
 	// Transition all resources to resource state expected by Brixelizer
 	TransitionResources(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
@@ -1070,6 +1024,7 @@ void Raytracing::UpdateBrixelizerContext()
 	// Pass in the externally created output resources as FfxResource objects.
 	updateDesc.resources.sdfAtlas = ffxGetResourceDX12(sdfAtlas.get(), ffxGetResourceDescriptionDX12(sdfAtlas.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 	updateDesc.resources.brickAABBs = ffxGetResourceDX12(brickAABBs.get(), ffxGetResourceDescriptionDX12(brickAABBs.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+	
 	for (uint32_t i = 0; i < FFX_BRIXELIZER_MAX_CASCADES; ++i) {
 		updateDesc.resources.cascadeResources[i].aabbTree = ffxGetResourceDX12(cascadeAABBTrees[i].get(), ffxGetResourceDescriptionDX12(cascadeAABBTrees[i].get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 		updateDesc.resources.cascadeResources[i].brickMap = ffxGetResourceDX12(cascadeBrickMaps[i].get(), ffxGetResourceDescriptionDX12(cascadeBrickMaps[i].get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -1092,15 +1047,15 @@ void Raytracing::UpdateBrixelizerContext()
 
 	// Transition all resources to the Non-Pixel Shader Resource state after the Brixelizer
 	TransitionResources(D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
-	DX::ThrowIfFailed(commandList->Close());
 }
 
 void Raytracing::UpdateBrixelizerGIContext()
 {
-	auto& motionVectors = renderTargetsD3D12[RE::RENDER_TARGET::kMOTION_VECTOR].d3d12Resource;
-	//	auto& environmentMap = renderTargetsCubemapD3D12[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS].d3d12Resource;
-	auto& normalsRoughness = renderTargetsD3D12[NORMALROUGHNESS].d3d12Resource;
+	////	auto& environmentMap = renderTargetsCubemapD3D12[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS].d3d12Resource;
+	auto& normalsRoughness = renderTargetsD3D12[NORMALROUGHNESS];
+	auto& motionVectors = renderTargetsD3D12[RE::RENDER_TARGET::kMOTION_VECTOR];
+
+	auto& main = renderTargetsD3D12[Deferred::GetSingleton()->forwardRenderTargets[0]];
 
 	auto view = frameBufferCached.CameraView.Transpose();
 	view._41 -= frameBufferCached.CameraPosAdjust.x;
@@ -1112,19 +1067,46 @@ void Raytracing::UpdateBrixelizerGIContext()
 	static auto prevView = view;
 	static auto prevProjection = projection;
 
-	{
-		{
-			std::vector<D3D12_RESOURCE_BARRIER> barriers{
-				CD3DX12_RESOURCE_BARRIER::Transition(diffuseGi.get(),
-					D3D12_RESOURCE_STATE_GENERIC_READ,
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-				CD3DX12_RESOURCE_BARRIER::Transition(specularGi.get(),
-					D3D12_RESOURCE_STATE_GENERIC_READ,
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)
-			};
-			commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-		}
+	uint noiseIndex = RE::BSGraphics::State::GetSingleton()->frameCount % 16u;
 
+	
+	{
+		std::vector<D3D12_RESOURCE_BARRIER> barriers{
+			CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(),
+				D3D12_RESOURCE_STATE_COMMON,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(),
+				D3D12_RESOURCE_STATE_COMMON,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(normalsRoughness.d3d12Resource.get(),
+				D3D12_RESOURCE_STATE_COMMON,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(motionVectors.d3d12Resource.get(),
+				D3D12_RESOURCE_STATE_COMMON,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.resource.get(),
+				D3D12_RESOURCE_STATE_COMMON,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(historyNormal.resource.get(),
+				D3D12_RESOURCE_STATE_COMMON,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(main.d3d12Resource.get(),
+				D3D12_RESOURCE_STATE_COMMON,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(noiseTextures[noiseIndex].get(),
+				D3D12_RESOURCE_STATE_COMMON,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(diffuseGi.resource.get(),
+				D3D12_RESOURCE_STATE_COMMON,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(specularGi.resource.get(),
+				D3D12_RESOURCE_STATE_COMMON,
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)
+		};
+		commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+	}
+	
+	{
 		memcpy(&giDispatchDesc.view, &view, sizeof(giDispatchDesc.view));
 		memcpy(&giDispatchDesc.projection, &projection, sizeof(giDispatchDesc.projection));
 		memcpy(&giDispatchDesc.prevView, &prevView, sizeof(giDispatchDesc.prevView));
@@ -1149,20 +1131,19 @@ void Raytracing::UpdateBrixelizerGIContext()
 		giDispatchDesc.isRoughnessPerceptual = false;
 		giDispatchDesc.roughnessChannel = 1;
 		giDispatchDesc.roughnessThreshold = 0.9f;
-		giDispatchDesc.environmentMapIntensity = 0.1f;
+		giDispatchDesc.environmentMapIntensity = 0.0f;
 		giDispatchDesc.motionVectorScale = { 1.0f, 1.0f };
 
 		giDispatchDesc.depth = ffxGetResourceDX12(depth.resource.get(), ffxGetResourceDescriptionDX12(depth.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Depth", FFX_RESOURCE_STATE_COMPUTE_READ);
 
 		giDispatchDesc.normal = ffxGetResourceDX12(normal.resource.get(), ffxGetResourceDescriptionDX12(normal.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Normal", FFX_RESOURCE_STATE_COMPUTE_READ);
-		giDispatchDesc.roughness = ffxGetResourceDX12(normalsRoughness.get(), ffxGetResourceDescriptionDX12(normalsRoughness.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Roughness", FFX_RESOURCE_STATE_COMPUTE_READ);
-		giDispatchDesc.motionVectors = ffxGetResourceDX12(motionVectors.get(), ffxGetResourceDescriptionDX12(motionVectors.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"MotionVectors", FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.roughness = ffxGetResourceDX12(normalsRoughness.d3d12Resource.get(), ffxGetResourceDescriptionDX12(normalsRoughness.d3d12Resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Roughness", FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.motionVectors = ffxGetResourceDX12(motionVectors.d3d12Resource.get(), ffxGetResourceDescriptionDX12(motionVectors.d3d12Resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"MotionVectors", FFX_RESOURCE_STATE_COMPUTE_READ);
 
-		giDispatchDesc.historyDepth = ffxGetResourceDX12(historyDepth.get(), ffxGetResourceDescriptionDX12(historyDepth.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"HistoryDepth", FFX_RESOURCE_STATE_COMPUTE_READ);
-		giDispatchDesc.historyNormal = ffxGetResourceDX12(historyNormal.get(), ffxGetResourceDescriptionDX12(historyNormal.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"HistoryNormal", FFX_RESOURCE_STATE_COMPUTE_READ);
-		giDispatchDesc.prevLitOutput = ffxGetResourceDX12(prevLitOutput.get(), ffxGetResourceDescriptionDX12(prevLitOutput.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"PrevLitOutput", FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.historyDepth = ffxGetResourceDX12(historyDepth.resource.get(), ffxGetResourceDescriptionDX12(historyDepth.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"HistoryDepth", FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.historyNormal = ffxGetResourceDX12(historyNormal.resource.get(), ffxGetResourceDescriptionDX12(historyNormal.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"HistoryNormal", FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.prevLitOutput = ffxGetResourceDX12(main.d3d12Resource.get(), ffxGetResourceDescriptionDX12(main.d3d12Resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"PrevLitOutput", FFX_RESOURCE_STATE_COMPUTE_READ);
 
-		uint noiseIndex = RE::BSGraphics::State::GetSingleton()->frameCount % 16u;
 		giDispatchDesc.noiseTexture = ffxGetResourceDX12(noiseTextures[noiseIndex].get(), ffxGetResourceDescriptionDX12(noiseTextures[noiseIndex].get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Noise", FFX_RESOURCE_STATE_COMPUTE_READ);
 		giDispatchDesc.environmentMap = ffxGetResourceDX12(nullptr, ffxGetResourceDescriptionDX12(nullptr, FFX_RESOURCE_USAGE_READ_ONLY), L"EnvironmentMap", FFX_RESOURCE_STATE_COMPUTE_READ);
 
@@ -1174,80 +1155,49 @@ void Raytracing::UpdateBrixelizerGIContext()
 			giDispatchDesc.cascadeBrickMaps[i] = ffxGetResourceDX12(cascadeBrickMaps[i].get(), ffxGetResourceDescriptionDX12(cascadeBrickMaps[i].get(), FFX_RESOURCE_USAGE_READ_ONLY), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
 		}
 
-		giDispatchDesc.outputDiffuseGI = ffxGetResourceDX12(diffuseGi.get(), ffxGetResourceDescriptionDX12(diffuseGi.get(), FFX_RESOURCE_USAGE_UAV), L"OutputDiffuseGI", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-		giDispatchDesc.outputSpecularGI = ffxGetResourceDX12(specularGi.get(), ffxGetResourceDescriptionDX12(specularGi.get(), FFX_RESOURCE_USAGE_UAV), L"OutputSpecularGI", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+		giDispatchDesc.outputDiffuseGI = ffxGetResourceDX12(diffuseGi.resource.get(), ffxGetResourceDescriptionDX12(diffuseGi.resource.get(), FFX_RESOURCE_USAGE_UAV), L"OutputDiffuseGI", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+		giDispatchDesc.outputSpecularGI = ffxGetResourceDX12(specularGi.resource.get(), ffxGetResourceDescriptionDX12(specularGi.resource.get(), FFX_RESOURCE_USAGE_UAV), L"OutputSpecularGI", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 
 		if (ffxBrixelizerGetRawContext(&brixelizerContext, &giDispatchDesc.brixelizerContext) != FFX_OK)
 			logger::error("Failed to get Brixelizer context pointer.");
 
-		ffxBrixelizerGIContextDispatch(&brixelizerGIContext, &giDispatchDesc, ffxGetCommandListDX12(commandList.get()));
+		if (ffxBrixelizerGIContextDispatch(&brixelizerGIContext, &giDispatchDesc, ffxGetCommandListDX12(commandList.get())) != FFX_OK)
+			logger::error("Failed to dispatch Brixelizer GI.");
 
-		{
-			std::vector<D3D12_RESOURCE_BARRIER> barriers{
-				CD3DX12_RESOURCE_BARRIER::Transition(diffuseGi.get(),
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-					D3D12_RESOURCE_STATE_GENERIC_READ),
-				CD3DX12_RESOURCE_BARRIER::Transition(specularGi.get(),
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-					D3D12_RESOURCE_STATE_GENERIC_READ)
-			};
-			commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-		}
 	}
-}
-
-void Raytracing::CopyHistoryResources()
-{
-	{
-		std::vector<D3D12_RESOURCE_BARRIER> barriers{
-			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.get(),
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-				D3D12_RESOURCE_STATE_COPY_DEST),
-			CD3DX12_RESOURCE_BARRIER::Transition(historyNormal.get(),
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-				D3D12_RESOURCE_STATE_COPY_DEST),
-			CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.get(),
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-				D3D12_RESOURCE_STATE_COPY_DEST),
-
-			CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(),
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-				D3D12_RESOURCE_STATE_COPY_SOURCE),
-			CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(),
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-				D3D12_RESOURCE_STATE_COPY_SOURCE),
-			CD3DX12_RESOURCE_BARRIER::Transition(litOutputCopy.resource.get(),
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-				D3D12_RESOURCE_STATE_COPY_SOURCE)
-		};
-		commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-	}
-
-	commandList->CopyResource(historyDepth.get(), depth.resource.get());
-	commandList->CopyResource(historyNormal.get(), normal.resource.get());
-	commandList->CopyResource(prevLitOutput.get(), litOutputCopy.resource.get());
 
 	{
 		std::vector<D3D12_RESOURCE_BARRIER> barriers{
-			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.get(),
-				D3D12_RESOURCE_STATE_COPY_DEST,
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-			CD3DX12_RESOURCE_BARRIER::Transition(historyNormal.get(),
-				D3D12_RESOURCE_STATE_COPY_DEST,
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-			CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.get(),
-				D3D12_RESOURCE_STATE_COPY_DEST,
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-
 			CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(),
-				D3D12_RESOURCE_STATE_COPY_SOURCE,
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COMMON),
 			CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(),
-				D3D12_RESOURCE_STATE_COPY_SOURCE,
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-			CD3DX12_RESOURCE_BARRIER::Transition(litOutputCopy.resource.get(),
-				D3D12_RESOURCE_STATE_COPY_SOURCE,
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COMMON),
+			CD3DX12_RESOURCE_BARRIER::Transition(normalsRoughness.d3d12Resource.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COMMON),
+			CD3DX12_RESOURCE_BARRIER::Transition(motionVectors.d3d12Resource.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COMMON),
+			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.resource.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COMMON),
+			CD3DX12_RESOURCE_BARRIER::Transition(historyNormal.resource.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COMMON),
+			CD3DX12_RESOURCE_BARRIER::Transition(main.d3d12Resource.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COMMON),
+			CD3DX12_RESOURCE_BARRIER::Transition(noiseTextures[noiseIndex].get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COMMON),
+			CD3DX12_RESOURCE_BARRIER::Transition(diffuseGi.resource.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COMMON),
+			CD3DX12_RESOURCE_BARRIER::Transition(specularGi.resource.get(),
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+				D3D12_RESOURCE_STATE_COMMON)
 		};
 		commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 	}
@@ -1292,11 +1242,14 @@ void Raytracing::FrameUpdate()
 
 	queuedInstances.clear();
 
+	DX::ThrowIfFailed(commandAllocator->Reset());
+	DX::ThrowIfFailed(commandList->Reset(commandAllocator.get(), nullptr));
+
 	UpdateBrixelizerContext();
 
 	UpdateBrixelizerGIContext();
 
-	CopyHistoryResources();
+	DX::ThrowIfFailed(commandList->Close());
 
 	ID3D12CommandList* ppCommandLists[] = { commandList.get() };
 	commandQueue->ExecuteCommandLists(1, ppCommandLists);
@@ -1304,10 +1257,21 @@ void Raytracing::FrameUpdate()
 	if (debugAvailable && debugCapture)
 		ga->EndCapture();
 
-	// Wait for the GPU to finish executing the commands
 	WaitForD3D12();
 
 	debugCapture = false;
 
 	visibleState = !visibleState;
+}
+
+void Raytracing::PostFrameUpdate()
+{
+	auto& context = State::GetSingleton()->context;
+	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+
+	auto main = renderer->GetRuntimeData().renderTargets[Deferred::GetSingleton()->forwardRenderTargets[0]];
+
+	context->CopyResource(historyDepth.resource11, depth.resource11);
+	context->CopyResource(historyNormal.resource11, normal.resource11);
+	context->CopyResource(prevLitOutput.resource11, main.texture);
 }

@@ -113,16 +113,15 @@ public:
 
 	WrappedResource debugRenderTarget;
 
-	winrt::com_ptr<ID3D12Resource> diffuseGi;
-	winrt::com_ptr<ID3D12Resource> specularGi;
+	WrappedResource diffuseGi;
+	WrappedResource specularGi;
 
 	WrappedResource depth;
 	WrappedResource normal;
-	WrappedResource litOutputCopy;
 
-	winrt::com_ptr<ID3D12Resource> historyDepth;
-	winrt::com_ptr<ID3D12Resource> historyNormal;
-	winrt::com_ptr<ID3D12Resource> prevLitOutput;
+	WrappedResource historyDepth;
+	WrappedResource historyNormal;
+	WrappedResource prevLitOutput;
 
 	winrt::com_ptr<ID3D12Resource> noiseTextures[16];
 
@@ -218,6 +217,7 @@ public:
 	FfxBrixelizerDebugVisualizationDescription GetDebugVisualization();
 
 	void FrameUpdate();
+	void PostFrameUpdate();
 	void UpdateBrixelizerContext();
 	void UpdateBrixelizerGIContext();
 
