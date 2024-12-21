@@ -58,6 +58,8 @@ cbuffer DoFCB : register(b1)
     float ManualFocusPlane;
     float FocalLength;
     float FNumber;
+    float FarPlaneMaxBlur;
+    float NearPlaneMaxBlur;
     float BlurQuality;
     float NearFarDistanceCompensation;
     float BokehBusyFactor;
@@ -161,7 +163,7 @@ float PerformSingleValueGaussianBlur(Texture2D<float> source, SamplerState samp,
     float coc = GetBlurDiscRadiusFromSource(source, samp, texcoord, flattenToZero);
     coc *= weight[0];
     
-    float2 factorToUse = offsetWeight * 0.8f;
+    float2 factorToUse = offsetWeight * NearPlaneMaxBlur * 0.8f;
     for(int i = 1; i < 18; ++i)
     {
         float2 coordOffset = factorToUse * offset[i];
@@ -324,7 +326,7 @@ float4 PerformDiscBlur(DISCBLURINFO blurInfo, Texture2D source, SamplerState sam
     float2 pointOffset = float2(0,0);
     float2 ringRadiusDeltaCoords =  (float2(1.0f / Width, 1.0f / Height) * blurInfo.farPlaneMaxBlurInPixels * fragmentRadius) / blurInfo.numberOfRings;
     float2 currentRingRadiusCoords = ringRadiusDeltaCoords;
-    float cocPerRing = (fragmentRadius * 1.0f) / blurInfo.numberOfRings;
+    float cocPerRing = (fragmentRadius * FarPlaneMaxBlur) / blurInfo.numberOfRings;
     float pointsOnRing = pointsFirstRing;
     float4 anamorphicFactors = CalculateAnamorphicFactor(blurInfo.texcoord - 0.5); // xy are up vector, zw are right vector
     float2x2 anamorphicRotationMatrix = CalculateAnamorphicRotationMatrix(blurInfo.texcoord);
@@ -347,10 +349,10 @@ float4 PerformDiscBlur(DISCBLURINFO blurInfo, Texture2D source, SamplerState sam
             pointOffset = MorphPointOffsetWithAnamorphicDeltas(pointOffset, anamorphicFactors, anamorphicRotationMatrix);
             float4 tapCoords = float4(blurInfo.texcoord + (pointOffset * currentRingRadiusCoords), 0, 0);
             float sampleRadius = TexCoCInput.SampleLevel(DepthSampler, tapCoords.xy, 0).r;
-            float weight = (sampleRadius >=0) * ringWeight * CalculateSampleWeight(sampleRadius, ringDistance) * (shapeTap.a > 0.01 ? 1.0f : 0.0f);
+            float weight = (sampleRadius >=0) * ringWeight * CalculateSampleWeight(sampleRadius * FarPlaneMaxBlur, ringDistance) * (shapeTap.a > 0.01 ? 1.0f : 0.0f);
             // adjust the weight for samples which are in front of the fragment, as they have to get their weight boosted so we don't see edges bleeding through. 
             // as otherwise they'll get a weight that's too low relatively to the pixels sampled from the plane the fragment is in.The 3.0 value is empirically determined.
-            weight *= (1.0 + saturate(fragmentRadius - sampleRadius));
+            weight *= (1.0 + min(FarPlaneMaxBlur, 3.0f) * saturate(fragmentRadius - sampleRadius));
             float4 tap = source.SampleLevel(samp, tapCoords.xy, 0);
             tap.rgb *= 1.0f;
             average.rgb += tap.rgb * weight;
@@ -422,7 +424,6 @@ float4 PerformNearPlaneDiscBlur(DISCBLURINFO blurInfo, Texture2D source, Sampler
         pointsOnRing+=pointsFirstRing;
         currentRingRadiusCoords += ringRadiusDeltaCoords;
     }
-    float NearPlaneMaxBlur = 1.0f;
     average.rgb/=(average.w + (average.w ==0));
     float alpha = saturate((min(2.5, NearPlaneMaxBlur) + 0.4) * (fragmentRadiusToUse > 0.1 ? (fragmentRadii.g <=0 ? 2 : 1) * fragmentRadiusToUse : max(fragmentRadiusToUse, -fragmentRadii.g)));
     fragment.rgb = average.rgb;
@@ -537,8 +538,8 @@ void CS_Blur(uint2 DTid : SV_DispatchThreadID)
     blurInfo.texcoord = 2.0f * (DTid.xy + 0.5f) / float2(Width, Height);
     blurInfo.numberOfRings = round(BlurQuality);
     float pixelSizeLength = length(float2(1.0f / Width, 1.0f / Height)) * 0.5f;
-    blurInfo.farPlaneMaxBlurInPixels = (1.0f / 100.0f) / pixelSizeLength;
-    blurInfo.nearPlaneMaxBlurInPixels = (1.0f / 100.0f) / pixelSizeLength;
+    blurInfo.farPlaneMaxBlurInPixels = (FarPlaneMaxBlur / 100.0f) / pixelSizeLength;
+    blurInfo.nearPlaneMaxBlurInPixels = (NearPlaneMaxBlur / 100.0f) / pixelSizeLength;
     blurInfo.cocFactorPerPixel = pixelSizeLength * blurInfo.farPlaneMaxBlurInPixels;	// not needed for near plane.
     // Pre Blur
     float4 color = PerformPreDiscBlur(blurInfo, TexColor, ImageSampler);
@@ -609,7 +610,7 @@ void CS_Combiner(uint2 DTid : SV_DispatchThreadID)
     float blendFactor = (realCoC > 0.1) ? 1 : smoothstep(0, 1, (realCoC / 0.1));
     float4 color;
     color = lerp(originalFragment, farFragment, blendFactor);
-    color.rgb = lerp(color.rgb, nearFragment.rgb, nearFragment.a);
+    color.rgb = lerp(color.rgb, nearFragment.rgb, nearFragment.a * (NearPlaneMaxBlur != 0));
     color.a = 1.0;
     RWTexOut[DTid] = color;
 }

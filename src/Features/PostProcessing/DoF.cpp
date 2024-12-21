@@ -1,4 +1,4 @@
-#include "DoF.h"
+﻿#include "DoF.h"
 
 #include "State.h"
 #include "Util.h"
@@ -12,6 +12,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     ManualFocusPlane,
     FocalLength,
     FNumber,
+    FarPlaneMaxBlur,
+    NearPlaneMaxBlur,
     BlurQuality,
     NearFarDistanceCompensation,
     HighlightBoost,
@@ -30,6 +32,8 @@ void DoF::DrawSettings()
     ImGui::SliderFloat("Manual Focus", &settings.ManualFocusPlane, 0.0f, 1.0f, "%.2f");
     ImGui::SliderFloat("Focal Length", &settings.FocalLength, 1.0f, 300.0f, "%.1f mm");
     ImGui::SliderFloat("F-Number", &settings.FNumber, 1.0f, 22.0f, "f/%.1f");
+    ImGui::SliderFloat("Far Plane Max Blur", &settings.FarPlaneMaxBlur, 0.0f, 8.0f, "%.2f");
+    ImGui::SliderFloat("Near Plane Max Blur", &settings.NearPlaneMaxBlur, 0.0f, 4.0f, "%.2f");
     ImGui::SliderFloat("Blur Quality", &settings.BlurQuality, 2.0f, 30.0f, "%.1f");
     ImGui::SliderFloat("Near-Far Plane Distance Compenation", &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
     ImGui::SliderFloat("Bokeh Busy Factor", &settings.BokehBusyFactor, 0.0f, 1.0f, "%.2f");
@@ -287,6 +291,8 @@ void DoF::Draw(TextureInfo& inout_tex)
         .ManualFocusPlane = settings.ManualFocusPlane,
         .FocalLength = settings.FocalLength,
         .FNumber = settings.FNumber,
+        .FarPlaneMaxBlur = settings.FarPlaneMaxBlur,
+        .NearPlaneMaxBlur = settings.NearPlaneMaxBlur,
         .BlurQuality = settings.BlurQuality,
         .NearFarDistanceCompensation = settings.NearFarDistanceCompensation,
         .BokehBusyFactor = settings.BokehBusyFactor,

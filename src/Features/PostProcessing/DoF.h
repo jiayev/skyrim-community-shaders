@@ -17,6 +17,8 @@ struct DoF : public PostProcessFeature
         float ManualFocusPlane = 0.4f;
         float FocalLength = 50.0f;
         float FNumber = 2.8f;
+        float FarPlaneMaxBlur = 1.0f;
+        float NearPlaneMaxBlur = 1.0f;
         float BlurQuality = 7.0f;
         float NearFarDistanceCompensation = 1.0f;
         float BokehBusyFactor = 0.5f;
@@ -31,6 +33,8 @@ struct DoF : public PostProcessFeature
         float ManualFocusPlane;
         float FocalLength;
         float FNumber;
+        float FarPlaneMaxBlur;
+        float NearPlaneMaxBlur;
         float BlurQuality;
         float NearFarDistanceCompensation;
         float BokehBusyFactor;
@@ -39,7 +43,7 @@ struct DoF : public PostProcessFeature
         float Width;
         float Height;
         bool AutoFocus;
-        uint8_t pad[11];
+        uint8_t pad[3];
     };
 
     eastl::unique_ptr<ConstantBuffer> dofCB = nullptr;
