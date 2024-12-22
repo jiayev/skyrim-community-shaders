@@ -44,10 +44,10 @@ void BrixelizerGIContext::CreateMiscTextures()
 		D3D12_RESOURCE_DESC textureDesc = {};
 		textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 		textureDesc.Alignment = 0;
-		textureDesc.Width = 1;                            
-		textureDesc.Height = 1;                          
-		textureDesc.DepthOrArraySize = 6;                 
-		textureDesc.MipLevels = 1;                       
+		textureDesc.Width = 1;
+		textureDesc.Height = 1;
+		textureDesc.DepthOrArraySize = 6;
+		textureDesc.MipLevels = 1;
 		textureDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 		textureDesc.SampleDesc.Count = 1;
 		textureDesc.SampleDesc.Quality = 0;
@@ -323,8 +323,7 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 		logger::error("Failed to dispatch Brixelizer GI.");
 
 	{
-
-	auto state = State::GetSingleton();
+		auto state = State::GetSingleton();
 
 		FfxBrixelizerGIDebugDescription debug_desc = {};
 
@@ -337,7 +336,6 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 		debug_desc.normalsUnpackAdd = -1.0f;
 
 		debug_desc.debugMode = FFX_BRIXELIZER_GI_DEBUG_MODE_RADIANCE_CACHE;
-
 
 		debug_desc.startCascade = brixelizerContext->m_StartCascadeIdx + (2 * NUM_BRIXELIZER_CASCADES);
 		debug_desc.endCascade = brixelizerContext->m_EndCascadeIdx + (2 * NUM_BRIXELIZER_CASCADES);

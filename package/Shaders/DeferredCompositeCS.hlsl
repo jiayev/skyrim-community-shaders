@@ -206,6 +206,6 @@ Texture2D<float4> SpecularGI : register(t13);
 
 	// color = Color::LinearToGamma(color);
 
-	MainRW[dispatchID.xy] = DebugTexture[dispatchID.xy ];
+	MainRW[dispatchID.xy] = DebugTexture[dispatchID.xy];
 	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = half4(GBuffer::EncodeNormalVanilla(normalVS), 0.0, 0.0);
 }
