@@ -169,11 +169,11 @@ public:
 
 		static void Install()
 		{
-			if (REL::Module::IsAE()) {
-				stl::write_vfunc<0x31, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
-			} else {
-				stl::write_vfunc<0x30, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
-			}
+			//if (REL::Module::IsAE()) {
+			//	stl::write_vfunc<0x31, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
+			//} else {
+			//	stl::write_vfunc<0x30, BSTriShape_UpdateWorldData>(RE::VTABLE_BSTriShape[0]);
+			//}
 			stl::write_thunk_call<DirtyStates_CreateInputLayoutFromVertexDesc>(REL::RelocationID(75580, 75580).address() + REL::Relocate(0x465, 0x465));
 
 			logger::info("[BrixelizerContext] Installed hooks");

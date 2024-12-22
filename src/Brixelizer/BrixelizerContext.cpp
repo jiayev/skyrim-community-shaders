@@ -565,28 +565,30 @@ void BrixelizerContext::UpdateBrixelizerContext()
 
 	static auto shadowSceneNode = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
 
-	RE::BSVisit::TraverseScenegraphGeometries(shadowSceneNode, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
-		if (auto triShape = a_geometry->AsTriShape()) {
-			SeenInstance(triShape);
+	if (Brixelizer::GetSingleton()->update) {
+		RE::BSVisit::TraverseScenegraphGeometries(shadowSceneNode, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
+			if (auto triShape = a_geometry->AsTriShape()) {
+				SeenInstance(triShape);
+			}
+			return RE::BSVisit::BSVisitControl::kContinue;
+		});
+
+		for (auto it = instances.begin(); it != instances.end();) {
+			if (it->second.visibleState != visibleStateValue) {
+				auto error = ffxBrixelizerDeleteInstances(&brixelizerContext, &it->second.instanceID, 1);
+				if (error != FFX_OK)
+					logger::critical("error");
+
+				it = instances.erase(it);
+
+			} else {
+				++it;
+			}
 		}
-		return RE::BSVisit::BSVisitControl::kContinue;
-	});
 
-	for (auto it = instances.begin(); it != instances.end();) {
-		if (it->second.visibleState != visibleStateValue) {
-			auto error = ffxBrixelizerDeleteInstances(&brixelizerContext, &it->second.instanceID, 1);
-			if (error != FFX_OK)
-				logger::critical("error");
-
-			it = instances.erase(it);
-
-		} else {
-			++it;
+		for (auto& queuedInstance : queuedInstances) {
+			AddInstance(queuedInstance);
 		}
-	}
-
-	for (auto& queuedInstance : queuedInstances) {
-		AddInstance(queuedInstance);
 	}
 
 	queuedInstances.clear();

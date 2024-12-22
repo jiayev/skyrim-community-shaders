@@ -22,6 +22,9 @@ void Brixelizer::DrawSettings()
 	if (ImGui::Button("Take Debug Capture") && !debugCapture) {
 		debugCapture = true;
 	}
+	
+	ImGui::Checkbox("update", &update);
+
 	//ImGui::SliderInt("Debug Mode", (int*)&m_DebugMode, 0, FFX_BRIXELIZER_TRACE_DEBUG_MODE_CASCADE_ID, "%d", ImGuiSliderFlags_AlwaysClamp);
 	//if (auto _tt = Util::HoverTooltipWrapper())
 	//	ImGui::Text("%s", magic_enum::enum_name(m_DebugMode).data());

@@ -51,6 +51,8 @@ public:
 		return &singleton;
 	}
 
+	bool update = true;
+
 	struct FrameBuffer
 	{
 		Matrix CameraView;
