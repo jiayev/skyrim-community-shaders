@@ -57,6 +57,8 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half3 il)
 #endif
 
 Texture2D<float4> DebugTexture : register(t12);
+Texture2D<float4> DiffuseGI : register(t13);
+Texture2D<float4> SpecularGI : register(t13);
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
@@ -195,6 +197,15 @@ Texture2D<float4> DebugTexture : register(t12);
 
 #endif
 
-	MainRW[dispatchID.xy] = DebugTexture[dispatchID.xy];
+	color = Color::GammaToLinear(color);
+
+	float3 diffuseGI = DiffuseGI[dispatchID.xy].xyz;
+	//diffuseGI = Color::GammaToLinear(diffuseGI);
+
+	// color += diffuseGI * Color::GammaToLinear(albedo);
+
+	// color = Color::LinearToGamma(color);
+
+	MainRW[dispatchID.xy] = DebugTexture[dispatchID.xy ];
 	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = half4(GBuffer::EncodeNormalVanilla(normalVS), 0.0, 0.0);
 }

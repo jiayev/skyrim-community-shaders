@@ -594,7 +594,7 @@ void BrixelizerContext::UpdateBrixelizerContext()
 	// Transition all resources to resource state expected by Brixelizer
 	TransitionResources(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-	FfxBrixelizerDebugVisualizationDescription debugVisDesc = GetDebugVisualization();
+	//FfxBrixelizerDebugVisualizationDescription debugVisDesc = GetDebugVisualization();
 
 	size_t scratchBufferSize = 0;
 
@@ -612,7 +612,7 @@ void BrixelizerContext::UpdateBrixelizerContext()
 		.frameIndex = RE::BSGraphics::State::GetSingleton()->frameCount,
 		.sdfCenter = { frameBufferCached.CameraPosAdjust.x, frameBufferCached.CameraPosAdjust.y, frameBufferCached.CameraPosAdjust.z },
 		.populateDebugAABBsFlags = populateDebugAABBFlags,
-		.debugVisualizationDesc = &debugVisDesc,
+		.debugVisualizationDesc = nullptr,
 		.maxReferences = 32 * (1 << 20),
 		.triangleSwapSize = 300 * (1 << 20),
 		.maxBricksPerBake = 1 << 14,
