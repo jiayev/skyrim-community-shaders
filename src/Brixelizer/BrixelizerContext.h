@@ -8,6 +8,8 @@
 
 #include "Brixelizer.h"
 
+#include <DDSTextureLoader12.h>
+
 class BrixelizerContext
 {
 public:

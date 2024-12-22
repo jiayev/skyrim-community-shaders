@@ -76,7 +76,6 @@ void Brixelizer::InitD3D12(IDXGIAdapter* a_adapter)
 	DX::ThrowIfFailed(d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator)));
 
 	DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.get(), nullptr, IID_PPV_ARGS(&commandList)));
-	DX::ThrowIfFailed(commandList->Close());
 
 	debugAvailable = DXGIGetDebugInterface1(0, IID_PPV_ARGS(&ga)) == S_OK;
 }
@@ -94,6 +93,8 @@ void Brixelizer::InitBrixelizer()
 	stl::detour_vfunc<14, Brixelizer::Hooks::ID3D11DeviceContext_Map>(context);
 	stl::detour_vfunc<15, Brixelizer::Hooks::ID3D11DeviceContext_Unmap>(context);
 	
+	BrixelizerGIContext::GetSingleton()->CreateNoiseTextures();
+
 	InitializeSharedFence();
 	OpenSharedHandles();
 	BrixelizerContext::GetSingleton()->InitBrixelizerContext();
@@ -227,14 +228,13 @@ void WaitForD3D12(ID3D12CommandQueue* commandQueue, ID3D12Fence* d3d12Fence, UIN
 
 void Brixelizer::FrameUpdate()
 {
+	BrixelizerGIContext::GetSingleton()->CopyResourcesToSharedBuffers();
+
 	// Wait for D3D11 to complete prior work
 	WaitForD3D11(d3d11Context.get(), d3d11Fence.get(), currentFenceValue);
 
 	if (debugAvailable && debugCapture)
 		ga->BeginCapture();
-
-	DX::ThrowIfFailed(commandAllocator->Reset());
-	DX::ThrowIfFailed(commandList->Reset(commandAllocator.get(), nullptr));
 
 	BrixelizerContext::GetSingleton()->UpdateBrixelizerContext();
 	BrixelizerGIContext::GetSingleton()->UpdateBrixelizerGIContext();
@@ -244,6 +244,9 @@ void Brixelizer::FrameUpdate()
 	ID3D12CommandList* ppCommandLists[] = { commandList.get() };
 	commandQueue->ExecuteCommandLists(1, ppCommandLists);
 
+	DX::ThrowIfFailed(commandAllocator->Reset());
+	DX::ThrowIfFailed(commandList->Reset(commandAllocator.get(), nullptr));
+
 	if (debugAvailable && debugCapture)
 		ga->EndCapture();
 
@@ -251,4 +254,6 @@ void Brixelizer::FrameUpdate()
 	WaitForD3D12(commandQueue.get(), d3d12Fence.get(), currentFenceValue);
 
 	debugCapture = false;
+
+
 }

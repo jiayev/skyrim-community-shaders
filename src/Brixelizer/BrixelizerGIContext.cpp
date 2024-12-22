@@ -39,91 +39,108 @@ void BrixelizerGIContext::CreateMiscTextures()
 	Brixelizer::CreatedWrappedResource(texDesc, specularGi);
 }
 
+HRESULT UploadDDSTexture(
+	ID3D12Device* device,
+	ID3D12GraphicsCommandList* commandList,
+	ID3D12CommandQueue* commandQueue,
+	const std::string& filePath,
+	winrt::com_ptr<ID3D12Resource>& textureResource)
+{
+	// Convert std::string to std::wstring
+	std::wstring wFilePath(filePath.begin(), filePath.end());
+
+	// Load the DDS texture
+	std::unique_ptr<uint8_t[]> ddsData;
+	std::vector<D3D12_SUBRESOURCE_DATA> subresources;
+	HRESULT hr = DirectX::LoadDDSTextureFromFile(
+		device, wFilePath.c_str(), textureResource.put(), ddsData, subresources);
+
+	if (FAILED(hr)) {
+		return hr;
+	}
+
+	D3D12_SUBRESOURCE_DATA subresourceData = subresources[0];
+
+	// Create an upload heap for texture data
+	UINT64 uploadBufferSize = GetRequiredIntermediateSize(textureResource.get(), 0, 1);
+	winrt::com_ptr<ID3D12Resource> uploadHeap;
+
+	CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_UPLOAD);
+	CD3DX12_RESOURCE_DESC bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
+
+	hr = device->CreateCommittedResource(
+		&heapProperties,
+		D3D12_HEAP_FLAG_NONE,
+		&bufferDesc,
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(uploadHeap.put()));
+
+	if (FAILED(hr)) {
+		return hr;
+	}
+
+	// Copy subresource data to the upload heap
+	UpdateSubresources(
+		commandList,
+		textureResource.get(),
+		uploadHeap.get(),
+		0, 0, 1,
+		&subresourceData);
+
+	// Transition the texture to PIXEL_SHADER_RESOURCE state
+	CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+		textureResource.get(),
+		D3D12_RESOURCE_STATE_COPY_DEST,
+		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	commandList->ResourceBarrier(1, &barrier);
+
+	// Execute the command list
+	hr = commandList->Close();
+	if (FAILED(hr)) {
+		return hr;
+	}
+
+	ID3D12CommandList* ppCommandLists[] = { commandList };
+	commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
+
+	// Synchronize with the GPU
+	winrt::com_ptr<ID3D12Fence> fence;
+	HANDLE fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+	if (!fenceEvent) {
+		return HRESULT_FROM_WIN32(GetLastError());
+	}
+
+	hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence.put()));
+	if (FAILED(hr)) {
+		return hr;
+	}
+
+	UINT64 fenceValue = 1;
+	commandQueue->Signal(fence.get(), fenceValue);
+	if (fence->GetCompletedValue() < fenceValue) {
+		fence->SetEventOnCompletion(fenceValue, fenceEvent);
+		WaitForSingleObject(fenceEvent, INFINITE);
+	}
+	CloseHandle(fenceEvent);
+
+	return S_OK;
+}
+
 void BrixelizerGIContext::CreateNoiseTextures()
 {
-	auto& device = State::GetSingleton()->device;
-	auto& context = State::GetSingleton()->context;
-
 	for (int i = 0; i < 16; i++) {
-		winrt::com_ptr<ID3D11Resource> noiseTexture11;
-
-		wchar_t filePath[128];
-		swprintf(filePath, 128, L"Data\\Shaders\\Brixelizer\\Noise\\LDR_RG01_%d.dds", i);
-
-		DirectX::CreateDDSTextureFromFileEx(
-			device,
-			context,
+		auto filePath = std::format("Data\\Shaders\\Brixelizer\\Noise\\LDR_RG01_{}.dds", i);
+		
+		UploadDDSTexture(
+			Brixelizer::GetSingleton()->d3d12Device.get(),
+			Brixelizer::GetSingleton()->commandList.get(),
+			Brixelizer::GetSingleton()->commandQueue.get(),
 			filePath,
-			SIZE_T_MAX,
-			D3D11_USAGE_DEFAULT,
-			D3D11_BIND_SHADER_RESOURCE,
-			0u,
-			D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED,
-			DirectX::DDS_LOADER_FLAGS::DDS_LOADER_DEFAULT,
-			noiseTexture11.put(),
-			nullptr);
+			noiseTextures[i]);
 
-		// Query the DXGIResource1 interface to access shared NT handle
-		winrt::com_ptr<IDXGIResource1> dxgiResource1;
-		DX::ThrowIfFailed(noiseTexture11->QueryInterface(IID_PPV_ARGS(&dxgiResource1)));
-
-		// Create the shared NT handle
-		HANDLE sharedNtHandle = nullptr;
-		DX::ThrowIfFailed(dxgiResource1->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ, nullptr, &sharedNtHandle));
-
-		// Open the shared handle in D3D12
-		winrt::com_ptr<ID3D12Resource> d3d12Resource;
-		DX::ThrowIfFailed(Brixelizer::GetSingleton()->d3d12Device->OpenSharedHandle(sharedNtHandle, IID_PPV_ARGS(&d3d12Resource)));
-		CloseHandle(sharedNtHandle);  // Close the handle after opening it in D3D12
-
-		winrt::com_ptr<ID3D11Texture2D> texture11;
-		DX::ThrowIfFailed(noiseTexture11->QueryInterface(IID_PPV_ARGS(&texture11)));
-
-		D3D11_TEXTURE2D_DESC texDesc11{};
-		texture11->GetDesc(&texDesc11);
-
-		D3D12_RESOURCE_DESC texDesc = {};
-		texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-		texDesc.Width = texDesc11.Width;
-		texDesc.Height = texDesc11.Height;
-		texDesc.DepthOrArraySize = 1;
-		texDesc.MipLevels = 1;
-		texDesc.Format = texDesc11.Format;
-		texDesc.SampleDesc.Count = 1;
-		texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-		texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-		CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
-		DX::ThrowIfFailed(Brixelizer::GetSingleton()->d3d12Device->CreateCommittedResource(
-			&heapProperties,
-			D3D12_HEAP_FLAG_NONE,
-			&texDesc,
-			D3D12_RESOURCE_STATE_COPY_DEST,
-			nullptr,
-			IID_PPV_ARGS(&noiseTextures[i])));
-
-		{
-			std::vector<D3D12_RESOURCE_BARRIER> barriers{
-				CD3DX12_RESOURCE_BARRIER::Transition(d3d12Resource.get(),
-					D3D12_RESOURCE_STATE_COMMON,
-					D3D12_RESOURCE_STATE_COPY_SOURCE)
-			};
-			Brixelizer::GetSingleton()->commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-		}
-
-		Brixelizer::GetSingleton()->commandList->CopyResource(noiseTextures[i].get(), d3d12Resource.get());
-
-		{
-			std::vector<D3D12_RESOURCE_BARRIER> barriers{
-				CD3DX12_RESOURCE_BARRIER::Transition(d3d12Resource.get(),
-					D3D12_RESOURCE_STATE_COPY_SOURCE,
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-				CD3DX12_RESOURCE_BARRIER::Transition(noiseTextures[i].get(),
-					D3D12_RESOURCE_STATE_COPY_DEST,
-					D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-			};
-			Brixelizer::GetSingleton()->commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-		}
+		DX::ThrowIfFailed(Brixelizer::GetSingleton()->commandAllocator->Reset());
+		DX::ThrowIfFailed(Brixelizer::GetSingleton()->commandList->Reset(Brixelizer::GetSingleton()->commandAllocator.get(), nullptr));
 	}
 }
 
@@ -159,7 +176,6 @@ void BrixelizerGIContext::InitBrixelizerGIContext()
 	CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
 
 	CreateMiscTextures();
-	CreateNoiseTextures();
 }
 
 ID3D11ComputeShader* BrixelizerGIContext::GetCopyToSharedBufferCS()
@@ -183,14 +199,15 @@ void BrixelizerGIContext::CopyResourcesToSharedBuffers()
 
 	auto& depth11 = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 	auto& normalRoughness = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
+	auto& main = renderer->GetRuntimeData().renderTargets[Deferred::GetSingleton()->forwardRenderTargets[0]];
 
 	{
 		auto dispatchCount = Util::GetScreenDispatchCount(true);
 
-		ID3D11ShaderResourceView* views[2] = { depth11.depthSRV, normalRoughness.SRV };
+		ID3D11ShaderResourceView* views[3] = { depth11.depthSRV, normalRoughness.SRV, main.SRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11UnorderedAccessView* uavs[2] = { depth.uav, normal.uav };
+		ID3D11UnorderedAccessView* uavs[3] = { depth.uav, normal.uav, prevLitOutput.uav };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		context->CSSetShader(GetCopyToSharedBufferCS(), nullptr, 0);
@@ -198,10 +215,10 @@ void BrixelizerGIContext::CopyResourcesToSharedBuffers()
 		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 	}
 
-	ID3D11ShaderResourceView* views[2] = { nullptr, nullptr };
+	ID3D11ShaderResourceView* views[3] = { nullptr, nullptr, nullptr };
 	context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-	ID3D11UnorderedAccessView* uavs[2] = { nullptr, nullptr };
+	ID3D11UnorderedAccessView* uavs[3] = { nullptr, nullptr, nullptr };
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 	ID3D11ComputeShader* shader = nullptr;
@@ -216,7 +233,7 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 	auto& normalsRoughness = brixelizer->renderTargetsD3D12[NORMALROUGHNESS];
 	auto& motionVectors = brixelizer->renderTargetsD3D12[RE::RENDER_TARGET::kMOTION_VECTOR];
 
-	auto& main = brixelizer->renderTargetsD3D12[Deferred::GetSingleton()->forwardRenderTargets[0]];
+	//auto& main = brixelizer->renderTargetsD3D12[Deferred::GetSingleton()->forwardRenderTargets[0]];
 
 	//auto& environmentMap = brixelizer->renderTargetsCubemapD3D12[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS];
 
@@ -269,7 +286,7 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 
 	giDispatchDesc.historyDepth = ffxGetResourceDX12(depth.resource.get(), ffxGetResourceDescriptionDX12(depth.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"HistoryDepth", FFX_RESOURCE_STATE_COMPUTE_READ);
 	giDispatchDesc.historyNormal = ffxGetResourceDX12(normal.resource.get(), ffxGetResourceDescriptionDX12(normal.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"HistoryNormal", FFX_RESOURCE_STATE_COMPUTE_READ);
-	giDispatchDesc.prevLitOutput = ffxGetResourceDX12(main.d3d12Resource.get(), ffxGetResourceDescriptionDX12(main.d3d12Resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"PrevLitOutput", FFX_RESOURCE_STATE_COMPUTE_READ);
+	giDispatchDesc.prevLitOutput = ffxGetResourceDX12(prevLitOutput.resource.get(), ffxGetResourceDescriptionDX12(prevLitOutput.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"PrevLitOutput", FFX_RESOURCE_STATE_COMPUTE_READ);
 
 	giDispatchDesc.noiseTexture = ffxGetResourceDX12(noiseTextures[noiseIndex].get(), ffxGetResourceDescriptionDX12(noiseTextures[noiseIndex].get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Noise", FFX_RESOURCE_STATE_COMPUTE_READ);
 	giDispatchDesc.environmentMap = ffxGetResourceDX12(nullptr, ffxGetResourceDescriptionDX12(nullptr, FFX_RESOURCE_USAGE_READ_ONLY), L"EnvironmentMap", FFX_RESOURCE_STATE_COMPUTE_READ);
