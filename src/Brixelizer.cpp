@@ -92,7 +92,7 @@ void Brixelizer::InitBrixelizer()
 
 	stl::detour_vfunc<14, Brixelizer::Hooks::ID3D11DeviceContext_Map>(context);
 	stl::detour_vfunc<15, Brixelizer::Hooks::ID3D11DeviceContext_Unmap>(context);
-	
+
 	BrixelizerGIContext::GetSingleton()->CreateNoiseTextures();
 
 	InitializeSharedFence();
@@ -254,6 +254,4 @@ void Brixelizer::FrameUpdate()
 	WaitForD3D12(commandQueue.get(), d3d12Fence.get(), currentFenceValue);
 
 	debugCapture = false;
-
-
 }

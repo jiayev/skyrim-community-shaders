@@ -131,7 +131,7 @@ void BrixelizerGIContext::CreateNoiseTextures()
 {
 	for (int i = 0; i < 16; i++) {
 		auto filePath = std::format("Data\\Shaders\\Brixelizer\\Noise\\LDR_RG01_{}.dds", i);
-		
+
 		UploadDDSTexture(
 			Brixelizer::GetSingleton()->d3d12Device.get(),
 			Brixelizer::GetSingleton()->commandList.get(),
