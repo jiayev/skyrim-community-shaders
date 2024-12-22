@@ -30,6 +30,7 @@ public:
 	Brixelizer::WrappedResource historyDepth;
 	Brixelizer::WrappedResource historyNormal;
 	Brixelizer::WrappedResource prevLitOutput;
+	Brixelizer::WrappedResource roughness;
 
 	winrt::com_ptr<ID3D12Resource> noiseTextures[16];
 

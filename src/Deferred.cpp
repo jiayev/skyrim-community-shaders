@@ -428,8 +428,8 @@ void Deferred::DeferredPasses()
 			ssgi_y,
 			ssgi_cocg,
 			BrixelizerContext::GetSingleton()->debugRenderTarget.srv,
-			BrixelizerGIContext::GetSingleton()->diffuseGi.srv,
-			BrixelizerGIContext::GetSingleton()->specularGi.srv,
+			nullptr,
+			nullptr,
 		};
 
 		if (dynamicCubemaps->loaded)

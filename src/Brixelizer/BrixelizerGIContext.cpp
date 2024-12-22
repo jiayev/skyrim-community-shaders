@@ -37,6 +37,7 @@ void BrixelizerGIContext::CreateMiscTextures()
 	Brixelizer::CreatedWrappedResource(texDesc, prevLitOutput);
 	Brixelizer::CreatedWrappedResource(texDesc, diffuseGi);
 	Brixelizer::CreatedWrappedResource(texDesc, specularGi);
+	Brixelizer::CreatedWrappedResource(texDesc, roughness);
 }
 
 HRESULT UploadDDSTexture(
@@ -150,7 +151,7 @@ void BrixelizerGIContext::InitBrixelizerGIContext()
 
 	// Context Creation
 	FfxBrixelizerGIContextDescription desc = {
-		.flags = FFX_BRIXELIZER_GI_FLAG_DEPTH_INVERTED,
+		.flags = {},
 		.internalResolution = FFX_BRIXELIZER_GI_INTERNAL_RESOLUTION_50_PERCENT,
 		.displaySize = { static_cast<uint>(displaySize.x), static_cast<uint>(displaySize.y) },
 		.backendInterface = BrixelizerContext::GetSingleton()->initializationParameters.backendInterface,
@@ -159,21 +160,6 @@ void BrixelizerGIContext::InitBrixelizerGIContext()
 		logger::critical("Failed to create Brixelizer GI context.");
 	if (ffxBrixelizerGIGetEffectVersion() == FFX_SDK_MAKE_VERSION(1, 0, 0))
 		logger::critical("FidelityFX Brixelizer GI sample requires linking with a 1.0 version Brixelizer GI library.");
-
-	// Resource Creation
-	D3D12_RESOURCE_DESC texDesc = {
-		.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-		.Width = static_cast<UINT64>(displaySize.x),
-		.Height = static_cast<UINT64>(displaySize.y),
-		.DepthOrArraySize = 1,
-		.MipLevels = 1,
-		.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
-		.SampleDesc = { .Count = 1 },
-		.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
-		.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
-	};
-
-	CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
 
 	CreateMiscTextures();
 }
@@ -207,7 +193,7 @@ void BrixelizerGIContext::CopyResourcesToSharedBuffers()
 		ID3D11ShaderResourceView* views[3] = { depth11.depthSRV, normalRoughness.SRV, main.SRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11UnorderedAccessView* uavs[3] = { depth.uav, normal.uav, prevLitOutput.uav };
+		ID3D11UnorderedAccessView* uavs[4] = { depth.uav, normal.uav, prevLitOutput.uav, roughness.uav };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		context->CSSetShader(GetCopyToSharedBufferCS(), nullptr, 0);
@@ -218,7 +204,7 @@ void BrixelizerGIContext::CopyResourcesToSharedBuffers()
 	ID3D11ShaderResourceView* views[3] = { nullptr, nullptr, nullptr };
 	context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-	ID3D11UnorderedAccessView* uavs[3] = { nullptr, nullptr, nullptr };
+	ID3D11UnorderedAccessView* uavs[4] = { nullptr, nullptr, nullptr, nullptr };
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 	ID3D11ComputeShader* shader = nullptr;
@@ -230,7 +216,7 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 	auto brixelizer = Brixelizer::GetSingleton();
 	auto brixelizerContext = BrixelizerContext::GetSingleton();
 
-	auto& normalsRoughness = brixelizer->renderTargetsD3D12[NORMALROUGHNESS];
+	//auto& normalsRoughness = brixelizer->renderTargetsD3D12[NORMALROUGHNESS];
 	auto& motionVectors = brixelizer->renderTargetsD3D12[RE::RENDER_TARGET::kMOTION_VECTOR];
 
 	//auto& main = brixelizer->renderTargetsD3D12[Deferred::GetSingleton()->forwardRenderTargets[0]];
@@ -239,12 +225,14 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 
 	auto frameBufferCached = brixelizer->frameBufferCached;
 
-	auto view = frameBufferCached.CameraView.Transpose();
-	view._41 -= frameBufferCached.CameraPosAdjust.x;
-	view._42 -= frameBufferCached.CameraPosAdjust.y;
-	view._43 -= frameBufferCached.CameraPosAdjust.z;
+	auto cameraViewInverseAdjusted = frameBufferCached.CameraViewInverse.Transpose();
+	cameraViewInverseAdjusted._41 += frameBufferCached.CameraPosAdjust.x;
+	cameraViewInverseAdjusted._42 += frameBufferCached.CameraPosAdjust.y;
+	cameraViewInverseAdjusted._43 += frameBufferCached.CameraPosAdjust.z;
+	auto cameraProjInverse = frameBufferCached.CameraProjInverse.Transpose();
 
-	auto projection = frameBufferCached.CameraProj.Transpose();
+	auto view = cameraViewInverseAdjusted.Invert();
+	auto projection = cameraProjInverse.Invert();
 
 	static auto prevView = view;
 	static auto prevProjection = projection;
@@ -281,7 +269,7 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 	giDispatchDesc.depth = ffxGetResourceDX12(depth.resource.get(), ffxGetResourceDescriptionDX12(depth.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Depth", FFX_RESOURCE_STATE_COMPUTE_READ);
 
 	giDispatchDesc.normal = ffxGetResourceDX12(normal.resource.get(), ffxGetResourceDescriptionDX12(normal.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Normal", FFX_RESOURCE_STATE_COMPUTE_READ);
-	giDispatchDesc.roughness = ffxGetResourceDX12(normalsRoughness.d3d12Resource.get(), ffxGetResourceDescriptionDX12(normalsRoughness.d3d12Resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Roughness", FFX_RESOURCE_STATE_COMPUTE_READ);
+	giDispatchDesc.roughness = ffxGetResourceDX12(roughness.resource.get(), ffxGetResourceDescriptionDX12(roughness.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"Roughness", FFX_RESOURCE_STATE_COMPUTE_READ);
 	giDispatchDesc.motionVectors = ffxGetResourceDX12(motionVectors.d3d12Resource.get(), ffxGetResourceDescriptionDX12(motionVectors.d3d12Resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"MotionVectors", FFX_RESOURCE_STATE_COMPUTE_READ);
 
 	giDispatchDesc.historyDepth = ffxGetResourceDX12(depth.resource.get(), ffxGetResourceDescriptionDX12(depth.resource.get(), FFX_RESOURCE_USAGE_READ_ONLY), L"HistoryDepth", FFX_RESOURCE_STATE_COMPUTE_READ);
@@ -299,8 +287,8 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 		giDispatchDesc.cascadeBrickMaps[i] = ffxGetResourceDX12(brixelizerContext->cascadeBrickMaps[i].get(), ffxGetResourceDescriptionDX12(brixelizerContext->cascadeBrickMaps[i].get(), FFX_RESOURCE_USAGE_READ_ONLY), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
 	}
 
-	giDispatchDesc.outputDiffuseGI = ffxGetResourceDX12(diffuseGi.resource.get(), ffxGetResourceDescriptionDX12(diffuseGi.resource.get(), FFX_RESOURCE_USAGE_UAV), L"OutputDiffuseGI", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
-	giDispatchDesc.outputSpecularGI = ffxGetResourceDX12(specularGi.resource.get(), ffxGetResourceDescriptionDX12(specularGi.resource.get(), FFX_RESOURCE_USAGE_UAV), L"OutputSpecularGI", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+	giDispatchDesc.outputDiffuseGI = ffxGetResourceDX12(diffuseGi.resource.get(), ffxGetResourceDescriptionDX12(diffuseGi.resource.get()), L"OutputDiffuseGI");
+	giDispatchDesc.outputSpecularGI = ffxGetResourceDX12(specularGi.resource.get(), ffxGetResourceDescriptionDX12(specularGi.resource.get()), L"OutputSpecularGI");
 
 	if (ffxBrixelizerGetRawContext(&brixelizerContext->brixelizerContext, &giDispatchDesc.brixelizerContext) != FFX_OK)
 		logger::error("Failed to get Brixelizer context pointer.");
