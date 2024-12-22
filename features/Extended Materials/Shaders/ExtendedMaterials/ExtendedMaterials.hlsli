@@ -183,11 +183,11 @@ namespace ExtendedMaterials
 #endif
 	{
 		float3 viewDirTS = normalize(mul(tbn, viewDir));
-#	if defined(LANDSCAPE)
-		viewDirTS.xy /= viewDirTS.z*(1-params[0].Angle) + params[0].Angle;  // Fix for objects at extreme viewing angles
-#	else
-		viewDirTS.xy /= viewDirTS.z*(1-params.Angle) + params.Angle;  // Fix for objects at extreme viewing angles
-#	endif
+#if defined(LANDSCAPE)
+		viewDirTS.xy /= viewDirTS.z * (1 - params[0].Angle) + params[0].Angle;  // Fix for objects at extreme viewing angles
+#else
+		viewDirTS.xy /= viewDirTS.z * (1 - params.Angle) + params.Angle;  // Fix for objects at extreme viewing angles
+#endif
 
 		float nearBlendToFar = saturate(distance / 2048.0);
 #if defined(LANDSCAPE)
@@ -196,18 +196,17 @@ namespace ExtendedMaterials
 		float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? sqrt(saturate(1 - nearBlendToFar)) : 0;
 		float4 w1 = lerp(input.LandBlendWeights1, smoothstep(0, 1, input.LandBlendWeights1), blendFactor);
 		float2 w2 = lerp(input.LandBlendWeights2.xy, smoothstep(0, 1, input.LandBlendWeights2.xy), blendFactor);
-		float scale = max(params[0].HeightScale * w1.x, max(params[1].HeightScale * w1.y, max(params[2].HeightScale * w1.z, max(params[3].HeightScale * w1.w, max(params[4].HeightScale * w2.x, params[5].HeightScale * w2.y)))))
-		*(1-params[0].Curvature);
+		float scale = max(params[0].HeightScale * w1.x, max(params[1].HeightScale * w1.y, max(params[2].HeightScale * w1.z, max(params[3].HeightScale * w1.w, max(params[4].HeightScale * w2.x, params[5].HeightScale * w2.y))))) * (1 - params[0].Curvature);
 		float scalercp = rcp(scale);
 		float maxHeight = 0.1 * scale;
 #	else
 		float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? saturate(1 - nearBlendToFar) : INV_HEIGHT_POWER;
-		float scale = (1-params[0].Curvature);
+		float scale = (1 - params[0].Curvature);
 		float maxHeight = 0.1 * scale;
 #	endif
 #else
 		float scale = params.HeightScale;
-		float maxHeight = 0.1 * scale*(1-params.Curvature);
+		float maxHeight = 0.1 * scale * (1 - params.Curvature);
 #endif
 		float minHeight = maxHeight * 0.5;
 

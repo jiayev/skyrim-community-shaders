@@ -1020,37 +1020,35 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(SKINNED) || !defined(MODELSPACENORMALS)
 	float3x3 tbn = float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz);
 
-
-
 #		if !defined(TREE_ANIM) && !defined(LOD)
 	// Fix incorrect vertex normals on double-sided meshes
 	if (!frontFace)
 		tbn = lerp(tbn, -tbn, nearFactor);
 #		endif
 
-#	if defined(MODELSPACENORMALS) && !defined(SKINNED)
+#		if defined(MODELSPACENORMALS) && !defined(SKINNED)
 	float3 n = float3(0, 0, 1);
-#	else
+#		else
 	float3 n = float4(normalize(mul(tbn, float3(0, 0, 1))), 1);
-#	endif
+#		endif
 	float3 wsn = n.xyz;
-#	if !defined(DRAW_IN_WORLDSPACE)
+#		if !defined(DRAW_IN_WORLDSPACE)
 	[flatten] if (!input.WorldSpace)
 		wsn = normalize(mul(input.World[eyeIndex], float4(wsn, 0)));
-#	endif
+#		endif
 	float3 flatWorldNormal = normalize(-cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
 
 	float3x3 tbnTr = transpose(tbn);
 
 	float3 ndx = ddx(wsn);
 	float3 ndy = ddy(wsn);
-	float3 nl = wsn-ndx;
-	float3 nr = wsn+ndx;
-	float3 nd = wsn-ndx;
-	float3 nu = wsn+ndx;
+	float3 nl = wsn - ndx;
+	float3 nr = wsn + ndx;
+	float3 nd = wsn - ndx;
+	float3 nu = wsn + ndx;
 	//float curve = saturate(abs((cross(nl, nr).y - cross(nd,nu).x))*4.0*2048.0/viewPosition.z);
 	//float curve = saturate(length(max(abs(ddx(wsn)), abs(ddy(wsn))))*2048/viewPosition.z);
-	float curve = abs(tan(length(max(abs(ndx), abs(ndy)))*3.14))*2048.0/viewPosition.z;
+	float curve = abs(tan(length(max(abs(ndx), abs(ndy))) * 3.14)) * 2048.0 / viewPosition.z;
 	//float curve = tan(max(max(abs(ddx(input.TBN0.xyz)),abs(ddy(input.TBN0.xyz))), max(max(abs(ddx(input.TBN1.xyz)),abs(ddy(input.TBN1.xyz))), max(abs(ddx(input.TBN2.xyz)),abs(ddy(input.TBN2.xyz))))))*2048.0/viewPosition.z;
 	float angle = saturate(pow(1 - dot(worldSpaceViewDirection, wsn), 2));
 
@@ -1080,8 +1078,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	blendFactorTerrain = saturate(blendFactorTerrain);
 #	endif
 
-
-
 	float2 uv = input.TexCoord0.xy;
 	float2 uvOriginal = uv;
 
@@ -1097,8 +1093,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float sh0 = 0;
 	float pixelOffset = 0;
 
-
-
 #	if defined(EMAT)
 #		if defined(LANDSCAPE)
 	DisplacementParams displacementParams[6];
@@ -1107,9 +1101,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	displacementParams[0].HeightScale = 1.f;
 	displacementParams[0].Curvature = 0.0f;
 	displacementParams[0].Angle = 0.3f;
-	if (SharedData::extendedMaterialSettings.ExtendShadows){
-			displacementParams[0].Curvature = saturate(curve);
-			displacementParams[0].Angle = saturate(angle)*0.5;
+	if (SharedData::extendedMaterialSettings.ExtendShadows) {
+		displacementParams[0].Curvature = saturate(curve);
+		displacementParams[0].Angle = saturate(angle) * 0.5;
 	}
 #		else
 	DisplacementParams displacementParams;
@@ -1118,12 +1112,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	displacementParams.HeightScale = 1.f;
 	displacementParams.Curvature = 0.0f;
 	displacementParams.Angle = 0.3f;
-	if (SharedData::extendedMaterialSettings.ExtendShadows){
-			displacementParams.Curvature = saturate(curve);
-			displacementParams.Angle = saturate(angle)*0.5;
+	if (SharedData::extendedMaterialSettings.ExtendShadows) {
+		displacementParams.Curvature = saturate(curve);
+		displacementParams.Angle = saturate(angle) * 0.5;
 	}
 #		endif
-	
+
 #	endif
 
 	float3 entryNormal = 0;
@@ -1131,7 +1125,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float eta = 1;
 	float3 refractedViewDirection = viewDirection;
 	float3 refractedViewDirectionWS = worldSpaceViewDirection;
-
 
 #	if defined(EMAT)
 #		if defined(PARALLAX)
@@ -1167,13 +1160,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		endif  // ENVMAP
 
-
 #		if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 	bool PBRParallax = false;
 	[branch] if (SharedData::extendedMaterialSettings.EnableParallax && (PBRFlags & PBR::Flags::HasDisplacement) != 0)
 	{
 		PBRParallax = true;
-		
+
 		displacementParams.HeightScale = PBRParams1.y;
 		[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 		{
@@ -2789,18 +2781,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 #	endif
 
-if (SharedData::extendedMaterialSettings.EnableShadows){
+	if (SharedData::extendedMaterialSettings.EnableShadows) {
 #	if defined(SKINNED) || !defined(MODELSPACENORMALS)
-	psout.Diffuse.xyz = float3(curve, angle, 0);
-#if defined(DEFERRED)
-	psout.Albedo.xyz = float3(curve, angle, 0);
-#endif  
-#endif
-}
-//	psout.Diffuse.xyz = pow(dot(wsn, flatWorldNormal), 8.0);
-//#if defined(DEFERRED)
-//	psout.Albedo.xyz = pow(dot(wsn, flatWorldNormal), 8.0);
-//#endif  
+		psout.Diffuse.xyz = float3(curve, angle, 0);
+#		if defined(DEFERRED)
+		psout.Albedo.xyz = float3(curve, angle, 0);
+#		endif
+#	endif
+	}
+	//	psout.Diffuse.xyz = pow(dot(wsn, flatWorldNormal), 8.0);
+	//#if defined(DEFERRED)
+	//	psout.Albedo.xyz = pow(dot(wsn, flatWorldNormal), 8.0);
+	//#endif
 	return psout;
 }
 #endif  // PSHADER
