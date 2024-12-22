@@ -224,9 +224,9 @@ namespace ExtendedMaterials
 			float2 pt1 = 0;
 			float2 pt2 = 0;
 
-			uint numStepsTemp = numSteps;			
+			uint numStepsTemp = numSteps;
 			bool contactRefinement = false;
-			
+
 			[loop] while (numSteps > 0)
 			{
 				float4 currentOffset[2];
