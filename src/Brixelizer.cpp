@@ -216,25 +216,13 @@ void Brixelizer::InitializeSharedFence()
 	DX::ThrowIfFailed(d3d11Device->OpenSharedFence(sharedFenceHandle, IID_PPV_ARGS(&d3d11Fence)));
 }
 
-void WaitForD3D11(ID3D11DeviceContext4* d3d11Context, ID3D11Fence* d3d11Fence, UINT64 fenceValue)
-{
-	// Wait on the D3D11 context until the shared fence reaches the given value
-	DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence, fenceValue));
-}
-
-void WaitForD3D12(ID3D12CommandQueue* commandQueue, ID3D12Fence* d3d12Fence, UINT64& currentFenceValue)
-{
-	// Increment and signal the fence value
-	const UINT64 fenceValueToWaitFor = ++currentFenceValue;
-	DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence, fenceValueToWaitFor));
-}
-
 void Brixelizer::FrameUpdate()
 {
 	BrixelizerGIContext::GetSingleton()->CopyResourcesToSharedBuffers();
 
 	// Wait for D3D11 to complete prior work
-	WaitForD3D11(d3d11Context.get(), d3d11Fence.get(), currentFenceValue);
+	DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), ++currentFenceValue));
+	DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), currentFenceValue));
 
 	if (debugAvailable && debugCapture)
 		ga->BeginCapture();
@@ -254,7 +242,8 @@ void Brixelizer::FrameUpdate()
 		ga->EndCapture();
 
 	// Signal and wait for D3D12 to complete this frame's work
-	WaitForD3D12(commandQueue.get(), d3d12Fence.get(), currentFenceValue);
+	DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), ++currentFenceValue));
+	DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), currentFenceValue));
 
 	debugCapture = false;
 }
