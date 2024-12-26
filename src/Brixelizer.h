@@ -124,6 +124,8 @@ public:
 
 	void FrameUpdate();
 
+	void PostFrameUpdate();
+
 	struct RenderTargetDataD3D12
 	{
 		// D3D12 Resource

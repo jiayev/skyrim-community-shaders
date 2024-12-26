@@ -9,7 +9,7 @@
 #include "Brixelizer/BrixelizerContext.h"
 #include "Brixelizer/BrixelizerGIContext.h"
 
-#include "renderdoc_app.h"
+//#include "renderdoc_app.h"
 
 void Brixelizer::CacheFramebuffer()
 {
@@ -68,19 +68,19 @@ void Brixelizer::DrawSettings()
 	//ImGui::Text(std::format("	freeBricks : {}", statsFirstCascade.contextStats.freeBricks).c_str());
 }
 
-static RENDERDOC_API_1_5_0* rdoc_api = NULL;
+//static RENDERDOC_API_1_5_0* rdoc_api = NULL;
 
 void Brixelizer::InitD3D12(IDXGIAdapter* a_adapter)
 {
 	// At init, on windows
-	if (HMODULE mod = GetModuleHandleA("renderdoc.dll")) {
-		pRENDERDOC_GetAPI RENDERDOC_GetAPI =
-			(pRENDERDOC_GetAPI)GetProcAddress(mod, "RENDERDOC_GetAPI");
-		int ret = RENDERDOC_GetAPI(eRENDERDOC_API_Version_1_5_0, (void**)&rdoc_api);
-		assert(ret == 1);
-	}
-	if (rdoc_api)
-		rdoc_api->SetCaptureOptionU32(eRENDERDOC_Option_APIValidation, 1);
+	//if (HMODULE mod = GetModuleHandleA("renderdoc.dll")) {
+	//	pRENDERDOC_GetAPI RENDERDOC_GetAPI =
+	//		(pRENDERDOC_GetAPI)GetProcAddress(mod, "RENDERDOC_GetAPI");
+	//	int ret = RENDERDOC_GetAPI(eRENDERDOC_API_Version_1_5_0, (void**)&rdoc_api);
+	//	assert(ret == 1);
+	//}
+	//if (rdoc_api)
+	//	rdoc_api->SetCaptureOptionU32(eRENDERDOC_Option_APIValidation, 1);
 	DX::ThrowIfFailed(D3D12CreateDevice(a_adapter, D3D_FEATURE_LEVEL_12_2, IID_PPV_ARGS(&d3d12Device)));
 
 	D3D12_COMMAND_QUEUE_DESC queueDesc = {};
@@ -324,8 +324,8 @@ void Brixelizer::FrameUpdate()
 		captureCount = 3;
 	}
 
-	if (rdoc_api && captureCount > 0)
-		rdoc_api->StartFrameCapture(NULL, NULL);
+	//if (rdoc_api && captureCount > 0)
+	//	rdoc_api->StartFrameCapture(NULL, NULL);
 
 	BrixelizerGIContext::GetSingleton()->CopyResourcesToSharedBuffers();
 
@@ -341,8 +341,6 @@ void Brixelizer::FrameUpdate()
 	BrixelizerContext::GetSingleton()->UpdateBrixelizerContext(cmdList);
 	BrixelizerGIContext::GetSingleton()->UpdateBrixelizerGIContext(cmdList);
 
-	BrixelizerGIContext::GetSingleton()->CopyHistoryResources(cmdList);
-
 	EndCommandList();
 
 	if (debugAvailable && debugCapture)
@@ -352,10 +350,27 @@ void Brixelizer::FrameUpdate()
 	DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), ++currentSharedFenceValue));
 	DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), currentSharedFenceValue));
 
-	if (rdoc_api && captureCount > 0) {
-		rdoc_api->EndFrameCapture(NULL, NULL);
-		captureCount--;
-	}
+	//if (rdoc_api && captureCount > 0) {
+	//	rdoc_api->EndFrameCapture(NULL, NULL);
+	//	captureCount--;
+	//}
 
 	debugCapture = false;
+}
+
+void Brixelizer::PostFrameUpdate()
+{
+	auto cmdList = BeginCommandList();
+
+	// Wait for D3D11 to complete prior work
+	DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), ++currentSharedFenceValue));
+	DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), currentSharedFenceValue));
+
+	BrixelizerGIContext::GetSingleton()->CopyHistoryResources(cmdList);
+
+	EndCommandList();
+
+	// Signal and wait for D3D12 to complete this frame's work
+	DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), ++currentSharedFenceValue));
+	DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), currentSharedFenceValue));
 }

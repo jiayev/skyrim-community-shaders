@@ -177,7 +177,7 @@ void BrixelizerGIContext::InitBrixelizerGIContext()
 	// Context Creation
 	FfxBrixelizerGIContextDescription desc = {
 		.flags = {},
-		.internalResolution = FFX_BRIXELIZER_GI_INTERNAL_RESOLUTION_50_PERCENT,
+		.internalResolution = FFX_BRIXELIZER_GI_INTERNAL_RESOLUTION_NATIVE,
 		.displaySize = { static_cast<uint>(displaySize.x), static_cast<uint>(displaySize.y) },
 		.backendInterface = BrixelizerContext::GetSingleton()->initializationParameters.backendInterface,
 	};
@@ -218,7 +218,7 @@ void BrixelizerGIContext::CopyResourcesToSharedBuffers()
 		ID3D11ShaderResourceView* views[3] = { depth11.depthSRV, normalRoughness.SRV, main.SRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11UnorderedAccessView* uavs[5] = { depth.uav, normal.uav, currLitOutput.uav, roughness.uav, motionVectors.uav };
+		ID3D11UnorderedAccessView* uavs[5] = { depth.uav, normal.uav, prevLitOutput.uav, roughness.uav, motionVectors.uav };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		context->CSSetShader(GetCopyToSharedBufferCS(), nullptr, 0);
@@ -243,6 +243,8 @@ void BrixelizerGIContext::CopyHistoryResources(ID3D12GraphicsCommandList* cmdLis
 	//context->CopyResource(historyNormal.resource11, normal.resource11);
 	//context->CopyResource(prevLitOutput.resource11, currLitOutput.resource11);
 
+	auto& main = Brixelizer::GetSingleton()->renderTargetsD3D12[RE::RENDER_TARGET::kMAIN];
+
 	{
 		CD3DX12_RESOURCE_BARRIER barriers[] = {
 			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST),
@@ -250,13 +252,13 @@ void BrixelizerGIContext::CopyHistoryResources(ID3D12GraphicsCommandList* cmdLis
 			CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST),
 			CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE),
 			CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE),
-			CD3DX12_RESOURCE_BARRIER::Transition(currLitOutput.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(main.d3d12Resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE),
 		};
 		cmdList->ResourceBarrier(_countof(barriers), barriers);
 	}
 	cmdList->CopyResource(historyDepth.resource.get(), depth.resource.get());
 	cmdList->CopyResource(historyNormal.resource.get(), normal.resource.get());
-	cmdList->CopyResource(prevLitOutput.resource.get(), currLitOutput.resource.get());
+	cmdList->CopyResource(prevLitOutput.resource.get(), main.d3d12Resource.get());
 	{
 		CD3DX12_RESOURCE_BARRIER barriers[] = {
 			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.resource.get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
@@ -264,7 +266,7 @@ void BrixelizerGIContext::CopyHistoryResources(ID3D12GraphicsCommandList* cmdLis
 			CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.resource.get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
 			CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
 			CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
-			CD3DX12_RESOURCE_BARRIER::Transition(currLitOutput.resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+			CD3DX12_RESOURCE_BARRIER::Transition(main.d3d12Resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON),
 		};
 		cmdList->ResourceBarrier(_countof(barriers), barriers);
 	}
@@ -277,8 +279,6 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* c
 
 	//auto& normalsRoughness = brixelizer->renderTargetsD3D12[NORMALROUGHNESS];
 	//auto& motionVectors = brixelizer->renderTargetsD3D12[RE::RENDER_TARGET::kMOTION_VECTOR];
-
-	//auto& main = brixelizer->renderTargetsD3D12[Deferred::GetSingleton()->forwardRenderTargets[0]];
 
 	//auto& environmentMap = brixelizer->renderTargetsCubemapD3D12[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS];
 
@@ -315,7 +315,7 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* c
 	giDispatchDesc.specularRayPushoff = brixelizerContext->m_RayPushoff;
 	giDispatchDesc.specularSDFSolveEps = brixelizerContext->m_SdfSolveEps;
 	giDispatchDesc.tMin = brixelizerContext->m_TMin;
-	giDispatchDesc.tMax = brixelizerContext->m_TMax;
+	giDispatchDesc.tMax = brixelizerContext->m_TMax * 10;
 
 	giDispatchDesc.normalsUnpackMul = 2.0f;
 	giDispatchDesc.normalsUnpackAdd = -1.0f;

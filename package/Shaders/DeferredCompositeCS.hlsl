@@ -58,7 +58,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half3 il)
 
 Texture2D<float4> DebugTexture : register(t12);
 Texture2D<float4> DiffuseGI : register(t13);
-Texture2D<float4> SpecularGI : register(t13);
+Texture2D<float4> SpecularGI : register(t14);
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
@@ -90,7 +90,7 @@ Texture2D<float4> SpecularGI : register(t13);
 
 	half3 color = lerp(diffuseColor + specularColor, Color::LinearToGamma(Color::GammaToLinear(diffuseColor) + Color::GammaToLinear(specularColor)), pbrWeight);
 
-#if defined(DYNAMIC_CUBEMAPS)
+ #if defined(DYNAMIC_CUBEMAPS)
 
 	half3 reflectance = ReflectanceTexture[dispatchID.xy];
 
@@ -101,7 +101,7 @@ Texture2D<float4> SpecularGI : register(t13);
 
 		normalWS = lerp(normalWS, float3(0, 0, 1), wetnessMask);
 
-		color = Color::GammaToLinear(color);
+		 color = Color::GammaToLinear(color);
 
 		half3 V = normalize(positionWS.xyz);
 		half3 R = reflect(V, normalWS);
@@ -147,8 +147,9 @@ Texture2D<float4> SpecularGI : register(t13);
 #	else
 		half3 specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level).xyz;
 		specularIrradianceReflections = Color::GammaToLinear(specularIrradianceReflections);
+		float3 specularIrradiance = SpecularGI[dispatchID.xy];
 
-		finalIrradiance += specularIrradianceReflections;
+		finalIrradiance = specularIrradiance * reflectance;
 #	endif
 
 #	if defined(SSGI)
@@ -172,7 +173,7 @@ Texture2D<float4> SpecularGI : register(t13);
 		finalIrradiance += ssgiIlSpecular;
 #	endif
 
-		color += reflectance * finalIrradiance;
+		//color += reflectance * SpecularGI[dispatchID.xy];
 
 		color = Color::LinearToGamma(color);
 	}
@@ -200,12 +201,11 @@ Texture2D<float4> SpecularGI : register(t13);
 	color = Color::GammaToLinear(color);
 
 	float3 diffuseGI = DiffuseGI[dispatchID.xy].xyz;
-	//diffuseGI = Color::GammaToLinear(diffuseGI);
 
-	// color += diffuseGI * Color::GammaToLinear(albedo);
+	color += diffuseGI * Color::GammaToLinear(albedo) * 3 * 3;
 
-	// color = Color::LinearToGamma(color);
+	color = Color::LinearToGamma(color);
 
-	MainRW[dispatchID.xy] = DebugTexture[dispatchID.xy];
+	MainRW[dispatchID.xy] = color;
 	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = half4(GBuffer::EncodeNormalVanilla(normalVS), 0.0, 0.0);
 }

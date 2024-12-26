@@ -428,8 +428,8 @@ void Deferred::DeferredPasses()
 			ssgi_y,
 			ssgi_cocg,
 			BrixelizerContext::GetSingleton()->debugRenderTarget.srv,
-			nullptr,
-			nullptr,
+			BrixelizerGIContext::GetSingleton()->diffuseGi.srv,
+			BrixelizerGIContext::GetSingleton()->specularGi.srv,
 		};
 
 		if (dynamicCubemaps->loaded)
@@ -497,6 +497,8 @@ void Deferred::EndDeferred()
 	deferredPass = false;
 
 	ResetBlendStates();
+
+	Brixelizer::GetSingleton()->PostFrameUpdate();
 }
 
 void Deferred::OverrideBlendStates()

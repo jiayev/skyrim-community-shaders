@@ -1854,6 +1854,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 dirLightColor = DirLightColor.xyz;
 	float3 dirLightColorMultiplier = 1;
 
+	dirLightColor = 0;
+
 #	if defined(WATER_EFFECTS)
 	dirLightColorMultiplier *= WaterEffects::ComputeCaustics(waterData, input.WorldPosition.xyz, worldSpaceNormal);
 #	endif
@@ -2131,6 +2133,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				continue;
 			}
 		}
+			if (!(light.lightFlags & LightLimitFix::LightFlags::Shadow)) {
+				continue;
+			}
 
 		float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
 		float lightDist = length(lightDirection);
@@ -2287,7 +2292,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(TRUE_PBR)
 	directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor) / Color::LightPreMult;
 #	endif
-
+directionalAmbientColor = 0;
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
 
 #	if defined(SKYLIGHTING)
