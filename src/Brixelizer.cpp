@@ -268,7 +268,6 @@ void Brixelizer::ClearShaderCache()
 {
 }
 
-
 void Brixelizer::InitializeSharedFence()
 {
 	DX::ThrowIfFailed(d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&d3d12Fence)));

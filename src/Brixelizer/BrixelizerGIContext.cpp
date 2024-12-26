@@ -42,18 +42,18 @@ void BrixelizerGIContext::CreateMiscTextures()
 	Brixelizer::CreatedWrappedResource(texDesc, motionVectors);
 
 	{
-        D3D12_RESOURCE_DESC textureDesc = {};
-        textureDesc.Dimension           = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        textureDesc.Alignment           = 0;
-        textureDesc.Width               = 512;
-        textureDesc.Height              = 512;
-        textureDesc.DepthOrArraySize    = 6;
-        textureDesc.MipLevels           = 1;
-        textureDesc.Format              = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        textureDesc.SampleDesc.Count    = 1;
-        textureDesc.SampleDesc.Quality  = 0;
-        textureDesc.Flags               = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        textureDesc.Layout              = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+		D3D12_RESOURCE_DESC textureDesc = {};
+		textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+		textureDesc.Alignment = 0;
+		textureDesc.Width = 512;
+		textureDesc.Height = 512;
+		textureDesc.DepthOrArraySize = 6;
+		textureDesc.MipLevels = 1;
+		textureDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		textureDesc.SampleDesc.Count = 1;
+		textureDesc.SampleDesc.Quality = 0;
+		textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+		textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 
 		// Create the texture resource (cubemap)
 		CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
