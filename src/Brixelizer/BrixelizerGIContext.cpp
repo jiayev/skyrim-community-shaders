@@ -314,14 +314,14 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* c
 	giDispatchDesc.specularRayPushoff = brixelizerContext->m_RayPushoff;
 	giDispatchDesc.specularSDFSolveEps = brixelizerContext->m_SdfSolveEps;
 	giDispatchDesc.tMin = brixelizerContext->m_TMin;
-	giDispatchDesc.tMax = brixelizerContext->m_TMax * 10;
+	giDispatchDesc.tMax = brixelizerContext->m_TMax;
 
 	giDispatchDesc.normalsUnpackMul = 2.0f;
 	giDispatchDesc.normalsUnpackAdd = -1.0f;
 	giDispatchDesc.isRoughnessPerceptual = false;
 	giDispatchDesc.roughnessChannel = 1;
 	giDispatchDesc.roughnessThreshold = 0.9f;
-	giDispatchDesc.environmentMapIntensity = 0.1f;
+	giDispatchDesc.environmentMapIntensity = environmentIntensity;
 	giDispatchDesc.motionVectorScale = { 1.0f, 1.0f };
 
 	giDispatchDesc.depth = ffxGetResourceDX12(depth.resource.get(), ffxGetResourceDescriptionDX12(depth.resource.get()), L"Depth");
@@ -350,6 +350,29 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* c
 
 	giDispatchDesc.outputDiffuseGI = ffxGetResourceDX12(diffuseGi.resource.get(), ffxGetResourceDescriptionDX12(diffuseGi.resource.get()), L"OutputDiffuseGI");
 	giDispatchDesc.outputSpecularGI = ffxGetResourceDX12(specularGi.resource.get(), ffxGetResourceDescriptionDX12(specularGi.resource.get()), L"OutputSpecularGI");
+	
+	const auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
+	const RE::NiTransform& dalcTransform = shaderManager.directionalAmbientTransform;
+	DirectX::XMFLOAT4X4 DirectionalAmbient;
+
+	_mm_store_ps(DirectionalAmbient.m[0], _mm_loadu_ps(dalcTransform.rotate.entry[0]));
+	_mm_store_ps(DirectionalAmbient.m[1], _mm_loadu_ps(dalcTransform.rotate.entry[1]));
+	_mm_store_ps(DirectionalAmbient.m[2], _mm_loadu_ps(dalcTransform.rotate.entry[2]));
+
+	DirectionalAmbient.m[0][3] = dalcTransform.translate.x;
+	DirectionalAmbient.m[1][3] = dalcTransform.translate.y;
+	DirectionalAmbient.m[2][3] = dalcTransform.translate.z;
+
+	DirectionalAmbient.m[3][0] = 0;
+	DirectionalAmbient.m[3][1] = 0;
+	DirectionalAmbient.m[3][2] = 0;
+	DirectionalAmbient.m[3][3] = 0;
+
+	float4x4 DirectionalAmbientF = DirectionalAmbient;
+
+	DirectionalAmbientF = DirectionalAmbientF.Transpose();
+
+	memcpy(&giDispatchDesc.directionalAmbient, &DirectionalAmbientF, sizeof(giDispatchDesc.directionalAmbient));
 
 	if (ffxBrixelizerGetRawContext(&brixelizerContext->brixelizerContext, &giDispatchDesc.brixelizerContext) != FFX_OK)
 		logger::error("Failed to get Brixelizer context pointer.");

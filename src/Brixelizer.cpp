@@ -26,6 +26,7 @@ void Brixelizer::DrawSettings()
 	}
 
 	ImGui::Checkbox("update", &update);
+	ImGui::SliderFloat("environment intensity", &BrixelizerGIContext::GetSingleton()->environmentIntensity, 0, 1);
 
 	//ImGui::SliderInt("Debug Mode", (int*)&m_DebugMode, 0, FFX_BRIXELIZER_TRACE_DEBUG_MODE_CASCADE_ID, "%d", ImGuiSliderFlags_AlwaysClamp);
 	//if (auto _tt = Util::HoverTooltipWrapper())

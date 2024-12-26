@@ -36,6 +36,8 @@ public:
 	winrt::com_ptr<ID3D12Resource> environmentMap;
 	winrt::com_ptr<ID3D12Resource> noiseTextures[16];
 
+	float environmentIntensity = 0.1f;
+
 	ID3D11ComputeShader* copyToSharedBufferCS;
 	ID3D11ComputeShader* GetCopyToSharedBufferCS();
 
