@@ -202,7 +202,7 @@ Texture2D<float4> SpecularGI : register(t14);
 
 	float3 diffuseGI = DiffuseGI[dispatchID.xy].xyz;
 
-	color += diffuseGI * Color::GammaToLinear(albedo) * 3 * 3;
+	color += diffuseGI * Color::GammaToLinear(albedo) * Math::PI;
 
 	color = Color::LinearToGamma(color);
 
