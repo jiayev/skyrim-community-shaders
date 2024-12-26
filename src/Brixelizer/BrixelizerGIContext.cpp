@@ -39,7 +39,6 @@ void BrixelizerGIContext::CreateMiscTextures()
 	Brixelizer::CreatedWrappedResource(texDesc, diffuseGi);
 	Brixelizer::CreatedWrappedResource(texDesc, specularGi);
 	Brixelizer::CreatedWrappedResource(texDesc, roughness);
-	Brixelizer::CreatedWrappedResource(texDesc, motionVectors);
 
 	{
 		D3D12_RESOURCE_DESC textureDesc = {};
@@ -218,7 +217,7 @@ void BrixelizerGIContext::CopyResourcesToSharedBuffers()
 		ID3D11ShaderResourceView* views[3] = { depth11.depthSRV, normalRoughness.SRV, main.SRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11UnorderedAccessView* uavs[5] = { depth.uav, normal.uav, prevLitOutput.uav, roughness.uav, motionVectors.uav };
+		ID3D11UnorderedAccessView* uavs[6] = { depth.uav, normal.uav, prevLitOutput.uav, roughness.uav };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		context->CSSetShader(GetCopyToSharedBufferCS(), nullptr, 0);
@@ -229,7 +228,7 @@ void BrixelizerGIContext::CopyResourcesToSharedBuffers()
 	ID3D11ShaderResourceView* views[3] = { nullptr, nullptr, nullptr };
 	context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-	ID3D11UnorderedAccessView* uavs[5] = { nullptr, nullptr, nullptr, nullptr };
+	ID3D11UnorderedAccessView* uavs[6] = { nullptr, nullptr, nullptr, nullptr, nullptr };
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 	ID3D11ComputeShader* shader = nullptr;
@@ -278,7 +277,7 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* c
 	auto brixelizerContext = BrixelizerContext::GetSingleton();
 
 	//auto& normalsRoughness = brixelizer->renderTargetsD3D12[NORMALROUGHNESS];
-	//auto& motionVectors = brixelizer->renderTargetsD3D12[RE::RENDER_TARGET::kMOTION_VECTOR];
+	auto& motionVectors = brixelizer->renderTargetsD3D12[RE::RENDER_TARGET::kMOTION_VECTOR];
 
 	//auto& environmentMap = brixelizer->renderTargetsCubemapD3D12[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS];
 
@@ -329,7 +328,7 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* c
 
 	giDispatchDesc.normal = ffxGetResourceDX12(normal.resource.get(), ffxGetResourceDescriptionDX12(normal.resource.get()), L"Normal");
 	giDispatchDesc.roughness = ffxGetResourceDX12(roughness.resource.get(), ffxGetResourceDescriptionDX12(roughness.resource.get()), L"Roughness");
-	giDispatchDesc.motionVectors = ffxGetResourceDX12(motionVectors.resource.get(), ffxGetResourceDescriptionDX12(motionVectors.resource.get()), L"MotionVectors");
+	giDispatchDesc.motionVectors = ffxGetResourceDX12(motionVectors.d3d12Resource.get(), ffxGetResourceDescriptionDX12(motionVectors.d3d12Resource.get()), L"MotionVectors");
 
 	giDispatchDesc.historyDepth = ffxGetResourceDX12(historyDepth.resource.get(), ffxGetResourceDescriptionDX12(historyDepth.resource.get()), L"HistoryDepth");
 	giDispatchDesc.historyNormal = ffxGetResourceDX12(historyNormal.resource.get(), ffxGetResourceDescriptionDX12(historyNormal.resource.get()), L"HistoryNormal");

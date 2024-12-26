@@ -14,7 +14,6 @@ RWTexture2D<unorm float> DepthTexture12 : register(u0);
 RWTexture2D<unorm float3> Normal : register(u1);
 RWTexture2D<float4> PrevLitOutput : register(u2);
 RWTexture2D<float4> Roughness12 : register(u3);
-RWTexture2D<float4> MotionVectors12 : register(u4);
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
@@ -31,5 +30,4 @@ RWTexture2D<float4> MotionVectors12 : register(u4);
 	float3 color = Color::GammaToLinear(PrevLitOutput[dispatchID.xy].xyz);
 	PrevLitOutput[dispatchID.xy] = float4(color, 1);
 	Roughness12[dispatchID.xy] = 1.0 - NormalRoughnessTexture[dispatchID.xy].z;
-	MotionVectors12[dispatchID.xy] = 0;
 }

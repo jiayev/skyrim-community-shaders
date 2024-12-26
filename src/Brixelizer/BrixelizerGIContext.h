@@ -32,7 +32,6 @@ public:
 	Brixelizer::WrappedResource historyNormal;
 	Brixelizer::WrappedResource prevLitOutput;
 	Brixelizer::WrappedResource roughness;
-	Brixelizer::WrappedResource motionVectors;
 
 	winrt::com_ptr<ID3D12Resource> environmentMap;
 	winrt::com_ptr<ID3D12Resource> noiseTextures[16];
