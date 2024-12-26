@@ -90,7 +90,7 @@ Texture2D<float4> SpecularGI : register(t14);
 
 	half3 color = lerp(diffuseColor + specularColor, Color::LinearToGamma(Color::GammaToLinear(diffuseColor) + Color::GammaToLinear(specularColor)), pbrWeight);
 
- #if defined(DYNAMIC_CUBEMAPS)
+#if defined(DYNAMIC_CUBEMAPS)
 
 	half3 reflectance = ReflectanceTexture[dispatchID.xy];
 
@@ -101,7 +101,7 @@ Texture2D<float4> SpecularGI : register(t14);
 
 		normalWS = lerp(normalWS, float3(0, 0, 1), wetnessMask);
 
-		 color = Color::GammaToLinear(color);
+		color = Color::GammaToLinear(color);
 
 		half3 V = normalize(positionWS.xyz);
 		half3 R = reflect(V, normalWS);
