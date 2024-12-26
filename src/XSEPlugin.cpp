@@ -49,6 +49,7 @@ void InitializeLog([[maybe_unused]] spdlog::level::level_enum a_level = spdlog::
 
 extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
 {
+	LoadLibrary(L"renderdoc.dll");
 #ifndef NDEBUG
 	while (!REX::W32::IsDebuggerPresent()) {};
 #endif

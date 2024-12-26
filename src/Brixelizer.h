@@ -85,15 +85,16 @@ public:
 	winrt::com_ptr<ID3D12CommandQueue> commandQueue;
 	winrt::com_ptr<ID3D12CommandAllocator> commandAllocator;
 	winrt::com_ptr<ID3D12GraphicsCommandList> commandList;
+	ID3D12CommandList* commandLists[1];
 
 	winrt::com_ptr<ID3D11Device5> d3d11Device;
 	winrt::com_ptr<ID3D11DeviceContext4> d3d11Context;
 	winrt::com_ptr<ID3D11Fence> d3d11Fence;
 	winrt::com_ptr<ID3D12Fence> d3d12Fence;
-	UINT64 currentFenceValue = 0;
+	UINT64 currentSharedFenceValue = 0;
 
-	winrt::com_ptr<ID3D12Fence> fence;
-	UINT64 fenceValue = 0;
+	winrt::com_ptr<ID3D12Fence> d3d12OnlyFence;
+	UINT64 d3d12FenceValue = 0;
 	HANDLE fenceEvent = nullptr;
 
 	struct WrappedResource
@@ -116,6 +117,10 @@ public:
 	void ClearShaderCache();
 
 	void InitializeSharedFence();
+
+	ID3D12GraphicsCommandList* BeginCommandList();
+
+	void EndCommandList();
 
 	void FrameUpdate();
 

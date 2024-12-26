@@ -34,6 +34,7 @@ void BrixelizerGIContext::CreateMiscTextures()
 	Brixelizer::CreatedWrappedResource(texDesc, normal);
 	Brixelizer::CreatedWrappedResource(texDesc, historyNormal);
 
+	Brixelizer::CreatedWrappedResource(texDesc, currLitOutput);
 	Brixelizer::CreatedWrappedResource(texDesc, prevLitOutput);
 	Brixelizer::CreatedWrappedResource(texDesc, diffuseGi);
 	Brixelizer::CreatedWrappedResource(texDesc, specularGi);
@@ -41,18 +42,18 @@ void BrixelizerGIContext::CreateMiscTextures()
 	Brixelizer::CreatedWrappedResource(texDesc, motionVectors);
 
 	{
-		D3D12_RESOURCE_DESC textureDesc = {};
-		textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-		textureDesc.Alignment = 0;
-		textureDesc.Width = 1;
-		textureDesc.Height = 1;
-		textureDesc.DepthOrArraySize = 6;
-		textureDesc.MipLevels = 1;
-		textureDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-		textureDesc.SampleDesc.Count = 1;
-		textureDesc.SampleDesc.Quality = 0;
-		textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-		textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        D3D12_RESOURCE_DESC textureDesc = {};
+        textureDesc.Dimension           = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        textureDesc.Alignment           = 0;
+        textureDesc.Width               = 512;
+        textureDesc.Height              = 512;
+        textureDesc.DepthOrArraySize    = 6;
+        textureDesc.MipLevels           = 1;
+        textureDesc.Format              = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        textureDesc.SampleDesc.Count    = 1;
+        textureDesc.SampleDesc.Quality  = 0;
+        textureDesc.Flags               = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        textureDesc.Layout              = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 
 		// Create the texture resource (cubemap)
 		CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
@@ -158,16 +159,14 @@ void BrixelizerGIContext::CreateNoiseTextures()
 {
 	for (int i = 0; i < 16; i++) {
 		auto filePath = std::format("Data\\Shaders\\Brixelizer\\Noise\\LDR_RG01_{}.dds", i);
-
+		DX::ThrowIfFailed(Brixelizer::GetSingleton()->commandAllocator->Reset());
+		DX::ThrowIfFailed(Brixelizer::GetSingleton()->commandList->Reset(Brixelizer::GetSingleton()->commandAllocator.get(), nullptr));
 		UploadDDSTexture(
 			Brixelizer::GetSingleton()->d3d12Device.get(),
 			Brixelizer::GetSingleton()->commandList.get(),
 			Brixelizer::GetSingleton()->commandQueue.get(),
 			filePath,
 			noiseTextures[i]);
-
-		DX::ThrowIfFailed(Brixelizer::GetSingleton()->commandAllocator->Reset());
-		DX::ThrowIfFailed(Brixelizer::GetSingleton()->commandList->Reset(Brixelizer::GetSingleton()->commandAllocator.get(), nullptr));
 	}
 }
 
@@ -219,7 +218,7 @@ void BrixelizerGIContext::CopyResourcesToSharedBuffers()
 		ID3D11ShaderResourceView* views[3] = { depth11.depthSRV, normalRoughness.SRV, main.SRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11UnorderedAccessView* uavs[5] = { depth.uav, normal.uav, prevLitOutput.uav, roughness.uav, motionVectors.uav };
+		ID3D11UnorderedAccessView* uavs[5] = { depth.uav, normal.uav, currLitOutput.uav, roughness.uav, motionVectors.uav };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		context->CSSetShader(GetCopyToSharedBufferCS(), nullptr, 0);
@@ -237,7 +236,41 @@ void BrixelizerGIContext::CopyResourcesToSharedBuffers()
 	context->CSSetShader(shader, nullptr, 0);
 }
 
-void BrixelizerGIContext::UpdateBrixelizerGIContext()
+void BrixelizerGIContext::CopyHistoryResources(ID3D12GraphicsCommandList* cmdList)
+{
+	//auto& context = State::GetSingleton()->context;
+	//context->CopyResource(historyDepth.resource11, depth.resource11);
+	//context->CopyResource(historyNormal.resource11, normal.resource11);
+	//context->CopyResource(prevLitOutput.resource11, currLitOutput.resource11);
+
+	{
+		CD3DX12_RESOURCE_BARRIER barriers[] = {
+			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST),
+			CD3DX12_RESOURCE_BARRIER::Transition(historyNormal.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST),
+			CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST),
+			CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(currLitOutput.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE),
+		};
+		cmdList->ResourceBarrier(_countof(barriers), barriers);
+	}
+	cmdList->CopyResource(historyDepth.resource.get(), depth.resource.get());
+	cmdList->CopyResource(historyNormal.resource.get(), normal.resource.get());
+	cmdList->CopyResource(prevLitOutput.resource.get(), currLitOutput.resource.get());
+	{
+		CD3DX12_RESOURCE_BARRIER barriers[] = {
+			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.resource.get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+			CD3DX12_RESOURCE_BARRIER::Transition(historyNormal.resource.get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+			CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.resource.get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+			CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+			CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+			CD3DX12_RESOURCE_BARRIER::Transition(currLitOutput.resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+		};
+		cmdList->ResourceBarrier(_countof(barriers), barriers);
+	}
+}
+
+void BrixelizerGIContext::UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* cmdList)
 {
 	auto brixelizer = Brixelizer::GetSingleton();
 	auto brixelizerContext = BrixelizerContext::GetSingleton();
@@ -289,7 +322,7 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 	giDispatchDesc.isRoughnessPerceptual = false;
 	giDispatchDesc.roughnessChannel = 1;
 	giDispatchDesc.roughnessThreshold = 0.9f;
-	giDispatchDesc.environmentMapIntensity = 0.0f;
+	giDispatchDesc.environmentMapIntensity = 0.1f;
 	giDispatchDesc.motionVectorScale = { 1.0f, 1.0f };
 
 	giDispatchDesc.depth = ffxGetResourceDX12(depth.resource.get(), ffxGetResourceDescriptionDX12(depth.resource.get()), L"Depth");
@@ -298,8 +331,8 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 	giDispatchDesc.roughness = ffxGetResourceDX12(roughness.resource.get(), ffxGetResourceDescriptionDX12(roughness.resource.get()), L"Roughness");
 	giDispatchDesc.motionVectors = ffxGetResourceDX12(motionVectors.resource.get(), ffxGetResourceDescriptionDX12(motionVectors.resource.get()), L"MotionVectors");
 
-	giDispatchDesc.historyDepth = ffxGetResourceDX12(depth.resource.get(), ffxGetResourceDescriptionDX12(depth.resource.get()), L"HistoryDepth");
-	giDispatchDesc.historyNormal = ffxGetResourceDX12(normal.resource.get(), ffxGetResourceDescriptionDX12(normal.resource.get()), L"HistoryNormal");
+	giDispatchDesc.historyDepth = ffxGetResourceDX12(historyDepth.resource.get(), ffxGetResourceDescriptionDX12(historyDepth.resource.get()), L"HistoryDepth");
+	giDispatchDesc.historyNormal = ffxGetResourceDX12(historyNormal.resource.get(), ffxGetResourceDescriptionDX12(historyNormal.resource.get()), L"HistoryNormal");
 	giDispatchDesc.prevLitOutput = ffxGetResourceDX12(prevLitOutput.resource.get(), ffxGetResourceDescriptionDX12(prevLitOutput.resource.get()), L"PrevLitOutput");
 
 	giDispatchDesc.noiseTexture = ffxGetResourceDX12(noiseTextures[noiseIndex].get(), ffxGetResourceDescriptionDX12(noiseTextures[noiseIndex].get()), L"Noise");
@@ -307,10 +340,13 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 
 	giDispatchDesc.sdfAtlas = ffxGetResourceDX12(brixelizerContext->sdfAtlas.get(), ffxGetResourceDescriptionDX12(brixelizerContext->sdfAtlas.get()), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
 	giDispatchDesc.bricksAABBs = ffxGetResourceDX12(brixelizerContext->brickAABBs.get(), ffxGetResourceDescriptionDX12(brixelizerContext->brickAABBs.get()), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
+	giDispatchDesc.bricksAABBs.description.stride = 4;
 
 	for (uint32_t i = 0; i < FFX_BRIXELIZER_MAX_CASCADES; ++i) {
 		giDispatchDesc.cascadeAABBTrees[i] = ffxGetResourceDX12(brixelizerContext->cascadeAABBTrees[i].get(), ffxGetResourceDescriptionDX12(brixelizerContext->cascadeAABBTrees[i].get()), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.cascadeAABBTrees[i].description.stride = 4;
 		giDispatchDesc.cascadeBrickMaps[i] = ffxGetResourceDX12(brixelizerContext->cascadeBrickMaps[i].get(), ffxGetResourceDescriptionDX12(brixelizerContext->cascadeBrickMaps[i].get()), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
+		giDispatchDesc.cascadeBrickMaps[i].description.stride = 4;
 	}
 
 	giDispatchDesc.outputDiffuseGI = ffxGetResourceDX12(diffuseGi.resource.get(), ffxGetResourceDescriptionDX12(diffuseGi.resource.get()), L"OutputDiffuseGI");
@@ -319,7 +355,7 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 	if (ffxBrixelizerGetRawContext(&brixelizerContext->brixelizerContext, &giDispatchDesc.brixelizerContext) != FFX_OK)
 		logger::error("Failed to get Brixelizer context pointer.");
 
-	if (ffxBrixelizerGIContextDispatch(&brixelizerGIContext, &giDispatchDesc, ffxGetCommandListDX12(brixelizer->commandList.get())) != FFX_OK)
+	if (ffxBrixelizerGIContextDispatch(&brixelizerGIContext, &giDispatchDesc, ffxGetCommandListDX12(cmdList)) != FFX_OK)
 		logger::error("Failed to dispatch Brixelizer GI.");
 
 	{
@@ -344,10 +380,12 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 
 		debug_desc.sdfAtlas = ffxGetResourceDX12(brixelizerContext->sdfAtlas.get(), ffxGetResourceDescriptionDX12(brixelizerContext->sdfAtlas.get()), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
 		debug_desc.bricksAABBs = ffxGetResourceDX12(brixelizerContext->brickAABBs.get(), ffxGetResourceDescriptionDX12(brixelizerContext->brickAABBs.get()), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
-
+		debug_desc.bricksAABBs.description.stride = 4;
 		for (uint32_t i = 0; i < FFX_BRIXELIZER_MAX_CASCADES; ++i) {
 			debug_desc.cascadeAABBTrees[i] = ffxGetResourceDX12(brixelizerContext->cascadeAABBTrees[i].get(), ffxGetResourceDescriptionDX12(brixelizerContext->cascadeAABBTrees[i].get()), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
+			debug_desc.cascadeAABBTrees[i].description.stride = 4;
 			debug_desc.cascadeBrickMaps[i] = ffxGetResourceDX12(brixelizerContext->cascadeBrickMaps[i].get(), ffxGetResourceDescriptionDX12(brixelizerContext->cascadeBrickMaps[i].get()), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
+			debug_desc.cascadeBrickMaps[i].description.stride = 4;
 		}
 
 		debug_desc.outputDebug = ffxGetResourceDX12(brixelizerContext->debugRenderTarget.resource.get(), ffxGetResourceDescriptionDX12(brixelizerContext->debugRenderTarget.resource.get(), FFX_RESOURCE_USAGE_UAV), nullptr, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -355,7 +393,7 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext()
 		if (ffxBrixelizerGetRawContext(&brixelizerContext->brixelizerContext, &debug_desc.brixelizerContext) != FFX_OK)
 			logger::error("Failed to dispatch Brixelizer GI.");
 
-		if (ffxBrixelizerGIContextDebugVisualization(&brixelizerGIContext, &debug_desc, ffxGetCommandListDX12(brixelizer->commandList.get())) != FFX_OK)
+		if (ffxBrixelizerGIContextDebugVisualization(&brixelizerGIContext, &debug_desc, ffxGetCommandListDX12(cmdList)) != FFX_OK)
 			logger::error("Failed to dispatch Brixelizer GI.");
 	}
 }

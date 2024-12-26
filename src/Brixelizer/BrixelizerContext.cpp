@@ -489,7 +489,7 @@ void BrixelizerContext::UnregisterIndexBuffer(ID3D11Buffer* ppBuffer)
 	indexBuffers.erase(ppBuffer);
 }
 
-void BrixelizerContext::TransitionResources(D3D12_RESOURCE_STATES stateBefore, D3D12_RESOURCE_STATES stateAfter)
+void BrixelizerContext::TransitionResources(ID3D12GraphicsCommandList* cmdList, D3D12_RESOURCE_STATES stateBefore, D3D12_RESOURCE_STATES stateAfter)
 {
 	std::vector<D3D12_RESOURCE_BARRIER> barriers;
 
@@ -522,7 +522,7 @@ void BrixelizerContext::TransitionResources(D3D12_RESOURCE_STATES stateBefore, D
 	}
 
 	// Execute the resource barriers on the command list
-	Brixelizer::GetSingleton()->commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+	cmdList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 }
 
 FfxBrixelizerDebugVisualizationDescription BrixelizerContext::GetDebugVisualization()
@@ -559,7 +559,7 @@ FfxBrixelizerDebugVisualizationDescription BrixelizerContext::GetDebugVisualizat
 	return debugVisDesc;
 }
 
-void BrixelizerContext::UpdateBrixelizerContext()
+void BrixelizerContext::UpdateBrixelizerContext(ID3D12GraphicsCommandList* cmdList)
 {
 	std::lock_guard lock{ mutex };
 
@@ -594,7 +594,7 @@ void BrixelizerContext::UpdateBrixelizerContext()
 	queuedInstances.clear();
 
 	// Transition all resources to resource state expected by Brixelizer
-	TransitionResources(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	TransitionResources(cmdList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
 	//FfxBrixelizerDebugVisualizationDescription debugVisDesc = GetDebugVisualization();
 
@@ -643,12 +643,12 @@ void BrixelizerContext::UpdateBrixelizerContext()
 	ffxGpuScratchBuffer.description.stride = sizeof(uint32_t);
 
 	// Call frame update
-	error = ffxBrixelizerUpdate(&brixelizerContext, &bakedUpdateDesc, ffxGpuScratchBuffer, ffxGetCommandListDX12(Brixelizer::GetSingleton()->commandList.get()));
+	error = ffxBrixelizerUpdate(&brixelizerContext, &bakedUpdateDesc, ffxGpuScratchBuffer, ffxGetCommandListDX12(cmdList));
 	if (error != FFX_OK)
 		logger::critical("error");
 
 	// Transition all resources to the Non-Pixel Shader Resource state after the Brixelizer
-	TransitionResources(D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+	TransitionResources(cmdList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
 	visibleStateValue = !visibleStateValue;
 }

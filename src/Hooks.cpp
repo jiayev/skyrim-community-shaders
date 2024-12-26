@@ -316,6 +316,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainNoStreamline(
 	//	(*ppSwapChain)->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)backbuffer.put());
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;  // Create a device with only the latest feature level
+	//Flags |= D3D11_CREATE_DEVICE_DEBUG;
 	return ptrD3D11CreateDeviceAndSwapChain(pAdapter,
 		DriverType,
 		Software,

@@ -103,11 +103,11 @@ public:
 	void SeenInstance(RE::BSTriShape* geometry);
 	void RemoveInstance(RE::BSTriShape* a_geometry);
 
-	void TransitionResources(D3D12_RESOURCE_STATES stateBefore, D3D12_RESOURCE_STATES stateAfter);
+	void TransitionResources(ID3D12GraphicsCommandList* cmdList, D3D12_RESOURCE_STATES stateBefore, D3D12_RESOURCE_STATES stateAfter);
 
 	FfxBrixelizerDebugVisualizationDescription GetDebugVisualization();
 
-	void UpdateBrixelizerContext();
+	void UpdateBrixelizerContext(ID3D12GraphicsCommandList* cmdList);
 	void UpdateScene();
 	void BSTriShape_UpdateWorldData(RE::BSTriShape* This, RE::NiUpdateData* a_data);
 

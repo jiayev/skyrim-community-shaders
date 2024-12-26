@@ -24,6 +24,7 @@ public:
 	Brixelizer::WrappedResource diffuseGi;
 	Brixelizer::WrappedResource specularGi;
 
+	Brixelizer::WrappedResource currLitOutput;
 	Brixelizer::WrappedResource depth;
 	Brixelizer::WrappedResource normal;
 
@@ -48,7 +49,7 @@ public:
 
 	void InitBrixelizerGIContext();
 
-	void UpdateBrixelizerGIContext();
+	void UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* cmdList);
 
-	void CopyHistoryResources();
+	void CopyHistoryResources(ID3D12GraphicsCommandList* cmdList);
 };
