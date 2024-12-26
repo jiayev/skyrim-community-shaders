@@ -350,7 +350,7 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* c
 
 	giDispatchDesc.outputDiffuseGI = ffxGetResourceDX12(diffuseGi.resource.get(), ffxGetResourceDescriptionDX12(diffuseGi.resource.get()), L"OutputDiffuseGI");
 	giDispatchDesc.outputSpecularGI = ffxGetResourceDX12(specularGi.resource.get(), ffxGetResourceDescriptionDX12(specularGi.resource.get()), L"OutputSpecularGI");
-	
+
 	const auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
 	const RE::NiTransform& dalcTransform = shaderManager.directionalAmbientTransform;
 	DirectX::XMFLOAT4X4 DirectionalAmbient;
