@@ -118,7 +118,7 @@ public:
 
 	void InitializeSharedFence();
 
-	ID3D12GraphicsCommandList* BeginCommandList();
+	ID3D12GraphicsCommandList* BeginCommandList(bool waitForFence);
 
 	void EndCommandList();
 
