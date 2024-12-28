@@ -227,7 +227,7 @@ void BrixelizerGIContext::CopyHistoryResources()
 	context->CopyResource(historyDepth.resource11, depth.resource11);
 	context->CopyResource(historyNormal.resource11, normal.resource11);
 	context->CopyResource(prevLitOutput.resource11, main.texture);
-	
+
 	auto& cubemap = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
 	context->CopyResource(environmentMap.resource11, cubemap.texture);
 }
