@@ -198,8 +198,7 @@ void Brixelizer::CreatedWrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, Brixeliz
 	}
 
 	if (a_texDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) {
-		if (a_texDesc.ArraySize > 1)
-		{
+		if (a_texDesc.ArraySize > 1) {
 			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 			uavDesc.Format = a_texDesc.Format;
 			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
