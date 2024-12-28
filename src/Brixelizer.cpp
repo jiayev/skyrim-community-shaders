@@ -361,17 +361,5 @@ void Brixelizer::FrameUpdate()
 
 void Brixelizer::PostFrameUpdate()
 {
-	auto cmdList = BeginCommandList();
-
-	// Wait for D3D11 to complete prior work
-	DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), ++currentSharedFenceValue));
-	DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), currentSharedFenceValue));
-
-	BrixelizerGIContext::GetSingleton()->CopyHistoryResources(cmdList);
-
-	EndCommandList();
-
-	// Signal and wait for D3D12 to complete this frame's work
-	DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), ++currentSharedFenceValue));
-	DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), currentSharedFenceValue));
+	BrixelizerGIContext::GetSingleton()->CopyHistoryResources();
 }

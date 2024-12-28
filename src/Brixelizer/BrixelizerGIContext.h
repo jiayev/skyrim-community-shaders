@@ -45,12 +45,12 @@ public:
 
 	void CopyResourcesToSharedBuffers();
 
+	void CopyHistoryResources();
+
 	void CreateMiscTextures();
 	void CreateNoiseTextures();
 
 	void InitBrixelizerGIContext();
 
 	void UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* cmdList);
-
-	void CopyHistoryResources(ID3D12GraphicsCommandList* cmdList);
 };

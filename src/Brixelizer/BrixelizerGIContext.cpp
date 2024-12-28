@@ -235,40 +235,16 @@ void BrixelizerGIContext::CopyResourcesToSharedBuffers()
 	context->CSSetShader(shader, nullptr, 0);
 }
 
-void BrixelizerGIContext::CopyHistoryResources(ID3D12GraphicsCommandList* cmdList)
+void BrixelizerGIContext::CopyHistoryResources()
 {
-	//auto& context = State::GetSingleton()->context;
-	//context->CopyResource(historyDepth.resource11, depth.resource11);
-	//context->CopyResource(historyNormal.resource11, normal.resource11);
-	//context->CopyResource(prevLitOutput.resource11, currLitOutput.resource11);
+	auto& context = State::GetSingleton()->context;
 
-	auto& main = Brixelizer::GetSingleton()->renderTargetsD3D12[RE::RENDER_TARGET::kMAIN];
+	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+	auto& main = renderer->GetRuntimeData().renderTargets[Deferred::GetSingleton()->forwardRenderTargets[0]];
 
-	{
-		CD3DX12_RESOURCE_BARRIER barriers[] = {
-			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST),
-			CD3DX12_RESOURCE_BARRIER::Transition(historyNormal.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST),
-			CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST),
-			CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE),
-			CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE),
-			CD3DX12_RESOURCE_BARRIER::Transition(main.d3d12Resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE),
-		};
-		cmdList->ResourceBarrier(_countof(barriers), barriers);
-	}
-	cmdList->CopyResource(historyDepth.resource.get(), depth.resource.get());
-	cmdList->CopyResource(historyNormal.resource.get(), normal.resource.get());
-	cmdList->CopyResource(prevLitOutput.resource.get(), main.d3d12Resource.get());
-	{
-		CD3DX12_RESOURCE_BARRIER barriers[] = {
-			CD3DX12_RESOURCE_BARRIER::Transition(historyDepth.resource.get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
-			CD3DX12_RESOURCE_BARRIER::Transition(historyNormal.resource.get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
-			CD3DX12_RESOURCE_BARRIER::Transition(prevLitOutput.resource.get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
-			CD3DX12_RESOURCE_BARRIER::Transition(depth.resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
-			CD3DX12_RESOURCE_BARRIER::Transition(normal.resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
-			CD3DX12_RESOURCE_BARRIER::Transition(main.d3d12Resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON),
-		};
-		cmdList->ResourceBarrier(_countof(barriers), barriers);
-	}
+	context->CopyResource(historyDepth.resource11, depth.resource11);
+	context->CopyResource(historyNormal.resource11, normal.resource11);
+	context->CopyResource(prevLitOutput.resource11, main.texture);
 }
 
 void BrixelizerGIContext::UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* cmdList)
