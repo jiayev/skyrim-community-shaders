@@ -40,30 +40,11 @@ void BrixelizerGIContext::CreateMiscTextures()
 	Brixelizer::CreatedWrappedResource(texDesc, specularGi);
 	Brixelizer::CreatedWrappedResource(texDesc, roughness);
 
-	{
-		D3D12_RESOURCE_DESC textureDesc = {};
-		textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-		textureDesc.Alignment = 0;
-		textureDesc.Width = 512;
-		textureDesc.Height = 512;
-		textureDesc.DepthOrArraySize = 6;
-		textureDesc.MipLevels = 1;
-		textureDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-		textureDesc.SampleDesc.Count = 1;
-		textureDesc.SampleDesc.Quality = 0;
-		textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-		textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+	texDesc.ArraySize = 6;
+	texDesc.Width = 128;
+	texDesc.Height = 128;
 
-		// Create the texture resource (cubemap)
-		CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
-		Brixelizer::GetSingleton()->d3d12Device->CreateCommittedResource(
-			&heapProps,
-			D3D12_HEAP_FLAG_NONE,
-			&textureDesc,
-			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-			nullptr,
-			IID_PPV_ARGS(&environmentMap));
-	}
+	Brixelizer::CreatedWrappedResource(texDesc, environmentMap);
 }
 
 HRESULT UploadDDSTexture(
@@ -240,11 +221,15 @@ void BrixelizerGIContext::CopyHistoryResources()
 	auto& context = State::GetSingleton()->context;
 
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+
 	auto& main = renderer->GetRuntimeData().renderTargets[Deferred::GetSingleton()->forwardRenderTargets[0]];
 
 	context->CopyResource(historyDepth.resource11, depth.resource11);
 	context->CopyResource(historyNormal.resource11, normal.resource11);
 	context->CopyResource(prevLitOutput.resource11, main.texture);
+	
+	auto& cubemap = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
+	context->CopyResource(environmentMap.resource11, cubemap.texture);
 }
 
 void BrixelizerGIContext::UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* cmdList)
@@ -311,7 +296,9 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* c
 	giDispatchDesc.prevLitOutput = ffxGetResourceDX12(prevLitOutput.resource.get(), ffxGetResourceDescriptionDX12(prevLitOutput.resource.get()), L"PrevLitOutput");
 
 	giDispatchDesc.noiseTexture = ffxGetResourceDX12(noiseTextures[noiseIndex].get(), ffxGetResourceDescriptionDX12(noiseTextures[noiseIndex].get()), L"Noise");
-	giDispatchDesc.environmentMap = ffxGetResourceDX12(environmentMap.get(), ffxGetResourceDescriptionDX12(environmentMap.get()), L"EnvironmentMap");
+
+	giDispatchDesc.environmentMap = ffxGetResourceDX12(environmentMap.resource.get(), ffxGetResourceDescriptionDX12(environmentMap.resource.get()), L"EnvironmentMap");
+	giDispatchDesc.environmentMap.description.type = FFX_RESOURCE_TYPE_TEXTURE_CUBE;
 
 	giDispatchDesc.sdfAtlas = ffxGetResourceDX12(brixelizerContext->sdfAtlas.get(), ffxGetResourceDescriptionDX12(brixelizerContext->sdfAtlas.get()), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
 	giDispatchDesc.bricksAABBs = ffxGetResourceDX12(brixelizerContext->brickAABBs.get(), ffxGetResourceDescriptionDX12(brixelizerContext->brickAABBs.get()), nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);

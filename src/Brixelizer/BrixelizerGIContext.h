@@ -32,8 +32,8 @@ public:
 	Brixelizer::WrappedResource historyNormal;
 	Brixelizer::WrappedResource prevLitOutput;
 	Brixelizer::WrappedResource roughness;
+	Brixelizer::WrappedResource environmentMap;
 
-	winrt::com_ptr<ID3D12Resource> environmentMap;
 	winrt::com_ptr<ID3D12Resource> noiseTextures[16];
 
 	float environmentIntensity = 0.1f;
