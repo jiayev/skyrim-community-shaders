@@ -2781,7 +2781,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 #	endif
 
-	if (!SharedData::extendedMaterialSettings.EnableShadows && !SharedData::extendedMaterialSettings.ExtendShadows) {
+	if (!SharedData::extendedMaterialSettings.EnableShadows && SharedData::extendedMaterialSettings.ExtendShadows) {
 #	if defined(SKINNED) || !defined(MODELSPACENORMALS)
 		psout.Diffuse.xyz = float3(curve, angle, 0);
 #		if defined(DEFERRED)
