@@ -210,7 +210,7 @@ namespace ExtendedMaterials
 #endif
 		float minHeight = maxHeight * 0.5;
 
-		if (nearBlendToFar < 1.0) {
+		if (nearBlendToFar < 1.0 && scale > 0) {
 #if defined(LANDSCAPE)
 			uint numSteps = uint((max(4, scale * 8) * (1.0 - nearBlendToFar)) + 0.5);
 			numSteps = clamp((numSteps + 3) & ~0x03, 4, max(4, scale * 8));
@@ -219,7 +219,7 @@ namespace ExtendedMaterials
 			numSteps = clamp((numSteps + 3) & ~0x03, 4, 16);
 #endif
 			float stepSize = rcp(numSteps);
-			stepSize += (noise * 2.0 - 1.0) * stepSize * 0.25;
+			stepSize += (noise * 2.0 - 1.0) * stepSize * 0.25 * (1 - pow(0.25, 1/scale));
 
 			float2 offsetPerStep = viewDirTS.xy * float2(maxHeight, maxHeight) * stepSize.xx;
 			float2 prevOffset = viewDirTS.xy * float2(minHeight, minHeight) + coords.xy;
