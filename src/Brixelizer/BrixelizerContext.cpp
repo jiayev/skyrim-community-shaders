@@ -430,6 +430,8 @@ bool hooked = false;
 
 void BrixelizerContext::RegisterVertexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer)
 {
+	std::lock_guard lock{ mutex };
+
 	BufferData data = AllocateBuffer(pDesc, pInitialData);
 	vertexBuffers.insert({ *ppBuffer, data });
 	if (!hooked) {
@@ -440,6 +442,8 @@ void BrixelizerContext::RegisterVertexBuffer(const D3D11_BUFFER_DESC* pDesc, con
 
 void BrixelizerContext::RegisterIndexBuffer(const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer)
 {
+	std::lock_guard lock{ mutex };
+
 	BufferData data = AllocateBuffer(pDesc, pInitialData);
 	indexBuffers.insert({ *ppBuffer, data });
 	if (!hooked) {
@@ -481,11 +485,15 @@ void BrixelizerContext::RegisterInputLayout(ID3D11InputLayout* ppInputLayout, D3
 
 void BrixelizerContext::UnregisterVertexBuffer(ID3D11Buffer* ppBuffer)
 {
+	std::lock_guard lock{ mutex };
+
 	vertexBuffers.erase(ppBuffer);
 }
 
 void BrixelizerContext::UnregisterIndexBuffer(ID3D11Buffer* ppBuffer)
 {
+	std::lock_guard lock{ mutex };
+
 	indexBuffers.erase(ppBuffer);
 }
 
