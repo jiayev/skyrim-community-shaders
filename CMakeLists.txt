@@ -13,8 +13,8 @@ list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 # ########################################################################################################################
 message("Options:")
 option(AUTO_PLUGIN_DEPLOYMENT "Copy the build output and addons to env:CommunityShadersOutputDir." OFF)
-option(ZIP_TO_DIST "Zip the base mod and addons to their own 7z file in dist." ON)
-option(AIO_ZIP_TO_DIST "Zip the base mod and addons to a AIO 7z file in dist." ON)
+option(ZIP_TO_DIST "Zip the base mod and addons to their own 7z file in dist." OFF)
+option(AIO_ZIP_TO_DIST "Zip the base mod and addons to a AIO 7z file in dist." OFF)
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
@@ -43,8 +43,11 @@ find_package(cppwinrt CONFIG REQUIRED)
 find_package(unordered_dense CONFIG REQUIRED)
 find_package(efsw CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
+find_package(directxmesh CONFIG REQUIRED)
+
 add_subdirectory(${CMAKE_SOURCE_DIR}/cmake/Streamline)
-include(FidelityFX-SDK)
+# include(FidelityFX-SDK)
+include(FidelityFX-SDK-DX12)
 
 target_compile_definitions(
 	${PROJECT_NAME}
@@ -72,11 +75,13 @@ target_link_libraries(
 	EASTL
 	Microsoft::DirectXTK
 	Microsoft::DirectXTex
+	Microsoft::DirectXMesh
 	pystring::pystring
 	unordered_dense::unordered_dense
 	efsw::efsw
 	Tracy::TracyClient
 	Streamline
+	d3d12.lib
 )
 
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
@@ -146,9 +151,9 @@ if(CLANG_FORMAT_PATH)
 	)
 endif()
 
-# #######################################################################################################################
-# # Automatic deployment
-# #######################################################################################################################
+#######################################################################################################################
+# Automatic deployment
+#######################################################################################################################
 file(GLOB FEATURE_PATHS LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/features/*)
 string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 

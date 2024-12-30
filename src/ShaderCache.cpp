@@ -7,6 +7,7 @@
 #include <fmt/std.h>
 #include <wrl/client.h>
 
+#include "Brixelizer.h"
 #include "Deferred.h"
 #include "Feature.h"
 #include "State.h"
@@ -1851,6 +1852,7 @@ namespace SIE
 		}
 		compilationSet.Clear();
 		Deferred::GetSingleton()->ClearShaderCache();
+		Brixelizer::GetSingleton()->ClearShaderCache();
 		for (auto* feature : Feature::GetFeatureList()) {
 			if (feature->loaded) {
 				feature->ClearShaderCache();

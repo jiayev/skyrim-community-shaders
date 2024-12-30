@@ -1,5 +1,7 @@
 #include "Hooks.h"
 
+#include "Brixelizer.h"
+#include "Brixelizer/BrixelizerContext.h"
 #include "Deferred.h"
 #include "Feature.h"
 #include "FrameAnnotations.h"
@@ -47,6 +49,7 @@ void InitializeLog([[maybe_unused]] spdlog::level::level_enum a_level = spdlog::
 
 extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
 {
+	LoadLibrary(L"renderdoc.dll");
 #ifndef NDEBUG
 	while (!REX::W32::IsDebuggerPresent()) {};
 #endif
@@ -88,6 +91,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 				Hooks::Install();
 				FrameAnnotations::OnPostPostLoad();
+				Brixelizer::Hooks::Install();
+				BrixelizerContext::Hooks::Install();
 
 				auto& shaderCache = SIE::ShaderCache::Instance();
 

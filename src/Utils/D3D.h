@@ -1,5 +1,7 @@
 #pragma once
 
+#include <d3d12.h>
+
 namespace Util
 {
 	ID3D11ShaderResourceView* GetSRVFromRTV(ID3D11RenderTargetView* a_rtv);
@@ -9,4 +11,6 @@ namespace Util
 	void SetResourceName(ID3D11DeviceChild* Resource, const char* Format, ...);
 
 	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program = "main");
+
+	ID3D12Resource* Convert11To12Resource(ID3D12Device* device, ID3D11Resource* rsrc);
 }  // namespace Util

@@ -18,6 +18,7 @@
 #include "Deferred.h"
 #include "TruePBR.h"
 
+#include "Brixelizer.h"
 #include "Streamline.h"
 #include "Upscaling.h"
 
@@ -963,6 +964,7 @@ void Menu::DrawDisplaySettings()
 		auto& themeSettings = Menu::GetSingleton()->settings.Theme;
 
 		const std::vector<std::pair<std::string, std::function<void()>>> features = {
+			{ "Brixelizer", []() { Brixelizer::GetSingleton()->DrawSettings(); } },
 			{ "Upscaling", []() { Upscaling::GetSingleton()->DrawSettings(); } },
 			{ "Frame Generation", []() { Streamline::GetSingleton()->DrawSettings(); } }
 		};

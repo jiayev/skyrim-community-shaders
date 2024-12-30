@@ -66,6 +66,10 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half ao, out half3 il)
 }
 #endif
 
+Texture2D<float4> DebugTexture : register(t12);
+Texture2D<float4> DiffuseGI : register(t13);
+Texture2D<float4> SpecularGI : register(t14);
+
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
 	half2 uv = half2(dispatchID.xy + 0.5) * SharedData::BufferDim.zw;
@@ -153,8 +157,9 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half ao, out half3 il)
 #	else
 		half3 specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level).xyz;
 		specularIrradianceReflections = Color::GammaToLinear(specularIrradianceReflections);
+		float3 specularIrradiance = SpecularGI[dispatchID.xy];
 
-		finalIrradiance += specularIrradianceReflections;
+		finalIrradiance = specularIrradiance * reflectance;
 #	endif
 
 #	if defined(SSGI)
@@ -182,7 +187,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half ao, out half3 il)
 		finalIrradiance = finalIrradiance * ssgiAo + ssgiIlSpecular;
 #	endif
 
-		color += reflectance * finalIrradiance;
+		//color += reflectance * SpecularGI[dispatchID.xy];
 
 		color = Color::LinearToGamma(color);
 	}
@@ -206,6 +211,14 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half ao, out half3 il)
 	}
 
 #endif
+
+	color = Color::GammaToLinear(color);
+
+	float3 diffuseGI = DiffuseGI[dispatchID.xy].xyz;
+
+	color += diffuseGI * Color::GammaToLinear(albedo) * Math::PI;
+
+	color = Color::LinearToGamma(color);
 
 	MainRW[dispatchID.xy] = color;
 	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = half4(GBuffer::EncodeNormalVanilla(normalVS), 0.0, 0.0);

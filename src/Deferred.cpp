@@ -11,6 +11,10 @@
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 
+#include "Brixelizer.h"
+#include "Brixelizer/BrixelizerContext.h"
+#include "Brixelizer/BrixelizerGIContext.h"
+
 struct DepthStates
 {
 	ID3D11DepthStencilState* a[6][40];
@@ -329,6 +333,8 @@ void Deferred::DeferredPasses()
 		}
 	}
 
+	Brixelizer::GetSingleton()->FrameUpdate();
+
 	auto specular = renderer->GetRuntimeData().renderTargets[SPECULAR];
 	auto albedo = renderer->GetRuntimeData().renderTargets[ALBEDO];
 	auto normalRoughness = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
@@ -408,8 +414,8 @@ void Deferred::DeferredPasses()
 	// Deferred Composite
 	{
 		TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Deferred Composite");
-
-		ID3D11ShaderResourceView* srvs[14]{
+    
+		ID3D11ShaderResourceView* srvs[17]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
@@ -424,6 +430,9 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? nullptr : ssgi_y,
 			ssgi_hq_spec ? nullptr : ssgi_cocg,
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
+			BrixelizerContext::GetSingleton()->debugRenderTarget.srv,
+			BrixelizerGIContext::GetSingleton()->diffuseGi.srv,
+			BrixelizerGIContext::GetSingleton()->specularGi.srv,
 		};
 
 		if (dynamicCubemaps->loaded)
@@ -491,6 +500,8 @@ void Deferred::EndDeferred()
 	deferredPass = false;
 
 	ResetBlendStates();
+
+	Brixelizer::GetSingleton()->PostFrameUpdate();
 }
 
 void Deferred::OverrideBlendStates()

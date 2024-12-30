@@ -184,3 +184,10 @@ using float3 = DirectX::SimpleMath::Vector3;
 using float4 = DirectX::SimpleMath::Vector4;
 using float4x4 = DirectX::SimpleMath::Matrix;
 using uint = uint32_t;
+
+#include <DDSTextureLoader.h>
+
+#define DDS_LOADER_FLAGS_DEFINED
+#define DDS_LOADER_MIP_RESERVE 0x8
+
+#include "DDSTextureLoader12.h"

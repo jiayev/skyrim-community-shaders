@@ -10,6 +10,11 @@
 
 #include "Streamline.h"
 
+#include "Brixelizer.h"
+#include "Brixelizer/BrixelizerContext.h"
+
+#include "Features/LightLimitFix.h"
+
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
 
 void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeLength)
@@ -214,25 +219,104 @@ HRESULT WINAPI hk_CreateDXGIFactory(REFIID, void** ppFactory)
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChain;
 
+#include "d3d11on12.h"
+#include "d3d12.h"
+
+winrt::com_ptr<ID3D11On12Device> d3d11On12Device;
+
+struct IDXGISwapChain_GetBuffer
+{
+	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT index, REFIID, void** buffer)
+	{
+		static bool created[3];
+
+		static winrt::com_ptr<ID3D12Resource> resource[3];
+		static winrt::com_ptr<ID3D11Texture2D> resource11[3];
+
+		if (!created) {
+			created[index] = true;
+
+			D3D11_RESOURCE_FLAGS d3d11Flags = { D3D11_BIND_RENDER_TARGET };
+
+			func(This, 0, IID_PPV_ARGS(&resource[index]));
+			d3d11On12Device->CreateWrappedResource(resource[index].get(), &d3d11Flags, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT, IID_PPV_ARGS(&resource11[index]));
+		}
+
+		*buffer = resource11[index].get();
+
+		return S_OK;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
 HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainNoStreamline(
 	IDXGIAdapter* pAdapter,
-	D3D_DRIVER_TYPE DriverType,
-	HMODULE Software,
-	UINT Flags,
+	[[maybe_unused]] D3D_DRIVER_TYPE DriverType,
+	[[maybe_unused]] HMODULE Software,
+	[[maybe_unused]] UINT Flags,
 	[[maybe_unused]] const D3D_FEATURE_LEVEL* pFeatureLevels,
 	[[maybe_unused]] UINT FeatureLevels,
-	UINT SDKVersion,
-	const DXGI_SWAP_CHAIN_DESC* pSwapChainDesc,
+	[[maybe_unused]] UINT SDKVersion,
+	DXGI_SWAP_CHAIN_DESC* pSwapChainDesc,
 	IDXGISwapChain** ppSwapChain,
 	ID3D11Device** ppDevice,
-	D3D_FEATURE_LEVEL* pFeatureLevel,
+	[[maybe_unused]] D3D_FEATURE_LEVEL* pFeatureLevel,
 	ID3D11DeviceContext** ppImmediateContext)
 {
-	DXGI_ADAPTER_DESC adapterDesc;
-	pAdapter->GetDesc(&adapterDesc);
-	State::GetSingleton()->SetAdapterDescription(adapterDesc.Description);
+	Brixelizer::GetSingleton()->InitD3D12(pAdapter);
+
+	//winrt::com_ptr<IDXGIFactory4> dxgiFactory;
+
+	//CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory));
+
+	//DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
+	//swapChainDesc.Width = pSwapChainDesc->BufferDesc.Width;
+	//swapChainDesc.Height = pSwapChainDesc->BufferDesc.Height;
+	//swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	//swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+	//swapChainDesc.BufferCount = 2;
+	//swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
+	//DX::ThrowIfFailed(dxgiFactory->CreateSwapChainForHwnd(
+	//	Raytracing::GetSingleton()->commandQueue.get(),
+	//	pSwapChainDesc->OutputWindow,
+	//	&swapChainDesc,
+	//	nullptr,
+	//	nullptr,
+	//	reinterpret_cast<IDXGISwapChain1**>(ppSwapChain)));
+
+	////dxgiFactory->CreateSwapChain(
+	////Raytracing::GetSingleton()->commandQueue.get(),
+	////pSwapChainDesc,
+	////ppSwapChain);
+
+	//IUnknown* commandQueue = Raytracing::GetSingleton()->commandQueue.get();
+
+	//auto hr = D3D11On12CreateDevice(
+	//	Raytracing::GetSingleton()->d3d12Device.get(),
+	//	0,
+	//	nullptr,
+	//	0,
+	//	&commandQueue,
+	//	1,
+	//	0,
+	//	ppDevice,
+	//	ppImmediateContext,
+	//	nullptr);
+
+	//(*ppDevice)->QueryInterface(IID_PPV_ARGS(&d3d11On12Device));
+
+	//DXGI_ADAPTER_DESC adapterDesc;
+	//pAdapter->GetDesc(&adapterDesc);
+	//State::GetSingleton()->SetAdapterDescription(adapterDesc.Description);
+
+	//stl::detour_vfunc<9, IDXGISwapChain_GetBuffer>(*ppSwapChain);
+
+	//	winrt::com_ptr<ID3D11Texture2D> backbuffer;
+	//	(*ppSwapChain)->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)backbuffer.put());
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;  // Create a device with only the latest feature level
+	//Flags |= D3D11_CREATE_DEVICE_DEBUG;
 	return ptrD3D11CreateDeviceAndSwapChain(pAdapter,
 		DriverType,
 		Software,
@@ -245,6 +329,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainNoStreamline(
 		ppDevice,
 		pFeatureLevel,
 		ppImmediateContext);
+	//	return hr;
 }
 
 HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
@@ -370,6 +455,9 @@ namespace Hooks
 				stl::detour_vfunc<12, ID3D11Device_CreateVertexShader>(device);
 				stl::detour_vfunc<15, ID3D11Device_CreatePixelShader>(device);
 			}
+
+			Brixelizer::GetSingleton()->InitBrixelizer();
+
 			Menu::GetSingleton()->Init(swapchain, device, context);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -654,6 +742,18 @@ namespace Hooks
 		};
 	}
 
+	struct NiNode_Destroy
+	{
+		static void thunk(RE::NiNode* This)
+		{
+			LightLimitFix::GetSingleton()->CleanupParticleLights(This);
+			if (auto triShape = This->AsTriShape())
+				BrixelizerContext::GetSingleton()->RemoveInstance(triShape);
+			func(This);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	void Install()
 	{
 		logger::info("Hooking BSInputDeviceManager::PollInputDevices");
@@ -706,6 +806,8 @@ namespace Hooks
 
 		logger::info("Hooking BSEffectShader");
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
+
+		stl::detour_thunk<NiNode_Destroy>(REL::RelocationID(68937, 70288));
 	}
 
 	void InstallD3DHooks()
