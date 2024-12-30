@@ -337,6 +337,13 @@ void BrixelizerGIContext::UpdateBrixelizerGIContext(ID3D12GraphicsCommandList* c
 
 	memcpy(&giDispatchDesc.directionalAmbient, &DirectionalAmbientF, sizeof(giDispatchDesc.directionalAmbient));
 
+	bool interior = true;
+	if (auto sky = RE::Sky::GetSingleton())
+		interior = sky->mode.get() != RE::Sky::Mode::kFull;
+
+	float4 customFlags = { float(interior), 0, 0, 0 };
+	memcpy(&giDispatchDesc.customFlags, &customFlags, sizeof(giDispatchDesc.customFlags));
+
 	if (ffxBrixelizerGetRawContext(&brixelizerContext->brixelizerContext, &giDispatchDesc.brixelizerContext) != FFX_OK)
 		logger::error("Failed to get Brixelizer context pointer.");
 

@@ -74,14 +74,14 @@ static RENDERDOC_API_1_5_0* rdoc_api = NULL;
 void Brixelizer::InitD3D12(IDXGIAdapter* a_adapter)
 {
 	// At init, on windows
-	if (HMODULE mod = GetModuleHandleA("renderdoc.dll")) {
-		pRENDERDOC_GetAPI RENDERDOC_GetAPI =
-			(pRENDERDOC_GetAPI)GetProcAddress(mod, "RENDERDOC_GetAPI");
-		int ret = RENDERDOC_GetAPI(eRENDERDOC_API_Version_1_5_0, (void**)&rdoc_api);
-		assert(ret == 1);
-	}
-	if (rdoc_api)
-		rdoc_api->SetCaptureOptionU32(eRENDERDOC_Option_APIValidation, 1);
+	// if (HMODULE mod = GetModuleHandleA("renderdoc.dll")) {
+	// 	pRENDERDOC_GetAPI RENDERDOC_GetAPI =
+	// 		(pRENDERDOC_GetAPI)GetProcAddress(mod, "RENDERDOC_GetAPI");
+	// 	int ret = RENDERDOC_GetAPI(eRENDERDOC_API_Version_1_5_0, (void**)&rdoc_api);
+	// 	assert(ret == 1);
+	// }
+	// if (rdoc_api)
+	// 	rdoc_api->SetCaptureOptionU32(eRENDERDOC_Option_APIValidation, 1);
 	DX::ThrowIfFailed(D3D12CreateDevice(a_adapter, D3D_FEATURE_LEVEL_12_2, IID_PPV_ARGS(&d3d12Device)));
 
 	D3D12_COMMAND_QUEUE_DESC queueDesc = {};

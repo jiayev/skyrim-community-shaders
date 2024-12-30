@@ -29,7 +29,7 @@ void BrixelizerContext::InitBrixelizerContext()
 	initializationParameters.flags = FFX_BRIXELIZER_CONTEXT_FLAG_ALL_DEBUG;
 	initializationParameters.numCascades = NUM_BRIXELIZER_CASCADES;
 
-	float voxelSize = 10.f;
+	float voxelSize = 1.0f;
 	for (uint32_t i = 0; i < NUM_BRIXELIZER_CASCADES; ++i) {
 		FfxBrixelizerCascadeDescription* cascadeDesc = &initializationParameters.cascadeDescs[i];
 		cascadeDesc->flags = FfxBrixelizerCascadeFlag(FFX_BRIXELIZER_CASCADE_DYNAMIC | FFX_BRIXELIZER_CASCADE_STATIC);

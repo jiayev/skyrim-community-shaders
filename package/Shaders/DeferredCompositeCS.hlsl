@@ -66,9 +66,9 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out half ao, out half3 il)
 }
 #endif
 
-Texture2D<float4> DebugTexture : register(t12);
-Texture2D<float4> DiffuseGI : register(t13);
-Texture2D<float4> SpecularGI : register(t14);
+Texture2D<float4> DebugTexture : register(t14);
+Texture2D<float4> DiffuseGI : register(t15);
+Texture2D<float4> SpecularGI : register(t16);
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
@@ -99,13 +99,14 @@ Texture2D<float4> SpecularGI : register(t14);
 	half glossiness = normalGlossiness.z;
 
 	half3 color = lerp(diffuseColor + specularColor, Color::LinearToGamma(Color::GammaToLinear(diffuseColor) + Color::GammaToLinear(specularColor)), pbrWeight);
+	
+	half3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], half4(normalVS, 0)).xyz);
 
 #if defined(DYNAMIC_CUBEMAPS)
 
 	half3 reflectance = ReflectanceTexture[dispatchID.xy];
 
 	if (reflectance.x > 0.0 || reflectance.y > 0.0 || reflectance.z > 0.0) {
-		half3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], half4(normalVS, 0)).xyz);
 
 		half wetnessMask = MasksTexture[dispatchID.xy].z;
 
@@ -214,9 +215,18 @@ Texture2D<float4> SpecularGI : register(t14);
 
 	color = Color::GammaToLinear(color);
 
+	half3 directionalAmbientColor = mul(SharedData::DirectionalAmbient, half4(normalWS, 1.0));
+
+	half3 linAlbedo = Color::GammaToLinear(albedo) / Color::AlbedoPreMult;
+	half3 linDirectionalAmbientColor = Color::GammaToLinear(directionalAmbientColor) / Color::LightPreMult;
+	half3 linDiffuseColor = Color::GammaToLinear(diffuseColor);
+
+	half3 linAmbient = lerp(Color::GammaToLinear(albedo * directionalAmbientColor), linAlbedo * linDirectionalAmbientColor, pbrWeight);
+
 	float3 diffuseGI = DiffuseGI[dispatchID.xy].xyz;
 
-	color += diffuseGI * Color::GammaToLinear(albedo) * Math::PI;
+	color += diffuseGI * linAlbedo * 1.5;
+	color += linAmbient * 0.01;
 
 	color = Color::LinearToGamma(color);
 
