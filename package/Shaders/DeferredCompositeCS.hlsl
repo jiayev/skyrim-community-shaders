@@ -99,7 +99,7 @@ Texture2D<float4> SpecularGI : register(t16);
 	half glossiness = normalGlossiness.z;
 
 	half3 color = lerp(diffuseColor + specularColor, Color::LinearToGamma(Color::GammaToLinear(diffuseColor) + Color::GammaToLinear(specularColor)), pbrWeight);
-	
+
 	half3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], half4(normalVS, 0)).xyz);
 
 #if defined(DYNAMIC_CUBEMAPS)
@@ -107,7 +107,6 @@ Texture2D<float4> SpecularGI : register(t16);
 	half3 reflectance = ReflectanceTexture[dispatchID.xy];
 
 	if (reflectance.x > 0.0 || reflectance.y > 0.0 || reflectance.z > 0.0) {
-
 		half wetnessMask = MasksTexture[dispatchID.xy].z;
 
 		normalWS = lerp(normalWS, float3(0, 0, 1), wetnessMask);
