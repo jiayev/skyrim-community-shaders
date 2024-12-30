@@ -1852,7 +1852,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 	float3 dirLightColor = DirLightColor.xyz;
-	float3 dirLightColorMultiplier = 1;
+	float3 dirLightColorMultiplier = SharedData::InInterior ? 0.01 : 1.0;
 
 #	if defined(WATER_EFFECTS)
 	dirLightColorMultiplier *= WaterEffects::ComputeCaustics(waterData, input.WorldPosition.xyz, worldSpaceNormal);
@@ -2130,9 +2130,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			if (LightLimitFix::IsLightIgnored(light) || (!(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) && light.lightFlags & LightLimitFix::LightFlags::Shadow)) {
 				continue;
 			}
-		}
-		if (!(light.lightFlags & LightLimitFix::LightFlags::Shadow)) {
-			continue;
 		}
 
 		float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
