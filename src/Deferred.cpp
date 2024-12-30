@@ -414,7 +414,7 @@ void Deferred::DeferredPasses()
 	// Deferred Composite
 	{
 		TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Deferred Composite");
-    
+
 		ID3D11ShaderResourceView* srvs[17]{
 			specular.SRV,
 			albedo.SRV,
