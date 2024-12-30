@@ -108,9 +108,9 @@ void Deferred::SetupResources()
 
 		D3D11_SAMPLER_DESC samplerDesc = {};
 		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
-		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
-		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
 		samplerDesc.MaxAnisotropy = 1;
 		samplerDesc.MinLOD = 0;
 		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
@@ -357,7 +357,8 @@ void Deferred::DeferredPasses()
 	auto ssgi = ScreenSpaceGI::GetSingleton();
 	if (ssgi->loaded)
 		ssgi->DrawSSGI(prevDiffuseAmbientTexture);
-	auto [ssgi_ao, ssgi_y, ssgi_cocg] = ssgi->GetOutputTextures();
+	auto [ssgi_ao, ssgi_y, ssgi_cocg, ssgi_gi_spec] = ssgi->GetOutputTextures();
+	bool ssgi_hq_spec = ssgi->settings.EnableExperimentalSpecularGI;
 
 	auto dispatchCount = Util::GetScreenDispatchCount();
 
@@ -414,7 +415,7 @@ void Deferred::DeferredPasses()
 	{
 		TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Deferred Composite");
 
-		ID3D11ShaderResourceView* srvs[16]{
+		ID3D11ShaderResourceView* srvs[17]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
@@ -425,8 +426,10 @@ void Deferred::DeferredPasses()
 			dynamicCubemaps->loaded ? dynamicCubemaps->envTexture->srv.get() : nullptr,
 			dynamicCubemaps->loaded ? dynamicCubemaps->envReflectionsTexture->srv.get() : nullptr,
 			dynamicCubemaps->loaded && skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
-			ssgi_y,
-			ssgi_cocg,
+			ssgi_ao,
+			ssgi_hq_spec ? nullptr : ssgi_y,
+			ssgi_hq_spec ? nullptr : ssgi_cocg,
+			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
 			BrixelizerContext::GetSingleton()->debugRenderTarget.srv,
 			BrixelizerGIContext::GetSingleton()->diffuseGi.srv,
 			BrixelizerGIContext::GetSingleton()->specularGi.srv,
