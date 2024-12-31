@@ -1048,7 +1048,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 nu = wsn + ndx;
 	//float curve = saturate(abs((cross(nl, nr).y - cross(nd,nu).x))*4.0*2048.0/viewPosition.z);
 	//float curve = saturate(length(max(abs(ddx(wsn)), abs(ddy(wsn))))*2048/viewPosition.z);
-	float curve = abs(tan(length(max(abs(ndx), abs(ndy))) * 3.14)) * 2048.0 / viewPosition.z;
+	float curve = abs(length(max(abs(ndx), abs(ndy)))*3.14) * 2048.0 / viewPosition.z;
 	//float curve = tan(max(max(abs(ddx(input.TBN0.xyz)),abs(ddy(input.TBN0.xyz))), max(max(abs(ddx(input.TBN1.xyz)),abs(ddy(input.TBN1.xyz))), max(abs(ddx(input.TBN2.xyz)),abs(ddy(input.TBN2.xyz))))))*2048.0/viewPosition.z;
 	float angle = saturate(pow(1 - dot(worldSpaceViewDirection, wsn), 2));
 
@@ -1101,10 +1101,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	displacementParams[0].HeightScale = 1.f;
 	displacementParams[0].Curvature = 0.0f;
 	displacementParams[0].Angle = 0.3f;
-	if (SharedData::extendedMaterialSettings.ExtendShadows) {
+#			if defined(TRUE_PBR)
 		displacementParams[0].Curvature = saturate(curve);
 		displacementParams[0].Angle = saturate(angle) * 0.5;
-	}
+#			endif
 #		else
 	DisplacementParams displacementParams;
 	displacementParams.DisplacementScale = 1.f;
@@ -1112,10 +1112,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	displacementParams.HeightScale = 1.f;
 	displacementParams.Curvature = 0.0f;
 	displacementParams.Angle = 0.3f;
-	if (SharedData::extendedMaterialSettings.ExtendShadows) {
 		displacementParams.Curvature = saturate(curve);
 		displacementParams.Angle = saturate(angle) * 0.5;
-	}
 #		endif
 
 #	endif
@@ -2781,14 +2779,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 #	endif
 
-	if (!SharedData::extendedMaterialSettings.EnableShadows && SharedData::extendedMaterialSettings.ExtendShadows) {
-#	if defined(SKINNED) || !defined(MODELSPACENORMALS)
-		psout.Diffuse.xyz = float3(curve, angle, 0);
-#		if defined(DEFERRED)
-		psout.Albedo.xyz = float3(curve, angle, 0);
-#		endif
-#	endif
-	}
+// 	if (!SharedData::extendedMaterialSettings.EnableShadows && SharedData::extendedMaterialSettings.ExtendShadows) {
+// #	if defined(SKINNED) || !defined(MODELSPACENORMALS)
+// 		psout.Diffuse.xyz = float3(curve, angle, 0);
+// #		if defined(DEFERRED)
+// 		psout.Albedo.xyz = float3(curve, angle, 0);
+// #		endif
+// #	endif
+// 	}
 	//	psout.Diffuse.xyz = pow(dot(wsn, flatWorldNormal), 8.0);
 	//#if defined(DEFERRED)
 	//	psout.Albedo.xyz = pow(dot(wsn, flatWorldNormal), 8.0);
