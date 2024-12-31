@@ -10,6 +10,8 @@ struct DisplacementParams
 	float DisplacementScale;
 	float DisplacementOffset;
 	float HeightScale;
+	float Curvature;
+	float Angle;
 };
 
 namespace ExtendedMaterials
@@ -181,7 +183,11 @@ namespace ExtendedMaterials
 #endif
 	{
 		float3 viewDirTS = normalize(mul(tbn, viewDir));
-		viewDirTS.xy /= viewDirTS.z * 0.7 + 0.3;  // Fix for objects at extreme viewing angles
+#if defined(LANDSCAPE)
+		viewDirTS.xy /= viewDirTS.z * (1 - params[0].Angle) + params[0].Angle;  // Fix for objects at extreme viewing angles
+#else
+		viewDirTS.xy /= viewDirTS.z * (1 - params.Angle) + params.Angle;  // Fix for objects at extreme viewing angles
+#endif
 
 		float nearBlendToFar = saturate(distance / 2048.0);
 #if defined(LANDSCAPE)
@@ -190,30 +196,30 @@ namespace ExtendedMaterials
 		float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? sqrt(saturate(1 - nearBlendToFar)) : 0;
 		float4 w1 = lerp(input.LandBlendWeights1, smoothstep(0, 1, input.LandBlendWeights1), blendFactor);
 		float2 w2 = lerp(input.LandBlendWeights2.xy, smoothstep(0, 1, input.LandBlendWeights2.xy), blendFactor);
-		float scale = max(params[0].HeightScale * w1.x, max(params[1].HeightScale * w1.y, max(params[2].HeightScale * w1.z, max(params[3].HeightScale * w1.w, max(params[4].HeightScale * w2.x, params[5].HeightScale * w2.y)))));
+		float scale = max(params[0].HeightScale * w1.x, max(params[1].HeightScale * w1.y, max(params[2].HeightScale * w1.z, max(params[3].HeightScale * w1.w, max(params[4].HeightScale * w2.x, params[5].HeightScale * w2.y))))) * (1 - params[0].Curvature);
 		float scalercp = rcp(scale);
 		float maxHeight = 0.1 * scale;
 #	else
 		float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? saturate(1 - nearBlendToFar) : INV_HEIGHT_POWER;
-		float scale = 1;
+		float scale = (1 - params[0].Curvature);
 		float maxHeight = 0.1 * scale;
 #	endif
 #else
 		float scale = params.HeightScale;
-		float maxHeight = 0.1 * scale;
+		float maxHeight = 0.1 * scale * (1 - params.Curvature);
 #endif
 		float minHeight = maxHeight * 0.5;
 
-		if (nearBlendToFar < 1.0) {
+		if (nearBlendToFar < 1.0 && scale > 0) {
 #if defined(LANDSCAPE)
-			uint numSteps = uint((max(4, scale * 32) * (1.0 - nearBlendToFar)) + 0.5);
-			numSteps = clamp((numSteps + 3) & ~0x03, 4, max(4, scale * 32));
+			uint numSteps = uint((max(4, scale * 8) * (1.0 - nearBlendToFar)) + 0.5);
+			numSteps = clamp((numSteps + 3) & ~0x03, 4, max(4, scale * 8));
 #else
-			uint numSteps = uint((32 * (1.0 - nearBlendToFar)) + 0.5);
-			numSteps = clamp((numSteps + 3) & ~0x03, 4, 32);
+			uint numSteps = uint((16 * (1.0 - nearBlendToFar)) + 0.5);
+			numSteps = clamp((numSteps + 3) & ~0x03, 4, 16);
 #endif
-
 			float stepSize = rcp(numSteps);
+			stepSize += (noise * 2.0 - 1.0) * stepSize * 0.25 * (1 - pow(0.25, 1/scale));
 
 			float2 offsetPerStep = viewDirTS.xy * float2(maxHeight, maxHeight) * stepSize.xx;
 			float2 prevOffset = viewDirTS.xy * float2(minHeight, minHeight) + coords.xy;
@@ -223,6 +229,9 @@ namespace ExtendedMaterials
 
 			float2 pt1 = 0;
 			float2 pt2 = 0;
+
+			uint numStepsTemp = numSteps;
+			bool contactRefinement = false;
 
 			[loop] while (numSteps > 0)
 			{
@@ -256,27 +265,42 @@ namespace ExtendedMaterials
 				bool4 testResult = currHeight >= currentBound;
 				[branch] if (any(testResult))
 				{
+					float2 outOffset = 0;
 					[flatten] if (testResult.w)
 					{
+						outOffset = currentOffset[1].xy;
 						pt1 = float2(currentBound.w, currHeight.w);
 						pt2 = float2(currentBound.z, currHeight.z);
 					}
 					[flatten] if (testResult.z)
 					{
+						outOffset = currentOffset[0].zw;
 						pt1 = float2(currentBound.z, currHeight.z);
 						pt2 = float2(currentBound.y, currHeight.y);
 					}
 					[flatten] if (testResult.y)
 					{
+						outOffset = currentOffset[0].xy;
 						pt1 = float2(currentBound.y, currHeight.y);
 						pt2 = float2(currentBound.x, currHeight.x);
 					}
 					[flatten] if (testResult.x)
 					{
+						outOffset = prevOffset;
 						pt1 = float2(currentBound.x, currHeight.x);
 						pt2 = float2(prevBound, prevHeight);
 					}
-					break;
+					if (contactRefinement) {
+						break;
+					} else {
+						contactRefinement = true;
+						prevOffset = outOffset;
+						prevBound = pt2.x;
+						numSteps = numStepsTemp;
+						stepSize /= (float)numSteps;
+						offsetPerStep /= (float)numSteps;
+						continue;
+					}
 				}
 
 				prevOffset = currentOffset[1].zw;
