@@ -1,5 +1,8 @@
 #pragma once
 
+#define TDM_API_COMMONLIB
+#include "TDM/TrueDirectionalMovementAPI.h"
+
 #include "Buffer.h"
 #include "PostProcessFeature.h"
 
@@ -24,6 +27,8 @@ struct DoF : public PostProcessFeature
         float BokehBusyFactor = 0.5f;
         float HighlightBoost = 0.0f;
         float PostBlurSmoothing = 0.0f;
+		bool  targetFocus = false;
+		float targetFocusFocalLength = 50.0f;
     } settings;
 
     struct alignas(16) DoFCB
@@ -94,4 +99,13 @@ struct DoF : public PostProcessFeature
     virtual void DrawSettings() override;
 
     virtual void Draw(TextureInfo&) override;
+
+    RE::NiPoint3 GetCameraPos();
+	bool GetInDialogue();
+	float GetDistanceToDialogueTarget();
+	//float targetFocusPercent;
+	bool GetTargetLockEnabled();
+	float GetDistanceToLockedTarget();
+
+	TDM_API::IVTDM2* g_TDM = nullptr;
 };
