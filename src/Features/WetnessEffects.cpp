@@ -30,6 +30,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RippleBreadth,
 	RippleLifetime)
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	WetnessEffects::DebugSettings,
+	EnableWetnessOverride,
+	ExteriorWetnessOverride,
+	InteriorWetnessOverride,
+	PuddleWetnessOverride,
+	RainOverride)
+
 void WetnessEffects::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Wetness Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -151,6 +159,15 @@ void WetnessEffects::DrawSettings()
 
 	ImGui::Spacing();
 	ImGui::Spacing();
+
+	if (ImGui::TreeNodeEx("Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Enable Wetness Override", &debugSettings.EnableWetnessOverride);
+		ImGui::SliderFloat("Exterior Wetness Override", &debugSettings.ExteriorWetnessOverride, 0.0f, 2.0f);
+		ImGui::SliderFloat("Interior Wetness Override", &debugSettings.InteriorWetnessOverride, 0.0f, 2.0f);
+		ImGui::SliderFloat("Puddle Wetness Override", &debugSettings.PuddleWetnessOverride, 0.0f, 2.0f);
+		ImGui::SliderFloat("Rain Override", &debugSettings.RainOverride, 0.0f, 1.0f);
+		ImGui::TreePop();
+	}
 }
 
 WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
@@ -163,7 +180,7 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
 
 	if (settings.EnableWetnessEffects) {
 		if (auto sky = RE::Sky::GetSingleton()) {
-			if (sky->mode.get() == RE::Sky::Mode::kFull) {
+			if (sky->mode.get() == RE::Sky::Mode::kFull && !debugSettings.EnableWetnessOverride) {
 				if (auto precip = sky->precip) {
 					float currentRaining = 0.0f;
 					float lastRaining = 0.0f;
@@ -239,10 +256,17 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
 				float wetness = std::min(1.0f, wetnessCurrentWeather + wetnessLastWeather);
 				float puddleWetness = std::min(1.0f, puddleCurrentWeather + puddleLastWeather);
 
+
 				data.Wetness = wetness;
 				data.PuddleWetness = puddleWetness;
 			}
+			else {
+				data.Wetness = sky->mode.get() == RE::Sky::Mode::kFull ? debugSettings.ExteriorWetnessOverride : debugSettings.InteriorWetnessOverride;
+				data.PuddleWetness = debugSettings.PuddleWetnessOverride;
+				data.Raining = debugSettings.RainOverride;
+			}
 		}
+		
 	}
 
 	static size_t rainTimer = 0;  // size_t for precision
@@ -276,13 +300,20 @@ void WetnessEffects::Prepass()
 
 void WetnessEffects::LoadSettings(json& o_json)
 {
-	settings = o_json;
+    settings = o_json;
+
+    if (o_json.contains("DebugSettings")) {
+        debugSettings = o_json["DebugSettings"].get<DebugSettings>();
+    }
 }
 
 void WetnessEffects::SaveSettings(json& o_json)
 {
-	o_json = settings;
+    o_json = settings;
+
+    o_json["DebugSettings"] = debugSettings;
 }
+
 
 void WetnessEffects::RestoreDefaultSettings()
 {

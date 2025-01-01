@@ -4,6 +4,7 @@
 #include "Util.h"
 #include "Menu.h"
 
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     DoF::Settings,
     AutoFocus,
@@ -18,7 +19,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     NearFarDistanceCompensation,
     HighlightBoost,
     BokehBusyFactor,
-    PostBlurSmoothing
+	PostBlurSmoothing,
+	targetFocus,
+	targetFocusFocalLength
 )
 
 void DoF::DrawSettings()
@@ -39,6 +42,9 @@ void DoF::DrawSettings()
     ImGui::SliderFloat("Bokeh Busy Factor", &settings.BokehBusyFactor, 0.0f, 1.0f, "%.2f");
     ImGui::SliderFloat("Highlight Boost", &settings.HighlightBoost, 0.0f, 1.0f, "%.2f");
     ImGui::SliderFloat("Post Blur Smoothing", &settings.PostBlurSmoothing, 0.0f, 2.0f, "%.2f");
+
+    ImGui::Checkbox("Target Focus", &settings.targetFocus);
+	ImGui::SliderFloat("Max Focal Length", &settings.targetFocusFocalLength, 1.0f, 300.0f, "%.1f mm");
 
     if (ImGui::CollapsingHeader("Debug")) {
         static float debugRescale = .3f;
@@ -187,6 +193,8 @@ void DoF::SetupResources()
         texPreFocus = eastl::make_unique<Texture2D>(texDesc);
         texPreFocus->CreateSRV(srvDesc);
         texPreFocus->CreateUAV(uavDesc);
+
+		g_TDM = reinterpret_cast<TDM_API::IVTDM2*>(TDM_API::RequestPluginAPI(TDM_API::InterfaceVersion::V2));
     }
 
     logger::debug("Creating samplers...");
@@ -274,6 +282,64 @@ void DoF::CompileComputeShaders()
     }
 }
 
+// Thanks Ershin!
+RE::NiPoint3 DoF::GetCameraPos()
+{
+	auto player = RE::PlayerCharacter::GetSingleton();
+	auto playerCamera = RE::PlayerCamera::GetSingleton();
+	RE::NiPoint3 ret;
+
+	if (playerCamera->currentState == playerCamera->GetRuntimeData().cameraStates[RE::CameraStates::kFirstPerson] ||
+		playerCamera->currentState == playerCamera->GetRuntimeData().cameraStates[RE::CameraStates::kThirdPerson] ||
+		playerCamera->currentState == playerCamera->GetRuntimeData().cameraStates[RE::CameraStates::kMount]) {
+		RE::NiNode* root = playerCamera->cameraRoot.get();
+		if (root) {
+			ret.x = root->world.translate.x;
+			ret.y = root->world.translate.y;
+			ret.z = root->world.translate.z;
+		}
+	} else {
+		RE::NiPoint3 playerPos = player->GetLookingAtLocation();
+
+		ret.z = playerPos.z;
+		ret.x = player->GetPositionX();
+		ret.y = player->GetPositionY();
+	}
+
+	return ret;
+}
+
+bool DoF::GetTargetLockEnabled()
+{
+	return g_TDM && g_TDM->GetCurrentTarget();
+}
+
+float DoF::GetDistanceToLockedTarget()
+{
+	RE::TESObjectREFR* target = g_TDM->GetCurrentTarget().get().get();
+	RE::NiPoint3 cameraPosition = GetCameraPos();
+	RE::NiPoint3 targetPosition = target->GetPosition();
+	return cameraPosition.GetDistance(targetPosition);
+}
+
+bool DoF::GetInDialogue()
+{
+	return RE::MenuTopicManager::GetSingleton()->speaker || RE::MenuTopicManager::GetSingleton()->lastSpeaker;
+}
+
+float DoF::GetDistanceToDialogueTarget()
+{
+	RE::TESObjectREFR* target;
+	if (RE::MenuTopicManager::GetSingleton()->speaker) {
+		target = RE::MenuTopicManager::GetSingleton()->speaker.get().get();
+	} else {
+		target = RE::MenuTopicManager::GetSingleton()->lastSpeaker.get().get();
+	}
+	RE::NiPoint3 cameraPosition = GetCameraPos();
+	RE::NiPoint3 targetPosition = target->GetPosition();
+	return cameraPosition.GetDistance(targetPosition);
+}
+
 void DoF::Draw(TextureInfo& inout_tex)
 {
     auto state = State::GetSingleton();
@@ -283,16 +349,46 @@ void DoF::Draw(TextureInfo& inout_tex)
 
     float2 res = { (float)texOutput->desc.Width, (float)texOutput->desc.Height };
 
+	float focusLen = settings.FocalLength;
+	float nearBlur = settings.NearPlaneMaxBlur;
+
+    if (settings.targetFocus) {
+		focusLen = 1.0f;
+		nearBlur = 0.0f;
+		float targetFocusDistanceGame = 0;
+		auto targetFocusEnabled = false;
+
+        if (GetTargetLockEnabled()) {
+			targetFocusDistanceGame = GetDistanceToLockedTarget();
+			targetFocusEnabled = true;
+        }
+
+		if (GetInDialogue()) {
+			targetFocusDistanceGame = GetDistanceToDialogueTarget();
+			targetFocusEnabled = true;
+		}
+
+        if (targetFocusEnabled) {
+			float maxDistance = 1500;
+			if (targetFocusDistanceGame > maxDistance)
+				targetFocusDistanceGame = maxDistance;
+
+			focusLen = (maxDistance - targetFocusDistanceGame) * settings.targetFocusFocalLength / maxDistance;
+			if (focusLen < 1)
+				focusLen = 1;
+		}
+    }
+
     state->BeginPerfEvent("Depth of Field");
 
     DoFCB dofData = {
         .TransitionSpeed = settings.TransitionSpeed,
         .FocusCoord = settings.FocusCoord,
         .ManualFocusPlane = settings.ManualFocusPlane,
-        .FocalLength = settings.FocalLength,
+		.FocalLength = focusLen,
         .FNumber = settings.FNumber,
         .FarPlaneMaxBlur = settings.FarPlaneMaxBlur,
-        .NearPlaneMaxBlur = settings.NearPlaneMaxBlur,
+		.NearPlaneMaxBlur = nearBlur,
         .BlurQuality = settings.BlurQuality,
         .NearFarDistanceCompensation = settings.NearFarDistanceCompensation,
         .BokehBusyFactor = settings.BokehBusyFactor,
