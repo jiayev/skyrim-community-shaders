@@ -61,6 +61,14 @@ public:
 		uint pad0[3];
 	};
 
+	struct DebugSettings
+	{
+		uint EnableWetnessOverride = false;
+		float WetnessOverride = 0.0f;
+		float PuddleWetnessOverride = 0.0f;
+		float RainOverride = 0.0f;
+	} debugSettings;
+
 	Settings settings;
 
 	PerFrame GetCommonBufferData();

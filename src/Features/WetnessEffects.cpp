@@ -30,6 +30,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RippleBreadth,
 	RippleLifetime)
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	WetnessEffects::DebugSettings,
+	EnableWetnessOverride,
+	WetnessOverride,
+	PuddleWetnessOverride,
+	RainOverride)
+
 void WetnessEffects::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Wetness Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -151,6 +158,14 @@ void WetnessEffects::DrawSettings()
 
 	ImGui::Spacing();
 	ImGui::Spacing();
+
+	if (ImGui::TreeNodeEx("Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Enable Wetness Override", (bool*)&debugSettings.EnableWetnessOverride);
+		ImGui::SliderFloat("Wetness Override", &debugSettings.WetnessOverride, 0.0f, 1.0f);
+		ImGui::SliderFloat("Puddle Wetness Override", &debugSettings.PuddleWetnessOverride, 0.0f, 4.0f);
+		ImGui::SliderFloat("Rain Override", &debugSettings.RainOverride, 0.0f, 1.0f);
+		ImGui::TreePop();
+	}
 }
 
 WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
@@ -214,6 +229,10 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
 					}
 
 					data.Raining = std::min(1.0f, currentRaining + lastRaining);
+
+					if ((bool)debugSettings.EnableWetnessOverride) {
+						data.Raining = debugSettings.RainOverride;
+					}
 				}
 
 				auto linearstep = [](float edge0, float edge1, float x) {
@@ -238,6 +257,11 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
 
 				float wetness = std::min(1.0f, wetnessCurrentWeather + wetnessLastWeather);
 				float puddleWetness = std::min(1.0f, puddleCurrentWeather + puddleLastWeather);
+
+				if ((bool)debugSettings.EnableWetnessOverride) {
+					wetness = debugSettings.WetnessOverride;
+					puddleWetness = debugSettings.PuddleWetnessOverride;
+				}
 
 				data.Wetness = wetness;
 				data.PuddleWetness = puddleWetness;
