@@ -213,7 +213,7 @@ namespace ExtendedMaterials
 			numSteps = clamp((numSteps + 3) & ~0x03, 4, 16);
 #endif
 			float stepSize = rcp(numSteps);
-			stepSize += (noise * 2.0 - 1.0) * stepSize * 0.25;
+			stepSize += (noise * 2.0 - 1.0) * stepSize * stepSize;
 
 			float2 offsetPerStep = viewDirTS.xy * float2(maxHeight, maxHeight) * stepSize.xx;
 			float2 prevOffset = viewDirTS.xy * float2(minHeight, minHeight) + coords.xy;
@@ -338,7 +338,7 @@ namespace ExtendedMaterials
 	}
 
 #if defined(TRUE_PBR)
-	static const float shadowIntensity = 1.0;
+	static const float shadowIntensity = 2.0;
 #else
 	static const float shadowIntensity = 2.0;
 #endif
