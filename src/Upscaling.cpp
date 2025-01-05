@@ -342,8 +342,6 @@ void Upscaling::SharpenTAA()
 
 	CheckResources();
 
-	Hooks::BSGraphics_SetDirtyStates::func(false);
-
 	auto state = State::GetSingleton();
 
 	auto& context = state->context;
@@ -401,6 +399,11 @@ void Upscaling::SharpenTAA()
 	state->EndPerfEvent();
 
 	context->CopyResource(outputTextureResource, upscalingTexture->resource.get());
+
+	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+	GET_INSTANCE_MEMBER(stateUpdateFlags, shadowState)
+
+	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);  // Run OMSetRenderTargets again
 }
 
 void Upscaling::CreateUpscalingResources()
