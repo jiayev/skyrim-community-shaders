@@ -242,14 +242,14 @@ void PostProcessing::DrawSettings()
 	const float _iconButtonSize = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().FramePadding.x;
 	const ImVec2 iconButtonSize{ _iconButtonSize, _iconButtonSize };
 
-	if (ImGui::BeginTable("Page Select", 2)) {
-		ImGui::TableNextColumn();
-		ImGui::RadioButton("Effect List", &pageNum, 0);
-		ImGui::TableNextColumn();
-		ImGui::RadioButton("Effect Settings", &pageNum, 1);
+	//if (ImGui::BeginTable("Page Select", 2)) {
+	//	ImGui::TableNextColumn();
+	//	ImGui::RadioButton("Effect List", &pageNum, 0);
+	//	ImGui::TableNextColumn();
+	//	ImGui::RadioButton("Effect Settings", &pageNum, 1);
 
-		ImGui::EndTable();
-	}
+	//	ImGui::EndTable();
+	//}
 
 	ImGui::Separator();
 	ImGui::Spacing();
@@ -341,6 +341,14 @@ void PostProcessing::DrawSettings()
 					ImGui::Text("Move the selected effect down.");
 
 				ImGui::SameLine();
+				if (ImGui::Button(ICON_FA_BARS, iconButtonSize)) {
+					markedFeat = i;
+					actionType = 3;
+				}
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Edit the selected effect.");
+
+				ImGui::SameLine();
 				ImGui::AlignTextToFramePadding();
 
 				if (nonVR)
@@ -382,6 +390,10 @@ void PostProcessing::DrawSettings()
 				else if (markedFeat + 1 == featIdx)
 					featIdx--;
 				break;
+			case 3:
+				featIdx = markedFeat;
+				pageNum = 1;
+				break;
 			default:
 				break;
 			}
@@ -392,8 +404,14 @@ void PostProcessing::DrawSettings()
 
 		if (featIdx < feats.size()) {
 			auto& feat = feats[featIdx];
-			ImGui::InputText("Name", &feat->name);
+			if (ImGui::Button(ICON_FA_ARROW_LEFT, iconButtonSize)) {
+				pageNum = 0;
+			}
 
+			ImGui::Spacing();
+
+			ImGui::InputText("Name", &feat->name);
+	
 			ImGui::SeparatorText(std::format("{} ({})", feat->name, feat->GetType()).c_str());
 
 			ImGui::TextWrapped(feat->GetDesc().c_str());

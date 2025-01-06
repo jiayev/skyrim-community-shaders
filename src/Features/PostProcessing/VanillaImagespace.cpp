@@ -16,7 +16,7 @@ void VanillaImagespace::DrawSettings()
 {
     ImGui::SliderFloat3("Blend Factor", &settings.blendFactor.x, 0.0f, 1.0f, "%.3f");
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Blend factor for the vanilla imagespace effect (saturation, brightness, contrast).");
+        ImGui::SetTooltip("Blend factor for the vanilla imagespace (saturation, brightness, contrast).");
     }
 
     ImGui::Checkbox("Enable Interior/Exterior Multiplier", &settings.enableInExMultiplier);
@@ -24,12 +24,29 @@ void VanillaImagespace::DrawSettings()
     if (settings.enableInExMultiplier) {
         ImGui::SliderFloat3("Exterior Multiplier", &settings.ExteriorMultiplier.x, 0.0f, 2.0f, "%.3f");
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Multiplier for the exterior imagespace effect (saturation, brightness, contrast).");
+            ImGui::SetTooltip("Multiplier for the exterior imagespace (saturation, brightness, contrast).");
         }
 
         ImGui::SliderFloat3("Interior Multiplier", &settings.InteriorMultiplier.x, 0.0f, 2.0f, "%.3f");
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Multiplier for the interior imagespace effect (saturation, brightness, contrast).");
+            ImGui::SetTooltip("Multiplier for the interior imagespace (saturation, brightness, contrast).");
+        }
+    }
+
+    ImGui::Checkbox("Enable Interior/Exterior Override", &settings.enableInExOverride);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Override the vanilla In/Exterior imagespace values. Would ignore the above multiplier settings.");
+    }
+
+    if (settings.enableInExOverride) {
+        ImGui::SliderFloat3("Exterior Override", &settings.ExteriorOverride.x, 0.0f, 8.0f, "%.3f");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Override for the exterior imagespace (saturation, brightness, contrast).");
+        }
+
+        ImGui::SliderFloat3("Interior Override", &settings.InteriorOverride.x, 0.0f, 8.0f, "%.3f");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Override for the interior imagespace (saturation, brightness, contrast).");
         }
     }
 
@@ -192,6 +209,13 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
     actualValues = (float3(1.0f) - settings.blendFactor) + vanillaImagespaceData.cinematic * settings.blendFactor;
     
     actualValues = actualValues * (settings.enableInExMultiplier ? (isInInterior ? settings.InteriorMultiplier : settings.ExteriorMultiplier) : float3(1.0f));
+    if (cinematic.x == 0.0f && cinematic.y == 0.0f && cinematic.z == 0.0f) {
+        actualValues = float3(1.0f);
+    }
+
+    if (settings.enableInExOverride) {
+        actualValues = isInInterior ? settings.InteriorOverride : settings.ExteriorOverride;
+    }
     data.cinematic = actualValues;
     vanillaImagespaceCB->Update(data);
 

@@ -8,6 +8,7 @@
 #include "pCamera.h"
 #include "LensFlare.h"
 #include "VanillaImagespace.h"
+#include "DoF.h"
 
 template <class T>
 std::pair<std::string, PostProcessFeatureConstructor> GetFeatureConstructorPair()
@@ -26,6 +27,7 @@ const ankerl::unordered_dense::map<std::string, PostProcessFeatureConstructor>& 
 		GetFeatureConstructorPair<Camera>(),
 		GetFeatureConstructorPair<LensFlare>(),
 		GetFeatureConstructorPair<VanillaImagespace>(),
+		GetFeatureConstructorPair<DoF>(),
 	};
 	return retval;
 }
