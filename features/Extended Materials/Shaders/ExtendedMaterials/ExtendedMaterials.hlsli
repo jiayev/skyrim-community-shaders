@@ -206,14 +206,14 @@ namespace ExtendedMaterials
 
 		if (nearBlendToFar < 1.0) {
 #if defined(LANDSCAPE)
-			uint numSteps = uint((max(4, scale * 32) * (1.0 - nearBlendToFar)) + 0.5);
-			numSteps = clamp((numSteps + 3) & ~0x03, 4, max(4, scale * 32));
+			uint numSteps = uint((max(4, scale * 8) * (1.0 - nearBlendToFar)) + 0.5);
+			numSteps = clamp((numSteps + 3) & ~0x03, 4, max(4, scale * 8));
 #else
-			uint numSteps = uint((32 * (1.0 - nearBlendToFar)) + 0.5);
-			numSteps = clamp((numSteps + 3) & ~0x03, 4, 32);
+			uint numSteps = uint((16 * (1.0 - nearBlendToFar)) + 0.5);
+			numSteps = clamp((numSteps + 3) & ~0x03, 4, 16);
 #endif
-
 			float stepSize = rcp(numSteps);
+			stepSize += (noise * 2.0 - 1.0) * stepSize * stepSize;
 
 			float2 offsetPerStep = viewDirTS.xy * float2(maxHeight, maxHeight) * stepSize.xx;
 			float2 prevOffset = viewDirTS.xy * float2(minHeight, minHeight) + coords.xy;
@@ -223,6 +223,9 @@ namespace ExtendedMaterials
 
 			float2 pt1 = 0;
 			float2 pt2 = 0;
+
+			uint numStepsTemp = numSteps;
+			bool contactRefinement = false;
 
 			[loop] while (numSteps > 0)
 			{
@@ -256,27 +259,42 @@ namespace ExtendedMaterials
 				bool4 testResult = currHeight >= currentBound;
 				[branch] if (any(testResult))
 				{
+					float2 outOffset = 0;
 					[flatten] if (testResult.w)
 					{
+						outOffset = currentOffset[1].xy;
 						pt1 = float2(currentBound.w, currHeight.w);
 						pt2 = float2(currentBound.z, currHeight.z);
 					}
 					[flatten] if (testResult.z)
 					{
+						outOffset = currentOffset[0].zw;
 						pt1 = float2(currentBound.z, currHeight.z);
 						pt2 = float2(currentBound.y, currHeight.y);
 					}
 					[flatten] if (testResult.y)
 					{
+						outOffset = currentOffset[0].xy;
 						pt1 = float2(currentBound.y, currHeight.y);
 						pt2 = float2(currentBound.x, currHeight.x);
 					}
 					[flatten] if (testResult.x)
 					{
+						outOffset = prevOffset;
 						pt1 = float2(currentBound.x, currHeight.x);
 						pt2 = float2(prevBound, prevHeight);
 					}
-					break;
+					if (contactRefinement) {
+						break;
+					} else {
+						contactRefinement = true;
+						prevOffset = outOffset;
+						prevBound = pt2.x;
+						numSteps = numStepsTemp;
+						stepSize /= (float)numSteps;
+						offsetPerStep /= (float)numSteps;
+						continue;
+					}
 				}
 
 				prevOffset = currentOffset[1].zw;
@@ -320,7 +338,7 @@ namespace ExtendedMaterials
 	}
 
 #if defined(TRUE_PBR)
-	static const float shadowIntensity = 1.0;
+	static const float shadowIntensity = 2.0;
 #else
 	static const float shadowIntensity = 2.0;
 #endif
