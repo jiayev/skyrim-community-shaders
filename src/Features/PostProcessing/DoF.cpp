@@ -21,7 +21,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     BokehBusyFactor,
 	PostBlurSmoothing,
 	targetFocus,
-	targetFocusFocalLength
+	targetFocusFocalLength,
+    consoleSelection
 )
 
 void DoF::DrawSettings()
@@ -45,6 +46,10 @@ void DoF::DrawSettings()
 
     ImGui::Checkbox("Target Focus", &settings.targetFocus);
 	ImGui::SliderFloat("Max Focal Length", &settings.targetFocusFocalLength, 1.0f, 300.0f, "%.1f mm");
+    ImGui::Checkbox("Console Selection", &settings.consoleSelection);
+    if (settings.consoleSelection && currentRef != 0) {
+        ImGui::Text("Selected Reference: %08X", currentRef);
+    }
 
     if (ImGui::CollapsingHeader("Debug")) {
         static float debugRescale = .3f;
@@ -340,6 +345,13 @@ float DoF::GetDistanceToDialogueTarget()
 	return cameraPosition.GetDistance(targetPosition);
 }
 
+float DoF::GetDistanceToReference(RE::TESObjectREFR* a_ref)
+{
+    RE::NiPoint3 cameraPosition = GetCameraPos();
+    RE::NiPoint3 targetPosition = a_ref->GetPosition();
+    return cameraPosition.GetDistance(targetPosition);
+}
+
 void DoF::Draw(TextureInfo& inout_tex)
 {
     auto state = State::GetSingleton();
@@ -357,6 +369,17 @@ void DoF::Draw(TextureInfo& inout_tex)
 		nearBlur = 0.0f;
 		float targetFocusDistanceGame = 0;
 		auto targetFocusEnabled = false;
+
+        const auto consoleRef = RE::Console::GetSelectedRef();
+        if (settings.consoleSelection)
+            if (consoleRef && !consoleRef->IsDisabled() && !consoleRef->IsDeleted() && consoleRef->Is3DLoaded()) {
+                currentRef = consoleRef->formID;
+                targetFocusDistanceGame = GetDistanceToReference(static_cast<RE::TESObjectREFR*>(consoleRef));
+                targetFocusEnabled = true;
+            }
+            else {
+                currentRef = 0;
+            }
 
         if (GetTargetLockEnabled()) {
 			targetFocusDistanceGame = GetDistanceToLockedTarget();
