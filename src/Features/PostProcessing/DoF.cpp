@@ -363,6 +363,8 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 	float focusLen = settings.FocalLength;
 	float nearBlur = settings.NearPlaneMaxBlur;
+    float manualFocus = settings.ManualFocusPlane;
+    bool autoFocus = settings.AutoFocus;
 
     if (settings.targetFocus) {
 		focusLen = 1.0f;
@@ -374,7 +376,7 @@ void DoF::Draw(TextureInfo& inout_tex)
         if (settings.consoleSelection)
             if (consoleRef && !consoleRef->IsDisabled() && !consoleRef->IsDeleted() && consoleRef->Is3DLoaded()) {
                 currentRef = consoleRef->formID;
-                targetFocusDistanceGame = GetDistanceToReference(consoleRef);
+                targetFocusDistanceGame = GetDistanceToReference(consoleRef.get());
                 targetFocusEnabled = true;
             }
             else {
@@ -392,13 +394,16 @@ void DoF::Draw(TextureInfo& inout_tex)
 		}
 
         if (targetFocusEnabled) {
+            autoFocus = false;
 			float maxDistance = 1500;
+            nearBlur = settings.NearPlaneMaxBlur;
 			if (targetFocusDistanceGame > maxDistance)
 				targetFocusDistanceGame = maxDistance;
 
 			focusLen = (maxDistance - targetFocusDistanceGame) * settings.targetFocusFocalLength / maxDistance;
 			if (focusLen < 1)
 				focusLen = 1;
+            manualFocus = targetFocusDistanceGame / 70.02801f / 1000;
 		}
     }
 
@@ -407,7 +412,7 @@ void DoF::Draw(TextureInfo& inout_tex)
     DoFCB dofData = {
         .TransitionSpeed = settings.TransitionSpeed,
         .FocusCoord = settings.FocusCoord,
-        .ManualFocusPlane = settings.ManualFocusPlane,
+        .ManualFocusPlane = manualFocus,
 		.FocalLength = focusLen,
         .FNumber = settings.FNumber,
         .FarPlaneMaxBlur = settings.FarPlaneMaxBlur,
@@ -419,7 +424,7 @@ void DoF::Draw(TextureInfo& inout_tex)
         .PostBlurSmoothing = settings.PostBlurSmoothing,
         .Width = res.x,
         .Height = res.y,
-        .AutoFocus = settings.AutoFocus
+        .AutoFocus = autoFocus
     };
     dofCB->Update(dofData);
 

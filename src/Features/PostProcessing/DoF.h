@@ -107,6 +107,7 @@ struct DoF : public PostProcessFeature
 	//float targetFocusPercent;
 	bool GetTargetLockEnabled();
 	float GetDistanceToLockedTarget();
+    float GetDistanceToReference(RE::TESObjectREFR* a_ref);
 
     uint currentRef = 0;
 
