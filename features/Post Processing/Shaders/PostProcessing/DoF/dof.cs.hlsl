@@ -71,7 +71,7 @@ cbuffer DoFCB : register(b1)
 };
 
 #define EPSILON 1e-6
-#define SENSOR_SIZE 0.024f
+#define SENSOR_SIZE 0.035f
 
 struct FOCUSINFO
 {
@@ -97,9 +97,7 @@ struct DISCBLURINFO
 float GetDepth(float2 uv)
 {
     float depth = DepthTexture.SampleLevel(DepthSampler, uv, 0);
-    float zNear = 0.01f;
-    float zFar = 1.0f;
-    depth = zNear * zFar / (zFar + depth * (zNear - zFar));
+    depth = SharedData::GetScreenDepth(depth) * 1.428e-5f;
     return depth;
 }
 
@@ -475,7 +473,7 @@ void CS_UpdateFocus(uint2 DTid : SV_DispatchThreadID)
 {
     float depth = AutoFocus? GetDepth(FocusCoord): ManualFocusPlane;
 
-    RWFocus[DTid] = lerp(TexPreviousFocus.SampleLevel(DepthSampler, (0.5f, 0.5f), 0), depth, TransitionSpeed);
+    RWFocus[DTid] = lerp(TexPreviousFocus.SampleLevel(DepthSampler, float2(0.5f, 0.5f), 0), depth, TransitionSpeed);
 }
 
 [numthreads(8, 8, 1)]

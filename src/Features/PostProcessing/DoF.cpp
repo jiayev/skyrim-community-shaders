@@ -21,7 +21,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     BokehBusyFactor,
 	PostBlurSmoothing,
 	targetFocus,
-	targetFocusFocalLength
+	targetFocusFocalLength,
+    consoleSelection
 )
 
 void DoF::DrawSettings()
@@ -44,10 +45,16 @@ void DoF::DrawSettings()
     ImGui::SliderFloat("Post Blur Smoothing", &settings.PostBlurSmoothing, 0.0f, 2.0f, "%.2f");
 
     ImGui::Checkbox("Target Focus", &settings.targetFocus);
-	ImGui::SliderFloat("Max Focal Length", &settings.targetFocusFocalLength, 1.0f, 300.0f, "%.1f mm");
+	ImGui::SliderFloat("Target Focus Focal Length", &settings.targetFocusFocalLength, 1.0f, 300.0f, "%.1f mm");
+    ImGui::Checkbox("Console Selection", &settings.consoleSelection);
+    if (settings.consoleSelection && currentRef != 0) {
+        ImGui::Text("Selected Reference: %08X", currentRef);
+    }
 
     if (ImGui::CollapsingHeader("Debug")) {
         static float debugRescale = .3f;
+        ImGui::Text("Debug Distance: %f", debugDistance);
+        ImGui::Text("Debug Focus Plane: %f", debugFocusPlane);
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
         BUFFER_VIEWER_NODE(texFocus, 64.0f)
@@ -314,30 +321,22 @@ bool DoF::GetTargetLockEnabled()
 	return g_TDM && g_TDM->GetCurrentTarget();
 }
 
-float DoF::GetDistanceToLockedTarget()
-{
-	RE::TESObjectREFR* target = g_TDM->GetCurrentTarget().get().get();
-	RE::NiPoint3 cameraPosition = GetCameraPos();
-	RE::NiPoint3 targetPosition = target->GetPosition();
-	return cameraPosition.GetDistance(targetPosition);
-}
-
 bool DoF::GetInDialogue()
 {
 	return RE::MenuTopicManager::GetSingleton()->speaker || RE::MenuTopicManager::GetSingleton()->lastSpeaker;
 }
 
-float DoF::GetDistanceToDialogueTarget()
+float DoF::GetDistanceToReference(RE::TESObjectREFR* a_ref)
 {
-	RE::TESObjectREFR* target;
-	if (RE::MenuTopicManager::GetSingleton()->speaker) {
-		target = RE::MenuTopicManager::GetSingleton()->speaker.get().get();
-	} else {
-		target = RE::MenuTopicManager::GetSingleton()->lastSpeaker.get().get();
-	}
-	RE::NiPoint3 cameraPosition = GetCameraPos();
-	RE::NiPoint3 targetPosition = target->GetPosition();
-	return cameraPosition.GetDistance(targetPosition);
+    RE::NiPoint3 cameraPosition = GetCameraPos();
+    RE::NiPoint3 targetPosition = a_ref->GetPosition();
+    if (a_ref->GetFormType() == RE::FormType::ActorCharacter && !a_ref->IsPlayer()) {
+        auto head = a_ref->GetNodeByName("NPC Head [Head]");
+        if (head) {
+            targetPosition = head->world.translate;
+        }
+    }
+    return cameraPosition.GetDistance(targetPosition);
 }
 
 void DoF::Draw(TextureInfo& inout_tex)
@@ -351,40 +350,60 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 	float focusLen = settings.FocalLength;
 	float nearBlur = settings.NearPlaneMaxBlur;
+    float manualFocus = settings.ManualFocusPlane;
+    debugFocusPlane = manualFocus;
+    bool autoFocus = settings.AutoFocus;
 
     if (settings.targetFocus) {
 		focusLen = 1.0f;
 		nearBlur = 0.0f;
 		float targetFocusDistanceGame = 0;
 		auto targetFocusEnabled = false;
+        autoFocus = false;
+
+        RE::TESObjectREFR* target = nullptr;
+        const auto consoleRef = RE::Console::GetSelectedRef();
+        if (settings.consoleSelection)
+            if (consoleRef && !consoleRef->IsDisabled() && !consoleRef->IsDeleted() && consoleRef->Is3DLoaded()) {
+                currentRef = consoleRef->formID;
+                target = consoleRef.get();
+                targetFocusEnabled = true;
+            }
+            else {
+                currentRef = 0;
+            }
 
         if (GetTargetLockEnabled()) {
-			targetFocusDistanceGame = GetDistanceToLockedTarget();
+			target = g_TDM->GetCurrentTarget().get().get();
 			targetFocusEnabled = true;
         }
 
 		if (GetInDialogue()) {
-			targetFocusDistanceGame = GetDistanceToDialogueTarget();
+			if (RE::MenuTopicManager::GetSingleton()->speaker) {
+                target = RE::MenuTopicManager::GetSingleton()->speaker.get().get();
+            } else {
+                target = RE::MenuTopicManager::GetSingleton()->lastSpeaker.get().get();
+            }
 			targetFocusEnabled = true;
 		}
-
+        if (target)
+            targetFocusDistanceGame = GetDistanceToReference(target);
+        debugDistance = targetFocusDistanceGame;
         if (targetFocusEnabled) {
-			float maxDistance = 1500;
-			if (targetFocusDistanceGame > maxDistance)
-				targetFocusDistanceGame = maxDistance;
-
-			focusLen = (maxDistance - targetFocusDistanceGame) * settings.targetFocusFocalLength / maxDistance;
-			if (focusLen < 1)
-				focusLen = 1;
+            nearBlur = settings.NearPlaneMaxBlur;
+			focusLen = settings.targetFocusFocalLength;
+            manualFocus = targetFocusDistanceGame * 1.428e-5f;
 		}
+        else {
+            return;
+        }
     }
-
+    debugFocusPlane = manualFocus;
     state->BeginPerfEvent("Depth of Field");
-
     DoFCB dofData = {
         .TransitionSpeed = settings.TransitionSpeed,
         .FocusCoord = settings.FocusCoord,
-        .ManualFocusPlane = settings.ManualFocusPlane,
+        .ManualFocusPlane = manualFocus,
 		.FocalLength = focusLen,
         .FNumber = settings.FNumber,
         .FarPlaneMaxBlur = settings.FarPlaneMaxBlur,
@@ -396,7 +415,7 @@ void DoF::Draw(TextureInfo& inout_tex)
         .PostBlurSmoothing = settings.PostBlurSmoothing,
         .Width = res.x,
         .Height = res.y,
-        .AutoFocus = settings.AutoFocus
+        .AutoFocus = autoFocus
     };
     dofCB->Update(dofData);
 

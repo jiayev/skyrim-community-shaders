@@ -29,6 +29,7 @@ struct DoF : public PostProcessFeature
         float PostBlurSmoothing = 0.0f;
 		bool  targetFocus = false;
 		float targetFocusFocalLength = 50.0f;
+        bool consoleSelection = false;
     } settings;
 
     struct alignas(16) DoFCB
@@ -102,10 +103,14 @@ struct DoF : public PostProcessFeature
 
     RE::NiPoint3 GetCameraPos();
 	bool GetInDialogue();
-	float GetDistanceToDialogueTarget();
-	//float targetFocusPercent;
+	// float GetDistanceToDialogueTarget();
+	// float targetFocusPercent;
 	bool GetTargetLockEnabled();
-	float GetDistanceToLockedTarget();
+	// float GetDistanceToLockedTarget();
+    float GetDistanceToReference(RE::TESObjectREFR* a_ref);
+    float debugDistance = 0.0f;
+    float debugFocusPlane = 0.0f;
+    uint currentRef = 0;
 
 	TDM_API::IVTDM2* g_TDM = nullptr;
 };
