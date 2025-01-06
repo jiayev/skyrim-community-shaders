@@ -11,6 +11,8 @@
 
 #include "ENB/ENBSeriesAPI.h"
 
+#include "Editor/EditorWindow.h"
+
 #define DLLEXPORT __declspec(dllexport)
 
 std::list<std::string> errors;
@@ -111,6 +113,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				auto& errorMessage = *it;
 				RE::DebugMessageBox(std::format("Community Shaders\n{}, will disable all hooks and features", errorMessage).c_str());
 			}
+
+			EditorWindow::GetSingleton()->SetupResources();
 
 			if (errors.empty()) {
 				FrameAnnotations::OnDataLoaded();

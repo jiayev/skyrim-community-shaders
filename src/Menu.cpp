@@ -21,6 +21,8 @@
 #include "Streamline.h"
 #include "Upscaling.h"
 
+#include "Editor/EditorWindow.h"
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
 	Background,
@@ -212,10 +214,10 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset;
 
-	ImFontConfig font_config;
-	font_config.GlyphExtraSpacing.x = -0.5;
+	//ImFontConfig font_config;
+	//font_config.GlyphExtraSpacing.x = -0.5;
 
-	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Jost-Regular.ttf", 36, &font_config);
+	//imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\Jost-Regular.ttf", 36, &font_config);
 
 	DXGI_SWAP_CHAIN_DESC desc;
 	swapchain->GetDesc(&desc);
@@ -225,7 +227,7 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	ImGui_ImplDX11_Init(device, context);
 
 	auto& io = ImGui::GetIO();
-	io.FontGlobalScale = exp2(settings.Theme.GlobalScale);
+	io.FontGlobalScale = exp2(0.5f);
 
 	{
 		winrt::com_ptr<IDXGIDevice> dxgiDevice;
@@ -247,307 +249,308 @@ void Menu::DrawSettings()
 	ImGui::SetNextWindowPos(Util::GetNativeViewportSizeScaled(0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
 	ImGui::SetNextWindowSize(Util::GetNativeViewportSizeScaled(0.8f), ImGuiCond_FirstUseEver);
 
-	auto title = std::format("Community Shaders {}", Util::GetFormattedVersion(Plugin::VERSION));
+	EditorWindow::GetSingleton()->Draw();
 
-	ImGui::Begin(title.c_str(), &IsEnabled, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
-	{
-		if (!ImGui::IsWindowDocked()) {
-			ImGui::SetWindowFontScale(1.5f);
-			ImGui::TextUnformatted(title.c_str());
-			ImGui::SetWindowFontScale(1.f);
+	//auto title = std::format("Community Shaders {}", Util::GetFormattedVersion(Plugin::VERSION));
 
-			ImGui::Spacing();
-			ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
-			ImGui::Spacing();
-		}
+	//ImGui::Begin(title.c_str(), &IsEnabled, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
+	//{
+	//	if (!ImGui::IsWindowDocked()) {
+	//		ImGui::SetWindowFontScale(1.5f);
+	//		ImGui::TextUnformatted(title.c_str());
+	//		ImGui::SetWindowFontScale(1.f);
 
-		auto& shaderCache = SIE::ShaderCache::Instance();
+	//		ImGui::Spacing();
+	//		ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
+	//		ImGui::Spacing();
+	//	}
+	//	auto& shaderCache = SIE::ShaderCache::Instance();
 
-		if (ImGui::BeginTable("##LeButtons", 4, ImGuiTableFlags_SizingStretchSame)) {
-			ImGui::TableNextColumn();
-			if (ImGui::Button("Save Settings", { -1, 0 })) {
-				State::GetSingleton()->Save();
-			}
+	//	if (ImGui::BeginTable("##LeButtons", 4, ImGuiTableFlags_SizingStretchSame)) {
+	//		ImGui::TableNextColumn();
+	//		if (ImGui::Button("Save Settings", { -1, 0 })) {
+	//			State::GetSingleton()->Save();
+	//		}
 
-			ImGui::TableNextColumn();
-			if (ImGui::Button("Load Settings", { -1, 0 })) {
-				State::GetSingleton()->Load();
-				ParticleLights::GetSingleton()->GetConfigs();
-			}
+	//		ImGui::TableNextColumn();
+	//		if (ImGui::Button("Load Settings", { -1, 0 })) {
+	//			State::GetSingleton()->Load();
+	//			ParticleLights::GetSingleton()->GetConfigs();
+	//		}
 
-			ImGui::TableNextColumn();
-			if (ImGui::Button("Clear Shader Cache", { -1, 0 })) {
-				shaderCache.Clear();
-				// any features should be added to shadercache's clear.
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(
-					"The Shader Cache is the collection of compiled shaders which replace the vanilla shaders at runtime. "
-					"Clearing the shader cache will mean that shaders are recompiled only when the game re-encounters them. "
-					"This is only needed for hot-loading shaders for development purposes. ");
-			}
+	//		ImGui::TableNextColumn();
+	//		if (ImGui::Button("Clear Shader Cache", { -1, 0 })) {
+	//			shaderCache.Clear();
+	//			// any features should be added to shadercache's clear.
+	//		}
+	//		if (auto _tt = Util::HoverTooltipWrapper()) {
+	//			ImGui::Text(
+	//				"The Shader Cache is the collection of compiled shaders which replace the vanilla shaders at runtime. "
+	//				"Clearing the shader cache will mean that shaders are recompiled only when the game re-encounters them. "
+	//				"This is only needed for hot-loading shaders for development purposes. ");
+	//		}
 
-			ImGui::TableNextColumn();
-			if (ImGui::Button("Clear Disk Cache", { -1, 0 })) {
-				shaderCache.DeleteDiskCache();
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(
-					"The Disk Cache is a collection of compiled shaders on disk, which are automatically created when shaders are added to the Shader Cache. "
-					"If you do not have a Disk Cache, or it is outdated or invalid, you will see \"Compiling Shaders\" in the upper-left corner. "
-					"After this has completed you will no longer see this message apart from when loading from the Disk Cache. "
-					"Only delete the Disk Cache manually if you are encountering issues. ");
-			}
+	//		ImGui::TableNextColumn();
+	//		if (ImGui::Button("Clear Disk Cache", { -1, 0 })) {
+	//			shaderCache.DeleteDiskCache();
+	//		}
+	//		if (auto _tt = Util::HoverTooltipWrapper()) {
+	//			ImGui::Text(
+	//				"The Disk Cache is a collection of compiled shaders on disk, which are automatically created when shaders are added to the Shader Cache. "
+	//				"If you do not have a Disk Cache, or it is outdated or invalid, you will see \"Compiling Shaders\" in the upper-left corner. "
+	//				"After this has completed you will no longer see this message apart from when loading from the Disk Cache. "
+	//				"Only delete the Disk Cache manually if you are encountering issues. ");
+	//		}
 
-			if (shaderCache.GetFailedTasks()) {
-				ImGui::TableNextRow();
-				ImGui::TableNextColumn();
-				if (ImGui::Button("Toggle Error Message", { -1, 0 })) {
-					shaderCache.ToggleErrorMessages();
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text(
-						"Hide or show the shader failure message. "
-						"Your installation is broken and will likely see errors in game. "
-						"Please double check you have updated all features and that your load order is correct. "
-						"See CommunityShaders.log for details and check the Nexus Mods page or Discord server. ");
-				}
-			}
-			ImGui::EndTable();
-		}
+	//		if (shaderCache.GetFailedTasks()) {
+	//			ImGui::TableNextRow();
+	//			ImGui::TableNextColumn();
+	//			if (ImGui::Button("Toggle Error Message", { -1, 0 })) {
+	//				shaderCache.ToggleErrorMessages();
+	//			}
+	//			if (auto _tt = Util::HoverTooltipWrapper()) {
+	//				ImGui::Text(
+	//					"Hide or show the shader failure message. "
+	//					"Your installation is broken and will likely see errors in game. "
+	//					"Please double check you have updated all features and that your load order is correct. "
+	//					"See CommunityShaders.log for details and check the Nexus Mods page or Discord server. ");
+	//			}
+	//		}
+	//		ImGui::EndTable();
+	//	}
 
-		ImGui::Spacing();
-		ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
-		ImGui::Spacing();
+	//	ImGui::Spacing();
+	//	ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
+	//	ImGui::Spacing();
 
-		float footer_height = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y * 3 + 3.0f;  // text + separator
+	//	float footer_height = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y * 3 + 3.0f;  // text + separator
 
-		ImGui::BeginChild("Menus Table", ImVec2(0, -footer_height));
-		if (ImGui::BeginTable("Menus Table", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
-			ImGui::TableSetupColumn("##ListOfMenus", 0, 2);
-			ImGui::TableSetupColumn("##MenuConfig", 0, 8);
+	//	ImGui::BeginChild("Menus Table", ImVec2(0, -footer_height));
+	//	if (ImGui::BeginTable("Menus Table", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
+	//		ImGui::TableSetupColumn("##ListOfMenus", 0, 2);
+	//		ImGui::TableSetupColumn("##MenuConfig", 0, 8);
 
-			static size_t selectedMenu = 0;
+	//		static size_t selectedMenu = 0;
 
-			// some type erasure bs for virtual-free polymorphism
-			struct BuiltInMenu
-			{
-				std::string name;
-				std::function<void()> func;
-			};
-			using MenuFuncInfo = std::variant<BuiltInMenu, std::string, Feature*>;
-			struct ListMenuVisitor
-			{
-				size_t listId;
+	//		// some type erasure bs for virtual-free polymorphism
+	//		struct BuiltInMenu
+	//		{
+	//			std::string name;
+	//			std::function<void()> func;
+	//		};
+	//		using MenuFuncInfo = std::variant<BuiltInMenu, std::string, Feature*>;
+	//		struct ListMenuVisitor
+	//		{
+	//			size_t listId;
 
-				void operator()(const BuiltInMenu& menu)
-				{
-					if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenu == listId, ImGuiSelectableFlags_SpanAllColumns))
-						selectedMenu = listId;
-				}
-				void operator()(const std::string& label)
-				{
-					ImGui::SeparatorText(label.c_str());
-				}
-				void operator()(Feature* feat)
-				{
-					const auto featureName = feat->GetShortName();
-					bool isDisabled = State::GetSingleton()->IsFeatureDisabled(featureName);
-					bool isLoaded = feat->loaded;
-					bool hasFailedMessage = !feat->failedLoadedMessage.empty();
-					auto& themeSettings = Menu::GetSingleton()->settings.Theme;
+	//			void operator()(const BuiltInMenu& menu)
+	//			{
+	//				if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenu == listId, ImGuiSelectableFlags_SpanAllColumns))
+	//					selectedMenu = listId;
+	//			}
+	//			void operator()(const std::string& label)
+	//			{
+	//				ImGui::SeparatorText(label.c_str());
+	//			}
+	//			void operator()(Feature* feat)
+	//			{
+	//				const auto featureName = feat->GetShortName();
+	//				bool isDisabled = State::GetSingleton()->IsFeatureDisabled(featureName);
+	//				bool isLoaded = feat->loaded;
+	//				bool hasFailedMessage = !feat->failedLoadedMessage.empty();
+	//				auto& themeSettings = Menu::GetSingleton()->settings.Theme;
 
-					ImVec4 textColor;
+	//				ImVec4 textColor;
 
-					// Determine the text color based on the state
-					if (isDisabled) {
-						textColor = themeSettings.StatusPalette.Disable;
-					} else if (isLoaded) {
-						textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-					} else if (hasFailedMessage) {
-						textColor = feat->version.empty() ? themeSettings.StatusPalette.Disable : themeSettings.StatusPalette.Error;
-					} else {
-						textColor = themeSettings.StatusPalette.RestartNeeded;
-					}
+	//				// Determine the text color based on the state
+	//				if (isDisabled) {
+	//					textColor = themeSettings.StatusPalette.Disable;
+	//				} else if (isLoaded) {
+	//					textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+	//				} else if (hasFailedMessage) {
+	//					textColor = feat->version.empty() ? themeSettings.StatusPalette.Disable : themeSettings.StatusPalette.Error;
+	//				} else {
+	//					textColor = themeSettings.StatusPalette.RestartNeeded;
+	//				}
 
-					// Set text color
-					ImGui::PushStyleColor(ImGuiCol_Text, textColor);
+	//				// Set text color
+	//				ImGui::PushStyleColor(ImGuiCol_Text, textColor);
 
-					// Create selectable item
-					if (ImGui::Selectable(fmt::format(" {} ", feat->GetName()).c_str(), selectedMenu == listId, ImGuiSelectableFlags_SpanAllColumns)) {
-						selectedMenu = listId;
-					}
+	//				// Create selectable item
+	//				if (ImGui::Selectable(fmt::format(" {} ", feat->GetName()).c_str(), selectedMenu == listId, ImGuiSelectableFlags_SpanAllColumns)) {
+	//					selectedMenu = listId;
+	//				}
 
-					// Restore original text color
-					ImGui::PopStyleColor();
+	//				// Restore original text color
+	//				ImGui::PopStyleColor();
 
-					// Show tooltip based on the state
-					if (isDisabled) {
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::Text("Disabled at boot. Reenable, save settings, and restart.");
-						}
-					} else if (!isLoaded) {
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::Text(hasFailedMessage ? feat->failedLoadedMessage.c_str() : "Feature pending restart.");
-						}
-					}
+	//				// Show tooltip based on the state
+	//				if (isDisabled) {
+	//					if (auto _tt = Util::HoverTooltipWrapper()) {
+	//						ImGui::Text("Disabled at boot. Reenable, save settings, and restart.");
+	//					}
+	//				} else if (!isLoaded) {
+	//					if (auto _tt = Util::HoverTooltipWrapper()) {
+	//						ImGui::Text(hasFailedMessage ? feat->failedLoadedMessage.c_str() : "Feature pending restart.");
+	//					}
+	//				}
 
-					// Display version if loaded
-					if (isLoaded) {
-						ImGui::SameLine();
-						ImGui::TextDisabled(fmt::format("({})", feat->version).c_str());
-					}
-				}
-			};
-			struct DrawMenuVisitor
-			{
-				void operator()(const BuiltInMenu& menu)
-				{
-					if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-						menu.func();
-					}
-					ImGui::EndChild();
-				}
-				void operator()(const std::string&)
-				{
-					// std::unreachable() from c++23
-					// you are not supposed to have selected a label!
-				}
-				void operator()(Feature* feat)
-				{
-					const auto featureName = feat->GetShortName();
-					bool isDisabled = State::GetSingleton()->IsFeatureDisabled(featureName);
-					bool isLoaded = feat->loaded;
-					bool hasFailedMessage = !feat->failedLoadedMessage.empty();
-					auto& themeSettings = Menu::GetSingleton()->settings.Theme;
+	//				// Display version if loaded
+	//				if (isLoaded) {
+	//					ImGui::SameLine();
+	//					ImGui::TextDisabled(fmt::format("({})", feat->version).c_str());
+	//				}
+	//			}
+	//		};
+	//		struct DrawMenuVisitor
+	//		{
+	//			void operator()(const BuiltInMenu& menu)
+	//			{
+	//				if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
+	//					menu.func();
+	//				}
+	//				ImGui::EndChild();
+	//			}
+	//			void operator()(const std::string&)
+	//			{
+	//				// std::unreachable() from c++23
+	//				// you are not supposed to have selected a label!
+	//			}
+	//			void operator()(Feature* feat)
+	//			{
+	//				const auto featureName = feat->GetShortName();
+	//				bool isDisabled = State::GetSingleton()->IsFeatureDisabled(featureName);
+	//				bool isLoaded = feat->loaded;
+	//				bool hasFailedMessage = !feat->failedLoadedMessage.empty();
+	//				auto& themeSettings = Menu::GetSingleton()->settings.Theme;
 
-					if (ImGui::BeginTable("##FeatureButtons", 2, ImGuiTableFlags_SizingStretchSame)) {
-						ImGui::TableNextColumn();
+	//				if (ImGui::BeginTable("##FeatureButtons", 2, ImGuiTableFlags_SizingStretchSame)) {
+	//					ImGui::TableNextColumn();
 
-						ImVec4 textColor;
+	//					ImVec4 textColor;
 
-						// Determine the text color based on the state
-						if (isDisabled) {
-							textColor = themeSettings.StatusPalette.Disable;
-						} else if (hasFailedMessage) {
-							textColor = themeSettings.StatusPalette.Error;
-						} else {
-							textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-						}
-						ImGui::PushStyleColor(ImGuiCol_Text, textColor);
+	//					// Determine the text color based on the state
+	//					if (isDisabled) {
+	//						textColor = themeSettings.StatusPalette.Disable;
+	//					} else if (hasFailedMessage) {
+	//						textColor = themeSettings.StatusPalette.Error;
+	//					} else {
+	//						textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+	//					}
+	//					ImGui::PushStyleColor(ImGuiCol_Text, textColor);
 
-						if (ImGui::Button(isDisabled ? "Enable at Boot" : "Disable at Boot", { -1, 0 })) {
-							bool newState = feat->ToggleAtBootSetting();
-							logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
-						}
+	//					if (ImGui::Button(isDisabled ? "Enable at Boot" : "Disable at Boot", { -1, 0 })) {
+	//						bool newState = feat->ToggleAtBootSetting();
+	//						logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
+	//					}
 
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::Text(
-								"Current State: %s\n"
-								"%s the feature settings at boot. "
-								"Restart will be required to reenable. "
-								"This is the same as deleting the ini file. "
-								"This should remove any performance impact for the feature.",
-								isDisabled ? "Disabled" : "Enabled",
-								isDisabled ? "Enable" : "Disable");
-						}
+	//					if (auto _tt = Util::HoverTooltipWrapper()) {
+	//						ImGui::Text(
+	//							"Current State: %s\n"
+	//							"%s the feature settings at boot. "
+	//							"Restart will be required to reenable. "
+	//							"This is the same as deleting the ini file. "
+	//							"This should remove any performance impact for the feature.",
+	//							isDisabled ? "Disabled" : "Enabled",
+	//							isDisabled ? "Enable" : "Disable");
+	//					}
 
-						ImGui::PopStyleColor();
+	//					ImGui::PopStyleColor();
 
-						ImGui::TableNextColumn();
+	//					ImGui::TableNextColumn();
 
-						if (!isDisabled && isLoaded) {
-							if (ImGui::Button("Restore Defaults", { -1, 0 })) {
-								feat->RestoreDefaultSettings();
-							}
-							if (auto _tt = Util::HoverTooltipWrapper()) {
-								ImGui::Text(
-									"Restores the feature's settings back to their default values. "
-									"You will still need to Save Settings to make these changes permanent.");
-							}
-						}
+	//					if (!isDisabled && isLoaded) {
+	//						if (ImGui::Button("Restore Defaults", { -1, 0 })) {
+	//							feat->RestoreDefaultSettings();
+	//						}
+	//						if (auto _tt = Util::HoverTooltipWrapper()) {
+	//							ImGui::Text(
+	//								"Restores the feature's settings back to their default values. "
+	//								"You will still need to Save Settings to make these changes permanent.");
+	//						}
+	//					}
 
-						ImGui::EndTable();
-					}
+	//					ImGui::EndTable();
+	//				}
 
-					if (hasFailedMessage) {
-						ImGui::TextColored(themeSettings.StatusPalette.Error, feat->failedLoadedMessage.c_str());
-					}
+	//				if (hasFailedMessage) {
+	//					ImGui::TextColored(themeSettings.StatusPalette.Error, feat->failedLoadedMessage.c_str());
+	//				}
 
-					if (!isDisabled && isLoaded) {
-						if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-							feat->DrawSettings();
-						}
-						ImGui::EndChild();
-					}
-				}
-			};
+	//				if (!isDisabled && isLoaded) {
+	//					if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
+	//						feat->DrawSettings();
+	//					}
+	//					ImGui::EndChild();
+	//				}
+	//			}
+	//		};
 
-			auto& featureList = Feature::GetFeatureList();
-			auto sortedFeatureList{ featureList };  // need a copy so the load order is not lost
-			std::ranges::sort(sortedFeatureList, [](Feature* a, Feature* b) {
-				return a->GetName() < b->GetName();
-			});
+	//		auto& featureList = Feature::GetFeatureList();
+	//		auto sortedFeatureList{ featureList };  // need a copy so the load order is not lost
+	//		std::ranges::sort(sortedFeatureList, [](Feature* a, Feature* b) {
+	//			return a->GetName() < b->GetName();
+	//		});
 
-			auto menuList = std::vector<MenuFuncInfo>{
-				BuiltInMenu{ "General", [&]() { DrawGeneralSettings(); } },
-				BuiltInMenu{ "Advanced", [&]() { DrawAdvancedSettings(); } },
-				BuiltInMenu{ "Display", [&]() { DrawDisplaySettings(); } }
-			};
+	//		auto menuList = std::vector<MenuFuncInfo>{
+	//			BuiltInMenu{ "General", [&]() { DrawGeneralSettings(); } },
+	//			BuiltInMenu{ "Advanced", [&]() { DrawAdvancedSettings(); } },
+	//			BuiltInMenu{ "Display", [&]() { DrawDisplaySettings(); } }
+	//		};
 
-			menuList.push_back("Core Features"s);
-			std::ranges::copy(
-				sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
-					return feat->IsCore() && feat->loaded;
-				}),
-				std::back_inserter(menuList));
+	//		menuList.push_back("Core Features"s);
+	//		std::ranges::copy(
+	//			sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
+	//				return feat->IsCore() && feat->loaded;
+	//			}),
+	//			std::back_inserter(menuList));
 
-			menuList.push_back("Features"s);
-			std::ranges::copy(
-				sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
-					return !feat->IsCore() && feat->loaded;
-				}),
-				std::back_inserter(menuList));
+	//		menuList.push_back("Features"s);
+	//		std::ranges::copy(
+	//			sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
+	//				return !feat->IsCore() && feat->loaded;
+	//			}),
+	//			std::back_inserter(menuList));
 
-			auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
-				return !feat->loaded;
-			});
-			if (std::ranges::distance(unloadedFeatures) != 0) {
-				menuList.push_back("Unloaded Features"s);
-				std::ranges::copy(unloadedFeatures, std::back_inserter(menuList));
-			}
+	//		auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
+	//			return !feat->loaded;
+	//		});
+	//		if (std::ranges::distance(unloadedFeatures) != 0) {
+	//			menuList.push_back("Unloaded Features"s);
+	//			std::ranges::copy(unloadedFeatures, std::back_inserter(menuList));
+	//		}
 
-			ImGui::TableNextColumn();
-			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-			ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4());
-			if (ImGui::BeginListBox("##MenusList", { -FLT_MIN, -FLT_MIN })) {
-				ImGui::PopStyleVar();
-				ImGui::PopStyleColor();
-				for (size_t i = 0; i < menuList.size(); i++) {
-					std::visit(ListMenuVisitor{ i }, menuList[i]);
-				}
-				ImGui::EndListBox();
-			}
+	//		ImGui::TableNextColumn();
+	//		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+	//		ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4());
+	//		if (ImGui::BeginListBox("##MenusList", { -FLT_MIN, -FLT_MIN })) {
+	//			ImGui::PopStyleVar();
+	//			ImGui::PopStyleColor();
+	//			for (size_t i = 0; i < menuList.size(); i++) {
+	//				std::visit(ListMenuVisitor{ i }, menuList[i]);
+	//			}
+	//			ImGui::EndListBox();
+	//		}
 
-			ImGui::TableNextColumn();
+	//		ImGui::TableNextColumn();
 
-			if (selectedMenu < menuList.size()) {
-				std::visit(DrawMenuVisitor{}, menuList[selectedMenu]);
-			} else {
-				ImGui::TextDisabled("Please select an item on the left.");
-			}
+	//		if (selectedMenu < menuList.size()) {
+	//			std::visit(DrawMenuVisitor{}, menuList[selectedMenu]);
+	//		} else {
+	//			ImGui::TextDisabled("Please select an item on the left.");
+	//		}
 
-			ImGui::EndTable();
-		}
-		ImGui::EndChild();
+	//		ImGui::EndTable();
+	//	}
+	//	ImGui::EndChild();
 
-		ImGui::Spacing();
-		ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
-		ImGui::Spacing();
+	//	ImGui::Spacing();
+	//	ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, 3.0f);
+	//	ImGui::Spacing();
 
-		DrawFooter();
-	}
-	ImGui::End();
+	//	DrawFooter();
+	//}
+//	ImGui::End();
 }
 
 void Menu::DrawGeneralSettings()
@@ -1037,8 +1040,8 @@ void Menu::DrawOverlay()
 	ImGui_ImplWin32_NewFrame();
 	ImGui::NewFrame();
 
-	ImGuiStyle oldStyle = ImGui::GetStyle();
-	SetupImGuiStyle();
+	//ImGuiStyle oldStyle = ImGui::GetStyle();
+	//SetupImGuiStyle();
 
 	uint64_t totalShaders = 0;
 	uint64_t compiledShaders = 0;
@@ -1110,8 +1113,8 @@ void Menu::DrawOverlay()
 		ImGui::End();
 	}
 
-	ImGuiStyle& style = ImGui::GetStyle();
-	style = oldStyle;
+//	ImGuiStyle& style = ImGui::GetStyle();
+//	style = oldStyle;
 
 	ImGui::Render();
 	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
