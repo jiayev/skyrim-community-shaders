@@ -374,7 +374,7 @@ void DoF::Draw(TextureInfo& inout_tex)
         if (settings.consoleSelection)
             if (consoleRef && !consoleRef->IsDisabled() && !consoleRef->IsDeleted() && consoleRef->Is3DLoaded()) {
                 currentRef = consoleRef->formID;
-                targetFocusDistanceGame = GetDistanceToReference(static_cast<RE::TESObjectREFR*>(consoleRef));
+                targetFocusDistanceGame = GetDistanceToReference(consoleRef);
                 targetFocusEnabled = true;
             }
             else {
