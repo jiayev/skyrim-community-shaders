@@ -1,8 +1,8 @@
 #pragma once
 
 #include "Buffer.h"
-#include "Widget.h"
 #include "Weather/WeatherWidget.h"
+#include "Widget.h"
 
 class EditorWindow
 {

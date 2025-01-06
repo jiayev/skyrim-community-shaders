@@ -24,7 +24,7 @@ void EditorWindow::ShowObjectsWindow()
 void EditorWindow::ShowViewportWindow()
 {
 	ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);  // Center window
-	
+
 	if (ImGui::BeginTabBar("ViewportTabBar")) {
 		if (ImGui::BeginTabItem("Viewport")) {
 			// Top bar
@@ -78,7 +78,6 @@ void EditorWindow::ShowWidgetWindow()
 	ImGui::Begin("Tabs View");
 
 	if (ImGui::BeginTabBar("##tabs")) {
-
 		std::unordered_set<Widget*> widgetsToRemove;
 
 		for (int i = (int)activeWidgets.size() - 1; i > -1; i--) {
@@ -129,8 +128,7 @@ void EditorWindow::SetupResources()
 	auto dataHandler = RE::TESDataHandler::GetSingleton();
 	auto& weatherArray = dataHandler->GetFormArray<RE::TESWeather>();
 
-	for (auto weather : weatherArray)
-	{
+	for (auto weather : weatherArray) {
 		auto widget = new WeatherWidget(weather);
 		widgets.push_back(widget);
 	}
@@ -145,11 +143,10 @@ void EditorWindow::Draw()
 	framebuffer.SRV->GetResource(&resource);
 
 	if (!tempTexture) {
-
 		D3D11_TEXTURE2D_DESC texDesc{};
 		((ID3D11Texture2D*)resource)->GetDesc(&texDesc);
 
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{}; 
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 		framebuffer.SRV->GetDesc(&srvDesc);
 
 		tempTexture = new Texture2D(texDesc);

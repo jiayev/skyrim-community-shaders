@@ -550,7 +550,7 @@ void Menu::DrawSettings()
 
 	//	DrawFooter();
 	//}
-//	ImGui::End();
+	//	ImGui::End();
 }
 
 void Menu::DrawGeneralSettings()
@@ -1113,8 +1113,8 @@ void Menu::DrawOverlay()
 		ImGui::End();
 	}
 
-//	ImGuiStyle& style = ImGui::GetStyle();
-//	style = oldStyle;
+	//	ImGuiStyle& style = ImGui::GetStyle();
+	//	style = oldStyle;
 
 	ImGui::Render();
 	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
