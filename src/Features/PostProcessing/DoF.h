@@ -29,6 +29,7 @@ struct DoF : public PostProcessFeature
         float PostBlurSmoothing = 0.0f;
 		bool  targetFocus = false;
 		float targetFocusFocalLength = 50.0f;
+        bool consoleSelection = false;
     } settings;
 
     struct alignas(16) DoFCB
@@ -106,6 +107,8 @@ struct DoF : public PostProcessFeature
 	//float targetFocusPercent;
 	bool GetTargetLockEnabled();
 	float GetDistanceToLockedTarget();
+
+    uint currentRef = 0;
 
 	TDM_API::IVTDM2* g_TDM = nullptr;
 };
