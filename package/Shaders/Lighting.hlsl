@@ -15,7 +15,12 @@
 #endif
 
 #if defined(HAIR)
-#	define TRUE_PBR
+// #	define TRUE_PBR
+#endif
+
+#if (defined(HAIR) || defined(SKIN)) && defined(TRUE_PBR)
+#	undef ENVMAP
+#	undef MULTI_LAYER_PARALLAX
 #endif
 
 // #if defined(EYE)
@@ -75,7 +80,7 @@ struct VS_OUTPUT
 	precise
 #endif  // ENVMAP
 		float3 InputPosition : TEXCOORD4;
-#if defined(SKINNED) || !defined(MODELSPACENORMALS)
+#if defined(SKINNED) || !defined(MODELSPACENORMALS) || (defined(TRUE_PBR) && defined(MODELSPACENORMALS))
 	float3 TBN0 : TEXCOORD1;
 	float3 TBN1 : TEXCOORD2;
 	float3 TBN2 : TEXCOORD3;
@@ -263,7 +268,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float3x3 boneRSMatrix = Skinned::GetBoneRSMatrix(Bones, actualIndices, input.BoneWeights);
 #	endif
 
-#	if !defined(MODELSPACENORMALS)
+#	if !defined(MODELSPACENORMALS) || (defined(TRUE_PBR) && defined(MODELSPACENORMALS))
 	float3x3 tbn = float3x3(
 		float3(input.Position.w, input.Normal.w * 2 - 1, input.Bitangent.w * 2 - 1),
 		input.Bitangent.xyz * 2.0.xxx + -1.0.xxx,
@@ -965,7 +970,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		undef WETNESS_EFFECTS
 #	endif
 
-#	if defined(EXTENDED_MATERIALS) && !defined(LOD) && (defined(PARALLAX) || defined(LANDSCAPE) || defined(ENVMAP) || defined(TRUE_PBR))
+#	if defined(EXTENDED_MATERIALS) && !defined(LOD) && (defined(PARALLAX) || defined(LANDSCAPE) || defined(ENVMAP) || defined(TRUE_PBR)) && !defined(SKIN) && !defined(HAIR)
 #		define EMAT
 #	endif
 
@@ -1038,7 +1043,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 viewDirection = normalize(input.ViewVector.xyz);
 	float3 worldSpaceViewDirection = -normalize(input.WorldPosition.xyz);
 
-#	if defined(SKINNED) || !defined(MODELSPACENORMALS)
+#	if defined(SKINNED) || !defined(MODELSPACENORMALS) || (defined(TRUE_PBR) && defined(MODELSPACENORMALS))
 	float3x3 tbn = float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz);
 
 #		if !defined(TREE_ANIM) && !defined(LOD)
@@ -1400,7 +1405,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 #	if defined(HAIR) && defined(TRUE_PBR)
-	baseColor.xyz = pow(baseColor.xyz, 2.4) * 3.14;
+	baseColor.xyz = saturate(pow(baseColor.xyz, 2.4));
 #	endif
 
 #	if defined(LANDSCAPE)
@@ -1709,11 +1714,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	pbrSurfaceProperties.AO = CalculateApproximateAO(baseSkinColor, uv, 20.0) * 0.5 + 0.5;
 	pbrSurfaceProperties.F0 = 0.028;
 #		elif defined(HAIR)
-	pbrSurfaceProperties.Roughness = 0.5;
+	pbrSurfaceProperties.Roughness = 0.3;
 	pbrSurfaceProperties.Metallic = 0;
-	pbrSurfaceProperties.AO = CalculateApproximateAO(baseSkinColor, uv, 1);
-	// pbrSurfaceProperties.Roughness -= pbrSurfaceProperties.AO * 0.25;
-	pbrSurfaceProperties.F0 = 0.047;
+	pbrSurfaceProperties.AO = CalculateApproximateAO(baseSkinColor, uv, 5);
+	// pbrSurfaceProperties.AO = 1;
+	pbrSurfaceProperties.F0 = 0.045;
 #		elif defined(EYE)
 	pbrSurfaceProperties.Roughness = 1.0 - TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).x;
 	pbrSurfaceProperties.Metallic = 0;
@@ -1751,6 +1756,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		pbrSurfaceProperties.SubsurfaceColor = baseColor.xyz;
 		pbrSurfaceProperties.Thickness = 0.2;
 #			endif
+#			if !defined(SKIN) && !defined(HAIR)
 	[branch] if ((PBRFlags & PBR::Flags::Subsurface) != 0)
 	{
 		pbrSurfaceProperties.SubsurfaceColor = PBRParams2.xyz;
@@ -1813,6 +1819,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 		pbrSurfaceProperties.FuzzWeight = lerp(pbrSurfaceProperties.FuzzWeight, 0, projectedMaterialWeight);
 	}
+#			endif  // !SKIN && !HAIR
 #		endif
 
 	float3 specularColorPBR = 0;
@@ -2492,7 +2499,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(HAIR)
 	float3 vertexColor = lerp(1, TintColor.xyz, input.Color.y);
 #		if defined(TRUE_PBR)
-	vertexColor = pow(vertexColor, 2.4) * 3.14;
+	vertexColor = saturate(pow(vertexColor, 2.4));
 #		endif
 #	else
 	float3 vertexColor = input.Color.xyz;
@@ -2858,6 +2865,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	//#if defined(DEFERRED)
 	//	psout.Albedo.xyz = pow(dot(wsn, flatWorldNormal), 8.0);
 	//#endif
+
+// #	if (defined(TRUE_PBR) || defined(HAIR)) && !defined(MODELSPACENORMALS)
+// 	psout.Diffuse.xyz = modelNormal.xyz;
+// #	endif
+// #	if (defined(TRUE_PBR) || defined(HAIR)) && defined(MODELSPACENORMALS)
+// 	psout.Diffuse.xyz = modelNormal.xyz;
+// #	endif
+// #	if defined(TRUE_PBR)
+// #		if defined(DEFERRED)
+// 	psout.Specular.xyz = float3(0, 0, 0);
+// 	psout.Albedo.xyz = float3(0, 0, 0);
+// #		endif
+// #	endif
 
 	return psout;
 }
