@@ -1752,10 +1752,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		pbrSurfaceProperties.SubsurfaceColor = float3(0.482, 0.169, 0.109);
 		pbrSurfaceProperties.Thickness = 0.5;
 #			endif
-#			if defined(HAIR)
-		pbrSurfaceProperties.SubsurfaceColor = baseColor.xyz;
-		pbrSurfaceProperties.Thickness = 0.2;
-#			endif
 #			if !defined(SKIN) && !defined(HAIR)
 	[branch] if ((PBRFlags & PBR::Flags::Subsurface) != 0)
 	{

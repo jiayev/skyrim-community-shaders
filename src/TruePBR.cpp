@@ -39,6 +39,16 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	specularLevel,
 	glintParameters);
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	TruePBR::DebugSkinHairSettings,
+	EnablePBRSkin,
+	EnablePBRHair,
+	SkinRoughnessScale,
+	SkinSpecularLevel,
+	SkinSubsurfaceScale,
+	HairRoughnessScale,
+	HairSpecularLevel);
+
 namespace PNState
 {
 	void ReadPBRRecordConfigs(const std::string& rootPath, std::function<void(const std::string&, const json&)> recordReader)
@@ -100,6 +110,20 @@ void SetupPBRLandscapeTextureParameters(BSLightingShaderMaterialPBRLandscape& ma
 void TruePBR::DrawSettings()
 {
 	if (ImGui::CollapsingHeader("PBR", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
+		if (ImGui::TreeNodeEx("Experimental Vanilla to PBR Skin / Hair", ImGuiTreeNodeFlags_DefaultOpen)) {
+			ImGui::Checkbox("Enable Skin", &debugSkinHairSettings.EnablePBRSkin);
+			if (debugSkinHairSettings.EnablePBRSkin) {
+				ImGui::SliderFloat("Skin Roughness", &debugSkinHairSettings.SkinRoughnessScale, 0.f, 1.f, "%.3f");
+				ImGui::SliderFloat("Skin Specular Level", &debugSkinHairSettings.SkinSpecularLevel, 0.f, 0.1f, "%.4f");
+				ImGui::SliderFloat("Skin Subsurface Scale", &debugSkinHairSettings.SkinSubsurfaceScale, 0.f, 1.f, "%.3f");
+			}
+			ImGui::Checkbox("Enable Hair", &debugSkinHairSettings.EnablePBRHair);
+			if (debugSkinHairSettings.EnablePBRHair) {
+				ImGui::SliderFloat("Hair Roughness", &debugSkinHairSettings.HairRoughnessScale, 0.f, 1.f, "%.3f");
+				ImGui::SliderFloat("Hair Specular Level", &debugSkinHairSettings.HairSpecularLevel, 0.f, 0.1f, "%.4f");
+			}
+		}
+
 		if (ImGui::TreeNodeEx("Texture Set Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
 			if (ImGui::BeginCombo("Texture Set", selectedPbrTextureSetName.c_str())) {
 				for (auto& [textureSetName, textureSet] : pbrTextureSets) {
@@ -576,9 +600,25 @@ struct BSLightingShaderProperty_LoadBinary
 				pbrMaterial->loadedWithFeature = feature;
 				material = pbrMaterial;
 				isPbr = true;
+			// } else {
+			// 	material = RE::BSLightingShaderMaterialBase::CreateMaterial(feature);
+			// }
+			} else if (property->GetBaseMaterial()->GetFeature() == RE::BSShaderMaterial::Feature::kHairTint && TruePBR::debugSkinHairSettings.EnablePBRHair) {
+				auto* pbrMaterial = BSLightingShaderMaterialPBR::Make();
+				pbrMaterial->loadedWithFeature = feature;
+				pbrMaterial->pbrFlags.set(PBRFlags::HairMarschner);
+				material = pbrMaterial;
+				isPbr = true;
+			} else if ((property->GetBaseMaterial()->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGen || property->GetBaseMaterial()->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGenRGBTint) && TruePBR::debugSkinHairSettings.EnablePBRSkin) {
+				auto* pbrMaterial = BSLightingShaderMaterialPBR::Make();
+				pbrMaterial->loadedWithFeature = feature;
+				pbrMaterial->pbrFlags.set(PBRFlags::Subsurface);
+				material = pbrMaterial;
+				isPbr = true;
 			} else {
 				material = RE::BSLightingShaderMaterialBase::CreateMaterial(feature);
 			}
+			
 			property->LinkMaterial(nullptr, false);
 			property->material = material;
 		}
