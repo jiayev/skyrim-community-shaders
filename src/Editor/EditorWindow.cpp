@@ -6,7 +6,7 @@ void EditorWindow::ShowObjectsWindow()
 {
 	ImGui::Begin("Object List", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);  // Center window
 
-    // Create two columns: left for categories, right for objects
+	// Create two columns: left for categories, right for objects
 	ImGui::Columns(2, nullptr, true);
 
 	// Static variable to track the selected category
@@ -181,7 +181,7 @@ void EditorWindow::SetupResources()
 	for (auto weather : weatherArray) {
 		std::string editorID = weather->GetFormEditorID();
 		auto widget = new WeatherWidget(weather);
-		widgets.push_back(widget);	
+		widgets.push_back(widget);
 	}
 }
 
