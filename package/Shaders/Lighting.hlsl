@@ -15,7 +15,7 @@
 #endif
 
 #if defined(HAIR)
-// #	define TRUE_PBR
+#	define TRUE_PBR
 #endif
 
 #if (defined(HAIR) || defined(SKIN)) && defined(TRUE_PBR)
@@ -1404,9 +1404,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	baseColor.xyz = pow(baseColor.xyz, 2.4) * 3.14;
 #	endif
 
-#	if defined(HAIR) && defined(TRUE_PBR)
-	baseColor.xyz = saturate(pow(baseColor.xyz, 2.4));
-#	endif
+// #	if defined(HAIR) && defined(TRUE_PBR)
+	// baseColor.xyz = saturate(pow(baseColor.xyz, 2.2));
+// #	endif
 
 #	if defined(LANDSCAPE)
 
@@ -2507,7 +2507,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(HAIR)
 	float3 vertexColor = lerp(1, TintColor.xyz, input.Color.y);
 #		if defined(TRUE_PBR)
-	vertexColor = saturate(pow(vertexColor, 2.4));
+	vertexColor = saturate(pow(vertexColor, 2.2));
 #		endif
 #	else
 	float3 vertexColor = input.Color.xyz;
