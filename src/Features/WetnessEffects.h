@@ -67,9 +67,9 @@ public:
 		bool EnablePuddleOverride = false;
 		bool EnableRainOverride = false;
 		bool EnableIntExOverride = false;
-		float2 WetnessOverride = 0.0f;
-		float2 PuddleWetnessOverride = 0.0f;
-		float2 RainOverride = 0.0f;
+		float2 WetnessOverride = float2(0.0f, 0.0f);
+		float2 PuddleWetnessOverride = float2(0.0f, 0.0f);
+		float2 RainOverride = float2(0.0f, 0.0f);
 	} debugSettings;
 
 	Settings settings;
