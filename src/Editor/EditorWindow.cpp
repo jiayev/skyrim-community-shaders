@@ -65,7 +65,7 @@ void EditorWindow::ShowViewportWindow()
 	auto calendar = RE::Calendar::GetSingleton();
 	if (calendar)
 		ImGui::SliderFloat("##ViewportSlider", &calendar->gameHour->value, 0.0f, 23.99f, "Time: %.2f");
-				
+
 	// The size of the image in ImGui																														   // Get the available space in the current window
 	ImVec2 availableSpace = ImGui::GetContentRegionAvail();
 
@@ -98,8 +98,7 @@ void EditorWindow::ShowWidgetWindow()
 			auto viewportWidth = width * 0.5f;                // Make the viewport take up 50% of the width
 			auto sideWidth = (width - viewportWidth) / 2.0f;  // Divide the remaining width equally between the side windows
 			ImGui::SetNextWindowSize(ImVec2(sideWidth, ImGui::GetIO().DisplaySize.y));
-			if (ImGui::Begin(widget->GetName().c_str(), &widget->open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar)) 
-			{		
+			if (ImGui::Begin(widget->GetName().c_str(), &widget->open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar)) {
 				if (ImGui::BeginMenuBar()) {
 					if (ImGui::BeginMenu("Menu")) {
 						ImGui::EndMenu();
@@ -124,7 +123,7 @@ void EditorWindow::RenderUI()
 
 	context->ClearRenderTargetView(framebuffer.RTV, (float*)&ImGui::GetStyle().Colors[ImGuiCol_WindowBg]);
 
-    if (ImGui::BeginMainMenuBar()) {
+	if (ImGui::BeginMainMenuBar()) {
 		if (ImGui::BeginMenu("File")) {
 			ImGui::EndMenu();
 		}
