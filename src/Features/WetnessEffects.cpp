@@ -33,8 +33,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	WetnessEffects::DebugSettings,
 	EnableWetnessOverride,
-	ExteriorWetnessOverride,
-	InteriorWetnessOverride,
+	EnablePuddleOverride,
+	EnableRainOverride,
+	EnableIntExOverride,
+	WetnessOverride,
 	PuddleWetnessOverride,
 	RainOverride)
 
@@ -162,10 +164,25 @@ void WetnessEffects::DrawSettings()
 
 	if (ImGui::TreeNodeEx("Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Wetness Override", &debugSettings.EnableWetnessOverride);
-		ImGui::SliderFloat("Exterior Wetness Override", &debugSettings.ExteriorWetnessOverride, 0.0f, 2.0f);
-		ImGui::SliderFloat("Interior Wetness Override", &debugSettings.InteriorWetnessOverride, 0.0f, 2.0f);
-		ImGui::SliderFloat("Puddle Wetness Override", &debugSettings.PuddleWetnessOverride, 0.0f, 2.0f);
-		ImGui::SliderFloat("Rain Override", &debugSettings.RainOverride, 0.0f, 1.0f);
+		ImGui::Checkbox("Enable Puddle Override", &debugSettings.EnablePuddleOverride);
+		ImGui::Checkbox("Enable Rain Override", &debugSettings.EnableRainOverride);
+		ImGui::Checkbox("Enable Interior/Exterior Override", &debugSettings.EnableIntExOverride);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"If disabled, will only use the exterior value. ");
+		}
+
+		if (debugSettings.EnableWetnessOverride) {
+			ImGui::SliderFloat2("Wetness In/Exterior", &debugSettings.WetnessOverride.x, 0.0f, 2.0f);
+		}
+
+		if (debugSettings.EnablePuddleOverride) {
+			ImGui::SliderFloat2("Puddle Wetness In/Exterior", &debugSettings.PuddleWetnessOverride.x, 0.0f, 2.0f);
+		}
+
+		if (debugSettings.EnableRainOverride) {
+			ImGui::SliderFloat2("Rain In/Exterior", &debugSettings.RainOverride.x, 0.0f, 1.0f);
+		}
 		ImGui::TreePop();
 	}
 }
@@ -180,7 +197,7 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
 
 	if (settings.EnableWetnessEffects) {
 		if (auto sky = RE::Sky::GetSingleton()) {
-			if (sky->mode.get() == RE::Sky::Mode::kFull && !debugSettings.EnableWetnessOverride) {
+			if (sky->mode.get() == RE::Sky::Mode::kFull) {
 				if (auto precip = sky->precip) {
 					float currentRaining = 0.0f;
 					float lastRaining = 0.0f;
@@ -259,11 +276,26 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
 
 				data.Wetness = wetness;
 				data.PuddleWetness = puddleWetness;
+				if (debugSettings.EnableWetnessOverride) {
+					data.Wetness = debugSettings.WetnessOverride.y;
+				}
+				if (debugSettings.EnablePuddleOverride) {
+					data.PuddleWetness = debugSettings.PuddleWetnessOverride.y;
+				}
+				if (debugSettings.EnableRainOverride) {
+					data.Raining = debugSettings.RainOverride.y;
+				}
 			}
 			else {
-				data.Wetness = sky->mode.get() == RE::Sky::Mode::kFull ? debugSettings.ExteriorWetnessOverride : debugSettings.InteriorWetnessOverride;
-				data.PuddleWetness = debugSettings.PuddleWetnessOverride;
-				data.Raining = debugSettings.RainOverride;
+				if (debugSettings.EnableWetnessOverride) {
+					data.Wetness = debugSettings.EnableIntExOverride ? debugSettings.WetnessOverride.x : debugSettings.WetnessOverride.y;
+				}
+				if (debugSettings.EnablePuddleOverride) {
+					data.PuddleWetness = debugSettings.EnableIntExOverride ? debugSettings.PuddleWetnessOverride.x : debugSettings.PuddleWetnessOverride.y;
+				}
+				if (debugSettings.EnableRainOverride) {
+					data.Raining = debugSettings.EnableIntExOverride ? debugSettings.RainOverride.x : debugSettings.RainOverride.y;
+				}
 			}
 		}
 		

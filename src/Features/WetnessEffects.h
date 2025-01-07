@@ -64,11 +64,12 @@ public:
 	struct DebugSettings
 	{
 		bool EnableWetnessOverride = false;
-		uint8_t pad0[3];
-		float ExteriorWetnessOverride = 0.0f;
-		float InteriorWetnessOverride = 0.0f;
-		float PuddleWetnessOverride = 0.0f;
-		float RainOverride = 0.0f;
+		bool EnablePuddleOverride = false;
+		bool EnableRainOverride = false;
+		bool EnableIntExOverride = false;
+		float2 WetnessOverride = 0.0f;
+		float2 PuddleWetnessOverride = 0.0f;
+		float2 RainOverride = 0.0f;
 	} debugSettings;
 
 	Settings settings;
