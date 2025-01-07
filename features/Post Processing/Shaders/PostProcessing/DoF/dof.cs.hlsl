@@ -472,8 +472,11 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, SamplerState samp, floa
 void CS_UpdateFocus(uint2 DTid : SV_DispatchThreadID)
 {
     float depth = AutoFocus? GetDepth(FocusCoord): ManualFocusPlane;
-
-    RWFocus[DTid] = lerp(TexPreviousFocus.SampleLevel(DepthSampler, float2(0.5f, 0.5f), 0), depth, TransitionSpeed);
+    float previousFocus = TexPreviousFocus.SampleLevel(DepthSampler, float2(0.5f, 0.5f), 0);
+    if (depth + previousFocus < 2 * EPSILON)
+        RWFocus[DTid] = 1.0f;
+    else
+    RWFocus[DTid] = lerp(previousFocus, depth, TransitionSpeed);
 }
 
 [numthreads(8, 8, 1)]
