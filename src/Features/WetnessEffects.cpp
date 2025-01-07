@@ -30,6 +30,16 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RippleBreadth,
 	RippleLifetime)
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	WetnessEffects::DebugSettings,
+	EnableWetnessOverride,
+	EnablePuddleOverride,
+	EnableRainOverride,
+	EnableIntExOverride,
+	WetnessOverride,
+	PuddleWetnessOverride,
+	RainOverride)
+
 void WetnessEffects::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Wetness Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -151,6 +161,30 @@ void WetnessEffects::DrawSettings()
 
 	ImGui::Spacing();
 	ImGui::Spacing();
+
+	if (ImGui::TreeNodeEx("Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Enable Wetness Override", &debugSettings.EnableWetnessOverride);
+		ImGui::Checkbox("Enable Puddle Override", &debugSettings.EnablePuddleOverride);
+		ImGui::Checkbox("Enable Rain Override", &debugSettings.EnableRainOverride);
+		ImGui::Checkbox("Enable Interior/Exterior Override", &debugSettings.EnableIntExOverride);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"If disabled, will only use the exterior value. ");
+		}
+
+		if (debugSettings.EnableWetnessOverride) {
+			ImGui::SliderFloat2("Wetness In/Exterior", &debugSettings.WetnessOverride.x, 0.0f, 2.0f);
+		}
+
+		if (debugSettings.EnablePuddleOverride) {
+			ImGui::SliderFloat2("Puddle Wetness In/Exterior", &debugSettings.PuddleWetnessOverride.x, 0.0f, 2.0f);
+		}
+
+		if (debugSettings.EnableRainOverride) {
+			ImGui::SliderFloat2("Rain In/Exterior", &debugSettings.RainOverride.x, 0.0f, 1.0f);
+		}
+		ImGui::TreePop();
+	}
 }
 
 WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
@@ -239,10 +273,32 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
 				float wetness = std::min(1.0f, wetnessCurrentWeather + wetnessLastWeather);
 				float puddleWetness = std::min(1.0f, puddleCurrentWeather + puddleLastWeather);
 
+
 				data.Wetness = wetness;
 				data.PuddleWetness = puddleWetness;
+				if (debugSettings.EnableWetnessOverride) {
+					data.Wetness = debugSettings.WetnessOverride.y;
+				}
+				if (debugSettings.EnablePuddleOverride) {
+					data.PuddleWetness = debugSettings.PuddleWetnessOverride.y;
+				}
+				if (debugSettings.EnableRainOverride) {
+					data.Raining = debugSettings.RainOverride.y;
+				}
+			}
+			else {
+				if (debugSettings.EnableWetnessOverride) {
+					data.Wetness = debugSettings.EnableIntExOverride ? debugSettings.WetnessOverride.x : debugSettings.WetnessOverride.y;
+				}
+				if (debugSettings.EnablePuddleOverride) {
+					data.PuddleWetness = debugSettings.EnableIntExOverride ? debugSettings.PuddleWetnessOverride.x : debugSettings.PuddleWetnessOverride.y;
+				}
+				if (debugSettings.EnableRainOverride) {
+					data.Raining = debugSettings.EnableIntExOverride ? debugSettings.RainOverride.x : debugSettings.RainOverride.y;
+				}
 			}
 		}
+		
 	}
 
 	static size_t rainTimer = 0;  // size_t for precision
@@ -276,13 +332,20 @@ void WetnessEffects::Prepass()
 
 void WetnessEffects::LoadSettings(json& o_json)
 {
-	settings = o_json;
+    settings = o_json;
+
+    if (o_json.contains("DebugSettings")) {
+        debugSettings = o_json["DebugSettings"].get<DebugSettings>();
+    }
 }
 
 void WetnessEffects::SaveSettings(json& o_json)
 {
-	o_json = settings;
+    o_json = settings;
+
+    o_json["DebugSettings"] = debugSettings;
 }
+
 
 void WetnessEffects::RestoreDefaultSettings()
 {
