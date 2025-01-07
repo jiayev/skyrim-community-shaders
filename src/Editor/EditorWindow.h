@@ -16,7 +16,6 @@ public:
 	Texture2D* tempTexture;
 
 	std::vector<Widget*> widgets;
-	std::vector<Widget*> activeWidgets;
 
 	void ShowObjectsWindow();
 
