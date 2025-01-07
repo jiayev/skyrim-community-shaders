@@ -161,7 +161,7 @@ void EditorWindow::SetupResources()
 	for (auto weather : weatherArray) {
 		std::string editorID = weather->GetFormEditorID();
 		auto widget = new WeatherWidget(weather);
-		widgets.push_back(widget);	
+		widgets.push_back(widget);
 	}
 }
 
