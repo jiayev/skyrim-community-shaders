@@ -226,8 +226,8 @@ void Menu::Init(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceCon
 	ImGui_ImplWin32_Init(desc.OutputWindow);
 	ImGui_ImplDX11_Init(device, context);
 
-	auto& io = ImGui::GetIO();
-	io.FontGlobalScale = exp2(0.5f);
+	//auto& io = ImGui::GetIO();
+	//io.FontGlobalScale = exp2(0.5f);
 
 	{
 		winrt::com_ptr<IDXGIDevice> dxgiDevice;

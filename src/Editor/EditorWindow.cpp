@@ -4,20 +4,60 @@
 
 void EditorWindow::ShowObjectsWindow()
 {
-	ImGui::Begin("Object List");
-	for (int i = 0; i < widgets.size(); ++i) {
-		if (ImGui::Selectable(widgets[i]->GetName().c_str())) {
-			// Push to front
-			for (auto it = activeWidgets.begin(); it != activeWidgets.end();) {
-				if ((*it) == widgets[i]) {
-					it = activeWidgets.erase(it);
-				} else {
-					++it;
+	ImGui::Begin("Object List", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);  // Center window
+
+    // Create two columns: left for categories, right for objects
+	ImGui::Columns(2, nullptr, true);
+
+	// Static variable to track the selected category
+	static std::string selectedCategory = "Weathers";
+
+	// Left column: Categories
+	{
+		ImGui::BeginChild("Categories", ImVec2(0, 0), true);
+
+		// List of categories
+		const char* categories[] = { "Weathers", "Clouds" };
+		for (int i = 0; i < IM_ARRAYSIZE(categories); ++i) {
+			// Highlight the selected category
+			if (ImGui::Selectable(categories[i], selectedCategory == categories[i])) {
+				selectedCategory = categories[i];  // Update selected category
+			}
+		}
+
+		ImGui::EndChild();
+	}
+
+	// Switch to the right column
+	ImGui::NextColumn();
+
+	// Right column: Objects
+	{
+		ImGui::BeginChild("Objects", ImVec2(0, 0), true);
+
+		// Display objects based on the selected category
+		if (selectedCategory == "Weathers") {
+			for (int i = 0; i < widgets.size(); ++i) {
+				if (ImGui::Selectable(widgets[i]->GetName().c_str())) {
+					// Push to front
+					for (auto it = activeWidgets.begin(); it != activeWidgets.end();) {
+						if ((*it) == widgets[i]) {
+							it = activeWidgets.erase(it);
+						} else {
+							++it;
+						}
+					}
+					activeWidgets.push_back(widgets[i]);
 				}
 			}
-			activeWidgets.push_back(widgets[i]);
+		} else if (selectedCategory == "Clouds") {
+			ImGui::Text("Not implemented");
 		}
+
+		ImGui::EndChild();
 	}
+
+	// End the window
 	ImGui::End();
 }
 
@@ -75,7 +115,7 @@ void EditorWindow::ShowViewportWindow()
 
 void EditorWindow::ShowWidgetWindow()
 {
-	ImGui::Begin("Tabs View");
+	ImGui::Begin("Tabs View", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);  // Center window
 
 	if (ImGui::BeginTabBar("##tabs")) {
 		std::unordered_set<Widget*> widgetsToRemove;
@@ -107,19 +147,29 @@ void EditorWindow::ShowWidgetWindow()
 
 void EditorWindow::RenderUI()
 {
-	auto width = ImGui::GetIO().DisplaySize.x;
-	width /= 3.0f;
+	// Ensure global alpha is fully opaque
+	ImGui::GetStyle().Alpha = 1.0f;
 
+	// Set an opaque background color
+	ImGui::GetStyle().Colors[ImGuiCol_WindowBg].w = 1.0f;
+
+	auto width = ImGui::GetIO().DisplaySize.x;
+	auto viewportWidth = width * 0.5f;                // Make the viewport take up 50% of the width
+	auto sideWidth = (width - viewportWidth) / 2.0f;  // Divide the remaining width equally between the side windows
+
+	// Left window (Objects)
 	ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-	ImGui::SetNextWindowSize(ImVec2(width, ImGui::GetIO().DisplaySize.y));
+	ImGui::SetNextWindowSize(ImVec2(sideWidth, ImGui::GetIO().DisplaySize.y));
 	ShowObjectsWindow();
 
-	ImGui::SetNextWindowPos(ImVec2(width, 0), ImGuiCond_Always);
-	ImGui::SetNextWindowSize(ImVec2(width, ImGui::GetIO().DisplaySize.y));
+	// Middle window (Viewport, larger size)
+	ImGui::SetNextWindowPos(ImVec2(sideWidth, 0), ImGuiCond_Always);
+	ImGui::SetNextWindowSize(ImVec2(viewportWidth, ImGui::GetIO().DisplaySize.y));
 	ShowViewportWindow();
 
-	ImGui::SetNextWindowPos(ImVec2(width + width, 0), ImGuiCond_Always);
-	ImGui::SetNextWindowSize(ImVec2(width, ImGui::GetIO().DisplaySize.y));
+	// Right window (Widget)
+	ImGui::SetNextWindowPos(ImVec2(sideWidth + viewportWidth, 0), ImGuiCond_Always);
+	ImGui::SetNextWindowSize(ImVec2(sideWidth, ImGui::GetIO().DisplaySize.y));
 	ShowWidgetWindow();
 }
 
@@ -129,8 +179,9 @@ void EditorWindow::SetupResources()
 	auto& weatherArray = dataHandler->GetFormArray<RE::TESWeather>();
 
 	for (auto weather : weatherArray) {
+		std::string editorID = weather->GetFormEditorID();
 		auto widget = new WeatherWidget(weather);
-		widgets.push_back(widget);
+		widgets.push_back(widget);	
 	}
 }
 

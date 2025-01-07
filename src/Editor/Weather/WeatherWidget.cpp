@@ -2,7 +2,7 @@
 
 std::string WeatherWidget::GetName()
 {
-	return std::format("{} ({:X})", weather->GetFormEditorID(), weather->GetFormID());
+	return std::format("{} ({:08X})", weather->GetFormEditorID(), weather->GetFormID());
 }
 
 void WeatherWidget::DrawWidget()
