@@ -1705,20 +1705,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	PBR::SurfaceProperties pbrSurfaceProperties = PBR::InitSurfaceProperties();
 
 #		if defined(SKIN)
-# 			if defined(MODELSPACENORMALS)
-	pbrSurfaceProperties.Roughness = saturate(1.0 - pow(TexSpecularSampler.Sample(SampSpecularSampler, uv).x, 1 / 2.2) - 0.3);
-#			else
-	pbrSurfaceProperties.Roughness = saturate(1.0 - TexNormalSampler.Sample(SampNormalSampler, uv).w - 0.3);
-#			endif
+	pbrSurfaceProperties.Roughness = PBRParams1.x - glossiness;
 	pbrSurfaceProperties.Metallic = 0;
 	pbrSurfaceProperties.AO = CalculateApproximateAO(baseSkinColor, uv, 20.0) * 0.5 + 0.5;
-	pbrSurfaceProperties.F0 = 0.028;
+	pbrSurfaceProperties.F0 = PBRParams1.zzz;
 #		elif defined(HAIR)
-	pbrSurfaceProperties.Roughness = 0.3;
+	pbrSurfaceProperties.Roughness = PBRParams1.x - glossiness;
 	pbrSurfaceProperties.Metallic = 0;
 	pbrSurfaceProperties.AO = CalculateApproximateAO(baseSkinColor, uv, 5);
 	// pbrSurfaceProperties.AO = 1;
-	pbrSurfaceProperties.F0 = 0.045;
+	pbrSurfaceProperties.F0 = PBRParams1.zzz;
 #		elif defined(EYE)
 	pbrSurfaceProperties.Roughness = 1.0 - TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).x;
 	pbrSurfaceProperties.Metallic = 0;
@@ -1749,8 +1745,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 #			if defined(SKIN)
-		pbrSurfaceProperties.SubsurfaceColor = float3(0.482, 0.169, 0.109);
-		pbrSurfaceProperties.Thickness = 0.5;
+		pbrSurfaceProperties.SubsurfaceColor = PBRParams2.xyz;
+		pbrSurfaceProperties.Thickness = PBRParams2.w;
 #			endif
 #			if !defined(SKIN) && !defined(HAIR)
 	[branch] if ((PBRFlags & PBR::Flags::Subsurface) != 0)
