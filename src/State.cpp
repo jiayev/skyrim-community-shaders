@@ -92,6 +92,7 @@ void State::Reset()
 	for (auto* feature : Feature::GetFeatureList())
 		if (feature->loaded)
 			feature->Reset();
+	TruePBR::GetSingleton()->ResetDebugSkinHairSettings();
 	if (!RE::UI::GetSingleton()->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
 	lastModifiedPixelDescriptor = 0;
@@ -260,6 +261,15 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			}
 		}
 
+		auto truePBR = TruePBR::GetSingleton();
+		auto& truePBRJson = settings[truePBR->GetShortName()];
+		if (truePBRJson.is_object()) {
+			logger::info("Loading TruePBR debug skin/hair settings");
+			truePBR->LoadDebugSkinHairSettings(truePBRJson);
+		} else {
+			logger::warn("Missing debug skin/hair settings for TruePBR, using default.");
+		}
+
 		auto upscaling = Upscaling::GetSingleton();
 		auto& upscalingJson = settings[upscaling->GetShortName()];
 		if (upscalingJson.is_object()) {
@@ -349,6 +359,10 @@ void State::Save(ConfigMode a_configMode)
 	general["Enable Async"] = shaderCache.IsAsync();
 
 	settings["General"] = general;
+
+	auto truePBR = TruePBR::GetSingleton();
+	auto& truePBRJson = settings[truePBR->GetShortName()];
+	truePBR->SaveDebugSkinHairSettings(truePBRJson);
 
 	auto upscaling = Upscaling::GetSingleton();
 	auto& upscalingJson = settings[upscaling->GetShortName()];

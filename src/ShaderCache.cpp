@@ -68,6 +68,13 @@ namespace SIE
 					defines[lastIndex++] = { "GLINT", nullptr };
 				}
 			}
+			if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::TruePbrDebugHair)) != 0) {
+				defines[lastIndex++] = { "PBR_HAIR", nullptr };
+			}
+			if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::TruePbrDebugSkin)) != 0) {
+				defines[lastIndex++] = { "PBR_SKIN", nullptr };
+			}
+			
 
 			for (auto* feature : Feature::GetFeatureList()) {
 				if (feature->loaded && feature->HasShaderDefine(RE::BSShader::Type::Lighting)) {
