@@ -138,8 +138,7 @@ void EditorWindow::ShowWidgetWindow()
 			auto viewportWidth = width * 0.5f;                // Make the viewport take up 50% of the width
 			auto sideWidth = (width - viewportWidth) / 2.0f;  // Divide the remaining width equally between the side windows
 			ImGui::SetNextWindowSize(ImVec2(sideWidth, ImGui::GetIO().DisplaySize.y));
-			if (ImGui::Begin(widget->GetNameWithID().c_str(), &widget->open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar)) 
-			{		
+			if (ImGui::Begin(widget->GetNameWithID().c_str(), &widget->open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar)) {
 				if (ImGui::BeginMenuBar()) {
 					if (ImGui::BeginMenu("Menu")) {
 						ImGui::EndMenu();
@@ -152,7 +151,7 @@ void EditorWindow::ShowWidgetWindow()
 		}
 	}
 
-		for (int i = 0; i < (int)worldSpaceWidgets.size(); i++) {
+	for (int i = 0; i < (int)worldSpaceWidgets.size(); i++) {
 		auto widget = worldSpaceWidgets[i];
 		if (widget->IsOpen()) {
 			auto width = ImGui::GetIO().DisplaySize.x;

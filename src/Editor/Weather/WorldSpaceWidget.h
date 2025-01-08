@@ -13,7 +13,7 @@ public:
 
 		name = worldSpace->GetFormEditorID();
 	}
-	
+
 	~WorldSpaceWidget();
 
 	WorldSpaceWidget(const WorldSpaceWidget& other)

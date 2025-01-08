@@ -2,10 +2,10 @@
 
 #include "Buffer.h"
 
-#include "Widget.h"
+#include "Weather/CloudsWidget.h"
 #include "Weather/WeatherWidget.h"
 #include "Weather/WorldSpaceWidget.h"
-#include "Weather/CloudsWidget.h"
+#include "Widget.h"
 
 class EditorWindow
 {
