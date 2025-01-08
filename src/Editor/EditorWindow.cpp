@@ -9,6 +9,10 @@ void EditorWindow::ShowObjectsWindow()
 	// Static variable to track the selected category
 	static std::string selectedCategory = "Weathers";
 
+	// Static variable to track renaming
+	static int renameIndex = -1;
+	static char renameBuffer[256] = "";
+
 	// Create a table with two columns
 	if (ImGui::BeginTable("ObjectTable", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInner | ImGuiTableFlags_NoHostExtendX)) {
 		// Set up column widths
@@ -22,7 +26,7 @@ void EditorWindow::ShowObjectsWindow()
 		ImGui::BeginChild("Categories");
 
 		// List of categories
-		const char* categories[] = { "Weathers", "Clouds" };
+		const char* categories[] = { "Weathers", "WorldSpace", "Clouds" };
 		for (int i = 0; i < IM_ARRAYSIZE(categories); ++i) {
 			// Highlight the selected category
 			if (ImGui::Selectable(categories[i], selectedCategory == categories[i])) {
@@ -36,16 +40,52 @@ void EditorWindow::ShowObjectsWindow()
 		ImGui::TableSetColumnIndex(1);
 		ImGui::BeginChild("Objects");
 
+		// Helper lambda for adding a new widget
+		auto addNewWidget = [&]() {
+			if (selectedCategory == "Weathers") {
+			} else if (selectedCategory == "WorldSpace") {
+			} else if (selectedCategory == "Clouds") {
+				cloudsWidgets.push_back(new CloudsWidget());
+			}
+		};
+
 		// Display objects based on the selected category
-		if (selectedCategory == "Weathers") {
-			for (int i = 0; i < widgets.size(); ++i) {
+		auto& widgets = selectedCategory == "Weathers" ? weatherWidgets : selectedCategory == "WorldSpace" ? worldSpaceWidgets :
+		                                                                                                     cloudsWidgets;
+
+		for (int i = 0; i < widgets.size(); ++i) {
+			ImGui::PushID(widgets[i]->GetID());
+			// Handle renaming mode
+			if (renameIndex == i) {
+				if (ImGui::InputText("##rename", renameBuffer, sizeof(renameBuffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
+					widgets[i]->SetName(renameBuffer);  // Apply new name
+					renameIndex = -1;                   // Exit rename mode
+				}
+			} else {
+				// Display selectable item
 				if (ImGui::Selectable(widgets[i]->GetName().c_str(), widgets[i]->open, ImGuiSelectableFlags_AllowDoubleClick)) {
-					if (ImGui::IsMouseDoubleClicked(0))
+					if (ImGui::IsMouseDoubleClicked(0)) {
 						widgets[i]->open = true;
+					}
+				}
+				// Open context menu for the item
+				if (ImGui::BeginPopupContextItem(("ItemContextMenu" + std::to_string(i)).c_str())) {
+					if (ImGui::MenuItem("New")) {
+						addNewWidget();
+					}
+					if (ImGui::MenuItem("Duplicate")) {
+						Widget* duplicateWidget = widgets[i]->Clone();
+						widgets.push_back(duplicateWidget);
+					}
+					if (ImGui::MenuItem("Rename")) {
+						renameIndex = i;  // Enter rename mode
+						strncpy(renameBuffer, widgets[i]->GetEditableName().c_str(), sizeof(renameBuffer));
+						renameBuffer[sizeof(renameBuffer) - 1] = '\0';  // Ensure null termination
+					}
+					ImGui::EndPopup();
 				}
 			}
-		} else if (selectedCategory == "Clouds") {
-			ImGui::Text("Not implemented");
+			ImGui::PopID();
 		}
 
 		ImGui::EndChild();
@@ -91,15 +131,55 @@ void EditorWindow::ShowViewportWindow()
 
 void EditorWindow::ShowWidgetWindow()
 {
-	for (int i = 0; i < (int)widgets.size(); i++) {
-		auto widget = widgets[i];
+	for (int i = 0; i < (int)weatherWidgets.size(); i++) {
+		auto widget = weatherWidgets[i];
 		if (widget->IsOpen()) {
 			auto width = ImGui::GetIO().DisplaySize.x;
 			auto viewportWidth = width * 0.5f;                // Make the viewport take up 50% of the width
 			auto sideWidth = (width - viewportWidth) / 2.0f;  // Divide the remaining width equally between the side windows
 			ImGui::SetNextWindowSize(ImVec2(sideWidth, ImGui::GetIO().DisplaySize.y));
-			if (ImGui::Begin(widget->GetName().c_str(), &widget->open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar)) 
+			if (ImGui::Begin(widget->GetNameWithID().c_str(), &widget->open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar)) 
 			{		
+				if (ImGui::BeginMenuBar()) {
+					if (ImGui::BeginMenu("Menu")) {
+						ImGui::EndMenu();
+					}
+					ImGui::EndMenuBar();
+				}
+				widget->DrawWidget();
+			}
+			ImGui::End();
+		}
+	}
+
+		for (int i = 0; i < (int)worldSpaceWidgets.size(); i++) {
+		auto widget = worldSpaceWidgets[i];
+		if (widget->IsOpen()) {
+			auto width = ImGui::GetIO().DisplaySize.x;
+			auto viewportWidth = width * 0.5f;                // Make the viewport take up 50% of the width
+			auto sideWidth = (width - viewportWidth) / 2.0f;  // Divide the remaining width equally between the side windows
+			ImGui::SetNextWindowSize(ImVec2(sideWidth, ImGui::GetIO().DisplaySize.y));
+			if (ImGui::Begin(widget->GetNameWithID().c_str(), &widget->open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar)) {
+				if (ImGui::BeginMenuBar()) {
+					if (ImGui::BeginMenu("Menu")) {
+						ImGui::EndMenu();
+					}
+					ImGui::EndMenuBar();
+				}
+				widget->DrawWidget();
+			}
+			ImGui::End();
+		}
+	}
+
+	for (int i = 0; i < (int)cloudsWidgets.size(); i++) {
+		auto widget = cloudsWidgets[i];
+		if (widget->IsOpen()) {
+			auto width = ImGui::GetIO().DisplaySize.x;
+			auto viewportWidth = width * 0.5f;                // Make the viewport take up 50% of the width
+			auto sideWidth = (width - viewportWidth) / 2.0f;  // Divide the remaining width equally between the side windows
+			ImGui::SetNextWindowSize(ImVec2(sideWidth, ImGui::GetIO().DisplaySize.y));
+			if (ImGui::Begin(widget->GetNameWithID().c_str(), &widget->open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar)) {
 				if (ImGui::BeginMenuBar()) {
 					if (ImGui::BeginMenu("Menu")) {
 						ImGui::EndMenu();
@@ -159,9 +239,15 @@ void EditorWindow::SetupResources()
 	auto& weatherArray = dataHandler->GetFormArray<RE::TESWeather>();
 
 	for (auto weather : weatherArray) {
-		std::string editorID = weather->GetFormEditorID();
 		auto widget = new WeatherWidget(weather);
-		widgets.push_back(widget);
+		weatherWidgets.push_back(widget);
+	}
+
+	auto& worldSpaceArray = dataHandler->GetFormArray<RE::TESWorldSpace>();
+
+	for (auto worldSpace : worldSpaceArray) {
+		auto widget = new WorldSpaceWidget(worldSpace);
+		worldSpaceWidgets.push_back(widget);
 	}
 }
 

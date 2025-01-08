@@ -1,8 +1,12 @@
 #include "WeatherWidget.h"
 
+WeatherWidget::~WeatherWidget()
+{
+}
+
 std::string WeatherWidget::GetName()
 {
-	return std::format("{} ({:08X})", weather->GetFormEditorID(), weather->GetFormID());
+	return std::format("{} ({:08X})", name, weather->GetFormID());
 }
 
 void WeatherWidget::DrawWidget()
