@@ -93,8 +93,8 @@ public:
 
 	struct DebugSkinHairSettings
 	{
-		bool EnablePBRSkin = true;
-		bool EnablePBRHair = true;
+		bool EnablePBRSkin = false;
+		bool EnablePBRHair = false;
 		float SkinRoughnessScale = 0.7f;
 		float SkinSpecularLevel = 0.028f;
 		float SkinSpecularTexMultiplier = 3.0f;

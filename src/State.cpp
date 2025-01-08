@@ -92,7 +92,6 @@ void State::Reset()
 	for (auto* feature : Feature::GetFeatureList())
 		if (feature->loaded)
 			feature->Reset();
-	TruePBR::GetSingleton()->ResetDebugSkinHairSettings();
 	if (!RE::UI::GetSingleton()->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
 	lastModifiedPixelDescriptor = 0;

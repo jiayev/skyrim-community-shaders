@@ -28,6 +28,7 @@ enum class PBRShaderFlags : uint32_t
 	HairMarschner = 1 << 10,
 	Glint = 1 << 11,
 	ProjectedGlint = 1 << 12,
+	TestSkinHair = 1 << 13,
 };
 
 class BSLightingShaderMaterialPBR : public RE::BSLightingShaderMaterialBase
