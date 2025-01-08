@@ -105,7 +105,7 @@ void EditorWindow::ShowViewportWindow()
 	auto calendar = RE::Calendar::GetSingleton();
 	if (calendar)
 		ImGui::SliderFloat("##ViewportSlider", &calendar->gameHour->value, 0.0f, 23.99f, "Time: %.2f");
-				
+
 	// The size of the image in ImGui																														   // Get the available space in the current window
 	ImVec2 availableSpace = ImGui::GetContentRegionAvail();
 
@@ -204,7 +204,7 @@ void EditorWindow::RenderUI()
 
 	context->ClearRenderTargetView(framebuffer.RTV, (float*)&ImGui::GetStyle().Colors[ImGuiCol_WindowBg]);
 
-    if (ImGui::BeginMainMenuBar()) {
+	if (ImGui::BeginMainMenuBar()) {
 		if (ImGui::BeginMenu("File")) {
 			ImGui::EndMenu();
 		}
