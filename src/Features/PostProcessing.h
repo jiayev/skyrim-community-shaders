@@ -13,6 +13,8 @@ struct PostProcessing : Feature
 		return &singleton;
 	}
 
+	const std::string ppPresetPath = "Data\\SKSE\\Plugins\\CommunityShaders\\PostProcessing";
+
 	virtual inline std::string GetName() override { return "Post Processing"; }
 	virtual inline std::string GetShortName() override { return "PostProcessing"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "POSTPROCESS"; }
@@ -27,6 +29,11 @@ struct PostProcessing : Feature
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
+
+	std::vector<std::string> presets = {};
+	std::vector<std::string> LoadPresets();
+	void SavePresetTo(std::string a_name);
+	void LoadPresetFrom(std::string a_name);
 
 	virtual void ClearShaderCache() override;
 
