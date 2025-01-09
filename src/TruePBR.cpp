@@ -767,10 +767,10 @@ struct BSLightingShaderProperty_GetRenderPasses
 				auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((lightingTechnique >> 24) & 0x3F);
 				lightingFlags &= ~0b111000u;
 				if (debugSkinHairSettings.EnablePBRHair && property->material->GetFeature() == RE::BSShaderMaterial::Feature::kHairTint) {
-					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbrDebugHair);
+					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::VtPbr);
 				}
 				if (debugSkinHairSettings.EnablePBRSkin && (property->material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGen || property->material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGenRGBTint)) {
-					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbrDebugSkin);
+					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::VtPbr);
 				}
 				if (isPbr) {
 					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr);
@@ -815,7 +815,7 @@ struct BSLightingShader_SetupMaterial
 		auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((shader->currentRawTechnique >> 24) & 0x3F);
 		auto debugSkinHairSettings = TruePBR::GetSingleton()->GetDebugSkinHairSettings();
 		if ((debugSkinHairSettings.EnablePBRSkin && (lightingType == Facegen || lightingType == FacegenRGBTint)) || (debugSkinHairSettings.EnablePBRHair && lightingType == Hair))
-			lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr);
+			lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::VtPbr);
 		if (!(lightingType == LODLand || lightingType == LODLandNoise) && (lightingFlags & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr))) {
 			auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 			auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -1196,10 +1196,10 @@ struct BSLightingShader_SetupGeometry
 
 		TruePBR::DebugSkinHairSettings debugSkinHairSettings = TruePBR::GetSingleton()->GetDebugSkinHairSettings();
 		if (debugSkinHairSettings.EnablePBRSkin ) {
-			shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbrDebugSkin);
+			shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::VtPbr);
 		}
 		if (debugSkinHairSettings.EnablePBRHair) {
-			shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbrDebugHair);
+			shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::VtPbr);
 		}
 
 		shader->currentRawTechnique &= ~0b111000u;
