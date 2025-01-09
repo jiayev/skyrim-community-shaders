@@ -6,7 +6,7 @@ WorldSpaceWidget::~WorldSpaceWidget()
 
 std::string WorldSpaceWidget::GetName()
 {
-	return std::format("{} ({:08X})", name, worldSpace->GetFormID());
+	return name;
 }
 
 void WorldSpaceWidget::DrawWidget()

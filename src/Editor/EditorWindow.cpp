@@ -40,56 +40,90 @@ void EditorWindow::ShowObjectsWindow()
 		ImGui::TableSetColumnIndex(1);
 		ImGui::BeginChild("Objects");
 
-		// Helper lambda for adding a new widget
-		auto addNewWidget = [&]() {
-			if (selectedCategory == "Weathers") {
-			} else if (selectedCategory == "WorldSpace") {
-			} else if (selectedCategory == "Clouds") {
-				cloudsWidgets.push_back(new CloudsWidget());
-			}
-		};
+		bool openContextMenu = false;
 
-		// Display objects based on the selected category
-		auto& widgets = selectedCategory == "Weathers" ? weatherWidgets : selectedCategory == "WorldSpace" ? worldSpaceWidgets :
-		                                                                                                     cloudsWidgets;
+		// Create a table for the right column with "Name" and "ID" headers
+		if (ImGui::BeginTable("DetailsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+			ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableHeadersRow();
 
-		for (int i = 0; i < widgets.size(); ++i) {
-			ImGui::PushID(widgets[i]->GetID());
-			// Handle renaming mode
-			if (renameIndex == i) {
-				if (ImGui::InputText("##rename", renameBuffer, sizeof(renameBuffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
-					widgets[i]->SetName(renameBuffer);  // Apply new name
-					renameIndex = -1;                   // Exit rename mode
-				}
-			} else {
-				// Display selectable item
-				if (ImGui::Selectable(widgets[i]->GetName().c_str(), widgets[i]->open, ImGuiSelectableFlags_AllowDoubleClick)) {
-					if (ImGui::IsMouseDoubleClicked(0)) {
-						widgets[i]->open = true;
+			// Display objects based on the selected category
+			auto& widgets = selectedCategory == "Weathers"   ? weatherWidgets :
+			                selectedCategory == "WorldSpace" ? worldSpaceWidgets :
+			                                                   cloudsWidgets;
+
+			for (int i = 0; i < widgets.size(); ++i) {
+				ImGui::TableNextRow();
+
+				// Name column
+				ImGui::TableSetColumnIndex(0);
+				ImGui::PushID(widgets[i]->GetID());
+
+				if (renameIndex == i) {
+					if (ImGui::InputText("##rename", renameBuffer, sizeof(renameBuffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
+						widgets[i]->SetName(renameBuffer);  // Apply new name
+						renameIndex = -1;                   // Exit rename mode
+					}
+				} else {
+					if (ImGui::Selectable(widgets[i]->GetName().c_str(), widgets[i]->open, ImGuiSelectableFlags_SpanAllColumns)) {
+						if (ImGui::IsMouseDoubleClicked(0)) {
+							widgets[i]->open = true;
+						}
+					}
+					// Open context menu for the item
+					if (ImGui::BeginPopupContextItem(("ItemContextMenu" + std::to_string(i)).c_str())) {
+						openContextMenu = true;
+						if (ImGui::MenuItem("New")) {
+							// Add a new widget based on the selected category
+							if (selectedCategory == "Weathers") {
+							} else if (selectedCategory == "WorldSpace") {
+							} else if (selectedCategory == "Clouds") {
+								cloudsWidgets.push_back(new CloudsWidget());
+							}
+						}
+						if (ImGui::MenuItem("Duplicate")) {
+							Widget* duplicateWidget = widgets[i]->Clone();
+							widgets.push_back(duplicateWidget);
+						}
+						if (ImGui::MenuItem("Rename")) {
+							renameIndex = i;  // Enter rename mode
+							strncpy(renameBuffer, widgets[i]->GetEditableName().c_str(), sizeof(renameBuffer));
+							renameBuffer[sizeof(renameBuffer) - 1] = '\0';  // Ensure null termination
+						}
+						if (ImGui::MenuItem("Delete")) {
+							widgets.erase(widgets.begin() + i);
+							--i;  // Adjust index after deletion
+						}
+						ImGui::EndPopup();
 					}
 				}
-				// Open context menu for the item
-				if (ImGui::BeginPopupContextItem(("ItemContextMenu" + std::to_string(i)).c_str())) {
-					if (ImGui::MenuItem("New")) {
-						addNewWidget();
-					}
-					if (ImGui::MenuItem("Duplicate")) {
-						Widget* duplicateWidget = widgets[i]->Clone();
-						widgets.push_back(duplicateWidget);
-					}
-					if (ImGui::MenuItem("Rename")) {
-						renameIndex = i;  // Enter rename mode
-						strncpy(renameBuffer, widgets[i]->GetEditableName().c_str(), sizeof(renameBuffer));
-						renameBuffer[sizeof(renameBuffer) - 1] = '\0';  // Ensure null termination
-					}
-					ImGui::EndPopup();
-				}
+
+				ImGui::PopID();
+
+				// ID column
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text(std::format("{:08X}", widgets[i]->GetID()).c_str());
 			}
-			ImGui::PopID();
+
+			ImGui::EndTable();
+		}
+
+		// Open context menu in the empty space
+		if (!openContextMenu) {
+			if (ImGui::BeginPopupContextWindow("BackgroundContextMenu", ImGuiPopupFlags_MouseButtonRight)) {
+				if (ImGui::MenuItem("New")) {
+					if (selectedCategory == "Weathers") {
+					} else if (selectedCategory == "WorldSpace") {
+					} else if (selectedCategory == "Clouds") {
+						cloudsWidgets.push_back(new CloudsWidget());
+					}
+				}
+				ImGui::EndPopup();
+			}
 		}
 
 		ImGui::EndChild();
-
 		ImGui::EndTable();
 	}
 

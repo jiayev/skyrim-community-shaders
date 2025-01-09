@@ -6,7 +6,7 @@ WeatherWidget::~WeatherWidget()
 
 std::string WeatherWidget::GetName()
 {
-	return std::format("{} ({:08X})", name, weather->GetFormID());
+	return name;
 }
 
 void WeatherWidget::DrawWidget()
