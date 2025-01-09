@@ -33,7 +33,8 @@ public:
 		color[2] = other.color[2];
 	}
 
-	virtual int GetID() {
+	virtual int GetID()
+	{
 		return (int)weather->GetFormID();
 	}
 

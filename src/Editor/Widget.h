@@ -41,7 +41,8 @@ public:
 
 	virtual int GetID() = 0;
 
-	virtual std::string GetNameWithID() {
+	virtual std::string GetNameWithID()
+	{
 		return std::format("{}###{}", GetName(), GetID());
 	}
 

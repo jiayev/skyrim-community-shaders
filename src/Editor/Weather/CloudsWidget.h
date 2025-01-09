@@ -5,12 +5,11 @@
 class CloudsWidget : public Widget
 {
 public:
-
 	CloudsWidget()
 	{
 		name = "Cloud";
 	}
-	
+
 	~CloudsWidget();
 
 	int id;
