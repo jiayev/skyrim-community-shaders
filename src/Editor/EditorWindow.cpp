@@ -108,7 +108,7 @@ void EditorWindow::ShowObjectsWindow()
 						renameIndex = -1;                   // Exit rename mode
 					}
 				} else {
-					if (ImGui::Selectable(widgets[i]->GetName().c_str(), widgets[i]->open, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
+					if (ImGui::Selectable(widgets[i]->GetName().c_str(), widgets[i]->IsOpen(), ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
 						if (ImGui::IsMouseDoubleClicked(0)) {
 							widgets[i]->open = true;
 						}
@@ -129,7 +129,7 @@ void EditorWindow::ShowObjectsWindow()
 						}
 						if (ImGui::MenuItem("Rename")) {
 							renameIndex = i;  // Enter rename mode
-							strncpy(renameBuffer, widgets[i]->GetEditableName().c_str(), sizeof(renameBuffer));
+							strncpy(renameBuffer, widgets[i]->GetName().c_str(), sizeof(renameBuffer));
 							renameBuffer[sizeof(renameBuffer) - 1] = '\0';  // Ensure null termination
 						}
 						if (ImGui::MenuItem("Delete")) {
@@ -204,70 +204,25 @@ void EditorWindow::ShowWidgetWindow()
 {
 	for (int i = 0; i < (int)weatherWidgets.size(); i++) {
 		auto widget = weatherWidgets[i];
-		if (widget->IsOpen()) {
-			auto width = ImGui::GetIO().DisplaySize.x;
-			auto viewportWidth = width * 0.5f;                // Make the viewport take up 50% of the width
-			auto sideWidth = (width - viewportWidth) / 2.0f;  // Divide the remaining width equally between the side windows
-			ImGui::SetNextWindowSize(ImVec2(sideWidth, ImGui::GetIO().DisplaySize.y));
-			if (ImGui::Begin(widget->GetNameWithID().c_str(), &widget->open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar)) {
-				if (ImGui::BeginMenuBar()) {
-					if (ImGui::BeginMenu("Menu")) {
-						ImGui::EndMenu();
-					}
-					ImGui::EndMenuBar();
-				}
-				widget->DrawWidget();
-			}
-			ImGui::End();
-		}
+		if (widget->IsOpen())
+			widget->DrawWidget();
 	}
 
 	for (int i = 0; i < (int)worldSpaceWidgets.size(); i++) {
 		auto widget = worldSpaceWidgets[i];
-		if (widget->IsOpen()) {
-			auto width = ImGui::GetIO().DisplaySize.x;
-			auto viewportWidth = width * 0.5f;                // Make the viewport take up 50% of the width
-			auto sideWidth = (width - viewportWidth) / 2.0f;  // Divide the remaining width equally between the side windows
-			ImGui::SetNextWindowSize(ImVec2(sideWidth, ImGui::GetIO().DisplaySize.y));
-			if (ImGui::Begin(widget->GetNameWithID().c_str(), &widget->open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar)) {
-				if (ImGui::BeginMenuBar()) {
-					if (ImGui::BeginMenu("Menu")) {
-						ImGui::EndMenu();
-					}
-					ImGui::EndMenuBar();
-				}
-				widget->DrawWidget();
-			}
-			ImGui::End();
-		}
+		if (widget->IsOpen())
+			widget->DrawWidget();
 	}
 
 	for (int i = 0; i < (int)cloudsWidgets.size(); i++) {
 		auto widget = cloudsWidgets[i];
-		if (widget->IsOpen()) {
-			auto width = ImGui::GetIO().DisplaySize.x;
-			auto viewportWidth = width * 0.5f;                // Make the viewport take up 50% of the width
-			auto sideWidth = (width - viewportWidth) / 2.0f;  // Divide the remaining width equally between the side windows
-			ImGui::SetNextWindowSize(ImVec2(sideWidth, ImGui::GetIO().DisplaySize.y));
-			if (ImGui::Begin(widget->GetNameWithID().c_str(), &widget->open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar)) {
-				if (ImGui::BeginMenuBar()) {
-					if (ImGui::BeginMenu("Menu")) {
-						ImGui::EndMenu();
-					}
-					ImGui::EndMenuBar();
-				}
-				widget->DrawWidget();
-			}
-			ImGui::End();
-		}
+		if (widget->IsOpen())
+			widget->DrawWidget();
 	}
 }
 
 void EditorWindow::RenderUI()
 {
-	ImGui::GetStyle().Alpha = 1.0f;
-	ImGui::GetStyle().Colors[ImGuiCol_WindowBg].w = 1.0f;
-
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto& framebuffer = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];
 	auto& context = State::GetSingleton()->context;

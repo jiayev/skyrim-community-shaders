@@ -30,7 +30,5 @@ public:
 		return id;
 	}
 
-	virtual std::string GetName() override;
-
 	virtual void DrawWidget() override;
 };

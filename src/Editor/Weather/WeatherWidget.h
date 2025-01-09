@@ -43,7 +43,5 @@ public:
 		return new WeatherWidget(*this);  // Return a copy of this object
 	}
 
-	virtual std::string GetName() override;
-
 	virtual void DrawWidget() override;
 };

@@ -33,7 +33,5 @@ public:
 		return (int)worldSpace->GetFormID();
 	}
 
-	virtual std::string GetName() override;
-
 	virtual void DrawWidget() override;
 };
