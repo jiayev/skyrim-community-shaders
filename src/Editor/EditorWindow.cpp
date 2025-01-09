@@ -49,7 +49,6 @@ void EditorWindow::ShowObjectsWindow()
 		}
 		ImGui::Separator();
 
-
 		// Begin a table for the categories list
 		if (ImGui::BeginTable("CategoriesTable", 1, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
 			ImGui::TableNextRow();

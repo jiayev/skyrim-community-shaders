@@ -48,7 +48,6 @@ public:
 	virtual std::string GetWindowTitle()
 	{
 		return std::format("{} ({:08X})", GetName(), GetID());
-
 	}
 
 	virtual std::string GetWindowTitleWithID()
