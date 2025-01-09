@@ -57,6 +57,9 @@ void EditorWindow::ShowObjectsWindow()
 				ImGui::TableNextRow();
 
 				// Name column
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text(std::format("{:08X}", widgets[i]->GetID()).c_str());
+
 				ImGui::TableSetColumnIndex(0);
 				ImGui::PushID(widgets[i]->GetID());
 
@@ -66,7 +69,7 @@ void EditorWindow::ShowObjectsWindow()
 						renameIndex = -1;                   // Exit rename mode
 					}
 				} else {
-					if (ImGui::Selectable(widgets[i]->GetName().c_str(), widgets[i]->open, ImGuiSelectableFlags_SpanAllColumns)) {
+					if (ImGui::Selectable(widgets[i]->GetName().c_str(), widgets[i]->open, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
 						if (ImGui::IsMouseDoubleClicked(0)) {
 							widgets[i]->open = true;
 						}
@@ -100,10 +103,6 @@ void EditorWindow::ShowObjectsWindow()
 				}
 
 				ImGui::PopID();
-
-				// ID column
-				ImGui::TableSetColumnIndex(1);
-				ImGui::Text(std::format("{:08X}", widgets[i]->GetID()).c_str());
 			}
 
 			ImGui::EndTable();
