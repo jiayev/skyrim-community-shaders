@@ -1096,9 +1096,7 @@ struct BSLightingShader_SetupMaterial
 				PBRParams1[2] = debugSkinHairSettings.HairSpecularLevel;
 				shadowState->SetPSConstant(PBRParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRParams1);
 				shadowState->SetPSConstant(hairMaterial->tintColor, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.TintColor);
-			}
-
-			if (lightingType == Facegen || lightingType == FacegenRGBTint) {
+			} else if (lightingType == Facegen || lightingType == FacegenRGBTint) {
 				if (lightingType == Facegen) {
 					auto* facegenMaterial = static_cast<const RE::BSLightingShaderMaterialFacegen*>(tMaterial);
 					if (facegenMaterial->specularBackLightingTexture != nullptr) {
@@ -1128,6 +1126,19 @@ struct BSLightingShader_SetupMaterial
 					shadowState->SetPSConstant(facegenMaterial->tintColor, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.TintColor);
 				}
 		
+				std::array<float, 3> PBRParams1;
+				PBRParams1[0] = debugSkinHairSettings.SkinRoughnessScale;
+				PBRParams1[1] = 0.f;
+				PBRParams1[2] = debugSkinHairSettings.SkinSpecularLevel;
+				shadowState->SetPSConstant(PBRParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRParams1);
+
+				std::array<float, 4> PBRParams2;
+				PBRParams2[0] = 0.482f;
+				PBRParams2[1] = 0.169f;
+				PBRParams2[2] = 0.109f;
+				PBRParams2[3] = debugSkinHairSettings.SkinSpecularTexMultiplier;
+				shadowState->SetPSConstant(PBRParams2, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRParams2);
+			} else {
 				std::array<float, 3> PBRParams1;
 				PBRParams1[0] = debugSkinHairSettings.SkinRoughnessScale;
 				PBRParams1[1] = 0.f;

@@ -11,16 +11,10 @@
 
 #if defined(FACEGEN) || defined(FACEGEN_RGB_TINT)
 #	define SKIN
-#	if defined(PBR_HS)
-#	define TRUE_PBR
-#	endif
 #endif
 
-#if defined(HAIR)
-#	if defined(PBR_HS)
+#if defined(PBR_HS)
 #	define TRUE_PBR
-// #	undef DYNAMIC_CUBEMAPS
-#	endif
 #endif
 
 #if (defined(HAIR) || defined(SKIN)) && defined(TRUE_PBR)
@@ -1404,6 +1398,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	baseColor.xyz = pow(baseColor.xyz, 2.4) * 3.14;
 #	endif
 
+#	if defined(PBR_HS) && !defined(HAIR) && !defined(SKIN)
+	baseColor.xyz = pow(baseColor.xyz, 2.4) * 3.14;
+#	endif
+
 // #	if defined(HAIR) && defined(TRUE_PBR)
 	// baseColor.xyz = Color::GammaToLinear(baseColor.xyz);
 // #	endif
@@ -1704,7 +1702,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(TRUE_PBR)
 	PBR::SurfaceProperties pbrSurfaceProperties = PBR::InitSurfaceProperties();
 
-#		if defined(SKIN)
+#		if defined(SKIN) || (defined(PBR_HS) && !defined(HAIR) && !defined(SKIN))
 	pbrSurfaceProperties.Roughness = saturate(PBRParams1.x - PBRParams2.w * glossiness);
 	pbrSurfaceProperties.Metallic = 0;
 	pbrSurfaceProperties.AO = CalculateApproximateAO(baseSkinColor, uv, 20.0) * 0.5 + 0.5;
