@@ -11,27 +11,22 @@
 
 #if defined(FACEGEN) || defined(FACEGEN_RGB_TINT)
 #	define SKIN
-// #	if defined(PBR_SKIN)
+#	if defined(PBR_HS)
 #	define TRUE_PBR
-// #	define DEFERRED
-// #	endif
+#	endif
 #endif
 
 #if defined(HAIR)
-// #	if defined(PBR_HAIR)
+#	if defined(PBR_HS)
 #	define TRUE_PBR
-// #	define DEFERRED
-// #	endif
+// #	undef DYNAMIC_CUBEMAPS
+#	endif
 #endif
 
 #if (defined(HAIR) || defined(SKIN)) && defined(TRUE_PBR)
 #	undef ENVMAP
 #	undef MULTI_LAYER_PARALLAX
 #endif
-
-// #if defined(EYE)
-// #	define TRUE_PBR
-// #endif
 
 #if defined(SKINNED) || defined(ENVMAP) || defined(EYE) || defined(MULTI_LAYER_PARALLAX)
 #	define DRAW_IN_WORLDSPACE
@@ -1058,10 +1053,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		tbn = lerp(tbn, -tbn, nearFactor);
 #		endif
 
-// #	if defined(HAIR)
-// 	tbn = -tbn;
-// #	endif
-
 #		if defined(MODELSPACENORMALS) && !defined(SKINNED)
 	float3 n = float3(0, 0, 1);
 #		else
@@ -1410,7 +1401,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif  // FACEGEN
 
 #	if defined(SKIN) && defined(TRUE_PBR)
-	// baseColor.xyz = Color::GammaToLinear(baseColor.xyz) * 3.14;
 	baseColor.xyz = pow(baseColor.xyz, 2.4) * 3.14;
 #	endif
 
@@ -1607,10 +1597,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	else
 	float4 modelNormal = float4(normalize(mul(tbn, normal.xyz)), 1);
 
-// #		if defined(HAIR)
-// 	modelNormal.xyz = -2 * modelNormal.xyz;
-// #		endif  // HAIR
-
 #		if defined(SPARKLE)
 	float3 projectedNormal = normalize(mul(tbn, float3(ProjectedUVParams2.xx * normal.xy, normal.z)));
 #		endif  // SPARKLE
@@ -1719,12 +1705,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	PBR::SurfaceProperties pbrSurfaceProperties = PBR::InitSurfaceProperties();
 
 #		if defined(SKIN)
-	pbrSurfaceProperties.Roughness = PBRParams1.x - PBRParams2.w * glossiness;
+	pbrSurfaceProperties.Roughness = saturate(PBRParams1.x - PBRParams2.w * glossiness);
 	pbrSurfaceProperties.Metallic = 0;
 	pbrSurfaceProperties.AO = CalculateApproximateAO(baseSkinColor, uv, 20.0) * 0.5 + 0.5;
 	pbrSurfaceProperties.F0 = PBRParams1.zzz;
 #		elif defined(HAIR)
-	pbrSurfaceProperties.Roughness = PBRParams1.x - glossiness;
+	pbrSurfaceProperties.Roughness = saturate(PBRParams1.x - glossiness);
 	pbrSurfaceProperties.Metallic = 0;
 	pbrSurfaceProperties.AO = CalculateApproximateAO(baseSkinColor, uv, 5);
 	// pbrSurfaceProperties.AO = 1;
@@ -2555,7 +2541,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 #		if !defined(DEFERRED)
-#			if defined(DYNAMIC_CUBEMAPS) && !defined(HAIR)
+#			if defined(DYNAMIC_CUBEMAPS)
 	specularColorPBR += indirectSpecularLobeWeight * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, pbrSurfaceProperties.Roughness, viewPosition.z);
 #			endif
 #		else
@@ -2888,30 +2874,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	//#if defined(DEFERRED)
 	//	psout.Albedo.xyz = pow(dot(wsn, flatWorldNormal), 8.0);
 	//#endif
-
-// #	if !defined(MODELSPACENORMALS) || (defined(TRUE_PBR) && defined(MODELSPACENORMALS))
-// #	if defined(HAIR)
-// 	modelNormal.xy = 1 * modelNormal.xy;
-// #	endif
-	// psout.Diffuse.xyz = tbn[2].xxx / 2 + 0.5;
-	// psout.Diffuse.xyz = clamp(psout.Diffuse.xyz,0.5,1);
-// #	endif
-// #	if defined(SKINNED) || !defined(MODELSPACENORMALS) || (defined(TRUE_PBR) && defined(MODELSPACENORMALS))
-// 	psout.Diffuse.xyz = tbnTr[2].xyz;
-// #	endif
-// #		if defined(DEFERRED)
-// 	psout.Specular.xyz = float3(0, 0, 0);
-// 	psout.Albedo.xyz = float3(0, 0, 0);
-// 	psout.Reflectance.xyz = float3(0, 0, 0);
-// 	psout.NormalGlossiness.xyz = float3(0, 0, 0);
-// 	psout.Parameters.xyz = float3(0, 0, 0);
-// 	psout.Masks.xyz = float3(0, 0, 0);
-// #		endif
-
-// #if defined(DEFERRED)
-// 	psout.Diffuse.xyz = psout.Specular.xyz;
-// 	psout.Specular.xyz = float3(0, 0, 0);
-// #endif
 
 	return psout;
 }
