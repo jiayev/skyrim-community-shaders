@@ -539,8 +539,8 @@ namespace Permutations
 		constexpr std::array lodObjectsFlags{ Deferred, WorldMap, DoAlphaTest, ProjectedUV };
 		constexpr std::array treeFlags{ Deferred, AnisoLighting, Skinned, DoAlphaTest };
 		constexpr std::array landFlags{ Deferred, AnisoLighting };
-		// constexpr std::array debugHairFlags{ Deferred, DoAlphaTest, TruePbrDebugHair };
-		// constexpr std::array debugSkinFlags{ Deferred, TruePbrDebugSkin };
+		// constexpr std::array debugHairFlags{ Deferred, DoAlphaTest, TruePbrDebugHair, Specular };
+		// constexpr std::array debugSkinFlags{ Deferred, TruePbrDebugSkin, DoAlphaTest, Specular };
 
 		constexpr uint32_t defaultConstantFlags = static_cast<uint32_t>(TruePbr) | static_cast<uint32_t>(VC);
 		constexpr uint32_t projectedUvConstantFlags = static_cast<uint32_t>(TruePbr) | static_cast<uint32_t>(VC) | static_cast<uint32_t>(ProjectedUV);
@@ -561,15 +561,12 @@ namespace Permutations
 		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::TreeAnim, treeFlagValues, result);
 		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::MTLand, landFlagValues, result);
 		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::MTLandLODBlend, landFlagValues, result);
-		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::Facegen, defaultFlagValues, result);
-		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::FacegenRGBTint, defaultFlagValues, result);
-		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::Hair, defaultFlagValues, result);
-		// if (debugSkin){
-		// 	AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::Facegen, debugSkinFlagValues, result);
-		// 	AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::FacegenRGBTint, debugSkinFlagValues, result);
-		// }
-		// if (debugHair)
-		// 	AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::Hair, debugHairFlagValues, result);
+		// AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::Facegen, defaultFlagValues, result);
+		// AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::FacegenRGBTint, defaultFlagValues, result);
+		// AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::Hair, defaultFlagValues, result);
+		// AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::Facegen, debugSkinFlagValues, result);
+		// AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::FacegenRGBTint, debugSkinFlagValues, result);
+		// AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::Hair, debugHairFlagValues, result);
 		return result;
 	}
 
@@ -751,12 +748,12 @@ struct BSLightingShaderProperty_GetRenderPasses
 		bool isPbr = false;
 
 		TruePBR::DebugSkinHairSettings debugSkinHairSettings = TruePBR::GetSingleton()->GetDebugSkinHairSettings();
-		if (debugSkinHairSettings.EnablePBRHair && property->material->GetFeature() == RE::BSShaderMaterial::Feature::kHairTint) {
-			isPbr = true;
-		}
-		if (debugSkinHairSettings.EnablePBRSkin && (property->material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGen || property->material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGenRGBTint)) {
-			isPbr = true;
-		}
+		// if (debugSkinHairSettings.EnablePBRHair && property->material->GetFeature() == RE::BSShaderMaterial::Feature::kHairTint) {
+		// 	isPbr = true;
+		// }
+		// if (debugSkinHairSettings.EnablePBRSkin && (property->material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGen || property->material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGenRGBTint)) {
+		// 	isPbr = true;
+		// }
 		if (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting) && (property->material->GetFeature() == RE::BSShaderMaterial::Feature::kDefault || property->material->GetFeature() == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend)) {
 			isPbr = true;
 		}
@@ -769,6 +766,12 @@ struct BSLightingShaderProperty_GetRenderPasses
 				auto lightingFlags = lightingTechnique & ~(~0u << 24);
 				auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((lightingTechnique >> 24) & 0x3F);
 				lightingFlags &= ~0b111000u;
+				if (debugSkinHairSettings.EnablePBRHair && property->material->GetFeature() == RE::BSShaderMaterial::Feature::kHairTint) {
+					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbrDebugHair);
+				}
+				if (debugSkinHairSettings.EnablePBRSkin && (property->material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGen || property->material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGenRGBTint)) {
+					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbrDebugSkin);
+				}
 				if (isPbr) {
 					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr);
 					lightingFlags &= ~static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Specular);
@@ -777,7 +780,7 @@ struct BSLightingShaderProperty_GetRenderPasses
 						if (material->HasGlint()) {
 							lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AnisoLighting);
 						}
-					} else if (!(property->material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGen || property->material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGenRGBTint || property->material->GetFeature() == RE::BSShaderMaterial::Feature::kHairTint)) {
+					} else {
 						auto* material = static_cast<BSLightingShaderMaterialPBR*>(property->material);
 						if (material->glintParameters.enabled || (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kProjectedUV) && material->projectedMaterialGlintParameters.enabled)) {
 							lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AnisoLighting);
@@ -901,7 +904,7 @@ struct BSLightingShader_SetupMaterial
 					lodTexParams[3] = pbrMaterial->terrainTexFade;
 					shadowState->SetPSConstant(lodTexParams, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.LODTexParams);
 				}
-			} else if ((lightingType == None || lightingType == TreeAnim) && (lightingType != Facegen && lightingType != FacegenRGBTint && lightingType != Hair)) {
+			} else if (lightingType == None || lightingType == TreeAnim) {
 				auto* pbrMaterial = static_cast<const BSLightingShaderMaterialPBR*>(material);
 				if (pbrMaterial->diffuseRenderTargetSourceIndex != -1) {
 					shadowState->SetPSTexture(0, renderer->GetRuntimeData().renderTargets[pbrMaterial->diffuseRenderTargetSourceIndex]);
@@ -915,13 +918,9 @@ struct BSLightingShader_SetupMaterial
 				shadowState->SetPSTextureAddressMode(1, static_cast<RE::BSGraphics::TextureAddressMode>(pbrMaterial->textureClampMode));
 				shadowState->SetPSTextureFilterMode(1, RE::BSGraphics::TextureFilterMode::kAnisotropic);
 
-				if (pbrMaterial->rmaosTexture != nullptr && shadowState != nullptr) {
-					shadowState->SetPSTexture(5, pbrMaterial->rmaosTexture->rendererTexture);
-					shadowState->SetPSTextureAddressMode(5, static_cast<RE::BSGraphics::TextureAddressMode>(pbrMaterial->textureClampMode));
-					shadowState->SetPSTextureFilterMode(5, RE::BSGraphics::TextureFilterMode::kAnisotropic);
-				} else {
-					logger::error("Failed to set RMAOS texture");
-				}
+				shadowState->SetPSTexture(5, pbrMaterial->rmaosTexture->rendererTexture);
+				shadowState->SetPSTextureAddressMode(5, static_cast<RE::BSGraphics::TextureAddressMode>(pbrMaterial->textureClampMode));
+				shadowState->SetPSTextureFilterMode(5, RE::BSGraphics::TextureFilterMode::kAnisotropic);
 
 				stl::enumeration<PBRShaderFlags> shaderFlags;
 				if (pbrMaterial->pbrFlags.any(PBRFlags::TwoLayer)) {
@@ -1073,7 +1072,7 @@ struct BSLightingShader_SetupMaterial
 				shadowState->SetPSTextureFilterMode(1, RE::BSGraphics::TextureFilterMode::kAnisotropic);
 
 				if (lightingType == Hair) {
-					shaderFlags.set(PBRShaderFlags::HairMarschner);
+					// shaderFlags.set(PBRShaderFlags::HairMarschner);
 					auto* hairMaterial = static_cast<const RE::BSLightingShaderMaterialHairTint*>(tMaterial);
 
 					std::array<float, 4> PBRParams1;
@@ -1091,7 +1090,9 @@ struct BSLightingShader_SetupMaterial
 					// 	shadowState->SetPSTextureAddressMode(2, static_cast<RE::BSGraphics::TextureAddressMode>(pbrMaterial->textureClampMode));
 					// 	shadowState->SetPSTextureFilterMode(2, RE::BSGraphics::TextureFilterMode::kAnisotropic);
 					// }
+					logger::debug("Setting up Fake PBR Skin.");
 					if (lightingType == Facegen) {
+						logger::debug("Setting up Facegen.");
 						auto* facegenMaterial = static_cast<const RE::BSLightingShaderMaterialFacegen*>(tMaterial);
 						if (facegenMaterial->specularBackLightingTexture != nullptr) {
 							shadowState->SetPSTexture(2, facegenMaterial->specularBackLightingTexture->rendererTexture);
@@ -1111,6 +1112,7 @@ struct BSLightingShader_SetupMaterial
 						shadowState->SetPSConstant(float4(1.0,1.0,1.0,1.0), RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.TintColor);
 					}
 					if (lightingType == FacegenRGBTint) {
+						logger::debug("Setting up FacegenRGBTint.");
 						auto* facegenMaterial = static_cast<const RE::BSLightingShaderMaterialFacegenTint*>(tMaterial);
 						if (facegenMaterial->specularBackLightingTexture != nullptr) {
 							shadowState->SetPSTexture(2, facegenMaterial->specularBackLightingTexture->rendererTexture);
@@ -1193,7 +1195,7 @@ struct BSLightingShader_SetupGeometry
 		}
 
 		TruePBR::DebugSkinHairSettings debugSkinHairSettings = TruePBR::GetSingleton()->GetDebugSkinHairSettings();
-		if (debugSkinHairSettings.EnablePBRSkin) {
+		if (debugSkinHairSettings.EnablePBRSkin ) {
 			shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbrDebugSkin);
 		}
 		if (debugSkinHairSettings.EnablePBRHair) {
