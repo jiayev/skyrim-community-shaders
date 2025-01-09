@@ -239,6 +239,7 @@ void PostProcessing::DrawSettings()
 	// 1 for feat settings
 	static int pageNum = 0;
 	static int featIdx = 0;
+	static int presetIdx = -1;
 	const float _iconButtonSize = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().FramePadding.x;
 	const ImVec2 iconButtonSize{ _iconButtonSize, _iconButtonSize };
 
@@ -250,6 +251,45 @@ void PostProcessing::DrawSettings()
 
 	//	ImGui::EndTable();
 	//}
+
+	ImGui::BeginGroup();
+	std::string currentPreset = (presetIdx >= 0 && presetIdx < presets.size()) 
+                                ? presets[presetIdx] 
+                                : "Select a preset";
+
+	if (ImGui::BeginCombo("##PresetCombo", currentPreset.c_str())) {
+		presets = LoadPresets();
+
+		for (int i = 0; i < presets.size(); ++i) {
+			bool isSelected = presetIdx == i;
+			if (ImGui::Selectable(presets[i].c_str(), isSelected))
+				presetIdx = i;
+			if (isSelected)
+				ImGui::SetItemDefaultFocus();
+		}
+		ImGui::EndCombo();
+	}
+
+	ImGui::SameLine();
+	if (ImGui::Button("Load")) {
+		if (presetIdx >= 0 && presetIdx < presets.size())
+		{
+			LoadPresetFrom(presets[presetIdx]);
+		}
+	}
+
+	ImGui::EndGroup();
+	ImGui::BeginGroup();
+	static std::string newPresetName = "";
+	ImGui::InputText("##NewPresetName", &newPresetName);
+
+	ImGui::SameLine();
+	if (ImGui::Button("Save")) {
+		if (!newPresetName.empty())
+			SavePresetTo(newPresetName);
+	}
+
+	ImGui::EndGroup();
 
 	ImGui::Separator();
 	ImGui::Spacing();
@@ -483,6 +523,74 @@ void PostProcessing::SaveSettings(json& o_json)
 	}
 
 	o_json["effects"] = arr;
+}
+
+std::vector<std::string> PostProcessing::LoadPresets()
+{
+	std::vector<std::string> o_presets = {};
+
+	try {
+		std::filesystem::create_directories(ppPresetPath);
+	} catch (const std::filesystem::filesystem_error& e) {
+		logger::warn("Error creating preset directory during Load ({}) : {}\n", ppPresetPath, e.what());
+		return o_presets;
+	}
+
+	for (const auto& entry : std::filesystem::directory_iterator(ppPresetPath)) {
+		if (entry.is_regular_file() && entry.path().extension() == ".json") {
+			o_presets.push_back(entry.path().stem().string());
+		}
+	}
+
+	return o_presets;
+}
+
+void PostProcessing::LoadPresetFrom(std::string a_name)
+{
+	json a_presets = {};
+
+	// Clean up the name
+	a_name.erase(std::remove_if(a_name.begin(), a_name.end(), [](char c) { return !std::isalnum(c); }), a_name.end());
+
+	try {
+		std::ifstream i{ std::format("{}\\{}.json", ppPresetPath, a_name) };
+		i >> a_presets;
+	} catch (const std::exception& e) {
+		logger::warn("Failed to load preset: {}. Error: {}", a_name, e.what());
+		return;
+	}
+
+	LoadSettings(a_presets);
+}
+
+void PostProcessing::SavePresetTo(std::string a_name)
+{
+	json a_presets = {};
+	SaveSettings(a_presets);
+	a_presets["preset_name"] = a_name;
+
+	// Check if the name is valid
+	if (a_name.empty()) {
+		logger::warn("Invalid preset name.");
+		return;
+	}
+
+	try {
+		std::filesystem::create_directories(ppPresetPath);
+	} catch (const std::filesystem::filesystem_error& e) {
+		logger::warn("Error creating preset directory during Save ({}) : {}\n", ppPresetPath, e.what());
+		return;
+	}
+
+	std::string presetPath = std::format("{}\\{}.json", ppPresetPath, a_name);
+	std::ofstream o{ presetPath };
+
+	try {
+		o << std::setw(4) << a_presets;
+		logger::info("Saving preset to {}", presetPath);
+	} catch (const std::exception& e) {
+		logger::warn("Failed to write preset to file: {}. Error: {}", presetPath, e.what());
+	}
 }
 
 void PostProcessing::RestoreDefaultSettings()
