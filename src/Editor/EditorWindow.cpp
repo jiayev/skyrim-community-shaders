@@ -39,7 +39,11 @@ void EditorWindow::ShowObjectsWindow()
 			// Add a row for the input field
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
+			ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+
 			ImGui::InputText("##ObjectFilter", filterBuffer, sizeof(filterBuffer));
+
+			ImGui::PopItemWidth(); 
 
 			ImGui::EndTable();
 		}
