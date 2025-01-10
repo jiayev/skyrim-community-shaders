@@ -859,7 +859,7 @@ float CalculateApproximateAO(float3 skincolor, float2 uv, float scale)
 	float3 baseColorApprox = skincolor;
     float luminance = 0.2126 * baseColorApprox.r + 0.7152 * baseColorApprox.g + 0.0722 * baseColorApprox.b;
     float approximateAO = pow(luminance, 2.4) * scale;
-    return saturate(approximateAO); // 确保 AO 值在 0 到 1 之间
+    return saturate(approximateAO);
 }
 
 #	if defined(WORLD_MAP)
@@ -1387,7 +1387,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	baseColor.xyz = lerp(baseColor.xyz, lerp(baseColor.xyz, 0.0, complexMaterialColor.z), complexMaterial);
 #	endif  // defined (EMAT) && defined(ENVMAP)
 
-	float3 baseSkinColor = baseColor.xyz;
+	float3 preBaseColor = baseColor.xyz;
 #	if defined(FACEGEN)
 	baseColor.xyz = GetFacegenBaseColor(baseColor.xyz, uv);
 #	elif defined(FACEGEN_RGB_TINT)
@@ -1705,12 +1705,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(SKIN) || (defined(PBR_HS) && !defined(HAIR) && !defined(SKIN))
 	pbrSurfaceProperties.Roughness = saturate(PBRParams1.x - PBRParams2.w * glossiness);
 	pbrSurfaceProperties.Metallic = 0;
-	pbrSurfaceProperties.AO = CalculateApproximateAO(baseSkinColor, uv, 20.0) * 0.5 + 0.5;
+	pbrSurfaceProperties.AO = CalculateApproximateAO(preBaseColor, uv, 20.0) * 0.25 + 0.75;
 	pbrSurfaceProperties.F0 = PBRParams1.zzz;
 #		elif defined(HAIR)
 	pbrSurfaceProperties.Roughness = saturate(PBRParams1.x - glossiness);
 	pbrSurfaceProperties.Metallic = 0;
-	pbrSurfaceProperties.AO = CalculateApproximateAO(baseSkinColor, uv, 5);
+	pbrSurfaceProperties.AO = CalculateApproximateAO(preBaseColor, uv, 5) * 0.75 + 0.25;
 	// pbrSurfaceProperties.AO = 1;
 	pbrSurfaceProperties.F0 = PBRParams1.zzz;
 #		elif defined(EYE)
