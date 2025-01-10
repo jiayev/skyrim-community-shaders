@@ -64,8 +64,6 @@ void EditorWindow::ShowObjectsWindow()
 		// Left column: Categories
 		ImGui::TableSetColumnIndex(0);
 
-		ImGui::BeginChild("Categories");
-
 		// Begin a table for the categories list
 		if (ImGui::BeginTable("CategoriesTable", 1, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
 			ImGui::TableNextRow();
@@ -87,11 +85,8 @@ void EditorWindow::ShowObjectsWindow()
 			ImGui::EndTable();
 		}
 
-		ImGui::EndChild();
-
 		// Right column: Objects
 		ImGui::TableSetColumnIndex(1);
-		ImGui::BeginChild("Objects");
 
 		ImGui::InputTextWithHint("##ObjectFilter", "Filter...", filterBuffer, sizeof(filterBuffer));
 
@@ -186,7 +181,6 @@ void EditorWindow::ShowObjectsWindow()
 			}
 		}
 
-		ImGui::EndChild();
 		ImGui::EndTable();
 	}
 
