@@ -92,8 +92,6 @@ void EditorWindow::ShowObjectsWindow()
 		ImGui::SameLine();
 		HelpMarker("Type a part of an object name to filter the list.");
 
-		ImGui::Separator();
-
 		bool openContextMenu = false;
 
 		// Create a table for the right column with "Name" and "ID" headers
