@@ -445,6 +445,10 @@ float3 GetFlowmapNormal(PS_INPUT input, float2 uvShift, float multiplier, float 
 #				include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #			endif
 
+#			if defined(PHYS_SKY)
+#				include "PhysicalSky/PhysicalSky.hlsli"
+#			endif
+
 float3 GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFactor, float3 viewDirection, float depth, uint eyeIndex)
 {
 	float3 normalScalesRcp = rcp(input.NormalsScale.xyz);
@@ -750,7 +754,7 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 #			endif
 }
 
-float3 GetSunColor(float3 normal, float3 viewDirection)
+float3 GetSunColor(float3 normal, float3 viewDirection, uint eyeIndex, PS_INPUT input)
 {
 #			if defined(UNDERWATER)
 	return 0.0.xxx;
@@ -898,7 +902,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 finalSpecularColor = lerp(ShallowColor.xyz, specularColor, 0.5);
 	float3 finalColor = saturate(1 - input.WPosition.w * 0.002) * ((1 - fresnel) * (diffuseColor - finalSpecularColor)) + finalSpecularColor;
 #				else
-	float3 sunColor = GetSunColor(normal, viewDirection);
+	float3 sunColor = GetSunColor(normal, viewDirection, eyeIndex, input);
 
 	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Interior) && any(sunColor > 0.0)) {
 		sunColor *= ShadowSampling::GetWaterShadow(screenNoise, input.WPosition.xyz, eyeIndex);

@@ -6,6 +6,7 @@
 #include "Util.h"
 
 #include "Features/DynamicCubemaps.h"
+#include "Features/PhysicalSky.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -404,12 +405,13 @@ void Deferred::DeferredPasses()
 		dynamicCubemaps->UpdateCubemap();
 
 	auto terrainBlending = TerrainBlending::GetSingleton();
+	auto physSky = PhysicalSky::GetSingleton();
 
 	// Deferred Composite
 	{
 		TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Deferred Composite");
 
-		ID3D11ShaderResourceView* srvs[14]{
+		ID3D11ShaderResourceView* srvs[16]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
@@ -424,6 +426,8 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? nullptr : ssgi_y,
 			ssgi_hq_spec ? nullptr : ssgi_cocg,
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
+			physSky->loaded ? physSky->main_view_tr_tex->srv.get() : nullptr,
+			physSky->loaded ? physSky->main_view_lum_tex->srv.get() : nullptr,
 		};
 
 		if (dynamicCubemaps->loaded)
@@ -648,6 +652,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 
 		if (ScreenSpaceGI::GetSingleton()->loaded)
 			defines.push_back({ "SSGI", nullptr });
+
+		if (PhysicalSky::GetSingleton()->loaded)
+			defines.push_back({ "PHYS_SKY", nullptr });
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });

@@ -996,6 +996,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Skylighting/Skylighting.hlsli"
 #	endif
 
+#	if defined(PHYS_SKY)
+#		include "PhysicalSky/PhysicalSky.hlsli"
+#	endif
+
 #	define LinearSampler SampColorSampler
 
 #	include "Common/ShadowSampling.hlsli"
@@ -1852,6 +1856,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 	float3 dirLightColor = DirLightColor.xyz;
+
+#	if defined(PHYS_SKY)
+	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
+		dirLightColor = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
+		dirLightColor *= getDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, SampColorSampler);
+		dirLightColor = Color::LinearToGamma(dirLightColor) / Color::LightPreMult;
+	}
+#	endif
+
 	float3 dirLightColorMultiplier = 1;
 
 #	if defined(WATER_EFFECTS)
@@ -1885,7 +1898,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 	float3 refractedDirLightDirection = DirLightDirection;
-#	if defined(TRUE_PBR)
+#	if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 	[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 	{
 		refractedDirLightDirection = -refract(-DirLightDirection, coatModelNormal, eta);
@@ -2058,10 +2071,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		{
 			float3 pointDiffuseColor, coatPointDiffuseColor, pointTransmissionColor, pointSpecularColor;
 			float3 refractedLightDirection = normalizedLightDirection;
+#				if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 			[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 			{
 				refractedLightDirection = -refract(-normalizedLightDirection, coatModelNormal, eta);
 			}
+#				endif
 			PBR::LightProperties lightProperties = PBR::InitLightProperties(lightColor, lightShadow, 1);
 			PBR::GetDirectLightInput(pointDiffuseColor, coatPointDiffuseColor, pointTransmissionColor, pointSpecularColor, modelNormal.xyz, coatModelNormal, refractedViewDirection, viewDirection, refractedLightDirection, normalizedLightDirection, lightProperties, pbrSurfaceProperties, tbnTr, uvOriginal);
 			lightsDiffuseColor += pointDiffuseColor;
@@ -2164,7 +2179,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 
 		float3 refractedLightDirection = normalizedLightDirection;
-#			if defined(TRUE_PBR)
+#			if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 		[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 		{
 			refractedLightDirection = -refract(-normalizedLightDirection, coatWorldNormal, eta);
@@ -2326,15 +2341,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	TexEnvSampler.GetDimensions(envSize.x, envSize.y);
 
 	bool dynamicCubemap = false;
-	if (envMask > 0.0 && envSize.x < 5) {
+	if (envMask > 0.0 && envSize.x == 1 && envSize.y == 1) {
 		dynamicCubemap = true;
-		envColorBase = TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 15);
-		if (envColorBase.a < 1.0) {
-			F0 = (Color::GammaToLinear(envColorBase.rgb) + Color::GammaToLinear(baseColor.rgb));
-			envRoughness = envColorBase.a;
-		} else {
-			F0 = 1.0;
-			envRoughness = 1.0 / 7.0;
+
+		// Dynamic Cubemap Creator sets this value to black, if it is anything but black it is wrong
+		float3 envColorTest = TexEnvSampler.SampleLevel(SampEnvSampler, float3(0.0, 1.0, 0.0), 15);
+		dynamicCubemap = all(envColorTest == 0.0);
+
+		if (dynamicCubemap) {
+			envColorBase = TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 15);
+
+			if (envColorBase.a < 1.0) {
+				F0 = (Color::GammaToLinear(envColorBase.rgb) + Color::GammaToLinear(baseColor.rgb));
+				envRoughness = envColorBase.a;
+			} else {
+				F0 = 1.0;
+				envRoughness = 1.0 / 7.0;
+			}
 		}
 	}
 
