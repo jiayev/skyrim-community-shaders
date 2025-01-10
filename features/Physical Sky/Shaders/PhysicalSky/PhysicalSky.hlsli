@@ -562,22 +562,22 @@ float3 getDirlightTransmittance(float3 world_pos_abs, SamplerState samp)
 	}
 
 	// fog
-	transmittance *= analyticFogTransmittance(world_pos_abs.z);
+	 transmittance *= analyticFogTransmittance(world_pos_abs.z);
 
-	// shadow volume
-	float3 pos_sample_shadow_uvw = getShadowVolumeSampleUvw(world_pos_abs, PhysSkyBuffer[0].dirlight_dir);
-	float cloud_density = 0;
-	if (all(pos_sample_shadow_uvw.xyz > 0))
-		cloud_density = TexShadowVolume.SampleLevel(samp, pos_sample_shadow_uvw.xyz, 0);
-	else
-		cloud_density += inBetweenSphereDistance(
-							 world_pos_abs + float3(-FrameBuffer::CameraPosAdjust[0].xy, PhysSkyBuffer[0].planet_radius),
-							 PhysSkyBuffer[0].dirlight_dir,
-							 PhysSkyBuffer[0].planet_radius + PhysSkyBuffer[0].cloud_layer.bottom,
-							 PhysSkyBuffer[0].planet_radius + PhysSkyBuffer[0].cloud_layer.bottom + PhysSkyBuffer[0].cloud_layer.thickness) *
-		                 PhysSkyBuffer[0].cloud_layer.average_density;
+	// // shadow volume
+	// float3 pos_sample_shadow_uvw = getShadowVolumeSampleUvw(world_pos_abs, PhysSkyBuffer[0].dirlight_dir);
+	// float cloud_density = 0;
+	// if (all(pos_sample_shadow_uvw.xyz > 0))
+	// 	cloud_density = TexShadowVolume.SampleLevel(samp, pos_sample_shadow_uvw.xyz, 0);
+	// else
+	// 	cloud_density += inBetweenSphereDistance(
+	// 						 world_pos_abs + float3(-FrameBuffer::CameraPosAdjust[0].xy, PhysSkyBuffer[0].planet_radius),
+	// 						 PhysSkyBuffer[0].dirlight_dir,
+	// 						 PhysSkyBuffer[0].planet_radius + PhysSkyBuffer[0].cloud_layer.bottom,
+	// 						 PhysSkyBuffer[0].planet_radius + PhysSkyBuffer[0].cloud_layer.bottom + PhysSkyBuffer[0].cloud_layer.thickness) *
+	// 	                 PhysSkyBuffer[0].cloud_layer.average_density;
 
-	transmittance *= exp(-(PhysSkyBuffer[0].cloud_layer.scatter + PhysSkyBuffer[0].cloud_layer.absorption) * cloud_density);
+	// transmittance *= exp(-(PhysSkyBuffer[0].cloud_layer.scatter + PhysSkyBuffer[0].cloud_layer.absorption) * cloud_density);
 
 	return transmittance;
 }
