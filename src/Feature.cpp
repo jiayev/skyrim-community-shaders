@@ -10,7 +10,7 @@
 <<<<<<< HEAD
 =======
 #include "Features/PhysicalSky.h"
->>>>>>> 480cf054 (Merge branch 'physky-before' into merge_pp_physky)
+	>>>>>>> 480cf054 (Merge branch 'physky-before' into merge_pp_physky)
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skylighting.h"
@@ -23,7 +23,8 @@
 
 #include "State.h"
 
-void Feature::Load(json& o_json)
+	void
+	Feature::Load(json& o_json)
 {
 	if (o_json[GetName()].is_structured()) {
 		logger::info("Loading {} settings", GetName());

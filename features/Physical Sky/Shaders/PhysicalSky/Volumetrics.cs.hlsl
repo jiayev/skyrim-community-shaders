@@ -2,9 +2,9 @@
 #define SKY_SAMPLERS
 #include "PhysicalSky/PhysicalSky.hlsli"
 
-#include "Common/VR.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/SharedData.hlsli"
+#include "Common/VR.hlsli"
 
 Texture2D<float> TexDepth : register(t4);
 
