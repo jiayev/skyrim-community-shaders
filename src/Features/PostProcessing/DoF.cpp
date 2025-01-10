@@ -305,7 +305,10 @@ RE::NiPoint3 DoF::GetCameraPos()
 			ret.y = root->world.translate.y;
 			ret.z = root->world.translate.z;
 		}
-	} else {
+	} else if (playerCamera->IsInFreeCameraMode()) {
+        auto freeCameraState = static_cast<RE::FreeCameraState*>(playerCamera->currentState.get());
+        ret = freeCameraState->translation;
+    } else {
 		RE::NiPoint3 playerPos = player->GetLookingAtLocation();
 
 		ret.z = playerPos.z;
