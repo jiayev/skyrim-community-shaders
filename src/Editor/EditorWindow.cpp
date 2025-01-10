@@ -2,6 +2,43 @@
 
 #include "State.h"
 
+bool ContainsStringIgnoreCase(const std::string_view a_string, const std::string_view a_substring)
+{
+	const auto it = std::ranges::search(a_string, a_substring, [](const char a_a, const char a_b) {
+		return std::tolower(a_a) == std::tolower(a_b);
+	}).begin();
+	return it != a_string.end();
+}
+
+
+void TextUnformattedDisabled(const char* a_text, const char* a_textEnd = nullptr)
+{
+	ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+	ImGui::TextUnformatted(a_text, a_textEnd);
+	ImGui::PopStyleColor();
+}
+
+void AddTooltip(const char* a_desc, ImGuiHoveredFlags a_flags = ImGuiHoveredFlags_DelayNormal)
+{
+	if (ImGui::IsItemHovered(a_flags)) {
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 8, 8 });
+		if (ImGui::BeginTooltip()) {
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 50.0f);
+			ImGui::TextUnformatted(a_desc);
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
+		ImGui::PopStyleVar();
+	}
+}
+
+inline void HelpMarker(const char* a_desc)
+{
+	ImGui::AlignTextToFramePadding();
+	TextUnformattedDisabled("(?)");
+	AddTooltip(a_desc, ImGuiHoveredFlags_DelayShort);
+}
+
 void EditorWindow::ShowObjectsWindow()
 {
 	ImGui::Begin("Object List");
@@ -28,26 +65,6 @@ void EditorWindow::ShowObjectsWindow()
 		ImGui::TableSetColumnIndex(0);
 
 		ImGui::BeginChild("Categories");
-
-		// Begin a table for the filter
-		if (ImGui::BeginTable("FilterTable", 1, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-			// Add a label row for the table
-			ImGui::TableNextRow();
-			ImGui::TableSetColumnIndex(0);
-			ImGui::Text("Filter");
-
-			// Add a row for the input field
-			ImGui::TableNextRow();
-			ImGui::TableSetColumnIndex(0);
-			ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
-
-			ImGui::InputText("##ObjectFilter", filterBuffer, sizeof(filterBuffer));
-
-			ImGui::PopItemWidth(); 
-
-			ImGui::EndTable();
-		}
-		ImGui::Separator();
 
 		// Begin a table for the categories list
 		if (ImGui::BeginTable("CategoriesTable", 1, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
@@ -76,6 +93,13 @@ void EditorWindow::ShowObjectsWindow()
 		ImGui::TableSetColumnIndex(1);
 		ImGui::BeginChild("Objects");
 
+		ImGui::InputTextWithHint("##ObjectFilter", "Filter...", filterBuffer, sizeof(filterBuffer));
+
+		ImGui::SameLine();
+		HelpMarker("Type a part of an object name to filter the list.");
+
+		ImGui::Separator();
+
 		bool openContextMenu = false;
 
 		// Create a table for the right column with "Name" and "ID" headers
@@ -91,9 +115,8 @@ void EditorWindow::ShowObjectsWindow()
 
 			// Filtered display of widgets
 			for (int i = 0; i < widgets.size(); ++i) {
-				if (std::string(widgets[i]->GetName()).find(filterBuffer) == std::string::npos && renameIndex != i) {
+				if (!ContainsStringIgnoreCase(widgets[i]->GetName(), filterBuffer) && renameIndex != i)
 					continue;  // Skip widgets that don't match the filter
-				}
 
 				ImGui::TableNextRow();
 
