@@ -83,7 +83,7 @@ void CloudLayerEdit(CloudLayerSettings& cloud)
 	ImGui::SliderFloat("Noise Scale", &cloud.layer.noise_scale_or_freq, 0.01f, 5.f, "%.3f km");
 	ImGui::SliderFloat3("Noise Velocity", &cloud.layer.noise_offset_or_speed.x, -30.f, 30.f, "%.3f m/s");
 
-	ImGui::SliderFloat("Post Power", &cloud.layer.power, 0.2, 5, "%.3f");
+	ImGui::SliderFloat("Post Power", &cloud.layer.power, 0.2f, 5, "%.3f");
 
 	ImGui::SeparatorText("Lighting");
 
@@ -153,7 +153,7 @@ void PhysicalSky::DrawSettings()
 void PhysicalSky::SettingsGeneral()
 {
 	if (!CheckComputeShaders())
-		ImGui::TextColored({ 1, .1, .1, 1 }, "Shader compilation failed!");
+		ImGui::TextColored({ 1, .1f, .1f, 1 }, "Shader compilation failed!");
 
 	ImGui::Checkbox("Enable Physcial Sky", &settings.enable_sky);
 
@@ -390,7 +390,7 @@ void PhysicalSky::SettingsCelestials()
 	if (ImGui::CollapsingHeader("Sun Disc", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::PushID("Sun");
 		ImGui::ColorEdit3("Color", &celestials.sun_disc_color.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-		ImGui::SliderAngle("Angular Radius", &celestials.sun_angular_radius, 0.05, 5, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderAngle("Angular Radius", &celestials.sun_angular_radius, 0.05f, 5, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Ours is quite small (only 0.25 deg)");
 
@@ -412,7 +412,7 @@ void PhysicalSky::SettingsCelestials()
 	if (ImGui::CollapsingHeader("Masser", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::PushID("Masser");
 		ImGui::SliderFloat("Brightness", &celestials.masser_brightness, 0.f, 10.f, "%.2f");
-		ImGui::SliderAngle("Angular Radius", &celestials.masser_angular_radius, 0.05, 30, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderAngle("Angular Radius", &celestials.masser_angular_radius, 0.05f, 30, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
 
 		ImGui::Checkbox("Custom Trajectory", &celestials.override_masser_traj);
 		if (ImGui::TreeNodeEx("Trajectory")) {
@@ -432,7 +432,7 @@ void PhysicalSky::SettingsCelestials()
 	if (ImGui::CollapsingHeader("Secunda", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::PushID("Secunda");
 		ImGui::SliderFloat("Brightness", &celestials.secunda_brightness, 0.f, 10.f, "%.2f");
-		ImGui::SliderAngle("Angular Radius", &celestials.secunda_angular_radius, 0.05, 30, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderAngle("Angular Radius", &celestials.secunda_angular_radius, 0.05f, 30, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
 
 		ImGui::Checkbox("Custom Trajectory", &celestials.override_secunda_traj);
 		if (ImGui::TreeNodeEx("Trajectory")) {
@@ -562,10 +562,10 @@ void PhysicalSky::SettingsTextures()
 			state = GenerateNoise({ filename }, type, base_freq, octaves, persistence, lacunarity, seed);
 		if (state == 0) {
 			ImGui::SameLine();
-			ImGui::TextColored({ 1.0, 0.2, 0.2, 1.0 }, "Failed!");
+			ImGui::TextColored({ 1.0, 0.2f, 0.2f, 1.0 }, "Failed!");
 		} else if (state == 1) {
 			ImGui::SameLine();
-			ImGui::TextColored({ 0.2, 1.0, 0.2, 1.0 }, "Success!");
+			ImGui::TextColored({ 0.2f, 1.0, 0.2f, 1.0 }, "Success!");
 		}
 
 		ImGui::TreePop();

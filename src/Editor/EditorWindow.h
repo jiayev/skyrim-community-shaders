@@ -16,6 +16,8 @@ public:
 		return &singleton;
 	}
 
+	bool open = false;
+
 	Texture2D* tempTexture;
 
 	std::vector<Widget*> weatherWidgets;

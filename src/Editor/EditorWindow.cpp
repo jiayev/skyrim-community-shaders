@@ -247,6 +247,9 @@ void EditorWindow::RenderUI()
 	context->ClearRenderTargetView(framebuffer.RTV, (float*)&ImGui::GetStyle().Colors[ImGuiCol_WindowBg]);
 
 	if (ImGui::BeginMainMenuBar()) {
+		if (ImGui::BeginMenu("Close")) {
+			open = false;
+		}
 		if (ImGui::BeginMenu("File")) {
 			ImGui::EndMenu();
 		}
