@@ -10,7 +10,6 @@ bool ContainsStringIgnoreCase(const std::string_view a_string, const std::string
 	return it != a_string.end();
 }
 
-
 void TextUnformattedDisabled(const char* a_text, const char* a_textEnd = nullptr)
 {
 	ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
