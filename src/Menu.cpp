@@ -558,7 +558,7 @@ void Menu::DrawSettings()
 
 		DrawFooter();
 	}
-		ImGui::End();
+	ImGui::End();
 }
 
 void Menu::DrawGeneralSettings()
