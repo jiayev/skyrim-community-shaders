@@ -562,7 +562,7 @@ float3 getDirlightTransmittance(float3 world_pos_abs, SamplerState samp)
 	}
 
 	// fog
-	 transmittance *= analyticFogTransmittance(world_pos_abs.z);
+	transmittance *= analyticFogTransmittance(world_pos_abs.z);
 
 	// // shadow volume
 	// float3 pos_sample_shadow_uvw = getShadowVolumeSampleUvw(world_pos_abs, PhysSkyBuffer[0].dirlight_dir);
