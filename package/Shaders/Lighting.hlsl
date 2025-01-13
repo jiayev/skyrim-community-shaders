@@ -17,7 +17,7 @@
 #	define TRUE_PBR
 #endif
 
-#if (defined(HAIR) || defined(SKIN)) && defined(TRUE_PBR)
+#if defined(PBR_HS) && defined(TRUE_PBR) && (defined(HAIR) || defined(SKIN))
 #	undef ENVMAP
 #	undef MULTI_LAYER_PARALLAX
 #endif
@@ -2410,7 +2410,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	diffuseColor += directionalAmbientColor;
 #	endif
 
-#	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || (defined(EYE) && !defined(TRUE_PBR))
+#	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
 	float envMaskColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).x;
 	float envMask = (EnvmapData.y * (envMaskColor - glossiness) + glossiness) * (EnvmapData.x * MaterialData.x);
 	float viewNormalAngle = dot(worldSpaceNormal.xyz, viewDirection);
@@ -2594,7 +2594,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	diffuseColor = reflectionDiffuseColor;
 
-#	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || (defined(EYE) && !defined(TRUE_PBR)))
+#	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
 #		if defined(DYNAMIC_CUBEMAPS)
 	if (dynamicCubemap) {
 #			if defined(DEFERRED)
@@ -2668,7 +2668,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 #	if defined(TESTCUBEMAP)
-#		if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || (defined(EYE) && !defined(TRUE_PBR)))
+#		if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
 #			if defined(DYNAMIC_CUBEMAPS)
 	baseColor.xyz = 0.0;
 	specularColor = 0.0;
@@ -2836,7 +2836,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	psout.Parameters.w = psout.Diffuse.w;
 
-#		if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || (defined(EYE) && !defined(TRUE_PBR)))
+#		if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
 #			if defined(DYNAMIC_CUBEMAPS)
 	if (dynamicCubemap) {
 #				if defined(WETNESS_EFFECTS)
