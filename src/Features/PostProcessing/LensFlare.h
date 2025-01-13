@@ -5,8 +5,8 @@
 
 struct LensFlare : public PostProcessFeature
 {
-    virtual inline std::string GetType() const override { return "PotatoFX Lens Flare"; }
-	virtual inline std::string GetDesc() const override { return "Lens Flare from PotatoFX, originally by Gimle Larpes."; }
+    virtual inline std::string GetType() const override { return "Lens Flare"; }
+	virtual inline std::string GetDesc() const override { return "Lens Flare by Jiaye, partially based on Gimle Larpes's effect shader."; }
 
     struct Settings
 	{
@@ -35,10 +35,12 @@ struct LensFlare : public PostProcessFeature
         float ScreenWidth;
         float ScreenHeight;
         float3 SunPos;
+        float SunVisibility;
         int DownsizeScale;
         uint GLocalMask;
         uint SunGlareBoost;
         uint Starburst;
+        uint8_t pad[12];
     };
 
     struct debugSettings

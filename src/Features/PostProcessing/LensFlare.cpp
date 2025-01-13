@@ -340,13 +340,18 @@ void LensFlare::Draw(TextureInfo& inout_tex)
 
     auto sky = RE::Sky::GetSingleton();
     RE::NiPoint3 sun_pos;
+    float3 SunPos;
     if (sky->mode.get() == RE::Sky::Mode::kFull) {
         auto sun = sky->sun;
-        sun_pos = sun->GetRoot()->world.translate;
-        debugSunPos = { sun_pos.x, sun_pos.y, sun_pos.z };
+        sun_pos = sun->sunQuery.get()->world.translate;
+        auto eye_pos = Util::GetAverageEyePosition();
+        SunPos = { sun_pos.x, sun_pos.y, sun_pos.z };
+        SunPos -= { eye_pos.x, eye_pos.y, eye_pos.z };
     } else {
-        debugSunPos = { 0.0f, 0.0f, 0.0f };
+        SunPos = { 0.0f, 0.0f, 0.0f };
     }
+
+    debugSunPos = SunPos;
 
     state->BeginPerfEvent("Lens Flare");
 
@@ -363,7 +368,8 @@ void LensFlare::Draw(TextureInfo& inout_tex)
         .LFStrength = settings.LFStrength,
         .ScreenWidth = (float)width,
         .ScreenHeight = (float)height,
-        .SunPos = debugSunPos,
+        .SunPos = SunPos,
+        .SunVisibility = 1.0f,
         .DownsizeScale = 1,
         .GLocalMask = uint(settings.GLocalMask),
         .SunGlareBoost = uint(settings.SunGlareBoost),
