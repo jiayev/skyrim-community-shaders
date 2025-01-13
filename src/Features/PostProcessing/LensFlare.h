@@ -18,16 +18,27 @@ struct LensFlare : public PostProcessFeature
         float LensFlareCA = 1.0f;
         float LFStrength = 0.5f;
         bool GLocalMask = true;
-        uint8_t pad[3];
+        bool SunGlareBoost = true;
+        bool Starburst = true;
+        uint8_t pad;
 	} settings;
 
     struct alignas(16) LensFlareCB
     {
-        Settings settings;
+        float LensFlareCurve;
+        float GhostStrength;
+        float HaloStrength;
+        float HaloRadius;
+        float HaloWidth;
+        float LensFlareCA;
+        float LFStrength;
         float ScreenWidth;
         float ScreenHeight;
-        int downsizeScale;
-        uint8_t pad[4];
+        float3 SunPos;
+        int DownsizeScale;
+        uint GLocalMask;
+        uint SunGlareBoost;
+        uint Starburst;
     };
 
     struct debugSettings
@@ -48,6 +59,7 @@ struct LensFlare : public PostProcessFeature
     eastl::unique_ptr<Texture2D> texFlareU = nullptr;
     eastl::unique_ptr<Texture2D> texFlareUCopy = nullptr;
     eastl::unique_ptr<Texture2D> texBurstNoise = nullptr;
+    eastl::unique_ptr<Texture2D> texRGBNoise = nullptr;
 
     winrt::com_ptr<ID3D11SamplerState> colorSampler = nullptr;
     winrt::com_ptr<ID3D11SamplerState> resizeSampler = nullptr;
@@ -57,6 +69,8 @@ struct LensFlare : public PostProcessFeature
     winrt::com_ptr<ID3D11ComputeShader> downsampleCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> upsampleCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> compositeCS = nullptr;
+
+    float3 debugSunPos;
 
     virtual void SetupResources() override;
     virtual void ClearShaderCache() override;
@@ -69,4 +83,7 @@ struct LensFlare : public PostProcessFeature
     virtual void DrawSettings() override;
 
     virtual void Draw(TextureInfo&) override;
+
+    RE::NiPoint3 GetCameraPos();
+    RE::NiQuaternion GetCameraRot();
 };
