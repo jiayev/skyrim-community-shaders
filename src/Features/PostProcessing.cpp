@@ -549,8 +549,9 @@ void PostProcessing::LoadPresetFrom(std::string a_name)
 {
 	json a_presets = {};
 
-	// Clean up the name
-	a_name.erase(std::remove_if(a_name.begin(), a_name.end(), [](char c) { return !std::isalnum(c); }), a_name.end());
+	// if the name has .json, remove it
+	if (a_name.ends_with(".json"))
+		a_name = a_name.substr(0, a_name.size() - 5);
 
 	try {
 		std::ifstream i{ std::format("{}\\{}.json", ppPresetPath, a_name) };
