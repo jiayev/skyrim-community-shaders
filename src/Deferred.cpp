@@ -11,6 +11,7 @@
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
+#include "Features/Weather.h"
 
 struct DepthStates
 {
@@ -240,6 +241,8 @@ void Deferred::PrepassPasses()
 
 void Deferred::StartDeferred()
 {
+	Weather::GetSingleton()->Bind();
+
 	if (!inWorld)
 		return;
 

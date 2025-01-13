@@ -17,8 +17,10 @@ RWTexture2D<half3> MainRW : register(u0);
 RWTexture2D<half4> NormalTAAMaskSpecularMaskRW : register(u1);
 RWTexture2D<half2> MotionVectorsRW : register(u2);
 
-#if defined(DYNAMIC_CUBEMAPS)
 Texture2D<float> DepthTexture : register(t5);
+
+#if defined(DYNAMIC_CUBEMAPS)
+// Texture2D<float> DepthTexture : register(t5);
 Texture2D<half3> ReflectanceTexture : register(t6);
 TextureCube<half3> EnvTexture : register(t7);
 TextureCube<half3> EnvReflectionsTexture : register(t8);
@@ -27,7 +29,7 @@ SamplerState LinearSampler : register(s0);
 #endif
 
 #if !defined(DYNAMIC_CUBEMAPS) && defined(VR)  // VR also needs a depthbuffer
-Texture2D<float> DepthTexture : register(t5);
+// Texture2D<float> DepthTexture : register(t5);
 #endif
 
 #if defined(SKYLIGHTING)

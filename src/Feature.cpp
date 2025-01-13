@@ -17,6 +17,7 @@
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
+#include "Features/Weather.h"
 
 #include "State.h"
 
@@ -135,7 +136,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		ScreenSpaceGI::GetSingleton(),
 		Skylighting::GetSingleton(),
 		TerrainBlending::GetSingleton(),
-		VolumetricLighting::GetSingleton()
+		VolumetricLighting::GetSingleton(),
+		Weather::GetSingleton()
 	};
 
 	static std::vector<Feature*> featuresVR(features);
