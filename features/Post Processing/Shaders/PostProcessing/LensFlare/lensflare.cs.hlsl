@@ -31,8 +31,10 @@ static const float EPSILON = 1e-6;
 // Textures & Samplers
 Texture2D<float4> InputTexture : register(t0);
 Texture2D<float4> FlareTexture : register(t1);
+Texture2D<float4> NoiseTexture : register(t2);
 SamplerState ColorSampler : register(s0);
 SamplerState ResizeSampler : register(s1);
+SamplerState NoiseSampler : register(s2);
 RWTexture2D<float4> OutputTexture : register(u0);
 
 cbuffer LensFlareConstants : register(b1)

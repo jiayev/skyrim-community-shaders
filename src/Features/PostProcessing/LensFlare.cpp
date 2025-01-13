@@ -3,6 +3,8 @@
 #include "State.h"
 #include "Util.h"
 
+#include "DirectXTex.h"
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     LensFlare::Settings,
     LensFlareCurve,
@@ -75,6 +77,12 @@ void LensFlare::DrawSettings()
         ImGui::Checkbox("Disable Upsample", &debugsettings.disableUpsample);
         ImGui::SliderInt("Downsample Times", &debugsettings.downsampleTimes, 1, 8);
         ImGui::SliderInt("Upsample Times", &debugsettings.upsampleTimes, 1, 8);
+
+        static float debugRescale = .3f;
+        ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+
+        BUFFER_VIEWER_NODE(texFlare, debugRescale)
+        BUFFER_VIEWER_NODE(texBurstNoise, debugRescale)
     }
 }
 
@@ -101,6 +109,40 @@ void LensFlare::SetupResources()
     logger::debug("Creating buffers...");
     {
         lensFlareCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<LensFlareCB>());
+    }
+
+    logger::debug("Loading Burst Noise texture...");
+    {
+        DirectX::ScratchImage image;
+        try {
+			std::filesystem::path path{ "Data\\Textures\\starburst.dds" };
+
+			DX::ThrowIfFailed(LoadFromDDSFile(path.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image));
+		} catch (const DX::com_exception& e) {
+			logger::error("{}", e.what());
+			return;
+		}
+
+        ID3D11Resource* pResource = nullptr;
+        try {
+			DX::ThrowIfFailed(CreateTexture(device,
+				image.GetImages(), image.GetImageCount(),
+				image.GetMetadata(), &pResource));
+		} catch (const DX::com_exception& e) {
+			logger::error("{}", e.what());
+			return;
+		}
+
+        texBurstNoise = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource));
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = texBurstNoise->desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = {
+				.MostDetailedMip = 0,
+				.MipLevels = 1 }
+		};
+		texBurstNoise->CreateSRV(srvDesc);
     }
 
     logger::debug("Creating 2D textures...");
@@ -178,6 +220,18 @@ void LensFlare::SetupResources()
 		};
 
         DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, resizeSampler.put()));
+
+        D3D11_SAMPLER_DESC noiseRadialSamplerDesc = {
+            .Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+            .AddressU = D3D11_TEXTURE_ADDRESS_WRAP,
+            .AddressV = D3D11_TEXTURE_ADDRESS_WRAP,
+            .AddressW = D3D11_TEXTURE_ADDRESS_WRAP,
+            .MaxAnisotropy = 1,
+            .MinLOD = 0,
+            .MaxLOD = D3D11_FLOAT32_MAX
+        };
+
+        DX::ThrowIfFailed(device->CreateSamplerState(&noiseRadialSamplerDesc, noiseSampler.put()));
 	}
 
     CompileComputeShaders();
@@ -250,9 +304,9 @@ void LensFlare::Draw(TextureInfo& inout_tex)
 
     lensFlareCB->Update(data);
 
-    std::array<ID3D11ShaderResourceView*, 2> srvs = { nullptr };
+    std::array<ID3D11ShaderResourceView*, 3> srvs = { nullptr };
     std::array<ID3D11UnorderedAccessView*, 1> uavs = { nullptr };
-    std::array<ID3D11SamplerState*, 2> samplers = { colorSampler.get(), resizeSampler.get() };
+    std::array<ID3D11SamplerState*, 3> samplers = { colorSampler.get(), resizeSampler.get(), noiseSampler.get() };
 	auto cb = lensFlareCB->CB();
 
     auto resetViews = [&]() {
@@ -270,6 +324,7 @@ void LensFlare::Draw(TextureInfo& inout_tex)
 
     // Get Lens Flare
     srvs.at(0) = inout_tex.srv;
+    srvs.at(2) = texBurstNoise->srv.get();
     uavs.at(0) = texFlare->uav.get();
 
     context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
