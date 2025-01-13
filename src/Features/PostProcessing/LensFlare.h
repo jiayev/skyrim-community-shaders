@@ -47,9 +47,11 @@ struct LensFlare : public PostProcessFeature
     eastl::unique_ptr<Texture2D> texFlareDCopy = nullptr;
     eastl::unique_ptr<Texture2D> texFlareU = nullptr;
     eastl::unique_ptr<Texture2D> texFlareUCopy = nullptr;
+    eastl::unique_ptr<Texture2D> texBurstNoise = nullptr;
 
     winrt::com_ptr<ID3D11SamplerState> colorSampler = nullptr;
     winrt::com_ptr<ID3D11SamplerState> resizeSampler = nullptr;
+    winrt::com_ptr<ID3D11SamplerState> noiseSampler = nullptr;
 
     winrt::com_ptr<ID3D11ComputeShader> lensFlareCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> downsampleCS = nullptr;
