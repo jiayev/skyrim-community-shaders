@@ -2305,7 +2305,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor) / Color::LightPreMult;
 #	endif
 
-
 	directionalAmbientColor = Weather::GetDiffuseIBL(-worldSpaceNormal);
 	float3 directionalAmbientColorLinear = directionalAmbientColor;
 	directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor);
@@ -2326,17 +2325,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 #	endif
 
-
-
 #	if defined(TRUE_PBR) && defined(LOD_LAND_BLEND) && !defined(DEFERRED)
 	lodLandDiffuseColor += directionalAmbientColor;
 #	endif
 
-// #	if !(defined(DEFERRED) && defined(SSGI)) && !defined(TRUE_PBR)
-// 	diffuseColor += directionalAmbientColor;
-// #	endif
-
-
+	// #	if !(defined(DEFERRED) && defined(SSGI)) && !defined(TRUE_PBR)
+	// 	diffuseColor += directionalAmbientColor;
+	// #	endif
 
 #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
 	float envMaskColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).x;

@@ -1,7 +1,7 @@
 #include "Weather.h"
 
-#include "Util.h"
 #include "Deferred.h"
+#include "Util.h"
 
 void Weather::Bind()
 {
@@ -24,7 +24,7 @@ void Weather::Prepass()
 	auto& reflections = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS];
 
 	std::array<ID3D11ShaderResourceView*, 1> srvs = { reflections.SRV };
-	std::array<ID3D11UnorderedAccessView*, 1> uavs = { diffuseIBLTexture->uav.get()};
+	std::array<ID3D11UnorderedAccessView*, 1> uavs = { diffuseIBLTexture->uav.get() };
 	std::array<ID3D11SamplerState*, 1> samplers = { Deferred::GetSingleton()->linearSampler };
 
 	// Unset PS shader resource

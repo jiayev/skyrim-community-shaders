@@ -16,8 +16,8 @@
 #include "Features/TerrainShadows.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
-#include "Features/WetnessEffects.h"
 #include "Features/Weather.h"
+#include "Features/WetnessEffects.h"
 
 #include "State.h"
 
