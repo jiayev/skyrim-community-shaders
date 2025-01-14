@@ -33,7 +33,7 @@ void DoF::DrawSettings()
         ImGui::SliderFloat2("Focus Point", &settings.FocusCoord.x, 0.0f, 1.0f, "%.2f");
     }
     ImGui::SliderFloat("Transition Speed", &settings.TransitionSpeed, 0.1f, 1.0f, "%.2f");
-    ImGui::SliderFloat("Manual Focus", &settings.ManualFocusPlane, 0.0f, 1.0f, "%.2f");
+    ImGui::SliderFloat("Manual Focus", &settings.ManualFocusPlane, 0.1f, 150.0f, "%.2f m");
     ImGui::SliderFloat("Focal Length", &settings.FocalLength, 1.0f, 300.0f, "%.1f mm");
     ImGui::SliderFloat("F-Number", &settings.FNumber, 1.0f, 22.0f, "f/%.1f");
     ImGui::SliderFloat("Far Plane Max Blur", &settings.FarPlaneMaxBlur, 0.0f, 8.0f, "%.2f");
@@ -353,7 +353,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 	float focusLen = settings.FocalLength;
 	float nearBlur = settings.NearPlaneMaxBlur;
-    float manualFocus = settings.ManualFocusPlane;
+    float manualFocus = settings.ManualFocusPlane / 1000.0f;
     debugFocusPlane = manualFocus;
     bool autoFocus = settings.AutoFocus;
 
