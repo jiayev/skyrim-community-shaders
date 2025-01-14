@@ -2,9 +2,9 @@
 
 #include "Buffer.h"
 
+#include "Weather/LightingTemplateWidget.h"
 #include "Weather/WeatherWidget.h"
 #include "Weather/WorldSpaceWidget.h"
-#include "Weather/LightingTemplateWidget.h"
 #include "Widget.h"
 
 class EditorWindow

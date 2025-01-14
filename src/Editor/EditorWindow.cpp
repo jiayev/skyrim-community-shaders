@@ -100,7 +100,7 @@ void EditorWindow::ShowObjectsWindow()
 			ImGui::TableHeadersRow();
 
 			// Display objects based on the selected category
-			auto& widgets = selectedCategory == "Weather"   ? weatherWidgets :
+			auto& widgets = selectedCategory == "Weather"    ? weatherWidgets :
 			                selectedCategory == "WorldSpace" ? worldSpaceWidgets :
 			                                                   lightingTemplateWidgets;
 
@@ -110,7 +110,7 @@ void EditorWindow::ShowObjectsWindow()
 					continue;  // Skip widgets that don't match the filter
 
 				ImGui::TableNextRow();
-	
+
 				ImGui::TableSetColumnIndex(0);
 
 				// Editor ID column

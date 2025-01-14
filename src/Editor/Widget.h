@@ -24,7 +24,6 @@ public:
 class Widget
 {
 public:
-
 	RE::TESForm* form = nullptr;
 
 	virtual ~Widget(){};
