@@ -48,10 +48,10 @@ void WeatherWidget::DrawWidget()
 			ImGui::EndCombo();
 		}
 
-		if (parent) {
+		if (parent && !parent->IsOpen()) {
 			ImGui::SameLine();
 			if (ImGui::Button("Open"))
-				parent->open = true;
+				parent->SetOpen(true);
 		}
 
 	}

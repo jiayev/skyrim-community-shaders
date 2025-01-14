@@ -53,4 +53,9 @@ public:
 	{
 		return open;
 	}
+
+	void SetOpen(bool state = true)
+	{
+		open = state;
+	}
 };

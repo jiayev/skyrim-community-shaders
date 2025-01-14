@@ -116,7 +116,7 @@ void EditorWindow::ShowObjectsWindow()
 				// Editor ID column
 				if (ImGui::Selectable(widgets[i]->GetEditorID().c_str(), widgets[i]->IsOpen(), ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
 					if (ImGui::IsMouseDoubleClicked(0)) {
-						widgets[i]->open = true;
+						widgets[i]->SetOpen(true);
 					}
 				}
 
