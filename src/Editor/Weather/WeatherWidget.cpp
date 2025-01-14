@@ -53,7 +53,6 @@ void WeatherWidget::DrawWidget()
 			if (ImGui::Button("Open"))
 				parent->open = true;
 		}
-
 	}
 	ImGui::End();
 }
