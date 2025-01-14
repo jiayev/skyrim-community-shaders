@@ -1,10 +1,10 @@
-#include "WeatherWidget.h"
+#include "LightingTemplateWidget.h"
 
-WeatherWidget::~WeatherWidget()
+LightingTemplateWidget::~LightingTemplateWidget()
 {
 }
 
-void WeatherWidget::DrawWidget()
+void LightingTemplateWidget::DrawWidget()
 {
 	if (ImGui::Begin(GetEditorID().c_str(), &open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar)) {
 		if (ImGui::BeginMenuBar()) {

@@ -2,9 +2,9 @@
 
 #include "Buffer.h"
 
-#include "Weather/CloudsWidget.h"
 #include "Weather/WeatherWidget.h"
 #include "Weather/WorldSpaceWidget.h"
+#include "Weather/LightingTemplateWidget.h"
 #include "Widget.h"
 
 class EditorWindow
@@ -22,7 +22,7 @@ public:
 
 	std::vector<Widget*> weatherWidgets;
 	std::vector<Widget*> worldSpaceWidgets;
-	std::vector<Widget*> cloudsWidgets;
+	std::vector<Widget*> lightingTemplateWidgets;
 
 	void ShowObjectsWindow();
 

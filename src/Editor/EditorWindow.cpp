@@ -43,7 +43,7 @@ void EditorWindow::ShowObjectsWindow()
 	ImGui::Begin("Object List");
 
 	// Static variable to track the selected category
-	static std::string selectedCategory = "Weathers";
+	static std::string selectedCategory = "Lighting Template";
 
 	// Static variable for filtering objects
 	static char filterBuffer[256] = "";
@@ -73,7 +73,7 @@ void EditorWindow::ShowObjectsWindow()
 			ImGui::TableSetColumnIndex(0);
 
 			// List of categories
-			const char* categories[] = { "Weathers", "WorldSpace", "Clouds" };
+			const char* categories[] = { "Lighting Template", "Weather", "WorldSpace" };
 			for (int i = 0; i < IM_ARRAYSIZE(categories); ++i) {
 				// Highlight the selected category
 				if (ImGui::Selectable(categories[i], selectedCategory == categories[i])) {
@@ -92,90 +92,44 @@ void EditorWindow::ShowObjectsWindow()
 		ImGui::SameLine();
 		HelpMarker("Type a part of an object name to filter the list.");
 
-		bool openContextMenu = false;
-
 		// Create a table for the right column with "Name" and "ID" headers
-		if (ImGui::BeginTable("DetailsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-			ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
-			ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthStretch);
+		if (ImGui::BeginTable("DetailsTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+			ImGui::TableSetupColumn("Editor ID", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableSetupColumn("Form ID", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch);  // Added File column
 			ImGui::TableHeadersRow();
 
 			// Display objects based on the selected category
-			auto& widgets = selectedCategory == "Weathers"   ? weatherWidgets :
+			auto& widgets = selectedCategory == "Weather"   ? weatherWidgets :
 			                selectedCategory == "WorldSpace" ? worldSpaceWidgets :
-			                                                   cloudsWidgets;
+			                                                   lightingTemplateWidgets;
 
 			// Filtered display of widgets
 			for (int i = 0; i < widgets.size(); ++i) {
-				if (!ContainsStringIgnoreCase(widgets[i]->GetName(), filterBuffer) && renameIndex != i)
+				if (!ContainsStringIgnoreCase(widgets[i]->GetEditorID(), filterBuffer) && renameIndex != i)
 					continue;  // Skip widgets that don't match the filter
 
 				ImGui::TableNextRow();
-
-				// ID column
-				ImGui::TableSetColumnIndex(1);
-				ImGui::Text(std::format("{:08X}", widgets[i]->GetID()).c_str());
-
-				// Name column
+	
 				ImGui::TableSetColumnIndex(0);
-				ImGui::PushID(widgets[i]->GetID());
 
-				if (renameIndex == i) {
-					if (ImGui::InputText("##rename", renameBuffer, sizeof(renameBuffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
-						widgets[i]->SetName(renameBuffer);  // Apply new name
-						renameIndex = -1;                   // Exit rename mode
-					}
-				} else {
-					if (ImGui::Selectable(widgets[i]->GetName().c_str(), widgets[i]->IsOpen(), ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
-						if (ImGui::IsMouseDoubleClicked(0)) {
-							widgets[i]->open = true;
-						}
-					}
-					// Open context menu for the item
-					if (ImGui::BeginPopupContextItem(("ItemContextMenu" + std::to_string(i)).c_str())) {
-						openContextMenu = true;
-						if (ImGui::MenuItem("New")) {
-							if (selectedCategory == "Weathers") {
-							} else if (selectedCategory == "WorldSpace") {
-							} else if (selectedCategory == "Clouds") {
-								cloudsWidgets.push_back(new CloudsWidget());
-							}
-						}
-						if (ImGui::MenuItem("Duplicate")) {
-							Widget* duplicateWidget = widgets[i]->Clone();
-							widgets.push_back(duplicateWidget);
-						}
-						if (ImGui::MenuItem("Rename")) {
-							renameIndex = i;  // Enter rename mode
-							strncpy(renameBuffer, widgets[i]->GetName().c_str(), sizeof(renameBuffer));
-							renameBuffer[sizeof(renameBuffer) - 1] = '\0';  // Ensure null termination
-						}
-						if (ImGui::MenuItem("Delete")) {
-							widgets.erase(widgets.begin() + i);
-							--i;  // Adjust index after deletion
-						}
-						ImGui::EndPopup();
+				// Editor ID column
+				if (ImGui::Selectable(widgets[i]->GetEditorID().c_str(), widgets[i]->IsOpen(), ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
+					if (ImGui::IsMouseDoubleClicked(0)) {
+						widgets[i]->open = true;
 					}
 				}
 
-				ImGui::PopID();
+				// Form ID column
+				ImGui::TableNextColumn();
+				ImGui::Text(widgets[i]->GetFormID().c_str());
+
+				// File column
+				ImGui::TableNextColumn();
+				ImGui::Text(widgets[i]->GetFilename().c_str());
 			}
 
 			ImGui::EndTable();
-		}
-
-		// Open context menu in the empty space
-		if (!openContextMenu) {
-			if (ImGui::BeginPopupContextWindow("BackgroundContextMenu", ImGuiPopupFlags_MouseButtonRight)) {
-				if (ImGui::MenuItem("New")) {
-					if (selectedCategory == "Weathers") {
-					} else if (selectedCategory == "WorldSpace") {
-					} else if (selectedCategory == "Clouds") {
-						cloudsWidgets.push_back(new CloudsWidget());
-					}
-				}
-				ImGui::EndPopup();
-			}
 		}
 
 		ImGui::EndTable();
@@ -231,8 +185,8 @@ void EditorWindow::ShowWidgetWindow()
 			widget->DrawWidget();
 	}
 
-	for (int i = 0; i < (int)cloudsWidgets.size(); i++) {
-		auto widget = cloudsWidgets[i];
+	for (int i = 0; i < (int)lightingTemplateWidgets.size(); i++) {
+		auto widget = lightingTemplateWidgets[i];
 		if (widget->IsOpen())
 			widget->DrawWidget();
 	}
@@ -293,6 +247,13 @@ void EditorWindow::SetupResources()
 	for (auto worldSpace : worldSpaceArray) {
 		auto widget = new WorldSpaceWidget(worldSpace);
 		worldSpaceWidgets.push_back(widget);
+	}
+
+	auto& lightingTemplateArray = dataHandler->GetFormArray<RE::BGSLightingTemplate>();
+
+	for (auto lightingTemplate : lightingTemplateArray) {
+		auto widget = new LightingTemplateWidget(lightingTemplate);
+		lightingTemplateWidgets.push_back(widget);
 	}
 }
 

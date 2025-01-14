@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include "Util.h"
+
 class WidgetSharedData
 {
 private:
@@ -22,37 +24,26 @@ public:
 class Widget
 {
 public:
+
+	RE::TESForm* form = nullptr;
+
 	virtual ~Widget(){};
 
-	virtual Widget* Clone() const = 0;
-
-	std::string name = "";
-
-	virtual std::string GetName()
+	virtual std::string GetEditorID()
 	{
-		return name;
+		return form->GetFormEditorID();
 	}
 
-	virtual void SetName(std::string a_newName)
+	virtual std::string GetFormID()
 	{
-		name = a_newName;
+		return std::format("{:08X}", form->GetFormID());
 	}
 
-	virtual int GetID() = 0;
-
-	virtual std::string GetNameWithID()
+	virtual std::string GetFilename()
 	{
-		return std::format("{}###{}", GetName(), GetID());
-	}
-
-	virtual std::string GetWindowTitle()
-	{
-		return std::format("{} ({:08X})", GetName(), GetID());
-	}
-
-	virtual std::string GetWindowTitleWithID()
-	{
-		return std::format("{}###{}", GetWindowTitle(), GetID());
+		if (auto file = form->GetFile())
+			return std::format("{}", file->GetFilename());
+		return "Generated";
 	}
 
 	virtual void DrawWidget() = 0;
