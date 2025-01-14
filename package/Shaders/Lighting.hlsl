@@ -1710,7 +1710,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		elif defined(HAIR)
 	pbrSurfaceProperties.Roughness = saturate(PBRParams1.x - glossiness);
 	pbrSurfaceProperties.Metallic = 0;
-	pbrSurfaceProperties.AO = CalculateApproximateAO(preBaseColor, uv, 5) * 0.75 + 0.25;
+	pbrSurfaceProperties.AO = CalculateApproximateAO(preBaseColor, uv, 10) * 0.75 + 0.25;
 	// pbrSurfaceProperties.AO = 1;
 	pbrSurfaceProperties.F0 = PBRParams1.zzz;
 #		elif defined(EYE)
