@@ -1,6 +1,6 @@
 namespace CloudShadows
 {
-	TextureCube<float4> CloudShadowsTexture : register(t25);
+	TextureCube<float> CloudShadowsTexture : register(t25);
 
 	const static float CloudHeight = 2e3f / 1.428e-2;
 	const static float PlanetRadius = (6371e3f / 1.428e-2);
@@ -20,7 +20,7 @@ namespace CloudShadows
 	float GetCloudShadowMult(float3 worldPosition, SamplerState textureSampler)
 	{
 		float3 cloudSampleDir = GetCloudShadowSampleDir(worldPosition, SharedData::DirLightDirection.xyz).xyz;
-		float cloudCubeSample = CloudShadowsTexture.SampleLevel(textureSampler, cloudSampleDir, 0).w;
+		float cloudCubeSample = CloudShadowsTexture.SampleLevel(textureSampler, cloudSampleDir, 0).x;
 		return 1.0 - saturate(cloudCubeSample);
 	}
 }
