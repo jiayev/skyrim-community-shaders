@@ -16,10 +16,10 @@ Texture3D<float4> NoiseTex : register(t3);
 RWTexture3D<float4> DensityRW : register(u0);
 RWTexture3D<float4> DensityCopyRW : register(u1);
 
-#define LinearSampler ShadowmapSampler
+#	define LinearSampler ShadowmapSampler
 
-#include "Common/Framebuffer.hlsli"
-#include "Common/SharedData.hlsli"
+#	include "Common/Framebuffer.hlsli"
+#	include "Common/SharedData.hlsli"
 
 #	if defined(TERRAIN_SHADOWS)
 #		include "TerrainShadows/TerrainShadows.hlsli"
@@ -29,7 +29,7 @@ RWTexture3D<float4> DensityCopyRW : register(u1);
 #		include "CloudShadows/CloudShadows.hlsli"
 #	endif
 
-#include "Common/ShadowSampling.hlsli"
+#	include "Common/ShadowSampling.hlsli"
 
 cbuffer PerTechnique : register(b0)
 {

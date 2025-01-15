@@ -87,7 +87,6 @@ public:
 			{
 				func();
 				GetSingleton()->EarlyPrepasses();
-
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
