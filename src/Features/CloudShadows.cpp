@@ -90,7 +90,7 @@ void CloudShadows::SetupResources()
 		reflections.texture->GetDesc(&texDesc);
 		reflections.SRV->GetDesc(&srvDesc);
 
-		texDesc.Format = srvDesc.Format = DXGI_FORMAT_R16_FLOAT;
+		texDesc.Format = srvDesc.Format = DXGI_FORMAT_R8_UNORM;
 
 		texCubemapCloudOcc = new Texture2D(texDesc);
 		texCubemapCloudOcc->CreateSRV(srvDesc);
