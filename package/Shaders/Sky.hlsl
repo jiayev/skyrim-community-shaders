@@ -247,9 +247,9 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.MotionVectors = float4(screenMotionVector, 0, psout.Color.w);
 	psout.Normal = float4(0.5, 0.5, 0, psout.Color.w);
 
-#	if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)	
+#	if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
 	psout.CloudShadows = float4(1, 1, 1, psout.Color.w);
-	
+
 	float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
 	if (depth < input.Position.z)
 		psout.Color.w = 0;
