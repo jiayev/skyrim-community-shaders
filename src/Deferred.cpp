@@ -274,6 +274,8 @@ void Deferred::StartDeferred()
 	if (!shaderCache.IsEnabled())
 		return;
 
+	State::GetSingleton()->UpdateSharedData();
+
 	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
 	GET_INSTANCE_MEMBER(renderTargets, shadowState)
 	GET_INSTANCE_MEMBER(setRenderTargetMode, shadowState)
