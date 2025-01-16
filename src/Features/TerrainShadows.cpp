@@ -399,7 +399,7 @@ void TerrainShadows::UpdateShadow()
 	context->CSSetConstantBuffers(0, 1, &old.buffer);
 }
 
-void TerrainShadows::Prepass()
+void TerrainShadows::EarlyPrepass()
 {
 	LoadHeightmap();
 
@@ -416,5 +416,6 @@ void TerrainShadows::Prepass()
 
 		std::array<ID3D11ShaderResourceView*, 1> srvs = { texShadowHeight->srv.get() };
 		context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
+		context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
 	}
 }

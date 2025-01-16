@@ -73,7 +73,7 @@ struct TerrainShadows : public Feature
 
 	virtual void DrawSettings() override;
 
-	virtual void Prepass() override;
+	virtual void EarlyPrepass() override;
 	void LoadHeightmap();
 	void Precompute();
 	void UpdateShadow();
