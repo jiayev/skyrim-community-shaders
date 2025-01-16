@@ -32,6 +32,7 @@ struct Feature
 
 	virtual void DrawSettings() {}
 	virtual void Prepass() {}
+	virtual void EarlyPrepass() {}
 
 	virtual void DataLoaded() {}
 	virtual void PostPostLoad() {}

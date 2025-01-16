@@ -211,6 +211,33 @@ void Deferred::CopyShadowData()
 	}
 }
 
+void Deferred::EarlyPrepasses()
+{
+	auto& shaderCache = SIE::ShaderCache::Instance();
+
+	if (!shaderCache.IsEnabled())
+		return;
+
+	State::GetSingleton()->UpdateSharedData();
+
+	ZoneScoped;
+	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Early Prepass");
+
+	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
+
+	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
+	GET_INSTANCE_MEMBER(stateUpdateFlags, shadowState)
+
+	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);  // Run OMSetRenderTargets again
+
+	for (auto* feature : Feature::GetFeatureList()) {
+		if (feature->loaded) {
+			feature->EarlyPrepass();
+		}
+	}
+}
+
 void Deferred::PrepassPasses()
 {
 	ZoneScoped;
