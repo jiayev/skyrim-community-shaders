@@ -16,20 +16,16 @@ struct CloudShadows : Feature
 	virtual inline std::string_view GetShaderDefineName() override { return "CLOUD_SHADOWS"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
 
-	bool isCubemapPass = false;
-	ID3D11BlendState* resetBlendState = nullptr;
-	std::set<ID3D11BlendState*> mappedBlendStates;
-	std::map<ID3D11BlendState*, ID3D11BlendState*> modifiedBlendStates;
-
 	Texture2D* texCubemapCloudOcc = nullptr;
 	ID3D11RenderTargetView* cubemapCloudOccRTVs[6] = { nullptr };
+	ID3D11BlendState* cloudShadowBlendState = nullptr;
 
 	virtual void SetupResources() override;
 
 	void CheckResourcesSide(int side);
 	void ModifySky(RE::BSRenderPass* Pass);
 
-	virtual void Prepass() override;
+	virtual void EarlyPrepass() override;
 
 	virtual inline void PostPostLoad() override { Hooks::Install(); }
 

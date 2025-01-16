@@ -36,8 +36,8 @@ void CloudShadows::ModifySky(RE::BSRenderPass* Pass)
 
 		// render targets
 		ID3D11RenderTargetView* rtvs[4];
-		ID3D11DepthStencilView* depthStencil;
-		context->OMGetRenderTargets(3, rtvs, &depthStencil);
+		ID3D11DepthStencilView* dsv;
+		context->OMGetRenderTargets(3, rtvs, &dsv);
 
 		int side = -1;
 		for (int i = 0; i < 6; ++i)
@@ -51,11 +51,19 @@ void CloudShadows::ModifySky(RE::BSRenderPass* Pass)
 		CheckResourcesSide(side);
 
 		rtvs[3] = cubemapCloudOccRTVs[side];
-		context->OMSetRenderTargets(4, rtvs, depthStencil);
+		context->OMSetRenderTargets(4, rtvs, nullptr);
+
+		float blendFactor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+		UINT sampleMask = 0xffffffff;
+
+		context->OMSetBlendState(cloudShadowBlendState, blendFactor, sampleMask);
+
+		auto cubemapDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kCUBEMAP_REFLECTIONS];
+		context->PSSetShaderResources(17, 1, &cubemapDepth.depthSRV);
 	}
 }
 
-void CloudShadows::Prepass()
+void CloudShadows::EarlyPrepass()
 {
 	if ((RE::Sky::GetSingleton()->mode.get() != RE::Sky::Mode::kFull) ||
 		!RE::Sky::GetSingleton()->currentClimate)
@@ -65,6 +73,7 @@ void CloudShadows::Prepass()
 
 	ID3D11ShaderResourceView* srv = texCubemapCloudOcc->srv.get();
 	context->PSSetShaderResources(25, 1, &srv);
+	context->CSSetShaderResources(25, 1, &srv);
 }
 
 void CloudShadows::SetupResources()
@@ -82,7 +91,7 @@ void CloudShadows::SetupResources()
 		reflections.texture->GetDesc(&texDesc);
 		reflections.SRV->GetDesc(&srvDesc);
 
-		texDesc.Format = srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+		texDesc.Format = srvDesc.Format = DXGI_FORMAT_R8_UNORM;
 
 		texCubemapCloudOcc = new Texture2D(texDesc);
 		texCubemapCloudOcc->CreateSRV(srvDesc);
@@ -92,5 +101,21 @@ void CloudShadows::SetupResources()
 			rtvDesc.Format = texDesc.Format;
 			DX::ThrowIfFailed(device->CreateRenderTargetView(texCubemapCloudOcc->resource.get(), &rtvDesc, cubemapCloudOccRTVs + i));
 		}
+	}
+	{
+		D3D11_BLEND_DESC blendDesc = {};
+		blendDesc.AlphaToCoverageEnable = false;
+		blendDesc.IndependentBlendEnable = false;
+
+		blendDesc.RenderTarget[0].BlendEnable = true;
+		blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+		blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+		blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+		blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_SRC_ALPHA;
+		blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+		blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+		blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+
+		DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &cloudShadowBlendState));
 	}
 }
