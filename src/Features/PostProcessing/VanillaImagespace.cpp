@@ -187,7 +187,7 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
     RE::ImageSpaceBaseData::Cinematic cinematicdata;
     if (State::GetSingleton()->isVR) {
         auto iSRuntimeData = ImageSpace->GetVRRuntimeData();
-        if (auto& overrideBaseData = iSRuntimeData.overrideBaseData) {
+        if (auto overrideBaseData = iSRuntimeData.overrideBaseData) {
             cinematicdata = overrideBaseData->cinematic;
         }
         else {
@@ -195,7 +195,7 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
         }
     } else {
         auto iSRuntimeData = ImageSpace->GetRuntimeData();
-        if (auto& overrideBaseData = iSRuntimeData.overrideBaseData) {
+        if (auto overrideBaseData = iSRuntimeData.overrideBaseData) {
             cinematicdata = overrideBaseData->cinematic;
         }
         else {
