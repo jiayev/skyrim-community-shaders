@@ -63,7 +63,7 @@ void CloudShadows::ModifySky(RE::BSRenderPass* Pass)
 	}
 }
 
-void CloudShadows::Prepass()
+void CloudShadows::EarlyPrepass()
 {
 	if ((RE::Sky::GetSingleton()->mode.get() != RE::Sky::Mode::kFull) ||
 		!RE::Sky::GetSingleton()->currentClimate)
@@ -73,6 +73,7 @@ void CloudShadows::Prepass()
 
 	ID3D11ShaderResourceView* srv = texCubemapCloudOcc->srv.get();
 	context->PSSetShaderResources(25, 1, &srv);
+	context->CSSetShaderResources(25, 1, &srv);
 }
 
 void CloudShadows::SetupResources()

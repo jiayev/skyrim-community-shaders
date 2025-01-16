@@ -7,7 +7,7 @@
 namespace SharedData
 {
 
-#if defined(PSHADER) || defined(COMPUTESHADER)
+#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 	cbuffer SharedData : register(b5)
 	{
 		float4 WaterData[25];

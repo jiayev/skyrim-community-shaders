@@ -25,7 +25,7 @@ struct CloudShadows : Feature
 	void CheckResourcesSide(int side);
 	void ModifySky(RE::BSRenderPass* Pass);
 
-	virtual void Prepass() override;
+	virtual void EarlyPrepass() override;
 
 	virtual inline void PostPostLoad() override { Hooks::Install(); }
 
