@@ -185,12 +185,24 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
     float3 cinematic;
     auto ImageSpace = RE::ImageSpaceManager::GetSingleton();
     RE::ImageSpaceBaseData::Cinematic cinematicdata;
-    if (!REL::Module::IsVR()) {
-        cinematicdata = ImageSpace->GetRuntimeData().currentBaseData->cinematic;
+    if (State::GetSingleton()->isVR) {
+        auto iSRuntimeData = ImageSpace->GetVRRuntimeData();
+        if (auto& overrideBaseData = iSRuntimeData.overrideBaseData) {
+            cinematicdata = overrideBaseData->cinematic;
+        }
+        else {
+            cinematicdata = iSRuntimeData.currentBaseData->cinematic;
+        }
+    } else {
+        auto iSRuntimeData = ImageSpace->GetRuntimeData();
+        if (auto& overrideBaseData = iSRuntimeData.overrideBaseData) {
+            cinematicdata = overrideBaseData->cinematic;
+        }
+        else {
+            cinematicdata = iSRuntimeData.currentBaseData->cinematic;
+        }
     }
-    else {
-        cinematicdata = ImageSpace->GetVRRuntimeData().currentBaseData->cinematic;
-    }
+    
     if (auto sky = RE::Sky::GetSingleton())
         isInInterior = sky->mode.get() != RE::Sky::Mode::kFull;
     else
