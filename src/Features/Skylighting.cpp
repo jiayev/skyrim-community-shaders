@@ -27,6 +27,15 @@ void Skylighting::RestoreDefaultSettings()
 	settings = {};
 }
 
+void Skylighting::ResetSkylighting()
+{
+	auto& context = State::GetSingleton()->context;
+	UINT clr[1] = { 0 };
+	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
+	forceFrames = 255 * 4;
+	queuedResetSkylighting = false;
+}
+
 void Skylighting::DrawSettings()
 {
 	ImGui::Text("Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections.");
@@ -40,12 +49,9 @@ void Skylighting::DrawSettings()
 
 	ImGui::Separator();
 
-	if (ImGui::Button("Rebuild Skylighting")) {
-		auto& context = State::GetSingleton()->context;
-		UINT clr[1] = { 0 };
-		context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
-		forceFrames = 255 * 4;
-	}
+	if (ImGui::Button("Rebuild Skylighting"))
+		ResetSkylighting();
+	
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Changes below require rebuilding, a loading screen, or moving away from the current location to apply.");
 
@@ -431,15 +437,27 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 	return precipitationOcclusionMapRenderPassList;
 }
 
-void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
+void Skylighting::SetViewFrustum::thunk(RE::NiCamera* a_camera, RE::NiFrustum* a_frustum)
 {
-	State::GetSingleton()->BeginPerfEvent("PRECIPITATION MASK");
-	State::GetSingleton()->SetPerfMarker("PRECIPITATION MASK");
+	if (GetSingleton()->inOcclusion) {
+		uint corner = GetSingleton()->frameCount % 4;
 
+		a_frustum->fBottom = (corner == 0 || corner == 1) ? -5000.0f : 0.0f;
+
+		a_frustum->fLeft = (corner == 0 || corner == 2) ? -5000.0f : 0.0f;
+		a_frustum->fRight = (corner == 1 || corner == 3) ? 5000.0f : 0.0f;
+
+		a_frustum->fTop = (corner == 2 || corner == 3) ? 5000.0f : 0.0f;
+	}
+
+	func(a_camera, a_frustum);
+}
+
+void Skylighting::RenderOcclusion()
+{
 	auto& shaderCache = SIE::ShaderCache::Instance();
-	auto singleton = GetSingleton();
 
-	if (!singleton->doOcclusion || !shaderCache.IsEnabled()) {
+	if (!shaderCache.IsEnabled()) {
 		Main_Precipitation_RenderOcclusion::func();
 		State::GetSingleton()->EndPerfEvent();
 	}
@@ -451,6 +469,8 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 			auto precip = sky->precip;
 
 			{
+				State::GetSingleton()->BeginPerfEvent("Precipitation Mask");
+
 				doPrecip = false;
 
 				auto precipObject = precip->currentPrecip;
@@ -467,24 +487,31 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 
 					precip->RenderMask(rain);
 				}
+
+				State::GetSingleton()->EndPerfEvent();
 			}
 
 			{
-				std::chrono::time_point<std::chrono::system_clock> currentTimer = std::chrono::system_clock::now();
-				auto timePassed = std::chrono::duration_cast<std::chrono::milliseconds>(currentTimer - singleton->lastUpdateTimer).count();
+				State::GetSingleton()->BeginPerfEvent("Skylighting Mask");
 
-				if (singleton->forceFrames || timePassed >= (1000.0f / 30.0f)) {
-					singleton->forceFrames = (uint)std::max(0, (int)singleton->forceFrames - 1);
-					singleton->lastUpdateTimer = currentTimer;
-					singleton->frameCount++;
+				if (queuedResetSkylighting)
+					ResetSkylighting();
+
+				std::chrono::time_point<std::chrono::system_clock> currentTimer = std::chrono::system_clock::now();
+				auto timePassed = std::chrono::duration_cast<std::chrono::milliseconds>(currentTimer - lastUpdateTimer).count();
+
+				if (forceFrames || timePassed >= (1000.0f / 30.0f)) {
+					forceFrames = (uint)std::max(0, (int)forceFrames - 1);
+					lastUpdateTimer = currentTimer;
+					frameCount++;
 
 					auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 					auto& precipitation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
 					RE::BSGraphics::DepthStencilData precipitationCopy = precipitation;
 
-					precipitation.depthSRV = singleton->texOcclusion->srv.get();
-					precipitation.texture = singleton->texOcclusion->resource.get();
-					precipitation.views[0] = singleton->texOcclusion->dsv.get();
+					precipitation.depthSRV = texOcclusion->srv.get();
+					precipitation.texture = texOcclusion->resource.get();
+					precipitation.views[0] = texOcclusion->dsv.get();
 
 					static float& PrecipitationShaderCubeSize = (*(float*)REL::RelocationID(515451, 401590).address());
 					float originalPrecipitationShaderCubeSize = PrecipitationShaderCubeSize;
@@ -492,8 +519,8 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 					static RE::NiPoint3& PrecipitationShaderDirection = (*(RE::NiPoint3*)REL::RelocationID(515509, 401648).address());
 					RE::NiPoint3 originalParticleShaderDirection = PrecipitationShaderDirection;
 
-					singleton->inOcclusion = true;
-					PrecipitationShaderCubeSize = singleton->occlusionDistance;
+					inOcclusion = true;
+					PrecipitationShaderCubeSize = occlusionDistance;
 
 					float originaLastCubeSize = precip->lastCubeSize;
 					precip->lastCubeSize = PrecipitationShaderCubeSize;
@@ -516,7 +543,7 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 						}
 
 						// disc transformation
-						vPoint.x = sqrt(vPoint.x * sin(singleton->settings.MaxZenith));
+						vPoint.x = sqrt(vPoint.x * sin(settings.MaxZenith));
 						vPoint.y *= 6.28318530718f;
 
 						vPoint = { vPoint.x * cos(vPoint.y), vPoint.x * sin(vPoint.y) };
@@ -535,10 +562,10 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 						TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Skylighting - Render Height Map");
 						precip->RenderMask((RE::BSParticleShaderRainEmitter*)rain);
 					}
-					singleton->inOcclusion = false;
+					inOcclusion = false;
 
-					singleton->OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };
-					singleton->OcclusionTransform = ((RE::BSParticleShaderRainEmitter*)rain)->occlusionProjection;
+					OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };
+					OcclusionTransform = ((RE::BSParticleShaderRainEmitter*)rain)->occlusionProjection;
 
 					delete rain;
 
@@ -548,25 +575,10 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 					PrecipitationShaderDirection = originalParticleShaderDirection;
 
 					precipitation = precipitationCopy;
+
+					State::GetSingleton()->EndPerfEvent();
 				}
 			}
 		}
 	}
-	State::GetSingleton()->EndPerfEvent();
-}
-
-void Skylighting::SetViewFrustum::thunk(RE::NiCamera* a_camera, RE::NiFrustum* a_frustum)
-{
-	if (GetSingleton()->inOcclusion) {
-		uint corner = GetSingleton()->frameCount % 4;
-
-		a_frustum->fBottom = (corner == 0 || corner == 1) ? -5000.0f : 0.0f;
-
-		a_frustum->fLeft = (corner == 0 || corner == 2) ? -5000.0f : 0.0f;
-		a_frustum->fRight = (corner == 1 || corner == 3) ? 5000.0f : 0.0f;
-
-		a_frustum->fTop = (corner == 2 || corner == 3) ? 5000.0f : 0.0f;
-	}
-
-	func(a_camera, a_frustum);
 }
