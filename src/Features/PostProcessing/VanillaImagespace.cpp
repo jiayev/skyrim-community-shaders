@@ -9,8 +9,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     blendFactor,
     InteriorMultiplier,
     ExteriorMultiplier,
-    enableInExMultiplier
-)
+    InteriorOverride,
+    ExteriorOverride,
+    enableInExMultiplier,
+    enableInExOverride)
 
 void VanillaImagespace::DrawSettings()
 {

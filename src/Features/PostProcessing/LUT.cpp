@@ -121,10 +121,12 @@ void LUT::ReadTexture(std::filesystem::path path)
 
 	if (path.extension() != ".dds" && path.extension() != ".png" && path.extension() != ".bmp") {
 		errMsg = std::format("Invalid extension: {}! Only dds/png/bmp are supported.", path.extension().string());
+		logger::warn("Invalid extension: {}! Only dds/png/bmp are supported.", path.extension().string());
 		return;
 	}
 	if (!std::filesystem::exists(path)) {
 		errMsg = "The file does not exist.";
+		logger::warn("The file does not exist.");
 		return;
 	}
 
@@ -135,6 +137,7 @@ void LUT::ReadTexture(std::filesystem::path path)
 			DX::ThrowIfFailed(DirectX::CreateDDSTextureFromFile(device, path.c_str(), &pRsrc, &pSrv));
 		} catch (std::runtime_error& e) {
 			errMsg = std::format(comErrMsg, e.what());
+			logger::warn(comErrMsg, e.what());
 			return;
 		}
 
@@ -150,6 +153,7 @@ void LUT::ReadTexture(std::filesystem::path path)
 			LutType = 3;
 		} else {
 			errMsg = std::format("Invalid texture dimension: {}! Only 2D/3D textures are supported.", magic_enum::enum_name(texType));
+			logger::warn("Invalid texture dimension: {}! Only 2D/3D textures are supported.", magic_enum::enum_name(texType));
 			return;
 		}
 	} else {
@@ -158,6 +162,7 @@ void LUT::ReadTexture(std::filesystem::path path)
 			DX::ThrowIfFailed(DirectX::LoadFromWICFile(path.c_str(), DirectX::WIC_FLAGS_NONE, nullptr, image));
 		} catch (std::runtime_error& e) {
 			errMsg = std::format(comErrMsg, e.what());
+			logger::warn(comErrMsg, e.what());
 			return;
 		}
 
@@ -166,6 +171,7 @@ void LUT::ReadTexture(std::filesystem::path path)
 			DX::ThrowIfFailed(CreateTexture(device, image.GetImages(), image.GetImageCount(), image.GetMetadata(), &pRsrc));
 		} catch (std::runtime_error& e) {
 			errMsg = std::format(comErrMsg, e.what());
+			logger::warn(comErrMsg, e.what());
 			return;
 		}
 
