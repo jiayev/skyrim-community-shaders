@@ -3,12 +3,14 @@
 #include <DDSTextureLoader.h>
 
 #include "ShaderCache.h"
+#include "ScreenSpaceGI.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
 	MaxZenith,
 	MinDiffuseVisibility,
-	MinSpecularVisibility)
+	MinSpecularVisibility,
+	SSGIAmbientDimmer)
 
 void Skylighting::LoadSettings(json& o_json)
 {
@@ -27,13 +29,13 @@ void Skylighting::RestoreDefaultSettings()
 
 void Skylighting::DrawSettings()
 {
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(
-			"Extra darkening depending on surface orientation.\n"
-			"More physically correct, but may impact the intended visual of certain weathers.");
-
 	ImGui::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
 	ImGui::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
+	
+	ImGui::Separator();
+
+	ImGui::Text("Extra diffuse darkening if Screen Space GI is enabled.");
+	ImGui::SliderFloat("Screen Space GI Ambient Dimmer", &settings.SSGIAmbientDimmer, 0.01f, 1.f, "%.2f");
 
 	ImGui::Separator();
 
@@ -191,6 +193,13 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData()
 	float3 cellIDDiff = prevCellID - cellID;
 	prevCellID = cellID;
 
+	auto ambientDimmer = 1.0f;
+
+	auto ssgi = ScreenSpaceGI::GetSingleton();
+	if (ssgi->loaded)
+		if (ssgi->settings.Enabled && ssgi->settings.EnableGI && ssgi->settings.GIStrength > 0.0f)
+			ambientDimmer = settings.SSGIAmbientDimmer;
+
 	return {
 		.OcclusionViewProj = OcclusionTransform,
 		.OcclusionDir = OcclusionDir,
@@ -200,7 +209,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData()
 			((int)cellID.y - probeArrayDims[1] / 2) % probeArrayDims[1],
 			((int)cellID.z - probeArrayDims[2] / 2) % probeArrayDims[2] },
 		.ValidMargin = { (int)cellIDDiff.x, (int)cellIDDiff.y, (int)cellIDDiff.z },
-		.MinDiffuseVisibility = settings.MinDiffuseVisibility,
+		.MinDiffuseVisibility = settings.MinDiffuseVisibility * ambientDimmer,
 		.MinSpecularVisibility = settings.MinSpecularVisibility
 	};
 }
@@ -376,6 +385,8 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 					if (value & (static_cast<int32_t>(RE::BSXFlags::Flag::kRagdoll) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kEditorMarker) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kDynamic) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kArticulated) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kAddon) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kNeedsTransformUpdate) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kMagicShaderParticles) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kLights) |
