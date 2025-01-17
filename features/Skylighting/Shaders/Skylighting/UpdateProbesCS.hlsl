@@ -26,7 +26,6 @@ SamplerState samplerPointClamp : register(s0);
 
 	if (all(occlusionUV > 0) && all(occlusionUV < 1)) {
 		uint accumFrames = isValid ? (outAccumFramesArray[dtid] + 1) : 1;
-		//if (accumFrames < 255) {
 		float occlusionDepth = srcOcclusionDepth.SampleLevel(samplerPointClamp, occlusionUV, 0);
 		float visibility = saturate((occlusionDepth + 0.0005 - cellCentreOS.z) * 1024);
 
@@ -42,7 +41,6 @@ SamplerState samplerPointClamp : register(s0);
 
 		outProbeArray[dtid] = occlusionSH;
 		outAccumFramesArray[dtid] = accumFrames;
-		//}
 	} else if (!isValid) {
 		outProbeArray[dtid] = unitSH;
 		outAccumFramesArray[dtid] = 0;
