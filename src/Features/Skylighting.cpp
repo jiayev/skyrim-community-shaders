@@ -124,10 +124,9 @@ void Skylighting::SetupResources()
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, pointClampSampler.put()));
 	}
 
-	{		
+	{
 		auto& context = State::GetSingleton()->context;
 		DirectX::CreateDDSTextureFromFile(device, context, L"Data\\Shaders\\Skylighting\\SpatiotemporalBlueNoise\\stbn_vec3_2Dx1D_128x128x64.dds", nullptr, stbn_vec3_2Dx1D_128x128x64.put());
-		
 	}
 
 	CompileComputeShaders();
