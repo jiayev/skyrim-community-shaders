@@ -374,8 +374,7 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 					auto bsxFlags = (RE::BSXFlags*)extraData;
 					auto value = static_cast<int32_t>(bsxFlags->value);
 
-					if (value & (static_cast<int32_t>(RE::BSXFlags::Flag::kAnimated) |
-									static_cast<int32_t>(RE::BSXFlags::Flag::kRagdoll) |
+					if (value & (static_cast<int32_t>(RE::BSXFlags::Flag::kRagdoll) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kEditorMarker) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kDynamic) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kNeedsTransformUpdate) |
