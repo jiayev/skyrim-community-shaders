@@ -345,8 +345,7 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 			RE::BSFadeNode* fadeNode = nullptr;
 
 			RE::NiNode* parent = geometry->parent;
-			while (parent && !fadeNode)
-			{
+			while (parent && !fadeNode) {
 				fadeNode = parent->AsFadeNode();
 				parent = parent->parent;
 			}
@@ -386,7 +385,6 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 			if (property->flags.any(kVertexColors)) {
 				technique.set(Vc);
 			}
-
 
 			const auto alphaProperty = static_cast<RE::NiAlphaProperty*>(geometry->GetGeometryRuntimeData().properties[0].get());
 			if (alphaProperty && alphaProperty->GetAlphaTesting()) {
