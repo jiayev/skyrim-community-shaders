@@ -34,7 +34,7 @@ namespace Skylighting
 
 	sh2 sample(SharedData::SkylightingSettings params, Texture3D<sh2> probeArray, Texture2DArray<float3> blueNoise, float2 screenPosition, float3 positionMS, float3 normalWS)
 	{
-		if (SharedData::FrameCount){ // Check TAA
+		if (SharedData::FrameCount) {  // Check TAA
 			float3 offset = blueNoise[int3(screenPosition.xy % 128, SharedData::FrameCount % 64)] * 2.0 - 1.0;
 			positionMS.xyz += offset * 32;
 		}
