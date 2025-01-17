@@ -2,8 +2,8 @@
 
 #include <DDSTextureLoader.h>
 
-#include "ShaderCache.h"
 #include "ScreenSpaceGI.h"
+#include "ShaderCache.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
@@ -31,7 +31,7 @@ void Skylighting::DrawSettings()
 {
 	ImGui::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
 	ImGui::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
-	
+
 	ImGui::Separator();
 
 	ImGui::Text("Extra diffuse darkening if Screen Space GI is enabled.");
