@@ -51,7 +51,7 @@ void Skylighting::DrawSettings()
 
 	if (ImGui::Button("Rebuild Skylighting"))
 		ResetSkylighting();
-	
+
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Changes below require rebuilding, a loading screen, or moving away from the current location to apply.");
 
