@@ -36,7 +36,7 @@ namespace Skylighting
 	{
 		if (SharedData::FrameCount) {  // Check TAA
 			float3 offset = blueNoise[int3(screenPosition.xy % 128, SharedData::FrameCount % 64)] * 2.0 - 1.0;
-			positionMS.xyz += offset * 32;
+			positionMS.xyz += offset * CELL_SIZE * 0.5;
 		}
 
 		const static sh2 unitSH = float4(sqrt(4 * Math::PI), 0, 0, 0);

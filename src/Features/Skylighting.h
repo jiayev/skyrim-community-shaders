@@ -63,7 +63,7 @@ struct Skylighting : Feature
 
 	SkylightingCB GetCommonBufferData();
 
-	winrt::com_ptr<ID3D11SamplerState> pointClampSampler = nullptr;
+	winrt::com_ptr<ID3D11SamplerState> comparisonSampler = nullptr;
 
 	Texture2D* texOcclusion = nullptr;
 	Texture3D* texProbeArray = nullptr;
