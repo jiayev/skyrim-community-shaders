@@ -163,6 +163,10 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData()
 	if (frameChecker.IsNewFrame())
 		return Skylighting::SkylightingCB{};
 
+	if (auto ui = RE::UI::GetSingleton())
+		if (ui->IsMenuOpen(RE::MapMenu::MENU_NAME))
+			return Skylighting::SkylightingCB{};
+
 	static float3 prevCellID = { 0, 0, 0 };
 
 	auto eyePosNI = Util::GetEyePosition(0);
@@ -195,6 +199,10 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData()
 
 void Skylighting::Prepass()
 {
+	if (auto ui = RE::UI::GetSingleton())
+		if (ui->IsMenuOpen(RE::MapMenu::MENU_NAME))
+			return;
+
 	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Skylighting - Update Probes");
 
 	auto& context = State::GetSingleton()->context;
@@ -366,12 +374,6 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 									static_cast<int32_t>(RE::BSXFlags::Flag::kSearchedBreakable))) {
 						return precipitationOcclusionMapRenderPassList;
 					}
-				}
-			}
-
-			if (auto baseObject = userData->GetBaseObject()) {
-				if (baseObject->As<RE::BGSMovableStatic>()) {
-					return precipitationOcclusionMapRenderPassList;
 				}
 			}
 		}
