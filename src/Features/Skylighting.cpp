@@ -386,7 +386,6 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 					if (value & (static_cast<int32_t>(RE::BSXFlags::Flag::kRagdoll) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kEditorMarker) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kDynamic) |
-									static_cast<int32_t>(RE::BSXFlags::Flag::kArticulated) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kAddon) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kNeedsTransformUpdate) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kMagicShaderParticles) |
