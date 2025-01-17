@@ -159,6 +159,10 @@ void Skylighting::CompileComputeShaders()
 
 Skylighting::SkylightingCB Skylighting::GetCommonBufferData()
 {
+	static Util::FrameChecker frameChecker;
+	if (frameChecker.IsNewFrame())
+		return Skylighting::SkylightingCB{};
+
 	static float3 prevCellID = { 0, 0, 0 };
 
 	auto eyePosNI = Util::GetEyePosition(0);
@@ -336,7 +340,45 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 			return precipitationOcclusionMapRenderPassList;
 	}
 
-	if (property->flags.any(kZBufferWrite) && property->flags.none(kRefraction, kTempRefraction, kMultiTextureLandscape, kNoLODLandBlend, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal, kAnisotropicLighting) && !(property->flags.any(kSkinned) && property->flags.none(kTreeAnim))) {
+	if (GetSingleton()->inOcclusion) {
+		if (auto userData = geometry->GetUserData()) {
+			RE::BSFadeNode* fadeNode = nullptr;
+
+			RE::NiNode* parent = geometry->parent;
+			while (parent && !fadeNode)
+			{
+				fadeNode = parent->AsFadeNode();
+				parent = parent->parent;
+			}
+
+			if (fadeNode) {
+				if (auto extraData = fadeNode->GetExtraData("BSX")) {
+					auto bsxFlags = (RE::BSXFlags*)extraData;
+					auto value = static_cast<int32_t>(bsxFlags->value);
+
+					if (value & (static_cast<int32_t>(RE::BSXFlags::Flag::kAnimated) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kRagdoll) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kEditorMarker) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kDynamic) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kNeedsTransformUpdate) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kMagicShaderParticles) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kLights) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kBreakable) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kSearchedBreakable))) {
+						return precipitationOcclusionMapRenderPassList;
+					}
+				}
+			}
+
+			if (auto baseObject = userData->GetBaseObject()) {
+				if (baseObject->As<RE::BGSMovableStatic>()) {
+					return precipitationOcclusionMapRenderPassList;
+				}
+			}
+		}
+	}
+
+	if (property->flags.any(kZBufferWrite) && property->flags.none(kRefraction, kTempRefraction, kMultiTextureLandscape, kNoLODLandBlend, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal)) {
 		if (geometry->worldBound.radius > 1) {
 			stl::enumeration<RE::BSUtilityShader::Flags> technique;
 			technique.set(RenderDepth);
@@ -344,6 +386,7 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 			if (property->flags.any(kVertexColors)) {
 				technique.set(Vc);
 			}
+
 
 			const auto alphaProperty = static_cast<RE::NiAlphaProperty*>(geometry->GetGeometryRuntimeData().properties[0].get());
 			if (alphaProperty && alphaProperty->GetAlphaTesting()) {
