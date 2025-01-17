@@ -389,7 +389,7 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 	}
 
 	if (property->flags.any(kZBufferWrite) && property->flags.none(kRefraction, kTempRefraction, kMultiTextureLandscape, kNoLODLandBlend, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal)) {
-		if (geometry->worldBound.radius > 1) {
+		if (geometry->worldBound.radius > 32) {
 			stl::enumeration<RE::BSUtilityShader::Flags> technique;
 			technique.set(RenderDepth);
 
