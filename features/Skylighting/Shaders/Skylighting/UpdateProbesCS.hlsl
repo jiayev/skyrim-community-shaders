@@ -19,7 +19,7 @@ SamplerComparisonState comparisonSampler : register(s0);
 
 	float3 cellCentreMS = cellID + 0.5 - Skylighting::ARRAY_DIM / 2;
 	cellCentreMS = cellCentreMS / Skylighting::ARRAY_DIM * Skylighting::ARRAY_SIZE + settings.PosOffset.xyz;
-	
+
 	float3 cellCentreOS = mul(settings.OcclusionViewProj, float4(cellCentreMS, 1)).xyz;
 	cellCentreOS.y = -cellCentreOS.y;
 	float2 occlusionUV = cellCentreOS.xy * 0.5 + 0.5;
