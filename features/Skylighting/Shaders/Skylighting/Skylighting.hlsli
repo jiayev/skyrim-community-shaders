@@ -7,6 +7,7 @@ namespace Skylighting
 {
 #ifdef PSHADER
 	Texture3D<sh2> SkylightingProbeArray : register(t50);
+	Texture2DArray<float3> stbn_vec3_2Dx1D_128x128x64 : register(t51);
 #endif
 
 	const static uint3 ARRAY_DIM = uint3(256, 256, 128);
@@ -31,8 +32,11 @@ namespace Skylighting
 		return lerp(params.MinSpecularVisibility, 1.0, saturate(visibility));
 	}
 
-	sh2 sample(SharedData::SkylightingSettings params, Texture3D<sh2> probeArray, float3 positionMS, float3 normalWS)
+	sh2 sample(SharedData::SkylightingSettings params, Texture3D<sh2> probeArray, Texture2DArray<float3> blueNoise, float2 screenPosition, float3 positionMS, float3 normalWS)
 	{
+		float3 offset = blueNoise[int3(screenPosition.xy % 128, SharedData::FrameCount % 64)] * 2.0 - 1.0;
+		positionMS.xyz += offset * 32;
+
 		const static sh2 unitSH = float4(sqrt(4 * Math::PI), 0, 0, 0);
 		sh2 scaledUnitSH = unitSH / 1e-10;
 
@@ -79,33 +83,5 @@ namespace Skylighting
 		}
 
 		return SphericalHarmonics::Scale(sum, rcp(wsum + 1e-10));
-	}
-
-	float getVL(SharedData::SkylightingSettings params, Texture3D<sh2> probeArray, float3 startPosWS, float3 endPosWS, float2 pxCoord)
-	{
-		const static uint nSteps = 16;
-		const static float step = 1.0 / float(nSteps);
-
-		float3 worldDir = endPosWS - startPosWS;
-		float3 worldDirNormalised = normalize(worldDir);
-
-		float noise = Random::InterleavedGradientNoise(pxCoord, SharedData::FrameCount);
-
-		float vl = 0;
-
-		for (uint i = 0; i < nSteps; ++i) {
-			float t = saturate(i * step);
-
-			float shadow = 0;
-			{
-				float3 samplePositionWS = startPosWS + worldDir * t;
-
-				sh2 skylighting = Skylighting::sample(params, probeArray, samplePositionWS, float3(0, 0, 1));
-
-				shadow += Skylighting::mixDiffuse(params, SphericalHarmonics::Unproject(skylighting, worldDirNormalised));
-			}
-			vl += shadow;
-		}
-		return vl * step;
 	}
 }

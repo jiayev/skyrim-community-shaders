@@ -1,5 +1,8 @@
 #include "Skylighting.h"
-#include <ShaderCache.h>
+
+#include <DDSTextureLoader.h>
+
+#include "ShaderCache.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
@@ -121,6 +124,12 @@ void Skylighting::SetupResources()
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, pointClampSampler.put()));
 	}
 
+	{		
+		auto& context = State::GetSingleton()->context;
+		DirectX::CreateDDSTextureFromFile(device, context, L"Data\\Shaders\\Skylighting\\SpatiotemporalBlueNoise\\stbn_vec3_2Dx1D_128x128x64.dds", nullptr, stbn_vec3_2Dx1D_128x128x64.put());
+		
+	}
+
 	CompileComputeShaders();
 }
 
@@ -207,35 +216,37 @@ void Skylighting::Prepass()
 
 	auto& context = State::GetSingleton()->context;
 
-	std::array<ID3D11ShaderResourceView*, 1> srvs = { texOcclusion->srv.get() };
-	std::array<ID3D11UnorderedAccessView*, 2> uavs = { texProbeArray->uav.get(), texAccumFramesArray->uav.get() };
-	std::array<ID3D11SamplerState*, 1> samplers = { pointClampSampler.get() };
-
-	// update probe array
 	{
-		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(probeUpdateCompute.get(), nullptr, 0);
-		context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, probeArrayDims[2]);
+		std::array<ID3D11ShaderResourceView*, 1> srvs = { texOcclusion->srv.get() };
+		std::array<ID3D11UnorderedAccessView*, 2> uavs = { texProbeArray->uav.get(), texAccumFramesArray->uav.get() };
+		std::array<ID3D11SamplerState*, 1> samplers = { pointClampSampler.get() };
+
+		// Update probe array
+		{
+			context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
+			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			context->CSSetShader(probeUpdateCompute.get(), nullptr, 0);
+			context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, probeArrayDims[2]);
+		}
+
+		// Reset
+		{
+			srvs.fill(nullptr);
+			uavs.fill(nullptr);
+			samplers.fill(nullptr);
+
+			context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
+			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			context->CSSetShader(nullptr, nullptr, 0);
+		}
 	}
 
-	// reset
+	// Set PS shader resources
 	{
-		srvs.fill(nullptr);
-		uavs.fill(nullptr);
-		samplers.fill(nullptr);
-
-		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(nullptr, nullptr, 0);
-	}
-
-	// set PS shader resource
-	{
-		ID3D11ShaderResourceView* srv = texProbeArray->srv.get();
-		context->PSSetShaderResources(50, 1, &srv);
+		ID3D11ShaderResourceView* srvs[2] = { texProbeArray->srv.get(), stbn_vec3_2Dx1D_128x128x64.get() };
+		context->PSSetShaderResources(50, 2, srvs);
 	}
 }
 
