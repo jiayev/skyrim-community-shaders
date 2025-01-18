@@ -40,8 +40,8 @@ struct Skylighting : Feature
 	{
 		float MaxZenith = 3.1415926f / 4.f;  // 45 deg
 		float MinDiffuseVisibility = 0.1f;
-		float MinSpecularVisibility = 0.f;
-		uint pad0;
+		float MinSpecularVisibility = 0.01f;
+		float SSGIAmbientDimmer = 1.0f;
 	} settings;
 
 	struct SkylightingCB
@@ -63,25 +63,28 @@ struct Skylighting : Feature
 
 	SkylightingCB GetCommonBufferData();
 
-	winrt::com_ptr<ID3D11SamplerState> pointClampSampler = nullptr;
+	winrt::com_ptr<ID3D11SamplerState> comparisonSampler = nullptr;
 
 	Texture2D* texOcclusion = nullptr;
 	Texture3D* texProbeArray = nullptr;
 	Texture3D* texAccumFramesArray = nullptr;
 
 	winrt::com_ptr<ID3D11ComputeShader> probeUpdateCompute = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> stbn_vec3_2Dx1D_128x128x64;
 
 	// misc parameters
-	bool doOcclusion = true;
 	uint probeArrayDims[3] = { 256, 256, 128 };
 	float occlusionDistance = 4096.f * 3.f;  // 3 cells
 
 	// cached variables
+	bool queuedResetSkylighting = true;
 	bool inOcclusion = false;
 	REX::W32::XMFLOAT4X4 OcclusionTransform;
 	float4 OcclusionDir;
 	uint forceFrames = 255 * 4;
 	uint frameCount = 0;
+
+	void ResetSkylighting();
 
 	std::chrono::time_point<std::chrono::system_clock> lastUpdateTimer = std::chrono::system_clock::now();
 
@@ -94,9 +97,15 @@ struct Skylighting : Feature
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	void RenderOcclusion();
+
 	struct Main_Precipitation_RenderOcclusion
 	{
-		static void thunk();
+		static void thunk()
+		{
+			GetSingleton()->RenderOcclusion();
+		}
+
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -115,7 +124,7 @@ struct Skylighting : Feature
 			// When entering a new cell through a loadscreen, update every frame until completion
 			if (a_event->menuName == RE::LoadingMenu::MENU_NAME) {
 				if (!a_event->opening)
-					Skylighting::GetSingleton()->forceFrames = 255 * 4;
+					GetSingleton()->queuedResetSkylighting = true;
 			}
 
 			return RE::BSEventNotifyControl::kContinue;
