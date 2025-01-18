@@ -61,9 +61,17 @@ void LUT::LoadSettings(json& o_json)
 {
 	settings = o_json;
 
-	if (!settings.LutPath.empty())
-		ReadTexture(settings.LutPath);
 	tempPath = settings.LutPath;
+	logger::info("Loading LUT settings, LUT Path: {}", settings.LutPath);
+
+	try {
+		if (!tempPath.empty() && !firstLoad)
+			ReadTexture(tempPath);
+		else if (firstLoad)
+			firstLoad = false;
+	} catch (const std::exception& e) {
+		logger::warn("Failed to load LUT settings: {}", e.what());
+	}
 }
 
 void LUT::SaveSettings(json& o_json)
@@ -74,6 +82,9 @@ void LUT::SaveSettings(json& o_json)
 void LUT::SetupResources()
 {
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+
+	if (!settings.LutPath.empty())
+		ReadTexture(settings.LutPath);
 
 	logger::debug("Creating buffers...");
 	{
