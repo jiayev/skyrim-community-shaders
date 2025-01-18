@@ -34,15 +34,18 @@ namespace Skylighting
 
 	sh2 sample(SharedData::SkylightingSettings params, Texture3D<sh2> probeArray, Texture2DArray<float3> blueNoise, float2 screenPosition, float3 positionMS, float3 normalWS)
 	{
+		const static sh2 unitSH = float4(sqrt(4 * Math::PI), 0, 0, 0);
+		sh2 scaledUnitSH = unitSH / 1e-10;
+
+		if (SharedData::InInterior)
+			return scaledUnitSH;
+
 		positionMS.xyz += normalWS * CELL_SIZE * 0.5;  // Receiver normal bias
 
 		if (SharedData::FrameCount) {  // Check TAA
 			float3 offset = blueNoise[int3(screenPosition.xy % 128, SharedData::FrameCount % 64)] * 2.0 - 1.0;
 			positionMS.xyz += offset * CELL_SIZE * 0.5;
 		}
-
-		const static sh2 unitSH = float4(sqrt(4 * Math::PI), 0, 0, 0);
-		sh2 scaledUnitSH = unitSH / 1e-10;
 
 		float3 positionMSAdjusted = positionMS - params.PosOffset.xyz;
 		float3 uvw = positionMSAdjusted / ARRAY_SIZE + .5;
@@ -93,6 +96,9 @@ namespace Skylighting
 	{
 		const static sh2 unitSH = float4(sqrt(4 * Math::PI), 0, 0, 0);
 		sh2 scaledUnitSH = unitSH / 1e-10;
+
+		if (SharedData::InInterior)
+			return scaledUnitSH;
 
 		float3 positionMSAdjusted = positionMS - params.PosOffset.xyz;
 		float3 uvw = positionMSAdjusted / ARRAY_SIZE + .5;
