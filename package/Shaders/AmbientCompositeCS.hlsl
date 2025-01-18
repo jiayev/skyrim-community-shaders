@@ -8,24 +8,22 @@
 
 Texture2D<unorm half3> AlbedoTexture : register(t0);
 Texture2D<unorm half3> NormalRoughnessTexture : register(t1);
+Texture2D<float> DepthTexture : register(t2);
 
 #if defined(SKYLIGHTING)
 #	include "Skylighting/Skylighting.hlsli"
 
-Texture2D<unorm float> DepthTexture : register(t2);
 Texture3D<sh2> SkylightingProbeArray : register(t3);
+Texture2DArray<float3> stbn_vec3_2Dx1D_128x128x64 : register(t4);
+
 #endif
 
-#if !defined(SKYLIGHTING) && defined(VR)  // VR also needs a depthbuffer
-Texture2D<unorm float> DepthTexture : register(t2);
-#endif
-
-Texture2D<unorm half3> Masks2Texture : register(t4);
+Texture2D<unorm half3> Masks2Texture : register(t5);
 
 #if defined(SSGI)
-Texture2D<half> SsgiAoTexture : register(t5);
-Texture2D<half4> SsgiYTexture : register(t6);
-Texture2D<half2> SsgiCoCgTexture : register(t7);
+Texture2D<half> SsgiAoTexture : register(t6);
+Texture2D<half4> SsgiYTexture : register(t7);
+Texture2D<half2> SsgiCoCgTexture : register(t8);
 #endif
 
 RWTexture2D<half3> MainRW : register(u0);
@@ -79,7 +77,7 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out half ao, out half3 il)
 	positionMS.xyz += FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
 #	endif
 
-	sh2 skylighting = Skylighting::sample(SharedData::skylightingSettings, SkylightingProbeArray, positionMS.xyz, normalWS);
+	sh2 skylighting = Skylighting::sample(SharedData::skylightingSettings, SkylightingProbeArray, stbn_vec3_2Dx1D_128x128x64, dispatchID.xy, positionMS.xyz, normalWS);
 	half skylightingDiffuse = SphericalHarmonics::FuncProductIntegral(skylighting, SphericalHarmonics::EvaluateCosineLobe(float3(normalWS.xy, normalWS.z * 0.5 + 0.5))) / Math::PI;
 	skylightingDiffuse = lerp(1.0, skylightingDiffuse, Skylighting::getFadeOutFactor(positionMS.xyz));
 	skylightingDiffuse = Skylighting::mixDiffuse(SharedData::skylightingSettings, skylightingDiffuse);
