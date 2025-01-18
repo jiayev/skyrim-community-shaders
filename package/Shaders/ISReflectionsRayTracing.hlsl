@@ -86,7 +86,7 @@ float4 GetReflectionColor(
 			float2 uvResultScreenCenterOffset = binaryRaySample.xy - 0.5;
 
 #	ifdef VR
-			float centerDistance = abs(uvResultScreenCenterOffset.xy * 2.0);
+			float2 centerDistance = abs(uvResultScreenCenterOffset.xy * 2.0);
 
 			// Make VR fades consistent by taking the closer of the two eyes
 			// Based on concepts from https://cuteloong.github.io/publications/scssr24/
