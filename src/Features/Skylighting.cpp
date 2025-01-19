@@ -1,11 +1,16 @@
 #include "Skylighting.h"
-#include <ShaderCache.h>
+
+#include <DDSTextureLoader.h>
+
+#include "ScreenSpaceGI.h"
+#include "ShaderCache.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
 	MaxZenith,
 	MinDiffuseVisibility,
-	MinSpecularVisibility)
+	MinSpecularVisibility,
+	SSGIAmbientDimmer)
 
 void Skylighting::LoadSettings(json& o_json)
 {
@@ -22,24 +27,31 @@ void Skylighting::RestoreDefaultSettings()
 	settings = {};
 }
 
+void Skylighting::ResetSkylighting()
+{
+	auto& context = State::GetSingleton()->context;
+	UINT clr[1] = { 0 };
+	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
+	forceFrames = 255 * 4;
+	queuedResetSkylighting = false;
+}
+
 void Skylighting::DrawSettings()
 {
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(
-			"Extra darkening depending on surface orientation.\n"
-			"More physically correct, but may impact the intended visual of certain weathers.");
-
-	ImGui::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.f, 1.f, "%.2f");
-	ImGui::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.f, 1.f, "%.2f");
+	ImGui::Text("Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections.");
+	ImGui::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
+	ImGui::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
 
 	ImGui::Separator();
 
-	if (ImGui::Button("Rebuild Skylighting")) {
-		auto& context = State::GetSingleton()->context;
-		UINT clr[1] = { 0 };
-		context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
-		forceFrames = 255 * 4;
-	}
+	ImGui::Text("Extra diffuse darkening if Screen Space GI is enabled.");
+	ImGui::SliderFloat("Screen Space GI Ambient Dimmer", &settings.SSGIAmbientDimmer, 0.01f, 1.f, "%.2f");
+
+	ImGui::Separator();
+
+	if (ImGui::Button("Rebuild Skylighting"))
+		ResetSkylighting();
+
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Changes below require rebuilding, a loading screen, or moving away from the current location to apply.");
 
@@ -109,16 +121,20 @@ void Skylighting::SetupResources()
 	}
 
 	{
-		D3D11_SAMPLER_DESC samplerDesc = {
-			.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT,
-			.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP,
-			.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP,
-			.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP,
-			.MaxAnisotropy = 1,
-			.MinLOD = 0,
-			.MaxLOD = D3D11_FLOAT32_MAX
-		};
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, pointClampSampler.put()));
+		D3D11_SAMPLER_DESC samplerDesc = {};
+		samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;  // Use comparison filtering
+		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;               // Address mode (Clamp for shadow maps)
+		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samplerDesc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;  // Comparison function
+		samplerDesc.MinLOD = 0;
+		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, comparisonSampler.put()));
+	}
+
+	{
+		auto& context = State::GetSingleton()->context;
+		DirectX::CreateDDSTextureFromFile(device, context, L"Data\\Shaders\\Skylighting\\SpatiotemporalBlueNoise\\stbn_vec3_2Dx1D_128x128x64.dds", nullptr, stbn_vec3_2Dx1D_128x128x64.put());
 	}
 
 	CompileComputeShaders();
@@ -159,6 +175,14 @@ void Skylighting::CompileComputeShaders()
 
 Skylighting::SkylightingCB Skylighting::GetCommonBufferData()
 {
+	static Util::FrameChecker frameChecker;
+	if (frameChecker.IsNewFrame())
+		return Skylighting::SkylightingCB{};
+
+	if (auto ui = RE::UI::GetSingleton())
+		if (ui->IsMenuOpen(RE::MapMenu::MENU_NAME))
+			return Skylighting::SkylightingCB{};
+
 	static float3 prevCellID = { 0, 0, 0 };
 
 	auto eyePosNI = Util::GetEyePosition(0);
@@ -175,6 +199,13 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData()
 	float3 cellIDDiff = prevCellID - cellID;
 	prevCellID = cellID;
 
+	auto ambientDimmer = 1.0f;
+
+	auto ssgi = ScreenSpaceGI::GetSingleton();
+	if (ssgi->loaded)
+		if (ssgi->settings.Enabled && ssgi->settings.EnableGI && ssgi->settings.GIStrength > 0.0f)
+			ambientDimmer = settings.SSGIAmbientDimmer;
+
 	return {
 		.OcclusionViewProj = OcclusionTransform,
 		.OcclusionDir = OcclusionDir,
@@ -184,46 +215,60 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData()
 			((int)cellID.y - probeArrayDims[1] / 2) % probeArrayDims[1],
 			((int)cellID.z - probeArrayDims[2] / 2) % probeArrayDims[2] },
 		.ValidMargin = { (int)cellIDDiff.x, (int)cellIDDiff.y, (int)cellIDDiff.z },
-		.MinDiffuseVisibility = settings.MinDiffuseVisibility,
+		.MinDiffuseVisibility = settings.MinDiffuseVisibility * ambientDimmer,
 		.MinSpecularVisibility = settings.MinSpecularVisibility
 	};
 }
 
 void Skylighting::Prepass()
 {
+	if (auto ui = RE::UI::GetSingleton())
+		if (ui->IsMenuOpen(RE::MapMenu::MENU_NAME))
+			return;
+
+	bool interior = true;
+
+	if (auto sky = RE::Sky::GetSingleton())
+		interior = sky->mode.get() != RE::Sky::Mode::kFull;
+
+	if (interior)
+		return;
+
 	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Skylighting - Update Probes");
 
 	auto& context = State::GetSingleton()->context;
 
-	std::array<ID3D11ShaderResourceView*, 1> srvs = { texOcclusion->srv.get() };
-	std::array<ID3D11UnorderedAccessView*, 2> uavs = { texProbeArray->uav.get(), texAccumFramesArray->uav.get() };
-	std::array<ID3D11SamplerState*, 1> samplers = { pointClampSampler.get() };
-
-	// update probe array
 	{
-		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(probeUpdateCompute.get(), nullptr, 0);
-		context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, probeArrayDims[2]);
+		std::array<ID3D11ShaderResourceView*, 1> srvs = { texOcclusion->srv.get() };
+		std::array<ID3D11UnorderedAccessView*, 2> uavs = { texProbeArray->uav.get(), texAccumFramesArray->uav.get() };
+		std::array<ID3D11SamplerState*, 1> samplers = { comparisonSampler.get() };
+
+		// Update probe array
+		{
+			context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
+			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			context->CSSetShader(probeUpdateCompute.get(), nullptr, 0);
+			context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, probeArrayDims[2]);
+		}
+
+		// Reset
+		{
+			srvs.fill(nullptr);
+			uavs.fill(nullptr);
+			samplers.fill(nullptr);
+
+			context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
+			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			context->CSSetShader(nullptr, nullptr, 0);
+		}
 	}
 
-	// reset
+	// Set PS shader resources
 	{
-		srvs.fill(nullptr);
-		uavs.fill(nullptr);
-		samplers.fill(nullptr);
-
-		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(nullptr, nullptr, 0);
-	}
-
-	// set PS shader resource
-	{
-		ID3D11ShaderResourceView* srv = texProbeArray->srv.get();
-		context->PSSetShaderResources(50, 1, &srv);
+		ID3D11ShaderResourceView* srvs[2] = { texProbeArray->srv.get(), stbn_vec3_2Dx1D_128x128x64.get() };
+		context->PSSetShaderResources(50, 2, srvs);
 	}
 }
 
@@ -336,8 +381,39 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 			return precipitationOcclusionMapRenderPassList;
 	}
 
-	if (property->flags.any(kZBufferWrite) && property->flags.none(kRefraction, kTempRefraction, kMultiTextureLandscape, kNoLODLandBlend, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal, kAnisotropicLighting) && !(property->flags.any(kSkinned) && property->flags.none(kTreeAnim))) {
-		if (geometry->worldBound.radius > 1) {
+	if (GetSingleton()->inOcclusion) {
+		if (auto userData = geometry->GetUserData()) {
+			RE::BSFadeNode* fadeNode = nullptr;
+
+			RE::NiNode* parent = geometry->parent;
+			while (parent && !fadeNode) {
+				fadeNode = parent->AsFadeNode();
+				parent = parent->parent;
+			}
+
+			if (fadeNode) {
+				if (auto extraData = fadeNode->GetExtraData("BSX")) {
+					auto bsxFlags = (RE::BSXFlags*)extraData;
+					auto value = static_cast<int32_t>(bsxFlags->value);
+
+					if (value & (static_cast<int32_t>(RE::BSXFlags::Flag::kRagdoll) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kEditorMarker) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kDynamic) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kAddon) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kNeedsTransformUpdate) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kMagicShaderParticles) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kLights) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kBreakable) |
+									static_cast<int32_t>(RE::BSXFlags::Flag::kSearchedBreakable))) {
+						return precipitationOcclusionMapRenderPassList;
+					}
+				}
+			}
+		}
+	}
+
+	if (property->flags.any(kZBufferWrite) && property->flags.none(kRefraction, kTempRefraction, kMultiTextureLandscape, kNoLODLandBlend, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal)) {
+		if (geometry->worldBound.radius > 32) {
 			stl::enumeration<RE::BSUtilityShader::Flags> technique;
 			technique.set(RenderDepth);
 
@@ -369,15 +445,27 @@ RE::BSLightingShaderProperty::Data* Skylighting::BSLightingShaderProperty_GetPre
 	return precipitationOcclusionMapRenderPassList;
 }
 
-void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
+void Skylighting::SetViewFrustum::thunk(RE::NiCamera* a_camera, RE::NiFrustum* a_frustum)
 {
-	State::GetSingleton()->BeginPerfEvent("PRECIPITATION MASK");
-	State::GetSingleton()->SetPerfMarker("PRECIPITATION MASK");
+	if (GetSingleton()->inOcclusion) {
+		uint corner = GetSingleton()->frameCount % 4;
 
+		a_frustum->fBottom = (corner == 0 || corner == 1) ? -5000.0f : 0.0f;
+
+		a_frustum->fLeft = (corner == 0 || corner == 2) ? -5000.0f : 0.0f;
+		a_frustum->fRight = (corner == 1 || corner == 3) ? 5000.0f : 0.0f;
+
+		a_frustum->fTop = (corner == 2 || corner == 3) ? 5000.0f : 0.0f;
+	}
+
+	func(a_camera, a_frustum);
+}
+
+void Skylighting::RenderOcclusion()
+{
 	auto& shaderCache = SIE::ShaderCache::Instance();
-	auto singleton = GetSingleton();
 
-	if (!singleton->doOcclusion || !shaderCache.IsEnabled()) {
+	if (!shaderCache.IsEnabled()) {
 		Main_Precipitation_RenderOcclusion::func();
 		State::GetSingleton()->EndPerfEvent();
 	}
@@ -389,6 +477,8 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 			auto precip = sky->precip;
 
 			{
+				State::GetSingleton()->BeginPerfEvent("Precipitation Mask");
+
 				doPrecip = false;
 
 				auto precipObject = precip->currentPrecip;
@@ -405,24 +495,31 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 
 					precip->RenderMask(rain);
 				}
+
+				State::GetSingleton()->EndPerfEvent();
 			}
 
 			{
-				std::chrono::time_point<std::chrono::system_clock> currentTimer = std::chrono::system_clock::now();
-				auto timePassed = std::chrono::duration_cast<std::chrono::milliseconds>(currentTimer - singleton->lastUpdateTimer).count();
+				State::GetSingleton()->BeginPerfEvent("Skylighting Mask");
 
-				if (singleton->forceFrames || timePassed >= (1000.0f / 30.0f)) {
-					singleton->forceFrames = (uint)std::max(0, (int)singleton->forceFrames - 1);
-					singleton->lastUpdateTimer = currentTimer;
-					singleton->frameCount++;
+				if (queuedResetSkylighting)
+					ResetSkylighting();
+
+				std::chrono::time_point<std::chrono::system_clock> currentTimer = std::chrono::system_clock::now();
+				auto timePassed = std::chrono::duration_cast<std::chrono::milliseconds>(currentTimer - lastUpdateTimer).count();
+
+				if (forceFrames || timePassed >= (1000.0f / 30.0f)) {
+					forceFrames = (uint)std::max(0, (int)forceFrames - 1);
+					lastUpdateTimer = currentTimer;
+					frameCount++;
 
 					auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 					auto& precipitation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
 					RE::BSGraphics::DepthStencilData precipitationCopy = precipitation;
 
-					precipitation.depthSRV = singleton->texOcclusion->srv.get();
-					precipitation.texture = singleton->texOcclusion->resource.get();
-					precipitation.views[0] = singleton->texOcclusion->dsv.get();
+					precipitation.depthSRV = texOcclusion->srv.get();
+					precipitation.texture = texOcclusion->resource.get();
+					precipitation.views[0] = texOcclusion->dsv.get();
 
 					static float& PrecipitationShaderCubeSize = (*(float*)REL::RelocationID(515451, 401590).address());
 					float originalPrecipitationShaderCubeSize = PrecipitationShaderCubeSize;
@@ -430,8 +527,8 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 					static RE::NiPoint3& PrecipitationShaderDirection = (*(RE::NiPoint3*)REL::RelocationID(515509, 401648).address());
 					RE::NiPoint3 originalParticleShaderDirection = PrecipitationShaderDirection;
 
-					singleton->inOcclusion = true;
-					PrecipitationShaderCubeSize = singleton->occlusionDistance;
+					inOcclusion = true;
+					PrecipitationShaderCubeSize = occlusionDistance;
 
 					float originaLastCubeSize = precip->lastCubeSize;
 					precip->lastCubeSize = PrecipitationShaderCubeSize;
@@ -454,7 +551,7 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 						}
 
 						// disc transformation
-						vPoint.x = sqrt(vPoint.x * sin(singleton->settings.MaxZenith));
+						vPoint.x = sqrt(vPoint.x * sin(settings.MaxZenith));
 						vPoint.y *= 6.28318530718f;
 
 						vPoint = { vPoint.x * cos(vPoint.y), vPoint.x * sin(vPoint.y) };
@@ -473,10 +570,10 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 						TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Skylighting - Render Height Map");
 						precip->RenderMask((RE::BSParticleShaderRainEmitter*)rain);
 					}
-					singleton->inOcclusion = false;
+					inOcclusion = false;
 
-					singleton->OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };
-					singleton->OcclusionTransform = ((RE::BSParticleShaderRainEmitter*)rain)->occlusionProjection;
+					OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };
+					OcclusionTransform = ((RE::BSParticleShaderRainEmitter*)rain)->occlusionProjection;
 
 					delete rain;
 
@@ -486,25 +583,10 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 					PrecipitationShaderDirection = originalParticleShaderDirection;
 
 					precipitation = precipitationCopy;
+
+					State::GetSingleton()->EndPerfEvent();
 				}
 			}
 		}
 	}
-	State::GetSingleton()->EndPerfEvent();
-}
-
-void Skylighting::SetViewFrustum::thunk(RE::NiCamera* a_camera, RE::NiFrustum* a_frustum)
-{
-	if (GetSingleton()->inOcclusion) {
-		uint corner = GetSingleton()->frameCount % 4;
-
-		a_frustum->fBottom = (corner == 0 || corner == 1) ? -5000.0f : 0.0f;
-
-		a_frustum->fLeft = (corner == 0 || corner == 2) ? -5000.0f : 0.0f;
-		a_frustum->fRight = (corner == 1 || corner == 3) ? 5000.0f : 0.0f;
-
-		a_frustum->fTop = (corner == 2 || corner == 3) ? 5000.0f : 0.0f;
-	}
-
-	func(a_camera, a_frustum);
 }

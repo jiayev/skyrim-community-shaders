@@ -86,7 +86,7 @@ float4 GetReflectionColor(
 			float2 uvResultScreenCenterOffset = binaryRaySample.xy - 0.5;
 
 #	ifdef VR
-			float centerDistance = abs(uvResultScreenCenterOffset.xy * 2.0);
+			float2 centerDistance = abs(uvResultScreenCenterOffset.xy * 2.0);
 
 			// Make VR fades consistent by taking the closer of the two eyes
 			// Based on concepts from https://cuteloong.github.io/publications/scssr24/
@@ -97,9 +97,10 @@ float4 GetReflectionColor(
 #	endif
 
 			// Fade out around screen edges
-			float2 centerDistanceFadeFactor = sqrt(saturate(1.0 - centerDistance));
+			float2 centerDistanceFadeFactorX = smoothstep(0.0, 0.1, saturate(1.0 - centerDistance.x));
+			float2 centerDistanceFadeFactorY = smoothstep(0.0, 0.5, saturate(1.0 - centerDistance.y));
 
-			float fadeFactor = depthThicknessFactor * sqrt(ssrMarchingRadiusFadeFactor) * min(centerDistanceFadeFactor.x, centerDistanceFadeFactor.y);
+			float fadeFactor = depthThicknessFactor * ssrMarchingRadiusFadeFactor * centerDistanceFadeFactorX * centerDistanceFadeFactorY;
 
 			if (fadeFactor > 0.0) {
 				float3 color = ColorTex.SampleLevel(ColorSampler, ConvertRaySample(binaryRaySample.xy, eyeIndex), 0);
