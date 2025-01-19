@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Buffer.h"
+#include "State.h"
+#include "ShaderCache.h"
 #include "Feature.h"
 
 struct PBRSkin : Feature
@@ -13,7 +15,7 @@ struct PBRSkin : Feature
 
     virtual inline std::string GetName() override { return "PBR Skin"; }
     virtual inline std::string GetShortName() override { return "PBRSkin"; }
-    virtual inline std::string_view GetShaderDefineName();
+    // virtual inline std::string_view GetShaderDefineName() override { return "PBR_SKIN"; }
     virtual inline bool HasShaderDefine(RE::BSShader::Type t) override
 	{
 		return t == RE::BSShader::Type::Lighting;
@@ -44,4 +46,29 @@ struct PBRSkin : Feature
     };
 
     PBRSkinData GetCommonBufferData();
+
+    struct BSLightingShader_SetupGeometry
+    {
+        static void thunk(RE::BSLightingShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+        {
+            const auto originalTechnique = shader->currentRawTechnique;
+            if (GetSingleton()->settings.EnablePBRSkin)
+            {
+                shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::PbrSkin);
+            }
+            if (GetSingleton()->settings.EnablePBRHair)
+            {
+                shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::PbrHair);
+            }
+            func(shader, pass, renderFlags);
+            shader->currentRawTechnique = originalTechnique;
+        }
+        static inline REL::Relocation<decltype(thunk)> func;
+    };
+
+    virtual void PostPostLoad() override
+    {
+        logger::info("[PBR Skin] PostPostLoad hooking");
+        stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
+    }
 };

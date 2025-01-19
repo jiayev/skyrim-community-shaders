@@ -18,9 +18,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void PBRSkin::DrawSettings()
 {
-    bool changed = false;
-    if(ImGui::Checkbox("Enable Skin", &settings.EnablePBRSkin))
-        changed = true;
+    ImGui::Checkbox("Enable Skin", &settings.EnablePBRSkin);
     ImGui::SliderFloat("Skin Roughness", &settings.SkinRoughnessScale, 0.f, 1.f, "%.3f");
     ImGui::SliderFloat("Skin Specular Level", &settings.SkinSpecularLevel, 0.f, 0.1f, "%.4f");
     if (auto _tt = Util::HoverTooltipWrapper())
@@ -28,8 +26,8 @@ void PBRSkin::DrawSettings()
     ImGui::SliderFloat("Skin Specular Texture Multiplier", &settings.SkinSpecularTexMultiplier, 0.f, 10.f, "%.3f");
     if (auto _tt = Util::HoverTooltipWrapper())
         ImGui::Text("A multiplier for the vanilla specular texture. It will be used to modify the roughness of the skin.");
-    if(ImGui::Checkbox("Enable Hair", &settings.EnablePBRHair))
-        changed = true;
+
+    ImGui::Checkbox("Enable Hair", &settings.EnablePBRHair);
     ImGui::SliderFloat("Hair Roughness", &settings.HairRoughnessScale, 0.f, 1.f, "%.3f");
     ImGui::SliderFloat("Hair Specular Level", &settings.HairSpecularLevel, 0.f, 0.1f, "%.4f");
     if (auto _tt = Util::HoverTooltipWrapper())
@@ -37,20 +35,6 @@ void PBRSkin::DrawSettings()
     ImGui::SliderFloat("Hair Specular Texture Multiplier", &settings.HairSpecularTexMultiplier, 0.f, 10.f, "%.3f");
     if (auto _tt = Util::HoverTooltipWrapper())
         ImGui::Text("A multiplier for the vanilla specular texture. It will be used to modify the roughness of the hair.");
-
-    if(changed)
-        SIE::ShaderCache::Instance().Clear(RE::BSShader::Type::Lighting);
-}
-
-std::string_view PBRSkin::GetShaderDefineName() override
-{
-    if (settings.EnablePBRSkin && settings.EnablePBRHair)
-        return "PBR_HS";
-    else if (settings.EnablePBRSkin)
-        return "PBR_SKIN";
-    else if (settings.EnablePBRHair)
-        return "PBR_HAIR";
-    return "";
 }
 
 PBRSkin::PBRSkinData PBRSkin::GetCommonBufferData()

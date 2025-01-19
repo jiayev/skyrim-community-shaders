@@ -11,12 +11,12 @@
 
 #if defined(FACEGEN) || defined(FACEGEN_RGB_TINT)
 #	define SKIN
-#	if defined(PBR_HS) || defined(PBR_SKIN)
+#	if defined(PBR_SKIN)
 #		define TRUE_PBR
 #	endif
 #endif
 
-#if defined(HAIR) && (defined(PBR_HS) || defined(PBR_HAIR))
+#if defined(HAIR) && defined(PBR_HAIR)
 #	define TRUE_PBR
 #endif
 
