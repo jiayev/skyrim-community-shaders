@@ -128,6 +128,12 @@ namespace SharedData
 		uint2 pad0;
 	};
 
+	struct PBRSkinData
+    {
+        float4 skinParams;
+        float4 hairParams;
+    };
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -137,6 +143,7 @@ namespace SharedData
 		LightLimitFixSettings lightLimitFixSettings;
 		WetnessEffectsSettings wetnessEffectsSettings;
 		SkylightingSettings skylightingSettings;
+		PBRSkinData pbrSkinData;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);
