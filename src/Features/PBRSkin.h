@@ -2,7 +2,6 @@
 
 #include "Buffer.h"
 #include "State.h"
-#include "ShaderCache.h"
 #include "Feature.h"
 
 struct PBRSkin : Feature
@@ -29,8 +28,8 @@ struct PBRSkin : Feature
 
     struct Settings
     {
-        bool EnablePBRSkin = false;
-		bool EnablePBRHair = false;
+        bool EnablePBRSkin = true;
+		bool EnablePBRHair = true;
 		float SkinRoughnessScale = 0.6f;
 		float SkinSpecularLevel = 0.0277f;
 		float SkinSpecularTexMultiplier = 3.14f;
@@ -47,28 +46,5 @@ struct PBRSkin : Feature
 
     PBRSkinData GetCommonBufferData();
 
-    struct BSLightingShader_SetupGeometry
-    {
-        static void thunk(RE::BSLightingShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
-        {
-            const auto originalTechnique = shader->currentRawTechnique;
-            if (GetSingleton()->settings.EnablePBRSkin)
-            {
-                shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::PbrSkin);
-            }
-            if (GetSingleton()->settings.EnablePBRHair)
-            {
-                shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::PbrHair);
-            }
-            func(shader, pass, renderFlags);
-            shader->currentRawTechnique = originalTechnique;
-        }
-        static inline REL::Relocation<decltype(thunk)> func;
-    };
-
-    virtual void PostPostLoad() override
-    {
-        logger::info("[PBR Skin] PostPostLoad hooking");
-        stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
-    }
+    virtual void PostPostLoad() override;
 };

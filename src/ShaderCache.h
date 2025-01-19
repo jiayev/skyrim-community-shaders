@@ -470,8 +470,7 @@ namespace SIE
 			// Community Shaders start
 			TruePbr = 1 << 3,
 			Deferred = 1 << 4,
-			PbrHair = 1 << 5,
-			PbrSkin = 1 << 7,
+			PbrHS = 1 << 5,
 			// Community Shaders end
 			Specular = 1 << 9,
 			SoftLighting = 1 << 10,

@@ -1,8 +1,9 @@
 #include "PBRSkin.h"
 
+#include "Hooks.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
-#include "ShaderCache.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     PBRSkin::Settings,
@@ -58,4 +59,63 @@ void PBRSkin::SaveSettings(json& o_json)
 void PBRSkin::RestoreDefaultSettings()
 {
     settings = {};
+}
+
+struct BSLightingShaderProperty_GetRenderPasses
+{
+    static RE::BSShaderProperty::RenderPassArray* thunk(RE::BSLightingShaderProperty* property, RE::BSGeometry* geometry, std::uint32_t renderFlags, RE::BSShaderAccumulator* accumulator)
+    {
+        auto renderPasses = func(property, geometry, renderFlags, accumulator);
+		if (renderPasses == nullptr) {
+			return renderPasses;
+		}
+        auto currentPass = renderPasses->head;
+        while (currentPass != nullptr) {
+			if (currentPass->shader->shaderType == RE::BSShader::Type::Lighting) {
+				constexpr uint32_t LightingTechniqueStart = 0x4800002D;
+				auto lightingTechnique = currentPass->passEnum - LightingTechniqueStart;
+				auto lightingFlags = lightingTechnique & ~(~0u << 24);
+                auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((lightingTechnique >> 24) & 0x3F);
+				lightingFlags &= ~0b111000u;
+                if (PBRSkin::GetSingleton()->settings.EnablePBRHair && property->material->GetFeature() == RE::BSShaderMaterial::Feature::kHairTint) {
+					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::PbrHS);
+				}
+				if (PBRSkin::GetSingleton()->settings.EnablePBRSkin && (property->material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGen || property->material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGenRGBTint)) {
+					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::PbrHS);
+				}
+                lightingTechnique = (static_cast<uint32_t>(lightingType) << 24) | lightingFlags;
+				currentPass->passEnum = lightingTechnique + LightingTechniqueStart;
+			}
+			currentPass = currentPass->next;
+		}
+        return renderPasses;
+    }
+    static inline REL::Relocation<decltype(thunk)> func;
+};
+
+struct BSLightingShader_SetupGeometry
+{
+    static void thunk(RE::BSLightingShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+    {
+        const auto originalTechnique = shader->currentRawTechnique;
+        if (PBRSkin::GetSingleton()->settings.EnablePBRSkin)
+        {
+            shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::PbrHS);
+        }
+        if (PBRSkin::GetSingleton()->settings.EnablePBRHair)
+        {
+            shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::PbrHS);
+        }
+        func(shader, pass, renderFlags);
+        shader->currentRawTechnique = originalTechnique;
+    }
+    static inline REL::Relocation<decltype(thunk)> func;
+};
+
+void PBRSkin::PostPostLoad()
+{
+    logger::info("[PBR Skin] BSLightingShaderProperty_GetRenderPasses hooking");
+    stl::write_vfunc<0x2A, BSLightingShaderProperty_GetRenderPasses>(RE::VTABLE_BSLightingShaderProperty[0]);
+    logger::info("[PBR Skin] BSLightingShader_SetupGeometry hooking");
+    stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 }
