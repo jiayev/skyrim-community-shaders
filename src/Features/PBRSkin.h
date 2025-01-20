@@ -29,22 +29,15 @@ struct PBRSkin : Feature
     struct Settings
     {
         bool EnablePBRSkin = true;
-		bool EnablePBRHair = true;
 		float SkinRoughnessScale = 0.6f;
 		float SkinSpecularLevel = 0.0277f;
 		float SkinSpecularTexMultiplier = 3.14f;
-		float HairRoughnessScale = 0.5f;
-		float HairSpecularLevel = 0.045f;
-        float HairSpecularTexMultiplier = 1.0f;
     } settings;
 
     struct alignas(16) PBRSkinData
     {
         float4 skinParams;
-        float4 hairParams;
     };
 
     PBRSkinData GetCommonBufferData();
-
-    virtual void PostPostLoad() override;
 };
