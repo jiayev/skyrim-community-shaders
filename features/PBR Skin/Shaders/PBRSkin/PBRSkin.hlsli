@@ -1,3 +1,5 @@
+#include "Common/PBR.hlsli"
+
 namespace PBRSkin{
     float CalculateApproximateAO(float3 skincolor, float2 uv, float scale)
     {

@@ -131,7 +131,6 @@ namespace SharedData
 	struct PBRSkinData
     {
         float4 skinParams;
-        float4 hairParams;
     };
 
 	cbuffer FeatureData : register(b6)
