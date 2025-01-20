@@ -95,10 +95,10 @@ public:
 	{
 		bool EnablePBRSkin = false;
 		bool EnablePBRHair = false;
-		float SkinRoughnessScale = 0.7f;
-		float SkinSpecularLevel = 0.028f;
-		float SkinSpecularTexMultiplier = 3.0f;
-		float HairRoughnessScale = 0.4f;
+		float SkinRoughnessScale = 0.6f;
+		float SkinSpecularLevel = 0.0277f;
+		float SkinSpecularTexMultiplier = 3.14f;
+		float HairRoughnessScale = 0.5f;
 		float HairSpecularLevel = 0.045f;
 	} debugSkinHairSettings;
 
