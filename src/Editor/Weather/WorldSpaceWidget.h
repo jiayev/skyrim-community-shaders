@@ -21,7 +21,7 @@ public:
 
 	struct Settings
 	{
-		int temp; // Temp var to resolve macro issue in cpp file as worldspace has no settings at the moment. Can be removed once settings are added.
+		int temp;  // Temp var to resolve macro issue in cpp file as worldspace has no settings at the moment. Can be removed once settings are added.
 	};
 
 	Settings settings;

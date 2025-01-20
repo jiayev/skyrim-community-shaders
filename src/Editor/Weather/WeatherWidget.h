@@ -16,7 +16,6 @@ public:
 		weather = a_weather;
 	}
 
-	
 	struct Settings
 	{
 		std::string currentParentBuffer;
