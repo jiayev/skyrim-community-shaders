@@ -16,7 +16,17 @@ public:
 		weather = a_weather;
 	}
 
+	
+	struct Settings
+	{
+		std::string currentParentBuffer;
+	};
+
+	Settings settings;
+
 	~WeatherWidget();
 
 	virtual void DrawWidget() override;
+	virtual void LoadSettings() override;
+	virtual void SaveSettings() override;
 };

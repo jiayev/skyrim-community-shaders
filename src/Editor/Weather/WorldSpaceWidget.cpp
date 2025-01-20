@@ -1,4 +1,7 @@
 #include "WorldSpaceWidget.h"
+#include "Util.h"
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(WorldSpaceWidget::Settings, temp)
 
 WorldSpaceWidget::~WorldSpaceWidget()
 {
@@ -7,12 +10,19 @@ WorldSpaceWidget::~WorldSpaceWidget()
 void WorldSpaceWidget::DrawWidget()
 {
 	if (ImGui::Begin(GetEditorID().c_str(), &open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar)) {
-		if (ImGui::BeginMenuBar()) {
-			if (ImGui::BeginMenu("Menu")) {
-				ImGui::EndMenu();
-			}
-			ImGui::EndMenuBar();
-		}
+		DrawMenu();
 	}
 	ImGui::End();
+}
+
+void WorldSpaceWidget::LoadSettings()
+{
+	if (!j.empty()) {
+		settings = j;
+	}
+}
+
+void WorldSpaceWidget::SaveSettings()
+{
+	j = settings;
 }

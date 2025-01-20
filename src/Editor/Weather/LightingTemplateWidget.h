@@ -16,4 +16,6 @@ public:
 	~LightingTemplateWidget();
 
 	virtual void DrawWidget() override;
+	virtual void LoadSettings() override;
+	virtual void SaveSettings() override;
 };

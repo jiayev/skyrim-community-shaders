@@ -30,6 +30,8 @@ public:
 
 	virtual std::string GetEditorID()
 	{
+		if (form != nullptr)
+			return clib_util::editorID::get_editorID(form);
 		return form->GetFormEditorID();
 	}
 
@@ -58,4 +60,15 @@ public:
 	{
 		open = state;
 	}
+
+	void Save();
+	void Load();
+
+	virtual void LoadSettings() = 0;
+	virtual void SaveSettings() = 0;
+
+protected:
+	json j = json();
+	virtual void DrawMenu();
+	std::string GetFolderName();
 };

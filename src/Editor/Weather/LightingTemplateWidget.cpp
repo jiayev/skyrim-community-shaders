@@ -16,3 +16,11 @@ void LightingTemplateWidget::DrawWidget()
 	}
 	ImGui::End();
 }
+
+void LightingTemplateWidget::LoadSettings()
+{
+}
+
+void LightingTemplateWidget::SaveSettings()
+{
+}

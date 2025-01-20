@@ -205,6 +205,8 @@ void EditorWindow::RenderUI()
 			open = false;
 		}
 		if (ImGui::BeginMenu("File")) {
+			if (ImGui::MenuItem("Save all"))
+				SaveAll();
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu("Edit")) {
@@ -239,6 +241,7 @@ void EditorWindow::SetupResources()
 
 	for (auto weather : weatherArray) {
 		auto widget = new WeatherWidget(weather);
+		widget->Load();
 		weatherWidgets.push_back(widget);
 	}
 
@@ -246,6 +249,7 @@ void EditorWindow::SetupResources()
 
 	for (auto worldSpace : worldSpaceArray) {
 		auto widget = new WorldSpaceWidget(worldSpace);
+		widget->Load();
 		worldSpaceWidgets.push_back(widget);
 	}
 
@@ -253,6 +257,7 @@ void EditorWindow::SetupResources()
 
 	for (auto lightingTemplate : lightingTemplateArray) {
 		auto widget = new LightingTemplateWidget(lightingTemplate);
+		widget->Load();
 		lightingTemplateWidgets.push_back(widget);
 	}
 }
@@ -281,4 +286,22 @@ void EditorWindow::Draw()
 	context->CopyResource(tempTexture->resource.get(), resource);
 
 	RenderUI();
+}
+
+void EditorWindow::SaveAll()
+{
+	for (auto weather : weatherWidgets) {
+		if (weather->IsOpen())
+			weather->Save();
+	}
+
+	for (auto worldspace : worldSpaceWidgets) {
+		if (worldspace->IsOpen())
+			worldspace->Save();
+	}
+
+	for (auto lightingTemplate : lightingTemplateWidgets) {
+		if (lightingTemplate->IsOpen())
+			lightingTemplate->Save();
+	}
 }
