@@ -113,18 +113,18 @@ void TruePBR::DrawSettings()
 		if (ImGui::TreeNodeEx("Experimental Vanilla to PBR Skin / Hair", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Checkbox("Enable Skin", &debugSkinHairSettings.EnablePBRSkin);
 			// if (debugSkinHairSettings.EnablePBRSkin) {
-				ImGui::SliderFloat("Skin Roughness", &debugSkinHairSettings.SkinRoughnessScale, 0.f, 1.f, "%.3f");
-				ImGui::SliderFloat("Skin Specular Level", &debugSkinHairSettings.SkinSpecularLevel, 0.f, 0.1f, "%.4f");
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("This \"Specular\" here is the same as the \"Specular\" in the PBR material object data. 0.028 is the default value for skin.");
-				ImGui::SliderFloat("Skin Specular Texture Multiplier", &debugSkinHairSettings.SkinSpecularTexMultiplier, 0.f, 10.f, "%.3f");
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("A multiplier for the vanilla specular texture. It will be used to modify the roughness of the skin.");
+			ImGui::SliderFloat("Skin Roughness", &debugSkinHairSettings.SkinRoughnessScale, 0.f, 1.f, "%.3f");
+			ImGui::SliderFloat("Skin Specular Level", &debugSkinHairSettings.SkinSpecularLevel, 0.f, 0.1f, "%.4f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("This \"Specular\" here is the same as the \"Specular\" in the PBR material object data. 0.028 is the default value for skin.");
+			ImGui::SliderFloat("Skin Specular Texture Multiplier", &debugSkinHairSettings.SkinSpecularTexMultiplier, 0.f, 10.f, "%.3f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("A multiplier for the vanilla specular texture. It will be used to modify the roughness of the skin.");
 			// }
 			ImGui::Checkbox("Enable Hair", &debugSkinHairSettings.EnablePBRHair);
 			// if (debugSkinHairSettings.EnablePBRHair) {
-				ImGui::SliderFloat("Hair Roughness", &debugSkinHairSettings.HairRoughnessScale, 0.f, 1.f, "%.3f");
-				ImGui::SliderFloat("Hair Specular Level", &debugSkinHairSettings.HairSpecularLevel, 0.f, 0.1f, "%.4f");
+			ImGui::SliderFloat("Hair Roughness", &debugSkinHairSettings.HairRoughnessScale, 0.f, 1.f, "%.3f");
+			ImGui::SliderFloat("Hair Specular Level", &debugSkinHairSettings.HairSpecularLevel, 0.f, 0.1f, "%.4f");
 			// }
 			if (ImGui::Button("Reset")) {
 				ResetDebugSkinHairSettings();
@@ -729,7 +729,7 @@ struct BSLightingShaderProperty_GetRenderPasses
 		bool isPbr = false;
 
 		TruePBR::DebugSkinHairSettings debugSkinHairSettings = TruePBR::GetSingleton()->GetDebugSkinHairSettings();
-		
+
 		if (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting) && (property->material->GetFeature() == RE::BSShaderMaterial::Feature::kDefault || property->material->GetFeature() == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend)) {
 			isPbr = true;
 		}
@@ -967,7 +967,6 @@ struct BSLightingShader_SetupMaterial
 						}
 					}
 				}
-				
 
 				{
 					std::array<float, 4> PBRProjectedUVParams1;
@@ -1114,7 +1113,7 @@ struct BSLightingShader_SetupMaterial
 						shadowState->SetPSTextureAddressMode(4, static_cast<RE::BSGraphics::TextureAddressMode>(tMaterial->textureClampMode));
 						shadowState->SetPSTextureFilterMode(4, RE::BSGraphics::TextureFilterMode::kAnisotropic);
 					}
-					shadowState->SetPSConstant(float4(1.0,1.0,1.0,1.0), RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.TintColor);
+					shadowState->SetPSConstant(float4(1.0, 1.0, 1.0, 1.0), RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.TintColor);
 				}
 				if (lightingType == FacegenRGBTint) {
 					auto* facegenMaterial = static_cast<const RE::BSLightingShaderMaterialFacegenTint*>(tMaterial);
@@ -1125,7 +1124,7 @@ struct BSLightingShader_SetupMaterial
 					}
 					shadowState->SetPSConstant(facegenMaterial->tintColor, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.TintColor);
 				}
-		
+
 				std::array<float, 3> PBRParams1;
 				PBRParams1[0] = debugSkinHairSettings.SkinRoughnessScale;
 				PBRParams1[1] = 0.f;
@@ -1156,7 +1155,7 @@ struct BSLightingShader_SetupMaterial
 			{
 				shadowState->SetPSConstant(shaderFlags, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRFlags);
 				shadowState->SetPSConstant(tMaterial->specularColor, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.SpecularColor);
-				shadowState->SetPSConstant(float4(0.0,0.0,0.0,0.0), RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.EnvmapData);
+				shadowState->SetPSConstant(float4(0.0, 0.0, 0.0, 0.0), RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.EnvmapData);
 			}
 
 			{
@@ -1211,7 +1210,7 @@ struct BSLightingShader_SetupGeometry
 		}
 
 		TruePBR::DebugSkinHairSettings debugSkinHairSettings = TruePBR::GetSingleton()->GetDebugSkinHairSettings();
-		if (debugSkinHairSettings.EnablePBRSkin ) {
+		if (debugSkinHairSettings.EnablePBRSkin) {
 			shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::VtPbr);
 		}
 		if (debugSkinHairSettings.EnablePBRHair) {

@@ -857,9 +857,9 @@ float3 GetFacegenRGBTintBaseColor(float3 rawBaseColor, float2 uv)
 float CalculateApproximateAO(float3 skincolor, float2 uv, float scale)
 {
 	float3 baseColorApprox = skincolor;
-    float luminance = 0.2126 * baseColorApprox.r + 0.7152 * baseColorApprox.g + 0.0722 * baseColorApprox.b;
-    float approximateAO = pow(luminance, 2.4) * scale;
-    return saturate(approximateAO);
+	float luminance = 0.2126 * baseColorApprox.r + 0.7152 * baseColorApprox.g + 0.0722 * baseColorApprox.b;
+	float approximateAO = pow(luminance, 2.4) * scale;
+	return saturate(approximateAO);
 }
 
 #	if defined(WORLD_MAP)
@@ -1069,7 +1069,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 nu = wsn + ndx;
 	//float curve = saturate(abs((cross(nl, nr).y - cross(nd,nu).x))*4.0*2048.0/viewPosition.z);
 	//float curve = saturate(length(max(abs(ddx(wsn)), abs(ddy(wsn))))*2048/viewPosition.z);
-	float curve = abs(length(max(abs(ndx), abs(ndy)))*3.14) * 2048.0 / viewPosition.z;
+	float curve = abs(length(max(abs(ndx), abs(ndy))) * 3.14) * 2048.0 / viewPosition.z;
 	//float curve = tan(max(max(abs(ddx(input.TBN0.xyz)),abs(ddy(input.TBN0.xyz))), max(max(abs(ddx(input.TBN1.xyz)),abs(ddy(input.TBN1.xyz))), max(abs(ddx(input.TBN2.xyz)),abs(ddy(input.TBN2.xyz))))))*2048.0/viewPosition.z;
 	float angle = saturate(pow(1 - dot(worldSpaceViewDirection, wsn), 2));
 
@@ -1392,9 +1392,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	baseColor.xyz = pow(baseColor.xyz, 2.4) * 3.14;
 #	endif
 
-// #	if defined(HAIR) && defined(TRUE_PBR)
+	// #	if defined(HAIR) && defined(TRUE_PBR)
 	// baseColor.xyz = Color::GammaToLinear(baseColor.xyz);
-// #	endif
+	// #	endif
 
 #	if defined(LANDSCAPE)
 
@@ -1733,11 +1733,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 #			if defined(SKIN)
-		pbrSurfaceProperties.SubsurfaceColor = float3(0.6, 0.2, 0.1);
-		pbrSurfaceProperties.Thickness = 0.5;
+	pbrSurfaceProperties.SubsurfaceColor = float3(0.6, 0.2, 0.1);
+	pbrSurfaceProperties.Thickness = 0.5;
 #			elif defined(HAIR)
-		pbrSurfaceProperties.SubsurfaceColor = pbrSurfaceProperties.BaseColor;
-		pbrSurfaceProperties.Thickness = 0.9;
+	pbrSurfaceProperties.SubsurfaceColor = pbrSurfaceProperties.BaseColor;
+	pbrSurfaceProperties.Thickness = 0.9;
 #			endif
 #			if !defined(SKIN) && !defined(HAIR)
 	[branch] if ((PBRFlags & PBR::Flags::Subsurface) != 0)
@@ -1751,7 +1751,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			pbrSurfaceProperties.Thickness *= sampledSubsurfaceProperties.w;
 		}
 		pbrSurfaceProperties.Thickness = lerp(pbrSurfaceProperties.Thickness, 1, projectedMaterialWeight);
-
 	}
 	else if ((PBRFlags & PBR::Flags::TwoLayer) != 0)
 	{
@@ -1780,12 +1779,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				coatModelNormal = normalize(mul(tbn, TransformNormal(sampledCoatProperties.xyz)));
 			}
 
-#			if !defined(DRAW_IN_WORLDSPACE)
+#				if !defined(DRAW_IN_WORLDSPACE)
 			[flatten] if (!input.WorldSpace)
 			{
 				coatWorldNormal = normalize(mul(input.World[eyeIndex], float4(coatModelNormal, 0)));
 			}
-#			endif
+#				endif
 		}
 		pbrSurfaceProperties.CoatStrength = lerp(pbrSurfaceProperties.CoatStrength, 0, projectedMaterialWeight);
 	}
