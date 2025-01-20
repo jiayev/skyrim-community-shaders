@@ -11,13 +11,6 @@
 
 #if defined(FACEGEN) || defined(FACEGEN_RGB_TINT)
 #	define SKIN
-#	if defined(PBR_HS)
-#		define TRUE_PBR
-#	endif
-#endif
-
-#if defined(HAIR) && defined(PBR_HS)
-#	define TRUE_PBR
 #endif
 
 #if defined(SKINNED) || defined(ENVMAP) || defined(EYE) || defined(MULTI_LAYER_PARALLAX)
@@ -73,7 +66,7 @@ struct VS_OUTPUT
 	precise
 #endif  // ENVMAP
 		float3 InputPosition : TEXCOORD4;
-#if defined(SKINNED) || !defined(MODELSPACENORMALS) || (defined(TRUE_PBR) && defined(MODELSPACENORMALS))
+#if defined(SKINNED) || !defined(MODELSPACENORMALS)
 	float3 TBN0 : TEXCOORD1;
 	float3 TBN1 : TEXCOORD2;
 	float3 TBN2 : TEXCOORD3;
@@ -261,7 +254,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float3x3 boneRSMatrix = Skinned::GetBoneRSMatrix(Bones, actualIndices, input.BoneWeights);
 #	endif
 
-#	if !defined(MODELSPACENORMALS) || (defined(TRUE_PBR) && defined(MODELSPACENORMALS))
+#	if !defined(MODELSPACENORMALS)
 	float3x3 tbn = float3x3(
 		float3(input.Position.w, input.Normal.w * 2 - 1, input.Bitangent.w * 2 - 1),
 		input.Bitangent.xyz * 2.0.xxx + -1.0.xxx,
@@ -452,7 +445,7 @@ SamplerState SampColorSampler : register(s0);
 #		if defined(MODELSPACENORMALS) && !defined(LODLANDNOISE)
 SamplerState SampSpecularSampler : register(s2);
 #		endif
-#		if defined(SKIN)
+#		if defined(FACEGEN)
 SamplerState SampTintSampler : register(s3);
 SamplerState SampDetailSampler : register(s4);
 #		elif defined(PARALLAX)
@@ -467,9 +460,7 @@ SamplerState SampEnvMaskSampler : register(s5);
 #		endif
 
 #		if defined(TRUE_PBR)
-#			if !defined(SKIN)
 SamplerState SampParallaxSampler : register(s4);
-#			endif
 SamplerState SampRMAOSSampler : register(s5);
 #		endif
 
@@ -546,7 +537,7 @@ Texture2D<float4> TexNormalSampler : register(t1);  // normal in xyz, glossiness
 #		if defined(MODELSPACENORMALS) && !defined(LODLANDNOISE)
 Texture2D<float4> TexSpecularSampler : register(t2);
 #		endif
-#		if defined(SKIN)
+#		if defined(FACEGEN)
 Texture2D<float4> TexTintSampler : register(t3);
 Texture2D<float4> TexDetailSampler : register(t4);
 #		elif defined(PARALLAX)
@@ -561,9 +552,7 @@ Texture2D<float4> TexEnvMaskSampler : register(t5);
 #		endif
 
 #		if defined(TRUE_PBR)
-#			if !defined(SKIN)
 Texture2D<float4> TexParallaxSampler : register(t4);
-#			endif
 Texture2D<float4> TexRMAOSSampler : register(t5);
 #		endif
 
@@ -955,7 +944,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		undef WETNESS_EFFECTS
 #	endif
 
-#	if defined(EXTENDED_MATERIALS) && !defined(LOD) && (defined(PARALLAX) || defined(LANDSCAPE) || defined(ENVMAP) || defined(TRUE_PBR)) && !defined(SKIN) && !defined(HAIR)
+#	if defined(EXTENDED_MATERIALS) && !defined(LOD) && (defined(PARALLAX) || defined(LANDSCAPE) || defined(ENVMAP) || defined(TRUE_PBR))
 #		define EMAT
 #	endif
 
@@ -1007,10 +996,6 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Skylighting/Skylighting.hlsli"
 #	endif
 
-#	if defined(PBR_HS) || defined(PBR_SKIN) || defined(PBR_HAIR)
-#		include "PBRSkin/PBRSkin.hlsli"
-#	endif
-
 #	define LinearSampler SampColorSampler
 
 #	include "Common/ShadowSampling.hlsli"
@@ -1029,10 +1014,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float nearFactor = smoothstep(4096.0 * 2.5, 0.0, viewPosition.z);
 
-	float3 viewDirection = normalize(input.ViewVector.xyz);
-	float3 worldSpaceViewDirection = -normalize(input.WorldPosition.xyz);
-
-#	if defined(SKINNED) || !defined(MODELSPACENORMALS) || (defined(TRUE_PBR) && defined(MODELSPACENORMALS))
+#	if defined(SKINNED) || !defined(MODELSPACENORMALS)
 	float3x3 tbn = float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz);
 
 #		if !defined(TREE_ANIM) && !defined(LOD)
@@ -1041,31 +1023,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		tbn = lerp(tbn, -tbn, nearFactor);
 #		endif
 
-#		if defined(MODELSPACENORMALS) && !defined(SKINNED)
-	float3 n = float3(0, 0, 1);
-#		else
-	float3 n = float4(normalize(mul(tbn, float3(0, 0, 1))), 1);
-#		endif
-	float3 wsn = n.xyz;
-#		if !defined(DRAW_IN_WORLDSPACE)
-	[flatten] if (!input.WorldSpace)
-		wsn = normalize(mul(input.World[eyeIndex], float4(wsn, 0)));
-#		endif
-	float3 flatWorldNormal = normalize(-cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
-
 	float3x3 tbnTr = transpose(tbn);
-
-	float3 ndx = ddx(wsn);
-	float3 ndy = ddy(wsn);
-	float3 nl = wsn - ndx;
-	float3 nr = wsn + ndx;
-	float3 nd = wsn - ndx;
-	float3 nu = wsn + ndx;
-	//float curve = saturate(abs((cross(nl, nr).y - cross(nd,nu).x))*4.0*2048.0/viewPosition.z);
-	//float curve = saturate(length(max(abs(ddx(wsn)), abs(ddy(wsn))))*2048/viewPosition.z);
-	float curve = abs(length(max(abs(ndx), abs(ndy)))*3.14) * 2048.0 / viewPosition.z;
-	//float curve = tan(max(max(abs(ddx(input.TBN0.xyz)),abs(ddy(input.TBN0.xyz))), max(max(abs(ddx(input.TBN1.xyz)),abs(ddy(input.TBN1.xyz))), max(abs(ddx(input.TBN2.xyz)),abs(ddy(input.TBN2.xyz))))))*2048.0/viewPosition.z;
-	float angle = saturate(pow(1 - dot(worldSpaceViewDirection, wsn), 2));
 
 #	endif  // defined (SKINNED) || !defined (MODELSPACENORMALS)
 
@@ -1093,6 +1051,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	blendFactorTerrain = saturate(blendFactorTerrain);
 #	endif
 
+	float3 viewDirection = normalize(input.ViewVector.xyz);
+	float3 worldSpaceViewDirection = -normalize(input.WorldPosition.xyz);
+
 	float2 uv = input.TexCoord0.xy;
 	float2 uvOriginal = uv;
 
@@ -1108,7 +1069,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float sh0 = 0;
 	float pixelOffset = 0;
 
-#	if defined(EMAT) && !defined(SKIN) && !defined(EYE)
+#	if defined(EMAT)
 #		if defined(LANDSCAPE)
 	DisplacementParams displacementParams[6];
 	displacementParams[0].DisplacementScale = 1.f;
@@ -1163,7 +1124,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		endif  // ENVMAP
 
-#		if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(SKIN) && !defined(EYE)
+#		if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 	bool PBRParallax = false;
 	[branch] if (SharedData::extendedMaterialSettings.EnableParallax && (PBRFlags & PBR::Flags::HasDisplacement) != 0)
 	{
@@ -1375,10 +1336,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	elif defined(FACEGEN_RGB_TINT)
 	baseColor.xyz = GetFacegenRGBTintBaseColor(baseColor.xyz, uv);
 #	endif  // FACEGEN
-
-#	if defined(SKIN) && defined(TRUE_PBR)
-	baseColor.xyz = pow(baseColor.xyz, 2.4) * 3.14;
-#	endif
 
 #	if defined(LANDSCAPE)
 
@@ -1676,24 +1633,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(TRUE_PBR)
 	PBR::SurfaceProperties pbrSurfaceProperties = PBR::InitSurfaceProperties();
 
-#		if defined(SKIN)
-	float4 skinParams = SharedData::pbrSkinData.skinParams;
-	pbrSurfaceProperties.Roughness = saturate(skinParams.x - skinParams.z * glossiness);
-	pbrSurfaceProperties.Metallic = 0;
-	pbrSurfaceProperties.AO = PBRSkin::CalculateApproximateAO(preBaseColor, uv, 20.0) * 0.25 + 0.75;
-	pbrSurfaceProperties.F0 = skinParams.yyy;
-#		elif defined(HAIR)
-	float4 hairParams = SharedData::pbrHairData.hairParams;
-	pbrSurfaceProperties.Roughness = saturate(hairParams.x - hairParams.z * glossiness);
-	pbrSurfaceProperties.Metallic = 0;
-	pbrSurfaceProperties.AO = PBRSkin::CalculateApproximateAO(preBaseColor, uv, 10.0) * 0.75 + 0.25;
-	pbrSurfaceProperties.F0 = hairParams.yyy;
-#		else
 	pbrSurfaceProperties.Roughness = saturate(rawRMAOS.x);
 	pbrSurfaceProperties.Metallic = saturate(rawRMAOS.y);
 	pbrSurfaceProperties.AO = rawRMAOS.z;
 	pbrSurfaceProperties.F0 = lerp(saturate(rawRMAOS.w), baseColor.xyz, pbrSurfaceProperties.Metallic);
-#		endif
 
 	pbrSurfaceProperties.GlintScreenSpaceScale = max(1, glintParameters.x);
 	pbrSurfaceProperties.GlintLogMicrofacetDensity = clamp(40.f - glintParameters.y, 1, 40);
@@ -2002,7 +1945,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		elif defined(ENVMAP)
 			[branch] if (complexMaterialParallax)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, lerp(parallaxShadowQuality, 1.0, SharedData::extendedMaterialSettings.ExtendShadows), screenNoise, displacementParams);
-#		elif defined(TRUE_PBR) && !defined(LODLANDSCAPE) && !defined(SKIN) && !defined(EYE)
+#		elif defined(TRUE_PBR) && !defined(LODLANDSCAPE)
 			[branch] if (PBRParallax)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, lerp(parallaxShadowQuality, 1.0, SharedData::extendedMaterialSettings.ExtendShadows), screenNoise, displacementParams);
 #		endif  // LANDSCAPE
@@ -2223,7 +2166,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 
 		float3 refractedLightDirection = normalizedLightDirection;
-#			if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(SKIN) && !defined(HAIR)
+#			if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 		[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 		{
 			refractedLightDirection = -refract(-normalizedLightDirection, coatWorldNormal, eta);
@@ -2250,7 +2193,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #				elif defined(ENVMAP)
 			[branch] if (complexMaterialParallax)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, parallaxShadowQuality, screenNoise, displacementParams);
-#				elif defined(TRUE_PBR) && !defined(LODLANDSCAPE) && !defined(SKIN) && !defined(HAIR)
+#				elif defined(TRUE_PBR) && !defined(LODLANDSCAPE)
 			[branch] if (PBRParallax)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, parallaxShadowQuality, screenNoise, displacementParams);
 #				endif
@@ -2459,9 +2402,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(HAIR)
 	float3 vertexColor = lerp(1, TintColor.xyz, input.Color.y);
-#		if defined(TRUE_PBR)
-	vertexColor = Color::GammaToLinear(vertexColor);
-#		endif
 #	else
 	float3 vertexColor = input.Color.xyz;
 #	endif  // defined (HAIR)
@@ -2480,11 +2420,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 
 	float3 indirectDiffuseLobeWeight, indirectSpecularLobeWeight;
-#		if !defined(HAIR)
 	PBR::GetIndirectLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, worldSpaceNormal.xyz, worldSpaceViewDirection, worldSpaceVertexNormal, baseColor.xyz, pbrSurfaceProperties);
-#		else
-	PBR::GetIndirectLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, worldSpaceNormal.xyz, worldSpaceViewDirection, worldSpaceVertexNormal, baseColor.xyz * TintColor.xyz, pbrSurfaceProperties);
-#		endif
 #		if defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1.0)
 		indirectSpecularLobeWeight += PBR::GetWetnessIndirectSpecularLobeWeight(wetnessNormal, worldSpaceViewDirection, worldSpaceVertexNormal, waterRoughnessSpecular) * wetnessGlossinessSpecular;
@@ -2650,7 +2586,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(EMAT) && !defined(LANDSCAPE)
 #			if defined(PARALLAX)
 	alpha = TexColorSampler.Sample(SampColorSampler, uvOriginal).w;
-#			elif defined(TRUE_PBR) && !defined(SKIN)
+#			elif defined(TRUE_PBR)
 	[branch] if (PBRParallax)
 	{
 		alpha = TexColorSampler.Sample(SampColorSampler, uvOriginal).w;
