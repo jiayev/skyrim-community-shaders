@@ -48,10 +48,6 @@ void EditorWindow::ShowObjectsWindow()
 	// Static variable for filtering objects
 	static char filterBuffer[256] = "";
 
-	// Static variable to track renaming
-	static int renameIndex = -1;
-	static char renameBuffer[256] = "";
-
 	// Create a table with two columns
 	if (ImGui::BeginTable("ObjectTable", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInner | ImGuiTableFlags_NoHostExtendX)) {
 		// Set up column widths
@@ -106,7 +102,7 @@ void EditorWindow::ShowObjectsWindow()
 
 			// Filtered display of widgets
 			for (int i = 0; i < widgets.size(); ++i) {
-				if (!ContainsStringIgnoreCase(widgets[i]->GetEditorID(), filterBuffer) && renameIndex != i)
+				if (!ContainsStringIgnoreCase(widgets[i]->GetEditorID(), filterBuffer))
 					continue;  // Skip widgets that don't match the filter
 
 				ImGui::TableNextRow();

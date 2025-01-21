@@ -5,7 +5,7 @@
 
 namespace Weather
 {
-	Texture2D<sh2> DiffuseIBLTexture : register(t80);
+	Texture2D<sh2> DiffuseIBLTexture : register(t100);
 
 	float3 GetDiffuseIBL(float3 rayDir)
 	{

@@ -30,8 +30,8 @@ public:
 
 	virtual std::string GetEditorID()
 	{
-		if (form != nullptr)
-			return clib_util::editorID::get_editorID(form);
+		//if (form != nullptr)
+		//	return clib_util::editorID::get_editorID(form);
 		return form->GetFormEditorID();
 	}
 

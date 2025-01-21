@@ -9,11 +9,13 @@ void Widget::Save()
 	const std::string file = std::format("{}\\{}.json", filePath, GetEditorID());
 
 	std::ofstream settingsFile(file);
-	try {
-		std::filesystem::create_directories(filePath);
-	} catch (const std::filesystem::filesystem_error& e) {
-		logger::warn("Error creating directory during Save ({}) : {}\n", filePath, e.what());
-		return;
+	if (!std::filesystem::exists(filePath) || !std::filesystem::is_directory(filePath)) {
+		try {
+			std::filesystem::create_directories(filePath);
+		} catch (const std::filesystem::filesystem_error& e) {
+			logger::warn("Error creating directory during Save ({}) : {}\n", filePath, e.what());
+			return;
+		}
 	}
 
 	if (!settingsFile.good() || !settingsFile.is_open()) {
