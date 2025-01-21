@@ -69,7 +69,7 @@ struct VS_OUTPUT
 	precise
 #endif  // ENVMAP
 		float3 InputPosition : TEXCOORD4;
-#if defined(SKINNED) || !defined(MODELSPACENORMALS)
+#if defined(SKINNED) || !defined(MODELSPACENORMALS) || (defined(SKIN) && defined(MODELSPACENORMALS) && defined(PBR_SKIN))
 	float3 TBN0 : TEXCOORD1;
 	float3 TBN1 : TEXCOORD2;
 	float3 TBN2 : TEXCOORD3;
@@ -1022,7 +1022,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float nearFactor = smoothstep(4096.0 * 2.5, 0.0, viewPosition.z);
 
-#	if defined(SKINNED) || !defined(MODELSPACENORMALS)
+#	if defined(SKINNED) || !defined(MODELSPACENORMALS) || (defined(SKIN) && defined(MODELSPACENORMALS) && defined(PBR_SKIN))
 	float3x3 tbn = float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz);
 
 #		if !defined(TREE_ANIM) && !defined(LOD)
@@ -1349,7 +1349,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(SKIN) && defined(PBR_SKIN)
 	if (SharedData::pbrSkinData.skinParams.w > 0.0f) {
-		baseColor.xyz = Color::GammaToLinear(baseColor.xyz) * 3.14f;
+		baseColor.xyz = Color::GammaToLinear(baseColor.xyz) / Color::AlbedoPreMult;
 		}
 #	endif  // PBR_SKIN
 
