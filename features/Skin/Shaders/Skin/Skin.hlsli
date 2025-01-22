@@ -116,11 +116,15 @@ namespace Skin{
         diffuse = max(light.LinearLightColor * NdotL * OrenNayarDiffuse(N, V, L, skin.RoughnessPrimary), 1e-5);
 
         float3 F_primary;
-        specularPrimary = GetBeckmannSpecular(
+        specularPrimary = PBR::GetSpecularDirectLightMultiplierMicrofacet(
             skin.RoughnessPrimary, 
             skin.F0Primary,
             NdotL, NdotV, NdotH, VdotH,
             F_primary) * light.LinearLightColor * NdotL;
+
+        float2 specularBRDF = PBR::GetEnvBRDFApproxLazarov(skin.RoughnessPrimary, NdotV);
+
+        specularPrimary *= 1 + skin.F0Primary * (1 / (specularBRDF.x + specularBRDF.y) - 1);
 
         float3 F_secondary;
         const float3 specSecondary = GetBeckmannSpecular(
