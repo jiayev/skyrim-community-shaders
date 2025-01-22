@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
+#include "Util.h"
 #include <FeatureBuffer.h>
 
 class State
@@ -105,7 +106,7 @@ public:
 
 	void SetAdapterDescription(const std::wstring& description);
 
-	bool extendedFrameAnnotations = false;
+	bool frameAnnotations = false;
 
 	uint lastVertexDescriptor = 0;
 	uint lastPixelDescriptor = 0;
@@ -156,6 +157,8 @@ public:
 	ConstantBuffer* sharedDataCB = nullptr;
 	ConstantBuffer* featureDataCB = nullptr;
 
+	Util::FrameChecker frameChecker;
+
 	// Skyrim constants
 	bool isVR = false;
 	float2 screenSize = {};
@@ -169,6 +172,8 @@ public:
 	bool SetFeatureDisabled(const std::string& featureName, bool isDisabled);
 	bool IsFeatureDisabled(const std::string& featureName);
 	std::unordered_map<std::string, bool>& GetDisabledFeatures();
+
+	bool useFrameAnnotations = false;
 
 	// Features that are more special then others
 	std::unordered_map<std::string, bool> specialFeatures = {

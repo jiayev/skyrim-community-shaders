@@ -8,6 +8,7 @@
 #include "State.h"
 #include "TruePBR.h"
 #include "Upscaling.h"
+#include "VariableCache.h"
 
 
 #define DLLEXPORT __declspec(dllexport)
@@ -112,6 +113,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			}
 
 			if (errors.empty()) {
+				VariableCache::GetSingleton()->OnDataLoaded();
 				FrameAnnotations::OnDataLoaded();
 
 				auto& shaderCache = SIE::ShaderCache::Instance();
