@@ -4,16 +4,16 @@
 #include "State.h"
 #include "Feature.h"
 
-struct PBRSkin : Feature
+struct Skin : Feature
 {
-    static PBRSkin* GetSingleton()
+    static Skin* GetSingleton()
     {
-        static PBRSkin singleton;
+        static Skin singleton;
         return &singleton;
     }
 
-    virtual inline std::string GetName() override { return "PBR Skin"; }
-    virtual inline std::string GetShortName() override { return "PBRSkin"; }
+    virtual inline std::string GetName() override { return "Skin"; }
+    virtual inline std::string GetShortName() override { return "Skin"; }
     virtual inline std::string_view GetShaderDefineName() override { return "PBR_SKIN"; }
     virtual inline bool HasShaderDefine(RE::BSShader::Type t) override
 	{
@@ -30,16 +30,19 @@ struct PBRSkin : Feature
 
     struct Settings
     {
-        bool EnablePBRSkin = true;
-		float SkinRoughnessScale = 0.6f;
-		float SkinSpecularLevel = 0.0277f;
-		float SkinSpecularTexMultiplier = 3.14f;
+        bool EnableSkin = true;
+		float SkinMainRoughness = 0.6f;
+		float SkinSecondRoughness = 0.4f;
+		float SkinSpecularTexMultiplier = 1.7f;
+        float SecondarySpecularStrength = 0.25f;
+        float Thickness = 0.15f;
     } settings;
 
-    struct alignas(16) PBRSkinData
+    struct alignas(16) SkinData
     {
         float4 skinParams;
+        float4 skinParams2;
     };
 
-    PBRSkinData GetCommonBufferData();
+    SkinData GetCommonBufferData();
 };

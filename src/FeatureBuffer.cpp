@@ -7,7 +7,7 @@
 #include "Features/Skylighting.h"
 #include "Features/TerrainShadows.h"
 #include "Features/WetnessEffects.h"
-#include "Features/PBRSkin.h"
+#include "Features/Skin.h"
 
 #include "TruePBR.h"
 
@@ -37,5 +37,5 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData()
 		LightLimitFix::GetSingleton()->GetCommonBufferData(),
 		WetnessEffects::GetSingleton()->GetCommonBufferData(),
 		Skylighting::GetSingleton()->GetCommonBufferData(),
-		PBRSkin::GetSingleton()->GetCommonBufferData());
+		Skin::GetSingleton()->GetCommonBufferData());
 }
