@@ -2139,7 +2139,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			float3 pointDiffuseColor, pointSpecularColor, pointSpecularColorSecond;
 			PBR::LightProperties lightProperties = PBR::InitLightProperties(lightColor, lightShadow, 1);
 			// PBR::GetDirectLightInput(pointDiffuseColor, coatPointDiffuseColor, pointTransmissionColor, pointSpecularColor, modelNormal.xyz, coatModelNormal, refractedViewDirection, viewDirection, normalizedLightDirection, lightDirection, lightProperties, pbrSurfaceProperties, tbnTr, uvOriginal);
-			Skin::SkinDirectLightInput(pointDiffuseColor, pointSpecularColor, pointSpecularColorSecond, lightProperties, skinSurfaceProperties, modelNormal.xyz, viewDirection, lightDirection);
+			Skin::SkinDirectLightInput(pointDiffuseColor, pointSpecularColor, pointSpecularColorSecond, lightProperties, skinSurfaceProperties, modelNormal.xyz, viewDirection, normalizedLightDirection);
 			lightsDiffuseColor += pointDiffuseColor;
 			specularColorPBR += pointSpecularColor;
 			specularColorPBR += pointSpecularColorSecond;
@@ -2303,7 +2303,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			PBR::LightProperties lightProperties = PBR::InitLightProperties(lightColor, lightShadow * contactShadow, parallaxShadow);
 			float3 pointDiffuseColor, pointSpecularColor, pointSpecularColorSecond;
 			// PBR::GetDirectLightInput(pointDiffuseColor, coatPointDiffuseColor, pointTransmissionColor, pointSpecularColor, worldSpaceNormal.xyz, coatWorldNormal, refractedViewDirectionWS, worldSpaceViewDirection, normalizedLightDirection, lightDirection, lightProperties, pbrSurfaceProperties, tbnTr, uvOriginal);
-			Skin::SkinDirectLightInput(pointDiffuseColor, pointSpecularColor, pointSpecularColorSecond, lightProperties, skinSurfaceProperties, worldSpaceNormal.xyz, worldSpaceViewDirection, lightDirection);
+			Skin::SkinDirectLightInput(pointDiffuseColor, pointSpecularColor, pointSpecularColorSecond, lightProperties, skinSurfaceProperties, worldSpaceNormal.xyz, worldSpaceViewDirection, normalizedLightDirection);
 			lightsDiffuseColor += pointDiffuseColor;
 			specularColorPBR += pointSpecularColor;
 			specularColorPBR += pointSpecularColorSecond;

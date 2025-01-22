@@ -35,22 +35,13 @@ namespace Skin{
         return length(float2(dot(dNdx, dNdx), dot(dNdy, dNdy)));
     }
 
-    float OrenNayarDiffuse(float3 N, float3 V, float3 L, float roughness)
+    float DisneyDiffuse(float NdotV, float NdotL, float VdotH, float roughness)
     {
-        const float sigma = roughness * roughness;
-        const float A = 1.0 - 0.5 * sigma / (sigma + 0.33);
-        const float B = 0.45 * sigma / (sigma + 0.09);
+        const float FD90 = 0.5 + 2.0 * VdotH * VdotH * roughness;
+        const float fdv = 1.0 + (FD90 - 1.0) * pow(1.0 - NdotV, 5.0);
+        const float fdl = 1.0 + (FD90 - 1.0) * pow(1.0 - NdotL, 5.0);
         
-        const float NdotL = dot(N, L);
-        const float NdotV = dot(N, V);
-        const float angleVN = acos(NdotV);
-        const float angleLN = acos(NdotL);
-        
-        const float alpha = max(angleVN, angleLN);
-        const float beta = min(angleVN, angleLN);
-        const float gamma = dot(normalize(V - N * NdotV), normalize(L - N * NdotL));
-        
-        return (A + B * max(0.0, gamma) * sin(alpha) * tan(beta)) / Math::PI;
+        return fdv * fdl;
     }
 
     float SmithG1_GGX(float NdotV, float alpha)
@@ -113,7 +104,7 @@ namespace Skin{
         const float NdotH = saturate(dot(N, H));
         const float VdotH = saturate(dot(V, H));
 
-        diffuse = max(light.LinearLightColor * NdotL * OrenNayarDiffuse(N, V, L, skin.RoughnessPrimary), 1e-5);
+        diffuse += light.LinearLightColor * NdotL * DisneyDiffuse(NdotV, NdotL, VdotH, skin.RoughnessPrimary) / Math::PI;
 
         float3 F_primary;
         specularPrimary = PBR::GetSpecularDirectLightMultiplierMicrofacet(
@@ -123,7 +114,6 @@ namespace Skin{
             F_primary) * light.LinearLightColor * NdotL;
 
         float2 specularBRDF = PBR::GetEnvBRDFApproxLazarov(skin.RoughnessPrimary, NdotV);
-
         specularPrimary *= 1 + skin.F0Primary * (1 / (specularBRDF.x + specularBRDF.y) - 1);
 
         float3 F_secondary;
@@ -136,6 +126,12 @@ namespace Skin{
         const float energyCompensation = 1.0 + skin.Thickness * 0.3;
         specularPrimary *= energyCompensation;
         specularSecondary = specSecondary * skin.SecondarySpecIntensity * energyCompensation;
+    }
+
+    float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
+    {
+        return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0) * 
+            pow(1.0 - cosTheta, 5.0);
     }
 
     float3 SchlickFresnelAverage(float3 F0, float dielectricF0)
@@ -151,18 +147,21 @@ namespace Skin{
     {
         const float NdotV = saturate(dot(N, V));
         
-        float2 brdfPrimary = PBR::GetEnvBRDFApproxLazarov(skin.RoughnessPrimary, NdotV);
-        float3 specularPrimary = skin.F0Primary * brdfPrimary.x + brdfPrimary.y;
+        const float2 brdfPrimary = PBR::GetEnvBRDFApproxLazarov(skin.RoughnessPrimary, NdotV);
+        const float3 specPrimary = skin.F0Primary * brdfPrimary.x + brdfPrimary.y;
         
-        float2 brdfSecondary = PBR::GetEnvBRDFApproxLazarov(skin.RoughnessSecondary, NdotV);
-        float3 specularSecondary = skin.F0Secondary * brdfSecondary.x + brdfSecondary.y;
+        const float2 brdfSecondary = PBR::GetEnvBRDFApproxLazarov(skin.RoughnessSecondary, NdotV);
+        const float3 specSecondary = skin.F0Secondary * brdfSecondary.x + brdfSecondary.y;
         
-        specularWeight = specularPrimary + specularSecondary * skin.SecondarySpecIntensity;
+        specularWeight = specPrimary + specSecondary * skin.SecondarySpecIntensity;
+        specularWeight *= 1.0 + skin.Thickness * 0.2;
 
-        float3 totalSpec = specularWeight * (1.0 + skin.Thickness * 0.15);
+        diffuseWeight = skin.Albedo * (1.0 - FresnelSchlickRoughness(NdotV, 0.04, skin.RoughnessPrimary)) / Math::PI;
         
-        diffuseWeight = skin.Albedo * (1 - totalSpec) / Math::PI;
-        specularWeight = totalSpec;
+        const float curvature = CalculateCurvature(N);
+        specularWeight *= 1.0 - saturate(curvature * skin.CurvatureScale);
+
+        specularWeight *= 1 + skin.F0Primary * (1 / (brdfPrimary.x + brdfPrimary.y) - 1) + skin.F0Secondary * (1 / (brdfSecondary.x + brdfSecondary.y) - 1);
 
         float3 R = reflect(-V, N);
         float horizon = min(1.0 + dot(R, VN), 1.0);
