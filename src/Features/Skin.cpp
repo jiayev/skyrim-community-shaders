@@ -23,17 +23,12 @@ void Skin::DrawSettings()
     ImGui::SliderFloat("Primary Roughness", &settings.SkinMainRoughness, 0.0f, 1.0f);
     if (auto _tt = Util::HoverTooltipWrapper()) {
         ImGui::Text("Controls microscopic roughness of stratum corneum layer");
-        ImGui::BulletText("0.4-0.6 : Normal skin (forehead/cheek)");
-        ImGui::BulletText("0.2-0.3 : Oily areas (nose bridge)");
-        ImGui::BulletText("0.7+ : Dry skin (elbows)");
     }
 
     ImGui::SliderFloat("Secondary Roughness", &settings.SkinSecondRoughness, 0.0f, 1.0f);
     if (auto _tt = Util::HoverTooltipWrapper()) {
         ImGui::Text("Smoothness of epidermal cell layer reflections");
         ImGui::BulletText("Should be 30-50%% lower than Primary");
-        ImGui::BulletText("0.2-0.3 : Young skin");
-        ImGui::BulletText("0.4+ : Aged/wrinkled skin");
     }
 
     ImGui::SliderFloat("Specular Texture Multiplier", &settings.SkinSpecularTexMultiplier, 0.0f, 10.0f);
@@ -45,17 +40,11 @@ void Skin::DrawSettings()
     ImGui::SliderFloat("Secondary Specular Strength", &settings.SecondarySpecularStrength, 0.0f, 1.0f);
     if (auto _tt = Util::HoverTooltipWrapper()) {
         ImGui::Text("Intensity of secondary specular highlights");
-        ImGui::BulletText("0.3-0.5 : Moist skin");
-        ImGui::BulletText("0.1-0.2 : Matte finish");
-        ImGui::BulletText("Combine with curvature map for pores");
     }
 
     ImGui::SliderFloat("Thickness", &settings.Thickness, 0.0f, 1.0f);
     if (auto _tt = Util::HoverTooltipWrapper()) {
         ImGui::Text("Optical thickness for energy compensation");
-        ImGui::BulletText("0.0 : Thin areas (ears/nose tip)");
-        ImGui::BulletText("0.5 : Average facial skin");
-        ImGui::BulletText("1.0 : Thick areas (palms/heels)");
     }
 }
 
