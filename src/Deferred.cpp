@@ -4,6 +4,7 @@
 #include "State.h"
 #include "TruePBR.h"
 #include "Util.h"
+#include "VariableCache.h"
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/ScreenSpaceGI.h"
@@ -220,16 +221,15 @@ void Deferred::EarlyPrepasses()
 
 	State::GetSingleton()->UpdateSharedData();
 
-	ZoneScoped;
-	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Early Prepass");
+	auto variableCache = VariableCache::GetSingleton();
 
-	auto context = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData().context;
+	ZoneScoped;
+	TracyD3D11Zone(variableCache->state->tracyCtx, "Early Prepass");
+
+	auto context = variableCache->context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
-	auto shadowState = RE::BSGraphics::RendererShadowState::GetSingleton();
-	GET_INSTANCE_MEMBER(stateUpdateFlags, shadowState)
-
-	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);  // Run OMSetRenderTargets again
+	variableCache->stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);  // Run OMSetRenderTargets again
 
 	for (auto* feature : Feature::GetFeatureList()) {
 		if (feature->loaded) {
@@ -707,3 +707,77 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 	}
 	return mainCompositeInteriorCS;
 }
+
+void Deferred::Hooks::Main_RenderShadowMaps::thunk()
+{
+	func();
+	VariableCache::GetSingleton()->deferred->EarlyPrepasses();
+};
+
+void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
+{
+	auto deferred = VariableCache::GetSingleton()->deferred;
+	deferred->inWorld = true;
+	func(a1);
+	deferred->inWorld = false;
+};
+
+void Deferred::Hooks::Main_RenderWorld_Start::thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges, uint32_t RenderFlags, int GeometryGroup)
+{
+	auto deferred = VariableCache::GetSingleton()->deferred;
+	// Here is where the first opaque objects start rendering
+	deferred->StartDeferred();
+	func(This, StartRange, EndRanges, RenderFlags, GeometryGroup);  // RenderBatches
+};
+
+void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumulator* This, uint32_t RenderFlags)
+{
+	auto deferred = VariableCache::GetSingleton()->deferred;
+
+	// Deferred blended decals
+	deferred->inBlendedDecals = true;
+	func(This, RenderFlags);
+	deferred->inBlendedDecals = false;
+
+	deferred->EndDeferred();
+
+	// Blended decals
+	deferred->inDecals = true;
+	func(This, RenderFlags);
+	deferred->inDecals = false;
+
+	// After this point, water starts rendering
+};
+
+void Deferred::Hooks::BSShaderAccumulator_BlendedDecals_RenderGeometryGroup::thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges, uint32_t RenderFlags, int GeometryGroup)
+{
+	auto deferred = VariableCache::GetSingleton()->deferred;
+
+	if (deferred->inBlendedDecals) {
+		func(This, StartRange, EndRanges, RenderFlags, 12);
+	} else {
+		func(This, StartRange, EndRanges, RenderFlags, GeometryGroup);
+	}
+};
+
+void Deferred::Hooks::BSShaderAccumulator_FirstPerson_BlendedDecals::thunk(RE::BSShaderAccumulator* This, uint32_t RenderFlags)
+{
+	auto deferred = VariableCache::GetSingleton()->deferred;
+
+	deferred->inBlendedDecals = true;
+	func(This, RenderFlags);
+	deferred->inBlendedDecals = false;
+	func(This, RenderFlags);
+	deferred->inDecals = false;
+};
+
+void Deferred::Hooks::BSShaderAccumulator_ShadowMapOrMask_BlendedDecals::thunk(RE::BSShaderAccumulator* This, uint32_t RenderFlags)
+{
+	auto deferred = VariableCache::GetSingleton()->deferred;
+
+	deferred->inBlendedDecals = true;
+	func(This, RenderFlags);
+	deferred->inBlendedDecals = false;
+	func(This, RenderFlags);
+	deferred->inDecals = false;
+};
