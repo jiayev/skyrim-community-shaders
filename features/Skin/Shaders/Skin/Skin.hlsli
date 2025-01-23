@@ -19,8 +19,8 @@ namespace Skin{
         SkinSurfaceProperties skin;
         skin.RoughnessPrimary = 0.55;
         skin.RoughnessSecondary = 0.35;
-        skin.F0Primary = float3(0.02, 0.017, 0.014);
-        skin.F0Secondary = float3(0.04, 0.035, 0.03);
+        skin.F0Primary = float3(0.0277, 0.0277, 0.0277);
+        skin.F0Secondary = float3(0.04, 0.04, 0.04);
         skin.SecondarySpecIntensity = 0.15;
         skin.CurvatureScale = 1.0;
         skin.Albedo = float3(0.8, 0.6, 0.5);

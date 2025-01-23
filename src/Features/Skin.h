@@ -36,6 +36,8 @@ struct Skin : Feature
 		float SkinSpecularTexMultiplier = 1.7f;
         float SecondarySpecularStrength = 0.25f;
         float Thickness = 0.15f;
+        float F01 = 0.027f;
+        float F02 = 0.04f;
     } settings;
 
     struct alignas(16) SkinData
