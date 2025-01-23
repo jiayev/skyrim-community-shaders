@@ -1751,8 +1751,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	skinSurfaceProperties.RoughnessSecondary = SharedData::skinData.skinParams.y;
 	skinSurfaceProperties.SecondarySpecIntensity = SharedData::skinData.skinParams2.x;
 	skinSurfaceProperties.Thickness = SharedData::skinData.skinParams2.y;
-	skinSurfaceProperties.F0Primary = SharedData::skinData.skinParams2.z;
-	skinSurfaceProperties.F0Secondary = SharedData::skinData.skinParams2.w;
+	skinSurfaceProperties.F0Primary = SharedData::skinData.skinParams2.zzz;
+	skinSurfaceProperties.F0Secondary = SharedData::skinData.skinParams2.www;
 
 	float3 specularColorPBR = 0;
 
