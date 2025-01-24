@@ -3,8 +3,6 @@
 #include "State.h"
 #include "Util.h"
 
-#include "DirectXTex.h"
-
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     LensFlare::Settings,
     LensFlareCurve,
@@ -14,9 +12,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     HaloWidth,
     LensFlareCA,
     LFStrength,
-    GLocalMask,
-    SunGlareBoost,
-    Starburst
+    GLocalMask
 )
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -42,16 +38,6 @@ void LensFlare::DrawSettings()
     ImGui::Checkbox("Non-intrusive Lens Flares", &settings.GLocalMask);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Only apply flaring when looking directly at light sources");
-    }
-
-    ImGui::Checkbox("Sun Glare Boost", &settings.SunGlareBoost);
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Apply additional glare to the sun");
-    }
-
-    ImGui::Checkbox("Starburst", &settings.Starburst);
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Enable starburst effect");
     }
 
     // Ghost Settings
@@ -85,20 +71,10 @@ void LensFlare::DrawSettings()
     ImGui::Spacing();
 
     if (ImGui::CollapsingHeader("Debug")) {
-        ImGui::Text("Sun Position: %f, %f, %f", debugSunPos.x, debugSunPos.y, debugSunPos.z);
         ImGui::Checkbox("Disable Downsample", &debugsettings.disableDownsample);
         ImGui::Checkbox("Disable Upsample", &debugsettings.disableUpsample);
         ImGui::SliderInt("Downsample Times", &debugsettings.downsampleTimes, 1, 8);
         ImGui::SliderInt("Upsample Times", &debugsettings.upsampleTimes, 1, 8);
-
-        static float debugRescale = .3f;
-        ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
-
-        BUFFER_VIEWER_NODE(texFlare, debugRescale)
-        BUFFER_VIEWER_NODE(texBurstNoise, debugRescale)
-        BUFFER_VIEWER_NODE(texRGBNoise, debugRescale)
-        BUFFER_VIEWER_NODE(texFlareD, debugRescale)
-        BUFFER_VIEWER_NODE(texFlareU, debugRescale)
     }
 }
 
@@ -125,75 +101,6 @@ void LensFlare::SetupResources()
     logger::debug("Creating buffers...");
     {
         lensFlareCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<LensFlareCB>());
-    }
-
-    logger::debug("Loading Burst Noise texture...");
-    {
-        DirectX::ScratchImage image;
-        try {
-			std::filesystem::path path{ "Data\\Textures\\starburst.dds" };
-
-			DX::ThrowIfFailed(LoadFromDDSFile(path.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image));
-		} catch (const DX::com_exception& e) {
-			logger::error("{}", e.what());
-			return;
-		}
-
-        ID3D11Resource* pResource = nullptr;
-        try {
-			DX::ThrowIfFailed(CreateTexture(device,
-				image.GetImages(), image.GetImageCount(),
-				image.GetMetadata(), &pResource));
-		} catch (const DX::com_exception& e) {
-			logger::error("{}", e.what());
-			return;
-		}
-
-        texBurstNoise = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource));
-
-        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = texBurstNoise->desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = {
-				.MostDetailedMip = 0,
-				.MipLevels = 1 }
-		};
-		texBurstNoise->CreateSRV(srvDesc);
-    }
-
-    logger::debug("Loading RGB Noise texture...");
-    {
-        DirectX::ScratchImage image;
-        try {
-            std::filesystem::path path{ "Data\\Textures\\rgbnoise.dds" };
-
-            DX::ThrowIfFailed(LoadFromDDSFile(path.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image));
-        } catch (const DX::com_exception& e) {
-            logger::error("{}", e.what());
-            return;
-        }
-
-        ID3D11Resource* pResource = nullptr;
-        try {
-            DX::ThrowIfFailed(CreateTexture(device,
-                image.GetImages(), image.GetImageCount(),
-                image.GetMetadata(), &pResource));
-        } catch (const DX::com_exception& e) {
-            logger::error("{}", e.what());
-            return;
-        }
-
-        texRGBNoise = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource));
-
-        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-            .Format = texRGBNoise->desc.Format,
-            .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-            .Texture2D = {
-                .MostDetailedMip = 0,
-                .MipLevels = 1
-            }
-        };
-        texRGBNoise->CreateSRV(srvDesc);
     }
 
     logger::debug("Creating 2D textures...");
@@ -271,18 +178,6 @@ void LensFlare::SetupResources()
 		};
 
         DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, resizeSampler.put()));
-
-        D3D11_SAMPLER_DESC noiseRadialSamplerDesc = {
-            .Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-            .AddressU = D3D11_TEXTURE_ADDRESS_WRAP,
-            .AddressV = D3D11_TEXTURE_ADDRESS_WRAP,
-            .AddressW = D3D11_TEXTURE_ADDRESS_WRAP,
-            .MaxAnisotropy = 1,
-            .MinLOD = 0,
-            .MaxLOD = D3D11_FLOAT32_MAX
-        };
-
-        DX::ThrowIfFailed(device->CreateSamplerState(&noiseRadialSamplerDesc, noiseSampler.put()));
 	}
 
     CompileComputeShaders();
@@ -338,42 +233,16 @@ void LensFlare::Draw(TextureInfo& inout_tex)
 	auto state = State::GetSingleton();
 	auto context = state->context;
 
-    auto sky = RE::Sky::GetSingleton();
-    RE::NiPoint3 sun_pos;
-    float3 SunPos;
-    if (sky->mode.get() == RE::Sky::Mode::kFull) {
-        auto sun = sky->sun;
-        sun_pos = sun->sunQuery.get()->world.translate;
-        auto eye_pos = Util::GetAverageEyePosition();
-        SunPos = { sun_pos.x, sun_pos.y, sun_pos.z };
-        SunPos -= { eye_pos.x, eye_pos.y, eye_pos.z };
-    } else {
-        SunPos = { 0.0f, 0.0f, 0.0f };
-    }
-
-    debugSunPos = SunPos;
-
     state->BeginPerfEvent("Lens Flare");
 
     uint width = texOutput->desc.Width;
     uint height = texOutput->desc.Height;
 
     LensFlareCB data = {
-        .LensFlareCurve = settings.LensFlareCurve,
-        .GhostStrength = settings.GhostStrength,
-        .HaloStrength = settings.HaloStrength,
-        .HaloRadius = settings.HaloRadius,
-        .HaloWidth = settings.HaloWidth,
-        .LensFlareCA = settings.LensFlareCA,
-        .LFStrength = settings.LFStrength,
+        .settings = settings,
         .ScreenWidth = (float)width,
         .ScreenHeight = (float)height,
-        .SunPos = SunPos,
-        .SunVisibility = 1.0f,
-        .DownsizeScale = 1,
-        .GLocalMask = uint(settings.GLocalMask),
-        .SunGlareBoost = uint(settings.SunGlareBoost),
-        .Starburst = uint(settings.Starburst)
+        .downsizeScale = 1
     };
 
     int downsampleTimes = debugsettings.downsampleTimes;
@@ -381,9 +250,9 @@ void LensFlare::Draw(TextureInfo& inout_tex)
 
     lensFlareCB->Update(data);
 
-    std::array<ID3D11ShaderResourceView*, 4> srvs = { nullptr };
+    std::array<ID3D11ShaderResourceView*, 2> srvs = { nullptr };
     std::array<ID3D11UnorderedAccessView*, 1> uavs = { nullptr };
-    std::array<ID3D11SamplerState*, 3> samplers = { colorSampler.get(), resizeSampler.get(), noiseSampler.get() };
+    std::array<ID3D11SamplerState*, 2> samplers = { colorSampler.get(), resizeSampler.get() };
 	auto cb = lensFlareCB->CB();
 
     auto resetViews = [&]() {
@@ -399,11 +268,25 @@ void LensFlare::Draw(TextureInfo& inout_tex)
 	context->CSSetConstantBuffers(1, 1, &cb);
     context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 
+    // Get Lens Flare
+    srvs.at(0) = inout_tex.srv;
+    uavs.at(0) = texFlare->uav.get();
+
+    context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+    context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+    context->CSSetShader(lensFlareCS.get(), nullptr, 0);
     uint dispatchX = (width + 7) >> 3;
     uint dispatchY = (height + 7) >> 3;
+    context->Dispatch(dispatchX, dispatchY, 1);
+    resetViews();
 
-    context->CopyResource(texFlareD->resource.get(), inout_tex.tex);
-    context->CopyResource(texFlareDCopy->resource.get(), inout_tex.tex);
+    // int numDownsamples = 1;
+    // if (height > 1024) numDownsamples = 2;
+    // if (height > 2048) numDownsamples = 3;
+    // if (height > 4096) numDownsamples = 4;
+
+    context->CopyResource(texFlareD->resource.get(), texFlare->resource.get());
+    context->CopyResource(texFlareDCopy->resource.get(), texFlare->resource.get());
 
     if (!debugsettings.disableDownsample) {
         // Downsample passes
@@ -411,7 +294,7 @@ void LensFlare::Draw(TextureInfo& inout_tex)
         for (int i = 0; i < downsampleTimes; i++) {
             // When i == 0, downsizeScale is 8.
             // When i == 3, downsizeScale is 64.
-            data.DownsizeScale = 2 ^ (i + 3);
+            data.downsizeScale = 2 ^ (i + 3);
             lensFlareCB->Update(data);
             cb = lensFlareCB->CB();
             context->CSSetConstantBuffers(1, 1, &cb);
@@ -423,7 +306,7 @@ void LensFlare::Draw(TextureInfo& inout_tex)
             context->CopyResource(texFlareD->resource.get(), texFlareDCopy->resource.get());
             resetViews();
         }
-        // context->CopyResource(texFlare->resource.get(), texFlareD->resource.get());
+        context->CopyResource(texFlare->resource.get(), texFlareD->resource.get());
         context->Flush();
     }
 
@@ -436,7 +319,7 @@ void LensFlare::Draw(TextureInfo& inout_tex)
         for (int i = 0; i < upsampleTimes; i++) {
             // When i == 3, downsizeScale is 8.
             // When i == 0, downsizeScale is 64.
-            data.DownsizeScale = 2 ^ (6 - i);
+            data.downsizeScale = 2 ^ (6 - i);
             lensFlareCB->Update(data);
             cb = lensFlareCB->CB();
             context->CSSetConstantBuffers(1, 1, &cb);
@@ -448,33 +331,16 @@ void LensFlare::Draw(TextureInfo& inout_tex)
             context->CopyResource(texFlareU->resource.get(), texFlareUCopy->resource.get());
             resetViews();
         }
-        // context->CopyResource(texFlare->resource.get(), texFlareU->resource.get());
+        context->CopyResource(texFlare->resource.get(), texFlareU->resource.get());
         context->Flush();
     }
 
-    // Get Lens Flare
-    srvs.at(0) = texFlareU->srv.get();
-    srvs.at(2) = texBurstNoise->srv.get();
-    srvs.at(3) = texRGBNoise->srv.get();
-    uavs.at(0) = texFlare->uav.get();
-    lensFlareCB->Update(data);
-    cb = lensFlareCB->CB();
-
-    context->CSSetConstantBuffers(1, 1, &cb);
-
-    context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-    context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-    context->CSSetShader(lensFlareCS.get(), nullptr, 0);
-
-    context->Dispatch(dispatchX, dispatchY, 1);
-    resetViews();
+    
 
     // Final composite
-    lensFlareCB->Update(data);
     cb = lensFlareCB->CB();
     srvs.at(0) = inout_tex.srv;
     srvs.at(1) = texFlare->srv.get();
-    srvs.at(3) = texRGBNoise->srv.get();
     uavs.at(0) = texOutput->uav.get();
     context->CSSetConstantBuffers(1, 1, &cb);
     context->CSSetShader(compositeCS.get(), nullptr, 0);
@@ -494,4 +360,3 @@ void LensFlare::Draw(TextureInfo& inout_tex)
     inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
     state->EndPerfEvent();
 }
-

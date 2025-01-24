@@ -23,9 +23,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 #include "PostProcessing/common.hlsli"
-#include "Common/FrameBuffer.hlsli"
-#include "Common/Random.hlsli"
-#include "Common/SharedData.hlsli"
 
 // Constants
 static const float PI = 3.14159265359;
@@ -34,11 +31,8 @@ static const float EPSILON = 1e-6;
 // Textures & Samplers
 Texture2D<float4> InputTexture : register(t0);
 Texture2D<float4> FlareTexture : register(t1);
-Texture2D<float4> NoiseTexture : register(t2);
-Texture2D<float4> RGBNoiseTexture : register(t3);
 SamplerState ColorSampler : register(s0);
 SamplerState ResizeSampler : register(s1);
-SamplerState NoiseSampler : register(s2);
 RWTexture2D<float4> OutputTexture : register(u0);
 
 cbuffer LensFlareConstants : register(b1)
@@ -50,14 +44,10 @@ cbuffer LensFlareConstants : register(b1)
     float HaloWidth;
     float LensFlareCA;
     float LFStrength;
+    bool GLocalMask;
     float ScreenWidth;
     float ScreenHeight;
-    float3 SunPos;
-    float SunVisibility;
     int DownsizeScale;
-    uint GLocalMask;
-    uint SunGlareBoost;
-    uint Starburst;
 }
 
 static const float4 GHOST_COLORS[8] = 
@@ -79,77 +69,15 @@ static const float GHOST_SCALES[8] =
 
 float3 HighPassFilter(float3 color, float curve)
 {
-    float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
+    float luminance = Color::RGBToLuminance(color);
     
-    float strength = pow(luminance / (1.0 + luminance), curve * curve * curve);
+    float mask = pow(abs(luminance), curve * curve + EPSILON);
     
-    return color * min(strength, 1.0f);
-}
-
-float GetNoise(float2 uv)
-{
-    return NoiseTexture.SampleLevel(NoiseSampler, uv, 0).r;
-}
-
-float GetRGBNoise(float2 uv)
-{
-    return RGBNoiseTexture.SampleLevel(NoiseSampler, uv + SharedData::FrameCount / 60.0f, 0).r;
-}
-
-float3 cc(float3 color, float factor, float factor2)
-{
-    float w = color.x+color.y+color.z;
-    return lerp(color, w * factor, w * factor2);
-}
-
-float3 Glare(float2 uv, float2 sun)
-{
-    float2 main = uv - sun;
-    float2 uvd = uv * length(uv);
-    float T = SharedData::FrameCount / 60.0f;
-
-    float ang = atan2(main.y, main.x);
-    float dist = length(main);
-    dist = pow(dist, 0.1);
-    float n = GetRGBNoise(float2((ang+T/9.0f)*16.0f, dist*32.0f));
-    float3 color = 0.0f;
-    float f0 = 1.0/(length(uv-sun)*16.0+1.0);
-    f0 = f0+f0*(sin((ang+T/18.0 + GetNoise(abs(ang)+n/2.0)*2.0)*12.0)*.1+dist*.1+.8);
-    color = float3(f0, f0, f0);
-    color = pow(color, 2.2f);
+    color *= mask;
+    
     return color;
 }
 
-float4 GetColor(float2 uv)
-{
-    float4 color = InputTexture.SampleLevel(ColorSampler, uv, 0);
-    // Sun
-    if (SunGlareBoost != 0)
-    {
-        // color.rgb = HighPassFilter(color.rgb, LensFlareCurve);
-        // color.rgb += Glare(uv, float2(0.7,0.3)) * SunVisibility;
-        // float3 sun_color = 0.0f;
-        // sun_color = float3(1.4f, 1.2f, 1.0f) * color.rgb;
-        // sun_color -= RGBNoiseTexture.SampleLevel(NoiseSampler, uv, 0).xxx * 0.15f;
-        // sun_color = cc(sun_color, 0.5f, 0.1f);
-        // color.rgb += sun_color;
-    }
-    return color;
-}
-
-float4 SampleCA(float2 texcoord, float strength)
-{
-    float3 influence = float3(0.04, 0.0, 0.03);
-    float2 CAr = (texcoord - 0.5) * (1.0 - strength * influence.r) + 0.5;
-    float2 CAb = (texcoord - 0.5) * (1.0 + strength * influence.b) + 0.5;
-
-    float4 color;
-    color.r = GetColor(CAr).r;
-    color.ga = GetColor(texcoord).ga;
-    color.b = GetColor(CAb).b;
-
-    return color;
-}
 
 [numthreads(8, 8, 1)]
 void CSLensflare(uint3 DTid : SV_DispatchThreadID)
@@ -158,14 +86,13 @@ void CSLensflare(uint3 DTid : SV_DispatchThreadID)
         return;
     float2 texcoord = (DTid.xy + 0.5f) / float2(ScreenWidth, ScreenHeight);
     // float2 texcoord = (floor((DTid.xy / 4)) * 4 + 2.0f) / float2(ScreenWidth, ScreenHeight);
-    float4 input_color = GetColor(texcoord);
+    float4 input_color = InputTexture.SampleLevel(ColorSampler, texcoord, 4);
     float weight;
     float4 s = 0.0f;
     float3 color = 0.0f;
     float2 texcoord_clean = texcoord;
     float2 radiant_vector = texcoord - 0.5f;
     float2 halo_vector = texcoord_clean;
-
     // Ghosts
     [branch]
     if (GhostStrength != 0.0f)
@@ -178,7 +105,7 @@ void CSLensflare(uint3 DTid : SV_DispatchThreadID)
                 float2 ghost_vector = radiant_vector * GHOST_SCALES[i];
 
                 float distance_mask = 1.0 - length(ghost_vector);
-                if (GLocalMask != 0)
+                if (GLocalMask)
 				{
             		float mask1 = smoothstep(0.5, 0.9, distance_mask);
             		float mask2 = smoothstep(0.75, 1.0, distance_mask) * 0.95 + 0.05;
@@ -189,7 +116,7 @@ void CSLensflare(uint3 DTid : SV_DispatchThreadID)
 					weight = distance_mask;
 				}
                 float4 s1 = 0.0f;
-                s1 = GetColor(ghost_vector + 0.5f);
+                s1 = SampleCA(InputTexture, ColorSampler, ghost_vector + 0.5f, 8.0 * LensFlareCA, 2);
                 s1.rgb = HighPassFilter(s1.rgb, LensFlareCurve);
                 color += s1.rgb * GHOST_COLORS[i].rgb * GHOST_COLORS[i].a * weight;
             }
@@ -205,33 +132,17 @@ void CSLensflare(uint3 DTid : SV_DispatchThreadID)
     // Halo
     if (HaloStrength > EPSILON)
     {
-        float aspect = ScreenWidth / ScreenHeight;
-        halo_vector -= normalize(radiant_vector) * HaloRadius;  
+        halo_vector -= normalize(radiant_vector) * HaloRadius;
         weight = 1.0 - min(rcp(HaloWidth + EPSILON) * length(0.5 - halo_vector), 1.0);
         weight = pow(abs(weight), 5.0);
 
-        s = SampleCA(halo_vector, 8.0 * LensFlareCA);
+        s = SampleCA(InputTexture, ColorSampler, halo_vector, 8.0 * LensFlareCA, 2);
         s.rgb = HighPassFilter(s.rgb, LensFlareCurve);
-
-        //Burst Noise, https://john-chapman.github.io/2017/11/05/pseudo-lens-flare.html
-        if (Starburst != 0)
-        {
-            float uStarburstOffset = SunPos.z % 10.0f * 0.1f;
-            float d = length(radiant_vector);
-            float radial = acos(radiant_vector.x / d) / 2;
-            float mask = GetNoise(float2(radial + uStarburstOffset, 0.0f))
-                    * GetNoise(float2(radial + uStarburstOffset * 0.5f, 0.0f));
-            mask = saturate(mask + (1.0 - smoothstep(0.0, 0.3, d)));
-            mask = mask * 0.5 + 0.5;
-            s *= mask;
-        }
-
         color += s.rgb * s.a * weight * (HaloStrength * HaloStrength);
     }
 
     color *= LFStrength * LFStrength;
 
-    // OutputTexture[DTid.xy] = float4(color, 1.0f);
     OutputTexture[DTid.xy] = float4(color, 1.0f);
 }
 
@@ -257,11 +168,5 @@ void CSComposite(uint3 DTid : SV_DispatchThreadID)
     float2 texcoord = (DTid.xy + 0.5) / float2(ScreenWidth, ScreenHeight);
     float4 flarecolor = FlareTexture.SampleLevel(ColorSampler, texcoord, 0);
     float4 origincolor = InputTexture.SampleLevel(ColorSampler, texcoord, 0);
-    float2 suncoord = FrameBuffer::ViewToUV(FrameBuffer::WorldToView(SunPos, true), true);
-    // if (abs(suncoord.x - texcoord.x) <= 0.5)
-    // {
-    //     origincolor.rgb = float3(0.0f, 0.0f, 1.0f);
-    // }
-    OutputTexture[DTid.xy] = flarecolor + origincolor + float4(saturate(Glare(texcoord, suncoord) * SunVisibility), 1.0f);
-    // OutputTexture[DTid.xy] = float4(SunPos / 1000.0f, 1.0f);
+    OutputTexture[DTid.xy] = flarecolor + origincolor;
 }
