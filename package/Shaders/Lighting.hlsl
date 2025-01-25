@@ -394,9 +394,6 @@ struct PS_OUTPUT
 	float4 Reflectance : SV_Target5;
 	float4 Masks : SV_Target6;
 	float4 Parameters : SV_Target7;
-#	if defined(TERRAIN_BLENDING)
-	float Depth : SV_Depth;
-#	endif
 };
 #else
 struct PS_OUTPUT
@@ -1036,18 +1033,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 #	if defined(TERRAIN_BLENDING)
-	float depthSampled = TerrainBlending::GetTerrainOffsetDepth(screenUV, eyeIndex);
-	float depthComp = input.Position.z - depthSampled;
+	float depthSampled = TerrainBlending::TerrainBlendingMaskTexture[input.Position.xy];
 
 	float depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
 	float depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
 
-	float blendFactorTerrain = saturate((depthSampledLinear - depthPixelLinear) / 5.0);
+	float blendFactorTerrain = saturate((depthSampledLinear - depthPixelLinear) / 4.0);
 
 	if (input.Position.z == depthSampled)
 		blendFactorTerrain = 1;
 
-	clip(blendFactorTerrain);
 	blendFactorTerrain = saturate(blendFactorTerrain);
 #	endif
 
@@ -2697,7 +2692,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(TERRAIN_BLENDING)
 	psout.Diffuse.w = blendFactorTerrain;
-	psout.Depth = lerp(max(depthSampled, input.Position.z), input.Position.z, blendFactorTerrain > screenNoise);
 #		endif
 
 	psout.MotionVectors.zw = float2(0.0, psout.Diffuse.w);
