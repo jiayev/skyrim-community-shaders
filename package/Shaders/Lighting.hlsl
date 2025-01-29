@@ -1073,14 +1073,49 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	DisplacementParams displacementParams[6];
 	displacementParams[0].DisplacementScale = 1.f;
 	displacementParams[0].DisplacementOffset = 0.f;
-	displacementParams[0].HeightScale = 1.f;
+	displacementParams[0].HeightScale = 1;
+	displacementParams[0].FlattenAmount = 0;
 #		else
 	DisplacementParams displacementParams;
 	displacementParams.DisplacementScale = 1.f;
 	displacementParams.DisplacementOffset = 0.f;
-	displacementParams.HeightScale = 1.f;
+	displacementParams.HeightScale = 1;
+	displacementParams.FlattenAmount = 0;
 #		endif
 
+#	endif
+
+	float curvature = 0;
+	float normalSmoothness = 0;
+
+#	if !defined(MODELSPACENORMALS)
+	float3 vertexNormal = tbnTr[2];
+	float3 worldSpaceVertexNormal = vertexNormal;
+
+#		if !defined(DRAW_IN_WORLDSPACE)
+	[flatten] if (!input.WorldSpace)
+		worldSpaceVertexNormal = normalize(mul(input.World[eyeIndex], float4(worldSpaceVertexNormal, 0)));
+#		endif
+#		if defined(EMAT)
+
+	if (SharedData::extendedMaterialSettings.EnableParallaxWarpingFix) {
+		float3 ndx = ddx(worldSpaceVertexNormal);
+		float3 ndy = ddy(worldSpaceVertexNormal);
+		float3 fdx = ddx(input.WorldPosition.xyz);
+		float3 fdy = ddy(input.WorldPosition.xyz);
+		float fragSize = rcp(length(max(abs(fdx), abs(fdy))));
+		curvature = pow(length(max(abs(ndx), abs(ndy))) * fragSize, 0.5);
+		float3 flatWorldNormal = normalize(-cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
+		normalSmoothness = (1 - dot(worldSpaceVertexNormal, flatWorldNormal));
+#			if defined(LANDSCAPE)
+		displacementParams[0].HeightScale = saturate(1 - curvature);
+		displacementParams[0].FlattenAmount = (normalSmoothness + curvature);
+#			else
+		displacementParams.HeightScale = saturate(1 - curvature);
+		displacementParams.FlattenAmount = (normalSmoothness + curvature);
+#			endif
+	}
+#		endif
 #	endif
 
 	float3 entryNormal = 0;
@@ -1129,9 +1164,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	[branch] if (SharedData::extendedMaterialSettings.EnableParallax && (PBRFlags & PBR::Flags::HasDisplacement) != 0)
 	{
 		PBRParallax = true;
-		displacementParams.HeightScale = PBRParams1.y;
 		[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 		{
+			displacementParams.HeightScale = PBRParams1.y;
 			displacementParams.DisplacementScale = 0.5;
 			displacementParams.DisplacementOffset = -0.25;
 			eta = (1 - sqrt(MultiLayerParallaxData.y)) / (1 + sqrt(MultiLayerParallaxData.y));
@@ -1146,6 +1181,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			entryNormal = normalize(mul(tbn, entryNormalTS));
 			refractedViewDirection = -refract(-viewDirection, entryNormal, eta);
 			refractedViewDirectionWS = normalize(mul(input.World[eyeIndex], float4(refractedViewDirection, 0)));
+		}
+		else
+		{
+			displacementParams.HeightScale *= PBRParams1.y;
 		}
 		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler);
 		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, refractedViewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, pixelOffset);
@@ -1203,12 +1242,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		displacementParams[4] = displacementParams[0];
 		displacementParams[5] = displacementParams[0];
 #			if defined(TRUE_PBR)
-		displacementParams[0].HeightScale = PBRParams1.y;
-		displacementParams[1].HeightScale = LandscapeTexture2PBRParams.y;
-		displacementParams[2].HeightScale = LandscapeTexture3PBRParams.y;
-		displacementParams[3].HeightScale = LandscapeTexture4PBRParams.y;
-		displacementParams[4].HeightScale = LandscapeTexture5PBRParams.y;
-		displacementParams[5].HeightScale = LandscapeTexture6PBRParams.y;
+		displacementParams[0].HeightScale *= PBRParams1.y;
+		displacementParams[1].HeightScale *= LandscapeTexture2PBRParams.y;
+		displacementParams[2].HeightScale *= LandscapeTexture3PBRParams.y;
+		displacementParams[3].HeightScale *= LandscapeTexture4PBRParams.y;
+		displacementParams[4].HeightScale *= LandscapeTexture5PBRParams.y;
+		displacementParams[5].HeightScale *= LandscapeTexture6PBRParams.y;
 #			endif
 
 		float weights[6];
@@ -1628,6 +1667,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		worldSpaceNormal = normalize(mul(input.World[eyeIndex], float4(worldSpaceNormal, 0)));
 #	endif
 
+#	if defined(MODELSPACENORMALS)
+	float3 worldSpaceVertexNormal = worldSpaceNormal;
+#	endif
+
 	float3 screenSpaceNormal = normalize(FrameBuffer::WorldToView(worldSpaceNormal, false, eyeIndex));
 
 #	if defined(TRUE_PBR)
@@ -1725,18 +1768,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float pbrWeight = 1;
 	float pbrGlossiness = 1 - pbrSurfaceProperties.Roughness;
 #	endif  // TRUE_PBR
-
-#	if !defined(MODELSPACENORMALS)
-	float3 vertexNormal = tbnTr[2];
-	float3 worldSpaceVertexNormal = vertexNormal;
-
-#		if !defined(DRAW_IN_WORLDSPACE)
-	[flatten] if (!input.WorldSpace)
-		worldSpaceVertexNormal = normalize(mul(input.World[eyeIndex], float4(worldSpaceVertexNormal, 0)));
-#		endif
-#	else
-	float3 worldSpaceVertexNormal = worldSpaceNormal;
-#	endif
 
 	float porosity = 1.0;
 
