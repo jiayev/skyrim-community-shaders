@@ -176,7 +176,15 @@ struct IDXGISwapChain_Present
 	{
 		State::GetSingleton()->Reset();
 		Menu::GetSingleton()->DrawOverlay();
-		Streamline::GetSingleton()->Present();
+
+		auto streamline = Streamline::GetSingleton();
+		streamline->Present();
+
+		if (streamline->settings.frameGenerationMode == sl::DLSSGMode::eOn) {
+			SyncInterval = 0;
+			Flags = DXGI_PRESENT_ALLOW_TEARING;
+		}
+
 		auto retval = func(This, SyncInterval, Flags);
 		TracyD3D11Collect(State::GetSingleton()->tracyCtx);
 		return retval;
@@ -268,7 +276,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 	[[maybe_unused]] const D3D_FEATURE_LEVEL* pFeatureLevels,
 	[[maybe_unused]] UINT FeatureLevels,
 	UINT SDKVersion,
-	const DXGI_SWAP_CHAIN_DESC* pSwapChainDesc,
+	DXGI_SWAP_CHAIN_DESC* pSwapChainDesc,
 	IDXGISwapChain** ppSwapChain,
 	ID3D11Device** ppDevice,
 	D3D_FEATURE_LEVEL* pFeatureLevel,
