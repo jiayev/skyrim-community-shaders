@@ -6,6 +6,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
+#include "VariableCache.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionProfile,
 	BlurRadius, Thickness, Strength, Falloff)
@@ -262,14 +263,16 @@ void SubsurfaceScattering::SetupResources()
 		D3D11_TEXTURE2D_DESC texDesc{};
 		main.texture->GetDesc(&texDesc);
 
-		blurHorizontalTemp = new Texture2D(texDesc);
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 		main.SRV->GetDesc(&srvDesc);
-		blurHorizontalTemp->CreateSRV(srvDesc);
 
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 		main.UAV->GetDesc(&uavDesc);
+
+		blurHorizontalTemp = new Texture2D(texDesc);
+		blurHorizontalTemp->CreateSRV(srvDesc);
 		blurHorizontalTemp->CreateUAV(uavDesc);
 	}
 }
@@ -331,6 +334,11 @@ ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderVerticalBlur()
 	return verticalSSBlur;
 }
 
+void SubsurfaceScattering::DataLoaded()
+{
+	isBeastRaceKeyword = RE::TESForm::LookupByEditorID("IsBeastRace")->As<RE::BGSKeyword>();
+}
+
 void SubsurfaceScattering::PostPostLoad()
 {
 	Hooks::Install();
@@ -338,24 +346,31 @@ void SubsurfaceScattering::PostPostLoad()
 
 void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 {
-	if (Deferred::GetSingleton()->deferredPass) {
+	auto variableCache = VariableCache::GetSingleton();
+	auto deferred = variableCache->deferred;
+	auto state = variableCache->state;
+
+	if (deferred->deferredPass) {
 		if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kFace, RE::BSShaderProperty::EShaderPropertyFlag::kFaceGenRGBTint)) {
 			bool isBeastRace = true;
 
 			auto geometry = a_pass->geometry;
-			if (auto userData = geometry->GetUserData()) {
-				if (auto actor = userData->As<RE::Actor>()) {
-					if (auto race = actor->GetRace()) {
-						static auto isBeastRaceForm = RE::TESForm::LookupByEditorID("IsBeastRace")->As<RE::BGSKeyword>();
-						isBeastRace = race->HasKeyword(isBeastRaceForm);
-					}
-				}
-			}
+			if (auto userData = geometry->GetUserData())
+				if (auto actor = userData->As<RE::Actor>())
+					if (auto race = actor->GetRace())
+						isBeastRace = race->HasKeyword(isBeastRaceKeyword);
 
 			validMaterials = true;
 
 			if (isBeastRace)
-				State::GetSingleton()->currentExtraDescriptor |= (uint)State::ExtraShaderDescriptors::IsBeastRace;
+				state->currentExtraDescriptor |= (uint)State::ExtraShaderDescriptors::IsBeastRace;
 		}
 	}
+}
+
+void SubsurfaceScattering::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+{
+	auto variableCache = VariableCache::GetSingleton();
+	variableCache->subsurfaceScattering->BSLightingShader_SetupSkin(Pass);
+	func(This, Pass, RenderFlags);
 }
