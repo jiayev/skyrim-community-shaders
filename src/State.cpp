@@ -9,7 +9,6 @@
 #include "ShaderCache.h"
 
 #include "Feature.h"
-#include "Util.h"
 
 #include "Deferred.h"
 #include "Features/CloudShadows.h"
@@ -19,28 +18,35 @@
 #include "Streamline.h"
 #include "Upscaling.h"
 
+#include "VariableCache.h"
+
 void State::Draw()
 {
-	const auto& shaderCache = SIE::ShaderCache::Instance();
-	if (shaderCache.IsEnabled()) {
-		auto terrainBlending = TerrainBlending::GetSingleton();
+	auto variableCache = VariableCache::GetSingleton();
+	auto shaderCache = variableCache->shaderCache;
+	auto deferred = variableCache->deferred;
+	auto terrainBlending = variableCache->terrainBlending;
+	auto cloudShadows = variableCache->cloudShadows;
+	auto truePBR = variableCache->truePBR;
+	auto smState = variableCache->smState;
+
+	if (shaderCache->IsEnabled()) {
 		if (terrainBlending->loaded)
 			terrainBlending->TerrainShaderHacks();
 
-		auto cloudShadows = CloudShadows::GetSingleton();
 		if (cloudShadows->loaded)
 			cloudShadows->SkyShaderHacks();
 
-		TruePBR::GetSingleton()->SetShaderResouces();
+		truePBR->SetShaderResouces(context);
 
 		if (auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator()) {
-			// Set an unused bit to indicate if we are rendering an object in the main rendering pass
-			if (accumulator->GetRuntimeData().activeShadowSceneNode == RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0]) {
+			// Set an unused bit to indicate if we are rendering an object in the main rendering passes
+			if (accumulator->GetRuntimeData().activeShadowSceneNode == smState->shadowSceneNode[0]) {
 				currentExtraDescriptor |= (uint32_t)ExtraShaderDescriptors::InWorld;
 			}
 		}
 
-		if (Deferred::GetSingleton()->inDecals)
+		if (deferred->inDecals)
 			currentExtraDescriptor |= (uint32_t)ExtraShaderDescriptors::IsDecal;
 
 		if (forceUpdatePermutationBuffer || currentPixelDescriptor != lastPixelDescriptor || currentExtraDescriptor != lastExtraDescriptor) {
@@ -60,7 +66,6 @@ void State::Draw()
 
 		currentExtraDescriptor = 0;
 
-		static Util::FrameChecker frameChecker;
 		if (frameChecker.IsNewFrame()) {
 			ID3D11Buffer* buffers[3] = { permutationCB->CB(), sharedDataCB->CB(), featureDataCB->CB() };
 			context->PSSetConstantBuffers(4, 3, buffers);
@@ -71,7 +76,7 @@ void State::Draw()
 			auto type = currentShader->shaderType.get();
 			if (type == RE::BSShader::Type::Utility) {
 				if (currentPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
-					Deferred::GetSingleton()->CopyShadowData();
+					deferred->CopyShadowData();
 				}
 			}
 
@@ -80,7 +85,7 @@ void State::Draw()
 					// Only check against non-shader bits
 					currentPixelDescriptor &= ~modifiedPixelDescriptor;
 
-					if (IsDeveloperMode()) {
+					if (frameAnnotations) {
 						BeginPerfEvent(std::format("Draw: CS {}::{:x}::{}", magic_enum::enum_name(currentShader->shaderType.get()), currentPixelDescriptor, currentShader->fxpFilename));
 						SetPerfMarker(std::format("Defines: {}", SIE::ShaderCache::GetDefinesString(*currentShader, currentPixelDescriptor)));
 						EndPerfEvent();
@@ -213,8 +218,8 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 				shaderCache.backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
 			if (advanced["Use FileWatcher"].is_boolean())
 				shaderCache.SetFileWatcher(advanced["Use FileWatcher"]);
-			if (advanced["Extended Frame Annotations"].is_boolean())
-				extendedFrameAnnotations = advanced["Extended Frame Annotations"];
+			if (advanced["Frame Annotations"].is_boolean())
+				frameAnnotations = advanced["Frame Annotations"];
 		}
 
 		if (settings["General"].is_object()) {
@@ -277,6 +282,20 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			}
 		} else {
 			logger::warn("Missing settings for Upscaling, using default.");
+		}
+
+		auto streamline = Streamline::GetSingleton();
+		auto& streamlineJson = settings[streamline->GetShortName()];
+		if (streamlineJson.is_object()) {
+			logger::info("Loading Streamline settings");
+			try {
+				streamline->LoadSettings(streamlineJson);
+			} catch (...) {
+				logger::warn("Invalid settings for Streamline, using default.");
+				streamline->RestoreDefaultSettings();
+			}
+		} else {
+			logger::warn("Missing settings for Streamline, using default.");
 		}
 
 		for (auto* feature : Feature::GetFeatureList()) {
@@ -345,7 +364,7 @@ void State::Save(ConfigMode a_configMode)
 	advanced["Compiler Threads"] = shaderCache.compilationThreadCount;
 	advanced["Background Compiler Threads"] = shaderCache.backgroundCompilationThreadCount;
 	advanced["Use FileWatcher"] = shaderCache.UseFileWatcher();
-	advanced["Extended Frame Annotations"] = extendedFrameAnnotations;
+	advanced["Frame Annotations"] = frameAnnotations;
 	settings["Advanced"] = advanced;
 
 	json general;
@@ -358,6 +377,10 @@ void State::Save(ConfigMode a_configMode)
 	auto upscaling = Upscaling::GetSingleton();
 	auto& upscalingJson = settings[upscaling->GetShortName()];
 	upscaling->SaveSettings(upscalingJson);
+
+	auto streamline = Streamline::GetSingleton();
+	auto& streamlineJson = settings[streamline->GetShortName()];
+	streamline->SaveSettings(streamlineJson);
 
 	json originalShaders;
 	for (int classIndex = 0; classIndex < RE::BSShader::Type::Total - 1; ++classIndex) {
@@ -507,6 +530,8 @@ void State::SetupResources()
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred)
 {
+	auto deferred = VariableCache::GetSingleton()->deferred;
+
 	if (a_shader.shaderType.get() != RE::BSShader::Type::Utility && a_shader.shaderType.get() != RE::BSShader::Type::ImageSpace) {
 		switch (a_shader.shaderType.get()) {
 		case RE::BSShader::Type::Lighting:
@@ -542,7 +567,7 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 				if (vr || !enableImprovedSnow->GetBool())
 					a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow);
 
-				if (Deferred::GetSingleton()->deferredPass || a_forceDeferred)
+				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred;
 
 				{
@@ -582,19 +607,19 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 				a_vertexDescriptor &= flags;
 				a_pixelDescriptor &= flags;
 
-				if (Deferred::GetSingleton()->deferredPass || a_forceDeferred)
+				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::EffectShaderFlags::Deferred;
 			}
 			break;
 		case RE::BSShader::Type::DistantTree:
 			{
-				if (Deferred::GetSingleton()->deferredPass || a_forceDeferred)
+				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::DistantTreeShaderFlags::Deferred;
 			}
 			break;
 		case RE::BSShader::Type::Sky:
 			{
-				if (Deferred::GetSingleton()->deferredPass || a_forceDeferred)
+				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= 256;
 			}
 			break;
