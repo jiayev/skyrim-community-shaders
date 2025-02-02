@@ -39,9 +39,6 @@ void DynamicCubemaps::DrawSettings()
 					ImGui::PopStyleColor();
 				}
 			}
-			if (settings.EnabledSSR) {
-				Util::RenderImGuiSettingsTree(SSRSettings, "Skyrim SSR");
-			}
 			ImGui::TreePop();
 		}
 
@@ -142,7 +139,6 @@ void DynamicCubemaps::DrawSettings()
 void DynamicCubemaps::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	Util::LoadGameSettings(SSRSettings);
 	if (REL::Module::IsVR()) {
 		Util::LoadGameSettings(iniVRCubeMapSettings);
 	}
@@ -152,7 +148,6 @@ void DynamicCubemaps::LoadSettings(json& o_json)
 void DynamicCubemaps::SaveSettings(json& o_json)
 {
 	o_json = settings;
-	Util::SaveGameSettings(SSRSettings);
 	if (REL::Module::IsVR()) {
 		Util::SaveGameSettings(iniVRCubeMapSettings);
 	}
@@ -161,7 +156,6 @@ void DynamicCubemaps::SaveSettings(json& o_json)
 void DynamicCubemaps::RestoreDefaultSettings()
 {
 	settings = {};
-	Util::ResetGameSettingsToDefaults(SSRSettings);
 	if (REL::Module::IsVR()) {
 		Util::ResetGameSettingsToDefaults(iniVRCubeMapSettings);
 		Util::ResetGameSettingsToDefaults(hiddenVRCubeMapSettings);
@@ -234,6 +228,14 @@ void DynamicCubemaps::ClearShaderCache()
 		updateCubemapCS->Release();
 		updateCubemapCS = nullptr;
 	}
+	if (updateCubemapReflectionsCS) {
+		updateCubemapReflectionsCS->Release();
+		updateCubemapReflectionsCS = nullptr;
+	}
+	if (updateCubemapFakeReflectionsCS) {
+		updateCubemapFakeReflectionsCS->Release();
+		updateCubemapFakeReflectionsCS = nullptr;
+	}
 	if (inferCubemapCS) {
 		inferCubemapCS->Release();
 		inferCubemapCS = nullptr;
@@ -241,6 +243,10 @@ void DynamicCubemaps::ClearShaderCache()
 	if (inferCubemapReflectionsCS) {
 		inferCubemapReflectionsCS->Release();
 		inferCubemapReflectionsCS = nullptr;
+	}
+	if (inferCubemapFakeReflectionsCS) {
+		inferCubemapFakeReflectionsCS->Release();
+		inferCubemapFakeReflectionsCS = nullptr;
 	}
 	if (specularIrradianceCS) {
 		specularIrradianceCS->Release();
@@ -266,6 +272,15 @@ ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdateReflections()
 	return updateCubemapReflectionsCS;
 }
 
+ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdateFakeReflections()
+{
+	if (!updateCubemapFakeReflectionsCS) {
+		logger::debug("Compiling UpdateCubemapCS FAKEREFLECTIONS");
+		updateCubemapFakeReflectionsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", { { "FAKEREFLECTIONS", "" } }, "cs_5_0"));
+	}
+	return updateCubemapFakeReflectionsCS;
+}
+
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrence()
 {
 	if (!inferCubemapCS) {
@@ -282,6 +297,15 @@ ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrenceReflections()
 		inferCubemapReflectionsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0"));
 	}
 	return inferCubemapReflectionsCS;
+}
+
+ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrenceFakeReflections()
+{
+	if (!inferCubemapFakeReflectionsCS) {
+		logger::debug("Compiling InferCubemapCS FAKEREFLECTIONS");
+		inferCubemapFakeReflectionsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "FAKEREFLECTIONS", "" } }, "cs_5_0"));
+	}
+	return inferCubemapFakeReflectionsCS;
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderSpecularIrradiance()
@@ -344,7 +368,7 @@ void DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 
 	context->CSSetSamplers(0, 1, &computeSampler);
 
-	context->CSSetShader(a_reflections ? GetComputeShaderUpdateReflections() : GetComputeShaderUpdate(), nullptr, 0);
+	context->CSSetShader(a_reflections ? (fakeReflections ? GetComputeShaderUpdateFakeReflections() : GetComputeShaderUpdateReflections()) : GetComputeShaderUpdate(), nullptr, 0);
 
 	context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 8.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 8.0f), 6);
 
@@ -385,7 +409,7 @@ void DynamicCubemaps::Inferrence(bool a_reflections)
 
 	context->CSSetSamplers(0, 1, &computeSampler);
 
-	context->CSSetShader(a_reflections ? GetComputeShaderInferrenceReflections() : GetComputeShaderInferrence(), nullptr, 0);
+	context->CSSetShader(a_reflections ? (fakeReflections ? GetComputeShaderInferrenceFakeReflections() : GetComputeShaderInferrenceReflections()) : GetComputeShaderInferrence(), nullptr, 0);
 
 	context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 8.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 8.0f), 6);
 
@@ -631,8 +655,11 @@ void DynamicCubemaps::SetupResources()
 
 void DynamicCubemaps::Reset()
 {
-	if (auto sky = RE::Sky::GetSingleton())
+	if (auto sky = RE::Sky::GetSingleton()) {
 		activeReflections = sky->mode.get() == RE::Sky::Mode::kFull;
-	else
+		fakeReflections = activeReflections && sky->flags.any(RE::Sky::Flags::kHideSky);
+	} else {
 		activeReflections = false;
+		fakeReflections = false;
+	}
 }
