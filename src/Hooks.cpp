@@ -180,9 +180,9 @@ struct IDXGISwapChain_Present
 		auto streamline = Streamline::GetSingleton();
 		streamline->Present();
 
-		if (streamline->settings.frameGenerationMode == sl::DLSSGMode::eOn) {
+		if (streamline->featureDLSSG && streamline->settings.frameGenerationMode == sl::DLSSGMode::eOn) {
 			SyncInterval = 0;
-			Flags = DXGI_PRESENT_ALLOW_TEARING;
+			Flags |= DXGI_PRESENT_ALLOW_TEARING;
 		}
 
 		auto retval = func(This, SyncInterval, Flags);
