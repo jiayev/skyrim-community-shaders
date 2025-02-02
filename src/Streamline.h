@@ -36,7 +36,7 @@ public:
 
 	struct Settings
 	{
-		sl::DLSSGMode frameGenerationMode = sl::DLSSGMode::eOn;
+		sl::DLSSGMode frameGenerationMode = sl::DLSSGMode::eOff;
 		int frameLimitMode = 0;
 	};
 
