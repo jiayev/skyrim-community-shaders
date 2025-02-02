@@ -117,15 +117,17 @@ namespace Skin{
         specularPrimary *= 1 + skin.F0Primary * (1 / (specularBRDF.x + specularBRDF.y) - 1);
 
         float3 F_secondary;
-        const float3 specSecondary = GetBeckmannSpecular(
-            skin.RoughnessSecondary,
+        float3 specSecondary = PBR::GetSpecularDirectLightMultiplierMicrofacet(
+            skin.RoughnessSecondary, 
             skin.F0Secondary,
             NdotL, NdotV, NdotH, VdotH,
             F_secondary) * light.LinearLightColor * NdotL;
 
-        const float energyCompensation = 1.0 + skin.Thickness * 0.3;
-        specularPrimary *= energyCompensation;
-        specularSecondary = specSecondary * skin.SecondarySpecIntensity * energyCompensation;
+        float2 specSecondaryBRDF = PBR::GetEnvBRDFApproxLazarov(skin.RoughnessSecondary, NdotV);
+        specSecondary *= 1 + skin.F0Secondary * (1 / (specSecondaryBRDF.x + specSecondaryBRDF.y) - 1);
+
+        specularPrimary *= 1 - skin.SecondarySpecIntensity;
+        specularSecondary = specSecondary * skin.SecondarySpecIntensity;
     }
 
     float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
