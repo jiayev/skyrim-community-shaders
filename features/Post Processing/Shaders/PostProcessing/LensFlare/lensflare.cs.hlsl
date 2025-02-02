@@ -141,6 +141,8 @@ void CSLensflare(uint3 DTid : SV_DispatchThreadID)
         color += s.rgb * s.a * weight * (HaloStrength * HaloStrength);
     }
 
+    color = saturate(color);
+
     color *= LFStrength * LFStrength;
 
     OutputTexture[DTid.xy] = float4(color, 1.0f);
