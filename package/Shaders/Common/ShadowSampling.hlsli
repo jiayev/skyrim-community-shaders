@@ -65,8 +65,8 @@ namespace ShadowSampling
 				float r = rnd.z;
 				float4 sincos_phi;
 				sincos(phi, sincos_phi.y, sincos_phi.x);
-				float3 sampleOffset = viewDirection * (float(i) - float(sampleCount) * 0.5) * 64 * rcpSampleCount;
-				sampleOffset += float3(r * sin_theta * sincos_phi.x, r * sin_theta * sincos_phi.y, r * cos_theta) * 64;
+				float3 sampleOffset = viewDirection * (float(i) - float(sampleCount) * 0.5) * 32 * rcpSampleCount;
+				sampleOffset += float3(r * sin_theta * sincos_phi.x, r * sin_theta * sincos_phi.y, r * cos_theta) * 32;
 
 				uint cascadeIndex = sD.EndSplitDistances.x < GetShadowDepth(positionWS.xyz + viewDirection * (sampleOffset.x + sampleOffset.y), eyeIndex);  // Stochastic cascade sampling
 
