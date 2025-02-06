@@ -97,16 +97,6 @@ void DoF::SetupResources()
     auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
 
-    logger::debug("Creating shaders...");
-    {
-        auto path = "Data\\SKSE\\Plugins\\EngineFixes\\DoF.hlsl";
-        auto defines = eastl::vector<std::pair<std::string, std::string>>();
-        auto shaderPath = Util::GetShaderPath(path);
-
-        if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(shaderPath.c_str(), defines, "cs_5_0")))
-            shaderCS.attach(rawPtr);
-    }
-
 	logger::debug("Creating buffers...");
 	{
         dofCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<DoFCB>());

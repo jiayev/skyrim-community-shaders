@@ -166,7 +166,6 @@ void Camera::CompileComputeShaders()
 
 void Camera::Draw(TextureInfo& inout_tex)
 {
-    auto state = globals::state;
     auto context = globals::d3d::context;
     float2 res = { (float)texOutput->desc.Width, (float)texOutput->desc.Height };
     res = Util::ConvertToDynamic(res);
