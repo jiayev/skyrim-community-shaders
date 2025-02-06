@@ -609,7 +609,7 @@ void PostProcessing::ClearShaderCache()
 void PostProcessing::SetupResources()
 {
 	{
-		auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+		auto renderer = globals::game::renderer;
 		auto gameTexMainCopy = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN_COPY];
 
 		D3D11_TEXTURE2D_DESC texDesc;
@@ -655,8 +655,8 @@ void PostProcessing::PreProcess()
 	if (bypass)
 		return;
 
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto context = State::GetSingleton()->context;
+	auto renderer = globals::game::renderer;
+	auto context = globals::d3d::context;
 
 	auto gameTexMain = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	PostProcessFeature::TextureInfo lastTexColor = { gameTexMain.texture, gameTexMain.SRV };

@@ -94,8 +94,18 @@ void DoF::SaveSettings(json& o_json)
 
 void DoF::SetupResources()
 {
-    auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto device = State::GetSingleton()->device;
+    auto renderer = globals::game::renderer;
+	auto device = globals::d3d::device;
+
+    logger::debug("Creating shaders...");
+    {
+        auto path = "Data\\SKSE\\Plugins\\EngineFixes\\DoF.hlsl";
+        auto defines = eastl::vector<std::pair<std::string, std::string>>();
+        auto shaderPath = Util::GetShaderPath(path);
+
+        if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(shaderPath.c_str(), defines, "cs_5_0")))
+            shaderCS.attach(rawPtr);
+    }
 
 	logger::debug("Creating buffers...");
 	{
@@ -344,9 +354,9 @@ float DoF::GetDistanceToReference(RE::TESObjectREFR* a_ref)
 
 void DoF::Draw(TextureInfo& inout_tex)
 {
-    auto state = State::GetSingleton();
-	auto context = state->context;
-    auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+    auto state = globals::state;
+	auto context = globals::d3d::context;
+    auto renderer = globals::game::renderer;
     auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 
     float2 res = { (float)texOutput->desc.Width, (float)texOutput->desc.Height };

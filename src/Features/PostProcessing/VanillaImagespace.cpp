@@ -81,8 +81,8 @@ void VanillaImagespace::SaveSettings(json& o_json)
 
 void VanillaImagespace::SetupResources()
 {
-    auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-    auto device = State::GetSingleton()->device;
+    auto renderer = globals::game::renderer;
+    auto device = globals::d3d::device;
 
     logger::debug("Creating buffers...");
     {
@@ -182,7 +182,7 @@ void VanillaImagespace::CompileComputeShaders()
 
 void VanillaImagespace::Draw(TextureInfo& inout_tex)
 {
-    auto context = State::GetSingleton()->context;
+    auto context = globals::d3d::context;
     float2 res = { (float)texOutput->desc.Width, (float)texOutput->desc.Height };
     float3 cinematic;
     auto ImageSpace = RE::ImageSpaceManager::GetSingleton();
@@ -205,7 +205,7 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
         }
     }
     
-    if (auto sky = RE::Sky::GetSingleton())
+    if (auto sky = globals::game::sky)
         isInInterior = sky->mode.get() != RE::Sky::Mode::kFull;
     else
         isInInterior = true;

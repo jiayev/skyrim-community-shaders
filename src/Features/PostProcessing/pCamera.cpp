@@ -65,8 +65,8 @@ void Camera::SaveSettings(json& o_json)
 
 void Camera::SetupResources()
 {
-    auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-    auto device = State::GetSingleton()->device;
+    auto renderer = globals::game::renderer;
+    auto device = globals::d3d::device;
 
     logger::debug("Creating buffers...");
     {
@@ -166,8 +166,8 @@ void Camera::CompileComputeShaders()
 
 void Camera::Draw(TextureInfo& inout_tex)
 {
-    auto state = State::GetSingleton();
-    auto context = state->context;
+    auto state = globals::state;
+    auto context = globals::d3d::context;
     float2 res = { (float)texOutput->desc.Width, (float)texOutput->desc.Height };
     res = Util::ConvertToDynamic(res);
 

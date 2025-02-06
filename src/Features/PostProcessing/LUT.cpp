@@ -81,7 +81,7 @@ void LUT::SaveSettings(json& o_json)
 
 void LUT::SetupResources()
 {
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+	auto renderer = globals::game::renderer;
 
 	if (!settings.LutPath.empty())
 		ReadTexture(settings.LutPath);
@@ -126,7 +126,7 @@ void LUT::ReadTexture(std::filesystem::path path)
 {
 	constexpr auto comErrMsg = "Failed to create texture! Error: {}";
 
-	auto device = State::GetSingleton()->device;
+	auto device = globals::d3d::device;
 
 	Clear();
 
@@ -245,7 +245,7 @@ void LUT::Draw(TextureInfo& inout_tex)
 	if (LutType == -1)
 		return;
 
-	auto context = State::GetSingleton()->context;
+	auto context = globals::d3d::context;
 
 	float2 res = { (float)texOutput->desc.Width, (float)texOutput->desc.Height };
 	res = Util::ConvertToDynamic(res);
