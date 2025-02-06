@@ -1,8 +1,5 @@
 #pragma once
 
-#include "Buffer.h"
-#include "Feature.h"
-
 #include "PostProcessing/PostProcessFeature.h"
 
 struct PostProcessing : Feature

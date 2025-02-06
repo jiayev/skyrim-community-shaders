@@ -4,7 +4,6 @@
 #include "imgui_stdlib.h"
 
 #include "State.h"
-#include "Util.h"
 
 constexpr auto def_settings = R"(
 [
