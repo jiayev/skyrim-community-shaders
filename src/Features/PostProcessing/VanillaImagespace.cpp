@@ -187,7 +187,7 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
     float3 cinematic;
     auto ImageSpace = RE::ImageSpaceManager::GetSingleton();
     RE::ImageSpaceBaseData::Cinematic cinematicdata;
-    if (globals::isVR) {
+    if (globals::game::isVR) {
         const auto& iSRuntimeData = ImageSpace->GetVRRuntimeData();
         if (const auto& overrideBaseData = iSRuntimeData.overrideBaseData) {
             cinematicdata = overrideBaseData->cinematic;
