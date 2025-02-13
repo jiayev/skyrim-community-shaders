@@ -2665,6 +2665,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	endif
 
+	float3 F0 = 0.04;
+	float roughness = 1.0;
+
 #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
 	float envMask = EnvmapData.x * MaterialData.x;
 
@@ -2682,20 +2685,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 envColor = 0.0;
 	bool dynamicCubemap = false;
 
-#		if defined(DYNAMIC_CUBEMAPS)
-	float3 F0 = 0.0;
-	float envRoughness = 1.0;
-#		endif
-
 	if (envMask > 0.0) {
 #		if defined(DYNAMIC_CUBEMAPS)
 		uint2 envSize;
 		TexEnvSampler.GetDimensions(envSize.x, envSize.y);
 
-#			if defined(EMAT)
-		if (envSize.x == 1 && envSize.y == 1 || complexMaterial) {
+#			if defined(CREATOR)
+#				if defined(EMAT)
+		if (envSize.x == 1 && envSize.y == 1 || complexMaterial || SharedData::cubemapCreatorSettings.Enabled) {
+#				else
+		if (envSize.x == 1 && envSize.y == 1 || SharedData::cubemapCreatorSettings.Enabled) {
+#				endif
 #			else
+#				if defined(EMAT)
+		if (envSize.x == 1 && envSize.y == 1 || complexMaterial) {
+#				else
 		if (envSize.x == 1 && envSize.y == 1) {
+#				endif
 #			endif
 
 			dynamicCubemap = true;
@@ -2717,6 +2723,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 			if (dynamicCubemap) {
 				float4 envColorBase = TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 15);
+				float envRoughness = 1.0;
 
 				if (envColorBase.a < 1.0) {
 					F0 = Color::GammaToLinear(envColorBase.rgb);
@@ -2739,14 +2746,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				F0 = lerp(F0, complexSpecular, complexMaterial);
 #			endif
 
-				if (any(F0 > 0.0))
-#			if defined(SKYLIGHTING)
-					envColor = DynamicCubemaps::GetDynamicCubemap(worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, envRoughness, F0, skylightingSH) * envMask;
-#			else
-					envColor = DynamicCubemaps::GetDynamicCubemap(worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, envRoughness, F0) * envMask;
-#			endif
-				else
-					envColor = 0.0;
+				envMask = saturate(envMask);
+				F0 = lerp(0.04, F0, envMask);
+				roughness = lerp(roughness, envRoughness, pow(envMask, 0.25));
 			}
 		}
 #		endif
@@ -2759,6 +2761,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
 
+#	if defined(DYNAMIC_CUBEMAPS)
+#		if defined(SKYLIGHTING)
+	float3 reflectance = DynamicCubemaps::GetDynamicCubemap(worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, roughness, F0, skylightingSH);
+#		else
+	float3 reflectance = DynamicCubemaps::GetDynamicCubemap(worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, roughness, F0);
+#		endif
+#	else
+	float3 reflectance = 0;
+#	endif
+	
 	float2 screenMotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 
 #	if defined(WETNESS_EFFECTS)
@@ -2781,7 +2793,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	baseColor.xyz = lerp(baseColor.xyz, pow(baseColor.xyz, 1.0 + wetnessDarkeningAmount), 0.8);
 #		endif
 
-	float3 wetnessReflectance = WetnessEffects::GetWetnessAmbientSpecular(screenUV, wetnessNormal, worldSpaceVertexNormal, worldSpaceViewDirection, waterRoughnessSpecular) * wetnessGlossinessSpecular;
+	float3 wetnessReflectance = WetnessEffects::GetWetnessAmbientSpecular(screenUV, wetnessNormal, worldSpaceVertexNormal, worldSpaceViewDirection, waterRoughnessSpecular);
 
 #		if !defined(DEFERRED)
 	wetnessSpecular += wetnessReflectance;
@@ -3010,9 +3022,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	baseColor.xyz = 0.0;
 	specularColor = 0.0;
 	diffuseColor = 0.0;
-	dynamicCubemap = true;
-	envColor = 1.0;
-	envRoughness = 0.0;
+	reflectance = 1.0;
+	roughness = 0.0;
 	color.xyz = 0;
 #	endif
 
@@ -3152,8 +3163,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Albedo = float4(outputAlbedo, psout.Diffuse.w);
 
 	const float wetnessGlossinessGain = 0.65;
-	float outGlossiness = saturate(glossiness * SSRParams.w);
-
 #		if defined(HAIR) && defined(CS_HAIR)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		outGlossiness = saturate(SharedData::hairSpecularSettings.Glossiness * 0.0075f * SSRParams.w);
@@ -3186,11 +3195,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 	}
 #		elif defined(WETNESS_EFFECTS)
-	psout.Reflectance = float4(wetnessReflectance, psout.Diffuse.w);
-	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), lerp(outGlossiness, saturate(outGlossiness + wetnessGlossinessGain), wetnessGlossinessSpecular), psout.Diffuse.w);
+	psout.Reflectance = float4(max(reflectance, wetnessReflectance), psout.Diffuse.w);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - roughness + wetnessGlossinessGain), psout.Diffuse.w);
 #		else
-	psout.Reflectance = float4(0.0.xxx, psout.Diffuse.w);
-	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), outGlossiness, psout.Diffuse.w);
+	psout.Reflectance = float4(reflectance, psout.Diffuse.w);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), 1.0 - roughness, psout.Diffuse.w);
 #		endif
 
 #		if defined(TERRAIN_BLENDING)
@@ -3199,20 +3208,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(SNOW)
 	psout.Parameters.w = psout.Diffuse.w;
-#		endif
-
-#		if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
-#			if defined(DYNAMIC_CUBEMAPS)
-	if (dynamicCubemap) {
-#				if defined(WETNESS_EFFECTS)
-		psout.Reflectance.xyz = max(envColor, wetnessReflectance);
-		psout.NormalGlossiness.z = lerp(1.0 - envRoughness, saturate(1.0 - envRoughness + wetnessGlossinessGain), wetnessGlossinessSpecular);
-#				else
-		psout.Reflectance.xyz = envColor;
-		psout.NormalGlossiness.z = 1.0 - envRoughness;
-#				endif
-	}
-#			endif
 #		endif
 
 #		if defined(SSS) && defined(SKIN)
