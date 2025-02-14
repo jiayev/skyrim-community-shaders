@@ -96,8 +96,8 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::Text("Quarter res and blurry.");
 
 		ImGui::TableNextColumn();
-		if (ImGui::Button("Medium", { -1, 0 })) {
-			settings.NumSlices = 5;
+		if (ImGui::Button("Standard", { -1, 0 })) {
+			settings.NumSlices = 2;
 			settings.NumSteps = 8;
 			settings.ResolutionMode = 1;
 			settings.EnableBlur = true;
@@ -108,7 +108,7 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::Text("Half res and somewhat stable.");
 
 		ImGui::TableNextColumn();
-		if (ImGui::Button("High", { -1, 0 })) {
+		if (ImGui::Button("Extreme", { -1, 0 })) {
 			settings.NumSlices = 4;
 			settings.NumSteps = 8;
 			settings.ResolutionMode = 0;
@@ -120,7 +120,7 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::Text("Full res and clean.");
 
 		ImGui::TableNextColumn();
-		if (ImGui::Button("Ultra", { -1, 0 })) {
+		if (ImGui::Button("Reference", { -1, 0 })) {
 			settings.NumSlices = 8;
 			settings.NumSteps = 10;
 			settings.ResolutionMode = 0;
@@ -562,8 +562,6 @@ bool ScreenSpaceGI::ShadersOK()
 
 void ScreenSpaceGI::UpdateSB()
 {
-	auto viewport = globals::game::graphicsState;
-
 	float2 res = { (float)texRadiance->desc.Width, (float)texRadiance->desc.Height };
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
@@ -588,7 +586,7 @@ void ScreenSpaceGI::UpdateSB()
 		data.RcpTexDim = float2(1.0f) / res;
 		data.FrameDim = dynres;
 		data.RcpFrameDim = float2(1.0f) / dynres;
-		data.FrameIndex = viewport->frameCount;
+		data.FrameIndex = globals::state->frameCount;
 
 		data.NumSlices = settings.NumSlices;
 		data.NumSteps = settings.NumSteps;
