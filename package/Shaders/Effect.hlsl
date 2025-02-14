@@ -663,6 +663,9 @@ PS_OUTPUT main(PS_INPUT input)
 				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightDirection);
 				float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light.radius);
+				if (intensityMultiplier < 1e-5) {
+					continue;
+				}
 				float3 lightColor = light.color.xyz * intensityMultiplier * 0.5;
 				propertyColor += lightColor;
 			}

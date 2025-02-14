@@ -609,11 +609,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightDirection);
-				float intensityFactor = saturate(lightDist / light.radius);
-				if (intensityFactor == 1)
-					continue;
 
-				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+				float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light.radius);
+				if (intensityMultiplier < 1e-5)
+					continue;
 				float3 lightColor = light.color.xyz * intensityMultiplier;
 
 				float lightShadow = 1.0;
@@ -796,7 +795,7 @@ PS_OUTPUT main(PS_INPUT input)
 				float lightDist = length(lightDirection);
 
 				float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light.radius);
-				if (intensityMultiplier == 1)
+				if (intensityMultiplier < 1e-5)
 					continue;
 				float3 lightColor = light.color.xyz * intensityMultiplier;
 

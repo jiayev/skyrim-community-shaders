@@ -888,6 +888,9 @@ PS_OUTPUT main(PS_INPUT input)
 			float lightDist = length(lightDirection);
 
 			float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light.radius);
+			if (intensityMultiplier < 1e-5) {
+				continue;
+			}
 
 			float3 normalizedLightDirection = normalize(lightDirection);
 
