@@ -193,8 +193,8 @@ public:
 		float BillboardRadius = 1.0f;
 		bool EnableParticleLightsOptimization = true;
 		bool EnableInverseSquareFalloff = false;
-		float InverseSquareFalloffMultiplier = 0.1f;
-		float BrightnessClip = 1.0f;
+		float InverseSquareFalloffMultiplier = 0.12f;
+		float BrightnessClip = 2.0f;
 	};
 
 	uint clusterSize[3] = { 16 };
