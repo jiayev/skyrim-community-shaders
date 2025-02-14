@@ -140,7 +140,7 @@ namespace LightLimitFix
 		}
 		float distanceSquared = distance * distance + 1e-6;
 		float radiusSquared = radius * radius / 16;
-		float attenuation = (radiusSquared / distanceSquared - 0.0625) / 10;
-		return saturate(attenuation);
+		float attenuation = (radiusSquared / distanceSquared - 0.0625) * SharedData::lightLimitFixSettings.InverseSquareFalloffMultiplier;
+		return clamp(attenuation, 0, SharedData::lightLimitFixSettings.BrightnessClip);
 	}
 }

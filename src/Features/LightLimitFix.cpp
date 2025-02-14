@@ -46,6 +46,11 @@ void LightLimitFix::DrawSettings()
 		ImGui::Spacing();
 
 		ImGui::Checkbox("[EXP] Enable Inverse Square Falloff", &settings.EnableInverseSquareFalloff);
+		ImGui::SliderFloat("[EXP] Inverse Square Falloff Multiplier", &settings.InverseSquareFalloffMultiplier, 0.0, 1.0, "%.2f");
+		ImGui::SliderFloat("[EXP] Brightness Clip", &settings.BrightnessClip, 1.0, 10.0, "%.2f");
+
+		ImGui::Spacing();
+		ImGui::Spacing();
 
 		ImGui::TextWrapped("Particle Lights Customisation");
 		ImGui::SliderFloat("Saturation", &settings.ParticleLightsSaturation, 1.0, 2.0, "%.2f");
@@ -120,6 +125,8 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	perFrame.LightsVisualisationMode = settings.LightsVisualisationMode;
 	perFrame.EnableInverseSquareFalloff = settings.EnableInverseSquareFalloff;
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
+	perFrame.InverseSquareFalloffMultiplier = settings.InverseSquareFalloffMultiplier;
+	perFrame.BrightnessClip = settings.BrightnessClip;
 	return perFrame;
 }
 

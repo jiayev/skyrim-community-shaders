@@ -76,6 +76,9 @@ public:
 		uint LightsVisualisationMode;
 		uint EnableInverseSquareFalloff;
 		uint ClusterSize[4];
+		float InverseSquareFalloffMultiplier;
+		float BrightnessClip;
+		float pad0[2];
 	};
 
 	PerFrame GetCommonBufferData();
@@ -188,6 +191,8 @@ public:
 		float BillboardRadius = 1.0f;
 		bool EnableParticleLightsOptimization = true;
 		bool EnableInverseSquareFalloff = false;
+		float InverseSquareFalloffMultiplier = 0.1f;
+		float BrightnessClip = 1.0f;
 	};
 
 	uint clusterSize[3] = { 16 };
