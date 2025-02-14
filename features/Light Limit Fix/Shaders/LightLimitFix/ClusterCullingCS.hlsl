@@ -54,7 +54,7 @@ bool LightIntersectsCluster(float3 position, float radius, ClusterAABB cluster)
 	for (uint i = 0; i < LightCount; i++) {
 		Light light = lights[i];
 
-		float radius = light.radius * light.radius;
+		float radius = 16 * light.radius * light.radius;
 
 #if defined(VR)
 		[branch] if (LightIntersectsCluster(light.positionVS[0], radius, cluster) || LightIntersectsCluster(light.positionVS[1], radius, cluster))

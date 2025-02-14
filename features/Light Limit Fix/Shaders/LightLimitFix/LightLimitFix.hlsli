@@ -130,4 +130,12 @@ namespace LightLimitFix
 		}
 		return lightIgnored;
 	}
+
+	float GetAttenuation(float distance, float radius)
+	{
+		float distanceSquared = distance * distance + 1e-6;
+		float radiusSquared = radius * radius;
+		float attenuation = (radiusSquared / distanceSquared - 0.0625) / 10;
+		return saturate(attenuation);
+	}
 }
