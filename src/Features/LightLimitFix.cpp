@@ -404,7 +404,7 @@ float LightLimitFix::CalculateLuminance(CachedParticleLight& light, RE::NiPoint3
 	float intensityMultiplier = 1.0f;
 	if (settings.EnableInverseSquareFalloff) {
 		float distSq = lightDist * lightDist + 1e-6f;
-		float radiusSq = light.radius * light.radius;
+		float radiusSq = light.radius * light.radius / 16;
 		float attenuation = (radiusSq / distSq - 0.0625f) / 10;
 		intensityMultiplier = std::clamp(attenuation, 0.0f, 1.0f);
 	}
