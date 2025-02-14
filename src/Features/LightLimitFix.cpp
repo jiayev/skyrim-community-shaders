@@ -17,7 +17,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ParticleBrightness,
 	ParticleRadius,
 	BillboardBrightness,
-	BillboardRadius)
+	BillboardRadius,
+	EnableInverseSquareFalloff,
+	InverseSquareFalloffMultiplier,
+	BrightnessClip
+)
 
 void LightLimitFix::DrawSettings()
 {
