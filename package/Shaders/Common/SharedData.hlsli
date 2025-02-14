@@ -68,6 +68,7 @@ namespace SharedData
 		uint EnableContactShadows;
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
+		uint EnableInverseSquareFalloff;
 		float LightsFar;
 		uint4 ClusterSize;
 	};

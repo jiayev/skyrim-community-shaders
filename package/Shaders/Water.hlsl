@@ -886,9 +886,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 			float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WPosition.xyz;
 			float lightDist = length(lightDirection);
-			float intensityFactor = saturate(lightDist / light.radius);
 
-			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+			float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light.radius);
 
 			float3 normalizedLightDirection = normalize(lightDirection);
 

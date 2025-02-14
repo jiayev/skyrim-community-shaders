@@ -74,7 +74,7 @@ public:
 		uint EnableContactShadows;
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		float pad0;
+		uint EnableInverseSquareFalloff;
 		uint ClusterSize[4];
 	};
 
@@ -187,6 +187,7 @@ public:
 		float BillboardBrightness = 1.0f;
 		float BillboardRadius = 1.0f;
 		bool EnableParticleLightsOptimization = true;
+		bool EnableInverseSquareFalloff = false;
 	};
 
 	uint clusterSize[3] = { 16 };

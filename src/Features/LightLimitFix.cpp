@@ -45,6 +45,8 @@ void LightLimitFix::DrawSettings()
 		ImGui::Spacing();
 		ImGui::Spacing();
 
+		ImGui::Checkbox("[EXP] Enable Inverse Square Falloff", &settings.EnableInverseSquareFalloff);
+
 		ImGui::TextWrapped("Particle Lights Customisation");
 		ImGui::SliderFloat("Saturation", &settings.ParticleLightsSaturation, 1.0, 2.0, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -116,6 +118,7 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	perFrame.EnableContactShadows = settings.EnableContactShadows;
 	perFrame.EnableLightsVisualisation = settings.EnableLightsVisualisation;
 	perFrame.LightsVisualisationMode = settings.LightsVisualisationMode;
+	perFrame.EnableInverseSquareFalloff = settings.EnableInverseSquareFalloff;
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
 	return perFrame;
 }
@@ -398,8 +401,18 @@ float LightLimitFix::CalculateLuminance(CachedParticleLight& light, RE::NiPoint3
 
 	auto lightDirection = light.position - point;
 	float lightDist = lightDirection.Length();
-	float intensityFactor = std::clamp(lightDist / light.radius, 0.0f, 1.0f);
-	float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+	float intensityMultiplier = 1.0f;
+	if (settings.EnableInverseSquareFalloff) {
+		float distSq = lightDist * lightDist + 1e-6f;
+		float radiusSq = light.radius * light.radius;
+		float attenuation = (radiusSq / distSq - 0.0625f) / 10;
+		intensityMultiplier = std::clamp(attenuation, 0.0f, 1.0f);
+	}
+	else
+	{
+		float intensityFactor = std::clamp(lightDist / light.radius, 0.0f, 1.0f);
+		intensityMultiplier = 1 - intensityFactor * intensityFactor;
+	}
 
 	return light.grey * intensityMultiplier;
 }
@@ -701,6 +714,9 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 		CachedParticleLight cachedParticleLight{};
 		cachedParticleLight.grey = float3(light.color.x, light.color.y, light.color.z).Dot(float3(0.3f, 0.59f, 0.11f));
 		cachedParticleLight.radius = light.radius;
+		if (settings.EnableInverseSquareFalloff) {
+			cachedParticleLight.radius *= 4.0f;
+		}
 		cachedParticleLight.position = { light.positionWS[0].data.x + eyePositionCached[0].x, light.positionWS[0].data.y + eyePositionCached[0].y, light.positionWS[0].data.z + eyePositionCached[0].z };
 
 		cachedParticleLights.push_back(cachedParticleLight);
@@ -769,6 +785,9 @@ void LightLimitFix::UpdateLights()
 					light.color *= bsLight->lodDimmer;
 
 					light.radius = runtimeData.radius.x;
+					if (settings.EnableInverseSquareFalloff) {
+						light.radius *= 4.0f;
+					}
 
 					light.lightFlags = static_cast<LightFlags>(runtimeData.ambient.red);
 

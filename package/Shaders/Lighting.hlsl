@@ -2137,17 +2137,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
 		float lightDist = length(lightDirection);
 
-#				if defined(INV_SQRT)
 		float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light.radius);
 		if (intensityMultiplier < 1e-5)
 			continue;
-#				else
-		float intensityFactor = saturate(lightDist / light.radius);
-		if (intensityFactor == 1)
-			continue;
-
-		float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#				endif
 		float3 lightColor = Color::Light(light.color.xyz) * intensityMultiplier;
 		float lightShadow = 1.0;
 
