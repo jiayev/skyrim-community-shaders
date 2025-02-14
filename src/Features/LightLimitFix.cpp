@@ -405,6 +405,20 @@ void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPo
 	}
 }
 
+float LightLimitFix::GetAttenuation(float distance, float radius)
+{
+	if (settings.EnableInverseSquareFalloff) {
+		float distanceSquared = distance * distance + 1e-6f;
+		float radiusSquared = radius * radius;
+		float forcefadeout = 1 / (1 + 16 * std::exp(distance - radius));
+		float attenuation = 1 / ((1 / settings.BrightnessClip) + (1 / (settings.InverseSquareFalloffMultiplier * settings.InverseSquareFalloffMultiplier)) * distanceSquared / radiusSquared) * forcefadeout;
+		return attenuation;
+	}
+
+	float intensityFactor = std::clamp(distance / radius, 0.0f, 1.0f);
+	return 1 - intensityFactor * intensityFactor;
+}
+
 float LightLimitFix::CalculateLuminance(CachedParticleLight& light, RE::NiPoint3& point)
 {
 	// See BSLight::CalculateLuminance_14131D3D0
@@ -412,18 +426,7 @@ float LightLimitFix::CalculateLuminance(CachedParticleLight& light, RE::NiPoint3
 
 	auto lightDirection = light.position - point;
 	float lightDist = lightDirection.Length();
-	float intensityMultiplier = 1.0f;
-	if (settings.EnableInverseSquareFalloff) {
-		float distSq = lightDist * lightDist + 1e-6f;
-		float radiusSq = light.radius * light.radius / 16;
-		float attenuation = (radiusSq / distSq - 0.0625f) / 10;
-		intensityMultiplier = std::clamp(attenuation, 0.0f, 1.0f);
-	}
-	else
-	{
-		float intensityFactor = std::clamp(lightDist / light.radius, 0.0f, 1.0f);
-		intensityMultiplier = 1 - intensityFactor * intensityFactor;
-	}
+	float intensityMultiplier = GetAttenuation(lightDist, light.radius);
 
 	return light.grey * intensityMultiplier;
 }

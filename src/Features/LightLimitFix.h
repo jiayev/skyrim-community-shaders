@@ -176,6 +176,8 @@ public:
 	static inline bool IsValidLight(RE::BSLight* a_light);
 	static inline bool IsGlobalLight(RE::BSLight* a_light);
 
+	float GetAttenuation(float distance, float radius);
+
 	struct Settings
 	{
 		bool EnableContactShadows = false;
