@@ -337,6 +337,9 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 		light.color *= bsLight->lodDimmer;
 
 		light.radius = runtimeData.radius.x;
+		if (settings.EnableInverseSquareFalloff) {
+			light.radius *= 4.0f;
+		}
 
 		SetLightPosition(light, niLight->world.translate, inWorld);
 

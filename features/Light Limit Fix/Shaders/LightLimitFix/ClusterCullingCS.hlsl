@@ -22,7 +22,7 @@ bool LightIntersectsCluster(float3 position, float radius, ClusterAABB cluster)
 	float3 closest = max(cluster.minPoint.xyz, min(position, cluster.maxPoint.xyz));
 
 	float3 dist = closest - position;
-	return dot(dist, dist) <= (radius * 16);
+	return dot(dist, dist) <= radius;
 }
 
 [numthreads(NUMTHREAD_X, NUMTHREAD_Y, NUMTHREAD_Z)] void main(
