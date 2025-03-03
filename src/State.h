@@ -180,9 +180,7 @@ public:
 
 	// Features that are more special then others
 	std::unordered_map<std::string, bool> specialFeatures = {
-		{ "Frame Generation", false },
-		{ "Upscaling", false },
-		{ "TruePBR", false },
+		{ "TruePBR", false }
 	};
 	std::unordered_map<std::string, bool> disabledFeatures;
 
