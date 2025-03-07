@@ -4,6 +4,7 @@
 
 #include "DX12SwapChain.h"
 #include "Deferred.h"
+#include "FidelityFX.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -36,7 +37,7 @@ namespace globals
 	{
 		ID3D11Device* device = nullptr;
 		ID3D11DeviceContext* context = nullptr;
-		IDXGISwapChain* swapchain = nullptr;
+		IDXGISwapChain* swapChain = nullptr;
 	}
 
 	namespace features
@@ -89,6 +90,8 @@ namespace globals
 		RE::Setting* bEnableLandFade = nullptr;
 		RE::Setting* bShadowsOnGrass = nullptr;
 		RE::Setting* shadowMaskQuarter = nullptr;
+
+		REL::Relocation<ID3D11Buffer**> perFrame;
 	}
 
 	State* state = nullptr;
@@ -99,6 +102,7 @@ namespace globals
 	Streamline* streamline = nullptr;
 	Upscaling* upscaling = nullptr;
 	DX12SwapChain* dx12SwapChain = nullptr;
+	FidelityFX* fidelityFX = nullptr;
 
 	void ReInit()
 	{
@@ -123,11 +127,12 @@ namespace globals
 			stateUpdateFlags = GET_INSTANCE_MEMBER_PTR(stateUpdateFlags, shadowState);
 
 			ui = RE::UI::GetSingleton();
+			perFrame = { REL::RelocationID(524768, 411384) };
 		}
 
 		d3d::device = reinterpret_cast<ID3D11Device*>(game::renderer->GetRuntimeData().forwarder);
 		d3d::context = reinterpret_cast<ID3D11DeviceContext*>(game::renderer->GetRuntimeData().context);
-		d3d::swapchain = reinterpret_cast<IDXGISwapChain*>(game::renderer->GetRuntimeData().renderWindows->swapChain);
+		d3d::swapChain = reinterpret_cast<IDXGISwapChain*>(game::renderer->GetRuntimeData().renderWindows->swapChain);
 
 		state = State::GetSingleton();
 		menu = Menu::GetSingleton();
@@ -137,6 +142,7 @@ namespace globals
 		streamline = Streamline::GetSingleton();
 		upscaling = Upscaling::GetSingleton();
 		dx12SwapChain = DX12SwapChain::GetSingleton();
+		fidelityFX = FidelityFX::GetSingleton();
 
 		features::cloudShadows = CloudShadows::GetSingleton();
 		features::dynamicCubemaps = DynamicCubemaps::GetSingleton();
