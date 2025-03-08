@@ -104,6 +104,37 @@ namespace globals
 	DX12SwapChain* dx12SwapChain = nullptr;
 	FidelityFX* fidelityFX = nullptr;
 
+	void OnInit()
+	{
+		shaderCache = &SIE::ShaderCache::Instance();
+		state = State::GetSingleton();
+		menu = Menu::GetSingleton();
+		deferred = Deferred::GetSingleton();
+		truePBR = TruePBR::GetSingleton();
+		streamline = Streamline::GetSingleton();
+		upscaling = Upscaling::GetSingleton();
+		dx12SwapChain = DX12SwapChain::GetSingleton();
+		fidelityFX = FidelityFX::GetSingleton();
+
+		features::cloudShadows = CloudShadows::GetSingleton();
+		features::dynamicCubemaps = DynamicCubemaps::GetSingleton();
+		features::extendedMaterials = ExtendedMaterials::GetSingleton();
+		features::grassCollision = GrassCollision::GetSingleton();
+		features::grassLighting = GrassLighting::GetSingleton();
+		features::lightLimitFix = LightLimitFix::GetSingleton();
+		features::screenSpaceGI = ScreenSpaceGI::GetSingleton();
+		features::screenSpaceShadows = ScreenSpaceShadows::GetSingleton();
+		features::skylighting = Skylighting::GetSingleton();
+		features::subsurfaceScattering = SubsurfaceScattering::GetSingleton();
+		features::terrainBlending = TerrainBlending::GetSingleton();
+		features::terrainShadows = TerrainShadows::GetSingleton();
+		features::volumetricLighting = VolumetricLighting::GetSingleton();
+		features::waterEffects = WaterEffects::GetSingleton();
+		features::wetnessEffects = WetnessEffects::GetSingleton();
+
+		features::llf::particleLights = ParticleLights::GetSingleton();
+	}
+
 	void ReInit()
 	{
 		{
@@ -133,34 +164,6 @@ namespace globals
 		d3d::device = reinterpret_cast<ID3D11Device*>(game::renderer->GetRuntimeData().forwarder);
 		d3d::context = reinterpret_cast<ID3D11DeviceContext*>(game::renderer->GetRuntimeData().context);
 		d3d::swapChain = reinterpret_cast<IDXGISwapChain*>(game::renderer->GetRuntimeData().renderWindows->swapChain);
-
-		state = State::GetSingleton();
-		menu = Menu::GetSingleton();
-		shaderCache = &SIE::ShaderCache::Instance();
-		deferred = Deferred::GetSingleton();
-		truePBR = TruePBR::GetSingleton();
-		streamline = Streamline::GetSingleton();
-		upscaling = Upscaling::GetSingleton();
-		dx12SwapChain = DX12SwapChain::GetSingleton();
-		fidelityFX = FidelityFX::GetSingleton();
-
-		features::cloudShadows = CloudShadows::GetSingleton();
-		features::dynamicCubemaps = DynamicCubemaps::GetSingleton();
-		features::extendedMaterials = ExtendedMaterials::GetSingleton();
-		features::grassCollision = GrassCollision::GetSingleton();
-		features::grassLighting = GrassLighting::GetSingleton();
-		features::lightLimitFix = LightLimitFix::GetSingleton();
-		features::screenSpaceGI = ScreenSpaceGI::GetSingleton();
-		features::screenSpaceShadows = ScreenSpaceShadows::GetSingleton();
-		features::skylighting = Skylighting::GetSingleton();
-		features::subsurfaceScattering = SubsurfaceScattering::GetSingleton();
-		features::terrainBlending = TerrainBlending::GetSingleton();
-		features::terrainShadows = TerrainShadows::GetSingleton();
-		features::volumetricLighting = VolumetricLighting::GetSingleton();
-		features::waterEffects = WaterEffects::GetSingleton();
-		features::wetnessEffects = WetnessEffects::GetSingleton();
-
-		features::llf::particleLights = ParticleLights::GetSingleton();
 	}
 
 	void OnDataLoaded()
