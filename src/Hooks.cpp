@@ -208,6 +208,9 @@ struct IDXGISwapChain_Present
 		state->Reset();
 		menu->DrawOverlay();
 
+		if (upscaling->d3d12Interop)
+			SyncInterval = 0;
+
 		BOOL fullscreen = FALSE;
 		((IDXGISwapChain*)This)->GetFullscreenState(&fullscreen, nullptr);
 		if (fullscreen || SyncInterval) {
