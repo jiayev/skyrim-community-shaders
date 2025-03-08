@@ -2288,7 +2288,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 	float3 directionalAmbientColor = max(0, mul(DirectionalAmbient, modelNormal));
-	float3 directionalAmbientColorDirect = 0;
 
 #	if defined(SKYLIGHTING)
 	float skylightingDiffuse = 1;
@@ -2301,15 +2300,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 		skylightingDiffuse = lerp(1.0, skylightingDiffuse, skylightingFadeOutFactor);
 
-		float skylightingBoost = 0.25 * skylightingDiffuse * saturate(worldSpaceNormal.z) * (1.0 - SharedData::skylightingSettings.MinDiffuseVisibility);
-
 		skylightingDiffuse = Skylighting::mixDiffuse(SharedData::skylightingSettings, skylightingDiffuse);
 
 		directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor);
-		directionalAmbientColorDirect = directionalAmbientColor * skylightingBoost;
-		directionalAmbientColorDirect = Color::LinearToGamma(directionalAmbientColorDirect);
 
-		directionalAmbientColor *= skylightingDiffuse + skylightingBoost;
+		directionalAmbientColor *= skylightingDiffuse;
+		directionalAmbientColor *= 1.0 + saturate(worldSpaceNormal.z) * (1.0 - SharedData::skylightingSettings.MinDiffuseVisibility);
 		directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor);
 	}
 #	endif
@@ -2322,7 +2318,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if !defined(TRUE_PBR)
 #		if defined(DEFERRED) && defined(SSGI)
-	diffuseColor += directionalAmbientColorDirect;
 #		else
 	diffuseColor += directionalAmbientColor;
 #		endif
@@ -2465,12 +2460,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 		if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsTree) {
 			// Remove AO
+			float3 originalVertexColor = vertexColor;
 			vertexColor = vertexColor / vertexAO;
 			vertexColor = lerp(input.Color.xyz, vertexColor, skylightingFadeOutFactor);
 
 			// Apply AO to direct lighting only
+			float3 originalDiffuseColor = diffuseColor;
 			diffuseColor -= lightsDiffuseColor;
 			diffuseColor += lerp(lightsDiffuseColor, lightsDiffuseColor * vertexAO, skylightingFadeOutFactor);
+
+			vertexColor = lerp(vertexColor, originalVertexColor, SharedData::skylightingSettings.MinDiffuseVisibility);
+			diffuseColor = lerp(diffuseColor, originalDiffuseColor, SharedData::skylightingSettings.MinDiffuseVisibility);
 		}
 
 		// Brighten skylighting on vertex AO
@@ -2502,7 +2502,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 #		if defined(DEFERRED) && defined(SSGI)
-	color.xyz += indirectDiffuseLobeWeight * directionalAmbientColorDirect;
 #		else
 	color.xyz += indirectDiffuseLobeWeight * directionalAmbientColor;
 #		endif
@@ -2596,7 +2595,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(LOD_LAND_BLEND) && defined(TRUE_PBR)
 	{
 #		if defined(DEFERRED) && defined(SSGI)
-		lodLandDiffuseColor += directionalAmbientColorDirect;
 #		else
 		lodLandDiffuseColor += directionalAmbientColor;
 #		endif
