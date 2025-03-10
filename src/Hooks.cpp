@@ -373,6 +373,12 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 			streamline->PostDevice();
 			streamline->InstallHooks(*ppImmediateContext);
 
+			IDXGIFactory* factory = nullptr;
+			if (SUCCEEDED((*ppSwapChain)->GetParent(IID_PPV_ARGS(&factory)))) {
+				factory->MakeWindowAssociation(pSwapChainDesc->OutputWindow, DXGI_MWA_NO_WINDOW_CHANGES);
+				factory->Release();
+			}
+
 			return ret;
 
 		} else {
@@ -407,6 +413,12 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 				if (streamline->initialized) {
 					streamline->slSetD3DDevice(*ppDevice);
 					streamline->PostDevice();
+				}
+
+				IDXGIFactory* factory = nullptr;
+				if (SUCCEEDED((*ppSwapChain)->GetParent(IID_PPV_ARGS(&factory)))) {
+					factory->MakeWindowAssociation(pSwapChainDesc->OutputWindow, DXGI_MWA_NO_WINDOW_CHANGES);
+					factory->Release();
 				}
 
 				return S_OK;
