@@ -19,6 +19,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/Skin.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
@@ -59,6 +60,7 @@ namespace globals
 		WaterEffects* waterEffects = nullptr;
 		WetnessEffects* wetnessEffects = nullptr;
 		PostProcessing* postProcessing = nullptr;
+		Skin* skin = nullptr;
 
 		namespace llf
 		{
@@ -126,6 +128,7 @@ namespace globals
 		features::lightLimitFix = LightLimitFix::GetSingleton();
 		features::screenSpaceGI = ScreenSpaceGI::GetSingleton();
 		features::screenSpaceShadows = ScreenSpaceShadows::GetSingleton();
+		features::skin = Skin::GetSingleton();
 		features::skylighting = Skylighting::GetSingleton();
 		features::subsurfaceScattering = SubsurfaceScattering::GetSingleton();
 		features::terrainBlending = TerrainBlending::GetSingleton();
