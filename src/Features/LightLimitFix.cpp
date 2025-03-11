@@ -338,7 +338,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 		light.radius = runtimeData.radius.x;
 		if (settings.EnableInverseSquareFalloff) {
-			light.radius *= 4.0f;
+			light.radius *= 2.0f;
 		}
 
 		SetLightPosition(light, niLight->world.translate, inWorld);
@@ -732,7 +732,7 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 		cachedParticleLight.grey = float3(light.color.x, light.color.y, light.color.z).Dot(float3(0.3f, 0.59f, 0.11f));
 		cachedParticleLight.radius = light.radius;
 		if (settings.EnableInverseSquareFalloff) {
-			cachedParticleLight.radius *= 4.0f;
+			cachedParticleLight.radius *= 2.0f;
 		}
 		cachedParticleLight.position = { light.positionWS[0].data.x + eyePositionCached[0].x, light.positionWS[0].data.y + eyePositionCached[0].y, light.positionWS[0].data.z + eyePositionCached[0].z };
 
@@ -803,7 +803,7 @@ void LightLimitFix::UpdateLights()
 
 					light.radius = runtimeData.radius.x;
 					if (settings.EnableInverseSquareFalloff) {
-						light.radius *= 4.0f;
+						light.radius *= 2.0f;
 					}
 
 					light.lightFlags = static_cast<LightFlags>(runtimeData.ambient.red);
