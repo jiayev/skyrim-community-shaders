@@ -74,8 +74,11 @@ public:
 		uint EnableContactShadows;
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		float pad0;
+		uint EnableInverseSquareFalloff;
 		uint ClusterSize[4];
+		float InverseSquareFalloffMultiplier;
+		float BrightnessClip;
+		float pad0[2];
 	};
 
 	PerFrame GetCommonBufferData();
@@ -173,6 +176,8 @@ public:
 	static inline bool IsValidLight(RE::BSLight* a_light);
 	static inline bool IsGlobalLight(RE::BSLight* a_light);
 
+	float GetAttenuation(float distance, float radius);
+
 	struct Settings
 	{
 		bool EnableContactShadows = false;
@@ -187,6 +192,9 @@ public:
 		float BillboardBrightness = 1.0f;
 		float BillboardRadius = 1.0f;
 		bool EnableParticleLightsOptimization = true;
+		bool EnableInverseSquareFalloff = false;
+		float InverseSquareFalloffMultiplier = 0.12f;
+		float BrightnessClip = 2.0f;
 	};
 
 	uint clusterSize[3] = { 16 };

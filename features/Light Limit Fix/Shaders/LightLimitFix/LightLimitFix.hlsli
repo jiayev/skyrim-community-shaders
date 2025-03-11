@@ -130,4 +130,20 @@ namespace LightLimitFix
 		}
 		return lightIgnored;
 	}
+
+	float GetAttenuation(float distance, float radius)
+	{
+		if (!SharedData::lightLimitFixSettings.EnableInverseSquareFalloff)
+		{
+			float intensityFactor = saturate(distance / radius);
+			return 1 - intensityFactor * intensityFactor;
+		}
+		float distanceSquared = distance * distance + 1e-6;
+		float radiusSquared = radius * radius / 16;
+		float realRadiusSquared = radiusSquared * 16;
+		float forcefadeout = 1 / (1 + 16 * exp(distance - radius));
+		// float attenuation = (radiusSquared / distanceSquared - 0.0625) * SharedData::lightLimitFixSettings.InverseSquareFalloffMultiplier;
+		float attenuation = 1 / ((1 / SharedData::lightLimitFixSettings.BrightnessClip) + (1 / (SharedData::lightLimitFixSettings.InverseSquareFalloffMultiplier * SharedData::lightLimitFixSettings.InverseSquareFalloffMultiplier)) * distanceSquared / realRadiusSquared) * forcefadeout;
+		return attenuation;
+	}
 }

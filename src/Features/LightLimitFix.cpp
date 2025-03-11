@@ -17,7 +17,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ParticleBrightness,
 	ParticleRadius,
 	BillboardBrightness,
-	BillboardRadius)
+	BillboardRadius,
+	EnableInverseSquareFalloff,
+	InverseSquareFalloffMultiplier,
+	BrightnessClip
+)
 
 void LightLimitFix::DrawSettings()
 {
@@ -41,6 +45,13 @@ void LightLimitFix::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Merges vertices which are close enough to each other to improve performance.");
 		}
+
+		ImGui::Spacing();
+		ImGui::Spacing();
+
+		ImGui::Checkbox("[EXP] Enable Inverse Square Falloff", &settings.EnableInverseSquareFalloff);
+		ImGui::SliderFloat("[EXP] Inverse Square Falloff Multiplier", &settings.InverseSquareFalloffMultiplier, 0.0, 1.0, "%.2f");
+		ImGui::SliderFloat("[EXP] Brightness Clip", &settings.BrightnessClip, 1.0, 10.0, "%.2f");
 
 		ImGui::Spacing();
 		ImGui::Spacing();
@@ -116,7 +127,10 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	perFrame.EnableContactShadows = settings.EnableContactShadows;
 	perFrame.EnableLightsVisualisation = settings.EnableLightsVisualisation;
 	perFrame.LightsVisualisationMode = settings.LightsVisualisationMode;
+	perFrame.EnableInverseSquareFalloff = settings.EnableInverseSquareFalloff;
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
+	perFrame.InverseSquareFalloffMultiplier = settings.InverseSquareFalloffMultiplier;
+	perFrame.BrightnessClip = settings.BrightnessClip;
 	return perFrame;
 }
 
@@ -323,6 +337,9 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 		light.color *= bsLight->lodDimmer;
 
 		light.radius = runtimeData.radius.x;
+		if (settings.EnableInverseSquareFalloff) {
+			light.radius *= 2.0f;
+		}
 
 		SetLightPosition(light, niLight->world.translate, inWorld);
 
@@ -391,6 +408,20 @@ void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPo
 	}
 }
 
+float LightLimitFix::GetAttenuation(float distance, float radius)
+{
+	if (settings.EnableInverseSquareFalloff) {
+		float distanceSquared = distance * distance + 1e-6f;
+		float radiusSquared = radius * radius;
+		float forcefadeout = 1 / (1 + 16 * std::exp(distance - radius));
+		float attenuation = 1 / ((1 / settings.BrightnessClip) + (1 / (settings.InverseSquareFalloffMultiplier * settings.InverseSquareFalloffMultiplier)) * distanceSquared / radiusSquared) * forcefadeout;
+		return attenuation;
+	}
+
+	float intensityFactor = std::clamp(distance / radius, 0.0f, 1.0f);
+	return 1 - intensityFactor * intensityFactor;
+}
+
 float LightLimitFix::CalculateLuminance(CachedParticleLight& light, RE::NiPoint3& point)
 {
 	// See BSLight::CalculateLuminance_14131D3D0
@@ -398,8 +429,7 @@ float LightLimitFix::CalculateLuminance(CachedParticleLight& light, RE::NiPoint3
 
 	auto lightDirection = light.position - point;
 	float lightDist = lightDirection.Length();
-	float intensityFactor = std::clamp(lightDist / light.radius, 0.0f, 1.0f);
-	float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+	float intensityMultiplier = GetAttenuation(lightDist, light.radius);
 
 	return light.grey * intensityMultiplier;
 }
@@ -701,6 +731,9 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 		CachedParticleLight cachedParticleLight{};
 		cachedParticleLight.grey = float3(light.color.x, light.color.y, light.color.z).Dot(float3(0.3f, 0.59f, 0.11f));
 		cachedParticleLight.radius = light.radius;
+		if (settings.EnableInverseSquareFalloff) {
+			cachedParticleLight.radius *= 2.0f;
+		}
 		cachedParticleLight.position = { light.positionWS[0].data.x + eyePositionCached[0].x, light.positionWS[0].data.y + eyePositionCached[0].y, light.positionWS[0].data.z + eyePositionCached[0].z };
 
 		cachedParticleLights.push_back(cachedParticleLight);
@@ -769,6 +802,9 @@ void LightLimitFix::UpdateLights()
 					light.color *= bsLight->lodDimmer;
 
 					light.radius = runtimeData.radius.x;
+					if (settings.EnableInverseSquareFalloff) {
+						light.radius *= 2.0f;
+					}
 
 					light.lightFlags = static_cast<LightFlags>(runtimeData.ambient.red);
 

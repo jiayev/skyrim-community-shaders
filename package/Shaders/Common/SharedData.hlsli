@@ -69,8 +69,10 @@ namespace SharedData
 		uint EnableContactShadows;
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		float LightsFar;
+		uint EnableInverseSquareFalloff;
 		uint4 ClusterSize;
+		float InverseSquareFalloffMultiplier;
+		float BrightnessClip;
 	};
 
 	struct WetnessEffectsSettings
