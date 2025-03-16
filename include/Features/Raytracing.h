@@ -68,7 +68,17 @@ public:
     
     void RegisterGeometry();
     void UpdateGeometry();
+    
+    // Updated method signature to match implementation
+    bool InjectLighting(ID3D11ShaderResourceView* lightingSRV, 
+                       ID3D11ShaderResourceView* depthSRV,
+                       ID3D11ShaderResourceView* normalSRV, 
+                       const DirectX::XMFLOAT4X4& viewMatrix,
+                       const DirectX::XMFLOAT4X4& projMatrix);
+    
+    // Legacy method to maintain compatibility
     void InjectLighting(Texture2D* lightBuffer, Texture2D* depthBuffer, Texture2D* normalBuffer);
+    
     void GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuffer, Texture2D* outputBuffer);
     void GenerateReflections(Texture2D* depthBuffer, Texture2D* normalBuffer, Texture2D* roughnessBuffer, Texture2D* outputBuffer);
     
@@ -83,7 +93,7 @@ private:
     
 #ifdef ENABLE_KICKSTART_RT
     // KickstartRT implementation
-    std::unique_ptr<KickstartRTImpl> kickstartRT;
+    std::unique_ptr<KickstartRTImpl> m_rtImpl;
     
     // Textures for GI and reflections
     eastl::unique_ptr<Texture2D> rtGITexture;

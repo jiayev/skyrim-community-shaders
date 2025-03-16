@@ -8,6 +8,9 @@
 // Define API for KickstartRT
 #define KickstartRT_Graphics_API_D3D11 1
 
+// Disable warning about struct vs class mismatch
+#pragma warning(disable: 4099)
+
 #include <windows.h>
 #include <d3d11.h>
 #include <memory>
@@ -15,11 +18,12 @@
 #include <DirectXMath.h>
 
 // Forward declarations for KickstartRT
+// These match the forward declarations in the KickstartRT headers
 namespace KickstartRT
 {
     namespace D3D11
     {
-        class ExecuteContext;
+        struct ExecuteContext;
     }
 }
 

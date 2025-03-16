@@ -230,28 +230,28 @@ void Raytracing::SetupResources()
         // We'll rely on KickstartRT to determine compatibility
         
         // Create KickstartRT implementation
-        kickstartRT = std::make_unique<KickstartRTImpl>();
+        m_rtImpl = std::make_unique<KickstartRTImpl>();
         
         // Initialize KickstartRT
-        if (kickstartRT->Initialize(device)) {
+        if (m_rtImpl->Initialize(device)) {
             initialized = true;
             logger::info("[Raytracing] KickstartRT initialized successfully");
             
             // Run a test to verify functionality
-            if (kickstartRT->RunTest()) {
+            if (m_rtImpl->RunTest()) {
                 logger::info("[Raytracing] KickstartRT test passed");
             } else {
                 logger::warn("[Raytracing] KickstartRT test failed, but continuing initialization");
             }
         } else {
             logger::error("[Raytracing] Failed to initialize KickstartRT");
-            kickstartRT.reset();
+            m_rtImpl.reset();
             return;
         }
     }
     
     if (!resourcesCreated && initialized) {
-        auto renderer = globals::game::renderer;
+        // Getting D3D11 device directly
         auto device = globals::d3d::device;
         
         if (!device) {
@@ -263,8 +263,8 @@ void Raytracing::SetupResources()
         
         try {
             // Get screen dimensions
-            uint32_t width = globals::state->screenSize.x;
-            uint32_t height = globals::state->screenSize.y;
+            uint32_t width = static_cast<uint32_t>(globals::state->screenSize.x);
+            uint32_t height = static_cast<uint32_t>(globals::state->screenSize.y);
             
             if (width == 0 || height == 0) {
                 logger::error("[Raytracing] Invalid screen dimensions: {}x{}", width, height);
@@ -300,18 +300,24 @@ void Raytracing::SetupResources()
                 .Texture2D = { .MipSlice = 0 }
             };
             
+            D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
+                .Format = texDesc.Format,
+                .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+                .Texture2D = { .MipSlice = 0 }
+            };
+            
             // Create GI texture
             rtGITexture = eastl::make_unique<Texture2D>(texDesc);
             rtGITexture->CreateSRV(srvDesc);
             rtGITexture->CreateUAV(uavDesc);
-            rtGITexture->CreateRTV();
+            rtGITexture->CreateRTV(rtvDesc);
             rtGIUAV = rtGITexture->uav;
             
             // Create reflection texture
             rtReflectionTexture = eastl::make_unique<Texture2D>(texDesc);
             rtReflectionTexture->CreateSRV(srvDesc);
             rtReflectionTexture->CreateUAV(uavDesc);
-            rtReflectionTexture->CreateRTV();
+            rtReflectionTexture->CreateRTV(rtvDesc);
             rtReflectionUAV = rtReflectionTexture->uav;
             
             resourcesCreated = true;
@@ -342,9 +348,9 @@ void Raytracing::ClearResources()
         rtReflectionUAV = nullptr;
         
         // Shutdown KickstartRT
-        if (kickstartRT) {
-            kickstartRT->Shutdown();
-            kickstartRT.reset();
+        if (m_rtImpl) {
+            m_rtImpl->Shutdown();
+            m_rtImpl.reset();
         }
         
         initialized = false;
@@ -359,7 +365,7 @@ void Raytracing::ClearResources()
 void Raytracing::RegisterGeometry()
 {
 #ifdef ENABLE_KICKSTART_RT
-    if (!initialized || !kickstartRT)
+    if (!initialized || !m_rtImpl)
         return;
     
     // Implementation for registering geometry with KickstartRT
@@ -370,7 +376,7 @@ void Raytracing::RegisterGeometry()
 void Raytracing::UpdateGeometry()
 {
 #ifdef ENABLE_KICKSTART_RT
-    if (!initialized || !kickstartRT)
+    if (!initialized || !m_rtImpl)
         return;
     
     // Implementation for updating geometry with KickstartRT
@@ -378,14 +384,44 @@ void Raytracing::UpdateGeometry()
 #endif
 }
 
+bool Raytracing::InjectLighting(ID3D11ShaderResourceView* lightingSRV, 
+                             ID3D11ShaderResourceView* depthSRV,
+                             ID3D11ShaderResourceView* normalSRV, 
+                             const DirectX::XMFLOAT4X4& viewMatrix,
+                             const DirectX::XMFLOAT4X4& projMatrix) 
+{
+    // Disable warning for unreferenced parameters
+    #pragma warning(push)
+    #pragma warning(disable: 4100) // unreferenced formal parameter
+
+    if (m_rtImpl) {
+        return m_rtImpl->InjectLighting(lightingSRV, depthSRV, normalSRV, viewMatrix, projMatrix);
+    }
+    return false;
+
+    #pragma warning(pop)
+}
+
 void Raytracing::InjectLighting(Texture2D* lightBuffer, Texture2D* depthBuffer, Texture2D* normalBuffer)
 {
 #ifdef ENABLE_KICKSTART_RT
-    if (!initialized || !kickstartRT)
+    if (!initialized || !m_rtImpl)
         return;
     
-    // Implementation for injecting lighting with KickstartRT
-    // This depends on the exact rendering pipeline and KickstartRT's API
+    // For now, we'll use identity matrices as placeholders
+    // In a real implementation, these would come from the game's camera
+    DirectX::XMFLOAT4X4 viewMatrix;
+    DirectX::XMFLOAT4X4 projMatrix;
+    DirectX::XMStoreFloat4x4(&viewMatrix, DirectX::XMMatrixIdentity());
+    DirectX::XMStoreFloat4x4(&projMatrix, DirectX::XMMatrixIdentity());
+    
+    // Extract SRVs from the Texture2D objects
+    ID3D11ShaderResourceView* lightingSRV = lightBuffer ? lightBuffer->srv.get() : nullptr;
+    ID3D11ShaderResourceView* depthSRV = depthBuffer ? depthBuffer->srv.get() : nullptr;
+    ID3D11ShaderResourceView* normalSRV = normalBuffer ? normalBuffer->srv.get() : nullptr;
+    
+    // Call the new method with the extracted SRVs
+    InjectLighting(lightingSRV, depthSRV, normalSRV, viewMatrix, projMatrix);
 #endif
 }
 
@@ -394,7 +430,7 @@ void Raytracing::InjectLighting(Texture2D* lightBuffer, Texture2D* depthBuffer, 
 void Raytracing::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuffer, Texture2D* outputBuffer)
 {
 #ifdef ENABLE_KICKSTART_RT
-    if (!initialized || !kickstartRT || !rtGITexture)
+    if (!initialized || !m_rtImpl || !rtGITexture)
         return;
         
     // Get view and projection matrices
@@ -416,7 +452,7 @@ void Raytracing::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuffer, Tex
     }
     
     // Generate global illumination
-    kickstartRT->GenerateGI(
+    m_rtImpl->GenerateGI(
         depthBuffer->srv.get(),
         normalBuffer->srv.get(),
         rtGITexture->uav.get(),
@@ -429,7 +465,7 @@ void Raytracing::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuffer, Tex
 void Raytracing::GenerateReflections(Texture2D* depthBuffer, Texture2D* normalBuffer, Texture2D* roughnessBuffer, Texture2D* outputBuffer)
 {
 #ifdef ENABLE_KICKSTART_RT
-    if (!initialized || !kickstartRT || !rtReflectionTexture)
+    if (!initialized || !m_rtImpl || !rtReflectionTexture)
         return;
     
     // Get view and projection matrices
@@ -451,7 +487,7 @@ void Raytracing::GenerateReflections(Texture2D* depthBuffer, Texture2D* normalBu
     }
     
     // Generate reflections
-    kickstartRT->GenerateReflections(
+    m_rtImpl->GenerateReflections(
         depthBuffer->srv.get(),
         normalBuffer->srv.get(),
         roughnessBuffer->srv.get(),
@@ -479,3 +515,4 @@ ID3D11ShaderResourceView* Raytracing::GetReflectionSRV() const
         return rtReflectionTexture->srv.get();
 #endif
     return nullptr; 
+} 

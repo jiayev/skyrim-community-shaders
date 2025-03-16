@@ -93,7 +93,7 @@ if(KICKSTART_RT)
 	target_link_libraries(
 		"${PROJECT_NAME}"
 		PUBLIC
-		KickstartRT_D3D11.lib
+		"${KICKSTART_RT_DIR}/lib/KickstartRT_Interop_D3D11.lib"
 	)
 	
 	# Copy KickstartRT DLLs and PDBs to output directory
@@ -101,28 +101,9 @@ if(KICKSTART_RT)
 		TARGET "${PROJECT_NAME}"
 		POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different
-		"${KICKSTART_RT_DIR}/bin/KickstartRT_D3D11.dll"
-		"$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-		COMMENT "Copying KickstartRT_D3D11.dll to output directory"
-	)
-	
-	add_custom_command(
-		TARGET "${PROJECT_NAME}"
-		POST_BUILD
-		COMMAND ${CMAKE_COMMAND} -E copy_if_different
 		"${KICKSTART_RT_DIR}/bin/KickstartRT_Interop_D3D11.dll"
 		"$<TARGET_FILE_DIR:${PROJECT_NAME}>"
 		COMMENT "Copying KickstartRT_Interop_D3D11.dll to output directory"
-	)
-	
-	# Copy PDB files if they exist
-	add_custom_command(
-		TARGET "${PROJECT_NAME}"
-		POST_BUILD
-		COMMAND ${CMAKE_COMMAND} -E copy_if_different
-		"${KICKSTART_RT_DIR}/bin/KickstartRT_D3D11.pdb"
-		"$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-		COMMENT "Copying KickstartRT_D3D11.pdb to output directory"
 	)
 	
 	add_custom_command(
@@ -133,6 +114,22 @@ if(KICKSTART_RT)
 		"$<TARGET_FILE_DIR:${PROJECT_NAME}>"
 		COMMENT "Copying KickstartRT_Interop_D3D11.pdb to output directory"
 	)
+	
+	# When AIO or auto deployment is enabled, copy to the aio directory as well
+	if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
+		add_custom_command(
+			TARGET "${PROJECT_NAME}"
+			POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E make_directory "${AIO_DIR}/SKSE/Plugins"
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			"${KICKSTART_RT_DIR}/bin/KickstartRT_Interop_D3D11.dll"
+			"${AIO_DIR}/SKSE/Plugins"
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			"${KICKSTART_RT_DIR}/bin/KickstartRT_Interop_D3D11.pdb"
+			"${AIO_DIR}/SKSE/Plugins"
+			COMMENT "Copying KickstartRT DLLs to AIO directory"
+		)
+	endif()
 	
 	message(STATUS "KickstartRT support enabled")
 endif()

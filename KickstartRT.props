@@ -9,6 +9,7 @@
     <ClCompile>
       <PreprocessorDefinitions>ENABLE_KICKSTART_RT=1;KickstartRT_Graphics_API_D3D11=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(KickstartRTDir)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>4099;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(KickstartRTDir)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>

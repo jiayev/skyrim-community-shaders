@@ -54,7 +54,10 @@
 				"vcpkg",
 				"win64",
 				"msvc"
-			]
+			],
+			"cacheVariables": {
+				"KICKSTART_RT": "ON"
+			}
 		},
 		{
 			"name": "AE",
