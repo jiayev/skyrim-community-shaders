@@ -49,8 +49,9 @@ public:
 
     // Feature implementation
     std::string GetName() override { return "Raytracing"; }
-    std::string GetShortName() override { return "RT"; }
+    std::string GetShortName() override { return "Raytracing"; }
     bool SupportsVR() override { return true; }
+    std::string_view GetShaderDefineName() override { return "RT"; }
     
     void RestoreDefaultSettings() override;
     void DrawSettings() override;
@@ -94,9 +95,9 @@ private:
     
     // Track registered geometry
     struct RegisteredMesh {
-        KickstartRT::BVHTask::GeometryHandle geoHandle;
-        KickstartRT::BVHTask::InstanceHandle instHandle;
-        uint64_t meshID;
+        void* geoHandle = nullptr;  // Simplified to avoid undefined types
+        void* instHandle = nullptr; // Simplified to avoid undefined types
+        uint64_t meshID = 0;
     };
     std::vector<RegisteredMesh> registeredMeshes;
 #endif
