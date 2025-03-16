@@ -190,7 +190,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
 			"${KICKSTART_RT_DIR}/KickstartRT_Interop_D3D11.pdb"
 			"${AIO_DIR}/SKSE/Plugins/KickstartRT/KickstartRT_Interop_D3D11.pdb"
-			COMMENT "Adding KickstartRT DLLs to AIO package in KickstartRT subfolder"
+			COMMENT "KickstartRT_Interop_D3D11.dll -> AIO"
 		)
 	endif()
 
@@ -295,21 +295,6 @@ if(AIO_ZIP_TO_DIST)
 	)
 endif()
 
-# Copy KickstartRT DLLs to Data/SKSE/Plugins/KickstartRT directory
-if(KICKSTART_RT)
-    add_custom_command(
-        TARGET "${PROJECT_NAME}"
-        POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${KICKSTART_RT_DIR}/KickstartRT_Interop_D3D11.dll"
-        "${CMAKE_BINARY_DIR}/Data/SKSE/Plugins/KickstartRT/KickstartRT_Interop_D3D11.dll"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${KICKSTART_RT_DIR}/KickstartRT_Interop_D3D11.pdb"
-        "${CMAKE_BINARY_DIR}/Data/SKSE/Plugins/KickstartRT/KickstartRT_Interop_D3D11.pdb"
-        COMMENT "Copying KickstartRT DLLs to Data/SKSE/Plugins/KickstartRT directory"
-    )
-endif()
-
 # Copy KickstartRT DLLs and PDBs to output directory
 if(KICKSTART_RT)
     add_custom_command(
@@ -322,7 +307,7 @@ if(KICKSTART_RT)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${KICKSTART_RT_DIR}/KickstartRT_Interop_D3D11.pdb"
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>/KickstartRT/KickstartRT_Interop_D3D11.pdb"
-        COMMENT "Copying KickstartRT DLLs to output directory KickstartRT subfolder"
+        COMMENT "KickstartRT_Interop_D3D11.dll -> Release"
     )
 endif()
 
@@ -331,6 +316,5 @@ add_custom_command(
     TARGET "${PROJECT_NAME}"
     PRE_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/Data/SKSE/Plugins"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/Data/SKSE/Plugins/KickstartRT"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>/KickstartRT"
 )
