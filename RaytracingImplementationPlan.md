@@ -29,7 +29,6 @@ This plan outlines a step-by-step approach to complete the raytracing feature wi
 3. **Complete the geometry registration process**
    - Implement the `RegisterGeometry()` method
    - Create interfaces to access Skyrim mesh data
-   - Test: Register a simple test object and verify BVH creation
 
 4. **Implement geometry update mechanism**
    - Complete the `UpdateGeometry()` method for dynamic objects

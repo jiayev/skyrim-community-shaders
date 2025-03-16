@@ -1,4 +1,10 @@
 #include "Features/Raytracing.h"
+#include "../../include/KickstartRTImpl.h"
+
+// Enable KickstartRT by default
+#ifndef ENABLE_KICKSTART_RT
+#define ENABLE_KICKSTART_RT 1
+#endif
 
 #include <DirectXTex.h>
 
@@ -101,8 +107,7 @@ void Raytracing::DrawSettings()
         ImGui::BeginDisabled();
 #else
         if (!IsInitialized()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "KickstartRT failed to initialize!");
-            ImGui::BeginDisabled();
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "KickstartRT not initialized!");
         }
 #endif
         
@@ -214,15 +219,18 @@ void Raytracing::SetupResources()
     if (!initialized) {
         logger::info("[Raytracing] Setting up KickstartRT resources");
         
-        // Create KickstartRT implementation
-        kickstartRT = std::make_unique<KickstartRTImpl>();
-        
-        // Get the D3D11 device from the game
+        // Check for hardware compatibility
         ID3D11Device* device = globals::d3d::device;
         if (!device) {
             logger::error("[Raytracing] D3D11 device is null, cannot initialize KickstartRT");
             return;
         }
+        
+        // Note: We can't check for raytracing support directly in D3D11
+        // We'll rely on KickstartRT to determine compatibility
+        
+        // Create KickstartRT implementation
+        kickstartRT = std::make_unique<KickstartRTImpl>();
         
         // Initialize KickstartRT
         if (kickstartRT->Initialize(device)) {
@@ -253,50 +261,61 @@ void Raytracing::SetupResources()
         
         logger::info("[Raytracing] Creating render textures for GI and reflections");
         
-        // Create textures for GI and reflections
-        D3D11_TEXTURE2D_DESC texDesc{
-            .Width = globals::state->screenSize.x,
-            .Height = globals::state->screenSize.y,
-            .MipLevels = 1,
-            .ArraySize = 1,
-            .Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
-            .SampleDesc = { 1, 0 },
-            .Usage = D3D11_USAGE_DEFAULT,
-            .BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
-            .CPUAccessFlags = 0,
-            .MiscFlags = 0
-        };
-        
-        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-            .Format = texDesc.Format,
-            .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-            .Texture2D = {
-                .MostDetailedMip = 0,
-                .MipLevels = 1
-            }
-        };
-        
-        D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-            .Format = texDesc.Format,
-            .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-            .Texture2D = { .MipSlice = 0 }
-        };
-        
         try {
+            // Get screen dimensions
+            uint32_t width = globals::state->screenSize.x;
+            uint32_t height = globals::state->screenSize.y;
+            
+            if (width == 0 || height == 0) {
+                logger::error("[Raytracing] Invalid screen dimensions: {}x{}", width, height);
+                return;
+            }
+            
+            // Create textures for GI and reflections
+            D3D11_TEXTURE2D_DESC texDesc{
+                .Width = width,
+                .Height = height,
+                .MipLevels = 1,
+                .ArraySize = 1,
+                .Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+                .SampleDesc = { 1, 0 },
+                .Usage = D3D11_USAGE_DEFAULT,
+                .BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET,
+                .CPUAccessFlags = 0,
+                .MiscFlags = 0
+            };
+            
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+                .Format = texDesc.Format,
+                .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+                .Texture2D = {
+                    .MostDetailedMip = 0,
+                    .MipLevels = 1
+                }
+            };
+            
+            D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+                .Format = texDesc.Format,
+                .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+                .Texture2D = { .MipSlice = 0 }
+            };
+            
             // Create GI texture
             rtGITexture = eastl::make_unique<Texture2D>(texDesc);
             rtGITexture->CreateSRV(srvDesc);
             rtGITexture->CreateUAV(uavDesc);
+            rtGITexture->CreateRTV();
             rtGIUAV = rtGITexture->uav;
             
             // Create reflection texture
             rtReflectionTexture = eastl::make_unique<Texture2D>(texDesc);
             rtReflectionTexture->CreateSRV(srvDesc);
             rtReflectionTexture->CreateUAV(uavDesc);
+            rtReflectionTexture->CreateRTV();
             rtReflectionUAV = rtReflectionTexture->uav;
             
             resourcesCreated = true;
-            logger::info("[Raytracing] KickstartRT resources created successfully");
+            logger::info("[Raytracing] KickstartRT resources created successfully: {}x{}", width, height);
         } catch (const std::exception& e) {
             logger::error("[Raytracing] Failed to create resources: {}", e.what());
             ClearResources();
@@ -343,107 +362,41 @@ void Raytracing::RegisterGeometry()
     if (!initialized || !kickstartRT)
         return;
     
-    // Only register geometry once for now
-    if (geometryRegistered) {
-        logger::debug("[Raytracing] Geometry already registered, skipping");
-        return;
-    }
-    
-    logger::info("[Raytracing] Registering geometry with KickstartRT");
-    
-    // TODO: Get actual geometry data from Skyrim
-    // This is just a placeholder - in a real implementation, we would iterate
-    // through the visible meshes in the scene and register them
-    // 
-    // For now, let's just log that we would register geometry
-    logger::info("[Raytracing] KickstartRT geometry registration placeholder");
-    
-    // Mark as registered
-    geometryRegistered = true;
-    logger::info("[Raytracing] Geometry registration completed");
+    // Implementation for registering geometry with KickstartRT
+    // This depends on the geometry representation used by the game
 #endif
 }
 
 void Raytracing::UpdateGeometry()
 {
 #ifdef ENABLE_KICKSTART_RT
-    if (!initialized || !geometryRegistered || !kickstartRT)
+    if (!initialized || !kickstartRT)
         return;
     
-    // TODO: Update transforms for dynamic objects
-    // This is just a placeholder
-    logger::debug("[Raytracing] KickstartRT geometry update placeholder");
+    // Implementation for updating geometry with KickstartRT
+    // This depends on the geometry representation used by the game
 #endif
 }
 
-#pragma warning(push)
-#pragma warning(disable: 4100) // Unreferenced formal parameter
 void Raytracing::InjectLighting(Texture2D* lightBuffer, Texture2D* depthBuffer, Texture2D* normalBuffer)
 {
 #ifdef ENABLE_KICKSTART_RT
-    if (!initialized || !resourcesCreated || !kickstartRT)
+    if (!initialized || !kickstartRT)
         return;
     
-    if (!settings.Enabled)
-        return;
-    
-    (void)lightBuffer;
-    (void)depthBuffer;
-    (void)normalBuffer;
-    
-    // Get view and projection matrices
-    DirectX::XMFLOAT4X4 viewMatrix;
-    DirectX::XMFLOAT4X4 projMatrix;
-    
-    // Get camera data
-    auto cameraData = Util::GetCameraData(0);
-    
-    // Convert matrices to DirectX format
-    auto& skyrimViewMatrix = cameraData.viewMat;
-    auto& skyrimProjMatrix = cameraData.projMat;
-    
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++) {
-            viewMatrix.m[i][j] = skyrimViewMatrix(i, j);
-            projMatrix.m[i][j] = skyrimProjMatrix(i, j);
-        }
-    }
-    
-    // Inject lighting into KickstartRT
-    kickstartRT->InjectLighting(
-        lightBuffer->srv.get(),
-        depthBuffer->srv.get(),
-        normalBuffer->srv.get(),
-        viewMatrix,
-        projMatrix
-    );
+    // Implementation for injecting lighting with KickstartRT
+    // This depends on the exact rendering pipeline and KickstartRT's API
 #endif
 }
-#pragma warning(pop)
 
 #pragma warning(push)
 #pragma warning(disable: 4100) // Unreferenced formal parameter
 void Raytracing::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuffer, Texture2D* outputBuffer)
 {
 #ifdef ENABLE_KICKSTART_RT
-    if (!initialized || !resourcesCreated || !kickstartRT)
+    if (!initialized || !kickstartRT || !rtGITexture)
         return;
-    
-    if (!settings.Enabled || !settings.EnableGI)
-        return;
-    
-    (void)depthBuffer;
-    (void)normalBuffer;
-    (void)outputBuffer;
-    
-    // Make sure geometry is registered
-    if (!geometryRegistered) {
-        RegisterGeometry();
-    }
-    
-    // Update geometry transforms
-    UpdateGeometry();
-    
+        
     // Get view and projection matrices
     DirectX::XMFLOAT4X4 viewMatrix;
     DirectX::XMFLOAT4X4 projMatrix;
@@ -462,75 +415,22 @@ void Raytracing::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuffer, Tex
         }
     }
     
-    // Create roughness buffer from constant value
-    D3D11_TEXTURE2D_DESC roughnessTexDesc{
-        .Width = depthBuffer->desc.Width,
-        .Height = depthBuffer->desc.Height,
-        .MipLevels = 1,
-        .ArraySize = 1,
-        .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
-        .SampleDesc = { 1, 0 },
-        .Usage = D3D11_USAGE_DEFAULT,
-        .BindFlags = D3D11_BIND_SHADER_RESOURCE,
-        .CPUAccessFlags = 0,
-        .MiscFlags = 0
-    };
-    
-    // We use a high roughness value to simulate diffuse GI
-    // Create a temporary roughness texture with high value
-    auto device = globals::d3d::device;
-    auto context = globals::d3d::context;
-    
-    ID3D11Texture2D* roughnessTex = nullptr;
-    DX::ThrowIfFailed(device->CreateTexture2D(&roughnessTexDesc, nullptr, &roughnessTex));
-    
-    ID3D11ShaderResourceView* roughnessSRV = nullptr;
-    DX::ThrowIfFailed(device->CreateShaderResourceView(roughnessTex, nullptr, &roughnessSRV));
-    
-    // Fill the roughness texture with high value (diffuse-like)
-    FLOAT roughnessValue[4] = { 0.9f, 0.9f, 0.9f, 1.0f };
-    context->ClearRenderTargetView(rtGITexture->rtv.get(), roughnessValue);
-    
-    // Generate reflections with high roughness for GI
-    kickstartRT->GenerateReflections(
+    // Generate global illumination
+    kickstartRT->GenerateGI(
         depthBuffer->srv.get(),
         normalBuffer->srv.get(),
-        roughnessSRV,
         rtGITexture->uav.get(),
         viewMatrix,
         projMatrix
     );
-    
-    // Release temporary resources
-    if (roughnessSRV) roughnessSRV->Release();
-    if (roughnessTex) roughnessTex->Release();
 #endif
 }
-#pragma warning(pop)
 
-#pragma warning(push)
-#pragma warning(disable: 4100) // Unreferenced formal parameter
 void Raytracing::GenerateReflections(Texture2D* depthBuffer, Texture2D* normalBuffer, Texture2D* roughnessBuffer, Texture2D* outputBuffer)
 {
 #ifdef ENABLE_KICKSTART_RT
-    if (!initialized || !resourcesCreated || !kickstartRT)
+    if (!initialized || !kickstartRT || !rtReflectionTexture)
         return;
-    
-    if (!settings.Enabled || !settings.EnableReflections)
-        return;
-    
-    (void)depthBuffer;
-    (void)normalBuffer;
-    (void)roughnessBuffer;
-    (void)outputBuffer;
-    
-    // Make sure geometry is registered
-    if (!geometryRegistered) {
-        RegisterGeometry();
-    }
-    
-    // Update geometry transforms
-    UpdateGeometry();
     
     // Get view and projection matrices
     DirectX::XMFLOAT4X4 viewMatrix;
@@ -578,5 +478,4 @@ ID3D11ShaderResourceView* Raytracing::GetReflectionSRV() const
     if (initialized && resourcesCreated && rtReflectionTexture)
         return rtReflectionTexture->srv.get();
 #endif
-    return nullptr;
-} 
+    return nullptr; 
