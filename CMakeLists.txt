@@ -16,10 +16,12 @@ option(AUTO_PLUGIN_DEPLOYMENT "Copy the build output and addons to env:Community
 option(ZIP_TO_DIST "Zip the base mod and addons to their own 7z file in dist." ON)
 option(AIO_ZIP_TO_DIST "Zip the base mod and addons to a AIO 7z file in dist." ON)
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
+option(KICKSTART_RT "Enable support for KickstartRT ray tracing" OFF)
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
+message("\tKickstartRT: ${KICKSTART_RT}")
 
 # #######################################################################################################################
 # # Add CMake features
@@ -79,6 +81,41 @@ target_link_libraries(
 	Streamline
 	d3d12.lib
 )
+
+# KickstartRT support
+if(KICKSTART_RT)
+	add_compile_definitions(ENABLE_KICKSTART_RT)
+	add_compile_definitions(KickstartRT_Graphics_API_D3D11)
+	set(KICKSTART_RT_DIR "${PROJECT_SOURCE_DIR}/extern/KickstartRT")
+	include_directories("${KICKSTART_RT_DIR}/include")
+	link_directories("${KICKSTART_RT_DIR}/lib")
+	
+	target_link_libraries(
+		"${PROJECT_NAME}"
+		PUBLIC
+		KickstartRT_D3D11.lib
+	)
+	
+	# Copy KickstartRT DLL and PDB to output directory
+	add_custom_command(
+		TARGET "${PROJECT_NAME}"
+		POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+		"${KICKSTART_RT_DIR}/bin/KickstartRT_D3D11.dll"
+		"$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+		COMMENT "Copying KickstartRT_D3D11.dll to output directory"
+	)
+	
+	# Copy PDB files if they exist
+	add_custom_command(
+		TARGET "${PROJECT_NAME}"
+		POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+		"${KICKSTART_RT_DIR}/bin/KickstartRT_D3D11.pdb"
+		"$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+		COMMENT "Copying KickstartRT_D3D11.pdb to output directory"
+	)
+endif()
 
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
 if(MSVC_VERSION GREATER_EQUAL 1936 AND MSVC_IDE) # 17.6+
