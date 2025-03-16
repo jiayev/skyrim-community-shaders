@@ -5,11 +5,6 @@
 #include <string>
 #include <DirectXMath.h>
 
-// Enable KickstartRT by default
-#ifndef ENABLE_KICKSTART_RT
-#define ENABLE_KICKSTART_RT 1
-#endif
-
 // Define the D3D11 API for KickstartRT before including headers
 #define KickstartRT_Graphics_API_D3D11 1
 
@@ -40,44 +35,68 @@ PFN_DestroyExecuteContext g_pfnDestroyExecuteContext = nullptr;
 
 // Helper to load the DLL and functions
 bool LoadKickstartRTFunctions() {
-    // Try several possible locations for the DLL
-    std::vector<std::string> possiblePaths = {
-        "KickstartRT_Interop_D3D11.dll",                      // Current directory
-        "Data\\SKSE\\Plugins\\KickstartRT_Interop_D3D11.dll", // Game's plugin directory
-    };
-
-    // Get executable path
-    char exePath[MAX_PATH] = {0};
-    GetModuleFileNameA(NULL, exePath, MAX_PATH);
-    std::string exeDirectory = exePath;
-    size_t lastSlash = exeDirectory.find_last_of("\\/");
-    if (lastSlash != std::string::npos) {
-        exeDirectory = exeDirectory.substr(0, lastSlash + 1);
-        // Add executable directory as a possible path
-        possiblePaths.push_back(exeDirectory + "KickstartRT_Interop_D3D11.dll");
-        // Also try the SKSE plugins directory relative to exe
-        possiblePaths.push_back(exeDirectory + "Data\\SKSE\\Plugins\\KickstartRT_Interop_D3D11.dll");
-    }
-
-    HMODULE hDLL = NULL;
-    std::string loadedPath;
-
-    // Try each path until we find one that works
-    for (const auto& path : possiblePaths) {
-        logger::info("[KickstartRTImpl] Trying to load DLL from: {}", path);
-        hDLL = LoadLibraryA(path.c_str());
-        if (hDLL) {
-            loadedPath = path;
-            break;
-        }
-    }
-
+    logger::info("[KickstartRTImpl] Starting DLL loading process...");
+    
+    // First attempt - try with an absolute path to the game's plugin directory
+    // using both forward and backslash variants
+    HMODULE hDLL = LoadLibraryW(L"Data/SKSE/Plugins/KickstartRT/KickstartRT_Interop_D3D11.dll");
     if (!hDLL) {
-        logger::error("[KickstartRTImpl] Failed to load KickstartRT_Interop_D3D11.dll from any location");
-        return false;
+        hDLL = LoadLibraryW(L"Data\\SKSE\\Plugins\\KickstartRT\\KickstartRT_Interop_D3D11.dll");
     }
     
-    logger::info("[KickstartRTImpl] Successfully loaded DLL from: {}", loadedPath);
+    if (hDLL) {
+        logger::info("[KickstartRTImpl] Successfully loaded DLL from Data/SKSE/Plugins/KickstartRT directory");
+    }
+    else {
+        DWORD error = GetLastError();
+        logger::error("[KickstartRTImpl] Failed to load from Data/SKSE/Plugins/KickstartRT directory, error code: {}", error);
+        
+        // Second attempt - try from current directory + KickstartRT subfolder
+        hDLL = LoadLibraryA("KickstartRT/KickstartRT_Interop_D3D11.dll");
+        if (hDLL) {
+            logger::info("[KickstartRTImpl] Successfully loaded DLL from current directory's KickstartRT subfolder");
+        }
+        else {
+            error = GetLastError();
+            logger::error("[KickstartRTImpl] Failed to load from current directory's KickstartRT subfolder, error code: {}", error);
+            
+            // Third attempt - try from executable directory
+            char exePath[MAX_PATH] = {0};
+            GetModuleFileNameA(NULL, exePath, MAX_PATH);
+            std::string exeDirectory;
+            
+            size_t lastSlash = std::string(exePath).find_last_of("\\/");
+            if (lastSlash != std::string::npos) {
+                exeDirectory = std::string(exePath).substr(0, lastSlash + 1);
+                
+                // Try in exe directory
+                std::string exeDirPath = exeDirectory + "KickstartRT/KickstartRT_Interop_D3D11.dll";
+                logger::info("[KickstartRTImpl] Trying to load from executable directory: {}", exeDirPath);
+                hDLL = LoadLibraryA(exeDirPath.c_str());
+                
+                // Try in exe directory + Data/SKSE/Plugins
+                if (!hDLL) {
+                    std::string exePluginPath = exeDirectory + "Data\\SKSE\\Plugins\\KickstartRT\\KickstartRT_Interop_D3D11.dll";
+                    logger::info("[KickstartRTImpl] Trying to load from executable plugin directory: {}", exePluginPath);
+                    hDLL = LoadLibraryA(exePluginPath.c_str());
+                }
+                
+                if (hDLL) {
+                    logger::info("[KickstartRTImpl] Successfully loaded DLL from executable-relative path");
+                }
+                else {
+                    error = GetLastError();
+                    logger::error("[KickstartRTImpl] Failed to load from executable-relative paths, error code: {}", error);
+                }
+            }
+        }
+    }
+    
+    if (!hDLL) {
+        logger::error("[KickstartRTImpl] Failed to load KickstartRT_Interop_D3D11.dll from any location");
+        logger::error("[KickstartRTImpl] Make sure KickstartRT_Interop_D3D11.dll is in Data/SKSE/Plugins/KickstartRT directory");
+        return false;
+    }
     
     // Get function pointers
     g_pfnCreateExecuteContext = reinterpret_cast<PFN_CreateExecuteContext>(
@@ -87,7 +106,9 @@ bool LoadKickstartRTFunctions() {
         GetProcAddress(hDLL, "DestroyExecuteContext"));
     
     if (!g_pfnCreateExecuteContext || !g_pfnDestroyExecuteContext) {
-        logger::error("[KickstartRTImpl] Failed to get function pointers from KickstartRT_Interop_D3D11.dll");
+        logger::error("[KickstartRTImpl] Failed to get function pointers. CreateExecuteContext: {}, DestroyExecuteContext: {}", 
+            g_pfnCreateExecuteContext ? "Found" : "Not Found", 
+            g_pfnDestroyExecuteContext ? "Found" : "Not Found");
         FreeLibrary(hDLL);
         return false;
     }

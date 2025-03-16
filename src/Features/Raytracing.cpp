@@ -1,10 +1,10 @@
 #include "Features/Raytracing.h"
 #include "../../include/KickstartRTImpl.h"
 
-// Enable KickstartRT by default
-#ifndef ENABLE_KICKSTART_RT
-#define ENABLE_KICKSTART_RT 1
-#endif
+// We should NOT redefine this here - it should come from CMake
+// #ifndef ENABLE_KICKSTART_RT
+// #define ENABLE_KICKSTART_RT 1
+// #endif
 
 #include <DirectXTex.h>
 
@@ -216,6 +216,10 @@ void Raytracing::SaveSettings(json& o_json)
 void Raytracing::SetupResources()
 {
 #ifdef ENABLE_KICKSTART_RT
+    if (!settings.Enabled) {
+        return;
+    }
+    
     if (!initialized) {
         logger::info("[Raytracing] Setting up KickstartRT resources");
         
@@ -262,7 +266,7 @@ void Raytracing::SetupResources()
         logger::info("[Raytracing] Creating render textures for GI and reflections");
         
         try {
-            // Get screen dimensions
+            // Get screen dimensions from global state
             uint32_t width = static_cast<uint32_t>(globals::state->screenSize.x);
             uint32_t height = static_cast<uint32_t>(globals::state->screenSize.y);
             
@@ -394,9 +398,11 @@ bool Raytracing::InjectLighting(ID3D11ShaderResourceView* lightingSRV,
     #pragma warning(push)
     #pragma warning(disable: 4100) // unreferenced formal parameter
 
+#ifdef ENABLE_KICKSTART_RT
     if (m_rtImpl) {
         return m_rtImpl->InjectLighting(lightingSRV, depthSRV, normalSRV, viewMatrix, projMatrix);
     }
+#endif
     return false;
 
     #pragma warning(pop)

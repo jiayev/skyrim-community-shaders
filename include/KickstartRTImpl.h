@@ -1,10 +1,5 @@
 #pragma once
 
-// Enable KickstartRT by default
-#ifndef ENABLE_KICKSTART_RT
-#define ENABLE_KICKSTART_RT 1
-#endif
-
 // Define API for KickstartRT
 #define KickstartRT_Graphics_API_D3D11 1
 
