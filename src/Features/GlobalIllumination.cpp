@@ -37,8 +37,8 @@ void GlobalIllumination::DrawSettings()
         return;
     
     // GI Settings
-    ImGui::SeparatorText("Global Illumination Settings");
-    
+        ImGui::SeparatorText("Global Illumination Settings");
+        
     ImGui::SliderFloat("GI Intensity", &settings.Intensity, 0.0f, 5.0f, "%.2f");
     ImGui::SliderFloat("GI Distance", &settings.Distance, 50.0f, 500.0f, "%.1f game units");
     ImGui::SliderFloat("GI Saturation", &settings.Saturation, 0.0f, 2.0f, "%.2f");
@@ -103,6 +103,9 @@ void GlobalIllumination::InitializeRaytracing()
     // Skip the test as it's causing issues, and assume it would pass
     logger::info("[GlobalIllumination] Skipping KickstartRT test and proceeding with geometry registration");
     raytracingAvailable = true;
+    
+    // Ensure raytracing is enabled before registering geometry
+    raytracing->settings.Enabled = true;
     
     // Register scene geometry with KickstartRT
     logger::info("[GlobalIllumination] Registering scene geometry with KickstartRT...");
@@ -282,11 +285,11 @@ void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuf
             if (auto renderer = globals::game::renderer) {
                 // Get device for creating resources
                 auto device = globals::d3d::device;
-                if (!device) {
+        if (!device) {
                     logger::error("[GlobalIllumination] No D3D11 device available for normal buffer");
-                    return;
-                }
-                
+            return;
+        }
+        
                 // In Skyrim, normals are stored in the G-buffer which is in the render targets
                 // Look for a render target that might contain normals (we need to find the right index)
                 // For now, we'll try the first few render targets
