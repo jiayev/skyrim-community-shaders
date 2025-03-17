@@ -594,10 +594,26 @@ void GlobalIllumination::ApplyGIToFinalRender()
     logger::info("[GlobalIllumination] Compositing GI buffer with main render target");
     
     // Draw a fullscreen quad to apply the effect
-    // TODO: Add a proper compositing shader and adjust this when we have a better understanding
-    // of the BSUtilityShader interface and capabilities
+    // Replace the problematic DrawFullScreenRect() with a more standard D3D11 approach
     if (utilityShader) {
-        utilityShader->RenderScreenShape();
+        // Set the appropriate shader technique
+        if (utilityShader->SetupTechnique(0)) {
+            // Create a simple quad (Vertices will be generated in the vertex shader)
+            // This is often done with a simple triangle that covers the whole screen
+            context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            context->IASetInputLayout(nullptr);
+            context->IASetVertexBuffers(0, 0, nullptr, nullptr, nullptr);
+            context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
+            
+            // Draw 3 vertices (full screen triangle) without any vertex buffer
+            // This is a common technique for fullscreen passes
+            context->Draw(3, 0);
+            
+            // Restore the technique when finished
+            utilityShader->RestoreTechnique(0);
+        } else {
+            logger::error("[GlobalIllumination] Failed to setup utility shader technique");
+        }
     } else {
         logger::error("[GlobalIllumination] BSUtilityShader not available for compositing");
     }
