@@ -242,7 +242,7 @@ bool UpdateInstanceTransform(KickstartRT::D3D11::InstanceHandle& instanceHandle,
             return false;
         }
         
-        return true;
+    return true;
     }
     catch (const std::exception& e) {
         logger::error("[RT] Exception during transform update: {}", e.what());
@@ -395,8 +395,8 @@ void CleanupResources() {
      */
     bool GenerateGI(
         ID3D11ShaderResourceView* depthSRV,
-        ID3D11ShaderResourceView* normalSRV,
-        ID3D11UnorderedAccessView* outputUAV,
+               ID3D11ShaderResourceView* normalSRV,
+               ID3D11UnorderedAccessView* outputUAV,
         DirectX::XMFLOAT4X4 viewMatrix,
         DirectX::XMFLOAT4X4 projMatrix)
     {
@@ -1158,7 +1158,7 @@ bool Raytracing::GetCurrentViewAndProjectionMatrices(DirectX::XMFLOAT4X4& viewMa
 // Direct pass-through to KickstartRTImpl
 bool Raytracing::GenerateGI(
     ID3D11ShaderResourceView* depthSRV,
-                       ID3D11ShaderResourceView* normalSRV,
+                       ID3D11ShaderResourceView* normalSRV, 
                        ID3D11UnorderedAccessView* outputUAV,
                        const DirectX::XMFLOAT4X4& viewMatrix,
                        const DirectX::XMFLOAT4X4& projMatrix) 
