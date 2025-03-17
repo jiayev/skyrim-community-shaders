@@ -6,6 +6,7 @@
 #include <Windows.h>
 #include <DirectXMath.h>
 #include <d3d11.h>
+#include <unordered_map>
 
 // Disable warnings for unreferenced parameters
 #pragma warning(disable: 4100)
@@ -18,6 +19,236 @@ static KickstartRT::D3D11::ExecuteContext* g_executeContext = nullptr;
 static bool g_initialized = false;
 static uint32_t g_width = 0;
 static uint32_t g_height = 0;
+
+// Storage for geometry and instance handles for later reference
+static std::unordered_map<std::string, KickstartRT::D3D11::GeometryHandle> g_geometryHandles;
+static std::unordered_map<std::string, KickstartRT::D3D11::InstanceHandle> g_instanceHandles;
+
+// Register a geometry with KickstartRT and return the handle
+bool RegisterGeometryWithKickstartRT(ID3D11Buffer* vertexBuffer, ID3D11Buffer* indexBuffer, const std::string& name, KickstartRT::D3D11::GeometryHandle* outHandle)
+{
+    if (!g_executeContext || !vertexBuffer || !indexBuffer || !outHandle) {
+        logger::error("[RT] Invalid parameters for geometry registration");
+        return false;
+    }
+    
+    // Check if we already have a handle for this geometry
+    auto it = g_geometryHandles.find(name);
+    if (it != g_geometryHandles.end()) {
+        *outHandle = it->second;
+        return true;
+    }
+    
+    try {
+        // Create a handle for the geometry
+        KickstartRT::D3D11::GeometryHandle handle;
+        auto status = g_executeContext->CreateGeometryHandles(&handle, 1);
+        if (status != KickstartRT::Status::OK) {
+            logger::error("[RT] Failed to create geometry handle. Status: {}", static_cast<int>(status));
+            return false;
+        }
+        
+        // Create a task container
+        auto taskContainer = g_executeContext->CreateTaskContainer();
+        if (!taskContainer) {
+            logger::error("[RT] Failed to create task container for geometry registration");
+            return false;
+        }
+        
+        // Get vertex buffer description to extract stride and format
+        D3D11_BUFFER_DESC vbDesc;
+        vertexBuffer->GetDesc(&vbDesc);
+        
+        // Get index buffer description
+        D3D11_BUFFER_DESC ibDesc;
+        indexBuffer->GetDesc(&ibDesc);
+        
+        // Figure out format for index buffer (16 or 32-bit indices)
+        DXGI_FORMAT indexFormat = DXGI_FORMAT_R32_UINT; // Default to 32-bit
+        if (ibDesc.ByteWidth > 0 && ibDesc.ByteWidth % 4 != 0 && ibDesc.ByteWidth % 2 == 0) {
+            indexFormat = DXGI_FORMAT_R16_UINT; // Must be 16-bit
+        }
+        
+        // Create geometry task
+        KickstartRT::D3D11::BVHTask::GeometryTask geomTask;
+        geomTask.taskOperation = KickstartRT::D3D11::BVHTask::TaskOperation::Register;
+        geomTask.handle = handle;
+        
+        // Set up geometry input
+        geomTask.input.type = KickstartRT::D3D11::BVHTask::GeometryInput::Type::TrianglesIndexed;
+        geomTask.input.allowUpdate = true; // Allow updating in the future
+        
+        // Create geometry component
+        KickstartRT::D3D11::BVHTask::GeometryInput::GeometryComponent component;
+        
+        // Set up vertex buffer
+        component.vertexBuffer.resource = vertexBuffer;
+        component.vertexBuffer.format = DXGI_FORMAT_R32G32B32_FLOAT; // Assuming position is float3
+        component.vertexBuffer.offsetInBytes = 0;
+        component.vertexBuffer.strideInBytes = vbDesc.StructureByteStride > 0 ? vbDesc.StructureByteStride : 12; // Default to 12 bytes (3 floats)
+        
+        // Get vertex count
+        component.vertexBuffer.count = vbDesc.ByteWidth / component.vertexBuffer.strideInBytes;
+        
+        // Set up index buffer
+        component.indexBuffer.resource = indexBuffer;
+        component.indexBuffer.format = indexFormat;
+        component.indexBuffer.offsetInBytes = 0;
+        component.indexBuffer.count = ibDesc.ByteWidth / (indexFormat == DXGI_FORMAT_R16_UINT ? 2 : 4);
+        
+        // Add component to geometry input
+        geomTask.input.components.push_back(component);
+        
+        // Schedule geometry task
+        taskContainer->ScheduleBVHTask(&geomTask);
+        
+        // Execute the GPU task
+        auto execStatus = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
+        if (execStatus != KickstartRT::Status::OK) {
+            logger::error("[RT] Failed to execute geometry registration task. Status: {}", static_cast<int>(execStatus));
+            return false;
+        }
+        
+        // Store the handle for future reference
+        g_geometryHandles[name] = handle;
+        *outHandle = handle;
+        
+        logger::info("[RT] Successfully registered geometry '{}' with KickstartRT", name);
+        return true;
+    }
+    catch (const std::exception& e) {
+        logger::error("[RT] Exception during geometry registration: {}", e.what());
+        return false;
+    }
+}
+
+// Create an instance of a geometry with KickstartRT
+bool CreateInstance(KickstartRT::D3D11::GeometryHandle& geometryHandle, const DirectX::XMFLOAT4X4& transform, const std::string& name, KickstartRT::D3D11::InstanceHandle* outHandle)
+{
+    if (!g_executeContext || !outHandle) {
+        logger::error("[RT] Invalid parameters for instance creation");
+        return false;
+    }
+    
+    // Check if we already have a handle for this instance
+    auto it = g_instanceHandles.find(name);
+    if (it != g_instanceHandles.end()) {
+        *outHandle = it->second;
+        return true;
+    }
+    
+    try {
+        // Create a handle for the instance
+        KickstartRT::D3D11::InstanceHandle handle;
+        auto status = g_executeContext->CreateInstanceHandles(&handle, 1);
+        if (status != KickstartRT::Status::OK) {
+            logger::error("[RT] Failed to create instance handle. Status: {}", static_cast<int>(status));
+            return false;
+        }
+        
+        // Create a task container
+        auto taskContainer = g_executeContext->CreateTaskContainer();
+        if (!taskContainer) {
+            logger::error("[RT] Failed to create task container for instance creation");
+            return false;
+        }
+        
+        // Create instance task
+        KickstartRT::D3D11::BVHTask::InstanceTask instanceTask;
+        instanceTask.taskOperation = KickstartRT::D3D11::BVHTask::TaskOperation::Register;
+        instanceTask.handle = handle;
+        
+        // Set up instance input
+        std::wstring wideName(name.begin(), name.end());
+        instanceTask.input.name = wideName.c_str();
+        instanceTask.input.geomHandle = geometryHandle;
+        
+        // Convert transform matrix to KickstartRT format (3x4 row-major)
+        KickstartRT::Math::Float_3x4 ksTransform;
+        
+        // Fill the 3x4 matrix from the 4x4 transform
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 4; col++) {
+                ksTransform.m[row][col] = transform.m[row][col];
+            }
+        }
+        
+        instanceTask.input.transform = ksTransform;
+        instanceTask.input.participatingInTLAS = true; // Include in the TLAS
+        
+        // Schedule instance task
+        taskContainer->ScheduleBVHTask(&instanceTask);
+        
+        // Execute the GPU task
+        auto execStatus = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
+        if (execStatus != KickstartRT::Status::OK) {
+            logger::error("[RT] Failed to execute instance creation task. Status: {}", static_cast<int>(execStatus));
+            return false;
+        }
+        
+        // Store the handle for future reference
+        g_instanceHandles[name] = handle;
+        *outHandle = handle;
+        
+        logger::info("[RT] Successfully created instance '{}' with KickstartRT", name);
+        return true;
+    }
+    catch (const std::exception& e) {
+        logger::error("[RT] Exception during instance creation: {}", e.what());
+        return false;
+    }
+}
+
+// Update an instance's transform with KickstartRT
+bool UpdateInstanceTransform(KickstartRT::D3D11::InstanceHandle& instanceHandle, const DirectX::XMFLOAT4X4& transform)
+{
+    if (!g_executeContext) {
+        logger::error("[RT] Execute context not available for transform update");
+        return false;
+    }
+    
+    try {
+        // Create a task container
+        auto taskContainer = g_executeContext->CreateTaskContainer();
+        if (!taskContainer) {
+            logger::error("[RT] Failed to create task container for transform update");
+            return false;
+        }
+        
+        // Create instance task
+        KickstartRT::D3D11::BVHTask::InstanceTask instanceTask;
+        instanceTask.taskOperation = KickstartRT::D3D11::BVHTask::TaskOperation::Update;
+        instanceTask.handle = instanceHandle;
+        
+        // Convert transform matrix to KickstartRT format (3x4 row-major)
+        KickstartRT::Math::Float_3x4 ksTransform;
+        
+        // Fill the 3x4 matrix from the 4x4 transform
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 4; col++) {
+                ksTransform.m[row][col] = transform.m[row][col];
+            }
+        }
+        
+        instanceTask.input.transform = ksTransform;
+        
+        // Schedule instance task
+        taskContainer->ScheduleBVHTask(&instanceTask);
+        
+        // Execute the GPU task
+        auto execStatus = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
+        if (execStatus != KickstartRT::Status::OK) {
+            logger::error("[RT] Failed to execute transform update task. Status: {}", static_cast<int>(execStatus));
+            return false;
+        }
+        
+        return true;
+    }
+    catch (const std::exception& e) {
+        logger::error("[RT] Exception during transform update: {}", e.what());
+        return false;
+    }
+}
 
 // Initialize KickstartRT
 bool Initialize(ID3D11Device* device) {
@@ -151,8 +382,8 @@ void CleanupResources() {
     // In the future these will be expanded to use proper task scheduling
     bool GenerateGI(
         ID3D11ShaderResourceView* depthSRV,
-               ID3D11ShaderResourceView* normalSRV,
-               ID3D11UnorderedAccessView* outputUAV,
+        ID3D11ShaderResourceView* normalSRV,
+        ID3D11UnorderedAccessView* outputUAV,
         DirectX::XMFLOAT4X4 viewMatrix,
         DirectX::XMFLOAT4X4 projMatrix)
     {
@@ -174,6 +405,10 @@ void CleanupResources() {
         try {
             // Create a task container
             auto taskContainer = g_executeContext->CreateTaskContainer();
+            if (!taskContainer) {
+                logger::error("[KickstartRTImpl] Failed to create task container for GI");
+                return false;
+            }
 
             // Schedule BVH Build task
             KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
@@ -184,7 +419,7 @@ void CleanupResources() {
             // Set up diffuse GI tracing
             KickstartRT::D3D11::RenderTask::TraceDiffuseTask traceTask;
             
-            // Configure input buffers - use the correct field names
+            // Configure input buffers
             // Get resources from SRVs
             ID3D11Resource* depthResource = nullptr;
             ID3D11Resource* normalResource = nullptr;
@@ -194,20 +429,28 @@ void CleanupResources() {
             if (depthSRV) {
                 depthSRV->GetResource(&depthResource);
                 traceTask.common.depth.tex.resource = depthResource;
-                if (depthResource) depthResource->Release(); // Release our reference
+                // Shader resource view description
+                traceTask.common.depth.tex.srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                traceTask.common.depth.tex.srvDesc.Texture2D.MipLevels = 1;
+                traceTask.common.depth.tex.srvDesc.Texture2D.MostDetailedMip = 0;
             }
             
             if (normalSRV) {
                 normalSRV->GetResource(&normalResource);
                 traceTask.common.normal.tex.resource = normalResource;
-                if (normalResource) normalResource->Release(); // Release our reference
+                // Shader resource view description
+                traceTask.common.normal.tex.srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                traceTask.common.normal.tex.srvDesc.Texture2D.MipLevels = 1;
+                traceTask.common.normal.tex.srvDesc.Texture2D.MostDetailedMip = 0;
             }
             
             // Configure output buffer
             if (outputUAV) {
                 outputUAV->GetResource(&outputResource);
                 traceTask.out.resource = outputResource;
-                if (outputResource) outputResource->Release(); // Release our reference
+                // Unordered access view description
+                traceTask.out.uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+                traceTask.out.uavDesc.Texture2D.MipSlice = 0;
             }
             
             // Set view and projection matrices
@@ -225,11 +468,37 @@ void CleanupResources() {
             traceTask.common.clipToViewMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invProj);
             traceTask.common.viewToWorldMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invView);
             
-            // Set ray parameters
+            // Get dimensions from the depth resource
+            D3D11_TEXTURE2D_DESC depthDesc;
+            if (depthResource) {
+                ID3D11Texture2D* depthTex = nullptr;
+                HRESULT hr = depthResource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&depthTex));
+                if (SUCCEEDED(hr) && depthTex) {
+                    depthTex->GetDesc(&depthDesc);
+                    traceTask.common.viewport.width = depthDesc.Width;
+                    traceTask.common.viewport.height = depthDesc.Height;
+                    depthTex->Release();
+                } else {
+                    // Fallback to screen dimensions
+                    traceTask.common.viewport.width = g_width;
+                    traceTask.common.viewport.height = g_height;
+                }
+            } else {
+                // Fallback to screen dimensions
+                traceTask.common.viewport.width = g_width;
+                traceTask.common.viewport.height = g_height;
+            }
+            
+            // Set ray parameters - only use fields that exist in the API
             traceTask.common.maxRayLength = 200.0f;  // Maximum ray distance
             
             // Schedule the task
             taskContainer->ScheduleRenderTask(&traceTask);
+            
+            // Release resources
+            if (depthResource) depthResource->Release();
+            if (normalResource) normalResource->Release();
+            if (outputResource) outputResource->Release();
             
             // Execute GPU task
             auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
@@ -276,6 +545,10 @@ void CleanupResources() {
         try {
             // Create a task container
             auto taskContainer = g_executeContext->CreateTaskContainer();
+            if (!taskContainer) {
+                logger::error("[KickstartRTImpl] Failed to create task container for reflections");
+                return false;
+            }
 
             // Schedule BVH Build task
             KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
@@ -286,7 +559,7 @@ void CleanupResources() {
             // Set up specular reflection tracing
             KickstartRT::D3D11::RenderTask::TraceSpecularTask traceTask;
             
-            // Configure input buffers - use the correct field names
+            // Configure input buffers
             // Get resources from SRVs
             ID3D11Resource* depthResource = nullptr;
             ID3D11Resource* normalResource = nullptr;
@@ -297,26 +570,37 @@ void CleanupResources() {
             if (depthSRV) {
                 depthSRV->GetResource(&depthResource);
                 traceTask.common.depth.tex.resource = depthResource;
-                if (depthResource) depthResource->Release(); // Release our reference
+                // Set view description
+                traceTask.common.depth.tex.srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                traceTask.common.depth.tex.srvDesc.Texture2D.MipLevels = 1;
+                traceTask.common.depth.tex.srvDesc.Texture2D.MostDetailedMip = 0;
             }
             
             if (normalSRV) {
                 normalSRV->GetResource(&normalResource);
                 traceTask.common.normal.tex.resource = normalResource;
-                if (normalResource) normalResource->Release(); // Release our reference
+                // Set view description
+                traceTask.common.normal.tex.srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                traceTask.common.normal.tex.srvDesc.Texture2D.MipLevels = 1;
+                traceTask.common.normal.tex.srvDesc.Texture2D.MostDetailedMip = 0;
             }
             
             if (roughnessSRV) {
                 roughnessSRV->GetResource(&roughnessResource);
                 traceTask.common.roughness.tex.resource = roughnessResource;
-                if (roughnessResource) roughnessResource->Release(); // Release our reference
+                // Set view description
+                traceTask.common.roughness.tex.srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                traceTask.common.roughness.tex.srvDesc.Texture2D.MipLevels = 1;
+                traceTask.common.roughness.tex.srvDesc.Texture2D.MostDetailedMip = 0;
             }
             
             // Configure output buffer
             if (outputUAV) {
                 outputUAV->GetResource(&outputResource);
                 traceTask.out.resource = outputResource;
-                if (outputResource) outputResource->Release(); // Release our reference
+                // Set view description
+                traceTask.out.uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+                traceTask.out.uavDesc.Texture2D.MipSlice = 0;
             }
             
             // Set view and projection matrices
@@ -334,11 +618,38 @@ void CleanupResources() {
             traceTask.common.clipToViewMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invProj);
             traceTask.common.viewToWorldMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invView);
             
+            // Get dimensions from the depth resource
+            D3D11_TEXTURE2D_DESC depthDesc;
+            if (depthResource) {
+                ID3D11Texture2D* depthTex = nullptr;
+                HRESULT hr = depthResource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&depthTex));
+                if (SUCCEEDED(hr) && depthTex) {
+                    depthTex->GetDesc(&depthDesc);
+                    traceTask.common.viewport.width = depthDesc.Width;
+                    traceTask.common.viewport.height = depthDesc.Height;
+                    depthTex->Release();
+                } else {
+                    // Fallback to screen dimensions
+                    traceTask.common.viewport.width = g_width;
+                    traceTask.common.viewport.height = g_height;
+                }
+            } else {
+                // Fallback to screen dimensions
+                traceTask.common.viewport.width = g_width;
+                traceTask.common.viewport.height = g_height;
+            }
+            
             // Set ray parameters
             traceTask.common.maxRayLength = 200.0f;  // Maximum ray distance
             
             // Schedule the task
             taskContainer->ScheduleRenderTask(&traceTask);
+            
+            // Release resources
+            if (depthResource) depthResource->Release();
+            if (normalResource) normalResource->Release();
+            if (roughnessResource) roughnessResource->Release();
+            if (outputResource) outputResource->Release();
             
             // Execute GPU task
             auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
@@ -357,24 +668,6 @@ void CleanupResources() {
             logger::error("[KickstartRTImpl] Unknown exception in GenerateReflections");
             return false;
         }
-    }
-
-    // Register geometry with KickstartRT - simplified placeholder
-    bool RegisterGeometryWithKickstartRT(ID3D11Buffer* vertexBuffer, ID3D11Buffer* indexBuffer)
-{
-    if (!g_initialized || !g_executeContext) {
-        logger::error("[RT] Not initialized");
-        return false;
-    }
-    
-        if (!vertexBuffer || !indexBuffer) {
-            logger::error("[RT] Invalid buffers for geometry registration");
-            return false;
-        }
-        
-        // This is a placeholder - we'll implement proper geometry registration later
-        logger::info("[RT] Geometry registration is a placeholder - will be implemented in a future version");
-        return true;
     }
 } // namespace KickstartRTImpl
 
@@ -429,8 +722,6 @@ bool Raytracing::RegisterGeometry()
     
     logger::info("[RT] Beginning geometry registration");
     
-    // For now, we'll set up a simple BVH with no actual geometry
-    // In a real implementation, we would iterate through game objects here
     try {
         // Create a task container for geometry registration
         auto taskContainer = KickstartRTImpl::g_executeContext->CreateTaskContainer();
@@ -439,11 +730,111 @@ bool Raytracing::RegisterGeometry()
             return false;
         }
         
-        // Schedule a BVH update task with no geometry
-        // This will create an empty BVH that we can update later as more geometry is loaded
+        // Get renderer
+        auto renderer = globals::game::renderer;
+        if (!renderer) {
+            logger::error("[RT] Failed to get renderer");
+            
+            // Fall back to create an empty BVH structure
+            KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
+            bvhBuildTask.buildTLAS = true;
+            bvhBuildTask.maxBlasBuildCount = 16u;
+            taskContainer->ScheduleBVHTask(&bvhBuildTask);
+            
+            // Execute the GPU tasks to create empty BVH
+            auto status = KickstartRTImpl::g_executeContext->InvokeGPUTask(taskContainer, nullptr);
+            if (status != KickstartRT::Status::OK) {
+                logger::error("[RT] Failed to execute empty BVH build task. Status: {}", static_cast<int>(status));
+                return false;
+            }
+            
+            logger::warn("[RT] Created empty BVH structure with no geometry");
+            return true;
+        }
+        
+        // Get device
+        ID3D11Device* device = globals::d3d::device;
+        if (!device) {
+            logger::error("[RT] D3D11 device is null");
+            return false;
+        }
+        
+        // Create a simple test quad as a placeholder geometry
+        // In a real implementation, we'd iterate through Skyrim's scene graph
+        int registeredMeshes = 0;
+        
+        // Vertices for a simple quad (2x2 units, centered at origin)
+        // Each vertex is position (XYZ)
+        DirectX::XMFLOAT3 quadVertices[] = {
+            { -1.0f, -1.0f, 0.0f },  // Bottom-left
+            {  1.0f, -1.0f, 0.0f },  // Bottom-right
+            {  1.0f,  1.0f, 0.0f },  // Top-right
+            { -1.0f,  1.0f, 0.0f }   // Top-left
+        };
+        
+        // Indices for the quad (2 triangles)
+        uint32_t quadIndices[] = {
+            0, 1, 2,  // Triangle 1
+            0, 2, 3   // Triangle 2
+        };
+        
+        // Create vertex buffer
+        D3D11_BUFFER_DESC vbDesc = {};
+        vbDesc.ByteWidth = sizeof(quadVertices);
+        vbDesc.Usage = D3D11_USAGE_DEFAULT;
+        vbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        vbDesc.CPUAccessFlags = 0;
+        vbDesc.StructureByteStride = sizeof(DirectX::XMFLOAT3);
+        
+        D3D11_SUBRESOURCE_DATA vbData = {};
+        vbData.pSysMem = quadVertices;
+        
+        Microsoft::WRL::ComPtr<ID3D11Buffer> vertexBuffer;
+        HRESULT hr = device->CreateBuffer(&vbDesc, &vbData, vertexBuffer.GetAddressOf());
+        if (FAILED(hr)) {
+            logger::error("[RT] Failed to create vertex buffer for test quad. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+            return false;
+        }
+        
+        // Create index buffer
+        D3D11_BUFFER_DESC ibDesc = {};
+        ibDesc.ByteWidth = sizeof(quadIndices);
+        ibDesc.Usage = D3D11_USAGE_DEFAULT;
+        ibDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+        ibDesc.CPUAccessFlags = 0;
+        ibDesc.StructureByteStride = sizeof(uint32_t);
+        
+        D3D11_SUBRESOURCE_DATA ibData = {};
+        ibData.pSysMem = quadIndices;
+        
+        Microsoft::WRL::ComPtr<ID3D11Buffer> indexBuffer;
+        hr = device->CreateBuffer(&ibDesc, &ibData, indexBuffer.GetAddressOf());
+        if (FAILED(hr)) {
+            logger::error("[RT] Failed to create index buffer for test quad. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+            return false;
+        }
+        
+        // Register the quad geometry with KickstartRT
+        KickstartRT::D3D11::GeometryHandle geomHandle;
+        if (KickstartRTImpl::RegisterGeometryWithKickstartRT(vertexBuffer.Get(), indexBuffer.Get(), "TestQuad", &geomHandle)) {
+            registeredMeshes++;
+            
+            // Create an instance of the quad
+            // Use identity transform for now
+            DirectX::XMFLOAT4X4 transform;
+            DirectX::XMStoreFloat4x4(&transform, DirectX::XMMatrixIdentity());
+            
+            // Create instance handle
+            KickstartRT::D3D11::InstanceHandle instanceHandle;
+            if (KickstartRTImpl::CreateInstance(geomHandle, transform, "TestQuadInstance", &instanceHandle)) {
+                logger::info("[RT] Created instance of TestQuad");
+            }
+        }
+        
+        // Schedule a BVH update task
         KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
-        bvhBuildTask.buildTLAS = true;  // Build top-level acceleration structure
-        bvhBuildTask.maxBlasBuildCount = 16u;  // Number of BLASes to build per frame
+        bvhBuildTask.buildTLAS = true;
+        bvhBuildTask.maxBlasBuildCount = 16u;
         taskContainer->ScheduleBVHTask(&bvhBuildTask);
         
         // Execute the GPU tasks to update geometry
@@ -453,7 +844,7 @@ bool Raytracing::RegisterGeometry()
             return false;
         }
         
-        logger::info("[RT] Geometry registration completed successfully");
+        logger::info("[RT] BVH structure created with {} meshes registered", registeredMeshes);
         return true;
     }
     catch (const std::exception& e) {
@@ -464,9 +855,70 @@ bool Raytracing::RegisterGeometry()
 
 bool Raytracing::UpdateGeometry()
 {
-    // This would update dynamic geometry with KickstartRT
-    // Left as a placeholder for future implementation
-    return true;
+    if (!IsInitialized() || !settings.Enabled) {
+        return false;
+    }
+    
+    try {
+        // Find the instance handle for our test quad
+        auto it = KickstartRTImpl::g_instanceHandles.find("TestQuadInstance");
+        if (it == KickstartRTImpl::g_instanceHandles.end()) {
+            // Not found, probably not initialized yet
+            return false;
+        }
+        
+        // Get the instance handle
+        KickstartRT::D3D11::InstanceHandle instanceHandle = it->second;
+        
+        // Create a rotation transform that changes over time
+        static float rotation = 0.0f;
+        rotation += 0.01f; // Small increment each frame
+        
+        // Create a rotation matrix around Y axis
+        DirectX::XMMATRIX rotationMatrix = DirectX::XMMatrixRotationY(rotation);
+        
+        // Create a translation matrix to move the quad up and away from the origin
+        DirectX::XMMATRIX translationMatrix = DirectX::XMMatrixTranslation(0.0f, 0.0f, -5.0f);
+        
+        // Combine the transforms
+        DirectX::XMMATRIX worldMatrix = rotationMatrix * translationMatrix;
+        
+        // Convert to XMFLOAT4X4 for the utility function
+        DirectX::XMFLOAT4X4 transform;
+        DirectX::XMStoreFloat4x4(&transform, worldMatrix);
+        
+        // Update the instance transform
+        if (!KickstartRTImpl::UpdateInstanceTransform(instanceHandle, transform)) {
+            logger::error("[RT] Failed to update instance transform");
+            return false;
+        }
+        
+        // Create a task container for BVH update
+        auto taskContainer = KickstartRTImpl::g_executeContext->CreateTaskContainer();
+        if (!taskContainer) {
+            logger::error("[RT] Failed to create task container for BVH update");
+            return false;
+        }
+        
+        // Schedule a BVH update task
+        KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
+        bvhBuildTask.buildTLAS = true;
+        bvhBuildTask.maxBlasBuildCount = 4u;
+        taskContainer->ScheduleBVHTask(&bvhBuildTask);
+        
+        // Execute the GPU tasks to update BVH
+        auto status = KickstartRTImpl::g_executeContext->InvokeGPUTask(taskContainer, nullptr);
+        if (status != KickstartRT::Status::OK) {
+            logger::error("[RT] Failed to execute BVH update task. Status: {}", static_cast<int>(status));
+            return false;
+        }
+        
+        return true;
+    }
+    catch (const std::exception& e) {
+        logger::error("[RT] Exception during geometry update: {}", e.what());
+        return false;
+    }
 }
 
 bool Raytracing::GetCurrentViewAndProjectionMatrices(DirectX::XMFLOAT4X4& viewMatrix, DirectX::XMFLOAT4X4& projMatrix)
