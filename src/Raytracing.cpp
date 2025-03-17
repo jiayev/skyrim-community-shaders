@@ -32,64 +32,56 @@ namespace KickstartRTImpl
         }
         
         try {
-            // Get dimensions from device
-            g_width = 1920;  // Default resolution
+            // Default resolution in case we can't query the actual dimensions
+            g_width = 1920;
             g_height = 1080;
-            
-            // Get adapter associated with device to query output information
-            IDXGIDevice* dxgiDevice = nullptr;
-            if (SUCCEEDED(device->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDevice))) {
-                IDXGIAdapter* adapter = nullptr;
-                if (SUCCEEDED(dxgiDevice->GetAdapter(&adapter))) {
-                    // Get primary output (monitor)
-                    IDXGIOutput* output = nullptr;
-                    if (SUCCEEDED(adapter->EnumOutputs(0, &output))) {
-                        DXGI_OUTPUT_DESC desc;
-                        if (SUCCEEDED(output->GetDesc(&desc))) {
-                            RECT r = desc.DesktopCoordinates;
-                            g_width = r.right - r.left;
-                            g_height = r.bottom - r.top;
-                        }
-                        output->Release();
-                    }
-                    adapter->Release();
-                }
-                dxgiDevice->Release();
-            }
             
             // Create init settings for D3D11
             KickstartRT::D3D11::ExecuteContext_InitSettings settings;
             settings.D3D11Device = device;
             
-            // Get the adapter from the device - this is REQUIRED for KickstartRT D3D11 interop
-            IDXGIAdapter1* dxgiAdapter1 = nullptr;
-            {
-                Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDeviceComPtr;
-                if (SUCCEEDED(device->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDeviceComPtr))) {
-                    Microsoft::WRL::ComPtr<IDXGIAdapter> dxgiAdapterComPtr;
-                    if (SUCCEEDED(dxgiDeviceComPtr->GetAdapter(dxgiAdapterComPtr.GetAddressOf()))) {
-                        // Get IDXGIAdapter1 interface
-                        if (SUCCEEDED(dxgiAdapterComPtr->QueryInterface(__uuidof(IDXGIAdapter1), (void**)&dxgiAdapter1))) {
-                            logger::info("[RT] Successfully obtained DXGIAdapter1");
-                        }
-                        else {
-                            logger::error("[RT] Failed to get IDXGIAdapter1 interface");
-                            return false;
-                        }
-                    }
-                    else {
-                        logger::error("[RT] Failed to get adapter from device");
-                        return false;
-                    }
-                }
-                else {
-                    logger::error("[RT] Failed to get DXGI device interface");
-                    return false;
+            // Get the adapter directly for KickstartRT
+            // This is REQUIRED for the D3D11 interop layer
+            Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+            HRESULT hr = device->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDevice);
+            if (FAILED(hr)) {
+                logger::error("[RT] Failed to get DXGI device interface. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+                return false;
+            }
+            
+            // Get the adapter
+            IDXGIAdapter1* adapter1 = nullptr;
+            Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+            hr = dxgiDevice->GetAdapter(adapter.GetAddressOf());
+            if (FAILED(hr)) {
+                logger::error("[RT] Failed to get DXGI adapter. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+                return false;
+            }
+            
+            // Try to get dimensions from the primary output if desired
+            Microsoft::WRL::ComPtr<IDXGIOutput> output;
+            if (SUCCEEDED(adapter->EnumOutputs(0, output.GetAddressOf()))) {
+                DXGI_OUTPUT_DESC desc;
+                if (SUCCEEDED(output->GetDesc(&desc))) {
+                    RECT r = desc.DesktopCoordinates;
+                    g_width = r.right - r.left;
+                    g_height = r.bottom - r.top;
+                    logger::info("[RT] Detected display dimensions: {}x{}", g_width, g_height);
                 }
             }
             
-            // Set the adapter in settings - this is REQUIRED
-            settings.DXGIAdapter = dxgiAdapter1;
+            // Now get the IDXGIAdapter1 for KickstartRT
+            hr = adapter->QueryInterface(__uuidof(IDXGIAdapter1), (void**)&adapter1);
+            if (FAILED(hr)) {
+                logger::error("[RT] Failed to get IDXGIAdapter1 interface. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+                return false;
+            }
+            
+            // Directly set the adapter in settings (no temporary variables needed)
+            settings.DXGIAdapter = adapter1;
+            logger::info("[RT] Successfully set DXGIAdapter1 in KickstartRT settings");
+            
+            // Configure other settings
             settings.usingCommandQueue = KickstartRT::D3D11::ExecuteContext_InitSettings::UsingCommandQueue::Direct;
             settings.supportedWorkingSet = 4u;
             settings.descHeapSize = 8192u;
