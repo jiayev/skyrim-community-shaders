@@ -27,6 +27,10 @@ struct GlobalIllumination : Feature
     void GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuffer, Texture2D* outputBuffer);
     void UpdateSettingsForScene();
     bool IsAvailable();
+    
+    // Buffer management methods
+    void CreateGIOutputBuffer();
+    void ApplyGIToFinalRender();
 
     struct Settings
     {
@@ -44,4 +48,9 @@ struct GlobalIllumination : Feature
 private:
     float effectiveIntensity = 1.0f;
     bool raytracingAvailable = false; // Tracks whether raytracing is available and functioning
+    
+    // Buffer management
+    std::shared_ptr<Texture2D> giOutputBuffer = nullptr;
+    bool recreateBuffers = true;
+    bool shouldUpdateGeometry = true;
 };

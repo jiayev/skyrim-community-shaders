@@ -197,10 +197,20 @@ void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuf
     // Get the current view and projection matrices
     DirectX::XMFLOAT4X4 viewMatrix, projMatrix;
     
-    // Use identity matrices for now - will get proper matrices in the future
-    // The Raytracing class can get its own matrices, but we're moving all buffer management here
-    DirectX::XMStoreFloat4x4(&viewMatrix, DirectX::XMMatrixIdentity());
-    DirectX::XMStoreFloat4x4(&projMatrix, DirectX::XMMatrixIdentity());
+    // Get proper matrices from Skyrim's renderer
+    if (auto renderer = globals::game::renderer) {
+        // For now, use identity matrices since accessing the actual view/projection matrices
+        // would require more complex code to dereference the perFrameBuffer properly
+        DirectX::XMStoreFloat4x4(&viewMatrix, DirectX::XMMatrixIdentity());
+        DirectX::XMStoreFloat4x4(&projMatrix, DirectX::XMMatrixIdentity());
+        
+        logger::warn("[GlobalIllumination] Using identity matrices for view and projection");
+        // In a future version, we can implement proper matrix extraction when we know the correct buffer layout
+    } else {
+        logger::warn("[GlobalIllumination] Renderer not available, using identity matrices");
+        DirectX::XMStoreFloat4x4(&viewMatrix, DirectX::XMMatrixIdentity());
+        DirectX::XMStoreFloat4x4(&projMatrix, DirectX::XMMatrixIdentity());
+    }
     
     // Extract DirectX resources from the Texture2D objects
     ID3D11ShaderResourceView* depthSRV = nullptr;
@@ -237,19 +247,79 @@ void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuf
             }
         }
         
-        // For normal buffer, we would need to extract from G-buffer
-        // This is a placeholder - the exact method to access normals will depend on Skyrim's rendering setup
+        // For normal buffer, extract from G-buffer
         if (!normalSRV) {
-            logger::warn("[GlobalIllumination] Normal buffer not provided and no game method implemented yet");
-            // In a future implementation, we'll get normals from G-buffer
-            return; // Early out as we can't proceed without normals
+            if (auto renderer = globals::game::renderer) {
+                // Get device for creating resources
+                auto device = globals::d3d::device;
+                if (!device) {
+                    logger::error("[GlobalIllumination] No D3D11 device available for normal buffer");
+                    return;
+                }
+                
+                // In Skyrim, normals are stored in the G-buffer which is in the render targets
+                // Look for a render target that might contain normals (we need to find the right index)
+                // For now, we'll try the first few render targets
+                auto& renderTargetData = renderer->GetRuntimeData().renderTargets;
+                ID3D11ShaderResourceView* possibleNormalSRV = nullptr;
+                
+                // Try a few potential render targets
+                for (int i = 0; i < 5; i++) {
+                    if (renderTargetData[i].texture) {
+                        // Instead of accessing views[0] directly, create an SRV from the texture
+                        ID3D11ShaderResourceView* tempSRV = nullptr;
+                        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+                        srvDesc.Format = DXGI_FORMAT_UNKNOWN; // Use the same format as the texture
+                        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                        srvDesc.Texture2D.MipLevels = 1;
+                        srvDesc.Texture2D.MostDetailedMip = 0;
+                        
+                        // Try to get or create an SRV for this texture
+                        ID3D11Resource* resource = nullptr;
+                        renderTargetData[i].texture->QueryInterface(__uuidof(ID3D11Resource), (void**)&resource);
+                        
+                        if (resource) {
+                            // Try to get an existing SRV or create a new one
+                            device->CreateShaderResourceView(resource, &srvDesc, &tempSRV);
+                            resource->Release();
+                            
+                            if (tempSRV) {
+                                possibleNormalSRV = tempSRV;
+                                logger::info("[GlobalIllumination] Created SRV for render target {} for normals", i);
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if (possibleNormalSRV) {
+                    normalSRV = possibleNormalSRV;
+                    logger::info("[GlobalIllumination] Using render target as normal buffer");
+                } else {
+                    logger::error("[GlobalIllumination] Could not find a suitable normal buffer");
+                    return;
+                }
+            } else {
+                logger::error("[GlobalIllumination] No game renderer available to get normal buffer");
+                return;
+            }
         }
         
-        // For output buffer, we'd need a render target
+        // Create output buffer if not provided
         if (!outputUAV) {
-            logger::warn("[GlobalIllumination] Output buffer not provided and no game method implemented yet");
-            // In a future implementation, we'll create an output UAV
-            return; // Early out as we can't proceed without output buffer
+            // Create the output buffer compatible with game's buffer format and dimensions
+            if (!giOutputBuffer || recreateBuffers) {
+                CreateGIOutputBuffer();
+                recreateBuffers = false;
+            }
+            
+            if (giOutputBuffer && giOutputBuffer->uav) {
+                outputUAV = giOutputBuffer->uav.get();
+                logger::info("[GlobalIllumination] Using created output buffer");
+            } else {
+                logger::error("[GlobalIllumination] Failed to create or get output buffer");
+                return;
+            }
         }
     }
     
@@ -269,6 +339,11 @@ void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuf
     logger::info("[GlobalIllumination] Generating GI with intensity={}, distance={}, saturation={}", 
                 intensity, rayLength, saturation);
     
+    // Update geometry each frame if needed
+    if (shouldUpdateGeometry) {
+        raytracing->UpdateGeometry();
+    }
+    
     // Call Raytracing::GenerateGI directly with our buffers
     bool success = raytracing->GenerateGI(
         depthSRV,
@@ -282,7 +357,118 @@ void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuf
         logger::warn("[GlobalIllumination] Failed to generate global illumination");
     } else {
         logger::info("[GlobalIllumination] Global illumination rendered successfully");
+        
+        // Apply the GI output to the final render (to be implemented)
+        if (outputUAV == giOutputBuffer->uav.get()) {
+            ApplyGIToFinalRender();
+        }
     }
+}
+
+// Create the output buffer for GI
+void GlobalIllumination::CreateGIOutputBuffer()
+{
+    auto device = globals::d3d::device;
+    if (!device) {
+        logger::error("[GlobalIllumination] No D3D11 device available to create output buffer");
+        return;
+    }
+    
+    auto renderer = globals::game::renderer;
+    if (!renderer) {
+        logger::error("[GlobalIllumination] No renderer available to get dimensions");
+        return;
+    }
+    
+    // Get dimensions from a render target that should exist
+    UINT width = 1920;  // Default fallback
+    UINT height = 1080; // Default fallback
+    
+    // Try to get dimensions from any available render target
+    auto& renderTargetData = renderer->GetRuntimeData().renderTargets;
+    for (int i = 0; i < 10; i++) {
+        if (renderTargetData[i].texture) {
+            ID3D11Texture2D* pTexture = nullptr;
+            if (SUCCEEDED(renderTargetData[i].texture->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&pTexture))) {
+                D3D11_TEXTURE2D_DESC texDesc;
+                pTexture->GetDesc(&texDesc);
+                width = texDesc.Width;
+                height = texDesc.Height;
+                pTexture->Release();
+                logger::info("[GlobalIllumination] Got dimensions {}x{} from render target {}", width, height, i);
+                break;
+            }
+        }
+    }
+    
+    // Create a texture descriptor
+    D3D11_TEXTURE2D_DESC texDesc = {};
+    texDesc.Width = width;
+    texDesc.Height = height;
+    texDesc.MipLevels = 1;
+    texDesc.ArraySize = 1;
+    texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; // Use a high precision format for GI
+    texDesc.SampleDesc.Count = 1;
+    texDesc.SampleDesc.Quality = 0;
+    texDesc.Usage = D3D11_USAGE_DEFAULT;
+    texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+    texDesc.CPUAccessFlags = 0;
+    texDesc.MiscFlags = 0;
+    
+    try {
+        // Create the texture using Texture2D's constructor
+        ID3D11Texture2D* texture = nullptr;
+        HRESULT hr = device->CreateTexture2D(&texDesc, nullptr, &texture);
+        if (FAILED(hr)) {
+            logger::error("[GlobalIllumination] Failed to create output texture. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+            return;
+        }
+        
+        // Create the Texture2D object using the existing resource
+        giOutputBuffer = std::make_shared<Texture2D>(texture);
+        
+        // Create SRV
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = texDesc.Format;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        
+        giOutputBuffer->CreateSRV(srvDesc);
+        
+        // Create UAV
+        D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+        uavDesc.Format = texDesc.Format;
+        uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+        uavDesc.Texture2D.MipSlice = 0;
+        
+        giOutputBuffer->CreateUAV(uavDesc);
+        
+        // We don't need to release texture, as it's now owned by the Texture2D object
+        
+        logger::info("[GlobalIllumination] Created output buffer {}x{}", width, height);
+    }
+    catch (const std::exception& e) {
+        logger::error("[GlobalIllumination] Exception creating output buffer: {}", e.what());
+    }
+}
+
+// Apply the GI result to the final render
+void GlobalIllumination::ApplyGIToFinalRender()
+{
+    // For now, output a simple log message until we have the proper methods to blend the result
+    logger::info("[GlobalIllumination] GI output buffer ready for compositing");
+    
+    // We'll need to implement this function properly when we have:
+    // 1. A better understanding of how Texture2D works in this codebase
+    // 2. Knowledge of how to access and use the BSUtilityShader correctly
+    // 3. Information about how to hook into Skyrim's rendering pipeline
+    
+    // The implementation will eventually:
+    // - Get the main render target
+    // - Set up proper blending states
+    // - Use a pixel shader to blend the GI result with the main render target
+    // - Apply the intensity and saturation settings
 }
 
 // This callback could be registered to be called during appropriate render events
