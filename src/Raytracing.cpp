@@ -13,24 +13,24 @@
 // Core KickstartRT implementation
 namespace KickstartRTImpl
 {
-    // Direct access to the ExecuteContext
-    static KickstartRT::D3D11::ExecuteContext* g_executeContext = nullptr;
-    static bool g_initialized = false;
-    static uint32_t g_width = 0;
-    static uint32_t g_height = 0;
+// Direct access to the ExecuteContext
+static KickstartRT::D3D11::ExecuteContext* g_executeContext = nullptr;
+static bool g_initialized = false;
+static uint32_t g_width = 0;
+static uint32_t g_height = 0;
 
-    // Initialize KickstartRT
-    bool Initialize(ID3D11Device* device) {
-        if (!device) {
-            logger::error("[RT] Null device");
-            return false;
-        }
-        
-        // Already initialized
-        if (g_initialized) {
-            return true;
-        }
-        
+// Initialize KickstartRT
+bool Initialize(ID3D11Device* device) {
+    if (!device) {
+        logger::error("[RT] Null device");
+        return false;
+    }
+    
+    // Already initialized
+    if (g_initialized) {
+        return true;
+    }
+    
         try {
             // Default resolution in case we can't query the actual dimensions
             g_width = 1920;
@@ -46,9 +46,9 @@ namespace KickstartRTImpl
             HRESULT hr = device->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDevice);
             if (FAILED(hr)) {
                 logger::error("[RT] Failed to get DXGI device interface. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
-                return false;
-            }
-            
+        return false;
+    }
+    
             // Get the adapter
             IDXGIAdapter1* adapter1 = nullptr;
             Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
@@ -61,11 +61,11 @@ namespace KickstartRTImpl
             // Try to get dimensions from the primary output if desired
             Microsoft::WRL::ComPtr<IDXGIOutput> output;
             if (SUCCEEDED(adapter->EnumOutputs(0, output.GetAddressOf()))) {
-                DXGI_OUTPUT_DESC desc;
-                if (SUCCEEDED(output->GetDesc(&desc))) {
-                    RECT r = desc.DesktopCoordinates;
-                    g_width = r.right - r.left;
-                    g_height = r.bottom - r.top;
+                    DXGI_OUTPUT_DESC desc;
+                    if (SUCCEEDED(output->GetDesc(&desc))) {
+                        RECT r = desc.DesktopCoordinates;
+                        g_width = r.right - r.left;
+                        g_height = r.bottom - r.top;
                     logger::info("[RT] Detected display dimensions: {}x{}", g_width, g_height);
                 }
             }
@@ -82,11 +82,11 @@ namespace KickstartRTImpl
             logger::info("[RT] Successfully set DXGIAdapter1 in KickstartRT settings");
             
             // Configure other settings
-            settings.usingCommandQueue = KickstartRT::D3D11::ExecuteContext_InitSettings::UsingCommandQueue::Direct;
-            settings.supportedWorkingSet = 4u;
-            settings.descHeapSize = 8192u;
-            settings.uploadHeapSizeForVolatileConstantBuffers = 64u * 1024u;
-            
+        settings.usingCommandQueue = KickstartRT::D3D11::ExecuteContext_InitSettings::UsingCommandQueue::Direct;
+        settings.supportedWorkingSet = 4u;
+        settings.descHeapSize = 8192u;
+        settings.uploadHeapSizeForVolatileConstantBuffers = 64u * 1024u;
+        
             // Create the execute context - directly use the KickstartRT API
             KickstartRT::D3D11::ExecuteContext* exc = nullptr;
             KickstartRT::Status status = KickstartRT::D3D11::ExecuteContext::Init(
@@ -96,10 +96,10 @@ namespace KickstartRTImpl
                 
             // Check status first
             if (status != KickstartRT::Status::OK) {
-                logger::error("[RT] Failed to create context. Status: {}", static_cast<int>(status));
-                return false;
-            }
-            
+            logger::error("[RT] Failed to create context. Status: {}", static_cast<int>(status));
+            return false;
+        }
+        
             // Then check if context is null
             if (!exc) {
                 logger::error("[RT] Context creation returned OK but context is null");
@@ -107,52 +107,52 @@ namespace KickstartRTImpl
             }
             
             g_executeContext = exc;
-            g_initialized = true;
-            logger::info("[RT] KickstartRT initialized successfully");
-            
-            return true;
-        }
-        catch (const std::exception& e) {
-            logger::error("[RT] Exception during initialization: {}", e.what());
-            return false;
-        }
+        g_initialized = true;
+        logger::info("[RT] KickstartRT initialized successfully");
+        
+        return true;
     }
+    catch (const std::exception& e) {
+            logger::error("[RT] Exception during initialization: {}", e.what());
+        return false;
+    }
+}
 
-    // Shutdown KickstartRT
-    void Shutdown() {
+// Shutdown KickstartRT
+void Shutdown() {
         if (g_initialized && g_executeContext) {
             // Destroy context - directly use the KickstartRT API
             KickstartRT::Status status = KickstartRT::D3D11::ExecuteContext::Destruct(g_executeContext);
             if (status != KickstartRT::Status::OK) {
                 logger::error("[RT] Error destroying context. Status: {}", static_cast<int>(status));
             }
-                
-            g_executeContext = nullptr;
-            g_initialized = false;
-            
-            logger::info("[RT] KickstartRT shutdown complete");
-        }
+        
+        g_executeContext = nullptr;
+        g_initialized = false;
+        
+        logger::info("[RT] KickstartRT shutdown complete");
     }
+}
 
     // Check if KickstartRT is initialized
     bool IsInitialized() {
         return g_initialized && g_executeContext != nullptr;
-    }
+}
 
-    // Clean up resources without destroying the context
-    void CleanupResources() {
-        if (g_initialized && g_executeContext) {
-            g_executeContext->ReleaseDeviceResourcesImmediately();
-            logger::info("[RT] Resources cleaned up");
-        }
+// Clean up resources without destroying the context
+void CleanupResources() {
+    if (g_initialized && g_executeContext) {
+        g_executeContext->ReleaseDeviceResourcesImmediately();
+        logger::info("[RT] Resources cleaned up");
     }
+}
 
     // Core rendering functions - simplified implementations for now
     // In the future these will be expanded to use proper task scheduling
     bool GenerateGI(
         ID3D11ShaderResourceView* depthSRV,
-        ID3D11ShaderResourceView* normalSRV,
-        ID3D11UnorderedAccessView* outputUAV,
+               ID3D11ShaderResourceView* normalSRV,
+               ID3D11UnorderedAccessView* outputUAV,
         DirectX::XMFLOAT4X4 viewMatrix,
         DirectX::XMFLOAT4X4 projMatrix)
     {
@@ -361,12 +361,12 @@ namespace KickstartRTImpl
 
     // Register geometry with KickstartRT - simplified placeholder
     bool RegisterGeometryWithKickstartRT(ID3D11Buffer* vertexBuffer, ID3D11Buffer* indexBuffer)
-    {
-        if (!g_initialized || !g_executeContext) {
-            logger::error("[RT] Not initialized");
-            return false;
-        }
-        
+{
+    if (!g_initialized || !g_executeContext) {
+        logger::error("[RT] Not initialized");
+        return false;
+    }
+    
         if (!vertexBuffer || !indexBuffer) {
             logger::error("[RT] Invalid buffers for geometry registration");
             return false;
@@ -507,10 +507,10 @@ bool Raytracing::GetCurrentViewAndProjectionMatrices(DirectX::XMFLOAT4X4& viewMa
 // Direct pass-through to KickstartRTImpl
 bool Raytracing::GenerateGI(
     ID3D11ShaderResourceView* depthSRV,
-    ID3D11ShaderResourceView* normalSRV,
-    ID3D11UnorderedAccessView* outputUAV,
-    const DirectX::XMFLOAT4X4& viewMatrix,
-    const DirectX::XMFLOAT4X4& projMatrix)
+                       ID3D11ShaderResourceView* normalSRV, 
+                       ID3D11UnorderedAccessView* outputUAV,
+                       const DirectX::XMFLOAT4X4& viewMatrix,
+                       const DirectX::XMFLOAT4X4& projMatrix) 
 {
     // Check if we're enabled
     if (!IsEnabled()) {
@@ -538,12 +538,12 @@ bool Raytracing::GenerateGI(
 
 // Direct pass-through to KickstartRTImpl
 bool Raytracing::GenerateReflections(
-    ID3D11ShaderResourceView* depthSRV,
-    ID3D11ShaderResourceView* normalSRV,
+                  ID3D11ShaderResourceView* depthSRV,
+                  ID3D11ShaderResourceView* normalSRV,
     ID3D11ShaderResourceView* roughnessSRV,
     ID3D11UnorderedAccessView* outputUAV,
-    const DirectX::XMFLOAT4X4& viewMatrix,
-    const DirectX::XMFLOAT4X4& projMatrix)
+                  const DirectX::XMFLOAT4X4& viewMatrix,
+                  const DirectX::XMFLOAT4X4& projMatrix) 
 {
     // Check if we're enabled
     if (!IsEnabled()) {
