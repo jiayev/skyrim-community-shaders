@@ -199,13 +199,43 @@ void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuf
     
     // Get proper matrices from Skyrim's renderer
     if (auto renderer = globals::game::renderer) {
-        // For now, use identity matrices since accessing the actual view/projection matrices
-        // would require more complex code to dereference the perFrameBuffer properly
-        DirectX::XMStoreFloat4x4(&viewMatrix, DirectX::XMMatrixIdentity());
-        DirectX::XMStoreFloat4x4(&projMatrix, DirectX::XMMatrixIdentity());
+        // Try to get matrices from per-frame constant buffer
+        bool gotMatrices = false;
         
-        logger::warn("[GlobalIllumination] Using identity matrices for view and projection");
-        // In a future version, we can implement proper matrix extraction when we know the correct buffer layout
+        // Get the per-frame buffer from globals
+        auto perFrameBuffer = *globals::game::perFrame.get();
+        if (perFrameBuffer) {
+            // Map the buffer to read its contents
+            ID3D11DeviceContext* context = globals::d3d::context;
+            if (context) {
+                D3D11_MAPPED_SUBRESOURCE mapped;
+                if (SUCCEEDED(context->Map(perFrameBuffer, 0, D3D11_MAP_READ, 0, &mapped))) {
+                    // The per-frame buffer contains view and projection matrices
+                    // Based on Skyrim's shader constant layout
+                    struct PerFrameBuffer {
+                        DirectX::XMFLOAT4X4 viewMatrix;         // Offset 0
+                        DirectX::XMFLOAT4X4 projMatrix;         // Offset 64
+                        // Other data follows...
+                    };
+                    
+                    const PerFrameBuffer* frameData = reinterpret_cast<const PerFrameBuffer*>(mapped.pData);
+                    viewMatrix = frameData->viewMatrix;
+                    projMatrix = frameData->projMatrix;
+                    
+                    context->Unmap(perFrameBuffer, 0);
+                    
+                    gotMatrices = true;
+                    logger::info("[GlobalIllumination] Successfully extracted view/projection matrices from per-frame buffer");
+                }
+            }
+        }
+        
+        // If we couldn't get matrices from buffer, fall back to identity matrices
+        if (!gotMatrices) {
+            logger::warn("[GlobalIllumination] Could not extract matrices from per-frame buffer, using identity matrices");
+            DirectX::XMStoreFloat4x4(&viewMatrix, DirectX::XMMatrixIdentity());
+            DirectX::XMStoreFloat4x4(&projMatrix, DirectX::XMMatrixIdentity());
+        }
     } else {
         logger::warn("[GlobalIllumination] Renderer not available, using identity matrices");
         DirectX::XMStoreFloat4x4(&viewMatrix, DirectX::XMMatrixIdentity());
@@ -456,19 +486,143 @@ void GlobalIllumination::CreateGIOutputBuffer()
 // Apply the GI result to the final render
 void GlobalIllumination::ApplyGIToFinalRender()
 {
-    // For now, output a simple log message until we have the proper methods to blend the result
-    logger::info("[GlobalIllumination] GI output buffer ready for compositing");
+    // Check if we have the output buffer
+    if (!giOutputBuffer || !giOutputBuffer->srv) {
+        logger::error("[GlobalIllumination] No GI output buffer available for compositing");
+        return;
+    }
     
-    // We'll need to implement this function properly when we have:
-    // 1. A better understanding of how Texture2D works in this codebase
-    // 2. Knowledge of how to access and use the BSUtilityShader correctly
-    // 3. Information about how to hook into Skyrim's rendering pipeline
+    // Get required resources
+    auto device = globals::d3d::device;
+    auto context = globals::d3d::context;
+    auto renderer = globals::game::renderer;
+    auto utilityShader = globals::game::utilityShader;
     
-    // The implementation will eventually:
-    // - Get the main render target
-    // - Set up proper blending states
-    // - Use a pixel shader to blend the GI result with the main render target
-    // - Apply the intensity and saturation settings
+    // Check for required resources
+    if (!device || !context || !renderer || !utilityShader) {
+        logger::error("[GlobalIllumination] Missing required resources for GI compositing");
+        return;
+    }
+    
+    // Get the main render target
+    int mainRTIndex = RE::RENDER_TARGETS::kMAIN;
+    auto& mainRT = renderer->GetRuntimeData().renderTargets[mainRTIndex];
+    if (!mainRT.texture) {
+        logger::error("[GlobalIllumination] Main render target not available");
+        return;
+    }
+    
+    ID3D11RenderTargetView* rtv = mainRT.RTV;
+    if (!rtv) {
+        logger::error("[GlobalIllumination] Main render target view not available");
+        return;
+    }
+    
+    logger::info("[GlobalIllumination] Applying GI to final render with intensity {}", 
+        settings.AdaptToScene ? effectiveIntensity : settings.Intensity);
+    
+    // Save current render targets and viewport
+    ID3D11RenderTargetView* previousRTV = nullptr;
+    ID3D11DepthStencilView* previousDSV = nullptr;
+    context->OMGetRenderTargets(1, &previousRTV, &previousDSV);
+    
+    D3D11_VIEWPORT previousViewport;
+    UINT numViewports = 1;
+    context->RSGetViewports(&numViewports, &previousViewport);
+    
+    // Set up viewport to match the render target
+    D3D11_VIEWPORT viewport;
+    D3D11_TEXTURE2D_DESC texDesc;
+    
+    ID3D11Texture2D* texture = nullptr;
+    mainRT.texture->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&texture);
+    if (texture) {
+        texture->GetDesc(&texDesc);
+        viewport.TopLeftX = 0.0f;
+        viewport.TopLeftY = 0.0f;
+        viewport.Width = (float)texDesc.Width;
+        viewport.Height = (float)texDesc.Height;
+        viewport.MinDepth = 0.0f;
+        viewport.MaxDepth = 1.0f;
+        texture->Release();
+    } else {
+        // Fall back to previous viewport dimensions
+        viewport = previousViewport;
+    }
+    
+    // Set the main render target
+    context->OMSetRenderTargets(1, &rtv, nullptr);
+    context->RSSetViewports(1, &viewport);
+    
+    // Define constant buffer for shader parameters
+    struct CompositingParams {
+        float intensity;      // overall intensity of GI effect
+        float saturation;     // color saturation control
+        float padding[2];     // padding to 16 bytes
+    };
+    
+    // Create/update constant buffer
+    ID3D11Buffer* constantBuffer = nullptr;
+    
+    D3D11_BUFFER_DESC cbDesc = {};
+    cbDesc.ByteWidth = sizeof(CompositingParams);
+    cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+    cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    
+    HRESULT hr = device->CreateBuffer(&cbDesc, nullptr, &constantBuffer);
+    if (SUCCEEDED(hr) && constantBuffer) {
+        // Update constant buffer with current settings
+        D3D11_MAPPED_SUBRESOURCE mappedResource;
+        if (SUCCEEDED(context->Map(constantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource))) {
+            CompositingParams* data = (CompositingParams*)mappedResource.pData;
+            data->intensity = settings.AdaptToScene ? effectiveIntensity : settings.Intensity;
+            data->saturation = settings.Saturation;
+            context->Unmap(constantBuffer, 0);
+        }
+        
+        // Bind constant buffer
+        context->PSSetConstantBuffers(0, 1, &constantBuffer);
+    }
+    
+    // Bind the GI output buffer as a shader resource
+    ID3D11ShaderResourceView* srvs[] = { giOutputBuffer->srv.get() };
+    context->PSSetShaderResources(0, 1, srvs);
+    
+    // Use the utility shader to do a simple blend of the GI with the main render target
+    // This is a simple additive blend for now
+    logger::info("[GlobalIllumination] Compositing GI buffer with main render target");
+    
+    // Draw a fullscreen quad to apply the effect
+    // TODO: Add a proper compositing shader and adjust this when we have a better understanding
+    // of the BSUtilityShader interface and capabilities
+    if (utilityShader) {
+        utilityShader->RenderScreenShape();
+    } else {
+        logger::error("[GlobalIllumination] BSUtilityShader not available for compositing");
+    }
+    
+    // Clean up
+    // Clear bound resources
+    ID3D11ShaderResourceView* nullSRVs[] = { nullptr };
+    context->PSSetShaderResources(0, 1, nullSRVs);
+    
+    if (constantBuffer) {
+        constantBuffer->Release();
+    }
+    
+    // Restore previous render targets and viewport
+    context->OMSetRenderTargets(1, &previousRTV, previousDSV);
+    context->RSSetViewports(1, &previousViewport);
+    
+    if (previousRTV) {
+        previousRTV->Release();
+    }
+    if (previousDSV) {
+        previousDSV->Release();
+    }
+    
+    logger::info("[GlobalIllumination] GI compositing complete");
 }
 
 // This callback could be registered to be called during appropriate render events
