@@ -289,16 +289,20 @@ namespace KickstartRTImpl
      * Register a Skyrim mesh for raytracing
      * 
      * Takes a Skyrim BSTriShape and registers it with KickstartRT.
+     * Modified to accept a task container rather than creating a new one.
      * 
      * @param triShape Skyrim mesh to register
      * @param name Name identifier for the geometry
      * @param outHandle Pointer to receive the geometry handle
+     * @param taskContainer Existing task container to schedule tasks
      * @return True if registration was successful, false otherwise
      */
-    bool RegisterSkyrimMesh(RE::BSTriShape* triShape, const std::string& name, KickstartRT::D3D11::GeometryHandle* outHandle)
+    bool RegisterSkyrimMeshBatched(RE::BSTriShape* triShape, const std::string& name, 
+                                 KickstartRT::D3D11::GeometryHandle* outHandle,
+                                 KickstartRT::D3D11::TaskContainer* taskContainer)
     {
-        if (!g_executeContext || !triShape || !outHandle) {
-            logger::error("[RT] Invalid parameters for Skyrim mesh registration");
+        if (!g_executeContext || !triShape || !outHandle || !taskContainer) {
+            logger::error("[RT] Invalid parameters for batched Skyrim mesh registration");
             return false;
         }
         
@@ -377,17 +381,130 @@ namespace KickstartRTImpl
                 return false;
             }
             
-            logger::info("[RT] Created vertex and index buffers for Skyrim mesh '{}'", name);
+            logger::debug("[RT] Created buffers for Skyrim mesh '{}'", name);
             
-            // Register with KickstartRT using our existing function
-            return RegisterGeometryWithKickstartRT(vertexBuffer.Get(), indexBuffer.Get(), name, outHandle);
+            // Create a handle for the geometry
+            KickstartRT::D3D11::GeometryHandle handle;
+            auto status = g_executeContext->CreateGeometryHandles(&handle, 1);
+            if (status != KickstartRT::Status::OK) {
+                logger::error("[RT] Failed to create geometry handle. Status: {}", static_cast<int>(status));
+                return false;
+            }
+            
+            // Setup geometry task
+            KickstartRT::D3D11::BVHTask::GeometryTask geomTask;
+            geomTask.taskOperation = KickstartRT::D3D11::BVHTask::TaskOperation::Register;
+            geomTask.handle = handle;
+            geomTask.input.type = KickstartRT::D3D11::BVHTask::GeometryInput::Type::TrianglesIndexed;
+            geomTask.input.allowUpdate = true;
+            
+            // Add geometry component
+            KickstartRT::D3D11::BVHTask::GeometryInput::GeometryComponent component;
+            
+            // Configure vertex buffer
+            component.vertexBuffer.resource = vertexBuffer.Get();
+            component.vertexBuffer.format = DXGI_FORMAT_R32G32B32_FLOAT;
+            component.vertexBuffer.offsetInBytes = 0;
+            component.vertexBuffer.strideInBytes = vbDesc.StructureByteStride > 0 ? 
+                vbDesc.StructureByteStride : 12;
+            component.vertexBuffer.count = vbDesc.ByteWidth / component.vertexBuffer.strideInBytes;
+            
+            // Configure index buffer
+            component.indexBuffer.resource = indexBuffer.Get();
+            component.indexBuffer.format = DXGI_FORMAT_R16_UINT;
+            component.indexBuffer.offsetInBytes = 0;
+            component.indexBuffer.count = ibDesc.ByteWidth / sizeof(uint16_t);
+            
+            // Add component to geometry task
+            geomTask.input.components.push_back(component);
+            
+            // Schedule the task in the provided container
+            taskContainer->ScheduleBVHTask(&geomTask);
+            
+            // Store the handle and return it - we'll store permanently after successful execution
+            g_geometryHandles[name] = handle;
+            *outHandle = handle;
+            
+            return true;
         }
         catch (const std::exception& e) {
-            logger::error("[RT] Exception during Skyrim mesh registration: {}", e.what());
+            logger::error("[RT] Exception during batched geometry registration: {}", e.what());
             return false;
         }
         
         return false;
+    }
+
+    /**
+     * Create an instance of a geometry in the scene, using a shared task container
+     * 
+     * @param geometryHandle Handle to the registered geometry
+     * @param transform Transformation matrix (position, rotation, scale)
+     * @param name Name identifier for the instance
+     * @param outHandle Pointer to receive the instance handle
+     * @param taskContainer Existing task container to schedule tasks
+     * @return True if instance creation was successful, false otherwise
+     */
+    bool CreateInstanceBatched(KickstartRT::D3D11::GeometryHandle& geometryHandle, 
+                              const DirectX::XMFLOAT4X4& transform, 
+                              const std::string& name, 
+                              KickstartRT::D3D11::InstanceHandle* outHandle,
+                              KickstartRT::D3D11::TaskContainer* taskContainer)
+    {
+        if (!g_executeContext || !outHandle || !taskContainer) {
+            logger::error("[RT] Invalid parameters for batched instance creation");
+            return false;
+        }
+        
+        // Check if we already have a handle for this instance
+        auto it = g_instanceHandles.find(name);
+        if (it != g_instanceHandles.end()) {
+            *outHandle = it->second;
+            return true;
+        }
+        
+        try {
+            // Create instance handle
+            KickstartRT::D3D11::InstanceHandle handle;
+            auto status = g_executeContext->CreateInstanceHandles(&handle, 1);
+            if (status != KickstartRT::Status::OK) {
+                logger::error("[RT] Failed to create instance handle. Status: {}", static_cast<int>(status));
+                return false;
+            }
+            
+            // Create instance task
+            KickstartRT::D3D11::BVHTask::InstanceTask instanceTask;
+            instanceTask.taskOperation = KickstartRT::D3D11::BVHTask::TaskOperation::Register;
+            instanceTask.handle = handle;
+            
+            // Set up instance data
+            std::wstring wideName(name.begin(), name.end());
+            instanceTask.input.name = wideName.c_str();
+            instanceTask.input.geomHandle = geometryHandle;
+            instanceTask.input.participatingInTLAS = true;
+            
+            // Convert transform matrix
+            KickstartRT::Math::Float_3x4 ksTransform = {};
+            for (int row = 0; row < 3; row++) {
+                for (int col = 0; col < 4; col++) {
+                    ksTransform.m[row][col] = transform.m[row][col];
+                }
+            }
+            instanceTask.input.transform = ksTransform;
+            
+            // Schedule task in the provided container
+            taskContainer->ScheduleBVHTask(&instanceTask);
+            
+            // Store the handle - we'll store permanently after successful execution
+            g_instanceHandles[name] = handle;
+            *outHandle = handle;
+            
+            return true;
+        }
+        catch (const std::exception& e) {
+            logger::error("[RT] Exception during batched instance creation: {}", e.what());
+            return false;
+        }
     }
     
     /**
@@ -404,6 +521,13 @@ namespace KickstartRTImpl
         int registeredCount = 0;
         int processedCount = 0;
         
+        // Create a single task container for all operations this frame
+        auto taskContainer = g_executeContext->CreateTaskContainer();
+        if (!taskContainer) {
+            logger::error("[RT] Failed to create task container for scene geometry collection");
+            return 0;
+        }
+        
         // Get the root node of the scene using the correct method
         auto worldRoot = RE::Main::WorldRootNode();
         if (!worldRoot) {
@@ -413,17 +537,38 @@ namespace KickstartRTImpl
         
         logger::debug("[RT] Starting scene geometry collection...");
         
+        // Wait for previous GPU operations to complete before starting new ones
+        // This helps avoid fence timeout/stall issues
+        if (g_renderFence) {
+            try {
+                auto context = globals::d3d::context;
+                if (context) {
+                    Microsoft::WRL::ComPtr<ID3D11DeviceContext4> context4;
+                    HRESULT hr = context->QueryInterface(__uuidof(ID3D11DeviceContext4), &context4);
+                    if (SUCCEEDED(hr)) {
+                        // Wait for most recent fence before collecting new geometry
+                        // This ensures previous submissions are fully processed
+                        context4->Wait(g_renderFence.Get(), g_fenceValue - 1);
+                        logger::debug("[RT] Successfully waited for previous GPU operations, fence value: {}", g_fenceValue - 1);
+                    }
+                }
+            }
+            catch (const std::exception& e) {
+                logger::warn("[RT] Exception during fence wait: {}", e.what());
+            }
+        }
+        
         // Get player position for distance-based culling
         RE::NiPoint3 playerPosition;
-        float maxDistance = 2048.0f; // Reasonable culling distance
+        float maxDistance = 512.0f; // Reduced from 2048.0f for better performance
         
         if (auto player = RE::PlayerCharacter::GetSingleton()) {
             playerPosition = player->GetPosition();
         }
         
         // Process only a limited number of objects per frame
-        const int MAX_PROCESSED_PER_FRAME = 1;
-        const int MAX_REGISTERED_TOTAL = 1; // Lower limit for dynamic updates
+        const int MAX_PROCESSED_PER_FRAME = updateDynamicOnly ? 20 : 100; // Reduced for better performance
+        const int MAX_REGISTERED_TOTAL = updateDynamicOnly ? 10 : 20;     // Significantly reduced
         
         // Create a timestamp string to uniquely identify this collection pass
         static uint32_t collectionCounter = 0;
@@ -433,6 +578,19 @@ namespace KickstartRTImpl
         // Keep track of what's been processed this frame
         static std::unordered_set<RE::BSGeometry*> processedThisFrame;
         processedThisFrame.clear();
+        
+        // Structure to hold geometry candidates with their importance metrics
+        struct GeometryCandidate {
+            RE::BSTriShape* triShape;
+            float distance;
+            float radius;
+            float importance; // Higher is more important
+            std::string name;
+        };
+        
+        // Vector to collect candidates before sorting by importance
+        std::vector<GeometryCandidate> candidates;
+        candidates.reserve(MAX_PROCESSED_PER_FRAME);
         
         // Process actors (dynamic objects) first if requested
         if (updateDynamicOnly) {
@@ -459,6 +617,11 @@ namespace KickstartRTImpl
                                 processedThisFrame.insert(geometry);
                                 processedCount++;
                                 
+                                // Early exit if we're hitting our per-frame processing limit
+                                if (processedCount > MAX_PROCESSED_PER_FRAME) {
+                                    return RE::BSVisit::BSVisitControl::kStop;
+                                }
+                                
                                 // Skip invalid or small geometries
                                 if (!geometry || geometry->worldBound.radius < 5.0f) {
                                     return RE::BSVisit::BSVisitControl::kContinue;
@@ -469,57 +632,25 @@ namespace KickstartRTImpl
                                 if (!triShape) {
                                     return RE::BSVisit::BSVisitControl::kContinue;
                                 }
+
+                                // Calculate distance from player
+                                float distance = (geometry->world.translate - playerPosition).Length();
+                                
+                                // Use size/distance ratio as importance - larger and closer objects are more important
+                                float importance = geometry->worldBound.radius / (distance + 1.0f);
                                 
                                 // Create a unique name for this geometry 
-                                // Include actor ID for better identification
                                 std::string name = "Actor_" + std::to_string(actor->formID) + "_" + 
-                                                 std::to_string(registeredCount) + "_" + timeStamp;
+                                                 std::to_string(candidates.size()) + "_" + timeStamp;
                                 
-                                // The rest of processing is the same...
-                                KickstartRT::D3D11::GeometryHandle handle;
-                                if (RegisterSkyrimMesh(triShape, name, &handle)) {
-                                    registeredCount++;
-                                    
-                                    // Get the world transform from the geometry
-                                    DirectX::XMFLOAT4X4 worldTransform;
-                                    
-                                    // Access transform directly from NiAVObject's world transform
-                                    const RE::NiTransform& transform = geometry->world;
-                                    
-                                    // NiMatrix3 to upper 3x3 of XMFLOAT4X4
-                                    worldTransform._11 = transform.rotate.entry[0][0];
-                                    worldTransform._12 = transform.rotate.entry[0][1];
-                                    worldTransform._13 = transform.rotate.entry[0][2];
-                                    worldTransform._14 = 0.0f;
-                                    
-                                    worldTransform._21 = transform.rotate.entry[1][0];
-                                    worldTransform._22 = transform.rotate.entry[1][1];
-                                    worldTransform._23 = transform.rotate.entry[1][2];
-                                    worldTransform._24 = 0.0f;
-                                    
-                                    worldTransform._31 = transform.rotate.entry[2][0];
-                                    worldTransform._32 = transform.rotate.entry[2][1];
-                                    worldTransform._33 = transform.rotate.entry[2][2];
-                                    worldTransform._34 = 0.0f;
-                                    
-                                    // Position to translation component (last row)
-                                    worldTransform._41 = transform.translate.x;
-                                    worldTransform._42 = transform.translate.y;
-                                    worldTransform._43 = transform.translate.z;
-                                    worldTransform._44 = 1.0f;
-                                    
-                                    // Create an instance with the world transform
-                                    KickstartRT::D3D11::InstanceHandle instanceHandle;
-                                    if (CreateInstance(handle, worldTransform, name + "_Instance", &instanceHandle)) {
-                                        // Reduced logging to debug only
-                                        logger::debug("[RT] Created instance for dynamic actor geometry: {}", name);
-                                    }
-                                    
-                                    // Check if we've hit our limit
-                                    if (registeredCount >= MAX_REGISTERED_TOTAL) {
-                                        return RE::BSVisit::BSVisitControl::kStop;
-                                    }
-                                }
+                                // Add to candidates
+                                candidates.push_back({
+                                    triShape,
+                                    distance,
+                                    geometry->worldBound.radius,
+                                    importance,
+                                    name
+                                });
                                 
                                 return RE::BSVisit::BSVisitControl::kContinue;
                             });
@@ -527,65 +658,97 @@ namespace KickstartRTImpl
                     }
                 }
             }
-            
-            // Log only in debug mode
-            logger::debug("[RT] Dynamic object collection complete. Registered {} objects (processed {})", 
-                registeredCount, processedCount);
-            return registeredCount;
+        } else {
+            // For full updates, process the entire scene graph with prioritization  
+            // Use BSVisit to traverse the scene graph and collect candidates
+            RE::BSVisit::TraverseScenegraphGeometries(reinterpret_cast<RE::NiAVObject*>(worldRoot), [&](RE::BSGeometry* geometry) {
+                // Skip if we've already processed this geometry
+                if (processedThisFrame.count(geometry) > 0) {
+                    return RE::BSVisit::BSVisitControl::kContinue;
+                }
+                
+                processedThisFrame.insert(geometry);
+                
+                // Skip invalid geometries
+                if (!geometry) {
+                    return RE::BSVisit::BSVisitControl::kContinue;
+                }
+                
+                // Early exit if we're hitting our per-frame processing limit
+                processedCount++;
+                if (processedCount > MAX_PROCESSED_PER_FRAME) {
+                    logger::debug("[RT] Reached per-frame processing limit ({}), stopping collection", MAX_PROCESSED_PER_FRAME);
+                    return RE::BSVisit::BSVisitControl::kStop;
+                }
+                
+                // Progressive level of detail - scale minimum object size with distance
+                float distance = (geometry->world.translate - playerPosition).Length();
+                float minObjectSize = 10.0f + (distance * 0.02f);
+                
+                // Filter out small geometries
+                if (geometry->worldBound.radius < minObjectSize) {
+                    return RE::BSVisit::BSVisitControl::kContinue;
+                }
+                
+                // Distance-based culling
+                if (distance > maxDistance) {
+                    return RE::BSVisit::BSVisitControl::kContinue;
+                }
+                
+                // Convert to BSTriShape if possible
+                auto triShape = geometry->AsTriShape();
+                if (!triShape) {
+                    return RE::BSVisit::BSVisitControl::kContinue;
+                }
+                
+                // Use size/distance ratio as importance - larger and closer objects are more important
+                float importance = geometry->worldBound.radius / (distance + 1.0f);
+                
+                // Create a unique name for this geometry
+                std::string name = "SceneObj_" + std::to_string(candidates.size()) + "_" + timeStamp;
+                
+                // Add to candidates
+                candidates.push_back({
+                    triShape,
+                    distance,
+                    geometry->worldBound.radius,
+                    importance,
+                    name
+                });
+                
+                return RE::BSVisit::BSVisitControl::kContinue;
+            });
         }
         
-        // For full updates, process the entire scene graph as before
-        // Use BSVisit to traverse the scene graph
-        RE::BSVisit::TraverseScenegraphGeometries(reinterpret_cast<RE::NiAVObject*>(worldRoot), [&](RE::BSGeometry* geometry) {
-            // Skip if we've already processed this geometry
-            if (processedThisFrame.count(geometry) > 0) {
-                return RE::BSVisit::BSVisitControl::kContinue;
-            }
+        // Sort candidates by importance (highest first)
+        std::sort(candidates.begin(), candidates.end(), 
+                  [](const GeometryCandidate& a, const GeometryCandidate& b) {
+                      return a.importance > b.importance;
+                  });
+        
+        // Register only the most important candidates up to the limit
+        size_t registerCount = std::min(candidates.size(), static_cast<size_t>(MAX_REGISTERED_TOTAL));
+        
+        logger::info("[RT] Collected {} potential objects, registering top {} by importance", 
+                    candidates.size(), registerCount);
+        
+        // Schedule a BVH build task first
+        KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
+        bvhBuildTask.buildTLAS = true;
+        bvhBuildTask.maxBlasBuildCount = 8u;
+        taskContainer->ScheduleBVHTask(&bvhBuildTask);
+        
+        // Register the candidates - now using the batched approach
+        for (size_t i = 0; i < registerCount; i++) {
+            const auto& candidate = candidates[i];
             
-            processedThisFrame.insert(geometry);
-            
-            // Skip invalid geometries
-            if (!geometry) {
-                return RE::BSVisit::BSVisitControl::kContinue;
-            }
-            
-            // Early exit if we're hitting our per-frame processing limit
-            processedCount++;
-            if (processedCount > MAX_PROCESSED_PER_FRAME) {
-                logger::debug("[RT] Reached per-frame processing limit ({}), stopping collection", MAX_PROCESSED_PER_FRAME);
-                return RE::BSVisit::BSVisitControl::kStop;
-            }
-            
-            // Filter out small geometries
-            if (geometry->worldBound.radius < 10.0f) {
-                return RE::BSVisit::BSVisitControl::kContinue;
-            }
-            
-            // Distance-based culling
-            float distance = (geometry->world.translate - playerPosition).Length();
-            if (distance > maxDistance) {
-                return RE::BSVisit::BSVisitControl::kContinue;
-            }
-            
-            // Convert to BSTriShape if possible
-            auto triShape = geometry->AsTriShape();
-            if (!triShape) {
-                return RE::BSVisit::BSVisitControl::kContinue;
-            }
-            
-            // Create a unique name for this geometry
-            std::string name = "SceneObj_" + std::to_string(registeredCount) + "_" + timeStamp;
-            
-            // Register the mesh
             KickstartRT::D3D11::GeometryHandle handle;
-            if (RegisterSkyrimMesh(triShape, name, &handle)) {
-                registeredCount++;
-                
+            if (RegisterSkyrimMeshBatched(candidate.triShape, candidate.name, &handle, taskContainer)) {
                 // Get the world transform from the geometry
                 DirectX::XMFLOAT4X4 worldTransform;
                 
                 // Access transform directly from NiAVObject's world member
-                const RE::NiTransform& transform = geometry->world;
+                const RE::NiTransform& transform = candidate.triShape->world;
                 
                 // NiMatrix3 to upper 3x3 of XMFLOAT4X4
                 worldTransform._11 = transform.rotate.entry[0][0];
@@ -609,24 +772,37 @@ namespace KickstartRTImpl
                 worldTransform._43 = transform.translate.z;
                 worldTransform._44 = 1.0f;
                 
-                // Create an instance with the world transform
+                // Create an instance with the world transform - also batched
                 KickstartRT::D3D11::InstanceHandle instanceHandle;
-                if (CreateInstance(handle, worldTransform, name + "_Instance", &instanceHandle)) {
-                    // Reduced logging to debug only for better performance
-                    logger::debug("[RT] Created instance for geometry: {}", name);
-                }
-                
-                // Limit to a reasonable number of objects for performance
-                if (registeredCount >= MAX_REGISTERED_TOTAL) {
-                    logger::debug("[RT] Reached geometry limit ({}), stopping collection", MAX_REGISTERED_TOTAL);
-                    return RE::BSVisit::BSVisitControl::kStop;
+                if (CreateInstanceBatched(handle, worldTransform, candidate.name + "_Instance", &instanceHandle, taskContainer)) {
+                    registeredCount++;
+                    
+                    // Log prioritization info for debugging
+                    logger::debug("[RT] Scheduled registration for object: radius={:.1f}, dist={:.1f}, importance={:.4f}", 
+                        candidate.radius, candidate.distance, candidate.importance);
                 }
             }
-            
-            return RE::BSVisit::BSVisitControl::kContinue;
-        });
+        }
         
-        // Reduced logging to info level (not spamming every frame)
+        // Execute the single task container with all operations
+        if (registeredCount > 0) {
+            logger::info("[RT] Executing batch of {} registration operations", registeredCount);
+            if (ExecuteTaskContainer(taskContainer, true, 8u)) {
+                logger::info("[RT] Successfully executed all scheduled geometry tasks");
+            } else {
+                logger::error("[RT] Failed to execute geometry tasks");
+                // If execution failed, clear the temporary handles we added
+                for (const auto& candidate : candidates) {
+                    g_geometryHandles.erase(candidate.name);
+                    g_instanceHandles.erase(candidate.name + "_Instance");
+                }
+                registeredCount = 0;
+            }
+        } else {
+            // Clean up the task container if we didn't use it
+            logger::debug("[RT] No objects to register, skipping execution");
+        }
+        
         logger::info("[RT] Scene geometry collection complete. Registered {} objects (processed {})", 
             registeredCount, processedCount);
         return registeredCount;
