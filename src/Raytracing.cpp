@@ -103,9 +103,13 @@ bool RegisterGeometryWithKickstartRT(ID3D11Buffer* vertexBuffer, ID3D11Buffer* i
         taskContainer->ScheduleBVHTask(&geomTask);
         
         // Execute the GPU task
-        auto execStatus = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
-        if (execStatus != KickstartRT::Status::OK) {
-            logger::error("[RT] Failed to execute geometry registration task. Status: {}", static_cast<int>(execStatus));
+        KickstartRT::D3D11::BuildGPUTaskInput taskInput1 = {};
+        taskInput1.geometryTaskFirst = true;
+        taskInput1.maxBlasBuildCount = 16u;
+        
+        auto execStatus1 = g_executeContext->InvokeGPUTask(taskContainer, &taskInput1);
+        if (execStatus1 != KickstartRT::Status::OK) {
+            logger::error("[RT] Failed to execute geometry registration task. Status: {}", static_cast<int>(execStatus1));
             return false;
         }
         
@@ -180,9 +184,13 @@ bool CreateInstance(KickstartRT::D3D11::GeometryHandle& geometryHandle, const Di
         taskContainer->ScheduleBVHTask(&instanceTask);
         
         // Execute the GPU task
-        auto execStatus = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
-        if (execStatus != KickstartRT::Status::OK) {
-            logger::error("[RT] Failed to execute instance creation task. Status: {}", static_cast<int>(execStatus));
+        KickstartRT::D3D11::BuildGPUTaskInput taskInput2 = {};
+        taskInput2.geometryTaskFirst = true;
+        taskInput2.maxBlasBuildCount = 16u;
+        
+        auto execStatus2 = g_executeContext->InvokeGPUTask(taskContainer, &taskInput2);
+        if (execStatus2 != KickstartRT::Status::OK) {
+            logger::error("[RT] Failed to execute instance creation task. Status: {}", static_cast<int>(execStatus2));
             return false;
         }
         
@@ -236,9 +244,12 @@ bool UpdateInstanceTransform(KickstartRT::D3D11::InstanceHandle& instanceHandle,
         taskContainer->ScheduleBVHTask(&instanceTask);
         
         // Execute the GPU task
-        auto execStatus = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
-        if (execStatus != KickstartRT::Status::OK) {
-            logger::error("[RT] Failed to execute transform update task. Status: {}", static_cast<int>(execStatus));
+        KickstartRT::D3D11::BuildGPUTaskInput taskInput3 = {};
+        taskInput3.geometryTaskFirst = true;
+        taskInput3.maxBlasBuildCount = 16u;
+        auto execStatus3 = g_executeContext->InvokeGPUTask(taskContainer, &taskInput3);
+        if (execStatus3 != KickstartRT::Status::OK) {
+            logger::error("[RT] Failed to execute transform update task. Status: {}", static_cast<int>(execStatus3));
             return false;
         }
         
@@ -541,26 +552,32 @@ void CleanupResources() {
             d3dContext->FinishCommandList(false, &commandList);
 
             if (commandList) {
-                auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
+                KickstartRT::D3D11::BuildGPUTaskInput taskInput4 = {};
+                taskInput4.geometryTaskFirst = true;
+                taskInput4.maxBlasBuildCount = 16u;
+                auto status4 = g_executeContext->InvokeGPUTask(taskContainer, &taskInput4);
                 commandList->Release();
                 
-                if (status == KickstartRT::Status::OK) {
+                if (status4 == KickstartRT::Status::OK) {
                     logger::info("[KickstartRTImpl] Successfully generated GI");
                     return true;
                 } else {
-                    logger::error("[KickstartRTImpl] Failed to execute GI task: {}", static_cast<int>(status));
+                    logger::error("[KickstartRTImpl] Failed to execute GI task: {}", static_cast<int>(status4));
                     return false;
                 }
             } else {
                 // Fall back to direct execution without command lists if we couldn't create one
                 logger::warn("[KickstartRTImpl] Could not create command list, executing directly");
-                auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
+                KickstartRT::D3D11::BuildGPUTaskInput taskInput5 = {};
+                taskInput5.geometryTaskFirst = true;
+                taskInput5.maxBlasBuildCount = 16u;
+                auto status5 = g_executeContext->InvokeGPUTask(taskContainer, &taskInput5);
                 
-                if (status == KickstartRT::Status::OK) {
+                if (status5 == KickstartRT::Status::OK) {
                     logger::info("[KickstartRTImpl] Successfully generated GI (direct execution)");
                     return true;
                 } else {
-                    logger::error("[KickstartRTImpl] Failed to execute GI task: {}", static_cast<int>(status));
+                    logger::error("[KickstartRTImpl] Failed to execute GI task: {}", static_cast<int>(status5));
                     return false;
                 }
             }
@@ -721,13 +738,16 @@ void CleanupResources() {
             if (outputResource) outputResource->Release();
             
             // Execute GPU task - this is where KickstartRT actually processes all scheduled tasks
-            auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
+            KickstartRT::D3D11::BuildGPUTaskInput taskInput6 = {};
+            taskInput6.geometryTaskFirst = true;
+            taskInput6.maxBlasBuildCount = 16u;
+            auto status6 = g_executeContext->InvokeGPUTask(taskContainer, &taskInput6);
             
-            if (status == KickstartRT::Status::OK) {
+            if (status6 == KickstartRT::Status::OK) {
                 logger::info("[KickstartRTImpl] Successfully generated reflections");
                 return true;
             } else {
-                logger::error("[KickstartRTImpl] Failed to execute reflections task: {}", static_cast<int>(status));
+                logger::error("[KickstartRTImpl] Failed to execute reflections task: {}", static_cast<int>(status6));
                 return false;
             }
         } catch (const std::exception& e) {
@@ -818,9 +838,13 @@ bool Raytracing::RegisterGeometry()
             taskContainer->ScheduleBVHTask(&bvhBuildTask);
             
             // Execute the GPU tasks to create empty BVH
-            auto status = KickstartRTImpl::g_executeContext->InvokeGPUTask(taskContainer, nullptr);
-            if (status != KickstartRT::Status::OK) {
-                logger::error("[RT] Failed to execute empty BVH build task. Status: {}", static_cast<int>(status));
+            KickstartRT::D3D11::BuildGPUTaskInput taskInput7 = {};
+            taskInput7.geometryTaskFirst = true;
+            taskInput7.maxBlasBuildCount = 16u;
+            
+            auto execStatus7 = KickstartRTImpl::g_executeContext->InvokeGPUTask(taskContainer, &taskInput7);
+            if (execStatus7 != KickstartRT::Status::OK) {
+                logger::error("[RT] Failed to execute empty BVH build task. Status: {}", static_cast<int>(execStatus7));
                 return false;
             }
             
@@ -1035,9 +1059,12 @@ bool Raytracing::RegisterGeometry()
         taskContainer->ScheduleBVHTask(&bvhBuildTask);
         
         // Execute the GPU tasks to update geometry
-        auto status = KickstartRTImpl::g_executeContext->InvokeGPUTask(taskContainer, nullptr);
-        if (status != KickstartRT::Status::OK) {
-            logger::error("[RT] Failed to execute geometry registration task. Status: {}", static_cast<int>(status));
+        KickstartRT::D3D11::BuildGPUTaskInput taskInput8 = {};
+        taskInput8.geometryTaskFirst = true;
+        taskInput8.maxBlasBuildCount = static_cast<uint32_t>(registeredMeshes * 2);
+        auto status8 = KickstartRTImpl::g_executeContext->InvokeGPUTask(taskContainer, &taskInput8);
+        if (status8 != KickstartRT::Status::OK) {
+            logger::error("[RT] Failed to execute geometry registration task. Status: {}", static_cast<int>(status8));
             return false;
         }
         
@@ -1141,9 +1168,12 @@ bool Raytracing::UpdateGeometry()
         taskContainer->ScheduleBVHTask(&bvhBuildTask);
         
         // Execute the GPU tasks to update geometry
-        auto status = KickstartRTImpl::g_executeContext->InvokeGPUTask(taskContainer, nullptr);
-        if (status != KickstartRT::Status::OK) {
-            logger::error("[RT] Failed to execute geometry update task. Status: {}", static_cast<int>(status));
+        KickstartRT::D3D11::BuildGPUTaskInput taskInput9 = {};
+        taskInput9.geometryTaskFirst = true;
+        taskInput9.maxBlasBuildCount = 16u;
+        auto status9 = KickstartRTImpl::g_executeContext->InvokeGPUTask(taskContainer, &taskInput9);
+        if (status9 != KickstartRT::Status::OK) {
+            logger::error("[RT] Failed to execute geometry update task. Status: {}", static_cast<int>(status9));
             return false;
         }
         
@@ -1347,7 +1377,7 @@ bool Raytracing::TraceGI(const KickstartRT::TraceQueryInternal& query)
                 // Simple dark gray output as ambient approximation
                 FLOAT ambient[4] = { 0.1f, 0.1f, 0.1f, 1.0f };
                 context->ClearUnorderedAccessViewFloat(query.outputUAV, ambient);
-                return true; // Return true as we provided valid output
+                return true; // We at least produced valid output
             }
         }
         
