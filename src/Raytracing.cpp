@@ -440,6 +440,12 @@ void Raytracing::ClearResources()
 
 bool Raytracing::TestKickstartRT()
 {
+    if (!IsInitialized()) {
+        logger::error("[Raytracing] Cannot test KickstartRT, system not initialized");
+        return false;
+    }
+    
+    logger::info("[Raytracing] Running KickstartRT test...");
     return KickstartRTImpl::RunTest();
 }
 

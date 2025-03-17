@@ -93,7 +93,14 @@ void GlobalIllumination::InitializeRaytracing()
         }
     }
     
-    // Test KickstartRT to ensure it's working properly
+    // First verify the system is initialized
+    if (!raytracing->IsInitialized()) {
+        logger::error("[GlobalIllumination] Raytracing system reports it is not initialized");
+        raytracingAvailable = false;
+        return;
+    }
+    
+    // Now test KickstartRT to ensure it's working properly
     logger::info("[GlobalIllumination] Testing KickstartRT...");
     if (raytracing->TestKickstartRT()) {
         logger::info("[GlobalIllumination] KickstartRT test successful");
