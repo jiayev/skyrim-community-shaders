@@ -302,21 +302,85 @@ namespace KickstartRTImpl
             return false;
         }
         
+        // Check if we already have a handle for this geometry
+        auto it = g_geometryHandles.find(name);
+        if (it != g_geometryHandles.end()) {
+            *outHandle = it->second;
+            return true;
+        }
+        
         try {
-            // Extract the DirectX vertex and index buffers from BSTriShape
-            // This would need to be implemented based on how Skyrim's rendering system works
-            // Placeholder implementation - these would need to be obtained from BSTriShape
-            ID3D11Buffer* vertexBuffer = nullptr; // Get from triShape
-            ID3D11Buffer* indexBuffer = nullptr;  // Get from triShape
+            // Get the runtime data from the BSTriShape
+            auto& runtimeData = triShape->GetTrishapeRuntimeData();
+            auto& geometryData = triShape->GetGeometryRuntimeData();
             
-            // Then use the regular registration function
-            if (vertexBuffer && indexBuffer) {
-                return RegisterGeometryWithKickstartRT(vertexBuffer, indexBuffer, name, outHandle);
-            }
-            else {
-                logger::error("[RT] Failed to extract vertex/index buffers from BSTriShape");
+            // Need the renderer data for vertex/index buffers
+            auto rendererData = geometryData.rendererData;
+            if (!rendererData) {
+                logger::error("[RT] Failed to get renderer data from BSTriShape");
                 return false;
             }
+            
+            // Get vertex and index counts
+            uint32_t vertexCount = runtimeData.vertexCount;
+            uint32_t triangleCount = runtimeData.triangleCount;
+            
+            if (vertexCount == 0 || triangleCount == 0) {
+                logger::warn("[RT] BSTriShape has no vertices or triangles, skipping");
+                return false;
+            }
+            
+            // Create D3D11 vertex buffer
+            D3D11_BUFFER_DESC vbDesc = {};
+            vbDesc.ByteWidth = rendererData->vertexDesc.GetSize() * vertexCount;
+            vbDesc.Usage = D3D11_USAGE_DEFAULT;
+            vbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+            vbDesc.CPUAccessFlags = 0;
+            vbDesc.StructureByteStride = rendererData->vertexDesc.GetSize();
+            vbDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // Required for KickstartRT
+            
+            D3D11_SUBRESOURCE_DATA vbData = {};
+            vbData.pSysMem = rendererData->rawVertexData;
+            
+            // Create index buffer description
+            D3D11_BUFFER_DESC ibDesc = {};
+            ibDesc.ByteWidth = sizeof(uint16_t) * triangleCount * 3; // 3 indices per triangle
+            ibDesc.Usage = D3D11_USAGE_DEFAULT;
+            ibDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+            ibDesc.CPUAccessFlags = 0;
+            ibDesc.StructureByteStride = sizeof(uint16_t);
+            ibDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // Required for KickstartRT
+            
+            D3D11_SUBRESOURCE_DATA ibData = {};
+            ibData.pSysMem = rendererData->rawIndexData;
+            
+            // Get D3D11 device
+            ID3D11Device* device = globals::d3d::device;
+            if (!device) {
+                logger::error("[RT] Failed to get D3D11 device");
+                return false;
+            }
+            
+            // Create the vertex buffer
+            Microsoft::WRL::ComPtr<ID3D11Buffer> vertexBuffer;
+            HRESULT hr = device->CreateBuffer(&vbDesc, &vbData, vertexBuffer.GetAddressOf());
+            if (FAILED(hr)) {
+                logger::error("[RT] Failed to create vertex buffer for Skyrim mesh. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+                return false;
+            }
+            
+            // Create the index buffer
+            Microsoft::WRL::ComPtr<ID3D11Buffer> indexBuffer;
+            hr = device->CreateBuffer(&ibDesc, &ibData, indexBuffer.GetAddressOf());
+            if (FAILED(hr)) {
+                logger::error("[RT] Failed to create index buffer for Skyrim mesh. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+                return false;
+            }
+            
+            logger::info("[RT] Created vertex and index buffers for Skyrim mesh '{}'", name);
+            
+            // Register with KickstartRT using our existing function
+            return RegisterGeometryWithKickstartRT(vertexBuffer.Get(), indexBuffer.Get(), name, outHandle);
         }
         catch (const std::exception& e) {
             logger::error("[RT] Exception during Skyrim mesh registration: {}", e.what());
@@ -331,45 +395,248 @@ namespace KickstartRTImpl
      * 
      * This uses Skyrim's scene traversal to gather meshes for raytracing.
      * 
+     * @param updateDynamicOnly Whether to only update dynamic objects
      * @return The number of geometries successfully registered
+     */
+    int CollectSceneGeometry(bool updateDynamicOnly)
+    {
+        // Track registered geometries
+        int registeredCount = 0;
+        int processedCount = 0;
+        
+        // Get the root node of the scene using the correct method
+        auto worldRoot = RE::Main::WorldRootNode();
+        if (!worldRoot) {
+            logger::error("[RT] Failed to get world root node");
+            return 0;
+        }
+        
+        logger::debug("[RT] Starting scene geometry collection...");
+        
+        // Get player position for distance-based culling
+        RE::NiPoint3 playerPosition;
+        float maxDistance = 2048.0f; // Reasonable culling distance
+        
+        if (auto player = RE::PlayerCharacter::GetSingleton()) {
+            playerPosition = player->GetPosition();
+        }
+        
+        // Process only a limited number of objects per frame
+        const int MAX_PROCESSED_PER_FRAME = 1;
+        const int MAX_REGISTERED_TOTAL = 1; // Lower limit for dynamic updates
+        
+        // Create a timestamp string to uniquely identify this collection pass
+        static uint32_t collectionCounter = 0;
+        std::string timeStamp = std::to_string(++collectionCounter) + "_" + 
+                               (updateDynamicOnly ? "dyn" : "full");
+        
+        // Keep track of what's been processed this frame
+        static std::unordered_set<RE::BSGeometry*> processedThisFrame;
+        processedThisFrame.clear();
+        
+        // Process actors (dynamic objects) first if requested
+        if (updateDynamicOnly) {
+            auto processManager = RE::ProcessLists::GetSingleton();
+            if (processManager) {
+                // Process high priority actors (closer to player)
+                for (auto& actorHandle : processManager->highActorHandles) {
+                    if (auto actor = actorHandle.get()) {
+                        if (processedCount >= MAX_PROCESSED_PER_FRAME) break;
+                        
+                        // Check if the actor is close enough to be worth processing
+                        float distance = (actor->GetPosition() - playerPosition).Length();
+                        if (distance > maxDistance * 0.5f) continue; // Use a tighter constraint for actors
+                        
+                        // Get the actor's 3D
+                        if (auto actorRoot = actor->Get3D()) {
+                            // Process this actor's geometry
+                            RE::BSVisit::TraverseScenegraphGeometries(actorRoot, [&](RE::BSGeometry* geometry) {
+                                // Skip if we've already processed this geometry
+                                if (processedThisFrame.count(geometry) > 0) {
+                                    return RE::BSVisit::BSVisitControl::kContinue;
+                                }
+                                
+                                processedThisFrame.insert(geometry);
+                                processedCount++;
+                                
+                                // Skip invalid or small geometries
+                                if (!geometry || geometry->worldBound.radius < 5.0f) {
+                                    return RE::BSVisit::BSVisitControl::kContinue;
+                                }
+                                
+                                // Convert to BSTriShape if possible
+                                auto triShape = geometry->AsTriShape();
+                                if (!triShape) {
+                                    return RE::BSVisit::BSVisitControl::kContinue;
+                                }
+                                
+                                // Create a unique name for this geometry 
+                                // Include actor ID for better identification
+                                std::string name = "Actor_" + std::to_string(actor->formID) + "_" + 
+                                                 std::to_string(registeredCount) + "_" + timeStamp;
+                                
+                                // The rest of processing is the same...
+                                KickstartRT::D3D11::GeometryHandle handle;
+                                if (RegisterSkyrimMesh(triShape, name, &handle)) {
+                                    registeredCount++;
+                                    
+                                    // Get the world transform from the geometry
+                                    DirectX::XMFLOAT4X4 worldTransform;
+                                    
+                                    // Access transform directly from NiAVObject's world transform
+                                    const RE::NiTransform& transform = geometry->world;
+                                    
+                                    // NiMatrix3 to upper 3x3 of XMFLOAT4X4
+                                    worldTransform._11 = transform.rotate.entry[0][0];
+                                    worldTransform._12 = transform.rotate.entry[0][1];
+                                    worldTransform._13 = transform.rotate.entry[0][2];
+                                    worldTransform._14 = 0.0f;
+                                    
+                                    worldTransform._21 = transform.rotate.entry[1][0];
+                                    worldTransform._22 = transform.rotate.entry[1][1];
+                                    worldTransform._23 = transform.rotate.entry[1][2];
+                                    worldTransform._24 = 0.0f;
+                                    
+                                    worldTransform._31 = transform.rotate.entry[2][0];
+                                    worldTransform._32 = transform.rotate.entry[2][1];
+                                    worldTransform._33 = transform.rotate.entry[2][2];
+                                    worldTransform._34 = 0.0f;
+                                    
+                                    // Position to translation component (last row)
+                                    worldTransform._41 = transform.translate.x;
+                                    worldTransform._42 = transform.translate.y;
+                                    worldTransform._43 = transform.translate.z;
+                                    worldTransform._44 = 1.0f;
+                                    
+                                    // Create an instance with the world transform
+                                    KickstartRT::D3D11::InstanceHandle instanceHandle;
+                                    if (CreateInstance(handle, worldTransform, name + "_Instance", &instanceHandle)) {
+                                        // Reduced logging to debug only
+                                        logger::debug("[RT] Created instance for dynamic actor geometry: {}", name);
+                                    }
+                                    
+                                    // Check if we've hit our limit
+                                    if (registeredCount >= MAX_REGISTERED_TOTAL) {
+                                        return RE::BSVisit::BSVisitControl::kStop;
+                                    }
+                                }
+                                
+                                return RE::BSVisit::BSVisitControl::kContinue;
+                            });
+                        }
+                    }
+                }
+            }
+            
+            // Log only in debug mode
+            logger::debug("[RT] Dynamic object collection complete. Registered {} objects (processed {})", 
+                registeredCount, processedCount);
+            return registeredCount;
+        }
+        
+        // For full updates, process the entire scene graph as before
+        // Use BSVisit to traverse the scene graph
+        RE::BSVisit::TraverseScenegraphGeometries(reinterpret_cast<RE::NiAVObject*>(worldRoot), [&](RE::BSGeometry* geometry) {
+            // Skip if we've already processed this geometry
+            if (processedThisFrame.count(geometry) > 0) {
+                return RE::BSVisit::BSVisitControl::kContinue;
+            }
+            
+            processedThisFrame.insert(geometry);
+            
+            // Skip invalid geometries
+            if (!geometry) {
+                return RE::BSVisit::BSVisitControl::kContinue;
+            }
+            
+            // Early exit if we're hitting our per-frame processing limit
+            processedCount++;
+            if (processedCount > MAX_PROCESSED_PER_FRAME) {
+                logger::debug("[RT] Reached per-frame processing limit ({}), stopping collection", MAX_PROCESSED_PER_FRAME);
+                return RE::BSVisit::BSVisitControl::kStop;
+            }
+            
+            // Filter out small geometries
+            if (geometry->worldBound.radius < 10.0f) {
+                return RE::BSVisit::BSVisitControl::kContinue;
+            }
+            
+            // Distance-based culling
+            float distance = (geometry->world.translate - playerPosition).Length();
+            if (distance > maxDistance) {
+                return RE::BSVisit::BSVisitControl::kContinue;
+            }
+            
+            // Convert to BSTriShape if possible
+            auto triShape = geometry->AsTriShape();
+            if (!triShape) {
+                return RE::BSVisit::BSVisitControl::kContinue;
+            }
+            
+            // Create a unique name for this geometry
+            std::string name = "SceneObj_" + std::to_string(registeredCount) + "_" + timeStamp;
+            
+            // Register the mesh
+            KickstartRT::D3D11::GeometryHandle handle;
+            if (RegisterSkyrimMesh(triShape, name, &handle)) {
+                registeredCount++;
+                
+                // Get the world transform from the geometry
+                DirectX::XMFLOAT4X4 worldTransform;
+                
+                // Access transform directly from NiAVObject's world member
+                const RE::NiTransform& transform = geometry->world;
+                
+                // NiMatrix3 to upper 3x3 of XMFLOAT4X4
+                worldTransform._11 = transform.rotate.entry[0][0];
+                worldTransform._12 = transform.rotate.entry[0][1];
+                worldTransform._13 = transform.rotate.entry[0][2];
+                worldTransform._14 = 0.0f;
+                
+                worldTransform._21 = transform.rotate.entry[1][0];
+                worldTransform._22 = transform.rotate.entry[1][1];
+                worldTransform._23 = transform.rotate.entry[1][2];
+                worldTransform._24 = 0.0f;
+                
+                worldTransform._31 = transform.rotate.entry[2][0];
+                worldTransform._32 = transform.rotate.entry[2][1];
+                worldTransform._33 = transform.rotate.entry[2][2];
+                worldTransform._34 = 0.0f;
+                
+                // Position to translation component (last row)
+                worldTransform._41 = transform.translate.x;
+                worldTransform._42 = transform.translate.y;
+                worldTransform._43 = transform.translate.z;
+                worldTransform._44 = 1.0f;
+                
+                // Create an instance with the world transform
+                KickstartRT::D3D11::InstanceHandle instanceHandle;
+                if (CreateInstance(handle, worldTransform, name + "_Instance", &instanceHandle)) {
+                    // Reduced logging to debug only for better performance
+                    logger::debug("[RT] Created instance for geometry: {}", name);
+                }
+                
+                // Limit to a reasonable number of objects for performance
+                if (registeredCount >= MAX_REGISTERED_TOTAL) {
+                    logger::debug("[RT] Reached geometry limit ({}), stopping collection", MAX_REGISTERED_TOTAL);
+                    return RE::BSVisit::BSVisitControl::kStop;
+                }
+            }
+            
+            return RE::BSVisit::BSVisitControl::kContinue;
+        });
+        
+        // Reduced logging to info level (not spamming every frame)
+        logger::info("[RT] Scene geometry collection complete. Registered {} objects (processed {})", 
+            registeredCount, processedCount);
+        return registeredCount;
+    }
+    
+    /**
+     * Overloaded version that defaults to full updates
      */
     int CollectSceneGeometry()
     {
-        // This function would traverse Skyrim's scene graph and collect visible geometry
-        // It would use RE::BSVisit::TraverseScenegraphGeometries to access all BSGeometry objects
-        
-        // Placeholder implementation
-        int registeredCount = 0;
-        
-        // Example of how to traverse the scene:
-        /*
-        auto sceneRoot = RE::TES::GetSingleton()->GetRootNode();
-        if (sceneRoot) {
-            RE::BSVisit::TraverseScenegraphGeometries(sceneRoot, [&](RE::BSGeometry* geometry) {
-                // Filter geometry based on visibility, distance, etc.
-                
-                // Cast to BSTriShape when possible
-                if (auto triShape = geometry->AsTriShape()) {
-                    std::string name = "SceneObj_" + std::to_string(registeredCount);
-                    
-                    KickstartRT::D3D11::GeometryHandle handle;
-                    if (RegisterSkyrimMesh(triShape, name, &handle)) {
-                        registeredCount++;
-                        
-                        // Create an instance with the object's world transform
-                        DirectX::XMFLOAT4X4 worldTransform;
-                        // Convert from NiMatrix to XMFLOAT4X4
-                        
-                        KickstartRT::D3D11::InstanceHandle instanceHandle;
-                        CreateInstance(handle, worldTransform, name + "_Instance", &instanceHandle);
-                    }
-                }
-                
-                return RE::BSVisit::BSVisitControl::kContinue;
-            });
-        }
-        */
-        
-        return registeredCount;
+        return CollectSceneGeometry(false);
     }
 } // namespace KickstartRTImpl 

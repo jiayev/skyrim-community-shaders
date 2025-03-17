@@ -7,6 +7,9 @@
 #include <unordered_map>
 #include <string>
 
+// Add include for Skyrim types
+#include "RE/Skyrim.h"
+
 namespace KickstartRTImpl
 {
     // Core functions
@@ -20,6 +23,9 @@ namespace KickstartRTImpl
     bool RegisterGeometryWithKickstartRT(ID3D11Buffer* vertexBuffer, ID3D11Buffer* indexBuffer, const std::string& name, KickstartRT::D3D11::GeometryHandle* outHandle);
     bool CreateInstance(KickstartRT::D3D11::GeometryHandle& geometryHandle, const DirectX::XMFLOAT4X4& transform, const std::string& name, KickstartRT::D3D11::InstanceHandle* outHandle);
     bool UpdateInstanceTransform(KickstartRT::D3D11::InstanceHandle& instanceHandle, const DirectX::XMFLOAT4X4& transform);
+    bool RegisterSkyrimMesh(RE::BSTriShape* triShape, const std::string& name, KickstartRT::D3D11::GeometryHandle* outHandle);
+    int CollectSceneGeometry(bool updateDynamicOnly);
+    int CollectSceneGeometry();
 
     // Raytracing operations
     bool GenerateGI(
