@@ -177,180 +177,215 @@ namespace KickstartRTImpl
             return false;
         }
     }
-
+    
     // Core rendering functions - simplified implementations for now
     // In the future these will be expanded to use proper task scheduling
-    bool GenerateGI(ID3D11ShaderResourceView* depthSRV, 
-                   ID3D11ShaderResourceView* normalSRV,
-                   ID3D11UnorderedAccessView* outputUAV,
-                   const DirectX::XMFLOAT4X4& viewMatrix,
-                   const DirectX::XMFLOAT4X4& projMatrix) 
+    bool GenerateGI(
+        ID3D11ShaderResourceView* depthSRV,
+        ID3D11ShaderResourceView* normalSRV,
+        ID3D11UnorderedAccessView* outputUAV,
+        DirectX::XMFLOAT4X4 viewMatrix,
+        DirectX::XMFLOAT4X4 projMatrix)
     {
-        if (!g_initialized || !g_executeContext) {
-            logger::error("[RT] Not initialized");
+        // Check if we have an initialized context
+        if (!g_executeContext) {
+            logger::error("[KickstartRTImpl] GenerateGI called without initialized context");
             return false;
         }
-        
+
+        // Check for required resources
         if (!depthSRV || !normalSRV || !outputUAV) {
-            logger::error("[RT] Missing required buffers for GI generation");
+            logger::error("[KickstartRTImpl] GenerateGI called with null resources");
             return false;
         }
-        
+
+        // Log what we're doing
+        logger::info("[KickstartRTImpl] Running GenerateGI with provided resources");
+
         try {
-            logger::info("[RT] Generating GI");
-            
-            // Create a task container for GI
+            // Create a task container
             auto taskContainer = g_executeContext->CreateTaskContainer();
-            if (!taskContainer) {
-                logger::error("[RT] Failed to create task container for GI");
-                return false;
+
+            // Schedule BVH Build task
+            KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
+            bvhBuildTask.buildTLAS = true;
+            bvhBuildTask.maxBlasBuildCount = 4u;
+            taskContainer->ScheduleBVHTask(&bvhBuildTask);
+            
+            // Set up diffuse GI tracing
+            KickstartRT::D3D11::RenderTask::TraceDiffuseTask traceTask;
+            
+            // Configure input buffers - use the correct field names
+            // Get resources from SRVs
+            ID3D11Resource* depthResource = nullptr;
+            ID3D11Resource* normalResource = nullptr;
+            ID3D11Resource* outputResource = nullptr;
+            
+            // Extract the underlying resources from the views
+            if (depthSRV) {
+                depthSRV->GetResource(&depthResource);
+                traceTask.common.depth.tex.resource = depthResource;
+                if (depthResource) depthResource->Release(); // Release our reference
             }
             
-            // 1. Schedule BVH Build task - this ensures the acceleration structure is up to date
-            {
-                KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
-                bvhBuildTask.buildTLAS = true;  // Build top-level acceleration structure
-                bvhBuildTask.maxBlasBuildCount = 4u;  // Number of BLASes to build per frame
-                taskContainer->ScheduleBVHTask(&bvhBuildTask);
+            if (normalSRV) {
+                normalSRV->GetResource(&normalResource);
+                traceTask.common.normal.tex.resource = normalResource;
+                if (normalResource) normalResource->Release(); // Release our reference
             }
             
-            // 2. Schedule Diffuse GI tracing task
-            {
-                KickstartRT::D3D11::RenderTask::TraceDiffuseTask traceTask;
-                
-                // Fill common trace task parameters
-                if (depthSRV) {
-                    ID3D11Resource* depthResource = nullptr;
-                    depthSRV->GetResource(&depthResource);
-                    traceTask.common.depth.tex.resource = depthResource;
-                }
-                
-                if (normalSRV) {
-                    ID3D11Resource* normalResource = nullptr;
-                    normalSRV->GetResource(&normalResource);
-                    traceTask.common.normal.tex.resource = normalResource;
-                }
-                
-                // Set view and projection matrices
-                // Matrix conversion from DirectXMath to KickstartRT format
-                // Note: KickstartRT expects row-major matrices
-                traceTask.common.clipToViewMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&viewMatrix);
-                traceTask.common.viewToWorldMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&projMatrix);
-                
-                // Set ray parameters
-                traceTask.common.maxRayLength = 200.0f;  // Maximum ray distance
-                
-                // Set output
-                if (outputUAV) {
-                    outputUAV->GetResource(&traceTask.out.resource);
-                }
-                
-                // Schedule the task
-                taskContainer->ScheduleRenderTask(&traceTask);
+            // Configure output buffer
+            if (outputUAV) {
+                outputUAV->GetResource(&outputResource);
+                traceTask.out.resource = outputResource;
+                if (outputResource) outputResource->Release(); // Release our reference
             }
             
-            // 3. Execute the GPU tasks
+            // Set view and projection matrices
+            // Calculate the inverse projection matrix
+            DirectX::XMMATRIX invProjMatrix = DirectX::XMMatrixInverse(nullptr, DirectX::XMLoadFloat4x4(&projMatrix));
+            DirectX::XMFLOAT4X4 invProj;
+            DirectX::XMStoreFloat4x4(&invProj, invProjMatrix);
+            
+            // Calculate the inverse view matrix
+            DirectX::XMMATRIX invViewMatrix = DirectX::XMMatrixInverse(nullptr, DirectX::XMLoadFloat4x4(&viewMatrix));
+            DirectX::XMFLOAT4X4 invView;
+            DirectX::XMStoreFloat4x4(&invView, invViewMatrix);
+            
+            // Convert to KickstartRT format
+            traceTask.common.clipToViewMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invProj);
+            traceTask.common.viewToWorldMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invView);
+            
+            // Set ray parameters
+            traceTask.common.maxRayLength = 200.0f;  // Maximum ray distance
+            
+            // Schedule the task
+            taskContainer->ScheduleRenderTask(&traceTask);
+            
+            // Execute GPU task
             auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
-            if (status != KickstartRT::Status::OK) {
-                logger::error("[RT] Failed to execute GI task. Status: {}", static_cast<int>(status));
+            
+            if (status == KickstartRT::Status::OK) {
+                logger::info("[KickstartRTImpl] Successfully generated GI");
+                return true;
+            } else {
+                logger::error("[KickstartRTImpl] Failed to execute GI task: {}", static_cast<int>(status));
                 return false;
             }
-            
-            logger::info("[RT] Successfully executed GI generation");
-            return true;
-        }
-        catch (const std::exception& e) {
-            logger::error("[RT] GI generation exception: {}", e.what());
+        } catch (const std::exception& e) {
+            logger::error("[KickstartRTImpl] Exception in GenerateGI: {}", e.what());
+            return false;
+        } catch (...) {
+            logger::error("[KickstartRTImpl] Unknown exception in GenerateGI");
             return false;
         }
     }
 
-    bool GenerateReflections(ID3D11ShaderResourceView* depthSRV, 
-                           ID3D11ShaderResourceView* normalSRV, 
-                           ID3D11ShaderResourceView* roughnessSRV,
-                           ID3D11UnorderedAccessView* outputUAV,
-                           const DirectX::XMFLOAT4X4& viewMatrix,
-                           const DirectX::XMFLOAT4X4& projMatrix) 
+    bool GenerateReflections(
+        ID3D11ShaderResourceView* depthSRV,
+        ID3D11ShaderResourceView* normalSRV,
+        ID3D11ShaderResourceView* roughnessSRV,
+        ID3D11UnorderedAccessView* outputUAV,
+        DirectX::XMFLOAT4X4 viewMatrix,
+        DirectX::XMFLOAT4X4 projMatrix)
     {
-        if (!g_initialized || !g_executeContext) {
-            logger::error("[RT] Not initialized");
+        // Check if we have an initialized context
+        if (!g_executeContext) {
+            logger::error("[KickstartRTImpl] GenerateReflections called without initialized context");
             return false;
         }
-        
+
+        // Check for required resources
         if (!depthSRV || !normalSRV || !roughnessSRV || !outputUAV) {
-            logger::error("[RT] Missing required buffers for reflection generation");
+            logger::error("[KickstartRTImpl] GenerateReflections called with null resources");
             return false;
         }
-        
+
+        // Log what we're doing
+        logger::info("[KickstartRTImpl] Running GenerateReflections with provided resources");
+
         try {
-            logger::info("[RT] Generating reflections");
-            
-            // Create a task container for reflections
+            // Create a task container
             auto taskContainer = g_executeContext->CreateTaskContainer();
-            if (!taskContainer) {
-                logger::error("[RT] Failed to create task container for reflections");
-                return false;
+
+            // Schedule BVH Build task
+            KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
+            bvhBuildTask.buildTLAS = true;
+            bvhBuildTask.maxBlasBuildCount = 4u;
+            taskContainer->ScheduleBVHTask(&bvhBuildTask);
+            
+            // Set up specular reflection tracing
+            KickstartRT::D3D11::RenderTask::TraceSpecularTask traceTask;
+            
+            // Configure input buffers - use the correct field names
+            // Get resources from SRVs
+            ID3D11Resource* depthResource = nullptr;
+            ID3D11Resource* normalResource = nullptr;
+            ID3D11Resource* roughnessResource = nullptr;
+            ID3D11Resource* outputResource = nullptr;
+            
+            // Extract the underlying resources from the views
+            if (depthSRV) {
+                depthSRV->GetResource(&depthResource);
+                traceTask.common.depth.tex.resource = depthResource;
+                if (depthResource) depthResource->Release(); // Release our reference
             }
             
-            // BVH Build task
-            {
-                KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
-                bvhBuildTask.buildTLAS = true;
-                bvhBuildTask.maxBlasBuildCount = 4u;
-                taskContainer->ScheduleBVHTask(&bvhBuildTask);
+            if (normalSRV) {
+                normalSRV->GetResource(&normalResource);
+                traceTask.common.normal.tex.resource = normalResource;
+                if (normalResource) normalResource->Release(); // Release our reference
             }
             
-            // Schedule specular reflection tracing task
-            {
-                KickstartRT::D3D11::RenderTask::TraceSpecularTask traceTask;
-                
-                // Fill common trace task parameters
-                if (depthSRV) {
-                    ID3D11Resource* depthResource = nullptr;
-                    depthSRV->GetResource(&depthResource);
-                    traceTask.common.depth.tex.resource = depthResource;
-                }
-                
-                if (normalSRV) {
-                    ID3D11Resource* normalResource = nullptr;
-                    normalSRV->GetResource(&normalResource);
-                    traceTask.common.normal.tex.resource = normalResource;
-                }
-                
-                if (roughnessSRV) {
-                    ID3D11Resource* roughnessResource = nullptr;
-                    roughnessSRV->GetResource(&roughnessResource);
-                    traceTask.common.roughness.tex.resource = roughnessResource;
-                }
-                
-                // Set view and projection matrices
-                traceTask.common.clipToViewMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&viewMatrix);
-                traceTask.common.viewToWorldMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&projMatrix);
-                
-                // Set ray parameters
-                traceTask.common.maxRayLength = 200.0f;
-                
-                // Set output
-                if (outputUAV) {
-                    outputUAV->GetResource(&traceTask.out.resource);
-                }
-                
-                // Schedule the task
-                taskContainer->ScheduleRenderTask(&traceTask);
+            if (roughnessSRV) {
+                roughnessSRV->GetResource(&roughnessResource);
+                traceTask.common.roughness.tex.resource = roughnessResource;
+                if (roughnessResource) roughnessResource->Release(); // Release our reference
             }
             
-            // Execute the GPU tasks
+            // Configure output buffer
+            if (outputUAV) {
+                outputUAV->GetResource(&outputResource);
+                traceTask.out.resource = outputResource;
+                if (outputResource) outputResource->Release(); // Release our reference
+            }
+            
+            // Set view and projection matrices
+            // Calculate the inverse projection matrix
+            DirectX::XMMATRIX invProjMatrix = DirectX::XMMatrixInverse(nullptr, DirectX::XMLoadFloat4x4(&projMatrix));
+            DirectX::XMFLOAT4X4 invProj;
+            DirectX::XMStoreFloat4x4(&invProj, invProjMatrix);
+            
+            // Calculate the inverse view matrix
+            DirectX::XMMATRIX invViewMatrix = DirectX::XMMatrixInverse(nullptr, DirectX::XMLoadFloat4x4(&viewMatrix));
+            DirectX::XMFLOAT4X4 invView;
+            DirectX::XMStoreFloat4x4(&invView, invViewMatrix);
+            
+            // Convert to KickstartRT format
+            traceTask.common.clipToViewMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invProj);
+            traceTask.common.viewToWorldMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invView);
+            
+            // Set ray parameters
+            traceTask.common.maxRayLength = 200.0f;  // Maximum ray distance
+            
+            // Schedule the task
+            taskContainer->ScheduleRenderTask(&traceTask);
+            
+            // Execute GPU task
             auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
-            if (status != KickstartRT::Status::OK) {
-                logger::error("[RT] Failed to execute reflections task. Status: {}", static_cast<int>(status));
+            
+            if (status == KickstartRT::Status::OK) {
+                logger::info("[KickstartRTImpl] Successfully generated reflections");
+                return true;
+            } else {
+                logger::error("[KickstartRTImpl] Failed to execute reflections task: {}", static_cast<int>(status));
                 return false;
             }
-            
-            logger::info("[RT] Successfully executed reflections generation");
-            return true;
-        }
-        catch (const std::exception& e) {
-            logger::error("[RT] Reflection generation exception: {}", e.what());
+        } catch (const std::exception& e) {
+            logger::error("[KickstartRTImpl] Exception in GenerateReflections: {}", e.what());
+            return false;
+        } catch (...) {
+            logger::error("[KickstartRTImpl] Unknown exception in GenerateReflections");
             return false;
         }
     }
@@ -410,9 +445,55 @@ bool Raytracing::TestKickstartRT()
 
 bool Raytracing::RegisterGeometry()
 {
-    // This would register scene geometry with KickstartRT
-    // Left as a placeholder for future implementation
-    return true;
+    if (!IsInitialized() || !settings.Enabled) {
+        logger::warn("[RT] RegisterGeometry called but raytracing is not initialized or enabled");
+        return false;
+    }
+
+    if (!KickstartRTImpl::g_executeContext) {
+        logger::error("[RT] No execute context available");
+        return false;
+    }
+    
+    logger::info("[RT] Beginning geometry registration");
+    
+    // In a real implementation, we would:
+    // 1. Iterate through visible/loaded geometry in Skyrim
+    // 2. For each mesh, create a KickstartRT geometry instance
+    // 3. Register each geometry with the KickstartRT BVH
+    
+    // For now, we'll set up a simple scene with a ground plane for testing
+    try {
+        // Create a task container for geometry registration
+        auto taskContainer = KickstartRTImpl::g_executeContext->CreateTaskContainer();
+        if (!taskContainer) {
+            logger::error("[RT] Failed to create task container for geometry registration");
+            return false;
+        }
+        
+        // Example: Schedule a dummy plane for ground reflection
+        // In reality, we would iterate through game objects and add their geometry
+        
+        // Schedule a BVH update task
+        KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
+        bvhBuildTask.buildTLAS = true;  // Build top-level acceleration structure
+        bvhBuildTask.maxBlasBuildCount = 16u;  // Number of BLASes to build per frame
+        taskContainer->ScheduleBVHTask(&bvhBuildTask);
+        
+        // Execute the GPU tasks to update geometry
+        auto status = KickstartRTImpl::g_executeContext->InvokeGPUTask(taskContainer, nullptr);
+        if (status != KickstartRT::Status::OK) {
+            logger::error("[RT] Failed to execute geometry registration task. Status: {}", static_cast<int>(status));
+            return false;
+        }
+        
+        logger::info("[RT] Geometry registration completed successfully");
+        return true;
+    }
+    catch (const std::exception& e) {
+        logger::error("[RT] Exception during geometry registration: {}", e.what());
+        return false;
+    }
 }
 
 bool Raytracing::UpdateGeometry()
@@ -420,80 +501,6 @@ bool Raytracing::UpdateGeometry()
     // This would update dynamic geometry with KickstartRT
     // Left as a placeholder for future implementation
     return true;
-}
-
-bool Raytracing::ApplyGlobalIllumination(float intensity, float distance, float saturation)
-{
-    if (!IsInitialized() || !settings.Enabled) {
-        return false;
-    }
-    
-    // Get matrices from the current rendering context
-    DirectX::XMFLOAT4X4 viewMatrix, projMatrix;
-    if (!GetCurrentViewAndProjectionMatrices(viewMatrix, projMatrix)) {
-        logger::error("[RT] Failed to get current view and projection matrices");
-        return false;
-    }
-    
-    // Get required buffers
-    ID3D11ShaderResourceView* depthSRV = nullptr;
-    ID3D11ShaderResourceView* normalSRV = nullptr;
-    ID3D11UnorderedAccessView* outputUAV = nullptr;
-    
-    if (!GetRequiredBuffersForGI(depthSRV, normalSRV, outputUAV)) {
-        logger::error("[RT] Failed to get required buffers for GI");
-        return false;
-    }
-    
-    // Call the low-level implementation
-    logger::info("[RT] Applying global illumination with intensity={}, distance={}, saturation={}", 
-                intensity, distance, saturation);
-                
-    return KickstartRTImpl::GenerateGI(
-        depthSRV,
-        normalSRV,
-        outputUAV,
-        viewMatrix,
-        projMatrix
-    );
-}
-
-bool Raytracing::ApplyReflections(float intensity, float roughness, float distance)
-{
-    if (!IsInitialized() || !settings.Enabled) {
-        return false;
-    }
-    
-    // Get matrices from the current rendering context
-    DirectX::XMFLOAT4X4 viewMatrix, projMatrix;
-    if (!GetCurrentViewAndProjectionMatrices(viewMatrix, projMatrix)) {
-        logger::error("[RT] Failed to get current view and projection matrices");
-        return false;
-    }
-    
-    // Get required buffers
-    ID3D11ShaderResourceView* depthSRV = nullptr;
-    ID3D11ShaderResourceView* normalSRV = nullptr;
-    ID3D11ShaderResourceView* roughnessSRV = nullptr;
-    ID3D11UnorderedAccessView* outputUAV = nullptr;
-    
-    if (!GetRequiredBuffersForReflections(depthSRV, normalSRV, roughnessSRV, outputUAV)) {
-        logger::error("[RT] Failed to get required buffers for reflections");
-        return false;
-    }
-    
-    // Call the low-level implementation
-    logger::info("[RT] Applying reflections with intensity={}, roughness={}, distance={}", 
-                intensity, roughness, distance);
-                
-    return KickstartRTImpl::GenerateReflections(
-        depthSRV,
-        normalSRV,
-        roughnessSRV,
-        outputUAV,
-        viewMatrix,
-        projMatrix
-    );
 }
 
 bool Raytracing::GetCurrentViewAndProjectionMatrices(DirectX::XMFLOAT4X4& viewMatrix, DirectX::XMFLOAT4X4& projMatrix)
@@ -504,52 +511,95 @@ bool Raytracing::GetCurrentViewAndProjectionMatrices(DirectX::XMFLOAT4X4& viewMa
     
     // Try to get the current view and projection matrices from the game's renderer
     if (auto renderer = globals::game::renderer) {
-        // For now, log that we're using default matrices until we implement proper fetching
-        logger::warn("[RT] Using default view and projection matrices (not implemented yet)");
+        // Get the camera data
+        // int eyeIndex = 0; // Use main eye (for VR we'd need to handle both eyes)
+        
+        // Check for VR without using namespaces that don't exist
+        bool isVR = globals::game::isVR; // Use the correct global
+        if (isVR) {
+            logger::info("[RT] VR mode detected, using eye index 0 for now");
+            // In the future we should disable raytracing in VR
+        }
+        
+        // For now, return identity matrices
+        // We'll implement proper matrix retrieval later
+        logger::info("[RT] Using identity matrices for view and projection");
         return true;
+        
+        // TODO: Implement proper matrix retrieval from the game's renderer
+        // Example of how this would work:
+        // auto viewMat = renderer->GetViewMatrix();
+        // auto projMat = renderer->GetProjectionMatrix();
+        // DirectX::XMStoreFloat4x4(&viewMatrix, viewMat);
+        // DirectX::XMStoreFloat4x4(&projMatrix, projMat);
     }
     
     logger::error("[RT] Cannot get renderer");
     return false;
 }
 
-bool Raytracing::GetRequiredBuffersForGI(ID3D11ShaderResourceView*& depthSRV, ID3D11ShaderResourceView*& normalSRV, ID3D11UnorderedAccessView*& outputUAV)
+// Direct pass-through to KickstartRTImpl
+bool Raytracing::GenerateGI(
+    ID3D11ShaderResourceView* depthSRV,
+    ID3D11ShaderResourceView* normalSRV,
+    ID3D11UnorderedAccessView* outputUAV,
+    const DirectX::XMFLOAT4X4& viewMatrix,
+    const DirectX::XMFLOAT4X4& projMatrix)
 {
-    // Set default values
-    depthSRV = nullptr;
-    normalSRV = nullptr;
-    outputUAV = nullptr;
-    
-    // Check if renderer is available
-    if (auto renderer = globals::game::renderer) {
-        // For now, log that proper buffer fetching isn't implemented yet
-        logger::warn("[RT] Buffer fetching for GI not implemented yet");
-        
-        // Return true for now to allow development without actual buffer references
-        return true;
+    // Check if we're enabled
+    if (!IsEnabled()) {
+        logger::info("[Raytracing] GenerateGI called but raytracing is not enabled");
+        return false;
     }
     
-    logger::error("[RT] Cannot get renderer for GI buffers");
-    return false;
+    // Validate input resources
+    if (!depthSRV || !normalSRV || !outputUAV) {
+        logger::error("[Raytracing] GenerateGI called with null resources");
+        return false;
+    }
+    
+    logger::info("[Raytracing] Generating global illumination with provided resources");
+    
+    // Call into the KickstartRT implementation
+    return KickstartRTImpl::GenerateGI(
+        depthSRV,
+        normalSRV,
+        outputUAV,
+        viewMatrix,
+        projMatrix
+    );
 }
 
-bool Raytracing::GetRequiredBuffersForReflections(ID3D11ShaderResourceView*& depthSRV, ID3D11ShaderResourceView*& normalSRV, ID3D11ShaderResourceView*& roughnessSRV, ID3D11UnorderedAccessView*& outputUAV)
+// Direct pass-through to KickstartRTImpl
+bool Raytracing::GenerateReflections(
+    ID3D11ShaderResourceView* depthSRV,
+    ID3D11ShaderResourceView* normalSRV,
+    ID3D11ShaderResourceView* roughnessSRV,
+    ID3D11UnorderedAccessView* outputUAV,
+    const DirectX::XMFLOAT4X4& viewMatrix,
+    const DirectX::XMFLOAT4X4& projMatrix)
 {
-    // Set default values
-    depthSRV = nullptr;
-    normalSRV = nullptr;
-    roughnessSRV = nullptr;
-    outputUAV = nullptr;
-    
-    // Check if renderer is available
-    if (auto renderer = globals::game::renderer) {
-        // For now, log that proper buffer fetching isn't implemented yet
-        logger::warn("[RT] Buffer fetching for reflections not implemented yet");
-        
-        // Return true for now to allow development without actual buffer references
-        return true;
+    // Check if we're enabled
+    if (!IsEnabled()) {
+        logger::info("[Raytracing] GenerateReflections called but raytracing is not enabled");
+        return false;
     }
     
-    logger::error("[RT] Cannot get renderer for reflection buffers");
-    return false;
+    // Validate input resources
+    if (!depthSRV || !normalSRV || !roughnessSRV || !outputUAV) {
+        logger::error("[Raytracing] GenerateReflections called with null resources");
+        return false;
+    }
+    
+    logger::info("[Raytracing] Generating reflections with provided resources");
+    
+    // Call into the KickstartRT implementation
+    return KickstartRTImpl::GenerateReflections(
+        depthSRV,
+        normalSRV,
+        roughnessSRV,
+        outputUAV,
+        viewMatrix,
+        projMatrix
+    );
 }

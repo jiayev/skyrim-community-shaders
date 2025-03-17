@@ -98,6 +98,15 @@ void GlobalIllumination::InitializeRaytracing()
     if (raytracing->TestKickstartRT()) {
         logger::info("[GlobalIllumination] KickstartRT test successful");
         raytracingAvailable = true;
+        
+        // Now register scene geometry with KickstartRT if the test was successful
+        logger::info("[GlobalIllumination] Registering scene geometry with KickstartRT...");
+        if (!raytracing->RegisterGeometry()) {
+            logger::warn("[GlobalIllumination] Failed to register geometry, GI may not work properly");
+            // Don't set raytracingAvailable to false, we'll try to continue anyway
+        } else {
+            logger::info("[GlobalIllumination] Geometry registration successful");
+        }
     } else {
         logger::error("[GlobalIllumination] KickstartRT test failed");
         raytracingAvailable = false;
@@ -167,9 +176,6 @@ void GlobalIllumination::UpdateSettingsForScene()
 
 void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuffer, Texture2D* outputBuffer)
 {
-    (void)depthBuffer;
-    (void)normalBuffer;
-    (void)outputBuffer;
     if (!settings.Enabled || !IsAvailable())
         return;
     
@@ -180,16 +186,96 @@ void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuf
     auto* raytracing = globals::features::raytracing;
     if (!raytracing)
         return;
+    
+    // Log what we're working with
+    logger::info("[GlobalIllumination] GenerateGI called with depth:{}, normal:{}, output:{}", 
+        depthBuffer ? "provided" : "null", 
+        normalBuffer ? "provided" : "null", 
+        outputBuffer ? "provided" : "null");
+    
+    // Get the current view and projection matrices
+    DirectX::XMFLOAT4X4 viewMatrix, projMatrix;
+    
+    // Use identity matrices for now - will get proper matrices in the future
+    // The Raytracing class can get its own matrices, but we're moving all buffer management here
+    DirectX::XMStoreFloat4x4(&viewMatrix, DirectX::XMMatrixIdentity());
+    DirectX::XMStoreFloat4x4(&projMatrix, DirectX::XMMatrixIdentity());
+    
+    // Extract DirectX resources from the Texture2D objects
+    ID3D11ShaderResourceView* depthSRV = nullptr;
+    ID3D11ShaderResourceView* normalSRV = nullptr;
+    ID3D11UnorderedAccessView* outputUAV = nullptr;
+    
+    // First try to use the provided buffers
+    if (depthBuffer && depthBuffer->srv)
+        depthSRV = depthBuffer->srv.get();
+    
+    if (normalBuffer && normalBuffer->srv)
+        normalSRV = normalBuffer->srv.get();
+    
+    if (outputBuffer && outputBuffer->uav)
+        outputUAV = outputBuffer->uav.get();
+    
+    // If we don't have all the required resources, try to get them from the game
+    if (!depthSRV || !normalSRV || !outputUAV) {
+        logger::info("[GlobalIllumination] Missing some buffers, getting from game renderer");
         
+        // Get the depth buffer from the game if not provided
+        if (!depthSRV) {
+            if (auto renderer = globals::game::renderer) {
+                auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+                depthSRV = depthTexture.depthSRV;
+                logger::info("[GlobalIllumination] Got depth buffer from game renderer");
+            }
+        }
+        
+        // For normal buffer, we would need to extract from G-buffer
+        // This is a placeholder - the exact method to access normals will depend on Skyrim's rendering setup
+        if (!normalSRV) {
+            logger::warn("[GlobalIllumination] Normal buffer not provided and no game method implemented yet");
+            // Placeholder SRV - in a real implementation we'd get this from Skyrim's G-buffer
+        }
+        
+        // For output buffer, we'd need a render target
+        if (!outputUAV) {
+            logger::warn("[GlobalIllumination] Output buffer not provided and no game method implemented yet");
+            // Placeholder UAV - in a real implementation we'd create this
+        }
+    }
+    
+    // Check if we have all required resources
+    if (!depthSRV || !normalSRV || !outputUAV) {
+        logger::error("[GlobalIllumination] Missing required buffers for GI, cannot proceed");
+        return;
+    }
+    
     // Apply the GI-specific settings to the raytracer
     float intensity = settings.AdaptToScene ? effectiveIntensity : settings.Intensity;
     
-    // Use the simplified API - all buffers will be handled internally
-    raytracing->ApplyGlobalIllumination(
-        intensity,                   // Intensity for this specific effect
-        settings.Distance,           // Distance for this specific effect
-        settings.Saturation          // Saturation for this specific effect
+    // Set ray length based on user settings
+    float rayLength = settings.Distance;
+    
+    // For saturation, we'd need to modify the shader or post-process
+    float saturation = settings.Saturation;
+    
+    // Log that we're generating GI
+    logger::info("[GlobalIllumination] Generating GI with intensity={}, distance={}, saturation={}", 
+                intensity, rayLength, saturation);
+    
+    // Call Raytracing::GenerateGI directly with our buffers
+    bool success = raytracing->GenerateGI(
+        depthSRV,
+        normalSRV,
+        outputUAV,
+        viewMatrix,
+        projMatrix
     );
+    
+    if (!success) {
+        logger::warn("[GlobalIllumination] Failed to generate global illumination");
+    } else {
+        logger::info("[GlobalIllumination] Global illumination rendered successfully");
+    }
 }
 
 // This callback could be registered to be called during appropriate render events

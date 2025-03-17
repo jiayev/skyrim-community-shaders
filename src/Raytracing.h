@@ -46,26 +46,15 @@ public:
     bool IsInitialized() const { return initialized; }
     bool TestKickstartRT();
     
-    // High-level functions for feature use
-    bool ApplyGlobalIllumination(float intensity, float distance, float saturation);
-    bool ApplyReflections(float intensity, float roughness, float distance);
+    // Make geometry registration functions public
+    bool RegisterGeometry();
+    bool UpdateGeometry();
     
     // Settings
     Settings settings;
     
-private:
-    Raytracing() = default;
-    ~Raytracing() = default;
-    
-    // Internal state
-    bool initialized = false;
-    bool resourcesCreated = false;
-    
-    // Internal functions for managing KickstartRT
-    bool RegisterGeometry();
-    bool UpdateGeometry();
-    
-    // Internal rendering functions
+    // Direct access to core rendering functions (moved from private to public)
+    // GlobalIllumination will provide the buffers
     bool GenerateGI(ID3D11ShaderResourceView* depthSRV, 
                    ID3D11ShaderResourceView* normalSRV,
                    ID3D11UnorderedAccessView* outputUAV,
@@ -78,9 +67,20 @@ private:
                            ID3D11UnorderedAccessView* outputUAV,
                            const DirectX::XMFLOAT4X4& viewMatrix,
                            const DirectX::XMFLOAT4X4& projMatrix);
+    
+private:
+    Raytracing() = default;
+    ~Raytracing() = default;
+    
+    // Internal state
+    bool initialized = false;
+    bool resourcesCreated = false;
                            
     // Resource management
     bool GetCurrentViewAndProjectionMatrices(DirectX::XMFLOAT4X4& viewMatrix, DirectX::XMFLOAT4X4& projMatrix);
-    bool GetRequiredBuffersForGI(ID3D11ShaderResourceView*& depthSRV, ID3D11ShaderResourceView*& normalSRV, ID3D11UnorderedAccessView*& outputUAV);
-    bool GetRequiredBuffersForReflections(ID3D11ShaderResourceView*& depthSRV, ID3D11ShaderResourceView*& normalSRV, ID3D11ShaderResourceView*& roughnessSRV, ID3D11UnorderedAccessView*& outputUAV);
+
+    // Shortcut to enable/disable the system
+    void Enable() { settings.Enabled = true; }
+    void Disable() { settings.Enabled = false; }
+    bool IsEnabled() const { return settings.Enabled && initialized; }
 };
