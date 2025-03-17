@@ -60,6 +60,36 @@ namespace KickstartRTImpl
             // Create init settings for D3D11
             KickstartRT::D3D11::ExecuteContext_InitSettings settings;
             settings.D3D11Device = device;
+            
+            // Get the adapter from the device - this is REQUIRED for KickstartRT D3D11 interop
+            IDXGIAdapter1* dxgiAdapter1 = nullptr;
+            {
+                Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDeviceComPtr;
+                if (SUCCEEDED(device->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDeviceComPtr))) {
+                    Microsoft::WRL::ComPtr<IDXGIAdapter> dxgiAdapterComPtr;
+                    if (SUCCEEDED(dxgiDeviceComPtr->GetAdapter(dxgiAdapterComPtr.GetAddressOf()))) {
+                        // Get IDXGIAdapter1 interface
+                        if (SUCCEEDED(dxgiAdapterComPtr->QueryInterface(__uuidof(IDXGIAdapter1), (void**)&dxgiAdapter1))) {
+                            logger::info("[RT] Successfully obtained DXGIAdapter1");
+                        }
+                        else {
+                            logger::error("[RT] Failed to get IDXGIAdapter1 interface");
+                            return false;
+                        }
+                    }
+                    else {
+                        logger::error("[RT] Failed to get adapter from device");
+                        return false;
+                    }
+                }
+                else {
+                    logger::error("[RT] Failed to get DXGI device interface");
+                    return false;
+                }
+            }
+            
+            // Set the adapter in settings - this is REQUIRED
+            settings.DXGIAdapter = dxgiAdapter1;
             settings.usingCommandQueue = KickstartRT::D3D11::ExecuteContext_InitSettings::UsingCommandQueue::Direct;
             settings.supportedWorkingSet = 4u;
             settings.descHeapSize = 8192u;
@@ -140,7 +170,7 @@ namespace KickstartRTImpl
                 return false;
             }
             
-            // Schedule an empty task to execute
+            // Use InvokeGPUTask instead of BuildGPUTask for D3D11
             auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
             if (status != KickstartRT::Status::OK) {
                 logger::error("[RT] Failed to execute empty task. Status: {}", static_cast<int>(status));
@@ -177,11 +207,10 @@ namespace KickstartRTImpl
                 return false;
             }
             
-            // In a real implementation, we would:
-            // 1. Schedule a TraceDiffuseTask to the container
-            // 2. Call InvokeGPUTask to execute it
+            // For a real implementation:
+            // 1. Schedule RenderTasks to the container (like TraceDiffuseTask)
             
-            // Execute and let KickstartRT manage the task container
+            // Use InvokeGPUTask for D3D11 instead of BuildGPUTask
             auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
             if (status != KickstartRT::Status::OK) {
                 logger::error("[RT] Failed to execute GI task. Status: {}", static_cast<int>(status));
@@ -215,11 +244,10 @@ namespace KickstartRTImpl
                 return false;
             }
             
-            // In a real implementation, we would:
-            // 1. Schedule a TraceSpecularTask to the container
-            // 2. Call InvokeGPUTask to execute it
+            // For a real implementation:
+            // 1. Schedule RenderTasks to the container (like TraceSpecularTask)
             
-            // Execute and let KickstartRT manage the task container
+            // Use InvokeGPUTask for D3D11 instead of BuildGPUTask
             auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
             if (status != KickstartRT::Status::OK) {
                 logger::error("[RT] Failed to execute reflections task. Status: {}", static_cast<int>(status));
