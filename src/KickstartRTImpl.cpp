@@ -135,6 +135,26 @@ namespace KickstartRTImpl
             
             g_executeContext = exc;
             g_initialized = true;
+            
+            // Make sure we have a fence for synchronization
+            if (!g_renderFence) {
+                logger::warn("[RT] No fence was created earlier. Attempting to create one now.");
+                device5 = nullptr;
+                hr = device->QueryInterface(__uuidof(ID3D11Device5), (void**)&device5);
+                if (SUCCEEDED(hr) && device5) {
+                    hr = device5->CreateFence(0, D3D11_FENCE_FLAG_SHARED, IID_PPV_ARGS(&g_renderFence));
+                    if (FAILED(hr)) {
+                        logger::error("[RT] Failed to create fence as fallback. KickstartRT operations will fail. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+                    } else {
+                        logger::info("[RT] Successfully created fallback fence");
+                        g_fenceValue = 1; // Start at 1
+                    }
+                    device5->Release();
+                } else {
+                    logger::error("[RT] Could not get D3D11Device5 interface. GPU synchronization will not work.");
+                }
+            }
+            
             logger::info("[RT] KickstartRT initialized successfully");
             
             return true;

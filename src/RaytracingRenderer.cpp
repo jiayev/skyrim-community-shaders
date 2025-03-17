@@ -155,8 +155,15 @@ namespace KickstartRTImpl
                 
                 // Add synchronization fences if available
                 if (g_renderFence) {
+                    taskInput4.waitFence = g_renderFence.Get();
+                    taskInput4.waitFenceValue = g_fenceValue;
                     taskInput4.signalFence = g_renderFence.Get();
-                    taskInput4.signalFenceValue = g_fenceValue++;
+                    taskInput4.signalFenceValue = g_fenceValue + 1;
+                    g_fenceValue++; // Increment for next use
+                }
+                else {
+                    logger::error("[RT] Cannot execute GPU task without a valid fence for synchronization");
+                    return false;
                 }
                 
                 auto status4 = g_executeContext->InvokeGPUTask(taskContainer, &taskInput4);
@@ -178,8 +185,15 @@ namespace KickstartRTImpl
                 
                 // Add synchronization fences if available
                 if (g_renderFence) {
+                    taskInput5.waitFence = g_renderFence.Get();
+                    taskInput5.waitFenceValue = g_fenceValue;
                     taskInput5.signalFence = g_renderFence.Get();
-                    taskInput5.signalFenceValue = g_fenceValue++;
+                    taskInput5.signalFenceValue = g_fenceValue + 1;
+                    g_fenceValue++; // Increment for next use
+                }
+                else {
+                    logger::error("[RT] Cannot execute GPU task without a valid fence for synchronization");
+                    return false;
                 }
                 
                 auto status5 = g_executeContext->InvokeGPUTask(taskContainer, &taskInput5);
@@ -354,8 +368,15 @@ namespace KickstartRTImpl
             
             // Add synchronization fences if available
             if (g_renderFence) {
+                taskInput6.waitFence = g_renderFence.Get();
+                taskInput6.waitFenceValue = g_fenceValue;
                 taskInput6.signalFence = g_renderFence.Get();
-                taskInput6.signalFenceValue = g_fenceValue++;
+                taskInput6.signalFenceValue = g_fenceValue + 1;
+                g_fenceValue++; // Increment for next use
+            }
+            else {
+                logger::error("[RT] Cannot execute GPU task without a valid fence for synchronization");
+                return false;
             }
             
             auto status6 = g_executeContext->InvokeGPUTask(taskContainer, &taskInput6);
