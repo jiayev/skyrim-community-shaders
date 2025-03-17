@@ -1,5 +1,6 @@
 #include "KickstartRTImpl.h"
 #include "Globals.h"
+#include "State.h"
 
 namespace KickstartRTImpl
 {
@@ -26,7 +27,7 @@ namespace KickstartRTImpl
     {
         // Check if we have an initialized context
         if (!g_executeContext) {
-            logger::error("[KickstartRTImpl] GenerateGI called without initialized context");
+            logger::debug("[KickstartRTImpl] GenerateGI called without initialized context");
             return false;
         }
 
@@ -36,17 +37,14 @@ namespace KickstartRTImpl
             return false;
         }
 
-        // Log what we're doing
-        logger::info("[KickstartRTImpl] Running GenerateGI with provided resources");
+        // Get the device context from globals
+        auto d3dContext = globals::d3d::context;
+        if (!d3dContext) {
+            logger::error("[KickstartRTImpl] D3D11 device context not available");
+            return false;
+        }
 
         try {
-            // Get the device context from globals
-            auto d3dContext = globals::d3d::context;
-            if (!d3dContext) {
-                logger::error("[KickstartRTImpl] D3D11 device context not available");
-                return false;
-            }
-
             // Create a task container with proper synchronization setup
             auto taskContainer = g_executeContext->CreateTaskContainer();
             if (!taskContainer) {
@@ -57,47 +55,54 @@ namespace KickstartRTImpl
             // Schedule BVH Build task - this is required before any rendering tasks
             KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
             bvhBuildTask.buildTLAS = true;  // Build the top-level acceleration structure
-            bvhBuildTask.maxBlasBuildCount = 4u;  // Process up to 4 bottom-level acceleration structures
+            bvhBuildTask.maxBlasBuildCount = 4u;  // Process up to 4 bottom-level acceleration structures per frame
             taskContainer->ScheduleBVHTask(&bvhBuildTask);
             
             // Set up diffuse GI tracing
             KickstartRT::D3D11::RenderTask::TraceDiffuseTask traceTask;
             
-            // Configure input buffers - note that the KickstartRT API requires specific setup
-            // Get resources from SRVs
+            // Extract resources from the views
             ID3D11Resource* depthResource = nullptr;
             ID3D11Resource* normalResource = nullptr;
             ID3D11Resource* outputResource = nullptr;
             
-            // Extract the underlying resources from the views
+            // Get depth resource
             if (depthSRV) {
                 depthSRV->GetResource(&depthResource);
-                traceTask.common.depth.tex.resource = depthResource;
-                // Shader resource view description - required for KickstartRT to correctly access the texture
-                traceTask.common.depth.tex.srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                traceTask.common.depth.tex.srvDesc.Texture2D.MipLevels = 1;
-                traceTask.common.depth.tex.srvDesc.Texture2D.MostDetailedMip = 0;
+                if (depthResource) {
+                    traceTask.common.depth.tex.resource = depthResource;
+                    // Get SRV description
+                    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+                    depthSRV->GetDesc(&srvDesc);
+                    traceTask.common.depth.tex.srvDesc = srvDesc;
+                }
             }
             
+            // Get normal resource if available
             if (normalSRV) {
                 normalSRV->GetResource(&normalResource);
-                traceTask.common.normal.tex.resource = normalResource;
-                // Shader resource view description
-                traceTask.common.normal.tex.srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                traceTask.common.normal.tex.srvDesc.Texture2D.MipLevels = 1;
-                traceTask.common.normal.tex.srvDesc.Texture2D.MostDetailedMip = 0;
+                if (normalResource) {
+                    traceTask.common.normal.tex.resource = normalResource;
+                    // Get SRV description
+                    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+                    normalSRV->GetDesc(&srvDesc);
+                    traceTask.common.normal.tex.srvDesc = srvDesc;
+                }
             }
             
-            // Configure output buffer
+            // Get output resource
             if (outputUAV) {
                 outputUAV->GetResource(&outputResource);
-                traceTask.out.resource = outputResource;
-                // Unordered access view description
-                traceTask.out.uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-                traceTask.out.uavDesc.Texture2D.MipSlice = 0;
+                if (outputResource) {
+                    traceTask.out.resource = outputResource;
+                    // Get UAV description
+                    D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc;
+                    outputUAV->GetDesc(&uavDesc);
+                    traceTask.out.uavDesc = uavDesc;
+                }
             }
             
-            // Set view and projection matrices
+            // Setup view matrices - Convert view and projection matrices to the format expected by KickstartRT
             // Calculate the inverse projection matrix
             DirectX::XMMATRIX invProjMatrix = DirectX::XMMatrixInverse(nullptr, DirectX::XMLoadFloat4x4(&projMatrix));
             DirectX::XMFLOAT4X4 invProj;
@@ -108,33 +113,35 @@ namespace KickstartRTImpl
             DirectX::XMFLOAT4X4 invView;
             DirectX::XMStoreFloat4x4(&invView, invViewMatrix);
             
-            // Convert to KickstartRT format - this maps from clip space to view space and view space to world space
+            // Convert to KickstartRT format
             traceTask.common.clipToViewMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invProj);
             traceTask.common.viewToWorldMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invView);
             
-            // Get dimensions from the depth resource - needed for viewport setup
-            D3D11_TEXTURE2D_DESC depthDesc;
+            // Set viewport dimensions from the depth resource
             if (depthResource) {
                 ID3D11Texture2D* depthTex = nullptr;
                 HRESULT hr = depthResource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&depthTex));
                 if (SUCCEEDED(hr) && depthTex) {
+                    D3D11_TEXTURE2D_DESC depthDesc;
                     depthTex->GetDesc(&depthDesc);
                     traceTask.common.viewport.width = depthDesc.Width;
                     traceTask.common.viewport.height = depthDesc.Height;
                     depthTex->Release();
-                } else {
-                    // Fallback to screen dimensions
+                }
+                else {
+                    // Fallback to default dimensions
                     traceTask.common.viewport.width = 1920;
                     traceTask.common.viewport.height = 1080;
                 }
-            } else {
-                // Fallback to screen dimensions
+            }
+            else {
+                // Fallback to default dimensions
                 traceTask.common.viewport.width = 1920;
                 traceTask.common.viewport.height = 1080;
             }
             
-            // Set ray parameters
-            traceTask.common.maxRayLength = 200.0f;  // Maximum ray distance
+            // Configure GI ray tracing parameters
+            traceTask.common.maxRayLength = 500.0f;  // Maximum ray distance for GI
             
             // Schedule the task
             taskContainer->ScheduleRenderTask(&traceTask);
@@ -144,75 +151,50 @@ namespace KickstartRTImpl
             if (normalResource) normalResource->Release();
             if (outputResource) outputResource->Release();
             
-            // Execute GPU task - using proper fence synchronization
-            ID3D11CommandList* commandList = nullptr;
-            d3dContext->FinishCommandList(false, &commandList);
-
-            if (commandList) {
-                KickstartRT::D3D11::BuildGPUTaskInput taskInput4 = {};
-                taskInput4.geometryTaskFirst = true;
-                taskInput4.maxBlasBuildCount = 16u;
+            // Setup proper synchronization for GPU task execution
+            KickstartRT::D3D11::BuildGPUTaskInput taskInput = {};
+            taskInput.geometryTaskFirst = true;       // Process geometry tasks first
+            taskInput.maxBlasBuildCount = 4u;         // Limit BLAS builds per frame
+            
+            // Add synchronization fences if available
+            if (g_renderFence) {
+                // Wait for previous operations to complete
+                taskInput.waitFence = g_renderFence.Get();
+                taskInput.waitFenceValue = g_fenceValue;
                 
-                // Add synchronization fences if available
-                if (g_renderFence) {
-                    taskInput4.waitFence = g_renderFence.Get();
-                    taskInput4.waitFenceValue = g_fenceValue;
-                    taskInput4.signalFence = g_renderFence.Get();
-                    taskInput4.signalFenceValue = g_fenceValue + 1;
-                    g_fenceValue++; // Increment for next use
-                }
-                else {
-                    logger::error("[RT] Cannot execute GPU task without a valid fence for synchronization");
-                    return false;
-                }
+                // Signal when our operations are done
+                taskInput.signalFence = g_renderFence.Get();
+                taskInput.signalFenceValue = g_fenceValue + 1;
                 
-                auto status4 = g_executeContext->InvokeGPUTask(taskContainer, &taskInput4);
-                commandList->Release();
-                
-                if (status4 == KickstartRT::Status::OK) {
-                    logger::info("[KickstartRTImpl] Successfully generated GI");
-                    return true;
-                } else {
-                    logger::error("[KickstartRTImpl] Failed to execute GI task: {}", static_cast<int>(status4));
-                    return false;
-                }
-            } else {
-                // Fall back to direct execution without command lists if we couldn't create one
-                logger::warn("[KickstartRTImpl] Could not create command list, executing directly");
-                KickstartRT::D3D11::BuildGPUTaskInput taskInput5 = {};
-                taskInput5.geometryTaskFirst = true;
-                taskInput5.maxBlasBuildCount = 16u;
-                
-                // Add synchronization fences if available
-                if (g_renderFence) {
-                    taskInput5.waitFence = g_renderFence.Get();
-                    taskInput5.waitFenceValue = g_fenceValue;
-                    taskInput5.signalFence = g_renderFence.Get();
-                    taskInput5.signalFenceValue = g_fenceValue + 1;
-                    g_fenceValue++; // Increment for next use
-                }
-                else {
-                    logger::error("[RT] Cannot execute GPU task without a valid fence for synchronization");
-                    return false;
-                }
-                
-                auto status5 = g_executeContext->InvokeGPUTask(taskContainer, &taskInput5);
-                
-                if (status5 == KickstartRT::Status::OK) {
-                    logger::info("[KickstartRTImpl] Successfully generated GI (direct execution)");
-                    return true;
-                } else {
-                    logger::error("[KickstartRTImpl] Failed to execute GI task: {}", static_cast<int>(status5));
-                    return false;
-                }
+                // Increment for next use
+                g_fenceValue++;
             }
-        } catch (const std::exception& e) {
+            else {
+                logger::error("[KickstartRTImpl] Cannot execute GPU task without a valid fence for synchronization");
+                return false;
+            }
+            
+            // Execute the GPU task
+            auto status = g_executeContext->InvokeGPUTask(taskContainer, &taskInput);
+            
+            if (status == KickstartRT::Status::OK) {
+                logger::debug("[KickstartRTImpl] Successfully generated GI");
+                return true;
+            } else {
+                logger::error("[KickstartRTImpl] Failed to execute GI task: {}", static_cast<int>(status));
+                return false;
+            }
+        } 
+        catch (const std::exception& e) {
             logger::error("[KickstartRTImpl] Exception in GenerateGI: {}", e.what());
             return false;
-        } catch (...) {
+        } 
+        catch (...) {
             logger::error("[KickstartRTImpl] Unknown exception in GenerateGI");
             return false;
         }
+        
+        return false;
     }
 
     /**

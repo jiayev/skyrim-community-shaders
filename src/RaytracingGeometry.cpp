@@ -1,10 +1,106 @@
 #include "KickstartRTImpl.h"
 #include "Globals.h"
+#include "State.h"
 
 namespace KickstartRTImpl
 {
     namespace
     {
+        // Resource cache to prevent recreating the same buffers repeatedly
+        struct BufferCacheEntry {
+            Microsoft::WRL::ComPtr<ID3D11Buffer> buffer;
+            size_t hash;
+            uint64_t lastUsedFrame;
+        };
+
+        std::vector<BufferCacheEntry> g_vertexBufferCache;
+        std::vector<BufferCacheEntry> g_indexBufferCache;
+        const size_t MAX_BUFFER_CACHE_SIZE = 100; // Limit cache size to prevent memory growth
+        
+        // Add a static counter as a replacement for frameCount
+        static uint64_t g_frameCounter = 0;
+        
+        // Function to get and increment the frame counter
+        uint64_t GetFrameCount() {
+            return g_frameCounter++;
+        }
+        
+        /**
+         * Try to find a cached buffer that matches the given data
+         * 
+         * @param cache The buffer cache to search
+         * @param size Size of the data in bytes
+         * @param data Pointer to the data
+         * @return Cached buffer if found, nullptr otherwise
+         */
+        ID3D11Buffer* FindCachedBuffer(std::vector<BufferCacheEntry>& cache, size_t size, const void* data) {
+            // Simple hash function for buffer data
+            size_t hash = 0;
+            const uint8_t* bytes = static_cast<const uint8_t*>(data);
+            // Only hash a subset of bytes to avoid performance issues with large buffers
+            const size_t sampleSize = std::min(size, size_t(1024));
+            const size_t stride = size / sampleSize;
+            
+            for (size_t i = 0; i < sampleSize; i++) {
+                hash = hash * 31 + bytes[i * stride];
+            }
+            
+            // Add buffer size to hash to differentiate same content with different sizes
+            hash = hash * 31 + size;
+            
+            // Find matching buffer in cache
+            for (auto& entry : cache) {
+                if (entry.hash == hash) {
+                    // Update last used frame
+                    entry.lastUsedFrame = GetFrameCount();
+                    return entry.buffer.Get();
+                }
+            }
+            
+            return nullptr;
+        }
+        
+        /**
+         * Add a buffer to the cache
+         * 
+         * @param cache The buffer cache to add to
+         * @param buffer The buffer to add
+         * @param size Size of the data in bytes
+         * @param data Pointer to the data
+         */
+        void AddBufferToCache(std::vector<BufferCacheEntry>& cache, ID3D11Buffer* buffer, size_t size, const void* data) {
+            // Simple hash function for buffer data
+            size_t hash = 0;
+            const uint8_t* bytes = static_cast<const uint8_t*>(data);
+            // Only hash a subset of bytes to avoid performance issues with large buffers
+            const size_t sampleSize = std::min(size, size_t(1024));
+            const size_t stride = size / sampleSize;
+            
+            for (size_t i = 0; i < sampleSize; i++) {
+                hash = hash * 31 + bytes[i * stride];
+            }
+            
+            // Add buffer size to hash to differentiate same content with different sizes
+            hash = hash * 31 + size;
+            
+            // If cache is full, remove least recently used entry
+            if (cache.size() >= MAX_BUFFER_CACHE_SIZE) {
+                size_t lruIndex = 0;
+                uint64_t lruFrame = UINT64_MAX;
+                
+                for (size_t i = 0; i < cache.size(); i++) {
+                    if (cache[i].lastUsedFrame < lruFrame) {
+                        lruFrame = cache[i].lastUsedFrame;
+                        lruIndex = i;
+                    }
+                }
+                
+                cache[lruIndex] = {Microsoft::WRL::ComPtr<ID3D11Buffer>(buffer), hash, GetFrameCount()};
+            } else {
+                cache.push_back({Microsoft::WRL::ComPtr<ID3D11Buffer>(buffer), hash, GetFrameCount()});
+            }
+        }
+
         /**
          * Helper function to execute a task container with proper fence synchronization
          * 
@@ -334,30 +430,6 @@ namespace KickstartRTImpl
                 return false;
             }
             
-            // Create D3D11 vertex buffer
-            D3D11_BUFFER_DESC vbDesc = {};
-            vbDesc.ByteWidth = rendererData->vertexDesc.GetSize() * vertexCount;
-            vbDesc.Usage = D3D11_USAGE_DEFAULT;
-            vbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-            vbDesc.CPUAccessFlags = 0;
-            vbDesc.StructureByteStride = rendererData->vertexDesc.GetSize();
-            vbDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // Required for KickstartRT
-            
-            D3D11_SUBRESOURCE_DATA vbData = {};
-            vbData.pSysMem = rendererData->rawVertexData;
-            
-            // Create index buffer description
-            D3D11_BUFFER_DESC ibDesc = {};
-            ibDesc.ByteWidth = sizeof(uint16_t) * triangleCount * 3; // 3 indices per triangle
-            ibDesc.Usage = D3D11_USAGE_DEFAULT;
-            ibDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
-            ibDesc.CPUAccessFlags = 0;
-            ibDesc.StructureByteStride = sizeof(uint16_t);
-            ibDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // Required for KickstartRT
-            
-            D3D11_SUBRESOURCE_DATA ibData = {};
-            ibData.pSysMem = rendererData->rawIndexData;
-            
             // Get D3D11 device
             ID3D11Device* device = globals::d3d::device;
             if (!device) {
@@ -365,23 +437,90 @@ namespace KickstartRTImpl
                 return false;
             }
             
-            // Create the vertex buffer
-            Microsoft::WRL::ComPtr<ID3D11Buffer> vertexBuffer;
-            HRESULT hr = device->CreateBuffer(&vbDesc, &vbData, vertexBuffer.GetAddressOf());
-            if (FAILED(hr)) {
-                logger::error("[RT] Failed to create vertex buffer for Skyrim mesh. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
-                return false;
+            // Try to find cached buffers first
+            ID3D11Buffer* vertexBuffer = FindCachedBuffer(
+                g_vertexBufferCache, 
+                rendererData->vertexDesc.GetSize() * vertexCount, 
+                rendererData->rawVertexData
+            );
+            
+            ID3D11Buffer* indexBuffer = FindCachedBuffer(
+                g_indexBufferCache, 
+                sizeof(uint16_t) * triangleCount * 3, 
+                rendererData->rawIndexData
+            );
+            
+            // Create the vertex buffer if not found in cache
+            Microsoft::WRL::ComPtr<ID3D11Buffer> vertexBufferPtr;
+            if (!vertexBuffer) {
+                D3D11_BUFFER_DESC vbDesc = {};
+                vbDesc.ByteWidth = rendererData->vertexDesc.GetSize() * vertexCount;
+                vbDesc.Usage = D3D11_USAGE_DEFAULT;
+                vbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+                vbDesc.CPUAccessFlags = 0;
+                vbDesc.StructureByteStride = rendererData->vertexDesc.GetSize();
+                vbDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // Required for KickstartRT
+                
+                D3D11_SUBRESOURCE_DATA vbData = {};
+                vbData.pSysMem = rendererData->rawVertexData;
+                
+                HRESULT hr = device->CreateBuffer(&vbDesc, &vbData, vertexBufferPtr.GetAddressOf());
+                if (FAILED(hr)) {
+                    logger::error("[RT] Failed to create vertex buffer for Skyrim mesh. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+                    return false;
+                }
+                
+                vertexBuffer = vertexBufferPtr.Get();
+                
+                // Add to cache for future reuse
+                AddBufferToCache(
+                    g_vertexBufferCache, 
+                    vertexBuffer, 
+                    rendererData->vertexDesc.GetSize() * vertexCount, 
+                    rendererData->rawVertexData
+                );
+                
+                logger::debug("[RT] Created new vertex buffer for Skyrim mesh '{}'", name);
+            } else {
+                vertexBufferPtr = Microsoft::WRL::ComPtr<ID3D11Buffer>(vertexBuffer);
+                logger::debug("[RT] Reusing cached vertex buffer for Skyrim mesh '{}'", name);
             }
             
-            // Create the index buffer
-            Microsoft::WRL::ComPtr<ID3D11Buffer> indexBuffer;
-            hr = device->CreateBuffer(&ibDesc, &ibData, indexBuffer.GetAddressOf());
-            if (FAILED(hr)) {
-                logger::error("[RT] Failed to create index buffer for Skyrim mesh. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
-                return false;
+            // Create the index buffer if not found in cache
+            Microsoft::WRL::ComPtr<ID3D11Buffer> indexBufferPtr;
+            if (!indexBuffer) {
+                D3D11_BUFFER_DESC ibDesc = {};
+                ibDesc.ByteWidth = sizeof(uint16_t) * triangleCount * 3; // 3 indices per triangle
+                ibDesc.Usage = D3D11_USAGE_DEFAULT;
+                ibDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+                ibDesc.CPUAccessFlags = 0;
+                ibDesc.StructureByteStride = sizeof(uint16_t);
+                ibDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // Required for KickstartRT
+                
+                D3D11_SUBRESOURCE_DATA ibData = {};
+                ibData.pSysMem = rendererData->rawIndexData;
+                
+                HRESULT hr = device->CreateBuffer(&ibDesc, &ibData, indexBufferPtr.GetAddressOf());
+                if (FAILED(hr)) {
+                    logger::error("[RT] Failed to create index buffer for Skyrim mesh. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+                    return false;
+                }
+                
+                indexBuffer = indexBufferPtr.Get();
+                
+                // Add to cache for future reuse
+                AddBufferToCache(
+                    g_indexBufferCache, 
+                    indexBuffer, 
+                    sizeof(uint16_t) * triangleCount * 3, 
+                    rendererData->rawIndexData
+                );
+                
+                logger::debug("[RT] Created new index buffer for Skyrim mesh '{}'", name);
+            } else {
+                indexBufferPtr = Microsoft::WRL::ComPtr<ID3D11Buffer>(indexBuffer);
+                logger::debug("[RT] Reusing cached index buffer for Skyrim mesh '{}'", name);
             }
-            
-            logger::debug("[RT] Created buffers for Skyrim mesh '{}'", name);
             
             // Create a handle for the geometry
             KickstartRT::D3D11::GeometryHandle handle;
@@ -396,24 +535,31 @@ namespace KickstartRTImpl
             geomTask.taskOperation = KickstartRT::D3D11::BVHTask::TaskOperation::Register;
             geomTask.handle = handle;
             geomTask.input.type = KickstartRT::D3D11::BVHTask::GeometryInput::Type::TrianglesIndexed;
-            geomTask.input.allowUpdate = true;
+            
+            // Determine if this is a dynamic (skinned) mesh by checking if it's part of an actor
+            std::string nameStr = name;
+            bool isDynamic = nameStr.find("Actor_") != std::string::npos;
+            
+            // Only allow updates for dynamic meshes to conserve memory
+            // See doc2.md: "For static geometry, the buffer is released when its BLAS has been built, 
+            // but for dynamic geometry is not released even after the BLAS is built"
+            geomTask.input.allowUpdate = isDynamic;
             
             // Add geometry component
             KickstartRT::D3D11::BVHTask::GeometryInput::GeometryComponent component;
             
             // Configure vertex buffer
-            component.vertexBuffer.resource = vertexBuffer.Get();
+            component.vertexBuffer.resource = vertexBuffer;
             component.vertexBuffer.format = DXGI_FORMAT_R32G32B32_FLOAT;
             component.vertexBuffer.offsetInBytes = 0;
-            component.vertexBuffer.strideInBytes = vbDesc.StructureByteStride > 0 ? 
-                vbDesc.StructureByteStride : 12;
-            component.vertexBuffer.count = vbDesc.ByteWidth / component.vertexBuffer.strideInBytes;
+            component.vertexBuffer.strideInBytes = rendererData->vertexDesc.GetSize();
+            component.vertexBuffer.count = vertexCount;
             
             // Configure index buffer
-            component.indexBuffer.resource = indexBuffer.Get();
+            component.indexBuffer.resource = indexBuffer;
             component.indexBuffer.format = DXGI_FORMAT_R16_UINT;
             component.indexBuffer.offsetInBytes = 0;
-            component.indexBuffer.count = ibDesc.ByteWidth / sizeof(uint16_t);
+            component.indexBuffer.count = triangleCount * 3;
             
             // Add component to geometry task
             geomTask.input.components.push_back(component);
@@ -548,8 +694,10 @@ namespace KickstartRTImpl
                     if (SUCCEEDED(hr)) {
                         // Wait for most recent fence before collecting new geometry
                         // This ensures previous submissions are fully processed
-                        context4->Wait(g_renderFence.Get(), g_fenceValue - 1);
-                        logger::debug("[RT] Successfully waited for previous GPU operations, fence value: {}", g_fenceValue - 1);
+                        if (g_fenceValue > 1) {
+                            context4->Wait(g_renderFence.Get(), g_fenceValue - 1);
+                            logger::debug("[RT] Successfully waited for previous GPU operations, fence value: {}", g_fenceValue - 1);
+                        }
                     }
                 }
             }
@@ -586,6 +734,7 @@ namespace KickstartRTImpl
             float radius;
             float importance; // Higher is more important
             std::string name;
+            bool isDynamic;
         };
         
         // Vector to collect candidates before sorting by importance
@@ -649,7 +798,8 @@ namespace KickstartRTImpl
                                     distance,
                                     geometry->worldBound.radius,
                                     importance,
-                                    name
+                                    name,
+                                    true // Actor geometries are considered dynamic
                                 });
                                 
                                 return RE::BSVisit::BSVisitControl::kContinue;
@@ -713,7 +863,8 @@ namespace KickstartRTImpl
                     distance,
                     geometry->worldBound.radius,
                     importance,
-                    name
+                    name,
+                    false // Static scene objects are not considered dynamic
                 });
                 
                 return RE::BSVisit::BSVisitControl::kContinue;
@@ -732,10 +883,17 @@ namespace KickstartRTImpl
         logger::info("[RT] Collected {} potential objects, registering top {} by importance", 
                     candidates.size(), registerCount);
         
-        // Schedule a BVH build task first
+        // ===== Based on KickstartRT documentation =====
+        // First schedule a BVH build task with optimal settings
         KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
-        bvhBuildTask.buildTLAS = true;
-        bvhBuildTask.maxBlasBuildCount = 8u;
+        bvhBuildTask.buildTLAS = true; // Build top-level acceleration structure
+        
+        // Limit the number of BLAS builds per frame to avoid stalls
+        // From the docs: "By generating a copy of the vertex buffer, the SDK can control the number of BLASs 
+        // created per BVHBuildTask in order to adjust the BLAS creation load."
+        bvhBuildTask.maxBlasBuildCount = updateDynamicOnly ? 4u : 8u;
+        
+        // Schedule the BVH build task
         taskContainer->ScheduleBVHTask(&bvhBuildTask);
         
         // Register the candidates - now using the batched approach
@@ -778,8 +936,8 @@ namespace KickstartRTImpl
                     registeredCount++;
                     
                     // Log prioritization info for debugging
-                    logger::debug("[RT] Scheduled registration for object: radius={:.1f}, dist={:.1f}, importance={:.4f}", 
-                        candidate.radius, candidate.distance, candidate.importance);
+                    logger::debug("[RT] Scheduled registration for object: radius={:.1f}, dist={:.1f}, importance={:.4f}, dynamic={}", 
+                        candidate.radius, candidate.distance, candidate.importance, candidate.isDynamic ? "yes" : "no");
                 }
             }
         }
@@ -787,7 +945,9 @@ namespace KickstartRTImpl
         // Execute the single task container with all operations
         if (registeredCount > 0) {
             logger::info("[RT] Executing batch of {} registration operations", registeredCount);
-            if (ExecuteTaskContainer(taskContainer, true, 8u)) {
+            
+            // Use optimal parameters for ExecuteTaskContainer based on KickstartRT docs
+            if (ExecuteTaskContainer(taskContainer, true, updateDynamicOnly ? 4u : 8u)) {
                 logger::info("[RT] Successfully executed all scheduled geometry tasks");
             } else {
                 logger::error("[RT] Failed to execute geometry tasks");
@@ -803,6 +963,35 @@ namespace KickstartRTImpl
             logger::debug("[RT] No objects to register, skipping execution");
         }
         
+        // Clean up old buffers from cache periodically
+        static uint64_t lastCleanupFrame = 0;
+        uint64_t currentFrame = GetFrameCount();
+        if (currentFrame - lastCleanupFrame > 120) { // ~ every 2 seconds at 60 fps
+            size_t numRemoved = 0;
+            
+            // Remove buffers that haven't been used in the last 300 frames (~ 5 seconds at 60 fps)
+            auto cleanupCache = [currentFrame, &numRemoved](std::vector<BufferCacheEntry>& cache) {
+                auto it = cache.begin();
+                while (it != cache.end()) {
+                    if (currentFrame - it->lastUsedFrame > 300) {
+                        it = cache.erase(it);
+                        numRemoved++;
+                    } else {
+                        ++it;
+                    }
+                }
+            };
+            
+            cleanupCache(g_vertexBufferCache);
+            cleanupCache(g_indexBufferCache);
+            
+            if (numRemoved > 0) {
+                logger::debug("[RT] Cleaned up {} unused buffers from cache", numRemoved);
+            }
+            
+            lastCleanupFrame = currentFrame;
+        }
+        
         logger::info("[RT] Scene geometry collection complete. Registered {} objects (processed {})", 
             registeredCount, processedCount);
         return registeredCount;
@@ -814,5 +1003,40 @@ namespace KickstartRTImpl
     int CollectSceneGeometry()
     {
         return CollectSceneGeometry(false);
+    }
+    
+    /**
+     * Clean up all cached resources
+     * This should be called when unloading areas or during shutdown
+     */
+    void CleanupGeometryResources()
+    {
+        // Wait for GPU to complete all pending operations
+        if (g_renderFence) {
+            try {
+                auto context = globals::d3d::context;
+                if (context) {
+                    Microsoft::WRL::ComPtr<ID3D11DeviceContext4> context4;
+                    HRESULT hr = context->QueryInterface(__uuidof(ID3D11DeviceContext4), &context4);
+                    if (SUCCEEDED(hr) && g_fenceValue > 0) {
+                        context4->Wait(g_renderFence.Get(), g_fenceValue - 1);
+                        logger::info("[RT] Successfully waited for all GPU operations to complete before cleanup");
+                    }
+                }
+            }
+            catch (const std::exception& e) {
+                logger::warn("[RT] Exception during fence wait for cleanup: {}", e.what());
+            }
+        }
+        
+        // Clear all cached buffers
+        g_vertexBufferCache.clear();
+        g_indexBufferCache.clear();
+        
+        // According to the documentation, releasing device resources immediately will work
+        // but all SDK command lists must be complete first, which we ensured above
+        g_executeContext->ReleaseDeviceResourcesImmediately();
+        
+        logger::info("[RT] Cleaned up all geometry resources");
     }
 } // namespace KickstartRTImpl 

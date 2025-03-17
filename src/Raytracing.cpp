@@ -5,6 +5,7 @@
 #include <Windows.h>
 #include <DirectXMath.h>
 #include <d3d11.h>
+#include <chrono>
 
 // Raytracing class implementation 
 bool Raytracing::InitializeResources(ID3D11Device* device)
@@ -220,7 +221,7 @@ bool Raytracing::GenerateGI(
     
     // Validate critical input resources
     if (!depthSRV || !outputUAV) {
-        logger::error("[Raytracing] GenerateGI called with null resources");
+        logger::debug("[Raytracing] GenerateGI called with null resources");
         return false;
     }
     
@@ -229,13 +230,28 @@ bool Raytracing::GenerateGI(
     
     // Call into the KickstartRT implementation
     try {
-        return KickstartRTImpl::GenerateGI(
+        // Setup a timer for performance tracking
+        auto startTime = std::chrono::high_resolution_clock::now();
+        
+        bool result = KickstartRTImpl::GenerateGI(
             depthSRV,
             normalSRV,
             outputUAV,
             viewMatrix,
             projMatrix
         );
+        
+        // Calculate execution time for performance monitoring
+        auto endTime = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+        
+        // Only log timing occasionally to avoid spam - use a static counter instead of frameCount
+        static uint64_t timingLogCounter = 0;
+        if (timingLogCounter++ % 60 == 0) { // Log timing every 60 calls
+            logger::debug("[Raytracing] GI generation took {} ms", duration);
+        }
+        
+        return result;
     }
     catch (const std::exception& e) {
         logger::error("[Raytracing] Exception in GenerateGI: {}", e.what());
@@ -288,7 +304,7 @@ bool Raytracing::TraceGI(const KickstartRT::TraceQueryInternal& query)
 
     // Check if we're properly initialized
     if (!initialized) {
-        logger::warn("[Raytracing] Cannot trace GI - raytracing not initialized");
+        logger::debug("[Raytracing] Cannot trace GI - raytracing not initialized");
         
         // Fallback: fill output with black if we have a valid UAV
         if (query.outputUAV) {
@@ -306,7 +322,7 @@ bool Raytracing::TraceGI(const KickstartRT::TraceQueryInternal& query)
 
     // Validate all required resources
     if (!query.depthBufferSRV || !query.outputUAV) {
-        logger::error("[Raytracing] Missing required resources for GI trace");
+        logger::debug("[Raytracing] Missing required resources for GI trace");
         return false;
     }
 
@@ -314,13 +330,30 @@ bool Raytracing::TraceGI(const KickstartRT::TraceQueryInternal& query)
     logger::debug("[Raytracing] Tracing GI with ray length: {}", query.maxRayLength);
 
     try {
+        // Register scene geometry if needed (do this less frequently to improve performance)
+        static uint64_t registrationCounter = 0;
+        // Only register geometry every few frames to reduce overhead
+        if (registrationCounter++ % 30 == 0) {
+            if (RegisterGeometry()) {
+                logger::debug("[Raytracing] Updated scene geometry for raytracing");
+            }
+        }
+        
+        // Ensure view and projection matrices are properly set up
+        DirectX::XMFLOAT4X4 viewMatrix, projMatrix;
+        if (!GetCurrentViewAndProjectionMatrices(viewMatrix, projMatrix)) {
+            logger::warn("[Raytracing] Failed to get current view matrices, using provided matrices");
+            viewMatrix = query.cameraData.view;
+            projMatrix = query.cameraData.projection;
+        }
+        
         // Call the underlying GenerateGI method with unwrapped parameters
         bool result = GenerateGI(
             query.depthBufferSRV,
             query.normalBufferSRV,
             query.outputUAV,
-            query.cameraData.view,
-            query.cameraData.projection
+            viewMatrix,
+            projMatrix
         );
         
         // If GI generation failed, use fallback
