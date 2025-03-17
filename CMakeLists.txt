@@ -62,6 +62,7 @@ target_compile_definitions(
 	PRIVATE
 	"$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
 	"ENABLE_KICKSTART_RT"
+	"KICKSTART_RT_DLL_PATH=\"Data/SKSE/Plugins/KickstartRT\""
 )
 
 target_include_directories(
@@ -308,6 +309,20 @@ if(KICKSTART_RT)
         "${KICKSTART_RT_DIR}/KickstartRT_Interop_D3D11.pdb"
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>/KickstartRT/KickstartRT_Interop_D3D11.pdb"
         COMMENT "KickstartRT_Interop_D3D11.dll -> Release"
+    )
+
+    # Add the wrapper file to the project sources
+    target_sources(
+        "${PROJECT_NAME}"
+        PRIVATE
+        "src/KickstartRTWrapper.cpp"
+    )
+
+    # Ensure we directly link against the KickstartRT library
+    target_link_libraries(
+        "${PROJECT_NAME}"
+        PRIVATE
+        "${KICKSTART_RT_DIR}/KickstartRT_Interop_D3D11.lib"
     )
 endif()
 

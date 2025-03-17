@@ -23,6 +23,7 @@ struct GlobalIllumination : Feature
     void SaveSettings(json& o_json) override;
     
     // GI-specific functionality
+    void InitializeRaytracing();
     void GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuffer, Texture2D* outputBuffer);
     void UpdateSettingsForScene();
     bool IsAvailable();

@@ -3,7 +3,6 @@
 #include "Raytracing.h"
 #include "Globals.h"
 #include "State.h"
-#include "Utils/Logger.h"
 #include <Windows.h>
 #include <DirectXMath.h>
 #include <d3d11.h>
@@ -33,20 +32,6 @@ namespace KickstartRTImpl
         }
         
         try {
-            // Set DLL directory to ensure KickstartRT DLL can be found
-            #ifdef KICKSTART_RT_DLL_PATH
-            // Store the original DLL directory
-            WCHAR originalPath[MAX_PATH];
-            GetDllDirectory(MAX_PATH, originalPath);
-            
-            // Set the DLL directory to our KickstartRT directory
-            logger::info("[RT] Setting DLL directory to {}", KICKSTART_RT_DLL_PATH);
-            if (!SetDllDirectory(TEXT(KICKSTART_RT_DLL_PATH))) {
-                logger::error("[RT] Failed to set DLL directory. Error: {}", GetLastError());
-                // Continue anyway, the DLL might be in the system path
-            }
-            #endif
-            
             // Get dimensions from device
             g_width = 1920;  // Default resolution
             g_height = 1080;
@@ -82,20 +67,20 @@ namespace KickstartRTImpl
             
             // Create the execute context - directly use the KickstartRT API
             KickstartRT::D3D11::ExecuteContext* exc = nullptr;
-            
-            logger::info("[RT] Initializing KickstartRT");
             KickstartRT::Status status = KickstartRT::D3D11::ExecuteContext::Init(
                 &settings, 
                 &exc,
                 KickstartRT::Version());
-            
-            // Restore the original DLL directory
-            #ifdef KICKSTART_RT_DLL_PATH
-            SetDllDirectory(originalPath);
-            #endif
                 
-            if (status != KickstartRT::Status::OK || !exc) {
+            // Check status first
+            if (status != KickstartRT::Status::OK) {
                 logger::error("[RT] Failed to create context. Status: {}", static_cast<int>(status));
+                return false;
+            }
+            
+            // Then check if context is null
+            if (!exc) {
+                logger::error("[RT] Context creation returned OK but context is null");
                 return false;
             }
             

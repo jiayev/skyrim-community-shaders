@@ -22,8 +22,16 @@ void GlobalIllumination::RestoreDefaultSettings()
 
 void GlobalIllumination::DrawSettings()
 {
+    bool wasEnabled = settings.Enabled;
+    
     // Main toggle
     ImGui::Checkbox("Enable Global Illumination", &settings.Enabled);
+    
+    // Check if we need to initialize raytracing when enabling
+    if (!wasEnabled && settings.Enabled) {
+        logger::info("[GlobalIllumination] Global Illumination enabled, initializing raytracing");
+        InitializeRaytracing();
+    }
     
     if (!settings.Enabled)
         return;
@@ -46,12 +54,17 @@ void GlobalIllumination::DrawSettings()
     // Status info
     if (!IsAvailable()) {
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Raytracing not available or initialized");
+        
+        // Add a button to try initializing again
+        if (ImGui::Button("Try Initialize Raytracing")) {
+            InitializeRaytracing();
+        }
     } else {
         ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Raytracing available and ready");
     }
 }
 
-void GlobalIllumination::SetupResources()
+void GlobalIllumination::InitializeRaytracing()
 {
     // Initialize and test Raytracing
     auto raytracing = globals::features::raytracing;
@@ -91,6 +104,19 @@ void GlobalIllumination::SetupResources()
     }
     
     logger::info("[GlobalIllumination] Setup complete. Raytracing available: {}", raytracingAvailable);
+}
+
+void GlobalIllumination::SetupResources()
+{
+    // Don't automatically initialize, wait for the user to enable the feature
+    logger::info("[GlobalIllumination] Resource setup - waiting for user to enable feature");
+    raytracingAvailable = false;
+    
+    // If already enabled in settings, initialize
+    if (settings.Enabled) {
+        logger::info("[GlobalIllumination] Feature is enabled in settings, initializing raytracing");
+        InitializeRaytracing();
+    }
 }
 
 void GlobalIllumination::LoadSettings(json& o_json)
