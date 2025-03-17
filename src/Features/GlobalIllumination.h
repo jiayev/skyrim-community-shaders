@@ -1,7 +1,6 @@
 #pragma once
 
 // GlobalIllumination feature that leverages the Raytracing system
-
 struct GlobalIllumination : Feature
 {
     static GlobalIllumination* GetSingleton()
@@ -43,4 +42,5 @@ struct GlobalIllumination : Feature
     
 private:
     float effectiveIntensity = 1.0f;
+    bool raytracingAvailable = false; // Tracks whether raytracing is available and functioning
 };

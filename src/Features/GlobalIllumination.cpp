@@ -1,9 +1,9 @@
 #include "GlobalIllumination.h"
-
-
+#include "Raytracing.h"
 #include "State.h"
 #include "Utils/Game.h"
-
+#include "Globals.h"
+#include "imgui.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     GlobalIllumination::Settings,
@@ -46,13 +46,51 @@ void GlobalIllumination::DrawSettings()
     // Status info
     if (!IsAvailable()) {
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Raytracing not available or initialized");
+    } else {
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Raytracing available and ready");
     }
 }
 
 void GlobalIllumination::SetupResources()
 {
-    // We don't need to set up any resources here as we're using Raytracing functionality
-    logger::info("[GlobalIllumination] Setup complete");
+    // Initialize and test Raytracing
+    auto raytracing = globals::features::raytracing;
+    if (!raytracing) {
+        logger::error("[GlobalIllumination] Failed to get Raytracing singleton");
+        raytracingAvailable = false;
+        return;
+    }
+    
+    logger::info("[GlobalIllumination] Setting up resources and testing Raytracing...");
+    
+    // Initialize resources if not already done
+    if (!raytracing->IsInitialized()) {
+        auto device = globals::d3d::device;
+        if (!device) {
+            logger::error("[GlobalIllumination] Failed to get D3D11 device");
+            raytracingAvailable = false;
+            return;
+        }
+        
+        logger::info("[GlobalIllumination] Initializing Raytracing resources");
+        if (!raytracing->InitializeResources(device)) {
+            logger::error("[GlobalIllumination] Failed to initialize Raytracing resources");
+            raytracingAvailable = false;
+            return;
+        }
+    }
+    
+    // Test KickstartRT to ensure it's working properly
+    logger::info("[GlobalIllumination] Testing KickstartRT...");
+    if (raytracing->TestKickstartRT()) {
+        logger::info("[GlobalIllumination] KickstartRT test successful");
+        raytracingAvailable = true;
+    } else {
+        logger::error("[GlobalIllumination] KickstartRT test failed");
+        raytracingAvailable = false;
+    }
+    
+    logger::info("[GlobalIllumination] Setup complete. Raytracing available: {}", raytracingAvailable);
 }
 
 void GlobalIllumination::LoadSettings(json& o_json)
@@ -67,7 +105,14 @@ void GlobalIllumination::SaveSettings(json& o_json)
 
 bool GlobalIllumination::IsAvailable()
 {
-    return true;
+    // Check if raytracing is initialized and test passed
+    if (!raytracingAvailable) {
+        return false;
+    }
+    
+    // Also check if the raytracing singleton is still valid and initialized
+    auto raytracing = globals::features::raytracing;
+    return raytracing && raytracing->IsInitialized();
 }
 
 void GlobalIllumination::UpdateSettingsForScene()
@@ -77,8 +122,9 @@ void GlobalIllumination::UpdateSettingsForScene()
     
     // Check if we're in an interior cell
     bool isInterior = false;
-    if (globals::game::tes && globals::game::tes->GetRuntimeData().interiorCell) {
-        isInterior = true;
+    if (globals::game::tes) {
+        // Use Sky as an indicator - if there's no sky, we're in an interior
+        isInterior = !globals::game::sky || globals::game::sky->mode == RE::Sky::Mode::kInterior;
     }
     
     // Apply intensity adjustment based on interior/exterior context
@@ -95,6 +141,9 @@ void GlobalIllumination::UpdateSettingsForScene()
 
 void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuffer, Texture2D* outputBuffer)
 {
+    (void)depthBuffer;
+    (void)normalBuffer;
+    (void)outputBuffer;
     if (!settings.Enabled || !IsAvailable())
         return;
     
@@ -106,55 +155,30 @@ void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuf
     if (!raytracing)
         return;
         
-    // Get current view and projection matrices
-    DirectX::XMFLOAT4X4 viewMatrix = {}; // Get this from the game engine
-    DirectX::XMFLOAT4X4 projMatrix = {}; // Get this from the game engine
-    
     // Apply the GI-specific settings to the raytracer
     float intensity = settings.AdaptToScene ? effectiveIntensity : settings.Intensity;
     
-    // Call the raytracing subsystem with our specific GI parameters
-    if (depthBuffer && normalBuffer && outputBuffer) {
-        raytracing->GenerateRays(
-            depthBuffer->srv.get(),
-            normalBuffer->srv.get(),
-            outputBuffer->uav.get(),
-            viewMatrix,
-            projMatrix,
-            intensity,                   // Intensity for this specific effect
-            settings.Distance,           // Distance for this specific effect
-            settings.Saturation,         // Saturation for this specific effect
-            raytracing->settings.SampleCount // Use the global sample count from raytracing settings
-        );
-    }
+    // Use the simplified API - all buffers will be handled internally
+    raytracing->ApplyGlobalIllumination(
+        intensity,                   // Intensity for this specific effect
+        settings.Distance,           // Distance for this specific effect
+        settings.Saturation          // Saturation for this specific effect
+    );
 }
-
-// Add a new member to store the effective intensity after scene adaptation
-private:
-    float effectiveIntensity = 1.0f;
 
 // This callback could be registered to be called during appropriate render events
 void UpdateGlobalIllumination()
 {
-    // Get required buffers from the deferred renderer
-    auto* deferredBuffers = globals::deferred;
-    if (!deferredBuffers)
-        return;
-
+    // Get singleton instance
+    auto* gi = GlobalIllumination::GetSingleton();
+    
     // Check if raytracing is available and enabled
-    if (!GlobalIllumination::IsAvailable())
+    if (!gi->IsAvailable())
         return;
         
     // Optional: update settings based on scene
-    GlobalIllumination::UpdateSettingsForScene();
+    gi->UpdateSettingsForScene();
     
     // Process GI using the raytracing system
-    // This is just an example - the actual implementation would use real buffers
-    /*
-    Texture2D* depthBuffer = deferredBuffers->GetDepthBuffer();
-    Texture2D* normalBuffer = deferredBuffers->GetNormalBuffer();
-    Texture2D* outputBuffer = deferredBuffers->GetGIBuffer();
-    
-    GlobalIllumination::Generate(depthBuffer, normalBuffer, outputBuffer);
-    */
+    gi->GenerateGI(nullptr, nullptr, nullptr);
 } 

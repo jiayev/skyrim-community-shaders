@@ -6,7 +6,7 @@ struct ExtendedMaterials;
 struct GrassCollision;
 struct GrassLighting;
 struct LightLimitFix;
-struct Raytracing;
+class Raytracing;
 struct ScreenSpaceGI;
 struct ScreenSpaceShadows;
 struct Skylighting;
