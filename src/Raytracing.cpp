@@ -162,7 +162,7 @@ namespace KickstartRTImpl
                 return false;
             }
             
-            // Use InvokeGPUTask instead of BuildGPUTask for D3D11
+            // Use InvokeGPUTask for D3D11 - no input parameter required for empty container
             auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
             if (status != KickstartRT::Status::OK) {
                 logger::error("[RT] Failed to execute empty task. Status: {}", static_cast<int>(status));
@@ -178,7 +178,8 @@ namespace KickstartRTImpl
         }
     }
 
-    // Core rendering functions
+    // Core rendering functions - simplified implementations for now
+    // In the future these will be expanded to use proper task scheduling
     bool GenerateGI(ID3D11ShaderResourceView* depthSRV, 
                    ID3D11ShaderResourceView* normalSRV,
                    ID3D11UnorderedAccessView* outputUAV,
@@ -190,8 +191,14 @@ namespace KickstartRTImpl
             return false;
         }
         
-        if (depthSRV && normalSRV && outputUAV) {
+        if (!depthSRV || !normalSRV || !outputUAV) {
+            logger::error("[RT] Missing required buffers for GI generation");
+            return false;
+        }
+        
+        try {
             logger::info("[RT] Generating GI");
+            
             // Create a task container for GI
             auto taskContainer = g_executeContext->CreateTaskContainer();
             if (!taskContainer) {
@@ -199,20 +206,63 @@ namespace KickstartRTImpl
                 return false;
             }
             
-            // For a real implementation:
-            // 1. Schedule RenderTasks to the container (like TraceDiffuseTask)
+            // 1. Schedule BVH Build task - this ensures the acceleration structure is up to date
+            {
+                KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
+                bvhBuildTask.buildTLAS = true;  // Build top-level acceleration structure
+                bvhBuildTask.maxBlasBuildCount = 4u;  // Number of BLASes to build per frame
+                taskContainer->ScheduleBVHTask(&bvhBuildTask);
+            }
             
-            // Use InvokeGPUTask for D3D11 instead of BuildGPUTask
+            // 2. Schedule Diffuse GI tracing task
+            {
+                KickstartRT::D3D11::RenderTask::TraceDiffuseTask traceTask;
+                
+                // Fill common trace task parameters
+                if (depthSRV) {
+                    ID3D11Resource* depthResource = nullptr;
+                    depthSRV->GetResource(&depthResource);
+                    traceTask.common.depth.tex.resource = depthResource;
+                }
+                
+                if (normalSRV) {
+                    ID3D11Resource* normalResource = nullptr;
+                    normalSRV->GetResource(&normalResource);
+                    traceTask.common.normal.tex.resource = normalResource;
+                }
+                
+                // Set view and projection matrices
+                // Matrix conversion from DirectXMath to KickstartRT format
+                // Note: KickstartRT expects row-major matrices
+                traceTask.common.clipToViewMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&viewMatrix);
+                traceTask.common.viewToWorldMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&projMatrix);
+                
+                // Set ray parameters
+                traceTask.common.maxRayLength = 200.0f;  // Maximum ray distance
+                
+                // Set output
+                if (outputUAV) {
+                    outputUAV->GetResource(&traceTask.out.resource);
+                }
+                
+                // Schedule the task
+                taskContainer->ScheduleRenderTask(&traceTask);
+            }
+            
+            // 3. Execute the GPU tasks
             auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
             if (status != KickstartRT::Status::OK) {
                 logger::error("[RT] Failed to execute GI task. Status: {}", static_cast<int>(status));
                 return false;
             }
             
+            logger::info("[RT] Successfully executed GI generation");
             return true;
         }
-        
-        return false;
+        catch (const std::exception& e) {
+            logger::error("[RT] GI generation exception: {}", e.what());
+            return false;
+        }
     }
 
     bool GenerateReflections(ID3D11ShaderResourceView* depthSRV, 
@@ -227,8 +277,14 @@ namespace KickstartRTImpl
             return false;
         }
         
-        if (depthSRV && normalSRV && roughnessSRV && outputUAV) {
+        if (!depthSRV || !normalSRV || !roughnessSRV || !outputUAV) {
+            logger::error("[RT] Missing required buffers for reflection generation");
+            return false;
+        }
+        
+        try {
             logger::info("[RT] Generating reflections");
+            
             // Create a task container for reflections
             auto taskContainer = g_executeContext->CreateTaskContainer();
             if (!taskContainer) {
@@ -236,20 +292,85 @@ namespace KickstartRTImpl
                 return false;
             }
             
-            // For a real implementation:
-            // 1. Schedule RenderTasks to the container (like TraceSpecularTask)
+            // BVH Build task
+            {
+                KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
+                bvhBuildTask.buildTLAS = true;
+                bvhBuildTask.maxBlasBuildCount = 4u;
+                taskContainer->ScheduleBVHTask(&bvhBuildTask);
+            }
             
-            // Use InvokeGPUTask for D3D11 instead of BuildGPUTask
+            // Schedule specular reflection tracing task
+            {
+                KickstartRT::D3D11::RenderTask::TraceSpecularTask traceTask;
+                
+                // Fill common trace task parameters
+                if (depthSRV) {
+                    ID3D11Resource* depthResource = nullptr;
+                    depthSRV->GetResource(&depthResource);
+                    traceTask.common.depth.tex.resource = depthResource;
+                }
+                
+                if (normalSRV) {
+                    ID3D11Resource* normalResource = nullptr;
+                    normalSRV->GetResource(&normalResource);
+                    traceTask.common.normal.tex.resource = normalResource;
+                }
+                
+                if (roughnessSRV) {
+                    ID3D11Resource* roughnessResource = nullptr;
+                    roughnessSRV->GetResource(&roughnessResource);
+                    traceTask.common.roughness.tex.resource = roughnessResource;
+                }
+                
+                // Set view and projection matrices
+                traceTask.common.clipToViewMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&viewMatrix);
+                traceTask.common.viewToWorldMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&projMatrix);
+                
+                // Set ray parameters
+                traceTask.common.maxRayLength = 200.0f;
+                
+                // Set output
+                if (outputUAV) {
+                    outputUAV->GetResource(&traceTask.out.resource);
+                }
+                
+                // Schedule the task
+                taskContainer->ScheduleRenderTask(&traceTask);
+            }
+            
+            // Execute the GPU tasks
             auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
             if (status != KickstartRT::Status::OK) {
                 logger::error("[RT] Failed to execute reflections task. Status: {}", static_cast<int>(status));
                 return false;
             }
             
+            logger::info("[RT] Successfully executed reflections generation");
             return true;
         }
+        catch (const std::exception& e) {
+            logger::error("[RT] Reflection generation exception: {}", e.what());
+            return false;
+        }
+    }
+
+    // Register geometry with KickstartRT - simplified placeholder
+    bool RegisterGeometryWithKickstartRT(ID3D11Buffer* vertexBuffer, ID3D11Buffer* indexBuffer)
+    {
+        if (!g_initialized || !g_executeContext) {
+            logger::error("[RT] Not initialized");
+            return false;
+        }
         
-        return false;
+        if (!vertexBuffer || !indexBuffer) {
+            logger::error("[RT] Invalid buffers for geometry registration");
+            return false;
+        }
+        
+        // This is a placeholder - we'll implement proper geometry registration later
+        logger::info("[RT] Geometry registration is a placeholder - will be implemented in a future version");
+        return true;
     }
 } // namespace KickstartRTImpl
 
