@@ -7,7 +7,7 @@
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/LightLimitFix.h"
-#include "Features/Raytracing.h"
+#include "Features/GlobalIllumination.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skylighting.h"
@@ -17,7 +17,7 @@
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
-
+#include "Features/GlobalIllumination.h"
 #include "State.h"
 
 void Feature::Load(json& o_json)
@@ -135,7 +135,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::skylighting,
 		globals::features::terrainBlending,
 		globals::features::volumetricLighting,
-		globals::features::raytracing
+		globals::features::globalIllumination
 	};
 
 	static std::vector<Feature*> featuresVR(features);
