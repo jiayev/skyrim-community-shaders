@@ -8,6 +8,25 @@
 class Texture2D;
 struct ExecuteContextD3D11;
 
+// Define a camera data structure for the trace query
+namespace KickstartRT {
+    struct CameraData {
+        DirectX::XMFLOAT4X4 view;
+        DirectX::XMFLOAT4X4 projection;
+        float nearClipPlane = 0.1f;
+        float farClipPlane = 1000.0f;
+    };
+
+    // Trace query structure that combines inputs for easier parameter passing
+    struct TraceQueryInternal {
+        CameraData cameraData;
+        ID3D11ShaderResourceView* depthBufferSRV = nullptr;
+        ID3D11ShaderResourceView* normalBufferSRV = nullptr;
+        ID3D11UnorderedAccessView* outputUAV = nullptr;
+        float maxRayLength = 200.0f;
+    };
+}
+
 /**
  * Utility class for raytracing functionality using KickstartRT.
  * This provides a simplified interface for features to access raytracing.
@@ -67,6 +86,9 @@ public:
                            ID3D11UnorderedAccessView* outputUAV,
                            const DirectX::XMFLOAT4X4& viewMatrix,
                            const DirectX::XMFLOAT4X4& projMatrix);
+    
+    // Simplified trace interface using the query structure
+    bool TraceGI(const KickstartRT::TraceQueryInternal& query);
     
 private:
     Raytracing() = default;

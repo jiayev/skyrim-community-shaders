@@ -31,6 +31,11 @@ struct GlobalIllumination : Feature
     // Buffer management methods
     void CreateGIOutputBuffer();
     void ApplyGIToFinalRender();
+    
+    // Pipeline integration methods
+    void Update();
+    void RegisterHooks();
+    void CleanupResources();
 
     struct Settings
     {

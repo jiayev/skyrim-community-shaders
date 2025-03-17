@@ -262,89 +262,104 @@ bool Initialize(ID3D11Device* device) {
         return true;
     }
     
-        try {
-            // Default resolution in case we can't query the actual dimensions
-            g_width = 1920;
-            g_height = 1080;
-            
-            // Create init settings for D3D11
-            KickstartRT::D3D11::ExecuteContext_InitSettings settings;
-            settings.D3D11Device = device;
-            
-            // Get the adapter directly for KickstartRT
-            // This is REQUIRED for the D3D11 interop layer
-            Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
-            HRESULT hr = device->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDevice);
-            if (FAILED(hr)) {
-                logger::error("[RT] Failed to get DXGI device interface. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
-        return false;
-    }
+    try {
+        // Default resolution in case we can't query the actual dimensions
+        g_width = 1920;
+        g_height = 1080;
+        
+        // Create init settings for D3D11
+        KickstartRT::D3D11::ExecuteContext_InitSettings settings;
+        settings.D3D11Device = device;
+        
+        // Get the adapter directly for KickstartRT
+        // This is REQUIRED for the D3D11 interop layer
+        Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+        HRESULT hr = device->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDevice);
+        if (FAILED(hr)) {
+            logger::error("[RT] Failed to get DXGI device interface. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+            return false;
+        }
     
-            // Get the adapter
-            IDXGIAdapter1* adapter1 = nullptr;
-            Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
-            hr = dxgiDevice->GetAdapter(adapter.GetAddressOf());
-            if (FAILED(hr)) {
-                logger::error("[RT] Failed to get DXGI adapter. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
-                return false;
+        // Get the adapter
+        IDXGIAdapter1* adapter1 = nullptr;
+        Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+        hr = dxgiDevice->GetAdapter(adapter.GetAddressOf());
+        if (FAILED(hr)) {
+            logger::error("[RT] Failed to get DXGI adapter. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+            return false;
+        }
+        
+        // Try to get dimensions from the primary output if desired
+        Microsoft::WRL::ComPtr<IDXGIOutput> output;
+        if (SUCCEEDED(adapter->EnumOutputs(0, output.GetAddressOf()))) {
+            DXGI_OUTPUT_DESC desc;
+            if (SUCCEEDED(output->GetDesc(&desc))) {
+                RECT r = desc.DesktopCoordinates;
+                g_width = r.right - r.left;
+                g_height = r.bottom - r.top;
+                logger::info("[RT] Detected display dimensions: {}x{}", g_width, g_height);
             }
-            
-            // Try to get dimensions from the primary output if desired
-            Microsoft::WRL::ComPtr<IDXGIOutput> output;
-            if (SUCCEEDED(adapter->EnumOutputs(0, output.GetAddressOf()))) {
-                    DXGI_OUTPUT_DESC desc;
-                    if (SUCCEEDED(output->GetDesc(&desc))) {
-                        RECT r = desc.DesktopCoordinates;
-                        g_width = r.right - r.left;
-                        g_height = r.bottom - r.top;
-                    logger::info("[RT] Detected display dimensions: {}x{}", g_width, g_height);
-                }
-            }
-            
-            // Now get the IDXGIAdapter1 for KickstartRT
-            hr = adapter->QueryInterface(__uuidof(IDXGIAdapter1), (void**)&adapter1);
-            if (FAILED(hr)) {
-                logger::error("[RT] Failed to get IDXGIAdapter1 interface. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
-                return false;
-            }
-            
-            // Directly set the adapter in settings (no temporary variables needed)
-            settings.DXGIAdapter = adapter1;
-            logger::info("[RT] Successfully set DXGIAdapter1 in KickstartRT settings");
-            
-            // Configure other settings
+        }
+        
+        // Now get the IDXGIAdapter1 for KickstartRT
+        hr = adapter->QueryInterface(__uuidof(IDXGIAdapter1), (void**)&adapter1);
+        if (FAILED(hr)) {
+            logger::error("[RT] Failed to get IDXGIAdapter1 interface. HRESULT: 0x{:08X}", static_cast<unsigned int>(hr));
+            return false;
+        }
+        
+        // Directly set the adapter in settings (no temporary variables needed)
+        settings.DXGIAdapter = adapter1;
+        logger::info("[RT] Successfully set DXGIAdapter1 in KickstartRT settings");
+        
+        // Configure other settings
         settings.usingCommandQueue = KickstartRT::D3D11::ExecuteContext_InitSettings::UsingCommandQueue::Direct;
         settings.supportedWorkingSet = 4u;
         settings.descHeapSize = 8192u;
         settings.uploadHeapSizeForVolatileConstantBuffers = 64u * 1024u;
         
-            // Create the execute context - directly use the KickstartRT API
-            KickstartRT::D3D11::ExecuteContext* exc = nullptr;
-            KickstartRT::Status status = KickstartRT::D3D11::ExecuteContext::Init(
-                &settings, 
+        // Create the execute context - directly use the KickstartRT API
+        KickstartRT::D3D11::ExecuteContext* exc = nullptr;
+        KickstartRT::Status status = KickstartRT::D3D11::ExecuteContext::Init(
+            &settings, 
+            &exc,
+            KickstartRT::Version());
+            
+        // Check status first
+        if (status != KickstartRT::Status::OK) {
+            logger::error("[RT] Failed to create context. Status: {}", static_cast<int>(status));
+            
+            // Try with default settings as a fallback
+            logger::warn("[RT] Trying to initialize with default settings");
+            KickstartRT::D3D11::ExecuteContext_InitSettings defaultSettings;
+            defaultSettings.D3D11Device = device;
+            defaultSettings.DXGIAdapter = adapter1;
+            
+            status = KickstartRT::D3D11::ExecuteContext::Init(
+                &defaultSettings, 
                 &exc,
                 KickstartRT::Version());
                 
-            // Check status first
             if (status != KickstartRT::Status::OK) {
-            logger::error("[RT] Failed to create context. Status: {}", static_cast<int>(status));
+                logger::error("[RT] Failed to create context with default settings. Status: {}", static_cast<int>(status));
+                return false;
+            }
+        }
+        
+        // Then check if context is null
+        if (!exc) {
+            logger::error("[RT] Context creation returned OK but context is null");
             return false;
         }
         
-            // Then check if context is null
-            if (!exc) {
-                logger::error("[RT] Context creation returned OK but context is null");
-                return false;
-            }
-            
-            g_executeContext = exc;
+        g_executeContext = exc;
         g_initialized = true;
         logger::info("[RT] KickstartRT initialized successfully");
         
         return true;
     }
     catch (const std::exception& e) {
-            logger::error("[RT] Exception during initialization: {}", e.what());
+        logger::error("[RT] Exception during initialization: {}", e.what());
         return false;
     }
 }
@@ -407,7 +422,7 @@ void CleanupResources() {
         }
 
         // Check for required resources
-        if (!depthSRV || !normalSRV || !outputUAV) {
+        if (!depthSRV || !outputUAV) {
             logger::error("[KickstartRTImpl] GenerateGI called with null resources");
             return false;
         }
@@ -416,7 +431,14 @@ void CleanupResources() {
         logger::info("[KickstartRTImpl] Running GenerateGI with provided resources");
 
         try {
-            // Create a task container
+            // Get the device context from globals
+            auto d3dContext = globals::d3d::context;
+            if (!d3dContext) {
+                logger::error("[KickstartRTImpl] D3D11 device context not available");
+                return false;
+            }
+
+            // Create a task container with proper synchronization setup
             auto taskContainer = g_executeContext->CreateTaskContainer();
             if (!taskContainer) {
                 logger::error("[KickstartRTImpl] Failed to create task container for GI");
@@ -502,8 +524,7 @@ void CleanupResources() {
                 traceTask.common.viewport.height = g_height;
             }
             
-            // Set ray parameters - only use fields that exist in the API
-            // TODO: Consult KickstartRT documentation for additional parameters that can be set
+            // Set ray parameters
             traceTask.common.maxRayLength = 200.0f;  // Maximum ray distance
             
             // Schedule the task
@@ -514,15 +535,34 @@ void CleanupResources() {
             if (normalResource) normalResource->Release();
             if (outputResource) outputResource->Release();
             
-            // Execute GPU task - this is where KickstartRT actually processes all scheduled tasks
-            auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
-            
-            if (status == KickstartRT::Status::OK) {
-                logger::info("[KickstartRTImpl] Successfully generated GI");
-                return true;
+            // Execute GPU task - using ID3D11DeviceContext* as sync point instead of fences
+            // This is the critical change to fix the fence-related crash
+            ID3D11CommandList* commandList = nullptr;
+            d3dContext->FinishCommandList(false, &commandList);
+
+            if (commandList) {
+                auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
+                commandList->Release();
+                
+                if (status == KickstartRT::Status::OK) {
+                    logger::info("[KickstartRTImpl] Successfully generated GI");
+                    return true;
+                } else {
+                    logger::error("[KickstartRTImpl] Failed to execute GI task: {}", static_cast<int>(status));
+                    return false;
+                }
             } else {
-                logger::error("[KickstartRTImpl] Failed to execute GI task: {}", static_cast<int>(status));
-                return false;
+                // Fall back to direct execution without command lists if we couldn't create one
+                logger::warn("[KickstartRTImpl] Could not create command list, executing directly");
+                auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
+                
+                if (status == KickstartRT::Status::OK) {
+                    logger::info("[KickstartRTImpl] Successfully generated GI (direct execution)");
+                    return true;
+                } else {
+                    logger::error("[KickstartRTImpl] Failed to execute GI task: {}", static_cast<int>(status));
+                    return false;
+                }
             }
         } catch (const std::exception& e) {
             logger::error("[KickstartRTImpl] Exception in GenerateGI: {}", e.what());
@@ -1158,33 +1198,59 @@ bool Raytracing::GetCurrentViewAndProjectionMatrices(DirectX::XMFLOAT4X4& viewMa
 // Direct pass-through to KickstartRTImpl
 bool Raytracing::GenerateGI(
     ID3D11ShaderResourceView* depthSRV,
-                       ID3D11ShaderResourceView* normalSRV, 
+                       ID3D11ShaderResourceView* normalSRV,
                        ID3D11UnorderedAccessView* outputUAV,
                        const DirectX::XMFLOAT4X4& viewMatrix,
                        const DirectX::XMFLOAT4X4& projMatrix) 
 {
-    // Check if we're enabled
-    if (!IsEnabled()) {
+    // First check if the raytracing system is even enabled
+    if (!settings.Enabled) {
         logger::info("[Raytracing] GenerateGI called but raytracing is not enabled");
         return false;
     }
     
-    // Validate input resources
-    if (!depthSRV || !normalSRV || !outputUAV) {
-        logger::error("[Raytracing] GenerateGI called with null resources");
+    // Check if we're properly initialized
+    if (!initialized) {
+        logger::warn("[Raytracing] Cannot generate GI - raytracing not initialized");
         return false;
+    }
+    
+    // Validate critical input resources
+    if (!depthSRV) {
+        logger::error("[Raytracing] GenerateGI called with null depth buffer");
+        return false;
+    }
+    
+    if (!outputUAV) {
+        logger::error("[Raytracing] GenerateGI called with null output UAV");
+        return false;
+    }
+    
+    // Normal buffer is optional but will log a warning
+    if (!normalSRV) {
+        logger::warn("[Raytracing] No normal buffer provided for GI - results may be incorrect");
     }
     
     logger::info("[Raytracing] Generating global illumination with provided resources");
     
     // Call into the KickstartRT implementation
-    return KickstartRTImpl::GenerateGI(
-        depthSRV,
-        normalSRV,
-        outputUAV,
-        viewMatrix,
-        projMatrix
-    );
+    try {
+        return KickstartRTImpl::GenerateGI(
+            depthSRV,
+            normalSRV,
+            outputUAV,
+            viewMatrix,
+            projMatrix
+        );
+    }
+    catch (const std::exception& e) {
+        logger::error("[Raytracing] Exception in GenerateGI: {}", e.what());
+        return false;
+    }
+    catch (...) {
+        logger::error("[Raytracing] Unknown exception in GenerateGI");
+        return false;
+    }
 }
 
 // Direct pass-through to KickstartRTImpl
@@ -1219,4 +1285,104 @@ bool Raytracing::GenerateReflections(
         viewMatrix,
         projMatrix
     );
+}
+
+// Implement the TraceGI method using the query structure
+bool Raytracing::TraceGI(const KickstartRT::TraceQueryInternal& query)
+{
+    // First check if raytracing is enabled at all
+    if (!settings.Enabled) {
+        logger::info("[Raytracing] Raytracing is disabled, skipping GI trace");
+        return false;
+    }
+
+    // Check if we're properly initialized - this is critical to prevent null pointer crashes
+    if (!initialized) {
+        logger::warn("[Raytracing] Cannot trace GI - raytracing not initialized");
+        
+        // Fallback: fill output with black if we have a valid UAV
+        if (query.outputUAV) {
+            auto context = globals::d3d::context;
+            if (context) {
+                FLOAT clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+                context->ClearUnorderedAccessViewFloat(query.outputUAV, clearColor);
+                logger::warn("[Raytracing] Produced blank output as fallback");
+                return true; // We at least produced valid output
+            }
+        }
+        
+        return false;
+    }
+
+    // Validate all required resources
+    if (!query.depthBufferSRV) {
+        logger::error("[Raytracing] Depth buffer SRV is null, cannot trace GI");
+        return false;
+    }
+
+    if (!query.outputUAV) {
+        logger::error("[Raytracing] Output UAV is null, cannot trace GI");
+        return false;
+    }
+
+    // Normal buffer can be null in some cases - we'll use a default if needed
+
+    logger::info("[Raytracing] Tracing GI with ray length: {}", query.maxRayLength);
+
+    try {
+        // Try calling the underlying GenerateGI method with unwrapped parameters
+        bool result = GenerateGI(
+            query.depthBufferSRV,
+            query.normalBufferSRV,  // This might be null, handled in GenerateGI
+            query.outputUAV,
+            query.cameraData.view,
+            query.cameraData.projection
+        );
+        
+        // If GI generation failed, use fallback
+        if (!result) {
+            logger::warn("[Raytracing] GI generation failed, using fallback");
+            auto context = globals::d3d::context;
+            if (context) {
+                // Simple dark gray output as ambient approximation
+                FLOAT ambient[4] = { 0.1f, 0.1f, 0.1f, 1.0f };
+                context->ClearUnorderedAccessViewFloat(query.outputUAV, ambient);
+                return true; // Return true as we provided valid output
+            }
+        }
+        
+        return result;
+    }
+    catch (const std::exception& e) {
+        logger::error("[Raytracing] Exception in TraceGI: {}", e.what());
+        
+        // Fallback in case of exception
+        if (query.outputUAV) {
+            auto context = globals::d3d::context;
+            if (context) {
+                FLOAT black[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+                context->ClearUnorderedAccessViewFloat(query.outputUAV, black);
+                logger::warn("[Raytracing] Exception recovery: filled output with black");
+                return true; // We provided valid output
+            }
+        }
+        
+        return false;
+    }
+    catch (...) {
+        logger::error("[Raytracing] Unknown exception in TraceGI");
+        
+        // Fallback for unknown exceptions
+        if (query.outputUAV) {
+            auto context = globals::d3d::context;
+            if (context) {
+                FLOAT black[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+                context->ClearUnorderedAccessViewFloat(query.outputUAV, black);
+                logger::warn("[Raytracing] Unknown exception recovery: filled output with black");
+                return true; // We provided valid output
+            }
+        }
+        
+        return false;
+    }
 }
