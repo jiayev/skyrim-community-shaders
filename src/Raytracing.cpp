@@ -164,7 +164,7 @@ bool CreateInstance(KickstartRT::D3D11::GeometryHandle& geometryHandle, const Di
         instanceTask.input.geomHandle = geometryHandle;
         
         // Convert transform matrix to KickstartRT format (3x4 row-major)
-        KickstartRT::Math::Float_3x4 ksTransform;
+        KickstartRT::Math::Float_3x4 ksTransform = {};  // Initialize to zero first
         
         // Fill the 3x4 matrix from the 4x4 transform
         for (int row = 0; row < 3; row++) {
@@ -221,7 +221,7 @@ bool UpdateInstanceTransform(KickstartRT::D3D11::InstanceHandle& instanceHandle,
         instanceTask.handle = instanceHandle;
         
         // Convert transform matrix to KickstartRT format (3x4 row-major)
-        KickstartRT::Math::Float_3x4 ksTransform;
+        KickstartRT::Math::Float_3x4 ksTransform = {};  // Initialize to zero first
         
         // Fill the 3x4 matrix from the 4x4 transform
         for (int row = 0; row < 3; row++) {
@@ -380,6 +380,19 @@ void CleanupResources() {
 
     // Core rendering functions - simplified implementations for now
     // In the future these will be expanded to use proper task scheduling
+    /**
+     * Generate Global Illumination using KickstartRT
+     * 
+     * This function creates a TraceDiffuseTask to generate global illumination effects
+     * using ray tracing through the KickstartRT API.
+     * 
+     * @param depthSRV Shader resource view for the depth buffer
+     * @param normalSRV Shader resource view for the normal buffer
+     * @param outputUAV Unordered access view for the output buffer
+     * @param viewMatrix Current view matrix
+     * @param projMatrix Current projection matrix
+     * @return true if successful, false otherwise
+     */
     bool GenerateGI(
         ID3D11ShaderResourceView* depthSRV,
         ID3D11ShaderResourceView* normalSRV,
@@ -410,16 +423,16 @@ void CleanupResources() {
                 return false;
             }
 
-            // Schedule BVH Build task
+            // Schedule BVH Build task - this is required before any rendering tasks
             KickstartRT::D3D11::BVHTask::BVHBuildTask bvhBuildTask;
-            bvhBuildTask.buildTLAS = true;
-            bvhBuildTask.maxBlasBuildCount = 4u;
+            bvhBuildTask.buildTLAS = true;  // Build the top-level acceleration structure
+            bvhBuildTask.maxBlasBuildCount = 4u;  // Process up to 4 bottom-level acceleration structures
             taskContainer->ScheduleBVHTask(&bvhBuildTask);
             
             // Set up diffuse GI tracing
             KickstartRT::D3D11::RenderTask::TraceDiffuseTask traceTask;
             
-            // Configure input buffers
+            // Configure input buffers - note that the KickstartRT API requires specific setup
             // Get resources from SRVs
             ID3D11Resource* depthResource = nullptr;
             ID3D11Resource* normalResource = nullptr;
@@ -429,7 +442,7 @@ void CleanupResources() {
             if (depthSRV) {
                 depthSRV->GetResource(&depthResource);
                 traceTask.common.depth.tex.resource = depthResource;
-                // Shader resource view description
+                // Shader resource view description - required for KickstartRT to correctly access the texture
                 traceTask.common.depth.tex.srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
                 traceTask.common.depth.tex.srvDesc.Texture2D.MipLevels = 1;
                 traceTask.common.depth.tex.srvDesc.Texture2D.MostDetailedMip = 0;
@@ -464,11 +477,11 @@ void CleanupResources() {
             DirectX::XMFLOAT4X4 invView;
             DirectX::XMStoreFloat4x4(&invView, invViewMatrix);
             
-            // Convert to KickstartRT format
+            // Convert to KickstartRT format - this maps from clip space to view space and view space to world space
             traceTask.common.clipToViewMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invProj);
             traceTask.common.viewToWorldMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invView);
             
-            // Get dimensions from the depth resource
+            // Get dimensions from the depth resource - needed for viewport setup
             D3D11_TEXTURE2D_DESC depthDesc;
             if (depthResource) {
                 ID3D11Texture2D* depthTex = nullptr;
@@ -490,17 +503,18 @@ void CleanupResources() {
             }
             
             // Set ray parameters - only use fields that exist in the API
+            // TODO: Consult KickstartRT documentation for additional parameters that can be set
             traceTask.common.maxRayLength = 200.0f;  // Maximum ray distance
             
             // Schedule the task
             taskContainer->ScheduleRenderTask(&traceTask);
             
-            // Release resources
+            // Release resources - we need to release any resources we acquired
             if (depthResource) depthResource->Release();
             if (normalResource) normalResource->Release();
             if (outputResource) outputResource->Release();
             
-            // Execute GPU task
+            // Execute GPU task - this is where KickstartRT actually processes all scheduled tasks
             auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
             
             if (status == KickstartRT::Status::OK) {
@@ -519,6 +533,20 @@ void CleanupResources() {
         }
     }
 
+    /**
+     * Generate reflections using KickstartRT
+     * 
+     * This function creates a TraceSpecularTask to generate reflection effects
+     * using ray tracing through the KickstartRT API.
+     * 
+     * @param depthSRV Shader resource view for the depth buffer
+     * @param normalSRV Shader resource view for the normal buffer
+     * @param roughnessSRV Shader resource view for the roughness buffer
+     * @param outputUAV Unordered access view for the output buffer
+     * @param viewMatrix Current view matrix
+     * @param projMatrix Current projection matrix
+     * @return true if successful, false otherwise
+     */
     bool GenerateReflections(
         ID3D11ShaderResourceView* depthSRV,
         ID3D11ShaderResourceView* normalSRV,
@@ -559,7 +587,7 @@ void CleanupResources() {
             // Set up specular reflection tracing
             KickstartRT::D3D11::RenderTask::TraceSpecularTask traceTask;
             
-            // Configure input buffers
+            // Configure input buffers - note that the KickstartRT API requires specific setup
             // Get resources from SRVs
             ID3D11Resource* depthResource = nullptr;
             ID3D11Resource* normalResource = nullptr;
@@ -570,7 +598,7 @@ void CleanupResources() {
             if (depthSRV) {
                 depthSRV->GetResource(&depthResource);
                 traceTask.common.depth.tex.resource = depthResource;
-                // Set view description
+                // Set view description - required for KickstartRT to correctly access the texture
                 traceTask.common.depth.tex.srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
                 traceTask.common.depth.tex.srvDesc.Texture2D.MipLevels = 1;
                 traceTask.common.depth.tex.srvDesc.Texture2D.MostDetailedMip = 0;
@@ -579,7 +607,7 @@ void CleanupResources() {
             if (normalSRV) {
                 normalSRV->GetResource(&normalResource);
                 traceTask.common.normal.tex.resource = normalResource;
-                // Set view description
+                // Set view description - required for KickstartRT to correctly access the texture
                 traceTask.common.normal.tex.srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
                 traceTask.common.normal.tex.srvDesc.Texture2D.MipLevels = 1;
                 traceTask.common.normal.tex.srvDesc.Texture2D.MostDetailedMip = 0;
@@ -588,7 +616,7 @@ void CleanupResources() {
             if (roughnessSRV) {
                 roughnessSRV->GetResource(&roughnessResource);
                 traceTask.common.roughness.tex.resource = roughnessResource;
-                // Set view description
+                // Set view description - required for KickstartRT to correctly access the texture
                 traceTask.common.roughness.tex.srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
                 traceTask.common.roughness.tex.srvDesc.Texture2D.MipLevels = 1;
                 traceTask.common.roughness.tex.srvDesc.Texture2D.MostDetailedMip = 0;
@@ -598,7 +626,7 @@ void CleanupResources() {
             if (outputUAV) {
                 outputUAV->GetResource(&outputResource);
                 traceTask.out.resource = outputResource;
-                // Set view description
+                // Set view description - required for KickstartRT to correctly access the texture
                 traceTask.out.uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
                 traceTask.out.uavDesc.Texture2D.MipSlice = 0;
             }
@@ -614,11 +642,11 @@ void CleanupResources() {
             DirectX::XMFLOAT4X4 invView;
             DirectX::XMStoreFloat4x4(&invView, invViewMatrix);
             
-            // Convert to KickstartRT format
+            // Convert to KickstartRT format - this maps from clip space to view space and view space to world space
             traceTask.common.clipToViewMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invProj);
             traceTask.common.viewToWorldMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invView);
             
-            // Get dimensions from the depth resource
+            // Get dimensions from the depth resource - needed for viewport setup
             D3D11_TEXTURE2D_DESC depthDesc;
             if (depthResource) {
                 ID3D11Texture2D* depthTex = nullptr;
@@ -639,19 +667,20 @@ void CleanupResources() {
                 traceTask.common.viewport.height = g_height;
             }
             
-            // Set ray parameters
+            // Set ray parameters - only use fields that exist in the API
+            // TODO: Consult KickstartRT documentation for additional parameters that can be set
             traceTask.common.maxRayLength = 200.0f;  // Maximum ray distance
             
             // Schedule the task
             taskContainer->ScheduleRenderTask(&traceTask);
             
-            // Release resources
+            // Release resources - we need to release any resources we acquired
             if (depthResource) depthResource->Release();
             if (normalResource) normalResource->Release();
             if (roughnessResource) roughnessResource->Release();
             if (outputResource) outputResource->Release();
             
-            // Execute GPU task
+            // Execute GPU task - this is where KickstartRT actually processes all scheduled tasks
             auto status = g_executeContext->InvokeGPUTask(taskContainer, nullptr);
             
             if (status == KickstartRT::Status::OK) {
