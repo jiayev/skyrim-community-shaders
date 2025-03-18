@@ -221,6 +221,10 @@ void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuf
         // Get the current view and projection matrices
         DirectX::XMFLOAT4X4 viewMatrix, projMatrix;
         
+        // Initialize with identity matrices to prevent "uninitialized variable" warnings
+        DirectX::XMStoreFloat4x4(&viewMatrix, DirectX::XMMatrixIdentity());
+        DirectX::XMStoreFloat4x4(&projMatrix, DirectX::XMMatrixIdentity());
+        
         // Get proper matrices from Skyrim's renderer
         if (auto renderer = globals::game::renderer) {
             // Try to get matrices from per-frame constant buffer
@@ -744,33 +748,57 @@ void GlobalIllumination::ApplyGIToFinalRender()
     logger::info("[GlobalIllumination] GI compositing complete");
 }
 
-// Update GI in the rendering pipeline
-void GlobalIllumination::Update()
-{
-    // Only update if the feature is enabled and available
-    if (!settings.Enabled || !IsAvailable())
-        return;
-    
-    // Update settings based on the scene
-    UpdateSettingsForScene();
-    
-    // Generate GI using the renderer's resources
-    GenerateGI(nullptr, nullptr, nullptr);
-}
-
 // Register for rendering hooks
 void GlobalIllumination::RegisterHooks()
 {
     if (!settings.Enabled)
         return;
     
-    // We'll use this method to hook into the rendering pipeline at the appropriate point
-    // For example, after the deferred rendering pass but before the final composite
+    // Hook into the Deferred rendering pipeline at the appropriate point
+    // This ensures our Update and ApplyGIToFinalRender methods are called at the right time
     
-    // In a complete implementation, we would register a handler for a specific rendering event
-    // For now, we can rely on the Update method being called at the right time
+    // Get the deferred renderer singleton
+    auto deferred = globals::deferred;
+    if (deferred) {
+        logger::info("[GlobalIllumination] Registering GI rendering hooks in the deferred pipeline");
+        
+        // Register a callback to be called during the DeferredPasses stage
+        // This is already added in Deferred.cpp now and we don't need to do more here
+        
+        // Add a debug log to verify when hooks are registered
+        logger::debug("[GlobalIllumination] GI hooks registered successfully");
+    } else {
+        logger::error("[GlobalIllumination] Failed to register rendering hooks - deferred renderer not available");
+    }
+}
+
+// Update GI in the rendering pipeline
+void GlobalIllumination::Update()
+{
+    // Only update if the feature is enabled and available
+    if (!settings.Enabled || !IsAvailable()) {
+        logger::debug("[GlobalIllumination] Update called but feature is disabled or raytracing not available");
+        return;
+    }
     
-    logger::info("[GlobalIllumination] Registered rendering hooks");
+    logger::debug("[GlobalIllumination] Update called - generating and applying GI effects");
+    
+    // Update settings based on the scene
+    UpdateSettingsForScene();
+    
+    // Generate GI using the renderer's resources
+    // GenerateGI returns void, so we can't assign it to a bool
+    logger::debug("[GlobalIllumination] Generating GI effects");
+    GenerateGI(nullptr, nullptr, nullptr);
+    
+    // Ensure the final rendering happens by explicitly calling ApplyGIToFinalRender
+    // This is critical to ensure the results are visible
+    if (giOutputBuffer && giOutputBuffer->srv) {
+        logger::debug("[GlobalIllumination] Explicitly calling ApplyGIToFinalRender");
+        ApplyGIToFinalRender();
+    } else {
+        logger::warn("[GlobalIllumination] No GI output buffer available for rendering");
+    }
 }
 
 // Clean up resources

@@ -22,6 +22,7 @@ namespace KickstartRT {
         CameraData cameraData;
         ID3D11ShaderResourceView* depthBufferSRV = nullptr;
         ID3D11ShaderResourceView* normalBufferSRV = nullptr;
+        ID3D11ShaderResourceView* directLightingSRV = nullptr; // Direct lighting buffer for injection
         ID3D11UnorderedAccessView* outputUAV = nullptr;
         float maxRayLength = 200.0f;
     };

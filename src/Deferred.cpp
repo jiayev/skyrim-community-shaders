@@ -5,6 +5,7 @@
 #include "TruePBR.h"
 
 #include "Features/DynamicCubemaps.h"
+#include "Features/GlobalIllumination.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -447,6 +448,13 @@ void Deferred::DeferredPasses()
 		dynamicCubemaps->UpdateCubemap();
 
 	auto terrainBlending = globals::features::terrainBlending;
+
+	// Call GlobalIllumination update here to ensure it's processed during the rendering pipeline
+	// This will cause raytracing to execute and apply its results to the final render
+	if (globals::features::globalIllumination && globals::features::globalIllumination->loaded) {
+		logger::debug("[Deferred] Calling GlobalIllumination update during deferred rendering");
+		globals::features::globalIllumination->Update();
+	}
 
 	// Deferred Composite
 	{

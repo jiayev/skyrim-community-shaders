@@ -347,7 +347,24 @@ bool Raytracing::TraceGI(const KickstartRT::TraceQueryInternal& query)
             projMatrix = query.cameraData.projection;
         }
         
-        // Call the underlying GenerateGI method with unwrapped parameters
+        // CRITICAL STEP: First inject direct lighting data into KickstartRT's light cache
+        // We need the direct lighting buffer from the query, but should fall back if not provided
+        if (query.directLightingSRV) {
+            bool lightingInjected = KickstartRTImpl::InjectDirectLighting(
+                query.directLightingSRV,
+                query.depthBufferSRV,
+                viewMatrix,
+                projMatrix
+            );
+            
+            if (!lightingInjected) {
+                logger::warn("[Raytracing] Failed to inject direct lighting, GI quality may be poor");
+            }
+        } else {
+            logger::warn("[Raytracing] No direct lighting buffer provided, GI quality will be poor");
+        }
+        
+        // Now call the underlying GenerateGI method with unwrapped parameters
         bool result = GenerateGI(
             query.depthBufferSRV,
             query.normalBufferSRV,

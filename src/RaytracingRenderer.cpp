@@ -6,6 +6,164 @@ namespace KickstartRTImpl
 {
     // Core rendering functions - simplified implementations for now
     /**
+     * Inject Direct Lighting into KickstartRT's cache
+     * 
+     * This function creates a DirectLightingInjectionTask to store direct lighting 
+     * information in the KickstartRT cache, which is essential for GI and reflections.
+     * 
+     * @param directLightingSRV Shader resource view for the direct lighting buffer
+     * @param depthSRV Shader resource view for the depth buffer
+     * @param viewMatrix Current view matrix
+     * @param projMatrix Current projection matrix
+     * @return true if successful, false otherwise
+     */
+    bool InjectDirectLighting(
+        ID3D11ShaderResourceView* directLightingSRV,
+        ID3D11ShaderResourceView* depthSRV,
+        DirectX::XMFLOAT4X4 viewMatrix,
+        DirectX::XMFLOAT4X4 projMatrix)
+    {
+        // Check if we have an initialized context
+        if (!g_executeContext) {
+            logger::debug("[KickstartRTImpl] InjectDirectLighting called without initialized context");
+            return false;
+        }
+
+        // Check for required resources
+        if (!directLightingSRV || !depthSRV) {
+            logger::error("[KickstartRTImpl] InjectDirectLighting called with null resources");
+            return false;
+        }
+
+        try {
+            // Create a task container for the lighting injection
+            auto taskContainer = g_executeContext->CreateTaskContainer();
+            if (!taskContainer) {
+                logger::error("[KickstartRTImpl] Failed to create task container for direct lighting injection");
+                return false;
+            }
+
+            // Setup the DirectLightingInjectionTask
+            KickstartRT::D3D11::RenderTask::DirectLightingInjectionTask injectionTask;
+            
+            // Extract resources from the views
+            ID3D11Resource* directLightingResource = nullptr;
+            ID3D11Resource* depthResource = nullptr;
+            
+            // Get direct lighting resource
+            if (directLightingSRV) {
+                directLightingSRV->GetResource(&directLightingResource);
+                if (directLightingResource) {
+                    injectionTask.directLighting.resource = directLightingResource;
+                    // Get SRV description
+                    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+                    directLightingSRV->GetDesc(&srvDesc);
+                    injectionTask.directLighting.srvDesc = srvDesc;
+                }
+            }
+            
+            // Get depth resource
+            if (depthSRV) {
+                depthSRV->GetResource(&depthResource);
+                if (depthResource) {
+                    injectionTask.depth.tex.resource = depthResource;
+                    // Get SRV description
+                    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+                    depthSRV->GetDesc(&srvDesc);
+                    injectionTask.depth.tex.srvDesc = srvDesc;
+                }
+            }
+            
+            // Setup view matrices - Convert view and projection matrices to the format expected by KickstartRT
+            // Calculate the inverse projection matrix
+            DirectX::XMMATRIX invProjMatrix = DirectX::XMMatrixInverse(nullptr, DirectX::XMLoadFloat4x4(&projMatrix));
+            DirectX::XMFLOAT4X4 invProj;
+            DirectX::XMStoreFloat4x4(&invProj, invProjMatrix);
+            
+            // Calculate the inverse view matrix
+            DirectX::XMMATRIX invViewMatrix = DirectX::XMMatrixInverse(nullptr, DirectX::XMLoadFloat4x4(&viewMatrix));
+            DirectX::XMFLOAT4X4 invView;
+            DirectX::XMStoreFloat4x4(&invView, invViewMatrix);
+            
+            // Convert to KickstartRT format
+            injectionTask.clipToViewMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invProj);
+            injectionTask.viewToWorldMatrix = *reinterpret_cast<const KickstartRT::Math::Float_4x4*>(&invView);
+            
+            // Set viewport dimensions from the depth resource
+            if (depthResource) {
+                ID3D11Texture2D* depthTex = nullptr;
+                HRESULT hr = depthResource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&depthTex));
+                if (SUCCEEDED(hr) && depthTex) {
+                    D3D11_TEXTURE2D_DESC depthDesc;
+                    depthTex->GetDesc(&depthDesc);
+                    injectionTask.viewport.width = depthDesc.Width;
+                    injectionTask.viewport.height = depthDesc.Height;
+                    depthTex->Release();
+                }
+                else {
+                    // Fallback to default dimensions
+                    injectionTask.viewport.width = 1920;
+                    injectionTask.viewport.height = 1080;
+                }
+            }
+            else {
+                // Fallback to default dimensions
+                injectionTask.viewport.width = 1920;
+                injectionTask.viewport.height = 1080;
+            }
+            
+            // Schedule the task
+            taskContainer->ScheduleRenderTask(&injectionTask);
+            
+            // Setup proper synchronization for GPU task execution
+            KickstartRT::D3D11::BuildGPUTaskInput taskInput = {};
+            taskInput.geometryTaskFirst = true;       // Process geometry tasks first
+            taskInput.maxBlasBuildCount = 4u;         // Limit BLAS builds per frame
+            
+            // Add synchronization fences if available
+            if (g_renderFence) {
+                // Wait for previous operations to complete
+                taskInput.waitFence = g_renderFence.Get();
+                taskInput.waitFenceValue = g_fenceValue;
+                
+                // Signal when our operations are done
+                taskInput.signalFence = g_renderFence.Get();
+                taskInput.signalFenceValue = g_fenceValue + 1;
+                
+                // Increment for next use
+                g_fenceValue++;
+            }
+            else {
+                logger::error("[KickstartRTImpl] Cannot execute GPU task without a valid fence for synchronization");
+                return false;
+            }
+            
+            // Execute the GPU task
+            auto status = g_executeContext->InvokeGPUTask(taskContainer, &taskInput);
+            
+            // Only release resources after GPU task execution
+            if (directLightingResource) directLightingResource->Release();
+            if (depthResource) depthResource->Release();
+            
+            if (status == KickstartRT::Status::OK) {
+                logger::debug("[KickstartRTImpl] Successfully injected direct lighting");
+                return true;
+            } else {
+                logger::error("[KickstartRTImpl] Failed to execute direct lighting injection task: {}", static_cast<int>(status));
+                return false;
+            }
+        } 
+        catch (const std::exception& e) {
+            logger::error("[KickstartRTImpl] Exception in InjectDirectLighting: {}", e.what());
+            return false;
+        } 
+        catch (...) {
+            logger::error("[KickstartRTImpl] Unknown exception in InjectDirectLighting");
+            return false;
+        }
+    }
+
+    /**
      * Generate Global Illumination using KickstartRT
      * 
      * This function creates a TraceDiffuseTask to generate global illumination effects
@@ -146,11 +304,6 @@ namespace KickstartRTImpl
             // Schedule the task
             taskContainer->ScheduleRenderTask(&traceTask);
             
-            // Release resources - we need to release any resources we acquired
-            if (depthResource) depthResource->Release();
-            if (normalResource) normalResource->Release();
-            if (outputResource) outputResource->Release();
-            
             // Setup proper synchronization for GPU task execution
             KickstartRT::D3D11::BuildGPUTaskInput taskInput = {};
             taskInput.geometryTaskFirst = true;       // Process geometry tasks first
@@ -177,6 +330,11 @@ namespace KickstartRTImpl
             // Execute the GPU task
             auto status = g_executeContext->InvokeGPUTask(taskContainer, &taskInput);
             
+            // Only release resources after GPU task execution
+            if (depthResource) depthResource->Release();
+            if (normalResource) normalResource->Release();
+            if (outputResource) outputResource->Release();
+            
             if (status == KickstartRT::Status::OK) {
                 logger::debug("[KickstartRTImpl] Successfully generated GI");
                 return true;
@@ -193,8 +351,6 @@ namespace KickstartRTImpl
             logger::error("[KickstartRTImpl] Unknown exception in GenerateGI");
             return false;
         }
-        
-        return false;
     }
 
     /**
@@ -337,12 +493,6 @@ namespace KickstartRTImpl
             // Schedule the task
             taskContainer->ScheduleRenderTask(&traceTask);
             
-            // Release resources - we need to release any resources we acquired
-            if (depthResource) depthResource->Release();
-            if (normalResource) normalResource->Release();
-            if (roughnessResource) roughnessResource->Release();
-            if (outputResource) outputResource->Release();
-            
             // Execute GPU task - this is where KickstartRT actually processes all scheduled tasks
             KickstartRT::D3D11::BuildGPUTaskInput taskInput6 = {};
             taskInput6.geometryTaskFirst = true;
@@ -362,6 +512,12 @@ namespace KickstartRTImpl
             }
             
             auto status6 = g_executeContext->InvokeGPUTask(taskContainer, &taskInput6);
+            
+            // Only release resources after GPU task execution
+            if (depthResource) depthResource->Release();
+            if (normalResource) normalResource->Release();
+            if (roughnessResource) roughnessResource->Release();
+            if (outputResource) outputResource->Release();
             
             if (status6 == KickstartRT::Status::OK) {
                 logger::info("[KickstartRTImpl] Successfully generated reflections");

@@ -12,10 +12,16 @@ namespace KickstartRTImpl
             size_t hash;
             uint64_t lastUsedFrame;
         };
+        
+        // Forward declaration of function defined outside the anonymous namespace
+        void DestroyUnusedHandles(uint64_t currentFrame);
+        
+        // Maximum number of buffers to cache
+        constexpr size_t MAX_BUFFER_CACHE_SIZE = 1024;
 
         std::vector<BufferCacheEntry> g_vertexBufferCache;
         std::vector<BufferCacheEntry> g_indexBufferCache;
-        const size_t MAX_BUFFER_CACHE_SIZE = 100; // Limit cache size to prevent memory growth
+        // Limit cache size to prevent memory growth
         
         // Add a static counter as a replacement for frameCount
         static uint64_t g_frameCounter = 0;
@@ -144,6 +150,140 @@ namespace KickstartRTImpl
             }
             
             return true;
+        }
+
+        /**
+         * Destroy geometry and instance handles that are no longer needed
+         * 
+         * This function identifies handles for objects that haven't been seen recently
+         * and destroys them to free up GPU resources.
+         * 
+         * @param currentFrame The current frame number for timing
+         */
+        void DestroyUnusedHandles(uint64_t currentFrame)
+        {
+            if (!g_executeContext) {
+                return;
+            }
+            
+            // Wait for GPU to complete all pending operations first
+            if (g_renderFence) {
+                try {
+                    auto context = globals::d3d::context;
+                    if (context) {
+                        Microsoft::WRL::ComPtr<ID3D11DeviceContext4> context4;
+                        HRESULT hr = context->QueryInterface(__uuidof(ID3D11DeviceContext4), &context4);
+                        if (SUCCEEDED(hr) && g_fenceValue > 0) {
+                            context4->Wait(g_renderFence.Get(), g_fenceValue - 1);
+                            logger::debug("[RT] Successfully waited for all GPU operations to complete before handle cleanup");
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    logger::warn("[RT] Exception during fence wait for cleanup: {}", e.what());
+                    return; // Skip cleanup if we can't wait for GPU
+                }
+            }
+            
+            // Track object usage by frame number
+            static std::unordered_map<std::string, uint64_t> lastSeenFrame;
+            
+            // First update the lastSeenFrame for all currently active objects
+            // This will be called during scene geometry collection, so active objects are marked
+            for (const auto& [name, handle] : g_instanceHandles) {
+                lastSeenFrame[name] = currentFrame;
+                
+                // If this instance references a geometry, mark that as used too
+                // This ensures geometries used by active instances aren't deleted
+                size_t sepPos = name.find("_inst_");
+                if (sepPos != std::string::npos) {
+                    std::string geomName = name.substr(0, sepPos);
+                    if (g_geometryHandles.find(geomName) != g_geometryHandles.end()) {
+                        lastSeenFrame[geomName] = currentFrame;
+                    }
+                }
+            }
+            
+            // Clean up instances that haven't been seen recently
+            std::vector<std::string> instancesToRemove;
+            for (const auto& [name, handle] : g_instanceHandles) {
+                auto it = lastSeenFrame.find(name);
+                
+                // If not found or not seen for a while
+                if (it == lastSeenFrame.end() || (currentFrame - it->second > 300)) {
+                    // Queue for removal - can't remove during iteration
+                    instancesToRemove.push_back(name);
+                }
+            }
+            
+            // Now destroy the instances
+            for (const auto& name : instancesToRemove) {
+                auto it = g_instanceHandles.find(name);
+                if (it != g_instanceHandles.end()) {
+                    logger::debug("[RT] Destroying unused instance handle: {}", name);
+                    
+                    // Destroy the instance in KickstartRT
+                    g_executeContext->DestroyInstanceHandle(it->second);
+                    
+                    // Remove from our map
+                    g_instanceHandles.erase(it);
+                    
+                    // Also remove from lastSeenFrame
+                    lastSeenFrame.erase(name);
+                }
+            }
+            
+            // Clean up geometries that haven't been seen recently and aren't used by any instance
+            std::vector<std::string> geometriesToRemove;
+            for (const auto& [name, handle] : g_geometryHandles) {
+                auto it = lastSeenFrame.find(name);
+                
+                // If not found or not seen for a while
+                if (it == lastSeenFrame.end() || (currentFrame - it->second > 300)) {
+                    // Check if any active instance uses this geometry
+                    bool usedByInstance = false;
+                    for (const auto& [instName, instHandle] : g_instanceHandles) {
+                        if (instName.find(name) != std::string::npos) {
+                            usedByInstance = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!usedByInstance) {
+                        // Queue for removal - can't remove during iteration
+                        geometriesToRemove.push_back(name);
+                    }
+                }
+            }
+            
+            // Now destroy the geometries
+            for (const auto& name : geometriesToRemove) {
+                auto it = g_geometryHandles.find(name);
+                if (it != g_geometryHandles.end()) {
+                    logger::debug("[RT] Destroying unused geometry handle: {}", name);
+                    
+                    // Destroy the geometry in KickstartRT
+                    g_executeContext->DestroyGeometryHandle(it->second);
+                    
+                    // Remove from our map
+                    g_geometryHandles.erase(it);
+                    
+                    // Also remove from lastSeenFrame
+                    lastSeenFrame.erase(name);
+                }
+            }
+            
+            // Only call ReleaseDeviceResourcesImmediately if we actually destroyed some handles
+            if (!instancesToRemove.empty() || !geometriesToRemove.empty()) {
+                // According to the documentation, this releases any device resources that
+                // were previously marked for destruction but are now safe to release
+                g_executeContext->ReleaseDeviceResourcesImmediately();
+                
+                logger::info("[RT] Released device resources after destroying {} instances and {} geometries",
+                          instancesToRemove.size(), geometriesToRemove.size());
+            }
+            
+            logger::debug("[RT] Handle cleanup complete. Remaining: {} geometries, {} instances",
+                        g_geometryHandles.size(), g_instanceHandles.size());
         }
     }
     
@@ -1011,32 +1151,47 @@ namespace KickstartRTImpl
      */
     void CleanupGeometryResources()
     {
-        // Wait for GPU to complete all pending operations
-        if (g_renderFence) {
-            try {
-                auto context = globals::d3d::context;
-                if (context) {
-                    Microsoft::WRL::ComPtr<ID3D11DeviceContext4> context4;
-                    HRESULT hr = context->QueryInterface(__uuidof(ID3D11DeviceContext4), &context4);
-                    if (SUCCEEDED(hr) && g_fenceValue > 0) {
-                        context4->Wait(g_renderFence.Get(), g_fenceValue - 1);
-                        logger::info("[RT] Successfully waited for all GPU operations to complete before cleanup");
+        static uint64_t lastCleanupFrame = 0;
+        
+        uint64_t currentFrame = GetFrameCount();
+        
+        // Only clean up occasionally to avoid overhead
+        if (currentFrame - lastCleanupFrame > 120) { // ~ every 2 seconds at 60 fps
+            
+            // Record that we performed cleanup
+            lastCleanupFrame = currentFrame;
+            
+            // Clean up cached buffers that haven't been used recently
+            if (!g_vertexBufferCache.empty() || !g_indexBufferCache.empty()) {
+                
+                logger::debug("[RT] Cleaning up {} vertex and {} index buffer cache entries", 
+                              g_vertexBufferCache.size(), g_indexBufferCache.size());
+                
+                // Clean vertex buffer cache
+                auto it = g_vertexBufferCache.begin();
+                while (it != g_vertexBufferCache.end()) {
+                    if (currentFrame - it->lastUsedFrame > 300) {
+                        logger::trace("[RT] Removing old vertex buffer cache entry");
+                        it = g_vertexBufferCache.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                
+                // Clean index buffer cache
+                it = g_indexBufferCache.begin();
+                while (it != g_indexBufferCache.end()) {
+                    if (currentFrame - it->lastUsedFrame > 300) {
+                        logger::trace("[RT] Removing old index buffer cache entry");
+                        it = g_indexBufferCache.erase(it);
+                    } else {
+                        ++it;
                     }
                 }
             }
-            catch (const std::exception& e) {
-                logger::warn("[RT] Exception during fence wait for cleanup: {}", e.what());
-            }
+            
+            // Destroy handles for objects no longer in the scene
+            DestroyUnusedHandles(currentFrame);
         }
-        
-        // Clear all cached buffers
-        g_vertexBufferCache.clear();
-        g_indexBufferCache.clear();
-        
-        // According to the documentation, releasing device resources immediately will work
-        // but all SDK command lists must be complete first, which we ensured above
-        g_executeContext->ReleaseDeviceResourcesImmediately();
-        
-        logger::info("[RT] Cleaned up all geometry resources");
     }
 } // namespace KickstartRTImpl 

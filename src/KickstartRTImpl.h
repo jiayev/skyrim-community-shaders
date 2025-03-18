@@ -28,6 +28,12 @@ namespace KickstartRTImpl
     int CollectSceneGeometry();
 
     // Raytracing operations
+    bool InjectDirectLighting(
+        ID3D11ShaderResourceView* directLightingSRV,
+        ID3D11ShaderResourceView* depthSRV,
+        DirectX::XMFLOAT4X4 viewMatrix,
+        DirectX::XMFLOAT4X4 projMatrix);
+        
     bool GenerateGI(
         ID3D11ShaderResourceView* depthSRV,
         ID3D11ShaderResourceView* normalSRV,
