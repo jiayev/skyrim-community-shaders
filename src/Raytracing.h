@@ -91,6 +91,9 @@ public:
     // Simplified trace interface using the query structure
     bool TraceGI(const KickstartRT::TraceQueryInternal& query);
     
+    // Added to public section for GlobalIllumination feature
+    bool GetCurrentViewAndProjectionMatrices(DirectX::XMFLOAT4X4& viewMatrix, DirectX::XMFLOAT4X4& projMatrix);
+    
 private:
     Raytracing() = default;
     ~Raytracing() = default;
@@ -100,7 +103,7 @@ private:
     bool resourcesCreated = false;
                            
     // Resource management
-    bool GetCurrentViewAndProjectionMatrices(DirectX::XMFLOAT4X4& viewMatrix, DirectX::XMFLOAT4X4& projMatrix);
+    // Removed from here: bool GetCurrentViewAndProjectionMatrices(DirectX::XMFLOAT4X4& viewMatrix, DirectX::XMFLOAT4X4& projMatrix);
 
     // Shortcut to enable/disable the system
     void Enable() { settings.Enabled = true; }

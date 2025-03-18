@@ -218,53 +218,19 @@ void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuf
             normalBuffer ? "provided" : "null", 
             outputBuffer ? "provided" : "null");
         
-        // Get the current view and projection matrices
+        // Get the per-frame constant buffer to extract view and projection matrices
         DirectX::XMFLOAT4X4 viewMatrix, projMatrix;
         
-        // Initialize with identity matrices to prevent "uninitialized variable" warnings
-        DirectX::XMStoreFloat4x4(&viewMatrix, DirectX::XMMatrixIdentity());
-        DirectX::XMStoreFloat4x4(&projMatrix, DirectX::XMMatrixIdentity());
+        // Instead of trying to extract from constant buffer which is failing,
+        // use the Raytracing class's method to get matrices from the camera
+        bool gotMatrices = raytracing->GetCurrentViewAndProjectionMatrices(viewMatrix, projMatrix);
         
-        // Get proper matrices from Skyrim's renderer
-        if (auto renderer = globals::game::renderer) {
-            // Try to get matrices from per-frame constant buffer
-            bool gotMatrices = false;
-            
-            // Get the per-frame buffer from globals
-            auto perFrameBuffer = *globals::game::perFrame.get();
-            if (perFrameBuffer) {
-                // Map the buffer to read its contents
-                D3D11_MAPPED_SUBRESOURCE mapped;
-                if (SUCCEEDED(context->Map(perFrameBuffer, 0, D3D11_MAP_READ, 0, &mapped))) {
-                    // The per-frame buffer contains view and projection matrices
-                    // Based on Skyrim's shader constant layout
-                    struct PerFrameBuffer {
-                        DirectX::XMFLOAT4X4 viewMatrix;         // Offset 0
-                        DirectX::XMFLOAT4X4 projMatrix;         // Offset 64
-                        // Other data follows...
-                    };
-                    
-                    const PerFrameBuffer* frameData = reinterpret_cast<const PerFrameBuffer*>(mapped.pData);
-                    viewMatrix = frameData->viewMatrix;
-                    projMatrix = frameData->projMatrix;
-                    
-                    context->Unmap(perFrameBuffer, 0);
-                    
-                    gotMatrices = true;
-                    logger::debug("[GlobalIllumination] Successfully extracted view/projection matrices from per-frame buffer");
-                }
-            }
-            
-            // If we couldn't get matrices from buffer, fall back to identity matrices
-            if (!gotMatrices) {
-                logger::warn("[GlobalIllumination] Could not extract matrices from per-frame buffer, using identity matrices");
-                DirectX::XMStoreFloat4x4(&viewMatrix, DirectX::XMMatrixIdentity());
-                DirectX::XMStoreFloat4x4(&projMatrix, DirectX::XMMatrixIdentity());
-            }
-        } else {
-            logger::warn("[GlobalIllumination] Renderer not available, using identity matrices");
+        if (!gotMatrices) {
+            logger::warn("[GlobalIllumination] Could not get matrices from camera, using identity matrices");
             DirectX::XMStoreFloat4x4(&viewMatrix, DirectX::XMMatrixIdentity());
             DirectX::XMStoreFloat4x4(&projMatrix, DirectX::XMMatrixIdentity());
+        } else {
+            logger::debug("[GlobalIllumination] Successfully extracted view/projection matrices from camera");
         }
         
         // Extract DirectX resources from the Texture2D objects
@@ -410,6 +376,37 @@ void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuf
             }
         }
         
+        // Add direct lighting buffer acquisition for better GI quality
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> directLightingSRV;
+        if (auto renderer = globals::game::renderer) {
+            // Try to get a render target containing direct lighting
+            auto& renderTargetData = renderer->GetRuntimeData().renderTargets;
+            
+            // First try the INDIRECT target, which often contains lighting information
+            const int indirectTargetIndex = static_cast<int>(RE::RENDER_TARGETS::kINDIRECT);
+            
+            ID3D11ShaderResourceView* rawSRV = renderTargetData[indirectTargetIndex].SRV;
+            if (rawSRV) {
+                directLightingSRV = rawSRV;
+                logger::debug("[GlobalIllumination] Successfully acquired direct lighting from INDIRECT target");
+                            // If that wasn't available, try the main target as fallback
+                if (!directLightingSRV) {
+                    const int mainTargetIndex = static_cast<int>(RE::RENDER_TARGETS::kMAIN);
+                    rawSRV = renderTargetData[mainTargetIndex].SRV;
+                    if (rawSRV) {
+                        directLightingSRV = rawSRV;
+                        logger::debug("[GlobalIllumination] Using main render target as direct lighting buffer");
+                    }
+            }
+            }
+            
+
+        }
+        
+        if (!directLightingSRV) {
+            logger::warn("[GlobalIllumination] Could not acquire direct lighting buffer, GI quality will be reduced");
+        }
+        
         // At this point, we should have depth buffer and output UAV
         // Normal buffer is optional and might be null
         if (!depthSRV || !outputUAV) {
@@ -433,6 +430,7 @@ void GlobalIllumination::GenerateGI(Texture2D* depthBuffer, Texture2D* normalBuf
         traceQuery.cameraData = cameraData;
         traceQuery.depthBufferSRV = depthSRV.Get();
         traceQuery.normalBufferSRV = normalSRV.Get();
+        traceQuery.directLightingSRV = directLightingSRV.Get();
         traceQuery.outputUAV = outputUAV.Get();
         traceQuery.maxRayLength = settings.Distance;
         
@@ -583,7 +581,7 @@ void GlobalIllumination::ApplyGIToFinalRender()
     TracyD3D11Zone(globals::state->tracyCtx, "GI Compositing");
     
     // Get the main render target
-    int mainRTIndex = RE::RENDER_TARGETS::kMAIN;
+    int mainRTIndex = static_cast<int>(RE::RENDER_TARGETS::kMAIN);
     auto& mainRT = renderer->GetRuntimeData().renderTargets[mainRTIndex];
     if (!mainRT.texture) {
         logger::error("[GlobalIllumination] Main render target not available");
