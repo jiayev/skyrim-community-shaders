@@ -139,6 +139,14 @@ namespace SharedData
 		float3 pad0;
 	};
 
+	struct LODBlendingSettings
+	{
+		float LODTerrainBrightness;
+		float LODObjectBrightness;
+		float LODObjectSnowBrightness;
+		bool DisableTerrainVertexColors;
+	};
+
 	struct SkinData
 	{
 		float4 skinParams;
@@ -157,6 +165,7 @@ namespace SharedData
 		WetnessEffectsSettings wetnessEffectsSettings;
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
+		LODBlendingSettings lodBlendingSettings;
 		SkinData skinData;
 	};
 
