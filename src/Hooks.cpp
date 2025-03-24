@@ -180,10 +180,10 @@ namespace LightingExtensions
 
 			globals::state->isTree = false;
 
-			auto userData = pass->geometry->GetUserData();
-			if (userData)
-				if (userData->GetBaseObject()->As<RE::TESObjectTREE>())
-					globals::state->isTree = true;
+			if (auto userData = pass->geometry->GetUserData())
+				if (auto baseObject = userData->GetBaseObject())
+					if (baseObject->As<RE::TESObjectTREE>())
+						globals::state->isTree = true;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -344,7 +344,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 			shouldProxy = false;
 	}
 
-	upscaling->lowRefreshRate = refreshRate < 120;
+	upscaling->lowRefreshRate = refreshRate < 119;
 	upscaling->isWindowed = pSwapChainDesc->Windowed;
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
