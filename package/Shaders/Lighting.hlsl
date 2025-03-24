@@ -2240,13 +2240,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			Skin::SkinDirectLightInput(pointDiffuseColor, pointTransmissionColor, pointSpecularColor, lightProperties, skinSurfaceProperties, modelNormal.xyz, viewDirection, normalizedLightDirection);
 			lightsDiffuseColor += pointDiffuseColor;
 			transmissionColor += pointTransmissionColor;
-			float3 sssTransmittance = Skin::SSSSTransmittance(
-				SharedData::skinData.sssParams.x, 
-				SharedData::skinData.sssParams.y, 
-				modelNormal.xyz, 
-				normalizedLightDirection, 
-				skinSurfaceProperties.Thickness) * SharedData::skinData.sssParams.w;
-			transmissionColor += min(sssTransmittance * lightProperties.LightColor, lightProperties.LightColor);
+			if (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) {
+				float3 sssTransmittance = Skin::SSSSTransmittance(
+					SharedData::skinData.sssParams.x, 
+					SharedData::skinData.sssParams.y, 
+					modelNormal.xyz, 
+					normalizedLightDirection, 
+					skinSurfaceProperties.Thickness) * SharedData::skinData.sssParams.w;
+				transmissionColor += min(sssTransmittance * lightProperties.LightColor, lightProperties.LightColor);
+			}
 			specularColorPBR += pointSpecularColor;
 		} else {
 			lightColor *= lightShadow;
@@ -2406,13 +2408,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			Skin::SkinDirectLightInput(pointDiffuseColor, pointTransmissionColor, pointSpecularColor, lightProperties, skinSurfaceProperties, worldSpaceNormal.xyz, worldSpaceViewDirection, normalizedLightDirection);
 			lightsDiffuseColor += pointDiffuseColor;
 			transmissionColor += pointTransmissionColor;
-			float3 sssTransmittance = Skin::SSSSTransmittance(
-				SharedData::skinData.sssParams.x, 
-				SharedData::skinData.sssParams.y, 
-				modelNormal.xyz, 
-				normalizedLightDirection, 
-				skinSurfaceProperties.Thickness) * SharedData::skinData.sssParams.w;
-			transmissionColor += min(sssTransmittance * lightProperties.LightColor, lightProperties.LightColor);
+			if (light.lightFlags & LightLimitFix::LightFlags::Shadow) {
+				float3 sssTransmittance = Skin::SSSSTransmittance(
+					SharedData::skinData.sssParams.x, 
+					SharedData::skinData.sssParams.y, 
+					modelNormal.xyz, 
+					normalizedLightDirection, 
+					skinSurfaceProperties.Thickness) * SharedData::skinData.sssParams.w;
+				transmissionColor += min(sssTransmittance * lightProperties.LightColor, lightProperties.LightColor);
+			}
 			specularColorPBR += pointSpecularColor;
 #				if defined(WETNESS_EFFECTS)
 			if (waterRoughnessSpecular < 1.0)
@@ -2883,7 +2887,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 #	if !defined(DEFERRED)
+#		if defined(SKIN) && defined(CS_SKIN)
+	if (SharedData::skinData.skinParams.w > 0) {
+		color.xyz += specularColor;
+	} else {
+		color.xyz += Color::LinearToGamma(Color::GammaToLinear(color.xyz) + specularColor);
+	}
+#		else
 	color.xyz = Color::LinearToGamma(Color::GammaToLinear(color.xyz) + specularColor);
+#		endif
 	if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z)
 		color.xyz = lerp(color.xyz, input.FogParam.xyz, input.FogParam.w);
 #	endif
