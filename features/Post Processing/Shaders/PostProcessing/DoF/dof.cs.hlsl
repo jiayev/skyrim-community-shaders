@@ -95,12 +95,12 @@ struct DISCBLURINFO
 };
 
 #define UNIT_TO_MM 14.28f
-#define MM_TO_UNIT 0.07f
+#define UNIT_TO_M 0.01428f
 
 float GetDepth(float2 uv)
 {
     float depth = DepthTexture.SampleLevel(DepthSampler, uv, 0);
-    depth = SharedData::GetScreenDepth(depth) * 1.428e-5f;
+    depth = SharedData::GetScreenDepth(depth);
     return depth;
 }
 
@@ -117,7 +117,7 @@ void FillFocusInfoData(inout FOCUSINFO toFill)
     // 1000 to make it equal to a depth value read from the depth linearized depth buffer.
     // Read from sampler on current focus which is a 1x1 texture filled with the actual depth value of the focus point to use.
     toFill.focusDepth = PreviousFocus();
-    toFill.focusDepthInM = toFill.focusDepth * 1000.0; 		// km to m
+    toFill.focusDepthInM = toFill.focusDepth * UNIT_TO_M; 		// km to m
     toFill.focusDepthInMM = toFill.focusDepthInM * 1000.0; 	// m to mm
     toFill.pixelSizeLength = length(float2(Width, Height));	// in pixels
     
@@ -131,7 +131,7 @@ void FillFocusInfoData(inout FOCUSINFO toFill)
 float CalculateBlurDiscSize(FOCUSINFO focusInfo)
 {
     float pixelDepth = GetDepth(focusInfo.texcoord);
-    float pixelDepthInM = pixelDepth * 1000.0;			// in meter
+    float pixelDepthInM = pixelDepth * UNIT_TO_M;			// in meter
 
     // CoC (blur disc size) calculation based on [Lee2008]
     // CoC = ((EF / Zf - F) * (abs(Z-Zf) / Z)
