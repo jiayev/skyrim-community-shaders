@@ -22,11 +22,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PostBlurSmoothing,
 	targetFocus,
 	targetFocusFocalLength,
-    consoleSelection
+    consoleSelection,
+    vanillaDoF
 )
 
 void DoF::DrawSettings()
 {
+    ImGui::Checkbox("Use Parameters from Vanilla DoF", &settings.vanillaDoF);
     ImGui::Checkbox("Auto Focus", &settings.AutoFocus);
 
     if (settings.AutoFocus) {
@@ -55,6 +57,20 @@ void DoF::DrawSettings()
         static float debugRescale = .3f;
         ImGui::Text("Debug Distance: %f", debugDistance);
         ImGui::Text("Debug Focus Plane: %f", debugFocusPlane);
+        ImGui::Spacing();
+        ImGui::Text("Vanilla DoF Parameters:");
+        ImGui::Text("Near Distance: %f", vanillaDoF.nearDist);
+        ImGui::Text("Far Distance: %f", vanillaDoF.farDist);
+        ImGui::Text("Near Range: %f", vanillaDoF.nearRange);
+        ImGui::Text("Far Range: %f", vanillaDoF.farRange);
+        ImGui::Text("Near Blur: %f", vanillaDoF.nearBlur);
+        ImGui::Text("Far Blur: %f", vanillaDoF.farBlur);
+        ImGui::Text("Blur Multiplier: %f", vanillaDoF.blurMultiplier);
+        ImGui::Text("Center Weight: %f", vanillaDoF.centerWeight);
+        ImGui::Text("Max Depth: %f", vanillaDoF.maxDepth);
+        ImGui::Text("Center Weight Toggle: %s", vanillaDoF.centerWeightToggle ? "true" : "false");
+        ImGui::Text("Dynamic Toggle: %s", vanillaDoF.dynamicToggle ? "true" : "false");
+        ImGui::Spacing();
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
         BUFFER_VIEWER_NODE(texFocus, 64.0f)
@@ -342,12 +358,33 @@ float DoF::GetDistanceToReference(RE::TESObjectREFR* a_ref)
     return cameraPosition.GetDistance(targetPosition);
 }
 
+DoF::VanillaDoF DoF::GetVanillaDoFData()
+{
+    VanillaDoF data = {};
+    data.nearDist = SkyrimDOF::nearDist;
+    data.farDist = SkyrimDOF::farDist;
+    data.nearRange = SkyrimDOF::nearRange;
+    data.farRange = SkyrimDOF::farRange;
+    data.nearBlur = SkyrimDOF::nearBlur;
+    data.farBlur = SkyrimDOF::farBlur;
+    data.blurMultiplier = SkyrimDOF::blurMultiplier;
+    data.centerWeight = SkyrimDOF::centerWeight;
+    data.maxDepth = SkyrimDOF::maxDepth;
+    data.centerWeightToggle = SkyrimDOF::centerWeightToggle;
+    data.dynamicToggle = SkyrimDOF::dynamicToggle;
+    return data;
+}
+
 void DoF::Draw(TextureInfo& inout_tex)
 {
     auto state = globals::state;
 	auto context = globals::d3d::context;
     auto renderer = globals::game::renderer;
     auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
+    if (settings.vanillaDoF) {
+        vanillaDoF = GetVanillaDoFData();
+    }
 
     float2 res = { (float)texOutput->desc.Width, (float)texOutput->desc.Height };
 
@@ -426,6 +463,7 @@ void DoF::Draw(TextureInfo& inout_tex)
     std::array<ID3D11UnorderedAccessView*, 3> uavs = { texOutput->uav.get(), texFocus->uav.get(), texCoC->uav.get() };
     std::array<ID3D11SamplerState*, 2> samplers = { colorSampler.get(), depthSampler.get() };
     auto cb = dofCB->CB();
+
     auto resetViews = [&]() {
 		srvs.fill(nullptr);
 		uavs.fill(nullptr);

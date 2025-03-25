@@ -6,6 +6,45 @@
 #include "Buffer.h"
 #include "PostProcessFeature.h"
 
+namespace SkyrimDOF
+{
+    inline static bool& dynamicToggle{
+        *REL::Relocation<bool*>{ RELOCATION_ID(517709, 404236) }
+    };
+
+    inline static float& nearDist{
+        *REL::Relocation<float*>{ RELOCATION_ID(528191, 415136) }
+    };
+    inline static float& farDist{
+        *REL::Relocation<float*>{ RELOCATION_ID(528192, 415137) }
+    };
+    inline static float& nearRange{
+        *REL::Relocation<float*>{ RELOCATION_ID(528193, 415138) }
+    };
+    inline static float& farRange{
+        *REL::Relocation<float*>{ RELOCATION_ID(528194, 415139) }
+    };
+    inline static float& nearBlur{
+        *REL::Relocation<float*>{ RELOCATION_ID(528195, 415140) }
+    };
+    inline static float& farBlur{
+        *REL::Relocation<float*>{ RELOCATION_ID(528196, 415141) }
+    };
+    inline static float& blurMultiplier{
+        *REL::Relocation<float*>{ RELOCATION_ID(528197, 415142) }
+    };
+
+    inline static bool& centerWeightToggle{
+        *REL::Relocation<bool*>{ RELOCATION_ID(528124, 415069) }
+    };
+    inline static float& centerWeight{
+        *REL::Relocation<float*>{ RELOCATION_ID(528120, 415065) }
+    };
+    inline static float& maxDepth{
+        *REL::Relocation<float*>{ RELOCATION_ID(528121, 415066) }
+    };
+}
+
 struct DoF : public PostProcessFeature
 {
     virtual inline std::string GetType() const override { return "Depth of Field"; }
@@ -30,6 +69,8 @@ struct DoF : public PostProcessFeature
 		bool  targetFocus = false;
 		float targetFocusFocalLength = 50.0f;
         bool consoleSelection = false;
+        bool vanillaDoF = false;
+        uint8_t pad2[3];
     } settings;
 
     struct alignas(16) DoFCB
@@ -51,6 +92,22 @@ struct DoF : public PostProcessFeature
         bool AutoFocus;
         uint8_t pad[3];
     };
+
+    struct VanillaDoF
+    {
+        float nearDist = 0.0f;
+        float farDist = 0.0f;
+        float nearRange = 0.0f;
+        float farRange = 0.0f;
+        float nearBlur = 0.0f;
+        float farBlur = 0.0f;
+        float blurMultiplier = 0.0f;
+        float centerWeight = 0.0f;
+        float maxDepth = 0.0f;
+        bool centerWeightToggle = false;
+        bool dynamicToggle = false;
+        uint8_t pad[2];
+    } vanillaDoF;
 
     eastl::unique_ptr<ConstantBuffer> dofCB = nullptr;
 
@@ -111,6 +168,8 @@ struct DoF : public PostProcessFeature
     float debugDistance = 0.0f;
     float debugFocusPlane = 0.0f;
     uint currentRef = 0;
+
+    VanillaDoF GetVanillaDoFData();
 
 	TDM_API::IVTDM2* g_TDM = nullptr;
 };

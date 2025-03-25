@@ -94,6 +94,9 @@ struct DISCBLURINFO
     float highlightBoostFactor: TEXCOORD5;
 };
 
+#define UNIT_TO_MM 14.28f
+#define MM_TO_UNIT 0.07f
+
 float GetDepth(float2 uv)
 {
     float depth = DepthTexture.SampleLevel(DepthSampler, uv, 0);
