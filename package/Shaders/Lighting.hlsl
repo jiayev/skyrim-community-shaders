@@ -910,6 +910,9 @@ float3 GetWorldMapBaseColor(float3 originalBaseColor, float3 rawBaseColor, float
 #		if defined(LODOBJECTS)
 	float4 lodColorMul = lodMultiplier.xxxx * float4(0.269999981, 0.281000018, 0.441000015, 0.441000015) + float4(0.0780000091, 0.09799999, -0.0349999964, 0.465000004);
 	float4 lodColor = lodColorMul.xyzw * 2.0.xxxx;
+# 		if defined(LL)
+	lodColor.xyz = Color::Diffuse(lodColor.xyz);
+#		endif
 	bool useLodColorZ = lodColorMul.w > 0.5;
 	lodColor.xyz = max(lodColor.xyz, rawBaseColor.xyz);
 	lodColor.w = useLodColorZ ? lodColor.z : min(lodColor.w, rawBaseColor.z);
@@ -917,6 +920,9 @@ float3 GetWorldMapBaseColor(float3 originalBaseColor, float3 rawBaseColor, float
 #		else
 	float4 lodColorMul = lodMultiplier.xxxx * float4(0.199999988, 0.441000015, 0.269999981, 0.281000018) + float4(0.300000012, 0.465000004, 0.0780000091, 0.09799999);
 	float3 lodColor = lodColorMul.zwy * 2.0.xxx;
+# 		if defined(LL)
+	lodColor.xyz = Color::Diffuse(lodColor.xyz);
+#		endif
 	lodColor.xy = max(lodColor.xy, rawBaseColor.xy);
 	lodColor.z = lodColorMul.y > 0.5 ? max((lodMultiplier * 0.441 + -0.0349999964) * 2, rawBaseColor.z) : min(lodColor.z, rawBaseColor.z);
 	return lodColorMul.xxx * (lodColor - rawBaseColor.xyz) + rawBaseColor;
@@ -1617,6 +1623,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(LOD_LAND_BLEND)
 	float4 lodLandColor = TexLandLodBlend1Sampler.Sample(SampLandLodBlend1Sampler, input.TexCoord0.zw);
+#			if defined(LL)
+	lodLandColor.xyz = Color::GammaToTrueLinear(lodLandColor.xyz);
+#			endif
 #			if defined(LOD_BLENDING)
 	lodLandColor.xyz *= SharedData::lodBlendingSettings.LODTerrainBrightness;
 #			endif  // LOD_BLENDING
@@ -1717,7 +1726,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float2 projDetailNormalUv = ProjectedUVParams3.y * projNoiseUv;
 		float3 projDetailNormal = TexProjDetail.Sample(SampProjDetailSampler, projDetailNormalUv).xyz;
 		float3 finalProjNormal = normalize(TransformNormal(projDetailNormal) * float3(1, 1, projNormal.z) + float3(projNormal.xy, 0));
+#			if !defined(LL)
 		float3 projBaseColor = TexProjDiffuseSampler.Sample(SampProjDiffuseSampler, projNormalDiffuseUv).xyz * ProjectedUVParams2.xyz;
+#			else
+		float3 projBaseColor = Color::Diffuse(TexProjDiffuseSampler.Sample(SampProjDiffuseSampler, projNormalDiffuseUv).xyz) * Color::Diffuse(ProjectedUVParams2.xyz);
+#			endif
 		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
 #			if defined(TRUE_PBR)
 		projBaseColor = saturate(EnvmapData.xyz * projBaseColor);
@@ -1739,7 +1752,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			endif  // SNOW
 	} else {
 		if (projWeight > 0) {
+#			if !defined(LL)
 			baseColor.xyz = ProjectedUVParams2.xyz;
+#			else
+			baseColor.xyz = Color::Diffuse(ProjectedUVParams2.xyz);
+#			endif
 #			if defined(SNOW)
 			useSnowDecalSpecular = true;
 			psout.Parameters.y = GetSnowParameterY(projWeight, baseColor.w);
@@ -2957,7 +2974,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			endif
 #		endif
 	if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z)
+#		if !defined(LL)
 		color.xyz = lerp(color.xyz, input.FogParam.xyz, input.FogParam.w);
+#		else
+		color.xyz = lerp(color.xyz, Color::GammaToTrueLinear(input.FogParam.xyz), Color::GammaToTrueLinear(input.FogParam.w));
+#		endif
 #	endif
 
 #	if defined(TESTCUBEMAP) && defined(ENVMAP) && defined(DYNAMIC_CUBEMAPS)
