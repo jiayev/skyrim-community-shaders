@@ -145,6 +145,15 @@ namespace SharedData
 		bool DisableTerrainVertexColors;
 	};
 
+	struct SkinData
+	{
+		float4 skinParams;
+		float4 skinParams2;
+		float4 skinDetailParams;
+		float4 sssParams;
+		uint ApplySpecularToWetness;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -156,6 +165,7 @@ namespace SharedData
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
 		LODBlendingSettings lodBlendingSettings;
+		SkinData skinData;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);
