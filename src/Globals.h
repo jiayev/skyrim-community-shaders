@@ -16,6 +16,7 @@ struct TerrainShadows;
 struct VolumetricLighting;
 struct WaterEffects;
 struct WetnessEffects;
+struct PostProcessing;
 
 class ParticleLights;
 
@@ -60,6 +61,7 @@ namespace globals
 		extern VolumetricLighting* volumetricLighting;
 		extern WaterEffects* waterEffects;
 		extern WetnessEffects* wetnessEffects;
+		extern PostProcessing* postProcessing;
 
 		namespace llf
 		{
