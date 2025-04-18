@@ -211,7 +211,9 @@ namespace Skin
 		transmission = 0;
 		specular = 0;
 
+#if !defined(LL)
 		light.LightColor = Color::GammaToLinear(light.LightColor);
+#endif
 		light.LightColor *= Math::PI;
 
 		const float3 H = normalize(V + L);
