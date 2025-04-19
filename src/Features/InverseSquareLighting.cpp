@@ -61,9 +61,10 @@ void InverseSquareLighting::ProcessLight(LightLimitFix::LightData& light, RE::BS
 		runtimeData->radius.z = light.radius;
 		light.color /= std::max(0.001f, std::max(light.color.x, std::max(light.color.y, light.color.z)));
 		light.color *= intensity;
+		light.fade = 1.0f;
 	} else {
 		light.radius = runtimeData->radius.x;
-		light.color *= runtimeData->fade;
+		light.fade = runtimeData->fade;
 	}
 }
 

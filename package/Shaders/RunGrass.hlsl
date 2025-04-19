@@ -608,7 +608,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 #				endif
 
+#				if !defined(LL)
 	float3 albedo = max(0, baseColor.xyz * vertexColor);
+#				else
+	float3 albedo = max(0, baseColor.xyz * Color::GammaToTrueLinear(vertexColor));
+#				endif
 
 	float3 subsurfaceColor = albedo.xyz * albedo.xyz * saturate(input.VertexNormal.w * 10.0);
 
@@ -648,8 +652,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #				endif
 
-				float3 lightColor = light.color.xyz * intensityMultiplier;
-
+#				if !defined(LL)
+				float3 lightColor = light.color.xyz * intensityMultiplier * light.fade;
+#				else
+				float3 lightColor = Color::GammaToTrueLinear(light.color.xyz) * intensityMultiplier * light.fade;
+#				endif
 				float lightShadow = 1.0;
 
 				float shadowComponent = 1.0;
@@ -856,7 +863,11 @@ PS_OUTPUT main(PS_INPUT input)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #				endif
 
-				float3 lightColor = light.color.xyz * intensityMultiplier;
+#				if !defined(LL)
+				float3 lightColor = light.color.xyz * intensityMultiplier * light.fade;
+#				else
+				float3 lightColor = Color::GammaToTrueLinear(light.color.xyz) * intensityMultiplier * light.fade;
+#				endif
 
 				float lightShadow = 1.0;
 
