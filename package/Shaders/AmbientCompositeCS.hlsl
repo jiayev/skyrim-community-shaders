@@ -24,6 +24,21 @@ Texture2D<float4> SsgiYTexture : register(t6);
 Texture2D<float2> SsgiCoCgTexture : register(t7);
 #endif
 
+#if defined(IBL)
+Texture2D<sh2> DiffuseIBLTexture : register(t8);
+
+float3 GetDiffuseIBL(float3 rayDir)
+{
+	sh2 shR = DiffuseIBLTexture.Load(int3(0, 0, 0));
+	sh2 shG = DiffuseIBLTexture.Load(int3(1, 0, 0));
+	sh2 shB = DiffuseIBLTexture.Load(int3(2, 0, 0));
+	float colorR = SphericalHarmonics::SHHallucinateZH3Irradiance(shR, rayDir);
+	float colorG = SphericalHarmonics::SHHallucinateZH3Irradiance(shG, rayDir);
+	float colorB = SphericalHarmonics::SHHallucinateZH3Irradiance(shB, rayDir);
+	return float3(colorR, colorG, colorB);
+}
+#endif
+
 RWTexture2D<float4> MainRW : register(u0);
 #if defined(SSGI)
 RWTexture2D<float3> DiffuseAmbientRW : register(u1);
@@ -56,6 +71,13 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 
 	float3 directionalAmbientColor = max(0, mul(SharedData::DirectionalAmbient, float4(normalWS, 1.0)));
 
+#if defined(IBL)
+	if (SharedData::iblSettings.EnableDiffuseIBL) {
+		directionalAmbientColor *= SharedData::iblSettings.DALCAmount;
+		directionalAmbientColor += GetDiffuseIBL(-normalWS) * SharedData::iblSettings.DiffuseIBLScale;
+	}
+#endif
+
 	float3 linAlbedo = albedo;
 	float3 linDirectionalAmbientColor = directionalAmbientColor;
 	float3 linDiffuseColor = diffuseColor;
@@ -65,6 +87,11 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 	linDiffuseColor = Color::GammaToLinear(linDiffuseColor);
 #else
 	linDirectionalAmbientColor = Color::GammaToTrueLinear(linDirectionalAmbientColor);
+#	if defined(IBL)
+	if (SharedData::iblSettings.EnableDiffuseIBL) {
+		linDirectionalAmbientColor = directionalAmbientColor;
+	}
+#	endif
 #endif
 	float3 originalDiffuseColor = linDiffuseColor;
 

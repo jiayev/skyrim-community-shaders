@@ -145,6 +145,14 @@ namespace SharedData
 		bool DisableTerrainVertexColors;
 	};
 
+	struct IBLSettings
+	{
+		uint EnableDiffuseIBL;
+		float DiffuseIBLScale;
+		float DALCAmount;
+		uint pad0;
+	};
+
 	struct SkinData
 	{
 		float4 skinParams;
@@ -165,6 +173,7 @@ namespace SharedData
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
 		LODBlendingSettings lodBlendingSettings;
+		IBLSettings iblSettings;
 		SkinData skinData;
 	};
 
