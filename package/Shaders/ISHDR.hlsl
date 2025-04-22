@@ -120,7 +120,7 @@ PS_OUTPUT main(PS_INPUT input)
 		else
 		{
 			float maxCol = Color::RGBToLuminance(inputColor);
-			float mappedMax = GetTonemapFactorReinhard(maxCol);
+			float mappedMax = GetTonemapFactorReinhard(maxCol).x;
 			float3 compressedHuePreserving = inputColor * mappedMax / maxCol;
 			blendedColor = compressedHuePreserving;
 			blendedColor += saturate(Param.x - blendedColor) * bloomColor;
@@ -130,7 +130,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 		float blendedLuminance = Color::RGBToLuminance(blendedColor);
 
-		float3 linearColor = Cinematic.w * lerp(lerp(blendedLuminance, blendedColor, Cinematic.x), blendedLuminance * Tint, Tint.w).xyz;
+		float3 linearColor = Cinematic.w * lerp(lerp(blendedLuminance, blendedColor, Cinematic.x), blendedLuminance * Tint.xyz, Tint.w).xyz;
 
 		linearColor = lerp(avgValue.x, linearColor, Cinematic.z);
 

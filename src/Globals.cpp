@@ -26,6 +26,7 @@
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
+#include "Features/TerrainHelper.h"
 #include "Features/TerrainShadows.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
@@ -61,6 +62,7 @@ namespace globals
 		Skylighting* skylighting = nullptr;
 		SubsurfaceScattering* subsurfaceScattering = nullptr;
 		TerrainBlending* terrainBlending = nullptr;
+		TerrainHelper* terrainHelper = nullptr;
 		TerrainShadows* terrainShadows = nullptr;
 		VolumetricLighting* volumetricLighting = nullptr;
 		WaterEffects* waterEffects = nullptr;
@@ -141,6 +143,7 @@ namespace globals
 		features::skylighting = Skylighting::GetSingleton();
 		features::subsurfaceScattering = SubsurfaceScattering::GetSingleton();
 		features::terrainBlending = TerrainBlending::GetSingleton();
+		features::terrainHelper = TerrainHelper::GetSingleton();
 		features::terrainShadows = TerrainShadows::GetSingleton();
 		features::volumetricLighting = VolumetricLighting::GetSingleton();
 		features::waterEffects = WaterEffects::GetSingleton();
