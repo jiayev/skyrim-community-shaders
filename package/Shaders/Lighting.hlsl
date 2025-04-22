@@ -512,6 +512,13 @@ Texture2D<float4> TexLandNormal4Sampler : register(t10);
 Texture2D<float4> TexLandNormal5Sampler : register(t11);
 Texture2D<float4> TexLandNormal6Sampler : register(t12);
 
+Texture2D<float4> TexLandTHDisp0Sampler : register(t92);
+Texture2D<float4> TexLandTHDisp1Sampler : register(t93);
+Texture2D<float4> TexLandTHDisp2Sampler : register(t94);
+Texture2D<float4> TexLandTHDisp3Sampler : register(t95);
+Texture2D<float4> TexLandTHDisp4Sampler : register(t96);
+Texture2D<float4> TexLandTHDisp5Sampler : register(t97);
+
 #		if defined(TRUE_PBR)
 
 Texture2D<float4> TexLandDisplacement0Sampler : register(t80);
@@ -1045,7 +1052,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 #	if defined(TERRAIN_BLENDING)
-	float depthSampled = TerrainBlending::TerrainBlendingMaskTexture[input.Position.xy];
+	float depthSampled = TerrainBlending::TerrainBlendingMaskTexture[input.Position.xy].x;
 
 	float depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
 	float depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
@@ -1307,10 +1314,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(TRUE_PBR) && defined(LANDSCAPE)
 		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile0PBR) == 0)
 		{
-			// relevant for linear only
+			baseColor = float4(rawBaseColor.rgb / Color::PBRLightingScale, rawBaseColor.a);
 		}
+		else
 #	endif
-		baseColor = float4(Color::Diffuse(rawBaseColor.rgb), rawBaseColor.a);
+			baseColor = float4(Color::Diffuse(rawBaseColor.rgb), rawBaseColor.a);
+
+#	if defined(LOD_BLENDING)
+#		if defined(LODOBJECTS) || defined(LODOBJECTSHD)
+		baseColor.xyz *= SharedData::lodBlendingSettings.LODObjectBrightness;
+#		elif defined(LODLANDSCAPE)
+		baseColor.xyz *= SharedData::lodBlendingSettings.LODTerrainBrightness;
+#		endif
+#	endif  // LOD_BLENDING
 
 		float landSnowMask1 = GetLandSnowMaskValue(baseColor.w);
 		float4 normalColor = TexNormalSampler.SampleBias(SampNormalSampler, uv, SharedData::MipBias);
@@ -1398,7 +1414,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	if (input.LandBlendWeights1.y > 0.0) {
 		float4 landColor2 = TexLandColor2Sampler.SampleBias(SampLandColor2Sampler, uv, SharedData::MipBias);
-		landColor2.rgb = Color::Diffuse(landColor2.rgb);
+#		if defined(TRUE_PBR)
+		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile1PBR) == 0)
+		{
+			landColor2 = float4(landColor2.rgb / Color::PBRLightingScale, landColor2.a);
+		}
+		else
+#		endif
+			landColor2.rgb = Color::Diffuse(landColor2.rgb);
 		float landSnowMask2 = GetLandSnowMaskValue(landColor2.w);
 		float4 landNormal2 = TexLandNormal2Sampler.SampleBias(SampLandNormal2Sampler, uv, SharedData::MipBias);
 		landNormal2.xyz = GetLandNormal(landSnowMask2, landNormal2.xyz, uv, SampLandNormal2Sampler, TexLandNormal2Sampler);
@@ -1426,7 +1449,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	if (input.LandBlendWeights1.z > 0.0) {
 		float4 landColor3 = TexLandColor3Sampler.SampleBias(SampLandColor3Sampler, uv, SharedData::MipBias);
-		landColor3.rgb = Color::Diffuse(landColor3.rgb);
+#		if defined(TRUE_PBR)
+		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile2PBR) == 0)
+		{
+			landColor3 = float4(landColor3.rgb / Color::PBRLightingScale, landColor3.a);
+		}
+		else
+#		endif
+			landColor3.rgb = Color::Diffuse(landColor3.rgb);
 		float landSnowMask3 = GetLandSnowMaskValue(landColor3.w);
 		float4 landNormal3 = TexLandNormal3Sampler.SampleBias(SampLandNormal3Sampler, uv, SharedData::MipBias);
 		landNormal3.xyz = GetLandNormal(landSnowMask3, landNormal3.xyz, uv, SampLandNormal3Sampler, TexLandNormal3Sampler);
@@ -1454,7 +1484,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	if (input.LandBlendWeights1.w > 0.0) {
 		float4 landColor4 = TexLandColor4Sampler.SampleBias(SampLandColor4Sampler, uv, SharedData::MipBias);
-		landColor4.rgb = Color::Diffuse(landColor4.rgb);
+#		if defined(TRUE_PBR)
+		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile3PBR) == 0)
+		{
+			landColor4 = float4(landColor4.rgb / Color::PBRLightingScale, landColor4.a);
+		}
+		else
+#		endif
+			landColor4.rgb = Color::Diffuse(landColor4.rgb);
 		float landSnowMask4 = GetLandSnowMaskValue(landColor4.w);
 		float4 landNormal4 = TexLandNormal4Sampler.SampleBias(SampLandNormal4Sampler, uv, SharedData::MipBias);
 		landNormal4.xyz = GetLandNormal(landSnowMask4, landNormal4.xyz, uv, SampLandNormal4Sampler, TexLandNormal4Sampler);
@@ -1482,7 +1519,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	if (input.LandBlendWeights2.x > 0.0) {
 		float4 landColor5 = TexLandColor5Sampler.SampleBias(SampLandColor5Sampler, uv, SharedData::MipBias);
-		landColor5.rgb = Color::Diffuse(landColor5.rgb);
+#		if defined(TRUE_PBR)
+		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile4PBR) == 0)
+		{
+			landColor5 = float4(landColor5.rgb / Color::PBRLightingScale, landColor5.a);
+		}
+		else
+#		endif
+			landColor5.rgb = Color::Diffuse(landColor5.rgb);
 		float landSnowMask5 = GetLandSnowMaskValue(landColor5.w);
 		float4 landNormal5 = TexLandNormal5Sampler.SampleBias(SampLandNormal5Sampler, uv, SharedData::MipBias);
 		landNormal5.xyz = GetLandNormal(landSnowMask5, landNormal5.xyz, uv, SampLandNormal5Sampler, TexLandNormal5Sampler);
@@ -1510,7 +1554,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	if (input.LandBlendWeights2.y > 0.0) {
 		float4 landColor6 = TexLandColor6Sampler.SampleBias(SampLandColor6Sampler, uv, SharedData::MipBias);
-		landColor6.rgb = Color::Diffuse(landColor6.rgb);
+#		if defined(TRUE_PBR)
+		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile5PBR) == 0)
+		{
+			landColor6 = float4(landColor6.rgb / Color::PBRLightingScale, landColor6.a);
+		}
+		else
+#		endif
+			landColor6.rgb = Color::Diffuse(landColor6.rgb);
 		float landSnowMask6 = GetLandSnowMaskValue(landColor6.w);
 		float4 landNormal6 = TexLandNormal6Sampler.SampleBias(SampLandNormal6Sampler, uv, SharedData::MipBias);
 		landNormal6.xyz = GetLandNormal(landSnowMask6, landNormal6.xyz, uv, SampLandNormal6Sampler, TexLandNormal6Sampler);
@@ -1538,6 +1589,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if defined(LOD_LAND_BLEND)
 	float4 lodLandColor = TexLandLodBlend1Sampler.Sample(SampLandLodBlend1Sampler, input.TexCoord0.zw);
+#			if defined(LOD_BLENDING)
+	lodLandColor.xyz *= SharedData::lodBlendingSettings.LODTerrainBrightness;
+#			endif  // LOD_BLENDING
 	float lodBlendParameter = GetLodLandBlendParameter(lodLandColor.xyz);
 	float lodBlendMask = TexLandLodBlend2Sampler.Sample(SampLandLodBlend2Sampler, 3.0.xx * input.TexCoord0.zw).x;
 	float lodLandFadeFactor = GetLodLandBlendMultiplier(lodBlendParameter, lodBlendMask);
@@ -1566,12 +1620,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	uint numLights = min(7, uint(NumLightNumShadowLight.x));
 	uint numShadowLights = min(4, uint(NumLightNumShadowLight.y));
-
-#	if defined(TRUE_PBR) && !defined(MODELSPACENORMALS)
-	if (!frontFace) {
-		normal.xyz *= -1;
-	}
-#	endif
 
 #	if defined(MODELSPACENORMALS) && !defined(SKINNED)
 	float4 modelNormal = normal;
@@ -1634,6 +1682,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			projectedGlintParameters = SparkleParams;
 		}
 		glintParameters = lerp(glintParameters, projectedGlintParameters, projectedMaterialWeight);
+#			elif defined(LOD_BLENDING) && (defined(LODOBJECTS) || defined(LODOBJECTSHD))
+		projBaseColor.xyz *= SharedData::lodBlendingSettings.LODObjectSnowBrightness;
 #			endif  // TRUE_PBR
 		normal.xyz = lerp(normal.xyz, finalProjNormal, projectedMaterialWeight);
 		baseColor.xyz = lerp(baseColor.xyz, projBaseColor, projectedMaterialWeight);
@@ -1702,7 +1752,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	pbrSurfaceProperties.GlintDensityRandomization = clamp(glintParameters.w, 0, 5);
 
 #		if defined(GLINT)
-	float glintNoise = Random::R1Modified(SharedData::FrameCount, Random::pcg2d(uint2(input.Position.xy)) / 4294967296.0);
+	float glintNoise = Random::R1Modified(float(SharedData::FrameCount), (Random::pcg2d(uint2(input.Position.xy)) / 4294967296.0).x);
 	PBR::Glints::PrecomputeGlints(glintNoise, uvOriginal, ddx(uvOriginal), ddy(uvOriginal), pbrSurfaceProperties.GlintScreenSpaceScale, pbrSurfaceProperties.GlintCache);
 #		endif
 
@@ -1897,7 +1947,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 dirLightColorMultiplier = 1;
 
 #	if defined(WATER_EFFECTS)
-	dirLightColorMultiplier *= WaterEffects::ComputeCaustics(waterData, input.WorldPosition.xyz, worldSpaceNormal);
+	dirLightColorMultiplier *= WaterEffects::ComputeCaustics(waterData, input.WorldPosition.xyz, eyeIndex);
 #	endif
 
 	float selfShadowFactor = 1.0f;
@@ -1974,7 +2024,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				// (MODELSPACENORMALS))
 
 	if (dirShadow != 0.0 && (inWorld || inReflection))
-		dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition, FrameBuffer::CameraPosAdjust[eyeIndex], eyeIndex);
+		dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
 
 	dirLightColorMultiplier *= dirShadow;
 
@@ -2362,7 +2412,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			endif
 			{
 				// Dynamic Cubemap Creator sets this value to black, if it is anything but black it is wrong
-				float3 envColorTest = TexEnvSampler.SampleLevel(SampEnvSampler, float3(0.0, 1.0, 0.0), 15);
+				float3 envColorTest = TexEnvSampler.SampleLevel(SampEnvSampler, float3(0.0, 1.0, 0.0), 15).xyz;
 				dynamicCubemap = all(envColorTest == 0.0);
 			}
 
@@ -2409,7 +2459,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 		if (!dynamicCubemap) {
-			float3 envColorBase = Color::GammaToLinear(TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint));
+			float3 envColorBase = Color::GammaToLinear(TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz);
 			envColor = envColorBase.xyz * envMask;
 		}
 	}
@@ -2455,6 +2505,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		if defined(LANDSCAPE)
 		// Remove AO
 		vertexColor = vertexColor / vertexAO;
+#			if defined(LOD_BLENDING)
+		vertexColor = lerp(vertexColor, 1, SharedData::lodBlendingSettings.DisableTerrainVertexColors);
+#			endif  // LOD_BLENDING
 #		else
 
 		if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsTree) {
@@ -2599,11 +2652,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		else
 		lodLandDiffuseColor += directionalAmbientColor;
 #		endif
-		float3 litLodLandColor = vertexColor * lodLandColor * lodLandFadeFactor * lodLandDiffuseColor;
+		float3 litLodLandColor = vertexColor * lodLandColor.xyz * lodLandFadeFactor * lodLandDiffuseColor;
 		color.xyz = lerp(color.xyz * Color::PBRLightingScale, litLodLandColor, lodLandBlendFactor);
 
 		specularColor = lerp(specularColorPBR * Color::PBRLightingScale, 0, lodLandBlendFactor);
-		indirectDiffuseLobeWeight = lerp(indirectDiffuseLobeWeight, vertexColor * lodLandColor * lodLandFadeFactor, lodLandBlendFactor);
+		indirectDiffuseLobeWeight = lerp(indirectDiffuseLobeWeight, vertexColor * lodLandColor.xyz * lodLandFadeFactor, lodLandBlendFactor);
 		indirectSpecularLobeWeight = lerp(indirectSpecularLobeWeight, 0, lodLandBlendFactor);
 		pbrGlossiness = lerp(pbrGlossiness, 0, lodLandBlendFactor);
 	}
