@@ -34,7 +34,9 @@ SamplerState LinearSampler : register(s0);
 			}
 #endif
 
+#if !defined(LL)
 			color = Color::GammaToLinear(color);
+#endif
 
 			sh2 sh = SphericalHarmonics::Evaluate(rayDir);
 
