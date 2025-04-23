@@ -1,6 +1,7 @@
 #include "Common/Color.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/PBR.hlsli"
+#include "Common/SharedData.hlsli"
 
 namespace Skin
 {
@@ -211,9 +212,9 @@ namespace Skin
 		transmission = 0;
 		specular = 0;
 
-#if !defined(LL)
-		light.LightColor = Color::GammaToLinear(light.LightColor);
-#endif
+		if (!SharedData::linearLightingSettings.enableLinearLighting) {
+			light.LightColor = Color::GammaToLinear(light.LightColor);
+		}
 		light.LightColor *= Math::PI;
 
 		const float3 H = normalize(V + L);

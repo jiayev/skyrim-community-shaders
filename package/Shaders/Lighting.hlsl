@@ -1483,9 +1483,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(SKIN) && defined(CS_SKIN)
 	if (SharedData::skinData.skinParams.w > 0.0f) {
 		baseColor.xyz = baseColor.xyz * SharedData::skinData.skinParams2.www;
-#		if !defined(LL)
-		baseColor.xyz = Color::GammaToLinear(baseColor.xyz);
-#		endif
+		if (!SharedData::linearLightingSettings.enableLinearLighting) {
+			baseColor.xyz = Color::GammaToLinear(baseColor.xyz);
+		}
 	}
 #	endif  // CS_SKIN
 
@@ -2795,11 +2795,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 #	if defined(HAIR)
-#		if defined(LL)
-	float3 vertexColor = lerp(1, Color::GammaToTrueLinear(TintColor.xyz), Color::GammaToTrueLinear(input.Color.y));
-#		else
-	float3 vertexColor = lerp(1, TintColor.xyz, input.Color.y);
-#		endif
+	float3 vertexColor = 0;
+	if (SharedData::linearLightingSettings.enableLinearLighting) {
+		vertexColor = lerp(1, Color::GammaToTrueLinear(TintColor.xyz), Color::GammaToTrueLinear(input.Color.y));
+	} else {
+		vertexColor = lerp(1, TintColor.xyz, input.Color.y);
+	}
 #	elif defined(SKYLIGHTING)
 	float3 vertexColor = input.Color.xyz;
 	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
@@ -3263,8 +3264,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 #	endif
 
-#	if defined(SKIN) && defined(CS_SKIN) && !defined(LL)
-	if (SharedData::skinData.skinParams.w > 0) {
+#	if defined(SKIN) && defined(CS_SKIN)
+	if (SharedData::skinData.skinParams.w > 0 && !SharedData::linearLightingSettings.enableLinearLighting) {
 		psout.Diffuse.xyz = Color::LinearToGamma(psout.Diffuse.xyz);
 #		if defined(DEFERRED)
 		// psout.Specular.xyz = Color::LinearToGamma(psout.Specular.xyz);
