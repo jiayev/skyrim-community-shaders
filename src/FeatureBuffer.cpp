@@ -5,6 +5,7 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/GrassLighting.h"
 #include "Features/IBL.h"
+#include "Features/LinearLighting.h"
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/Skin.h"
@@ -43,5 +44,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::cloudShadows->settings,
 		globals::features::lodBlending->settings,
 		globals::features::ibl->settings,
-		globals::features::skin->GetCommonBufferData());
+		globals::features::skin->GetCommonBufferData(),
+		globals::features::linearLighting->settings);
 }

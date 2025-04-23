@@ -162,6 +162,12 @@ namespace SharedData
 		uint ApplySpecularToWetness;
 	};
 
+	struct LinearLightingSettings
+	{
+		uint enableLinearLighting;
+		uint pad[3];
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -175,6 +181,7 @@ namespace SharedData
 		LODBlendingSettings lodBlendingSettings;
 		IBLSettings iblSettings;
 		SkinData skinData;
+		LinearLightingSettings linearLightingSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

@@ -10,6 +10,7 @@
 #include "Features/InverseSquareLighting.h"
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
+#include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
@@ -145,7 +146,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::ibl,
 		globals::features::inverseSquareLighting,
 		globals::features::postProcessing,
-		globals::features::skin
+		globals::features::skin,
+		globals::features::linearLighting
 	};
 
 	static std::vector<Feature*> featuresVR(features);
