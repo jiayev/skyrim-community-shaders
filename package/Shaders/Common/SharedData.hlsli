@@ -145,6 +145,14 @@ namespace SharedData
 		bool DisableTerrainVertexColors;
 	};
 
+	struct HairSpecularSettings
+	{
+		uint Enabled;
+        float Glossiness;
+        float SpecularMult;
+        float DiffuseMult;
+	};
+
 	struct IBLSettings
 	{
 		uint EnableDiffuseIBL;
@@ -180,6 +188,7 @@ namespace SharedData
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
 		LODBlendingSettings lodBlendingSettings;
+		HairSpecularSettings hairSpecularSettings;
 		IBLSettings iblSettings;
 		SkinData skinData;
 		LinearLightingSettings linearLightingSettings;

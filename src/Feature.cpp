@@ -6,6 +6,7 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
+#include "Features/HairSpecular.h"
 #include "Features/IBL.h"
 #include "Features/InverseSquareLighting.h"
 #include "Features/LODBlending.h"
@@ -145,6 +146,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::lodBlending,
 		globals::features::ibl,
 		globals::features::inverseSquareLighting,
+		globals::features::hairSpecular,
 		globals::features::postProcessing,
 		globals::features::skin,
 		globals::features::linearLighting
