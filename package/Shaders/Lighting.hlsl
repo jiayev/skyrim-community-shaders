@@ -1496,7 +1496,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		} else {
 			hairTint = lerp(1, TintColor.xyz, input.Color.y);
 		}
-	baseColor.xyz *= hairTint;
+		baseColor.xyz *= hairTint;
+		baseColor.xyz = Hair::Saturation(baseColor.xyz, SharedData::hairSpecularSettings.Saturation);
 	}
 #	endif
 
