@@ -151,6 +151,8 @@ namespace SharedData
         float Glossiness;
         float SpecularMult;
         float DiffuseMult;
+		uint EnableTangentShift;
+        uint pad[3];
 	};
 
 	struct IBLSettings
