@@ -1,6 +1,8 @@
 #ifndef __HAIR_DEPENDENCY_HLSL__
 #define __HAIR_DEPENDENCY_HLSL__
 
+#include "Common/Math.hlsli"
+
 namespace Hair
 {
     Texture2D<float> TexTangentShift : register(t73);
@@ -23,6 +25,34 @@ namespace Hair
     float3 ShiftTangent(float3 T, float3 N, float shift)
     {
         return normalize(T + N * shift);
+    }
+
+    void GetHairDirectLight(out float3 dirDiffuse, out float3 dirSpecular, float3 T, float3 L, float3 V, float3 N, float3 lightColor, float shininess, float2 uv, float3 baseColor)
+    {
+        const float3 H = normalize(L + V);
+        const float3 NdotL = saturate(dot(N, L));
+        const float3 NdotV = saturate(dot(N, V));
+
+        dirDiffuse = NdotL * lightColor / Math::PI;
+
+        float3 TshiftPrimary = T;
+        float3 TshiftSecondary = T;
+        if (SharedData::hairSpecularSettings.EnableTangentShift) {
+            const float shift = TexTangentShift.SampleBias(SampColorSampler, uv, SharedData::MipBias).x - 0.5;
+            TshiftPrimary = ShiftTangent(T, N, shift + SharedData::hairSpecularSettings.PrimaryShift);
+            TshiftSecondary = ShiftTangent(T, N, shift + SharedData::hairSpecularSettings.SecondaryShift);
+        }
+
+        const float3 specPrimary = D_KajiyaKay(TshiftPrimary, H, shininess);
+        const float3 specSecondary = D_KajiyaKay(TshiftSecondary, H, shininess * 0.5);
+        const float3 F = F_Schlick(saturate(dot(H, V)), float3(0.046, 0.046, 0.046));
+        float3 specR = 0.25 * F * (specPrimary + specSecondary) * NdotL * saturate(NdotV * (3.4e+38));
+        specR = Color::LinearToGamma(specR);
+        float scatterFresnel1 = pow(saturate(-dot(L, V)), 9) * pow(saturate(1 - NdotV * NdotV), 12);
+        float scatterFresnel2 = saturate(pow((1 - NdotV), 20));
+        float3 specT = scatterFresnel1 + scatterFresnel2;
+        float3 specTerm = specR + specT * baseColor;
+        dirSpecular = specTerm * lightColor;
     }
 
     float2 GetEnvBRDFApproxLazarov(float roughness, float NdotV)
