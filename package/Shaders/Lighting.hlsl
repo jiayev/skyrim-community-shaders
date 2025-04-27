@@ -2685,6 +2685,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if !defined(TRUE_PBR) && !(defined(SKIN) && defined(CS_SKIN))
 #		if defined(DEFERRED) && defined(SSGI)
+#		elif defined(HAIR) && defined(CS_HAIR)
+	if (!SharedData::hairSpecularSettings.Enabled)
+		diffuseColor += directionalAmbientColor;
 #		else
 	diffuseColor += directionalAmbientColor;
 #		endif
@@ -2828,9 +2831,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		vertexColor = lerp(1, TintColor.xyz, input.Color.y);
 	}
 #		if defined(CS_HAIR)
+	float3 indirectDiffuseLobeWeight, indirectSpecularLobeWeight;
 	if (SharedData::hairSpecularSettings.Enabled)
 		vertexColor = 1;
-	float3 indirectSpecularLobeWeight = Hair::GetHairIndirectSpecularLobeWeights(worldSpaceNormal.xyz, worldSpaceViewDirection, worldSpaceVertexNormal, SharedData::hairSpecularSettings.Glossiness);
+		Hair::GetHairIndirectSpecularLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, worldSpaceNormal.xyz, worldSpaceViewDirection, worldSpaceVertexNormal, SharedData::hairSpecularSettings.Glossiness, baseColor.xyz);
 #		endif  // CS_HAIR
 #	elif defined(SKYLIGHTING)
 	float3 vertexColor = input.Color.xyz;
@@ -2889,6 +2893,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 #		if defined(DEFERRED) && defined(SSGI)
+#		elif defined(HAIR) && defined(CS_HAIR)
+	if (SharedData::hairSpecularSettings.Enabled)
+		color.xyz += indirectDiffuseLobeWeight * directionalAmbientColor;
 #		else
 	color.xyz += indirectDiffuseLobeWeight * directionalAmbientColor;
 #		endif
