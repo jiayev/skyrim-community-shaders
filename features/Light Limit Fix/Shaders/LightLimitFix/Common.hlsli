@@ -40,8 +40,8 @@ struct Light
 	uint4 roomFlags;
 	uint lightFlags;
 	uint shadowLightIndex;
+	float invRadius;
 	float fadeZone;
-	float fade;
 };
 
 #endif  //__LLF_COMMON_DEPENDENCY_HLSL__

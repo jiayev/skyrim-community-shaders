@@ -2441,7 +2441,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #			endif
 
-		float3 lightColor = Color::Light(light.color.xyz) * intensityMultiplier * light.fade;
+		float3 lightColor = Color::Light(light.color.xyz) * intensityMultiplier;
 		float lightShadow = 1.0;
 
 		float shadowComponent = 1.0;
@@ -2615,7 +2615,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 emitColor = EmitColor;
 	if (SharedData::linearLightingSettings.enableLinearLighting) {
-		emitColor = Color::GammaToTrueLinear(emitColor);
+		emitColor = Color::GammaToLinearLuminancePreserving(emitColor);
 	}
 #	if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 	bool hasEmissive = (0x3F & (Permutation::PixelShaderDescriptor >> 24)) == Permutation::LightingTechnique::Glowmap;

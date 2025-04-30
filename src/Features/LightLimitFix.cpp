@@ -327,10 +327,10 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 			isl->ProcessLight(light, bsLight, niLight);
 		} else {
 			light.radius = runtimeData.radius.x;
-			light.fade = runtimeData.fade;
+			light.color *= runtimeData.fade;
 		}
 
-		light.fade *= bsLight->lodDimmer;
+		light.color *= bsLight->lodDimmer;
 
 		SetLightPosition(light, niLight->world.translate, inWorld);
 
@@ -696,16 +696,17 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 		dimmer = 0.0f;
 	}
 
-	light.fade *= dimmer;
+	light.color *= dimmer;
 
-	if (light.fade > 1e-4 && light.radius > 1e-4) {
+	if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
 		for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++)
 			light.positionVS[eyeIndex].data = DirectX::SimpleMath::Vector3::Transform(light.positionWS[eyeIndex].data, viewMatrixCached[eyeIndex]);
 
+		light.invRadius = 1.f / light.radius;
 		lightsData.push_back(light);
 
 		CachedParticleLight cachedParticleLight{};
-		cachedParticleLight.grey = float3(light.color.x, light.color.y, light.color.z).Dot(float3(0.3f, 0.59f, 0.11f)) * light.fade;
+		cachedParticleLight.grey = float3(light.color.x, light.color.y, light.color.z).Dot(float3(0.3f, 0.59f, 0.11f));
 		cachedParticleLight.radius = light.radius;
 		cachedParticleLight.position = { light.positionWS[0].data.x + eyePositionCached[0].x, light.positionWS[0].data.y + eyePositionCached[0].y, light.positionWS[0].data.z + eyePositionCached[0].z };
 
@@ -778,10 +779,10 @@ void LightLimitFix::UpdateLights()
 						isl->ProcessLight(light, bsLight, niLight);
 					} else {
 						light.radius = runtimeData.radius.x;
-						light.fade = runtimeData.fade;
+						light.color *= runtimeData.fade;
 					}
 
-					light.fade *= bsLight->lodDimmer;
+					light.color *= bsLight->lodDimmer;
 
 					if (!IsGlobalLight(bsLight)) {
 						// List of BSMultiBoundRooms affected by a light
@@ -806,7 +807,7 @@ void LightLimitFix::UpdateLights()
 					if (light.shadowMaskIndex != 255) {
 						SetLightPosition(light, niLight->world.translate);
 
-						if (light.fade > 1e-4 && light.radius > 1e-4) {
+						if ((light.color.x + light.color.y + light.color.z) > 1e-4 && light.radius > 1e-4) {
 							lightsData.push_back(light);
 						}
 					}
@@ -827,7 +828,6 @@ void LightLimitFix::UpdateLights()
 		cachedParticleLights.clear();
 
 		LightData clusteredLight{};
-		clusteredLight.fade = 1.0f;
 		uint32_t clusteredLights = 0;
 
 		auto eyePositionOffset = eyePositionCached[0] - eyePositionCached[1];
@@ -925,7 +925,6 @@ void LightLimitFix::UpdateLights()
 
 				light.color *= particleLight.color.alpha * settings.BillboardBrightness;
 				light.radius = particleLight.node->worldBound.radius * particleLight.color.alpha * settings.BillboardRadius * 0.5f;
-				light.fade = 1.0f;
 
 				auto position = particleLight.node->world.translate;
 
