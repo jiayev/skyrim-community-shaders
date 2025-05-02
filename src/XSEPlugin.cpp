@@ -85,6 +85,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				globals::truePBR->PostPostLoad();
 				Upscaling::InstallHooks();
 				Hooks::Install();
+				EngineFix::InstallOnPostPostLoadFixes();
 				FrameAnnotations::OnPostPostLoad();
 
 				auto shaderCache = globals::shaderCache;
@@ -112,6 +113,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 			if (errors.empty()) {
 				globals::OnDataLoaded();
+				EngineFix::InstallOnDataLoadedFixes();
 				FrameAnnotations::OnDataLoaded();
 
 				auto shaderCache = globals::shaderCache;
