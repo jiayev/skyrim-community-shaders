@@ -1,8 +1,14 @@
 ﻿#include "EngineFix.h"
 
+#include "EngineFixes/ShadowmapCascadeCullingFix.h"
+
 const std::vector<EngineFix*>& EngineFix::GetOnPostPostLoadFixesList()
 {
-	static std::vector<EngineFix*> fixes = {};
+	static ShadowmapCascadeCullingFix shadowmapCascadeCullingFix;
+
+	static std::vector<EngineFix*> fixes = {
+		&shadowmapCascadeCullingFix
+	};
 
 	return fixes;
 }
