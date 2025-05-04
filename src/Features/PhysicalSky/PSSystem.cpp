@@ -162,7 +162,7 @@ void PhysicalSky::UpdateBuffer()
 	float fog_mult = exp(settings.fog_bottom * settings.fog_decay);
 
 	phys_sky_sb_data = {
-		.enable_sky = settings.enable_sky && all_set,
+		.enable_sky = settings.enable_sky,
 		.transmittance_step = settings.transmittance_step,
 		.multiscatter_step = settings.multiscatter_step,
 		.multiscatter_sqrt_samples = settings.multiscatter_sqrt_samples,
