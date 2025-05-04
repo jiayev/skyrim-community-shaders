@@ -1958,6 +1958,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		dirLightColor = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
 		dirLightColor *= getDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, SampColorSampler);
 		dirLightColor = Color::LinearToGamma(dirLightColor);
+		dirLightColor = Color::Light(dirLightColor);
 	}
 #	endif
 
