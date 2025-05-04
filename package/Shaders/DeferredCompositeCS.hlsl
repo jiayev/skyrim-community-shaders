@@ -209,11 +209,10 @@ Texture2D<float3> PhysSkyLumTexture : register(t15);
 	}
 
 #if defined(PHYS_SKY)
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+	if (!SharedData::linearLightingSettings.enableLinearLighting)
 		color = Color::LinearToGamma(Color::GammaToLinear(color) * PhysSkyTrTexture[dispatchID.xy] + PhysSkyLumTexture[dispatchID.xy]);
 	else
 		color = color * PhysSkyTrTexture[dispatchID.xy] + PhysSkyLumTexture[dispatchID.xy];
-	}
 #endif
 
 #if defined(DEBUG)
