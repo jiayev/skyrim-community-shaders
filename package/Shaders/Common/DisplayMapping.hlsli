@@ -128,7 +128,7 @@ namespace DisplayMapping
 		return XYZToRGB(col);
 	}
 
-	float3 HuePreservingHejlBurgessDawson(float3 col)
+	float3 HuePreservingHejlBurgessDawson(float3 col, float3 bloomCol)
 	{
 		float3 ictcp = RGBToICtCp(col);
 
@@ -138,11 +138,14 @@ namespace DisplayMapping
 
 		// Hue preserving mapping
 		float maxCol = Color::RGBToLuminance(col);
-		float mappedMax = GetTonemapFactorHejlBurgessDawson(maxCol);
+		float mappedMax = GetTonemapFactorHejlBurgessDawson(maxCol).x;
 		float3 compressedHuePreserving = col * mappedMax / maxCol;
+
+		compressedHuePreserving += saturate(Param.x - mappedMax) * bloomCol;
 
 		// Non-hue preserving mapping
 		float3 perChannelCompressed = GetTonemapFactorHejlBurgessDawson(col);
+		perChannelCompressed += saturate(Param.x - perChannelCompressed) * bloomCol;
 
 		col = lerp(perChannelCompressed, compressedHuePreserving, 0.6);
 

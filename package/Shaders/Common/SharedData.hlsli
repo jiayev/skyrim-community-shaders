@@ -7,7 +7,7 @@
 namespace SharedData
 {
 
-#if defined(PSHADER) || defined(COMPUTESHADER)
+#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 	cbuffer SharedData : register(b5)
 	{
 		float4 WaterData[25];
@@ -21,6 +21,8 @@ namespace SharedData
 		uint FrameCountAlwaysActive;
 		bool InInterior;  // If the area lacks a directional shadow light e.g. the sun or moon
 		bool InMapMenu;   // If the world/local map is open (note that the renderer is still deferred here)
+		bool HideSky;     // HideSky flag in WorldSpace, e.g. Blackreach
+		float MipBias;    // Offset to mip level for TAA sharpness
 	};
 
 	struct GrassLightingSettings
@@ -42,7 +44,8 @@ namespace SharedData
 		bool EnableHeightBlending;
 		bool EnableShadows;
 		bool ExtendShadows;
-		float2 pad0;
+		bool EnableParallaxWarpingFix;
+		float1 pad0;
 	};
 
 	struct CubemapCreatorSettings
@@ -128,6 +131,20 @@ namespace SharedData
 		uint2 pad0;
 	};
 
+	struct CloudShadowsSettings
+	{
+		float Opacity;
+		float3 pad0;
+	};
+
+	struct LODBlendingSettings
+	{
+		float LODTerrainBrightness;
+		float LODObjectBrightness;
+		float LODObjectSnowBrightness;
+		bool DisableTerrainVertexColors;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -137,6 +154,8 @@ namespace SharedData
 		LightLimitFixSettings lightLimitFixSettings;
 		WetnessEffectsSettings wetnessEffectsSettings;
 		SkylightingSettings skylightingSettings;
+		CloudShadowsSettings cloudShadowsSettings;
+		LODBlendingSettings lodBlendingSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

@@ -1,11 +1,10 @@
 #include "ScreenSpaceGI.h"
-#include "Menu.h"
+
+#include <DirectXTex.h>
 
 #include "Deferred.h"
+#include "Menu.h"
 #include "State.h"
-#include "Util.h"
-
-#include "DirectXTex.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ScreenSpaceGI::Settings,
@@ -77,7 +76,7 @@ void ScreenSpaceGI::DrawSettings()
 		if (ImGui::Button("AO only", { -1, 0 })) {
 			settings.NumSlices = 1;
 			settings.NumSteps = 6;
-			settings.EnableBlur = false;
+			settings.EnableBlur = true;
 			settings.EnableGI = false;
 			recompileFlag = true;
 		}
@@ -97,8 +96,8 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::Text("Quarter res and blurry.");
 
 		ImGui::TableNextColumn();
-		if (ImGui::Button("Medium", { -1, 0 })) {
-			settings.NumSlices = 5;
+		if (ImGui::Button("Standard", { -1, 0 })) {
+			settings.NumSlices = 4;
 			settings.NumSteps = 8;
 			settings.ResolutionMode = 1;
 			settings.EnableBlur = true;
@@ -109,7 +108,7 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::Text("Half res and somewhat stable.");
 
 		ImGui::TableNextColumn();
-		if (ImGui::Button("High", { -1, 0 })) {
+		if (ImGui::Button("Extreme", { -1, 0 })) {
 			settings.NumSlices = 4;
 			settings.NumSteps = 8;
 			settings.ResolutionMode = 0;
@@ -121,11 +120,11 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::Text("Full res and clean.");
 
 		ImGui::TableNextColumn();
-		if (ImGui::Button("Ultra", { -1, 0 })) {
+		if (ImGui::Button("Reference", { -1, 0 })) {
 			settings.NumSlices = 8;
 			settings.NumSteps = 10;
 			settings.ResolutionMode = 0;
-			settings.EnableBlur = false;
+			settings.EnableBlur = true;
 			settings.EnableGI = true;
 			recompileFlag = true;
 		}
@@ -172,14 +171,14 @@ void ScreenSpaceGI::DrawSettings()
 
 	ImGui::Separator();
 
-	ImGui::SliderFloat("AO radius", &settings.AORadius, 10.f, 800.0f, "%.1f game units");
+	ImGui::SliderFloat("AO radius", &settings.AORadius, 10.f, 1024.0f, "%.1f game units");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("A smaller radius produces tighter AO.");
 
 	{
 		auto _ = Util::DisableGuard(!settings.EnableGI);
 
-		ImGui::SliderFloat("IL radius", &settings.GIRadius, 10.f, 800.0f, "%.1f game units");
+		ImGui::SliderFloat("IL radius", &settings.GIRadius, 10.f, 1024.0f, "%.1f game units");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("A larger radius produces wider IL.");
 	}
@@ -195,7 +194,7 @@ void ScreenSpaceGI::DrawSettings()
 	if (showAdvanced) {
 		ImGui::Separator();
 
-		ImGui::SliderFloat("Thickness", &settings.Thickness, 0.f, 500.0f, "%.1f game units");
+		ImGui::SliderFloat("Thickness", &settings.Thickness, 0.f, 128.0f, "%.1f game units");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("How thick the occluders are. Only affects AO.");
 	}
@@ -286,7 +285,7 @@ void ScreenSpaceGI::DrawSettings()
 	ImGui::SeparatorText("Debug");
 
 	if (ImGui::TreeNode("Buffer Viewer")) {
-		auto deferred = Deferred::GetSingleton();
+		auto deferred = globals::deferred;
 
 		static float debugRescale = .3f;
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
@@ -312,7 +311,7 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 {
 	settings = o_json;
 
-	if (auto iniSettingCollection = RE::INIPrefSettingCollection::GetSingleton()) {
+	if (auto iniSettingCollection = globals::game::iniPrefSettingCollection) {
 		if (auto setting = iniSettingCollection->GetSetting("bSAOEnable:Display")) {
 			setting->data.b = false;
 		}
@@ -328,8 +327,8 @@ void ScreenSpaceGI::SaveSettings(json& o_json)
 
 void ScreenSpaceGI::SetupResources()
 {
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto& device = State::GetSingleton()->device;
+	auto renderer = globals::game::renderer;
+	auto device = globals::d3d::device;
 
 	logger::debug("Creating buffers...");
 	{
@@ -563,8 +562,6 @@ bool ScreenSpaceGI::ShadersOK()
 
 void ScreenSpaceGI::UpdateSB()
 {
-	auto viewport = RE::BSGraphics::State::GetSingleton();
-
 	float2 res = { (float)texRadiance->desc.Width, (float)texRadiance->desc.Height };
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
@@ -589,7 +586,7 @@ void ScreenSpaceGI::UpdateSB()
 		data.RcpTexDim = float2(1.0f) / res;
 		data.FrameDim = dynres;
 		data.RcpFrameDim = float2(1.0f) / dynres;
-		data.FrameIndex = viewport->frameCount;
+		data.FrameIndex = globals::state->frameCount;
 
 		data.NumSlices = settings.NumSlices;
 		data.NumSteps = settings.NumSteps;
@@ -622,7 +619,7 @@ void ScreenSpaceGI::UpdateSB()
 
 void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 {
-	auto& context = State::GetSingleton()->context;
+	auto context = globals::d3d::context;
 
 	if (!(settings.Enabled && ShadersOK())) {
 		FLOAT clr[4] = { 0.f, 0.f, 0.f, 0.f };
@@ -633,7 +630,7 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 	}
 
 	ZoneScoped;
-	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "SSGI");
+	TracyD3D11Zone(globals::state->tracyCtx, "SSGI");
 
 	static uint lastFrameAoTexIdx = 0;
 	static uint lastFrameGITexIdx = 0;
@@ -650,11 +647,11 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 
 	//////////////////////////////////////////////////////
 
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+	auto renderer = globals::game::renderer;
 	auto rts = renderer->GetRuntimeData().renderTargets;
-	auto deferred = Deferred::GetSingleton();
+	auto deferred = globals::deferred;
 
-	float2 size = Util::ConvertToDynamic(State::GetSingleton()->screenSize);
+	float2 size = Util::ConvertToDynamic(globals::state->screenSize);
 	auto resolution = std::array{ (uint)size.x, (uint)size.y };
 	auto resChoices = std::array{
 		resolution, std::array{ resolution[0] >> 1, resolution[1] >> 1 }, std::array{ resolution[0] >> 2, resolution[1] >> 2 }
@@ -681,7 +678,7 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 
 	// prefilter depths
 	{
-		TracyD3D11Zone(State::GetSingleton()->tracyCtx, "SSGI - Prefilter Depths");
+		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Prefilter Depths");
 
 		srvs.at(0) = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
 		for (int i = 0; i < 5; ++i)
@@ -695,7 +692,7 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 
 	// fetch radiance and disocclusion
 	{
-		TracyD3D11Zone(State::GetSingleton()->tracyCtx, "SSGI - Radiance Disocc");
+		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Radiance Disocc");
 
 		resetViews();
 		srvs.at(0) = rts[deferred->forwardRenderTargets[0]].SRV;
@@ -731,7 +728,7 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 
 	// GI
 	{
-		TracyD3D11Zone(State::GetSingleton()->tracyCtx, "SSGI - GI");
+		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - GI");
 
 		resetViews();
 		srvs.at(0) = texWorkingDepth->srv.get();
@@ -763,7 +760,7 @@ void ScreenSpaceGI::DrawSSGI(Texture2D* srcPrevAmbient)
 
 	// blur
 	if (settings.EnableBlur) {
-		TracyD3D11Zone(State::GetSingleton()->tracyCtx, "SSGI - Diffuse Blur");
+		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Diffuse Blur");
 
 		resetViews();
 		srvs.at(0) = texWorkingDepth->srv.get();

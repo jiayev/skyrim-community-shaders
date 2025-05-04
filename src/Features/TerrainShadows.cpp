@@ -1,12 +1,10 @@
 #include "TerrainShadows.h"
-#include "Menu.h"
-
-#include "Deferred.h"
-#include "State.h"
-#include "Util.h"
 
 #include <DirectXTex.h>
 #include <pystring/pystring.h>
+
+#include "Menu.h"
+#include "State.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainShadows::Settings,
@@ -29,7 +27,7 @@ void TerrainShadows::DrawSettings()
 	if (ImGui::CollapsingHeader("Debug")) {
 		std::string curr_worldspace = "N/A";
 		std::string curr_worldspace_name = "N/A";
-		auto tes = RE::TES::GetSingleton();
+		auto tes = globals::game::tes;
 		if (tes) {
 			auto worldspace = tes->GetRuntimeData2().worldSpace;
 			if (worldspace) {
@@ -173,7 +171,7 @@ void TerrainShadows::CompileComputeShaders()
 
 bool TerrainShadows::IsHeightMapReady()
 {
-	if (auto tes = RE::TES::GetSingleton())
+	if (auto tes = globals::game::tes)
 		if (auto worldspace = tes->GetRuntimeData2().worldSpace)
 			return cachedHeightmap && cachedHeightmap->worldspace == worldspace->GetFormEditorID();
 	return false;
@@ -199,7 +197,7 @@ TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()
 
 void TerrainShadows::LoadHeightmap()
 {
-	auto tes = RE::TES::GetSingleton();
+	auto tes = globals::game::tes;
 	if (!tes)
 		return;
 	auto worldspace = tes->GetRuntimeData2().worldSpace;
@@ -211,7 +209,7 @@ void TerrainShadows::LoadHeightmap()
 	if (cachedHeightmap && cachedHeightmap->worldspace == worldspace_name)  // already cached
 		return;
 
-	auto& device = State::GetSingleton()->device;
+	auto device = globals::d3d::device;
 
 	logger::debug("Loading height map...");
 	{
@@ -264,6 +262,14 @@ void TerrainShadows::Precompute()
 
 	logger::info("Creating shadow texture...");
 	{
+		if (texShadowHeight) {
+			auto context = globals::d3d::context;
+
+			std::array<ID3D11ShaderResourceView*, 1> srvs = { nullptr };
+			context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
+			context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
+		}
+
 		texShadowHeight.release();
 
 		D3D11_TEXTURE2D_DESC texDesc = {
@@ -306,14 +312,21 @@ void TerrainShadows::UpdateShadow()
 	constexpr uint updateLength = 128u;
 	constexpr uint logUpdateLength = std::bit_width(128u) - 1;  // integer log2, https://stackoverflow.com/questions/994593/how-to-do-an-integer-log2-in-c
 
-	auto& context = State::GetSingleton()->context;
+	auto context = globals::d3d::context;
+
+	if (texShadowHeight) {
+		std::array<ID3D11ShaderResourceView*, 1> srvs = { nullptr };
+		context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
+		context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
+	}
+
 	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
 	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
 	if (!sunLight)
 		return;
 
 	ZoneScoped;
-	TracyD3D11Zone(State::GetSingleton()->tracyCtx, "Terrain Occlusion - Update Shadows");
+	TracyD3D11Zone(globals::state->tracyCtx, "Terrain Occlusion - Update Shadows");
 
 	/* ---- UPDATE CB ---- */
 	uint width = texHeightMap->desc.Width;
@@ -382,6 +395,7 @@ void TerrainShadows::UpdateShadow()
 	} old, newer;
 
 	/* ---- DISPATCH ---- */
+
 	newer.srvs[0] = texHeightMap->srv.get();
 	newer.uavs[0] = texShadowHeight->uav.get();
 	newer.buffer = shadowUpdateCB->CB();
@@ -399,7 +413,18 @@ void TerrainShadows::UpdateShadow()
 	context->CSSetConstantBuffers(0, 1, &old.buffer);
 }
 
-void TerrainShadows::Prepass()
+void TerrainShadows::ReflectionsPrepass()
+{
+	if (texShadowHeight) {
+		auto context = globals::d3d::context;
+
+		std::array<ID3D11ShaderResourceView*, 1> srvs = { texShadowHeight->srv.get() };
+		context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
+		context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
+	}
+}
+
+void TerrainShadows::EarlyPrepass()
 {
 	LoadHeightmap();
 
@@ -412,9 +437,10 @@ void TerrainShadows::Prepass()
 	UpdateShadow();
 
 	if (texShadowHeight) {
-		auto context = State::GetSingleton()->context;
+		auto context = globals::d3d::context;
 
 		std::array<ID3D11ShaderResourceView*, 1> srvs = { texShadowHeight->srv.get() };
 		context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
+		context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
 	}
 }

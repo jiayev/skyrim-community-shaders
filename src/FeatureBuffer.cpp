@@ -1,8 +1,10 @@
 #include "FeatureBuffer.h"
 
+#include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/GrassLighting.h"
+#include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainShadows.h"
@@ -26,14 +28,16 @@ std::pair<unsigned char*, size_t> _GetFeatureBufferData(Ts... feat_datas)
 	return std::make_pair(data, totalSize);
 }
 
-std::pair<unsigned char*, size_t> GetFeatureBufferData()
+std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 {
 	return _GetFeatureBufferData(
-		GrassLighting::GetSingleton()->settings,
-		ExtendedMaterials::GetSingleton()->settings,
-		DynamicCubemaps::GetSingleton()->settings,
-		TerrainShadows::GetSingleton()->GetCommonBufferData(),
-		LightLimitFix::GetSingleton()->GetCommonBufferData(),
-		WetnessEffects::GetSingleton()->GetCommonBufferData(),
-		Skylighting::GetSingleton()->GetCommonBufferData());
+		globals::features::grassLighting->settings,
+		globals::features::extendedMaterials->settings,
+		globals::features::dynamicCubemaps->settings,
+		globals::features::terrainShadows->GetCommonBufferData(),
+		globals::features::lightLimitFix->GetCommonBufferData(),
+		globals::features::wetnessEffects->GetCommonBufferData(),
+		globals::features::skylighting->GetCommonBufferData(a_inWorld),
+		globals::features::cloudShadows->settings,
+		globals::features::lodBlending->settings);
 }

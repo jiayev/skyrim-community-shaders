@@ -390,7 +390,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 			in_scatter += (sun_transmittance / max(1e-8, cloud_transmittance)) * cloud_scatter * cloud_secondary_phase * ms_volume * info.dirlight_color;
 
 			// ambient
-			float3 ambient = Color::GammaToLinear(SharedData::DirectionalAmbient._14_24_34) / Color::LightPreMult;
+			float3 ambient = Color::GammaToLinear(SharedData::DirectionalAmbient._14_24_34);
 			in_scatter += (cloud_scatter * sqrt(1.0 - ndf.dimension_profile) * info.cloud_layer.ambient_mult + fog_scatter * info.fog_ambient_mult) * ambient * RCP_PI;
 
 			const float3 sample_transmittance = exp(-dt * extinction);

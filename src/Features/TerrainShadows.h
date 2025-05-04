@@ -1,8 +1,5 @@
 #pragma once
 
-#include "Buffer.h"
-#include "Feature.h"
-
 #include <filesystem>
 
 struct TerrainShadows : public Feature
@@ -73,10 +70,12 @@ struct TerrainShadows : public Feature
 
 	virtual void DrawSettings() override;
 
-	virtual void Prepass() override;
+	virtual void EarlyPrepass() override;
 	void LoadHeightmap();
 	void Precompute();
 	void UpdateShadow();
+
+	virtual void ReflectionsPrepass() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

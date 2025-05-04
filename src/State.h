@@ -9,6 +9,9 @@ using json = nlohmann::json;
 
 #include <FeatureBuffer.h>
 
+#include "reshade/reshade_api.hpp"
+#include <reshade/reshade.hpp>
+
 class State
 {
 public:
@@ -105,7 +108,7 @@ public:
 
 	void SetAdapterDescription(const std::wstring& description);
 
-	bool extendedFrameAnnotations = false;
+	bool frameAnnotations = false;
 
 	uint lastVertexDescriptor = 0;
 	uint lastPixelDescriptor = 0;
@@ -115,24 +118,40 @@ public:
 	uint lastModifiedPixelDescriptor = 0;
 	uint currentExtraDescriptor = 0;
 	uint lastExtraDescriptor = 0;
+	uint currentExtraFeatureDescriptor = 0;
+	uint lastExtraFeatureDescriptor = 0;
 	bool forceUpdatePermutationBuffer = true;
+
+	bool isTree = false;
 
 	enum class ExtraShaderDescriptors : uint32_t
 	{
 		InWorld = 1 << 0,
-		IsBeastRace = 1 << 1,
-		EffectShadows = 1 << 2,
-		IsDecal = 1 << 3
+		IsReflections = 1 << 1,
+		IsBeastRace = 1 << 2,
+		EffectShadows = 1 << 3,
+		IsDecal = 1 << 4,
+		IsTree = 1 << 5
 	};
 
-	void UpdateSharedData();
+	enum class ExtraFeatureDescriptors : uint32_t
+	{
+		THLand0HasDisplacement = 1 << 0,
+		THLand1HasDisplacement = 1 << 1,
+		THLand2HasDisplacement = 1 << 2,
+		THLand3HasDisplacement = 1 << 3,
+		THLand4HasDisplacement = 1 << 4,
+		THLand5HasDisplacement = 1 << 5
+	};
+
+	void UpdateSharedData(bool a_inWorld, bool a_prepass);
 
 	struct alignas(16) PermutationCB
 	{
 		uint VertexShaderDescriptor;
 		uint PixelShaderDescriptor;
 		uint ExtraShaderDescriptor;
-		uint pad0[1];
+		uint ExtraFeatureDescriptor;
 	};
 
 	ConstantBuffer* permutationCB = nullptr;
@@ -150,17 +169,19 @@ public:
 		uint FrameCountAlwaysActive;
 		uint InInterior;
 		uint InMapMenu;
-		float3 pad0;
+		uint HideSky;
+		float MipBias;
+		float pad0;
 	};
 
 	ConstantBuffer* sharedDataCB = nullptr;
 	ConstantBuffer* featureDataCB = nullptr;
 
+	Util::FrameChecker frameChecker;
+	uint frameCount = 0;
+
 	// Skyrim constants
-	bool isVR = false;
 	float2 screenSize = {};
-	ID3D11DeviceContext* context = nullptr;
-	ID3D11Device* device = nullptr;
 	D3D_FEATURE_LEVEL featureLevel;
 
 	TracyD3D11Ctx tracyCtx = nullptr;  // Tracy context
@@ -170,11 +191,19 @@ public:
 	bool IsFeatureDisabled(const std::string& featureName);
 	std::unordered_map<std::string, bool>& GetDisabledFeatures();
 
+	reshade::api::effect_runtime* reShadeRuntime = nullptr;
+	reshade::api::resource_view reshadeSwapChainRTV;
+	reshade::api::resource_view reshadeSwapChainRTVsRGB;
+
+	void SetupReShade();
+	void RenderReShade();
+	void PresentReShade();
+
+	bool useFrameAnnotations = false;
+
 	// Features that are more special then others
 	std::unordered_map<std::string, bool> specialFeatures = {
-		{ "Frame Generation", false },
-		{ "Upscaling", false },
-		{ "TruePBR", false },
+		{ "TruePBR", false }
 	};
 	std::unordered_map<std::string, bool> disabledFeatures;
 

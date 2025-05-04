@@ -1,4 +1,4 @@
-#include "../PhysicalSky.h"
+#include "Features/PhysicalSky.h"
 
 #include "Deferred.h"
 #include "State.h"
@@ -11,8 +11,8 @@
 
 bool TextureManager::LoadTexture(std::filesystem::path path)
 {
-	auto device = State::GetSingleton()->device;
-	auto context = State::GetSingleton()->context;
+	auto device = globals::d3d::device;
+	auto context = globals::d3d::context;
 
 	auto path_str = path.string();
 	if (!tex_list.contains(path_str))
@@ -40,8 +40,8 @@ bool PhysicalSky::HasShaderDefine(RE::BSShader::Type type)
 
 void PhysicalSky::SetupResources()
 {
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto device = State::GetSingleton()->device;
+	auto renderer = globals::game::renderer;
+	auto device = globals::d3d::device;
 
 	logger::debug("Creating samplers...");
 	{
@@ -199,8 +199,8 @@ void PhysicalSky::SetupResources()
 
 void PhysicalSky::LoadNDFTextures()
 {
-	auto device = State::GetSingleton()->device;
-	auto context = State::GetSingleton()->context;
+	auto device = globals::d3d::device;
+	auto context = globals::d3d::context;
 
 	DirectX::CreateDDSTextureFromFile(device, context, L"Data\\Textures\\PhysicalSky\\ndf.dds", nullptr, ndf_tex_srv.put());
 	DirectX::CreateDDSTextureFromFile(device, context, L"Data\\Textures\\PhysicalSky\\top_lut.dds", nullptr, cloud_top_lut_srv.put());
@@ -257,7 +257,7 @@ void PhysicalSky::Prepass()
 		GenerateLuts();
 		RenderShadowMapMainView();
 	} else {
-		auto context = State::GetSingleton()->context;
+		auto context = globals::d3d::context;
 		{
 			FLOAT clr[4] = { 1., 1., 1., 1. };
 			context->ClearUnorderedAccessViewFloat(main_view_tr_tex->uav.get(), clr);
@@ -268,7 +268,7 @@ void PhysicalSky::Prepass()
 		}
 	}
 
-	auto context = State::GetSingleton()->context;
+	auto context = globals::d3d::context;
 
 	std::array<ID3D11ShaderResourceView*, 8> srvs = {
 		phys_sky_sb->SRV(0),
@@ -310,8 +310,8 @@ void PhysicalSky::Prepass()
 
 bool PhysicalSky::GenerateNoise(const std::filesystem::path& filename, uint type, float base_freq, uint octaves, float persistence, float lacunarity, uint seed)
 {
-	auto context = State::GetSingleton()->context;
-	auto device = State::GetSingleton()->device;
+	auto context = globals::d3d::context;
+	auto device = globals::d3d::device;
 
 	constexpr auto noise_funcs = std::array{
 		"Worley",
@@ -390,8 +390,8 @@ bool PhysicalSky::GenerateNoise(const std::filesystem::path& filename, uint type
 
 void PhysicalSky::GenerateLuts()
 {
-	auto state = State::GetSingleton();
-	auto context = State::GetSingleton()->context;
+	auto state = globals::state;
+	auto context = globals::d3d::context;
 
 	/* ---- BACKUP ---- */
 	struct ShaderState
@@ -461,10 +461,10 @@ void PhysicalSky::GenerateLuts()
 
 void PhysicalSky::RenderShadowMapMainView()
 {
-	auto state = State::GetSingleton();
-	auto& context = state->context;
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto deferred = Deferred::GetSingleton();
+	auto state = globals::state;
+	auto context = globals::d3d::context;
+	auto renderer = globals::game::renderer;
+	auto deferred = globals::deferred;
 
 	float2 size = Util::ConvertToDynamic(state->screenSize);
 	uint resolution[2] = { (uint)size.x, (uint)size.y };

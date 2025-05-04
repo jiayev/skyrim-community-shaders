@@ -194,6 +194,8 @@ cbuffer AlphaTestRefCB : register(b11)
 #		include "PhysicalSky/PhysicalSky.hlsli"
 #	endif
 
+Texture2D<float> TexDepthSampler : register(t17);
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
@@ -253,7 +255,12 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Normal = float4(0.5, 0.5, 0, psout.Color.w);
 
 #	if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
-	psout.CloudShadows = psout.Color;
+	psout.CloudShadows = float4(1, 1, 1, psout.Color.w);
+
+	float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
+	if (depth < input.Position.z)
+		psout.Color.w = 0;
+
 #	endif
 
 #	if defined(PHYS_SKY)

@@ -1,0 +1,118 @@
+#pragma once
+
+struct CloudShadows;
+struct DynamicCubemaps;
+struct ExtendedMaterials;
+struct GrassCollision;
+struct GrassLighting;
+struct LightLimitFix;
+struct LODBlending;
+struct InverseSquareLighting;
+struct PhysicalSky;
+struct ScreenSpaceGI;
+struct ScreenSpaceShadows;
+struct Skylighting;
+struct SubsurfaceScattering;
+struct TerrainBlending;
+struct TerrainHelper;
+struct TerrainShadows;
+struct VolumetricLighting;
+struct WaterEffects;
+struct WetnessEffects;
+
+class ParticleLights;
+
+class State;
+class Deferred;
+struct TruePBR;
+class Menu;
+class Streamline;
+class Upscaling;
+class DX12SwapChain;
+class FidelityFX;
+
+namespace SIE
+{
+	class ShaderCache;
+}
+
+namespace globals
+{
+	namespace d3d
+	{
+		extern ID3D11Device* device;
+		extern ID3D11DeviceContext* context;
+		extern IDXGISwapChain* swapChain;
+	}
+
+	namespace features
+	{
+		extern CloudShadows* cloudShadows;
+		extern DynamicCubemaps* dynamicCubemaps;
+		extern ExtendedMaterials* extendedMaterials;
+		extern GrassCollision* grassCollision;
+		extern GrassLighting* grassLighting;
+		extern LightLimitFix* lightLimitFix;
+		extern LODBlending* lodBlending;
+		extern InverseSquareLighting* inverseSquareLighting;
+		extern PhysicalSky* physicalSky;
+		extern ScreenSpaceGI* screenSpaceGI;
+		extern ScreenSpaceShadows* screenSpaceShadows;
+		extern Skylighting* skylighting;
+		extern SubsurfaceScattering* subsurfaceScattering;
+		extern TerrainBlending* terrainBlending;
+		extern TerrainHelper* terrainHelper;
+		extern TerrainShadows* terrainShadows;
+		extern VolumetricLighting* volumetricLighting;
+		extern WaterEffects* waterEffects;
+		extern WetnessEffects* wetnessEffects;
+
+		namespace llf
+		{
+			extern ParticleLights* particleLights;
+		}
+	}
+
+	namespace game
+	{
+		extern RE::BSGraphics::RendererShadowState* shadowState;
+		extern RE::BSGraphics::State* graphicsState;
+		extern RE::BSGraphics::Renderer* renderer;
+		extern RE::BSShaderManager::State* smState;
+		extern RE::TES* tes;
+		extern bool isVR;
+		extern RE::MemoryManager* memoryManager;
+		extern RE::INISettingCollection* iniSettingCollection;
+		extern RE::INIPrefSettingCollection* iniPrefSettingCollection;
+		extern RE::GameSettingCollection* gameSettingCollection;
+		extern float* cameraNear;
+		extern float* cameraFar;
+		extern float* deltaTime;
+		extern RE::BSUtilityShader* utilityShader;
+		extern RE::Sky* sky;
+		extern RE::UI* ui;
+
+		extern RE::BSGraphics::PixelShader** currentPixelShader;
+		extern RE::BSGraphics::VertexShader** currentVertexShader;
+		extern stl::enumeration<RE::BSGraphics::ShaderFlags, uint32_t>* stateUpdateFlags;
+
+		extern RE::Setting* bEnableLandFade;
+		extern RE::Setting* bShadowsOnGrass;
+		extern RE::Setting* shadowMaskQuarter;
+		extern REL::Relocation<ID3D11Buffer**> perFrame;
+	}
+
+	extern State* state;
+	extern Deferred* deferred;
+	extern TruePBR* truePBR;
+	extern Menu* menu;
+	extern SIE::ShaderCache* shaderCache;
+	extern Streamline* streamline;
+	extern Upscaling* upscaling;
+	extern DX12SwapChain* dx12SwapChain;
+	extern FidelityFX* fidelityFX;
+
+	void OnInit();
+	void ReInit();
+	void OnDataLoaded();
+}

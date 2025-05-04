@@ -6,6 +6,8 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
+#include "Features/InverseSquareLighting.h"
+#include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/PhysicalSky.h"
 #include "Features/ScreenSpaceGI.h"
@@ -13,6 +15,7 @@
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
+#include "Features/TerrainHelper.h"
 #include "Features/TerrainShadows.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
@@ -120,34 +123,37 @@ void Feature::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 const std::vector<Feature*>& Feature::GetFeatureList()
 {
 	static std::vector<Feature*> features = {
-		GrassLighting::GetSingleton(),
-		GrassCollision::GetSingleton(),
-		ScreenSpaceShadows::GetSingleton(),
-		ExtendedMaterials::GetSingleton(),
-		WetnessEffects::GetSingleton(),
-		LightLimitFix::GetSingleton(),
-		DynamicCubemaps::GetSingleton(),
-		CloudShadows::GetSingleton(),
-		WaterEffects::GetSingleton(),
-		PhysicalSky::GetSingleton(),
-		SubsurfaceScattering::GetSingleton(),
-		TerrainShadows::GetSingleton(),
-		ScreenSpaceGI::GetSingleton(),
-		Skylighting::GetSingleton(),
-		TerrainBlending::GetSingleton(),
-		VolumetricLighting::GetSingleton()
+		globals::features::grassLighting,
+		globals::features::grassCollision,
+		globals::features::screenSpaceShadows,
+		globals::features::extendedMaterials,
+		globals::features::wetnessEffects,
+		globals::features::lightLimitFix,
+		globals::features::dynamicCubemaps,
+		globals::features::cloudShadows,
+		globals::features::waterEffects,
+		globals::features::subsurfaceScattering,
+		globals::features::terrainShadows,
+		globals::features::screenSpaceGI,
+		globals::features::skylighting,
+		globals::features::terrainBlending,
+		globals::features::terrainHelper,
+		globals::features::volumetricLighting,
+		globals::features::lodBlending,
+		globals::features::inverseSquareLighting,
+		globals::features::physicalSky
 	};
 
 	static std::vector<Feature*> featuresVR(features);
 	std::erase_if(featuresVR, [](Feature* a) {
 		return !a->SupportsVR();
 	});
-	return (REL::Module::IsVR() && !State::GetSingleton()->IsDeveloperMode()) ? featuresVR : features;
+	return (REL::Module::IsVR() && !globals::state->IsDeveloperMode()) ? featuresVR : features;
 }
 
 bool Feature::ToggleAtBootSetting()
 {
-	auto state = State::GetSingleton();
+	auto state = globals::state;
 	const std::string featureName = GetShortName();
 	auto disabled = state->IsFeatureDisabled(featureName);
 	state->SetFeatureDisabled(featureName, !disabled);
