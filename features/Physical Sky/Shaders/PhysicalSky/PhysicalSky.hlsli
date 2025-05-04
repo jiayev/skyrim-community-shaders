@@ -132,6 +132,10 @@ Texture2D<float4> TexTransmittance : register(t1);
 Texture2D<float4> TexMultiScatter : register(t2);
 Texture3D<float4> TexAerialPerspective : register(t3);
 #else
+Texture2D<float4> PhysSkyTrTexture : register(t98);
+Texture2D<float4> PhysSkyLumTexture : register(t99);
+SamplerState PhysSkyLinearSampler : register(s15);
+
 StructuredBuffer<PhySkyBufferContent> PhysSkyBuffer : register(t100);
 Texture2D<float4> TexTransmittance : register(t101);
 Texture2D<float4> TexMultiScatter : register(t102);

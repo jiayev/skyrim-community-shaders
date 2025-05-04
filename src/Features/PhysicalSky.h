@@ -350,6 +350,7 @@ struct PhysicalSky : public Feature
 	winrt::com_ptr<ID3D11SamplerState> tileable_sampler = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> transmittance_sampler = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> sky_view_sampler = nullptr;
+	winrt::com_ptr<ID3D11SamplerState> linear_sampler = nullptr;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

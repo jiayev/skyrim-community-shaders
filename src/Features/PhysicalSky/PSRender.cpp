@@ -54,6 +54,7 @@ void PhysicalSky::SetupResources()
 		samplerDesc.MinLOD = 0;
 		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, transmittance_sampler.put()));
+		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, linear_sampler.put()));
 
 		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
 		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_MIRROR;
@@ -305,6 +306,19 @@ void PhysicalSky::Prepass()
 			sky_view_sampler.get()
 		};
 		context->PSSetSamplers(3, ARRAYSIZE(samplers), samplers);
+	}
+
+	if (main_view_tr_tex && main_view_lum_tex) {
+		std::array<ID3D11ShaderResourceView*, 2> srvs2 = {
+			main_view_tr_tex->srv.get(),
+			main_view_lum_tex->srv.get()
+		};
+		context->PSSetShaderResources(98, (uint)srvs2.size(), srvs2.data());
+
+		ID3D11SamplerState* sampler = {
+			linear_sampler.get()
+		};
+		context->PSSetSamplers(15, 1, &sampler);
 	}
 }
 

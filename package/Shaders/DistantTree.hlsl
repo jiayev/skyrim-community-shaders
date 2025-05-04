@@ -276,6 +276,13 @@ PS_OUTPUT main(PS_INPUT input)
 	diffuseColor += directionalAmbientColor;
 
 	float3 color = diffuseColor * baseColor.xyz;
+#			if defined(PHYS_SKY)
+	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
+	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
+	if (PhysSkyBuffer[0].enable_sky) {
+		color = Color::LinearToGamma(Color::GammaToLinear(color) * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz);
+	}
+#			endif  // PHYS_SKY
 	psout.Diffuse = float4(color, 1.0);
 #		endif  // DEFERRED
 #	endif      // RENDER_DEPTH

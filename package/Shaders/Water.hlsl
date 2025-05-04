@@ -773,7 +773,16 @@ float3 GetSunColor(float3 normal, float3 viewDirection, uint eyeIndex, PS_INPUT 
 
 	float3 reflectionDirection = reflect(viewDirection, normal);
 	float reflectionMul = exp2(VarAmounts.x * log2(saturate(dot(reflectionDirection, SunDir.xyz))));
+#				if defined(PHYS_SKY)
+	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
+		float3 dirLightColor = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
 
+		dirLightColor *= getDirlightTransmittance(input.WPosition + FrameBuffer::CameraPosAdjust[eyeIndex], PhysSkyLinearSampler);
+
+		dirLightColor = Color::LinearToGamma(dirLightColor);
+		return reflectionMul * dirLightColor * SunDir.w * DeepColor.w;
+	} else
+#				endif
 	return reflectionMul * SunColor.xyz * SunDir.w * DeepColor.w;
 #			endif
 }
@@ -929,6 +938,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float specularFraction = lerp(1, fresnel * diffuseOutput.refractionMul, distanceFactor);
 	float3 finalColorPreFog = lerp(diffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
 	float3 finalColor = lerp(finalColorPreFog, input.FogParam.xyz * PosAdjust[eyeIndex].w, input.FogParam.w);
+#						if defined(PHYS_SKY)
+	if (PhysSkyBuffer[0].enable_sky) {
+		finalColor = Color::LinearToGamma(Color::GammaToLinear(finalColor) * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz);
+	}
+#						endif
 #					else
 	float specularFraction = lerp(1, fresnel, distanceFactor);
 	float3 finalColorPreFog = lerp(diffuseOutput.refractionDiffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
@@ -941,10 +955,16 @@ PS_OUTPUT main(PS_INPUT input)
 	refractionColor = lerp(refractionColor, fogColor, fogFactor);
 
 	float3 finalColor = lerp(refractionColor, finalColorPreFog, diffuseOutput.refractionMul);
+#						if defined(PHYS_SKY)
+	if (PhysSkyBuffer[0].enable_sky) {
+		finalColor = Color::LinearToGamma(Color::GammaToLinear(finalColor) * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz);
+	}
+#						endif
 #					endif
 
 #				endif
 #			endif
+
 	psout.Lighting = saturate(float4(finalColor, isSpecular));
 #		endif
 

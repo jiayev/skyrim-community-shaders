@@ -806,6 +806,13 @@ PS_OUTPUT main(PS_INPUT input)
 #	else
 	finalColor *= fogMul;
 #	endif
+#	if defined(PHYS_SKY)
+	if (PhysSkyBuffer[0].enable_sky) {
+		float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
+		float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
+		finalColor.xyz = Color::LinearToGamma(Color::GammaToLinear(finalColor.xyz) * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz);
+	}
+#	endif
 	psout.Diffuse = finalColor;
 #	if defined(LIGHTING) && defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (SharedData::lightLimitFixSettings.EnableLightsVisualisation) {
