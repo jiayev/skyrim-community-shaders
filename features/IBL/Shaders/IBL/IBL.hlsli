@@ -5,7 +5,7 @@
 
 namespace ImageBasedLighting
 {
-	Texture2D<sh2> DiffuseIBLTexture : register(t100);
+	Texture2D<sh2> DiffuseIBLTexture : register(t76);
 
 	float3 GetDiffuseIBL(float3 rayDir)
 	{
@@ -15,6 +15,6 @@ namespace ImageBasedLighting
 		float colorR = SphericalHarmonics::SHHallucinateZH3Irradiance(shR, rayDir);
 		float colorG = SphericalHarmonics::SHHallucinateZH3Irradiance(shG, rayDir);
 		float colorB = SphericalHarmonics::SHHallucinateZH3Irradiance(shB, rayDir);
-		return float3(colorR, colorG, colorB) / Math::PI;
+		return Color::LinearToGamma(float3(colorR, colorG, colorB)) / Math::PI;
 	}
 }
