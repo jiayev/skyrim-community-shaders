@@ -35,7 +35,11 @@ float3 GetDiffuseIBL(float3 rayDir)
 	float colorR = SphericalHarmonics::SHHallucinateZH3Irradiance(shR, rayDir);
 	float colorG = SphericalHarmonics::SHHallucinateZH3Irradiance(shG, rayDir);
 	float colorB = SphericalHarmonics::SHHallucinateZH3Irradiance(shB, rayDir);
-	return Color::LinearToGamma(float3(colorR, colorG, colorB)) / Math::PI;
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		return Color::LinearToGamma(float3(colorR, colorG, colorB)) / Math::PI;
+	} else {
+		return float3(colorR, colorG, colorB) / Math::PI;
+	}
 }
 #endif
 
