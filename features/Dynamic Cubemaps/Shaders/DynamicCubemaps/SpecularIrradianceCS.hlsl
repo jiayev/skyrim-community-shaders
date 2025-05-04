@@ -172,11 +172,19 @@ float3 tangentToWorld(const float3 v, const float3 N, const float3 S, const floa
 			// Mip level to sample from.
 			float mipLevel = max(0.5 * log2(ws / wt) + 1.0, 0.0);
 
-			color += Color::GammaToLinear(inputTexture.SampleLevel(linear_wrap_sampler, Li, mipLevel).rgb) * cosLi;
+			if (!SharedData::linearLightingSettings.enableLinearLighting) {
+				color += Color::GammaToLinear(inputTexture.SampleLevel(linear_wrap_sampler, Li, mipLevel).rgb) * cosLi;
+			} else {
+				color += inputTexture.SampleLevel(linear_wrap_sampler, Li, mipLevel).rgb * cosLi;
+			}
 			weight += cosLi;
 		}
 	}
 	color /= weight;
 
-	outputTexture[ThreadID] = float4(Color::LinearToGamma(color), 1.0);
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		outputTexture[ThreadID] = float4(Color::LinearToGamma(color), 1.0);
+	} else {
+		outputTexture[ThreadID] = float4(color, 1.0);
+	}
 }

@@ -210,6 +210,9 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Diffuse.w = 0;
 #	else
 	float4 baseColor = TexDiffuse.Sample(SampDiffuse, input.TexCoord.xy);
+	if (SharedData::linearLightingSettings.enableLinearLighting) {
+		baseColor.xyz = Color::GammaToTrueLinear(baseColor.xyz);
+	}
 
 	if ((baseColor.w - AlphaTestRefRS) < 0) {
 		discard;
@@ -227,7 +230,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
 		dirLightColor = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
 		dirLightColor *= getDirlightTransmittance(input.WorldPosition + FrameBuffer::CameraPosAdjust[eyeIndex], SampDiffuse);
-		dirLightColor = Color::LinearToGamma(dirLightColor);
+		dirLightColor = Color::LinearLight(dirLightColor);
 	}
 #			endif
 	// dirLightColor end
@@ -242,14 +245,24 @@ PS_OUTPUT main(PS_INPUT input)
 	if (dirShadow != 0.0)
 		dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
 
-	float3 diffuseColor = SharedData::DirLightColor.xyz * dirShadow * 0.5;
+	float3 diffuseColor = 0;
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		diffuseColor = SharedData::DirLightColor.xyz * dirShadow * 0.5;
+	} else {
+		diffuseColor = Color::Light(SharedData::DirLightColor.xyz) * dirShadow * 0.5;
+	}
 
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = normalize(cross(ddx, ddy));
 
 #			if !defined(SSGI)
-	float3 directionalAmbientColor = max(0, mul(SharedData::DirectionalAmbient, float4(normal, 1.0)));
+	float3 directionalAmbientColor = 0;
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		directionalAmbientColor = max(0, mul(SharedData::DirectionalAmbient, float4(normal, 1.0)));
+	} else {
+		directionalAmbientColor = max(0, mul(Color::GammaToTrueLinear(SharedData::DirectionalAmbient), float4(normal, 1.0)));
+	}
 	diffuseColor += directionalAmbientColor;
 #			endif
 
@@ -266,13 +279,23 @@ PS_OUTPUT main(PS_INPUT input)
 #		else
 	float dirShadow = ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
 
-	float3 diffuseColor = SharedData::DirLightColor.xyz * dirShadow * 0.5;
+	float3 diffuseColor = 0;
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		diffuseColor = SharedData::DirLightColor.xyz * dirShadow * 0.5;
+	} else {
+		diffuseColor = Color::Light(SharedData::DirLightColor.xyz) * dirShadow * 0.5;
+	}
 
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = normalize(cross(ddx, ddy));
 
-	float3 directionalAmbientColor = mul(SharedData::DirectionalAmbient, float4(normal, 1.0));
+	float3 directionalAmbientColor = 0;
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		directionalAmbientColor = mul(SharedData::DirectionalAmbient, float4(normal, 1.0));
+	} else {
+		directionalAmbientColor = Color::GammaToTrueLinear(mul(SharedData::DirectionalAmbient, float4(normal, 1.0)));
+	}
 	diffuseColor += directionalAmbientColor;
 
 	float3 color = diffuseColor * baseColor.xyz;
@@ -280,7 +303,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 	if (PhysSkyBuffer[0].enable_sky) {
-		color = Color::LinearToGamma(Color::GammaToLinear(color) * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz);
+		if (!SharedData::linearLightingSettings.enableLinearLighting)
+			color = Color::GammaToLinear(Color::LinearToGamma(color) * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz);
+		else
+			color = color * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz;
+
 	}
 #			endif  // PHYS_SKY
 	psout.Diffuse = float4(color, 1.0);

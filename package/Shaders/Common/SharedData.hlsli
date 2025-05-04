@@ -145,6 +145,13 @@ namespace SharedData
 		bool DisableTerrainVertexColors;
 	};
 
+	struct LinearLightingSettings
+	{
+		uint enableLinearLighting;
+		uint enableGammaCorrection;
+		uint pad[2];
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -156,6 +163,7 @@ namespace SharedData
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
 		LODBlendingSettings lodBlendingSettings;
+		LinearLightingSettings linearLightingSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

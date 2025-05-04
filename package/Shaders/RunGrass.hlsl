@@ -469,6 +469,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
 	}
 
+	if (SharedData::linearLightingSettings.enableLinearLighting) {
+		baseColor.xyz = Color::Diffuse(baseColor.xyz);
+	}
+
 #		if defined(RENDER_DEPTH)
 	float diffuseAlpha = input.VertexColor.w * baseColor.w;
 	if ((diffuseAlpha - AlphaTestRefRS) < 0) {
@@ -546,7 +550,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 transmissionColor = 0;
 #			endif  // TRUE_PBR
 
-	float3 dirLightColor = SharedData::DirLightColor.xyz;
+	float3 dirLightColor = Color::Light(SharedData::DirLightColor.xyz);
 
 #			if defined(PHYS_SKY)
 	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
@@ -554,7 +558,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 		dirLightColor *= getDirlightTransmittance(input.WorldPosition + FrameBuffer::CameraPosAdjust[eyeIndex], SampBaseSampler);
 
-		dirLightColor = Color::LinearToGamma(dirLightColor);
+		dirLightColor = Color::LinearLight(dirLightColor);
 	}
 #			endif
 
@@ -619,7 +623,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 #				endif
 
-	float3 albedo = max(0, baseColor.xyz * vertexColor);
+	float3 albedo = 0;
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		albedo = max(0, baseColor.xyz * vertexColor);
+	} else {
+		albedo = max(0, baseColor.xyz * Color::GammaToTrueLinear(vertexColor));
+	}
 
 	float3 subsurfaceColor = albedo.xyz * albedo.xyz * saturate(input.VertexNormal.w * 10.0);
 
@@ -660,8 +669,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #				endif
 
-				float3 lightColor = light.color.xyz * intensityMultiplier;
-
+				float3 lightColor = 0;
+				if (!SharedData::linearLightingSettings.enableLinearLighting) {
+					lightColor = light.color.xyz * intensityMultiplier;
+				} else {
+					lightColor = Color::GammaToLinearLuminancePreservingLight(light.color.xyz) * intensityMultiplier;
+				}
 				float lightShadow = 1.0;
 
 				float shadowComponent = 1.0;
@@ -720,6 +733,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	normal = normalize(float3(normal.xy, max(0, normal.z)));
 
 	float3 directionalAmbientColor = max(0, mul(SharedData::DirectionalAmbient, float4(normal, 1.0)));
+	if (SharedData::linearLightingSettings.enableLinearLighting) {
+		directionalAmbientColor = Color::GammaToTrueLinear(directionalAmbientColor);
+	}
 
 #				if defined(SKYLIGHTING)
 	if (!SharedData::InInterior) {
@@ -738,11 +754,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		skylightingDiffuse = lerp(1.0, skylightingDiffuse, skylightingFadeOutFactor);
 		skylightingDiffuse = Skylighting::mixDiffuse(SharedData::skylightingSettings, skylightingDiffuse);
 
-		directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor);
+		if (!SharedData::linearLightingSettings.enableLinearLighting) {
+			directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor);
+		}
 
 		directionalAmbientColor *= skylightingDiffuse;
 		directionalAmbientColor *= 1.0 + saturate(normal.z) * (1.0 - SharedData::skylightingSettings.MinDiffuseVisibility);
-		directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor);
+		if (!SharedData::linearLightingSettings.enableLinearLighting) {
+			directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor);
+		}
 	}
 #				endif  // SKYLIGHTING
 
@@ -838,7 +858,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 	}
 
-	float3 diffuseColor = SharedData::DirLightColor.xyz * dirShadow * lerp(dirDetailShadow, 1.0, 0.5) * 0.5;
+	float3 diffuseColor = Color::Light(SharedData::DirLightColor.xyz) * dirShadow * lerp(dirDetailShadow, 1.0, 0.5) * 0.5;
 
 #			if defined(LIGHT_LIMIT_FIX)
 	uint clusterIndex = 0;
@@ -869,7 +889,12 @@ PS_OUTPUT main(PS_INPUT input)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #				endif
 
-				float3 lightColor = light.color.xyz * intensityMultiplier;
+				float3 lightColor = 0;
+				if (!SharedData::linearLightingSettings.enableLinearLighting) {
+					lightColor = light.color.xyz * intensityMultiplier;
+				} else {
+					lightColor = Color::GammaToLinearLuminancePreservingLight(light.color.xyz) * intensityMultiplier;
+				}
 
 				float lightShadow = 1.0;
 
@@ -904,6 +929,9 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 
 	float3 directionalAmbientColor = max(0, mul(SharedData::DirectionalAmbient, float4(normal, 1.0)));
+	if (SharedData::linearLightingSettings.enableLinearLighting) {
+		directionalAmbientColor = Color::GammaToTrueLinear(directionalAmbientColor);
+	}
 
 #			if defined(SKYLIGHTING)
 	if (!SharedData::InInterior) {
@@ -922,12 +950,16 @@ PS_OUTPUT main(PS_INPUT input)
 		skylightingDiffuse = lerp(1.0, skylightingDiffuse, skylightingFadeOutFactor);
 		skylightingDiffuse = Skylighting::mixDiffuse(SharedData::skylightingSettings, skylightingDiffuse);
 
-		directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor);
+		if (!SharedData::linearLightingSettings.enableLinearLighting) {
+			directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor);
+		}
 
 		directionalAmbientColor *= skylightingDiffuse;
 		directionalAmbientColor *= 1.0 + saturate(normal.z) * (1.0 - SharedData::skylightingSettings.MinDiffuseVisibility);
 
-		directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor);
+		if (!SharedData::linearLightingSettings.enableLinearLighting) {
+			directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor);
+		}
 	}
 #			endif  // SKYLIGHTING
 

@@ -535,18 +535,25 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 
 	float3 color = DLightColor.xyz;
+	if (SharedData::linearLightingSettings.enableLinearLighting) {
+		color = Color::GammaToTrueLinear(color);
+	}
 
 #		if defined(PHYS_SKY)
 	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
 		color = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
 		color *= getDirlightTransmittance(worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex], SampDepthSampler);
-		color = Color::LinearToGamma(color);
+		color = Color::LinearLight(color);
 	}
 #		endif
 
 	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::EffectShadows)) {
 		float3 dirLightColor = SharedData::DirLightColor.xyz * 0.5;
 		float3 ambientColor = max(0, mul(SharedData::DirectionalAmbient, float4(0, 0, 1, 1)));
+		if (SharedData::linearLightingSettings.enableLinearLighting) {
+			dirLightColor = Color::GammaToTrueLinear(dirLightColor);
+			ambientColor = Color::GammaToTrueLinear(ambientColor);
+		}
 
 		color = ambientColor;
 
@@ -563,9 +570,13 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 		skylightingDiffuse = lerp(1.0, skylightingDiffuse, Skylighting::getFadeOutFactor(worldPosition));
 		skylightingDiffuse = Skylighting::mixDiffuse(SharedData::skylightingSettings, skylightingDiffuse);
 
-		color = Color::GammaToLinear(color);
-		color *= skylightingDiffuse;
-		color = Color::LinearToGamma(color);
+		if (!SharedData::linearLightingSettings.enableLinearLighting) {
+			color = Color::GammaToLinear(color);
+			color *= skylightingDiffuse;
+			color = Color::LinearToGamma(color);
+		} else {
+			color *= skylightingDiffuse;
+		}
 #		endif
 
 		if (!SharedData::InInterior)
@@ -588,9 +599,13 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 			skylightingDiffuse = lerp(1.0, skylightingDiffuse, Skylighting::getFadeOutFactor(worldPosition));
 			skylightingDiffuse = Skylighting::mixDiffuse(SharedData::skylightingSettings, skylightingDiffuse);
 
-			color = Color::GammaToLinear(color);
-			color *= skylightingDiffuse;
-			color = Color::LinearToGamma(color);
+			if (!SharedData::linearLightingSettings.enableLinearLighting) {
+				color = Color::GammaToLinear(color);
+				color *= skylightingDiffuse;
+				color = Color::LinearToGamma(color);
+			} else {
+				color *= skylightingDiffuse;
+			}
 		}
 #		endif
 	}
@@ -599,9 +614,15 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld))
 #		endif
 	{
-		color.x += dot(PLightColorR * lightFadeMul, 1.0.xxxx);
-		color.y += dot(PLightColorG * lightFadeMul, 1.0.xxxx);
-		color.z += dot(PLightColorB * lightFadeMul, 1.0.xxxx);
+		if (!SharedData::linearLightingSettings.enableLinearLighting) {
+			color.x += dot(PLightColorR * lightFadeMul, 1.0.xxxx);
+			color.y += dot(PLightColorG * lightFadeMul, 1.0.xxxx);
+			color.z += dot(PLightColorB * lightFadeMul, 1.0.xxxx);
+		} else {
+			color.x += dot(Color::GammaToTrueLinear(PLightColorR) * lightFadeMul, 1.0.xxxx);
+			color.y += dot(Color::GammaToTrueLinear(PLightColorG) * lightFadeMul, 1.0.xxxx);
+			color.z += dot(Color::GammaToTrueLinear(PLightColorB) * lightFadeMul, 1.0.xxxx);
+		}
 	}
 
 	return color;
@@ -620,7 +641,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float4 fogMul = 1;
 #	if !defined(MULTBLEND)
-	fogMul.xyz = input.FogAlpha;
+	fogMul.xyzw = input.FogAlpha;
 #	endif
 
 #	if defined(MEMBRANE)
@@ -646,7 +667,12 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 	float NdotV = dot(normal, input.ViewVector.xyz);
 	float membraneColorMul = pow(saturate(1 - NdotV), MembraneVars.x);
-	float4 membraneColor = MembraneRimColor * membraneColorMul;
+	float4 membraneColor = 0;
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		membraneColor = MembraneRimColor * membraneColorMul;
+	} else {
+		membraneColor = float4(Color::GammaToTrueLinear(MembraneRimColor.xyz), MembraneRimColor.w) * membraneColorMul;
+	}
 #	elif defined(PROJECTED_UV) && defined(NORMALS)
 	float2 noiseTexCoord = 0.00333333341 * input.TexCoord0.xy;
 	float noise = TexNoiseSampler.Sample(SampNoiseSampler, noiseTexCoord).x * 0.2 + 0.4;
@@ -663,6 +689,9 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float lightingInfluence = LightingInfluence.x;
 	float3 propertyColor = PropertyColor.xyz;
+	if (SharedData::linearLightingSettings.enableLinearLighting) {
+		propertyColor = Color::GammaToTrueLinear(propertyColor);
+	}
 
 #	if defined(LIGHTING)
 	propertyColor = GetLightingColor(input.MSPosition.xyz, input.WorldPosition.xyz, input.Position.xyzw, eyeIndex);
@@ -695,7 +724,12 @@ PS_OUTPUT main(PS_INPUT input)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #			endif
 
-				float3 lightColor = light.color.xyz * intensityMultiplier * 0.5;
+				float3 lightColor = 0;
+				if (!SharedData::linearLightingSettings.enableLinearLighting) {
+					lightColor = light.color.xyz * intensityMultiplier * 0.5;
+				} else {
+					lightColor = Color::GammaToLinearLuminancePreservingLight(light.color.xyz) * intensityMultiplier * 0.5;
+				}
 				propertyColor += lightColor;
 			}
 		}
@@ -713,6 +747,9 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 	{
 		baseTexColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
+		if (SharedData::linearLightingSettings.enableLinearLighting) {
+			baseTexColor.xyz = Color::GammaToTrueLinear(baseTexColor.xyz);
+		}
 		baseColor *= baseTexColor;
 		if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::IgnoreTexAlpha || Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) {
 			baseColor.w = 1;
@@ -723,8 +760,15 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 baseColorMul = float4(1, 1, 1, 1);
 #	else
 	float4 baseColorMul = BaseColor;
+	if (SharedData::linearLightingSettings.enableLinearLighting) {
+		baseColorMul.xyz = Color::GammaToLinearLuminancePreservingLight(max(baseColorMul.xyz, 0));
+	}
 #		if defined(VC) && !defined(PROJECTED_UV)
-	baseColorMul *= input.Color;
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		baseColorMul *= input.Color;
+	} else {
+		baseColorMul *= float4(Color::GammaToLinearLuminancePreservingLight(input.Color.xyz), input.Color.w);
+	}
 #		endif
 #	endif
 
@@ -763,7 +807,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float baseColorScale = BaseColorScale.x;
 
 #	if defined(MEMBRANE)
-	baseColor.xyz = (PropertyColor.xyz + baseColor.xyz) * alpha + membraneColor.xyz * membraneColor.w;
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		baseColor.xyz = (PropertyColor.xyz + baseColor.xyz) * alpha + membraneColor.xyz * membraneColor.w;
+	} else {
+		baseColor.xyz = (Color::GammaToTrueLinear(PropertyColor.xyz) + baseColor.xyz) * alpha + membraneColor.xyz * membraneColor.w;
+	}
 	alpha += membraneColor.w;
 	baseColorScale = MembraneVars.z;
 #	endif
@@ -790,17 +838,32 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if !defined(MOTIONVECTORS_NORMALS)
 #		if defined(ADDBLEND)
-	float3 blendedColor = lightColor * (1 - input.FogParam.www);
+	float3 blendedColor = 0;
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		blendedColor = lightColor * (1 - input.FogParam.www);
+	} else {
+		blendedColor = lightColor * (1 - Color::GammaToLinear(input.FogParam.www));
+	}
 #		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
 	float3 blendedColor = lerp(lightColor, 1.0.xxx, saturate(1.5 * input.FogParam.w).xxx);
 #		else
-	float3 blendedColor = lerp(lightColor, input.FogParam.xyz, input.FogParam.www);
+	float3 blendedColor = 0;
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		blendedColor = lerp(lightColor, input.FogParam.xyz, input.FogParam.www);
+	} else {
+		blendedColor = lerp(lightColor, Color::GammaToLinear(input.FogParam.xyz), Color::GammaToLinear(input.FogParam.www));
+	}
 #		endif
 #	else
 	float3 blendedColor = lightColor.xyz;
 #	endif
 
-	float4 finalColor = float4(blendedColor, alpha);
+	float4 finalColor = 0;
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		finalColor = float4(blendedColor, alpha);
+	} else {
+		finalColor = float4(blendedColor, pow(alpha, 2.2));
+	}
 #	if defined(MULTBLEND_DECAL)
 	finalColor.xyz *= alpha;
 #	else
@@ -810,7 +873,10 @@ PS_OUTPUT main(PS_INPUT input)
 	if (PhysSkyBuffer[0].enable_sky) {
 		float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 		float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
-		finalColor.xyz = Color::LinearToGamma(Color::GammaToLinear(finalColor.xyz) * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz);
+		if (!SharedData::linearLightingSettings.enableLinearLighting)
+			finalColor.xyz = Color::LinearToGamma(Color::GammaToLinear(finalColor.xyz) * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz);
+		else
+			finalColor.xyz = finalColor.xyz * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz;
 	}
 #	endif
 	psout.Diffuse = finalColor;

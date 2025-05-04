@@ -1,5 +1,6 @@
 #include "Common/FrameBuffer.hlsli"
 #include "Common/VR.hlsli"
+#include "Common/Color.hlsli"
 
 struct VS_INPUT
 {
@@ -262,6 +263,9 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float4 sourceColor = TexSourceTexture.Sample(SampSourceTexture, input.TexCoord0);
 	float4 baseColor = input.Color * sourceColor;
+	if (SharedData::linearLightingSettings.enableLinearLighting) {
+		baseColor.xyz = Color::GammaToTrueLinear(baseColor.xyz);
+	}
 #	if defined(GRAYSCALE_TO_COLOR)
 	float3 grayScaleColor =
 		TexGrayscaleTexture.Sample(SampGrayscaleTexture, float2(sourceColor.y, input.Color.x)).xyz;

@@ -2,6 +2,7 @@
 #define __COLOR_DEPENDENCY_HLSL__
 
 #include "Common/Math.hlsli"
+#include "Common/SharedData.hlsli"
 
 namespace Color
 {
@@ -46,41 +47,100 @@ namespace Color
 
 	float3 GammaToLinear(float3 color)
 	{
-		return pow(color, 1.8);
+		return pow(max(color, 0), 1.8);
 	}
 
 	float3 LinearToGamma(float3 color)
 	{
-		return pow(color, 1.0 / 1.8);
+		return pow(max(color, 0), 1.0 / 1.8);
 	}
 
 	float3 GammaToTrueLinear(float3 color)
 	{
-		return pow(color, 2.2);
+		return pow(max(color, 0), 2.2);
 	}
 
 	float3 TrueLinearToGamma(float3 color)
 	{
-		return pow(color, 1.0 / 2.2);
+		return pow(max(color, 0), 1.0 / 2.2);
 	}
 
+	float3 GammaToLinearLuminancePreserving(float3 color)
+	{
+		float originalLuminance = RGBToLuminance(color);
+		float3 linearColorRaw = GammaToLinear(color / originalLuminance);
+		float scale = 1.0;
+		if (originalLuminance > 1e-5)
+		{
+			scale = GammaToLinear(originalLuminance);
+		}
+		else if (originalLuminance <= 1e-5)
+		{
+			return float3(0.0, 0.0, 0.0);
+		}
+		float3 finalLinearColor = linearColorRaw * scale;
+		return finalLinearColor;
+	}
+
+	float3 GammaToLinearLuminancePreservingLight(float3 color)
+	{
+		float originalLuminance = RGBToLuminance(color);
+		float3 linearColorRaw = GammaToLinear(color / originalLuminance);
+		float scale = 1.0;
+		if (originalLuminance > 1e-5)
+		{
+			scale = originalLuminance;
+		}
+		else if (originalLuminance <= 1e-5)
+		{
+			return float3(0.0, 0.0, 0.0);
+		}
+		float3 finalLinearColor = linearColorRaw * scale;
+		return finalLinearColor;
+	}
+
+#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 	float3 Diffuse(float3 color)
 	{
-#if defined(TRUE_PBR)
-		return pow(abs(color), 1.0 / 2.2);
-#else
-		return color;
-#endif
+		if (!SharedData::linearLightingSettings.enableLinearLighting) {
+	#	if defined(TRUE_PBR)
+			return pow(abs(color), 1.0 / 2.2);
+	#	else
+			return color;
+	#	endif
+		} else {
+	#	if defined(TRUE_PBR)
+			return color;
+	#	else
+			return pow(abs(color), 2.2);
+	#	endif
+		}
 	}
 
 	float3 Light(float3 color)
 	{
-#if defined(TRUE_PBR)
+		if (SharedData::linearLightingSettings.enableLinearLighting) {
+			color = GammaToLinearLuminancePreservingLight(color);
+		}
+	#if defined(TRUE_PBR)
 		return color * Math::PI;  // Compensate for traditional Lambertian diffuse
-#else
+	#else
 		return color;
-#endif
+	#endif
 	}
+
+	float3 LinearLight(float3 color)
+	{
+		if (SharedData::linearLightingSettings.enableLinearLighting) {
+			color = LinearToGamma(color);
+		}
+	#if defined(TRUE_PBR)
+		return color * Math::PI;  // Compensate for traditional Lambertian diffuse
+	#else
+		return color;
+	#endif
+	}
+#endif
 }
 
 #endif  //__COLOR_DEPENDENCY_HLSL__
