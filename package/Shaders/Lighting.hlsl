@@ -2887,7 +2887,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(PHYS_SKY) && !defined(DEFERRED)
 	if (PhysSkyBuffer[0].enable_sky) {
-		psout.Diffuse.xyz = Color::LinearToGamma(Color::GammaToLinear(psout.Diffuse.xyz) * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz);
+		psout.Diffuse.xyz = Color::LinearToGamma(Color::GammaToLinear(psout.Diffuse.xyz) * PhysSkyTrTexture.SampleLevel(LinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(LinearSampler, screenUV, 0).xyz);
 	}
 #	endif
 

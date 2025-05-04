@@ -134,7 +134,9 @@ Texture3D<float4> TexAerialPerspective : register(t3);
 #else
 Texture2D<float4> PhysSkyTrTexture : register(t98);
 Texture2D<float4> PhysSkyLumTexture : register(t99);
+#	if !defined(LOD_LAND_BLEND) && !defined(LODLANDNOISE)
 SamplerState PhysSkyLinearSampler : register(s15);
+#	endif
 
 StructuredBuffer<PhySkyBufferContent> PhysSkyBuffer : register(t100);
 Texture2D<float4> TexTransmittance : register(t101);
