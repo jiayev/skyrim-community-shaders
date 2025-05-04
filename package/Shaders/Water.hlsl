@@ -445,6 +445,10 @@ float3 GetFlowmapNormal(PS_INPUT input, float2 uvShift, float multiplier, float 
 #				include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #			endif
 
+#			if defined(PHYS_SKY)
+#				include "PhysicalSky/PhysicalSky.hlsli"
+#			endif
+
 float3 GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFactor, float3 viewDirection, float depth, uint eyeIndex)
 {
 	float3 normalScalesRcp = rcp(input.NormalsScale.xyz);
@@ -785,7 +789,7 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 #			endif
 }
 
-float3 GetSunColor(float3 normal, float3 viewDirection)
+float3 GetSunColor(float3 normal, float3 viewDirection, uint eyeIndex, PS_INPUT input)
 {
 #			if defined(UNDERWATER)
 	return 0.0.xxx;
@@ -795,7 +799,16 @@ float3 GetSunColor(float3 normal, float3 viewDirection)
 
 	float3 reflectionDirection = reflect(viewDirection, normal);
 	float reflectionMul = exp2(VarAmounts.x * log2(saturate(dot(reflectionDirection, SunDir.xyz))));
+#				if defined(PHYS_SKY)
+	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
+		float3 dirLightColor = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
 
+		dirLightColor *= getDirlightTransmittance(input.WPosition + FrameBuffer::CameraPosAdjust[eyeIndex], PhysSkyLinearSampler);
+
+		dirLightColor = Color::LinearLight(dirLightColor);
+		return reflectionMul * dirLightColor * SunDir.w * DeepColor.w;
+	} else
+#				endif
 	return reflectionMul * SunColor.xyz * SunDir.w * DeepColor.w;
 #			endif
 }
@@ -956,7 +969,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 	float3 finalColor = saturate(1 - input.WPosition.w * 0.002) * ((1 - fresnel) * (diffuseColor - finalSpecularColor)) + finalSpecularColor;
 #				else
-	float3 sunColor = GetSunColor(normal, viewDirection);
+	float3 sunColor = GetSunColor(normal, viewDirection, eyeIndex, input);
 
 	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Interior) && any(sunColor > 0.0)) {
 		sunColor *= ShadowSampling::GetWaterShadow(screenNoise, input.WPosition.xyz, eyeIndex);
@@ -971,6 +984,14 @@ PS_OUTPUT main(PS_INPUT input)
 	} else {
 		finalColor = lerp(finalColorPreFog, Color::GammaToLinear(input.FogParam.xyz) * PosAdjust[eyeIndex].w, Color::GammaToLinear(input.FogParam.w));
 	}
+#						if defined(PHYS_SKY)
+	if (PhysSkyBuffer[0].enable_sky) {
+		if (!SharedData::linearLightingSettings.enableLinearLighting)
+			finalColor = Color::LinearToGamma(Color::GammaToLinear(finalColor) * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz);
+		else
+			finalColor = finalColor * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz;
+	}
+#						endif
 #					else
 	float specularFraction = lerp(1, fresnel, distanceFactor);
 	float3 finalColorPreFog = lerp(diffuseOutput.refractionDiffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
@@ -992,10 +1013,19 @@ PS_OUTPUT main(PS_INPUT input)
 	refractionColor = lerp(refractionColor, fogColor, fogFactor);
 
 	float3 finalColor = lerp(refractionColor, finalColorPreFog, diffuseOutput.refractionMul);
+#						if defined(PHYS_SKY)
+	if (PhysSkyBuffer[0].enable_sky) {
+		if (!SharedData::linearLightingSettings.enableLinearLighting)
+			finalColor = Color::LinearToGamma(Color::GammaToLinear(finalColor) * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz);
+		else
+			finalColor = finalColor * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz;
+	}
+#						endif
 #					endif
 
 #				endif
 #			endif
+
 	psout.Lighting = saturate(float4(finalColor, isSpecular));
 #		endif
 

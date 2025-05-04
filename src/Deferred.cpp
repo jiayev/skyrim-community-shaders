@@ -6,6 +6,7 @@
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/IBL.h"
+#include "Features/PhysicalSky.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -454,12 +455,13 @@ void Deferred::DeferredPasses()
 		dynamicCubemaps->UpdateCubemap();
 
 	auto terrainBlending = globals::features::terrainBlending;
+	auto physSky = globals::features::physicalSky;
 
 	// Deferred Composite
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
-		ID3D11ShaderResourceView* srvs[15]{
+		ID3D11ShaderResourceView* srvs[17]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
@@ -475,6 +477,8 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? nullptr : ssgi_cocg,
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
 			ibl->loaded ? ibl->diffuseIBLTexture->srv.get() : nullptr,
+			physSky->loaded ? physSky->main_view_tr_tex->srv.get() : nullptr,
+			physSky->loaded ? physSky->main_view_lum_tex->srv.get() : nullptr,
 		};
 
 		if (dynamicCubemaps->loaded)
@@ -493,7 +497,7 @@ void Deferred::DeferredPasses()
 
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[15]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[17]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
@@ -699,6 +703,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 
 		if (globals::features::ibl->loaded)
 			defines.push_back({ "IBL", nullptr });
+
+		if (globals::features::physicalSky->loaded)
+			defines.push_back({ "PHYS_SKY", nullptr });
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });

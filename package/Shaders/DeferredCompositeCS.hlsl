@@ -67,6 +67,11 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 }
 #endif
 
+#if defined(PHYS_SKY)
+Texture2D<float3> PhysSkyTrTexture : register(t15);
+Texture2D<float3> PhysSkyLumTexture : register(t16);
+#endif
+
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
 	float2 uv = float2(dispatchID.xy + 0.5) * SharedData::BufferDim.zw;
@@ -202,6 +207,14 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 	if (!SharedData::linearLightingSettings.enableLinearLighting) {
 		color = Color::LinearToGamma(color);
 	}
+
+#if defined(PHYS_SKY)
+	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		color = Color::LinearToGamma(Color::GammaToLinear(color) * PhysSkyTrTexture[dispatchID.xy] + PhysSkyLumTexture[dispatchID.xy]);
+	else
+		color = color * PhysSkyTrTexture[dispatchID.xy] + PhysSkyLumTexture[dispatchID.xy];
+	}
+#endif
 
 #if defined(DEBUG)
 

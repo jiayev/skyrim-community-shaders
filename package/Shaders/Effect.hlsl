@@ -522,6 +522,10 @@ cbuffer PerGeometry : register(b2)
 #		include "Skylighting/Skylighting.hlsli"
 #	endif
 
+#	if defined(PHYS_SKY)
+#		include "PhysicalSky/PhysicalSky.hlsli"
+#	endif
+
 #	include "Common/ShadowSampling.hlsli"
 
 #	if defined(LIGHTING)
@@ -534,6 +538,14 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	if (SharedData::linearLightingSettings.enableLinearLighting) {
 		color = Color::GammaToTrueLinear(color);
 	}
+
+#		if defined(PHYS_SKY)
+	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
+		color = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
+		color *= getDirlightTransmittance(worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex], SampDepthSampler);
+		color = Color::LinearLight(color);
+	}
+#		endif
 
 	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::EffectShadows)) {
 		float3 dirLightColor = SharedData::DirLightColor.xyz * 0.5;
@@ -856,6 +868,16 @@ PS_OUTPUT main(PS_INPUT input)
 	finalColor.xyz *= alpha;
 #	else
 	finalColor *= fogMul;
+#	endif
+#	if defined(PHYS_SKY)
+	if (PhysSkyBuffer[0].enable_sky) {
+		float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
+		float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
+		if (!SharedData::linearLightingSettings.enableLinearLighting)
+			finalColor.xyz = Color::LinearToGamma(Color::GammaToLinear(finalColor.xyz) * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz);
+		else
+			finalColor.xyz = finalColor.xyz * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz;
+	}
 #	endif
 	psout.Diffuse = finalColor;
 #	if defined(LIGHTING) && defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
