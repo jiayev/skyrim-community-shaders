@@ -35,11 +35,7 @@ float3 GetDiffuseIBL(float3 rayDir)
 	float colorR = SphericalHarmonics::SHHallucinateZH3Irradiance(shR, rayDir);
 	float colorG = SphericalHarmonics::SHHallucinateZH3Irradiance(shG, rayDir);
 	float colorB = SphericalHarmonics::SHHallucinateZH3Irradiance(shB, rayDir);
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
-		return Color::LinearToGamma(float3(colorR, colorG, colorB)) / Math::PI;
-	} else {
-		return float3(colorR, colorG, colorB) / Math::PI;
-	}
+	return float3(colorR, colorG, colorB) / Math::PI;
 }
 #endif
 
@@ -78,7 +74,7 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 #if defined(IBL)
 	if (SharedData::iblSettings.EnableDiffuseIBL) {
 		directionalAmbientColor *= SharedData::iblSettings.DALCAmount;
-		directionalAmbientColor += GetDiffuseIBL(-normalWS) * SharedData::iblSettings.DiffuseIBLScale;
+		directionalAmbientColor += Color::Saturation(GetDiffuseIBL(-normalWS), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 	}
 #endif
 
