@@ -165,7 +165,7 @@ Texture2D<float3> PhysSkyLumTexture : register(t16);
 
 		finalIrradiance = lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
 #	else
-		if ((!SharedData::linearLightingSettings.enableLinearLighting) {)
+		if (!SharedData::linearLightingSettings.enableLinearLighting) {
 			float3 specularIrradianceReflections = Color::GammaToLinear(EnvReflectionsTexture.SampleLevel(LinearSampler, R, level));
 		} else {
 			float3 specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level);
