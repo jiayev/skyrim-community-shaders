@@ -840,7 +840,7 @@ float3 GetFacegenBaseColor(float3 rawBaseColor, float2 uv)
 {
 	float3 detailColor = TexDetailSampler.Sample(SampDetailSampler, uv).xyz;
 	detailColor = float3(3.984375, 3.984375, 3.984375) * (float3(0.00392156886, 0, 0.00392156886) + detailColor);
-	tintColor = tintColor * rawBaseColor * 2.0.xxx;
+	float3 tintColor = TexTintSampler.Sample(SampTintSampler, uv).xyz * rawBaseColor * 2.0.xxx;
 	tintColor = tintColor - tintColor * rawBaseColor;
 	return (rawBaseColor * rawBaseColor + tintColor) * detailColor;
 }
@@ -3107,7 +3107,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	} else {
 		color.xyz = color.xyz + specularColor;
 	}
-	color.xyz = Color::LinearToGamma(Color::GammaToLinear(color.xyz) + specularColor);
 	if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z)
 		if (!SharedData::linearLightingSettings.enableLinearLighting) {
 			color.xyz = lerp(color.xyz, input.FogParam.xyz, input.FogParam.w);
