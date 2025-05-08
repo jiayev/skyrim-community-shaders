@@ -16,6 +16,22 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Trajectory,
 	period_orbital, offset_orbital,
 	period_long, offset_long);
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(CloudLayer,
+	bottom,
+	thickness,
+	ndf_scale_or_freq,
+	noise_scale_or_freq,
+	noise_offset_or_speed,
+	power,
+	scatter,
+	absorption,
+	average_density,
+	ms_mult,
+	ms_transmittance_power,
+	ms_height_power,
+	ambient_mult)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(CloudLayerSettings, layer)
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PhysicalSky::Settings::Celestials,
 	sun_disc_color,
 	sun_angular_radius,
@@ -37,6 +53,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PhysicalSky::Settings,
 	multiscatter_sqrt_samples,
 	skyview_step,
 	aerial_perspective_max_dist,
+	shadow_volume_range,
+	ray_march_range,
+	fog_max_step,
+	cloud_max_step,
 	planet_radius,
 	atmos_thickness,
 	ground_albedo,
@@ -77,7 +97,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PhysicalSky::Settings,
 	fog_absorption,
 	fog_decay,
 	fog_bottom,
-	fog_thickness)
+	fog_thickness,
+	cloud_layer)
 
 RE::NiPoint3 Orbit::getDir(float t)
 {
