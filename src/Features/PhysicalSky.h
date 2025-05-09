@@ -117,7 +117,7 @@ struct PhysicalSky : public Feature
 	struct Settings
 	{
 		// GENRERAL
-		bool enable_sky = true;
+		bool enable_sky = false;
 
 		// PERFORMANCE
 		uint transmittance_step = 40;
