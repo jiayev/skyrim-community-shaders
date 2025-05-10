@@ -20,6 +20,7 @@
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/ScreenSpaceGI.h"
+#include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -54,6 +55,7 @@ namespace globals
 		LODBlending* lodBlending = nullptr;
 		InverseSquareLighting* inverseSquareLighting = nullptr;
 		ScreenSpaceGI* screenSpaceGI = nullptr;
+		ScreenSpacePointLightShadows* screenSpacePointLightShadows = nullptr;
 		ScreenSpaceShadows* screenSpaceShadows = nullptr;
 		Skylighting* skylighting = nullptr;
 		SubsurfaceScattering* subsurfaceScattering = nullptr;
@@ -131,6 +133,7 @@ namespace globals
 		features::lodBlending = LODBlending::GetSingleton();
 		features::inverseSquareLighting = InverseSquareLighting::GetSingleton();
 		features::screenSpaceGI = ScreenSpaceGI::GetSingleton();
+		features::screenSpacePointLightShadows = ScreenSpacePointLightShadows::GetSingleton();
 		features::screenSpaceShadows = ScreenSpaceShadows::GetSingleton();
 		features::skylighting = Skylighting::GetSingleton();
 		features::subsurfaceScattering = SubsurfaceScattering::GetSingleton();

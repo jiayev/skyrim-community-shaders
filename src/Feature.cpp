@@ -10,6 +10,7 @@
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/ScreenSpaceGI.h"
+#include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -134,6 +135,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::subsurfaceScattering,
 		globals::features::terrainShadows,
 		globals::features::screenSpaceGI,
+		globals::features::screenSpacePointLightShadows,
 		globals::features::skylighting,
 		globals::features::terrainBlending,
 		globals::features::terrainHelper,
