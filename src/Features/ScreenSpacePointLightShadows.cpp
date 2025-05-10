@@ -6,11 +6,13 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     ScreenSpacePointLightShadows::Settings,
-    Enable)
+    Enable,
+    Steps)
 
 void ScreenSpacePointLightShadows::DrawSettings()
 {   
     ImGui::Checkbox("Enable Screen Space Point Light Shadows", (bool*)&settings.Enable);
+    ImGui::SliderInt("Raymarch Steps", (int*)&settings.Steps, 1, 64, "%d", ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp);
 
     ImGui::Spacing();
     ImGui::Spacing();
@@ -18,12 +20,14 @@ void ScreenSpacePointLightShadows::DrawSettings()
     if (ImGui::CollapsingHeader("Debug")) {
         static int mip = 0;
         ImGui::SliderInt("Debug Mip Level", &mip, 0, (int)s_ShadowMips - 1, "%d", ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp);
-        ImGui::BulletText("ShadowTexture");
-        ImGui::Image(shadowSRVs[mip].get(), { shadowTexture->width * .2f, shadowTexture->height * .2f });
-        ImGui::BulletText("DepthTexture");
-        ImGui::Image(depthSRVs[mip].get(), { depthTexture->width * .2f, depthTexture->height * .2f });
-        ImGui::BulletText("LinearDepthTexture");
-        ImGui::Image(linearDepthSRVs[mip].get(), { linearDepthTexture->width * .2f, linearDepthTexture->height * .2f });
+        ImGui::BulletText("shadowTexture");
+        ImGui::Image(shadowSRVs[mip].get(), { shadowTexture->desc.Width * .2f, shadowTexture->desc.Height * .2f });
+        ImGui::BulletText("depthTexture");
+        ImGui::Image(depthSRVs[mip].get(), { depthTexture->desc.Width * .2f, depthTexture->desc.Height * .2f });
+        ImGui::BulletText("linearDepthTexture");
+        ImGui::Image(linearDepthSRVs[mip].get(), { linearDepthTexture->desc.Width * .8f, linearDepthTexture->desc.Height * .8f });
+        ImGui::BulletText("blurredLinearDepthTexture");
+        ImGui::Image(blurredLinearDepthSRVs[mip].get(), { blurredLinearDepthTexture->desc.Width * .8f, blurredLinearDepthTexture->desc.Height * .8f });
     }
 }
 
@@ -53,14 +57,15 @@ void ScreenSpacePointLightShadows::CompileComputeShaders()
 	};
 
     std::vector<ShaderCompileInfo> shaderInfos = {
-        { &createDepthCS, "CreateDepthCS.hlsl", {} },
-        { &raymarchCS, "RaymarchCS.hlsl", {} },
-        { &depthAwareBlurCS, "DepthAwareBlurCS.hlsl", {} },
+        { &createDepthCS, "createDepthCS.hlsl", {} },
+        { &blurDepthCS, "blurDepthCS.hlsl", {} },
+        { &raymarchCS, "raymarchCS.hlsl", {} },
+        { &depthAwareBlurCS, "depthAwareBlurCS.hlsl", {} },
     };
 
     for (auto& info : shaderInfos) {
         auto path = std::filesystem::path("Data\\Shaders\\ScreenSpacePointLightShadows") / info.filename;
-        if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry)))
+        if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
             info.programPtr->attach(rawPtr);
     }
 }
@@ -72,7 +77,7 @@ void ScreenSpacePointLightShadows::SetupResources()
 
     logger::debug("Creating buffers...");
     {
-        ssplsCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<SSPLSCB>());
+        ssplsCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<SSPLSCB>());
     }
 
     logger::debug("Creating 2D textures...");
@@ -85,17 +90,12 @@ void ScreenSpacePointLightShadows::SetupResources()
 		shadowMask.SRV->GetDesc(&srvDesc);
 
 		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET;
+        texDesc.MiscFlags = 0;
+        texDesc.MipLevels = srvDesc.Texture2D.MipLevels = s_ShadowMips;
 		srvDesc.Format = texDesc.Format;
 
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-			.Format = texDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-
-        shadowTexture = std::make_unique<Texture2D>(texDesc);
+        shadowTexture = eastl::make_unique<Texture2D>(texDesc);
         shadowTexture->CreateSRV(srvDesc);
 
         for (uint i = 0; i < s_ShadowMips; i++) {
@@ -106,31 +106,27 @@ void ScreenSpacePointLightShadows::SetupResources()
 			};
 
             DX::ThrowIfFailed(device->CreateShaderResourceView(shadowTexture->resource.get(), &mipSrvDesc, shadowSRVs[i].put()));
-
             D3D11_UNORDERED_ACCESS_VIEW_DESC mipUavDesc = {
                 .Format = texDesc.Format,
                 .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 				.Texture2D = { .MipSlice = i }
 			};
-
             DX::ThrowIfFailed(device->CreateUnorderedAccessView(shadowTexture->resource.get(), &mipUavDesc, shadowUAVs[i].put()));
         }
 
         auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 
-        depth->texture->GetDesc(&texDesc);
-        depth->depthSRV->GetDesc(&srvDesc);
+        depth.texture->GetDesc(&texDesc);
+        depth.depthSRV->GetDesc(&srvDesc);
 
         texDesc.Format = DXGI_FORMAT_R16_FLOAT;
-        texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-
+        texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET;
+        texDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+        texDesc.MipLevels = srvDesc.Texture2D.MipLevels = s_ShadowMips;
         srvDesc.Format = texDesc.Format;
         
-        depthTexture = std::make_unique<Texture2D>(texDesc);
+        depthTexture = eastl::make_unique<Texture2D>(texDesc);
         depthTexture->CreateSRV(srvDesc);
-
-        linearDepthTexture = std::make_unique<Texture2D>(texDesc);
-        linearDepthTexture->CreateSRV(srvDesc);
 
         for (uint i = 0; i < s_ShadowMips; i++) {
             D3D11_SHADER_RESOURCE_VIEW_DESC mipSrvDesc = {
@@ -139,7 +135,6 @@ void ScreenSpacePointLightShadows::SetupResources()
                 .Texture2D = { .MostDetailedMip = i, .MipLevels = 1 }
             };
             DX::ThrowIfFailed(device->CreateShaderResourceView(depthTexture->resource.get(), &mipSrvDesc, depthSRVs[i].put()));
-            DX::ThrowIfFailed(device->CreateShaderResourceView(linearDepthTexture->resource.get(), &mipSrvDesc, linearDepthSRVs[i].put()));
 
             D3D11_UNORDERED_ACCESS_VIEW_DESC mipUavDesc = {
                 .Format = texDesc.Format,
@@ -147,7 +142,32 @@ void ScreenSpacePointLightShadows::SetupResources()
                 .Texture2D = { .MipSlice = i }
             };
             DX::ThrowIfFailed(device->CreateUnorderedAccessView(depthTexture->resource.get(), &mipUavDesc, depthUAVs[i].put()));
+        }
+
+        texDesc.Width /= 4;
+        texDesc.Height /= 4;
+
+        linearDepthTexture = eastl::make_unique<Texture2D>(texDesc);
+        linearDepthTexture->CreateSRV(srvDesc);
+        blurredLinearDepthTexture = eastl::make_unique<Texture2D>(texDesc);
+        blurredLinearDepthTexture->CreateSRV(srvDesc);
+
+        for (uint i = 0; i < s_ShadowMips; i++) {
+            D3D11_SHADER_RESOURCE_VIEW_DESC mipSrvDesc = {
+                .Format = texDesc.Format,
+                .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+                .Texture2D = { .MostDetailedMip = i, .MipLevels = 1 }
+            };
+            DX::ThrowIfFailed(device->CreateShaderResourceView(linearDepthTexture->resource.get(), &mipSrvDesc, linearDepthSRVs[i].put()));
+            DX::ThrowIfFailed(device->CreateShaderResourceView(blurredLinearDepthTexture->resource.get(), &mipSrvDesc, blurredLinearDepthSRVs[i].put()));
+
+            D3D11_UNORDERED_ACCESS_VIEW_DESC mipUavDesc = {
+                .Format = texDesc.Format,
+                .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+                .Texture2D = { .MipSlice = i }
+            };
             DX::ThrowIfFailed(device->CreateUnorderedAccessView(linearDepthTexture->resource.get(), &mipUavDesc, linearDepthUAVs[i].put()));
+            DX::ThrowIfFailed(device->CreateUnorderedAccessView(blurredLinearDepthTexture->resource.get(), &mipUavDesc, blurredLinearDepthUAVs[i].put()));
         }
     }
 
@@ -155,15 +175,15 @@ void ScreenSpacePointLightShadows::SetupResources()
 	{
 		D3D11_SAMPLER_DESC samplerDesc = {
 			.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-			.AddressU = D3D11_TEXTURE_ADDRESS_BORDER,
-			.AddressV = D3D11_TEXTURE_ADDRESS_BORDER,
-			.AddressW = D3D11_TEXTURE_ADDRESS_BORDER,
+			.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP,
+			.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP,
+			.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP,
 			.MaxAnisotropy = 1,
 			.MinLOD = 0,
 			.MaxLOD = D3D11_FLOAT32_MAX
 		};
 
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &linearSampler.put()));
+		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, linearSampler.put()));
     }
 
     CompileComputeShaders();
@@ -174,6 +194,10 @@ void ScreenSpacePointLightShadows::ClearShaderCache()
     if (createDepthCS) {
         createDepthCS->Release();
         createDepthCS = nullptr;
+    }
+    if (blurDepthCS) {
+        blurDepthCS->Release();
+        blurDepthCS = nullptr;
     }
     if (raymarchCS) {
         raymarchCS->Release();
@@ -189,30 +213,85 @@ void ScreenSpacePointLightShadows::ClearShaderCache()
 
 void ScreenSpacePointLightShadows::DrawShadows()
 {
+    auto state = globals::state;
     auto context = globals::d3d::context;
     auto renderer = globals::game::renderer;
+
+    state->BeginPerfEvent("ScreenSpacePointLightShadows::DrawShadows");
 
     auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
     context->CSSetShaderResources(0, 1, &depth.depthSRV);
 
-    // Create Depth Mips Pass
-    {
-        std::array<ID3D11UnorderedAccessView*, 8> uavs = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-        for (uint i = 0; i < s_ShadowMips; i++) {
-            uavs[i] = depthUAVs[i].get();
-            uavs[i + s_ShadowMips] = linearDepthUAVs[i].get();
-        }
+    std::array<ID3D11SamplerState*, 1> samplers = { linearSampler.get() };
+
+    SSPLSCB cbData = {
+        .MipLevel = 0,
+        .Steps = settings.Steps,
+        .ResX = 0,
+        .ResY = 0
+    };
+    
+    auto cb = ssplsCB->CB();
+    std::array<ID3D11UnorderedAccessView*, 8> uavs = { nullptr };
+
+    // Create Depth and Downsample Linear Depth Textures
+    {   
+        cbData.ResX = depthTexture->desc.Width / 4;
+        cbData.ResY = depthTexture->desc.Height / 4;
+        ssplsCB->Update(cbData);
+        context->CSSetConstantBuffers(1, 1, &cb);
+        
+        uavs.at(0) = depthUAVs[0].get();
+        uavs.at(1) = linearDepthUAVs[0].get();
         context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
         context->CSSetShader(createDepthCS.get(), nullptr, 0);
-        context->CSSetSamplers(0, 1, &linearSampler.get());
+        context->CSSetSamplers(0, 1, samplers.data());
 
-        context->Dispatch(((shadowTexture->desc.Width + 7) >> 3), ((shadowTexture->desc.Height + 7) >> 3), 1);
+        context->Dispatch(((depthTexture->desc.Width - 1) >> 5) + 1, ((depthTexture->desc.Height - 1) >> 5) + 1, 1);
 
         context->CSSetShader(nullptr, nullptr, 0);
-        context->CSSetShaderResources(0, 1, nullptr);
+        ID3D11ShaderResourceView* srv = nullptr;
+        context->CSSetShaderResources(0, 1, &srv);
         uavs.fill(nullptr);
         context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+        ID3D11SamplerState* sampler = nullptr;
+        context->CSSetSamplers(0, 1, &sampler);
     }
+
+    context->GenerateMips(depthTexture->srv.get());
+    context->GenerateMips(linearDepthTexture->srv.get());
+
+    // Blur Linear Depth Map
+    for (uint i = 3; i >= 0; i--) {
+        cbData.MipLevel = i;
+        ID3D11ShaderResourceView* srv = linearDepthSRVs[i].get();
+        context->CSSetShaderResources(0, 1, &srv);
+        uavs.at(0) = blurredLinearDepthUAVs[i].get();
+        context->CSSetUnorderedAccessViews(0, 1, uavs.data(), nullptr);
+        context->CSSetSamplers(0, 1, samplers.data());
+        context->CSSetShader(blurDepthCS.get(), nullptr, 0);
+
+        uint mipWidth = linearDepthTexture->desc.Width >> i;
+        uint mipHeight = linearDepthTexture->desc.Height >> i;
+
+        cbData.ResX = mipWidth;
+        cbData.ResY = mipHeight;
+
+        ssplsCB->Update(cbData);
+
+        context->CSSetConstantBuffers(1, 1, &cb);
+        context->Dispatch(((mipWidth - 1) >> 2) + 1, ((mipHeight - 1) >> 2) + 1, 1);
+
+        context->CSSetShader(nullptr, nullptr, 0);
+        srv = nullptr;
+        context->CSSetShaderResources(0, 1, &srv);
+        uavs.fill(nullptr);
+        context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+        ID3D11SamplerState* sampler = nullptr;
+        context->CSSetSamplers(0, 1, &sampler);
+    }
+
+    state->EndPerfEvent();
 }
 
 void ScreenSpacePointLightShadows::Prepass()
@@ -220,7 +299,7 @@ void ScreenSpacePointLightShadows::Prepass()
     auto context = globals::d3d::context;
 
     float white = 1.0f;
-    context->ClearUnorderedAccessViewFloat(shadowUAVs[0].get(), &white, 0, nullptr);
+    context->ClearUnorderedAccessViewFloat(shadowUAVs[0].get(), &white);
 
     if (globals::features::lightLimitFix->loaded && settings.Enable) {
         DrawShadows();
