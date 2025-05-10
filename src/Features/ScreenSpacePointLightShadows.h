@@ -11,26 +11,29 @@ struct ScreenSpacePointLightShadows : Feature
     virtual inline std::string GetName() override { return "Screen Space Point Light Shadows"; }
     virtual inline std::string GetShortName() override { return "ScreenSpacePointLightShadows"; }
     virtual inline std::string_view GetShaderDefineName() override { return "SSPLS"; }
-    bool HasShaderDefine(RE::BSShader::Type shaderType) override;
+    bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
     constexpr static size_t s_ShadowMips = 4;
 
     struct Settings
     {
         uint Enable = true;
+        uint Steps = 16;
     } settings;
 
     struct alignas(16) SSPLSCB
     {
-        uint Enable;
         uint MipLevel;
-        float2 DynamicRes;
+        uint Steps;
+        uint ResX;
+        uint ResY;
     };
     
     winrt::com_ptr<ID3D11SamplerState> linearSampler = nullptr;
-    Texture2D* shadowTexture = nullptr;
-    Texture2D* depthTexture = nullptr;
-    Texture2D* linearDepthTexture = nullptr;
+    eastl::unique_ptr<Texture2D> shadowTexture = nullptr;
+    eastl::unique_ptr<Texture2D> depthTexture = nullptr;
+    eastl::unique_ptr<Texture2D> linearDepthTexture = nullptr;
+    eastl::unique_ptr<Texture2D> blurredLinearDepthTexture = nullptr;
 
     std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_ShadowMips> shadowSRVs = { nullptr };
     std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_ShadowMips> shadowUAVs = { nullptr };
@@ -38,10 +41,13 @@ struct ScreenSpacePointLightShadows : Feature
     std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_ShadowMips> depthUAVs = { nullptr };
     std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_ShadowMips> linearDepthSRVs = { nullptr };
     std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_ShadowMips> linearDepthUAVs = { nullptr };
+    std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_ShadowMips> blurredLinearDepthSRVs = { nullptr };
+    std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_ShadowMips> blurredLinearDepthUAVs = { nullptr };
 
-    SSPLSCBConstantBuffer* ssplsCB = nullptr;
+    eastl::unique_ptr<ConstantBuffer> ssplsCB = nullptr;
 
     winrt::com_ptr<ID3D11ComputeShader> createDepthCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> blurDepthCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> raymarchCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> depthAwareBlurCS = nullptr;
 
