@@ -25,6 +25,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/ScreenSpaceGI.h"
+#include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
@@ -66,6 +67,7 @@ namespace globals
 		InteriorSunShadows interiorSunShadows{};
 		InverseSquareLighting inverseSquareLighting{};
 		ScreenSpaceGI screenSpaceGI{};
+		ScreenSpacePointLightShadows screenSpacePointLightShadows{};
 		ScreenSpaceShadows screenSpaceShadows{};
 		Skylighting skylighting{};
 		TerrainVariation terrainVariation{};
