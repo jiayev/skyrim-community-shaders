@@ -34,37 +34,7 @@ struct Trajectory
 	RE::NiPoint3 getTangent(float gameDaysPassed);
 };
 
-struct CloudLayer
-{
-	// placement
-	float bottom = 0.f;
-	float thickness = 2.f;
-	// ndf
-	float2 ndf_scale_or_freq = { 16.f, 16.f };  // km
-	// noise
-	float noise_scale_or_freq = 0.2f;     // km^-1
-	float3 noise_offset_or_speed{ 0.f };  // moving speed in settings, offset in game
-
-	float power = 1.0f;
-
-	// density
-	float3 scatter{ 100.f };
-	float3 absorption{ 0.f };
-
-	// visuals
-	float average_density = 0.02f;
-
-	float ms_mult = 5.0f;
-	float ms_transmittance_power = 0.15f;
-	float ms_height_power = 0.7f;
-
-	float ambient_mult = 1.0f;
-};
-
-struct CloudLayerSettings
-{
-	CloudLayer layer;
-};
+//////////////////////////////////////////////////////////////////////////
 
 struct TextureManager
 {
@@ -96,24 +66,59 @@ namespace nlohmann
 	void from_json(const json&, TextureManager&);
 };
 
-struct NdfProvider
+//////////////////////////////////////////////////////////////////////////
+
+struct TexNdfSettings
 {
-	constexpr static uint16_t s_ndf_dim = 256;
-	virtual ID3D11ShaderResourceView* GetNdf() = 0;
-	virtual void DrawUi() = 0;
+	std::string tex_path;
 };
 
-struct FileNdfProvider : public NdfProvider
+using NdfSettings = std::variant<TexNdfSettings>;
+
+struct NdfManager
 {
-	TextureManager* const tex_manager;
+	constexpr static uint16_t s_ndf_dim = 256;
 
-	std::string tex_path;
+	static const char*
+		GetSettingsTypeName(const NdfSettings& ndf_settings);
+	static void
+		DrawNdfSettings(NdfSettings& ndf_settings, TextureManager& tex_manager);
+	ID3D11ShaderResourceView*
+		GetNdf(NdfSettings& ndf_settings, TextureManager& tex_manager);
+};
 
-	inline FileNdfProvider(TextureManager& tex_manager) :
-		tex_manager(&tex_manager) {}
+//////////////////////////////////////////////////////////////////////////
 
-	virtual ID3D11ShaderResourceView* GetNdf() override;
-	virtual void DrawUi() override;
+struct CloudLayer
+{
+	// placement
+	float bottom = 0.f;
+	float thickness = 2.f;
+	// ndf
+	float2 ndf_scale_or_freq = { 16.f, 16.f };  // km
+	// noise
+	float noise_scale_or_freq = 0.2f;     // km^-1
+	float3 noise_offset_or_speed{ 0.f };  // moving speed in settings, offset in game
+
+	float power = 1.0f;
+
+	// density
+	float3 scatter{ 100.f };
+	float3 absorption{ 0.f };
+
+	// visuals
+	float average_density = 0.02f;
+
+	float ms_mult = 5.0f;
+	float ms_transmittance_power = 0.15f;
+	float ms_height_power = 0.7f;
+
+	float ambient_mult = 1.0f;
+};
+
+struct CloudLayerSettings
+{
+	CloudLayer layer;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -366,10 +371,10 @@ struct PhysicalSky : public Feature
 	eastl::unique_ptr<Texture2D> main_view_lum_tex = nullptr;
 	eastl::unique_ptr<Texture3D> shadow_volume_tex = nullptr;
 
-	winrt::com_ptr<ID3D11ShaderResourceView> ndf_tex_srv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> cloud_top_lut_srv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> cloud_bottom_lut_srv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> nubis_noise_srv = nullptr;
+	void LoadNDFTextures();
 
 	TextureManager ndf_tex_manager{ "Cloud Map" };
 	inline auto ListManagers()
@@ -378,7 +383,11 @@ struct PhysicalSky : public Feature
 			&ndf_tex_manager,
 		};
 	}
-	void LoadNDFTextures();
+
+	// Temporary
+	// TODO: per-weather variant and blending
+	NdfSettings ndf_settings;
+	NdfManager ndf_manager;
 
 	winrt::com_ptr<ID3D11ComputeShader> transmittance_program = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> multiscatter_program = nullptr;

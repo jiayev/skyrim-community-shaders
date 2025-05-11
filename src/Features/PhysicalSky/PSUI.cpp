@@ -554,18 +554,18 @@ void PhysicalSky::SettingsClouds()
 	// 		ImGui::EndDisabled();
 	// }
 
-	if (ImGui::CollapsingHeader("Cloud")) {
-		ImGui::PushID("Cloud");
-		CloudLayerEdit(settings.cloud_layer);
-		ImGui::PopID();
-	}
+	CloudLayerEdit(settings.cloud_layer);
+
+	ImGui::SeparatorText("Cloud Map");
+
+	ndf_manager.DrawNdfSettings(ndf_settings, ndf_tex_manager);
 }
 
 void PhysicalSky::SettingsTextures()
 {
 	if (ImGui::Button("Load NDF Textures", { -FLT_MIN, 0 }))
 		LoadNDFTextures();
-	if (ndf_tex_srv && cloud_top_lut_srv && cloud_bottom_lut_srv)
+	if (cloud_top_lut_srv && cloud_bottom_lut_srv)
 		ImGui::Text("NDF Tex Status: Loaded");
 	else
 		ImGui::Text("NDF Tex Status: Incomplete");
