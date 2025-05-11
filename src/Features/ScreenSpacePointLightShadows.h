@@ -18,13 +18,13 @@ struct ScreenSpacePointLightShadows : Feature
     struct Settings
     {
         uint Enable = true;
-        uint Steps = 16;
+        float Scale = 1.0f;
     } settings;
 
     struct alignas(16) SSPLSCB
     {
         uint MipLevel;
-        uint Steps;
+        float Scale;
         uint ResX;
         uint ResY;
     };

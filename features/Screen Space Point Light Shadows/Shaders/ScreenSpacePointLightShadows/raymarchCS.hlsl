@@ -4,7 +4,7 @@
 #include "Common/FrameBuffer.hlsli"
 #include "LightLimitFix/LightLimitFix.hlsli"
 
-Texture2D<float> texblurredLinearDepth : register(t0);
+Texture2D<float4> texblurredLinearDepth : register(t0);
 Texture2D<float> texDepth : register(t1);
 
 RWTexture2D<float4> outShadow : register(u0);
@@ -14,12 +14,14 @@ SamplerState linearSampler : register(s0);
 cbuffer blurBuffer : register(b1)
 {
     uint MipLevel;
-    uint Steps;
+    float Scale;
     uint ResX;
     uint ResY;
 };
 
-#define INV_OCCLUSION_DIST_THRESHOLD 5.f
+#define UNIT_TO_M_SCALED (0.01428f / Scale)
+
+#define INV_OCCLUSION_DIST_THRESHOLD 0.5f
 
 float3 UVDepthToView(float2 uv, float depth, uint a_eyeIndex = 0)
 {
@@ -57,7 +59,6 @@ int GetLevelStartMultipleScale(int mip_level)
     float2 texCoord = (dtid + 0.5) / float2(ResX, ResY);
 
     float depth = texDepth.SampleLevel(linearSampler, texCoord, MipLevel).x;
-    float linearDepth = texblurredLinearDepth.SampleLevel(linearSampler, texCoord, MipLevel).x;
 
     float3 viewPos = UVDepthToView(texCoord, depth);
 
@@ -91,12 +92,13 @@ int GetLevelStartMultipleScale(int mip_level)
         float opacity = 1.0f;
 
         float3 lightPos = light.positionWS[0].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
+        // float3 lightPos = float3(-384,230,202) - FrameBuffer::CameraPosAdjust[0].xyz;
         float3 lightView = FrameBuffer::WorldToView(lightPos);
 
         float3 view_ray_start = viewPos;
         float3 view_ray_end = lightView;
 
-        float3 start_screen_coord = ViewToScreenCoord(viewPos);
+        float3 start_screen_coord = float3(texCoord, depth);
         float3 end_screen_coord = ViewToScreenCoord(lightView);
 
         float total_screen_path = length(end_screen_coord - start_screen_coord);
@@ -104,7 +106,7 @@ int GetLevelStartMultipleScale(int mip_level)
         float3 view_dir = view_ray_end - view_ray_start;
         float3 view_dir_normalize = view_dir / total_screen_path;
 
-        float screen_step = 0.001f * pow(2, MipLevel);
+        float screen_step = 0.001f * pow(2, MipLevel - 1);
 
         float level_path_scale = 0.01;
         float start_offset = max(0.0f, min(total_screen_path, level_path_scale * GetLevelStartMultipleScale(int(max(0, MipLevel)))));
@@ -115,31 +117,31 @@ int GetLevelStartMultipleScale(int mip_level)
         for(float screen_offset = start_offset; screen_offset < end_offset; screen_offset += screen_step)
         {
             float2 curr_screen_coord = start_screen_coord.xy + screen_dir * screen_offset;
-            float3 curr_view_coord = view_ray_start + view_dir * screen_offset;
+            float3 curr_view_coord = view_ray_start + view_dir_normalize * screen_offset;
 
-            float view_step = length(curr_view_coord - prev_view_coord);
+            float view_step = length(curr_view_coord - prev_view_coord) * UNIT_TO_M_SCALED;
             float3 view_start_delta = curr_view_coord - view_ray_start;
             float3 view_end_delta = curr_view_coord - view_ray_end;
             
             // Sample linear depth
-            float3 linear_depth_sample = texblurredLinearDepth.SampleLevel(linearSampler, curr_screen_coord, MipLevel).xxx;
+            float3 linear_depth_sample = texblurredLinearDepth.SampleLevel(linearSampler, curr_screen_coord, 0).xyz;
 
             // Depth mean variance
             float mean = linear_depth_sample.x;
-            float variance = max(linear_depth_sample.y - mean * mean, 1e-7f);    
+            float variance = max(linear_depth_sample.y - mean * mean, 1e-7f);
 
-            float ray_depth = length(curr_view_coord.xyz);
+            float ray_depth = length(curr_view_coord.xyz) * UNIT_TO_M_SCALED;
 
             // Chebyshev
-            float delta = ray_depth - mean;
+            float delta = (ray_depth - mean);
             float probability = 1 - ((delta < 0.0f) ? 1.0f : (variance / (variance + delta * delta)));
             float thick_delta = delta - 100.0f;
             probability -= ((thick_delta > 0.0f) ? 1.0f : (variance / (variance + thick_delta * thick_delta)));
             probability = max(0.0f, probability);
 
             float density = probability * view_step;
-            density /= (1.0f + 0.05f * length(view_start_delta));
-            density *= pow(saturate(length(view_end_delta) * INV_OCCLUSION_DIST_THRESHOLD - 0.5f), 2.0f);
+            density /= (1.0f + 0.05f * length(view_start_delta) * UNIT_TO_M_SCALED);
+            density *= pow(saturate(length(view_end_delta) * UNIT_TO_M_SCALED * INV_OCCLUSION_DIST_THRESHOLD - 0.5f), 2.0f);
             opacity *= exp(-density);
             prev_view_coord = curr_view_coord;
         }
@@ -149,8 +151,10 @@ int GetLevelStartMultipleScale(int mip_level)
         else if (lightIndex == 2) shadow.z = opacity;
         else if (lightIndex == 3) shadow.w = opacity;
 
-        // if (length(texCoord - saturate(end_screen_coord)) < 0.1) shadow = 1;
+        // if (abs(SharedData::GetScreenDepth(depth) - SharedData::GetScreenDepth(end_screen_coord.z)) < 10) shadow = 1;
         // else shadow = 0;
+        // shadow.xyz = end_screen_coord;
+        // shadow.w = 1;
     }
 
     if (MipLevel < 3) {

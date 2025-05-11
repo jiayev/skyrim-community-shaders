@@ -1012,6 +1012,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Skylighting/Skylighting.hlsli"
 #	endif
 
+#	if defined(SSPLS)
+#		include "ScreenSpacePointLightShadows/SSPLS.hlsli"
+#	endif
+
 #	define LinearSampler SampColorSampler
 
 #	include "Common/ShadowSampling.hlsli"
@@ -2216,6 +2220,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			shadowComponent = shadowColor[light.shadowLightIndex];
 			lightShadow *= shadowComponent;
 		}
+
+#			if defined(SSPLS)
+		if (lightIndex < 4 && inWorld) {
+			float SSPLSShadow = ScreenSpacePointLightShadows::GetShadow(LinearSampler, screenUV, lightIndex);
+			lightShadow *= SSPLSShadow;
+		}
+#			endif
 
 		float3 normalizedLightDirection = normalize(lightDirection);
 		float lightAngle = dot(worldSpaceNormal.xyz, normalizedLightDirection.xyz);

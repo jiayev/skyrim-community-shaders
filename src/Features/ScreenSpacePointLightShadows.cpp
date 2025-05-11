@@ -7,12 +7,12 @@
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     ScreenSpacePointLightShadows::Settings,
     Enable,
-    Steps)
+    Scale)
 
 void ScreenSpacePointLightShadows::DrawSettings()
 {   
     ImGui::Checkbox("Enable Screen Space Point Light Shadows", (bool*)&settings.Enable);
-    ImGui::SliderInt("Raymarch Steps", (int*)&settings.Steps, 1, 64, "%d", ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SliderFloat("Raymarch Scale", &settings.Scale, 0.5f, 10.f, "%.2f");
 
     ImGui::Spacing();
     ImGui::Spacing();
@@ -161,6 +161,8 @@ void ScreenSpacePointLightShadows::SetupResources()
 
         texDesc.Width /= 4;
         texDesc.Height /= 4;
+        texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        srvDesc.Format = texDesc.Format;
 
         linearDepthTexture = eastl::make_unique<Texture2D>(texDesc);
         linearDepthTexture->CreateSRV(srvDesc);
@@ -245,7 +247,7 @@ void ScreenSpacePointLightShadows::DrawShadows()
 
     SSPLSCB cbData = {
         .MipLevel = 0,
-        .Steps = settings.Steps,
+        .Scale = settings.Scale,
         .ResX = 0,
         .ResY = 0
     };
