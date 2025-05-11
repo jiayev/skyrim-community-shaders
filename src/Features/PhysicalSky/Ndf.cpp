@@ -15,6 +15,23 @@ const char* NdfManager::GetSettingsTypeName(const NdfSettings& ndf_settings)
 	return std::visit(visitor, ndf_settings);
 }
 
+const char* NdfManager::GetSettingsHint(const NdfSettings& ndf_settings)
+{
+	auto visitor = overloads{
+		[&](const TexNdfSettings&) {
+			return "Read the cloud map from dds textures. More static but you can draw arbitrary shapes.\n"
+				   "The texture should be a Texture2DArray consists of 5 grayscale images:\n"
+				   "1. min height\n"
+				   "2. max height\n"
+				   "3. coverage\n"
+				   "4. bottom type\n"
+				   "5. top type";
+		}
+	};
+
+	return std::visit(visitor, ndf_settings);
+}
+
 void NdfManager::DrawNdfSettings(NdfSettings& ndf_settings, TextureManager& tex_manager)
 {
 	// ndf_selector
@@ -39,6 +56,12 @@ void NdfManager::DrawNdfSettings(NdfSettings& ndf_settings, TextureManager& tex_
 	ImGui::Separator();
 
 	// ndf editor
+	if (ImGui::BeginTable("TexManagers", 1, ImGuiTableFlags_BordersOuter, { -FLT_MIN, 0 })) {
+		ImGui::TableNextColumn();
+		ImGui::TextWrapped(GetSettingsHint(ndf_settings));
+		ImGui::EndTable();
+	}
+
 	auto visitor = overloads{
 		[&](TexNdfSettings& s) {
 			if (ImGui::BeginCombo("Texture Path", s.tex_path.c_str())) {

@@ -81,6 +81,8 @@ struct NdfManager
 
 	static const char*
 		GetSettingsTypeName(const NdfSettings& ndf_settings);
+	static const char*
+		GetSettingsHint(const NdfSettings& ndf_settings);
 	static void
 		DrawNdfSettings(NdfSettings& ndf_settings, TextureManager& tex_manager);
 	ID3D11ShaderResourceView*
