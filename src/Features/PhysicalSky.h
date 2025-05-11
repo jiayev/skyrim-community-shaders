@@ -73,11 +73,21 @@ struct TexNdfSettings
 	std::string tex_path;
 };
 
-using NdfSettings = std::variant<TexNdfSettings>;
+struct CumuliformNdfSettings
+{
+};
+
+using NdfSettings = std::variant<TexNdfSettings, CumuliformNdfSettings>;
 
 struct NdfManager
 {
 	constexpr static uint16_t s_ndf_dim = 256;
+
+	eastl::unique_ptr<Texture2D> tex_ndf_output = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> cumuliform_program = nullptr;
+
+	void SetupResources();
+	void CompileShaders();
 
 	static const char*
 		GetSettingsTypeName(const NdfSettings& ndf_settings);
@@ -85,8 +95,10 @@ struct NdfManager
 		GetSettingsHint(const NdfSettings& ndf_settings);
 	static void
 		DrawNdfSettings(NdfSettings& ndf_settings, TextureManager& tex_manager);
+	void
+		UpdateNdf(const NdfSettings& ndf_settings);
 	ID3D11ShaderResourceView*
-		GetNdf(NdfSettings& ndf_settings, TextureManager& tex_manager);
+		GetNdf(const NdfSettings& ndf_settings, TextureManager& tex_manager);
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -94,24 +106,24 @@ struct NdfManager
 struct CloudLayer
 {
 	// placement
-	float bottom = 0.f;
-	float thickness = 2.f;
+	float bottom = 0.05f;
+	float thickness = 0.4f;
 	// ndf
 	float2 ndf_scale_or_freq = { 16.f, 16.f };  // km
 	// noise
-	float noise_scale_or_freq = 0.2f;     // km^-1
-	float3 noise_offset_or_speed{ 0.f };  // moving speed in settings, offset in game
+	float noise_scale_or_freq = 0.2f;                  // km^-1
+	float3 noise_offset_or_speed{ 0.f, -4.8f, 5.7f };  // moving speed in settings, offset in game
 
 	float power = 1.0f;
 
 	// density
-	float3 scatter{ 100.f };
-	float3 absorption{ 0.f };
+	float3 scatter{ 85.f, 90.f, 95.f };
+	float3 absorption{ 15.f, 10.f, 5.f };
 
 	// visuals
-	float average_density = 0.02f;
+	float average_density = 0.02;
 
-	float ms_mult = 5.0f;
+	float ms_mult = 10.0f;
 	float ms_transmittance_power = 0.15f;
 	float ms_height_power = 0.7f;
 
@@ -388,7 +400,7 @@ struct PhysicalSky : public Feature
 
 	// Temporary
 	// TODO: per-weather variant and blending
-	NdfSettings ndf_settings;
+	NdfSettings ndf_settings = CumuliformNdfSettings{};
 	NdfManager ndf_manager;
 
 	winrt::com_ptr<ID3D11ComputeShader> transmittance_program = nullptr;

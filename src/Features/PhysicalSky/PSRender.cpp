@@ -194,6 +194,7 @@ void PhysicalSky::SetupResources()
 	}
 
 	LoadNDFTextures();
+	ndf_manager.SetupResources();
 
 	CompileComputeShaders();
 }
@@ -244,6 +245,7 @@ void PhysicalSky::ClearShaderCache()
 		*shader = nullptr;
 
 	CompileComputeShaders();
+	ndf_manager.CompileShaders();
 }
 
 void PhysicalSky::Reset()
@@ -256,6 +258,7 @@ void PhysicalSky::Prepass()
 	if (phys_sky_sb_data.enable_sky) {
 		GenerateLuts();
 		RenderShadowMapMainView();
+		ndf_manager.UpdateNdf(ndf_settings);
 	} else {
 		auto context = globals::d3d::context;
 		{
