@@ -34,40 +34,11 @@ struct Trajectory
 	RE::NiPoint3 getTangent(float gameDaysPassed);
 };
 
-struct CloudLayer
-{
-	// placement
-	float bottom = 0.f;
-	float thickness = 2.f;
-	// ndf
-	float2 ndf_scale_or_freq = { 16.f, 16.f };  // km
-	// noise
-	float noise_scale_or_freq = 0.2f;     // km^-1
-	float3 noise_offset_or_speed{ 0.f };  // moving speed in settings, offset in game
-
-	float power = 1.0f;
-
-	// density
-	float3 scatter{ 100.f };
-	float3 absorption{ 0.f };
-
-	// visuals
-	float average_density = 0.02;
-
-	float ms_mult = 5.0f;
-	float ms_transmittance_power = 0.15f;
-	float ms_height_power = 0.7f;
-
-	float ambient_mult = 1.0f;
-};
-
-struct CloudLayerSettings
-{
-	CloudLayer layer;
-};
+//////////////////////////////////////////////////////////////////////////
 
 struct TextureManager
 {
+	std::string name;
 	ankerl::unordered_dense::map<std::string, winrt::com_ptr<ID3D11ShaderResourceView>> tex_list;
 
 	bool LoadTexture(std::filesystem::path path);
@@ -84,7 +55,87 @@ struct TextureManager
 		std::ranges::transform(tex_list, std::back_inserter(retval), [](auto& pair) { return pair.first; });
 		return std::move(retval);
 	}
+
+	std::string ui_path;
+	void DrawUi();
 };
+
+namespace nlohmann
+{
+	void to_json(json&, const TextureManager&);
+	void from_json(const json&, TextureManager&);
+};
+
+//////////////////////////////////////////////////////////////////////////
+
+struct TexNdfSettings
+{
+	std::string tex_path;
+};
+
+struct CumuliformNdfSettings
+{
+};
+
+using NdfSettings = std::variant<TexNdfSettings, CumuliformNdfSettings>;
+
+struct NdfManager
+{
+	constexpr static uint16_t s_ndf_dim = 256;
+
+	eastl::unique_ptr<Texture2D> tex_ndf_output = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> cumuliform_program = nullptr;
+
+	void SetupResources();
+	void CompileShaders();
+
+	static const char*
+		GetSettingsTypeName(const NdfSettings& ndf_settings);
+	static const char*
+		GetSettingsHint(const NdfSettings& ndf_settings);
+	static void
+		DrawNdfSettings(NdfSettings& ndf_settings, TextureManager& tex_manager);
+	void
+		UpdateNdf(const NdfSettings& ndf_settings);
+	ID3D11ShaderResourceView*
+		GetNdf(const NdfSettings& ndf_settings, TextureManager& tex_manager);
+};
+
+//////////////////////////////////////////////////////////////////////////
+
+struct CloudLayer
+{
+	// placement
+	float bottom = 0.05f;
+	float thickness = 0.4f;
+	// ndf
+	float2 ndf_scale_or_freq = { 16.f, 16.f };  // km
+	// noise
+	float noise_scale_or_freq = 0.2f;                  // km^-1
+	float3 noise_offset_or_speed{ 0.f, -4.8f, 5.7f };  // moving speed in settings, offset in game
+
+	float power = 1.0f;
+
+	// density
+	float3 scatter{ 85.f, 90.f, 95.f };
+	float3 absorption{ 15.f, 10.f, 5.f };
+
+	// visuals
+	float average_density = 0.02;
+
+	float ms_mult = 10.0f;
+	float ms_transmittance_power = 0.15f;
+	float ms_height_power = 0.7f;
+
+	float ambient_mult = 1.0f;
+};
+
+struct CloudLayerSettings
+{
+	CloudLayer layer;
+};
+
+//////////////////////////////////////////////////////////////////////////
 
 struct PhysicalSky : public Feature
 {
@@ -334,11 +385,23 @@ struct PhysicalSky : public Feature
 	eastl::unique_ptr<Texture2D> main_view_lum_tex = nullptr;
 	eastl::unique_ptr<Texture3D> shadow_volume_tex = nullptr;
 
-	winrt::com_ptr<ID3D11ShaderResourceView> ndf_tex_srv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> cloud_top_lut_srv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> cloud_bottom_lut_srv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> nubis_noise_srv = nullptr;
 	void LoadNDFTextures();
+
+	TextureManager ndf_tex_manager{ "Cloud Map" };
+	inline auto ListManagers()
+	{
+		return std::array{
+			&ndf_tex_manager,
+		};
+	}
+
+	// Temporary
+	// TODO: per-weather variant and blending
+	NdfSettings ndf_settings = CumuliformNdfSettings{};
+	NdfManager ndf_manager;
 
 	winrt::com_ptr<ID3D11ComputeShader> transmittance_program = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> multiscatter_program = nullptr;
@@ -375,7 +438,6 @@ struct PhysicalSky : public Feature
 	void SettingsClouds();
 	void SettingsCelestials();
 	void SettingsAtmosphere();
-	void SettingsLayers();
 	void SettingsTextures();
 	void SettingsDebug();
 
