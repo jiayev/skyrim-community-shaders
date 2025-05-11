@@ -5,3 +5,4 @@ namespace ScreenSpacePointLightShadows
 {
     Texture2D<float4> SSPLSTexture : register(t56);
 }
+#endif // SSPLS_COMMON
