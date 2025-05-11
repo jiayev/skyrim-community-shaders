@@ -809,7 +809,7 @@ float3 GetSunColor(float3 normal, float3 viewDirection, uint eyeIndex, PS_INPUT 
 		return reflectionMul * dirLightColor * SunDir.w * DeepColor.w;
 	} else
 #				endif
-	return reflectionMul * SunColor.xyz * SunDir.w * DeepColor.w;
+		return reflectionMul * SunColor.xyz * SunDir.w * DeepColor.w;
 #			endif
 }
 #		endif

@@ -327,8 +327,8 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #			endif  // PHYS_SKY
 	psout.Diffuse = float4(color, 1.0);
-#		endif  // DEFERRED
-#	endif      // RENDER_DEPTH
+#		endif      // DEFERRED
+#	endif          // RENDER_DEPTH
 
 	return psout;
 }
