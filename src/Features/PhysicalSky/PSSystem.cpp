@@ -8,6 +8,26 @@
 constexpr float g_game_unit_2_km = 1.428e-5f;
 constexpr float g_km_2_game_unit = 1 / g_game_unit_2_km;
 
+namespace nlohmann
+{
+	void to_json(json& j, const TextureManager& v)
+	{
+		std::vector<std::string> tex_list;
+		std::ranges::transform(v.tex_list, std::back_inserter(tex_list), [](auto kvpair) { return kvpair.first; });
+		j = tex_list;
+	}
+
+	void from_json(const json& j, TextureManager& v)
+	{
+		if (j.empty())
+			return;
+		std::vector<std::string> tex_list = j;
+		for (auto& tex : tex_list)
+			if (!v.LoadTexture(tex))
+				logger::warn("Loading texture manager from config: Texture {} missing.", tex);
+	}
+};
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(WorldspaceInfo, name, bottom_z)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Orbit, azimuth, zenith, drift);
@@ -152,12 +172,25 @@ RE::NiPoint3 Trajectory::getTangent(float gameDaysPassed)
 
 void PhysicalSky::LoadSettings(json& o_json)
 {
-	settings = o_json;
+	auto settings_j = o_json["Settings"];
+	if (!settings_j.empty())
+		settings = settings_j;
+
+	auto textures_j = o_json["Textures"];
+	if (!textures_j.empty())
+		for (auto manager : ListManagers())
+			*manager = textures_j[manager->name];
 }
 
 void PhysicalSky::SaveSettings(json& o_json)
 {
-	o_json = settings;
+	json textures_j{};
+	for (auto manager : ListManagers())
+		textures_j.emplace(manager->name, *manager);
+	o_json = {
+		{ "Settings", settings },
+		{ "Textures", textures_j },
+	};
 }
 
 void PhysicalSky::UpdateBuffer()

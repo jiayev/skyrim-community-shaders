@@ -83,19 +83,66 @@ void CloudLayerEdit(CloudLayerSettings& cloud)
 	ImGui::SliderFloat("Noise Scale", &cloud.layer.noise_scale_or_freq, 0.01f, 5.f, "%.3f km");
 	ImGui::SliderFloat3("Noise Velocity", &cloud.layer.noise_offset_or_speed.x, -30.f, 30.f, "%.3f m/s");
 
-	ImGui::SliderFloat("Post Power", &cloud.layer.power, 0.2, 5, "%.3f");
+	ImGui::SliderFloat("Post Power", &cloud.layer.power, 0.2f, 5.f, "%.3f");
 
 	ImGui::SeparatorText("Lighting");
 
 	ImGui::SliderFloat("Average Density", &cloud.layer.average_density, 0.f, 0.1f, "%.3f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("For approximating shadowing on far away clouds.");
+		ImGui::Text("For approximating shadowing on far away clouds where the shadow map doesn't cover.");
 
 	ImGui::SliderFloat("Multiscatter Mult", &cloud.layer.ms_mult, 0.1f, 10.f, "%.2f");
 	ImGui::SliderFloat("Multiscatter Transmittance Power", &cloud.layer.ms_transmittance_power, 0.1f, 1.f, "%.2f");
 	ImGui::SliderFloat("Multiscatter Altitude Power", &cloud.layer.ms_height_power, 0.2f, 5.f, "%.2f");
 
 	ImGui::SliderFloat("Ambient Strength", &cloud.layer.ambient_mult, 0.f, 5.f);
+}
+
+void TextureManager::DrawUi()
+{
+	ImGui::PushID(name.data());
+
+	ImGui::InputText("Path", &ui_path);
+	if (ImGui::Button("Add New Entry"))
+		LoadTexture(ui_path);
+
+	if (ImGui::BeginTable("TexList", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable)) {
+		ImGui::TableSetupColumn("Path");
+		ImGui::TableSetupColumn("Status");
+		ImGui::TableSetupColumn("Action");
+		ImGui::TableHeadersRow();
+
+		int i = 0;
+		std::string mark_delete = {};
+		for (auto& [path, srv] : tex_list) {
+			ImGui::PushID(i++);
+
+			ImGui::TableNextColumn();
+			ImGui::Text(path.c_str());
+
+			ImGui::TableNextColumn();
+			if (srv.get())
+				ImGui::Text("Loaded");
+			else
+				ImGui::TextDisabled("Not Loaded");
+
+			ImGui::TableNextColumn();
+			if (ImGui::Button("Reload"))
+				LoadTexture(path);
+			ImGui::SameLine();
+			if (ImGui::Button("Delete"))
+				mark_delete = path;
+
+			ImGui::PopID();
+		}
+
+		if (!mark_delete.empty())
+			tex_list.erase(mark_delete);
+
+		ImGui::EndTable();
+	}
+
+	ImGui::PopID();
 }
 
 void PhysicalSky::DrawSettings()
@@ -116,11 +163,6 @@ void PhysicalSky::DrawSettings()
 			ImGui::EndTabItem();
 		}
 
-		// if (ImGui::BeginTabItem("Clouds")) {
-		// 	SettingsClouds();
-		// 	ImGui::EndTabItem();
-		// }
-
 		if (ImGui::BeginTabItem("Celestials")) {
 			SettingsCelestials();
 			ImGui::EndTabItem();
@@ -131,8 +173,8 @@ void PhysicalSky::DrawSettings()
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem("Volumetric Layers")) {
-			SettingsLayers();
+		if (ImGui::BeginTabItem("Clouds")) {
+			SettingsClouds();
 			ImGui::EndTabItem();
 		}
 
@@ -346,41 +388,6 @@ void PhysicalSky::SettingsLighting()
 	}
 }
 
-void PhysicalSky::SettingsClouds()
-{
-	ImGui::TextWrapped("Little fluffy clouds.");
-
-	if (ImGui::CollapsingHeader("Vanilla Clouds")) {
-		ImGui::Checkbox("Enable Vanilla Clouds", &settings.enable_vanilla_clouds);
-
-		if (!(settings.enable_vanilla_clouds && settings.override_dirlight_color)) {
-			ImGui::TextDisabled("Below options require Override Light Color.");
-			ImGui::BeginDisabled();
-		}
-
-		ImGui::SliderFloat("Height", &settings.cloud_height, 0.f, 20.f, "%.2f km");
-		ImGui::SliderFloat("Saturation", &settings.cloud_saturation, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat("Brightness", &settings.cloud_mult, 0.f, 2.f, "%.2f");
-		ImGui::SliderFloat("Atmosphere Scattering", &settings.cloud_atmos_scatter, 0.f, 5.f, "%.2f");
-
-		if (ImGui::TreeNodeEx("Phase Function", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::SliderFloat("Forward Asymmetry", &settings.cloud_phase_g0, 0, 1, "%.2f");
-			ImGui::SliderFloat("Backward Asymmetry", &settings.cloud_phase_g1, -1, 0, "%.2f");
-			ImGui::SliderFloat("Backward Weight", &settings.cloud_phase_w, 0, 1, "%.2f");
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNodeEx("Scattering Heuristics", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::SliderFloat("Alpha", &settings.cloud_alpha_heuristics, -.5, 1, "%.2f");
-			ImGui::SliderFloat("Value", &settings.cloud_color_heuristics, -.5, 1, "%.2f");
-			ImGui::TreePop();
-		}
-
-		if (!(settings.enable_vanilla_clouds && settings.override_dirlight_color))
-			ImGui::EndDisabled();
-	}
-}
-
 void PhysicalSky::SettingsCelestials()
 {
 	auto& celestials = settings.celestials;
@@ -458,6 +465,19 @@ void PhysicalSky::SettingsAtmosphere()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("The thickness of atmosphere that contributes to lighting.");
 
+	if (ImGui::CollapsingHeader("Fog")) {
+		ImGui::PushID("Fog");
+		ImGui::ColorEdit3("Scatter", &settings.fog_scatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3("Absorption", &settings.fog_absorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::SliderFloat("Height Decay", &settings.fog_decay, 0.1f, 30.f);
+		ImGui::SliderFloat("Layer Offset", &settings.fog_bottom, 0.f, 2.f, "%.3f km");
+		ImGui::SliderFloat("Layer Height", &settings.fog_thickness, 0.f, 1.f, "%.3f km");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("For optimization purposes.");
+		ImGui::SliderFloat("Ambient Strength", &settings.fog_ambient_mult, 0.f, 5.f);
+		ImGui::PopID();
+	}
+
 	if (ImGui::CollapsingHeader("Air Molecules (Rayleigh)")) {
 		ImGui::PushID("Rayleigh");
 		ImGui::TextWrapped(
@@ -500,24 +520,39 @@ void PhysicalSky::SettingsAtmosphere()
 	}
 }
 
-void PhysicalSky::SettingsLayers()
+void PhysicalSky::SettingsClouds()
 {
-	ImGui::TextWrapped("Volumetric layers. Cloud, fog, mist, smog, toxic volcanic ash cloud, etc.");
+	ImGui::TextWrapped("Little fluffy clouds.");
 
-	if (ImGui::CollapsingHeader("Fog")) {
-		ImGui::ColorEdit3("Scatter", &settings.fog_scatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-		ImGui::ColorEdit3("Absorption", &settings.fog_absorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-		ImGui::SliderFloat("Height Decay", &settings.fog_decay, 0.1f, 30.f);
-		ImGui::SliderFloat("Layer Offset", &settings.fog_bottom, 0.f, 2.f, "%.3f km");
-		ImGui::SliderFloat("Layer Height", &settings.fog_thickness, 0.f, 1.f, "%.3f km");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("For optimization purposes.");
-		ImGui::SliderFloat("Ambient Strength", &settings.fog_ambient_mult, 0.f, 5.f);
-	}
+	// if (ImGui::CollapsingHeader("Vanilla Clouds")) {
+	// 	ImGui::Checkbox("Enable Vanilla Clouds", &settings.enable_vanilla_clouds);
 
-	if (ImGui::CollapsingHeader("Vanilla Clouds")) {
-		ImGui::Checkbox("Enable Vanilla Clouds", &settings.enable_vanilla_clouds);
-	}
+	// 	if (!(settings.enable_vanilla_clouds && settings.override_dirlight_color)) {
+	// 		ImGui::TextDisabled("Below options require Override Light Color.");
+	// 		ImGui::BeginDisabled();
+	// 	}
+
+	// 	ImGui::SliderFloat("Height", &settings.cloud_height, 0.f, 20.f, "%.2f km");
+	// 	ImGui::SliderFloat("Saturation", &settings.cloud_saturation, 0.f, 1.f, "%.2f");
+	// 	ImGui::SliderFloat("Brightness", &settings.cloud_mult, 0.f, 2.f, "%.2f");
+	// 	ImGui::SliderFloat("Atmosphere Scattering", &settings.cloud_atmos_scatter, 0.f, 5.f, "%.2f");
+
+	// 	if (ImGui::TreeNodeEx("Phase Function", ImGuiTreeNodeFlags_DefaultOpen)) {
+	// 		ImGui::SliderFloat("Forward Asymmetry", &settings.cloud_phase_g0, 0, 1, "%.2f");
+	// 		ImGui::SliderFloat("Backward Asymmetry", &settings.cloud_phase_g1, -1, 0, "%.2f");
+	// 		ImGui::SliderFloat("Backward Weight", &settings.cloud_phase_w, 0, 1, "%.2f");
+	// 		ImGui::TreePop();
+	// 	}
+
+	// 	if (ImGui::TreeNodeEx("Scattering Heuristics", ImGuiTreeNodeFlags_DefaultOpen)) {
+	// 		ImGui::SliderFloat("Alpha", &settings.cloud_alpha_heuristics, -.5, 1, "%.2f");
+	// 		ImGui::SliderFloat("Value", &settings.cloud_color_heuristics, -.5, 1, "%.2f");
+	// 		ImGui::TreePop();
+	// 	}
+
+	// 	if (!(settings.enable_vanilla_clouds && settings.override_dirlight_color))
+	// 		ImGui::EndDisabled();
+	// }
 
 	if (ImGui::CollapsingHeader("Cloud")) {
 		ImGui::PushID("Cloud");
@@ -571,49 +606,19 @@ void PhysicalSky::SettingsTextures()
 		ImGui::TreePop();
 	}
 
-	// ImGui::SeparatorText("Texture List");
-	// {
-	// 	static std::string filename = "Data\\Textures\\PhysicalSky\\noise.dds";
-	// 	ImGui::InputText("Path", &filename);
-	// 	if (ImGui::Button("Add New Entry"))
-	// 		noise_tex_manager.LoadTexture(filename);
+	ImGui::SeparatorText("Texture Managers");
 
-	// 	if (ImGui::BeginTable("TexList", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable)) {
-	// 		ImGui::TableSetupColumn("Path");
-	// 		ImGui::TableSetupColumn("Status");
-	// 		ImGui::TableSetupColumn("Action");
-	// 		ImGui::TableHeadersRow();
+	const auto managers = ListManagers();
+	static auto manager_choice = *ListManagers().begin();
 
-	// 		int i = 0;
-	// 		std::string mark_delete = {};
-	// 		for (auto& [path, srv] : noise_tex_manager.tex_list) {
-	// 			ImGui::PushID(i++);
-
-	// 			ImGui::TableNextColumn();
-	// 			ImGui::Text(path.c_str());
-
-	// 			ImGui::TableNextColumn();
-	// 			if (srv.get())
-	// 				ImGui::Text("Loaded");
-	// 			else
-	// 				ImGui::TextDisabled("Not Loaded");
-
-	// 			ImGui::TableNextColumn();
-	// 			if (ImGui::Button("Reload"))
-	// 				noise_tex_manager.LoadTexture(path);
-	// 			ImGui::SameLine();
-	// 			if (ImGui::Button("Delete"))
-	// 				mark_delete = path;
-
-	// 			ImGui::PopID();
-	// 		}
-
-	// 		if (!mark_delete.empty())
-	// 			noise_tex_manager.tex_list.erase(mark_delete);
-
-	// 		ImGui::EndTable();
-	// 	}
-	// }
+	if (ImGui::BeginTable("TexManagers", 3, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersOuter, { -FLT_MIN, 0 })) {
+		for (auto manager : managers) {
+			ImGui::TableNextColumn();
+			ImGui::RadioButton(manager->name.data(), manager == manager_choice);
+		}
+		ImGui::EndTable();
+	}
+	manager_choice->DrawUi();
 }
 
 void PhysicalSky::SettingsDebug()

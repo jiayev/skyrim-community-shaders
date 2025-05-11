@@ -52,7 +52,7 @@ struct CloudLayer
 	float3 absorption{ 0.f };
 
 	// visuals
-	float average_density = 0.02;
+	float average_density = 0.02f;
 
 	float ms_mult = 5.0f;
 	float ms_transmittance_power = 0.15f;
@@ -68,6 +68,7 @@ struct CloudLayerSettings
 
 struct TextureManager
 {
+	std::string name;
 	ankerl::unordered_dense::map<std::string, winrt::com_ptr<ID3D11ShaderResourceView>> tex_list;
 
 	bool LoadTexture(std::filesystem::path path);
@@ -84,7 +85,38 @@ struct TextureManager
 		std::ranges::transform(tex_list, std::back_inserter(retval), [](auto& pair) { return pair.first; });
 		return std::move(retval);
 	}
+
+	std::string ui_path;
+	void DrawUi();
 };
+
+namespace nlohmann
+{
+	void to_json(json&, const TextureManager&);
+	void from_json(const json&, TextureManager&);
+};
+
+struct NdfProvider
+{
+	constexpr static uint16_t s_ndf_dim = 256;
+	virtual ID3D11ShaderResourceView* GetNdf() = 0;
+	virtual void DrawUi() = 0;
+};
+
+struct FileNdfProvider : public NdfProvider
+{
+	TextureManager* const tex_manager;
+
+	std::string tex_path;
+
+	inline FileNdfProvider(TextureManager& tex_manager) :
+		tex_manager(&tex_manager) {}
+
+	virtual ID3D11ShaderResourceView* GetNdf() override;
+	virtual void DrawUi() override;
+};
+
+//////////////////////////////////////////////////////////////////////////
 
 struct PhysicalSky : public Feature
 {
@@ -338,6 +370,14 @@ struct PhysicalSky : public Feature
 	winrt::com_ptr<ID3D11ShaderResourceView> cloud_top_lut_srv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> cloud_bottom_lut_srv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> nubis_noise_srv = nullptr;
+
+	TextureManager ndf_tex_manager{ "Cloud Map" };
+	inline auto ListManagers()
+	{
+		return std::array{
+			&ndf_tex_manager,
+		};
+	}
 	void LoadNDFTextures();
 
 	winrt::com_ptr<ID3D11ComputeShader> transmittance_program = nullptr;
@@ -375,7 +415,6 @@ struct PhysicalSky : public Feature
 	void SettingsClouds();
 	void SettingsCelestials();
 	void SettingsAtmosphere();
-	void SettingsLayers();
 	void SettingsTextures();
 	void SettingsDebug();
 
