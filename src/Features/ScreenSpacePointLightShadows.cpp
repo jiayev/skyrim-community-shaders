@@ -238,6 +238,8 @@ void ScreenSpacePointLightShadows::DrawShadows()
     auto context = globals::d3d::context;
     auto renderer = globals::game::renderer;
 
+    auto llf = globals::features::lightLimitFix;
+
     state->BeginPerfEvent("ScreenSpacePointLightShadows::DrawShadows");
 
     auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
@@ -347,6 +349,15 @@ void ScreenSpacePointLightShadows::DrawShadows()
             context->Flush();
         }
 
+        ID3D11ShaderResourceView* views[3]{};
+        views[0] = llf->lights->srv.get();
+        views[1] = llf->lightIndexList->srv.get();
+        views[2] = llf->lightGrid->srv.get();
+        context->CSSetShaderResources(35, ARRAYSIZE(views), views);
+
+        ID3D11Buffer* buffer = { llf->strictLightDataCB->CB() };
+		context->CSSetConstantBuffers(3, 1, &buffer);
+
         // Raymarch
         srvs.at(0) = blurredLinearDepthTexture->srv.get();
         srvs.at(1) = depthTexture->srv.get();
@@ -361,8 +372,15 @@ void ScreenSpacePointLightShadows::DrawShadows()
         context->CSSetShader(nullptr, nullptr, 0);
         srvs.fill(nullptr);
         context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        views[0] = nullptr;
+        views[1] = nullptr;
+        views[2] = nullptr;
+        context->CSSetShaderResources(35, ARRAYSIZE(views), views);
+        buffer = nullptr;
+        context->CSSetConstantBuffers(3, 1, &buffer);
         uav = nullptr;
         context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+
 
         // Depthaware Blur
         srvs.at(0) = depthSRVs[i].get();
@@ -393,6 +411,9 @@ void ScreenSpacePointLightShadows::DrawShadows()
 void ScreenSpacePointLightShadows::Prepass()
 {
     auto context = globals::d3d::context;
+
+    float white[4] = { 1, 1, 1, 1 };
+	context->ClearUnorderedAccessViewFloat(shadowTexture->uav.get(), white);
 
     if (globals::features::lightLimitFix->loaded && settings.Enable) {
         DrawShadows();
