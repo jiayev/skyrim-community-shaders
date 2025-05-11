@@ -90,7 +90,7 @@ int GetLevelStartMultipleScale(int mip_level)
 
         float opacity = 1.0f;
 
-        float3 lightPos = light.positionWS[0].xyz - ViewToWorld(float3(0, 0, 0));
+        float3 lightPos = light.positionWS[0].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
         float3 lightView = FrameBuffer::WorldToView(lightPos);
 
         float3 view_ray_start = viewPos;
@@ -148,12 +148,15 @@ int GetLevelStartMultipleScale(int mip_level)
         else if (lightIndex == 1) shadow.y = opacity;
         else if (lightIndex == 2) shadow.z = opacity;
         else if (lightIndex == 3) shadow.w = opacity;
+
+        // if (length(texCoord - saturate(end_screen_coord)) < 0.1) shadow = 1;
+        // else shadow = 0;
     }
 
-    // if (MipLevel < 3) {
-    //     float4 lastShadow = outShadow[dtid];
-    //     shadow = shadow * lastShadow;
-    // }
+    if (MipLevel < 3) {
+        float4 lastShadow = outShadow[dtid];
+        shadow = shadow * lastShadow;
+    }
 
     outShadow[dtid] = shadow;
 }
