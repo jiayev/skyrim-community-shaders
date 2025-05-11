@@ -39,6 +39,7 @@ void Feature::Load(json& o_json)
 			RestoreDefaultSettings();
 		}
 	} else {
+		logger::info("Loading default settings for {}", GetName());
 		RestoreDefaultSettings();
 	}
 
