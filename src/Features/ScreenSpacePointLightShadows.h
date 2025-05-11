@@ -34,6 +34,7 @@ struct ScreenSpacePointLightShadows : Feature
     eastl::unique_ptr<Texture2D> depthTexture = nullptr;
     eastl::unique_ptr<Texture2D> linearDepthTexture = nullptr;
     eastl::unique_ptr<Texture2D> blurredLinearDepthTexture = nullptr;
+    eastl::unique_ptr<Texture2D> blurredShadowTexture = nullptr;
 
     std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_ShadowMips> shadowSRVs = { nullptr };
     std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_ShadowMips> shadowUAVs = { nullptr };
@@ -43,6 +44,8 @@ struct ScreenSpacePointLightShadows : Feature
     std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_ShadowMips> linearDepthUAVs = { nullptr };
     std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_ShadowMips> blurredLinearDepthSRVs = { nullptr };
     std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_ShadowMips> blurredLinearDepthUAVs = { nullptr };
+    std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_ShadowMips> blurredShadowSRVs = { nullptr };
+    std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_ShadowMips> blurredShadowUAVs = { nullptr };
 
     eastl::unique_ptr<ConstantBuffer> ssplsCB = nullptr;
 
@@ -50,6 +53,7 @@ struct ScreenSpacePointLightShadows : Feature
     winrt::com_ptr<ID3D11ComputeShader> blurDepthCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> raymarchCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> depthAwareBlurCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> depthAwareUpscaleCS = nullptr;
 
     virtual void SetupResources() override;
 
