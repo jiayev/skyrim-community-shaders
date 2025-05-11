@@ -4,6 +4,8 @@
 #include "Shadercache.h"
 #include "State.h"
 
+#include "ScreenSpacePointLightShadows.h"
+
 static constexpr uint CLUSTER_MAX_LIGHTS = 256;
 static constexpr uint MAX_LIGHTS = 1024;
 
@@ -372,6 +374,11 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 	if (frameChecker.IsNewFrame()) {
 		ID3D11Buffer* buffer = { strictLightDataCB->CB() };
 		context->PSSetConstantBuffers(3, 1, &buffer);
+
+		if (auto sspls = globals::features::screenSpacePointLightShadows) {
+			if (sspls->settings.Enable && sspls->loaded)
+				sspls->DrawShadows();
+		}
 	}
 }
 
