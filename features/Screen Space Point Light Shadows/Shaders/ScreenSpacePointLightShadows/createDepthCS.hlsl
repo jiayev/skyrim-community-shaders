@@ -12,7 +12,7 @@ SamplerState linearSampler : register(s0);
 cbuffer blurBuffer : register(b1)
 {
     uint MipLevel;
-    uint Scale;
+    float Scale;
     uint ResX;
     uint ResY;
 };
