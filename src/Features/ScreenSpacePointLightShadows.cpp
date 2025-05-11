@@ -232,15 +232,13 @@ void ScreenSpacePointLightShadows::ClearShaderCache()
     CompileComputeShaders();
 }
 
-void ScreenSpacePointLightShadows::DrawShadows()
+void ScreenSpacePointLightShadows::PrepareDepth()
 {
     auto state = globals::state;
     auto context = globals::d3d::context;
     auto renderer = globals::game::renderer;
 
-    auto llf = globals::features::lightLimitFix;
-
-    state->BeginPerfEvent("ScreenSpacePointLightShadows::DrawShadows");
+    state->BeginPerfEvent("ScreenSpacePointLightShadows::PrepareDepth");
 
     auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
     context->CSSetShaderResources(0, 1, &depth.depthSRV);
@@ -314,6 +312,33 @@ void ScreenSpacePointLightShadows::DrawShadows()
         ID3D11SamplerState* sampler = nullptr;
         context->CSSetSamplers(0, 1, &sampler);
     }
+
+    cb = nullptr;
+    context->CSSetConstantBuffers(1, 1, &cb);
+
+    state->EndPerfEvent();
+}
+
+
+void ScreenSpacePointLightShadows::DrawShadows()
+{
+    auto state = globals::state;
+    auto context = globals::d3d::context;
+
+    auto llf = globals::features::lightLimitFix;
+
+    state->BeginPerfEvent("ScreenSpacePointLightShadows::DrawShadows");
+
+    std::array<ID3D11SamplerState*, 1> samplers = { linearSampler.get() };
+
+    SSPLSCB cbData = {
+        .MipLevel = 0,
+        .Scale = settings.Scale,
+        .ResX = 0,
+        .ResY = 0
+    };
+    
+    auto cb = ssplsCB->CB();
 
     std::array<ID3D11ShaderResourceView*, 2> srvs = { nullptr, nullptr };
 
@@ -406,6 +431,9 @@ void ScreenSpacePointLightShadows::DrawShadows()
     context->CSSetConstantBuffers(1, 1, &cb);
 
     state->EndPerfEvent();
+
+    auto view = shadowSRVs[0].get();
+    context->PSSetShaderResources(56, 1, &view);
 }
 
 void ScreenSpacePointLightShadows::Prepass()
@@ -416,10 +444,7 @@ void ScreenSpacePointLightShadows::Prepass()
 	context->ClearUnorderedAccessViewFloat(shadowTexture->uav.get(), white);
 
     if (globals::features::lightLimitFix->loaded && settings.Enable) {
-        DrawShadows();
+        PrepareDepth();
     }
-
-    auto view = shadowSRVs[0].get();
-    context->PSSetShaderResources(56, 1, &view);
 }
 
