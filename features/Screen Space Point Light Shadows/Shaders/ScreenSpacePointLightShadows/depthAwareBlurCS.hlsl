@@ -27,7 +27,7 @@ cbuffer blurBuffer : register(b1)
     float4 sum_data = 0;
     float sum_weight = 0;
 
-    float center_view_depth = texDepth.SampleLevel(linearSampler, texCoord, 0).x;
+    float center_view_depth = SharedData::GetScreenDepth(texDepth.SampleLevel(linearSampler, texCoord, 0).x);
 
     for(int x = -radius; x < (radius + 1); x++)
     {
