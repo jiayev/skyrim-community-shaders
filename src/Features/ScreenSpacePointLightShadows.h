@@ -65,6 +65,7 @@ struct ScreenSpacePointLightShadows : Feature
 
     void CompileComputeShaders();
 
+    void PrepareDepth();
     void DrawShadows();
 
 	virtual void LoadSettings(json& o_json) override;
