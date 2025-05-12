@@ -68,7 +68,7 @@ const char* NdfManager::GetSettingsHint(const NdfSettings& ndf_settings)
 	auto visitor = overloads{
 		[&](const TexNdfSettings&) {
 			return "Read the cloud map from dds textures. More static but you can draw arbitrary shapes.\n"
-				   "The texture should be a Texture2DArray consists of 5 grayscale images:\n"
+				   "The texture should be a 256x256 Texture2DArray consists of 5 grayscale images:\n"
 				   "1. min height\n"
 				   "2. max height\n"
 				   "3. coverage\n"
@@ -76,7 +76,7 @@ const char* NdfManager::GetSettingsHint(const NdfSettings& ndf_settings)
 				   "5. top type";
 		},
 		[&](const CumuliformNdfSettings&) {
-			return "A versatile cloud map generator that gets you from billowy cumulus to thick stratus sheets.";
+			return "A simple-yet-versatile cloud map generator that gets you from billowy cumulus to thick stratus sheets.";
 		}
 	};
 
@@ -127,7 +127,7 @@ void NdfManager::DrawNdfSettings(NdfSettings& ndf_settings, TextureManager& tex_
 				ImGui::TextColored({ 1, 0, 0, 1 }, "Failed to load texture.");
 		},
 		[&](CumuliformNdfSettings& s) {
-			constexpr uint pmin = 5;
+			constexpr uint pmin = 2;
 			constexpr uint pmax = 50;
 			ImGui::SliderScalarN("Layer 1 - Frequency", ImGuiDataType_U32, (void*)&s.scale0.x, 2, &pmin, &pmax, "%u");
 			ImGui::SliderFloat2("Layer 1 - Velocity", &s.offset0.x, -100.f, 100.f, "%.1f");
