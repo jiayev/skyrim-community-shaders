@@ -127,16 +127,23 @@ void NdfManager::DrawNdfSettings(NdfSettings& ndf_settings, TextureManager& tex_
 				ImGui::TextColored({ 1, 0, 0, 1 }, "Failed to load texture.");
 		},
 		[&](CumuliformNdfSettings& s) {
-			uint pmin = 5;
-			uint pmax = 50;
+			constexpr uint pmin = 5;
+			constexpr uint pmax = 50;
 			ImGui::SliderScalarN("Layer 1 - Frequency", ImGuiDataType_U32, (void*)&s.scale0.x, 2, &pmin, &pmax, "%u");
 			ImGui::SliderFloat2("Layer 1 - Velocity", &s.offset0.x, -100.f, 100.f, "%.1f");
+			ImGui::SliderAngle("Layer 1 - Rotation", &s.rot0, 0.f, 360.f);
+
 			ImGui::SliderScalarN("Layer 2 - Frequency", ImGuiDataType_U32, (void*)&s.scale1.x, 2, &pmin, &pmax, "%u");
-			ImGui::SliderFloat2("Layer 2 - Velocity", &s.offset1.x, -100.f, 100.f, "%.5f");
+			ImGui::SliderFloat2("Layer 2 - Velocity", &s.offset1.x, -100.f, 100.f, "%.1f");
+			ImGui::SliderAngle("Layer 2 - Rotation", &s.rot1, 0.f, 360.f);
+
 			ImGui::SliderScalarN("Layer 3 - Frequency", ImGuiDataType_U32, (void*)&s.scale2.x, 2, &pmin, &pmax, "%u");
-			ImGui::SliderFloat2("Layer 3 - Velocity", &s.offset2.x, -100.f, 100.f, "%.5f");
-			ImGui::SliderFloat2("Clip Range", &s.clip_range.x, 0, 1, "%.2f");
+			ImGui::SliderFloat2("Layer 3 - Velocity", &s.offset2.x, -100.f, 100.f, "%.1f");
+			ImGui::SliderAngle("Layer 3 - Rotation", &s.rot2, 0.f, 360.f);
+
+			ImGui::SliderFloat2("Coverage Clamping", &s.clip_range.x, 0, 1, "%.2f");
 			ImGui::SliderFloat("Power", &s.power, 0.2f, 5, "%.2f");
+			ImGui::SliderFloat("Bottom Type", &s.wispiness, 0.f, 1.f, "%.2f");
 		},
 		[&](auto&) {}
 	};

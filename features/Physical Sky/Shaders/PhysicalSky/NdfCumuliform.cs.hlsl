@@ -17,8 +17,19 @@ cbuffer CB : register(b1)
     float2 offset2;
     float2 clip_range;
     float power;
-	float _pad;
+	float wispiness;
+    float rot0;
+    float rot1;
+    float rot2;
+    float _pad;
 };
+
+float2x2 rotationMatrix(float angle)
+{
+	float2 sin_cos;
+	sincos(angle, sin_cos.y, sin_cos.x);
+	return float2x2(sin_cos.x, sin_cos.y, -sin_cos.y, sin_cos.x);
+}
 
 float2 hash22(int2 seed)
 {
@@ -52,21 +63,24 @@ float Worley(float2 uv, uint2 freq)
 	RWTexOutput.GetDimensions(dims.x, dims.y, dims.z);
 	float2 uv = (tid + 0.5) / dims.xy;
 
-	float2 uv0 = uv * scale0 + offset0;
+    float2x2 rotmat0 = rotationMatrix(rot0);
+	float2 uv0 = mul(rotmat0, uv * scale0) + offset0;
 	float noise0 =
 		Worley(uv0 + Random::R2Modified(0) * 100, scale0) * .625 +
 		Worley(uv0 * 2 + Random::R2Modified(1) * 100, scale0 * 2) * .25 +
 		Worley(uv0 * 4 + Random::R2Modified(2) * 100, scale0 * 4) * .125;
 	noise0 = 1 - noise0;
 
-	float2 uv1 = uv * scale1 + offset1;
+    float2x2 rotmat1 = rotationMatrix(rot1);
+	float2 uv1 = mul(rotmat1, uv * scale1) + offset1;
 	float noise1 =
 		Worley(uv1 + Random::R2Modified(3) * 100, scale1) * .625 +
 		Worley(uv1 * 2 + Random::R2Modified(4) * 100, scale1 * 2) * .25 +
 		Worley(uv1 * 4 + Random::R2Modified(5) * 100, scale1 * 4) * .125;
 	noise1 = 1 - noise1;
 
-	float2 uv2 = uv * scale2 + offset2;
+    float2x2 rotmat2 = rotationMatrix(rot2);
+	float2 uv2 = mul(rotmat2, uv * scale2) + offset2;
 	float noise2 =
 		Worley(uv2 + Random::R2Modified(6) * 100, scale2) * .625 +
 		Worley(uv2 * 2 + Random::R2Modified(7) * 100, scale2 * 2) * .25 +
@@ -75,9 +89,9 @@ float Worley(float2 uv, uint2 freq)
 	float noise = noise0 * noise1 * noise2;
     noise = saturate((noise - clip_range.x) / (clip_range.y - clip_range.x));
 
-	RWTexOutput[uint3(tid, 0)] = 0; // min_h
-	RWTexOutput[uint3(tid, 1)] = 1; // max_h
+	RWTexOutput[uint3(tid, 0)] = 0.; // min_h
+	RWTexOutput[uint3(tid, 1)] = 1.; // max_h
 	RWTexOutput[uint3(tid, 2)] = pow(noise, power); // coverage
 	RWTexOutput[uint3(tid, 3)] = noise; // cloud_type
-	RWTexOutput[uint3(tid, 4)] = 0; // bottom_type
+	RWTexOutput[uint3(tid, 4)] = wispiness; // bottom_type
 }

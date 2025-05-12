@@ -76,13 +76,17 @@ struct TexNdfSettings
 struct CumuliformNdfSettings
 {
 	DirectX::XMUINT2 scale0 = { 10, 10 };
-	float2 offset0 = { 1.f, 1.f };  // speed in c++, offset in shader
+	float2 offset0 = { 3.f, 3.f };  // speed in c++, offset in shader
 	DirectX::XMUINT2 scale1 = { 20, 20 };
-	float2 offset1 = { 2.f, 2.f };
+	float2 offset1 = { 6.f, 6.f };
 	DirectX::XMUINT2 scale2 = { 40, 40 };
-	float2 offset2 = { 8.f, 8.f };
+	float2 offset2 = { 24.f, 24.f };
 	float2 clip_range = { 0.4f, 1.f };
-	float power = { 0.7f };
+	float power = 0.7f;
+	float wispiness = 0.1f;
+	float rot0 = 1.f;
+	float rot1 = 2.f;
+	float rot2 = 3.f;
 	float _pad;
 };
 
@@ -116,7 +120,7 @@ struct NdfManager
 struct CloudLayer
 {
 	// placement
-	float bottom = 0.1f;
+	float bottom = 0.2f;
 	float thickness = 0.3f;
 	// ndf
 	float2 ndf_scale_or_freq = { 16.f, 16.f };  // km
