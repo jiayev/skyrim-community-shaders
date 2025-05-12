@@ -9,14 +9,14 @@ RWTexture2DArray<unorm float> RWTexOutput : register(u0);
 
 cbuffer CB : register(b1)
 {
-    uint2 scale0;
-    float2 offset0;
-    uint2 scale1;
-    float2 offset1;
-    uint2 scale2;
-    float2 offset2;
-    float2 clip_range;
-    float power;
+	uint2 scale0;
+	float2 offset0;
+	uint2 scale1;
+	float2 offset1;
+	uint2 scale2;
+	float2 offset2;
+	float2 clip_range;
+	float power;
 	float wispiness;
     float rot0;
     float rot1;
@@ -87,11 +87,11 @@ float Worley(float2 uv, uint2 freq)
 		Worley(uv2 * 4 + Random::R2Modified(8) * 100, scale2 * 4) * .125;
 	noise2 = 1 - noise2;
 	float noise = noise0 * noise1 * noise2;
-    noise = saturate((noise - clip_range.x) / (clip_range.y - clip_range.x));
+	noise = saturate((noise - clip_range.x) / (clip_range.y - clip_range.x));
 
-	RWTexOutput[uint3(tid, 0)] = 0.; // min_h
-	RWTexOutput[uint3(tid, 1)] = 1.; // max_h
-	RWTexOutput[uint3(tid, 2)] = pow(noise, power); // coverage
-	RWTexOutput[uint3(tid, 3)] = noise; // cloud_type
-	RWTexOutput[uint3(tid, 4)] = wispiness; // bottom_type
+	RWTexOutput[uint3(tid, 0)] = 0.;                 // min_h
+	RWTexOutput[uint3(tid, 1)] = 1.;                 // max_h
+	RWTexOutput[uint3(tid, 2)] = pow(noise, power);  // coverage
+	RWTexOutput[uint3(tid, 3)] = noise;              // cloud_type
+	RWTexOutput[uint3(tid, 4)] = wispiness;          // bottom_type
 }
