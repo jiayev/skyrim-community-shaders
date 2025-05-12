@@ -7,12 +7,25 @@
 
 RWTexture2DArray<unorm float> RWTexOutput : register(u0);
 
+cbuffer CB : register(b1)
+{
+    uint2 scale0;
+    float2 offset0;
+    uint2 scale1;
+    float2 offset1;
+    uint2 scale2;
+    float2 offset2;
+    float2 clip_range;
+    float power;
+	float _pad;
+};
+
 float2 hash22(int2 seed)
 {
 	return Random::pcg2d(asuint(seed)) / 4294967295.f;
 }
 
-float Worley(float2 uv, uint freq)
+float Worley(float2 uv, uint2 freq)
 {
 	int2 id = floor(uv);
 	float2 p = frac(uv);
@@ -39,37 +52,32 @@ float Worley(float2 uv, uint freq)
 	RWTexOutput.GetDimensions(dims.x, dims.y, dims.z);
 	float2 uv = (tid + 0.5) / dims.xy;
 
-	float2 uv0 = uv * 10 + SharedData::Timer * 0.005;
+	float2 uv0 = uv * scale0 + offset0;
 	float noise0 =
-		Worley(uv0 + Random::R2Modified(0) * 100, 10) * .625 +
-		Worley(uv0 * 2 + Random::R2Modified(1) * 100, 10 * 2) * .25 +
-		Worley(uv0 * 4 + Random::R2Modified(2) * 100, 10 * 4) * .125;
+		Worley(uv0 + Random::R2Modified(0) * 100, scale0) * .625 +
+		Worley(uv0 * 2 + Random::R2Modified(1) * 100, scale0 * 2) * .25 +
+		Worley(uv0 * 4 + Random::R2Modified(2) * 100, scale0 * 4) * .125;
 	noise0 = 1 - noise0;
 
-	float2 uv1 = uv * 20 + SharedData::Timer * 0.01;
+	float2 uv1 = uv * scale1 + offset1;
 	float noise1 =
-		Worley(uv1 + Random::R2Modified(3) * 100, 20) * .625 +
-		Worley(uv1 * 2 + Random::R2Modified(4) * 100, 20 * 2) * .25 +
-		Worley(uv1 * 4 + Random::R2Modified(5) * 100, 20 * 4) * .125;
+		Worley(uv1 + Random::R2Modified(3) * 100, scale1) * .625 +
+		Worley(uv1 * 2 + Random::R2Modified(4) * 100, scale1 * 2) * .25 +
+		Worley(uv1 * 4 + Random::R2Modified(5) * 100, scale1 * 4) * .125;
 	noise1 = 1 - noise1;
 
-	float2 uv2 = uv * 40 + SharedData::Timer * 0.04;
+	float2 uv2 = uv * scale2 + offset2;
 	float noise2 =
-		Worley(uv2 + Random::R2Modified(6) * 100, 40) * .625 +
-		Worley(uv2 * 2 + Random::R2Modified(7) * 100, 40 * 2) * .25 +
-		Worley(uv2 * 4 + Random::R2Modified(8) * 100, 40 * 4) * .125;
+		Worley(uv2 + Random::R2Modified(6) * 100, scale2) * .625 +
+		Worley(uv2 * 2 + Random::R2Modified(7) * 100, scale2 * 2) * .25 +
+		Worley(uv2 * 4 + Random::R2Modified(8) * 100, scale2 * 4) * .125;
 	noise2 = 1 - noise2;
 	float noise = noise0 * noise1 * noise2;
+    noise = saturate((noise - clip_range.x) / (clip_range.y - clip_range.x));
 
-	float min_h = 0;
-	float max_h = 1;
-	float coverage = pow(saturate((noise - 0.4) / 0.6), 0.7);
-	float cloud_type = saturate((noise - 0.4) / 0.6);
-	float bottom_type = 0;
-
-	RWTexOutput[uint3(tid, 0)] = min_h;
-	RWTexOutput[uint3(tid, 1)] = max_h;
-	RWTexOutput[uint3(tid, 2)] = coverage;
-	RWTexOutput[uint3(tid, 3)] = cloud_type;
-	RWTexOutput[uint3(tid, 4)] = bottom_type;
+	RWTexOutput[uint3(tid, 0)] = 0; // min_h
+	RWTexOutput[uint3(tid, 1)] = 1; // max_h
+	RWTexOutput[uint3(tid, 2)] = pow(noise, power); // coverage
+	RWTexOutput[uint3(tid, 3)] = noise; // cloud_type
+	RWTexOutput[uint3(tid, 4)] = 0; // bottom_type
 }

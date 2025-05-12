@@ -75,6 +75,15 @@ struct TexNdfSettings
 
 struct CumuliformNdfSettings
 {
+	DirectX::XMUINT2 scale0 = { 10, 10 };
+	float2 offset0 = { 1.f, 1.f };  // speed in c++, offset in shader
+	DirectX::XMUINT2 scale1 = { 20, 20 };
+	float2 offset1 = { 2.f, 2.f };
+	DirectX::XMUINT2 scale2 = { 40, 40 };
+	float2 offset2 = { 8.f, 8.f };
+	float2 clip_range = { 0.4f, 1.f };
+	float power = { 0.7f };
+	float _pad;
 };
 
 using NdfSettings = std::variant<TexNdfSettings, CumuliformNdfSettings>;
@@ -85,6 +94,7 @@ struct NdfManager
 
 	eastl::unique_ptr<Texture2D> tex_ndf_output = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> cumuliform_program = nullptr;
+	eastl::unique_ptr<ConstantBuffer> cumuliform_cb = {};
 
 	void SetupResources();
 	void CompileShaders();
@@ -106,8 +116,8 @@ struct NdfManager
 struct CloudLayer
 {
 	// placement
-	float bottom = 0.05f;
-	float thickness = 0.4f;
+	float bottom = 0.1f;
+	float thickness = 0.3f;
 	// ndf
 	float2 ndf_scale_or_freq = { 16.f, 16.f };  // km
 	// noise

@@ -1,5 +1,7 @@
 #include "Features/PhysicalSky.h"
 
+#include "State.h"
+
 template <class... Ts>
 struct overloads : Ts...
 {
@@ -10,6 +12,8 @@ void NdfManager::SetupResources()
 {
 	logger::debug("Creating NDF resources...");
 	{
+		cumuliform_cb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<CumuliformNdfSettings>());
+
 		D3D11_TEXTURE2D_DESC tex_desc{
 			.Width = s_ndf_dim,
 			.Height = s_ndf_dim,
@@ -122,6 +126,18 @@ void NdfManager::DrawNdfSettings(NdfSettings& ndf_settings, TextureManager& tex_
 			if (!tex_manager.Query(s.tex_path))
 				ImGui::TextColored({ 1, 0, 0, 1 }, "Failed to load texture.");
 		},
+		[&](CumuliformNdfSettings& s) {
+			uint pmin = 5;
+			uint pmax = 50;
+			ImGui::SliderScalarN("Layer 1 - Frequency", ImGuiDataType_U32, (void*)&s.scale0.x, 2, &pmin, &pmax, "%u");
+			ImGui::SliderFloat2("Layer 1 - Velocity", &s.offset0.x, -100.f, 100.f, "%.1f");
+			ImGui::SliderScalarN("Layer 2 - Frequency", ImGuiDataType_U32, (void*)&s.scale1.x, 2, &pmin, &pmax, "%u");
+			ImGui::SliderFloat2("Layer 2 - Velocity", &s.offset1.x, -100.f, 100.f, "%.5f");
+			ImGui::SliderScalarN("Layer 3 - Frequency", ImGuiDataType_U32, (void*)&s.scale2.x, 2, &pmin, &pmax, "%u");
+			ImGui::SliderFloat2("Layer 3 - Velocity", &s.offset2.x, -100.f, 100.f, "%.5f");
+			ImGui::SliderFloat2("Clip Range", &s.clip_range.x, 0, 1, "%.2f");
+			ImGui::SliderFloat("Power", &s.power, 0.2f, 5, "%.2f");
+		},
 		[&](auto&) {}
 	};
 	std::visit(visitor, ndf_settings);
@@ -131,15 +147,25 @@ void NdfManager::UpdateNdf(const NdfSettings& ndf_settings)
 {
 	auto visitor = overloads{
 		[&](const TexNdfSettings&) {},
-		[&](const CumuliformNdfSettings&) {
+		[&](const CumuliformNdfSettings& s) {
+			CumuliformNdfSettings data = s;
+			data.offset0 *= -globals::state->timer * 1e-3f;
+			data.offset1 *= -globals::state->timer * 1e-3f;
+			data.offset2 *= -globals::state->timer * 1e-3f;
+			cumuliform_cb->Update(data);
+
 			auto context = globals::d3d::context;
 
 			auto uav = tex_ndf_output->uav.get();
+			auto cb = cumuliform_cb->CB();
+			context->CSSetConstantBuffers(1, 1, &cb);
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 			context->CSSetShader(cumuliform_program.get(), nullptr, 0);
 			context->Dispatch((s_ndf_dim + 7) >> 3, (s_ndf_dim + 7) >> 3, 1);
 
 			uav = nullptr;
+			cb = nullptr;
+			context->CSSetConstantBuffers(0, 1, &cb);
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 			context->CSSetShader(nullptr, nullptr, 0);
 		}
