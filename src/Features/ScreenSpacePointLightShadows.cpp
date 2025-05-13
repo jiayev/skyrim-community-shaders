@@ -431,9 +431,6 @@ void ScreenSpacePointLightShadows::DrawShadows()
     context->CSSetConstantBuffers(1, 1, &cb);
 
     state->EndPerfEvent();
-
-    auto view = shadowSRVs[0].get();
-    context->PSSetShaderResources(56, 1, &view);
 }
 
 void ScreenSpacePointLightShadows::Prepass()
@@ -445,6 +442,10 @@ void ScreenSpacePointLightShadows::Prepass()
 
     if (globals::features::lightLimitFix->loaded && settings.Enable) {
         PrepareDepth();
+        DrawShadows();
     }
+
+    auto view = shadowSRVs[0].get();
+    context->PSSetShaderResources(56, 1, &view);
 }
 

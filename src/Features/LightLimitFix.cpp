@@ -375,10 +375,10 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 		ID3D11Buffer* buffer = { strictLightDataCB->CB() };
 		context->PSSetConstantBuffers(3, 1, &buffer);
 
-		if (auto sspls = globals::features::screenSpacePointLightShadows) {
-			if (sspls->settings.Enable && sspls->loaded)
-				sspls->DrawShadows();
-		}
+		// if (auto sspls = globals::features::screenSpacePointLightShadows) {
+		// 	if (sspls->settings.Enable && sspls->loaded)
+		// 		sspls->DrawShadows();
+		// }
 	}
 }
 
