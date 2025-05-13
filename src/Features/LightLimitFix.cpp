@@ -22,7 +22,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ContactShadowsStepLimit,
 	ContactShadowsLength,
 	ContactShadowsCompareToleranceScale,
-	ContactShadowsMaxDistance)
+	ContactShadowsMaxDistance,
+	ContactShadowsStrength)
 
 void LightLimitFix::DrawSettings()
 {
@@ -79,6 +80,7 @@ void LightLimitFix::DrawSettings()
 			}
 			ImGui::SliderFloat("Contact Shadows Compare Tolerance Scale", &settings.ContactShadowsCompareToleranceScale, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat("Contact Shadows Max Distance", &settings.ContactShadowsMaxDistance, 0.0f, 8192.0f, "%1.f");
+			ImGui::SliderFloat("Contact Shadows Strength", &settings.ContactShadowsStrength, 0.0f, 1.0f, "%.2f");
 		}
 
 		ImGui::Spacing();
@@ -135,6 +137,7 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	perFrame.ContactShadowsLength = settings.ContactShadowsLength;
 	perFrame.ContactShadowsCompareToleranceScale = settings.ContactShadowsCompareToleranceScale;
 	perFrame.ContactShadowsMaxDistance = settings.ContactShadowsMaxDistance;
+	perFrame.ContactShadowsStrength = settings.ContactShadowsStrength;
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
 	return perFrame;
 }

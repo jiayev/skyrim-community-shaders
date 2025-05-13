@@ -69,7 +69,7 @@ namespace SharedData
 		uint EnableContactShadows;
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		float LightsFar;
+		float ContactShadowsStrength;
 		uint4 ClusterSize;
 		uint ContactShadowsStepLimit;
 		float ContactShadowsLength;

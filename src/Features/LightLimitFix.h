@@ -79,7 +79,7 @@ public:
 		uint EnableContactShadows;
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		float pad0;
+		float ContactShadowsStrength;
 		uint ClusterSize[4];
 		uint ContactShadowsStepLimit;
 		float ContactShadowsLength;
@@ -200,6 +200,7 @@ public:
 		float ContactShadowsLength = 1.0f;
 		float ContactShadowsCompareToleranceScale = 2.0f;
 		float ContactShadowsMaxDistance = 2048.0f;
+		float ContactShadowsStrength = 1.0f;
 	};
 
 	uint clusterSize[3] = { 16 };
