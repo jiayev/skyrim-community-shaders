@@ -47,19 +47,31 @@ namespace LightLimitFix
 		if (contactShadowSteps == 0)
 			return 1.0;
 
-		float2 depthDeltaMult = float2(0.20, 0.05);
+		// float2 depthDeltaMult = float2(10, 0.001);
 
 		// Extend contact shadow distance
-		lightDirectionVS *= 2.0;
+		// lightDirectionVS *= 2.0;
+		const float rayLength = SharedData::lightLimitFixSettings.ContactShadowsLength;
+		lightDirectionVS *= rayLength;
 
-		// Offset starting position with interleaved gradient noise
-		viewPosition += lightDirectionVS * noise2D;
+		const float3 normalizedLightDirection = normalize(lightDirectionVS);
+
+		// Offset with interleaved gradient noise
+		const float offset = noise2D - 0.5;
+
+		const float step = 1.0 / contactShadowSteps;
+
+		float sampleTime = offset * step + step;
+
+		const float startDepth = viewPosition.z;
+
+		const float compareTolerance = abs(lightDirectionVS.z - viewPosition.z) * step * SharedData::lightLimitFixSettings.ContactShadowsCompareToleranceScale;
 
 		// Accumulate samples
 		float contactShadow = 0.0;
 		for (uint i = 0; i < contactShadowSteps; i++) {
 			// Step the ray
-			viewPosition += lightDirectionVS;
+			viewPosition += lightDirectionVS * sampleTime;
 
 			float2 rayUV = FrameBuffer::ViewToUV(viewPosition, true, a_eyeIndex);
 
@@ -70,15 +82,19 @@ namespace LightLimitFix
 			// Compute the difference between the ray's and the camera's depth
 			float rayDepth = SharedData::GetScreenDepth(rayUV, a_eyeIndex);
 
-			// Difference between the current ray distance and the marched light
-			float depthDelta = viewPosition.z - rayDepth;
-			if (rayDepth > 16.5)  // First person
-				contactShadow = max(contactShadow, saturate(depthDelta * depthDeltaMult.x) - saturate(depthDelta * depthDeltaMult.y));
-			if (contactShadow == 1.0)
-				break;
+			if (rayDepth != startDepth) {
+				float depthDelta = viewPosition.z - rayDepth;
+				bool hit = abs(depthDelta - compareTolerance) < compareTolerance;
+
+				if (hit) {
+					return 0.0;
+				}
+			}
+
+			sampleTime += step;
 		}
 
-		return 1.0 - saturate(contactShadow);
+		return 1.0;
 	}
 
 	// Copyright 2019 Google LLC.

@@ -2178,7 +2178,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
 	}
 
-	uint contactShadowSteps = round(4.0 * (1.0 - saturate(viewPosition.z / 1024.0)));
+	uint contactShadowSteps = round(SharedData::lightLimitFixSettings.ContactShadowsStepLimit * (1.0 - saturate(viewPosition.z / 2048.0)));
 
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
 	{
@@ -2228,8 +2228,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			shadowComponent != 0.0 &&
 			lightAngle > 0.0)
 		{
-			float3 normalizedLightDirectionVS = normalize(light.positionVS[eyeIndex].xyz - viewPosition.xyz);
-			contactShadow = LightLimitFix::ContactShadows(viewPosition, screenNoise, normalizedLightDirectionVS, contactShadowSteps, eyeIndex);
+			float3 lightDirectionVS = light.positionVS[eyeIndex].xyz - viewPosition.xyz;
+			contactShadow = LightLimitFix::ContactShadows(viewPosition, screenNoise, lightDirectionVS, contactShadowSteps, eyeIndex);
 		}
 
 		float3 refractedLightDirection = normalizedLightDirection;

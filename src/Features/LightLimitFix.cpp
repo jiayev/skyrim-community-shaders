@@ -18,7 +18,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ParticleBrightness,
 	ParticleRadius,
 	BillboardBrightness,
-	BillboardRadius)
+	BillboardRadius,
+	ContactShadowsStepLimit,
+	ContactShadowsLength,
+	ContactShadowsCompareToleranceScale)
 
 void LightLimitFix::DrawSettings()
 {
@@ -65,6 +68,15 @@ void LightLimitFix::DrawSettings()
 		ImGui::Checkbox("Enable Contact Shadows", &settings.EnableContactShadows);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("All lights cast small shadows. Performance impact.");
+		}
+		if (settings.EnableContactShadows) {
+			ImGui::SliderInt("Contact Shadows Step Limit", (int*)&settings.ContactShadowsStepLimit, 1, 64);
+			ImGui::SliderFloat("Contact Shadows Length", &settings.ContactShadowsLength, 0.0f, 1.0f, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("The length of the rays used to calculate the contact shadows. 1.0 means it would traverse the entire screen. \n"
+					"Higher values create more noise.");
+			}
+			ImGui::SliderFloat("Contact Shadows Compare Tolerance Scale", &settings.ContactShadowsCompareToleranceScale, 0.0f, 10.0f, "%.2f");
 		}
 
 		ImGui::Spacing();
@@ -117,6 +129,9 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	perFrame.EnableContactShadows = settings.EnableContactShadows;
 	perFrame.EnableLightsVisualisation = settings.EnableLightsVisualisation;
 	perFrame.LightsVisualisationMode = settings.LightsVisualisationMode;
+	perFrame.ContactShadowsStepLimit = settings.ContactShadowsStepLimit;
+	perFrame.ContactShadowsLength = settings.ContactShadowsLength;
+	perFrame.ContactShadowsCompareToleranceScale = settings.ContactShadowsCompareToleranceScale;
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
 	return perFrame;
 }

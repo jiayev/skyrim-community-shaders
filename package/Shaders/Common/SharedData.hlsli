@@ -71,6 +71,10 @@ namespace SharedData
 		uint LightsVisualisationMode;
 		float LightsFar;
 		uint4 ClusterSize;
+		uint ContactShadowsStepLimit;
+		float ContactShadowsLength;
+		float ContactShadowsCompareToleranceScale;
+		float pad;
 	};
 
 	struct WetnessEffectsSettings
