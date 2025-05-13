@@ -134,6 +134,7 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	perFrame.ContactShadowsStepLimit = settings.ContactShadowsStepLimit;
 	perFrame.ContactShadowsLength = settings.ContactShadowsLength;
 	perFrame.ContactShadowsCompareToleranceScale = settings.ContactShadowsCompareToleranceScale;
+	perFrame.ContactShadowsMaxDistance = settings.ContactShadowsMaxDistance;
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
 	return perFrame;
 }
