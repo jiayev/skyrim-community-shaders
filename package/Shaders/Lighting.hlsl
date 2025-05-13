@@ -2589,8 +2589,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 
 #			if defined(SSPLS)
-		if (lightIndex < 4 && inWorld) {
-			float SSPLSShadow = ScreenSpacePointLightShadows::GetShadow(LinearSampler, screenUV, lightIndex);
+		if (inWorld) {
+			float SSPLSShadow = ScreenSpacePointLightShadows::GetShadow(LinearSampler, viewPosition.xyz, light.positionVS[eyeIndex].xyz - viewPosition.xyz, screenUV);
 			lightShadow *= SSPLSShadow;
 		}
 #			endif
