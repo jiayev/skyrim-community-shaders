@@ -446,5 +446,15 @@ void ScreenSpacePointLightShadows::Prepass()
     if (globals::features::lightLimitFix->loaded && settings.Enable) {
         PrepareDepth();
     }
+
+    auto view = blurredLinearDepthTexture->srv.get();
+    context->PSSetShaderResources(57, 1, &view);
 }
 
+ScreenSpacePointLightShadows::PerFrame ScreenSpacePointLightShadows::GetCommonBufferData()
+{
+    PerFrame data = {
+        .Scale = settings.Scale
+    };
+    return data;
+}

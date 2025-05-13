@@ -145,6 +145,12 @@ namespace SharedData
 		bool DisableTerrainVertexColors;
 	};
 
+	struct SSPLSSettings
+	{
+		float Scale;
+		float3 pad0;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -156,6 +162,7 @@ namespace SharedData
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
 		LODBlendingSettings lodBlendingSettings;
+		SSPLSSettings ssplsSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);
