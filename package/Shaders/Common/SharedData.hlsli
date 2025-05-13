@@ -74,7 +74,7 @@ namespace SharedData
 		uint ContactShadowsStepLimit;
 		float ContactShadowsLength;
 		float ContactShadowsCompareToleranceScale;
-		float pad;
+		float ContactShadowsMaxDistance;
 	};
 
 	struct WetnessEffectsSettings

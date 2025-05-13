@@ -2178,7 +2178,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
 	}
 
-	uint contactShadowSteps = round(SharedData::lightLimitFixSettings.ContactShadowsStepLimit * (1.0 - saturate(viewPosition.z / 2048.0)));
+	uint contactShadowSteps = round(SharedData::lightLimitFixSettings.ContactShadowsStepLimit * (1.0 - saturate(viewPosition.z / SharedData::lightLimitFixSettings.ContactShadowsMaxDistance)));
 
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
 	{

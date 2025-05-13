@@ -81,10 +81,10 @@ public:
 		uint LightsVisualisationMode;
 		float pad0;
 		uint ClusterSize[4];
-		uint ContactShadowsStepLimit = 16;
-		float ContactShadowsLength = 1.0f;
-		float ContactShadowsCompareToleranceScale = 2.0f;
-		float pad1;
+		uint ContactShadowsStepLimit;
+		float ContactShadowsLength;
+		float ContactShadowsCompareToleranceScale;
+		float ContactShadowsMaxDistance;
 	};
 
 	PerFrame GetCommonBufferData();
@@ -199,6 +199,7 @@ public:
 		uint ContactShadowsStepLimit = 16;
 		float ContactShadowsLength = 1.0f;
 		float ContactShadowsCompareToleranceScale = 2.0f;
+		float ContactShadowsMaxDistance = 2048.0f;
 	};
 
 	uint clusterSize[3] = { 16 };

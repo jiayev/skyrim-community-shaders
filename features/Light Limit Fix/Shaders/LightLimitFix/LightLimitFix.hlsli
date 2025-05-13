@@ -52,6 +52,8 @@ namespace LightLimitFix
 		// Extend contact shadow distance
 		// lightDirectionVS *= 2.0;
 		const float rayLength = SharedData::lightLimitFixSettings.ContactShadowsLength;
+		if (rayLength <= 0.0)
+			return 1.0;
 		lightDirectionVS *= rayLength;
 
 		const float3 normalizedLightDirection = normalize(lightDirectionVS);

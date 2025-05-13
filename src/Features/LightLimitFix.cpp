@@ -21,7 +21,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	BillboardRadius,
 	ContactShadowsStepLimit,
 	ContactShadowsLength,
-	ContactShadowsCompareToleranceScale)
+	ContactShadowsCompareToleranceScale,
+	ContactShadowsMaxDistance)
 
 void LightLimitFix::DrawSettings()
 {
@@ -77,6 +78,7 @@ void LightLimitFix::DrawSettings()
 					"Higher values create more noise.");
 			}
 			ImGui::SliderFloat("Contact Shadows Compare Tolerance Scale", &settings.ContactShadowsCompareToleranceScale, 0.0f, 10.0f, "%.2f");
+			ImGui::SliderFloat("Contact Shadows Max Distance", &settings.ContactShadowsMaxDistance, 0.0f, 8192.0f, "%1.f");
 		}
 
 		ImGui::Spacing();
