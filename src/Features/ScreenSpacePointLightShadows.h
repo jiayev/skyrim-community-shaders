@@ -28,6 +28,12 @@ struct ScreenSpacePointLightShadows : Feature
         uint ResX;
         uint ResY;
     };
+
+    struct alignas(16) PerFrame
+    {
+        float Scale;
+        float pad[3];
+    };
     
     winrt::com_ptr<ID3D11SamplerState> linearSampler = nullptr;
     eastl::unique_ptr<Texture2D> shadowTexture = nullptr;
@@ -71,4 +77,6 @@ struct ScreenSpacePointLightShadows : Feature
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
     virtual void RestoreDefaultSettings() override;
+
+    PerFrame GetCommonBufferData();
 };
