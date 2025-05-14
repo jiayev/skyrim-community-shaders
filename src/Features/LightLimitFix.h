@@ -196,9 +196,9 @@ public:
 		float BillboardBrightness = 1.0f;
 		float BillboardRadius = 1.0f;
 		bool EnableParticleLightsOptimization = true;
-		uint ContactShadowsStepLimit = 16;
-		float ContactShadowsLength = 1.0f;
-		float ContactShadowsCompareToleranceScale = 2.0f;
+		uint ContactShadowsStepLimit = 8;
+		float ContactShadowsLength = 0.3f;
+		float ContactShadowsCompareToleranceScale = 1.0f;
 		float ContactShadowsMaxDistance = 2048.0f;
 		float ContactShadowsStrength = 1.0f;
 	};
