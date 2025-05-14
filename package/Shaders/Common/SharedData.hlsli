@@ -184,7 +184,7 @@ namespace SharedData
 	{
 		uint enableLinearLighting;
 		uint enableGammaCorrection;
-		uint pad[2];
+		uint2 pad;
 	};
 
 	struct SSPLSSettings
