@@ -24,7 +24,7 @@ namespace ScreenSpacePointLightShadows
 		const float rayLength = SharedData::ssplsSettings.RayLength;
 		if (rayLength <= 0.0)
 			return 1.0;
-		lightDirectionVS *= isShadowCaster ? 0.1 : rayLength;
+		lightDirectionVS *= rayLength;
 
 		const float3 normalizedLightDirection = normalize(lightDirectionVS);
 
@@ -37,13 +37,21 @@ namespace ScreenSpacePointLightShadows
 
 		const float startDepth = viewPosition.z;
 
-		const float compareTolerance = abs(lightDirectionVS.z - viewPosition.z) * step * isShadowCaster ? 0.5f : SharedData::ssplsSettings.CompareToleranceScale;
+#	if defined(SKIN) || defined(HAIR) || defined(EYE)
+		float2 stepScale = float2(0.5, 1.25);
+		float shadowCasterTolerance = SharedData::ssplsSettings.CompareToleranceScale * 0.5;
+#	else
+		float2 stepScale = float2(1.0, 1.0);
+		float shadowCasterTolerance = 0.4;
+#	endif
+		
+		const float compareTolerance = abs(lightDirectionVS.z - viewPosition.z) * step * isShadowCaster ? shadowCasterTolerance : SharedData::ssplsSettings.CompareToleranceScale;
 
 		// Accumulate samples
 		float shadow = 0.0;
 		for (uint i = 0; i < steps; i++) {
 			// Step the ray
-			viewPosition += lightDirectionVS * step;
+			viewPosition += lightDirectionVS * step * (steps == 1 ? 1.0 : stepScale.x + i * (stepScale.y - stepScale.x) / (steps - 1));
 
 			float2 rayUV = FrameBuffer::ViewToUV(viewPosition, true, a_eyeIndex);
 
@@ -53,6 +61,7 @@ namespace ScreenSpacePointLightShadows
 
 			// Compute the difference between the ray's and the camera's depth
 			float rayDepth = SharedData::GetScreenDepth(rayUV, a_eyeIndex);
+			float3 linearSample = BlurredLinearDepthTexture.SampleLevel(s, rayUV, 0).xyz;
 
 			if (rayDepth != startDepth) {
 				float depthDelta = viewPosition.z - rayDepth;
