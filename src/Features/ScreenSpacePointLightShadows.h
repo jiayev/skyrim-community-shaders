@@ -18,46 +18,49 @@ struct ScreenSpacePointLightShadows : Feature
     struct Settings
     {
         uint Enable = true;
-        float Scale = 1.0f;
+        float Strength = 1.0f;
+		uint StepLimit = 8;
+		float RayLength = 0.8f;
+		float CompareToleranceScale = 1.0f;
+		float MaxDistance = 2048.0f;
     } settings;
 
     struct alignas(16) SSPLSCB
     {
         uint MipLevel;
-        float Scale;
         uint ResX;
         uint ResY;
+        uint pad;
     };
 
     struct alignas(16) PerFrame
     {
-        float Scale;
-        float pad[3];
+        uint Enable;
+        float Strength;
+        uint StepLimit;
+        float RayLength;
+        float CompareToleranceScale;
+        float MaxDistance;
+        float pad[2];
     };
     
     winrt::com_ptr<ID3D11SamplerState> linearSampler = nullptr;
-    eastl::unique_ptr<Texture2D> shadowTexture = nullptr;
+
     eastl::unique_ptr<Texture2D> depthTexture = nullptr;
     eastl::unique_ptr<Texture2D> linearDepthTexture = nullptr;
     eastl::unique_ptr<Texture2D> blurredLinearDepthTexture = nullptr;
-    eastl::unique_ptr<Texture2D> blurredShadowTexture = nullptr;
 
-    std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_ShadowMips> shadowSRVs = { nullptr };
-    std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_ShadowMips> shadowUAVs = { nullptr };
     std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_ShadowMips> depthSRVs = { nullptr };
     std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_ShadowMips> depthUAVs = { nullptr };
     std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_ShadowMips> linearDepthSRVs = { nullptr };
     std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_ShadowMips> linearDepthUAVs = { nullptr };
     std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_ShadowMips> blurredLinearDepthSRVs = { nullptr };
     std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_ShadowMips> blurredLinearDepthUAVs = { nullptr };
-    std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_ShadowMips> blurredShadowSRVs = { nullptr };
-    std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_ShadowMips> blurredShadowUAVs = { nullptr };
 
     eastl::unique_ptr<ConstantBuffer> ssplsCB = nullptr;
 
     winrt::com_ptr<ID3D11ComputeShader> createDepthCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> blurDepthCS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> raymarchCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> depthAwareBlurCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> depthAwareUpscaleCS = nullptr;
 
