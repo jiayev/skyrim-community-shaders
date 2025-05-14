@@ -6,6 +6,7 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
+#include "Features/HairSpecular.h"
 #include "Features/InverseSquareLighting.h"
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
@@ -33,6 +34,9 @@ void Feature::Load(json& o_json)
 			logger::warn("Invalid settings for {}, using default.", GetName());
 			RestoreDefaultSettings();
 		}
+	} else {
+		logger::info("Loading default settings for {}", GetName());
+		RestoreDefaultSettings();
 	}
 
 	// Convert string to wstring
@@ -141,7 +145,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::terrainHelper,
 		globals::features::volumetricLighting,
 		globals::features::lodBlending,
-		globals::features::inverseSquareLighting
+		globals::features::inverseSquareLighting,
+		globals::features::hairSpecular
 	};
 
 	static std::vector<Feature*> featuresVR(features);
