@@ -24,6 +24,7 @@
 #include "Features/LinearLighting.h"
 #include "Features/PhysicalSky.h"
 #include "Features/ScreenSpaceGI.h"
+#include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skin.h"
 #include "Features/Skylighting.h"
@@ -64,6 +65,7 @@ namespace globals
 		InverseSquareLighting* inverseSquareLighting = nullptr;
 		PhysicalSky* physicalSky = nullptr;
 		ScreenSpaceGI* screenSpaceGI = nullptr;
+		ScreenSpacePointLightShadows* screenSpacePointLightShadows = nullptr;
 		ScreenSpaceShadows* screenSpaceShadows = nullptr;
 		Skylighting* skylighting = nullptr;
 		SubsurfaceScattering* subsurfaceScattering = nullptr;
@@ -147,6 +149,7 @@ namespace globals
 		features::inverseSquareLighting = InverseSquareLighting::GetSingleton();
 		features::physicalSky = PhysicalSky::GetSingleton();
 		features::screenSpaceGI = ScreenSpaceGI::GetSingleton();
+		features::screenSpacePointLightShadows = ScreenSpacePointLightShadows::GetSingleton();
 		features::screenSpaceShadows = ScreenSpaceShadows::GetSingleton();
 		features::skin = Skin::GetSingleton();
 		features::skylighting = Skylighting::GetSingleton();

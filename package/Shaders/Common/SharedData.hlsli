@@ -187,6 +187,17 @@ namespace SharedData
 		uint pad[2];
 	};
 
+	struct SSPLSSettings
+	{
+		uint Enable;
+        float Strength;
+        uint StepLimit;
+        float RayLength;
+        float CompareToleranceScale;
+        float MaxDistance;
+        float2 pad;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -202,6 +213,7 @@ namespace SharedData
 		IBLSettings iblSettings;
 		SkinData skinData;
 		LinearLightingSettings linearLightingSettings;
+		SSPLSSettings ssplsSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

@@ -13,6 +13,7 @@ struct LODBlending;
 struct InverseSquareLighting;
 struct PhysicalSky;
 struct ScreenSpaceGI;
+struct ScreenSpacePointLightShadows;
 struct ScreenSpaceShadows;
 struct Skylighting;
 struct SubsurfaceScattering;
@@ -65,6 +66,7 @@ namespace globals
 		extern InverseSquareLighting* inverseSquareLighting;
 		extern PhysicalSky* physicalSky;
 		extern ScreenSpaceGI* screenSpaceGI;
+		extern ScreenSpacePointLightShadows* screenSpacePointLightShadows;
 		extern ScreenSpaceShadows* screenSpaceShadows;
 		extern Skylighting* skylighting;
 		extern SubsurfaceScattering* subsurfaceScattering;
