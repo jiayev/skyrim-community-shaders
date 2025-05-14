@@ -21,7 +21,7 @@ struct ScreenSpacePointLightShadows : Feature
         float Strength = 1.0f;
 		uint StepLimit = 8;
 		float RayLength = 0.8f;
-		float CompareToleranceScale = 1.0f;
+		float CompareToleranceScale = 2.0f;
 		float MaxDistance = 2048.0f;
     } settings;
 
