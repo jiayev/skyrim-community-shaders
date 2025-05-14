@@ -63,7 +63,7 @@ namespace LightLimitFix
 
 		const float step = 1.0 / contactShadowSteps;
 
-		float sampleTime = offset * step + step;
+		viewPosition += lightDirectionVS * offset * step;
 
 		const float startDepth = viewPosition.z;
 
@@ -73,7 +73,7 @@ namespace LightLimitFix
 		float contactShadow = 0.0;
 		for (uint i = 0; i < contactShadowSteps; i++) {
 			// Step the ray
-			viewPosition += lightDirectionVS * sampleTime;
+			viewPosition += lightDirectionVS * step;
 
 			float2 rayUV = FrameBuffer::ViewToUV(viewPosition, true, a_eyeIndex);
 
@@ -92,8 +92,6 @@ namespace LightLimitFix
 					return 0.0;
 				}
 			}
-
-			sampleTime += step;
 		}
 
 		return 1.0;
