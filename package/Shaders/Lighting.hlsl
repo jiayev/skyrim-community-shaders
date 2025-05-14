@@ -2229,7 +2229,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			lightAngle > 0.0)
 		{
 			float3 lightDirectionVS = light.positionVS[eyeIndex].xyz - viewPosition.xyz;
-			contactShadow = lerp(1.0, LightLimitFix::ContactShadows(viewPosition, screenNoise, lightDirectionVS, contactShadowSteps, eyeIndex), SharedData::lightLimitFixSettings.ContactShadowsStrength);
+			contactShadow = lerp(1.0, LightLimitFix::ContactShadows(viewPosition, screenNoise, lightDirectionVS, contactShadowSteps, eyeIndex, light.lightFlags & LightLimitFix::LightFlags::Shadow), SharedData::lightLimitFixSettings.ContactShadowsStrength);
 		}
 
 		float3 refractedLightDirection = normalizedLightDirection;

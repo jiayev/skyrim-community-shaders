@@ -42,19 +42,15 @@ namespace LightLimitFix
 		return IsSaturated(value.x) && IsSaturated(value.y);
 	}
 
-	float ContactShadows(float3 viewPosition, float noise2D, float3 lightDirectionVS, uint contactShadowSteps, uint a_eyeIndex = 0)
+	float ContactShadows(float3 viewPosition, float noise2D, float3 lightDirectionVS, uint contactShadowSteps, uint a_eyeIndex = 0, bool isShadowCaster = false)
 	{
 		if (contactShadowSteps == 0)
 			return 1.0;
 
-		// float2 depthDeltaMult = float2(10, 0.001);
-
-		// Extend contact shadow distance
-		// lightDirectionVS *= 2.0;
 		const float rayLength = SharedData::lightLimitFixSettings.ContactShadowsLength;
 		if (rayLength <= 0.0)
 			return 1.0;
-		lightDirectionVS *= rayLength;
+		lightDirectionVS *= isShadowCaster ? 0.1 : rayLength;
 
 		const float3 normalizedLightDirection = normalize(lightDirectionVS);
 
@@ -67,7 +63,7 @@ namespace LightLimitFix
 
 		const float startDepth = viewPosition.z;
 
-		const float compareTolerance = abs(lightDirectionVS.z - viewPosition.z) * step * SharedData::lightLimitFixSettings.ContactShadowsCompareToleranceScale;
+		const float compareTolerance = abs(lightDirectionVS.z - viewPosition.z) * step * isShadowCaster ? 0.5f : SharedData::lightLimitFixSettings.ContactShadowsCompareToleranceScale;
 
 		// Accumulate samples
 		float contactShadow = 0.0;
