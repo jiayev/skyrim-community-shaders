@@ -147,8 +147,13 @@ namespace SharedData
 
 	struct SSPLSSettings
 	{
-		float Scale;
-		float3 pad0;
+		uint Enable;
+        float Strength;
+        uint StepLimit;
+        float RayLength;
+        float CompareToleranceScale;
+        float MaxDistance;
+        float2 pad;
 	};
 
 	cbuffer FeatureData : register(b6)

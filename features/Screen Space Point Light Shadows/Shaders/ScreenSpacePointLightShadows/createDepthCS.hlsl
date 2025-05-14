@@ -12,12 +12,9 @@ SamplerState linearSampler : register(s0);
 cbuffer blurBuffer : register(b1)
 {
     uint MipLevel;
-    float Scale;
     uint ResX;
     uint ResY;
 };
-
-#define UNIT_TO_M_SCALED (0.01428f / Scale)
 
 [numthreads(8, 8, 1)] void main(const uint2 dtid : SV_DispatchThreadID) {
     float linearDepth = 0;
@@ -28,7 +25,7 @@ cbuffer blurBuffer : register(b1)
             uint2 newdtid = dtid * 4 + uint2(i, j);
             float2 sampleCoord = (texCoord + float2(i, j) * (1.0 / float2(ResX, ResY)));
             float depth = texDepth.SampleLevel(linearSampler, sampleCoord, 0).x;
-            float lineared = SharedData::GetScreenDepth(depth) * UNIT_TO_M_SCALED;
+            float lineared = SharedData::GetScreenDepth(depth);
             outDepth0[newdtid].x = depth;
             linearDepth += lineared;
             linearSquared += lineared * lineared;

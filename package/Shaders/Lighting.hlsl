@@ -2221,19 +2221,30 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			lightShadow *= shadowComponent;
 		}
 
+		float3 normalizedLightDirection = normalize(lightDirection);
+		float lightAngle = dot(worldSpaceNormal.xyz, normalizedLightDirection.xyz);
+
 #			if defined(SSPLS)
-		if (inWorld) {
-			float SSPLSShadow = ScreenSpacePointLightShadows::GetShadow(LinearSampler, viewPosition.xyz, light.positionVS[eyeIndex].xyz - viewPosition.xyz, screenUV);
+		uint ssplsSteps = round(SharedData::ssplsSettings.StepLimit * (1.0 - saturate(viewPosition.z / SharedData::ssplsSettings.MaxDistance)));
+		[branch] if (
+			inWorld && !FrameBuffer::FrameParams.z &&
+			SharedData::ssplsSettings.Enable &&
+			!(light.lightFlags & LightLimitFix::LightFlags::Simple) &&
+			shadowComponent != 0.0 &&
+			lightAngle > 0.0)
+		{
+			float3 lightDirectionVS = light.positionVS[eyeIndex].xyz - viewPosition.xyz;
+			float SSPLSShadow = lerp(1.0, ScreenSpacePointLightShadows::GetShadow(LinearSampler, viewPosition, screenNoise, lightDirectionVS, ssplsSteps, eyeIndex, light.lightFlags & LightLimitFix::LightFlags::Shadow), SharedData::ssplsSettings.Strength);
 			lightShadow *= SSPLSShadow;
 		}
 #			endif
 
-		float3 normalizedLightDirection = normalize(lightDirection);
-		float lightAngle = dot(worldSpaceNormal.xyz, normalizedLightDirection.xyz);
-
 		float contactShadow = 1.0;
 		[branch] if (
 			inWorld && !FrameBuffer::FrameParams.z &&
+#			if defined(SSPLS)
+			!SharedData::ssplsSettings.Enable &&
+#			endif
 			SharedData::lightLimitFixSettings.EnableContactShadows &&
 			!(light.lightFlags & LightLimitFix::LightFlags::Simple) &&
 			shadowComponent != 0.0 &&
