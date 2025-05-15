@@ -99,8 +99,8 @@ namespace ScreenSpacePointLightShadows
 		const float startDepth = viewPosition.z;
 
 #	if defined(SKIN) || defined(HAIR) || defined(EYE)
-		const float2 stepScale = float2(0.5, 1.25);
-		const float scaleMult = 0.5;
+		const float2 stepScale = float2(0.75, 1.25);
+		const float scaleMult = 0.75;
 		const float shadowCasterToleranceScale = SharedData::ssplsSettings.CompareToleranceScale;
 #	else
 		const float2 stepScale = float2(1.0, 1.0);
