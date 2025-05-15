@@ -195,7 +195,8 @@ namespace SharedData
         float RayLength;
         float CompareToleranceScale;
         float MaxDistance;
-        float2 pad;
+        uint EnableSoftShadows;
+		float SoftShadowScale;
 	};
 
 	cbuffer FeatureData : register(b6)

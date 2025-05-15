@@ -2468,7 +2468,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 			lightAngle > 0.0)
 		{
 			float3 lightDirectionVS = light.positionVS[eyeIndex].xyz - viewPosition.xyz;
-			float SSPLSShadow = lerp(1.0, ScreenSpacePointLightShadows::GetShadow(LinearSampler, viewPosition, screenNoise, lightDirectionVS, ssplsSteps, eyeIndex, light.lightFlags & LightLimitFix::LightFlags::Shadow), SharedData::ssplsSettings.Strength);
+			float SSPLSShadow = lerp(1.0, ScreenSpacePointLightShadows::GetShadow(LinearSampler, viewPosition, screenNoise, lightDirectionVS, ssplsSteps, light.radius, eyeIndex, light.lightFlags & LightLimitFix::LightFlags::Shadow), SharedData::ssplsSettings.Strength);
 			lightShadow *= SSPLSShadow;
 		}
 #			endif
