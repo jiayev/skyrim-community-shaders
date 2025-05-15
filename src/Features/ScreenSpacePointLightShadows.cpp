@@ -11,7 +11,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     StepLimit,
     RayLength,
     CompareToleranceScale,
-    MaxDistance)
+    MaxDistance,
+    EnableSoftShadows,
+    SoftShadowScale)
 
 void ScreenSpacePointLightShadows::DrawSettings()
 {   
@@ -26,16 +28,9 @@ void ScreenSpacePointLightShadows::DrawSettings()
     ImGui::SliderFloat("Compare Tolerance Scale", &settings.CompareToleranceScale, 0.0f, 10.0f, "%.2f");
     ImGui::SliderFloat("Max Distance", &settings.MaxDistance, 0.0f, 8192.0f, "%.2f");
 
-    if (ImGui::CollapsingHeader("Debug")) {
-        static int mip = 0;
-        ImGui::SliderInt("Debug Mip Level", &mip, 0, (int)s_ShadowMips - 1, "%d", ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp);
-        ImGui::BulletText("depthTexture");
-        ImGui::Image(depthSRVs[mip].get(), { depthTexture->desc.Width * .2f, depthTexture->desc.Height * .2f });
-        ImGui::BulletText("linearDepthTexture");
-        ImGui::Image(linearDepthSRVs[mip].get(), { linearDepthTexture->desc.Width * .8f, linearDepthTexture->desc.Height * .8f });
-        ImGui::BulletText("blurredLinearDepthTexture");
-        ImGui::Image(blurredLinearDepthSRVs[mip].get(), { blurredLinearDepthTexture->desc.Width * .8f, blurredLinearDepthTexture->desc.Height * .8f });
-    }
+    ImGui::Spacing();
+    ImGui::Checkbox("Enable Soft Shadows", (bool*)&settings.EnableSoftShadows);
+    ImGui::SliderFloat("Soft Shadow Scale", &settings.SoftShadowScale, 0.0f, 100.0f, "%.2f");
 }
 
 void ScreenSpacePointLightShadows::RestoreDefaultSettings()
@@ -299,7 +294,9 @@ ScreenSpacePointLightShadows::PerFrame ScreenSpacePointLightShadows::GetCommonBu
         .StepLimit = settings.StepLimit,
         .RayLength = settings.RayLength,
         .CompareToleranceScale = settings.CompareToleranceScale,
-        .MaxDistance = settings.MaxDistance
+        .MaxDistance = settings.MaxDistance,
+        .EnableSoftShadows = settings.EnableSoftShadows,
+        .SoftShadowScale = settings.SoftShadowScale
     };
     return data;
 }
