@@ -30,7 +30,7 @@ void ScreenSpacePointLightShadows::DrawSettings()
 
     ImGui::Spacing();
     ImGui::Checkbox("Enable Soft Shadows", (bool*)&settings.EnableSoftShadows);
-    ImGui::SliderFloat("Soft Shadow Scale", &settings.SoftShadowScale, 0.0f, 100.0f, "%.2f");
+    ImGui::SliderFloat("Soft Shadow Scale", &settings.SoftShadowScale, 0.0f, 50.0f, "%.2f");
 }
 
 void ScreenSpacePointLightShadows::RestoreDefaultSettings()
