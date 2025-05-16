@@ -27,11 +27,13 @@
 #include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skin.h"
+#include "Features/SkySync.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/TerrainShadows.h"
+#include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
@@ -68,11 +70,13 @@ namespace globals
 		ScreenSpacePointLightShadows* screenSpacePointLightShadows = nullptr;
 		ScreenSpaceShadows* screenSpaceShadows = nullptr;
 		Skylighting* skylighting = nullptr;
+		SkySync* skySync = nullptr;
 		SubsurfaceScattering* subsurfaceScattering = nullptr;
 		TerrainBlending* terrainBlending = nullptr;
 		TerrainHelper* terrainHelper = nullptr;
 		TerrainShadows* terrainShadows = nullptr;
 		VolumetricLighting* volumetricLighting = nullptr;
+		VR* vr = nullptr;
 		WaterEffects* waterEffects = nullptr;
 		WetnessEffects* wetnessEffects = nullptr;
 		PostProcessing* postProcessing = nullptr;
@@ -153,11 +157,13 @@ namespace globals
 		features::screenSpaceShadows = ScreenSpaceShadows::GetSingleton();
 		features::skin = Skin::GetSingleton();
 		features::skylighting = Skylighting::GetSingleton();
+		features::skySync = SkySync::GetSingleton();
 		features::subsurfaceScattering = SubsurfaceScattering::GetSingleton();
 		features::terrainBlending = TerrainBlending::GetSingleton();
 		features::terrainHelper = TerrainHelper::GetSingleton();
 		features::terrainShadows = TerrainShadows::GetSingleton();
 		features::volumetricLighting = VolumetricLighting::GetSingleton();
+		features::vr = VR::GetSingleton();
 		features::waterEffects = WaterEffects::GetSingleton();
 		features::wetnessEffects = WetnessEffects::GetSingleton();
 		features::postProcessing = PostProcessing::GetSingleton();

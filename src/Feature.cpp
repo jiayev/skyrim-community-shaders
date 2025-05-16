@@ -18,11 +18,13 @@
 #include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skin.h"
+#include "Features/SkySync.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/TerrainShadows.h"
+#include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
@@ -146,6 +148,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::screenSpaceGI,
 		globals::features::screenSpacePointLightShadows,
 		globals::features::skylighting,
+		globals::features::skySync,
 		globals::features::terrainBlending,
 		globals::features::terrainHelper,
 		globals::features::volumetricLighting,
@@ -159,10 +162,13 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::physicalSky
 	};
 
-	static std::vector<Feature*> featuresVR(features);
-	std::erase_if(featuresVR, [](Feature* a) {
-		return !a->SupportsVR();
-	});
+	static std::vector<Feature*> featuresVR = [] {
+		auto v = features;
+		v.push_back(globals::features::vr);
+		std::erase_if(v, [](Feature* a) { return !a->SupportsVR(); });
+		return v;
+	}();
+
 	return (REL::Module::IsVR() && !globals::state->IsDeveloperMode()) ? featuresVR : features;
 }
 
