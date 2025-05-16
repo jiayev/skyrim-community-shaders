@@ -822,6 +822,10 @@ float3 GetSunColor(float3 normal, float3 viewDirection, uint eyeIndex, PS_INPUT 
 #			include "InverseSquareLighting/InverseSquareLighting.hlsli"
 #		endif
 
+#		if defined(SSPLS)
+#			include "ScreenSpacePointLightShadows/SSPLS.hlsli"
+#		endif
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
@@ -954,6 +958,22 @@ PS_OUTPUT main(PS_INPUT input)
 			} else {
 				lightColor = Color::GammaToLinearLuminancePreservingLight(light.color.xyz) * pow(HdotN, FresnelRI.z);
 			}
+
+#					if defined(SSPLS)
+			float lightAngle = dot(normal.xyz, normalizedLightDirection.xyz);
+			uint ssplsSteps = round(SharedData::ssplsSettings.StepLimit * (1.0 - saturate(viewPosition.z / SharedData::ssplsSettings.MaxDistance)));
+			[branch] if (
+				!FrameBuffer::FrameParams.z &&
+				SharedData::ssplsSettings.Enable &&
+				!(light.lightFlags & LightLimitFix::LightFlags::Simple) &&
+				lightAngle > 0.0)
+			{
+				float3 lightDirectionVS = light.positionVS[eyeIndex].xyz - viewPosition.xyz;
+				float SSPLSShadow = lerp(1.0, ScreenSpacePointLightShadows::GetShadow(LinearSampler, viewPosition, screenNoise, lightDirectionVS, ssplsSteps, light.radius, eyeIndex, light.lightFlags & LightLimitFix::LightFlags::Shadow), SharedData::ssplsSettings.Strength);
+				lightColor *= SSPLSShadow;
+			}
+#					endif
+
 			specularLighting += lightColor * intensityMultiplier;
 		}
 	}
