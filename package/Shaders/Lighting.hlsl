@@ -1033,10 +1033,6 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Hair/Hair.hlsli"
 #	endif
 
-#	if defined(PHYS_SKY)
-#		include "PhysicalSky/PhysicalSky.hlsli"
-#	endif
-
 #	if defined(SSPLS)
 #		include "ScreenSpacePointLightShadows/SSPLS.hlsli"
 #	endif
@@ -2098,15 +2094,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 
 	float3 dirLightColor = Color::Light(DirLightColor.xyz);
-
-#	if defined(PHYS_SKY)
-	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
-		dirLightColor = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
-		dirLightColor *= getDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, SampColorSampler);
-		dirLightColor = Color::LinearLight(dirLightColor);
-	}
-#	endif
-
 	float3 dirLightColorMultiplier = 1;
 
 #	if defined(WATER_EFFECTS)
@@ -3380,12 +3367,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 #	endif
 
-#	if defined(PHYS_SKY) && !defined(DEFERRED)
-	if (PhysSkyBuffer[0].enable_sky) {
-		if (!SharedData::linearLightingSettings.enableLinearLighting)
-			psout.Diffuse.xyz = Color::LinearToGamma(Color::GammaToLinear(psout.Diffuse.xyz) * PhysSkyTrTexture.SampleLevel(LinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(LinearSampler, screenUV, 0).xyz);
-		else
-			psout.Diffuse.xyz = psout.Diffuse.xyz * PhysSkyTrTexture.SampleLevel(LinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(LinearSampler, screenUV, 0).xyz;
+#	if defined(SKIN) && defined(CS_SKIN)
+	if (SharedData::skinData.skinParams.w > 0 && !SharedData::linearLightingSettings.enableLinearLighting) {
+		psout.Diffuse.xyz = Color::LinearToGamma(psout.Diffuse.xyz);
+#		if defined(DEFERRED)
+		// psout.Specular.xyz = Color::LinearToGamma(psout.Specular.xyz);
+		psout.Albedo.xyz = Color::LinearToGamma(psout.Albedo.xyz);
+		// psout.Reflectance.xyz = Color::LinearToGamma(psout.Reflectance.xyz);
+#		endif
 	}
 #	endif
 

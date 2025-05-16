@@ -175,10 +175,6 @@ const static float DepthOffsets[16] = {
 #		include "IBL/IBL.hlsli"
 #	endif
 
-#	if defined(PHYS_SKY)
-#		include "PhysicalSky/PhysicalSky.hlsli"
-#	endif
-
 #	define LinearSampler SampDiffuse
 
 #	include "Common/ShadowSampling.hlsli"
@@ -227,19 +223,6 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 
-	// dirLightColor start
-	float3 dirLightColor = SharedData::DirLightColor.xyz;
-
-#			if defined(PHYS_SKY)
-	if (PhysSkyBuffer[0].enable_sky && PhysSkyBuffer[0].override_dirlight_color) {
-		dirLightColor = PhysSkyBuffer[0].dirlight_color * PhysSkyBuffer[0].horizon_penumbra;
-		dirLightColor *= getDirlightTransmittance(input.WorldPosition + FrameBuffer::CameraPosAdjust[eyeIndex], SampDiffuse);
-		dirLightColor = Color::LinearLight(dirLightColor);
-	}
-#			endif
-	// dirLightColor end
-
-	// dirShadow start
 	float dirShadow = 1;
 
 #			if defined(SCREEN_SPACE_SHADOWS)
@@ -315,17 +298,6 @@ PS_OUTPUT main(PS_INPUT input)
 	diffuseColor += directionalAmbientColor;
 
 	float3 color = diffuseColor * baseColor.xyz;
-#			if defined(PHYS_SKY)
-	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
-	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
-	if (PhysSkyBuffer[0].enable_sky) {
-		if (!SharedData::linearLightingSettings.enableLinearLighting)
-			color = Color::GammaToLinear(Color::LinearToGamma(color) * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz);
-		else
-			color = color * PhysSkyTrTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz + PhysSkyLumTexture.SampleLevel(PhysSkyLinearSampler, screenUV, 0).xyz;
-
-	}
-#			endif  // PHYS_SKY
 	psout.Diffuse = float4(color, 1.0);
 #		endif  // DEFERRED
 #	endif      // RENDER_DEPTH

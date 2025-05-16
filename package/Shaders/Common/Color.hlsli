@@ -137,18 +137,6 @@ namespace Color
 		return color;
 	#endif
 	}
-
-	float3 LinearLight(float3 color)
-	{
-		if (SharedData::linearLightingSettings.enableLinearLighting) {
-			color = LinearToGamma(color);
-		}
-	#if defined(TRUE_PBR)
-		return color * Math::PI;  // Compensate for traditional Lambertian diffuse
-	#else
-		return color;
-	#endif
-	}
 #endif
 }
 
