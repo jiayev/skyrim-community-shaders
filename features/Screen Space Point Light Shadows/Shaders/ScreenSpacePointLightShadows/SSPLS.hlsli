@@ -48,7 +48,11 @@ namespace ScreenSpacePointLightShadows
 					float distanceMult = abs(rayDepth - startPosition.z) / (abs(lightDirectionVS.z - rayDepth) + 0.00001) * distanceScale;
 					const uint sampleTimes = min(MAX_SAMPLES, (uint)(i >> 2) + 1);
 					float sampleOpacity = 1.0;
+					bool hit = (depthDelta > 0.5 * compareTolerance) && (depthDelta < compareTolerance * 1.5);
 					bool possibleHit = (depthDelta + compareTolerance > 0.0) && (depthDelta < compareTolerance * 3.0);
+					if (hit) {
+						return 0.0;
+					}
 					if (possibleHit)
 						[loop] for (uint j = 0; j < sampleTimes; j++) {
 							float2 sampleOffset = mul(Random::PoissonSampleOffsets16[(j * i) % 16], rotationMatrix);
