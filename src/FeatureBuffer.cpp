@@ -48,6 +48,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::hairSpecular->settings,
 		globals::features::ibl->settings,
 		globals::features::skin->GetCommonBufferData(),
-		globals::features::linearLighting->settings,
+		globals::features::linearLighting->GetCommonBufferData(),
 		globals::features::screenSpacePointLightShadows->GetCommonBufferData());
 }
