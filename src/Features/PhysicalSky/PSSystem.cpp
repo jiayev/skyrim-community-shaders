@@ -193,7 +193,7 @@ void PhysicalSky::UpdateBuffer()
 		.ray_march_range = settings.ray_march_range,
 		.fog_max_step = settings.fog_max_step,
 		.cloud_max_step = settings.cloud_max_step,
-		.bottom_z = worldspace_it != settings.worldspace_whitelist.end() ? worldspace_it->bottom_z : -14000.f,
+		.bottom_z = worldspace_it != settings.worldspace_whitelist.end() ? worldspace_it->bottom_z : 0,
 		.planet_radius = settings.planet_radius,
 		.atmos_thickness = settings.atmos_thickness,
 		.ground_albedo = settings.ground_albedo,
