@@ -3367,17 +3367,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 #	endif
 
-#	if defined(SKIN) && defined(CS_SKIN)
-	if (SharedData::skinData.skinParams.w > 0 && !SharedData::linearLightingSettings.enableLinearLighting) {
-		psout.Diffuse.xyz = Color::LinearToGamma(psout.Diffuse.xyz);
-#		if defined(DEFERRED)
-		// psout.Specular.xyz = Color::LinearToGamma(psout.Specular.xyz);
-		psout.Albedo.xyz = Color::LinearToGamma(psout.Albedo.xyz);
-		// psout.Reflectance.xyz = Color::LinearToGamma(psout.Reflectance.xyz);
-#		endif
-	}
-#	endif
-
 	if (!inWorld && SharedData::linearLightingSettings.enableLinearLighting) {
 		psout.Diffuse.xyz = Color::TrueLinearToGamma(psout.Diffuse.xyz);
 	}
