@@ -194,7 +194,6 @@ void PhysicalSky::SetupResources()
 	}
 
 	LoadNDFTextures();
-	ndf_manager.SetupResources();
 
 	CompileComputeShaders();
 }
@@ -204,6 +203,7 @@ void PhysicalSky::LoadNDFTextures()
 	auto device = globals::d3d::device;
 	auto context = globals::d3d::context;
 
+	DirectX::CreateDDSTextureFromFile(device, context, L"Data\\Textures\\PhysicalSky\\ndf.dds", nullptr, ndf_tex_srv.put());
 	DirectX::CreateDDSTextureFromFile(device, context, L"Data\\Textures\\PhysicalSky\\top_lut.dds", nullptr, cloud_top_lut_srv.put());
 	DirectX::CreateDDSTextureFromFile(device, context, L"Data\\Textures\\PhysicalSky\\bottom_lut.dds", nullptr, cloud_bottom_lut_srv.put());
 	DirectX::CreateDDSTextureFromFile(device, context, L"Data\\Textures\\PhysicalSky\\nubis.dds", nullptr, nubis_noise_srv.put());
@@ -245,7 +245,6 @@ void PhysicalSky::ClearShaderCache()
 		*shader = nullptr;
 
 	CompileComputeShaders();
-	ndf_manager.CompileShaders();
 }
 
 void PhysicalSky::Reset()
@@ -258,7 +257,6 @@ void PhysicalSky::Prepass()
 	if (phys_sky_sb_data.enable_sky) {
 		GenerateLuts();
 		RenderShadowMapMainView();
-		ndf_manager.UpdateNdf(ndf_settings);
 	} else {
 		auto context = globals::d3d::context;
 		{
@@ -492,7 +490,7 @@ void PhysicalSky::RenderShadowMapMainView()
 		aerial_perspective_lut->srv.get(),
 		renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV,
 		nubis_noise_srv.get(),
-		ndf_manager.GetNdf(ndf_settings, ndf_tex_manager),
+		ndf_tex_srv.get(),
 		cloud_top_lut_srv.get(),
 		cloud_bottom_lut_srv.get(),
 	};

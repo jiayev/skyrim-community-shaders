@@ -1,13 +1,10 @@
 #define PHYS_VOLS
-#ifndef COMPUTESHADER
-#	define COMPUTESHADER
-#endif
 #define SKY_SAMPLERS
 #include "PhysicalSky/PhysicalSky.hlsli"
 
+#include "Common/VR.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/SharedData.hlsli"
-#include "Common/VR.hlsli"
 
 Texture2D<float> TexDepth : register(t4);
 
@@ -34,6 +31,7 @@ struct PerShadow
 	float4x4 CameraViewProjInverse[2];
 };
 StructuredBuffer<PerShadow> SharedPerShadow : register(t21);
+#define TERRAIN_SHADOW_REGISTER t22
 #include "TerrainShadows/TerrainShadows.hlsli"
 Texture3D<float> TexShadowVolume : register(t23);
 

@@ -1,3 +1,4 @@
+
 #pragma once
 
 inline float getDayInYear()
