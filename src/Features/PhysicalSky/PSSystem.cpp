@@ -199,8 +199,8 @@ void PhysicalSky::UpdateBuffer()
 
 	// check worldspace
 	auto worldspace_it = std::ranges::find_if(settings.worldspace_whitelist, [](const auto& info) {
-		if (globals::game::tes)
-			if (auto worldspace = globals::game::tes->GetRuntimeData2().worldSpace; worldspace)
+		if (auto tes = RE::TES::GetSingleton(); tes)
+			if (auto worldspace = tes->GetRuntimeData2().worldSpace; worldspace)
 				return info.name == worldspace->GetFormEditorID();
 		return false;
 	});
@@ -209,7 +209,7 @@ void PhysicalSky::UpdateBuffer()
 	float sun_aperture_cos = cos(settings.celestials.sun_angular_radius);
 	float sun_aperture_rcp_sin = 1.f / sqrt(1 - sun_aperture_cos * sun_aperture_cos);
 
-	float2 res = globals::state->screenSize;
+	float2 res = State::GetSingleton()->screenSize;
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
@@ -278,7 +278,7 @@ void PhysicalSky::UpdateBuffer()
 		cl.thickness *= g_km_2_game_unit;
 		cl.ndf_scale_or_freq = float2(1.f / cl.ndf_scale_or_freq.x, 1.f / cl.ndf_scale_or_freq.y) * g_game_unit_2_km;
 		cl.noise_scale_or_freq = 1.f / (cl.noise_scale_or_freq * g_km_2_game_unit);
-		cl.noise_offset_or_speed *= -globals::state->timer * 1e-3f * g_km_2_game_unit;
+		cl.noise_offset_or_speed *= -State::GetSingleton()->timer * 1e-3f * g_km_2_game_unit;
 		cl.scatter *= g_game_unit_2_km;
 		cl.absorption *= g_game_unit_2_km;
 	};
