@@ -137,8 +137,9 @@ namespace Skin
 		specular *= 1 + F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
 
 		if (skin.FuzzWeight > 0.0) {
-			float3 fuzzSpecular = GetSpecularDirectLightMultiplierMicroflakes(skin.FuzzRoughness, skin.FuzzColor, NdotL, NdotV, NdotH, VdotH) * light.LightColor * NdotL;
-			fuzzSpecular *= 1 + skin.FuzzColor * (1 / (specularBRDF.x + specularBRDF.y) - 1);
+			float3 fuzzSpecular = PBR::GetSpecularDirectLightMultiplierMicroflakes(skin.FuzzRoughness, skin.FuzzColor, NdotL, NdotV, NdotH, VdotH) * light.LightColor * NdotL;
+			float2 fuzzSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(skin.FuzzRoughness, NdotV);
+			fuzzSpecular *= 1 + skin.FuzzColor * (1 / (fuzzSpecularBRDF.x + fuzzSpecularBRDF.y) - 1);
 
 			specular = lerp(specular, fuzzSpecular, skin.FuzzWeight);
 		}
