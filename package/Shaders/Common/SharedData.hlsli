@@ -173,8 +173,6 @@ namespace SharedData
 		float pad;
 	};
 
-	};
-
 	struct IBLSettings
 	{
 		uint EnableDiffuseIBL;
