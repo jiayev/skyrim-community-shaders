@@ -161,6 +161,18 @@ namespace SharedData
 		float pad;
 	};
 
+	struct TerrainVariationSettings
+	{
+		bool enableTilingFix;
+		float startDistance;
+		float maxDistance;
+		float invDistanceRange;          // For distance calc optimisation
+		float heightCompensationFactor;  // Compensation multiplier for terrain parallax
+		float shadowRayDirFactor;        // Shadow ray direction multiplier
+		int hashQuality;                 // 0 = Low quality hash, 1 = High quality hash
+		float pad;
+	};
+
 	struct SSPLSSettings
 	{
 		uint Enable;
@@ -185,6 +197,7 @@ namespace SharedData
 		CloudShadowsSettings cloudShadowsSettings;
 		LODBlendingSettings lodBlendingSettings;
 		HairSpecularSettings hairSpecularSettings;
+		TerrainVariationSettings terrainVariationSettings;
 		SSPLSSettings ssplsSettings;
 	};
 
