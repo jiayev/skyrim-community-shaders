@@ -32,6 +32,7 @@
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/TerrainShadows.h"
+#include "Features/TerrainVariation.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
@@ -68,6 +69,7 @@ namespace globals
 		ScreenSpacePointLightShadows* screenSpacePointLightShadows = nullptr;
 		ScreenSpaceShadows* screenSpaceShadows = nullptr;
 		Skylighting* skylighting = nullptr;
+		TerrainVariation* terrainVariation = nullptr;
 		SkySync* skySync = nullptr;
 		SubsurfaceScattering* subsurfaceScattering = nullptr;
 		TerrainBlending* terrainBlending = nullptr;
@@ -154,6 +156,7 @@ namespace globals
 		features::screenSpaceShadows = ScreenSpaceShadows::GetSingleton();
 		features::skin = Skin::GetSingleton();
 		features::skylighting = Skylighting::GetSingleton();
+		features::terrainVariation = TerrainVariation::GetSingleton();
 		features::skySync = SkySync::GetSingleton();
 		features::subsurfaceScattering = SubsurfaceScattering::GetSingleton();
 		features::terrainBlending = TerrainBlending::GetSingleton();

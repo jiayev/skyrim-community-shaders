@@ -23,6 +23,7 @@
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/TerrainShadows.h"
+#include "Features/TerrainVariation.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
@@ -155,6 +156,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::ibl,
 		globals::features::inverseSquareLighting,
 		globals::features::hairSpecular,
+		globals::features::terrainVariation,
 		globals::features::postProcessing,
 		globals::features::skin,
 		globals::features::linearLighting

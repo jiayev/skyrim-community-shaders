@@ -13,6 +13,7 @@
 #include "Features/Skin.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainShadows.h"
+#include "Features/TerrainVariation.h"
 #include "Features/WetnessEffects.h"
 
 #include "TruePBR.h"
@@ -46,6 +47,7 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::cloudShadows->settings,
 		globals::features::lodBlending->settings,
 		globals::features::hairSpecular->settings,
+		globals::features::terrainVariation->settings,
 		globals::features::ibl->settings,
 		globals::features::skin->GetCommonBufferData(),
 		globals::features::linearLighting->GetCommonBufferData(),
