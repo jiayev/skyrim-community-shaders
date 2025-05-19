@@ -13,7 +13,7 @@ void XeGTAOFeature::SetupResources()
 
 	auto renderer = globals::game::renderer;
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-	auto& device = State::GetSingleton()->device;
+	auto device = globals::d3d::device;
 
 	D3D11_TEXTURE2D_DESC texDesc{};
 	main.texture->GetDesc(&texDesc);
