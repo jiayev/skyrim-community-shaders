@@ -7,6 +7,7 @@
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/HairSpecular.h"
+#include "Features/IBL.h"
 #include "Features/InteriorSunShadows.h"
 #include "Features/InverseSquareLighting.h"
 #include "Features/LODBlending.h"
@@ -151,7 +152,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::inverseSquareLighting,
 		globals::features::hairSpecular,
 		globals::features::interiorSunShadows,
-		globals::features::terrainVariation
+		globals::features::terrainVariation,
+		globals::features::ibl
 	};
 
 	static std::vector<Feature*> featuresVR = [] {

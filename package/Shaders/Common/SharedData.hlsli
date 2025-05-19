@@ -173,6 +173,16 @@ namespace SharedData
 		float pad;
 	};
 
+	struct IBLSettings
+	{
+		uint EnableDiffuseIBL;
+		float DiffuseIBLScale;
+		float DALCAmount;
+		float IBLSaturation;
+		uint SampleUnderHorizonFromDynCube;
+		uint3 pad;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -186,6 +196,7 @@ namespace SharedData
 		LODBlendingSettings lodBlendingSettings;
 		HairSpecularSettings hairSpecularSettings;
 		TerrainVariationSettings terrainVariationSettings;
+		IBLSettings iblSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);
