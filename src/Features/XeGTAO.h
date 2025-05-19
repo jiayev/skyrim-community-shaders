@@ -1,9 +1,6 @@
 #pragma once
 
-#include "Feature.h"
-
-#include <Buffer.h>
-#include <Features/XeGTAO/XeGTAO.h>
+#include "Features/XeGTAO/XeGTAO.h"
 
 struct XeGTAOFeature : Feature
 {

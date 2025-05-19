@@ -1,8 +1,8 @@
 #include "XeGTAO.h"
 
-#include <Deferred.h>
-#include <State.h>
-#include <Util.h>
+#include "Deferred.h"
+#include "State.h"
+#include "Util.h"
 
 void XeGTAOFeature::SetupResources()
 {
@@ -11,7 +11,7 @@ void XeGTAOFeature::SetupResources()
 	CSDenoisePass = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", {}, "cs_5_0", "CSDenoisePass"));
 	CSDenoiseLastPass = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", {}, "cs_5_0", "CSDenoiseLastPass"));
 
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+	auto renderer = globals::game::renderer;
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	auto& device = State::GetSingleton()->device;
 
@@ -89,10 +89,10 @@ void XeGTAOFeature::SetupResources()
 
 void XeGTAOFeature::GTAO()
 {
-	auto state = State::GetSingleton();
+	auto state = globals::state;
 
-	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	auto& context = State::GetSingleton()->context;
+	auto renderer = globals::game::renderer;
+	auto context = globals::d3d::context;
 
 	auto inputDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
 	auto inputNormals = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS].SRV;
