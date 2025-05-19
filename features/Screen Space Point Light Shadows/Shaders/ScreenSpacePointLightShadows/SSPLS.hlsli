@@ -18,13 +18,13 @@ namespace ScreenSpacePointLightShadows
 		const float3 startPosition = viewPosition;
 		const float3 normalizedLightDirection = normalize(lightDirectionVS);
 
-		float compareTolerance = abs(lightDirectionVS.z - viewPosition.z) * step * compareToleranceScale;
+		float totalCompareTolerance = abs(lightDirectionVS.z - viewPosition.z) * step * compareToleranceScale;
 		
 		[loop] for (uint i = 0; i < steps; i++) {
 			// Step the ray
 			const float stepScaleMult = steps == 1 ? 1.0 : (stepScale.x + i * (stepScale.y - stepScale.x) / (steps - 1));
 			viewPosition += lightDirectionVS * step * stepScaleMult;
-
+			float compareTolerance = totalCompareTolerance * stepScaleMult;
 			float2 rayUV = FrameBuffer::ViewToUV(viewPosition, true, a_eyeIndex);
 
 			// Ensure the UV coordinates are inside the screen
