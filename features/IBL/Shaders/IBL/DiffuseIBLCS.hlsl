@@ -33,10 +33,8 @@ SamplerState LinearSampler : register(s0);
 				color = EnvTexture.SampleLevel(LinearSampler, -rayDir, 0);
 			}
 #endif
-
-// #if !defined(LL)
-// 			color = Color::GammaToLinear(color);
-// #endif
+			if (!SharedData::linearLightingSettings.enableLinearLighting)
+				color = Color::GammaToLinear(color);
 
 			sh2 sh = SphericalHarmonics::Evaluate(rayDir);
 
