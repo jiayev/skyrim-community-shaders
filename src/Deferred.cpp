@@ -424,7 +424,7 @@ void Deferred::DeferredPasses()
 				ssgi_y,
 				ssgi_cocg,
 				ibl->loaded ? ibl->diffuseIBLTexture->srv.get() : nullptr,
-				xeGTAO->outputAO->srv.get(),
+				xeGTAO->loaded ?  xeGTAO->outputAO->srv.get() : nullptr,
 			};
 
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -662,6 +662,9 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientComposite()
 		if (globals::features::ibl->loaded)
 			defines.push_back({ "IBL", nullptr });
 
+		if (globals::features::xeGTAO->loaded)
+			defines.push_back({ "XeGTAO", nullptr });
+
 		ambientCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return ambientCompositeCS;
@@ -680,6 +683,9 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientCompositeInterior()
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
+
+		if (globals::features::xeGTAO->loaded)
+			defines.push_back({ "XeGTAO", nullptr });
 
 		ambientCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
 	}

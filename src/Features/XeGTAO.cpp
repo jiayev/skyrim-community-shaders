@@ -1,8 +1,21 @@
 #include "XeGTAO.h"
 
 #include "Deferred.h"
+#include "Menu.h"
 #include "State.h"
 #include "Util.h"
+
+void XeGTAOFeature::DrawSettings()
+{
+	static float debugRescale = .3f;
+	ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+
+	BUFFER_VIEWER_NODE(workingDepths, debugRescale)
+	BUFFER_VIEWER_NODE(workingEdges, debugRescale)
+	BUFFER_VIEWER_NODE(workingAOTerm, debugRescale)
+	BUFFER_VIEWER_NODE(workingAOTermPong, debugRescale)
+	BUFFER_VIEWER_NODE(outputAO, debugRescale)
+}
 
 void XeGTAOFeature::SetupResources()
 {

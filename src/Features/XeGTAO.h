@@ -34,6 +34,8 @@ public:
 	virtual inline std::string GetShortName() override { return "XeGTAO"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "XeGTAO"; }
 
+	virtual void DrawSettings() override;
+
 	virtual void SetupResources() override;
 
 	virtual bool SupportsVR() override { return false; };
