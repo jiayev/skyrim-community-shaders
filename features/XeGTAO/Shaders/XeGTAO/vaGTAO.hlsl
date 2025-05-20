@@ -15,7 +15,7 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #ifndef __INTELLISENSE__  // avoids some pesky intellisense errors
-#	include "XeGTAO.h"
+#	include "XeGTAO\XeGTAO.h"
 #endif
 
 cbuffer GTAOConstantBuffer : register(b0)
@@ -23,7 +23,7 @@ cbuffer GTAOConstantBuffer : register(b0)
 	GTAOConstants g_GTAOConsts;
 }
 
-#include "XeGTAO.hlsli"
+#include "XeGTAO\XeGTAO.hlsli"
 
 // input output textures for the first pass (XeGTAO_PrefilterDepths16x16)
 Texture2D<float> g_srcRawDepth : register(t0);              // source depth buffer data (in NDC space in DirectX)

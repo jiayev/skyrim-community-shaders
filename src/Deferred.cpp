@@ -405,10 +405,12 @@ void Deferred::DeferredPasses()
 	auto ibl = globals::features::ibl;
 	auto xeGTAO = globals::features::xeGTAO;
 
+	if (xeGTAO->loaded)
+		xeGTAO->GTAO();
+
 	auto dispatchCount = Util::GetScreenDispatchCount();
 
 	if (ssgi->loaded) {
-		xeGTAO->GTAO();
 
 		// Ambient Composite
 		{
