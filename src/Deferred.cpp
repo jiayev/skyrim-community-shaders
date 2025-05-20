@@ -424,7 +424,7 @@ void Deferred::DeferredPasses()
 				ssgi_y,
 				ssgi_cocg,
 				ibl->loaded ? ibl->diffuseIBLTexture->srv.get() : nullptr,
-				xeGTAO->loaded ?  xeGTAO->outputAO->srv.get() : nullptr,
+				xeGTAO->loaded ? xeGTAO->outputAO->srv.get() : nullptr,
 			};
 
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
