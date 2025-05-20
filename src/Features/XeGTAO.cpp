@@ -15,14 +15,12 @@ void XeGTAOFeature::DrawSettings()
 	BUFFER_VIEWER_NODE(workingAOTerm, debugRescale)
 	BUFFER_VIEWER_NODE(workingAOTermPong, debugRescale)
 	BUFFER_VIEWER_NODE(outputAO, debugRescale)
+	BUFFER_VIEWER_NODE(outputNormals, debugRescale)
 }
 
 void XeGTAOFeature::SetupResources()
 {
-	CSPrefilterDepths16x16 = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", {}, "cs_5_0", "CSPrefilterDepths16x16"));
-	CSGTAOUltra = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", {}, "cs_5_0", "CSGTAOUltra"));
-	CSDenoisePass = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", {}, "cs_5_0", "CSDenoisePass"));
-	CSDenoiseLastPass = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", {}, "cs_5_0", "CSDenoiseLastPass"));
+	CompileComputeShaders();
 
 	auto renderer = globals::game::renderer;
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
@@ -85,6 +83,14 @@ void XeGTAOFeature::SetupResources()
 	outputAO->CreateSRV(srvDesc);
 	outputAO->CreateUAV(uavDesc);
 
+	texDesc.Format = DXGI_FORMAT_R32_UINT;
+	srvDesc.Format = texDesc.Format;
+	uavDesc.Format = texDesc.Format;
+
+	outputNormals = new Texture2D(texDesc);
+	outputNormals->CreateSRV(srvDesc);
+	outputNormals->CreateUAV(uavDesc);
+
 	constantBuffer = new ConstantBuffer(ConstantBufferDesc<XeGTAO::GTAOConstants>());
 
 	{
@@ -99,6 +105,92 @@ void XeGTAOFeature::SetupResources()
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &samplerPointClamp));
 	}
 }
+
+void XeGTAOFeature::ClearShaderCache()
+{
+	if (CSPrefilterDepths16x16) {
+		CSPrefilterDepths16x16->Release();
+		CSPrefilterDepths16x16 = nullptr;
+	}
+	if (CSGTAOUltra) {
+		CSGTAOUltra->Release();
+		CSGTAOUltra = nullptr;
+	}
+	if (CSDenoisePass) {
+		CSDenoisePass->Release();
+		CSDenoisePass = nullptr;
+	}
+	if (CSDenoiseLastPass) {
+		CSDenoiseLastPass->Release();
+		CSDenoiseLastPass = nullptr;
+	}
+
+	CompileComputeShaders();
+}
+
+void XeGTAOFeature::CompileComputeShaders()
+{
+	CSPrefilterDepths16x16 = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", {}, "cs_5_0", "CSPrefilterDepths16x16"));
+	CSGTAOUltra = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", {}, "cs_5_0", "CSGTAOUltra"));
+	CSDenoisePass = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", {}, "cs_5_0", "CSDenoisePass"));
+	CSDenoiseLastPass = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", {}, "cs_5_0", "CSDenoiseLastPass"));
+	CSGenerateNormals = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", {}, "cs_5_0", "CSGenerateNormals"));
+}
+
+void XeGTAOFeature::Prepass()
+{
+	auto state = globals::state;
+
+	auto renderer = globals::game::renderer;
+	auto context = globals::d3d::context;
+
+	auto inputDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
+
+	{
+		XeGTAO::GTAOConstants consts;
+
+		auto usingTAA = Util::GetTemporal();
+		auto gameViewport = globals::game::graphicsState;
+
+		auto projMatrix = Util::GetCameraData(0).projMat;
+
+		XeGTAO::GTAOUpdateConstants(consts, (int)state->screenSize.x, (int)state->screenSize.y, settings, &projMatrix._11, true, (usingTAA) ? (gameViewport->frameCount % 256) : (0));
+
+		constantBuffer->Update(consts);
+
+		ID3D11Buffer* buffers[1] = { constantBuffer->CB() };
+
+		context->CSSetConstantBuffers(0, 1, buffers);
+	}
+
+	context->CSSetSamplers(0, 1, &samplerPointClamp);
+
+	{
+		state->BeginPerfEvent("XeGTAO Prepass Generate Normals");
+
+		context->CSSetShader(CSGenerateNormals, nullptr, 0);
+		context->CSSetShaderResources(0, 1, &inputDepth);
+		context->CSSetUnorderedAccessViews(0, 1, &outputNormals->uav.get(), nullptr);
+
+		context->Dispatch(((uint)state->screenSize.x + XE_GTAO_NUMTHREADS_X - 1) / XE_GTAO_NUMTHREADS_X, ((uint)state->screenSize.y + XE_GTAO_NUMTHREADS_Y - 1) / XE_GTAO_NUMTHREADS_Y, 1);
+		state->EndPerfEvent();
+	}
+
+	{
+		ID3D11UnorderedAccessView* uavs[1]{ nullptr }；
+		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+
+		ID3D11ShaderResourceView* srvs[1]{ nullptr };
+		context->CSSetShaderResources(0, 1, srvs);
+
+		ID3D11Buffer* buffers[1]{ nullptr };
+		context->CSSetConstantBuffers(0, 1, buffers);
+		context->CSSetShader(nullptr, nullptr, 0);
+	}
+}
+
+
+
 
 void XeGTAOFeature::GTAO()
 {

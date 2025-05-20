@@ -30,7 +30,7 @@ Texture2D<float2> SsgiCoCgTexture : register(t7);
 #endif
 
 #if defined(XeGTAO)
-Texture2D<float4> XEGTAOTexture : register(t9);
+Texture2D<uint> XEGTAOTexture : register(t9);
 #endif
 
 RWTexture2D<float4> MainRW : register(u0);

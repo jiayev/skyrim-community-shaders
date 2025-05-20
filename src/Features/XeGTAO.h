@@ -15,12 +15,14 @@ public:
 	ID3D11ComputeShader* CSGTAOUltra;
 	ID3D11ComputeShader* CSDenoisePass;
 	ID3D11ComputeShader* CSDenoiseLastPass;
+	ID3D11ComputeShader* CSGenerateNormals;
 
 	Texture2D* workingDepths;
 	Texture2D* workingEdges;
 	Texture2D* workingAOTerm;
 	Texture2D* workingAOTermPong;
 	Texture2D* outputAO;
+	Texture2D* outputNormals;
 
 	ID3D11SamplerState* samplerPointClamp = nullptr;
 
@@ -37,6 +39,10 @@ public:
 	virtual void DrawSettings() override;
 
 	virtual void SetupResources() override;
+	virtual void ClearShaderCache() override;
+	void CompileComputeShaders();
+
+	virtual void Prepass() override;
 
 	virtual bool SupportsVR() override { return false; };
 
