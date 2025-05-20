@@ -116,7 +116,7 @@ void XeGTAOFeature::GTAO()
 		XeGTAO::GTAOConstants consts;
 
 		auto usingTAA = Util::GetTemporal();
-		auto gameViewport = RE::BSGraphics::State::GetSingleton();
+		auto gameViewport = globals::game::graphicsState;
 
 		auto projMatrix = Util::GetCameraData(0).projMat;
 
