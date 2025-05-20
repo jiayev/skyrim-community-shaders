@@ -170,7 +170,8 @@ void XeGTAOFeature::Prepass()
 
 		context->CSSetShader(CSGenerateNormals, nullptr, 0);
 		context->CSSetShaderResources(0, 1, &inputDepth);
-		context->CSSetUnorderedAccessViews(0, 1, &outputNormals->uav.get(), nullptr);
+		auto uav = outputNormals->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 		context->Dispatch(((uint)state->screenSize.x + XE_GTAO_NUMTHREADS_X - 1) / XE_GTAO_NUMTHREADS_X, ((uint)state->screenSize.y + XE_GTAO_NUMTHREADS_Y - 1) / XE_GTAO_NUMTHREADS_Y, 1);
 		state->EndPerfEvent();
