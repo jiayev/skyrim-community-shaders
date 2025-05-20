@@ -271,7 +271,6 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
 				float wetness = std::min(1.0f, wetnessCurrentWeather + wetnessLastWeather);
 				float puddleWetness = std::min(1.0f, puddleCurrentWeather + puddleLastWeather);
 
-
 				data.Wetness = wetness;
 				data.PuddleWetness = puddleWetness;
 				if (debugSettings.EnableWetnessOverride) {
@@ -283,8 +282,7 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
 				if (debugSettings.EnableRainOverride) {
 					data.Raining = debugSettings.RainOverride.y;
 				}
-			}
-			else {
+			} else {
 				if (debugSettings.EnableWetnessOverride) {
 					data.Wetness = debugSettings.EnableIntExOverride ? debugSettings.WetnessOverride.x : debugSettings.WetnessOverride.y;
 				}
@@ -296,7 +294,6 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData()
 				}
 			}
 		}
-		
 	}
 
 	static size_t rainTimer = 0;  // size_t for precision
@@ -329,20 +326,19 @@ void WetnessEffects::Prepass()
 
 void WetnessEffects::LoadSettings(json& o_json)
 {
-    settings = o_json;
+	settings = o_json;
 
-    if (o_json.contains("DebugSettings")) {
-        debugSettings = o_json["DebugSettings"].get<DebugSettings>();
-    }
+	if (o_json.contains("DebugSettings")) {
+		debugSettings = o_json["DebugSettings"].get<DebugSettings>();
+	}
 }
 
 void WetnessEffects::SaveSettings(json& o_json)
 {
-    o_json = settings;
+	o_json = settings;
 
-    o_json["DebugSettings"] = debugSettings;
+	o_json["DebugSettings"] = debugSettings;
 }
-
 
 void WetnessEffects::RestoreDefaultSettings()
 {
