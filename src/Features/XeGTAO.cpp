@@ -177,8 +177,8 @@ void XeGTAOFeature::Prepass()
 	}
 
 	{
-		ID3D11UnorderedAccessView* uavs[1] { nullptr }
-		； context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+		ID3D11UnorderedAccessView* uavs[1] { nullptr };
+		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
 		ID3D11ShaderResourceView* srvs[1]{ nullptr };
 		context->CSSetShaderResources(0, 1, srvs);
