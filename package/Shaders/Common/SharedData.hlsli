@@ -198,7 +198,8 @@ namespace SharedData
 	{
 		uint enableLinearLighting;
 		uint enableGammaCorrection;
-		uint2 pad;
+		float lightGamma;
+		float colorGamma;
 	};
 
 	struct SSPLSSettings
