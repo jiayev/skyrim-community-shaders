@@ -411,7 +411,6 @@ void Deferred::DeferredPasses()
 	auto dispatchCount = Util::GetScreenDispatchCount();
 
 	if (ssgi->loaded) {
-
 		// Ambient Composite
 		{
 			TracyD3D11Zone(globals::state->tracyCtx, "Ambient Composite");
