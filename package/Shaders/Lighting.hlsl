@@ -1979,15 +1979,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif  // WORLD_MAP
 
 #	if defined(XeGTAO)
-	float3 bendNormal = 0.0;
+	float3 bentNormal = 0.0;
 	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
 #		if !defined(DRAW_IN_WORLDSPACE)
-		bendNormal = BentNormals::GetModelSpaceBentNormal(screenUV.xy, eyeIndex, input.WorldSpace, input.World[eyeIndex]);
+		bentNormal = BentNormals::GetModelSpaceBentNormal(screenUV.xy, eyeIndex, input.WorldSpace, input.World[eyeIndex]);
 #		else
-		bendNormal = BentNormals::GetModelSpaceBentNormal(screenUV.xy, eyeIndex);
+		bentNormal = BentNormals::GetModelSpaceBentNormal(screenUV.xy, eyeIndex);
 #		endif
 	}
-	modelNormal.xyz = normalize(modelNormal.xyz + bendNormal);
+	modelNormal.xyz = normalize(modelNormal.xyz - bentNormal);
 #	endif
 
 	float3 worldSpaceNormal = modelNormal.xyz;
