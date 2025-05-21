@@ -29,33 +29,43 @@ namespace BentNormals
 		return normalize(XeGTAO_R11G11B10_UNORM_to_FLOAT3(packedXeGTAONormal) * 2.0 - 1.0);
 	}
 
+    float3 WorldToModel(float3 worldPos, float3x4 world)
+    {
+        float3x3 rotationMatrix = float3x3(
+            world[0].xyz,
+            world[1].xyz,
+            world[2].xyz
+        );
+        float3x3 inverseRotation = float3x3(
+            rotationMatrix[0][0], rotationMatrix[1][0], rotationMatrix[2][0],
+            rotationMatrix[0][1], rotationMatrix[1][1], rotationMatrix[2][1],
+            rotationMatrix[0][2], rotationMatrix[1][2], rotationMatrix[2][2]
+        );
+        float3 modelPos = mul(inverseRotation, worldPos);
+        return modelPos;
+    }
+
 #if !defined(DRAW_IN_WORLDSPACE)
-	float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex, bool worldSpace, float3x4 world)
+    float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex, bool worldSpace, float3x4 world)
 #else
-	float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex)
+    float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex)
 #endif
-	{
-		float4x4 inverseView = FrameBuffer::CameraViewInverse[eyeIndex];
-		float3 bentNormal = GetBentNormals(uv, eyeIndex);
-		float3 generatedNormal = GetGeneratedNormals(uv, eyeIndex);
+    {
+        float4x4 inverseView = FrameBuffer::CameraViewInverse[eyeIndex];
+        float3 bentNormal = GetBentNormals(uv, eyeIndex);
+        float3 generatedNormal = GetGeneratedNormals(uv, eyeIndex);
 
-		float3 diff = bentNormal - generatedNormal;
-		float3 bentNormalWS = mul(inverseView, float4(diff, 0)).xyz;
+        float3 bentNormalWS = mul(inverseView, float4(bentNormal, 0)).xyz;
+        float3 generatedNormalWS = mul(inverseView, float4(generatedNormal, 0)).xyz;   
 
 #if !defined(DRAW_IN_WORLDSPACE)
-		if (!worldSpace) {
-			float3x3 rotationMatrix = float3x3(
-				world[0].xyz,
-				world[1].xyz,
-				world[2].xyz);
-			float3x3 inverseRotation = float3x3(
-				rotationMatrix[0][0], rotationMatrix[1][0], rotationMatrix[2][0],
-				rotationMatrix[0][1], rotationMatrix[1][1], rotationMatrix[2][1],
-				rotationMatrix[0][2], rotationMatrix[1][2], rotationMatrix[2][2]);
-			bentNormalWS = mul(inverseRotation, bentNormalWS);
-		}
+        if (!worldSpace)
+        {
+            bentNormalWS = WorldToModel(bentNormalWS, world);
+            generatedNormalWS = WorldToModel(generatedNormalWS, world);
+        }
 #endif
-		return bentNormalWS;
-	}
+        return bentNormalWS - generatedNormalWS;
+    }
 }
 #endif
