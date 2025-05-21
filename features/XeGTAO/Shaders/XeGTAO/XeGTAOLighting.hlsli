@@ -21,15 +21,15 @@ namespace GTAO
 	}
 
 	float3 GetBentNormals(float2 uv, uint eyeIndex, out float xeGTAO)
-    {
-        xeGTAO = 1.0;
+	{
+		xeGTAO = 1.0;
 		uint2 pixelCoord = SharedData::ConvertUVToSampleCoord(uv, eyeIndex);
 		uint packedXeGTAO = XeGTAOTexture[pixelCoord].x;
 		lpfloat xeGTAOWeight = 1.0;
 		lpfloat3 bentNormal = 0.0;
 
 		XeGTAO_DecodeVisibilityBentNormal(packedXeGTAO, xeGTAOWeight, bentNormal);
-        xeGTAO = xeGTAOWeight;
+		xeGTAO = xeGTAOWeight;
 		return normalize(bentNormal);
 	}
 
@@ -60,21 +60,20 @@ namespace GTAO
 	float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex, out float xeGTAO)
 #endif
 	{
-        xeGTAO = 1.0;
+		xeGTAO = 1.0;
 		float4x4 inverseView = FrameBuffer::CameraViewInverse[eyeIndex];
 		float3 bentNormal = GetBentNormals(uv, eyeIndex, xeGTAO);
 		float3 generatedNormal = GetGeneratedNormals(uv, eyeIndex);
 
 		float3 bentNormalWS = normalize(mul(inverseView, float4(bentNormal, 0)).xyz);
 		float3 generatedNormalWS = normalize(mul(inverseView, float4(generatedNormal, 0)).xyz);
-        float3 diffWS = bentNormalWS - generatedNormalWS;
-
+		float3 diffWS = bentNormalWS - generatedNormalWS;
 
 #if !defined(DRAW_IN_WORLDSPACE)
 		if (!worldSpace) {
 			bentNormalWS = normalize(WorldToModel(bentNormalWS, world));
 			generatedNormalWS = normalize(WorldToModel(generatedNormalWS, world));
-            diffWS = bentNormalWS - generatedNormalWS;
+			diffWS = bentNormalWS - generatedNormalWS;
 		}
 #endif
 		return diffWS;

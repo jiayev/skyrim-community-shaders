@@ -321,7 +321,7 @@ void XeGTAOFeature::GTAO(bool b_isFirstPass)
 	} else {
 		inputNormals = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS].SRV;
 	}
-	
+
 	settings.DenoisePasses = 3;
 
 	{
@@ -351,10 +351,18 @@ void XeGTAOFeature::GTAO(bool b_isFirstPass)
 		ID3D11ComputeShader* mainShader = nullptr;
 		int qualityLevel = b_isFirstPass ? menusettings.QualityLevel : menusettings.SecondPassQualityLevel;
 		switch (qualityLevel) {
-			case 0: mainShader = CSGTAOLow[shaderIndex]; break;
-			case 1: mainShader = CSGTAOMedium[shaderIndex]; break;
-			case 2: mainShader = CSGTAOHigh[shaderIndex]; break;
-			case 3: mainShader = CSGTAOUltra[shaderIndex]; break;
+		case 0:
+			mainShader = CSGTAOLow[shaderIndex];
+			break;
+		case 1:
+			mainShader = CSGTAOMedium[shaderIndex];
+			break;
+		case 2:
+			mainShader = CSGTAOHigh[shaderIndex];
+			break;
+		case 3:
+			mainShader = CSGTAOUltra[shaderIndex];
+			break;
 		}
 		context->CSSetShader(mainShader, nullptr, 0);
 

@@ -157,9 +157,9 @@ Texture2D<uint> XeGTAOTexture : register(t9);
 
 	visibility *= ssgiAo;
 
-#if defined(XeGTAO)
+#	if defined(XeGTAO)
 	visibility *= xeGTAOVisibility;
-#endif
+#	endif
 
 #	if defined(INTERIOR)
 	linDiffuseColor *= ssgiAo;
