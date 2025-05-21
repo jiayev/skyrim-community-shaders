@@ -34,9 +34,9 @@ RWTexture2D<lpfloat> g_outWorkingDepthMIP3 : register(u3);  // output viewspace 
 RWTexture2D<lpfloat> g_outWorkingDepthMIP4 : register(u4);  // output viewspace depth MIP (these are views into g_srcWorkingDepth MIP levels)
 
 // input output textures for the second pass (XeGTAO_MainPass)
-Texture2D<lpfloat> g_srcWorkingDepth : register(t0);        // viewspace depth with MIPs, output by XeGTAO_PrefilterDepths16x16 and consumed by XeGTAO_MainPass
+Texture2D<lpfloat> g_srcWorkingDepth : register(t0);  // viewspace depth with MIPs, output by XeGTAO_PrefilterDepths16x16 and consumed by XeGTAO_MainPass
 #ifndef USE_GENERATED_NORMALS
-Texture2D<float2> g_srcNormalmap : register(t1);            // source normal map (if used)
+Texture2D<float2> g_srcNormalmap : register(t1);  // source normal map (if used)
 #else
 Texture2D<uint> g_srcNormalmap : register(t1);
 #endif
@@ -70,9 +70,9 @@ lpfloat3 LoadNormal(int2 pos)
 	return (lpfloat3)DecodeNormal(encodedNormal);
 #else
 	// special decoding for external normals stored in 11_11_10 unorm
-    uint packedInput = g_srcNormalmap.Load( int3(pos, 0) ).x;
-    float3 unpackedOutput = XeGTAO_R11G11B10_UNORM_to_FLOAT3( packedInput );
-    float3 normal = normalize(unpackedOutput * 2.0.xxx - 1.0.xxx);
+	uint packedInput = g_srcNormalmap.Load(int3(pos, 0)).x;
+	float3 unpackedOutput = XeGTAO_R11G11B10_UNORM_to_FLOAT3(packedInput);
+	float3 normal = normalize(unpackedOutput * 2.0.xxx - 1.0.xxx);
 
 	return (lpfloat3)normal;
 #endif
