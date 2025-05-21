@@ -103,7 +103,8 @@ Texture2D<uint> XeGTAOGeneratedNormal : register(t16);
 	uint xeGTAO = 0;
 	lpfloat xeGTAOWeight = 1.0;
 	lpfloat3 bentNormal = 0.0;
-	float3 bentNormalWS = 0.0 float xeGTAOVisibility = 1.0;
+	float3 bentNormalWS = 0.0;
+	float xeGTAOVisibility = 1.0;
 
 	if (SharedData::xeGTAOSettings.Enabled) {
 		xeGTAO = XeGTAOTexture[dispatchID.xy].x;
@@ -216,44 +217,45 @@ Texture2D<uint> XeGTAOGeneratedNormal : register(t16);
 #endif
 
 #if defined(XeGTAO)
+	if (SharedData::xeGTAOSettings.Enabled) {
 #	if defined(GTAO_DEBUG_NORMAL)
-	uint packedXeGTAONormal = XeGTAOGeneratedNormal[dispatchID.xy].x;
-	float3 xeGTAONormal = XeGTAO_R11G11B10_UNORM_to_FLOAT3(packedXeGTAONormal);
-	if (uv.x < 0.5)
-		color = xeGTAONormal;
-	else
-		color = normalVS * 0.5 + 0.5;
-	color = Color::GammaToLinear(color);
+		uint packedXeGTAONormal = XeGTAOGeneratedNormal[dispatchID.xy].x;
+		float3 xeGTAONormal = XeGTAO_R11G11B10_UNORM_to_FLOAT3(packedXeGTAONormal);
+		if (uv.x < 0.5)
+			color = xeGTAONormal;
+		else
+			color = normalVS * 0.5 + 0.5;
+		color = Color::GammaToLinear(color);
 #	elif defined(GTAO_DEBUG_AO)
-	color = xeGTAOWeight;
-	color = Color::GammaToLinear(color);
+		color = xeGTAOWeight;
+		color = Color::GammaToLinear(color);
 #	elif defined(GTAO_DEBUG_BENT_NORMAL)
-	color = (float3)bentNormal * 0.5 + 0.5;
-	color = Color::GammaToLinear(color);
+		color = (float3)bentNormal * 0.5 + 0.5;
+		color = Color::GammaToLinear(color);
 #	endif
-}
+	}
 #endif
 
-color = Color::LinearToGamma(color);
+	color = Color::LinearToGamma(color);
 
 #if defined(DEBUG)
 
 #	if defined(VR)
-uv.x += (eyeIndex ? 0.1 : -0.1);
+	uv.x += (eyeIndex ? 0.1 : -0.1);
 #	endif  // VR
 
-if (uv.x < 0.5 && uv.y < 0.5) {
-	color = color;
-} else if (uv.x < 0.5) {
-	color = albedo;
-} else if (uv.y < 0.5) {
-	color = normalVS;
-} else {
-	color = glossiness;
-}
+	if (uv.x < 0.5 && uv.y < 0.5) {
+		color = color;
+	} else if (uv.x < 0.5) {
+		color = albedo;
+	} else if (uv.y < 0.5) {
+		color = normalVS;
+	} else {
+		color = glossiness;
+	}
 
 #endif
 
-MainRW[dispatchID.xy] = float4(color, 1.0);
-NormalTAAMaskSpecularMaskRW[dispatchID.xy] = float4(GBuffer::EncodeNormalVanilla(normalVS), 0.0, 0.0);
+	MainRW[dispatchID.xy] = float4(color, 1.0);
+	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = float4(GBuffer::EncodeNormalVanilla(normalVS), 0.0, 0.0);
 }
