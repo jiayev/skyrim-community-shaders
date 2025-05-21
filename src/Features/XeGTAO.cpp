@@ -212,10 +212,12 @@ void XeGTAOFeature::CompileComputeShaders()
 
 void XeGTAOFeature::Prepass()
 {
-	if (!menusettings.Enabled) return;
+	if (!menusettings.Enabled)
+		return;
 
 	GTAOGenerateNormals();
-	if (menusettings.UseGeneratedNormals || menusettings.BentNormals) GTAO();
+	if (menusettings.UseGeneratedNormals || menusettings.BentNormals)
+		GTAO();
 
 	auto context = globals::d3d::context;
 	ID3D11ShaderResourceView* views[2]{ outputAO->srv.get(), generatedNormals->srv.get() };
