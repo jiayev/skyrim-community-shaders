@@ -1033,7 +1033,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #	endif
 
 #	if defined(XeGTAO)
-#		include "XeGTAO/BentNormals.hlsli"
+#		include "XeGTAO/XeGTAOLighting.hlsli"
 #	endif
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace
@@ -1980,14 +1980,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(XeGTAO)
 	float3 bentNormal = 0.0;
-	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+	float xeGTAOVisibility = 1.0;
+	if (SharedData::xeGTAOSettings.Enabled) {
+		if (SharedData::xeGTAOSettings.BentNormals) {
 #		if !defined(DRAW_IN_WORLDSPACE)
-		bentNormal = BentNormals::GetModelSpaceBentNormal(screenUV.xy, eyeIndex, input.WorldSpace, input.World[eyeIndex]);
+			bentNormal = GTAO::GetModelSpaceBentNormal(screenUV.xy, eyeIndex, xeGTAOVisibility, input.WorldSpace, input.World[eyeIndex]);
 #		else
-		bentNormal = BentNormals::GetModelSpaceBentNormal(screenUV.xy, eyeIndex);
+			bentNormal = GTAO::GetModelSpaceBentNormal(screenUV.xy, eyeIndex, xeGTAOVisibility);
 #		endif
+			modelNormal.xyz = normalize(modelNormal.xyz - bentNormal);
+		} else {
+			xeGTAOVisibility = GTAO::GetVisibility(screenUV.xy, eyeIndex);
+			xeGTAOVisibility = saturate(lerp(1.0, xeGTAOVisibility, SharedData::xeGTAOSettings.Mix));
+		}
 	}
-	modelNormal.xyz = normalize(modelNormal.xyz - bentNormal);
 #	endif
 
 	float3 worldSpaceNormal = modelNormal.xyz;
@@ -2662,6 +2668,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 		directionalAmbientColor *= skylightingDiffuse;
 		directionalAmbientColor *= 1.0 + saturate(worldSpaceNormal.z) * (1.0 - SharedData::skylightingSettings.MinDiffuseVisibility);
+		directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor);
+	}
+#	endif
+
+#	if defined(XeGTAO)
+	if (xeGTAOVisibility < 1.0) {
+		directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor);
+		directionalAmbientColor *= xeGTAOVisibility;
 		directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor);
 	}
 #	endif

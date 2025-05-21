@@ -1,24 +1,35 @@
-#ifndef XeGTAO_BENT_NORMALS_HLSLI
-#define XeGTAO_BENT_NORMALS_HLSLI
+#ifndef XeGTAO_LIGHTING_HLSLI
+#define XeGTAO_LIGHTING_HLSLI
 
 #include "Common/FrameBuffer.hlsli"
 #include "Common/SharedData.hlsli"
 
 #include "XeGTAO/XeGTAO.hlsli"
 
-namespace BentNormals
+namespace GTAO
 {
 	Texture2D<uint> XeGTAOTexture : register(t78);
 	Texture2D<uint> XeGTAOGeneratedNormal : register(t79);
 
-	float3 GetBentNormals(float2 uv, uint eyeIndex)
+	float GetVisibility(float2 uv, uint eyeIndex)
 	{
+		uint2 pixelCoord = SharedData::ConvertUVToSampleCoord(uv, eyeIndex);
+		uint packedXeGTAO = XeGTAOTexture[pixelCoord].x;
+		float xeGTAOWeight = 1.0;
+		xeGTAOWeight = (float)packedXeGTAO / 255.0;
+		return xeGTAOWeight;
+	}
+
+	float3 GetBentNormals(float2 uv, uint eyeIndex, out float xeGTAO)
+    {
+        xeGTAO = 1.0;
 		uint2 pixelCoord = SharedData::ConvertUVToSampleCoord(uv, eyeIndex);
 		uint packedXeGTAO = XeGTAOTexture[pixelCoord].x;
 		lpfloat xeGTAOWeight = 1.0;
 		lpfloat3 bentNormal = 0.0;
 
 		XeGTAO_DecodeVisibilityBentNormal(packedXeGTAO, xeGTAOWeight, bentNormal);
+        xeGTAO = xeGTAOWeight;
 		return normalize(bentNormal);
 	}
 
@@ -44,25 +55,29 @@ namespace BentNormals
 	}
 
 #if !defined(DRAW_IN_WORLDSPACE)
-	float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex, bool worldSpace, float3x4 world)
+	float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex, out float xeGTAO, bool worldSpace, float3x4 world)
 #else
-	float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex)
+	float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex, out float xeGTAO)
 #endif
 	{
+        xeGTAO = 1.0;
 		float4x4 inverseView = FrameBuffer::CameraViewInverse[eyeIndex];
-		float3 bentNormal = GetBentNormals(uv, eyeIndex);
+		float3 bentNormal = GetBentNormals(uv, eyeIndex, xeGTAO);
 		float3 generatedNormal = GetGeneratedNormals(uv, eyeIndex);
 
-		float3 bentNormalWS = mul(inverseView, float4(bentNormal, 0)).xyz;
-		float3 generatedNormalWS = mul(inverseView, float4(generatedNormal, 0)).xyz;
+		float3 bentNormalWS = normalize(mul(inverseView, float4(bentNormal, 0)).xyz);
+		float3 generatedNormalWS = normalize(mul(inverseView, float4(generatedNormal, 0)).xyz);
+        float3 diffWS = bentNormalWS - generatedNormalWS;
+
 
 #if !defined(DRAW_IN_WORLDSPACE)
 		if (!worldSpace) {
-			bentNormalWS = WorldToModel(bentNormalWS, world);
-			generatedNormalWS = WorldToModel(generatedNormalWS, world);
+			bentNormalWS = normalize(WorldToModel(bentNormalWS, world));
+			generatedNormalWS = normalize(WorldToModel(generatedNormalWS, world));
+            diffWS = bentNormalWS - generatedNormalWS;
 		}
 #endif
-		return bentNormalWS - generatedNormalWS;
+		return diffWS;
 	}
 }
 #endif

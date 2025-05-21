@@ -12,20 +12,21 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Denoise,
 	Radius,
 	MixStrength,
-	UseGeneratedNormals,
+	UseSecondPass,
+	SecondPassQualityLevel,
+	SecondPassRadius,
 	BentNormals);
 
 void XeGTAOFeature::DrawSettings()
 {
 	ImGui::Checkbox("XeGTAO", &menusettings.Enabled);
 
-	if (ImGui::Combo("Quality Level", &menusettings.QualityLevel, "Low\0Medium\0High\0Ultra\0")) {
-		ClearShaderCache();
-	}
-	// ImGui::Checkbox("Denoise", &menusettings.Denoise);
-	// ImGui::Text("Denoise is broken for now. Do not use.");
+	ImGui::Combo("Quality Level", &menusettings.QualityLevel, "Low\0Medium\0High\0Ultra\0");
+	ImGui::Checkbox("Denoise", &menusettings.Denoise);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Denoise is broken for now. Do not use.");
 
-	ImGui::SliderFloat("Radius", &menusettings.Radius, 0.0f, 100.0f);
+	ImGui::SliderFloat("Radius", &menusettings.Radius, 0.0f, 512.0f);
 	ImGui::SliderFloat("Mix Strength", &menusettings.MixStrength, 0.0f, 1.0f);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Only affects the final deferred AO output.");
@@ -33,10 +34,12 @@ void XeGTAOFeature::DrawSettings()
 	if (ImGui::Checkbox("Bent Normals", &menusettings.BentNormals)) {
 		ClearShaderCache();
 	}
-	ImGui::Text("Bent normals requires generated normals to be enabled. When using bent normals, the generated normals are forced on.");
-	if (ImGui::Checkbox("Use Generated Normals", &menusettings.UseGeneratedNormals)) {
-		ClearShaderCache();
-	}
+
+	ImGui::Checkbox("Use Second Pass For Deferred", &menusettings.UseSecondPass);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Use a second pass for deferred AO, so it can calculate the AO term based on screen space normals.");
+	ImGui::Combo("Second Pass Quality Level", &menusettings.SecondPassQualityLevel, "Low\0Medium\0High\0Ultra\0");
+	ImGui::SliderFloat("Second Pass Radius", &menusettings.SecondPassRadius, 0.0f, 512.0f);
 
 	static float debugRescale = .3f;
 	ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
@@ -157,17 +160,31 @@ void XeGTAOFeature::ClearShaderCache()
 		CSPrefilterDepths16x16->Release();
 		CSPrefilterDepths16x16 = nullptr;
 	}
-	if (CSGTAO) {
-		CSGTAO->Release();
-		CSGTAO = nullptr;
-	}
-	if (CSDenoisePass) {
-		CSDenoisePass->Release();
-		CSDenoisePass = nullptr;
-	}
-	if (CSDenoiseLastPass) {
-		CSDenoiseLastPass->Release();
-		CSDenoiseLastPass = nullptr;
+	for (int i = 0; i < 2; i++) {
+		if (CSGTAOLow[i]) {
+			CSGTAOLow[i]->Release();
+			CSGTAOLow[i] = nullptr;
+		}
+		if (CSGTAOMedium[i]) {
+			CSGTAOMedium[i]->Release();
+			CSGTAOMedium[i] = nullptr;
+		}
+		if (CSGTAOHigh[i]) {
+			CSGTAOHigh[i]->Release();
+			CSGTAOHigh[i] = nullptr;
+		}
+		if (CSGTAOUltra[i]) {
+			CSGTAOUltra[i]->Release();
+			CSGTAOUltra[i] = nullptr;
+		}
+		if (CSDenoisePass[i]) {
+			CSDenoisePass[i]->Release();
+			CSDenoisePass[i] = nullptr;
+		}
+		if (CSDenoiseLastPass[i]) {
+			CSDenoiseLastPass[i]->Release();
+			CSDenoiseLastPass[i] = nullptr;
+		}
 	}
 	if (CSGenerateNormals) {
 		CSGenerateNormals->Release();
@@ -182,32 +199,22 @@ void XeGTAOFeature::CompileComputeShaders()
 	std::vector<std::pair<const char*, const char*>> defines;
 	if (menusettings.BentNormals)
 		defines.push_back({ "XE_GTAO_COMPUTE_BENT_NORMALS", nullptr });
-	if (menusettings.UseGeneratedNormals || menusettings.BentNormals) {
-		defines.push_back({ "USE_GENERATED_NORMALS", nullptr });
-	}
 	CSPrefilterDepths16x16 = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", {}, "cs_5_0", "CSPrefilterDepths16x16"));
-	char const* shaderName = nullptr;
-	switch (menusettings.QualityLevel) {
-	case 0:
-		shaderName = "CSGTAOLow";
-		break;
-	case 1:
-		shaderName = "CSGTAOMedium";
-		break;
-	case 2:
-		shaderName = "CSGTAOHigh";
-		break;
-	case 3:
-		shaderName = "CSGTAOUltra";
-		break;
-	default:
-		shaderName = "CSGTAOHigh";
-		break;
-	}
-	CSGTAO = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", shaderName));
-	CSDenoisePass = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSDenoisePass"));
-	CSDenoiseLastPass = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSDenoiseLastPass"));
+	CSGTAOLow[0] = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSGTAOLow"));
+	CSGTAOMedium[0] = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSGTAOMedium"));
+	CSGTAOHigh[0] = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSGTAOHigh"));
+	CSGTAOUltra[0] = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSGTAOUltra"));
+	CSDenoisePass[0] = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSDenoisePass"));
+	CSDenoiseLastPass[0] = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSDenoiseLastPass"));
 	CSGenerateNormals = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSGenerateNormals"));
+
+	defines.push_back({ "USE_GENERATED_NORMALS", nullptr });
+	CSGTAOLow[1] = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSGTAOLow"));
+	CSGTAOMedium[1] = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSGTAOMedium"));
+	CSGTAOHigh[1] = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSGTAOHigh"));
+	CSGTAOUltra[1] = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSGTAOUltra"));
+	CSDenoisePass[1] = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSDenoisePass"));
+	CSDenoiseLastPass[1] = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", defines, "cs_5_0", "CSDenoiseLastPass"));
 }
 
 void XeGTAOFeature::Prepass()
@@ -216,8 +223,7 @@ void XeGTAOFeature::Prepass()
 		return;
 
 	GTAOGenerateNormals();
-	if (menusettings.UseGeneratedNormals || menusettings.BentNormals)
-		GTAO();
+	GTAO(true);
 
 	auto context = globals::d3d::context;
 	ID3D11ShaderResourceView* views[2]{ outputAO->srv.get(), generatedNormals->srv.get() };
@@ -253,7 +259,7 @@ void XeGTAOFeature::GTAOGenerateNormals()
 	context->CSSetSamplers(0, 1, &samplerPointClamp);
 
 	{
-		state->BeginPerfEvent("XeGTAO Prepass Generate Normals");
+		state->BeginPerfEvent("GTAO Generate Normals");
 
 		context->CSSetShader(CSGenerateNormals, nullptr, 0);
 		context->CSSetShaderResources(0, 1, &inputDepth);
@@ -267,54 +273,7 @@ void XeGTAOFeature::GTAOGenerateNormals()
 	{
 		ID3D11UnorderedAccessView* uavs[1]{ nullptr };
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-		ID3D11ShaderResourceView* srvs[1]{ nullptr };
-		context->CSSetShaderResources(0, 1, srvs);
-
-		ID3D11Buffer* buffers[1]{ nullptr };
-		context->CSSetConstantBuffers(0, 1, buffers);
-		context->CSSetShader(nullptr, nullptr, 0);
 	}
-}
-
-void XeGTAOFeature::GTAO()
-{
-	auto state = globals::state;
-
-	auto renderer = globals::game::renderer;
-	auto context = globals::d3d::context;
-
-	auto inputDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
-
-	ID3D11ShaderResourceView* inputNormals = nullptr;
-	if (menusettings.UseGeneratedNormals || menusettings.BentNormals) {
-		inputNormals = generatedNormals->srv.get();
-	} else {
-		inputNormals = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS].SRV;
-	}
-
-	settings.DenoisePasses = 3;
-
-	{
-		XeGTAO::GTAOConstants consts;
-
-		auto usingTAA = Util::GetTemporal();
-		auto gameViewport = globals::game::graphicsState;
-
-		auto projMatrix = Util::GetCameraData(0).projMat;
-
-		settings.Radius = menusettings.Radius;
-
-		XeGTAO::GTAOUpdateConstants(consts, (int)state->screenSize.x, (int)state->screenSize.y, settings, &projMatrix._11, true, (usingTAA) ? (gameViewport->frameCount % 256) : (0));
-
-		constantBuffer->Update(consts);
-
-		ID3D11Buffer* buffers[1] = { constantBuffer->CB() };
-
-		context->CSSetConstantBuffers(0, 1, buffers);
-	}
-
-	context->CSSetSamplers(0, 1, &samplerPointClamp);
 
 	{
 		state->BeginPerfEvent("GTAO Prefilter Depths");
@@ -338,12 +297,66 @@ void XeGTAOFeature::GTAO()
 	{
 		ID3D11UnorderedAccessView* uavs[5]{ nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+		ID3D11ShaderResourceView* srvs[1]{ nullptr };
+		context->CSSetShaderResources(0, 1, srvs);
+
+		ID3D11Buffer* buffers[1]{ nullptr };
+		context->CSSetConstantBuffers(0, 1, buffers);
+		context->CSSetShader(nullptr, nullptr, 0);
 	}
+}
+
+void XeGTAOFeature::GTAO(bool b_isFirstPass)
+{
+	int shaderIndex = b_isFirstPass ? 1 : 0;
+	auto state = globals::state;
+
+	auto renderer = globals::game::renderer;
+	auto context = globals::d3d::context;
+
+	ID3D11ShaderResourceView* inputNormals = nullptr;
+	if (b_isFirstPass) {
+		inputNormals = generatedNormals->srv.get();
+	} else {
+		inputNormals = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS].SRV;
+	}
+	
+	settings.DenoisePasses = 3;
+
+	{
+		XeGTAO::GTAOConstants consts;
+
+		auto usingTAA = Util::GetTemporal();
+		auto gameViewport = globals::game::graphicsState;
+
+		auto projMatrix = Util::GetCameraData(0).projMat;
+
+		settings.Radius = b_isFirstPass ? menusettings.Radius : menusettings.SecondPassRadius;
+
+		XeGTAO::GTAOUpdateConstants(consts, (int)state->screenSize.x, (int)state->screenSize.y, settings, &projMatrix._11, true, (usingTAA) ? (gameViewport->frameCount % 256) : (0));
+
+		constantBuffer->Update(consts);
+
+		ID3D11Buffer* buffers[1] = { constantBuffer->CB() };
+
+		context->CSSetConstantBuffers(0, 1, buffers);
+	}
+
+	context->CSSetSamplers(0, 1, &samplerPointClamp);
 
 	{
 		state->BeginPerfEvent("GTAO Main Pass");
 
-		context->CSSetShader(CSGTAO, nullptr, 0);
+		ID3D11ComputeShader* mainShader = nullptr;
+		int qualityLevel = b_isFirstPass ? menusettings.QualityLevel : menusettings.SecondPassQualityLevel;
+		switch (qualityLevel) {
+			case 0: mainShader = CSGTAOLow[shaderIndex]; break;
+			case 1: mainShader = CSGTAOMedium[shaderIndex]; break;
+			case 2: mainShader = CSGTAOHigh[shaderIndex]; break;
+			case 3: mainShader = CSGTAOUltra[shaderIndex]; break;
+		}
+		context->CSSetShader(mainShader, nullptr, 0);
 
 		// input SRVs
 		ID3D11ShaderResourceView* srvs[2]{ workingDepths->srv.get(), inputNormals };
@@ -369,7 +382,7 @@ void XeGTAOFeature::GTAO()
 		for (int i = 0; i < passCount; i++) {
 			const bool lastPass = i == passCount - 1;
 
-			context->CSSetShader((lastPass) ? (CSDenoiseLastPass) : (CSDenoisePass), nullptr, 0);
+			context->CSSetShader((lastPass) ? (CSDenoiseLastPass[shaderIndex]) : (CSDenoisePass[shaderIndex]), nullptr, 0);
 
 			ID3D11ShaderResourceView* srvs[2]{ workingAOTerm->srv.get(), workingEdges->srv.get() };
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);

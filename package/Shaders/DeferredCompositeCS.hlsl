@@ -99,12 +99,45 @@ Texture2D<uint> XeGTAOGeneratedNormal : register(t16);
 
 	float3 color = Color::GammaToLinear(diffuseColor) + specularColor;
 
+#if defined(XeGTAO)
+	uint xeGTAO = 0;
+	lpfloat xeGTAOWeight = 1.0;
+	lpfloat3 bentNormal = 0.0;
+	float3 bentNormalWS = 0.0
+	float xeGTAOVisibility = 1.0;
+
+	if (SharedData::xeGTAOSettings.Enabled) {
+		xeGTAO = XeGTAOTexture[dispatchID.xy].x;
+		if (SharedData::xeGTAOSettings.BentNormals) {
+			XeGTAO_DecodeVisibilityBentNormal(xeGTAO, xeGTAOWeight, bentNormal);
+			bentNormal = normalize(bentNormal);
+			bentNormalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(bentNormal, 0)).xyz);
+		} else {
+			xeGTAOWeight = (lpfloat)xeGTAO / 255.0;
+		}
+		
+		xeGTAOVisibility = saturate(lerp(1.0, (float)xeGTAOWeight, SharedData::xeGTAOSettings.Mix));
+	}
+#endif
+
 #if defined(DYNAMIC_CUBEMAPS)
 
 	float3 reflectance = ReflectanceTexture[dispatchID.xy];
 
+#	if defined(XeGTAO)
+	if (SharedData::xeGTAOSettings.Enabled) {
+		reflectance *= xeGTAOVisibility;
+	}
+#	endif
+
 	if (reflectance.x > 0.0 || reflectance.y > 0.0 || reflectance.z > 0.0) {
 		float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
+		
+#	if defined(XeGTAO)
+		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+			normalWS = bentNormalWS;
+		}
+#	endif
 
 		float wetnessMask = MasksTexture[dispatchID.xy].z;
 
@@ -184,19 +217,6 @@ Texture2D<uint> XeGTAOGeneratedNormal : register(t16);
 #endif
 
 #if defined(XeGTAO)
-	uint xeGTAO = 0;
-	lpfloat xeGTAOWeight = 1.0;
-	lpfloat3 bentNormal = 0.0;
-	if (SharedData::xeGTAOSettings.Enabled) {
-		xeGTAO = XeGTAOTexture[dispatchID.xy].x;
-		if (SharedData::xeGTAOSettings.BentNormals) {
-			XeGTAO_DecodeVisibilityBentNormal(xeGTAO, xeGTAOWeight, bentNormal);
-		} else {
-			xeGTAOWeight = (lpfloat)xeGTAO / 255.0;
-		}
-		if (xeGTAOWeight < 1.0) {
-			color *= lerp(1.0, (float)xeGTAOWeight, SharedData::xeGTAOSettings.Mix);
-		}
 #	if defined(GTAO_DEBUG_NORMAL)
 		uint packedXeGTAONormal = XeGTAOGeneratedNormal[dispatchID.xy].x;
 		float3 xeGTAONormal = XeGTAO_R11G11B10_UNORM_to_FLOAT3(packedXeGTAONormal);

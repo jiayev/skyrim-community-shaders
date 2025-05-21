@@ -44,6 +44,11 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 }
 #endif
 
+#if defined(XeGTAO)
+#	include "XeGTAO/XeGTAO.hlsli"
+Texture2D<uint> XeGTAOTexture : register(t9);
+#endif
+
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
 	float2 uv = float2(dispatchID.xy + 0.5) * SharedData::BufferDim.zw;
@@ -60,6 +65,27 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
 
 	float3 directionalAmbientColor = max(0, mul(SharedData::DirectionalAmbient, float4(normalWS, 1.0)));
+
+#if defined(XeGTAO)
+	uint xeGTAO = 0;
+	lpfloat xeGTAOWeight = 1.0;
+	lpfloat3 bentNormal = 0.0;
+	float xeGTAOVisibility = 1.0;
+	float3 bentNormalWS = 0.0;
+
+	if (SharedData::xeGTAOSettings.Enabled) {
+		xeGTAO = XeGTAOTexture[dispatchID.xy].x;
+		if (SharedData::xeGTAOSettings.BentNormals) {
+			XeGTAO_DecodeVisibilityBentNormal(xeGTAO, xeGTAOWeight, bentNormal);
+			bentNormal = normalize(bentNormal);
+			bentNormalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(bentNormal, 0)).xyz);
+			normalWS = bentNormalWS;
+		} else {
+			xeGTAOWeight = (lpfloat)xeGTAO / 255.0;
+		}
+		xeGTAOVisibility = saturate(lerp(1.0, (float)xeGTAOWeight, SharedData::xeGTAOSettings.Mix));
+	}
+#endif
 
 #if defined(IBL)
 	if (SharedData::iblSettings.EnableDiffuseIBL) {
@@ -130,6 +156,10 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 #	endif
 
 	visibility *= ssgiAo;
+
+#if defined(XeGTAO)
+	visibility *= xeGTAOVisibility;
+#endif
 
 #	if defined(INTERIOR)
 	linDiffuseColor *= ssgiAo;

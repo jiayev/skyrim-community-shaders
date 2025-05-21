@@ -18,7 +18,9 @@ public:
 		bool Denoise = false;
 		float Radius = 50.0f;
 		float MixStrength = 1.0f;
-		bool UseGeneratedNormals = false;
+		bool UseSecondPass = false;
+		int SecondPassQualityLevel = 2;
+		float SecondPassRadius = 50.0f;
 		bool BentNormals = true;
 	} menusettings;
 
@@ -33,9 +35,12 @@ public:
 	PerFrame GetCommonBufferData();
 
 	ID3D11ComputeShader* CSPrefilterDepths16x16;
-	ID3D11ComputeShader* CSGTAO;
-	ID3D11ComputeShader* CSDenoisePass;
-	ID3D11ComputeShader* CSDenoiseLastPass;
+	ID3D11ComputeShader* CSGTAOLow[2];
+	ID3D11ComputeShader* CSGTAOMedium[2];
+	ID3D11ComputeShader* CSGTAOHigh[2];
+	ID3D11ComputeShader* CSGTAOUltra[2];
+	ID3D11ComputeShader* CSDenoisePass[2];
+	ID3D11ComputeShader* CSDenoiseLastPass[2];
 	ID3D11ComputeShader* CSGenerateNormals;
 
 	Texture2D* workingDepths;
@@ -62,7 +67,7 @@ public:
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 
-	virtual inline void RestoreDefaultSettings() override { settings = {}; }
+	virtual inline void RestoreDefaultSettings() override { menusettings = {}; }
 
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
@@ -73,5 +78,5 @@ public:
 	virtual bool SupportsVR() override { return false; };
 
 	void GTAOGenerateNormals();
-	void GTAO();
+	void GTAO(bool b_isFirstPass);
 };
