@@ -7,27 +7,40 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	XeGTAOFeature::Settings,
+	Enabled,
 	QualityLevel,
 	Denoise,
 	Radius,
-	useGeneratedNormals)
+	MixStrength,
+	UseGeneratedNormals,
+	BentNormals);
 
 void XeGTAOFeature::DrawSettings()
 {
-	ImGui::Text("XeGTAO Settings");
+	ImGui::Checkbox("XeGTAO", &menusettings.Enabled);
+
 	if (ImGui::Combo("Quality Level", &menusettings.QualityLevel, "Low\0Medium\0High\0Ultra\0")) {
 		ClearShaderCache();
 	}
-	ImGui::Checkbox("Denoise", &menusettings.Denoise);
+	// ImGui::Checkbox("Denoise", &menusettings.Denoise);
+	// ImGui::Text("Denoise is broken for now. Do not use.");
+
 	ImGui::SliderFloat("Radius", &menusettings.Radius, 0.0f, 100.0f);
-	if (ImGui::Checkbox("Use Generated Normals", &menusettings.useGeneratedNormals)) {
+	ImGui::SliderFloat("Mix Strength", &menusettings.MixStrength, 0.0f, 1.0f);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Only affects the final deferred AO output.");
+
+	if (ImGui::Checkbox("Bent Normals", &menusettings.BentNormals)) {
+		ClearShaderCache();
+	}
+	ImGui::Text("Bent normals requires generated normals to be enabled. When using bent normals, the generated normals are forced on.");
+	if (ImGui::Checkbox("Use Generated Normals", &menusettings.UseGeneratedNormals)) {
 		ClearShaderCache();
 	}
 
 	static float debugRescale = .3f;
 	ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
-	BUFFER_VIEWER_NODE(workingDepths, debugRescale)
 	BUFFER_VIEWER_NODE(workingEdges, debugRescale)
 }
 
@@ -39,6 +52,15 @@ void XeGTAOFeature::LoadSettings(json& o_json)
 void XeGTAOFeature::SaveSettings(json& o_json)
 {
 	o_json = menusettings;
+}
+
+XeGTAOFeature::PerFrame XeGTAOFeature::GetCommonBufferData()
+{
+	PerFrame data{};
+	data.Enabled = menusettings.Enabled ? 1 : 0;
+	data.BentNormals = menusettings.BentNormals ? 1 : 0;
+	data.MixStrength = menusettings.MixStrength;
+	return data;
 }
 
 void XeGTAOFeature::SetupResources()
@@ -90,7 +112,7 @@ void XeGTAOFeature::SetupResources()
 	workingEdges->CreateSRV(srvDesc);
 	workingEdges->CreateUAV(uavDesc);
 
-	texDesc.Format = DXGI_FORMAT_R32_UINT;
+	texDesc.Format = menusettings.BentNormals ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R8_UINT;
 	srvDesc.Format = texDesc.Format;
 	uavDesc.Format = texDesc.Format;
 
@@ -158,8 +180,9 @@ void XeGTAOFeature::ClearShaderCache()
 void XeGTAOFeature::CompileComputeShaders()
 {
 	std::vector<std::pair<const char*, const char*>> defines;
-	defines.push_back({ "XE_GTAO_COMPUTE_BENT_NORMALS", nullptr });
-	if (menusettings.useGeneratedNormals) {
+	if (menusettings.BentNormals)
+		defines.push_back({ "XE_GTAO_COMPUTE_BENT_NORMALS", nullptr });
+	if (menusettings.UseGeneratedNormals || menusettings.BentNormals) {
 		defines.push_back({ "USE_GENERATED_NORMALS", nullptr });
 	}
 	CSPrefilterDepths16x16 = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\vaGTAO.hlsl", {}, "cs_5_0", "CSPrefilterDepths16x16"));
@@ -188,6 +211,18 @@ void XeGTAOFeature::CompileComputeShaders()
 }
 
 void XeGTAOFeature::Prepass()
+{
+	if (!menusettings.Enabled) return;
+
+	GTAOGenerateNormals();
+	if (menusettings.UseGeneratedNormals || menusettings.BentNormals) GTAO();
+
+	auto context = globals::d3d::context;
+	ID3D11ShaderResourceView* views[2]{ outputAO->srv.get(), generatedNormals->srv.get() };
+	context->PSSetShaderResources(78, 2, views);
+}
+
+void XeGTAOFeature::GTAOGenerateNormals()
 {
 	auto state = globals::state;
 
@@ -250,7 +285,7 @@ void XeGTAOFeature::GTAO()
 	auto inputDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
 
 	ID3D11ShaderResourceView* inputNormals = nullptr;
-	if (menusettings.useGeneratedNormals) {
+	if (menusettings.UseGeneratedNormals || menusettings.BentNormals) {
 		inputNormals = generatedNormals->srv.get();
 	} else {
 		inputNormals = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS].SRV;

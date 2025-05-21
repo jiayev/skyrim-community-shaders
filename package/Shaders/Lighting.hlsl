@@ -1032,6 +1032,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "IBL/IBL.hlsli"
 #	endif
 
+#	if defined(XeGTAO)
+#		include "XeGTAO/BentNormals.hlsli"
+#	endif
+
 PS_OUTPUT main(PS_INPUT input, bool frontFace
 			   : SV_IsFrontFace)
 {
@@ -1973,6 +1977,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	if defined(WORLD_MAP)
 	baseColor.xyz = GetWorldMapBaseColor(rawBaseColor.xyz, baseColor.xyz, projWeight);
 #	endif  // WORLD_MAP
+
+#	if defined(XeGTAO)
+	float3 bendNormal = 0.0;
+	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+#		if !defined(DRAW_IN_WORLDSPACE)
+		bendNormal = BentNormals::GetModelSpaceBentNormal(screenUV.xy, eyeIndex, input.WorldSpace, input.World[eyeIndex]);
+#		else
+		bendNormal = BentNormals::GetModelSpaceBentNormal(screenUV.xy, eyeIndex);
+#		endif
+	}
+	modelNormal.xyz = normalize(modelNormal.xyz + bendNormal);
+#	endif
 
 	float3 worldSpaceNormal = modelNormal.xyz;
 

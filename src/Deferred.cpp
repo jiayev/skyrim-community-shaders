@@ -457,7 +457,7 @@ void Deferred::DeferredPasses()
 	auto terrainBlending = globals::features::terrainBlending;
 
 	auto xeGTAO = globals::features::xeGTAO;
-	if (xeGTAO->loaded)
+	if (xeGTAO->loaded && xeGTAO->menusettings.Enabled && !xeGTAO->menusettings.BentNormals && !xeGTAO->menusettings.UseGeneratedNormals)
 		xeGTAO->GTAO();
 
 	// Deferred Composite

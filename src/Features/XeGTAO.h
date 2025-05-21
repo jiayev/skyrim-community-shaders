@@ -13,11 +13,24 @@ public:
 
 	struct Settings
 	{
+		bool Enabled = true;
 		int QualityLevel = 2;
 		bool Denoise = false;
-		float Radius = 0.5f;
-		bool useGeneratedNormals = false;
+		float Radius = 50.0f;
+		float MixStrength = 1.0f;
+		bool UseGeneratedNormals = false;
+		bool BentNormals = true;
 	} menusettings;
+
+	struct alignas(16) PerFrame
+	{
+		uint Enabled;
+		uint BentNormals;
+		float MixStrength;
+		float pad;
+	};
+
+	PerFrame GetCommonBufferData();
 
 	ID3D11ComputeShader* CSPrefilterDepths16x16;
 	ID3D11ComputeShader* CSGTAO;
@@ -43,6 +56,7 @@ public:
 	virtual inline std::string GetName() override { return "XeGTAO"; }
 	virtual inline std::string GetShortName() override { return "XeGTAO"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "XeGTAO"; }
+	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
 	virtual void DrawSettings() override;
 	virtual void LoadSettings(json& o_json) override;
@@ -58,5 +72,6 @@ public:
 
 	virtual bool SupportsVR() override { return false; };
 
+	void GTAOGenerateNormals();
 	void GTAO();
 };
