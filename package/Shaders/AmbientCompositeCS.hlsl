@@ -29,10 +29,6 @@ Texture2D<float2> SsgiCoCgTexture : register(t7);
 #	include "IBL/IBL.hlsli"
 #endif
 
-#if defined(XeGTAO)
-Texture2D<uint> XEGTAOTexture : register(t9);
-#endif
-
 RWTexture2D<float4> MainRW : register(u0);
 #if defined(SSGI)
 RWTexture2D<float3> DiffuseAmbientRW : register(u1);

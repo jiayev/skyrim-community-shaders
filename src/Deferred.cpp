@@ -403,10 +403,6 @@ void Deferred::DeferredPasses()
 	bool ssgi_hq_spec = ssgi->settings.EnableExperimentalSpecularGI;
 
 	auto ibl = globals::features::ibl;
-	auto xeGTAO = globals::features::xeGTAO;
-
-	if (xeGTAO->loaded)
-		xeGTAO->GTAO();
 
 	auto dispatchCount = Util::GetScreenDispatchCount();
 
@@ -415,7 +411,7 @@ void Deferred::DeferredPasses()
 		{
 			TracyD3D11Zone(globals::state->tracyCtx, "Ambient Composite");
 
-			ID3D11ShaderResourceView* srvs[10]{
+			ID3D11ShaderResourceView* srvs[9]{
 				albedo.SRV,
 				normalRoughness.SRV,
 				skylighting->loaded || REL::Module::IsVR() ? depth.depthSRV : nullptr,
@@ -425,7 +421,6 @@ void Deferred::DeferredPasses()
 				ssgi_y,
 				ssgi_cocg,
 				ibl->loaded ? ibl->diffuseIBLTexture->srv.get() : nullptr,
-				xeGTAO->loaded ? xeGTAO->outputAO->srv.get() : nullptr,
 			};
 
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -441,7 +436,7 @@ void Deferred::DeferredPasses()
 
 		// Clear
 		{
-			ID3D11ShaderResourceView* views[10]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+			ID3D11ShaderResourceView* views[9]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 			context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 			ID3D11UnorderedAccessView* uavs[2]{ nullptr, nullptr };
@@ -461,11 +456,15 @@ void Deferred::DeferredPasses()
 
 	auto terrainBlending = globals::features::terrainBlending;
 
+	auto xeGTAO = globals::features::xeGTAO;
+	if (xeGTAO->loaded)
+		xeGTAO->GTAO();
+
 	// Deferred Composite
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
-		ID3D11ShaderResourceView* srvs[15]{
+		ID3D11ShaderResourceView* srvs[17]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
@@ -481,6 +480,8 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? nullptr : ssgi_cocg,
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
 			ibl->loaded ? ibl->diffuseIBLTexture->srv.get() : nullptr,
+			xeGTAO->loaded ? xeGTAO->outputAO->srv.get() : nullptr,
+			xeGTAO->loaded ? xeGTAO->generatedNormals->srv.get() : nullptr,
 		};
 
 		if (dynamicCubemaps->loaded)
@@ -499,7 +500,7 @@ void Deferred::DeferredPasses()
 
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[15]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[17]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
@@ -663,9 +664,6 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientComposite()
 		if (globals::features::ibl->loaded)
 			defines.push_back({ "IBL", nullptr });
 
-		if (globals::features::xeGTAO->loaded)
-			defines.push_back({ "XeGTAO", nullptr });
-
 		ambientCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return ambientCompositeCS;
@@ -684,9 +682,6 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientCompositeInterior()
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
-
-		if (globals::features::xeGTAO->loaded)
-			defines.push_back({ "XeGTAO", nullptr });
 
 		ambientCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
 	}
@@ -715,6 +710,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
 
+		if (globals::features::xeGTAO->loaded)
+			defines.push_back({ "XeGTAO", nullptr });
+
 		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return mainCompositeCS;
@@ -736,6 +734,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
+
+		if (globals::features::xeGTAO->loaded)
+			defines.push_back({ "XeGTAO", nullptr });
 
 		mainCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}

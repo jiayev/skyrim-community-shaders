@@ -67,6 +67,12 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 }
 #endif
 
+#if defined(XeGTAO)
+#	include "XeGTAO/XeGTAO.hlsli"
+Texture2D<uint> XeGTAOTexture : register(t15);
+Texture2D<uint> XeGTAOGeneratedNormal : register(t16);
+#endif
+
 [numthreads(8, 8, 1)] void main(uint3 dispatchID
 								: SV_DispatchThreadID) {
 	float2 uv = float2(dispatchID.xy + 0.5) * SharedData::BufferDim.zw;
@@ -175,6 +181,31 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 		color += reflectance * finalIrradiance;
 	}
 
+#endif
+
+#if defined(XeGTAO)
+	uint xeGTAO = XeGTAOTexture[dispatchID.xy].x;
+	lpfloat xeGTAOWeight = 1.0;
+	lpfloat3 bentNormal = 0.0;
+	XeGTAO_DecodeVisibilityBentNormal(xeGTAO, xeGTAOWeight, bentNormal);
+	if (xeGTAOWeight < 1.0) {
+		color *= (float)xeGTAOWeight;
+	}
+#	if defined(GTAO_DEBUG_NORMAL)
+	uint packedXeGTAONormal = XeGTAOGeneratedNormal[dispatchID.xy].x;
+	float3 xeGTAONormal = XeGTAO_R11G11B10_UNORM_to_FLOAT3(packedXeGTAONormal);
+	if (uv.x < 0.5)
+		color = xeGTAONormal;
+	else
+		color = normalVS * 0.5 + 0.5;
+	color = Color::GammaToLinear(color);
+#	elif defined(GTAO_DEBUG_AO)
+	color = xeGTAOWeight;
+	color = Color::GammaToLinear(color);
+#	elif defined(GTAO_DEBUG_BENT_NORMAL)
+	color = (float3)bentNormal * 0.5 + 0.5;
+	color = Color::GammaToLinear(color);
+#	endif
 #endif
 
 	color = Color::LinearToGamma(color);

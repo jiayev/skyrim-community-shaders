@@ -11,8 +11,16 @@ public:
 		return &singleton;
 	}
 
+	struct Settings
+	{
+		int QualityLevel = 2;
+		bool Denoise = false;
+		float Radius = 0.5f;
+		bool useGeneratedNormals = false;
+	} menusettings;
+
 	ID3D11ComputeShader* CSPrefilterDepths16x16;
-	ID3D11ComputeShader* CSGTAOUltra;
+	ID3D11ComputeShader* CSGTAO;
 	ID3D11ComputeShader* CSDenoisePass;
 	ID3D11ComputeShader* CSDenoiseLastPass;
 	ID3D11ComputeShader* CSGenerateNormals;
@@ -22,7 +30,7 @@ public:
 	Texture2D* workingAOTerm;
 	Texture2D* workingAOTermPong;
 	Texture2D* outputAO;
-	Texture2D* outputNormals;
+	Texture2D* generatedNormals;
 
 	ID3D11SamplerState* samplerPointClamp = nullptr;
 
@@ -37,6 +45,10 @@ public:
 	virtual inline std::string_view GetShaderDefineName() override { return "XeGTAO"; }
 
 	virtual void DrawSettings() override;
+	virtual void LoadSettings(json& o_json) override;
+	virtual void SaveSettings(json& o_json) override;
+
+	virtual inline void RestoreDefaultSettings() override { settings = {}; }
 
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
