@@ -138,12 +138,12 @@ Texture2D<uint> XeGTAOGeneratedNormal : register(t16);
 		float roughness = 1.0 - glossiness;
 		float level = roughness * 7.0;
 
-#		if defined(XeGTAO)
+#	if defined(XeGTAO)
 		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
 			float specularOcclusion = BentNormals::SpecularAO_Cones(bentNormalWS, normalWS, -V, xeGTAOWeight, roughness);
 			reflectance *= specularOcclusion;
 		}
-#		endif
+#	endif
 
 		sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(normalWS, -V, roughness);
 
