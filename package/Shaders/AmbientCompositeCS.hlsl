@@ -46,6 +46,7 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 
 #if defined(XeGTAO)
 #	include "XeGTAO/XeGTAO.hlsli"
+#	include "XeGTAO/XeGTAOBentNormals.hlsli"
 Texture2D<uint> XeGTAOTexture : register(t9);
 #endif
 
@@ -79,7 +80,6 @@ Texture2D<uint> XeGTAOTexture : register(t9);
 			XeGTAO_DecodeVisibilityBentNormal(xeGTAO, xeGTAOWeight, bentNormal);
 			bentNormal = normalize(bentNormal);
 			bentNormalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(bentNormal, 0)).xyz);
-			normalWS = bentNormalWS;
 		} else {
 			xeGTAOWeight = (lpfloat)xeGTAO / 255.0;
 		}

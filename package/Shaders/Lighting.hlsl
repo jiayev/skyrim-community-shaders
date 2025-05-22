@@ -1034,6 +1034,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 
 #	if defined(XeGTAO)
 #		include "XeGTAO/XeGTAOLighting.hlsli"
+#		include "XeGTAO/XeGTAOBentNormals.hlsli"
 #	endif
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace
@@ -1978,29 +1979,38 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	baseColor.xyz = GetWorldMapBaseColor(rawBaseColor.xyz, baseColor.xyz, projWeight);
 #	endif  // WORLD_MAP
 
-#	if defined(XeGTAO)
-	float3 bentNormal = 0.0;
-	float xeGTAOVisibility = 1.0;
-	if (SharedData::xeGTAOSettings.Enabled) {
-		if (SharedData::xeGTAOSettings.BentNormals) {
-#		if !defined(DRAW_IN_WORLDSPACE)
-			bentNormal = GTAO::GetModelSpaceBentNormal(screenUV.xy, eyeIndex, xeGTAOVisibility, input.WorldSpace, input.World[eyeIndex]);
-#		else
-			bentNormal = GTAO::GetModelSpaceBentNormal(screenUV.xy, eyeIndex, xeGTAOVisibility);
-#		endif
-			modelNormal.xyz = normalize(modelNormal.xyz - bentNormal);
-		} else {
-			xeGTAOVisibility = GTAO::GetVisibility(screenUV.xy, eyeIndex);
-			xeGTAOVisibility = saturate(lerp(1.0, xeGTAOVisibility, SharedData::xeGTAOSettings.Mix));
-		}
-	}
-#	endif
-
 	float3 worldSpaceNormal = modelNormal.xyz;
 
 #	if !defined(DRAW_IN_WORLDSPACE)
 	[flatten] if (!input.WorldSpace)
 		worldSpaceNormal = normalize(mul(input.World[eyeIndex], float4(worldSpaceNormal, 0)));
+#	endif
+
+#	if defined(XeGTAO)
+	float3 bentNormal = 0.0;
+	float3 bentNormalWS = 0.0;
+	float xeGTAOWeight = 1.0;
+	float xeGTAOVisibility = 1.0;
+	float specularOcclusion = 1.0;
+	float bentNormalWeight = 0.0;
+	float geometryTerm = 1.0;
+
+	if (SharedData::xeGTAOSettings.Enabled) {
+		if (SharedData::xeGTAOSettings.BentNormals) {
+#		if !defined(DRAW_IN_WORLDSPACE)
+			bentNormal = GTAO::GetModelSpaceBentNormal(screenUV.xy, eyeIndex, xeGTAOWeight, bentNormalWS, input.WorldSpace, input.World[eyeIndex]);
+#		else
+			bentNormal = GTAO::GetModelSpaceBentNormal(screenUV.xy, eyeIndex, xeGTAOWeight, bentNormalWS);
+#		endif
+			bentNormal = normalize(modelNormal.xyz + bentNormal);
+			bentNormalWS = normalize(worldSpaceNormal + bentNormalWS);
+			bentNormalWeight = 1.0 - (1.0 - xeGTAOWeight) * (1.0 - xeGTAOWeight);
+			geometryTerm = lerp(saturate(dot(bentNormal, modelNormal)), 1.0, bentNormalWeight);
+		} else {
+			xeGTAOWeight = GTAO::GetVisibility(screenUV.xy, eyeIndex);
+		}
+		xeGTAOVisibility = lerp(1.0, xeGTAOWeight * geometryTerm, SharedData::xeGTAOSettings.Mix);
+	}
 #	endif
 
 #	if defined(MODELSPACENORMALS)
@@ -2327,6 +2337,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 lodLandDiffuseColor = 0;
 
+#	if defined(XeGTAO)
+	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+		float dirVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, worldSpaceNormal.xyz, bentNormalWS, normalizedDirLightDirectionWS);
+		dirLightColor *= dirVisibilityBentNormal;
+	}
+#	endif
+
 #	if defined(TRUE_PBR)
 	{
 		PBR::LightProperties lightProperties = PBR::InitLightProperties(dirLightColor, dirLightColorMultiplier * dirDetailShadow, parallaxShadow);
@@ -2409,6 +2426,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 
 		float3 normalizedLightDirection = normalize(lightDirection);
+
+#			if defined(XeGTAO)
+		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+			float pointVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, worldSpaceNormal.xyz, bentNormalWS, normalizedLightDirection);
+			lightColor *= pointVisibilityBentNormal;
+		}
+#			endif
 
 #			if defined(TRUE_PBR)
 		{
@@ -2545,6 +2569,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #			endif
 
 		float parallaxShadow = 1;
+
+#			if defined(XeGTAO)
+		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+			float pointVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, worldSpaceNormal.xyz, bentNormalWS, normalizedLightDirection);
+			lightColor *= pointVisibilityBentNormal;
+		}
+#			endif
 
 #			if defined(TRUE_PBR)
 		{
@@ -2710,6 +2741,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		}
 	}
 
+#		if defined(XeGTAO)
+	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+		specularOcclusion = BentNormals::SpecularAO_Cones(bentNormalWS, worldSpaceNormal, worldSpaceViewDirection, xeGTAOWeight, 1.0 - (glossiness * 0.01));
+		envMask *= specularOcclusion;
+	}
+#		endif
+
 	float3 envColor = 0.0;
 	bool dynamicCubemap = false;
 
@@ -2829,6 +2867,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	indirectDiffuseLobeWeight *= SharedData::hairSpecularSettings.DiffuseIndirectMult * (1 / Math::PI);
 	indirectSpecularLobeWeightPrim *= SharedData::hairSpecularSettings.SpecularIndirectMult;
 	indirectSpecularLobeWeightSec *= SharedData::hairSpecularSettings.SpecularIndirectMult;
+#			if defined(XeGTAO)
+	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+		float specularOcclusionPrim = BentNormals::SpecularAO_Cones(bentNormalWS, worldSpaceNormal, worldSpaceViewDirection, xeGTAOWeight, 1.0 - (SharedData::hairSpecularSettings.Glossiness * 0.01));
+		indirectSpecularLobeWeightPrim *= specularOcclusionPrim;
+		float specularOcclusionSec = BentNormals::SpecularAO_Cones(bentNormalWS, worldSpaceNormal, worldSpaceViewDirection, xeGTAOWeight, 1.0 - (SharedData::hairSpecularSettings.Glossiness * 0.005));
+		indirectSpecularLobeWeightSec *= specularOcclusionSec;
+	}
+#			endif
 #		endif  // CS_HAIR
 #	elif defined(SKYLIGHTING)
 	float3 vertexColor = input.Color.xyz;
@@ -2892,6 +2938,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 #		if !defined(DEFERRED)
+#			if defined(XeGTAO)
+	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+		specularOcclusion = BentNormals::SpecularAO_Cones(bentNormalWS, worldSpaceNormal, worldSpaceViewDirection, xeGTAOWeight, pbrSurfaceProperties.Roughness);
+		indirectSpecularLobeWeight *= specularOcclusion;
+	}
+#			endif
 #			if defined(DYNAMIC_CUBEMAPS)
 #				if defined(SKYLIGHTING)
 	specularColorPBR += indirectSpecularLobeWeight * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, pbrSurfaceProperties.Roughness, skylightingSH);

@@ -69,6 +69,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 
 #if defined(XeGTAO)
 #	include "XeGTAO/XeGTAO.hlsli"
+#	include "XeGTAO/XeGTAOBentNormals.hlsli"
 Texture2D<uint> XeGTAOTexture : register(t15);
 Texture2D<uint> XeGTAOGeneratedNormal : register(t16);
 #endif
@@ -124,20 +125,8 @@ Texture2D<uint> XeGTAOGeneratedNormal : register(t16);
 
 	float3 reflectance = ReflectanceTexture[dispatchID.xy];
 
-#	if defined(XeGTAO)
-	if (SharedData::xeGTAOSettings.Enabled) {
-		reflectance *= xeGTAOVisibility;
-	}
-#	endif
-
 	if (reflectance.x > 0.0 || reflectance.y > 0.0 || reflectance.z > 0.0) {
 		float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
-
-#	if defined(XeGTAO)
-		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
-			normalWS = bentNormalWS;
-		}
-#	endif
 
 		float wetnessMask = MasksTexture[dispatchID.xy].z;
 
@@ -148,6 +137,13 @@ Texture2D<uint> XeGTAOGeneratedNormal : register(t16);
 
 		float roughness = 1.0 - glossiness;
 		float level = roughness * 7.0;
+
+#		if defined(XeGTAO)
+		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+			float specularOcclusion = BentNormals::SpecularAO_Cones(bentNormalWS, normalWS, -V, xeGTAOWeight, roughness);
+			reflectance *= specularOcclusion;
+		}
+#		endif
 
 		sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(normalWS, -V, roughness);
 

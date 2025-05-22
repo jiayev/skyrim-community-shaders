@@ -55,9 +55,30 @@ namespace GTAO
 	}
 
 #if !defined(DRAW_IN_WORLDSPACE)
-	float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex, out float xeGTAO, bool worldSpace, float3x4 world)
+	float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex, out float xeGTAO, out float3 bentNormalWS, bool worldSpace, float3x4 world)
 #else
-	float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex, out float xeGTAO)
+	float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex, out float xeGTAO, out float3 bentNormalWS)
+#endif
+	{
+		xeGTAO = 1.0;
+		float4x4 inverseView = FrameBuffer::CameraViewInverse[eyeIndex];
+		float3 bentNormal = GetBentNormals(uv, eyeIndex, xeGTAO);
+
+		bentNormalWS = normalize(mul(inverseView, float4(bentNormal, 0)).xyz);
+		float3 bentNormalMS = bentNormalWS;
+
+#if !defined(DRAW_IN_WORLDSPACE)
+		if (!worldSpace) {
+			bentNormalMS = normalize(WorldToModel(bentNormalWS, world));
+		}
+#endif
+		return bentNormalMS;
+	}
+
+#if !defined(DRAW_IN_WORLDSPACE)
+	float3 GetModelSpaceBentNormalDiff(float2 uv, uint eyeIndex, out float xeGTAO, bool worldSpace, float3x4 world)
+#else
+	float3 GetModelSpaceBentNormalDiff(float2 uv, uint eyeIndex, out float xeGTAO)
 #endif
 	{
 		xeGTAO = 1.0;
