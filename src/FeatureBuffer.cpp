@@ -15,6 +15,7 @@
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
 #include "Features/WetnessEffects.h"
+#include "Features/XeGTAO.h"
 
 #include "TruePBR.h"
 
@@ -51,5 +52,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::ibl->settings,
 		globals::features::skin->GetCommonBufferData(),
 		globals::features::linearLighting->GetCommonBufferData(),
-		globals::features::screenSpacePointLightShadows->GetCommonBufferData());
+		globals::features::screenSpacePointLightShadows->GetCommonBufferData(),
+		globals::features::xeGTAO->GetCommonBufferData());
 }

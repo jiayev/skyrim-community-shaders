@@ -28,6 +28,7 @@ struct WaterEffects;
 struct WetnessEffects;
 struct PostProcessing;
 struct Skin;
+struct XeGTAOFeature;
 
 class ParticleLights;
 
@@ -84,6 +85,7 @@ namespace globals
 		extern WetnessEffects* wetnessEffects;
 		extern PostProcessing* postProcessing;
 		extern Skin* skin;
+		extern XeGTAOFeature* xeGTAO;
 
 		namespace llf
 		{

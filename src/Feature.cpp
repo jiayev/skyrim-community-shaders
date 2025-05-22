@@ -29,6 +29,7 @@
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
+#include "Features/XeGTAO.h"
 
 #include "State.h"
 
@@ -161,7 +162,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::ibl,
 		globals::features::postProcessing,
 		globals::features::skin,
-		globals::features::linearLighting
+		globals::features::linearLighting,
+		globals::features::xeGTAO
 	};
 
 	static std::vector<Feature*> featuresVR = [] {
