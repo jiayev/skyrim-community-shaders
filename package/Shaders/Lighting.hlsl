@@ -2475,8 +2475,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	// float thickness = ShadowSampling::CalculateThickness(screenNoise, input.WorldPosition.xyz, modelNormal.xyz, eyeIndex, 0.0005) * SharedData::skinData.sssParams.z;
 
 #	if defined(XeGTAO)
-	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals && SharedData::xeGTAOSettings.DirectLightMicroShadowing) {
-		float dirVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, bentNormalWS, normalizedDirLightDirectionWS);
+	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.DirectLightMicroShadowing) {
+		float dirVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, worldSpaceNormal.xyz, normalizedDirLightDirectionWS);
 		dirLightColor *= dirVisibilityBentNormal;
 	}
 #	endif
@@ -2601,8 +2601,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float3 normalizedLightDirection = normalize(lightDirection);
 
 #			if defined(XeGTAO)
-		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals && SharedData::xeGTAOSettings.DirectLightMicroShadowing) {
-			float pointVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, bentNormalWS, normalizedLightDirection);
+		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.DirectLightMicroShadowing) {
+			float pointVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, worldSpaceNormal.xyz, normalizedLightDirection);
 			lightColor *= pointVisibilityBentNormal;
 		}
 #			endif
@@ -2789,8 +2789,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		float parallaxShadow = 1;
 
 #			if defined(XeGTAO)
-		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals && SharedData::xeGTAOSettings.DirectLightMicroShadowing) {
-			float pointVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, bentNormalWS, normalizedLightDirection);
+		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.DirectLightMicroShadowing) {
+			float pointVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, worldSpaceNormal.xyz, normalizedLightDirection);
 			lightColor *= pointVisibilityBentNormal;
 		}
 #			endif

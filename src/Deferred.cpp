@@ -482,7 +482,7 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
 			ibl->loaded ? ibl->diffuseIBLTexture->srv.get() : nullptr,
 			xeGTAO->loaded ? xeGTAO->outputAO->srv.get() : nullptr,
-			xeGTAO->loaded ? (xeGTAO->menusettings.BlurGeneratedNormals ? xeGTAO->blurredNormals->srv.get() : xeGTAO->generatedNormals->srv.get()) : nullptr,
+			xeGTAO->loaded ? xeGTAO->generatedNormals->srv.get() : nullptr,
 		};
 
 		if (dynamicCubemaps->loaded)

@@ -22,7 +22,7 @@ public:
 		int SecondPassQualityLevel = 2;
 		float SecondPassRadius = 50.0f;
 		bool BentNormals = true;
-		bool BlurGeneratedNormals = true;
+		bool BlurAO = true;
 		bool DirectLightMicroShadowing = false;
 	} menusettings;
 
@@ -52,7 +52,7 @@ public:
 	Texture2D* workingAOTermPong;
 	Texture2D* outputAO;
 	Texture2D* generatedNormals;
-	Texture2D* blurredNormals;
+	Texture2D* blurredAO;
 
 	ID3D11SamplerState* samplerPointClamp = nullptr;
 
