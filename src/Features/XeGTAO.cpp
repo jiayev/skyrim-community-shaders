@@ -16,7 +16,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SecondPassQualityLevel,
 	SecondPassRadius,
 	BentNormals,
-	BlurGeneratedNormals);
+	BlurGeneratedNormals,
+	DirectLightMicroShadowing)
 
 void XeGTAOFeature::DrawSettings()
 {
@@ -35,6 +36,12 @@ void XeGTAOFeature::DrawSettings()
 
 	if (ImGui::Checkbox("Bent Normals", &menusettings.BentNormals)) {
 		ClearShaderCache();
+	}
+
+	if (menusettings.BentNormals) {
+		ImGui::Checkbox("Direct Light Micro Shadowing", &menusettings.DirectLightMicroShadowing);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Enables Bent Normals for Direct Light Micro Shadowing. Might look weird.");
 	}
 
 	ImGui::Checkbox("Use Second Pass For Deferred", &menusettings.UseSecondPass);
@@ -64,6 +71,7 @@ XeGTAOFeature::PerFrame XeGTAOFeature::GetCommonBufferData()
 	PerFrame data{};
 	data.Enabled = menusettings.Enabled ? 1 : 0;
 	data.BentNormals = menusettings.BentNormals ? 1 : 0;
+	data.DirectLightMicroShadowing = menusettings.DirectLightMicroShadowing ? 1 : 0;
 	data.MixStrength = menusettings.MixStrength;
 	return data;
 }
