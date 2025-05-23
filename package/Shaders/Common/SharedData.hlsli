@@ -187,8 +187,8 @@ namespace SharedData
 	{
 		uint Enabled;
 		uint BentNormals;
+		uint DirectLightMicroShadowing;
 		float Mix;
-		float pad;
 	};
 
 	cbuffer FeatureData : register(b6)

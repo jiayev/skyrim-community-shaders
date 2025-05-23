@@ -23,14 +23,15 @@ public:
 		float SecondPassRadius = 50.0f;
 		bool BentNormals = true;
 		bool BlurGeneratedNormals = true;
+		bool DirectLightMicroShadowing = false;
 	} menusettings;
 
 	struct alignas(16) PerFrame
 	{
 		uint Enabled;
 		uint BentNormals;
+		uint DirectLightMicroShadowing;
 		float MixStrength;
-		float pad;
 	};
 
 	PerFrame GetCommonBufferData();
