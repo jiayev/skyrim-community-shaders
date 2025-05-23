@@ -2476,7 +2476,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #	if defined(XeGTAO)
 	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals && SharedData::xeGTAOSettings.DirectLightMicroShadowing) {
-		float dirVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, worldSpaceNormal.xyz, bentNormalWS, normalizedDirLightDirectionWS);
+		float dirVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, bentNormalWS, normalizedDirLightDirectionWS);
 		dirLightColor *= dirVisibilityBentNormal;
 	}
 #	endif
@@ -2602,7 +2602,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #			if defined(XeGTAO)
 		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals && SharedData::xeGTAOSettings.DirectLightMicroShadowing) {
-			float pointVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, worldSpaceNormal.xyz, bentNormalWS, normalizedLightDirection);
+			float pointVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, bentNormalWS, normalizedLightDirection);
 			lightColor *= pointVisibilityBentNormal;
 		}
 #			endif
@@ -2790,7 +2790,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #			if defined(XeGTAO)
 		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals && SharedData::xeGTAOSettings.DirectLightMicroShadowing) {
-			float pointVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, worldSpaceNormal.xyz, bentNormalWS, normalizedLightDirection);
+			float pointVisibilityBentNormal = BentNormals::ApproximateDirectVisibility(xeGTAOWeight, bentNormalWS, normalizedLightDirection);
 			lightColor *= pointVisibilityBentNormal;
 		}
 #			endif
