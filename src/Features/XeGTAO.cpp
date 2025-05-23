@@ -15,7 +15,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UseSecondPass,
 	SecondPassQualityLevel,
 	SecondPassRadius,
-	BentNormals);
+	BentNormals,
+	BlurGeneratedNormals);
 
 void XeGTAOFeature::DrawSettings()
 {
@@ -26,6 +27,7 @@ void XeGTAOFeature::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Denoise is broken for now. Do not use.");
 
+	ImGui::Checkbox("Blur Generated Normals", &menusettings.BlurGeneratedNormals);
 	ImGui::SliderFloat("Radius", &menusettings.Radius, 0.0f, 512.0f);
 	ImGui::SliderFloat("Mix Strength", &menusettings.MixStrength, 0.0f, 1.0f);
 	if (auto _tt = Util::HoverTooltipWrapper())
@@ -139,6 +141,10 @@ void XeGTAOFeature::SetupResources()
 	generatedNormals->CreateSRV(srvDesc);
 	generatedNormals->CreateUAV(uavDesc);
 
+	blurredNormals = new Texture2D(texDesc);
+	blurredNormals->CreateSRV(srvDesc);
+	blurredNormals->CreateUAV(uavDesc);
+
 	constantBuffer = new ConstantBuffer(ConstantBufferDesc<XeGTAO::GTAOConstants>());
 
 	{
@@ -190,12 +196,17 @@ void XeGTAOFeature::ClearShaderCache()
 		CSGenerateNormals->Release();
 		CSGenerateNormals = nullptr;
 	}
+	if (CSBlur) {
+		CSBlur->Release();
+		CSBlur = nullptr;
+	}
 
 	CompileComputeShaders();
 }
 
 void XeGTAOFeature::CompileComputeShaders()
 {
+	CSBlur = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\XeGTAO\\blur.cs.hlsl", {}, "cs_5_0", "main"));
 	std::vector<std::pair<const char*, const char*>> defines;
 	if (menusettings.BentNormals)
 		defines.push_back({ "XE_GTAO_COMPUTE_BENT_NORMALS", nullptr });
@@ -226,7 +237,7 @@ void XeGTAOFeature::Prepass()
 	GTAO(true);
 
 	auto context = globals::d3d::context;
-	ID3D11ShaderResourceView* views[2]{ outputAO->srv.get(), generatedNormals->srv.get() };
+	ID3D11ShaderResourceView* views[2]{ outputAO->srv.get(), menusettings.BlurGeneratedNormals ? blurredNormals->srv.get() : generatedNormals->srv.get() };
 	context->PSSetShaderResources(78, 2, views);
 }
 
@@ -294,6 +305,22 @@ void XeGTAOFeature::GTAOGenerateNormals()
 		state->EndPerfEvent();
 	}
 
+	if (menusettings.BlurGeneratedNormals) {
+		state->BeginPerfEvent("GTAO Blur Normals");
+
+		context->CSSetShader(CSBlur, nullptr, 0);
+
+		ID3D11ShaderResourceView* srvs[1]{ generatedNormals->srv.get() };
+		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+		ID3D11UnorderedAccessView* uavs[1]{ blurredNormals->uav.get() };
+		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+		context->Dispatch(((uint)state->screenSize.x + XE_GTAO_NUMTHREADS_X - 1) / XE_GTAO_NUMTHREADS_X, ((uint)state->screenSize.y + XE_GTAO_NUMTHREADS_Y - 1) / XE_GTAO_NUMTHREADS_Y, 1);
+
+		state->EndPerfEvent();
+	}
+
 	{
 		ID3D11UnorderedAccessView* uavs[5]{ nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
@@ -317,7 +344,7 @@ void XeGTAOFeature::GTAO(bool b_isFirstPass)
 
 	ID3D11ShaderResourceView* inputNormals = nullptr;
 	if (b_isFirstPass) {
-		inputNormals = generatedNormals->srv.get();
+		inputNormals = menusettings.BlurGeneratedNormals ? blurredNormals->srv.get() : generatedNormals->srv.get();
 	} else {
 		inputNormals = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS].SRV;
 	}
