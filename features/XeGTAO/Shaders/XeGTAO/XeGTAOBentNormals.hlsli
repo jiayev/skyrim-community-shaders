@@ -59,12 +59,14 @@ namespace BentNormals
 		return lerp(1.0, ao, smoothstep(0.01, 0.09, roughness));
 	}
 
+	// a contact shadow approximation, totally not physically correct; a riff on "Chan 2018, "Material Advances in Call of Duty: WWII" and "The Technical Art of Uncharted 4" http://advances.realtimerendering.com/other/2016/naughty_dog/NaughtyDog_TechArt_Final.pdf (microshadowing)"
 	float ApproximateDirectVisibility(float aoVisibility, float3 N, float3 L)
 	{
-		float NoL = saturate(dot(N, L));
+		// Could use bent normal instead of normal
+		float NdotL = saturate(dot(N, L));
 		float aperture = rsqrt(1.0000001 - aoVisibility);
-		NoL += 0.1;  // when using bent normals, avoids overshadowing - bent normals are just approximation anyhow
-		return saturate(NoL * aperture);
+		NdotL += 0.1;  // when using bent normals, avoids overshadowing - bent normals are just approximation anyhow
+		return saturate(NdotL * aperture);
 	}
 }
 #endif
