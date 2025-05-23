@@ -38,11 +38,7 @@ void XeGTAOFeature::DrawSettings()
 		ClearShaderCache();
 	}
 
-	if (menusettings.BentNormals) {
-		ImGui::Checkbox("Direct Light Micro Shadowing", &menusettings.DirectLightMicroShadowing);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Enables Bent Normals for Direct Light Micro Shadowing. Might look weird.");
-	}
+	ImGui::Checkbox("Direct Light Micro Shadowing", &menusettings.DirectLightMicroShadowing);
 
 	ImGui::Checkbox("Use Second Pass For Deferred", &menusettings.UseSecondPass);
 	if (auto _tt = Util::HoverTooltipWrapper())
