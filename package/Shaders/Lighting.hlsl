@@ -3263,10 +3263,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 #		if !defined(DEFERRED)
 #			if defined(XeGTAO)
-	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
-		specularOcclusion = BentNormals::SpecularAO_Cones(bentNormalWS, worldSpaceNormal, worldSpaceViewDirection, xeGTAOWeight, skinSurfaceProperties.RoughnessPrimary);
-		indirectSpecularLobeWeight *= specularOcclusion;
-	}
+		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+			specularOcclusion = BentNormals::SpecularAO_Cones(bentNormalWS, worldSpaceNormal, worldSpaceViewDirection, xeGTAOWeight, skinSurfaceProperties.RoughnessPrimary);
+			indirectSpecularLobeWeight *= specularOcclusion;
+		}
 #			endif
 #			if defined(DYNAMIC_CUBEMAPS)
 #				if defined(SKYLIGHTING)
