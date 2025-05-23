@@ -144,9 +144,9 @@ Texture2D<uint> XeGTAOGeneratedNormal : register(t16);
 		float level = roughness * 7.0;
 
 #	if defined(XeGTAO)
+		float specularOcclusion = 1.0;
 		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
-			float specularOcclusion = BentNormals::SpecularAO_Cones(bentNormalWS, normalWS, -V, xeGTAOWeight, roughness);
-			reflectance *= specularOcclusion;
+			specularOcclusion = BentNormals::SpecularAO_Cones(bentNormalWS, normalWS, -V, xeGTAOWeight, roughness);
 		}
 #	endif
 
@@ -202,6 +202,12 @@ Texture2D<uint> XeGTAOGeneratedNormal : register(t16);
 		}
 
 		finalIrradiance += specularIrradianceReflections;
+#	endif
+
+#	if defined(XeGTAO)
+		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+			finalIrradiance *= specularOcclusion;
+		}
 #	endif
 
 #	if defined(SSGI)
