@@ -22,6 +22,7 @@ public:
 		int SecondPassQualityLevel = 2;
 		float SecondPassRadius = 50.0f;
 		bool BentNormals = true;
+		bool BlurGeneratedNormals = true;
 	} menusettings;
 
 	struct alignas(16) PerFrame
@@ -42,6 +43,7 @@ public:
 	ID3D11ComputeShader* CSDenoisePass[2];
 	ID3D11ComputeShader* CSDenoiseLastPass[2];
 	ID3D11ComputeShader* CSGenerateNormals;
+	ID3D11ComputeShader* CSBlur;
 
 	Texture2D* workingDepths;
 	Texture2D* workingEdges;
@@ -49,6 +51,7 @@ public:
 	Texture2D* workingAOTermPong;
 	Texture2D* outputAO;
 	Texture2D* generatedNormals;
+	Texture2D* blurredNormals;
 
 	ID3D11SamplerState* samplerPointClamp = nullptr;
 
