@@ -9,7 +9,8 @@ RWTexture2D<uint> outBlurred : register(u0);
 
 SamplerState linearSampler : register(s0);
 
-float GetAO(int2 coord, out float3 bentNormal) {
+float GetAO(int2 coord, out float3 bentNormal)
+{
 #ifdef XE_GTAO_COMPUTE_BENT_NORMALS
 	uint packed = texAO.Load(int3(coord, 0));
 	float unpackedAO = 1;
