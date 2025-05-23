@@ -45,7 +45,8 @@ float GetAO(int2 coord, out float3 bentNormal)
 		for (int y = -radius; y < (radius + 1); y++) {
 			float2 sample_tex_coord = clamp(texCoord.xy + float2(x, y) * float2(invResX, invResY), 0, 1);
 			int2 sample_pixel_coord = dtid + int2(x, y);
-			float data_sample = GetAO(sample_pixel_coord);
+			float3 tempnormal = 0;
+			float data_sample = GetAO(sample_pixel_coord, tempnormal);
 
 			float blur_sample_view_depth = SharedData::GetScreenDepth(sample_tex_coord);
 

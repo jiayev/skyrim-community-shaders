@@ -441,8 +441,10 @@ void XeGTAOFeature::GTAO(bool b_isFirstPass)
 		ID3D11ShaderResourceView* srvs[1]{ outputAO->srv.get() };
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-		ID3D11UnorderedAccessView* uavs[1]{ blurredAO->uav.get() };
-		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+		{
+			ID3D11UnorderedAccessView* uavs[1]{ blurredAO->uav.get() };
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+		}
 
 		context->Dispatch(((uint)state->screenSize.x + XE_GTAO_NUMTHREADS_X - 1) / XE_GTAO_NUMTHREADS_X, ((uint)state->screenSize.y + XE_GTAO_NUMTHREADS_Y - 1) / XE_GTAO_NUMTHREADS_Y, 1);
 		context->CopyResource(outputAO->resource.get(), blurredAO->resource.get());
@@ -450,11 +452,6 @@ void XeGTAOFeature::GTAO(bool b_isFirstPass)
 		{
 			ID3D11UnorderedAccessView* uavs[1]{ nullptr };
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-			ID3D11ShaderResourceView* srvs[1]{ nullptr };
-			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-			ID3D11Buffer* buffers[1]{ nullptr };
-			context->CSSetConstantBuffers(0, ARRAYSIZE(buffers), buffers);
-			context->CSSetShader(nullptr, nullptr, 0);
 		}
 
 		state->EndPerfEvent();
