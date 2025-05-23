@@ -16,8 +16,8 @@ SamplerState linearSampler : register(s0);
 
 	float2 texCoord = (dtid + 0.5) * float2(invResX, invResY);
 
-	float tolerance_mult = 1.0f;
-	static const int radius = 2;
+	float tolerance_mult = 1.f;
+	static const int radius = 4;
 
 	float3 sum_data = 0;
 	float sum_weight = 0;
@@ -28,8 +28,8 @@ SamplerState linearSampler : register(s0);
 		for (int y = -radius; y < (radius + 1); y++) {
 			float2 sample_tex_coord = clamp(texCoord.xy + float2(x, y) * float2(invResX, invResY), 0, 1);
 			uint2 sample_pixel_coord = dtid + uint2(x, y);
-			uint data_sample_packed = texNormal.Load(sample_pixel_coord).x;
-			float3 data_sample = XeGTAO_R11G11B10_UNORM_to_FLOAT3(data_sample_unpacked);
+			uint data_sample_packed = texNormal.Load(int3(sample_pixel_coord, 0)).x;
+			float3 data_sample = XeGTAO_R11G11B10_UNORM_to_FLOAT3(data_sample_packed);
 
 			float blur_sample_view_depth = SharedData::GetScreenDepth(sample_tex_coord);
 
