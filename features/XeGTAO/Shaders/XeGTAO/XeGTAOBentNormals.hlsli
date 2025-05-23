@@ -59,9 +59,9 @@ namespace BentNormals
 		return lerp(1.0, ao, smoothstep(0.01, 0.09, roughness));
 	}
 
-	float ApproximateDirectVisibility(float aoVisibility, float3 N, float3 BN, float3 L)
+	float ApproximateDirectVisibility(float aoVisibility, float3 N, float3 L)
 	{
-		float NoL = saturate(dot(BN, L));
+		float NoL = saturate(dot(N, L));
 		float aperture = rsqrt(1.0000001 - aoVisibility);
 		NoL += 0.1;  // when using bent normals, avoids overshadowing - bent normals are just approximation anyhow
 		return saturate(NoL * aperture);
