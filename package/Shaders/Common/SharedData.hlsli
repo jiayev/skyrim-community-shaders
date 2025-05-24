@@ -225,6 +225,12 @@ namespace SharedData
 		float Mix;
 	};
 
+	struct PostProcessingSettings
+	{
+		uint DisableVanillaTonemapping;
+		uint3 pad0;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -243,6 +249,7 @@ namespace SharedData
 		LinearLightingSettings linearLightingSettings;
 		SSPLSSettings ssplsSettings;
 		XeGTAOSettings xeGTAOSettings;
+		PostProcessingSettings postProcessingSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

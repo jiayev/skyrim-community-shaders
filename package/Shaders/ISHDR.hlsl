@@ -93,11 +93,13 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 inputColor = BlendTex.Sample(BlendSampler, uv).xyz;
 
 #		if defined(POSTPROCESS)
-	psout.Color = float4(inputColor, 1.0);
-	if (SharedData::linearLightingSettings.enableLinearLighting && SharedData::linearLightingSettings.enableGammaCorrection) {
-		psout.Color.xyz = Color::TrueLinearToGamma(psout.Color.xyz);
+	if (SharedData::postProcessingSettings.DisableVanillaTonemapping) {
+		psout.Color = float4(inputColor, 1.0);
+		if (SharedData::linearLightingSettings.enableLinearLighting && SharedData::linearLightingSettings.enableGammaCorrection) {
+			psout.Color.xyz = Color::TrueLinearToGamma(psout.Color.xyz);
+		}
+		return psout;
 	}
-	return psout;
 #		endif
 
 	float3 bloomColor = 0;
