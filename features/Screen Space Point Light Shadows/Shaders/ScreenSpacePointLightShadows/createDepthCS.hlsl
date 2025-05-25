@@ -11,24 +11,25 @@ SamplerState linearSampler : register(s0);
 
 cbuffer blurBuffer : register(b1)
 {
-    uint MipLevel;
-    uint ResX;
-    uint ResY;
+	uint MipLevel;
+	uint ResX;
+	uint ResY;
 };
 
-[numthreads(8, 8, 1)] void main(const uint2 dtid : SV_DispatchThreadID) {
-    float linearDepth = 0;
-    float linearSquared = 0;
-    float2 texCoord = (dtid + 0.5) / float2(ResX, ResY);
-    for (int i = 0; i < 4 ; i++)
-        for (int j = 0; j < 4 ; j++) {
-            uint2 newdtid = dtid * 4 + uint2(i, j);
-            float2 sampleCoord = (texCoord + float2(i, j) * (1.0 / float2(ResX, ResY)));
-            float depth = texDepth.SampleLevel(linearSampler, sampleCoord, 0).x;
-            float lineared = SharedData::GetScreenDepth(depth);
-            outDepth0[newdtid].x = depth;
-            linearDepth += lineared;
-            linearSquared += lineared * lineared;
-        }
-    outLinearDepth0[dtid] = float4(linearDepth / 16.0, linearSquared / 16.0, 0, 1);
+[numthreads(8, 8, 1)] void main(const uint2 dtid
+								: SV_DispatchThreadID) {
+	float linearDepth = 0;
+	float linearSquared = 0;
+	float2 texCoord = (dtid + 0.5) / float2(ResX, ResY);
+	for (int i = 0; i < 4; i++)
+		for (int j = 0; j < 4; j++) {
+			uint2 newdtid = dtid * 4 + uint2(i, j);
+			float2 sampleCoord = (texCoord + float2(i, j) * (1.0 / float2(ResX, ResY)));
+			float depth = texDepth.SampleLevel(linearSampler, sampleCoord, 0).x;
+			float lineared = SharedData::GetScreenDepth(depth);
+			outDepth0[newdtid].x = depth;
+			linearDepth += lineared;
+			linearSquared += lineared * lineared;
+		}
+	outLinearDepth0[dtid] = float4(linearDepth / 16.0, linearSquared / 16.0, 0, 1);
 }

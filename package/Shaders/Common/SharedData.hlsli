@@ -176,12 +176,12 @@ namespace SharedData
 	struct SSPLSSettings
 	{
 		uint Enable;
-        float Strength;
-        uint StepLimit;
-        float RayLength;
-        float CompareToleranceScale;
-        float MaxDistance;
-        uint EnableSoftShadows;
+		float Strength;
+		uint StepLimit;
+		float RayLength;
+		float CompareToleranceScale;
+		float MaxDistance;
+		uint EnableSoftShadows;
 		float SoftShadowScale;
 	};
 
