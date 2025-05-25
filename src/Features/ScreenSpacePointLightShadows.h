@@ -19,12 +19,12 @@ struct ScreenSpacePointLightShadows : Feature
 	{
 		uint Enable = true;
 		float Strength = 1.0f;
-		uint StepLimit = 16;
-		float RayLength = 0.8f;
-		float CompareToleranceScale = 0.75f;
+		uint StepLimit = 4;
+		float RayLength = 0.2f;
+		float CompareToleranceScale = 0.2f;
 		float MaxDistance = 2048.0f;
 		uint EnableSoftShadows = true;
-		float SoftShadowScale = 5.0f;
+		float SoftShadowScale = 2.5f;
 	} settings;
 
 	struct alignas(16) SSPLSCB
