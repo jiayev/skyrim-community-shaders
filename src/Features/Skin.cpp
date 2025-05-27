@@ -353,7 +353,7 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 
 	auto& workingExtraPtr = skinExtraTextures.try_emplace(hashKey).first->second;
 	workingExtraPtr = stateData.defaultTextureWhite;
-	
+
 	inTextureSet->SetTexturePath(RE::BSTextureSet::Texture::kHeight, extraTexturePath);
 	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kHeight, workingExtraPtr);
 }
