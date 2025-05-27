@@ -25,6 +25,7 @@ struct Skin : Feature
 	virtual void SaveSettings(json& o_json) override;
 
 	virtual void Prepass() override;
+	virtual void PostPostLoad() override;
 
 	virtual void SetupResources() override;
 
@@ -73,4 +74,7 @@ struct Skin : Feature
 	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;
 
 	SkinData GetCommonBufferData();
+
+	void OnLoadTextureSet(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet);
+	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
 };

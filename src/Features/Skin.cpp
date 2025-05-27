@@ -1,6 +1,8 @@
 #include "Skin.h"
 #include <DirectXTex.h>
 
+#include "Features/Skin/BSLightingShaderMaterialFacegenExtended.h"
+#include "Features/Skin/BSLightingShaderMaterialFacegenTintExtended.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -265,4 +267,185 @@ void Skin::SaveSettings(json& o_json)
 void Skin::RestoreDefaultSettings()
 {
 	settings = {};
+}
+
+void Skin::OnLoadTextureSet(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet)
+{
+	if (!inTextureSet || material->normalTexture == nullptr) {
+		return;
+	}
+
+	const char extraTextureName[] = "_extra.dds";
+	const char* workingNormalPath = nullptr;
+	const char* workingSpecularPath = nullptr;
+	auto workingTextureSet = inTextureSet;
+	auto hasSpecular = material->specularBackLightingTexture != nullptr;
+
+	if (hasSpecular) {
+		if (auto specularPath = workingTextureSet->GetTexturePath(RE::BSTextureSet::Texture::kSpecular)) {
+			workingSpecularPath = specularPath;
+		}
+	} else if (auto normalPath = workingTextureSet->GetTexturePath(RE::BSTextureSet::Texture::kNormal)) {
+		workingNormalPath = normalPath;
+	} else {
+		logger::error("[Advanced Skin] OnLoadTextureSet : No specular or normal texture found in texture set from material: {}", material->GetFeature());
+		return;
+	}
+
+	const char* foundPath = nullptr;
+	const char* extraTexturePath = nullptr;
+	if (!workingSpecularPath && !workingNormalPath) {
+		return;
+	}
+
+	auto findIgnoreCase = [](std::string_view str, std::string_view pattern) -> size_t {
+		auto it = std::search(str.begin(), str.end(), pattern.begin(), pattern.end(),
+							[](char ch1, char ch2) { return std::tolower(ch1) == std::tolower(ch2); });
+		return it == str.end() ? std::string_view::npos : std::distance(str.begin(), it);
+	};
+
+	if (hasSpecular && workingSpecularPath && findIgnoreCase(workingSpecularPath, "_s.dds") != std::string_view::npos) {
+		auto pos = findIgnoreCase(workingSpecularPath, "_s.dds");
+		if (pos != std::string_view::npos) {
+			auto newPath = std::string(workingSpecularPath);
+			newPath.replace(pos, 6, extraTextureName);
+			extraTexturePath = newPath.c_str();
+			foundPath = workingSpecularPath;
+		}
+	} else {
+		if (workingNormalPath && findIgnoreCase(workingNormalPath, "_n.dds") != std::string_view::npos) {
+			auto pos = findIgnoreCase(workingNormalPath, "_n.dds");
+			if (pos != std::string_view::npos) {
+				auto newPath = std::string(workingNormalPath);
+				newPath.replace(pos, 6, extraTextureName);
+				extraTexturePath = newPath.c_str();
+				foundPath = workingNormalPath;
+			}
+		} else if (workingNormalPath && findIgnoreCase(workingNormalPath, "_msn.dds") != std::string_view::npos) {
+			auto pos = findIgnoreCase(workingNormalPath, "_msn.dds");
+			if (pos != std::string_view::npos) {
+				auto newPath = std::string(workingNormalPath);
+				newPath.replace(pos, 8, extraTextureName);
+				extraTexturePath = newPath.c_str();
+				foundPath = workingNormalPath;
+			}
+		} else {
+			auto pos = findIgnoreCase(std::string_view(workingNormalPath), ".dds");
+			if (pos != std::string_view::npos) {
+				auto newPath = std::string(workingNormalPath);
+				newPath.replace(pos, 4, extraTextureName);
+				extraTexturePath = newPath.c_str();
+				foundPath = workingNormalPath;
+			}
+		}
+	}
+	if (!extraTexturePath) {
+		return;
+	}
+	logger::debug("[Advanced Skin] OnLoadTextureSet : Extra texture path: {} for {}", extraTexturePath, foundPath);
+}
+
+void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material)
+{
+	auto materialFeature = material->GetFeature();
+	if (materialFeature != RE::BSShaderMaterial::Feature::kFaceGen &&
+		materialFeature != RE::BSShaderMaterial::Feature::kFaceGenRGBTint) {
+		return;
+	}
+
+	// bool useExtraTextures = false;
+	// const char extraTextureName[] = "_extra.dds";
+
+	// auto workingSpecularPath = material->textureSet->GetTexturePath(RE::BSTextureSet::Texture::kSpecular);
+	// auto workingNormalPath = material->textureSet->GetTexturePath(RE::BSTextureSet::Texture::kNormal);
+	// const char* foundPath = nullptr;
+	// const char* extraTexturePath = nullptr;
+	// if (!workingSpecularPath && !workingNormalPath) {
+	// 	return;
+	// }
+	
+	// auto shadowState = globals::game::shadowState;
+
+	// auto findIgnoreCase = [](std::string_view str, std::string_view pattern) -> size_t {
+	// 	auto it = std::search(str.begin(), str.end(), pattern.begin(), pattern.end(),
+	// 						[](char ch1, char ch2) { return std::tolower(ch1) == std::tolower(ch2); });
+	// 	return it == str.end() ? std::string_view::npos : std::distance(str.begin(), it);
+	// };
+
+	// if (workingSpecularPath && findIgnoreCase(workingSpecularPath, "_s.dds") != std::string_view::npos) {
+	// 	auto pos = findIgnoreCase(workingSpecularPath, "_s.dds");
+	// 	if (pos != std::string_view::npos) {
+	// 		auto newPath = std::string(workingSpecularPath);
+	// 		newPath.replace(pos, 6, extraTextureName);
+	// 		extraTexturePath = newPath.c_str();
+	// 		foundPath = workingSpecularPath;
+	// 	}
+	// } else {
+	// 	if (workingNormalPath && findIgnoreCase(workingNormalPath, "_n.dds") != std::string_view::npos) {
+	// 		auto pos = findIgnoreCase(workingNormalPath, "_n.dds");
+	// 		if (pos != std::string_view::npos) {
+	// 			auto newPath = std::string(workingNormalPath);
+	// 			newPath.replace(pos, 6, extraTextureName);
+	// 			extraTexturePath = newPath.c_str();
+	// 			foundPath = workingNormalPath;
+	// 		}
+	// 	} else if (workingNormalPath && findIgnoreCase(workingNormalPath, "_msn.dds") != std::string_view::npos) {
+	// 		auto pos = findIgnoreCase(workingNormalPath, "_msn.dds");
+	// 		if (pos != std::string_view::npos) {
+	// 			auto newPath = std::string(workingNormalPath);
+	// 			newPath.replace(pos, 8, extraTextureName);
+	// 			extraTexturePath = newPath.c_str();
+	// 			foundPath = workingNormalPath;
+	// 		}
+	// 	} else {
+	// 		auto pos = findIgnoreCase(std::string_view(workingNormalPath), ".dds");
+	// 		if (pos != std::string_view::npos) {
+	// 			auto newPath = std::string(workingNormalPath);
+	// 			newPath.replace(pos, 4, extraTextureName);
+	// 			extraTexturePath = newPath.c_str();
+	// 			foundPath = workingNormalPath;
+	// 		}
+	// 	}
+	// }
+
+	// if (!extraTexturePath) {
+	// 	return;
+	// }
+
+	// logger::debug("Extra texture path: {} for {}", extraTexturePath, foundPath);
+
+	return;
+}
+
+struct BSLightingShaderMaterialFacegen_OnLoadTextureSet
+{
+	static void thunk(RE::BSLightingShaderMaterialFacegen* material, std::uint64_t a_arg1, RE::BSTextureSet* a_textureSet)
+	{
+		func(material, a_arg1, a_textureSet);
+		auto skin = globals::features::skin;
+		if (skin) {
+			skin->OnLoadTextureSet(material, a_textureSet);
+		}
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+struct BSLightingShaderMaterialFacegenTint_OnLoadTextureSet
+{
+	static void thunk(RE::BSLightingShaderMaterialFacegenTint* material, std::uint64_t a_arg1, RE::BSTextureSet* a_textureSet)
+	{
+		func(material, a_arg1, a_textureSet);
+		auto skin = globals::features::skin;
+		if (skin) {
+			skin->OnLoadTextureSet(material, a_textureSet);
+		}
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+void Skin::PostPostLoad()
+{
+	logger::info("[Advanced Skin] Hooking BSLightingShaderMaterial");
+	stl::write_vfunc<08, BSLightingShaderMaterialFacegen_OnLoadTextureSet>(RE::VTABLE_BSLightingShaderMaterialFacegen[0]);
+	stl::write_vfunc<08, BSLightingShaderMaterialFacegenTint_OnLoadTextureSet>(RE::VTABLE_BSLightingShaderMaterialFacegenTint[0]);
 }
