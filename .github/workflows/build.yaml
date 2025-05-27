@@ -100,6 +100,26 @@ jobs:
           name: dist-artifacts
           path: dist/
 
+      - name: Generate release notes comparing against base version tag
+        id: gen_notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="v${{ needs.build.outputs.version }}-pr${{ github.event.pull_request.number }}"
+          BASE_TAG="v${{ needs.build.outputs.version }}"
+          PR_URL="https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
+
+          echo "🔍 Comparing $BASE_SHA...$HEAD_SHA"
+
+          NOTES=$(gh api repos/$REPO/compare/$BASE_SHA...$HEAD_SHA | jq -r '
+            .commits[] | "- \(.commit.message | split("\n")[0]) by @\(.author.login // $author)"
+          ')
+
+          echo "$NOTES" > release-notes.md
+          echo -e "\n[View Pull Request](https://github.com/$REPO/pull/$PR_NUMBER)" >> release-notes.md
+          echo "bodyfile=release-notes.md" >> "$GITHUB_OUTPUT"
+
       - name: Upload prerelease
         uses: ncipollo/release-action@v1
         with:
@@ -107,7 +127,8 @@ jobs:
           tag: v${{ needs.build.outputs.version }}-pr${{ github.event.pull_request.number }}
           prerelease: true
           artifacts: "${{ github.workspace }}/dist/CommunityShaders_AIO-*.7z"
-          generateReleaseNotes: true
+          bodyFile: release-notes.md
+          generateReleaseNotes: false
           allowUpdates: true
           replacesArtifacts: true
           removeArtifacts: true
