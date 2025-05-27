@@ -2,5 +2,4 @@
 
 class BSLightingShaderMaterialFacegenTintExtended : public RE::BSLightingShaderMaterialFacegenTint
 {
-
 }

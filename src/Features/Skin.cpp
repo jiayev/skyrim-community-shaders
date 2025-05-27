@@ -300,7 +300,7 @@ void Skin::OnLoadTextureSet(RE::BSLightingShaderMaterialBase const* material, RE
 
 	auto findIgnoreCase = [](std::string_view str, std::string_view pattern) -> size_t {
 		auto it = std::search(str.begin(), str.end(), pattern.begin(), pattern.end(),
-							[](char ch1, char ch2) { return std::tolower(ch1) == std::tolower(ch2); });
+			[](char ch1, char ch2) { return std::tolower(ch1) == std::tolower(ch2); });
 		return it == str.end() ? std::string_view::npos : std::distance(str.begin(), it);
 	};
 
@@ -363,7 +363,7 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 	// if (!workingSpecularPath && !workingNormalPath) {
 	// 	return;
 	// }
-	
+
 	// auto shadowState = globals::game::shadowState;
 
 	// auto findIgnoreCase = [](std::string_view str, std::string_view pattern) -> size_t {
