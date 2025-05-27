@@ -25,7 +25,6 @@ struct Skin : Feature
 	virtual void SaveSettings(json& o_json) override;
 
 	virtual void Prepass() override;
-	virtual void PostPostLoad() override;
 
 	virtual void SetupResources() override;
 
@@ -78,4 +77,5 @@ struct Skin : Feature
 
 	void SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet);
 	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
+	void SetShaderResouces(ID3D11DeviceContext* a_context);
 };
