@@ -72,9 +72,10 @@ struct Skin : Feature
 	};
 
 	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;
+	std::unordered_map<uint32_t, RE::NiSourceTexturePtr> skinExtraTextures;
 
 	SkinData GetCommonBufferData();
 
-	void OnLoadTextureSet(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet);
+	void SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet);
 	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
 };
