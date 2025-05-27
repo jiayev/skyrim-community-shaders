@@ -268,6 +268,29 @@ void Skin::RestoreDefaultSettings()
 	settings = {};
 }
 
+struct SkinExtendedRendererState
+{
+	static constexpr uint32_t NumPSTextures = 1;
+	static constexpr uint32_t FirstPSTexture = 71;
+
+	uint32_t PSResourceModifiedBits = 0;
+	ID3D11ShaderResourceView* PSTexture;
+
+	void SetExtraSkinPSTexture(RE::BSGraphics::Texture* newTexture)
+	{
+		ID3D11ShaderResourceView* resourceView = newTexture ? newTexture->resourceView : nullptr;
+		{
+			PSTexture = resourceView;
+			PSResourceModifiedBits = 1;
+		}
+	}
+
+	SkinExtendedRendererState()
+	{
+		PSTexture = nullptr;
+	}
+} skinExtendedRendererState;
+
 void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet)
 {
 	if (!inTextureSet || material->normalTexture == nullptr) {
@@ -356,6 +379,7 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 
 	inTextureSet->SetTexturePath(RE::BSTextureSet::Texture::kHeight, extraTexturePath);
 	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kHeight, workingExtraPtr);
+	// logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture set with hash key: {}", hashKey);
 }
 
 void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material)
@@ -376,42 +400,27 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 	}
 
 	if (!skinExtraTextures.contains(hashKey)) {
-		logger::debug("[Advanced Skin] BSLightingShader_SetupMaterial : Setting up extra texture for material: {}", static_cast<int>(materialFeature));
+		// logger::debug("[Advanced Skin] BSLightingShader_SetupMaterial : Setting up extra texture for material: {}", static_cast<int>(materialFeature));
 		GetSingleton()->SetupExtraTexture(material, materialTextureSet);
+	}
+
+	auto graphicsState = globals::game::graphicsState;
+	auto workingExtraPtr = skinExtraTextures[hashKey];
+	const auto state = globals::state;
+
+	const bool hasExtraTexture = workingExtraPtr != nullptr;
+	const bool isExtraTextureLoaded = workingExtraPtr != graphicsState->GetRuntimeData().defaultTextureBlack;
+	if (hasExtraTexture && isExtraTextureLoaded) {
+		skinExtendedRendererState.SetExtraSkinPSTexture(workingExtraPtr->rendererTexture);
+	} else {
+		skinExtendedRendererState.SetExtraSkinPSTexture(graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture);
 	}
 }
 
-// struct BSLightingShaderMaterialFacegen_OnLoadTextureSet
-// {
-// 	static void thunk(RE::BSLightingShaderMaterialFacegen* material, std::uint64_t a_arg1, RE::BSTextureSet* a_textureSet)
-// 	{
-// 		func(material, a_arg1, a_textureSet);
-// 		auto skin = globals::features::skin;
-// 		if (skin) {
-// 			logger::debug("[Advanced Skin] BSLightingShaderMaterialFacegen_OnLoadTextureSet called for Facegen");
-// 			skin->OnLoadTextureSet(material, a_textureSet);
-// 		}
-// 	}
-// 	static inline REL::Relocation<decltype(thunk)> func;
-// };
-
-// struct BSLightingShaderMaterialFacegenTint_OnLoadTextureSet
-// {
-// 	static void thunk(RE::BSLightingShaderMaterialFacegenTint* material, std::uint64_t a_arg1, RE::BSTextureSet* a_textureSet)
-// 	{
-// 		func(material, a_arg1, a_textureSet);
-// 		auto skin = globals::features::skin;
-// 		if (skin) {
-// 			logger::debug("[Advanced Skin] BSLightingShaderMaterialFacegenTint_OnLoadTextureSet called for FacegenTint");
-// 			skin->OnLoadTextureSet(material, a_textureSet);
-// 		}
-// 	}
-// 	static inline REL::Relocation<decltype(thunk)> func;
-// };
-
-void Skin::PostPostLoad()
+void Skin::SetShaderResouces(ID3D11DeviceContext* a_context)
 {
-	logger::info("[Advanced Skin] Hooking BSLightingShaderMaterial");
-	// stl::write_vfunc<08, BSLightingShaderMaterialFacegen_OnLoadTextureSet>(RE::VTABLE_BSLightingShaderMaterialFacegen[0]);
-	// stl::write_vfunc<08, BSLightingShaderMaterialFacegenTint_OnLoadTextureSet>(RE::VTABLE_BSLightingShaderMaterialFacegenTint[0]);
+	if (skinExtendedRendererState.PSResourceModifiedBits != 0) {
+		a_context->PSSetShaderResources(71, 1, &skinExtendedRendererState.PSTexture);
+	}
+	skinExtendedRendererState.PSResourceModifiedBits = 0;
 }
