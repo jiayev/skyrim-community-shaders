@@ -68,7 +68,7 @@ struct Skin : Feature
 	};
 
 	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;
-	std::unordered_map<uint32_t, RE::NiSourceTexturePtr> skinExtraTextures;
+	std::unordered_map<uint32_t, RE::NiSourceTexturePtr[2]> skinExtraTextures;
 
 	SkinData GetCommonBufferData();
 
