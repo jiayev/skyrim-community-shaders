@@ -46,7 +46,6 @@ struct Skin : Feature
 		float SkinDetailStrength = 0.5f;
 		float SkinDetailTiling = 20.0f;
 		float BodyTilingMultiplier = 2.0f;
-		bool ApplySpecularToWetness = false;
 		float ExtraSkinWetness = 0.0f;
 		float Translucency = 0.1f;
 		float sssWidth = 0.2f;
@@ -66,8 +65,6 @@ struct Skin : Feature
 		float4 sssParams;
 		float4 fuzzParams;
 		float4 physicalParams;
-		uint ApplySpecularToWetness;
-		uint pad0[3];
 	};
 
 	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;

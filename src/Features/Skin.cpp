@@ -22,7 +22,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkinDetailStrength,
 	SkinDetailTiling,
 	BodyTilingMultiplier,
-	ApplySpecularToWetness,
 	ExtraSkinWetness,
 	Translucency,
 	sssWidth,
@@ -113,14 +112,9 @@ void Skin::DrawSettings()
 
 	ImGui::Spacing();
 
-	ImGui::SliderFloat("Extra Skin Wetness", &settings.ExtraSkinWetness, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderFloat("Extra Skin Wetness", &settings.ExtraSkinWetness, 0.0f, 2.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Extra wetness for skin adding to wetness feature");
-	}
-
-	ImGui::Checkbox("Apply Specular to Wetness", &settings.ApplySpecularToWetness);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Applies specular texture to wetness feature instead of roughness (needs Wetness Effects enabled)");
 	}
 
 	ImGui::Spacing();
@@ -249,7 +243,6 @@ Skin::SkinData Skin::GetCommonBufferData()
 	data.sssParams = float4(settings.Translucency, settings.sssWidth, settings.thicknessMult * float(settings.UseCalcThickness), float(settings.UseSSS));
 	data.fuzzParams = float4(settings.FuzzStrength, settings.FuzzRoughness, settings.FuzzF0, 0.0f);
 	data.physicalParams = float4(settings.PhysicalMainRoughnessMultiplier, settings.PhysicalSecondRoughnessMultiplier, settings.PhysicalSpecularStrength, 0.0f);
-	data.ApplySpecularToWetness = uint(settings.ApplySpecularToWetness);
 	return data;
 }
 
@@ -406,7 +399,6 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 
 	auto graphicsState = globals::game::graphicsState;
 	auto workingExtraPtr = skinExtraTextures[hashKey];
-	const auto state = globals::state;
 
 	const bool hasExtraTexture = workingExtraPtr != nullptr;
 	const bool isExtraTextureLoaded = workingExtraPtr != graphicsState->GetRuntimeData().defaultTextureBlack;
