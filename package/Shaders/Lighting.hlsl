@@ -605,6 +605,7 @@ Texture2D<float4> TexShadowMaskSampler : register(t14);
 
 #	if defined(SKIN) && defined(CS_SKIN)
 Texture2D<float4> TexSkinExtraSampler : register(t71);
+Texture2D<float4> TexSkinWetnessSampler : register(t74);
 #	endif
 
 cbuffer PerTechnique : register(b0)
@@ -1361,6 +1362,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float skinSpecular = 0;
 	float skinFuzzMask = 1;
 	float skinWetMask = 1;
+	float skinAO = 1;
 	bool skinRoughnessSet = false;
 #	endif
 
@@ -1707,14 +1709,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(SKIN) && defined(CS_SKIN)
 	float4 skinsk = TexRimSoftLightWorldMapOverlaySampler.SampleBias(SampRimSoftLightWorldMapOverlaySampler, uv, SharedData::MipBias);
 	float4 skinExtra = TexSkinExtraSampler.SampleBias(SampColorSampler, uv, SharedData::MipBias);
+	float4 skinWetnessSample = TexSkinWetnessSampler.SampleBias(SampColorSampler, uv, SharedData::MipBias);
 	if ((skinExtra.x > 0.0 || skinExtra.y > 0.0 || skinExtra.z > 0.0 || skinExtra.w > 0.0) && !(skinExtra.x == skinExtra.y && skinExtra.z == 1.0 && skinExtra.w == 1.0)) {
 		skinRoughness = skinExtra.x;
 		skinFuzzMask = skinExtra.y;
-		skinWetMask = skinExtra.z;
+		skinAO = skinExtra.z;
 		skinSpecular = skinExtra.w;
 		skinRoughnessSet = true;
 	} else {
 		skinRoughnessSet = false;
+	}
+	if ((skinWetnessSample.x > 0.0 || skinWetnessSample.y > 0.0 || skinWetnessSample.z > 0.0 || skinWetnessSample.w > 0.0) && !(skinWetnessSample.x == skinWetnessSample.y && skinWetnessSample.z == 1.0 && skinWetnessSample.w == 1.0)) {
+		skinWetMask = skinWetnessSample.x;
+	} else {
+		skinWetMask = 1.0;
 	}
 #	endif
 
@@ -1921,7 +1929,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif      // defined (MODELSPACENORMALS) && !defined (SKINNED)
 
 #	if defined(SKIN) && defined(CS_SKIN)
-	float SkinAO = 1.0;
 	if (SharedData::skinData.skinDetailParams.w > 0.0f) {
 #		if defined(FACEGEN)
 		float2 detailUV = input.TexCoord0.xy * SharedData::skinData.skinDetailParams.x;
@@ -1935,7 +1942,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 tangentNormal = normal.xyz;
 #		endif  // MODELSPACENORMALS
 		float3 detailNormal = float3(Skin::TexSkinDetailNormal.SampleBias(SampNormalSampler, detailUV, SharedData::MipBias).xy, 0.5f);
-		SkinAO = Skin::TexSkinDetailNormal.Sample(SampNormalSampler, detailUV).w;
+		skinAO *= Skin::TexSkinDetailNormal.Sample(SampNormalSampler, detailUV).w;
 		detailNormal = (detailNormal * 2.0 - 1.0) * SharedData::skinData.skinDetailParams.z;
 		float3 combinedTangentNormal = (tangentNormal * 2.0 - 1.0) + detailNormal;
 		combinedTangentNormal = (combinedTangentNormal + 1.0) * 0.5;
@@ -2168,19 +2175,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 	skinSurfaceProperties.SubsurfaceColor = skinsk.xyz;
 	skinSurfaceProperties.F0 = SharedData::skinData.skinParams2.zzz;
-	skinSurfaceProperties.AO = SkinAO;
+	skinSurfaceProperties.AO = skinAO;
 	skinSurfaceProperties.Curvature = Skin::CalculateCurvature(modelNormal.xyz);
 
 	skinSurfaceProperties.FuzzWeight = SharedData::skinData.fuzzParams.x;
 	skinSurfaceProperties.FuzzRoughness = SharedData::skinData.fuzzParams.y;
 	skinSurfaceProperties.FuzzColor = SharedData::skinData.fuzzParams.zzz;
 
-	skinSurfaceProperties.Wetness = SharedData::skinData.skinParams2.y;
+	skinSurfaceProperties.Wetness = SharedData::skinData.skinParams2.y * skinWetMask;
 
 	if (skinRoughnessSet) {
 		skinSurfaceProperties.F0 = 0.08f * skinSpecular * SharedData::skinData.physicalParams.z;
 		skinSurfaceProperties.FuzzWeight *= skinFuzzMask;
-		skinSurfaceProperties.Wetness *= skinWetMask;
 	}
 
 	float3 specularColorPBR = 0;
