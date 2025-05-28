@@ -1360,7 +1360,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float skinRoughness = 0;
 	float skinSpecular = 0;
 	float skinFuzzMask = 1;
-	float skinWetMask = 0;
+	float skinWetMask = 1;
 	bool skinRoughnessSet = false;
 #	endif
 
@@ -1939,7 +1939,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		detailNormal = (detailNormal * 2.0 - 1.0) * SharedData::skinData.skinDetailParams.z;
 		float3 combinedTangentNormal = (tangentNormal * 2.0 - 1.0) + detailNormal;
 		combinedTangentNormal = (combinedTangentNormal + 1.0) * 0.5;
-		modelNormal = float4(normalize(mul(tbn, combinedTangentNormal.xyz)), 1);
+		modelNormal = lerp(float4(normalize(mul(tbn, combinedTangentNormal.xyz)), 1), modelNormal, sqrt(saturate(SharedData::skinData.skinParams2.y * skinWetMask)));
 	}
 #	endif  // CS_SKIN
 
