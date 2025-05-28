@@ -2194,7 +2194,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float3 transmissionColor = 0;
 
 	float pbrWeight = 1;
-	float pbrGlossiness = 1 - skinSurfaceProperties.RoughnessPrimary;
+	float pbrGlossiness = 1 - lerp(lerp(skinSurfaceProperties.RoughnessPrimary, skinSurfaceProperties.RoughnessSecondary, skinSurfaceProperties.SecondarySpecIntensity), 0.1, skinSurfaceProperties.Wetness);
 #	endif  // CS_SKIN
 
 	float porosity = 1.0;
