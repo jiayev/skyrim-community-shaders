@@ -21,6 +21,7 @@ namespace Skin
 		float FuzzRoughness;
 		float3 FuzzColor;
 		float FuzzWeight;
+		float Wetness;
 	};
 
 	SkinSurfaceProperties InitSkinSurfaceProperties()
@@ -38,6 +39,7 @@ namespace Skin
 		skin.FuzzRoughness = 0.35;
 		skin.FuzzColor = float3(0.045, 0.045, 0.045);
 		skin.FuzzWeight = 0.0;
+		skin.Wetness = 0.0;
 		return skin;
 	}
 
@@ -144,6 +146,16 @@ namespace Skin
 
 			specular += fuzzSpecular * skin.FuzzWeight;
 		}
+
+		if (skin.Wetness > 0.0) {
+			float3 wetnessF;
+			const float3 waterF0 = 0.02;
+			const float waterRoughness = 0.1;
+			float3 wetSpecular = PBR::GetSpecularDirectLightMultiplierMicrofacet(waterRoughness, waterF0, NdotL, NdotV, NdotH, VdotH, wetnessF) * light.LightColor * NdotL;
+			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(waterRoughness, NdotV);
+			wetSpecular *= 1 + waterF0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
+			specular = lerp(specular, wetSpecular, saturate(skin.Wetness));
+		}
 	}
 
 	void SkinIndirectLobeWeights(
@@ -155,6 +167,8 @@ namespace Skin
 		const float NdotV = saturate(dot(N, V));
 
 		float averageRoughness = lerp(skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity);
+		const float waterRoughness = 0.1;
+		const float waterF0 = 0.02;
 
 		float2 specularBRDF = PBR::GetEnvBRDFApproxLazarov(averageRoughness, NdotV);
 		specularWeight = skin.F0 * specularBRDF.x + specularBRDF.y;
@@ -162,6 +176,14 @@ namespace Skin
 		diffuseWeight = skin.Albedo * (1.0 - specularWeight);
 
 		specularWeight *= 1 + skin.F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
+
+		if (skin.Wetness > 0.0) {
+			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(waterRoughness, NdotV);
+			float3 wetSpecular = waterF0 * wetSpecularBRDF.x + wetSpecularBRDF.y;
+			wetSpecular *= 1 + waterF0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
+			specularWeight = lerp(specularWeight, wetSpecular, saturate(skin.Wetness));
+		}
+
 		float3 R = reflect(-V, N);
 		float horizon = min(1.0 + dot(R, VN), 1.0);
 		horizon *= horizon;
