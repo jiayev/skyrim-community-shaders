@@ -310,7 +310,8 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 		if (auto specularPath = inTextureSet->GetTexturePath(RE::BSTextureSet::Texture::kSpecular)) {
 			workingSpecularPath = specularPath;
 		}
-	} else if (auto normalPath = inTextureSet->GetTexturePath(RE::BSTextureSet::Texture::kNormal)) {
+	}
+	if (auto normalPath = inTextureSet->GetTexturePath(RE::BSTextureSet::Texture::kNormal)) {
 		workingNormalPath = normalPath;
 	} else {
 		logger::error("[Advanced Skin] SetupExtraTexture : No specular or normal texture found in texture set from material: {}", static_cast<int>(material->GetFeature()));
