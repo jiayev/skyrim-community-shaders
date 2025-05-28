@@ -603,6 +603,10 @@ Texture2D<float4> TexLandLodNoiseSampler : register(t15);
 
 Texture2D<float4> TexShadowMaskSampler : register(t14);
 
+#	if defined(SKIN) && defined(CS_SKIN)
+Texture2D<float4> TexSkinExtraSampler : register(t71);
+#	endif
+
 cbuffer PerTechnique : register(b0)
 {
 	float4 FogColor : packoffset(c0);           // Color in xyz, invFrameBufferRange in w
@@ -1369,6 +1373,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float glossiness = 0;
 #	if defined(SKIN) && defined(CS_SKIN)
 	float skinRoughness = 0;
+	float skinSpecular = 0;
+	float skinFuzzMask = 1;
+	float skinWetMask = 0;
 	bool skinRoughnessSet = false;
 #	endif
 
@@ -1713,10 +1720,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif  // LOD_BLENDING
 
 #	if defined(SKIN) && defined(CS_SKIN)
-	float4 skinsk = TexRimSoftLightWorldMapOverlaySampler.Sample(SampRimSoftLightWorldMapOverlaySampler, uv);
-	if (skinsk.w < 0.99) {
-		skinRoughness = skinsk.w;
+	float4 skinsk = TexRimSoftLightWorldMapOverlaySampler.SampleBias(SampRimSoftLightWorldMapOverlaySampler, uv, SharedData::MipBias);
+	float4 skinExtra = TexSkinExtraSampler.SampleBias(SampColorSampler, uv, SharedData::MipBias);
+	if ((skinExtra.x > 0.0 || skinExtra.y > 0.0 || skinExtra.z > 0.0 || skinExtra.w > 0.0) && !(skinExtra.x == skinExtra.y && skinExtra.z == 1.0 && skinExtra.w == 1.0)) {
+		skinRoughness = skinExtra.x;
+		skinFuzzMask = skinExtra.y;
+		skinWetMask = skinExtra.z;
+		skinSpecular = skinExtra.w;
 		skinRoughnessSet = true;
+	} else {
+		skinRoughnessSet = false;
 	}
 #	endif
 
@@ -2210,8 +2223,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	const float ExtraRoughness = PBR::GetFresnelFactorSchlick(0.04, saturate(dot(modelNormal.xyz, viewDirection))) * SharedData::skinData.skinParams2.w;
 	skinSurfaceProperties.RoughnessPrimary = SharedData::skinData.skinParams.x;
-	if (!SharedData::skinData.ApplySpecularToWetness)
-		skinSurfaceProperties.RoughnessPrimary = saturate(SharedData::skinData.skinParams.x - SharedData::skinData.skinParams.z * glossiness);
+	skinSurfaceProperties.RoughnessPrimary = saturate(SharedData::skinData.skinParams.x - SharedData::skinData.skinParams.z * glossiness);
 	skinSurfaceProperties.RoughnessSecondary = SharedData::skinData.skinParams.y;
 	if (skinRoughnessSet) {
 		skinSurfaceProperties.RoughnessPrimary = skinRoughness * SharedData::skinData.physicalParams.x;
@@ -2226,15 +2238,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	}
 	skinSurfaceProperties.SubsurfaceColor = skinsk.xyz;
 	skinSurfaceProperties.F0 = SharedData::skinData.skinParams2.zzz;
-	if (skinRoughnessSet) {
-		skinSurfaceProperties.F0 = 0.08f * glossiness * SharedData::skinData.physicalParams.z;
-	}
 	skinSurfaceProperties.AO = SkinAO;
 	skinSurfaceProperties.Curvature = Skin::CalculateCurvature(modelNormal.xyz);
 
 	skinSurfaceProperties.FuzzWeight = SharedData::skinData.fuzzParams.x;
 	skinSurfaceProperties.FuzzRoughness = SharedData::skinData.fuzzParams.y;
 	skinSurfaceProperties.FuzzColor = SharedData::skinData.fuzzParams.zzz;
+
+	skinSurfaceProperties.Wetness = SharedData::skinData.skinParams2.y;
+
+	if (skinRoughnessSet) {
+		skinSurfaceProperties.F0 = 0.08f * skinSpecular * SharedData::skinData.physicalParams.z;
+		skinSurfaceProperties.FuzzWeight *= skinFuzzMask;
+		skinSurfaceProperties.Wetness *= skinWetMask;
+	}
 
 	float3 specularColorPBR = 0;
 	float3 transmissionColor = 0;
@@ -2314,16 +2331,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float puddleWetness = SharedData::wetnessEffectsSettings.PuddleWetness * minWetnessAngle;
 #		if defined(SKIN)
 	rainWetness = SharedData::wetnessEffectsSettings.SkinWetness * SharedData::wetnessEffectsSettings.Wetness;
-#			if defined(CS_SKIN)
-	if (SharedData::skinData.skinParams2.y) {
-		rainWetness += SharedData::skinData.skinParams2.y;
-		puddleWetness += SharedData::skinData.skinParams2.y;
-	}
-	if (SharedData::skinData.ApplySpecularToWetness) {
-		rainWetness += glossiness * SharedData::skinData.skinParams.z;
-		puddleWetness += glossiness * SharedData::skinData.skinParams.z;
-	}
-#			endif
 #		endif
 #		if defined(HAIR)
 	rainWetness = SharedData::wetnessEffectsSettings.SkinWetness * SharedData::wetnessEffectsSettings.Wetness * 0.8f;
@@ -2512,7 +2519,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 									  DirLightDirection,
 									  skinSurfaceProperties.Thickness) *
 		                          SharedData::skinData.sssParams.w;
-		transmissionColor += min(sssTransmittance * lightProperties.LightColor, dirLightColor * dirLightColorMultiplier);
+		transmissionColor += min(sssTransmittance * lightProperties.LightColor * skinSurfaceProperties.Albedo, dirLightColor * dirLightColorMultiplier);
 		specularColorPBR += dirSpecularColor * !SharedData::InInterior;
 #		if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1.0)
@@ -2639,7 +2646,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 										  normalizedLightDirection,
 										  skinSurfaceProperties.Thickness) *
 			                          SharedData::skinData.sssParams.w;
-			transmissionColor += min(sssTransmittance * lightProperties.LightColor, lightProperties.LightColor);
+			transmissionColor += min(sssTransmittance * lightProperties.LightColor * skinSurfaceProperties.Albedo, lightProperties.LightColor);
 			specularColorPBR += pointSpecularColor;
 		} else {
 			lightColor *= lightShadow;
@@ -2823,7 +2830,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 										  normalizedLightDirection,
 										  skinSurfaceProperties.Thickness) *
 			                          SharedData::skinData.sssParams.w;
-			transmissionColor += min(sssTransmittance * lightProperties.LightColor, lightProperties.LightColor);
+			transmissionColor += min(sssTransmittance * lightProperties.LightColor * skinSurfaceProperties.Albedo, lightProperties.LightColor);
 			specularColorPBR += pointSpecularColor;
 #				if defined(WETNESS_EFFECTS)
 			if (waterRoughnessSpecular < 1.0)

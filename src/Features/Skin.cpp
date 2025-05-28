@@ -1,6 +1,7 @@
 #include "Skin.h"
 #include <DirectXTex.h>
 
+#include "Hooks.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -21,7 +22,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkinDetailStrength,
 	SkinDetailTiling,
 	BodyTilingMultiplier,
-	ApplySpecularToWetness,
 	ExtraSkinWetness,
 	Translucency,
 	sssWidth,
@@ -112,14 +112,9 @@ void Skin::DrawSettings()
 
 	ImGui::Spacing();
 
-	ImGui::SliderFloat("Extra Skin Wetness", &settings.ExtraSkinWetness, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderFloat("Extra Skin Wetness", &settings.ExtraSkinWetness, 0.0f, 2.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Extra wetness for skin adding to wetness feature");
-	}
-
-	ImGui::Checkbox("Apply Specular to Wetness", &settings.ApplySpecularToWetness);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Applies specular texture to wetness feature instead of roughness (needs Wetness Effects enabled)");
 	}
 
 	ImGui::Spacing();
@@ -248,7 +243,6 @@ Skin::SkinData Skin::GetCommonBufferData()
 	data.sssParams = float4(settings.Translucency, settings.sssWidth, settings.thicknessMult * float(settings.UseCalcThickness), float(settings.UseSSS));
 	data.fuzzParams = float4(settings.FuzzStrength, settings.FuzzRoughness, settings.FuzzF0, 0.0f);
 	data.physicalParams = float4(settings.PhysicalMainRoughnessMultiplier, settings.PhysicalSecondRoughnessMultiplier, settings.PhysicalSpecularStrength, 0.0f);
-	data.ApplySpecularToWetness = uint(settings.ApplySpecularToWetness);
 	return data;
 }
 
@@ -265,4 +259,160 @@ void Skin::SaveSettings(json& o_json)
 void Skin::RestoreDefaultSettings()
 {
 	settings = {};
+}
+
+struct SkinExtendedRendererState
+{
+	static constexpr uint32_t NumPSTextures = 1;
+	static constexpr uint32_t FirstPSTexture = 71;
+
+	uint32_t PSResourceModifiedBits = 0;
+	ID3D11ShaderResourceView* PSTexture;
+
+	void SetExtraSkinPSTexture(RE::BSGraphics::Texture* newTexture)
+	{
+		ID3D11ShaderResourceView* resourceView = newTexture ? newTexture->resourceView : nullptr;
+		{
+			PSTexture = resourceView;
+			PSResourceModifiedBits = 1;
+		}
+	}
+
+	SkinExtendedRendererState()
+	{
+		PSTexture = nullptr;
+	}
+} skinExtendedRendererState;
+
+void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet)
+{
+	if (!inTextureSet || material->normalTexture == nullptr) {
+		logger::error("[Advanced Skin] SetupExtraTexture : Texture set is null for material: {}", static_cast<int>(material->GetFeature()));
+		return;
+	}
+
+	uint32_t hashKey = 0;
+	hashKey = material->hashKey;
+	if (hashKey == 0) {
+		logger::error("[Advanced Skin] SetupExtraTexture : Invalid hash key for material: {}", static_cast<int>(material->GetFeature()));
+		return;
+	}
+
+	const char extraTextureName[] = "_extra.dds";
+	const char* workingNormalPath = nullptr;
+	const char* workingSpecularPath = nullptr;
+	auto workingMaterial = static_cast<const RE::BSLightingShaderMaterialBase*>(material);
+	auto hasSpecular = workingMaterial->specularBackLightingTexture != nullptr;
+
+	const auto& stateData = globals::game::graphicsState->GetRuntimeData();
+
+	if (hasSpecular) {
+		if (auto specularPath = inTextureSet->GetTexturePath(RE::BSTextureSet::Texture::kSpecular)) {
+			workingSpecularPath = specularPath;
+		}
+	} else if (auto normalPath = inTextureSet->GetTexturePath(RE::BSTextureSet::Texture::kNormal)) {
+		workingNormalPath = normalPath;
+	} else {
+		logger::error("[Advanced Skin] SetupExtraTexture : No specular or normal texture found in texture set from material: {}", static_cast<int>(material->GetFeature()));
+		return;
+	}
+
+	const char* foundPath = nullptr;
+	const char* extraTexturePath = nullptr;
+	if (!workingSpecularPath && !workingNormalPath) {
+		return;
+	}
+
+	auto findIgnoreCase = [](std::string_view str, std::string_view pattern) -> size_t {
+		auto it = std::search(str.begin(), str.end(), pattern.begin(), pattern.end(),
+			[](char ch1, char ch2) { return std::tolower(ch1) == std::tolower(ch2); });
+		return it == str.end() ? std::string_view::npos : std::distance(str.begin(), it);
+	};
+
+	if (hasSpecular && workingSpecularPath && findIgnoreCase(workingSpecularPath, "_s.dds") != std::string_view::npos) {
+		auto pos = findIgnoreCase(workingSpecularPath, "_s.dds");
+		if (pos != std::string_view::npos) {
+			auto newPath = std::string(workingSpecularPath);
+			newPath.replace(pos, 6, extraTextureName);
+			extraTexturePath = newPath.c_str();
+			foundPath = workingSpecularPath;
+		}
+	} else {
+		if (workingNormalPath && findIgnoreCase(workingNormalPath, "_n.dds") != std::string_view::npos) {
+			auto pos = findIgnoreCase(workingNormalPath, "_n.dds");
+			if (pos != std::string_view::npos) {
+				auto newPath = std::string(workingNormalPath);
+				newPath.replace(pos, 6, extraTextureName);
+				extraTexturePath = newPath.c_str();
+				foundPath = workingNormalPath;
+			}
+		} else if (workingNormalPath && findIgnoreCase(workingNormalPath, "_msn.dds") != std::string_view::npos) {
+			auto pos = findIgnoreCase(workingNormalPath, "_msn.dds");
+			if (pos != std::string_view::npos) {
+				auto newPath = std::string(workingNormalPath);
+				newPath.replace(pos, 8, extraTextureName);
+				extraTexturePath = newPath.c_str();
+				foundPath = workingNormalPath;
+			}
+		} else {
+			auto pos = findIgnoreCase(std::string_view(workingNormalPath), ".dds");
+			if (pos != std::string_view::npos) {
+				auto newPath = std::string(workingNormalPath);
+				newPath.replace(pos, 4, extraTextureName);
+				extraTexturePath = newPath.c_str();
+				foundPath = workingNormalPath;
+			}
+		}
+	}
+
+	logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture path: {} for {}", extraTexturePath, foundPath);
+
+	auto& workingExtraPtr = skinExtraTextures.try_emplace(hashKey).first->second;
+	workingExtraPtr = stateData.defaultTextureWhite;
+
+	inTextureSet->SetTexturePath(RE::BSTextureSet::Texture::kHeight, extraTexturePath);
+	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kHeight, workingExtraPtr);
+	// logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture set with hash key: {}", hashKey);
+}
+
+void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material)
+{
+	auto materialFeature = material->GetFeature();
+	if (materialFeature != RE::BSShaderMaterial::Feature::kFaceGen &&
+		materialFeature != RE::BSShaderMaterial::Feature::kFaceGenRGBTint) {
+		return;
+	}
+
+	auto materialTextureSet = material->textureSet.get();
+
+	uint32_t hashKey = 0;
+	hashKey = material->hashKey;
+	if (hashKey == 0) {
+		logger::error("[Advanced Skin] BSLightingShader_SetupMaterial : Invalid hash key for material: {}", static_cast<int>(materialFeature));
+		return;
+	}
+
+	if (!skinExtraTextures.contains(hashKey)) {
+		// logger::debug("[Advanced Skin] BSLightingShader_SetupMaterial : Setting up extra texture for material: {}", static_cast<int>(materialFeature));
+		GetSingleton()->SetupExtraTexture(material, materialTextureSet);
+	}
+
+	auto graphicsState = globals::game::graphicsState;
+	auto workingExtraPtr = skinExtraTextures[hashKey];
+
+	const bool hasExtraTexture = workingExtraPtr != nullptr;
+	const bool isExtraTextureLoaded = workingExtraPtr != graphicsState->GetRuntimeData().defaultTextureBlack;
+	if (hasExtraTexture && isExtraTextureLoaded) {
+		skinExtendedRendererState.SetExtraSkinPSTexture(workingExtraPtr->rendererTexture);
+	} else {
+		skinExtendedRendererState.SetExtraSkinPSTexture(graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture);
+	}
+}
+
+void Skin::SetShaderResouces(ID3D11DeviceContext* a_context)
+{
+	if (skinExtendedRendererState.PSResourceModifiedBits != 0) {
+		a_context->PSSetShaderResources(71, 1, &skinExtendedRendererState.PSTexture);
+	}
+	skinExtendedRendererState.PSResourceModifiedBits = 0;
 }
