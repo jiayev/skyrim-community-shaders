@@ -267,20 +267,22 @@ struct SkinExtendedRendererState
 	static constexpr uint32_t FirstPSTexture = 71;
 
 	uint32_t PSResourceModifiedBits = 0;
-	ID3D11ShaderResourceView* PSTexture;
+	std::array<ID3D11ShaderResourceView*, 2> PSTexture;
 
-	void SetExtraSkinPSTexture(RE::BSGraphics::Texture* newTexture)
+	void SetExtraSkinPSTexture(RE::BSGraphics::Texture* newTexture, RE::BSGraphics::Texture* newTexture2)
 	{
-		ID3D11ShaderResourceView* resourceView = newTexture ? newTexture->resourceView : nullptr;
 		{
-			PSTexture = resourceView;
+			PSTexture = {
+				newTexture ? newTexture->resourceView : nullptr,
+				newTexture2 ? newTexture2->resourceView : nullptr
+			};
 			PSResourceModifiedBits = 1;
 		}
 	}
 
 	SkinExtendedRendererState()
 	{
-		PSTexture = nullptr;
+		PSTexture.fill(nullptr);
 	}
 } skinExtendedRendererState;
 
@@ -298,7 +300,8 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 		return;
 	}
 
-	const char extraTextureName[] = "_extra.dds";
+	const char extraTextureName[] = "_rfaos.dds";
+	const char wetnessTextureName[] = "_wet.dds";
 	const char* workingNormalPath = nullptr;
 	const char* workingSpecularPath = nullptr;
 	auto workingMaterial = static_cast<const RE::BSLightingShaderMaterialBase*>(material);
@@ -320,6 +323,7 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 
 	const char* foundPath = nullptr;
 	const char* extraTexturePath = nullptr;
+	const char* wetnessTexturePath = nullptr;
 	if (!workingSpecularPath && !workingNormalPath) {
 		return;
 	}
@@ -343,24 +347,33 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 			auto pos = findIgnoreCase(workingNormalPath, "_n.dds");
 			if (pos != std::string_view::npos) {
 				auto newPath = std::string(workingNormalPath);
+				auto newPath2 = newPath;
 				newPath.replace(pos, 6, extraTextureName);
+				newPath2.replace(pos, 6, wetnessTextureName);
 				extraTexturePath = newPath.c_str();
+				wetnessTexturePath = newPath2.c_str();
 				foundPath = workingNormalPath;
 			}
 		} else if (workingNormalPath && findIgnoreCase(workingNormalPath, "_msn.dds") != std::string_view::npos) {
 			auto pos = findIgnoreCase(workingNormalPath, "_msn.dds");
 			if (pos != std::string_view::npos) {
 				auto newPath = std::string(workingNormalPath);
+				auto newPath2 = newPath;
 				newPath.replace(pos, 8, extraTextureName);
+				newPath2.replace(pos, 8, wetnessTextureName);
 				extraTexturePath = newPath.c_str();
+				wetnessTexturePath = newPath2.c_str();
 				foundPath = workingNormalPath;
 			}
 		} else {
 			auto pos = findIgnoreCase(std::string_view(workingNormalPath), ".dds");
 			if (pos != std::string_view::npos) {
 				auto newPath = std::string(workingNormalPath);
+				auto newPath2 = newPath;
 				newPath.replace(pos, 4, extraTextureName);
+				newPath2.replace(pos, 4, wetnessTextureName);
 				extraTexturePath = newPath.c_str();
+				wetnessTexturePath = newPath2.c_str();
 				foundPath = workingNormalPath;
 			}
 		}
@@ -369,10 +382,13 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 	logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture path: {} for {}", extraTexturePath, foundPath);
 
 	auto& workingExtraPtr = skinExtraTextures.try_emplace(hashKey).first->second;
-	workingExtraPtr = stateData.defaultTextureWhite;
+	workingExtraPtr[0] = stateData.defaultTextureWhite;
+	workingExtraPtr[1] = stateData.defaultTextureWhite;
 
 	inTextureSet->SetTexturePath(RE::BSTextureSet::Texture::kHeight, extraTexturePath);
-	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kHeight, workingExtraPtr);
+	inTextureSet->SetTexturePath(RE::BSTextureSet::Texture::kMultilayer, wetnessTexturePath);
+	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kHeight, workingExtraPtr[0]);
+	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kMultilayer, workingExtraPtr[1]);
 	// logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture set with hash key: {}", hashKey);
 }
 
@@ -402,18 +418,19 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 	auto workingExtraPtr = skinExtraTextures[hashKey];
 
 	const bool hasExtraTexture = workingExtraPtr != nullptr;
-	const bool isExtraTextureLoaded = workingExtraPtr != graphicsState->GetRuntimeData().defaultTextureBlack;
+	const bool isExtraTextureLoaded = workingExtraPtr[0] != graphicsState->GetRuntimeData().defaultTextureBlack;
 	if (hasExtraTexture && isExtraTextureLoaded) {
-		skinExtendedRendererState.SetExtraSkinPSTexture(workingExtraPtr->rendererTexture);
+		skinExtendedRendererState.SetExtraSkinPSTexture(workingExtraPtr[0]->rendererTexture, workingExtraPtr[1]->rendererTexture);
 	} else {
-		skinExtendedRendererState.SetExtraSkinPSTexture(graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture);
+		skinExtendedRendererState.SetExtraSkinPSTexture(graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture, graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture);
 	}
 }
 
 void Skin::SetShaderResouces(ID3D11DeviceContext* a_context)
 {
 	if (skinExtendedRendererState.PSResourceModifiedBits != 0) {
-		a_context->PSSetShaderResources(71, 1, &skinExtendedRendererState.PSTexture);
+		a_context->PSSetShaderResources(71, 1, &skinExtendedRendererState.PSTexture.at(0));
+		a_context->PSSetShaderResources(74, 1, &skinExtendedRendererState.PSTexture.at(1));
 	}
 	skinExtendedRendererState.PSResourceModifiedBits = 0;
 }
