@@ -1028,17 +1028,17 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Skylighting/Skylighting.hlsli"
 #	endif
 
-#	if defined(CS_SKIN)
-#		include "Common/PBR.hlsli"
-#		include "Skin/Skin.hlsli"
-#	endif
-
 #	if defined(HAIR) && defined(CS_HAIR)
 #		include "Hair/Hair.hlsli"
 #	endif
 
 #	if defined(TERRAIN_VARIATION)
 #		include "TerrainVariation/TerrainVariation.hlsli"
+#	endif
+
+#	if defined(CS_SKIN)
+#		include "Common/PBR.hlsli"
+#		include "Skin/Skin.hlsli"
 #	endif
 
 #	if defined(SSPLS)
