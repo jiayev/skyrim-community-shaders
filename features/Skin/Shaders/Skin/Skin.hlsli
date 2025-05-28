@@ -104,6 +104,14 @@ namespace Skin
 		return D * G * F;
 	}
 
+	// a contact shadow approximation, totally not physically correct; a riff on "Chan 2018, "Material Advances in Call of Duty: WWII" and "The Technical Art of Uncharted 4" http://advances.realtimerendering.com/other/2016/naughty_dog/NaughtyDog_TechArt_Final.pdf (microshadowing)"
+	float ApproximateDirectOcculusion(float aoVisibility, float NdotL)
+	{
+		float aperture = rsqrt(1.0000001 - aoVisibility);
+		NdotL += 0.1;  // when using bent normals, avoids overshadowing - bent normals are just approximation anyhow
+		return saturate(NdotL * aperture);
+	}
+
 	void SkinDirectLightInput(
 		out float3 diffuse,
 		out float3 transmission,
@@ -125,6 +133,8 @@ namespace Skin
 		const float NdotH = saturate(dot(N, H));
 		const float VdotH = saturate(dot(V, H));
 		const float VdotL = dot(V, L);
+
+		light.LightColor *= ApproximateDirectOcculusion(skin.AO, NdotL);
 
 		float averageRoughness = lerp(skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity);
 
