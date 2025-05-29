@@ -38,20 +38,20 @@ struct Skin : Feature
 		float SkinSpecularTexMultiplier = 1.0f;
 		float SecondarySpecularStrength = 0.15f;
 		float F0 = 0.0278f;
+		float BaseColorMultiplier = 1.0f;
 		float PhysicalMainRoughnessMultiplier = 1.3f;
 		float PhysicalSecondRoughnessMultiplier = 0.75f;
 		float PhysicalSpecularStrength = 1.0f;
 		float ExtraEdgeRoughness = 0.25f;
 		bool EnableSkinDetail = true;
 		float SkinDetailStrength = 0.5f;
-		float SkinDetailTiling = 20.0f;
+		float SkinDetailTiling = 40.0f;
 		float BodyTilingMultiplier = 2.0f;
 		float ExtraSkinWetness = 0.0f;
+		float4 WetParams = { 64.0f, 1.0, 2.0, 0.5f };
 		float Translucency = 0.1f;
 		float sssWidth = 0.2f;
-		float thicknessMult = 20.0f;
 		bool UseSSS = true;
-		bool UseCalcThickness = false;
 		float FuzzStrength = 1.0f;
 		float FuzzRoughness = 0.35f;
 		float FuzzF0 = 0.045f;
@@ -65,6 +65,7 @@ struct Skin : Feature
 		float4 sssParams;
 		float4 fuzzParams;
 		float4 physicalParams;
+		float4 wetParams;
 	};
 
 	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;

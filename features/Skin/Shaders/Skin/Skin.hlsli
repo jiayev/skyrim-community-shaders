@@ -164,7 +164,9 @@ namespace Skin
 			float3 wetSpecular = PBR::GetSpecularDirectLightMultiplierMicrofacet(waterRoughness, waterF0, NdotL, NdotV, NdotH, VdotH, wetnessF) * light.LightColor * NdotL;
 			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(waterRoughness, NdotV);
 			wetSpecular *= 1 + waterF0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
-			specular = lerp(specular, wetSpecular, saturate(skin.Wetness));
+			specular *= 1 - saturate(wetnessF.x);
+			specular += wetSpecular;
+			diffuse *= 1 - saturate(wetnessF.x);
 		}
 	}
 
@@ -191,7 +193,8 @@ namespace Skin
 			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(waterRoughness, NdotV);
 			float3 wetSpecular = waterF0 * wetSpecularBRDF.x + wetSpecularBRDF.y;
 			wetSpecular *= 1 + waterF0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
-			specularWeight = lerp(specularWeight, wetSpecular, saturate(skin.Wetness));
+			specularWeight = specularWeight * (1 - wetSpecularBRDF.x) + wetSpecular;
+			diffuseWeight *= 1 - wetSpecularBRDF.x;
 		}
 
 		float3 R = reflect(-V, N);
@@ -209,5 +212,82 @@ namespace Skin
 		specularWeight *= specularAO;
 
 		specularWeight *= 1 - skin.Curvature;
+	}
+
+	// https://blog.selfshadow.com/publications/blending-in-detail/
+	// geometric normal s, a base normal t and a secondary (or detail) normal u
+	float3 ReorientNormal(float3 u, float3 t, float3 s)
+	{
+		// Build the shortest-arc quaternion
+		float4 q = float4(cross(s, t), dot(s, t) + 1) / sqrt(2 * (dot(s, t) + 1));
+
+		// Rotate the normal
+		return u * (q.w * q.w - dot(q.xyz, q.xyz)) + 2 * q.xyz * dot(q.xyz, u) + 2 * q.w * cross(q.xyz, u);
+	}
+
+	// for when s = (0,0,1)
+	float3 ReorientNormal(float3 n1, float3 n2)
+	{
+		n1 += float3(0, 0, 1);
+		n2 *= float3(-1, -1, 1);
+
+		return n1 * dot(n1, n2) / n1.z - n2;
+	}
+
+	float3x3 ReconstructTBN(float3 worldPos, float3 worldNormal, float2 uv)
+	{
+		float3 dFdx = ddx(worldPos);
+		float3 dFdy = ddy(worldPos);
+		float2 dUVdx = ddx(uv);
+		float2 dUVdy = ddy(uv);
+		float3 tangent = normalize(dFdx * dUVdy.y - dFdy * dUVdx.y);
+		float3 bitangent = normalize(dFdy * dUVdx.x - dFdx * dUVdy.x);
+		tangent = normalize(tangent - worldNormal * dot(worldNormal, tangent));
+		bitangent = normalize(bitangent - worldNormal * dot(worldNormal, bitangent));
+		
+		return float3x3(tangent, bitangent, normalize(worldNormal));
+	}
+
+	float3 CalculateNormalFromHeight(float height, float heightScale, float2 uv)
+	{
+		float dHdx = ddx(height);
+		float dHdy = ddy(height);
+		float2 dUVdx = ddx(uv);
+		float2 dUVdy = ddy(uv);
+
+		float det = dUVdx.x * dUVdy.y - dUVdx.y * dUVdy.x;
+		if (det == 0.0f) {
+			return float3(0, 0, 1); // Avoid division by zero
+		}
+
+		float dHdx_Tex = (dHdx * dUVdy.y - dHdy * dUVdx.y) / det;
+		float dHdy_Tex = (dHdy * dUVdx.x - dHdx * dUVdy.x) / det;
+		float3 normal = float3(-dHdx_Tex, -dHdy_Tex, 0);
+		return normal * heightScale + float3(0, 0, 1);
+	}
+
+	float PerlinNoise(float2 uv, float scale, float amp, float freq, float k)
+	{
+		if (k <= 0.0) {
+			return 0.0;
+		} else if (k >= 1.0) {
+			return 1.0;
+		}
+
+		float noise = 0.0;
+		float amplitude = 1.0;
+		float frequency = 1.0;
+		float totalAmplitude = 0.0;
+
+		for(int i = 0; i < 4; i++) {
+			noise += Random::perlinNoise(float3(uv * scale * frequency, 0)) * amplitude;
+			totalAmplitude += amplitude;
+			amplitude *= amp;
+			frequency *= freq;
+		}
+
+		noise = noise / totalAmplitude;
+
+		return saturate(noise + 3 * k - 1);
 	}
 }

@@ -75,7 +75,7 @@ struct VS_OUTPUT
 	precise
 #endif  // ENVMAP
 		float3 InputPosition : TEXCOORD4;
-#if defined(SKINNED) || !defined(MODELSPACENORMALS) || (defined(SKIN) && defined(CS_SKIN))
+#if defined(SKINNED) || !defined(MODELSPACENORMALS)
 	float3 TBN0 : TEXCOORD1;
 	float3 TBN1 : TEXCOORD2;
 	float3 TBN2 : TEXCOORD3;
@@ -263,7 +263,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float3x3 boneRSMatrix = Skinned::GetBoneRSMatrix(Bones, actualIndices, input.BoneWeights);
 #	endif
 
-#	if !defined(MODELSPACENORMALS) || (defined(SKIN) && defined(CS_SKIN))
+#	if !defined(MODELSPACENORMALS)
 	float3x3 tbn = float3x3(
 		float3(input.Position.w, input.Normal.w * 2 - 1, input.Bitangent.w * 2 - 1),
 		input.Bitangent.xyz * 2.0.xxx + -1.0.xxx,
@@ -1062,7 +1062,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float nearFactor = smoothstep(4096.0 * 2.5, 0.0, viewPosition.z);
 
-#	if defined(SKINNED) || !defined(MODELSPACENORMALS) || (defined(SKIN) && defined(CS_SKIN))
+#	if defined(SKINNED) || !defined(MODELSPACENORMALS)
 	float3x3 tbn = float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz);
 
 #		if !defined(TREE_ANIM) && !defined(LOD)
@@ -1710,7 +1710,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float4 skinsk = TexRimSoftLightWorldMapOverlaySampler.SampleBias(SampRimSoftLightWorldMapOverlaySampler, uv, SharedData::MipBias);
 	float4 skinExtra = TexSkinExtraSampler.SampleBias(SampColorSampler, uv, SharedData::MipBias);
 	float4 skinWetnessSample = TexSkinWetnessSampler.SampleBias(SampColorSampler, uv, SharedData::MipBias);
-	if ((skinExtra.x > 0.0 || skinExtra.y > 0.0 || skinExtra.z > 0.0 || skinExtra.w > 0.0) && !(skinExtra.x == skinExtra.y && skinExtra.z == 1.0 && skinExtra.w == 1.0)) {
+	const bool hasSkinExtra = (skinExtra.x > 0.0 || skinExtra.y > 0.0 || skinExtra.z > 0.0 || skinExtra.w > 0.0) && !(skinExtra.x == skinExtra.y && skinExtra.z == 1.0 && skinExtra.w == 1.0);
+	const bool hasSkinWetness = (skinWetnessSample.x > 0.0 || skinWetnessSample.y > 0.0 || skinWetnessSample.z > 0.0 || skinWetnessSample.w > 0.0) && !(skinWetnessSample.x == skinWetnessSample.y && skinWetnessSample.z == 1.0 && skinWetnessSample.w == 1.0);
+
+	if (hasSkinExtra) {
 		skinRoughness = skinExtra.x;
 		skinFuzzMask = skinExtra.y;
 		skinAO = skinExtra.z;
@@ -1719,7 +1722,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	} else {
 		skinRoughnessSet = false;
 	}
-	if ((skinWetnessSample.x > 0.0 || skinWetnessSample.y > 0.0 || skinWetnessSample.z > 0.0 || skinWetnessSample.w > 0.0) && !(skinWetnessSample.x == skinWetnessSample.y && skinWetnessSample.z == 1.0 && skinWetnessSample.w == 1.0)) {
+	if (hasSkinWetness) {
 		skinWetMask = skinWetnessSample.x;
 	} else {
 		skinWetMask = 1.0;
@@ -1869,7 +1872,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(SKIN) && defined(CS_SKIN)
 	if (SharedData::skinData.skinParams.w > 0.0f) {
-		baseColor.xyz = baseColor.xyz;
+		baseColor.xyz = baseColor.xyz * SharedData::skinData.skinParams2.w;
 	}
 #	endif  // CS_SKIN
 
@@ -1929,6 +1932,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif      // defined (MODELSPACENORMALS) && !defined (SKINNED)
 
 #	if defined(SKIN) && defined(CS_SKIN)
+#		if defined(FACEGEN)
+	float2 wetUV = uv;
+#		else
+	float2 wetUV = uv * SharedData::skinData.skinDetailParams.y;
+#		endif
+	float skinWetness = Skin::PerlinNoise(wetUV, SharedData::skinData.wetParams.x, SharedData::skinData.wetParams.y, SharedData::skinData.wetParams.z, SharedData::skinData.skinParams2.y * (hasSkinWetness ? 1.0 : 0.5));
+	skinWetness = smoothstep(0.0, 1.0, skinWetness);
 	if (SharedData::skinData.skinDetailParams.w > 0.0f) {
 #		if defined(FACEGEN)
 		float2 detailUV = input.TexCoord0.xy * SharedData::skinData.skinDetailParams.x;
@@ -1936,17 +1946,27 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float2 detailUV = input.TexCoord0.xy * SharedData::skinData.skinDetailParams.x * SharedData::skinData.skinDetailParams.y;
 #		endif  // FACEGEN
 #		if defined(MODELSPACENORMALS)
-		float3 tangentNormal = mul(modelNormal.xyz, tbn);
-		detailUV *= float3(-1, -1, 1);
+		const float3x3 tbnTr = Skin::ReconstructTBN(input.WorldPosition.xyz, modelNormal, screenUV);
+		const float3x3 tbn = transpose(tbnTr);
+		const float3 tangentNormal = mul(tbnTr, modelNormal.xyz);
 #		else
-		float3 tangentNormal = normal.xyz;
+		const float3 tangentNormal = normal.xyz;
 #		endif  // MODELSPACENORMALS
 		float3 detailNormal = float3(Skin::TexSkinDetailNormal.SampleBias(SampNormalSampler, detailUV, SharedData::MipBias).xy, 0.5f);
 		skinAO *= Skin::TexSkinDetailNormal.Sample(SampNormalSampler, detailUV).w;
 		detailNormal = (detailNormal * 2.0 - 1.0) * SharedData::skinData.skinDetailParams.z;
-		float3 combinedTangentNormal = (tangentNormal * 2.0 - 1.0) + detailNormal;
-		combinedTangentNormal = (combinedTangentNormal + 1.0) * 0.5;
-		modelNormal = lerp(float4(normalize(mul(tbn, combinedTangentNormal.xyz)), 1), modelNormal, sqrt(saturate(SharedData::skinData.skinParams2.y * skinWetMask)));
+		float3 combinedTangentNormal = normalize(float3(Skin::ReorientNormal(detailNormal, tangentNormal).xy, tangentNormal.z));
+		float3 combinedNormal = normalize(mul(tbn, combinedTangentNormal));
+		modelNormal.xyz = combinedNormal;
+		if (skinWetness > 0.0f) {
+			float3 wetNormal = Skin::CalculateNormalFromHeight(saturate(skinWetness * skinWetMask), SharedData::skinData.wetParams.z / 4096.0, uv);
+			if (SharedData::skinData.skinParams2.y > 1.0f) {
+				wetNormal = lerp(wetNormal, float3(0, 0, 1), saturate(SharedData::skinData.skinParams2.y - 1.0f));
+			}
+			float3 combinedWetNormal = normalize(float3(Skin::ReorientNormal(wetNormal, tangentNormal).xy, tangentNormal.z));
+			float3 wetModelNormal = normalize(mul(tbn, combinedWetNormal));
+			modelNormal.xyz = lerp(combinedNormal, wetModelNormal, skinWetness > 0);
+		}
 	}
 #	endif  // CS_SKIN
 
@@ -2158,7 +2178,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	skinSurfaceProperties.Albedo = baseColor.xyz;
 
-	const float ExtraRoughness = PBR::GetFresnelFactorSchlick(0.04, saturate(dot(modelNormal.xyz, viewDirection))) * SharedData::skinData.skinParams2.w;
+	const float ExtraRoughness = PBR::GetFresnelFactorSchlick(0.04, saturate(dot(modelNormal.xyz, viewDirection))) * SharedData::skinData.fuzzParams.w;
 	skinSurfaceProperties.RoughnessPrimary = SharedData::skinData.skinParams.x;
 	skinSurfaceProperties.RoughnessPrimary = saturate(SharedData::skinData.skinParams.x - SharedData::skinData.skinParams.z * glossiness);
 	skinSurfaceProperties.RoughnessSecondary = SharedData::skinData.skinParams.y;
@@ -2170,9 +2190,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	skinSurfaceProperties.RoughnessSecondary = min(1.0, skinSurfaceProperties.RoughnessSecondary + ExtraRoughness);
 	skinSurfaceProperties.SecondarySpecIntensity = SharedData::skinData.skinParams2.x;
 	skinSurfaceProperties.Thickness = 1 - skinsk.x;
-	if (SharedData::skinData.sssParams.z > 0.0f) {
-		skinSurfaceProperties.Thickness = ShadowSampling::CalculateThickness(screenNoise, input.WorldPosition.xyz, modelNormal.xyz, eyeIndex, 0.0005) * SharedData::skinData.sssParams.z;
-	}
 	skinSurfaceProperties.SubsurfaceColor = skinsk.xyz;
 	skinSurfaceProperties.F0 = SharedData::skinData.skinParams2.zzz;
 	skinSurfaceProperties.AO = skinAO;
@@ -2182,7 +2199,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	skinSurfaceProperties.FuzzRoughness = SharedData::skinData.fuzzParams.y;
 	skinSurfaceProperties.FuzzColor = SharedData::skinData.fuzzParams.zzz;
 
-	skinSurfaceProperties.Wetness = SharedData::skinData.skinParams2.y * skinWetMask;
+	skinSurfaceProperties.Wetness = skinWetness;
 
 	if (skinRoughnessSet) {
 		skinSurfaceProperties.F0 = 0.08f * skinSpecular * SharedData::skinData.physicalParams.z;
@@ -2415,7 +2432,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 lightsSpecularColor = 0.0.xxx;
 
 	float3 lodLandDiffuseColor = 0;
-	// float thickness = ShadowSampling::CalculateThickness(screenNoise, input.WorldPosition.xyz, modelNormal.xyz, eyeIndex, 0.0005) * SharedData::skinData.sssParams.z;
 
 #	if defined(TRUE_PBR)
 	{
