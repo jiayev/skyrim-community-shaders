@@ -191,6 +191,7 @@ namespace SharedData
 		float4 sssParams;
 		float4 fuzzParams;
 		float4 physicalParams;
+		float4 wetParams;
 	};
 
 	cbuffer FeatureData : register(b6)
