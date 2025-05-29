@@ -266,28 +266,46 @@ namespace Skin
 		return normal * heightScale + float3(0, 0, 1);
 	}
 
-	float PerlinNoise(float2 uv, float scale, float amp, float freq, float k)
+	float FBM(float2 uv, float base_scale, int octaves, float lacunarity, float persistence, float z_offset_multiplier)
 	{
-		if (k <= 0.0) {
-			return 0.0;
-		} else if (k >= 1.0) {
-			return 1.0;
-		}
-
-		float noise = 0.0;
+		float total = 0.0;
+		float frequency = base_scale;
 		float amplitude = 1.0;
-		float frequency = 1.0;
-		float totalAmplitude = 0.0;
-
-		for(int i = 0; i < 4; i++) {
-			noise += Random::perlinNoise(float3(uv * scale * frequency, 0)) * amplitude;
-			totalAmplitude += amplitude;
-			amplitude *= amp;
-			frequency *= freq;
+		float max_amplitude = 0.0;
+		for (int i = 0; i < octaves; i++)
+		{
+			total += amplitude * (Random::perlinNoise(float3(uv * frequency, (float)i * z_offset_multiplier)) + 1.0) * 0.5;
+			
+			max_amplitude += amplitude;
+			amplitude *= persistence;
+			frequency *= lacunarity;
 		}
+		if (max_amplitude > 0.0) {
+			return total / max_amplitude;
+		}
+		return 0.0;
+	}
 
-		noise = noise / totalAmplitude;
+	float PerlinNoise(float2 uv, float scale, float lacunarity, float persistence, float strength)
+	{
+		if (strength <= 0.001f)
+		{
+			return 0.0f;
+		}
+		if (strength >= 0.999f)
+		{
+			return 1.0f;
+		}
+		int octaves = 5;
+		float z_offset_multiplier = 7.375f;
 
-		return saturate(noise + 3 * k - 1);
+		float noise_value = FBM(uv, scale, octaves, lacunarity, persistence, z_offset_multiplier);
+
+		float dynamic_threshold = 1.0f - strength;
+
+		float sweat_intensity = saturate((noise_value - dynamic_threshold) / strength);
+
+		sweat_intensity = pow(sweat_intensity, 1.5f);
+		return lerp(sweat_intensity, 1.0, smoothstep(0, 1, (strength - 0.9) * 10.0));
 	}
 }

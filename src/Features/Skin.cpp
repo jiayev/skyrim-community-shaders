@@ -113,9 +113,9 @@ void Skin::DrawSettings()
 	}
 
 	ImGui::SliderFloat("Wetness Perlin Noise Scale", &settings.WetParams.x, 0.0f, 1024.0f, "%1.f");
-	ImGui::SliderFloat("Wetness Perlin Noise Amplitude", &settings.WetParams.y, 0.0f, 2.0f, "%.1f");
-	ImGui::SliderFloat("Wetness Perlin Noise Frequency", &settings.WetParams.w, 0.0f, 4.0f, "%.2f");
-	ImGui::SliderFloat("Wetness Normal Scale", &settings.WetParams.z, 0.0f, 20.0f, "%.1f");
+	ImGui::SliderFloat("Wetness Perlin Noise Lacunarity", &settings.WetParams.y, 0.0f, 2.0f, "%.1f");
+	ImGui::SliderFloat("Wetness Perlin Noise Persistence", &settings.WetParams.z, 0.0f, 20.0f, "%.2f");
+	ImGui::SliderFloat("Wetness Normal Scale", &settings.WetParams.w, 0.0f, 20.0f, "%.1f");
 
 	ImGui::Spacing();
 
