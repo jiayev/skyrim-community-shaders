@@ -14,6 +14,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkinSpecularTexMultiplier,
 	SecondarySpecularStrength,
 	F0,
+	BaseColorMultiplier,
 	PhysicalMainRoughnessMultiplier,
 	PhysicalSecondRoughnessMultiplier,
 	PhysicalSpecularStrength,
@@ -23,11 +24,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkinDetailTiling,
 	BodyTilingMultiplier,
 	ExtraSkinWetness,
+	WetParams,
 	Translucency,
 	sssWidth,
-	thicknessMult,
 	UseSSS,
-	UseCalcThickness,
 	FuzzStrength,
 	FuzzRoughness,
 	FuzzF0);
@@ -65,6 +65,11 @@ void Skin::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Fresnel reflectance");
 	}
+	
+	ImGui::SliderFloat("Base Color Multiplier", &settings.BaseColorMultiplier, 0.0f, 2.0f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Multiplier for the base color texture");
+	}
 
 	ImGui::Spacing();
 	ImGui::Text("Options for additional roughness and specular maps.");
@@ -90,11 +95,6 @@ void Skin::DrawSettings()
 
 	ImGui::Checkbox("Enable SSS Transmission", &settings.UseSSS);
 
-	ImGui::Checkbox("Use Calculated Thickness", &settings.UseCalcThickness);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("This will only work for exterior directional light. And it's far from precise. I don't recommend using it.");
-	}
-
 	ImGui::SliderFloat("Translucency", &settings.Translucency, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Translucency of the SSS Transmittance effect");
@@ -105,17 +105,17 @@ void Skin::DrawSettings()
 		ImGui::Text("Width of the SSS Transmittance effect");
 	}
 
-	ImGui::SliderFloat("Calculated Thickness Multiplier", &settings.thicknessMult, 0.0f, 50.0f, "%.2f");
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Multiplier for the calculated thickness");
-	}
-
 	ImGui::Spacing();
 
 	ImGui::SliderFloat("Extra Skin Wetness", &settings.ExtraSkinWetness, 0.0f, 2.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Extra wetness for skin adding to wetness feature");
 	}
+
+	ImGui::SliderFloat("Wetness Perlin Noise Scale", &settings.WetParams.x, 0.0f, 1024.0f, "%1.f");
+	ImGui::SliderFloat("Wetness Perlin Noise Amplitude", &settings.WetParams.y, 0.0f, 2.0f, "%.1f");
+	ImGui::SliderFloat("Wetness Perlin Noise Frequency", &settings.WetParams.w, 0.0f, 4.0f, "%.2f");
+	ImGui::SliderFloat("Wetness Normal Scale", &settings.WetParams.z, 0.0f, 20.0f, "%.1f");
 
 	ImGui::Spacing();
 
@@ -238,11 +238,12 @@ Skin::SkinData Skin::GetCommonBufferData()
 {
 	SkinData data{};
 	data.skinParams = float4(settings.SkinMainRoughness, settings.SkinSecondRoughness, settings.SkinSpecularTexMultiplier, float(settings.EnableSkin));
-	data.skinParams2 = float4(settings.SecondarySpecularStrength, settings.ExtraSkinWetness, settings.F0, settings.ExtraEdgeRoughness);
+	data.skinParams2 = float4(settings.SecondarySpecularStrength, settings.ExtraSkinWetness, settings.F0, settings.BaseColorMultiplier);
 	data.skinDetailParams = float4(settings.SkinDetailTiling, settings.BodyTilingMultiplier, settings.SkinDetailStrength, float(settings.EnableSkinDetail && settings.EnableSkin));
-	data.sssParams = float4(settings.Translucency, settings.sssWidth, settings.thicknessMult * float(settings.UseCalcThickness), float(settings.UseSSS));
-	data.fuzzParams = float4(settings.FuzzStrength, settings.FuzzRoughness, settings.FuzzF0, 0.0f);
+	data.sssParams = float4(settings.Translucency, settings.sssWidth, 0.0f, float(settings.UseSSS));
+	data.fuzzParams = float4(settings.FuzzStrength, settings.FuzzRoughness, settings.FuzzF0, settings.ExtraEdgeRoughness);
 	data.physicalParams = float4(settings.PhysicalMainRoughnessMultiplier, settings.PhysicalSecondRoughnessMultiplier, settings.PhysicalSpecularStrength, 0.0f);
+	data.wetParams = settings.WetParams;
 	return data;
 }
 
