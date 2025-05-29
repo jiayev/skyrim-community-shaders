@@ -1059,8 +1059,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "XeGTAO/XeGTAOBentNormals.hlsli"
 #	endif
 
-PS_OUTPUT main(PS_INPUT input, bool frontFace
-			   : SV_IsFrontFace)
+PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;
 	uint eyeIndex = Stereo::GetEyeIndexPS(input.Position, VPOSOffset);
@@ -1968,8 +1967,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	float2 wetUV = uv * SharedData::skinData.skinDetailParams.y;
 #		endif
 	float skinWetness = Skin::PerlinNoise(wetUV, SharedData::skinData.wetParams.x, SharedData::skinData.wetParams.y, SharedData::skinData.wetParams.z, SharedData::skinData.skinParams2.y * (hasSkinWetness ? 1.0 : 0.5));
-	skinWetness = smoothstep(0.0, 1.0, skinWetness);
-	if (SharedData::skinData.skinDetailParams.w > 0.0f) {
+	if (SharedData::skinData.skinDetailParams.w > 0.0f || SharedData::skinData.skinParams2.y > 0.0f) {
 #		if defined(FACEGEN)
 		float2 detailUV = input.TexCoord0.xy * SharedData::skinData.skinDetailParams.x;
 #		else
@@ -1987,15 +1985,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 		detailNormal = (detailNormal * 2.0 - 1.0) * SharedData::skinData.skinDetailParams.z;
 		float3 combinedTangentNormal = normalize(float3(Skin::ReorientNormal(detailNormal, tangentNormal).xy, tangentNormal.z));
 		float3 combinedNormal = normalize(mul(tbn, combinedTangentNormal));
-		modelNormal.xyz = combinedNormal;
+		if (SharedData::skinData.skinDetailParams.w > 0.0f)
+			modelNormal.xyz = combinedNormal;
 		if (skinWetness > 0.0f) {
-			float3 wetNormal = Skin::CalculateNormalFromHeight(saturate(skinWetness * skinWetMask), SharedData::skinData.wetParams.z / 4096.0, uv);
+			float3 wetNormal = Skin::CalculateNormalFromHeight((skinWetness * skinWetMask) * (hasSkinWetness ? 1.0 : 4.0), SharedData::skinData.wetParams.w * 0.00005, uv);
 			if (SharedData::skinData.skinParams2.y > 1.0f) {
 				wetNormal = lerp(wetNormal, float3(0, 0, 1), saturate(SharedData::skinData.skinParams2.y - 1.0f));
 			}
 			float3 combinedWetNormal = normalize(float3(Skin::ReorientNormal(wetNormal, tangentNormal).xy, tangentNormal.z));
 			float3 wetModelNormal = normalize(mul(tbn, combinedWetNormal));
-			modelNormal.xyz = lerp(combinedNormal, wetModelNormal, skinWetness > 0);
+			modelNormal.xyz = lerp((SharedData::skinData.skinDetailParams.w > 0.0f ? combinedNormal : modelNormal.xyz), wetModelNormal, skinWetness > 0);
 		}
 	}
 #	endif  // CS_SKIN
