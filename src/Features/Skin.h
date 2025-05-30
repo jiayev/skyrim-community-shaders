@@ -48,7 +48,7 @@ struct Skin : Feature
 		float SkinDetailTiling = 40.0f;
 		float BodyTilingMultiplier = 2.0f;
 		float ExtraSkinWetness = 0.0f;
-		float4 WetParams = { 128.0f, 1.0, 20.0, 4.0f };
+		float4 WetParams = { 512.0f, 0.7, 10.0, 4.0f };
 		float Translucency = 0.1f;
 		float sssWidth = 0.2f;
 		bool UseSSS = true;
