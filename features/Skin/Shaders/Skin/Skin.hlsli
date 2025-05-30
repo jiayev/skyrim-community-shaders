@@ -3,6 +3,9 @@
 #include "Common/PBR.hlsli"
 #include "Common/SharedData.hlsli"
 
+#define WATER_ROUGHNESS 0.1f
+#define WATER_F0 0.02f
+
 namespace Skin
 {
 	Texture2D<float4> TexSkinDetailNormal : register(t72);
@@ -118,7 +121,7 @@ namespace Skin
 		out float3 specular,
 		PBR::LightProperties light,
 		SkinSurfaceProperties skin,
-		float3 N, float3 V, float3 L)
+		float3 N, float3 V, float3 L, float3 WetN)
 	{
 		diffuse = 0;
 		transmission = 0;
@@ -126,13 +129,28 @@ namespace Skin
 
 		light.LightColor *= Math::PI;
 
-		const float3 H = normalize(V + L);
+		float3 H = normalize(V + L);
 		const float oNdotL = dot(N, L);
-		const float NdotL = clamp(oNdotL, 1e-5, 1.0);
-		const float NdotV = saturate(abs(dot(N, V)) + 1e-5);
-		const float NdotH = saturate(dot(N, H));
-		const float VdotH = saturate(dot(V, H));
-		const float VdotL = dot(V, L);
+		float NdotL = clamp(oNdotL, 1e-5, 1.0);
+		float NdotV = saturate(abs(dot(N, V)) + 1e-5);
+		float NdotH = saturate(dot(N, H));
+		float VdotH = saturate(dot(V, H));
+		float VdotL = dot(V, L);
+		float oVdotH = VdotH;
+
+		if (skin.Wetness > 0.0) {
+			float eta = 1.33;
+			float3 RefractedL = -refract(-L, WetN, 1.0 / eta);
+			float3 RefractedV = -refract(-V, WetN, 1.0 / eta);
+			RefractedL = lerp(RefractedL, L, saturate(dot(WetN, N)));
+			RefractedV = lerp(RefractedV, V, saturate(dot(WetN, N)));
+			NdotL = saturate(dot(N, RefractedL));
+			NdotV = saturate(abs(dot(N, RefractedV)) + 1e-5);
+			float3 RefractedH = normalize(RefractedV + RefractedL);
+			NdotH = saturate(dot(N, RefractedH));
+			VdotH = saturate(dot(RefractedV, RefractedH));
+			VdotL = dot(RefractedV, RefractedL);
+		}
 
 		light.LightColor *= ApproximateDirectOcculusion(skin.AO, NdotL);
 
@@ -158,15 +176,17 @@ namespace Skin
 		}
 
 		if (skin.Wetness > 0.0) {
+			const float WNdotL = saturate(dot(WetN, L));
+			const float WNdotV = saturate(abs(dot(WetN, V)) + 1e-5);
+			const float WNdotH = saturate(dot(WetN, H));
 			float3 wetnessF;
-			const float3 waterF0 = 0.02;
-			const float waterRoughness = 0.1;
-			float3 wetSpecular = PBR::GetSpecularDirectLightMultiplierMicrofacet(waterRoughness, waterF0, NdotL, NdotV, NdotH, VdotH, wetnessF) * light.LightColor * NdotL;
-			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(waterRoughness, NdotV);
-			wetSpecular *= 1 + waterF0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
-			specular *= 1 - saturate(wetnessF.x);
+			float3 wetSpecular = PBR::GetSpecularDirectLightMultiplierMicrofacet(WATER_ROUGHNESS, WATER_F0, WNdotL, WNdotV, WNdotH, oVdotH, wetnessF) * light.LightColor * WNdotL;
+			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(WATER_ROUGHNESS, WNdotV);
+			wetSpecular *= 1 + WATER_F0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
+			const float waterTransmission = 1 - wetnessF.x;
+			specular *= waterTransmission;
 			specular += wetSpecular;
-			diffuse *= 1 - saturate(wetnessF.x);
+			diffuse *= waterTransmission;
 		}
 	}
 
@@ -174,13 +194,17 @@ namespace Skin
 		out float3 diffuseWeight,
 		out float3 specularWeight,
 		SkinSurfaceProperties skin,
-		float3 N, float3 V, float3 VN)
+		float3 N, float3 V, float3 VN, float3 WetN)
 	{
-		const float NdotV = saturate(dot(N, V));
+		float NdotV = saturate(dot(N, V));
+		if (skin.Wetness > 0.0) {
+			float eta = 1.33;
+			float3 RefractedV = -refract(-V, WetN, 1.0 / eta);
+			RefractedV = lerp(RefractedV, V, saturate(dot(WetN, N)));
+			NdotV = saturate(abs(dot(N, RefractedV)) + 1e-5);
+		}
 
 		float averageRoughness = lerp(skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity);
-		const float waterRoughness = 0.1;
-		const float waterF0 = 0.02;
 
 		float2 specularBRDF = PBR::GetEnvBRDFApproxLazarov(averageRoughness, NdotV);
 		specularWeight = skin.F0 * specularBRDF.x + specularBRDF.y;
@@ -190,11 +214,13 @@ namespace Skin
 		specularWeight *= 1 + skin.F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
 
 		if (skin.Wetness > 0.0) {
-			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(waterRoughness, NdotV);
-			float3 wetSpecular = waterF0 * wetSpecularBRDF.x + wetSpecularBRDF.y;
-			wetSpecular *= 1 + waterF0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
-			specularWeight = specularWeight * (1 - wetSpecularBRDF.x) + wetSpecular;
-			diffuseWeight *= 1 - wetSpecularBRDF.x;
+			const float WNdotV = saturate(abs(dot(WetN, V)) + 1e-5);
+			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(WATER_ROUGHNESS, WNdotV);
+			float3 wetSpecular = WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y;
+			wetSpecular *= 1 + WATER_F0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
+			const float waterTransmission = 1 - wetSpecularBRDF.x;
+			specularWeight = specularWeight * waterTransmission * waterTransmission + wetSpecular;
+			diffuseWeight *= waterTransmission * waterTransmission;
 		}
 
 		float3 R = reflect(-V, N);
@@ -306,6 +332,6 @@ namespace Skin
 		float sweat_intensity = saturate((noise_value - dynamic_threshold) / strength);
 
 		sweat_intensity = pow(sweat_intensity, 1.5f);
-		return lerp(sweat_intensity, 1.0, smoothstep(0, 1, (strength - 0.9) * 10.0));
+		return lerp(sweat_intensity, 1.0, smoothstep(0, 1, (strength - 0.5) * 10.0));
 	}
 }
