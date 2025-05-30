@@ -218,9 +218,9 @@ namespace Skin
 			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(WATER_ROUGHNESS, WNdotV);
 			float3 wetSpecular = WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y;
 			wetSpecular *= 1 + WATER_F0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
-			const float waterTransmission = 1 - wetSpecularBRDF.x;
-			specularWeight = specularWeight * waterTransmission * waterTransmission + wetSpecular;
-			diffuseWeight *= waterTransmission * waterTransmission;
+			const float waterTransmission = 1 - (WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y);
+			specularWeight = specularWeight * waterTransmission + wetSpecular;
+			diffuseWeight *= waterTransmission;
 		}
 
 		float3 R = reflect(-V, N);
@@ -332,6 +332,11 @@ namespace Skin
 		float sweat_intensity = saturate((noise_value - dynamic_threshold) / strength);
 
 		sweat_intensity = pow(sweat_intensity, 1.5f);
-		return lerp(sweat_intensity, 1.0, smoothstep(0, 1, (strength - 0.5) * 10.0));
+
+		if (strength > 0.8f)
+		{
+			sweat_intensity = sweat_intensity * saturate(0.99f - (strength - 0.8f) * 5.0f) + (strength - 0.8f) * 5.0f;
+		}
+		return saturate(sweat_intensity);
 	}
 }
