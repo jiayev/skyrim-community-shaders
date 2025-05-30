@@ -1959,7 +1959,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (SharedData::skinData.skinDetailParams.w > 0.0f)
 			modelNormal.xyz = combinedNormal;
 		if (skinWetness > 0.0f) {
-			float3 wetNormal = Skin::CalculateNormalFromHeight((skinWetness * skinWetMask) * (hasSkinWetness ? 1.0 : 4.0), SharedData::skinData.wetParams.w * 0.00005, uv);
+			float3 wetNormal = Skin::CalculateNormalFromHeight(skinWetness, SharedData::skinData.wetParams.w * 0.0001, uv);
+			if (hasSkinWetness) {
+				float3 wetMaskNormal = Skin::CalculateNormalFromHeight(skinWetMask, SharedData::skinData.wetParams.w * 0.00005, uv);
+				wetNormal = Skin::ReorientNormal(wetNormal, wetMaskNormal);
+			}
 			if (SharedData::skinData.skinParams2.y > 1.0f) {
 				wetNormal = lerp(wetNormal, float3(0, 0, 1), saturate(SharedData::skinData.skinParams2.y - 1.0f));
 			}
