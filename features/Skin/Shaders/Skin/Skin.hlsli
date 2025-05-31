@@ -138,12 +138,11 @@ namespace Skin
 		float VdotL = dot(V, L);
 		float oVdotH = VdotH;
 
-		if (skin.Wetness > 0.0) {
+		if (skin.Wetness > 0.0 && dot(WetN, L) > 0.0) {
 			float eta = 1.33;
+			eta = lerp(eta, 1.0, saturate(dot(WetN, N)));
 			float3 RefractedL = -refract(-L, WetN, 1.0 / eta);
 			float3 RefractedV = -refract(-V, WetN, 1.0 / eta);
-			RefractedL = lerp(RefractedL, L, saturate(dot(WetN, N)));
-			RefractedV = lerp(RefractedV, V, saturate(dot(WetN, N)));
 			NdotL = saturate(dot(N, RefractedL));
 			NdotV = saturate(abs(dot(N, RefractedV)) + 1e-5);
 			float3 RefractedH = normalize(RefractedV + RefractedL);
@@ -199,19 +198,15 @@ namespace Skin
 		float NdotV = saturate(dot(N, V));
 		if (skin.Wetness > 0.0) {
 			float eta = 1.33;
+			eta = lerp(eta, 1.0, saturate(dot(WetN, N)));
 			float3 RefractedV = -refract(-V, WetN, 1.0 / eta);
-			RefractedV = lerp(RefractedV, V, saturate(dot(WetN, N)));
-			NdotV = saturate(abs(dot(N, RefractedV)) + 1e-5);
+			NdotV = saturate(dot(N, RefractedV));
 		}
 
 		float averageRoughness = lerp(skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity);
 
 		float2 specularBRDF = PBR::GetEnvBRDFApproxLazarov(averageRoughness, NdotV);
 		specularWeight = skin.F0 * specularBRDF.x + specularBRDF.y;
-
-		diffuseWeight = skin.Albedo * (1.0 - specularWeight);
-
-		specularWeight *= 1 + skin.F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
 
 		if (skin.Wetness > 0.0) {
 			const float WNdotV = saturate(abs(dot(WetN, V)) + 1e-5);
@@ -220,8 +215,11 @@ namespace Skin
 			wetSpecular *= 1 + WATER_F0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
 			const float waterTransmission = 1 - (WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y);
 			specularWeight = specularWeight * waterTransmission + wetSpecular;
-			diffuseWeight *= waterTransmission;
 		}
+
+		diffuseWeight = skin.Albedo * (1.0 - specularWeight);
+
+		specularWeight *= 1 + skin.F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
 
 		float3 R = reflect(-V, N);
 		float horizon = min(1.0 + dot(R, VN), 1.0);
