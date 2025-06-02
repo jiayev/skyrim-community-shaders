@@ -74,6 +74,10 @@ Texture2D<uint> XeGTAOTexture : register(t15);
 Texture2D<uint> XeGTAOGeneratedNormal : register(t16);
 #endif
 
+#if defined(SSR)
+Texture2D<float4> SSRTexture : register(t17);
+#endif
+
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
 	float2 uv = float2(dispatchID.xy + 0.5) * SharedData::BufferDim.zw;
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
@@ -232,6 +236,11 @@ Texture2D<uint> XeGTAOGeneratedNormal : register(t16);
 #		endif
 
 		finalIrradiance = (finalIrradiance * ssgiAo) + ssgiIlSpecular;
+#	endif
+
+#	if defined(SSR)
+		float4 ssrIrradiance = SSRTexture[dispatchID.xy];
+		finalIrradiance = lerp(finalIrradiance, ssrIrradiance.rgb, ssrIrradiance.a);
 #	endif
 
 		color += reflectance * finalIrradiance;

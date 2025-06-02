@@ -16,6 +16,7 @@
 #include "Features/PostProcessing.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpacePointLightShadows.h"
+#include "Features/ScreenSpaceReflections.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -149,6 +150,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::terrainShadows,
 		globals::features::screenSpaceGI,
 		globals::features::screenSpacePointLightShadows,
+		globals::features::screenSpaceReflections,
 		globals::features::skylighting,
 		globals::features::skySync,
 		globals::features::terrainBlending,

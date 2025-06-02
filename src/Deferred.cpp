@@ -7,6 +7,7 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/IBL.h"
 #include "Features/ScreenSpaceGI.h"
+#include "Features/ScreenSpaceReflections.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
@@ -461,11 +462,15 @@ void Deferred::DeferredPasses()
 
 	auto terrainBlending = globals::features::terrainBlending;
 
+	auto ssr = globals::features::screenSpaceReflections;
+	if (ssr->loaded)
+		ssr->DrawSSR();
+
 	// Deferred Composite
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
-		ID3D11ShaderResourceView* srvs[17]{
+		ID3D11ShaderResourceView* srvs[18]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
@@ -483,6 +488,7 @@ void Deferred::DeferredPasses()
 			ibl->loaded ? ibl->diffuseIBLTexture->srv.get() : nullptr,
 			xeGTAO->loaded ? xeGTAO->outputAO->srv.get() : nullptr,
 			xeGTAO->loaded ? xeGTAO->generatedNormals->srv.get() : nullptr,
+			ssr->loaded ? ssr->texSSRColor->srv.get() : nullptr,
 		};
 
 		if (dynamicCubemaps->loaded)
@@ -501,7 +507,7 @@ void Deferred::DeferredPasses()
 
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[17]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[18]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
@@ -714,6 +720,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		if (globals::features::ibl->loaded)
 			defines.push_back({ "IBL", nullptr });
 
+		if (globals::features::screenSpaceReflections->loaded)
+			defines.push_back({ "SSR", nullptr });
+
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
 
@@ -738,6 +747,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 
 		if (globals::features::screenSpaceGI->loaded)
 			defines.push_back({ "SSGI", nullptr });
+
+		if (globals::features::screenSpaceReflections->loaded)
+			defines.push_back({ "SSR", nullptr });
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
