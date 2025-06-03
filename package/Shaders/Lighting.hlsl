@@ -3682,7 +3682,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	} else {
 #			if defined(WETNESS_EFFECTS)
 	psout.Reflectance = float4(max(reflectance, wetnessReflectance), psout.Diffuse.w);
-	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - roughness + wetnessGlossinessGain), psout.Diffuse.w);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), lerp(1.0 - roughness, saturate(1 - roughness + wetnessGlossinessGain), wetnessGlossinessSpecular), psout.Diffuse.w);
 #			else
 	psout.Reflectance = float4(reflectance, psout.Diffuse.w);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), 1.0 - roughness, psout.Diffuse.w);
@@ -3690,7 +3690,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #		elif defined(WETNESS_EFFECTS)
 	psout.Reflectance = float4(max(reflectance, wetnessReflectance), psout.Diffuse.w);
-	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - roughness + wetnessGlossinessGain), psout.Diffuse.w);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), lerp(1.0 - roughness, saturate(1 - roughness + wetnessGlossinessGain), wetnessGlossinessSpecular), psout.Diffuse.w);
 #		else
 	psout.Reflectance = float4(reflectance, psout.Diffuse.w);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), 1.0 - roughness, psout.Diffuse.w);
