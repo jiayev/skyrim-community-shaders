@@ -1,12 +1,39 @@
 namespace GrassLighting
 {
-	float3 GetLightSpecularInput(float3 L, float3 V, float3 N, float3 lightColor, float shininess)
+	float3 F_Schlick(float3 F0, float VdotH)
+	{
+		float Fc = pow(1 - VdotH, 5);
+		return Fc + (1 - Fc) * F0;
+	}
+
+	float D_GGX(float roughness, float NdotH)
+	{
+		float a2 = pow(roughness, 4);
+		float d = max((NdotH * a2 - NdotH) * NdotH + 1, 1e-5);
+		return a2 / (Math::PI * d * d);
+	}
+
+	float G_SmithJointApprox(float roughness, float NdotL, float NdotV)
+	{
+		float a = roughness * roughness;
+		float visSmithV = NdotL * (NdotV * (1 - a) + a);
+		float visSmithL = NdotV * (NdotL * (1 - a) + a);
+		return 0.5 * rcp(visSmithV + visSmithL);
+	}
+
+	float3 GetLightSpecularInput(float3 L, float3 V, float3 N, float3 lightColor, float roughness, float3 F0)
 	{
 		float3 H = normalize(V + L);
-		float HdotN = saturate(dot(H, N));
+		float NdotL = saturate(dot(N, L));
+		float NdotV = saturate(dot(N, V));
+		float NdotH = saturate(dot(N, H));
+		float VdotH = saturate(dot(V, H));
 
-		float lightColorMultiplier = exp2(shininess * log2(HdotN));
-		return lightColor * lightColorMultiplier.xxx;
+		float D = D_GGX(roughness, NdotH);
+		float G = G_SmithJointApprox(roughness, NdotL, NdotV);
+		float3 F = F_Schlick(F0, VdotH);
+		float3 specular = D * G * F;
+		return specular * lightColor * NdotL;
 	}
 
 	float3 TransformNormal(float3 normal)
