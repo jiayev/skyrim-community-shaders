@@ -3661,10 +3661,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	} else {
 #			if defined(WETNESS_EFFECTS)
 		psout.Reflectance = float4(wetnessReflectance, psout.Diffuse.w);
-		psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), lerp(outGlossiness, saturate(outGlossiness + wetnessGlossinessGain), wetnessGlossinessSpecular), psout.Diffuse.w);
+		psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), lerp(1.0 - roughness, saturate(1.0 - roughness + wetnessGlossinessGain), wetnessGlossinessSpecular), psout.Diffuse.w);
 #			else
 		psout.Reflectance = float4(0.0.xxx, psout.Diffuse.w);
-		psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), outGlossiness, psout.Diffuse.w);
+		psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), 1.0 - roughness, psout.Diffuse.w);
 #			endif
 	}
 #		elif defined(HAIR) && defined(CS_HAIR)
