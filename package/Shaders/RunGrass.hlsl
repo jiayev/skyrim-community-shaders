@@ -517,6 +517,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		baseColor.xyz *= SharedData::grassLightingSettings.BasicGrassBrightness;
 #			endif  // !TRUE_PBR
 
+	float3 F0 = SharedData::grassLightingSettings.SpecularStrength * 0.08;
+	float roughness = saturate(sqrt(2.0 / (SharedData::grassLightingSettings.Glossiness + 2.0)));
+
 #			if defined(TRUE_PBR)
 	float4 rawRMAOS = TexRMAOSSampler.SampleBias(SampRMAOSSampler, input.TexCoord.xy, SharedData::MipBias) * float4(PBRParams1.x, 1, 1, PBRParams1.y);
 
@@ -620,7 +623,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 sss = dirBacklighting * dirLightColor * saturate(-dirLightAngle);
 
 	if (complex)
-		lightsSpecularColor += GrassLighting::GetLightSpecularInput(DirLightDirection, viewDirection, normal, dirLightColor, SharedData::grassLightingSettings.Glossiness);
+		lightsSpecularColor += GrassLighting::GetLightSpecularInput(DirLightDirection, viewDirection, normal, dirLightColor, roughness, F0);
 #			endif
 
 #			if defined(LIGHT_LIMIT_FIX)
@@ -694,7 +697,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				lightsDiffuseColor += lightDiffuseColor;
 
 				if (complex)
-					lightsSpecularColor += GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, SharedData::grassLightingSettings.Glossiness) * intensityMultiplier;
+					lightsSpecularColor += GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, roughness, F0) * intensityMultiplier;
 #				endif
 			}
 		}
@@ -791,15 +794,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Reflectance = float4(indirectSpecularLobeWeight, 1);
 #			else
 
-	float3 F0 = 0.04;
-	float roughness = 1.0;
-
 #				if defined(DYNAMIC_CUBEMAPS)
-#					if defined(SKYLIGHTING)
-	float3 reflectance = DynamicCubemaps::GetDynamicCubemap(normal, normal, viewDirection, roughness, F0, 0);
-#					else
-	float3 reflectance = DynamicCubemaps::GetDynamicCubemap(normal, normal, viewDirection, roughness, F0);
-#					endif
+	float2 specularBDRF = DynamicCubemaps::EnvBRDFApprox(roughness, saturate(dot(viewDirection, normalVS)));
+	float3 reflectance = F0 * specularBDRF.x + specularBDRF.y;
 #				else
 	float3 reflectance = 0;
 #				endif
