@@ -488,7 +488,7 @@ void Deferred::DeferredPasses()
 			ibl->loaded ? ibl->diffuseIBLTexture->srv.get() : nullptr,
 			xeGTAO->loaded ? xeGTAO->outputAO->srv.get() : nullptr,
 			xeGTAO->loaded ? xeGTAO->generatedNormals->srv.get() : nullptr,
-			(ssr->loaded && ssr->settings.Enabled) ? ssr->texSSRColor->srv.get() : nullptr,
+			(ssr->loaded && ssr->settings.Enabled) ? ssr->texOutput->srv.get() : nullptr,
 		};
 
 		if (dynamicCubemaps->loaded)
