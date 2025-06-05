@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Utils/Serialize.h"
 #include <dxgi1_4.h>
 
 using namespace std::chrono;
