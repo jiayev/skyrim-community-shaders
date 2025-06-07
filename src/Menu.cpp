@@ -1931,34 +1931,48 @@ void Menu::ProcessInputEventQueue()
 			if (key == event.keyCode)
 				key = MapVirtualKeyEx(event.keyCode, MAPVK_VSC_TO_VK_EX, GetKeyboardLayout(0));
 			if (!event.IsPressed()) {
-				if (settingToggleKey) {
-					settings.ToggleKey = key;
-					settingToggleKey = false;
-				} else if (settingSkipCompilationKey) {
-					settings.SkipCompilationKey = key;
-					settingSkipCompilationKey = false;
-				} else if (settingsEffectsToggle) {
-					settings.EffectToggleKey = key;
-					settingsEffectsToggle = false;
-				} else if (settingOverlayToggleKey) {
-					settings.PerfOverlay.OverlayToggleKey = key;
-					settingOverlayToggleKey = false;
-				} else if (key == settings.ToggleKey) {
-					IsEnabled = !IsEnabled;
-				} else if (key == settings.SkipCompilationKey) {
-					auto shaderCache = globals::shaderCache;
-					shaderCache->backgroundCompilation = true;
-				} else if (key == settings.EffectToggleKey) {
-					auto shaderCache = globals::shaderCache;
-					shaderCache->SetEnabled(!shaderCache->IsEnabled());
-				} else if (key == priorShaderKey && globals::state->IsDeveloperMode()) {
-					auto shaderCache = globals::shaderCache;
-					shaderCache->IterateShaderBlock();
-				} else if (key == nextShaderKey && globals::state->IsDeveloperMode()) {
-					auto shaderCache = globals::shaderCache;
-					shaderCache->IterateShaderBlock(false);
-				} else if (key == settings.PerfOverlay.OverlayToggleKey) {
-					settings.PerfOverlay.Enabled = !settings.PerfOverlay.Enabled;
+				struct HotkeyAction
+				{
+					uint32_t* settingKey;
+					bool* settingFlag;
+					std::function<void(uint32_t)> action;
+				};
+				auto shaderCache = globals::shaderCache;
+				auto devMode = globals::state->IsDeveloperMode();
+				HotkeyAction hotkeyActions[] = {
+					{ &settings.ToggleKey, &settingToggleKey, [this](uint32_t key) { settings.ToggleKey = key; settingToggleKey = false; } },
+					{ &settings.SkipCompilationKey, &settingSkipCompilationKey, [this](uint32_t key) { settings.SkipCompilationKey = key; settingSkipCompilationKey = false; } },
+					{ &settings.EffectToggleKey, &settingsEffectsToggle, [this](uint32_t key) { settings.EffectToggleKey = key; settingsEffectsToggle = false; } },
+					{ &settings.PerfOverlay.OverlayToggleKey, &settingOverlayToggleKey, [this](uint32_t key) { settings.PerfOverlay.OverlayToggleKey = key; settingOverlayToggleKey = false; } },
+				};
+				bool handled = false;
+				for (auto& h : hotkeyActions) {
+					if (*(h.settingFlag)) {
+						h.action(key);
+						handled = true;
+						break;
+					}
+				}
+				if (!handled) {
+					struct KeyAction
+					{
+						uint32_t settingKey;
+						std::function<void()> action;
+					};
+					KeyAction keyActions[] = {
+						{ settings.ToggleKey, [this]() { IsEnabled = !IsEnabled; } },
+						{ settings.SkipCompilationKey, [shaderCache]() { shaderCache->backgroundCompilation = true; } },
+						{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnabled()); } },
+						{ priorShaderKey, [shaderCache, devMode]() { if (devMode) shaderCache->IterateShaderBlock(); } },
+						{ nextShaderKey, [shaderCache, devMode]() { if (devMode) shaderCache->IterateShaderBlock(false); } },
+						{ settings.PerfOverlay.OverlayToggleKey, [this]() { settings.PerfOverlay.Enabled = !settings.PerfOverlay.Enabled; } },
+					};
+					for (auto& ka : keyActions) {
+						if (key == ka.settingKey) {
+							ka.action();
+							break;
+						}
+					}
 				}
 				if (key == VK_ESCAPE && IsEnabled) {
 					IsEnabled = false;
