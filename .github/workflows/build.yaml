@@ -10,6 +10,7 @@ on:
                 description: "Optional suffix to invalidate the build cache"
                 required: false
     pull_request_target:
+        types: [opened, synchronize, reopened, ready_for_review]
         paths:
             - "**.cpp"
             - "**.h"
