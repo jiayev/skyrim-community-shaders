@@ -25,6 +25,7 @@ struct Skin : Feature
 	virtual void SaveSettings(json& o_json) override;
 
 	virtual void Prepass() override;
+	virtual void PostPostLoad() override;
 
 	virtual void SetupResources() override;
 
@@ -48,6 +49,9 @@ struct Skin : Feature
 		float SkinDetailTiling = 40.0f;
 		float BodyTilingMultiplier = 2.0f;
 		float ExtraSkinWetness = 0.0f;
+		float WetFadeTime = 10.0f;
+		float StartSweat = 0.75f;
+		float FullSweat = 0.15f;
 		float4 WetParams = { 512.0f, 0.7, 10.0, 4.0f };
 		float Translucency = 0.1f;
 		float sssWidth = 0.2f;
@@ -68,12 +72,41 @@ struct Skin : Feature
 		float4 wetParams;
 	};
 
+	struct alignas(16) PerGeometryData
+	{
+		float4 skinPerGeometry;
+	};
+
+	ConstantBuffer* PerGeometryCB = nullptr;
+	float4 currentWetness = { 0.0f, 0.0f, 0.0f, 0.0f };
+	float playerStamina = 0.0f;
+	float playerStaminaMax = 0.0f;
+
 	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;
 	std::unordered_map<uint32_t, RE::NiSourceTexturePtr[2]> skinExtraTextures;
+	std::unordered_map<uint32_t, float4> actorWetnessMap;
 
 	SkinData GetCommonBufferData();
+	float GetWaterHeight(const RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_pos);
+	float4 GetWetness(RE::BSGeometry* geometry);
 
 	void SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet);
 	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
+	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
 	void SetShaderResouces(ID3D11DeviceContext* a_context);
+
+	struct Hooks
+	{
+		struct BSLightingShader_SetupGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		static void Install()
+		{
+			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
+			logger::info("[Advanced Skin] Installed hooks");
+		}
+	};
 };
