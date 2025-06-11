@@ -1,6 +1,7 @@
 #include "Skin.h"
 #include <DirectXTex.h>
 
+#include "Deferred.h"
 #include "Hooks.h"
 #include "Menu.h"
 #include "ShaderCache.h"
@@ -24,6 +25,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkinDetailTiling,
 	BodyTilingMultiplier,
 	ExtraSkinWetness,
+	WetFadeTime,
+	StartSweat,
+	FullSweat,
 	WetParams,
 	Translucency,
 	sssWidth,
@@ -112,10 +116,37 @@ void Skin::DrawSettings()
 		ImGui::Text("Extra wetness for skin adding to wetness feature");
 	}
 
+	ImGui::SliderFloat("Wetness Fade Out Time", &settings.WetFadeTime, 0.0f, 50.0f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Time it takes for the wetness to reduce from 1.0 to 0.0 after leaving water");
+	}
+
+	ImGui::SliderFloat("Stamina Threshold for Sweat", &settings.StartSweat, 0.01f, 1.0f, "%.2f", 
+		ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("Full Sweat Threshold", &settings.FullSweat, 0.0f, 1.0f, "%.2f",
+		ImGuiSliderFlags_AlwaysClamp);
+
 	ImGui::SliderFloat("Wetness Perlin Noise Scale", &settings.WetParams.x, 0.0f, 1024.0f, "%1.f");
 	ImGui::SliderFloat("Wetness Perlin Noise Lacunarity", &settings.WetParams.y, 0.0f, 2.0f, "%.1f");
 	ImGui::SliderFloat("Wetness Perlin Noise Persistence", &settings.WetParams.z, 0.0f, 20.0f, "%.2f");
 	ImGui::SliderFloat("Wetness Normal Scale", &settings.WetParams.w, 0.0f, 20.0f, "%.1f");
+
+	if (actorWetnessMap.contains(0x14)) {
+		ImGui::Text("Player Wetness: %.2f", std::min(actorWetnessMap[0x14].x + actorWetnessMap[0x14].y, 2.0f));
+	} else {
+		ImGui::Text("Player Wetness: 0.00");
+	}
+
+	ImGui::Text("Player Stamina: %.2f / %.2f", playerStamina, playerStaminaMax);
+
+	if (const auto consoleRef = RE::Console::GetSelectedRef()) {
+		uint32_t selectedid = consoleRef->formID;
+		if (actorWetnessMap.contains(selectedid)) {
+			ImGui::Text("Console Selected Wetness: %.2f", std::min(actorWetnessMap[selectedid].x + actorWetnessMap[selectedid].y, 2.0f));
+		} else {
+			ImGui::Text("Console Selected Wetness: 0.00");
+		}
+	}
 
 	ImGui::Spacing();
 
@@ -183,6 +214,10 @@ void Skin::SetupResources()
 		};
 		texSkinDetail->CreateSRV(srvDesc);
 	}
+
+	{
+		PerGeometryCB = new ConstantBuffer(ConstantBufferDesc<PerGeometryData>());
+	}
 }
 
 void Skin::ReloadSkinDetail()
@@ -234,6 +269,11 @@ void Skin::Prepass()
 	}
 }
 
+void Skin::PostPostLoad()
+{
+	Hooks::Install();
+}
+
 Skin::SkinData Skin::GetCommonBufferData()
 {
 	SkinData data{};
@@ -260,6 +300,116 @@ void Skin::SaveSettings(json& o_json)
 void Skin::RestoreDefaultSettings()
 {
 	settings = {};
+}
+
+// By PO3
+// https://github.com/powerof3/Splashes-of-Skyrim/blob/master/src/Manager.cpp
+float Skin::GetWaterHeight(const RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_pos)
+{
+	float waterHeight = -RE::NI_INFINITY;
+
+	if (const auto waterManager = RE::TESWaterSystem::GetSingleton()) {
+		waterHeight = a_ref->GetWaterHeight();
+
+		if (waterHeight != -RE::NI_INFINITY) {
+			return waterHeight;
+		}
+
+		const auto get_nearest_water_object_height = [&]() {
+			for (const auto& waterObject : waterManager->waterObjects) {
+				if (waterObject) {
+					for (const auto& bound : waterObject->multiBounds) {
+						if (bound) {
+							if (auto size{ bound->size }; size.z <= 10.0f) {  //avoid sloped water
+								auto       center{ bound->center };
+								const auto boundMin = center - size;
+								const auto boundMax = center + size;
+								if (!(a_pos.x < boundMin.x || a_pos.x > boundMax.x || a_pos.y < boundMin.y || a_pos.y > boundMax.y)) {
+									return center.z;
+								}
+							}
+						}
+					}
+				}
+			}
+
+			return -RE::NI_INFINITY;
+		};
+
+		waterHeight = get_nearest_water_object_height();
+	}
+
+	return waterHeight;
+}
+
+float4 Skin::GetWetness(RE::BSGeometry* geometry)
+{
+	float4 wetness = float4(0.0f, 0.0f, 0.0f, 0.0f);
+	if (auto userData = geometry->GetUserData())
+		if (auto actor = userData->As<RE::Actor>())
+		{
+			uint32_t refid = actor->AsReference()->formID;
+			const float positionZ = actor->GetPositionZ();
+			wetness.z = positionZ;
+			const float stamina = actor->AsActorValueOwner()->GetActorValue(RE::ActorValue::kStamina);
+			const float permanentStamina = actor->AsActorValueOwner()->GetPermanentActorValue(RE::ActorValue::kStamina);
+			const float temporaryStamina = actor->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary, RE::ActorValue::kStamina);
+			const float maxStamina = permanentStamina + temporaryStamina;
+			const float staminaPercentage = stamina / maxStamina;
+			if (refid == 0x14) { // Player
+				playerStamina = stamina;
+				playerStaminaMax = maxStamina;
+			}
+			wetness.x = (staminaPercentage >= settings.StartSweat) ? 0.0f : 
+                		(staminaPercentage <= settings.FullSweat) ? 1.0f : 
+                		(settings.StartSweat - staminaPercentage) / (settings.StartSweat - settings.FullSweat);
+			if (actor->IsInWater()) {
+				wetness.y = 2.0f;
+				float waterHeight = GetWaterHeight(actor->AsReference(), actor->GetPosition());
+				wetness.w = std::max(0.0f, waterHeight - positionZ);
+			} else {
+				wetness.y = 0.0f;
+				wetness.w = 0.0f;
+			}
+
+			if(actorWetnessMap.contains(refid)) {
+				if (actorWetnessMap[refid].x < wetness.x) {
+					actorWetnessMap[refid].x = wetness.x;
+				} else if (actorWetnessMap[refid].x > wetness.x) {
+					actorWetnessMap[refid].x -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
+					actorWetnessMap[refid].x = std::max(actorWetnessMap[refid].x, 0.0f);
+					wetness.x = actorWetnessMap[refid].x;
+				}
+
+				if (actorWetnessMap[refid].y < wetness.y) {
+					actorWetnessMap[refid].y = wetness.y;
+					if (actorWetnessMap[refid].w < wetness.w) {
+						actorWetnessMap[refid].w = wetness.w;
+					} else {
+						wetness.w = actorWetnessMap[refid].w;
+					}
+				} else if (actorWetnessMap[refid].y > wetness.y) {
+					actorWetnessMap[refid].y -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
+					actorWetnessMap[refid].y = std::max(actorWetnessMap[refid].y, 0.0f);
+					wetness.y = actorWetnessMap[refid].y;
+					if (wetness.y == 0.0f) {
+						wetness.w = 0.0f;
+						actorWetnessMap[refid].w = 0.0f;
+					} else if (actorWetnessMap[refid].w < wetness.w) {
+						actorWetnessMap[refid].w = wetness.w;
+					} else {
+						wetness.w = actorWetnessMap[refid].w;
+					}
+				} else if (actorWetnessMap[refid].w < wetness.w) {
+					actorWetnessMap[refid].w = wetness.w;
+				} else {
+					wetness.w = actorWetnessMap[refid].w;
+				}
+			} else {
+				actorWetnessMap.emplace(refid, wetness);
+			}
+		}
+	return wetness;
 }
 
 struct SkinExtendedRendererState
@@ -430,6 +580,30 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 	}
 }
 
+void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
+{
+	auto deferred = globals::deferred;
+	auto context = globals::d3d::context;
+
+	if (deferred->deferredPass) {
+		if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kFace, RE::BSShaderProperty::EShaderPropertyFlag::kFaceGenRGBTint)) {
+			auto geometry = a_pass->geometry;
+			float4 wetness = GetWetness(geometry);
+			// wetness = 0.0;
+
+			if (currentWetness != wetness) {
+				currentWetness = wetness;
+				PerGeometryData perGeometryData{};
+				perGeometryData.skinPerGeometry = wetness;
+				PerGeometryCB->Update(perGeometryData);
+			}
+
+			ID3D11Buffer* buffer = { PerGeometryCB->CB() };
+			context->PSSetConstantBuffers(7, 1, &buffer);
+		}
+	}
+}
+
 void Skin::SetShaderResouces(ID3D11DeviceContext* a_context)
 {
 	if (skinExtendedRendererState.PSResourceModifiedBits != 0) {
@@ -437,4 +611,11 @@ void Skin::SetShaderResouces(ID3D11DeviceContext* a_context)
 		a_context->PSSetShaderResources(74, 1, &skinExtendedRendererState.PSTexture.at(1));
 	}
 	skinExtendedRendererState.PSResourceModifiedBits = 0;
+}
+
+void Skin::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+{
+	auto skin = GetSingleton();
+	skin->BSLightingShader_SetupGeometry(Pass);
+	return func(This, Pass, RenderFlags);
 }

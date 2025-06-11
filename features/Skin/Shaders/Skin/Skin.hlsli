@@ -8,6 +8,13 @@
 
 namespace Skin
 {
+#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
+	cbuffer SkinPerGeometry : register(b7)
+	{
+		float4 skinPerGeometry;
+	};
+#endif
+
 	Texture2D<float4> TexSkinDetailNormal : register(t72);
 
 	struct SkinSurfaceProperties
@@ -336,5 +343,17 @@ namespace Skin
 			sweat_intensity = sweat_intensity * saturate(0.99f - (strength - 0.8f) * 5.0f) + (strength - 0.8f) * 5.0f;
 		}
 		return saturate(sweat_intensity);
+	}
+
+	float GetWetness(float z)
+	{
+		float waterWet = 0.0f;
+		if (z <= skinPerGeometry.z + skinPerGeometry.w)
+		{
+			waterWet = skinPerGeometry.y;
+		}
+
+		float sweatWet = skinPerGeometry.x;
+		return clamp(waterWet + sweatWet, 0.0f, 2.0f);
 	}
 }
