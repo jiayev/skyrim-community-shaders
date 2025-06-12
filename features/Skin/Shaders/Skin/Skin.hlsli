@@ -346,7 +346,7 @@ namespace Skin
 	}
 #endif
 
-	float GetWetness(float z, float3 modelNormal)
+	float2 GetWetness(float z, float3 modelNormal)
 	{
 		if (skinPerGeometry.x == 0.f && skinPerGeometry.y == 0.f)
 			return 0.f;
@@ -360,6 +360,6 @@ namespace Skin
 #if !defined(SKIN)
 		sweatWet *= 1.0f - saturate(dot(modelNormal, float3(0, 0, 1)));
 #endif
-		return clamp(waterWet + sweatWet, 0.0f, 2.0f);
+		return float2(sweatWet, waterWet);
 	}
 }
