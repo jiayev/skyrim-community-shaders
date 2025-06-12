@@ -354,7 +354,7 @@ namespace Skin
 		float waterWet = 0.0f;
 		float waterLevel = skinPerGeometry.z + skinPerGeometry.w;
 		
-		waterWet = skinPerGeometry.y * (1 - smoothstep(waterLevel - 5.f, waterLevel + 5.f, z));
+		waterWet = skinPerGeometry.y * (1 - smoothstep(waterLevel - 2.5f, waterLevel + 2.5f, z));
 
 		float sweatWet = skinPerGeometry.x;
 		return clamp(waterWet + sweatWet, 0.0f, 2.0f);

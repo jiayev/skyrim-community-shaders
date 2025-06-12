@@ -2299,8 +2299,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 #		if defined(CS_SKIN)
-	if (SharedData::skinData.skinParams.w > 0.0f)
-		rainWetness = clamp(rainWetness + saturate(Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z)), 0.f, 2.f);
+	if (SharedData::skinData.skinParams.w > 0.0f) {
+		rainWetness += Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z);
+		puddleWetness += Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z);
+	}
 #		endif
 
 	rainWetness *= wetnessOcclusion;
