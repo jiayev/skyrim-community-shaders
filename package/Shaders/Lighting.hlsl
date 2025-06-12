@@ -2305,7 +2305,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(TRUE_PBR)
 		dynamicWetness.x = lerp(dynamicWetness.x, 0.0f, pbrSurfaceProperties.Metallic);
 #			endif
-		float dynamicWetnessValue = clamp(dynamicWetness.x + dynamicWetness.y + SharedData::skinData.skinParams2.y, 0.f, 2.f);
+		float dynamicWetnessValue = clamp(dynamicWetness.x + dynamicWetness.y, 0.f, 2.f);
 		rainWetness += dynamicWetnessValue;
 		puddleWetness += dynamicWetnessValue;
 	}
