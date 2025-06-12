@@ -348,11 +348,13 @@ namespace Skin
 
 	float GetWetness(float z)
 	{
+		if (skinPerGeometry.x == 0.f && skinPerGeometry.y == 0.f)
+			return 0.f;
+
 		float waterWet = 0.0f;
-		if (z <= skinPerGeometry.z + skinPerGeometry.w)
-		{
-			waterWet = skinPerGeometry.y;
-		}
+		float waterLevel = skinPerGeometry.z + skinPerGeometry.w;
+		
+		waterWet = skinPerGeometry.y * (1 - smoothstep(waterLevel - 2.5f, waterLevel + 2.5f, z));
 
 		float sweatWet = skinPerGeometry.x;
 		return clamp(waterWet + sweatWet, 0.0f, 2.0f);
