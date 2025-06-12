@@ -8,6 +8,13 @@
 
 namespace Skin
 {
+	float CalculateCurvature(float3 N)
+	{
+		const float3 dNdx = ddx(N);
+		const float3 dNdy = ddy(N);
+		return length(float2(dot(dNdx, dNdx), dot(dNdy, dNdy)));
+	}
+	
 #if defined(PSHADER)
 	cbuffer SkinPerGeometry : register(b7)
 	{
@@ -51,13 +58,6 @@ namespace Skin
 		skin.FuzzWeight = 0.0;
 		skin.Wetness = 0.0;
 		return skin;
-	}
-
-	float CalculateCurvature(float3 N)
-	{
-		const float3 dNdx = ddx(N);
-		const float3 dNdy = ddy(N);
-		return length(float2(dot(dNdx, dNdx), dot(dNdy, dNdy)));
 	}
 
 	// [Jorge Jimenez, Diego Gutierrez 2015, "Separable Subsurface Scattering"]
@@ -346,7 +346,7 @@ namespace Skin
 	}
 #endif
 
-	float GetWetness(float z)
+	float GetWetness(float z, float3 modelNormal)
 	{
 		if (skinPerGeometry.x == 0.f && skinPerGeometry.y == 0.f)
 			return 0.f;
@@ -357,6 +357,9 @@ namespace Skin
 		waterWet = skinPerGeometry.y * (1 - smoothstep(waterLevel - 2.5f, waterLevel + 2.5f, z));
 
 		float sweatWet = skinPerGeometry.x;
+#if !defined(SKIN)
+		sweatWet *= 1.0f - saturate(dot(modelNormal, float3(0, 0, 1)));
+#endif
 		return clamp(waterWet + sweatWet, 0.0f, 2.0f);
 	}
 }
