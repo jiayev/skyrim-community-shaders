@@ -2084,6 +2084,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float pbrGlossiness = 1 - pbrSurfaceProperties.Roughness;
 #	endif  // TRUE_PBR
 
+	float3 F0 = 0.04;
+	float roughness = 1.0;
+#	if defined(SPECULAR) && !defined(TRUE_PBR)
+	roughness = sqrt(2.0 / (shininess + 2.0));
+#	endif
+
 	float porosity = 1.0;
 
 #	if defined(SKYLIGHTING)
@@ -2663,12 +2669,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		else
 	diffuseColor += directionalAmbientColor;
 #		endif
-#	endif
-
-	float3 F0 = 0.04;
-	float roughness = 1.0;
-#	if defined(SPECULAR) && !defined(TRUE_PBR)
-	roughness = sqrt(2.0 / (shininess + 2.0));
 #	endif
 
 #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
