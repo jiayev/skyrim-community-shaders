@@ -8,13 +8,13 @@
 
 namespace Skin
 {
-#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
+#if defined(PSHADER)
 	cbuffer SkinPerGeometry : register(b7)
 	{
 		float4 skinPerGeometry;
 	};
 #endif
-
+#if defined(SKIN)
 	Texture2D<float4> TexSkinDetailNormal : register(t72);
 
 	struct SkinSurfaceProperties
@@ -344,6 +344,7 @@ namespace Skin
 		}
 		return saturate(sweat_intensity);
 	}
+#endif
 
 	float GetWetness(float z)
 	{
