@@ -2298,6 +2298,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	rainWetness = SharedData::wetnessEffectsSettings.SkinWetness * SharedData::wetnessEffectsSettings.Wetness * 0.8f;
 #		endif
 
+#		if defined(CS_SKIN) && (defined(SKINNED) || defined(HAIR))
+	rainWetness = clamp(rainWetness + saturate(Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z)), 0.f, 2.f);
+#		endif
+
 	rainWetness *= wetnessOcclusion;
 	puddleWetness *= wetnessOcclusion;
 
