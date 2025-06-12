@@ -346,7 +346,7 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 {
 	float4 wetness = float4(0.0f, 0.0f, 0.0f, 0.0f);
 	if (auto userData = geometry->GetUserData())
-		if (auto actor = userData->As<RE::Actor>())
+		if (auto actor = userData->As<RE::Character>())
 		{
 			uint32_t refid = actor->AsReference()->formID;
 			const float positionZ = actor->GetPositionZ();
@@ -586,7 +586,7 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	auto context = globals::d3d::context;
 
 	// if (deferred->deferredPass) {
-		if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kFace, RE::BSShaderProperty::EShaderPropertyFlag::kFaceGenRGBTint, RE::BSShaderProperty::EShaderPropertyFlag::kSkinned, RE::BSShaderProperty::EShaderPropertyFlag::kHairTint)) {
+		// if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kFace, RE::BSShaderProperty::EShaderPropertyFlag::kFaceGenRGBTint, RE::BSShaderProperty::EShaderPropertyFlag::kSkinned, RE::BSShaderProperty::EShaderPropertyFlag::kHairTint)) {
 			auto geometry = a_pass->geometry;
 			float4 wetness = GetWetness(geometry);
 			// wetness = 0.0;
@@ -600,7 +600,7 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 			ID3D11Buffer* buffer = { PerGeometryCB->CB() };
 			context->PSSetConstantBuffers(7, 1, &buffer);
-		}
+		// }
 	// }
 }
 
