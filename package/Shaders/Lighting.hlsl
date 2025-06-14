@@ -2299,7 +2299,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	rainWetness = SharedData::wetnessEffectsSettings.SkinWetness * SharedData::wetnessEffectsSettings.Wetness * 0.8f;
 #		endif
 
-#		if defined(CS_SKIN)
+#		if defined(CS_SKIN) && !defined(SKIN)
 	if (SharedData::skinData.skinParams.w > 0.0f) {
 		float2 dynamicWetness = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z, modelNormal.xyz);
 #			if defined(TRUE_PBR)

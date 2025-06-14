@@ -84,7 +84,7 @@ struct Skin : Feature
 
 	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;
 	std::unordered_map<uint32_t, RE::NiSourceTexturePtr[2]> skinExtraTextures;
-	std::unordered_map<uint32_t, float4> actorWetnessMap;
+	std::unordered_map<void*, float4> actorWetnessMap;
 
 	SkinData GetCommonBufferData();
 	float GetWaterHeight(const RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_pos);
