@@ -136,6 +136,8 @@ namespace Skin
 
 		light.LightColor *= Math::PI;
 
+		N = skin.Wetness > 0 ? WetN : N;
+
 		float3 H = normalize(V + L);
 		const float oNdotL = dot(N, L);
 		float NdotL = clamp(oNdotL, 1e-5, 1.0);
@@ -144,19 +146,6 @@ namespace Skin
 		float VdotH = saturate(dot(V, H));
 		float VdotL = dot(V, L);
 		float oVdotH = VdotH;
-
-		if (skin.Wetness > 0.0 && dot(WetN, L) > 0.0) {
-			float eta = 1.33;
-			eta = lerp(eta, 1.0, saturate(dot(WetN, N)));
-			float3 RefractedL = -refract(-L, WetN, 1.0 / eta);
-			float3 RefractedV = -refract(-V, WetN, 1.0 / eta);
-			NdotL = saturate(dot(N, RefractedL));
-			NdotV = saturate(abs(dot(N, RefractedV)) + 1e-5);
-			float3 RefractedH = normalize(RefractedV + RefractedL);
-			NdotH = saturate(dot(N, RefractedH));
-			VdotH = saturate(dot(RefractedV, RefractedH));
-			VdotL = dot(RefractedV, RefractedL);
-		}
 
 		light.LightColor *= ApproximateDirectOcculusion(skin.AO, NdotL);
 
@@ -202,13 +191,9 @@ namespace Skin
 		SkinSurfaceProperties skin,
 		float3 N, float3 V, float3 VN, float3 WetN)
 	{
+		N = skin.Wetness > 0 ? WetN : N;
+
 		float NdotV = saturate(dot(N, V));
-		if (skin.Wetness > 0.0) {
-			float eta = 1.33;
-			eta = lerp(eta, 1.0, saturate(dot(WetN, N)));
-			float3 RefractedV = -refract(-V, WetN, 1.0 / eta);
-			NdotV = saturate(dot(N, RefractedV));
-		}
 
 		float averageRoughness = lerp(skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity);
 
@@ -342,7 +327,7 @@ namespace Skin
 		{
 			sweat_intensity = sweat_intensity * saturate(0.99f - (strength - 0.8f) * 5.0f) + (strength - 0.8f) * 5.0f;
 		}
-		return saturate(sweat_intensity);
+		return smoothstep(0.0, 0.8, sweat_intensity);
 	}
 #endif
 

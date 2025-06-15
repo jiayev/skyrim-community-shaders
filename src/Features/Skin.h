@@ -82,15 +82,21 @@ struct Skin : Feature
 	float playerStamina = 0.0f;
 	float playerStaminaMax = 0.0f;
 
+	struct ExtraTextures
+	{
+		RE::NiSourceTexturePtr rfaosTexture;
+		RE::NiSourceTexturePtr wetnessTexture;
+	};
+
 	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;
-	std::unordered_map<uint32_t, RE::NiSourceTexturePtr[2]> skinExtraTextures;
+	std::unordered_map<uint32_t, ExtraTextures> skinExtraTextures;
 	std::unordered_map<void*, float4> actorWetnessMap;
 
 	SkinData GetCommonBufferData();
 	float GetWaterHeight(const RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_pos);
 	float4 GetWetness(RE::BSGeometry* geometry);
 
-	void SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet);
+	void SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet, uint32_t i_hashKey);
 	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
 	void SetShaderResouces(ID3D11DeviceContext* a_context);
