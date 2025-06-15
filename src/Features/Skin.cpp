@@ -418,7 +418,7 @@ struct SkinExtendedRendererState
 	}
 } skinExtendedRendererState;
 
-void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet)
+void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet, uint32_t i_hashKey)
 {
 	if (!inTextureSet || material->normalTexture == nullptr) {
 		logger::error("[Advanced Skin] SetupExtraTexture : Texture set is null for material: {}", static_cast<int>(material->GetFeature()));
@@ -427,7 +427,7 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 
 	uint32_t hashKey = 0;
 	hashKey = material->hashKey;
-	if (hashKey == 0) {
+	if (hashKey == 0 || hashKey != i_hashKey) {
 		logger::error("[Advanced Skin] SetupExtraTexture : Invalid hash key for material: {}", static_cast<int>(material->GetFeature()));
 		return;
 	}
@@ -517,14 +517,15 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 	logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture path: {} for {}", extraTexturePath, foundPath);
 
 	auto& workingExtraPtr = skinExtraTextures.try_emplace(hashKey).first->second;
-	workingExtraPtr[0] = stateData.defaultTextureWhite;
-	workingExtraPtr[1] = stateData.defaultTextureWhite;
+	workingExtraPtr.rfaosTexture = stateData.defaultTextureWhite;
+	workingExtraPtr.wetnessTexture = stateData.defaultTextureWhite;
 
 	inTextureSet->SetTexturePath(RE::BSTextureSet::Texture::kEnvironment, extraTexturePath);
 	inTextureSet->SetTexturePath(RE::BSTextureSet::Texture::kMultilayer, wetnessTexturePath);
-	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kEnvironment, workingExtraPtr[0]);
-	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kMultilayer, workingExtraPtr[1]);
-	// logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture set with hash key: {}", hashKey);
+	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kEnvironment, workingExtraPtr.rfaosTexture);
+	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kMultilayer, workingExtraPtr.wetnessTexture);
+
+	logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture set with hash key: {}", hashKey);
 }
 
 void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material)
@@ -546,17 +547,18 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 
 	if (!skinExtraTextures.contains(hashKey)) {
 		// logger::debug("[Advanced Skin] BSLightingShader_SetupMaterial : Setting up extra texture for material: {}", static_cast<int>(materialFeature));
-		GetSingleton()->SetupExtraTexture(material, materialTextureSet);
+		GetSingleton()->SetupExtraTexture(material, materialTextureSet, hashKey);
 	}
 
 	auto graphicsState = globals::game::graphicsState;
 	auto workingExtraPtr = skinExtraTextures[hashKey];
 
-	const bool hasExtraTexture = workingExtraPtr[0] != nullptr && workingExtraPtr[1] != nullptr;
-	const bool isExtraTextureLoaded = workingExtraPtr[0] != graphicsState->GetRuntimeData().defaultTextureBlack;
+	const bool hasExtraTexture = workingExtraPtr.rfaosTexture != nullptr && workingExtraPtr.wetnessTexture != nullptr;
+	const bool isExtraTextureLoaded = workingExtraPtr.rfaosTexture != graphicsState->GetRuntimeData().defaultTextureBlack;
 	if (hasExtraTexture && isExtraTextureLoaded) {
-		skinExtendedRendererState.SetExtraSkinPSTexture(workingExtraPtr[0]->rendererTexture, workingExtraPtr[1]->rendererTexture);
+		skinExtendedRendererState.SetExtraSkinPSTexture(workingExtraPtr.rfaosTexture->rendererTexture, workingExtraPtr.wetnessTexture->rendererTexture);
 	} else {
+		logger::debug("[Advanced Skin] BSLightingShader_SetupMaterial : Using default textures for material: {}", static_cast<int>(materialFeature));
 		skinExtendedRendererState.SetExtraSkinPSTexture(graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture, graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture);
 	}
 }
