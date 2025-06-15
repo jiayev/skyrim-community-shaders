@@ -327,7 +327,7 @@ namespace Skin
 		{
 			sweat_intensity = sweat_intensity * saturate(0.99f - (strength - 0.8f) * 5.0f) + (strength - 0.8f) * 5.0f;
 		}
-		return smoothstep(0.0, 0.8, sweat_intensity);
+		return pow(sweat_intensity, 0.1f);
 	}
 #endif
 
