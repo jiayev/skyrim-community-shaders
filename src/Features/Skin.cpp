@@ -131,23 +131,6 @@ void Skin::DrawSettings()
 	ImGui::SliderFloat("Wetness Perlin Noise Persistence", &settings.WetParams.z, 0.0f, 20.0f, "%.2f");
 	ImGui::SliderFloat("Wetness Normal Scale", &settings.WetParams.w, 0.0f, 20.0f, "%.1f");
 
-	if (actorWetnessMap.contains(0x14)) {
-		ImGui::Text("Player Wetness: %.2f", std::min(actorWetnessMap[0x14].x + actorWetnessMap[0x14].y, 2.0f));
-	} else {
-		ImGui::Text("Player Wetness: 0.00");
-	}
-
-	ImGui::Text("Player Stamina: %.2f / %.2f", playerStamina, playerStaminaMax);
-
-	if (const auto consoleRef = RE::Console::GetSelectedRef()) {
-		uint32_t selectedid = consoleRef->formID;
-		if (actorWetnessMap.contains(selectedid)) {
-			ImGui::Text("Console Selected Wetness: %.2f", std::min(actorWetnessMap[selectedid].x + actorWetnessMap[selectedid].y, 2.0f));
-		} else {
-			ImGui::Text("Console Selected Wetness: 0.00");
-		}
-	}
-
 	ImGui::Spacing();
 
 	ImGui::Checkbox("Enable Skin Detail", &settings.EnableSkinDetail);
@@ -348,7 +331,7 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 	if (auto userData = geometry->GetUserData())
 		if (auto actor = userData->As<RE::Character>())
 		{
-			uint32_t refid = actor->AsReference()->formID;
+			// uint32_t refid = actor->AsReference()->formID;
 			const float positionZ = actor->GetPositionZ();
 			wetness.z = positionZ;
 			const float stamina = actor->AsActorValueOwner()->GetActorValue(RE::ActorValue::kStamina);
@@ -356,10 +339,6 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 			const float temporaryStamina = actor->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary, RE::ActorValue::kStamina);
 			const float maxStamina = permanentStamina + temporaryStamina;
 			const float staminaPercentage = stamina / maxStamina;
-			if (refid == 0x14) { // Player
-				playerStamina = stamina;
-				playerStaminaMax = maxStamina;
-			}
 			wetness.x = (staminaPercentage >= settings.StartSweat) ? 0.0f : 
                 		(staminaPercentage <= settings.FullSweat) ? 1.0f : 
                 		(settings.StartSweat - staminaPercentage) / (settings.StartSweat - settings.FullSweat);
@@ -372,41 +351,43 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 				wetness.w = 0.0f;
 			}
 
-			if(actorWetnessMap.contains(refid)) {
-				if (actorWetnessMap[refid].x < wetness.x) {
-					actorWetnessMap[refid].x = wetness.x;
-				} else if (actorWetnessMap[refid].x > wetness.x) {
-					actorWetnessMap[refid].x -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
-					actorWetnessMap[refid].x = std::max(actorWetnessMap[refid].x, 0.0f);
-					wetness.x = actorWetnessMap[refid].x;
+			void* geometryPtr = static_cast<void*>(geometry);
+
+			if(actorWetnessMap.contains(geometryPtr)) {
+				if (actorWetnessMap[geometryPtr].x < wetness.x) {
+					actorWetnessMap[geometryPtr].x = wetness.x;
+				} else if (actorWetnessMap[geometryPtr].x > wetness.x) {
+					actorWetnessMap[geometryPtr].x -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
+					actorWetnessMap[geometryPtr].x = std::max(actorWetnessMap[geometryPtr].x, 0.0f);
+					wetness.x = actorWetnessMap[geometryPtr].x;
 				}
 
-				if (actorWetnessMap[refid].y < wetness.y) {
-					actorWetnessMap[refid].y = wetness.y;
-					if (actorWetnessMap[refid].w < wetness.w) {
-						actorWetnessMap[refid].w = wetness.w;
+				if (actorWetnessMap[geometryPtr].y < wetness.y) {
+					actorWetnessMap[geometryPtr].y = wetness.y;
+					if (actorWetnessMap[geometryPtr].w < wetness.w) {
+						actorWetnessMap[geometryPtr].w = wetness.w;
 					} else {
-						wetness.w = actorWetnessMap[refid].w;
+						wetness.w = actorWetnessMap[geometryPtr].w;
 					}
-				} else if (actorWetnessMap[refid].y > wetness.y) {
-					actorWetnessMap[refid].y -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
-					actorWetnessMap[refid].y = std::max(actorWetnessMap[refid].y, 0.0f);
-					wetness.y = actorWetnessMap[refid].y;
+				} else if (actorWetnessMap[geometryPtr].y > wetness.y) {
+					actorWetnessMap[geometryPtr].y -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
+					actorWetnessMap[geometryPtr].y = std::max(actorWetnessMap[geometryPtr].y, 0.0f);
+					wetness.y = actorWetnessMap[geometryPtr].y;
 					if (wetness.y == 0.0f) {
 						wetness.w = 0.0f;
-						actorWetnessMap[refid].w = 0.0f;
-					} else if (actorWetnessMap[refid].w < wetness.w) {
-						actorWetnessMap[refid].w = wetness.w;
+						actorWetnessMap[geometryPtr].w = 0.0f;
+					} else if (actorWetnessMap[geometryPtr].w < wetness.w) {
+						actorWetnessMap[geometryPtr].w = wetness.w;
 					} else {
-						wetness.w = actorWetnessMap[refid].w;
+						wetness.w = actorWetnessMap[geometryPtr].w;
 					}
-				} else if (actorWetnessMap[refid].w < wetness.w) {
-					actorWetnessMap[refid].w = wetness.w;
+				} else if (actorWetnessMap[geometryPtr].w < wetness.w) {
+					actorWetnessMap[geometryPtr].w = wetness.w;
 				} else {
-					wetness.w = actorWetnessMap[refid].w;
+					wetness.w = actorWetnessMap[geometryPtr].w;
 				}
 			} else {
-				actorWetnessMap.emplace(refid, wetness);
+				actorWetnessMap.emplace(geometryPtr, wetness);
 			}
 		}
 	return wetness;
@@ -437,7 +418,7 @@ struct SkinExtendedRendererState
 	}
 } skinExtendedRendererState;
 
-void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet)
+void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet, uint32_t i_hashKey)
 {
 	if (!inTextureSet || material->normalTexture == nullptr) {
 		logger::error("[Advanced Skin] SetupExtraTexture : Texture set is null for material: {}", static_cast<int>(material->GetFeature()));
@@ -446,7 +427,7 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 
 	uint32_t hashKey = 0;
 	hashKey = material->hashKey;
-	if (hashKey == 0) {
+	if (hashKey == 0 || hashKey != i_hashKey) {
 		logger::error("[Advanced Skin] SetupExtraTexture : Invalid hash key for material: {}", static_cast<int>(material->GetFeature()));
 		return;
 	}
@@ -536,14 +517,15 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 	logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture path: {} for {}", extraTexturePath, foundPath);
 
 	auto& workingExtraPtr = skinExtraTextures.try_emplace(hashKey).first->second;
-	workingExtraPtr[0] = stateData.defaultTextureWhite;
-	workingExtraPtr[1] = stateData.defaultTextureWhite;
+	workingExtraPtr.rfaosTexture = stateData.defaultTextureWhite;
+	workingExtraPtr.wetnessTexture = stateData.defaultTextureWhite;
 
 	inTextureSet->SetTexturePath(RE::BSTextureSet::Texture::kEnvironment, extraTexturePath);
 	inTextureSet->SetTexturePath(RE::BSTextureSet::Texture::kMultilayer, wetnessTexturePath);
-	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kEnvironment, workingExtraPtr[0]);
-	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kMultilayer, workingExtraPtr[1]);
-	// logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture set with hash key: {}", hashKey);
+	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kEnvironment, workingExtraPtr.rfaosTexture);
+	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kMultilayer, workingExtraPtr.wetnessTexture);
+
+	logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture set with hash key: {}", hashKey);
 }
 
 void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material)
@@ -565,17 +547,18 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 
 	if (!skinExtraTextures.contains(hashKey)) {
 		// logger::debug("[Advanced Skin] BSLightingShader_SetupMaterial : Setting up extra texture for material: {}", static_cast<int>(materialFeature));
-		GetSingleton()->SetupExtraTexture(material, materialTextureSet);
+		GetSingleton()->SetupExtraTexture(material, materialTextureSet, hashKey);
 	}
 
 	auto graphicsState = globals::game::graphicsState;
 	auto workingExtraPtr = skinExtraTextures[hashKey];
 
-	const bool hasExtraTexture = workingExtraPtr[0] != nullptr && workingExtraPtr[1] != nullptr;
-	const bool isExtraTextureLoaded = workingExtraPtr[0] != graphicsState->GetRuntimeData().defaultTextureBlack;
+	const bool hasExtraTexture = workingExtraPtr.rfaosTexture != nullptr && workingExtraPtr.wetnessTexture != nullptr;
+	const bool isExtraTextureLoaded = workingExtraPtr.rfaosTexture != graphicsState->GetRuntimeData().defaultTextureBlack;
 	if (hasExtraTexture && isExtraTextureLoaded) {
-		skinExtendedRendererState.SetExtraSkinPSTexture(workingExtraPtr[0]->rendererTexture, workingExtraPtr[1]->rendererTexture);
+		skinExtendedRendererState.SetExtraSkinPSTexture(workingExtraPtr.rfaosTexture->rendererTexture, workingExtraPtr.wetnessTexture->rendererTexture);
 	} else {
+		logger::debug("[Advanced Skin] BSLightingShader_SetupMaterial : Using default textures for material: {}", static_cast<int>(materialFeature));
 		skinExtendedRendererState.SetExtraSkinPSTexture(graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture, graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture);
 	}
 }
@@ -585,23 +568,20 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// auto deferred = globals::deferred;
 	auto context = globals::d3d::context;
 
-	// if (deferred->deferredPass) {
-		// if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kFace, RE::BSShaderProperty::EShaderPropertyFlag::kFaceGenRGBTint, RE::BSShaderProperty::EShaderPropertyFlag::kSkinned, RE::BSShaderProperty::EShaderPropertyFlag::kHairTint)) {
-			auto geometry = a_pass->geometry;
-			float4 wetness = GetWetness(geometry);
-			// wetness = 0.0;
+	if (settings.EnableSkin) {
+		auto geometry = a_pass->geometry;
+		float4 wetness = GetWetness(geometry);
 
-			if (currentWetness != wetness) {
-				currentWetness = wetness;
-				PerGeometryData perGeometryData{};
-				perGeometryData.skinPerGeometry = wetness;
-				PerGeometryCB->Update(perGeometryData);
-			}
+		if (currentWetness != wetness) {
+			currentWetness = wetness;
+			PerGeometryData perGeometryData{};
+			perGeometryData.skinPerGeometry = wetness;
+			PerGeometryCB->Update(perGeometryData);
+		}
 
-			ID3D11Buffer* buffer = { PerGeometryCB->CB() };
-			context->PSSetConstantBuffers(7, 1, &buffer);
-		// }
-	// }
+		ID3D11Buffer* buffer = { PerGeometryCB->CB() };
+		context->PSSetConstantBuffers(7, 1, &buffer);
+	}
 }
 
 void Skin::SetShaderResouces(ID3D11DeviceContext* a_context)

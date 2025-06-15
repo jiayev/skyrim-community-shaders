@@ -609,6 +609,7 @@ Texture2D<float4> TexShadowMaskSampler : register(t14);
 #	if defined(SKIN) && defined(CS_SKIN)
 Texture2D<float4> TexSkinExtraSampler : register(t71);
 Texture2D<float4> TexSkinWetnessSampler : register(t74);
+Texture2D<float4> TexSkinWetnessNormalSampler : register(t75);
 #	endif
 
 cbuffer PerTechnique : register(b0)
@@ -1727,8 +1728,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float4 skinsk = TexRimSoftLightWorldMapOverlaySampler.SampleBias(SampRimSoftLightWorldMapOverlaySampler, uv, SharedData::MipBias);
 	float4 skinExtra = TexSkinExtraSampler.SampleBias(SampColorSampler, uv, SharedData::MipBias);
 	float4 skinWetnessSample = TexSkinWetnessSampler.SampleBias(SampColorSampler, uv, SharedData::MipBias);
-	const bool hasSkinExtra = (skinExtra.x > 0.0 || skinExtra.y > 0.0 || skinExtra.z > 0.0 || skinExtra.w > 0.0) && !(skinExtra.x == skinExtra.y && skinExtra.z == 1.0 && skinExtra.w == 1.0);
-	const bool hasSkinWetness = (skinWetnessSample.x > 0.0 || skinWetnessSample.y > 0.0 || skinWetnessSample.z > 0.0 || skinWetnessSample.w > 0.0) && !(skinWetnessSample.x == skinWetnessSample.y && skinWetnessSample.z == 1.0 && skinWetnessSample.w == 1.0);
+	uint2 skinExtraDimensions;
+	TexSkinExtraSampler.GetDimensions(skinExtraDimensions.x, skinExtraDimensions.y);
+	uint2 wetnessDimensions;
+	TexSkinWetnessSampler.GetDimensions(wetnessDimensions.x, wetnessDimensions.y);
+	const bool hasSkinExtra = skinExtraDimensions.x > 32 && skinExtraDimensions.y > 32;
+	const bool hasSkinWetness = wetnessDimensions.x > 32 && wetnessDimensions.y > 32;
+	float4 skinWetnessNormal = float4(0.f, 0.f, 0.f, 1.f);
 
 	if (hasSkinExtra) {
 		skinRoughness = skinExtra.x;
@@ -1740,7 +1746,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		skinRoughnessSet = false;
 	}
 	if (hasSkinWetness) {
-		skinWetMask = skinWetnessSample.x;
+		if ((skinWetnessSample.y == 0 && skinWetnessSample.z == 0) || (skinWetnessSample.x == skinWetnessSample.y && skinWetnessSample.y == skinWetnessSample.z && skinWetnessSample.w >= 0.99f)) {
+			skinWetMask = skinWetnessSample.x;
+			skinWetnessNormal.xyz = Skin::CalculateNormalFromHeight(skinWetMask, SharedData::skinData.wetParams.w * 0.0001, uv) * 0.5 + 0.5;
+		} else {
+			skinWetnessNormal.xyz = skinWetnessSample.xyz;
+			skinWetMask = skinWetnessSample.w;
+		}
 	} else {
 		skinWetMask = 1.0;
 	}
@@ -1996,13 +2008,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (skinWetness > 0.0f) {
 			float3 wetNormal = Skin::CalculateNormalFromHeight(skinWetness, SharedData::skinData.wetParams.w * 0.0005, uv);
 			if (hasSkinWetness) {
-				float3 wetMaskNormal = Skin::CalculateNormalFromHeight(skinWetMask, SharedData::skinData.wetParams.w * 0.00005, uv);
+				// float3 wetMaskNormal = Skin::CalculateNormalFromHeight(skinWetMask, SharedData::skinData.wetParams.w * 0.00005, uv);
+				float3 wetMaskNormal = (skinWetnessNormal.xyz * 2.0 - 1.0);
 				wetNormal = Skin::ReorientNormal(wetMaskNormal, wetNormal);
 			}
 			if (SharedData::skinData.skinParams2.y > 1.0f) {
-				wetNormal = lerp(wetNormal, float3(0, 0, 1), saturate(SharedData::skinData.skinParams2.y - 1.0f));
+				wetNormal = lerp(wetNormal, tangentNormal, saturate(SharedData::skinData.skinParams2.y - 1.0f));
 			}
-			float3 combinedWetNormal = normalize(float3(Skin::ReorientNormal(wetNormal, tangentNormal).xy, tangentNormal.z));
+			float3 combinedWetNormal = skinWetMask ? wetNormal : combinedTangentNormal;
 			wetModelNormal = normalize(mul(tbn, combinedWetNormal));
 			wetModelNormal = lerp(modelNormal.xyz, wetModelNormal, skinWetness > 0 ? 1 : 0);
 		}
@@ -2374,7 +2387,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	rainWetness = SharedData::wetnessEffectsSettings.SkinWetness * SharedData::wetnessEffectsSettings.Wetness * 0.8f;
 #		endif
 
-#		if defined(CS_SKIN)
+#		if defined(CS_SKIN) && !defined(SKIN)
 	if (SharedData::skinData.skinParams.w > 0.0f) {
 		float2 dynamicWetness = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z, modelNormal.xyz);
 #			if defined(TRUE_PBR)
