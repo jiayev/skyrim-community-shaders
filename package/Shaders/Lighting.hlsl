@@ -1722,7 +1722,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	const bool hasSkinWetness = wetnessDimensions.x > 32 && wetnessDimensions.y > 32;
 	float4 skinWetnessNormal = float4(0.f, 0.f, 0.f, 1.f);
 
-	if (hasSkinExtra) {
+	if (hasSkinExtra && SharedData::skinData.skinParams.x > 0.0f) {
 		skinRoughness = skinExtra.x;
 		skinFuzzMask = skinExtra.y;
 		skinAO = skinExtra.z;
@@ -1731,7 +1731,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	} else {
 		skinRoughnessSet = false;
 	}
-	if (hasSkinWetness) {
+	if (hasSkinWetness && SharedData::skinData.skinParams.w > 0.0f) {
 		if ((skinWetnessSample.y == 0 && skinWetnessSample.z == 0) || (skinWetnessSample.x == skinWetnessSample.y && skinWetnessSample.y == skinWetnessSample.z && skinWetnessSample.w >= 0.99f)) {
 			skinWetMask = skinWetnessSample.x;
 			skinWetnessNormal.xyz = Skin::CalculateNormalFromHeight(skinWetMask, SharedData::skinData.wetParams.w * 0.0001, uv) * 0.5 + 0.5;
@@ -1955,7 +1955,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 	float2 dynamicWet = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z, modelNormal.xyz);
 	float skinWetness = Skin::PerlinNoise(wetUV, SharedData::skinData.wetParams.x, SharedData::skinData.wetParams.y, SharedData::skinData.wetParams.z, clamp(dynamicWet.x + dynamicWet.y + SharedData::skinData.skinParams2.y, 0.f, 2.f) * (hasSkinWetness ? 1.0 : 0.5));
-	if (SharedData::skinData.skinDetailParams.w > 0.0f || SharedData::skinData.skinParams2.y > 0.0f) {
+	if ((SharedData::skinData.skinDetailParams.w > 0.0f || skinWetness > 0.0f) && SharedData::skinData.skinParams.w > 0.0f) {
 #		if defined(FACEGEN)
 		float2 detailUV = input.TexCoord0.xy * SharedData::skinData.skinDetailParams.x;
 #		else
