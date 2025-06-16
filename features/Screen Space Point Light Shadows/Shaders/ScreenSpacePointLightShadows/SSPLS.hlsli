@@ -86,11 +86,6 @@ namespace ScreenSpacePointLightShadows
 		if (steps == 0)
 			return 1.0;
 
-		float4 lightDirectionSS = mul(FrameBuffer::CameraProj[a_eyeIndex], float4(lightDirectionVS, 0.0));
-		lightDirectionSS.xy /= lightDirectionSS.w;
-		float2 lightDirectionUV = lightDirectionSS.xy * float2(0.5, -0.5);
-		steps = max(min(length(lightDirectionUV), 1) * steps, 1);
-
 		const float rayLength = SharedData::ssplsSettings.RayLength;
 		if (rayLength <= 0.0)
 			return 1.0;
@@ -116,11 +111,10 @@ namespace ScreenSpacePointLightShadows
 #else
 		const float2 stepScale = float2(0.75, 1.25);
 		const float scaleMult = 1.0;
-		const float shadowCasterToleranceScale = 0.5 * SharedData::ssplsSettings.CompareToleranceScale;
+		const float shadowCasterToleranceScale = 0.4;
 #endif
 
-		float compareToleranceScale = isShadowCaster ? shadowCasterToleranceScale : SharedData::ssplsSettings.CompareToleranceScale;
-		compareToleranceScale *= clamp(length(lightDirectionUV), 0.1, 1.0);
+		const float compareToleranceScale = isShadowCaster ? shadowCasterToleranceScale : SharedData::ssplsSettings.CompareToleranceScale;
 
 		// Accumulate samples
 		float shadow = 1.0;
