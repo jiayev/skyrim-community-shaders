@@ -2320,9 +2320,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 		float dynamicWetnessValue = clamp(dynamicWetness.x + dynamicWetness.y, 0.f, 2.f);
 #			if defined(HAIR)
-		dynamicWetnessValue = min(SharedData::skinData.skinParams2.y + dynamicWetnessValue, 1.0f);
+		dynamicWetnessValue = min(SharedData::skinData.skinParams2.y + dynamicWetnessValue, 2.0f);
 #			endif
-		rainWetness += dynamicWetnessValue;
+		rainWetness += min(dynamicWetnessValue, 1.f);
 		puddleWetness += dynamicWetnessValue;
 	}
 #		endif
