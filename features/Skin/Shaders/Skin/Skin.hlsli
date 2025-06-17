@@ -128,15 +128,13 @@ namespace Skin
 		out float3 specular,
 		PBR::LightProperties light,
 		SkinSurfaceProperties skin,
-		float3 N, float3 V, float3 L, float3 WetN)
+		float3 N, float3 V, float3 L)
 	{
 		diffuse = 0;
 		transmission = 0;
 		specular = 0;
 
 		light.LightColor *= Math::PI;
-
-		N = skin.Wetness > 0 ? WetN : N;
 
 		float3 H = normalize(V + L);
 		const float oNdotL = dot(N, L);
@@ -171,12 +169,9 @@ namespace Skin
 		}
 
 		if (skin.Wetness > 0.0) {
-			const float WNdotL = saturate(dot(WetN, L));
-			const float WNdotV = saturate(abs(dot(WetN, V)) + 1e-5);
-			const float WNdotH = saturate(dot(WetN, H));
 			float3 wetnessF;
-			float3 wetSpecular = PBR::GetSpecularDirectLightMultiplierMicrofacet(WATER_ROUGHNESS, WATER_F0, WNdotL, WNdotV, WNdotH, oVdotH, wetnessF) * light.LightColor * WNdotL;
-			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(WATER_ROUGHNESS, WNdotV);
+			float3 wetSpecular = PBR::GetSpecularDirectLightMultiplierMicrofacet(WATER_ROUGHNESS, WATER_F0, NdotL, NdotV, NdotH, oVdotH, wetnessF) * light.LightColor * NdotL;
+			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(WATER_ROUGHNESS, NdotV);
 			wetSpecular *= 1 + WATER_F0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
 			const float waterTransmission = 1 - wetnessF.x;
 			specular *= waterTransmission;
@@ -189,10 +184,8 @@ namespace Skin
 		out float3 diffuseWeight,
 		out float3 specularWeight,
 		SkinSurfaceProperties skin,
-		float3 N, float3 V, float3 VN, float3 WetN)
+		float3 N, float3 V, float3 VN)
 	{
-		N = skin.Wetness > 0 ? WetN : N;
-
 		float NdotV = saturate(dot(N, V));
 
 		float averageRoughness = lerp(skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity);
@@ -201,8 +194,7 @@ namespace Skin
 		specularWeight = skin.F0 * specularBRDF.x + specularBRDF.y;
 
 		if (skin.Wetness > 0.0) {
-			const float WNdotV = saturate(abs(dot(WetN, V)) + 1e-5);
-			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(WATER_ROUGHNESS, WNdotV);
+			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(WATER_ROUGHNESS, NdotV);
 			float3 wetSpecular = WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y;
 			wetSpecular *= 1 + WATER_F0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
 			const float waterTransmission = 1 - (WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y);

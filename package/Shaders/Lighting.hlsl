@@ -2018,6 +2018,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			float3 combinedWetNormal = skinWetMask ? wetNormal : combinedTangentNormal;
 			wetModelNormal = normalize(mul(tbn, combinedWetNormal));
 			wetModelNormal = lerp(modelNormal.xyz, wetModelNormal, skinWetness > 0 ? 1 : 0);
+			modelNormal.xyz = wetModelNormal;
 		}
 	}
 #	endif  // CS_SKIN
@@ -2574,7 +2575,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (SharedData::skinData.skinParams.w > 0) {
 		PBR::LightProperties lightProperties = PBR::InitLightProperties(dirLightColor, dirLightColorMultiplier * dirDetailShadow, parallaxShadow);
 		float3 dirDiffuseColor, dirTransmissionColor, dirSpecularColor;
-		Skin::SkinDirectLightInput(dirDiffuseColor, dirTransmissionColor, dirSpecularColor, lightProperties, skinSurfaceProperties, modelNormal.xyz, viewDirection, DirLightDirection, wetModelNormal);
+		Skin::SkinDirectLightInput(dirDiffuseColor, dirTransmissionColor, dirSpecularColor, lightProperties, skinSurfaceProperties, modelNormal.xyz, viewDirection, DirLightDirection);
 		lightsDiffuseColor += dirDiffuseColor;
 		transmissionColor += dirTransmissionColor;
 		float3 sssTransmittance = Skin::SSSSTransmittance(
@@ -2701,7 +2702,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (SharedData::skinData.skinParams.w > 0) {
 			float3 pointDiffuseColor, pointTransmissionColor, pointSpecularColor;
 			PBR::LightProperties lightProperties = PBR::InitLightProperties(lightColor, lightShadow, 1);
-			Skin::SkinDirectLightInput(pointDiffuseColor, pointTransmissionColor, pointSpecularColor, lightProperties, skinSurfaceProperties, modelNormal.xyz, viewDirection, normalizedLightDirection, wetModelNormal);
+			Skin::SkinDirectLightInput(pointDiffuseColor, pointTransmissionColor, pointSpecularColor, lightProperties, skinSurfaceProperties, modelNormal.xyz, viewDirection, normalizedLightDirection);
 			lightsDiffuseColor += pointDiffuseColor;
 			transmissionColor += pointTransmissionColor;
 			float3 sssTransmittance = Skin::SSSSTransmittance(
@@ -2914,7 +2915,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (SharedData::skinData.skinParams.w > 0) {
 			PBR::LightProperties lightProperties = PBR::InitLightProperties(lightColor, lightShadow * contactShadow, parallaxShadow);
 			float3 pointDiffuseColor, pointTransmissionColor, pointSpecularColor;
-			Skin::SkinDirectLightInput(pointDiffuseColor, pointTransmissionColor, pointSpecularColor, lightProperties, skinSurfaceProperties, worldSpaceNormal.xyz, worldSpaceViewDirection, normalizedLightDirection, wetModelNormal);
+			Skin::SkinDirectLightInput(pointDiffuseColor, pointTransmissionColor, pointSpecularColor, lightProperties, skinSurfaceProperties, worldSpaceNormal.xyz, worldSpaceViewDirection, normalizedLightDirection);
 			lightsDiffuseColor += pointDiffuseColor;
 			transmissionColor += pointTransmissionColor;
 			float3 sssTransmittance = Skin::SSSSTransmittance(
@@ -3360,7 +3361,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 directLightsDiffuseInput = diffuseColor * baseColor.xyz;
 		color.xyz += directLightsDiffuseInput;
 
-		Skin::SkinIndirectLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, skinSurfaceProperties, worldSpaceNormal.xyz, worldSpaceViewDirection, worldSpaceVertexNormal, wetModelNormal);
+		Skin::SkinIndirectLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, skinSurfaceProperties, worldSpaceNormal.xyz, worldSpaceViewDirection, worldSpaceVertexNormal);
 
 #		if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1.0)
