@@ -2234,7 +2234,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 transmissionColor = 0;
 
 	float pbrWeight = 1;
-	float pbrGlossiness = 1 - lerp(lerp(skinSurfaceProperties.RoughnessPrimary, skinSurfaceProperties.RoughnessSecondary, skinSurfaceProperties.SecondarySpecIntensity), 0.1, skinSurfaceProperties.Wetness);
+	float pbrGlossiness = 1 - skinSurfaceProperties.RoughnessPrimary;
 #	endif  // CS_SKIN
 
 	float porosity = 1.0;
@@ -3594,6 +3594,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Masks = float4(0, 0, wetnessNormalAmount, psout.Diffuse.w);
 #		else
 	psout.Masks = float4(0, 0, 0, psout.Diffuse.w);
+#		endif
+
+#		if defined(CS_SKIN) && defined(SKIN)
+	if (SharedData::skinData.skinParams.w > 0) {
+		psout.Masks.y = 0.5f;
+	}
 #		endif
 #	endif
 

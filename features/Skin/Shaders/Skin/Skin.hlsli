@@ -187,23 +187,32 @@ namespace Skin
 		float3 N, float3 V, float3 VN)
 	{
 		float NdotV = saturate(dot(N, V));
+		specularWeight = 0;
 
 		float averageRoughness = lerp(skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity);
 
-		float2 specularBRDF = PBR::GetEnvBRDFApproxLazarov(averageRoughness, NdotV);
-		specularWeight = skin.F0 * specularBRDF.x + specularBRDF.y;
+		float2 specularBRDFPrimary = PBR::GetEnvBRDFApproxLazarov(skin.RoughnessPrimary, NdotV);
+		float2 specularBRDFSecondary = PBR::GetEnvBRDFApproxLazarov(skin.RoughnessSecondary, NdotV);
+		float specularBRDFMix = skin.SecondarySpecIntensity;
+
+		specularWeight.x = (skin.F0 * specularBRDFPrimary.x + specularBRDFPrimary.y) * (1 - specularBRDFMix);
+		specularWeight.y = (skin.F0 * specularBRDFSecondary.x + specularBRDFSecondary.y) * specularBRDFMix;
+
+		float waterTransmission = 1.f;
+		float3 wetSpecular = 0.f;
 
 		if (skin.Wetness > 0.0) {
 			float2 wetSpecularBRDF = PBR::GetEnvBRDFApproxLazarov(WATER_ROUGHNESS, NdotV);
-			float3 wetSpecular = WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y;
+			wetSpecular += WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y;
 			wetSpecular *= 1 + WATER_F0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
-			const float waterTransmission = 1 - (WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y);
-			specularWeight = specularWeight * waterTransmission + wetSpecular;
+			waterTransmission = 1 - (WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y);
 		}
 
-		diffuseWeight = skin.Albedo * (1.0 - specularWeight);
-
-		specularWeight *= 1 + skin.F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
+		diffuseWeight = skin.Albedo * (1.0 - specularWeight.x - specularWeight.y) * waterTransmission;
+		specularWeight *= waterTransmission;
+		specularWeight.x *= 1 + skin.F0 * (1 / (specularBRDFPrimary.x + specularBRDFPrimary.y) - 1);
+		specularWeight.y *= 1 + skin.F0 * (1 / (specularBRDFSecondary.x + specularBRDFSecondary.y) - 1);
+		specularWeight.z += wetSpecular.x;
 
 		float3 R = reflect(-V, N);
 		float horizon = min(1.0 + dot(R, VN), 1.0);
