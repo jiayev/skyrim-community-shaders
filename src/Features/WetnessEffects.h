@@ -50,6 +50,8 @@ public:
 		uint EnableRaindropFx = true;
 		uint EnableSplashes = true;
 		uint EnableRipples = true;
+		uint EnableVanillaRipples = false;
+		float RaindropFxRange = 1000.f;
 		float RaindropGridSize = 4.f;
 		float RaindropInterval = .5f;
 		float RaindropChance = .3f;
@@ -60,7 +62,7 @@ public:
 		float RippleStrength = 1.f;
 		float RippleRadius = 1.f;
 		float RippleBreadth = .5f;
-		float RippleLifetime = .15f;
+		float RippleLifetime = .5f;
 	};
 
 	struct alignas(16) PerFrame
@@ -71,7 +73,7 @@ public:
 		float Wetness;
 		float PuddleWetness;
 		Settings settings;
-		uint pad0[3];
+		uint pad0;
 	};
 
 	Settings settings;
@@ -79,6 +81,7 @@ public:
 	PerFrame GetCommonBufferData();
 
 	virtual void Prepass() override;
+	virtual void PostPostLoad() override;
 
 	virtual void DrawSettings() override;
 
@@ -88,4 +91,8 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual bool SupportsVR() override { return true; };
+	virtual void DrawUnloadedUI() override;
+
+private:
+	bool splashesOfStormsLoaded = false;
 };
