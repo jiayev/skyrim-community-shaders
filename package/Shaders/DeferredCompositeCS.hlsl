@@ -128,6 +128,17 @@ Texture2D<float4> SSRTexture : register(t17);
 
 	float3 reflectance = ReflectanceTexture[dispatchID.xy];
 
+	float isAdvancedSkin = (MasksTexture[dispatchID.xy].y < 1 && MasksTexture[dispatchID.xy].y > 0) && SharedData::skinData.skinParams.w > 0;
+	float roughnessSecondary = 0;
+	float reflectanceSecondary = 0;
+	float reflectanceWet = 0;
+	if (isAdvancedSkin) {
+		reflectanceSecondary = reflectance.y;
+		reflectanceWet = reflectance.z;
+		reflectance = reflectance.xxx;
+		roughnessSecondary = (1.0 - glossiness) * 0.55;
+	}
+
 	if (reflectance.x > 0.0 || reflectance.y > 0.0 || reflectance.z > 0.0) {
 		float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
 
@@ -152,10 +163,34 @@ Texture2D<float4> SSRTexture : register(t17);
 
 		float3 finalIrradiance = 0;
 
+		// Advanced Skin
+		sh2 specularLobeSecondary = 0;
+		sh2 specularLobeWet = 0;
+		float3 finalIrradianceSecondary = 0;
+		float3 finalIrradianceWet = 0;
+		if (isAdvancedSkin) {
+			specularLobeSecondary = SphericalHarmonics::FauxSpecularLobe(normalWS, -V, roughnessSecondary);
+			specularLobeWet = SphericalHarmonics::FauxSpecularLobe(normalWS, -V, 0.0);
+		}
+
 #	if defined(INTERIOR)
 		float3 specularIrradiance = Color::Irradiance(EnvTexture.SampleLevel(LinearSampler, R, level));
 
 		finalIrradiance += specularIrradiance;
+
+		if (isAdvancedSkin) {
+			float3 specularIrradianceSecondary = 0;
+			specularIrradianceSecondary = Color::Irradiance(EnvTexture.SampleLevel(LinearSampler, R, roughnessSecondary * 7.0));
+
+			finalIrradianceSecondary += specularIrradianceSecondary;
+
+			if (reflectanceWet > 0.0) {
+				float3 specularIrradianceWet = 0;
+				specularIrradianceWet = Color::Irradiance(EnvTexture.SampleLevel(LinearSampler, R, 0));
+
+				finalIrradianceWet += specularIrradianceWet;
+			}
+		}
 #	elif defined(SKYLIGHTING)
 #		if defined(VR)
 		float3 positionMS = positionWS.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
@@ -179,10 +214,48 @@ Texture2D<float4> SSRTexture : register(t17);
 			specularIrradianceReflections = Color::Irradiance(EnvReflectionsTexture.SampleLevel(LinearSampler, R, level));
 
 		finalIrradiance = lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
+
+		if (isAdvancedSkin) {
+			float skylightingSpecularSecondary = SphericalHarmonics::FuncProductIntegral(skylighting, specularLobeSecondary);
+			skylightingSpecularSecondary = Skylighting::mixSpecular(SharedData::skylightingSettings, skylightingSpecularSecondary);
+
+			float3 specularIrradianceSecondary = 1;
+
+			if (skylightingSpecularSecondary < 1.0)
+				specularIrradianceSecondary = Color::Irradiance(EnvTexture.SampleLevel(LinearSampler, R, roughnessSecondary * 7.0));
+
+			finalIrradianceSecondary = lerp(specularIrradianceSecondary, specularIrradianceReflections, skylightingSpecularSecondary);
+
+			if (reflectanceWet > 0.0) {
+				float skylightingSpecularWet = SphericalHarmonics::FuncProductIntegral(skylighting, specularLobeWet);
+				skylightingSpecularWet = Skylighting::mixSpecular(SharedData::skylightingSettings, skylightingSpecularWet);
+
+				float3 specularIrradianceWet = 1;
+
+				if (skylightingSpecularWet < 1.0)
+					specularIrradianceWet = Color::Irradiance(EnvTexture.SampleLevel(LinearSampler, R, 0));
+
+				finalIrradianceWet = lerp(specularIrradianceWet, specularIrradianceReflections, skylightingSpecularWet);
+			}
+		}
 #	else
 		float3 specularIrradianceReflections = Color::Irradiance(EnvReflectionsTexture.SampleLevel(LinearSampler, R, level));
 
 		finalIrradiance += specularIrradianceReflections;
+
+		if (isAdvancedSkin) {
+			float3 specularIrradianceSecondary = 0;
+			specularIrradianceSecondary = Color::Irradiance(EnvReflectionsTexture.SampleLevel(LinearSampler, R, roughnessSecondary * 7.0));
+
+			finalIrradianceSecondary += specularIrradianceSecondary;
+
+			if (reflectanceWet > 0.0) {
+				float3 specularIrradianceWet = 0;
+				specularIrradianceWet = Color::Irradiance(EnvReflectionsTexture.SampleLevel(LinearSampler, R, 0));
+
+				finalIrradianceWet += specularIrradianceWet;
+			}
+		}
 #	endif
 
 #	if defined(XeGTAO)
@@ -204,6 +277,17 @@ Texture2D<float4> SSRTexture : register(t17);
 		float3 ssgiIlSpecular;
 		SampleSSGISpecular(dispatchID.xy, specularLobe, ssgiAo, ssgiIlSpecular, normalWS, V);
 
+		float ssgiAoSecondary = 0;
+		float3 ssgiIlSpecularSecondary = 0;
+		float ssgiAoWet = 0;
+		float3 ssgiIlSpecularWet = 0;
+		if (isAdvancedSkin) {
+			SampleSSGISpecular(dispatchID.xy, specularLobeSecondary, ssgiAoSecondary, ssgiIlSpecularSecondary, normalWS, V);
+			if (reflectanceWet > 0.0) {
+				SampleSSGISpecular(dispatchID.xy, specularLobeWet, ssgiAoWet, ssgiIlSpecularWet, normalWS, V);
+			}
+		}
+
 #		if defined(VR)
 		float ssgiAo2;
 		float3 ssgiIlSpecular2;
@@ -211,9 +295,34 @@ Texture2D<float4> SSRTexture : register(t17);
 		float4 ssgiMixed = Stereo::BlendEyeColors(uv1Mono, float4(ssgiIlSpecular, ssgiAo), uv2Mono, float4(ssgiIlSpecular2, ssgiAo2));
 		ssgiAo = ssgiMixed.a;
 		ssgiIlSpecular = ssgiMixed.rgb;
+
+		if (isAdvancedSkin) {
+			float ssgiAoSecondary2;
+			float3 ssgiIlSpecularSecondary2;
+			SampleSSGISpecular(pixCoord2, specularLobeSecondary, ssgiAoSecondary2, ssgiIlSpecularSecondary2, normalWS, V);
+			float4 ssgiMixedSecondary = Stereo::BlendEyeColors(uv1Mono, float4(ssgiIlSpecularSecondary, ssgiAoSecondary), uv2Mono, float4(ssgiIlSpecularSecondary2, ssgiAoSecondary2));
+			ssgiAoSecondary = ssgiMixedSecondary.a;
+			ssgiIlSpecularSecondary = ssgiMixedSecondary.rgb;
+
+			if (reflectanceWet > 0.0) {
+				float ssgiAoWet2;
+				float3 ssgiIlSpecularWet2;
+				SampleSSGISpecular(pixCoord2, specularLobeWet, ssgiAoWet2, ssgiIlSpecularWet2, normalWS, V);
+				float4 ssgiMixedWet = Stereo::BlendEyeColors(uv1Mono, float4(ssgiIlSpecularWet, ssgiAoWet), uv2Mono, float4(ssgiIlSpecularWet2, ssgiAoWet2));
+				ssgiAoWet = ssgiMixedWet.a;
+				ssgiIlSpecularWet = ssgiMixedWet.rgb;
+			}
+		}
 #		endif
 
 		finalIrradiance = (finalIrradiance * ssgiAo) + ssgiIlSpecular;
+
+		if (isAdvancedSkin) {
+			finalIrradianceSecondary = (finalIrradianceSecondary * ssgiAoSecondary) + ssgiIlSpecularSecondary;
+			if (reflectanceWet > 0.0) {
+				finalIrradianceWet = (finalIrradianceWet * ssgiAoWet) + ssgiIlSpecularWet;
+			}
+		}
 #	endif
 
 #	if defined(SSR)
@@ -222,6 +331,13 @@ Texture2D<float4> SSRTexture : register(t17);
 #	endif
 
 		color += reflectance * finalIrradiance;
+
+		if (isAdvancedSkin) {
+			color += reflectanceSecondary * finalIrradianceSecondary;
+			if (reflectanceWet > 0.0) {
+				color += reflectanceWet * finalIrradianceWet;
+			}
+		}
 	}
 
 #endif
@@ -235,13 +351,13 @@ Texture2D<float4> SSRTexture : register(t17);
 			color = xeGTAONormal;
 		else
 			color = normalVS * 0.5 + 0.5;
-		color = Color::GammaToLinear(color);
+		color = Color::Irradiance(color);
 #	elif defined(GTAO_DEBUG_AO)
 		color = xeGTAOWeight;
-		color = Color::GammaToLinear(color);
+		color = Color::Irradiance(color);
 #	elif defined(GTAO_DEBUG_BENT_NORMAL)
 		color = (float3)bentNormal * 0.5 + 0.5;
-		color = Color::GammaToLinear(color);
+		color = Color::Irradiance(color);
 #	endif
 	}
 #endif
