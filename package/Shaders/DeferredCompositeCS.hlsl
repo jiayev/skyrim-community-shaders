@@ -101,12 +101,7 @@ Texture2D<float4> SSRTexture : register(t17);
 
 	float glossiness = normalGlossiness.z;
 
-	float3 color = 0;
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
-		color = Color::GammaToLinear(diffuseColor) + specularColor;
-	} else {
-		color = diffuseColor + specularColor;
-	}
+	float3 color = Color::Irradiance(diffuseColor) + specularColor;
 
 #if defined(XeGTAO)
 	uint xeGTAO = 0;
@@ -158,12 +153,7 @@ Texture2D<float4> SSRTexture : register(t17);
 		float3 finalIrradiance = 0;
 
 #	if defined(INTERIOR)
-		float3 specularIrradiance = 0;
-		if (!SharedData::linearLightingSettings.enableLinearLighting) {
-			specularIrradiance = Color::GammaToLinear(EnvTexture.SampleLevel(LinearSampler, R, level));
-		} else {
-			specularIrradiance = EnvTexture.SampleLevel(LinearSampler, R, level);
-		}
+		float3 specularIrradiance = Color::Irradiance(EnvTexture.SampleLevel(LinearSampler, R, level));
 
 		finalIrradiance += specularIrradiance;
 #	elif defined(SKYLIGHTING)
@@ -181,28 +171,16 @@ Texture2D<float4> SSRTexture : register(t17);
 		float3 specularIrradiance = 1;
 
 		if (skylightingSpecular < 1.0)
-			if (!SharedData::linearLightingSettings.enableLinearLighting) {
-				specularIrradiance = Color::GammaToLinear(EnvTexture.SampleLevel(LinearSampler, R, level));
-			} else {
-				specularIrradiance = EnvTexture.SampleLevel(LinearSampler, R, level);
-			}
+			specularIrradiance = Color::Irradiance(EnvTexture.SampleLevel(LinearSampler, R, level));
 
 		float3 specularIrradianceReflections = 1.0;
 
 		if (skylightingSpecular > 0.0)
-			if (!SharedData::linearLightingSettings.enableLinearLighting) {
-				specularIrradianceReflections = Color::GammaToLinear(EnvReflectionsTexture.SampleLevel(LinearSampler, R, level));
-			} else {
-				specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level);
-			}
+			specularIrradianceReflections = Color::Irradiance(EnvReflectionsTexture.SampleLevel(LinearSampler, R, level));
 
 		finalIrradiance = lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
 #	else
-		if (!SharedData::linearLightingSettings.enableLinearLighting) {
-			float3 specularIrradianceReflections = Color::GammaToLinear(EnvReflectionsTexture.SampleLevel(LinearSampler, R, level));
-		} else {
-			float3 specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level);
-		}
+		float3 specularIrradianceReflections = Color::Irradiance(EnvReflectionsTexture.SampleLevel(LinearSampler, R, level));
 
 		finalIrradiance += specularIrradianceReflections;
 #	endif
