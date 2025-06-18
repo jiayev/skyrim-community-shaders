@@ -121,7 +121,7 @@ void Skin::DrawSettings()
 		ImGui::Text("Time it takes for the wetness to reduce from 1.0 to 0.0 after leaving water");
 	}
 
-	ImGui::SliderFloat("Stamina Threshold for Sweat", &settings.StartSweat, 0.01f, 1.0f, "%.2f", 
+	ImGui::SliderFloat("Stamina Threshold for Sweat", &settings.StartSweat, 0.0f, 1.0f, "%.2f", 
 		ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat("Full Sweat Threshold", &settings.FullSweat, 0.0f, 1.0f, "%.2f",
 		ImGuiSliderFlags_AlwaysClamp);
