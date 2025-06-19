@@ -1,6 +1,17 @@
 #include "UI.h"
 #include "Menu.h"
 
+#include <d3d11.h>
+#include <imgui.h>
+#include <imgui_internal.h>
+
+#include "../Globals.h"
+#include "../Menu.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#include <cmath>
+#include <stb_image.h>
+
 namespace Util
 {
 	PerformanceOverlay performanceOverlay;
@@ -47,7 +58,241 @@ namespace Util
 		const auto Size = ImGui::GetMainViewport()->Size;
 		return { Size.x * scale, Size.y * scale };
 	}
+	// Icon loading functions (moved from UIIconLoader)
+	bool LoadTextureFromFile(ID3D11Device* device,
+		const char* filename,
+		ID3D11ShaderResourceView** out_srv,
+		ImVec2& out_size)
+	{
+		// Validate input parameters
+		if (!device || !out_srv) {
+			logger::warn("LoadTextureFromFile: Invalid parameters - device: {}, out_srv: {}",
+				device ? "valid" : "null", out_srv ? "valid" : "null");
+			return false;
+		}
 
+		// Initialize output to nullptr
+		*out_srv = nullptr;
+
+		logger::debug("LoadTextureFromFile: Attempting to load {}", filename);
+
+		// Load from disk into a raw RGBA buffer
+		int image_width = 0;
+		int image_height = 0;
+		int channels_in_file;
+		unsigned char* image_data = stbi_load(filename, &image_width, &image_height, &channels_in_file, 4);
+		if (image_data == NULL) {
+			logger::warn("LoadTextureFromFile: Failed to load image data from {}", filename);
+			return false;
+		}
+		// Creates Textures for Icons with Mipmapping to support high DPI displays.
+		logger::debug("LoadTextureFromFile: Loaded image {}x{} with {} channels from {}",
+			image_width, image_height, channels_in_file, filename);
+		D3D11_TEXTURE2D_DESC desc;
+		ZeroMemory(&desc, sizeof(desc));
+		desc.Width = image_width;
+		desc.Height = image_height;
+		desc.MipLevels = 1;  // Start with just one mip level
+		desc.ArraySize = 1;
+		desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		desc.SampleDesc.Count = 1;
+		desc.SampleDesc.Quality = 0;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+		desc.CPUAccessFlags = 0;
+
+		ID3D11Texture2D* pTexture = nullptr;
+		D3D11_SUBRESOURCE_DATA subResource;
+		subResource.pSysMem = image_data;
+		subResource.SysMemPitch = desc.Width * 4;
+		subResource.SysMemSlicePitch = 0;
+
+		HRESULT hr = device->CreateTexture2D(&desc, &subResource, &pTexture);
+		if (FAILED(hr) || !pTexture) {
+			logger::warn("LoadTextureFromFile: Failed to create D3D11 texture, HRESULT: 0x{:08X}", static_cast<uint32_t>(hr));
+			stbi_image_free(image_data);
+			return false;
+		}
+		// Create simple shader resource view
+		hr = device->CreateShaderResourceView(pTexture, nullptr, out_srv);
+		if (FAILED(hr) || !*out_srv) {
+			logger::warn("LoadTextureFromFile: Failed to create shader resource view, HRESULT: 0x{:08X}", static_cast<uint32_t>(hr));
+			pTexture->Release();
+			stbi_image_free(image_data);
+			*out_srv = nullptr;
+			return false;
+		}
+
+		// Generate mipmaps for better icon quality at different scales
+		ID3D11DeviceContext* context = nullptr;
+		device->GetImmediateContext(&context);
+		if (context) {
+			context->GenerateMips(*out_srv);
+			context->Release();
+		}
+		// Success - clean up intermediate resources
+		pTexture->Release();
+		stbi_image_free(image_data);
+
+		out_size = ImVec2((float)image_width, (float)image_height);
+		logger::debug("LoadTextureFromFile: Successfully loaded {} ({}x{})", filename, image_width, image_height);
+		return true;
+	}
+	bool InitializeMenuIcons(Menu* menu)
+	{
+		if (!menu) {
+			logger::warn("InitializeMenuIcons: Menu pointer is null");
+			return false;
+		}
+
+		// Get the D3D device from globals
+		ID3D11Device* device = globals::d3d::device;
+		if (!device) {
+			logger::warn("InitializeMenuIcons: D3D device is null");
+			return false;
+		}
+		// Define path to icons
+		std::string basePath = "Data\\Interface\\CommunityShaders\\Icons\\";
+		logger::info("InitializeMenuIcons: Loading icons from base path: {}", basePath);
+
+		// Initialize all texture pointers to nullptr for safe cleanup
+		std::array<ID3D11ShaderResourceView**, 5> texturePointers = {
+			&menu->uiIcons.saveSettings.texture,
+			&menu->uiIcons.loadSettings.texture,
+			&menu->uiIcons.clearCache.texture,
+			&menu->uiIcons.clearDiskCache.texture,
+			&menu->uiIcons.logo.texture
+		};
+
+		// Safely release existing textures
+		for (auto* texturePtr : texturePointers) {
+			if (*texturePtr) {
+				(*texturePtr)->Release();
+				*texturePtr = nullptr;
+			}
+		}
+
+		// Instead of failing completely if one icon fails, try to load each one individually
+		bool anyIconLoaded = false;
+		int iconsLoaded = 0;
+
+		// Load save settings icon
+		if (LoadTextureFromFile(device, (basePath + "Microsoft Icons\\save-settings.png").c_str(), &menu->uiIcons.saveSettings.texture, menu->uiIcons.saveSettings.size)) {
+			logger::info("InitializeMenuIcons: Successfully loaded save-settings icon");
+			iconsLoaded++;
+			anyIconLoaded = true;
+		} else {
+			logger::warn("InitializeMenuIcons: Failed to load save-settings icon from: {}", basePath + "Microsoft Icons\\save-settings.png");
+		}
+
+		// Load load settings icon
+		if (LoadTextureFromFile(device, (basePath + "Microsoft Icons\\load-settings.png").c_str(), &menu->uiIcons.loadSettings.texture, menu->uiIcons.loadSettings.size)) {
+			logger::info("InitializeMenuIcons: Successfully loaded load-settings icon");
+			iconsLoaded++;
+			anyIconLoaded = true;
+		} else {
+			logger::warn("InitializeMenuIcons: Failed to load load-settings icon from: {}", basePath + "Microsoft Icons\\load-settings.png");
+		}
+
+		// Load clear cache icon
+		if (LoadTextureFromFile(device, (basePath + "Microsoft Icons\\clear-cache.png").c_str(), &menu->uiIcons.clearCache.texture, menu->uiIcons.clearCache.size)) {
+			logger::info("InitializeMenuIcons: Successfully loaded clear-cache icon");
+			iconsLoaded++;
+			anyIconLoaded = true;
+		} else {
+			logger::warn("InitializeMenuIcons: Failed to load clear-cache icon from: {}", basePath + "Microsoft Icons\\clear-cache.png");
+		}
+
+		// Load clear disk cache icon
+		if (LoadTextureFromFile(device, (basePath + "Microsoft Icons\\clear-disk.png").c_str(), &menu->uiIcons.clearDiskCache.texture, menu->uiIcons.clearDiskCache.size)) {
+			logger::info("InitializeMenuIcons: Successfully loaded clear-disk icon");
+			iconsLoaded++;
+			anyIconLoaded = true;
+		} else {
+			logger::warn("InitializeMenuIcons: Failed to load clear-disk icon from: {}", basePath + "Microsoft Icons\\clear-disk.png");
+		}
+
+		// Load logo icon
+		if (LoadTextureFromFile(device, (basePath + "Community Shaders Logo\\cs-logo.png").c_str(), &menu->uiIcons.logo.texture, menu->uiIcons.logo.size)) {
+			logger::info("InitializeMenuIcons: Successfully loaded logo icon");
+			iconsLoaded++;
+			anyIconLoaded = true;
+		} else {
+			logger::warn("InitializeMenuIcons: Failed to load logo icon from: {}", basePath + "Community Shaders Logo\\cs-logo.png");
+		}
+
+		logger::info("InitializeMenuIcons: Loaded {}/5 icons successfully", iconsLoaded);
+		return anyIconLoaded;
+	}
+
+	// Text rendering helpers (moved from UITextHelper)
+	ImVec2 DrawSharpText(const char* text, bool alignToPixelGrid, float scale)
+	{
+		ImVec2 startPos = ImGui::GetCursorPos();
+
+		if (alignToPixelGrid) {
+			// Get current position
+			ImVec2 pos = ImGui::GetCursorPos();
+
+			// Align to pixel grid for sharper rendering
+			pos.x = std::round(pos.x);
+			pos.y = std::round(pos.y);
+
+			// Set aligned position
+			ImGui::SetCursorPos(pos);
+		}
+		// Apply scale if needed
+		if (scale != 1.0f) {
+			ImGui::SetWindowFontScale(scale);
+		}
+
+		// Use Text instead of TextUnformatted for better rendering
+		ImGui::Text("%s", text);
+		// Restore original scale if needed
+		if (scale != 1.0f)
+			ImGui::SetWindowFontScale(1.0f);
+
+		// Calculate and return the rendered size
+		ImVec2 endPos = ImGui::GetCursorPos();
+		return ImVec2(endPos.x - startPos.x, endPos.y - startPos.y);
+	}
+
+	ImVec2 DrawAlignedTextWithLogo(ID3D11ShaderResourceView* logoTexture, const ImVec2& logoSize, const char* text, float textScale)
+	{
+		// Save current cursor position
+		ImVec2 startPos = ImGui::GetCursorPos();
+
+		// Calculate scaled text height
+		float fontHeight = ImGui::GetFontSize() * textScale;
+		float logoHeight = logoSize.y;
+
+		// Calculate vertical offset to center align logo with text
+		float verticalOffset = (fontHeight - logoHeight) * 0.5f;
+
+		// Position cursor for logo with vertical alignment
+		ImGui::SetCursorPos(ImVec2(startPos.x, startPos.y + verticalOffset));
+
+		// Render logo
+		ImGui::Image(logoTexture, logoSize);
+		ImGui::SameLine();
+
+		// Reset cursor for text with proper vertical alignment
+		ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX(), startPos.y));
+		// Use windowed font scale for sharper text
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+		ImGui::SetWindowFontScale(textScale);
+
+		// Render text aligned to pixel grid for sharpness
+		ImGui::Text("%s", text);
+		// Restore style
+		ImGui::SetWindowFontScale(1.0f);
+		ImGui::PopStyleVar();
+
+		// Calculate and return the total rendered size
+		ImVec2 endPos = ImGui::GetCursorPos();
+		return ImVec2(endPos.x - startPos.x, endPos.y - startPos.y);
+	}
 	// StyledButtonWrapper implementation
 	StyledButtonWrapper::StyledButtonWrapper(const ImVec4& normalColor, const ImVec4& hoveredColor, const ImVec4& activeColor) :
 		m_pushedStyles(0)
@@ -81,9 +326,6 @@ namespace Util
 			ImGui::TextWrapped("%s", description);
 			ImGui::Spacing();
 		}
-
-		// Note: For this simplified version, we don't use TreeNode
-		// The sections are always expanded in FeatureIssues UI
 	}
 
 	SectionWrapper::~SectionWrapper()
