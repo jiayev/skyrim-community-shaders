@@ -14,6 +14,7 @@
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
+#include "Features/PostProcessing.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceReflections.h"
 #include "Features/ScreenSpaceShadows.h"
@@ -225,7 +226,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::interiorSunShadows,
 		globals::features::terrainVariation,
 		globals::features::ibl,
-		globals::features::linearLighting
+		globals::features::linearLighting,
+		globals::features::postProcessing
 	};
 
 	if (REL::Module::IsVR()) {

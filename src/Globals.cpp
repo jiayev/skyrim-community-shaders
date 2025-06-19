@@ -23,6 +23,7 @@
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
+#include "Features/PostProcessing.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceReflections.h"
 #include "Features/ScreenSpaceShadows.h"
@@ -79,6 +80,7 @@ namespace globals
 		VR* vr = nullptr;
 		WaterEffects* waterEffects = nullptr;
 		WetnessEffects* wetnessEffects = nullptr;
+		PostProcessing* postProcessing = nullptr;
 
 		namespace llf
 		{
@@ -164,6 +166,7 @@ namespace globals
 		features::vr = VR::GetSingleton();
 		features::waterEffects = WaterEffects::GetSingleton();
 		features::wetnessEffects = WetnessEffects::GetSingleton();
+		features::postProcessing = PostProcessing::GetSingleton();
 
 		features::llf::particleLights = ParticleLights::GetSingleton();
 	}
