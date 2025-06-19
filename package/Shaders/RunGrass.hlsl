@@ -514,7 +514,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif  // !TRUE_PBR
 
 	float3 F0 = SharedData::grassLightingSettings.SpecularStrength * 0.08;
-	float roughness = saturate(sqrt(2.0 / (SharedData::grassLightingSettings.Glossiness + 2.0)));
+	float roughness = saturate(pow(2.0 / (SharedData::grassLightingSettings.Glossiness + 2.0), 0.25));
 
 #			if defined(TRUE_PBR)
 	float4 rawRMAOS = TexRMAOSSampler.SampleBias(SampRMAOSSampler, input.TexCoord.xy, SharedData::MipBias) * float4(PBRParams1.x, 1, 1, PBRParams1.y);
