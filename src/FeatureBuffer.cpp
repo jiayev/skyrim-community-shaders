@@ -10,6 +10,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
+#include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
@@ -49,5 +50,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::terrainVariation->settings,
 		globals::features::ibl->settings,
 		globals::features::linearLighting->GetCommonBufferData(),
-		globals::features::postProcessing->settings);
+		globals::features::postProcessing->settings,
+		globals::features::screenSpacePointLightShadows->GetCommonBufferData());
 }
