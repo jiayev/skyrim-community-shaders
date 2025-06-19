@@ -28,6 +28,7 @@
 #include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/ScreenSpaceReflections.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -83,6 +84,7 @@ namespace globals
 		WaterEffects* waterEffects = nullptr;
 		WetnessEffects* wetnessEffects = nullptr;
 		PostProcessing* postProcessing = nullptr;
+		Skin* skin = nullptr;
 
 		namespace llf
 		{
@@ -158,6 +160,7 @@ namespace globals
 		features::screenSpacePointLightShadows = ScreenSpacePointLightShadows::GetSingleton();
 		features::screenSpaceReflections = ScreenSpaceReflections::GetSingleton();
 		features::screenSpaceShadows = ScreenSpaceShadows::GetSingleton();
+		features::skin = Skin::GetSingleton();
 		features::skylighting = Skylighting::GetSingleton();
 		features::terrainVariation = TerrainVariation::GetSingleton();
 		features::skySync = SkySync::GetSingleton();

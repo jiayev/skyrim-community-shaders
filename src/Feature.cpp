@@ -19,6 +19,7 @@
 #include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/ScreenSpaceReflections.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -229,7 +230,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::terrainVariation,
 		globals::features::ibl,
 		globals::features::linearLighting,
-		globals::features::postProcessing
+		globals::features::postProcessing,
+		globals::features::skin
 	};
 
 	if (REL::Module::IsVR()) {
