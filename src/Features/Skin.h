@@ -11,6 +11,19 @@ struct Skin : Feature
 	virtual inline std::string GetName() override { return "Advanced Skin"; }
 	virtual inline std::string GetShortName() override { return "Skin"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "CS_SKIN"; }
+	virtual std::string_view GetCategory() const override { return "Characters"; }
+	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
+	{
+		return {
+			"Advanced Skin enhances character skin rendering with multiple techniques.",
+			{
+				"Physically-based dual specular lobes for realistic skin highlights",
+				"Tiled skin detail textures for enhanced realism",
+				"Extra textures support for roughness, translucency, and more",
+				"Reworked wetness system for dynamic skin effects"
+			}
+		};
+	}
 	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override
 	{
 		return t == RE::BSShader::Type::Lighting;
