@@ -1,3 +1,4 @@
+#include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -735,7 +736,7 @@ float ProcessSparkleColor(float color)
 }
 #	endif
 
-float3 GetLightSpecularInput(PS_INPUT input, float3 L, float3 V, float3 N, float3 lightColor, float shininess, float2 uv)
+float3 GetLightSpecularInput(PS_INPUT input, float3 L, float3 V, float3 N, float3 lightColor, float3 specularColor, float glossiness, float2 uv)
 {
 	float3 H = normalize(V + L);
 	float HdotN = 1.0;
@@ -750,7 +751,17 @@ float3 GetLightSpecularInput(PS_INPUT input, float3 L, float3 V, float3 N, float
 
 #	if defined(SPECULAR)
 	float lightColorMultiplier = exp2(shininess * log2(HdotN));
-
+#		if defined(VANILLA_FRESNEL)
+	float NdotV = saturate(dot(N, V));
+	float NdotL = saturate(dot(N, L));
+	float NdotH = saturate(dot(N, H));
+	float HdotV = saturate(dot(H, V));
+	float roughness = pow(2.0 / (shininess + 2.0), 0.25);
+	float D = BRDF::D_GGX(roughness, HdotN);
+	float3 F = BRDF::F_Schlick(specularColor, HdotV);
+	float G = BRDF::Vis_SmithJointApprox(roughness, NdotV, NdotL);
+	lightColorMultiplier = D * G * F * NdotL;
+#		endif
 #	elif defined(SPARKLE)
 	float lightColorMultiplier = 0;
 #	else
@@ -2282,7 +2293,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 F0 = 0.04;
 	float roughness = 1.0;
 #	if defined(SPECULAR) && !defined(TRUE_PBR)
-	roughness = sqrt(2.0 / (shininess + 2.0));
+	F0 = glossiness * SpecularColor.xyz;
+	roughness = pow(2.0 / (shininess + 2.0), 0.25);
 #	endif
 
 	float porosity = 1.0;
@@ -2602,11 +2614,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			Hair::GetHairDirectLight(dirDiffuseColor, lightsSpecularColor, hairT, DirLightDirection, viewDirection, modelNormal.xyz, dirLightColor.xyz * dirDetailShadow, SharedData::hairSpecularSettings.Glossiness, uv, baseColor.xyz);
 		else {
 #			if defined(SPECULAR)
-			lightsSpecularColor = GetLightSpecularInput(input, DirLightDirection, viewDirection, modelNormal.xyz, dirLightColor.xyz * dirDetailShadow, shininess, uv);
+			lightsSpecularColor = GetLightSpecularInput(input, DirLightDirection, viewDirection, modelNormal.xyz, dirLightColor.xyz * dirDetailShadow, F0, shininess, uv);
 #			endif
 		}
 #		elif defined(SPECULAR) || defined(SPARKLE)
-		lightsSpecularColor = GetLightSpecularInput(input, DirLightDirection, viewDirection, modelNormal.xyz, dirLightColor.xyz * dirDetailShadow, shininess, uv);
+		lightsSpecularColor = GetLightSpecularInput(input, DirLightDirection, viewDirection, modelNormal.xyz, dirLightColor.xyz * dirDetailShadow, F0, shininess, uv);
 #		endif
 	}
 
@@ -2708,11 +2720,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			lightsSpecularColor += lightSpecularColor;
 		} else {
 #					if defined(SPECULAR)
-			lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, viewDirection, modelNormal.xyz, lightColor, shininess, uv);
+			lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, viewDirection, modelNormal.xyz, lightColor, F0, shininess, uv);
 #					endif
 		}
 #				elif defined(SPECULAR) || (defined(SPARKLE) && !defined(SNOW))
-		lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, viewDirection, modelNormal.xyz, lightColor, shininess, uv);
+		lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, viewDirection, modelNormal.xyz, lightColor, F0, shininess, uv);
 #				endif  // defined (SPECULAR) || (defined (SPARKLE) && !defined(SNOW))
 
 		lightsDiffuseColor += lightDiffuseColor;
@@ -2919,11 +2931,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			lightsSpecularColor += lightSpecularColor;
 		} else {
 #					if defined(SPECULAR)
-			lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz, lightColor, shininess, uv);
+			lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz, lightColor, F0, shininess, uv);
 #					endif
 		}
 #				elif defined(SPECULAR) || (defined(SPARKLE) && !defined(SNOW))
-		lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz, lightColor, shininess, uv);
+		lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz, lightColor, F0, shininess, uv);
 #				endif
 
 		lightsDiffuseColor += lightDiffuseColor;
@@ -3364,7 +3376,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	endif  // MULTI_LAYER_PARALLAX
 
-#	if defined(SPECULAR) && !(defined(SKIN) && defined(CS_SKIN))
+#	if defined(SPECULAR) && !defined(VANILLA_FRESNEL) && !(defined(SKIN) && defined(CS_SKIN))
 #		if defined(EMAT_ENVMAP)
 	if (!SharedData::linearLightingSettings.enableLinearLighting) {
 		specularColor = (specularColor * glossiness * MaterialData.yyy) * lerp(SpecularColor.xyz, Color::LinearToGamma(complexSpecular), complexMaterial);
