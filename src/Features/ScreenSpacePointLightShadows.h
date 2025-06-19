@@ -12,6 +12,19 @@ struct ScreenSpacePointLightShadows : Feature
 	virtual inline std::string GetShortName() override { return "ScreenSpacePointLightShadows"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "SSPLS"; }
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
+	virtual std::string_view GetCategory() const override { return "Lighting"; }
+	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
+	{
+		return {
+			"Screen Space Point Light Shadows adds contact shadows and soft shadows for point lights in the game.",
+			{
+				"Adjustable settings",
+				"Drain your GPU",
+				"Greatly enhances vibes",
+				"Won't really look correct"
+			}
+		};
+	}
 
 	constexpr static size_t s_ShadowMips = 4;
 
