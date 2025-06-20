@@ -2575,7 +2575,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 dirDiffuseColor = dirLightColor * saturate(dirLightAngle) * dirDetailShadow;
 
 #		if defined(SPECULAR) || defined(SPARKLE)
-		lightsSpecularColor = GetLightSpecularInput(input, DirLightDirection, viewDirection, modelNormal.xyz, dirLightColor.xyz * dirDetailShadow, shininess, uv);
+		lightsSpecularColor = GetLightSpecularInput(input, DirLightDirection, viewDirection, modelNormal.xyz, dirLightColor.xyz * dirDetailShadow, F0, shininess, uv);
 #		endif
 
 		lightsDiffuseColor += dirDiffuseColor;
@@ -2691,7 +2691,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
 #				if defined(SPECULAR) || (defined(SPARKLE) && !defined(SNOW))
-			lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, viewDirection, modelNormal.xyz, lightColor, shininess, uv);
+			lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, viewDirection, modelNormal.xyz, lightColor, F0, shininess, uv);
 #				endif  // defined (SPECULAR) || (defined (SPARKLE) && !defined(SNOW))
 
 			lightsDiffuseColor += lightDiffuseColor;
@@ -2901,7 +2901,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			float3 lightDiffuseColor = lightColor * contactShadow * parallaxShadow * saturate(lightAngle.xxx);
 
 #				if defined(SPECULAR) || (defined(SPARKLE) && !defined(SNOW))
-			lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz, lightColor, shininess, uv);
+			lightsSpecularColor += GetLightSpecularInput(input, normalizedLightDirection, worldSpaceViewDirection, worldSpaceNormal.xyz, lightColor, F0, shininess, uv);
 #				endif
 
 			lightsDiffuseColor += lightDiffuseColor;
