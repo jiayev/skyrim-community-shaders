@@ -2293,9 +2293,113 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 F0 = 0.04;
 	float roughness = 1.0;
 #	if defined(SPECULAR) && !defined(TRUE_PBR)
-	F0 = glossiness * SpecularColor.xyz;
+	F0 = saturate(glossiness * SpecularColor.xyz);
 	roughness = pow(2.0 / (shininess + 2.0), 0.25);
+#	elif defined(EYE)
+	F0 = 0.027;
+	roughness = 0.1;
 #	endif
+
+#	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
+	float envMask = EnvmapData.x * MaterialData.x;
+
+	float viewNormalAngle = dot(worldSpaceNormal.xyz, viewDirection);
+	float3 envSamplingPoint = (viewNormalAngle * 2) * modelNormal.xyz - viewDirection;
+
+	if (envMask > 0.0) {
+		if (EnvmapData.y) {
+			envMask *= TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).x;
+		} else {
+			envMask *= glossiness;
+		}
+	}
+
+	float3 envColor = 0.0;
+	bool dynamicCubemap = false;
+
+	if (envMask > 0.0) {
+#		if defined(DYNAMIC_CUBEMAPS)
+		uint2 envSize;
+		TexEnvSampler.GetDimensions(envSize.x, envSize.y);
+
+#			if defined(CREATOR)
+#				if defined(EMAT)
+		if (envSize.x == 1 && envSize.y == 1 || complexMaterial || SharedData::cubemapCreatorSettings.Enabled) {
+#				else
+		if (envSize.x == 1 && envSize.y == 1 || SharedData::cubemapCreatorSettings.Enabled) {
+#				endif
+#			else
+#				if defined(EMAT)
+		if (envSize.x == 1 && envSize.y == 1 || complexMaterial) {
+#				else
+		if (envSize.x == 1 && envSize.y == 1) {
+#				endif
+#			endif
+
+			dynamicCubemap = true;
+
+#			if defined(EMAT)
+			if (!complexMaterial)
+#			endif
+			{
+				// Dynamic Cubemap Creator sets this value to black, if it is anything but black it is wrong
+				float3 envColorTest = TexEnvSampler.SampleLevel(SampEnvSampler, float3(0.0, 1.0, 0.0), 15).xyz;
+				dynamicCubemap = all(envColorTest == 0.0);
+			}
+
+#			if defined(CREATOR)
+			if (SharedData::cubemapCreatorSettings.Enabled) {
+				dynamicCubemap = true;
+			}
+#			endif
+
+			if (dynamicCubemap) {
+				float4 envColorBase = TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 15);
+				float envRoughness = 1.0;
+
+				if (envColorBase.a < 1.0) {
+					F0 = Color::GammaToLinear(envColorBase.rgb);
+					envRoughness = envColorBase.a;
+				} else {
+					F0 = 1.0;
+					envRoughness = 1.0 / 7.0;
+				}
+
+#			if defined(CREATOR)
+				if (SharedData::cubemapCreatorSettings.Enabled) {
+					F0 = SharedData::cubemapCreatorSettings.CubemapColor.rgb;
+					envRoughness = SharedData::cubemapCreatorSettings.CubemapColor.a;
+				}
+#			endif
+
+#			if defined(EMAT)
+				float complexMaterialRoughness = 1.0 - complexMaterialColor.y;
+				envRoughness = lerp(envRoughness, pow(complexMaterialRoughness, 1.5), complexMaterial);
+				F0 = lerp(F0, complexSpecular, complexMaterial);
+#			endif
+
+				envMask = saturate(envMask);
+				F0 = lerp(glossiness * SpecularColor.xyz, F0, envMask);
+				roughness = lerp(roughness, envRoughness, pow(envMask, 0.25));
+			}
+		}
+#		endif
+
+#		if defined(EYE)
+		F0 = 0.027;
+		roughness = 0.1;
+#		endif
+
+		if (!dynamicCubemap) {
+			float3 envColorBase = Color::GammaToLinear(TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz);
+			envColor = envColorBase.xyz * envMask;
+#		if defined(VANILLA_FRESNEL)
+			F0 = lerp(F0, Color::GammaToLinear(TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 15).xyz), envMask);
+#		endif
+		}
+	}
+
+#	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
 
 	float porosity = 1.0;
 
@@ -3057,99 +3161,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
-#	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
-	float envMask = EnvmapData.x * MaterialData.x;
-
-	float viewNormalAngle = dot(worldSpaceNormal.xyz, viewDirection);
-	float3 envSamplingPoint = (viewNormalAngle * 2) * modelNormal.xyz - viewDirection;
-
-	if (envMask > 0.0) {
-		if (EnvmapData.y) {
-			envMask *= TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).x;
-		} else {
-			envMask *= glossiness;
-		}
-	}
-
-	float3 envColor = 0.0;
-	bool dynamicCubemap = false;
-
-	if (envMask > 0.0) {
-#		if defined(DYNAMIC_CUBEMAPS)
-		uint2 envSize;
-		TexEnvSampler.GetDimensions(envSize.x, envSize.y);
-
-#			if defined(CREATOR)
-#				if defined(EMAT)
-		if (envSize.x == 1 && envSize.y == 1 || complexMaterial || SharedData::cubemapCreatorSettings.Enabled) {
-#				else
-		if (envSize.x == 1 && envSize.y == 1 || SharedData::cubemapCreatorSettings.Enabled) {
-#				endif
-#			else
-#				if defined(EMAT)
-		if (envSize.x == 1 && envSize.y == 1 || complexMaterial) {
-#				else
-		if (envSize.x == 1 && envSize.y == 1) {
-#				endif
-#			endif
-
-			dynamicCubemap = true;
-
-#			if defined(EMAT)
-			if (!complexMaterial)
-#			endif
-			{
-				// Dynamic Cubemap Creator sets this value to black, if it is anything but black it is wrong
-				float3 envColorTest = TexEnvSampler.SampleLevel(SampEnvSampler, float3(0.0, 1.0, 0.0), 15).xyz;
-				dynamicCubemap = all(envColorTest == 0.0);
-			}
-
-#			if defined(CREATOR)
-			if (SharedData::cubemapCreatorSettings.Enabled) {
-				dynamicCubemap = true;
-			}
-#			endif
-
-			if (dynamicCubemap) {
-				float4 envColorBase = TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 15);
-				float envRoughness = 1.0;
-
-				if (envColorBase.a < 1.0) {
-					F0 = Color::GammaToLinear(envColorBase.rgb);
-					envRoughness = envColorBase.a;
-				} else {
-					F0 = 1.0;
-					envRoughness = 1.0 / 7.0;
-				}
-
-#			if defined(CREATOR)
-				if (SharedData::cubemapCreatorSettings.Enabled) {
-					F0 = SharedData::cubemapCreatorSettings.CubemapColor.rgb;
-					envRoughness = SharedData::cubemapCreatorSettings.CubemapColor.a;
-				}
-#			endif
-
-#			if defined(EMAT)
-				float complexMaterialRoughness = 1.0 - complexMaterialColor.y;
-				envRoughness = lerp(envRoughness, pow(complexMaterialRoughness, 1.5), complexMaterial);
-				F0 = lerp(F0, complexSpecular, complexMaterial);
-#			endif
-
-				envMask = saturate(envMask);
-				F0 = lerp(0.04, F0, envMask);
-				roughness = lerp(roughness, envRoughness, pow(envMask, 0.25));
-			}
-		}
-#		endif
-
-		if (!dynamicCubemap) {
-			float3 envColorBase = Color::GammaToLinear(TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz);
-			envColor = envColorBase.xyz * envMask;
-		}
-	}
-
-#	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
-
 #	if defined(DYNAMIC_CUBEMAPS)
 #		if defined(SKYLIGHTING)
 	float3 reflectance = DynamicCubemaps::GetDynamicCubemap(worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, roughness, F0, skylightingSH);
@@ -3408,7 +3419,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	diffuseColor = reflectionDiffuseColor;
 
-#	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
+#	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)) && !(defined(VANILLA_FRESNEL) && !defined(EYE))
 #		if defined(DYNAMIC_CUBEMAPS)
 	if (!dynamicCubemap)
 #		endif
