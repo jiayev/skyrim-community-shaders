@@ -2255,7 +2255,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	skinSurfaceProperties.Albedo = baseColor.xyz;
 
-	const float ExtraRoughness = PBR::GetFresnelFactorSchlick(0.04, saturate(dot(modelNormal.xyz, viewDirection))) * SharedData::skinData.fuzzParams.w;
+	const float ExtraRoughness = BRDF::F_Schlick(0.04, saturate(dot(modelNormal.xyz, viewDirection))) * SharedData::skinData.fuzzParams.w;
 	skinSurfaceProperties.RoughnessPrimary = SharedData::skinData.skinParams.x;
 	skinSurfaceProperties.RoughnessPrimary = saturate(SharedData::skinData.skinParams.x - SharedData::skinData.skinParams.z * glossiness);
 	skinSurfaceProperties.RoughnessSecondary = SharedData::skinData.skinParams.y;
