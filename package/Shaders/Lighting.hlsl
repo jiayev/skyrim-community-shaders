@@ -748,7 +748,7 @@ float3 GetLightSpecularInput(PS_INPUT input, float3 L, float3 V, float3 N, float
 	float D = BRDF::D_GGX(roughness, HdotN);
 	float3 F = BRDF::F_Schlick(specularColor, HdotV);
 	float G = BRDF::Vis_SmithJointApprox(roughness, NdotV, NdotL);
-	lightColorMultiplier = D * G * F * NdotL;
+	lightColorMultiplier = max(D * G * F * NdotL, 0.0);
 #		endif
 #	elif defined(SPARKLE)
 	float lightColorMultiplier = 0;
