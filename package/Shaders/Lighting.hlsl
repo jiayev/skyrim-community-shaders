@@ -724,7 +724,7 @@ float ProcessSparkleColor(float color)
 }
 #	endif
 
-float3 GetLightSpecularInput(PS_INPUT input, float3 L, float3 V, float3 N, float3 lightColor, float3 specularColor, float glossiness, float2 uv)
+float3 GetLightSpecularInput(PS_INPUT input, float3 L, float3 V, float3 N, float3 lightColor, float3 specularColor, float shininess, float2 uv)
 {
 	float3 H = normalize(V + L);
 	float HdotN = 1.0;
