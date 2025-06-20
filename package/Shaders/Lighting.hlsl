@@ -3161,7 +3161,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
-#	if defined(DYNAMIC_CUBEMAPS)
+#	if defined(DYNAMIC_CUBEMAPS) && defined(VANILLA_FRESNEL)
 #		if defined(SKYLIGHTING)
 	float3 reflectance = DynamicCubemaps::GetDynamicCubemap(worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, roughness, F0, skylightingSH);
 #		else
