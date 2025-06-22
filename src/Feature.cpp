@@ -31,6 +31,7 @@
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
+#include "Features/XeGTAO.h"
 
 #include "State.h"
 
@@ -231,7 +232,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		globals::features::ibl,
 		globals::features::linearLighting,
 		globals::features::postProcessing,
-		globals::features::skin
+		globals::features::skin,
+		globals::features::xeGTAO
 	};
 
 	if (REL::Module::IsVR()) {

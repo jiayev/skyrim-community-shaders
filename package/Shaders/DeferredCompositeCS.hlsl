@@ -67,6 +67,13 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 }
 #endif
 
+#if defined(XeGTAO)
+#	include "XeGTAO/XeGTAO.hlsli"
+#	include "XeGTAO/XeGTAOBentNormals.hlsli"
+Texture2D<uint> XeGTAOTexture : register(t16);
+Texture2D<uint> XeGTAOGeneratedNormal : register(t17);
+#endif
+
 #if defined(SSR)
 Texture2D<float4> SSRTexture : register(t15);
 #endif
@@ -96,6 +103,27 @@ Texture2D<float4> SSRTexture : register(t15);
 
 	float3 color = Color::Irradiance(diffuseColor) + specularColor;
 
+#if defined(XeGTAO)
+	uint xeGTAO = 0;
+	lpfloat xeGTAOWeight = 1.0;
+	lpfloat3 bentNormal = 0.0;
+	float3 bentNormalWS = 0.0;
+	float xeGTAOVisibility = 1.0;
+
+	if (SharedData::xeGTAOSettings.Enabled) {
+		xeGTAO = XeGTAOTexture[dispatchID.xy].x;
+		if (SharedData::xeGTAOSettings.BentNormals) {
+			XeGTAO_DecodeVisibilityBentNormal(xeGTAO, xeGTAOWeight, bentNormal);
+			bentNormal = normalize(bentNormal);
+			bentNormalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(bentNormal, 0)).xyz);
+		} else {
+			xeGTAOWeight = (lpfloat)xeGTAO / 255.0;
+		}
+
+		xeGTAOVisibility = saturate(lerp(1.0, (float)xeGTAOWeight, SharedData::xeGTAOSettings.Mix));
+	}
+#endif
+
 #if defined(DYNAMIC_CUBEMAPS)
 
 	float3 reflectance = ReflectanceTexture[dispatchID.xy];
@@ -123,6 +151,13 @@ Texture2D<float4> SSRTexture : register(t15);
 
 		float roughness = 1.0 - glossiness;
 		float level = roughness * 7.0;
+
+#	if defined(XeGTAO)
+		float specularOcclusion = 1.0;
+		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+			specularOcclusion = BentNormals::SpecularAO_Cones(bentNormalWS, normalWS, -V, xeGTAOWeight, roughness);
+		}
+#	endif
 
 		sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(normalWS, -V, roughness);
 
@@ -223,6 +258,12 @@ Texture2D<float4> SSRTexture : register(t15);
 		}
 #	endif
 
+#	if defined(XeGTAO)
+		if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+			finalIrradiance *= specularOcclusion;
+		}
+#	endif
+
 #	if defined(SSGI)
 #		if defined(VR)
 		float3 uvF = float3((dispatchID.xy + 0.5) * SharedData::BufferDim.zw, DepthTexture[dispatchID.xy]);  // calculate high precision uv of initial eye
@@ -299,6 +340,26 @@ Texture2D<float4> SSRTexture : register(t15);
 		}
 	}
 
+#endif
+
+#if defined(XeGTAO)
+	if (SharedData::xeGTAOSettings.Enabled) {
+#	if defined(GTAO_DEBUG_NORMAL)
+		uint packedXeGTAONormal = XeGTAOGeneratedNormal[dispatchID.xy].x;
+		float3 xeGTAONormal = XeGTAO_R11G11B10_UNORM_to_FLOAT3(packedXeGTAONormal);
+		if (uv.x < 0.5)
+			color = xeGTAONormal;
+		else
+			color = normalVS * 0.5 + 0.5;
+		color = Color::GammaToLinear(color);
+#	elif defined(GTAO_DEBUG_AO)
+		color = xeGTAOWeight;
+		color = Color::GammaToLinear(color);
+#	elif defined(GTAO_DEBUG_BENT_NORMAL)
+		color = (float3)bentNormal * 0.5 + 0.5;
+		color = Color::GammaToLinear(color);
+#	endif
+	}
 #endif
 
 	if (!SharedData::linearLightingSettings.enableLinearLighting) {

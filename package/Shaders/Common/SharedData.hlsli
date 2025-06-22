@@ -227,6 +227,14 @@ namespace SharedData
 		float4 wetParams;
 	};
 
+	struct XeGTAOSettings
+	{
+		uint Enabled;
+		uint BentNormals;
+		uint DirectLightMicroShadowing;
+		float Mix;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -245,6 +253,7 @@ namespace SharedData
 		PostProcessingSettings postProcessingSettings;
 		SSPLSSettings ssplsSettings;
 		SkinData skinData;
+		XeGTAOSettings xeGTAOSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

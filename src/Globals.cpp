@@ -40,6 +40,7 @@
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
+#include "Features/XeGTAO.h"
 
 #include "Features/LightLimitFix/ParticleLights.h"
 
@@ -85,6 +86,7 @@ namespace globals
 		WetnessEffects* wetnessEffects = nullptr;
 		PostProcessing* postProcessing = nullptr;
 		Skin* skin = nullptr;
+		XeGTAOFeature* xeGTAO = nullptr;
 
 		namespace llf
 		{
@@ -173,6 +175,7 @@ namespace globals
 		features::waterEffects = WaterEffects::GetSingleton();
 		features::wetnessEffects = WetnessEffects::GetSingleton();
 		features::postProcessing = PostProcessing::GetSingleton();
+		features::xeGTAO = XeGTAOFeature::GetSingleton();
 
 		features::llf::particleLights = ParticleLights::GetSingleton();
 	}
