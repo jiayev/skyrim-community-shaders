@@ -2352,6 +2352,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 	}
 
+#		if defined(XeGTAO)
+	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
+		specularOcclusion = BentNormals::SpecularAO_Cones(bentNormalWS, worldSpaceNormal, worldSpaceViewDirection, xeGTAOWeight, 1.0 - (glossiness * 0.01));
+		envMask *= specularOcclusion;
+	}
+#		endif
+
 	float3 envColor = 0.0;
 	bool dynamicCubemap = false;
 
@@ -3224,35 +3231,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(DEFERRED) && defined(SSGI)
 #		else
 		diffuseColor += directionalAmbientColor;
-#	endif
-
-#	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
-	float envMask = EnvmapData.x * MaterialData.x;
-
-	float viewNormalAngle = dot(worldSpaceNormal.xyz, viewDirection);
-	float3 envSamplingPoint = (viewNormalAngle * 2) * modelNormal.xyz - viewDirection;
-
-	if (envMask > 0.0) {
-		if (EnvmapData.y) {
-			envMask *= TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).x;
-		} else {
-			envMask *= glossiness;
-		}
-	}
-
-#		if defined(XeGTAO)
-	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
-		specularOcclusion = BentNormals::SpecularAO_Cones(bentNormalWS, worldSpaceNormal, worldSpaceViewDirection, xeGTAOWeight, 1.0 - (glossiness * 0.01));
-		envMask *= specularOcclusion;
-	}
-#		endif
-
-	float3 envColor = 0.0;
-	bool dynamicCubemap = false;
-
-#		if defined(DYNAMIC_CUBEMAPS)
-	float3 F0 = 0.0;
-	float envRoughness = 1.0;
 #		endif
 	}
 #	endif
