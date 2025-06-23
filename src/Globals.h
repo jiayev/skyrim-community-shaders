@@ -27,6 +27,7 @@ struct VolumetricLighting;
 struct VR;
 struct WaterEffects;
 struct WetnessEffects;
+struct ExtendedTranslucency;
 struct PostProcessing;
 struct Skin;
 struct XeGTAOFeature;
@@ -85,6 +86,7 @@ namespace globals
 		extern VR* vr;
 		extern WaterEffects* waterEffects;
 		extern WetnessEffects* wetnessEffects;
+		extern ExtendedTranslucency* extendedTranslucency;
 		extern PostProcessing* postProcessing;
 		extern Skin* skin;
 		extern XeGTAOFeature* xeGTAO;

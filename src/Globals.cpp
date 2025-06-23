@@ -14,6 +14,7 @@
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
+#include "Features/ExtendedTranslucency.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/HairSpecular.h"
@@ -84,6 +85,7 @@ namespace globals
 		VR* vr = nullptr;
 		WaterEffects* waterEffects = nullptr;
 		WetnessEffects* wetnessEffects = nullptr;
+		ExtendedTranslucency* extendedTranslucency = nullptr;
 		PostProcessing* postProcessing = nullptr;
 		Skin* skin = nullptr;
 		XeGTAOFeature* xeGTAO = nullptr;
@@ -174,6 +176,7 @@ namespace globals
 		features::vr = VR::GetSingleton();
 		features::waterEffects = WaterEffects::GetSingleton();
 		features::wetnessEffects = WetnessEffects::GetSingleton();
+		features::extendedTranslucency = ExtendedTranslucency::GetSingleton();
 		features::postProcessing = PostProcessing::GetSingleton();
 		features::xeGTAO = XeGTAOFeature::GetSingleton();
 
