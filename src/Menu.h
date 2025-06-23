@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Feature.h"
 #include "Utils/Serialize.h"
 #include <dxgi1_4.h>
 #include <winrt/base.h>
@@ -93,11 +94,9 @@ public:
 		} StatusPalette;
 		struct FeatureHeadingColors
 		{
-			ImU32 LineColorDefault{ IM_COL32(120, 120, 120, 255) };
-			ImU32 LineColorHovered{ IM_COL32(100, 100, 100, 255) };
-			ImU32 TextColorDefault{ IM_COL32(180, 180, 180, 255) };
-			ImU32 TextColorHovered{ IM_COL32(140, 140, 140, 255) };
-			ImU32 TextColorWhite{ IM_COL32(255, 255, 255, 255) };
+			ImVec4 ColorDefault{ 0.47f, 0.47f, 0.47f, 1.00f };  // ~120, 120, 120
+			ImVec4 ColorHovered{ 0.39f, 0.39f, 0.39f, 1.00f };  // ~100, 100, 100
+			float MinimizedFactor = 0.7f;                       // 70% of original alpha for when the header is minimized
 		} FeatureHeading;
 
 		ImGuiStyle Style = []() {
@@ -216,6 +215,7 @@ public:
 	const ThemeSettings& GetTheme() const { return settings.Theme; }  // Provide read-only access to the Theme.
 
 	void SelectFeatureMenu(const std::string& featureName);
+	static std::unordered_map<std::string, int> categoryCounts;  // Number of features in each feature category
 
 private:
 	Settings settings;
@@ -288,6 +288,7 @@ private:
 	void DrawDisableAtBootSettings();
 	void DrawFooter();
 	void DrawPerformanceOverlaySettings();
+	void BuildCategoryCounts();
 
 	class CharEvent : public RE::InputEvent
 	{
