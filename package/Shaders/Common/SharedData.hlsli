@@ -203,7 +203,9 @@ namespace SharedData
 		float fogGamma;
 		float effectGamma;
 		float skyGamma;
-		float3 pad;
+		float vlGamma;
+		float lensFlareGamma;
+		float pad;
 	};
 
 	struct PostProcessingSettings
