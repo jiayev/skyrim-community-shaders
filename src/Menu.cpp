@@ -13,6 +13,7 @@
 #include "Deferred.h"
 #include "Feature.h"
 #include "FeatureIssues.h"
+#include "FeatureVersions.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Streamline.h"
@@ -738,7 +739,14 @@ void Menu::DrawSettings()
 					} else if (hasFailedMessage) {
 						textColor = feat->version.empty() ? themeSettings.StatusPalette.Disable : themeSettings.StatusPalette.Error;
 					} else {
-						textColor = themeSettings.StatusPalette.RestartNeeded;
+						// No failed message but not loaded - check if INI file exists
+						if (!std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
+							// INI file missing - treat as missing feature (grey)
+							textColor = themeSettings.StatusPalette.Disable;
+						} else {
+							// INI file exists but feature not loaded - truly pending restart (green)
+							textColor = themeSettings.StatusPalette.RestartNeeded;
+						}
 					}
 
 					// Set text color
@@ -844,7 +852,15 @@ void Menu::DrawSettings()
 									if (isLoaded) {
 										feat->DrawSettings();
 									} else {
-										feat->DrawUnloadedUI();
+										// Check if INI file exists to avoid showing obsolete "missing file" messages
+										// when feature was re-enabled after being disabled at boot
+										if (std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
+											// INI file exists - show simple pending restart message
+											ImGui::Text("This feature will be available after restart.");
+										} else {
+											// INI file missing - show detailed unloaded UI with installation info
+											feat->DrawUnloadedUI();
+										}
 										// Add download link if available
 										if (!feat->GetFeatureModLink().empty()) {
 											ImGui::Spacing();
@@ -885,8 +901,16 @@ void Menu::DrawSettings()
 									statusColor = themeSettings.StatusPalette.Error;
 									statusText = "Failed to load.";
 								} else if (!isLoaded) {
-									statusColor = themeSettings.StatusPalette.RestartNeeded;
-									statusText = "Pending restart.";
+									// Check if INI file exists to determine actual status
+									if (!std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
+										// INI file missing - feature not installed
+										statusColor = themeSettings.StatusPalette.Error;
+										statusText = "Not installed.";
+									} else {
+										// INI file exists but feature not loaded - truly pending restart
+										statusColor = themeSettings.StatusPalette.RestartNeeded;
+										statusText = "Pending restart.";
+									}
 								} else {
 									statusColor = themeSettings.StatusPalette.SuccessColor;
 									statusText = "Active.";
@@ -914,10 +938,18 @@ void Menu::DrawSettings()
 									// For unloaded features, show basic info if available
 									ImGui::Spacing();
 									ImGui::SeparatorText("Information");
-									ImGui::Text("This feature is not currently loaded.");
 									if (hasFailedMessage) {
-										ImGui::Spacing();
 										ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", feat->failedLoadedMessage.c_str());
+									} else {
+										// For features that are pending restart or not installed,
+										// the detailed information is shown in the Settings tab.
+										// Here we just show a simple message directing users there.
+										if (!std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
+											ImGui::Text("Feature installation details are available in the Settings tab.");
+										} else {
+											// INI file exists but feature not loaded - truly pending restart
+											ImGui::Text("This feature is pending restart.");
+										}
 									}
 								}
 							}
