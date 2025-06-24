@@ -16,9 +16,6 @@
 #	define SKIN
 #	if defined(CS_SKIN)
 #		define DYNAMIC_CUBEMAPS
-#		if !defined(DEFERRED)
-#			undef CS_SKIN
-#		endif
 #	endif
 #endif
 
