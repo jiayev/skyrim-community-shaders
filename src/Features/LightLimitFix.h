@@ -278,32 +278,19 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct ValidLight1
+		template <int N>
+		struct ValidLight
 		{
 			static bool thunk(RE::BSShaderProperty* a_property, RE::BSLight* a_light)
 			{
-				return func(a_property, a_light) && (a_light->portalStrict || !a_light->portalGraph);
+				return func(a_property, a_light) && (a_light->portalStrict || !a_light->portalGraph || a_light->IsShadowLight());
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct ValidLight2
-		{
-			static bool thunk(RE::BSShaderProperty* a_property, RE::BSLight* a_light)
-			{
-				return func(a_property, a_light) && (a_light->portalStrict || !a_light->portalGraph);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct ValidLight3
-		{
-			static bool thunk(RE::BSShaderProperty* a_property, RE::BSLight* a_light)
-			{
-				return func(a_property, a_light) && (a_light->portalStrict || !a_light->portalGraph);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
+		using ValidLight1 = ValidLight<1>;
+		using ValidLight2 = ValidLight<2>;
+		using ValidLight3 = ValidLight<3>;
 
 		static void Install()
 		{
