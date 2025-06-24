@@ -102,7 +102,6 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual bool SupportsVR() override { return true; };
-	virtual void DrawUnloadedUI() override;
 
 private:
 	bool splashesOfStormsLoaded = false;

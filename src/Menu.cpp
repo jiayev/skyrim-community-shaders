@@ -15,6 +15,7 @@
 #include "Deferred.h"
 #include "Feature.h"
 #include "FeatureIssues.h"
+#include "FeatureVersions.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Streamline.h"
@@ -24,6 +25,7 @@
 #include "Utils/UI.h"
 
 #include "Features/LightLimitFix/ParticleLights.h"
+#include "Features/WeatherPicker.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
@@ -67,6 +69,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Position,
 	PositionSet,
 	OverlayToggleKey)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Menu::Settings::WeatherDetailsWindowSettings,
+	Enabled,
+	Position,
+	PositionSet)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ImGuiStyle,
@@ -749,7 +757,14 @@ void Menu::DrawSettings()
 					} else if (hasFailedMessage) {
 						textColor = feat->version.empty() ? themeSettings.StatusPalette.Disable : themeSettings.StatusPalette.Error;
 					} else {
-						textColor = themeSettings.StatusPalette.RestartNeeded;
+						// No failed message but not loaded - check if INI file exists
+						if (!std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
+							// INI file missing - treat as missing feature (grey)
+							textColor = themeSettings.StatusPalette.Disable;
+						} else {
+							// INI file exists but feature not loaded - truly pending restart (green)
+							textColor = themeSettings.StatusPalette.RestartNeeded;
+						}
 					}
 
 					// Set text color
@@ -796,54 +811,24 @@ void Menu::DrawSettings()
 					bool isLoaded = feat->loaded;
 					bool hasFailedMessage = !feat->failedLoadedMessage.empty();
 					auto& themeSettings = globals::menu->settings.Theme;
+					// Calculate button widths based on text content
+					const char* bootButtonText = isDisabled ? "Enable at Boot" : "Disable at Boot";
+					const char* defaultsButtonText = "Restore Defaults";
 
-					if (ImGui::BeginTabBar("##FeatureTabs")) {
+					float buttonPadding = 16.0f;
+					float buttonSpacing = 8.0f;
+					float bootButtonWidth = ImGui::CalcTextSize(bootButtonText).x + buttonPadding;
+					float defaultsButtonWidth = ImGui::CalcTextSize(defaultsButtonText).x + buttonPadding;
+
+					float totalButtonWidth = bootButtonWidth;
+					if (!isDisabled && isLoaded) {
+						totalButtonWidth += defaultsButtonWidth + buttonSpacing;
+					}
+
+					if (ImGui::BeginTabBar("##FeatureTabs", ImGuiTabBarFlags_Reorderable)) {
+						// Draw standard tabs
 						if (ImGui::BeginTabItem("Settings")) {
 							if (ImGui::BeginChild("##FeatureSettingsFrame", { 0, 0 }, true)) {
-								ImGui::SeparatorText("Feature Management");
-
-								// Disable/Enable at boot
-								ImVec4 textColor;
-								if (isDisabled) {
-									textColor = themeSettings.StatusPalette.Disable;
-								} else if (hasFailedMessage) {
-									textColor = themeSettings.StatusPalette.Error;
-								} else {
-									textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-								}
-								ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-								if (ImGui::Button(isDisabled ? "Enable at Boot" : "Disable at Boot", { -1, 0 })) {
-									bool newState = feat->ToggleAtBootSetting();
-									logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
-								}
-								ImGui::PopStyleColor();
-								if (auto _tt = Util::HoverTooltipWrapper()) {
-									ImGui::Text(
-										"Current State: %s\n"
-										"%s the feature settings at boot. "
-										"Restart will be required to reenable. "
-										"This is the same as deleting the ini file. "
-										"This should remove any performance impact for the feature.",
-										isDisabled ? "Disabled" : "Enabled",
-										isDisabled ? "Enable" : "Disable");
-								}
-
-								// Restore Defaults buttons shows when feature is not disabled and is loaded
-								if (!isDisabled && isLoaded) {
-									ImGui::Spacing();
-									if (ImGui::Button("Restore Defaults", { -1, 0 })) {
-										feat->RestoreDefaultSettings();
-									}
-									if (auto _tt = Util::HoverTooltipWrapper()) {
-										ImGui::Text(
-											"Restores the feature's settings back to their default values. "
-											"You will still need to Save Settings to make these changes permanent.");
-									}
-								}
-
-								ImGui::Spacing();
-								ImGui::Spacing();
-
 								// Feature-specific settings section
 								ImGui::SeparatorText("Feature Settings");
 								if (isDisabled) {
@@ -855,7 +840,15 @@ void Menu::DrawSettings()
 									if (isLoaded) {
 										feat->DrawSettings();
 									} else {
-										feat->DrawUnloadedUI();
+										// Check if INI file exists to avoid showing obsolete "missing file" messages
+										// when feature was re-enabled after being disabled at boot
+										if (std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
+											// INI file exists - show simple pending restart message
+											ImGui::Text("This feature will be available after restart.");
+										} else {
+											// INI file missing - show detailed unloaded UI with installation info
+											feat->DrawUnloadedUI();
+										}
 										// Add download link if available
 										if (!feat->GetFeatureModLink().empty()) {
 											ImGui::Spacing();
@@ -896,8 +889,16 @@ void Menu::DrawSettings()
 									statusColor = themeSettings.StatusPalette.Error;
 									statusText = "Failed to load.";
 								} else if (!isLoaded) {
-									statusColor = themeSettings.StatusPalette.RestartNeeded;
-									statusText = "Pending restart.";
+									// Check if INI file exists to determine actual status
+									if (!std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
+										// INI file missing - feature not installed
+										statusColor = themeSettings.StatusPalette.Error;
+										statusText = "Not installed.";
+									} else {
+										// INI file exists but feature not loaded - truly pending restart
+										statusColor = themeSettings.StatusPalette.RestartNeeded;
+										statusText = "Pending restart.";
+									}
 								} else {
 									statusColor = themeSettings.StatusPalette.SuccessColor;
 									statusText = "Active.";
@@ -925,15 +926,73 @@ void Menu::DrawSettings()
 									// For unloaded features, show basic info if available
 									ImGui::Spacing();
 									ImGui::SeparatorText("Information");
-									ImGui::Text("This feature is not currently loaded.");
 									if (hasFailedMessage) {
-										ImGui::Spacing();
 										ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", feat->failedLoadedMessage.c_str());
+									} else {
+										// For features that are pending restart or not installed,
+										// the detailed information is shown in the Settings tab.
+										// Here we just show a simple message directing users there.
+										if (!std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
+											ImGui::Text("Feature installation details are available in the Settings tab.");
+										} else {
+											// INI file exists but feature not loaded - truly pending restart
+											ImGui::Text("This feature is pending restart.");
+										}
 									}
 								}
 							}
 							ImGui::EndChild();
 							ImGui::EndTabItem();
+						}
+
+						// Position buttons on the right side of the tab bar
+						ImGui::SameLine();
+						float availableSpace = ImGui::GetContentRegionAvail().x;
+						float rightOffset = availableSpace - totalButtonWidth;
+						if (rightOffset > 0) {
+							ImGui::SetCursorPosX(ImGui::GetCursorPosX() + rightOffset);
+						}
+
+						// Disable/Enable at boot button
+						ImVec4 textColor;
+						if (isDisabled) {
+							textColor = themeSettings.StatusPalette.Disable;
+						} else if (hasFailedMessage) {
+							textColor = themeSettings.StatusPalette.Error;
+						} else {
+							textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+						}
+
+						ImGui::PushStyleColor(ImGuiCol_Text, textColor);
+						if (ImGui::Button(bootButtonText, { bootButtonWidth, 0 })) {
+							bool newState = feat->ToggleAtBootSetting();
+							logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
+						}
+						ImGui::PopStyleColor();
+
+						if (auto _tt = Util::HoverTooltipWrapper()) {
+							ImGui::Text(
+								"Current State: %s\n"
+								"%s the feature settings at boot. "
+								"Restart will be required to reenable. "
+								"This is the same as deleting the ini file. "
+								"This should remove any performance impact for the feature.",
+								isDisabled ? "Disabled" : "Enabled",
+								isDisabled ? "Enable" : "Disable");
+						}
+
+						// Restore Defaults button (when feature is not disabled and is loaded)
+						if (!isDisabled && isLoaded) {
+							ImGui::SameLine();
+							if (ImGui::Button(defaultsButtonText, { defaultsButtonWidth, 0 })) {
+								feat->RestoreDefaultSettings();
+							}
+
+							if (auto _tt = Util::HoverTooltipWrapper()) {
+								ImGui::Text(
+									"Restores the feature's settings back to their default values. "
+									"You will still need to Save Settings to make these changes permanent.");
+							}
 						}
 					}
 					ImGui::EndTabBar();
@@ -1635,6 +1694,9 @@ void Menu::DrawOverlay()
 	}
 	if (settings.PerfOverlay.Enabled)
 		DrawPerfOverlay();
+
+	// Draw weather details window independently of main menu
+	DrawWeatherDetailsWindow();
 
 	if (inTestMode) {  // In test mode
 		float seconds = (float)duration_cast<std::chrono::milliseconds>(high_resolution_clock::now() - lastTestSwitch).count() / 1000.0f;
@@ -2725,6 +2787,20 @@ void Menu::SelectFeatureMenu(const std::string& featureName)
 {
 	pendingFeatureSelection = featureName;
 	logger::info("Queued navigation to {} feature menu", featureName);
+}
+
+void Menu::DrawWeatherDetailsWindow()
+{
+	if (!settings.WeatherDetailsWindow.Enabled) {
+		return;
+	}
+
+	// Use Weather core feature for all window management and rendering
+	auto weather = globals::features::weatherPicker;
+	if (weather) {
+		bool* p_open = &settings.WeatherDetailsWindow.Enabled;
+		weather->RenderWeatherDetailsWindow(p_open);
+	}
 }
 
 void Menu::BuildCategoryCounts()

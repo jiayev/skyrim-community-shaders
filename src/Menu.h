@@ -43,6 +43,7 @@ public:
 	void DrawSettings();
 	void DrawOverlay();
 	void DrawPerfOverlay();
+	void DrawWeatherDetailsWindow();
 
 	void ProcessInputEvents(RE::InputEvent* const* a_events);
 	bool ShouldSwallowInput();
@@ -210,12 +211,22 @@ public:
 			bool PositionSet = false;
 			uint32_t OverlayToggleKey = VK_F10;
 		} PerfOverlay;
-	};
 
+		struct WeatherDetailsWindowSettings
+		{
+			bool Enabled = false;
+			ImVec2 Position = ImVec2(50.f, 50.f);
+			bool PositionSet = false;
+		} WeatherDetailsWindow;
+	};
 	const ThemeSettings& GetTheme() const { return settings.Theme; }  // Provide read-only access to the Theme.
+	Settings& GetSettings() { return settings; }                      // Provide access to settings for other components
 
 	void SelectFeatureMenu(const std::string& featureName);
 	static std::unordered_map<std::string, int> categoryCounts;  // Number of features in each feature category
+
+	// Static utility functions
+	static const char* KeyIdToString(uint32_t key);
 
 private:
 	Settings settings;
@@ -279,7 +290,6 @@ private:
 
 	Menu() = default;
 	void SetupImGuiStyle() const;
-	const char* KeyIdToString(uint32_t key);
 	const ImGuiKey VirtualKeyToImGuiKey(WPARAM vkKey);
 
 	void DrawGeneralSettings();
