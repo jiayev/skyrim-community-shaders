@@ -35,6 +35,7 @@
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
+#include "Features/WeatherPicker.h"
 #include "Features/WetnessEffects.h"
 
 #include "Features/LightLimitFix/ParticleLights.h"
@@ -75,6 +76,7 @@ namespace globals
 		VolumetricLighting* volumetricLighting = nullptr;
 		VR* vr = nullptr;
 		WaterEffects* waterEffects = nullptr;
+		WeatherPicker* weatherPicker = nullptr;
 		WetnessEffects* wetnessEffects = nullptr;
 		ExtendedTranslucency* extendedTranslucency = nullptr;
 
@@ -159,6 +161,7 @@ namespace globals
 		features::volumetricLighting = VolumetricLighting::GetSingleton();
 		features::vr = VR::GetSingleton();
 		features::waterEffects = WaterEffects::GetSingleton();
+		features::weatherPicker = WeatherPicker::GetSingleton();
 		features::wetnessEffects = WetnessEffects::GetSingleton();
 		features::extendedTranslucency = ExtendedTranslucency::GetSingleton();
 

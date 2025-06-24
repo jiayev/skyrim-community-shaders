@@ -23,6 +23,7 @@ struct TerrainShadows;
 struct VolumetricLighting;
 struct VR;
 struct WaterEffects;
+struct WeatherPicker;
 struct WetnessEffects;
 struct ExtendedTranslucency;
 
@@ -76,6 +77,7 @@ namespace globals
 		extern VolumetricLighting* volumetricLighting;
 		extern VR* vr;
 		extern WaterEffects* waterEffects;
+		extern WeatherPicker* weatherPicker;
 		extern WetnessEffects* wetnessEffects;
 		extern ExtendedTranslucency* extendedTranslucency;
 

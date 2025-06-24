@@ -66,7 +66,6 @@ public:
 	 * \return Pair containing feature summary description and vector of key feature bullet points
 	 */
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() { return {}; }
-
 	virtual void SetupResources() {}
 	virtual void Reset() {}
 	virtual void DrawSettings() {}
@@ -87,6 +86,29 @@ public:
 
 	virtual void RestoreDefaultSettings() {}
 	virtual bool ToggleAtBootSetting();
+
+	/**
+	 * Weather analysis configuration for features that want to provide weather analysis.
+	 * If sectionName is empty, the feature will not appear in weather analysis UI.
+	 * Features should populate this struct to opt-in to weather analysis display.
+	 */
+	struct WeatherAnalysisConfig
+	{
+		std::string sectionName;             // Display name for the collapsible section (empty = no weather analysis)
+		std::function<void()> drawFunction;  // Custom draw function for weather analysis content
+
+		// Constructor for easy initialization
+		WeatherAnalysisConfig() = default;
+		WeatherAnalysisConfig(const std::string& name, std::function<void()> drawFunc) :
+			sectionName(name), drawFunction(std::move(drawFunc)) {}
+	};
+
+	/**
+	 * Get weather analysis configuration for this feature.
+	 * Returns empty sectionName by default (no weather analysis).
+	 * Features should override this to provide their weather analysis section name and draw function.
+	 */
+	virtual WeatherAnalysisConfig GetWeatherAnalysisConfig() const { return {}; }
 
 	virtual bool ValidateCache(CSimpleIniA& a_ini);
 	virtual void WriteDiskCacheInfo(CSimpleIniA& a_ini);
