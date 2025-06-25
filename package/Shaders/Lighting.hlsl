@@ -2217,7 +2217,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	skinSurfaceProperties.Albedo = baseColor.xyz;
 
-	const float ExtraRoughness = BRDF::F_Schlick(0.04, saturate(dot(modelNormal.xyz, viewDirection))) * SharedData::skinData.fuzzParams.w;
+	const float ExtraRoughness = BRDF::F_Schlick(0.04, saturate(dot(modelNormal.xyz, worldSpaceViewDirection))) * SharedData::skinData.fuzzParams.w;
 	skinSurfaceProperties.RoughnessPrimary = SharedData::skinData.skinParams.x;
 	skinSurfaceProperties.RoughnessPrimary = saturate(SharedData::skinData.skinParams.x - SharedData::skinData.skinParams.z * glossiness);
 	skinSurfaceProperties.RoughnessSecondary = SharedData::skinData.skinParams.y;
@@ -2508,7 +2508,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (skinEnabled) {
 		PBR::LightProperties lightProperties = PBR::InitLightProperties(dirLightColor, dirLightColorMultiplier * dirDetailShadow, parallaxShadow);
 		float3 dirDiffuseColor, dirTransmissionColor, dirSpecularColor;
-		Skin::SkinDirectLightInput(dirDiffuseColor, dirTransmissionColor, dirSpecularColor, lightProperties, skinSurfaceProperties, modelNormal.xyz, viewDirection, DirLightDirection);
+		Skin::SkinDirectLightInput(dirDiffuseColor, dirTransmissionColor, dirSpecularColor, lightProperties, skinSurfaceProperties, modelNormal.xyz, worldSpaceViewDirection, DirLightDirection);
 		lightsDiffuseColor += dirDiffuseColor;
 		transmissionColor += dirTransmissionColor;
 		float3 sssTransmittance = Skin::SSSSTransmittance(
@@ -2628,7 +2628,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (skinEnabled) {
 			float3 pointDiffuseColor, pointTransmissionColor, pointSpecularColor;
 			PBR::LightProperties lightProperties = PBR::InitLightProperties(lightColor, lightShadow, 1);
-			Skin::SkinDirectLightInput(pointDiffuseColor, pointTransmissionColor, pointSpecularColor, lightProperties, skinSurfaceProperties, modelNormal.xyz, viewDirection, normalizedLightDirection);
+			Skin::SkinDirectLightInput(pointDiffuseColor, pointTransmissionColor, pointSpecularColor, lightProperties, skinSurfaceProperties, modelNormal.xyz, worldSpaceViewDirection, normalizedLightDirection);
 			lightsDiffuseColor += pointDiffuseColor;
 			transmissionColor += pointTransmissionColor;
 			float3 sssTransmittance = Skin::SSSSTransmittance(
