@@ -130,6 +130,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Theme,
 	PerfOverlay)
 
+constexpr std::uint16_t KEY_PRESSED_MASK = 0x8000;
+
 void Menu::SetupImGuiStyle() const
 {
 	auto& style = ImGui::GetStyle();
@@ -305,6 +307,10 @@ void Menu::Init()
 
 void Menu::DrawSettings()
 {
+	if (focusChanged) {
+		OnFocusChanged();
+		focusChanged = false;
+	}
 	ImGui::DockSpaceOverViewport(NULL, ImGuiDockNodeFlags_PassthruCentralNode);
 
 	ImGui::SetNextWindowPos(Util::GetNativeViewportSizeScaled(0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
@@ -2714,6 +2720,16 @@ void Menu::ProcessInputEventQueue()
 	}
 
 	_keyEventQueue.clear();
+
+	// Fallback: release stuck Shift and Tab if OS reports them not pressed
+	if ((io.KeysDown[ImGuiKey_LeftShift] && !(GetAsyncKeyState(VK_LSHIFT) & KEY_PRESSED_MASK)) ||
+		(io.KeysDown[ImGuiKey_RightShift] && !(GetAsyncKeyState(VK_RSHIFT) & KEY_PRESSED_MASK))) {
+		io.AddKeyEvent(ImGuiKey_LeftShift, false);
+		io.AddKeyEvent(ImGuiKey_RightShift, false);
+	}
+	if (io.KeysDown[ImGuiKey_Tab] && !(GetAsyncKeyState(VK_TAB) & KEY_PRESSED_MASK)) {
+		io.AddKeyEvent(ImGuiKey_Tab, false);
+	}
 }
 
 void Menu::addToEventQueue(KeyEvent e)
@@ -2722,10 +2738,16 @@ void Menu::addToEventQueue(KeyEvent e)
 	_keyEventQueue.emplace_back(e);
 }
 
-void Menu::OnFocusLost()
+void Menu::OnFocusChanged()
 {
-	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
-	_keyEventQueue.clear();
+	// Solves the alt+tab stuck issue, but disables tab after tabbing back in.
+	if (const auto& inputMgr = RE::BSInputDeviceManager::GetSingleton()) {
+		if (const auto& device = inputMgr->GetKeyboard()) {
+			device->Reset();
+		}
+	}
+	// Allows tab to work again after alt+tabbing back in.
+	ImGui::GetIO().ClearInputKeys();
 }
 
 void Menu::ProcessInputEvents(RE::InputEvent* const* a_events)
