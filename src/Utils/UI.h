@@ -134,34 +134,6 @@ namespace Util
 	 * Draws a custom styled collapsible category header with lines extending from both sides
 	 * @param categoryName The name of the category to display
 	 * @param isExpanded Reference to the expansion state
-	 * @return true if the expansion state was toggled
-	 */
-	bool DrawCategoryHeader(const char* categoryName, bool& isExpanded);
-
-	/**
-	 * Draws a custom styled section header (non-collapsible) with lines extending from both sides
-	 * @param sectionName The name of the section to display
-	 * @param useWhiteText Whether to use white text (for differentiation)
-	 */
-	void DrawSectionHeader(const char* sectionName, bool useWhiteText = false);
-
-	// Icon loading functions
-	// `device` must remain alive for the SRV lifetime. Caller owns *out_srv and must `Release()` it.
-	bool LoadTextureFromFile(ID3D11Device* device,
-		const char* filename,
-		ID3D11ShaderResourceView** out_srv,
-		ImVec2& out_size);
-	bool InitializeMenuIcons(Menu* menu);
-
-	// Text rendering helpers for clearer title text
-	// These functions modify ImGui rendering state and should be called within ImGui context
-	ImVec2 DrawSharpText(const char* text, bool alignToPixelGrid = true, float scale = 1.0f);
-	ImVec2 DrawAlignedTextWithLogo(ID3D11ShaderResourceView* logoTexture, const ImVec2& logoSize, const char* text, float textScale = DefaultHeaderTextScale);
-
-	/**
-	 * Draws a custom styled collapsible category header with lines extending from both sides
-	 * @param categoryName The name of the category to display
-	 * @param isExpanded Reference to the expansion state
 	 * @param categoryCount Number of features in the category
 	 * @return true if the expansion state was toggled
 	 */
