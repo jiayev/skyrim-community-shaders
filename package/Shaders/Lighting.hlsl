@@ -3296,9 +3296,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	indirectSpecularLobeWeightSec *= SharedData::hairSpecularSettings.SpecularIndirectMult;
 #			if defined(XeGTAO)
 	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
-		float specularOcclusionPrim = BentNormals::SpecularAO_Cones(bentNormalWS, worldSpaceNormal, worldSpaceViewDirection, xeGTAOWeight, 1.0 - (SharedData::hairSpecularSettings.Glossiness * 0.01));
+		float specularOcclusionPrim = BentNormals::SpecularAO_Cones(bentNormalWS, worldSpaceNormal, worldSpaceViewDirection, xeGTAOWeight, roughness);
 		indirectSpecularLobeWeightPrim *= specularOcclusionPrim;
-		float specularOcclusionSec = BentNormals::SpecularAO_Cones(bentNormalWS, worldSpaceNormal, worldSpaceViewDirection, xeGTAOWeight, 1.0 - (SharedData::hairSpecularSettings.Glossiness * 0.005));
+		float specularOcclusionSec = BentNormals::SpecularAO_Cones(bentNormalWS, worldSpaceNormal, worldSpaceViewDirection, xeGTAOWeight, roughness);
 		indirectSpecularLobeWeightSec *= specularOcclusionSec;
 	}
 #			endif
