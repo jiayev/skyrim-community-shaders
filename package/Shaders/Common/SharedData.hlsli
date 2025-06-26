@@ -69,7 +69,7 @@ namespace SharedData
 		uint EnableContactShadows;
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		float LightsFar;
+		float pad0;
 		uint4 ClusterSize;
 	};
 
@@ -149,17 +149,17 @@ namespace SharedData
 	struct HairSpecularSettings
 	{
 		uint Enabled;
-		float Glossiness;
+		float HairGlossiness;
 		float SpecularMult;
 		float DiffuseMult;
 		uint EnableTangentShift;
-		float PrimaryShift;
-		float SecondaryShift;
-		float Saturation;
+		float PrimaryTangentShift;
+		float SecondaryTangentShift;
+		float HairSaturation;
 		float SpecularIndirectMult;
 		float DiffuseIndirectMult;
 		float BaseColorMult;
-		float pad;
+		float Transmission;
 	};
 
 	struct TerrainVariationSettings
