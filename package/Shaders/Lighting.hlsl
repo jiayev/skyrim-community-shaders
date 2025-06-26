@@ -2366,6 +2366,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 envColor = 0.0;
 	bool dynamicCubemap = false;
+#		if defined(VANILLA_FRESNEL)
+	dynamicCubemap = true;
+#		endif
 
 	if (envMask > 0.0) {
 #		if defined(DYNAMIC_CUBEMAPS)
@@ -2443,9 +2446,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (!dynamicCubemap) {
 			float3 envColorBase = Color::GammaToLinear(TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz);
 			envColor = envColorBase.xyz * envMask;
-#		if defined(VANILLA_FRESNEL)
-			F0 = lerp(F0, Color::GammaToLinear(TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 15).xyz), envMask);
-#		endif
 		}
 	}
 
