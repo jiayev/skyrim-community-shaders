@@ -130,6 +130,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Theme,
 	PerfOverlay)
 
+constexpr std::uint16_t KEY_PRESSED_MASK = 0x8000;
+
 void Menu::SetupImGuiStyle() const
 {
 	auto& style = ImGui::GetStyle();
@@ -305,6 +307,10 @@ void Menu::Init()
 
 void Menu::DrawSettings()
 {
+	if (focusChanged) {
+		OnFocusChanged();
+		focusChanged = false;
+	}
 	ImGui::DockSpaceOverViewport(NULL, ImGuiDockNodeFlags_PassthruCentralNode);
 
 	ImGui::SetNextWindowPos(Util::GetNativeViewportSizeScaled(0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
@@ -770,7 +776,9 @@ void Menu::DrawSettings()
 					// Display version if loaded
 					if (isLoaded) {
 						ImGui::SameLine();
-						ImGui::TextDisabled(fmt::format("({})", feat->version).c_str());
+						std::string formattedVersion = feat->version;
+						std::replace(formattedVersion.begin(), formattedVersion.end(), '-', '.');
+						ImGui::TextDisabled(fmt::format("({})", formattedVersion).c_str());
 					}
 				}
 			};
@@ -827,33 +835,48 @@ void Menu::DrawSettings()
 									ImGui::Text("Enable the feature above to access its configuration options.");
 								} else {
 									if (isLoaded) {
+										// Check if the feature has any settings by monitoring cursor position (if the feature draws settings, the imgui cursor position will change)
+										ImVec2 cursorPosBefore = ImGui::GetCursorPos();
+
 										feat->DrawSettings();
+
+										ImVec2 cursorPosAfter = ImGui::GetCursorPos();
+
+										// If cursor position hasn't changed significantly, no visible settings were drawn
+										const float epsilon = 0.1f;  // Simple check to ensure we don't trigger on minor cursor movements / weird imgui math
+										bool cursorMoved = (std::abs(cursorPosAfter.x - cursorPosBefore.x) > epsilon ||
+															std::abs(cursorPosAfter.y - cursorPosBefore.y) > epsilon);
+										if (!cursorMoved) {
+											ImGui::TextColored(themeSettings.StatusPalette.Disable, "There are no settings available for this feature.");
+										}
 									} else {
-										// Check if INI file exists to avoid showing obsolete "missing file" messages
-										// when feature was re-enabled after being disabled at boot
-										if (std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
+										// Check if feature is obsolete first - always show error for obsolete features
+										if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
+											// Obsolete feature - show detailed unloaded UI with error info
+											feat->DrawUnloadedUI();
+										} else if (std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
 											// INI file exists - show simple pending restart message
 											ImGui::Text("This feature will be available after restart.");
 										} else {
 											// INI file missing - show detailed unloaded UI with installation info
 											feat->DrawUnloadedUI();
-										}
-										// Add download link if available
-										if (!feat->GetFeatureModLink().empty()) {
-											ImGui::Spacing();
-											const auto downloadText = fmt::format("Click here to download this feature ({})", feat->GetFeatureModLink());
-											if (ImGui::Selectable(downloadText.c_str())) {
-												ShellExecuteA(NULL, "open", feat->GetFeatureModLink().c_str(), NULL, NULL, SW_SHOWNORMAL);
-											}
-											if (auto _tt = Util::HoverTooltipWrapper()) {
-												ImGui::Text("Download the feature from the mod page.");
+											// Add download link if available
+											if (!feat->GetFeatureModLink().empty()) {
+												ImGui::Spacing();
+												const auto downloadText = fmt::format("Click here to download this feature ({})", feat->GetFeatureModLink());
+												if (ImGui::Selectable(downloadText.c_str())) {
+													ShellExecuteA(NULL, "open", feat->GetFeatureModLink().c_str(), NULL, NULL, SW_SHOWNORMAL);
+												}
+												if (auto _tt = Util::HoverTooltipWrapper()) {
+													ImGui::Text("Download the feature from the mod page.");
+												}
 											}
 										}
 									}
 								}
 
-								// Error Messages
-								if (hasFailedMessage && feat->DrawFailLoadMessage()) {
+								// Error Messages (Not for obsolete features as this is already covered by DrawUnloadedUI)
+								if (hasFailedMessage && feat->DrawFailLoadMessage() && !FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
 									ImGui::Spacing();
 									ImGui::SeparatorText("Error");
 									ImGui::TextColored(themeSettings.StatusPalette.Error, feat->failedLoadedMessage.c_str());
@@ -1057,7 +1080,7 @@ void Menu::DrawSettings()
 			}
 
 			auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
-				return !feat->loaded && feat->IsInMenu();
+				return !feat->loaded && feat->IsInMenu() && (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
 			});
 			if (std::ranges::distance(unloadedFeatures) != 0) {
 				menuList.push_back("Unloaded Features"s);
@@ -2714,6 +2737,16 @@ void Menu::ProcessInputEventQueue()
 	}
 
 	_keyEventQueue.clear();
+
+	// Fallback: release stuck Shift and Tab if OS reports them not pressed
+	if ((io.KeysDown[ImGuiKey_LeftShift] && !(GetAsyncKeyState(VK_LSHIFT) & KEY_PRESSED_MASK)) ||
+		(io.KeysDown[ImGuiKey_RightShift] && !(GetAsyncKeyState(VK_RSHIFT) & KEY_PRESSED_MASK))) {
+		io.AddKeyEvent(ImGuiKey_LeftShift, false);
+		io.AddKeyEvent(ImGuiKey_RightShift, false);
+	}
+	if (io.KeysDown[ImGuiKey_Tab] && !(GetAsyncKeyState(VK_TAB) & KEY_PRESSED_MASK)) {
+		io.AddKeyEvent(ImGuiKey_Tab, false);
+	}
 }
 
 void Menu::addToEventQueue(KeyEvent e)
@@ -2722,10 +2755,16 @@ void Menu::addToEventQueue(KeyEvent e)
 	_keyEventQueue.emplace_back(e);
 }
 
-void Menu::OnFocusLost()
+void Menu::OnFocusChanged()
 {
-	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
-	_keyEventQueue.clear();
+	// Solves the alt+tab stuck issue, but disables tab after tabbing back in.
+	if (const auto& inputMgr = RE::BSInputDeviceManager::GetSingleton()) {
+		if (const auto& device = inputMgr->GetKeyboard()) {
+			device->Reset();
+		}
+	}
+	// Allows tab to work again after alt+tabbing back in.
+	ImGui::GetIO().ClearInputKeys();
 }
 
 void Menu::ProcessInputEvents(RE::InputEvent* const* a_events)
