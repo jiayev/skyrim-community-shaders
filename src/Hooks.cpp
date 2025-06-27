@@ -846,7 +846,7 @@ namespace Hooks
 
 			// advanced skin
 			auto skin = globals::features::skin;
-			if (skin->loaded) {
+			if (skin->loaded && skin->settings.EnableSkin) {
 				skin->BSLightingShader_SetupMaterial(material);
 			}
 		};
