@@ -120,6 +120,14 @@ namespace Color
 		}
 	}
 
+	float3 Specular(float3 color)
+	{
+		if (!SharedData::linearLightingSettings.enableLinearLighting) {
+			color = LinearToGamma(color);
+		}
+		return color;
+	}
+
 	float3 Light(float3 color)
 	{
 		if (SharedData::linearLightingSettings.enableLinearLighting) {
