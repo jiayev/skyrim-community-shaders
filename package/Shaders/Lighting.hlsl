@@ -3417,7 +3417,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	elif defined(SKIN) && defined(CS_SKIN)
 	float3 indirectDiffuseLobeWeight, indirectSpecularLobeWeight;
 	if (skinEnabled) {
+#		if defined(SSS) && defined(DEFERRED)
+		float3 directLightsDiffuseInput = diffuseColor;
+#		else
 		float3 directLightsDiffuseInput = diffuseColor * baseColor.xyz;
+#		endif
 		color.xyz += directLightsDiffuseInput;
 
 		Skin::SkinIndirectLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, skinSurfaceProperties, worldSpaceNormal.xyz, worldSpaceViewDirection, worldSpaceVertexNormal);
@@ -3447,7 +3451,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		color.xyz += transmissionColor;
 	} else {
+#		if defined(SSS) && defined(DEFERRED)
+		color.xyz += diffuseColor;
+#		else
 		color.xyz += diffuseColor * baseColor.xyz;
+#		endif
 	}
 #	elif defined(HAIR) && defined(CS_HAIR)
 	color.xyz += diffuseColor * baseColor.xyz;
