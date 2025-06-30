@@ -103,7 +103,6 @@ float4 SSSSBlurCS(
 
 #if defined(HORIZONTAL)
 	colorM.rgb = Color::Irradiance(colorM.rgb);
-	colorM.rgb = colorM.rgb / max(AlbedoTexture[DTid.xy].rgb, 0.0001);
 #endif
 
 	if (sssAmount == 0)
@@ -154,7 +153,6 @@ float4 SSSSBlurCS(
 
 #if defined(HORIZONTAL)
 		color.rgb = Color::Irradiance(color.rgb);
-		color.rgb = color.rgb / max(AlbedoTexture[coords].rgb, 0.0001);
 #endif
 
 		float depth = DepthTexture[coords].r;

@@ -425,7 +425,7 @@ void Deferred::DeferredPasses()
 		{
 			TracyD3D11Zone(globals::state->tracyCtx, "Ambient Composite");
 
-			ID3D11ShaderResourceView* srvs[10]{
+			ID3D11ShaderResourceView* srvs[11]{
 				albedo.SRV,
 				normalRoughness.SRV,
 				skylighting->loaded || REL::Module::IsVR() ? depth.depthSRV : nullptr,
@@ -435,6 +435,7 @@ void Deferred::DeferredPasses()
 				ssgi_y,
 				ssgi_cocg,
 				ibl->loaded ? ibl->diffuseIBLTexture->srv.get() : nullptr,
+				masks.SRV,
 				xeGTAO->loaded ? xeGTAO->outputAO->srv.get() : nullptr,
 			};
 
@@ -680,6 +681,9 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientComposite()
 		if (globals::features::ibl->loaded)
 			defines.push_back({ "IBL", nullptr });
 
+		if (globals::features::subsurfaceScattering->loaded)
+			defines.push_back({ "SSS", nullptr });
+
 		if (globals::features::xeGTAO->loaded)
 			defines.push_back({ "XeGTAO", nullptr });
 
@@ -701,6 +705,9 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientCompositeInterior()
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
+
+		if (globals::features::subsurfaceScattering->loaded)
+			defines.push_back({ "SSS", nullptr });
 
 		if (globals::features::xeGTAO->loaded)
 			defines.push_back({ "XeGTAO", nullptr });
