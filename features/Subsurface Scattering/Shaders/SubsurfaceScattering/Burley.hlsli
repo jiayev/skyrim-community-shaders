@@ -73,7 +73,7 @@ BurleySampleDiffuseNormal SampleSSSColor(float2 CenterUV, float2 UVOffset, float
 	Sample.WorldNormal = 0.0;
 
 	Sample.DiffuseLighting = ColorTexture[pixCoord];
-	Sample.DiffuseLighting.rgb = Color::Irradiance(Sample.DiffuseLighting.rgb);
+	Sample.DiffuseLighting.rgb = Color::IrradianceToLinear(Sample.DiffuseLighting.rgb);
 
 	float3 ViewNormal = GBuffer::DecodeNormal(NormalTexture[pixCoord].xy);
 	Sample.WorldNormal = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(ViewNormal, 0)).xyz);
