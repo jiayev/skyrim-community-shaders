@@ -513,7 +513,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		baseColor.xyz *= SharedData::grassLightingSettings.BasicGrassBrightness;
 #			endif  // !TRUE_PBR
 
-	float3 F0 = SharedData::grassLightingSettings.SpecularStrength * 0.08;
+	float3 F0 = specColor.w * SharedData::grassLightingSettings.SpecularStrength;
 	float roughness = saturate(pow(2.0 / (SharedData::grassLightingSettings.Glossiness + 2.0), 0.25));
 
 #			if defined(TRUE_PBR)
@@ -747,7 +747,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	diffuseColor += max(0, sss * subsurfaceColor * SharedData::grassLightingSettings.SubsurfaceScatteringAmount);
 
 	specularColor += lightsSpecularColor;
-	specularColor *= specColor.w * SharedData::grassLightingSettings.SpecularStrength;
 	specularColor = Color::GammaToLinear(specularColor);
 #			endif
 
