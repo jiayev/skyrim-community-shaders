@@ -37,7 +37,7 @@ public:
 	struct alignas(16) Settings
 	{
 		uint Enabled = true;
-		float HairGlossiness = 80.0f;
+		float HairGlossiness = 70.0f;
 		float SpecularMult = 1.0f;
 		float DiffuseMult = 1.0f;
 		uint EnableTangentShift = true;
@@ -52,6 +52,8 @@ public:
 		float SelfShadowStrength = 1.0f;
 		float SelfShadowExponent = 1.0f;
 		float SelfShadowScale = 1.0f;
+		uint HairMode = 0; // 0: Kajiya-Kay, 1: Marschner
+		uint pad[3];
 	} settings;
 
 	eastl::unique_ptr<Texture2D> texTangentShift = nullptr;
