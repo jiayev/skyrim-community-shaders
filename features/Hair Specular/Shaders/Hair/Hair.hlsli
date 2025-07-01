@@ -219,7 +219,7 @@ namespace Hair
 		GetHairDirectLightScheuermann(dirDiffuse, dirSpecular, T, L, V, N, VN, lightColor, shininess, selfShadow, uv, baseColor);
 #else
 		GetHairDirectLightMarschner(dirDiffuse, dirSpecular, T, L, V, N, VN, lightColor, shininess, selfShadow, uv, baseColor);
-		dirSpecular = Color::Specular(dirSpecular);
+		dirSpecular = Color::IrradianceToGamma(dirSpecular);
 #endif
 	}
 

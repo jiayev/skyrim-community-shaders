@@ -932,9 +932,7 @@ float3 GetWorldMapBaseColor(float3 originalBaseColor, float3 rawBaseColor, float
 #		if defined(LODOBJECTS)
 	float4 lodColorMul = lodMultiplier.xxxx * float4(0.269999981, 0.281000018, 0.441000015, 0.441000015) + float4(0.0780000091, 0.09799999, -0.0349999964, 0.465000004);
 	float4 lodColor = lodColorMul.xyzw * 2.0.xxxx;
-	if (SharedData::linearLightingSettings.enableLinearLighting) {
-		lodColor.xyz = Color::Diffuse(lodColor.xyz);
-	}
+	lodColor.xyz = Color::Diffuse(lodColor.xyz);
 	bool useLodColorZ = lodColorMul.w > 0.5;
 	lodColor.xyz = max(lodColor.xyz, rawBaseColor.xyz);
 	lodColor.w = useLodColorZ ? lodColor.z : min(lodColor.w, rawBaseColor.z);
@@ -942,9 +940,7 @@ float3 GetWorldMapBaseColor(float3 originalBaseColor, float3 rawBaseColor, float
 #		else
 	float4 lodColorMul = lodMultiplier.xxxx * float4(0.199999988, 0.441000015, 0.269999981, 0.281000018) + float4(0.300000012, 0.465000004, 0.0780000091, 0.09799999);
 	float3 lodColor = lodColorMul.zwy * 2.0.xxx;
-	if (SharedData::linearLightingSettings.enableLinearLighting) {
-		lodColor.xyz = Color::Diffuse(lodColor.xyz);
-	}
+	lodColor.xyz = Color::Diffuse(lodColor.xyz);
 	lodColor.xy = max(lodColor.xy, rawBaseColor.xy);
 	lodColor.z = lodColorMul.y > 0.5 ? max((lodMultiplier * 0.441 + -0.0349999964) * 2, rawBaseColor.z) : min(lodColor.z, rawBaseColor.z);
 	return lodColorMul.xxx * (lodColor - rawBaseColor.xyz) + rawBaseColor;
@@ -1948,11 +1944,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 hairTint = 0;
 
 	if (SharedData::hairSpecularSettings.Enabled) {
-		if (SharedData::linearLightingSettings.enableLinearLighting) {
-			hairTint = lerp(1, Color::Diffuse(TintColor.xyz), Color::Diffuse(input.Color.y));
-		} else {
-			hairTint = lerp(1, TintColor.xyz, input.Color.y);
-		}
+		hairTint = lerp(1, Color::Diffuse(TintColor.xyz), Color::Diffuse(input.Color.y));
 		baseColor.xyz *= hairTint;
 		baseColor.xyz = Hair::Saturation(baseColor.xyz, SharedData::hairSpecularSettings.HairSaturation);
 		baseColor.xyz *= SharedData::hairSpecularSettings.BaseColorMult;
@@ -1973,9 +1965,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(LOD_LAND_BLEND)
 	float4 lodLandColor = TexLandLodBlend1Sampler.Sample(SampLandLodBlend1Sampler, input.TexCoord0.zw);
-	if (SharedData::linearLightingSettings.enableLinearLighting) {
-		lodLandColor.xyz = Color::GammaToTrueLinear(lodLandColor.xyz);
-	}
+	lodLandColor.xyz = Color::Diffuse(lodLandColor.xyz);
 #		if defined(LOD_BLENDING)
 	lodLandColor.xyz *= SharedData::lodBlendingSettings.LODTerrainBrightness;
 #		endif  // LOD_BLENDING
@@ -3175,10 +3165,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	modelNormal.xyz = input.EyeNormal;
 #	endif  // EYE
 
-	float3 emitColor = EmitColor;
-	if (SharedData::linearLightingSettings.enableLinearLighting) {
-		emitColor = Color::GammaToLinearLuminancePreserving(emitColor);
-	}
+	float3 emitColor = Color::GammaToLinearLuminancePreserving(EmitColor);
 #	if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 	bool hasEmissive = (0x3F & (Permutation::PixelShaderDescriptor >> 24)) == Permutation::LightingTechnique::Glowmap;
 #		if defined(TRUE_PBR)
@@ -3195,10 +3182,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	diffuseColor += emitColor.xyz;
 #	endif
 
-	float3 directionalAmbientColor = max(0, mul(DirectionalAmbient, modelNormal));
-	if (SharedData::linearLightingSettings.enableLinearLighting) {
-		directionalAmbientColor = Color::Ambient(directionalAmbientColor);
-	}
+	float3 directionalAmbientColor = Color::Ambient(max(0, mul(DirectionalAmbient, modelNormal)));
 
 #	if defined(IBL)
 	if (SharedData::iblSettings.EnableDiffuseIBL && !SharedData::InInterior) {
@@ -3220,29 +3204,25 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		skylightingDiffuse = Skylighting::mixDiffuse(SharedData::skylightingSettings, skylightingDiffuse);
 
-		if (!SharedData::linearLightingSettings.enableLinearLighting) {
-			directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor);
-		}
+		directionalAmbientColor = Color::IrradianceToLinear(directionalAmbientColor);
 
 		directionalAmbientColor *= skylightingDiffuse;
 		directionalAmbientColor *= 1.0 + saturate(worldSpaceNormal.z) * (1.0 - SharedData::skylightingSettings.MinDiffuseVisibility);
-		if (!SharedData::linearLightingSettings.enableLinearLighting) {
 #		if !(defined(SKIN) && defined(CS_SKIN))
-			directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor);
+		directionalAmbientColor = Color::IrradianceToGamma(directionalAmbientColor);
 #		else
-			if (!skinEnabled) {
-				directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor);
-			}
-#		endif
+		if (!skinEnabled) {
+			directionalAmbientColor = Color::IrradianceToGamma(directionalAmbientColor);
 		}
+#		endif
 	}
 #	endif
 
 #	if defined(XeGTAO)
 	if (xeGTAOVisibility < 1.0) {
-		directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor);
+		directionalAmbientColor = Color::IrradianceToLinear(directionalAmbientColor);
 		directionalAmbientColor *= xeGTAOVisibility;
-		directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor);
+		directionalAmbientColor = Color::IrradianceToGamma(directionalAmbientColor);
 	}
 #	endif
 
@@ -3517,11 +3497,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(SPECULAR) && !defined(VANILLA_FRESNEL) && !(defined(SKIN) && defined(CS_SKIN))
 #		if defined(EMAT_ENVMAP)
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
-		specularColor = (specularColor * glossiness * MaterialData.yyy) * lerp(SpecularColor.xyz, Color::LinearToGamma(complexSpecular), complexMaterial);
-	} else {
-		specularColor = (specularColor * glossiness * MaterialData.yyy) * lerp(SpecularColor.xyz, complexSpecular, complexMaterial);
-	}
+	specularColor = (specularColor * glossiness * MaterialData.yyy) * lerp(SpecularColor.xyz, Color::IrradianceToGamma(complexSpecular), complexMaterial);
 #		elif defined(HAIR) && defined(CS_HAIR)
 	if (!SharedData::hairSpecularSettings.Enabled)
 		specularColor = (specularColor * glossiness * MaterialData.yyy) * SpecularColor.xyz;
@@ -3541,9 +3517,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		specularColor = 0;
 #	endif
 
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
-		specularColor = Color::GammaToLinear(specularColor);
-	}
+	specularColor = Color::IrradianceToLinear(specularColor);
 
 	diffuseColor = reflectionDiffuseColor;
 
@@ -3551,11 +3525,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(DYNAMIC_CUBEMAPS)
 	if (!dynamicCubemap)
 #		endif
-		if (!SharedData::linearLightingSettings.enableLinearLighting) {
-			specularColor += envColor * Color::GammaToLinear(diffuseColor);
-		} else {
-			specularColor += envColor * diffuseColor;
-		}
+		specularColor += envColor * Color::IrradianceToLinear(diffuseColor);
 #	endif
 
 #	if defined(EMAT_ENVMAP)
@@ -3596,11 +3566,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if !defined(DEFERRED)
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
-		color.xyz = Color::LinearToGamma(Color::GammaToLinear(color.xyz) + specularColor);
-	} else {
-		color.xyz = color.xyz + specularColor;
-	}
+	color.xyz = Color::IrradianceToGamma(Color::IrradianceToLinear(color.xyz) + specularColor);
 	if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z)
 		color.xyz = lerp(color.xyz, Color::Fog(input.FogParam.xyz), input.FogParam.w);
 #	endif

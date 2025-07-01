@@ -506,9 +506,7 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssA
 	float OriginalLerp = saturate((BurleyParameter.SurfaceOpacity - LowOpacityEps) / LowOpacityEps);
 
 	OutColor.xyz = lerp(OriginalColor,RadianceAccumulated.xyz,OriginalLerp);
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
-		OutColor.xyz = Color::LinearToGamma(OutColor.xyz);
-	}
+	OutColor.xyz = Color::IrradianceToGamma(OutColor.xyz);
 	OutColor.xyz *= AlbedoTexture[DTid.xy].xyz;
 	OutColor.w = ColorTexture[DTid.xy].w;
 

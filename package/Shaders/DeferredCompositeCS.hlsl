@@ -101,7 +101,7 @@ Texture2D<float4> SSRTexture : register(t15);
 
 	float glossiness = normalGlossiness.z;
 
-	float3 color = Color::Irradiance(diffuseColor) + specularColor;
+	float3 color = Color::IrradianceToLinear(diffuseColor) + specularColor;
 
 #if defined(XeGTAO)
 	uint xeGTAO = 0;
@@ -174,7 +174,7 @@ Texture2D<float4> SSRTexture : register(t15);
 		}
 
 #	if defined(INTERIOR)
-		float3 specularIrradiance = Color::Irradiance(EnvTexture.SampleLevel(LinearSampler, R, level));
+		float3 specularIrradiance = Color::IrradianceToLinear(EnvTexture.SampleLevel(LinearSampler, R, level));
 
 		finalIrradiance += specularIrradiance;
 
@@ -206,12 +206,12 @@ Texture2D<float4> SSRTexture : register(t15);
 		float3 specularIrradiance = 1;
 
 		if (skylightingSpecular < 1.0)
-			specularIrradiance = Color::Irradiance(EnvTexture.SampleLevel(LinearSampler, R, level));
+			specularIrradiance = Color::IrradianceToLinear(EnvTexture.SampleLevel(LinearSampler, R, level));
 
 		float3 specularIrradianceReflections = 1.0;
 
 		if (skylightingSpecular > 0.0)
-			specularIrradianceReflections = Color::Irradiance(EnvReflectionsTexture.SampleLevel(LinearSampler, R, level));
+			specularIrradianceReflections = Color::IrradianceToLinear(EnvReflectionsTexture.SampleLevel(LinearSampler, R, level));
 
 		finalIrradiance = lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
 
@@ -239,7 +239,7 @@ Texture2D<float4> SSRTexture : register(t15);
 			}
 		}
 #	else
-		float3 specularIrradianceReflections = Color::Irradiance(EnvReflectionsTexture.SampleLevel(LinearSampler, R, level));
+		float3 specularIrradianceReflections = Color::IrradianceToLinear(EnvReflectionsTexture.SampleLevel(LinearSampler, R, level));
 
 		finalIrradiance += specularIrradianceReflections;
 
@@ -362,9 +362,7 @@ Texture2D<float4> SSRTexture : register(t15);
 	}
 #endif
 
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
-		color = Color::LinearToGamma(color);
-	}
+	color = Color::IrradianceToGamma(color);
 
 #if defined(DEBUG)
 

@@ -208,12 +208,14 @@ namespace SharedData
 		float effectGamma;
 		float effectAlphaGamma;
 		float skyGamma;
+		float waterGamma;
 		float vlGamma;
 		float membraneEffectMult;
 		float bloodEffectMult;
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
+		float3 pad;
 	};
 
 	struct PostProcessingSettings
