@@ -32,6 +32,10 @@
 #	define LOD
 #endif
 
+#if defined(VANILLA_FRESNEL_DL)
+#	define VANILLA_FRESNEL
+#endif
+
 struct VS_INPUT
 {
 	float4 Position : POSITION0;
@@ -739,7 +743,7 @@ float3 GetLightSpecularInput(PS_INPUT input, float3 L, float3 V, float3 N, float
 
 #	if defined(SPECULAR)
 	float lightColorMultiplier = exp2(shininess * log2(HdotN));
-#		if defined(VANILLA_FRESNEL)
+#		if defined(VANILLA_FRESNEL_DL)
 	float NdotV = saturate(dot(N, V));
 	float NdotL = saturate(dot(N, L));
 	float NdotH = saturate(dot(N, H));
@@ -3033,7 +3037,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	endif  // MULTI_LAYER_PARALLAX
 
-#	if defined(SPECULAR) && !defined(VANILLA_FRESNEL)
+#	if defined(SPECULAR) && !defined(VANILLA_FRESNEL_DL)
 #		if defined(EMAT_ENVMAP)
 	specularColor = (specularColor * glossiness * MaterialData.yyy) * lerp(SpecularColor.xyz, Color::LinearToGamma(complexSpecular), complexMaterial);
 #		elif defined(HAIR) && defined(CS_HAIR)

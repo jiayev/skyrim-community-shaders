@@ -10,6 +10,10 @@
 #	define GRASS
 #endif  // GRASS_LIGHTING
 
+#if defined(VANILLA_FRESNEL_DL)
+#	define VANILLA_FRESNEL
+#endif
+
 struct VS_INPUT
 {
 	float4 Position : POSITION0;
@@ -514,7 +518,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif  // !TRUE_PBR
 
 	float3 F0 = specColor.w * SharedData::grassLightingSettings.SpecularStrength;
-	float roughness = saturate(pow(2.0 / (SharedData::grassLightingSettings.Glossiness + 2.0), 0.25));
+	float roughness = saturate(1.0 - SharedData::grassLightingSettings.Glossiness * 0.01);
 
 #			if defined(TRUE_PBR)
 	float4 rawRMAOS = TexRMAOSSampler.SampleBias(SampRMAOSSampler, input.TexCoord.xy, SharedData::MipBias) * float4(PBRParams1.x, 1, 1, PBRParams1.y);
@@ -747,6 +751,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	diffuseColor += max(0, sss * subsurfaceColor * SharedData::grassLightingSettings.SubsurfaceScatteringAmount);
 
 	specularColor += lightsSpecularColor;
+#				if !defined(VANILLA_FRESNEL_DL)
+	specularColor *= specColor.w * SharedData::grassLightingSettings.SpecularStrength;
+#				endif
 	specularColor = Color::GammaToLinear(specularColor);
 #			endif
 
@@ -773,7 +780,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Reflectance = float4(indirectSpecularLobeWeight, 1);
 #			else
 
-#				if defined(DYNAMIC_CUBEMAPS)
+#				if defined(DYNAMIC_CUBEMAPS) && (defined(VANILLA_FRESNEL) || defined(TRUE_PBR))
 	float2 specularBDRF = DynamicCubemaps::EnvBRDFApprox(roughness, saturate(dot(viewDirection, normalVS)));
 	float3 reflectance = F0 * specularBDRF.x + specularBDRF.y;
 #				else

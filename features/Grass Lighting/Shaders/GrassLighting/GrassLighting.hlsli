@@ -5,6 +5,7 @@ namespace GrassLighting
 	float3 GetLightSpecularInput(float3 L, float3 V, float3 N, float3 lightColor, float roughness, float3 F0)
 	{
 		float3 H = normalize(V + L);
+#if defined(VANILLA_FRESNEL_DL)
 		float NdotL = saturate(dot(N, L));
 		float NdotV = saturate(dot(N, V));
 		float NdotH = saturate(dot(N, H));
@@ -15,6 +16,12 @@ namespace GrassLighting
 		float3 F = BRDF::F_Schlick(F0, VdotH);
 		float3 specular = D * G * F;
 		return specular * lightColor * NdotL;
+#else
+		float shininess = (1.0 - roughness) * 100.f;
+		float HdotN = saturate(dot(H, N));
+		float lightColorMultiplier = exp2(shininess * log2(HdotN));
+		return lightColor * lightColorMultiplier.xxx;
+#endif
 	}
 
 	float3 TransformNormal(float3 normal)
