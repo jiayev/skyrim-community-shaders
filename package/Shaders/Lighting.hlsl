@@ -2352,14 +2352,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float pbrGlossiness = 1 - skinSurfaceProperties.RoughnessPrimary;
 #	endif  // CS_SKIN
 
+#	if defined(VANILLA_FRESNEL)
 	float3 F0 = 0.04;
+#	else
+	float3 F0 = 0.0;
+#	endif
 	float roughness = 1.0;
-#	if defined(SPECULAR) && !defined(TRUE_PBR)
+
+#	if defined(VANILLA_FRESNEL)
+#		if defined(SPECULAR) && !defined(TRUE_PBR)
 	F0 = saturate(glossiness * SpecularColor.xyz);
 	roughness = pow(2.0 / (shininess + 2.0), 0.25);
-#	elif defined(EYE)
+#		elif defined(EYE)
 	F0 = 0.027;
 	roughness = 0.1;
+#		endif
 #	endif
 
 #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
@@ -2457,7 +2464,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 #		endif
 
-#		if defined(EYE)
+#		if defined(EYE) && defined(VANILLA_FRESNEL)
 		F0 = 0.027;
 		roughness = 0.1;
 #		endif
@@ -3255,14 +3262,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
-#	if defined(DYNAMIC_CUBEMAPS) && defined(VANILLA_FRESNEL)
-#		if defined(SKYLIGHTING)
-	float3 reflectance = DynamicCubemaps::GetDynamicCubemap(worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, roughness, F0, skylightingSH);
-#		else
-	float3 reflectance = DynamicCubemaps::GetDynamicCubemap(worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, roughness, F0);
-#		endif
-#	else
 	float3 reflectance = 0;
+#	if defined(DYNAMIC_CUBEMAPS)
+	if (any(F0 > 0.0)) {
+#		if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
+		if (dynamicCubemap)
+#		endif
+#		if defined(SKYLIGHTING)
+			reflectance = DynamicCubemaps::GetDynamicCubemap(worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, roughness, F0, skylightingSH);
+#		else
+			reflectance = DynamicCubemaps::GetDynamicCubemap(worldSpaceNormal, worldSpaceVertexNormal, worldSpaceViewDirection, roughness, F0);
+#		endif
+	}
 #	endif
 
 	float2 screenMotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
