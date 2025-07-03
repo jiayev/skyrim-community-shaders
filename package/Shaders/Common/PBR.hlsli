@@ -216,7 +216,7 @@ namespace PBR
 
 		const float3 Lp = L - NdotL * N;
 		const float3 Vp = V - NdotL * N;
-		const float cosPhi = dot(Lp, Vp) * rsqrt(dot(Lp, Lp) * dot(Vp, Vp) + 1e-4);
+		const float cosPhi = dot(Lp, Vp) * rsqrt(dot(Lp, Lp) * dot(Vp, Vp) + EPSILON_DIVISION);
 		const float cosHalfPhi = sqrt(saturate(0.5 + 0.5 * cosPhi));
 
 		float n_prime = 1.19 / cosThetaD + 0.36 * cosThetaD;
@@ -309,8 +309,8 @@ namespace PBR
 		float NdotH = dot(N, H);
 		float VdotH = dot(V, H);
 
-		float satNdotL = clamp(NdotL, 1e-5, 1);
-		float satNdotV = saturate(abs(NdotV) + 1e-5);
+		float satNdotL = clamp(NdotL, EPSILON_DOT_CLAMP, 1);
+		float satNdotV = saturate(abs(NdotV) + EPSILON_DOT_CLAMP);
 		float satVdotL = saturate(VdotL);
 		float satNdotH = saturate(NdotH);
 		float satVdotH = saturate(VdotH);
@@ -364,8 +364,8 @@ namespace PBR
 				float coatVdotH = satVdotH;
 				[branch] if ((PBRFlags & Flags::CoatNormal) != 0)
 				{
-					coatNdotL = clamp(dot(coatN, coatL), 1e-5, 1);
-					coatNdotV = saturate(abs(dot(coatN, coatV)) + 1e-5);
+					coatNdotL = clamp(dot(coatN, coatL), EPSILON_DOT_CLAMP, 1);
+					coatNdotV = saturate(abs(dot(coatN, coatV)) + EPSILON_DOT_CLAMP);
 					coatNdotH = saturate(dot(coatN, coatH));
 					coatVdotH = saturate(dot(coatV, coatH));
 				}
@@ -384,122 +384,14 @@ namespace PBR
 		}
 	}
 
-	/**
-	 * @brief Calculates and accumulates PBR direct lighting contributions for a single light source
-	 *
-	 * This function handles the core PBR lighting calculation that is identical across all call sites.
-	 * It processes diffuse, specular, transmission, and coat lighting components for a given light
-	 * and accumulates the results into the provided output variables.
-	 *
-	 * @note This function is designed to be called multiple times per pixel (once per light source)
-	 *       and accumulates results rather than returning them. All output parameters are modified in-place.
-	 *
-	 * @param[in] lightColor The RGB color of the light source (should be in linear space)
-	 * @param[in] lightMultiplier Combined multiplier for light intensity (includes shadows, attenuation, etc.)
-	 * @param[in] parallaxShadow Parallax occlusion mapping shadow factor (1.0 = no shadow)
-	 * @param[in] N Surface normal vector in world space
-	 * @param[in] N_coat Coat layer normal vector in world space (used for two-layer materials)
-	 * @param[in] V_refracted View direction after refraction through coat layer
-	 * @param[in] V Original view direction in world space
-	 * @param[in] L_refracted Light direction after refraction through coat layer
-	 * @param[in] L Original light direction in world space
-	 * @param[in] surfaceProperties PBR material properties (roughness, metallic, F0, etc.)
-	 * @param[in] tbnMatrix Transpose of the tangent-bitangent-normal matrix
-	 * @param[in] texCoord Texture coordinates (used for feature texture sampling)
-	 * @param[in,out] diffuseAccumulator Accumulated diffuse lighting contribution (modified in-place)
-	 * @param[in,out] coatDiffuseAccumulator Accumulated coat layer diffuse lighting (modified in-place)
-	 * @param[in,out] transmissionAccumulator Accumulated transmission/translucency contribution (modified in-place)
-	 * @param[in,out] specularAccumulator Accumulated specular lighting contribution (modified in-place, automatically gated by interior status)
-	 *
-	 * @return PBR::LightProperties The calculated light properties, useful for additional effects like wetness
-	 *
-	 * @par Example Usage:
-	 * @code
-	 * // For directional light
-	 * PBR::LightProperties lightProperties = PBR::ProcessPBRDirectLight(
-	 *     dirLightColor,
-	 *     dirLightColorMultiplier * dirDetailShadow,
-	 *     parallaxShadow,
-	 *     N,                    // Surface normal
-	 *     N_coat,               // Coat normal
-	 *     V_refracted,          // Refracted view direction
-	 *     V,                    // View direction
-	 *     L_refracted,          // Refracted light direction
-	 *     L,                    // Light direction
-	 *     pbrSurfaceProperties,
-	 *     tbnMatrix,
-	 *     texCoord,
-	 *     lightsDiffuseColor,
-	 *     coatLightsDiffuseColor,
-	 *     transmissionColor,
-	 *     specularColorPBR);
-	 *
-	 * // Additional effects using the returned light properties
-	 * if (waterRoughnessSpecular < 1.0) {
-	 *     specularColorPBR += PBR::GetWetnessDirectLightSpecularInput(
-	 *         wetnessNormal, V, L,
-	 *         lightProperties.CoatLightColor, waterRoughnessSpecular) * wetnessGlossinessSpecular;
-	 * }
-	 * @endcode
-	 *
-	 * @par Features Supported:
-	 * - Standard PBR lighting (diffuse + specular)
-	 * - Two-layer materials (coat layer)
-	 * - Transmission/translucency effects
-	 * - Interior/exterior lighting adjustments (specular automatically disabled in interiors)
-	 * - Feature texture sampling
-	 *
-	 * @par Performance Notes:
-	 * - Function is marked as @c inline for optimal performance
-	 * - Designed to be called in tight loops for multiple light sources
-	 * - Accumulates results to minimize memory bandwidth
-	 *
-	 * @see PBR::GetDirectLightInput
-	 * @see PBR::InitLightProperties
-	 * @see PBR::SurfaceProperties
-	 */
-	inline LightProperties ProcessPBRDirectLight(
-		float3 lightColor,
-		float lightMultiplier,
-		float parallaxShadow,
-		float3 N,
-		float3 N_coat,
-		float3 V_refracted,
-		float3 V,
-		float3 L_refracted,
-		float3 L,
-		SurfaceProperties surfaceProperties,
-		float3x3 tbnMatrix,
-		float2 texCoord,
-		inout float3 diffuseAccumulator,
-		inout float3 coatDiffuseAccumulator,
-		inout float3 transmissionAccumulator,
-		inout float3 specularAccumulator)
-	{
-		LightProperties lightProperties = InitLightProperties(lightColor, lightMultiplier, parallaxShadow);
-		float3 dirDiffuseColor, coatDirDiffuseColor, dirTransmissionColor, dirSpecularColor;
-
-		GetDirectLightInput(
-			dirDiffuseColor, coatDirDiffuseColor, dirTransmissionColor, dirSpecularColor,
-			N, N_coat, V_refracted, V,
-			L_refracted, L, lightProperties, surfaceProperties, tbnMatrix, texCoord);
-
-		diffuseAccumulator += dirDiffuseColor;
-		coatDiffuseAccumulator += coatDirDiffuseColor;
-		transmissionAccumulator += dirTransmissionColor;
-		specularAccumulator += dirSpecularColor * !SharedData::InInterior;
-
-		return lightProperties;
-	}
-
 	float3 GetWetnessDirectLightSpecularInput(float3 N, float3 V, float3 L, float3 lightColor, float roughness)
 	{
 		const float wetnessStrength = 1;
 		const float wetnessF0 = 0.02;
 
 		float3 H = normalize(V + L);
-		float NdotL = clamp(dot(N, L), 1e-5, 1);
-		float NdotV = saturate(abs(dot(N, V)) + 1e-5);
+		float NdotL = clamp(dot(N, L), EPSILON_DOT_CLAMP, 1);
+		float NdotV = saturate(abs(dot(N, V)) + EPSILON_DOT_CLAMP);
 		float NdotH = saturate(dot(N, H));
 		float VdotH = saturate(dot(V, H));
 
@@ -591,7 +483,7 @@ namespace PBR
 		const float wetnessStrength = 1;
 		const float wetnessF0 = 0.02;
 
-		float NdotV = saturate(abs(dot(N, V)) + 1e-5);
+		float NdotV = saturate(abs(dot(N, V)) + EPSILON_DOT_CLAMP);
 		float2 specularBRDF = BRDF::EnvBRDFApproxLazarov(roughness, NdotV);
 		float3 specularLobeWeight = wetnessF0 * specularBRDF.x + specularBRDF.y;
 
