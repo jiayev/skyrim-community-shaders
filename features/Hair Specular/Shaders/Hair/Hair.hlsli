@@ -2,10 +2,10 @@
 #define __HAIR_DEPENDENCY_HLSL__
 
 #include "Common/BRDF.hlsli"
+#include "Common/Game.hlsli"
 #include "Common/Math.hlsli"
 
 #define HAIR_LIGHTING_MULTIPLIER Math::PI  // Compensating to adapt to vanilla lighting model
-#define GAME_UNIT_TO_CM 1.428f
 
 namespace Hair
 {
@@ -197,7 +197,6 @@ namespace Hair
 		lightColor *= HAIR_LIGHTING_MULTIPLIER * selfShadow;
 		dirDiffuse = 0;
 		dirSpecular = 0;
-		// const float roughness = pow(abs(2.0 / (shininess + 2.0)), 0.25);
 		const float roughness = 1 - saturate(shininess * 0.01);
 
 		if (SharedData::hairSpecularSettings.EnableTangentShift) {
