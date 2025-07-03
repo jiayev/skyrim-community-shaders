@@ -32,8 +32,6 @@ cbuffer PerFrameSSS : register(b1)
 								: SV_DispatchThreadID) {
 	float2 texCoord = (DTid.xy + 0.5) * SharedData::BufferDim.zw;
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(texCoord);
-	texCoord *= FrameBuffer::DynamicResolutionParams2.xy;
-	texCoord = Stereo::ConvertFromStereoUV(texCoord, eyeIndex);
 
 #if defined(BURLEY)
 
@@ -59,8 +57,7 @@ cbuffer PerFrameSSS : register(b1)
 		bool humanProfile = MaskTexture[DTid.xy].y > 0.0;
 
 		float4 color = SSSSBlurCS(DTid.xy, texCoord, float2(0.0, 1.0), sssAmount, humanProfile);
-		color.rgb = Color::IrradianceToGamma(color.rgb);
-		color.rgb *= AlbedoTexture[DTid.xy].rgb;
+		color.rgb = Color::IrradianceToGamma(color.rgb) * AlbedoTexture[DTid.xy].rgb;
 		SSSRW[DTid.xy] = float4(color.rgb, 1.0);
 	}
 

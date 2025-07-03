@@ -1,4 +1,5 @@
 #include "Common/GBuffer.hlsli"
+#include "Common/Game.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/Math.hlsli"
@@ -10,8 +11,6 @@
 // Burley constants
 #define BURLEY_MM_2_CM		0.1f
 #define BURLEY_CM_2_MM      10.0f
-
-#define GAME_UNIT_TO_CM 1.428f
 
 #define SUBSURFACE_RADIUS_SCALE 1024
 #define SUBSURFACE_KERNEL_SIZE 3
@@ -506,8 +505,7 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssA
 	float OriginalLerp = saturate((BurleyParameter.SurfaceOpacity - LowOpacityEps) / LowOpacityEps);
 
 	OutColor.xyz = lerp(OriginalColor,RadianceAccumulated.xyz,OriginalLerp);
-	OutColor.xyz = Color::IrradianceToGamma(OutColor.xyz);
-	OutColor.xyz *= AlbedoTexture[DTid.xy].xyz;
+	OutColor.xyz = Color::IrradianceToGamma(OutColor.xyz) * AlbedoTexture[DTid.xy].xyz;
 	OutColor.w = ColorTexture[DTid.xy].w;
 
 	return OutColor;
