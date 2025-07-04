@@ -25,11 +25,11 @@ cbuffer VanillaISCB : register(b1)
 	float luminance = Color::RGBToLuminance2(color.xyz);
 	float3 ppColor = color.xyz;
 
-	ppColor = Cinematic.y * lerp(lerp(luminance, ppColor, Cinematic.x), luminance * Tint.xyz, Tint.w);
+	ppColor = Cinematic.y * lerp(lerp(luminance, ppColor, Cinematic.x), luminance * Tint.xyz, Color::LLGammaToLinear(Tint.www).x);
 	ppColor = clamp(pow(clamp(ppColor, 0.0f, 16.0f), pow(2.0f, Cinematic.z - 1.0f)), 0.0f, 16.0f);
 
 	if (Fade.w > 0) {
-		ppColor = lerp(ppColor, Fade.xyz, Fade.w);
+		ppColor = lerp(ppColor, Fade.xyz, Color::LLGammaToLinear(Fade.www).x);
 	}
 
 	RWTexOut[DTid.xy] = float4(ppColor, color.a);
