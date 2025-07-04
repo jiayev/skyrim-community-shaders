@@ -12,7 +12,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	InteriorOverride,
 	ExteriorOverride,
 	enableInExMultiplier,
-	enableInExOverride)
+	enableInExOverride,
+	enableFade,
+	enableTint)
 
 void VanillaImagespace::DrawSettings()
 {
@@ -20,6 +22,9 @@ void VanillaImagespace::DrawSettings()
 	if (ImGui::IsItemHovered()) {
 		ImGui::SetTooltip("Blend factor for the vanilla imagespace (saturation, brightness, contrast).");
 	}
+
+	ImGui::Checkbox("Enable Fade", &settings.enableFade);
+	ImGui::Checkbox("Enable Tint", &settings.enableTint);
 
 	ImGui::Checkbox("Enable Interior/Exterior Multiplier", &settings.enableInExMultiplier);
 
@@ -53,7 +58,7 @@ void VanillaImagespace::DrawSettings()
 	}
 
 	if (ImGui::TreeNode("Original ImageSpace Values")) {
-		ImGui::Text("Base Amount: %.3f", imageSpaceData.baseData.baseAmount);
+		ImGui::Text("Base Amount: %.3f", imageSpaceData.baseAmount);
 		ImGui::Text("Base Data:");
 		ImGui::Text("Cinematic Values:");
 		ImGui::Text("Saturation: %.3f", imageSpaceData.baseData.cinematic.saturation);
@@ -127,7 +132,6 @@ void VanillaImagespace::SaveSettings(json& o_json)
 void VanillaImagespace::SetupResources()
 {
 	auto renderer = globals::game::renderer;
-	auto device = globals::d3d::device;
 
 	logger::debug("Creating buffers...");
 	{
@@ -160,21 +164,6 @@ void VanillaImagespace::SetupResources()
 		texOutput = eastl::make_unique<Texture2D>(texDesc);
 		texOutput->CreateSRV(srvDesc);
 		texOutput->CreateUAV(uavDesc);
-	}
-
-	logger::debug("Creating samplers...");
-	{
-		D3D11_SAMPLER_DESC samplerDesc = {
-			.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-			.AddressU = D3D11_TEXTURE_ADDRESS_BORDER,
-			.AddressV = D3D11_TEXTURE_ADDRESS_BORDER,
-			.AddressW = D3D11_TEXTURE_ADDRESS_BORDER,
-			.MaxAnisotropy = 1,
-			.MinLOD = 0,
-			.MaxLOD = D3D11_FLOAT32_MAX
-		};
-
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, colorSampler.put()));
 	}
 
 	logger::debug("Creating compute shaders...");
@@ -229,23 +218,25 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
 {
 	auto context = globals::d3d::context;
 	float2 res = { (float)texOutput->desc.Width, (float)texOutput->desc.Height };
-	float3 cinematic;
+	float4 cinematic = { 1.0f, 1.0f, 1.0f, 1.0f };
+	float4 fade = { 0.0f, 0.0f, 0.0f, 0.0f };
+	float4 tint = { 0.0f, 0.0f, 0.0f, 0.0f };
 	auto ImageSpace = RE::ImageSpaceManager::GetSingleton();
 	if (globals::game::isVR) {
 		const auto& iSRuntimeData = ImageSpace->GetVRRuntimeData();
 		imageSpaceData = iSRuntimeData.data;
 		if (const auto& overrideBaseData = iSRuntimeData.overrideBaseData) {
-			imageSpaceData.baseData = overrideBaseData;
+			imageSpaceData.baseData = *overrideBaseData;
 		} else {
-			imageSpaceData.baseData = iSRuntimeData.currentBaseData;
+			imageSpaceData.baseData = *iSRuntimeData.currentBaseData;
 		}
 	} else {
 		const auto& iSRuntimeData = ImageSpace->GetRuntimeData();
 		imageSpaceData = iSRuntimeData.data;
 		if (const auto& overrideBaseData = iSRuntimeData.overrideBaseData) {
-			imageSpaceData.baseData = overrideBaseData;
+			imageSpaceData.baseData = *overrideBaseData;
 		} else {
-			imageSpaceData.baseData = iSRuntimeData.currentBaseData;
+			imageSpaceData.baseData = *iSRuntimeData.currentBaseData;
 		}
 	}
 
@@ -256,14 +247,29 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
 	cinematic.x = imageSpaceData.baseData.cinematic.saturation;
 	cinematic.y = imageSpaceData.baseData.cinematic.brightness;
 	cinematic.z = imageSpaceData.baseData.cinematic.contrast;
+	cinematic.w = imageSpaceData.baseAmount;
+
+	if (settings.enableFade) {
+		fade.x = imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeR];
+		fade.y = imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeG];
+		fade.z = imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeB];
+		fade.w = imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeAmount];
+	}
+
+	if (settings.enableTint) {
+		tint.x = imageSpaceData.baseData.tint.color.red;
+		tint.y = imageSpaceData.baseData.tint.color.green;
+		tint.z = imageSpaceData.baseData.tint.color.blue;
+		tint.w = imageSpaceData.baseData.tint.amount;
+	}
 
 	VanillaImagespaceCB data = {
 		.cinematic = cinematic,
-		.width = res.x,
-		.height = res.y
+		.fade = fade,
+		.tint = tint
 	};
 
-	actualValues = (float3(1.0f) - settings.blendFactor) + cinematic * settings.blendFactor;
+	actualValues = (float3(1.0f) - settings.blendFactor) + float3(cinematic.x, cinematic.y, cinematic.z) * settings.blendFactor;
 
 	actualValues = actualValues * (settings.enableInExMultiplier ? (isInInterior ? settings.InteriorMultiplier : settings.ExteriorMultiplier) : float3(1.0f));
 	if (cinematic.x == 0.0f && cinematic.y == 0.0f && cinematic.z == 0.0f) {
@@ -273,7 +279,9 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
 	if (settings.enableInExOverride) {
 		actualValues = isInInterior ? settings.InteriorOverride : settings.ExteriorOverride;
 	}
-	data.cinematic = actualValues;
+	data.cinematic.x = actualValues.x;
+	data.cinematic.y = actualValues.y;
+	data.cinematic.z = actualValues.z;
 	vanillaImagespaceCB->Update(data);
 
 	ID3D11ShaderResourceView* srv = inout_tex.srv;
