@@ -31,6 +31,7 @@ struct PhysicalSky : public Feature
 	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override { return t == RE::BSShader::Type::Sky; };
 
 	// Settings & UI
+	virtual void DataLoaded() override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -75,7 +76,7 @@ struct PhysicalSky : public Feature
 		int tonemapper = 2;
 		float vanillaMix = 0;
 
-		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 6.f;
+		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 10.f;
 
 		std::map<std::string, WorldspaceInfo> worldspaceWhitelist = {
 			{ "Tamriel", { -14500.f } }
