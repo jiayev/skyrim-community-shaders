@@ -11,6 +11,7 @@ struct LightLimitFix;
 struct LODBlending;
 struct InteriorSunShadows;
 struct InverseSquareLighting;
+struct PhysicalSky;
 struct ScreenSpaceGI;
 struct ScreenSpaceShadows;
 struct Skylighting;
@@ -66,6 +67,7 @@ namespace globals
 		extern LODBlending lodBlending;
 		extern InteriorSunShadows interiorSunShadows;
 		extern InverseSquareLighting inverseSquareLighting;
+		extern PhysicalSky physicalSky;
 		extern ScreenSpaceGI screenSpaceGI;
 		extern ScreenSpaceShadows screenSpaceShadows;
 		extern Skylighting skylighting;
