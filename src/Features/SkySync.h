@@ -1,12 +1,16 @@
 ﻿#pragma once
 #include "RE/M/Moon.h"
 
+struct PhysicalSky;
+
 struct SkySync : Feature
 {
 private:
 	static constexpr std::string_view MOD_ID = "153543";
 
 public:
+	friend struct PhysicalSky;
+
 	virtual inline std::string GetName() override { return "Sky Sync"; }
 	virtual inline std::string GetShortName() override { return "SkySync"; }
 	virtual std::string_view GetCategory() const override { return "Sky"; }

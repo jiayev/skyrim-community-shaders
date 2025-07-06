@@ -1,7 +1,17 @@
 #include "PhysicalSky.h"
+#include "SkySync.h"
 
 #include "State.h"
 #include "Util.h"
+
+void PhysicalSky::DataLoaded()
+{
+	auto skySync = globals::features::skySync;
+	if (!skySync->loaded) {
+		failedLoadedMessage = "Sky Sync is required for Physical Sky to function.";
+		loaded = false;
+	}
+}
 
 void PhysicalSky::RestoreDefaultSettings() { settings = {}; }
 void PhysicalSky::LoadSettings(json&) {}
@@ -299,9 +309,9 @@ bool PhysicalSky::ShadersOK()
 
 void PhysicalSky::Reset()
 {
-	auto accumulator = RE::BSGraphics::BSShaderAccumulator::GetCurrentAccumulator();
+	auto skySync = globals::features::skySync;
 
-	bool allGood = settings.enabled && ShadersOK();
+	bool allGood = settings.enabled && ShadersOK() && skySync->loaded && skySync->settings.Enabled;
 
 	// check worldspace
 	bool worldspace_enabled = false;
@@ -344,12 +354,8 @@ void PhysicalSky::Reset()
 	if (!cbData.enabled)
 		return;
 
-	auto dirLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
-	if (dirLight) {
-		auto lightDir = -dirLight->GetWorldDirection();
-		cbData.lightDir = { lightDir.x, lightDir.y, lightDir.z };
-	}
-
+	auto sunDir = skySync->rawDirections[static_cast<int>(SkySync::Caster::Sun)];
+	cbData.lightDir = { sunDir.x, sunDir.y, sunDir.z };
 	cbData.lightColor = settings.sunlightColor;
 
 	cbData.rPlanet = 6.36e3f / Util::Units::GAME_UNIT_TO_KM;
