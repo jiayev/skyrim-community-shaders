@@ -8,6 +8,7 @@
 #include "State.h"
 #include "TruePBR.h"
 
+#include "ENB/ENBSeriesAPI.h"
 
 #define DLLEXPORT __declspec(dllexport)
 
@@ -138,6 +139,11 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 bool Load()
 {
+	if (ENB_API::RequestENBAPI()) {
+		logger::info("ENB detected, disabling all hooks and features");
+		return true;
+	}
+
 	if (REL::Module::IsVR()) {
 		REL::IDDatabase::get().IsVRAddressLibraryAtLeastVersion("0.189.0", true);
 	}
