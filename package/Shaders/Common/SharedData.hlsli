@@ -193,6 +193,45 @@ namespace SharedData
 		float Strength;      // [0, 1.0] The inverse blend weight of the effect
 	};
 
+	struct PhysSkyData
+	{
+		// DYNAMIC
+		float2 texDim;
+		float2 rcpTexDim;  //
+		float2 frameDim;
+		float2 rcpFrameDim;  //
+
+		float zCameraPlanet;
+		float3 lightDir;  //
+		float3 lightColor;
+
+		// GENERAL
+		uint enabled;  //
+		int tonemapper;
+		float vanillaMix;
+
+		// WORLD
+		float zBottom;
+		float rPlanet;  //
+		float rAtmosphere;
+		float3 groundAlbedo;  //
+
+		// ATMOSPHERE
+		float rayleighFalloff;
+		float3 rayleighScatter;  //
+
+		float aerosolFalloff;
+		float aerosolPhaseG;
+		float2 _pad0;  //
+		float3 aerosolScatter;
+		float _pad1;  //
+		float3 aerosolAbsorption;
+
+		float ozoneAltitude;  //
+		float ozoneThickness;
+		float3 ozoneAbsorption;  //
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -208,6 +247,7 @@ namespace SharedData
 		TerrainVariationSettings terrainVariationSettings;
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
+		PhysSkyData physSkyData;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);
