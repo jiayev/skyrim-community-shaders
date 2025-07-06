@@ -50,6 +50,7 @@ struct PhysicalSky : public Feature
 	// Draw
 	virtual void Reset() override;
 	virtual void EarlyPrepass() override;
+	virtual void ReflectionsPrepass() override;
 	void GenerateLuts();
 
 	////////////////////////////////////////////////// Feature Specific Data
