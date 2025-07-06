@@ -42,7 +42,7 @@ void PhysicalSky::DrawSettings()
 
 void PhysicalSky::SettingsGeneral()
 {
-	if (ImGui::BeginTable("Info", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchSame, { -FLT_MIN, 0 })) {
+	if (ImGui::BeginTable("Info", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
 		ImGui::TableNextColumn();
 		ImGui::Text("Shader Status: ");
 		ImGui::TableNextColumn();
@@ -70,7 +70,7 @@ void PhysicalSky::SettingsGeneral()
 
 	ImGui::SeparatorText("Post Processing");
 	{
-		if (ImGui::BeginTable("tonemap", 4, ImGuiTableFlags_SizingStretchSame, { -FLT_MIN, 0 })) {
+		if (ImGui::BeginTable("tonemap", 4, ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
 			ImGui::TableNextColumn();
 			ImGui::Text("Tonemapper");
 			ImGui::TableNextColumn();
@@ -91,7 +91,7 @@ void PhysicalSky::SettingsCelestials()
 {
 	constexpr auto lightColorHint = "This sets the light color BEFORE it goes through the atmosphere i.e. extraterrestrial radiation.";
 
-	if (ImGui::BeginTable("Info", 1, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchSame, { -FLT_MIN, 0 })) {
+	if (ImGui::BeginTable("Info", 1, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
 		ImGui::TableNextColumn();
 		ImGui::TextWrapped("The sun and moons, and their lights.");
 		ImGui::EndTable();
@@ -109,7 +109,7 @@ void PhysicalSky::SettingsCelestials()
 
 void PhysicalSky::SettingsAtmosphere()
 {
-	if (ImGui::BeginTable("Info", 1, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchSame, { -FLT_MIN, 0 })) {
+	if (ImGui::BeginTable("Info", 1, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
 		ImGui::TableNextColumn();
 		ImGui::TextWrapped("The composition and physical properties of the atmosphere.");
 		ImGui::EndTable();
@@ -355,8 +355,8 @@ void PhysicalSky::Reset()
 		return;
 
 	auto sunDir = skySync->rawDirections[static_cast<int>(SkySync::Caster::Sun)];
-	cbData.lightDir = { sunDir.x, sunDir.y, sunDir.z };
-	cbData.lightColor = settings.sunlightColor;
+	cbData.sunDir = { sunDir.x, sunDir.y, sunDir.z };
+	cbData.sunlightColor = settings.sunlightColor;
 
 	cbData.rPlanet = 6.36e3f / Util::Units::GAME_UNIT_TO_KM;
 	cbData.rAtmosphere = cbData.rPlanet + 60.f / Util::Units::GAME_UNIT_TO_KM;
