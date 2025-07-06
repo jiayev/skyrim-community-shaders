@@ -230,8 +230,8 @@ namespace SharedData
 		float2 rcpFrameDim;  //
 
 		float zCameraPlanet;
-		float3 lightDir;  //
-		float3 lightColor;
+		float3 sunDir;  //
+		float3 sunlightColor;
 
 		// GENERAL
 		uint enabled;  //
