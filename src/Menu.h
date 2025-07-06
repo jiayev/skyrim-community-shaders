@@ -5,8 +5,6 @@
 #include <dxgi1_4.h>
 #include <winrt/base.h>
 
-using namespace std::chrono;
-
 class Menu
 {
 public:
@@ -271,7 +269,7 @@ private:
 		void DrawVRAM(winrt::com_ptr<IDXGIAdapter3> dxgiAdapter3);
 	} perfOverlayState;
 
-	std::chrono::steady_clock::time_point lastTestSwitch = high_resolution_clock::now();  // Time of last test switch
+	std::chrono::steady_clock::time_point lastTestSwitch = std::chrono::steady_clock::now();  // Time of last test switch
 
 	Menu() = default;
 	void SetupImGuiStyle() const;
