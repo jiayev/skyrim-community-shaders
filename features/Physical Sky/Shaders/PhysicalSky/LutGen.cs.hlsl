@@ -156,7 +156,7 @@ void rayMarch(
 	float3 sunDir = float3(0, sqrt(1 - zenithCos * zenithCos), zenithCos);
 #else
 	float3 rayDir = InvSkyViewLutUv(uv);
-	float3 sunDir = data.lightDir;
+	float3 sunDir = data.sunDir;
 	float3 pos = float3(0, 0, data.zCameraPlanet);
 #endif
 
@@ -191,7 +191,7 @@ void rayMarch(
 #elif LUTGEN == 2
 	float3 lum = 0;
 	rayMarch(pos, rayDir, sunDir, tr, lum);
-	lum *= data.lightColor;
+	lum *= data.sunlightColor;
 	RWTexOutput[tid.xy] = float4(lum, 1.0);
 
 #elif LUTGEN == 3
