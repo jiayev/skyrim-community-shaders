@@ -373,6 +373,15 @@ void PhysicalSky::EarlyPrepass()
 	}
 }
 
+void PhysicalSky::ReflectionsPrepass()
+{
+	auto context = globals::d3d::context;
+	if (cbData.enabled) {
+		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get() };
+		context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
+	}
+}
+
 void PhysicalSky::GenerateLuts()
 {
 	auto state = globals::state;
