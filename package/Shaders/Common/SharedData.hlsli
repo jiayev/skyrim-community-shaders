@@ -205,6 +205,14 @@ namespace SharedData
 		float zCameraPlanet;
 		float3 sunDir;  //
 		float3 sunlightColor;
+		float _pad0;  //
+		float3 masserDir;
+		float _pad1;  //
+		float3 masserColor;
+		float _pad2;  //
+		float3 secundaDir;
+		float _pad3;  //
+		float3 secundaColor;
 
 		// GENERAL
 		uint enabled;  //
@@ -223,9 +231,9 @@ namespace SharedData
 
 		float aerosolFalloff;
 		float aerosolPhaseG;
-		float2 _pad0;  //
+		float2 _pad4;  //
 		float3 aerosolScatter;
-		float _pad1;  //
+		float _pad5;  //
 		float3 aerosolAbsorption;
 
 		float ozoneAltitude;  //
