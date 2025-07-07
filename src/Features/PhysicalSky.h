@@ -77,6 +77,12 @@ struct PhysicalSky : public Feature
 		float vanillaMix = 0;
 
 		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 10.f;
+		float3 masserColor = float3{ 1.0f, 0.6f, 0.6f } * 5e-3f;
+		float3 secundaColor = float3{ 0.8f, 1.0f, 1.0f } * 5e-3f;
+
+		float adaptationStart = DirectX::XMConvertToRadians(-2);
+		float adaptationEnd = DirectX::XMConvertToRadians(-15);
+		float nightExposure = 1e2f;
 
 		std::map<std::string, WorldspaceInfo> worldspaceWhitelist = {
 			{ "Tamriel", { -14500.f } }
@@ -105,6 +111,14 @@ struct PhysicalSky : public Feature
 		float zCameraPlanet;
 		float3 sunDir;  //
 		float3 sunlightColor;
+		float _pad0;  //
+		float3 masserDir;
+		float _pad1;  //
+		float3 masserColor;
+		float _pad2;  //
+		float3 secundaDir;
+		float _pad3;  //
+		float3 secundaColor;
 
 		// GENERAL
 		uint enabled;  //
@@ -123,9 +137,9 @@ struct PhysicalSky : public Feature
 
 		float aerosolFalloff;
 		float aerosolPhaseG;
-		float2 _pad0;  //
+		float2 _pad4;  //
 		float3 aerosolScatter;
-		float _pad1;  //
+		float _pad5;  //
 		float3 aerosolAbsorption;
 
 		float ozoneAltitude;  //
