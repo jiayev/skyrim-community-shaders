@@ -17,10 +17,12 @@ RWTexture2D<float4> RWTexOutput : register(u0);
 #endif
 
 void rayMarch(
-	float3 pos, float3 rayDir, float3 sunDir,
+	float3 pos, float3 rayDir, 
 #if LUTGEN == 0
+	float3 sunDir,
 	inout float3 tr
 #elif LUTGEN == 1
+	float3 sunDir,
 	inout float3 tr,
 	inout float3 lum, inout float3 lumFactor
 #elif LUTGEN == 2
@@ -45,6 +47,10 @@ void rayMarch(
 	const uint nsteps = depth - 1;
 #endif
 
+#if LUTGEN > 1
+	const float3 sunDir = data.sunDir;
+#endif
+
 	float tGround = RayIntersectSphere(pos, rayDir, 0, data.rPlanet);
 #if LUTGEN == 0
 	if (tGround > 0.0) {
@@ -63,9 +69,19 @@ void rayMarch(
 	float3 stride = dt * rayDir;
 
 #if LUTGEN != 0
-	float uScatter = dot(rayDir, sunDir);
-	float phaseAerosol = Phase::CornetteShanks(uScatter, data.aerosolPhaseG);
-	float phaseRayleigh = Phase::Rayleigh(uScatter);
+	float uSun = dot(rayDir, sunDir);
+	float phaseAerosolSun = Phase::CornetteShanks(uSun, data.aerosolPhaseG);
+	float phaseRayleighSun = Phase::Rayleigh(uSun);
+
+#	if LUTGEN != 1
+	float uMasser = dot(rayDir, data.masserDir);
+	float phaseAerosolMasser = Phase::CornetteShanks(uMasser, data.aerosolPhaseG);
+	float phaseRayleighMasser = Phase::Rayleigh(uMasser);
+
+	float uSecunda = dot(rayDir, data.secundaDir);
+	float phaseAerosolSecunda = Phase::CornetteShanks(uSecunda, data.aerosolPhaseG);
+	float phaseRayleighSecunda = Phase::Rayleigh(uSecunda);
+#	endif
 #endif
 
 	float3 curr_pos = pos;
@@ -94,16 +110,25 @@ void rayMarch(
 		lumFactor += tr * fScatter;
 #	endif
 
-		float2 lutUv = TrLutUvPlanet(curr_pos, sunDir);
-		float3 trSun = TexTrLut.SampleLevel(SampTr, lutUv, 0).rgb;
+		float2 lutUvSun = TrLutUvPlanet(curr_pos, sunDir);
+		float3 trSun = TexTrLut.SampleLevel(SampTr, lutUvSun, 0).rgb;
 #	if LUTGEN != 1
-		float3 psiMs = TexMsLut.SampleLevel(SampTr, lutUv, 0).rgb;
+		float2 lutUvMasser = TrLutUvPlanet(curr_pos, data.masserDir);
+		float3 trMasser = TexTrLut.SampleLevel(SampTr, lutUvMasser, 0).rgb;
+
+		float2 lutUvSecunda = TrLutUvPlanet(curr_pos, data.secundaDir);
+		float3 trSecunda = TexTrLut.SampleLevel(SampTr, lutUvSecunda, 0).rgb;
+		
+		float3 psiMs = TexMsLut.SampleLevel(SampTr, lutUvSun, 0).rgb * data.sunlightColor;
+		psiMs += TexMsLut.SampleLevel(SampTr, lutUvMasser, 0).rgb * data.masserColor;
+		psiMs += TexMsLut.SampleLevel(SampTr, lutUvSecunda, 0).rgb * data.secundaColor;
 #	endif
 
-		float3 inscatterRayleigh = muSRayleigh * phaseRayleigh;
-		float3 inscatterAerosol = muSAerosol * phaseAerosol;
-		float3 inscatter = (inscatterRayleigh + inscatterAerosol) * trSun;
+		float3 inscatter = (muSRayleigh * phaseRayleighSun + muSAerosol * phaseAerosolSun) * trSun;
 #	if LUTGEN != 1
+		inscatter *= data.sunlightColor;
+		inscatter += (muSRayleigh * phaseRayleighMasser + muSAerosol * phaseAerosolMasser) * trMasser * data.masserColor;
+		inscatter += (muSRayleigh * phaseRayleighSecunda + muSAerosol * phaseAerosolSecunda) * trSecunda * data.secundaColor;
 		inscatter += scatterNoPhase * psiMs;
 #	endif
 
@@ -190,12 +215,11 @@ void rayMarch(
 
 #elif LUTGEN == 2
 	float3 lum = 0;
-	rayMarch(pos, rayDir, sunDir, tr, lum);
-	lum *= data.sunlightColor;
+	rayMarch(pos, rayDir, tr, lum);
 	RWTexOutput[tid.xy] = float4(lum, 1.0);
 
 #elif LUTGEN == 3
 	float3 lum = 0;
-	rayMarch(pos, rayDir, sunDir, tid.xy, outDims.z, tr, lum);
+	rayMarch(pos, rayDir, tid.xy, outDims.z, tr, lum);
 #endif
 }

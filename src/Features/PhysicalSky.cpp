@@ -70,6 +70,11 @@ void PhysicalSky::SettingsGeneral()
 
 	ImGui::SeparatorText("Post Processing");
 	{
+		ImGui::InputFloat("Night Exposure", &settings.nightExposure);
+		settings.nightExposure = std::max(1.f, settings.nightExposure);
+		ImGui::SliderAngle("Adaptation Start", &settings.adaptationStart, -90.f, 0.f);
+		ImGui::SliderAngle("Adaptation End", &settings.adaptationEnd, -90.f, 0.f);
+
 		if (ImGui::BeginTable("tonemap", 4, ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
 			ImGui::TableNextColumn();
 			ImGui::Text("Tonemapper");
@@ -101,6 +106,24 @@ void PhysicalSky::SettingsCelestials()
 	{
 		ImGui::PushID("Sun");
 		ImGui::ColorEdit3("Light Color", &settings.sunlightColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(lightColorHint);
+		ImGui::PopID();
+	}
+
+	ImGui::SeparatorText("Masser");
+	{
+		ImGui::PushID("Masser");
+		ImGui::ColorEdit3("Light Color", &settings.masserColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(lightColorHint);
+		ImGui::PopID();
+	}
+
+	ImGui::SeparatorText("Secunda");
+	{
+		ImGui::PushID("Secunda");
+		ImGui::ColorEdit3("Light Color", &settings.secundaColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(lightColorHint);
 		ImGui::PopID();
@@ -167,6 +190,13 @@ void PhysicalSky::SettingsDebug()
 
 	if (ImGui::Button("Recompile Shaders"))
 		ClearShaderCache();
+
+	ImGui::SeparatorText("Values");
+	{
+		ImGui::InputFloat3("Sun Direction", &cbData.sunDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+		ImGui::InputFloat3("Masser Direction", &cbData.masserDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+		ImGui::InputFloat3("Secunda Direction", &cbData.secundaDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+	}
 
 	ImGui::SeparatorText("Textures");
 	{
@@ -325,20 +355,43 @@ void PhysicalSky::Reset()
 		}
 	allGood &= worldspace_enabled;
 
+	if (!allGood) {
+		cbData.enabled = allGood;
+		return;
+	}
+
 	// resolution
 	float2 res = globals::state->screenSize;
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
+
+	auto sunDir = skySync->rawDirections[static_cast<int>(SkySync::Caster::Sun)];
+	auto masserDir = skySync->rawDirections[static_cast<int>(SkySync::Caster::Masser)];
+	auto secundaDir = skySync->rawDirections[static_cast<int>(SkySync::Caster::Secunda)];
+
+	float sunAngle = DirectX::XMConvertToRadians(90.f) - acos(sunDir.z);
+	float adaptAmount = (sunAngle - settings.adaptationStart) / (settings.adaptationEnd - settings.adaptationStart);
+	adaptAmount = std::min(1.f, std::max(0.f, adaptAmount));
+	// adaptAmount = adaptAmount * adaptAmount * (3.0f - 2.0f * adaptAmount);  // smoothstep
+	float exposure = exp(log(settings.nightExposure) * adaptAmount);
 
 	cbData = {
 		.texDim = res,
 		.rcpTexDim = float2(1.0f) / res,
 		.frameDim = dynres,
 		.rcpFrameDim = float2(1.0f) / dynres,
+		.sunDir = { sunDir.x, sunDir.y, sunDir.z },
+		.sunlightColor = settings.sunlightColor * exposure,
+		.masserDir = { masserDir.x, masserDir.y, masserDir.z },
+		.masserColor = settings.masserColor * exposure,
+		.secundaDir = { secundaDir.x, secundaDir.y, secundaDir.z },
+		.secundaColor = settings.secundaColor * exposure,
 		.enabled = allGood,
 		.tonemapper = settings.tonemapper,
 		.vanillaMix = settings.vanillaMix,
 		.zBottom = worldspaceInfo.zBottom,
+		.rPlanet = 6.36e3f / Util::Units::GAME_UNIT_TO_KM,
+		.rAtmosphere = 6.42e3f / Util::Units::GAME_UNIT_TO_KM,
 		.groundAlbedo = settings.groundAlbedo,
 		.rayleighFalloff = settings.rayleighFalloff * Util::Units::GAME_UNIT_TO_KM,
 		.rayleighScatter = settings.rayleighScatter * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
@@ -350,16 +403,6 @@ void PhysicalSky::Reset()
 		.ozoneThickness = settings.ozoneThickness / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneAbsorption = settings.ozoneAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
 	};
-
-	if (!cbData.enabled)
-		return;
-
-	auto sunDir = skySync->rawDirections[static_cast<int>(SkySync::Caster::Sun)];
-	cbData.sunDir = { sunDir.x, sunDir.y, sunDir.z };
-	cbData.sunlightColor = settings.sunlightColor;
-
-	cbData.rPlanet = 6.36e3f / Util::Units::GAME_UNIT_TO_KM;
-	cbData.rAtmosphere = cbData.rPlanet + 60.f / Util::Units::GAME_UNIT_TO_KM;
 
 	RE::NiPoint3 posCam = { 0, 0, 0 };
 	if (auto cam = RE::PlayerCamera::GetSingleton(); cam && cam->cameraRoot) {
