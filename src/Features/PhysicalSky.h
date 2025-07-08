@@ -76,12 +76,13 @@ struct PhysicalSky : public Feature
 		int tonemapper = 2;
 		float vanillaMix = 0;
 
-		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 10.f;
+		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 1e3f;
 		float3 masserColor = float3{ 1.0f, 0.6f, 0.6f } * 5e-3f;
 		float3 secundaColor = float3{ 0.8f, 1.0f, 1.0f } * 5e-3f;
 
 		float adaptationStart = DirectX::XMConvertToRadians(-2);
 		float adaptationEnd = DirectX::XMConvertToRadians(-15);
+		float dayExposure = 1e-2f;
 		float nightExposure = 1e2f;
 
 		std::map<std::string, WorldspaceInfo> worldspaceWhitelist = {
