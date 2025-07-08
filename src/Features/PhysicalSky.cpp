@@ -4,6 +4,15 @@
 #include "State.h"
 #include "Util.h"
 
+static inline void InfoBox(const char* str)
+{
+	if (ImGui::BeginTable("Info", 1, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
+		ImGui::TableNextColumn();
+		ImGui::TextWrapped(str);
+		ImGui::EndTable();
+	}
+}
+
 void PhysicalSky::DataLoaded()
 {
 	auto skySync = globals::features::skySync;
@@ -70,8 +79,10 @@ void PhysicalSky::SettingsGeneral()
 
 	ImGui::SeparatorText("Post Processing");
 	{
+		ImGui::InputFloat("Day Exposure", &settings.dayExposure);
+		settings.dayExposure = std::max(1e-10f, settings.dayExposure);
 		ImGui::InputFloat("Night Exposure", &settings.nightExposure);
-		settings.nightExposure = std::max(1.f, settings.nightExposure);
+		settings.nightExposure = std::max(1e-10f, settings.nightExposure);
 		ImGui::SliderAngle("Adaptation Start", &settings.adaptationStart, -90.f, 0.f);
 		ImGui::SliderAngle("Adaptation End", &settings.adaptationEnd, -90.f, 0.f);
 
@@ -94,13 +105,9 @@ void PhysicalSky::SettingsGeneral()
 
 void PhysicalSky::SettingsCelestials()
 {
-	constexpr auto lightColorHint = "This sets the light color BEFORE it goes through the atmosphere i.e. extraterrestrial radiation.";
+	constexpr auto lightColorHint = "This sets the light color BEFORE it goes through the atmosphere i.e. extraterrestrial radiance.";
 
-	if (ImGui::BeginTable("Info", 1, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
-		ImGui::TableNextColumn();
-		ImGui::TextWrapped("The sun and moons, and their lights.");
-		ImGui::EndTable();
-	}
+	InfoBox("The sun and moons, and their lights.");
 
 	ImGui::SeparatorText("Sun");
 	{
@@ -132,11 +139,7 @@ void PhysicalSky::SettingsCelestials()
 
 void PhysicalSky::SettingsAtmosphere()
 {
-	if (ImGui::BeginTable("Info", 1, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
-		ImGui::TableNextColumn();
-		ImGui::TextWrapped("The composition and physical properties of the atmosphere.");
-		ImGui::EndTable();
-	}
+	InfoBox("The composition and physical properties of the atmosphere.");
 
 	ImGui::SeparatorText("Air Molecules (Rayleigh)");
 	{
@@ -182,11 +185,7 @@ void PhysicalSky::SettingsAtmosphere()
 
 void PhysicalSky::SettingsDebug()
 {
-	if (ImGui::BeginTable("Info", 1, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
-		ImGui::TableNextColumn();
-		ImGui::TextWrapped("Beep Boop.");
-		ImGui::EndTable();
-	}
+	InfoBox("Beep Boop.");
 
 	if (ImGui::Button("Recompile Shaders"))
 		ClearShaderCache();
@@ -372,8 +371,7 @@ void PhysicalSky::Reset()
 	float sunAngle = DirectX::XMConvertToRadians(90.f) - acos(sunDir.z);
 	float adaptAmount = (sunAngle - settings.adaptationStart) / (settings.adaptationEnd - settings.adaptationStart);
 	adaptAmount = std::min(1.f, std::max(0.f, adaptAmount));
-	// adaptAmount = adaptAmount * adaptAmount * (3.0f - 2.0f * adaptAmount);  // smoothstep
-	float exposure = exp(log(settings.nightExposure) * adaptAmount);
+	float exposure = settings.dayExposure * exp(log(settings.nightExposure / settings.dayExposure) * adaptAmount);
 
 	cbData = {
 		.texDim = res,
