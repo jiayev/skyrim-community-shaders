@@ -227,7 +227,7 @@ float3 SampleSky(float3 viewDir, SamplerState samp)
 	SharedData::PhysSkyData data = SharedData::physSkyData;
 
 	float2 skyLutUv = SkyViewLutUv(viewDir);
-	float3 skyColor = TexSvLut.SampleLevel(samp, skyLutUv, 0);
+	float3 skyColor = TexSvLut.SampleLevel(samp, skyLutUv, 0).rgb;
 	skyColor = skyColor / (skyColor + 1);
 
 	if (data.tonemapper == 1)
@@ -236,6 +236,20 @@ float3 SampleSky(float3 viewDir, SamplerState samp)
         skyColor = skyColor / (1 + skyColor);
 
 	return skyColor;
+}
+
+float3 SampleTr(float3 sunDir, SamplerState samp)
+{
+	SharedData::PhysSkyData data = SharedData::physSkyData;
+
+	if (data.trMix < 1e-8)
+		return 1;
+
+	float2 lutUv = TrLutUv(data.zCameraPlanet, sunDir.z);
+	float3 tr = TexTrLut.SampleLevel(samp, lutUv, 0).rgb;
+	tr = lerp(1, tr, data.trMix);
+
+	return tr;
 }
 
 #ifndef OMIT_PS_NAMESPACE
