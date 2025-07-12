@@ -13,6 +13,8 @@ static inline void InfoBox(const char* str)
 	}
 }
 
+static inline float Lerp(float a, float b, float x) { return a + (b - a) * x; }
+
 void PhysicalSky::DataLoaded()
 {
 	auto skySync = globals::features::skySync;
@@ -76,6 +78,12 @@ void PhysicalSky::SettingsGeneral()
 	}
 
 	ImGui::Checkbox("Enabled", &settings.enabled);
+
+	ImGui::SliderFloat("Transmittance Mix", &settings.trMix, 0.f, 1.f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(
+			"Apply additional atmospheric tranmisttance on the directional light.\n"
+			"Introduces natural yellowening at sunset with white sunlight.");
 
 	ImGui::SeparatorText("Post Processing");
 	{
@@ -336,6 +344,16 @@ bool PhysicalSky::ShadersOK()
 	return csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen;
 }
 
+float PhysicalSky::CalcExposure()
+{
+	auto sunDir = globals::features::skySync->rawDirections[static_cast<int>(SkySync::Caster::Sun)];
+	float sunAngle = DirectX::XMConvertToRadians(90.f) - acos(sunDir.z);
+	float adaptAmount = (sunAngle - settings.adaptationStart) / (settings.adaptationEnd - settings.adaptationStart);
+	adaptAmount = std::min(1.f, std::max(0.f, adaptAmount));
+	float exposure = settings.dayExposure * exp(log(settings.nightExposure / settings.dayExposure) * adaptAmount);
+	return exposure;
+}
+
 void PhysicalSky::Reset()
 {
 	auto skySync = globals::features::skySync;
@@ -368,10 +386,7 @@ void PhysicalSky::Reset()
 	auto masserDir = skySync->rawDirections[static_cast<int>(SkySync::Caster::Masser)];
 	auto secundaDir = skySync->rawDirections[static_cast<int>(SkySync::Caster::Secunda)];
 
-	float sunAngle = DirectX::XMConvertToRadians(90.f) - acos(sunDir.z);
-	float adaptAmount = (sunAngle - settings.adaptationStart) / (settings.adaptationEnd - settings.adaptationStart);
-	adaptAmount = std::min(1.f, std::max(0.f, adaptAmount));
-	float exposure = settings.dayExposure * exp(log(settings.nightExposure / settings.dayExposure) * adaptAmount);
+	float exposure = CalcExposure();
 
 	cbData = {
 		.texDim = res,
@@ -380,6 +395,7 @@ void PhysicalSky::Reset()
 		.rcpFrameDim = float2(1.0f) / dynres,
 		.sunDir = { sunDir.x, sunDir.y, sunDir.z },
 		.sunlightColor = settings.sunlightColor * exposure,
+		.trMix = settings.trMix,
 		.masserDir = { masserDir.x, masserDir.y, masserDir.z },
 		.masserColor = settings.masserColor * exposure,
 		.secundaDir = { secundaDir.x, secundaDir.y, secundaDir.z },
