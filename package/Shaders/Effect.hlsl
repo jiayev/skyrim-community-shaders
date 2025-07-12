@@ -526,6 +526,10 @@ cbuffer PerGeometry : register(b2)
 #		include "IBL/IBL.hlsli"
 #	endif
 
+#	if defined(PHYSICAL_SKY)
+#		include "PhysicalSky/Common.hlsli"
+#	endif
+
 #	include "Common/ShadowSampling.hlsli"
 
 #	if defined(LIGHTING)
@@ -539,6 +543,12 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::EffectShadows)) {
 		float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 		float3 dirLightColor = Color::Light(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult * 0.5;
+
+#		if defined(PHYSICAL_SKY)
+		if (SharedData::physSkyData.enabled)
+			dirLightColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampDepthSampler);
+#		endif
+
 		float3 ambientColor = max(0, mul(SharedData::DirectionalAmbient, float4(0, 0, 1, 1)));
 
 #		if defined(IBL)

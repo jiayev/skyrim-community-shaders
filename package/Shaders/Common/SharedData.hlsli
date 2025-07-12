@@ -232,7 +232,7 @@ namespace SharedData
 		float zCameraPlanet;
 		float3 sunDir;  //
 		float3 sunlightColor;
-		float _pad0;  //
+		float trMix;  //
 		float3 masserDir;
 		float _pad1;  //
 		float3 masserColor;
