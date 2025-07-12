@@ -1,5 +1,8 @@
 #pragma once
 
+// TODO: fix seam
+// TODO: fix zenith incontinuity
+
 struct PhysicalSky : public Feature
 {
 	////////////////////////////////////////////////// Boilerplate
@@ -28,7 +31,7 @@ struct PhysicalSky : public Feature
 	// Functionality
 	virtual bool inline SupportsVR() override { return true; }
 	virtual inline std::string_view GetShaderDefineName() override { return "PHYSICAL_SKY"; }
-	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override { return t == RE::BSShader::Type::Sky; };
+	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
 	// Settings & UI
 	virtual void DataLoaded() override;
@@ -49,6 +52,8 @@ struct PhysicalSky : public Feature
 	bool ShadersOK();
 
 	// Draw
+	float CalcExposure();
+
 	virtual void Reset() override;
 	virtual void EarlyPrepass() override;
 	virtual void ReflectionsPrepass() override;
@@ -75,6 +80,7 @@ struct PhysicalSky : public Feature
 		bool enabled = true;
 		int tonemapper = 2;
 		float vanillaMix = 0;
+		float trMix = 0;
 
 		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 1e3f;
 		float3 masserColor = float3{ 1.0f, 0.6f, 0.6f } * 5e-3f;
@@ -112,7 +118,7 @@ struct PhysicalSky : public Feature
 		float zCameraPlanet;
 		float3 sunDir;  //
 		float3 sunlightColor;
-		float _pad0;  //
+		float trMix;  //
 		float3 masserDir;
 		float _pad1;  //
 		float3 masserColor;
