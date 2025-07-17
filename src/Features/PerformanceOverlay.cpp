@@ -27,12 +27,12 @@
 #include "State.h"
 #include "Upscaling.h"
 #include "Utils/FileSystem.h"
+#include "Utils/Format.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <format>
@@ -357,8 +357,16 @@ void PerformanceOverlay::DrawOverlay()
 		this->perfOverlayState.SetFps(Util::CalcFPS(this->perfOverlayState.GetFrameTimeMs()));
 
 		// Calculate smooth values for display using the user-defined update interval
-		auto now = std::chrono::steady_clock::now();
-		float deltaTime = std::chrono::duration<float>(now - this->perfOverlayState.GetLastUpdateTime()).count();
+		// Initialize overlay timing frequency if needed
+		if (this->perfOverlayState.GetOverlayTimingFrequencyRef().QuadPart == 0) {
+			QueryPerformanceFrequency(&this->perfOverlayState.GetOverlayTimingFrequencyRef());
+			QueryPerformanceCounter(&this->perfOverlayState.GetLastUpdateTimeRef());
+		}
+
+		LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		float deltaTime = (now.QuadPart - this->perfOverlayState.GetLastUpdateTime().QuadPart) /
+		                  static_cast<float>(this->perfOverlayState.GetOverlayTimingFrequencyRef().QuadPart);
 		this->perfOverlayState.SetLastUpdateTime(now);
 
 		// Update graph values
@@ -1667,7 +1675,7 @@ void PerformanceOverlay::HandleShaderToggle(const DrawCallRow& row, bool wasEnab
 		this->testData[magic_enum::enum_integer(SpecialShaderType::Total)] = { smoothedFrameTime, totalCostPerCall, 100.0f };
 		this->testData[magic_enum::enum_integer(SpecialShaderType::Other)] = { otherFrameTime, 0.0f, otherPercent };
 		this->testDataSource = TestDataSource::ManualShaderToggle;
-		this->testDataLastUpdated = std::chrono::steady_clock::now();
+		QueryPerformanceCounter(&this->testDataLastUpdated);
 	}
 }
 
@@ -1706,7 +1714,7 @@ void PerformanceOverlay::HandleTotalRowToggle()
 		this->testData[magic_enum::enum_integer(SpecialShaderType::Total)] = { smoothedFrameTime, totalCostPerCall, 100.0f };
 		this->testData[magic_enum::enum_integer(SpecialShaderType::Other)] = { otherFrameTime, 0.0f, otherPercent };
 		this->testDataSource = TestDataSource::ManualShaderToggle;
-		this->testDataLastUpdated = std::chrono::steady_clock::now();
+		QueryPerformanceCounter(&this->testDataLastUpdated);
 	}
 }
 // ============================================================================
@@ -1744,7 +1752,7 @@ void PerformanceOverlay::UpdateShaderTestData(int shaderType, float frameTime, f
 	UpdateSummaryTestData(smoothedFrameTime, otherFrameTime, otherPercent, totalCostPerCall);
 
 	testDataSource = TestDataSource::ManualShaderToggle;
-	testDataLastUpdated = std::chrono::steady_clock::now();
+	QueryPerformanceCounter(&testDataLastUpdated);
 }
 
 /**
@@ -1792,16 +1800,16 @@ void PerformanceOverlay::UpdateAllShaderTestData()
 	auto [otherFrameTime, otherPercent, totalCostPerCall] = CalculateSummaryData(smoothedFrameTime, measuredSum);
 	UpdateSummaryTestData(smoothedFrameTime, otherFrameTime, otherPercent, totalCostPerCall);
 	testDataSource = TestDataSource::ABTest_VariantB;
-	testDataLastUpdated = std::chrono::steady_clock::now();
+	QueryPerformanceCounter(&testDataLastUpdated);
 }
 
 std::string PerformanceOverlay::GetTestDataTooltip()
 {
 	switch (testDataSource) {
 	case TestDataSource::ABTest_VariantB:
-		return std::string("Test data from Test (Variant B).\nLast updated: ") + Util::TimeAgoString(testDataLastUpdated) + " ago.";
+		return std::string("Test data from Test (Variant B).\nLast updated: ") + Util::TimeAgoStringQPC(testDataLastUpdated, this->perfOverlayState.GetOverlayTimingFrequencyRef()) + " ago.";
 	case TestDataSource::ManualShaderToggle:
-		return std::string("Test data from manual shader toggle.\nLast updated: ") + Util::TimeAgoString(testDataLastUpdated) + " ago.";
+		return std::string("Test data from manual shader toggle.\nLast updated: ") + Util::TimeAgoStringQPC(testDataLastUpdated, this->perfOverlayState.GetOverlayTimingFrequencyRef()) + " ago.";
 	default:
 		return "No test data available.";
 	}
@@ -1837,7 +1845,7 @@ void PerformanceOverlay::CaptureTestData()
 		auto [otherFrameTime, otherPercent, totalCostPerCall] = CalculateSummaryData(smoothedFrameTime, measuredSum);
 		UpdateSummaryTestData(smoothedFrameTime, otherFrameTime, otherPercent, totalCostPerCall);
 		testDataSource = TestDataSource::ABTest_VariantB;
-		testDataLastUpdated = std::chrono::steady_clock::now();
+		QueryPerformanceCounter(&testDataLastUpdated);
 	} else if (anyShaderDisabled) {
 		measuredSum = 0.0f;
 		globals::state->ForEachShaderTypeWithMetrics([&measuredSum, smoothedFrameTime, this]([[maybe_unused]] auto type, int typeIndex, [[maybe_unused]] float drawCalls, float frameTime, float percent, float costPerCall) {
@@ -1850,7 +1858,7 @@ void PerformanceOverlay::CaptureTestData()
 		auto [otherFrameTime, otherPercent, totalCostPerCall] = CalculateSummaryData(smoothedFrameTime, measuredSum);
 		UpdateSummaryTestData(smoothedFrameTime, otherFrameTime, otherPercent, totalCostPerCall);
 		testDataSource = TestDataSource::ManualShaderToggle;
-		testDataLastUpdated = std::chrono::steady_clock::now();
+		QueryPerformanceCounter(&testDataLastUpdated);
 	}
 }
 
