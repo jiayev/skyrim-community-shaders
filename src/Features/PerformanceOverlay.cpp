@@ -176,16 +176,12 @@ void PerformanceOverlay::DrawSettings()
 			if (this->settings.ShowFPS && isFrameGenerationActive) {
 				ImGui::Checkbox("Show Pre-FG Frametime Graph", &this->settings.ShowPreFGFrameTimeGraph);
 
+				ImGui::Checkbox("Show Post-FG Frametime Graph", &this->settings.ShowPostFGFrameTimeGraph);
 				bool isFSRFrameGen = globals::fidelityFX && globals::fidelityFX->isFrameGenActive;
-				if (isFSRFrameGen) {
-					ImGui::BeginDisabled();
-					ImGui::Checkbox("Show Post-FG Frametime Graph", &this->settings.ShowPostFGFrameTimeGraph);
-					ImGui::EndDisabled();
+				if (isFSRFrameGen && ImGui::IsItemHovered()) {
 					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::Text("Post-FG timing not available with AMD FSR Frame Generation.\nThis option is only available with NVIDIA DLSS Frame Generation.");
+						ImGui::Text("FSR Frame Generation uses calculated timing data (2x Pre-FG).\nDLSS Frame Generation provides measured timing data.");
 					}
-				} else {
-					ImGui::Checkbox("Show Post-FG Frametime Graph", &this->settings.ShowPostFGFrameTimeGraph);
 				}
 			} else if (this->settings.ShowFPS) {
 				ImGui::Checkbox("Show Frametime Graph", &this->settings.ShowPreFGFrameTimeGraph);
@@ -504,15 +500,15 @@ void PerformanceOverlay::DrawFPS()
 		bool isFSRFrameGen = globals::fidelityFX && globals::fidelityFX->isFrameGenActive;
 
 		if (isFSRFrameGen) {
-			// Show note that post-FG timing isn't available with FSR
-			ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Post-FG timing not available with FSR3 Framegen");
+			// Show note that FSR uses calculated data
+			ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Post-FG: Calculated timing (2x Pre-FG)");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("AMD FSR Frame Generation doesn't provide internal timing data.\nPost-FG performance metrics are only available with NVIDIA DLSS Frame Generation.");
+				ImGui::Text("AMD FSR Frame Generation uses calculated timing data (2x Pre-FG).\nNVIDIA DLSS Frame Generation provides measured timing data.");
 			}
-		} else {
-			// Show post-FG graph for DLSS
-			this->perfOverlayState.DrawPostFGFrameTimeGraph();
 		}
+
+		// Show post-FG graph for both DLSS and FSR (FSR uses calculated data)
+		this->perfOverlayState.DrawPostFGFrameTimeGraph();
 	}
 }
 
@@ -1893,7 +1889,10 @@ void PerformanceOverlay::PerfOverlayState::UpdateFGFrameTime()
 
 	// Get frametime directly from the Frame Generation system
 	float fgDeltaTime = globals::upscaling->GetFrameGenerationFrameTime();
-	if (fgDeltaTime > 0.0f) {
+
+	// Check if FSR frame generation is active (FSR doesn't provide timing data)
+	bool isFSRFrameGen = globals::fidelityFX && globals::fidelityFX->isFrameGenActive;
+	if (fgDeltaTime > 0.0f && !isFSRFrameGen) {
 		overlay->perfOverlayState.SetPostFGFrameTimeMs(fgDeltaTime * 1000.0f);
 		overlay->perfOverlayState.SetPostFGFps(1000.0f / overlay->perfOverlayState.GetPostFGFrameTimeMs());
 
