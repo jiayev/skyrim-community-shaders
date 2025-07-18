@@ -625,7 +625,7 @@ namespace SIE
 		static std::array<std::array<std::unordered_map<std::string, int32_t>,
 							  static_cast<size_t>(ShaderClass::Total)>,
 			static_cast<size_t>(RE::BSShader::Type::Total)>
-			GetVariableIndices()
+		GetVariableIndices()
 		{
 			std::array<std::array<std::unordered_map<std::string, int32_t>,
 						   static_cast<size_t>(ShaderClass::Total)>,
@@ -998,7 +998,7 @@ namespace SIE
 
 				if (shaderClass == ShaderClass::Vertex) {
 					for (size_t nameIndex = 0; nameIndex < imagespaceShader.vsConstantNames.size();
-						 ++nameIndex) {
+						++nameIndex) {
 						if (std::string_view(imagespaceShader.vsConstantNames[static_cast<uint32_t>(nameIndex)].c_str()) ==
 							name) {
 							return static_cast<int32_t>(nameIndex);
@@ -1186,7 +1186,7 @@ namespace SIE
 								} else {
 									const auto elementSize = varDesc.Size / varTypeDesc.Elements;
 									for (uint32_t arrayIndex = 1; arrayIndex < varTypeDesc.Elements;
-										 ++arrayIndex) {
+										++arrayIndex) {
 										const std::string varName =
 											std::format("{}[{}]", varDesc.Name, arrayIndex);
 										const auto variableArrayElementIndex =
@@ -1507,7 +1507,7 @@ namespace SIE
 		{
 			using enum RE::ImageSpaceManager::ImageSpaceEffectEnum;
 
-			static const std::unordered_map<std::string_view, uint32_t> descriptors{
+			static const ankerl::unordered_dense::map<std::string_view, uint32_t> descriptors{
 				// { "BSImagespaceShaderISBlur", static_cast<uint32_t>(ISBlur) },
 				// { "BSImagespaceShaderBlur3", static_cast<uint32_t>(ISBlur3) },
 				// { "BSImagespaceShaderBlur5", static_cast<uint32_t>(ISBlur5) },
@@ -1643,6 +1643,8 @@ namespace SIE
 
 				{ "BSImagespaceShaderVolumetricLightingRaymarchCS", 256 },
 				{ "BSImagespaceShaderVolumetricLightingGenerateCS", 257 },
+				{ "BSImagespaceShaderVolumetricLightingBlurHCS", static_cast<uint32_t>(ISVolumetricLightingBlurHCS) },
+				{ "BSImagespaceShaderVolumetricLightingBlurVCS", static_cast<uint32_t>(ISVolumetricLightingBlurVCS) },
 				{ "BSImagespaceShaderCopyDepthBuffer", 98 },
 				{ "BSImagespaceShaderCopyDepthBuffer", 99 },
 				{ "BSImagespaceShaderCopyDepthBuffer", 100 },
@@ -1921,16 +1923,12 @@ namespace SIE
 			const auto& filePathString = Util::WStringToString(filePath);
 			{
 				std::scoped_lock lockD{ compilationSet.compilationMutex };
-				try {
-					if (std::filesystem::exists(filePath)) {
-						std::filesystem::remove(filePath);
-						logger::debug("Deleted {}", filePathString);
-					}
-				} catch (const std::exception& e) {
-					logger::warn("Failed to delete file {}: {}", filePathString, e.what());
-				} catch (...) {
-					logger::warn("An unknown error occurred while trying to delete file '{}'", filePathString);
-				}
+				std::error_code ec;  // Use the error_code overload to avoid exceptions for non-critical errors like the file not existing.
+				if (const bool removed = std::filesystem::remove(filePath, ec); ec) {
+					logger::warn("Error while trying to delete {}: {}", filePathString, ec.message());
+				} else if (removed) {
+					logger::debug("Deleted {}", filePathString);
+				}  // If !removed and no error, the file didn't exist, which is fine.
 			}
 
 			logger::debug("Marking recompile for shader: {}", entry.key);
@@ -2469,8 +2467,17 @@ namespace SIE
 
 	void ShaderCache::ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task)
 	{
+		if (stoken.stop_requested()) {
+			return;
+		}
+
 		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 		task.Perform();
+
+		if (stoken.stop_requested()) {
+			return;
+		}
+
 		compilationSet.Complete(task);
 	}
 
@@ -2522,7 +2529,8 @@ namespace SIE
 			return std::nullopt;
 		}
 		if (!shaderCache->IsCompiling()) {  // we just got woken up because there's a task, start clock
-			lastCalculation = lastReset = high_resolution_clock::now();
+			QueryPerformanceCounter(&lastReset);
+			lastCalculation = lastReset;
 		}
 		auto node = availableTasks.extract(availableTasks.begin());
 		auto& task = node.value();
@@ -2557,8 +2565,9 @@ namespace SIE
 			logger::debug("Compiling Task failed: {}", key);
 			failedTasks++;
 		}
-		auto now = high_resolution_clock::now();
-		totalMs += duration_cast<milliseconds>(now - lastCalculation).count();
+		LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		totalTime.QuadPart += now.QuadPart - lastCalculation.QuadPart;
 		lastCalculation = now;
 		std::scoped_lock lock(compilationMutex);
 		processedTasks.insert(task);
@@ -2576,14 +2585,14 @@ namespace SIE
 		completedTasks = 0;
 		failedTasks = 0;
 		cacheHitTasks = 0;
-		lastReset = high_resolution_clock::now();
-		lastCalculation = high_resolution_clock::now();
-		totalMs = (double)duration_cast<std::chrono::milliseconds>(lastReset - lastReset).count();
+		QueryPerformanceCounter(&lastReset);
+		QueryPerformanceCounter(&lastCalculation);
+		totalTime = { 0 };
 	}
 
-	std::string CompilationSet::GetHumanTime(double a_totalms)
+	std::string CompilationSet::GetHumanTime(double a_totalMs)
 	{
-		int milliseconds = (int)a_totalms;
+		int milliseconds = (int)a_totalMs;
 		int seconds = milliseconds / 1000;
 		int minutes = seconds / 60;
 		seconds %= 60;
@@ -2595,6 +2604,11 @@ namespace SIE
 
 	double CompilationSet::GetEta()
 	{
+		double totalMs = static_cast<double>(totalTime.QuadPart) * 1000.0 / frequency.QuadPart;
+
+		if (totalMs == 0.0) {
+			return 0.0;  // Avoid division by zero
+		}
 		auto rate = completedTasks / totalMs;
 		auto remaining = totalTasks - completedTasks - failedTasks;
 		return std::max(remaining / rate, 0.0);
@@ -2602,6 +2616,8 @@ namespace SIE
 
 	std::string CompilationSet::GetStatsString(bool a_timeOnly)
 	{
+		double totalMs = static_cast<double>(totalTime.QuadPart) * 1000.0 / frequency.QuadPart;
+
 		if (a_timeOnly)
 			return fmt::format("{}/{}",
 				GetHumanTime(totalMs),

@@ -2,6 +2,10 @@
 
 struct HairSpecular : Feature
 {
+private:
+	static constexpr std::string_view MOD_ID = "149011";
+
+public:
 	static HairSpecular* GetSingleton()
 	{
 		static HairSpecular singleton;
@@ -11,9 +15,20 @@ struct HairSpecular : Feature
 	virtual inline std::string GetName() override { return "Hair Specular"; }
 	virtual inline std::string GetShortName() override { return "HairSpecular"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "CS_HAIR"; }
+	virtual std::string_view GetCategory() const override { return "Characters"; }
+	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
+	{
+		return {
+			"Provides better hair shading with realistic specular highlights and tangent-based light interaction for more lifelike hair appearance.",
+			{ "Realistic hair specular highlights",
+				"Enhanced hair glossiness and saturation controls",
+				"Separate specular and diffuse lighting multipliers",
+				"Tangent shift texture support for varied hair highlights" }
+		};
+	}
 	virtual bool HasShaderDefine(RE::BSShader::Type shaderType) override { return shaderType == RE::BSShader::Type::Lighting; };
 
-	virtual inline std::string GetFeatureModLink() override { return "https://www.nexusmods.com/skyrimspecialedition/mods/149011"; }
+	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 
 	virtual void Prepass() override;
 
@@ -22,17 +37,23 @@ struct HairSpecular : Feature
 	struct alignas(16) Settings
 	{
 		uint Enabled = true;
-		float HairGlossiness = 60.0f;
+		float HairGlossiness = 70.0f;
 		float SpecularMult = 1.0f;
 		float DiffuseMult = 1.0f;
 		uint EnableTangentShift = true;
 		float PrimaryTangentShift = 0.5f;
 		float SecondaryTangentShift = -0.25f;
-		float HairSaturation = 1.25f;
+		float HairSaturation = 1.0f;
 		float SpecularIndirectMult = 1.0f;
 		float DiffuseIndirectMult = 1.0f;
-		float BaseColorMult = 1.5f;
-		float pad;
+		float BaseColorMult = 1.0f;
+		float Transmission = 1.0f;
+		uint EnableSelfShadow = true;
+		float SelfShadowStrength = 1.0f;
+		float SelfShadowExponent = 0.1f;
+		float SelfShadowScale = 2.5f;
+		uint HairMode = 0;  // 0: Kajiya-Kay, 1: Marschner
+		uint pad[3];
 	} settings;
 
 	eastl::unique_ptr<Texture2D> texTangentShift = nullptr;

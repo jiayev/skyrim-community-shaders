@@ -3,6 +3,10 @@
 
 struct SkySync : Feature
 {
+private:
+	static constexpr std::string_view MOD_ID = "153543";
+
+public:
 	static SkySync* GetSingleton()
 	{
 		static SkySync singleton;
@@ -11,6 +15,20 @@ struct SkySync : Feature
 
 	virtual inline std::string GetName() override { return "Sky Sync"; }
 	virtual inline std::string GetShortName() override { return "SkySync"; }
+	virtual std::string_view GetCategory() const override { return "Sky"; }
+
+	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
+	{
+		return {
+			"Synchronizes volumetric lighting and shadows with the actual sun and moon positions in the sky.",
+			{ "Fixes the mismatch between the positions of the sun and moons and the lighting direction",
+				"Includes an optional alternative southern sun path for more realistic and dramatic lighting",
+				"Smoothly switches the light source between the sun and moons based on visibility",
+				"Moon light source can be switched between Masser, Secunda, or the brightest",
+				"Automatic calculation of moon lighting intensity based on moon phase",
+				"Fixes the sun appearing higher on the horizon when the player gains altitude" }
+		};
+	}
 
 	struct Settings
 	{
@@ -146,6 +164,7 @@ private:
 
 	ClimateTimings timings = {};
 
+	RE::NiPoint3 rawDirections[3];
 	RE::NiPoint3 directions[3];
 	float intensities[3] = {};
 	ShadowFader shadowFader;

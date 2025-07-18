@@ -3,7 +3,7 @@
 #include <BS_thread_pool.hpp>
 #include <efsw/efsw.hpp>
 
-static constexpr REL::Version SHADER_CACHE_VERSION = { 0, 0, 0, 30 };
+static constexpr REL::Version SHADER_CACHE_VERSION = { 0, 0, 0, 31 };
 
 using namespace std::chrono;
 
@@ -242,11 +242,23 @@ namespace SIE
 	class CompilationSet
 	{
 	public:
+		LARGE_INTEGER lastReset;
+		LARGE_INTEGER lastCalculation;
+		LARGE_INTEGER frequency;
+		LARGE_INTEGER totalTime = { 0 };
+
+		CompilationSet()
+		{
+			QueryPerformanceFrequency(&frequency);
+			QueryPerformanceCounter(&lastReset);
+			QueryPerformanceCounter(&lastCalculation);
+		}
+
 		std::optional<ShaderCompilationTask> WaitTake(std::stop_token stoken);
 		void Add(const ShaderCompilationTask& task);
 		void Complete(const ShaderCompilationTask& task);
 		void Clear();
-		std::string GetHumanTime(double a_totalms);
+		std::string GetHumanTime(double a_totalMs);
 		double GetEta();
 		std::string GetStatsString(bool a_timeOnly = false);
 		std::atomic<uint64_t> completedTasks = 0;
@@ -260,9 +272,6 @@ namespace SIE
 		std::unordered_set<ShaderCompilationTask> tasksInProgress;
 		std::unordered_set<ShaderCompilationTask> processedTasks;  // completed or failed
 		std::condition_variable_any conditionVariable;
-		std::chrono::steady_clock::time_point lastReset = high_resolution_clock::now();
-		std::chrono::steady_clock::time_point lastCalculation = high_resolution_clock::now();
-		double totalMs = (double)duration_cast<std::chrono::milliseconds>(lastReset - lastReset).count();
 	};
 
 	struct ShaderCacheResult
@@ -336,11 +345,11 @@ namespace SIE
 
 		/**
 		 * @brief Updates the shader modification time for the given shader type.
-		 * 
-		 * This function checks if the shader's file modification time has changed or 
-		 * forces an update based on the a_forceUpdate flag. If the file does not exist, 
+		 *
+		 * This function checks if the shader's file modification time has changed or
+		 * forces an update based on the a_forceUpdate flag. If the file does not exist,
 		 * or the shader type is invalid, the update is skipped.
-		 * 
+		 *
 		 * @param a_type The shader type as a string (case insensitive).
 		 * @param a_forceUpdate If true, forces an update regardless of the actual file modification time.
 		 * @return true if the shader modification time was updated, false otherwise.
@@ -348,10 +357,10 @@ namespace SIE
 		bool UpdateShaderModifiedTime(const std::string& a_type, boolean a_forceUpdate = false);
 		/**
 		 * @brief Checks if the shader has been modified since the given time.
-		 * 
+		 *
 		 * This function compares the shader's last modification time against the provided
 		 * time point to determine if it has been updated.
-		 * 
+		 *
 		 * @param a_type The shader type as a string (case insensitive).
 		 * @param a_current The time point to compare against.
 		 * @return true if the shader has been modified after the given time point, false otherwise.
@@ -363,21 +372,21 @@ namespace SIE
 		/**
    		* @brief Clears and marks shaders for recompilation based on the given path.
  		*
- 		* This function looks up the provided `a_path` in the `hlslToShaderMap`. 
-		* If the path exists in the map, it iterates through all the shader entries associated 
-		* with that path, clears the shaders, and marks them for recompilation by updating their 
+ 		* This function looks up the provided `a_path` in the `hlslToShaderMap`.
+		* If the path exists in the map, it iterates through all the shader entries associated
+		* with that path, clears the shaders, and marks them for recompilation by updating their
 		* modified times, and logs the operation.
 		*
 		* @param a_path The file path associated with the shaders to be marked for recompilation.
-		* 
+		*
 		* @returns bool whether a shader was found in the `hlslToShaderMap`
-		* 
+		*
 		* @note The function assumes that `a_path` corresponds to shaders stored in `hlslToShaderMap`.
 		* If the path is not found in the map, the function does nothing. Also, only files compiled
-		* during session will be identified. Disk cached shaders will not be cleared and a further 
+		* during session will be identified. Disk cached shaders will not be cleared and a further
 		* cache clear may be necessary.
-		* 
-		* @threadsafe The function locks the internal map (`mapMutex`) to ensure thread safety when 
+		*
+		* @threadsafe The function locks the internal map (`mapMutex`) to ensure thread safety when
 		* accessing or modifying shared shader map data.
 		*/
 		bool Clear(const std::string& a_path);
@@ -416,9 +425,9 @@ namespace SIE
 
 		/**
 		 * @brief Clears all shaders of a specific type from the shader map.
-		 * 
-		 * This function removes all shaders of the specified type (`RE::BSShader::Type`) from the shader map. 
-		 * 
+		 *
+		 * This function removes all shaders of the specified type (`RE::BSShader::Type`) from the shader map.
+		 *
 		 * @param a_type The shader type (e.g., Grass, Sky, Water) to be cleared from the map.
 		 */
 		void ClearShaderMap(RE::BSShader::Type a_type);
@@ -647,15 +656,14 @@ namespace SIE
 
 		~ShaderCache();
 
-		std::array<eastl::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::VertexShader>>,
-			static_cast<size_t>(RE::BSShader::Type::Total)>
-			vertexShaders;
-		std::array<eastl::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::PixelShader>>,
-			static_cast<size_t>(RE::BSShader::Type::Total)>
-			pixelShaders;
-		std::array<eastl::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::ComputeShader>>,
-			static_cast<size_t>(RE::BSShader::Type::Total)>
-			computeShaders;
+		template <typename ShaderType>
+		using ShaderMapArray = std::array<
+			ankerl::unordered_dense::map<uint32_t, std::unique_ptr<ShaderType>>,
+			RE::BSShader::Type::Total>;
+
+		ShaderMapArray<RE::BSGraphics::VertexShader> vertexShaders;
+		ShaderMapArray<RE::BSGraphics::PixelShader> pixelShaders;
+		ShaderMapArray<RE::BSGraphics::ComputeShader> computeShaders;
 
 		bool isEnabled = true;
 		bool isDiskCache = true;
@@ -669,12 +677,12 @@ namespace SIE
 		std::mutex pixelShadersMutex;
 		std::mutex computeShadersMutex;
 		CompilationSet compilationSet;
-		std::unordered_map<std::string, ShaderCacheResult> shaderMap{};
-		std::mutex mapMutex;                                                            // guard for shaderMap
-		std::unordered_map<std::string, system_clock::time_point> modifiedShaderMap{};  // hashmap when a shader source file last modified
-		std::mutex modifiedMapMutex;                                                    // guard for modifiedShaderMap
-		std::unordered_map<std::string, std::set<hlslRecord>> hlslToShaderMap{};        // hashmap linking specific hlsl files to shader keys in shaderMap
-		std::mutex hlslMapMutex;                                                        // guard for hlslToShaderMap
+		ankerl::unordered_dense::map<std::string, ShaderCacheResult> shaderMap{};
+		std::mutex mapMutex;                                                                      // guard for shaderMap
+		ankerl::unordered_dense::map<std::string, system_clock::time_point> modifiedShaderMap{};  // hashmap when a shader source file last modified
+		std::mutex modifiedMapMutex;                                                              // guard for modifiedShaderMap
+		ankerl::unordered_dense::map<std::string, std::set<hlslRecord>> hlslToShaderMap{};        // hashmap linking specific hlsl files to shader keys in shaderMap
+		std::mutex hlslMapMutex;                                                                  // guard for hlslToShaderMap
 
 		// efsw file watcher
 		efsw::FileWatcher* fileWatcher = nullptr;
@@ -690,17 +698,17 @@ namespace SIE
 		 * @brief Updates the shader cache for a specific file path and determines whether to clear the cache.
 		 *
 		 * This function checks if the given file exists and is a shader file (with the ".hlsl" extension).
-		 * It then updates the cache with the modified time for the shader file and marks shaders for recompilation 
+		 * It then updates the cache with the modified time for the shader file and marks shaders for recompilation
 		 * based on the given path. If a specific shader is not found in the cache, it may trigger a cache clear.
 		 *
 		 * @param filePath The path of the shader file to update.
 		 * @param cache Reference to the shader cache to update.
 		 * @param clearCache A boolean flag indicating whether the entire cache should be cleared.
 		 * @param fileDone A boolean flag that signals whether the update process is done for the current file.
-		 * 
+		 *
 		 * @note The function only processes files with an ".hlsl" extension and ignores directories.
 		 * It assumes case-insensitive handling for shader types and extensions.
-		 * 
+		 *
 		 * @return Void. Updates internal state and modifies `clearCache` and `fileDone` by reference.
 		 */
 		void UpdateCache(const std::filesystem::path& filePath, SIE::ShaderCache* cache, bool& clearCache, bool& retFlag);

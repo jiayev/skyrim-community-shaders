@@ -3,11 +3,6 @@
 #include "ShaderCache.h"
 #include "State.h"
 
-void TerrainHelper::DrawUnloadedUI()
-{
-	ImGui::Text("Terrain Helper is only required if a terrain mod you are using requires it, otherwise it does nothing.");
-}
-
 void TerrainHelper::DataLoaded()
 {
 	// Get the default landscape texture set for terrain helper
@@ -15,15 +10,21 @@ void TerrainHelper::DataLoaded()
 	if (defaultLandTextureSet != nullptr) {
 		logger::info("[Terrain Helper] LandscapeDefault EDID texture set found");
 		defaultLandTexture = defaultLandTextureSet;
+		// only enable if TerrainHelper.esp is loaded
+		enabled = true;
 	} else {
-		logger::info("[Terrain Helper] LandscapeDefault EDID texture set not found, using default");
-		const auto bgsDefaultLandTex = *REL::Relocation<RE::TESLandTexture**>(RELOCATION_ID(514783, 400936));
-		defaultLandTexture = bgsDefaultLandTex->textureSet;
+		logger::warn("[Terrain Helper] LandscapeDefault EDID texture set from TerrainHelper.esp not found. Terrain helper is disabled.");
+		enabled = false;
 	}
 }
 
 bool TerrainHelper::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 {
+	if (!enabled) {
+		// terrain helper is not enabled
+		return false;
+	}
+
 	if (land == nullptr || land->loadedData == nullptr || land->loadedData->mesh[0] == nullptr) {
 		// this is not terrain or vanilla material failed
 		return false;
@@ -56,10 +57,10 @@ bool TerrainHelper::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 		std::array<RE::BGSTextureSet*, 6> textureSets;
 		auto defTexture = land->loadedData->defQuadTextures[quadI];
 		if (defTexture != nullptr && defTexture->formID != 0) {
-			textureSets[0] = defTexture->textureSet;
+			textureSets[0] = Util::GetSeasonalSwap(defTexture->textureSet);
 		} else {
 			// this is a default texture
-			textureSets[0] = defaultLandTexture;
+			textureSets[0] = Util::GetSeasonalSwap(defaultLandTexture);
 		}
 		for (uint32_t textureI = 0; textureI < 5; ++textureI) {
 			auto curTexture = land->loadedData->quadTextures[quadI][textureI];
@@ -70,9 +71,9 @@ bool TerrainHelper::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 
 			if (curTexture->formID == 0) {
 				// this is a default texture
-				textureSets[textureI + 1] = defaultLandTexture;
+				textureSets[textureI + 1] = Util::GetSeasonalSwap(defaultLandTexture);
 			} else {
-				textureSets[textureI + 1] = land->loadedData->quadTextures[quadI][textureI]->textureSet;
+				textureSets[textureI + 1] = Util::GetSeasonalSwap(land->loadedData->quadTextures[quadI][textureI]->textureSet);
 			}
 		}
 
@@ -131,6 +132,11 @@ void TerrainHelper::SetShaderResouces(ID3D11DeviceContext* a_context)
 
 void TerrainHelper::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material)
 {
+	if (!enabled) {
+		// terrain helper is not enabled
+		return;
+	}
+
 	if (material == nullptr) {
 		return;
 	}
@@ -150,6 +156,7 @@ void TerrainHelper::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialB
 	const auto& stateData = globals::game::graphicsState->GetRuntimeData();
 
 	// Populate extended slots
+	// Please update bits allocation in ExtraFeatureDescriptor/Permutation.hlsli and other feature code if you need to change the constant 6
 	for (uint32_t textureI = 0; textureI < 6; ++textureI) {
 		if (materialBase.parallax[textureI] != nullptr && materialBase.parallax[textureI] != stateData.defaultTextureNormalMap) {
 			thExtendedRendererState.SetPSTexture(textureI, materialBase.parallax[textureI]->rendererTexture);
