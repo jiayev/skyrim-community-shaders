@@ -2769,7 +2769,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			specularColorPBR += pointSpecularColor;
 		} else {
 			lightColor *= lightShadow;
-			float lightAngle = dot(worldSpaceNormal.xyz, normalizedLightDirection.xyz);
+			float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
 			float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
 
 #				if defined(SPECULAR) || (defined(SPARKLE) && !defined(SNOW))
@@ -3324,11 +3324,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 directLightsDiffuseInput = diffuseColor * baseColor.xyz;
 		color.xyz += directLightsDiffuseInput;
 
-		Skin::SkinIndirectLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, skinSurfaceProperties, worldSpaceNormal.xyz, viewDirection, worldSpaceVertexNormal);
+		Skin::SkinIndirectLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, skinSurfaceProperties, worldNormal.xyz, viewDirection, vertexNormal);
 
 #		if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1.0)
-			indirectSpecularLobeWeight += PBR::GetWetnessIndirectSpecularLobeWeight(wetnessNormal, viewDirection, worldSpaceVertexNormal, waterRoughnessSpecular) * wetnessGlossinessSpecular;
+			indirectSpecularLobeWeight += PBR::GetWetnessIndirectSpecularLobeWeight(wetnessNormal, viewDirection, vertexNormal, waterRoughnessSpecular) * wetnessGlossinessSpecular;
 #		endif
 
 #		if !(defined(DEFERRED) && defined(SSGI))
@@ -3338,9 +3338,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if !defined(DEFERRED)
 #			if defined(DYNAMIC_CUBEMAPS)
 #				if defined(SKYLIGHTING)
-		specularColorPBR += indirectSpecularLobeWeight * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldSpaceNormal, worldSpaceVertexNormal, viewDirection, skinSurfaceProperties.RoughnessPrimary, skylightingSH);
+		specularColorPBR += indirectSpecularLobeWeight * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, skinSurfaceProperties.RoughnessPrimary, skylightingSH);
 #				else
-		specularColorPBR += indirectSpecularLobeWeight * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldSpaceNormal, worldSpaceVertexNormal, viewDirection, skinSurfaceProperties.RoughnessPrimary);
+		specularColorPBR += indirectSpecularLobeWeight * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, skinSurfaceProperties.RoughnessPrimary);
 #				endif
 #			else
 		specularColorPBR += indirectSpecularLobeWeight * directionalAmbientColor;
