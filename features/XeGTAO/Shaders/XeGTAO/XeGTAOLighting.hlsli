@@ -54,32 +54,17 @@ namespace GTAO
 		return modelPos;
 	}
 
-#if !defined(DRAW_IN_WORLDSPACE)
-	float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex, out float xeGTAO, out float3 bentNormalWS, bool worldSpace, float3x4 world)
-#else
-	float3 GetModelSpaceBentNormal(float2 uv, uint eyeIndex, out float xeGTAO, out float3 bentNormalWS)
-#endif
+	float3 GetWorldSpaceBentNormal(float2 uv, uint eyeIndex, out float xeGTAO)
 	{
 		xeGTAO = 1.0;
 		float4x4 inverseView = FrameBuffer::CameraViewInverse[eyeIndex];
 		float3 bentNormal = GetBentNormals(uv, eyeIndex, xeGTAO);
 
-		bentNormalWS = normalize(mul(inverseView, float4(bentNormal, 0)).xyz);
-		float3 bentNormalMS = bentNormalWS;
-
-#if !defined(DRAW_IN_WORLDSPACE)
-		if (!worldSpace) {
-			bentNormalMS = normalize(WorldToModel(bentNormalWS, world));
-		}
-#endif
-		return bentNormalMS;
+		bentNormal = normalize(mul(inverseView, float4(bentNormal, 0)).xyz);
+		return bentNormal;
 	}
 
-#if !defined(DRAW_IN_WORLDSPACE)
-	float3 GetModelSpaceBentNormalDiff(float2 uv, uint eyeIndex, out float xeGTAO, bool worldSpace, float3x4 world)
-#else
-	float3 GetModelSpaceBentNormalDiff(float2 uv, uint eyeIndex, out float xeGTAO)
-#endif
+	float3 GetWorldSpaceBentNormalDiff(float2 uv, uint eyeIndex, out float xeGTAO)
 	{
 		xeGTAO = 1.0;
 		float4x4 inverseView = FrameBuffer::CameraViewInverse[eyeIndex];
@@ -90,13 +75,6 @@ namespace GTAO
 		float3 generatedNormalWS = normalize(mul(inverseView, float4(generatedNormal, 0)).xyz);
 		float3 diffWS = bentNormalWS - generatedNormalWS;
 
-#if !defined(DRAW_IN_WORLDSPACE)
-		if (!worldSpace) {
-			bentNormalWS = normalize(WorldToModel(bentNormalWS, world));
-			generatedNormalWS = normalize(WorldToModel(generatedNormalWS, world));
-			diffWS = bentNormalWS - generatedNormalWS;
-		}
-#endif
 		return diffWS;
 	}
 }
