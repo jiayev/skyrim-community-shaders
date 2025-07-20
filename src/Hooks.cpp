@@ -1111,14 +1111,22 @@ namespace Hooks
 			stl::write_thunk_call<Main_Update_Swap>(REL::RelocationID(35565, 36564).address() + REL::Relocate(0x5D2, 0xA97));
 		}
 
-		// Patch eye position in BSLightingShader::SetupGeometry to always update due to additional effects which may require it
-		// The variable updateEyePosition is set to false by default. By patching to be true it will always update the eye position
-		// SE and AE use a 7-byte instruction whereas VR uses a 8-byte instruction
-		// We offset from the base address of the containing function to the instruction itself and then to the value the instruction sets
+		// Patch render space in BSLightingShader::SetupGeometry to always use world space
+		// The variable updateEyePosition is set to 1 when not skinned. By patching to be 0 it will always use world space
+		// We offset from the base address of the containing function to the start of the patch
 		{
 			logger::info("Patching BSLightingShader::SetupGeometry::updateEyePosition");
-			uintptr_t setupGeometryUpdateEyePosition = REL::RelocationID(100565, 107300).address() + REL::Relocate(0x50, 0x75, 0x78);
-			REL::safe_write(setupGeometryUpdateEyePosition + REL::Relocate(6, 6, 7), bool{ true });
+			uintptr_t setupGeometryUpdateRenderSpace = REL::RelocationID(100565, 107300).address() + REL::Relocate(0x76, 0x71, 0x65);
+			if (REL::Module::IsAE()) {
+				std::uint8_t patch[] = { 0x41, 0x83, 0xE7, 0x00 };  // and r15d, 0
+				REL::safe_write(setupGeometryUpdateRenderSpace, patch, sizeof(patch));
+			} else if (REL::Module::IsVR()) {
+				std::uint8_t patch[] = { 0x41, 0x83, 0xE4, 0x00 };  // and r12d, 0
+				REL::safe_write(setupGeometryUpdateRenderSpace, patch, sizeof(patch));
+			} else {
+				std::uint8_t patch[] = { 0x0F, 0x1F, 0x40, 0x00 };  // 4-byte NOP
+				REL::safe_write(setupGeometryUpdateRenderSpace, patch, sizeof(patch));
+			}
 		}
 	}
 
