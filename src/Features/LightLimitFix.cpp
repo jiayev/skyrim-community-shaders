@@ -289,6 +289,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pa
 		return;
 
 	strictLightDataTemp.NumStrictLights = 0;
+	strictLightDataTemp.ShadowBitMask = 0;
 
 	strictLightDataTemp.RoomIndex = -1;
 	if (!roomNodes.empty()) {
@@ -343,6 +344,13 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 		strictLightDataTemp.StrictLights[i] = light;
 	}
+
+	for (uint32_t i = 0; i < a_pass->numShadowLights; i++) {
+		auto bsLight = a_pass->sceneLights[i + 1];
+		auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
+		GET_INSTANCE_MEMBER(shadowLightIndex, shadowLight);
+		strictLightDataTemp.ShadowBitMask |= (1 << shadowLightIndex);
+	}
 }
 
 void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
@@ -358,15 +366,17 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 
 	auto shadowSceneNode = smState->shadowSceneNode[0];
 
-	const bool isEmpty = strictLightDataTemp.NumStrictLights == 0;
+	const auto isEmpty = strictLightDataTemp.NumStrictLights == 0;
 	const bool isWorld = accumulator->GetRuntimeData().activeShadowSceneNode == shadowSceneNode;
-	const int roomIndex = strictLightDataTemp.RoomIndex;
+	const auto roomIndex = strictLightDataTemp.RoomIndex;
+	const auto shadowBitMask = strictLightDataTemp.ShadowBitMask;
 
-	if (!isEmpty || (isEmpty && !wasEmpty) || isWorld != wasWorld || previousRoomIndex != roomIndex) {
+	if (!isEmpty || (isEmpty && !wasEmpty) || isWorld != wasWorld || previousRoomIndex != roomIndex || shadowBitMask != previousShadowBitMask) {
 		strictLightDataCB->Update(strictLightDataTemp);
 		wasEmpty = isEmpty;
 		wasWorld = isWorld;
 		previousRoomIndex = roomIndex;
+		previousShadowBitMask = shadowBitMask;
 	}
 
 	if (frameChecker.IsNewFrame()) {

@@ -1116,16 +1116,23 @@ namespace Hooks
 		// We offset from the base address of the containing function to the start of the patch
 		{
 			logger::info("Patching BSLightingShader::SetupGeometry::updateEyePosition");
-			uintptr_t setupGeometryUpdateRenderSpace = REL::RelocationID(100565, 107300).address() + REL::Relocate(0x76, 0x71, 0x65);
+			auto setupGeometryUpdateRenderSpace = REL::RelocationID(100565, 107300).address();
+
 			if (REL::Module::IsAE()) {
 				std::uint8_t patch[] = { 0x41, 0x83, 0xE7, 0x00 };  // and r15d, 0
-				REL::safe_write(setupGeometryUpdateRenderSpace, patch, sizeof(patch));
+				REL::safe_write(setupGeometryUpdateRenderSpace + 0x71, patch, sizeof(patch));
 			} else if (REL::Module::IsVR()) {
 				std::uint8_t patch[] = { 0x41, 0x83, 0xE4, 0x00 };  // and r12d, 0
-				REL::safe_write(setupGeometryUpdateRenderSpace, patch, sizeof(patch));
+				REL::safe_write(setupGeometryUpdateRenderSpace + 0x65, patch, sizeof(patch));
 			} else {
-				std::uint8_t patch[] = { 0x0F, 0x1F, 0x40, 0x00 };  // 4-byte NOP
-				REL::safe_write(setupGeometryUpdateRenderSpace, patch, sizeof(patch));
+				std::uint8_t patch1[] = { 0xB8, 0x00, 0x00 };  // mov eax, 0
+				REL::safe_write(setupGeometryUpdateRenderSpace + 0x73, patch1, sizeof(patch1));
+
+				std::uint8_t patch2[] = { 0x45, 0x31, 0xC9 };  // xor r9d, r9d (zeros r9d)
+				REL::safe_write(setupGeometryUpdateRenderSpace + 0x36D, patch2, sizeof(patch2));
+
+				std::uint8_t patch3[] = { 0x45, 0x31, 0xC0 };  // xor r8d, r8d (zeros r8d)
+				REL::safe_write(setupGeometryUpdateRenderSpace + 0x378, patch3, sizeof(patch3));
 			}
 		}
 	}

@@ -107,7 +107,8 @@ public:
 	{
 		uint NumStrictLights;
 		int RoomIndex;
-		uint pad0[2];
+		uint ShadowBitMask;
+		uint pad0;
 		LightData StrictLights[15];
 	};
 
@@ -171,6 +172,8 @@ public:
 	bool wasEmpty = false;
 	bool wasWorld = false;
 	int previousRoomIndex = -1;
+	uint previousShadowBitMask = 0;
+
 	Util::FrameChecker frameChecker;
 
 	virtual void SetupResources() override;
