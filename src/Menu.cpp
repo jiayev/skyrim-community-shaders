@@ -26,6 +26,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
+#include "Features/VR.h"
 #include "Features/WeatherPicker.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -217,6 +218,8 @@ Menu::~Menu()
 	ImGui_ImplWin32_Shutdown();
 	ImGui::DestroyContext();
 	dxgiAdapter3 = nullptr;
+
+	globals::features::vr->DestroyOverlay();
 }
 
 void Menu::Load(json& o_json)
@@ -237,8 +240,8 @@ void Menu::Init()
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	auto& imgui_io = ImGui::GetIO();
-	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
-	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset;
+	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_DockingEnable;
+	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_HasGamepad;
 
 	// Enhanced font configuration for sharper text rendering
 	ImFontConfig font_config;
@@ -289,6 +292,10 @@ void Menu::Init()
 	}
 
 	BuildCategoryCounts();
+
+	if (REL::Module::IsVR()) {
+		globals::features::vr->EnsureOverlayInitialized();
+	}
 
 	initialized = true;
 }
@@ -1641,7 +1648,13 @@ void Menu::DrawFooter()
 
 void Menu::DrawOverlay()
 {
-	ProcessInputEventQueue();  // Synchronize Inputs to frame
+	if (REL::Module::IsVR()) {
+		globals::features::vr->RecreateOverlayTexturesIfNeeded();
+	}
+	ProcessInputEventQueue();
+	if (REL::Module::IsVR()) {
+		globals::features::vr->ProcessControllerInputForImGui();
+	}
 
 	auto shaderCache = globals::shaderCache;
 	auto failed = shaderCache->GetFailedTasks();
@@ -1752,20 +1765,16 @@ void Menu::DrawOverlay()
 
 	// Draw A/B testing overlay
 	abTestingManager->DrawOverlayUI();
-
 	ImGuiStyle& style = ImGui::GetStyle();
 	style = oldStyle;
 
 	ImGui::Render();
 	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-}
 
-/**
- * @brief Renders the current draw call counts for various shader types using ImGui.
- *
- * Displays a breakdown of draw calls by type (e.g., Grass, Sky, Water, etc.) and the total count.
- * Values are sourced from the global state.
- */
+	if (REL::Module::IsVR()) {
+		globals::features::vr->SubmitOverlayFrame();
+	}
+}
 
 const ImGuiKey Menu::VirtualKeyToImGuiKey(WPARAM vkKey)
 {
@@ -2049,13 +2058,30 @@ void Menu::ProcessInputEventQueue()
 {
 	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
 	ImGuiIO& io = ImGui::GetIO();
-
+	// Split the queue into VR and non-VR events
+	std::vector<KeyEvent> vrEvents;
+	std::vector<KeyEvent> nonVREvents;
 	for (auto& event : _keyEventQueue) {
+		bool isVRController = ((event.device == RE::INPUT_DEVICE::kVivePrimary || event.device == RE::INPUT_DEVICE::kViveSecondary ||
+								event.device == RE::INPUT_DEVICE::kOculusPrimary || event.device == RE::INPUT_DEVICE::kOculusSecondary ||
+								event.device == RE::INPUT_DEVICE::kWMRPrimary || event.device == RE::INPUT_DEVICE::kWMRSecondary));
+		if (REL::Module::IsVR() && isVRController) {
+			vrEvents.push_back(event);
+		} else {
+			nonVREvents.push_back(event);
+		}
+	}
+	// Process VR events in VR
+	if (!vrEvents.empty()) {
+		globals::features::vr->ProcessVREvents(vrEvents);
+		globals::features::vr->UpdateOverlayMenuStateFromInput();
+	}
+	// Process non-VR events in Menu (original logic here)
+	for (auto& event : nonVREvents) {
 		if (event.eventType == RE::INPUT_EVENT_TYPE::kChar) {
 			io.AddInputCharacter(event.keyCode);
 			continue;
 		}
-
 		if (event.device == RE::INPUT_DEVICE::kMouse) {
 			logger::trace("Detect mouse scan code {} value {} pressed: {}", event.keyCode, event.value, event.IsPressed());
 			if (event.keyCode > 7) {  // middle scroll
@@ -2111,7 +2137,7 @@ void Menu::ProcessInputEventQueue()
 							 Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible;
 						 } },
 					};
-					for (auto& ka : keyActions) {
+					for (const auto& ka : keyActions) {
 						if (key == ka.settingKey) {
 							ka.action();
 							break;
@@ -2168,12 +2194,23 @@ void Menu::OnFocusChanged()
 void Menu::ProcessInputEvents(RE::InputEvent* const* a_events)
 {
 	for (auto it = *a_events; it; it = it->next) {
-		if (it->GetEventType() != RE::INPUT_EVENT_TYPE::kButton && it->GetEventType() != RE::INPUT_EVENT_TYPE::kChar)  // we do not care about non button or char events
+		// Accept button, char, and thumbstick events
+		if (it->GetEventType() != RE::INPUT_EVENT_TYPE::kButton &&
+			it->GetEventType() != RE::INPUT_EVENT_TYPE::kChar &&
+
+			it->GetEventType() != RE::INPUT_EVENT_TYPE::kThumbstick
+
+			)  // we do not care about non button/char/thumbstick events
 			continue;
 
-		auto event = it->GetEventType() == RE::INPUT_EVENT_TYPE::kButton ? KeyEvent(static_cast<RE::ButtonEvent*>(it)) : KeyEvent(static_cast<CharEvent*>(it));
+		if (it->GetEventType() == RE::INPUT_EVENT_TYPE::kButton) {
+			addToEventQueue(KeyEvent(static_cast<RE::ButtonEvent*>(it)));
+		} else if (it->GetEventType() == RE::INPUT_EVENT_TYPE::kChar) {
+			addToEventQueue(KeyEvent(static_cast<CharEvent*>(it)));
 
-		addToEventQueue(event);
+		} else if (it->GetEventType() == RE::INPUT_EVENT_TYPE::kThumbstick) {
+			addToEventQueue(KeyEvent(static_cast<RE::ThumbstickEvent*>(it)));
+		}
 	}
 }
 
