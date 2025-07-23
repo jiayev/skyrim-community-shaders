@@ -124,10 +124,16 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	state->currentVertexDescriptor = vertexDescriptor;
 	state->currentPixelDescriptor = pixelDescriptor;
 
+	state->permutationData.VertexShaderDescriptor = vertexDescriptor;
+	state->permutationData.PixelShaderDescriptor = pixelDescriptor;
+
 	state->modifiedVertexDescriptor = vertexDescriptor;
 	state->modifiedPixelDescriptor = pixelDescriptor;
 
 	state->ModifyShaderLookup(*shader, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor);
+
+	// Only check against non-shader bits
+	state->permutationData.PixelShaderDescriptor &= ~state->modifiedPixelDescriptor;
 
 	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
 
@@ -168,7 +174,7 @@ namespace EffectExtensions
 			if (auto* shaderProperty = static_cast<RE::BSShaderProperty*>(pass->geometry->GetGeometryRuntimeData().properties[1].get())) {
 				if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kUniformScale)) {
 					auto state = globals::state;
-					state->currentExtraDescriptor |= (uint)State::ExtraShaderDescriptors::EffectShadows;
+					state->permutationData.ExtraShaderDescriptor |= (uint)State::ExtraShaderDescriptors::EffectShadows;
 				}
 			}
 		}
@@ -184,12 +190,12 @@ namespace LightingExtensions
 		{
 			func(shader, pass, renderFlags);
 
-			globals::state->isTree = false;
+			globals::state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
 
 			if (auto userData = pass->geometry->GetUserData())
 				if (auto baseObject = userData->GetBaseObject())
 					if (baseObject->As<RE::TESObjectTREE>())
-						globals::state->isTree = true;
+						globals::state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -998,6 +1004,18 @@ namespace Hooks
 		PatchMemory(Address, Data.begin(), Data.size());
 	}
 
+	struct BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights
+	{
+		static void thunk(RE::BSGraphics::PixelShader* PixelShader, RE::BSRenderPass* Pass, DirectX::XMMATRIX& Transform, uint32_t LightCount, uint32_t ShadowLightCount, float WorldScale, uint32_t)
+		{
+			if (globals::features::lightLimitFix->loaded)
+				globals::features::lightLimitFix->BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(Pass);
+			else
+				func(PixelShader, Pass, Transform, LightCount, ShadowLightCount, WorldScale, 0);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	/**
 	 * @brief Installs hooks, detours, and memory patches for graphics, input, and rendering subsystems.
 	 *
@@ -1106,6 +1124,7 @@ namespace Hooks
 				REL::Relocation<std::uintptr_t>(renderPassCacheCtor, 0x191 - 2).address(),
 				reinterpret_cast<const uint8_t*>(&passCountSE), 4);
 		}
+
 		if (!REL::Module::IsVR()) {
 			stl::write_thunk_call<Main_Update_Begin>(REL::RelocationID(35565, 36564).address() + REL::Relocate(0x53, 0x6E));
 			stl::write_thunk_call<Main_Update_Swap>(REL::RelocationID(35565, 36564).address() + REL::Relocate(0x5D2, 0xA97));
@@ -1135,6 +1154,8 @@ namespace Hooks
 				REL::safe_write(setupGeometryUpdateRenderSpace + 0x378, patch3, sizeof(patch3));
 			}
 		}
+
+		stl::write_thunk_call<BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights>(REL::RelocationID(100565, 107300).address() + REL::Relocate(0x523, 0xB0E, 0x5FE));
 	}
 
 	/**
