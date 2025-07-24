@@ -2337,14 +2337,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	bool inReflection = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection;
 
-#	if defined(SCREEN_SPACE_SHADOWS)
-#		if defined(DEFERRED)
-	bool useScreenSpaceShadows = true;
-#		else
-	bool useScreenSpaceShadows = inWorld && !SharedData::InInterior;
-#		endif
-
-	if (useScreenSpaceShadows)
+#	if defined(SCREEN_SPACE_SHADOWS) && defined(DEFERRED)
+	if (!SharedData::InInterior)
 		dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, screenUV, screenNoise, eyeIndex);
 #	endif
 
@@ -2594,8 +2588,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
 
 		float contactShadow = 1.0;
+
+#	if defined(DEFERRED)
 		[branch] if (
-			inWorld && !FrameBuffer::FrameParams.z &&
 			SharedData::lightLimitFixSettings.EnableContactShadows &&
 			!(light.lightFlags & LightLimitFix::LightFlags::Simple) &&
 			shadowComponent != 0.0 &&
@@ -2604,6 +2599,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			float3 normalizedLightDirectionVS = normalize(light.positionVS[eyeIndex].xyz - viewPosition.xyz);
 			contactShadow = LightLimitFix::ContactShadows(viewPosition, screenNoise, normalizedLightDirectionVS, contactShadowSteps, eyeIndex);
 		}
+#	endif
 
 		float3 refractedLightDirection = normalizedLightDirection;
 #			if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
