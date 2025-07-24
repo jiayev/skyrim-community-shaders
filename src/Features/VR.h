@@ -298,6 +298,8 @@ public:
 
 	virtual void DrawSettings() override;
 
+	virtual std::string_view GetCategory() const override { return "Debug"; }
+
 	//=============================================================================
 	// OVERLAY FEATURE OVERRIDES
 	//=============================================================================
