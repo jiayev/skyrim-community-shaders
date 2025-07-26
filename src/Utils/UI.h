@@ -64,9 +64,9 @@ namespace Util
 	/**
 	 * Usage:
 	 * {
-     *      auto _ = DisableGuard(disableThis);
-     *      ... Some settings ...
-     * }
+	 *      auto _ = DisableGuard(disableThis);
+	 *      ... Some settings ...
+	 * }
 	*/
 	class DisableGuard
 	{

@@ -2,7 +2,7 @@
 #include "D3D.h"
 #include <SimpleMath.h>
 #include <d3d11.h>
-#include <imgui.h>
+#include <imgui.h>  // For ImVec4
 #include <openvr.h>
 #include <vector>
 
@@ -19,6 +19,22 @@ struct ButtonCombo;
  */
 namespace Util
 {
+	// -----------------------------------------------------------------------------
+	// Centralized UI Colors for Util functions
+	// -----------------------------------------------------------------------------
+	namespace Colors
+	{
+		constexpr ImVec4 Primary = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);    // Yellow
+		constexpr ImVec4 Secondary = ImVec4(0.0f, 0.5f, 1.0f, 1.0f);  // Blue
+		constexpr ImVec4 Both = ImVec4(0.0f, 1.0f, 0.0f, 1.0f);       // Green
+		constexpr ImVec4 Default = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);    // White
+	}
+
+	inline ImVec4 GetControllerPrimaryColor() { return Colors::Primary; }
+	inline ImVec4 GetControllerSecondaryColor() { return Colors::Secondary; }
+	inline ImVec4 GetControllerBothColor() { return Colors::Both; }
+	inline ImVec4 GetControllerDefaultColor() { return Colors::Default; }
+
 	/**
 	 * @brief Draws a button combination in the ImGui interface with color coding
 	 * @param combo Vector of ButtonCombo structures representing the key combination

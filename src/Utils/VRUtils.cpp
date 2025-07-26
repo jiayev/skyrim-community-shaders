@@ -20,16 +20,16 @@ namespace Util
 			ImVec4 color;
 			switch (combo[i].GetDevice()) {
 			case ControllerDevice::Primary:
-				color = ImVec4(0.0f, 1.0f, 0.0f, 1.0f);
+				color = Util::GetControllerPrimaryColor();
 				break;
 			case ControllerDevice::Secondary:
-				color = ImVec4(0.0f, 0.6f, 1.0f, 1.0f);
+				color = Util::GetControllerSecondaryColor();
 				break;
 			case ControllerDevice::Both:
-				color = ImVec4(0.5f, 0.0f, 0.5f, 1.0f);
+				color = Util::GetControllerBothColor();
 				break;
 			default:
-				color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+				color = Util::GetControllerDefaultColor();
 				break;
 			}
 			ImGui::PushStyleColor(ImGuiCol_Text, color);
@@ -38,31 +38,35 @@ namespace Util
 			anyDrawn = true;
 			if (showControllerLabels) {
 				ImGui::SameLine();
+				ImVec4 labelColor = Util::GetControllerDefaultColor();
 				const char* label = "";
 				switch (combo[i].GetDevice()) {
 				case ControllerDevice::Primary:
-					label = "(Primary)";
+					label = "(Primary Controller)";
+					labelColor = Util::GetControllerPrimaryColor();
 					break;
 				case ControllerDevice::Secondary:
-					label = "(Secondary)";
+					label = "(Secondary Controller)";
+					labelColor = Util::GetControllerSecondaryColor();
 					break;
 				case ControllerDevice::Both:
-					label = "(Both)";
+					label = "(Both Controllers)";
+					labelColor = Util::GetControllerBothColor();
 					break;
 				default:
 					break;
 				}
-				ImGui::TextDisabled("%s", label);
+				ImGui::TextColored(labelColor, "%s", label);
 				if (i < combo.size() - 1)
 					ImGui::SameLine();
 			}
 		}
 		if (anyDrawn) {
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				Util::DrawColoredMultiLineTooltip({ { "Color coding:", ImVec4(1, 1, 1, 1) },
-					{ "Green = Primary controller", ImVec4(0.0f, 1.0f, 0.0f, 1.0f) },
-					{ "Blue = Secondary controller", ImVec4(0.0f, 0.6f, 1.0f, 1.0f) },
-					{ "Purple = Both controllers", ImVec4(0.5f, 0.0f, 0.5f, 1.0f) } });
+				Util::DrawColoredMultiLineTooltip({ { "Color coding:", Util::GetControllerDefaultColor() },
+					{ "Yellow = Primary controller", Util::GetControllerPrimaryColor() },
+					{ "Blue = Secondary controller", Util::GetControllerSecondaryColor() },
+					{ "Green = Both controllers (Yellow + Blue)", Util::GetControllerBothColor() } });
 			}
 		}
 	}

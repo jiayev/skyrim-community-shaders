@@ -301,7 +301,7 @@ void Menu::Init()
 
 	BuildCategoryCounts();
 
-	if (REL::Module::IsVR()) {
+	if (globals::features::vr && globals::features::vr->IsOpenVRCompatible()) {
 		globals::features::vr->EnsureOverlayInitialized();
 	}
 
@@ -1620,7 +1620,7 @@ void Menu::DrawDisplaySettings()
 		for (const auto& [featureName, drawFunc] : features) {
 			bool isDisabled = globals::state->IsFeatureDisabled(featureName);
 
-			if (featureName == "Frame Generation" && REL::Module::IsVR()) {
+			if (featureName == "Frame Generation" && globals::features::vr) {
 				isDisabled = true;
 			}
 
@@ -1656,11 +1656,11 @@ void Menu::DrawFooter()
 
 void Menu::DrawOverlay()
 {
-	if (REL::Module::IsVR()) {
+	if (globals::features::vr && globals::features::vr->IsOpenVRCompatible()) {
 		globals::features::vr->RecreateOverlayTexturesIfNeeded();
 	}
 	ProcessInputEventQueue();
-	if (REL::Module::IsVR()) {
+	if (globals::features::vr && globals::features::vr->IsOpenVRCompatible()) {
 		globals::features::vr->ProcessControllerInputForImGui();
 	}
 
@@ -1779,7 +1779,7 @@ void Menu::DrawOverlay()
 	ImGui::Render();
 	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-	if (REL::Module::IsVR()) {
+	if (globals::features::vr && globals::features::vr->IsOpenVRCompatible()) {
 		globals::features::vr->SubmitOverlayFrame();
 	}
 }
@@ -2073,7 +2073,8 @@ void Menu::ProcessInputEventQueue()
 		bool isVRController = ((event.device == RE::INPUT_DEVICE::kVivePrimary || event.device == RE::INPUT_DEVICE::kViveSecondary ||
 								event.device == RE::INPUT_DEVICE::kOculusPrimary || event.device == RE::INPUT_DEVICE::kOculusSecondary ||
 								event.device == RE::INPUT_DEVICE::kWMRPrimary || event.device == RE::INPUT_DEVICE::kWMRSecondary));
-		if (REL::Module::IsVR() && isVRController) {
+
+		if (globals::features::vr && globals::features::vr->IsOpenVRCompatible() && isVRController) {
 			vrEvents.push_back(event);
 		} else {
 			nonVREvents.push_back(event);

@@ -12,6 +12,7 @@
 #include "Features/InteriorSunShadows.h"
 #include "Features/LightLimitFix.h"
 #include "Features/TerrainHelper.h"
+#include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 
 #include "ShaderTools/BSShaderHooks.h"
@@ -579,17 +580,16 @@ struct BSInputDeviceManager_PollInputDevices
 					if (globals::game::isVR) {
 						// Check if this is a VR device that should be blocked when menu is open
 						bool vrDevice = false;
-#ifdef ENABLE_SKYRIM_VR
 						vrDevice = (globals::game::isVR && ((device == RE::INPUT_DEVICES::INPUT_DEVICE::kVivePrimary) ||
 															   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kViveSecondary) ||
 															   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kOculusPrimary) ||
 															   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kOculusSecondary) ||
 															   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kWMRPrimary) ||
 															   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kWMRSecondary)));
-#endif
 						// Block VR devices when menu is open to prevent game interaction
 						// Allow gamepad and non-VR devices to pass through
-						blockedDevice = !((device == RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) || !vrDevice);
+						// Only block VR device if openvr is compatible with the in game vr menu
+						blockedDevice = !((device == RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) || !vrDevice || (vrDevice && !globals::features::vr->IsOpenVRCompatible()));
 					} else {
 						// Block all devices except gamepad when menu is open
 						blockedDevice = (device != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad);

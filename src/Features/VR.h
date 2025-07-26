@@ -242,6 +242,8 @@ public:
 		static constexpr float kDefaultComboTimeout = 3.0f;   ///< Default timeout for button combos (seconds)
 		static constexpr float kDefaultMouseDeadzone = 0.1f;  ///< Default thumbstick deadzone for mouse input
 		static constexpr float kDefaultMouseSpeed = 10.0f;    ///< Default mouse speed multiplier
+		static constexpr int kDefaultAutoHideSeconds = 30;    ///< Default auto-hide timeout for overlay messages
+		static constexpr int kMaxAutoHideSeconds = 300;       ///< Maximum auto-hide timeout (5 minutes)
 
 		// Default HMD overlay offset values (in meters, relative to HMD)
 		static constexpr float kDefaultHMDOffsetX = 0.26f;   ///< Default horizontal offset from HMD
@@ -286,6 +288,7 @@ public:
 		};
 	}
 
+	virtual void SetupResources() override;
 	virtual bool SupportsVR() override { return true; }
 	virtual bool IsCore() const override { return true; }
 
@@ -305,7 +308,7 @@ public:
 	//=============================================================================
 
 	virtual void DrawOverlay() override;
-	virtual bool IsOverlayVisible() const override { return settings.ShowHowToUseMessage; }
+	virtual bool IsOverlayVisible() const override { return openVRInfo.isCompatible && settings.kAutoHideSeconds > 0 && !globals::menu->IsEnabled; }
 
 	//=============================================================================
 	// SETTINGS STRUCTURE
@@ -327,7 +330,7 @@ public:
 
 		// VR Menu Overlay positioning settings
 		float VRMenuScale = Config::kDefaultMenuScale;  ///< Scale factor for overlay UI (0.5-2.0)
-		int VRMenuPositioningMethod = 0;                ///< 0 = HMD relative, 1 = Fixed world position
+		int VRMenuPositioningMethod = 1;                ///< 0 = HMD relative, 1 = Fixed world position
 
 		/**
 		 * @brief Defines how overlays are attached and positioned in VR space
@@ -375,9 +378,11 @@ public:
 		};
 
 		// General interaction settings
-		float comboTimeout = Config::kDefaultComboTimeout;  ///< Timeout for button combo sequences (1.0-10.0 seconds)
-		bool ShowHowToUseMessage = true;                    ///< Show instructional overlay messages
-		bool EnableDragToReposition = true;                 ///< Allow drag-and-drop overlay repositioning
+		float comboTimeout = Config::kDefaultComboTimeout;       ///< Timeout for button combo sequences (1.0-10.0 seconds)
+		int kAutoHideSeconds = Config::kDefaultAutoHideSeconds;  ///< Auto-hide timeout for overlay messages (>0 shows overlay, <=0 hides it)
+		bool EnableDragToReposition = true;                      ///< Allow drag-and-drop overlay repositioning
+
+		float VRMenuAutoResetDistance = 1000.0f;  // Default: 1000 units ≈ 14.3 meters
 
 		/**
 		 * @brief Validates if the current menu scale is within acceptable range
@@ -410,6 +415,7 @@ public:
 			mouseDeadzone = std::clamp(mouseDeadzone, 0.0f, 1.0f);
 			mouseSpeed = std::clamp(mouseSpeed, 0.1f, 50.0f);
 			comboTimeout = std::clamp(comboTimeout, 1.0f, 10.0f);
+			kAutoHideSeconds = std::clamp(kAutoHideSeconds, 0, Config::kMaxAutoHideSeconds);
 		}
 	};
 
@@ -576,10 +582,25 @@ public:
 	// Button controller recording state for UI settings
 	std::unordered_map<uint32_t, ControllerDevice> recordingButtonControllers;
 
-private:
+	// OpenVR version and compatibility information
+	struct OpenVRInfo
+	{
+		bool isAvailable = false;
+		bool isCompatible = true;
+		std::string dllPath;
+		std::string version;
+		uint64_t fileSize = 0;
+		std::string modificationTime;
+	} openVRInfo;
+
+	RE::NiPoint3 savedPlayerWorldPos = RE::NiPoint3();  // Used for auto-reset distance check
+
+public:
 	//=============================================================================
 	// PRIVATE IMPLEMENTATION
 	//=============================================================================
 
 	void CleanupOverlayTextures();
+	void DetectOpenVRInfo();
+	bool IsOpenVRCompatible() const;
 };
