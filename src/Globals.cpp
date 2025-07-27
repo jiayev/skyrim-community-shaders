@@ -27,6 +27,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/PostProcessing.h"
 #include "Features/ScreenSpaceGI.h"
+#include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -70,6 +71,7 @@ namespace globals
 		InteriorSunShadows* interiorSunShadows = nullptr;
 		InverseSquareLighting* inverseSquareLighting = nullptr;
 		ScreenSpaceGI* screenSpaceGI = nullptr;
+		ScreenSpacePointLightShadows* screenSpacePointLightShadows = nullptr;
 		ScreenSpaceShadows* screenSpaceShadows = nullptr;
 		Skylighting* skylighting = nullptr;
 		TerrainVariation* terrainVariation = nullptr;
@@ -170,6 +172,7 @@ namespace globals
 		features::interiorSunShadows = InteriorSunShadows::GetSingleton();
 		features::inverseSquareLighting = InverseSquareLighting::GetSingleton();
 		features::screenSpaceGI = ScreenSpaceGI::GetSingleton();
+		features::screenSpacePointLightShadows = ScreenSpacePointLightShadows::GetSingleton();
 		features::screenSpaceShadows = ScreenSpaceShadows::GetSingleton();
 		features::skin = Skin::GetSingleton();
 		features::skylighting = Skylighting::GetSingleton();

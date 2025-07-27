@@ -12,6 +12,7 @@
 #include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
 #include "Features/Skin.h"
+#include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
@@ -53,5 +54,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::extendedTranslucency->settings,
 		globals::features::linearLighting->GetCommonBufferData(),
 		globals::features::postProcessing->settings,
-		globals::features::skin->GetCommonBufferData());
+		globals::features::skin->GetCommonBufferData(),
+		globals::features::screenSpacePointLightShadows->GetCommonBufferData());
 }

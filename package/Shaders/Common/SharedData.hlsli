@@ -232,6 +232,18 @@ namespace SharedData
 		float4 wetParams;
 	};
 
+	struct SSPLSSettings
+	{
+		uint Enable;
+		float Strength;
+		uint StepLimit;
+		float RayLength;
+		float CompareToleranceScale;
+		float MaxDistance;
+		uint EnableSoftShadows;
+		float SoftShadowScale;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -250,6 +262,7 @@ namespace SharedData
 		LinearLightingSettings linearLightingSettings;
 		PostProcessingSettings postProcessingSettings;
 		SkinData skinData;
+		SSPLSSettings ssplsSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);
