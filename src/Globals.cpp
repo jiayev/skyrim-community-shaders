@@ -43,6 +43,7 @@
 #include "Features/WaterEffects.h"
 #include "Features/WeatherPicker.h"
 #include "Features/WetnessEffects.h"
+#include "Features/XeGTAO.h"
 
 #include "Features/LightLimitFix/ParticleLights.h"
 
@@ -91,6 +92,7 @@ namespace globals
 		ExtendedTranslucency* extendedTranslucency = nullptr;
 		PostProcessing* postProcessing = nullptr;
 		Skin* skin = nullptr;
+		XeGTAOFeature* xeGTAO = nullptr;
 
 		namespace llf
 		{
@@ -193,6 +195,7 @@ namespace globals
 		features::wetnessEffects = WetnessEffects::GetSingleton();
 		features::extendedTranslucency = ExtendedTranslucency::GetSingleton();
 		features::postProcessing = PostProcessing::GetSingleton();
+		features::xeGTAO = XeGTAOFeature::GetSingleton();
 
 		features::llf::particleLights = ParticleLights::GetSingleton();
 	}
