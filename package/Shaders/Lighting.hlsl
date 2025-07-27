@@ -2594,7 +2594,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(SSPLS)
 		uint ssplsSteps = round(SharedData::ssplsSettings.StepLimit * (1.0 - saturate(viewPosition.z / SharedData::ssplsSettings.MaxDistance)));
 		[branch] if (
-			inWorld && !FrameBuffer::FrameParams.z &&
 			SharedData::ssplsSettings.Enable &&
 			!(light.lightFlags & LightLimitFix::LightFlags::Simple) &&
 			shadowComponent != 0.0 &&
