@@ -29,6 +29,7 @@ struct PerformanceOverlay;
 struct WetnessEffects;
 struct ExtendedTranslucency;
 struct PostProcessing;
+struct Skin;
 
 class ParticleLights;
 
@@ -86,6 +87,7 @@ namespace globals
 		extern WetnessEffects* wetnessEffects;
 		extern ExtendedTranslucency* extendedTranslucency;
 		extern PostProcessing* postProcessing;
+		extern Skin* skin;
 
 		namespace llf
 		{
