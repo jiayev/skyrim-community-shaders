@@ -28,6 +28,7 @@ struct WeatherPicker;
 struct PerformanceOverlay;
 struct WetnessEffects;
 struct ExtendedTranslucency;
+struct PostProcessing;
 
 class ParticleLights;
 
@@ -84,6 +85,7 @@ namespace globals
 		extern PerformanceOverlay* performanceOverlay;
 		extern WetnessEffects* wetnessEffects;
 		extern ExtendedTranslucency* extendedTranslucency;
+		extern PostProcessing* postProcessing;
 
 		namespace llf
 		{

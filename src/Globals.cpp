@@ -25,6 +25,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/PostProcessing.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/SkySync.h"
@@ -83,6 +84,7 @@ namespace globals
 		PerformanceOverlay* performanceOverlay = nullptr;
 		WetnessEffects* wetnessEffects = nullptr;
 		ExtendedTranslucency* extendedTranslucency = nullptr;
+		PostProcessing* postProcessing = nullptr;
 
 		namespace llf
 		{
@@ -181,6 +183,7 @@ namespace globals
 		features::performanceOverlay = PerformanceOverlay::GetSingleton();
 		features::wetnessEffects = WetnessEffects::GetSingleton();
 		features::extendedTranslucency = ExtendedTranslucency::GetSingleton();
+		features::postProcessing = PostProcessing::GetSingleton();
 
 		features::llf::particleLights = ParticleLights::GetSingleton();
 	}
