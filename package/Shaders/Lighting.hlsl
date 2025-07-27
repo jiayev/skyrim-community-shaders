@@ -3343,9 +3343,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	indirectSpecularLobeWeightSec *= SharedData::hairSpecularSettings.SpecularIndirectMult;
 #			if defined(XeGTAO)
 	if (SharedData::xeGTAOSettings.Enabled && SharedData::xeGTAOSettings.BentNormals) {
-		float specularOcclusionPrim = BentNormals::SpecularAO_Cones(bentNormal, worldNormal, viewDirection, xeGTAOWeight, 1.0 - (SharedData::hairSpecularSettings.Glossiness * 0.01));
+		float specularOcclusionPrim = BentNormals::SpecularAO_Cones(bentNormal, worldNormal, viewDirection, xeGTAOWeight, 1.0 - (SharedData::hairSpecularSettings.HairGlossiness * 0.01));
 		indirectSpecularLobeWeightPrim *= specularOcclusionPrim;
-		float specularOcclusionSec = BentNormals::SpecularAO_Cones(bentNormal, worldNormal, viewDirection, xeGTAOWeight, 1.0 - (SharedData::hairSpecularSettings.Glossiness * 0.005));
+		float specularOcclusionSec = BentNormals::SpecularAO_Cones(bentNormal, worldNormal, viewDirection, xeGTAOWeight, 1.0 - (SharedData::hairSpecularSettings.HairGlossiness * 0.005));
 		indirectSpecularLobeWeightSec *= specularOcclusionSec;
 	}
 #			endif
@@ -3440,7 +3440,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	elif defined(SKIN) && defined(CS_SKIN)
 	float3 indirectDiffuseLobeWeight, indirectSpecularLobeWeight;
 	if (skinEnabled) {
+#		if defined(SSS) && defined(DEFERRED)
+		float3 directLightsDiffuseInput = diffuseColor;
+#		else
 		float3 directLightsDiffuseInput = diffuseColor * baseColor.xyz;
+#		endif
 		color.xyz += directLightsDiffuseInput;
 
 		Skin::SkinIndirectLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, skinSurfaceProperties, worldNormal.xyz, viewDirection, vertexNormal);
@@ -3470,7 +3474,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		color.xyz += transmissionColor;
 	} else {
+#		if defined(SSS) && defined(DEFERRED)
+		color.xyz += diffuseColor;
+#		else
 		color.xyz += diffuseColor * baseColor.xyz;
+#		endif
 	}
 #	elif defined(HAIR) && defined(CS_HAIR)
 	color.xyz += diffuseColor * baseColor.xyz;

@@ -48,7 +48,7 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 #if defined(XeGTAO)
 #	include "XeGTAO/XeGTAO.hlsli"
 #	include "XeGTAO/XeGTAOBentNormals.hlsli"
-Texture2D<uint> XeGTAOTexture : register(t9);
+Texture2D<uint> XeGTAOTexture : register(t10);
 #endif
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
