@@ -67,6 +67,10 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 }
 #endif
 
+#if defined(SSR)
+Texture2D<float4> SSRTexture : register(t15);
+#endif
+
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
 	float2 uv = float2(dispatchID.xy + 0.5) * SharedData::BufferDim.zw;
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
@@ -280,6 +284,11 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 		}
 #	endif
 
+#	if defined(SSR)
+		float4 ssrIrradiance = SSRTexture[dispatchID.xy];
+		finalIrradiance = lerp(finalIrradiance, ssrIrradiance.rgb, ssrIrradiance.a);
+#	endif
+
 		color += reflectance * finalIrradiance;
 
 		if (isAdvancedSkin) {
@@ -310,6 +319,10 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 		color = glossiness;
 	}
 
+#endif
+
+#if defined(SSR) && defined(SSR_DEBUG)
+	color = SSRTexture[dispatchID.xy].rgb;
 #endif
 
 	MainRW[dispatchID.xy] = float4(color, 1.0);
