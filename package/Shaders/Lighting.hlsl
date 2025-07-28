@@ -2278,7 +2278,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	pbrSurfaceProperties.Noise = screenNoise;
 
-	pbrSurfaceProperties.Roughness = saturate(rawRMAOS.x);
+	pbrSurfaceProperties.Roughness = clamp(rawRMAOS.x, 0.005, 1.0);
 	pbrSurfaceProperties.Metallic = saturate(rawRMAOS.y);
 	pbrSurfaceProperties.AO = rawRMAOS.z;
 	if (!SharedData::linearLightingSettings.enableLinearLighting) {
