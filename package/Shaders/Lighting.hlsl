@@ -3547,7 +3547,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(SPECULAR) && !defined(VANILLA_FRESNEL_DL)
 # 		if defined(HAIR) && defined(CS_HAIR)
 	if (!SharedData::hairSpecularSettings.Enabled)
-#		elif defined(SPECULAR) && defined(SKIN) && defined(CS_SKIN)
+#		elif defined(SKIN) && defined(CS_SKIN)
 	if (!skinEnabled)
 #		endif
 		specularColor = (specularColor * glossiness * MaterialData.yyy) * SpecularColor.xyz;
