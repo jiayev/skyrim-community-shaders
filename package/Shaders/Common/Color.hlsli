@@ -4,6 +4,8 @@
 #include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
 
+#define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
+
 namespace Color
 {
 	static float GammaCorrectionValue = 2.2;
@@ -51,9 +53,6 @@ namespace Color
 		return color;
 	}
 
-	// Attempt to match vanilla materials tha are a darker than PBR
-	const static float PBRLightingScale = 0.666;
-
 	float3 GammaToLinear(float3 color)
 	{
 		return pow(max(color, 0), 1.8);
@@ -89,7 +88,10 @@ namespace Color
 	}
 
 #if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
-#	define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
+	// Attempt to match vanilla materials tha are a darker than PBR
+	const static float PBRLightingScale = ENABLE_LL ? 1.0 : 0.666;
+	const static float PBRLightingCompensation = ENABLE_LL ? 1.0 : Math::PI;
+
 	float3 GammaToLinearLuminancePreservingLight(float3 color)
 	{
 		if (!ENABLE_LL) {
@@ -131,7 +133,7 @@ namespace Color
 		color = ENABLE_LL ? (SharedData::linearLightingSettings.preserveLightLuminance ? GammaToLinearLuminancePreservingLight(color) 
 			: pow(abs(color), SharedData::linearLightingSettings.lightGamma)) : color;
 #	if defined(TRUE_PBR)
-		return color * Math::PI;  // Compensate for traditional Lambertian diffuse
+		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
 #	else
 		return color;
 #	endif
@@ -204,6 +206,16 @@ namespace Color
 	float3 IrradianceToGamma(float3 color)
 	{
 		return ENABLE_LL ? color : LinearToGamma(color);
+	}
+
+	float VanillaDiffuseMult()
+	{
+		return ENABLE_LL ? SharedData::linearLightingSettings.vanillaDiffuseMult : 1.0f;
+	}
+
+	float VanillaSpecularMult()
+	{
+		return ENABLE_LL ? SharedData::linearLightingSettings.vanillaSpecularMult : 1.0f;
 	}
 #endif
 }
