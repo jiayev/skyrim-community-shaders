@@ -431,9 +431,9 @@ void Deferred::DeferredPasses()
 
 	auto& ibl = globals::features::ibl;
 
-	auto xeGTAO = globals::features::xeGTAO;
-	if (xeGTAO->loaded && xeGTAO->menusettings.Enabled && xeGTAO->menusettings.UseSecondPass)
-		xeGTAO->GTAO(false);
+	auto& xeGTAO = globals::features::xeGTAO;
+	if (xeGTAO.loaded && xeGTAO.menusettings.Enabled && xeGTAO.menusettings.UseSecondPass)
+		xeGTAO.GTAO(false);
 
 	auto dispatchCount = Util::GetScreenDispatchCount();
 
@@ -453,7 +453,7 @@ void Deferred::DeferredPasses()
 				ssgi_cocg,
 				ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
 				masks.SRV,
-				xeGTAO->loaded ? xeGTAO->outputAO->srv.get() : nullptr,
+				xeGTAO.loaded ? xeGTAO.outputAO->srv.get() : nullptr,
 			};
 
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -514,8 +514,8 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
 			ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
 			(ssr.loaded && ssr.settings.Enabled) ? ssr.texOutput->srv.get() : nullptr,
-			xeGTAO->loaded ? xeGTAO->outputAO->srv.get() : nullptr,
-			xeGTAO->loaded ? xeGTAO->generatedNormals->srv.get() : nullptr,
+			xeGTAO.loaded ? xeGTAO.outputAO->srv.get() : nullptr,
+			xeGTAO.loaded ? xeGTAO.generatedNormals->srv.get() : nullptr,
 		};
 
 		if (dynamicCubemaps.loaded)
