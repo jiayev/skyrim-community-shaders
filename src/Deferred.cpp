@@ -701,7 +701,7 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientComposite()
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });
 
-		if (globals::features::xeGTAO->loaded)
+		if (globals::features::xeGTAO.loaded)
 			defines.push_back({ "XeGTAO", nullptr });
 
 		ambientCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
@@ -723,7 +723,7 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientCompositeInterior()
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
 
-		if (globals::features::xeGTAO->loaded)
+		if (globals::features::xeGTAO.loaded)
 			defines.push_back({ "XeGTAO", nullptr });
 
 		ambientCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
@@ -753,7 +753,7 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
 
-		if (globals::features::xeGTAO->loaded)
+		if (globals::features::xeGTAO.loaded)
 			defines.push_back({ "XeGTAO", nullptr });
 
 		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
@@ -778,7 +778,7 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
 
-		if (globals::features::xeGTAO->loaded)
+		if (globals::features::xeGTAO.loaded)
 			defines.push_back({ "XeGTAO", nullptr });
 
 		mainCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
