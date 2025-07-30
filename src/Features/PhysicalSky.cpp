@@ -17,8 +17,7 @@ static inline float Lerp(float a, float b, float x) { return a + (b - a) * x; }
 
 void PhysicalSky::DataLoaded()
 {
-	auto skySync = globals::features::skySync;
-	if (!skySync->loaded) {
+	if (!globals::features::skySync.loaded) {
 		failedLoadedMessage = "Sky Sync is required for Physical Sky to function.";
 		loaded = false;
 	}
@@ -346,7 +345,7 @@ bool PhysicalSky::ShadersOK()
 
 float PhysicalSky::CalcExposure()
 {
-	auto sunDir = globals::features::skySync->rawDirections[static_cast<int>(SkySync::Caster::Sun)];
+	auto sunDir = globals::features::skySync.rawDirections[static_cast<int>(SkySync::Caster::Sun)];
 	float sunAngle = DirectX::XMConvertToRadians(90.f) - acos(sunDir.z);
 	float adaptAmount = (sunAngle - settings.adaptationStart) / (settings.adaptationEnd - settings.adaptationStart);
 	adaptAmount = std::min(1.f, std::max(0.f, adaptAmount));
@@ -356,9 +355,9 @@ float PhysicalSky::CalcExposure()
 
 void PhysicalSky::Reset()
 {
-	auto skySync = globals::features::skySync;
+	auto& skySync = globals::features::skySync;
 
-	bool allGood = settings.enabled && ShadersOK() && skySync->loaded && skySync->settings.Enabled;
+	bool allGood = settings.enabled && ShadersOK() && skySync.loaded && skySync.settings.Enabled;
 
 	// check worldspace
 	bool worldspace_enabled = false;
@@ -382,9 +381,9 @@ void PhysicalSky::Reset()
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
-	auto sunDir = skySync->rawDirections[static_cast<int>(SkySync::Caster::Sun)];
-	auto masserDir = skySync->rawDirections[static_cast<int>(SkySync::Caster::Masser)];
-	auto secundaDir = skySync->rawDirections[static_cast<int>(SkySync::Caster::Secunda)];
+	auto sunDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Sun)];
+	auto masserDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Masser)];
+	auto secundaDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Secunda)];
 
 	float exposure = CalcExposure();
 
