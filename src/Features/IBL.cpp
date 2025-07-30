@@ -2,6 +2,7 @@
 
 #include "Deferred.h"
 #include "DynamicCubemaps.h"
+#include "JiayeStatement.h"
 #include "Shadercache.h"
 #include "State.h"
 
@@ -27,6 +28,8 @@ void IBL::DrawSettings()
 			"Requires the Dynamic Cubemaps feature to be enabled.\n"
 			"Warning: may cause dynamic cubemaps sampling accumulation issues.");
 	}
+
+	DrawJSInfo();
 }
 
 void IBL::LoadSettings(json& o_json)

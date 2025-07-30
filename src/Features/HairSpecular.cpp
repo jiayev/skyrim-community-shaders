@@ -1,4 +1,5 @@
 #include "HairSpecular.h"
+#include "JiayeStatement.h"
 
 #include <DirectXTex.h>
 
@@ -70,6 +71,8 @@ void HairSpecular::DrawSettings()
 	ImGui::SliderFloat("Self Shadow Strength", &settings.SelfShadowStrength, 0.0f, 1.0f, "%.2f");
 	ImGui::SliderFloat("Self Shadow Exponent", &settings.SelfShadowExponent, 0.0f, 10.0f, "%.2f");
 	ImGui::SliderFloat("Self Shadow Scale", &settings.SelfShadowScale, 0.0f, 10.0f, "%.2f");
+
+	DrawJSInfo();
 }
 
 void HairSpecular::LoadSettings(json& o_json)

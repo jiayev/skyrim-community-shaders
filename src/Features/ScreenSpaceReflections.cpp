@@ -3,6 +3,7 @@
 #include <DDSTextureLoader.h>
 
 #include "Deferred.h"
+#include "JiayeStatement.h"
 #include "Menu.h"
 #include "State.h"
 #include "ShaderCache.h"
@@ -64,6 +65,8 @@ void ScreenSpaceReflections::DrawSettings()
 
 		ImGui::TreePop();
 	}
+
+    DrawJSInfo();
 }
 
 void ScreenSpaceReflections::RestoreDefaultSettings()

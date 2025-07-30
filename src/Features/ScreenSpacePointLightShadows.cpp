@@ -1,5 +1,6 @@
 #include "ScreenSpacePointLightShadows.h"
 
+#include "JiayeStatement.h"
 #include "LightLimitFix.h"
 #include "State.h"
 #include "Util.h"
@@ -31,6 +32,8 @@ void ScreenSpacePointLightShadows::DrawSettings()
 	ImGui::Spacing();
 	ImGui::Checkbox("Enable Soft Shadows", (bool*)&settings.EnableSoftShadows);
 	ImGui::SliderFloat("Soft Shadow Scale", &settings.SoftShadowScale, 0.0f, 50.0f, "%.2f");
+
+	DrawJSInfo();
 }
 
 void ScreenSpacePointLightShadows::RestoreDefaultSettings()

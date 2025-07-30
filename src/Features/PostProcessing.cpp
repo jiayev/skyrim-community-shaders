@@ -3,6 +3,7 @@
 #include "IconsFontAwesome5.h"
 #include "imgui_stdlib.h"
 
+#include "JiayeStatement.h"
 #include "State.h"
 #include "Upscaling.h"
 
@@ -245,6 +246,8 @@ void PostProcessing::DrawSettings()
 			ImGui::TextDisabled("Please select an effect in the effect list to continue.");
 		}
 	}
+
+	DrawJSInfo();
 }
 
 void PostProcessing::LoadSettings(json& o_json)

@@ -3,6 +3,7 @@
 
 #include "Deferred.h"
 #include "Hooks.h"
+#include "JiayeStatement.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -158,6 +159,8 @@ void Skin::DrawSettings()
 	}
 
 	BUFFER_VIEWER_NODE(texSkinDetail, 1.0f)
+
+	DrawJSInfo();
 }
 
 void Skin::SetupResources()
