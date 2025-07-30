@@ -235,11 +235,11 @@ void SubsurfaceScattering::DrawSSS()
 		ID3D11UnorderedAccessView* uav = blurHorizontalTemp->uav.get();
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
-		auto terrainBlending = globals::features::terrainBlending;
+		auto& terrainBlending = globals::features::terrainBlending;
 
 		ID3D11ShaderResourceView* views[5];
 		views[0] = main.SRV;
-		views[1] = terrainBlending->loaded ? terrainBlending->blendedDepthTexture16->srv.get() : depth.depthSRV,
+		views[1] = terrainBlending.loaded ? terrainBlending.blendedDepthTexture16->srv.get() : depth.depthSRV,
 		views[2] = mask.SRV;
 		views[3] = albedo.SRV;
 		views[4] = normal.SRV;
@@ -445,6 +445,6 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 
 void SubsurfaceScattering::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
-	globals::features::subsurfaceScattering->BSLightingShader_SetupSkin(Pass);
+	globals::features::subsurfaceScattering.BSLightingShader_SetupSkin(Pass);
 	func(This, Pass, RenderFlags);
 }

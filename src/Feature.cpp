@@ -203,35 +203,35 @@ void Feature::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 const std::vector<Feature*>& Feature::GetFeatureList()
 {
 	static std::vector<Feature*> features = {
-		globals::features::grassLighting,
-		globals::features::grassCollision,
-		globals::features::screenSpaceShadows,
-		globals::features::extendedMaterials,
-		globals::features::wetnessEffects,
-		globals::features::lightLimitFix,
-		globals::features::dynamicCubemaps,
-		globals::features::cloudShadows,
-		globals::features::waterEffects,
-		globals::features::weatherPicker,
-		globals::features::performanceOverlay,
-		globals::features::subsurfaceScattering,
-		globals::features::terrainShadows,
-		globals::features::screenSpaceGI,
+		&globals::features::grassLighting,
+		&globals::features::grassCollision,
+		&globals::features::screenSpaceShadows,
+		&globals::features::extendedMaterials,
+		&globals::features::wetnessEffects,
+		&globals::features::lightLimitFix,
+		&globals::features::dynamicCubemaps,
+		&globals::features::cloudShadows,
+		&globals::features::waterEffects,
+		&globals::features::weatherPicker,
+		&globals::features::performanceOverlay,
+		&globals::features::subsurfaceScattering,
+		&globals::features::terrainShadows,
+		&globals::features::screenSpaceGI,
 		globals::features::screenSpacePointLightShadows,
 		globals::features::screenSpaceReflections,
-		globals::features::skylighting,
-		globals::features::skySync,
-		globals::features::terrainBlending,
-		globals::features::terrainHelper,
-		globals::features::volumetricLighting,
-		globals::features::lodBlending,
-		globals::features::inverseSquareLighting,
-		globals::features::hairSpecular,
-		globals::features::interiorSunShadows,
-		globals::features::terrainVariation,
-		globals::features::ibl,
-		globals::features::extendedTranslucency,
-		globals::features::linearLighting,
+		&globals::features::skylighting,
+		&globals::features::skySync,
+		&globals::features::terrainBlending,
+		&globals::features::terrainHelper,
+		&globals::features::volumetricLighting,
+		&globals::features::lodBlending,
+		&globals::features::inverseSquareLighting,
+		&globals::features::hairSpecular,
+		&globals::features::interiorSunShadows,
+		&globals::features::terrainVariation,
+		&globals::features::ibl,
+		&globals::features::extendedTranslucency,
+		&globals::features::linearLighting,
 		globals::features::postProcessing,
 		globals::features::skin,
 		globals::features::xeGTAO
@@ -241,7 +241,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		// Helper function to build VR feature list
 		static auto BuildVRList = []() -> std::vector<Feature*> {
 			auto v = features;
-			v.push_back(globals::features::vr);
+			v.push_back(&globals::features::vr);
 
 			// In developer mode, keep all features for testing
 			// In production mode, filter to VR-compatible only

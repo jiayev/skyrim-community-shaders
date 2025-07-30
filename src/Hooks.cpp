@@ -590,7 +590,7 @@ struct BSInputDeviceManager_PollInputDevices
 						// Block VR devices when menu is open to prevent game interaction
 						// Allow gamepad and non-VR devices to pass through
 						// Only block VR device if openvr is compatible with the in game vr menu
-						blockedDevice = !((device == RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) || !vrDevice || (vrDevice && !globals::features::vr->IsOpenVRCompatible()));
+						blockedDevice = !((device == RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) || !vrDevice || (vrDevice && !globals::features::vr.IsOpenVRCompatible()));
 					} else {
 						// Block all devices except gamepad when menu is open
 						blockedDevice = (device != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad);
@@ -843,9 +843,9 @@ namespace Hooks
 			}
 
 			// setup material for terrain helper
-			auto terrainHelper = globals::features::terrainHelper;
-			if (vanillaResult && terrainHelper->loaded) {
-				terrainHelper->TESObjectLAND_SetupMaterial(land);
+			auto& terrainHelper = globals::features::terrainHelper;
+			if (vanillaResult && terrainHelper.loaded) {
+				terrainHelper.TESObjectLAND_SetupMaterial(land);
 			}
 
 			return vanillaResult;
@@ -868,9 +868,9 @@ namespace Hooks
 			func(shader, material);
 
 			// terrain helper
-			auto terrainHelper = globals::features::terrainHelper;
-			if (terrainHelper->loaded) {
-				terrainHelper->BSLightingShader_SetupMaterial(material);
+			auto& terrainHelper = globals::features::terrainHelper;
+			if (terrainHelper.loaded) {
+				terrainHelper.BSLightingShader_SetupMaterial(material);
 			}
 
 			// advanced skin
@@ -884,7 +884,7 @@ namespace Hooks
 
 	void BSBatchRenderer_RenderPassImmediately1::thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 	{
-		if (globals::features::lightLimitFix->loaded && !globals::features::lightLimitFix->CheckParticleLights(a_pass, a_technique))
+		if (globals::features::lightLimitFix.loaded && !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique))
 			return;
 
 		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
@@ -894,11 +894,11 @@ namespace Hooks
 	{
 		static void thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 		{
-			if (globals::features::lightLimitFix->loaded && !globals::features::lightLimitFix->CheckParticleLights(a_pass, a_technique))
+			if (globals::features::lightLimitFix.loaded && !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique))
 				return;
 
-			if (globals::features::interiorSunShadows->loaded)
-				globals::features::interiorSunShadows->UpdateRasterStateCullMode(a_pass, a_technique);
+			if (globals::features::interiorSunShadows.loaded)
+				globals::features::interiorSunShadows.UpdateRasterStateCullMode(a_pass, a_technique);
 
 			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 		}
@@ -909,7 +909,7 @@ namespace Hooks
 	{
 		static void thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 		{
-			if (globals::features::lightLimitFix->loaded && !globals::features::lightLimitFix->CheckParticleLights(a_pass, a_technique))
+			if (globals::features::lightLimitFix.loaded && !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique))
 				return;
 
 			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
@@ -965,7 +965,7 @@ namespace Hooks
 			{
 				auto state = globals::state;
 				auto shaderCache = globals::shaderCache;
-				auto vl = globals::features::volumetricLighting;
+				auto& vl = globals::features::volumetricLighting;
 
 				if (state->enabledClasses[RE::BSShader::Type::ImageSpace]) {
 					RE::BSImagespaceShader* isShader = CurrentlyDispatchedShader;
@@ -973,20 +973,20 @@ namespace Hooks
 					if (CurrentlyDispatchedShader == nullptr) {
 						techniqueId = 0;
 						if (CurrentlyDispatchedComputeShader->name == std::string_view("ISVolumetricLightingGenerateCS")) {
-							isShader = globals::features::volumetricLighting->GetOrCreateGenerateCS(CurrentlyDispatchedComputeShader);
+							isShader = vl.GetOrCreateGenerateCS(CurrentlyDispatchedComputeShader);
 						} else if (CurrentlyDispatchedComputeShader->name == std::string_view("ISVolumetricLightingRaymarchCS")) {
-							isShader = globals::features::volumetricLighting->GetOrCreateRaymarchCS(CurrentlyDispatchedComputeShader);
+							isShader = vl.GetOrCreateRaymarchCS(CurrentlyDispatchedComputeShader);
 						}
-					} else if (vl->loaded && CurrentlyDispatchedComputeShader->name == std::string_view("ISVolumetricLightingBlurHCS")) {
+					} else if (vl.loaded && CurrentlyDispatchedComputeShader->name == std::string_view("ISVolumetricLightingBlurHCS")) {
 						techniqueId = 0;
-						isShader = vl->GetOrCreateBlurHCS(CurrentlyDispatchedComputeShader);
-						vl->SetDimensionsCB();
-						vl->SetGroupCountsHCS(threadGroupCountX);
-					} else if (vl->loaded && CurrentlyDispatchedComputeShader->name == std::string_view("ISVolumetricLightingBlurVCS")) {
+						isShader = vl.GetOrCreateBlurHCS(CurrentlyDispatchedComputeShader);
+						vl.SetDimensionsCB();
+						vl.SetGroupCountsHCS(threadGroupCountX);
+					} else if (vl.loaded && CurrentlyDispatchedComputeShader->name == std::string_view("ISVolumetricLightingBlurVCS")) {
 						techniqueId = 0;
-						isShader = vl->GetOrCreateBlurVCS(CurrentlyDispatchedComputeShader);
-						vl->SetDimensionsCB();
-						vl->SetGroupCountsVCS(threadGroupCountY);
+						isShader = vl.GetOrCreateBlurVCS(CurrentlyDispatchedComputeShader);
+						vl.SetDimensionsCB();
+						vl.SetGroupCountsVCS(threadGroupCountY);
 					}
 					if (isShader != nullptr) {
 						if (auto* computeShader = shaderCache->GetComputeShader(*isShader, techniqueId)) {
@@ -1022,8 +1022,8 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::PixelShader* PixelShader, RE::BSRenderPass* Pass, DirectX::XMMATRIX& Transform, uint32_t LightCount, uint32_t ShadowLightCount, float WorldScale, uint32_t)
 		{
-			if (globals::features::lightLimitFix->loaded)
-				globals::features::lightLimitFix->BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(Pass);
+			if (globals::features::lightLimitFix.loaded)
+				globals::features::lightLimitFix.BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(Pass);
 			else
 				func(PixelShader, Pass, Transform, LightCount, ShadowLightCount, WorldScale, 0);
 		}

@@ -419,15 +419,15 @@ void Deferred::DeferredPasses()
 		}
 	}
 
-	auto skylighting = globals::features::skylighting;
+	auto& skylighting = globals::features::skylighting;
 
-	auto ssgi = globals::features::screenSpaceGI;
-	if (ssgi->loaded)
-		ssgi->DrawSSGI(prevDiffuseAmbientTexture);
-	auto [ssgi_ao, ssgi_y, ssgi_cocg, ssgi_gi_spec] = ssgi->GetOutputTextures();
-	bool ssgi_hq_spec = ssgi->settings.EnableExperimentalSpecularGI;
+	auto& ssgi = globals::features::screenSpaceGI;
+	if (ssgi.loaded)
+		ssgi.DrawSSGI(prevDiffuseAmbientTexture);
+	auto [ssgi_ao, ssgi_y, ssgi_cocg, ssgi_gi_spec] = ssgi.GetOutputTextures();
+	bool ssgi_hq_spec = ssgi.settings.EnableExperimentalSpecularGI;
 
-	auto ibl = globals::features::ibl;
+	auto& ibl = globals::features::ibl;
 
 	auto xeGTAO = globals::features::xeGTAO;
 	if (xeGTAO->loaded && xeGTAO->menusettings.Enabled && xeGTAO->menusettings.UseSecondPass)
@@ -435,7 +435,7 @@ void Deferred::DeferredPasses()
 
 	auto dispatchCount = Util::GetScreenDispatchCount();
 
-	if (ssgi->loaded) {
+	if (ssgi.loaded) {
 		// Ambient Composite
 		{
 			TracyD3D11Zone(globals::state->tracyCtx, "Ambient Composite");
@@ -443,13 +443,13 @@ void Deferred::DeferredPasses()
 			ID3D11ShaderResourceView* srvs[11]{
 				albedo.SRV,
 				normalRoughness.SRV,
-				skylighting->loaded || REL::Module::IsVR() ? depth.depthSRV : nullptr,
-				skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
-				skylighting->loaded ? skylighting->stbn_vec3_2Dx1D_128x128x64.get() : nullptr,
+				skylighting.loaded || REL::Module::IsVR() ? depth.depthSRV : nullptr,
+				skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr,
+				skylighting.loaded ? skylighting.stbn_vec3_2Dx1D_128x128x64.get() : nullptr,
 				ssgi_ao,
 				ssgi_y,
 				ssgi_cocg,
-				ibl->loaded ? ibl->diffuseIBLTexture->srv.get() : nullptr,
+				ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
 				masks.SRV,
 				xeGTAO->loaded ? xeGTAO->outputAO->srv.get() : nullptr,
 			};
@@ -477,15 +477,15 @@ void Deferred::DeferredPasses()
 		}
 	}
 
-	auto sss = globals::features::subsurfaceScattering;
-	if (sss->loaded)
-		sss->DrawSSS();
+	auto& sss = globals::features::subsurfaceScattering;
+	if (sss.loaded)
+		sss.DrawSSS();
 
-	auto dynamicCubemaps = globals::features::dynamicCubemaps;
-	if (dynamicCubemaps->loaded)
-		dynamicCubemaps->UpdateCubemap();
+	auto& dynamicCubemaps = globals::features::dynamicCubemaps;
+	if (dynamicCubemaps.loaded)
+		dynamicCubemaps.UpdateCubemap();
 
-	auto terrainBlending = globals::features::terrainBlending;
+	auto& terrainBlending = globals::features::terrainBlending;
 
 	auto ssr = globals::features::screenSpaceReflections;
 	if (ssr->loaded)
@@ -500,23 +500,23 @@ void Deferred::DeferredPasses()
 			albedo.SRV,
 			normalRoughness.SRV,
 			masks.SRV,
-			dynamicCubemaps->loaded || REL::Module::IsVR() ? (terrainBlending->loaded ? terrainBlending->blendedDepthTexture16->srv.get() : depth.depthSRV) : nullptr,
-			dynamicCubemaps->loaded ? reflectance.SRV : nullptr,
-			dynamicCubemaps->loaded ? dynamicCubemaps->envTexture->srv.get() : nullptr,
-			dynamicCubemaps->loaded ? dynamicCubemaps->envReflectionsTexture->srv.get() : nullptr,
-			dynamicCubemaps->loaded && skylighting->loaded ? skylighting->texProbeArray->srv.get() : nullptr,
-			dynamicCubemaps->loaded && skylighting->loaded ? skylighting->stbn_vec3_2Dx1D_128x128x64.get() : nullptr,
+			dynamicCubemaps.loaded || REL::Module::IsVR() ? (terrainBlending.loaded ? terrainBlending.blendedDepthTexture16->srv.get() : depth.depthSRV) : nullptr,
+			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,
+			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,
+			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,
+			dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr,
+			dynamicCubemaps.loaded && skylighting.loaded ? skylighting.stbn_vec3_2Dx1D_128x128x64.get() : nullptr,
 			ssgi_ao,
 			ssgi_hq_spec ? nullptr : ssgi_y,
 			ssgi_hq_spec ? nullptr : ssgi_cocg,
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
-			ibl->loaded ? ibl->diffuseIBLTexture->srv.get() : nullptr,
+			ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
 			(ssr->loaded && ssr->settings.Enabled) ? ssr->texOutput->srv.get() : nullptr,
 			xeGTAO->loaded ? xeGTAO->outputAO->srv.get() : nullptr,
 			xeGTAO->loaded ? xeGTAO->generatedNormals->srv.get() : nullptr,
 		};
 
-		if (dynamicCubemaps->loaded)
+		if (dynamicCubemaps.loaded)
 			context->CSSetSamplers(0, 1, &linearSampler);
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -544,8 +544,8 @@ void Deferred::DeferredPasses()
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
 
-	if (dynamicCubemaps->loaded)
-		dynamicCubemaps->PostDeferred();
+	if (dynamicCubemaps.loaded)
+		dynamicCubemaps.PostDeferred();
 }
 
 void Deferred::EndDeferred()
@@ -696,16 +696,16 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientComposite()
 
 		std::vector<std::pair<const char*, const char*>> defines;
 
-		if (globals::features::skylighting->loaded)
+		if (globals::features::skylighting.loaded)
 			defines.push_back({ "SKYLIGHTING", nullptr });
 
-		if (globals::features::screenSpaceGI->loaded)
+		if (globals::features::screenSpaceGI.loaded)
 			defines.push_back({ "SSGI", nullptr });
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
 
-		if (globals::features::ibl->loaded)
+		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });
 
 		if (globals::features::subsurfaceScattering->loaded)
@@ -727,7 +727,7 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientCompositeInterior()
 		std::vector<std::pair<const char*, const char*>> defines;
 		defines.push_back({ "INTERIOR", nullptr });
 
-		if (globals::features::screenSpaceGI->loaded)
+		if (globals::features::screenSpaceGI.loaded)
 			defines.push_back({ "SSGI", nullptr });
 
 		if (REL::Module::IsVR())
@@ -751,16 +751,16 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 
 		std::vector<std::pair<const char*, const char*>> defines;
 
-		if (globals::features::dynamicCubemaps->loaded)
+		if (globals::features::dynamicCubemaps.loaded)
 			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
 
-		if (globals::features::skylighting->loaded)
+		if (globals::features::skylighting.loaded)
 			defines.push_back({ "SKYLIGHTING", nullptr });
 
-		if (globals::features::screenSpaceGI->loaded)
+		if (globals::features::screenSpaceGI.loaded)
 			defines.push_back({ "SSGI", nullptr });
 
-		if (globals::features::ibl->loaded)
+		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });
 
 		if (globals::features::screenSpaceReflections->loaded)
@@ -785,10 +785,10 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 		std::vector<std::pair<const char*, const char*>> defines;
 		defines.push_back({ "INTERIOR", nullptr });
 
-		if (globals::features::dynamicCubemaps->loaded)
+		if (globals::features::dynamicCubemaps.loaded)
 			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
 
-		if (globals::features::screenSpaceGI->loaded)
+		if (globals::features::screenSpaceGI.loaded)
 			defines.push_back({ "SSGI", nullptr });
 
 		if (globals::features::screenSpaceReflections->loaded)
@@ -891,10 +891,10 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 	auto deferred = globals::deferred;
 
 	if (globals::shaderCache->IsEnabled() && globals::state->inWorld) {
-		auto terrainBlending = globals::features::terrainBlending;
+		auto& terrainBlending = globals::features::terrainBlending;
 		// Defer terrain rendering until after everything else
-		if (terrainBlending->loaded)
-			terrainBlending->RenderTerrainBlendingPasses();
+		if (terrainBlending.loaded)
+			terrainBlending.RenderTerrainBlendingPasses();
 	}
 
 	// Deferred blended decals
