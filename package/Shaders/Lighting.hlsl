@@ -3447,7 +3447,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	elif defined(SKIN) && defined(CS_SKIN)
 	float3 indirectDiffuseLobeWeight, indirectSpecularLobeWeight;
 	if (skinEnabled) {
-#		if defined(SSS) && defined(DEFERRED)
+#		if defined(SSS) && defined(DEFERRED) && !defined(DO_ALPHA_TEST)
 		float3 directLightsDiffuseInput = diffuseColor;
 		psout.Masks2.xyz = baseColor.xyz;
 #		else
@@ -3482,7 +3482,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		color.xyz += transmissionColor;
 	} else {
-#		if defined(SSS) && defined(DEFERRED)
+#		if defined(SSS) && defined(DEFERRED) && !defined(DO_ALPHA_TEST)
 		color.xyz += diffuseColor;
 		psout.Masks2.xyz = baseColor.xyz;
 #		else
