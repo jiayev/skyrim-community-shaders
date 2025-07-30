@@ -874,9 +874,9 @@ namespace Hooks
 			}
 
 			// advanced skin
-			auto skin = globals::features::skin;
-			if (skin->loaded && skin->settings.EnableSkin) {
-				skin->BSLightingShader_SetupMaterial(material);
+			auto& skin = globals::features::skin;
+			if (skin.loaded && skin.settings.EnableSkin) {
+				skin.BSLightingShader_SetupMaterial(material);
 			}
 		};
 		static inline REL::Relocation<decltype(thunk)> func;

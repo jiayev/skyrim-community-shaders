@@ -595,7 +595,7 @@ void Skin::SetShaderResouces(ID3D11DeviceContext* a_context)
 
 void Skin::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
-	auto skin = GetSingleton();
-	skin->BSLightingShader_SetupGeometry(Pass);
+	auto& skin = GetSingleton();
+	skin.BSLightingShader_SetupGeometry(Pass);
 	return func(This, Pass, RenderFlags);
 }
