@@ -550,7 +550,7 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 
 	if (!skinExtraTextures.contains(hashKey)) {
 		// logger::debug("[Advanced Skin] BSLightingShader_SetupMaterial : Setting up extra texture for material: {}", static_cast<int>(materialFeature));
-		GetSingleton()->SetupExtraTexture(material, materialTextureSet, hashKey);
+		globals::features::skin.SetupExtraTexture(material, materialTextureSet, hashKey);
 	}
 
 	auto graphicsState = globals::game::graphicsState;
