@@ -351,6 +351,8 @@ struct PS_OUTPUT
 	float4 Masks : SV_Target6;
 #	if defined(SNOW)
 	float4 Parameters : SV_Target7;
+#	else
+	float3 Masks2 : SV_Target7;
 #	endif
 };
 #else
@@ -3447,6 +3449,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (skinEnabled) {
 #		if defined(SSS) && defined(DEFERRED)
 		float3 directLightsDiffuseInput = diffuseColor;
+		psout.Masks2.xyz = baseColor.xyz;
 #		else
 		float3 directLightsDiffuseInput = diffuseColor * baseColor.xyz;
 #		endif
@@ -3481,6 +3484,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	} else {
 #		if defined(SSS) && defined(DEFERRED)
 		color.xyz += diffuseColor;
+		psout.Masks2.xyz = baseColor.xyz;
 #		else
 		color.xyz += diffuseColor * baseColor.xyz;
 #		endif
@@ -3496,8 +3500,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	elif defined(SKIN) && defined(SSS) && defined(DEFERRED)
 	color.xyz += diffuseColor;
+	psout.Masks2.xyz = baseColor.xyz;
 #	else
 	color.xyz += diffuseColor * baseColor.xyz;
+#	endif
+
+#	if defined(DEFERRED) && !(defined(SKIN) && defined(SSS))
+	psout.Masks2.xyz = float3(1.0, 1.0, 1.0);
 #	endif
 
 #	if defined(HAIR) && defined(CS_HAIR)

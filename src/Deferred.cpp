@@ -109,6 +109,8 @@ void Deferred::SetupResources()
 		SetupRenderTarget(NORMALROUGHNESS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R10G10B10A2_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 		// Masks
 		SetupRenderTarget(MASKS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+		// Masks 2
+		SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 
 		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 		texDesc.Width = 2;
@@ -338,7 +340,7 @@ void Deferred::StartDeferred()
 		SPECULAR,
 		REFLECTANCE,
 		MASKS,
-		RE::RENDER_TARGET::kNONE
+		MASKS2
 	};
 
 	for (uint i = 2; i < 8; i++) {
@@ -627,6 +629,16 @@ void Deferred::OverrideBlendStates()
 								blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 							}
 
+							// Use alpha blending for masks2
+							blendDesc.RenderTarget[7].BlendEnable = blendDesc.RenderTarget[0].BlendEnable;
+							blendDesc.RenderTarget[7].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+							blendDesc.RenderTarget[7].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+							blendDesc.RenderTarget[7].BlendOp = D3D11_BLEND_OP_ADD;
+							blendDesc.RenderTarget[7].SrcBlendAlpha = D3D11_BLEND_SRC_ALPHA;
+							blendDesc.RenderTarget[7].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+							blendDesc.RenderTarget[7].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+							blendDesc.RenderTarget[7].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+
 							DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[a][b][c][d]));
 						} else {
 							deferredBlendStates[a][b][c][d] = nullptr;
@@ -708,7 +720,7 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientComposite()
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });
 
-		if (globals::features::subsurfaceScattering->loaded)
+		if (globals::features::subsurfaceScattering.loaded)
 			defines.push_back({ "SSS", nullptr });
 
 		if (globals::features::xeGTAO->loaded)
@@ -733,7 +745,7 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientCompositeInterior()
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
 
-		if (globals::features::subsurfaceScattering->loaded)
+		if (globals::features::subsurfaceScattering.loaded)
 			defines.push_back({ "SSS", nullptr });
 
 		if (globals::features::xeGTAO->loaded)
