@@ -90,9 +90,9 @@ namespace globals
 		PerformanceOverlay performanceOverlay{};
 		WetnessEffects wetnessEffects{};
 		ExtendedTranslucency extendedTranslucency{};
-		PostProcessing* postProcessing = nullptr;
-		Skin* skin = nullptr;
-		XeGTAOFeature* xeGTAO = nullptr;
+		PostProcessing postProcessing{};
+		Skin skin{};
+		XeGTAOFeature xeGTAO{};
 
 		namespace llf
 		{

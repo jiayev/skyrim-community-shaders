@@ -54,8 +54,8 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::ibl.settings,
 		globals::features::extendedTranslucency.settings,
 		globals::features::linearLighting.GetCommonBufferData(),
-		globals::features::postProcessing->settings,
-		globals::features::skin->GetCommonBufferData(),
-		globals::features::screenSpacePointLightShadows->GetCommonBufferData(),
-		globals::features::xeGTAO->GetCommonBufferData());
+		globals::features::postProcessing.settings,
+		globals::features::skin.GetCommonBufferData(),
+		globals::features::screenSpacePointLightShadows.GetCommonBufferData(),
+		globals::features::xeGTAO.GetCommonBufferData());
 }

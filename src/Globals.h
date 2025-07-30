@@ -91,9 +91,9 @@ namespace globals
 		extern PerformanceOverlay performanceOverlay;
 		extern WetnessEffects wetnessEffects;
 		extern ExtendedTranslucency extendedTranslucency;
-		extern PostProcessing* postProcessing;
-		extern Skin* skin;
-		extern XeGTAOFeature* xeGTAO;
+		extern PostProcessing postProcessing;
+		extern Skin skin;
+		extern XeGTAOFeature xeGTAO;
 
 		namespace llf
 		{

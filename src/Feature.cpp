@@ -232,9 +232,9 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::ibl,
 		&globals::features::extendedTranslucency,
 		&globals::features::linearLighting,
-		globals::features::postProcessing,
-		globals::features::skin,
-		globals::features::xeGTAO
+		&globals::features::postProcessing,
+		&globals::features::skin,
+		&globals::features::xeGTAO
 	};
 
 	if (REL::Module::IsVR()) {
