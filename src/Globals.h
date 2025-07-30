@@ -74,8 +74,8 @@ namespace globals
 		extern InteriorSunShadows interiorSunShadows;
 		extern InverseSquareLighting inverseSquareLighting;
 		extern ScreenSpaceGI screenSpaceGI;
-		extern ScreenSpacePointLightShadows* screenSpacePointLightShadows;
-		extern ScreenSpaceReflections* screenSpaceReflections;
+		extern ScreenSpacePointLightShadows screenSpacePointLightShadows;
+		extern ScreenSpaceReflections screenSpaceReflections;
 		extern ScreenSpaceShadows screenSpaceShadows;
 		extern Skylighting skylighting;
 		extern TerrainVariation terrainVariation;

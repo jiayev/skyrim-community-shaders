@@ -73,8 +73,8 @@ namespace globals
 		InteriorSunShadows interiorSunShadows{};
 		InverseSquareLighting inverseSquareLighting{};
 		ScreenSpaceGI screenSpaceGI{};
-		ScreenSpacePointLightShadows* screenSpacePointLightShadows = nullptr;
-		ScreenSpaceReflections* screenSpaceReflections = nullptr;
+		ScreenSpacePointLightShadows screenSpacePointLightShadows{};
+		ScreenSpaceReflections screenSpaceReflections{};
 		ScreenSpaceShadows screenSpaceShadows{};
 		Skylighting skylighting{};
 		TerrainVariation terrainVariation{};

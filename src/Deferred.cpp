@@ -487,9 +487,9 @@ void Deferred::DeferredPasses()
 
 	auto& terrainBlending = globals::features::terrainBlending;
 
-	auto ssr = globals::features::screenSpaceReflections;
-	if (ssr->loaded)
-		ssr->DrawSSR();
+	auto& ssr = globals::features::screenSpaceReflections;
+	if (ssr.loaded)
+		ssr.DrawSSR();
 
 	// Deferred Composite
 	{
@@ -511,7 +511,7 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? nullptr : ssgi_cocg,
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
 			ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
-			(ssr->loaded && ssr->settings.Enabled) ? ssr->texOutput->srv.get() : nullptr,
+			(ssr.loaded && ssr.settings.Enabled) ? ssr.texOutput->srv.get() : nullptr,
 			xeGTAO->loaded ? xeGTAO->outputAO->srv.get() : nullptr,
 			xeGTAO->loaded ? xeGTAO->generatedNormals->srv.get() : nullptr,
 		};
@@ -763,7 +763,7 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });
 
-		if (globals::features::screenSpaceReflections->loaded)
+		if (globals::features::screenSpaceReflections.loaded)
 			defines.push_back({ "SSR", nullptr });
 
 		if (REL::Module::IsVR())
@@ -791,7 +791,7 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 		if (globals::features::screenSpaceGI.loaded)
 			defines.push_back({ "SSGI", nullptr });
 
-		if (globals::features::screenSpaceReflections->loaded)
+		if (globals::features::screenSpaceReflections.loaded)
 			defines.push_back({ "SSR", nullptr });
 
 		if (REL::Module::IsVR())
