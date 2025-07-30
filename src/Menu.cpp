@@ -281,6 +281,14 @@ void Menu::Init()
 
 	imgui_io.FontGlobalScale = exp2(settings.Theme.GlobalScale);
 
+	ImFontConfig zhConfig;
+	zhConfig.MergeMode = true;
+	zhConfig.PixelSnapH = true;
+	zhConfig.FontDataOwnedByAtlas = false;
+
+	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\SourceHanSansSC-Regular.otf",
+		std::round(fontSize), &zhConfig, imgui_io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+
 	// Setup Platform/Renderer backends
 	ImGui_ImplWin32_Init(desc.OutputWindow);
 	ImGui_ImplDX11_Init(globals::d3d::device, globals::d3d::context);
