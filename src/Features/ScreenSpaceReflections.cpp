@@ -66,7 +66,7 @@ void ScreenSpaceReflections::DrawSettings()
 		ImGui::TreePop();
 	}
 
-    DrawJSInfo();
+    JiayeStatement::GetSingleton()->DrawJSInfo();
 }
 
 void ScreenSpaceReflections::RestoreDefaultSettings()

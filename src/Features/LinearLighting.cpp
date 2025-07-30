@@ -52,7 +52,7 @@ void LinearLighting::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	DrawJSInfo();
+	JiayeStatement::GetSingleton()->DrawJSInfo();
 }
 
 void LinearLighting::LoadSettings(json& o_json)

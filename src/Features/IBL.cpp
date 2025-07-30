@@ -29,7 +29,7 @@ void IBL::DrawSettings()
 			"Warning: may cause dynamic cubemaps sampling accumulation issues.");
 	}
 
-	DrawJSInfo();
+	JiayeStatement::GetSingleton()->DrawJSInfo();
 }
 
 void IBL::LoadSettings(json& o_json)

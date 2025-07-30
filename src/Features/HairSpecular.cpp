@@ -72,7 +72,7 @@ void HairSpecular::DrawSettings()
 	ImGui::SliderFloat("Self Shadow Exponent", &settings.SelfShadowExponent, 0.0f, 10.0f, "%.2f");
 	ImGui::SliderFloat("Self Shadow Scale", &settings.SelfShadowScale, 0.0f, 10.0f, "%.2f");
 
-	DrawJSInfo();
+	JiayeStatement::GetSingleton()->DrawJSInfo();
 }
 
 void HairSpecular::LoadSettings(json& o_json)

@@ -247,7 +247,7 @@ void PostProcessing::DrawSettings()
 		}
 	}
 
-	DrawJSInfo();
+	JiayeStatement::GetSingleton()->DrawJSInfo();
 }
 
 void PostProcessing::LoadSettings(json& o_json)

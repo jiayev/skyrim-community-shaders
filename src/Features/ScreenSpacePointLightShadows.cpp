@@ -33,7 +33,7 @@ void ScreenSpacePointLightShadows::DrawSettings()
 	ImGui::Checkbox("Enable Soft Shadows", (bool*)&settings.EnableSoftShadows);
 	ImGui::SliderFloat("Soft Shadow Scale", &settings.SoftShadowScale, 0.0f, 50.0f, "%.2f");
 
-	DrawJSInfo();
+	JiayeStatement::GetSingleton()->DrawJSInfo();
 }
 
 void ScreenSpacePointLightShadows::RestoreDefaultSettings()

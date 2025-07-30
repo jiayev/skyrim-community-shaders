@@ -160,7 +160,7 @@ void Skin::DrawSettings()
 
 	BUFFER_VIEWER_NODE(texSkinDetail, 1.0f)
 
-	DrawJSInfo();
+	JiayeStatement::GetSingleton()->DrawJSInfo();
 }
 
 void Skin::SetupResources()
