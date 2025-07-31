@@ -549,7 +549,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 transmissionColor = 0;
 #			endif  // TRUE_PBR
 
-	float3 dirLightColor = Color::Light(SharedData::DirLightColor.xyz);
+	float3 dirLightColor = Color::Light(SharedData::DirLightColor.xyz / SharedData::linearLightingSettings.dirLightMult) * SharedData::linearLightingSettings.dirLightMult;
 	float3 dirLightColorMultiplier = 1;
 
 	float dirLightAngle = dot(normal, SharedData::DirLightDirection.xyz);
@@ -652,7 +652,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #				endif
 
-				float3 lightColor = Color::GammaToLinearLuminancePreservingLight(light.color.xyz) * intensityMultiplier;
+				float3 lightColor = Color::Light(light.color.xyz) * intensityMultiplier * light.fade;
 				float lightShadow = 1.0;
 
 				float shadowComponent = 1.0;
@@ -846,7 +846,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 	}
 
-	float3 diffuseColor = Color::Light(SharedData::DirLightColor.xyz) * dirShadow * lerp(dirDetailShadow, 1.0, 0.5) * 0.5;
+	float3 diffuseColor = Color::Light(SharedData::DirLightColor.xyz / SharedData::linearLightingSettings.dirLightMult) * dirShadow * lerp(dirDetailShadow, 1.0, 0.5) * 0.5 * SharedData::linearLightingSettings.dirLightMult;
 
 #			if defined(LIGHT_LIMIT_FIX)
 	uint clusterIndex = 0;
@@ -877,7 +877,7 @@ PS_OUTPUT main(PS_INPUT input)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #				endif
 
-				float3 lightColor = Color::GammaToLinearLuminancePreservingLight(light.color.xyz) * intensityMultiplier;
+				float3 lightColor = Color::Light(light.color.xyz) * intensityMultiplier * light.fade;
 
 				float lightShadow = 1.0;
 

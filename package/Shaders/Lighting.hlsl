@@ -2653,7 +2653,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	waterRoughnessSpecular = 1.0 - wetnessGlossinessSpecular * 0.9;
 #	endif
 
-	float3 dirLightColor = Color::Light(DirLightColor.xyz);
+	float3 dirLightColor = Color::Light(DirLightColor.xyz / SharedData::linearLightingSettings.dirLightMult) * SharedData::linearLightingSettings.dirLightMult;
 	float3 dirLightColorMultiplier = 1;
 
 #	if defined(WATER_EFFECTS)
@@ -3005,7 +3005,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #			endif
 
-		float3 lightColor = Color::Light(light.color.xyz) * intensityMultiplier;
+		float3 lightColor = Color::Light(light.color.xyz) * intensityMultiplier * light.fade;
 		float lightShadow = 1.0;
 
 		float shadowComponent = 1.0;
