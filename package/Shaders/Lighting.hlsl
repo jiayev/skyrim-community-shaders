@@ -352,7 +352,7 @@ struct PS_OUTPUT
 #	if defined(SNOW)
 	float4 Masks2 : SV_Target7;
 #	else
-	float3 Masks2 : SV_Target7;
+	float4 Masks2 : SV_Target7;
 #	endif
 };
 #else
@@ -3447,12 +3447,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	elif defined(SKIN) && defined(CS_SKIN)
 	float3 indirectDiffuseLobeWeight, indirectSpecularLobeWeight;
 	if (skinEnabled) {
-#		if defined(SSS) && defined(DEFERRED) && !defined(DO_ALPHA_TEST)
-		float3 directLightsDiffuseInput = diffuseColor;
-		psout.Masks2.xyz = baseColor.xyz;
-#		else
 		float3 directLightsDiffuseInput = diffuseColor * baseColor.xyz;
-#		endif
 		color.xyz += directLightsDiffuseInput;
 
 		Skin::SkinIndirectLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, skinSurfaceProperties, worldNormal.xyz, viewDirection, vertexNormal);
@@ -3482,12 +3477,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		color.xyz += transmissionColor;
 	} else {
-#		if defined(SSS) && defined(DEFERRED) && !defined(DO_ALPHA_TEST)
-		color.xyz += diffuseColor;
-		psout.Masks2.xyz = baseColor.xyz;
-#		else
 		color.xyz += diffuseColor * baseColor.xyz;
-#		endif
 	}
 #	elif defined(HAIR) && defined(CS_HAIR)
 	color.xyz += diffuseColor * baseColor.xyz;
@@ -3498,9 +3488,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 		color.xyz += transmissionColor;
 	}
-#	elif defined(SKIN) && defined(SSS) && defined(DEFERRED) && !defined(DO_ALPHA_TEST)
-	color.xyz += diffuseColor;
-	psout.Masks2.xyz = baseColor.xyz;
 #	else
 	color.xyz += diffuseColor * baseColor.xyz;
 #		if !defined(DEFERRED) && (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)) && defined(DYNAMIC_CUBEMAPS)
@@ -3511,10 +3498,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		envColor += DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, roughness) * reflectance;
 #			endif
 #		endif
-#	endif
-
-#	if defined(DEFERRED) && !(defined(SKIN) && defined(SSS) && !defined(DO_ALPHA_TEST))
-	psout.Masks2.xyz = float3(1.0, 1.0, 1.0);
 #	endif
 
 #	if defined(HAIR) && defined(CS_HAIR)
@@ -3822,6 +3805,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #		endif
 
+	psout.Masks2.xyz = baseColor.xyz;
+
 	psout.Albedo = float4(outputAlbedo, psout.Diffuse.w);
 
 	const float wetnessGlossinessGain = 0.65;
@@ -3885,9 +3870,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness.w = 1;
 #		endif
 
-#		if defined(SNOW)
 	psout.Masks2.w = psout.Diffuse.w;
-#		endif
 
 #		if defined(SSS) && defined(SKIN) && !defined(DO_ALPHA_TEST)
 	psout.Masks = float4(saturate(baseColor.a), !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace), 0, psout.Diffuse.w);

@@ -62,12 +62,6 @@ Texture2D<uint> XeGTAOTexture : register(t10);
 
 	float3 diffuseColor = MainRW[dispatchID.xy].xyz;
 	float3 albedo = AlbedoTexture[dispatchID.xy];
-#if defined(SSS)
-	float3 mask = MasksTexture[dispatchID.xy];
-	if (mask.x > 0.001) {
-		albedo = float3(1.0, 1.0, 1.0);
-	}
-#endif
 
 	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
 
