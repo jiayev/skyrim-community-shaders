@@ -2925,7 +2925,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			reflectance = DynamicCubemaps::GetDynamicCubemap(worldNormal, vertexNormal, viewDirection, roughness, F0);
 #		endif
 
-#		if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE) && !defined(VANILLA_FRESNEL)
+#		if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)) && !defined(VANILLA_FRESNEL)
 		reflectance *= envMask;
 #		endif
 	}
