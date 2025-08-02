@@ -141,8 +141,8 @@ private:
 		float fadeTimer = 0.0f;
 		float previousHoursPassed = 0.0f;
 
-		void Update(const RE::Sun* sun, RE::NiPoint3 dirs[], float intensities[], bool isDayTime);
-		static void SetLighting(const RE::Sun* sun, RE::NiPoint3 dir, float intensity);
+		void Update(const RE::Sun* sun, RE::NiPoint3 dirs[], float intensities[], std::optional<std::array<RE::NiColor, 3>> colors, bool isDayTime);
+		static void SetLighting(const RE::Sun* sun, RE::NiPoint3 dir, float intensity, std::optional<RE::NiColor> color);
 		static void ClampDirection(RE::NiPoint3& dir);
 		void Reset();
 	};
@@ -181,6 +181,7 @@ private:
 	RE::NiPoint3 rawDirections[3];
 	RE::NiPoint3 directions[3];
 	float intensities[3] = {};
+	std::optional<std::array<RE::NiColor, 3>> lightColors = {};  // assigned externally by Physical Sky
 	ShadowFader shadowFader;
 
 	void DisableOnConflict(std::string_view conflictName);
