@@ -1,8 +1,5 @@
 #pragma once
 
-// TODO: fix seam
-// TODO: fix zenith incontinuity
-
 struct PhysicalSky : public Feature
 {
 	////////////////////////////////////////////////// Boilerplate
@@ -169,4 +166,20 @@ struct PhysicalSky : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csMsLutGen = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csSvLutGen = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csApLutGen = nullptr;
+
+	void ModifySky();
+	struct Hooks
+	{
+		struct BSSkyShader_SetupMaterial
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		static void Install()
+		{
+			stl::write_vfunc<0x6, BSSkyShader_SetupMaterial>(RE::VTABLE_BSSkyShader[0]);
+			logger::info("[Cloud Shadows] Installed hooks");
+		}
+	};
 };

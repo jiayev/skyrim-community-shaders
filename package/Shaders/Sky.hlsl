@@ -189,6 +189,7 @@ cbuffer AlphaTestRefCB : register(b11)
 #	endif
 
 #	if defined(PHYSICAL_SKY)
+#		define SKY_SAMPLERS
 #		include "PhysicalSky/Common.hlsli"
 #	endif
 
@@ -255,7 +256,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (SharedData::physSkyData.enabled)
 	{
 # 		if defined(DITHER) && !defined(TEX)
-		float3 skyColor = PhysSky::SampleSky(normalize(input.WorldPosition.xyz), SampBaseSampler);
+		float3 skyColor = PhysSky::SampleSky(normalize(input.WorldPosition.xyz), PhysSky::SampSv);
 		psout.Color.xyz = lerp(skyColor, psout.Color.xyz, SharedData::physSkyData.vanillaMix);
 #		else
 		// discard; // TODO: REMOVE
