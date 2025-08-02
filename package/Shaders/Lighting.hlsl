@@ -2297,8 +2297,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				else
 				F0 = lerp(0.04, F0, envMask);
 #				endif
-#			endif
 				roughness = lerp(roughness, envRoughness, pow(envMask, 0.25));
+#			else
+				roughness = envRoughness;
+#			endif
 			}
 		}
 #		endif
@@ -3067,11 +3069,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	color.xyz += diffuseColor * baseColor.xyz;
 #		if !defined(DEFERRED) && (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)) && defined(DYNAMIC_CUBEMAPS)
 	if (dynamicCubemap)
-#			if defined(SKYLIGHTING)
-		envColor += DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, roughness, skylightingSH) * reflectance;
-#			else
-		envColor += DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, roughness) * reflectance;
-#			endif
+		envColor += reflectance;
 #		endif
 #	endif
 
