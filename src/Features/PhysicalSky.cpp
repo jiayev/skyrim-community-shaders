@@ -4,16 +4,21 @@
 #include "State.h"
 #include "Util.h"
 
-static inline void InfoBox(const char* str)
+namespace
 {
-	if (ImGui::BeginTable("Info", 1, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
-		ImGui::TableNextColumn();
-		ImGui::TextWrapped(str);
-		ImGui::EndTable();
+	void InfoBox(const char* str)
+	{
+		if (ImGui::BeginTable("Info", 1, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
+			ImGui::TableNextColumn();
+			ImGui::TextWrapped(str);
+			ImGui::EndTable();
+		}
 	}
-}
 
-static inline float Lerp(float a, float b, float x) { return a + (b - a) * x; }
+	float Lerp(float a, float b, float x) { return a + (b - a) * x; }
+
+	RE::NiColor Float3ToNiColor(const float3& v) { return { v.x, v.y, v.z }; }
+}
 
 void PhysicalSky::DataLoaded()
 {
@@ -115,6 +120,8 @@ void PhysicalSky::SettingsCelestials()
 	constexpr auto lightColorHint = "This sets the light color BEFORE it goes through the atmosphere i.e. extraterrestrial radiance.";
 
 	InfoBox("The sun and moons, and their lights.");
+
+	ImGui::Checkbox("Override Directional Light", &settings.overrideDirLight);
 
 	ImGui::SeparatorText("Sun");
 	{
@@ -416,6 +423,11 @@ void PhysicalSky::Reset()
 		.ozoneThickness = settings.ozoneThickness / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneAbsorption = settings.ozoneAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
 	};
+
+	if (settings.overrideDirLight)
+		skySync.lightColors = { Float3ToNiColor(cbData.sunlightColor), Float3ToNiColor(cbData.masserColor), Float3ToNiColor(cbData.secundaColor) };
+	else
+		skySync.lightColors = std::nullopt;
 
 	RE::NiPoint3 posCam = { 0, 0, 0 };
 	if (auto cam = RE::PlayerCamera::GetSingleton(); cam && cam->cameraRoot) {
