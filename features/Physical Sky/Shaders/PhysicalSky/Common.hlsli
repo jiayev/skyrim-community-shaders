@@ -7,10 +7,15 @@ namespace PhysSky
 {
 #endif
 
-#ifdef SKY_SAMPLERS
+#ifdef PREPASS_SAMPLERS
 SamplerState SampTr : register(s0);  // in lighting, use shadow
 SamplerState SampSv : register(s1);  // in lighting, use color
 SamplerState SampNoise : register(s2);
+#endif
+
+#ifdef SKY_SAMPLERS
+SamplerState SampTr : register(s3);
+SamplerState SampSv : register(s4); 
 #endif
 
 #ifdef PS_PREPASS_RSRCS
