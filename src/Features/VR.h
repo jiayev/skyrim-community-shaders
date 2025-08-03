@@ -10,6 +10,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <winrt/base.h>
 using namespace DirectX::SimpleMath;
 
 /**
@@ -482,10 +483,10 @@ public:
 	// OpenVR overlay handles and DirectX 11 rendering resources
 	vr::VROverlayHandle_t menuOverlayHandle = vr::k_ulOverlayHandleInvalid;
 	vr::VROverlayHandle_t menuControllerOverlayHandle = vr::k_ulOverlayHandleInvalid;
-	ID3D11Texture2D* menuTexture = nullptr;
-	ID3D11RenderTargetView* menuRTV = nullptr;
-	ID3D11Texture2D* menuControllerTexture = nullptr;
-	ID3D11RenderTargetView* menuControllerRTV = nullptr;
+	winrt::com_ptr<ID3D11Texture2D> menuTexture;
+	winrt::com_ptr<ID3D11RenderTargetView> menuRTV;
+	winrt::com_ptr<ID3D11Texture2D> menuControllerTexture;
+	winrt::com_ptr<ID3D11RenderTargetView> menuControllerRTV;
 
 	// Engine hook integration points
 	bool* gDepthBufferCulling = nullptr;
@@ -586,7 +587,6 @@ public:
 	// PRIVATE IMPLEMENTATION
 	//=============================================================================
 
-	void CleanupOverlayTextures();
 	void DetectOpenVRInfo();
 	bool IsOpenVRCompatible() const;
 };
