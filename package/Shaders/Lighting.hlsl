@@ -3889,11 +3889,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Masks = float4(0, 0, 0, psout.Diffuse.w);
 #		endif
 
-#		if defined(CS_SKIN) && defined(SKIN)
+#		if defined(SKIN)
+	psout.Masks.z = 1.0;
+#			if defined(CS_SKIN)
 	if (skinEnabled) {
 		psout.Masks.y = 0.5f;
 		psout.Masks.z = indirectDiffuseLobeMult;
 	}
+#			endif
 #		endif
 #	endif
 
