@@ -79,6 +79,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 	float3 diffuseColor = MainRW[dispatchID.xy].xyz;
 	float3 specularColor = SpecularTexture[dispatchID.xy];
 	float3 albedo = AlbedoTexture[dispatchID.xy];
+	float3 masks = MasksTexture[dispatchID.xy].xyz;
 
 	float depth = DepthTexture[dispatchID.xy];
 	float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
@@ -96,7 +97,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 
 	float3 reflectance = ReflectanceTexture[dispatchID.xy];
 
-	float isAdvancedSkin = (MasksTexture[dispatchID.xy].y < 1 && MasksTexture[dispatchID.xy].y > 0) && SharedData::skinData.skinParams.w > 0;
+	float isAdvancedSkin = (masks.y < 1 && masks.y > 0) && SharedData::skinData.skinParams.w > 0;
 	float roughnessSecondary = 0;
 	float reflectanceSecondary = 0;
 	float reflectanceWet = 0;
@@ -110,7 +111,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 	if (reflectance.x > 0.0 || reflectance.y > 0.0 || reflectance.z > 0.0) {
 		float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
 
-		float wetnessMask = MasksTexture[dispatchID.xy].z;
+		float wetnessMask = masks.y > 0 ? 0 : masks.z;
 
 		normalWS = lerp(normalWS, float3(0, 0, 1), wetnessMask);
 
