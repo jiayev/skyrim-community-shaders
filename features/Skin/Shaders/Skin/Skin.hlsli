@@ -135,7 +135,7 @@ namespace Skin
 		transmission = 0;
 		specular = 0;
 
-		light.LightColor *= Math::PI;
+		light.LightColor *= Color::PBRLightingCompensation;
 
 		float3 H = normalize(V + L);
 		const float oNdotL = dot(N, L);
