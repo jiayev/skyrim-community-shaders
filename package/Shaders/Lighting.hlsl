@@ -350,9 +350,7 @@ struct PS_OUTPUT
 	float4 Reflectance : SV_Target5;
 	float4 Masks : SV_Target6;
 #	if defined(SNOW)
-	float4 Masks2 : SV_Target7;
-#	else
-	float4 Masks2 : SV_Target7;
+	float4 Parameters : SV_Target7;
 #	endif
 };
 #else
@@ -362,7 +360,7 @@ struct PS_OUTPUT
 	float4 MotionVectors : SV_Target1;
 	float4 ScreenSpaceNormals : SV_Target2;
 #	if defined(SNOW)
-	float4 Masks2 : SV_Target3;
+	float4 Parameters : SV_Target3;
 #	endif
 };
 #endif
@@ -2175,7 +2173,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	worldNormal.xyz = projectedNormal;
 #			if defined(SNOW)
-	psout.Masks2.y = 1;
+	psout.Parameters.y = 1;
 #			endif  // SNOW
 #		elif !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX) && !defined(SPARKLE)
 	if (ProjectedUVParams3.w > 0.5) {
@@ -2202,18 +2200,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #			if defined(SNOW)
 		useSnowDecalSpecular = true;
-		psout.Masks2.y = GetSnowParameterY(projectedMaterialWeight, baseColor.w);
+		psout.Parameters.y = GetSnowParameterY(projectedMaterialWeight, baseColor.w);
 #			endif  // SNOW
 	} else {
 		if (projWeight > 0) {
 			baseColor.xyz = Color::ColorToLinear(ProjectedUVParams2.xyz);
 #			if defined(SNOW)
 			useSnowDecalSpecular = true;
-			psout.Masks2.y = GetSnowParameterY(projWeight, baseColor.w);
+			psout.Parameters.y = GetSnowParameterY(projWeight, baseColor.w);
 #			endif  // SNOW
 		} else {
 #			if defined(SNOW)
-			psout.Masks2.y = 0;
+			psout.Parameters.y = 0;
 #			endif  // SNOW
 		}
 	}
@@ -2225,9 +2223,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	elif defined(SNOW)
 #		if defined(LANDSCAPE)
-	psout.Masks2.y = landSnowMask;
+	psout.Parameters.y = landSnowMask;
 #		else
-	psout.Masks2.y = baseColor.w;
+	psout.Parameters.y = baseColor.w;
 #		endif  // LANDSCAPE
 #	endif      // SNOW
 
@@ -3763,10 +3761,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(SNOW)
 #		if defined(TRUE_PBR)
-	psout.Masks2.x = Color::RGBToLuminanceAlternative(specularColor);
-	psout.Masks2.y = 0;
+	psout.Parameters.x = Color::RGBToLuminanceAlternative(specularColor);
+	psout.Parameters.y = 0;
 #		else
-	psout.Masks2.x = Color::RGBToLuminanceAlternative(lightsSpecularColor);
+	psout.Parameters.x = Color::RGBToLuminanceAlternative(lightsSpecularColor);
 #		endif
 #	endif  // SNOW && !PBR
 
@@ -3816,8 +3814,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		outputAlbedo = indirectDiffuseLobeWeight;
 	}
 #		endif
-
-	psout.Masks2.xyz = baseColor.xyz;
 
 	psout.Albedo = float4(outputAlbedo, psout.Diffuse.w);
 
@@ -3882,7 +3878,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness.w = 1;
 #		endif
 
-	psout.Masks2.w = psout.Diffuse.w;
+#		if defined(SNOW)
+	psout.Parameters.w = psout.Diffuse.w;
+#		endif
 
 #		if defined(SSS) && defined(SKIN) && !defined(DO_ALPHA_TEST)
 	psout.Masks = float4(saturate(baseColor.a), !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace), 0, psout.Diffuse.w);
