@@ -3804,8 +3804,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TRUE_PBR)
 	outputAlbedo = indirectDiffuseLobeWeight;
 #		elif defined(SKIN) && defined(CS_SKIN)
+	float indirectDiffuseLobeMult = 1.0;
 	if (skinEnabled) {
-		outputAlbedo = indirectDiffuseLobeWeight;
+		indirectDiffuseLobeMult = indirectDiffuseLobeWeight.x / max(1e-5, baseColor.x);
 	}
 #		endif
 
@@ -3894,6 +3895,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(CS_SKIN) && defined(SKIN)
 	if (skinEnabled) {
 		psout.Masks.y = 0.5f;
+		psout.Masks.z = indirectDiffuseLobeMult;
 	}
 #		endif
 #	endif

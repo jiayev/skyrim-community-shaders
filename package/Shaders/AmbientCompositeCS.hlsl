@@ -9,6 +9,7 @@
 Texture2D<float3> AlbedoTexture : register(t0);
 Texture2D<float3> NormalRoughnessTexture : register(t1);
 Texture2D<float> DepthTexture : register(t2);
+Texture2D<float3> MasksTexture : register(t9);
 
 #if defined(SKYLIGHTING)
 #	include "Skylighting/Skylighting.hlsli"
@@ -61,6 +62,10 @@ Texture2D<uint> XeGTAOTexture : register(t10);
 
 	float3 diffuseColor = MainRW[dispatchID.xy].xyz;
 	float3 albedo = AlbedoTexture[dispatchID.xy];
+	float3 masks = MasksTexture[dispatchID.xy];
+	if (masks.y > 0.0) {
+		albedo *= masks.z;
+	}
 
 	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
 

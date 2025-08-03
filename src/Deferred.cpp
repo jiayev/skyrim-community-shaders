@@ -450,6 +450,7 @@ void Deferred::DeferredPasses()
 				ssgi_y,
 				ssgi_cocg,
 				ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
+				masks.SRV,
 				xeGTAO.loaded ? xeGTAO.outputAO->srv.get() : nullptr,
 			};
 
