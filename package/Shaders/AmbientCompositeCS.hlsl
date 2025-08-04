@@ -93,7 +93,7 @@ Texture2D<uint> XeGTAOTexture : register(t10);
 
 #if defined(IBL)
 	if (SharedData::iblSettings.EnableDiffuseIBL) {
-		directionalAmbientColor *= SharedData::iblSettings.DALCAmount;
+		directionalAmbientColor = SharedData::iblSettings.DALCAmount * Color::Ambient(directionalAmbientColor);
 		directionalAmbientColor += Color::Saturation(ImageBasedLighting::GetDiffuseIBL(-normalWS), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 	}
 #endif
