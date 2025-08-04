@@ -2,7 +2,6 @@
 #include "Menu.h"
 #include "OverlayFeature.h"
 #include <algorithm>
-#include <atomic>
 #include <d3d11.h>
 #include <imgui_impl_dx11.h>
 #include <magic_enum.hpp>
@@ -281,6 +280,7 @@ public:
 
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
+	virtual void EarlyPrepass() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -312,8 +312,9 @@ public:
 	struct Settings
 	{
 		// Performance optimization settings
-		bool EnableDepthBufferCulling = true;  ///< Enable depth buffer culling for VR performance
-		float MinOccludeeBoxExtent = 10.0f;    ///< Minimum bounding box size for occlusion culling
+		bool EnableDepthBufferCullingExterior = true;  ///< Enable depth buffer culling for VR performance
+		bool EnableDepthBufferCullingInterior = false;
+		float MinOccludeeBoxExtent = 10.0f;  ///< Minimum bounding box size for occlusion culling
 
 		// VR Menu Overlay positioning settings
 		float VRMenuScale = Config::kDefaultMenuScale;  ///< Scale factor for overlay UI (0.5-2.0)

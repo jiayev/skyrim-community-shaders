@@ -29,7 +29,8 @@ constexpr int kOverlayHeight = 1080;
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VR::Settings,
-	EnableDepthBufferCulling,
+	EnableDepthBufferCullingInterior,
+	EnableDepthBufferCullingExterior,
 	MinOccludeeBoxExtent,
 	VRMenuScale,
 	VRMenuPositioningMethod,
@@ -110,8 +111,13 @@ void VR::PostPostLoad()
 
 void VR::DataLoaded()
 {
-	*gDepthBufferCulling = settings.EnableDepthBufferCulling;
+	*gDepthBufferCulling = settings.EnableDepthBufferCullingExterior;
 	*gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
+}
+
+void VR::EarlyPrepass()
+{
+	*gDepthBufferCulling = globals::game::tes->interiorCell ? settings.EnableDepthBufferCullingInterior : settings.EnableDepthBufferCullingExterior;
 }
 
 //=============================================================================
@@ -551,13 +557,18 @@ namespace
 		auto& vr = globals::features::vr;
 		VR::Settings& settings = vr.settings;
 		if (ImGui::CollapsingHeader("General Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Checkbox("Enable Depth Buffer Culling", &settings.EnableDepthBufferCulling);
+			ImGui::Checkbox("Enable Depth Buffer Culling in Exteriors", &settings.EnableDepthBufferCullingExterior);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Enables depth buffer culling for VR performance optimization.");
+				ImGui::Text("Improves performance in exteriors, recommended ON.");
 			}
-			ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f");
+			ImGui::Checkbox("Enable Depth Buffer Culling in Interiors", &settings.EnableDepthBufferCullingInterior);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Minimum box extent for occlusion culling in VR.");
+				ImGui::Text("Improves performance in interiors, recommended OFF due to occasional visual glitches.");
+			}
+			if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f"))
+				*vr.gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Minimum bounding box dimensions for object occlusion culling. Lower values improve performance but may result in visual artifacts.");
 			}
 		}
 	}
