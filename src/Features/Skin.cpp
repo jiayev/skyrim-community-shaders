@@ -554,11 +554,11 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 	auto workingExtraPtr = skinExtraTextures[hashKey];
 
 	const bool hasExtraTexture = workingExtraPtr.rfaosTexture != nullptr && workingExtraPtr.wetnessTexture != nullptr;
-	const bool isExtraTextureLoaded = workingExtraPtr.rfaosTexture != graphicsState->GetRuntimeData().defaultTextureBlack;
+	const bool isExtraTextureLoaded = workingExtraPtr.rfaosTexture != graphicsState->GetRuntimeData().defaultTextureBlack || workingExtraPtr.wetnessTexture != graphicsState->GetRuntimeData().defaultTextureBlack;
 	if (hasExtraTexture && isExtraTextureLoaded) {
 		skinExtendedRendererState.SetExtraSkinPSTexture(workingExtraPtr.rfaosTexture->rendererTexture, workingExtraPtr.wetnessTexture->rendererTexture);
 	} else {
-		logger::debug("[Advanced Skin] BSLightingShader_SetupMaterial : Using default textures for material: {}", static_cast<int>(materialFeature));
+		logger::debug("[Advanced Skin] BSLightingShader_SetupMaterial : Using default textures for material: {}", hashKey);
 		skinExtendedRendererState.SetExtraSkinPSTexture(graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture, graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture);
 	}
 }
@@ -595,7 +595,7 @@ void Skin::SetShaderResouces(ID3D11DeviceContext* a_context)
 
 void Skin::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
-	auto& skin = globals::features::skin;
-	skin.BSLightingShader_SetupGeometry(Pass);
+	// auto& skin = globals::features::skin;
+	// skin.BSLightingShader_SetupGeometry(Pass);
 	return func(This, Pass, RenderFlags);
 }
