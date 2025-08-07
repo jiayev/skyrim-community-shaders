@@ -2339,8 +2339,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 specularColorPBR = 0;
 	float3 transmissionColor = 0;
 
+	float averageRoughness = lerp(skinSurfaceProperties.RoughnessPrimary, skinSurfaceProperties.RoughnessSecondary, skinSurfaceProperties.SecondarySpecIntensity);
+
 	float pbrWeight = 1;
-	float pbrGlossiness = 1 - skinSurfaceProperties.RoughnessPrimary;
+	float pbrGlossiness = 1 - (skinWetness > 0.0 ? averageRoughness : WATER_ROUGHNESS);
 #	endif  // CS_SKIN
 
 	float porosity = 1.0;
@@ -3297,9 +3299,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if !defined(DEFERRED)
 #			if defined(DYNAMIC_CUBEMAPS)
 #				if defined(SKYLIGHTING)
-		specularColorPBR += indirectSpecularLobeWeight * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, skinSurfaceProperties.RoughnessPrimary, skylightingSH);
+		specularColorPBR += indirectSpecularLobeWeight * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, averageRoughness, skylightingSH);
 #				else
-		specularColorPBR += indirectSpecularLobeWeight * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, skinSurfaceProperties.RoughnessPrimary);
+		specularColorPBR += indirectSpecularLobeWeight * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, averageRoughness);
 #				endif
 #			else
 		specularColorPBR += indirectSpecularLobeWeight * directionalAmbientColor;

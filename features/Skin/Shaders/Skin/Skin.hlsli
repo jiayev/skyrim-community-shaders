@@ -192,12 +192,9 @@ namespace Skin
 
 		float averageRoughness = lerp(skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity);
 
-		float2 specularBRDFPrimary = BRDF::EnvBRDFApproxLazarov(skin.RoughnessPrimary, NdotV);
-		float2 specularBRDFSecondary = BRDF::EnvBRDFApproxLazarov(skin.RoughnessSecondary, NdotV);
-		float specularBRDFMix = skin.SecondarySpecIntensity;
+		float2 specularBRDF = BRDF::EnvBRDFApproxLazarov(averageRoughness, NdotV);
 
-		specularWeight.x = (skin.F0 * specularBRDFPrimary.x + specularBRDFPrimary.y) * (1 - specularBRDFMix);
-		specularWeight.y = (skin.F0 * specularBRDFSecondary.x + specularBRDFSecondary.y) * specularBRDFMix;
+		specularWeight = skin.F0 * specularBRDF.x + specularBRDF.y;
 
 		float waterTransmission = 1.f;
 		float3 wetSpecular = 0.f;
@@ -211,9 +208,8 @@ namespace Skin
 
 		diffuseWeight = skin.Albedo * (1.0 - specularWeight.x - specularWeight.y) * waterTransmission;
 		specularWeight *= waterTransmission;
-		specularWeight.x *= 1 + skin.F0 * (1 / (specularBRDFPrimary.x + specularBRDFPrimary.y) - 1);
-		specularWeight.y *= 1 + skin.F0 * (1 / (specularBRDFSecondary.x + specularBRDFSecondary.y) - 1);
-		specularWeight.z += wetSpecular.x;
+		specularWeight *= 1 + skin.F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
+		specularWeight += wetSpecular;
 
 		float3 R = reflect(-V, N);
 		float horizon = min(1.0 + dot(R, VN), 1.0);
