@@ -426,14 +426,14 @@ struct SkinExtendedRendererState
 void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet, uint32_t i_hashKey)
 {
 	if (!inTextureSet || material->normalTexture == nullptr) {
-		logger::error("[Advanced Skin] SetupExtraTexture : Texture set is null for material: {}", static_cast<int>(material->GetFeature()));
+		logger::error("[Advanced Skin] SetupExtraTexture : Texture set is null for material: {}", i_hashKey);
 		return;
 	}
 
 	uint32_t hashKey = 0;
 	hashKey = material->hashKey;
 	if (hashKey == 0 || hashKey != i_hashKey) {
-		logger::error("[Advanced Skin] SetupExtraTexture : Invalid hash key for material: {}", static_cast<int>(material->GetFeature()));
+		logger::error("[Advanced Skin] SetupExtraTexture : Invalid hash key for material: {}", i_hashKey);
 		return;
 	}
 
@@ -454,7 +454,7 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 	if (auto normalPath = inTextureSet->GetTexturePath(RE::BSTextureSet::Texture::kNormal)) {
 		workingNormalPath = normalPath;
 	} else {
-		logger::error("[Advanced Skin] SetupExtraTexture : No specular or normal texture found in texture set from material: {}", static_cast<int>(material->GetFeature()));
+		logger::error("[Advanced Skin] SetupExtraTexture : No specular or normal texture found in texture set from material: {}", hashKey);
 		return;
 	}
 
@@ -600,7 +600,7 @@ void Skin::SetShaderResouces(ID3D11DeviceContext* a_context)
 
 void Skin::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
-	auto& skin = globals::features::skin;
-	skin.BSLightingShader_SetupGeometry(Pass);
+	// auto& skin = globals::features::skin;
+	// skin.BSLightingShader_SetupGeometry(Pass);
 	return func(This, Pass, RenderFlags);
 }
