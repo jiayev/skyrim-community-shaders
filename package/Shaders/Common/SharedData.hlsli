@@ -254,6 +254,17 @@ namespace SharedData
 		float Mix;
 	};
 
+	struct VanillaFresnelSettings
+	{
+		uint Enable;
+		uint EnableGGX;
+		uint EnableGGXOnGrass;
+		uint EnableDynamicCubemapsConversion;
+		float RoughnessMultiplier;
+		float CubemapToF0Multiplier;
+		float3 pad;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -274,6 +285,7 @@ namespace SharedData
 		SkinData skinData;
 		SSPLSSettings ssplsSettings;
 		XeGTAOSettings xeGTAOSettings;
+		VanillaFresnelSettings vanillaFresnelSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);
