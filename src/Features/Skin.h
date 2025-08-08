@@ -126,6 +126,7 @@ struct Skin : Feature
 		{
 			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 			logger::info("[Advanced Skin] Installed hooks");
+			return;
 		}
 	};
 };
