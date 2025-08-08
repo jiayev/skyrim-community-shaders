@@ -2342,7 +2342,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float averageRoughness = lerp(skinSurfaceProperties.RoughnessPrimary, skinSurfaceProperties.RoughnessSecondary, skinSurfaceProperties.SecondarySpecIntensity);
 
 	float pbrWeight = 1;
-	float pbrGlossiness = 1 - (skinWetness > 0.0 ? averageRoughness : WATER_ROUGHNESS);
+	float pbrGlossiness = skinSurfaceProperties.Wetness == 0.0 ? (1 - averageRoughness) : (1 - WATER_ROUGHNESS);
 #	endif  // CS_SKIN
 
 	float porosity = 1.0;
