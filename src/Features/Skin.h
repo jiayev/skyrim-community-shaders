@@ -99,6 +99,10 @@ struct Skin : Feature
 	{
 		RE::NiSourceTexturePtr rfaosTexture;
 		RE::NiSourceTexturePtr wetnessTexture;
+		std::string extraTexturePath;
+		std::string wetnessTexturePath;
+		bool hasExtraTexture = false;
+		bool hasWetnessTexture = false;
 	};
 
 	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;
