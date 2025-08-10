@@ -1,6 +1,6 @@
 #pragma once
 
-struct PhysicalSky : public Feature
+struct PhysicalSky final : public Feature
 {
 	////////////////////////////////////////////////// Boilerplate
 	static PhysicalSky* GetSingleton()
@@ -10,11 +10,11 @@ struct PhysicalSky : public Feature
 	}
 
 	// Metadata
-	virtual inline std::string GetName() override { return "Physical Sky"; }
-	virtual inline std::string GetShortName() override { return "PhysicalSky"; }
-	virtual inline std::string_view GetCategory() const override { return "Sky"; }
-	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL("999999"); }
-	virtual inline std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
+	inline std::string GetName() override { return "Physical Sky"; }
+	inline std::string GetShortName() override { return "PhysicalSky"; }
+	inline std::string_view GetCategory() const override { return "Sky"; }
+	inline std::string GetFeatureModLink() override { return MakeNexusModURL("999999"); }
+	inline std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
 			"Physically based sky models for photorealistic sky gradients, plus other astronomical effects.",
@@ -26,33 +26,34 @@ struct PhysicalSky : public Feature
 	}
 
 	// Functionality
-	virtual bool inline SupportsVR() override { return true; }
-	virtual inline std::string_view GetShaderDefineName() override { return "PHYSICAL_SKY"; }
-	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
+	bool inline SupportsVR() override { return true; }
+	inline std::string_view GetShaderDefineName() override { return "PHYSICAL_SKY"; }
+	inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
 	// Settings & UI
-	virtual void DataLoaded() override;
-	virtual void RestoreDefaultSettings() override;
-	virtual void LoadSettings(json& o_json) override;
-	virtual void SaveSettings(json& o_json) override;
+	void DataLoaded() override;
+	void RestoreDefaultSettings() override;
+	void LoadSettings(json& o_json) override;
+	void SaveSettings(json& o_json) override;
 
-	virtual void DrawSettings() override;
+	void DrawSettings() override;
 	void SettingsGeneral();
 	void SettingsCelestials();
 	void SettingsAtmosphere();
 	void SettingsDebug();
 
 	// Resources
-	virtual void SetupResources() override;
-	virtual void ClearShaderCache() override;
+	void SetupResources() override;
+	void ClearShaderCache() override;
 	void CompileShaders();
 	bool ShadersOK();
 
 	// Draw
-	virtual void Reset() override;
-	virtual void EarlyPrepass() override;
-	virtual void ReflectionsPrepass() override;
+	void Reset() override;
+	void EarlyPrepass() override;
+	void ReflectionsPrepass() override;
 	void GenerateLuts();
+	inline void PostPostLoad() override { Hooks::Install(); }
 
 	////////////////////////////////////////////////// Feature Specific Data
 	constexpr static uint16_t kTrLutW = 256;
