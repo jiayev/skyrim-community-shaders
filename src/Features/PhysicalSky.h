@@ -49,8 +49,6 @@ struct PhysicalSky : public Feature
 	bool ShadersOK();
 
 	// Draw
-	float CalcExposure();
-
 	virtual void Reset() override;
 	virtual void EarlyPrepass() override;
 	virtual void ReflectionsPrepass() override;
