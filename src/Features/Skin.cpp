@@ -441,7 +441,8 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 	auto workingMaterial = static_cast<const RE::BSLightingShaderMaterialBase*>(material);
 	auto hasSpecular = workingMaterial->specularBackLightingTexture != nullptr;
 
-	const auto& stateData = globals::game::graphicsState->GetRuntimeData();
+	auto graphicsState = globals::game::graphicsState;
+	const auto& stateData = graphicsState->GetRuntimeData();
 
 	if (hasSpecular) {
 		if (auto specularPath = inTextureSet->GetTexturePath(RE::BSTextureSet::Texture::kSpecular)) {
@@ -537,8 +538,8 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kEnvironment, workingExtraPtr.rfaosTexture);
 	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kMultilayer, workingExtraPtr.wetnessTexture);
 
-	workingExtraPtr.hasExtraTexture = workingExtraPtr.rfaosTexture != nullptr && !workingExtraPtr.extraTexturePath.empty() && workingExtraPtr.rfaosTexture->rendererTexture != graphicsState->GetRuntimeData().defaultTextureBlack;
-	workingExtraPtr.hasWetnessTexture = workingExtraPtr.wetnessTexture != nullptr && !workingExtraPtr.wetnessTexturePath.empty() && workingExtraPtr.wetnessTexture->rendererTexture != graphicsState->GetRuntimeData().defaultTextureBlack;
+	workingExtraPtr.hasExtraTexture = workingExtraPtr.rfaosTexture != nullptr && !workingExtraPtr.extraTexturePath.empty() && workingExtraPtr.rfaosTexture->rendererTexture != stateData.defaultTextureBlack;
+	workingExtraPtr.hasWetnessTexture = workingExtraPtr.wetnessTexture != nullptr && !workingExtraPtr.wetnessTexturePath.empty() && workingExtraPtr.wetnessTexture->rendererTexture != stateData.defaultTextureBlack;
 
 	if (workingExtraPtr.hasExtraTexture || workingExtraPtr.hasWetnessTexture) {
 		logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture set with hash key: {}", hashKey);
