@@ -14,11 +14,9 @@ namespace
 			ImGui::EndTable();
 		}
 	}
-
-	float Lerp(float a, float b, float x) { return a + (b - a) * x; }
-
-	RE::NiColor Float3ToNiColor(const float3& v) { return { v.x, v.y, v.z }; }
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void PhysicalSky::DataLoaded()
 {
@@ -122,6 +120,8 @@ void PhysicalSky::SettingsCelestials()
 	InfoBox("The sun and moons, and their lights.");
 
 	ImGui::Checkbox("Override Directional Light", &settings.overrideDirLight);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Overrides the color of directional light. Linear tonemapper and 1.0 transmittance mix are recommended.");
 
 	ImGui::SeparatorText("Sun");
 	{
@@ -350,16 +350,6 @@ bool PhysicalSky::ShadersOK()
 	return csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen;
 }
 
-float PhysicalSky::CalcExposure()
-{
-	auto sunDir = globals::features::skySync.rawDirections[static_cast<int>(SkySync::Caster::Sun)];
-	float sunAngle = DirectX::XMConvertToRadians(90.f) - acos(sunDir.z);
-	float adaptAmount = (sunAngle - settings.adaptationStart) / (settings.adaptationEnd - settings.adaptationStart);
-	adaptAmount = std::min(1.f, std::max(0.f, adaptAmount));
-	float exposure = settings.dayExposure * exp(log(settings.nightExposure / settings.dayExposure) * adaptAmount);
-	return exposure;
-}
-
 void PhysicalSky::Reset()
 {
 	auto& skySync = globals::features::skySync;
@@ -392,7 +382,10 @@ void PhysicalSky::Reset()
 	auto masserDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Masser)];
 	auto secundaDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Secunda)];
 
-	float exposure = CalcExposure();
+	float sunAngle = DirectX::XMConvertToRadians(90.f) - acos(sunDir.z);
+	float adaptAmount = (sunAngle - settings.adaptationStart) / (settings.adaptationEnd - settings.adaptationStart);
+	adaptAmount = std::min(1.f, std::max(0.f, adaptAmount));
+	float exposure = settings.dayExposure * exp(log(settings.nightExposure / settings.dayExposure) * adaptAmount);
 
 	cbData = {
 		.texDim = res,
@@ -424,9 +417,13 @@ void PhysicalSky::Reset()
 		.ozoneAbsorption = settings.ozoneAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
 	};
 
-	if (settings.overrideDirLight)
-		skySync.lightColors = { Float3ToNiColor(cbData.sunlightColor), Float3ToNiColor(cbData.masserColor), Float3ToNiColor(cbData.secundaColor) };
-	else
+	if (settings.overrideDirLight) {
+		constexpr auto LightConvFn = [](float3 color) {
+			color /= 3.14159265359f;  // Colors should match PBR values
+			return RE::NiColor(color.x, color.y, color.z);
+		};
+		skySync.lightColors = { LightConvFn(cbData.sunlightColor), LightConvFn(cbData.masserColor), LightConvFn(cbData.secundaColor) };
+	} else
 		skySync.lightColors = std::nullopt;
 
 	RE::NiPoint3 posCam = { 0, 0, 0 };
