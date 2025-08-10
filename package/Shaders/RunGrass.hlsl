@@ -605,7 +605,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirNoL = dot(SharedData::DirLightDirection.xyz, viewDirection);
 	float dirViewWrap = -dirNoL * 0.5 + 0.5;
 	float wrappedDirLight = saturate(dirLightAngle + wrapAmount * dirViewWrap) / (1.0 + wrapAmount * dirViewWrap);
-	lightsDiffuseColor += dirLightColor * saturate(wrappedDirLight) * dirDetailShadow;
+	lightsDiffuseColor += dirLightColor * saturate(wrappedDirLight) * dirDetailShadow * Color::VanillaDiffuseMult();
 
 	float3 vertexColor = input.VertexColor.xyz;
 
@@ -623,10 +623,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float dirBacklighting = 1.0 + saturate(-dirNoL);
 
-	float3 sss = dirBacklighting * dirLightColor * saturate(-dirLightAngle);
+	float3 sss = dirBacklighting * dirLightColor * saturate(-dirLightAngle) * Color::VanillaDiffuseMult();
 
 	if (complex)
-		lightsSpecularColor += GrassLighting::GetLightSpecularInput(DirLightDirection, viewDirection, normal, dirLightColor, roughness, F0);
+		lightsSpecularColor += GrassLighting::GetLightSpecularInput(DirLightDirection, viewDirection, normal, dirLightColor, roughness, F0) * Color::VanillaSpecularMult();
 #			endif
 
 #			if defined(LIGHT_LIMIT_FIX)
@@ -692,10 +692,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 				sss += lightBacklighting * lightColor * saturate(-lightAngle);
 
-				lightsDiffuseColor += lightDiffuseColor;
+				lightsDiffuseColor += lightDiffuseColor * Color::VanillaDiffuseMult();
 
 				if (complex)
-					lightsSpecularColor += GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, roughness, F0) * intensityMultiplier;
+					lightsSpecularColor += GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, roughness, F0) * Color::VanillaSpecularMult();
 #				endif
 			}
 		}
