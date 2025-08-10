@@ -455,12 +455,19 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 		workingNormalPath = normalPath;
 	} else {
 		logger::error("[Advanced Skin] SetupExtraTexture : No specular or normal texture found in texture set from material: {}", hashKey);
+		auto& workingExtraPtr = skinExtraTextures.try_emplace(hashKey).first->second;
+		workingExtraPtr.rfaosTexture = stateData.defaultTextureBlack;
+		workingExtraPtr.wetnessTexture = stateData.defaultTextureBlack;
+		workingExtraPtr.extraTexturePath = "";
+		workingExtraPtr.wetnessTexturePath = "";
+		workingExtraPtr.hasExtraTexture = false;
+		workingExtraPtr.hasWetnessTexture = false;
 		return;
 	}
 
 	const char* foundPath = nullptr;
-	const char* extraTexturePath = nullptr;
-	const char* wetnessTexturePath = nullptr;
+	std::string extraTexturePath = "";
+	std::string wetnessTexturePath = "";
 	if (!workingSpecularPath && !workingNormalPath) {
 		return;
 	}
@@ -478,8 +485,8 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 			auto newPath2 = std::string(workingSpecularPath);
 			newPath.replace(pos, 6, extraTextureName);
 			newPath2.replace(pos, 6, wetnessTextureName);
-			extraTexturePath = newPath.c_str();
-			wetnessTexturePath = newPath2.c_str();
+			extraTexturePath = newPath;
+			wetnessTexturePath = newPath2;
 			foundPath = workingSpecularPath;
 		}
 	} else {
@@ -490,8 +497,8 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 				auto newPath2 = std::string(workingNormalPath);
 				newPath.replace(pos, 6, extraTextureName);
 				newPath2.replace(pos, 6, wetnessTextureName);
-				extraTexturePath = newPath.c_str();
-				wetnessTexturePath = newPath2.c_str();
+				extraTexturePath = newPath;
+				wetnessTexturePath = newPath2;
 				foundPath = workingNormalPath;
 			}
 		} else if (workingNormalPath && findIgnoreCase(workingNormalPath, "_msn.dds") != std::string_view::npos) {
@@ -501,8 +508,8 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 				auto newPath2 = std::string(workingNormalPath);
 				newPath.replace(pos, 8, extraTextureName);
 				newPath2.replace(pos, 8, wetnessTextureName);
-				extraTexturePath = newPath.c_str();
-				wetnessTexturePath = newPath2.c_str();
+				extraTexturePath = newPath;
+				wetnessTexturePath = newPath2;
 				foundPath = workingNormalPath;
 			}
 		} else {
@@ -512,25 +519,35 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 				auto newPath2 = std::string(workingNormalPath);
 				newPath.replace(pos, 4, extraTextureName);
 				newPath2.replace(pos, 4, wetnessTextureName);
-				extraTexturePath = newPath.c_str();
-				wetnessTexturePath = newPath2.c_str();
+				extraTexturePath = newPath;
+				wetnessTexturePath = newPath2;
 				foundPath = workingNormalPath;
 			}
 		}
 	}
 
 	logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture path: {} for {}", extraTexturePath, foundPath);
+	logger::debug("[Advanced Skin] SetupExtraTexture : Wetness texture path: {} for {}", wetnessTexturePath, foundPath);
 
 	auto& workingExtraPtr = skinExtraTextures.try_emplace(hashKey).first->second;
 	workingExtraPtr.rfaosTexture = stateData.defaultTextureWhite;
 	workingExtraPtr.wetnessTexture = stateData.defaultTextureWhite;
+	workingExtraPtr.extraTexturePath = extraTexturePath;
+	workingExtraPtr.wetnessTexturePath = wetnessTexturePath;
 
-	inTextureSet->SetTexturePath(RE::BSTextureSet::Texture::kEnvironment, extraTexturePath);
-	inTextureSet->SetTexturePath(RE::BSTextureSet::Texture::kMultilayer, wetnessTexturePath);
+	inTextureSet->SetTexturePath(RE::BSTextureSet::Texture::kEnvironment, workingExtraPtr.extraTexturePath.c_str());
+	inTextureSet->SetTexturePath(RE::BSTextureSet::Texture::kMultilayer, workingExtraPtr.wetnessTexturePath.c_str());
 	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kEnvironment, workingExtraPtr.rfaosTexture);
 	inTextureSet->SetTexture(RE::BSTextureSet::Texture::kMultilayer, workingExtraPtr.wetnessTexture);
 
-	logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture set with hash key: {}", hashKey);
+	workingExtraPtr.hasExtraTexture = workingExtraPtr.rfaosTexture != nullptr && !workingExtraPtr.extraTexturePath.empty() && workingExtraPtr.rfaosTexture->rendererTexture != graphicsState->GetRuntimeData().defaultTextureBlack;
+	workingExtraPtr.hasWetnessTexture = workingExtraPtr.wetnessTexture != nullptr && !workingExtraPtr.wetnessTexturePath.empty() && workingExtraPtr.wetnessTexture->rendererTexture != graphicsState->GetRuntimeData().defaultTextureBlack;
+
+	if (workingExtraPtr.hasExtraTexture || workingExtraPtr.hasWetnessTexture) {
+		logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture set with hash key: {}", hashKey);
+	} else {
+		logger::debug("[Advanced Skin] SetupExtraTexture : Failed to set extra texture for material: {}", hashKey);
+	}
 }
 
 void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material)
@@ -558,12 +575,9 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 	auto graphicsState = globals::game::graphicsState;
 	auto workingExtraPtr = skinExtraTextures[hashKey];
 
-	const bool hasExtraTexture = workingExtraPtr.rfaosTexture != nullptr && workingExtraPtr.wetnessTexture != nullptr;
-	const bool isExtraTextureLoaded = workingExtraPtr.rfaosTexture != graphicsState->GetRuntimeData().defaultTextureBlack || workingExtraPtr.wetnessTexture != graphicsState->GetRuntimeData().defaultTextureBlack;
-	if (hasExtraTexture && isExtraTextureLoaded) {
+	if (workingExtraPtr.hasExtraTexture || workingExtraPtr.hasWetnessTexture) {
 		skinExtendedRendererState.SetExtraSkinPSTexture(workingExtraPtr.rfaosTexture->rendererTexture, workingExtraPtr.wetnessTexture->rendererTexture);
 	} else {
-		logger::debug("[Advanced Skin] BSLightingShader_SetupMaterial : Using default textures for material: {}", hashKey);
 		skinExtendedRendererState.SetExtraSkinPSTexture(graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture, graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture);
 	}
 }
