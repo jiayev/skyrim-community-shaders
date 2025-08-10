@@ -10,6 +10,7 @@
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
+#include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "Features/Skin.h"
 #include "Features/ScreenSpacePointLightShadows.h"
@@ -59,5 +60,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::skin.GetCommonBufferData(),
 		globals::features::screenSpacePointLightShadows.GetCommonBufferData(),
 		globals::features::xeGTAO.GetCommonBufferData(),
-		globals::features::vanillaFresnel.settings);
+		globals::features::vanillaFresnel.settings,
+		globals::features::physicalSky.cbData);
 }

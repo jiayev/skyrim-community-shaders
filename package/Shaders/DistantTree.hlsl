@@ -118,6 +118,8 @@ struct PS_OUTPUT
 #ifdef PSHADER
 SamplerState SampDiffuse : register(s0);
 
+SamplerState SampShadowMaskSampler : register(s14);
+
 Texture2D<float4> TexDiffuse : register(t0);
 
 #	if !defined(VR)
@@ -173,6 +175,10 @@ const static float DepthOffsets[16] = {
 
 #	if defined(IBL)
 #		include "IBL/IBL.hlsli"
+#	endif
+
+#	if defined(PHYSICAL_SKY)
+#		include "PhysicalSky/Common.hlsli"
 #	endif
 
 #	define LinearSampler SampDiffuse
@@ -233,6 +239,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 diffuseColor = Color::Light(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * 0.5 * llDirLightMult;
 
+#			if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+#			endif
+
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = normalize(cross(ddx, ddy));
@@ -263,6 +274,11 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 diffuseColor = Color::Light(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * 0.5 * llDirLightMult;
+
+#			if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+#			endif
 
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
