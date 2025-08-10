@@ -331,8 +331,6 @@ float Skin::GetWaterHeight(const RE::TESObjectREFR* a_ref, const RE::NiPoint3& a
 float4 Skin::GetWetness(RE::BSGeometry* geometry)
 {
 	float4 wetness = float4(0.0f, 0.0f, 0.0f, 0.0f);
-	if (true)
-		return wetness;
 	if (auto userData = geometry->GetUserData())
 		if (auto actor = userData->As<RE::Character>())
 		{
@@ -615,7 +613,7 @@ void Skin::SetShaderResouces(ID3D11DeviceContext* a_context)
 
 void Skin::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
-	// auto& skin = globals::features::skin;
-	// skin.BSLightingShader_SetupGeometry(Pass);
+	auto& skin = globals::features::skin;
+	skin.BSLightingShader_SetupGeometry(Pass);
 	return func(This, Pass, RenderFlags);
 }
