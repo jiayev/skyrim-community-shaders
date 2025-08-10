@@ -219,6 +219,53 @@ namespace SharedData
 		float3 pad;
 	};
 
+	struct PhysSkyData
+	{
+		// DYNAMIC
+		float2 texDim;
+		float2 rcpTexDim;  //
+		float2 frameDim;
+		float2 rcpFrameDim;  //
+
+		float zCameraPlanet;
+		float3 sunDir;  //
+		float3 sunlightColor;
+		float trMix;  //
+		float3 masserDir;
+		float _pad1;  //
+		float3 masserColor;
+		float _pad2;  //
+		float3 secundaDir;
+		float _pad3;  //
+		float3 secundaColor;
+
+		// GENERAL
+		uint enabled;  //
+		int tonemapper;
+		float vanillaMix;
+
+		// WORLD
+		float zBottom;
+		float rPlanet;  //
+		float rAtmosphere;
+		float3 groundAlbedo;  //
+
+		// ATMOSPHERE
+		float rayleighFalloff;
+		float3 rayleighScatter;  //
+
+		float aerosolFalloff;
+		float aerosolPhaseG;
+		float2 _pad4;  //
+		float3 aerosolScatter;
+		float _pad5;  //
+		float3 aerosolAbsorption;
+
+		float ozoneAltitude;  //
+		float ozoneThickness;
+		float3 ozoneAbsorption;  //
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -235,6 +282,7 @@ namespace SharedData
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
+		PhysSkyData physSkyData;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

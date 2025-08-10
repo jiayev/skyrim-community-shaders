@@ -426,6 +426,10 @@ cbuffer AlphaTestRefCB : register(b11)
 #		include "IBL/IBL.hlsli"
 #	endif
 
+#	if defined(PHYSICAL_SKY)
+#		include "PhysicalSky/Common.hlsli"
+#	endif
+
 #	define LinearSampler SampBaseSampler
 
 #	include "Common/ShadowSampling.hlsli"
@@ -550,6 +554,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 dirLightColor = Color::Light(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
 	float3 dirLightColorMultiplier = 1;
+
+#			if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		dirLightColorMultiplier *= PhysSky::SampleTr(normalize(DirLightDirection.xyz), SampShadowMaskSampler);
+#			endif
 
 	float dirLightAngle = dot(normal, SharedData::DirLightDirection.xyz);
 
