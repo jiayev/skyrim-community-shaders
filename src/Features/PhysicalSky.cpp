@@ -421,11 +421,12 @@ void PhysicalSky::Reset()
 	auto& linearLighting = globals::features::linearLighting;
 	if (settings.overrideDirLight) {
 		linearLighting.isDirLightLinear = true;
-		const float pbrCompensationMult = linearLighting.settings.enableLinearLighting ? 1.0f : 3.14159265359f;  // Colors should match PBR values
-		constexpr auto LightConvFn = [](float3 color) {
+		const float pbrCompensationMult = linearLighting.settings.enableLinearLighting ? 1.0f : 3.14159265359f;  // Colors should match PBR values when not using linear lighting
+		auto LightConvFn = [pbrCompensationMult](float3 color) {
+			color /= pbrCompensationMult;
 			return RE::NiColor(color.x, color.y, color.z);
 		};
-		skySync.lightColors = { LightConvFn(cbData.sunlightColor / pbrCompensationMult), LightConvFn(cbData.masserColor / pbrCompensationMult), LightConvFn(cbData.secundaColor / pbrCompensationMult) };
+		skySync.lightColors = { LightConvFn(cbData.sunlightColor), LightConvFn(cbData.masserColor), LightConvFn(cbData.secundaColor) };
 	} else {
 		linearLighting.isDirLightLinear = false;
 		skySync.lightColors = std::nullopt;
