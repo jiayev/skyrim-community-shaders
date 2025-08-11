@@ -354,21 +354,27 @@ bool PhysicalSky::ShadersOK()
 void PhysicalSky::Reset()
 {
 	auto& skySync = globals::features::skySync;
-	const auto cell = RE::PlayerCharacter::GetSingleton()->GetParentCell();
 
-	bool allGood = settings.enabled && ShadersOK() && skySync.loaded && skySync.settings.Enabled && !cell->IsInteriorCell();
+	bool allGood = settings.enabled && ShadersOK() && skySync.loaded && skySync.settings.Enabled;
 
 	// check worldspace
 	bool worldspace_enabled = false;
+	bool in_interior = false;
 	WorldspaceInfo worldspaceInfo = {};
-	if (globals::game::tes)
+	if (globals::game::tes) {
 		if (auto worldspace = globals::game::tes->GetRuntimeData2().worldSpace; worldspace) {
 			std::string worldspaceName = worldspace->GetFormEditorID();
 			worldspace_enabled = settings.worldspaceWhitelist.contains(worldspaceName);
 			if (worldspace_enabled)
 				worldspaceInfo = settings.worldspaceWhitelist.at(worldspaceName);
 		}
-	allGood &= worldspace_enabled;
+		if (auto player = RE::PlayerCharacter::GetSingleton(); player) {
+			if (auto cell = player->GetParentCell(); cell) {
+				in_interior = cell->IsInteriorCell();
+			}
+		}
+	}
+	allGood &= worldspace_enabled && !in_interior;
 
 	if (!allGood) {
 		cbData.enabled = allGood;
