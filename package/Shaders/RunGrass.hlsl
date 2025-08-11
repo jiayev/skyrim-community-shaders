@@ -605,7 +605,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirNoL = dot(SharedData::DirLightDirection.xyz, viewDirection);
 	float dirViewWrap = -dirNoL * 0.5 + 0.5;
 	float wrappedDirLight = saturate(dirLightAngle + wrapAmount * dirViewWrap) / (1.0 + wrapAmount * dirViewWrap);
-	lightsDiffuseColor += dirLightColor * saturate(wrappedDirLight) * dirDetailShadow * Color::VanillaDiffuseMult();
+	lightsDiffuseColor += dirLightColor * saturate(wrappedDirLight) * dirDetailShadow * Color::GrassDiffuseMult();
 
 	float3 vertexColor = input.VertexColor.xyz;
 
@@ -623,10 +623,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float dirBacklighting = 1.0 + saturate(-dirNoL);
 
-	float3 sss = dirBacklighting * dirLightColor * saturate(-dirLightAngle) * Color::VanillaDiffuseMult();
+	float3 sss = dirBacklighting * dirLightColor * saturate(-dirLightAngle) * Color::GrassDiffuseMult();
 
 	if (complex)
-		lightsSpecularColor += GrassLighting::GetLightSpecularInput(DirLightDirection, viewDirection, normal, dirLightColor, roughness, F0) * Color::VanillaSpecularMult();
+		lightsSpecularColor += GrassLighting::GetLightSpecularInput(DirLightDirection, viewDirection, normal, dirLightColor, roughness, F0) * Color::GrassSpecularMult();
 #			endif
 
 #			if defined(LIGHT_LIMIT_FIX)
@@ -692,10 +692,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 				sss += lightBacklighting * lightColor * saturate(-lightAngle);
 
-				lightsDiffuseColor += lightDiffuseColor * Color::VanillaDiffuseMult();
+				lightsDiffuseColor += lightDiffuseColor * Color::GrassDiffuseMult();
 
 				if (complex)
-					lightsSpecularColor += GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, roughness, F0) * Color::VanillaSpecularMult();
+					lightsSpecularColor += GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, roughness, F0) * Color::GrassSpecularMult();
 #				endif
 			}
 		}
@@ -710,8 +710,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	diffuseColor.xyz += transmissionColor;
 	specularColor.xyz += specularColorPBR;
-	specularColor.xyz = Color::LinearToGamma(specularColor.xyz);
-	diffuseColor.xyz = Color::LinearToGamma(diffuseColor.xyz);
+	specularColor.xyz = Color::IrradianceToGamma(specularColor.xyz);
+	diffuseColor.xyz = Color::IrradianceToGamma(diffuseColor.xyz);
 #			else
 
 	normal = normalize(float3(normal.xy, max(0, normal.z)));
