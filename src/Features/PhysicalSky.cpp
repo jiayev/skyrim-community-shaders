@@ -376,6 +376,8 @@ void PhysicalSky::Reset()
 	allGood &= worldspace_enabled && !in_interior;
 
 	if (!allGood) {
+		if (skySync.loaded && skySync.settings.Enabled)
+			skySync.lightColors = std::nullopt;
 		cbData.enabled = allGood;
 		return;
 	}
