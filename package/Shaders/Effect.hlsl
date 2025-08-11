@@ -812,7 +812,7 @@ PS_OUTPUT main(PS_INPUT input)
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
 	}
 #			endif
-	float3 blendedColor = lerp(lightColor, fogColor, input.FogParam.www);
+	float3 blendedColor = lerp(lightColor, fogColor, Color::FogAlpha(input.FogParam.w).xxx);
 #		endif
 #	else
 	float3 blendedColor = lightColor.xyz;
