@@ -3673,7 +3673,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #		endif
 	if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z)
-		color.xyz = lerp(color.xyz, fogColor, input.FogParam.w);
+		color.xyz = lerp(color.xyz, fogColor, Color::FogAlpha(input.FogParam.w));
 #	endif
 
 #	if defined(TESTCUBEMAP) && defined(ENVMAP) && defined(DYNAMIC_CUBEMAPS)
