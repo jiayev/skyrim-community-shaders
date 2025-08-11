@@ -89,7 +89,15 @@ struct PhysicalSky final : public Feature
 		float nightExposure = 1e2f;
 
 		std::map<std::string, WorldspaceInfo> worldspaceWhitelist = {
-			{ "Tamriel", { -14500.f } }
+			{ "Tamriel", { -14500.f } },
+			{ "WindhelmWorld", { -14500.f } },
+			{ "RiftenWorld", { -14500.f } },
+			{ "MarkarthWorld", { -14500.f } },
+			{ "WhiterunWorld", { -14500.f } },
+			{ "SolitudeWorld", { -14500.f } },
+			{ "WhiterunDragonsreachWorld", { -14500.f } },
+			{ "DLC01FalmerValley", { 3000.f } },
+			{ "DLC2SolstheimWorld", { 256.f } }
 		};
 		float3 groundAlbedo = { .2f, .2f, .2f };
 

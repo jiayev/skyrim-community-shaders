@@ -233,7 +233,6 @@ float3 SampleSky(float3 viewDir, SamplerState samp)
 
 	float2 skyLutUv = SkyViewLutUv(viewDir);
 	float3 skyColor = TexSvLut.SampleLevel(samp, skyLutUv, 0).rgb;
-	skyColor = skyColor / (skyColor + 1);
 
 	if (data.tonemapper == 1)
         skyColor = Color::LinearToGamma(skyColor);
