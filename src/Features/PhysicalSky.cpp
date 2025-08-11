@@ -354,8 +354,9 @@ bool PhysicalSky::ShadersOK()
 void PhysicalSky::Reset()
 {
 	auto& skySync = globals::features::skySync;
+	const auto cell = RE::PlayerCharacter::GetSingleton()->GetParentCell();
 
-	bool allGood = settings.enabled && ShadersOK() && skySync.loaded && skySync.settings.Enabled;
+	bool allGood = settings.enabled && ShadersOK() && skySync.loaded && skySync.settings.Enabled && !cell->IsInteriorCell();
 
 	// check worldspace
 	bool worldspace_enabled = false;
