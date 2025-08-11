@@ -176,9 +176,8 @@ PS_OUTPUT main(PS_INPUT input)
 	float fogFactor = min(FogParam.w, pow(saturate(fogDistanceFactor * FogParam.y - FogParam.x), FogParam.z));
 	float3 fogColor = Color::Fog(lerp(FogNearColor.xyz, FogFarColor.xyz, fogFactor));
 #		if defined(IBL)
-	if (SharedData::iblSettings.EnableDiffuseIBL) {
-		float3 iblColor = Color::Saturation(ImageBasedLighting::GetDiffuseIBL(float3(0, 0, 0)), SharedData::iblSettings.IBLSaturation);
-		fogColor = lerp(fogColor, fogColor * iblColor, SharedData::iblSettings.FogAmount * SharedData::iblSettings.DiffuseIBLScale);
+	if (SharedData::iblSettings.EnableDiffuseIBL && !SharedData::InInterior) {
+		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
 	}
 #		endif
 	if (depth < 0.999999) {
