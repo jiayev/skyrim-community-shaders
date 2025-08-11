@@ -802,9 +802,9 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if !defined(MOTIONVECTORS_NORMALS)
 #		if defined(ADDBLEND)
-	float3 blendedColor = lightColor * (1 - input.FogParam.www);
+	float3 blendedColor = lightColor * (1 - Color::FogAlpha(input.FogParam.w).xxx);
 #		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
-	float3 blendedColor = lerp(lightColor, 1.0.xxx, saturate(1.5 * input.FogParam.w).xxx);
+	float3 blendedColor = lerp(lightColor, 1.0.xxx, saturate(1.5 * Color::FogAlpha(input.FogParam.w)).xxx);
 #		else
 	float3 fogColor = Color::Fog(input.FogParam.xyz);
 #			if defined(IBL)
