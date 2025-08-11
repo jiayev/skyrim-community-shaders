@@ -9,7 +9,7 @@
 #include "TruePBR.h"
 #include "Util.h"
 
-#include "Features/InteriorSunShadows.h"
+#include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/TerrainHelper.h"
 #include "Features/VR.h"
@@ -900,8 +900,8 @@ namespace Hooks
 			if (globals::features::lightLimitFix.loaded && !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique))
 				return;
 
-			if (globals::features::interiorSunShadows.loaded)
-				globals::features::interiorSunShadows.UpdateRasterStateCullMode(a_pass, a_technique);
+			if (globals::features::interiorSun.loaded)
+				globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
 
 			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 		}
