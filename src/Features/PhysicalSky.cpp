@@ -1,5 +1,6 @@
 #include "PhysicalSky.h"
 #include "SkySync.h"
+#include "LinearLighting.h"
 
 #include "State.h"
 #include "Util.h"
@@ -353,20 +354,28 @@ bool PhysicalSky::ShadersOK()
 void PhysicalSky::Reset()
 {
 	auto& skySync = globals::features::skySync;
+	skySync.lightColors = std::nullopt;
 
 	bool allGood = settings.enabled && ShadersOK() && skySync.loaded && skySync.settings.Enabled;
 
 	// check worldspace
 	bool worldspace_enabled = false;
+	bool in_interior = false;
 	WorldspaceInfo worldspaceInfo = {};
-	if (globals::game::tes)
+	if (globals::game::tes) {
 		if (auto worldspace = globals::game::tes->GetRuntimeData2().worldSpace; worldspace) {
 			std::string worldspaceName = worldspace->GetFormEditorID();
 			worldspace_enabled = settings.worldspaceWhitelist.contains(worldspaceName);
 			if (worldspace_enabled)
 				worldspaceInfo = settings.worldspaceWhitelist.at(worldspaceName);
 		}
-	allGood &= worldspace_enabled;
+		if (auto player = RE::PlayerCharacter::GetSingleton(); player) {
+			if (auto cell = player->GetParentCell(); cell) {
+				in_interior = cell->IsInteriorCell();
+			}
+		}
+	}
+	allGood &= worldspace_enabled && !in_interior;
 
 	if (!allGood) {
 		cbData.enabled = allGood;
@@ -417,6 +426,7 @@ void PhysicalSky::Reset()
 		.ozoneAbsorption = settings.ozoneAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
 	};
 
+	auto& linearLighting = globals::features::linearLighting;
 	if (settings.overrideDirLight) {
 		linearLighting.isDirLightLinear = true;
 		const float pbrCompensationMult = linearLighting.settings.enableLinearLighting ? 1.0f : 3.14159265359f;  // Colors should match PBR values when not using linear lighting
@@ -427,7 +437,7 @@ void PhysicalSky::Reset()
 		skySync.lightColors = { LightConvFn(cbData.sunlightColor), LightConvFn(cbData.masserColor), LightConvFn(cbData.secundaColor) };
 	} else {
 		linearLighting.isDirLightLinear = false;
-		skySync.lightColors = std::nullopt;
+	}
 
 	RE::NiPoint3 posCam = { 0, 0, 0 };
 	if (auto cam = RE::PlayerCamera::GetSingleton(); cam && cam->cameraRoot) {
