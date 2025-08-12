@@ -554,7 +554,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #			if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
-		dirLightColorMultiplier *= PhysSky::SampleTr(normalize(DirLightDirection.xyz), SampShadowMaskSampler);
+		dirLightColorMultiplier *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
 #			endif
 
 	float dirLightAngle = dot(normal, SharedData::DirLightDirection.xyz);
