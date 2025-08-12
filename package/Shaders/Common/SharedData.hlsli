@@ -216,11 +216,13 @@ namespace SharedData
 		float grassDiffuseMult;
 		float grassSpecularMult;
 		float lightMult;
+		float effectLightingMult;
 		float membraneEffectMult;
 		float bloodEffectMult;
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
+		float3 pad;
 	};
 
 	struct PostProcessingSettings
