@@ -354,6 +354,7 @@ bool PhysicalSky::ShadersOK()
 void PhysicalSky::Reset()
 {
 	auto& skySync = globals::features::skySync;
+	skySync.lightColors = std::nullopt;
 
 	bool allGood = settings.enabled && ShadersOK() && skySync.loaded && skySync.settings.Enabled;
 
@@ -438,7 +439,6 @@ void PhysicalSky::Reset()
 		skySync.lightColors = { LightConvFn(cbData.sunlightColor), LightConvFn(cbData.masserColor), LightConvFn(cbData.secundaColor) };
 	} else {
 		linearLighting.isDirLightLinear = false;
-		skySync.lightColors = std::nullopt;
 	}
 
 	RE::NiPoint3 posCam = { 0, 0, 0 };
