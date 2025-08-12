@@ -353,6 +353,7 @@ bool PhysicalSky::ShadersOK()
 void PhysicalSky::Reset()
 {
 	auto& skySync = globals::features::skySync;
+	skySync.lightColors = std::nullopt;
 
 	bool allGood = settings.enabled && ShadersOK() && skySync.loaded && skySync.settings.Enabled;
 
@@ -376,8 +377,6 @@ void PhysicalSky::Reset()
 	allGood &= worldspace_enabled && !in_interior;
 
 	if (!allGood) {
-		if (skySync.loaded && skySync.settings.Enabled)
-			skySync.lightColors = std::nullopt;
 		cbData.enabled = allGood;
 		return;
 	}
@@ -432,8 +431,7 @@ void PhysicalSky::Reset()
 			return RE::NiColor(color.x, color.y, color.z);
 		};
 		skySync.lightColors = { LightConvFn(cbData.sunlightColor), LightConvFn(cbData.masserColor), LightConvFn(cbData.secundaColor) };
-	} else
-		skySync.lightColors = std::nullopt;
+	}
 
 	RE::NiPoint3 posCam = { 0, 0, 0 };
 	if (auto cam = RE::PlayerCamera::GetSingleton(); cam && cam->cameraRoot) {
