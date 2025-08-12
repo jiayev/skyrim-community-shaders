@@ -427,7 +427,7 @@ void PhysicalSky::Reset()
 
 	if (settings.overrideDirLight) {
 		constexpr auto LightConvFn = [](float3 color) {
-			color /= 3.14159265359f;  // Colors should match PBR values
+			color /= RE::NI_PI;  // Colors should match PBR values
 			return RE::NiColor(color.x, color.y, color.z);
 		};
 		skySync.lightColors = { LightConvFn(cbData.sunlightColor), LightConvFn(cbData.masserColor), LightConvFn(cbData.secundaColor) };
