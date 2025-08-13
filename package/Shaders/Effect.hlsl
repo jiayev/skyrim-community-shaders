@@ -538,11 +538,11 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	float4 lightDistanceSquared = (PLightPositionX[eyeIndex] - msPosition.xxxx) * (PLightPositionX[eyeIndex] - msPosition.xxxx) + (PLightPositionY[eyeIndex] - msPosition.yyyy) * (PLightPositionY[eyeIndex] - msPosition.yyyy) + (PLightPositionZ[eyeIndex] - msPosition.zzzz) * (PLightPositionZ[eyeIndex] - msPosition.zzzz);
 	float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 
-	float3 color = DLightColor.xyz;
+	float3 color = DLightColor.xyz * Color::EffectLightingMult();
 
 	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::EffectShadows)) {
 		float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-		float3 dirLightColor = Color::Light(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult * 0.5;
+		float3 dirLightColor = Color::Light(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult * 0.5 * Color::EffectLightingMult();
 
 #		if defined(PHYSICAL_SKY)
 		if (SharedData::physSkyData.enabled)
@@ -609,9 +609,9 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld))
 #		endif
 	{
-		color.x += dot(Color::Light(PLightColorR) * lightFadeMul, 1.0.xxxx);
-        color.y += dot(Color::Light(PLightColorG) * lightFadeMul, 1.0.xxxx);
-        color.z += dot(Color::Light(PLightColorB) * lightFadeMul, 1.0.xxxx);
+		color.x += dot(Color::Light(PLightColorR) * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx);
+        color.y += dot(Color::Light(PLightColorG) * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx);
+        color.z += dot(Color::Light(PLightColorB) * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx);
 	}
 
 	return color;
@@ -705,7 +705,7 @@ PS_OUTPUT main(PS_INPUT input)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #			endif
 
-				float3 lightColor = Color::Light(light.color.xyz) * intensityMultiplier * 0.5 * light.fade;
+				float3 lightColor = Color::Light(light.color.xyz) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingMult();
 				propertyColor += lightColor;
 			}
 		}
@@ -802,11 +802,11 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if !defined(MOTIONVECTORS_NORMALS)
 #		if defined(ADDBLEND)
-	float3 blendedColor = lightColor * (1 - input.FogParam.www);
+	float3 blendedColor = lightColor * (1 - Color::FogAlpha(input.FogParam.w).xxx);
 #		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
-	float3 blendedColor = lerp(lightColor, 1.0.xxx, saturate(1.5 * input.FogParam.w).xxx);
+	float3 blendedColor = lerp(lightColor, 1.0.xxx, saturate(1.5 * Color::FogAlpha(input.FogParam.w)).xxx);
 #		else
-	float3 blendedColor = lerp(lightColor, input.FogParam.xyz, input.FogParam.www);
+	float3 blendedColor = lerp(lightColor, Color::Fog(input.FogParam.xyz), Color::FogAlpha(input.FogParam.w).xxx);
 #		endif
 #	else
 	float3 blendedColor = lightColor.xyz;

@@ -203,6 +203,7 @@ namespace SharedData
 		float colorGamma;
 		float ambientGamma;
 		float fogGamma;
+		float fogAlphaGamma;
 		float effectGamma;
 		float effectAlphaGamma;
 		float skyGamma;
@@ -213,12 +214,13 @@ namespace SharedData
 		float grassDiffuseMult;
 		float grassSpecularMult;
 		float lightMult;
+		float effectLightingMult;
 		float membraneEffectMult;
 		float bloodEffectMult;
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		float pad;
+		float3 pad;
 	};
 
 	struct PhysSkyData
