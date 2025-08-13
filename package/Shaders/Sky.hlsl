@@ -189,7 +189,7 @@ cbuffer AlphaTestRefCB : register(b11)
 #	endif
 
 #	if defined(PHYSICAL_SKY)
-#		define SKY_SAMPLERS
+#		define PS_SKY_SAMPLERS
 #		include "PhysicalSky/Common.hlsli"
 #	endif
 
@@ -265,46 +265,45 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.MotionVectors = float4(screenMotionVector, 0, psout.Color.w);
 	psout.Normal = float4(0.5, 0.5, 0, psout.Color.w);
 
-#	if defined(DEFERRED) && defined(CLOUDS) && defined(CLOUD_SHADOWS) && defined(PHYSICAL_SKY)
-	float3 viewPosition = normalize(input.WorldPosition.xyz);
-	float brightness = saturate(dot(SharedData::DirLightDirection.xyz, viewPosition) * 0.5 + 0.5);
+// #	if defined(DEFERRED) && defined(CLOUDS) && defined(CLOUD_SHADOWS) && defined(PHYSICAL_SKY)
+// 	float3 viewPosition = normalize(input.WorldPosition.xyz);
+// 	float brightness = saturate(dot(SharedData::DirLightDirection.xyz, viewPosition) * 0.5 + 0.5);
 
-	if (brightness > 0.0 && baseColor.w > 0.0)
-	{
-		float noise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
+// 	if (brightness > 0.0 && baseColor.w > 0.0)
+// 	{
+// 		float noise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 
-		float rayStep = 1.0 / 32.0;
-		float rayPos = rayStep * noise; 
-		float4 rayShadow = 0.0;
+// 		float rayStep = 1.0 / 32.0;
+// 		float rayPos = rayStep * noise; 
+// 		float4 rayShadow = 0.0;
 
-		float3 startPosition = viewPosition;
-		float3 endPosition = SharedData::DirLightDirection.xyz;
+// 		float3 startPosition = viewPosition;
+// 		float3 endPosition = SharedData::DirLightDirection.xyz;
 
-		float3 PoissonDisc[] = {
-			float3(0.460921f, 0.615192f, 0.887539f),
-			float3(0.757347f, 0.911008f, 0.189581f),
-			float3(0.548753f, 0.145482f, 0.0548723f),
-			float3(0.90051f, 0.157048f, 0.623493f)
-		};
+// 		float3 PoissonDisc[] = {
+// 			float3(0.460921f, 0.615192f, 0.887539f),
+// 			float3(0.757347f, 0.911008f, 0.189581f),
+// 			float3(0.548753f, 0.145482f, 0.0548723f),
+// 			float3(0.90051f, 0.157048f, 0.623493f)
+// 		};
 
-		for(int i = 0; i < 4; i++)
-		{		
-			float3 raySample = normalize(lerp(startPosition, endPosition, rayPos));
+// 		for(int i = 0; i < 4; i++)
+// 		{		
+// 			float3 raySample = normalize(lerp(startPosition, endPosition, rayPos));
 
-			raySample += (PoissonDisc[i] * 2.0 - 1.0) * 0.01;
+// 			raySample += (PoissonDisc[i] * 2.0 - 1.0) * 0.01;
 
-			if (raySample.z < 0.0)
-				rayShadow[i % 4] += -raySample.z; // World shadow
-			else
-				rayShadow[i % 4] = max(rayShadow[i % 4], CloudShadows::CloudShadowsTexture.SampleLevel(SampBaseSampler, raySample, 0).x);
+// 			if (raySample.z < 0.0)
+// 				rayShadow[i % 4] += -raySample.z; // World shadow
+// 			else
+// 				rayShadow[i % 4] = max(rayShadow[i % 4], CloudShadows::CloudShadowsTexture.SampleLevel(SampBaseSampler, raySample, 0).x);
 
-			rayPos += rayStep;
-		}
+// 			rayPos += rayStep;
+// 		}
 
-		psout.Color.xyz += baseColor.a * baseColor.xyz * brightness * (1.0 - saturate(dot(rayShadow, 0.25))) * SharedData::DirLightColor.xyz;
-	}
-
-#	endif
+// 		psout.Color.xyz += baseColor.a * baseColor.xyz * brightness * (1.0 - saturate(dot(rayShadow, 0.25))) * SharedData::DirLightColor.xyz;
+// 	}
+// #	endif
 
 #	if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
 	psout.CloudShadows = float4(1, 1, 1, psout.Color.w);

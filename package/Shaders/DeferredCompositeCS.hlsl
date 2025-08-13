@@ -67,6 +67,14 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 }
 #endif
 
+#if defined(PHYSICAL_SKY)
+#	define PS_DEFERRED_RSRCS
+#	define PS_DEFERRED_SAMPLERS
+#	include "PhysicalSky/Common.hlsli"
+// Texture3D<float4> TexApLut : register(t15);
+// SamplerState SampSv : register(s2); 
+#endif
+
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
 	float2 uv = float2(dispatchID.xy + 0.5) * SharedData::BufferDim.zw;
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
@@ -177,6 +185,13 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 #endif
 
 	color = Color::LinearToGamma(color);
+
+#if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled && depth < 1 - 1e-6) {
+		const float4 apSample = PhysSky::SampleAp(normalize(positionWS.xyz), length(positionWS.xyz), PhysSky::SampSv);
+		color.xyz = color.xyz * apSample.w + apSample.xyz;
+	}
+#endif
 
 #if defined(DEBUG)
 
