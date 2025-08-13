@@ -5,7 +5,7 @@
 #	define LUTGEN 0
 #endif
 
-#define PREPASS_SAMPLERS
+#define PS_PREPASS_SAMPLERS
 #define PS_PREPASS_RSRCS
 #define OMIT_PS_NAMESPACE
 #include "PhysicalSky/Common.hlsli"

@@ -3138,6 +3138,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	color.xyz = Color::IrradianceToGamma(Color::IrradianceToLinear(color.xyz) + specularColor);
 	if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z)
 		color.xyz = lerp(color.xyz, Color::Fog(input.FogParam.xyz), Color::FogAlpha(input.FogParam.w));
+
+#		if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), length(input.WorldPosition.xyz), SampColorSampler);
+		color.xyz = color.xyz * apSample.w + apSample.xyz;
+	}
+#		endif
 #	endif
 
 #	if defined(TESTCUBEMAP) && defined(ENVMAP) && defined(DYNAMIC_CUBEMAPS)
