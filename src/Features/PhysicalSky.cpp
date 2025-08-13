@@ -67,14 +67,22 @@ void PhysicalSky::SettingsGeneral()
 		ImGui::TableNextColumn();
 		ImGui::Text("Worldspace: ");
 		ImGui::TableNextColumn();
-		if (globals::game::tes)
-			if (auto worldspace = globals::game::tes->GetRuntimeData2().worldSpace; worldspace) {
+		if (globals::game::tes) {
+			bool inInterior = false;
+			if (auto player = RE::PlayerCharacter::GetSingleton(); player)
+				if (auto cell = player->GetParentCell(); cell)
+					inInterior = cell->IsInteriorCell();
+
+			if (inInterior)
+				ImGui::Text("Interior (Disabled)");
+			else if (auto worldspace = globals::game::tes->GetRuntimeData2().worldSpace; worldspace) {
 				std::string worldspaceName = worldspace->GetFormEditorID();
 				if (settings.worldspaceWhitelist.contains(worldspaceName))
 					ImGui::Text("%s (Enabled)", worldspaceName.c_str());
 				else
 					ImGui::Text("%s (Disabled)", worldspaceName.c_str());
 			}
+		}
 
 		ImGui::EndTable();
 	}
@@ -358,23 +366,23 @@ void PhysicalSky::Reset()
 	bool allGood = settings.enabled && ShadersOK() && skySync.loaded && skySync.settings.Enabled;
 
 	// check worldspace
-	bool worldspace_enabled = false;
-	bool in_interior = false;
+	bool worldspaceEnabled = false;
+	bool inInterior = false;
 	WorldspaceInfo worldspaceInfo = {};
 	if (globals::game::tes) {
 		if (auto worldspace = globals::game::tes->GetRuntimeData2().worldSpace; worldspace) {
 			std::string worldspaceName = worldspace->GetFormEditorID();
-			worldspace_enabled = settings.worldspaceWhitelist.contains(worldspaceName);
-			if (worldspace_enabled)
+			worldspaceEnabled = settings.worldspaceWhitelist.contains(worldspaceName);
+			if (worldspaceEnabled)
 				worldspaceInfo = settings.worldspaceWhitelist.at(worldspaceName);
 		}
 		if (auto player = RE::PlayerCharacter::GetSingleton(); player) {
 			if (auto cell = player->GetParentCell(); cell) {
-				in_interior = cell->IsInteriorCell();
+				inInterior = cell->IsInteriorCell();
 			}
 		}
 	}
-	allGood &= worldspace_enabled && !in_interior;
+	allGood &= worldspaceEnabled && !inInterior;
 
 	if (!allGood) {
 		cbData.enabled = allGood;
