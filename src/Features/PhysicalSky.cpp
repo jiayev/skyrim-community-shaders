@@ -89,12 +89,6 @@ void PhysicalSky::SettingsGeneral()
 
 	ImGui::Checkbox("Enabled", &settings.enabled);
 
-	ImGui::SliderFloat("Transmittance Mix", &settings.trMix, 0.f, 1.f, "%.2f");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(
-			"Apply additional atmospheric tranmisttance on the directional light.\n"
-			"Introduces natural yellowening at sunset with white sunlight.");
-
 	ImGui::SeparatorText("Post Processing");
 	{
 		ImGui::InputFloat("Day Exposure", &settings.dayExposure);
@@ -130,6 +124,11 @@ void PhysicalSky::SettingsCelestials()
 	ImGui::Checkbox("Override Directional Light", &settings.overrideDirLight);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Overrides the color of directional light. Linear tonemapper and 1.0 transmittance mix are recommended.");
+	ImGui::SliderFloat("Transmittance Mix", &settings.trMix, 0.f, 1.f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(
+			"Apply additional atmospheric tranmisttance on the directional light.\n"
+			"Introduces natural yellowening at sunset with white sunlight.");
 
 	ImGui::SeparatorText("Sun");
 	{
@@ -162,6 +161,13 @@ void PhysicalSky::SettingsCelestials()
 void PhysicalSky::SettingsAtmosphere()
 {
 	InfoBox("The composition and physical properties of the atmosphere.");
+
+	ImGui::SliderFloat("AP Luminance Mix", &settings.apLumMix, 0.f, 1.f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Add light scattered by air (Aerial Perspective) to the scene.");
+	ImGui::SliderFloat("AP Transmittance Mix", &settings.apTrMix, 0.f, 1.f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Remove light absorbed by air (Aerial Perspective) from the scene.");
 
 	ImGui::SeparatorText("Air Molecules (Rayleigh)");
 	{
@@ -412,7 +418,9 @@ void PhysicalSky::Reset()
 		.sunlightColor = settings.sunlightColor * exposure,
 		.trMix = settings.trMix,
 		.masserDir = { masserDir.x, masserDir.y, masserDir.z },
+		.apLumMix = settings.apLumMix,
 		.masserColor = settings.masserColor * exposure,
+		.apTrMix = settings.apTrMix,
 		.secundaDir = { secundaDir.x, secundaDir.y, secundaDir.z },
 		.secundaColor = settings.secundaColor * exposure,
 		.enabled = allGood,
@@ -454,7 +462,7 @@ void PhysicalSky::EarlyPrepass()
 	if (cbData.enabled) {
 		GenerateLuts();
 
-		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get() };
+		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get() };
 		context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
 	}
 }
@@ -463,7 +471,7 @@ void PhysicalSky::ReflectionsPrepass()
 {
 	auto context = globals::d3d::context;
 	if (cbData.enabled) {
-		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get() };
+		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get() };
 		context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
 	}
 }
