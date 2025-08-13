@@ -78,6 +78,8 @@ struct PhysicalSky final : public Feature
 		int tonemapper = 2;
 		float vanillaMix = 0;
 		float trMix = 0;
+		float apLumMix = 1;
+		float apTrMix = 1;
 
 		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 1e3f;
 		float3 masserColor = float3{ 1.0f, 0.6f, 0.6f } * 5e-3f;
@@ -125,9 +127,9 @@ struct PhysicalSky final : public Feature
 		float3 sunlightColor;
 		float trMix;  //
 		float3 masserDir;
-		float _pad1;  //
+		float apLumMix;  //
 		float3 masserColor;
-		float _pad2;  //
+		float apTrMix;  //
 		float3 secundaDir;
 		float _pad3;  //
 		float3 secundaColor;
