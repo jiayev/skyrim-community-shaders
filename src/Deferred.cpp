@@ -8,6 +8,7 @@
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/IBL.h"
+#include "Features/PhysicalSky.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceReflections.h"
 #include "Features/Skylighting.h"
@@ -495,6 +496,8 @@ void Deferred::DeferredPasses()
 
 	auto& terrainBlending = globals::features::terrainBlending;
 
+	auto& physSky = globals::features::physicalSky;
+
 	auto& ssr = globals::features::screenSpaceReflections;
 	if (ssr.loaded)
 		ssr.DrawSSR();
@@ -503,7 +506,7 @@ void Deferred::DeferredPasses()
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
-		ID3D11ShaderResourceView* srvs[18]{
+		ID3D11ShaderResourceView* srvs[]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
@@ -522,10 +525,14 @@ void Deferred::DeferredPasses()
 			(ssr.loaded && ssr.settings.Enabled) ? ssr.texOutput->srv.get() : nullptr,
 			xeGTAO.loaded ? xeGTAO.outputAO->srv.get() : nullptr,
 			xeGTAO.loaded ? xeGTAO.generatedNormals->srv.get() : nullptr,
+			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,
 		};
 
-		if (dynamicCubemaps.loaded)
-			context->CSSetSamplers(0, 1, &linearSampler);
+		ID3D11SamplerState* samplers[]{
+			dynamicCubemaps.loaded ? linearSampler : nullptr,
+			physSky.loaded ? physSky.sampSv.get() : nullptr,
+		};
+		context->CSSetSamplers(0, ARRAYSIZE(samplers), samplers);
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -540,7 +547,7 @@ void Deferred::DeferredPasses()
 
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[18]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[19]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
@@ -548,6 +555,9 @@ void Deferred::DeferredPasses()
 
 		ID3D11Buffer* buffers[1] = { nullptr };
 		context->CSSetConstantBuffers(12, 1, buffers);
+
+		ID3D11SamplerState* samplers[2]{ nullptr, nullptr };
+		context->CSSetSamplers(0, ARRAYSIZE(samplers), samplers);
 
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
@@ -767,6 +777,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 
 		if (globals::features::screenSpaceReflections.loaded)
 			defines.push_back({ "SSR", nullptr });
+
+		if (globals::features::physicalSky.loaded)
+			defines.push_back({ "PHYSICAL_SKY", nullptr });
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });

@@ -7,15 +7,19 @@ namespace PhysSky
 {
 #endif
 
-#ifdef PREPASS_SAMPLERS
+#ifdef PS_PREPASS_SAMPLERS
 SamplerState SampTr : register(s0);  // in lighting, use shadow
 SamplerState SampSv : register(s1);  // in lighting, use color
 SamplerState SampNoise : register(s2);
 #endif
 
-#ifdef SKY_SAMPLERS
+#ifdef PS_SKY_SAMPLERS
 SamplerState SampTr : register(s3);
 SamplerState SampSv : register(s4); 
+#endif
+
+#ifdef PS_DEFERRED_SAMPLERS
+SamplerState SampSv : register(s2); 
 #endif
 
 #ifdef PS_PREPASS_RSRCS
@@ -23,9 +27,12 @@ Texture2D<float4> TexTrLut : register(t0);
 Texture2D<float4> TexMsLut : register(t1);
 Texture2D<float4> TexSvLut : register(t2);
 Texture3D<float4> TexApLut : register(t3);
+#elif defined(PS_DEFERRED_RSRCS)
+Texture3D<float4> TexApLut : register(t18);
 #else
 Texture2D<float4> TexTrLut : register(t61);
 Texture2D<float4> TexSvLut : register(t62);
+Texture3D<float4> TexApLut : register(t63);
 #endif
 
 static const float RCP_PI = 1 / Math::PI;         // PI
@@ -227,11 +234,12 @@ namespace Phase
 	}
 }
 
+#ifndef PS_DEFERRED_RSRCS
 float3 SampleSky(float3 viewDir, SamplerState samp)
 {
 	SharedData::PhysSkyData data = SharedData::physSkyData;
 
-	float2 skyLutUv = SkyViewLutUv(viewDir);
+	const float2 skyLutUv = SkyViewLutUv(viewDir);
 	float3 skyColor = TexSvLut.SampleLevel(samp, skyLutUv, 0).rgb;
 
 	if (data.tonemapper == 1)
@@ -249,11 +257,34 @@ float3 SampleTr(float3 sunDir, SamplerState samp)
 	if (data.trMix < 1e-8)
 		return 1;
 
-	float2 lutUv = TrLutUv(data.zCameraPlanet, sunDir.z);
+	const float2 lutUv = TrLutUv(data.zCameraPlanet, sunDir.z);
 	float3 tr = TexTrLut.SampleLevel(samp, lutUv, 0).rgb;
 	tr = lerp(1, tr, data.trMix);
 
 	return tr;
+}
+#endif
+
+float4 SampleAp(float3 viewDir, float dist, SamplerState samp)
+{
+	SharedData::PhysSkyData data = SharedData::physSkyData;
+
+	const float2 skyLutUv = SkyViewLutUv(viewDir);
+
+	uint3 apDims;
+	TexApLut.GetDimensions(apDims.x, apDims.y, apDims.z);
+	const float depth_slice = lerp(.5 / apDims.z, 1 - .5 / apDims.z, saturate(dist / AP_MAX_DIST));
+	float4 apColor = TexApLut.SampleLevel(samp, float3(skyLutUv, depth_slice), 0);
+
+	if (data.tonemapper == 1)
+        apColor.rgb = Color::LinearToGamma(apColor.rgb);
+    else if (data.tonemapper == 2)
+        apColor.rgb = apColor.rgb / (1 + apColor.rgb);
+
+	apColor.rgb = lerp(0, apColor.rgb, data.apLumMix);
+	apColor.a = lerp(1, apColor.a, data.apTrMix);
+
+	return apColor;
 }
 
 #ifndef OMIT_PS_NAMESPACE

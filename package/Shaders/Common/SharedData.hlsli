@@ -289,9 +289,9 @@ namespace SharedData
 		float3 sunlightColor;
 		float trMix;  //
 		float3 masserDir;
-		float _pad1;  //
+		float apLumMix;  //
 		float3 masserColor;
-		float _pad2;  //
+		float apTrMix;  //
 		float3 secundaDir;
 		float _pad3;  //
 		float3 secundaColor;
