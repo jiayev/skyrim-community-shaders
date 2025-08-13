@@ -101,11 +101,12 @@ namespace Color
 		if (originalLuminance <= 1e-5) {
 			return float3(0.0, 0.0, 0.0);
 		}
-		float3 linearColorRaw = pow(color / originalLuminance, SharedData::linearLightingSettings.lightGamma);
+		float3 linearColorRaw = pow(abs(color / originalLuminance), SharedData::linearLightingSettings.lightGamma);
 		float scale = originalLuminance;
 		return linearColorRaw * scale;
 	}
 
+	// Linear Lighting Functions
 	float3 LLGammaToLinear(float3 color)
 	{
 		return ENABLE_LL ? GammaToLinear(color) : color;
@@ -145,6 +146,11 @@ namespace Color
 		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.fogGamma) : color;
 	}
 
+	float FogAlpha(float alpha)
+	{
+		return ENABLE_LL ? pow(abs(alpha), SharedData::linearLightingSettings.fogAlphaGamma) : alpha;
+	}
+
 	float3 Effect(float3 color)
 	{
 		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.effectGamma) : color;
@@ -166,6 +172,11 @@ namespace Color
 #	endif
 		}
 		return color;
+	}
+
+	float EffectLightingMult()
+	{
+		return ENABLE_LL ? SharedData::linearLightingSettings.effectLightingMult : 1.0f;
 	}
 
 	float EffectAlpha(float alpha)
