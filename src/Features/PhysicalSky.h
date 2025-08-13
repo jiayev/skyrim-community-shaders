@@ -186,7 +186,6 @@ struct PhysicalSky final : public Feature
 		static void Install()
 		{
 			stl::write_vfunc<0x6, BSSkyShader_SetupMaterial>(RE::VTABLE_BSSkyShader[0]);
-			logger::info("[Cloud Shadows] Installed hooks");
 		}
 	};
 };
