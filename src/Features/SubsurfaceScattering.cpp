@@ -30,7 +30,7 @@ void SubsurfaceScattering::DrawSettings()
 			ImGui::SliderFloat("Strength", &settings.CharacterLightingStrength, 0, 5, "%.2f");
 		}
 
-		ImGui::RadioButton("Separatable SSS", &settings.SSMode, 0);
+		ImGui::RadioButton("Separable SSS", &settings.SSMode, 0);
 		ImGui::SameLine();
 		ImGui::RadioButton("Burley", &settings.SSMode, 1);
 
@@ -213,11 +213,6 @@ void SubsurfaceScattering::DrawSSS()
 		const float distanceToProjectionWindow = cameraData.projMat.m[0][0];
 
 		blurCBData.SSSS_FOVY = atan(1.0f / distanceToProjectionWindow) * 2.0f * (180.0f / 3.14159265359f);
-		const float SSSScaleZ = distanceToProjectionWindow;
-		const float SSSScaleX = SSSScaleZ * 0.5f;
-
-		blurCBData.SSSScaleX = SSSScaleX;
-		blurCBData.SSSScaleZ = SSSScaleZ;
 
 		blurCBData.BaseProfile = { settings.BaseProfile.BlurRadius, settings.BaseProfile.Thickness, 0, 0 };
 		blurCBData.HumanProfile = { settings.HumanProfile.BlurRadius, settings.HumanProfile.Thickness, 0, 0 };
