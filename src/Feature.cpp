@@ -38,6 +38,7 @@
 #include "Features/WetnessEffects.h"
 #include "Features/XeGTAO.h"
 #include "Menu.h"
+#include "SettingsOverrideManager.h"
 #include "Utils/Format.h"
 
 #include "State.h"
@@ -279,6 +280,29 @@ bool Feature::ToggleAtBootSetting()
 	state->SetFeatureDisabled(featureName, !disabled);
 
 	return state->IsFeatureDisabled(featureName);  // Return the new state
+}
+
+bool Feature::ReapplyOverrideSettings()
+{
+	auto overrideManager = SettingsOverrideManager::GetSingleton();
+	if (!overrideManager || !overrideManager->HasFeatureOverrides(GetShortName())) {
+		return false;
+	}
+
+	// Get current settings as JSON
+	json featureJson;
+	SaveSettings(featureJson);
+
+	// Apply overrides to the current settings
+	size_t appliedCount = overrideManager->ReapplyFeatureOverrides(GetShortName(), featureJson);
+
+	if (appliedCount > 0) {
+		// Load the modified settings back into the feature
+		LoadSettings(featureJson);
+		return true;
+	}
+
+	return false;
 }
 
 void Feature::DrawUnloadedUI()
