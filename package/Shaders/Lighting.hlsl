@@ -3482,6 +3482,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	specularColorPBR += indirectSpecularLobeWeight * directionalAmbientColor;
 #			endif
 #		else
+	// In deferred mode, metallic materials need ambient specular lighting
+	specularColorPBR += indirectSpecularLobeWeight * directionalAmbientColor;
 	indirectDiffuseLobeWeight *= vertexColor;
 #		endif
 
@@ -3934,10 +3936,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), 1.0 - roughness, psout.Diffuse.w);
 #		endif
 
-#		if defined(TERRAIN_BLENDING)
-	psout.NormalGlossiness.w = 1;
-#		endif
-
 #		if defined(SNOW)
 	psout.Parameters.w = psout.Diffuse.w;
 #		endif
@@ -3964,6 +3962,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #			endif
 #		endif
+
+#		if defined(TERRAIN_BLENDING)
+	float stochasticBlend = (screenNoise * screenNoise) < blendFactorTerrain ? 1.0 : 0.0;
+	stochasticBlend = lerp(stochasticBlend, blendFactorTerrain, 0.1);
+	psout.NormalGlossiness.w = stochasticBlend;
+	psout.Albedo.w = stochasticBlend;
+#		endif
+
 #	endif
 
 	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {
