@@ -229,7 +229,7 @@ Texture2D<uint> XeGTAOGeneratedNormal : register(t17);
 
 #	if defined(SSR)
 		float4 ssrIrradiance = SSRTexture[dispatchID.xy];
-		finalIrradiance = lerp(finalIrradiance, ssrIrradiance.rgb, ssrIrradiance.a);
+		finalIrradiance = lerp(finalIrradiance, Color::IrradianceToLinear(ssrIrradiance.rgb), ssrIrradiance.a);
 #	endif
 
 		color += reflectance * finalIrradiance;
