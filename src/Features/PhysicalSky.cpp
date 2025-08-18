@@ -5,6 +5,33 @@
 #include "State.h"
 #include "Util.h"
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	PhysicalSky::Settings,
+	enabled,
+	overrideDirLight,
+	tonemapper,
+	vanillaMix,
+	trMix,
+	apLumMix,
+	apTrMix,
+	sunlightColor,
+	masserColor,
+	secundaColor,
+	adaptationStart,
+	adaptationEnd,
+	dayExposure,
+	nightExposure,
+	groundAlbedo,
+	rayleighFalloff,
+	rayleighScatter,
+	aerosolFalloff,
+	aerosolPhaseG,
+	aerosolScatter,
+	aerosolAbsorption,
+	ozoneAltitude,
+	ozoneThickness,
+	ozoneAbsorption)
+
 namespace
 {
 	void InfoBox(const char* str)
@@ -27,9 +54,20 @@ void PhysicalSky::DataLoaded()
 	}
 }
 
-void PhysicalSky::RestoreDefaultSettings() { settings = {}; }
-void PhysicalSky::LoadSettings(json&) {}
-void PhysicalSky::SaveSettings(json&) {}
+void PhysicalSky::RestoreDefaultSettings()
+{
+	settings = {};
+}
+
+void PhysicalSky::LoadSettings(json& o_json)
+{
+	settings = o_json;
+}
+
+void PhysicalSky::SaveSettings(json& o_json)
+{
+	o_json = settings;
+}
 
 void PhysicalSky::DrawSettings()
 {
