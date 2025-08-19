@@ -688,6 +688,8 @@ void PostProcessing::Prepass()
 		pendingSettings = {};
 	}
 
+	UpdateToD();
+
 	// Update gameISData
 	const auto ImageSpace = RE::ImageSpaceManager::GetSingleton();
 	if (globals::game::isVR) {
