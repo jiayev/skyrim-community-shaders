@@ -52,7 +52,9 @@ struct PhysicalSky final : public Feature
 	void Reset() override;
 	void EarlyPrepass() override;
 	void ReflectionsPrepass() override;
+	void Prepass() override;
 	void GenerateLuts();
+	void AccumShadow();
 	inline void PostPostLoad() override { Hooks::Install(); }
 
 	////////////////////////////////////////////////// Feature Specific Data
@@ -166,6 +168,7 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texMsLut = nullptr;  // multiscattering
 	eastl::unique_ptr<Texture2D> texSvLut = nullptr;  // sky view
 	eastl::unique_ptr<Texture3D> texApLut = nullptr;  // aerial perspective
+	eastl::unique_ptr<Texture2D> texApShadow = nullptr;
 
 	winrt::com_ptr<ID3D11SamplerState> sampTr = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> sampSv = nullptr;
@@ -175,6 +178,7 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csMsLutGen = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csSvLutGen = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csApLutGen = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csShadowAccum = nullptr;
 
 	void ModifySky();
 	struct Hooks
