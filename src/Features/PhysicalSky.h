@@ -1,5 +1,7 @@
 #pragma once
 
+// TODO: cloud shadow overshadowing fix
+
 struct PhysicalSky final : public Feature
 {
 	////////////////////////////////////////////////// Boilerplate
@@ -83,6 +85,8 @@ struct PhysicalSky final : public Feature
 		float apLumMix = 1;
 		float apTrMix = 1;
 
+		float2 cloudShadowRemapRange = float2{ 0, 0.1f };
+
 		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 1e3f;
 		float3 masserColor = float3{ 1.0f, 0.6f, 0.6f } * 5e-3f;
 		float3 secundaColor = float3{ 0.8f, 1.0f, 1.0f } * 5e-3f;
@@ -148,15 +152,16 @@ struct PhysicalSky final : public Feature
 		float3 groundAlbedo;  //
 
 		// ATMOSPHERE
-		float rayleighFalloff;
-		float3 rayleighScatter;  //
+		float2 cloudShadowRemapRange;
 
 		float aerosolFalloff;
-		float aerosolPhaseG;
-		float2 _pad4;  //
+		float aerosolPhaseG;  //
 		float3 aerosolScatter;
 		float _pad5;  //
 		float3 aerosolAbsorption;
+
+		float rayleighFalloff;
+		float3 rayleighScatter;  //
 
 		float ozoneAltitude;  //
 		float ozoneThickness;
