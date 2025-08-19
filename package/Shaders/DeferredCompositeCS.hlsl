@@ -195,7 +195,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 
 #if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled && depth < 1 - 1e-6) {
-		const float4 apSample = PhysSky::SampleAp(normalize(positionWS.xyz), length(positionWS.xyz), PhysSky::SampSv);
+		const float4 apSample = PhysSky::SampleAp(normalize(positionWS.xyz), dispatchID.xy, length(positionWS.xyz), PhysSky::SampSv);
 		color.xyz = color.xyz * apSample.w + apSample.xyz;
 	}
 #endif
