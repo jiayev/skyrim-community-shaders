@@ -252,7 +252,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (SharedData::physSkyData.enabled)
 	{
 # 		if defined(DITHER) && !defined(TEX)
-		float3 skyColor = PhysSky::SampleSky(normalize(input.WorldPosition.xyz), PhysSky::SampSv);
+		float3 skyColor = PhysSky::SampleSky(normalize(input.WorldPosition.xyz), input.Position.xy, PhysSky::SampSv);
 		psout.Color.xyz = lerp(skyColor, psout.Color.xyz, SharedData::physSkyData.vanillaMix);
 #		else
 		// discard; // TODO: REMOVE
