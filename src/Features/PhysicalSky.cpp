@@ -1,5 +1,9 @@
 #include "PhysicalSky.h"
+
+#include "CloudShadows.h"
+#include "Deferred.h"
 #include "SkySync.h"
+#include "TerrainShadows.h"
 
 #include "State.h"
 #include "Util.h"
@@ -271,6 +275,7 @@ void PhysicalSky::SettingsDebug()
 		BUFFER_VIEWER_NODE_BULLET(texTrLut, 1.f);
 		BUFFER_VIEWER_NODE_BULLET(texMsLut, 1.f);
 		BUFFER_VIEWER_NODE_BULLET(texSvLut, 1.f);
+		BUFFER_VIEWER_NODE_BULLET(texApShadow, debugScale);
 	}
 }
 
@@ -364,6 +369,31 @@ void PhysicalSky::SetupResources()
 		texApLut->CreateSRV(srvDesc);
 		texApLut->CreateUAV(uavDesc);
 	}
+	{
+		D3D11_TEXTURE2D_DESC texDesc;
+		auto mainTex = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+		mainTex.texture->GetDesc(&texDesc);
+		texDesc.Format = DXGI_FORMAT_R8_UNORM;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		texDesc.MipLevels = 1;
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = texDesc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = {
+				.MostDetailedMip = 0,
+				.MipLevels = texDesc.MipLevels }
+		};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+			.Format = texDesc.Format,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+
+		texApShadow = eastl::make_unique<Texture2D>(texDesc);
+		texApShadow->CreateSRV(srvDesc);
+		texApShadow->CreateUAV(uavDesc);
+	}
 
 	CompileShaders();
 }
@@ -387,7 +417,8 @@ void PhysicalSky::CompileShaders()
 		{ &csTrLutGen, "LutGen.cs.hlsl", { { "LUTGEN", "0" } } },
 		{ &csMsLutGen, "LutGen.cs.hlsl", { { "LUTGEN", "1" } } },
 		{ &csSvLutGen, "LutGen.cs.hlsl", { { "LUTGEN", "2" } } },
-		{ &csApLutGen, "LutGen.cs.hlsl", { { "LUTGEN", "3" } } }
+		{ &csApLutGen, "LutGen.cs.hlsl", { { "LUTGEN", "3" } } },
+		{ &csShadowAccum, "ShadowAccum.cs.hlsl", {} }
 	};
 
 	for (auto& info : shaderInfos) {
@@ -399,7 +430,7 @@ void PhysicalSky::CompileShaders()
 
 bool PhysicalSky::ShadersOK()
 {
-	return csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen;
+	return csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum;
 }
 
 void PhysicalSky::Reset()
@@ -496,21 +527,26 @@ void PhysicalSky::Reset()
 
 void PhysicalSky::EarlyPrepass()
 {
-	auto context = globals::d3d::context;
 	if (cbData.enabled) {
 		GenerateLuts();
-
-		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get() };
-		context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
 	}
 }
 
 void PhysicalSky::ReflectionsPrepass()
 {
-	auto context = globals::d3d::context;
 	if (cbData.enabled) {
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get() };
-		context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
+		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
+	}
+}
+
+void PhysicalSky::Prepass()
+{
+	if (cbData.enabled) {
+		AccumShadow();
+
+		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get(), texApShadow->srv.get() };
+		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
 	}
 }
 
@@ -565,6 +601,53 @@ void PhysicalSky::GenerateLuts()
 		uav = nullptr;
 
 		context->CSSetSamplers(0, (int)samplers.size(), samplers.data());
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		context->CSSetShaderResources(0, (int)srvs.size(), srvs.data());
+		context->CSSetShader(nullptr, nullptr, 0);
+	}
+	state->EndPerfEvent();
+}
+
+void PhysicalSky::AccumShadow()
+{
+	auto state = globals::state;
+	auto context = globals::d3d::context;
+
+	auto deferred = globals::deferred;
+	auto& terrainShadows = globals::features::terrainShadows;
+	auto& cloudShadows = globals::features::cloudShadows;
+
+	float2 size = Util::ConvertToDynamic(state->screenSize);
+	uint resolution[2] = { (uint)size.x, (uint)size.y };
+
+	constexpr auto debugStr = "Physical Sky: Shadow Accumulation";
+	state->BeginPerfEvent(debugStr);
+	{
+		TracyD3D11Zone(state->tracyCtx, debugStr);
+
+		auto sampler = sampTr.get();
+		auto srvs = std::array{
+			globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV,
+			deferred->shadowView,
+			deferred->perShadow->srv.get(),
+			terrainShadows.IsHeightMapReady() ? terrainShadows.texShadowHeight->srv.get() : nullptr,
+			cloudShadows.loaded ? cloudShadows.texCubemapCloudOcc->srv.get() : nullptr,
+		};
+		auto uav = texApShadow->uav.get();
+
+		/* ---- DISPATCH ---- */
+		context->CSSetSamplers(0, 1, &sampler);
+		context->CSSetShaderResources(0, (int)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		context->CSSetShader(csShadowAccum.get(), nullptr, 0);
+		context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
+
+		/* ---- RESTORE ---- */
+		sampler = nullptr;
+		srvs.fill(nullptr);
+		uav = nullptr;
+
+		context->CSSetSamplers(0, 1, &sampler);
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShaderResources(0, (int)srvs.size(), srvs.data());
 		context->CSSetShader(nullptr, nullptr, 0);

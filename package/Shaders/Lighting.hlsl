@@ -3132,7 +3132,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
-		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), length(input.WorldPosition.xyz), SampColorSampler);
+		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), input.Position.xy, length(input.WorldPosition.xyz), SampColorSampler);
 		color.xyz = color.xyz * apSample.w + apSample.xyz;
 	}
 #		endif

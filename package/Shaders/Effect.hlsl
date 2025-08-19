@@ -881,7 +881,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	if !defined(DEFERRED)
 #		if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
-		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), length(input.WorldPosition.xyz), SampBaseSampler);
+		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), input.Position.xy, length(input.WorldPosition.xyz), SampBaseSampler);
 		psout.Diffuse.xyz = psout.Diffuse.xyz * apSample.w + apSample.xyz;
 	}
 #		endif
