@@ -634,8 +634,7 @@ void PostProcessing::UpdateToD()
 	if (!sky)
 		return;
 
-	if (sky->mode.get() == RE::Sky::Mode::kFull)
-		imageSpaceManager->inInterior = false;
+	imageSpaceManager->inInterior = sky->mode.get() != RE::Sky::Mode::kFull;
 
 	float currentTime = sky->currentGameHour;
 
