@@ -211,6 +211,8 @@ void PhysicalSky::SettingsAtmosphere()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Remove light absorbed by air (Aerial Perspective) from the scene.");
 
+	ImGui::SliderFloat2("Cloud Shadow Remap", &settings.cloudShadowRemapRange.x, 0.f, 1.f, "%.2f");
+
 	ImGui::SeparatorText("Air Molecules (Rayleigh)");
 	{
 		ImGui::PushID("Rayleigh");
@@ -499,12 +501,13 @@ void PhysicalSky::Reset()
 		.rPlanet = 6.36e3f / Util::Units::GAME_UNIT_TO_KM,
 		.rAtmosphere = 6.42e3f / Util::Units::GAME_UNIT_TO_KM,
 		.groundAlbedo = settings.groundAlbedo,
-		.rayleighFalloff = settings.rayleighFalloff * Util::Units::GAME_UNIT_TO_KM,
-		.rayleighScatter = settings.rayleighScatter * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.cloudShadowRemapRange = settings.cloudShadowRemapRange,
 		.aerosolFalloff = settings.aerosolFalloff * Util::Units::GAME_UNIT_TO_KM,
 		.aerosolPhaseG = settings.aerosolPhaseG,
 		.aerosolScatter = settings.aerosolScatter * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
 		.aerosolAbsorption = settings.aerosolAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.rayleighFalloff = settings.rayleighFalloff * Util::Units::GAME_UNIT_TO_KM,
+		.rayleighScatter = settings.rayleighScatter * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
 		.ozoneAltitude = settings.ozoneAltitude / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneThickness = settings.ozoneThickness / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneAbsorption = settings.ozoneAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
