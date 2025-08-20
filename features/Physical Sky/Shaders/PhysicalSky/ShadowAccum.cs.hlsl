@@ -38,8 +38,6 @@ SamplerState SampTr : register(s0);
 
 const static uint nStep = 40;
 const static float rcpNStep = rcp(nStep);
-const static float distWeightPower = 0.1;
-const static float distSamplePower = rcp(distWeightPower);
 
 float SampleShadow(float3 posWorldRel, uint eyeIndex)
 {
@@ -93,20 +91,19 @@ void main(uint2 tid	: SV_DispatchThreadID)
 	posWorld.xyz /= posWorld.w;
 	
 	float dist = length(posWorld.xyz);
-	posWorld.xyz *= min(AP_MAX_DIST, dist) / dist;
+	float distClamped = min(AP_MAX_DIST, dist);
+	float3 dir = posWorld.xyz / dist;
 
-    float tPrevPower = 0;
+	const float extGr = dot(data.rayleighScatter + data.aerosolAbsorption + data.aerosolScatter, 1 / 3.f);
+	const float rcpExtGr = rcp(extGr);
+	float estContrib = 1 - exp(-extGr * distClamped);
+
     float shadow = 0;
     for(uint i = 1; i <= nStep; ++i){
-        float t = pow(rcpNStep * i, distSamplePower);
-        float tSample = pow(rcpNStep * lerp(i-1, i, rnd.x), 2);
-		float tPower = pow(t, distWeightPower);
-        float weight = tPower - tPrevPower;
+		float tSample = -rcpExtGr * log(1 - lerp(i - 1, i, rnd.x) * rcpNStep * estContrib);
 
-        float shadowSample = SampleShadow(posWorld.xyz * tSample, eyeIndex);
-        shadow += (1 - shadowSample) * weight;
-
-        tPrevPower = tPower;
+        float shadowSample = SampleShadow(dir * tSample, eyeIndex);
+        shadow += (1 - shadowSample) * rcpNStep;
     }
 
 	RWTexOutput[pxCoords] = shadow;
