@@ -1,6 +1,6 @@
 #pragma once
 
-// TODO: cloud shadow overshadowing fix
+// TODO: cloud shadow overshadowing fix and layer height specification
 
 struct PhysicalSky final : public Feature
 {
@@ -85,7 +85,7 @@ struct PhysicalSky final : public Feature
 		float apLumMix = 1;
 		float apTrMix = 1;
 
-		float2 cloudShadowRemapRange = float2{ 0, 0.1f };
+		float2 cloudShadowRemapRange = float2{ 0, 0.2f };
 
 		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 1e3f;
 		float3 masserColor = float3{ 1.0f, 0.6f, 0.6f } * 5e-3f;
