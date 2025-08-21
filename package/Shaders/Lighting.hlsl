@@ -3136,12 +3136,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if !defined(DEFERRED)
 	color.xyz = Color::IrradianceToGamma(Color::IrradianceToLinear(color.xyz) + specularColor);
+	float3 fogColor = Color::Fog(input.FogParam.xyz);
+#		if defined(IBL)
+	if (SharedData::iblSettings.EnableDiffuseIBL && !SharedData::InInterior) {
+		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
+	}
+#		endif
 	if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z)
-		color.xyz = lerp(color.xyz, Color::Fog(input.FogParam.xyz), Color::FogAlpha(input.FogParam.w));
+		color.xyz = lerp(color.xyz, fogColor, Color::FogAlpha(input.FogParam.w));
 
 #		if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
-		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), length(input.WorldPosition.xyz), SampColorSampler);
+		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), input.Position.xy, length(input.WorldPosition.xyz), SampColorSampler);
 		color.xyz = color.xyz * apSample.w + apSample.xyz;
 	}
 #		endif
@@ -3375,10 +3381,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), outGlossiness, psout.Diffuse.w);
 #		endif
 
-#		if defined(TERRAIN_BLENDING)
-	psout.NormalGlossiness.w = 1;
-#		endif
-
 #		if defined(SNOW)
 	psout.Parameters.w = psout.Diffuse.w;
 #		endif
@@ -3405,6 +3407,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		else
 	psout.Masks = float4(0, 0, 0, psout.Diffuse.w);
 #		endif
+
+#		if defined(TERRAIN_BLENDING)
+	float stochasticBlend = (screenNoise * screenNoise) < blendFactorTerrain ? 1.0 : 0.0;
+	stochasticBlend = lerp(stochasticBlend, blendFactorTerrain, 0.1);
+	psout.NormalGlossiness.w = stochasticBlend;
+	psout.Albedo.w = stochasticBlend;
+#		endif
+
 #	endif
 
 	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {

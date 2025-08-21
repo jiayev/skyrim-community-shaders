@@ -19,7 +19,7 @@
 #include "Features/GrassLighting.h"
 #include "Features/HairSpecular.h"
 #include "Features/IBL.h"
-#include "Features/InteriorSunShadows.h"
+#include "Features/InteriorSun.h"
 #include "Features/InverseSquareLighting.h"
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
@@ -66,7 +66,7 @@ namespace globals
 		LinearLighting linearLighting{};
 		LODBlending lodBlending{};
 		HairSpecular hairSpecular{};
-		InteriorSunShadows interiorSunShadows{};
+		InteriorSun interiorSun{};
 		InverseSquareLighting inverseSquareLighting{};
 		PhysicalSky physicalSky{};
 		ScreenSpaceGI screenSpaceGI{};

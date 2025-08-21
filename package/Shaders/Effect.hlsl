@@ -806,7 +806,13 @@ PS_OUTPUT main(PS_INPUT input)
 #		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
 	float3 blendedColor = lerp(lightColor, 1.0.xxx, saturate(1.5 * Color::FogAlpha(input.FogParam.w)).xxx);
 #		else
-	float3 blendedColor = lerp(lightColor, Color::Fog(input.FogParam.xyz), Color::FogAlpha(input.FogParam.w).xxx);
+	float3 fogColor = Color::Fog(input.FogParam.xyz);
+#			if defined(IBL)
+	if (SharedData::iblSettings.EnableDiffuseIBL && !SharedData::InInterior) {
+		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
+	}
+#			endif
+	float3 blendedColor = lerp(lightColor, fogColor, Color::FogAlpha(input.FogParam.w).xxx);
 #		endif
 #	else
 	float3 blendedColor = lightColor.xyz;
@@ -880,7 +886,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	if !defined(DEFERRED)
 #		if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
-		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), length(input.WorldPosition.xyz), SampBaseSampler);
+		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), input.Position.xy, length(input.WorldPosition.xyz), SampBaseSampler);
 		psout.Diffuse.xyz = psout.Diffuse.xyz * apSample.w + apSample.xyz;
 	}
 #		endif
