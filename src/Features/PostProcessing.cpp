@@ -438,6 +438,9 @@ void PostProcessing::UpdateToD()
 		}
 	}
 
+	if (globals::game::isVR)
+		return;  // for now
+
 	float currentTime = sky->currentGameHour;
 
 	float sunriseBegin = sky->GetSunriseBegin();

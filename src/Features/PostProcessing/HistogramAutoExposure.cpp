@@ -26,9 +26,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void HistogramAutoExposure::DrawSettings()
 {
-	ImGui::Checkbox("ToD Exposure Compensation", &settings.EnableToD);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Applying exposure adjustments based on the time of day.");
+	if (globals::game::isVR) {
+		settings.EnableToD = false;
+	} else {
+		ImGui::Checkbox("ToD Exposure Compensation", &settings.EnableToD);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Applying exposure adjustments based on the time of day.");
+	}
 	if (settings.EnableToD) {
 		if (ImGui::TreeNodeEx("ToD Exposure Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::SliderFloat("Dawn", &settings.ToDExposure[0], -5.f, 5.f, "%+.2f EV");

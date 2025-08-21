@@ -238,7 +238,10 @@ struct TonemapperInfo
 void ColorGrading::DrawSettings()
 {
     static int page = 0;
-    ImGui::Checkbox("Use ToD and Interior Settings", &settings.useToDInterior);
+	if (globals::game::isVR)
+		settings.useToDInterior = false;
+	else
+    	ImGui::Checkbox("Use ToD and Interior Settings", &settings.useToDInterior);
     ImGui::SameLine();
     ImGui::Checkbox("Skip LDR Color Grading", &settings.skipLDR);
     if (auto _tt = Util::HoverTooltipWrapper())
