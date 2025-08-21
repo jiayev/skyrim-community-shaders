@@ -227,6 +227,7 @@ namespace SharedData
 
 	struct PhysSkyData
 	{
+		
 		// DYNAMIC
 		float2 texDim;
 		float2 rcpTexDim;  //
@@ -257,15 +258,16 @@ namespace SharedData
 		float3 groundAlbedo;  //
 
 		// ATMOSPHERE
-		float rayleighFalloff;
-		float3 rayleighScatter;  //
+		float2 cloudShadowRemapRange;
 
 		float aerosolFalloff;
-		float aerosolPhaseG;
-		float2 _pad4;  //
+		float aerosolPhaseG; //
 		float3 aerosolScatter;
 		float _pad5;  //
 		float3 aerosolAbsorption;
+		
+		float rayleighFalloff;
+		float3 rayleighScatter;  //
 
 		float ozoneAltitude;  //
 		float ozoneThickness;
