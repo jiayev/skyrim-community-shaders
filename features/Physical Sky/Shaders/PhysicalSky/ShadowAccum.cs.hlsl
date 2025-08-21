@@ -36,7 +36,7 @@ RWTexture2D<unorm float> RWTexOutput : register(u0);
 
 SamplerState SampTr : register(s0); 
 
-const static uint nStep = 40;
+const static uint nStep = 30;
 const static float rcpNStep = rcp(nStep);
 
 float SampleShadow(float3 posWorldRel, uint eyeIndex)
@@ -46,7 +46,7 @@ float SampleShadow(float3 posWorldRel, uint eyeIndex)
 	float shadow = 1.0;
 
 	// cloud shadows
-	shadow *= Remap(dot(CloudShadows::GetCloudShadowMult(posWorldRel, SampTr), 1 / 3.f), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1) ;
+	shadow *= Remap(CloudShadows::GetCloudShadowMult(posWorldRel, SampTr), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1) ;
 	[branch] if (all(shadow < 1e-8)) return 0;
 
     // dir shadow map
@@ -100,7 +100,7 @@ void main(uint2 tid	: SV_DispatchThreadID)
 
     float shadow = 0;
     for(uint i = 1; i <= nStep; ++i){
-		float tSample = -rcpExtGr * log(1 - lerp(i - 1, i, rnd.x) * rcpNStep * estContrib);
+		float tSample = -rcpExtGr * log(1 - lerp(i - 1, i, rnd.x) * rcpNStep * estContrib); // map to truncated exponential distribution
 
         float shadowSample = SampleShadow(dir * tSample, eyeIndex);
         shadow += (1 - shadowSample) * rcpNStep;
