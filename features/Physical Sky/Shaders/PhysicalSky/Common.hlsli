@@ -29,14 +29,16 @@ Texture2D<float4> TexSvLut : register(t2);
 Texture3D<float4> TexApLut : register(t3);
 #elif defined(PS_DEFERRED_RSRCS)
 Texture3D<float4> TexApLut : register(t18);
+Texture2D<unorm float> TexApShadow : register(t19);
 #else
 Texture2D<float4> TexTrLut : register(t61);
 Texture2D<float4> TexSvLut : register(t62);
 Texture3D<float4> TexApLut : register(t63);
+Texture2D<unorm float> TexApShadow : register(t64);
 #endif
 
 static const float RCP_PI = 1 / Math::PI;         // PI
-static const float AP_MAX_DIST = 60 / 1.428e-5f;  // 60 km
+static const float AP_MAX_DIST = 40 / 1.428e-5f;  // 40 km
 static const uint3 CLOUD_DIM = uint3(512, 512, 64);
 static const float3 CLOUD_RANGE = float3(4.f, 4.f, .5f) / 1.428e-5f;
 static const float3 CLOUD_RANGE_M = float3(4.f, 4.f, .5f) * 1e3;
@@ -234,13 +236,18 @@ namespace Phase
 	}
 }
 
-#ifndef PS_DEFERRED_RSRCS
-float3 SampleSky(float3 viewDir, SamplerState samp)
+#ifndef PS_PREPASS_RSRCS
+
+#	ifndef PS_DEFERRED_RSRCS
+float3 SampleSky(float3 viewDir, uint2 pxCoord, SamplerState samp)
 {
 	SharedData::PhysSkyData data = SharedData::physSkyData;
 
 	const float2 skyLutUv = SkyViewLutUv(viewDir);
 	float3 skyColor = TexSvLut.SampleLevel(samp, skyLutUv, 0).rgb;
+
+	float shadow = TexApShadow[pxCoord];
+	skyColor *= 1 - shadow;
 
 	if (data.tonemapper == 1)
         skyColor = Color::LinearToGamma(skyColor);
@@ -263,9 +270,9 @@ float3 SampleTr(float3 sunDir, SamplerState samp)
 
 	return tr;
 }
-#endif
+#	endif
 
-float4 SampleAp(float3 viewDir, float dist, SamplerState samp)
+float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState samp)
 {
 	SharedData::PhysSkyData data = SharedData::physSkyData;
 
@@ -275,6 +282,9 @@ float4 SampleAp(float3 viewDir, float dist, SamplerState samp)
 	TexApLut.GetDimensions(apDims.x, apDims.y, apDims.z);
 	const float depth_slice = lerp(.5 / apDims.z, 1 - .5 / apDims.z, saturate(dist / AP_MAX_DIST));
 	float4 apColor = TexApLut.SampleLevel(samp, float3(skyLutUv, depth_slice), 0);
+
+	float shadow = TexApShadow[pxCoord];
+	apColor.rgb *= 1 - shadow;
 
 	if (data.tonemapper == 1)
         apColor.rgb = Color::LinearToGamma(apColor.rgb);
@@ -286,6 +296,7 @@ float4 SampleAp(float3 viewDir, float dist, SamplerState samp)
 
 	return apColor;
 }
+#endif
 
 #ifndef OMIT_PS_NAMESPACE
 }

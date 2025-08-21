@@ -526,6 +526,7 @@ void Deferred::DeferredPasses()
 			xeGTAO.loaded ? xeGTAO.outputAO->srv.get() : nullptr,
 			xeGTAO.loaded ? xeGTAO.generatedNormals->srv.get() : nullptr,
 			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,
+			physSky.loaded ? physSky.texApShadow->srv.get() : nullptr,
 		};
 
 		ID3D11SamplerState* samplers[]{
@@ -547,7 +548,7 @@ void Deferred::DeferredPasses()
 
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[19]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[20]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };

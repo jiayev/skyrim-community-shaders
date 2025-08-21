@@ -1,5 +1,7 @@
 #pragma once
 
+// TODO: cloud shadow overshadowing fix and layer height specification
+
 struct PhysicalSky final : public Feature
 {
 	////////////////////////////////////////////////// Boilerplate
@@ -52,7 +54,9 @@ struct PhysicalSky final : public Feature
 	void Reset() override;
 	void EarlyPrepass() override;
 	void ReflectionsPrepass() override;
+	void Prepass() override;
 	void GenerateLuts();
+	void AccumShadow();
 	inline void PostPostLoad() override { Hooks::Install(); }
 
 	////////////////////////////////////////////////// Feature Specific Data
@@ -80,6 +84,8 @@ struct PhysicalSky final : public Feature
 		float trMix = 0;
 		float apLumMix = 1;
 		float apTrMix = 1;
+
+		float2 cloudShadowRemapRange = float2{ 0, 0.2f };
 
 		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 1e3f;
 		float3 masserColor = float3{ 1.0f, 0.6f, 0.6f } * 5e-3f;
@@ -146,15 +152,16 @@ struct PhysicalSky final : public Feature
 		float3 groundAlbedo;  //
 
 		// ATMOSPHERE
-		float rayleighFalloff;
-		float3 rayleighScatter;  //
+		float2 cloudShadowRemapRange;
 
 		float aerosolFalloff;
-		float aerosolPhaseG;
-		float2 _pad4;  //
+		float aerosolPhaseG;  //
 		float3 aerosolScatter;
 		float _pad5;  //
 		float3 aerosolAbsorption;
+
+		float rayleighFalloff;
+		float3 rayleighScatter;  //
 
 		float ozoneAltitude;  //
 		float ozoneThickness;
@@ -166,6 +173,7 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texMsLut = nullptr;  // multiscattering
 	eastl::unique_ptr<Texture2D> texSvLut = nullptr;  // sky view
 	eastl::unique_ptr<Texture3D> texApLut = nullptr;  // aerial perspective
+	eastl::unique_ptr<Texture2D> texApShadow = nullptr;
 
 	winrt::com_ptr<ID3D11SamplerState> sampTr = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> sampSv = nullptr;
@@ -175,6 +183,7 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csMsLutGen = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csSvLutGen = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csApLutGen = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csShadowAccum = nullptr;
 
 	void ModifySky();
 	struct Hooks
