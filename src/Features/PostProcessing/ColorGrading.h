@@ -27,12 +27,15 @@ struct ColorGrading : public PostProcessFeature
         // float4 saturationHueInOutGamma = float4{ 1.f, 1.f, 1.f, 1.f };
         // float4 oklchSaturation = float4{ 1.f, 1.f, 0.f, 0.f };
         // std::array<float4, 7> oklchColorMixer = make_array<7>(float4{ 0.f, 1.f, 0.f, 0.f });
-        std::array<float4, 15> params = {
+        std::array<float4, 22> params = {
             float4{ 1.f, 1.f, 1.f, 0.f }, float4{ 1.f, 1.f, 1.f, 0.f }, float4{ 0.f, 0.f, 0.f, 0.f },
             float4{ 0.f, 0.f, 0.f, 0.f }, float4{ 0.f, 0.f, 0.f, 0.f }, float4{ 1.f, 1.f, 1.f, 1.f },
             float4{ 1.f, 1.f, 1.f, 1.f }, float4{ 1.f, 1.f, 0.f, 0.f }, float4{ 0.f, 1.f, 0.f, 0.f },
             float4{ 0.f, 1.f, 0.f, 0.f }, float4{ 0.f, 1.f, 0.f, 0.f }, float4{ 0.f, 1.f, 0.f, 0.f },
-            float4{ 0.f, 1.f, 0.f, 0.f }, float4{ 0.f, 1.f, 0.f, 0.f }, float4{ 0.f, 1.f, 0.f, 0.f }
+            float4{ 0.f, 1.f, 0.f, 0.f }, float4{ 0.f, 1.f, 0.f, 0.f }, float4{ 0.f, 1.f, 0.f, 0.f },
+            float4{ 1.f, 1.f, 1.f, 0.f }, float4{ 1.f, 1.f, 1.f, 0.f }, float4{ 1.f, 6500.f, 0.f, 0.f },
+            float4{ 0.f, 0.f, 0.f, 0.f }, float4{ 0.f, 0.f, 0.f, 0.f }, float4{ 0.f, 0.f, 0.f, 0.f },
+            float4{ 0.f, 0.3f, 0.55f, 1.f }
         };
     };
 
@@ -78,6 +81,13 @@ struct ColorGrading : public PostProcessFeature
         float4 saturationHueInOutGamma;
         float4 oklchSaturation;
         float4 oklchColorMixer[7];
+        float4 contrast;
+        float4 pivot;
+        float4 exposureTemperatureTint;
+        float4 shadows;
+        float4 midtones;
+        float4 highlights;
+        float4 shadowsHighlightsRange; // shadowBegin, shadowEnd, highlightBegin, highlightEnd
 
         float4 tonemapParams[2];
         float4 colorSpaceTransform[3];

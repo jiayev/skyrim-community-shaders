@@ -29,7 +29,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     enableColorSpaceTransform,
     inputColorSpace,
     processColorSpace,
-    outputColorSpace
+    outputColorSpace,
+	colorSpaceTransform,
+	invColorSpaceTransform
 )
 
 template <int num = 3>
@@ -266,6 +268,14 @@ void ColorGrading::DrawSettings()
         ImGui::SliderFloat("Input Gamma", &profile.params[6].z, 0.f, 3.f, "%.3f");
         ImGui::SliderFloat("Output Gamma", &profile.params[6].w, 0.f, 3.f, "%.3f");
 
+		ImGui::Text("Pre-Tonemapping Settings");
+		if (ImGui::TreeNode("Exposure/Temperature/Tint")) {
+			exposureSlider(&profile.params[17].x);
+			ImGui::SliderFloat("Temperature", &profile.params[17].y, 1000.f, 10000.f, "%100.f K");
+			ImGui::SliderFloat("Tint", &profile.params[17].z, -1.f, 1.f, "%.3f");
+			ImGui::TreePop();
+		}
+
         if (ImGui::TreeNode("ASC CDL")) {
             shiftSlider("Slope", &profile.params[0].x, 0.f, 2.f, "%.2f");
             shiftSlider("Power", &profile.params[1].x, 0.f, 2.f, "%.2f");
@@ -273,12 +283,28 @@ void ColorGrading::DrawSettings()
             ImGui::TreePop();
         }
 
-        if (ImGui::TreeNode("Saturation/Hue")) {
+		if (ImGui::TreeNode("Saturation/Hue")) {
             ImGui::SliderFloat("Saturation", &profile.params[6].x, 0.f, 3.f, "%.3f");
             ImGui::SliderFloat("Hue Shift", &profile.params[6].y, -1.f, 1.f, "%.3f");
             ImGui::TreePop();
         }
 
+		if (ImGui::TreeNode("Shadows/Midtones/Highlights")) {
+            shiftSlider("Shadows", &profile.params[18].x, -1.f, 1.f, "%.3f");
+            shiftSlider("Midtones", &profile.params[19].x, -1.f, 1.f, "%.3f");
+            shiftSlider("Highlights", &profile.params[20].x, -1.f, 1.f, "%.3f");
+            ImGui::InputFloat2("Shadows Start/End", &profile.params[21].x, "%.3f");
+            ImGui::InputFloat2("Highlights Start/End", &profile.params[21].z, "%.3f");
+            ImGui::TreePop();
+        }
+
+		if (ImGui::TreeNode("Contrast")) {
+			shiftSlider("Contrast", &profile.params[15].x, 0.f, 2.f, "%.3f");
+			shiftSlider("Pivot", &profile.params[16].x, 0.f, 1.f, "%.3f");
+			ImGui::TreePop();
+		}
+
+		ImGui::Text("Post-Tonemapping Settings");
         if (ImGui::TreeNode("Lift Gamma Gain")) {
             ImGui::DragFloat4("Lift", &profile.params[3].x, 1e-3f, -1.f, 1.f, "%.3f");
             ImGui::DragFloat4("Gamma", &profile.params[4].x, 1e-3f, -1.5f, 1.5f, "%.3f");
@@ -401,7 +427,6 @@ void ColorGrading::LoadSettings(json& o_json)
     if (auto it = std::ranges::find_if(tonemappers, [&](TonemapperInfo& x) { return settings.currentTonemapper == x.name; });
 		it != tonemappers.end()) {
 		tonemapperType = (int)(it - tonemappers.begin());
-		settings.tonemapParams = it->default_settings;
 	} else {
 		TonemapperInfo::GetDefaultParams(tonemapperType, settings.tonemapParams);
 	}
@@ -549,6 +574,13 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
             profile.params[13],
             profile.params[14]
         },
+		.contrast = profile.params[15],
+		.pivot = profile.params[16],
+		.exposureTemperatureTint = profile.params[17],
+		.shadows = profile.params[18],
+		.midtones = profile.params[19],
+		.highlights = profile.params[20],
+		.shadowsHighlightsRange = profile.params[21],
         .tonemapParams = {
             settings.tonemapParams[0],
             settings.tonemapParams[1]
