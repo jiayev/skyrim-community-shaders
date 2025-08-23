@@ -1,7 +1,5 @@
 #pragma once
 
-// TODO: cloud shadow overshadowing fix and layer height specification
-
 struct PhysicalSky final : public Feature
 {
 	////////////////////////////////////////////////// Boilerplate
