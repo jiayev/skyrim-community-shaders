@@ -257,9 +257,20 @@ PS_OUTPUT main(PS_INPUT input)
 	if (SharedData::physSkyData.enabled)
 	{
 # 		if defined(DITHER) && !defined(TEX)
+
 		float3 skyColor = PhysSky::SampleSky(normalize(input.WorldPosition.xyz), input.Position.xy, PhysSky::SampSv);
 		psout.Color.xyz = lerp(skyColor, psout.Color.xyz, SharedData::physSkyData.vanillaMix);
+
 #		elif defined(TEX) && defined(CLOUDS)
+
+		float3 viewDir = normalize(input.WorldPosition.xyz);
+#			if defined(CLOUD_SHADOWS) 
+		float dist = CloudShadows::IntersectCloudDist(float3(0, 0, 0), viewDir);
+#			else
+		float dist = 1e3f / 1.428e-2;
+#			endif
+		float4 apColor = PhysSky::SampleAp(viewDir, input.Position.xy, dist, PhysSky::SampSv);
+		psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
 
 #		else
 		// discard; // TODO: REMOVE
