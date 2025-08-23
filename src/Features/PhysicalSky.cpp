@@ -378,6 +378,8 @@ void PhysicalSky::SetupResources()
 		texDesc.Format = DXGI_FORMAT_R8_UNORM;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		texDesc.MipLevels = 1;
+		texDesc.Width /= 2;
+		texDesc.Height /= 2;
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
 			.Format = texDesc.Format,

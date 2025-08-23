@@ -3,6 +3,7 @@
 #endif
 
 #define OMIT_PS_NAMESPACE
+#define PS_PREPASS_SAMPLERS
 #include "PhysicalSky/Common.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Random.hlsli"
@@ -33,8 +34,6 @@ StructuredBuffer<PerShadow> SharedPerShadow : register(t2);
 #include "CloudShadows/CloudShadows.hlsli"
 
 RWTexture2D<unorm float> RWTexOutput : register(u0);
-
-SamplerState SampTr : register(s0); 
 
 const static uint nStep = 30;
 const static float rcpNStep = rcp(nStep);
@@ -81,11 +80,11 @@ void main(uint2 tid	: SV_DispatchThreadID)
 	const uint2 seed = Random::pcg2d(pxCoords.xy);
 	const float2 rnd = Random::R2Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
 
-	const float2 stereoUv = (pxCoords + 0.5) * data.rcpFrameDim;
+	const float2 stereoUv = (pxCoords + 0.5) * data.rcpFrameDim * 2; // half res
 	const uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(stereoUv);
 	const float2 uv = Stereo::ConvertFromStereoUV(stereoUv, eyeIndex);
 
-	const float depth = TexDepth[pxCoords.xy];
+	const float depth = TexDepth.SampleLevel(SampTr, stereoUv, 0);
     float4 posWorld = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
 	posWorld = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], posWorld);
 	posWorld.xyz /= posWorld.w;
@@ -96,11 +95,12 @@ void main(uint2 tid	: SV_DispatchThreadID)
 
 	const float extGr = dot(data.rayleighScatter + data.aerosolAbsorption + data.aerosolScatter, 1 / 3.f);
 	const float rcpExtGr = rcp(extGr);
-	float estContrib = 1 - exp(-extGr * distClamped);
+	const float estContrib = 1 - exp(-extGr * distClamped);
 
     float shadow = 0;
-    for(uint i = 1; i <= nStep; ++i){
-		float tSample = -rcpExtGr * log(1 - lerp(i - 1, i, rnd.x) * rcpNStep * estContrib); // map to truncated exponential distribution
+    for (uint i = 1; i <= nStep; ++i)
+	{
+		float tSample = -rcpExtGr * log(1 - (i - 1 + rnd.x) * rcpNStep * estContrib); // map to truncated exponential distribution
 
         float shadowSample = SampleShadow(dir * tSample, eyeIndex);
         shadow += (1 - shadowSample) * rcpNStep;
