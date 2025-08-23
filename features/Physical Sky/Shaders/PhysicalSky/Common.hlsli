@@ -246,7 +246,7 @@ float3 SampleSky(float3 viewDir, uint2 pxCoord, SamplerState samp)
 	const float2 skyLutUv = SkyViewLutUv(viewDir);
 	float3 skyColor = TexSvLut.SampleLevel(samp, skyLutUv, 0).rgb;
 
-	float shadow = TexApShadow[pxCoord];
+	float shadow = TexApShadow[pxCoord / 2]; // this actually works???
 	skyColor *= 1 - shadow;
 
 	if (data.tonemapper == 1)
@@ -283,7 +283,7 @@ float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState samp)
 	const float depth_slice = lerp(.5 / apDims.z, 1 - .5 / apDims.z, saturate(dist / AP_MAX_DIST));
 	float4 apColor = TexApLut.SampleLevel(samp, float3(skyLutUv, depth_slice), 0);
 
-	float shadow = TexApShadow[pxCoord];
+	float shadow = TexApShadow[pxCoord / 2];
 	apColor.rgb *= 1 - shadow;
 
 	if (data.tonemapper == 1)
