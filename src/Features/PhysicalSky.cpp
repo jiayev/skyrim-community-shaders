@@ -619,6 +619,8 @@ void PhysicalSky::AccumShadow()
 	auto context = globals::d3d::context;
 
 	auto deferred = globals::deferred;
+	if (!deferred)
+		return;
 	auto& terrainShadows = globals::features::terrainShadows;
 	auto& cloudShadows = globals::features::cloudShadows;
 
