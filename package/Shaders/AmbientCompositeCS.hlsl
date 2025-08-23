@@ -69,7 +69,7 @@ Texture2D<uint> XeGTAOTexture : register(t10);
 
 	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
 
-	float3 directionalAmbientColor = max(0, mul(SharedData::DirectionalAmbient, float4(normalWS, 1.0)));
+	float3 directionalAmbientColor = Color::Ambient(max(0, mul(SharedData::DirectionalAmbient, float4(normalWS, 1.0))));
 
 #if defined(XeGTAO)
 	uint xeGTAO = 0;
@@ -93,26 +93,14 @@ Texture2D<uint> XeGTAOTexture : register(t10);
 
 #if defined(IBL)
 	if (SharedData::iblSettings.EnableDiffuseIBL) {
-		directionalAmbientColor = SharedData::iblSettings.DALCAmount * Color::Ambient(directionalAmbientColor);
+		directionalAmbientColor = SharedData::iblSettings.DALCAmount * directionalAmbientColor;
 		directionalAmbientColor += Color::Saturation(ImageBasedLighting::GetDiffuseIBL(-normalWS), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 	}
 #endif
 
-	float3 linAlbedo = albedo;
-	float3 linDirectionalAmbientColor = directionalAmbientColor;
-	float3 linDiffuseColor = diffuseColor;
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
-		linAlbedo = Color::GammaToLinear(linAlbedo);
-		linDirectionalAmbientColor = Color::GammaToLinear(linDirectionalAmbientColor);
-		linDiffuseColor = Color::GammaToLinear(linDiffuseColor);
-	} else {
-		linDirectionalAmbientColor = Color::Ambient(linDirectionalAmbientColor);
-	}
-#if defined(IBL)
-	if (SharedData::iblSettings.EnableDiffuseIBL) {
-		linDirectionalAmbientColor = directionalAmbientColor;
-	}
-#endif
+	float3 linAlbedo = Color::IrradianceToLinear(albedo);
+	float3 linDirectionalAmbientColor = Color::IrradianceToLinear(directionalAmbientColor);
+	float3 linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
 	float3 originalDiffuseColor = linDiffuseColor;
 
 	float3 linAmbient = Color::IrradianceToLinear(albedo * directionalAmbientColor);
