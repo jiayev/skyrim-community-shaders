@@ -1,5 +1,7 @@
 #pragma once
 
+// TODO: consider cam height in cloud intersection
+
 struct CloudShadows : Feature
 {
 private:
