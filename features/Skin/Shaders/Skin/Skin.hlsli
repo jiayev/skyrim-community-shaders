@@ -153,15 +153,15 @@ namespace Skin
 		diffuse += light.LightColor * NdotL * BRDF::Diffuse_Chan(averageRoughness, NdotV, NdotL, VdotH, NdotH);
 
 		float3 F;
-		float3 F0 = skin.F0 * (1 - skin.Curvature);
+		float3 F0 = skin.F0 * saturate(1 - skin.Curvature);
 
 		specular += GetDualSpecularGGX(averageRoughness, skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity, F0, NdotL, NdotV, NdotH, VdotH, F) * light.LightColor * NdotL;
 
-		float2 specularBRDF = BRDF::EnvBRDFApproxLazarov(averageRoughness, NdotV);
+		float2 specularBRDF = BRDF::EnvBRDF(averageRoughness, NdotV);
 		specular *= 1 + F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
 
 		if (skin.FuzzWeight > 0.0) {
-			float3 FuzzF0 = skin.FuzzColor * (1 - skin.Curvature);
+			float3 FuzzF0 = skin.FuzzColor * saturate(1 - skin.Curvature);
 			float3 fuzzSpecular = PBR::GetSpecularDirectLightMultiplierMicroflakes(skin.FuzzRoughness, FuzzF0, NdotL, NdotV, NdotH, VdotH) * light.LightColor * NdotL;
 			float2 fuzzSpecularBRDF = BRDF::EnvBRDFApproxLazarov(skin.FuzzRoughness, NdotV);
 			fuzzSpecular *= 1 + skin.FuzzColor * (1 / (fuzzSpecularBRDF.x + fuzzSpecularBRDF.y) - 1);
@@ -192,7 +192,7 @@ namespace Skin
 
 		float averageRoughness = lerp(skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity);
 
-		float2 specularBRDF = BRDF::EnvBRDFApproxLazarov(averageRoughness, NdotV);
+		float2 specularBRDF = BRDF::EnvBRDF(averageRoughness, NdotV);
 
 		specularWeight = skin.F0 * specularBRDF.x + specularBRDF.y;
 
@@ -200,7 +200,7 @@ namespace Skin
 		float3 wetSpecular = 0.f;
 
 		if (skin.Wetness > 0.0) {
-			float2 wetSpecularBRDF = BRDF::EnvBRDFApproxLazarov(WATER_ROUGHNESS, NdotV);
+			float2 wetSpecularBRDF = BRDF::EnvBRDF(WATER_ROUGHNESS, NdotV);
 			wetSpecular += WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y;
 			wetSpecular *= 1 + WATER_F0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
 			waterTransmission = 1 - (WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y);
@@ -225,7 +225,7 @@ namespace Skin
 		diffuseWeight *= diffuseAO;
 		specularWeight *= specularAO;
 
-		specularWeight *= 1 - skin.Curvature;
+		specularWeight *= saturate(1 - skin.Curvature);
 	}
 
 	// https://blog.selfshadow.com/publications/blending-in-detail/
