@@ -435,6 +435,10 @@ void Deferred::DeferredPasses()
 
 	auto& ibl = globals::features::ibl;
 
+	auto& ssr = globals::features::screenSpaceReflections;
+	if (ssr.loaded && ssr.settings.EnableDiffuse)
+		ssr.DrawSSRTDiffuse();
+
 	auto dispatchCount = Util::GetScreenDispatchCount(true);
 
 	if (ssgi.loaded) {
@@ -442,7 +446,7 @@ void Deferred::DeferredPasses()
 		{
 			TracyD3D11Zone(globals::state->tracyCtx, "Ambient Composite");
 
-			ID3D11ShaderResourceView* srvs[9]{
+			ID3D11ShaderResourceView* srvs[10]{
 				albedo.SRV,
 				normalRoughness.SRV,
 				skylighting.loaded || REL::Module::IsVR() ? depth.depthSRV : nullptr,
@@ -452,6 +456,7 @@ void Deferred::DeferredPasses()
 				ssgi_y,
 				ssgi_cocg,
 				ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
+				(ssr.loaded && ssr.settings.Enabled && ssr.settings.EnableDiffuse) ? ssr.texSSRTDiffuseColor->srv.get() : nullptr
 			};
 
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -467,7 +472,7 @@ void Deferred::DeferredPasses()
 
 		// Clear
 		{
-			ID3D11ShaderResourceView* views[9]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+			ID3D11ShaderResourceView* views[10]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 			context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 			ID3D11UnorderedAccessView* uavs[2]{ nullptr, nullptr };
@@ -487,7 +492,6 @@ void Deferred::DeferredPasses()
 
 	auto& terrainBlending = globals::features::terrainBlending;
 
-	auto& ssr = globals::features::screenSpaceReflections;
 	if (ssr.loaded)
 		ssr.DrawSSR();
 
@@ -700,6 +704,9 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientComposite()
 		if (globals::features::screenSpaceGI.loaded)
 			defines.push_back({ "SSGI", nullptr });
 
+		if (globals::features::screenSpaceReflections.loaded)
+			defines.push_back({ "SSR", nullptr });
+
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
 
@@ -721,6 +728,9 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientCompositeInterior()
 
 		if (globals::features::screenSpaceGI.loaded)
 			defines.push_back({ "SSGI", nullptr });
+
+		if (globals::features::screenSpaceReflections.loaded)
+			defines.push_back({ "SSR", nullptr });
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
