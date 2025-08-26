@@ -317,6 +317,14 @@ namespace SharedData
 		float3 ozoneAbsorption;  //
 	};
 
+	struct SSRSettings
+    {
+        uint Enabled;
+        uint UseDynamicCubemapsAsFallback;
+        float SpecularMult;
+        float DiffuseMult;
+    }
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -338,6 +346,7 @@ namespace SharedData
 		SSPLSSettings ssplsSettings;
 		VanillaFresnelSettings vanillaFresnelSettings;
 		PhysSkyData physSkyData;
+		SSRSettings ssrSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

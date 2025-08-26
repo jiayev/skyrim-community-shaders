@@ -437,6 +437,10 @@ void Deferred::DeferredPasses()
 
 	auto& ibl = globals::features::ibl;
 
+	auto& ssr = globals::features::screenSpaceReflections;
+	if (ssr.loaded && ssr.settings.EnableDiffuse)
+		ssr.DrawSSRTDiffuse();
+
 	auto dispatchCount = Util::GetScreenDispatchCount();
 
 	if (ssgi.loaded) {
@@ -455,6 +459,7 @@ void Deferred::DeferredPasses()
 				ssgi_cocg,
 				ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
 				masks.SRV,
+				(ssr.loaded && ssr.settings.Enabled && ssr.settings.EnableDiffuse) ? ssr.texSSRTDiffuseColor->srv.get() : nullptr
 			};
 
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -470,7 +475,7 @@ void Deferred::DeferredPasses()
 
 		// Clear
 		{
-			ID3D11ShaderResourceView* views[10]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+			ID3D11ShaderResourceView* views[11]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 			context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 			ID3D11UnorderedAccessView* uavs[2]{ nullptr, nullptr };
@@ -713,6 +718,9 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientComposite()
 		if (globals::features::screenSpaceGI.loaded)
 			defines.push_back({ "SSGI", nullptr });
 
+		if (globals::features::screenSpaceReflections.loaded)
+			defines.push_back({ "SSR", nullptr });
+
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
 
@@ -734,6 +742,9 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientCompositeInterior()
 
 		if (globals::features::screenSpaceGI.loaded)
 			defines.push_back({ "SSGI", nullptr });
+
+		if (globals::features::screenSpaceReflections.loaded)
+			defines.push_back({ "SSR", nullptr });
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
