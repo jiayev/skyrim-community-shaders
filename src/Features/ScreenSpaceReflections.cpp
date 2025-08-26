@@ -8,6 +8,8 @@
 #include "State.h"
 #include "ShaderCache.h"
 
+#include "DynamicCubemaps.h"
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     ScreenSpaceReflections::Settings,
     Enabled,
@@ -25,7 +27,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     BilateralScale,
     BilateralColorWeight,
     BilateralDepthWeight,
-    BilateralNormalWeight
+    BilateralNormalWeight,
+    UseDynamicCubemapsAsFallback
 )
 
 void ScreenSpaceReflections::DrawSettings()
@@ -39,13 +42,18 @@ void ScreenSpaceReflections::DrawSettings()
     ImGui::SliderInt("Spatial Times", &settings.SpatialTimes, 0, 2, "%d", ImGuiSliderFlags_AlwaysClamp);
     ImGui::SliderFloat("Spatial Radius", &settings.SpatialRadius, 0.0f, 5.0f, "%.2f");
     ImGui::Checkbox("Enable Temporal Filtering", &settings.EnableTemporal);
-    ImGui::SliderFloat("Temporal Scale", &settings.TemporalScale, 0.0f, 8.0f, "%.2f");
-    ImGui::SliderFloat("Temporal Weight", &settings.TemporalWeight, 0.0f, 0.97f, "%.2f");
+    if (settings.EnableTemporal) {
+        ImGui::SliderFloat("Temporal Scale", &settings.TemporalScale, 0.0f, 8.0f, "%.2f");
+        ImGui::SliderFloat("Temporal Weight", &settings.TemporalWeight, 0.0f, 0.97f, "%.2f");
+    }
     ImGui::Checkbox("Enable Bilateral Filtering", &settings.EnableBilateral);
-    ImGui::SliderFloat("Bilateral Scale", &settings.BilateralScale, 0.01f, 5.0f, "%.2f");
-    ImGui::SliderFloat("Bilateral Color Weight", &settings.BilateralColorWeight, 0.0f, 1.0f, "%.2f");
-    ImGui::SliderFloat("Bilateral Depth Weight", &settings.BilateralDepthWeight, 0.0f, 1.0f, "%.2f");
-    ImGui::SliderFloat("Bilateral Normal Weight", &settings.BilateralNormalWeight, 0.0f, 1.0f, "%.2f");
+    if (settings.EnableBilateral) {
+        ImGui::SliderFloat("Bilateral Scale", &settings.BilateralScale, 0.01f, 5.0f, "%.2f");
+        ImGui::SliderFloat("Bilateral Color Weight", &settings.BilateralColorWeight, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Bilateral Depth Weight", &settings.BilateralDepthWeight, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Bilateral Normal Weight", &settings.BilateralNormalWeight, 0.0f, 1.0f, "%.2f");
+    }
+    ImGui::Checkbox("Use Dynamic Cubemaps as Fallback", &settings.UseDynamicCubemapsAsFallback);
 
     ImGui::SeparatorText("Debug");
 
@@ -349,6 +357,8 @@ void ScreenSpaceReflections::DrawSSR()
     auto normal = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
     auto motion = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 
+    auto& dynamicCubemaps = globals::features::dynamicCubemaps;
+
     float2 size = Util::ConvertToDynamic(state->screenSize);
     float2 dispatchCount = { (size.x + 7) / 8, (size.y + 7) / 8 };
     
@@ -366,12 +376,13 @@ void ScreenSpaceReflections::DrawSSR()
         ssrCBData.DepthWeight = settings.BilateralDepthWeight;
         ssrCBData.NormalWeight = settings.BilateralNormalWeight;
         ssrCBData.BRDFBias = settings.BRDFBias;
+        ssrCBData.UseDynamicCubemapsAsFallback = (uint)settings.UseDynamicCubemapsAsFallback && dynamicCubemaps.loaded;
     }
     ssrCB->Update(ssrCBData);
     auto buffer = ssrCB->CB();
     context->CSSetConstantBuffers(1, 1, &buffer);
 
-    std::array<ID3D11ShaderResourceView*, 7> srvs = { nullptr };
+    std::array<ID3D11ShaderResourceView*, 8> srvs = { nullptr };
 	std::array<ID3D11UnorderedAccessView*, 2> uavs = { nullptr };
 
     auto resetViews = [&]() {
@@ -400,6 +411,16 @@ void ScreenSpaceReflections::DrawSSR()
 
     resetViews();
 
+    const auto& envTexture = dynamicCubemaps.envTexture;
+	const auto& envReflectionsTexture = dynamicCubemaps.envReflectionsTexture;
+    bool inInterior = true;
+
+    if (auto player = RE::PlayerCharacter::GetSingleton()) {
+        if (auto parentCell = player->GetParentCell()) {
+            inInterior = parentCell->IsInteriorCell();
+        }
+    }
+
     // raymarch
     state->BeginPerfEvent("Raymarch");
     
@@ -413,6 +434,7 @@ void ScreenSpaceReflections::DrawSSR()
     srvs.at(4) = depth.depthSRV;
     srvs.at(5) = texDepth->srv.get();
     srvs.at(6) = noiseSRV.get();
+    srvs.at(7) = inInterior ? envTexture->srv.get() : envReflectionsTexture->srv.get();
 
     context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
     context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
