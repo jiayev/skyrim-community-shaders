@@ -14,7 +14,6 @@
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
-#include "Features/XeGTAO.h"
 
 #include "Hooks.h"
 #include "Streamline.h"
@@ -438,10 +437,6 @@ void Deferred::DeferredPasses()
 
 	auto& ibl = globals::features::ibl;
 
-	auto& xeGTAO = globals::features::xeGTAO;
-	if (xeGTAO.loaded && xeGTAO.menusettings.Enabled && xeGTAO.menusettings.UseSecondPass)
-		xeGTAO.GTAO(false);
-
 	auto dispatchCount = Util::GetScreenDispatchCount();
 
 	if (ssgi.loaded) {
@@ -449,7 +444,7 @@ void Deferred::DeferredPasses()
 		{
 			TracyD3D11Zone(globals::state->tracyCtx, "Ambient Composite");
 
-			ID3D11ShaderResourceView* srvs[11]{
+			ID3D11ShaderResourceView* srvs[10]{
 				albedo.SRV,
 				normalRoughness.SRV,
 				skylighting.loaded || REL::Module::IsVR() ? depth.depthSRV : nullptr,
@@ -460,7 +455,6 @@ void Deferred::DeferredPasses()
 				ssgi_cocg,
 				ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
 				masks.SRV,
-				xeGTAO.loaded ? xeGTAO.outputAO->srv.get() : nullptr,
 			};
 
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -476,7 +470,7 @@ void Deferred::DeferredPasses()
 
 		// Clear
 		{
-			ID3D11ShaderResourceView* views[11]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+			ID3D11ShaderResourceView* views[10]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 			context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 			ID3D11UnorderedAccessView* uavs[2]{ nullptr, nullptr };
@@ -523,8 +517,6 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
 			ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
 			(ssr.loaded && ssr.settings.Enabled) ? ssr.texOutput->srv.get() : nullptr,
-			xeGTAO.loaded ? xeGTAO.outputAO->srv.get() : nullptr,
-			xeGTAO.loaded ? xeGTAO.generatedNormals->srv.get() : nullptr,
 			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,
 			physSky.loaded ? physSky.texApShadow->srv.get() : nullptr,
 		};
@@ -548,7 +540,7 @@ void Deferred::DeferredPasses()
 
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[20]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[18]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
@@ -727,9 +719,6 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientComposite()
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });
 
-		if (globals::features::xeGTAO.loaded)
-			defines.push_back({ "XeGTAO", nullptr });
-
 		ambientCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return ambientCompositeCS;
@@ -748,9 +737,6 @@ ID3D11ComputeShader* Deferred::GetComputeAmbientCompositeInterior()
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
-
-		if (globals::features::xeGTAO.loaded)
-			defines.push_back({ "XeGTAO", nullptr });
 
 		ambientCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
 	}
@@ -785,9 +771,6 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
 
-		if (globals::features::xeGTAO.loaded)
-			defines.push_back({ "XeGTAO", nullptr });
-
 		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return mainCompositeCS;
@@ -812,9 +795,6 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
-
-		if (globals::features::xeGTAO.loaded)
-			defines.push_back({ "XeGTAO", nullptr });
 
 		mainCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}

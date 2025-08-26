@@ -45,7 +45,6 @@
 #include "Features/WaterEffects.h"
 #include "Features/WeatherPicker.h"
 #include "Features/WetnessEffects.h"
-#include "Features/XeGTAO.h"
 
 #include "Features/LightLimitFix/ParticleLights.h"
 
@@ -96,7 +95,6 @@ namespace globals
 		ExtendedTranslucency extendedTranslucency{};
 		PostProcessing postProcessing{};
 		Skin skin{};
-		XeGTAOFeature xeGTAO{};
 
 		namespace llf
 		{

@@ -254,14 +254,6 @@ namespace SharedData
 		float SoftShadowScale;
 	};
 
-	struct XeGTAOSettings
-	{
-		uint Enabled;
-		uint BentNormals;
-		uint DirectLightMicroShadowing;
-		float Mix;
-	};
-
 	struct VanillaFresnelSettings
 	{
 		uint Enable;
@@ -344,7 +336,6 @@ namespace SharedData
 		PostProcessingSettings postProcessingSettings;
 		SkinData skinData;
 		SSPLSSettings ssplsSettings;
-		XeGTAOSettings xeGTAOSettings;
 		VanillaFresnelSettings vanillaFresnelSettings;
 		PhysSkyData physSkyData;
 	};

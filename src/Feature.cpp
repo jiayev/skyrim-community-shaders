@@ -36,7 +36,6 @@
 #include "Features/WaterEffects.h"
 #include "Features/WeatherPicker.h"
 #include "Features/WetnessEffects.h"
-#include "Features/XeGTAO.h"
 #include "Menu.h"
 #include "SettingsOverrideManager.h"
 #include "Utils/Format.h"
@@ -238,8 +237,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::linearLighting,
 		&globals::features::physicalSky,
 		&globals::features::postProcessing,
-		&globals::features::skin,
-		&globals::features::xeGTAO
+		&globals::features::skin
 	};
 
 	if (REL::Module::IsVR()) {

@@ -19,7 +19,6 @@
 #include "Features/TerrainVariation.h"
 #include "Features/VanillaFresnel.h"
 #include "Features/WetnessEffects.h"
-#include "Features/XeGTAO.h"
 
 #include "TruePBR.h"
 
@@ -59,7 +58,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::postProcessing.settings,
 		globals::features::skin.GetCommonBufferData(),
 		globals::features::screenSpacePointLightShadows.GetCommonBufferData(),
-		globals::features::xeGTAO.GetCommonBufferData(),
 		globals::features::vanillaFresnel.settings,
 		globals::features::physicalSky.cbData);
 }
