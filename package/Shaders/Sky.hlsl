@@ -191,6 +191,9 @@ cbuffer AlphaTestRefCB : register(b11)
 #	if defined(PHYSICAL_SKY)
 #		define PS_SKY_SAMPLERS
 #		include "PhysicalSky/Common.hlsli"
+#		if defined(TEX) && defined(CLOUDS)
+#			define PS_CLOUDS
+#		endif
 #	endif
 
 Texture2D<float> TexDepthSampler : register(t17);
@@ -204,6 +207,15 @@ PS_OUTPUT main(PS_INPUT input)
 	uint eyeIndex = input.EyeIndex;
 #	endif  // !VR
 
+#	if defined(PS_CLOUDS)
+	float psCloudDist = 1e3f / 1.428e-2;
+	float3 viewDir = normalize(input.WorldPosition.xyz);
+#		if defined(CLOUD_SHADOWS) 
+	if (SharedData::physSkyData.enabled)
+		psCloudDist = CloudShadows::IntersectCloudDist(float3(0, 0, 0), viewDir);
+#		endif
+#	endif
+
 #	ifndef OCCLUSION
 #		ifndef TEXLERP
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
@@ -215,6 +227,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
+
+// #		if defined(PS_CLOUDS) && defined(CLOUD_SHADOWS) 
+// 	if (SharedData::physSkyData.enabled)
+// 		baseColor.rgb = PhysSky::RelightCloud(baseColor, viewDir, float3(0, 0, 0) + viewDir * psCloudDist, PhysSky::SampTr, SampBaseSampler);
+// #		endif
 
 #		if defined(DITHER)
 	float2 noiseGradUv = float2(0.125, 0.125) * input.Position.xy;
@@ -252,21 +269,13 @@ PS_OUTPUT main(PS_INPUT input)
 	if (SharedData::physSkyData.enabled)
 	{
 # 		if defined(DITHER) && !defined(TEX)
-
+		// SKY
 		float3 skyColor = PhysSky::SampleSky(normalize(input.WorldPosition.xyz), input.Position.xy, PhysSky::SampSv);
 		psout.Color.xyz = lerp(skyColor, psout.Color.xyz, SharedData::physSkyData.vanillaMix);
 
-#		elif defined(TEX) && defined(CLOUDS)
-
-		float3 viewDir = normalize(input.WorldPosition.xyz);
-#			if defined(CLOUD_SHADOWS) 
-		float dist = CloudShadows::IntersectCloudDist(float3(0, 0, 0), viewDir);
-#			else
-		float dist = 1e3f / 1.428e-2;
-#			endif
-		float4 apColor = PhysSky::SampleAp(viewDir, input.Position.xy, dist, PhysSky::SampSv);
+#		elif defined(PS_CLOUDS)
+		float4 apColor = PhysSky::SampleAp(viewDir, input.Position.xy, psCloudDist, PhysSky::SampSv);
 		psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
-
 #		else
 		// discard; // TODO: REMOVE
 #		endif

@@ -668,7 +668,7 @@ void PhysicalSky::ModifySky()
 	globals::d3d::context->PSSetSamplers(3, static_cast<UINT>(samplers.size()), samplers.data());
 
 	GET_INSTANCE_MEMBER(PSSamplerModifiedBits, globals::game::shadowState);
-	PSSamplerModifiedBits |= (3 << 3);
+	PSSamplerModifiedBits |= (1 << 3);
 }
 
 void PhysicalSky::Hooks::BSSkyShader_SetupMaterial::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
