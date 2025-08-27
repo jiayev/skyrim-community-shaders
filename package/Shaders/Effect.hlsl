@@ -880,7 +880,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if !defined(DEFERRED)
 #		if defined(PHYSICAL_SKY)
-	if (SharedData::physSkyData.enabled) {
+	if (SharedData::physSkyData.enabled && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
 		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), input.Position.xy, length(input.WorldPosition.xyz), SampBaseSampler);
 		psout.Diffuse.xyz = psout.Diffuse.xyz * apSample.w + apSample.xyz;
 	}
