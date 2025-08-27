@@ -497,7 +497,6 @@ void Deferred::DeferredPasses()
 
 	auto& physSky = globals::features::physicalSky;
 
-	auto& ssr = globals::features::screenSpaceReflections;
 	if (ssr.loaded)
 		ssr.DrawSSR();
 
