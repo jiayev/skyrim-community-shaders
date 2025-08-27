@@ -239,12 +239,12 @@ namespace Phase
 #ifndef PS_PREPASS_RSRCS
 
 #	ifndef PS_DEFERRED_RSRCS
-float3 SampleSky(float3 viewDir, uint2 pxCoord, SamplerState samp)
+float3 SampleSky(float3 viewDir, uint2 pxCoord, SamplerState sampSv)
 {
 	SharedData::PhysSkyData data = SharedData::physSkyData;
 
 	const float2 skyLutUv = SkyViewLutUv(viewDir);
-	float3 skyColor = TexSvLut.SampleLevel(samp, skyLutUv, 0).rgb;
+	float3 skyColor = TexSvLut.SampleLevel(sampSv, skyLutUv, 0).rgb;
 
 	float shadow = TexApShadow[pxCoord / 2]; // this actually works???
 	skyColor *= 1 - shadow;
@@ -257,7 +257,7 @@ float3 SampleSky(float3 viewDir, uint2 pxCoord, SamplerState samp)
 	return skyColor;
 }
 
-float3 SampleTr(float3 sunDir, SamplerState samp)
+float3 SampleTr(float3 sunDir, SamplerState sampSv)
 {
 	SharedData::PhysSkyData data = SharedData::physSkyData;
 
@@ -265,14 +265,91 @@ float3 SampleTr(float3 sunDir, SamplerState samp)
 		return 1;
 
 	const float2 lutUv = TrLutUv(data.zCameraPlanet, sunDir.z);
-	float3 tr = TexTrLut.SampleLevel(samp, lutUv, 0).rgb;
+	float3 tr = TexTrLut.SampleLevel(sampSv, lutUv, 0).rgb;
 	tr = lerp(1, tr, data.trMix);
 
 	return tr;
 }
+
+#		if defined(CLOUD_SHADOWS)
+float3 RelightCloud(float4 baseColor, float3 viewDir, float3 cloudPosWS, SamplerState sampTr, SamplerState sampCube)
+{
+	const static float VirtualCloudThickness = 100 / 1.428e-2; // 300 m
+	const static float MaxSunTravelDist = VirtualCloudThickness * 2;
+	const static float CloudScatter = 300 * 1.428e-5;
+	const static float CloudAbsorp = 0;
+	const static float CloudExtinction = CloudScatter + CloudAbsorp;
+	const static uint SunSteps = 4;
+	const static uint ViewSteps = 4;
+
+	SharedData::PhysSkyData data = SharedData::physSkyData;
+
+	// TODO: use proper light Dir
+	float3 dirLightDir = data.sunDir;
+	float3 dirLightColor = data.sunlightColor;
+
+	float2 lutUv = TrLutUvPlanet(cloudPosWS + float3(0, 0, data.zCameraPlanet), dirLightDir);
+	float3 trAtmos = TexTrLut.SampleLevel(sampTr, lutUv, 0).rgb;
+	trAtmos = lerp(1, trAtmos, data.trMix);
+	dirLightColor *= trAtmos;
+
+	float u = dot(viewDir, dirLightDir);
+	float sunTravelDist = MaxSunTravelDist * sqrt(saturate(1 - u * u)); // approx.
+
+	float muSunCloud = 0; // extinction
+	{
+		[unroll] for (uint i = 1; i <= SunSteps; i++)
+		{
+			float3 raySample = cloudPosWS + sunTravelDist * i * rcp(SunSteps) * dirLightDir; // TODO: random
+			float alpha = raySample.z < 0.0 ? saturate(-raySample.z) : CloudShadows::CloudShadowsTexture.SampleLevel(sampCube, raySample, 0).x;
+			muSunCloud += alpha * sunTravelDist * rcp(SunSteps) * CloudExtinction;
+		}
+	}
+
+	// float phaseCloud = lerp(Phase::ThomasSchander(u), Phase::HG(u, -0.3), 0.3);
+	float3 phaseCloud = Phase::CloudFit(u);
+	float perStepTr = pow(min(baseColor.a, 0.8), rcp(ViewSteps));
+	float perStepMu = -log(perStepTr); // extinction
+	float perStepScatterFactor = (1 - perStepTr) / max(perStepMu, 1e-8);
+	float cloudLum = dot(baseColor.rgb, float3(0.2125, 0.7154, 0.0721));
+	float maxDimProfile = lerp(baseColor.a, min(baseColor.a, 0.3), cloudLum);
+	float edgeDist = maxDimProfile * VirtualCloudThickness;
+
+	float tr = 1;
+	float3 lum = 0;
+	{
+		[unroll] for (uint i = 0; i < ViewSteps; i++)
+		{	
+			float sampleT = lerp(i, i + 1, 0.5) * rcp(ViewSteps); // TODO: random
+
+			float muSunCloudSample = muSunCloud * (u > 0 ? (1 - sampleT): sampleT);
+			float trSunCloudSample = exp(-muSunCloudSample);
+			float3 inscatter = phaseCloud * trSunCloudSample * dirLightColor;
+			
+			float dimProfile = lerp(0, maxDimProfile, abs(sampleT - 0.5) * 2);
+			float msVolume = dimProfile * exp(-muSunCloudSample * CloudScatter * Remap(u, 0.0, 0.9, 0.25, Remap(edgeDist, -0.128 / 1.428e-5f, 0.0, 0.05, 0.25)));
+			inscatter += msVolume * dirLightColor;
+
+			float3 ambient = Color::GammaToLinear(SharedData::DirectionalAmbient._14_24_34);
+			inscatter += sqrt(1.0 - dimProfile) * ambient;
+
+			float3 scatterIntegeral = perStepMu * inscatter * perStepScatterFactor;
+
+			lum += scatterIntegeral * tr;
+			tr *= perStepTr;
+		}
+	}
+
+	float3 cloudColor = lum / max(baseColor.a, 0.1);
+
+	cloudColor = baseColor.rgb;
+
+	return cloudColor;
+}
+#		endif
 #	endif
 
-float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState samp)
+float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)
 {
 	SharedData::PhysSkyData data = SharedData::physSkyData;
 
@@ -281,7 +358,7 @@ float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState samp)
 	uint3 apDims;
 	TexApLut.GetDimensions(apDims.x, apDims.y, apDims.z);
 	const float depth_slice = lerp(.5 / apDims.z, 1 - .5 / apDims.z, saturate(dist / AP_MAX_DIST));
-	float4 apColor = TexApLut.SampleLevel(samp, float3(skyLutUv, depth_slice), 0);
+	float4 apColor = TexApLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0);
 
 	float shadow = TexApShadow[pxCoord / 2];
 	apColor.rgb *= 1 - shadow;
