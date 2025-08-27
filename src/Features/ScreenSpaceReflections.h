@@ -55,20 +55,20 @@ struct ScreenSpaceReflections : Feature
         float BilateralDepthWeight = 0.1f;
         float BilateralNormalWeight = 0.1f;
         bool UseDynamicCubemapsAsFallback = true;
-        uint SpecularSPP = 1;
         uint DiffuseSPP = 1;
         bool EnableDiffuse = true;
         float SpecularMult = 1.0f;
         float DiffuseMult = 1.0f;
+        float AmbienceMult = 1.0f;
     } settings;
 
     struct alignas(16) SharedData
     {
         uint Enabled;
-        uint UseDynamicCubemapsAsFallback;
         float SpecularMult;
         float DiffuseMult;
-    }
+        float AmbienceMult;
+    };
 
     struct alignas(16) SSRCB
     {
@@ -85,9 +85,7 @@ struct ScreenSpaceReflections : Feature
         float NormalWeight;
         float BRDFBias;
         uint UseDynamicCubemapsAsFallback;
-        uint SpecularSPP;
-        uint DiffuseSPP;
-        uint pad;
+        uint pad[3];
     };
 
     struct alignas(16) SPDCB
@@ -102,7 +100,9 @@ struct ScreenSpaceReflections : Feature
 
     eastl::unique_ptr<ConstantBuffer> ssrCB;
     // eastl::unique_ptr<ConstantBuffer> spdCB;
-    
+
+    bool recompileFlag = false;
+
     void DrawSSR();
     void DrawSSRTDiffuse();
     virtual void Prepass() override;

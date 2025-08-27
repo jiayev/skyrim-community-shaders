@@ -31,9 +31,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     BilateralDepthWeight,
     BilateralNormalWeight,
     UseDynamicCubemapsAsFallback,
-    SpecularSPP,
     DiffuseSPP,
-    EnableDiffuse
+    EnableDiffuse,
+    SpecularMult,
+    DiffuseMult,
+    AmbienceMult
 )
 
 void ScreenSpaceReflections::DrawSettings()
@@ -43,8 +45,11 @@ void ScreenSpaceReflections::DrawSettings()
     ImGui::Checkbox("Enable Diffuse", &settings.EnableDiffuse);
     ImGui::SliderInt("Max Steps", (int*)&settings.MaxSteps, 1, 256);
     ImGui::SliderInt("Max Mip Level", (int*)&settings.MaxMips, 1, maxMips, "%d", ImGuiSliderFlags_AlwaysClamp);
-    ImGui::SliderInt("Specular SPP", (int*)&settings.SpecularSPP, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
-    ImGui::SliderInt("Diffuse SPP", (int*)&settings.DiffuseSPP, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
+    recompileFlag |= ImGui::SliderInt("Diffuse SPP", (int*)&settings.DiffuseSPP, 1, 8, "%d", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SliderFloat("Specular Multiplier", &settings.SpecularMult, 0.0f, 5.0f, "%.2f");
+    ImGui::SliderFloat("Diffuse Multiplier", &settings.DiffuseMult, 0.0f, 5.0f, "%.2f");
+    ImGui::SliderFloat("Ambience Multiplier", &settings.AmbienceMult, 0.0f, 1.0f, "%.2f");
+    ImGui::Separator();
     ImGui::SliderFloat("Thickness", &settings.Thickness, 0.0f, 50.0f, "%.2f");
     ImGui::SliderFloat("Roughness Mask", &settings.RoughnessMask, 0.0f, 1.0f, "%.2f");
     ImGui::SliderFloat("BRDF Bias", &settings.BRDFBias, 0.0f, 1.0f, "%.2f");
@@ -73,6 +78,7 @@ void ScreenSpaceReflections::DrawSettings()
 		BUFFER_VIEWER_NODE(texDepth, debugRescale)
         BUFFER_VIEWER_NODE(texColor, debugRescale)
         BUFFER_VIEWER_NODE(texSSRColor, debugRescale)
+        BUFFER_VIEWER_NODE(texSSRTDiffuseColor, debugRescale)
         BUFFER_VIEWER_NODE(texHistory, debugRescale)
         BUFFER_VIEWER_NODE(texHitPDF, debugRescale)
         BUFFER_VIEWER_NODE(texSpatial, debugRescale)
@@ -240,6 +246,10 @@ void ScreenSpaceReflections::CompileComputeShaders()
     if (globals::features::skylighting.loaded)
 		defines.push_back({ "SKYLIGHTING", nullptr });
 
+    const std::string DiffuseSPPStr = std::to_string(settings.DiffuseSPP);
+
+    defines.push_back({ "DIFFUSE_SPP", DiffuseSPPStr.c_str() });
+
     auto definesSpecular = defines;
     definesSpecular.push_back({ "SSSR_SPECULAR", nullptr });
 
@@ -265,6 +275,11 @@ void ScreenSpaceReflections::CompileComputeShaders()
 
 void ScreenSpaceReflections::Prepass()
 {
+    if (recompileFlag) {
+        recompileFlag = false;
+        CompileComputeShaders();
+    }
+
     auto renderer = globals::game::renderer;
     auto context = globals::d3d::context;
     auto state = globals::state;
@@ -406,8 +421,6 @@ void ScreenSpaceReflections::DrawSSR()
         ssrCBData.NormalWeight = settings.BilateralNormalWeight;
         ssrCBData.BRDFBias = settings.BRDFBias;
         ssrCBData.UseDynamicCubemapsAsFallback = (uint)settings.UseDynamicCubemapsAsFallback && dynamicCubemaps.loaded;
-        ssrCBData.SpecularSPP = settings.SpecularSPP;
-        ssrCBData.DiffuseSPP = settings.DiffuseSPP;
     }
     ssrCB->Update(ssrCBData);
     auto buffer = ssrCB->CB();
@@ -610,8 +623,6 @@ void ScreenSpaceReflections::DrawSSRTDiffuse()
         ssrCBData.NormalWeight = settings.BilateralNormalWeight;
         ssrCBData.BRDFBias = settings.BRDFBias;
         ssrCBData.UseDynamicCubemapsAsFallback = (uint)settings.UseDynamicCubemapsAsFallback && dynamicCubemaps.loaded;
-        ssrCBData.SpecularSPP = settings.SpecularSPP;
-        ssrCBData.DiffuseSPP = settings.DiffuseSPP;
     }
     ssrCB->Update(ssrCBData);
     auto buffer = ssrCB->CB();
@@ -663,7 +674,7 @@ void ScreenSpaceReflections::DrawSSRTDiffuse()
 
     context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
     context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-    context->CSSetShader(raymarchSpecularCS.get(), nullptr, 0);
+    context->CSSetShader(raymarchDiffuseCS.get(), nullptr, 0);
     context->CSSetConstantBuffers(1, 1, &buffer);
 
     context->Dispatch((uint)dispatchCount.x, (uint)dispatchCount.y, 1);
@@ -679,8 +690,8 @@ ScreenSpaceReflections::SharedData ScreenSpaceReflections::GetCommonBufferData()
 {
     SharedData data;
     data.Enabled = settings.Enabled;
-    data.UseDynamicCubemapsAsFallback = settings.UseDynamicCubemapsAsFallback;
     data.SpecularMult = settings.SpecularMult;
     data.DiffuseMult = settings.EnableDiffuse ? settings.DiffuseMult : 0.0f;
+    data.AmbienceMult = settings.AmbienceMult;
     return data;
 }
