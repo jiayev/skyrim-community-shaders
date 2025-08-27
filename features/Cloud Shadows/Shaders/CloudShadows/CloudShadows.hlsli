@@ -2,6 +2,7 @@
 #	define CLOUD_SHADOW_REGISTER t25
 #endif
 
+// TODO move to PSky
 namespace CloudShadows
 {
 	TextureCube<float> CloudShadowsTexture : register(CLOUD_SHADOW_REGISTER);
