@@ -159,20 +159,6 @@ Texture2D<float4> SSRTexture : register(t15);
 		float3 specularIrradianceReflections = Color::IrradianceToLinear(EnvReflectionsTexture.SampleLevel(LinearSampler, R, level));
 
 		finalIrradiance += specularIrradianceReflections;
-
-		if (isAdvancedSkin) {
-			float3 specularIrradianceSecondary = 0;
-			specularIrradianceSecondary = Color::GammaToLinear(EnvReflectionsTexture.SampleLevel(LinearSampler, R, roughnessSecondary * 7.0));
-
-			finalIrradianceSecondary += specularIrradianceSecondary;
-
-			if (reflectanceWet > 0.0) {
-				float3 specularIrradianceWet = 0;
-				specularIrradianceWet = Color::GammaToLinear(EnvReflectionsTexture.SampleLevel(LinearSampler, R, 0));
-
-				finalIrradianceWet += specularIrradianceWet;
-			}
-		}
 #	endif
 
 #	if defined(SSGI)
