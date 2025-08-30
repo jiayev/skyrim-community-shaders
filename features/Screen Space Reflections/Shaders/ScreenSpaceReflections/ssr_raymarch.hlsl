@@ -22,6 +22,10 @@
 
 #include "ScreenSpaceReflections/ssr_common.hlsli"
 
+#if SHARC_UPDATE || SHARC_RENDER
+#   include "ScreenSpaceReflections/sharc/SharcCommon.h"
+#endif
+
 Texture2D<float4> HistoryTexture : register(t0);
 Texture2D<float4> MotionVectorTexture : register(t1);
 Texture2D<float4> ScreenColorTextureMips : register(t3);
@@ -44,24 +48,23 @@ Texture2DArray<float3> stbn_vec3_2Dx1D_128x128x64 : register(t11);
 RWTexture2D<float4> SSRColorOutput : register(u0);
 RWTexture2D<float4> SSRPDFOutput : register(u1);
 
+RWStructuredBuffer<uint64_t> u_SharcHashEntriesBuffer : register(u2);
+RWStructuredBuffer<uint> u_HashCopyOffsetBuffer : register(u3);
+RWStructuredBuffer<uint4> u_SharcVoxelDataBuffer : register(u4);
+RWStructuredBuffer<uint4> u_SharcVoxelDataBufferPrev : register(u5);
+
 cbuffer SSRCB : register(b1)
 {
     uint MaxSteps;
     uint MaxMips;
+    uint UseDynamicCubemapsAsFallback;
+    uint ReuseRay;
     float Thickness;
-    float SpatialRadius;
     float NormalBias;
-    float TemporalScale;
-    float TemporalWeight;
-    float BilateralRadius;
-    float ColorWeight;
-    float DepthWeight;
-    float NormalWeight;
     float BRDFBias;
     float HistoryWeight;
     float OcclusionStrength;
-    uint UseDynamicCubemapsAsFallback;
-    uint ReuseRay;
+    float3 pad;
 };
 
 #define HIZ_MAX_ITERATIONS MaxSteps
@@ -69,6 +72,8 @@ cbuffer SSRCB : register(b1)
 #define FFX_SSSR_FLOAT_MAX 3.402823466e+38
 #define FFX_SSSR_DEPTH_HIERARCHY_MAX_MIP MaxMips
 #if defined(SSSR_SPECULAR)
+#   define SAMPLES_PER_PIXEL 1
+#elif SHARC_UPDATE
 #   define SAMPLES_PER_PIXEL 1
 #else
 #   define SAMPLES_PER_PIXEL DIFFUSE_SPP
@@ -223,7 +228,7 @@ float3 FFX_SSSR_HierarchicalRaymarch(float3 origin, float3 direction, bool is_mi
 
     _num_iters                     = uint(0);
     while (_num_iters < max_traversal_intersections && current_mip >= most_detailed_mip) {
-        if (any(position.xy > float2(1.0, 1.0)) || any(position.xy < float2(0.0, 0.0))) break;
+        if (any(position.xy > float2(FrameBuffer::DynamicResolutionParams1.x, FrameBuffer::DynamicResolutionParams1.y)) || any(position.xy < float2(0.0, 0.0))) break;
 #ifdef FFX_SSSR_INVERTED_DEPTH_RANGE
         if (position.z < f32(1.0e-6)) break;
 #else
@@ -254,7 +259,7 @@ float FFX_SSSR_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_directi
     occlusion = 1.f;
 
     // Reject hits outside the view frustum
-    if ((hit.x < 0.0f) || (hit.y < 0.0f) || (hit.x > 1.0f) || (hit.y > 1.0f))
+    if ((hit.x < 0.0f) || (hit.y < 0.0f) || (hit.x > FrameBuffer::DynamicResolutionParams1.x) || (hit.y > FrameBuffer::DynamicResolutionParams1.y))
     {
         return 0.0f;
     }
@@ -416,6 +421,20 @@ float LocalBRDF(float3 V, float3 L, float3 N, float roughness) {
 #endif
 }
 
+#if SHARC_UPDATE
+uint Hash(uint2 pos, uint seed)
+{
+    uint hash = pos.x + pos.y * 8 + seed * 64;
+    hash = hash * 1103515245u + 12345u;
+    return hash;
+}
+bool ShouldProcessPixel(uint2 GroupThreadID, uint FrameCount)
+{
+    uint hash = Hash(GroupThreadID, FrameCount);
+    return (hash % 4) == 0;
+}
+#endif
+
 [numthreads(8, 8, SAMPLES_PER_PIXEL)] void main(uint3 groupID : SV_GroupID,
                                                 uint3 groupThreadID : SV_GroupThreadID,
                                                 uint3 DTid : SV_DispatchThreadID)
@@ -457,7 +476,10 @@ float LocalBRDF(float3 V, float3 L, float3 N, float roughness) {
     float3 world_space_reflected_direction = mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(view_space_reflected_direction, 0)).xyz;
     float3 world_space_origin = mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(view_space_ray, 1)).xyz;
     float world_ray_length = 0.0;
-    bool valid_ray = all(coords < int2(screen_size)) && all(coords >= int2(0, 0));
+    bool valid_ray = all(coords < int2(screen_size * FrameBuffer::DynamicResolutionParams1.xy)) && all(coords >= int2(0, 0));
+#if SHARC_UPDATE
+    valid_ray = valid_ray && ShouldProcessPixel(coords.xy, SharedData::FrameCount);
+#endif
     uint hit_counter = 0;
     float3 hit = float3(0.0, 0.0, 0.0);
     float confidence = 0.0;
@@ -465,7 +487,7 @@ float LocalBRDF(float3 V, float3 L, float3 N, float roughness) {
     float3 world_space_ray = float3(0.0, 0.0, 0.0);
 
     float depth = DepthTexture[coords.xy].x;
-    float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
+    float4 positionWS = float4(2 * float2(uv.x * FrameBuffer::DynamicResolutionParams2.x, -uv.y * FrameBuffer::DynamicResolutionParams2.y + 1) - 1, depth, 1);
 	positionWS = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], positionWS);
 	positionWS.xyz = positionWS.xyz / positionWS.w;
 
@@ -473,7 +495,31 @@ float LocalBRDF(float3 V, float3 L, float3 N, float roughness) {
     float localWeight = pdf == 0 ? 0 : LocalBRDF(-view_space_ray_direction, view_space_surface_normal, view_space_reflected_direction, roughness) / max(pdf, 1e-4);
     weights[groupThreadID.x * 8 + groupThreadID.y][sample_id] = float4(view_space_surface_normal, localWeight);
 
-    if (valid_ray)
+#if SHARC_RENDER
+    SharcParameters sharcParameters;
+
+    sharcParameters.gridParameters.cameraPosition = FrameBuffer::CameraPosAdjust[0].xyz;
+    sharcParameters.gridParameters.sceneScale = GAME_UNIT_TO_CM;
+    sharcParameters.gridParameters.logarithmBase = SHARC_GRID_LOGARITHM_BASE;
+    sharcParameters.gridParameters.levelBias = SHARC_GRID_LEVEL_BIAS;
+
+    sharcParameters.hashMapData.capacity = 0x100000;
+    sharcParameters.hashMapData.hashEntriesBuffer = u_SharcHashEntriesBuffer;
+
+    sharcParameters.voxelDataBuffer = u_SharcVoxelDataBuffer;
+    sharcParameters.voxelDataBufferPrev = u_SharcVoxelDataBufferPrev;
+
+    SharcHitData hitData;
+    hitData.positionWorld = positionWS.xyz;
+    hitData.normalWorld = world_space_normal;
+
+    float3 sharcColor = 0;
+
+    if (valid_ray && SharcGetCachedRadiance(sharcParameters, hitData, sharcColor, false))
+    {
+        samples[groupThreadID.x * 8 + groupThreadID.y][sample_id] = float4(sharcColor, 1);
+    }
+    else if (valid_ray)
     {
         bool valid_hit;
         bool go_through_thin = false;
@@ -514,7 +560,7 @@ float LocalBRDF(float3 V, float3 L, float3 N, float roughness) {
             outPDF.w += pdf * confidence;
         }
         const float NdotV = saturate(dot(normalize(view_space_ray), view_space_surface_normal));
-#if defined(DYNAMIC_CUBEMAPS)
+#if defined(DYNAMIC_CUBEMAPS) && !SHARC_UPDATE
         if (UseDynamicCubemapsAsFallback != 0 && (confidence < 0.999f))
         {
 #   if defined(SSSR_SPECULAR)            
@@ -564,7 +610,41 @@ float LocalBRDF(float3 V, float3 L, float3 N, float roughness) {
 #endif
         sampleColor *= lerp(1.0f, occlusion, OcclusionStrength);
         samples[groupThreadID.x * 8 + groupThreadID.y][sample_id] = float4(sampleColor, confidence);
+#if SHARC_UPDATE
+        if (confidence > 0.99f)
+        {
+            SharcParameters sharcParameters;
+
+            sharcParameters.gridParameters.cameraPosition = FrameBuffer::CameraPosAdjust[0].xyz;
+            sharcParameters.gridParameters.sceneScale = GAME_UNIT_TO_CM;
+            sharcParameters.gridParameters.logarithmBase = SHARC_GRID_LOGARITHM_BASE;
+            sharcParameters.gridParameters.levelBias = SHARC_GRID_LEVEL_BIAS;
+
+            sharcParameters.hashMapData.capacity = 0x100000;
+            sharcParameters.hashMapData.hashEntriesBuffer = u_SharcHashEntriesBuffer;
+
+            sharcParameters.voxelDataBuffer = u_SharcVoxelDataBuffer;
+            sharcParameters.voxelDataBufferPrev = u_SharcVoxelDataBufferPrev;
+
+            SharcResolveParameters resolveParameters;
+            resolveParameters.accumulationFrameNum = 8;
+            resolveParameters.staleFrameNumMax = 16;
+            resolveParameters.cameraPositionPrev = FrameBuffer::CameraPreviousPosAdjust[0].xyz;
+            resolveParameters.enableAntiFireflyFilter = true;
+
+            SharcState sharcState;
+            SharcInit(sharcState);
+
+            SharcHitData hitData;
+            hitData.positionWorld = positionWS.xyz;
+            hitData.normalWorld = world_space_normal;
+
+            float random = Random::InterleavedGradientNoise(uv, SharedData::FrameCount);
+            SharcUpdateHit(sharcParameters, sharcState, hitData, sampleColor, random);
+        }
+#endif
     }
+#if !SHARC_UPDATE
     GroupMemoryBarrierWithGroupSync();
 
     // Ray Reuse
@@ -591,6 +671,7 @@ float LocalBRDF(float3 V, float3 L, float3 N, float roughness) {
 
         samples[groupThreadID.x * 8 + groupThreadID.y][0] = float4(colorSum, 1);
     }
+#endif
 
 #if defined(SSSR_SPECULAR)
     outColor.xyz = samples[groupThreadID.x * 8 + groupThreadID.y][0].xyz;
@@ -606,6 +687,8 @@ float LocalBRDF(float3 V, float3 L, float3 N, float roughness) {
     }
     SSRColorOutput[coords.xy] = outColor;
     SSRPDFOutput[coords.xy] = outPDF;
+#elif SHARC_UPDATE
+
 #else
 
     if (sample_id == 0) {

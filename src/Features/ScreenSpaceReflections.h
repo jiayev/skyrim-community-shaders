@@ -44,16 +44,6 @@ struct ScreenSpaceReflections : Feature
         float Thickness = 5.f;
         float NormalBias = 0.25f;
         float BRDFBias = 0.25f;
-        int SpatialTimes = 0;
-        float SpatialRadius = 0.5f;
-        bool EnableTemporal = false;
-        float TemporalScale = 1.25f;
-        float TemporalWeight = 0.92f;
-        bool EnableBilateral = false;
-        float BilateralScale = 0.5f;
-        float BilateralColorWeight = 0.1f;
-        float BilateralDepthWeight = 0.1f;
-        float BilateralNormalWeight = 0.1f;
         bool UseDynamicCubemapsAsFallback = true;
         uint DiffuseSPP = 2;
         bool EnableDiffuse = true;
@@ -64,6 +54,7 @@ struct ScreenSpaceReflections : Feature
         float OcclusionStrength = 1.0f;
         bool ReuseRayDiffuse = true;
         bool ReuseRaySpecular = false;
+        bool EnableSharc = false;
     } settings;
 
     struct alignas(16) SharedData
@@ -78,20 +69,14 @@ struct ScreenSpaceReflections : Feature
     {
         uint MaxSteps;
         uint MaxMips;
+        uint UseDynamicCubemapsAsFallback;
+        uint ReuseRay;
         float Thickness;
-        float SpatialRadius;
         float NormalBias;
-        float TemporalScale;
-        float TemporalWeight;
-        float BilateralScale;
-        float ColorWeight;
-        float DepthWeight;
-        float NormalWeight;
         float BRDFBias;
         float HistoryWeight;
         float OcclusionStrength;
-        uint UseDynamicCubemapsAsFallback;
-        uint ReuseRay;
+        float pad[3];
     };
 
     struct alignas(16) SPDCB
@@ -105,7 +90,6 @@ struct ScreenSpaceReflections : Feature
     };
 
     eastl::unique_ptr<ConstantBuffer> ssrCB;
-    // eastl::unique_ptr<ConstantBuffer> spdCB;
 
     bool recompileFlag = false;
 
@@ -120,16 +104,19 @@ struct ScreenSpaceReflections : Feature
     eastl::unique_ptr<Texture2D> texSSRColor = nullptr;
     eastl::unique_ptr<Texture2D> texSSRTDiffuseColor = nullptr;
     eastl::unique_ptr<Texture2D> texHitPDF = nullptr;
-    eastl::unique_ptr<Texture2D> texSpatial = nullptr;
-    eastl::unique_ptr<Texture2D> texTemporal = nullptr;
-    eastl::unique_ptr<Texture2D> texBilateral = nullptr;
     eastl::unique_ptr<Texture2D> texHistory = nullptr;
     eastl::unique_ptr<Texture2D> texHistoryDiffuse = nullptr;
     eastl::unique_ptr<Texture2D> texOutput = nullptr;
 
+    eastl::unique_ptr<Buffer> sharcHashEntries = nullptr;
+    eastl::unique_ptr<Buffer> sharcHashCopyOffsets = nullptr;
+    eastl::unique_ptr<Buffer> sharcVoxelData = nullptr;
+    eastl::unique_ptr<Buffer> sharcVoxelDataPrev = nullptr;
+
     winrt::com_ptr<ID3D11ShaderResourceView> noiseSRV = nullptr;
 
     static const uint maxMips = 9;
+    static const uint sharcNumEntries = 0x100000;
 
     std::array<winrt::com_ptr<ID3D11ShaderResourceView>, maxMips> depthSRVs = { nullptr };
 	std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, maxMips> depthUAVs = { nullptr };
@@ -139,10 +126,9 @@ struct ScreenSpaceReflections : Feature
     winrt::com_ptr<ID3D11ComputeShader> preprocessDepthCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> raymarchSpecularCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> raymarchDiffuseCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> raymarchDiffuseSharcCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> sharcUpdateRaymarchCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> prepareColorCS = nullptr;
-    // winrt::com_ptr<ID3D11ComputeShader> spdCS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> spatialCS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> temporalCS = nullptr;
-    winrt::com_ptr<ID3D11ComputeShader> bilateralCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> depthDownsampleCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> sharcResolveCS = nullptr;
 };
