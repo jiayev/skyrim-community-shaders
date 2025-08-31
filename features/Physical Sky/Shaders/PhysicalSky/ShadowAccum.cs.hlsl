@@ -45,8 +45,8 @@ float SampleShadow(float3 posWorldRel, uint eyeIndex)
 	float shadow = 1.0;
 
 	// cloud shadows
-	shadow *= Remap(CloudShadows::GetCloudShadowMult(posWorldRel, SampTr), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1) ;
-	[branch] if (all(shadow < 1e-8)) return 0;
+	// shadow *= Remap(CloudShadows::GetCloudShadowMult(posWorldRel, SampTr), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1) ;
+	// [branch] if (all(shadow < 1e-8)) return 0;
 
     // dir shadow map
 	{

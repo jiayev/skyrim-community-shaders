@@ -8,6 +8,8 @@
 #include "State.h"
 #include "Util.h"
 
+#include <DDSTextureLoader.h>
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PhysicalSky::Settings,
 	enabled,
@@ -278,6 +280,12 @@ void PhysicalSky::SettingsDebug()
 		BUFFER_VIEWER_NODE_BULLET(texMsLut, 1.f);
 		BUFFER_VIEWER_NODE_BULLET(texSvLut, 1.f);
 		BUFFER_VIEWER_NODE_BULLET(texApShadow, debugScale);
+
+		ImGui::Image(srvCloudSh[0].get(), { 256, 256 });
+		ImGui::Image(srvCloudSh[1].get(), { 256, 256 });
+		ImGui::Image(srvCloudSh[2].get(), { 256, 256 });
+		ImGui::Image(srvCloudSh[3].get(), { 256, 256 });
+		ImGui::Image(srvCloudSh[4].get(), { 256, 256 });
 	}
 }
 
@@ -397,6 +405,19 @@ void PhysicalSky::SetupResources()
 		texApShadow = eastl::make_unique<Texture2D>(texDesc);
 		texApShadow->CreateSRV(srvDesc);
 		texApShadow->CreateUAV(uavDesc);
+	}
+
+	{
+		DX::ThrowIfFailed(DirectX::CreateDDSTextureFromFile(device, L"data\\textures\\cloud_sh_cubemaps\\test_+x_sh.dds", nullptr, srvCloudSh[0].put()));
+		DX::ThrowIfFailed(DirectX::CreateDDSTextureFromFile(device, L"data\\textures\\cloud_sh_cubemaps\\test_-x_sh.dds", nullptr, srvCloudSh[1].put()));
+		DX::ThrowIfFailed(DirectX::CreateDDSTextureFromFile(device, L"data\\textures\\cloud_sh_cubemaps\\test_+y_sh.dds", nullptr, srvCloudSh[2].put()));
+		DX::ThrowIfFailed(DirectX::CreateDDSTextureFromFile(device, L"data\\textures\\cloud_sh_cubemaps\\test_-y_sh.dds", nullptr, srvCloudSh[3].put()));
+		DX::ThrowIfFailed(DirectX::CreateDDSTextureFromFile(device, L"data\\textures\\cloud_sh_cubemaps\\test_+z_sh.dds", nullptr, srvCloudSh[4].put()));
+		DX::ThrowIfFailed(DirectX::CreateDDSTextureFromFile(device, L"data\\textures\\cloud_sh_cubemaps\\test_+x_tr.dds", nullptr, srvCloudTr[0].put()));
+		DX::ThrowIfFailed(DirectX::CreateDDSTextureFromFile(device, L"data\\textures\\cloud_sh_cubemaps\\test_-x_tr.dds", nullptr, srvCloudTr[1].put()));
+		DX::ThrowIfFailed(DirectX::CreateDDSTextureFromFile(device, L"data\\textures\\cloud_sh_cubemaps\\test_+y_tr.dds", nullptr, srvCloudTr[2].put()));
+		DX::ThrowIfFailed(DirectX::CreateDDSTextureFromFile(device, L"data\\textures\\cloud_sh_cubemaps\\test_-y_tr.dds", nullptr, srvCloudTr[3].put()));
+		DX::ThrowIfFailed(DirectX::CreateDDSTextureFromFile(device, L"data\\textures\\cloud_sh_cubemaps\\test_+z_tr.dds", nullptr, srvCloudTr[4].put()));
 	}
 
 	CompileShaders();
@@ -540,8 +561,30 @@ void PhysicalSky::EarlyPrepass()
 void PhysicalSky::ReflectionsPrepass()
 {
 	if (cbData.enabled) {
-		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get() };
-		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
+		{
+			std::array srvs = {
+				texTrLut->srv.get(),
+				texSvLut->srv.get(),
+				texApLut->srv.get(),
+			};
+			globals::d3d::context->PSSetShaderResources(kSrvStartSlot, (uint)srvs.size(), srvs.data());
+		}
+
+		{
+			std::array srvs = {
+				srvCloudSh[0].get(),
+				srvCloudSh[1].get(),
+				srvCloudSh[2].get(),
+				srvCloudSh[3].get(),
+				srvCloudSh[4].get(),
+				srvCloudTr[0].get(),
+				srvCloudTr[1].get(),
+				srvCloudTr[2].get(),
+				srvCloudTr[3].get(),
+				srvCloudTr[4].get(),
+			};
+			globals::d3d::context->PSSetShaderResources(100, (uint)srvs.size(), srvs.data());
+		}
 	}
 }
 
@@ -550,8 +593,31 @@ void PhysicalSky::Prepass()
 	if (cbData.enabled) {
 		AccumShadow();
 
-		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get(), texApShadow->srv.get() };
-		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
+		{
+			std::array srvs = {
+				texTrLut->srv.get(),
+				texSvLut->srv.get(),
+				texApLut->srv.get(),
+				texApShadow->srv.get(),
+			};
+			globals::d3d::context->PSSetShaderResources(kSrvStartSlot, (uint)srvs.size(), srvs.data());
+		}
+
+		{
+			std::array srvs = {
+				srvCloudSh[0].get(),
+				srvCloudSh[1].get(),
+				srvCloudSh[2].get(),
+				srvCloudSh[3].get(),
+				srvCloudSh[4].get(),
+				srvCloudTr[0].get(),
+				srvCloudTr[1].get(),
+				srvCloudTr[2].get(),
+				srvCloudTr[3].get(),
+				srvCloudTr[4].get(),
+			};
+			globals::d3d::context->PSSetShaderResources(100, (uint)srvs.size(), srvs.data());
+		}
 	}
 }
 

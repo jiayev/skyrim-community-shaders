@@ -190,6 +190,7 @@ cbuffer AlphaTestRefCB : register(b11)
 
 #	if defined(PHYSICAL_SKY)
 #		define PS_SKY_SAMPLERS
+#		define PS_CLOUD_SH
 #		include "PhysicalSky/Common.hlsli"
 #		if defined(TEX) && defined(CLOUDS)
 #			define PS_CLOUDS
@@ -270,12 +271,18 @@ PS_OUTPUT main(PS_INPUT input)
 	{
 # 		if defined(DITHER) && !defined(TEX)
 		// SKY
-		float3 skyColor = PhysSky::SampleSky(normalize(input.WorldPosition.xyz), input.Position.xy, PhysSky::SampSv);
+		float3 viewDir = normalize(input.WorldPosition.xyz);
+		float3 skyColor = PhysSky::SampleSky(viewDir, input.Position.xy, PhysSky::SampSv);
+
+		float4 cloud = PhysSky::SampleCloudSH(viewDir, SampBaseSampler);
+		skyColor = skyColor * cloud.a + cloud.rgb;
+
 		psout.Color.xyz = lerp(skyColor, psout.Color.xyz, SharedData::physSkyData.vanillaMix);
 
 #		elif defined(PS_CLOUDS)
 		float4 apColor = PhysSky::SampleAp(viewDir, input.Position.xy, psCloudDist, PhysSky::SampSv);
 		psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
+		discard; // TODO: DEBUG REMOVE
 #		else
 		// discard; // TODO: REMOVE
 #		endif

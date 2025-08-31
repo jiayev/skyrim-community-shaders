@@ -1,6 +1,9 @@
 #include "Common/Color.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
+#include "PhysicalSky/SH_Lite.hlsli"
+
+// #define PS_CLOUD_SH
 
 #ifndef OMIT_PS_NAMESPACE
 namespace PhysSky
@@ -31,10 +34,22 @@ Texture3D<float4> TexApLut : register(t3);
 Texture3D<float4> TexApLut : register(t15);
 Texture2D<unorm float> TexApShadow : register(t16);
 #else
-Texture2D<float4> TexTrLut : register(t61);
-Texture2D<float4> TexSvLut : register(t62);
-Texture3D<float4> TexApLut : register(t63);
-Texture2D<unorm float> TexApShadow : register(t64);
+Texture2D<float4> TexTrLut : register(t40);
+Texture2D<float4> TexSvLut : register(t41);
+Texture3D<float4> TexApLut : register(t42);
+Texture2D<unorm float> TexApShadow : register(t43);
+
+Texture2DArray<float3> TexCloudShPX : register(t100);
+Texture2DArray<float3> TexCloudShNX : register(t101);
+Texture2DArray<float3> TexCloudShPY : register(t102);
+Texture2DArray<float3> TexCloudShNY : register(t103);
+Texture2DArray<float3> TexCloudShPZ : register(t104);
+
+Texture2D<float> TexCloudTrPX : register(t105);
+Texture2D<float> TexCloudTrNX : register(t106);
+Texture2D<float> TexCloudTrPY : register(t107);
+Texture2D<float> TexCloudTrNY : register(t108);
+Texture2D<float> TexCloudTrPZ : register(t109);
 #endif
 
 static const float RCP_PI = 1 / Math::PI;         // PI
@@ -123,6 +138,12 @@ float3 InvSkyViewLutUv(float2 uv)
 	float vm = 1 - 2 * uv.y;
 	float zenith = Math::PI * .5 * (1 - sign(vm) * vm * vm);
 	return SphericalDir(azimuth, zenith);
+}
+
+// https://blog.google/products/google-ar-vr/bringing-pixels-front-and-center-vr-video/
+float2 EquiangularCubemapUv(float2 facePos)
+{
+	return 2 * RCP_PI * atan(2 * facePos) + .5;
 }
 
 void SampleAtmosphere(
@@ -227,6 +248,24 @@ namespace Phase
 		float4 expValues = exp(float4(bestParams[1] * costh + bestParams[2], bestParams[5] * p1 * p1, bestParams[6] * costh, bestParams[9] * costh));
 		float4 expValWeight = float4(bestParams[0], bestParams[4], bestParams[7], bestParams[8]);
 		return dot(expValues, expValWeight) * 0.25;
+	}
+
+	float JendersieAt10um(float cos_theta)
+	{
+		float g_hg = 0.9882,
+			g_d = 0.5557,
+			alpha = 21.9955,
+			w_d = 0.4820;
+		return lerp(HG(cos_theta, g_hg), Draine(cos_theta, g_d, alpha), w_d);
+	}
+
+	float MsHeuristic(float cos_theta, float tr)
+	{
+		static const float scale = .25 / 3.1415926;
+		static const float power = 0.5; // lower = less isotropic
+		float w = 1 - pow(tr, power); // isotropic weight
+
+		return lerp(JendersieAt10um(cos_theta), scale, w);
 	}
 
 	float Rayleigh(float cos_theta)
@@ -347,6 +386,87 @@ float3 RelightCloud(float4 baseColor, float3 viewDir, float3 cloudPosWS, Sampler
 	return cloudColor;
 }
 #		endif
+
+#		ifdef PS_CLOUD_SH
+float4 SampleCloudSH(float3 viewDir, SamplerState sampCube)
+{
+	SharedData::PhysSkyData data = SharedData::physSkyData;
+
+	float2 uv;
+	float3 sh0;
+    float3 sh1;
+    float3 sh2;
+	float tr;
+
+#		define PS_SMPCLOUD(which) \
+	sh0 = TexCloudSh##which.Sample(sampCube, float3(uv, 0)); \
+    sh1 = TexCloudSh##which.Sample(sampCube, float3(uv, 1)); \
+    sh2 = TexCloudSh##which.Sample(sampCube, float3(uv, 2)); \
+	tr = TexCloudTr##which.Sample(sampCube, uv);
+
+	float3 cubemapSpaceViewDir = viewDir * float3(1, -1, 1);
+	float3 absViewDir = abs(cubemapSpaceViewDir);
+	float maxDirVal = max(max(absViewDir.x, absViewDir.y), absViewDir.z);
+	float3 onCubeViewDir = cubemapSpaceViewDir / maxDirVal * 0.5;
+	if (absViewDir.x == maxDirVal)
+	{
+		if (cubemapSpaceViewDir.x > 0)
+		{
+			uv = EquiangularCubemapUv(-onCubeViewDir.yz);
+			PS_SMPCLOUD(PX);
+		}
+		else
+		{
+			uv = EquiangularCubemapUv(onCubeViewDir.yz * float2(1, -1));
+			PS_SMPCLOUD(NX);
+		}
+	} 
+	else if (absViewDir.y == maxDirVal)
+	{
+		if (cubemapSpaceViewDir.y > 0)
+		{
+			uv = EquiangularCubemapUv(onCubeViewDir.xz * float2(1, -1));
+			PS_SMPCLOUD(PY);
+		}
+		else
+		{
+			uv = EquiangularCubemapUv(-onCubeViewDir.xz);
+			PS_SMPCLOUD(NY);
+		}
+	}
+	else // z
+	{
+		if (cubemapSpaceViewDir.z > 0)
+		{
+			uv = EquiangularCubemapUv(-onCubeViewDir.yz);
+			PS_SMPCLOUD(PZ);
+		}
+		else // negative z
+			return float4(0, 0, 0, 1);
+	}
+
+    SH::L2 sh;
+    sh.C[0] = sh0.x;
+    sh.C[1] = sh0.y;
+    sh.C[2] = sh0.z;
+    sh.C[3] = sh1.x;
+    sh.C[4] = sh1.y;
+    sh.C[5] = sh1.z;
+    sh.C[6] = sh2.x;
+    sh.C[7] = sh2.y;
+    sh.C[8] = sh2.z;
+    float3 color = SH::Evaluate(sh, -data.sunDir * float3(1, -1, 1));
+
+	float u = dot(viewDir, data.sunDir);
+    float phase = Phase::MsHeuristic(u, tr);
+    color *= phase;
+
+	color *= data.sunlightColor;
+    
+	return float4(color.rgb, tr);
+}
+#		endif
+
 #	endif
 
 float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)

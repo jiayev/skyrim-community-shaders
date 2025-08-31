@@ -58,6 +58,7 @@ struct PhysicalSky final : public Feature
 	inline void PostPostLoad() override { Hooks::Install(); }
 
 	////////////////////////////////////////////////// Feature Specific Data
+	constexpr static uint32_t kSrvStartSlot = 40;
 	constexpr static uint16_t kTrLutW = 256;
 	constexpr static uint16_t kTrLutH = 64;
 	constexpr static uint16_t kMsLutW = 32;
@@ -172,6 +173,9 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texSvLut = nullptr;  // sky view
 	eastl::unique_ptr<Texture3D> texApLut = nullptr;  // aerial perspective
 	eastl::unique_ptr<Texture2D> texApShadow = nullptr;
+
+	winrt::com_ptr<ID3D11ShaderResourceView> srvCloudSh[5] = { nullptr };
+	winrt::com_ptr<ID3D11ShaderResourceView> srvCloudTr[5] = { nullptr };
 
 	winrt::com_ptr<ID3D11SamplerState> sampTr = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> sampSv = nullptr;
