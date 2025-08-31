@@ -20,7 +20,7 @@ public:
 		return {
 			"Synchronizes volumetric lighting and shadows with the actual sun and moon positions in the sky.",
 			{ "Fixes the mismatch between the positions of the sun and moons and the lighting direction",
-				"Includes an optional alternative southern sun path for more realistic and dramatic lighting",
+				"Includes a configurable alternative sun path for more realistic and dramatic lighting",
 				"Smoothly switches the light source between the sun and moons based on visibility",
 				"Moon light source can be switched between Masser, Secunda, or the brightest",
 				"Automatic calculation of moon lighting intensity based on moon phase",
@@ -33,6 +33,8 @@ public:
 		bool Enabled = true;
 		bool UseAlternateSunPath = true;
 		int32_t MoonLightSource = 0;
+		int32_t SunPath = 0;
+		float CustomAngle = -35.0f;
 	};
 
 	Settings settings;
@@ -94,7 +96,17 @@ private:
 		None
 	};
 
+	enum class SunPath : uint8_t
+	{
+		Southern,
+		Northern,
+		Vanilla,
+		Custom,
+		Count
+	};
+
 	const char* MoonLightSourceNames[static_cast<uint8_t>(MoonLightSource::Count)] = { "Brightest", "Masser", "Secunda" };
+	const char* SunPathNames[static_cast<uint8_t>(SunPath::Count)] = { "Southern Sky", "Northern Sky", "Vanilla", "Custom" };
 
 	struct ClimateTimings
 	{
@@ -136,11 +148,14 @@ private:
 	};
 
 	static constexpr float RenderDistance = 325000.0f;
-	static constexpr float SunArcTiltAngle = 55.0f;
 	static constexpr float SunHorizonDistance = 280.0f;
 	static constexpr float SunPeakDistance = 400.0f;
 	static constexpr float SunScaleFactor = 48.0f / 2048.0f;
 	static constexpr float MinElevation = 0.25f;
+
+	static constexpr float SouthernSunAngle = 90.0f - 35.0f;
+	static constexpr float NorthernSunAngle = 90.0f + 35.0f;
+	static constexpr float VanillaSunAngle = 90.0f + 5.0f;
 
 	static constexpr float SecundaIntensityFactor = 0.67f;
 	static constexpr float NewMoonIntensityFactor = 0.05f;
@@ -156,6 +171,7 @@ private:
 
 	bool moonAndStarsLoaded = false;
 	RE::TESObjectCELL* currentCell = nullptr;
+	float sunAngle = 90.0f;
 	float currentSkyRotation = D3D11_FLOAT32_MAX;
 	float masserPhaseIntensityFactor = 0.0f;
 	float secundaPhaseIntensityFactor = 0.0f;
@@ -172,6 +188,8 @@ private:
 
 	void Update(const RE::Sky* sky);
 
+	void SetSunAngle();
+
 	void SetSkyRotation(const RE::Sky* sky, RE::TESObjectCELL* cell);
 
 	void ProcessSun(const RE::Sun* sun, float time, float altitude, bool isDayTime);
@@ -180,7 +198,7 @@ private:
 
 	static void CalculateSunDirectionAndDistance(const RE::Sun* sun, RE::NiPoint3& outDir, float& outDistance);
 
-	static void CalculateAlternateSunDirectionAndDistance(RE::NiPoint3& outDir, float& outDist, float time, float sunrise, float sunset);
+	static void CalculateAlternateSunDirectionAndDistance(RE::NiPoint3& outDir, float& outDist, float time, float sunrise, float sunset, float sunAngle);
 
 	static RE::NiPoint3 GetApparentDirection(const RE::NiPoint3& dir, float altitude);
 
