@@ -178,13 +178,13 @@ namespace SharedData
 	struct IBLSettings
 	{
 		uint EnableDiffuseIBL;
-		uint SampleUnderHorizonFromDynCube;
 		uint PreserveFogLuminance;
-		uint pad;
 		float DiffuseIBLScale;
 		float DALCAmount;
 		float IBLSaturation;
 		float FogAmount;
+		float DynamicCubemapsAmount;
+		float pad;
 	};
 
 	struct ExtendedTranslucencySettings
@@ -193,6 +193,36 @@ namespace SharedData
 		float Reduction;     // [0, 1.0] The factor to reduce the transparency to matain the average transparency [0,1]
 		float Softness;      // [0, 2.0] The soft remap upper limit [0,2]
 		float Strength;      // [0, 1.0] The inverse blend weight of the effect
+	};
+
+	struct LinearLightingSettings
+	{
+		uint enableLinearLighting;
+		uint enableGammaCorrection;
+		uint isDirLightLinear;
+		float dirLightMult;
+		float lightGamma;
+		float colorGamma;
+		float ambientGamma;
+		float fogGamma;
+		float fogAlphaGamma;
+		float effectGamma;
+		float effectAlphaGamma;
+		float skyGamma;
+		float waterGamma;
+		float vlGamma;
+		float vanillaDiffuseMult;
+		float vanillaSpecularMult;
+		float grassDiffuseMult;
+		float grassSpecularMult;
+		float lightMult;
+		float effectLightingMult;
+		float membraneEffectMult;
+		float bloodEffectMult;
+		float projectedEffectMult;
+		float deferredEffectMult;
+		float otherEffectMult;
+		float3 pad;
 	};
 
 	struct PhysSkyData
@@ -259,6 +289,7 @@ namespace SharedData
 		TerrainVariationSettings terrainVariationSettings;
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
+		LinearLightingSettings linearLightingSettings;
 		PhysSkyData physSkyData;
 	};
 

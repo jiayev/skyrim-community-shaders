@@ -1,3 +1,4 @@
+#include "Common/BRDF.hlsli"
 
 #if defined(SKYLIGHTING)
 #	include "Skylighting/Skylighting.hlsli"
@@ -7,17 +8,6 @@ namespace DynamicCubemaps
 {
 	TextureCube<float4> EnvReflectionsTexture : register(t30);
 	TextureCube<float4> EnvTexture : register(t31);
-
-	// https://www.unrealengine.com/en-US/blog/physically-based-shading-on-mobile
-	half2 EnvBRDFApprox(half Roughness, half NoV)
-	{
-		const half4 c0 = { -1, -0.0275, -0.572, 0.022 };
-		const half4 c1 = { 1, 0.0425, 1.04, -0.04 };
-		half4 r = Roughness * c0 + c1;
-		half a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
-		half2 AB = half2(-1.04, 1.04) * a004 + r.zw;
-		return AB;
-	}
 
 #if !defined(WATER)
 
@@ -45,7 +35,7 @@ namespace DynamicCubemaps
 
 #		if defined(SKYLIGHTING)
 		if (SharedData::InInterior) {
-			float3 specularIrradiance = Color::GammaToLinear(EnvTexture.SampleLevel(SampColorSampler, R, level).xyz);
+			float3 specularIrradiance = Color::IrradianceToLinear(EnvTexture.SampleLevel(SampColorSampler, R, level).xyz);
 
 			finalIrradiance += specularIrradiance;
 			return finalIrradiance;
@@ -59,16 +49,16 @@ namespace DynamicCubemaps
 		float3 specularIrradiance = 1;
 
 		if (skylightingSpecular < 1.0)
-			specularIrradiance = Color::GammaToLinear(EnvTexture.SampleLevel(SampColorSampler, R, level).xyz);
+			specularIrradiance = Color::IrradianceToLinear(EnvTexture.SampleLevel(SampColorSampler, R, level).xyz);
 
 		float3 specularIrradianceReflections = 1.0;
 
 		if (skylightingSpecular > 0.0)
-			specularIrradianceReflections = Color::GammaToLinear(EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level).xyz);
+			specularIrradianceReflections = Color::IrradianceToLinear(EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level).xyz);
 
 		finalIrradiance = lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
 #		else
-		float3 specularIrradiance = Color::GammaToLinear(EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level).xyz);
+		float3 specularIrradiance = Color::IrradianceToLinear(EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level).xyz);
 
 		finalIrradiance += specularIrradiance;
 #		endif
@@ -87,7 +77,7 @@ namespace DynamicCubemaps
 
 		float level = roughness * 7.0;
 
-		float2 specularBRDF = EnvBRDFApprox(roughness, NoV);
+		float2 specularBRDF = BRDF::EnvBRDF(roughness, NoV);
 
 		// Horizon specular occlusion
 		// https://marmosetco.tumblr.com/post/81245981087
@@ -102,7 +92,7 @@ namespace DynamicCubemaps
 
 #		if defined(SKYLIGHTING)
 		if (SharedData::InInterior) {
-			float3 specularIrradiance = Color::GammaToLinear(EnvTexture.SampleLevel(SampColorSampler, R, level).xyz);
+			float3 specularIrradiance = Color::IrradianceToLinear(EnvTexture.SampleLevel(SampColorSampler, R, level).xyz);
 
 			finalIrradiance += specularIrradiance;
 
@@ -117,16 +107,16 @@ namespace DynamicCubemaps
 		float3 specularIrradiance = 1;
 
 		if (skylightingSpecular < 1.0)
-			specularIrradiance = Color::GammaToLinear(EnvTexture.SampleLevel(SampColorSampler, R, level).xyz);
+			specularIrradiance = Color::IrradianceToLinear(EnvTexture.SampleLevel(SampColorSampler, R, level).xyz);
 
 		float3 specularIrradianceReflections = 1.0;
 
 		if (skylightingSpecular > 0.0)
-			specularIrradianceReflections = Color::GammaToLinear(EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level).xyz);
+			specularIrradianceReflections = Color::IrradianceToLinear(EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level).xyz);
 
 		finalIrradiance = lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
 #		else
-		float3 specularIrradiance = Color::GammaToLinear(EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level));
+		float3 specularIrradiance = Color::IrradianceToLinear(EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level));
 
 		finalIrradiance += specularIrradiance;
 #		endif

@@ -2,6 +2,9 @@
 #define __COLOR_DEPENDENCY_HLSL__
 
 #include "Common/Math.hlsli"
+#include "Common/SharedData.hlsli"
+
+#define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
 
 namespace Color
 {
@@ -50,9 +53,6 @@ namespace Color
 		return color;
 	}
 
-	// Attempt to match vanilla materials tha are a darker than PBR
-	const static float PBRLightingScale = 0.666;
-
 	float3 GammaToLinear(float3 color)
 	{
 		return pow(abs(color), 1.8);
@@ -73,23 +73,172 @@ namespace Color
 		return pow(abs(color), 1.0 / 2.2);
 	}
 
-	float3 Diffuse(float3 color)
+#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
+	// Attempt to match vanilla materials tha are a darker than PBR
+	const static float PBRLightingScale = ENABLE_LL ? 1.0 : 0.666;
+	const static float PBRLightingCompensation = ENABLE_LL ? 1.0 : Math::PI;
+
+	float3 GammaToLinearLuminancePreserving(float3 color)
 	{
-#if defined(TRUE_PBR)
-		return LinearToGamma(color);
-#else
-		return color;
-#endif
+		if (!ENABLE_LL) {
+			return color;
+		}
+		float originalLuminance = RGBToLuminance(color);
+		if (originalLuminance <= 1e-5) {
+			return float3(0.0, 0.0, 0.0);
+		}
+		float3 linearColorRaw = GammaToLinear(color / originalLuminance);
+		float scale = GammaToLinear(originalLuminance).x;
+		return linearColorRaw * scale;
 	}
 
-	float3 Light(float3 color)
+	float3 GammaToLinearLuminancePreservingLight(float3 color)
 	{
-#if defined(TRUE_PBR)
-		return color * Math::PI;  // Compensate for traditional Lambertian diffuse
-#else
-		return color;
-#endif
+		if (!ENABLE_LL) {
+			return color;
+		}
+		float originalLuminance = RGBToLuminance(color);
+		if (originalLuminance <= 1e-5) {
+			return float3(0.0, 0.0, 0.0);
+		}
+		float3 linearColorRaw = pow(abs(color / originalLuminance), SharedData::linearLightingSettings.lightGamma);
+		float scale = originalLuminance;
+		return linearColorRaw * scale;
 	}
+
+	// Linear Lighting Functions
+	float3 LLGammaToLinear(float3 color)
+	{
+		return ENABLE_LL ? GammaToLinear(color) : color;
+	}
+
+	float3 LLLinearToGamma(float3 color)
+	{
+		return ENABLE_LL ? LinearToGamma(color) : color;
+	}
+
+	float3 Diffuse(float3 color)
+	{
+#	if defined(TRUE_PBR)
+		return ENABLE_LL ? color : LinearToGamma(color);
+#	else
+		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) : color;
+#	endif
+	}
+
+	float3 Light(float3 color, bool isLinear = false)
+	{
+		color = (ENABLE_LL && !isLinear) ? pow(abs(color), SharedData::linearLightingSettings.lightGamma) * SharedData::linearLightingSettings.lightMult : color;
+#	if defined(TRUE_PBR)
+		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
+#	else
+		return color;
+#	endif
+	}
+
+	float3 Ambient(float3 color)
+	{
+		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.ambientGamma) : color;
+	}
+
+	float3 Fog(float3 color)
+	{
+		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.fogGamma) : color;
+	}
+
+	float FogAlpha(float alpha)
+	{
+		return ENABLE_LL ? pow(abs(alpha), SharedData::linearLightingSettings.fogAlphaGamma) : alpha;
+	}
+
+	float3 Effect(float3 color)
+	{
+		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.effectGamma) : color;
+	}
+
+	float3 EffectMult(float3 color)
+	{
+		if (ENABLE_LL) {
+#	if defined(MEMBRANE)
+			color *= SharedData::linearLightingSettings.membraneEffectMult;
+#	elif defined(BLOOD)
+			color *= SharedData::linearLightingSettings.bloodEffectMult;
+#	elif defined(PROJECTED_UV)
+			color *= SharedData::linearLightingSettings.projectedEffectMult;
+#	elif defined(DEFERRED)
+			color *= SharedData::linearLightingSettings.deferredEffectMult;
+#	else
+			color *= SharedData::linearLightingSettings.otherEffectMult;
+#	endif
+		}
+		return color;
+	}
+
+	float EffectLightingMult()
+	{
+		return ENABLE_LL ? SharedData::linearLightingSettings.effectLightingMult : 1.0f;
+	}
+
+	float EffectAlpha(float alpha)
+	{
+		return ENABLE_LL ? pow(abs(alpha), SharedData::linearLightingSettings.effectAlphaGamma) : alpha;
+	}
+
+	float3 Sky(float3 color)
+	{
+		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.skyGamma) : color;
+	}
+
+	float3 Water(float3 color)
+	{
+		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.waterGamma) : color;
+	}
+
+	float3 VolumetricLighting(float3 color)
+	{
+		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.vlGamma) : color;
+	}
+
+	float3 ColorToLinear(float3 color)
+	{
+		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) : color;
+	}
+
+	float3 RadianceToLinear(float3 color)
+	{
+		return ENABLE_LL ? color : GammaToLinear(color);
+	}
+
+	float3 IrradianceToLinear(float3 color)
+	{
+		return ENABLE_LL ? color : GammaToLinear(color);
+	}
+
+	float3 IrradianceToGamma(float3 color)
+	{
+		return ENABLE_LL ? color : LinearToGamma(color);
+	}
+
+	float VanillaDiffuseMult()
+	{
+		return ENABLE_LL ? SharedData::linearLightingSettings.vanillaDiffuseMult : 1.0f;
+	}
+
+	float VanillaSpecularMult()
+	{
+		return ENABLE_LL ? SharedData::linearLightingSettings.vanillaSpecularMult : 1.0f;
+	}
+
+	float GrassDiffuseMult()
+	{
+		return ENABLE_LL ? SharedData::linearLightingSettings.grassDiffuseMult : 1.0f;
+	}
+
+	float GrassSpecularMult()
+	{
+		return ENABLE_LL ? SharedData::linearLightingSettings.grassSpecularMult : 1.0f;
+	}
+#endif
 }
 
 #endif  //__COLOR_DEPENDENCY_HLSL__

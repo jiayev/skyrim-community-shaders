@@ -14,6 +14,7 @@
 #include "Features/InverseSquareLighting.h"
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
+#include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PhysicalSky.h"
 #include "Features/ScreenSpaceGI.h"
@@ -225,6 +226,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::terrainVariation,
 		&globals::features::ibl,
 		&globals::features::extendedTranslucency,
+		&globals::features::linearLighting,
 		&globals::features::physicalSky
 	};
 

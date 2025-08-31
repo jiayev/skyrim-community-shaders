@@ -2,6 +2,7 @@
 
 #include "CloudShadows.h"
 #include "Deferred.h"
+#include "LinearLighting.h"
 #include "SkySync.h"
 #include "TerrainShadows.h"
 
@@ -463,6 +464,8 @@ void PhysicalSky::Reset()
 	auto& skySync = globals::features::skySync;
 	skySync.lightColors = std::nullopt;
 
+	auto& linearLighting = globals::features::linearLighting;
+
 	bool allGood = settings.enabled && ShadersOK() && skySync.loaded && skySync.settings.Enabled;
 
 	// check worldspace
@@ -486,6 +489,7 @@ void PhysicalSky::Reset()
 
 	if (!allGood) {
 		cbData.enabled = allGood;
+		linearLighting.isDirLightLinear = false;
 		return;
 	}
 
@@ -518,7 +522,7 @@ void PhysicalSky::Reset()
 		.secundaDir = { secundaDir.x, secundaDir.y, secundaDir.z },
 		.secundaColor = settings.secundaColor * exposure,
 		.enabled = allGood,
-		.tonemapper = settings.tonemapper,
+		.tonemapper = linearLighting.settings.enableLinearLighting ? 0 : settings.tonemapper,
 		.vanillaMix = settings.vanillaMix,
 		.zBottom = worldspaceInfo.zBottom,
 		.rPlanet = 6.36e3f / Util::Units::GAME_UNIT_TO_KM,
@@ -537,11 +541,15 @@ void PhysicalSky::Reset()
 	};
 
 	if (settings.overrideDirLight) {
-		constexpr auto LightConvFn = [](float3 color) {
-			color /= RE::NI_PI;  // Colors should match PBR values
+		linearLighting.isDirLightLinear = true;
+		const float pbrCompensationMult = linearLighting.settings.enableLinearLighting ? 1.0f : RE::NI_PI;  // Colors should match PBR values when not using linear lighting
+		auto LightConvFn = [pbrCompensationMult](float3 color) {
+			color /= pbrCompensationMult;
 			return RE::NiColor(color.x, color.y, color.z);
 		};
 		skySync.lightColors = { LightConvFn(cbData.sunlightColor), LightConvFn(cbData.masserColor), LightConvFn(cbData.secundaColor) };
+	} else {
+		linearLighting.isDirLightLinear = false;
 	}
 
 	RE::NiPoint3 posCam = { 0, 0, 0 };

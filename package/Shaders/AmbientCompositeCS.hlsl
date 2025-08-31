@@ -58,26 +58,21 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 
 	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
 
-	float3 directionalAmbientColor = max(0, mul(SharedData::DirectionalAmbient, float4(normalWS, 1.0)));
+	float3 directionalAmbientColor = Color::Ambient(max(0, mul(SharedData::DirectionalAmbient, float4(normalWS, 1.0))));
 
 #if defined(IBL)
 	if (SharedData::iblSettings.EnableDiffuseIBL) {
-		directionalAmbientColor *= SharedData::iblSettings.DALCAmount;
+		directionalAmbientColor = SharedData::iblSettings.DALCAmount * directionalAmbientColor;
 		directionalAmbientColor += Color::Saturation(ImageBasedLighting::GetDiffuseIBL(-normalWS), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 	}
 #endif
 
-	float3 linAlbedo = Color::GammaToLinear(albedo);
-	float3 linDirectionalAmbientColor = Color::GammaToLinear(directionalAmbientColor);
-#if defined(IBL)
-	if (SharedData::iblSettings.EnableDiffuseIBL) {
-		linDirectionalAmbientColor = directionalAmbientColor;
-	}
-#endif
-	float3 linDiffuseColor = Color::GammaToLinear(diffuseColor);
+	float3 linAlbedo = Color::IrradianceToLinear(albedo);
+	float3 linDirectionalAmbientColor = Color::IrradianceToLinear(directionalAmbientColor);
+	float3 linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
 	float3 originalDiffuseColor = linDiffuseColor;
 
-	float3 linAmbient = Color::GammaToLinear(albedo * directionalAmbientColor);
+	float3 linAmbient = Color::IrradianceToLinear(albedo * directionalAmbientColor);
 
 	float visibility = 1.0;
 #if defined(SKYLIGHTING)
@@ -140,13 +135,13 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 #endif
 
 	linAmbient *= visibility;
-	diffuseColor = Color::LinearToGamma(linDiffuseColor);
-	directionalAmbientColor = Color::LinearToGamma(linDirectionalAmbientColor * visibility);
+	diffuseColor = Color::IrradianceToGamma(linDiffuseColor);
+	directionalAmbientColor = Color::IrradianceToGamma(linDirectionalAmbientColor * visibility);
 
 	diffuseColor = diffuseColor + directionalAmbientColor * albedo;
 
 #if defined(SSGI)
-	DiffuseAmbientRW[dispatchID.xy] = Color::GammaToLinear(diffuseColor - originalDiffuseColor);
+	DiffuseAmbientRW[dispatchID.xy] = Color::IrradianceToLinear(diffuseColor - originalDiffuseColor);
 #endif
 
 	MainRW[dispatchID.xy] = float4(diffuseColor, 1);
