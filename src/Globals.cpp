@@ -26,6 +26,7 @@
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PhysicalSky.h"
+#include "Features/PostProcessing.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/SkySync.h"
@@ -85,6 +86,7 @@ namespace globals
 		PerformanceOverlay performanceOverlay{};
 		WetnessEffects wetnessEffects{};
 		ExtendedTranslucency extendedTranslucency{};
+		PostProcessing postProcessing{};
 
 		namespace llf
 		{
