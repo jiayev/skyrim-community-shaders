@@ -84,8 +84,9 @@ Texture2D<float4> SSRTexture : register(t15);
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
 	float2 uv = float2(dispatchID.xy + 0.5) * SharedData::BufferDim.zw;
+	uv *= FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
+
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
-	uv *= FrameBuffer::DynamicResolutionParams2.xy;  // Adjust for dynamic res
 	uv = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
 	float3 normalGlossiness = NormalRoughnessTexture[dispatchID.xy];

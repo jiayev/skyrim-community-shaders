@@ -14,9 +14,9 @@
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
+#include "Features/Upscaling.h"
 
 #include "Hooks.h"
-#include "Streamline.h"
 
 struct DepthStates
 {
@@ -142,6 +142,9 @@ void Deferred::SetupResources()
 		samplerDesc.MinLOD = 0;
 		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &linearSampler));
+
+		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointSampler));
 	}
 
 	{
@@ -384,7 +387,7 @@ void Deferred::StartDeferred()
 
 void Deferred::DeferredPasses()
 {
-	globals::streamline->CheckFrameConstants();
+	globals::features::upscaling.CheckFrameConstants();
 
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Deferred");
@@ -415,7 +418,7 @@ void Deferred::DeferredPasses()
 
 	auto main = renderer->GetRuntimeData().renderTargets[forwardRenderTargets[0]];
 	auto normals = renderer->GetRuntimeData().renderTargets[forwardRenderTargets[2]];
-	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	auto reflectance = renderer->GetRuntimeData().renderTargets[REFLECTANCE];
 
 	auto motionVectors = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
@@ -441,7 +444,7 @@ void Deferred::DeferredPasses()
 	if (ssr.loaded && ssr.settings.EnableDiffuse)
 		ssr.DrawSSRTDiffuse();
 
-	auto dispatchCount = Util::GetScreenDispatchCount();
+	auto dispatchCount = Util::GetScreenDispatchCount(true);
 
 	if (ssgi.loaded) {
 		// Ambient Composite
@@ -908,6 +911,15 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 	func(This, RenderFlags);
 
 	deferred->EndDeferred();
+
+	// Copy depth from before water
+	auto renderer = globals::game::renderer;
+	auto context = globals::d3d::context;
+
+	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
+	context->CopyResource(depthCopy.texture, depth.texture);
 
 	// After this point, water starts rendering
 };
