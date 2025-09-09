@@ -513,7 +513,7 @@ void PostProcessing::DrawBeforeUpscaling()
 		return;
 
 	auto& upscaling = globals::features::upscaling;
-	if (!upscaling || !upscaling.loaded)
+	if (!upscaling.loaded)
 		return;
 
 	auto renderer = globals::game::renderer;
@@ -568,7 +568,6 @@ void PostProcessing::PreProcess()
 	auto context = globals::d3d::context;
 
 	auto& upscaling = globals::features::upscaling;
-	bool upscalingActive = upscaling && upscaling.loaded;
 
 	bool inMainLoadingMenu = globals::game::ui && (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
 
@@ -578,13 +577,13 @@ void PostProcessing::PreProcess()
 
 	// go through each fx
 	for (auto& pipe : pipeline) {
-		if (pipe && pipe->enabled && !pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && (!pipe->DrawBeforeUpscaling() || !upscalingActive)) {
+		if (pipe && pipe->enabled && !pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && (!pipe->DrawBeforeUpscaling() || !upscaling.loaded)) {
 			pipe->Draw(lastTexColor);
 		}
 	}
 
 	for (auto& pipe : pipeline) {
-		if (pipe && pipe->enabled && pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && (!pipe->DrawBeforeUpscaling() || !upscalingActive)) {
+		if (pipe && pipe->enabled && pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && (!pipe->DrawBeforeUpscaling() || !upscaling.loaded)) {
 			pipe->Draw(lastTexColor);
 		}
 	}
