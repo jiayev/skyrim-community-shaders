@@ -1,5 +1,5 @@
-#include "DX12SwapChain.h"
 #include "Deferred.h"
+#include "Features/Upscaling.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
 #include "Hooks.h"
@@ -7,7 +7,6 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
-#include "Upscaling.h"
 
 #include "ENB/ENBSeriesAPI.h"
 
@@ -79,11 +78,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
-				auto state = globals::state;
-				state->PostPostLoad();  // state should load first so basic information is populated
 				Deferred::Hooks::Install();
 				globals::truePBR->PostPostLoad();
-				Upscaling::InstallHooks();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
 				FrameAnnotations::OnPostPostLoad();
@@ -173,12 +169,13 @@ bool Load()
 	auto log = spdlog::default_logger();
 	log->set_level(state->GetLogLevel());
 
-	const std::array dlls = {
+	const std::array incompatibleDLLs = {
 		L"Data/SKSE/Plugins/ShaderTools.dll",
-		L"Data/SKSE/Plugins/SSEShaderTools.dll"
+		L"Data/SKSE/Plugins/SSEShaderTools.dll",
+		L"Data/SKSE/Plugins/SkyrimUpscaler.dll"
 	};
 
-	for (const auto dll : dlls) {
+	for (const auto dll : incompatibleDLLs) {
 		if (LoadLibrary(dll)) {
 			auto errorMessage = std::format("Incompatible DLL {} detected", stl::utf16_to_utf8(dll).value_or("<unicode conversion error>"s));
 			logger::error("{}", errorMessage);
@@ -186,7 +183,26 @@ bool Load()
 		}
 	}
 
-	if (errors.empty())
-		Hooks::InstallD3DHooks();
-	return true;
+	const std::array requiredDLLs = {
+		L"Data/SKSE/Plugins/EngineFixes.dll"
+	};
+
+	for (const auto dll : requiredDLLs) {
+		if (LoadLibrary(dll)) {
+			auto errorMessage = std::format("Required DLL {} was missing", stl::utf16_to_utf8(dll).value_or("<unicode conversion error>"s));
+			logger::error("{}", errorMessage);
+			errors.push_back(errorMessage);
+		}
+	}
+
+	if (errors.empty()) {
+		logger::info("Calling feature Load methods");
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (feature->loaded) {
+				feature->Load();
+			}
+		}
+	}
+
+	return errors.empty();
 }
