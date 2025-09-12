@@ -57,7 +57,7 @@ public:
 		uint frameGenerationForceEnable = 0;
 		uint streamlineLogLevel = 0;   // 0=Off, 1=Default, 2=Verbose
 		uint enableNISSharpening = 1;  // 0=Off, 1=On
-		float nisSharpness = 0.3f;     // 0.0 to 1.0
+		float nisSharpness = 0.15f;    // 0.0 to 1.0
 	};
 
 	Settings settings;
