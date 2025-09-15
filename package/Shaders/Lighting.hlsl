@@ -3020,7 +3020,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			shadowComponent != 0.0 &&
 			lightAngle > 0.0)
 		{
-			float3 lightDirectionVS = light.positionVS[eyeIndex].xyz - viewPosition.xyz;
+			float3 lightDirectionVS = FrameBuffer::WorldToView(light.positionWS[eyeIndex].xyz, true, eyeIndex) - viewPosition.xyz;
 			float SSPLSShadow = lerp(1.0, ScreenSpacePointLightShadows::GetShadow(LinearSampler, viewPosition, screenNoise, lightDirectionVS, ssplsSteps, light.radius, eyeIndex, light.lightFlags & LightLimitFix::LightFlags::Shadow), SharedData::ssplsSettings.Strength);
 			lightShadow *= SSPLSShadow;
 		}
