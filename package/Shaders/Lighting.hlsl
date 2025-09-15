@@ -2609,15 +2609,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		rainWetness = SharedData::wetnessEffectsSettings.SkinWetness * SharedData::wetnessEffectsSettings.Wetness;
 #		endif
 
-	float shoreWetness = shoreFactor * SharedData::wetnessEffectsSettings.MaxShoreWetness;
-	wetness = max(shoreWetness, rainWetness);
-
-	// Calculate puddle effects
-	float puddleWetness = SharedData::wetnessEffectsSettings.PuddleWetness * minWetnessAngle;
-#		if defined(HAIR)
-	rainWetness = SharedData::wetnessEffectsSettings.SkinWetness * SharedData::wetnessEffectsSettings.Wetness * 0.8f;
-#		endif
-
 #		if defined(CS_SKIN) && !defined(SKIN)
 	if (skinEnabled) {
 		float2 dynamicWetness = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z, worldNormal.xyz);
@@ -2629,18 +2620,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		dynamicWetnessValue = min(SharedData::skinData.skinParams2.y + dynamicWetnessValue, 2.0f);
 #			endif
 		rainWetness += min(dynamicWetnessValue, 1.f);
-		puddleWetness += dynamicWetnessValue;
 	}
 #		endif
+	float shoreWetness = shoreFactor * SharedData::wetnessEffectsSettings.MaxShoreWetness;
+	wetness = max(shoreWetness, rainWetness);
 
-	rainWetness *= wetnessOcclusion;
-	puddleWetness *= wetnessOcclusion;
-
-	wetness = max(shoreFactor * SharedData::wetnessEffectsSettings.MaxShoreWetness, rainWetness);
-
-	float3 wetnessNormal = worldNormal;
-
-	float3 puddleCoords = ((input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz) * 0.5 + 0.5) * 0.01 / SharedData::wetnessEffectsSettings.PuddleRadius;
+	// Calculate puddle effects
+	float puddleWetness = SharedData::wetnessEffectsSettings.PuddleWetness * minWetnessAngle;
 	float puddle = wetness;
 
 #		if !defined(SKINNED) && !(defined(SKIN) && defined(CS_SKIN))
