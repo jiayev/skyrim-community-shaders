@@ -10,10 +10,8 @@ using json = nlohmann::json;
 
 #include <FeatureBuffer.h>
 
-#include "reshade/reshade_api.hpp"
 #include <Hooks.h>
 #include <mutex>
-#include <reshade/reshade.hpp>
 
 class State
 {
@@ -58,8 +56,6 @@ public:
 	const std::string userConfigPath = "Data\\SKSE\\Plugins\\CommunityShaders\\SettingsUser.json";
 	const std::string defaultConfigPath = "Data\\SKSE\\Plugins\\CommunityShaders\\SettingsDefault.json";
 
-	bool upscalerLoaded = false;
-
 	float timer = 0;
 	double smoothDrawCalls[RE::BSShader::Type::Total + 1];
 	int drawCalls[RE::BSShader::Type::Total + 1];
@@ -87,7 +83,6 @@ public:
 
 	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);
 	void Save(ConfigMode a_configMode = ConfigMode::USER);
-	void PostPostLoad();
 
 	bool ValidateCache(CSimpleIniA& a_ini);
 	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
@@ -227,14 +222,6 @@ public:
 	bool IsFeatureDisabled(const std::string& featureName);
 	std::unordered_map<std::string, bool>& GetDisabledFeatures();
 
-	reshade::api::effect_runtime* reShadeRuntime = nullptr;
-	reshade::api::resource_view reshadeSwapChainRTV;
-	reshade::api::resource_view reshadeSwapChainRTVsRGB;
-
-	void SetupReShade();
-	void RenderReShade();
-	void PresentReShade();
-
 	bool useFrameAnnotations = false;
 
 	// --- Utility Methods ---
@@ -306,6 +293,5 @@ public:
 
 private:
 	std::shared_ptr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
-	bool initialized = false;
 	std::mutex statsMutex;
 };

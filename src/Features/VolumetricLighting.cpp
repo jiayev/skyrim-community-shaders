@@ -1,6 +1,6 @@
 #include "VolumetricLighting.h"
 
-#include "InteriorSunShadows.h"
+#include "InteriorSun.h"
 #include "ShaderCache.h"
 #include "State.h"
 
@@ -21,22 +21,17 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void VolumetricLighting::DrawSettings()
 {
-	if (ImGui::TreeNodeEx("Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-		if (ImGui::Checkbox("Enable Volumetric Lighting in Exteriors", &settings.ExteriorEnabled))
-			SetupVL();
+	if (ImGui::Checkbox("Enable Volumetric Lighting in Exteriors", &settings.ExteriorEnabled))
+		SetupVL();
 
-		if (settings.ExteriorEnabled)
-			DrawVolumetricLightingSettings(settings.ExteriorQuality, settings.ExteriorCustomSize, false, !inInterior);
+	if (settings.ExteriorEnabled)
+		DrawVolumetricLightingSettings(settings.ExteriorQuality, settings.ExteriorCustomSize, false, !inInterior);
 
-		if (ImGui::Checkbox("Enable Volumetric Lighting in Interiors", &settings.InteriorEnabled))
-			SetupVL();
+	if (ImGui::Checkbox("Enable Volumetric Lighting in Interiors", &settings.InteriorEnabled))
+		SetupVL();
 
-		if (settings.InteriorEnabled)
-			DrawVolumetricLightingSettings(settings.InteriorQuality, settings.InteriorCustomSize, true, inInterior);
-
-		ImGui::Spacing();
-		ImGui::TreePop();
-	}
+	if (settings.InteriorEnabled)
+		DrawVolumetricLightingSettings(settings.InteriorQuality, settings.InteriorCustomSize, true, inInterior);
 }
 
 void VolumetricLighting::DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, const bool isInterior, const bool inLocationType)
@@ -220,7 +215,7 @@ void VolumetricLighting::EarlyPrepass()
 
 	initialised = true;
 	inInterior = currentlyInInterior;
-	inInteriorWithSunShadows = InteriorSunShadows::IsInteriorWithSun(interiorCell);
+	inInteriorWithSun = InteriorSun::IsInteriorWithSun(interiorCell);
 	SetupVL();
 }
 
@@ -228,9 +223,9 @@ void VolumetricLighting::SetupVL()
 {
 	if (inInterior) {
 		if (globals::game::isVR)
-			SetBooleanSettings(hiddenVRSettings, GetName(), settings.InteriorEnabled && inInteriorWithSunShadows);
+			SetBooleanSettings(hiddenVRSettings, GetName(), settings.InteriorEnabled && inInteriorWithSun);
 		else
-			*bEnableVolumetricLighting = settings.InteriorEnabled && inInteriorWithSunShadows;
+			*bEnableVolumetricLighting = settings.InteriorEnabled && inInteriorWithSun;
 		*gVolumetricLightingSizeHigh = static_cast<Quality>(settings.InteriorQuality) == Quality::Custom ? settings.InteriorCustomSize : defaultSizeHigh;
 		SetVLQuality(GetVLDescriptor(), settings.InteriorQuality);
 	} else {

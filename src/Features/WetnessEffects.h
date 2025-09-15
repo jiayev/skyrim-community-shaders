@@ -31,7 +31,7 @@ public:
 		uint EnableWetnessEffects = true;
 		float MaxRainWetness = 1.0f;
 		float MaxPuddleWetness = 2.5f;
-		float MaxShoreWetness = 0.5f;
+		float MaxShoreWetness = 1.0f;
 		uint ShoreRange = 32;
 		float PuddleRadius = 1.0f;
 		float PuddleMaxAngle = 0.95f;
@@ -47,8 +47,8 @@ public:
 		uint EnableVanillaRipples = false;
 		float RaindropFxRange = 1000.f;
 		float RaindropGridSize = 4.f;
-		float RaindropInterval = .5f;
-		float RaindropChance = .3f;
+		float RaindropInterval = 1.0f;
+		float RaindropChance = 1.0f;
 		float SplashesLifetime = 10.0f;
 		float SplashesStrength = 1.05f;
 		float SplashesMinRadius = .3f;
@@ -69,6 +69,17 @@ public:
 		Settings settings;
 		uint pad0;
 	};
+
+	struct DebugSettings
+	{
+		bool EnableWetnessOverride = false;
+		bool EnablePuddleOverride = false;
+		bool EnableRainOverride = false;
+		bool EnableIntExOverride = false;
+		float2 WetnessOverride = float2(0.0f, 0.0f);
+		float2 PuddleWetnessOverride = float2(0.0f, 0.0f);
+		float2 RainOverride = float2(0.0f, 0.0f);
+	} debugSettings;
 
 	Settings settings;
 	// Climate preset system

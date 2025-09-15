@@ -60,7 +60,7 @@ cbuffer PerGeometry : register(b2)
 
 VS_OUTPUT main(VS_INPUT input)
 {
-	VS_OUTPUT vsout;
+	VS_OUTPUT vsout = (VS_OUTPUT)0;
 	uint eyeIndex = Stereo::GetEyeIndexVS(
 #	if defined(VR)
 		input.InstanceID
@@ -233,7 +233,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
-	float3 normal = normalize(cross(ddx, ddy));
+	float3 normal = -normalize(cross(ddx, ddy));
 
 #			if !defined(SSGI)
 	float3 directionalAmbientColor = max(0, mul(SharedData::DirectionalAmbient, float4(normal, 1.0)));
