@@ -1,4 +1,5 @@
 #pragma once
+#define ENABLE_SHARC
 
 struct ScreenSpaceReflections : Feature
 {

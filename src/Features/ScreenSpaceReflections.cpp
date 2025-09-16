@@ -88,7 +88,7 @@ void ScreenSpaceReflections::DrawSettings()
     if (auto _tt = Util::HoverTooltipWrapper())
         ImGui::Text("When ray marching misses, use dynamic cubemaps for reflections. This with diffuse would provide natural ambient lighting.");
 #ifdef ENABLE_SHARC
-    ImGui::Checkbox("Enable SHARC", &settings.EnableSharc);
+    ImGui::Checkbox("(Broken) Enable SHARC", &settings.EnableSharc);
     if (auto _tt = Util::HoverTooltipWrapper())
         ImGui::Text("(Experimental) Enables Spatially Hashed Radiance Cache (SHARC) to improve diffuse quality. This requires more memory and might impact performance.");
 #endif
