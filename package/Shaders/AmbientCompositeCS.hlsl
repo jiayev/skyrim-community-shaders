@@ -66,8 +66,9 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 
 #if defined(IBL)
 	if (SharedData::iblSettings.EnableDiffuseIBL) {
-		directionalAmbientColor *= SharedData::iblSettings.DALCAmount;
-		directionalAmbientColor += Color::Saturation(ImageBasedLighting::GetDiffuseIBL(-normalWS), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
+		if (!SharedData::InInterior || SharedData::iblSettings.EnableInterior) {
+			directionalAmbientColor *= SharedData::iblSettings.DALCAmount;
+		}
 	}
 #endif
 
@@ -99,6 +100,19 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 		skylightingDiffuse = Skylighting::mixDiffuse(SharedData::skylightingSettings, skylightingDiffuse);
 
 		visibility = skylightingDiffuse;
+	}
+#endif
+
+#if defined(IBL)
+	float3 iblColor = 0;
+	float3 linIBLColor = 0;
+	if (SharedData::iblSettings.EnableDiffuseIBL) {
+		if (!SharedData::InInterior || SharedData::iblSettings.EnableInterior) {
+#if defined(SKYLIGHTING)
+			iblColor = Color::Saturation(IBL::GetIBLColor(normalWS, visibility), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
+#endif
+			linIBLColor = Color::GammaToLinear(iblColor);
+		}
 	}
 #endif
 
@@ -138,7 +152,11 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 
 	linAmbient *= visibility;
 	diffuseColor = Color::LinearToGamma(linDiffuseColor);
+#if defined(IBL)
+	directionalAmbientColor = Color::LinearToGamma(linDirectionalAmbientColor * visibility + linIBLColor);
+#else
 	directionalAmbientColor = Color::LinearToGamma(linDirectionalAmbientColor * visibility);
+#endif
 
 	diffuseColor = diffuseColor + directionalAmbientColor * albedo;
 

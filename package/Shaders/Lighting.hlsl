@@ -15,8 +15,8 @@
 #	define SKIN
 #endif
 
-#if defined(HAIR) && defined(CS_HAIR)
-#	define DYNAMIC_CUBEMAPS
+#if !defined(DYNAMIC_CUBEMAPS) && defined(IBL)
+#	undef IBL
 #endif
 
 #if (defined(TREE_ANIM) || defined(LANDSCAPE)) && !defined(VC)
@@ -2719,9 +2719,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (SharedData::iblSettings.EnableDiffuseIBL) {
 		if (SharedData::iblSettings.UseStaticIBL && !inWorld && !inReflection) {
 			directionalAmbientColor = ImageBasedLighting::GetStaticDiffuseIBL(worldNormal, SampColorSampler);
-		} else if (!SharedData::InInterior) {
+		} else if (!SharedData::InInterior || SharedData::iblSettings.EnableInterior) {
 			directionalAmbientColor *= SharedData::iblSettings.DALCAmount;
-			directionalAmbientColor += Color::Saturation(ImageBasedLighting::GetDiffuseIBL(-worldNormal), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 		}
 	}
 #	endif
@@ -2742,6 +2741,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor);
 		directionalAmbientColor *= skylightingDiffuse;
 		directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor);
+	}
+#	endif
+
+#	if defined(IBL)
+	if (SharedData::iblSettings.EnableDiffuseIBL) {
+		if ((!SharedData::InInterior || SharedData::iblSettings.EnableInterior) && !(SharedData::iblSettings.UseStaticIBL && !inWorld && !inReflection))
+		{
+#		if defined(SKYLIGHTING)
+			directionalAmbientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(-worldNormal, skylightingDiffuse), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
+#		else
+			directionalAmbientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(-worldNormal), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
+#		endif
+		}
 	}
 #	endif
 
