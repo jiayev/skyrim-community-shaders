@@ -168,11 +168,17 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 		linDiffuseColor += Color::IrradianceToLinear(ssrIrradiance.rgb) * linAlbedo;
 		linDirectionalAmbientColor *= SharedData::ssrSettings.AmbientMult;
 	}
+#	if defined(IBL)
+	linIBLColor *= SharedData::ssrSettings.AmbientMult;
+#	endif
 #endif
 
 	linAmbient *= visibility;
 	diffuseColor = Color::IrradianceToGamma(linDiffuseColor);
 #if defined(IBL)
+#	if defined(SSGI)
+	linIBLColor *= ssgiAo;
+#	endif
 	directionalAmbientColor = Color::IrradianceToGamma(linDirectionalAmbientColor * visibility + linIBLColor);
 #else
 	directionalAmbientColor = Color::IrradianceToGamma(linDirectionalAmbientColor * visibility);
