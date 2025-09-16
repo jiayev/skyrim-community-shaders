@@ -155,6 +155,9 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 	linAmbient *= visibility;
 	diffuseColor = Color::LinearToGamma(linDiffuseColor);
 #if defined(IBL)
+#	if defined(SSGI)
+	linIBLColor *= ssgiAo;
+#	endif
 	directionalAmbientColor = Color::LinearToGamma(linDirectionalAmbientColor * visibility + linIBLColor);
 #else
 	directionalAmbientColor = Color::LinearToGamma(linDirectionalAmbientColor * visibility);
