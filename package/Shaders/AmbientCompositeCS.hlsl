@@ -9,7 +9,7 @@
 Texture2D<float3> AlbedoTexture : register(t0);
 Texture2D<float3> NormalRoughnessTexture : register(t1);
 Texture2D<float> DepthTexture : register(t2);
-Texture2D<float3> MasksTexture : register(t9);
+Texture2D<float3> MasksTexture : register(t10);
 
 #if defined(SKYLIGHTING)
 #	include "Skylighting/Skylighting.hlsli"
@@ -31,7 +31,7 @@ Texture2D<float2> SsgiCoCgTexture : register(t7);
 #endif
 
 #if defined(SSR)
-Texture2D<float4> SSRTDiffuseTexture : register(t10);
+Texture2D<float4> SSRTDiffuseTexture : register(t11);
 #endif
 
 RWTexture2D<float4> MainRW : register(u0);

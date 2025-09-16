@@ -71,7 +71,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 #endif
 
 #if defined(SSR)
-Texture2D<float4> SSRTexture : register(t15);
+Texture2D<float4> SSRTexture : register(t14);
 #endif
 
 #if defined(PHYSICAL_SKY)
