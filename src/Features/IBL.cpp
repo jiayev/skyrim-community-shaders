@@ -14,11 +14,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableDiffuseIBL,
 	PreserveFogLuminance,
 	UseStaticIBL,
+	EnableInterior,
 	DiffuseIBLScale,
 	DALCAmount,
 	IBLSaturation,
-	FogAmount,
-	DynamicCubemapsAmount)
+	FogAmount)
 
 void IBL::DrawSettings()
 {
@@ -65,7 +65,7 @@ void IBL::EarlyPrepass()
 				staticDiffuseIBLTexture->srv.get(),
 				staticSpecularIBLTexture->srv.get()
 			};
-			context->PSSetShaderResources(76, 3, srvs.data());
+			context->PSSetShaderResources(76, 4, srvs.data());
 		}
 	}
 }
@@ -74,7 +74,6 @@ void IBL::Prepass()
 {
 	auto context = globals::d3d::context;
 	auto state = globals::state;
-	auto renderer = globals::game::renderer;
 
 	auto& dynamicCubemaps = globals::features::dynamicCubemaps;
 
@@ -83,8 +82,8 @@ void IBL::Prepass()
 
 	// Unset PS shader resource
 	{
-		ID3D11ShaderResourceView* srvs[2]{ nullptr, nullptr };
-		context->PSSetShaderResources(76, 2, srvs);
+		ID3D11ShaderResourceView* views[2]{ nullptr, nullptr };
+		context->PSSetShaderResources(76, 2, views);
 	}
 
 	state->BeginPerfEvent("IBL");
@@ -128,8 +127,8 @@ void IBL::Prepass()
 
 	// Set PS shader resource
 	{
-		ID3D11ShaderResourceView* srvs[2]{ diffuseIBLTexture->srv.get(), diffuseSkyIBLTexture->srv.get() };
-		context->PSSetShaderResources(76, 2, srvs);
+		ID3D11ShaderResourceView* views[2]{ diffuseIBLTexture->srv.get(), diffuseSkyIBLTexture->srv.get() };
+		context->PSSetShaderResources(76, 2, views);
 	}
 }
 
