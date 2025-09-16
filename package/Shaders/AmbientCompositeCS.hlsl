@@ -122,7 +122,7 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 #else
 			iblColor = Color::Saturation(ImageBasedLighting::GetIBLColor(-normalWS), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 #endif
-			linIBLColor = Color::GammaToLinear(iblColor);
+			linIBLColor = Color::IrradianceToLinear(iblColor);
 		}
 	}
 #endif
@@ -167,10 +167,10 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 		ssrIrradiance.xyz *= SharedData::ssrSettings.DiffuseMult;
 		linDiffuseColor += Color::IrradianceToLinear(ssrIrradiance.rgb) * linAlbedo;
 		linDirectionalAmbientColor *= SharedData::ssrSettings.AmbientMult;
-	}
 #	if defined(IBL)
-	linIBLColor *= SharedData::ssrSettings.AmbientMult;
+		linIBLColor *= SharedData::ssrSettings.AmbientMult;
 #	endif
+	}
 #endif
 
 	linAmbient *= visibility;
