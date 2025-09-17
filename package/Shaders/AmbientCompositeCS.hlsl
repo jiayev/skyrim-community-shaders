@@ -113,7 +113,7 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 #else
 			iblColor = Color::Saturation(ImageBasedLighting::GetIBLColor(-normalWS), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 #endif
-			linIBLColor = Color::GammaToLinear(iblColor);
+			linIBLColor = iblColor;
 		}
 	}
 #endif

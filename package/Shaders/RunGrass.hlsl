@@ -739,11 +739,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (SharedData::iblSettings.EnableDiffuseIBL) {
 		if (!SharedData::InInterior || SharedData::iblSettings.EnableInterior)
 		{
+			directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor);
 #					if defined(SKYLIGHTING)
 			directionalAmbientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(-normal, skylightingDiffuse), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 #					else
 			directionalAmbientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(-normal), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 #					endif
+			directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor);
 		}
 	}
 #				endif
@@ -941,11 +943,13 @@ PS_OUTPUT main(PS_INPUT input)
 	if (SharedData::iblSettings.EnableDiffuseIBL) {
 		if (!SharedData::InInterior || SharedData::iblSettings.EnableInterior)
 		{
+			directionalAmbientColor = Color::GammaToLinear(directionalAmbientColor);
 #				if defined(SKYLIGHTING)
 			directionalAmbientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(-normal, skylightingDiffuse), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 #				else
 			directionalAmbientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(-normal), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 #				endif
+			directionalAmbientColor = Color::LinearToGamma(directionalAmbientColor);
 		}
 	}
 #			endif
