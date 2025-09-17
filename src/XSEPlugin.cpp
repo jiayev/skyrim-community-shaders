@@ -196,5 +196,5 @@ bool Load()
 		}
 	}
 
-	return errors.empty();
+	return true;
 }
