@@ -52,6 +52,7 @@ namespace Color
 
 	// Attempt to match vanilla materials tha are a darker than PBR
 	const static float PBRLightingScale = 0.666;
+	const static float PBRLightingCompensation = Math::PI;
 
 	float3 GammaToLinear(float3 color)
 	{
@@ -85,7 +86,7 @@ namespace Color
 	float3 Light(float3 color)
 	{
 #if defined(TRUE_PBR)
-		return color * Math::PI;  // Compensate for traditional Lambertian diffuse
+		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
 #else
 		return color;
 #endif
