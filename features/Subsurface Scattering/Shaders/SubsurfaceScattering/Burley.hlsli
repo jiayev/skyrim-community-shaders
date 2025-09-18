@@ -59,7 +59,7 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssA
 	}
 
 	float4 surfaceAlbedo = AlbedoTexture[DTid];
-	float3 originalColor = Color::IrradianceToLinear(centerColor.xyz / lerp(1.0, max(surfaceAlbedo.xyz, EPSILON_SSS_ALBEDO), sssAmount));
+	float3 originalColor = Color::IrradianceToLinear(centerColor.xyz / max(surfaceAlbedo.xyz, EPSILON_SSS_ALBEDO));
 
 	float4 diffuseMeanFreePath = humanProfile ? MeanFreePathHuman : MeanFreePathBase;
 	diffuseMeanFreePath.xyz = float3(max(diffuseMeanFreePath.x, 1e-5f), max(diffuseMeanFreePath.y, 1e-5f), max(diffuseMeanFreePath.z, 1e-5f));
@@ -108,12 +108,7 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssA
 		float2 sampleUV = texCoord + uvOffset;
 		float2 clampedUV = clamp(sampleUV, float2(0.0f, 0.0f), float2(1.0f, 1.0f));
 		uint2 samplePixcoord = uint2(clampedUV * SharedData::BufferDim.xy);
-		float sampleMask = MaskTexture[samplePixcoord].x;
-		bool mask = sampleMask > 1e-5f;
-		if (!mask)
-			continue;
-
-		float3 sampleColor = Color::IrradianceToLinear(ColorTexture[samplePixcoord].xyz / lerp(1.0, max(AlbedoTexture[samplePixcoord].xyz, EPSILON_SSS_ALBEDO), sampleMask));
+		float3 sampleColor = Color::IrradianceToLinear(ColorTexture[samplePixcoord].xyz / max(AlbedoTexture[samplePixcoord].xyz, EPSILON_SSS_ALBEDO));
 		float sampleDepth = SharedData::GetScreenDepth(DepthTexture[samplePixcoord].x);
 		float3 sampleNormalVS = GBuffer::DecodeNormal(NormalTexture[samplePixcoord].xy);
 		float3 sampleNormalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(sampleNormalVS, 0)).xyz);
@@ -121,9 +116,12 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssA
 		float deltaDepth = (sampleDepth - centerDepth) * 10.f / GAME_UNIT_TO_CM;  // convert to mm
 		float radiusSampledInMM = sqrt(radius * radius + deltaDepth * deltaDepth);
 
+		float maskSample = MaskTexture[samplePixcoord].x;
+		bool mask = maskSample > 1e-5f;
+
 		float3 diffusionProfile = GetBurleyProfile(diffuseMeanFreePath.xyz, s3d, radiusSampledInMM);
 		float normalWeight = sqrt(saturate(dot(sampleNormalWS, normalWS) * 0.5f + 0.5f));
-		float3 sampleWeight = (diffusionProfile / pdf) * normalWeight;
+		float3 sampleWeight = mask ? (diffusionProfile / pdf) * normalWeight : 0.0f;
 
 		colorSum += sampleWeight * sampleColor;
 		weightSum += sampleWeight;
@@ -131,7 +129,7 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssA
 
 	colorSum *= any(weightSum == 0.0f) ? 0.0f : (1.0f / weightSum);
 	colorSum = lerp(colorSum, originalColor, saturate(centerWeight));
-	float3 color = Color::IrradianceToGamma(colorSum) * lerp(1.0f, AlbedoTexture[DTid.xy].xyz, sssAmount);
+	float3 color = Color::IrradianceToGamma(colorSum) * AlbedoTexture[DTid.xy].xyz;
 
 	float4 outColor = float4(color, ColorTexture[DTid.xy].w);
 	return outColor;
