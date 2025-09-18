@@ -3798,6 +3798,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (skinEnabled) {
 		indirectDiffuseLobeMult = indirectDiffuseLobeWeight.x / max(1e-5, baseColor.x);
 	}
+#		elif defined(VANILLA_FRESNEL)
+	if (enableVanillaFresnel)
+	{
+		outputAlbedo *= 1 - reflectance;
+	}
 #		endif
 
 #		if defined(HAIR) && defined(CS_HAIR)
