@@ -427,7 +427,9 @@ struct PS_OUTPUT
 #	elif defined(NORMALS)
 	float4 NormalGlossiness : SV_Target2;
 #	endif
+#	if defined(MULTBLEND) || defined(MULTBLEND_DECAL)
 	float4 Albedo : SV_Target3;
+#	endif
 	float4 Specular : SV_Target4;
 	float4 Reflectance : SV_Target5;
 	float4 Masks : SV_Target6;
@@ -532,8 +534,17 @@ cbuffer PerGeometry : register(b2)
 
 #	include "Common/ShadowSampling.hlsli"
 
+float ComputeShadowVariance(float shadow)
+{
+    // Measure local gradient magnitude; classify "no variation" using a small threshold.
+    const float2 grad = float2(ddx(shadow), ddy(shadow));
+    const float v = abs(grad.x) + abs(grad.y) + fwidth(shadow);
+    const float epsilon = 1e-4;
+    return (v < epsilon) ? 1.0 : 0.0;
+}
+
 #	if defined(LIGHTING)
-float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPosition, uint eyeIndex)
+float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPosition, uint eyeIndex, inout float shadowVariance)
 {
 	float4 lightDistanceSquared = (PLightPositionX[eyeIndex] - msPosition.xxxx) * (PLightPositionX[eyeIndex] - msPosition.xxxx) + (PLightPositionY[eyeIndex] - msPosition.yyyy) * (PLightPositionY[eyeIndex] - msPosition.yyyy) + (PLightPositionZ[eyeIndex] - msPosition.zzzz) * (PLightPositionZ[eyeIndex] - msPosition.zzzz);
 	float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
@@ -578,10 +589,16 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 		color = Color::IrradianceToGamma(color);
 #		endif
 
-		if (!SharedData::InInterior)
-			color += dirLightColor * ShadowSampling::GetEffectShadow(worldPosition.xyz, normalize(worldPosition.xyz), screenPosition.xy, eyeIndex);
-		else
+		if (!SharedData::InInterior){
+			bool isWorldShadow = false;
+			float shadow = ShadowSampling::GetEffectShadow(worldPosition.xyz, normalize(worldPosition.xyz), screenPosition.xy, eyeIndex, isWorldShadow);
+			color += dirLightColor * shadow;
+			// Do not denoise world shadows
+			if (!isWorldShadow)
+				shadowVariance = ComputeShadowVariance(shadow);
+		} else {
 			color += dirLightColor;
+		}
 	} else {
 #		if defined(SKYLIGHTING)
 #			if defined(VR)
@@ -673,9 +690,10 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float lightingInfluence = LightingInfluence.x;
 	float3 propertyColor = Color::Effect(PropertyColor.xyz);
+	float shadowVariance = 1.0;
 
 #	if defined(LIGHTING)
-	propertyColor = GetLightingColor(input.MSPosition.xyz, input.WorldPosition.xyz, input.Position.xyzw, eyeIndex);
+	propertyColor = GetLightingColor(input.MSPosition.xyz, input.WorldPosition.xyz, input.Position.xyzw, eyeIndex, shadowVariance);
 
 #		if defined(LIGHT_LIMIT_FIX)
 	uint lightCount = 0;
@@ -859,7 +877,6 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Masks = float4(Color::RGBToLuminance(psout.Diffuse.xyz).xxx, finalColor.w);
 #else
 	psout.Specular = float4(0, 0, 0, finalColor.w);
-	psout.Albedo = float4(0, 0, 0, finalColor.w);
 	psout.Reflectance = float4(0, 0, 0, finalColor.w);
 	psout.Masks = float4(0, 0, 0, finalColor.w);
 #endif
@@ -879,7 +896,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.ScreenSpaceNormals.xy = screenSpaceNormal.xy + 0.5.xx;
 	psout.ScreenSpaceNormals.zw = 0.0.xx;
 #	else
-	psout.Normal = float4(!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::EffectShadows), 0, 0, finalColor.w);
+	psout.Normal = float4(shadowVariance, 0, 0, finalColor.w);
 	psout.Color2 = finalColor;
 #	endif
 
