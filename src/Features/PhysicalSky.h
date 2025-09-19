@@ -40,6 +40,7 @@ struct PhysicalSky final : public Feature
 	void SettingsGeneral();
 	void SettingsCelestials();
 	void SettingsAtmosphere();
+	void SettingsClouds();
 	void SettingsDebug();
 
 	// Resources
@@ -116,6 +117,11 @@ struct PhysicalSky final : public Feature
 		float ozoneAltitude = 22.3499f + 35.66071f * .5f;  // in km
 		float ozoneThickness = 35.66071f;
 		float3 ozoneAbsorption = { 2.2911f, 1.5404f, 0 };
+
+		float cloudRelightMix = 1.f;
+		float cloudOriginalMix = 0.5f;
+		float silverLiningMix = 1.f;
+		float silverLiningSpread = 0.f;
 	} settings;
 
 	struct CbData
@@ -164,6 +170,12 @@ struct PhysicalSky final : public Feature
 		float ozoneAltitude;  //
 		float ozoneThickness;
 		float3 ozoneAbsorption;  //
+
+		// CLOUDS (VANILLA)
+		float cloudRelightMix;
+		float cloudOriginalMix;
+		float silverLiningMix;
+		float silverLiningSpread;  //
 	} cbData;
 	static_assert(sizeof(CbData) % 16 == 0);
 

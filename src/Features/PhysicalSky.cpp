@@ -87,6 +87,10 @@ void PhysicalSky::DrawSettings()
 			SettingsAtmosphere();
 			ImGui::EndTabItem();
 		}
+		if (ImGui::BeginTabItem("Clouds")) {
+			SettingsClouds();
+			ImGui::EndTabItem();
+		}
 		if (ImGui::BeginTabItem("Debug")) {
 			SettingsDebug();
 			ImGui::EndTabItem();
@@ -253,6 +257,16 @@ void PhysicalSky::SettingsAtmosphere()
 		ImGui::DragFloat("Layer Thickness", &settings.ozoneThickness, .1f, 0.f, 50.f, "%.3f km");
 		ImGui::PopID();
 	}
+}
+
+void PhysicalSky::SettingsClouds()
+{
+	InfoBox("Clouds.");
+
+	ImGui::SliderFloat("Vanilla Mix", &settings.cloudOriginalMix, 0.f, 2.f, "%.2f");
+	ImGui::SliderFloat("Relight Mix", &settings.cloudRelightMix, 0.f, 2.f, "%.2f");
+	ImGui::SliderFloat("Silver Lining Accent", &settings.silverLiningMix, 0.f, 1.f, "%.2f");
+	ImGui::SliderFloat("Silver Lining Spread", &settings.silverLiningSpread, -0.99f, 0.99f, "%.2f");
 }
 
 void PhysicalSky::SettingsDebug()
@@ -513,6 +527,10 @@ void PhysicalSky::Reset()
 		.ozoneAltitude = settings.ozoneAltitude / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneThickness = settings.ozoneThickness / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneAbsorption = settings.ozoneAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.cloudRelightMix = settings.cloudRelightMix,
+		.cloudOriginalMix = settings.cloudOriginalMix,
+		.silverLiningMix = settings.silverLiningMix,
+		.silverLiningSpread = settings.silverLiningSpread,
 	};
 
 	if (settings.overrideDirLight) {

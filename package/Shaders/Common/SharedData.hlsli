@@ -241,6 +241,12 @@ namespace SharedData
 		float ozoneAltitude;  //
 		float ozoneThickness;
 		float3 ozoneAbsorption;  //
+		
+		// CLOUDS (VANILLA)
+		float cloudRelightMix;
+		float cloudOriginalMix;
+		float silverLiningMix;
+		float silverLiningSpread;  //
 	};
 
 	cbuffer FeatureData : register(b6)
