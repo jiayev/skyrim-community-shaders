@@ -2,7 +2,6 @@
 
 #include "CloudShadows.h"
 #include "Deferred.h"
-#include "LinearLighting.h"
 #include "SkySync.h"
 #include "TerrainShadows.h"
 
@@ -86,6 +85,10 @@ void PhysicalSky::DrawSettings()
 		}
 		if (ImGui::BeginTabItem("Atmosphere")) {
 			SettingsAtmosphere();
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem("Clouds")) {
+			SettingsClouds();
 			ImGui::EndTabItem();
 		}
 		if (ImGui::BeginTabItem("Debug")) {
@@ -254,6 +257,16 @@ void PhysicalSky::SettingsAtmosphere()
 		ImGui::DragFloat("Layer Thickness", &settings.ozoneThickness, .1f, 0.f, 50.f, "%.3f km");
 		ImGui::PopID();
 	}
+}
+
+void PhysicalSky::SettingsClouds()
+{
+	InfoBox("Clouds.");
+
+	ImGui::SliderFloat("Vanilla Mix", &settings.cloudOriginalMix, 0.f, 2.f, "%.2f");
+	ImGui::SliderFloat("Relight Mix", &settings.cloudRelightMix, 0.f, 2.f, "%.2f");
+	ImGui::SliderFloat("Silver Lining Accent", &settings.silverLiningMix, 0.f, 1.f, "%.2f");
+	ImGui::SliderFloat("Silver Lining Spread", &settings.silverLiningSpread, -0.99f, 0.99f, "%.2f");
 }
 
 void PhysicalSky::SettingsDebug()
@@ -443,8 +456,6 @@ void PhysicalSky::Reset()
 	auto& skySync = globals::features::skySync;
 	skySync.lightColors = std::nullopt;
 
-	auto& linearLighting = globals::features::linearLighting;
-
 	bool allGood = settings.enabled && ShadersOK() && skySync.loaded && skySync.settings.Enabled;
 
 	// check worldspace
@@ -468,7 +479,6 @@ void PhysicalSky::Reset()
 
 	if (!allGood) {
 		cbData.enabled = allGood;
-		linearLighting.isDirLightLinear = false;
 		return;
 	}
 
@@ -501,7 +511,7 @@ void PhysicalSky::Reset()
 		.secundaDir = { secundaDir.x, secundaDir.y, secundaDir.z },
 		.secundaColor = settings.secundaColor * exposure,
 		.enabled = allGood,
-		.tonemapper = linearLighting.settings.enableLinearLighting ? 0 : settings.tonemapper,
+		.tonemapper = settings.tonemapper,
 		.vanillaMix = settings.vanillaMix,
 		.zBottom = worldspaceInfo.zBottom,
 		.rPlanet = 6.36e3f / Util::Units::GAME_UNIT_TO_KM,
@@ -517,18 +527,18 @@ void PhysicalSky::Reset()
 		.ozoneAltitude = settings.ozoneAltitude / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneThickness = settings.ozoneThickness / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneAbsorption = settings.ozoneAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.cloudRelightMix = settings.cloudRelightMix,
+		.cloudOriginalMix = settings.cloudOriginalMix,
+		.silverLiningMix = settings.silverLiningMix,
+		.silverLiningSpread = settings.silverLiningSpread,
 	};
 
 	if (settings.overrideDirLight) {
-		linearLighting.isDirLightLinear = true;
-		const float pbrCompensationMult = linearLighting.settings.enableLinearLighting ? 1.0f : RE::NI_PI;  // Colors should match PBR values when not using linear lighting
-		auto LightConvFn = [pbrCompensationMult](float3 color) {
-			color /= pbrCompensationMult;
+		constexpr auto LightConvFn = [](float3 color) {
+			color /= RE::NI_PI;  // Colors should match PBR values
 			return RE::NiColor(color.x, color.y, color.z);
 		};
 		skySync.lightColors = { LightConvFn(cbData.sunlightColor), LightConvFn(cbData.masserColor), LightConvFn(cbData.secundaColor) };
-	} else {
-		linearLighting.isDirLightLinear = false;
 	}
 
 	RE::NiPoint3 posCam = { 0, 0, 0 };
