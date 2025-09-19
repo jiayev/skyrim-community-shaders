@@ -239,12 +239,12 @@ namespace Phase
 #ifndef PS_PREPASS_RSRCS
 
 #	ifndef PS_DEFERRED_RSRCS
-float3 SampleSky(float3 viewDir, uint2 pxCoord, SamplerState samp)
+float3 SampleSky(float3 viewDir, uint2 pxCoord, SamplerState sampSv)
 {
 	SharedData::PhysSkyData data = SharedData::physSkyData;
 
 	const float2 skyLutUv = SkyViewLutUv(viewDir);
-	float3 skyColor = TexSvLut.SampleLevel(samp, skyLutUv, 0).rgb;
+	float3 skyColor = TexSvLut.SampleLevel(sampSv, skyLutUv, 0).rgb;
 
 	float shadow = TexApShadow[pxCoord / 2]; // this actually works???
 	skyColor *= 1 - shadow;
@@ -257,7 +257,7 @@ float3 SampleSky(float3 viewDir, uint2 pxCoord, SamplerState samp)
 	return skyColor;
 }
 
-float3 SampleTr(float3 sunDir, SamplerState samp)
+float3 SampleTr(float3 sunDir, SamplerState sampSv)
 {
 	SharedData::PhysSkyData data = SharedData::physSkyData;
 
@@ -265,14 +265,78 @@ float3 SampleTr(float3 sunDir, SamplerState samp)
 		return 1;
 
 	const float2 lutUv = TrLutUv(data.zCameraPlanet, sunDir.z);
-	float3 tr = TexTrLut.SampleLevel(samp, lutUv, 0).rgb;
+	float3 tr = TexTrLut.SampleLevel(sampSv, lutUv, 0).rgb;
 	tr = lerp(1, tr, data.trMix);
 
 	return tr;
 }
+
+#		if defined(CLOUD_SHADOWS)
+float3 RelightCloud(float4 baseColor, float3 viewDir, float3 cloudPosWS, SamplerState sampTr, SamplerState sampCube)
+{
+	if(baseColor.w <= 0)
+		return baseColor.rgb;
+
+	SharedData::PhysSkyData data = SharedData::physSkyData;
+
+	// TODO: use proper light Dir
+	float3 dirLightDir = SharedData::DirLightDirection.xyz;
+	float3 dirLightColor = SharedData::DirLightColor;
+
+	// TODO: planet shadowing
+
+	float2 lutUv = TrLutUvPlanet(cloudPosWS + float3(0, 0, data.zCameraPlanet), dirLightDir);
+	float3 trAtmos = TexTrLut.SampleLevel(sampTr, lutUv, 0).rgb;
+	trAtmos = lerp(1, trAtmos, data.trMix);
+	dirLightColor *= trAtmos;
+	
+	float u = dot(viewDir, dirLightDir);
+	float phaseCloud = Remap(
+		baseColor.w,
+		data.silverLiningSpread > 0 ? data.silverLiningSpread: 0,
+		data.silverLiningSpread < 0 ? 1 + data.silverLiningSpread : 1,
+		lerp(0.25 * RCP_PI, Phase::ThomasSchander(u), data.silverLiningMix),
+		0.25 * RCP_PI) * 2 * Math::PI * data.cloudRelightMix;
+
+	float3 cloudColor = baseColor.rgb * data.cloudOriginalMix;
+
+	if (baseColor.w > 0.0)
+	{
+		float rayStep = 1.0 / 32.0;
+		float rayPos = rayStep * 0.5; 
+		float4 rayShadow = 0.0;
+
+		float3 PoissonDisc[] = {
+			float3(0.460921f, 0.615192f, 0.887539f),
+			float3(0.757347f, 0.911008f, 0.189581f),
+			float3(0.548753f, 0.145482f, 0.0548723f),
+			float3(0.90051f, 0.157048f, 0.623493f)
+		};
+
+		[unroll]
+		for(int i = 0; i < 4; i++)
+		{		
+			float3 raySample = normalize(lerp(viewDir, SharedData::DirLightDirection.xyz, rayPos));
+
+			raySample += (PoissonDisc[i] * 2.0 - 1.0) * 0.01;
+
+			if (raySample.z < 0.0)
+				rayShadow[i % 4] += -raySample.z; // World shadow
+			else
+				rayShadow[i % 4] = max(rayShadow[i % 4], CloudShadows::CloudShadowsTexture.SampleLevel(sampCube, raySample, 0).x);
+
+			rayPos += rayStep;
+		}
+
+		cloudColor += baseColor.a * baseColor.xyz * phaseCloud * (1.0 - saturate(dot(rayShadow, 0.25))) * dirLightColor;
+	}
+
+	return cloudColor;
+}
+#		endif
 #	endif
 
-float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState samp)
+float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)
 {
 	SharedData::PhysSkyData data = SharedData::physSkyData;
 
@@ -281,7 +345,7 @@ float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState samp)
 	uint3 apDims;
 	TexApLut.GetDimensions(apDims.x, apDims.y, apDims.z);
 	const float depth_slice = lerp(.5 / apDims.z, 1 - .5 / apDims.z, saturate(dist / AP_MAX_DIST));
-	float4 apColor = TexApLut.SampleLevel(samp, float3(skyLutUv, depth_slice), 0);
+	float4 apColor = TexApLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0);
 
 	float shadow = TexApShadow[pxCoord / 2];
 	apColor.rgb *= 1 - shadow;

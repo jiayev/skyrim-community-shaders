@@ -253,6 +253,11 @@ PS_OUTPUT main(PS_INPUT input)
 		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
 #			endif
 
+#			if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+#			endif
+
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = -normalize(cross(ddx, ddy));
@@ -296,6 +301,11 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 diffuseColor = Color::Light(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * 0.5 * llDirLightMult * Color::VanillaDiffuseMult();
+
+#			if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+#			endif
 
 #			if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)

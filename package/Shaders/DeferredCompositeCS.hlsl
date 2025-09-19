@@ -216,6 +216,13 @@ Texture2D<float4> SSRTexture : register(t14);
 	}
 #endif
 
+#if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled && depth < 1 - 1e-6) {
+		const float4 apSample = PhysSky::SampleAp(normalize(positionWS.xyz), dispatchID.xy, length(positionWS.xyz), PhysSky::SampSv);
+		color.xyz = color.xyz * apSample.w + apSample.xyz;
+	}
+#endif
+
 #if defined(DEBUG)
 
 #	if defined(VR)
