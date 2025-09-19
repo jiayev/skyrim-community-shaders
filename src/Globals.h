@@ -36,8 +36,6 @@ struct Upscaling;
 struct PostProcessing;
 struct Skin;
 
-class ParticleLights;
-
 class State;
 class Deferred;
 struct TruePBR;
@@ -97,7 +95,6 @@ namespace globals
 
 		namespace llf
 		{
-			extern ParticleLights particleLights;
 		}
 	}
 

@@ -711,9 +711,6 @@ namespace Hooks
 
 	void BSBatchRenderer_RenderPassImmediately1::thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 	{
-		if (globals::features::lightLimitFix.loaded && !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique))
-			return;
-
 		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 	}
 
@@ -721,9 +718,6 @@ namespace Hooks
 	{
 		static void thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 		{
-			if (globals::features::lightLimitFix.loaded && !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique))
-				return;
-
 			if (globals::features::interiorSun.loaded)
 				globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
 
@@ -736,9 +730,6 @@ namespace Hooks
 	{
 		static void thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 		{
-			if (globals::features::lightLimitFix.loaded && !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique))
-				return;
-
 			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

@@ -41,8 +41,6 @@
 #include "State.h"
 #include "Utils/Game.h"
 
-#include "Features/LightLimitFix/ParticleLights.h"
-
 #include "TruePBR.h"
 
 namespace globals
@@ -94,7 +92,6 @@ namespace globals
 
 		namespace llf
 		{
-			ParticleLights particleLights{};
 		}
 	}
 
