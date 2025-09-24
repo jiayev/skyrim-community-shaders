@@ -114,7 +114,7 @@ void PhysicalSky::SettingsGeneral()
 		ImGui::TableNextColumn();
 		ImGui::Text("Worldspace: ");
 		ImGui::TableNextColumn();
-		if (globals::game::tes) {
+		if (RE::TES::GetSingleton()) {
 			bool inInterior = false;
 			if (auto player = RE::PlayerCharacter::GetSingleton(); player)
 				if (auto cell = player->GetParentCell(); cell)
@@ -122,7 +122,7 @@ void PhysicalSky::SettingsGeneral()
 
 			if (inInterior)
 				ImGui::Text("Interior (Disabled)");
-			else if (auto worldspace = globals::game::tes->GetRuntimeData2().worldSpace; worldspace) {
+			else if (auto worldspace = RE::TES::GetSingleton()->GetRuntimeData2().worldSpace; worldspace) {
 				std::string worldspaceName = worldspace->GetFormEditorID();
 				if (settings.worldspaceWhitelist.contains(worldspaceName))
 					ImGui::Text("%s (Enabled)", worldspaceName.c_str());
@@ -465,8 +465,8 @@ void PhysicalSky::Reset()
 	bool worldspaceEnabled = false;
 	bool inInterior = false;
 	WorldspaceInfo worldspaceInfo = {};
-	if (globals::game::tes) {
-		if (auto worldspace = globals::game::tes->GetRuntimeData2().worldSpace; worldspace) {
+	if (RE::TES::GetSingleton()) {
+		if (auto worldspace = RE::TES::GetSingleton()->GetRuntimeData2().worldSpace; worldspace) {
 			std::string worldspaceName = worldspace->GetFormEditorID();
 			worldspaceEnabled = settings.worldspaceWhitelist.contains(worldspaceName);
 			if (worldspaceEnabled)
