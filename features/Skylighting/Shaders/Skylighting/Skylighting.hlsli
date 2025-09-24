@@ -49,7 +49,7 @@ namespace Skylighting
 
 		diffuseColor = max(0.0, diffuseColor - directionalAmbientColor);
 
-		directionalAmbientColor = Color::LinearToGamma(Color::GammaToLinear(directionalAmbientColor) * skylightingDiffuse);
+		directionalAmbientColor = Color::IrradianceToGamma(Color::IrradianceToLinear(directionalAmbientColor) * skylightingDiffuse);
 
 		diffuseColor += directionalAmbientColor;
 	}

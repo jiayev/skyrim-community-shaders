@@ -765,7 +765,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #					else
 			iblColor += Color::Saturation(ImageBasedLighting::GetIBLColor(-normal), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 #					endif
-			iblColor = Color::LinearToGamma(iblColor);
+			iblColor = Color::IrradianceToGamma(iblColor);
 			directionalAmbientColor += iblColor;
 		}
 	}
@@ -815,7 +815,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 normalVS = normalize(FrameBuffer::WorldToView(normal, false, eyeIndex));
 #			if defined(TRUE_PBR)
-	psout.Albedo = float4(Color::LinearToGamma(indirectDiffuseLobeWeight), 1);
+	psout.Albedo = float4(Color::IrradianceToGamma(indirectDiffuseLobeWeight), 1);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), 1 - pbrSurfaceProperties.Roughness, 1);
 	psout.Reflectance = float4(indirectSpecularLobeWeight, 1);
 #			else
@@ -1005,7 +1005,7 @@ PS_OUTPUT main(PS_INPUT input)
 #					else
 			iblColor += Color::Saturation(ImageBasedLighting::GetIBLColor(-normal), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 #					endif
-			iblColor = Color::LinearToGamma(iblColor);
+			iblColor = Color::IrradianceToGamma(iblColor);
 			directionalAmbientColor += iblColor;
 		}
 	}

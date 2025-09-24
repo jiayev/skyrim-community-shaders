@@ -615,7 +615,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 #			else
 				iblColor += Color::Saturation(ImageBasedLighting::GetIBLColor(float3(0, 0, -1)), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 #			endif
-				color += Color::LinearToGamma(iblColor);
+				color += Color::IrradianceToGamma(iblColor);
 			}
 		}
 #		endif

@@ -273,7 +273,7 @@ PS_OUTPUT main(PS_INPUT input)
 #					else
 		iblColor += Color::Saturation(ImageBasedLighting::GetIBLColor(-normal), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 #					endif
-		directionalAmbientColor += Color::LinearToGamma(iblColor);
+		directionalAmbientColor += Color::IrradianceToGamma(iblColor);
 	}
 #			endif
 	diffuseColor += directionalAmbientColor;
@@ -331,7 +331,7 @@ PS_OUTPUT main(PS_INPUT input)
 #					else
 		iblColor += Color::Saturation(ImageBasedLighting::GetIBLColor(-normal), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
 #					endif
-		directionalAmbientColor += Color::LinearToGamma(iblColor);
+		directionalAmbientColor += Color::IrradianceToGamma(iblColor);
 	}
 #			endif
 	diffuseColor += directionalAmbientColor;

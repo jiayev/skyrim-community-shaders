@@ -121,7 +121,7 @@ Texture2D<float4> SSRTexture : register(t14);
 
 	float glossiness = normalGlossiness.z;
 
-	float3 linDiffuseColor = Color::GammaToLinear(diffuseColor);
+	float3 linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
 	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
 
 #if defined(SSGI)
@@ -166,19 +166,19 @@ Texture2D<float4> SSRTexture : register(t14);
 
 	diffuseColor = max(0.0, diffuseColor - directionalAmbientColor);
 
-	linDiffuseColor = Color::GammaToLinear(diffuseColor);
+	linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
 #	if defined(INTERIOR)
 	linDiffuseColor *= ssgiAo;
 #	else
 	linDiffuseColor *= sqrt(ssgiAo);
 #	endif
-	diffuseColor = Color::LinearToGamma(linDiffuseColor);
+	diffuseColor = Color::IrradianceToGamma(linDiffuseColor);
 
-	diffuseColor += Color::LinearToGamma(Color::GammaToLinear(directionalAmbientColor) * ssgiAo);
+	diffuseColor += Color::IrradianceToGamma(Color::IrradianceToLinear(directionalAmbientColor) * ssgiAo);
 
-	linDiffuseColor = Color::GammaToLinear(diffuseColor);
+	linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
 
-	linDiffuseColor += ssgiIl * Color::GammaToLinear(albedo);
+	linDiffuseColor += ssgiIl * Color::IrradianceToLinear(albedo);
 #endif
 
 	float3 color = linDiffuseColor + specularColor;
