@@ -131,26 +131,19 @@ void State::Reset()
 
 	if (auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton()) {
 		GET_INSTANCE_MEMBER(BSImagespaceShaderApplyReflections, imageSpaceManager);
+
+		// Disable reflections being applied to things other than water
 		if (BSImagespaceShaderApplyReflections.get()) {
 			BSImagespaceShaderApplyReflections->active = false;
 		}
-
-		if (!globals::game::isVR) {
-			GET_INSTANCE_MEMBER(BSImagespaceShaderISSnowSSS, imageSpaceManager);
-			GET_INSTANCE_MEMBER(BSImagespaceShaderISBlur, imageSpaceManager);
-
-			// Disable Snow SSS
-			if (auto* snowSSS = static_cast<RE::BSImagespaceShader*>(BSImagespaceShaderISSnowSSS.get())) {
-				snowSSS->active = false;
-			}
-
-			// Disable IBLF
-			if (auto* isBlur = BSImagespaceShaderISBlur.get()) {
-				auto& enableIBLF = REL::RelocateMember<bool>(isBlur, 0x48, 0x48);
-				enableIBLF = false;
-			}
-		}
 	}
+
+	// Disable "improved" snow shader, unsupported
+	if (!globals::game::isVR) {
+		RE::GetINISetting("bEnableImprovedSnow:Display")->data.b = false;
+	}
+
+	activeReflections = false;
 }
 
 void State::Setup()
@@ -760,24 +753,27 @@ void State::UpdateSharedData(bool a_inWorld, bool a_prepass)
 			}
 		}
 
-		data.InInterior = true;
-		data.HideSky = true;
-		if (auto sky = globals::game::sky) {
-			data.InInterior = sky->mode.get() != RE::Sky::Mode::kFull;
-			data.HideSky = sky->flags.any(RE::Sky::Flags::kHideSky);
-		}
+		data.InInterior = Util::IsInterior();
 
-		if (auto ui = globals::game::ui)
-			data.InMapMenu = ui->IsMenuOpen(RE::MapMenu::MENU_NAME);
+		if (globals::game::sky)
+			data.HideSky = globals::game::sky->flags.any(RE::Sky::Flags::kHideSky);
 		else
-			data.InMapMenu = true;
+			data.HideSky = false;
+
+		if (globals::game::ui)
+			data.InMapMenu = globals::game::ui->IsMenuOpen(RE::MapMenu::MENU_NAME);
+		else
+			data.InMapMenu = false;
 
 		auto& upscaling = globals::features::upscaling;
 
 		if (upscaling.loaded) {
-			if (temporal && (a_inWorld || a_prepass) && upscaling.GetUpscaleMethod() != Upscaling::UpscaleMethod::kTAA) {
+			auto upscaleMethod = upscaling.GetUpscaleMethod();
+			if (temporal && (a_inWorld || a_prepass) && upscaleMethod != Upscaling::UpscaleMethod::kTAA) {
 				auto renderSize = Util::ConvertToDynamic(screenSize);
-				data.MipBias = std::log2f(renderSize.x / screenSize.x) - 1.0f;
+				data.MipBias = std::log2f(renderSize.x / screenSize.x);
+				if (upscaleMethod == Upscaling::UpscaleMethod::kDLSS)
+					data.MipBias -= 1.0f;
 			} else {
 				data.MipBias = 0;
 			}
