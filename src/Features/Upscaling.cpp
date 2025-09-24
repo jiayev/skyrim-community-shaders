@@ -62,7 +62,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		pSwapChainDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 	}
 
-	bool shouldProxy = !globals::game::isVR;
+	bool shouldProxy = !globals::game::isVR || upscaling.streamline.featureDLSS;
 	if (shouldProxy)
 		if (!pSwapChainDesc->Windowed)
 			shouldProxy = false;
@@ -80,6 +80,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 				shouldProxy = false;
 		else
 			shouldProxy = false;
+		if (upscaling.settings.upscaleMethod == (uint)Upscaling::UpscaleMethod::kDLSS)
+			shouldProxy = true;
 	}
 
 	upscaling.lowRefreshRate = refreshRate < 120;
@@ -88,9 +90,9 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
 
 	if (shouldProxy) {
-		logger::info("[Frame Generation] Frame Generation enabled, using D3D12 proxy");
+		logger::info("[Upscaling] Using D3D12 proxy");
 
-		if (upscaling.HasFrameGenModule()) {
+		if (upscaling.HasFrameGenModule() || upscaling.streamline.featureDLSS) {
 			DX::ThrowIfFailed(D3D11CreateDevice(
 				pAdapter,
 				DriverType,
@@ -112,16 +114,18 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 			upscaling.d3d12SwapChainActive = true;
 
+			auto d3d12Device = upscaling.dx12SwapChain.d3d12Device.get();
+
 			if (upscaling.IsBackendInitialized()) {
-				upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
+				upscaling.UpgradeBackendInterface((void**)&d3d12Device);
 				upscaling.UpgradeBackendInterface((void**)&(*ppSwapChain));
-				upscaling.SetBackendD3DDevice(*ppDevice);
+				upscaling.SetBackendD3DDevice((void*)d3d12Device);
 				upscaling.PostBackendDevice();
 			}
 
 			return S_OK;
 		} else {
-			logger::warn("[Frame Generation] FidelityFX DLLs are not loaded, skipping proxy");
+			logger::warn("[Upscaling] Skipping proxy");
 			upscaling.fidelityFXMissing = true;
 		}
 	}
@@ -139,12 +143,12 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		pFeatureLevel,
 		ppImmediateContext);
 
-	if (upscaling.IsBackendInitialized()) {
-		upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
-		upscaling.UpgradeBackendInterface((void**)&(*ppSwapChain));
-		upscaling.SetBackendD3DDevice(*ppDevice);
-		upscaling.PostBackendDevice();
-	}
+	// if (upscaling.IsBackendInitialized()) {
+	// 	upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
+	// 	upscaling.UpgradeBackendInterface((void**)&(*ppSwapChain));
+	// 	upscaling.SetBackendD3DDevice(*ppDevice);
+	// 	upscaling.PostBackendDevice();
+	// }
 
 	return ret;
 }
@@ -486,56 +490,6 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod, b
 			motionVectorCopyTexture->CreateSRV(srvDesc);
 			motionVectorCopyTexture->CreateUAV(uavDesc);
 		}
-
-		if (!nisSharpenerTexture) {
-			texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-			srvDesc.Format = texDesc.Format;
-			uavDesc.Format = texDesc.Format;
-
-			nisSharpenerTexture = new Texture2D(texDesc);
-			nisSharpenerTexture->CreateSRV(srvDesc);
-			nisSharpenerTexture->CreateUAV(uavDesc);
-		}
-
-		if (!packedNormalTexture) {
-			texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-			srvDesc.Format = texDesc.Format;
-			uavDesc.Format = texDesc.Format;
-
-			packedNormalTexture = new Texture2D(texDesc);
-			packedNormalTexture->CreateSRV(srvDesc);
-			packedNormalTexture->CreateUAV(uavDesc);
-		}
-
-		if (!rrInputTexture) {
-			texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-			srvDesc.Format = texDesc.Format;
-			uavDesc.Format = texDesc.Format;
-
-			rrInputTexture = new Texture2D(texDesc);
-			rrInputTexture->CreateSRV(srvDesc);
-			rrInputTexture->CreateUAV(uavDesc);
-		}
-
-		if (!rrOutputTexture) {
-			texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-			srvDesc.Format = texDesc.Format;
-			uavDesc.Format = texDesc.Format;
-
-			rrOutputTexture = new Texture2D(texDesc);
-			rrOutputTexture->CreateSRV(srvDesc);
-			rrOutputTexture->CreateUAV(uavDesc);
-		}
-
-		if (!specHitDistanceTexture) {
-			texDesc.Format = DXGI_FORMAT_R32_FLOAT;
-			srvDesc.Format = texDesc.Format;
-			uavDesc.Format = texDesc.Format;
-
-			specHitDistanceTexture = new Texture2D(texDesc);
-			specHitDistanceTexture->CreateSRV(srvDesc);
-			specHitDistanceTexture->CreateUAV(uavDesc);
-		}
 	}
 }
 
@@ -571,49 +525,6 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			motionVectorCopyTexture->srv = nullptr;
 			motionVectorCopyTexture->uav = nullptr;
 			motionVectorCopyTexture->resource = nullptr;
-
-			delete motionVectorCopyTexture;
-			motionVectorCopyTexture = nullptr;
-		}
-		if (nisSharpenerTexture) {
-			nisSharpenerTexture->srv = nullptr;
-			nisSharpenerTexture->uav = nullptr;
-			nisSharpenerTexture->resource = nullptr;
-
-			delete nisSharpenerTexture;
-			nisSharpenerTexture = nullptr;
-		}
-		if (packedNormalTexture) {
-			packedNormalTexture->srv = nullptr;
-			packedNormalTexture->uav = nullptr;
-			packedNormalTexture->resource = nullptr;
-
-			delete packedNormalTexture;
-			packedNormalTexture = nullptr;
-		}
-		if (rrInputTexture) {
-			rrInputTexture->srv = nullptr;
-			rrInputTexture->uav = nullptr;
-			rrInputTexture->resource = nullptr;
-
-			delete rrInputTexture;
-			rrInputTexture = nullptr;
-		}
-		if (rrOutputTexture) {
-			rrOutputTexture->srv = nullptr;
-			rrOutputTexture->uav = nullptr;
-			rrOutputTexture->resource = nullptr;
-
-			delete rrOutputTexture;
-			rrOutputTexture = nullptr;
-		}
-		if (specHitDistanceTexture) {
-			specHitDistanceTexture->srv = nullptr;
-			specHitDistanceTexture->uav = nullptr;
-			specHitDistanceTexture->resource = nullptr;
-
-			delete specHitDistanceTexture;
-			specHitDistanceTexture = nullptr;
 		}
 	}
 }
@@ -957,6 +868,19 @@ void Upscaling::CopySharedD3D12Resources()
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11, motionVector.texture);
+	auto& albedo = renderer->GetRuntimeData().renderTargets[ALBEDO];
+	context->CopyResource(dx12SwapChain.albedoShared12->resource11, albedo.texture);
+	auto& reflectance = renderer->GetRuntimeData().renderTargets[REFLECTANCE];
+	context->CopyResource(dx12SwapChain.reflectanceShared12->resource11, reflectance.texture);
+
+	if (settings.enableDLSSRR) {
+		auto& ssr = globals::features::screenSpaceReflections;
+		if (ssr.loaded && ssr.settings.Enabled) {
+			if (ssr.texHitDistance) {
+				context->CopyResource(dx12SwapChain.specHitDistanceShared12->resource11, ssr.texHitDistance->resource.get());
+			}
+		}
+	}
 
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
@@ -1209,7 +1133,7 @@ void Upscaling::UpgradeBackendInterface(void** ppInterface)
 	streamline.slUpgradeInterface(ppInterface);
 }
 
-void Upscaling::SetBackendD3DDevice(ID3D11Device* device)
+void Upscaling::SetBackendD3DDevice(void* device)
 {
 	streamline.slSetD3DDevice(device);
 }
@@ -1287,7 +1211,14 @@ void Upscaling::Upscale()
 			ID3D11ShaderResourceView* views[5] = { temporalAAMask.SRV, normals.SRV, motionVector.SRV, depth.depthSRV, normalroughness.SRV };
 			context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-			ID3D11UnorderedAccessView* uavs[4] = { reactiveMaskTexture->uav.get(), transparencyCompositionMaskTexture->uav.get(), upscaleMethod == UpscaleMethod::kDLSS ? motionVectorCopyTexture->uav.get() : nullptr, upscaleMethod == UpscaleMethod::kDLSS ? packedNormalTexture->uav.get() : nullptr };
+			bool isDLSS = (upscaleMethod == UpscaleMethod::kDLSS);
+
+			ID3D11UnorderedAccessView* reactiveMaskUAV = isDLSS ? dx12SwapChain.reactiveMaskShared12->uav : reactiveMaskTexture->uav.get();
+			ID3D11UnorderedAccessView* transparencyUAV = isDLSS ? dx12SwapChain.transparencyCompositionMaskShared12->uav : transparencyCompositionMaskTexture->uav.get();
+			ID3D11UnorderedAccessView* motionVectorUAV = isDLSS ? dx12SwapChain.motionVectorBufferShared12->uav : nullptr;
+			ID3D11UnorderedAccessView* packedNormalUAV = isDLSS ? dx12SwapChain.packedNormalShared12->uav : nullptr;
+
+			ID3D11UnorderedAccessView* uavs[4] = { reactiveMaskUAV, transparencyUAV, motionVectorUAV, packedNormalUAV };
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 			context->CSSetShader(GetEncodeTexturesCS(), nullptr, 0);
@@ -1313,23 +1244,59 @@ void Upscaling::Upscale()
 	{
 		state->BeginPerfEvent("Upscaling");
 
-		if (upscaleMethod == UpscaleMethod::kDLSS && !settings.enableDLSSRR) {
-			streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorCopyTexture->resource.get());
-		} else if (upscaleMethod == UpscaleMethod::kDLSS && settings.enableDLSSRR && streamline.featureDLSS_RR) {
-			HRESULT hr = globals::d3d::device->GetDeviceRemovedReason();
-			if (hr != S_OK) {
-				logger::error("Device removed before DLSS RR: 0X{:#X}", static_cast<uint32_t>(hr));
-				return;
+		if (upscaleMethod == UpscaleMethod::kDLSS) {
+			auto renderSize = Util::ConvertToDynamic(globals::state->screenSize);
+
+			// Copy input color texture to shared D3D12 resource
+			context->CopyResource(dx12SwapChain.inputColorBufferShared12->resource11, main.texture);
+
+			// Wait for D3D11 to finish
+			DX::ThrowIfFailed(context->QueryInterface(IID_PPV_ARGS(dx12SwapChain.d3d11Context.put())));
+			DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Signal(dx12SwapChain.d3d11Fence.get(), dx12SwapChain.fenceValue));
+			DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.d3d12Fence.get(), dx12SwapChain.fenceValue));
+			dx12SwapChain.fenceValue++;
+
+			// Reset command allocator and list
+			DX::ThrowIfFailed(dx12SwapChain.commandAllocators[0]->Reset());
+			DX::ThrowIfFailed(dx12SwapChain.commandLists[0]->Reset(dx12SwapChain.commandAllocators[0].get(), nullptr));
+
+			if (!settings.enableDLSSRR) {
+				streamline.Upscale(
+					dx12SwapChain.inputColorBufferShared12->resource.get(),
+					dx12SwapChain.motionVectorBufferShared12->resource.get(),
+					dx12SwapChain.depthBufferShared12->resource.get(),
+					dx12SwapChain.reactiveMaskShared12->resource.get(),
+					dx12SwapChain.transparencyCompositionMaskShared12->resource.get(),
+					dx12SwapChain.outputColorBufferShared12->resource.get(),
+					dx12SwapChain.commandLists[0].get()
+				);
+			} else {
+				logger::debug("Call DLSS RR");
+				streamline.RayReconstruction(
+					dx12SwapChain.inputColorBufferShared12->resource.get(),
+					dx12SwapChain.motionVectorBufferShared12->resource.get(),
+					dx12SwapChain.depthBufferShared12->resource.get(),
+					dx12SwapChain.albedoShared12->resource.get(),
+					dx12SwapChain.reflectanceShared12->resource.get(),
+					dx12SwapChain.packedNormalShared12->resource.get(),
+					dx12SwapChain.specHitDistanceShared12->resource.get(),
+					dx12SwapChain.outputColorBufferShared12->resource.get(),
+					dx12SwapChain.commandLists[0].get()
+				);
 			}
-			logger::debug("Begin DLSS RR");
-			context->CopyResource(rrInputTexture->resource.get(), main.texture);
-			auto& ssr = globals::features::screenSpaceReflections;
-			if (ssr.loaded && ssr.settings.Enabled && ssr.texHitDistance) {
-				context->CopyResource(specHitDistanceTexture->resource.get(), ssr.texHitDistance->resource.get());
-			}
-			logger::debug("Call DLSS RR");
-			streamline.RayReconstruction(rrInputTexture->resource.get(), rrOutputTexture->resource.get(), packedNormalTexture->resource.get(), specHitDistanceTexture->resource.get(), motionVectorCopyTexture->resource.get());
-			context->CopyResource(main.texture, rrOutputTexture->resource.get());
+			// Close and execute command list
+			DX::ThrowIfFailed(dx12SwapChain.commandLists[0]->Close());
+
+			ID3D12CommandList* commandLists[] = { dx12SwapChain.commandLists[0].get() };
+			dx12SwapChain.commandQueue->ExecuteCommandLists(1, commandLists);
+
+			// Wait for D3D12 to finish
+			DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.d3d12Fence.get(), dx12SwapChain.fenceValue));
+			DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Wait(dx12SwapChain.d3d11Fence.get(), dx12SwapChain.fenceValue));
+			dx12SwapChain.fenceValue++;
+
+			// Copy back to main buffer
+			context->CopyResource(main.texture, dx12SwapChain.outputColorBufferShared12->resource11);
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
 			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR);
 		}
@@ -1479,11 +1446,34 @@ void Upscaling::ApplyNISSharpening()
 
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
-	context->CopyResource(nisSharpenerTexture->resource.get(), mainResource.get());
+	context->CopyResource(dx12SwapChain.nisSharpenerInputShared12->resource11, mainResource.get());
+
+	// Wait for D3D11 to finish
+	DX::ThrowIfFailed(context->QueryInterface(IID_PPV_ARGS(dx12SwapChain.d3d11Context.put())));
+	DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Signal(dx12SwapChain.d3d11Fence.get(), dx12SwapChain.fenceValue));
+	DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.d3d12Fence.get(), dx12SwapChain.fenceValue));
+	dx12SwapChain.fenceValue++;
+
+	auto frameIndex = dx12SwapChain.frameIndex;
+
+	// Reset command allocator and list
+	DX::ThrowIfFailed(dx12SwapChain.commandAllocators[frameIndex]->Reset());
+	DX::ThrowIfFailed(dx12SwapChain.commandLists[frameIndex]->Reset(dx12SwapChain.commandAllocators[frameIndex].get(), nullptr));
 
 	streamline.ApplyNISSharpening(nisSharpenerTexture->resource.get(), settings.sharpnessDLSS);
+	// Close and execute command list
+	DX::ThrowIfFailed(dx12SwapChain.commandLists[0]->Close());
 
-	context->CopyResource(mainResource.get(), nisSharpenerTexture->resource.get());
+	ID3D12CommandList* commandLists[] = { dx12SwapChain.commandLists[frameIndex].get() };
+	dx12SwapChain.commandQueue->ExecuteCommandLists(1, commandLists);
+
+	// Wait for D3D12 to finish
+	DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.d3d12Fence.get(), dx12SwapChain.fenceValue));
+	DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Wait(dx12SwapChain.d3d11Fence.get(), dx12SwapChain.fenceValue));
+	dx12SwapChain.fenceValue++;
+
+	// Copy back to main buffer
+	context->CopyResource(mainResource.get(), dx12SwapChain.nisSharpenerOutputShared12->resource11);
 
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);  // Run OMSetRenderTargets again
 
@@ -1509,7 +1499,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a1, uint32_t a
 	auto& upscaling = globals::features::upscaling;
 	auto upscaleMethod = upscaling.GetUpscaleMethod();
 
-	if (upscaling.d3d12SwapChainActive && upscaling.settings.frameGenerationMode)
+	if (upscaling.d3d12SwapChainActive && (upscaling.settings.frameGenerationMode || upscaleMethod == UpscaleMethod::kDLSS))
 		upscaling.CopySharedD3D12Resources();
 
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA)
