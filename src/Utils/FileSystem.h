@@ -45,12 +45,6 @@ namespace Util
 		std::filesystem::path GetImGuiIniPath();
 
 		/**
-		 * Gets the UserSettings.json file path
-		 * @return CommunityShaderPath / "UserSettings.json"
-		 */
-		std::filesystem::path GetUserSettingsPath();
-
-		/**
 		 * Gets the CommunityShaders Interface directory path
 		 * @return Data / "Interface" / "CommunityShaders"
 		 */
