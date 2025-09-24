@@ -17,6 +17,6 @@ RWTexture2D<float4> ColorTextureRW : register(u0);
     float4 albedo = AlbedoTexture[dispatchID.xy];
     float4 originalColor = ColorTextureRW[dispatchID.xy];
 
-    float3 color = Color::LinearToGamma(Color::GammaToLinear(ssrDiffuse.xyz) * Color::GammaToLinear(albedo.xyz) * SharedData::ssrSettings.DiffuseMult + Color::GammaToLinear(originalColor.xyz));
+    float3 color = Color::IrradianceToGamma(Color::IrradianceToLinear(ssrDiffuse.xyz) * Color::IrradianceToLinear(albedo.xyz) * SharedData::ssrSettings.DiffuseMult + Color::IrradianceToLinear(originalColor.xyz));
     ColorTextureRW[dispatchID.xy] = float4(color, originalColor.w);
 }
