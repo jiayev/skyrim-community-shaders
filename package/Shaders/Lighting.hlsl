@@ -3581,6 +3581,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 outputAlbedo = baseColor.xyz * vertexColor;
 #		if defined(TRUE_PBR)
 	outputAlbedo = indirectDiffuseLobeWeight;
+#		elif defined(VANILLA_FRESNEL)
+	if (enableVanillaFresnel)
+	{
+		outputAlbedo *= 1 - reflectance;
+	}
 #		endif
 
 #		if defined(SKIN) && defined(CS_SKIN)
@@ -3592,13 +3597,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(HAIR) && defined(CS_HAIR)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		outputAlbedo = indirectDiffuseLobeWeight;
-	}
-#		endif
-
-#		elif defined(VANILLA_FRESNEL)
-	if (enableVanillaFresnel)
-	{
-		outputAlbedo *= 1 - reflectance;
 	}
 #		endif
 
