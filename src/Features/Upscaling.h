@@ -54,6 +54,7 @@ public:
 		uint frameGenerationMode = 1;
 		uint frameGenerationForceEnable = 0;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
+		bool enableDLSSRR = false;
 	};
 
 	Settings settings;
@@ -106,7 +107,7 @@ public:
 	UpscaleMethod GetUpscaleMethod();
 
 	void CheckResources(UpscaleMethod a_upscalemethod);
-	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
+	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod, bool a_enableDLSSRR);
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 
 	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[5];  // One for each UpscaleMethod
@@ -133,6 +134,7 @@ public:
 	Texture2D* reactiveMaskTexture = nullptr;
 	Texture2D* transparencyCompositionMaskTexture = nullptr;
 	Texture2D* motionVectorCopyTexture = nullptr;
+	Texture2D* packedNormalTexture = nullptr;  // For DLSSRR
 
 	virtual void ClearShaderCache() override;
 

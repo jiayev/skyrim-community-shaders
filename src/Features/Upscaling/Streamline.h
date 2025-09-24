@@ -13,6 +13,7 @@
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
+#include <sl_dlss_d.h>
 #include <sl_matrix_helpers.h>
 #include <sl_version.h>
 #pragma warning(pop)
@@ -31,6 +32,7 @@ public:
 	bool triedInitialization = false;
 
 	bool featureDLSS = false;
+	bool featureDLSS_RR = false;
 
 	sl::ViewportHandle viewport{ 0 };
 
@@ -60,6 +62,11 @@ public:
 	PFun_slDLSSGetState* slDLSSGetState{};
 	PFun_slDLSSSetOptions* slDLSSSetOptions{};
 
+	// DLSSD specific functions
+	PFun_slDLSSDGetOptimalSettings* slDLSSDGetOptimalSettings{};
+	PFun_slDLSSDGetState* slDLSSDGetState{};
+	PFun_slDLSSDSetOptions* slDLSSDSetOptions{};
+
 	Util::FrameChecker frameChecker;
 	sl::FrameToken* frameToken = nullptr;
 
@@ -76,7 +83,11 @@ public:
 
 	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
 
-	float GetInputResolutionScale(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
+	void RayReconstruction(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_normalRoughness, ID3D11Resource* a_specularHitDistance, ID3D11Resource* a_motionVectors);
 
-	void DestroyDLSSResources();
+	float GetInputResolutionScale(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
+	float GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
+
+	void DestroyDLSSResources(bool keepOptions = false);
+	void DestroyDLSSRRResources(bool keepOptions = false);
 };
