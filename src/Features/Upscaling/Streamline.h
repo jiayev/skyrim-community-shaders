@@ -102,6 +102,6 @@ public:
 	float GetInputResolutionScale(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
 	float GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
 
-	void DestroyDLSSResources(bool keepOptions = false);
-	void DestroyDLSSRRResources(bool keepOptions = false);
+	void DestroyDLSSResources();
+	void DestroyDLSSRRResources();
 };

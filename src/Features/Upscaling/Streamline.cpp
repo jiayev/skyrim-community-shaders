@@ -573,23 +573,19 @@ float Streamline::GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outpu
  *
  * Sets the DLSS mode to off and frees all DLSS-related resources associated with the viewport.
  */
-void Streamline::DestroyDLSSResources(bool keepOptions)
+void Streamline::DestroyDLSSResources()
 {
-	if (!keepOptions) {
-		sl::DLSSOptions dlssOptions{};
-		dlssOptions.mode = sl::DLSSMode::eOff;
-		slDLSSSetOptions(viewport, dlssOptions);
-	}
+	sl::DLSSOptions dlssOptions{};
+	dlssOptions.mode = sl::DLSSMode::eOff;
+	slDLSSSetOptions(viewport, dlssOptions);
 	slFreeResources(sl::kFeatureDLSS, viewport);
 }
 
-void Streamline::DestroyDLSSRRResources(bool keepOptions)
+void Streamline::DestroyDLSSRRResources()
 {
 	logger::debug("[Streamline] Destroying DLSS-RR resources");
-	if (!keepOptions) {
-		sl::DLSSDOptions dlssdOptions{};
-		dlssdOptions.mode = sl::DLSSMode::eOff;
-		slDLSSDSetOptions(viewport, dlssdOptions);
-	}
+	sl::DLSSDOptions dlssdOptions{};
+	dlssdOptions.mode = sl::DLSSMode::eOff;
+	slDLSSDSetOptions(viewport, dlssdOptions);
 	slFreeResources(sl::kFeatureDLSS_RR, viewport);
 }
