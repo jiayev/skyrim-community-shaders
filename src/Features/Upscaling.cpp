@@ -549,13 +549,6 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 				streamline.DestroyDLSSRRResources();
 		}
 
-		if (rrChanged && !upscaleModeChanged) {
-			if (previousRR)
-				streamline.DestroyDLSSRRResources(true);
-			else
-				streamline.DestroyDLSSResources(true);
-		}
-
 		// Create new upscaling method resources
 		if (upscaleModeChanged || rrChanged) {
 			CreateUpscalingTextureResources(a_upscalemethod, settings.enableDLSSRR);
@@ -1232,10 +1225,18 @@ void Upscaling::Upscale()
 		state->BeginPerfEvent("Upscaling");
 
 		if (upscaleMethod == UpscaleMethod::kDLSS) {
+			HRESULT hr = dx12SwapChain.d3d12Device->GetDeviceRemovedReason();
+			if (hr != S_OK) {
+				logger::error("D3D12 device removed: 0x{:08X}", static_cast<uint32_t>(hr));
+				settings.upscaleMethod = (uint)UpscaleMethod::kTAA;
+				d3d12SwapChainActive = false;
+				return;
+			}
 			auto renderSize = Util::ConvertToDynamic(globals::state->screenSize);
 
 			// Copy input color texture to shared D3D12 resource
 			context->CopyResource(dx12SwapChain.inputColorBufferShared12->resource11, main.texture);
+			auto frameIndex = dx12SwapChain.frameIndex;
 
 			// Wait for D3D11 to finish
 			DX::ThrowIfFailed(context->QueryInterface(IID_PPV_ARGS(dx12SwapChain.d3d11Context.put())));
@@ -1244,8 +1245,28 @@ void Upscaling::Upscale()
 			dx12SwapChain.fenceValue++;
 
 			// Reset command allocator and list
-			DX::ThrowIfFailed(dx12SwapChain.commandAllocators[0]->Reset());
-			DX::ThrowIfFailed(dx12SwapChain.commandLists[0]->Reset(dx12SwapChain.commandAllocators[0].get(), nullptr));
+			DX::ThrowIfFailed(dx12SwapChain.commandAllocators[frameIndex]->Reset());
+			DX::ThrowIfFailed(dx12SwapChain.commandLists[frameIndex]->Reset(dx12SwapChain.commandAllocators[frameIndex].get(), nullptr));
+
+			std::vector<D3D12_RESOURCE_BARRIER> barriers;
+
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.inputColorBufferShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.motionVectorBufferShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.depthBufferShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.outputColorBufferShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+
+			if (!settings.enableDLSSRR) {
+				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.reactiveMaskShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.transparencyCompositionMaskShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+			} else {
+				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.albedoShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.reflectanceShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.packedNormalShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.specHitDistanceShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+			}
+
+			if (!barriers.empty())
+				dx12SwapChain.commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 
 			if (!settings.enableDLSSRR) {
 				streamline.Upscale(
@@ -1255,7 +1276,7 @@ void Upscaling::Upscale()
 					dx12SwapChain.reactiveMaskShared12->resource.get(),
 					dx12SwapChain.transparencyCompositionMaskShared12->resource.get(),
 					dx12SwapChain.outputColorBufferShared12->resource.get(),
-					dx12SwapChain.commandLists[0].get()
+					dx12SwapChain.commandLists[frameIndex].get()
 				);
 			} else {
 				logger::debug("Call DLSS RR");
@@ -1268,13 +1289,31 @@ void Upscaling::Upscale()
 					dx12SwapChain.packedNormalShared12->resource.get(),
 					dx12SwapChain.specHitDistanceShared12->resource.get(),
 					dx12SwapChain.outputColorBufferShared12->resource.get(),
-					dx12SwapChain.commandLists[0].get()
+					dx12SwapChain.commandLists[frameIndex].get()
 				);
 			}
-			// Close and execute command list
-			DX::ThrowIfFailed(dx12SwapChain.commandLists[0]->Close());
+			barriers.clear();
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.inputColorBufferShared12->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON));
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.motionVectorBufferShared12->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON));
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.depthBufferShared12->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON));
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.outputColorBufferShared12->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON));
 
-			ID3D12CommandList* commandLists[] = { dx12SwapChain.commandLists[0].get() };
+			if (!settings.enableDLSSRR) {
+				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.reactiveMaskShared12->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON));
+				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.transparencyCompositionMaskShared12->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON));
+			} else {
+				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.albedoShared12->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON));
+				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.reflectanceShared12->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON));
+				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.packedNormalShared12->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON));
+				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.specHitDistanceShared12->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON));
+			}
+			if (!barriers.empty())
+				dx12SwapChain.commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+
+			// Close and execute command list
+			DX::ThrowIfFailed(dx12SwapChain.commandLists[frameIndex]->Close());
+
+			ID3D12CommandList* commandLists[] = { dx12SwapChain.commandLists[frameIndex].get() };
 			dx12SwapChain.commandQueue->ExecuteCommandLists(1, commandLists);
 
 			// Wait for D3D12 to finish
