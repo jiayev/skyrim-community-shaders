@@ -549,17 +549,23 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 
 			if (previousUpscaleMode == UpscaleMethod::kDLSS)
 				if (previousRR)
-					streamline.DestroyDLSSRRResources();
+					streamline.DestroyDLSSRRResources(true);
 				else
-					streamline.DestroyDLSSResources();
+					streamline.DestroyDLSSResources(true);
 			else if (previousUpscaleMode == UpscaleMethod::kFSR)
 				fidelityFX.DestroyFSRResources();
 
 			if (a_upscalemethod == UpscaleMethod::kFSR)
 				fidelityFX.CreateFSRResources();
-			
-			if (previousRR && previousUpscaleMode == UpscaleMethod::kDLSS)
-				streamline.DestroyDLSSRRResources();
+		}
+
+		if (a_upscalemethod == UpscaleMethod::kDLSS) {
+			if (!upscaleModeChanged && rrChanged) {
+				if (previousRR)
+					streamline.DestroyDLSSRRResources();
+				else
+					streamline.DestroyDLSSResources();
+			}
 		}
 
 		// Create new upscaling method resources
@@ -1249,7 +1255,6 @@ void Upscaling::Upscale()
 
 			// Copy input color texture to shared D3D12 resource
 			context->CopyResource(dx12SwapChain.inputColorBufferShared12->resource11, main.texture);
-			auto frameIndex = dx12SwapChain.frameIndex;
 
 			// Wait for D3D11 to finish
 			DX::ThrowIfFailed(context->QueryInterface(IID_PPV_ARGS(dx12SwapChain.d3d11Context.put())));
@@ -1258,8 +1263,8 @@ void Upscaling::Upscale()
 			dx12SwapChain.fenceValue++;
 
 			// Reset command allocator and list
-			DX::ThrowIfFailed(dx12SwapChain.commandAllocators[frameIndex]->Reset());
-			DX::ThrowIfFailed(dx12SwapChain.commandLists[frameIndex]->Reset(dx12SwapChain.commandAllocators[frameIndex].get(), nullptr));
+			DX::ThrowIfFailed(dx12SwapChain.dlssCommandAllocator->Reset());
+			DX::ThrowIfFailed(dx12SwapChain.dlssCommandList->Reset(dx12SwapChain.dlssCommandAllocator.get(), nullptr));
 
 			std::vector<D3D12_RESOURCE_BARRIER> barriers;
 
@@ -1279,7 +1284,7 @@ void Upscaling::Upscale()
 			}
 
 			if (!barriers.empty())
-				dx12SwapChain.commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+				dx12SwapChain.dlssCommandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 
 			if (!settings.enableDLSSRR) {
 				streamline.Upscale(
@@ -1289,7 +1294,7 @@ void Upscaling::Upscale()
 					dx12SwapChain.reactiveMaskShared12->resource.get(),
 					dx12SwapChain.transparencyCompositionMaskShared12->resource.get(),
 					dx12SwapChain.outputColorBufferShared12->resource.get(),
-					dx12SwapChain.commandLists[frameIndex].get()
+					dx12SwapChain.dlssCommandList.get()
 				);
 			} else {
 				logger::debug("Call DLSS RR");
@@ -1302,7 +1307,7 @@ void Upscaling::Upscale()
 					dx12SwapChain.packedNormalShared12->resource.get(),
 					dx12SwapChain.specHitDistanceShared12->resource.get(),
 					dx12SwapChain.outputColorBufferShared12->resource.get(),
-					dx12SwapChain.commandLists[frameIndex].get()
+					dx12SwapChain.dlssCommandList.get()
 				);
 			}
 			barriers.clear();
@@ -1321,12 +1326,12 @@ void Upscaling::Upscale()
 				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.specHitDistanceShared12->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON));
 			}
 			if (!barriers.empty())
-				dx12SwapChain.commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+				dx12SwapChain.dlssCommandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 
 			// Close and execute command list
-			DX::ThrowIfFailed(dx12SwapChain.commandLists[frameIndex]->Close());
+			DX::ThrowIfFailed(dx12SwapChain.dlssCommandList->Close());
 
-			ID3D12CommandList* commandLists[] = { dx12SwapChain.commandLists[frameIndex].get() };
+			ID3D12CommandList* commandLists[] = { dx12SwapChain.dlssCommandList.get() };
 			dx12SwapChain.commandQueue->ExecuteCommandLists(1, commandLists);
 
 			// Wait for D3D12 to finish
@@ -1496,14 +1501,14 @@ void Upscaling::ApplyNISSharpening()
 	auto frameIndex = dx12SwapChain.frameIndex;
 
 	// Reset command allocator and list
-	DX::ThrowIfFailed(dx12SwapChain.commandAllocators[frameIndex]->Reset());
-	DX::ThrowIfFailed(dx12SwapChain.commandLists[frameIndex]->Reset(dx12SwapChain.commandAllocators[frameIndex].get(), nullptr));
+	DX::ThrowIfFailed(dx12SwapChain.dlssCommandAllocator->Reset());
+	DX::ThrowIfFailed(dx12SwapChain.dlssCommandList->Reset(dx12SwapChain.dlssCommandAllocator.get(), nullptr));
 
-	streamline.ApplyNISSharpening(nisSharpenerTexture->resource.get(), settings.sharpnessDLSS);
+	streamline.ApplyNISSharpening(dx12SwapChain.nisSharpenerInputShared12->resource.get(), dx12SwapChain.nisSharpenerOutputShared12->resource.get(), settings.sharpnessDLSS, dx12SwapChain.dlssCommandList.get());
 	// Close and execute command list
-	DX::ThrowIfFailed(dx12SwapChain.commandLists[0]->Close());
+	DX::ThrowIfFailed(dx12SwapChain.dlssCommandList->Close());
 
-	ID3D12CommandList* commandLists[] = { dx12SwapChain.commandLists[frameIndex].get() };
+	ID3D12CommandList* commandLists[] = { dx12SwapChain.dlssCommandList.get() };
 	dx12SwapChain.commandQueue->ExecuteCommandLists(1, commandLists);
 
 	// Wait for D3D12 to finish

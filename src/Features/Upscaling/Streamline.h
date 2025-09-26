@@ -108,8 +108,8 @@ public:
 	float GetInputResolutionScale(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
 	float GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
 
-	void DestroyDLSSResources();
-	void DestroyDLSSRRResources();
+	void DestroyDLSSResources(bool modeSwitch = false);
+	void DestroyDLSSRRResources(bool modeSwitch = false);
 
 	void ApplyNISSharpening(ID3D12Resource* a_inputColorTexture, ID3D12Resource* a_outputTexture, float sharpness, ID3D12GraphicsCommandList* a_commandList);
 };

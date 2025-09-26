@@ -426,9 +426,18 @@ void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
 	dlssdOptions.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
 	dlssdOptions.alphaUpscalingEnabled = sl::Boolean::eFalse;
 
-	dlssdOptions.worldToCameraView = *(sl::float4x4*)&worldToCameraView;
-	dlssdOptions.cameraViewToWorld = *(sl::float4x4*)&cameraViewToWorld;
-
+	dlssdOptions.worldToCameraView = sl::float4x4{
+		sl::float4{ worldToCameraView._11, worldToCameraView._12, worldToCameraView._13, worldToCameraView._14 },
+		sl::float4{ worldToCameraView._21, worldToCameraView._22, worldToCameraView._23, worldToCameraView._24 },
+		sl::float4{ worldToCameraView._31, worldToCameraView._32, worldToCameraView._33, worldToCameraView._34 },
+		sl::float4{ worldToCameraView._41, worldToCameraView._42, worldToCameraView._43, worldToCameraView._44 }
+	};
+	dlssdOptions.cameraViewToWorld = sl::float4x4{
+		sl::float4{ cameraViewToWorld._11, cameraViewToWorld._12, cameraViewToWorld._13, cameraViewToWorld._14 },
+		sl::float4{ cameraViewToWorld._21, cameraViewToWorld._22, cameraViewToWorld._23, cameraViewToWorld._24 },
+		sl::float4{ cameraViewToWorld._31, cameraViewToWorld._32, cameraViewToWorld._33, cameraViewToWorld._34 },
+		sl::float4{ cameraViewToWorld._41, cameraViewToWorld._42, cameraViewToWorld._43, cameraViewToWorld._44 }
+	};
 	dlssdOptions.dlaaPreset = sl::DLSSDPreset::ePresetD;
 	dlssdOptions.qualityPreset = sl::DLSSDPreset::ePresetD;
 	dlssdOptions.balancedPreset = sl::DLSSDPreset::ePresetD;
@@ -593,20 +602,24 @@ float Streamline::GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outpu
  *
  * Sets the DLSS mode to off and frees all DLSS-related resources associated with the viewport.
  */
-void Streamline::DestroyDLSSResources()
+void Streamline::DestroyDLSSResources(bool modeSwitch)
 {
-	sl::DLSSOptions dlssOptions{};
-	dlssOptions.mode = sl::DLSSMode::eOff;
-	slDLSSSetOptions(viewport, dlssOptions);
+	if (modeSwitch) {
+		sl::DLSSOptions dlssOptions{};
+		dlssOptions.mode = sl::DLSSMode::eOff;
+		slDLSSSetOptions(viewport, dlssOptions);
+	}
 	slFreeResources(sl::kFeatureDLSS, viewport);
 }
 
-void Streamline::DestroyDLSSRRResources()
+void Streamline::DestroyDLSSRRResources(bool modeSwitch)
 {
 	logger::debug("[Streamline] Destroying DLSS-RR resources");
-	sl::DLSSDOptions dlssdOptions{};
-	dlssdOptions.mode = sl::DLSSMode::eOff;
-	slDLSSDSetOptions(viewport, dlssdOptions);
+	if (modeSwitch) {
+		sl::DLSSDOptions dlssdOptions{};
+		dlssdOptions.mode = sl::DLSSMode::eOff;
+		slDLSSDSetOptions(viewport, dlssdOptions);
+	}
 	slFreeResources(sl::kFeatureDLSS_RR, viewport);
 }
 

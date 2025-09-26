@@ -66,6 +66,9 @@ public:
 	winrt::com_ptr<ID3D12CommandAllocator> commandAllocators[2];
 	winrt::com_ptr<ID3D12GraphicsCommandList4> commandLists[2];
 
+	winrt::com_ptr<ID3D12CommandAllocator> dlssCommandAllocator;
+	winrt::com_ptr<ID3D12GraphicsCommandList4> dlssCommandList;
+
 	IDXGISwapChain4* swapChain;
 
 	DXGI_SWAP_CHAIN_DESC1 swapChainDesc;
