@@ -28,8 +28,8 @@ Texture2D<float4> TexMsLut : register(t1);
 Texture2D<float4> TexSvLut : register(t2);
 Texture3D<float4> TexApLut : register(t3);
 #elif defined(PS_DEFERRED_RSRCS)
-Texture3D<float4> TexApLut : register(t15);
-Texture2D<unorm float> TexApShadow : register(t16);
+Texture3D<float4> TexApLut : register(t17);
+Texture2D<unorm float> TexApShadow : register(t18);
 #else
 Texture2D<float4> TexTrLut : register(t61);
 Texture2D<float4> TexSvLut : register(t62);
