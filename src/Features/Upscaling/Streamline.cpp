@@ -128,7 +128,7 @@ void Streamline::LoadInterposer()
 	pref.engineVersion = "1.0.0";
 	pref.projectId = "f8776929-c969-43bd-ac2b-294b4de58aac";
 
-	pref.renderAPI = sl::RenderAPI::eD3D12;
+	pref.renderAPI = sl::RenderAPI::eD3D11;
 	pref.flags = sl::PreferenceFlags::eUseManualHooking;
 
 	// Hook up all of the functions exported by the SL Interposer Library
@@ -270,17 +270,14 @@ void Streamline::CheckFrameConstants()
 	}
 }
 
-void Streamline::Upscale(ID3D12Resource* a_inputColorTexture,
-	ID3D12Resource* a_motionVectorTexture,
-	ID3D12Resource* a_depthTexture,
-	ID3D12Resource* a_reactiveMask,
-	ID3D12Resource* a_transparencyCompositionMask,
-	ID3D12Resource* a_outputTexture,
-	ID3D12GraphicsCommandList* a_commandList)
+void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)
 {
 	CheckFrameConstants();
 
 	auto state = globals::state;
+
+	auto renderer = globals::game::renderer;
+	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
 	sl::DLSSOptions dlssOptions{};
 
@@ -329,10 +326,10 @@ void Streamline::Upscale(ID3D12Resource* a_inputColorTexture,
 		sl::Extent lowResExtent{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
 		sl::Extent fullExtent{ 0, 0, (uint)screenSize.x, (uint)screenSize.y };
 
-		sl::Resource colorIn = { sl::ResourceType::eTex2d, a_inputColorTexture, 0 };
-		sl::Resource colorOut = { sl::ResourceType::eTex2d, a_outputTexture, 0 };
-		sl::Resource depth = { sl::ResourceType::eTex2d, a_depthTexture, 0 };
-		sl::Resource mvec = { sl::ResourceType::eTex2d, a_motionVectorTexture, 0 };
+		sl::Resource colorIn = { sl::ResourceType::eTex2d, a_upscalingTexture, 0 };
+		sl::Resource colorOut = { sl::ResourceType::eTex2d, a_upscalingTexture, 0 };
+		sl::Resource depth = { sl::ResourceType::eTex2d, depthTexture.texture, 0 };
+		sl::Resource mvec = { sl::ResourceType::eTex2d, a_motionVectors, 0 };
 
 		sl::ResourceTag colorInTag = sl::ResourceTag{ &colorIn, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &lowResExtent };
 		sl::ResourceTag colorOutTag = sl::ResourceTag{ &colorOut, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &fullExtent };
@@ -347,23 +344,15 @@ void Streamline::Upscale(ID3D12Resource* a_inputColorTexture,
 
 		sl::ResourceTag resourceTags[] = { colorInTag, colorOutTag, depthTag, mvecTag, reactiveMaskTag, transparencyCompositionMaskTag };
 
-		slSetTag(viewport, resourceTags, _countof(resourceTags), a_commandList);
+		slSetTag(viewport, resourceTags, _countof(resourceTags), globals::d3d::context);
 	}
 
 	sl::ViewportHandle view(viewport);
 	const sl::BaseStructure* inputs[] = { &view };
-	slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), a_commandList);
+	slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), globals::d3d::context);
 }
 
-void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
-	ID3D12Resource* a_motionVectorTexture,
-	ID3D12Resource* a_depthTexture,
-	ID3D12Resource* a_albedoTexture,
-	ID3D12Resource* a_reflectanceTexture,
-	ID3D12Resource* a_normalRoughness,
-	ID3D12Resource* a_specularHitDistance,
-	ID3D12Resource* a_outputTexture,
-	ID3D12GraphicsCommandList* a_commandList)
+void Streamline::RayReconstruction(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_normalRoughness, ID3D11Resource* a_specularHitDistance, ID3D11Resource* a_motionVectors)
 {
 	if (!featureDLSS_RR)
 		return;
@@ -374,6 +363,10 @@ void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
 	logger::debug("[DLSS RR] Frame constants set");
 
 	auto state = globals::state;
+	auto renderer = globals::game::renderer;
+	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto& albedoTexture = renderer->GetRuntimeData().renderTargets[ALBEDO];
+	auto& reflectanceTexture = renderer->GetRuntimeData().renderTargets[REFLECTANCE];
 
 	sl::DLSSDOptions dlssdOptions{};
 
@@ -428,12 +421,12 @@ void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
 		sl::Extent inputExtent{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
 		sl::Extent outputExtent{ 0, 0, (uint)screenSize.x, (uint)screenSize.y };
 
-		sl::Resource colorIn = { sl::ResourceType::eTex2d, a_inputColorTexture, 0 };
-		sl::Resource colorOut = { sl::ResourceType::eTex2d, a_outputTexture, 0 };
-		sl::Resource depth = { sl::ResourceType::eTex2d, a_depthTexture, 0 };
-		sl::Resource mvec = { sl::ResourceType::eTex2d, a_motionVectorTexture, 0 };
-		sl::Resource diffuseAlbedo = { sl::ResourceType::eTex2d, a_albedoTexture, 0 };
-		sl::Resource specularAlbedo = { sl::ResourceType::eTex2d, a_reflectanceTexture, 0 };
+		sl::Resource colorIn = { sl::ResourceType::eTex2d, a_upscalingTexture, 0 };
+		sl::Resource colorOut = { sl::ResourceType::eTex2d, a_upscalingTexture, 0 };
+		sl::Resource depth = { sl::ResourceType::eTex2d, depthTexture.texture, 0 };
+		sl::Resource mvec = { sl::ResourceType::eTex2d, a_motionVectors, 0 };
+		sl::Resource diffuseAlbedo = { sl::ResourceType::eTex2d, albedoTexture.texture, 0 };
+		sl::Resource specularAlbedo = { sl::ResourceType::eTex2d, reflectanceTexture.texture, 0 };
 		sl::Resource normalRoughness = { sl::ResourceType::eTex2d, a_normalRoughness, 0 };
 		sl::Resource specHitDistance = { sl::ResourceType::eTex2d, a_specularHitDistance, 0 };
 
@@ -447,7 +440,7 @@ void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
 		sl::ResourceTag specHitDistanceTag = sl::ResourceTag{ &specHitDistance, sl::kBufferTypeSpecularHitDistance, sl::ResourceLifecycle::eValidUntilPresent, &inputExtent };
 
 		sl::ResourceTag resourceTags[] = { colorInTag, colorOutTag, depthTag, mvecTag, diffuseAlbedoTag, specularAlbedoTag, normalRoughnessTag, specHitDistanceTag };
-		if (SL_FAILED(result, slSetTag(viewport, resourceTags, _countof(resourceTags), a_commandList))) {
+		if (SL_FAILED(result, slSetTag(viewport, resourceTags, _countof(resourceTags), globals::d3d::context))) {
 			logger::error("[DLSS RR] Failed to set DLSS RR tags, error code: {}", (int)result);
 			return;
 		}
@@ -457,8 +450,10 @@ void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
 
 	sl::ViewportHandle view(viewport);
 	const sl::BaseStructure* inputs[] = { &view };
+	// slAllocateResources(globals::d3d::device, sl::kFeatureDLSS_RR, viewport);
+	// logger::debug("[DLSS RR] slAllocateResources completed");
 
-	if (SL_FAILED(result, slEvaluateFeature(sl::kFeatureDLSS_RR, *frameToken, inputs, _countof(inputs), a_commandList))) {
+	if (SL_FAILED(result, slEvaluateFeature(sl::kFeatureDLSS_RR, *frameToken, inputs, _countof(inputs), globals::d3d::context))) {
 		logger::error("[DLSS RR] Failed to evaluate DLSS RR feature, error code: {}", (int)result);
 		return;
 	} else {

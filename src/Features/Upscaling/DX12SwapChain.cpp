@@ -3,7 +3,6 @@
 #include <FidelityFX/api/include/dx12/ffx_api_dx12.hpp>
 #include <dxgi1_6.h>
 
-#include "../../Deferred.h"
 #include "../Upscaling.h"
 #include "FidelityFX.h"
 #include "Streamline.h"
@@ -408,21 +407,8 @@ void DX12SwapChain::CreateSharedResources()
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	D3D11_TEXTURE2D_DESC texDesc{};
 	main.texture->GetDesc(&texDesc);
-	inputColorBufferShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-	outputColorBufferShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-	packedNormalShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-
 	texDesc.Format = DXGI_FORMAT_R32_FLOAT;
 	depthBufferShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-	specHitDistanceShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-
-	texDesc.Format = DXGI_FORMAT_R8_UNORM;
-	reactiveMaskShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-	transparencyCompositionMaskShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-
-	texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-	albedoShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-	reflectanceShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
 
 	// Create motion vector buffer
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];

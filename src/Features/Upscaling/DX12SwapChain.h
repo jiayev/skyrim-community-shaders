@@ -77,16 +77,6 @@ public:
 	WrappedResource* depthBufferShared12 = nullptr;
 	WrappedResource* motionVectorBufferShared12 = nullptr;
 
-	// for sr/rr
-	WrappedResource* reactiveMaskShared12 = nullptr;
-	WrappedResource* transparencyCompositionMaskShared12 = nullptr;
-	WrappedResource* inputColorBufferShared12 = nullptr;
-	WrappedResource* outputColorBufferShared12 = nullptr;
-	WrappedResource* albedoShared12 = nullptr;
-	WrappedResource* reflectanceShared12 = nullptr;
-	WrappedResource* packedNormalShared12 = nullptr;
-	WrappedResource* specHitDistanceShared12 = nullptr;
-
 	winrt::com_ptr<ID3D11Device5> d3d11Device;
 	winrt::com_ptr<ID3D11DeviceContext4> d3d11Context;
 
