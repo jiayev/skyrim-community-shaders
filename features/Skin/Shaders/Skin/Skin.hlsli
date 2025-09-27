@@ -217,10 +217,10 @@ namespace Skin
 		specularWeight *= horizon;
 
 		float3 diffuseAO = skin.AO;
-		float3 specularAO = PBR::SpecularAOLagarde(NdotV, skin.AO, averageRoughness);
+		float3 specularAO = Color::SpecularAOLagarde(NdotV, skin.AO, averageRoughness);
 
-		diffuseAO = PBR::MultiBounceAO(skin.Albedo, diffuseAO.x).y;
-		specularAO = PBR::MultiBounceAO(skin.F0, specularAO.x).y;
+		diffuseAO = Color::MultiBounceAO(skin.Albedo, diffuseAO.x).y;
+		specularAO = Color::MultiBounceAO(skin.F0, specularAO.x).y;
 
 		diffuseWeight *= diffuseAO;
 		specularWeight *= specularAO;
