@@ -1498,13 +1498,25 @@ void Upscaling::ApplyNISSharpening()
 	DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.d3d12Fence.get(), dx12SwapChain.fenceValue));
 	dx12SwapChain.fenceValue++;
 
-	auto frameIndex = dx12SwapChain.frameIndex;
+	std::vector<D3D12_RESOURCE_BARRIER> barriers;
+
+	barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.nisSharpenerInputShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+	barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.nisSharpenerOutputShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+	if (!barriers.empty())
+		dx12SwapChain.dlssCommandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 
 	// Reset command allocator and list
 	DX::ThrowIfFailed(dx12SwapChain.dlssCommandAllocator->Reset());
 	DX::ThrowIfFailed(dx12SwapChain.dlssCommandList->Reset(dx12SwapChain.dlssCommandAllocator.get(), nullptr));
 
 	streamline.ApplyNISSharpening(dx12SwapChain.nisSharpenerInputShared12->resource.get(), dx12SwapChain.nisSharpenerOutputShared12->resource.get(), settings.sharpnessDLSS, dx12SwapChain.dlssCommandList.get());
+	
+	barriers.clear();
+	barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.nisSharpenerInputShared12->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON));
+	barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.nisSharpenerOutputShared12->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON));
+	if (!barriers.empty())
+		dx12SwapChain.dlssCommandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+
 	// Close and execute command list
 	DX::ThrowIfFailed(dx12SwapChain.dlssCommandList->Close());
 
