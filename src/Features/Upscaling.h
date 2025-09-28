@@ -138,10 +138,6 @@ public:
 	Texture2D* reactiveMaskTexture = nullptr;
 	Texture2D* transparencyCompositionMaskTexture = nullptr;
 	Texture2D* motionVectorCopyTexture = nullptr;
-	Texture2D* nisSharpenerTexture = nullptr;
-	Texture2D* packedNormalTexture = nullptr;  // For DLSSRR
-	Texture2D* specHitDistanceTexture = nullptr;  // For DLSSRR
-	Texture2D* rrTexture = nullptr;  // For DLSSRR
 
 	virtual void ClearShaderCache() override;
 
@@ -182,7 +178,7 @@ public:
 	bool IsBackendInitialized() const;
 	void CheckBackendFeatures(IDXGIAdapter* adapter);
 	void UpgradeBackendInterface(void** ppInterface);
-	void SetBackendD3DDevice(ID3D11Device* device);
+	void SetBackendD3DDevice(void* device);
 	void PostBackendDevice();
 
 	// Module availability methods

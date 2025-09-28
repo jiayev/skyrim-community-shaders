@@ -87,15 +87,29 @@ public:
 
 	void CheckFrameConstants();
 
-	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
+	void Upscale(ID3D12Resource* a_inputColorTexture,
+		ID3D12Resource* a_motionVectorTexture,
+		ID3D12Resource* a_depthTexture,
+		ID3D12Resource* a_reactiveMask,
+		ID3D12Resource* a_transparencyCompositionMask,
+		ID3D12Resource* a_outputTexture,
+		ID3D12GraphicsCommandList* a_commandList);
 
-	void RayReconstruction(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_normalRoughness, ID3D11Resource* a_specularHitDistance, ID3D11Resource* a_motionVectors);
+	void RayReconstruction(ID3D12Resource* a_inputColorTexture,
+		ID3D12Resource* a_motionVectorTexture,
+		ID3D12Resource* a_depthTexture,
+		ID3D12Resource* a_albedoTexture,
+		ID3D12Resource* a_reflectanceTexture,
+		ID3D12Resource* a_normalRoughness,
+		ID3D12Resource* a_specularHitDistance,
+		ID3D12Resource* a_outputTexture,
+		ID3D12GraphicsCommandList* a_commandList);
 
 	float GetInputResolutionScale(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
 	float GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
 
-	void DestroyDLSSResources(bool keepOptions = false);
-	void DestroyDLSSRRResources(bool keepOptions = false);
+	void DestroyDLSSResources(bool modeSwitch = false);
+	void DestroyDLSSRRResources(bool modeSwitch = false);
 
-	void ApplyNISSharpening(ID3D11Resource* a_texture, float sharpness);
+	void ApplyNISSharpening(ID3D12Resource* a_inputColorTexture, ID3D12Resource* a_outputTexture, float sharpness, ID3D12GraphicsCommandList* a_commandList);
 };

@@ -66,6 +66,9 @@ public:
 	winrt::com_ptr<ID3D12CommandAllocator> commandAllocators[2];
 	winrt::com_ptr<ID3D12GraphicsCommandList4> commandLists[2];
 
+	winrt::com_ptr<ID3D12CommandAllocator> dlssCommandAllocator[2];
+	winrt::com_ptr<ID3D12GraphicsCommandList4> dlssCommandList[2];
+
 	IDXGISwapChain4* swapChain;
 
 	DXGI_SWAP_CHAIN_DESC1 swapChainDesc;
@@ -77,16 +80,33 @@ public:
 	WrappedResource* depthBufferShared12 = nullptr;
 	WrappedResource* motionVectorBufferShared12 = nullptr;
 
+	// for sr/rr
+	WrappedResource* reactiveMaskShared12 = nullptr;
+	WrappedResource* transparencyCompositionMaskShared12 = nullptr;
+	WrappedResource* inputColorBufferShared12 = nullptr;
+	WrappedResource* outputColorBufferShared12 = nullptr;
+	WrappedResource* albedoShared12 = nullptr;
+	WrappedResource* reflectanceShared12 = nullptr;
+	WrappedResource* packedNormalShared12 = nullptr;
+	WrappedResource* specHitDistanceShared12 = nullptr;
+
+	WrappedResource* nisSharpenerInputShared12 = nullptr;
+	WrappedResource* nisSharpenerOutputShared12 = nullptr;
+
 	winrt::com_ptr<ID3D11Device5> d3d11Device;
 	winrt::com_ptr<ID3D11DeviceContext4> d3d11Context;
 
 	winrt::com_ptr<ID3D11Fence> d3d11Fence;
 	winrt::com_ptr<ID3D12Fence> d3d12Fence;
 
+	winrt::com_ptr<ID3D12Fence> upscalingFence;
+
 	winrt::com_ptr<ID3D12Resource> swapChainBuffers[2];
 
 	UINT frameIndex = 0;
 	UINT64 fenceValue = 0;
+
+	UINT64 upscalingFenceValue = 0;
 
 	LARGE_INTEGER qpf;
 
