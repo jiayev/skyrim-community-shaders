@@ -1574,8 +1574,10 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a1, uint32_t a
 	if (upscaling.d3d12SwapChainActive && (upscaling.settings.frameGenerationMode || upscaleMethod == UpscaleMethod::kDLSS))
 		upscaling.CopySharedD3D12Resources();
 
-	if (upscaling.d3d12SwapChainActive && dx12SwapChain.upscalingFenceValue > 0) {
-		logger::trace("Waiting for upscaling fence {} at start of upscaling", dx12SwapChain.upscalingFenceValue);
+	if (upscaling.d3d12SwapChainActive) {
+		dx12SwapChain.upscalingFenceValue++;
+		logger::trace("Clearing queue using upscaling fence {}", dx12SwapChain.upscalingFenceValue);
+		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
 		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
 	}
 
@@ -1593,8 +1595,10 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a1, uint32_t a
 		upscaling.ApplyNISSharpening();
 
 	if (upscaling.d3d12SwapChainActive) {
-		logger::trace("Signaling upscaling fence {} at end of upscaling", dx12SwapChain.upscalingFenceValue);
-		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.upscalingFence.get(), ++dx12SwapChain.upscalingFenceValue));
+		dx12SwapChain.upscalingFenceValue++;
+		logger::trace("Clearing queue using upscaling fence {}", dx12SwapChain.upscalingFenceValue);
+		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
+		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
 	}
 
 	// Disable TAA in some menus
