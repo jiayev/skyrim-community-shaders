@@ -1258,13 +1258,18 @@ void Upscaling::Upscale()
 
 			// Wait for D3D11 to finish
 			DX::ThrowIfFailed(context->QueryInterface(IID_PPV_ARGS(dx12SwapChain.d3d11Context.put())));
-			DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Signal(dx12SwapChain.d3d11Fence.get(), dx12SwapChain.fenceValue));
-			DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.d3d12Fence.get(), dx12SwapChain.fenceValue));
+			auto fence = dx12SwapChain.fenceValue;
+			logger::trace("Signaling shared fence {} before upscaling", fence);
+			DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Signal(dx12SwapChain.d3d11Fence.get(), fence));
+			logger::trace("Waiting for shared fence {} before upscaling", fence);
+			DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.d3d12Fence.get(), fence));
 			dx12SwapChain.fenceValue++;
 
+			auto frameIndex = dx12SwapChain.frameIndex;
+
 			// Reset command allocator and list
-			DX::ThrowIfFailed(dx12SwapChain.dlssCommandAllocator->Reset());
-			DX::ThrowIfFailed(dx12SwapChain.dlssCommandList->Reset(dx12SwapChain.dlssCommandAllocator.get(), nullptr));
+			DX::ThrowIfFailed(dx12SwapChain.dlssCommandAllocator[frameIndex]->Reset());
+			DX::ThrowIfFailed(dx12SwapChain.dlssCommandList[frameIndex]->Reset(dx12SwapChain.dlssCommandAllocator[frameIndex].get(), nullptr));
 
 			std::vector<D3D12_RESOURCE_BARRIER> barriers;
 
@@ -1284,7 +1289,7 @@ void Upscaling::Upscale()
 			}
 
 			if (!barriers.empty())
-				dx12SwapChain.dlssCommandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+				dx12SwapChain.dlssCommandList[frameIndex]->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 
 			if (!settings.enableDLSSRR) {
 				streamline.Upscale(
@@ -1294,7 +1299,7 @@ void Upscaling::Upscale()
 					dx12SwapChain.reactiveMaskShared12->resource.get(),
 					dx12SwapChain.transparencyCompositionMaskShared12->resource.get(),
 					dx12SwapChain.outputColorBufferShared12->resource.get(),
-					dx12SwapChain.dlssCommandList.get()
+					dx12SwapChain.dlssCommandList[frameIndex].get()
 				);
 			} else {
 				logger::debug("Call DLSS RR");
@@ -1307,7 +1312,7 @@ void Upscaling::Upscale()
 					dx12SwapChain.packedNormalShared12->resource.get(),
 					dx12SwapChain.specHitDistanceShared12->resource.get(),
 					dx12SwapChain.outputColorBufferShared12->resource.get(),
-					dx12SwapChain.dlssCommandList.get()
+					dx12SwapChain.dlssCommandList[frameIndex].get()
 				);
 			}
 			barriers.clear();
@@ -1326,17 +1331,20 @@ void Upscaling::Upscale()
 				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.specHitDistanceShared12->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON));
 			}
 			if (!barriers.empty())
-				dx12SwapChain.dlssCommandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+				dx12SwapChain.dlssCommandList[frameIndex]->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 
 			// Close and execute command list
-			DX::ThrowIfFailed(dx12SwapChain.dlssCommandList->Close());
+			DX::ThrowIfFailed(dx12SwapChain.dlssCommandList[frameIndex]->Close());
 
-			ID3D12CommandList* commandLists[] = { dx12SwapChain.dlssCommandList.get() };
+			ID3D12CommandList* commandLists[] = { dx12SwapChain.dlssCommandList[frameIndex].get() };
 			dx12SwapChain.commandQueue->ExecuteCommandLists(1, commandLists);
 
 			// Wait for D3D12 to finish
-			DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.d3d12Fence.get(), dx12SwapChain.fenceValue));
-			DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Wait(dx12SwapChain.d3d11Fence.get(), dx12SwapChain.fenceValue));
+			fence = dx12SwapChain.fenceValue;
+			logger::trace("Signaling shared fence {} after upscaling", fence);
+			DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.d3d12Fence.get(), fence));
+			logger::trace("Waiting for shared fence {} after upscaling", fence);
+			DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Wait(dx12SwapChain.d3d11Fence.get(), fence));
 			dx12SwapChain.fenceValue++;
 
 			// Copy back to main buffer
@@ -1493,39 +1501,47 @@ void Upscaling::ApplyNISSharpening()
 	context->CopyResource(dx12SwapChain.nisSharpenerInputShared12->resource11, mainResource.get());
 
 	// Wait for D3D11 to finish
+	auto fence = dx12SwapChain.fenceValue;
 	DX::ThrowIfFailed(context->QueryInterface(IID_PPV_ARGS(dx12SwapChain.d3d11Context.put())));
-	DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Signal(dx12SwapChain.d3d11Fence.get(), dx12SwapChain.fenceValue));
-	DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.d3d12Fence.get(), dx12SwapChain.fenceValue));
+	logger::trace("Signaling shared fence {} before NIS sharpening", fence);
+	DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Signal(dx12SwapChain.d3d11Fence.get(), fence));
+	logger::trace("Waiting for shared fence {} before NIS sharpening", fence);
+	DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.d3d12Fence.get(), fence));
 	dx12SwapChain.fenceValue++;
+
+	auto frameIndex = dx12SwapChain.frameIndex;
+
+	// Reset command allocator and list
+	DX::ThrowIfFailed(dx12SwapChain.dlssCommandAllocator[frameIndex]->Reset());
+	DX::ThrowIfFailed(dx12SwapChain.dlssCommandList[frameIndex]->Reset(dx12SwapChain.dlssCommandAllocator[frameIndex].get(), nullptr));
 
 	std::vector<D3D12_RESOURCE_BARRIER> barriers;
 
 	barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.nisSharpenerInputShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
 	barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.nisSharpenerOutputShared12->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
 	if (!barriers.empty())
-		dx12SwapChain.dlssCommandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+		dx12SwapChain.dlssCommandList[frameIndex]->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 
-	// Reset command allocator and list
-	DX::ThrowIfFailed(dx12SwapChain.dlssCommandAllocator->Reset());
-	DX::ThrowIfFailed(dx12SwapChain.dlssCommandList->Reset(dx12SwapChain.dlssCommandAllocator.get(), nullptr));
+	streamline.ApplyNISSharpening(dx12SwapChain.nisSharpenerInputShared12->resource.get(), dx12SwapChain.nisSharpenerOutputShared12->resource.get(), settings.sharpnessDLSS, dx12SwapChain.dlssCommandList[frameIndex].get());
 
-	streamline.ApplyNISSharpening(dx12SwapChain.nisSharpenerInputShared12->resource.get(), dx12SwapChain.nisSharpenerOutputShared12->resource.get(), settings.sharpnessDLSS, dx12SwapChain.dlssCommandList.get());
-	
 	barriers.clear();
 	barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.nisSharpenerInputShared12->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON));
 	barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(dx12SwapChain.nisSharpenerOutputShared12->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON));
 	if (!barriers.empty())
-		dx12SwapChain.dlssCommandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+		dx12SwapChain.dlssCommandList[frameIndex]->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 
 	// Close and execute command list
-	DX::ThrowIfFailed(dx12SwapChain.dlssCommandList->Close());
+	DX::ThrowIfFailed(dx12SwapChain.dlssCommandList[frameIndex]->Close());
 
-	ID3D12CommandList* commandLists[] = { dx12SwapChain.dlssCommandList.get() };
+	ID3D12CommandList* commandLists[] = { dx12SwapChain.dlssCommandList[frameIndex].get() };
 	dx12SwapChain.commandQueue->ExecuteCommandLists(1, commandLists);
 
 	// Wait for D3D12 to finish
-	DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.d3d12Fence.get(), dx12SwapChain.fenceValue));
-	DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Wait(dx12SwapChain.d3d11Fence.get(), dx12SwapChain.fenceValue));
+	fence = dx12SwapChain.fenceValue;
+	logger::trace("Signaling shared fence {} after NIS sharpening", fence);
+	DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.d3d12Fence.get(), fence));
+	logger::trace("Waiting for shared fence {} after NIS sharpening", fence);
+	DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Wait(dx12SwapChain.d3d11Fence.get(), fence));
 	dx12SwapChain.fenceValue++;
 
 	// Copy back to main buffer
@@ -1558,6 +1574,11 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a1, uint32_t a
 	if (upscaling.d3d12SwapChainActive && (upscaling.settings.frameGenerationMode || upscaleMethod == UpscaleMethod::kDLSS))
 		upscaling.CopySharedD3D12Resources();
 
+	if (upscaling.d3d12SwapChainActive && dx12SwapChain.upscalingFenceValue > 0) {
+		logger::trace("Waiting for upscaling fence {} at start of upscaling", dx12SwapChain.upscalingFenceValue);
+		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
+	}
+
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA)
 		upscaling.PerformUpscaling();
 
@@ -1570,6 +1591,11 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a1, uint32_t a
 
 	if (upscaleMethod == UpscaleMethod::kDLSS)
 		upscaling.ApplyNISSharpening();
+
+	if (upscaling.d3d12SwapChainActive) {
+		logger::trace("Signaling upscaling fence {} at end of upscaling", dx12SwapChain.upscalingFenceValue);
+		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.upscalingFence.get(), ++dx12SwapChain.upscalingFenceValue));
+	}
 
 	// Disable TAA in some menus
 	BSImagespaceShaderISTemporalAA->taaEnabled = false;

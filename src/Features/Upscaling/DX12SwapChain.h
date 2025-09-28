@@ -66,8 +66,8 @@ public:
 	winrt::com_ptr<ID3D12CommandAllocator> commandAllocators[2];
 	winrt::com_ptr<ID3D12GraphicsCommandList4> commandLists[2];
 
-	winrt::com_ptr<ID3D12CommandAllocator> dlssCommandAllocator;
-	winrt::com_ptr<ID3D12GraphicsCommandList4> dlssCommandList;
+	winrt::com_ptr<ID3D12CommandAllocator> dlssCommandAllocator[2];
+	winrt::com_ptr<ID3D12GraphicsCommandList4> dlssCommandList[2];
 
 	IDXGISwapChain4* swapChain;
 
@@ -99,10 +99,14 @@ public:
 	winrt::com_ptr<ID3D11Fence> d3d11Fence;
 	winrt::com_ptr<ID3D12Fence> d3d12Fence;
 
+	winrt::com_ptr<ID3D12Fence> upscalingFence;
+
 	winrt::com_ptr<ID3D12Resource> swapChainBuffers[2];
 
 	UINT frameIndex = 0;
 	UINT64 fenceValue = 0;
+
+	UINT64 upscalingFenceValue = 0;
 
 	LARGE_INTEGER qpf;
 
