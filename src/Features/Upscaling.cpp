@@ -24,6 +24,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameGenerationMode,
 	frameGenerationForceEnable,
 	streamlineLogLevel,
+	sharpnessFSR,
+	sharpnessDLSS,
 	enableDLSSRR);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
@@ -1490,15 +1492,15 @@ void Upscaling::ApplyNISSharpening()
 	auto frameIndex = dx12SwapChain.frameIndex;
 
 	// Reset command allocator and list
-	DX::ThrowIfFailed(dx12SwapChain.dlssCommandAllocator[frameIndex]->Reset());
-	DX::ThrowIfFailed(dx12SwapChain.dlssCommandList[frameIndex]->Reset(dx12SwapChain.dlssCommandAllocator[frameIndex].get(), nullptr));
+	DX::ThrowIfFailed(dx12SwapChain.nisSharpenerCommandAllocator[frameIndex]->Reset());
+	DX::ThrowIfFailed(dx12SwapChain.nisSharpenerCommandList[frameIndex]->Reset(dx12SwapChain.nisSharpenerCommandAllocator[frameIndex].get(), nullptr));
 
-	streamline.ApplyNISSharpening(dx12SwapChain.nisSharpenerInputShared12->resource.get(), dx12SwapChain.nisSharpenerOutputShared12->resource.get(), settings.sharpnessDLSS, dx12SwapChain.dlssCommandList[frameIndex].get());
+	streamline.ApplyNISSharpening(dx12SwapChain.nisSharpenerInputShared12->resource.get(), dx12SwapChain.nisSharpenerOutputShared12->resource.get(), settings.sharpnessDLSS, dx12SwapChain.nisSharpenerCommandList[frameIndex].get());
 
 	// Close and execute command list
-	DX::ThrowIfFailed(dx12SwapChain.dlssCommandList[frameIndex]->Close());
+	DX::ThrowIfFailed(dx12SwapChain.nisSharpenerCommandList[frameIndex]->Close());
 
-	ID3D12CommandList* commandLists[] = { dx12SwapChain.dlssCommandList[frameIndex].get() };
+	ID3D12CommandList* commandLists[] = { dx12SwapChain.nisSharpenerCommandList[frameIndex].get() };
 	dx12SwapChain.commandQueue->ExecuteCommandLists(1, commandLists);
 
 	// Wait for D3D12 to finish
@@ -1546,7 +1548,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a1, uint32_t a
 
 	if (upscaling.d3d12SwapChainActive) {
 		dx12SwapChain.upscalingFenceValue++;
-		logger::trace("Clearing queue using upscaling fence {}", dx12SwapChain.upscalingFenceValue);
+		logger::trace("[Upscaling Begin] Clearing queue using upscaling fence {}", dx12SwapChain.upscalingFenceValue);
 		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
 		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
 	}
@@ -1561,12 +1563,19 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a1, uint32_t a
 
 	func(a1, a3, er8_);
 
+	if (upscaling.d3d12SwapChainActive) {
+		dx12SwapChain.upscalingFenceValue++;
+		logger::trace("[NIS] Clearing queue using upscaling fence {}", dx12SwapChain.upscalingFenceValue);
+		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
+		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
+	}
+
 	if (upscaleMethod == UpscaleMethod::kDLSS)
 		upscaling.ApplyNISSharpening();
 
 	if (upscaling.d3d12SwapChainActive) {
 		dx12SwapChain.upscalingFenceValue++;
-		logger::trace("Clearing queue using upscaling fence {}", dx12SwapChain.upscalingFenceValue);
+		logger::trace("[Upscaling End] Clearing queue using upscaling fence {}", dx12SwapChain.upscalingFenceValue);
 		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
 		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
 	}
