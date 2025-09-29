@@ -28,6 +28,10 @@ void DX12SwapChain::CreateD3D12Device(IDXGIAdapter* a_adapter)
 		DX::ThrowIfFailed(d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&dlssCommandAllocator[i])));
 		DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, dlssCommandAllocator[i].get(), nullptr, IID_PPV_ARGS(&dlssCommandList[i])));
 		dlssCommandList[i]->Close();
+
+		DX::ThrowIfFailed(d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&nisSharpenerCommandAllocator[i])));
+		DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, nisSharpenerCommandAllocator[i].get(), nullptr, IID_PPV_ARGS(&nisSharpenerCommandList[i])));
+		nisSharpenerCommandList[i]->Close();
 	}
 }
 

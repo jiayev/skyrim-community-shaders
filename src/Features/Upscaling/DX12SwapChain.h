@@ -69,6 +69,9 @@ public:
 	winrt::com_ptr<ID3D12CommandAllocator> dlssCommandAllocator[2];
 	winrt::com_ptr<ID3D12GraphicsCommandList4> dlssCommandList[2];
 
+	winrt::com_ptr<ID3D12CommandAllocator> nisSharpenerCommandAllocator[2];
+	winrt::com_ptr<ID3D12GraphicsCommandList4> nisSharpenerCommandList[2];
+
 	IDXGISwapChain4* swapChain;
 
 	DXGI_SWAP_CHAIN_DESC1 swapChainDesc;
