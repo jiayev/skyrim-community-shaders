@@ -87,6 +87,9 @@ public:
 
 	void CheckFrameConstants();
 
+	void SetDLSSOptions();
+	void SetDLSSRROptions();
+
 	void Upscale(ID3D12Resource* a_inputColorTexture,
 		ID3D12Resource* a_motionVectorTexture,
 		ID3D12Resource* a_depthTexture,
@@ -105,8 +108,8 @@ public:
 		ID3D12Resource* a_outputTexture,
 		ID3D12GraphicsCommandList* a_commandList);
 
-	float GetInputResolutionScale(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
-	float GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
+	float2 GetInputResolutionScale(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
+	float2 GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
 
 	void DestroyDLSSResources(bool modeSwitch = false);
 	void DestroyDLSSRRResources(bool modeSwitch = false);
