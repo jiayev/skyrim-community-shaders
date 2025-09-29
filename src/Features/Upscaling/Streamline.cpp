@@ -290,18 +290,8 @@ void Streamline::CheckFrameConstants()
 	}
 }
 
-void Streamline::Upscale(ID3D12Resource* a_inputColorTexture,
-	ID3D12Resource* a_motionVectorTexture,
-	ID3D12Resource* a_depthTexture,
-	ID3D12Resource* a_reactiveMask,
-	ID3D12Resource* a_transparencyCompositionMask,
-	ID3D12Resource* a_outputTexture,
-	ID3D12GraphicsCommandList* a_commandList)
+void Streamline::SetDLSSOptions()
 {
-	CheckFrameConstants();
-
-	auto state = globals::state;
-
 	sl::DLSSOptions dlssOptions{};
 
 	// Map quality mode to DLSS mode
@@ -324,6 +314,8 @@ void Streamline::Upscale(ID3D12Resource* a_inputColorTexture,
 		break;
 	}
 
+	auto state = globals::state;
+
 	dlssOptions.outputWidth = (uint)state->screenSize.x;
 	dlssOptions.outputHeight = (uint)state->screenSize.y;
 	dlssOptions.colorBuffersHDR = sl::Boolean::eTrue;
@@ -341,6 +333,20 @@ void Streamline::Upscale(ID3D12Resource* a_inputColorTexture,
 	if (SL_FAILED(result, slDLSSSetOptions(viewport, dlssOptions))) {
 		logger::critical("[Streamline] Could not enable DLSS");
 	}
+}
+
+void Streamline::Upscale(ID3D12Resource* a_inputColorTexture,
+	ID3D12Resource* a_motionVectorTexture,
+	ID3D12Resource* a_depthTexture,
+	ID3D12Resource* a_reactiveMask,
+	ID3D12Resource* a_transparencyCompositionMask,
+	ID3D12Resource* a_outputTexture,
+	ID3D12GraphicsCommandList* a_commandList)
+{
+	CheckFrameConstants();
+	SetDLSSOptions();
+
+	auto state = globals::state;
 
 	{
 		auto screenSize = state->screenSize;
@@ -375,26 +381,7 @@ void Streamline::Upscale(ID3D12Resource* a_inputColorTexture,
 	slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), a_commandList);
 }
 
-void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
-	ID3D12Resource* a_motionVectorTexture,
-	ID3D12Resource* a_depthTexture,
-	ID3D12Resource* a_albedoTexture,
-	ID3D12Resource* a_reflectanceTexture,
-	ID3D12Resource* a_normalRoughness,
-	ID3D12Resource* a_specularHitDistance,
-	ID3D12Resource* a_outputTexture,
-	ID3D12GraphicsCommandList* a_commandList)
-{
-	if (!featureDLSS_RR)
-		return;
-
-	logger::debug("[DLSS RR] Starting Ray Reconstruction");
-
-	CheckFrameConstants();
-	logger::debug("[DLSS RR] Frame constants set");
-
-	auto state = globals::state;
-
+void Streamline::SetDLSSRROptions() {
 	sl::DLSSDOptions dlssdOptions{};
 
 	// Map quality mode to DLSS mode
@@ -419,6 +406,8 @@ void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
 
 	auto worldToCameraView = globals::game::frameBufferCached.GetCameraView().Transpose();
 	auto cameraViewToWorld = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
+
+	auto state = globals::state;
 
 	dlssdOptions.outputWidth = (uint)state->screenSize.x;
 	dlssdOptions.outputHeight = (uint)state->screenSize.y;
@@ -448,8 +437,30 @@ void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
 		logger::critical("[DLSS RR] Could not set DLSS RR options");
 		return;
 	}
+}
 
+void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
+	ID3D12Resource* a_motionVectorTexture,
+	ID3D12Resource* a_depthTexture,
+	ID3D12Resource* a_albedoTexture,
+	ID3D12Resource* a_reflectanceTexture,
+	ID3D12Resource* a_normalRoughness,
+	ID3D12Resource* a_specularHitDistance,
+	ID3D12Resource* a_outputTexture,
+	ID3D12GraphicsCommandList* a_commandList)
+{
+	if (!featureDLSS_RR)
+		return;
+
+	logger::debug("[DLSS RR] Starting Ray Reconstruction");
+
+	CheckFrameConstants();
+	logger::debug("[DLSS RR] Frame constants set");
+	SetDLSSRROptions();
 	logger::debug("[DLSS RR] DLSS RR options set");
+
+	auto state = globals::state;
+
 	{
 		auto screenSize = state->screenSize;
 		auto renderSize = Util::ConvertToDynamic(screenSize);
@@ -496,7 +507,7 @@ void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
 	logger::debug("[DLSS RR] slEvaluateFeature completed");
 }
 
-float Streamline::GetInputResolutionScale(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityMode)
+float2 Streamline::GetInputResolutionScale(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityMode)
 {
 	sl::DLSSMode dlssMode;
 	switch (qualityMode) {
@@ -526,7 +537,7 @@ float Streamline::GetInputResolutionScale(uint32_t outputWidth, uint32_t outputH
 	sl::Result result = slDLSSGetOptimalSettings(dlssOptions, optimalSettings);
 	if (result != sl::Result::eOk) {
 		logger::critical("[Streamline] Failed to get DLSS optimal settings, error code: {}", (int)result);
-		return 1.0f;
+		return { 1.0f, 1.0f };
 	}
 
 	float scaleX;
@@ -542,11 +553,11 @@ float Streamline::GetInputResolutionScale(uint32_t outputWidth, uint32_t outputH
 		scaleY = (float)optimalSettings.optimalRenderHeight / (float)outputHeight;
 	}
 
-	// Use the average scale (both should be the same for uniform scaling)
-	return (scaleX + scaleY) * 0.5f;
+	// Return separate X and Y scales for more precision
+	return { scaleX, scaleY };
 }
 
-float Streamline::GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityMode)
+float2 Streamline::GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityMode)
 {
 	logger::debug("[DLSS RR] Getting input resolution scale for output {}x{} and quality mode {}", outputWidth, outputHeight, qualityMode);
 	sl::DLSSMode dlssMode;
@@ -577,7 +588,7 @@ float Streamline::GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outpu
 	sl::Result result = slDLSSDGetOptimalSettings(dlssdOptions, optimalSettings);
 	if (result != sl::Result::eOk) {
 		logger::critical("[Streamline] Failed to get DLSS RR optimal settings, error code: {}", (int)result);
-		return 1.0f;
+		return { 1.0f, 1.0f };
 	}
 
 	float scaleX;
@@ -593,8 +604,8 @@ float Streamline::GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outpu
 		scaleY = (float)optimalSettings.optimalRenderHeight / (float)outputHeight;
 	}
 
-	// Use the average scale (both should be the same for uniform scaling)
-	return (scaleX + scaleY) * 0.5f;
+	// Return separate X and Y scales for more precision
+	return { scaleX, scaleY };
 }
 
 /**
