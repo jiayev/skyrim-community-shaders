@@ -129,7 +129,7 @@ namespace Skin
 		out float3 specular,
 		PBR::LightProperties light,
 		SkinSurfaceProperties skin,
-		float3 N, float3 V, float3 L)
+		float3 N, float3 V, float3 L, float3 WN)
 	{
 		diffuse = 0;
 		transmission = 0;
@@ -150,7 +150,7 @@ namespace Skin
 
 		float averageRoughness = lerp(skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity);
 
-		diffuse += light.LightColor * NdotL * BRDF::Diffuse_Chan(averageRoughness, NdotV, NdotL, VdotH, NdotH);
+		diffuse += light.LightColor * NdotL * BRDF::Diffuse_Burley(averageRoughness, NdotV, NdotL, VdotH);
 
 		float3 F;
 		float3 F0 = skin.F0 * saturate(1 - skin.Curvature);
@@ -171,8 +171,12 @@ namespace Skin
 
 		if (skin.Wetness > 0.0) {
 			float3 wetnessF;
-			float3 wetSpecular = PBR::GetSpecularDirectLightMultiplierMicrofacet(WATER_ROUGHNESS, WATER_F0, NdotL, NdotV, NdotH, oVdotH, wetnessF) * light.LightColor * NdotL;
-			float2 wetSpecularBRDF = BRDF::EnvBRDFApproxLazarov(WATER_ROUGHNESS, NdotV);
+			float WNdotL = clamp(dot(WN, L), 1e-5, 1.0);
+			float WNdotV = saturate(abs(dot(WN, V)) + 1e-5);
+			float WNdotH = saturate(dot(WN, H));
+
+			float3 wetSpecular = PBR::GetSpecularDirectLightMultiplierMicrofacet(WATER_ROUGHNESS, WATER_F0, WNdotL, WNdotV, WNdotH, oVdotH, wetnessF) * light.LightColor * WNdotL;
+			float2 wetSpecularBRDF = BRDF::EnvBRDFApproxLazarov(WATER_ROUGHNESS, WNdotV);
 			wetSpecular *= 1 + WATER_F0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
 			const float waterTransmission = 1 - wetnessF.x;
 			specular *= waterTransmission;
@@ -185,7 +189,7 @@ namespace Skin
 		out float3 diffuseWeight,
 		out float3 specularWeight,
 		SkinSurfaceProperties skin,
-		float3 N, float3 V, float3 VN)
+		float3 N, float3 V, float3 VN, float3 WN)
 	{
 		float NdotV = saturate(dot(N, V));
 		specularWeight = 0;
@@ -200,7 +204,8 @@ namespace Skin
 		float3 wetSpecular = 0.f;
 
 		if (skin.Wetness > 0.0) {
-			float2 wetSpecularBRDF = BRDF::EnvBRDF(WATER_ROUGHNESS, NdotV);
+			float WNdotV = saturate(dot(WN, V));
+			float2 wetSpecularBRDF = BRDF::EnvBRDF(WATER_ROUGHNESS, WNdotV);
 			wetSpecular += WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y;
 			wetSpecular *= 1 + WATER_F0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
 			waterTransmission = 1 - (WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y);
