@@ -34,7 +34,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	aerosolAbsorption,
 	ozoneAltitude,
 	ozoneThickness,
-	ozoneAbsorption)
+	ozoneAbsorption,
+	cloudRelightMix,
+	cloudOriginalMix,
+	silverLiningMix,
+	silverLiningSpread)
 
 namespace
 {
@@ -464,6 +468,8 @@ void PhysicalSky::Reset()
 	// check worldspace
 	bool worldspaceEnabled = false;
 	bool inInterior = false;
+	bool inMainLoadingMenu = globals::game::ui && (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+
 	WorldspaceInfo worldspaceInfo = {};
 	if (RE::TES::GetSingleton()) {
 		if (auto worldspace = RE::TES::GetSingleton()->GetRuntimeData2().worldSpace; worldspace) {
@@ -478,7 +484,7 @@ void PhysicalSky::Reset()
 			}
 		}
 	}
-	allGood &= worldspaceEnabled && !inInterior;
+	allGood &= worldspaceEnabled && !inInterior && !inMainLoadingMenu;
 
 	if (!allGood) {
 		if (skySync.loaded && skySync.settings.Enabled)
