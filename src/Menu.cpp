@@ -369,7 +369,7 @@ void Menu::Init()
 	zhConfig.FontDataOwnedByAtlas = false;
 
 	imgui_io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\SourceHanSansSC-Regular.otf",
-		std::round(fontSize), &zhConfig, imgui_io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+		24, &zhConfig, imgui_io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
 
 	// Setup Platform/Renderer backends
 	ImGui_ImplWin32_Init(desc.OutputWindow);
