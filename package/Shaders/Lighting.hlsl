@@ -2102,6 +2102,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(SKIN) && defined(CS_SKIN)
 	float3 wetWorldNormal = worldNormal.xyz;
+	float3 originalWorldNormal = worldNormal.xyz;
 #		if defined(FACEGEN)
 	float2 wetUV = uv;
 #		else
@@ -2776,13 +2777,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (skinEnabled) {
 		PBR::LightProperties lightProperties = PBR::InitLightProperties(dirLightColor, dirLightColorMultiplier * dirDetailShadow, parallaxShadow);
 		float3 dirDiffuseColor, dirTransmissionColor, dirSpecularColor;
-		Skin::SkinDirectLightInput(dirDiffuseColor, dirTransmissionColor, dirSpecularColor, lightProperties, skinSurfaceProperties, worldNormal.xyz, viewDirection, DirLightDirection);
+		Skin::SkinDirectLightInput(dirDiffuseColor, dirTransmissionColor, dirSpecularColor, lightProperties, skinSurfaceProperties, originalWorldNormal, viewDirection, DirLightDirection, wetWorldNormal);
 		lightsDiffuseColor += dirDiffuseColor;
 		transmissionColor += dirTransmissionColor;
 		float3 sssTransmittance = Skin::SSSSTransmittance(
 									  SharedData::skinData.sssParams.x,
 									  SharedData::skinData.sssParams.y,
-									  worldNormal.xyz,
+									  originalWorldNormal,
 									  DirLightDirection,
 									  skinSurfaceProperties.Thickness) *
 		                          SharedData::skinData.sssParams.w;
@@ -2899,13 +2900,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (skinEnabled) {
 			float3 pointDiffuseColor, pointTransmissionColor, pointSpecularColor;
 			PBR::LightProperties lightProperties = PBR::InitLightProperties(lightColor, lightShadow, 1);
-			Skin::SkinDirectLightInput(pointDiffuseColor, pointTransmissionColor, pointSpecularColor, lightProperties, skinSurfaceProperties, worldNormal.xyz, viewDirection, normalizedLightDirection);
+			Skin::SkinDirectLightInput(pointDiffuseColor, pointTransmissionColor, pointSpecularColor, lightProperties, skinSurfaceProperties, originalWorldNormal, viewDirection, normalizedLightDirection, wetWorldNormal);
 			lightsDiffuseColor += pointDiffuseColor;
 			transmissionColor += pointTransmissionColor;
 			float3 sssTransmittance = Skin::SSSSTransmittance(
 										  SharedData::skinData.sssParams.x,
 										  SharedData::skinData.sssParams.y,
-										  worldNormal.xyz,
+										  originalWorldNormal,
 										  normalizedLightDirection,
 										  skinSurfaceProperties.Thickness) *
 			                          SharedData::skinData.sssParams.w;
@@ -3087,13 +3088,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (skinEnabled) {
 			PBR::LightProperties lightProperties = PBR::InitLightProperties(lightColor, lightShadow, parallaxShadow);
 			float3 pointDiffuseColor, pointTransmissionColor, pointSpecularColor;
-			Skin::SkinDirectLightInput(pointDiffuseColor, pointTransmissionColor, pointSpecularColor, lightProperties, skinSurfaceProperties, worldNormal.xyz, viewDirection, normalizedLightDirection);
+			Skin::SkinDirectLightInput(pointDiffuseColor, pointTransmissionColor, pointSpecularColor, lightProperties, skinSurfaceProperties, originalWorldNormal, viewDirection, normalizedLightDirection, wetWorldNormal);
 			lightsDiffuseColor += pointDiffuseColor;
 			transmissionColor += pointTransmissionColor;
 			float3 sssTransmittance = Skin::SSSSTransmittance(
 										  SharedData::skinData.sssParams.x,
 										  SharedData::skinData.sssParams.y,
-										  worldNormal.xyz,
+										  originalWorldNormal,
 										  normalizedLightDirection,
 										  skinSurfaceProperties.Thickness) *
 			                          SharedData::skinData.sssParams.w;
@@ -3431,7 +3432,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 directLightsDiffuseInput = diffuseColor * baseColor.xyz;
 		color.xyz += directLightsDiffuseInput;
 
-		Skin::SkinIndirectLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, skinSurfaceProperties, worldNormal.xyz, viewDirection, vertexNormal);
+		Skin::SkinIndirectLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, skinSurfaceProperties, originalWorldNormal, viewDirection, vertexNormal, wetWorldNormal);
 
 #		if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1.0)
