@@ -2,6 +2,7 @@
 #include "../Menu.h"
 
 #include "Fonts.h"
+#include "IconsFontAwesome5.h"
 
 #include <algorithm>
 #include <atomic>
@@ -425,6 +426,23 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 	cachedFontSize = fontSize;
 	const_cast<Menu&>(menu).GetSettings().Theme.FontName = menu.cachedFontName;
 	const_cast<Menu&>(menu).cachedFontSignature = const_cast<Menu&>(menu).BuildFontSignature(fontSize);
+
+	// add font awesome 5
+	static const ImWchar icons_ranges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+	ImFontConfig icons_config;
+	icons_config.MergeMode = true;
+	icons_config.PixelSnapH = true;
+	icons_config.FontDataOwnedByAtlas = true;
+
+	io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\fa-solid-900.ttf", 24, &icons_config, icons_ranges);
+	
+	ImFontConfig zhConfig;
+	zhConfig.MergeMode = true;
+	zhConfig.PixelSnapH = true;
+	zhConfig.FontDataOwnedByAtlas = false;
+
+	io.Fonts->AddFontFromFileTTF("Data\\Interface\\CommunityShaders\\Fonts\\SourceHanSansSC-Regular.otf",
+		cachedFontSize, &zhConfig, io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
 
 	// Build the font atlas - this bakes all fonts into the texture
 	if (!io.Fonts->Build()) {
