@@ -62,6 +62,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::screenSpacePointLightShadows.GetCommonBufferData(),
 		globals::features::vanillaFresnel.settings,
 		globals::features::physicalSky.cbData,
-		globals::features::screenSpaceReflections.GetCommonBufferData()),
-		globals::features::exponentialHeightFog.settings;
+		globals::features::screenSpaceReflections.GetCommonBufferData(),
+		globals::features::exponentialHeightFog.settings);
 }
