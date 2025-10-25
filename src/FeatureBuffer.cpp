@@ -2,6 +2,7 @@
 
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
+#include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/GrassLighting.h"
@@ -61,5 +62,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::screenSpacePointLightShadows.GetCommonBufferData(),
 		globals::features::vanillaFresnel.settings,
 		globals::features::physicalSky.cbData,
-		globals::features::screenSpaceReflections.GetCommonBufferData());
+		globals::features::screenSpaceReflections.GetCommonBufferData()),
+		globals::features::exponentialHeightFog.settings;
 }

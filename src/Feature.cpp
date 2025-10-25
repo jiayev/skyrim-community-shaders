@@ -4,6 +4,7 @@
 #include "FeatureVersions.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
+#include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/GrassCollision.h"
@@ -241,7 +242,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::linearLighting,
 		&globals::features::physicalSky,
 		&globals::features::postProcessing,
-		&globals::features::skin
+		&globals::features::skin,
+		&globals::features::exponentialHeightFog
 	};
 
 	if (REL::Module::IsVR()) {

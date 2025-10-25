@@ -35,6 +35,7 @@ struct ExtendedTranslucency;
 struct Upscaling;
 struct PostProcessing;
 struct Skin;
+struct ExponentialHeightFog;
 
 class State;
 class Deferred;
@@ -94,6 +95,7 @@ namespace globals
 		extern RenderDoc renderDoc;
 		extern PostProcessing postProcessing;
 		extern Skin skin;
+		extern ExponentialHeightFog exponentialHeightFog;
 
 		namespace llf
 		{

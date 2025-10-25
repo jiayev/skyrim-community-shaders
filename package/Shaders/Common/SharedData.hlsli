@@ -331,6 +331,18 @@ namespace SharedData
 		float AmbientMult;
     };
 
+	struct ExponentialHeightFogSettings
+	{
+		uint enabled;
+		float startDistance;
+		float fogHeight;
+		float fogHeightFalloff;
+		float fogDensity;
+		float directionalInscatteringMultiplier;
+		float directionalInscatteringExponent;
+		float pad0;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -353,6 +365,7 @@ namespace SharedData
 		VanillaFresnelSettings vanillaFresnelSettings;
 		PhysSkyData physSkyData;
 		SSRSettings ssrSettings;
+		ExponentialHeightFogSettings exponentialHeightFogSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);
