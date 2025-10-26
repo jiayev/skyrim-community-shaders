@@ -3636,12 +3636,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	color.xyz = Color::IrradianceToGamma(Color::IrradianceToLinear(color.xyz) + specularColor);
 	float3 fogColor = Color::Fog(input.FogParam.xyz);
 	float fogFactor = Color::FogAlpha(input.FogParam.w);
-#		if defined(EXP_HEIGHT_FOG)
-	float3 directionalInscattering = 0;
-	if (SharedData::exponentialHeightFogSettings.enabled) {
-		fogFactor = ExponentialHeightFog::GetFogFactor(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, directionalInscattering);
-	}
-#		endif
 #		if defined(IBL)
 	if (SharedData::iblSettings.EnableDiffuseIBL && !SharedData::InInterior) {
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
@@ -3649,7 +3643,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #		if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
-		fogColor += directionalInscattering;
+		float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, directionalInscattering);
+		fogColor = exponentialHeightFog.xyz;
+		fogFactor = exponentialHeightFog.w;
 	}
 #		endif
 	if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z)

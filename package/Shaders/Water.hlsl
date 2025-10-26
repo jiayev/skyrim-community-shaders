@@ -1149,13 +1149,6 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 finalColorPreFog = lerp(diffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
 	float3 fogColor = Color::Fog(input.FogParam.xyz);
 	float fogFactor = Color::FogAlpha(input.FogParam.w);
-#						if defined(EXP_HEIGHT_FOG)
-	float3 directionalInscattering = 0;
-	if (SharedData::exponentialHeightFogSettings.enabled) {
-		fogFactor = ExponentialHeightFog::GetFogFactor(input.WPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, directionalInscattering);
-		fogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogFactor);
-	}
-#						endif
 #						if defined(IBL)
 	if (SharedData::iblSettings.EnableDiffuseIBL && !SharedData::InInterior) {
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
@@ -1164,7 +1157,9 @@ PS_OUTPUT main(PS_INPUT input)
 #						if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled)
 	{
-		fogColor += directionalInscattering;
+		float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(input.WPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, fogColor);
+		fogColor = exponentialHeightFog.xyz;
+		fogFactor = exponentialHeightFog.w;
 	}
 	else
 #						endif
@@ -1184,13 +1179,6 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 finalColorPreFog = lerp(diffuseOutput.refractionDiffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
 	float3 preFogColor = Color::Fog(input.FogParam.xyz);
 	float preFogFactor = Color::FogAlpha(input.FogParam.w);
-#						if defined(EXP_HEIGHT_FOG)
-	float3 directionalInscattering = 0;
-	if (SharedData::exponentialHeightFogSettings.enabled) {
-		preFogFactor = ExponentialHeightFog::GetFogFactor(input.WPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, directionalInscattering);
-		preFogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, preFogFactor);
-	}
-#						endif
 #						if defined(IBL)
 	if (SharedData::iblSettings.EnableDiffuseIBL && !SharedData::InInterior) {
 		preFogColor = ImageBasedLighting::GetFogIBLColor(preFogColor);
@@ -1199,7 +1187,9 @@ PS_OUTPUT main(PS_INPUT input)
 #						if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled)
 	{
-		preFogColor += directionalInscattering;
+		float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(input.WPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, fogColor);
+		preFogColor = exponentialHeightFog.xyz;
+		preFogFactor = exponentialHeightFog.w;
 	}
 	else
 #						endif
@@ -1210,12 +1200,12 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 refractionColor = diffuseOutput.refractionColor;
 
 	float fogFactor = min(FogParam.w, pow(saturate(-diffuseOutput.depth * FogParam.y - FogParam.x), FogParam.z));
+	float3 fogColor = Color::Fog(lerp(FogNearColor.xyz, FogFarColor.xyz, fogFactor));
 #						if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
 		fogFactor = 0;
 	}
 #						endif
-	float3 fogColor = Color::Fog(lerp(FogNearColor.xyz, FogFarColor.xyz, fogFactor));
 #						if defined(IBL)
 	if (SharedData::iblSettings.EnableDiffuseIBL && !SharedData::InInterior) {
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
