@@ -2092,6 +2092,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 combinedNormal = normalize(mul(tbn, combinedTangentNormal));
 		if (SharedData::skinData.skinDetailParams.w > 0.0f)
 			worldNormal.xyz = combinedNormal;
+		originalWorldNormal = worldNormal.xyz;
 		wetWorldNormal = worldNormal.xyz;
 		if (skinWetness > 0.0f) {
 			float3 wetNormal = Skin::CalculateNormalFromHeight(skinWetness, SharedData::skinData.wetParams.w * 0.0005, uv);
