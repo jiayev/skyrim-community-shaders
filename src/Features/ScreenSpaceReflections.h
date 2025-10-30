@@ -53,7 +53,6 @@ struct ScreenSpaceReflections : Feature
         float DiffuseMult = 1.0f;
         float AmbientMult = 1.0f;
         float OcclusionStrength = 1.0f;
-        bool EnableSSPTDiffuse = false;
 #ifdef ENABLE_SHARC
         bool EnableSharc = false;
 #endif
@@ -72,13 +71,11 @@ struct ScreenSpaceReflections : Feature
         uint MaxSteps;
         uint MaxMips;
         uint UseDynamicCubemapsAsFallback;
-        uint ReuseRay;
         float Thickness;
         float NormalBias;
         float BRDFBias;
-        float HistoryWeight;
         float OcclusionStrength;
-        float pad[3];
+        float pad;
     };
 
     struct alignas(16) SPDCB

@@ -28,7 +28,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     DiffuseMult,
     AmbientMult,
     OcclusionStrength,
-    EnableSSPTDiffuse,
     EnableSharc
 )
 #else
@@ -46,8 +45,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     SpecularMult,
     DiffuseMult,
     AmbientMult,
-    OcclusionStrength,
-    EnableSSPTDiffuse
+    OcclusionStrength
 )
 #endif
 
@@ -78,9 +76,6 @@ void ScreenSpaceReflections::DrawSettings()
     ImGui::Checkbox("Use Dynamic Cubemaps as Fallback", &settings.UseDynamicCubemapsAsFallback);
     if (auto _tt = Util::HoverTooltipWrapper())
         ImGui::Text("When ray marching misses, use dynamic cubemaps for reflections. This with diffuse would provide natural ambient lighting.");
-    recompileFlag |= ImGui::Checkbox("(Experimental) Enable SSPT Diffuse", &settings.EnableSSPTDiffuse);
-    if (auto _tt = Util::HoverTooltipWrapper())
-        ImGui::Text("Path tracing on screen space for multi-bounce diffuse reflections.");
 #ifdef ENABLE_SHARC
     ImGui::Checkbox("(Broken) Enable SHARC", &settings.EnableSharc);
     if (auto _tt = Util::HoverTooltipWrapper())
@@ -330,10 +325,6 @@ void ScreenSpaceReflections::CompileComputeShaders()
     auto definesSpecular = defines;
     definesSpecular.push_back({ "SSSR_SPECULAR", nullptr });
 
-    if (settings.EnableSSPTDiffuse) {
-        defines.push_back({ "SSPT_DIFFUSE", nullptr });
-    }
-
     std::vector<ShaderCompileInfo>
         shaderInfos = {
             { &raymarchDiffuseCS, "ssr_raymarch.hlsl", defines },
@@ -459,9 +450,7 @@ void ScreenSpaceReflections::DrawSSR()
         ssrCBData.NormalBias = settings.NormalBias;
         ssrCBData.BRDFBias = settings.BRDFBias;
         ssrCBData.UseDynamicCubemapsAsFallback = (uint)settings.UseDynamicCubemapsAsFallback && dynamicCubemaps.loaded;
-        ssrCBData.HistoryWeight = 0;
         ssrCBData.OcclusionStrength = settings.OcclusionStrength;
-        ssrCBData.ReuseRay = 0;
     }
     ssrCB->Update(ssrCBData);
     auto buffer = ssrCB->CB();
@@ -582,9 +571,7 @@ void ScreenSpaceReflections::DrawSSRTDiffuse()
         ssrCBData.NormalBias = settings.NormalBias;
         ssrCBData.BRDFBias = settings.BRDFBias;
         ssrCBData.UseDynamicCubemapsAsFallback = (uint)settings.UseDynamicCubemapsAsFallback && dynamicCubemaps.loaded;
-        ssrCBData.HistoryWeight = 0;
         ssrCBData.OcclusionStrength = settings.OcclusionStrength;
-        ssrCBData.ReuseRay = 0;
     }
     ssrCB->Update(ssrCBData);
     auto buffer = ssrCB->CB();
