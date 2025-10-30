@@ -28,6 +28,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     DiffuseMult,
     AmbientMult,
     OcclusionStrength,
+    EnableSpatial,
     EnableSharc
 )
 #else
@@ -45,7 +46,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     SpecularMult,
     DiffuseMult,
     AmbientMult,
-    OcclusionStrength
+    OcclusionStrength,
+    EnableSpatial
 )
 #endif
 
@@ -76,6 +78,7 @@ void ScreenSpaceReflections::DrawSettings()
     ImGui::Checkbox("Use Dynamic Cubemaps as Fallback", &settings.UseDynamicCubemapsAsFallback);
     if (auto _tt = Util::HoverTooltipWrapper())
         ImGui::Text("When ray marching misses, use dynamic cubemaps for reflections. This with diffuse would provide natural ambient lighting.");
+    ImGui::Checkbox("Enable Spatial Filtering", &settings.EnableSpatial);
 #ifdef ENABLE_SHARC
     ImGui::Checkbox("(Broken) Enable SHARC", &settings.EnableSharc);
     if (auto _tt = Util::HoverTooltipWrapper())
@@ -94,6 +97,7 @@ void ScreenSpaceReflections::DrawSettings()
         BUFFER_VIEWER_NODE(texHistory, debugRescale)
         BUFFER_VIEWER_NODE(texHistoryDiffuse, debugRescale)
         BUFFER_VIEWER_NODE(texHitPDF, debugRescale)
+        BUFFER_VIEWER_NODE(texSpatial, debugRescale)
         BUFFER_VIEWER_NODE(texOutput, debugRescale)
 
 		ImGui::TreePop();
@@ -169,6 +173,9 @@ void ScreenSpaceReflections::SetupResources()
         texHistoryDiffuse = eastl::make_unique<Texture2D>(texDesc);
         texHistoryDiffuse->CreateSRV(srvDesc);
         texHistoryDiffuse->CreateUAV(uavDesc);
+        texSpatial = eastl::make_unique<Texture2D>(texDesc);
+        texSpatial->CreateSRV(srvDesc);
+        texSpatial->CreateUAV(uavDesc);
         texOutput = eastl::make_unique<Texture2D>(texDesc);
         texOutput->CreateSRV(srvDesc);
         texOutput->CreateUAV(uavDesc);
@@ -278,7 +285,7 @@ void ScreenSpaceReflections::SetupResources()
 void ScreenSpaceReflections::ClearShaderCache()
 {
     static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
-        &raymarchSpecularCS, &raymarchDiffuseCS, &prepareColorCS, &preprocessDepthCS, &depthDownsampleCS, &diffuseCompositeCS,
+        &raymarchSpecularCS, &raymarchDiffuseCS, &prepareColorCS, &preprocessDepthCS, &depthDownsampleCS, &diffuseCompositeCS, &spatialCS,
 #ifdef ENABLE_SHARC
         &raymarchDiffuseSharcCS, &sharcUpdateRaymarchCS, &sharcResolveCS
 #endif
@@ -333,6 +340,7 @@ void ScreenSpaceReflections::CompileComputeShaders()
             { &preprocessDepthCS, "ssr_preprocess_depth.hlsl", {} },
             { &depthDownsampleCS, "ssr_depth_downsample.hlsl", {} },
             { &diffuseCompositeCS, "ssr_diffuse_composite.hlsl", {} },
+            { &spatialCS, "ssr_spatial.hlsl", {} },
 #ifdef ENABLE_SHARC
             { &raymarchDiffuseSharcCS, "ssr_raymarch.hlsl", definesSharc },
             { &sharcUpdateRaymarchCS, "ssr_raymarch.hlsl", definesSharcUpdate },
@@ -529,6 +537,27 @@ void ScreenSpaceReflections::DrawSSR()
 
     resetViews();
 
+    if (settings.EnableSpatial) {
+        // spatial filter
+        uavs.at(0) = texSpatial->uav.get();
+        srvs.at(0) = texHistory->srv.get();
+        srvs.at(1) = motion.SRV;
+        srvs.at(2) = normal.SRV;
+        srvs.at(3) = texSSRColor->srv.get();
+        srvs.at(4) = depth.depthSRV;
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, 1, uavs.data(), nullptr);
+        context->CSSetShader(spatialCS.get(), nullptr, 0);
+
+        context->Dispatch((uint)dispatchCount.x, (uint)dispatchCount.y, 1);
+
+        resetViews();
+
+        // copy spatial to ssr
+        context->CopyResource(texSSRColor->resource.get(), texSpatial->resource.get());
+    }
+
     // output
     context->CopyResource(texOutput->resource.get(), texSSRColor->resource.get());
     context->CopyResource(texHistory->resource.get(), texSSRColor->resource.get());
@@ -658,6 +687,27 @@ void ScreenSpaceReflections::DrawSSRTDiffuse()
         std::swap(sharcVoxelData, sharcVoxelDataPrev);
     }
 #endif
+
+    if (settings.EnableSpatial) {
+        // spatial filter
+        uavs.at(0) = texSpatial->uav.get();
+        srvs.at(0) = texHistoryDiffuse->srv.get();
+        srvs.at(1) = motion.SRV;
+        srvs.at(2) = normal.SRV;
+        srvs.at(3) = texSSRTDiffuseColor->srv.get();
+        srvs.at(4) = depth.depthSRV;
+
+        context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+        context->CSSetUnorderedAccessViews(0, 1, uavs.data(), nullptr);
+        context->CSSetShader(spatialCS.get(), nullptr, 0);
+
+        context->Dispatch((uint)dispatchCount.x, (uint)dispatchCount.y, 1);
+
+        resetViews();
+
+        // copy spatial to ssrt diffuse
+        context->CopyResource(texSSRTDiffuseColor->resource.get(), texSpatial->resource.get());
+    }
 
     context->CopyResource(texHistoryDiffuse->resource.get(), texSSRTDiffuseColor->resource.get());
 
