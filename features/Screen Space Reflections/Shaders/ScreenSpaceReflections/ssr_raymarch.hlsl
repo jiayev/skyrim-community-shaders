@@ -63,13 +63,11 @@ cbuffer SSRCB : register(b1)
     uint MaxSteps;
     uint MaxMips;
     uint UseDynamicCubemapsAsFallback;
-    uint ReuseRay;
     float Thickness;
     float NormalBias;
     float BRDFBias;
-    float HistoryWeight;
     float OcclusionStrength;
-    float3 pad;
+    float pad;
 };
 
 #define HIZ_MAX_ITERATIONS MaxSteps
@@ -301,7 +299,7 @@ float FFX_SSSR_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_directi
     float3 hit_normal = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(hit_normalVS, 0)).xyz);
     if (dot(hit_normal, world_space_ray_direction) > 0)
     {
-        occlusion = 1 - confidence;
+        occlusion = distance > depth_buffer_thickness ? 1.f : 0.f;
         return 0;
     }
 
@@ -309,7 +307,7 @@ float FFX_SSSR_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_directi
     float2 manhattan_dist = abs(hit.xy - uv);
     if ((manhattan_dist.x < (2.f / screen_size.x)) && (manhattan_dist.y < (2.f / screen_size.y)))
     {
-        occlusion = 1 - confidence;
+        occlusion = distance > depth_buffer_thickness ? 1.f : 0.f;
         return 0;
     }
 
@@ -617,30 +615,23 @@ bool ShouldProcessPixel(uint2 GroupThreadID, uint FrameCount)
                 }
             }
 #   endif
+            float ao = lerp(1.0, occlusion, OcclusionStrength);
 #   if defined(SSGI)
-            float ao = 1 - saturate(SsgiAoTexture[coords.xy].x);
-#       if defined(SSSR_SPECULAR)
+            ao *= 1 - saturate(SsgiAoTexture[coords.xy].x);
+#   endif
+#   if defined(SSSR_SPECULAR)
             ao = GetSpecularOcclusionFromAmbientOcclusion(NdotV, ao, roughness);
             envColor *= ao;
-#       else
+#   else
             float3 multiBounceAO = Color::MultiBounceAO(albedo, ao);
             envColor *= multiBounceAO;
-#       endif
 #   endif
             sampleColor.xyz = lerp(envColor, sampleColor.xyz, confidence);
             confidence = 1;
         }
-#       if defined(SSSR_SPECULAR)
-        occlusion = GetSpecularOcclusionFromAmbientOcclusion(NdotV, occlusion, roughness);
-#       endif
 #endif
-#       if defined(SSSR_SPECULAR)
-        float ssrOcclusion = occlusion;
-#       else
-        float3 ssrOcclusion = Color::MultiBounceAO(albedo, occlusion);
-#       endif
-        sampleColor *= lerp(1.0f, ssrOcclusion, OcclusionStrength);
         samples[groupThreadID.x * 8 + groupThreadID.y][sample_id] = float4(sampleColor, confidence);
+
 #if SHARC_UPDATE
         if (confidence > 0.99f)
         {
@@ -678,45 +669,11 @@ bool ShouldProcessPixel(uint2 GroupThreadID, uint FrameCount)
     }
 #if !SHARC_UPDATE
     GroupMemoryBarrierWithGroupSync();
-
-    // Ray Reuse
-    if (ReuseRay != 0) {
-        float3 colorSum = samples[groupThreadID.x * 8 + groupThreadID.y][sample_id].xyz * localWeight;
-        float weightSum = localWeight;
-
-        [unroll(4)]
-        for (int i = 0; i < 4; ++i) {
-            int2 pixel = groupThreadID.xy + offset[i];
-            if (IsInGroup(pixel)) {
-                float3 pixelColor = samples[pixel.x * 8 + pixel.y][sample_id].xyz;
-                float pixelLum = Color::RGBToLuminance(pixelColor);
-                float weight = weights[pixel.x * 8 + pixel.y][sample_id].w * pixelLum;
-                colorSum += pixelColor * weight;
-                weightSum += weight;
-            }
-        }
-        if (weightSum > 0)
-            colorSum /= weightSum;
-        else
-            colorSum = float3(0.0, 0.0, 0.0);
-        GroupMemoryBarrierWithGroupSync();
-
-        samples[groupThreadID.x * 8 + groupThreadID.y][0] = float4(colorSum, 1);
-    }
 #endif
 
 #if defined(SSSR_SPECULAR)
     outColor.xyz = samples[groupThreadID.x * 8 + groupThreadID.y][0].xyz;
     outColor.w = samples[groupThreadID.x * 8 + groupThreadID.y][0].w;
-    [branch]
-    if (HistoryWeight > 0) {
-        float2 prevUV;
-        ReprojectHit(MotionVectorTexture, LinearSampler, float3(uv, z), eyeIndex, prevUV);
-        float4 prevColor = HistoryTexture.SampleLevel(LinearSampler, prevUV * FrameBuffer::DynamicResolutionParams1.xy, 0);
-        prevColor.w *= HistoryWeight;
-        if (outColor.w + prevColor.w > 0)
-            outColor.xyz = (outColor.xyz * outColor.w + filterNaN(prevColor.xyz) * prevColor.w) / (outColor.w + prevColor.w);
-    }
     SSRColorOutput[coords.xy] = outColor;
     SSRPDFOutput[coords.xy] = outPDF;
     SSRHitDistanceOutput[coords.xy] = hit_distance;
@@ -731,17 +688,6 @@ bool ShouldProcessPixel(uint2 GroupThreadID, uint FrameCount)
         }
         outColor.xyz /= SAMPLES_PER_PIXEL;
         outColor.w = saturate(outColor.w / SAMPLES_PER_PIXEL);
-
-        // History
-        [branch]
-        if (HistoryWeight > 0) {
-            float2 prevUV;
-            ReprojectHit(MotionVectorTexture, LinearSampler, float3(uv, z), eyeIndex, prevUV);
-            float4 prevColor = HistoryTexture.SampleLevel(LinearSampler, prevUV * FrameBuffer::DynamicResolutionParams1.xy, 0);
-            prevColor.w *= HistoryWeight;
-            if (outColor.w + prevColor.w > 0)
-                outColor.xyz = (outColor.xyz * outColor.w + filterNaN(prevColor.xyz) * prevColor.w) / (outColor.w + prevColor.w);
-        }
         SSRColorOutput[coords.xy] = outColor;
         SSRPDFOutput[coords.xy] = outPDF;
     }
