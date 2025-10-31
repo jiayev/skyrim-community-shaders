@@ -1,33 +1,10 @@
 #include "ScreenSpaceReflections/ssr_common.hlsli"
 
 Texture2D<float4> HistoryTexture : register(t0);
-Texture2D<float4> MotionVectorTexture : register(t1);
 Texture2D<float4> SSRColorTexture : register(t3);
 Texture2D<float> DepthTexture : register(t4);
 
 RWTexture2D<float4> FilteredOutput : register(u0);
-
-SamplerState LinearSampler : register(s0);
-
-// util: void ReprojectHit(Texture2D MotionTexture, SamplerState s, float3 hitUVz, uint eyeIndex, out float2 outPrevUV)
-float CalculateWeight(float depthCenter, float depthP, float phiD, float3 normalCenter, float3 normalP, float phiN,
-					  float luminanceCenter, float luminanceP, float phiL)
-{
-	float epsilon = 0.0000001;
-
-	// Depth weight
-	float difference = abs(depthCenter - depthP);
-	float weightDepth = (phiD == 0) ? 0.f : difference / max(phiD, epsilon);
-
-	// Normal weight
-	float weightNormal = pow(max(0.f, dot(normalCenter, normalP)), phiN);
-
-	// Luminance weight
-	float weightLuminance = abs(luminanceCenter - luminanceP) / phiL;
-
-	float weight = exp(-weightDepth - weightLuminance) * weightNormal;
-	return weight;
-}
 
 float GaussianBlur(uint2 id)
 {
@@ -71,14 +48,13 @@ static const float kernelWeights[3] = { 1.0, 2.0 / 3.0, 1.0 / 6.0 };
 [numthreads(8, 8, 1)] void main(uint3 DTid : SV_DispatchThreadID)
 {
     uint2 screen_size = SharedData::BufferDim.xy * FrameBuffer::DynamicResolutionParams1.xy;
-    if (DTid.x >= screen_size.x * FrameBuffer::DynamicResolutionParams1.x || DTid.y >= screen_size.y * FrameBuffer::DynamicResolutionParams1.y)
+    if (DTid.x >= screen_size.x || DTid.y >= screen_size.y)
         return;
 
     float2 uv = float2(DTid.xy + 0.5) * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;
 
     float3 blendedColor = 0;
     float4 historyColor = HistoryTexture[DTid.xy];
-    float4 motionVector = MotionVectorTexture[DTid.xy];
     float4 ssrColor = SSRColorTexture[DTid.xy];
     float depthCenter = DepthTexture[DTid.xy];
 
@@ -90,7 +66,6 @@ static const float kernelWeights[3] = { 1.0, 2.0 / 3.0, 1.0 / 6.0 };
     float luminanceCenter = Color::RGBToLuminance(ssrColor.rgb);
     float variance = GaussianBlur(DTid.xy);
 
-    FilteredOutput[DTid.xy].xyz = ssrColor.xyz;
     if (depthCenter < 0.999f)
     {
         float phiLuminance = max(RADIANCE_PHI * sqrt(abs(variance) + VAR_EPSILON), VAR_EPSILON);
@@ -103,7 +78,7 @@ static const float kernelWeights[3] = { 1.0, 2.0 / 3.0, 1.0 / 6.0 };
             for (int kx = -2; kx <= 2; kx++)
             {
                 int2 samplePos = int2(DTid.xy) + int2(kx, ky);
-                bool inside = (samplePos.x >= 0 && samplePos.y >= 0) && (samplePos.x < screen_size.x * FrameBuffer::DynamicResolutionParams1.x && samplePos.y < screen_size.y * FrameBuffer::DynamicResolutionParams1.y);
+                bool inside = (samplePos.x >= 0 && samplePos.y >= 0) && (samplePos.x < screen_size.x && samplePos.y < screen_size.y);
                 if (inside)
                 {
                     float4 sampleSSRColor = SSRColorTexture[samplePos];
@@ -123,6 +98,14 @@ static const float kernelWeights[3] = { 1.0, 2.0 / 3.0, 1.0 / 6.0 };
                     }
                 }
             }
+        }
+        if (weightSum > 0.f)
+        {
+            blendedColor /= weightSum;
+        }
+        else
+        {
+            blendedColor = ssrColor.rgb;
         }
     }
 
