@@ -54,6 +54,11 @@ struct ScreenSpaceReflections : Feature
         float AmbientMult = 1.0f;
         float OcclusionStrength = 1.0f;
         bool EnableSVGF = false;
+        uint MaxAccumulatedFrames = 16;
+        uint AtrousIterations = 3;
+        float ColorPhi = 0.5f;
+        float NormalPhi = 128.0f;
+        float DepthPhi = 4.0f;
 #ifdef ENABLE_SHARC
         bool EnableSharc = false;
 #endif
@@ -79,17 +84,18 @@ struct ScreenSpaceReflections : Feature
         float pad;
     };
 
-    struct alignas(16) SPDCB
+    struct alignas(16) DenoiserCB
     {
-        uint srcDimensions[2];
-        uint numMips;
-        uint slice;  // unused
-        uint workGroupOffset[2];
-        uint numWorkGroups;
-        uint _padding;
+        float invMaxAccumulatedFrames;
+        uint atrousIterations;
+        float colorPhi;
+        float normalPhi;
+        float depthPhi;
+        float pad[3];
     };
 
     eastl::unique_ptr<ConstantBuffer> ssrCB;
+    eastl::unique_ptr<ConstantBuffer> denoiserCB;
 
     bool recompileFlag = false;
 
@@ -110,6 +116,7 @@ struct ScreenSpaceReflections : Feature
     eastl::unique_ptr<Texture2D> texMoments = nullptr;
     eastl::unique_ptr<Texture2D> texHistoryMoments = nullptr;
     eastl::unique_ptr<Texture2D> texHistoryMomentsDiffuse = nullptr;
+    eastl::unique_ptr<Texture2D> texHistoryNormals = nullptr;
     eastl::unique_ptr<Texture2D> texVariance = nullptr;
     eastl::unique_ptr<Texture2D> texOutput = nullptr;
     Texture2D* texHitDistance = nullptr;
@@ -140,6 +147,7 @@ struct ScreenSpaceReflections : Feature
     winrt::com_ptr<ID3D11ComputeShader> temporalCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> varianceCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> spatialCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> spatialSpecularCS = nullptr;
 #ifdef ENABLE_SHARC
     winrt::com_ptr<ID3D11ComputeShader> raymarchDiffuseSharcCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> sharcUpdateRaymarchCS = nullptr;
