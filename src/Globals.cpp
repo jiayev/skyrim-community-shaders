@@ -21,7 +21,7 @@
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpacePointLightShadows.h"
-#include "Features/ScreenSpaceReflections.h"
+#include "Features/ScreenSpaceRayTracing.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -70,7 +70,7 @@ namespace globals
 		PhysicalSky physicalSky{};
 		ScreenSpaceGI screenSpaceGI{};
 		ScreenSpacePointLightShadows screenSpacePointLightShadows{};
-		ScreenSpaceReflections screenSpaceReflections{};
+		ScreenSpaceRayTracing screenSpaceRayTracing{};
 		ScreenSpaceShadows screenSpaceShadows{};
 		Skylighting skylighting{};
 		TerrainVariation terrainVariation{};

@@ -1,4 +1,4 @@
-#include "ScreenSpaceReflections/ssr_common.hlsli"
+#include "ScreenSpaceRayTracing/ssrt_common.hlsli"
 
 Texture2D<float4> HistoryTexture : register(t0);
 Texture2D<float4> SSRColorTexture : register(t3);
@@ -12,8 +12,6 @@ cbuffer DenoiserCB : register(b2)
     uint atrousIterations;
     float colorPhi;
     float normalPhi;
-    float depthPhi;
-    float3 pad;
 };
 
 float GaussianBlur(uint2 id)
@@ -77,17 +75,19 @@ static const float kernelWeights[3] = { 1.0, 2.0 / 3.0, 1.0 / 6.0 };
     {
         float phiLuminance = max(colorPhi * sqrt(abs(variance) + VAR_EPSILON), VAR_EPSILON);
         float phiNormal = normalPhi;
-#if defined(SSSR_SPECULAR)
+#if defined(SSRT_SPECULAR)
+        // Trying to reduce blurriness on glossy surfaces
         phiLuminance *= roughness;
         phiNormal /= roughness;
 #endif
-        float phiDepth = depthPhi * (atrousIterations + 1);
+        float phiDepth = (atrousIterations + 1);
         float weightSum = 0.f;
 
         for (int ky = -2; ky <= 2; ky++)
         {
             for (int kx = -2; kx <= 2; kx++)
             {
+                // A-Trous sampling
                 int2 samplePos = int2(DTid.xy) + int2(kx, ky) * (atrousIterations + 1);
                 bool inside = (samplePos.x >= 0 && samplePos.y >= 0) && (samplePos.x < screen_size.x && samplePos.y < screen_size.y);
                 if (inside)

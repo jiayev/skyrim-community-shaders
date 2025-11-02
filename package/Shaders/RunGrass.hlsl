@@ -792,10 +792,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #				endif
 
-#				if defined(SSR)
-	if (SharedData::ssrSettings.Enabled && SharedData::ssrSettings.DiffuseMult > 0.0) {
-		directionalAmbientColor *= SharedData::ssrSettings.AmbientMult;
-		iblColor *= SharedData::ssrSettings.AmbientMult;
+#				if defined(SSRT)
+	if (SharedData::ssrtSettings.Enabled && SharedData::ssrtSettings.DiffuseMult > 0.0) {
+		directionalAmbientColor = 0;
+		iblColor = 0;
 	}
 #				endif
 
@@ -1039,10 +1039,10 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #			endif
 
-#			if defined(SSR)
-	if (SharedData::ssrSettings.Enabled && SharedData::ssrSettings.DiffuseMult > 0.0) {
-		directionalAmbientColor *= SharedData::ssrSettings.AmbientMult;
-		iblColor *= SharedData::ssrSettings.AmbientMult;
+#			if defined(SSRT)
+	if (SharedData::ssrtSettings.Enabled && SharedData::ssrtSettings.DiffuseMult > 0.0) {
+		directionalAmbientColor = 0;
+		iblColor = 0;
 	}
 #			endif
 

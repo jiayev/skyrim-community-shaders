@@ -332,7 +332,7 @@ namespace SharedData
 		float silverLiningSpread;  //
 	};
 
-	struct SSRSettings
+	struct SSRTSettings
     {
         uint Enabled;
         float SpecularMult;
@@ -376,7 +376,7 @@ namespace SharedData
 		SSPLSSettings ssplsSettings;
 		VanillaFresnelSettings vanillaFresnelSettings;
 		PhysSkyData physSkyData;
-		SSRSettings ssrSettings;
+		SSRTSettings ssrtSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 	};
 

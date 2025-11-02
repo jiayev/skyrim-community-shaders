@@ -3244,10 +3244,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
-#	if defined(SSR) && defined(DEFERRED)
-	if (SharedData::ssrSettings.Enabled && SharedData::ssrSettings.DiffuseMult > 0.0) {
-		directionalAmbientColor *= SharedData::ssrSettings.AmbientMult;
-		iblColor *= SharedData::ssrSettings.AmbientMult;
+#	if defined(SSRT) && defined(DEFERRED)
+	if (SharedData::ssrtSettings.Enabled && SharedData::ssrtSettings.DiffuseMult > 0.0) {
+		directionalAmbientColor = 0;
+		iblColor = 0;
 	}
 #	endif
 
