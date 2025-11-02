@@ -1,4 +1,4 @@
-#include "ScreenSpaceReflections/ssr_common.hlsli"
+#include "ScreenSpaceRayTracing/ssrt_common.hlsli"
 
 Texture2D<float4> HistoryTexture : register(t0);
 Texture2D<float4> MomentsTexture : register(t1);
@@ -13,8 +13,6 @@ cbuffer DenoiserCB : register(b2)
     uint atrousIterations;
     float colorPhi;
     float normalPhi;
-    float depthPhi;
-    float3 pad;
 };
 
 [numthreads(8, 8, 1)] void main(uint3 DTid : SV_DispatchThreadID)

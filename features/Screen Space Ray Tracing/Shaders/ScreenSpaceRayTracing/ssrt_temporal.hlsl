@@ -1,4 +1,4 @@
-#include "ScreenSpaceReflections/ssr_common.hlsli"
+#include "ScreenSpaceRayTracing/ssrt_common.hlsli"
 
 Texture2D<float4> HistoryTexture : register(t0);
 Texture2D<float4> MotionVectorTexture : register(t1);
@@ -16,8 +16,6 @@ cbuffer DenoiserCB : register(b2)
     uint atrousIterations;
     float colorPhi;
     float normalPhi;
-    float depthPhi;
-    float3 pad;
 };
 
 bool IsValidHistory(uint2 pixel, float2 uv, float3 currNormalVS)

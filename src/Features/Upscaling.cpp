@@ -12,7 +12,7 @@
 #include <directx/d3dx12.h>
 #include <format>
 
-#include "Features/ScreenSpaceReflections.h"
+#include "Features/ScreenSpaceRayTracing.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
@@ -919,10 +919,10 @@ void Upscaling::CopySharedD3D12Resources()
 	context->CopyResource(dx12SwapChain.reflectanceShared12->resource11, reflectance.texture);
 
 	if (settings.enableDLSSRR) {
-		auto& ssr = globals::features::screenSpaceReflections;
-		if (ssr.loaded && ssr.settings.Enabled) {
-			if (ssr.texHitDistance) {
-				context->CopyResource(dx12SwapChain.specHitDistanceShared12->resource11, ssr.texHitDistance->resource.get());
+		auto& ssrt = globals::features::screenSpaceRayTracing;
+		if (ssrt.loaded && ssrt.settings.Enabled) {
+			if (ssrt.texHitDistance) {
+				context->CopyResource(dx12SwapChain.specHitDistanceShared12->resource11, ssrt.texHitDistance->resource.get());
 			}
 		}
 	}

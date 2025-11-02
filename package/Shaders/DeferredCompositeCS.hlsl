@@ -55,8 +55,11 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 	ao = 1 - SsgiAoTexture[pixCoord].x;
 	float NdotV = dot(normal, view);
 	ao = Color::SpecularAOLagarde(saturate(NdotV), ao, roughness);
-#	if defined(SSR)
-	il = 0;
+#	if defined(SSRT)
+	if (SharedData::ssrtSettings.Enabled) {
+		il = 0;
+		return;
+	}
 #	else
 	float4 ssgiIlYSh = SsgiYTexture[pixCoord];
 	float ssgiIlY = SphericalHarmonics::FuncProductIntegral(ssgiIlYSh, lobe);
@@ -84,7 +87,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 #	endif
 #endif
 
-#if defined(SSR)
+#if defined(SSRT)
 Texture2D<float4> SSRTexture : register(t16);
 #endif
 
@@ -282,12 +285,10 @@ Texture2D<float4> SSRTexture : register(t16);
 		finalIrradiance += ssgiIlSpecular;
 #	endif
 
-#	if defined(SSR)
-		if (SharedData::ssrSettings.Enabled) {
+#	if defined(SSRT)
+		if (SharedData::ssrtSettings.Enabled) {
 			float4 ssrIrradiance = SSRTexture[dispatchID.xy];
-			ssrIrradiance.xyz *= SharedData::ssrSettings.SpecularMult;
-			ssrIrradiance.a = lerp(ssrIrradiance.a, 1.0, 1.0 - SharedData::ssrSettings.AmbientMult);
-			finalIrradiance = lerp(finalIrradiance, Color::GammaToLinear(ssrIrradiance.rgb), ssrIrradiance.a);
+			finalIrradiance = ssrIrradiance.rgb;
 		}
 #	endif
 
@@ -314,14 +315,6 @@ Texture2D<float4> SSRTexture : register(t16);
 		color = glossiness;
 	}
 
-#endif
-
-#if defined(SSR)
-#	if defined(SSR_DEBUG)
-	color = SSRTexture[dispatchID.xy].rgb;
-#	elif defined(SSR_DEBUG_DIFFUSE)
-	color = MainRW[dispatchID.xy].rgb;
-#	endif
 #endif
 
 	MainRW[dispatchID.xy] = float4(color, 1.0);
