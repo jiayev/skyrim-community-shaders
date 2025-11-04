@@ -920,7 +920,7 @@ void Upscaling::CopySharedD3D12Resources()
 
 	if (settings.enableDLSSRR) {
 		auto& ssrt = globals::features::screenSpaceRayTracing;
-		if (ssrt.loaded && ssrt.settings.Enabled) {
+		if (ssrt.loaded && ssrt.settings.EnableSpecular) {
 			if (ssrt.texHitDistance) {
 				context->CopyResource(dx12SwapChain.specHitDistanceShared12->resource11, ssrt.texHitDistance->resource.get());
 			}
