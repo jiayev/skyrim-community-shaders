@@ -424,7 +424,7 @@ void Deferred::DeferredPasses()
 
 	auto& physSky = globals::features::physicalSky;
 
-	if (ssrt.loaded)
+	if (ssrt.loaded && ssrt.settings.EnableSpecular)
 		ssrt.DrawSSRTSpecular();
 
 	// Deferred Composite
@@ -448,7 +448,7 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
 			ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
 			ibl.loaded ? ibl.diffuseSkyIBLTexture->srv.get() : nullptr,
-			(ssrt.loaded && ssrt.settings.Enabled) ? ssrt.texOutput->srv.get() : nullptr,
+			(ssrt.loaded && ssrt.settings.EnableSpecular) ? ssrt.texOutput->srv.get() : nullptr,
 			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,
 			physSky.loaded ? physSky.texApShadow->srv.get() : nullptr,
 		};

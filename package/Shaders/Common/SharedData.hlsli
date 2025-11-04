@@ -334,7 +334,7 @@ namespace SharedData
 
 	struct SSRTSettings
     {
-        uint Enabled;
+        uint EnableSpecular;
         float SpecularMult;
         float DiffuseMult;
 		float AmbientMult;

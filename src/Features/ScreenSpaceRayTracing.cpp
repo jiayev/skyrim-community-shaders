@@ -15,19 +15,21 @@
 #ifdef ENABLE_SHARC
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     ScreenSpaceRayTracing::Settings,
-    Enabled,
+    EnableSpecular,
     MaxSteps,
     MaxMips,
     Thickness,
     NormalBias,
     BRDFBias,
     UseDynamicCubemapsAsFallback,
+    UseDynamicCubemapsAsFallbackSpecular,
     DiffuseSPP,
     EnableDiffuse,
     SpecularMult,
     DiffuseMult,
     AmbientMult,
     OcclusionStrength,
+    CubemapNormalization,
     EnableSVGF,
     MaxAccumulatedFrames,
     AtrousIterations,
@@ -38,19 +40,21 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 #else
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     ScreenSpaceRayTracing::Settings,
-    Enabled,
+    EnableSpecular,
     MaxSteps,
     MaxMips,
     Thickness,
     NormalBias,
     BRDFBias,
     UseDynamicCubemapsAsFallback,
+    UseDynamicCubemapsAsFallbackSpecular,
     DiffuseSPP,
     EnableDiffuse,
     SpecularMult,
     DiffuseMult,
     AmbientMult,
     OcclusionStrength,
+    CubemapNormalization,
     EnableSVGF,
     MaxAccumulatedFrames,
     AtrousIterations,
@@ -61,7 +65,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void ScreenSpaceRayTracing::DrawSettings()
 {
-    ImGui::Checkbox("Enabled", &settings.Enabled);
+    ImGui::Checkbox("Enable Specular", &settings.EnableSpecular);
     ImGui::SameLine();
     ImGui::Checkbox("Enable Diffuse", &settings.EnableDiffuse);
     ImGui::SliderInt("Max Steps", (int*)&settings.MaxSteps, 1, 256);
@@ -75,7 +79,9 @@ void ScreenSpaceRayTracing::DrawSettings()
     ImGui::SliderFloat("Ambient Multiplier", &settings.AmbientMult, 0.0f, 1.0f, "%.2f");
     if (auto _tt = Util::HoverTooltipWrapper())
         ImGui::Text("Set this to 0 and use Dynamic Cubemaps as fallback if you want full dynamic ambient lighting.");
+
     ImGui::Separator();
+
     ImGui::SliderFloat("Thickness", &settings.Thickness, 0.0f, 50.0f, "%.2f");
     ImGui::SliderFloat("Normal Bias", &settings.NormalBias, 0.0f, 1.0f, "%.2f");
     if (auto _tt = Util::HoverTooltipWrapper())
@@ -83,9 +89,18 @@ void ScreenSpaceRayTracing::DrawSettings()
     ImGui::SliderFloat("BRDF Bias", &settings.BRDFBias, 0.0f, 1.0f, "%.2f");
     if (auto _tt = Util::HoverTooltipWrapper())
         ImGui::Text("Specular only. Higher BRDF bias reduces noise but makes reflections more glossy.");
-    ImGui::Checkbox("Use Dynamic Cubemaps as Fallback", &settings.UseDynamicCubemapsAsFallback);
+    ImGui::Checkbox("Use Dynamic Cubemaps as Fallback for Diffuse", &settings.UseDynamicCubemapsAsFallback);
     if (auto _tt = Util::HoverTooltipWrapper())
-        ImGui::Text("When ray marching misses, use dynamic cubemaps for reflections. This with diffuse would provide natural ambient lighting.");
+        ImGui::Text("When ray marching misses, use dynamic cubemaps for reflections.");
+    ImGui::Checkbox("Use Dynamic Cubemaps as Fallback for Specular", &settings.UseDynamicCubemapsAsFallbackSpecular);
+    if (auto _tt = Util::HoverTooltipWrapper())
+        ImGui::Text("When ray marching misses, use dynamic cubemaps for reflections.");
+    ImGui::SliderFloat("Cubemap Normalization", &settings.CubemapNormalization, 0.0f, 1.0f, "%.2f");
+    if (auto _tt = Util::HoverTooltipWrapper())
+        ImGui::Text("Matches cubemap luminance with ambient color.");
+
+    ImGui::Separator();
+
     ImGui::Checkbox("Enable Spatiotemporal Variance-Guided Filtering", &settings.EnableSVGF);
     if (auto _tt = Util::HoverTooltipWrapper())
         ImGui::Text("SVGF denoiser. This may introduce some blurriness and temporal artifacts but significantly reduces noise.");
@@ -480,7 +495,7 @@ void ScreenSpaceRayTracing::Prepass()
 
 void ScreenSpaceRayTracing::DrawSSRTSpecular()
 {
-    if (!settings.Enabled)
+    if (!settings.EnableSpecular)
         return;
 
     auto renderer = globals::game::renderer;
@@ -509,8 +524,9 @@ void ScreenSpaceRayTracing::DrawSSRTSpecular()
         ssrCBData.Thickness = settings.Thickness;
         ssrCBData.NormalBias = settings.NormalBias;
         ssrCBData.BRDFBias = settings.BRDFBias;
-        ssrCBData.UseDynamicCubemapsAsFallback = (uint)settings.UseDynamicCubemapsAsFallback && dynamicCubemaps.loaded;
+        ssrCBData.UseDynamicCubemapsAsFallback = (uint)settings.UseDynamicCubemapsAsFallbackSpecular && dynamicCubemaps.loaded;
         ssrCBData.OcclusionStrength = settings.OcclusionStrength;
+        ssrCBData.CubemapNormalization = settings.CubemapNormalization;
     }
     ssrtCB->Update(ssrCBData);
     auto buffer = ssrtCB->CB();
@@ -676,7 +692,7 @@ void ScreenSpaceRayTracing::DrawSSRTSpecular()
 
 void ScreenSpaceRayTracing::DrawSSRTDiffuse()
 {
-    if (!(settings.Enabled && settings.EnableDiffuse))
+    if (!settings.EnableDiffuse)
         return;
 
     auto renderer = globals::game::renderer;
@@ -708,6 +724,7 @@ void ScreenSpaceRayTracing::DrawSSRTDiffuse()
         ssrCBData.BRDFBias = settings.BRDFBias;
         ssrCBData.UseDynamicCubemapsAsFallback = (uint)settings.UseDynamicCubemapsAsFallback && dynamicCubemaps.loaded;
         ssrCBData.OcclusionStrength = settings.OcclusionStrength;
+        ssrCBData.CubemapNormalization = settings.CubemapNormalization;
     }
     ssrtCB->Update(ssrCBData);
     auto buffer = ssrtCB->CB();
@@ -894,7 +911,7 @@ void ScreenSpaceRayTracing::DrawSSRTDiffuse()
 ScreenSpaceRayTracing::SharedData ScreenSpaceRayTracing::GetCommonBufferData()
 {
     SharedData data;
-    data.Enabled = settings.Enabled;
+    data.EnableSpecular = settings.EnableSpecular;
     data.SpecularMult = settings.SpecularMult;
     data.DiffuseMult = settings.EnableDiffuse ? settings.DiffuseMult : 0.0f;
     data.AmbientMult = settings.AmbientMult;

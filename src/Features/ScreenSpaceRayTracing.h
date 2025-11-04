@@ -42,19 +42,21 @@ struct ScreenSpaceRayTracing : Feature
 
     struct Settings
     {
-        bool Enabled = true;
+        bool EnableSpecular = true;
         uint MaxSteps = 128;
         uint MaxMips = 6;
         float Thickness = 5.f;
         float NormalBias = 0.1f;
         float BRDFBias = 0.25f;
         bool UseDynamicCubemapsAsFallback = true;
+        bool UseDynamicCubemapsAsFallbackSpecular = true;
         uint DiffuseSPP = 2;
         bool EnableDiffuse = true;
         float SpecularMult = 1.0f;
         float DiffuseMult = 1.0f;
         float AmbientMult = 1.0f;
         float OcclusionStrength = 1.0f;
+        float CubemapNormalization = 0.0f;
         bool EnableSVGF = false;
         uint MaxAccumulatedFrames = 16;
         uint AtrousIterations = 3;
@@ -67,7 +69,7 @@ struct ScreenSpaceRayTracing : Feature
 
     struct alignas(16) SharedData
     {
-        uint Enabled;
+        uint EnableSpecular;
         float SpecularMult;
         float DiffuseMult;
         float AmbientMult;
@@ -82,7 +84,7 @@ struct ScreenSpaceRayTracing : Feature
         float NormalBias;
         float BRDFBias;
         float OcclusionStrength;
-        float pad;
+        float CubemapNormalization;
     };
 
     struct alignas(16) DenoiserCB
