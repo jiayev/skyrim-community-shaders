@@ -105,6 +105,8 @@ public:
 		ID3D12Resource* a_reflectanceTexture,
 		ID3D12Resource* a_normalRoughness,
 		ID3D12Resource* a_specularHitDistance,
+		ID3D12Resource* a_colorBeforeTransparency,
+		ID3D12Resource* a_sssGuide,
 		ID3D12Resource* a_outputTexture,
 		ID3D12GraphicsCommandList* a_commandList);
 

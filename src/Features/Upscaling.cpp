@@ -15,6 +15,7 @@
 #include "Features/PostProcessing.h"
 
 #include "Features/ScreenSpaceRayTracing.h"
+#include "Features/SubsurfaceScattering.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
@@ -927,6 +928,13 @@ void Upscaling::CopySharedD3D12Resources()
 				context->CopyResource(dx12SwapChain.specHitDistanceShared12->resource11, ssrt.texHitDistance->resource.get());
 			}
 		}
+
+		auto& sss = globals::features::subsurfaceScattering;
+		if (sss.loaded) {
+			if (sss.sssGuide) {
+				context->CopyResource(dx12SwapChain.sssGuide->resource11, sss.sssGuide->resource.get());
+			}
+		}
 	}
 
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -1353,6 +1361,8 @@ void Upscaling::Upscale()
 					dx12SwapChain.reflectanceShared12->resource.get(),
 					dx12SwapChain.packedNormalShared12->resource.get(),
 					dx12SwapChain.specHitDistanceShared12->resource.get(),
+					dx12SwapChain.colorBeforeTransparencySnapshot->resource.get(),
+					dx12SwapChain.sssGuide->resource.get(),
 					dx12SwapChain.outputColorBufferShared12->resource.get(),
 					dx12SwapChain.dlssCommandList[frameIndex].get()
 				);
@@ -1563,6 +1573,19 @@ void Upscaling::ApplyNISSharpening()
 
 	if (renderTarget)
 		renderTarget->Release();
+}
+
+void Upscaling::SnapshotBeforeTransparency()
+{
+	if (!d3d12SwapChainActive)
+		return;
+
+	auto context = globals::d3d::context;
+
+	auto renderer = globals::game::renderer;
+	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+
+	context->CopyResource(dx12SwapChain.colorBeforeTransparencySnapshot->resource11, main.texture);
 }
 
 void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)

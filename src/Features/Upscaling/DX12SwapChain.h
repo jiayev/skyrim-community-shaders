@@ -92,6 +92,8 @@ public:
 	WrappedResource* reflectanceShared12 = nullptr;
 	WrappedResource* packedNormalShared12 = nullptr;
 	WrappedResource* specHitDistanceShared12 = nullptr;
+	WrappedResource* colorBeforeTransparencySnapshot = nullptr;
+	WrappedResource* sssGuide = nullptr;
 
 	WrappedResource* nisSharpenerInputShared12 = nullptr;
 	WrappedResource* nisSharpenerOutputShared12 = nullptr;

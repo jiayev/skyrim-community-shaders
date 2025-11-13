@@ -461,6 +461,8 @@ void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
 	ID3D12Resource* a_reflectanceTexture,
 	ID3D12Resource* a_normalRoughness,
 	ID3D12Resource* a_specularHitDistance,
+	ID3D12Resource* a_colorBeforeTransparency,
+	ID3D12Resource* a_sssGuide,
 	ID3D12Resource* a_outputTexture,
 	ID3D12GraphicsCommandList* a_commandList)
 {
@@ -491,6 +493,8 @@ void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
 		sl::Resource specularAlbedo = { sl::ResourceType::eTex2d, a_reflectanceTexture, 0 };
 		sl::Resource normalRoughness = { sl::ResourceType::eTex2d, a_normalRoughness, 0 };
 		sl::Resource specHitDistance = { sl::ResourceType::eTex2d, a_specularHitDistance, 0 };
+		sl::Resource colorBeforeTransparency = { sl::ResourceType::eTex2d, a_colorBeforeTransparency, 0 };
+		sl::Resource sssGuide = { sl::ResourceType::eTex2d, a_sssGuide, 0 };
 
 		sl::ResourceTag colorInTag = sl::ResourceTag{ &colorIn, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &inputExtent };
 		sl::ResourceTag colorOutTag = sl::ResourceTag{ &colorOut, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &outputExtent };
@@ -500,8 +504,10 @@ void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
 		sl::ResourceTag specularAlbedoTag = sl::ResourceTag{ &specularAlbedo, sl::kBufferTypeSpecularAlbedo, sl::ResourceLifecycle::eValidUntilPresent, &inputExtent };
 		sl::ResourceTag normalRoughnessTag = sl::ResourceTag{ &normalRoughness, sl::kBufferTypeNormalRoughness, sl::ResourceLifecycle::eValidUntilPresent, &inputExtent };
 		sl::ResourceTag specHitDistanceTag = sl::ResourceTag{ &specHitDistance, sl::kBufferTypeSpecularHitDistance, sl::ResourceLifecycle::eValidUntilPresent, &inputExtent };
+		sl::ResourceTag colorBeforeTransparencyTag = sl::ResourceTag{ &colorBeforeTransparency, sl::kBufferTypeColorBeforeTransparency, sl::ResourceLifecycle::eValidUntilPresent, &inputExtent };
+		sl::ResourceTag sssGuideTag = sl::ResourceTag{ &sssGuide, sl::kBufferTypeScreenSpaceSubsurfaceScatteringGuide, sl::ResourceLifecycle::eValidUntilPresent, &inputExtent };
 
-		sl::ResourceTag resourceTags[] = { colorInTag, colorOutTag, depthTag, mvecTag, diffuseAlbedoTag, specularAlbedoTag, normalRoughnessTag, specHitDistanceTag };
+		sl::ResourceTag resourceTags[] = { colorInTag, colorOutTag, depthTag, mvecTag, diffuseAlbedoTag, specularAlbedoTag, normalRoughnessTag, specHitDistanceTag, colorBeforeTransparencyTag, sssGuideTag };
 		if (SL_FAILED(result, slSetTag(viewport, resourceTags, _countof(resourceTags), a_commandList))) {
 			logger::error("[DLSS RR] Failed to set DLSS RR tags, error code: {}", (int)result);
 			return;
