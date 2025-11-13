@@ -58,10 +58,13 @@ public:
 	bool validMaterials = false;
 
 	Texture2D* blurHorizontalTemp = nullptr;
+	Texture2D* sssResult = nullptr;
+	Texture2D* sssGuide = nullptr;
 
 	ID3D11ComputeShader* horizontalSSBlur = nullptr;
 	ID3D11ComputeShader* verticalSSBlur = nullptr;
 	ID3D11ComputeShader* burleySS = nullptr;
+	ID3D11ComputeShader* compositeSSS = nullptr;
 	RE::BGSKeyword* isBeastRaceKeyword = nullptr;
 
 	virtual inline std::string GetName() override { return "Subsurface Scattering"; }
@@ -104,6 +107,7 @@ public:
 	ID3D11ComputeShader* GetComputeShaderHorizontalBlur();
 	ID3D11ComputeShader* GetComputeShaderVerticalBlur();
 	ID3D11ComputeShader* GetComputeShaderBurley();
+	ID3D11ComputeShader* GetComputeShaderComposite();
 
 	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;

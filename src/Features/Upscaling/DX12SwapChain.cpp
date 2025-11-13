@@ -423,10 +423,14 @@ void DX12SwapChain::CreateSharedResources()
 	packedNormalShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
 	nisSharpenerInputShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
 	nisSharpenerOutputShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
+	colorBeforeTransparencySnapshot = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
 
 	texDesc.Format = DXGI_FORMAT_R32_FLOAT;
 	depthBufferShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
 	specHitDistanceShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
+
+	texDesc.Format = DXGI_FORMAT_R16_FLOAT;
+	sssGuide = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
 
 	texDesc.Format = DXGI_FORMAT_R8_UNORM;
 	reactiveMaskShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());

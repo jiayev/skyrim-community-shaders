@@ -165,6 +165,8 @@ public:
 
 	void ApplyNISSharpening();
 
+	void SnapshotBeforeTransparency();
+
 	static void TimerSleepQPC(int64_t targetQPC);
 
 	void FrameLimiter();
