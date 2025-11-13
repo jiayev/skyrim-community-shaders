@@ -273,6 +273,7 @@ void SubsurfaceScattering::DrawSSS()
 				views[0] = blurHorizontalTemp->srv.get();
 				context->CSSetShaderResources(0, 1, views);
 
+				context->CopyResource(sssResult->resource.get(), main.texture);
 				ID3D11UnorderedAccessView* uavs[1] = { sssResult->uav.get() };
 				context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
