@@ -657,7 +657,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 sss = dirLightColor * saturate(-dirLightAngle) * Color::GrassDiffuseMult();
 
 	if (complex)
-		lightsSpecularColor += GrassLighting::GetLightSpecularInput(DirLightDirection, viewDirection, normal, dirLightColor, roughness, F0) * Color::GrassSpecularMult();
+		lightsSpecularColor += GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, roughness, F0) * Color::GrassSpecularMult();
 #			endif
 
 #			if defined(LIGHT_LIMIT_FIX)
