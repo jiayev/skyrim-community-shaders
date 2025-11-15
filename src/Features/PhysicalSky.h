@@ -195,10 +195,19 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csApLutGen = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csShadowAccum = nullptr;
 
+	ID3D11SamplerState* originalPSSamplers[2] = { nullptr, nullptr };
+
 	void ModifySky();
+	void RestoreSamplers();
 	struct Hooks
 	{
-		struct BSSkyShader_SetupMaterial
+		struct BSSkyShader_SetupGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSSkyShader_RestoreGeometry
 		{
 			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -206,7 +215,8 @@ struct PhysicalSky final : public Feature
 
 		static void Install()
 		{
-			stl::write_vfunc<0x6, BSSkyShader_SetupMaterial>(RE::VTABLE_BSSkyShader[0]);
+			stl::write_vfunc<0x6, BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
+			stl::write_vfunc<0x7, BSSkyShader_RestoreGeometry>(RE::VTABLE_BSSkyShader[0]);
 		}
 	};
 };
