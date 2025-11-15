@@ -34,7 +34,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	aerosolAbsorption,
 	ozoneAltitude,
 	ozoneThickness,
-	ozoneAbsorption)
+	ozoneAbsorption,
+	cloudRelightMix,
+	cloudOriginalMix,
+	silverLiningMix,
+	silverLiningSpread)
 
 namespace
 {
@@ -86,6 +90,10 @@ void PhysicalSky::DrawSettings()
 		}
 		if (ImGui::BeginTabItem("Atmosphere")) {
 			SettingsAtmosphere();
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem("Clouds")) {
+			SettingsClouds();
 			ImGui::EndTabItem();
 		}
 		if (ImGui::BeginTabItem("Debug")) {
@@ -254,6 +262,16 @@ void PhysicalSky::SettingsAtmosphere()
 		ImGui::DragFloat("Layer Thickness", &settings.ozoneThickness, .1f, 0.f, 50.f, "%.3f km");
 		ImGui::PopID();
 	}
+}
+
+void PhysicalSky::SettingsClouds()
+{
+	InfoBox("Clouds.");
+
+	ImGui::SliderFloat("Vanilla Mix", &settings.cloudOriginalMix, 0.f, 2.f, "%.2f");
+	ImGui::SliderFloat("Relight Mix", &settings.cloudRelightMix, 0.f, 2.f, "%.2f");
+	ImGui::SliderFloat("Silver Lining Accent", &settings.silverLiningMix, 0.f, 1.f, "%.2f");
+	ImGui::SliderFloat("Silver Lining Spread", &settings.silverLiningSpread, -0.99f, 0.99f, "%.2f");
 }
 
 void PhysicalSky::SettingsDebug()
@@ -450,6 +468,8 @@ void PhysicalSky::Reset()
 	// check worldspace
 	bool worldspaceEnabled = false;
 	bool inInterior = false;
+	bool inMainLoadingMenu = globals::game::ui && (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+
 	WorldspaceInfo worldspaceInfo = {};
 	if (globals::game::tes) {
 		if (auto worldspace = globals::game::tes->GetRuntimeData2().worldSpace; worldspace) {
@@ -464,7 +484,7 @@ void PhysicalSky::Reset()
 			}
 		}
 	}
-	allGood &= worldspaceEnabled && !inInterior;
+	allGood &= worldspaceEnabled && !inInterior && !inMainLoadingMenu;
 
 	if (!allGood) {
 		cbData.enabled = allGood;
@@ -517,6 +537,10 @@ void PhysicalSky::Reset()
 		.ozoneAltitude = settings.ozoneAltitude / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneThickness = settings.ozoneThickness / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneAbsorption = settings.ozoneAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.cloudRelightMix = settings.cloudRelightMix,
+		.cloudOriginalMix = settings.cloudOriginalMix,
+		.silverLiningMix = settings.silverLiningMix,
+		.silverLiningSpread = settings.silverLiningSpread,
 	};
 
 	if (settings.overrideDirLight) {
@@ -672,15 +696,33 @@ void PhysicalSky::AccumShadow()
 
 void PhysicalSky::ModifySky()
 {
+	auto context = globals::d3d::context;
+	context->PSGetSamplers(3, 2, originalPSSamplers);
+
 	auto samplers = std::array{ sampTr.get(), sampSv.get() };
-	globals::d3d::context->PSSetSamplers(3, static_cast<UINT>(samplers.size()), samplers.data());
+	context->PSSetSamplers(3, static_cast<UINT>(samplers.size()), samplers.data());
 
 	GET_INSTANCE_MEMBER(PSSamplerModifiedBits, globals::game::shadowState);
 	PSSamplerModifiedBits |= (1 << 3);
 }
 
-void PhysicalSky::Hooks::BSSkyShader_SetupMaterial::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+void PhysicalSky::RestoreSamplers()
+{
+	auto context = globals::d3d::context;
+	context->PSSetSamplers(3, 2, originalPSSamplers);
+
+	GET_INSTANCE_MEMBER(PSSamplerModifiedBits, globals::game::shadowState);
+	PSSamplerModifiedBits &= ~(1 << 3);
+}
+
+void PhysicalSky::Hooks::BSSkyShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
 	globals::features::physicalSky.ModifySky();
+	func(This, Pass, RenderFlags);
+}
+
+void PhysicalSky::Hooks::BSSkyShader_RestoreGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+{
+	globals::features::physicalSky.RestoreSamplers();
 	func(This, Pass, RenderFlags);
 }
