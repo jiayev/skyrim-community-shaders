@@ -233,10 +233,10 @@ PS_OUTPUT main(PS_INPUT input)
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
 
-// #		if defined(PS_CLOUDS) && defined(CLOUD_SHADOWS) 
-// 	if (SharedData::physSkyData.enabled)
-// 		baseColor.rgb = PhysSky::RelightCloud(baseColor, viewDir, float3(0, 0, 0) + viewDir * psCloudDist, PhysSky::SampTr, SampBaseSampler);
-// #		endif
+#		if defined(PS_CLOUDS) && defined(CLOUD_SHADOWS) 
+	if (SharedData::physSkyData.enabled)
+		baseColor.rgb = PhysSky::RelightCloud(baseColor, viewDir, float3(0, 0, 0) + viewDir * psCloudDist, PhysSky::SampTr, SampBaseSampler);
+#		endif
 
 #		if defined(DITHER)
 	float2 noiseGradUv = float2(0.125, 0.125) * input.Position.xy;

@@ -4,7 +4,7 @@ struct IBL : Feature
 {
 public:
 	virtual bool SupportsVR() override { return true; };
-	virtual bool IsCore() const override { return true; };
+	virtual bool IsCore() const override { return false; };
 
 	virtual inline std::string GetName() override { return "Image Based Lighting"; }
 	virtual inline std::string GetShortName() override { return "ImageBasedLighting"; }
@@ -42,13 +42,16 @@ public:
 	{
 		uint EnableDiffuseIBL = 1;
 		uint PreserveFogLuminance = 0;
+		uint UseStaticIBL = 1;
 		float DiffuseIBLScale = 1.0f;
 		float DALCAmount = 0.33f;
 		float IBLSaturation = 1.0f;
 		float FogAmount = 0.0f;
 		float DynamicCubemapsAmount = 0.0f;
-		float pad = 0.0f;
 	} settings;
+
+	eastl::unique_ptr<Texture2D> staticDiffuseIBLTexture = nullptr;
+	eastl::unique_ptr<Texture2D> staticSpecularIBLTexture = nullptr;
 
 	ID3D11ComputeShader* GetDiffuseIBLCS();
 };

@@ -22,7 +22,7 @@ namespace SharedData
 		bool InInterior;  // If the area lacks a directional shadow light e.g. the sun or moon
 		bool InMapMenu;   // If the world/local map is open (note that the renderer is still deferred here)
 		bool HideSky;     // HideSky flag in WorldSpace, e.g. Blackreach
-		float MipBias;    // Offset to mip level for TAA sharpness
+		float MipBias;    // Offset to mip level for TAA sharpness#
 	};
 
 	struct GrassLightingSettings
@@ -66,10 +66,9 @@ namespace SharedData
 
 	struct LightLimitFixSettings
 	{
-		uint EnableContactShadows;
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		float pad0;
+		float2 pad0;
 		uint4 ClusterSize;
 	};
 
@@ -179,12 +178,12 @@ namespace SharedData
 	{
 		uint EnableDiffuseIBL;
 		uint PreserveFogLuminance;
+		uint UseStaticIBL;
 		float DiffuseIBLScale;
 		float DALCAmount;
 		float IBLSaturation;
 		float FogAmount;
 		float DynamicCubemapsAmount;
-		float pad;
 	};
 
 	struct ExtendedTranslucencySettings
@@ -272,6 +271,12 @@ namespace SharedData
 		float ozoneAltitude;  //
 		float ozoneThickness;
 		float3 ozoneAbsorption;  //
+		
+		// CLOUDS (VANILLA)
+		float cloudRelightMix;
+		float cloudOriginalMix;
+		float silverLiningMix;
+		float silverLiningSpread;  //
 	};
 
 	cbuffer FeatureData : register(b6)
