@@ -698,15 +698,33 @@ void PhysicalSky::AccumShadow()
 
 void PhysicalSky::ModifySky()
 {
+	auto context = globals::d3d::context;
+	context->PSGetSamplers(3, 2, originalPSSamplers);
+
 	auto samplers = std::array{ sampTr.get(), sampSv.get() };
-	globals::d3d::context->PSSetSamplers(3, static_cast<UINT>(samplers.size()), samplers.data());
+	context->PSSetSamplers(3, static_cast<UINT>(samplers.size()), samplers.data());
 
 	GET_INSTANCE_MEMBER(PSSamplerModifiedBits, globals::game::shadowState);
 	PSSamplerModifiedBits |= (1 << 3);
 }
 
-void PhysicalSky::Hooks::BSSkyShader_SetupMaterial::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+void PhysicalSky::RestoreSamplers()
+{
+	auto context = globals::d3d::context;
+	context->PSSetSamplers(3, 2, originalPSSamplers);
+
+	GET_INSTANCE_MEMBER(PSSamplerModifiedBits, globals::game::shadowState);
+	PSSamplerModifiedBits &= ~(1 << 3);
+}
+
+void PhysicalSky::Hooks::BSSkyShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
 	globals::features::physicalSky.ModifySky();
+	func(This, Pass, RenderFlags);
+}
+
+void PhysicalSky::Hooks::BSSkyShader_RestoreGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+{
+	globals::features::physicalSky.RestoreSamplers();
 	func(This, Pass, RenderFlags);
 }
