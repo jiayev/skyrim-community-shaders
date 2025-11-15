@@ -159,6 +159,40 @@ void HomePageRenderer::RenderQuickLinksSection()
 	if (ImGui::Button("GitHub Wiki", ImVec2(buttonWidth, 0))) {
 		ShellExecuteA(NULL, "open", "https://github.com/doodlum/skyrim-community-shaders/wiki", NULL, NULL, SW_SHOWNORMAL);
 	}
+
+	ImGui::Separator();
+
+	ImVec2 jiayeInfoSize = ImGui::CalcTextSize("About this AIO version");
+	ImGui::SetCursorPosX((windowSize.x - jiayeInfoSize.x) * 0.5f);
+	ImGui::Text("About this AIO version");
+
+	static bool englishShown = true;
+	ImGui::SetCursorPosX((windowSize.x - buttonWidth) * 0.5f);
+	if (ImGui::Button("English / 中文", ImVec2(buttonWidth, 0))) {
+		englishShown = !englishShown;
+	}
+
+	if (!englishShown) {
+		ImGui::TextWrapped(
+			"本社区着色器AIO版本是由本人Jiaye发布的测试版本，基于主线版本添加了一些额外的功能和调整。"
+			"本版本不是稳定版本，可能存在诸多问题。如果您希望使用稳定版本，请前往官方Nexus页面下载正式版。"
+			"本版本仅供测试和个人使用，出现的任何独特问题与官方版本无关。但在测试时，请确认：如果出现的问题在官方版本中也存在，请前往CS Discord。\n"
+			"本版本并不是我一个人的工作成果，而是社区多位开发者共同努力的结果。使用本版本即表示您同意尊重所有开发者的劳动成果。\n"
+			"社区着色器及其Branch是基于GPLv3协议发布的开源项目，永久免费。"
+			"如果你是在付费群组、付费整合包或其他付费渠道获取的本社区着色器AIO版本，你已经被骗了。\n"
+			"Jiaye的社区着色器讨论群：1059023812 \n"
+			"在该群和官方Discord以外的任何其他渠道（除本人亲自发布）获取的本社区着色器AIO版本均与本人无关，本人也不存在任何义务提供支持。");
+	} else {
+		ImGui::TextWrapped(
+			"This AIO version of Community Shaders is a test build released by Jiaye, based on the mainline version with some additional features and adjustments. "
+			"This version is not a stable release and may contain various issues. If you wish to use a stable version, please download the official release from the Nexus page. "
+			"This version is intended for testing and personal use only, and any unique issues that arise are not related to the official version. However, during testing, please confirm: "
+			"if an issue also exists in the official version, please report it through official channels.\n"
+			"This version is not the work of just one person, but the result of the collective efforts of multiple developers in the community. By using this version, you agree to respect the labor of all developers.\n"
+			"Community Shaders and its branches are open-source projects released under the GPLv3 license and are free of charge. "
+			"If you obtained this AIO version through paid groups, paid bundles, or other paid channels, you have been scammed.\n"
+			"Any AIO versions of Community Shaders other than those personally released by me (Jiaye) are unrelated to me, and I have no obligation to provide support.");
+	}
 }
 
 void HomePageRenderer::RenderFAQSection()
