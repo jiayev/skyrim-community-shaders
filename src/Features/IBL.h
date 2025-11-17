@@ -52,8 +52,9 @@ public:
 		float IBLSaturation = 1.0f;
 		float FogAmount = 0.0f;
 		uint EffectNormalization = 0;
-		float EffectNormalizationMult = 50.0f;
-		uint pad[2];
+		float EffectNormalizationMult = 5.0f;
+		float MinEffectMult = 1.0f;
+		float pad;
 	} settings;
 	STATIC_ASSERT_ALIGNAS_16(Settings);
 
