@@ -190,7 +190,8 @@ namespace SharedData
 		float FogAmount;
 		uint EffectNormalization;
 		float EffectNormalizationMult;
-		uint2 pad;
+		float MinEffectMult;
+		float pad;
 	};
 
 	struct ExtendedTranslucencySettings

@@ -833,6 +833,7 @@ PS_OUTPUT main(PS_INPUT input)
 		float iblLuminance = Color::RGBToLuminance(iblColor);
 		effectNormalization = iblLuminance * SharedData::iblSettings.DiffuseIBLScale + directionalAmbientColorLuminance * SharedData::iblSettings.DALCAmount;
 		effectNormalization *= SharedData::iblSettings.EffectNormalizationMult;
+		effectNormalization = max(effectNormalization, SharedData::iblSettings.MinEffectMult);
 	}
 #	endif
 	lightColor *= effectNormalization;
