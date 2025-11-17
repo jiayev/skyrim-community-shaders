@@ -20,7 +20,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	IBLSaturation,
 	FogAmount,
 	EffectNormalization,
-	EffectNormalizationMult)
+	EffectNormalizationMult,
+	MinEffectMult)
 
 void IBL::DrawSettings()
 {
@@ -39,7 +40,8 @@ void IBL::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Normalizes effect shader brightness based on IBL brightness.");
 	}
-	ImGui::SliderFloat("Effect Normalization Multiplier", &settings.EffectNormalizationMult, 0.0f, 200.0f, "%.2f");
+	ImGui::SliderFloat("Effect Normalization Multiplier", &settings.EffectNormalizationMult, 0.0f, 100.0f, "%.2f");
+	ImGui::SliderFloat("Minimum Effect Multiplier", &settings.MinEffectMult, 0.0f, 10.0f, "%.2f");
 
 	JiayeStatement::GetSingleton()->DrawJSInfo();
 }
