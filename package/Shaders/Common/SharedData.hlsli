@@ -188,6 +188,8 @@ namespace SharedData
 		float DALCAmount;
 		float IBLSaturation;
 		float FogAmount;
+		uint EffectNormalization;
+		uint3 pad;
 	};
 
 	struct ExtendedTranslucencySettings
