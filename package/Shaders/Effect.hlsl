@@ -844,8 +844,8 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 	float effectNormalization = 1.0;
-#	if defined(IBL) && !defined(LIGHTING)
-	if (SharedData::iblSettings.EnableDiffuseIBL && SharedData::iblSettings.UseForEffectNormalization && (!SharedData::InInterior || SharedData::iblSettings.EnableInterior)) {
+#	if defined(IBL) && !defined(LIGHTING) && !defined(DEFERRED)
+	if (SharedData::iblSettings.EnableDiffuseIBL && SharedData::iblSettings.EffectNormalization && (!SharedData::InInterior || SharedData::iblSettings.EnableInterior) && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
 		float directionalAmbientColorLuminance = Color::RGBToLuminance(
             max(0, mul(SharedData::DirectionalAmbient, float4(0, 0, 0, 1.0)))
         );
@@ -855,7 +855,8 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 iblColor = ImageBasedLighting::GetIBLColor(float3(0, 0, 0));
 #		endif
 		float iblLuminance = Color::RGBToLuminance(iblColor);
-		effectNormalization = iblLuminance / max(0.0001, directionalAmbientColorLuminance);
+		effectNormalization = iblLuminance * SharedData::iblSettings.DiffuseIBLScale + directionalAmbientColorLuminance * SharedData::iblSettings.DALCAmount;
+		effectNormalization *= SharedData::iblSettings.EffectNormalizationMult;
 	}
 #	endif
 

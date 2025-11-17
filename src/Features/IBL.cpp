@@ -19,7 +19,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DALCAmount,
 	IBLSaturation,
 	FogAmount,
-	EffectNormalization)
+	EffectNormalization,
+	EffectNormalizationMult)
 
 void IBL::DrawSettings()
 {
@@ -38,6 +39,7 @@ void IBL::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Normalizes effect shader brightness based on IBL brightness.");
 	}
+	ImGui::SliderFloat("Effect Normalization Multiplier", &settings.EffectNormalizationMult, 0.0f, 200.0f, "%.2f");
 }
 
 void IBL::LoadSettings(json& o_json)
