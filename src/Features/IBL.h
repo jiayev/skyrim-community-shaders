@@ -41,7 +41,7 @@ public:
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
 
-	struct alignas(16) Settings
+	struct Settings
 	{
 		uint EnableDiffuseIBL = 1;
 		uint PreserveFogLuminance = 0;
@@ -52,7 +52,8 @@ public:
 		float IBLSaturation = 1.0f;
 		float FogAmount = 0.0f;
 		uint EffectNormalization = 0;
-		uint pad[3];
+		float EffectNormalizationMult = 50.0f;
+		uint pad[2];
 	} settings;
 	STATIC_ASSERT_ALIGNAS_16(Settings);
 
