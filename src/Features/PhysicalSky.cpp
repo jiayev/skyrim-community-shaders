@@ -20,6 +20,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	sunlightColor,
 	masserColor,
 	secundaColor,
+	proceduralSun,
+	sunDiskRad,
 	adaptationStart,
 	adaptationEnd,
 	dayExposure,
@@ -186,6 +188,10 @@ void PhysicalSky::SettingsCelestials()
 		ImGui::ColorEdit3("Light Color", &settings.sunlightColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(lightColorHint);
+		ImGui::Checkbox("Procedural Sun", &settings.proceduralSun);
+		ImGui::SliderAngle("Sun Disk Angular Radius", &settings.sunDiskRad, 0.f, 5.f, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Real world sun disk angular radius is about 0.27 degrees.");
 		ImGui::PopID();
 	}
 
@@ -515,6 +521,7 @@ void PhysicalSky::Reset()
 		.masserColor = settings.masserColor * exposure,
 		.apTrMix = settings.apTrMix,
 		.secundaDir = { secundaDir.x, secundaDir.y, secundaDir.z },
+		.sunDiskCos = cos(settings.sunDiskRad) * (settings.proceduralSun ? 1.f : 0.f),
 		.secundaColor = settings.secundaColor * exposure,
 		.enabled = allGood,
 		.tonemapper = settings.tonemapper,
