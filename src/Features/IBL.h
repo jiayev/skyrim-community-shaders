@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Buffer.h"
+
 struct IBL : Feature
 {
 public:
@@ -49,7 +51,11 @@ public:
 		float DALCAmount = 0.33f;
 		float IBLSaturation = 1.0f;
 		float FogAmount = 0.0f;
+		uint EffectNormalization = 0;
+		float EffectNormalizationMult = 50.0f;
+		uint pad[2];
 	} settings;
+	STATIC_ASSERT_ALIGNAS_16(Settings);
 
 	eastl::unique_ptr<Texture2D> staticDiffuseIBLTexture = nullptr;
 	eastl::unique_ptr<Texture2D> staticSpecularIBLTexture = nullptr;

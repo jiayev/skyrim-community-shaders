@@ -18,7 +18,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DiffuseIBLScale,
 	DALCAmount,
 	IBLSaturation,
-	FogAmount)
+	FogAmount,
+	EffectNormalization,
+	EffectNormalizationMult)
 
 void IBL::DrawSettings()
 {
@@ -33,6 +35,11 @@ void IBL::DrawSettings()
 	}
 	ImGui::SliderFloat("Fog Mix", &settings.FogAmount, 0.0f, 1.0f, "%.2f");
 	ImGui::Checkbox("Preserve Fog Luminance", (bool*)&settings.PreserveFogLuminance);
+	ImGui::Checkbox("Effect Normalization", (bool*)&settings.EffectNormalization);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Normalizes effect shader brightness based on IBL brightness.");
+	}
+	ImGui::SliderFloat("Effect Normalization Multiplier", &settings.EffectNormalizationMult, 0.0f, 200.0f, "%.2f");
 
 	JiayeStatement::GetSingleton()->DrawJSInfo();
 }
