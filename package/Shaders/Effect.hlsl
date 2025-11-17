@@ -848,6 +848,24 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence.xxx);
 
+	float effectNormalization = 1.0;
+#	if defined(IBL) && !defined(LIGHTING) && !defined(DEFERRED)
+	if (SharedData::iblSettings.EnableDiffuseIBL && SharedData::iblSettings.EffectNormalization && (!SharedData::InInterior || SharedData::iblSettings.EnableInterior) && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
+		float directionalAmbientColorLuminance = Color::RGBToLuminance(
+            max(0, mul(SharedData::DirectionalAmbient, float4(0, 0, 0, 1.0)))
+        );
+#		if defined(SKYLIGHTING)
+		float3 iblColor = ImageBasedLighting::GetIBLColor(float3(0, 0, 0), 1);
+#		else
+		float3 iblColor = ImageBasedLighting::GetIBLColor(float3(0, 0, 0));
+#		endif
+		float iblLuminance = Color::RGBToLuminance(iblColor);
+		effectNormalization = iblLuminance * SharedData::iblSettings.DiffuseIBLScale + directionalAmbientColorLuminance * SharedData::iblSettings.DALCAmount;
+		effectNormalization *= SharedData::iblSettings.EffectNormalizationMult;
+	}
+#	endif
+	lightColor *= effectNormalization;
+
 #	if !defined(MOTIONVECTORS_NORMALS)
 	if (alpha * fogMul.w - AlphaTestRefRS < 0) {
 		discard;
@@ -881,27 +899,9 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 blendedColor = lightColor.xyz;
 #	endif
 
-	float effectNormalization = 1.0;
-#	if defined(IBL) && !defined(LIGHTING) && !defined(DEFERRED)
-	if (SharedData::iblSettings.EnableDiffuseIBL && SharedData::iblSettings.EffectNormalization && (!SharedData::InInterior || SharedData::iblSettings.EnableInterior) && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
-		float directionalAmbientColorLuminance = Color::RGBToLuminance(
-            max(0, mul(SharedData::DirectionalAmbient, float4(0, 0, 0, 1.0)))
-        );
-#		if defined(SKYLIGHTING)
-		float3 iblColor = ImageBasedLighting::GetIBLColor(float3(0, 0, 0), 1);
-#		else
-		float3 iblColor = ImageBasedLighting::GetIBLColor(float3(0, 0, 0));
-#		endif
-		float iblLuminance = Color::RGBToLuminance(iblColor);
-		effectNormalization = iblLuminance * SharedData::iblSettings.DiffuseIBLScale + directionalAmbientColorLuminance * SharedData::iblSettings.DALCAmount;
-		effectNormalization *= SharedData::iblSettings.EffectNormalizationMult;
-	}
-#	endif
-
 	alpha = Color::EffectAlpha(alpha);
 
 	float4 finalColor = float4(Color::EffectMult(blendedColor), alpha);
-	finalColor.xyz *= effectNormalization;
 #	if defined(MULTBLEND_DECAL)
 	finalColor.xyz *= alpha;
 #	else
