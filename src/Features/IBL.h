@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Buffer.h"
+
 struct IBL : Feature
 {
 public:
@@ -39,7 +41,7 @@ public:
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
 
-	struct Settings
+	struct alignas(16) Settings
 	{
 		uint EnableDiffuseIBL = 1;
 		uint PreserveFogLuminance = 0;
@@ -49,7 +51,10 @@ public:
 		float DALCAmount = 0.33f;
 		float IBLSaturation = 1.0f;
 		float FogAmount = 0.0f;
+		uint EffectNormalization = 0;
+		uint pad[3];
 	} settings;
+	STATIC_ASSERT_ALIGNAS_16(Settings);
 
 	eastl::unique_ptr<Texture2D> staticDiffuseIBLTexture = nullptr;
 	eastl::unique_ptr<Texture2D> staticSpecularIBLTexture = nullptr;
