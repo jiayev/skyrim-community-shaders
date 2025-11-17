@@ -1,4 +1,5 @@
 #include "Common/Color.hlsli"
+#include "Common/FastMath.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/VR.hlsli"
@@ -286,7 +287,13 @@ PS_OUTPUT main(PS_INPUT input)
 		float cosTheta = saturate(dot(normalize(input.WorldPosition.xyz), sunDir));
 		if (cosTheta > SharedData::physSkyData.sunDiskCos && SharedData::physSkyData.sunDiskCos > 0.0)
 		{
-			float3 dirLightColor = SharedData::physSkyData.sunlightColor;
+			float sunAngularRadius = FastMath::ACos(SharedData::physSkyData.sunDiskCos);
+			float angularDistance = FastMath::ACos(cosTheta);
+			float r = angularDistance / sunAngularRadius;
+			const float limbDarkeningCoeff = 0.6f;
+        	float limbFactor = 1.0f - limbDarkeningCoeff * (1.0f - sqrt(max(0.0f, 1.0f - r * r)));
+
+			float3 dirLightColor = SharedData::physSkyData.sunlightColor * limbFactor;
 			dirLightColor *= PhysSky::SampleTr(sunDir, SampBaseSampler);
 			psout.Color.xyz += dirLightColor;
 		}
