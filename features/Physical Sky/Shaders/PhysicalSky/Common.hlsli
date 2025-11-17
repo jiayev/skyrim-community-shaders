@@ -1,3 +1,6 @@
+#ifndef COMMON_PHYS_SKY_HLSLI
+#define COMMON_PHYS_SKY_HLSLI
+
 #include "Common/Color.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
@@ -364,4 +367,5 @@ float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)
 
 #ifndef OMIT_PS_NAMESPACE
 }
+#endif
 #endif
