@@ -281,8 +281,15 @@ PS_OUTPUT main(PS_INPUT input)
 #		elif defined(PS_CLOUDS)
 		float4 apColor = PhysSky::SampleAp(viewDir, input.Position.xy, psCloudDist, PhysSky::SampSv);
 		psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
-#		else
-		// discard; // TODO: REMOVE
+#		elif defined(DEFERRED) && !defined(CLOUDS)
+		float3 sunDir = normalize(SharedData::physSkyData.sunDir);
+		float cosTheta = saturate(dot(normalize(input.WorldPosition.xyz), sunDir));
+		if (cosTheta > SharedData::physSkyData.sunDiskCos && SharedData::physSkyData.sunDiskCos > 0.0)
+		{
+			float3 dirLightColor = SharedData::physSkyData.sunlightColor;
+			dirLightColor *= PhysSky::SampleTr(sunDir, SampBaseSampler);
+			psout.Color.xyz += dirLightColor;
+		}
 #		endif
 	}
 #endif
