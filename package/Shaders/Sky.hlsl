@@ -282,20 +282,20 @@ PS_OUTPUT main(PS_INPUT input)
 #		elif defined(PS_CLOUDS)
 		float4 apColor = PhysSky::SampleAp(viewDir, input.Position.xy, psCloudDist, PhysSky::SampSv);
 		psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
-#		elif defined(DEFERRED) && !defined(CLOUDS)
+#		elif defined(DEFERRED) && defined(TEX)
 		float3 sunDir = normalize(SharedData::physSkyData.sunDir);
 		float cosTheta = saturate(dot(normalize(input.WorldPosition.xyz), sunDir));
 		if (cosTheta > SharedData::physSkyData.sunDiskCos && SharedData::physSkyData.sunDiskCos > 0.0)
 		{
-			float sunAngularRadius = FastMath::ACos(SharedData::physSkyData.sunDiskCos);
-			float angularDistance = FastMath::ACos(cosTheta);
-			float r = angularDistance / sunAngularRadius;
-			const float limbDarkeningCoeff = 0.6f;
-        	float limbFactor = 1.0f - limbDarkeningCoeff * (1.0f - sqrt(max(0.0f, 1.0f - r * r)));
+			float sunDiskSin = sqrt(1.0 - SharedData::physSkyData.sunDiskCos * SharedData::physSkyData.sunDiskCos);
+			float tanTheta = sqrt(1.0 - cosTheta * cosTheta) / cosTheta;
+			float normDist = tanTheta * SharedData::physSkyData.sunDiskCos * rcp(sunDiskSin);
+			float3 limbFactor = PhysSky::LimbDarkenHestroffer(normDist);
 
 			float3 dirLightColor = SharedData::physSkyData.sunlightColor * limbFactor;
-			dirLightColor *= PhysSky::SampleTr(sunDir, SampBaseSampler);
-			psout.Color.xyz += dirLightColor;
+			dirLightColor *= PhysSky::SampleTr(normalize(input.WorldPosition.xyz), SampBaseSampler);
+			psout.Color.xyz = dirLightColor;
+			psout.Color.w = 1.0;
 		}
 #		endif
 	}
