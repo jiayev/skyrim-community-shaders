@@ -294,7 +294,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 			float3 dirLightColor = SharedData::physSkyData.sunlightColor * limbFactor;
 			dirLightColor *= PhysSky::SampleTr(normalize(input.WorldPosition.xyz), SampBaseSampler);
-			psout.Color.xyz = dirLightColor;
+			psout.Color.xyz += dirLightColor;
 			psout.Color.w = 1.0;
 		}
 #		endif
