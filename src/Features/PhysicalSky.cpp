@@ -27,6 +27,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	dayExposure,
 	nightExposure,
 	groundAlbedo,
+	planetRadius,
+	atmosphereRadius,
 	rayleighFalloff,
 	rayleighScatter,
 	aerosolFalloff,
@@ -266,6 +268,17 @@ void PhysicalSky::SettingsAtmosphere()
 		ImGui::DragFloat("Mean Altitude", &settings.ozoneAltitude, .1f, 0.f, 100.f, "%.3f km");
 		ImGui::DragFloat("Layer Thickness", &settings.ozoneThickness, .1f, 0.f, 50.f, "%.3f km");
 		ImGui::PopID();
+	}
+
+	ImGui::SeparatorText("Planetary Parameters");
+	{
+		ImGui::InputFloat("Planet Radius", &settings.planetRadius, 1.f, 100000.f, "%.1f km");
+		ImGui::InputFloat("Atmosphere Radius", &settings.atmosphereRadius, 1.f, 100000.f, "%.1f km");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(
+				"Planet radius is the distance from the planet center to sea level.\n"
+				"Atmosphere radius is the distance from the planet center to the top of atmosphere.\n"
+				"On Earth, they are about 6360 km and 6420 km respectively.");
 	}
 }
 
@@ -527,8 +540,8 @@ void PhysicalSky::Reset()
 		.tonemapper = settings.tonemapper,
 		.vanillaMix = settings.vanillaMix,
 		.zBottom = worldspaceInfo.zBottom,
-		.rPlanet = 6.36e3f / Util::Units::GAME_UNIT_TO_KM,
-		.rAtmosphere = 6.42e3f / Util::Units::GAME_UNIT_TO_KM,
+		.rPlanet = settings.planetRadius / Util::Units::GAME_UNIT_TO_KM,
+		.rAtmosphere = settings.atmosphereRadius / Util::Units::GAME_UNIT_TO_KM,
 		.groundAlbedo = settings.groundAlbedo,
 		.cloudShadowRemapRange = settings.cloudShadowRemapRange,
 		.aerosolFalloff = settings.aerosolFalloff * Util::Units::GAME_UNIT_TO_KM,
