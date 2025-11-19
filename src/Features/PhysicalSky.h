@@ -111,6 +111,9 @@ struct PhysicalSky final : public Feature
 		};
 		float3 groundAlbedo = { .2f, .2f, .2f };
 
+		float planetRadius = 6.36e3f;      // in km
+		float atmosphereRadius = 6.42e3f;  // in km
+
 		float rayleighFalloff = 1 / 8.69645f;                    // in km^-1
 		float3 rayleighScatter = { 6.6049f, 12.345f, 29.413f };  // in megameter^-1
 		float aerosolFalloff = 1 / 1.2f;
