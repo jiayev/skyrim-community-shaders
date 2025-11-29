@@ -67,34 +67,36 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	// Use better swap effect to prevent tearing and improve performance
 	pSwapChainDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 
-	bool shouldProxy = !globals::game::isVR || upscaling.streamline.featureDLSS;
-	if (shouldProxy)
-		if (!pSwapChainDesc->Windowed)
-			shouldProxy = false;
+	// bool shouldProxy = !globals::game::isVR || upscaling.streamline.featureDLSS;
+	// if (shouldProxy)
+	// 	if (!pSwapChainDesc->Windowed)
+	// 		shouldProxy = false;
 
 	auto refreshRate = Upscaling::GetRefreshRate(pSwapChainDesc->OutputWindow);
 	upscaling.refreshRate = refreshRate;
 
-	if (shouldProxy) {
-		if (upscaling.settings.frameGenerationMode)
-			if (refreshRate >= 120)
-				shouldProxy = true;
-			else if (upscaling.settings.frameGenerationForceEnable)
-				shouldProxy = true;
-			else
-				shouldProxy = false;
-		else
-			shouldProxy = false;
-		if (upscaling.settings.upscaleMethod == (uint)Upscaling::UpscaleMethod::kDLSS)
-			shouldProxy = true;
-	}
+	// if (shouldProxy) {
+	// 	if (upscaling.settings.frameGenerationMode)
+	// 		if (refreshRate >= 120)
+	// 			shouldProxy = true;
+	// 		else if (upscaling.settings.frameGenerationForceEnable)
+	// 			shouldProxy = true;
+	// 		else
+	// 			shouldProxy = false;
+	// 	else
+	// 		shouldProxy = false;
+	// 	if (upscaling.settings.upscaleMethod == (uint)Upscaling::UpscaleMethod::kDLSS)
+	// 		shouldProxy = true;
+	// }
+
+	bool shouldProxy = true;
 
 	upscaling.lowRefreshRate = refreshRate < 120;
 	upscaling.isWindowed = pSwapChainDesc->Windowed;
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
 
-	if (shouldProxy) {
+	if (shouldProxy && upscaling.isWindowed) {
 		logger::info("[Upscaling] Using D3D12 proxy");
 
 		if (upscaling.HasFrameGenModule() || upscaling.streamline.featureDLSS) {
@@ -1313,7 +1315,7 @@ void Upscaling::Upscale()
 	{
 		state->BeginPerfEvent("Upscaling");
 
-		if (upscaleMethod == UpscaleMethod::kDLSS) {
+		if ((upscaleMethod == UpscaleMethod::kDLSS) && d3d12SwapChainActive) {
 			HRESULT hr = dx12SwapChain.d3d12Device->GetDeviceRemovedReason();
 			if (hr != S_OK) {
 				logger::error("D3D12 device removed: 0x{:08X}", static_cast<uint32_t>(hr));
