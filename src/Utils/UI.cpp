@@ -706,6 +706,43 @@ namespace Util
 		return ascending ? (a < b) : (b < a);
 	}
 
+	void RenderTextWithHighlights(const std::string& text, const std::string& searchTerm, ImVec4 highlightColor)
+	{
+		if (searchTerm.empty()) {
+			ImGui::TextUnformatted(text.c_str());
+			return;
+		}
+
+		std::string lowerText = text;
+		std::string lowerSearch = searchTerm;
+		std::transform(lowerText.begin(), lowerText.end(), lowerText.begin(), [](unsigned char c) { return static_cast<char>(::tolower(c)); });
+		std::transform(lowerSearch.begin(), lowerSearch.end(), lowerSearch.begin(), [](unsigned char c) { return static_cast<char>(::tolower(c)); });
+
+		size_t pos = 0;
+		size_t lastPos = 0;
+
+		while ((pos = lowerText.find(lowerSearch, lastPos)) != std::string::npos) {
+			// Render text before highlight
+			if (pos > lastPos) {
+				ImGui::TextUnformatted(text.substr(lastPos, pos - lastPos).c_str());
+				ImGui::SameLine(0, 0);
+			}
+
+			// Render highlighted text
+			ImGui::PushStyleColor(ImGuiCol_Text, highlightColor);
+			ImGui::TextUnformatted(text.substr(pos, searchTerm.length()).c_str());
+			ImGui::PopStyleColor();
+			ImGui::SameLine(0, 0);
+
+			lastPos = pos + searchTerm.length();
+		}
+
+		// Render remaining text
+		if (lastPos < text.length()) {
+			ImGui::TextUnformatted(text.substr(lastPos).c_str());
+		}
+	}
+
 	ImVec4 GetThresholdColor(float value, float good, float warn, ImVec4 goodColor, ImVec4 warnColor, ImVec4 badColor)
 	{
 		if (value < good)
@@ -727,13 +764,50 @@ namespace Util
 		std::string query = searchQuery;
 
 		// Convert all to lowercase for case-insensitive search
-		std::transform(shortName.begin(), shortName.end(), shortName.begin(), ::tolower);
-		std::transform(displayName.begin(), displayName.end(), displayName.begin(), ::tolower);
-		std::transform(query.begin(), query.end(), query.begin(), ::tolower);
+		std::transform(shortName.begin(), shortName.end(), shortName.begin(), [](unsigned char c) { return static_cast<char>(::tolower(c)); });
+		std::transform(displayName.begin(), displayName.end(), displayName.begin(), [](unsigned char c) { return static_cast<char>(::tolower(c)); });
+		std::transform(query.begin(), query.end(), query.begin(), [](unsigned char c) { return static_cast<char>(::tolower(c)); });
 
 		// Search in both short name and display name
 		return shortName.find(query) != std::string::npos ||
 		       displayName.find(query) != std::string::npos;
+	}
+
+	bool StringMatchesSearch(const std::string& text, const std::string& searchQuery)
+	{
+		if (searchQuery.empty())
+			return true;
+
+		std::string lowerText = text;
+		std::string lowerQuery = searchQuery;
+
+		// Convert all to lowercase for case-insensitive search
+		std::transform(lowerText.begin(), lowerText.end(), lowerText.begin(), ::tolower);
+		std::transform(lowerQuery.begin(), lowerQuery.end(), lowerQuery.begin(), ::tolower);
+
+		return lowerText.find(lowerQuery) != std::string::npos;
+	}
+
+	void DrawSearchIcon(const ImVec2& position, float size, float alpha)
+	{
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+		ImVec2 center = ImVec2(position.x + size * 0.46f, position.y + size * 0.5f);
+		float radius = size * 0.3f;
+
+		// Use themed text color with reduced alpha for search icon
+		auto& theme = globals::menu->GetTheme().Palette;
+		ImVec4 iconColor = theme.Text;
+		iconColor.w *= alpha;  // Apply alpha multiplier for subtler appearance
+		ImU32 placeholderColor = ImGui::GetColorU32(iconColor);
+
+		// Draw circle
+		drawList->AddCircle(center, radius, placeholderColor, 12, 2.2f);
+
+		// Draw handle
+		ImVec2 handleStart = ImVec2(center.x + radius * 0.81f, center.y + radius * 0.81f);
+		ImVec2 handleEnd = ImVec2(handleStart.x + size * 0.29f, handleStart.y + size * 0.29f);
+		drawList->AddLine(handleStart, handleEnd, placeholderColor, 2.1f);
 	}
 
 	void DrawFeatureSearchBar(std::string& searchString, float availableWidth)
@@ -775,26 +849,9 @@ namespace Util
 			searchString = buffer;
 		}
 
-		// Draw a simple search icon (magnifying glass shape)
+		// Draw search icon using the reusable function
 		ImVec2 iconPos = ImVec2(cursorPos.x + 8.0f, cursorPos.y + (frameHeight - iconSize) * 0.5f);
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-
-		ImVec2 center = ImVec2(iconPos.x + iconSize * 0.46f, iconPos.y + iconSize * 0.5f);
-		float radius = iconSize * 0.3f;
-
-		// Use themed text color with reduced alpha for search icon
-		auto& theme = globals::menu->GetTheme().Palette;
-		ImVec4 iconColor = theme.Text;
-		iconColor.w *= 0.7f;  // Reduce alpha for subtler appearance
-		ImU32 placeholderColor = ImGui::GetColorU32(iconColor);
-
-		// Draw circle
-		drawList->AddCircle(center, radius, placeholderColor, 12, 2.2f);
-
-		// Draw handle
-		ImVec2 handleStart = ImVec2(center.x + radius * 0.81f, center.y + radius * 0.81f);
-		ImVec2 handleEnd = ImVec2(handleStart.x + iconSize * 0.29f, handleStart.y + iconSize * 0.29f);
-		drawList->AddLine(handleStart, handleEnd, placeholderColor, 2.1f);
+		DrawSearchIcon(iconPos, iconSize, 0.7f);
 
 		ImGui::PopStyleVar(2);
 		ImGui::PopStyleColor(5);
