@@ -341,7 +341,7 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 			const float permanentStamina = actor->AsActorValueOwner()->GetPermanentActorValue(RE::ActorValue::kStamina);
 			const float temporaryStamina = actor->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary, RE::ActorValue::kStamina);
 			const float maxStamina = permanentStamina + temporaryStamina;
-			const float staminaPercentage = stamina / maxStamina;
+			const float staminaPercentage = actor->IsDead() ? 1.0f : (stamina / maxStamina);
 			wetness.x = (staminaPercentage >= settings.StartSweat) ? 0.0f : 
                 		(staminaPercentage <= settings.FullSweat) ? 1.0f : 
                 		(settings.StartSweat - staminaPercentage) / (settings.StartSweat - settings.FullSweat);
