@@ -7,6 +7,8 @@
 #include "ShaderCache.h"
 #include "State.h"
 
+#include "DynamicWetness_PublicAPI.h"
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skin::Settings,
 	EnableSkin,
@@ -34,7 +36,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UseSSS,
 	FuzzStrength,
 	FuzzRoughness,
-	FuzzF0);
+	FuzzF0,
+	UseDynamicWetness);
 
 void Skin::DrawSettings()
 {
@@ -121,10 +124,20 @@ void Skin::DrawSettings()
 		ImGui::Text("Time it takes for the wetness to reduce from 1.0 to 0.0 after leaving water");
 	}
 
-	ImGui::SliderFloat("Stamina Threshold for Sweat", &settings.StartSweat, 0.0f, 1.0f, "%.2f", 
-		ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Full Sweat Threshold", &settings.FullSweat, 0.0f, 1.0f, "%.2f",
-		ImGuiSliderFlags_AlwaysClamp);
+	if (isDynamicWetnessAvailable) {
+		ImGui::Text("Dynamic Wetness detected.");
+		ImGui::Checkbox("Use Dynamic Wetness", &settings.UseDynamicWetness);
+	} else {
+		settings.UseDynamicWetness = false;
+	}
+
+	if (!settings.UseDynamicWetness)
+	{
+		ImGui::SliderFloat("Stamina Threshold for Sweat", &settings.StartSweat, 0.0f, 1.0f, "%.2f", 
+			ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Full Sweat Threshold", &settings.FullSweat, 0.0f, 1.0f, "%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+	}
 
 	ImGui::SliderFloat("Wetness Perlin Noise Scale", &settings.WetParams.x, 0.0f, 1024.0f, "%1.f");
 	ImGui::SliderFloat("Wetness Perlin Noise Lacunarity", &settings.WetParams.y, 0.0f, 2.0f, "%.1f");
@@ -201,6 +214,9 @@ void Skin::SetupResources()
 	{
 		PerGeometryCB = new ConstantBuffer(ConstantBufferDesc<PerGeometryData>());
 	}
+
+	// Check for Dynamic Wetness availability
+	isDynamicWetnessAvailable = SWE::API::Init();
 }
 
 void Skin::ReloadSkinDetail()
@@ -334,14 +350,19 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 			// uint32_t refid = actor->AsReference()->formID;
 			const float positionZ = actor->GetPositionZ();
 			wetness.z = positionZ;
-			const float stamina = actor->AsActorValueOwner()->GetActorValue(RE::ActorValue::kStamina);
-			const float permanentStamina = actor->AsActorValueOwner()->GetPermanentActorValue(RE::ActorValue::kStamina);
-			const float temporaryStamina = actor->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary, RE::ActorValue::kStamina);
-			const float maxStamina = permanentStamina + temporaryStamina;
-			const float staminaPercentage = actor->IsDead() ? 1.0f : (stamina / maxStamina);
-			wetness.x = (staminaPercentage >= settings.StartSweat) ? 0.0f : 
-                		(staminaPercentage <= settings.FullSweat) ? 1.0f : 
-                		(settings.StartSweat - staminaPercentage) / (settings.StartSweat - settings.FullSweat);
+			if (settings.UseDynamicWetness && isDynamicWetnessAvailable) {
+				float dynamicWetness = SWE::API::SWE_GetFinalWetness(actor);
+				wetness.x = dynamicWetness;
+			} else {
+				const float stamina = actor->AsActorValueOwner()->GetActorValue(RE::ActorValue::kStamina);
+				const float permanentStamina = actor->AsActorValueOwner()->GetPermanentActorValue(RE::ActorValue::kStamina);
+				const float temporaryStamina = actor->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary, RE::ActorValue::kStamina);
+				const float maxStamina = permanentStamina + temporaryStamina;
+				const float staminaPercentage = actor->IsDead() ? 1.0f : (stamina / maxStamina);
+				wetness.x = (staminaPercentage >= settings.StartSweat) ? 0.0f : 
+							(staminaPercentage <= settings.FullSweat) ? 1.0f : 
+							(settings.StartSweat - staminaPercentage) / (settings.StartSweat - settings.FullSweat);
+			}
 			if (actor->IsInWater()) {
 				wetness.y = 2.0f;
 				float waterHeight = GetWaterHeight(actor->AsReference(), actor->GetPosition());
