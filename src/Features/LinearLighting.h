@@ -109,6 +109,13 @@ struct LinearLighting : Feature
 	virtual void RestoreDefaultSettings() override;
 
 	virtual void Prepass() override;
+	virtual void PostPostLoad() override;
 
 	PerFrameData GetCommonBufferData();
+
+	RE::NiColor ColorToLinear(RE::NiColor inColor, float gamma);
+
+	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
+
+	struct Hooks;
 };
