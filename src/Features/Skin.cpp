@@ -354,7 +354,7 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 			const float positionZ = actor->GetPositionZ();
 			wetness.z = positionZ;
 			if (settings.UseDynamicWetness && isDynamicWetnessAvailable) {
-				float dynamicWetness = SWE::API::SWE_GetFinalWetness(actor);
+				float dynamicWetness = SWE::API::GetFinalWetness(actor);
 				wetness.x = dynamicWetness;
 			} else {
 				const float stamina = actor->AsActorValueOwner()->GetActorValue(RE::ActorValue::kStamina);
