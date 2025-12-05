@@ -1,3 +1,5 @@
+#define LIGHTING
+
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
@@ -9,8 +11,6 @@
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
-
-#define LIGHTING
 
 #if defined(FACEGEN) || defined(FACEGEN_RGB_TINT)
 #	define SKIN
