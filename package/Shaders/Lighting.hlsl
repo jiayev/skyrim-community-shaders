@@ -2266,8 +2266,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (SharedData::hairSpecularSettings.EnableTangentShift && SharedData::hairSpecularSettings.HairMode != 1) {
 			float3 shiftedNormal = Hair::ShiftWorldNormal(hairT, worldNormal, 0, uv);
 			screenSpaceNormal = normalize(FrameBuffer::WorldToView(shiftedNormal, false, eyeIndex));
-		} else if (SharedData::hairSpecularSettings.HairMode == 1) {
-			screenSpaceNormal = normalize(FrameBuffer::WorldToView(hairT, false, eyeIndex));
 		}
 	}
 
@@ -3207,6 +3205,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(HAIR) && defined(CS_HAIR)
 	if (SharedData::hairSpecularSettings.Enabled && SharedData::hairSpecularSettings.HairMode == 1)
 		ambientNormal = normalize(viewDirection - hairT * dot(viewDirection, hairT));
+		screenSpaceNormal = normalize(FrameBuffer::WorldToView(ambientNormal, false, eyeIndex));
 #	endif
 
 	float3 directionalAmbientColor = Color::Ambient(max(0, mul(DirectionalAmbient, float4(ambientNormal, 1.0))));
