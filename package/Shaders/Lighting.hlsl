@@ -2098,9 +2098,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 	hairT = Hair::ReorientTangent(hairT, worldNormal);
 
-	if (SharedData::hairSpecularSettings.Enabled && SharedData::hairSpecularSettings.EnableTangentShift) {
-		float3 shiftedNormal = Hair::ShiftWorldNormal(hairT, worldNormal, 0, uv);
-		screenSpaceNormal = normalize(FrameBuffer::WorldToView(shiftedNormal, false, eyeIndex));
+	if (SharedData::hairSpecularSettings.Enabled) {
+		if (SharedData::hairSpecularSettings.EnableTangentShift && SharedData::hairSpecularSettings.HairMode != 1) {
+			float3 shiftedNormal = Hair::ShiftWorldNormal(hairT, worldNormal, 0, uv);
+			screenSpaceNormal = normalize(FrameBuffer::WorldToView(shiftedNormal, false, eyeIndex));
+		} else if (SharedData::hairSpecularSettings.HairMode == 1) {
+			screenSpaceNormal = normalize(FrameBuffer::WorldToView(hairT, false, eyeIndex));
+		}
 	}
 
 	float3 transmissionColor = 0;
