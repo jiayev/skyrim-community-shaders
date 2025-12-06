@@ -237,8 +237,8 @@ namespace Hair
 			}
 			float3 L = normalize(V - T * dot(V, T));
 
-			specularLobeWeightPrimary = D_Marschner(L, V, T, roughnessPrimary, baseColor, 0.2, 0) * Math::PI;
-			diffuseLobeWeight = GetHairDiffuseAttenuationKajiyaKay(T, V, L, 1, baseColor) * Math::PI;
+			diffuseLobeWeight = D_Marschner(L, V, T, roughnessPrimary, baseColor, 0.2, 0) * Math::PI;
+			diffuseLobeWeight += GetHairDiffuseAttenuationKajiyaKay(T, V, L, 1, baseColor) * Math::PI;
 			return;
 		} else {
 			float NdotVshifted = NdotV;

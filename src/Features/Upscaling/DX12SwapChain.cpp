@@ -436,8 +436,10 @@ void DX12SwapChain::CreateSharedResources()
 	reactiveMaskShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
 	transparencyCompositionMaskShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
 
-	texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	texDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
 	albedoShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
+
+	texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 	reflectanceShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
 
 	// Create motion vector buffer
