@@ -225,7 +225,8 @@ void AdvancedSettingsRenderer::RenderShaderDebugSection()
 		blockedBgColor.w = 0.15f;  // Semi-transparent background
 		ImGui::PushStyleColor(ImGuiCol_ChildBg, blockedBgColor);
 
-		if (ImGui::BeginChild("##BlockedShaderInfo", ImVec2(0, 0), true, ImGuiChildFlags_AutoResizeY)) {
+		float maxHeight = ImGui::GetContentRegionAvail().y * 0.3f;  // Limit to 30% to keep Active Shaders visible
+		if (ImGui::BeginChild("##BlockedShaderInfo", ImVec2(0, maxHeight), true, ImGuiChildFlags_AutoResizeY)) {
 			ImGui::TextColored(Util::Colors::GetError(), "Shader Blocking Active");
 			ImGui::SameLine();
 			if (ImGui::SmallButton("Stop Blocking##Section")) {
