@@ -30,6 +30,7 @@ struct PerformanceOverlay;
 struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
+struct Skin;
 
 class State;
 class Deferred;
@@ -84,6 +85,7 @@ namespace globals
 		extern ExtendedTranslucency extendedTranslucency;
 		extern Upscaling upscaling;
 		extern RenderDoc renderDoc;
+		extern Skin skin;
 
 		namespace llf
 		{

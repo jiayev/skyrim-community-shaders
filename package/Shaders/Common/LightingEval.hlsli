@@ -125,6 +125,29 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 		return;
 	}
 #	endif
+#	if defined(SKIN) && defined(CS_SKIN)
+	if (SharedData::skinData.skinParams.w > 0.0f)
+	{
+		Skin::SkinDirectLightInput(lightingOutput, context, material);
+
+		// SSS fallback for forward skin rendering
+#		if !defined(DEFERRED)
+		const float NdotL = dot(context.worldNormal, context.lightDir);
+#			if defined(SOFT_LIGHTING)
+		lightingOutput.diffuse += context.lightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor;
+#			endif
+
+#			if defined(RIM_LIGHTING)
+		lightingOutput.diffuse += context.lightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor;
+#			endif
+
+#			if defined(BACK_LIGHTING)
+		lightingOutput.diffuse += context.lightColor * saturate(-NdotL) * material.backLightColor;
+#			endif
+#		endif
+		return;
+	}
+#	endif
 	const float NdotL = dot(context.worldNormal, context.lightDir);
     lightingOutput.diffuse = saturate(NdotL) * context.lightColor * Color::VanillaDiffuseMult();
 #		if defined(SOFT_LIGHTING)
@@ -164,6 +187,13 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 	if (SharedData::hairSpecularSettings.Enabled)
 	{
 		Hair::GetHairIndirectLobeWeights(lobeWeights, context, material, uv);
+		return;
+	}
+#	endif
+#	if defined(SKIN) && defined(CS_SKIN)
+	if (SharedData::skinData.skinParams.w > 0.0f)
+	{
+		Skin::SkinIndirectLobeWeights(lobeWeights, material, context);
 		return;
 	}
 #	endif
@@ -243,17 +273,17 @@ float3 GetWetnessIndirectLobeWeights(inout IndirectLobeWeights lobeWeights, floa
 	float2 specularBRDF = BRDF::EnvBRDF(roughness, NdotV);
 	float3 specularLobeWeight = wetnessF0 * specularBRDF.x + specularBRDF.y;
 
-	specularLobeWeight *= wetnessStrength;
-
-	lobeWeights.diffuse *= 1 - specularLobeWeight;
-	lobeWeights.specular *= 1 - specularLobeWeight;
-
 	// Horizon specular occlusion
 	// https://marmosetco.tumblr.com/post/81245981087
 	float3 R = reflect(-V, N);
 	float horizon = min(1.0 + dot(R, VN), 1.0);
 	horizon = horizon * horizon;
 	specularLobeWeight *= horizon;
+
+	specularLobeWeight *= wetnessStrength;
+
+	lobeWeights.diffuse *= 1 - specularLobeWeight;
+	lobeWeights.specular *= 1 - specularLobeWeight;
 
 	return specularLobeWeight;
 }
