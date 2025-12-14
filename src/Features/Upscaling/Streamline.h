@@ -15,7 +15,6 @@
 #include <sl_dlss.h>
 #include <sl_dlss_d.h>
 #include <sl_matrix_helpers.h>
-#include <sl_nis.h>
 #include <sl_version.h>
 #pragma warning(pop)
 
@@ -34,7 +33,6 @@ public:
 
 	bool featureDLSS = false;
 	bool featureDLSS_RR = false;
-	bool featureNIS = false;
 
 	sl::ViewportHandle viewport{ 0 };
 
@@ -68,10 +66,6 @@ public:
 	PFun_slDLSSDGetOptimalSettings* slDLSSDGetOptimalSettings{};
 	PFun_slDLSSDGetState* slDLSSDGetState{};
 	PFun_slDLSSDSetOptions* slDLSSDSetOptions{};
-
-	// NIS specific functions
-	PFun_slNISSetOptions* slNISSetOptions{};
-	PFun_slNISGetState* slNISGetState{};
 
 	Util::FrameChecker frameChecker;
 	sl::FrameToken* frameToken = nullptr;
@@ -115,6 +109,4 @@ public:
 
 	void DestroyDLSSResources(bool modeSwitch = false);
 	void DestroyDLSSRRResources(bool modeSwitch = false);
-
-	void ApplyNISSharpening(ID3D12Resource* a_inputColorTexture, ID3D12Resource* a_outputTexture, float sharpness, ID3D12GraphicsCommandList* a_commandList);
 };

@@ -510,6 +510,27 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod, b
 			motionVectorCopyTexture->CreateSRV(srvDesc);
 			motionVectorCopyTexture->CreateUAV(uavDesc);
 		}
+
+		// RCAS sharpener texture - matches kMAIN format for HDR sharpening
+		if (!sharpenerTexture) {
+			main.texture->GetDesc(&texDesc);
+			main.SRV->GetDesc(&srvDesc);
+
+			texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+
+			srvDesc.Format = texDesc.Format;
+			srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+			srvDesc.Texture2D.MostDetailedMip = 0;
+			srvDesc.Texture2D.MipLevels = 1;
+
+			uavDesc.Format = texDesc.Format;
+			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+			uavDesc.Texture2D.MipSlice = 0;
+
+			sharpenerTexture = new Texture2D(texDesc);
+			sharpenerTexture->CreateSRV(srvDesc);
+			sharpenerTexture->CreateUAV(uavDesc);
+		}
 	}
 }
 
@@ -548,6 +569,14 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 
 			delete motionVectorCopyTexture;
 			motionVectorCopyTexture = nullptr;
+		}
+		if (sharpenerTexture) {
+			sharpenerTexture->srv = nullptr;
+			sharpenerTexture->uav = nullptr;
+			sharpenerTexture->resource = nullptr;
+
+			delete sharpenerTexture;
+			sharpenerTexture = nullptr;
 		}
 	}
 }
@@ -890,6 +919,8 @@ void Upscaling::SetupResources()
 
 	CheckResources(GetUpscaleMethod());
 
+	rcas.Initialize();
+
 	if (d3d12SwapChainActive)
 		dx12SwapChain.CreateSharedResources();
 
@@ -1124,7 +1155,7 @@ bool Upscaling::IsUpscalingActive()
 {
 	auto method = GetUpscaleMethod();
 
-	// Only consider vendor upscalers (FSR/XeSS/DLSS) as "active" when the
+	// Only consider vendor upscalers (FSR/DLSS) as "active" when the
 	// selected method actually produces a downscale. If the renderer is
 	// currently running at 1:1 (no downscale) then depth-buffer culling and
 	// other VR-sensitive behavior can remain enabled.
@@ -1517,75 +1548,35 @@ void Upscaling::UpscaleDepth()
 	}
 }
 
-void Upscaling::ApplyNISSharpening()
+void Upscaling::ApplySharpening()
 {
-	if (!streamline.featureNIS || settings.sharpnessDLSS <= 0.0f) {
-		return;
-	}
-
-	auto context = globals::d3d::context;
-
-	ID3D11RenderTargetView* renderTarget = nullptr;
-	context->OMGetRenderTargets(1, &renderTarget, nullptr);
-
-	winrt::com_ptr<ID3D11Resource> mainResource;
-	renderTarget->GetResource(mainResource.put());
-
-	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
-
-	context->CopyResource(dx12SwapChain.nisSharpenerInputShared12->resource11, mainResource.get());
-
-	// Wait for D3D11 to finish
-	auto fence = dx12SwapChain.fenceValue;
-	DX::ThrowIfFailed(context->QueryInterface(IID_PPV_ARGS(dx12SwapChain.d3d11Context.put())));
-	logger::trace("Signaling shared fence {} before NIS sharpening", fence);
-	DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Signal(dx12SwapChain.d3d11Fence.get(), fence));
-	logger::trace("Waiting for shared fence {} before NIS sharpening", fence);
-	DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.d3d12Fence.get(), fence));
-	dx12SwapChain.fenceValue++;
-
-	auto frameIndex = dx12SwapChain.frameIndex;
-
-	// Reset command allocator and list
-	DX::ThrowIfFailed(dx12SwapChain.nisSharpenerCommandAllocator[frameIndex]->Reset());
-	DX::ThrowIfFailed(dx12SwapChain.nisSharpenerCommandList[frameIndex]->Reset(dx12SwapChain.nisSharpenerCommandAllocator[frameIndex].get(), nullptr));
-
-	streamline.ApplyNISSharpening(dx12SwapChain.nisSharpenerInputShared12->resource.get(), dx12SwapChain.nisSharpenerOutputShared12->resource.get(), settings.sharpnessDLSS, dx12SwapChain.nisSharpenerCommandList[frameIndex].get());
-
-	// Close and execute command list
-	DX::ThrowIfFailed(dx12SwapChain.nisSharpenerCommandList[frameIndex]->Close());
-
-	ID3D12CommandList* commandLists[] = { dx12SwapChain.nisSharpenerCommandList[frameIndex].get() };
-	dx12SwapChain.commandQueue->ExecuteCommandLists(1, commandLists);
-
-	// Wait for D3D12 to finish
-	fence = dx12SwapChain.fenceValue;
-	logger::trace("Signaling shared fence {} after NIS sharpening", fence);
-	DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.d3d12Fence.get(), fence));
-	logger::trace("Waiting for shared fence {} after NIS sharpening", fence);
-	DX::ThrowIfFailed(dx12SwapChain.d3d11Context->Wait(dx12SwapChain.d3d11Fence.get(), fence));
-	dx12SwapChain.fenceValue++;
-
-	// Copy back to main buffer
-	context->CopyResource(mainResource.get(), dx12SwapChain.nisSharpenerOutputShared12->resource11);
-
-	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);  // Run OMSetRenderTargets again
-
-	if (renderTarget)
-		renderTarget->Release();
-}
-
-void Upscaling::SnapshotBeforeTransparency()
-{
-	if (!d3d12SwapChainActive)
+	if (settings.sharpnessDLSS <= 0.0f)
 		return;
 
-	auto context = globals::d3d::context;
+	if (!sharpenerTexture)
+		return;
 
+	float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
+	currentSharpness = exp2(-currentSharpness);
+
+	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
-	context->CopyResource(dx12SwapChain.colorBeforeTransparencySnapshot->resource11, main.texture);
+	ID3D11Resource* mainResource = nullptr;
+	main.SRV->GetResource(&mainResource);
+
+	if (!mainResource)
+		return;
+
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+
+	rcas.ApplySharpen(main.SRV, sharpenerTexture->uav.get(), currentSharpness);
+	context->CopyResource(mainResource, sharpenerTexture->resource.get());
+
+	mainResource->Release();
+
+	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }
 
 void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
@@ -1619,6 +1610,9 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA)
 		upscaling.PerformUpscaling();
 
+	if (upscaleMethod == UpscaleMethod::kDLSS)
+		upscaling.ApplySharpening();
+
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 	GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
@@ -1628,22 +1622,11 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	if (upscaling.d3d12SwapChainActive) {
 		dx12SwapChain.upscalingFenceValue++;
-		logger::trace("[NIS] Clearing queue using upscaling fence {}", dx12SwapChain.upscalingFenceValue);
-		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
-		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
-	}
-
-	if (upscaleMethod == UpscaleMethod::kDLSS)
-		upscaling.ApplyNISSharpening();
-
-	if (upscaling.d3d12SwapChainActive) {
-		dx12SwapChain.upscalingFenceValue++;
 		logger::trace("[Upscaling End] Clearing queue using upscaling fence {}", dx12SwapChain.upscalingFenceValue);
 		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Signal(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
 		DX::ThrowIfFailed(dx12SwapChain.commandQueue->Wait(dx12SwapChain.upscalingFence.get(), dx12SwapChain.upscalingFenceValue));
 	}
 
-	// Disable TAA in some menus
 	BSImagespaceShaderISTemporalAA->taaEnabled = false;
 }
 
