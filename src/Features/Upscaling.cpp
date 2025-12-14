@@ -1581,6 +1581,19 @@ void Upscaling::ApplySharpening()
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }
 
+void Upscaling::SnapshotBeforeTransparency()
+{
+	if (!d3d12SwapChainActive)
+		return;
+
+	auto context = globals::d3d::context;
+
+	auto renderer = globals::game::renderer;
+	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+
+	context->CopyResource(dx12SwapChain.colorBeforeTransparencySnapshot->resource11, main.texture);
+}
+
 void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
 {
 	globals::features::upscaling.ConfigureTAA();
