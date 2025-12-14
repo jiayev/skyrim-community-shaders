@@ -225,7 +225,8 @@ void AdvancedSettingsRenderer::RenderShaderDebugSection()
 		blockedBgColor.w = 0.15f;  // Semi-transparent background
 		ImGui::PushStyleColor(ImGuiCol_ChildBg, blockedBgColor);
 
-		if (ImGui::BeginChild("##BlockedShaderInfo", ImVec2(0, 0), true, ImGuiChildFlags_AutoResizeY)) {
+		float maxHeight = ImGui::GetContentRegionAvail().y * 0.3f;  // Limit to 30% to keep Active Shaders visible
+		if (ImGui::BeginChild("##BlockedShaderInfo", ImVec2(0, maxHeight), true, ImGuiChildFlags_AutoResizeY)) {
 			ImGui::TextColored(Util::Colors::GetError(), "Shader Blocking Active");
 			ImGui::SameLine();
 			if (ImGui::SmallButton("Stop Blocking##Section")) {
@@ -277,13 +278,63 @@ void AdvancedSettingsRenderer::RenderShaderDebugSection()
 		ImGui::PopStyleColor();  // ChildBg
 	}
 
+	// Shader Debug section
+	if (ImGui::CollapsingHeader("Shader Debug")) {
+		auto menu = globals::menu;
+		auto& menuSettings = menu->GetSettings();
+		auto& themeSettings = menuSettings.Theme;
+
+		if (ImGui::Checkbox("Enable Shader Blocking", &menuSettings.EnableShaderBlocking)) {
+			// Setting saved automatically on next save
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Enables hotkeys to cycle through and block individual shaders for debugging purposes.");
+		}
+
+		if (menuSettings.EnableShaderBlocking) {
+			ImGui::Indent();
+
+			// Shader Block Previous Key
+			if (menu->settingShaderBlockPrevKey) {
+				ImGui::Text("Press any key for Shader Block Previous...");
+			} else {
+				ImGui::AlignTextToFramePadding();
+				ImGui::Text("Block Previous:");
+				ImGui::SameLine();
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s", Util::Input::KeyIdToString(menuSettings.ShaderBlockPrevKey));
+				ImGui::SameLine();
+				if (ImGui::Button("Change##ShaderBlockPrev")) {
+					menu->settingShaderBlockPrevKey = true;
+				}
+			}
+
+			// Shader Block Next Key
+			if (menu->settingShaderBlockNextKey) {
+				ImGui::Text("Press any key for Shader Block Next...");
+			} else {
+				ImGui::AlignTextToFramePadding();
+				ImGui::Text("Block Next:");
+				ImGui::SameLine();
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s", Util::Input::KeyIdToString(menuSettings.ShaderBlockNextKey));
+				ImGui::SameLine();
+				if (ImGui::Button("Change##ShaderBlockNext")) {
+					menu->settingShaderBlockNextKey = true;
+				}
+			}
+
+			ImGui::Unindent();
+		}
+	}
+
 	// Active shaders list
 	if (ImGui::CollapsingHeader("Active Shaders", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Text("Active Shaders (Used Recently)");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"List of shaders that have been used in recent frames. "
-				"Use PAGEUP/PAGEDOWN to cycle through and block shaders for debugging. "
+				"Enable Shader Blocking above to use hotkeys to cycle through and block shaders for debugging. "
 				"Shaders not used for ~1 second are removed from this list.");
 		}
 
@@ -498,5 +549,19 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 	// Developer Mode Testing Section
 	if (globals::state->IsDeveloperMode()) {
 		FeatureIssues::Test::DrawDeveloperModeTestingUI();
+
+		ImGui::Spacing();
+		// Test Conditions button - runs a set of console commands to prepare the player for testing
+		if (ImGui::Button("Test Conditions", { -1, 0 })) {
+			if (auto ui = RE::UI::GetSingleton(); ui && !ui->menuStack.empty() && RE::PlayerCharacter::GetSingleton()) {
+				RE::Console::ExecuteCommand("player.setav speedmult 1000");
+				RE::Console::ExecuteCommand("tgm");
+				RE::Console::ExecuteCommand("tcl");
+				RE::Console::ExecuteCommand("set timescale to 0");
+				RE::Console::ExecuteCommand("set gamehour to 12");
+				RE::Console::ExecuteCommand("coc whiterun");
+				RE::Console::ExecuteCommand("fw 81a");
+			}
+		}
 	}
 }
