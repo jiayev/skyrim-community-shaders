@@ -1,11 +1,8 @@
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
+#include "Common/LightingCommon.hlsli"
 #include "Common/Math.hlsli"
-#include "Common/PBR.hlsli"
 #include "Common/SharedData.hlsli"
-
-#define WATER_ROUGHNESS 0.1f
-#define WATER_F0 0.02f
 
 namespace Skin
 {
@@ -24,42 +21,6 @@ namespace Skin
 #endif
 #if defined(SKIN)
 	Texture2D<float4> TexSkinDetailNormal : register(t72);
-
-	struct SkinSurfaceProperties
-	{
-		float RoughnessPrimary;
-		float RoughnessSecondary;
-		float3 F0;
-		float SecondarySpecIntensity;
-		float Curvature;
-		float3 Albedo;
-		float Thickness;
-		float3 SubsurfaceColor;
-		float AO;
-		float FuzzRoughness;
-		float3 FuzzColor;
-		float FuzzWeight;
-		float Wetness;
-	};
-
-	SkinSurfaceProperties InitSkinSurfaceProperties()
-	{
-		SkinSurfaceProperties skin;
-		skin.RoughnessPrimary = 0.55;
-		skin.RoughnessSecondary = 0.35;
-		skin.F0 = float3(0.0278, 0.0278, 0.0278);
-		skin.SecondarySpecIntensity = 0.15;
-		skin.Curvature = 0.0;
-		skin.Albedo = float3(0.8, 0.6, 0.5);
-		skin.Thickness = 0.15;
-		skin.SubsurfaceColor = float3(0.6, 0.3, 0.2);
-		skin.AO = 0.0;
-		skin.FuzzRoughness = 0.35;
-		skin.FuzzColor = float3(0.045, 0.045, 0.045);
-		skin.FuzzWeight = 0.0;
-		skin.Wetness = 0.0;
-		return skin;
-	}
 
 	// [Jorge Jimenez, Diego Gutierrez 2015, "Separable Subsurface Scattering"]
 	// https://www.iryoku.com/separable-sss/
@@ -124,113 +85,96 @@ namespace Skin
 	}
 
 	void SkinDirectLightInput(
-		out float3 diffuse,
-		out float3 transmission,
-		out float3 specular,
-		PBR::LightProperties light,
-		SkinSurfaceProperties skin,
-		float3 N, float3 V, float3 L, float3 WN)
+		out DirectLightingOutput lightingOutput,
+		DirectContext context,
+		MaterialProperties material)
 	{
-		diffuse = 0;
-		transmission = 0;
-		specular = 0;
+		lightingOutput = (DirectLightingOutput)0;
+		context.lightColor *= Color::PBRLightingCompensation;
 
-		light.LightColor *= Color::PBRLightingCompensation;
-
-		float3 H = normalize(V + L);
+		const float3 N = context.worldNormal;
+		const float3 V = context.viewDir;
+		const float3 L = context.lightDir;
+		const float3 H = context.halfVector;
+	
 		const float oNdotL = dot(N, L);
 		float NdotL = clamp(oNdotL, 1e-5, 1.0);
 		float NdotV = saturate(abs(dot(N, V)) + 1e-5);
 		float NdotH = saturate(dot(N, H));
 		float VdotH = saturate(dot(V, H));
-		float VdotL = dot(V, L);
-		float oVdotH = VdotH;
 
-		light.LightColor *= ApproximateDirectOcculusion(skin.AO, NdotL);
+		context.lightColor *= ApproximateDirectOcculusion(material.AO, NdotL);
 
-		float averageRoughness = lerp(skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity);
+		float averageRoughness = lerp(material.Roughness, material.RoughnessSecondary, material.SecondarySpecIntensity);
 
-		diffuse += light.LightColor * NdotL * BRDF::Diffuse_Burley(averageRoughness, NdotV, NdotL, VdotH);
-
+		lightingOutput.diffuse += context.lightColor * NdotL * BRDF::Diffuse_Burley(averageRoughness, NdotV, NdotL, VdotH);
 		float3 F;
-		float3 F0 = skin.F0 * saturate(1 - skin.Curvature);
+		float3 F0 = material.F0 * saturate(1 - material.Curvature);
 
-		specular += GetDualSpecularGGX(averageRoughness, skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity, F0, NdotL, NdotV, NdotH, VdotH, F) * light.LightColor * NdotL;
+		lightingOutput.specular += GetDualSpecularGGX(averageRoughness, material.Roughness, material.RoughnessSecondary, material.SecondarySpecIntensity, F0, NdotL, NdotV, NdotH, VdotH, F) * context.lightColor * NdotL;
 
 		float2 specularBRDF = BRDF::EnvBRDF(averageRoughness, NdotV);
-		specular *= 1 + F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
+		lightingOutput.specular *= 1 + F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
 
-		if (skin.FuzzWeight > 0.0) {
-			float3 FuzzF0 = skin.FuzzColor * saturate(1 - skin.Curvature);
-			float3 fuzzSpecular = PBR::GetSpecularDirectLightMultiplierMicroflakes(skin.FuzzRoughness, FuzzF0, NdotL, NdotV, NdotH, VdotH) * light.LightColor * NdotL;
-			float2 fuzzSpecularBRDF = BRDF::EnvBRDFApproxLazarov(skin.FuzzRoughness, NdotV);
-			fuzzSpecular *= 1 + skin.FuzzColor * (1 / (fuzzSpecularBRDF.x + fuzzSpecularBRDF.y) - 1);
+		if (material.FuzzWeight > 0.0) {
+			float3 FuzzF0 = material.FuzzColor * saturate(1 - material.Curvature);
+			float fuzzD = BRDF::D_Charlie(material.FuzzRoughness, NdotH);
+			float fuzzG = BRDF::Vis_Neubelt(NdotV, NdotL);
+			float3 fuzzF = BRDF::F_Schlick(FuzzF0, VdotH);
+			float3 fuzzSpecular = fuzzD * fuzzG * fuzzF * context.lightColor * NdotL;
+			float2 fuzzSpecularBRDF = BRDF::EnvBRDFApproxLazarov(material.FuzzRoughness, NdotV);
+			fuzzSpecular *= 1 + material.FuzzColor * (1 / (fuzzSpecularBRDF.x + fuzzSpecularBRDF.y) - 1);
 
-			specular += fuzzSpecular * skin.FuzzWeight;
+			lightingOutput.specular += fuzzSpecular * material.FuzzWeight;
 		}
 
-		if (skin.Wetness > 0.0) {
-			float3 wetnessF;
-			float WNdotL = clamp(dot(WN, L), 1e-5, 1.0);
-			float WNdotV = saturate(abs(dot(WN, V)) + 1e-5);
-			float WNdotH = saturate(dot(WN, H));
-
-			float3 wetSpecular = PBR::GetSpecularDirectLightMultiplierMicrofacet(WATER_ROUGHNESS, WATER_F0, WNdotL, WNdotV, WNdotH, oVdotH, wetnessF) * light.LightColor * WNdotL;
-			float2 wetSpecularBRDF = BRDF::EnvBRDFApproxLazarov(WATER_ROUGHNESS, WNdotV);
-			wetSpecular *= 1 + WATER_F0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
-			const float waterTransmission = 1 - wetnessF.x;
-			specular *= waterTransmission;
-			specular += wetSpecular;
-			diffuse *= waterTransmission;
-		}
+		float3 sssTransmittance = SSSSTransmittance(
+								SharedData::skinData.sssParams.x,
+								SharedData::skinData.sssParams.y,
+								N,
+								L,
+								material.Thickness) *
+							SharedData::skinData.sssParams.w;
+		lightingOutput.transmission = min(sssTransmittance * context.lightColor * material.BaseColor, context.lightColor);
 	}
 
 	void SkinIndirectLobeWeights(
-		out float3 diffuseWeight,
-		out float3 specularWeight,
-		SkinSurfaceProperties skin,
-		float3 N, float3 V, float3 VN, float3 WN)
+		out IndirectLobeWeights lobeWeights,
+		MaterialProperties material,
+		IndirectContext context)
 	{
-		float NdotV = saturate(dot(N, V));
-		specularWeight = 0;
+		lobeWeights = (IndirectLobeWeights)0;
 
-		float averageRoughness = lerp(skin.RoughnessPrimary, skin.RoughnessSecondary, skin.SecondarySpecIntensity);
+		const float3 N = context.worldNormal;
+		const float3 V = context.viewDir;
+		const float3 VN = context.vertexNormal;
+
+		float NdotV = saturate(dot(N, V));
+
+		float averageRoughness = lerp(material.Roughness, material.RoughnessSecondary, material.SecondarySpecIntensity);
 
 		float2 specularBRDF = BRDF::EnvBRDF(averageRoughness, NdotV);
 
-		specularWeight = skin.F0 * specularBRDF.x + specularBRDF.y;
+		lobeWeights.specular = material.F0 * specularBRDF.x + specularBRDF.y;
 
-		float waterTransmission = 1.f;
-		float3 wetSpecular = 0.f;
-
-		if (skin.Wetness > 0.0) {
-			float WNdotV = saturate(dot(WN, V));
-			float2 wetSpecularBRDF = BRDF::EnvBRDF(WATER_ROUGHNESS, WNdotV);
-			wetSpecular += WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y;
-			wetSpecular *= 1 + WATER_F0 * (1 / (wetSpecularBRDF.x + wetSpecularBRDF.y) - 1);
-			waterTransmission = 1 - (WATER_F0 * wetSpecularBRDF.x + wetSpecularBRDF.y);
-		}
-
-		diffuseWeight = skin.Albedo * (1.0 - specularWeight.x - specularWeight.y) * waterTransmission;
-		specularWeight *= waterTransmission;
-		specularWeight *= 1 + skin.F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
-		specularWeight += wetSpecular;
+		lobeWeights.diffuse = material.BaseColor * (1.0 - lobeWeights.specular.x - lobeWeights.specular.y);
+		lobeWeights.specular *= 1 + material.F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
 
 		float3 R = reflect(-V, N);
 		float horizon = min(1.0 + dot(R, VN), 1.0);
 		horizon *= horizon;
-		specularWeight *= horizon;
+		lobeWeights.specular *= horizon;
 
-		float3 diffuseAO = skin.AO;
-		float3 specularAO = Color::SpecularAOLagarde(NdotV, skin.AO, averageRoughness);
+		float3 diffuseAO = material.AO;
+		float3 specularAO = Color::SpecularAOLagarde(NdotV, material.AO, averageRoughness);
 
-		diffuseAO = Color::MultiBounceAO(skin.Albedo, diffuseAO.x).y;
-		specularAO = Color::MultiBounceAO(skin.F0, specularAO.x).y;
+		diffuseAO = Color::MultiBounceAO(material.BaseColor, diffuseAO.x).y;
+		specularAO = Color::MultiBounceAO(material.F0, specularAO.x).y;
 
-		diffuseWeight *= diffuseAO;
-		specularWeight *= specularAO;
+		lobeWeights.diffuse *= diffuseAO;
+		lobeWeights.specular *= specularAO;
 
-		specularWeight *= saturate(1 - skin.Curvature);
+		lobeWeights.specular *= saturate(1 - material.Curvature);
 	}
 
 	// https://blog.selfshadow.com/publications/blending-in-detail/
