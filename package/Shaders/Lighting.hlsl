@@ -1859,6 +1859,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	shininess = lerp(shininess, shininess * complexMaterialColor.y, complexMaterial);
 	if (complexMaterial) {
 		complexSpecular = lerp(1.0, baseColor.xyz, complexMaterialColor.z);
+#		if defined(VANILLA_FRESNEL)
+		complexSpecular = saturate(complexSpecular * (SharedData::vanillaFresnelSettings.Enable ? SharedData::vanillaFresnelSettings.ComplexMaterialF0Multiplier : 1.0));
+#		endif
 		baseColor.xyz = lerp(baseColor.xyz, 0.0, complexMaterialColor.z);
 
 	}
@@ -2184,6 +2187,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(BACK_LIGHTING)
 	material.backLightColor = backLightColor.xyz;
 #		endif
+
+#		if defined(VANILLA_FRESNEL)
+	const bool enableVanillaFresnel = SharedData::vanillaFresnelSettings.Enable;
+	material.F0 = enableVanillaFresnel ? SharedData::vanillaFresnelSettings.MinF0 : 0.0;
+#			if defined(EYE)
+	if (enableVanillaFresnel) {
+		material.F0 = 0.027;
+		material.Roughness = 0.1;
+	}
+#			elif defined(SPECULAR)
+	if (enableVanillaFresnel) {
+		material.F0 = saturate(glossiness * SpecularColor.xyz / Math::PI);
+		material.Roughness = ShininessToRoughness(material.Shininess);
+	}
+#			endif
+	material.F0 = max((enableVanillaFresnel ? SharedData::vanillaFresnelSettings.MinF0 : 0.0), material.F0 * SharedData::vanillaFresnelSettings.BaseF0Multiplier);
+	const float3 baseF0 = material.F0;
+#		endif  // VANILLA_FRESNEL
 #	endif  // TRUE_PBR
 
 #	if defined(CS_HAIR) && defined(HAIR)
@@ -2221,8 +2242,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		uint2 envSize;
 		TexEnvSampler.GetDimensions(envSize.x, envSize.y);
 
-#			if defined(EMAT)
+#			if defined(EMAT) && !defined(VANILLA_FRESNEL)
 		if (envSize.x == 1 && envSize.y == 1 || complexMaterial) {
+#			elif defined(VANILLA_FRESNEL)
+		bool vfStartDynamicCubemapTest = (enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableDynamicCubemapsConversion);
+#				if defined(EMAT)
+		vfStartDynamicCubemapTest = complexMaterial || vfStartDynamicCubemapTest;
+#				endif
+		if (vfStartDynamicCubemapTest || (envSize.x == 1 && envSize.y == 1)) {
 #			else
 		if (envSize.x == 1 && envSize.y == 1) {
 #			endif
@@ -2244,6 +2271,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			}
 #			endif
 
+#			if defined(VANILLA_FRESNEL)
+			dynamicCubemap = dynamicCubemap || (SharedData::vanillaFresnelSettings.EnableDynamicCubemapsConversion && enableVanillaFresnel);
+			const float originRoughness = material.Roughness;
+#			endif
+
 			if (dynamicCubemap) {
 				float4 envColorBase = TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 15);
 
@@ -2251,8 +2283,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 					material.F0 = Color::GammaToLinear(envColorBase.rgb);
 					material.Roughness = envColorBase.a;
 				} else {
+#			if defined(VANILLA_FRESNEL)
+					material.F0 = saturate(Color::GammaToLinear(envColorBase.rgb) * Math::PI * SharedData::vanillaFresnelSettings.CubemapToF0Multiplier);
+					material.Roughness = material.Roughness;
+#			else
 					material.F0 = 1.0;
 					material.Roughness = 1.0 / 7.0;
+#			endif
 				}
 
 #			if defined(CREATOR)
@@ -2267,7 +2304,32 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				material.Roughness = lerp(material.Roughness, complexMaterialRoughness, complexMaterial);
 				material.F0 = lerp(material.F0, complexSpecular, complexMaterial);
 #			endif
+
+				envMask = saturate(envMask);
+#			if defined(VANILLA_FRESNEL)
+				if (enableVanillaFresnel) {
+#				if defined(SPECULAR)
+					material.F0 = max(lerp(baseF0, material.F0, envMask), SharedData::vanillaFresnelSettings.MinF0);
+#				else
+					material.F0 = max(lerp(0, material.F0, envMask), SharedData::vanillaFresnelSettings.MinF0);
+#				endif
+#				if defined(EMAT)
+					if (!complexMaterial)
+#				endif
+					material.Roughness = lerp(originRoughness, material.Roughness, envMask);
+				}
+#			endif
 			}
+		}
+#		endif
+
+#		if defined(VANILLA_FRESNEL) && !defined(TRUE_PBR)
+		if (enableVanillaFresnel) {
+#			if defined(EYE)
+			material.F0 = 0.027;
+			material.Roughness = 0.1;
+#			endif
+			material.Roughness = clamp(material.Roughness * SharedData::vanillaFresnelSettings.RoughnessMultiplier, 0.04, 1.0);
 		}
 #		endif
 
@@ -2872,6 +2934,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	endif
 #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
+#		if defined(VANILLA_FRESNEL)
+	if (!enableVanillaFresnel)
+#		endif
 	indirectLobeWeights.specular *= envMask;
 #	endif
 
@@ -2937,10 +3002,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(DYNAMIC_CUBEMAPS)
 	if (!dynamicCubemap)
 #		endif
+#		if defined(VANILLA_FRESNEL)
+	if (!(enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableDynamicCubemapsConversion))
+#		endif
 		specularColor += envColor * Color::IrradianceToLinear(diffuseColor);
 #	endif
 
 #	if defined(EMAT_ENVMAP)
+#		if defined(VANILLA_FRESNEL)
+	if (!(enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableGGX))
+#		endif
 	specularColor *= complexSpecular;
 #	endif  // defined (EMAT) && defined(ENVMAP)
 

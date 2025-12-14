@@ -234,6 +234,20 @@ namespace SharedData
 		float otherEffectMult;
 	};
 
+	struct VanillaFresnelSettings
+	{
+		uint Enable;
+		uint EnableGGX;
+		uint EnableGGXOnGrass;
+		uint EnableDynamicCubemapsConversion;
+		float RoughnessMultiplier;
+		float BaseF0Multiplier;
+		float MinF0;
+		float CubemapToF0Multiplier;
+		float ComplexMaterialF0Multiplier;
+		float3 pad;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -250,6 +264,7 @@ namespace SharedData
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
+		VanillaFresnelSettings vanillaFresnelSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

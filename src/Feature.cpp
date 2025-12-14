@@ -27,6 +27,7 @@
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
 #include "Features/Upscaling.h"
+#include "Features/VanillaFresnel.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
@@ -219,6 +220,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::skySync,
 		&globals::features::terrainBlending,
 		&globals::features::terrainHelper,
+		&globals::features::vanillaFresnel,
 		&globals::features::volumetricLighting,
 		&globals::features::lodBlending,
 		&globals::features::inverseSquareLighting,
