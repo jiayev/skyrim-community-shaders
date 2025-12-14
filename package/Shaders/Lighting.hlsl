@@ -928,6 +928,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		define ANISOTROPIC_ALPHA
 #	endif
 
+#	if defined(PSEUDO_SUN_BOUNCE)
+#		include "PseudoSunBounce/sunbounce.hlsli"
+#	endif
+
 #	define LinearSampler SampColorSampler
 
 #	include "Common/ShadowSampling.hlsli"
@@ -2765,6 +2769,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			iblColor = Color::LinearToGamma(iblColor);
 			directionalAmbientColor += iblColor;
 		}
+	}
+#	endif
+
+#	if defined(PSEUDO_SUN_BOUNCE)
+	if (!SharedData::InInterior && inWorld) {
+		SH2_RGB sunBounceSH = SunBounce::CalcSunBounceSH(SharedData::DirLightDirection.xyz, SharedData::DirLightColor.xyz, GROUND_ALBEDO, WALL_ALBEDO);
+
+		float3 bounceLighting;
+		bounceLighting.r = SphericalHarmonics::Unproject(sunBounceSH.R, worldNormal.xyz);
+		bounceLighting.g = SphericalHarmonics::Unproject(sunBounceSH.G, worldNormal.xyz);
+		bounceLighting.b = SphericalHarmonics::Unproject(sunBounceSH.B, worldNormal.xyz);
+
+		bounceLighting = max(0, bounceLighting);
+#		if defined(SKYLIGHTING)
+		bounceLighting *= Color::MultiBounceAO(1.0.xxx, skylightingDiffuse);
+#		endif
+
+		directionalAmbientColor += bounceLighting;
 	}
 #	endif
 
