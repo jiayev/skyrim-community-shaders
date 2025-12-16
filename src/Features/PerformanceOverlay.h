@@ -129,6 +129,10 @@ struct PerformanceOverlay : OverlayFeature
 	virtual void DrawSettings() override;
 	virtual void DataLoaded() override;
 	void DrawOverlay() override;
+	// Settings persistence and defaults
+	void SaveSettings(json& j) override;
+	void LoadSettings(json& j) override;
+	void RestoreDefaultSettings() override;
 
 	// ============================================================================
 	// CORE PERFORMANCE DISPLAY FUNCTIONS
@@ -159,7 +163,7 @@ struct PerformanceOverlay : OverlayFeature
 	// ============================================================================
 	// A/B TESTING FUNCTIONS
 	// ============================================================================
-	void DrawABTestSection(const std::vector<DrawCallRow>& allRows, bool showCollapsibleSections);
+	void DrawABTestSection(const std::vector<DrawCallRow>& allRows);
 	void DrawABTestResultsTable();
 	void DrawABTestStatisticalValidity(const Menu::ThemeSettings& theme, const ABTestAggregator& aggregator) const;
 	void ConvertABTestResultsToRows(const std::vector<AggregatedDrawCallStats>& results, std::vector<DrawCallRow>& mainRows, std::vector<DrawCallRow>& summaryRows) const;

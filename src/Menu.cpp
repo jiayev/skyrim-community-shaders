@@ -3,12 +3,20 @@
 #ifndef DIRECTINPUT_VERSION
 #	define DIRECTINPUT_VERSION 0x0800
 #endif
+#include <algorithm>
+#include <cmath>
 #include <dinput.h>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
+#include <iomanip>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "Deferred.h"
 #include "Feature.h"
@@ -16,8 +24,11 @@
 #include "FeatureVersions.h"
 #include "Features/Upscaling.h"
 #include "Menu/AdvancedSettingsRenderer.h"
+#include "Menu/BackgroundBlur.h"
 #include "Menu/FeatureListRenderer.h"
+#include "Menu/Fonts.h"
 #include "Menu/HomePageRenderer.h"
+#include "Menu/IconLoader.h"
 #include "Menu/MenuHeaderRenderer.h"
 #include "Menu/OverlayRenderer.h"
 #include "Menu/SettingsTabRenderer.h"
@@ -28,7 +39,6 @@
 #include "Util.h"
 #include "Utils/UI.h"
 
-#include "Features/LightLimitFix/ParticleLights.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
@@ -39,7 +49,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
 	Background,
 	Text,
-	Border)
+	WindowBorder,
+	FrameBorder,
+	Separator,
+	ResizeGrip)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::StatusPaletteColors,
@@ -56,6 +69,20 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ColorDefault,
 	ColorHovered,
 	MinimizedFactor)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Menu::ThemeSettings::ScrollbarOpacitySettings,
+	Background,
+	Thumb,
+	ThumbHovered,
+	ThumbActive)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Menu::ThemeSettings::FontRoleSettings,
+	Family,
+	Style,
+	File,
+	SizeScale)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ImGuiStyle,
@@ -97,10 +124,18 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings,
 	FontSize,
+	FontName,
 	GlobalScale,
+	FontRoles,
 	UseSimplePalette,
 	ShowActionIcons,
+	UseMonochromeIcons,
+	UseMonochromeLogo,
+	ShowFooter,
+	CenterHeader,
 	TooltipHoverDelay,
+	BackgroundBlurEnabled,
+	ScrollbarOpacity,
 	Palette,
 	StatusPalette,
 	FeatureHeading,
@@ -113,10 +148,35 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkipCompilationKey,
 	EffectToggleKey,
 	OverlayToggleKey,
-	Theme)
+	ShaderBlockPrevKey,
+	ShaderBlockNextKey,
+	EnableShaderBlocking,
+	FirstTimeSetupCompleted,
+	Theme,
+	SelectedThemePreset)
 
 bool IsEnabled = false;
 std::unordered_map<std::string, int> Menu::categoryCounts;
+
+std::optional<Menu::FontRole> Menu::ResolveFontRole(std::string_view key)
+{
+	for (size_t i = 0; i < FontRoleDescriptors.size(); ++i) {
+		if (FontRoleDescriptors[i].key == key) {
+			return static_cast<FontRole>(i);
+		}
+	}
+	return std::nullopt;
+}
+
+std::string Menu::BuildFontSignature(float baseFontSize) const
+{
+	return MenuFonts::BuildFontSignature(settings.Theme, baseFontSize);
+}
+
+const Menu::ThemeSettings::FontRoleSettings& Menu::GetDefaultFontRole(FontRole role)
+{
+	return MenuFonts::GetDefaultRole(role);
+}
 
 Menu::~Menu()
 {  // Release icon textures if loaded
@@ -124,6 +184,7 @@ Menu::~Menu()
 	uiIcons.loadSettings.Release();
 	uiIcons.clearCache.Release();
 	uiIcons.logo.Release();
+	uiIcons.featureSettingRevert.Release();
 	uiIcons.discord.Release();
 	uiIcons.characters.Release();
 	uiIcons.display.Release();
@@ -136,6 +197,9 @@ Menu::~Menu()
 	uiIcons.materials.Release();
 	uiIcons.postProcessing.Release();
 
+	// Clean up blur resources
+	BackgroundBlur::Cleanup();
+
 	ImGui_ImplDX11_Shutdown();
 	ImGui_ImplWin32_Shutdown();
 	ImGui::DestroyContext();
@@ -147,11 +211,264 @@ Menu::~Menu()
 void Menu::Load(json& o_json)
 {
 	settings = o_json;
+	bool hasThemeObject = o_json.contains("Theme") && o_json["Theme"].is_object();
+	bool hasFontRoles = hasThemeObject && o_json["Theme"].contains("FontRoles");
+	MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
+	auto& bodyRole = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)];
+	if (!Util::ValidateFont(bodyRole.File)) {
+		const auto& defaults = Menu::GetDefaultFontRole(FontRole::Body);
+		logger::warn("Font '{}' not found while loading settings, falling back to default font '{}'",
+			bodyRole.File, defaults.File);
+		settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)] = defaults;
+		settings.Theme.FontName = defaults.File;
+	}
+
+	// Apply Default Dark theme on first launch if no theme is selected
+	if (!settings.FirstTimeSetupCompleted && settings.SelectedThemePreset.empty()) {
+		// Ensure default themes are created/available
+		CreateDefaultThemes();
+
+		// Load the Default Dark theme and mark it as selected to prevent override
+		if (LoadThemePreset("Default")) {
+			settings.SelectedThemePreset = "Default";  // Mark as selected to prevent State::LoadTheme override
+			logger::info("Applied Default Dark theme on first launch");
+		} else {
+			logger::warn("Failed to load Default Dark theme on first launch");
+		}
+	}
 }
 
 void Menu::Save(json& o_json)
 {
+	settings.Theme.FontName = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)].File;
 	o_json = settings;
+}
+
+void Menu::LoadTheme(json& o_json)
+{
+	if (o_json["Theme"].is_object()) {
+		bool hasFontRoles = o_json["Theme"].contains("FontRoles");
+		settings.Theme = o_json["Theme"];
+		MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
+
+		auto& bodyRole = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)];
+		if (!Util::ValidateFont(bodyRole.File)) {
+			const auto& defaults = Menu::GetDefaultFontRole(FontRole::Body);
+			logger::warn("Font '{}' not found, falling back to default font '{}'",
+				bodyRole.File, defaults.File);
+			settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)] = defaults;
+			settings.Theme.FontName = defaults.File;
+		}
+
+		// Apply background blur enabled state from theme
+		BackgroundBlur::SetEnabled(settings.Theme.BackgroundBlurEnabled);
+	}
+}
+void Menu::SaveTheme(json& o_json)
+{
+	settings.Theme.FontName = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)].File;
+
+	if (!Util::ValidateFont(settings.Theme.FontName)) {
+		const auto& defaults = Menu::GetDefaultFontRole(FontRole::Body);
+		logger::warn("Font '{}' not found during save, falling back to default font '{}'",
+			settings.Theme.FontName, defaults.File);
+		settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)] = defaults;
+		settings.Theme.FontName = defaults.File;
+	}
+
+	o_json["Theme"] = settings.Theme;
+}
+
+std::vector<std::string> Menu::DiscoverThemes()
+{
+	auto themeManager = ThemeManager::GetSingleton();
+	if (themeManager) {
+		themeManager->DiscoverThemes();
+		return themeManager->GetThemeNames();
+	}
+	return {};
+}
+
+bool Menu::LoadThemePreset(const std::string& themeName)
+{
+	if (themeName.empty()) {
+		// Empty theme name means custom/user theme
+		settings.SelectedThemePreset = "";
+		return true;
+	}
+
+	auto themeManager = ThemeManager::GetSingleton();
+	json themeSettings;
+
+	if (themeManager->LoadTheme(themeName, themeSettings)) {
+		try {
+			// Create a backup of current theme in case loading fails
+			ThemeSettings backupTheme = settings.Theme;
+			ThemeSettings defaultTheme;  // For fallback values
+
+			bool hasFontRoles = themeSettings.contains("FontRoles");
+
+			// Attempt to load theme with protection against malformed data
+			try {
+				settings.Theme = themeSettings;
+			} catch (const json::out_of_range& e) {
+				// Most likely FullPalette array size mismatch
+				logger::warn("Theme '{}' has incomplete data ({}). Loading with defaults for missing fields.", themeName, e.what());
+
+				// Manually load fields that exist, use defaults for missing ones
+				if (themeSettings.contains("FontSize")) {
+					try {
+						settings.Theme.FontSize = themeSettings["FontSize"];
+					} catch (...) {}
+				}
+				if (themeSettings.contains("FontName")) {
+					try {
+						settings.Theme.FontName = themeSettings["FontName"];
+					} catch (...) {}
+				}
+				if (themeSettings.contains("GlobalScale")) {
+					try {
+						settings.Theme.GlobalScale = themeSettings["GlobalScale"];
+					} catch (...) {}
+				}
+				if (themeSettings.contains("FontRoles")) {
+					try {
+						settings.Theme.FontRoles = themeSettings["FontRoles"];
+					} catch (...) {}
+				}
+				if (themeSettings.contains("ShowActionIcons")) {
+					try {
+						settings.Theme.ShowActionIcons = themeSettings["ShowActionIcons"];
+					} catch (...) {}
+				}
+				if (themeSettings.contains("UseMonochromeIcons")) {
+					try {
+						settings.Theme.UseMonochromeIcons = themeSettings["UseMonochromeIcons"];
+					} catch (...) {}
+				}
+				if (themeSettings.contains("UseMonochromeLogo")) {
+					try {
+						settings.Theme.UseMonochromeLogo = themeSettings["UseMonochromeLogo"];
+					} catch (...) {}
+				}
+				if (themeSettings.contains("TooltipHoverDelay")) {
+					try {
+						settings.Theme.TooltipHoverDelay = themeSettings["TooltipHoverDelay"];
+					} catch (...) {}
+				}
+				if (themeSettings.contains("BackgroundBlurEnabled")) {
+					try {
+						settings.Theme.BackgroundBlurEnabled = themeSettings["BackgroundBlurEnabled"];
+					} catch (...) {}
+				}
+				if (themeSettings.contains("ScrollbarOpacity")) {
+					try {
+						settings.Theme.ScrollbarOpacity = themeSettings["ScrollbarOpacity"];
+					} catch (...) {}
+				}
+				if (themeSettings.contains("Palette")) {
+					try {
+						settings.Theme.Palette = themeSettings["Palette"];
+					} catch (...) {}
+				}
+				if (themeSettings.contains("StatusPalette")) {
+					try {
+						settings.Theme.StatusPalette = themeSettings["StatusPalette"];
+					} catch (...) {}
+				}
+				if (themeSettings.contains("FeatureHeading")) {
+					try {
+						settings.Theme.FeatureHeading = themeSettings["FeatureHeading"];
+					} catch (...) {}
+				}
+				if (themeSettings.contains("Style")) {
+					try {
+						settings.Theme.Style = themeSettings["Style"];
+					} catch (...) {}
+				}
+
+				// Handle FullPalette with extra care
+				if (themeSettings.contains("FullPalette") && themeSettings["FullPalette"].is_array()) {
+					const auto& paletteJson = themeSettings["FullPalette"];
+					size_t jsonSize = paletteJson.size();
+					size_t requiredSize = settings.Theme.FullPalette.size();  // Should be ImGuiCol_COUNT (55)
+
+					if (jsonSize < requiredSize) {
+						logger::warn("Theme '{}' FullPalette has {} elements, expected {}. Using defaults for missing colors.",
+							themeName, jsonSize, requiredSize);
+					}
+
+					// Load colors that exist, use defaults for the rest
+					for (size_t i = 0; i < requiredSize; ++i) {
+						if (i < jsonSize) {
+							try {
+								if (paletteJson[i].is_array() && paletteJson[i].size() >= 4) {
+									settings.Theme.FullPalette[i] = ImVec4(
+										paletteJson[i][0].get<float>(),
+										paletteJson[i][1].get<float>(),
+										paletteJson[i][2].get<float>(),
+										paletteJson[i][3].get<float>());
+								} else {
+									settings.Theme.FullPalette[i] = defaultTheme.FullPalette[i];
+								}
+							} catch (...) {
+								settings.Theme.FullPalette[i] = defaultTheme.FullPalette[i];
+							}
+						} else {
+							settings.Theme.FullPalette[i] = defaultTheme.FullPalette[i];
+						}
+					}
+				} else {
+					// FullPalette missing, use all defaults
+					logger::warn("Theme '{}' missing FullPalette array, using defaults", themeName);
+					settings.Theme.FullPalette = defaultTheme.FullPalette;
+				}
+			} catch (const std::exception& e) {
+				logger::error("Error loading theme '{}': {}. Using previous theme.", themeName, e.what());
+				settings.Theme = backupTheme;
+				return false;
+			}
+
+			MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
+			auto& bodyRole = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)];
+			if (!Util::ValidateFont(bodyRole.File)) {
+				const auto& defaults = Menu::GetDefaultFontRole(FontRole::Body);
+				logger::warn("Font '{}' from theme '{}' not found, falling back to default font '{}'",
+					bodyRole.File, themeName, defaults.File);
+				settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)] = defaults;
+				settings.Theme.FontName = defaults.File;
+			}
+
+			settings.SelectedThemePreset = themeName;
+
+			// Schedule deferred font reload if font has changed
+			if (settings.Theme.FontName != cachedFontName) {
+				pendingFontReload = true;
+			}
+
+			// Schedule deferred icon reload to apply theme-specific icon overrides
+			pendingIconReload = true;
+
+			// Apply background blur enabled state from theme
+			BackgroundBlur::SetEnabled(settings.Theme.BackgroundBlurEnabled);
+
+			logger::info("Loaded theme preset: {}", themeName);
+			return true;
+		} catch (const std::exception& e) {
+			logger::error("Fatal error loading theme '{}': {}.", themeName, e.what());
+			return false;
+		}
+	} else {
+		logger::warn("Failed to load theme preset: {}", themeName);
+		return false;
+	}
+}
+
+void Menu::CreateDefaultThemes()
+{
+	// Use ThemeManager to create default theme files
+	auto themeManager = ThemeManager::GetSingleton();
+	themeManager->CreateDefaultThemeFiles();
 }
 
 void Menu::Init()
@@ -159,6 +476,23 @@ void Menu::Init()
 	// Setup Dear ImGui context
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
+
+	// IMPORTANT: Immediately override ImGui's default styles with our Default.json theme
+	// This prevents hardcoded ImGui defaults from ever showing through
+	auto* themeManager = ThemeManager::GetSingleton();
+	json defaultThemeSettings;
+	if (themeManager->LoadTheme("Default", defaultThemeSettings)) {
+		// Temporarily create a minimal theme structure to apply defaults
+		json tempSettings;
+		tempSettings["Theme"] = defaultThemeSettings;
+		LoadTheme(tempSettings);
+		logger::info("Applied Default.json theme immediately after ImGui context creation");
+	} else {
+		logger::warn("Could not load Default.json theme - trying direct force application");
+		// Last resort: Apply Default.json colors directly to ImGui
+		ThemeManager::ForceApplyDefaultTheme();
+	}
+
 	auto& imgui_io = ImGui::GetIO();
 	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_DockingEnable;
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_HasGamepad;
@@ -166,40 +500,14 @@ void Menu::Init()
 	cachedIniPath = Util::PathHelpers::GetImGuiIniPath().string();
 	imgui_io.IniFilename = cachedIniPath.c_str();
 
-	// Enhanced font configuration for sharper text rendering
-	ImFontConfig font_config;
-	font_config.OversampleH = ThemeManager::Constants::FCONF_OVERSAMPLE_H;
-	font_config.OversampleV = ThemeManager::Constants::FCONF_OVERSAMPLE_V;
-	font_config.PixelSnapH = ThemeManager::Constants::FCONF_PIXELSNAP_H;
-	font_config.RasterizerMultiply = ThemeManager::Constants::FCONF_RASTERIZER_MULTIPLY;
-
 	DXGI_SWAP_CHAIN_DESC desc{};
 	globals::d3d::swapChain->GetDesc(&desc);
-
-	float fontSize = settings.Theme.FontSize;
-
-	if (std::round(fontSize) != std::round(ThemeManager::Constants::DEFAULT_FONT_SIZE)) {
-		if (globals::state->screenSize.y > 0) {
-			fontSize = globals::state->screenSize.y * ThemeManager::Constants::DEFAULT_FONT_RATIO;
-		} else {
-			logger::warn("Menu::Init() - Failed to get game resolution from globals::state->screenSize.");
-		}
-	}
-
-	fontSize = std::clamp(fontSize, ThemeManager::Constants::MIN_FONT_SIZE, ThemeManager::Constants::MAX_FONT_SIZE);
-
-	auto fontPath = Util::PathHelpers::GetFontsPath() / "Jost-Regular.ttf";
-	if (!imgui_io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(),
-			std::round(fontSize), &font_config)) {
-		logger::warn("Menu::Init() - Failed to load custom font. Using default font.");
-		imgui_io.Fonts->AddFontDefault();
-	}
-
-	imgui_io.FontGlobalScale = exp2(settings.Theme.GlobalScale);
 
 	// Setup Platform/Renderer backends
 	ImGui_ImplWin32_Init(desc.OutputWindow);
 	ImGui_ImplDX11_Init(globals::d3d::device, globals::d3d::context);
+
+	ThemeManager::ReloadFont(*this, cachedFontSize);
 
 	{
 		winrt::com_ptr<IDXGIDevice> dxgiDevice;
@@ -213,6 +521,11 @@ void Menu::Init()
 	// Load UI icons
 	if (!Util::InitializeMenuIcons(this)) {
 		logger::warn("Menu::Init() - Failed to load UI icons. Will fallback to text buttons");
+	}
+
+	// Initialize background blur system
+	if (!BackgroundBlur::Initialize()) {
+		logger::warn("Menu::Init() - Failed to initialize background blur system");
 	}
 
 	BuildCategoryCounts();
@@ -243,6 +556,10 @@ void Menu::DrawSettings()
 		OnFocusChanged();
 		focusChanged = false;
 	}
+
+	// Apply theme styling with universal contrast enhancement
+	ThemeManager::SetupImGuiStyle(*this);
+
 	ImGui::DockSpaceOverViewport(NULL, ImGuiDockNodeFlags_PassthruCentralNode);
 
 	ImGui::SetNextWindowPos(Util::GetNativeViewportSizeScaled(0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
@@ -266,7 +583,14 @@ void Menu::DrawSettings()
 		bool isDocked = ImGui::IsWindowDocked();
 		wasDocked = isDocked;
 
-		const float uiScale = exp2(settings.Theme.GlobalScale);  // Get current UI scale
+		float globalScale = settings.Theme.GlobalScale;
+
+		// Use default global scale (0.0) for built-in themes when GlobalScale equals the default
+		if (std::abs(globalScale - ThemeManager::Constants::DEFAULT_GLOBAL_SCALE) < 0.001f) {
+			globalScale = ThemeManager::Constants::DEFAULT_GLOBAL_SCALE;  // Ensure built-in themes stay at 0.0
+		}
+
+		const float uiScale = exp2(globalScale);  // Get current UI scale
 		// Check if we can show icons - require setting enabled and at least some icons loaded (for undocked)
 		// For docked mode, always show icons if textures are available
 		bool canShowIcons = settings.Theme.ShowActionIcons &&
@@ -280,7 +604,9 @@ void Menu::DrawSettings()
 
 		// Main content starts here - no additional separator needed as it's already handled in the conditions above
 
-		float footer_height = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y * 3 + 3.0f;  // text + separator
+		float footer_height = settings.Theme.ShowFooter ?
+		                          (ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y * 3 + 3.0f) :
+		                          0.0f;
 
 		// Static storage for menu state - must persist across frames
 		static size_t selectedMenu = 0;
@@ -296,11 +622,12 @@ void Menu::DrawSettings()
 			[&]() { DrawGeneralSettings(); },
 			[&]() { DrawAdvancedSettings(); });
 
-		ImGui::Spacing();
-		ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, ThemeManager::Constants::SEPARATOR_THICKNESS);
-		ImGui::Spacing();
-
-		DrawFooter();
+		if (settings.Theme.ShowFooter) {
+			ImGui::Spacing();
+			ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, ThemeManager::Constants::SEPARATOR_THICKNESS);
+			ImGui::Spacing();
+			DrawFooter();
+		}
 	}
 	ImGui::End();
 }
@@ -319,7 +646,9 @@ void Menu::DrawGeneralSettings()
 		.settingToggleKey = settingToggleKey,
 		.settingsEffectsToggle = settingsEffectsToggle,
 		.settingSkipCompilationKey = settingSkipCompilationKey,
-		.settingOverlayToggleKey = settingOverlayToggleKey
+		.settingOverlayToggleKey = settingOverlayToggleKey,
+		.settingShaderBlockPrevKey = settingShaderBlockPrevKey,
+		.settingShaderBlockNextKey = settingShaderBlockNextKey
 	};
 
 	// Render settings using extracted component
@@ -339,7 +668,7 @@ void Menu::DrawAdvancedSettings()
 {
 	// Render advanced settings using extracted component
 	AdvancedSettingsRenderer::RenderAdvancedSettings(
-		[]() { globals::truePBR->DrawSettings(); },
+		[this]() { globals::truePBR->DrawSettings(); },
 		[this]() { DrawDisableAtBootSettings(); });
 }
 
@@ -348,49 +677,49 @@ void Menu::DrawDisableAtBootSettings()
 	auto state = globals::state;
 	auto& disabledFeatures = state->GetDisabledFeatures();
 
-	if (ImGui::CollapsingHeader("Disable at Boot", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
-		ImGui::Text(
-			"Select features to disable at boot. "
-			"This is the same as deleting a feature.ini file. "
-			"Restart will be required to reenable.");
+	ImGui::Text(
+		"Select features to disable at boot. "
+		"This is the same as deleting a feature.ini file. "
+		"Restart will be required to reenable.");
 
-		if (ImGui::CollapsingHeader("Special Features")) {
-			// Prepare a sorted list of special feature names
-			std::vector<std::string> specialFeatureNames;
-			for (const auto& [featureName, _] : state->specialFeatures) {
-				specialFeatureNames.push_back(featureName);
-			}
-			std::sort(specialFeatureNames.begin(), specialFeatureNames.end());
+	ImGui::Spacing();
 
-			// Display sorted special features
-			for (const auto& featureName : specialFeatureNames) {
-				// Check if the feature is currently disabled
-				bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
+	if (ImGui::CollapsingHeader("Special Features", ImGuiTreeNodeFlags_DefaultOpen)) {
+		// Prepare a sorted list of special feature names
+		std::vector<std::string> specialFeatureNames;
+		for (const auto& [featureName, _] : state->specialFeatures) {
+			specialFeatureNames.push_back(featureName);
+		}
+		std::sort(specialFeatureNames.begin(), specialFeatureNames.end());
 
-				// Create a checkbox for each feature
-				if (ImGui::Checkbox(featureName.c_str(), &isDisabled)) {
-					// Update the disabledFeatures map based on user interaction
-					disabledFeatures[featureName] = isDisabled;
-				}
+		// Display sorted special features
+		for (const auto& featureName : specialFeatureNames) {
+			// Check if the feature is currently disabled
+			bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
+
+			// Create a checkbox for each feature
+			if (ImGui::Checkbox(featureName.c_str(), &isDisabled)) {
+				// Update the disabledFeatures map based on user interaction
+				disabledFeatures[featureName] = isDisabled;
 			}
 		}
+	}
 
-		if (ImGui::CollapsingHeader("Features")) {
-			// Prepare a sorted list of feature pointers
-			auto featureList = Feature::GetFeatureList();
-			std::sort(featureList.begin(), featureList.end(), [](Feature* a, Feature* b) {
-				return a->GetShortName() < b->GetShortName();
-			});
+	if (ImGui::CollapsingHeader("Features", ImGuiTreeNodeFlags_DefaultOpen)) {
+		// Prepare a sorted list of feature pointers
+		auto featureList = Feature::GetFeatureList();
+		std::sort(featureList.begin(), featureList.end(), [](Feature* a, Feature* b) {
+			return a->GetShortName() < b->GetShortName();
+		});
 
-			// Display sorted features
-			for (auto* feature : featureList) {
-				const std::string featureName = feature->GetShortName();
-				bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
+		// Display sorted features
+		for (auto* feature : featureList) {
+			const std::string featureName = feature->GetShortName();
+			bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
 
-				if (ImGui::Checkbox(featureName.c_str(), &isDisabled)) {
-					// Update the disabledFeatures map based on user interaction
-					disabledFeatures[featureName] = isDisabled;
-				}
+			if (ImGui::Checkbox(featureName.c_str(), &isDisabled)) {
+				// Update the disabledFeatures map based on user interaction
+				disabledFeatures[featureName] = isDisabled;
 			}
 		}
 	}
@@ -400,9 +729,9 @@ void Menu::DrawFooter()
 {
 	ImGui::BulletText(std::format("Game Version: {} {}", magic_enum::enum_name(REL::Module::GetRuntime()), Util::GetFormattedVersion(REL::Module::get().version()).c_str()).c_str());
 	ImGui::SameLine();
-	ImGui::BulletText(std::format("D3D12 Interop: {}", globals::features::upscaling.d3d12Interop ? "Active" : "Inactive").c_str());
+	ImGui::BulletText(std::format("D3D12 Swap Chain: {}", globals::features::upscaling.d3d12SwapChainActive ? "Active" : "Inactive").c_str());
 	ImGui::SameLine();
-	ImGui::Text(std::format("GPU: {}", globals::state->adapterDescription.c_str()).c_str());
+	ImGui::BulletText(std::format("GPU: {}", globals::state->adapterDescription.c_str()).c_str());
 }
 
 /**
@@ -417,13 +746,39 @@ void Menu::DrawFooter()
  */
 void Menu::DrawOverlay()
 {
+	// Only process reloads when ImGui is NOT in an active frame
+	ImGuiContext* ctx = ImGui::GetCurrentContext();
+	bool canReload = ctx && !ctx->WithinFrameScope && !ctx->WithinEndChild;
+
+	// Process deferred font reload BEFORE any ImGui operations
+	// This is the safest place to do font atlas modifications
+	if (pendingFontReload && canReload) {
+		// Call ReloadFont first - only clear flag if it succeeds
+		if (ThemeManager::ReloadFont(*this, cachedFontSize)) {
+			// Reload completed successfully
+			pendingFontReload = false;
+		} else {
+			// Reload failed - keep flag true to retry next frame
+			logger::warn("Menu::DrawOverlay() - Font reload failed, will retry next frame");
+		}
+	}
+
+	// Process deferred icon reload BEFORE rendering
+	if (pendingIconReload && canReload) {
+		if (Util::IconLoader::InitializeMenuIcons(this)) {
+			pendingIconReload = false;
+		} else {
+			logger::warn("Menu::DrawOverlay() - Icon reload failed, will retry next frame");
+		}
+	}
+
 	OverlayRenderer::RenderOverlay(
 		*this,
 		[this]() { ProcessInputEventQueue(); },
 		[this]() { DrawSettings(); },
 		[](uint32_t key) { return Util::Input::KeyIdToString(key); },
 		cachedFontSize,
-		settings.Theme.FontSize);
+		ThemeManager::ResolveFontSize(*this));
 }
 
 /**
@@ -492,16 +847,24 @@ void Menu::ProcessInputEventQueue()
 					std::function<void(uint32_t)> action;
 				};
 				auto shaderCache = globals::shaderCache;
-				auto devMode = globals::state->IsDeveloperMode();
 				HotkeyAction hotkeyActions[] = {
 					{ &settings.ToggleKey, &settingToggleKey, [this](uint32_t key) { settings.ToggleKey = key; settingToggleKey = false; } },
 					{ &settings.SkipCompilationKey, &settingSkipCompilationKey, [this](uint32_t key) { settings.SkipCompilationKey = key; settingSkipCompilationKey = false; } },
 					{ &settings.EffectToggleKey, &settingsEffectsToggle, [this](uint32_t key) { settings.EffectToggleKey = key; settingsEffectsToggle = false; } },
 					{ &settings.OverlayToggleKey, &settingOverlayToggleKey, [this](uint32_t key) { settings.OverlayToggleKey = key; settingOverlayToggleKey = false; } },
+					{ &settings.ShaderBlockPrevKey, &settingShaderBlockPrevKey, [this](uint32_t key) { settings.ShaderBlockPrevKey = key; settingShaderBlockPrevKey = false; } },
+					{ &settings.ShaderBlockNextKey, &settingShaderBlockNextKey, [this](uint32_t key) { settings.ShaderBlockNextKey = key; settingShaderBlockNextKey = false; } },
 				};
 				bool handled = false;
 				for (auto& h : hotkeyActions) {
 					if (*(h.settingFlag)) {
+						// During first-time setup, don't capture Enter or Escape as hotkeys
+						// These keys are reserved for closing the dialog
+						if (HomePageRenderer::ShouldShowFirstTimeSetup() && (key == VK_RETURN || key == VK_ESCAPE)) {
+							*(h.settingFlag) = false;  // Cancel hotkey capture mode
+							handled = true;
+							break;
+						}
 						h.action(key);
 						handled = true;
 						break;
@@ -517,8 +880,8 @@ void Menu::ProcessInputEventQueue()
 						{ settings.ToggleKey, [this]() { IsEnabled = !IsEnabled; } },
 						{ settings.SkipCompilationKey, [shaderCache]() { shaderCache->backgroundCompilation = true; } },
 						{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnabled()); } },
-						{ priorShaderKey, [shaderCache, devMode]() { if (devMode) shaderCache->IterateShaderBlock(); } },
-						{ nextShaderKey, [shaderCache, devMode]() { if (devMode) shaderCache->IterateShaderBlock(false); } },
+						{ settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
+						{ settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },
 						{ settings.OverlayToggleKey, []() {
 							 Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible;
 						 } },

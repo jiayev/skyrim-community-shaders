@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Buffer.h"
+
 #define ALBEDO RE::RENDER_TARGETS::kINDIRECT
 #define SPECULAR RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED
 #define REFLECTANCE RE::RENDER_TARGETS::kRAWINDIRECT
@@ -29,19 +31,14 @@ public:
 	void PrepassPasses();
 
 	void ClearShaderCache();
-	ID3D11ComputeShader* GetComputeAmbientComposite();
-	ID3D11ComputeShader* GetComputeAmbientCompositeInterior();
-	ID3D11ComputeShader* GetComputeMainComposite();
 
+	ID3D11ComputeShader* GetComputeMainComposite();
 	ID3D11ComputeShader* GetComputeMainCompositeInterior();
 
 	ID3D11BlendState* deferredBlendStates[7][2][13][2];
 	ID3D11BlendState* forwardBlendStates[7][2][13][2];
 
 	RE::RENDER_TARGET forwardRenderTargets[4];
-
-	ID3D11ComputeShader* ambientCompositeCS = nullptr;
-	ID3D11ComputeShader* ambientCompositeInteriorCS = nullptr;
 
 	ID3D11ComputeShader* mainCompositeCS = nullptr;
 	ID3D11ComputeShader* mainCompositeInteriorCS = nullptr;
@@ -67,6 +64,7 @@ public:
 		DirectX::XMFLOAT4X3 ShadowMapProj[2][3];
 		DirectX::XMFLOAT4X3 CameraViewProjInverse[2];
 	};
+	STATIC_ASSERT_ALIGNAS_16(PerGeometry);
 
 	ID3D11ComputeShader* copyShadowCS = nullptr;
 	Buffer* perShadow = nullptr;
