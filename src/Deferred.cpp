@@ -99,7 +99,7 @@ void Deferred::SetupResources()
 		// TEMPORAL_AA_WATER_2
 
 		// Albedo
-		SetupRenderTarget(ALBEDO, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+		SetupRenderTarget(ALBEDO, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R10G10B10A2_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 		// Specular
 		SetupRenderTarget(SPECULAR, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 		// Reflectance
@@ -107,7 +107,7 @@ void Deferred::SetupResources()
 		// Normal + Roughness
 		SetupRenderTarget(NORMALROUGHNESS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R10G10B10A2_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 		// Masks
-		SetupRenderTarget(MASKS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+		SetupRenderTarget(MASKS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 	}
 
 	{
@@ -289,25 +289,6 @@ void Deferred::PrepassPasses()
 	auto context = globals::d3d::context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
-	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);  // Run OMSetRenderTargets again
-
-	{
-		ID3D11Buffer* buffers[1] = { *globals::game::perFrame.get() };
-
-		ID3D11Buffer* vrBuffer = nullptr;
-
-		if (REL::Module::IsVR()) {
-			static REL::Relocation<ID3D11Buffer**> VRValues{ REL::Offset(0x3180688) };
-			vrBuffer = *VRValues.get();
-		}
-		if (vrBuffer) {
-			context->CSSetConstantBuffers(12, 1, buffers);
-			context->CSSetConstantBuffers(13, 1, &vrBuffer);
-		} else {
-			context->CSSetConstantBuffers(12, 1, buffers);
-		}
-	}
-
 	globals::truePBR->PrePass();
 	for (auto* feature : Feature::GetFeatureList()) {
 		if (feature->loaded) {
@@ -422,49 +403,7 @@ void Deferred::DeferredPasses()
 	auto [ssgi_ao, ssgi_y, ssgi_cocg, ssgi_gi_spec] = ssgi.GetOutputTextures();
 	bool ssgi_hq_spec = ssgi.settings.EnableExperimentalSpecularGI;
 
-	auto& ibl = globals::features::ibl;
-
 	auto dispatchCount = Util::GetScreenDispatchCount(true);
-
-	if (ssgi.loaded) {
-		// Ambient Composite
-		{
-			TracyD3D11Zone(globals::state->tracyCtx, "Ambient Composite");
-
-			ID3D11ShaderResourceView* srvs[9]{
-				albedo.SRV,
-				normalRoughness.SRV,
-				skylighting.loaded || REL::Module::IsVR() ? depth.depthSRV : nullptr,
-				skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr,
-				skylighting.loaded ? skylighting.stbn_vec3_2Dx1D_128x128x64.get() : nullptr,
-				ssgi_ao,
-				ssgi_y,
-				ssgi_cocg,
-				ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
-			};
-
-			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-
-			ID3D11UnorderedAccessView* uavs[1]{ main.UAV };
-			context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-			auto shader = interior ? GetComputeAmbientCompositeInterior() : GetComputeAmbientComposite();
-			context->CSSetShader(shader, nullptr, 0);
-
-			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
-		}
-
-		// Clear
-		{
-			ID3D11ShaderResourceView* views[9]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-			context->CSSetShaderResources(0, ARRAYSIZE(views), views);
-
-			ID3D11UnorderedAccessView* uavs[2]{ nullptr, nullptr };
-			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-
-			context->CSSetShader(nullptr, nullptr, 0);
-		}
-	}
 
 	auto& sss = globals::features::subsurfaceScattering;
 	if (sss.loaded)
@@ -475,6 +414,8 @@ void Deferred::DeferredPasses()
 		dynamicCubemaps.UpdateCubemap();
 
 	auto& terrainBlending = globals::features::terrainBlending;
+
+	auto& ibl = globals::features::ibl;
 
 	auto& physSky = globals::features::physicalSky;
 
@@ -498,6 +439,7 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? nullptr : ssgi_cocg,
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
 			ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
+			ibl.loaded ? ibl.diffuseSkyIBLTexture->srv.get() : nullptr,
 			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,
 			physSky.loaded ? physSky.texApShadow->srv.get() : nullptr,
 		};
@@ -521,7 +463,7 @@ void Deferred::DeferredPasses()
 
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[17]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[18]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
@@ -663,14 +605,6 @@ void Deferred::ResetBlendStates()
 
 void Deferred::ClearShaderCache()
 {
-	if (ambientCompositeCS) {
-		ambientCompositeCS->Release();
-		ambientCompositeCS = nullptr;
-	}
-	if (ambientCompositeInteriorCS) {
-		ambientCompositeInteriorCS->Release();
-		ambientCompositeInteriorCS = nullptr;
-	}
 	if (mainCompositeCS) {
 		mainCompositeCS->Release();
 		mainCompositeCS = nullptr;
@@ -679,49 +613,6 @@ void Deferred::ClearShaderCache()
 		mainCompositeInteriorCS->Release();
 		mainCompositeInteriorCS = nullptr;
 	}
-}
-
-ID3D11ComputeShader* Deferred::GetComputeAmbientComposite()
-{
-	if (!ambientCompositeCS) {
-		logger::debug("Compiling AmbientCompositeCS");
-
-		std::vector<std::pair<const char*, const char*>> defines;
-
-		if (globals::features::skylighting.loaded)
-			defines.push_back({ "SKYLIGHTING", nullptr });
-
-		if (globals::features::screenSpaceGI.loaded)
-			defines.push_back({ "SSGI", nullptr });
-
-		if (REL::Module::IsVR())
-			defines.push_back({ "FRAMEBUFFER", nullptr });
-
-		if (globals::features::ibl.loaded)
-			defines.push_back({ "IBL", nullptr });
-
-		ambientCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
-	}
-	return ambientCompositeCS;
-}
-
-ID3D11ComputeShader* Deferred::GetComputeAmbientCompositeInterior()
-{
-	if (!ambientCompositeInteriorCS) {
-		logger::debug("Compiling AmbientCompositeCS INTERIOR");
-
-		std::vector<std::pair<const char*, const char*>> defines;
-		defines.push_back({ "INTERIOR", nullptr });
-
-		if (globals::features::screenSpaceGI.loaded)
-			defines.push_back({ "SSGI", nullptr });
-
-		if (REL::Module::IsVR())
-			defines.push_back({ "FRAMEBUFFER", nullptr });
-
-		ambientCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\AmbientCompositeCS.hlsl", defines, "cs_5_0"));
-	}
-	return ambientCompositeInteriorCS;
 }
 
 ID3D11ComputeShader* Deferred::GetComputeMainComposite()
@@ -767,6 +658,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 
 		if (globals::features::screenSpaceGI.loaded)
 			defines.push_back({ "SSGI", nullptr });
+
+		if (globals::features::ibl.loaded)
+			defines.push_back({ "IBL", nullptr });
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
