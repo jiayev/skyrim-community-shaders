@@ -25,10 +25,13 @@ void PseudoSunBounce::RestoreDefaultSettings()
 void PseudoSunBounce::DrawSettings()
 {
     ImGui::ColorEdit3("Ground Albedo", &settings.groundAlbedo.x);
-    ImGui::ColorEdit3("Wall Albedo", &settings.wallAlbedo.x);
-    ImGui::SliderFloat("Intensity", &settings.intensity, 0.0f, 10.0f, "%.2f");
-    ImGui::SliderFloat("Window Width", &settings.windowWidth, 1.0f, 10.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-
     if (auto _tt = Util::HoverTooltipWrapper())
-        ImGui::Text("Adjust the properties of the pseudo sun bounce light to achieve the desired indirect lighting effect.");
+        ImGui::Text("Reflectance color of the ground for bounced light calculation.");
+    ImGui::ColorEdit3("Wall Albedo", &settings.wallAlbedo.x);
+    if (auto _tt = Util::HoverTooltipWrapper())
+        ImGui::Text("Reflectance color of the wall for bounced light calculation.");
+    ImGui::SliderFloat("Intensity", &settings.intensity, 0.0f, 10.0f, "%.2f");
+    ImGui::SliderFloat("Window Width", &settings.windowWidth, 1.0f, 10.0f, "%.2f");
+    if (auto _tt = Util::HoverTooltipWrapper())
+        ImGui::Text("Hanning window width for cosine lobe convolution, preventing negative SH values. Smaller value gives flatter results.");
 }
