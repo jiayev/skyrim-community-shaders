@@ -30,11 +30,10 @@ struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
 
-class ParticleLights;
-
 class State;
 class Deferred;
 struct TruePBR;
+class RenderDoc;
 class Menu;
 
 namespace SIE
@@ -82,10 +81,10 @@ namespace globals
 		extern WetnessEffects wetnessEffects;
 		extern ExtendedTranslucency extendedTranslucency;
 		extern Upscaling upscaling;
+		extern RenderDoc renderDoc;
 
 		namespace llf
 		{
-			extern ParticleLights particleLights;
 		}
 	}
 
@@ -202,9 +201,7 @@ namespace globals
 		extern RE::BSGraphics::State* graphicsState;
 		extern RE::BSGraphics::Renderer* renderer;
 		extern RE::BSShaderManager::State* smState;
-		extern RE::TES* tes;
 		extern bool isVR;
-		extern RE::MemoryManager* memoryManager;
 		extern RE::INISettingCollection* iniSettingCollection;
 		extern RE::INIPrefSettingCollection* iniPrefSettingCollection;
 		extern RE::GameSettingCollection* gameSettingCollection;

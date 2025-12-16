@@ -7,6 +7,7 @@
 #include "Hooks.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Util.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	GlintParameters,
@@ -107,14 +108,8 @@ void TruePBR::DrawSettings()
 {
 	if (ImGui::CollapsingHeader("PBR", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 		if (ImGui::TreeNodeEx("Texture Set Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-			if (ImGui::BeginCombo("Texture Set", selectedPbrTextureSetName.c_str())) {
-				for (auto& [textureSetName, textureSet] : pbrTextureSets) {
-					if (ImGui::Selectable(textureSetName.c_str(), textureSetName == selectedPbrTextureSetName)) {
-						selectedPbrTextureSetName = textureSetName;
-						selectedPbrTextureSet = &textureSet;
-					}
-				}
-				ImGui::EndCombo();
+			if (Util::SearchableCombo("Texture Set", selectedPbrTextureSetName, pbrTextureSets)) {
+				selectedPbrTextureSet = &pbrTextureSets[selectedPbrTextureSetName];
 			}
 
 			if (selectedPbrTextureSet != nullptr) {
@@ -200,14 +195,8 @@ void TruePBR::DrawSettings()
 		}
 
 		if (ImGui::TreeNodeEx("Material Object Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-			if (ImGui::BeginCombo("Material Object", selectedPbrMaterialObjectName.c_str())) {
-				for (auto& [materialObjectName, materialObject] : pbrMaterialObjects) {
-					if (ImGui::Selectable(materialObjectName.c_str(), materialObjectName == selectedPbrMaterialObjectName)) {
-						selectedPbrMaterialObjectName = materialObjectName;
-						selectedPbrMaterialObject = &materialObject;
-					}
-				}
-				ImGui::EndCombo();
+			if (Util::SearchableCombo("Material Object", selectedPbrMaterialObjectName, pbrMaterialObjects)) {
+				selectedPbrMaterialObject = &pbrMaterialObjects[selectedPbrMaterialObjectName];
 			}
 
 			if (selectedPbrMaterialObject != nullptr) {
@@ -1109,10 +1098,12 @@ bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 		return false;
 	}
 
+	auto memoryManager = RE::MemoryManager::GetSingleton();
+
 	if (land->loadedData != nullptr && land->loadedData->mesh[0] != nullptr) {
 		land->data.flags.set(static_cast<RE::OBJ_LAND::Flag>(8));
 		for (uint32_t quadIndex = 0; quadIndex < 4; ++quadIndex) {
-			auto shaderProperty = static_cast<RE::BSLightingShaderProperty*>(globals::game::memoryManager->Allocate(REL::Module::IsVR() ? 0x178 : sizeof(RE::BSLightingShaderProperty), 0, false));
+			auto shaderProperty = static_cast<RE::BSLightingShaderProperty*>(memoryManager->Allocate(REL::Module::IsVR() ? 0x178 : sizeof(RE::BSLightingShaderProperty), 0, false));
 			shaderProperty->Ctor();
 
 			{
@@ -1148,7 +1139,7 @@ bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 			}
 
 			bool noLODLandBlend = false;
-			auto tes = globals::game::tes;
+			auto tes = RE::TES::GetSingleton();
 			auto worldSpace = tes->GetRuntimeData2().worldSpace;
 			if (worldSpace != nullptr) {
 				if (auto terrainManager = worldSpace->GetTerrainManager()) {
@@ -1249,7 +1240,7 @@ struct BSTempEffectGeometryDecal_Initialize
 		auto* singleton = globals::truePBR;
 
 		if (decal->decal != nullptr && singleton->IsPBRTextureSet(decal->texSet)) {
-			auto shaderProperty = static_cast<RE::BSLightingShaderProperty*>(globals::game::memoryManager->Allocate(sizeof(RE::BSLightingShaderProperty), 0, false));
+			auto shaderProperty = static_cast<RE::BSLightingShaderProperty*>(RE::MemoryManager::GetSingleton()->Allocate(sizeof(RE::BSLightingShaderProperty), 0, false));
 			shaderProperty->Ctor();
 
 			{

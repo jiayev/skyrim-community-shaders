@@ -28,8 +28,8 @@ Texture2D<float4> TexMsLut : register(t1);
 Texture2D<float4> TexSvLut : register(t2);
 Texture3D<float4> TexApLut : register(t3);
 #elif defined(PS_DEFERRED_RSRCS)
-Texture3D<float4> TexApLut : register(t15);
-Texture2D<unorm float> TexApShadow : register(t16);
+Texture3D<float4> TexApLut : register(t16);
+Texture2D<unorm float> TexApShadow : register(t17);
 #else
 Texture2D<float4> TexTrLut : register(t61);
 Texture2D<float4> TexSvLut : register(t62);
@@ -115,6 +115,28 @@ float2 SkyViewLutUv(float3 rayDir)
 	float v = 0.5 - 0.5 * sign(zenith) * sqrt(abs(zenith) * 2 * RCP_PI);
 	v = max(v, 0.01);
 	return frac(float2(u, v));
+}
+
+// url: http://www.physics.hmc.edu/faculty/esin/a101/limbdarkening.pdf
+float3 LimbDarkenHestroffer(float norm_dist)
+{
+	float mu = sqrt(1.0 - norm_dist * norm_dist);
+
+	// coefficient for RGB wavelength (680, 550, 440)
+	float3 a0 = float3(0.34685, 0.26073, 0.15248);
+	float3 a1 = float3(1.37539, 1.27428, 1.38517);
+	float3 a2 = float3(-2.04425, -1.30352, -1.49615);
+	float3 a3 = float3(2.70493, 1.47085, 1.99886);
+	float3 a4 = float3(-1.94290, -0.96618, -1.48155);
+	float3 a5 = float3(0.55999, 0.26384, 0.44119);
+
+	float mu2 = mu * mu;
+	float mu3 = mu2 * mu;
+	float mu4 = mu2 * mu2;
+	float mu5 = mu4 * mu;
+
+	float3 factor = a0 + a1 * mu + a2 * mu2 + a3 * mu3 + a4 * mu4 + a5 * mu5;
+	return factor;
 }
 
 float3 InvSkyViewLutUv(float2 uv)
