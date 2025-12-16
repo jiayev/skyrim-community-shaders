@@ -143,6 +143,10 @@ namespace SharedData
 		float LODObjectBrightness;
 		float LODObjectSnowBrightness;
 		bool DisableTerrainVertexColors;
+		float LODTerrainGamma;
+		float LODObjectGamma;
+		float LODObjectSnowGamma;
+		float pad0;
 	};
 
 	struct HairSpecularSettings
@@ -179,11 +183,11 @@ namespace SharedData
 		uint EnableDiffuseIBL;
 		uint PreserveFogLuminance;
 		uint UseStaticIBL;
+		uint EnableInterior;
 		float DiffuseIBLScale;
 		float DALCAmount;
 		float IBLSaturation;
 		float FogAmount;
-		float DynamicCubemapsAmount;
 	};
 
 	struct ExtendedTranslucencySettings
