@@ -45,7 +45,7 @@ namespace SunBounce
         return res;
     }
 
-    SH2_RGB CalcSunBounceSH(float3 DirLightDirection, float3 DirLightColor, float3 groundAlbedo, float3 wallAlbedo, float windowWidth)
+    SH2_RGB CalcSunBounceSH(float3 DirLightDirection, float3 DirLightColor, float3 groundAlbedo, float3 wallAlbedo)
     {
         float3 L = normalize(DirLightDirection);
         
@@ -62,14 +62,10 @@ namespace SunBounce
         sh2 sh_g = SphericalHarmonics::EvaluateCosineLobe(-R_g);
         sh2 sh_w = SphericalHarmonics::EvaluateCosineLobe(-R_wall);
 
-        sh_g = SphericalHarmonics::HanningConvolution(sh_g, windowWidth);
-        sh_w = SphericalHarmonics::HanningConvolution(sh_w, windowWidth);
-
         float NdotL_g = saturate(dot(N_ground, L));
-
         float NdotL_w = saturate(L_horiz_len); 
-        float3 bounceColor_g = DirLightColor * groundAlbedo * NdotL_g;
-        float3 bounceColor_w = DirLightColor * wallAlbedo * NdotL_w;
+        float3 bounceColor_g = DirLightColor * groundAlbedo * NdotL_g / Math::PI;
+        float3 bounceColor_w = DirLightColor * wallAlbedo * NdotL_w / Math::PI;
 
         SH2_RGB result = ZeroSH2_RGB();
         
@@ -81,6 +77,16 @@ namespace SunBounce
         result.G = SphericalHarmonics::Add(result.G, SphericalHarmonics::Scale(sh_w, bounceColor_w.g));
         result.B = SphericalHarmonics::Add(result.B, SphericalHarmonics::Scale(sh_w, bounceColor_w.b));
         return result;
+    }
+
+    float3 CalcFauxSpecularBounce(float3 N, float3 V, float roughness, SH2_RGB sunSH)
+    {
+        sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(N, V, roughness);
+        float3 specularColor;
+        specularColor.r = SphericalHarmonics::FuncProductIntegral(sunSH.R, specularLobe);
+        specularColor.g = SphericalHarmonics::FuncProductIntegral(sunSH.G, specularLobe);
+        specularColor.b = SphericalHarmonics::FuncProductIntegral(sunSH.B, specularLobe);
+        return specularColor;
     }
 }
 #endif

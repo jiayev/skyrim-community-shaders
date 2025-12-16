@@ -3059,13 +3059,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(PSEUDO_SUN_BOUNCE)
+	float3 specularBounce = 0;
 	if (!SharedData::InInterior && inWorld && SharedData::pseudoSunBounceSettings.intensity > 0.0) {
 		float cloudShadows = 1;
 #		if defined(CLOUD_SHADOWS)
 		cloudShadows = CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, LinearSampler);
 #		endif
 		SunBounce::SH2_RGB sunBounceSH = SunBounce::CalcSunBounceSH(SharedData::DirLightDirection.xyz, dirLightColor * cloudShadows,
-			SharedData::pseudoSunBounceSettings.groundAlbedo, SharedData::pseudoSunBounceSettings.wallAlbedo, SharedData::pseudoSunBounceSettings.windowWidth);
+			SharedData::pseudoSunBounceSettings.groundAlbedo, SharedData::pseudoSunBounceSettings.wallAlbedo);
+
+		specularBounce = max(0, SunBounce::CalcFauxSpecularBounce(ambientNormal, viewDirection, material.Roughness, sunBounceSH)) * SharedData::pseudoSunBounceSettings.intensity;
+
+		sunBounceSH.R = SphericalHarmonics::HanningConvolution(sunBounceSH.R, SharedData::pseudoSunBounceSettings.windowWidth);
+		sunBounceSH.G = SphericalHarmonics::HanningConvolution(sunBounceSH.G, SharedData::pseudoSunBounceSettings.windowWidth);
+		sunBounceSH.B = SphericalHarmonics::HanningConvolution(sunBounceSH.B, SharedData::pseudoSunBounceSettings.windowWidth);
 
 		float3 bounceLighting;
 		bounceLighting.r = SphericalHarmonics::Unproject(sunBounceSH.R, ambientNormal);
@@ -3074,7 +3081,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		bounceLighting = max(0, bounceLighting);
 #		if defined(SKYLIGHTING)
-		bounceLighting *= Color::MultiBounceAO(SharedData::pseudoSunBounceSettings.groundAlbedo, skylightingDiffuse);
+		float3 bouncedSkylighting = saturate(Color::MultiBounceAO(SharedData::pseudoSunBounceSettings.groundAlbedo, skylightingDiffuse) * skylightingDiffuse);
+		bounceLighting *= bouncedSkylighting;
+		specularBounce *= bouncedSkylighting;
 #		endif
 
 		directionalAmbientColor += bounceLighting * SharedData::pseudoSunBounceSettings.intensity;
@@ -3290,6 +3299,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		else
 		color.xyz += indirectLobeWeights.specular * directionalAmbientColor;
 #		endif
+#		if defined(PSEUDO_SUN_BOUNCE)
+	if (any(specularBounce > 0))
+	{
+		color.xyz += indirectLobeWeights.specular * specularBounce;
+#			if defined(WETNESS_EFFECTS)
+		if (waterRoughnessSpecular < 1)
+			color.xyz += wetnessReflectance * specularBounce;
+#			endif
+	}
+#		endif
 #	endif
 
 	float3 outputAlbedo = indirectLobeWeights.diffuse * vertexColor.xyz;
@@ -3489,6 +3508,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (waterRoughnessSpecular < 1) {
 		screenSpaceNormal = lerp(screenSpaceNormal, normalize(FrameBuffer::WorldToView(wetnessNormal, false, eyeIndex)), saturate(wetnessGlossinessSpecular));
 		material.Roughness = lerp(material.Roughness, waterRoughnessSpecular, wetnessReflectance.x);
+	}
+#		endif
+
+#		if defined(PSEUDO_SUN_BOUNCE)
+	if (any(specularBounce > 0))
+	{
+		psout.Diffuse.xyz += indirectLobeWeights.specular * specularBounce;
 	}
 #		endif
 
