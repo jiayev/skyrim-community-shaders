@@ -15,6 +15,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/RenderDoc.h"
+#include "Features/PseudoSunBounce.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/SkySync.h"
@@ -76,6 +77,7 @@ namespace globals
 		ExtendedTranslucency extendedTranslucency{};
 		Upscaling upscaling{};
 		RenderDoc renderDoc{};
+		PseudoSunBounce pseudoSunBounce{};
 
 		namespace llf
 		{

@@ -198,6 +198,14 @@ namespace SharedData
 		float Strength;      // [0, 1.0] The inverse blend weight of the effect
 	};
 
+	struct PseudoSunBounceSettings
+	{
+		float3 groundAlbedo;
+		float intensity;
+		float3 wallAlbedo;
+		float windowWidth;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -213,6 +221,7 @@ namespace SharedData
 		TerrainVariationSettings terrainVariationSettings;
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
+		PseudoSunBounceSettings pseudoSunBounceSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

@@ -8,9 +8,6 @@
 
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 
-static const float3 GROUND_ALBEDO = float3(0.2, 0.2, 0.2);
-static const float3 WALL_ALBEDO = float3(0.18, 0.18, 0.18);
-
 // SH helpers
 namespace SunBounce
 {
@@ -48,7 +45,7 @@ namespace SunBounce
         return res;
     }
 
-    SH2_RGB CalcSunBounceSH(float3 DirLightDirection, float3 DirLightColor, float3 groundAlbedo, float3 wallAlbedo)
+    SH2_RGB CalcSunBounceSH(float3 DirLightDirection, float3 DirLightColor, float3 groundAlbedo, float3 wallAlbedo, float windowWidth)
     {
         float3 L = normalize(DirLightDirection);
         

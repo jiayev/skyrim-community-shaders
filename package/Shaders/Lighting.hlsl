@@ -2773,8 +2773,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(PSEUDO_SUN_BOUNCE)
-	if (!SharedData::InInterior && inWorld) {
-		SH2_RGB sunBounceSH = SunBounce::CalcSunBounceSH(SharedData::DirLightDirection.xyz, SharedData::DirLightColor.xyz, GROUND_ALBEDO, WALL_ALBEDO);
+	if (!SharedData::InInterior && inWorld && SharedData::pseudoSunBounceSettings.intensity > 0.0) {
+		SH2_RGB sunBounceSH = SunBounce::CalcSunBounceSH(SharedData::DirLightDirection.xyz, SharedData::DirLightColor.xyz,
+			SharedData::pseudoSunBounceSettings.groundAlbedo, SharedData::pseudoSunBounceSettings.wallAlbedo, SharedData::pseudoSunBounceSettings.windowWidth);
 
 		float3 bounceLighting;
 		bounceLighting.r = SphericalHarmonics::Unproject(sunBounceSH.R, worldNormal.xyz);
@@ -2783,10 +2784,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		bounceLighting = max(0, bounceLighting);
 #		if defined(SKYLIGHTING)
-		bounceLighting *= Color::MultiBounceAO(1.0.xxx, skylightingDiffuse);
+		bounceLighting *= Color::MultiBounceAO(SharedData::pseudoSunBounceSettings.groundAlbedo, skylightingDiffuse);
 #		endif
 
-		directionalAmbientColor += bounceLighting;
+		directionalAmbientColor += bounceLighting * SharedData::pseudoSunBounceSettings.intensity;
 	}
 #	endif
 
