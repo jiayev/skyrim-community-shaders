@@ -62,7 +62,6 @@ namespace SunBounce
         sh2 sh_g = SphericalHarmonics::EvaluateCosineLobe(-R_g);
         sh2 sh_w = SphericalHarmonics::EvaluateCosineLobe(-R_wall);
 
-        float windowWidth = 2.5f; 
         sh_g = SphericalHarmonics::HanningConvolution(sh_g, windowWidth);
         sh_w = SphericalHarmonics::HanningConvolution(sh_w, windowWidth);
 

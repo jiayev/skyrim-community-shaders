@@ -3060,13 +3060,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(PSEUDO_SUN_BOUNCE)
 	if (!SharedData::InInterior && inWorld && SharedData::pseudoSunBounceSettings.intensity > 0.0) {
-		SH2_RGB sunBounceSH = SunBounce::CalcSunBounceSH(SharedData::DirLightDirection.xyz, SharedData::DirLightColor.xyz,
+		float cloudShadows = 1;
+#		if defined(CLOUD_SHADOWS)
+		cloudShadows = CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, LinearSampler);
+#		endif
+		SunBounce::SH2_RGB sunBounceSH = SunBounce::CalcSunBounceSH(SharedData::DirLightDirection.xyz, dirLightColor * cloudShadows,
 			SharedData::pseudoSunBounceSettings.groundAlbedo, SharedData::pseudoSunBounceSettings.wallAlbedo, SharedData::pseudoSunBounceSettings.windowWidth);
 
 		float3 bounceLighting;
-		bounceLighting.r = SphericalHarmonics::Unproject(sunBounceSH.R, worldNormal.xyz);
-		bounceLighting.g = SphericalHarmonics::Unproject(sunBounceSH.G, worldNormal.xyz);
-		bounceLighting.b = SphericalHarmonics::Unproject(sunBounceSH.B, worldNormal.xyz);
+		bounceLighting.r = SphericalHarmonics::Unproject(sunBounceSH.R, ambientNormal);
+		bounceLighting.g = SphericalHarmonics::Unproject(sunBounceSH.G, ambientNormal);
+		bounceLighting.b = SphericalHarmonics::Unproject(sunBounceSH.B, ambientNormal);
 
 		bounceLighting = max(0, bounceLighting);
 #		if defined(SKYLIGHTING)
