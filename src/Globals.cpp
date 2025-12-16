@@ -19,6 +19,7 @@
 #include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "Features/RenderDoc.h"
+#include "Features/PseudoSunBounce.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/ScreenSpaceRayTracing.h"
@@ -92,6 +93,7 @@ namespace globals
 		PostProcessing postProcessing{};
 		Skin skin{};
 		ExponentialHeightFog exponentialHeightFog{};
+		PseudoSunBounce pseudoSunBounce{};
 
 		namespace llf
 		{

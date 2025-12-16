@@ -19,6 +19,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
+#include "Features/PseudoSunBounce.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpacePointLightShadows.h"
@@ -243,7 +244,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::physicalSky,
 		&globals::features::postProcessing,
 		&globals::features::skin,
-		&globals::features::exponentialHeightFog
+		&globals::features::exponentialHeightFog,
+		&globals::features::pseudoSunBounce
 	};
 
 	if (REL::Module::IsVR()) {

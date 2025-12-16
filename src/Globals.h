@@ -36,6 +36,7 @@ struct Upscaling;
 struct PostProcessing;
 struct Skin;
 struct ExponentialHeightFog;
+struct PseudoSunBounce;
 
 class State;
 class Deferred;
@@ -96,6 +97,7 @@ namespace globals
 		extern PostProcessing postProcessing;
 		extern Skin skin;
 		extern ExponentialHeightFog exponentialHeightFog;
+		extern PseudoSunBounce pseudoSunBounce;
 
 		namespace llf
 		{

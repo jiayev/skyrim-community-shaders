@@ -359,6 +359,14 @@ namespace SharedData
 		float3 pad;
 	};
 
+	struct PseudoSunBounceSettings
+	{
+		float3 groundAlbedo;
+		float intensity;
+		float3 wallAlbedo;
+		float windowWidth;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -382,6 +390,7 @@ namespace SharedData
 		PhysSkyData physSkyData;
 		SSRTSettings ssrtSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
+		PseudoSunBounceSettings pseudoSunBounceSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);
