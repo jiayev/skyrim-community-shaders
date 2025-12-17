@@ -2782,7 +2782,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		SunBounce::SH2_RGB sunBounceSH = SunBounce::CalcSunBounceSH(SharedData::DirLightDirection.xyz, dirLightColor * cloudShadows,
 			SharedData::pseudoSunBounceSettings.groundAlbedo, SharedData::pseudoSunBounceSettings.wallAlbedo);
 
-		specularBounce = max(0, SunBounce::CalcFauxSpecularBounce(-ambientNormal, viewDirection, material.Roughness, sunBounceSH)) * SharedData::pseudoSunBounceSettings.intensity;
+		specularBounce = max(0, SunBounce::CalcFauxSpecularBounce(ambientNormal, viewDirection, material.Roughness, sunBounceSH)) * SharedData::pseudoSunBounceSettings.intensity;
 
 		sunBounceSH.R = SphericalHarmonics::HanningConvolution(sunBounceSH.R, SharedData::pseudoSunBounceSettings.windowWidth);
 		sunBounceSH.G = SphericalHarmonics::HanningConvolution(sunBounceSH.G, SharedData::pseudoSunBounceSettings.windowWidth);
