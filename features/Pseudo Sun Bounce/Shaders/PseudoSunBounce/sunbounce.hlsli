@@ -79,9 +79,9 @@ namespace SunBounce
     {
         sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(N, V, roughness);
         float3 specularColor;
-        specularColor.r = SphericalHarmonics::FuncProductIntegral(sunSH.R, specularLobe);
-        specularColor.g = SphericalHarmonics::FuncProductIntegral(sunSH.G, specularLobe);
-        specularColor.b = SphericalHarmonics::FuncProductIntegral(sunSH.B, specularLobe);
+        specularColor.r = SphericalHarmonics::FuncProductIntegral(-sunSH.R, specularLobe);
+        specularColor.g = SphericalHarmonics::FuncProductIntegral(-sunSH.G, specularLobe);
+        specularColor.b = SphericalHarmonics::FuncProductIntegral(-sunSH.B, specularLobe);
         return specularColor;
     }
 }
