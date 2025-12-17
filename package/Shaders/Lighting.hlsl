@@ -2376,7 +2376,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
-		dirLightColorMultiplier *= PhysSky::SampleTr(normalize(DirLightDirection.xyz), SampShadowMaskSampler);
+		dirLightColor *= PhysSky::SampleTr(normalize(DirLightDirection.xyz), SampShadowMaskSampler);
 #	endif
 
 #	if defined(WATER_EFFECTS)
