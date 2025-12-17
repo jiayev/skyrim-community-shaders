@@ -49,18 +49,14 @@ namespace SunBounce
     {
         float3 L = normalize(DirLightDirection);
         
-        float3 N_ground = float3(0, 1, 0);
+        float3 N_ground = float3(0, 0, 1);
 
-        float3 L_horiz = float3(L.x, 0, L.z);
+        float3 L_horiz = float3(L.x, L.y, 0);
         float L_horiz_len = length(L_horiz);
         float3 N_wall = (L_horiz_len > 0.001f) ? (L_horiz / L_horiz_len) : float3(1, 0, 0);
 
-        float3 incidentL = -L;
-        float3 R_g = reflect(incidentL, N_ground);
-        float3 R_wall = reflect(incidentL, N_wall);
-
-        sh2 sh_g = SphericalHarmonics::EvaluateCosineLobe(-R_g);
-        sh2 sh_w = SphericalHarmonics::EvaluateCosineLobe(-R_wall);
+        sh2 sh_g = SphericalHarmonics::EvaluateCosineLobe(N_ground);
+        sh2 sh_w = SphericalHarmonics::EvaluateCosineLobe(N_wall);
 
         float NdotL_g = saturate(dot(N_ground, L));
         float NdotL_w = saturate(L_horiz_len); 
