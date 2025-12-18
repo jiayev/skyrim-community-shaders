@@ -451,6 +451,10 @@ cbuffer AlphaTestRefCB : register(b11)
 #		include "PhysicalSky/Common.hlsli"
 #	endif
 
+#	if defined(PSEUDO_SUN_BOUNCE)
+#		include "PseudoSunBounce/sunbounce.hlsli"
+#	endif
+
 #	define LinearSampler SampBaseSampler
 
 #	include "Common/ShadowSampling.hlsli"
@@ -593,7 +597,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #			if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
-		dirLightColorMultiplier *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+		dirLightColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
 #			endif
 
 	float dirLightAngle = dot(normal, SharedData::DirLightDirection.xyz);
@@ -635,6 +639,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		specularColorPBR += dirSpecularColor;
 	}
 #			else
+	float3 originDirLightColor = dirLightColor;
 	dirLightColor *= dirLightColorMultiplier;
 	dirLightColor *= dirShadow;
 	dirLightColor *= dirDetailShadow;
@@ -804,6 +809,38 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #				endif
 
+#				if defined(PSEUDO_SUN_BOUNCE)
+	float3 specularBounce = 0;
+	if (!SharedData::InInterior && SharedData::pseudoSunBounceSettings.intensity > 0.0) {
+		float cloudShadows = 1;
+#					if defined(CLOUD_SHADOWS)
+		cloudShadows = CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, LinearSampler);
+#					endif
+		SunBounce::SH2_RGB sunBounceSH = SunBounce::CalcSunBounceSH(SharedData::DirLightDirection.xyz, originDirLightColor * cloudShadows,
+			SharedData::pseudoSunBounceSettings.groundAlbedo, SharedData::pseudoSunBounceSettings.wallAlbedo);
+
+		specularBounce = max(0, SunBounce::CalcFauxSpecularBounce(normal, viewDirection, saturate(1 - (0.01 * SharedData::grassLightingSettings.Glossiness)), sunBounceSH)) * SharedData::pseudoSunBounceSettings.intensity;
+
+		sunBounceSH.R = SphericalHarmonics::HanningConvolution(sunBounceSH.R, SharedData::pseudoSunBounceSettings.windowWidth);
+		sunBounceSH.G = SphericalHarmonics::HanningConvolution(sunBounceSH.G, SharedData::pseudoSunBounceSettings.windowWidth);
+		sunBounceSH.B = SphericalHarmonics::HanningConvolution(sunBounceSH.B, SharedData::pseudoSunBounceSettings.windowWidth);
+
+		float3 bounceLighting;
+		bounceLighting.r = SphericalHarmonics::Unproject(sunBounceSH.R, -normal);
+		bounceLighting.g = SphericalHarmonics::Unproject(sunBounceSH.G, -normal);
+		bounceLighting.b = SphericalHarmonics::Unproject(sunBounceSH.B, -normal);
+
+		bounceLighting = max(0, bounceLighting);
+#					if defined(SKYLIGHTING)
+		float3 bouncedSkylighting = saturate(Color::MultiBounceAO(SharedData::pseudoSunBounceSettings.groundAlbedo, skylightingDiffuse) * skylightingDiffuse);
+		bounceLighting *= bouncedSkylighting;
+		specularBounce *= bouncedSkylighting;
+#					endif
+
+		directionalAmbientColor += bounceLighting * SharedData::pseudoSunBounceSettings.intensity;
+	}
+#				endif
+
 	diffuseColor += directionalAmbientColor;
 
 #				if defined(IBL) && defined(SKYLIGHTING)
@@ -868,6 +905,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Reflectance = float4(reflectance, 1);
 	psout.Albedo = float4(albedo, 1);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), 1.0 - roughness, 1);
+#			endif
+
+#			if defined(PSEUDO_SUN_BOUNCE)
+	if (!SharedData::InInterior && SharedData::pseudoSunBounceSettings.intensity > 0.0) {
+#				if defined(TRUE_PBR)
+		specularColor += specularBounce * indirectSpecularLobeWeight;
+#				else
+		specularColor += specularBounce * reflectance;
+#				endif
+	}
 #			endif
 
 	psout.Specular = float4(specularColor, 1);
