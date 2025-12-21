@@ -198,6 +198,13 @@ namespace SharedData
 		float Softness;      // [0, 2.0] The soft remap upper limit [0,2]
 		float Strength;      // [0, 1.0] The inverse blend weight of the effect
 	};
+
+	struct PostProcessingSettings
+	{
+		uint DisableVanillaTonemapping;
+		uint3 pad0;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -213,6 +220,7 @@ namespace SharedData
 		TerrainVariationSettings terrainVariationSettings;
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
+		PostProcessingSettings postProcessingSettings;
 		RaytracingSettings raytracingSettings;
 	};
 
