@@ -17,20 +17,22 @@
 #include "Features/Raytracing/Shape.h"
 #include "Features/Raytracing/Utils.h"
 
+#include <shared_mutex>
+
 struct Model
 {
 	eastl::vector<eastl::unique_ptr<Shape>> shapes;
 
-	winrt::com_ptr<ID3D12Resource> blasBuffer = nullptr;
-	winrt::com_ptr<ID3D12Resource> blasScratchBuffer = nullptr;
-
-	Model() = default;
+	winrt::com_ptr<D3D12MA::Allocation> blasBuffer = nullptr;
+	winrt::com_ptr<D3D12MA::Allocation> blasScratchBuffer = nullptr;
 
 	Model(eastl::vector<eastl::unique_ptr<Shape>>& shapes) :
 		shapes(eastl::move(shapes))
 	{
 		for (auto& shape : this->shapes) {
 			flags |= shape->flags;
+			shaderTypes |= shape->material.shaderType;
+			features |= static_cast<int>(shape->material.Feature);
 		}
 	}
 
@@ -39,13 +41,14 @@ struct Model
 		return flags;
 	}
 
-	bool HasShaderType(RE::BSShader::Type shaderType) const
+	uint32_t GetShaderTypes() const
 	{
-		for (auto& shape : shapes)
-			if (shape->material.ShaderType == shaderType)
-				return true;
+		return shaderTypes;
+	}
 
-		return false;
+	auto GetFeatures() const
+	{
+		return features;
 	}
 
 	void AddRef()
@@ -53,14 +56,20 @@ struct Model
 		refCount++;
 	}
 
-	// Returns true if refCount reaches zero
-	bool Release()
+	// Returns refCount
+	int Release()
 	{
+		//std::lock_guard lock{ releaseMutex };
+
 		refCount--;
-		return refCount <= 0;
+		return refCount;
 	}
 
 private:
 	Flags flags = Flags::None;
-	uint refCount;
+	uint32_t shaderTypes = RE::BSShader::Type::None;
+	int features = static_cast<int>(RE::BSShaderMaterial::Feature::kNone);
+	int refCount = 0;
+
+	//std::shared_mutex releaseMutex;
 };

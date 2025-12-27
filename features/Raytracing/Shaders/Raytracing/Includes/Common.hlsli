@@ -54,10 +54,8 @@ half3 DecodeNormal(half2 f)
 	return -normalize(n);
 }
 
-void NormalMap(float3 normalMap, float3 geomNormalWS, float3 geomTangentWS, float3 geomBitangentWS, out float3 normalWS, out float3 tangentWS, out float3 bitangentWS)
+void NormalMap(float3 normalMap, float handedness, float3 geomNormalWS, float3 geomTangentWS, float3 geomBitangentWS, out float3 normalWS, out float3 tangentWS, out float3 bitangentWS)
 {
-	float tangentSign = (dot(cross(geomNormalWS, geomTangentWS), geomTangentWS) < 0.0f) ? -1.0f : 1.0f;
-	
 	normalMap = normalMap * 2.0f - 1.0f;
 	
     normalWS = normalize(
@@ -67,7 +65,7 @@ void NormalMap(float3 normalMap, float3 geomNormalWS, float3 geomTangentWS, floa
 	);
 
     tangentWS = normalize(geomTangentWS - normalWS * dot(geomTangentWS, normalWS)); 
-    bitangentWS = cross(normalWS, tangentWS) * tangentSign;  
+    bitangentWS = cross(normalWS, tangentWS) * handedness;  
 }
 
 uint StrongIntegerHash(uint x)
@@ -96,6 +94,15 @@ uint4 SamplerCore(inout uint seed)
 float2 Get2D(uint seed)
 {
 	return (SamplerCore(seed).xy) * 5.96046447754e-08;
+}
+
+// I keep it here because it is also used by DX11 to make the Diffuse Albedo texture from 'True Albedo'
+void UnpackMAO(float packed, out float metalness, out float ao)
+{
+    uint metalnessAO = packed * 65535.0;
+
+    metalness = saturate((metalnessAO & 0xFF) / 255.0f);   
+    ao = saturate(((metalnessAO >> 8) & 0xFF) / 255.0f);
 }
 
 float ShadowTerminatorTerm(float3 L, float3 N, float3 Ns)

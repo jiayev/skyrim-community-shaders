@@ -165,7 +165,7 @@ static inline std::string GetFlagsString(auto value)
 	std::string flags;
 
 	for (const auto& [flag, name] : entries) {
-		if (static_cast<N>(value) & static_cast<N>(flag)) {
+		if (value & static_cast<N>(flag)) {
 			flags += fmt::format("{} ", name);
 		}
 	}
@@ -214,4 +214,9 @@ static inline bool ShareableTexture(const char* path)
 static uint32_t DivideRoundUp(uint32_t x, uint32_t divisor)
 {
 	return (x + divisor - 1) / divisor;
+}
+
+static uint32_t DivideRoundUp(uint32_t x, float divisor)
+{
+	return static_cast<uint32_t>(ceil(x / divisor));
 }

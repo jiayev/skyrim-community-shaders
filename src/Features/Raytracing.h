@@ -20,6 +20,7 @@
 #include "Features/Raytracing/Utils.h"
 #include "Features/Raytracing/Heap.h"
 #include "Features/Raytracing/Buffer.h"
+#include "Features/Raytracing/BufferMA.h"
 #include "Features/Raytracing/Allocator.h"
 #include "Features/Raytracing/HeapManager.h"
 #include "Features/Raytracing/RTPipelineBuilder.h"
@@ -64,15 +65,21 @@ using namespace magic_enum::bitwise_operators;
 
 struct Raytracing : public OverlayFeature
 {
+	// DX12 will not like if we don't respect these numbers and try to write over the resource end
 	static constexpr uint MAX_TEXTURES = 1024;
-	static constexpr uint MAX_MODELS = 2048;
-	static constexpr uint MAX_SHAPES = 2048;
+	static constexpr uint MAX_MODELS = 1024;
+	static constexpr uint MAX_SHAPES = MAX_MODELS * 6;
 	static constexpr uint MAX_MATERIALS = MAX_SHAPES;
 	static constexpr uint MAX_INSTANCES = 4096;
-	
 	static constexpr uint MAX_LIGHTS = 255;
 
 	static constexpr uint SKY_CUBEMAP_SIZE = 256;
+
+	enum MarkerFlags : uint32_t
+	{
+		MapMarker = 1 << 22,
+		HeadingMarker = 1 << 23
+	};
 
 	struct GIHeapDef
 	{
@@ -106,6 +113,7 @@ struct Raytracing : public OverlayFeature
 			Lights,
 			Materials,
 			Instances,
+			Indirection,
 			Vertices,
 			Triangles = Vertices + Raytracing::MAX_SHAPES,
 			Textures = Triangles + Raytracing::MAX_SHAPES,
@@ -211,6 +219,10 @@ struct Raytracing : public OverlayFeature
 	void DrawLightingSettings();
 	void DrawLightSettings();
 
+	void DrawGeneralSettings();
+	void DrawAdvancedSettings();
+	void DrawDebugSettings();
+
 	virtual void DrawOverlay() override;
 	virtual void PostPostLoad() override;
 
@@ -219,6 +231,8 @@ struct Raytracing : public OverlayFeature
 	// Resources
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
+
+	void SetupOutputRT();
 
 	void ShareRT(ID3D11Texture2D* pTexture2D, const GIHeap::Slot& target, const ShadowsHeap::Slot& cTarget, ID3D12Resource** ppResource) const;
 	void SetupSharedRT();
@@ -240,17 +254,16 @@ struct Raytracing : public OverlayFeature
 	void UpdateShadowsFrameBuffer();
 	void RenderShadows();
 
-	float3 GammaToLinear(float3 color);
 	eastl::vector<LightLimitFix::LightData> GetPointLights();
 	void UpdateLights();
 
 	void Main_RenderWorld(bool a1);
 	void BSShader_SetupGeometry(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
 
-	void SkyCubeToHemi();
+	void SkyCubeToHemi() const;
 	void CheckResourcesSide(int side);
 
-	void AddInstance(RE::NiNode* pNiNode, eastl::string path);
+	void AddInstance(RE::FormID formID, RE::NiNode* pNiNode, eastl::string path);
 
 	eastl::vector<size_t> GatherInstanceLights(RE::NiNode* pNiNode);
 
@@ -266,22 +279,27 @@ struct Raytracing : public OverlayFeature
 	void DeviceRemovedHandler();
 
 	void CopyDepth();
-	void ConvertNormalGlossiness();
+	void ConvertTextures() const;
 
 	void ReleaseTempGPUData();
 
 	void BuildTLAS();
 	void RebuildTLAS(ID3D12GraphicsCommandList4* pCommandList, size_t numDescs, D3D12_GPU_VIRTUAL_ADDRESS instanceDescs);
 
+	uint2 GetScreenSize() const;
+	uint2 GetRenderSize();
+	bool UpdateRenderSize();
+
 #ifdef DLSS_RR
 	void InitRR();
 	void CheckFrameConstants();
-	sl::DLSSMode GetDLSSMode();
+	sl::DLSSMode GetDLSSMode() const;
+	sl::DLSSDOptions GetDLSSRROptions() const;
+	void GetDLSSRROptimal();
 	void SetDLSSRROptions();
 	int32_t GetJitterPhaseCount(int32_t renderWidth, int32_t displayWidth);
 	void GetJitterOffset(float* outX, float* outY, int32_t index, int32_t phaseCount);
 	float Halton(int32_t index, int32_t base);
-	float2 GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outputHeight);
 #endif
 
 	const bool Active() 
@@ -310,6 +328,9 @@ struct Raytracing : public OverlayFeature
 		.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR
 	};
 
+	static constexpr D3D12MA::ALLOCATION_DESC UPLOAD_HEAP_MA = { .HeapType = D3D12_HEAP_TYPE_UPLOAD };
+	static constexpr D3D12MA::ALLOCATION_DESC DEFAULT_HEAP_MA = { .HeapType = D3D12_HEAP_TYPE_DEFAULT };
+
 	enum struct Denoiser : int32_t
 	{
 		None,
@@ -327,16 +348,25 @@ struct Raytracing : public OverlayFeature
 		SpecularHitDistance,
 		NormalRoughnessGbuffer,
 		GeometryNormalMetalness,
-		ReflectanceGBuffer,
+		Albedo,
+		Diffuse,
 		Passthrough
 	};
 
+#ifdef DLSS_RR
 	enum struct DLSSRRQuality : int32_t
 	{
 		MaxPerformance,	
 		Balanced,
 		MaxQuality		
 	};
+
+	enum struct DLSSRRPreset : int32_t
+	{
+		D,
+		E
+	};
+#endif
 
 	enum struct PIXCaptureLocation : int32_t
 	{
@@ -345,7 +375,41 @@ struct Raytracing : public OverlayFeature
 		AO
 	};
 
-	enum struct Mode : int32_t
+	// TODO: Rename to ReflectanceModel?
+	enum struct DiffuseBRDF : int32_t
+	{
+		Lambert,
+		Burley,
+		OrenNayar,
+		Gotanda,
+		Chan
+	};
+
+	enum struct LightEvalMode : int32_t
+	{
+		Diffuse,
+		BRDF
+	};
+
+	static constexpr const char* LightEvalModeTooltips[] = {
+		"Diffuse only, no specular.",
+		"Diffuse and Specular with BRDF."
+	};
+	static_assert(_countof(LightEvalModeTooltips) == magic_enum::enum_count<LightEvalMode>());
+
+	enum struct LightingMode : int32_t
+	{
+		Diffuse,
+		PBR
+	};
+
+	static constexpr const char* LightingModeTooltips[] = {
+		"Diffuse only, no reflections.",
+		"Physically Based Rendering mode with diffuse and reflections."
+	};
+	static_assert(_countof(LightingModeTooltips) == magic_enum::enum_count<LightingMode>());
+
+	enum struct TraceMode : int32_t
 	{
 		Reference,
 #ifdef SHARC
@@ -353,10 +417,16 @@ struct Raytracing : public OverlayFeature
 #endif
 	};
 
+	static constexpr const char* TraceModeTooltips[] = {
+		"Reference mode with no cache.",
+		"Enables Spatially Hashed Radiance Cache, a technique aimed at improving signal quality and performance."
+	};
+	static_assert(_countof(TraceModeTooltips) == magic_enum::enum_count<TraceMode>());
+
 #ifdef SHARC
-	static constexpr Mode DefaultMode = Mode::SHaRC;
+	static constexpr TraceMode DefaultMode = TraceMode::SHaRC;
 #else
-	static constexpr Mode DefaultMode = Mode::Reference;
+	static constexpr TraceMode DefaultMode = TraceMode::Reference;
 #endif
 
 	struct SHaRCSettings
@@ -367,10 +437,17 @@ struct Raytracing : public OverlayFeature
 		float RadianceScale = 1e3f;
 		bool AntifireflyFilter = true;
 
+		SHaRCSettings() = default;
+		SHaRCSettings(const SHaRCSettings&) = default;
+
+		SHaRCSettings& operator=(const SHaRCSettings&) = default;
+		bool operator==(const SHaRCSettings&) const = default;
+		bool operator!=(const SHaRCSettings&) const = default;
+
 		SHaRCFrameData GetFrameData(bool updatePass) const
 		{
 			return {
-				.SceneScale = SceneScale / Util::Units::GAME_UNIT_TO_M,
+				.SceneScale = SceneScale * Util::Units::GAME_UNIT_TO_M,
 				.AccumFrameNum = (uint)AccumFrameNum,
 				.StaleFrameNum = (uint)StaleFrameNum,
 				.RadianceScale = RadianceScale,
@@ -379,6 +456,22 @@ struct Raytracing : public OverlayFeature
 				.UpdatePass = updatePass
 			};
 		}
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(SHaRCSettings, SceneScale, AccumFrameNum, StaleFrameNum, RadianceScale, AntifireflyFilter)
+	};
+
+	struct AdvancedSettings
+	{
+		bool ResampledImportanceSampling = true;
+		int RISMaxCandidates = 4;
+
+		bool GGXEnergyConservation = true;
+
+		DiffuseBRDF DiffuseBRDF = DiffuseBRDF::Burley;
+		LightEvalMode LightEvalMode = LightEvalMode::BRDF;
+		LightingMode LightingMode = LightingMode::PBR;
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(AdvancedSettings, ResampledImportanceSampling, RISMaxCandidates, GGXEnergyConservation, DiffuseBRDF, LightEvalMode, LightingMode)
 	};
 
 	////////////////////////////////////////////////// Feature Specific Data
@@ -386,21 +479,19 @@ struct Raytracing : public OverlayFeature
 	{
 		bool Enabled = true;
 		bool GlobalIllumination = true;
-		Mode Mode = DefaultMode;
+		AdvancedSettings AdvancedSettings;
+		TraceMode TraceMode = DefaultMode;
 		Denoiser Denoiser = Denoiser::Accumulation;
 		int Bounces = 2;
 		int SamplesPerPixel = 1;
 		float2 Roughness = {0.0f, 1.0f};
 		float2 Metalness = {0.0f, 1.0f};
-		float Diffuse = 1.0f;
-		float Specular = 1.0f;
 		float Emissive = 1.0f;
 		float Effect = 1.0f;
 		float Sky = 1.0f;
 		float Directional = 1.0f;
 		float Point = 1.0f;
 		bool LodDimmer = true;
-		bool GammaToLinear = false;
 		bool RaytracedShadows = true;
 		bool PathTracing = false;
 		bool CullShadows = true;
@@ -408,6 +499,8 @@ struct Raytracing : public OverlayFeature
 		bool RussianRoulette = true;
 #ifdef DLSS_RR
 		DLSSRRQuality DLSSRRQualityMode = DLSSRRQuality::MaxQuality;
+		float DLSSRRSharpness = 0.0f;
+		DLSSRRPreset DLSSRRPreset = DLSSRRPreset::E;
 #endif
 		bool PerformanceOverlay = false;
 		std::string Defines = "";
@@ -415,6 +508,7 @@ struct Raytracing : public OverlayFeature
 		bool EnablePIXCapture = false;
 		PIXCaptureLocation PIXCaptureLocation = PIXCaptureLocation::GlobalIllumination;
 		bool EnableDebugDevice = false;
+		bool WhiteFurnace = false;
 #ifdef SHARC
 		SHaRCSettings SHaRCSettings;
 #endif
@@ -423,14 +517,12 @@ struct Raytracing : public OverlayFeature
 	enum class RecompileReason : uint32_t
 	{
 		None = 0,
-		Bounces = 1 << 0,
-		Samples = 1 << 1,
-		Mode = 1 << 2,
-		GIPTMode = 1 << 3,
-		Debug = 1 << 4
-	};
-
-	RecompileReason recompileReason = RecompileReason::None;
+		General = 1 << 0,
+		Advanced = 1 << 1,
+		Debug = 1 << 2,
+		RestoreDefaultsSettings = 1 << 3,
+		LoadSettings = 1 << 4
+	} recompileReason = RecompileReason::None;
 
 	bool shareTexture = false;
 	bool renderingWorld = false;
@@ -450,7 +542,7 @@ struct Raytracing : public OverlayFeature
 	struct TextureReference
 	{
 		ID3D12Resource* resource = nullptr;
-		eastl::shared_ptr<Allocation> registerIndex;
+		eastl::shared_ptr<Allocation> allocation;
 	};
 
 	// Creates a single BLAS for a collection of Shapes
@@ -458,10 +550,11 @@ struct Raytracing : public OverlayFeature
 	void CommitModel(Model& geometryData);
 
 	// Creates mesh buffers for all graph TriShapes, handles materials and builds a single BLAS for the node
-	void CreateModel(const char* path, RE::NiNode* pRoot);
+	void CreateModel(RE::TESObjectREFR* refr, const char* path, RE::NiNode* pRoot);
 
 	// Removes the instance and optionally also releases the model and all its buffers if refCount reaches 0
-	void RemoveInstance(RE::NiNode* pRoot, bool releaseModel);
+	bool RemoveInstance(RE::NiNode* pRoot, bool releaseModel);
+	bool RemoveInstance(RE::FormID formID, bool releaseModel);
 
 	// TODO: Move to Model struct
 	void UpdateModelBLAS(Model& geometryData);
@@ -584,7 +677,7 @@ struct Raytracing : public OverlayFeature
 						auto& rt = globals::features::raytracing;
 
 						rt.modelUpdate.emplace_back(path);
-						rt.vertexUpdate.emplace_back(shape->registerIndex->GetIndex(), updateFlags & Flags::Dynamic ? shape->dynamicPositionBuffer.get() : nullptr, shape->vertexBuffer.get(), shape->vertexCount, updateFlags);
+						rt.vertexUpdate.emplace_back(shape->allocation->GetIndex(), updateFlags & Flags::Dynamic ? shape->dynamicPositionBuffer.get() : nullptr, shape->vertexBuffer.get(), shape->vertexCount, updateFlags);
 					}
 				}
 			}
@@ -593,12 +686,28 @@ struct Raytracing : public OverlayFeature
 		}
 	};
 
+	winrt::com_ptr<D3D12MA::Allocator> allocator = nullptr;
+
+	winrt::com_ptr<D3D12MA::Pool> uploadPool = nullptr;
+
+	winrt::com_ptr<D3D12MA::Pool> dynamicVertexPool = nullptr;
+	winrt::com_ptr<D3D12MA::Pool> vertexPool = nullptr;
+	winrt::com_ptr<D3D12MA::Pool> skinningPool = nullptr;
+	winrt::com_ptr<D3D12MA::Pool> trianglePool = nullptr;
+
+	winrt::com_ptr<D3D12MA::Pool> blasScratchPool = nullptr;
+	winrt::com_ptr<D3D12MA::Pool> blasPool = nullptr;
+
 	eastl::unordered_map<RE::NiNode*, Instance> instances;
+	eastl::unordered_map<RE::FormID, RE::NiNode*> formIDNodes;
 
 	eastl::unique_ptr<DX12::StructuredBufferUpload<MaterialData>> materialBuffer = nullptr;
 
 	eastl::vector<InstanceData> instanceBufferData;
 	eastl::unique_ptr<DX12::StructuredBufferUpload<InstanceData>> instanceBuffer = nullptr;
+
+	// Maps geometry to their actual buffer SRV
+	eastl::unique_ptr<DX12::ResourceUpload> indirectionBuffer = nullptr;
 
 	Util::FrameChecker shadowFrameChecker;
 
@@ -611,7 +720,8 @@ struct Raytracing : public OverlayFeature
 	winrt::com_ptr<ID3D11SamplerState> samplerState = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> copyDepthCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> convertNormalGlossCS = nullptr;
-
+	winrt::com_ptr<ID3D11ComputeShader> trueLinearToGammaCS = nullptr;
+	
 	eastl::unique_ptr<DX12::StructuredBufferUpload<D3D12_RAYTRACING_INSTANCE_DESC>> blasInstanceBuffer = nullptr;	
 	eastl::vector<D3D12_RAYTRACING_INSTANCE_DESC> blasInstances;
 
@@ -666,9 +776,9 @@ struct Raytracing : public OverlayFeature
 
 	struct VertexUpdate
 	{
-		uint16_t registerIndex;
-		DX12::StructuredBufferUpload<float4>* dynamicPositionBuffer = nullptr;
-		DX12::StructuredBufferUpload<Vertex>* vertexBuffer = nullptr;
+		uint16_t allocatedIndex;
+		DX12::StructuredBufferUploadMA<float4>* dynamicPositionBuffer = nullptr;
+		DX12::StructuredBufferUploadMA<Vertex>* vertexBuffer = nullptr;
 		uint16_t vertexCount;
 		Flags flags;
 	};
@@ -695,7 +805,7 @@ struct Raytracing : public OverlayFeature
 
 	struct TempGPUData
 	{
-		winrt::com_ptr<ID3D12Resource> scratchBuffers;
+		winrt::com_ptr<D3D12MA::Allocation> scratchBuffers;
 		uint64_t fenceValue;
 	};
 
@@ -717,17 +827,23 @@ struct Raytracing : public OverlayFeature
 
 	// Resources
 	eastl::unique_ptr<DX12::Texture2D> outputTexture = nullptr;
-	eastl::unique_ptr<DX12::Texture2D> reflectanceTexture = nullptr;
+	eastl::unique_ptr<DX12::Texture2D> specularAlbedoTexture = nullptr;
 	eastl::unique_ptr<DX12::Texture2D> specularHitDistanceTexture = nullptr;
 
 	eastl::unique_ptr<WrappedResource> depthTexture = nullptr;
 	eastl::unique_ptr<WrappedResource> motionVectorsTexture = nullptr;
 
+	// True Albedo
 	winrt::com_ptr<ID3D12Resource> albedoTexture = nullptr;
-	eastl::unique_ptr<WrappedResource> normalRoughnessTexture = nullptr;
-	winrt::com_ptr<ID3D12Resource> GNMDTexture = nullptr;
 
-	winrt::com_ptr<ID3D12Resource> gbufferReflectanceTexture = nullptr;
+	// Metalness modulated albedo
+	eastl::unique_ptr<WrappedResource> diffuseAlbedoTexture = nullptr;
+
+	// World normal and roughness
+	eastl::unique_ptr<WrappedResource> normalRoughnessTexture = nullptr;
+
+	// Geometry normal, metalness and AO
+	winrt::com_ptr<ID3D12Resource> GNMDTexture = nullptr;
 
 	eastl::unique_ptr<WrappedResource> mainTexture = nullptr;
 
@@ -735,6 +851,8 @@ struct Raytracing : public OverlayFeature
 	std::shared_mutex bufferMutex;
 	std::shared_mutex sharedTextureMutex;
 	std::shared_mutex renderMutex;
+
+	uint2 renderSize;
 
 	// Timings
 	float mainTime;
@@ -917,9 +1035,20 @@ struct Raytracing : public OverlayFeature
 						auto& rt = globals::features::raytracing;
 
 						if (auto sharedIt = rt.sharedTextures.find(texture); sharedIt != rt.sharedTextures.end()) {
-							// TODO: proper fix - this is backwards, it should be handled safely by the material going out of scope after its shape and models are released
 							if (auto textureIt = rt.textures.find(texture); textureIt != rt.textures.end()) {
-								logger::info("[RT] NiSourceTexture::Destructor [0x{:8X}] - Register: {}", reinterpret_cast<uintptr_t>(texture), textureIt->second.registerIndex->GetIndex());
+								auto index = textureIt->second.allocation->GetIndex();
+
+								logger::debug("[RT] NiSourceTexture::Destructor [0x{:8X}] - Register: {}", reinterpret_cast<uintptr_t>(texture), index);
+
+								// I imagine this isn't fast but I'll keep this in until I'm sure everything has been fixed
+								for (auto& [key, model]: rt.models) {
+									for (auto& shape: model.shapes) {
+										auto& material = shape->material;
+
+										if (index == material.BaseTexture->GetIndex())
+											logger::error("[RT]\t\t NiSourceTexture::Destructor - Found in: {}", key);
+									}
+								}
 							}
 
 							rt.sharedTextures.erase(sharedIt);
@@ -1102,7 +1231,7 @@ struct Raytracing : public OverlayFeature
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		template <typename T>
+		/*template <typename T>
 		struct Load3DBase
 		{
 			static RE::NiAVObject* thunk(T* oThis, bool a_backgroundLoading)
@@ -1118,7 +1247,7 @@ struct Raytracing : public OverlayFeature
 				return result;
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
-		};
+		};*/
 
 		template <typename T>
 		struct Load3D
@@ -1128,8 +1257,23 @@ struct Raytracing : public OverlayFeature
 				auto* result = func(oThis, a_backgroundLoading);
 
 				if (auto& rt = globals::features::raytracing; rt.Active()) {
-					if (auto model = oThis->GetBaseObject()->As<RE::TESModel>()) {
-						rt.CreateModel(model->GetModel(), netimmerse_cast<RE::NiNode*>(result));
+					auto* baseObject = oThis->GetBaseObject();
+
+					auto flags = baseObject->GetFormFlags();
+					RE::FormType type = baseObject->GetFormType();
+
+					if (type == RE::FormType::IdleMarker)
+						return result;
+
+					if (flags & MarkerFlags::MapMarker || flags & MarkerFlags::HeadingMarker)
+						return result;
+
+					/*RE::FormID id = baseObject->GetFormID();
+					logger::info("[RT] Load3DA - Name: {}, Flags [0x{:8X}]: {}", typeid(*baseObject).name(), flags, GetFlagsString<RE::TESObjectREFR::RecordFlags::RecordFlag>(flags));
+					logger::info("[RT] Load3DA - FormID: [0x{:8X}], FormType: {}", id, magic_enum::enum_name(type));*/
+
+					if (auto* model = baseObject->As<RE::TESModel>()) {
+						rt.CreateModel(oThis, model->GetModel(), netimmerse_cast<RE::NiNode*>(result));
 					}
 				}
 
@@ -1154,6 +1298,40 @@ struct Raytracing : public OverlayFeature
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct TESObjectREFR_Enable
+		{
+			static void thunk(RE::TESObjectREFR* oThis, bool a_resetInventory)
+			{
+				if (auto& rt = globals::features::raytracing; rt.Active()) {
+					auto* baseObject = oThis->GetBaseObject();
+
+					if (auto* model = baseObject->As<RE::TESModel>()) {
+						logger::info("[RT] TESObjectREFR::Enable: {}", model->GetModel());
+					}
+				}
+
+				func(oThis, a_resetInventory);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct TESObjectREFR_Disable
+		{
+			static void thunk(RE::TESObjectREFR* oThis)
+			{
+				if (auto& rt = globals::features::raytracing; rt.Active()) {
+					auto* baseObject = oThis->GetBaseObject();
+
+					if (auto* model = baseObject->As<RE::TESModel>()) {
+						logger::info("[RT] TESObjectREFR::Disable: {}", model->GetModel());
+					}
+				}
+
+				func(oThis);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+		
 		template <typename T>
 		struct Clone3DBase
 		{
@@ -1298,10 +1476,11 @@ struct Raytracing : public OverlayFeature
 			stl::write_vfunc<0x6A, Load3D<RE::TESObjectREFR>>(RE::VTABLE_TESObjectREFR[0]);
 			stl::write_vfunc<0x6B, Release3DRelatedData<RE::TESObjectREFR>>(RE::VTABLE_TESObjectREFR[0]);
 
+			//stl::detour_thunk<TESObjectREFR_Enable>(REL::RelocationID(19373, 19800));
+			//stl::write_vfunc<0x89, TESObjectREFR_Disable>(RE::VTABLE_TESObjectREFR[0]);
+
 			// NiSourceTexture Destructor
 			stl::write_vfunc<0x0, NiSourceTexture_Destructor>(RE::VTABLE_NiSourceTexture[0]);
-
-			//NiSourceTexture
 
 			// Destructors to remove instances
 			stl::write_vfunc<0x0, Destructor<RE::NiNode>>(RE::VTABLE_NiNode[0]);

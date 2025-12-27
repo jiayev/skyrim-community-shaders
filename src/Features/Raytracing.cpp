@@ -25,75 +25,55 @@
 #include <imgui_stdlib.h>
 
 #ifdef DLSS_RR
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	Raytracing::Settings,
-	Enabled,
-	GlobalIllumination,
-	Mode,
-	Denoiser,
-	Bounces,
-	SamplesPerPixel,
-	Roughness,
-	Metalness,
-	Diffuse,
-	Specular,
-	Emissive,
-	Directional,
-	Point,
-	LodDimmer,
-	GammaToLinear,
-	RaytracedShadows,
-	PathTracing,
-	CullShadows,
-	RecompressTextures,
-	RussianRoulette,
-	DLSSRRQualityMode,
-	PerformanceOverlay,
-	DebugOutput,
-	EnablePIXCapture,
-	PIXCaptureLocation,
-	EnableDebugDevice)
+#	define RAYTRACING_EXTRA_FIELDS DLSSRRQualityMode, DLSSRRSharpness, DLSSRRPreset
 #else
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	Raytracing::Settings,
-	Enabled,
-	GlobalIllumination,
-	Mode,
-	Denoiser,
-	Bounces,
-	SamplesPerPixel,
-	Roughness,
-	Metalness,
-	Diffuse,
-	Specular,
-	Emissive,
-	Directional,
-	Point,
-	LodDimmer,
-	GammaToLinear,
-	RaytracedShadows,
-	PathTracing,
-	CullShadows,
-	RecompressTextures,
-	RussianRoulette,
-	PerformanceOverlay,
-	DebugOutput,
-	EnablePIXCapture,
-	PIXCaptureLocation,
-	EnableDebugDevice)
+#	define RAYTRACING_EXTRA_FIELDS
 #endif
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Raytracing::Settings,
+	Enabled,
+	GlobalIllumination,
+	AdvancedSettings,
+	TraceMode,
+	Denoiser,
+	Bounces,
+	SamplesPerPixel,
+	Roughness,
+	Metalness,
+	Emissive,
+	Effect,
+	Sky,
+	Directional,
+	Point,
+	LodDimmer,
+	RaytracedShadows,
+	PathTracing,
+	CullShadows,
+	RecompressTextures,
+	RussianRoulette,
+	PerformanceOverlay,
+	Defines,
+	DebugOutput,
+	EnablePIXCapture,
+	PIXCaptureLocation,
+	EnableDebugDevice,
+	RAYTRACING_EXTRA_FIELDS)
 
 ////////////////////////////////////////////////////////////////////////////////////
 
 void Raytracing::RestoreDefaultSettings()
 {
 	settings = {};
+
+	recompileReason |= RecompileReason::RestoreDefaultsSettings;
 }
 
 void Raytracing::LoadSettings(json& o_json)
 {
 	settings = o_json;
+
+	recompileReason |= RecompileReason::LoadSettings;
 }
 
 void Raytracing::SaveSettings(json& o_json)
@@ -111,204 +91,89 @@ void DrawFloat2(const char* label, float2& v, float min = 0.0f, float max = 1.0f
 }
 
 template <typename T>
-static bool DrawEnumRadio(const char* label, T& variable) {
+requires std::is_enum_v<T>
+static bool DrawEnumRadio(const char* label, T& variable, const char* tooltip = nullptr, const char* const* tooltips = nullptr)
+{
+	ImGui::PushID(label);
+
 	auto variablePrev = variable;
 
 	int denoiser = static_cast<int32_t>(variable);
 	ImGui::TextUnformatted(label);
 
+	if (tooltip != nullptr)
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", tooltip);	
+
 	ImGui::SameLine();
 	ImGui::Dummy(ImVec2(25, 0));
+
+	auto i = 0;
 
 	for (auto& [value, name] : magic_enum::enum_entries<T>()) {
 		ImGui::SameLine();
 		ImGui::RadioButton(name.data(), &denoiser, static_cast<int32_t>(value));
 
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s tooltip.", name.data());
-			//ImGui::Text("Enables Spatially Hashed Radiance Cache, a technique aimed at improving signal quality and performance in the context of path tracing.");
-		}
+		if (tooltips != nullptr)
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", tooltips[i]);
+
+		i++;
 	}
+
+	ImGui::PopID();
 
 	variable = static_cast<T>(denoiser);
 
 	return variable != variablePrev;
 }
 
+template <typename T>
+requires std::is_enum_v<T>
+static bool DrawEnumCombo(const char* label, T& variable, const char* tooltip = nullptr, const char* const* tooltips = nullptr)
+{
+	ImGui::PushID(label);
+
+	auto variablePrev = variable;
+
+	if (ImGui::BeginCombo(label, magic_enum::enum_name(variable).data())) {
+		auto i = 0;
+
+		for (auto& value : magic_enum::enum_values<T>()) {
+			bool isSelected = (variable == value);
+
+			if (ImGui::Selectable(magic_enum::enum_name(value).data(), isSelected))
+				variable = value;
+
+			if (tooltips != nullptr)
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", tooltips[i]);
+
+			if (isSelected)
+				ImGui::SetItemDefaultFocus();
+
+			i++;
+		}
+
+		ImGui::EndCombo();
+	} else if (tooltip != nullptr) {
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", tooltip);	
+	}
+
+	ImGui::PopID();
+
+	return variable != variablePrev;
+}
+
 void Raytracing::DrawSettings()
 {
-	ImGui::Checkbox("Enabled", &settings.Enabled);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Enable Ray-Traced Global Illumination.");
-	}
+	if (ImGui::BeginTabBar("Settings")) {
+		DrawGeneralSettings();
+		DrawAdvancedSettings();
+		DrawDebugSettings();
 
-	ImGui::Checkbox("Global Illumination", &settings.GlobalIllumination);
-
-	if (DrawEnumRadio("Mode", settings.Mode))
-		recompileReason |= RecompileReason::Mode;
-
-	DrawEnumRadio("Denoiser", settings.Denoiser);
-
-	/*{
-		int denoiser = static_cast<int32_t>(settings.Denoiser);
-		ImGui::TextUnformatted("Denoiser");
-
-		ImGui::SameLine();
-		ImGui::Dummy(ImVec2(25, 0));
-
-		for (auto& [value, name] : magic_enum::enum_entries<Denoiser>()) {
-			ImGui::SameLine();
-			ImGui::RadioButton(name.data(), &denoiser, static_cast<int32_t>(value));
-		}
-
-		settings.Denoiser = static_cast<Denoiser>(denoiser);
-	}*/
-
-	// Bounces
-	{
-		int bounces = settings.Bounces;
-
-		if (ImGui::SliderInt("Bounces", &settings.Bounces, 1, 32))
-			settings.Bounces = std::clamp(settings.Bounces, 1, 32);
-
-		if (bounces != settings.Bounces)
-			recompileReason |= RecompileReason::Bounces;
-	}
-
-	// Samples Per Pixel
-	{
-		int samples = settings.SamplesPerPixel;
-
-		if (ImGui::SliderInt("Samples Per Pixel", &settings.SamplesPerPixel, 1, 32))
-			settings.SamplesPerPixel = std::clamp(settings.SamplesPerPixel, 1, 32);
-
-		if (samples != settings.SamplesPerPixel)
-			recompileReason |= RecompileReason::Samples;
-	}
-
-	/*if (ImGui::SliderInt("Bounces", &settings.Bounces, 1, 32))
-		settings.Bounces = std::clamp(settings.Bounces, 1, 32);*/
-
-	DrawFloat2("Roughness", settings.Roughness);
-	DrawFloat2("Metalness", settings.Metalness);
-
-	DrawDenoiserSettings();
-
-#ifdef SHARC
-	DrawSHaRCSettings();
-#endif
-
-	DrawLightingSettings();
-
-	if (ImGui::Checkbox("Path Tracing", &settings.PathTracing)) {
-		recompileReason |= RecompileReason::GIPTMode;
-	}
-
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Experimental Path Tracing mode.\n");
-	}
-
-	ImGui::Checkbox("Recompress Textures", &settings.RecompressTextures);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Some texture formats cannot be shared between APIs, enabling this option ensures they'll be recompressed in a lower quality yet compatible format.\n");
-	}
-
-	ImGui::Checkbox("Russian Roulette", &settings.RussianRoulette);
-
-	if (ImGui::CollapsingHeader("Debug", ImGuiTreeNodeFlags_DefaultOpen)) {	
-		ImGui::InputText("Shader Defines", &settings.Defines);
-
-		ImGui::SameLine();
-
-		if (ImGui::Button("Recompile"))
-			recompileReason |= RecompileReason::Debug;
-
-		// Debug display mode
-		if (ImGui::BeginCombo("Debug Output", magic_enum::enum_name(settings.DebugOutput).data())) {
-			for (auto& value : magic_enum::enum_values<DebugOutput>()) {
-				bool isSelected = (settings.DebugOutput == value);
-
-				if (ImGui::Selectable(magic_enum::enum_name(value).data(), isSelected))
-					settings.DebugOutput = value;
-
-				if (isSelected)
-					ImGui::SetItemDefaultFocus();
-			}
-
-			ImGui::EndCombo();
-		}
-
-		ImGui::Checkbox("Enable PIX Capture", &settings.EnablePIXCapture);
-		{
-			if (settings.EnablePIXCapture) {
-				if (ImGui::TreeNodeEx("Pix Capture", ImGuiTreeNodeFlags_DefaultOpen)) {
-					//Pix Capture Location
-					{
-						int pixCapLocation = static_cast<int32_t>(settings.PIXCaptureLocation);
-						ImGui::TextUnformatted("PIX Capture");
-
-						ImGui::SameLine();
-						ImGui::Dummy(ImVec2(25, 0));
-
-						for (auto& [value, name] : magic_enum::enum_entries<PIXCaptureLocation>()) {
-							ImGui::SameLine();
-							ImGui::RadioButton(name.data(), &pixCapLocation, static_cast<int32_t>(value));
-						}
-
-						settings.PIXCaptureLocation = static_cast<PIXCaptureLocation>(pixCapLocation);
-					}
-
-					if (ImGui::Button("Single Frame Capture")) {
-						pixCapture = true;
-						pixCaptureStarted = false;
-					}
-
-					if (ImGui::Button("Start MultiFrame Capture")) {
-						pixCapture = true;
-						pixCaptureStarted = false;
-						pixMultiFrame = true;
-					}
-
-					if (pixCapture && pixCaptureStarted && pixMultiFrame && ImGui::Button("End MultiFrame Capture")) {
-						pixMultiFrame = false;
-					}
-
-					if (ImGui::Button("Start TRD Capture")) {
-						pixCapture = true;
-						pixCaptureStarted = false;
-						pixTDR = true;
-					}
-
-					ImGui::TreePop();
-				}
-			}
-		}
-
-		ImGui::Checkbox("Enabled Debug Device", &settings.EnableDebugDevice);
-		{
-			if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
-				ImGui::Text(std::format("Lights: {}", lights.size()).c_str());
-
-				ImGui::Text(std::format("Used Textures: {}, Shared: {}", textureRegisters.UsedCount(), sharedTextures.size()).c_str());
-				ImGui::Text(std::format("Used Shapes: {}", shapeRegisters.UsedCount()).c_str());
-				ImGui::Text(std::format("Models: {}", models.size()).c_str());
-
-				auto instanceCount = instances.size();
-				ImGui::Text(std::format("Instances: {}", instanceCount).c_str());
-
-				if (settings.GlobalIllumination) {
-					auto blasInstancesCount = blasInstances.size();
-					ImGui::Text(std::format("GI Unculled: {}, Culled: {}", blasInstancesCount, instanceCount - blasInstancesCount).c_str());
-				}
-
-				if (settings.RaytracedShadows) {
-					auto blasInstancesCount = blasShadowInstances.size();
-					ImGui::Text(std::format("Shadow Unculled: {}, Culled: {}", blasInstancesCount, instanceCount - blasInstancesCount).c_str());
-				}
-
-				ImGui::TreePop();
-			}
-		}
+		ImGui::EndTabBar();
 	}
 
 	if (recompileReason != RecompileReason::None) {
@@ -320,8 +185,8 @@ void Raytracing::DrawSettings()
 #ifdef SHARC
 void Raytracing::DrawSHaRCSettings()
 {
-	if (ImGui::TreeNodeEx("SHaRC", ImGuiTreeNodeFlags_CollapsingHeader)) {
-		ImGui::BeginDisabled(settings.Mode != Mode::SHaRC);
+	if (ImGui::CollapsingHeader("SHaRC")) {
+		ImGui::BeginDisabled(settings.TraceMode != TraceMode::SHaRC);
 
 		auto& sharcSettings = settings.SHaRCSettings;
 
@@ -337,7 +202,6 @@ void Raytracing::DrawSHaRCSettings()
 		ImGui::Checkbox("Antifirefly Filter", &sharcSettings.AntifireflyFilter);
 
 		ImGui::EndDisabled();
-		ImGui::TreePop();
 	}
 }
 #endif
@@ -345,7 +209,7 @@ void Raytracing::DrawSHaRCSettings()
 void Raytracing::DrawDenoiserSettings()
 {
 #ifdef DLSS_RR
-	if (ImGui::BeginCombo("DLSS RR Quality Mode", magic_enum::enum_name(settings.DLSSRRQualityMode).data())) {
+	/*if (ImGui::BeginCombo("DLSS RR Quality TraceMode", magic_enum::enum_name(settings.DLSSRRQualityMode).data())) {
 		for (auto& value : magic_enum::enum_values<DLSSRRQuality>()) {
 			bool isSelected = (settings.DLSSRRQualityMode == value);
 
@@ -357,19 +221,20 @@ void Raytracing::DrawDenoiserSettings()
 		}
 
 		ImGui::EndCombo();
-	}
+	}*/
+
+	DrawEnumCombo("DLSS RR Quality Mode", settings.DLSSRRQualityMode);
+
+	ImGui::DragFloat("DLSS RR Sharpness", &settings.DLSSRRSharpness, 0.001f, 0.0f, 1.0f);
+	settings.DLSSRRSharpness = std::clamp(settings.DLSSRRSharpness, 0.0f, 1.0f);
+
+	DrawEnumRadio("DLSS RR Preset", settings.DLSSRRPreset);
 #endif
 }
 
 void Raytracing::DrawLightingSettings()
 {
-	if (ImGui::TreeNodeEx("Lighting", ImGuiTreeNodeFlags_CollapsingHeader)) {
-		if (ImGui::DragFloat("Diffuse Strength", &settings.Diffuse, 0.001f))
-			settings.Diffuse = std::max(0.0f, settings.Diffuse);
-
-		if (ImGui::DragFloat("Specular Strength", &settings.Specular, 0.001f))
-			settings.Specular = std::max(0.0f, settings.Specular);
-
+	if (ImGui::CollapsingHeader("Lighting")) {
 		if (ImGui::DragFloat("Emissive Strength", &settings.Emissive, 0.001f))
 			settings.Emissive = std::max(0.0f, settings.Emissive);
 
@@ -380,8 +245,6 @@ void Raytracing::DrawLightingSettings()
 			settings.Sky = std::max(0.0f, settings.Sky);
 
 		DrawLightSettings();
-
-		ImGui::TreePop();
 	}
 }
 
@@ -396,7 +259,6 @@ void Raytracing::DrawLightSettings()
 				settings.Point = std::max(0.0f, settings.Point);
 
 			ImGui::Checkbox("Lod Dimmer", &settings.LodDimmer);
-			ImGui::Checkbox("Gamma To Linear", &settings.GammaToLinear);
 
 			ImGui::Checkbox("Raytraced Shadows", &settings.RaytracedShadows);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -410,6 +272,218 @@ void Raytracing::DrawLightSettings()
 
 		ImGui::TreePop();
 	}
+}
+
+void Raytracing::DrawGeneralSettings()
+{
+	if (!ImGui::BeginTabItem("General"))
+		return;
+
+	ImGui::PushID("GeneralSettings");
+
+	ImGui::Checkbox("Enabled", &settings.Enabled);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Enable Ray-Traced Global Illumination.");
+	}
+
+	ImGui::Checkbox("Global Illumination", &settings.GlobalIllumination);
+
+	if (DrawEnumRadio("TraceMode", settings.TraceMode, nullptr, TraceModeTooltips))
+		recompileReason |= RecompileReason::General;
+
+	DrawEnumRadio("Denoiser", settings.Denoiser);
+
+	// Bounces
+	{
+		int bounces = settings.Bounces;
+
+		if (ImGui::SliderInt("Bounces", &settings.Bounces, 1, 32))
+			settings.Bounces = std::clamp(settings.Bounces, 1, 32);
+
+		if (bounces != settings.Bounces)
+			recompileReason |= RecompileReason::General;
+	}
+
+	// Samples Per Pixel
+	{
+		int samples = settings.SamplesPerPixel;
+
+		if (ImGui::SliderInt("Samples Per Pixel", &settings.SamplesPerPixel, 1, 32))
+			settings.SamplesPerPixel = std::clamp(settings.SamplesPerPixel, 1, 32);
+
+		if (samples != settings.SamplesPerPixel)
+			recompileReason |= RecompileReason::General;
+	}
+
+	DrawFloat2("Roughness", settings.Roughness);
+	DrawFloat2("Metalness", settings.Metalness);
+
+	DrawDenoiserSettings();
+
+#ifdef SHARC
+	DrawSHaRCSettings();
+#endif
+
+	DrawLightingSettings();
+
+	if (ImGui::Checkbox("Path Tracing", &settings.PathTracing)) {
+		recompileReason |= RecompileReason::General;
+	}
+
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Experimental Path Tracing mode.\n");
+	}
+
+	ImGui::Checkbox("Recompress Textures", &settings.RecompressTextures);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Some texture formats cannot be shared between APIs, enabling this option ensures they'll be recompressed in a lower quality yet compatible format.\n");
+	}
+
+	ImGui::Checkbox("Russian Roulette", &settings.RussianRoulette);
+
+	ImGui::PopID();
+
+	ImGui::EndTabItem();
+}
+
+void Raytracing::DrawAdvancedSettings()
+{
+	if (!ImGui::BeginTabItem("Advanced"))
+		return;
+
+	ImGui::PushID("AdvancedSettings");
+
+	auto& advSettings = settings.AdvancedSettings;
+
+	if (ImGui::Checkbox("Resampled Importance Sampling", &advSettings.ResampledImportanceSampling))
+		recompileReason |= RecompileReason::Advanced;
+
+	ImGui::SliderInt("RIS Max Candidates", &advSettings.RISMaxCandidates, 2, 16);
+
+	if (ImGui::Checkbox("GGX Energy Conservation", &advSettings.GGXEnergyConservation))
+		recompileReason |= RecompileReason::Advanced;
+
+	if (DrawEnumCombo("Diffuse BRDF", advSettings.DiffuseBRDF))
+		recompileReason |= RecompileReason::Advanced;
+
+	if (DrawEnumRadio("Light Evaluation Mode", advSettings.LightEvalMode, nullptr, LightEvalModeTooltips))
+		recompileReason |= RecompileReason::Advanced;
+
+	if (DrawEnumRadio("Lighting Mode", advSettings.LightingMode, nullptr, LightingModeTooltips))
+		recompileReason |= RecompileReason::Advanced;
+
+	ImGui::PopID();
+
+	ImGui::EndTabItem();
+}
+
+void Raytracing::DrawDebugSettings()
+{
+	if (!ImGui::BeginTabItem("Debug"))
+		return;
+
+	ImGui::PushID("DebugSettings");
+
+	ImGui::InputText("Shader Defines", &settings.Defines);
+
+	ImGui::SameLine();
+
+	if (ImGui::Button("Recompile"))
+		recompileReason |= RecompileReason::Debug;
+
+	if (ImGui::Checkbox("White Furnace", &settings.WhiteFurnace))
+		recompileReason |= RecompileReason::Debug;
+
+	// Debug display mode
+	if (ImGui::BeginCombo("Debug Output", magic_enum::enum_name(settings.DebugOutput).data())) {
+		for (auto& value : magic_enum::enum_values<DebugOutput>()) {
+			bool isSelected = (settings.DebugOutput == value);
+
+			if (ImGui::Selectable(magic_enum::enum_name(value).data(), isSelected))
+				settings.DebugOutput = value;
+
+			if (isSelected)
+				ImGui::SetItemDefaultFocus();
+		}
+
+		ImGui::EndCombo();
+	}
+
+	ImGui::Checkbox("Enable PIX Capture", &settings.EnablePIXCapture);
+	{
+		if (settings.EnablePIXCapture) {
+			if (ImGui::TreeNodeEx("Pix Capture", ImGuiTreeNodeFlags_DefaultOpen)) {
+				//Pix Capture Location
+				{
+					int pixCapLocation = static_cast<int32_t>(settings.PIXCaptureLocation);
+					ImGui::TextUnformatted("PIX Capture");
+
+					ImGui::SameLine();
+					ImGui::Dummy(ImVec2(25, 0));
+
+					for (auto& [value, name] : magic_enum::enum_entries<PIXCaptureLocation>()) {
+						ImGui::SameLine();
+						ImGui::RadioButton(name.data(), &pixCapLocation, static_cast<int32_t>(value));
+					}
+
+					settings.PIXCaptureLocation = static_cast<PIXCaptureLocation>(pixCapLocation);
+				}
+
+				if (ImGui::Button("Single Frame Capture")) {
+					pixCapture = true;
+					pixCaptureStarted = false;
+				}
+
+				if (ImGui::Button("Start MultiFrame Capture")) {
+					pixCapture = true;
+					pixCaptureStarted = false;
+					pixMultiFrame = true;
+				}
+
+				if (pixCapture && pixCaptureStarted && pixMultiFrame && ImGui::Button("End MultiFrame Capture")) {
+					pixMultiFrame = false;
+				}
+
+				if (ImGui::Button("Start TRD Capture")) {
+					pixCapture = true;
+					pixCaptureStarted = false;
+					pixTDR = true;
+				}
+
+				ImGui::TreePop();
+			}
+		}
+	}
+
+	ImGui::Checkbox("Enabled Debug Device", &settings.EnableDebugDevice);
+	{
+		if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
+			ImGui::Text(std::format("Lights: {}", lights.size()).c_str());
+
+			ImGui::Text(std::format("Used Textures: {}, Shared: {}", textureRegisters.UsedCount(), sharedTextures.size()).c_str());
+			ImGui::Text(std::format("Used Shapes: {}", shapeRegisters.UsedCount()).c_str());
+			ImGui::Text(std::format("Models: {}", models.size()).c_str());
+
+			auto instanceCount = instances.size();
+			ImGui::Text(std::format("Instances: {}", instanceCount).c_str());
+
+			if (settings.GlobalIllumination) {
+				auto blasInstancesCount = blasInstances.size();
+				ImGui::Text(std::format("GI Unculled: {}, Culled: {}", blasInstancesCount, instanceCount - blasInstancesCount).c_str());
+			}
+
+			if (settings.RaytracedShadows) {
+				auto blasInstancesCount = blasShadowInstances.size();
+				ImGui::Text(std::format("Shadow Unculled: {}, Culled: {}", blasInstancesCount, instanceCount - blasInstancesCount).c_str());
+			}
+
+			ImGui::TreePop();
+		}
+	}
+
+	ImGui::PopID();
+
+	ImGui::EndTabItem();
 }
 
 void Raytracing::DrawOverlay()
@@ -460,11 +534,39 @@ void Raytracing::DrawOverlay()
 
 void Raytracing::CreatePipelines()
 {
-	sharcPipeline = eastl::make_unique<SHaRCPipeline>();
+	if (!sharcPipeline)
+		sharcPipeline = eastl::make_unique<SHaRCPipeline>();
+}
+
+void Raytracing::SetupOutputRT()
+{
+	auto createRT = [&](eastl::unique_ptr<DX12::Texture2D>& texture, DXGI_FORMAT format, GIHeapDef::Slot slot, LPCWSTR name)
+	{
+		if (texture)
+			texture.reset();
+
+		texture = eastl::make_unique<DX12::Texture2D>(d3d12Device.get(), renderSize.x, renderSize.y, format, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+		texture->SetName(name);
+		texture->CreateUAV(giHeap->CPUHandle(slot));
+		texture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	};
+
+	// u0 - Output texture
+	createRT(outputTexture, DXGI_FORMAT_R16G16B16A16_FLOAT, GIHeap::Slot::Output, L"Output texture");
+
+	// u1 - Reflectance texture
+	createRT(specularAlbedoTexture, DXGI_FORMAT_R16G16B16A16_FLOAT, GIHeap::Slot::Reflectance, L"Reflectance texture");
+
+	// u2 - Specular Hit Distance texture
+	createRT(specularHitDistanceTexture, DXGI_FORMAT_R32_FLOAT, GIHeap::Slot::SpecularHitDist, L"Specular Hit Distance texture");
 }
 
 void Raytracing::SetupResources()
 {
+#if defined(DLSS_RR)
+	InitRR();
+#endif
+
 	CreatePipelines();
 
 	auto renderer = globals::game::renderer;
@@ -582,6 +684,9 @@ void Raytracing::SetupResources()
 		d3d12Device->CreateUnorderedAccessView(shadowMaskTexture->resource.get(), nullptr, &uavDesc, shadowHeap->CPUHandle(ShadowsHeap::Slot::ShadowMask));	
 	}
 
+	if (UpdateRenderSize())
+		SetupOutputRT();
+
 	// UAVs
 	{	
 		// u0 - Final texture
@@ -622,34 +727,7 @@ void Raytracing::SetupResources()
 			DX::ThrowIfFailed(motionVectorsTexture->resource->SetName(L"Motion Vectors Texture"));
 		}
 
-		// u0 - Output texture
-		{
-			outputTexture = eastl::make_unique<DX12::Texture2D>(d3d12Device.get(), mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-			outputTexture->SetName(L"Output texture");
-
-			outputTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-			outputTexture->CreateUAV(giHeap->CPUHandle(GIHeap::Slot::Output));
-		}
-
-		// u1 - Reflectance texture
-		{				
-			reflectanceTexture = eastl::make_unique<DX12::Texture2D>(d3d12Device.get(), mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-			reflectanceTexture->SetName(L"Reflectance Texture");
-
-			reflectanceTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-			reflectanceTexture->CreateUAV(giHeap->CPUHandle(GIHeap::Slot::Reflectance));
-		}
-
-		// u2 - Specular Hit Distance texture
-		{
-			specularHitDistanceTexture = eastl::make_unique<DX12::Texture2D>(d3d12Device.get(), mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-			specularHitDistanceTexture->SetName(L"Specular Hit Distance Texture");
-
-			specularHitDistanceTexture->CreateUAV(giHeap->CPUHandle(GIHeap::Slot::SpecularHitDist));
-		}
-
+		// Normal Roughness
 		{
 			D3D11_TEXTURE2D_DESC texDesc{};
 			texDesc.Width = mainDesc.Width;
@@ -675,6 +753,22 @@ void Raytracing::SetupResources()
 
 			d3d12Device->CreateShaderResourceView(normalRoughnessTexture->resource.get(), &srvDesc, giHeap->CPUHandle(GIHeap::Slot::NormalRoughness));
 		}
+
+		// Diffuse (Metallic modulated albedo)
+		{
+			D3D11_TEXTURE2D_DESC texDesc{};
+			texDesc.Width = mainDesc.Width;
+			texDesc.Height = mainDesc.Height;
+			texDesc.MipLevels = 1;
+			texDesc.ArraySize = 1;
+			texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+			texDesc.SampleDesc.Count = 1;
+			texDesc.SampleDesc.Quality = 0;
+			texDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+
+			diffuseAlbedoTexture = eastl::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
+			DX::ThrowIfFailed(diffuseAlbedoTexture->resource->SetName(L"Diffuse Texture Texture"));
+		}
 	}
 
 	// t3 - Light buffer
@@ -699,6 +793,24 @@ void Raytracing::SetupResources()
 		DX::ThrowIfFailed(instanceBuffer->resource->SetName(L"Instance Buffer"));
 
 		instanceBuffer->CreateSRV(giHeap->CPUHandle(GIHeap::Slot::Instances));
+	}
+
+	// t6 - Indirection buffer
+	{
+		// Could probably fit in 16 bits but indexing would be awkward 
+		indirectionBuffer = eastl::make_unique<DX12::ResourceUpload>(d3d12Device.get(), sizeof(uint32_t) * MAX_SHAPES);
+		DX::ThrowIfFailed(indirectionBuffer->resource->SetName(L"Indirection Buffer"));
+
+		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+		srvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = MAX_SHAPES;
+		srvDesc.Buffer.StructureByteStride = 0;
+		srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+		indirectionBuffer->CreateSRV(srvDesc, giHeap->CPUHandle(GIHeap::Slot::Indirection));
 	}
 
 	// Create instance buffer for BLAS
@@ -782,10 +894,6 @@ void Raytracing::SetupResources()
 	if (fenceEvent == nullptr) {
 		DX::ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
 	}
-
-#if defined(DLSS_RR)
-	InitRR();
-#endif
 
 	CompileShaders();
 }
@@ -871,42 +979,7 @@ void Raytracing::GetJitterOffset(float* outX, float* outY, int32_t index, int32_
 	*outY = y;
 }
 
-float2 Raytracing::GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outputHeight)
-{
-	auto currentMode = GetDLSSMode();
-
-	if (dlssdOptions.mode != currentMode || dlssdOptions.outputWidth != outputWidth || dlssdOptions.outputHeight != outputHeight) {
-		dlssdOptions.mode = currentMode;
-		dlssdOptions.outputWidth = outputWidth;
-		dlssdOptions.outputHeight = outputHeight;
-
-		logger::debug("[DLSS RR] Getting input resolution scale for output {}x{} and quality mode {}", outputWidth, outputHeight, magic_enum::enum_name(dlssdOptions.mode));
-
-		sl::Result result = slDLSSDGetOptimalSettings(dlssdOptions, optimalSettings);
-		if (result != sl::Result::eOk) {
-			logger::critical("[Streamline] Failed to get DLSS RR optimal settings, error code: {}", (int)result);
-			return { 1.0f, 1.0f };
-		}
-	}
-
-	float scaleX;
-	float scaleY;
-
-	if (globals::game::ui->GameIsPaused()) {
-		// Calculate scale as ratio of minimum render resolution to output resolution
-		scaleX = (float)optimalSettings.renderWidthMin / (float)outputWidth;
-		scaleY = (float)optimalSettings.renderHeightMin / (float)outputHeight;
-	} else {
-		// Calculate scale as ratio of optimal render resolution to output resolution
-		scaleX = (float)optimalSettings.optimalRenderWidth / (float)outputWidth;
-		scaleY = (float)optimalSettings.optimalRenderHeight / (float)outputHeight;
-	}
-
-	// Return separate X and Y scales for more precision
-	return { scaleX, scaleY };
-}
-
-sl::DLSSMode Raytracing::GetDLSSMode()
+sl::DLSSMode Raytracing::GetDLSSMode() const
 {
 	switch (settings.DLSSRRQualityMode) {
 	case DLSSRRQuality::MaxPerformance:
@@ -921,20 +994,53 @@ sl::DLSSMode Raytracing::GetDLSSMode()
 	}
 }
 
+void Raytracing::GetDLSSRROptimal()
+{
+	auto dlssdOptionsNew = GetDLSSRROptions();
+
+	if (dlssdOptions.mode != dlssdOptionsNew.mode || dlssdOptions.outputWidth != dlssdOptionsNew.outputWidth || dlssdOptions.outputHeight != dlssdOptionsNew.outputHeight) {
+		dlssdOptions = dlssdOptionsNew;
+
+		sl::Result result = slDLSSDGetOptimalSettings(dlssdOptions, optimalSettings);
+		if (result != sl::Result::eOk) {
+			logger::critical("[RT] Failed to get DLSS RR optimal settings, error code: {}", (int)result);
+			return;
+		}
+	}
+}
+
+sl::DLSSDOptions Raytracing::GetDLSSRROptions() const
+{
+	sl::DLSSDOptions dlssdOptionsOut{};
+
+	dlssdOptionsOut.mode = GetDLSSMode();
+
+	auto screenSize = GetScreenSize();
+
+	dlssdOptionsOut.outputWidth = screenSize.x;
+	dlssdOptionsOut.outputHeight = screenSize.y;
+
+	dlssdOptionsOut.colorBuffersHDR = sl::Boolean::eTrue;
+	dlssdOptionsOut.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
+	dlssdOptionsOut.alphaUpscalingEnabled = sl::Boolean::eFalse;
+
+	auto preset = (settings.DLSSRRPreset == DLSSRRPreset::D) ? sl::DLSSDPreset::ePresetD : sl::DLSSDPreset::ePresetE;
+
+	dlssdOptionsOut.dlaaPreset = preset;
+	dlssdOptionsOut.qualityPreset = preset;
+	dlssdOptionsOut.balancedPreset = preset;
+	dlssdOptionsOut.performancePreset = preset;
+	dlssdOptionsOut.ultraPerformancePreset = preset;
+
+	return dlssdOptionsOut;
+}
+
 void Raytracing::SetDLSSRROptions()
 {
-	dlssdOptions.mode = GetDLSSMode();
+	dlssdOptions.sharpness = settings.DLSSRRSharpness;
 
 	auto worldToCameraView = globals::game::frameBufferCached.GetCameraView().Transpose();
 	auto cameraViewToWorld = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
-
-	auto state = globals::state;
-
-	dlssdOptions.outputWidth = (uint)state->screenSize.x;
-	dlssdOptions.outputHeight = (uint)state->screenSize.y;
-	dlssdOptions.colorBuffersHDR = sl::Boolean::eTrue;
-	dlssdOptions.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
-	dlssdOptions.alphaUpscalingEnabled = sl::Boolean::eFalse;
 
 	dlssdOptions.worldToCameraView = sl::float4x4{
 		sl::float4{ worldToCameraView._11, worldToCameraView._12, worldToCameraView._13, worldToCameraView._14 },
@@ -942,20 +1048,13 @@ void Raytracing::SetDLSSRROptions()
 		sl::float4{ worldToCameraView._31, worldToCameraView._32, worldToCameraView._33, worldToCameraView._34 },
 		sl::float4{ worldToCameraView._41, worldToCameraView._42, worldToCameraView._43, worldToCameraView._44 }
 	};
+
 	dlssdOptions.cameraViewToWorld = sl::float4x4{
 		sl::float4{ cameraViewToWorld._11, cameraViewToWorld._12, cameraViewToWorld._13, cameraViewToWorld._14 },
 		sl::float4{ cameraViewToWorld._21, cameraViewToWorld._22, cameraViewToWorld._23, cameraViewToWorld._24 },
 		sl::float4{ cameraViewToWorld._31, cameraViewToWorld._32, cameraViewToWorld._33, cameraViewToWorld._34 },
 		sl::float4{ cameraViewToWorld._41, cameraViewToWorld._42, cameraViewToWorld._43, cameraViewToWorld._44 }
 	};
-
-	auto preset = sl::DLSSDPreset::ePresetE;  // sl::DLSSDPreset::ePresetD
-
-	dlssdOptions.dlaaPreset = preset;
-	dlssdOptions.qualityPreset = preset;
-	dlssdOptions.balancedPreset = preset;
-	dlssdOptions.performancePreset = preset;
-	dlssdOptions.ultraPerformancePreset = preset;
 
 	if (SL_FAILED(result, slDLSSDSetOptions(slViewportHandle, dlssdOptions))) {
 		logger::critical("[DLSS RR] Could not set DLSS RR options");
@@ -996,28 +1095,8 @@ void Raytracing::CheckFrameConstants()
 
 		recalculateCameraMatrices(slConstants);
 
-		auto screenSize = state->screenSize;
-
-		auto screenWidth = static_cast<int>(screenSize.x);
-		auto screenHeight = static_cast<int>(screenSize.y);
-
-		float2 resolutionScaleBase = GetInputResolutionScaleRR((uint32_t)screenSize.x, (uint32_t)screenSize.y);
-		auto renderWidth = static_cast<int>(screenWidth * resolutionScaleBase.x);
-		auto renderHeight = static_cast<int>(screenHeight * resolutionScaleBase.y);
-
-		float2 resolutionScale = { 1.0f, 1.0f };
-
-		// Use precise scale if the integer conversion doesn't change the dimensions
-		if (renderWidth == screenWidth && renderHeight == screenHeight) {
-			// For DLAA and other 1:1 modes, ensure exactly 1.0
-			resolutionScale.x = 1.0f;
-			resolutionScale.y = 1.0f;
-		} else {
-			resolutionScale.x = static_cast<float>(renderWidth) / static_cast<float>(screenWidth);
-			resolutionScale.y = static_cast<float>(renderHeight) / static_cast<float>(screenHeight);
-		}
-
-		auto phaseCount = GetJitterPhaseCount(renderWidth, screenWidth);
+		auto screenSize = GetScreenSize();
+		auto phaseCount = GetJitterPhaseCount(renderSize.x, screenSize.x);
 
 		GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
 
@@ -1090,12 +1169,12 @@ void Raytracing::SetupSharedRT()
 	const auto& rendererRD = globals::game::renderer->GetRuntimeData();
 
 	ShareRT(rendererRD.renderTargets[ALBEDO].texture, GIHeap::Slot::Albedo, ShadowsHeap::Slot::None, albedoTexture.put());
-	ShareRT(rendererRD.renderTargets[REFLECTANCE].texture, GIHeap::Slot::None, ShadowsHeap::Slot::None, gbufferReflectanceTexture.put());
+	//ShareRT(rendererRD.renderTargets[REFLECTANCE].texture, GIHeap::Slot::None, ShadowsHeap::Slot::None, gbufferReflectanceTexture.put());
 	//ShareRT(rendererRD.renderTargets[NORMALROUGHNESS].texture, HeapSlot::NormalRoughness, ComputeHeapSlot::None, normalRoughnessTexture.put());
 	ShareRT(rendererRD.renderTargets[MASKS2].texture, GIHeap::Slot::GNMD, ShadowsHeap::Slot::None, GNMDTexture.put());  // GNMD
 
 	DX::ThrowIfFailed(albedoTexture->SetName(L"Shared Albedo Texture"));
-	DX::ThrowIfFailed(gbufferReflectanceTexture->SetName(L"Shared Reflectance Texture"));
+	//DX::ThrowIfFailed(gbufferReflectanceTexture->SetName(L"Shared Reflectance Texture"));
 	//DX::ThrowIfFailed(normalRoughnessTexture->SetName(L"Shared NormalRoughness Texture"));
 	DX::ThrowIfFailed(GNMDTexture->SetName(L"Shared GNMD Texture"));
 }
@@ -1127,7 +1206,7 @@ eastl::vector<LightLimitFix::LightData> Raytracing::GetPointLights()
 					auto& runtimeData = niLight->GetLightRuntimeData();
 
 					LightLimitFix::LightData light{};
-					light.color = { runtimeData.diffuse.red, runtimeData.diffuse.green, runtimeData.diffuse.blue } * runtimeData.fade;
+					light.color = float3(runtimeData.diffuse.red, runtimeData.diffuse.green, runtimeData.diffuse.blue) * runtimeData.fade;
 					light.lightFlags = std::bit_cast<LightLimitFix::LightFlags>(runtimeData.ambient.red);
 
 					/*if (isl.loaded) {
@@ -1183,16 +1262,6 @@ eastl::vector<LightLimitFix::LightData> Raytracing::GetPointLights()
 	return lightsData;
 }
 
-float3 Raytracing::GammaToLinear(float3 color)
-{
-	if (settings.GammaToLinear) {
-		float3 colorAbs = DirectX::XMVectorAbs(color);
-		return float3(pow(colorAbs.x, 1.6f), pow(colorAbs.y, 1.6f), pow(colorAbs.z, 1.6f));
-	} else {
-		return color;
-	}
-}
-
 void Raytracing::UpdateLights() 
 {
 	if (!renderingWorld || lightsUpdated)
@@ -1209,7 +1278,7 @@ void Raytracing::UpdateLights()
 		auto& diffuse = dirLight->GetLightRuntimeData().diffuse;
 
 		frameData->Directional.Vector = -direction;
-		frameData->Directional.Color = GammaToLinear(float3(diffuse.red, diffuse.green, diffuse.blue)) * settings.Directional;  // * ( Util::IsInterior() ? 0.0f : 1.0f );
+		frameData->Directional.Color = float3(diffuse.red, diffuse.green, diffuse.blue) * settings.Directional;
 	}
 
 	// Point lights
@@ -1221,7 +1290,7 @@ void Raytracing::UpdateLights()
 			if (lights.size() >= MAX_LIGHTS)
 				break;
 
-			lights.emplace_back(data.positionWS[0].data, data.radius, GammaToLinear(data.color) * settings.Point, 0);
+			lights.emplace_back(data.positionWS[0].data, data.radius, data.color * settings.Point, 0);
 		}
 
 		if (!lights.empty())
@@ -1270,7 +1339,7 @@ void Raytracing::CopyDepth()
 	}
 }
 
-void Raytracing::ConvertNormalGlossiness()
+void Raytracing::ConvertTextures() const
 {
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
@@ -1280,11 +1349,18 @@ void Raytracing::ConvertNormalGlossiness()
 	ID3D11Buffer* cb[1] = { *globals::game::perFrame.get() };
 	context->CSSetConstantBuffers(12, 1, cb);
 
-	auto srv = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS].SRV;
-	context->CSSetShaderResources(0, 1, &srv);
+	ID3D11ShaderResourceView* srvs[3] = {
+		renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS].SRV,
+		renderer->GetRuntimeData().renderTargets[ALBEDO].SRV,
+		renderer->GetRuntimeData().renderTargets[MASKS2].SRV
+	};
+	context->CSSetShaderResources(0, _countof(srvs), srvs);
 
-	auto uav = normalRoughnessTexture->uav;
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	ID3D11UnorderedAccessView* uavs[2] = { 
+		normalRoughnessTexture->uav, 
+		diffuseAlbedoTexture->uav 
+	};
+	context->CSSetUnorderedAccessViews(0, _countof(uavs), uavs, nullptr);
 
 	auto dispatchCount = Util::GetScreenDispatchCount();
 	context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
@@ -1292,7 +1368,7 @@ void Raytracing::ConvertNormalGlossiness()
 	//context->CSSetUnorderedAccessViews(0, 1, nullptr, nullptr);
 }
 
-void Raytracing::SkyCubeToHemi()
+void Raytracing::SkyCubeToHemi() const
 {
 	auto context = globals::d3d::context;
 
@@ -1330,7 +1406,7 @@ void Raytracing::Main_RenderWorld(bool a1)
 	}
 }
 
-RE::BSFadeNode* FindBSFadeNode(RE::NiNode* a_niNode)
+static RE::BSFadeNode* FindBSFadeNode(RE::NiNode* a_niNode)
 {
 	if (auto fadeNode = a_niNode->AsFadeNode()) {
 		return fadeNode;
@@ -1367,6 +1443,8 @@ inline std::wstring ToWide(const std::string& str)
 
 void Raytracing::CommitModel(Model& model)
 {
+	std::lock_guard lock{ renderMutex };
+
 	auto& shapes = model.shapes;
 	auto meshCount = shapes.size();
 
@@ -1421,21 +1499,27 @@ void Raytracing::CommitModel(Model& model)
 		.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
 	};
 
-	winrt::com_ptr<ID3D12Resource> scratch = nullptr;
-	DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(&DEFAULT_HEAP, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&scratch)));
+	auto blasScratchDesc = DEFAULT_HEAP_MA;
+	blasScratchDesc.CustomPool = blasScratchPool.get();
+
+	winrt::com_ptr<D3D12MA::Allocation> scratch = nullptr;
+	DX::ThrowIfFailed(allocator->CreateResource(&blasScratchDesc, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, scratch.put(), IID_NULL, NULL));
+
+	auto blasDesc = DEFAULT_HEAP_MA;
+	blasDesc.CustomPool = blasPool.get();
 
 	desc.Width = prebuildInfo.ResultDataMaxSizeInBytes;
-	DX::ThrowIfFailed(d3d12Device->CreateCommittedResource(&DEFAULT_HEAP, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, IID_PPV_ARGS(&model.blasBuffer)));
+	DX::ThrowIfFailed(allocator->CreateResource(&blasDesc, &desc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, model.blasBuffer.put(), IID_NULL, NULL));
 
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {
-		.DestAccelerationStructureData = model.blasBuffer->GetGPUVirtualAddress(),
+		.DestAccelerationStructureData = model.blasBuffer->GetResource()->GetGPUVirtualAddress(),
 		.Inputs = inputs,
-		.ScratchAccelerationStructureData = scratch->GetGPUVirtualAddress() 
+		.ScratchAccelerationStructureData = scratch->GetResource()->GetGPUVirtualAddress() 
 	};
 
 	commandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
 
-	const auto& asBarrier = CD3DX12_RESOURCE_BARRIER::UAV(model.blasBuffer.get());
+	const auto& asBarrier = CD3DX12_RESOURCE_BARRIER::UAV(model.blasBuffer->GetResource());
 	commandList->ResourceBarrier(1, &asBarrier);
 
 	if (updatable)
@@ -1483,23 +1567,62 @@ void Raytracing::UpdateModelBLAS(Model& model)
 
 
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {
-		.DestAccelerationStructureData = model.blasBuffer->GetGPUVirtualAddress(),
+		.DestAccelerationStructureData = model.blasBuffer->GetResource()->GetGPUVirtualAddress(),
 		.Inputs = inputs,
-		.SourceAccelerationStructureData = model.blasBuffer->GetGPUVirtualAddress(),
-		.ScratchAccelerationStructureData = model.blasScratchBuffer->GetGPUVirtualAddress()
+		.SourceAccelerationStructureData = model.blasBuffer->GetResource()->GetGPUVirtualAddress(),
+		.ScratchAccelerationStructureData = model.blasScratchBuffer->GetResource()->GetGPUVirtualAddress()
 	};
 
 	commandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
 }
 
-void Raytracing::CreateModel(const char* path, RE::NiNode* pRoot)
+// A custom visit controller built to ignore billboard/particle geometry
+static RE::BSVisit::BSVisitControl TraverseScenegraphRTGeometries(RE::NiAVObject* a_object, std::function<RE::BSVisit::BSVisitControl(RE::BSGeometry*)> a_func)
+{
+	auto result = RE::BSVisit::BSVisitControl::kContinue;
+
+	if (!a_object) {
+		return result;
+	}
+
+	auto geom = a_object->AsGeometry();
+	if (geom) {
+		return a_func(geom);
+	}
+
+	// Doodlum sez this is faster
+	auto rtti = a_object->GetRTTI();
+
+	static REL::Relocation<const RE::NiRTTI*> billboardRTTI{ RE::NiBillboardNode::Ni_RTTI };
+	if (rtti == billboardRTTI.get())
+		return result;
+
+	// Might break vegetation
+	static REL::Relocation<const RE::NiRTTI*> orderedRTTI{ RE::BSOrderedNode::Ni_RTTI };
+	if (rtti == orderedRTTI.get())
+		return result;
+
+	auto node = a_object->AsNode();
+	if (node) {
+		for (auto& child : node->GetChildren()) {
+			result = TraverseScenegraphRTGeometries(child.get(), a_func);
+			if (result == RE::BSVisit::BSVisitControl::kStop) {
+				break;
+			}
+		}
+	}
+
+	return result;
+}
+
+void Raytracing::CreateModel(RE::TESObjectREFR* refr, const char* path, RE::NiNode* pRoot)
 {
 	if (!pRoot) {
 		logger::error("[RT] CreateModel \"{}\" - nullptr root", path);
 		return;
 	}
 
-	logger::info("[RT] CreateModel \"{}\"", typeid(*pRoot).name());
+	logger::trace("[RT] CreateModel \"{}\"", typeid(*pRoot).name());
 
 	if (!path) {
 		logger::debug("[RT] CreateModel \"{}\" - Invalid Path", pRoot->name);
@@ -1517,24 +1640,25 @@ void Raytracing::CreateModel(const char* path, RE::NiNode* pRoot)
 		if (static_cast<int32_t>(bsxFlags->value) & static_cast<int32_t>(RE::BSXFlags::Flag::kEditorMarker))
 			return;
 		
-		//logger::info("[RT] CreateModel - BSX Flags [0x{:x}]: {}", bsxFlags->value, GetFlagsString<RE::BSXFlags::Flag>(static_cast<uint32_t>(bsxFlags->value)));
+		logger::debug("[RT] CreateModel - BSX Flags [0x{:x}]: {}", bsxFlags->value, GetFlagsString<RE::BSXFlags::Flag>(bsxFlags->value));
 	}
+
+	auto formID = refr->GetFormID();
+	auto baseFormID = refr->GetBaseObject()->GetFormID();
 
 	// We only need one buffer per model
 	if (models.find(path) != models.end()) {
-		AddInstance(pRoot, path);
+		AddInstance(formID, pRoot, path);
 		return;
 	}
 
-	//std::lock_guard lock{ renderMutex };
-
-	logger::debug("[RT] CreateModel - Path: {}, NiNode [0x{:X}]: {}", path, reinterpret_cast<uintptr_t>(pRoot), pRoot->name);
+	logger::info("[RT] CreateModel - Path: {}, Base FormID [0x{:08X}], FormID [0x{:08X}], NiNode [0x{:08X}]: {}", path, baseFormID, formID, reinterpret_cast<uintptr_t>(pRoot), pRoot->name);
 
 	auto rootWorldInverse = pRoot->world.Invert();
 
 	eastl::vector<eastl::unique_ptr<Shape>> shapes;
 
-	RE::BSVisit::TraverseScenegraphGeometries(pRoot, [&](RE::BSGeometry* pGeometry) -> RE::BSVisit::BSVisitControl {
+	TraverseScenegraphRTGeometries(pRoot, [&](RE::BSGeometry* pGeometry) -> RE::BSVisit::BSVisitControl {
 		const char* name = pGeometry->name.c_str();
 
 		const auto& geometryType = pGeometry->GetType();
@@ -1552,16 +1676,24 @@ void Raytracing::CreateModel(const char* path, RE::NiNode* pRoot)
 
 		const auto& geometryRuntimeData = pGeometry->GetGeometryRuntimeData();
 
-		auto& effect = geometryRuntimeData.properties[RE::BSGeometry::States::kEffect];
+		auto* effect = geometryRuntimeData.properties[RE::BSGeometry::States::kEffect].get();
 
-		auto* lightingShader = netimmerse_cast<RE::BSLightingShaderProperty*>(effect.get());
-
-		// Only lighting shader for now
-		if (!lightingShader) {
+		if (!effect) {
+			logger::debug("\t\t[RT] CreateModel::TraverseScenegraphGeometries - No Effect");
 			return RE::BSVisit::BSVisitControl::kContinue;
 		}
 
-		bool skinned = lightingShader->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSkinned);
+		bool isLightingShader = netimmerse_cast<RE::BSLightingShaderProperty*>(effect) != nullptr;	
+		bool isEffectShader = netimmerse_cast<RE::BSEffectShaderProperty*>(effect) != nullptr;	
+
+		// Only lighting and effect shader for now
+		if (!isLightingShader && !isEffectShader) {
+			logger::warn("\t\t[RT] CreateModel::TraverseScenegraphGeometries - Unsupported shader type: {}", effect->GetRTTI()->name);
+			return RE::BSVisit::BSVisitControl::kContinue;
+		}
+
+		auto shaderProperty = netimmerse_cast<RE::BSShaderProperty*>(effect);
+		bool skinned = shaderProperty && shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSkinned);
 
 		auto& geomFlags = pGeometry->GetFlags();
 
@@ -1633,13 +1765,13 @@ void Raytracing::CreateModel(const char* path, RE::NiNode* pRoot)
 
 		// Models with these flags cannot be instanced directly
 		if ((model.GetFlags() & Flags::Dynamic) || (model.GetFlags() & Flags::Skinned))
-			modelKey.append(std::format("_{:8X}", reinterpret_cast<uintptr_t>(pRoot)).c_str());
+			modelKey.append(std::format("_{:08X}", reinterpret_cast<uintptr_t>(pRoot)).c_str());
 
 		auto [it, emplaced] = models.emplace(modelKey, eastl::move(model));
 
 		if (emplaced) {
 			CommitModel(it->second);
-			AddInstance(pRoot, modelKey);
+			AddInstance(formID, pRoot, modelKey);
 
 			logger::debug("[RT] CreateModel - Commited {} TriShapes", shapeCount);
 		} else {
@@ -1650,37 +1782,64 @@ void Raytracing::CreateModel(const char* path, RE::NiNode* pRoot)
 	}
 }
 
-void Raytracing::RemoveInstance(RE::NiNode* pRoot, bool releaseModel)
+bool Raytracing::RemoveInstance(RE::NiNode* pRoot, bool releaseModel)
 {
 	if (auto instanceIt = instances.find(pRoot); instanceIt != instances.end())
 	{
 		auto& instance = instanceIt->second;
 
+		logger::debug("[RT] RemoveInstance - \"{}\", \"{}\"", pRoot->name, instance.filename);
+
 		if (auto modelIt = models.find(instance.filename); modelIt != models.end()) {
 			auto& model = modelIt->second;
 
+			auto refCount = model.Release();
+
+			logger::debug("[RT] RemoveInstance - RefCount: {}", refCount);
+
 			// If this is the last Instance of the model, remove it
-			if (model.Release() && releaseModel) {
+			if (refCount <= 0 && releaseModel) {
+				// Not sure if its necesary to mutex here, but when the model goes out of scope the buffers are destroyed so I assume it is
+				std::lock_guard lock{ renderMutex };
+
 				logger::debug("[RT] RemoveInstance - No refs, erasing from collection");
 				models.erase(modelIt);
 			}
 		}
 
-		logger::debug("[RT] RemoveInstance - {}", pRoot->name);
-
 		instances.erase(instanceIt);
+
+		return true;
 	}
+
+	return false;
+}
+
+bool Raytracing::RemoveInstance(RE::FormID formID, bool releaseModel)
+{
+	bool removed = false;
+
+	if (auto nodesIt = formIDNodes.find(formID); nodesIt != formIDNodes.end()) {
+		removed = RemoveInstance(nodesIt->second, releaseModel);
+
+		if (removed)
+			formIDNodes.erase(nodesIt);
+	}
+
+	return removed;
 }
 
 eastl::shared_ptr<Allocation> Raytracing::GetTextureRegister(ID3D11Texture2D* dx11Texture, eastl::shared_ptr<Allocation> defaultTexture)
 {
 	// Texture already placed in heap, return allocation
 	if (auto refIt = textures.find(dx11Texture); refIt != textures.end()) {
-		return refIt->second.registerIndex;
+		return refIt->second.allocation;
 	} 
 
 	// Search for texture in shared map
 	if (auto sharedIt = sharedTextures.find(dx11Texture); sharedIt != sharedTextures.end()) {
+		std::lock_guard lock{ renderMutex };
+
 		// Texture not in heap, so create SRV at next available heap slot
 		auto dx12Texture = sharedIt->second.get();
 
@@ -1697,9 +1856,9 @@ eastl::shared_ptr<Allocation> Raytracing::GetTextureRegister(ID3D11Texture2D* dx
 
 		auto [it, emplaced] = textures.emplace(dx11Texture, TextureReference(dx12Texture, { textureRegisters.Allocate(), AllocationDeleter() }));
 
-		d3d12Device->CreateShaderResourceView(dx12Texture, &texSrvDesc, giHeap->CPUHandle(GIHeap::Slot::Textures, it->second.registerIndex->GetIndex()));
+		d3d12Device->CreateShaderResourceView(dx12Texture, &texSrvDesc, giHeap->CPUHandle(GIHeap::Slot::Textures, it->second.allocation->GetIndex()));
 
-		return it->second.registerIndex;
+		return it->second.allocation;
 	}
 
 	logger::debug("[RT] GetTextureRegister - Source texture not found");
@@ -1707,19 +1866,19 @@ eastl::shared_ptr<Allocation> Raytracing::GetTextureRegister(ID3D11Texture2D* dx
 	return defaultTexture;
 }
 
-void Raytracing::AddInstance(RE::NiNode* pNiNode, eastl::string path)
+void Raytracing::AddInstance(RE::FormID formID, RE::NiNode* pNiNode, eastl::string path)
 {
-	logger::debug("[RT] AddInstance - {}, Path: {}", pNiNode->name, path);
-
-	//std::lock_guard lock{ geometryMutex };
+	logger::debug("[RT] AddInstance [0x{:08X}] - {}, Path: {}", formID, pNiNode->name, path);
 
 	if (auto instanceIt = instances.find(pNiNode); instanceIt == instances.end()) {
 		if (auto modelIt = models.find(path); modelIt != models.end()) {
 			
 			auto [it, emplaced] = instances.try_emplace(pNiNode, Instance(path));
 
-			if (emplaced)
+			if (emplaced) {
+				formIDNodes.try_emplace(formID, pNiNode);
 				modelIt->second.AddRef();
+			}
 		}
 	}
 }
@@ -1739,7 +1898,7 @@ void Raytracing::UpdateDynamicSkinning(ID3D12GraphicsCommandList4* pCommandList)
 		barriers.reserve(updateCount);
 
 		for (auto& item : vertexUpdate) {
-			vertexUpdateData.emplace_back(item.registerIndex, item.flags, item.vertexCount, 0);
+			vertexUpdateData.emplace_back(item.allocatedIndex, item.flags, item.vertexCount, 0);
 
 			if (item.flags & Flags::Skinned) {
 				barriers.push_back(item.vertexBuffer->GetTransitionBarrier(true, D3D12_RESOURCE_STATE_COPY_DEST));
@@ -1751,7 +1910,7 @@ void Raytracing::UpdateDynamicSkinning(ID3D12GraphicsCommandList4* pCommandList)
 
 			for (auto& item : vertexUpdate) {
 				if (item.flags & Flags::Skinned) {
-					pCommandList->CopyResource(item.vertexBuffer->resource.get(), item.vertexBuffer->uploadBuffer[0].get());				
+					pCommandList->CopyResource(item.vertexBuffer->resource.get(), item.vertexBuffer->uploadResource[0].get());				
 				}
 			}
 		}
@@ -1816,7 +1975,7 @@ void Raytracing::UpdateDynamicSkinning(ID3D12GraphicsCommandList4* pCommandList)
 
 			UpdateModelBLAS(model);
 
-			uavBarriers.push_back(CD3DX12_RESOURCE_BARRIER::UAV(model.blasBuffer.get()));
+			uavBarriers.push_back(CD3DX12_RESOURCE_BARRIER::UAV(model.blasBuffer->GetResource()));
 		}
 	}
 
@@ -1891,6 +2050,13 @@ void Raytracing::UpdateInstances()
 
 	auto eye = Util::GetAverageEyePosition();
 
+	uint32_t totalShapeCount = 0;
+
+	// We'll manually map once, copy all data sequentially, then unmap and upload
+	D3D12_RANGE readRange = { 0, 0 };
+	uint32_t* pIndirectionData = nullptr;
+	DX::ThrowIfFailed(indirectionBuffer->uploadResource->Map(0, &readRange, reinterpret_cast<void**>(&pIndirectionData)));
+
 	for (auto& [pNiNode, instance] : instances) {
 		if (blasInstances.size() > MAX_INSTANCES)
 			break;
@@ -1908,11 +2074,11 @@ void Raytracing::UpdateInstances()
 		float worldBoundRadius = worldBound.radius;
 		float distanceToBounds = Util::Units::GameUnitsToMeters(eye.GetDistance(worldBound.center) - worldBoundRadius);
 
-		// TODO: Fix culling exclusion for emissive models
-		// Both may glow, if the object is a light source and behind the camera culling it will darken the visible scene (a better filter instead of shader types might be using their pixelDescriptor)
-		//auto cullOutOfView = !geometryData.HasFeature(RE::BSShaderMaterial::Feature::kGlowMap) && !geometryData.HasShaderType(RE::BSShader::Type::Effect);
-		
-		auto cullOutOfView = true;
+		auto shaderTypes = model.GetShaderTypes();
+		auto features = model.GetFeatures();
+
+		// We exclude emissive models from culling
+		auto cullOutOfView = !(shaderTypes & RE::BSShader::Type::Effect) && !(features & static_cast<int>(RE::BSShaderMaterial::Feature::kGlowMap));
 
 		// We'll cull small models or very distant ones (that are outside the player view)
 		if ((cullOutOfView && Util::Units::GameUnitsToMeters(worldBoundRadius) < 1.0f) || distanceToBounds > 100.0f) {
@@ -1924,14 +2090,23 @@ void Raytracing::UpdateInstances()
 		if (!instance.Update(pNiNode, { it->first, model }))
 			return;
 
-		auto firstShapeIndex = model.shapes[0]->registerIndex->GetIndex();
+		// This is temporary while I think of a better place to fit this (probably on instance.Update?)
+		auto firstShapeIndex = totalShapeCount;
+		auto shapeCount = model.shapes.size();
 
-		//logger::info("[RT] UpdateInstances - InstanceID: {}", firstShapeIndex);
+		if (totalShapeCount + shapeCount > MAX_SHAPES)
+			break;
+
+		totalShapeCount += static_cast<uint32_t>(shapeCount);
+
+		for (size_t i = 0; i < shapeCount; i++) {
+			pIndirectionData[firstShapeIndex + i] = static_cast<uint32_t>(model.shapes[i]->allocation->GetIndex());
+		}
 
 		D3D12_RAYTRACING_INSTANCE_DESC blasInstance = {
-			.InstanceID = firstShapeIndex,
+			.InstanceID = 0, // We don't really use this, instances are an unordered_map, so yeah unordered...
 			.InstanceMask = 1,
-			.AccelerationStructure = model.blasBuffer->GetGPUVirtualAddress()
+			.AccelerationStructure = model.blasBuffer->GetResource()->GetGPUVirtualAddress()
 		};
 
 		// Copy transform matrix from Instance to DX12 BLAS instance
@@ -1945,7 +2120,13 @@ void Raytracing::UpdateInstances()
 			firstShapeIndex
 		);
 	}
-	
+
+	logger::trace("[RT] UpdateInstances - Total Shape Count: {}", totalShapeCount);
+
+	// Unmap indirection table
+	D3D12_RANGE writeRange = { 0, std::min(totalShapeCount, MAX_SHAPES) * sizeof(uint32_t) };
+	indirectionBuffer->uploadResource->Unmap(0, &writeRange);
+
 	blasInstanceBuffer->UpdateList(blasInstances.data(), std::min(blasInstances.size(), (size_t)MAX_INSTANCES));
 	blasInstanceBuffer->Upload(commandList.get());
 
@@ -1953,6 +2134,8 @@ void Raytracing::UpdateInstances()
 	instanceBuffer->Upload(commandList.get());
 
 	materialBuffer->Upload(commandList.get());
+
+	indirectionBuffer->Upload(commandList.get());
 }
 
 auto GetFrustumCorners2(const RE::NiFrustum& frustum)
@@ -2183,7 +2366,7 @@ void Raytracing::UpdateShadowInstances()
 		D3D12_RAYTRACING_INSTANCE_DESC blasShadowInstance = { 
 			.InstanceID = static_cast<uint>(blasShadowInstances.size()),
 			.InstanceMask = 1,
-			.AccelerationStructure = model.blasBuffer->GetGPUVirtualAddress() 
+			.AccelerationStructure = model.blasBuffer->GetResource()->GetGPUVirtualAddress() 
 		};
 
 		memcpy(blasShadowInstance.Transform, instance.transform.m, sizeof(blasShadowInstance.Transform));
@@ -2285,9 +2468,51 @@ void Raytracing::RebuildTLAS(ID3D12GraphicsCommandList4* pCommandList, size_t nu
 	pCommandList->ResourceBarrier(1, &asBarrier);
 }
 
+uint2 Raytracing::GetScreenSize() const
+{
+	auto screenSize = Util::ConvertToDynamic(globals::state->screenSize);
+
+	return { 
+		static_cast<uint>(screenSize.x), 
+		static_cast<uint>(screenSize.y)
+	};
+}
+
+uint2 Raytracing::GetRenderSize()
+{
+	auto renderSizeOut = GetScreenSize();
+
+	// This is borked because all RTs need to share the same size
+/*
+#if defined(DLSS_RR)
+	if (settings.Denoiser == Denoiser::DLSSRR) {
+		GetDLSSRROptimal();
+
+		renderSizeOut = { optimalSettings.optimalRenderWidth, optimalSettings.optimalRenderHeight };
+	}
+#endif
+*/
+
+	return renderSizeOut;
+}
+
+bool Raytracing::UpdateRenderSize()
+{
+	uint2 renderSizeNew = GetRenderSize();
+
+	if (renderSize != renderSizeNew) {
+		renderSize = renderSizeNew;
+
+		return true;
+	}
+
+	return false;
+}
+
 void Raytracing::DrawRTGI()
 {
-	//std::lock_guard lock{ renderMutex };
+	// We mutex here to prevent changes to resources while the command list is in flight, we could just queue everything maybe?
+	std::lock_guard lock{ renderMutex };
 
 	if (!d3d11Context) {
 		logger::error("d3d11Context is nullptr");
@@ -2300,18 +2525,18 @@ void Raytracing::DrawRTGI()
 	auto& rendererRuntimeData = globals::game::renderer->GetRuntimeData();
 	auto main = rendererRuntimeData.renderTargets[RE::RENDER_TARGETS::kMAIN];
 
-	auto finalTexDesc = mainTexture->resource->GetDesc();
-
-	const auto width = static_cast<uint>(finalTexDesc.Width);
-	const auto height = finalTexDesc.Height;
-
 	d3d11Context->CopyResource(mainTexture->resource11, main.texture);
 	d3d11Context->CopyResource(motionVectorsTexture->resource11, rendererRuntimeData.renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].texture);
 
 	if (!settings.RaytracedShadows)
 		CopyDepth();
 
-	ConvertNormalGlossiness();
+	if (settings.WhiteFurnace) {
+		float clearColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+		d3d11Context->ClearRenderTargetView(rendererRuntimeData.renderTargets[ALBEDO].RTV, clearColor); 
+	}
+
+	ConvertTextures();
 
 	// Wait for D3D11 to finish
 	{
@@ -2340,8 +2565,12 @@ void Raytracing::DrawRTGI()
 	// Upload buffers
 	lightBuffer->Upload(commandList.get());
 
+	if (UpdateRenderSize())
+		SetupOutputRT();
+
 #ifdef DLSS_RR
 	if (settings.Denoiser == Denoiser::DLSSRR) {
+		GetDLSSRROptimal(); // TODO: Remove this once we can handle dynamic resolution changes properly
 		SetDLSSRROptions();
 		CheckFrameConstants();
 	}
@@ -2371,8 +2600,6 @@ void Raytracing::DrawRTGI()
 		frameData->Roughness = settings.Roughness;
 		frameData->Metalness = settings.Metalness;
 
-		frameData->Diffuse = settings.Diffuse;
-		frameData->Specular = settings.Specular;
 		frameData->Emissive = settings.Emissive;
 		frameData->Effect = settings.Effect;
 		frameData->Sky = settings.Sky;
@@ -2380,10 +2607,10 @@ void Raytracing::DrawRTGI()
 		frameData->RussianRoulette = settings.RussianRoulette;
 
 #ifdef SHARC
-		frameData->SHaRC = settings.SHaRCSettings.GetFrameData(settings.Mode == Mode::SHaRC);  // Sets UpdatePass to true if in SHaRC mode
+		frameData->SHaRC = settings.SHaRCSettings.GetFrameData(settings.TraceMode == TraceMode::SHaRC);  // Sets UpdatePass to true if in SHaRC mode
 #endif
 
-		frameData->DispatchSize = { width, height };
+		frameData->DispatchSize = renderSize;
 
 		// Update Features
 		{
@@ -2400,7 +2627,7 @@ void Raytracing::DrawRTGI()
 		frameBuffer->Update(frameData.get(), sizeof(FrameData), 0, 0);
 
 #ifdef SHARC
-		if (settings.Mode == Mode::SHaRC) {
+		if (settings.TraceMode == TraceMode::SHaRC) {
 			// Upload buffer 1, for main RT pass
 			frameData->SHaRC.UpdatePass = false;
 			frameBuffer->Update(frameData.get(), sizeof(FrameData), 0, 1);
@@ -2448,13 +2675,10 @@ void Raytracing::DrawRTGI()
 
 #ifdef SHARC
 			// SHaRC Update pass
-			if (settings.Mode == Mode::SHaRC)
+			if (settings.TraceMode == TraceMode::SHaRC)
 			{
-				const auto sharcWidth = (uint)ceil(width / 5.0f);
-				const auto sharcHeight = (uint)ceil(height / 5.0f);
-
-				dispatchDesc.Width = sharcWidth;
-				dispatchDesc.Height = sharcHeight;
+				dispatchDesc.Width = DivideRoundUp(renderSize.x, 5.0f);
+				dispatchDesc.Height = DivideRoundUp(renderSize.y, 5.0f);
 
 				commandList->DispatchRays(&dispatchDesc);
 
@@ -2467,14 +2691,14 @@ void Raytracing::DrawRTGI()
 #endif
 			// Main pass
 			{
-				dispatchDesc.Width = width;
-				dispatchDesc.Height = height;
+				dispatchDesc.Width = renderSize.x;
+				dispatchDesc.Height = renderSize.y;
 
 				commandList->DispatchRays(&dispatchDesc);
 
 				CD3DX12_RESOURCE_BARRIER rtUAVBarrier[3] = {
 					CD3DX12_RESOURCE_BARRIER::UAV(outputTexture->resource.get()),
-					CD3DX12_RESOURCE_BARRIER::UAV(reflectanceTexture->resource.get()),
+					CD3DX12_RESOURCE_BARRIER::UAV(specularAlbedoTexture->resource.get()),
 					CD3DX12_RESOURCE_BARRIER::UAV(specularHitDistanceTexture->resource.get())
 				};
 
@@ -2486,18 +2710,17 @@ void Raytracing::DrawRTGI()
 #ifdef DLSS_RR
 			if (settings.Denoiser == Denoiser::DLSSRR) {
 				{
-					auto screenSize = globals::state->screenSize;
-					auto renderSize = Util::ConvertToDynamic(screenSize);
+					auto screenSize = GetScreenSize();
 
-					sl::Extent inputExtent{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
-					sl::Extent outputExtent{ 0, 0, (uint)screenSize.x, (uint)screenSize.y };
+					sl::Extent inputExtent{ 0, 0, renderSize.x, renderSize.y };
+					sl::Extent outputExtent{ 0, 0, screenSize.x, screenSize.y };
 
 					sl::Resource colorIn = { sl::ResourceType::eTex2d, outputTexture->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
-					sl::Resource colorOut = { sl::ResourceType::eTex2d, mainTexture->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS };  // This probably will break, we'll see...
+					sl::Resource colorOut = { sl::ResourceType::eTex2d, mainTexture->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
 					sl::Resource depth = { sl::ResourceType::eTex2d, depthTexture->resource.get(), D3D12_RESOURCE_STATE_COMMON };
 					sl::Resource mvec = { sl::ResourceType::eTex2d, motionVectorsTexture->resource.get(), 0 };
-					sl::Resource diffuseAlbedo = { sl::ResourceType::eTex2d, albedoTexture.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
-					sl::Resource specularAlbedo = { sl::ResourceType::eTex2d, gbufferReflectanceTexture.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
+					sl::Resource diffuseAlbedo = { sl::ResourceType::eTex2d, diffuseAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
+					sl::Resource specularAlbedo = { sl::ResourceType::eTex2d, specularAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
 					sl::Resource normalRoughness = { sl::ResourceType::eTex2d, normalRoughnessTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
 					sl::Resource specHitDistance = { sl::ResourceType::eTex2d, specularHitDistanceTexture->resource.get(), D3D12_RESOURCE_STATE_COMMON };
 
@@ -2535,9 +2758,9 @@ void Raytracing::DrawRTGI()
 				outputTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
 			} else if (settings.DebugOutput == DebugOutput::Reflectance) {
-				reflectanceTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
-				commandList->CopyResource(mainTexture->resource.get(), reflectanceTexture->resource.get());
-				reflectanceTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+				specularAlbedoTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+				commandList->CopyResource(mainTexture->resource.get(), specularAlbedoTexture->resource.get());
+				specularAlbedoTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 			} else if (settings.DebugOutput == DebugOutput::SpecularHitDistance) {
 				specularHitDistanceTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
 				commandList->CopyResource(mainTexture->resource.get(), specularHitDistanceTexture->resource.get());
@@ -2552,6 +2775,7 @@ void Raytracing::DrawRTGI()
 				auto transitionNonPixelRes = CD3DX12_RESOURCE_BARRIER::Transition(normalRoughnessTexture->resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 				commandList->ResourceBarrier(1, &transitionNonPixelRes);
 			} else if (settings.DebugOutput == DebugOutput::GeometryNormalMetalness) {
+
 				auto transitionCopy = CD3DX12_RESOURCE_BARRIER::Transition(GNMDTexture.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
 				commandList->ResourceBarrier(1, &transitionCopy);
 
@@ -2559,14 +2783,21 @@ void Raytracing::DrawRTGI()
 
 				auto transitionNonPixelRes = CD3DX12_RESOURCE_BARRIER::Transition(GNMDTexture.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 				commandList->ResourceBarrier(1, &transitionNonPixelRes);
-			} else if (settings.DebugOutput == DebugOutput::ReflectanceGBuffer) {
-
-				auto transitionCopy = CD3DX12_RESOURCE_BARRIER::Transition(gbufferReflectanceTexture.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
+			} else if (settings.DebugOutput == DebugOutput::Albedo) {
+				auto transitionCopy = CD3DX12_RESOURCE_BARRIER::Transition(albedoTexture.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
 				commandList->ResourceBarrier(1, &transitionCopy);
 
-				commandList->CopyResource(mainTexture->resource.get(), gbufferReflectanceTexture.get());
+				commandList->CopyResource(mainTexture->resource.get(), albedoTexture.get());
 
-				auto transitionNonPixelRes = CD3DX12_RESOURCE_BARRIER::Transition(gbufferReflectanceTexture.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+				auto transitionNonPixelRes = CD3DX12_RESOURCE_BARRIER::Transition(albedoTexture.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+				commandList->ResourceBarrier(1, &transitionNonPixelRes);
+			} else if (settings.DebugOutput == DebugOutput::Diffuse) {
+				auto transitionCopy = CD3DX12_RESOURCE_BARRIER::Transition(diffuseAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
+				commandList->ResourceBarrier(1, &transitionCopy);
+
+				commandList->CopyResource(mainTexture->resource.get(), diffuseAlbedoTexture->resource.get());
+
+				auto transitionNonPixelRes = CD3DX12_RESOURCE_BARRIER::Transition(diffuseAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 				commandList->ResourceBarrier(1, &transitionNonPixelRes);
 			}
 		}
@@ -2607,7 +2838,19 @@ void Raytracing::DrawRTGI()
 
 	ReleaseTempGPUData();
 
-	d3d11Context->CopyResource(main.texture, mainTexture->resource11);
+	// True Linear to Gamma
+	{
+		d3d11Context->CSSetShader(trueLinearToGammaCS.get(), nullptr, 0);
+
+		d3d11Context->CSSetShaderResources(0, 1, &mainTexture->srv);
+
+		d3d11Context->CSSetUnorderedAccessViews(0, 1, &main.UAV, nullptr);
+
+		auto dispatchCount = Util::GetScreenDispatchCount();
+		d3d11Context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+	}
+
+	//d3d11Context->CopyResource(main.texture, mainTexture->resource11);
 
 	// Clear specular if Path Tracing is enabled
 	if (settings.PathTracing)
@@ -2783,7 +3026,7 @@ void Raytracing::PostPostLoad()
 	//MenuOpenCloseEventHandler::Register();
 	//TESLoadGameEventHandler::Register();
 
-	TESObjectLoadedEventHandler::Register();
+	//TESObjectLoadedEventHandler::Register();
 }
 
 /*void Raytracing::RTProcessor::PostCreate(const RE::BSModelDB::DBTraits::ArgsType& a_args, const char* modelName, RE::NiPointer<RE::NiNode>& a_root, std::uint32_t& typeOut)
@@ -2972,6 +3215,45 @@ void Raytracing::InitD3D12(ID3D11Device* ppDevice, ID3D11DeviceContext* pImmedia
 		CloseHandle(sharedFenceHandle);
 	}
 
+	// D3D12 Memory Allocator
+	{
+		D3D12MA::ALLOCATOR_DESC allocatorDesc = {};
+		allocatorDesc.pDevice = d3d12Device.get();
+		allocatorDesc.pAdapter = a_adapter;
+		allocatorDesc.Flags = D3D12MA_RECOMMENDED_ALLOCATOR_FLAGS;
+
+		DX::ThrowIfFailed(D3D12MA::CreateAllocator(&allocatorDesc, allocator.put()));
+	}
+
+	// D3D12MA Pools
+	{
+		// Upload pool
+		{
+			D3D12MA::POOL_DESC poolDesc = {};
+			poolDesc.HeapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
+			poolDesc.Flags = D3D12MA_RECOMMENDED_POOL_FLAGS;
+			poolDesc.HeapFlags = D3D12MA_RECOMMENDED_HEAP_FLAGS | D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS;
+
+			DX::ThrowIfFailed(allocator->CreatePool(&poolDesc, uploadPool.put()));
+		}
+
+		// Default pools
+		{
+			D3D12MA::POOL_DESC poolDesc = {};
+			poolDesc.HeapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
+			poolDesc.Flags = D3D12MA_RECOMMENDED_POOL_FLAGS;
+			poolDesc.HeapFlags = D3D12MA_RECOMMENDED_HEAP_FLAGS | D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS;
+
+			DX::ThrowIfFailed(allocator->CreatePool(&poolDesc, dynamicVertexPool.put()));
+			DX::ThrowIfFailed(allocator->CreatePool(&poolDesc, vertexPool.put()));
+			DX::ThrowIfFailed(allocator->CreatePool(&poolDesc, skinningPool.put()));
+			DX::ThrowIfFailed(allocator->CreatePool(&poolDesc, trianglePool.put()));
+			
+			DX::ThrowIfFailed(allocator->CreatePool(&poolDesc, blasScratchPool.put()));
+			DX::ThrowIfFailed(allocator->CreatePool(&poolDesc, blasPool.put()));
+		}
+	}
+
 	if (settings.EnableDebugDevice || settings.EnablePIXCapture)
 	{
 		HANDLE disconnectEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
@@ -3000,7 +3282,7 @@ void Raytracing::CreateRootSignature()
 			{ GIHeap::Slot::SHaRCResolved, 1 }
 		});
 
-	// Fixed SRV ranges (NormalRoughness + GNMD + Scene + Lights + Index map)
+	// Fixed SRV ranges
 	giHeap->CreateTable(
 		GIHeap::Table::SRV, 
 		D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
@@ -3014,7 +3296,8 @@ void Raytracing::CreateRootSignature()
 			{ GIHeap::Slot::SkyHemisphere, 1 },
 			{ GIHeap::Slot::Lights, 1 },
 			{ GIHeap::Slot::Materials, 1 },	
-			{ GIHeap::Slot::Instances, 1 }		
+			{ GIHeap::Slot::Instances, 1 },
+			{ GIHeap::Slot::Indirection, 1 }			
 		});
 
 
@@ -3230,13 +3513,36 @@ void Raytracing::CompileRTGIShaders()
 	const auto bouncesWStr = std::to_wstring(settings.Bounces);
 	const auto samplesWStr = std::to_wstring(settings.SamplesPerPixel);
 
-	eastl::vector<DxcDefine> defines = { 
+	eastl::vector<DxcDefine> defines = {
 		{ L"MAX_BOUNCES", bouncesWStr.c_str() },
 		{ L"MAX_SAMPLES", samplesWStr.c_str() },
 	};
 
+	auto& advSettings = settings.AdvancedSettings;
+
+	if (advSettings.ResampledImportanceSampling)
+		defines.emplace_back(L"RIS");
+
+	const auto risMaxCandidates = std::to_wstring(static_cast<uint32_t>(advSettings.RISMaxCandidates));
+	defines.emplace_back(L"RIS_MAX_CANDIDATES", risMaxCandidates.c_str());
+
+	if (advSettings.GGXEnergyConservation)
+		defines.emplace_back(L"GGX_ENERGY_CONSERVATION");
+
+	const auto diffuseMode = std::to_wstring(static_cast<uint32_t>(advSettings.DiffuseBRDF));
+	defines.emplace_back(L"DIFFUSE_MODE", diffuseMode.c_str());
+
+	const auto lightEvalMode = std::to_wstring(static_cast<uint32_t>(advSettings.LightEvalMode));
+	defines.emplace_back(L"LIGHTEVAL_MODE", lightEvalMode.c_str());
+
+	const auto lightingMode = std::to_wstring(static_cast<uint32_t>(advSettings.LightingMode));
+	defines.emplace_back(L"LIGHTING_MODE", lightingMode.c_str());
+
+	if (settings.WhiteFurnace)
+		defines.emplace_back(L"DEBUG_WHITE_FURNACE");
+
 #ifdef SHARC
-	if (settings.Mode == Mode::SHaRC)
+	if (settings.TraceMode == TraceMode::SHaRC)
 		defines.emplace_back(L"SHARC");
 #endif
 
@@ -3427,6 +3733,9 @@ void Raytracing::CompileComputeShaders()
 
 	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\ConvertNormalGlossCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
 		convertNormalGlossCS.attach(rawPtr);
+
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\TrueLinearToGammaCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
+		trueLinearToGammaCS.attach(rawPtr);
 }
 
 RaytracingFD::FeatureData Raytracing::GetCommonBufferData()
@@ -3475,6 +3784,19 @@ RE::BSEventNotifyControl Raytracing::TESObjectLoadedEventHandler::ProcessEvent(c
 
 	auto* eventRef = RE::TESForm::LookupByID<RE::TESObjectREFR>(a_event->formID);
 
+	// Unloaded
+	if (!a_event->loaded) {
+		auto formID = eventRef->GetFormID();
+
+		logger::info("[RT] TESObjectLoadedEventHandler - Unloading Name: {}, FormID [0x{:08X}]", eventRef->GetName(), formID);
+
+		bool removed = globals::features::raytracing.RemoveInstance(formID, true);
+
+		logger::info("[RT] TESObjectLoadedEventHandler - Unloaded {}", removed);
+
+		return RE::BSEventNotifyControl::kContinue;
+	}
+
 	//if (eventRef->formType.none(RE::FormType::NPC, RE::FormType::LeveledNPC, RE::FormType::ActorCharacter))
 	if (eventRef->formType.none(RE::FormType::ActorCharacter))
 		return RE::BSEventNotifyControl::kContinue;
@@ -3500,7 +3822,7 @@ RE::BSEventNotifyControl Raytracing::TESObjectLoadedEventHandler::ProcessEvent(c
 	if (!pNiAVObject)
 		return RE::BSEventNotifyControl::kContinue;
 
-	globals::features::raytracing.CreateModel(actor->GetName(), netimmerse_cast<RE::NiNode*>(pNiAVObject));
+	globals::features::raytracing.CreateModel(eventRef, actor->GetName(), netimmerse_cast<RE::NiNode*>(pNiAVObject));
 
 	return RE::BSEventNotifyControl::kContinue;
 }

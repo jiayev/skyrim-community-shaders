@@ -2193,6 +2193,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
 	float envMask = EnvmapData.x * MaterialData.x;
 
+#	if defined(RT)
+	envMask *= SharedData::raytracingSettings.EnvMap;
+#	endif
+
 	float viewNormalAngle = dot(worldNormal.xyz, viewDirection);
 	float3 envSamplingPoint = (viewNormalAngle * 2) * worldNormal.xyz - viewDirection;
 
@@ -2266,11 +2270,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			envColor = envColorBase.xyz * envMask;
 		}
 	}
-
-#	if defined(RT)
-	envColor *= SharedData::raytracingSettings.EnvMap;
-#	endif
-
 #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
 
 	float porosity = 1.0;
@@ -2708,7 +2707,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
-#	if defined(EYE)
+#	if defined(EYE) && defined(VANILLA_EYE_NORMAL)
 	worldNormal.xyz = input.EyeNormal;
 #	endif  // EYE
 
@@ -3203,21 +3202,27 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	
 #		if defined(RT)
 #			if !defined(SNOW)
-#				if defined(SKINNED) || !defined(MODELSPACENORMALS)	
-	float3 worldGeomNormal = tbnTr[2];
+
+	float3 worldGeomNormal;
+
+#				if defined(MODELSPACENORMALS)
+    float3 dd_x = ddx(input.WorldPosition.xyz);
+    float3 dd_y = ddy(input.WorldPosition.xyz);
+
+    worldGeomNormal = -normalize(cross(dd_x, dd_y));
 #				else
-	float3 worldGeomNormal = float3(0.0, 0.0, 1.0);	
-#				endif // !defined (SKINNED) && defined (MODELSPACENORMALS)
+	worldGeomNormal = vertexNormal;
+#				endif
 
 	float3 screenGeomNormal = normalize(FrameBuffer::WorldToView(worldGeomNormal, false, eyeIndex));
 
     uint m = (uint)round(saturate(rawRMAOS.y) * 255.0);
 
-#	if defined(TRUE_PBR)
+#if defined(TRUE_PBR)
     uint a = (uint)round(saturate(rawRMAOS.z) * 255.0);
 #	else
 	uint a = 255u;
-#	endif
+#	endif // defined(TRUE_PBR)
 
 	uint packed = m | (a << 8);
 
