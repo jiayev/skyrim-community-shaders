@@ -136,8 +136,8 @@ void Shape::BuildMesh(RE::BSGraphics::TriShape* rendererData, const std::uint32_
 			uint16_t v1 = indices[i + 1u];
 			uint16_t v2 = indices[i + 2u];
 
-			if (v0 > vertexCount || v1 > vertexCount || v2 > vertexCount)
-				logger::critical("[RT] Triangle {} vertice overflow: [{}, {}, {}]", t, v0, v1, v2);
+			if (v0 >= vertexCount || v1 >= vertexCount || v2 >= vertexCount)
+				logger::critical("[RT] Triangle {} vertex overflow: [{}, {}, {}]", t, v0, v1, v2);
 
 			triangles[t] = Triangle(v0, v1, v2);
 		}
@@ -197,7 +197,7 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 		auto* effect = geometryRuntimeData.properties[State::kEffect].get();
 
 		logger::trace("[RT] BuildMaterial - Effect RTTI: {}", effect->GetRTTI()->GetName());
-		
+
 		if (effect) {
 			if (auto shaderProp = netimmerse_cast<RE::BSShaderProperty*>(effect)) {
 				shaderFlags = shaderProp->flags.get();
@@ -243,7 +243,7 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 						normalTexture = TryGetTexture(lightingBaseMaterial->normalTexture);
 					}
 
-					// TrueBR - Tried to check for 'lightingShaderProp->flags.any(EShaderPropertyFlag::kMenuScreen)' 
+					// TrueBR - Tried to check for 'lightingShaderProp->flags.any(EShaderPropertyFlag::kMenuScreen)'
 					// but it did not work at all, skyrim_cast is not safe and will cast even if not PBR material (no RTTI?)
 					if (typeid(*shaderMaterial) == typeid(BSLightingShaderMaterialPBR)) {
 						const auto* lightingPBRMaterial = static_cast<BSLightingShaderMaterialPBR*>(shaderMaterial);
@@ -286,11 +286,11 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 
 				//if (effectShaderProp->material) {
 				if (auto effectMaterial = skyrim_cast<RE::BSEffectShaderMaterial*>(effectShaderProp->material)) {
-						effectColor = { effectMaterial->baseColor.red, effectMaterial->baseColor.green, effectMaterial->baseColor.blue, effectMaterial->baseColorScale };
+					effectColor = { effectMaterial->baseColor.red, effectMaterial->baseColor.green, effectMaterial->baseColor.blue, effectMaterial->baseColorScale };
 
-						baseTexture = TryGetTexture(effectMaterial->sourceTexture);
-						effectTexture = TryGetTexture(effectMaterial->greyscaleTexture);
-					}
+					baseTexture = TryGetTexture(effectMaterial->sourceTexture);
+					effectTexture = TryGetTexture(effectMaterial->greyscaleTexture);
+				}
 				//}
 			}
 		}

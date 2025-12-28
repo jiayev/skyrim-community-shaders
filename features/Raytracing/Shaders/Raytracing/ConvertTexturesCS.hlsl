@@ -1,6 +1,7 @@
 #include "Raytracing/Includes/Common.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
+#include "Common/Color.hlsli"
 
 Texture2D<unorm half4> NormalGlossiness     : register(t0);
 Texture2D<unorm half4> Albedo               : register(t1);
@@ -13,10 +14,11 @@ RWTexture2D<unorm half4> Diffuse            : register(u1);
 void main(uint2 id : SV_DispatchThreadID)
 {
     const unorm half3 normalGlossiness = NormalGlossiness[id].xyz;
-    const snorm half3 normalWS = normalize(ViewToWorldVector(GBuffer::DecodeNormal(normalGlossiness.xy), FrameBuffer::CameraViewInverse[0]));	
+    const snorm half3 normalWS = normalize(ViewToWorldVector(GBuffer::DecodeNormal(normalGlossiness.xy), FrameBuffer::CameraViewInverse[0]));
     NormalRoughness[id] = half4(normalWS, 1.0f - normalGlossiness.z);
-    
+
     float metallic, ao;
     UnpackMAO(GNMAO[id].z, metallic, ao);
-    Diffuse[id] = Albedo[id] * (1.0f - metallic);
+    const float4 albedo = Albedo[id];
+    Diffuse[id] = float4(Color::GammaToTrueLinear(albedo.rgb) * (1.0f - metallic), albedo.a);
 }

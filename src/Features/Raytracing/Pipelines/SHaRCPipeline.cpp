@@ -11,11 +11,9 @@ void SHaRCPipeline::CreateRootSignature(ID3D12Device5* device)
 	heap->CreateTable(
 		SHaRCHeap::Table::UAV,
 		D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
-		{ 
-			{ SHaRCHeap::Slot::SHaRCHashEntries, 1 },
+		{ { SHaRCHeap::Slot::SHaRCHashEntries, 1 },
 			{ SHaRCHeap::Slot::SHaRCAccumulation, 1 },
-			{ SHaRCHeap::Slot::SHaRCResolved, 1 }
-		});
+			{ SHaRCHeap::Slot::SHaRCResolved, 1 } });
 
 	auto rootParameters = heap->GetRootParameters();
 
@@ -83,6 +81,9 @@ void SHaRCPipeline::CreateUAVs(CD3DX12_CPU_DESCRIPTOR_HANDLE hashEntries, CD3DX1
 
 void SHaRCPipeline::Resolve(ID3D12GraphicsCommandList4* commandList)
 {
+	commandList->SetPipelineState(pipelineState.get());
+	commandList->SetComputeRootSignature(rootSignature.get());
+
 	CD3DX12_RESOURCE_BARRIER uavBarrier[3] = {
 		CD3DX12_RESOURCE_BARRIER::UAV(sharcHashEntriesBuffer->resource.get()),
 		CD3DX12_RESOURCE_BARRIER::UAV(sharcAccumulationBuffer->resource.get()),

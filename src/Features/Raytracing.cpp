@@ -3,14 +3,14 @@
 #include "TerrainBlending.h"
 
 #include "Globals.h"
-#include "State.h"
 #include "Raytracing/ShaderUtils.h"
 #include "ShaderCache.h"
+#include "State.h"
 
+#include "Deferred.h"
 #include <filesystem>
 #include <shlobj.h>
 #include <windows.h>
-#include "Deferred.h"
 
 #include "Utils/PerfUtils.h"
 
@@ -52,6 +52,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CullShadows,
 	RecompressTextures,
 	RussianRoulette,
+	ConvertToGamma,
 	PerformanceOverlay,
 	Defines,
 	DebugOutput,
@@ -91,7 +92,7 @@ void DrawFloat2(const char* label, float2& v, float min = 0.0f, float max = 1.0f
 }
 
 template <typename T>
-requires std::is_enum_v<T>
+	requires std::is_enum_v<T>
 static bool DrawEnumRadio(const char* label, T& variable, const char* tooltip = nullptr, const char* const* tooltips = nullptr)
 {
 	ImGui::PushID(label);
@@ -103,7 +104,7 @@ static bool DrawEnumRadio(const char* label, T& variable, const char* tooltip = 
 
 	if (tooltip != nullptr)
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", tooltip);	
+			ImGui::Text("%s", tooltip);
 
 	ImGui::SameLine();
 	ImGui::Dummy(ImVec2(25, 0));
@@ -129,7 +130,7 @@ static bool DrawEnumRadio(const char* label, T& variable, const char* tooltip = 
 }
 
 template <typename T>
-requires std::is_enum_v<T>
+	requires std::is_enum_v<T>
 static bool DrawEnumCombo(const char* label, T& variable, const char* tooltip = nullptr, const char* const* tooltips = nullptr)
 {
 	ImGui::PushID(label);
@@ -158,7 +159,7 @@ static bool DrawEnumCombo(const char* label, T& variable, const char* tooltip = 
 		ImGui::EndCombo();
 	} else if (tooltip != nullptr) {
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", tooltip);	
+			ImGui::Text("%s", tooltip);
 	}
 
 	ImGui::PopID();
@@ -340,6 +341,14 @@ void Raytracing::DrawGeneralSettings()
 	}
 
 	ImGui::Checkbox("Russian Roulette", &settings.RussianRoulette);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Enable Russian Roulette termination for ray paths to improve performance at the cost of some variance.\n");
+	}
+
+	ImGui::Checkbox("Convert To Gamma", &settings.ConvertToGamma);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Convert the final raytraced output to gamma space.\n");
+	}
 
 	ImGui::PopID();
 
@@ -515,7 +524,7 @@ void Raytracing::DrawOverlay()
 		ImGui::TableNextColumn();
 		ImGui::Text("%g ms", ms);
 	};
-	
+
 	if (ImGui::BeginTable("Effects", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
 		if (settings.RaytracedShadows)
 			DrawRow("Shadows", blasShadowInstances.size(), shadowsTime);
@@ -540,8 +549,7 @@ void Raytracing::CreatePipelines()
 
 void Raytracing::SetupOutputRT()
 {
-	auto createRT = [&](eastl::unique_ptr<DX12::Texture2D>& texture, DXGI_FORMAT format, GIHeapDef::Slot slot, LPCWSTR name)
-	{
+	auto createRT = [&](eastl::unique_ptr<DX12::Texture2D>& texture, DXGI_FORMAT format, GIHeapDef::Slot slot, LPCWSTR name) {
 		if (texture)
 			texture.reset();
 
@@ -579,7 +587,7 @@ void Raytracing::SetupResources()
 		D3D12_DESCRIPTOR_HEAP_DESC(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, SkinningHeap::NumDescriptors(), D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE));
 
 	giHeap = eastl::make_unique<DX12::DescriptorHeap<GIHeap>>(
-		device12, 
+		device12,
 		D3D12_DESCRIPTOR_HEAP_DESC(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, GIHeap::NumDescriptors(), D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE));
 
 	shadowHeap = eastl::make_unique<DX12::DescriptorHeap<ShadowsHeap>>(
@@ -653,7 +661,7 @@ void Raytracing::SetupResources()
 		srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
 
 		d3d12Device->CreateShaderResourceView(depthTexture->resource.get(), &srvDesc, giHeap->CPUHandle(GIHeap::Slot::Depth));
-		d3d12Device->CreateShaderResourceView(depthTexture->resource.get(), &srvDesc, shadowHeap->CPUHandle(ShadowsHeap::Slot::Depth));	
+		d3d12Device->CreateShaderResourceView(depthTexture->resource.get(), &srvDesc, shadowHeap->CPUHandle(ShadowsHeap::Slot::Depth));
 	}
 
 	// Shadow mask
@@ -681,14 +689,14 @@ void Raytracing::SetupResources()
 		uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
 		uavDesc.Format = texDesc.Format;
 
-		d3d12Device->CreateUnorderedAccessView(shadowMaskTexture->resource.get(), nullptr, &uavDesc, shadowHeap->CPUHandle(ShadowsHeap::Slot::ShadowMask));	
+		d3d12Device->CreateUnorderedAccessView(shadowMaskTexture->resource.get(), nullptr, &uavDesc, shadowHeap->CPUHandle(ShadowsHeap::Slot::ShadowMask));
 	}
 
 	if (UpdateRenderSize())
 		SetupOutputRT();
 
 	// UAVs
-	{	
+	{
 		// u0 - Final texture
 		{
 			D3D11_TEXTURE2D_DESC texDesc{};
@@ -797,7 +805,7 @@ void Raytracing::SetupResources()
 
 	// t6 - Indirection buffer
 	{
-		// Could probably fit in 16 bits but indexing would be awkward 
+		// Could probably fit in 16 bits but indexing would be awkward
 		indirectionBuffer = eastl::make_unique<DX12::ResourceUpload>(d3d12Device.get(), sizeof(uint32_t) * MAX_SHAPES);
 		DX::ThrowIfFailed(indirectionBuffer->resource->SetName(L"Indirection Buffer"));
 
@@ -839,7 +847,7 @@ void Raytracing::SetupResources()
 
 		shadowsCBData = eastl::make_unique<ShadowsFrameData>();
 	}
-	
+
 	logger::debug("Creating samplers...");
 	{
 		D3D11_SAMPLER_DESC samplerDesc = {
@@ -1139,7 +1147,7 @@ void Raytracing::ShareRT(ID3D11Texture2D* pTexture2D, const GIHeap::Slot& target
 	DX::ThrowIfFailed(pTexture2D->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
 
 	HANDLE sharedHandle = nullptr;
-	DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ, nullptr, &sharedHandle)); // DXGI_SHARED_RESOURCE_WRITE
+	DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ, nullptr, &sharedHandle));  // DXGI_SHARED_RESOURCE_WRITE
 
 	DX::ThrowIfFailed(d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(ppResource)));
 	CloseHandle(sharedHandle);
@@ -1198,8 +1206,7 @@ eastl::vector<LightLimitFix::LightData> Raytracing::GetPointLights()
 
 	//auto& isl = globals::features::inverseSquareLighting;
 
-	auto addLight = [&](const RE::NiPointer<RE::BSLight>& e) 
-	{
+	auto addLight = [&](const RE::NiPointer<RE::BSLight>& e) {
 		if (auto bsLight = e.get()) {
 			if (auto niLight = bsLight->light.get()) {
 				if (IsValidLight(bsLight)) {
@@ -1262,7 +1269,7 @@ eastl::vector<LightLimitFix::LightData> Raytracing::GetPointLights()
 	return lightsData;
 }
 
-void Raytracing::UpdateLights() 
+void Raytracing::UpdateLights()
 {
 	if (!renderingWorld || lightsUpdated)
 		return;
@@ -1305,7 +1312,7 @@ static DirectX::XMFLOAT3X4 GetXMF3X4FromNiTransform(const RE::NiTransform& Trans
 	const RE::NiMatrix3& m = Transform.rotate;
 	const float scale = Transform.scale;
 
-	return { 
+	return {
 		m.entry[0][0] * scale, m.entry[1][0] * scale, m.entry[2][0] * scale,
 		m.entry[0][1] * scale, m.entry[1][1] * scale, m.entry[2][1] * scale,
 		m.entry[0][2] * scale, m.entry[1][2] * scale, m.entry[2][2] * scale,
@@ -1321,9 +1328,7 @@ void Raytracing::CopyDepth()
 
 	if (tb.loaded) {
 		context->CopyResource(depthTexture->resource11, tb.blendedDepthTexture->resource.get());
-	} 
-	else
-	{
+	} else {
 		auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];  // kMAIN kPOST_ZPREPASS_COPY
 
 		context->CSSetShader(copyDepthCS.get(), nullptr, 0);
@@ -1344,7 +1349,7 @@ void Raytracing::ConvertTextures() const
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
 
-	context->CSSetShader(convertNormalGlossCS.get(), nullptr, 0);
+	context->CSSetShader(convertTexturesCS.get(), nullptr, 0);
 
 	ID3D11Buffer* cb[1] = { *globals::game::perFrame.get() };
 	context->CSSetConstantBuffers(12, 1, cb);
@@ -1356,9 +1361,9 @@ void Raytracing::ConvertTextures() const
 	};
 	context->CSSetShaderResources(0, _countof(srvs), srvs);
 
-	ID3D11UnorderedAccessView* uavs[2] = { 
-		normalRoughnessTexture->uav, 
-		diffuseAlbedoTexture->uav 
+	ID3D11UnorderedAccessView* uavs[2] = {
+		normalRoughnessTexture->uav,
+		diffuseAlbedoTexture->uav
 	};
 	context->CSSetUnorderedAccessViews(0, _countof(uavs), uavs, nullptr);
 
@@ -1416,7 +1421,7 @@ static RE::BSFadeNode* FindBSFadeNode(RE::NiNode* a_niNode)
 
 template <typename T>
 void Raytracing::MakeAndCopy(const eastl::vector<T>& data, winrt::com_ptr<ID3D12Resource>& res)
- {
+{
 	auto desc = BASIC_BUFFER_DESC;
 	desc.Width = sizeof(T) * data.size();
 
@@ -1469,9 +1474,7 @@ void Raytracing::CommitModel(Model& model)
 				.IndexBuffer = shape->triangleBuffer->resource->GetGPUVirtualAddress(),
 				.VertexBuffer = {
 					.StartAddress = shape->vertexBuffer->resource->GetGPUVirtualAddress(),
-					.StrideInBytes = sizeof(Vertex) 
-				} 
-			} 
+					.StrideInBytes = sizeof(Vertex) } }
 		};
 	}
 
@@ -1514,7 +1517,7 @@ void Raytracing::CommitModel(Model& model)
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {
 		.DestAccelerationStructureData = model.blasBuffer->GetResource()->GetGPUVirtualAddress(),
 		.Inputs = inputs,
-		.ScratchAccelerationStructureData = scratch->GetResource()->GetGPUVirtualAddress() 
+		.ScratchAccelerationStructureData = scratch->GetResource()->GetGPUVirtualAddress()
 	};
 
 	commandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
@@ -1535,7 +1538,6 @@ void Raytracing::UpdateModelBLAS(Model& model)
 
 	eastl::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs(shapeCount);
 
-
 	for (auto i = 0; i < shapeCount; i++) {
 		auto& shape = shapes[i];
 
@@ -1551,9 +1553,7 @@ void Raytracing::UpdateModelBLAS(Model& model)
 				.IndexBuffer = shape->triangleBuffer->resource->GetGPUVirtualAddress(),
 				.VertexBuffer = {
 					.StartAddress = shape->vertexBuffer->resource->GetGPUVirtualAddress(),
-					.StrideInBytes = sizeof(Vertex) 
-				} 
-			}
+					.StrideInBytes = sizeof(Vertex) } }
 		};
 	}
 
@@ -1564,7 +1564,6 @@ void Raytracing::UpdateModelBLAS(Model& model)
 		.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
 		.pGeometryDescs = geometryDescs.data()
 	};
-
 
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {
 		.DestAccelerationStructureData = model.blasBuffer->GetResource()->GetGPUVirtualAddress(),
@@ -1639,7 +1638,7 @@ void Raytracing::CreateModel(RE::TESObjectREFR* refr, const char* path, RE::NiNo
 	if (bsxFlags) {
 		if (static_cast<int32_t>(bsxFlags->value) & static_cast<int32_t>(RE::BSXFlags::Flag::kEditorMarker))
 			return;
-		
+
 		logger::debug("[RT] CreateModel - BSX Flags [0x{:x}]: {}", bsxFlags->value, GetFlagsString<RE::BSXFlags::Flag>(bsxFlags->value));
 	}
 
@@ -1683,8 +1682,8 @@ void Raytracing::CreateModel(RE::TESObjectREFR* refr, const char* path, RE::NiNo
 			return RE::BSVisit::BSVisitControl::kContinue;
 		}
 
-		bool isLightingShader = netimmerse_cast<RE::BSLightingShaderProperty*>(effect) != nullptr;	
-		bool isEffectShader = netimmerse_cast<RE::BSEffectShaderProperty*>(effect) != nullptr;	
+		bool isLightingShader = netimmerse_cast<RE::BSLightingShaderProperty*>(effect) != nullptr;
+		bool isEffectShader = netimmerse_cast<RE::BSEffectShaderProperty*>(effect) != nullptr;
 
 		// Only lighting and effect shader for now
 		if (!isLightingShader && !isEffectShader) {
@@ -1708,8 +1707,8 @@ void Raytracing::CreateModel(RE::TESObjectREFR* refr, const char* path, RE::NiNo
 			flags |= Flags::Dynamic;
 
 		auto localToRoot = GetXMFromNiTransform(rootWorldInverse * pGeometry->world);
-		
-		if (auto* triShapeRD = geometryRuntimeData.rendererData) { // Non-Skinned
+
+		if (auto* triShapeRD = geometryRuntimeData.rendererData) {  // Non-Skinned
 			auto* pTriShape = netimmerse_cast<RE::BSTriShape*>(pGeometry);
 
 			const auto& triShapeRuntime = pTriShape->GetTrishapeRuntimeData();
@@ -1727,9 +1726,9 @@ void Raytracing::CreateModel(RE::TESObjectREFR* refr, const char* path, RE::NiNo
 
 			if (isDismembered)
 				logger::warn("\t\t[RT] CreateModel::TraverseScenegraphGeometries - Is dismembered");*/
-			
+
 			auto& skinPartition = skinInstance->skinPartition;
-	
+
 			if (!skinPartition) {
 				logger::warn("\t\t[RT] CreateModel::TraverseScenegraphGeometries - Invalid SkinPartition");
 				return RE::BSVisit::BSVisitControl::kContinue;
@@ -1784,8 +1783,7 @@ void Raytracing::CreateModel(RE::TESObjectREFR* refr, const char* path, RE::NiNo
 
 bool Raytracing::RemoveInstance(RE::NiNode* pRoot, bool releaseModel)
 {
-	if (auto instanceIt = instances.find(pRoot); instanceIt != instances.end())
-	{
+	if (auto instanceIt = instances.find(pRoot); instanceIt != instances.end()) {
 		auto& instance = instanceIt->second;
 
 		logger::debug("[RT] RemoveInstance - \"{}\", \"{}\"", pRoot->name, instance.filename);
@@ -1834,7 +1832,7 @@ eastl::shared_ptr<Allocation> Raytracing::GetTextureRegister(ID3D11Texture2D* dx
 	// Texture already placed in heap, return allocation
 	if (auto refIt = textures.find(dx11Texture); refIt != textures.end()) {
 		return refIt->second.allocation;
-	} 
+	}
 
 	// Search for texture in shared map
 	if (auto sharedIt = sharedTextures.find(dx11Texture); sharedIt != sharedTextures.end()) {
@@ -1872,7 +1870,6 @@ void Raytracing::AddInstance(RE::FormID formID, RE::NiNode* pNiNode, eastl::stri
 
 	if (auto instanceIt = instances.find(pNiNode); instanceIt == instances.end()) {
 		if (auto modelIt = models.find(path); modelIt != models.end()) {
-			
 			auto [it, emplaced] = instances.try_emplace(pNiNode, Instance(path));
 
 			if (emplaced) {
@@ -1883,7 +1880,8 @@ void Raytracing::AddInstance(RE::FormID formID, RE::NiNode* pNiNode, eastl::stri
 	}
 }
 
-void Raytracing::UpdateDynamicSkinning(ID3D12GraphicsCommandList4* pCommandList) {
+void Raytracing::UpdateDynamicSkinning(ID3D12GraphicsCommandList4* pCommandList)
+{
 	if (vertexUpdate.empty())
 		return;
 
@@ -1910,7 +1908,7 @@ void Raytracing::UpdateDynamicSkinning(ID3D12GraphicsCommandList4* pCommandList)
 
 			for (auto& item : vertexUpdate) {
 				if (item.flags & Flags::Skinned) {
-					pCommandList->CopyResource(item.vertexBuffer->resource.get(), item.vertexBuffer->uploadResource[0].get());				
+					pCommandList->CopyResource(item.vertexBuffer->resource.get(), item.vertexBuffer->uploadResource[0].get());
 				}
 			}
 		}
@@ -1928,7 +1926,7 @@ void Raytracing::UpdateDynamicSkinning(ID3D12GraphicsCommandList4* pCommandList)
 	pCommandList->SetComputeRootDescriptorTable(0, skinningHeap->TableGPUHandle(SkinningHeap::Table::UAV));
 
 	pCommandList->SetComputeRootDescriptorTable(1, skinningHeap->TableGPUHandle(SkinningHeap::Table::SRV));
-	
+
 	pCommandList->SetComputeRootDescriptorTable(2, skinningHeap->TableGPUHandle(SkinningHeap::Table::DynamicBuffer));
 
 	pCommandList->SetComputeRootDescriptorTable(3, skinningHeap->TableGPUHandle(SkinningHeap::Table::SkinningBuffer));
@@ -2104,7 +2102,7 @@ void Raytracing::UpdateInstances()
 		}
 
 		D3D12_RAYTRACING_INSTANCE_DESC blasInstance = {
-			.InstanceID = 0, // We don't really use this, instances are an unordered_map, so yeah unordered...
+			.InstanceID = 0,  // We don't really use this, instances are an unordered_map, so yeah unordered...
 			.InstanceMask = 1,
 			.AccelerationStructure = model.blasBuffer->GetResource()->GetGPUVirtualAddress()
 		};
@@ -2115,10 +2113,9 @@ void Raytracing::UpdateInstances()
 		blasInstances.push_back(blasInstance);
 
 		instanceBufferData.emplace_back(
-			instance.transform, 
+			instance.transform,
 			LightData(GatherInstanceLights(pNiNode)),
-			firstShapeIndex
-		);
+			firstShapeIndex);
 	}
 
 	logger::trace("[RT] UpdateInstances - Total Shape Count: {}", totalShapeCount);
@@ -2183,7 +2180,7 @@ void ComputeFrustumAABB(eastl::array<float3, 8> corners, float3& bbMin, float3& 
 {
 	if (transform)
 		for (int i = 0; i < 8; i++) {
-			corners[i]  = float3::Transform(corners[i], *transform);
+			corners[i] = float3::Transform(corners[i], *transform);
 		}
 
 	// Initialize AABB
@@ -2363,10 +2360,10 @@ void Raytracing::UpdateShadowInstances()
 		if (!instance.Update(pNiNode, { it->first, model }))
 			return;
 
-		D3D12_RAYTRACING_INSTANCE_DESC blasShadowInstance = { 
+		D3D12_RAYTRACING_INSTANCE_DESC blasShadowInstance = {
 			.InstanceID = static_cast<uint>(blasShadowInstances.size()),
 			.InstanceMask = 1,
-			.AccelerationStructure = model.blasBuffer->GetResource()->GetGPUVirtualAddress() 
+			.AccelerationStructure = model.blasBuffer->GetResource()->GetGPUVirtualAddress()
 		};
 
 		memcpy(blasShadowInstance.Transform, instance.transform.m, sizeof(blasShadowInstance.Transform));
@@ -2472,8 +2469,8 @@ uint2 Raytracing::GetScreenSize() const
 {
 	auto screenSize = Util::ConvertToDynamic(globals::state->screenSize);
 
-	return { 
-		static_cast<uint>(screenSize.x), 
+	return {
+		static_cast<uint>(screenSize.x),
 		static_cast<uint>(screenSize.y)
 	};
 }
@@ -2483,7 +2480,7 @@ uint2 Raytracing::GetRenderSize()
 	auto renderSizeOut = GetScreenSize();
 
 	// This is borked because all RTs need to share the same size
-/*
+	/*
 #if defined(DLSS_RR)
 	if (settings.Denoiser == Denoiser::DLSSRR) {
 		GetDLSSRROptimal();
@@ -2533,7 +2530,7 @@ void Raytracing::DrawRTGI()
 
 	if (settings.WhiteFurnace) {
 		float clearColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-		d3d11Context->ClearRenderTargetView(rendererRuntimeData.renderTargets[ALBEDO].RTV, clearColor); 
+		d3d11Context->ClearRenderTargetView(rendererRuntimeData.renderTargets[ALBEDO].RTV, clearColor);
 	}
 
 	ConvertTextures();
@@ -2555,11 +2552,11 @@ void Raytracing::DrawRTGI()
 		/*if (pixMultiFrame) {
 			PIXGpuCaptureNextFrames(L"I:/Temp/Pix/TDRCap.pix", 60);
 		} else {*/
-			//PIXBeginCapture(PIX_CAPTURE_GPU, PIXCaptureParameters
-			ga->BeginCapture();
+		//PIXBeginCapture(PIX_CAPTURE_GPU, PIXCaptureParameters
+		ga->BeginCapture();
 		//}
 	}
-	
+
 	UpdateInstances();
 
 	// Upload buffers
@@ -2570,7 +2567,7 @@ void Raytracing::DrawRTGI()
 
 #ifdef DLSS_RR
 	if (settings.Denoiser == Denoiser::DLSSRR) {
-		GetDLSSRROptimal(); // TODO: Remove this once we can handle dynamic resolution changes properly
+		GetDLSSRROptimal();  // TODO: Remove this once we can handle dynamic resolution changes properly
 		SetDLSSRROptions();
 		CheckFrameConstants();
 	}
@@ -2642,14 +2639,7 @@ void Raytracing::DrawRTGI()
 	RebuildTLAS(commandList.get(), blasInstances.size(), blasInstanceBuffer->resource->GetGPUVirtualAddress());
 
 	{
-		// Raytracing
-		{
-			commandList->SetPipelineState1(pipelineRT.get());
-			commandList->SetComputeRootSignature(rootSignature.get());
-
-			auto commonHeapPtr = giHeap->Heap();
-			commandList->SetDescriptorHeaps(1, &commonHeapPtr);
-
+		auto setDescriptorTables = [&]() {
 			// Parameter 0: UAV table
 			commandList->SetComputeRootDescriptorTable(0, giHeap->TableGPUHandle(GIHeap::Table::UAV));
 
@@ -2667,6 +2657,17 @@ void Raytracing::DrawRTGI()
 
 			// Parameter 5: Constant buffer
 			commandList->SetComputeRootConstantBufferView(5, frameBuffer->resource->GetGPUVirtualAddress());
+		};
+
+		// Raytracing
+		{
+			commandList->SetPipelineState1(pipelineRT.get());
+			commandList->SetComputeRootSignature(rootSignature.get());
+
+			auto commonHeapPtr = giHeap->Heap();
+			commandList->SetDescriptorHeaps(1, &commonHeapPtr);
+
+			setDescriptorTables();
 
 			D3D12_DISPATCH_RAYS_DESC dispatchDesc{};
 			dispatchDesc.Depth = 1;
@@ -2675,8 +2676,7 @@ void Raytracing::DrawRTGI()
 
 #ifdef SHARC
 			// SHaRC Update pass
-			if (settings.TraceMode == TraceMode::SHaRC)
-			{
+			if (settings.TraceMode == TraceMode::SHaRC) {
 				dispatchDesc.Width = DivideRoundUp(renderSize.x, 5.0f);
 				dispatchDesc.Height = DivideRoundUp(renderSize.y, 5.0f);
 
@@ -2684,7 +2684,14 @@ void Raytracing::DrawRTGI()
 
 				sharcPipeline->Resolve(commandList.get());
 
-				// Update Frame Buffer for main RT pass, maybe we should use two buffers? 
+				// Restore RT pipeline
+				commandList->SetPipelineState1(pipelineRT.get());
+				commandList->SetComputeRootSignature(rootSignature.get());
+
+				// Restore Descriptor Tables
+				setDescriptorTables();
+
+				// Update Frame Buffer for main RT pass, maybe we should use two buffers?
 				// Using one GPU heap buffer with multiple upload buffers felt like a hack (but it works)
 				frameBuffer->UploadRegion(commandList.get(), sizeof(SHaRCFrameData::UpdatePass), offsetof(FrameData, SHaRC) + offsetof(SHaRCFrameData, UpdatePass), 1);
 			}
@@ -2748,7 +2755,7 @@ void Raytracing::DrawRTGI()
 			} else {
 				outputTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
 				commandList->CopyResource(mainTexture->resource.get(), outputTexture->resource.get());
-				outputTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);		
+				outputTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 			}
 #endif
 		} else {
@@ -2766,7 +2773,6 @@ void Raytracing::DrawRTGI()
 				commandList->CopyResource(mainTexture->resource.get(), specularHitDistanceTexture->resource.get());
 				specularHitDistanceTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 			} else if (settings.DebugOutput == DebugOutput::NormalRoughnessGbuffer) {
-
 				auto transitionCopy = CD3DX12_RESOURCE_BARRIER::Transition(normalRoughnessTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
 				commandList->ResourceBarrier(1, &transitionCopy);
 
@@ -2775,7 +2781,6 @@ void Raytracing::DrawRTGI()
 				auto transitionNonPixelRes = CD3DX12_RESOURCE_BARRIER::Transition(normalRoughnessTexture->resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 				commandList->ResourceBarrier(1, &transitionNonPixelRes);
 			} else if (settings.DebugOutput == DebugOutput::GeometryNormalMetalness) {
-
 				auto transitionCopy = CD3DX12_RESOURCE_BARRIER::Transition(GNMDTexture.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
 				commandList->ResourceBarrier(1, &transitionCopy);
 
@@ -2839,7 +2844,7 @@ void Raytracing::DrawRTGI()
 	ReleaseTempGPUData();
 
 	// True Linear to Gamma
-	{
+	if (settings.ConvertToGamma) {
 		d3d11Context->CSSetShader(trueLinearToGammaCS.get(), nullptr, 0);
 
 		d3d11Context->CSSetShaderResources(0, 1, &mainTexture->srv);
@@ -2848,13 +2853,12 @@ void Raytracing::DrawRTGI()
 
 		auto dispatchCount = Util::GetScreenDispatchCount();
 		d3d11Context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+	} else {
+		d3d11Context->CopyResource(main.texture, mainTexture->resource11);
 	}
 
-	//d3d11Context->CopyResource(main.texture, mainTexture->resource11);
-
 	// Clear specular if Path Tracing is enabled
-	if (settings.PathTracing)
-	{
+	if (settings.PathTracing) {
 		float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 		d3d11Context->ClearRenderTargetView(globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED].RTV, clearColor);
 	}
@@ -2885,7 +2889,6 @@ void Raytracing::UpdateShadowsFrameBuffer()
 
 void Raytracing::RenderShadows()
 {
-
 	//logger::info("[RT] RenderShadows - ShadowLight [0x{:x}], TLAS [0x{:x}]", reinterpret_cast<uintptr_t>(shadowLight), reinterpret_cast<uintptr_t>(tlas.get()));
 
 	if (!shadowLight)
@@ -2916,8 +2919,8 @@ void Raytracing::RenderShadows()
 		/*if (pixMultiFrame) {
 			PIXGpuCaptureNextFrames(L"I:/Temp/Pix/TDRCap.pix", 60);
 		} else {*/
-			//PIXBeginCapture(PIX_CAPTURE_GPU, PIXCaptureParameters
-			ga->BeginCapture();
+		//PIXBeginCapture(PIX_CAPTURE_GPU, PIXCaptureParameters
+		ga->BeginCapture();
 		//}
 	}
 
@@ -2959,16 +2962,9 @@ void Raytracing::RenderShadows()
 	D3D12_DISPATCH_RAYS_DESC dispatchDesc = {
 		.RayGenerationShaderRecord = {
 			.StartAddress = sbtAddr,
-			.SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES 
-		},
-		.MissShaderTable = { 
-			.StartAddress = sbtAddr + D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, 
-			.SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES 
-		},
-		.HitGroupTable = { 
-			.StartAddress = sbtAddr + 2 * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, 
-			.SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES 
-		},
+			.SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES },
+		.MissShaderTable = { .StartAddress = sbtAddr + D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES },
+		.HitGroupTable = { .StartAddress = sbtAddr + 2 * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES },
 		.Width = static_cast<UINT>(shadowMaskDesc.Width),
 		.Height = shadowMaskDesc.Height,
 		.Depth = 1
@@ -2998,7 +2994,7 @@ void Raytracing::RenderShadows()
 
 	if (pixCapture && pixCaptureStarted && !pixTDR && settings.PIXCaptureLocation == PIXCaptureLocation::Shadows) {
 		ga->EndCapture();
-		pixCapture = pixMultiFrame; // Do not stop capture when doing multiframe
+		pixCapture = pixMultiFrame;  // Do not stop capture when doing multiframe
 		pixCaptureStarted = false;
 	}
 
@@ -3136,8 +3132,7 @@ void Raytracing::InitD3D12(ID3D11Device* ppDevice, ID3D11DeviceContext* pImmedia
 
 			if (pixGPUCapturerPath.empty()) {
 				logger::warn("[RT] PIX capture is enabled but binaries where not found.");
-			} else
-			{
+			} else {
 				LoadLibrary(pixGPUCapturerPath.c_str());
 			}
 		}
@@ -3152,8 +3147,7 @@ void Raytracing::InitD3D12(ID3D11Device* ppDevice, ID3D11DeviceContext* pImmedia
 	DX::ThrowIfFailed(pImmediateContext->QueryInterface(IID_PPV_ARGS(&d3d11Context)));
 
 	// Create debug device
-	if (!settings.EnablePIXCapture && settings.EnableDebugDevice)
-	{
+	if (!settings.EnablePIXCapture && settings.EnableDebugDevice) {
 		winrt::com_ptr<ID3D12Debug6> debugController;
 		if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {
 			debugController->EnableDebugLayer();
@@ -3183,7 +3177,7 @@ void Raytracing::InitD3D12(ID3D11Device* ppDevice, ID3D11DeviceContext* pImmedia
 					logger::info("[RT] Hardware ray tracing supported! Tier: {}", magic_enum::enum_name(options5.RaytracingTier));
 				else
 					logger::warn("[RT] Hardware ray tracing not supported.");
-			}		
+			}
 		}
 
 		D3D12_COMMAND_QUEUE_DESC queueDesc = {};
@@ -3248,14 +3242,13 @@ void Raytracing::InitD3D12(ID3D11Device* ppDevice, ID3D11DeviceContext* pImmedia
 			DX::ThrowIfFailed(allocator->CreatePool(&poolDesc, vertexPool.put()));
 			DX::ThrowIfFailed(allocator->CreatePool(&poolDesc, skinningPool.put()));
 			DX::ThrowIfFailed(allocator->CreatePool(&poolDesc, trianglePool.put()));
-			
+
 			DX::ThrowIfFailed(allocator->CreatePool(&poolDesc, blasScratchPool.put()));
 			DX::ThrowIfFailed(allocator->CreatePool(&poolDesc, blasPool.put()));
 		}
 	}
 
-	if (settings.EnableDebugDevice || settings.EnablePIXCapture)
-	{
+	if (settings.EnableDebugDevice || settings.EnablePIXCapture) {
 		HANDLE disconnectEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 		DX::ThrowIfFailed(d3d12Fence->SetEventOnCompletion(UINT64_MAX, disconnectEvent));
 
@@ -3270,24 +3263,21 @@ void Raytracing::CreateRootSignature()
 {
 	// UAV range
 	giHeap->CreateTable(
-		GIHeap::Table::UAV, 
-		D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 
-		{  
-			{ GIHeap::Slot::Output, 1 }, 
-			{ GIHeap::Slot::Reflectance, 1 }, 
+		GIHeap::Table::UAV,
+		D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
+		{ { GIHeap::Slot::Output, 1 },
+			{ GIHeap::Slot::Reflectance, 1 },
 			{ GIHeap::Slot::SpecularHitDist, 1 },
 			{ GIHeap::Slot::SHaRCHashEntries, 1 },
 			{ GIHeap::Slot::SHaRCLock, 1 },
 			{ GIHeap::Slot::SHaRCAccumulation, 1 },
-			{ GIHeap::Slot::SHaRCResolved, 1 }
-		});
+			{ GIHeap::Slot::SHaRCResolved, 1 } });
 
 	// Fixed SRV ranges
 	giHeap->CreateTable(
-		GIHeap::Table::SRV, 
+		GIHeap::Table::SRV,
 		D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-		{
-			{ GIHeap::Slot::Main, 1 },
+		{ { GIHeap::Slot::Main, 1 },
 			{ GIHeap::Slot::Depth, 1 },
 			{ GIHeap::Slot::Albedo, 1 },
 			{ GIHeap::Slot::NormalRoughness, 1 },
@@ -3295,42 +3285,32 @@ void Raytracing::CreateRootSignature()
 			{ GIHeap::Slot::TLAS, 1 },
 			{ GIHeap::Slot::SkyHemisphere, 1 },
 			{ GIHeap::Slot::Lights, 1 },
-			{ GIHeap::Slot::Materials, 1 },	
+			{ GIHeap::Slot::Materials, 1 },
 			{ GIHeap::Slot::Instances, 1 },
-			{ GIHeap::Slot::Indirection, 1 }			
-		});
-
+			{ GIHeap::Slot::Indirection, 1 } });
 
 	// Vertex buffers (unbounded)
 	giHeap->CreateTable(
-		GIHeap::Table::VertexBuffer, 
+		GIHeap::Table::VertexBuffer,
 		D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-		{
-			{ GIHeap::Slot::Vertices, UINT_MAX, 1, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE }
-		});
-	
+		{ { GIHeap::Slot::Vertices, UINT_MAX, 1, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } });
 
 	// Triangle buffers (unbounded)
 	giHeap->CreateTable(
-		GIHeap::Table::TriangleBuffer, 
-		D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 
-		{ 
-			{ GIHeap::Slot::Triangles, UINT_MAX, 2, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } 
-		});
+		GIHeap::Table::TriangleBuffer,
+		D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+		{ { GIHeap::Slot::Triangles, UINT_MAX, 2, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } });
 
 	// Textures (unbounded)
 	giHeap->CreateTable(
 		GIHeap::Table::Textures,
 		D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-		{ 
-			{ GIHeap::Slot::Textures, UINT_MAX, 3, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } 
-		});
-
+		{ { GIHeap::Slot::Textures, UINT_MAX, 3, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } });
 
 	auto rootParameters = giHeap->GetRootParameters();
 
 	CD3DX12_ROOT_PARAMETER1 constantRootParam;
-	constantRootParam.InitAsConstantBufferView(0, 0); 
+	constantRootParam.InitAsConstantBufferView(0, 0);
 	rootParameters.push_back(constantRootParam);
 
 	CD3DX12_STATIC_SAMPLER_DESC staticSampler(0);  // register s0
@@ -3366,18 +3346,14 @@ void Raytracing::CreateShadowsRootSignature()
 	shadowHeap->CreateTable(
 		ShadowsHeap::Table::UAV,
 		D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
-		{ 
-			{ ShadowsHeap::Slot::ShadowMask, 1 } 
-		});
+		{ { ShadowsHeap::Slot::ShadowMask, 1 } });
 
 	// SRV
 	shadowHeap->CreateTable(
 		ShadowsHeap::Table::SRV,
 		D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-		{	
-			{ ShadowsHeap::Slot::Depth, 1 },
-			{ ShadowsHeap::Slot::TLAS, 1 }
-		});
+		{ { ShadowsHeap::Slot::Depth, 1 },
+			{ ShadowsHeap::Slot::TLAS, 1 } });
 
 	auto rootParameters = shadowHeap->GetRootParameters();
 
@@ -3414,32 +3390,24 @@ void Raytracing::CreateSkinningRootSignature()
 	skinningHeap->CreateTable(
 		SkinningHeap::Table::UAV,
 		D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
-		{ 
-			{ SkinningHeap::Slot::Output, UINT_MAX, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } 
-		});
+		{ { SkinningHeap::Slot::Output, UINT_MAX, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } });
 
 	skinningHeap->CreateTable(
 		SkinningHeap::Table::SRV,
 		D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-		{ 
-			{ SkinningHeap::Slot::LocalToRoot, 1 },
+		{ { SkinningHeap::Slot::LocalToRoot, 1 },
 			{ SkinningHeap::Slot::UpdateData, 1 },
-			{ SkinningHeap::Slot::BoneMatrices, 1 }
-		});
+			{ SkinningHeap::Slot::BoneMatrices, 1 } });
 
 	skinningHeap->CreateTable(
 		SkinningHeap::Table::DynamicBuffer,
 		D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-		{ 
-			{ SkinningHeap::Slot::DynamicVertices, UINT_MAX, 1, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } 
-		});
+		{ { SkinningHeap::Slot::DynamicVertices, UINT_MAX, 1, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } });
 
 	skinningHeap->CreateTable(
 		SkinningHeap::Table::SkinningBuffer,
 		D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-		{ 
-			{ SkinningHeap::Slot::SkinningData, UINT_MAX, 2, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } 
-		});
+		{ { SkinningHeap::Slot::SkinningData, UINT_MAX, 2, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } });
 
 	auto rootParameters = skinningHeap->GetRootParameters();
 
@@ -3465,9 +3433,7 @@ void Raytracing::CreateSkinningRootSignature()
 
 void Raytracing::Initialize()
 {
-	
 }
-
 
 void Raytracing::ClearShaderCache()
 {
@@ -3589,7 +3555,7 @@ void Raytracing::CompileRTGIShaders()
 		// Shader + pipeline config
 		pipelineBuilder.AddShaderConfig(16, 8);
 		pipelineBuilder.AddGlobalRootSignature(rootSignature.get());
-		pipelineBuilder.AddPipelineConfig(1); // Max recursion depth
+		pipelineBuilder.AddPipelineConfig(1);  // Max recursion depth
 
 		if (pipelineRT)
 			pipelineRT = nullptr;
@@ -3623,7 +3589,6 @@ void Raytracing::CompileRTGIShaders()
 
 		// Recreate buffer if necessary
 		if (!shaderBindingTableBuffer || shaderBindingTableSize > shaderBindingTableSizePrev) {
-
 			if (shaderBindingTableBuffer)
 				shaderBindingTableBuffer.reset();
 
@@ -3650,16 +3615,15 @@ void Raytracing::CompileRTShadowsShaders()
 	// Init pipeline
 	{
 		D3D12_DXIL_LIBRARY_DESC lib = {
-			.DXILLibrary = { 
+			.DXILLibrary = {
 				.pShaderBytecode = shadowsRTBlob->GetBufferPointer(),
-				.BytecodeLength = shadowsRTBlob->GetBufferSize() 
-			}
+				.BytecodeLength = shadowsRTBlob->GetBufferSize() }
 		};
 
-		D3D12_HIT_GROUP_DESC hitGroup = { 
+		D3D12_HIT_GROUP_DESC hitGroup = {
 			.HitGroupExport = L"HitGroup",
 			.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES,
-			.ClosestHitShaderImport = L"ClosestHit" 
+			.ClosestHitShaderImport = L"ClosestHit"
 		};
 
 		D3D12_RAYTRACING_SHADER_CONFIG shaderCfg = {
@@ -3710,9 +3674,9 @@ void Raytracing::CompileRTShadowsShaders()
 			void* id = props->GetShaderIdentifier(name);
 			memcpy(data, id, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
 			data = static_cast<char*>(data) +
-				   D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
+			       D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
 		};
-	
+
 		writeId(L"RayGeneration");
 		writeId(L"Miss");
 		writeId(L"HitGroup");
@@ -3731,8 +3695,8 @@ void Raytracing::CompileComputeShaders()
 	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\CubeToHemiCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
 		cubeToHemiCS.attach(rawPtr);
 
-	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\ConvertNormalGlossCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
-		convertNormalGlossCS.attach(rawPtr);
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\ConvertTexturesCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
+		convertTexturesCS.attach(rawPtr);
 
 	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\TrueLinearToGammaCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
 		trueLinearToGammaCS.attach(rawPtr);
@@ -3758,9 +3722,9 @@ RE::BSEventNotifyControl Raytracing::MenuOpenCloseEventHandler::ProcessEvent(con
 
 		logger::debug("MenuOpenCloseEventHandler::ProcessEvent - Opening: {}", a_event->opening);
 
-		if (a_event->opening) {			
+		if (a_event->opening) {
 			auto& rt = globals::features::raytracing;
-			rt.ClearInstances();	
+			rt.ClearInstances();
 		}
 	}
 
