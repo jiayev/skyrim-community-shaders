@@ -27,8 +27,8 @@ public:
     void ClearReSTIRShaderCache();
     void ExecuteReSTIRPass();
 
-    eastl::unique_ptr<WrappedResource> reservoirTexture = nullptr;
-    eastl::unique_ptr<WrappedResource> reservoirCandidateTexture = nullptr;
+    eastl::unique_ptr<WrappedResource> reservoirSpatialTexture = nullptr;
+    eastl::unique_ptr<WrappedResource> reservoirCurrTexture = nullptr;
     eastl::unique_ptr<WrappedResource> reservoirPrevTexture = nullptr;
 
     winrt::com_ptr<ID3D11ComputeShader> csReSTIRDI = nullptr;
