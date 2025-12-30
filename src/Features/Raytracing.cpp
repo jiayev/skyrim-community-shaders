@@ -292,6 +292,21 @@ void Raytracing::DrawLightSettings()
 	}
 }
 
+void Raytracing::DrawReSTIRSettings()
+{
+	auto& advSettings = settings.AdvancedSettings;
+	auto& restirSettings = advSettings.restirSettings;
+
+    if (ImGui::CollapsingHeader("ReSTIR Settings"))
+    {
+        ImGui::Checkbox("Enable ReSTIR DI", &restirSettings.EnableReSTIRDI);
+        ImGui::Checkbox("Spatial Reuse", &restirSettings.SpatialReuse);
+        ImGui::Checkbox("Temporal Reuse", &restirSettings.TemporalReuse);
+        ImGui::SliderInt("Initial Candidate Count", &restirSettings.InitialCandidateCount, 1, 32, "%d", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SliderInt("Max Candidate Count", &restirSettings.MaxCandidateCount, 1, 50, "%d", ImGuiSliderFlags_AlwaysClamp);
+    }
+}
+
 void Raytracing::DrawGeneralSettings()
 {
 	if (!ImGui::BeginTabItem("General"))
@@ -379,6 +394,8 @@ void Raytracing::DrawAdvancedSettings()
 	ImGui::PushID("AdvancedSettings");
 
 	auto& advSettings = settings.AdvancedSettings;
+
+	DrawReSTIRSettings();
 
 	if (ImGui::Checkbox("Resampled Importance Sampling", &advSettings.RIS.Enabled))
 		recompileReason |= RecompileReason::Advanced;
@@ -801,6 +818,28 @@ void Raytracing::SetupResources()
 			uavDesc.Format = texDesc.Format;
 
 			d3d12Device->CreateUnorderedAccessView(mainTexture->resource.get(), nullptr, &uavDesc, giHeap->CPUHandle(GIHeap::Slot::Main));
+		}
+
+		// ReSTIR Buffers
+		{
+			D3D11_TEXTURE2D_DESC texDesc{};
+			texDesc.Width = mainDesc.Width;
+			texDesc.Height = mainDesc.Height;
+			texDesc.MipLevels = 1;
+			texDesc.ArraySize = 1;
+			texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+			texDesc.SampleDesc.Count = 1;
+			texDesc.SampleDesc.Quality = 0;
+			texDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+
+			restir.reservoirSpatialTexture = eastl::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
+			DX::ThrowIfFailed(restir.reservoirSpatialTexture->resource->SetName(L"ReSTIR DI Spatial Reuse Reservoir Texture"));
+			restir.reservoirCurrTexture = eastl::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
+			DX::ThrowIfFailed(restir.reservoirCurrTexture->resource->SetName(L"ReSTIR DI Current Reservoir Texture"));
+			restir.reservoirPrevTexture = eastl::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
+			DX::ThrowIfFailed(restir.reservoirPrevTexture->resource->SetName(L"ReSTIR DI Previous Reservoir Texture"));
+
+			d3d12Device->CreateShaderResourceView(restir.reservoirSpatialTexture->resource.get(), nullptr, giHeap->CPUHandle(GIHeap::Slot::Reservoir));
 		}
 	}
 
@@ -2617,6 +2656,12 @@ void Raytracing::DrawRTGI()
 	}
 #endif
 
+	// ReSTIR DI
+	{
+		restir.ReSTIRDI(settings.AdvancedSettings.restirSettings, static_cast<uint>(lights.size()), samplerState.get());
+		// Should I just do it in raygen shader?
+	}
+
 	// Update framebuffer
 	{
 		frameData->ViewInverse = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
@@ -3348,7 +3393,8 @@ void Raytracing::CreateRootSignature()
 			{ GIHeap::Slot::Lights, 1 },
 			{ GIHeap::Slot::Materials, 1 },
 			{ GIHeap::Slot::Instances, 1 },
-			{ GIHeap::Slot::Indirection, 1 } });
+			{ GIHeap::Slot::Indirection, 1 },
+			{ GIHeap::Slot::Reservoir, 1 } });
 
 	// Vertex buffers (unbounded)
 	giHeap->CreateTable(
@@ -3549,6 +3595,9 @@ void Raytracing::CompileRTGIShaders()
 
 	if (advSettings.RIS.Enabled)
 		defines.emplace_back(L"RIS");
+
+	if (advSettings.restirSettings.EnableReSTIRDI)
+		defines.emplace_back(L"RESTIR_DI");
 
 	const auto risMaxCandidates = std::to_wstring(static_cast<uint32_t>(advSettings.RIS.MaxCandidates));
 	defines.emplace_back(L"RIS_MAX_CANDIDATES", risMaxCandidates.c_str());
@@ -3776,6 +3825,13 @@ void Raytracing::CompileComputeShaders()
 
 	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\TrueLinearToGammaCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
 		trueLinearToGammaCS.attach(rawPtr);
+
+	// ReSTIR shaders
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\ReSTIR\\ReSTIRGenerateReservoirCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
+		restir.ReSTIRGenerateReservoirCS.attach(rawPtr);
+
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\ReSTIR\\ReSTIRSpatialReuseCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
+		restir.ReSTIRSpatialReuseCS.attach(rawPtr);
 }
 
 RaytracingFD::FeatureData Raytracing::GetCommonBufferData()

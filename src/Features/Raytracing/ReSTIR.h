@@ -2,13 +2,12 @@
 
 #include "Buffer.h"
 #include "Features/Upscaling/DX12SwapChain.h"
-#include "LightLimitFix.h"
+#include "Features/LightLimitFix.h"
 #include <d3d12.h>
 #include "State.h"
 
-class ReSTIR
+struct ReSTIR
 {
-public:
     struct ReSTIRSettings
     {
         bool EnableReSTIRDI = true;
@@ -19,8 +18,6 @@ public:
 
         NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ReSTIRSettings, EnableReSTIRDI, SpatialReuse, TemporalReuse, InitialCandidateCount, MaxCandidateCount);
     };
-
-    ReSTIRSettings restirSettings;
 
     struct ReSTIRBuffer
     {
@@ -33,8 +30,10 @@ public:
     };
     STATIC_ASSERT_ALIGNAS_16(ReSTIRBuffer);
 
-    void DrawReSTIRSettings();
-    void ExecuteReSTIRPass();
+    ConstantBuffer* restirCB = nullptr;
+    ReSTIRBuffer restirCBData{};
+
+    void ReSTIRDI(ReSTIRSettings settings, uint lightCount, ID3D11SamplerState* linearSampler);
 
     eastl::unique_ptr<WrappedResource> reservoirSpatialTexture = nullptr;
     eastl::unique_ptr<WrappedResource> reservoirCurrTexture = nullptr;
