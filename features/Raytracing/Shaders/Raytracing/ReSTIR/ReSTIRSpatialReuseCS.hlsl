@@ -1,24 +1,28 @@
 #define DX11
 
+#define NEIGHBOURS_COUNT 15
+#define NEIGHBOURS_RANGE 5
+
 #include "Raytracing/ReSTIR/ReSTIRCommon.hlsli"
 #include "Raytracing/Includes/Types.hlsli"
 
+#include "Common/GBuffer.hlsli"
 #include "Common/SharedData.hlsli"
 
 Texture2D<float4> ReservoirCurrTexture : register(t0);
+Texture2D<float> DepthTexture : register(t1);
+Texture2D<float4> NormalGlossinessTexture : register(t2);
 
 RWTexture2D<float4> ReservoirSpatialTexture : register(u0);
 
-StructuredBuffer<Light> Lights : register(t1);
+StructuredBuffer<Light> Lights : register(t3);
 
 cbuffer ReSTIRCB : register(b1)
 {
     uint SpatialReuse;
     uint TemporalReuse;
     uint InitialCandidateCount;
-    uint MaxCandidateCount;
     uint LightCount;
-    uint3 Padding;
 };
 
 [numthreads(8, 8, 1)]
@@ -31,34 +35,65 @@ void ReSTIRSpatialReuseCS(uint3 DTid : SV_DispatchThreadID)
     if (pixelCoord.x >= textureSize.x || pixelCoord.y >= textureSize.y)
         return;
 
+    uint eyeIndex = 0; // vr not supported for now
+
+    float2 uv = float2(pixelCoord + 0.5) * SharedData::BufferDim.zw;
+    float depth = DepthTexture[pixelCoord].x;
+	float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
+    positionWS = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], positionWS);
+	positionWS.xyz = positionWS.xyz / positionWS.w;
+
+    float3 normalGlossiness = NormalGlossinessTexture[pixelCoord].xyz;
+    float3 normalVS = GBuffer::DecodeNormal(normalGlossiness.xy);
+    float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
+
     uint randSeed = InitRandomSeed(pixelCoord, textureSize, SharedData::FrameCount);
 
-    // Load current reservoir
-    Reservoir currentReservoir = ReservoirCurrTexture[pixelCoord];
+    Reservoir newReservoir = 0;
+    Reservoir reservoir = ReservoirCurrTexture[pixelCoord];
 
-    // Initialize new reservoir
-    Reservoir newReservoir = currentReservoir;
-
-    // Spatial reuse from neighboring pixels
-    if (SpatialReuse != 0)
+    if (SpatialReuse)
     {
-        for (int y = -1; y <= 1; ++y)
-        {
-            for (int x = -1; x <= 1; ++x)
-            {
-                if (x == 0 && y == 0) continue; // Skip current pixel
+        float p_hat;
+        Light light = Lights[(uint)reservoir.y];
 
-                uint2 neighborCoord = pixelCoord + uint2(x, y);
-                if (neighborCoord.x < textureSize.x && neighborCoord.y < textureSize.y)
-                {
-                    Reservoir neighborReservoir = ReservoirCurrTexture[neighborCoord];
+        p_hat = GetLightWeight(light, normalWS, positionWS);
 
-                    newReservoir = UpdateReservoir(newReservoir, (int)neighborReservoir.y, neighborReservoir.x, randSeed);
-                }
-            }
+        newReservoir = UpdateReservoir(newReservoir, reservoir.y, p_hat * reservoir.w * reservoir.z, randSeed);
+
+        float lightSamplesCount = newReservoir.z;
+
+        int2 neighborOffset;
+		int2 neighborIndex;
+		Reservoir neighborReservoir;
+
+        for (int i = 0; i < NEIGHBOURS_COUNT; i++) {
+            neighborOffset.x = int(Random(randSeed) * NEIGHBOURS_RANGE * 2.f) - NEIGHBOURS_RANGE;
+            neighborOffset.y = int(Random(randSeed) * NEIGHBOURS_RANGE * 2.f) - NEIGHBOURS_RANGE;
+
+            neighborIndex.x = max(0, min(textureSize.x - 1, pixelCoord.x + neighborOffset.x));
+            neighborIndex.y = max(0, min(textureSize.y - 1, pixelCoord.y + neighborOffset.y));
+
+            neighborReservoir = ReservoirCurrTexture[neighborIndex];
+
+            Light neighborLight = Lights[(uint)neighborReservoir.y];
+
+            float p_hat_neighbor = GetLightWeight(neighborLight, normalWS, positionWS);
+
+            newReservoir = UpdateReservoir(newReservoir, neighborReservoir.y, p_hat_neighbor * neighborReservoir.w * neighborReservoir.z, randSeed);
+
+            lightSamplesCount += newReservoir.z;
         }
+
+        newReservoir.z = lightSamplesCount;
+
+        light = Lights[(uint)newReservoir.y];
+
+        p_hat = GetLightWeight(light, normalWS, positionWS);
+
+        newReservoir.w = (1 / max(p_hat, 0.0001f)) * (newReservoir.x / max(newReservoir.z, 0.0001f));
+        reservoir = newReservoir;
     }
 
-    // Store updated reservoir
-    ReservoirSpatialTexture[pixelCoord] = newReservoir;
+    ReservoirSpatialTexture[pixelCoord] = reservoir;
 }

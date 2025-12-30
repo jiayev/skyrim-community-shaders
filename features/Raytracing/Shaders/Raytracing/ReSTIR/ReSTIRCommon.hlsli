@@ -3,6 +3,7 @@
 
 #include "Raytracing/Includes/Common.hlsli"
 #include "Raytracing/Includes/RT/CommonRT.hlsli"
+#include "Raytracing/Includes/Types.hlsli"
 
 #define Reservoir float4
 // Reservoir.x = W (sum of weights)
@@ -20,6 +21,16 @@ Reservoir UpdateReservoir(Reservoir reservoir, int lightIndex, float weight, ino
         reservoir.y = lightIndex; // Update selected light index
     }
     return reservoir;
+}
+
+float GetLightWeight(Light light, float3 normalWS, float3 positionWS)
+{
+    float3 L = light.positionWS[0].xyz - positionWS;
+    float distance = length(L);
+    L = L / distance;
+    float NdotL = saturate(dot(normalWS, L));
+    float p_hat = NdotL * light.color / (distance * distance);
+    return p_hat;
 }
 
 #if defined(DX11)
