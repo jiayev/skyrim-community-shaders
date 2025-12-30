@@ -5,6 +5,8 @@
 #include "Raytracing/Includes/RT/CommonRT.hlsli"
 #include "Raytracing/Includes/Types.hlsli"
 
+#include "Common/Game.hlsli"
+
 #define Reservoir float4
 // Reservoir.x = W (sum of weights)
 // Reservoir.y = light index
@@ -28,6 +30,7 @@ float GetLightWeight(Light light, float3 normalWS, float3 positionWS)
     float3 L = light.positionWS[0].xyz - positionWS;
     float distance = length(L);
     L = L / distance;
+    distance *= GAME_UNIT_TO_M;
     float NdotL = saturate(dot(normalWS, L));
     float p_hat = NdotL * light.color / (distance * distance);
     return p_hat;
