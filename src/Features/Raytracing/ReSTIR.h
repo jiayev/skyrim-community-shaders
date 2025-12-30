@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Buffer.h"
 #include "Features/Upscaling/DX12SwapChain.h"
 #include "LightLimitFix.h"
 #include <d3d12.h>
@@ -13,23 +14,29 @@ public:
         bool EnableReSTIRDI = true;
         bool SpatialReuse = true;
         bool TemporalReuse = true;
-        bool BiasedSampling = false;
         int InitialCandidateCount = 4;
-        int MaxCandidateCount = 32;
 
         NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ReSTIRSettings, EnableReSTIRDI, SpatialReuse, TemporalReuse, BiasedSampling, InitialCandidateCount, MaxCandidateCount);
     };
 
-    void DrawReSTIRSettings();
+    ReSTIRSettings restirSettings;
 
-    void SetupReSTIRResources();
-    void CompileReSTIRShaders();
-    void ClearReSTIRShaderCache();
+    struct ReSTIRBuffer
+    {
+        uint SpatialReuse;
+        uint TemporalReuse;
+        uint InitialCandidateCount;
+        uint LightCount;
+    };
+    STATIC_ASSERT_ALIGNAS_16(ReSTIRBuffer);
+
+    void DrawReSTIRSettings();
     void ExecuteReSTIRPass();
 
     eastl::unique_ptr<WrappedResource> reservoirSpatialTexture = nullptr;
     eastl::unique_ptr<WrappedResource> reservoirCurrTexture = nullptr;
     eastl::unique_ptr<WrappedResource> reservoirPrevTexture = nullptr;
 
-    winrt::com_ptr<ID3D11ComputeShader> csReSTIRDI = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> ReSTIRGenerateReservoirCS = nullptr;
+    winrt::com_ptr<ID3D11ComputeShader> ReSTIRSpatialReuseCS = nullptr;
 };
