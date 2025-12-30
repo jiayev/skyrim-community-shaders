@@ -196,11 +196,19 @@ float3 EvalPointLight(in Surface surface, in BRDFContext brdfContext, in LightDa
 
     Light light = Lights[selectedLightID];
 #elif defined(RESTIR_DI)
-    uint lightID = (uint)reservoir.y;
+    uint lightID = 0;
+    if (reservoir.w > 0)
+    {
+        lightID = uint(reservoir.y);
+        lightWeight *= reservoir.w;
+    }
+    else
+    {
+        uint lightIdx = min(uint(Random(randomSeed) * lightData.Count), lightData.Count - 1);
+        lightID = lightData.GetID(lightIdx);
+    }
 
     Light light = Lights[lightID];
-
-    lightWeight *= reservoir.w;
 #else
 
     uint lightIdx = min(uint(Random(randomSeed) * lightData.Count), lightData.Count - 1);

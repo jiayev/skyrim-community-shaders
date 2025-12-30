@@ -102,7 +102,7 @@ void main()
 #   endif
     
     // Direct Light for PT
-    float3 direct = EvaluateDirectRadiance(sourceSurface, sourceBRDFContext, sourceInstance, sourceMaterial, randomSeed, reservoir) + sourceSurface.Emissive;
+    float3 direct = EvaluateDirectRadiance(sourceSurface, sourceBRDFContext, sourceInstance, sourceMaterial, randomSeed, reservoir.w > 0 ? reservoir : 0) + sourceSurface.Emissive;
 #else
     const float2 uv = float2(idx + 0.5f) / size;
 
