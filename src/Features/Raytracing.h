@@ -26,6 +26,7 @@
 #include "Features/Raytracing/Model.h"
 #include "Features/Raytracing/Pipelines/SHaRCPipeline.h"
 #include "Features/Raytracing/Pipelines/SVGFPipeline.h"
+#include "Features/Raytracing/ReSTIR.h"
 #include "Features/Raytracing/RTPipelineBuilder.h"
 #include "Features/Raytracing/ShaderBindingTable.h"
 #include "Features/Raytracing/Shape.h"
@@ -114,6 +115,7 @@ struct Raytracing : public OverlayFeature
 			Materials,
 			Instances,
 			Indirection,
+			Reservoir,
 			Vertices,
 			Triangles = Vertices + Raytracing::MAX_SHAPES,
 			Textures = Triangles + Raytracing::MAX_SHAPES,
@@ -222,6 +224,7 @@ struct Raytracing : public OverlayFeature
 	void DrawDenoiserSettings();
 	void DrawLightingSettings();
 	void DrawLightSettings();
+	void DrawReSTIRSettings();
 
 	void DrawGeneralSettings();
 	void DrawAdvancedSettings();
@@ -455,18 +458,10 @@ struct Raytracing : public OverlayFeature
 		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(RISSettings, Enabled, MaxCandidates)
 	};
 
-	// Reservoir-based Spatiotemporal Importance Resampling
-	struct ReSTIRSettings
-	{
-		bool ReSTIRDI = true;
-
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ReSTIRSettings, ReSTIRDI)
-	};
-
 	struct AdvancedSettings
 	{
 		RISSettings RIS;
-		ReSTIRSettings ReSTIR;
+		ReSTIR::ReSTIRSettings restirSettings;
 
 		bool GGXEnergyConservation = true;
 
@@ -474,7 +469,7 @@ struct Raytracing : public OverlayFeature
 		LightEvalMode LightEvalMode = LightEvalMode::BRDF;
 		LightingMode LightingMode = LightingMode::PBR;
 
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(AdvancedSettings, RIS, ReSTIR, GGXEnergyConservation, DiffuseBRDF, LightEvalMode, LightingMode)
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(AdvancedSettings, RIS, restirSettings, GGXEnergyConservation, DiffuseBRDF, LightEvalMode, LightingMode)
 	};
 
 	////////////////////////////////////////////////// Feature Specific Data
@@ -524,6 +519,8 @@ struct Raytracing : public OverlayFeature
 		RestoreDefaultsSettings = 1 << 3,
 		LoadSettings = 1 << 4
 	} recompileReason = RecompileReason::None;
+
+	ReSTIR restir;
 
 	bool shareTexture = false;
 	bool renderingWorld = false;
