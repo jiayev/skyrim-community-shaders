@@ -96,8 +96,13 @@ void main()
     Surface sourceSurface = Surface(sourcePosition, sourcePayload, sourceInstance, sourceMaterial);
     BRDFContext sourceBRDFContext = BRDFContext(sourceSurface, -sourceDirection);
 
+    float4 reservoir = float4(0.0f);
+#   if defined(RESTIR_DI)
+    reservoir = ReservoirTexture[idx];
+#   endif
+    
     // Direct Light for PT
-    float3 direct = EvaluateDirectRadiance(sourceSurface, sourceBRDFContext, sourceInstance, sourceMaterial, randomSeed) + sourceSurface.Emissive;
+    float3 direct = EvaluateDirectRadiance(sourceSurface, sourceBRDFContext, sourceInstance, sourceMaterial, randomSeed, reservoir) + sourceSurface.Emissive;
 #else
     const float2 uv = float2(idx + 0.5f) / size;
 

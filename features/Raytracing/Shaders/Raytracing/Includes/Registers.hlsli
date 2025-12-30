@@ -30,6 +30,10 @@ StructuredBuffer<Material> Materials            : register(t8, space0);
 StructuredBuffer<Instance> Instances            : register(t9, space0);
 ByteAddressBuffer Indirection                   : register(t10, space0);
 
+#ifdef RESTIR_DI
+Texture2D<float4> ReservoirTexture                : register(t11, space0);
+#endif
+
 StructuredBuffer<Vertex> Vertices[]             : register(t0, space1);
 StructuredBuffer<Triangle> Triangles[]          : register(t0, space2);
 Texture2D<float4> Textures[]                    : register(t0, space3);
