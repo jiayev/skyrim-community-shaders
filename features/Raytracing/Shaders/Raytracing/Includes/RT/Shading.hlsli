@@ -160,7 +160,7 @@ float GetLightSampleWeight(Surface surface, Light light)
     return atten * intensity;
 }
 
-float3 EvalPointLight(in Surface surface, in BRDFContext brdfContext, in LightData lightData, in Material material, inout uint randomSeed)
+float3 EvalPointLight(in Surface surface, in BRDFContext brdfContext, in LightData lightData, in Material material, inout uint randomSeed, in float4 reservoir = 0.0f)
 {
     if (lightData.Count == 0)
         return float3(0, 0, 0);
@@ -195,6 +195,12 @@ float3 EvalPointLight(in Surface surface, in BRDFContext brdfContext, in LightDa
     lightWeight *= risWeight;
 
     Light light = Lights[selectedLightID];
+#elif defined(RESTIR_DI)
+    uint lightID = (uint)reservoir.y;
+
+    Light light = Lights[lightID];
+
+    lightWeight *= reservoir.w;
 #else
 
     uint lightIdx = min(uint(Random(randomSeed) * lightData.Count), lightData.Count - 1);
@@ -203,6 +209,8 @@ float3 EvalPointLight(in Surface surface, in BRDFContext brdfContext, in LightDa
 
     Light light = Lights[lightID];
 #endif
+    if (lightWeight < 1e-7f)
+        return float3(0, 0, 0);
 
     float3 l = (light.Vector - surface.Position);
     float dist = length(l);
@@ -399,10 +407,10 @@ float3 SampleSky(float3 dir)
     return Color::GammaToTrueLinear(SkyHemisphere.SampleLevel(BaseSampler, uv, 0.0f).rgb);
 }
 
-float3 EvaluateDirectRadiance(in Surface surface, in BRDFContext brdfContext, in Instance instance, in Material material, inout uint randomSeed)
+float3 EvaluateDirectRadiance(in Surface surface, in BRDFContext brdfContext, in Instance instance, in Material material, inout uint randomSeed, in float4 reservoir = 0.0f)
 {
     float3 radiance = EvalDirectionalLight(surface, brdfContext, Frame.Directional, material, randomSeed);
-    radiance += EvalPointLight(surface, brdfContext, instance.LightData, material, randomSeed);
+    radiance += EvalPointLight(surface, brdfContext, instance.LightData, material, randomSeed, reservoir);
 
     return radiance;
 }
