@@ -82,7 +82,7 @@ void ReSTIRSpatialReuseCS(uint3 DTid : SV_DispatchThreadID)
 
             newReservoir = UpdateReservoir(newReservoir, neighborReservoir.y, p_hat_neighbor * neighborReservoir.w * neighborReservoir.z, randSeed);
 
-            lightSamplesCount += newReservoir.z;
+            lightSamplesCount += neighborReservoir.z;
         }
 
         newReservoir.z = lightSamplesCount;
