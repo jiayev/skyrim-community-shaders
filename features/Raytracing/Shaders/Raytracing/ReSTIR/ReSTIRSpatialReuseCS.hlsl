@@ -76,15 +76,20 @@ void ReSTIRSpatialReuseCS(uint3 DTid : SV_DispatchThreadID)
             neighborIndex.x = max(0, min(textureSize.x - 1, pixelCoord.x + neighborOffset.x));
             neighborIndex.y = max(0, min(textureSize.y - 1, pixelCoord.y + neighborOffset.y));
 
-            neighborReservoir = ReservoirCurrTexture[neighborIndex];
+            float3 neighborNormalGlossiness = NormalGlossinessTexture[neighborIndex].xyz;
+            float3 neighborNormalVS = GBuffer::DecodeNormal(neighborNormalGlossiness.xy);
+            float3 neighborNormalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(neighborNormalVS, 0)).xyz);
+            float neighborDepth = DepthTexture[neighborIndex].x;
+            bool isValidNeighbor = IsValidNeighbor(neighborNormalWS, neighborDepth, normalWS, depth);
+            if (isValidNeighbor) {
+                neighborReservoir = ReservoirCurrTexture[neighborIndex];
 
-            Light neighborLight = Lights[(uint)neighborReservoir.y];
+                float p_hat_neighbor = GetLightWeight(Lights[(uint)neighborReservoir.y], normalWS, positionWS);
 
-            float p_hat_neighbor = GetLightWeight(neighborLight, normalWS, positionWS);
+                newReservoir = UpdateReservoir(newReservoir, neighborReservoir.y, p_hat_neighbor * neighborReservoir.w * neighborReservoir.z, randSeed);
 
-            newReservoir = UpdateReservoir(newReservoir, neighborReservoir.y, p_hat_neighbor * neighborReservoir.w * neighborReservoir.z, randSeed);
-
-            lightSamplesCount += neighborReservoir.z;
+                lightSamplesCount += neighborReservoir.z;
+            }
         }
 
         newReservoir.z = lightSamplesCount;

@@ -13,6 +13,9 @@
 // Reservoir.z = M (number of samples considered)
 // Reservoir.w = the final adjusted weight for the current pixel following the formula in algorithm 3 (r.W)
 
+#define DEPTH_THRESHOLD 0.1f
+#define NORMAL_THRESHOLD 0.5f
+
 Reservoir UpdateReservoir(Reservoir reservoir, int lightIndex, float weight, inout uint randSeed)
 {
     reservoir.x += weight; // Update W
@@ -34,6 +37,13 @@ float GetLightWeight(Light light, float3 normalWS, float3 positionWS)
     float NdotL = saturate(dot(normalWS, L));
     float p_hat = NdotL * light.color / (distance * distance);
     return p_hat;
+}
+
+bool IsValidNeighbor(float3 neighborNormal, float neighborDepth, float3 normal, float depth)
+{
+    float checkNormal = dot(normal, neighborNormal);
+    float checkDepth = abs(depth - neighborDepth);
+    return checkNormal > NORMAL_THRESHOLD && checkDepth < DEPTH_THRESHOLD * depth;
 }
 
 #if defined(DX11)
