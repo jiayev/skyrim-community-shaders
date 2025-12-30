@@ -8,6 +8,7 @@ void ReSTIR::DrawReSTIRSettings()
         ImGui::Checkbox("Spatial Reuse", &restirSettings.SpatialReuse);
         ImGui::Checkbox("Temporal Reuse", &restirSettings.TemporalReuse);
         ImGui::SliderInt("Initial Candidate Count", &restirSettings.InitialCandidateCount, 1, 32, "%d", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SliderInt("Max Candidate Count", &restirSettings.MaxCandidateCount, 1, 50, "%d", ImGuiSliderFlags_AlwaysClamp);
     }
 }
 

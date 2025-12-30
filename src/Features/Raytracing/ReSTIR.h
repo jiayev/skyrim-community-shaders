@@ -14,9 +14,10 @@ public:
         bool EnableReSTIRDI = true;
         bool SpatialReuse = true;
         bool TemporalReuse = true;
-        int InitialCandidateCount = 4;
+        int InitialCandidateCount = 8;
+        int MaxCandidateCount = 20;
 
-        NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ReSTIRSettings, EnableReSTIRDI, SpatialReuse, TemporalReuse, BiasedSampling, InitialCandidateCount, MaxCandidateCount);
+        NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ReSTIRSettings, EnableReSTIRDI, SpatialReuse, TemporalReuse, InitialCandidateCount, MaxCandidateCount);
     };
 
     ReSTIRSettings restirSettings;
@@ -27,6 +28,8 @@ public:
         uint TemporalReuse;
         uint InitialCandidateCount;
         uint LightCount;
+        uint MaxCandidateCount;
+        uint Padding[3];
     };
     STATIC_ASSERT_ALIGNAS_16(ReSTIRBuffer);
 
