@@ -230,6 +230,9 @@ jobs:
               uses: ./.github/actions/setup-build-environment
               with:
                   cache-key-suffix: "validation-${{ matrix.config.name }}"
+            - name: Prepare shaders
+              if: steps.check-hlsl.outputs.skip != 'true'
+              uses: ./.github/actions/prepare-shaders
             - name: Locate fxc.exe
               if: steps.check-hlsl.outputs.skip != 'true'
               id: find_fxc
@@ -260,26 +263,6 @@ jobs:
                       Add-Content -Path $env:GITHUB_OUTPUT -Value "fxc_path="
                     }
                   }
-
-            - name: Prepare shaders for validation
-              if: steps.check-hlsl.outputs.skip != 'true'
-              uses: lukka/run-cmake@v10
-              with:
-                  configurePreset: ALL
-                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF']"
-                  buildPreset: ALL
-                  buildPresetAdditionalArgs: "['--target prepare_shaders']"
-
-            - name: Setup Python
-              if: steps.check-hlsl.outputs.skip != 'true'
-              uses: actions/setup-python@v5
-              with:
-                  python-version: "3.11"
-
-            - name: Install hlslkit
-              if: steps.check-hlsl.outputs.skip != 'true'
-              run: pip install git+https://github.com/alandtse/hlslkit.git
-              shell: bash
 
             - name: Validate shader compilation (${{ matrix.config.name }})
               if: steps.check-hlsl.outputs.skip != 'true'
