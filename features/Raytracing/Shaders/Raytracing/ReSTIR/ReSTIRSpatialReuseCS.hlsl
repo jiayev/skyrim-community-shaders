@@ -23,6 +23,8 @@ cbuffer ReSTIRCB : register(b1)
     uint TemporalReuse;
     uint InitialCandidateCount;
     uint LightCount;
+    uint MaxCandidateCount;
+    uint3 Padding;
 };
 
 [numthreads(8, 8, 1)]

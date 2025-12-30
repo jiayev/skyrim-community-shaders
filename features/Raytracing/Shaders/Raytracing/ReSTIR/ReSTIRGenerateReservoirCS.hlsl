@@ -22,6 +22,8 @@ cbuffer ReSTIRCB : register(b1)
     uint TemporalReuse;
     uint InitialCandidateCount;
     uint LightCount;
+    uint MaxCandidateCount;
+    uint3 Padding;
 };
 
 [numthreads(8, 8, 1)]
@@ -86,7 +88,7 @@ void ReSTIRGenerateReservoirCS(uint3 DTid : SV_DispatchThreadID)
         temporalReservoir = UpdateReservoir(temporalReservoir, reservoir.y, p_hat * reservoir.w * reservoir.z, randSeed);
 
         p_hat = GetLightWeight(Lights[prevReservoir.y], normalWS, positionWS);
-        prevReservoir.z = min(20 * reservoir.z, prevReservoir.z);
+        prevReservoir.z = min(MaxCandidateCount * reservoir.z, prevReservoir.z);
         temporalReservoir = UpdateReservoir(temporalReservoir, prevReservoir.y, p_hat * prevReservoir.w * prevReservoir.z, randSeed);
 
         temporalReservoir.z = reservoir.z + prevReservoir.z;
