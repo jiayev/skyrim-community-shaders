@@ -34,7 +34,7 @@ void ReSTIR::ReSTIRDI(ReSTIRSettings settings, uint lightCount, ID3D11SamplerSta
     srvs[0] = reservoirPrevTexture->srv;
     srvs[1] = depth.depthSRV;
     srvs[2] = normal.SRV;
-    srvs[3] = nullptr; // Placeholder for light data SRV
+    srvs[3] = lightBuffer->srv.get();
     srvs[4] = motionVectors.SRV;
 
     context->CSSetShaderResources(0, 5, srvs);

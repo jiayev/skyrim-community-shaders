@@ -850,6 +850,22 @@ void Raytracing::SetupResources()
 		DX::ThrowIfFailed(lightBuffer->resource->SetName(L"Light Buffer"));
 
 		lightBuffer->CreateSRV(giHeap->CPUHandle(GIHeap::Slot::Lights));
+
+		D3D11_BUFFER_DESC sbDesc{};
+		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
+		sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		sbDesc.StructureByteStride = sizeof(Light);
+		sbDesc.ByteWidth = sizeof(Light) * MAX_LIGHTS;
+		restir.lightBuffer = eastl::make_unique<Buffer>(sbDesc);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = MAX_LIGHTS;
+		restir.lightBuffer->CreateSRV(srvDesc);
 	}
 
 	// t4 - Material buffer
@@ -913,6 +929,8 @@ void Raytracing::SetupResources()
 		DX::ThrowIfFailed(shadowsCB->resource->SetName(L"Shadows Constant Buffer"));
 
 		shadowsCBData = eastl::make_unique<ShadowsFrameData>();
+
+		restir.restirCB = new ConstantBuffer(ConstantBufferDesc<ReSTIR::ReSTIRBuffer>());
 	}
 
 	logger::debug("Creating samplers...");
@@ -1373,6 +1391,17 @@ void Raytracing::UpdateLights()
 
 		if (!lights.empty())
 			lightBuffer->UpdateList(lights.data(), lights.size());
+
+		{
+			auto context = globals::d3d::context;
+			auto lightCount = std::min((uint)lights.size(), MAX_LIGHTS);
+
+			D3D11_MAPPED_SUBRESOURCE mapped;
+			DX::ThrowIfFailed(context->Map(restir.lightBuffer->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+			size_t bytes = sizeof(Light) * lightCount;
+			memcpy_s(mapped.pData, bytes, lights.data(), bytes);
+			context->Unmap(restir.lightBuffer->resource.get(), 0);
+		}
 	}
 
 	lightsUpdated = true;
@@ -2904,6 +2933,14 @@ void Raytracing::DrawRTGI()
 				commandList->CopyResource(mainTexture->resource.get(), diffuseAlbedoTexture->resource.get());
 
 				auto transitionNonPixelRes = CD3DX12_RESOURCE_BARRIER::Transition(diffuseAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+				commandList->ResourceBarrier(1, &transitionNonPixelRes);
+			} else if (settings.DebugOutput == DebugOutput::Reservoir) {
+				auto transitionCopy = CD3DX12_RESOURCE_BARRIER::Transition(restir.reservoirSpatialTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
+				commandList->ResourceBarrier(1, &transitionCopy);
+
+				commandList->CopyResource(mainTexture->resource.get(), restir.reservoirSpatialTexture->resource.get());
+
+				auto transitionNonPixelRes = CD3DX12_RESOURCE_BARRIER::Transition(restir.reservoirSpatialTexture->resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 				commandList->ResourceBarrier(1, &transitionNonPixelRes);
 			}
 		}

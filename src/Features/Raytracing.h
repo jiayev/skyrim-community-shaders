@@ -360,7 +360,8 @@ struct Raytracing : public OverlayFeature
 		GeometryNormalMetalness,
 		Albedo,
 		Diffuse,
-		Passthrough
+		Passthrough,
+		Reservoir
 	};
 
 #ifdef DLSS_RR
