@@ -30,12 +30,12 @@ Reservoir UpdateReservoir(Reservoir reservoir, int lightIndex, float weight, ino
 
 float GetLightWeight(Light light, float3 normalWS, float3 positionWS)
 {
-    float3 L = light.positionWS[0].xyz - positionWS;
+    float3 L = light.Vector - positionWS;
     float distance = length(L);
     L = L / distance;
     distance *= GAME_UNIT_TO_M;
     float NdotL = saturate(dot(normalWS, L));
-    float p_hat = NdotL * light.color / (distance * distance);
+    float p_hat = NdotL * light.Color / (distance * distance);
     return p_hat;
 }
 

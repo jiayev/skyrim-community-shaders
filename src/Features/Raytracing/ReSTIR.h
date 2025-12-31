@@ -2,7 +2,6 @@
 
 #include "Buffer.h"
 #include "Features/Upscaling/DX12SwapChain.h"
-#include "Features/LightLimitFix.h"
 #include <d3d12.h>
 #include "State.h"
 
@@ -38,6 +37,8 @@ struct ReSTIR
     eastl::unique_ptr<WrappedResource> reservoirSpatialTexture = nullptr;
     eastl::unique_ptr<WrappedResource> reservoirCurrTexture = nullptr;
     eastl::unique_ptr<WrappedResource> reservoirPrevTexture = nullptr;
+
+    eastl::unique_ptr<Buffer> lightBuffer = nullptr;
 
     winrt::com_ptr<ID3D11ComputeShader> ReSTIRGenerateReservoirCS = nullptr;
     winrt::com_ptr<ID3D11ComputeShader> ReSTIRSpatialReuseCS = nullptr;
