@@ -6,7 +6,9 @@
 #include "Common/Color.hlsli"
 #include "Common/BRDF.hlsli"
 
+#ifndef DX11
 #include "Raytracing/Includes/Types.hlsli"
+#endif
 
 #ifndef MAX_BOUNCES
 #define     MAX_BOUNCES (1)

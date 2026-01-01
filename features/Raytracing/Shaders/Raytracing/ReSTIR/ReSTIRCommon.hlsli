@@ -1,9 +1,7 @@
 #ifndef RESTIR_COMMON_HLSLI
 #define RESTIR_COMMON_HLSLI
 
-#include "Raytracing/Includes/Common.hlsli"
 #include "Raytracing/Includes/RT/CommonRT.hlsli"
-#include "Raytracing/Includes/Types.hlsli"
 
 #include "Common/Game.hlsli"
 
@@ -15,6 +13,15 @@
 
 #define DEPTH_THRESHOLD 0.1f
 #define NORMAL_THRESHOLD 0.5f
+
+struct Light
+{
+	float3 Vector;
+	float Range;
+	float3 Color;
+	uint Type;
+	uint ISL;
+};
 
 Reservoir UpdateReservoir(Reservoir reservoir, int lightIndex, float weight, inout uint randSeed)
 {

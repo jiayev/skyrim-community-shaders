@@ -96,7 +96,7 @@ void main()
     Surface sourceSurface = Surface(sourcePosition, sourcePayload, sourceInstance, sourceMaterial);
     BRDFContext sourceBRDFContext = BRDFContext(sourceSurface, -sourceDirection);
 
-    float4 reservoir = float4(0.0f);
+    float4 reservoir = 0.0f;
 #   if defined(RESTIR_DI)
     reservoir = ReservoirTexture[idx];
 #   endif

@@ -4,7 +4,6 @@
 #define NEIGHBOURS_RANGE 5
 
 #include "Raytracing/ReSTIR/ReSTIRCommon.hlsli"
-#include "Raytracing/Includes/Types.hlsli"
 
 #include "Common/GBuffer.hlsli"
 #include "Common/SharedData.hlsli"
@@ -28,7 +27,7 @@ cbuffer ReSTIRCB : register(b1)
 };
 
 [numthreads(8, 8, 1)]
-void ReSTIRSpatialReuseCS(uint3 DTid : SV_DispatchThreadID)
+void main(uint3 DTid : SV_DispatchThreadID)
 {
     uint2 pixelCoord = DTid.xy;
     uint2 textureSize;
@@ -59,7 +58,7 @@ void ReSTIRSpatialReuseCS(uint3 DTid : SV_DispatchThreadID)
         float p_hat;
         Light light = Lights[(uint)reservoir.y];
 
-        p_hat = GetLightWeight(light, normalWS, positionWS);
+        p_hat = GetLightWeight(light, normalWS, positionWS.xyz);
 
         newReservoir = UpdateReservoir(newReservoir, reservoir.y, p_hat * reservoir.w * reservoir.z, randSeed);
 
@@ -84,7 +83,7 @@ void ReSTIRSpatialReuseCS(uint3 DTid : SV_DispatchThreadID)
             if (isValidNeighbor) {
                 neighborReservoir = ReservoirCurrTexture[neighborIndex];
 
-                float p_hat_neighbor = GetLightWeight(Lights[(uint)neighborReservoir.y], normalWS, positionWS);
+                float p_hat_neighbor = GetLightWeight(Lights[(uint)neighborReservoir.y], normalWS, positionWS.xyz);
 
                 newReservoir = UpdateReservoir(newReservoir, neighborReservoir.y, p_hat_neighbor * neighborReservoir.w * neighborReservoir.z, randSeed);
 
@@ -96,7 +95,7 @@ void ReSTIRSpatialReuseCS(uint3 DTid : SV_DispatchThreadID)
 
         light = Lights[(uint)newReservoir.y];
 
-        p_hat = GetLightWeight(light, normalWS, positionWS);
+        p_hat = GetLightWeight(light, normalWS, positionWS.xyz);
 
         newReservoir.w = (1 / max(p_hat, 0.0001f)) * (newReservoir.x / max(newReservoir.z, 0.0001f));
         reservoir = newReservoir;
