@@ -2648,6 +2648,12 @@ void Raytracing::DrawRTGI()
 
 	ConvertTextures();
 
+	// ReSTIR DI
+	if (settings.AdvancedSettings.restirSettings.EnableReSTIRDI) {
+		restir.ReSTIRDI(settings.AdvancedSettings.restirSettings, static_cast<uint>(lights.size()), samplerState.get());
+		// Should I just do it in raygen shader?
+	}
+
 	// Wait for D3D11 to finish
 	{
 		//d3d11Context->Flush1(D3D11_CONTEXT_TYPE_ALL, nullptr);
@@ -2685,13 +2691,6 @@ void Raytracing::DrawRTGI()
 		CheckFrameConstants();
 	}
 #endif
-
-	// ReSTIR DI
-	if (settings.AdvancedSettings.restirSettings.EnableReSTIRDI)
-	{
-		restir.ReSTIRDI(settings.AdvancedSettings.restirSettings, static_cast<uint>(lights.size()), samplerState.get());
-		// Should I just do it in raygen shader?
-	}
 
 	// Update framebuffer
 	{
