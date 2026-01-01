@@ -14,13 +14,18 @@
 #define DEPTH_THRESHOLD 0.1f
 #define NORMAL_THRESHOLD 0.5f
 
-struct Light
+struct LightDX11
 {
 	float3 Vector;
 	float Range;
 	float3 Color;
-	uint Type;
-	uint ISL;
+	uint TypeISL;
+    
+    void GetTypeISL(out uint type, out uint isl)
+    {
+        type =  TypeISL & 0xFFFF;          // low 16 bits
+        isl  = (TypeISL >> 16) & 0xFFFF;   // high 16 bits      
+    }
 };
 
 Reservoir UpdateReservoir(Reservoir reservoir, int lightIndex, float weight, inout uint randSeed)
@@ -35,7 +40,7 @@ Reservoir UpdateReservoir(Reservoir reservoir, int lightIndex, float weight, ino
     return reservoir;
 }
 
-float GetLightWeight(Light light, float3 normalWS, float3 positionWS)
+float GetLightWeight(LightDX11 light, float3 normalWS, float3 positionWS)
 {
     float3 L = light.Vector - positionWS;
     float distance = length(L);

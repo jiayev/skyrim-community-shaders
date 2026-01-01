@@ -14,7 +14,7 @@ Texture2D<float4> NormalGlossinessTexture : register(t2);
 
 RWTexture2D<float4> ReservoirSpatialTexture : register(u0);
 
-StructuredBuffer<Light> Lights : register(t3);
+StructuredBuffer<LightDX11> Lights : register(t3);
 
 cbuffer ReSTIRCB : register(b1)
 {
@@ -56,7 +56,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     if (SpatialReuse)
     {
         float p_hat;
-        Light light = Lights[(uint)reservoir.y];
+        LightDX11 light = Lights[(uint)reservoir.y];
 
         p_hat = GetLightWeight(light, normalWS, positionWS.xyz);
 
