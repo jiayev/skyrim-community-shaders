@@ -14,7 +14,7 @@ RWTexture2D<float4> ReservoirCurrTexture : register(u0);
 
 SamplerState LinearSampler : register(s0);
 
-StructuredBuffer<Light> Lights : register(t3);
+StructuredBuffer<LightDX11> Lights : register(t3);
 
 cbuffer ReSTIRCB : register(b1)
 {
@@ -71,7 +71,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     for (int i = 0; i < min(InitialCandidateCount, LightCount); i++)
     {
         lightIndex = min(int(Random(randSeed) * LightCount), LightCount - 1);
-        Light light = Lights[lightIndex];
+        LightDX11 light = Lights[lightIndex];
 
         p_hat = GetLightWeight(light, normalWS, positionWS.xyz);
         reservoir = UpdateReservoir(reservoir, lightIndex, p_hat, randSeed);
