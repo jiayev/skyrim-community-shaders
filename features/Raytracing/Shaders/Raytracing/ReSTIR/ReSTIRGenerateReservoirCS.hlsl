@@ -27,7 +27,7 @@ cbuffer ReSTIRCB : register(b1)
 };
 
 [numthreads(8, 8, 1)]
-void ReSTIRGenerateReservoirCS(uint3 DTid : SV_DispatchThreadID)
+void main(uint3 DTid : SV_DispatchThreadID)
 {
     uint2 pixelCoord = DTid.xy;
     uint2 textureSize;
@@ -73,12 +73,12 @@ void ReSTIRGenerateReservoirCS(uint3 DTid : SV_DispatchThreadID)
         lightIndex = min(int(Random(randSeed) * LightCount), LightCount - 1);
         Light light = Lights[lightIndex];
 
-        p_hat = GetLightWeight(light, normalWS, positionWS);
+        p_hat = GetLightWeight(light, normalWS, positionWS.xyz);
         reservoir = UpdateReservoir(reservoir, lightIndex, p_hat, randSeed);
     }
 
     lightIndex = (int)reservoir.y;
-    p_hat = GetLightWeight(Lights[lightIndex], normalWS, positionWS);
+    p_hat = GetLightWeight(Lights[lightIndex], normalWS, positionWS.xyz);
 
     reservoir.w = (1 / max(p_hat, 0.0001f)) * (reservoir.x / max(reservoir.z, 0.0001f));
 
@@ -87,13 +87,13 @@ void ReSTIRGenerateReservoirCS(uint3 DTid : SV_DispatchThreadID)
         Reservoir temporalReservoir = 0;
         temporalReservoir = UpdateReservoir(temporalReservoir, reservoir.y, p_hat * reservoir.w * reservoir.z, randSeed);
 
-        p_hat = GetLightWeight(Lights[prevReservoir.y], normalWS, positionWS);
+        p_hat = GetLightWeight(Lights[prevReservoir.y], normalWS, positionWS.xyz);
         prevReservoir.z = min(MaxCandidateCount * reservoir.z, prevReservoir.z);
         temporalReservoir = UpdateReservoir(temporalReservoir, prevReservoir.y, p_hat * prevReservoir.w * prevReservoir.z, randSeed);
 
         temporalReservoir.z = reservoir.z + prevReservoir.z;
 
-        p_hat = GetLightWeight(Lights[temporalReservoir.y], normalWS, positionWS);
+        p_hat = GetLightWeight(Lights[temporalReservoir.y], normalWS, positionWS.xyz);
 
         temporalReservoir.w = (1 / max(p_hat, 0.0001f)) * (temporalReservoir.x / max(temporalReservoir.z, 0.0001f));
 

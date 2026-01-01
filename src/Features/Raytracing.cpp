@@ -299,7 +299,8 @@ void Raytracing::DrawReSTIRSettings()
 
     if (ImGui::CollapsingHeader("ReSTIR Settings"))
     {
-        ImGui::Checkbox("Enable ReSTIR DI", &restirSettings.EnableReSTIRDI);
+        if (ImGui::Checkbox("Enable ReSTIR DI", &restirSettings.EnableReSTIRDI))
+			recompileReason |= RecompileReason::Advanced;
         ImGui::Checkbox("Spatial Reuse", &restirSettings.SpatialReuse);
         ImGui::Checkbox("Temporal Reuse", &restirSettings.TemporalReuse);
         ImGui::SliderInt("Initial Candidate Count", &restirSettings.InitialCandidateCount, 1, 32, "%d", ImGuiSliderFlags_AlwaysClamp);
@@ -2686,6 +2687,7 @@ void Raytracing::DrawRTGI()
 #endif
 
 	// ReSTIR DI
+	if (settings.AdvancedSettings.restirSettings.EnableReSTIRDI)
 	{
 		restir.ReSTIRDI(settings.AdvancedSettings.restirSettings, static_cast<uint>(lights.size()), samplerState.get());
 		// Should I just do it in raygen shader?

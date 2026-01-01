@@ -3,12 +3,10 @@
 
 void ReSTIR::ReSTIRDI(ReSTIRSettings settings, uint lightCount, ID3D11SamplerState* linearSampler)
 {
-    if (!settings.EnableReSTIRDI)
-        return;
-
     auto context = globals::d3d::context;
     auto renderer = globals::game::renderer;
 
+    logger::trace("[ReSTIR] ReSTIRDI called with LightCount: {}", lightCount);
     {
         restirCBData.SpatialReuse = settings.SpatialReuse ? 1 : 0;
         restirCBData.TemporalReuse = settings.TemporalReuse ? 1 : 0;
