@@ -1,18 +1,8 @@
 #ifndef RESTIR_COMMON_HLSLI
 #define RESTIR_COMMON_HLSLI
 
-#include "Raytracing/Includes/RT/CommonRT.hlsli"
-
 #include "Common/Game.hlsli"
-
-#define Reservoir float4
-// Reservoir.x = W (sum of weights)
-// Reservoir.y = light index
-// Reservoir.z = M (number of samples considered)
-// Reservoir.w = the final adjusted weight for the current pixel following the formula in algorithm 3 (r.W)
-
-#define DEPTH_THRESHOLD 0.1f
-#define NORMAL_THRESHOLD 0.5f
+#include "Raytracing/Includes/RT/CommonRT.hlsli"
 
 struct LightDX11
 {
@@ -27,6 +17,32 @@ struct LightDX11
         isl  = (TypeISL >> 16) & 0xFFFF;   // high 16 bits      
     }
 };
+
+Texture2D<float> DepthTexture : register(t1);
+Texture2D<float4> NormalGlossinessTexture : register(t2);
+StructuredBuffer<LightDX11> Lights : register(t3);
+
+cbuffer ReSTIRCB : register(b1)
+{
+    uint SpatialReuse;
+    uint TemporalReuse;
+    uint InitialCandidateCount;
+    uint LightCount;
+    uint MaxCandidateCount;
+    uint3 Padding;
+};
+
+#define Reservoir float4
+// Reservoir.x = W (sum of weights)
+// Reservoir.y = light index
+// Reservoir.z = M (number of samples considered)
+// Reservoir.w = the final adjusted weight for the current pixel following the formula in algorithm 3 (r.W)
+
+#define DEPTH_THRESHOLD 0.1f
+#define NORMAL_THRESHOLD 0.5f
+
+#define NEIGHBOURS_COUNT 15
+#define NEIGHBOURS_RANGE 5
 
 Reservoir UpdateReservoir(Reservoir reservoir, int lightIndex, float weight, inout uint randSeed)
 {
@@ -61,7 +77,7 @@ bool IsValidNeighbor(float3 neighborNormal, float neighborDepth, float3 normal, 
 #if defined(DX11)
 #include "Common/FrameBuffer.hlsli"
 
-void ReprojectHit(Texture2D MotionTexture, SamplerState s, float3 uvz, uint eyeIndex, out float2 outPrevUV)
+void ReprojectHit(Texture2D<half2> MotionTexture, SamplerState s, float3 uvz, uint eyeIndex, out float2 outPrevUV)
 {
 	// Camera motion for pixel (in ScreenPos space).
 	float2 thisScreen = (uvz.xy - 0.5f) * float2(2.0f, -2.0f);

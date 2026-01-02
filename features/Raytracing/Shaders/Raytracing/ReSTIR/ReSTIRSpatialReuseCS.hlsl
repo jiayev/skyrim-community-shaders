@@ -1,35 +1,18 @@
 #define DX11
 
-#define NEIGHBOURS_COUNT 15
-#define NEIGHBOURS_RANGE 5
-
 #include "Raytracing/ReSTIR/ReSTIRCommon.hlsli"
 
 #include "Common/GBuffer.hlsli"
 #include "Common/SharedData.hlsli"
 
 Texture2D<float4> ReservoirCurrTexture : register(t0);
-Texture2D<float> DepthTexture : register(t1);
-Texture2D<float4> NormalGlossinessTexture : register(t2);
 
 RWTexture2D<float4> ReservoirSpatialTexture : register(u0);
-
-StructuredBuffer<LightDX11> Lights : register(t3);
-
-cbuffer ReSTIRCB : register(b1)
-{
-    uint SpatialReuse;
-    uint TemporalReuse;
-    uint InitialCandidateCount;
-    uint LightCount;
-    uint MaxCandidateCount;
-    uint3 Padding;
-};
 
 [numthreads(8, 8, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
-    uint2 pixelCoord = DTid.xy;
+    const uint2 pixelCoord = DTid.xy;
     uint2 textureSize;
     ReservoirCurrTexture.GetDimensions(textureSize.x, textureSize.y);
 
@@ -56,7 +39,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     if (SpatialReuse)
     {
         float p_hat;
-        LightDX11 light = Lights[(uint)reservoir.y];
+        LightDX11 light = Lights[clamp((uint)reservoir.y, 0, LightCount - 1)];
 
         p_hat = GetLightWeight(light, normalWS, positionWS.xyz);
 
@@ -65,7 +48,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
         float lightSamplesCount = newReservoir.z;
 
         int2 neighborOffset;
-		int2 neighborIndex;
+		uint2 neighborIndex;
 		Reservoir neighborReservoir;
 
         for (int i = 0; i < NEIGHBOURS_COUNT; i++) {
@@ -93,7 +76,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
         newReservoir.z = lightSamplesCount;
 
-        light = Lights[(uint)newReservoir.y];
+        light = Lights[clamp((uint)newReservoir.y, 0, LightCount - 1)];
 
         p_hat = GetLightWeight(light, normalWS, positionWS.xyz);
 

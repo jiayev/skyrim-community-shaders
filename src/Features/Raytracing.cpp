@@ -295,14 +295,14 @@ void Raytracing::DrawLightSettings()
 void Raytracing::DrawReSTIRSettings()
 {
 	auto& advSettings = settings.AdvancedSettings;
-	auto& restirSettings = advSettings.restirSettings;
+	auto& restirSettings = advSettings.ReSTIR;
 
     if (ImGui::CollapsingHeader("ReSTIR Settings"))
     {
         if (ImGui::Checkbox("Enable ReSTIR DI", &restirSettings.EnableReSTIRDI))
 			recompileReason |= RecompileReason::Advanced;
+		ImGui::Checkbox("Temporal Reuse", &restirSettings.TemporalReuse);
         ImGui::Checkbox("Spatial Reuse", &restirSettings.SpatialReuse);
-        ImGui::Checkbox("Temporal Reuse", &restirSettings.TemporalReuse);
         ImGui::SliderInt("Initial Candidate Count", &restirSettings.InitialCandidateCount, 1, 32, "%d", ImGuiSliderFlags_AlwaysClamp);
         ImGui::SliderInt("Max Candidate Count", &restirSettings.MaxCandidateCount, 1, 50, "%d", ImGuiSliderFlags_AlwaysClamp);
     }
@@ -659,10 +659,14 @@ void Raytracing::SetupOutputRT()
 
 	svgfDenoiser->SetupTextureResources(renderSize);
 
+	restirPipeline->SetupTextureResources(renderSize, d3d11Device.get(), d3d12Device.get());
+	restirPipeline->CreateSRV(d3d12Device.get(), giHeap->CPUHandle(GIHeap::Slot::Reservoir));
+
 	renderResData->RenderRes = renderSize;
 	renderResData->RenderResRcp = float2(1.0f / static_cast<float>(renderSize.x), 1.0f / static_cast<float>(renderSize.y));
 
 	renderResCB->Update(renderResData.get(), sizeof(RenderResData));
+
 }
 
 void Raytracing::SetupResources()
@@ -820,28 +824,6 @@ void Raytracing::SetupResources()
 
 			d3d12Device->CreateUnorderedAccessView(mainTexture->resource.get(), nullptr, &uavDesc, giHeap->CPUHandle(GIHeap::Slot::Main));
 		}
-
-		// ReSTIR Buffers
-		{
-			D3D11_TEXTURE2D_DESC texDesc{};
-			texDesc.Width = mainDesc.Width;
-			texDesc.Height = mainDesc.Height;
-			texDesc.MipLevels = 1;
-			texDesc.ArraySize = 1;
-			texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-			texDesc.SampleDesc.Count = 1;
-			texDesc.SampleDesc.Quality = 0;
-			texDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-
-			restir.reservoirSpatialTexture = eastl::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
-			DX::ThrowIfFailed(restir.reservoirSpatialTexture->resource->SetName(L"ReSTIR DI Spatial Reuse Reservoir Texture"));
-			restir.reservoirCurrTexture = eastl::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
-			DX::ThrowIfFailed(restir.reservoirCurrTexture->resource->SetName(L"ReSTIR DI Current Reservoir Texture"));
-			restir.reservoirPrevTexture = eastl::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
-			DX::ThrowIfFailed(restir.reservoirPrevTexture->resource->SetName(L"ReSTIR DI Previous Reservoir Texture"));
-
-			d3d12Device->CreateShaderResourceView(restir.reservoirSpatialTexture->resource.get(), nullptr, giHeap->CPUHandle(GIHeap::Slot::Reservoir));
-		}
 	}
 
 	// t3 - Light buffer
@@ -850,22 +832,6 @@ void Raytracing::SetupResources()
 		DX::ThrowIfFailed(lightBuffer->resource->SetName(L"Light Buffer"));
 
 		lightBuffer->CreateSRV(giHeap->CPUHandle(GIHeap::Slot::Lights));
-
-		D3D11_BUFFER_DESC sbDesc{};
-		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
-		sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		sbDesc.StructureByteStride = sizeof(Light);
-		sbDesc.ByteWidth = sizeof(Light) * MAX_LIGHTS;
-		restir.lightBuffer = eastl::make_unique<Buffer>(sbDesc);
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		srvDesc.Buffer.FirstElement = 0;
-		srvDesc.Buffer.NumElements = MAX_LIGHTS;
-		restir.lightBuffer->CreateSRV(srvDesc);
 	}
 
 	// t4 - Material buffer
@@ -927,8 +893,6 @@ void Raytracing::SetupResources()
 		DX::ThrowIfFailed(shadowsCB->resource->SetName(L"Shadows Constant Buffer"));
 
 		shadowsCBData = eastl::make_unique<ShadowsFrameData>();
-
-		restir.restirCB = new ConstantBuffer(ConstantBufferDesc<ReSTIR::ReSTIRBuffer>());
 	}
 
 	logger::debug("Creating samplers...");
@@ -952,7 +916,7 @@ void Raytracing::SetupResources()
 		texDesc.Height = SKY_CUBEMAP_SIZE * 2;
 		texDesc.MipLevels = 1;
 		texDesc.ArraySize = 1;
-		texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+		texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 		texDesc.SampleDesc.Count = 1;
 		texDesc.SampleDesc.Quality = 0;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -1388,16 +1352,7 @@ void Raytracing::UpdateLights()
 		if (!lights.empty())
 			lightBuffer->UpdateList(lights.data(), lights.size());
 
-		{
-			auto context = globals::d3d::context;
-			auto lightCount = std::min((uint)lights.size(), MAX_LIGHTS);
-
-			D3D11_MAPPED_SUBRESOURCE mapped;
-			DX::ThrowIfFailed(context->Map(restir.lightBuffer->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-			size_t bytes = sizeof(Light) * lightCount;
-			memcpy_s(mapped.pData, bytes, lights.data(), bytes);
-			context->Unmap(restir.lightBuffer->resource.get(), 0);
-		}
+		restirPipeline->UpdateLightBuffer(lights.data(), lights.size());
 	}
 
 	lightsUpdated = true;
@@ -1437,13 +1392,15 @@ void Raytracing::CopyDepth()
 		//auto sampler = samplerState.get();
 		//context->CSSetSamplers(0, 1, &sampler);
 
-		context->CSSetUnorderedAccessViews(0, 1, &depthTexture->uav, nullptr);
+		ID3D11UnorderedAccessView* uav = skyHemisphere->uav;
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 		uint2 screenSize = GetScreenSize();
 		uint2 dispatchCount = { DivideRoundUp(screenSize.x, 8u), DivideRoundUp(screenSize.y, 8u) };
 		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 
-		//context->CSSetUnorderedAccessViews(0, 1, nullptr, nullptr);
+		uav = nullptr;
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 	}
 }
 
@@ -1483,7 +1440,10 @@ void Raytracing::ConvertTextures() const
 	uint2 dispatchCount = { DivideRoundUp(renderSize.x, 8u), DivideRoundUp(renderSize.y, 8u) };
 	context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 
-	//context->CSSetUnorderedAccessViews(0, 1, nullptr, nullptr);
+	uavs[0] = nullptr;
+	uavs[1] = nullptr;
+	uavs[2] = nullptr;
+	context->CSSetUnorderedAccessViews(0, _countof(uavs), uavs, nullptr);
 }
 
 void Raytracing::SkyCubeToHemi() const
@@ -1498,14 +1458,16 @@ void Raytracing::SkyCubeToHemi() const
 	auto sampler = samplerState.get();
 	context->CSSetSamplers(0, 1, &sampler);
 
-	context->CSSetUnorderedAccessViews(0, 1, &skyHemisphere->uav, nullptr);
+	ID3D11UnorderedAccessView* uav = skyHemisphere->uav;
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 	float hemiResolution = SKY_CUBEMAP_SIZE * 2.0f;
 	uint dispatch = (uint)std::ceil(hemiResolution / 8.0f);
 
 	context->Dispatch(dispatch, dispatch, 1);
 
-	//context->CSSetUnorderedAccessViews(0, 1, nullptr, nullptr);
+	uav = nullptr;
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 }
 
 void Raytracing::Main_RenderWorld(bool a1)
@@ -2649,8 +2611,8 @@ void Raytracing::DrawRTGI()
 	ConvertTextures();
 
 	// ReSTIR DI
-	if (settings.AdvancedSettings.restirSettings.EnableReSTIRDI) {
-		restir.ReSTIRDI(settings.AdvancedSettings.restirSettings, static_cast<uint>(lights.size()), samplerState.get());
+	if (settings.AdvancedSettings.ReSTIR.EnableReSTIRDI) {
+		restirPipeline->ReSTIRDI(settings.AdvancedSettings.ReSTIR, static_cast<uint>(lights.size()), samplerState.get());
 		// Should I just do it in raygen shader?
 	}
 
@@ -2926,12 +2888,12 @@ void Raytracing::DrawRTGI()
 				auto transitionNonPixelRes = CD3DX12_RESOURCE_BARRIER::Transition(diffuseAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 				commandList->ResourceBarrier(1, &transitionNonPixelRes);
 			} else if (settings.DebugOutput == DebugOutput::Reservoir) {
-				auto transitionCopy = CD3DX12_RESOURCE_BARRIER::Transition(restir.reservoirSpatialTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
+				auto transitionCopy = CD3DX12_RESOURCE_BARRIER::Transition(restirPipeline->reservoirSpatialTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
 				commandList->ResourceBarrier(1, &transitionCopy);
 
-				commandList->CopyResource(mainTexture->resource.get(), restir.reservoirSpatialTexture->resource.get());
+				commandList->CopyResource(mainTexture->resource.get(), restirPipeline->reservoirSpatialTexture->resource.get());
 
-				auto transitionNonPixelRes = CD3DX12_RESOURCE_BARRIER::Transition(restir.reservoirSpatialTexture->resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+				auto transitionNonPixelRes = CD3DX12_RESOURCE_BARRIER::Transition(restirPipeline->reservoirSpatialTexture->resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 				commandList->ResourceBarrier(1, &transitionNonPixelRes);
 			}
 		}
@@ -3634,7 +3596,7 @@ void Raytracing::CompileRTGIShaders()
 	if (advSettings.RIS.Enabled)
 		defines.emplace_back(L"RIS");
 
-	if (advSettings.restirSettings.EnableReSTIRDI)
+	if (advSettings.ReSTIR.EnableReSTIRDI)
 		defines.emplace_back(L"RESTIR_DI");
 
 	const auto risMaxCandidates = std::to_wstring(static_cast<uint32_t>(advSettings.RIS.MaxCandidates));
@@ -3863,13 +3825,6 @@ void Raytracing::CompileComputeShaders()
 
 	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\TrueLinearToGammaCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
 		trueLinearToGammaCS.attach(rawPtr);
-
-	// ReSTIR shaders
-	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\ReSTIR\\ReSTIRGenerateReservoirCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
-		restir.ReSTIRGenerateReservoirCS.attach(rawPtr);
-
-	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\ReSTIR\\ReSTIRSpatialReuseCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
-		restir.ReSTIRSpatialReuseCS.attach(rawPtr);
 }
 
 RaytracingFD::FeatureData Raytracing::GetCommonBufferData()
