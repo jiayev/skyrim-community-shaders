@@ -166,24 +166,24 @@ float3 EvalPointLight(in Surface surface, in BRDFContext brdfContext, in LightDa
         return float3(0, 0, 0);
 
     float lightWeight = float(lightData.Count);
-
+    uint lightID = 0;
+    
 #if defined(RIS)
     const uint candidateCount = min(RIS_MAX_CANDIDATES, lightData.Count);
-    uint selectedLightID = 0;
     float totalWeight = 0.0f;
     float selectedWeight = 0.0f;
 
     for (uint i = 0; i < candidateCount; i++)
     {
         uint lightIdx = min(uint(Random(randomSeed) * lightData.Count), lightData.Count - 1);
-        uint lightID = lightData.GetID(lightIdx);
-        Light testLight = Lights[lightID];
+        uint candidateID = lightData.GetID(lightIdx);
+        Light testLight = Lights[candidateID];
         float weight = GetLightSampleWeight(surface, testLight);
         totalWeight += weight;
 
         if (Random(randomSeed) * totalWeight < weight)
         {
-            selectedLightID = lightID;
+            lightID = candidateID;
             selectedWeight = weight;
         }
     }
@@ -193,10 +193,7 @@ float3 EvalPointLight(in Surface surface, in BRDFContext brdfContext, in LightDa
     float risWeight = (totalWeight / max(selectedWeight, 1e-7f)) / float(candidateCount);
 
     lightWeight *= risWeight;
-
-    Light light = Lights[selectedLightID];
 #elif defined(RESTIR_DI)
-    uint lightID = 0;
     if (reservoir.w > 0)
     {
         lightID = uint(reservoir.y);
@@ -207,16 +204,15 @@ float3 EvalPointLight(in Surface surface, in BRDFContext brdfContext, in LightDa
         uint lightIdx = min(uint(Random(randomSeed) * lightData.Count), lightData.Count - 1);
         lightID = lightData.GetID(lightIdx);
     }
-
-    Light light = Lights[lightID];
 #else
-
     uint lightIdx = min(uint(Random(randomSeed) * lightData.Count), lightData.Count - 1);
-
-    uint lightID = lightData.GetID(lightIdx);
-
-    Light light = Lights[lightID];
+    lightID = lightData.GetID(lightIdx);
 #endif
+    
+    lightID = clamp(lightID, 0, Frame.Lights - 1);
+    
+    Light light = Lights[lightID];
+    
     if (lightWeight < 1e-7f)
         return float3(0, 0, 0);
 

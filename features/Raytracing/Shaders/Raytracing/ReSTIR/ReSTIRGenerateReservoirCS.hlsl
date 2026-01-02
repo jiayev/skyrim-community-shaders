@@ -6,30 +6,16 @@
 #include "Common/SharedData.hlsli"
 
 Texture2D<float4> ReservoirPrevTexture : register(t0);
-Texture2D<float> DepthTexture : register(t1);
-Texture2D<float4> NormalGlossinessTexture : register(t2);
-Texture2D<float4> MotionVectorsTexture : register(t4);
+Texture2D<half2> MotionVectorsTexture : register(t4);
 
 RWTexture2D<float4> ReservoirCurrTexture : register(u0);
 
 SamplerState LinearSampler : register(s0);
 
-StructuredBuffer<LightDX11> Lights : register(t3);
-
-cbuffer ReSTIRCB : register(b1)
-{
-    uint SpatialReuse;
-    uint TemporalReuse;
-    uint InitialCandidateCount;
-    uint LightCount;
-    uint MaxCandidateCount;
-    uint3 Padding;
-};
-
 [numthreads(8, 8, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
-    uint2 pixelCoord = DTid.xy;
+    const uint2 pixelCoord = DTid.xy;
     uint2 textureSize;
     ReservoirCurrTexture.GetDimensions(textureSize.x, textureSize.y);
 
