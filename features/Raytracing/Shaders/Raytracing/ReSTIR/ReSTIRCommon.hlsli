@@ -1,8 +1,13 @@
 #ifndef RESTIR_COMMON_HLSLI
 #define RESTIR_COMMON_HLSLI
 
-#include "Common/Game.hlsli"
+#include "Raytracing/Includes/Common.hlsli"
 #include "Raytracing/Includes/RT/CommonRT.hlsli"
+
+#include "Common/Game.hlsli"
+#include "Common/FrameBuffer.hlsli"
+#include "Common/GBuffer.hlsli"
+#include "Common/SharedData.hlsli"
 
 struct LightDX11
 {
@@ -19,7 +24,7 @@ struct LightDX11
 };
 
 Texture2D<float> DepthTexture : register(t1);
-Texture2D<float4> NormalGlossinessTexture : register(t2);
+Texture2D<snorm half4> NormalRoughnessTexture : register(t2);
 StructuredBuffer<LightDX11> Lights : register(t3);
 
 cbuffer ReSTIRCB : register(b1)
@@ -29,6 +34,7 @@ cbuffer ReSTIRCB : register(b1)
     uint InitialCandidateCount;
     uint LightCount;
     uint MaxCandidateCount;
+    float4 NDCToView;
     uint3 Padding;
 };
 
@@ -72,6 +78,11 @@ bool IsValidNeighbor(float3 neighborNormal, float neighborDepth, float3 normal, 
     float checkNormal = dot(normal, neighborNormal);
     float checkDepth = abs(depth - neighborDepth);
     return checkNormal > NORMAL_THRESHOLD && checkDepth < DEPTH_THRESHOLD * depth;
+}
+
+float ScreenToViewDepth(const float screenDepth)
+{
+	return (SharedData::CameraData.w / (-screenDepth * SharedData::CameraData.z + SharedData::CameraData.x));
 }
 
 #if defined(DX11)

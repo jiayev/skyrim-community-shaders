@@ -10,7 +10,7 @@
 #include "Features/Raytracing/Types.h"
 #include "Raytracing/Includes/Types/Light.hlsli"
 
-struct ReSTIR : IPipeline
+struct ReSTIRPipeline : IPipeline
 {
     struct Settings
     {
@@ -30,6 +30,7 @@ struct ReSTIR : IPipeline
         uint InitialCandidateCount;
         uint LightCount;
         uint MaxCandidateCount;
+		float4 NDCToView;
         uint3 Padding;
     };
     STATIC_ASSERT_ALIGNAS_16(ReSTIRBuffer);
@@ -39,7 +40,7 @@ struct ReSTIR : IPipeline
 
 	void CompileShaders(ID3D12Device5* device) override;
 	void SetupResources(ID3D12Device5* device) override;
-	void ReSTIRDI(Settings settings, uint lightCount, ID3D11SamplerState* linearSampler);
+	void ReSTIRDI(Settings settings, uint lightCount, ID3D11SamplerState* linearSampler, ID3D11ShaderResourceView* normalRoughness);
 	void SetupTextureResources(uint2 size, ID3D11Device5* d3d11Device, ID3D12Device5* d3d12Device);
 	void UpdateLightBuffer(const Light* data, uint64_t count) const;
 	void CreateSRV(ID3D12Device5* device, CD3DX12_CPU_DESCRIPTOR_HANDLE reservoir) const;

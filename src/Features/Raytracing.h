@@ -24,7 +24,7 @@
 #include "Features/Raytracing/Model.h"
 #include "Features/Raytracing/Pipelines/SHaRCPipeline.h"
 #include "Features/Raytracing/Pipelines/SVGFPipeline.h"
-#include "Features/Raytracing/ReSTIR.h"
+#include "Features/Raytracing/Pipelines/ReSTIRPipeline.h"
 #include "Features/Raytracing/RTPipelineBuilder.h"
 #include "Features/Raytracing/ShaderBindingTable.h"
 #include "Features/Raytracing/Shape.h"
@@ -317,7 +317,7 @@ struct Raytracing : public OverlayFeature
 			sharcPipeline = eastl::make_unique<SHaRCPipeline>();
 
 		if (!restirPipeline)
-			restirPipeline = eastl::make_unique<ReSTIR>();
+			restirPipeline = eastl::make_unique<ReSTIRPipeline>();
 
 		static eastl::array<IPipeline*, 2> pipelines = {
 			sharcPipeline.get(),
@@ -495,7 +495,7 @@ struct Raytracing : public OverlayFeature
 	struct AdvancedSettings
 	{
 		RISSettings RIS;
-		ReSTIR::Settings ReSTIR;
+		ReSTIRPipeline::Settings ReSTIR;
 
 		bool GGXEnergyConservation = true;
 
@@ -804,7 +804,7 @@ struct Raytracing : public OverlayFeature
 	eastl::unique_ptr<SVGFPipeline> svgfDenoiser = nullptr;
 
 	// ReSTIR
-	eastl::unique_ptr<ReSTIR> restirPipeline = nullptr;
+	eastl::unique_ptr<ReSTIRPipeline> restirPipeline = nullptr;
 
 	struct VertexUpdate
 	{
@@ -855,6 +855,7 @@ struct Raytracing : public OverlayFeature
 		uint2 RenderRes;
 		float2 RenderResRcp;
 	};
+	STATIC_ASSERT_ALIGNAS_16(RenderResData);
 
 	eastl::unique_ptr<RenderResData> renderResData = nullptr;
 	eastl::unique_ptr<ConstantBuffer> renderResCB = nullptr;
