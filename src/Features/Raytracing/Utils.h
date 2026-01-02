@@ -247,3 +247,12 @@ static void CreateTexture2DSRV(ID3D12Device5* device, ID3D12Resource* resource, 
 
 	device->CreateShaderResourceView(resource, &srvDesc, handle);
 }
+
+static float4 NDCToView(uint eyeIndex = 0) {
+	auto eye = Util::GetCameraData(eyeIndex);
+
+	float2 ndcToViewMult = float2(2.0f / eye.projMat(0, 0), -2.0f / eye.projMat(1, 1));
+	float2 ndcToViewAdd = float2(-1.0f / eye.projMat(0, 0), 1.0f / eye.projMat(1, 1));
+
+	return float4(ndcToViewMult.x, ndcToViewMult.y, ndcToViewAdd.x, ndcToViewAdd.y);
+}

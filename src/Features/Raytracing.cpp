@@ -2617,7 +2617,7 @@ void Raytracing::DrawRTGI()
 
 	// ReSTIR DI
 	if (settings.AdvancedSettings.ReSTIR.EnableReSTIRDI) {
-		restirPipeline->ReSTIRDI(settings.AdvancedSettings.ReSTIR, static_cast<uint>(lights.size()), samplerState.get());
+		restirPipeline->ReSTIRDI(settings.AdvancedSettings.ReSTIR, static_cast<uint>(lights.size()), samplerState.get(), normalRoughnessTexture->srv);
 		// Should I just do it in raygen shader?
 	}
 
@@ -2674,11 +2674,7 @@ void Raytracing::DrawRTGI()
 
 		frameData->CameraData = Util::GetCameraData();
 
-		auto eye = Util::GetCameraData(0);
-		float2 ndcToViewMult = float2(2.0f / eye.projMat(0, 0), -2.0f / eye.projMat(1, 1));
-		float2 ndcToViewAdd = float2(-1.0f / eye.projMat(0, 0), 1.0f / eye.projMat(1, 1));
-
-		frameData->NDCToView = float4(ndcToViewMult.x, ndcToViewMult.y, ndcToViewAdd.x, ndcToViewAdd.y);
+		frameData->NDCToView = NDCToView();
 
 		frameData->Roughness = settings.Roughness;
 		frameData->Metalness = settings.Metalness;

@@ -1,8 +1,8 @@
-#include "ReSTIR.h"
+#include "ReSTIRPipeline.h"
 #include "Deferred.h"
 #include "Features/Raytracing.h"
 
-void ReSTIR::CompileShaders([[maybe_unused]] ID3D12Device5* device) 
+void ReSTIRPipeline::CompileShaders([[maybe_unused]] ID3D12Device5* device) 
 {
 	// ReSTIR shaders
 	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\ReSTIR\\ReSTIRGenerateReservoirCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
@@ -12,7 +12,7 @@ void ReSTIR::CompileShaders([[maybe_unused]] ID3D12Device5* device)
 		ReSTIRSpatialReuseCS.attach(rawPtr);
 }
 
-void ReSTIR::SetupResources([[maybe_unused]] ID3D12Device5* device)
+void ReSTIRPipeline::SetupResources([[maybe_unused]] ID3D12Device5* device)
 {
     auto desc = StructuredBufferDesc<Light>(Raytracing::MAX_LIGHTS);
 	lightBuffer = eastl::make_unique<StructuredBuffer>(desc, Raytracing::MAX_LIGHTS);
@@ -21,7 +21,7 @@ void ReSTIR::SetupResources([[maybe_unused]] ID3D12Device5* device)
     restirCB = new ConstantBuffer(ConstantBufferDesc<ReSTIRBuffer>());
 }
 
-void ReSTIR::SetupTextureResources(uint2 size, ID3D11Device5* d3d11Device, ID3D12Device5* d3d12Device)
+void ReSTIRPipeline::SetupTextureResources(uint2 size, ID3D11Device5* d3d11Device, ID3D12Device5* d3d12Device)
 {
 	D3D11_TEXTURE2D_DESC texDesc{};
 	texDesc.Width = size.x;
@@ -59,17 +59,17 @@ void ReSTIR::SetupTextureResources(uint2 size, ID3D11Device5* d3d11Device, ID3D1
 	reservoirCurrTexture->CreateSRV(srvDesc);
 }
 
-void ReSTIR::CreateSRV(ID3D12Device5* device, CD3DX12_CPU_DESCRIPTOR_HANDLE reservoir) const
+void ReSTIRPipeline::CreateSRV(ID3D12Device5* device, CD3DX12_CPU_DESCRIPTOR_HANDLE reservoir) const
 {
 	device->CreateShaderResourceView(reservoirSpatialTexture->resource.get(), nullptr, reservoir);
 }
 
-void ReSTIR::UpdateLightBuffer(const Light* data, uint64_t count) const
+void ReSTIRPipeline::UpdateLightBuffer(const Light* data, uint64_t count) const
 {
 	lightBuffer->Update(data, count);
 }
 
-void ReSTIR::ReSTIRDI(Settings settings, uint lightCount, ID3D11SamplerState* linearSampler)
+void ReSTIRPipeline::ReSTIRDI(Settings settings, uint lightCount, ID3D11SamplerState* linearSampler, ID3D11ShaderResourceView* normalRoughness)
 {
     auto context = globals::d3d::context;
     auto renderer = globals::game::renderer;
@@ -81,6 +81,7 @@ void ReSTIR::ReSTIRDI(Settings settings, uint lightCount, ID3D11SamplerState* li
         restirCBData.InitialCandidateCount = static_cast<uint>(settings.InitialCandidateCount);
         restirCBData.MaxCandidateCount = static_cast<uint>(settings.MaxCandidateCount);
         restirCBData.LightCount = lightCount;
+		restirCBData.NDCToView = NDCToView();
 
         restirCB->Update(&restirCBData);
     }
@@ -90,7 +91,6 @@ void ReSTIR::ReSTIRDI(Settings settings, uint lightCount, ID3D11SamplerState* li
     context->CSSetSamplers(0, 1, &linearSampler);
 
     auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-    auto normal = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
     auto motionVectors = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 
     ID3D11UnorderedAccessView* uav = nullptr;
@@ -99,14 +99,14 @@ void ReSTIR::ReSTIRDI(Settings settings, uint lightCount, ID3D11SamplerState* li
     auto dispatchCount = Util::GetScreenDispatchCount();
 
     {
-        //TracyD3D11Zone(globals::state->tracyCtx, "ReSTIR - Generate Reservoirs and Temporal Reuse");
+        TracyD3D11Zone(globals::state->tracyCtx, "ReSTIR - Generate Reservoirs and Temporal Reuse");
 
 		uav = reservoirCurrTexture->uav.get();
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 		srvs[0] = reservoirPrevTexture->srv.get();
 		srvs[1] = depth.depthSRV;
-		srvs[2] = normal.SRV;
+		srvs[2] = normalRoughness;
 		srvs[3] = lightBuffer->SRV();
 		srvs[4] = motionVectors.SRV;
 
@@ -119,7 +119,7 @@ void ReSTIR::ReSTIRDI(Settings settings, uint lightCount, ID3D11SamplerState* li
     
     if (settings.SpatialReuse)
     {
-        //TracyD3D11Zone(globals::state->tracyCtx, "ReSTIR - Spatial Reuse");
+        TracyD3D11Zone(globals::state->tracyCtx, "ReSTIR - Spatial Reuse");
 
         uav = reservoirSpatialTexture->uav;
         context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);

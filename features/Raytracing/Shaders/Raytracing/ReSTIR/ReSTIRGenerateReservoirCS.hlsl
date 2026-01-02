@@ -1,9 +1,7 @@
 #define DX11
+#define COMPUTESHADER
 
 #include "Raytracing/ReSTIR/ReSTIRCommon.hlsli"
-
-#include "Common/GBuffer.hlsli"
-#include "Common/SharedData.hlsli"
 
 Texture2D<float4> ReservoirPrevTexture : register(t0);
 Texture2D<half2> MotionVectorsTexture : register(t4);
@@ -22,17 +20,18 @@ void main(uint3 DTid : SV_DispatchThreadID)
     if (pixelCoord.x >= textureSize.x || pixelCoord.y >= textureSize.y)
         return;
 
-    uint eyeIndex = 0; // vr not supported for now
+    const uint eyeIndex = 0; // vr not supported for now
 
-    float2 uv = float2(pixelCoord + 0.5) * SharedData::BufferDim.zw;
-    float depth = DepthTexture[pixelCoord].x;
-	float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
-    positionWS = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], positionWS);
-	positionWS.xyz = positionWS.xyz / positionWS.w;
-
-    float3 normalGlossiness = NormalGlossinessTexture[pixelCoord].xyz;
-    float3 normalVS = GBuffer::DecodeNormal(normalGlossiness.xy);
-    float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
+    const float2 uv = float2(pixelCoord + 0.5) * SharedData::BufferDim.zw;
+    
+    const float depth = DepthTexture[pixelCoord].x;
+    const float depthView = ScreenToViewDepth(depth);   
+    
+    const float3 positionVS = ScreenToViewPosition(uv, depthView, NDCToView);
+    const float3 positionCS = FrameBuffer::ViewToWorld(positionVS);
+    const float3 positionWS = positionCS + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;    
+    
+    const float3 normalWS = NormalRoughnessTexture[pixelCoord].xyz;
 
     uint randSeed = InitRandomSeed(pixelCoord, textureSize, SharedData::FrameCount);
 
