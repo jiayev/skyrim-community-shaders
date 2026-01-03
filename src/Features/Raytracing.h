@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PCH.h"
+
 #define DLSS_RR
 
 #include "Features/Upscaling/DX12SwapChain.h"
@@ -434,37 +436,6 @@ struct Raytracing : public OverlayFeature
 	static constexpr Denoiser DefaultDenoiser = Denoiser::SVGF;
 #endif
 
-	struct SHaRCSettings
-	{
-		float SceneScale = 1.0f;
-		int AccumFrameNum = 10;
-		int StaleFrameNum = 64;
-		float RadianceScale = 1e3f;
-		bool AntifireflyFilter = true;
-
-		SHaRCSettings() = default;
-		SHaRCSettings(const SHaRCSettings&) = default;
-
-		SHaRCSettings& operator=(const SHaRCSettings&) = default;
-		bool operator==(const SHaRCSettings&) const = default;
-		bool operator!=(const SHaRCSettings&) const = default;
-
-		SHaRCFrameData GetFrameData(bool updatePass) const
-		{
-			return {
-				.SceneScale = SceneScale,
-				.AccumFrameNum = (uint)AccumFrameNum,
-				.StaleFrameNum = (uint)StaleFrameNum,
-				.RadianceScale = RadianceScale,
-				.AntifireflyFilter = AntifireflyFilter,
-				.Capacity = SHaRCPipeline::MAX_CAPACITY,
-				.UpdatePass = updatePass
-			};
-		}
-
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(SHaRCSettings, SceneScale, AccumFrameNum, StaleFrameNum, RadianceScale, AntifireflyFilter)
-	};
-
 #ifdef DLSS_RR
 	struct DLSSRRSettings
 	{
@@ -541,7 +512,7 @@ struct Raytracing : public OverlayFeature
 		PIXCaptureLocation PIXCaptureLocation = PIXCaptureLocation::GlobalIllumination;
 		bool EnableDebugDevice = false;
 		bool WhiteFurnace = false;
-		SHaRCSettings SHaRC;
+		SHaRCPipeline::Settings SHaRC;
 	} settings;
 
 	enum class RecompileReason : uint32_t
@@ -577,7 +548,7 @@ struct Raytracing : public OverlayFeature
 
 	// Creates a single BLAS for a collection of Shapes
 	// TODO: Move to Model struct
-	void CommitModel(Model& geometryData);
+	void CommitModel(Model* model);
 
 	// Creates mesh buffers for all graph TriShapes, handles materials and builds a single BLAS for the node
 	void CreateModel(RE::TESObjectREFR* refr, const char* path, RE::NiNode* pRoot);
@@ -587,7 +558,7 @@ struct Raytracing : public OverlayFeature
 	bool RemoveInstance(RE::FormID formID, bool releaseModel);
 
 	// TODO: Move to Model struct
-	void UpdateModelBLAS(Model& geometryData);
+	void UpdateModelBLAS(Model* model) const;
 
 	eastl::shared_ptr<Allocation> GetTextureRegister(ID3D11Texture2D* texture, eastl::shared_ptr<Allocation> defaultTexture);
 
@@ -644,7 +615,7 @@ struct Raytracing : public OverlayFeature
 	eastl::shared_ptr<DefaultTexture> defaultEnvMaskTexture = nullptr;
 
 	// We'll group trishapes by their parent nodes, hopefully trishapes don't move on their own
-	eastl::unordered_map<eastl::string, Model> models;
+	eastl::unordered_map<eastl::string, eastl::unique_ptr<Model>> models;
 
 	// Instance
 	struct Instance
@@ -654,7 +625,7 @@ struct Raytracing : public OverlayFeature
 		Util::FrameChecker frameChecker;
 		//bool hasUpdated = false;
 
-		bool Update(RE::NiNode* pNiNode, [[maybe_unused]] const eastl::pair<eastl::string, Model&>& modelPair)
+		bool Update(RE::NiNode* pNiNode, [[maybe_unused]] const eastl::pair<eastl::string, Model*>& modelPair)
 		{
 			// Instance was not changed by the game, so there is no need to update it
 			// This doesn't work at all for actors
@@ -669,8 +640,8 @@ struct Raytracing : public OverlayFeature
 
 			auto& [path, model] = modelPair;
 
-			if ((model.GetFlags() & Flags::Dynamic) || (model.GetFlags() & Flags::Skinned)) {
-				for (auto& shape : model.shapes) {
+			if ((model->GetFlags() & Flags::Dynamic) || (model->GetFlags() & Flags::Skinned)) {
+				for (auto& shape : model->shapes) {
 					Flags updateFlags = Flags::None;
 
 					// Updates Dynamic Vertex position (and Bitangent.x) buffer
@@ -1087,7 +1058,7 @@ struct Raytracing : public OverlayFeature
 
 								// I imagine this isn't fast but I'll keep this in until I'm sure everything has been fixed
 								for (auto& [key, model] : rt.models) {
-									for (auto& shape : model.shapes) {
+									for (auto& shape : model->shapes) {
 										auto& material = shape->material;
 
 										if (index == material.BaseTexture->GetIndex())

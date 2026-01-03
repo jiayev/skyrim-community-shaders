@@ -27,11 +27,13 @@
 #define RAY_TMAX (1e10f)
 #define SHADOW_RAY_TMAX (1e5f)
 
-#define GN_OFFSET (0.1f)
+#define GN_BIAS_MAX (0.1f)
 
 #define MIN_DIFFUSE_SHADOW (0.001f)
 #define MIN_RADIANCE (0.01f)
 #define RR_MIN_BOUNCE (3)
+
+#define DIV_EPSILON (1e-4f)
 
 uint InitRandomSeed(uint2 coord, uint2 size, uint frameCount)
 {
@@ -109,4 +111,13 @@ float3 TangentToWorld(float3 normal, float3 tangentSample)
            normal * tangentSample.z;
 }
 
-#endif // COMMONRT_HLSI
+float3 OffsetRay(float3 p, float3 n, float3 l)
+{
+	const float MinBias = 0.01f;
+	const float MaxBias = GN_BIAS_MAX;
+	const float NormalBias = lerp(MaxBias, MinBias, saturate(dot(n, l)));
+	p += l * NormalBias;
+	return p;
+}
+
+#endif // COMMONRT_HLSL

@@ -3,7 +3,6 @@
 
 #include "Raytracing/Includes/Common.hlsli"
 #include "Raytracing/Includes/PBR.hlsli"
-#include "Raytracing/Includes/MonteCarlo.hlsli"
 #include "Raytracing/Includes/Types.hlsli"
 #include "Raytracing/Includes/RT/Geometry.hlsli"
 
@@ -130,7 +129,7 @@ struct Surface
 #ifdef PATH_TRACING
         Texture2D normalTexture = Textures[NonUniformResourceIndex(material.NormalTexture)];
 
-        float handedness = (dot(cross(normalWS, tangentWS), tangentWS) < 0.0f) ? -1.0f : 1.0f;
+        float handedness = (dot(cross(normalWS, tangentWS), bitangentWS) < 0.0f) ? -1.0f : 1.0f;
 
         NormalMap(
             normalTexture.SampleLevel(BaseSampler, texCoord0, 0).rgb,

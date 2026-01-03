@@ -1,6 +1,7 @@
 #pragma once
 
-typedef unsigned int uint32_t;
+#include <concepts>
+#include <cstdint>
 
 template <typename TableEnum, typename SlotEnum>
 struct Heap

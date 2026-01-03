@@ -25,7 +25,7 @@
 #include <imgui_stdlib.h>
 
 #ifdef DLSS_RR
-#	define RAYTRACING_EXTRA_FIELDS DLSSRR
+#	define RAYTRACING_EXTRA_FIELDS , DLSSRR
 #else
 #	define RAYTRACING_EXTRA_FIELDS
 #endif
@@ -59,7 +59,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnablePIXCapture,
 	PIXCaptureLocation,
 	EnableDebugDevice,
-	RAYTRACING_EXTRA_FIELDS)
+	SHaRC
+		RAYTRACING_EXTRA_FIELDS)
 
 ////////////////////////////////////////////////////////////////////////////////////
 
@@ -82,7 +83,7 @@ void Raytracing::SaveSettings(json& o_json)
 	o_json = settings;
 }
 
-void DrawFloat2(const char* label, float2& v, float min = 0.0f, float max = 1.0f)
+static void DrawFloat2(const char* label, float2& v, float min = 0.0f, float max = 1.0f)
 {
 	float floats[2] = { v.x, v.y };
 	if (ImGui::SliderFloat2(label, floats, min, max)) {
@@ -858,12 +859,14 @@ void Raytracing::SetupResources()
 	// Create instance buffer for BLAS
 	{
 		blasInstanceBuffer = eastl::make_unique<DX12::StructuredBufferUpload<D3D12_RAYTRACING_INSTANCE_DESC>>(d3d12Device.get(), MAX_INSTANCES);
+		blasInstanceBuffer->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 		DX::ThrowIfFailed(blasInstanceBuffer->resource->SetName(L"BLAS Instance Buffer"));
 	}
 
 	// Create shadow instance buffer for BLAS
 	{
 		blasShadowInstanceBuffer = eastl::make_unique<DX12::StructuredBufferUpload<D3D12_RAYTRACING_INSTANCE_DESC>>(d3d12Device.get(), MAX_INSTANCES);
+		blasShadowInstanceBuffer->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 		DX::ThrowIfFailed(blasShadowInstanceBuffer->resource->SetName(L"BLAS Instance Buffer"));
 	}
 
@@ -903,7 +906,7 @@ void Raytracing::SetupResources()
 		texDesc.Height = SKY_CUBEMAP_SIZE * 2;
 		texDesc.MipLevels = 1;
 		texDesc.ArraySize = 1;
-		texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+		texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 		texDesc.SampleDesc.Count = 1;
 		texDesc.SampleDesc.Quality = 0;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -969,6 +972,8 @@ void Raytracing::InitRR()
 	pref.renderAPI = sl::RenderAPI::eD3D12;
 	pref.flags = sl::PreferenceFlags::eUseManualHooking;
 	//sl::PreferenceFlags::eUseFrameBasedResourceTagging;
+
+	pref.logLevel = sl::LogLevel::eOff;
 
 	slInit = (PFun_slInit*)GetProcAddress(interposer, "slInit");
 	slGetNewFrameToken = (PFun_slGetNewFrameToken*)GetProcAddress(interposer, "slGetNewFrameToken");
@@ -1423,7 +1428,10 @@ void Raytracing::ConvertTextures() const
 	uint2 dispatchCount = { DivideRoundUp(renderSize.x, 8u), DivideRoundUp(renderSize.y, 8u) };
 	context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 
-	//context->CSSetUnorderedAccessViews(0, 1, nullptr, nullptr);
+	uavs[0] = nullptr;
+	uavs[1] = nullptr;
+	uavs[2] = nullptr;
+	context->CSSetUnorderedAccessViews(0, _countof(uavs), uavs, nullptr);
 }
 
 void Raytracing::SkyCubeToHemi() const
@@ -1438,14 +1446,16 @@ void Raytracing::SkyCubeToHemi() const
 	auto sampler = samplerState.get();
 	context->CSSetSamplers(0, 1, &sampler);
 
-	context->CSSetUnorderedAccessViews(0, 1, &skyHemisphere->uav, nullptr);
+	ID3D11UnorderedAccessView* uav = skyHemisphere->uav;
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 	float hemiResolution = SKY_CUBEMAP_SIZE * 2.0f;
 	uint dispatch = (uint)std::ceil(hemiResolution / 8.0f);
 
 	context->Dispatch(dispatch, dispatch, 1);
 
-	//context->CSSetUnorderedAccessViews(0, 1, nullptr, nullptr);
+	uav = nullptr;
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 }
 
 void Raytracing::Main_RenderWorld(bool a1)
@@ -1499,11 +1509,11 @@ inline std::wstring ToWide(const std::string& str)
 	return wstr;
 }
 
-void Raytracing::CommitModel(Model& model)
+void Raytracing::CommitModel(Model* model)
 {
 	std::lock_guard lock{ renderMutex };
 
-	auto& shapes = model.shapes;
+	auto& shapes = model->shapes;
 	auto meshCount = shapes.size();
 
 	eastl::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs(meshCount);
@@ -1565,28 +1575,28 @@ void Raytracing::CommitModel(Model& model)
 	blasDesc.CustomPool = blasPool.get();
 
 	desc.Width = prebuildInfo.ResultDataMaxSizeInBytes;
-	DX::ThrowIfFailed(allocator->CreateResource(&blasDesc, &desc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, model.blasBuffer.put(), IID_NULL, NULL));
+	DX::ThrowIfFailed(allocator->CreateResource(&blasDesc, &desc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, model->blasBuffer.put(), IID_NULL, NULL));
 
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {
-		.DestAccelerationStructureData = model.blasBuffer->GetResource()->GetGPUVirtualAddress(),
+		.DestAccelerationStructureData = model->blasBuffer->GetResource()->GetGPUVirtualAddress(),
 		.Inputs = inputs,
 		.ScratchAccelerationStructureData = scratch->GetResource()->GetGPUVirtualAddress()
 	};
 
 	commandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
 
-	const auto& asBarrier = CD3DX12_RESOURCE_BARRIER::UAV(model.blasBuffer->GetResource());
+	const auto& asBarrier = CD3DX12_RESOURCE_BARRIER::UAV(model->blasBuffer->GetResource());
 	commandList->ResourceBarrier(1, &asBarrier);
 
 	if (updatable)
-		model.blasScratchBuffer = std::move(scratch);
+		model->blasScratchBuffer = std::move(scratch);
 	else
 		tempGPUData.emplace_back(std::move(scratch), fenceValue);
 }
 
-void Raytracing::UpdateModelBLAS(Model& model)
+void Raytracing::UpdateModelBLAS(Model* model) const
 {
-	auto& shapes = model.shapes;
+	auto& shapes = model->shapes;
 	auto shapeCount = shapes.size();
 
 	eastl::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs(shapeCount);
@@ -1619,10 +1629,10 @@ void Raytracing::UpdateModelBLAS(Model& model)
 	};
 
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {
-		.DestAccelerationStructureData = model.blasBuffer->GetResource()->GetGPUVirtualAddress(),
+		.DestAccelerationStructureData = model->blasBuffer->GetResource()->GetGPUVirtualAddress(),
 		.Inputs = inputs,
-		.SourceAccelerationStructureData = model.blasBuffer->GetResource()->GetGPUVirtualAddress(),
-		.ScratchAccelerationStructureData = model.blasScratchBuffer->GetResource()->GetGPUVirtualAddress()
+		.SourceAccelerationStructureData = model->blasBuffer->GetResource()->GetGPUVirtualAddress(),
+		.ScratchAccelerationStructureData = model->blasScratchBuffer->GetResource()->GetGPUVirtualAddress()
 	};
 
 	commandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
@@ -1813,16 +1823,16 @@ void Raytracing::CreateModel(RE::TESObjectREFR* refr, const char* path, RE::NiNo
 	if (auto shapeCount = shapes.size(); shapeCount > 0) {
 		eastl::string modelKey = path;
 
-		auto model = Model(shapes);
+		auto model = eastl::make_unique<Model>(shapes);
 
 		// Models with these flags cannot be instanced directly
-		if ((model.GetFlags() & Flags::Dynamic) || (model.GetFlags() & Flags::Skinned))
+		if ((model->GetFlags() & Flags::Dynamic) || (model->GetFlags() & Flags::Skinned))
 			modelKey.append(std::format("_{:08X}", reinterpret_cast<uintptr_t>(pRoot)).c_str());
 
 		auto [it, emplaced] = models.emplace(modelKey, eastl::move(model));
 
 		if (emplaced) {
-			CommitModel(it->second);
+			CommitModel(it->second.get());
 			AddInstance(formID, pRoot, modelKey);
 
 			logger::debug("[RT] CreateModel - Commited {} TriShapes", shapeCount);
@@ -1844,7 +1854,7 @@ bool Raytracing::RemoveInstance(RE::NiNode* pRoot, bool releaseModel)
 		if (auto modelIt = models.find(instance.filename); modelIt != models.end()) {
 			auto& model = modelIt->second;
 
-			auto refCount = model.Release();
+			auto refCount = model->Release();
 
 			logger::debug("[RT] RemoveInstance - RefCount: {}", refCount);
 
@@ -1927,7 +1937,7 @@ void Raytracing::AddInstance(RE::FormID formID, RE::NiNode* pNiNode, eastl::stri
 
 			if (emplaced) {
 				formIDNodes.try_emplace(formID, pNiNode);
-				modelIt->second.AddRef();
+				modelIt->second->AddRef();
 			}
 		}
 	}
@@ -2024,9 +2034,9 @@ void Raytracing::UpdateDynamicSkinning(ID3D12GraphicsCommandList4* pCommandList)
 		if (auto modelIt = models.find(path); modelIt != models.end()) {
 			auto& model = modelIt->second;
 
-			UpdateModelBLAS(model);
+			UpdateModelBLAS(model.get());
 
-			uavBarriers.push_back(CD3DX12_RESOURCE_BARRIER::UAV(model.blasBuffer->GetResource()));
+			uavBarriers.push_back(CD3DX12_RESOURCE_BARRIER::UAV(model->blasBuffer->GetResource()));
 		}
 	}
 
@@ -2125,8 +2135,8 @@ void Raytracing::UpdateInstances()
 		float worldBoundRadius = worldBound.radius;
 		float distanceToBounds = Util::Units::GameUnitsToMeters(eye.GetDistance(worldBound.center) - worldBoundRadius);
 
-		auto shaderTypes = model.GetShaderTypes();
-		auto features = model.GetFeatures();
+		auto shaderTypes = model->GetShaderTypes();
+		auto features = model->GetFeatures();
 
 		// We exclude emissive models from culling
 		auto cullOutOfView = !(shaderTypes & RE::BSShader::Type::Effect) && !(features & static_cast<int>(RE::BSShaderMaterial::Feature::kGlowMap));
@@ -2138,12 +2148,12 @@ void Raytracing::UpdateInstances()
 				continue;
 		}
 
-		if (!instance.Update(pNiNode, { it->first, model }))
+		if (!instance.Update(pNiNode, { it->first, model.get() }))
 			return;
 
 		// This is temporary while I think of a better place to fit this (probably on instance.Update?)
 		auto firstShapeIndex = totalShapeCount;
-		auto shapeCount = model.shapes.size();
+		auto shapeCount = model->shapes.size();
 
 		if (totalShapeCount + shapeCount > MAX_SHAPES)
 			break;
@@ -2151,13 +2161,13 @@ void Raytracing::UpdateInstances()
 		totalShapeCount += static_cast<uint32_t>(shapeCount);
 
 		for (size_t i = 0; i < shapeCount; i++) {
-			pIndirectionData[firstShapeIndex + i] = static_cast<uint32_t>(model.shapes[i]->allocation->GetIndex());
+			pIndirectionData[firstShapeIndex + i] = static_cast<uint32_t>(model->shapes[i]->allocation->GetIndex());
 		}
 
 		D3D12_RAYTRACING_INSTANCE_DESC blasInstance = {
 			.InstanceID = 0,  // We don't really use this, instances are an unordered_map, so yeah unordered...
 			.InstanceMask = 1,
-			.AccelerationStructure = model.blasBuffer->GetResource()->GetGPUVirtualAddress()
+			.AccelerationStructure = model->blasBuffer->GetResource()->GetGPUVirtualAddress()
 		};
 
 		// Copy transform matrix from Instance to DX12 BLAS instance
@@ -2410,13 +2420,13 @@ void Raytracing::UpdateShadowInstances()
 
 		auto& model = it->second;
 
-		if (!instance.Update(pNiNode, { it->first, model }))
+		if (!instance.Update(pNiNode, { it->first, model.get() }))
 			return;
 
 		D3D12_RAYTRACING_INSTANCE_DESC blasShadowInstance = {
 			.InstanceID = static_cast<uint>(blasShadowInstances.size()),
 			.InstanceMask = 1,
-			.AccelerationStructure = model.blasBuffer->GetResource()->GetGPUVirtualAddress()
+			.AccelerationStructure = model->blasBuffer->GetResource()->GetGPUVirtualAddress()
 		};
 
 		memcpy(blasShadowInstance.Transform, instance.transform.m, sizeof(blasShadowInstance.Transform));
@@ -2781,9 +2791,9 @@ void Raytracing::DrawRTGI()
 					sl::Resource depth = { sl::ResourceType::eTex2d, depthTexture->resource.get(), D3D12_RESOURCE_STATE_COMMON };
 					sl::Resource mvec = { sl::ResourceType::eTex2d, motionVectorsTexture->resource.get(), 0 };
 					sl::Resource diffuseAlbedo = { sl::ResourceType::eTex2d, diffuseAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
-					sl::Resource specularAlbedo = { sl::ResourceType::eTex2d, specularAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
+					sl::Resource specularAlbedo = { sl::ResourceType::eTex2d, specularAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
 					sl::Resource normalRoughness = { sl::ResourceType::eTex2d, normalRoughnessTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
-					sl::Resource specHitDistance = { sl::ResourceType::eTex2d, specularHitDistanceTexture->resource.get(), D3D12_RESOURCE_STATE_COMMON };
+					sl::Resource specHitDistance = { sl::ResourceType::eTex2d, specularHitDistanceTexture->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
 
 					sl::ResourceTag colorInTag = sl::ResourceTag{ &colorIn, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &inputExtent };
 					sl::ResourceTag colorOutTag = sl::ResourceTag{ &colorOut, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &outputExtent };
@@ -3216,12 +3226,16 @@ void Raytracing::InitD3D12(ID3D11Device* ppDevice, ID3D11DeviceContext* pImmedia
 	// Set Context Device
 	DX::ThrowIfFailed(pImmediateContext->QueryInterface(IID_PPV_ARGS(&d3d11Context)));
 
+	bool debugDevice = !settings.EnablePIXCapture && settings.EnableDebugDevice;
+
 	// Create debug device
-	if (!settings.EnablePIXCapture && settings.EnableDebugDevice) {
-		winrt::com_ptr<ID3D12Debug6> debugController;
+	if (debugDevice) {
+		winrt::com_ptr<ID3D12Debug3> debugController;
 		if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {
 			debugController->EnableDebugLayer();
 			debugController->SetEnableGPUBasedValidation(TRUE);
+		} else {
+			logger::critical("[RT] Debug layer creation failed.");
 		}
 
 		winrt::com_ptr<ID3D12DeviceRemovedExtendedDataSettings1> pDredSettings;
@@ -3268,6 +3282,17 @@ void Raytracing::InitD3D12(ID3D11Device* ppDevice, ID3D11DeviceContext* pImmedia
 		DX::ThrowIfFailed(commandAllocator->Reset());
 		DX::ThrowIfFailed(commandList->Reset(commandAllocator.get(), nullptr));
 		//DX::ThrowIfFailed(commandList->Close());
+	}
+
+	if (debugDevice) {
+		winrt::com_ptr<ID3D12InfoQueue> infoQueue;
+		if (SUCCEEDED(d3d12Device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, TRUE);
+		} else {
+			logger::critical("[RT] Debug break creation failed.");
+		}
 	}
 
 	// Create Interop
@@ -3331,6 +3356,8 @@ void Raytracing::InitD3D12(ID3D11Device* ppDevice, ID3D11DeviceContext* pImmedia
 
 void Raytracing::CreateRootSignature()
 {
+	auto unboundTableFlags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;  // D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE
+
 	// UAV range
 	giHeap->CreateTable(
 		GIHeap::Table::UAV,
@@ -3347,43 +3374,49 @@ void Raytracing::CreateRootSignature()
 	giHeap->CreateTable(
 		GIHeap::Table::SRV,
 		D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-		{ { GIHeap::Slot::Main, 1 },
-			{ GIHeap::Slot::Depth, 1 },
-			{ GIHeap::Slot::Albedo, 1 },
-			{ GIHeap::Slot::NormalRoughness, 1 },
-			{ GIHeap::Slot::GNMD, 1 },
-			{ GIHeap::Slot::TLAS, 1 },
-			{ GIHeap::Slot::SkyHemisphere, 1 },
-			{ GIHeap::Slot::Lights, 1 },
-			{ GIHeap::Slot::Materials, 1 },
-			{ GIHeap::Slot::Instances, 1 },
-			{ GIHeap::Slot::Indirection, 1 } });
+		{ { GIHeap::Slot::Main, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE },
+			{ GIHeap::Slot::Depth, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE },
+			{ GIHeap::Slot::Albedo, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE },
+			{ GIHeap::Slot::NormalRoughness, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE },
+			{ GIHeap::Slot::GNMD, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE },
+			{ GIHeap::Slot::TLAS, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE },
+			{ GIHeap::Slot::SkyHemisphere, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE },
+			{ GIHeap::Slot::Lights, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE },
+			{ GIHeap::Slot::Materials, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE },
+			{ GIHeap::Slot::Instances, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE },
+			{ GIHeap::Slot::Indirection, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } });
 
 	// Vertex buffers (unbounded)
 	giHeap->CreateTable(
 		GIHeap::Table::VertexBuffer,
 		D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-		{ { GIHeap::Slot::Vertices, UINT_MAX, 1, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } });
+		{ { GIHeap::Slot::Vertices, UINT_MAX, 1, unboundTableFlags } });
 
 	// Triangle buffers (unbounded)
 	giHeap->CreateTable(
 		GIHeap::Table::TriangleBuffer,
 		D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-		{ { GIHeap::Slot::Triangles, UINT_MAX, 2, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } });
+		{ { GIHeap::Slot::Triangles, UINT_MAX, 2, unboundTableFlags } });
 
 	// Textures (unbounded)
 	giHeap->CreateTable(
 		GIHeap::Table::Textures,
 		D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-		{ { GIHeap::Slot::Textures, UINT_MAX, 3, D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE } });
+		{ { GIHeap::Slot::Textures, UINT_MAX, 3, unboundTableFlags } });
 
 	auto rootParameters = giHeap->GetRootParameters();
 
 	CD3DX12_ROOT_PARAMETER1 constantRootParam;
-	constantRootParam.InitAsConstantBufferView(0, 0);
+	constantRootParam.InitAsConstantBufferView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE);
 	rootParameters.push_back(constantRootParam);
 
 	CD3DX12_STATIC_SAMPLER_DESC staticSampler(0);  // register s0
+
+	auto flags = D3D12_ROOT_SIGNATURE_FLAG_DENY_VERTEX_SHADER_ROOT_ACCESS |
+	             D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS |
+	             D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
+	             D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS |
+	             D3D12_ROOT_SIGNATURE_FLAG_DENY_PIXEL_SHADER_ROOT_ACCESS;
 
 	// Create root signature
 	CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSigDesc;
@@ -3392,7 +3425,7 @@ void Raytracing::CreateRootSignature()
 		rootParameters.data(),
 		1,
 		&staticSampler,
-		D3D12_ROOT_SIGNATURE_FLAG_NONE);
+		flags);
 
 	winrt::com_ptr<ID3DBlob> signature;
 	winrt::com_ptr<ID3DBlob> error;
