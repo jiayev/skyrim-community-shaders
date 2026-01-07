@@ -50,7 +50,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RaytracedShadows,
 	PathTracing,
 	CullShadows,
-	RecompressTextures,
 	RussianRoulette,
 	ConvertToGamma,
 	PerformanceOverlay,
@@ -352,10 +351,10 @@ void Raytracing::DrawGeneralSettings()
 		ImGui::Text("Experimental Path Tracing mode.\n");
 	}
 
-	ImGui::Checkbox("Recompress Textures", &settings.RecompressTextures);
+	/*ImGui::Checkbox("Recompress Textures", &settings.DebugShare);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Some texture formats cannot be shared between APIs, enabling this option ensures they'll be recompressed in a lower quality yet compatible format.\n");
-	}
+	}*/
 
 	ImGui::Checkbox("Russian Roulette", &settings.RussianRoulette);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -486,7 +485,7 @@ void Raytracing::DrawDebugSettings()
 		if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Text(std::format("Lights: {}", lights.size()).c_str());
 
-			ImGui::Text(std::format("Used Textures: {}, Shared: {}", textureRegisters.UsedCount(), sharedTextures.size()).c_str());
+			ImGui::Text(std::format("Used Textures: {}, Shared: {}", textureRegisters.UsedCount(), textures.size()).c_str());
 			ImGui::Text(std::format("Used Shapes: {}", shapeRegisters.UsedCount()).c_str());
 			ImGui::Text(std::format("Models: {}", models.size()).c_str());
 
@@ -908,8 +907,8 @@ void Raytracing::SetupResources()
 	// Sky Hemisphere
 	{
 		D3D11_TEXTURE2D_DESC texDesc{};
-		texDesc.Width = SKY_CUBEMAP_SIZE * 2;
-		texDesc.Height = SKY_CUBEMAP_SIZE * 2;
+		texDesc.Width = SKY_HEMI_SIZE;
+		texDesc.Height = SKY_HEMI_SIZE;
 		texDesc.MipLevels = 1;
 		texDesc.ArraySize = 1;
 		texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -1403,7 +1402,7 @@ void Raytracing::ConvertTextures() const
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
 
-	context->CSSetShader(convertTexturesCS.get(), nullptr, 0);
+	context->CSSetShader(settings.PathTracing ? convertTexturesPTCS.get() : convertTexturesCS.get(), nullptr, 0);
 
 	auto* renderSizeCB = renderResCB->CB();
 	context->CSSetConstantBuffers(0, 1, &renderSizeCB);
@@ -1447,7 +1446,14 @@ void Raytracing::SkyCubeToHemi() const
 	context->CSSetShader(cubeToHemiCS.get(), nullptr, 0);
 
 	auto reflections = globals::game::renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS];
-	context->CSSetShaderResources(0, 1, &reflections.SRV);
+	auto reflectionOcc = globals::features::cloudShadows.loaded ? globals::features::cloudShadows.texCubemapCloudOcc->srv.get() : nullptr;
+
+	//globals::features::cloudShadows.texCubemapCloudOcc
+	eastl::array<ID3D11ShaderResourceView*, 2> srvs = {
+		reflections.SRV,
+		reflectionOcc
+	};
+	context->CSSetShaderResources(0, (UINT)srvs.size(), srvs.data());
 
 	auto sampler = samplerState.get();
 	context->CSSetSamplers(0, 1, &sampler);
@@ -1455,7 +1461,7 @@ void Raytracing::SkyCubeToHemi() const
 	ID3D11UnorderedAccessView* uav = skyHemisphere->uav;
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
-	float hemiResolution = SKY_CUBEMAP_SIZE * 2.0f;
+	float hemiResolution = SKY_HEMI_SIZE;
 	uint dispatch = (uint)std::ceil(hemiResolution / 8.0f);
 
 	context->Dispatch(dispatch, dispatch, 1);
@@ -1898,34 +1904,71 @@ bool Raytracing::RemoveInstance(RE::FormID formID, bool releaseModel)
 
 eastl::shared_ptr<Allocation> Raytracing::GetTextureRegister(ID3D11Texture2D* dx11Texture, eastl::shared_ptr<Allocation> defaultTexture)
 {
+	std::lock_guard lock{ textureRegisterMutex };
+
+	if (!dx11Texture)
+		return defaultTexture;
+
 	// Texture already placed in heap, return allocation
 	if (auto refIt = textures.find(dx11Texture); refIt != textures.end()) {
-		return refIt->second.allocation;
+		return refIt->second->allocation;
 	}
 
+	// std::lock_guard lock{ renderMutex };
+
 	// Search for texture in shared map
-	if (auto sharedIt = sharedTextures.find(dx11Texture); sharedIt != sharedTextures.end()) {
-		std::lock_guard lock{ renderMutex };
+	winrt::com_ptr<IDXGIResource> dxgiResource;
+	HRESULT hr = dx11Texture->QueryInterface(IID_PPV_ARGS(dxgiResource.put()));
 
-		// Texture not in heap, so create SRV at next available heap slot
-		auto dx12Texture = sharedIt->second.get();
+	if (FAILED(hr)) {
+		logger::error("[RT] GetTextureRegister - Failed to query interface.");
+		return defaultTexture;
+	}
 
-		D3D12_RESOURCE_DESC texResDesc = dx12Texture->GetDesc();
+	HANDLE sharedHandle = nullptr;
+	hr = dxgiResource->GetSharedHandle(&sharedHandle);
 
-		D3D12_SHADER_RESOURCE_VIEW_DESC texSrvDesc = {};
-		texSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-		texSrvDesc.Format = texResDesc.Format;
-		texSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-		texSrvDesc.Texture2D.MostDetailedMip = 0;
-		texSrvDesc.Texture2D.MipLevels = texResDesc.MipLevels;
-		texSrvDesc.Texture2D.PlaneSlice = 0;
-		texSrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+	if (FAILED(hr) || !sharedHandle) {
+		logger::error("[RT] GetTextureRegister - Failed to get shared handle.");
+		return defaultTexture;
+	}
 
-		auto [it, emplaced] = textures.emplace(dx11Texture, TextureReference(dx12Texture, { textureRegisters.Allocate(), AllocationDeleter() }));
+	winrt::com_ptr<ID3D12Resource> dx12Texture;
+	hr = d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(dx12Texture.put()));
 
-		d3d12Device->CreateShaderResourceView(dx12Texture, &texSrvDesc, giHeap->CPUHandle(GIHeap::Slot::Textures, it->second.allocation->GetIndex()));
+	CloseHandle(sharedHandle);
 
-		return it->second.allocation;
+	if (FAILED(hr)) {
+		logger::error("[RT] GetTextureRegister - Failed to open shared handle.");
+		return defaultTexture;
+	}
+
+	if (!dx12Texture) {
+		logger::error("[RT] GetTextureRegister - Failed to adquire DX12 texture.");
+		return defaultTexture;
+	}
+
+	D3D12_RESOURCE_DESC texResDesc = dx12Texture->GetDesc();
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC texSrvDesc = {};
+	texSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	texSrvDesc.Format = texResDesc.Format;
+	texSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	texSrvDesc.Texture2D.MostDetailedMip = 0;
+	texSrvDesc.Texture2D.MipLevels = texResDesc.MipLevels;
+	texSrvDesc.Texture2D.PlaneSlice = 0;
+	texSrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+	auto [it, emplaced] = textures.try_emplace(dx11Texture, nullptr);
+
+	if (emplaced) {
+		it->second = eastl::make_unique<TextureReference>(std::move(dx12Texture), eastl::shared_ptr<Allocation>(textureRegisters.Allocate(), AllocationDeleter()));
+
+		d3d12Device->CreateShaderResourceView(it->second->resource.get(), &texSrvDesc, giHeap->CPUHandle(GIHeap::Slot::Textures, it->second->allocation->GetIndex()));
+
+		return it->second->allocation;
+	} else {
+		logger::error("[RT] GetTextureRegister - TextureReference emplace failed.");
 	}
 
 	logger::debug("[RT] GetTextureRegister - Source texture not found");
@@ -2772,15 +2815,22 @@ void Raytracing::DrawRTGI()
 
 				commandList->DispatchRays(&dispatchDesc);
 
-				CD3DX12_RESOURCE_BARRIER rtUAVBarrier[5] = {
+				CD3DX12_RESOURCE_BARRIER rtUAVBarrier[3] = {
 					CD3DX12_RESOURCE_BARRIER::UAV(outputTexture->resource.get()),
-					CD3DX12_RESOURCE_BARRIER::UAV(diffuseAlbedoPathTracingTexture->resource.get()),
-					CD3DX12_RESOURCE_BARRIER::UAV(normalRoughnessPathTracingTexture->resource.get()),
 					CD3DX12_RESOURCE_BARRIER::UAV(specularAlbedoTexture->resource.get()),
 					CD3DX12_RESOURCE_BARRIER::UAV(specularHitDistanceTexture->resource.get())
 				};
 
 				commandList->ResourceBarrier(_countof(rtUAVBarrier), rtUAVBarrier);
+
+				if (settings.PathTracing) {
+					CD3DX12_RESOURCE_BARRIER ptUAVBarrier[2] = {
+						CD3DX12_RESOURCE_BARRIER::UAV(diffuseAlbedoPathTracingTexture->resource.get()),
+						CD3DX12_RESOURCE_BARRIER::UAV(normalRoughnessPathTracingTexture->resource.get())
+					};
+
+					commandList->ResourceBarrier(_countof(ptUAVBarrier), ptUAVBarrier);
+				}
 			}
 		}
 
@@ -2794,13 +2844,15 @@ void Raytracing::DrawRTGI()
 					sl::Extent inputNativeExtent{ 0, 0, screenSize.x, screenSize.y };
 					sl::Extent outputExtent{ 0, 0, screenSize.x, screenSize.y };
 
+					uint32_t state = settings.PathTracing ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+
 					sl::Resource colorIn = { sl::ResourceType::eTex2d, outputTexture->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
 					sl::Resource colorOut = { sl::ResourceType::eTex2d, mainTexture->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
 					sl::Resource depth = { sl::ResourceType::eTex2d, depthTexture->resource.get(), D3D12_RESOURCE_STATE_COMMON };
 					sl::Resource mvec = { sl::ResourceType::eTex2d, motionVectorsTexture->resource.get(), 0 };
-					sl::Resource diffuseAlbedo = { sl::ResourceType::eTex2d, settings.PathTracing ? diffuseAlbedoPathTracingTexture->resource.get() : diffuseAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
+					sl::Resource diffuseAlbedo = { sl::ResourceType::eTex2d, settings.PathTracing ? diffuseAlbedoPathTracingTexture->resource.get() : diffuseAlbedoTexture->resource.get(), state };
 					sl::Resource specularAlbedo = { sl::ResourceType::eTex2d, specularAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
-					sl::Resource normalRoughness = { sl::ResourceType::eTex2d, settings.PathTracing ? normalRoughnessPathTracingTexture->resource.get() : normalRoughnessTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
+					sl::Resource normalRoughness = { sl::ResourceType::eTex2d, settings.PathTracing ? normalRoughnessPathTracingTexture->resource.get() : normalRoughnessTexture->resource.get(), state };
 					sl::Resource specHitDistance = { sl::ResourceType::eTex2d, specularHitDistanceTexture->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
 
 					sl::ResourceTag colorInTag = sl::ResourceTag{ &colorIn, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &inputExtent };
@@ -3112,7 +3164,7 @@ void Raytracing::PostPostLoad()
 	//MenuOpenCloseEventHandler::Register();
 	//TESLoadGameEventHandler::Register();
 
-	//TESObjectLoadedEventHandler::Register();
+	TESObjectLoadedEventHandler::Register();
 }
 
 /*void Raytracing::RTProcessor::PostCreate(const RE::BSModelDB::DBTraits::ArgsType& a_args, const char* modelName, RE::NiPointer<RE::NiNode>& a_root, std::uint32_t& typeOut)
@@ -3629,7 +3681,7 @@ void Raytracing::CompileRTGIShaders()
 		defines.emplace_back(L"PATH_TRACING");
 
 	if (settings.Denoiser == Denoiser::SVGF)
-		defines.emplace_back(L"OUTPUT_RADIANCE");
+		defines.emplace_back(L"RAW_RADIANCE");
 
 	const auto definesWStr = StringViewToWString(std::string_view{ settings.Defines });
 
@@ -3819,16 +3871,20 @@ void Raytracing::CompileRTShadowsShaders()
 
 void Raytracing::CompileComputeShaders()
 {
-	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\CopyDepthCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\CopyDepthCS.hlsl", {}, "cs_5_0")); rawPtr)
 		copyDepthCS.attach(rawPtr);
 
-	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\CubeToHemiCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
+	const auto skyHemiSize = std::to_string(SKY_HEMI_SIZE);
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\CubeToHemiCS.hlsl", { { "RESOLUTION", skyHemiSize.c_str() } }, "cs_5_0")); rawPtr)
 		cubeToHemiCS.attach(rawPtr);
 
-	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\ConvertTexturesCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\ConvertTexturesCS.hlsl", {}, "cs_5_0")); rawPtr)
 		convertTexturesCS.attach(rawPtr);
 
-	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\TrueLinearToGammaCS.hlsl", { { "DX11", "" } }, "cs_5_0")); rawPtr)
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\ConvertTexturesCS.hlsl", { { "PT", "" } }, "cs_5_0")); rawPtr)
+		convertTexturesPTCS.attach(rawPtr);
+
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\TrueLinearToGammaCS.hlsl", {}, "cs_5_0")); rawPtr)
 		trueLinearToGammaCS.attach(rawPtr);
 }
 
