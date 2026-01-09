@@ -11,6 +11,7 @@
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PhysicalSky::Settings,
 	enabled,
+	enableAllExteriorCells,
 	overrideDirLight,
 	tonemapper,
 	vanillaMix,
@@ -143,6 +144,8 @@ void PhysicalSky::SettingsGeneral()
 	}
 
 	ImGui::Checkbox("Enabled", &settings.enabled);
+	ImGui::SameLine();
+	ImGui::Checkbox("Enable All Exterior Cells", &settings.enableAllExteriorCells);
 
 	ImGui::SeparatorText("Post Processing");
 	{
@@ -501,7 +504,7 @@ void PhysicalSky::Reset()
 			}
 		}
 	}
-	allGood &= worldspaceEnabled && !inInterior && !inMainLoadingMenu;
+	allGood &= (worldspaceEnabled || settings.enableAllExteriorCells) && !inInterior && !inMainLoadingMenu;
 
 	if (!allGood) {
 		cbData.enabled = allGood;
