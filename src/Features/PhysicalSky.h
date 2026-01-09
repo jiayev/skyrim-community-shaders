@@ -90,6 +90,9 @@ struct PhysicalSky final : public Feature
 		float3 masserColor = float3{ 1.0f, 0.6f, 0.6f } * 5e-3f;
 		float3 secundaColor = float3{ 0.8f, 1.0f, 1.0f } * 5e-3f;
 
+		bool proceduralSun = true;
+		float sunDiskRad = DirectX::XMConvertToRadians(0.53f);
+
 		float adaptationStart = DirectX::XMConvertToRadians(-2);
 		float adaptationEnd = DirectX::XMConvertToRadians(-15);
 		float dayExposure = 1e-2f;
@@ -107,6 +110,9 @@ struct PhysicalSky final : public Feature
 			{ "DLC2SolstheimWorld", { 256.f } }
 		};
 		float3 groundAlbedo = { .2f, .2f, .2f };
+
+		float planetRadius = 6.36e3f;      // in km
+		float atmosphereRadius = 6.42e3f;  // in km
 
 		float rayleighFalloff = 1 / 8.69645f;                    // in km^-1
 		float3 rayleighScatter = { 6.6049f, 12.345f, 29.413f };  // in megameter^-1
@@ -141,7 +147,7 @@ struct PhysicalSky final : public Feature
 		float3 masserColor;
 		float apTrMix;  //
 		float3 secundaDir;
-		float _pad3;  //
+		float sunDiskCos;  //
 		float3 secundaColor;
 
 		// GENERAL
