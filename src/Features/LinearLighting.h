@@ -30,6 +30,8 @@ struct LinearLighting : Feature
 		uint enableGammaCorrection = true;
 		float lightGamma = 1.8f;
 		float colorGamma = 2.2f;
+		float emitColorGamma = 2.2f;
+		float glowmapGamma = 2.2f;
 		float ambientGamma = 1.8f;
 		float fogGamma = 2.2f;
 		float fogAlphaGamma = 1.0f;
@@ -44,7 +46,12 @@ struct LinearLighting : Feature
 		float vanillaSpecularMult = 0.32f;
 		float grassDiffuseMult = 0.32f;
 		float grassSpecularMult = 0.32f;
+		float vanillaDiffuseColorMult = 1.5f;
 		float lightMult = 1.0f;
+		float directionalLightMult = 1.0f;
+		float pointLightMult = 1.0f;
+		float emitColorMult = 1.0f;
+		float glowmapMult = 1.0f;
 
 		// Effect multipliers
 		float effectLightingMult = 0.32f;
@@ -63,6 +70,8 @@ struct LinearLighting : Feature
 		float dirLightMult;
 		float lightGamma;
 		float colorGamma;
+		float emitColorGamma;
+		float glowmapGamma;
 		float ambientGamma;
 		float fogGamma;
 		float fogAlphaGamma;
@@ -75,17 +84,28 @@ struct LinearLighting : Feature
 		float vanillaSpecularMult;
 		float grassDiffuseMult;
 		float grassSpecularMult;
+		float vanillaDiffuseColorMult;
 		float lightMult;
+		float directionalLightMult;
+		float pointLightMult;
+		float emitColorMult;
+		float glowmapMult;
 		float effectLightingMult;
 		float membraneEffectMult;
 		float bloodEffectMult;
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		float pad[3];
 	};
 
-	uint tempDisable = false;
+	struct alignas(16) PerGeometryData
+	{
+		float emissiveMult;
+		float pad0[3];
+	};
+
+	ConstantBuffer* PerGeometryCB = nullptr;
+
 	uint isDirLightLinear = false;
 	float dirLightMult = 1.0f;
 
@@ -96,40 +116,16 @@ struct LinearLighting : Feature
 
 	virtual void RestoreDefaultSettings() override;
 
-	virtual void PostPostLoad() override;
 	virtual void Prepass() override;
+	virtual void PostPostLoad() override;
+
+	virtual void SetupResources() override;
 
 	PerFrameData GetCommonBufferData();
 
-	// Event handler
-	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
-	{
-	public:
-		virtual RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
-		{
-			// Disable linear lighting when entering the loading screen
-			if (a_event->menuName == RE::LoadingMenu::MENU_NAME) {
-				globals::features::linearLighting.tempDisable = a_event->opening;
-			}
+	RE::NiColor ColorToLinear(RE::NiColor inColor, float gamma);
 
-			return RE::BSEventNotifyControl::kContinue;
-		}
+	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
 
-		static bool Register()
-		{
-			static MenuOpenCloseEventHandler singleton;
-			auto ui = globals::game::ui;
-
-			if (!ui) {
-				logger::error("UI event source not found");
-				return false;
-			}
-
-			ui->GetEventSource<RE::MenuOpenCloseEvent>()->AddEventSink(&singleton);
-
-			logger::info("Registered {}", typeid(singleton).name());
-
-			return true;
-		}
-	};
+	struct Hooks;
 };

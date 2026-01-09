@@ -28,6 +28,11 @@ public:
 	virtual void PostPostLoad() override;
 	virtual void EarlyPrepass() override;
 
+	virtual void DataLoaded() override
+	{
+		MenuOpenCloseEventHandler::Register();
+	}
+
 	struct Settings
 	{
 		bool ForceDoubleSidedRendering = true;
@@ -36,7 +41,7 @@ public:
 
 	Settings settings;
 
-	bool isInteriorWithSun = false;
+	std::atomic<bool> isInteriorWithSun = false;
 
 	struct GetWorldSpace
 	{
@@ -47,6 +52,12 @@ public:
 	struct DirShadowLightCulling
 	{
 		static void thunk(RE::BSShadowDirectionalLight* dirLight, RE::BSTArray<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>& jobArrays, RE::BSTArray<RE::NiPointer<RE::NiAVObject>>& nodes);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSBatchRenderer_RenderPassImmediately
+	{
+		static void thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -65,7 +76,28 @@ public:
 		}
 	}
 
+	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+	{
+	public:
+		virtual RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*);
+
+		static bool Register()
+		{
+			static MenuOpenCloseEventHandler singleton;
+			auto ui = globals::game::ui;
+			if (!ui) {
+				logger::error("UI event source not found");
+				return false;
+			}
+			ui->GetEventSource<RE::MenuOpenCloseEvent>()->AddEventSink(&singleton);
+
+			logger::info("Registered {}", typeid(singleton).name());
+			return true;
+		}
+	};
+
 	static bool IsInteriorWithSun(const RE::TESObjectCELL* cell);
+	virtual bool IsCore() const override { return true; };
 
 private:
 	enum class CellFlagExt : uint16_t
