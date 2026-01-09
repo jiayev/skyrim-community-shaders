@@ -6,9 +6,32 @@
 
 #define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
 
+#if defined(PSHADER) && defined(LIGHTING)
+cbuffer LLPerGeometry : register(b8)
+{
+	float emissiveMult;
+	float3 pad0;
+};
+#endif
+
 namespace Color
 {
 	static float GammaCorrectionValue = 2.2;
+
+	// [Jimenez et al. 2016, "Practical Realtime Strategies for Accurate Indirect Occlusion"]
+	float3 MultiBounceAO(float3 baseColor, float ao)
+	{
+		float3 a = 2.0404 * baseColor - 0.3324;
+		float3 b = -4.7951 * baseColor + 0.6417;
+		float3 c = 2.7552 * baseColor + 0.6903;
+		return max(ao, ((ao * a + b) * ao + c) * ao);
+	}
+
+	// [Lagarde et al. 2014, "Moving Frostbite to Physically Based Rendering 3.0"]
+	float SpecularAOLagarde(float NdotV, float ao, float roughness)
+	{
+		return saturate(pow(abs(NdotV + ao), exp2(-16.0 * roughness - 1.0)) - 1.0 + ao);
+	}
 
 	float RGBToLuminance(float3 color)
 	{
@@ -53,14 +76,24 @@ namespace Color
 		return color;
 	}
 
+	float GammaToLinear(float color)
+	{
+		return pow(abs(color), 1.6);
+	}
+
+	float LinearToGamma(float color)
+	{
+		return pow(abs(color), 1.0 / 1.6);
+	}
+
 	float3 GammaToLinear(float3 color)
 	{
-		return pow(abs(color), 1.8);
+		return pow(abs(color), 1.6);
 	}
 
 	float3 LinearToGamma(float3 color)
 	{
-		return pow(abs(color), 1.0 / 1.8);
+		return pow(abs(color), 1.0 / 1.6);
 	}
 
 	float3 GammaToTrueLinear(float3 color)
@@ -74,8 +107,12 @@ namespace Color
 	}
 
 #if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
-	// Attempt to match vanilla materials tha are a darker than PBR
-	const static float PBRLightingScale = ENABLE_LL ? 1.0 : 0.666;
+	// Attempt to match vanilla materials that are darker than PBR
+	const static float PBRLightingScale = ENABLE_LL ? 1.0 : 0.65;
+
+	// Attempt to normalise reflection brightness against DALC
+	const static float ReflectionNormalisationScale = ENABLE_LL ? 1.0 : 0.65;
+
 	const static float PBRLightingCompensation = ENABLE_LL ? 1.0 : Math::PI;
 
 	float3 GammaToLinearLuminancePreserving(float3 color)
@@ -83,10 +120,7 @@ namespace Color
 		if (!ENABLE_LL) {
 			return color;
 		}
-		float originalLuminance = RGBToLuminance(color);
-		if (originalLuminance <= 1e-5) {
-			return float3(0.0, 0.0, 0.0);
-		}
+		float originalLuminance = max(RGBToLuminance(color), 1e-5);
 		float3 linearColorRaw = GammaToLinear(color / originalLuminance);
 		float scale = GammaToLinear(originalLuminance).x;
 		return linearColorRaw * scale;
@@ -97,10 +131,7 @@ namespace Color
 		if (!ENABLE_LL) {
 			return color;
 		}
-		float originalLuminance = RGBToLuminance(color);
-		if (originalLuminance <= 1e-5) {
-			return float3(0.0, 0.0, 0.0);
-		}
+		float originalLuminance = max(RGBToLuminance(color), 1e-5);
 		float3 linearColorRaw = pow(abs(color / originalLuminance), SharedData::linearLightingSettings.lightGamma);
 		float scale = originalLuminance;
 		return linearColorRaw * scale;
@@ -120,9 +151,9 @@ namespace Color
 	float3 Diffuse(float3 color)
 	{
 #	if defined(TRUE_PBR)
-		return ENABLE_LL ? color : LinearToGamma(color);
+		return ENABLE_LL ? color : TrueLinearToGamma(color);
 #	else
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) : color;
+		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) * SharedData::linearLightingSettings.vanillaDiffuseColorMult : color;
 #	endif
 	}
 
@@ -133,6 +164,31 @@ namespace Color
 		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
 #	else
 		return color;
+#	endif
+	}
+
+	float3 DirectionalLight(float3 color, bool isLinear = false)
+	{
+		return Light(color, isLinear) * ((ENABLE_LL && !isLinear) ? SharedData::linearLightingSettings.directionalLightMult : 1.0f);
+	}
+
+	float3 PointLight(float3 color, bool isLinear = false)
+	{
+		return Light(color, isLinear) * ((ENABLE_LL && !isLinear) ? SharedData::linearLightingSettings.pointLightMult : 1.0f);
+	}
+#	if defined(LIGHTING)
+	float3 EmitColor(float3 color)
+	{
+		return ENABLE_LL ? (pow(abs(color / max(emissiveMult, 1e-5)), SharedData::linearLightingSettings.emitColorGamma) * emissiveMult * SharedData::linearLightingSettings.emitColorMult) : color;
+	}
+#	endif
+
+	float3 Glowmap(float3 color)
+	{
+#	if defined(TRUE_PBR)
+		return ENABLE_LL ? color * SharedData::linearLightingSettings.glowmapMult : TrueLinearToGamma(color);
+#	else
+		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.glowmapGamma) * SharedData::linearLightingSettings.glowmapMult : color;
 #	endif
 	}
 
@@ -209,6 +265,16 @@ namespace Color
 		return ENABLE_LL ? color : GammaToLinear(color);
 	}
 
+	float IrradianceToLinear(float color)
+	{
+		return ENABLE_LL ? color : GammaToLinear(color);
+	}
+
+	float IrradianceToGamma(float color)
+	{
+		return ENABLE_LL ? color : LinearToGamma(color);
+	}
+
 	float3 IrradianceToLinear(float3 color)
 	{
 		return ENABLE_LL ? color : GammaToLinear(color);
@@ -237,6 +303,29 @@ namespace Color
 	float GrassSpecularMult()
 	{
 		return ENABLE_LL ? SharedData::linearLightingSettings.grassSpecularMult : 1.0f;
+	}
+
+	float VanillaDiffuseColorMult()
+	{
+		return ENABLE_LL ? SharedData::linearLightingSettings.vanillaDiffuseColorMult : 1.0f;
+	}
+#else
+	float3 Diffuse(float3 color)
+	{
+#	if defined(TRUE_PBR)
+		return TrueLinearToGamma(color);
+#	else
+		return color;
+#	endif
+	}
+
+	float3 Light(float3 color)
+	{
+#	if defined(TRUE_PBR)
+		return color * Math::PI;  // Compensate for traditional Lambertian diffuse
+#	else
+		return color;
+#	endif
 	}
 #endif
 }
