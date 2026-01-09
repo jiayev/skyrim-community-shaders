@@ -7,7 +7,7 @@
 #       include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #   endif
 
-#   if defined(PHYSICAL_SKY) && defined(ISSAO_COMPOSITE)
+#   if defined(PHYSICAL_SKY)
 #       undef CLOUD_SHADOWS
 #       include "PhysicalSky/Common.hlsli"
 #   endif
