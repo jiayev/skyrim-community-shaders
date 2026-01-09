@@ -252,7 +252,7 @@ namespace SharedData
 		float3 masserColor;
 		float apTrMix;  //
 		float3 secundaDir;
-		float _pad3;  //
+		float sunDiskCos;  //
 		float3 secundaColor;
 
 		// GENERAL
