@@ -291,6 +291,8 @@ float3 SampleTr(float3 sunDir, SamplerState sampSv)
 
 	const float2 lutUv = TrLutUv(data.zCameraPlanet, sunDir.z);
 	float3 tr = TexTrLut.SampleLevel(sampSv, lutUv, 0).rgb;
+	if (sunDir.z <= -0.414)
+		tr = 0;
 	tr = lerp(1, tr, data.trMix);
 
 	return tr;
