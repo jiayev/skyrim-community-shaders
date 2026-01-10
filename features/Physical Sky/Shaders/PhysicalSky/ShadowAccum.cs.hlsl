@@ -9,6 +9,12 @@
 #include "Common/Random.hlsli"
 #include "Common/VR.hlsli"
 
+#if defined(HALF_RES)
+#define RES_MULT 2
+#else
+#define RES_MULT 1
+#endif
+
 Texture2D<float> TexDepth : register(t0);
 Texture2DArray<float4> TexDirectShadows : register(t1);
 struct PerShadow
@@ -80,7 +86,10 @@ void main(uint2 tid	: SV_DispatchThreadID)
 	const uint2 seed = Random::pcg2d(pxCoords.xy);
 	const float2 rnd = Random::R2Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
 
-	const float2 stereoUv = (pxCoords + 0.5) * data.rcpFrameDim * 2; // half res
+	float2 stereoUv = (pxCoords + 0.5) * data.rcpFrameDim;
+	if (stereoUv.x >= 1.f || stereoUv.y >= 1.f)
+		return;
+	stereoUv *= RES_MULT;
 	const uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(stereoUv);
 	const float2 uv = Stereo::ConvertFromStereoUV(stereoUv, eyeIndex);
 
