@@ -319,7 +319,7 @@ namespace SharedData
 		float aerosolFalloff;
 		float aerosolPhaseG; //
 		float3 aerosolScatter;
-		float _pad5;  //
+		uint halfResApShadow;  //
 		float3 aerosolAbsorption;
 		
 		float rayleighFalloff;
