@@ -1,15 +1,16 @@
 #pragma once
 
-#include "PCH.h"
-#include <d3d12.h>
 #include "Features/Raytracing/Buffer.h"
 #include "Features/Raytracing/Heap.h"
 #include "Features/Raytracing/HeapManager.h"
 #include "Features/Raytracing/Pipeline.h"
+#include "PCH.h"
+#include <d3d12.h>
 
 #include "Features/Raytracing/Types.h"
 
 #include "Raytracing/Includes/RT/SHaRC/SharcTypes.h"
+#include "Raytracing/Includes/Types/FrameData.hlsli"
 
 struct SHaRCHeapDef
 {
@@ -39,9 +40,40 @@ struct SHaRCPipeline : ComputePipeline<SHaRCHeap>
 	eastl::unique_ptr<DX12::StructuredBuffer<SharcAccumulationData>> sharcAccumulationBuffer = nullptr;
 	eastl::unique_ptr<DX12::StructuredBuffer<SharcPackedData>> sharcResolvedBuffer = nullptr;
 
+	struct Settings
+	{
+		float SceneScale = 1.0f;
+		int AccumFrameNum = 10;
+		int StaleFrameNum = 64;
+		float RadianceScale = 1e3f;
+		bool AntifireflyFilter = true;
+
+		Settings() = default;
+		Settings(const Settings&) = default;
+
+		Settings& operator=(const Settings&) = default;
+		bool operator==(const Settings&) const = default;
+		bool operator!=(const Settings&) const = default;
+
+		SHaRCFrameData GetFrameData(bool updatePass) const
+		{
+			return {
+				.SceneScale = SceneScale,
+				.AccumFrameNum = (uint)AccumFrameNum,
+				.StaleFrameNum = (uint)StaleFrameNum,
+				.RadianceScale = RadianceScale,
+				.AntifireflyFilter = AntifireflyFilter,
+				.Capacity = SHaRCPipeline::MAX_CAPACITY,
+				.UpdatePass = updatePass
+			};
+		}
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(Settings, SceneScale, AccumFrameNum, StaleFrameNum, RadianceScale, AntifireflyFilter)
+	};
+
 	void CreateRootSignature(ID3D12Device5* device) override;
 	void CompileShaders(ID3D12Device5* device) override;
 	void SetupResources(ID3D12Device5* device) override;
-	void Resolve(ID3D12GraphicsCommandList4* commandList);
+	void Resolve(ID3D12GraphicsCommandList4* commandList, ID3D12Resource* frameBuffer);
 	void CreateUAVs(CD3DX12_CPU_DESCRIPTOR_HANDLE hashEntries, CD3DX12_CPU_DESCRIPTOR_HANDLE lock, CD3DX12_CPU_DESCRIPTOR_HANDLE accumulation, CD3DX12_CPU_DESCRIPTOR_HANDLE resolved);
 };

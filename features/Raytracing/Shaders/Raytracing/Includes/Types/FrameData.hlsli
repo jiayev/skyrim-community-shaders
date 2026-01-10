@@ -7,17 +7,17 @@
 struct
 #ifdef __cplusplus
 alignas(16)
-#endif   
+#endif
     SHaRCFrameData
 {
     BOOL Enabled;
     float SceneScale;
     uint AccumFrameNum;
     uint StaleFrameNum;
-    float RadianceScale;    
-    BOOL AntifireflyFilter; 
+    float RadianceScale;
+    BOOL AntifireflyFilter;
     uint Capacity;
-    BOOL UpdatePass;    
+    BOOL UpdatePass;
 };
 #ifdef __cplusplus
 static_assert(sizeof(SHaRCFrameData) % 4 == 0);
@@ -26,7 +26,7 @@ static_assert(sizeof(SHaRCFrameData) % 4 == 0);
 struct
 #ifdef __cplusplus
 alignas(16)
-#endif   
+#endif
     FrameData
 {
     float4x4 ViewInverse;
@@ -44,7 +44,8 @@ alignas(16)
     float Emissive;
     float Effect;
     float Sky;
-    uint3 Pad0;
+    uint Lights;
+    uint2 Pad0;
     SHaRCFrameData SHaRC;
     FeatureData Features;
     uint4 Pad1[8];

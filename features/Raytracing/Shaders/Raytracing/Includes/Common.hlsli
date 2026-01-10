@@ -1,6 +1,8 @@
 #ifndef COMMON_HLSL
 #define COMMON_HLSL
 
+#include "Common/Game.hlsli"
+
 #define DEPTH_SCALE (0.99920h)
 #define FP_Z (16.5f)
 #define SKY_Z (0.9999f)
@@ -38,7 +40,7 @@ float Remap(float x, float min, float max)
 inline float Square(float value)
 {
     return value * value;
-}  
+}
 
 half3 DecodeNormal(half2 f)
 {
@@ -47,9 +49,9 @@ half3 DecodeNormal(half2 f)
 	half3 n = half3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
 	half t = saturate(-n.z);
 	#if !defined(DX11)
-	n.xy += select(n.xy >= 0.0, -t, t);	
+	n.xy += select(n.xy >= 0.0, -t, t);
 	#else
-	n.xy += n.xy >= 0.0 ? -t : t;	
+	n.xy += n.xy >= 0.0 ? -t : t;
 	#endif
 	return -normalize(n);
 }
@@ -57,15 +59,15 @@ half3 DecodeNormal(half2 f)
 void NormalMap(float3 normalMap, float handedness, float3 geomNormalWS, float3 geomTangentWS, float3 geomBitangentWS, out float3 normalWS, out float3 tangentWS, out float3 bitangentWS)
 {
 	normalMap = normalMap * 2.0f - 1.0f;
-	
+
     normalWS = normalize(
 		normalMap.x * geomTangentWS +
 		normalMap.y * geomBitangentWS +
 		normalMap.z * geomNormalWS
 	);
 
-    tangentWS = normalize(geomTangentWS - normalWS * dot(geomTangentWS, normalWS)); 
-    bitangentWS = cross(normalWS, tangentWS) * handedness;  
+    tangentWS = normalize(geomTangentWS - normalWS * dot(geomTangentWS, normalWS));
+    bitangentWS = cross(normalWS, tangentWS) * handedness;
 }
 
 uint StrongIntegerHash(uint x)
@@ -91,7 +93,7 @@ uint4 SamplerCore(inout uint seed)
 	return result;
 }
 
-float2 Get2D(uint seed)
+float2 Get2D(inout uint seed)
 {
 	return (SamplerCore(seed).xy) * 5.96046447754e-08;
 }
@@ -101,7 +103,7 @@ void UnpackMAO(float packed, out float metalness, out float ao)
 {
     uint metalnessAO = packed * 65535.0;
 
-    metalness = saturate((metalnessAO & 0xFF) / 255.0f);   
+    metalness = saturate((metalnessAO & 0xFF) / 255.0f);
     ao = saturate(((metalnessAO >> 8) & 0xFF) / 255.0f);
 }
 

@@ -2,19 +2,19 @@
 
 #include "PCH.h"
 
+#include "Features/Raytracing/Allocator.h"
 #include "Features/Raytracing/BufferMA.h"
 #include "Features/Raytracing/Utils.h"
-#include "Features/Raytracing/Allocator.h"
 
 #include <d3d12.h>
 #include <winrt/base.h>
 
 #include "Features/Raytracing/Types.h"
 
-#include "Raytracing/Includes/Types/Vertex.hlsli"
+#include "Raytracing/Includes/Types/Material.hlsli"
 #include "Raytracing/Includes/Types/Skinning.hlsli"
 #include "Raytracing/Includes/Types/Triangle.hlsli"
-#include "Raytracing/Includes/Types/Material.hlsli"
+#include "Raytracing/Includes/Types/Vertex.hlsli"
 
 using namespace magic_enum::bitwise_operators;
 
@@ -23,7 +23,8 @@ enum Flags : uint8_t
 	None = 0,
 	Alpha = 1 << 0,
 	Dynamic = 1 << 1,
-	Skinned = 1 << 2
+	Skinned = 1 << 2,
+	Landscape = 1 << 3
 };
 DEFINE_ENUM_FLAG_OPERATORS(Flags);
 
@@ -32,6 +33,9 @@ class Shape
 public:
 	struct Material
 	{
+		static constexpr uint MAX_LAND_TEXTURES = 5u;
+		static constexpr uint MAX_PBRLAND_TEXTURES = 6u;
+
 		enum ShaderType : uint16_t
 		{
 			TruePBR = 0,
@@ -68,17 +72,22 @@ public:
 			}
 		}
 
-		enum ShaderFlags : uint16_t
+		enum ShaderFlags : uint32_t
 		{
 			None = 0,
-			kTempRefraction = 1 << 0,
-			kVertexAlpha = 1 << 1,
-			kGrayscaleToPaletteColor = 1 << 2,
-			kGrayscaleToPaletteAlpha = 1 << 3,
-			kFalloff = 1 << 4,
-			kRefraction = 1 << 5,
-			kProjectedUV = 1 << 6,
-			kVertexColors = 1 << 7
+			kSpecular = 1 << 0,
+			kTempRefraction = 1 << 1,
+			kVertexAlpha = 1 << 2,
+			kGrayscaleToPaletteColor = 1 << 3,
+			kGrayscaleToPaletteAlpha = 1 << 4,
+			kFalloff = 1 << 5,
+			kEnvMap = 1 << 6,
+			kRefraction = 1 << 7,
+			kProjectedUV = 1 << 8,
+			kVertexColors = 1 << 9,
+			kMultiTextureLandscape = 1 << 10,
+			kEyeReflect = 1 << 11,
+			kHairTint = 1 << 12
 		};
 
 		ShaderFlags GetShaderFlags() const
@@ -100,36 +109,48 @@ public:
 			return shaderFlagsLocal;
 		}
 
-		half4 BaseColor;
-		half4 EffectColor;
-		half4 TexCoordOffsetScale;
-
-		half RoughnessScale;
-		half SpecularLevel;
-
-		eastl::shared_ptr<Allocation> BaseTexture;
-		eastl::shared_ptr<Allocation> NormalTexture;
-		eastl::shared_ptr<Allocation> EffectTexture;
-		eastl::shared_ptr<Allocation> RMAOSTexture;
-
-		RE::BSShader::Type shaderType;
 		REX::EnumSet<RE::BSShaderProperty::EShaderPropertyFlag, std::uint64_t> shaderFlags;
+		RE::BSShader::Type shaderType;
 		RE::BSShaderMaterial::Feature Feature;
 		stl::enumeration<PBRShaderFlags, uint16_t> PBRFlags;
 
-		MaterialData GetData() {
+		eastl::array<half4, 2> Colors;
+		eastl::array<half, 3> Scalars;
+
+		eastl::array<half4, 2> TexCoordOffsetScale;
+
+		eastl::array<eastl::shared_ptr<Allocation>, 20> Textures;
+
+		MaterialData GetData()
+		{
 			return MaterialData(
-				BaseColor, EffectColor,
-				TexCoordOffsetScale,
-				RoughnessScale, SpecularLevel,
-				BaseTexture->GetIndex(),
-				NormalTexture->GetIndex(),
-				EffectTexture->GetIndex(),
-				RMAOSTexture->GetIndex(),
+				TexCoordOffsetScale[0], TexCoordOffsetScale[1],
+				Colors[0], Colors[1],
+				Scalars[0], Scalars[1], Scalars[2],
+				Textures[0]->GetIndex(),
+				Textures[1]->GetIndex(),
+				Textures[2]->GetIndex(),
+				Textures[3]->GetIndex(),
+				Textures[4]->GetIndex(),
+				Textures[5]->GetIndex(),
+				Textures[6]->GetIndex(),
+				Textures[7]->GetIndex(),
+				Textures[8]->GetIndex(),
+				Textures[9]->GetIndex(),
+				Textures[10]->GetIndex(),
+				Textures[11]->GetIndex(),
+				Textures[12]->GetIndex(),
+				Textures[13]->GetIndex(),
+				Textures[14]->GetIndex(),
+				Textures[15]->GetIndex(),
+				Textures[16]->GetIndex(),
+				Textures[17]->GetIndex(),
+				Textures[18]->GetIndex(),
+				Textures[19]->GetIndex(),
 				GetShaderType(),
-				GetShaderFlags(),
 				static_cast<uint16_t>(Feature),
-				PBRFlags.underlying());
+				PBRFlags.underlying(),
+				GetShaderFlags());
 		}
 	};
 
@@ -161,12 +182,13 @@ public:
 		allocation({ allocation, AllocationDeleter() }), flags(flags) {}*/
 
 	Shape(Allocation* allocation, RE::BSGeometry* geometry, Flags flags = Flags::None) :
-		allocation({ allocation, AllocationDeleter() }), geometry(geometry), flags(flags) {
+		allocation({ allocation, AllocationDeleter() }), geometry(geometry), flags(flags)
+	{
 		//logger::info("[RT] Shape {} at Index {}", geometry->name, allocation->GetIndex());
 	}
 
 	/*~Shape() {
-	
+
 	};*/
 
 	/*inline Shape Clone(uint16_t registerIndexIn, RE::BSGeometry* geometryIn) const
@@ -188,11 +210,11 @@ public:
 	void BuildMesh(RE::BSGraphics::TriShape* rendererData, const std::uint32_t& vertexCountIn, const std::uint16_t& triangleCountIn, const std::uint16_t& bonesPerVertex, const float4x4& transform);
 
 	void BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryRuntimeData, [[maybe_unused]] const char* name);
-	
+
 	void CreateBuffers(const std::wstring& name);
 
 	void CalculateVectors(bool calculateNormal);
 
-	// For PBR shader flags we need to copy exactly what TruePBR does 
-	static stl::enumeration<PBRShaderFlags, uint16_t> GetPBRShaderFlags(const BSLightingShaderMaterialPBR* pbrMaterial);
+	// For PBR shader flags we need to copy exactly what TruePBR does
+	static stl::enumeration<PBRShaderFlags, uint32_t> GetPBRShaderFlags(const BSLightingShaderMaterialPBR* pbrMaterial);
 };

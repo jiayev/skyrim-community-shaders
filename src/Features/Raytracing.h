@@ -1,45 +1,48 @@
 #pragma once
 
-#define SHARC
+#include "PCH.h"
+
 #define DLSS_RR
 
-#include "OverlayFeature.h"
-#include <d3d12.h>
-#include <d3d11_4.h>
-#include <dxgi1_6.h>
 #include "Features/Upscaling/DX12SwapChain.h"
-#include <dxcapi.h>
 #include "LightLimitFix.h"
-#include <DirectXTex.h>
-#include <shared_mutex>
-#include <EASTL/deque.h>
+#include "OverlayFeature.h"
 #include <D3D12MemAlloc.h>
+#include <DirectXTex.h>
+#include <EASTL/deque.h>
+#include <d3d11_4.h>
+#include <d3d12.h>
+#include <dxcapi.h>
+#include <dxgi1_6.h>
+#include <shared_mutex>
 
 #include "State.h"
 
-#include "Features/Raytracing/Utils.h"
-#include "Features/Raytracing/Heap.h"
+#include "Features/Raytracing/Allocator.h"
 #include "Features/Raytracing/Buffer.h"
 #include "Features/Raytracing/BufferMA.h"
-#include "Features/Raytracing/Allocator.h"
+#include "Features/Raytracing/Heap.h"
 #include "Features/Raytracing/HeapManager.h"
-#include "Features/Raytracing/RTPipelineBuilder.h"
-#include "Features/Raytracing/ShaderBindingTable.h"
-#include "Features/Raytracing/Types.h"
-#include "Features/Raytracing/Shape.h"
 #include "Features/Raytracing/Model.h"
 #include "Features/Raytracing/Pipelines/SHaRCPipeline.h"
+#include "Features/Raytracing/Pipelines/SVGFPipeline.h"
+#include "Features/Raytracing/RTPipelineBuilder.h"
+#include "Features/Raytracing/ShaderBindingTable.h"
+#include "Features/Raytracing/Shape.h"
+#include "Features/Raytracing/TextureSharing.h"
+#include "Features/Raytracing/Types.h"
+#include "Features/Raytracing/Utils.h"
 
 #include "Raytracing/FeatureData.hlsli"
-#include "Raytracing/Includes/Types/VertexUpdate.hlsli"
-#include "Raytracing/Includes/Types/Vertex.hlsli"
+#include "Raytracing/Includes/Types/FrameData.hlsli"
+#include "Raytracing/Includes/Types/Instance.hlsli"
+#include "Raytracing/Includes/Types/Light.hlsli"
+#include "Raytracing/Includes/Types/Material.hlsli"
+#include "Raytracing/Includes/Types/ShadowsFrameData.hlsli"
 #include "Raytracing/Includes/Types/Skinning.hlsli"
 #include "Raytracing/Includes/Types/Triangle.hlsli"
-#include "Raytracing/Includes/Types/Instance.hlsli"
-#include "Raytracing/Includes/Types/Material.hlsli"
-#include "Raytracing/Includes/Types/Light.hlsli"
-#include "Raytracing/Includes/Types/FrameData.hlsli"
-#include "Raytracing/Includes/Types/ShadowsFrameData.hlsli"
+#include "Raytracing/Includes/Types/Vertex.hlsli"
+#include "Raytracing/Includes/Types/VertexUpdate.hlsli"
 
 #include "Raytracing/Denoiser/SVGF/SVGF.hlsli"
 
@@ -49,16 +52,16 @@
 
 #ifdef DLSS_RR
 #	define NV_WINDOWS
-#pragma warning(push)
-#pragma warning(disable: 4471)
-#include <sl.h>
-#include <sl_consts.h>
-#include <sl_dlss.h>
-#include <sl_dlss_d.h>
-#include <sl_matrix_helpers.h>
-#include <sl_nis.h>
-#include <sl_version.h>
-#pragma warning(pop)
+#	pragma warning(push)
+#	pragma warning(disable: 4471)
+#	include <sl.h>
+#	include <sl_consts.h>
+#	include <sl_dlss.h>
+#	include <sl_dlss_d.h>
+#	include <sl_matrix_helpers.h>
+#	include <sl_nis.h>
+#	include <sl_version.h>
+#	pragma warning(pop)
 #endif
 
 using namespace magic_enum::bitwise_operators;
@@ -73,7 +76,8 @@ struct Raytracing : public OverlayFeature
 	static constexpr uint MAX_INSTANCES = 4096;
 	static constexpr uint MAX_LIGHTS = 255;
 
-	static constexpr uint SKY_CUBEMAP_SIZE = 256;
+	static constexpr uint SKY_CUBEMAP_SIZE = 512;
+	static constexpr uint SKY_HEMI_SIZE = SKY_CUBEMAP_SIZE * 2;
 
 	enum MarkerFlags : uint32_t
 	{
@@ -95,14 +99,14 @@ struct Raytracing : public OverlayFeature
 		enum class Slot
 		{
 			Output,
+			DiffuseAlbedoPathTracing,
+			NormalRoughnessPathTracing,
 			Reflectance,
 			SpecularHitDist,
-#ifdef SHARC
 			SHaRCHashEntries,
 			SHaRCLock,
 			SHaRCAccumulation,
 			SHaRCResolved,
-#endif
 			Main,
 			Depth,
 			Albedo,
@@ -215,6 +219,10 @@ struct Raytracing : public OverlayFeature
 	virtual void DrawSettings() override;
 
 	void DrawSHaRCSettings();
+	void DrawSVGFSettings();
+#ifdef DLSS_RR
+	void DrawDLSSRRSettings();
+#endif
 	void DrawDenoiserSettings();
 	void DrawLightingSettings();
 	void DrawLightSettings();
@@ -238,6 +246,7 @@ struct Raytracing : public OverlayFeature
 	void SetupSharedRT();
 	void CompileShaders();
 	void CompileComputeShaders();
+	void CompileCompositeShader();
 
 	void CompileSkinningShaders();
 	void CompileRTGIShaders();
@@ -245,7 +254,6 @@ struct Raytracing : public OverlayFeature
 
 	void Initialize();
 	void InitD3D12(ID3D11Device* ppDevice, ID3D11DeviceContext* pImmediateContext, IDXGIAdapter* a_adapter);
-	void CreatePipelines();
 	void CreateRootSignature();
 	void CreateShadowsRootSignature();
 	void CreateSkinningRootSignature();
@@ -302,13 +310,17 @@ struct Raytracing : public OverlayFeature
 	float Halton(int32_t index, int32_t base);
 #endif
 
-	const bool Active() 
+	const bool Active()
 	{
 		return loaded && settings.Enabled;
 	};
 
-	const std::vector<IPipeline*>& GetPipelines() {
-		static std::vector<IPipeline*> pipelines = {
+	const auto& GetPipelines()
+	{
+		if (!sharcPipeline)
+			sharcPipeline = eastl::make_unique<SHaRCPipeline>();
+
+		static eastl::array<IPipeline*, 1> pipelines = {
 			sharcPipeline.get()
 		};
 
@@ -334,10 +346,10 @@ struct Raytracing : public OverlayFeature
 	enum struct Denoiser : int32_t
 	{
 		None,
-		Accumulation,
+		SVGF,
 #ifdef DLSS_RR
 		DLSSRR
-#endif	
+#endif
 	};
 
 	enum struct DebugOutput : int32_t
@@ -356,9 +368,11 @@ struct Raytracing : public OverlayFeature
 #ifdef DLSS_RR
 	enum struct DLSSRRQuality : int32_t
 	{
-		MaxPerformance,	
+		MaxPerformance,
 		Balanced,
-		MaxQuality		
+		MaxQuality,
+		NativeRes,
+		DLAA
 	};
 
 	enum struct DLSSRRPreset : int32_t
@@ -412,9 +426,7 @@ struct Raytracing : public OverlayFeature
 	enum struct TraceMode : int32_t
 	{
 		Reference,
-#ifdef SHARC
 		SHaRC
-#endif
 	};
 
 	static constexpr const char* TraceModeTooltips[] = {
@@ -423,47 +435,43 @@ struct Raytracing : public OverlayFeature
 	};
 	static_assert(_countof(TraceModeTooltips) == magic_enum::enum_count<TraceMode>());
 
-#ifdef SHARC
-	static constexpr TraceMode DefaultMode = TraceMode::SHaRC;
+#ifdef DLSS_RR
+	static constexpr Denoiser DefaultDenoiser = Denoiser::DLSSRR;
 #else
-	static constexpr TraceMode DefaultMode = TraceMode::Reference;
+	static constexpr Denoiser DefaultDenoiser = Denoiser::SVGF;
 #endif
 
-	struct SHaRCSettings
+#ifdef DLSS_RR
+	struct DLSSRRSettings
 	{
-		float SceneScale = 1.0f;
-		int AccumFrameNum = 10;
-		int StaleFrameNum = 64;
-		float RadianceScale = 1e3f;
-		bool AntifireflyFilter = true;
+		DLSSRRQuality QualityMode = DLSSRRQuality::MaxQuality;
+		DLSSRRPreset Preset = DLSSRRPreset::E;
 
-		SHaRCSettings() = default;
-		SHaRCSettings(const SHaRCSettings&) = default;
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(DLSSRRSettings, QualityMode, Preset)
+	};
+#endif
 
-		SHaRCSettings& operator=(const SHaRCSettings&) = default;
-		bool operator==(const SHaRCSettings&) const = default;
-		bool operator!=(const SHaRCSettings&) const = default;
+	// Resampled Importance Sampling
+	struct RISSettings
+	{
+		bool Enabled = true;
+		int MaxCandidates = 4;
 
-		SHaRCFrameData GetFrameData(bool updatePass) const
-		{
-			return {
-				.SceneScale = SceneScale * Util::Units::GAME_UNIT_TO_M,
-				.AccumFrameNum = (uint)AccumFrameNum,
-				.StaleFrameNum = (uint)StaleFrameNum,
-				.RadianceScale = RadianceScale,
-				.AntifireflyFilter = AntifireflyFilter,
-				.Capacity = SHaRCPipeline::MAX_CAPACITY,
-				.UpdatePass = updatePass
-			};
-		}
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(RISSettings, Enabled, MaxCandidates)
+	};
 
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(SHaRCSettings, SceneScale, AccumFrameNum, StaleFrameNum, RadianceScale, AntifireflyFilter)
+	// Reservoir-based Spatiotemporal Importance Resampling
+	struct ReSTIRSettings
+	{
+		bool ReSTIRDI = true;
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ReSTIRSettings, ReSTIRDI)
 	};
 
 	struct AdvancedSettings
 	{
-		bool ResampledImportanceSampling = true;
-		int RISMaxCandidates = 4;
+		RISSettings RIS;
+		ReSTIRSettings ReSTIR;
 
 		bool GGXEnergyConservation = true;
 
@@ -471,7 +479,7 @@ struct Raytracing : public OverlayFeature
 		LightEvalMode LightEvalMode = LightEvalMode::BRDF;
 		LightingMode LightingMode = LightingMode::PBR;
 
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(AdvancedSettings, ResampledImportanceSampling, RISMaxCandidates, GGXEnergyConservation, DiffuseBRDF, LightEvalMode, LightingMode)
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(AdvancedSettings, RIS, ReSTIR, GGXEnergyConservation, DiffuseBRDF, LightEvalMode, LightingMode)
 	};
 
 	////////////////////////////////////////////////// Feature Specific Data
@@ -480,12 +488,12 @@ struct Raytracing : public OverlayFeature
 		bool Enabled = true;
 		bool GlobalIllumination = true;
 		AdvancedSettings AdvancedSettings;
-		TraceMode TraceMode = DefaultMode;
-		Denoiser Denoiser = Denoiser::Accumulation;
+		TraceMode TraceMode = TraceMode::SHaRC;
+		Denoiser Denoiser = DefaultDenoiser;
 		int Bounces = 2;
 		int SamplesPerPixel = 1;
-		float2 Roughness = {0.0f, 1.0f};
-		float2 Metalness = {0.0f, 1.0f};
+		float2 Roughness = { 0.0f, 1.0f };
+		float2 Metalness = { 0.0f, 1.0f };
 		float Emissive = 1.0f;
 		float Effect = 1.0f;
 		float Sky = 1.0f;
@@ -495,14 +503,12 @@ struct Raytracing : public OverlayFeature
 		bool RaytracedShadows = true;
 		bool PathTracing = false;
 		bool CullShadows = true;
-		bool RecompressTextures = true;
 		bool RussianRoulette = true;
 		bool ConvertToGamma = true;
 #ifdef DLSS_RR
-		DLSSRRQuality DLSSRRQualityMode = DLSSRRQuality::MaxQuality;
-		float DLSSRRSharpness = 0.0f;
-		DLSSRRPreset DLSSRRPreset = DLSSRRPreset::E;
+		DLSSRRSettings DLSSRR;
 #endif
+		SVGFPipeline::Settings SVGF;
 		bool PerformanceOverlay = false;
 		std::string Defines = "";
 		DebugOutput DebugOutput = DebugOutput::None;
@@ -510,9 +516,7 @@ struct Raytracing : public OverlayFeature
 		PIXCaptureLocation PIXCaptureLocation = PIXCaptureLocation::GlobalIllumination;
 		bool EnableDebugDevice = false;
 		bool WhiteFurnace = false;
-#ifdef SHARC
-		SHaRCSettings SHaRCSettings;
-#endif
+		SHaRCPipeline::Settings SHaRC;
 	} settings;
 
 	enum class RecompileReason : uint32_t
@@ -542,23 +546,26 @@ struct Raytracing : public OverlayFeature
 
 	struct TextureReference
 	{
-		ID3D12Resource* resource = nullptr;
+		winrt::com_ptr<ID3D12Resource> resource;
 		eastl::shared_ptr<Allocation> allocation;
+
+		TextureReference(winrt::com_ptr<ID3D12Resource>&& res, eastl::shared_ptr<Allocation>&& alloc) :
+			resource(eastl::move(res)), allocation(eastl::move(alloc)) {}
 	};
 
 	// Creates a single BLAS for a collection of Shapes
 	// TODO: Move to Model struct
-	void CommitModel(Model& geometryData);
+	void CommitModel(Model* model);
 
 	// Creates mesh buffers for all graph TriShapes, handles materials and builds a single BLAS for the node
-	void CreateModel(RE::TESObjectREFR* refr, const char* path, RE::NiNode* pRoot);
+	void CreateModel(RE::TESForm* refr, const char* path, RE::NiNode* pRoot);
 
 	// Removes the instance and optionally also releases the model and all its buffers if refCount reaches 0
 	bool RemoveInstance(RE::NiNode* pRoot, bool releaseModel);
 	bool RemoveInstance(RE::FormID formID, bool releaseModel);
 
 	// TODO: Move to Model struct
-	void UpdateModelBLAS(Model& geometryData);
+	void UpdateModelBLAS(Model* model) const;
 
 	eastl::shared_ptr<Allocation> GetTextureRegister(ID3D11Texture2D* texture, eastl::shared_ptr<Allocation> defaultTexture);
 
@@ -604,26 +611,26 @@ struct Raytracing : public OverlayFeature
 		{
 			return allocation->GetIndex();
 		}
-
 	};
 
 	eastl::shared_ptr<DefaultTexture> defaultWhiteTexture = nullptr;
+	eastl::shared_ptr<DefaultTexture> defaultGrayTexture = nullptr;
 	eastl::shared_ptr<DefaultTexture> defaultNormalTexture = nullptr;
 	eastl::shared_ptr<DefaultTexture> defaultBlackTexture = nullptr;
 	eastl::shared_ptr<DefaultTexture> defaultRMAOSTexture = nullptr;
 
 	// We'll group trishapes by their parent nodes, hopefully trishapes don't move on their own
-	eastl::unordered_map<eastl::string, Model> models;
+	eastl::unordered_map<eastl::string, eastl::unique_ptr<Model>> models;
 
 	// Instance
 	struct Instance
 	{
 		eastl::string filename;
 		float3x4 transform;
-		Util::FrameChecker frameChecker;	
+		Util::FrameChecker frameChecker;
 		//bool hasUpdated = false;
 
-		bool Update(RE::NiNode* pNiNode, [[ maybe_unused ]] const eastl::pair<eastl::string, Model&>& modelPair)
+		bool Update(RE::NiNode* pNiNode, [[maybe_unused]] const eastl::pair<eastl::string, Model*>& modelPair)
 		{
 			// Instance was not changed by the game, so there is no need to update it
 			// This doesn't work at all for actors
@@ -638,8 +645,8 @@ struct Raytracing : public OverlayFeature
 
 			auto& [path, model] = modelPair;
 
-			if ((model.GetFlags() & Flags::Dynamic) || (model.GetFlags() & Flags::Skinned)) {
-				for (auto& shape : model.shapes) {
+			if ((model->GetFlags() & Flags::Dynamic) || (model->GetFlags() & Flags::Skinned)) {
+				for (auto& shape : model->shapes) {
 					Flags updateFlags = Flags::None;
 
 					// Updates Dynamic Vertex position (and Bitangent.x) buffer
@@ -712,18 +719,16 @@ struct Raytracing : public OverlayFeature
 
 	Util::FrameChecker shadowFrameChecker;
 
-	// Textures that have been shared with DX12
-	eastl::unordered_map<ID3D11Texture2D*, winrt::com_ptr<ID3D12Resource>> sharedTextures;
-
-	// Textures we have actually placed in a heap as SRV
-	eastl::unordered_map<ID3D11Texture2D*, TextureReference> textures;
+	// Textures that have been shared with DX12 and placed in a heap as SRV
+	eastl::unordered_map<ID3D11Texture2D*, eastl::unique_ptr<TextureReference>> textures;
 
 	winrt::com_ptr<ID3D11SamplerState> samplerState = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> copyDepthCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> convertNormalGlossCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> trueLinearToGammaCS = nullptr;
-	
-	eastl::unique_ptr<DX12::StructuredBufferUpload<D3D12_RAYTRACING_INSTANCE_DESC>> blasInstanceBuffer = nullptr;	
+	winrt::com_ptr<ID3D11ComputeShader> convertTexturesCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> convertTexturesPTCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> compositeCS = nullptr;
+
+	eastl::unique_ptr<DX12::StructuredBufferUpload<D3D12_RAYTRACING_INSTANCE_DESC>> blasInstanceBuffer = nullptr;
 	eastl::vector<D3D12_RAYTRACING_INSTANCE_DESC> blasInstances;
 
 	winrt::com_ptr<ID3D12Resource> tlas = nullptr;
@@ -767,13 +772,13 @@ struct Raytracing : public OverlayFeature
 	// TODO: Move other effects to their own pipelines as well
 	//	eastl::unique_ptr<SkinningPipeline> skinningPipeline = nullptr;
 	//	eastl::unique_ptr<RTPipeline> RTPipeline = nullptr;
-	//	eastl::unique_ptr<SVGFPipeline> svgfPipeline = nullptr;
 	//	eastl::unique_ptr<ShadowPipeline> shadowPipeline = nullptr;
 
-#ifdef SHARC
-	// SHaRC
+	// SHaRC (Radiance cache)
 	eastl::unique_ptr<SHaRCPipeline> sharcPipeline = nullptr;
-#endif
+
+	// SVGF (denoiser)
+	eastl::unique_ptr<SVGFPipeline> svgfDenoiser = nullptr;
 
 	struct VertexUpdate
 	{
@@ -792,9 +797,12 @@ struct Raytracing : public OverlayFeature
 	// GI
 	winrt::com_ptr<ID3D12RootSignature> rootSignature = nullptr;
 	winrt::com_ptr<ID3D12StateObject> pipelineRT = nullptr;
-	eastl::unique_ptr<DX12::ShaderBindingTable> shaderBindingTable = nullptr;	
+#if defined(SHARC)
+	winrt::com_ptr<ID3D12StateObject> pipelineSHaRCRT = nullptr;
+#endif
+	eastl::unique_ptr<DX12::ShaderBindingTable> shaderBindingTable = nullptr;
 	eastl::unique_ptr<DX12::ResourceUpload> shaderBindingTableBuffer = nullptr;
-	eastl::unique_ptr<DX12::DescriptorHeap<GIHeap>> giHeap = nullptr;	
+	eastl::unique_ptr<DX12::DescriptorHeap<GIHeap>> giHeap = nullptr;
 
 	// Shadows
 	winrt::com_ptr<ID3D12RootSignature> shadowRS = nullptr;
@@ -816,18 +824,29 @@ struct Raytracing : public OverlayFeature
 	winrt::com_ptr<ID3D11Device5> d3d11Device = nullptr;
 	winrt::com_ptr<ID3D11DeviceContext4> d3d11Context = nullptr;
 
+	struct alignas(16) RenderResData
+	{
+		uint2 RenderRes;
+		float2 RenderResRcp;
+	};
+
+	eastl::unique_ptr<RenderResData> renderResData = nullptr;
+	eastl::unique_ptr<ConstantBuffer> renderResCB = nullptr;
+
 	// Sky Cubemap
 	bool renderingCubemap = false;
 
 	eastl::unique_ptr<WrappedResource> skyHemisphere = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> cubeToHemiCS = nullptr;
-	
+
 	// Shadow maps
 	bool renderingShadowmap = false;
 	eastl::unique_ptr<WrappedResource> shadowMaskTexture = nullptr;
 
 	// Resources
 	eastl::unique_ptr<DX12::Texture2D> outputTexture = nullptr;
+	eastl::unique_ptr<DX12::Texture2D> diffuseAlbedoPathTracingTexture = nullptr;
+	eastl::unique_ptr<DX12::Texture2D> normalRoughnessPathTracingTexture = nullptr;
 	eastl::unique_ptr<DX12::Texture2D> specularAlbedoTexture = nullptr;
 	eastl::unique_ptr<DX12::Texture2D> specularHitDistanceTexture = nullptr;
 
@@ -850,10 +869,13 @@ struct Raytracing : public OverlayFeature
 
 	std::shared_mutex geometryMutex;
 	std::shared_mutex bufferMutex;
-	std::shared_mutex sharedTextureMutex;
 	std::shared_mutex renderMutex;
 
+	std::shared_mutex textureRegisterMutex;
+	std::recursive_mutex shareTextureMutex;
+
 	uint2 renderSize;
+	float2 dynamicResolutionRatio;
 
 	// Timings
 	float mainTime;
@@ -886,142 +908,25 @@ struct Raytracing : public OverlayFeature
 	sl::DLSSDOptimalSettings optimalSettings{};
 #endif
 
-	template <class T>
-	void detour_thunk(size_t offset)
-	{
-		T::func = REL::Module::get().base() + offset;
-		DetourTransactionBegin();
-		DetourUpdateThread(GetCurrentThread());
-		DetourAttach(reinterpret_cast<PVOID*>(&T::func), reinterpret_cast<PVOID>(T::thunk));
-		DetourTransactionCommit();
-	}
-
 	struct Hooks
 	{
 		struct ID3D11Device_CreateTexture2D
 		{
 			static HRESULT WINAPI thunk(ID3D11Device* This, const D3D11_TEXTURE2D_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Texture2D** ppTexture2D)
 			{
-				D3D11_TEXTURE2D_DESC descCopy = *pDesc;
-				const D3D11_SUBRESOURCE_DATA* initialDataCopy = pInitialData;
+				if (!pDesc || !pInitialData)
+					return func(This, pDesc, pInitialData, ppTexture2D);
 
 				auto& rt = globals::features::raytracing;
+				std::lock_guard<std::recursive_mutex> lock(rt.shareTextureMutex);
 
-				bool shareTexture = false;
+				D3D11_TEXTURE2D_DESC descCopy = *pDesc;
 
-				eastl::vector<D3D11_SUBRESOURCE_DATA> initialDataLocal;
-				eastl::vector<DirectX::ScratchImage> outputMips;
-
-				bool share = rt.shareTexture || pDesc && IsShareableFormat(pDesc->Format);
-
-				if (rt.loaded && share && pDesc && pInitialData && pDesc->ArraySize == 1 && pDesc->Usage == D3D11_USAGE_DEFAULT && pDesc->BindFlags == D3D11_BIND_SHADER_RESOURCE && pDesc->MiscFlags == 0 && pDesc->CPUAccessFlags == 0) {
-					bool recompress = rt.settings.RecompressTextures;
-
-					descCopy.Format = GetCompatibleFormat(pDesc->Format, recompress);
-	
-					logger::trace("[RT] ID3D11Device::CreateTexture2D - Sharing Texture - Original Format: {}, Target Format: {}", magic_enum::enum_name(pDesc->Format), magic_enum::enum_name(descCopy.Format));
-
-					if (pDesc->Format != descCopy.Format) {
-						initialDataLocal.resize(pDesc->MipLevels);
-						outputMips.resize(pDesc->MipLevels);
-
-						auto range = std::views::iota(0u, pDesc->MipLevels);
-
-						auto decompressedFormat = GetCompatibleFormat(pDesc->Format, false);
-
-						std::for_each(std::execution::par, range.begin(), range.end(), [&](uint mip) {
-							DirectX::Image src;
-							src.width = std::max(1u, pDesc->Width >> mip);
-							src.height = std::max(1u, pDesc->Height >> mip);
-							src.format = pDesc->Format;
-							src.rowPitch = pInitialData[mip].SysMemPitch;
-							src.slicePitch = pInitialData[mip].SysMemSlicePitch;
-							src.pixels = (uint8_t*)pInitialData[mip].pSysMem;
-
-							DirectX::ScratchImage decompressedScratch;
-							DX::ThrowIfFailed(DirectX::Decompress(src, decompressedFormat, recompress ? decompressedScratch : outputMips[mip]));
-							const DirectX::Image* decompressed = (recompress ? decompressedScratch : outputMips[mip]).GetImage(0, 0, 0);
-
-							if (recompress)
-								DX::ThrowIfFailed(DirectX::Compress(*decompressed, descCopy.Format, DirectX::TEX_COMPRESS_DEFAULT, 0.5f, outputMips[mip]));
-
-							const DirectX::Image* img = recompress ? outputMips[mip].GetImage(0, 0, 0) : decompressed;
-							initialDataLocal[mip].pSysMem = img->pixels;
-							initialDataLocal[mip].SysMemPitch = static_cast<UINT>(img->rowPitch);
-							initialDataLocal[mip].SysMemSlicePitch = static_cast<UINT>(img->slicePitch);							
-						});
-
-						initialDataCopy = initialDataLocal.data();
-					}
-
-					descCopy.MiscFlags |= D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
-					shareTexture = true;
+				if (rt.shareTexture && !(pDesc->MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE)) {
+					descCopy.MiscFlags |= D3D11_RESOURCE_MISC_SHARED;
 				}
 
-				HRESULT hr = func(This, &descCopy, initialDataCopy, ppTexture2D);
-
-				if (shareTexture) {
-					if (SUCCEEDED(hr)) {
-						/*if (!rt.releaseHooked) {
-							std::lock_guard lock{ rt.sharedTextureMutex };
-
-							if (!rt.releaseHooked) {
-								rt.releaseHooked = true;
-								stl::detour_vfunc<2, ID3D11Texture2D_Release>(*ppTexture2D);
-							}
-						}*/
-
-						winrt::com_ptr<IDXGIResource1> dxgiResource = nullptr;
-						DX::ThrowIfFailed((*ppTexture2D)->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
-
-						HANDLE sharedHandle = nullptr;
-						DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ, nullptr, &sharedHandle));
-
-						winrt::com_ptr<ID3D12Resource> resource = nullptr;
-						HRESULT hrOSH = rt.d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(resource.put()));
-
-						CloseHandle(sharedHandle);
-
-						if (SUCCEEDED(hrOSH)) {
-							rt.sharedTextures.emplace(*ppTexture2D, std::move(resource));
-						} else {
-							logger::warn("[RT] Error opening shared handle - [0x{:x}], Format: {}, Dimension: ({}, {}), MipLevels: {}", hrOSH, magic_enum::enum_name(pDesc->Format), pDesc->Width, pDesc->Height, pDesc->MipLevels);
-						}
-					} else {
-						logger::warn("[RT] Error creating shareable texture - [0x{:x}], Format: {}, Dimension: ({}, {}), MipLevels: {}", hr, magic_enum::enum_name(pDesc->Format), pDesc->Width, pDesc->Height, pDesc->MipLevels);
-					}
-				}
-
-				return hr;
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct ID3D11Device_CreateShaderResourceView
-		{
-			static HRESULT WINAPI thunk(ID3D11Device* This, ID3D11Resource* pResource, const D3D11_SHADER_RESOURCE_VIEW_DESC* pDesc, ID3D11ShaderResourceView** ppSRV)
-			{
-				D3D11_SHADER_RESOURCE_VIEW_DESC descCopy = {};
-				const D3D11_SHADER_RESOURCE_VIEW_DESC* descPtr = pDesc;
-
-				if (pDesc)
-					descCopy = *pDesc;
-
-				if (pResource && ppSRV && pDesc && pDesc->ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D) {
-					auto& rt = globals::features::raytracing;
-
-					std::lock_guard lock{ rt.sharedTextureMutex };
-
-					descCopy.Format = GetCompatibleFormat(pDesc->Format, rt.settings.RecompressTextures);
-
-					if (pDesc->Format != descCopy.Format) {
-						if (rt.sharedTextures.find(static_cast<ID3D11Texture2D*>(pResource)) != rt.sharedTextures.end()) {
-							descPtr = &descCopy;
-						}
-					}
-				}
-
-				return func(This, pResource, descPtr, ppSRV);
+				return func(This, &descCopy, pInitialData, ppTexture2D);
 			}
 
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -1032,50 +937,32 @@ struct Raytracing : public OverlayFeature
 			static void thunk(RE::NiSourceTexture* oThis)
 			{
 				if (oThis && oThis->rendererTexture) {
-            		if (auto texture = oThis->rendererTexture->texture) {  				
+					if (auto texture = oThis->rendererTexture->texture) {
 						auto& rt = globals::features::raytracing;
 
-						if (auto sharedIt = rt.sharedTextures.find(texture); sharedIt != rt.sharedTextures.end()) {
-							if (auto textureIt = rt.textures.find(texture); textureIt != rt.textures.end()) {
-								auto index = textureIt->second.allocation->GetIndex();
+						if (auto it = rt.textures.find(texture); it != rt.textures.end()) {
+							auto index = it->second->allocation->GetIndex();
 
-								logger::debug("[RT] NiSourceTexture::Destructor [0x{:8X}] - Register: {}", reinterpret_cast<uintptr_t>(texture), index);
+							logger::debug("[RT] NiSourceTexture::Destructor [0x{:8X}] - Register: {}", reinterpret_cast<uintptr_t>(texture), index);
 
-								// I imagine this isn't fast but I'll keep this in until I'm sure everything has been fixed
-								for (auto& [key, model]: rt.models) {
-									for (auto& shape: model.shapes) {
-										auto& material = shape->material;
+							// I imagine this isn't fast but I'll keep this in until I'm sure everything has been fixed
+							for (auto& [key, model] : rt.models) {
+								for (auto& shape : model->shapes) {
+									auto& material = shape->material;
 
-										if (index == material.BaseTexture->GetIndex())
-											logger::error("[RT]\t\t NiSourceTexture::Destructor - Found in: {}", key);
+									for (auto& materialTexture : material.Textures) {
+										if (index == materialTexture->GetIndex())
+											logger::critical("[RT]\t\t NiSourceTexture::Destructor - Found in: {}", key);
 									}
 								}
 							}
 
-							rt.sharedTextures.erase(sharedIt);
+							rt.textures.erase(it);
 						}
 					}
 				}
 
 				func(oThis);
-			}
-
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-
-		struct ID3D11Texture2D_Release
-		{
-			static ULONG WINAPI thunk(ID3D11Texture2D* This)
-			{			
-				ULONG refCount = func(This);
-
-				if (refCount == 0) {
-					logger::info("[RT] ID3D11Texture2D::Release: [0x{:8X}]", reinterpret_cast<uintptr_t>(This));
-					globals::features::raytracing.sharedTextures.erase(This);
-				}
-
-				return refCount;
 			}
 
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -1102,6 +989,7 @@ struct Raytracing : public OverlayFeature
 
 					if (rt.renderingCubemap) {
 						if (This->shaderType.get() != RE::BSShader::Type::Sky) {
+							This->RestoreGeometry(Pass, RenderFlags);
 							//Pass->geometry->CullGeometry(true);
 							return;
 						}
@@ -1144,8 +1032,15 @@ struct Raytracing : public OverlayFeature
 				auto& rt = globals::features::raytracing;
 				rt.renderingShadowmap = true;
 
-				if (rt.Active() && rt.settings.RaytracedShadows)
+				if (rt.Active() && rt.settings.RaytracedShadows) {
 					rt.UpdateShadowsFrameBuffer();
+
+					auto& runtimeData = light->GetShadowDirectionalLightRuntimeData();
+					for (size_t i = 0; i < 3; i++) {
+						runtimeData.startSplitDistances[i] = 0;
+						runtimeData.endSplitDistances[i] = 0;
+					}
+				}
 
 				// This is effectively bypassed (removing the call freezes the game...)
 				func(light, a2);
@@ -1154,7 +1049,6 @@ struct Raytracing : public OverlayFeature
 
 				if (rt.Active() && rt.settings.RaytracedShadows) {
 					rt.shadowLight = light;
-					//rt.UpdateShadowInstances();
 				}
 			}
 
@@ -1169,7 +1063,7 @@ struct Raytracing : public OverlayFeature
 
 				// Bypassing this alone does absolutely nothing.
 				if (!rt.Active() || !rt.renderingShadowmap || !rt.settings.RaytracedShadows)
-					func(shaderAccumulator, camera);			
+					func(shaderAccumulator, camera);
 			}
 
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -1202,53 +1096,37 @@ struct Raytracing : public OverlayFeature
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		// Land
-		struct BGSTextureSet_SetTexture
+		template <typename T>
+		struct Load
 		{
-			static void thunk(RE::BGSTextureSet* oThis, RE::BSTextureSet::Texture a_texture, RE::NiSourceTexturePtr& a_srcTexture)
+			static bool thunk(RE::TESObjectLAND* oThis, RE::TESFile* a_mod)
 			{
-				auto& rt = globals::features::raytracing;
-				rt.shareTexture = ShouldShareTexture(a_texture, rt.settings.PathTracing);
-
-				func(oThis, a_texture, a_srcTexture);
-
-				rt.shareTexture = false;
-			};
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		// Actors and the rest
-		struct BSShaderTextureSet_SetTexture
-		{
-			static void thunk(RE::BSShaderTextureSet* oThis, RE::BSTextureSet::Texture a_texture, RE::NiSourceTexturePtr& a_srcTexture)
-			{
-				auto& rt = globals::features::raytracing;
-				rt.shareTexture = ShouldShareTexture(a_texture, rt.settings.PathTracing);
-
-				func(oThis, a_texture, a_srcTexture);
-
-				rt.shareTexture = false;
-			};
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		/*template <typename T>
-		struct Load3DBase
-		{
-			static RE::NiAVObject* thunk(T* oThis, bool a_backgroundLoading)
-			{
-				auto* result = func(oThis, a_backgroundLoading);
+				bool result = func(oThis, a_mod);
 
 				if (auto& rt = globals::features::raytracing; rt.Active()) {
-					if (auto model = oThis->As<RE::TESModel>()) {
-						rt.CreateModel(model->GetModel(), netimmerse_cast<RE::NiNode*>(result));
+					logger::info("[RT] {}::Load", typeid(*oThis).name());
+
+					RE::TESObjectLAND::LoadedLandData* loadedLandData = oThis->loadedData;
+
+					if (loadedLandData) {
+						logger::info("[RT] LoadedLandData");
+
+						if (loadedLandData->mesh) {
+							for (uint i = 0; i < 4; i++) {
+								auto mesh = loadedLandData->mesh[i];
+
+								if (mesh) {
+									logger::info("[RT] Mesh [{}]", i);
+								}
+							}
+						}
 					}
 				}
 
 				return result;
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
-		};*/
+		};
 
 		template <typename T>
 		struct Load3D
@@ -1269,12 +1147,18 @@ struct Raytracing : public OverlayFeature
 					if (flags & MarkerFlags::MapMarker || flags & MarkerFlags::HeadingMarker)
 						return result;
 
+					//logger::info("[RT] Load3D - Name: {}", typeid(*baseObject).name());
+
 					/*RE::FormID id = baseObject->GetFormID();
 					logger::info("[RT] Load3DA - Name: {}, Flags [0x{:8X}]: {}", typeid(*baseObject).name(), flags, GetFlagsString<RE::TESObjectREFR::RecordFlags::RecordFlag>(flags));
 					logger::info("[RT] Load3DA - FormID: [0x{:8X}], FormType: {}", id, magic_enum::enum_name(type));*/
 
 					if (auto* model = baseObject->As<RE::TESModel>()) {
 						rt.CreateModel(oThis, model->GetModel(), netimmerse_cast<RE::NiNode*>(result));
+					} else if (auto* land = baseObject->As<RE::TESObjectLAND>()) {
+						logger::info("[RT] Load3D - Land {}", land->GetName());
+					} else if (auto* world = baseObject->As<RE::TESWorldSpace>()) {
+						logger::info("[RT] WorldSpace - Land {}", world->GetName());
 					}
 				}
 
@@ -1332,7 +1216,7 @@ struct Raytracing : public OverlayFeature
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
-		
+
 		template <typename T>
 		struct Clone3DBase
 		{
@@ -1381,34 +1265,6 @@ struct Raytracing : public OverlayFeature
 				return result;
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
-		};	
-
-		//__int64 __fastcall sub_7FF62400F840(__int64 a1, __int64 a2, char* a3, __int64 a4, int a5)
-
-		struct sub_7FF62400F840
-		{
-			static void* thunk(void* oThis, void* a2, char* path, void* a4, uint32_t a5)
-			{
-				logger::info("[RT] sub_7FF62400F840 Begin - Path {}, a5: [0x{:8X}]", path ? path : "", a5);
-				auto* result = func(oThis, a2, path, a4, a5);
-				logger::info("[RT] sub_7FF62400F840 End");
-
-				return result;
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};	
-
-		struct sub_7FF62400F3D0
-		{
-			static void* thunk(void* oThis, char* path, int64_t a3, void* a4, int64_t a5)
-			{
-				logger::info("[RT] sub_7FF62400F3D0 - Path {}", path ? path : "");
-				auto* result = func(oThis, path, a3, a4, a5);
-				logger::info("[RT] sub_7FF62400F3D0 - Path {}", path ? path : "");
-
-				return result;
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
 		template <typename T>
@@ -1423,51 +1279,60 @@ struct Raytracing : public OverlayFeature
 				func(oThis);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
-		};	
-		
-		struct BSBatchRenderer_RenderBatches
+		};
+
+		struct CreateTextureFromDDS
 		{
-			static bool thunk(RE::BSBatchRenderer* oThis, uint32_t& technique, uint32_t& groupIndex, RE::BSSimpleList<uint32_t>*& passIndexList, uint32_t renderFlags)
+			static RE::NiSourceTexture* thunk(RE::BSResource::CompressedArchiveStream* a1, char* path, ID3D11ShaderResourceView* srv, char a4, bool a5)
 			{
 				auto& rt = globals::features::raytracing;
 
-				if (rt.Active() && rt.renderingCubemap) {
-					auto& renderPassMap = *reinterpret_cast<RE::BSTHashMap<uint32_t, uint32_t>*>(&oThis->unk020);
+				std::lock_guard<std::recursive_mutex> lock(rt.shareTextureMutex);
 
-					if (auto renderPass = renderPassMap.find(technique); renderPass != renderPassMap.end()) {
-						auto& renderPasses = *reinterpret_cast<RE::BSTArray<RE::BSBatchRenderer::PassGroup>*>(&oThis->unk008);
+				rt.shareTexture = true;
 
-						auto& group = renderPasses[renderPass->second];
-						auto currentPass = group.passes[groupIndex];
+				auto* result = func(a1, path, srv, a4, a5);
 
-						if (currentPass; auto shader = currentPass->shader) {
-							if (shader->shaderType.get() != RE::BSShader::Type::Sky) {
-								auto geometry = currentPass->geometry;
+				rt.shareTexture = false;
 
-								auto culled = geometry->GetAppCulled();
-
-								geometry->CullGeometry(true);
-
-								auto result = func(oThis, technique, groupIndex, passIndexList, renderFlags);	
-
-								geometry->CullGeometry(culled);
-
-								return result;
-							}
-						}
-					}
-				}
-
-				return func(oThis, technique, groupIndex, passIndexList, renderFlags);			
+				return result;
 			};
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct BSShaderAccumulator_RenderPersistentPassList
+		struct TESObjectLAND_Attach3D
 		{
-			static void thunk(RE::BSBatchRenderer::PersistentPassList* passList, uint32_t renderFlags)
+			static void thunk(RE::TESObjectLAND* oThis, char a2)
 			{
-				func(passList, renderFlags);
+				func(oThis, a2);
+
+				logger::info("[RT] TESObjectLAND_Attach3D");
+
+				if (!oThis)
+					return;
+
+				auto* cell = oThis->parentCell;
+
+				if (!cell->IsExteriorCell())
+					return;
+
+				auto& runtimeData = cell->GetRuntimeData();
+
+				auto* exteriorData = runtimeData.cellData.exterior;
+
+				auto* loadedData = oThis->loadedData;
+
+				if (!loadedData || !loadedData->mesh)
+					return;
+
+				for (uint i = 0; i < 4; i++) {
+					auto mesh = loadedData->mesh[i];
+
+					if (!mesh)
+						continue;
+
+					globals::features::raytracing.CreateModel(oThis, std::format("Landscape_{}_{}_Quad_{}", exteriorData->cellX, exteriorData->cellY, i).c_str(), mesh);
+				}
 			};
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -1476,6 +1341,8 @@ struct Raytracing : public OverlayFeature
 		{
 			stl::write_vfunc<0x6A, Load3D<RE::TESObjectREFR>>(RE::VTABLE_TESObjectREFR[0]);
 			stl::write_vfunc<0x6B, Release3DRelatedData<RE::TESObjectREFR>>(RE::VTABLE_TESObjectREFR[0]);
+
+			//stl::write_vfunc<0x06, Load<RE::TESObjectLAND>>(RE::VTABLE_TESObjectLAND[0]);
 
 			//stl::detour_thunk<TESObjectREFR_Enable>(REL::RelocationID(19373, 19800));
 			//stl::write_vfunc<0x89, TESObjectREFR_Disable>(RE::VTABLE_TESObjectREFR[0]);
@@ -1488,16 +1355,11 @@ struct Raytracing : public OverlayFeature
 			stl::write_vfunc<0x0, Destructor<RE::BSFadeNode>>(RE::VTABLE_BSFadeNode[0]);
 			stl::write_vfunc<0x0, Destructor<RE::BSFadeNode>>(RE::VTABLE_BSLeafAnimNode[0]);
 			//stl::write_vfunc<0x0, Destructor<RE::BSFadeNode>>(RE::VTABLE_BSTreeNode[0]);
-			
+
 			stl::detour_thunk<Main_RenderWorld>(REL::RelocationID(100424, 107142));
 
-			//stl::detour_thunk<BSBatchRenderer_RenderBatches>(REL::RelocationID(100852, 107642));
-			//stl::detour_thunk<BSShaderAccumulator_RenderPersistentPassList>(REL::RelocationID(100840, 107630));
-
-			// We use these to render only the sky to the cubemaps, maybe it would be cleaner if we could override cubemap renderpass?		
+			// We use these to render only the sky to the cubemaps, maybe it would be cleaner if we could override cubemap renderpass?
 			stl::write_vfunc<0x6, BSShader_SetupGeometry<RE::BSShader::Type::Lighting>>(RE::VTABLE_BSLightingShader[0]);
-			//stl::write_vfunc<0x6, BSShader_SetupGeometry<RE::BSShader::Type::Effect>>(RE::VTABLE_BSEffectShader[0]);
-			//stl::write_vfunc<0x6, BSShader_SetupGeometry<RE::BSShader::Type::DistantTree>>(RE::VTABLE_BSDistantTreeShader[0]);
 
 			//stl::write_vfunc<0x6, BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
 
@@ -1513,11 +1375,13 @@ struct Raytracing : public OverlayFeature
 
 			stl::write_vfunc<0xA, BSShadowDirectionalLight_RenderShadowmaps>(RE::VTABLE_BSShadowDirectionalLight[0]);
 
-			stl::write_vfunc<0x29, BSShaderAccumulator_StartAccumulating>(RE::VTABLE_BSShaderAccumulator[0]);
-			stl::write_vfunc<0x2A, BSShaderAccumulator_FinishAccumulatingDispatch>(RE::VTABLE_BSShaderAccumulator[0]);
-			
-			stl::write_vfunc<0x26, BGSTextureSet_SetTexture>(RE::VTABLE_BGSTextureSet[1]);
-			stl::write_vfunc<0x26, BSShaderTextureSet_SetTexture>(RE::VTABLE_BSShaderTextureSet[0]);
+			//stl::write_vfunc<0x29, BSShaderAccumulator_StartAccumulating>(RE::VTABLE_BSShaderAccumulator[0]);
+			//stl::write_vfunc<0x2A, BSShaderAccumulator_FinishAccumulatingDispatch>(RE::VTABLE_BSShaderAccumulator[0]);
+
+			detour_thunk<CreateTextureFromDDS>(0xd2ef80);
+			detour_thunk<TESObjectLAND_Attach3D>(0x2a8b00);
+
+			logger::info("[RT] Base: [0x{:8X}]", REL::Module::get().base());
 
 			logger::info("[RT] Installed hooks");
 		}
@@ -1525,7 +1389,7 @@ struct Raytracing : public OverlayFeature
 		static void InstallD3D11Hooks(ID3D11Device* pDevice)
 		{
 			stl::detour_vfunc<5, ID3D11Device_CreateTexture2D>(pDevice);
-			stl::detour_vfunc<7, ID3D11Device_CreateShaderResourceView>(pDevice);
+			//stl::detour_vfunc<7, ID3D11Device_CreateShaderResourceView>(pDevice);
 
 			logger::info("[RT] Installed D3D11 hooks - {}", reinterpret_cast<uintptr_t>(pDevice));
 		}
@@ -1563,7 +1427,7 @@ struct Raytracing : public OverlayFeature
 		{
 			static TESLoadGameEventHandler singleton;
 
-            auto scriptEventSourceHolder = RE::ScriptEventSourceHolder::GetSingleton();
+			auto scriptEventSourceHolder = RE::ScriptEventSourceHolder::GetSingleton();
 			scriptEventSourceHolder->GetEventSource<RE::TESLoadGameEvent>()->AddEventSink(&singleton);
 
 			logger::info("Registered {}", typeid(singleton).name());
@@ -1583,6 +1447,42 @@ struct Raytracing : public OverlayFeature
 
 			auto scriptEventSourceHolder = RE::ScriptEventSourceHolder::GetSingleton();
 			scriptEventSourceHolder->GetEventSource<RE::TESObjectLoadedEvent>()->AddEventSink(&singleton);
+
+			logger::info("Registered {}", typeid(singleton).name());
+
+			return true;
+		}
+	};
+
+	class TESCellAttachDetachEventHandler : public RE::BSTEventSink<RE::TESCellAttachDetachEvent>
+	{
+	public:
+		virtual RE::BSEventNotifyControl ProcessEvent(const RE::TESCellAttachDetachEvent* a_event, RE::BSTEventSource<RE::TESCellAttachDetachEvent>*);
+
+		static bool Register()
+		{
+			static TESCellAttachDetachEventHandler singleton;
+
+			auto scriptEventSourceHolder = RE::ScriptEventSourceHolder::GetSingleton();
+			scriptEventSourceHolder->GetEventSource<RE::TESCellAttachDetachEvent>()->AddEventSink(&singleton);
+
+			logger::info("Registered {}", typeid(singleton).name());
+
+			return true;
+		}
+	};
+
+	class TESCellFullyLoadedEventHandler : public RE::BSTEventSink<RE::TESCellFullyLoadedEvent>
+	{
+	public:
+		virtual RE::BSEventNotifyControl ProcessEvent(const RE::TESCellFullyLoadedEvent* a_event, RE::BSTEventSource<RE::TESCellFullyLoadedEvent>*);
+
+		static bool Register()
+		{
+			static TESCellFullyLoadedEventHandler singleton;
+
+			auto scriptEventSourceHolder = RE::ScriptEventSourceHolder::GetSingleton();
+			scriptEventSourceHolder->GetEventSource<RE::TESCellFullyLoadedEvent>()->AddEventSink(&singleton);
 
 			logger::info("Registered {}", typeid(singleton).name());
 

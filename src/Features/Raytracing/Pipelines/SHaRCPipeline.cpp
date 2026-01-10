@@ -1,5 +1,3 @@
-#pragma once
-
 #include "SHaRCPipeline.h"
 
 void SHaRCPipeline::CreateRootSignature(ID3D12Device5* device)
@@ -11,11 +9,9 @@ void SHaRCPipeline::CreateRootSignature(ID3D12Device5* device)
 	heap->CreateTable(
 		SHaRCHeap::Table::UAV,
 		D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
-		{ 
-			{ SHaRCHeap::Slot::SHaRCHashEntries, 1 },
+		{ { SHaRCHeap::Slot::SHaRCHashEntries, 1 },
 			{ SHaRCHeap::Slot::SHaRCAccumulation, 1 },
-			{ SHaRCHeap::Slot::SHaRCResolved, 1 }
-		});
+			{ SHaRCHeap::Slot::SHaRCResolved, 1 } });
 
 	auto rootParameters = heap->GetRootParameters();
 
@@ -54,16 +50,16 @@ void SHaRCPipeline::CompileShaders(ID3D12Device5* device)
 
 void SHaRCPipeline::SetupResources(ID3D12Device5* device)
 {
-	sharcHashEntriesBuffer = eastl::make_unique<DX12::StructuredBuffer<uint64_t>>(device, MAX_CAPACITY, true);
+	sharcHashEntriesBuffer = eastl::make_unique<DX12::StructuredBuffer<uint64_t>>(device, MAX_CAPACITY, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	sharcHashEntriesBuffer->SetName(L"SHaRC HashEntries Buffer");
 
-	sharcLockBuffer = eastl::make_unique<DX12::StructuredBuffer<uint>>(device, MAX_CAPACITY, true);
+	sharcLockBuffer = eastl::make_unique<DX12::StructuredBuffer<uint>>(device, MAX_CAPACITY, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	sharcLockBuffer->SetName(L"SHaRC Lock Buffer");
 
-	sharcAccumulationBuffer = eastl::make_unique<DX12::StructuredBuffer<SharcAccumulationData>>(device, MAX_CAPACITY, true);
+	sharcAccumulationBuffer = eastl::make_unique<DX12::StructuredBuffer<SharcAccumulationData>>(device, MAX_CAPACITY, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	sharcAccumulationBuffer->SetName(L"SHaRC Accumulation Buffer");
 
-	sharcResolvedBuffer = eastl::make_unique<DX12::StructuredBuffer<SharcPackedData>>(device, MAX_CAPACITY, true);
+	sharcResolvedBuffer = eastl::make_unique<DX12::StructuredBuffer<SharcPackedData>>(device, MAX_CAPACITY, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	sharcResolvedBuffer->SetName(L"SHaRC Resolved Buffer");
 }
 
@@ -81,8 +77,18 @@ void SHaRCPipeline::CreateUAVs(CD3DX12_CPU_DESCRIPTOR_HANDLE hashEntries, CD3DX1
 	sharcResolvedBuffer->CreateUAV(resolved);
 }
 
-void SHaRCPipeline::Resolve(ID3D12GraphicsCommandList4* commandList)
+void SHaRCPipeline::Resolve(ID3D12GraphicsCommandList4* commandList, ID3D12Resource* frameBuffer)
 {
+	commandList->SetPipelineState(pipelineState.get());
+	commandList->SetComputeRootSignature(rootSignature.get());
+
+	auto* pHeap = heap->Heap();
+	commandList->SetDescriptorHeaps(1, &pHeap);
+
+	commandList->SetComputeRootDescriptorTable(0, heap->TableGPUHandle(SHaRCHeap::Table::UAV));
+
+	commandList->SetComputeRootConstantBufferView(1, frameBuffer->GetGPUVirtualAddress());
+
 	CD3DX12_RESOURCE_BARRIER uavBarrier[3] = {
 		CD3DX12_RESOURCE_BARRIER::UAV(sharcHashEntriesBuffer->resource.get()),
 		CD3DX12_RESOURCE_BARRIER::UAV(sharcAccumulationBuffer->resource.get()),

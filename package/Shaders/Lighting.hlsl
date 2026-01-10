@@ -344,7 +344,7 @@ struct PS_OUTPUT
 	float4 Masks : SV_Target6;
 #	if defined(SNOW)
 	float4 Parameters : SV_Target7;
-#	else
+#	elif defined(RT)
 	float4 GeomNormalMetalnessAO : SV_Target7;
 #	endif
 };
@@ -2307,7 +2307,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float minWetnessValue = SharedData::wetnessEffectsSettings.MinRainWetness;
 	float minWetnessAngle = saturate(max(minWetnessValue, worldNormal.z));
 #		if defined(SKYLIGHTING)
-	float wetnessOcclusion = inWorld ? pow(saturate(SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1))), 2) : 0.0;
+	float wetnessOcclusion = inWorld ? saturate(SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1))) : 0.0;
 #		else
 	float wetnessOcclusion = inWorld;
 #		endif
@@ -2355,7 +2355,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 	// Apply occlusion and distance factors
-	puddle *= wetnessOcclusion * nearFactor;
+	puddle *= saturate(wetnessOcclusion * 2.0) * nearFactor;
 
 	// Calculate wetness glossiness factors
 	float wetnessGlossinessAlbedo = max(puddle, shoreFactorAlbedo * SharedData::wetnessEffectsSettings.MaxShoreWetness);
@@ -2377,8 +2377,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 	float3 dirLightColor = Color::Light(DirLightColor.xyz);
-	
-#	if defined(RT)	
+
+#	if defined(RT)
 	float3 dirLightColorMultiplier = SharedData::InInterior ? SharedData::raytracingSettings.InteriorDirectional : 1;
 # 	else
 	float3 dirLightColorMultiplier = 1;
@@ -2743,7 +2743,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 	float3 directionalAmbientColor = max(0, mul(DirectionalAmbient, float4(ambientNormal, 1.0)));
-	
+
 #	if defined(RT)
 	directionalAmbientColor *= SharedData::raytracingSettings.Ambient;
 #	endif
@@ -3199,7 +3199,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float stochasticBlend = (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
 	psout.NormalGlossiness.w = stochasticBlend;
-	
+
 #		if defined(RT)
 #			if !defined(SNOW)
 

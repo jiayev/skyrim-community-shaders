@@ -25,9 +25,9 @@ namespace DX12
 
 		virtual ~Resource() = default;
 
-		void SetName(LPCWSTR name)
+		void SetName(LPCWSTR name) const
 		{
-			DX::ThrowIfFailed(device->SetName(name));
+			DX::ThrowIfFailed(resource->SetName(name));
 		}
 
 		virtual CD3DX12_RESOURCE_BARRIER GetTransitionBarrier(bool setState, D3D12_RESOURCE_STATES stateAfter, UINT subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES)
@@ -93,7 +93,6 @@ namespace DX12
 		D3D12_RESOURCE_STATES state;
 		D3D12_RESOURCE_DESC desc;
 	};
-
 
 	class ResourceUpload : public Resource
 	{
@@ -174,7 +173,7 @@ namespace DX12
 
 	public:
 		explicit Texture(
-			ID3D12Device5* device, 
+			ID3D12Device5* device,
 			D3D12_RESOURCE_DIMENSION dimension, UINT64 width, UINT height, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE) :
 			Resource(device, D3D12_HEAP_TYPE_DEFAULT, Desc(dimension, width, height, format, flags), D3D12_RESOURCE_STATE_COMMON) {}
 
@@ -249,7 +248,7 @@ namespace DX12
 				&uploadDesc,
 				D3D12_RESOURCE_STATE_GENERIC_READ,
 				nullptr,
-				IID_PPV_ARGS(&uploadResource)));		
+				IID_PPV_ARGS(&uploadResource)));
 		}
 
 		void Update(void const* src_data, size_t data_size, size_t begin = 0)
@@ -319,8 +318,8 @@ namespace DX12
 			return desc;
 		}
 
-		explicit StructuredBuffer(ID3D12Device5* device, const uint64_t& a_count, bool uav = false) :
-			Resource(device, D3D12_HEAP_TYPE_DEFAULT, Desc(sizeof(T) * a_count, uav), D3D12_RESOURCE_STATE_COPY_DEST), count(a_count) {}
+		explicit StructuredBuffer(ID3D12Device5* device, const uint64_t& a_count, bool uav = false, D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COPY_DEST) :
+			Resource(device, D3D12_HEAP_TYPE_DEFAULT, Desc(sizeof(T) * a_count, uav), state), count(a_count) {}
 
 		virtual ~StructuredBuffer() = default;
 
@@ -359,6 +358,7 @@ namespace DX12
 		{
 			StructuredBuffer::CreateUAV(nullptr, handle);
 		}
+
 	protected:
 		uint64_t count;
 	};
@@ -414,7 +414,7 @@ namespace DX12
 
 		void UpdateList(T const* srcData, uint64_t localCount, uint uploadIndex = 0)
 		{
-			Update(srcData, sizeof(T) * localCount, uploadIndex);
+			Update(srcData, sizeof(T) * localCount, 0, uploadIndex);
 		}
 
 		void Upload(ID3D12GraphicsCommandList4* commandList, uint uploadIndex = 0)
@@ -422,12 +422,10 @@ namespace DX12
 			D3D12_RESOURCE_STATES state = this->state;
 
 			this->TransitionBarrier(commandList, D3D12_RESOURCE_STATE_COPY_DEST);
-			commandList->CopyResource(this->resource.get(), uploadBuffer[uploadIndex].get());			
-			//commandList->CopyBufferRegion(this->resource.get(), 0, uploadBuffer.get(), 0, sizeof(T) * this->count);
+			commandList->CopyResource(this->resource.get(), uploadBuffer[uploadIndex].get());
 			this->TransitionBarrier(commandList, state);
 		}
 
-		// dataSize, offset arguments order to match Update function
 		void UploadRegion(ID3D12GraphicsCommandList4* commandList, uint64_t dataSize, uint64_t offset, uint uploadIndex = 0)
 		{
 			D3D12_RESOURCE_STATES state = this->state;
@@ -454,7 +452,7 @@ namespace DX12
 			D3D12_RESOURCE_DESC desc = {};
 			desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
 			desc.Alignment = 0;
-			desc.Width = D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT;
+			desc.Width = 4;
 			desc.Height = 1;
 			desc.DepthOrArraySize = 1;
 			desc.MipLevels = 1;

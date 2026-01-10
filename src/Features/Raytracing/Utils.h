@@ -1,9 +1,9 @@
 #pragma once
 
 #include "PCH.h"
-#include <directxpackedvector.h>
 #include "TruePBR.h"
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
+#include <directxpackedvector.h>
 
 static inline uint PackUByte4(float4 unpacked)
 {
@@ -155,24 +155,6 @@ static inline bool ShouldShareTexture(RE::BSTextureSet::Texture a_texture, bool 
 	return false;
 }
 
-template <typename T>
-static inline std::string GetFlagsString(auto value)
-{
-	using N = decltype(value);
-
-	const auto& entries = magic_enum::enum_entries<T>();
-
-	std::string flags;
-
-	for (const auto& [flag, name] : entries) {
-		if (value & static_cast<N>(flag)) {
-			flags += fmt::format("{} ", name);
-		}
-	}
-
-	return flags;
-};
-
 static inline std::string ToLower(std::string s)
 {
 	std::transform(s.begin(), s.end(), s.begin(),
@@ -211,6 +193,24 @@ static inline bool ShareableTexture(const char* path)
 	return true;
 }
 
+template <typename T>
+static inline std::string GetFlagsString(auto value)
+{
+	using N = decltype(value);
+
+	const auto& entries = magic_enum::enum_entries<T>();
+
+	std::string flags;
+
+	for (const auto& [flag, name] : entries) {
+		if (value & static_cast<N>(flag)) {
+			flags += fmt::format("{} ", name);
+		}
+	}
+
+	return flags;
+};
+
 static uint32_t DivideRoundUp(uint32_t x, uint32_t divisor)
 {
 	return (x + divisor - 1) / divisor;
@@ -219,4 +219,50 @@ static uint32_t DivideRoundUp(uint32_t x, uint32_t divisor)
 static uint32_t DivideRoundUp(uint32_t x, float divisor)
 {
 	return static_cast<uint32_t>(ceil(x / divisor));
+}
+
+static void CreateTexture2DUAV(ID3D12Device5* device, ID3D12Resource* resource, CD3DX12_CPU_DESCRIPTOR_HANDLE handle)
+{
+	auto desc = resource->GetDesc();
+
+	D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+	uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+	uavDesc.Format = desc.Format;
+
+	device->CreateUnorderedAccessView(resource, nullptr, &uavDesc, handle);
+}
+
+static void CreateTexture2DSRV(ID3D12Device5* device, ID3D12Resource* resource, CD3DX12_CPU_DESCRIPTOR_HANDLE handle)
+{
+	auto desc = resource->GetDesc();
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srvDesc.Format = desc.Format;
+	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Texture2D.MostDetailedMip = 0;
+	srvDesc.Texture2D.MipLevels = desc.MipLevels;
+	srvDesc.Texture2D.PlaneSlice = 0;
+	srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+	device->CreateShaderResourceView(resource, &srvDesc, handle);
+}
+
+static inline float ShininessToRoughness(float shininess)
+{
+	// make sure shininess within valid range (0 - 1023), otherwise set to 1.0f
+	if (shininess <= 0.0f || shininess > 1023.0f) {
+		return 1.0f;
+	}
+	return std::pow(2.0f / (shininess + 2.0f), 0.25f);
+}
+
+template <class T>
+static void detour_thunk(size_t offset)
+{
+	T::func = REL::Module::get().base() + offset;
+	DetourTransactionBegin();
+	DetourUpdateThread(GetCurrentThread());
+	DetourAttach(reinterpret_cast<PVOID*>(&T::func), reinterpret_cast<PVOID>(T::thunk));
+	DetourTransactionCommit();
 }
