@@ -13,6 +13,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	enabled,
 	enableAllExteriorCells,
 	overrideDirLight,
+	halfResApShadow,
 	tonemapper,
 	vanillaMix,
 	trMix,
@@ -231,6 +232,8 @@ void PhysicalSky::SettingsAtmosphere()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Remove light absorbed by air (Aerial Perspective) from the scene.");
 
+	ImGui::Checkbox("Half Resolution Cloud Shadow", &settings.halfResApShadow);
+
 	ImGui::SliderFloat2("Cloud Shadow Remap", &settings.cloudShadowRemapRange.x, 0.f, 1.f, "%.2f");
 
 	ImGui::SeparatorText("Air Molecules (Rayleigh)");
@@ -419,8 +422,8 @@ void PhysicalSky::SetupResources()
 		texDesc.Format = DXGI_FORMAT_R8_UNORM;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		texDesc.MipLevels = 1;
-		texDesc.Width /= 2;
-		texDesc.Height /= 2;
+		// texDesc.Width /= 2;
+		// texDesc.Height /= 2;
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
 			.Format = texDesc.Format,
@@ -463,7 +466,8 @@ void PhysicalSky::CompileShaders()
 		{ &csMsLutGen, "LutGen.cs.hlsl", { { "LUTGEN", "1" } } },
 		{ &csSvLutGen, "LutGen.cs.hlsl", { { "LUTGEN", "2" } } },
 		{ &csApLutGen, "LutGen.cs.hlsl", { { "LUTGEN", "3" } } },
-		{ &csShadowAccum, "ShadowAccum.cs.hlsl", {} }
+		{ &csShadowAccum, "ShadowAccum.cs.hlsl", {} },
+		{ &csShadowAccumHalfRes, "ShadowAccum.cs.hlsl", { { "HALF_RES", "" } } }
 	};
 
 	for (auto& info : shaderInfos) {
@@ -475,7 +479,7 @@ void PhysicalSky::CompileShaders()
 
 bool PhysicalSky::ShadersOK()
 {
-	return csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum;
+	return csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum && csShadowAccumHalfRes;
 }
 
 void PhysicalSky::Reset()
@@ -551,6 +555,7 @@ void PhysicalSky::Reset()
 		.aerosolFalloff = settings.aerosolFalloff * Util::Units::GAME_UNIT_TO_KM,
 		.aerosolPhaseG = settings.aerosolPhaseG,
 		.aerosolScatter = settings.aerosolScatter * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.halfResApShadow = settings.halfResApShadow ? 1u : 0u,
 		.aerosolAbsorption = settings.aerosolAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
 		.rayleighFalloff = settings.rayleighFalloff * Util::Units::GAME_UNIT_TO_KM,
 		.rayleighScatter = settings.rayleighScatter * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
@@ -694,7 +699,7 @@ void PhysicalSky::AccumShadow()
 		context->CSSetSamplers(0, 1, &sampler);
 		context->CSSetShaderResources(0, (int)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-		context->CSSetShader(csShadowAccum.get(), nullptr, 0);
+		context->CSSetShader(settings.halfResApShadow ? csShadowAccumHalfRes.get() : csShadowAccum.get(), nullptr, 0);
 		context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
 
 		/* ---- RESTORE ---- */

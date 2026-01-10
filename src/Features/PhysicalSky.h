@@ -79,6 +79,7 @@ struct PhysicalSky final : public Feature
 		bool enabled = true;
 		bool enableAllExteriorCells = false;
 		bool overrideDirLight = false;
+		bool halfResApShadow = false;
 		int tonemapper = 2;
 		float vanillaMix = 0;
 		float trMix = 0;
@@ -168,7 +169,7 @@ struct PhysicalSky final : public Feature
 		float aerosolFalloff;
 		float aerosolPhaseG;  //
 		float3 aerosolScatter;
-		float _pad5;  //
+		uint halfResApShadow;  //
 		float3 aerosolAbsorption;
 
 		float rayleighFalloff;
@@ -201,6 +202,7 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csSvLutGen = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csApLutGen = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csShadowAccum = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csShadowAccumHalfRes = nullptr;
 
 	ID3D11SamplerState* originalPSSamplers[2] = { nullptr, nullptr };
 
