@@ -39,6 +39,7 @@ public:
 		Initialised = (1 << 8),
 		Disabled = (1 << 9),
 		InverseSquare = (1 << 10),
+		Linear = (1 << 11),
 	};
 
 	struct PositionOpt
@@ -50,7 +51,7 @@ public:
 	struct alignas(16) LightData
 	{
 		float3 color;
-		float fade;
+		float fade = 1.0f;
 		float radius;
 		float invRadius;
 		float fadeZone;
