@@ -66,6 +66,9 @@
 
 using namespace magic_enum::bitwise_operators;
 
+#define STATIC_ASSERT_ENUM_COUNT(EnumType, Array) \
+	static_assert(_countof(Array) == magic_enum::enum_count<EnumType>(), "Array size must match enum count");
+
 struct Raytracing : public OverlayFeature
 {
 	// DX12 will not like if we don't respect these numbers and try to write over the resource end
@@ -170,25 +173,6 @@ struct Raytracing : public OverlayFeature
 	};
 	using ShadowsHeap = Heap<ShadowsHeapDef::Table, ShadowsHeapDef::Slot>;
 
-	struct SVGFHeapDef
-	{
-		enum class Table
-		{
-			UAV,
-			SRV
-		};
-
-		enum class Slot
-		{
-			ShadowMask,
-			Depth,
-			TLAS,
-			NumDescriptors,
-			None
-		};
-	};
-	using SVGFHeap = Heap<SVGFHeapDef::Table, SVGFHeapDef::Slot>;
-
 	////////////////////////////////////////////////// Boilerplate
 	// Metadata
 	virtual inline std::string GetName() override { return "Raytracing"; }
@@ -220,10 +204,12 @@ struct Raytracing : public OverlayFeature
 
 	void DrawSHaRCSettings();
 	void DrawSVGFSettings();
+	void DrawSVGFInternalSettings(const char* name, SVGFPipeline::Settings& svgfSettings);
 #ifdef DLSS_RR
 	void DrawDLSSRRSettings();
 #endif
 	void DrawDenoiserSettings();
+	void DrawResolutionSettings();
 	void DrawLightingSettings();
 	void DrawLightSettings();
 
@@ -409,7 +395,7 @@ struct Raytracing : public OverlayFeature
 		"Diffuse only, no specular.",
 		"Diffuse and Specular with BRDF."
 	};
-	static_assert(_countof(LightEvalModeTooltips) == magic_enum::enum_count<LightEvalMode>());
+	STATIC_ASSERT_ENUM_COUNT(LightEvalMode, LightEvalModeTooltips);
 
 	enum struct LightingMode : int32_t
 	{
@@ -421,7 +407,7 @@ struct Raytracing : public OverlayFeature
 		"Diffuse only, no reflections.",
 		"Physically Based Rendering mode with diffuse and reflections."
 	};
-	static_assert(_countof(LightingModeTooltips) == magic_enum::enum_count<LightingMode>());
+	STATIC_ASSERT_ENUM_COUNT(LightingMode, LightingModeTooltips);
 
 	enum struct TraceMode : int32_t
 	{
@@ -433,7 +419,15 @@ struct Raytracing : public OverlayFeature
 		"Reference mode with no cache.",
 		"Enables Spatially Hashed Radiance Cache, a technique aimed at improving signal quality and performance."
 	};
-	static_assert(_countof(TraceModeTooltips) == magic_enum::enum_count<TraceMode>());
+	STATIC_ASSERT_ENUM_COUNT(TraceMode, TraceModeTooltips);
+
+	enum struct Resolution : int32_t
+	{
+		Full,
+		Half,
+		Quarter,
+		Eighth
+	};
 
 #ifdef DLSS_RR
 	static constexpr Denoiser DefaultDenoiser = Denoiser::DLSSRR;
@@ -490,6 +484,7 @@ struct Raytracing : public OverlayFeature
 		AdvancedSettings AdvancedSettings;
 		TraceMode TraceMode = TraceMode::SHaRC;
 		Denoiser Denoiser = DefaultDenoiser;
+		Resolution Resolution = Resolution::Full;
 		int Bounces = 2;
 		int SamplesPerPixel = 1;
 		float2 Roughness = { 0.0f, 1.0f };
@@ -508,7 +503,8 @@ struct Raytracing : public OverlayFeature
 #ifdef DLSS_RR
 		DLSSRRSettings DLSSRR;
 #endif
-		SVGFPipeline::Settings SVGF;
+		SVGFPipeline::Settings SVGFDiffuse;
+		SVGFPipeline::Settings SVGFSpecular;
 		bool PerformanceOverlay = false;
 		std::string Defines = "";
 		DebugOutput DebugOutput = DebugOutput::None;
@@ -847,7 +843,7 @@ struct Raytracing : public OverlayFeature
 	eastl::unique_ptr<DX12::Texture2D> outputTexture = nullptr;
 	eastl::unique_ptr<DX12::Texture2D> diffuseAlbedoPathTracingTexture = nullptr;
 	eastl::unique_ptr<DX12::Texture2D> normalRoughnessPathTracingTexture = nullptr;
-	eastl::unique_ptr<DX12::Texture2D> specularAlbedoTexture = nullptr;
+	eastl::unique_ptr<WrappedResource> specularAlbedoTexture = nullptr;
 	eastl::unique_ptr<DX12::Texture2D> specularHitDistanceTexture = nullptr;
 
 	eastl::unique_ptr<WrappedResource> depthTexture = nullptr;
@@ -1120,7 +1116,7 @@ struct Raytracing : public OverlayFeature
 					if (flags & MarkerFlags::MapMarker || flags & MarkerFlags::HeadingMarker)
 						return result;
 
-					//logger::info("[RT] Load3D - Name: {}", typeid(*baseObject).name());
+					logger::info("[RT] Load3D - Name: {} - FullLodRef: {}", typeid(*baseObject).name(), oThis->GetFullLODRef());
 
 					/*RE::FormID id = baseObject->GetFormID();
 					logger::info("[RT] Load3DA - Name: {}, Flags [0x{:8X}]: {}", typeid(*baseObject).name(), flags, GetFlagsString<RE::TESObjectREFR::RecordFlags::RecordFlag>(flags));
@@ -1279,7 +1275,7 @@ struct Raytracing : public OverlayFeature
 			{
 				func(oThis, a2);
 
-				logger::info("[RT] TESObjectLAND_Attach3D");
+				logger::info("[RT] TESObjectLAND_Attach3D - IsLODLand: {}", oThis->QIsLODLandObject());
 
 				if (!oThis)
 					return;

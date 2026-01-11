@@ -24,10 +24,11 @@
 
 #include <imgui_stdlib.h>
 
+// WhiteFurnace here just so 'else' RAYTRACING_EXTRA_FIELDS is not empty
 #ifdef DLSS_RR
-#	define RAYTRACING_EXTRA_FIELDS , DLSSRR
+#	define RAYTRACING_EXTRA_FIELDS WhiteFurnace, DLSSRR
 #else
-#	define RAYTRACING_EXTRA_FIELDS
+#	define RAYTRACING_EXTRA_FIELDS WhiteFurnace
 #endif
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -37,6 +38,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdvancedSettings,
 	TraceMode,
 	Denoiser,
+	Resolution,
 	Bounces,
 	SamplesPerPixel,
 	Roughness,
@@ -58,8 +60,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnablePIXCapture,
 	PIXCaptureLocation,
 	EnableDebugDevice,
-	SHaRC
-		RAYTRACING_EXTRA_FIELDS)
+	SHaRC,
+	SVGFDiffuse,
+	SVGFSpecular,
+	RAYTRACING_EXTRA_FIELDS)
 
 ////////////////////////////////////////////////////////////////////////////////////
 
@@ -204,6 +208,7 @@ void Raytracing::DrawSHaRCSettings()
 		ImGui::Checkbox("Antifirefly Filter", &sharcSettings.AntifireflyFilter);
 	}
 }
+//SVGFDiffuse
 
 void Raytracing::DrawSVGFSettings()
 {
@@ -212,9 +217,25 @@ void Raytracing::DrawSVGFSettings()
 
 	// Shameless word by word copy of jiaye's settings
 	if (ImGui::CollapsingHeader("SVGF")) {
-		auto& svgfSettings = settings.SVGF;
+		if (ImGui::BeginTabBar("svgf_tabbar")) {
+			DrawSVGFInternalSettings("Diffuse", settings.SVGFDiffuse);
+			DrawSVGFInternalSettings("Specular", settings.SVGFSpecular);
 
-		ImGui::SliderInt("Max Accumulated Frames", (int*)&svgfSettings.MaxAccumulatedFrames, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::EndTabBar();
+		}
+	}
+}
+
+void Raytracing::DrawSVGFInternalSettings(const char* name, SVGFPipeline::Settings& svgfSettings)
+{
+	if (ImGui::BeginTabItem(name)) {
+		ImGui::SliderInt("Alpha Frames", (int*)&svgfSettings.AlphaFrames, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Temporal feedback frames for color.");
+
+		ImGui::SliderInt("Moments Alpha Frames", (int*)&svgfSettings.MomentsAlphaFrames, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Temporal feedback frames for moments.");
 
 		ImGui::SliderInt("À Trous Iterations", (int*)&svgfSettings.AtrousIterations, 1, 5, "%d", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -227,6 +248,28 @@ void Raytracing::DrawSVGFSettings()
 		ImGui::SliderFloat("Normal Phi", &svgfSettings.NormalPhi, 1.0f, 1024.0f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Controls sensitivity to normal differences in the À Trous filter. Higher values preserve more detail but may retain noise.");
+
+		ImGui::SliderFloat("Depth Phi", &svgfSettings.DepthPhi, 0.001f, 0.2f, "%.3f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Controls sensitivity to depth differences in the À Trous filter. Higher values preserve more detail but may retain noise.");
+
+		ImGui::SliderFloat("Depth Threshold", &svgfSettings.DepthThreshold, 0.0f, 1.0f, "%.3f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Depth rejection difference. Lower values are more agressive.");
+
+		ImGui::SliderInt("Normal Threshold", (int*)&svgfSettings.NormalThreshold, 0, 90, "%dº", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Normal rejection difference in dregrees. Lower values are more agressive.");
+
+		ImGui::SliderInt("History Threshold", (int*)&svgfSettings.HistoryThreshold, 0, 8, "%d", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Minimal accumulated frames before applying variance filter. Lower is faster but has less filtering.");
+
+		ImGui::Checkbox("Variance", &svgfSettings.Variance);
+
+		ImGui::Checkbox("Spatial", &svgfSettings.Spatial);
+
+		ImGui::EndTabItem();
 	}
 }
 
@@ -251,6 +294,28 @@ void Raytracing::DrawDenoiserSettings()
 #ifdef DLSS_RR
 	DrawDLSSRRSettings();
 #endif
+}
+//ResolutionMode
+
+void Raytracing::DrawResolutionSettings()
+{
+	bool disabled = false;
+
+	// DLSS RR manages RT resolution itself
+#ifdef DLSS_RR
+	if (settings.Denoiser == Denoiser::DLSSRR) {
+		ImGui::TextColored({ 1.0f, 0.0f, 0.0f, 1.0f }, "*DLSS Ray Reconstruction manages resolution via the 'Quality Mode' setting*");
+		disabled |= true;
+	}
+#endif
+
+	if (disabled)
+		ImGui::BeginDisabled();
+
+	DrawEnumRadio("Resolution", settings.Resolution, "Controls the Ray Tracing resolution. Lower resolutions cast fewer rays, which improves performance but greatly reduces detail and clarity.");
+
+	if (disabled)
+		ImGui::EndDisabled();
 }
 
 void Raytracing::DrawLightingSettings()
@@ -312,6 +377,8 @@ void Raytracing::DrawGeneralSettings()
 
 	if (DrawEnumRadio("Denoiser", settings.Denoiser))
 		recompileReason |= RecompileReason::General;
+
+	DrawResolutionSettings();
 
 	// Bounces
 	{
@@ -582,7 +649,31 @@ void Raytracing::SetupOutputRT()
 	createRT(normalRoughnessPathTracingTexture, DXGI_FORMAT_R16G16B16A16_SNORM, GIHeap::Slot::NormalRoughnessPathTracing, L"Normal Roughness Path Tracing texture");
 
 	// u3 - Reflectance texture
-	createRT(specularAlbedoTexture, DXGI_FORMAT_R16G16B16A16_FLOAT, GIHeap::Slot::Reflectance, L"Reflectance texture");
+	{
+		D3D11_TEXTURE2D_DESC texDesc{};
+		texDesc.Width = renderSize.x;
+		texDesc.Height = renderSize.y;
+		texDesc.MipLevels = 1;
+		texDesc.ArraySize = 1;
+		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		texDesc.SampleDesc.Count = 1;
+		texDesc.SampleDesc.Quality = 0;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+
+		specularAlbedoTexture = eastl::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
+		DX::ThrowIfFailed(specularAlbedoTexture->resource->SetName(L"Specular Albedo texture"));
+
+		D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+		uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+		uavDesc.Format = texDesc.Format;
+
+		d3d12Device->CreateUnorderedAccessView(specularAlbedoTexture->resource.get(), nullptr, &uavDesc, giHeap->CPUHandle(GIHeap::Slot::Reflectance));
+
+		const auto& barrier = CD3DX12_RESOURCE_BARRIER::Transition(specularAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		commandList->ResourceBarrier(1, &barrier);
+
+		//createRT(specularAlbedoTexture, DXGI_FORMAT_R16G16B16A16_FLOAT, GIHeap::Slot::Reflectance, L"Reflectance texture");
+	}
 
 	// u4 - Specular Hit Distance texture
 	createRT(specularHitDistanceTexture, DXGI_FORMAT_R32_FLOAT, GIHeap::Slot::SpecularHitDist, L"Specular Hit Distance texture");
@@ -1367,31 +1458,34 @@ void Raytracing::CopyDepth()
 {
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
-	auto& tb = globals::features::terrainBlending;
 
-	if (tb.loaded) {
-		context->CopyResource(depthTexture->resource11, tb.blendedDepthTexture->resource.get());
-	} else {
-		auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];  // kMAIN kPOST_ZPREPASS_COPY
+	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];  // kMAIN kPOST_ZPREPASS_COPY
 
-		context->CSSetShader(copyDepthCS.get(), nullptr, 0);
+	context->CSSetShader(copyDepthCS.get(), nullptr, 0);
 
-		//auto* renderSizeCB = renderResCB->CB();
-		//context->CSSetConstantBuffers(0, 1, &renderSizeCB);
+	//auto* renderSizeCB = renderResCB->CB();
+	//context->CSSetConstantBuffers(0, 1, &renderSizeCB);
 
-		context->CSSetShaderResources(0, 1, &depth.depthSRV);
+	auto* cb = globals::state->sharedDataCB->CB();
+	context->CSSetConstantBuffers(5, 1, &cb);
 
-		//auto sampler = samplerState.get();
-		//context->CSSetSamplers(0, 1, &sampler);
+	context->CSSetShaderResources(0, 1, &depth.depthSRV);
 
-		context->CSSetUnorderedAccessViews(0, 1, &depthTexture->uav, nullptr);
+	//auto sampler = samplerState.get();
+	//context->CSSetSamplers(0, 1, &sampler);
 
-		uint2 screenSize = GetScreenSize();
-		uint2 dispatchCount = { DivideRoundUp(screenSize.x, 8u), DivideRoundUp(screenSize.y, 8u) };
-		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+	eastl::array<ID3D11UnorderedAccessView*, 2> uavs = {
+		depthTexture->uav,
+		svgfDenoiser->depthLinearTexture->uav.get()
+	};
+	context->CSSetUnorderedAccessViews(0, (UINT)uavs.size(), uavs.data(), nullptr);
 
-		//context->CSSetUnorderedAccessViews(0, 1, nullptr, nullptr);
-	}
+	uint2 screenSize = GetScreenSize();
+	uint2 dispatchCount = { DivideRoundUp(screenSize.x, 8u), DivideRoundUp(screenSize.y, 8u) };
+	context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+
+	uavs.fill(nullptr);
+	context->CSSetUnorderedAccessViews(0, (UINT)uavs.size(), uavs.data(), nullptr);
 }
 
 void Raytracing::ConvertTextures() const
@@ -2587,8 +2681,6 @@ uint2 Raytracing::GetRenderSize()
 {
 	auto renderSizeOut = GetScreenSize();
 
-	// This is borked because all RTs need to share the same size
-
 #if defined(DLSS_RR)
 	if (settings.Denoiser == Denoiser::DLSSRR) {
 		GetDLSSRROptimal();
@@ -2596,8 +2688,27 @@ uint2 Raytracing::GetRenderSize()
 		if (settings.DLSSRR.QualityMode != DLSSRRQuality::NativeRes) {
 			renderSizeOut = { optimalSettings.optimalRenderWidth, optimalSettings.optimalRenderHeight };
 		}
-	}
+	} else
 #endif
+	{
+		uint resolutionFactor = 1;
+
+		switch (settings.Resolution) {
+		case (Resolution::Half):
+			resolutionFactor = 2;
+			break;
+		case (Resolution::Quarter):
+			resolutionFactor = 4;
+			break;
+		case (Resolution::Eighth):
+			resolutionFactor = 8;
+			break;
+		default:
+			break;
+		}
+
+		renderSizeOut = { renderSizeOut.x / resolutionFactor, renderSizeOut.y / resolutionFactor };
+	}
 
 	return renderSizeOut;
 }
@@ -2886,9 +2997,13 @@ void Raytracing::DrawRTGI()
 				outputTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
 			} else if (settings.DebugOutput == DebugOutput::Reflectance) {
-				specularAlbedoTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+				const auto& barrierCopy = CD3DX12_RESOURCE_BARRIER::Transition(specularAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+				commandList->ResourceBarrier(1, &barrierCopy);
+
 				commandList->CopyResource(mainTexture->resource.get(), specularAlbedoTexture->resource.get());
-				specularAlbedoTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+				const auto& barrierUAV = CD3DX12_RESOURCE_BARRIER::Transition(specularAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+				commandList->ResourceBarrier(1, &barrierUAV);
 			} else if (settings.DebugOutput == DebugOutput::SpecularHitDistance) {
 				specularHitDistanceTexture->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
 				commandList->CopyResource(mainTexture->resource.get(), specularHitDistanceTexture->resource.get());
@@ -2977,7 +3092,11 @@ void Raytracing::DrawRTGI()
 			auto* frameBufferCB = *globals::game::perFrame.get();
 			d3d11Context->CSSetConstantBuffers(12, 1, &frameBufferCB);
 
-			svgfDenoiser->Denoise(d3d11Context.get(), renderSize, settings.SVGF, normalRoughnessTexture.get(), mainTexture.get());
+			// Diffuse
+			svgfDenoiser->Denoise(d3d11Context.get(), renderSize, settings.SVGFDiffuse, normalRoughnessTexture.get(), mainTexture.get(), true);
+
+			// Specular
+			svgfDenoiser->Denoise(d3d11Context.get(), renderSize, settings.SVGFSpecular, normalRoughnessTexture.get(), specularAlbedoTexture.get(), false);
 		}
 	}
 
@@ -2987,10 +3106,11 @@ void Raytracing::DrawRTGI()
 
 		d3d11Context->CopyResource(main.textureCopy, main.texture);
 
-		eastl::array<ID3D11ShaderResourceView*, 3> srvs = {
+		eastl::array<ID3D11ShaderResourceView*, 4> srvs = {
 			main.SRVCopy,
 			diffuseAlbedoTexture->srv,
-			mainTexture->srv
+			mainTexture->srv,
+			specularAlbedoTexture->srv
 		};
 		d3d11Context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 
@@ -3903,6 +4023,7 @@ void Raytracing::CompileCompositeShader()
 	if (!settings.PathTracing && settings.Denoiser == Denoiser::SVGF) {
 		defines.emplace_back("COMPOSITE", "");
 		defines.emplace_back("DIFFUSE", "");
+		defines.emplace_back("SPECULAR", "");
 	}
 
 	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\CompositeCS.hlsl", defines, "cs_5_0")); rawPtr)
@@ -3968,7 +4089,7 @@ RE::BSEventNotifyControl Raytracing::TESObjectLoadedEventHandler::ProcessEvent(c
 		return RE::BSEventNotifyControl::kContinue;
 	}
 
-	//logger::info("[RT] TESObjectLoadedEvent - Name: {}", typeid(*eventRef).name());
+	logger::info("[RT] TESObjectLoadedEvent - Name: {} - FullLodRef: {}", typeid(*eventRef).name(), eventRef->GetFullLODRef());
 
 	//if (eventRef->formType.none(RE::FormType::NPC, RE::FormType::LeveledNPC, RE::FormType::ActorCharacter))
 	if (eventRef->formType.none(RE::FormType::ActorCharacter))
