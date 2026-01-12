@@ -201,7 +201,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #		else
 	if (depth < 0.999999) {
-		composedColor.xyz = FogNearColor.w * lerp(composedColor.xyz, fogColor, fogFactor);
+		composedColor.xyz = FogNearColor.w * lerp(composedColor.xyz, fogColor, Color::FogAlpha(fogFactor));
 	}
 #		endif
 #	endif
