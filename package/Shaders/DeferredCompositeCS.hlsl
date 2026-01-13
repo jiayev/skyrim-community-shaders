@@ -189,7 +189,7 @@ Texture2D<float4> SSRTexture : register(t16);
 
 		float3 finalIrradiance = 0;
 
-        float directionalAmbientColorSpecular = Color::RGBToLuminance(max(0, mul(SharedData::DirectionalAmbient, float4(R, 1.0)))) * Color::ReflectionNormalisationScale;
+        float directionalAmbientColorSpecular = Color::RGBToLuminance(Color::Ambient(max(0, mul(SharedData::DirectionalAmbient, float4(R, 1.0))))) * Color::ReflectionNormalisationScale;
 
 #	if defined(INTERIOR)
 		float3 specularIrradiance = EnvTexture.SampleLevel(LinearSampler, R, level);
