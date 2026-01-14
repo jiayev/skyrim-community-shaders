@@ -185,6 +185,11 @@ const static float DepthOffsets[16] = {
 #		include "PhysicalSky/Common.hlsli"
 #	endif
 
+#	if defined(EXP_HEIGHT_FOG)
+#		define SampColorSampler SampShadowMaskSampler
+#		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
+#	endif
+
 #	define LinearSampler SampDiffuse
 
 #	include "Common/ShadowSampling.hlsli"
@@ -248,6 +253,12 @@ PS_OUTPUT main(PS_INPUT input)
 		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
 #			endif
 
+#			if defined(EXP_HEIGHT_FOG)
+	if (SharedData::exponentialHeightFogSettings.enabled) {
+		diffuseColor *= ExponentialHeightFog::GetSunlightFogAttenuation(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
+	}
+#			endif
+
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = -normalize(cross(ddx, ddy));
@@ -300,6 +311,12 @@ PS_OUTPUT main(PS_INPUT input)
 #			if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
 		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+#			endif
+
+#			if defined(EXP_HEIGHT_FOG)
+	if (SharedData::exponentialHeightFogSettings.enabled) {
+		diffuseColor *= ExponentialHeightFog::GetSunlightFogAttenuation(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
+	}
 #			endif
 
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);

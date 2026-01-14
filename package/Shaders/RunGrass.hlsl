@@ -457,6 +457,10 @@ cbuffer AlphaTestRefCB : register(b11)
 #		include "PseudoSunBounce/sunbounce.hlsli"
 #	endif
 
+#	if defined(EXP_HEIGHT_FOG)
+#		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
+#	endif
+
 #	define LinearSampler SampBaseSampler
 
 #	include "Common/ShadowSampling.hlsli"
@@ -600,6 +604,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
 		dirLightColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+#			endif
+
+#			if defined(EXP_HEIGHT_FOG)
+	if (SharedData::exponentialHeightFogSettings.enabled) {
+		dirLightColor *= ExponentialHeightFog::GetSunlightFogAttenuation(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
+	}
 #			endif
 
 	float dirLightAngle = dot(normal, SharedData::DirLightDirection.xyz);
