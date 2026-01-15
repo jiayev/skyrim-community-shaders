@@ -197,7 +197,7 @@ void PhysicalSky::SettingsCelestials()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(lightColorHint);
 		ImGui::Checkbox("Procedural Sun", &settings.proceduralSun);
-		ImGui::SliderAngle("Sun Disk Angular Radius", &settings.sunDiskRad, 0.f, 5.f, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderAngle("Sun Disk Angular Radius", &settings.sunDiskRad, 0.f, 10.f, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Real world sun disk angular radius is about 0.27 degrees.");
 		ImGui::PopID();
