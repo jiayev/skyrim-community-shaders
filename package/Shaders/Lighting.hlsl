@@ -2534,7 +2534,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(WETNESS_EFFECTS)
 	// Initialize wetness parameters
 	float wetness = 0.0;
-	float3 wetnessNormal = worldNormal;
+	float3 wetnessNormal = vertexNormal.xyz;
 
 	// Calculate shore wetness factors
 	float wetnessDistToWater = abs(input.WorldPosition.z - waterHeight);
@@ -2543,7 +2543,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	// Calculate wetness angle and occlusion
 	float minWetnessValue = SharedData::wetnessEffectsSettings.MinRainWetness;
-	float minWetnessAngle = saturate(max(minWetnessValue, worldNormal.z));
+	float minWetnessAngle = saturate(max(minWetnessValue, vertexNormal.z));
 #		if defined(SKYLIGHTING)
 	float wetnessOcclusion = inWorld ? saturate(SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1))) : 0.0;
 #		else
@@ -2565,7 +2565,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		else
 		float3 ripplePosition = !FrameBuffer::FrameParams.y ? input.ModelPosition.xyz : input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
 #		endif
-		raindropInfo = WetnessEffects::GetRainDrops(ripplePosition, SharedData::wetnessEffectsSettings.Time, worldNormal, flatnessAmount);
+		raindropInfo = WetnessEffects::GetRainDrops(ripplePosition, SharedData::wetnessEffectsSettings.Time, wetnessNormal, flatnessAmount);
 	}
 
 	// Calculate different wetness types
@@ -2607,6 +2607,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	// Apply occlusion and distance factors
 	puddle *= saturate(wetnessOcclusion * 2.0) * nearFactor;
+	wetnessNormal = lerp(worldNormal.xyz, wetnessNormal, saturate(puddle));
 
 	// Calculate wetness glossiness factors
 	float wetnessGlossinessAlbedo = max(puddle, shoreFactorAlbedo * SharedData::wetnessEffectsSettings.MaxShoreWetness);
@@ -3517,7 +3518,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	indirectLobeWeights.specular += wetnessReflectance;
 	if (waterRoughnessSpecular < 1) {
 		screenSpaceNormal = lerp(screenSpaceNormal, normalize(FrameBuffer::WorldToView(wetnessNormal, false, eyeIndex)), saturate(wetnessGlossinessSpecular));
-		material.Roughness = lerp(material.Roughness, waterRoughnessSpecular, wetnessReflectance.x);
+		material.Roughness = lerp(material.Roughness, waterRoughnessSpecular, wetnessGlossinessSpecular);
 	}
 #		endif
 
