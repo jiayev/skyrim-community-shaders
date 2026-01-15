@@ -31,11 +31,14 @@
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
+#include "Features/WeatherEditor.h"
 #include "Features/WeatherPicker.h"
 #include "Features/WetnessEffects.h"
 #include "Menu.h"
 #include "SettingsOverrideManager.h"
 #include "Utils/Format.h"
+#include "WeatherManager.h"
+#include "WeatherVariableRegistry.h"
 
 #include "State.h"
 
