@@ -20,8 +20,8 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/HairSpecular.h"
-#include "Features/WetnessEffects.h"
 #include "Features/LinearLighting.h"
+#include "Features/WetnessEffects.h"
 
 #include <imgui_stdlib.h>
 
@@ -504,7 +504,6 @@ void Raytracing::DrawDebugSettings()
 
 	ImGui::PushID("DebugSettings");
 
-
 	if (ImGui::TreeNodeEx("Skinning and DynamicTriShapes", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Disable Updates", &debugDisableTriShapesUpdate);
 
@@ -515,9 +514,8 @@ void Raytracing::DrawDebugSettings()
 				SkinningPipeline::MIN_THREAD_GROUP_SIZE, SkinningPipeline::MAX_THREAD_GROUP_SIZE, "%d", ImGuiSliderFlags_AlwaysClamp))
 			skinningPipeline->recompile = true;
 
+		ImGui::Checkbox("Dispatch", &skinningPipeline->settings.Dispatch);
 
-		ImGui::Checkbox("Dispatch", &skinningPipeline->settings.Dispatch);	
-		
 		ImGui::Checkbox("Update BLAS", &skinningPipeline->settings.UpdateBLAS);
 
 		ImGui::TreePop();
@@ -2209,14 +2207,17 @@ void Raytracing::UpdateInstances()
 	const auto& cullingSettings = settings.AdvancedSettings.Culling;
 
 	RE::NiCamera* camera = nullptr;
+	RE::NiPoint3 position;
 
 	if (cullingSettings.Mode == CullingMode::Smart) {
 		auto* tesCamera = RE::PlayerCamera::GetSingleton()->currentState->camera;
 
 		camera = FindNiCamera(tesCamera->cameraRoot.get());
+		position = camera->world.translate;
 	}
 
-	auto eye = Util::GetAverageEyePosition();
+	//auto eye = Util::GetAverageEyePosition();
+	//float4 cameraPos = globals::game::frameBufferCached.GetCameraPosAdjust();
 
 	uint32_t totalShapeCount = 0;
 
@@ -2241,7 +2242,7 @@ void Raytracing::UpdateInstances()
 			auto worldBound = pNiNode->worldBound;
 
 			float worldBoundRadius = Util::Units::GameUnitsToMeters(worldBound.radius);
-			float distanceToBounds = Util::Units::GameUnitsToMeters(eye.GetDistance(worldBound.center)) - worldBoundRadius;
+			float distanceToBounds = Util::Units::GameUnitsToMeters(position.GetDistance(worldBound.center)) - worldBoundRadius;
 
 			auto shaderTypes = model->GetShaderTypes();
 			auto features = model->GetFeatures();
@@ -2255,7 +2256,7 @@ void Raytracing::UpdateInstances()
 				frustumCull |= frustumCullable && (worldBoundRadius < cullingSettings.MinRadius);
 			}
 
-			//float minDistance = cullingSettings.MinDistance;			
+			//float minDistance = cullingSettings.MinDistance;
 
 			// Culls all models outside of the player's view, must satisfy condition
 			if (cullingSettings.DistanceMode == CullingDistanceMode::Minimal) {
