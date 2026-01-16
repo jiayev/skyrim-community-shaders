@@ -857,7 +857,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence.xxx);
 
 	float effectNormalization = 1.0;
-#	if defined(IBL) && !defined(LIGHTING) && !defined(DEFERRED)
+#	if defined(IBL) && !defined(LIGHTING) && !defined(DEFERRED) && !defined(BLOOD)
 	if (SharedData::iblSettings.EnableDiffuseIBL && SharedData::iblSettings.EffectNormalization && (!SharedData::InInterior || SharedData::iblSettings.EnableInterior) && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
 		float directionalAmbientColorLuminance = Color::RGBToLuminance(
             max(0, mul(SharedData::DirectionalAmbient, float4(0, 0, 0, 1.0)))
