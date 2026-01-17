@@ -11,11 +11,14 @@
 
 struct Instance
 {
+	// What model this instance references
 	eastl::string filename;
-	float3x4 transform;
-	Util::FrameChecker frameChecker;
 
-	eastl::unordered_map<RE::NiAVObject*, float3x4> boneMatrices;
+	// Used for BLAS instance
+	float3x4 transform;
+
+	// Makes sure we only update once per frame
+	Util::FrameChecker frameChecker;
 
 	// Checks for skinned and dynamic trishapes update
 	void Update(RE::NiNode* pNiNode, const eastl::pair<eastl::string, Model*>& modelPair, SkinningPipeline* skinningPipeline)
@@ -25,6 +28,7 @@ struct Instance
 		/*if (pNiNode->lastUpdatedFrameCounter < globals::state->frameCount && hasUpdated)
 				return true;*/
 
+		// Is this working?
 		if (pNiNode->GetAppCulled())
 			return;
 
@@ -32,17 +36,14 @@ struct Instance
 		if (!frameChecker.IsNewFrame())
 			return;
 
-		auto world = GetXMFromNiTransform(pNiNode->world);
-		XMStoreFloat3x4(&transform, world);
-
-		auto worldInverse = pNiNode->world.Invert();
-		auto worldToRoot = GetXMFromNiTransform(worldInverse);
-
-		boneMatrices.clear();
+		// Sets the BLAS instance transform
+		XMStoreFloat3x4(&transform, GetXMFromNiTransform(pNiNode->world));
 
 		auto& [path, model] = modelPair;
 
 		if ((model->GetFlags() & Flags::Dynamic) || (model->GetFlags() & Flags::Skinned)) {
+			auto worldInverse = pNiNode->world.Invert();
+
 			for (auto& shape : model->shapes) {
 				Flags updateFlags = Flags::None;
 
@@ -62,30 +63,15 @@ struct Instance
 
 					float3x4* boneMatricesArray = reinterpret_cast<float3x4*>(skinInstance->boneMatrices);
 
-					for (uint i = 0; i < skinInstance->numMatrices; i++) {
-						auto* bone = skinInstance->bones[i];
+					auto skinRootInverse = GetXMFromNiTransform(skinInstance->rootParent->world.Invert());
 
-						if (auto it = boneMatrices.find(bone); it != boneMatrices.end()) {
-							shape->boneMatrices[i] = it->second;
-						} else {
-							XMStoreFloat3x4(&shape->boneMatrices[i], XMMatrixMultiply(XMLoadFloat3x4(&boneMatricesArray[i]), worldToRoot));
-							boneMatrices.try_emplace(bone, shape->boneMatrices[i]);
-						}
+					for (uint i = 0; i < skinInstance->numMatrices; i++) {
+						XMStoreFloat3x4(&shape->boneMatrices[i], XMMatrixMultiply(XMLoadFloat3x4(&boneMatricesArray[i]), skinRootInverse));
 					}
 				}
 
 				if ((updateFlags & Flags::Dynamic) || (updateFlags & Flags::Skinned)) {
-					DirectX::XMMATRIX localToRootXM;
-					if (shape->geometry->parent == pNiNode) {
-						localToRootXM = GetXMFromNiTransform(shape->geometry->local);
-					} else {
-						localToRootXM = GetXMFromNiTransform(worldInverse * shape->geometry->world);
-					}
-
-					float3x4 localToRoot;
-					XMStoreFloat3x4(&localToRoot, localToRootXM);
-
-					skinningPipeline->QueueUpdate(updateFlags, path, shape.get(), localToRoot);
+					skinningPipeline->QueueUpdate(updateFlags, path, shape.get());
 				}
 			}
 		}

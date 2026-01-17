@@ -22,6 +22,8 @@
 #include "Features/Raytracing/Core/Model.h"
 #include "Features/Raytracing/Core/Shape.h"
 
+#include "Features/Raytracing/Helpers/ModelSpaceToTangent.h"
+
 #include "Features/Raytracing/Allocator.h"
 #include "Features/Raytracing/Buffer.h"
 #include "Features/Raytracing/BufferMA.h"
@@ -265,6 +267,11 @@ struct Raytracing : public OverlayFeature
 	{
 		return loaded && settings.Enabled;
 	};
+
+	const bool RaytracedShadows()
+	{
+		return settings.RaytracedShadows && !settings.PathTracing;
+	}
 
 	const auto& GetPipelines()
 	{
@@ -579,6 +586,7 @@ struct Raytracing : public OverlayFeature
 	void UpdateModelBLAS(Model* model);
 
 	eastl::shared_ptr<Allocation> GetTextureRegister(ID3D11Texture2D* texture, eastl::shared_ptr<Allocation> defaultTexture);
+	eastl::shared_ptr<Allocation> GetMSNormalMapRegister(Shape* shape, RE::BSGraphics::Texture* texture, eastl::shared_ptr<Allocation> defaultTexture);
 
 	Allocator shapeRegisters = Allocator(RTConstants::MAX_SHAPES);
 	Allocator textureRegisters = Allocator(RTConstants::MAX_TEXTURES);
@@ -660,6 +668,14 @@ struct Raytracing : public OverlayFeature
 
 	// Textures that have been shared with DX12 and placed in a heap as SRV
 	eastl::unordered_map<ID3D11Texture2D*, eastl::unique_ptr<TextureReference>> textures;
+
+	struct ConvertedNormalMap
+	{
+		eastl::unique_ptr<TextureReference> Reference;
+		eastl::unique_ptr<Texture2D> Texture;
+	};
+
+	eastl::unordered_map<ID3D11Texture2D*, eastl::unique_ptr<ConvertedNormalMap>> normalMaps;
 
 	winrt::com_ptr<ID3D11SamplerState> samplerState = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> copyDepthCS = nullptr;
@@ -755,6 +771,8 @@ struct Raytracing : public OverlayFeature
 	eastl::unique_ptr<RenderResData> renderResData = nullptr;
 	eastl::unique_ptr<ConstantBuffer> renderResCB = nullptr;
 
+	eastl::unique_ptr<ModelSpaceToTangent> normalMapConverter;
+
 	// Sky Cubemap
 	bool renderingCubemap = false;
 
@@ -800,8 +818,26 @@ struct Raytracing : public OverlayFeature
 	float2 dynamicResolutionRatio;
 
 	// Timings
-	float mainTime;
-	float shadowsTime;
+	double captureInterval = 0.1;
+	double lastTime = 0;
+	bool canMeasure = false;
+
+	void UpdateMeasureTime(double currentTime)
+	{
+		double delta = currentTime - lastTime;
+
+		if (delta > captureInterval) {
+			lastTime = currentTime;
+			canMeasure = true;
+		} else
+			canMeasure = false;
+	}
+
+	float mainCPUTime;
+	float mainGPUTime;
+
+	float shadowsCPUTime;
+	float shadowsGPUTime;
 
 #if defined(DLSS_RR)
 	HMODULE interposer = NULL;
@@ -954,7 +990,7 @@ struct Raytracing : public OverlayFeature
 				auto& rt = globals::features::raytracing;
 				rt.renderingShadowmap = true;
 
-				if (rt.Active() && rt.settings.RaytracedShadows) {
+				if (rt.Active() && rt.RaytracedShadows()) {
 					rt.UpdateShadowsFrameBuffer();
 
 					auto& runtimeData = light->GetShadowDirectionalLightRuntimeData();
@@ -969,7 +1005,7 @@ struct Raytracing : public OverlayFeature
 
 				rt.renderingShadowmap = false;
 
-				if (rt.Active() && rt.settings.RaytracedShadows) {
+				if (rt.Active() && rt.RaytracedShadows()) {
 					rt.shadowLight = light;
 				}
 			}
@@ -983,7 +1019,7 @@ struct Raytracing : public OverlayFeature
 			{
 				auto& rt = globals::features::raytracing;
 
-				if (rt.Active() && rt.settings.RaytracedShadows)
+				if (rt.Active() && rt.RaytracedShadows())
 					rt.RenderShadows();
 				else
 					func(a1);

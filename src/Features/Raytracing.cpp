@@ -611,7 +611,7 @@ void Raytracing::DrawDebugSettings()
 				ImGui::Text(std::format("GI Unculled: {}, Culled: {}", blasInstancesCount, instanceCount - blasInstancesCount).c_str());
 			}
 
-			if (settings.RaytracedShadows) {
+			if (RaytracedShadows()) {
 				auto blasInstancesCount = blasShadowInstances.size();
 				ImGui::Text(std::format("Shadow Unculled: {}, Culled: {}", blasInstancesCount, instanceCount - blasInstancesCount).c_str());
 			}
@@ -642,25 +642,34 @@ void Raytracing::DrawOverlay()
 
 	ImGui::Begin("Raytracing Overlay", NULL, windowFlags);
 
-	auto DrawRow = [](const char* label, size_t instances, float ms, [[maybe_unused]] double frameTime = 0.0f) {
+	auto DrawRow = [](const char* label, size_t instances, float cpums, float gpums, [[maybe_unused]] double frameTime = 0.0f) {
 		ImGui::TableNextRow();
 
 		ImGui::TableNextColumn();
 		ImGui::Text(label);
 
 		ImGui::TableNextColumn();
-		ImGui::Text("%d", instances);
+		ImGui::Text("%zu", instances);
 
 		ImGui::TableNextColumn();
-		ImGui::Text("%g ms", ms);
+		ImGui::Text("%g ms", cpums);
+
+		ImGui::TableNextColumn();
+		ImGui::Text("%g ms", gpums);
 	};
 
-	if (ImGui::BeginTable("Effects", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-		if (settings.RaytracedShadows)
-			DrawRow("Shadows", blasShadowInstances.size(), shadowsTime);
+	if (ImGui::BeginTable("Effects", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+		ImGui::TableSetupColumn("Effect");
+		ImGui::TableSetupColumn("Instances");
+		ImGui::TableSetupColumn("CPU");
+		ImGui::TableSetupColumn("GPU");
+		ImGui::TableHeadersRow();
+
+		if (RaytracedShadows())
+			DrawRow("Shadows", blasShadowInstances.size(), shadowsCPUTime, shadowsGPUTime);
 
 		// GI/PT
-		DrawRow(settings.PathTracing ? "Path Tracing" : "Global Illumination", blasInstances.size(), mainTime);
+		DrawRow(settings.PathTracing ? "Path Tracing" : "Global Illumination", blasInstances.size(), mainCPUTime, mainGPUTime);
 
 		// Denoiser
 		//DrawRow(settings.PathTracing ? "Denoiser", blasInstances.size(), 0);
@@ -799,6 +808,8 @@ void Raytracing::SetupResources()
 
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
+
+	normalMapConverter = eastl::make_unique<ModelSpaceToTangent>();
 
 	auto device12 = d3d12Device.get();
 
@@ -993,25 +1004,33 @@ void Raytracing::SetupResources()
 
 	// Create instance buffer for BLAS
 	{
-		blasInstanceBuffer = eastl::make_unique<DX12::StructuredBufferUpload<D3D12_RAYTRACING_INSTANCE_DESC>>(d3d12Device.get(), RTConstants::MAX_INSTANCES, false, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		blasInstanceBuffer = eastl::make_unique<DX12::StructuredBufferUpload<D3D12_RAYTRACING_INSTANCE_DESC>>(d3d12Device.get(), RTConstants::MAX_INSTANCES, false);
 		DX::ThrowIfFailed(blasInstanceBuffer->resource->SetName(L"BLAS Instance Buffer"));
+
+		blasInstanceBuffer->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 	}
 
 	// Create shadow instance buffer for BLAS
 	{
-		blasShadowInstanceBuffer = eastl::make_unique<DX12::StructuredBufferUpload<D3D12_RAYTRACING_INSTANCE_DESC>>(d3d12Device.get(), RTConstants::MAX_INSTANCES, false, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		blasShadowInstanceBuffer = eastl::make_unique<DX12::StructuredBufferUpload<D3D12_RAYTRACING_INSTANCE_DESC>>(d3d12Device.get(), RTConstants::MAX_INSTANCES, false);
 		DX::ThrowIfFailed(blasShadowInstanceBuffer->resource->SetName(L"BLAS Instance Buffer"));
+
+		blasShadowInstanceBuffer->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 	}
 
 	logger::debug("Creating constant buffer...");
 	{
-		frameBuffer = eastl::make_unique<DX12::StructuredBufferUpload<FrameData>>(d3d12Device.get(), 1, false, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, 2);
+		frameBuffer = eastl::make_unique<DX12::StructuredBufferUpload<FrameData>>(d3d12Device.get(), 1, false, 2);
 		DX::ThrowIfFailed(frameBuffer->resource->SetName(L"Frame Buffer"));
+
+		frameBuffer->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
 
 		frameData = eastl::make_unique<FrameData>();
 
-		shadowsCB = eastl::make_unique<DX12::StructuredBufferUpload<ShadowsFrameData>>(d3d12Device.get(), 1, false, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+		shadowsCB = eastl::make_unique<DX12::StructuredBufferUpload<ShadowsFrameData>>(d3d12Device.get(), 1, false);
 		DX::ThrowIfFailed(shadowsCB->resource->SetName(L"Shadows Constant Buffer"));
+
+		shadowsCB->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
 
 		shadowsCBData = eastl::make_unique<ShadowsFrameData>();
 	}
@@ -2130,6 +2149,30 @@ eastl::shared_ptr<Allocation> Raytracing::GetTextureRegister(ID3D11Texture2D* dx
 	return defaultTexture;
 }
 
+eastl::shared_ptr<Allocation> Raytracing::GetMSNormalMapRegister([[maybe_unused]] Shape* shape, RE::BSGraphics::Texture* texture, eastl::shared_ptr<Allocation> defaultTexture)
+{
+	std::lock_guard lock{ textureRegisterMutex };
+
+	ConvertedNormalMap* normalMap = nullptr;
+
+	if (auto refIt = normalMaps.find(texture->texture); refIt != normalMaps.end()) {
+		normalMap = refIt->second.get();
+	} else {
+		auto [it, emplaced] = normalMaps.emplace(texture->texture, eastl::make_unique<ConvertedNormalMap>());
+
+		normalMap = it->second.get();
+
+		D3D11_TEXTURE2D_DESC desc;
+		texture->texture->GetDesc(&desc);
+		desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
+		normalMap->Texture = eastl::make_unique<Texture2D>(desc);
+	}
+
+	//normalMapConverter->Convert(geometryRuntimeData, runtimeData.rendererData->indexBuffer, shape->vertexCount, shape->triangleCount, texture, normalMap->Texture.rtv.get());
+
+	return defaultTexture;
+}
+
 void Raytracing::AddInstance(RE::FormID formID, RE::NiNode* pNiNode, eastl::string path)
 {
 	logger::debug("[RT] AddInstance [0x{:08X}] - {}, Path: {}", formID, pNiNode->name, path);
@@ -2733,7 +2776,7 @@ void Raytracing::DrawRTGI()
 
 	d3d11Context->CopyResource(mainTexture->resource11, main.texture);
 
-	if (!settings.RaytracedShadows)
+	if (!RaytracedShadows())
 		CopyDepth();
 
 	if (settings.WhiteFurnace) {
@@ -2753,6 +2796,7 @@ void Raytracing::DrawRTGI()
 	}
 
 	auto startTime = Util::GetNowSecs();
+	UpdateMeasureTime(startTime);
 
 	if (pixCapture && (!pixCaptureStarted || pixTDR) && settings.PIXCaptureLocation == PIXCaptureLocation::GlobalIllumination) {
 		pixCaptureStarted = true;
@@ -3043,6 +3087,11 @@ void Raytracing::DrawRTGI()
 
 		DX::ThrowIfFailed(commandList->Close());
 
+		if (canMeasure) {
+			mainCPUTime = static_cast<float>((Util::GetNowSecs() - startTime) * 1000.0);
+			startTime = Util::GetNowSecs();
+		}
+
 		ID3D12CommandList* commandListPtr = commandList.get();
 		commandQueue->ExecuteCommandLists(1, &commandListPtr);
 	}
@@ -3055,7 +3104,8 @@ void Raytracing::DrawRTGI()
 		DX::ThrowIfFailed(d3d12Fence->SetEventOnCompletion(fenceValue, nullptr));
 	}
 
-	mainTime = static_cast<float>((Util::GetNowSecs() - startTime) * 1000.0);
+	if (canMeasure)
+		mainGPUTime = static_cast<float>((Util::GetNowSecs() - startTime) * 1000.0);
 
 	if (pixCapture && pixCaptureStarted && !pixTDR && settings.PIXCaptureLocation == PIXCaptureLocation::GlobalIllumination) {
 		ga->EndCapture();
@@ -3175,6 +3225,7 @@ void Raytracing::RenderShadows()
 	fenceValue++;
 
 	auto startTime = Util::GetNowSecs();
+	UpdateMeasureTime(startTime);
 
 	if (pixCapture && (!pixCaptureStarted || pixTDR) && settings.PIXCaptureLocation == PIXCaptureLocation::Shadows) {
 		pixCaptureStarted = true;
@@ -3247,6 +3298,11 @@ void Raytracing::RenderShadows()
 
 	DX::ThrowIfFailed(commandList->Close());
 
+	if (canMeasure) {
+		shadowsCPUTime = static_cast<float>((Util::GetNowSecs() - startTime) * 1000.0);
+		startTime = Util::GetNowSecs();
+	}
+
 	ID3D12CommandList* commandListPtr = commandList.get();
 	commandQueue->ExecuteCommandLists(1, &commandListPtr);
 
@@ -3258,7 +3314,8 @@ void Raytracing::RenderShadows()
 		DX::ThrowIfFailed(d3d12Fence->SetEventOnCompletion(fenceValue, nullptr));
 	}
 
-	shadowsTime = static_cast<float>((Util::GetNowSecs() - startTime) * 1000.0);
+	if (canMeasure)
+		shadowsGPUTime = static_cast<float>((Util::GetNowSecs() - startTime) * 1000.0);
 
 	if (pixCapture && pixCaptureStarted && !pixTDR && settings.PIXCaptureLocation == PIXCaptureLocation::Shadows) {
 		ga->EndCapture();

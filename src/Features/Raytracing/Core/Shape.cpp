@@ -87,6 +87,11 @@ static std::string PrintVertexFlags(uint16_t value)
 	return result;
 }
 
+static uint16_t GetVertexSize2(uint16_t desc)
+{
+	return (desc & 0xF) * 4;
+}
+
 void Shape::BuildMesh(RE::BSGraphics::TriShape* rendererData, const std::uint32_t& vertexCountIn, const std::uint16_t& triangleCountIn, const std::uint16_t& bonesPerVertex, const float4x4& transform)
 {
 	auto vertexDesc = rendererData->vertexDesc;
@@ -134,6 +139,8 @@ void Shape::BuildMesh(RE::BSGraphics::TriShape* rendererData, const std::uint32_
 
 		bool hasPosition = vertexFlags & RE::BSGraphics::Vertex::VF_VERTEX;
 
+		//bool isFullPrec = vertexFlags & RE::BSGraphics::Vertex::VF_FULLPREC;
+
 		uint32_t posOffset = vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_POSITION);
 		uint32_t uvOffset = vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_TEXCOORD0);
 		uint32_t normOffset = vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL);
@@ -141,6 +148,8 @@ void Shape::BuildMesh(RE::BSGraphics::TriShape* rendererData, const std::uint32_
 		uint32_t colorOffset = vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_COLOR);
 		uint32_t skinOffset = vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING);
 		uint32_t landOffset = vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_LANDDATA);
+
+		//uint32_t boneIDOffset = !hasPosition && isFullPrec ? sizeof(float) : sizeof(uint16_t) * bonesPerVertex;
 
 		uint32_t boneIDOffset = sizeof(uint16_t) * bonesPerVertex;
 
@@ -193,10 +202,22 @@ void Shape::BuildMesh(RE::BSGraphics::TriShape* rendererData, const std::uint32_
 
 					float3 tangent = { pos.w, normalUnpacked.w, bitangentUnpacked.w };
 
+					if (!hasPosition) {
+						tangent.x = std::sqrt(std::max(0.0f, 1.0f - tangent.y * tangent.y - tangent.z * tangent.z));
+
+						float handedness = (tangent.x * (vertexData.Bitangent.y * vertexData.Normal.z - vertexData.Bitangent.z * vertexData.Normal.y) +
+											   tangent.y * (vertexData.Bitangent.z * vertexData.Normal.x - vertexData.Bitangent.x * vertexData.Normal.z) +
+											   tangent.z * (vertexData.Bitangent.x * vertexData.Normal.y - vertexData.Bitangent.y * vertexData.Normal.x)) < 0 ?
+						                       -1.0f :
+						                       1.0f;
+
+						tangent.x *= handedness;
+					}
+
 					if (skinned)
-						vertexData.Tangent = hasPosition ? Normalize(tangent) : tangent;
+						vertexData.Tangent = Normalize(tangent);
 					else
-						vertexData.Tangent = hasPosition ? Normalize(float3::TransformNormal(tangent, transform)) : tangent;
+						vertexData.Tangent = Normalize(float3::TransformNormal(tangent, transform));
 				}
 			}
 
@@ -204,8 +225,26 @@ void Shape::BuildMesh(RE::BSGraphics::TriShape* rendererData, const std::uint32_
 				if (vertexFlags & RE::BSGraphics::Vertex::VF_SKINNED) {
 					std::memcpy(weights.data(), vtx + skinOffset, sizeof(half) * bonesPerVertex);
 					std::memcpy(boneIds.data(), vtx + skinOffset + boneIDOffset, sizeof(uint8_t) * bonesPerVertex);
+
+					float sum = 0.0f;
+					for (float w : weights) {
+						sum += w;
+					}
+
+					if (sum < 1.0f) {
+						weights[0] += 1.0f - sum;
+					} else if (sum > eastl::numeric_limits<float>::epsilon()) {
+						float sumRcp = 1.0f / sum;
+
+						for (half& w : weights) {
+							w *= sumRcp;
+						}
+					} else {
+						weights = { 1.0f, 0.0f, 0.0f, 0.0f };
+					}
+
 				} else {
-					weights = { 0.0f, 0.0f, 0.0f, 0.0f };
+					weights = { 1.0f, 0.0f, 0.0f, 0.0f };
 					boneIds = { 0, 0, 0, 0 };
 				}
 
@@ -285,17 +324,23 @@ void Shape::BuildMesh(RE::BSGraphics::TriShape* rendererData, const std::uint32_
 	}
 }
 
-static eastl::shared_ptr<Allocation> TextureRegister(const RE::NiPointer<RE::NiSourceTexture> niPointer, eastl::shared_ptr<Allocation> defaultTexture)
+eastl::shared_ptr<Allocation> Shape::TextureRegister(const RE::NiPointer<RE::NiSourceTexture> niPointer, eastl::shared_ptr<Allocation> defaultTexture, bool modelSpaceNormalMap = false)
 {
 	if (!niPointer || !niPointer->rendererTexture)
 		return defaultTexture;
 
-	return globals::features::raytracing.GetTextureRegister(niPointer->rendererTexture->texture, defaultTexture);
+	auto& rt = globals::features::raytracing;
+
+	if (modelSpaceNormalMap)
+		return rt.GetMSNormalMapRegister(this, niPointer->rendererTexture, defaultTexture);
+	else
+		return rt.GetTextureRegister(niPointer->rendererTexture->texture, defaultTexture);
 }
 
 void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryRuntimeData, [[maybe_unused]] const char* name)
 {
 	auto& rt = globals::features::raytracing;
+
 	//auto& whiteTexture = rt.defaultWhiteTexture->allocation;
 	auto& grayTexture = rt.defaultGrayTexture->allocation;
 	auto& normalTexture = rt.defaultNormalTexture->allocation;
@@ -433,7 +478,7 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 						// Vanilla Materials
 						if (const RE::BSLightingShaderMaterialBase* lightingBaseMaterial = skyrim_cast<RE::BSLightingShaderMaterialBase*>(shaderMaterial)) {
 							textures[0] = TextureRegister(lightingBaseMaterial->diffuseTexture, grayTexture);
-							textures[1] = TextureRegister(lightingBaseMaterial->normalTexture, normalTexture);
+							textures[1] = TextureRegister(lightingBaseMaterial->normalTexture, normalTexture, false);  // shaderFlags.any(EShaderPropertyFlag::kModelSpaceNormals)
 
 							if (shaderFlags.any(EShaderPropertyFlag::kSpecular)) {
 								textures[3] = TextureRegister(lightingBaseMaterial->specularBackLightingTexture, blackTexture);
@@ -616,7 +661,9 @@ void Shape::CreateBuffers(const std::wstring& name)
 	// Dynamic
 	if (flags & Flags::Dynamic) {
 		allocDesc.CustomPool = rt.dynamicVertexPool.get();
-		dynamicPositionBuffer = eastl::make_unique<DX12::StructuredBufferUploadMA<float4>>(device, allocator, allocDesc, uploadAllocDesc, vertexCount, false, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		dynamicPositionBuffer = eastl::make_unique<DX12::StructuredBufferUploadMA<float4>>(device, allocator, allocDesc, uploadAllocDesc, vertexCount, false);
+
+		dynamicPositionBuffer->TransitionBarrier(commandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
 		dynamicPositionBuffer->CreateSRV(skinningHeap->CPUHandle(SkinningHeap::Slot::DynamicVertices, allocation->GetIndex()));
 	}
@@ -626,7 +673,7 @@ void Shape::CreateBuffers(const std::wstring& name)
 		bool hasUAV = (flags & Flags::Dynamic) || (flags & Flags::Skinned);
 
 		allocDesc.CustomPool = rt.vertexPool.get();
-		vertexBuffer = eastl::make_unique<DX12::StructuredBufferUploadMA<Vertex>>(device, allocator, allocDesc, uploadAllocDesc, vertexCount, hasUAV, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		vertexBuffer = eastl::make_unique<DX12::StructuredBufferUploadMA<Vertex>>(device, allocator, allocDesc, uploadAllocDesc, vertexCount, hasUAV);
 
 		vertexBuffer->UpdateList(vertices.data(), vertexCount);
 		DX::ThrowIfFailed(vertexBuffer->resource->SetName(std::format(L"Vertex Buffer [{}] - {}", allocation->GetIndex(), name).c_str()));
@@ -634,7 +681,7 @@ void Shape::CreateBuffers(const std::wstring& name)
 		if (vertexCount != vertices.size())
 			logger::error("[RT] Shape::CreateBuffers - VertexCount: {}, Vertices Size: {}", vertexCount, vertices.size());
 
-		vertexBuffer->Upload(commandList);
+		vertexBuffer->Upload(commandList, 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
 		// UAV
 		if (hasUAV) {
@@ -667,12 +714,12 @@ void Shape::CreateBuffers(const std::wstring& name)
 	// Skinning
 	if (flags & Flags::Skinned) {
 		allocDesc.CustomPool = rt.skinningPool.get();
-		skinningBuffer = eastl::make_unique<DX12::StructuredBufferUploadMA<Skinning>>(device, allocator, allocDesc, uploadAllocDesc, vertexCount, false, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		skinningBuffer = eastl::make_unique<DX12::StructuredBufferUploadMA<Skinning>>(device, allocator, allocDesc, uploadAllocDesc, vertexCount, false);
 
 		skinningBuffer->UpdateList(skinning.data(), vertexCount);
 		DX::ThrowIfFailed(skinningBuffer->resource->SetName(std::format(L"Skinning Buffer [{}] - {}", allocation->GetIndex(), name).c_str()));
 
-		skinningBuffer->Upload(commandList);
+		skinningBuffer->Upload(commandList, 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
 		// SRV
 		{
@@ -692,12 +739,12 @@ void Shape::CreateBuffers(const std::wstring& name)
 	// Triangles
 	{
 		allocDesc.CustomPool = rt.trianglePool.get();
-		triangleBuffer = eastl::make_unique<DX12::StructuredBufferUploadMA<Triangle>>(device, allocator, allocDesc, uploadAllocDesc, triangleCount, false, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		triangleBuffer = eastl::make_unique<DX12::StructuredBufferUploadMA<Triangle>>(device, allocator, allocDesc, uploadAllocDesc, triangleCount, false);
 
 		triangleBuffer->UpdateList(triangles.data(), triangles.size());
 		DX::ThrowIfFailed(triangleBuffer->resource->SetName(std::format(L"Triangle Buffer [{}] - {}", allocation->GetIndex(), name).c_str()));
 
-		triangleBuffer->Upload(commandList);
+		triangleBuffer->Upload(commandList, 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
 		// SRV
 		{

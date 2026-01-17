@@ -70,24 +70,27 @@ void SkinningPipeline::CompileShaders(ID3D12Device5* device)
 
 void SkinningPipeline::SetupResources(ID3D12Device5* device)
 {
-	vertexUpdateBuffer = eastl::make_unique<DX12::StructuredBufferUpload<VertexUpdateData>>(device, RTConstants::MAX_MODELS, false, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+	auto* commandList = globals::features::raytracing.commandList.get();
+
+	vertexUpdateBuffer = eastl::make_unique<DX12::StructuredBufferUpload<VertexUpdateData>>(device, RTConstants::MAX_MODELS, false);
 	DX::ThrowIfFailed(vertexUpdateBuffer->resource->SetName(L"Vertex Update Buffer"));
+	vertexUpdateBuffer->TransitionBarrier(commandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
 	vertexUpdateBuffer->CreateSRV(heap->CPUHandle(SkinningHeap::Slot::UpdateData));
 
-	boneMatricesBuffer = eastl::make_unique<DX12::StructuredBufferUpload<float3x4>>(device, MAX_BONE_MATRICES, false, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+	boneMatricesBuffer = eastl::make_unique<DX12::StructuredBufferUpload<float3x4>>(device, MAX_BONE_MATRICES, false);
 	DX::ThrowIfFailed(boneMatricesBuffer->resource->SetName(L"Bone Matrices Buffer"));
+	boneMatricesBuffer->TransitionBarrier(commandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
 	boneMatricesBuffer->CreateSRV(heap->CPUHandle(SkinningHeap::Slot::BoneMatrices));
 }
 
-void SkinningPipeline::QueueUpdate(Flags updateFlags, eastl::string path, Shape* shape, const float3x4& localToRoot)
+void SkinningPipeline::QueueUpdate(Flags updateFlags, eastl::string path, Shape* shape)
 {
 	queuedShapes.emplace_back(
 		updateFlags,
 		path,
-		shape,
-		localToRoot);
+		shape);
 }
 
 bool SkinningPipeline::PrepareResources(ID3D12GraphicsCommandList4* commandList, uint& count, uint& vertexCount)
@@ -118,7 +121,7 @@ bool SkinningPipeline::PrepareResources(ID3D12GraphicsCommandList4* commandList,
 		uint boneOffset = (uint)boneMatricesData.size();
 
 		vertexCount = std::max(vertexCount, (uint)shape->vertexCount);
-		vertexUpdateData.emplace_back(shape->allocation->GetIndex(), queuedShape.updateFlags, shape->vertexCount, boneOffset, queuedShape.localToRoot, bonePivot, 0);
+		vertexUpdateData.emplace_back(shape->allocation->GetIndex(), queuedShape.updateFlags, shape->vertexCount, boneOffset, bonePivot, 0);
 
 		// Dynamic TriShapes
 		shape->UpdateUploadDynamicBuffers(commandList);
