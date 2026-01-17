@@ -120,7 +120,6 @@ struct ScreenSpaceRayTracing : Feature
     eastl::unique_ptr<Texture2D> texHistoryNormals = nullptr;
     eastl::unique_ptr<Texture2D> texVariance = nullptr;
     eastl::unique_ptr<Texture2D> texOutput = nullptr;
-    Texture2D* texHitDistance = nullptr;
 
 #ifdef ENABLE_SHARC
     eastl::unique_ptr<Buffer> sharcHashEntries = nullptr;

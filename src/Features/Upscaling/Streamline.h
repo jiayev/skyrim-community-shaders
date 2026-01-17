@@ -13,7 +13,6 @@
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
-#include <sl_dlss_d.h>
 #include <sl_matrix_helpers.h>
 #include <sl_version.h>
 #pragma warning(pop)
@@ -32,7 +31,6 @@ public:
 	bool triedInitialization = false;
 
 	bool featureDLSS = false;
-	bool featureDLSS_RR = false;
 
 	sl::ViewportHandle viewport{ 0 };
 	static constexpr uint32_t MAX_RESOLUTION = 8192;
@@ -62,11 +60,6 @@ public:
 	PFun_slDLSSGetState* slDLSSGetState{};
 	PFun_slDLSSSetOptions* slDLSSSetOptions{};
 
-	// DLSSD specific functions
-	PFun_slDLSSDGetOptimalSettings* slDLSSDGetOptimalSettings{};
-	PFun_slDLSSDGetState* slDLSSDGetState{};
-	PFun_slDLSSDSetOptions* slDLSSDSetOptions{};
-
 	Util::FrameChecker frameChecker;
 	sl::FrameToken* frameToken = nullptr;
 
@@ -82,28 +75,8 @@ public:
 	void CheckFrameConstants();
 
 	void SetDLSSOptions();
-	void SetDLSSRROptions();
 
-	void Upscale(ID3D12Resource* a_inputColorTexture,
-		ID3D12Resource* a_motionVectorTexture,
-		ID3D12Resource* a_depthTexture,
-		ID3D12Resource* a_reactiveMask,
-		ID3D12Resource* a_transparencyCompositionMask,
-		ID3D12Resource* a_outputTexture,
-		ID3D12GraphicsCommandList* a_commandList);
+	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
 
-	void RayReconstruction(ID3D12Resource* a_inputColorTexture,
-		ID3D12Resource* a_motionVectorTexture,
-		ID3D12Resource* a_depthTexture,
-		ID3D12Resource* a_albedoTexture,
-		ID3D12Resource* a_reflectanceTexture,
-		ID3D12Resource* a_normalRoughness,
-		ID3D12Resource* a_specularHitDistance,
-		ID3D12Resource* a_colorBeforeTransparency,
-		ID3D12Resource* a_sssGuide,
-		ID3D12Resource* a_outputTexture,
-		ID3D12GraphicsCommandList* a_commandList);
-
-	void DestroyDLSSResources(bool modeSwitch = false);
-	void DestroyDLSSRRResources(bool modeSwitch = false);
+	void DestroyDLSSResources();
 };

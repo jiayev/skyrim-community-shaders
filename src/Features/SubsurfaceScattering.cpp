@@ -238,6 +238,7 @@ void SubsurfaceScattering::DrawSSS()
 		auto normal = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
 
 		ID3D11UnorderedAccessView* uav = blurHorizontalTemp->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 		auto& terrainBlending = globals::features::terrainBlending;
 
@@ -251,8 +252,6 @@ void SubsurfaceScattering::DrawSSS()
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		if (settings.SSMode == 0) {
-			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-
 			// Horizontal pass to temporary texture
 			{
 				TracyD3D11Zone(globals::state->tracyCtx, "Subsurface Scattering - Horizontal");
@@ -273,8 +272,7 @@ void SubsurfaceScattering::DrawSSS()
 				views[0] = blurHorizontalTemp->srv.get();
 				context->CSSetShaderResources(0, 1, views);
 
-				context->CopyResource(sssResult->resource.get(), main.texture);
-				ID3D11UnorderedAccessView* uavs[1] = { sssResult->uav.get() };
+				ID3D11UnorderedAccessView* uavs[1] = { main.UAV };
 				context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
 				auto shader = GetComputeShaderVerticalBlur();
@@ -287,35 +285,13 @@ void SubsurfaceScattering::DrawSSS()
 			{
 				TracyD3D11Zone(globals::state->tracyCtx, "Subsurface Scattering - Burley");
 
-				uav = sssResult->uav.get();
-				context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-
 				auto shader = GetComputeShaderBurley();
 				context->CSSetShader(shader, nullptr, 0);
 
 				context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+
+				context->CopyResource(main.texture, blurHorizontalTemp->resource.get());
 			}
-		}
-
-		uav = nullptr;
-		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-
-		// Composite SSS result back to main render target
-		{
-			TracyD3D11Zone(globals::state->tracyCtx, "Subsurface Scattering - Composite");
-
-			views[0] = sssResult->srv.get();
-			context->CSSetShaderResources(0, 1, views);
-
-			ID3D11UnorderedAccessView* uavs[2] = { main.UAV, sssGuide->uav.get() };
-			context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
-			auto shader = GetComputeShaderComposite();
-			context->CSSetShader(shader, nullptr, 0);
-			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
-
-			uavs[0] = nullptr;
-			uavs[1] = nullptr;
-			context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
 		}
 	}
 
@@ -357,17 +333,6 @@ void SubsurfaceScattering::SetupResources()
 		blurHorizontalTemp = new Texture2D(texDesc);
 		blurHorizontalTemp->CreateSRV(srvDesc);
 		blurHorizontalTemp->CreateUAV(uavDesc);
-
-		sssResult = new Texture2D(texDesc);
-		sssResult->CreateSRV(srvDesc);
-		sssResult->CreateUAV(uavDesc);
-
-		texDesc.Format = DXGI_FORMAT_R16_FLOAT;
-		srvDesc.Format = DXGI_FORMAT_R16_FLOAT;
-		uavDesc.Format = DXGI_FORMAT_R16_FLOAT;
-		sssGuide = new Texture2D(texDesc);
-		sssGuide->CreateSRV(srvDesc);
-		sssGuide->CreateUAV(uavDesc);
 	}
 }
 
@@ -419,10 +384,6 @@ void SubsurfaceScattering::ClearShaderCache()
 		burleySS->Release();
 		burleySS = nullptr;
 	}
-	if (compositeSSS) {
-		compositeSSS->Release();
-		compositeSSS = nullptr;
-	}
 }
 
 ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderHorizontalBlur()
@@ -450,15 +411,6 @@ ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderBurley()
 		burleySS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\SubsurfaceScattering\\SeparableSSSCS.hlsl", { { "BURLEY", "" } }, "cs_5_0");
 	}
 	return burleySS;
-}
-
-ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderComposite()
-{
-	if (!compositeSSS) {
-		logger::debug("Compiling compositeSSS");
-		compositeSSS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\SubsurfaceScattering\\SSSCompositeCS.hlsl", {}, "cs_5_0");
-	}
-	return compositeSSS;
 }
 
 void SubsurfaceScattering::DataLoaded()

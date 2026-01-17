@@ -1,5 +1,4 @@
 #include "Common/SharedData.hlsli"
-#include "Common/GBuffer.hlsli"
 
 cbuffer UpscalingData : register(b0)
 {
@@ -11,16 +10,10 @@ Texture2D<float2> TAAMask : register(t0);
 Texture2D<float4> NormalsWaterMask : register(t1);
 Texture2D<float2> MotionVectorMask : register(t2);
 Texture2D<float> DepthMask : register(t3);
-#if defined(DLSS)
-Texture2D<float3> NormalRoughness : register(t4);
-#endif
 
 RWTexture2D<float> ReactiveMask : register(u0);
 RWTexture2D<float> TransparencyCompositionMask : register(u1);
 RWTexture2D<float2> MotionVectorOutput : register(u2);
-#if defined(DLSS)
-RWTexture2D<float4> PackedNormal : register(u3);
-#endif
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
 	// Early exit if dispatch thread is outside true sampling dimensions
@@ -38,11 +31,6 @@ RWTexture2D<float4> PackedNormal : register(u3);
 	float2 motionVector = MotionVectorMask[dispatchID.xy];
 	float2 longestMotionVector = motionVector;
 	float maxMotionLengthSq = dot(motionVector, motionVector);
-
-	float3 normalGlossiness = NormalRoughness[dispatchID.xy];
-    float3 normal = GBuffer::DecodeNormal(normalGlossiness.xy);
-    float roughness = 1.0f - normalGlossiness.z;
-	PackedNormal[dispatchID.xy] = float4(normalize(normal), roughness);
 
 	[unroll]
 	for (int y = -2; y <= 2; y++) {

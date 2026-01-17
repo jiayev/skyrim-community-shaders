@@ -49,9 +49,6 @@ Texture2D<float3> AlbedoTexture : register(t12);
 
 RWTexture2D<float4> SSRColorOutput : register(u0);
 RWTexture2D<float4> SSRPDFOutput : register(u1);
-#if defined(SSRT_SPECULAR)
-RWTexture2D<float> SSRTHitDistanceOutput : register(u2);
-#endif
 
 RWStructuredBuffer<uint2> u_SharcHashEntriesBuffer : register(u2);
 RWStructuredBuffer<uint> u_HashCopyOffsetBuffer : register(u3);
@@ -270,15 +267,15 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
     // Don't lookup radiance from the background.
     int2  texel_coords = int2(screen_size * hit.xy * FrameBuffer::DynamicResolutionParams1.xy);
     float surface_z    = SSRT_LoadDepth(texel_coords / 2, 1);
-// #if SSRT_OPTION_INVERTED_DEPTH
-//     if (surface_z == 0.0)
-//     {
-// #else
-//     if (surface_z == 1.0)
-//     {
-// #endif
-//         return 0;
-//     }
+#if SSRT_OPTION_INVERTED_DEPTH
+    if (surface_z == 0.0)
+    {
+#else
+    if (surface_z == 1.0)
+    {
+#endif
+        return 0;
+    }
 
     float3 view_space_surface = SSRT_ScreenSpaceToViewSpace(float3(hit.xy, surface_z), eyeIndex);
     float3 view_space_hit     = SSRT_ScreenSpaceToViewSpace(hit, eyeIndex);
@@ -505,7 +502,6 @@ bool ShouldProcessPixel(uint2 GroupThreadID, uint FrameCount)
     samples[groupThreadID.x * 8 + groupThreadID.y][sample_id] = 0.f;
     float localWeight = pdf == 0 ? 0 : LocalBRDF(-view_space_ray_direction, view_space_surface_normal, view_space_reflected_direction, roughness) / max(pdf, 1e-4);
     weights[groupThreadID.x * 8 + groupThreadID.y][sample_id] = float4(view_space_surface_normal, localWeight);
-    float hit_distance = 65536;
 
 #if SHARC_RENDER
     SharcParameters sharcParameters;
@@ -581,7 +577,6 @@ bool ShouldProcessPixel(uint2 GroupThreadID, uint FrameCount)
 
             outPDF.xyz += hit * confidence;
             outPDF.w += pdf * confidence;
-            hit_distance = world_ray_length;
         }
         const float NdotV = saturate(dot(normalize(view_space_ray), view_space_surface_normal));
 #if defined(DYNAMIC_CUBEMAPS) && !SHARC_UPDATE
@@ -690,7 +685,6 @@ bool ShouldProcessPixel(uint2 GroupThreadID, uint FrameCount)
     outColor.w = samples[groupThreadID.x * 8 + groupThreadID.y][0].w;
     SSRColorOutput[coords.xy] = outColor;
     SSRPDFOutput[coords.xy] = outPDF;
-    SSRTHitDistanceOutput[coords.xy] = hit_distance;
 #elif SHARC_UPDATE
 #else
 

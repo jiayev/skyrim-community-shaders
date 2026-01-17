@@ -3,7 +3,6 @@
 #include <FidelityFX/api/include/dx12/ffx_api_dx12.hpp>
 #include <dxgi1_6.h>
 
-#include "../../Deferred.h"
 #include "../Upscaling.h"
 #include "FidelityFX.h"
 #include "Streamline.h"
@@ -24,14 +23,6 @@ void DX12SwapChain::CreateD3D12Device(IDXGIAdapter* a_adapter)
 		DX::ThrowIfFailed(d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocators[i])));
 		DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocators[i].get(), nullptr, IID_PPV_ARGS(&commandLists[i])));
 		commandLists[i]->Close();
-
-		DX::ThrowIfFailed(d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&dlssCommandAllocator[i])));
-		DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, dlssCommandAllocator[i].get(), nullptr, IID_PPV_ARGS(&dlssCommandList[i])));
-		dlssCommandList[i]->Close();
-
-		DX::ThrowIfFailed(d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&nisSharpenerCommandAllocator[i])));
-		DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, nisSharpenerCommandAllocator[i].get(), nullptr, IID_PPV_ARGS(&nisSharpenerCommandList[i])));
-		nisSharpenerCommandList[i]->Close();
 	}
 }
 
@@ -82,8 +73,6 @@ void DX12SwapChain::CreateInterop()
 	DX::ThrowIfFailed(d3d12Device->CreateSharedHandle(d3d12Fence.get(), nullptr, GENERIC_ALL, nullptr, &sharedFenceHandle));
 	DX::ThrowIfFailed(d3d11Device->OpenSharedFence(sharedFenceHandle, IID_PPV_ARGS(&d3d11Fence)));
 	CloseHandle(sharedFenceHandle);
-
-	DX::ThrowIfFailed(d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&upscalingFence)));
 
 	swapChainProxy = new DXGISwapChainProxy(swapChain);
 
@@ -418,29 +407,8 @@ void DX12SwapChain::CreateSharedResources()
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	D3D11_TEXTURE2D_DESC texDesc{};
 	main.texture->GetDesc(&texDesc);
-	inputColorBufferShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-	outputColorBufferShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-	packedNormalShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-	nisSharpenerInputShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-	nisSharpenerOutputShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-	colorBeforeTransparencySnapshot = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-
 	texDesc.Format = DXGI_FORMAT_R32_FLOAT;
 	depthBufferShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-	specHitDistanceShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-
-	texDesc.Format = DXGI_FORMAT_R16_FLOAT;
-	sssGuide = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-
-	texDesc.Format = DXGI_FORMAT_R8_UNORM;
-	reactiveMaskShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-	transparencyCompositionMaskShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-
-	texDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
-	albedoShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
-
-	texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-	reflectanceShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
 
 	// Create motion vector buffer
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];

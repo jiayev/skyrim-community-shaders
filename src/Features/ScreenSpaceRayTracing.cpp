@@ -242,9 +242,6 @@ void ScreenSpaceRayTracing::SetupResources()
         texHistoryNormals->CreateUAV(uavDesc);
 
         texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
-        texHitDistance = new Texture2D(texDesc);
-        texHitDistance->CreateSRV(srvDesc);
-        texHitDistance->CreateUAV(uavDesc);
 
         texDesc.MipLevels = maxMips;
         srvDesc.Texture2D.MipLevels = texDesc.MipLevels;
@@ -533,7 +530,7 @@ void ScreenSpaceRayTracing::DrawSSRTSpecular()
     context->CSSetConstantBuffers(1, 1, &buffer);
 
     std::array<ID3D11ShaderResourceView*, 12> srvs = { nullptr };
-	std::array<ID3D11UnorderedAccessView*, 3> uavs = { nullptr };
+	std::array<ID3D11UnorderedAccessView*, 2> uavs = { nullptr };
 
     auto resetViews = [&]() {
 		srvs.fill(nullptr);
@@ -579,7 +576,6 @@ void ScreenSpaceRayTracing::DrawSSRTSpecular()
     
     uavs.at(0) = texSSRColor->uav.get();
     uavs.at(1) = texHitPDF->uav.get();
-    uavs.at(2) = texHitDistance->uav.get();
 
     srvs.at(0) = texHistory->srv.get();
     srvs.at(1) = motion.SRV;

@@ -57,7 +57,6 @@ public:
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
 		float sharpnessDLSS = 0.0f;
-		bool enableDLSSRR = false;
 	};
 
 	Settings settings;
@@ -112,7 +111,7 @@ public:
 	UpscaleMethod GetUpscaleMethod();
 
 	void CheckResources(UpscaleMethod a_upscalemethod);
-	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod, bool a_enableDLSSRR);
+	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 
 	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[5];  // One for each UpscaleMethod
@@ -171,8 +170,6 @@ public:
 	 */
 	void ApplySharpening();
 
-	void SnapshotBeforeTransparency();
-
 	static void TimerSleepQPC(int64_t targetQPC);
 
 	void FrameLimiter();
@@ -190,7 +187,7 @@ public:
 	bool IsBackendInitialized() const;
 	void CheckBackendFeatures(IDXGIAdapter* adapter);
 	void UpgradeBackendInterface(void** ppInterface);
-	void SetBackendD3DDevice(void* device);
+	void SetBackendD3DDevice(ID3D11Device* device);
 	void PostBackendDevice();
 
 	// Module availability methods

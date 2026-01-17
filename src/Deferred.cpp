@@ -485,11 +485,6 @@ void Deferred::DeferredPasses()
 
 	if (dynamicCubemaps.loaded)
 		dynamicCubemaps.PostDeferred();
-
-	auto& upscaling = globals::features::upscaling;
-	if (upscaling.loaded && upscaling.settings.enableDLSSRR) {
-		upscaling.SnapshotBeforeTransparency();
-	}
 }
 
 void Deferred::EndDeferred()
