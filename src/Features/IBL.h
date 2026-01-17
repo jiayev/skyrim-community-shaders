@@ -35,7 +35,7 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RegisterWeatherVariables() override;
 
-	virtual void EarlyPrepass() override;
+	virtual void ReflectionsPrepass() override;
 	virtual void Prepass() override;
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
