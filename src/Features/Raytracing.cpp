@@ -1387,7 +1387,7 @@ eastl::vector<LightLimitFix::LightData> Raytracing::GetPointLights()
 	auto accumulator = *globals::game::currentAccumulator.get();
 	const auto activeShadowSceneNode = accumulator->GetRuntimeData().activeShadowSceneNode;
 
-	//auto& isl = globals::features::inverseSquareLighting;
+	auto& isl = globals::features::inverseSquareLighting;
 
 	auto addLight = [&](const RE::NiPointer<RE::BSLight>& e) {
 		if (auto bsLight = e.get()) {
@@ -1399,19 +1399,14 @@ eastl::vector<LightLimitFix::LightData> Raytracing::GetPointLights()
 					light.color = float3(runtimeData.diffuse.red, runtimeData.diffuse.green, runtimeData.diffuse.blue) * runtimeData.fade;
 					light.lightFlags = std::bit_cast<LightLimitFix::LightFlags>(runtimeData.ambient.red);
 
-					/*if (isl.loaded) {
+					if (isl.loaded) {
 						isl.ProcessLight(light, bsLight, niLight);
 					} else {
 						light.radius = runtimeData.radius.x;
 
 						if (settings.LodDimmer)
 							light.color *= runtimeData.fade;
-					}*/
-
-					light.radius = runtimeData.radius.x;
-
-					if (settings.LodDimmer)
-						light.color *= bsLight->lodDimmer;
+					}
 
 					if (!IsGlobalLight(bsLight)) {
 						light.lightFlags.set(LightLimitFix::LightFlags::PortalStrict);
@@ -1480,7 +1475,28 @@ void Raytracing::UpdateLights()
 			if (lights.size() >= RTConstants::MAX_LIGHTS)
 				break;
 
-			lights.emplace_back(data.positionWS[0].data, data.radius, data.color * settings.Point, 0);
+			if (data.lightFlags.any(LightLimitFix::LightFlags::Disabled))
+				continue;
+
+			Light light;
+			light.Vector = data.positionWS[0].data;
+			light.Radius = data.radius;
+			light.Color = data.color * settings.Point;
+			light.InvRadius = data.invRadius;
+			light.FadeZone = data.fadeZone;
+			light.SizeBias = data.sizeBias;
+			light.Type = 0;
+			light.Flags = 0;
+
+			if (data.lightFlags.any(LightLimitFix::LightFlags::InverseSquare))
+				light.Flags |= (1 << 0);
+
+			if (data.lightFlags.any(LightLimitFix::LightFlags::Linear))
+				light.Flags |= (1 << 1);
+
+			light.Pad0 = 0.0f;
+
+			lights.push_back(light);
 		}
 
 		if (!lights.empty())
@@ -1843,7 +1859,26 @@ static RE::BSVisit::BSVisitControl TraverseScenegraphRTGeometries(RE::NiAVObject
 	return result;
 }
 
-void Raytracing::CreateModel(RE::TESForm* form, const char* path, RE::NiNode* pRoot)
+void Raytracing::CreateModel(RE::TESForm* form, const char* model, RE::NiAVObject* root)
+{
+	auto formType = form->GetFormType();
+
+	if (formType == RE::FormType::Reference)
+		formType = form->As<RE::TESObjectREFR>()->GetBaseObject()->GetFormType();
+
+	if (formType == RE::FormType::Container || formType == RE::FormType::Door) {
+		if (auto* fadeNode = netimmerse_cast<RE::NiNode*>(root)) {
+			for (auto& child : fadeNode->GetChildren()) {
+				CreateModelInternal(form, std::format("{}_{}_{}", model, child->name.c_str(), child->parentIndex).c_str(), child.get());
+			}
+		}
+		return;
+	}
+
+	CreateModelInternal(form, model, root);
+}
+
+void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::NiAVObject* pRoot)
 {
 	if (!pRoot) {
 		logger::error("[RT] CreateModel \"{}\" - nullptr root", path);
@@ -2029,7 +2064,7 @@ void Raytracing::CreateModel(RE::TESForm* form, const char* path, RE::NiNode* pR
 	}
 }
 
-bool Raytracing::RemoveInstance(RE::NiNode* pRoot, bool releaseModel)
+bool Raytracing::RemoveInstance(RE::NiAVObject* pRoot, bool releaseModel)
 {
 	if (auto instanceIt = instances.find(pRoot); instanceIt != instances.end()) {
 		auto& instance = instanceIt->second;
@@ -2066,10 +2101,11 @@ bool Raytracing::RemoveInstance(RE::FormID formID, bool releaseModel)
 	bool removed = false;
 
 	if (auto nodesIt = formIDNodes.find(formID); nodesIt != formIDNodes.end()) {
-		removed = RemoveInstance(nodesIt->second, releaseModel);
+		for (auto& rootNode : nodesIt->second) {
+			removed = RemoveInstance(rootNode, releaseModel);
+		}
 
-		if (removed)
-			formIDNodes.erase(nodesIt);
+		formIDNodes.erase(nodesIt);
 	}
 
 	return removed;
@@ -2173,7 +2209,7 @@ eastl::shared_ptr<Allocation> Raytracing::GetMSNormalMapRegister([[maybe_unused]
 	return defaultTexture;
 }
 
-void Raytracing::AddInstance(RE::FormID formID, RE::NiNode* pNiNode, eastl::string path)
+void Raytracing::AddInstance(RE::FormID formID, RE::NiAVObject* pNiNode, eastl::string path)
 {
 	logger::debug("[RT] AddInstance [0x{:08X}] - {}, Path: {}", formID, pNiNode->name, path);
 
@@ -2182,14 +2218,19 @@ void Raytracing::AddInstance(RE::FormID formID, RE::NiNode* pNiNode, eastl::stri
 			auto [it, emplaced] = instances.try_emplace(pNiNode, Instance(path));
 
 			if (emplaced) {
-				formIDNodes.try_emplace(formID, pNiNode);
+				if (auto nodesIt = formIDNodes.find(formID); nodesIt != formIDNodes.end()) {
+					nodesIt->second.push_back(pNiNode);
+				} else {
+					formIDNodes.try_emplace(formID, eastl::vector<RE::NiAVObject*>{ pNiNode });
+				}
+
 				modelIt->second->AddRef();
 			}
 		}
 	}
 }
 
-eastl::vector<size_t> Raytracing::GatherInstanceLights(RE::NiNode* pNiNode)
+eastl::vector<size_t> Raytracing::GatherInstanceLights(RE::NiAVObject* pNiNode)
 {
 	eastl::vector<size_t> instanceLights;
 
@@ -2199,7 +2240,7 @@ eastl::vector<size_t> Raytracing::GatherInstanceLights(RE::NiNode* pNiNode)
 	for (size_t i = 0; i < lights.size(); i++) {
 		const Light& light = lights[i];
 
-		if ((center - light.Vector).Length() <= radius + light.Range)
+		if ((center - light.Vector).Length() <= radius + light.Radius)
 			instanceLights.push_back(i);
 	}
 
@@ -2299,8 +2340,6 @@ void Raytracing::UpdateInstances()
 				frustumCull |= frustumCullable && (worldBoundRadius < cullingSettings.MinRadius);
 			}
 
-			//float minDistance = cullingSettings.MinDistance;
-
 			// Culls all models outside of the player's view, must satisfy condition
 			if (cullingSettings.DistanceMode == CullingDistanceMode::Minimal) {
 				frustumCull |= distanceToBounds > cullingSettings.MinDistance;
@@ -2350,8 +2389,6 @@ void Raytracing::UpdateInstances()
 			LightData(GatherInstanceLights(pNiNode)),
 			firstShapeIndex);
 	}
-
-	logger::trace("[RT] UpdateInstances - Total Shape Count: {}", totalShapeCount);
 
 	// Unmap indirection table
 	D3D12_RANGE writeRange = { 0, std::min(totalShapeCount, RTConstants::MAX_SHAPES) * sizeof(uint32_t) };
@@ -4076,7 +4113,7 @@ RE::BSEventNotifyControl Raytracing::TESObjectLoadedEventHandler::ProcessEvent(c
 		return RE::BSEventNotifyControl::kContinue;
 	}
 
-	logger::info("[RT] TESObjectLoadedEvent - Name: {} - FullLodRef: {}", typeid(*eventRef).name(), eventRef->GetFullLODRef());
+	logger::info("[RT] TESObjectLoadedEvent - {} Name: {} - FullLodRef: {}", typeid(*eventRef).name(), eventRef->GetName(), eventRef->GetFullLODRef());
 
 	//if (eventRef->formType.none(RE::FormType::NPC, RE::FormType::LeveledNPC, RE::FormType::ActorCharacter))
 	if (eventRef->formType.none(RE::FormType::ActorCharacter))
@@ -4103,7 +4140,7 @@ RE::BSEventNotifyControl Raytracing::TESObjectLoadedEventHandler::ProcessEvent(c
 	if (!pNiAVObject)
 		return RE::BSEventNotifyControl::kContinue;
 
-	globals::features::raytracing.CreateModel(eventRef, actor->GetName(), netimmerse_cast<RE::NiNode*>(pNiAVObject));
+	globals::features::raytracing.CreateModelInternal(eventRef, actor->GetName(), netimmerse_cast<RE::NiNode*>(pNiAVObject));
 
 	return RE::BSEventNotifyControl::kContinue;
 }
