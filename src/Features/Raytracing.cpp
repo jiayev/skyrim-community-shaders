@@ -1864,54 +1864,42 @@ static RE::BSVisit::BSVisitControl TraverseScenegraphRTGeometries(RE::NiAVObject
 
 void Raytracing::CreateModel(RE::TESForm* form, const char* model, RE::NiAVObject* root)
 {
-	/*auto formType = form->GetFormType();
+	if (!root) {
+		logger::warn("[RT] CreateModel - NULL root object for model: {}", model ? model : "unknown");
+		return;
+	}
 
-	if (formType == RE::FormType::Reference)
-		formType = form->As<RE::TESObjectREFR>()->GetBaseObject()->GetFormType();
+	const REL::Relocation<const RE::NiRTTI*> rtti{ RE::NiMultiTargetTransformController::Ni_RTTI };
+	auto* controller = reinterpret_cast<RE::NiMultiTargetTransformController*>(root->GetController(rtti.get()));
 
-	if (formType == RE::FormType::Container || formType == RE::FormType::Door) {
-		if (auto* fadeNode = netimmerse_cast<RE::NiNode*>(root)) {
-			for (auto& child : fadeNode->GetChildren()) {
+	if (controller) {
+		logger::info("[RT] Load3D - NiMultiTargetTransformController {}", model);
+
+		eastl::hash_set<RE::NiNode*> parents;
+		eastl::hash_set<RE::NiAVObject*> targets;
+
+		for (uint16_t i = 0; i < controller->numInterps; i++) {
+			auto* target = controller->targets[i];
+
+			if (!target)
+				continue;
+
+			targets.emplace(target);
+			parents.emplace(target->parent);
+
+			CreateModelInternal(form, std::format("{}_{}", model, target->name.c_str()).c_str(), target);
+		}
+
+		for (auto* parent : parents) {
+			for (auto& child : parent->GetChildren()) {
+				if (targets.find(child.get()) != targets.end())
+					continue;
+
 				CreateModelInternal(form, std::format("{}_{}_{}", model, child->name.c_str(), child->parentIndex).c_str(), child.get());
 			}
 		}
+
 		return;
-	}*/
-
-	auto* controller = root->GetController<RE::NiControllerManager>();
-
-	if (controller) {
-		logger::info("[RT] Load3D - NiControllerManager {}", model);
-
-		auto* nextController = netimmerse_cast<RE::NiMultiTargetTransformController*>(controller->GetNext());
-
-		if (nextController) {
-			eastl::hash_set<RE::NiNode*> parents;
-			eastl::hash_set<RE::NiAVObject*> targets;
-
-			for (uint16_t i = 0; i < nextController->numInterps; i++) {
-				auto* target = nextController->targets[i];
-
-				if (!target)
-					continue;
-
-				targets.emplace(target);
-				parents.emplace(target->parent);
-
-				CreateModelInternal(form, std::format("{}_{}", model, target->name.c_str()).c_str(), target);
-			}
-
-			for (auto* parent : parents) {
-				for (auto& child : parent->GetChildren()) {
-					if (targets.find(child.get()) != targets.end())
-						continue;
-
-					CreateModelInternal(form, std::format("{}_{}_{}", model, child->name.c_str(), child->parentIndex).c_str(), child.get());
-				}
-			}
-
-			return;
-		}
 	}
 
 	CreateModelInternal(form, model, root);
@@ -2054,12 +2042,17 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 			logger::debug("\t\t[RT] CreateModel::TraverseScenegraphGeometries - Partitions: {}, VertexCount: {}, Unk24: [0x{:X}]", skinPartition->numPartitions, skinPartition->vertexCount, skinPartition->unk24);
 
 			for (auto& partition : skinPartition->partitions) {
+				// Fix for modded geometry
 				if (partition.triangles == 0) {
 					logger::error("\t\t[RT] CreateModel::TraverseScenegraphGeometries - Triangle count of 0 for {}: {}", path ? path : "N/A", name ? name : "N/A");
 					continue;
 				}
 
-				auto meshData = eastl::make_unique<Shape>(shapeRegisters.Allocate(), pGeometry, flags | Flags::Skinned);
+				// Fix for modded geometry
+				if (partition.bonesPerVertex > 0)
+					flags |= Flags::Skinned;
+
+				auto meshData = eastl::make_unique<Shape>(shapeRegisters.Allocate(), pGeometry, flags);
 
 				meshData->BuildMesh(partition.buffData, skinPartition->vertexCount, partition.triangles, partition.bonesPerVertex, localToRoot);
 				meshData->BuildMaterial(geometryRuntimeData, name);
@@ -2148,6 +2141,22 @@ bool Raytracing::RemoveInstance(RE::FormID formID, bool releaseModel)
 	}
 
 	return removed;
+}
+
+void Raytracing::SetInstanceDetached(RE::NiAVObject* root, bool detached)
+{
+	if (auto instanceIt = instances.find(root); instanceIt != instances.end()) {
+		instanceIt->second.SetDetached(detached);
+	}
+}
+
+void Raytracing::SetInstanceDetached(RE::FormID formID, bool detached)
+{
+	if (auto nodesIt = formIDNodes.find(formID); nodesIt != formIDNodes.end()) {
+		for (auto& rootNode : nodesIt->second) {
+			RemoveInstance(rootNode, detached);
+		}
+	}
 }
 
 eastl::shared_ptr<Allocation> Raytracing::GetTextureRegister(ID3D11Texture2D* dx11Texture, eastl::shared_ptr<Allocation> defaultTexture)
@@ -2350,6 +2359,9 @@ void Raytracing::UpdateInstances()
 	DX::ThrowIfFailed(indirectionBuffer->uploadResource->Map(0, &readRange, reinterpret_cast<void**>(&pIndirectionData)));
 
 	for (auto& [pNiNode, instance] : instances) {
+		if (instance.IsDetached())
+			continue;
+
 		if (blasInstances.size() > RTConstants::MAX_INSTANCES)
 			break;
 
@@ -2645,6 +2657,9 @@ void Raytracing::UpdateShadowInstances()
 	}
 
 	for (auto& [pNiNode, instance] : instances) {
+		if (instance.IsDetached())
+			continue;
+
 		if (blasShadowInstances.size() > RTConstants::MAX_INSTANCES)
 			break;
 
@@ -3435,7 +3450,9 @@ void Raytracing::PostPostLoad()
 	//TESLoadGameEventHandler::Register();
 
 	TESObjectLoadedEventHandler::Register();
+	
 	//TESCellAttachDetachEventHandler::Register();
+	// 
 	//TESCellFullyLoadedEventHandler::Register();
 }
 
@@ -4163,7 +4180,7 @@ RE::BSEventNotifyControl Raytracing::TESObjectLoadedEventHandler::ProcessEvent(c
 		return RE::BSEventNotifyControl::kContinue;
 	}
 
-	logger::info("[RT] TESObjectLoadedEvent - {} Name: {} - FullLodRef: {}", typeid(*eventRef).name(), eventRef->GetName(), eventRef->GetFullLODRef());
+	//logger::info("[RT] TESObjectLoadedEvent - {} Name: {} - FullLodRef: {}", typeid(*eventRef).name(), eventRef->GetName(), eventRef->GetFullLODRef());
 
 	//if (eventRef->formType.none(RE::FormType::NPC, RE::FormType::LeveledNPC, RE::FormType::ActorCharacter))
 	if (eventRef->formType.none(RE::FormType::ActorCharacter))
@@ -4195,17 +4212,27 @@ RE::BSEventNotifyControl Raytracing::TESObjectLoadedEventHandler::ProcessEvent(c
 	return RE::BSEventNotifyControl::kContinue;
 }
 
-// This might be usefull for instance management
 RE::BSEventNotifyControl Raytracing::TESCellAttachDetachEventHandler::ProcessEvent(const RE::TESCellAttachDetachEvent* a_event, RE::BSTEventSource<RE::TESCellAttachDetachEvent>*)
 {
-	if (!a_event)
+	globals::features::raytracing.SetInstanceDetached(a_event->reference->GetFormID(), !a_event->attached);
+
+	return RE::BSEventNotifyControl::kContinue;
+}
+
+RE::BSEventNotifyControl Raytracing::CellAttachDetachEventHandler::ProcessEvent(const RE::CellAttachDetachEvent* a_event, RE::BSTEventSource<RE::CellAttachDetachEvent>*)
+{
+	bool attaching = a_event->status == RE::CellAttachDetachEvent::Status::StartAttach;
+	bool detaching = a_event->status == RE::CellAttachDetachEvent::Status::StartDetach;
+
+	if (!attaching && !detaching)
 		return RE::BSEventNotifyControl::kContinue;
 
-	auto* refr = a_event->reference.get();
+	auto* land = a_event->cell->GetRuntimeData().cellLand;
 
-	auto* base = refr->GetBaseObject();
+	if (!land)
+		return RE::BSEventNotifyControl::kContinue;
 
-	logger::info("TESCellAttachDetachEventHandler::ProcessEvent {} {} {}", a_event->attached, magic_enum::enum_name(refr->formType.get()), magic_enum::enum_name(base->formType.get()));
+	globals::features::raytracing.SetInstanceDetached(land->GetFormID(), detaching);
 
 	return RE::BSEventNotifyControl::kContinue;
 }
