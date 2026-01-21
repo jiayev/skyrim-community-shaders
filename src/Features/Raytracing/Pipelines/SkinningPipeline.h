@@ -24,6 +24,7 @@ struct SkinningHeapDef
 		UAV,
 		SRV,
 		DynamicBuffer,
+		VertexBuffer,
 		SkinningBuffer
 	};
 
@@ -33,7 +34,8 @@ struct SkinningHeapDef
 		UpdateData = Output + RTConstants::MAX_SHAPES,
 		BoneMatrices,
 		DynamicVertices,
-		SkinningData = DynamicVertices + RTConstants::MAX_SHAPES,
+		Vertices = DynamicVertices + RTConstants::MAX_SHAPES,
+		SkinningData = Vertices + RTConstants::MAX_SHAPES,
 		NumDescriptors = SkinningData + RTConstants::MAX_SHAPES,
 		None
 	};
@@ -47,9 +49,9 @@ struct SkinningPipeline : ComputePipeline<SkinningHeap>
 
 	static constexpr uint MAX_BATCHES = 4;
 
-	static constexpr uint MAX_BONES = 255;
+	static constexpr uint MAX_GEOMETRY = 512;
 
-	static constexpr uint MAX_BONE_MATRICES = MAX_BONES * 512;
+	static constexpr uint MAX_BONE_MATRICES = MAX_GEOMETRY * 10;
 
 	struct Settings
 	{
@@ -63,13 +65,17 @@ struct SkinningPipeline : ComputePipeline<SkinningHeap>
 	{
 		Flags updateFlags;
 		eastl::string path;
-		Shape* shape;
 	};
 
-	eastl::vector<QueuedShape> queuedShapes;
+	eastl::unordered_map<Shape*, QueuedShape> queuedShapes;
 
 	eastl::unique_ptr<DX12::StructuredBufferUpload<VertexUpdateData>> vertexUpdateBuffer = nullptr;
 	eastl::unique_ptr<DX12::StructuredBufferUpload<float3x4>> boneMatricesBuffer = nullptr;
+
+	eastl::vector<VertexUpdateData> vertexUpdateData;
+	eastl::vector<float3x4> boneMatricesData;
+
+	eastl::vector<CD3DX12_RESOURCE_BARRIER> barriers;
 
 	Util::FrameChecker frameChecker;
 
