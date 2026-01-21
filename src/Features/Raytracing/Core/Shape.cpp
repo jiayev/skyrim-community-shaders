@@ -372,9 +372,8 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 		float4(0.0f, 0.0f, 0.0f, 0.0f)
 	};
 
-	eastl::array<half, 4> scalars;
+	eastl::array<half, 3> scalars;
 	scalars.fill(0.0f);
-	scalars[3] = 1.0f;
 
 	eastl::array<half4, 2> texCoordOffsetScales = {
 		float4(0.0f, 0.0f, 1.0f, 1.0f),
@@ -425,18 +424,20 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 				logger::debug("[RT] BuildMaterial - [Effect] BSLightingShaderProperty Flags: {}", GetFlagsString<EShaderPropertyFlag>(lightingShaderProp->flags.underlying()));
 
 				// Set alpha flags
-				auto alphaProperty = property->GetRTTI() == globals::rtti::NiAlphaPropertyRTTI.get() ? static_cast<RE::NiAlphaProperty*>(property) : nullptr;
-				if (lightingShaderProp->alpha < 0.999f || (alphaProperty && alphaProperty->GetAlphaBlending())) {
-					flags |= Flags::AlphaBlending;
-					scalars[3] = lightingShaderProp->alpha;
-					alphaFlags = Material::AlphaFlags::kAlphaBlend;
-				} else if (alphaProperty && alphaProperty->GetAlphaTesting()) {
-					flags &= ~Flags::AlphaBlending;
-					flags |= Flags::AlphaTesting;
-					alphaFlags = Material::AlphaFlags::kAlphaTest;
-				} else {
-					flags &= ~Flags::AlphaBlending;
-					flags &= ~Flags::AlphaTesting;
+				if (flags & Flags::AlphaBlending) {
+					auto alphaProperty = property->GetRTTI() == globals::rtti::NiAlphaPropertyRTTI.get() ? static_cast<RE::NiAlphaProperty*>(property) : nullptr;
+					if (lightingShaderProp->alpha < 0.999f || (alphaProperty && alphaProperty->GetAlphaBlending())) {
+						flags |= Flags::AlphaBlending;
+						colors[0].w = lightingShaderProp->alpha;
+						alphaFlags = Material::AlphaFlags::kAlphaBlend;
+					} else if (alphaProperty && alphaProperty->GetAlphaTesting()) {
+						flags &= ~Flags::AlphaBlending;
+						flags |= Flags::AlphaTesting;
+						alphaFlags = Material::AlphaFlags::kAlphaTest;
+					} else {
+						flags &= ~Flags::AlphaBlending;
+						flags &= ~Flags::AlphaTesting;
+					}
 				}
 
 				// This is always nullptr :(
@@ -549,7 +550,7 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 										lightingHairTintMaterial->tintColor.red,
 										lightingHairTintMaterial->tintColor.green,
 										lightingHairTintMaterial->tintColor.blue,
-										1.0f
+										(float)colors[0].w
 									};
 								}
 							}
@@ -569,7 +570,7 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 										lightingFacegenTintMaterial->tintColor.red,
 										lightingFacegenTintMaterial->tintColor.green,
 										lightingFacegenTintMaterial->tintColor.blue,
-										1.0f
+										(float)colors[0].w
 									};
 								}
 							}
