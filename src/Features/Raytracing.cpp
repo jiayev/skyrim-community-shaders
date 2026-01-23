@@ -296,6 +296,20 @@ void Raytracing::DrawDenoiserSettings()
 #ifdef DLSS_RR
 	DrawDLSSRRSettings();
 #endif
+
+	// Draw Accumulation settings
+	if (settings.Denoiser == Denoiser::Accumulation && settings.PathTracing) {
+		if (ImGui::CollapsingHeader("Accumulation")) {
+			ImGui::Text("Accumulated Frames: %d", accumulatedFrames);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Number of frames accumulated for denoising.\nAccumulation resets when camera moves.");
+			}
+			
+			if (cameraHasMoved) {
+				ImGui::TextColored({ 1.0f, 0.5f, 0.0f, 1.0f }, "Camera is moving - resetting accumulation");
+			}
+		}
+	}
 }
 //ResolutionMode
 
@@ -852,6 +866,11 @@ void Raytracing::SetupResources()
 	// Constant buffers
 	auto cbDesc = ConstantBufferDesc<RenderResData>();
 	renderResCB = eastl::make_unique<ConstantBuffer>(cbDesc);
+
+	// Accumulation denoiser constant buffer
+	accumulationCBData = eastl::make_unique<AccumulationCBData>();
+	auto accCbDesc = ConstantBufferDesc<AccumulationCBData>();
+	accumulationCB = eastl::make_unique<ConstantBuffer>(accCbDesc);
 
 	// Setup default textures (this is a bit wordy...)
 	{
@@ -1715,9 +1734,9 @@ void Raytracing::CommitModel(Model* model)
 		auto& shape = shapes[i];
 
 		bool hasAlphaTesting = shape->flags & Shape::Flags::AlphaTesting;
-		bool hasGlow = shape->material.Feature == RE::BSShaderMaterial::Feature::kGlowMap;
+		bool isWindows = shape->material.shaderFlags.any(RE::BSShaderProperty::EShaderPropertyFlag::kAssumeShadowmask) && (shape->material.Feature == RE::BSShaderMaterial::Feature::kGlowMap || shape->material.PBRFlags.any(PBRShaderFlags::HasEmissive));
 
-		bool isOpaque = !hasAlphaTesting && !(hasGlow && settings.InteriorSun);
+		bool isOpaque = !hasAlphaTesting && !(isWindows && settings.InteriorSun);
 
 		geometryDescs[i] = {
 			.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
@@ -2090,13 +2109,6 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 
 				shapes.push_back(eastl::move(meshData));
 			}
-
-			/*auto* rootParent = skinInstance->rootParent;
-			auto* bones = skinInstance->bones;
-			auto* boneWorldTransforms = skinInstance->boneWorldTransforms;
-
-			auto& numMatrices = skinInstance->numMatrices;
-			auto* boneMatrices = skinInstance->boneMatrices;*/
 		}
 
 		return RE::BSVisit::BSVisitControl::kContinue;
@@ -2389,7 +2401,7 @@ void Raytracing::UpdateInstances()
 	uint32_t* pIndirectionData = nullptr;
 	DX::ThrowIfFailed(indirectionBuffer->uploadResource->Map(0, &readRange, reinterpret_cast<void**>(&pIndirectionData)));
 
-	for (auto& [pNiNode, instance] : instances) {
+	for (auto& [node, instance] : instances) {
 		if (instance.IsDetached())
 			continue;
 
@@ -2413,11 +2425,14 @@ void Raytracing::UpdateInstances()
 		if (settings.DisableSkinned && (dynamic || skinned))
 			continue;
 
+		//if (!model->RenderUse())
+		//	continue;
+
 		if (cullingSettings.Mode == CullingMode::Smart) {
-			if (landscape && pNiNode->GetAppCulled())
+			if (landscape && node->GetFlags().any(RE::NiAVObject::Flag::kHidden))
 				continue;
 
-			auto worldBound = pNiNode->worldBound;
+			auto worldBound = node->worldBound;
 
 			float worldBoundRadius = Util::Units::GameUnitsToMeters(worldBound.radius);
 			float distanceToBounds = Util::Units::GameUnitsToMeters(position.GetDistance(worldBound.center)) - worldBoundRadius;
@@ -2444,15 +2459,15 @@ void Raytracing::UpdateInstances()
 			}
 
 			// We'll cull small models or very distant ones (that are outside the player view)
-			if (frustumCull && !camera->NodeInFrustum(pNiNode))
+			if (frustumCull && !camera->NodeInFrustum(node))
 				continue;
 
 		} else if (cullingSettings.Mode == CullingMode::Skyrim) {
-			if (pNiNode->GetAppCulled())
+			if (node->GetFlags().any(RE::NiAVObject::Flag::kHidden))
 				continue;
 		}
 
-		instance.Update(pNiNode, { it->first, model.get() }, skinningPipeline.get());
+		instance.Update(node, { it->first, model.get() }, skinningPipeline.get());
 
 		// This is temporary while I think of a better place to fit this (probably on instance.Update?)
 		auto firstShapeIndex = totalShapeCount;
@@ -2480,7 +2495,7 @@ void Raytracing::UpdateInstances()
 
 		instanceBufferData.emplace_back(
 			instance.transform,
-			LightData(GatherInstanceLights(pNiNode)),
+			LightData(GatherInstanceLights(node)),
 			firstShapeIndex);
 	}
 
@@ -3284,6 +3299,22 @@ void Raytracing::DrawRTGI()
 
 	PostRaytraceCleanup();
 
+	// Check for camera movement for accumulation denoiser
+	if (settings.Denoiser == Denoiser::Accumulation && settings.PathTracing) {
+		// Use frameData's Position and PositionPrev to detect camera movement
+		float3 posDelta = frameData->Position - frameData->PositionPrev;
+		float movementSq = posDelta.x * posDelta.x + posDelta.y * posDelta.y + posDelta.z * posDelta.z;
+		const float threshold = 0.01f;  // Movement threshold in world units squared
+		
+		cameraHasMoved = (movementSq > threshold);
+		
+		if (cameraHasMoved) {
+			accumulatedFrames = 0;
+		} else {
+			accumulatedFrames++;
+		}
+	}
+
 	if (settings.DebugOutput == DebugOutput::None) {
 		if (settings.Denoiser == Denoiser::SVGF) {
 			auto sampler = samplerState.get();
@@ -3321,6 +3352,39 @@ void Raytracing::DrawRTGI()
 
 		auto dispatchCount = Util::GetScreenDispatchCount();
 		d3d11Context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+	} else if (settings.PathTracing && settings.Denoiser == Denoiser::Accumulation) {
+		// Accumulation denoiser: blend current frame with accumulated result
+		if (accumulatedFrames == 0 || cameraHasMoved) {
+			// First frame or camera moved: copy directly
+			d3d11Context->CopyResource(main.texture, mainTexture->resource11);
+		} else {
+			// Accumulate: blend with previous frames using compute shader
+			accumulationCBData->AccumulationWeight = 1.0f / static_cast<float>(accumulatedFrames + 1);
+			accumulationCB->Update(accumulationCBData.get(), sizeof(AccumulationCBData));
+
+			auto* accumulationCBPtr = accumulationCB->CB();
+			d3d11Context->CSSetConstantBuffers(2, 1, &accumulationCBPtr);
+
+			d3d11Context->CSSetShader(accumulationCS.get(), nullptr, 0);
+
+			// Copy current accumulated result for reading
+			d3d11Context->CopyResource(main.textureCopy, main.texture);
+
+			// Set input textures:
+			// MainInputTexture (t0) = previous accumulated (main.textureCopy)
+			// DiffuseGITexture (t1) = current frame (mainTexture)
+			eastl::array<ID3D11ShaderResourceView*, 2> srvs = {
+				main.SRVCopy,      // Previous accumulated
+				mainTexture->srv   // Current frame
+			};
+			d3d11Context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+
+			// Output to main texture
+			d3d11Context->CSSetUnorderedAccessViews(0, 1, &main.UAV, nullptr);
+
+			auto dispatchCount = Util::GetScreenDispatchCount();
+			d3d11Context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+		}
 	} else {
 		d3d11Context->CopyResource(main.texture, mainTexture->resource11);
 	}
@@ -4172,6 +4236,15 @@ void Raytracing::CompileCompositeShader()
 
 	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\CompositeCS.hlsl", defines, "cs_5_0")); rawPtr)
 		compositeCS.attach(rawPtr);
+
+	// Compile accumulation shader
+	std::vector<std::pair<const char*, const char*>> accDefines;
+	accDefines.emplace_back("ACCUMULATION", "");
+	if (settings.ConvertToGamma) {
+		accDefines.emplace_back("GAMMA_OUTPUT", "");
+	}
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\CompositeCS.hlsl", accDefines, "cs_5_0")); rawPtr)
+		accumulationCS.attach(rawPtr);
 }
 
 RaytracingFD::FeatureData Raytracing::GetCommonBufferData()
