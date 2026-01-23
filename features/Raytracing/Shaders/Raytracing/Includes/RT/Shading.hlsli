@@ -129,17 +129,91 @@ float3 EvalFuzzBSDF(in float3 l, in Surface surface, in BRDFContext brdfContext)
 }
 #endif
 
+float3 EvalTransmissionBSDF(in float3 l, in Surface surface, in BRDFContext brdfContext, in bool isEnter)
+{
+    float materialIOR = max(surface.IOR, 1.0f);
+    
+    // Special case: IOR=1 means no refraction, light passes straight through
+    if (abs(materialIOR - 1.0f) < 0.001f)
+    {
+        float NdotL = abs(dot(surface.Normal, l));
+        if (NdotL > 0.0f)
+            return surface.TransmissionColor * NdotL;
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+    
+    float eta = isEnter ? (1.0f / materialIOR) : materialIOR;
+    
+    float NdotL = dot(surface.Normal, l);
+    // Use raw NdotV for transmission (not saturated)
+    float NdotV = dot(surface.Normal, brdfContext.ViewDirection);
+    
+    // Check if this is reflection (same hemisphere) or transmission (opposite hemisphere)
+    bool isReflection = NdotL * NdotV > 0.0f;
+    
+    NdotL = abs(NdotL);
+    if (NdotL <= 0.0f)
+        return float3(0.0f, 0.0f, 0.0f);
+    
+    float3 H;
+    float VdotH;
+    
+    if (isReflection)
+    {
+        // Reflection case: half vector is in between V and L
+        H = normalize(brdfContext.ViewDirection + l);
+        VdotH = clamp(dot(brdfContext.ViewDirection, H), 1e-5f, 1.0f);
+    }
+    else
+    {
+        // Transmission case: half vector is refracted
+        H = -normalize(brdfContext.ViewDirection * eta + l);
+        VdotH = abs(dot(brdfContext.ViewDirection, H));
+    }
+    
+    float NdotH = saturate(dot(surface.Normal, H));
+    
+    float F = FresnelDielectric(eta, VdotH);
+    float D = BRDF::D_GGX(surface.Roughness, NdotH);
+    float Vis = BRDF::Vis_SmithJointApprox(surface.Roughness, max(1e-5f, abs(NdotV)), NdotL);
+    
+    if (isReflection)
+    {
+        // Reflection component
+        float3 Fr = (D * Vis) * F;
+        return Fr * NdotL;
+    }
+    else
+    {
+        // Transmission component
+        float LdotH = abs(dot(l, H));
+        float sqrtDenom = VdotH + eta * LdotH;
+        float jacobian = (eta * eta * LdotH) / max(sqrtDenom * sqrtDenom, 1e-7f);
+
+        float etaScale = eta * eta;
+        float3 Ft = surface.TransmissionColor * (1.0f - F) * (D * Vis) * etaScale * jacobian;
+        return Ft * NdotL;
+    }
+}
+
 float3 EvalLight(in float3 l, in Surface surface, in BRDFContext brdfContext, in Material material)
 {
 #if LIGHTEVAL_MODE == LIGHTEVAL_MODE_DIFFUSE
     return EvalDiffuse(l, surface, brdfContext);
 #else
+    bool hasTransmission = any(surface.TransmissionColor) > 0.0f;
+    if (hasTransmission)
+    {
+        // For direct lighting, determine if light is entering or exiting based on view direction and geometry normal
+        bool isEnter = dot(brdfContext.ViewDirection, surface.GeomNormal) > 0.0f;
+        return EvalTransmissionBSDF(l, surface, brdfContext, isEnter);
+    }
 #   if defined(FULL_MATERIAL)
-    if ((material.PBRFlags & PBR::Flags::Fuzz) != 0)
+    else if ((material.PBRFlags & PBR::Flags::Fuzz) != 0)
         return EvalFuzzBSDF(l, surface, brdfContext);
-    else
 #   endif
-    return EvalDefaultBSDF(l, surface, brdfContext);
+    else
+        return EvalDefaultBSDF(l, surface, brdfContext);
 #endif
 }
 
@@ -341,15 +415,27 @@ bool SampleTransmissionBSDF(in Surface surface, in BRDFContext brdfContext, in b
 {
     const float3 V = brdfContext.ViewDirection;
     float3 N = surface.Normal;
-    if (!isEnter)
-        N = -N;
+    float3 L = 0;
+    float NdotL = 0;
 
     brdfWeight.diffuse = 0.0f;
     brdfWeight.specular = 0.0f;
     brdfWeight.transmission = 0.0f;
 
-    float materialIOR = max(surface.IOR, 1.001f);
-    float relativeEta = isEnter ? (1.0f / materialIOR) : materialIOR;
+    float materialIOR = max(surface.IOR, 1.0f);
+    
+    // Special case: IOR=1 means no refraction, light passes straight through
+    if (abs(materialIOR - 1.0f) < 0.001f)
+    {
+        direction = -V;  // Light continues in same direction
+        brdfWeight.transmission = surface.TransmissionColor;
+        return false;  // Not specular, just transmission
+    }
+    
+    float eta = isEnter ? (1.0f / materialIOR) : materialIOR;
+    
+    // Use raw NdotV for transmission (not saturated)
+    float rawNdotV = dot(surface.Normal, V);
 
     direction = float3(0, 0, 0);
 
@@ -363,81 +449,100 @@ bool SampleTransmissionBSDF(in Surface surface, in BRDFContext brdfContext, in b
     const float alpha2 = alpha * alpha;
     
     float3 He = MonteCarlo::SampleGGX_VNDF(Ve, alpha, randomSeed);
+    float3 H = surface.Mul(He);
 
-    float3 H = surface.Tangent * He.x + surface.Bitangent * He.y + N * He.z;
-    H = normalize(H);
+    float VdotH = saturate(dot(Ve, He));
+    float NdotH = saturate(dot(surface.Normal, H));
 
-    float VdotH = saturate(dot(V, H));
-    float NdotV = saturate(dot(N, V));
-
-    float F = FresnelDielectric(VdotH, relativeEta);
+    float F = FresnelDielectric(eta, VdotH);
 
     float rnd = Random(randomSeed);
+    float pdf = 0.0f;
+    float3 Le = 0.0f;
 
     if (rnd < F)
     {
-        float3 L = reflect(-V, H);
+        Le = reflect(-Ve, He);
+        L = surface.Mul(Le);
+        NdotL = saturate(dot(surface.Normal, L));
+        
+        if (NdotL <= 0.0f)
+            return false;
+        
+        float specularPdf = MonteCarlo::SampleGGXVNDFReflectionPdf(alpha, alpha2, NdotH, abs(rawNdotV), VdotH);
+        pdf = F * specularPdf;
+        
+        float3 Fr = MonteCarlo::SpecularSampleWeightGGXVNDF(alpha, alpha2, NdotL, abs(rawNdotV), VdotH, NdotH) * specularPdf;
+        
+#if GGX_ENERGY_CONSERVATION
+        Fr *= BRDF::GGXEnergyConservationTerm(surface.F0, surface.Roughness, abs(rawNdotV));
+#endif
+        
+        brdfWeight.specular = Fr / max(pdf, 1e-7f);
         direction = L;
-        
-        float NdotL = saturate(dot(N, L));
-        float NdotH = saturate(dot(N, H));
-        
-        if (NdotL <= 0.0f) 
-        {
-            brdfWeight.specular = 0.0f;
-            return true;
-        }
-
-        float D = BRDF::D_GGX(surface.Roughness, NdotH);
-        float Vis = BRDF::Vis_SmithJointApprox(surface.Roughness, NdotV, NdotL);
-        // Fr = D * Vis * F;
-
-        float pdf = MonteCarlo::SampleGGXVNDFReflectionPdf(alpha, alpha2, NdotH, NdotV, VdotH);
-        
-        // PDF = pdf * F
-        // Weight = (D * Vis * F * NdotL) / (pdf * F) = (D * Vis * NdotL) / pdf
-        float pdfRCP = 1.0f / max(pdf, 1e-7f);
-        
-        brdfWeight.specular = D * Vis * NdotL * pdfRCP;
-        
         return true;
     }
     else
     {
-        float3 L = refract(-V, H, relativeEta);
+        float cosThetaT;
+        float3 T = refract(-Ve, He, eta);
+
+        if (length(T) < 0.01f) {
+            Le = reflect(-Ve, He);
+            L = surface.Mul(Le);
+            NdotL = saturate(dot(surface.Normal, L));
+            
+            if (NdotL <= 0.0f)
+                return false;
+            
+            float specularPdf = MonteCarlo::SampleGGXVNDFReflectionPdf(alpha, alpha2, NdotH, abs(rawNdotV), VdotH);
+            pdf = specularPdf;
+            
+            float3 Fr = MonteCarlo::SpecularSampleWeightGGXVNDF(alpha, alpha2, NdotL, abs(rawNdotV), VdotH, NdotH) * specularPdf;
+            brdfWeight.specular = Fr / max(pdf, 1e-7f);
+            direction = L;
+            return true;
+        }
+
+        Le = normalize(T);
+        L = surface.Mul(Le);
+        NdotL = abs(dot(surface.Normal, L));
+
+        float TdotH = abs(dot(Le, He));
+        float LdotH = abs(dot(L, H));
+
+        float sqrtDenom = VdotH + eta * LdotH;
+        float jacobian = (eta * eta * abs(LdotH)) / (sqrtDenom * sqrtDenom);
+
+        float transmissionPdf = MonteCarlo::SampleGGXVNDFReflectionPdf(alpha, alpha2, NdotH, abs(rawNdotV), VdotH) * jacobian;
+        pdf = (1 - F) * transmissionPdf;
+
+        // Scale by eta^2 when exiting (eta > 1) to compensate for solid angle change
+        // When entering (eta < 1), don't scale down to avoid darkening
+        float etaScale = eta * eta;
+        float3 transmissionWeight = surface.TransmissionColor * (1.0f - F) * etaScale * NdotL;
+        
+        float G = MonteCarlo::SpecularSampleWeightGGXVNDF(alpha, alpha2, NdotL, abs(rawNdotV), abs(TdotH), NdotH);
+        
+        brdfWeight.transmission = transmissionWeight * G * transmissionPdf / max(pdf, 1e-7f);
         direction = L;
-
-        if (dot(L, L) < 0.01f) return false; 
-
-        float NdotL = saturate(dot(-N, L));
-        float NdotH = saturate(dot(N, H));
-        float LdotH = saturate(dot(-L, H));
-
-        if (NdotL <= 0.0f) return false;
-
-        float D = BRDF::D_GGX(surface.Roughness, NdotH);
-        float Vis = BRDF::Vis_SmithJointApprox(surface.Roughness, NdotV, NdotL);
-
-        // Eq: ( |V.H| * |L.H| ) / ( (eta*V.H + L.H)^2 ) * eta^2
-        float denom = (relativeEta * VdotH + LdotH);
-        float denom2 = max(denom * denom, 1e-5f);
-
-        float refractTerm = 4.0f * VdotH * LdotH * (relativeEta * relativeEta) / denom2;
-
-        float3 Ft = surface.TransmissionColor * D * Vis * refractTerm;
-
-        // Jacobian = (eta^2 * |L.H|) / (eta * V.H + L.H)^2
-        float jacobian = (relativeEta * relativeEta * LdotH) / denom2;
-
-        float pdfRefl = MonteCarlo::SampleGGXVNDFReflectionPdf(alpha, alpha2, NdotH, NdotV, VdotH);
-        float pdfH = pdfRefl * 4.0f * VdotH;
-
-        float pdf = pdfH * jacobian;
-        float pdfRCP = 1.0f / max(pdf, 1e-7f);
-
-        brdfWeight.transmission = Ft * NdotL * pdfRCP;
-        return false;
+        return true;
     }
+}
+
+bool SimpleTransmission(in Surface surface, in BRDFContext brdfContext, inout uint randomSeed, out float3 direction, out MonteCarlo::BRDFWeight brdfWeight)
+{
+    const float3 V = brdfContext.ViewDirection;
+
+    brdfWeight.diffuse = 0.0f;
+    brdfWeight.specular = 0.0f;
+    brdfWeight.transmission = 0.0f;
+
+    // No refraction or reflection, just pass through
+    direction = -V;
+    // For simple transmission (like hair), use full transmission color
+    brdfWeight.transmission = surface.TransmissionColor;
+    return false;
 }
 
 #if defined(FULL_MATERIAL)
