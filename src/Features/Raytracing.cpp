@@ -187,6 +187,7 @@ void Raytracing::DrawSettings()
 		CompileRTGIShaders();
 		CompileCompositeShader();
 		recompileReason = RecompileReason::None;
+		accumulatedFrames = 0; // Reset accumulation on recompile/settings change
 	}
 }
 
@@ -296,8 +297,6 @@ void Raytracing::DrawDenoiserSettings()
 #ifdef DLSS_RR
 	DrawDLSSRRSettings();
 #endif
-
-	// Draw Accumulation settings
 	if (settings.Denoiser == Denoiser::Accumulation && settings.PathTracing) {
 		if (ImGui::CollapsingHeader("Accumulation")) {
 			ImGui::Text("Accumulated Frames: %d", accumulatedFrames);
@@ -701,6 +700,11 @@ void Raytracing::DrawOverlay()
 		ImGui::EndTable();
 	}
 
+	if (settings.PathTracing && settings.Denoiser == Denoiser::Accumulation) {
+		ImGui::Separator();
+		ImGui::Text("Accumulation Frames: %d", accumulatedFrames);
+	}
+
 	ImGui::End();
 }
 
@@ -867,7 +871,6 @@ void Raytracing::SetupResources()
 	auto cbDesc = ConstantBufferDesc<RenderResData>();
 	renderResCB = eastl::make_unique<ConstantBuffer>(cbDesc);
 
-	// Accumulation denoiser constant buffer
 	accumulationCBData = eastl::make_unique<AccumulationCBData>();
 	auto accCbDesc = ConstantBufferDesc<AccumulationCBData>();
 	accumulationCB = eastl::make_unique<ConstantBuffer>(accCbDesc);
@@ -1000,6 +1003,25 @@ void Raytracing::SetupResources()
 
 			auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(mainTexture->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 			commandList->ResourceBarrier(1, &barrier);
+		}
+
+		// Accumulation buffer for path tracing denoiser
+		{
+			D3D11_TEXTURE2D_DESC texDesc{};
+			texDesc.Width = mainDesc.Width;
+			texDesc.Height = mainDesc.Height;
+			texDesc.MipLevels = 1;
+			texDesc.ArraySize = 1;
+			texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+			texDesc.SampleDesc.Count = 1;
+			texDesc.SampleDesc.Quality = 0;
+			texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+
+			accumulationTexture = eastl::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
+			DX::ThrowIfFailed(accumulationTexture->resource->SetName(L"Accumulation Texture"));
+
+			accumulationTextureCopy = eastl::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
+			DX::ThrowIfFailed(accumulationTextureCopy->resource->SetName(L"Accumulation Texture Copy"));
 		}
 	}
 
@@ -3301,12 +3323,16 @@ void Raytracing::DrawRTGI()
 
 	// Check for camera movement for accumulation denoiser
 	if (settings.Denoiser == Denoiser::Accumulation && settings.PathTracing) {
-		// Use frameData's Position and PositionPrev to detect camera movement
+		const auto& currentViewProj = globals::game::frameBufferCached.GetCameraViewProjUnjittered();
+		const auto& prevViewProj = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered();
+
+		bool matrixChanged = std::memcmp(&currentViewProj, &prevViewProj, sizeof(currentViewProj)) != 0;
+
 		float3 posDelta = frameData->Position - frameData->PositionPrev;
 		float movementSq = posDelta.x * posDelta.x + posDelta.y * posDelta.y + posDelta.z * posDelta.z;
-		const float threshold = 0.01f;  // Movement threshold in world units squared
-		
-		cameraHasMoved = (movementSq > threshold);
+		const float posThreshold = 0.01f;
+
+		cameraHasMoved = matrixChanged || (movementSq > posThreshold);
 		
 		if (cameraHasMoved) {
 			accumulatedFrames = 0;
@@ -3353,12 +3379,10 @@ void Raytracing::DrawRTGI()
 		auto dispatchCount = Util::GetScreenDispatchCount();
 		d3d11Context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 	} else if (settings.PathTracing && settings.Denoiser == Denoiser::Accumulation) {
-		// Accumulation denoiser: blend current frame with accumulated result
 		if (accumulatedFrames == 0 || cameraHasMoved) {
-			// First frame or camera moved: copy directly
+			d3d11Context->CopyResource(accumulationTexture->resource11, mainTexture->resource11);
 			d3d11Context->CopyResource(main.texture, mainTexture->resource11);
 		} else {
-			// Accumulate: blend with previous frames using compute shader
 			accumulationCBData->AccumulationWeight = 1.0f / static_cast<float>(accumulatedFrames + 1);
 			accumulationCB->Update(accumulationCBData.get(), sizeof(AccumulationCBData));
 
@@ -3367,23 +3391,21 @@ void Raytracing::DrawRTGI()
 
 			d3d11Context->CSSetShader(accumulationCS.get(), nullptr, 0);
 
-			// Copy current accumulated result for reading
-			d3d11Context->CopyResource(main.textureCopy, main.texture);
+			d3d11Context->CopyResource(accumulationTextureCopy->resource11, accumulationTexture->resource11);
 
-			// Set input textures:
-			// MainInputTexture (t0) = previous accumulated (main.textureCopy)
-			// DiffuseGITexture (t1) = current frame (mainTexture)
 			eastl::array<ID3D11ShaderResourceView*, 2> srvs = {
-				main.SRVCopy,      // Previous accumulated
-				mainTexture->srv   // Current frame
+				accumulationTextureCopy->srv,
+				mainTexture->srv
 			};
 			d3d11Context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 
-			// Output to main texture
-			d3d11Context->CSSetUnorderedAccessViews(0, 1, &main.UAV, nullptr);
+			ID3D11UnorderedAccessView* accumulationUAV = accumulationTexture->uav;
+			d3d11Context->CSSetUnorderedAccessViews(0, 1, &accumulationUAV, nullptr);
 
 			auto dispatchCount = Util::GetScreenDispatchCount();
 			d3d11Context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+
+			d3d11Context->CopyResource(main.texture, accumulationTexture->resource11);
 		}
 	} else {
 		d3d11Context->CopyResource(main.texture, mainTexture->resource11);
@@ -4237,7 +4259,6 @@ void Raytracing::CompileCompositeShader()
 	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\CompositeCS.hlsl", defines, "cs_5_0")); rawPtr)
 		compositeCS.attach(rawPtr);
 
-	// Compile accumulation shader
 	std::vector<std::pair<const char*, const char*>> accDefines;
 	accDefines.emplace_back("ACCUMULATION", "");
 	if (settings.ConvertToGamma) {

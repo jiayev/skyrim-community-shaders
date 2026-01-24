@@ -17,12 +17,10 @@ cbuffer AccumulationCB : register(b2)
 void main(uint2 id : SV_DispatchThreadID)
 {
 #if defined(ACCUMULATION)
-    // Accumulation denoiser mode: blend current frame with previous
-    float3 previousColor = MainInputTexture[id].rgb;        // Previous accumulated result (t0)
-    float3 currentColor = DiffuseAlbedoTexture[id].rgb;     // Current frame (t1)
-    
-    // Weighted average: newAccum = prevAccum * (1 - weight) + current * weight
-    float3 outputColor = lerp(previousColor, currentColor, AccumulationWeight);
+    float3 previousAccumulated = MainInputTexture[id].rgb;
+    float3 currentPathTraced = DiffuseAlbedoTexture[id].rgb;
+
+    float3 outputColor = lerp(previousAccumulated, currentPathTraced, AccumulationWeight);
 #elif defined(COMPOSITE)
     float3 outputColor = Color::GammaToTrueLinear(MainInputTexture[id].rgb);
 
