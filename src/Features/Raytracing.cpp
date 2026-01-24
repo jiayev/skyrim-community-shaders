@@ -1752,13 +1752,20 @@ void Raytracing::CommitModel(Model* model)
 
 	eastl::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs(meshCount);
 
+	// If no trishape has render use, we assume it is not used and skip using it to hide geometry
+	bool isRenderUseValid = model->IsRenderUseValid();
+
 	for (auto i = 0; i < meshCount; i++) {
 		auto& shape = shapes[i];
 
+		if (isRenderUseValid && shape->geometry->GetFlags().none(RE::NiAVObject::Flag::kRenderUse))
+			continue;
+
 		bool hasAlphaTesting = shape->flags & Shape::Flags::AlphaTesting;
+		bool isBlend = (shape->flags & Shape::Flags::AlphaBlending) &&  (shape->material.Feature == RE::BSShaderMaterial::Feature::kHairTint || shape->material.Feature == RE::BSShaderMaterial::Feature::kFaceGen || shape->material.Feature == RE::BSShaderMaterial::Feature::kFaceGenRGBTint || shape->material.Feature == RE::BSShaderMaterial::Feature::kEye);
 		bool isWindows = shape->material.shaderFlags.any(RE::BSShaderProperty::EShaderPropertyFlag::kAssumeShadowmask) && (shape->material.Feature == RE::BSShaderMaterial::Feature::kGlowMap || shape->material.PBRFlags.any(PBRShaderFlags::HasEmissive));
 
-		bool isOpaque = !hasAlphaTesting && !(isWindows && settings.InteriorSun);
+		bool isOpaque = !hasAlphaTesting && !(isWindows && settings.InteriorSun) && !isBlend;
 
 		geometryDescs[i] = {
 			.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
@@ -1856,10 +1863,14 @@ void Raytracing::UpdateModelBLAS(Model* model)
 		auto& shape = shapes[i];
 
 		bool hasAlphaTesting = shape->flags & Shape::Flags::AlphaTesting;
+		bool isBlend = (shape->flags & Shape::Flags::AlphaBlending) &&  (shape->material.Feature == RE::BSShaderMaterial::Feature::kHairTint || shape->material.Feature == RE::BSShaderMaterial::Feature::kFaceGen || shape->material.Feature == RE::BSShaderMaterial::Feature::kFaceGenRGBTint || shape->material.Feature == RE::BSShaderMaterial::Feature::kEye);
+		bool isWindows = shape->material.shaderFlags.any(RE::BSShaderProperty::EShaderPropertyFlag::kAssumeShadowmask) && (shape->material.Feature == RE::BSShaderMaterial::Feature::kGlowMap || shape->material.PBRFlags.any(PBRShaderFlags::HasEmissive));
+
+		bool isOpaque = !hasAlphaTesting && !(isWindows && settings.InteriorSun) && !isBlend;
 
 		geometryDescs[i] = {
 			.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
-			.Flags = hasAlphaTesting ? D3D12_RAYTRACING_GEOMETRY_FLAG_NONE : D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE,
+			.Flags = isOpaque ? D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE : D3D12_RAYTRACING_GEOMETRY_FLAG_NONE,
 			.Triangles = {
 				.Transform3x4 = 0,
 				.IndexFormat = DXGI_FORMAT_R16_UINT,
@@ -2446,9 +2457,6 @@ void Raytracing::UpdateInstances()
 
 		if (settings.DisableSkinned && (dynamic || skinned))
 			continue;
-
-		//if (!model->RenderUse())
-		//	continue;
 
 		if (cullingSettings.Mode == CullingMode::Smart) {
 			if (landscape && node->GetFlags().any(RE::NiAVObject::Flag::kHidden))
