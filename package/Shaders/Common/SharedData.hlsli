@@ -34,7 +34,8 @@ namespace SharedData
 
 		float BasicGrassBrightness;
 		bool EnableWrappedLighting;
-		float2 pad0;
+		float ComplexGrassThreshold;
+		float1 pad0;
 	};
 
 	struct CPMSettings
@@ -345,6 +346,12 @@ namespace SharedData
 		float AmbientMult;
     };
 
+	struct TerrainBlendingSettings
+	{
+		uint Enabled;
+		uint3 _padding;
+	};
+
 	struct ExponentialHeightFogSettings
 	{
 		uint enabled;
@@ -384,6 +391,7 @@ namespace SharedData
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
+		TerrainBlendingSettings terrainBlendingSettings;
 		PostProcessingSettings postProcessingSettings;
 		SkinData skinData;
 		SSPLSSettings ssplsSettings;

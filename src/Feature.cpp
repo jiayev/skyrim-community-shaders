@@ -33,6 +33,7 @@
 #include "Features/TerrainHelper.h"
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
+#include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
 #include "Features/VanillaFresnel.h"
 #include "Features/VR.h"
@@ -245,6 +246,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::renderDoc,
 		&globals::features::weatherEditor,
 		&globals::features::linearLighting,
+		&globals::features::unifiedWater,
 		&globals::features::physicalSky,
 		&globals::features::postProcessing,
 		&globals::features::skin,
