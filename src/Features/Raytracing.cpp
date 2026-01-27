@@ -643,6 +643,59 @@ void Raytracing::DrawDebugSettings()
 		ImGui::TreePop();
 	}
 
+	// Debug Draw Original and Converted Normal Maps
+#if defined(DEBUG_MSNCONVERSION)
+	if (!normalMaps.empty())
+	{
+		eastl::vector<std::pair<ID3D11Texture2D*, ConvertedNormalMap*>> normalMapVector;
+
+		for (auto& [msNormal, convertedNormal] : normalMaps) {
+			normalMapVector.emplace_back(msNormal, convertedNormal.get());
+		}
+
+		auto normalMapsCount = static_cast<uint>(normalMapVector.size());
+		debugNormalMap = std::min(debugNormalMap, normalMapsCount);
+
+		if (ImGui::BeginCombo("NormalMap", std::to_string(debugNormalMap).c_str())) {
+			for (uint i = 0; i < normalMapsCount; i++) {
+				bool isSelected = debugNormalMap == i;
+
+				auto& [msNormal, convertedNormal] = normalMapVector.at(i);
+
+				if (!convertedNormal->OriginalSRV)
+					continue;
+
+				if (!convertedNormal)
+					continue;
+
+				if (!convertedNormal->converted)
+					continue;
+
+				if (!convertedNormal->Texture || !convertedNormal->Texture->srv || !convertedNormal->Texture->srv.get())
+					continue;
+
+				if (ImGui::Selectable(std::to_string(i).c_str(), isSelected))
+					debugNormalMap = i;
+
+				if (isSelected)
+					ImGui::SetItemDefaultFocus();
+			}
+
+			ImGui::EndCombo();
+		}
+
+		auto& [msNormal, convertedNormal] = normalMapVector.at(debugNormalMap);
+
+		if (convertedNormal && convertedNormal->converted && convertedNormal->OriginalSRV && convertedNormal->Texture && convertedNormal->Texture->srv && convertedNormal->Texture->srv.get()) {
+			ImGui::Image(convertedNormal->OriginalSRV, ImVec2(256, 256));
+			ImGui::SameLine();
+			ImGui::Image(convertedNormal->Texture->srv.get(), ImVec2(256, 256));
+		}
+	}
+#endif
+
+	ImGui::Image(skyHemisphere->srv, ImVec2(512, 512));
+
 	ImGui::PopID();
 
 	ImGui::EndTabItem();
@@ -811,7 +864,7 @@ void Raytracing::SetupOutputRT()
 		texDesc.Height = renderSize.y;
 		texDesc.MipLevels = 1;
 		texDesc.ArraySize = 1;
-		texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+		texDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
 		texDesc.SampleDesc.Count = 1;
 		texDesc.SampleDesc.Quality = 0;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -1067,6 +1120,12 @@ void Raytracing::SetupResources()
 		indirectionBuffer->CreateSRV(srvDesc, giHeap->CPUHandle(GIHeap::Slot::Indirection));
 	}
 
+	// Geometry transform buffer
+	{
+		transformBuffer = eastl::make_unique<DX12::StructuredBufferUpload<float3x4>>(d3d12Device.get(), RTConstants::MAX_TRANSFORMS);
+		DX::ThrowIfFailed(transformBuffer->resource->SetName(L"Transform Buffer"));
+	}
+
 	// Create instance buffer for BLAS
 	{
 		blasInstanceBuffer = eastl::make_unique<DX12::StructuredBufferUpload<D3D12_RAYTRACING_INSTANCE_DESC>>(d3d12Device.get(), RTConstants::MAX_INSTANCES, false);
@@ -1139,6 +1198,15 @@ void Raytracing::SetupResources()
 		srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
 
 		d3d12Device->CreateShaderResourceView(skyHemisphere->resource.get(), &srvDesc, giHeap->CPUHandle(GIHeap::Slot::SkyHemisphere));
+
+		// Setup TESWaterReflections
+		waterReflections = RE::NiPointer(new RE::TESWaterReflections());
+
+		waterReflections->flags.set(true, RE::TESWaterReflections::Flags::kDirty, RE::TESWaterReflections::Flags::kDynamicCubemap, RE::TESWaterReflections::Flags::kWorldOrigin);
+
+		for (uint i = 0; i < 6; i++) {
+			waterReflections->cubeMapSides[i] = RE::TESWaterReflections::CubeMapSide(i, 0.0f);
+		}
 	}
 
 	fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
@@ -1180,7 +1248,7 @@ void Raytracing::InitRR()
 	pref.flags = sl::PreferenceFlags::eUseManualHooking;
 	//sl::PreferenceFlags::eUseFrameBasedResourceTagging;
 
-	//pref.logLevel = sl::LogLevel::eOff;
+	pref.logLevel = sl::LogLevel::eOff;
 
 	slInit = (PFun_slInit*)GetProcAddress(interposer, "slInit");
 	slGetNewFrameToken = (PFun_slGetNewFrameToken*)GetProcAddress(interposer, "slGetNewFrameToken");
@@ -1692,13 +1760,57 @@ void Raytracing::SkyCubeToHemi() const
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 }
 
+void Raytracing::ConvertMSN()
+{
+	while (!msnConvertionQueue.empty()) {
+		auto& key = msnConvertionQueue.front();
+
+		if (auto model = models.find(key); model != models.end()) {
+			model->second->ConvertMSN();
+		}
+
+		msnConvertionQueue.pop_front();
+	}
+}
+
 void Raytracing::Main_RenderWorld(bool a1)
 {
 	if (Active()) {
 		renderingWorld = true;
 		lightsUpdated = false;
 
+		/*RE::PlayerCharacter* player = RE::PlayerCharacter::GetSingleton();
+		if (player && player->parentCell && player->parentCell->IsInteriorCell()) {
+			//logger::info("WaterReflections: [0x{:08X}]", reinterpret_cast<uintptr_t>(waterReflections.get()));
+
+			//waterReflections->Update();	
+		}*/
+
+		/*auto* tes = RE::TES::GetSingleton();
+		if (tes->interiorCell) {
+			if (tes->interiorCell->cellFlags.none(RE::TESObjectCELL::Flag::kHasWater))
+				tes->interiorCell->cellFlags.set(true, RE::TESObjectCELL::Flag::kHasWater);
+
+			waterReflections->flags.set(true, RE::TESWaterReflections::Flags::kNeedsUpdate);
+
+			logger::info("WaterReflections Camera: [0x{:08X}]", reinterpret_cast<uintptr_t>(waterReflections->cubeMapCamera.get()));
+
+			UpdateReflections();
+			//waterReflections->Update();
+		} else {
+			auto* tesWaterSystem = RE::TESWaterSystem::GetSingleton();
+
+			if (!tesWaterSystem->waterReflections.empty()) {
+				logger::info("Water Reflections Flags [0x{:08X}]", tesWaterSystem->waterReflections[0]->flags.underlying());
+			}
+		}*/
+
+		/*auto* sky = globals::game::sky;
+		//sky->flags.reset(RE::Sky::Flags::kHideSky);
+		//sky->mode = RE::Sky::Mode::kSkyDomeOnly;*/
+
 		SkyCubeToHemi();
+		ConvertMSN();
 	}
 
 	Hooks::Main_RenderWorld::func(a1);
@@ -1730,19 +1842,6 @@ void Raytracing::MakeAndCopy(const eastl::vector<T>& data, winrt::com_ptr<ID3D12
 	res->Unmap(0, nullptr);
 }
 
-inline std::wstring ToWide(const std::string& str)
-{
-	if (str.empty())
-		return std::wstring();
-
-	int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(),
-		(int)str.size(), nullptr, 0);
-	std::wstring wstr(size_needed, 0);
-	MultiByteToWideChar(CP_UTF8, 0, str.c_str(),
-		(int)str.size(), &wstr[0], size_needed);
-	return wstr;
-}
-
 void Raytracing::CommitModel(Model* model)
 {
 	std::lock_guard lock{ renderMutex };
@@ -1753,13 +1852,13 @@ void Raytracing::CommitModel(Model* model)
 	eastl::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs(meshCount);
 
 	// If no trishape has render use, we assume it is not used and skip using it to hide geometry
-	bool isRenderUseValid = model->IsRenderUseValid();
+	//bool isRenderUseValid = model->IsRenderUseValid();
 
 	for (auto i = 0; i < meshCount; i++) {
 		auto& shape = shapes[i];
 
-		if (isRenderUseValid && shape->geometry->GetFlags().none(RE::NiAVObject::Flag::kRenderUse))
-			continue;
+		/*if (isRenderUseValid && shape->geometry->GetFlags().none(RE::NiAVObject::Flag::kRenderUse))
+			continue;*/
 
 		bool hasAlphaTesting = shape->flags & Shape::Flags::AlphaTesting;
 		bool isBlend = (shape->flags & Shape::Flags::AlphaBlending) &&  (shape->material.Feature == RE::BSShaderMaterial::Feature::kHairTint || shape->material.Feature == RE::BSShaderMaterial::Feature::kFaceGen || shape->material.Feature == RE::BSShaderMaterial::Feature::kFaceGenRGBTint || shape->material.Feature == RE::BSShaderMaterial::Feature::kEye);
@@ -1771,7 +1870,7 @@ void Raytracing::CommitModel(Model* model)
 			.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
 			.Flags = isOpaque ? D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE : D3D12_RAYTRACING_GEOMETRY_FLAG_NONE,
 			.Triangles = {
-				.Transform3x4 = 0,
+				.Transform3x4 = shape->TransformBuffer(transformBuffer->resource.get()),
 				.IndexFormat = DXGI_FORMAT_R16_UINT,
 				.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
 				.IndexCount = shape->triangleCount * 3,
@@ -1872,7 +1971,7 @@ void Raytracing::UpdateModelBLAS(Model* model)
 			.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
 			.Flags = isOpaque ? D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE : D3D12_RAYTRACING_GEOMETRY_FLAG_NONE,
 			.Triangles = {
-				.Transform3x4 = 0,
+				.Transform3x4 = shape->TransformBuffer(transformBuffer->resource.get()),
 				.IndexFormat = DXGI_FORMAT_R16_UINT,
 				.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
 				.IndexCount = shape->triangleCount * 3,
@@ -2080,7 +2179,8 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 		if (geometryType.all(RE::BSGeometry::Type::kDynamicTriShape))
 			flags |= Shape::Flags::Dynamic;
 
-		auto localToRoot = GetXMFromNiTransform(rootWorldInverse * pGeometry->world);
+		float3x4 localToRoot;
+		XMStoreFloat3x4(&localToRoot, GetXMFromNiTransform(rootWorldInverse * pGeometry->world));
 
 		if (auto* triShapeRD = geometryRuntimeData.rendererData) {  // Non-Skinned
 			auto* pTriShape = netimmerse_cast<RE::BSTriShape*>(pGeometry);
@@ -2097,9 +2197,9 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 				return RE::BSVisit::BSVisitControl::kContinue;
 			}
 
-			auto meshData = eastl::make_unique<Shape>(shapeRegisters.Allocate(), pGeometry, flags);
+			auto meshData = eastl::make_unique<Shape>(shapeRegisters.Allocate(), pGeometry, localToRoot, flags);
 
-			meshData->BuildMesh(triShapeRD, triShapeRuntime.vertexCount, triShapeRuntime.triangleCount, 0, localToRoot);
+			meshData->BuildMesh(triShapeRD, triShapeRuntime.vertexCount, triShapeRuntime.triangleCount, 0);
 			meshData->BuildMaterial(geometryRuntimeData, name, formID);
 			meshData->CreateBuffers(ToWide(name));
 
@@ -2136,9 +2236,9 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 				if (partition.bonesPerVertex > 0)
 					flags |= Shape::Flags::Skinned;
 
-				auto meshData = eastl::make_unique<Shape>(shapeRegisters.Allocate(), pGeometry, flags);
+				auto meshData = eastl::make_unique<Shape>(shapeRegisters.Allocate(), pGeometry, localToRoot, flags);
 
-				meshData->BuildMesh(partition.buffData, skinPartition->vertexCount, partition.triangles, partition.bonesPerVertex, localToRoot);
+				meshData->BuildMesh(partition.buffData, skinPartition->vertexCount, partition.triangles, partition.bonesPerVertex);
 				meshData->BuildMaterial(geometryRuntimeData, name, formID);
 				meshData->CreateBuffers(ToWide(name));
 
@@ -2162,7 +2262,11 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 		auto [it, emplaced] = models.emplace(modelKey, eastl::move(model));
 
 		if (emplaced) {
+			if (it->second->ShouldQueueMSNConversion())
+				msnConvertionQueue.emplace_back(modelKey);
+
 			CommitModel(it->second.get());
+
 			AddInstance(formID, pRoot, modelKey);
 
 			logger::info("[RT] CreateModel - Commited {} TriShapes", shapeCount);
@@ -2261,7 +2365,7 @@ eastl::shared_ptr<Allocation> Raytracing::GetTextureRegister(ID3D11Texture2D* dx
 	hr = dxgiResource->GetSharedHandle(&sharedHandle);
 
 	if (FAILED(hr) || !sharedHandle) {
-		logger::debug("[RT] GetTextureRegister - Failed to get shared handle.");
+		logger::error("[RT] GetTextureRegister - Failed to get shared handle.");
 		return defaultTexture;
 	}
 
@@ -2312,24 +2416,103 @@ eastl::shared_ptr<Allocation> Raytracing::GetMSNormalMapRegister([[maybe_unused]
 {
 	std::lock_guard lock{ textureRegisterMutex };
 
-	ConvertedNormalMap* normalMap = nullptr;
-
 	if (auto refIt = normalMaps.find(texture->texture); refIt != normalMaps.end()) {
-		normalMap = refIt->second.get();
+		return refIt->second->Reference->allocation;
 	} else {
 		auto [it, emplaced] = normalMaps.emplace(texture->texture, eastl::make_unique<ConvertedNormalMap>());
 
-		normalMap = it->second.get();
+		if (!emplaced) {
+			logger::warn("[RT] GetMSNormalMapRegister - NormalMap emplace failed.");
+			return defaultTexture;
+		}
+
+		auto* normalMap = it->second.get();
+
+		normalMap->OriginalSRV = texture->resourceView;
 
 		D3D11_TEXTURE2D_DESC desc;
 		texture->texture->GetDesc(&desc);
-		desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+		desc.SampleDesc.Count = 1;
+		desc.SampleDesc.Quality = 0;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		desc.CPUAccessFlags = 0;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+
 		normalMap->Texture = eastl::make_unique<Texture2D>(desc);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = desc.Format;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.MipLevels = desc.MipLevels;
+
+		normalMap->Texture->CreateSRV(srvDesc);
+
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+		rtvDesc.Format = desc.Format;
+		rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+		rtvDesc.Texture2D.MipSlice = 0;
+
+		normalMap->Texture->CreateRTV(rtvDesc);
+
+		static float clearColor[4] = { 0.5f, 0.5f, 1.0f, 1.0f };
+		globals::d3d::context->ClearRenderTargetView(normalMap->Texture->rtv.get(), clearColor);
+
+		// Share the new texture
+		winrt::com_ptr<IDXGIResource> dxgiResource;
+		HRESULT hr = normalMap->Texture->resource->QueryInterface(IID_PPV_ARGS(dxgiResource.put()));
+
+		if (FAILED(hr)) {
+			logger::error("[RT] GetTextureRegister - Failed to query interface.");
+			return defaultTexture;
+		}
+
+		HANDLE sharedHandle = nullptr;
+		hr = dxgiResource->GetSharedHandle(&sharedHandle);
+
+		if (FAILED(hr) || !sharedHandle) {
+			logger::error("[RT] GetTextureRegister - Failed to get shared handle.");
+			return defaultTexture;
+		}
+
+		winrt::com_ptr<ID3D12Resource> dx12Texture;
+		hr = d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(dx12Texture.put()));
+
+		CloseHandle(sharedHandle);
+
+		if (FAILED(hr)) {
+			logger::error("[RT] GetTextureRegister - Failed to open shared handle.");
+			return defaultTexture;
+		}
+
+		if (!dx12Texture) {
+			logger::error("[RT] GetTextureRegister - Failed to adquire DX12 texture.");
+			return defaultTexture;
+		}
+
+		D3D12_RESOURCE_DESC texResDesc = dx12Texture->GetDesc();
+
+		D3D12_SHADER_RESOURCE_VIEW_DESC texSrvDesc = {};
+		texSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		texSrvDesc.Format = texResDesc.Format;
+		texSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		texSrvDesc.Texture2D.MostDetailedMip = 0;
+		texSrvDesc.Texture2D.MipLevels = texResDesc.MipLevels;
+		texSrvDesc.Texture2D.PlaneSlice = 0;
+		texSrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+		normalMap->Reference = eastl::make_unique<TextureReference>(std::move(dx12Texture), eastl::shared_ptr<Allocation>(textureRegisters.Allocate(), AllocationDeleter()));
+
+		d3d12Device->CreateShaderResourceView(normalMap->Reference->resource.get(), &texSrvDesc, giHeap->CPUHandle(GIHeap::Slot::Textures, normalMap->Reference->allocation->GetIndex()));
+	
+		allocationMSNormalMaps.emplace(normalMap->Reference->allocation->GetIndex(), texture->texture);
+
+		return normalMap->Reference->allocation;	
 	}
-
-	//normalMapConverter->Convert(geometryRuntimeData, runtimeData.rendererData->indexBuffer, shape->vertexCount, shape->triangleCount, texture, normalMap->Texture.rtv.get());
-
-	return defaultTexture;
 }
 
 void Raytracing::AddInstance(RE::FormID formID, RE::NiAVObject* pNiNode, eastl::string path)
@@ -2544,6 +2727,8 @@ void Raytracing::UpdateInstances()
 	instanceBuffer->Upload(commandList.get(), 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
 	materialBuffer->Upload(commandList.get(), 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+	//transformBuffer->Upload(commandList.get(), 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
 	indirectionBuffer->Upload(commandList.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 }
@@ -3395,7 +3580,7 @@ void Raytracing::DrawRTGI()
 			d3d11Context->CopyResource(accumulationTexture->resource11, mainTexture->resource11);
 			d3d11Context->CopyResource(main.texture, mainTexture->resource11);
 		} else {
-			accumulationCBData->AccumulationWeight = 1.0f / static_cast<float>(accumulatedFrames + 1);
+			accumulationCBData->AccumulatedFrames = (uint)accumulatedFrames;
 			accumulationCB->Update(accumulationCBData.get(), sizeof(AccumulationCBData));
 
 			auto* accumulationCBPtr = accumulationCB->CB();
@@ -3590,30 +3775,24 @@ void Raytracing::RenderShadows()
 	d3d11Context->CopyResource(shadowMask.texture, shadowMaskTexture->resource11);
 }
 
+void Raytracing::DataLoaded()
+{
+	CellAttachDetachEventHandler::Register();
+	BGSActorCellEventHandler::Register();
+}
+
 void Raytracing::PostPostLoad()
 {
 	Hooks::Install();
 	Initialize();
-	//RE::BSTSingletonExplicit<RE::BSModelDB::BSModelProcessor>;
-
-	//auto* g_TESProcessor = REL::Relocation<RE::BSModelDB::BSModelProcessor*>(0x01F5D910).get();
-	//(g_TESProcessor) = new RTProcessor(g_TESProcessor);
 
 	//MenuOpenCloseEventHandler::Register();
 	//TESLoadGameEventHandler::Register();
 
 	TESObjectLoadedEventHandler::Register();
-	
-	//TESCellAttachDetachEventHandler::Register();
+
 	//TESCellFullyLoadedEventHandler::Register();
 }
-
-/*void Raytracing::RTProcessor::PostCreate(const RE::BSModelDB::DBTraits::ArgsType& a_args, const char* modelName, RE::NiPointer<RE::NiNode>& a_root, std::uint32_t& typeOut)
-{
-	m_oldProcessor->PostCreate(a_args, modelName, a_root, typeOut);
-	logger::error("[RT] RTProcessor::PostCreate - ModelName: {}", modelName);
-}*/
-
 static std::wstring GetLatestWinPixGpuCapturerPath()
 {
 	LPWSTR programFilesPath = nullptr;
@@ -4097,7 +4276,7 @@ void Raytracing::CompileRTGIShaders()
 		pipelineBuilder.AddHitGroup(L"ShadowHitGroup", L"", L"ShadowAnyHit");
 
 		// Shader + pipeline config
-		pipelineBuilder.AddShaderConfig(32, 8);
+		pipelineBuilder.AddShaderConfig(20, 8);
 		pipelineBuilder.AddGlobalRootSignature(rootSignature.get());
 		pipelineBuilder.AddPipelineConfig(1);  // Max recursion depth
 
@@ -4333,37 +4512,6 @@ RE::BSEventNotifyControl Raytracing::TESObjectLoadedEventHandler::ProcessEvent(c
 
 	globals::features::raytracing.RemoveInstance(formID, true);
 
-	/*auto* base = eventRef->GetBaseObject();
-
-	logger::info("TESObjectLoadedEventHandler::ProcessEvent {} - {:08X}, {} - {:08X}",
-		magic_enum::enum_name(eventRef->formType.get()), eventRef->GetFormID(),
-		magic_enum::enum_name(base->formType.get()), base->GetFormID());
-
-	//logger::info("[RT] TESObjectLoadedEvent - {} Name: {} - FullLodRef: {}", typeid(*eventRef).name(), eventRef->GetName(), eventRef->GetFullLODRef());
-
-	//if (eventRef->formType.none(RE::FormType::NPC, RE::FormType::LeveledNPC, RE::FormType::ActorCharacter))
-	if (eventRef->formType.none(RE::FormType::ActorCharacter))
-		return RE::BSEventNotifyControl::kContinue;
-
-	auto* actor = eventRef->As<RE::Actor>();
-
-	if (!actor)
-		return RE::BSEventNotifyControl::kContinue;
-
-	auto* pNiAVObject = eventRef->Get3D();
-
-	if (!pNiAVObject)
-		return RE::BSEventNotifyControl::kContinue;
-
-	globals::features::raytracing.CreateModelInternal(eventRef, actor->GetName(), pNiAVObject);*/
-
-	return RE::BSEventNotifyControl::kContinue;
-}
-
-RE::BSEventNotifyControl Raytracing::TESCellAttachDetachEventHandler::ProcessEvent(const RE::TESCellAttachDetachEvent* a_event, RE::BSTEventSource<RE::TESCellAttachDetachEvent>*)
-{
-	globals::features::raytracing.SetInstanceDetached(a_event->reference->GetFormID(), !a_event->attached);
-
 	return RE::BSEventNotifyControl::kContinue;
 }
 
@@ -4387,6 +4535,26 @@ RE::BSEventNotifyControl Raytracing::CellAttachDetachEventHandler::ProcessEvent(
 		return RE::BSEventNotifyControl::kContinue;
 
 	globals::features::raytracing.SetInstanceDetached(land->GetFormID(), detaching);
+
+	return RE::BSEventNotifyControl::kContinue;
+}
+
+RE::BSEventNotifyControl Raytracing::BGSActorCellEventHandler::ProcessEvent(const RE::BGSActorCellEvent* a_event, RE::BSTEventSource<RE::BGSActorCellEvent>*)
+{
+	if (a_event->flags.underlying() != static_cast<uint32_t>(RE::BGSActorCellEvent::CellFlag::kEnter))
+		return RE::BSEventNotifyControl::kContinue;
+
+	auto* tesWaterSystem = RE::TESWaterSystem::GetSingleton();
+
+	/*if (tesWaterSystem->waterObjects.empty()) {
+		tesWaterSystem->waterObjects.push_back(RE::NiPointer(globals::features::raytracing.waterObject.get()));
+	}*/
+
+	if (tesWaterSystem->waterReflections.empty()) {
+		tesWaterSystem->waterReflections.push_back(globals::features::raytracing.waterReflections);
+	}
+
+	tesWaterSystem->Enable();
 
 	return RE::BSEventNotifyControl::kContinue;
 }

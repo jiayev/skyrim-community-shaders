@@ -18,6 +18,8 @@
 
 #include "State.h"
 
+#include <RE/T/TESWaterReflections.h>
+
 #include "Features/Raytracing/Core/Instance.h"
 #include "Features/Raytracing/Core/Model.h"
 #include "Features/Raytracing/Core/Shape.h"
@@ -192,6 +194,10 @@ struct Raytracing : public OverlayFeature
 	void DrawDebugSettings();
 
 	virtual void DrawOverlay() override;
+
+	// SKSE kDataLoaded message
+	virtual void DataLoaded() override;
+
 	virtual void PostPostLoad() override;
 
 	virtual bool IsOverlayVisible() const override { return settings.PerformanceOverlay; };
@@ -221,6 +227,8 @@ struct Raytracing : public OverlayFeature
 
 	eastl::vector<LightLimitFix::LightData> GetPointLights();
 	void UpdateLights();
+
+	void ConvertMSN();
 
 	void Main_RenderWorld(bool a1);
 	void BSShader_SetupGeometry(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
@@ -543,6 +551,7 @@ struct Raytracing : public OverlayFeature
 	std::string debugDefines = "";
 	bool debugDisableTriShapesUpdate = false;
 	bool debugDisableTextureSharing = false;
+	uint debugNormalMap = 0;
 
 	enum class RecompileReason : uint32_t
 	{
@@ -578,13 +587,13 @@ struct Raytracing : public OverlayFeature
 			resource(eastl::move(res)), allocation(eastl::move(alloc)) {}
 	};
 
-	// Creates a single BLAS for a collection of Shapes
-	// TODO: Move to Model struct
-	void CommitModel(Model* model);
-
 	// Creates mesh buffers for all graph TriShapes, handles materials and builds a single BLAS for the node
 	void CreateModel(RE::TESForm* form, const char* model, RE::NiAVObject* root);
 	void CreateModelInternal(RE::TESForm* refr, const char* path, RE::NiAVObject* root);
+
+	// Creates a single BLAS for a collection of Shapes
+	// TODO: Move to Model struct
+	void CommitModel(Model* model);
 
 	// Removes the instance and optionally also releases the model and all its buffers if refCount reaches 0
 	bool RemoveInstance(RE::NiAVObject* root, bool releaseModel);
@@ -671,6 +680,8 @@ struct Raytracing : public OverlayFeature
 
 	eastl::unique_ptr<DX12::StructuredBufferUpload<MaterialData>> materialBuffer = nullptr;
 
+	eastl::unique_ptr<DX12::StructuredBufferUpload<float3x4>> transformBuffer = nullptr;
+
 	eastl::vector<InstanceData> instanceBufferData;
 	eastl::unique_ptr<DX12::StructuredBufferUpload<InstanceData>> instanceBuffer = nullptr;
 
@@ -686,9 +697,15 @@ struct Raytracing : public OverlayFeature
 	{
 		eastl::unique_ptr<TextureReference> Reference;
 		eastl::unique_ptr<Texture2D> Texture;
+		ID3D11ShaderResourceView* OriginalSRV = nullptr;
+		bool converted = false;
 	};
 
+	eastl::deque<eastl::string> msnConvertionQueue;
+
 	eastl::unordered_map<ID3D11Texture2D*, eastl::unique_ptr<ConvertedNormalMap>> normalMaps;
+
+	eastl::unordered_map<uint16_t, ID3D11Texture2D*> allocationMSNormalMaps;
 
 	winrt::com_ptr<ID3D11SamplerState> samplerState = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> copyDepthCS = nullptr;
@@ -699,7 +716,7 @@ struct Raytracing : public OverlayFeature
 
 	struct alignas(16) AccumulationCBData
 	{
-		float AccumulationWeight;
+		uint AccumulatedFrames;
 		float3 _padding;
 	};
 	eastl::unique_ptr<AccumulationCBData> accumulationCBData = nullptr;
@@ -851,6 +868,8 @@ struct Raytracing : public OverlayFeature
 	// Accumulation denoiser state
 	int accumulatedFrames = 0;
 	bool cameraHasMoved = true;
+
+	RE::NiPointer<RE::TESWaterReflections> waterReflections = nullptr;
 
 	void UpdateMeasureTime(double currentTime)
 	{
@@ -1219,19 +1238,6 @@ struct Raytracing : public OverlayFeature
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 		
-		struct TES_Init
-		{
-			static RE::TES* thunk(void* a1, char* a2, RE::NiNode* a3, RE::NiNode* a4, RE::Sky* a5, RE::NiNode* a6)
-			{
-				auto result = func(a1, a2, a3, a4, a5, a6);
-
-				CellAttachDetachEventHandler::Register(result);
-
-				return result;
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-		
 		struct AttachDistant3DTask_Attach
 		{
 			static void thunk(void* a1, float a2)
@@ -1323,6 +1329,23 @@ struct Raytracing : public OverlayFeature
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct Main_RenderWaterEffects
+		{
+			static void thunk()
+			{
+				auto* tes = RE::TES::GetSingleton();
+				if (tes->interiorCell) {
+					if (tes->interiorCell->cellFlags.none(RE::TESObjectCELL::Flag::kHasWater))
+						tes->interiorCell->cellFlags.set(true, RE::TESObjectCELL::Flag::kHasWater);
+
+					globals::features::raytracing.waterReflections->flags.set(true, RE::TESWaterReflections::Flags::kDirty);
+				}
+
+				func();
+			};
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		static void Install()
 		{
 			stl::detour_thunk<TES_Load3D>(REL::RelocationID(13209, 13355));
@@ -1346,8 +1369,10 @@ struct Raytracing : public OverlayFeature
 
 			//stl::write_vfunc<0x0, Destructor<RE::BSFadeNode>>(RE::VTABLE_BSTreeNode[0]);
 
-			stl::detour_thunk<Main_RenderWorld>(REL::RelocationID(100424, 107142));
+			stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
 
+			stl::detour_thunk<Main_RenderWorld>(REL::RelocationID(100424, 107142));
+			
 			// We use these to render only the sky to the cubemaps, maybe it would be cleaner if we could override cubemap renderpass?
 			stl::write_vfunc<0x6, BSShader_SetupGeometry<RE::BSShader::Type::Lighting>>(RE::VTABLE_BSLightingShader[0]);
 
@@ -1373,8 +1398,6 @@ struct Raytracing : public OverlayFeature
 			//stl::detour_thunk<TESObjectLAND_Detach3D>(REL::RelocationID(18335, 18751));
 
 			//stl::write_vfunc<0x0, TESObjectLAND_Destructor>(RE::VTABLE_TESObjectLAND[0]);
-
-			stl::detour_thunk<TES_Init>(REL::RelocationID(13139, 13279));
 
 			//stl::write_vfunc<0x6, AttachDistant3DTask_Attach>(RE::VTABLE_AttachDistant3DTask[0]);
 			
@@ -1449,33 +1472,16 @@ struct Raytracing : public OverlayFeature
 		}
 	};
 
-	class TESCellAttachDetachEventHandler : public RE::BSTEventSink<RE::TESCellAttachDetachEvent>
-	{
-	public:
-		virtual RE::BSEventNotifyControl ProcessEvent(const RE::TESCellAttachDetachEvent* a_event, RE::BSTEventSource<RE::TESCellAttachDetachEvent>*);
-
-		static bool Register()
-		{
-			static TESCellAttachDetachEventHandler singleton;
-
-			auto scriptEventSourceHolder = RE::ScriptEventSourceHolder::GetSingleton();
-			scriptEventSourceHolder->GetEventSource<RE::TESCellAttachDetachEvent>()->AddEventSink(&singleton);
-
-			logger::info("Registered {}", typeid(singleton).name());
-
-			return true;
-		}
-	};
-
 	class CellAttachDetachEventHandler : public RE::BSTEventSink<RE::CellAttachDetachEvent>
 	{
 	public:
 		virtual RE::BSEventNotifyControl ProcessEvent(const RE::CellAttachDetachEvent* a_event, RE::BSTEventSource<RE::CellAttachDetachEvent>*);
 
-		static bool Register(RE::TES* tes)
+		static bool Register()
 		{
 			static CellAttachDetachEventHandler singleton;
 
+			auto* tes = RE::TES::GetSingleton();
 			tes->AddEventSink<RE::CellAttachDetachEvent>(&singleton);
 
 			logger::info("Registered {}", typeid(singleton).name());
@@ -1484,17 +1490,17 @@ struct Raytracing : public OverlayFeature
 		}
 	};
 
-	class TESCellFullyLoadedEventHandler : public RE::BSTEventSink<RE::TESCellFullyLoadedEvent>
+	class BGSActorCellEventHandler : public RE::BSTEventSink<RE::BGSActorCellEvent>
 	{
 	public:
-		virtual RE::BSEventNotifyControl ProcessEvent(const RE::TESCellFullyLoadedEvent* a_event, RE::BSTEventSource<RE::TESCellFullyLoadedEvent>*);
+		virtual RE::BSEventNotifyControl ProcessEvent(const RE::BGSActorCellEvent* a_event, RE::BSTEventSource<RE::BGSActorCellEvent>*);
 
 		static bool Register()
 		{
-			static TESCellFullyLoadedEventHandler singleton;
+			static BGSActorCellEventHandler singleton;
 
-			auto scriptEventSourceHolder = RE::ScriptEventSourceHolder::GetSingleton();
-			scriptEventSourceHolder->GetEventSource<RE::TESCellFullyLoadedEvent>()->AddEventSink(&singleton);
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			player->AsBGSActorCellEventSource()->AddEventSink(&singleton);
 
 			logger::info("Registered {}", typeid(singleton).name());
 
