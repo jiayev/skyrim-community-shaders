@@ -87,12 +87,12 @@ static std::string PrintVertexFlags(uint16_t value)
 	return result;
 }
 
-static uint16_t GetVertexSize2(uint16_t desc)
+static uint16_t GetVertexSize2(uint64_t desc)
 {
 	return (desc & 0xF) * 4;
 }
 
-void Shape::BuildMesh(RE::BSGraphics::TriShape* rendererData, const std::uint32_t& vertexCountIn, const std::uint16_t& triangleCountIn, const std::uint16_t& bonesPerVertex)
+void Shape::BuildMesh(RE::BSGraphics::TriShape* rendererData, const uint32_t& vertexCountIn, const uint32_t& triangleCountIn, const std::uint16_t& bonesPerVertex)
 {
 	auto vertexDesc = rendererData->vertexDesc;
 
@@ -136,6 +136,10 @@ void Shape::BuildMesh(RE::BSGraphics::TriShape* rendererData, const std::uint32_
 			skinning.resize(vertexCountIn);
 
 		auto vertexSize = GetVertexSize(vertexFlags);
+		auto vertexSize2 = GetVertexSize2(*reinterpret_cast<uint64_t*>(&vertexDesc));
+
+		if (vertexSize != vertexSize2)
+			logger::warn("[RT] Shape::BuildMesh - Vertex size mismatch: {} != {}", vertexSize, vertexSize2);
 
 		bool hasPosition = vertexFlags & RE::BSGraphics::Vertex::VF_VERTEX;
 
@@ -299,24 +303,7 @@ void Shape::BuildMesh(RE::BSGraphics::TriShape* rendererData, const std::uint32_
 			}
 		} else {
 			triangles.resize(triangleCountIn);
-
-			const auto indexCount = triangleCountIn * 3;
-
-			eastl::vector<uint16_t> indices(indexCount);
-			std::memcpy(indices.data(), rendererData->rawIndexData, sizeof(uint16_t) * indexCount);
-
-			for (uint16_t t = 0; t < triangleCountIn; ++t) {
-				uint16_t i = t * 3u;
-
-				uint16_t v0 = indices[i];
-				uint16_t v1 = indices[i + 1u];
-				uint16_t v2 = indices[i + 2u];
-
-				if (v0 >= vertexCount || v1 >= vertexCount || v2 >= vertexCount)
-					logger::critical("[RT] Triangle {} vertex overflow: [{}, {}, {}]", t, v0, v1, v2);
-
-				triangles[t] = Triangle(v0, v1, v2);
-			}
+			std::memcpy(triangles.data(), rendererData->rawIndexData, sizeof(Triangle) * triangleCountIn);
 		}
 
 		triangleCount = triangleCountIn;
@@ -336,8 +323,9 @@ eastl::shared_ptr<Allocation> Shape::TextureRegister(const RE::NiPointer<RE::NiS
 
 	if (modelSpaceNormalMap)
 		return rt.GetMSNormalMapRegister(this, niPointer->rendererTexture, defaultTexture);
-	else
-		return rt.GetTextureRegister(niPointer->rendererTexture->texture, defaultTexture);
+	else {
+		return rt.GetTextureRegister(reinterpret_cast<ID3D11Texture2D*>(niPointer->rendererTexture->texture), defaultTexture);
+	}
 }
 
 void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryRuntimeData, [[maybe_unused]] const char* name, RE::FormID formID)
@@ -386,31 +374,16 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 			flags |= Flags::AlphaBlending;
 		}
 
-		if (property; auto* lightingShaderProp = netimmerse_cast<RE::BSLightingShaderProperty*>(property)) {
-			logger::info("[RT] BuildMaterial - [Prop] BSLightingShaderProperty Flags: {}", GetFlagsString<EShaderPropertyFlag>(lightingShaderProp->flags.underlying()));
-
-			if (auto& effectData = lightingShaderProp->effectData) {
-				logger::debug("[RT] BuildMaterial - Effect - Alpha: {}, Z Test Func: {}", effectData->alpha, magic_enum::enum_name(effectData->zTestFunc));
-			}
-		}
-
-		logger::trace("[RT] BuildMaterial {}", name);
-
 		auto* effect = geometryRuntimeData.properties[State::kEffect].get();
 
-		logger::trace("[RT] BuildMaterial - Effect RTTI: {}", effect->GetRTTI()->GetName());
-
 		if (effect) {
-			if (RE::BSShaderProperty* shaderProp = netimmerse_cast<RE::BSShaderProperty*>(effect)) {
+			if (RE::BSShaderProperty* shaderProp = netimmerse_cast<RE::BSShaderProperty*>(effect))
 				shaderFlags = shaderProp->flags.get();
-
-				logger::debug("[RT] BuildMaterial - [Effect] BSLightingShaderProperty Flags: {}", GetFlagsString<EShaderPropertyFlag>(shaderFlags.underlying()));
-			}
 
 			if (RE::BSLightingShaderProperty* lightingShaderProp = skyrim_cast<RE::BSLightingShaderProperty*>(effect)) {
 				shaderType = RE::BSShader::Type::Lighting;
 
-				logger::debug("[RT] BuildMaterial - [Effect] BSLightingShaderProperty Flags: {}", GetFlagsString<EShaderPropertyFlag>(lightingShaderProp->flags.underlying()));
+				logger::debug("[RT] BuildMaterial - BSLightingShaderProperty [0x{:08X}] Flags: {}", reinterpret_cast<uintptr_t>(lightingShaderProp), GetFlagsString<EShaderPropertyFlag>(lightingShaderProp->flags.underlying()));
 
 				// Set alpha flags
 				if (flags & Flags::AlphaBlending) {
@@ -427,11 +400,6 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 						flags &= ~Flags::AlphaBlending;
 						flags &= ~Flags::AlphaTesting;
 					}
-				}
-
-				// This is always nullptr :(
-				if (auto& effectData = lightingShaderProp->effectData) {
-					logger::info("[RT] BuildMaterial - Effect - Alpha: {}, Z Test Func: {}", effectData->alpha, magic_enum::enum_name(effectData->zTestFunc));
 				}
 
 				colors[1] = {
@@ -532,6 +500,12 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 							// Glow
 							if (feature == Feature::kGlowMap) {
 								if (const auto* lightingGlowMaterial = skyrim_cast<RE::BSLightingShaderMaterialGlowmap*>(shaderMaterial)) {
+									if (lightingShaderProp->flags.none(EShaderPropertyFlag::kOwnEmit)) {
+										colors[1].x = 1.0f;
+										colors[1].y = 1.0f;
+										colors[1].z = 1.0f;
+									}
+
 									textures[2] = TextureRegister(lightingGlowMaterial->glowTexture, blackTexture);
 								}
 							}

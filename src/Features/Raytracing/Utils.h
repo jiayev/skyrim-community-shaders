@@ -45,7 +45,7 @@ static inline float3 Normalize(float3 vector)
 	return vector;
 }
 
-static inline ID3D11Texture2D* TryGetTexture(const RE::NiPointer<RE::NiSourceTexture> niPointer)
+static inline ID3D11Resource* TryGetTexture(const RE::NiPointer<RE::NiSourceTexture> niPointer)
 {
 	if (niPointer) {
 		if (const auto& bsTexture = niPointer->rendererTexture; bsTexture) {
@@ -214,7 +214,7 @@ static inline std::string GetFlagsString(auto value)
 
 	const auto& entries = magic_enum::enum_entries<T>();
 
-	std::string flags;
+	std::string flags = "";
 
 	for (const auto& [flag, name] : entries) {
 		if (value & static_cast<N>(flag)) {

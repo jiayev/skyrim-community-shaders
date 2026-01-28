@@ -525,6 +525,7 @@ struct Raytracing : public OverlayFeature
 		float Sky = 1.0f;
 		float Directional = 1.0f;
 		float Point = 1.0f;
+		float TexLODBias = -1.0f;
 		bool LodDimmer = true;
 		bool RaytracedShadows = true;
 		bool PathTracing = false;
@@ -944,8 +945,12 @@ struct Raytracing : public OverlayFeature
 			static void thunk(RE::NiSourceTexture* oThis)
 			{
 				if (oThis && oThis->rendererTexture) {
-					if (auto texture = oThis->rendererTexture->texture) {
+					if (auto resource = oThis->rendererTexture->texture) {
 						auto& rt = globals::features::raytracing;
+
+						ID3D11Texture2D* texture = nullptr;
+
+						resource->QueryInterface(IID_PPV_ARGS(&texture));
 
 						if (auto it = rt.textures.find(texture); it != rt.textures.end()) {
 							auto index = it->second->allocation->GetIndex();
@@ -1271,9 +1276,18 @@ struct Raytracing : public OverlayFeature
 						return;
 					}
 
-					if (type == RE::FormType::Static && (flags & MarkerFlags::IsMarker)) {
-						logger::debug("\tTES::sub_1401A0920 - Is Marker");
-						return;
+					if (flags & MarkerFlags::IsMarker) {
+						if (type == RE::FormType::Static)
+							return;
+
+						if (type == RE::FormType::Door)
+							return;
+
+						if (type == RE::FormType::Action)
+							return;
+
+						if (type == RE::FormType::Furniture)
+							return;
 					}
 
 					auto* pNiAVObject = refr->Get3D();
@@ -1311,7 +1325,7 @@ struct Raytracing : public OverlayFeature
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
-		
+
 		struct CreateRenderTarget_PlayerFaceGenTint
 		{
 			static void thunk(RE::BSGraphics::Renderer* oThis, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)

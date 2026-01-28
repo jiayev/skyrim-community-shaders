@@ -49,6 +49,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Sky,
 	Directional,
 	Point,
+	TexLODBias,
 	LodDimmer,
 	RaytracedShadows,
 	PathTracing,
@@ -495,6 +496,8 @@ void Raytracing::DrawAdvancedSettings()
 
 	ImGui::SliderInt("RIS Max Candidates", &advSettings.RIS.MaxCandidates, 2, 16);
 
+	ImGui::SliderFloat("Texture LOD Bias", &settings.TexLODBias, -4.0f, 4.0f, "%.1f");
+
 	if (ImGui::Checkbox("GGX Energy Conservation", &advSettings.GGXEnergyConservation))
 		recompileReason |= RecompileReason::Advanced;
 
@@ -644,10 +647,11 @@ void Raytracing::DrawDebugSettings()
 	}
 
 	// Debug Draw Original and Converted Normal Maps
-#if defined(DEBUG_MSNCONVERSION)
-	if (!normalMaps.empty())
-	{
-		eastl::vector<std::pair<ID3D11Texture2D*, ConvertedNormalMap*>> normalMapVector;
+//#if defined(DEBUG_MSNCONVERSION)
+	if (normalMaps.empty()) {
+		ImGui::Text("No normal maps converted.");
+	} else {
+		eastl::vector<std::pair<ID3D11Resource*, ConvertedNormalMap*>> normalMapVector;
 
 		for (auto& [msNormal, convertedNormal] : normalMaps) {
 			normalMapVector.emplace_back(msNormal, convertedNormal.get());
@@ -692,7 +696,7 @@ void Raytracing::DrawDebugSettings()
 			ImGui::Image(convertedNormal->Texture->srv.get(), ImVec2(256, 256));
 		}
 	}
-#endif
+//#endif
 
 	ImGui::Image(skyHemisphere->srv, ImVec2(512, 512));
 
@@ -1549,8 +1553,8 @@ eastl::vector<LightLimitFix::LightData> Raytracing::GetPointLights()
 
 					if (bsLight->IsShadowLight()) {
 						auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-						GET_INSTANCE_MEMBER(shadowLightIndex, shadowLight);
-						light.shadowMaskIndex = shadowLightIndex;
+						GET_INSTANCE_MEMBER(maskIndex, shadowLight);
+						light.shadowMaskIndex = maskIndex;
 						light.lightFlags.set(LightLimitFix::LightFlags::Shadow);
 					}
 
@@ -2122,7 +2126,7 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 		return;
 	}
 
-	logger::info("[RT] CreateModel - Path: {}, FormID [0x{:08X}], NiNode [0x{:08X}]: {}", path, formID, reinterpret_cast<uintptr_t>(pRoot), pRoot->name);
+	logger::debug("[RT] CreateModel - Path: {}, FormID [0x{:08X}], NiNode [0x{:08X}]: {}", path, formID, reinterpret_cast<uintptr_t>(pRoot), pRoot->name);
 
 	auto formType = form->GetFormType();
 
@@ -2133,7 +2137,7 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 	TraverseScenegraphRTGeometries(pRoot, [&](RE::BSGeometry* pGeometry) -> RE::BSVisit::BSVisitControl {
 		const char* name = pGeometry->name.c_str();
 
-		logger::info("\t\t[RT] CreateModel::TraverseScenegraphGeometries - {}", name);
+		logger::debug("\t\t[RT] CreateModel::TraverseScenegraphGeometries - {}", name);
 
 		const auto& geometryType = pGeometry->GetType();
 
@@ -2269,7 +2273,7 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 
 			AddInstance(formID, pRoot, modelKey);
 
-			logger::info("[RT] CreateModel - Commited {} TriShapes", shapeCount);
+			logger::debug("[RT] CreateModel - Commited {} TriShapes", shapeCount);
 		} else {
 			logger::warn("[RT] CreateModel - Emplace failed for {} TriShapes", shapeCount);
 		}
@@ -2365,7 +2369,10 @@ eastl::shared_ptr<Allocation> Raytracing::GetTextureRegister(ID3D11Texture2D* dx
 	hr = dxgiResource->GetSharedHandle(&sharedHandle);
 
 	if (FAILED(hr) || !sharedHandle) {
-		logger::error("[RT] GetTextureRegister - Failed to get shared handle.");
+		D3D11_TEXTURE2D_DESC desc;
+		dx11Texture->GetDesc(&desc);
+
+		logger::warn("[RT] GetTextureRegister - Failed to get shared handle - [{}, {}] Format: {}, Flags: {}", desc.Width, desc.Height, magic_enum::enum_name(desc.Format), GetFlagsString<D3D11_RESOURCE_MISC_FLAG>(desc.MiscFlags));
 		return defaultTexture;
 	}
 
@@ -2416,10 +2423,12 @@ eastl::shared_ptr<Allocation> Raytracing::GetMSNormalMapRegister([[maybe_unused]
 {
 	std::lock_guard lock{ textureRegisterMutex };
 
-	if (auto refIt = normalMaps.find(texture->texture); refIt != normalMaps.end()) {
+	auto* texture2D = reinterpret_cast<ID3D11Texture2D*>(texture->texture);
+
+	if (auto refIt = normalMaps.find(texture2D); refIt != normalMaps.end()) {
 		return refIt->second->Reference->allocation;
 	} else {
-		auto [it, emplaced] = normalMaps.emplace(texture->texture, eastl::make_unique<ConvertedNormalMap>());
+		auto [it, emplaced] = normalMaps.emplace(texture2D, eastl::make_unique<ConvertedNormalMap>());
 
 		if (!emplaced) {
 			logger::warn("[RT] GetMSNormalMapRegister - NormalMap emplace failed.");
@@ -2431,7 +2440,7 @@ eastl::shared_ptr<Allocation> Raytracing::GetMSNormalMapRegister([[maybe_unused]
 		normalMap->OriginalSRV = texture->resourceView;
 
 		D3D11_TEXTURE2D_DESC desc;
-		texture->texture->GetDesc(&desc);
+		texture2D->GetDesc(&desc);
 		desc.MipLevels = 1;
 		desc.ArraySize = 1;
 		desc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
@@ -2467,7 +2476,7 @@ eastl::shared_ptr<Allocation> Raytracing::GetMSNormalMapRegister([[maybe_unused]
 		HRESULT hr = normalMap->Texture->resource->QueryInterface(IID_PPV_ARGS(dxgiResource.put()));
 
 		if (FAILED(hr)) {
-			logger::error("[RT] GetTextureRegister - Failed to query interface.");
+			logger::error("[RT] GetMSNormalMapRegister - Failed to query interface.");
 			return defaultTexture;
 		}
 
@@ -2475,7 +2484,7 @@ eastl::shared_ptr<Allocation> Raytracing::GetMSNormalMapRegister([[maybe_unused]
 		hr = dxgiResource->GetSharedHandle(&sharedHandle);
 
 		if (FAILED(hr) || !sharedHandle) {
-			logger::error("[RT] GetTextureRegister - Failed to get shared handle.");
+			logger::error("[RT] GetMSNormalMapRegister - Failed to get shared handle.");
 			return defaultTexture;
 		}
 
@@ -2485,12 +2494,12 @@ eastl::shared_ptr<Allocation> Raytracing::GetMSNormalMapRegister([[maybe_unused]
 		CloseHandle(sharedHandle);
 
 		if (FAILED(hr)) {
-			logger::error("[RT] GetTextureRegister - Failed to open shared handle.");
+			logger::error("[RT] GetMSNormalMapRegister - Failed to open shared handle.");
 			return defaultTexture;
 		}
 
 		if (!dx12Texture) {
-			logger::error("[RT] GetTextureRegister - Failed to adquire DX12 texture.");
+			logger::error("[RT] GetMSNormalMapRegister - Failed to adquire DX12 texture.");
 			return defaultTexture;
 		}
 
@@ -2509,7 +2518,7 @@ eastl::shared_ptr<Allocation> Raytracing::GetMSNormalMapRegister([[maybe_unused]
 
 		d3d12Device->CreateShaderResourceView(normalMap->Reference->resource.get(), &texSrvDesc, giHeap->CPUHandle(GIHeap::Slot::Textures, normalMap->Reference->allocation->GetIndex()));
 	
-		allocationMSNormalMaps.emplace(normalMap->Reference->allocation->GetIndex(), texture->texture);
+		allocationMSNormalMaps.emplace(normalMap->Reference->allocation->GetIndex(), texture2D);
 
 		return normalMap->Reference->allocation;	
 	}
@@ -3228,6 +3237,9 @@ void Raytracing::DrawRTGI()
 
 		frameData->Lights = static_cast<uint>(lights.size());
 
+		frameData->PixelConeSpreadAngle = std::atan((2.0f / eye.projMat.m[1][1]) / renderSize.y);
+		frameData->TexLODBias = settings.TexLODBias;
+
 		frameData->RussianRoulette = settings.RussianRoulette;
 
 		if (Util::IsInterior()) {
@@ -3238,8 +3250,11 @@ void Raytracing::DrawRTGI()
 			if (sky && sky->region)
 				frameData->EmittanceColor = Float3(sky->region->emittanceColor);
 			else
-				frameData->EmittanceColor = float3::One;  // I assume no sky = interior (except for blackreach I guess?)
+				frameData->EmittanceColor = float3::One;
 		}
+
+		auto& cloudShadows = globals::features::cloudShadows;
+		frameData->CloudOpacity = cloudShadows.loaded ? cloudShadows.settings.Opacity : 0.0f;
 
 		frameData->SHaRC = settings.SHaRC.GetFrameData(settings.TraceMode == TraceMode::SHaRC);  // Sets UpdatePass to true if in SHaRC mode
 
@@ -3632,8 +3647,7 @@ void Raytracing::UpdateShadowsFrameBuffer()
 	shadowsCBData->Position = float4(cameraPosition.x, cameraPosition.y, cameraPosition.z, 0.0f);
 
 	if (shadowLight) {
-		auto direction = Float3(-shadowLight->GetShadowDirectionalLightRuntimeData().lightDirection);
-		direction.Normalize();
+		auto direction = Normalize(Float3(-shadowLight->GetShadowDirectionalLightRuntimeData().sunVector));
 		shadowsCBData->Direction = float4(direction.x, direction.y, direction.z, 0.0f);
 	}
 
@@ -4276,7 +4290,7 @@ void Raytracing::CompileRTGIShaders()
 		pipelineBuilder.AddHitGroup(L"ShadowHitGroup", L"", L"ShadowAnyHit");
 
 		// Shader + pipeline config
-		pipelineBuilder.AddShaderConfig(20, 8);
+		pipelineBuilder.AddShaderConfig(32, 8);
 		pipelineBuilder.AddGlobalRootSignature(rootSignature.get());
 		pipelineBuilder.AddPipelineConfig(1);  // Max recursion depth
 
