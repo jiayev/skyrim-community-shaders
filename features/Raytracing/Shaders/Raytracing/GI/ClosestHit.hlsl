@@ -1,6 +1,8 @@
 #include "Raytracing/Includes/Types.hlsli"
 #include "Raytracing/Includes/RT/Geometry.hlsli"
 
+#include "Raytracing/Includes/Materials/TexLODHelpers.hlsli"
+
 [shader("closesthit")]
 void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attribs)
 {
