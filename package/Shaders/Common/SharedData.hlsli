@@ -240,6 +240,12 @@ namespace SharedData
 		float otherEffectMult;
 	};
 
+	struct TerrainBlendingSettings
+	{
+		uint Enabled;
+		uint3 _padding;
+	};
+
 	struct PostProcessingSettings
 	{
 		uint DisableVanillaTonemapping;
@@ -345,12 +351,6 @@ namespace SharedData
         float DiffuseMult;
 		float AmbientMult;
     };
-
-	struct TerrainBlendingSettings
-	{
-		uint Enabled;
-		uint3 _padding;
-	};
 
 	struct ExponentialHeightFogSettings
 	{
