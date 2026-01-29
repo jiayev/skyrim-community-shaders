@@ -15,6 +15,7 @@ struct Surface
 {
     float3 Position;
     float3 GeomNormal;
+    float3 GeomTangent;
     float3 Normal;
     float3 Tangent;
     float3 Bitangent;
@@ -259,7 +260,7 @@ struct Surface
         Bitangent = bitangentWS;
 #else
         Texture2D normalTexture = Textures[NonUniformResourceIndex(material.NormalTexture())];
-        float3 normal = normalTexture.SampleLevel(BaseSampler, texCoord0, MipLevel).xyz * 2.0f - 1.0f;
+        float3 normal = normalTexture.SampleLevel(BaseSampler, texCoord0, MipLevel).xyz;
 
         float handedness = (dot(cross(normalWS, tangentWS), bitangentWS) < 0.0f) ? -1.0f : 1.0f;
 
@@ -331,16 +332,22 @@ struct Surface
             Albedo = baseColor; // GammaToTrueLinear looks wonky
         }
 
+#if defined(DEBUG_NONORMALMAP)
+        Normal = normalWS;
+        Tangent = tangentWS;
+        Bitangent = bitangentWS;
+#else          
         float3 normal = BlendLandTexture(material.Texture6, texCoord0, landBlend0.x).rgb + BlendLandTexture(material.Texture7, texCoord0, landBlend0.y).rgb +
                         BlendLandTexture(material.Texture8, texCoord0, landBlend0.z).rgb + BlendLandTexture(material.Texture9, texCoord0, landBlend0.w).rgb +
                         BlendLandTexture(material.Texture10, texCoord0, landBlend1.x).rgb + BlendLandTexture(material.Texture11, texCoord0, landBlend1.y).rgb;
-
+        
         NormalMap(
             normal,
             handedness,
             normalWS, tangentWS, bitangentWS,
             Normal, Tangent, Bitangent
         );
+#endif        
     }
 
 
@@ -379,19 +386,19 @@ struct Surface
 
         surface.Position = position;
 
-        uint shapeIndex = GetShapeIdx(payload, instance);
+        Shape shape = GetShape(payload, instance);
 
         // Loads all geometry releated data
         Vertex v0, v1, v2;
-        GetVertices(shapeIndex, payload.primitiveIndex, v0, v1, v2);
+        GetVertices(shape.GeometryIdx, payload.primitiveIndex, v0, v1, v2);
 
         float3 uvw = GetBary(payload.Barycentrics());
 
-        material = Materials[shapeIndex];
+        material = shape.Material;
 
         float2 texCoord0 = material.TexCoord(Interpolate(v0.Texcoord0, v1.Texcoord0, v2.Texcoord0, uvw));
 
-        float3x3 objectToWorld3x3 = (float3x3) instance.Transform;
+        float3x3 objectToWorld3x3 = mul((float3x3) instance.Transform, (float3x3) shape.Transform);
 
         float coneTexLODValue = surface.ComputeRayConeTriangleLODValue(v0, v1, v2, objectToWorld3x3);
 
@@ -401,6 +408,7 @@ struct Surface
 
         surface.MipLevel = payload.rayCone.computeLOD(coneTexLODValue, rayDir, normalWS, true) + Frame.TexLODBias;
         surface.GeomNormal = normalWS;
+        surface.GeomTangent = tangentWS;
 
         surface.Albedo = float3(1.0f, 1.0f, 1.0f);
         surface.Emissive = float3(0.0f, 0.0f, 0.0f);
@@ -496,6 +504,8 @@ struct Surface
         surface.Normal = normal;
         surface.Tangent = tangent;
         surface.Bitangent = bitangent;
+
+        surface.GeomTangent = tangent; // not needed for hybrid
 
 #   ifdef DEBUG_WHITE_FURNACE
         surface.Albedo = float3(1.0f, 1.0f, 1.0f);

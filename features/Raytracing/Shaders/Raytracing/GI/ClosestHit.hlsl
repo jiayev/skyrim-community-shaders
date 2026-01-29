@@ -1,5 +1,6 @@
 #include "Raytracing/Includes/Types.hlsli"
-#include "Raytracing/Includes/RT/Geometry.hlsli"
+
+#include "Raytracing/Includes/Materials/TexLODHelpers.hlsli"
 
 #include "Raytracing/Includes/Materials/TexLODHelpers.hlsli"
 

@@ -143,8 +143,6 @@ void Shape::BuildMesh(RE::BSGraphics::TriShape* rendererData, const uint32_t& ve
 
 		bool hasPosition = vertexFlags & RE::BSGraphics::Vertex::VF_VERTEX;
 
-		//bool isFullPrec = vertexFlags & RE::BSGraphics::Vertex::VF_FULLPREC;
-
 		uint32_t posOffset = vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_POSITION);
 		uint32_t uvOffset = vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_TEXCOORD0);
 		uint32_t normOffset = vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL);
@@ -152,8 +150,6 @@ void Shape::BuildMesh(RE::BSGraphics::TriShape* rendererData, const uint32_t& ve
 		uint32_t colorOffset = vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_COLOR);
 		uint32_t skinOffset = vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING);
 		uint32_t landOffset = vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_LANDDATA);
-
-		//uint32_t boneIDOffset = !hasPosition && isFullPrec ? sizeof(float) : sizeof(uint16_t) * bonesPerVertex;
 
 		uint32_t boneIDOffset = sizeof(uint16_t) * bonesPerVertex;
 
@@ -661,6 +657,8 @@ void Shape::CreateBuffers(const std::wstring& name)
 
 	auto allocator = rt.allocator.get();
 
+	const auto allocationIndex = allocation->GetIndex();
+
 	std::lock_guard lock{ rt.renderMutex };
 
 	// Dynamic
@@ -670,7 +668,7 @@ void Shape::CreateBuffers(const std::wstring& name)
 
 		dynamicPositionBuffer->TransitionBarrier(commandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-		dynamicPositionBuffer->CreateSRV(skinningHeap->CPUHandle(SkinningHeap::Slot::DynamicVertices, allocation->GetIndex()));
+		dynamicPositionBuffer->CreateSRV(skinningHeap->CPUHandle(SkinningHeap::Slot::DynamicVertices, allocationIndex));
 	}
 
 	bool updatable = (flags & Flags::Dynamic) || (flags & Flags::Skinned);
@@ -698,7 +696,7 @@ void Shape::CreateBuffers(const std::wstring& name)
 			uavDesc.Buffer.StructureByteStride = sizeof(Vertex);
 			uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
 
-			device->CreateUnorderedAccessView(vertexBuffer->resource.get(), nullptr, &uavDesc, skinningHeap->CPUHandle(SkinningHeap::Slot::Output, allocation->GetIndex()));
+			device->CreateUnorderedAccessView(vertexBuffer->resource.get(), nullptr, &uavDesc, skinningHeap->CPUHandle(SkinningHeap::Slot::Output, allocationIndex));
 		}
 
 		// SRV
@@ -712,7 +710,7 @@ void Shape::CreateBuffers(const std::wstring& name)
 			vbDesc.Buffer.StructureByteStride = sizeof(Vertex);
 			vbDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
 
-			device->CreateShaderResourceView(vertexBuffer->resource.get(), &vbDesc, giHeap->CPUHandle(GIHeap::Slot::Vertices, allocation->GetIndex()));
+			device->CreateShaderResourceView(vertexBuffer->resource.get(), &vbDesc, giHeap->CPUHandle(GIHeap::Slot::Vertices, allocationIndex));
 		}
 	}
 
@@ -723,7 +721,7 @@ void Shape::CreateBuffers(const std::wstring& name)
 		vertexCopyBuffer = eastl::make_unique<DX12::StructuredBufferUploadMA<Vertex>>(device, allocator, allocDesc, uploadAllocDesc, vertexCount);
 
 		vertexCopyBuffer->UpdateList(vertices.data(), vertexCount);
-		DX::ThrowIfFailed(vertexCopyBuffer->resource->SetName(std::format(L"Vertex Copy Buffer [{}] - {}", allocation->GetIndex(), name).c_str()));
+		DX::ThrowIfFailed(vertexCopyBuffer->resource->SetName(std::format(L"Vertex Copy Buffer [{}] - {}", allocationIndex, name).c_str()));
 
 		vertexCopyBuffer->Upload(commandList, 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
@@ -738,7 +736,7 @@ void Shape::CreateBuffers(const std::wstring& name)
 			vbDesc.Buffer.StructureByteStride = sizeof(Vertex);
 			vbDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
 
-			device->CreateShaderResourceView(vertexCopyBuffer->resource.get(), &vbDesc, skinningHeap->CPUHandle(SkinningHeap::Slot::Vertices, allocation->GetIndex()));
+			device->CreateShaderResourceView(vertexCopyBuffer->resource.get(), &vbDesc, skinningHeap->CPUHandle(SkinningHeap::Slot::Vertices, allocationIndex));
 		}
 	}
 
@@ -748,7 +746,7 @@ void Shape::CreateBuffers(const std::wstring& name)
 		skinningBuffer = eastl::make_unique<DX12::StructuredBufferUploadMA<Skinning>>(device, allocator, allocDesc, uploadAllocDesc, vertexCount, false);
 
 		skinningBuffer->UpdateList(skinning.data(), vertexCount);
-		DX::ThrowIfFailed(skinningBuffer->resource->SetName(std::format(L"Skinning Buffer [{}] - {}", allocation->GetIndex(), name).c_str()));
+		DX::ThrowIfFailed(skinningBuffer->resource->SetName(std::format(L"Skinning Buffer [{}] - {}", allocationIndex, name).c_str()));
 
 		skinningBuffer->Upload(commandList, 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
@@ -763,7 +761,7 @@ void Shape::CreateBuffers(const std::wstring& name)
 			vbDesc.Buffer.StructureByteStride = sizeof(Skinning);
 			vbDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
 
-			device->CreateShaderResourceView(skinningBuffer->resource.get(), &vbDesc, skinningHeap->CPUHandle(SkinningHeap::Slot::SkinningData, allocation->GetIndex()));
+			device->CreateShaderResourceView(skinningBuffer->resource.get(), &vbDesc, skinningHeap->CPUHandle(SkinningHeap::Slot::SkinningData, allocationIndex));
 		}
 	}
 
@@ -773,7 +771,7 @@ void Shape::CreateBuffers(const std::wstring& name)
 		triangleBuffer = eastl::make_unique<DX12::StructuredBufferUploadMA<Triangle>>(device, allocator, allocDesc, uploadAllocDesc, triangleCount, false);
 
 		triangleBuffer->UpdateList(triangles.data(), triangles.size());
-		DX::ThrowIfFailed(triangleBuffer->resource->SetName(std::format(L"Triangle Buffer [{}] - {}", allocation->GetIndex(), name).c_str()));
+		DX::ThrowIfFailed(triangleBuffer->resource->SetName(std::format(L"Triangle Buffer [{}] - {}", allocationIndex, name).c_str()));
 
 		triangleBuffer->Upload(commandList, 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
@@ -788,17 +786,20 @@ void Shape::CreateBuffers(const std::wstring& name)
 			ibDesc.Buffer.StructureByteStride = sizeof(Triangle);
 			ibDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
 
-			device->CreateShaderResourceView(triangleBuffer->resource.get(), &ibDesc, giHeap->CPUHandle(GIHeap::Slot::Triangles, allocation->GetIndex()));
+			device->CreateShaderResourceView(triangleBuffer->resource.get(), &ibDesc, giHeap->CPUHandle(GIHeap::Slot::Triangles, allocationIndex));
 		}
 	}
 
-	// Material
-	auto materialData = material.GetData();
-	rt.materialBuffer->UpdateAt(&materialData, allocation->GetIndex());
+	// Updatable geometry is already in root space
+	if (updatable)
+		localToRoot = float3x4(
+			1.0f, 0.0f, 0.0f, 0.0f,
+			0.0f, 1.0f, 0.0f, 0.0f,
+			0.0f, 0.0f, 1.0f, 0.0f);
 
-	// Transform
-	rt.transformBuffer->UpdateAt(&localToRoot, allocation->GetIndex());
-	rt.transformBuffer->UploadRegion(commandList, sizeof(float3x4), sizeof(float3x4) * allocation->GetIndex());
+	// This buffer is used for BLAS build/rebuild
+	rt.transformBuffer->UpdateAt(&localToRoot, allocationIndex);
+	rt.transformBuffer->UploadRegion(commandList, sizeof(float3x4), sizeof(float3x4) * allocationIndex);
 }
 
 void Shape::CalculateVectors(bool calculateNormal)
@@ -877,6 +878,12 @@ void Shape::CalculateVectors(bool calculateNormal)
 	}
 }
 
+D3D12_GPU_VIRTUAL_ADDRESS Shape::TransformBuffer() const
+{
+	auto offset = allocation->GetIndex() * sizeof(float3x4);
+	return globals::features::raytracing.transformBuffer->resource->GetGPUVirtualAddress() + offset;
+}
+
 // Updates Dynamic Vertex position (and Bitangent.x) buffer
 // TODO: Test performance and stability of using a upload heap buffer and keeping it mapped to dynamicData
 bool Shape::UpdateDynamicPosition()
@@ -939,4 +946,14 @@ bool Shape::UpdateSkinning()
 		return false;*/
 
 	return true;
+}
+
+ShapeData Shape::GetData() const
+{
+	return ShapeData{ 
+		material.GetData(),
+		allocation->GetIndex(),
+		{0, 0},
+		localToRoot
+	};
 }

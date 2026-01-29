@@ -78,7 +78,7 @@ void main()
     sourcePayload.randomSeed = randomSeed;
     sourcePayload.rayCone = RayCone::make(0, Frame.PixelConeSpreadAngle);
 
-    TraceRay(Scene, RAY_FLAG_NONE, 0xFF, DIFFUSE_RAY_HITGROUP_IDX, 0, DIFFUSE_RAY_MISS_IDX, sourceRay, sourcePayload);
+    TraceRay(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, DIFFUSE_RAY_HITGROUP_IDX, 0, DIFFUSE_RAY_MISS_IDX, sourceRay, sourcePayload);
     randomSeed = sourcePayload.randomSeed;
 
     sourcePayload.rayCone = sourcePayload.rayCone.propagateDistance(sourcePayload.hitDistance);
@@ -205,6 +205,14 @@ void main()
 
 #if defined(DEBUG_TRANSOUT)
     OutputTexture[idx] = float4(sourceSurface.TransmissionColor, 1.0f);
+    SpecularAlbedo[idx] = float4(0.5f, 0.5f, 0.5f, 0.0f);
+    SpecularHitDist[idx] = RAY_TMAX;
+    return;
+#endif
+
+#if defined(DEBUG_MIPLEVEL)
+    float3 output = TurboColormap(saturate(sourceSurface.MipLevel / 12.0f));
+    OutputTexture[idx] = float4(output, 1.0f);
     SpecularAlbedo[idx] = float4(0.5f, 0.5f, 0.5f, 0.0f);
     SpecularHitDist[idx] = RAY_TMAX;
     return;
@@ -359,11 +367,11 @@ void main()
                 throughput /= (1.0f - rrProb);
             }
 
-            float dirDotGeom = dot(direction, surface.GeomNormal);
-            float3 offsetNormal = dirDotGeom > 0.0 ? surface.GeomNormal : -surface.GeomNormal;
-            ray.Origin = OffsetRay(surface.Position, offsetNormal);
+            // Use hasTransmission flag to properly determine ray offset direction
+            // instead of re-checking direction against geom normal
+            ray.Origin = OffsetRay(surface.Position, surface.GeomNormal, hasTransmission);
             ray.Direction = direction;
-            ray.TMin = 0.01f;
+            ray.TMin = 0.0f;  // OffsetRay already handles precision, no additional offset needed
             ray.TMax = RAY_TMAX;
 
             payload.hitDistance = -1.0f;
@@ -375,7 +383,7 @@ void main()
             if (!bsdfSample.isLobe(LobeType::Delta))
                 payload.rayCone = RayCone::make(payload.rayCone.getWidth(), min(payload.rayCone.getSpreadAngle() + ComputeRayConeSpreadAngleExpansionByScatterPDF(bsdfSample.pdf), 2.0 * K_PI));
 
-            TraceRay(Scene, RAY_FLAG_NONE, 0xFF, DIFFUSE_RAY_HITGROUP_IDX, 0, DIFFUSE_RAY_MISS_IDX, ray, payload);
+            TraceRay(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, DIFFUSE_RAY_HITGROUP_IDX, 0, DIFFUSE_RAY_MISS_IDX, ray, payload);
             randomSeed = payload.randomSeed;
             payload.rayCone = payload.rayCone.propagateDistance(payload.hitDistance);
 
@@ -437,6 +445,7 @@ void main()
 #endif
 
             brdfContext = BRDFContext(surface, -direction);
+            AdjustShadingNormal(surface, brdfContext, true, false);  // Adjusts the normal of the supplied shading frame to reduce black pixels due to back-facing view direction.
             bsdf = StandardBSDF::make(surface, isEnter);
 
             float3 directRadiance = EvaluateDirectRadiance(surface, brdfContext, instance, bsdf, randomSeed);
