@@ -83,6 +83,15 @@ namespace Util
 	};
 
 	/**
+	 * Confirmation popup for clearing shader cache.
+	 * Call RequestClearShaderCacheConfirmation() when the clear button is clicked.
+	 * Call DrawClearShaderCacheConfirmation() every frame to render the popup.
+	 * The popup respects the "don't ask me again" setting.
+	 */
+	void RequestClearShaderCacheConfirmation();
+	void DrawClearShaderCacheConfirmation();
+
+	/**
 	 * RAII wrapper for styled ImGui buttons that automatically applies and restores styling.
 	 * Use this to ensure consistent button styling without forgetting to pop styles.
 	 */
@@ -177,6 +186,12 @@ namespace Util
 		const char* filename,
 		ID3D11ShaderResourceView** out_srv,
 		ImVec2& out_size);
+
+	bool LoadDDSTextureFromFile(ID3D11Device* device,
+		const char* filename,
+		ID3D11ShaderResourceView** out_srv,
+		ImVec2& out_size);
+
 	bool InitializeMenuIcons(Menu* menu);
 
 	// Text rendering helpers for clearer title text
@@ -190,6 +205,46 @@ namespace Util
 	 * @return The offset to add to cursor X position to center the content
 	 */
 	float GetCenterOffsetForContent(float contentWidth);
+
+	/**
+	 * Weather-controlled UI helpers
+	 * These functions automatically check if a setting has a weather-specific override
+	 * and disable the control if it's being controlled by the current weather
+	 */
+	namespace WeatherUI
+	{
+		/**
+		 * Check if a specific setting is currently controlled by weather
+		 * @param feature The feature to check
+		 * @param settingName The name of the setting (must match registered weather variable name)
+		 * @return True if weather is overriding this setting
+		 */
+		bool IsWeatherControlled(Feature* feature, const char* settingName);
+
+		/**
+		 * Weather-aware slider float that greys out when controlled by weather
+		 * @param label The label for the slider
+		 * @param feature The feature this setting belongs to
+		 * @param settingName The name of the setting (must match registered weather variable name)
+		 * @param value Pointer to the value
+		 * @param min Minimum value
+		 * @param max Maximum value
+		 * @param format Display format
+		 * @return True if value was changed (only possible when not weather-controlled)
+		 */
+		bool SliderFloat(const char* label, Feature* feature, const char* settingName, float* value, float min, float max, const char* format = "%.3f");
+
+		/**
+		 * Weather-aware checkbox that greys out when controlled by weather
+		 */
+		bool Checkbox(const char* label, Feature* feature, const char* settingName, bool* value);
+
+		/**
+		 * Weather-aware color edit that greys out when controlled by weather
+		 */
+		bool ColorEdit3(const char* label, Feature* feature, const char* settingName, float col[3]);
+		bool ColorEdit4(const char* label, Feature* feature, const char* settingName, float col[4]);
+	}
 
 	/**
 	 * Draws a custom styled collapsible category header with lines extending from both sides
@@ -557,6 +612,31 @@ namespace Util
 	 * @param alpha Alpha multiplier for the icon color (default: 0.7f for subtle appearance)
 	 */
 	void DrawSearchIcon(const ImVec2& position, float size = 20.0f, float alpha = 0.7f);
+
+	/**
+	 * @brief Draws a semi-transparent dark overlay behind modal dialogs for depth.
+	 * @param alpha The alpha value for the overlay (0-255, default: 160)
+	 */
+	void DrawModalBackground(uint8_t alpha = 160);
+
+	/**
+	 * @brief Draws text with a breathing/pulsing alpha animation using theme text color.
+	 * @param text The text to display
+	 * @param speed Animation speed multiplier (default: 2.5f)
+	 * @param minAlpha Minimum alpha value (default: 0.7f)
+	 * @param maxAlpha Maximum alpha value (default: 1.0f)
+	 */
+	void DrawBreathingText(const char* text, float speed = 2.5f, float minAlpha = 0.7f, float maxAlpha = 1.0f);
+
+	/**
+	 * @brief Returns a color with pulsing brightness animation applied.
+	 * @param baseColor The base color to pulse
+	 * @param speed Animation speed multiplier (default: 4.0f)
+	 * @param minBrightness Minimum brightness multiplier (default: 0.7f)
+	 * @param maxBrightness Maximum brightness multiplier (default: 1.0f)
+	 * @return The color with pulsing brightness applied (alpha unchanged)
+	 */
+	ImVec4 GetPulsingColor(const ImVec4& baseColor, float speed = 4.0f, float minBrightness = 0.7f, float maxBrightness = 1.0f);
 
 	/**
 	 * @brief Draws the feature search bar with magnifying glass icon.

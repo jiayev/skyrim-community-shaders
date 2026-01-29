@@ -2,17 +2,10 @@ cmake_minimum_required(VERSION 3.21)
 cmake_policy(SET CMP0116 NEW)
 set(CMAKE_POLICY_WARNING_CMP0116 OFF)
 
-if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0.0")
-    message(
-        ERROR
-        "EASTL will fail to install with vcpkg using cmake 4.0+, remove this line if the port get fixed."
-    )
-endif()
-
 project(
     # gersemi: ignore
     CommunityShaders
-    VERSION 1.4.6
+    VERSION 1.4.7
     LANGUAGES CXX
 )
 
@@ -46,10 +39,16 @@ option(
     ON
 )
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
+option(
+    BUILD_SHADER_TESTS
+    "Build shader unit tests (runs automatically before packaging)"
+    ON
+)
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
+message("\tShader tests: ${BUILD_SHADER_TESTS}")
 
 # #######################################################################################################################
 # # Add CMake features
@@ -284,6 +283,16 @@ string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 # Set AIO directory path used by multiple targets below
 set(AIO_DIR "${CMAKE_CURRENT_BINARY_DIR}/aio")
 
+# Robocopy wrapper for Windows incremental file copy (used by deployment targets)
+if(WIN32)
+    set(ROBOCOPY_WRAPPER "${CMAKE_BINARY_DIR}/robocopy_wrapper.cmd")
+    file(
+        WRITE
+        ${ROBOCOPY_WRAPPER}
+        "@echo off\r\nrem Robocopy wrapper: forwards all args to robocopy and normalizes exit codes\r\nrobocopy %*\r\nset rc=%ERRORLEVEL%\r\nif %rc% GEQ 8 exit /b %rc%\r\nexit /b 0\r\n"
+    )
+endif()
+
 # #######################################################################################################################
 # # CMake install() infrastructure for manual packaging
 # #######################################################################################################################
@@ -332,7 +341,8 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     # deploys from copying everything every build.
     set(_prepare_aio_cmds)
 
-    # Ensure SKSE/Plugins dir exists and copy built plugin files
+    # Ensure SKSE/Plugins dir exists
+    # Note: DLL and PDB are copied via POST_BUILD command to avoid race conditions
     list(
         APPEND
         _prepare_aio_cmds
@@ -341,26 +351,6 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -E
         make_directory
         "${AIO_DIR}/SKSE/Plugins"
-    )
-    list(
-        APPEND
-        _prepare_aio_cmds
-        COMMAND
-        ${CMAKE_COMMAND}
-        -E
-        copy_if_different
-        $<TARGET_FILE:${PROJECT_NAME}>
-        "${AIO_DIR}/SKSE/Plugins/$<TARGET_FILE_NAME:${PROJECT_NAME}>"
-    )
-    list(
-        APPEND
-        _prepare_aio_cmds
-        COMMAND
-        ${CMAKE_COMMAND}
-        -E
-        copy_if_different
-        $<TARGET_PDB_FILE:${PROJECT_NAME}>
-        "${AIO_DIR}/SKSE/Plugins/$<TARGET_PDB_FILE_NAME:${PROJECT_NAME}>"
     )
 
     # Copy package files
@@ -454,6 +444,24 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
     )
 
+    # Copy DLL and PDB using POST_BUILD to avoid race conditions with file locking
+    # This ensures the linker has fully released the files before we attempt to copy them
+    add_custom_command(
+        TARGET ${PROJECT_NAME}
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${AIO_DIR}/SKSE/Plugins"
+        COMMAND
+            ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:${PROJECT_NAME}>"
+            "${AIO_DIR}/SKSE/Plugins/$<TARGET_FILE_NAME:${PROJECT_NAME}>"
+        COMMAND
+            ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_PDB_FILE:${PROJECT_NAME}>"
+            "${AIO_DIR}/SKSE/Plugins/$<TARGET_PDB_FILE_NAME:${PROJECT_NAME}>"
+        COMMENT "Copying built DLL and PDB to AIO package"
+        VERBATIM
+    )
+
     # Only copy shaders when HLSL files change; copy individually so unchanged
     # files do not get their timestamps updated.
     file(
@@ -461,6 +469,8 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         LIST_DIRECTORIES FALSE
         "${CMAKE_SOURCE_DIR}/package/Shaders/*"
     )
+    # Exclude test files from production packages
+    list(FILTER _package_shaders EXCLUDE REGEX "/Tests/")
     set(_shader_copy_cmds)
     foreach(_src IN LISTS _package_shaders)
         file(RELATIVE_PATH _rel "${CMAKE_SOURCE_DIR}/package/Shaders" "${_src}")
@@ -539,14 +549,6 @@ endif()
 if(AUTO_PLUGIN_DEPLOYMENT)
     set(DEPLOY_TARGET_HASHES)
     if(WIN32)
-        # Write a small wrapper once at configure time to normalize robocopy exit codes.
-        set(ROBOCOPY_WRAPPER "${CMAKE_BINARY_DIR}/robocopy_wrapper.cmd")
-        file(
-            WRITE
-            ${ROBOCOPY_WRAPPER}
-            "@echo off\r\nrem Robocopy wrapper: forwards all args to robocopy and normalizes exit codes\r\nrobocopy %*\r\nset rc=%ERRORLEVEL%\r\nif %rc% GEQ 8 exit /b %rc%\r\nexit /b 0\r\n"
-        )
-
         foreach(DEPLOY_TARGET $ENV{CommunityShadersOutputDir})
             message("Deploying AIO to ${DEPLOY_TARGET} (incremental)")
 
@@ -600,9 +602,10 @@ if(AUTO_PLUGIN_DEPLOYMENT)
 
             list(APPEND DEPLOY_TARGET_HASHES ${DEPLOY_TARGET_HASH}_plugin.stamp)
 
-            # Incremental shader copy (only changed/new shader files are copied)
+            # Incremental shader-only copy for fast dev iteration
+            # Depends ONLY on copy_shaders.stamp (no DLL, no PREPARE_AIO)
             add_custom_command(
-                OUTPUT ${DEPLOY_TARGET_HASH}.stamp
+                OUTPUT ${DEPLOY_TARGET_HASH}_shaders_only.stamp
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory
                     "${DEPLOY_TARGET}/Shaders"
@@ -610,16 +613,46 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     ${ROBOCOPY_WRAPPER} "${AIO_DIR}/Shaders"
                     "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/XO" "/R:1"
                     "/W:1" "/NFL" "/NDL" "/NJH" "/NJS"
-                COMMAND ${CMAKE_COMMAND} -E touch ${DEPLOY_TARGET_HASH}.stamp
+                COMMAND
+                    ${CMAKE_COMMAND} -E touch
+                    ${DEPLOY_TARGET_HASH}_shaders_only.stamp
+                DEPENDS copy_shaders.stamp
+                COMMENT "Fast shader-only deploy to ${DEPLOY_TARGET}/Shaders"
+            )
+
+            list(
+                APPEND
+                SHADER_ONLY_HASHES
+                ${DEPLOY_TARGET_HASH}_shaders_only.stamp
+            )
+
+            # Full shader copy for packaging (includes PREPARE_AIO dependency)
+            # This ensures DLL is built and all AIO files are ready
+            add_custom_command(
+                OUTPUT ${DEPLOY_TARGET_HASH}_shaders_full.stamp
+                COMMAND
+                    ${CMAKE_COMMAND} -E make_directory
+                    "${DEPLOY_TARGET}/Shaders"
+                COMMAND
+                    ${ROBOCOPY_WRAPPER} "${AIO_DIR}/Shaders"
+                    "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/XO" "/R:1"
+                    "/W:1" "/NFL" "/NDL" "/NJH" "/NJS"
+                COMMAND
+                    ${CMAKE_COMMAND} -E touch
+                    ${DEPLOY_TARGET_HASH}_shaders_full.stamp
                 DEPENDS
                     copy_shaders.stamp
                     ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
                 COMMENT
-                    "Incremental shader copy to ${DEPLOY_TARGET}/Shaders (robocopy-wrapper)"
+                    "Full shader deploy to ${DEPLOY_TARGET}/Shaders (with PREPARE_AIO)"
             )
 
             list(APPEND DEPLOY_TARGET_HASHES ${DEPLOY_TARGET_HASH}_deploy.stamp)
-            list(APPEND DEPLOY_TARGET_HASHES ${DEPLOY_TARGET_HASH}.stamp)
+            list(
+                APPEND
+                DEPLOY_TARGET_HASHES
+                ${DEPLOY_TARGET_HASH}_shaders_full.stamp
+            )
         endforeach()
     else()
         # AUTO_PLUGIN_DEPLOYMENT is enabled but the host is not Windows. Do
@@ -632,11 +665,21 @@ if(AUTO_PLUGIN_DEPLOYMENT)
         )
     endif()
 
+    # Lightweight target for fast shader dev iteration
+    # Deploys ONLY shaders to game directory (no DLL build, no tests)
     add_custom_target(
         COPY_SHADERS
+        DEPENDS ${SHADER_ONLY_HASHES}
+        COMMENT "Fast shader-only deploy to game directory (no DLL, no tests)"
+    )
+
+    # Full deployment target for packaging/CI
+    # Builds DLL, prepares AIO, deploys everything, runs tests
+    add_custom_target(
+        DEPLOY_ALL
         ALL
         DEPENDS copy_shaders.stamp ${DEPLOY_TARGET_HASHES}
-        COMMENT "Prepare and copy AIO/shaders to CommunityShadersOutputDir"
+        COMMENT "Full deployment: DLL + shaders + all files to game directory"
     )
 endif()
 
@@ -855,6 +898,52 @@ add_custom_command(
 )
 add_custom_target("Package-AIO-Manual" DEPENDS ${AIO_PACKAGE})
 
+# #######################################################################################################################
+# # Shader Unit Tests
+# #######################################################################################################################
+if(BUILD_SHADER_TESTS)
+    message(STATUS "Adding shader tests subdirectory")
+    enable_testing() # Enable CTest integration for shader tests
+    add_subdirectory(tests/shaders)
+
+    # Add a custom target that runs the shader tests
+    # Users can run this manually with: cmake --build <build-dir> --target run_shader_tests
+    # Runs the test executable directly (not via CTest) to show discovery count
+    add_custom_target(
+        run_shader_tests
+        COMMAND $<TARGET_FILE:shader_tests> --reporter compact
+        DEPENDS shader_tests
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:shader_tests>
+        COMMENT "Running shader unit tests..."
+        VERBATIM
+    )
+
+    # Make all package targets depend on shader tests passing
+    add_dependencies("Package-Core" run_shader_tests)
+    add_dependencies("Package-AIO-Manual" run_shader_tests)
+    foreach(FEATURE_PATH ${FEATURE_PATHS})
+        get_filename_component(FEATURE ${FEATURE_PATH} NAME)
+        string(REPLACE " " "" FEATURE ${FEATURE})
+        string(REPLACE "-" "" FEATURE ${FEATURE})
+        if(TARGET "Package-${FEATURE}")
+            add_dependencies("Package-${FEATURE}" run_shader_tests)
+        endif()
+    endforeach()
+
+    # Make shader deployment targets depend on tests passing
+    if(TARGET prepare_shaders)
+        add_dependencies(prepare_shaders run_shader_tests)
+    endif()
+    if(TARGET DEPLOY_ALL)
+        add_dependencies(DEPLOY_ALL run_shader_tests)
+    endif()
+
+    message(
+        STATUS
+        "Package and shader deployment targets will automatically run shader tests before deploying"
+    )
+endif()
+
 message("*************************************************************")
 message("Community Shaders configuration complete")
 message("To prepare a ZIP package of AIO, Core, or Features")
@@ -864,5 +953,11 @@ message("    - Package-AIO-Manual: AIO package (manual)")
 message("    - Package-<Feature>: Individual feature packages")
 message("  Or use cmake --install for custom deployment:")
 message("    cmake --install ./build/ALL --prefix <TARGET_DIR>")
+if(BUILD_SHADER_TESTS)
+    message("To run shader tests manually:")
+    message(
+        "  cmake --build build/<preset> --config <Debug|Release> --target run_shader_tests"
+    )
+endif()
 message("Try switching to build preset 'Dev' for faster iteration time")
 message("*************************************************************")

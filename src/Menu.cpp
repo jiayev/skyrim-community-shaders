@@ -44,6 +44,7 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/VR.h"
 #include "Features/WeatherPicker.h"
+#include "WeatherEditor/EditorWindow.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
@@ -152,6 +153,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ShaderBlockNextKey,
 	EnableShaderBlocking,
 	FirstTimeSetupCompleted,
+	SkipClearCacheConfirmation,
 	Theme,
 	SelectedThemePreset)
 
@@ -182,9 +184,13 @@ Menu::~Menu()
 {  // Release icon textures if loaded
 	uiIcons.saveSettings.Release();
 	uiIcons.loadSettings.Release();
+	uiIcons.deleteSettings.Release();
 	uiIcons.clearCache.Release();
 	uiIcons.logo.Release();
 	uiIcons.featureSettingRevert.Release();
+	uiIcons.applyToGame.Release();
+	uiIcons.pauseTime.Release();
+	uiIcons.undo.Release();
 	uiIcons.discord.Release();
 	uiIcons.characters.Release();
 	uiIcons.display.Release();
@@ -210,17 +216,29 @@ Menu::~Menu()
 
 void Menu::Load(json& o_json)
 {
+	// Store current Theme state before loading config
+	auto currentTheme = settings.Theme;
+
 	settings = o_json;
-	bool hasThemeObject = o_json.contains("Theme") && o_json["Theme"].is_object();
-	bool hasFontRoles = hasThemeObject && o_json["Theme"].contains("FontRoles");
-	MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
-	auto& bodyRole = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)];
-	if (!Util::ValidateFont(bodyRole.File)) {
-		const auto& defaults = Menu::GetDefaultFontRole(FontRole::Body);
-		logger::warn("Font '{}' not found while loading settings, falling back to default font '{}'",
-			bodyRole.File, defaults.File);
-		settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)] = defaults;
-		settings.Theme.FontName = defaults.File;
+
+	// Restore Theme - don't load it from config, only from theme preset files
+	settings.Theme = currentTheme;
+
+	// Legacy support: If old config has Theme data and no SelectedThemePreset, load it
+	if (o_json.contains("Theme") && o_json["Theme"].is_object() && settings.SelectedThemePreset.empty()) {
+		bool hasFontRoles = o_json["Theme"].contains("FontRoles");
+		settings.Theme = o_json["Theme"];
+		MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
+
+		auto& bodyRole = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)];
+		if (!Util::ValidateFont(bodyRole.File)) {
+			const auto& defaults = Menu::GetDefaultFontRole(FontRole::Body);
+			logger::warn("Font '{}' not found while loading settings, falling back to default font '{}'",
+				bodyRole.File, defaults.File);
+			settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)] = defaults;
+			settings.Theme.FontName = defaults.File;
+		}
+		logger::info("Loaded legacy Theme data from config (no SelectedThemePreset)");
 	}
 
 	// Apply Default Dark theme on first launch if no theme is selected
@@ -235,13 +253,29 @@ void Menu::Load(json& o_json)
 		} else {
 			logger::warn("Failed to load Default Dark theme on first launch");
 		}
+	} else if (!settings.SelectedThemePreset.empty()) {
+		// Load the previously selected theme preset (including custom themes)
+		if (LoadThemePreset(settings.SelectedThemePreset)) {
+			logger::info("Loaded saved theme preset: {}", settings.SelectedThemePreset);
+		} else {
+			logger::warn("Failed to load saved theme preset '{}', falling back to Default", settings.SelectedThemePreset);
+			if (LoadThemePreset("Default")) {
+				settings.SelectedThemePreset = "Default";
+			}
+		}
 	}
 }
 
 void Menu::Save(json& o_json)
 {
 	settings.Theme.FontName = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)].File;
+
+	// Save all settings except Theme values
+	// Theme values should only be saved in theme preset files, not in the main config
 	o_json = settings;
+
+	// Remove Theme object from config, only keep SelectedThemePreset
+	o_json.erase("Theme");
 }
 
 void Menu::LoadTheme(json& o_json)
@@ -301,13 +335,12 @@ bool Menu::LoadThemePreset(const std::string& themeName)
 	json themeSettings;
 
 	if (themeManager->LoadTheme(themeName, themeSettings)) {
+		// Create a backup of current theme in case loading fails
+		ThemeSettings backupTheme = settings.Theme;
+		ThemeSettings defaultTheme;  // For fallback values
+		bool hasFontRoles = themeSettings.contains("FontRoles");
+
 		try {
-			// Create a backup of current theme in case loading fails
-			ThemeSettings backupTheme = settings.Theme;
-			ThemeSettings defaultTheme;  // For fallback values
-
-			bool hasFontRoles = themeSettings.contains("FontRoles");
-
 			// Attempt to load theme with protection against malformed data
 			try {
 				settings.Theme = themeSettings;
@@ -452,10 +485,12 @@ bool Menu::LoadThemePreset(const std::string& themeName)
 			// Apply background blur enabled state from theme
 			BackgroundBlur::SetEnabled(settings.Theme.BackgroundBlurEnabled);
 
-			logger::info("Loaded theme preset: {}", themeName);
+			logger::info("Applied theme preset: {}", themeName);
 			return true;
 		} catch (const std::exception& e) {
-			logger::error("Fatal error loading theme '{}': {}.", themeName, e.what());
+			logger::warn("Error loading theme '{}': {}", themeName, e.what());
+			// Restore backup to maintain UI consistency
+			settings.Theme = backupTheme;
 			return false;
 		}
 	} else {
@@ -466,7 +501,6 @@ bool Menu::LoadThemePreset(const std::string& themeName)
 
 void Menu::CreateDefaultThemes()
 {
-	// Use ThemeManager to create default theme files
 	auto themeManager = ThemeManager::GetSingleton();
 	themeManager->CreateDefaultThemeFiles();
 }
@@ -491,6 +525,20 @@ void Menu::Init()
 		logger::warn("Could not load Default.json theme - trying direct force application");
 		// Last resort: Apply Default.json colors directly to ImGui
 		ThemeManager::ForceApplyDefaultTheme();
+	}
+
+	// Re-apply user-selected preset after defaults are applied (covers Default and custom)
+	if (!settings.SelectedThemePreset.empty()) {
+		auto themeManagerSingleton = ThemeManager::GetSingleton();
+		if (themeManagerSingleton && !themeManagerSingleton->IsDiscovered()) {
+			themeManagerSingleton->DiscoverThemes();
+		}
+
+		if (!LoadThemePreset(settings.SelectedThemePreset)) {
+			logger::warn("Failed to re-apply preset '{}' during Menu::Init. Keeping Default.", settings.SelectedThemePreset);
+		} else {
+			logger::info("Re-applied preset '{}' during Menu::Init", settings.SelectedThemePreset);
+		}
 	}
 
 	auto& imgui_io = ImGui::GetIO();
@@ -566,6 +614,11 @@ void Menu::DrawSettings()
 	ImGui::SetNextWindowSize(Util::GetNativeViewportSizeScaled(0.8f), ImGuiCond_FirstUseEver);
 	auto title = std::format("Community Shaders {}", Util::GetFormattedVersion(Plugin::VERSION));
 
+	if (EditorWindow::GetSingleton()->open) {
+		EditorWindow::GetSingleton()->Draw();
+		return;
+	}
+
 	// Determine window flags based on docking state
 	ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar;
 	// Check if this will be docked (we need to peek at the docking state)
@@ -628,6 +681,9 @@ void Menu::DrawSettings()
 			ImGui::Spacing();
 			DrawFooter();
 		}
+
+		// Draw global popups (needs to be called once per frame)
+		Util::DrawClearShaderCacheConfirmation();
 	}
 	ImGui::End();
 }
@@ -877,7 +933,7 @@ void Menu::ProcessInputEventQueue()
 						std::function<void()> action;
 					};
 					KeyAction keyActions[] = {
-						{ settings.ToggleKey, [this]() { IsEnabled = !IsEnabled; } },
+						{ settings.ToggleKey, [this]() { if (!HomePageRenderer::ShouldShowFirstTimeSetup()) IsEnabled = !IsEnabled; } },
 						{ settings.SkipCompilationKey, [shaderCache]() { shaderCache->backgroundCompilation = true; } },
 						{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnabled()); } },
 						{ settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
@@ -893,8 +949,12 @@ void Menu::ProcessInputEventQueue()
 						}
 					}
 				}
-				if (key == VK_ESCAPE && IsEnabled) {
-					IsEnabled = false;
+				// Guard against a null EditorWindow singleton before accessing `open`.
+				{
+					auto* editorWindow = EditorWindow::GetSingleton();
+					if (key == VK_ESCAPE && IsEnabled && editorWindow && !editorWindow->open) {
+						IsEnabled = false;
+					}
 				}
 			}
 
@@ -933,7 +993,7 @@ void Menu::OnFocusChanged()
 	// Solves the alt+tab stuck issue, but disables tab after tabbing back in.
 	if (const auto& inputMgr = RE::BSInputDeviceManager::GetSingleton()) {
 		if (const auto& device = inputMgr->GetKeyboard()) {
-			device->Reset();
+			device->ClearInputState();
 		}
 	}
 	// Allows tab to work again after alt+tabbing back in.

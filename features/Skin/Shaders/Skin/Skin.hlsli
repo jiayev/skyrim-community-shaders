@@ -90,7 +90,7 @@ namespace Skin
 		MaterialProperties material)
 	{
 		lightingOutput = (DirectLightingOutput)0;
-		context.lightColor *= Math::PI;
+		context.lightColor *= Color::PBRLightingCompensation;
 
 		const float3 N = context.worldNormal;
 		const float3 V = context.viewDir;
