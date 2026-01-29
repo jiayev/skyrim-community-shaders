@@ -55,8 +55,10 @@ void State::Draw()
 			terrainHelper.SetShaderResouces(context);
 		}
 
-		if (skin.loaded)
+		if (skin.loaded) {
+			ZoneScopedN("Skin::SetShaderResouces");
 			skin.SetShaderResouces(context);
+		}
 
 		{
 			ZoneScopedN("TruePBR::SetShaderResouces");
