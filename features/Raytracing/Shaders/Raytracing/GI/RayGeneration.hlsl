@@ -111,6 +111,8 @@ void main()
 
     StandardBSDF sourceBSDF = StandardBSDF::make(sourceSurface, true);
 
+    AdjustShadingNormal(sourceSurface, sourceBRDFContext, true, false);
+
     // Direct Light for PT
     float3 direct = EvaluateDirectRadiance(sourceSurface, sourceBRDFContext, sourceInstance, sourceBSDF, randomSeed) + sourceSurface.Emissive;
 #else
@@ -371,7 +373,7 @@ void main()
             }
 
 #if defined(SHARC)
-            materialRoughnessPrev += bsdfSample.isLobe(LobeType::Diffuse) ? 1.0f : material.roughness;
+            materialRoughnessPrev += bsdfSample.isLobe(LobeType::Diffuse) ? 1.0f : surface.Roughness;
 #endif
 
             // Use hasTransmission flag to properly determine ray offset direction
