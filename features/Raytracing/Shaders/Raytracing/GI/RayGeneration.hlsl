@@ -76,12 +76,11 @@ void main()
     sourcePayload.PackBarycentrics(float2(0.0f, 0.0f));
     sourcePayload.PackInstanceGeometryIndex(0, 0);
     sourcePayload.randomSeed = randomSeed;
-    sourcePayload.rayCone = RayCone::make(0, Frame.PixelConeSpreadAngle);
 
     TraceRay(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, DIFFUSE_RAY_HITGROUP_IDX, 0, DIFFUSE_RAY_MISS_IDX, sourceRay, sourcePayload);
     randomSeed = sourcePayload.randomSeed;
 
-    sourcePayload.rayCone = sourcePayload.rayCone.propagateDistance(sourcePayload.hitDistance);
+    RayCone sourceRayCone = RayCone::make(Frame.PixelConeSpreadAngle * sourcePayload.hitDistance, Frame.PixelConeSpreadAngle);    
 
     if (!sourcePayload.Hit())
     {
@@ -106,8 +105,9 @@ void main()
     Instance sourceInstance;
     Material sourceMaterial;
 
-    Surface sourceSurface = Surface(sourcePosition, sourcePayload, sourceDirection, sourceInstance, sourceMaterial);
+    Surface sourceSurface = Surface(sourcePosition, sourcePayload, sourceDirection, sourceRayCone, sourceInstance, sourceMaterial);
     BRDFContext sourceBRDFContext = BRDFContext(sourceSurface, -sourceDirection);
+    if ((sourceMaterial.ShaderFlags & ShaderFlags::kTwoSided) != 0 && dot(sourceSurface.FaceNormal, sourceBRDFContext.ViewDirection) < 0.0f) sourceSurface.FlipNormal();
 
     StandardBSDF sourceBSDF = StandardBSDF::make(sourceSurface, true);
 
@@ -163,6 +163,8 @@ void main()
     const float3 positionCS = ViewToWorldPosition(positionVS, Frame.ViewInverse);
     const float3 positionWS = positionCS + Frame.Position.xyz;
 
+    const float hitDistance = length(positionCS);
+    
     const snorm half3 normalWS = normalRoughness.xyz;
 
     float3 tangentWS, bitangentWS;
@@ -170,8 +172,10 @@ void main()
 
     float3 albedo = LLGammaToTrueLinear(AlbedoTexture.SampleLevel(BaseSampler, uv, 0).rgb);
 
+    RayCone sourceRayCone = RayCone::make(Frame.PixelConeSpreadAngle * hitDistance, Frame.PixelConeSpreadAngle);
+    
     Surface sourceSurface = Surface(positionWS, geometryNormalWS, normalWS, tangentWS, bitangentWS, albedo, linearRoughness, metalness, 0, ao);
-    BRDFContext sourceBRDFContext = BRDFContext(sourceSurface, normalize(-positionCS));
+    BRDFContext sourceBRDFContext = BRDFContext(sourceSurface, -positionCS / hitDistance);
 
     StandardBSDF sourceBSDF = StandardBSDF::make(sourceSurface, true);
 #endif
@@ -244,6 +248,8 @@ void main()
     BRDFContext brdfContext;
 
     StandardBSDF bsdf;
+    
+    RayCone rayCone;
 
 #if defined(SHARC)
     SharcState sharcState;
@@ -264,6 +270,7 @@ void main()
         surface = sourceSurface;
         brdfContext = sourceBRDFContext;
         bsdf = sourceBSDF;
+        rayCone = sourceRayCone;        
 #if defined(PATH_TRACING)
         material = sourceMaterial;
         instance = sourceInstance;
@@ -274,7 +281,7 @@ void main()
         float3 throughput = float3(1.0f, 1.0f, 1.0f);
         float materialRoughnessPrev = 0.0f;
         bool isEnter = true;
-
+        
 #if defined(RAW_RADIANCE)
         float3 throughputDelta = float3(1.0f, 1.0f, 1.0f);
 #endif
@@ -296,13 +303,11 @@ void main()
             isSpecular = bsdfSample.isLobe(LobeType::Specular);
             bool hasTransmission = bsdfSample.isLobe(LobeType::Transmission);
 
+            float3 faceNormalOriented = dot(brdfContext.ViewDirection, surface.FaceNormal) >= 0.0f ? surface.FaceNormal : -surface.FaceNormal;
+
             if (isValid)
                 direction = bsdfSample.wo;
             else
-                break;
-
-            // Check direction validity before modifying any state
-            if (!hasTransmission && dot(surface.GeomNormal, direction) <= 0.0)
                 break;
 
             throughput *= bsdfSample.isLobe(LobeType::Transmission) ? 1.f : surface.AO;
@@ -311,7 +316,7 @@ void main()
             if (hasTransmission) {
                 isEnter = !isEnter;
             } else {
-                isEnter = dot(direction, surface.GeomNormal) >= 0.0f;
+                isEnter = dot(direction, faceNormalOriented) >= 0.0f;
             }
 
             brdfWeight.diffuse = bsdfSample.isLobe(LobeType::DiffuseReflection) ? bsdfSample.weight : float3(0.f, 0.f, 0.f);
@@ -376,9 +381,7 @@ void main()
             materialRoughnessPrev += bsdfSample.isLobe(LobeType::Diffuse) ? 1.0f : surface.Roughness;
 #endif
 
-            // Use hasTransmission flag to properly determine ray offset direction
-            // instead of re-checking direction against geom normal
-            ray.Origin = OffsetRay(surface.Position, surface.GeomNormal, hasTransmission);
+            ray.Origin = OffsetRay(surface.Position, faceNormalOriented, hasTransmission);
             ray.Direction = direction;
             ray.TMin = 0.0f;  // OffsetRay already handles precision, no additional offset needed
             ray.TMax = RAY_TMAX;
@@ -390,17 +393,14 @@ void main()
             payload.randomSeed = randomSeed;
 
             if (!bsdfSample.isLobe(LobeType::Delta))
-                payload.rayCone = RayCone::make(payload.rayCone.getWidth(), min(payload.rayCone.getSpreadAngle() + ComputeRayConeSpreadAngleExpansionByScatterPDF(bsdfSample.pdf), 2.0 * K_PI));
+                rayCone = RayCone::make(rayCone.getWidth(), min(rayCone.getSpreadAngle() + ComputeRayConeSpreadAngleExpansionByScatterPDF(bsdfSample.pdf), 2.0 * K_PI));
 
             TraceRay(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, DIFFUSE_RAY_HITGROUP_IDX, 0, DIFFUSE_RAY_MISS_IDX, ray, payload);
             randomSeed = payload.randomSeed;
-            payload.rayCone = payload.rayCone.propagateDistance(payload.hitDistance);
+            rayCone = rayCone.propagateDistance(payload.hitDistance);
 
-            if (j == 0)
-            {
-                if (isSpecular)
-                    specHitDist = max(specHitDist, payload.hitDistance);
-            }
+            if (isSpecular)
+                specHitDist += payload.hitDistance;
 
             if (!payload.Hit())
             {
@@ -421,11 +421,11 @@ void main()
 
             float3 localPosition = ray.Origin + direction * payload.hitDistance;
 
-            surface = Surface(localPosition, payload, direction, instance, material);
+            surface = Surface(localPosition, payload, direction, rayCone, instance, material);
 
 #if defined(SHARC)
             sharcHitData.positionWorld = surface.Position;
-            sharcHitData.normalWorld = surface.GeomNormal;
+            sharcHitData.normalWorld = faceNormalOriented;
 
 #   if SHARC_SEPARATE_EMISSIVE
             sharcHitData.emissive = surface.Emissive;
@@ -456,6 +456,9 @@ void main()
 #endif
 
             brdfContext = BRDFContext(surface, -direction);
+            if ((material.ShaderFlags & ShaderFlags::kTwoSided) != 0 && dot(surface.FaceNormal, brdfContext.ViewDirection) < 0.0f)
+                surface.FlipNormal();
+
             AdjustShadingNormal(surface, brdfContext, true, false);  // Adjusts the normal of the supplied shading frame to reduce black pixels due to back-facing view direction.
             bsdf = StandardBSDF::make(surface, isEnter);
 

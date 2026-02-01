@@ -10,6 +10,19 @@
 
 #include "Raytracing/Includes/Materials/TexLODHelpers.hlsli"
 
+// Helpers
+
+float3 SafeNormalize(float3 input)
+{
+    float lenSq = dot(input,input);
+    return input * rsqrt(max( 1.175494351e-38, lenSq));
+}
+
+float3 FlipIfOpposite(float3 normal, float3 referenceNormal)
+{
+    return (dot(normal, referenceNormal)>=0)?(normal):(-normal);
+}
+
 #define Surface(...) static Surface ctor(__VA_ARGS__)
 struct Surface
 {
@@ -19,6 +32,7 @@ struct Surface
     float3 Normal;
     float3 Tangent;
     float3 Bitangent;
+    float3 FaceNormal;
     float3 Albedo;
     float3 DiffuseAlbedo;
     float Roughness;
@@ -67,6 +81,13 @@ struct Surface
     float3 FromLocal(float3 v)
     {
         return Mul(v);
+    }
+
+    void FlipNormal()
+    {
+        Normal = -Normal;
+        GeomNormal = -GeomNormal;
+        FaceNormal = -FaceNormal;
     }
 
     void DefaultMaterial(in Vertex v0, in Vertex v1, in Vertex v2, in float3 uvw, in float3 normalWS, in float3 tangentWS, in float3 bitangentWS, float3x3 objectToWorld3x3, in Material material)
@@ -380,7 +401,7 @@ struct Surface
         );
     }
 
-    Surface(float3 position, Payload payload, float3 rayDir, out Instance instance, out Material material)
+    Surface(float3 position, Payload payload, float3 rayDir, RayCone rayCone, out Instance instance, out Material material)
     {
         Surface surface;
 
@@ -402,11 +423,21 @@ struct Surface
 
         float coneTexLODValue = surface.ComputeRayConeTriangleLODValue(v0, v1, v2, objectToWorld3x3);
 
-        float3 normalWS = normalize(mul(objectToWorld3x3, Interpolate(v0.Normal, v1.Normal, v2.Normal, uvw)));
-        float3 tangentWS = normalize(mul(objectToWorld3x3, Interpolate(v0.Tangent, v1.Tangent, v2.Tangent, uvw)));
-        float3 bitangentWS = normalize(mul(objectToWorld3x3, Interpolate(v0.Bitangent, v1.Bitangent, v2.Bitangent, uvw)));
+        float3 objectSpaceFlatNormal = SafeNormalize(cross(
+            v1.Position - v0.Position,
+            v2.Position - v0.Position));
 
-        surface.MipLevel = payload.rayCone.computeLOD(coneTexLODValue, rayDir, normalWS, true) + Frame.TexLODBias;
+        float3 normal0 = FlipIfOpposite(v0.Normal, objectSpaceFlatNormal);
+        float3 normal1 = FlipIfOpposite(v1.Normal, objectSpaceFlatNormal);
+        float3 normal2 = FlipIfOpposite(v2.Normal, objectSpaceFlatNormal);
+
+        float3 normalWS = SafeNormalize(mul(objectToWorld3x3, Interpolate(normal0, normal1, normal2, uvw)));
+        float3 tangentWS = SafeNormalize(mul(objectToWorld3x3, Interpolate(v0.Tangent, v1.Tangent, v2.Tangent, uvw)));
+        float3 bitangentWS = SafeNormalize(mul(objectToWorld3x3, Interpolate(v0.Bitangent, v1.Bitangent, v2.Bitangent, uvw)));
+
+        surface.FaceNormal = SafeNormalize(mul(objectToWorld3x3, objectSpaceFlatNormal));
+
+        surface.MipLevel = rayCone.computeLOD(coneTexLODValue, rayDir, normalWS, true) + Frame.TexLODBias;
         surface.GeomNormal = normalWS;
         surface.GeomTangent = tangentWS;
 

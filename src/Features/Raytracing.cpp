@@ -2088,6 +2088,11 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 		return;
 	}
 
+	if (instances.find(pRoot) != instances.end()) {
+		logger::warn("[RT] CreateModel \"{}\" - Instance/Model for 0x{:08X} already present.", path, reinterpret_cast<uintptr_t>(pRoot));
+		return;
+	}
+
 	const auto* bsxFlags = pRoot->GetExtraData<RE::BSXFlags>("BSX");
 
 	if (bsxFlags) {
@@ -2232,7 +2237,6 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 		return RE::BSVisit::BSVisitControl::kContinue;
 	});
 
-
 	if (auto shapeCount = shapes.size(); shapeCount > 0) {
 		eastl::string modelKey = path;
 
@@ -2240,9 +2244,9 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 
 		// Models with these flags cannot be instanced directly
 		if ((model->GetFlags() & Shape::Flags::Dynamic) || (model->GetFlags() & Shape::Flags::Skinned))
-			modelKey.append(std::format("_{:08X}", reinterpret_cast<uintptr_t>(pRoot)).c_str());
+			modelKey.append(Model::KeySuffix(pRoot).c_str());
 
-		auto [it, emplaced] = models.emplace(modelKey, eastl::move(model));
+		auto [it, emplaced] = models.try_emplace(modelKey, eastl::move(model));
 
 		if (emplaced) {
 			if (it->second->ShouldQueueMSNConversion())
@@ -4251,7 +4255,7 @@ void Raytracing::CompileRTGIShaders()
 		pipelineBuilder.AddHitGroup(L"ShadowHitGroup", L"", L"ShadowAnyHit");
 
 		// Shader + pipeline config
-		pipelineBuilder.AddShaderConfig(32, 8);
+		pipelineBuilder.AddShaderConfig(20, 8);
 		pipelineBuilder.AddGlobalRootSignature(rootSignature.get());
 		pipelineBuilder.AddPipelineConfig(1);  // Max recursion depth
 
