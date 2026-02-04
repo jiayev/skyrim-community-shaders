@@ -293,10 +293,12 @@ PS_OUTPUT main(PS_INPUT input)
 			float3 limbFactor = PhysSky::LimbDarkenHestroffer(normDist);
 
 			const float softEdge = saturate(8.0f * (cosTheta - SharedData::physSkyData.sunDiskCos) / (1.0f - SharedData::physSkyData.sunDiskCos));
+			const float sunSolidAngle = Math::TAU * (1.0f - SharedData::physSkyData.sunDiskCos);
+			const float transmittance = PhysSky::SampleTr(normalize(input.WorldPosition.xyz), SampBlendSampler);
+			const float3 sunDiskRadiance = min((SharedData::physSkyData.sunlightColor / max(sunSolidAngle, 1e-6f)) * transmittance, 62250.0f);
 
-			float3 dirLightColor = SharedData::physSkyData.sunlightColor * limbFactor * softEdge;
-			dirLightColor *= PhysSky::SampleTr(normalize(input.WorldPosition.xyz), SampBlendSampler);
-			psout.Color.xyz += dirLightColor;
+			float3 sunDiskColor = sunDiskRadiance * limbFactor * softEdge;
+			psout.Color.xyz += sunDiskColor;
 			psout.Color.w = 1.0;
 		}
 #		endif
