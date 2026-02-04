@@ -35,7 +35,7 @@ public:
 	bool featureDLSS_RR = false;
 
 	sl::ViewportHandle viewport{ 0 };
-
+	static constexpr uint32_t MAX_RESOLUTION = 8192;
 	HMODULE interposer = NULL;
 
 	// SL Interposer Functions
@@ -103,9 +103,6 @@ public:
 		ID3D12Resource* a_sssGuide,
 		ID3D12Resource* a_outputTexture,
 		ID3D12GraphicsCommandList* a_commandList);
-
-	float2 GetInputResolutionScale(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
-	float2 GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityPreset);
 
 	void DestroyDLSSResources(bool modeSwitch = false);
 	void DestroyDLSSRRResources(bool modeSwitch = false);
