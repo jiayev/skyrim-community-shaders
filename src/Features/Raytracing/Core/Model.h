@@ -4,6 +4,8 @@
 
 #include <d3d12.h>
 
+#include "State.h"
+
 #include "Features/Raytracing/Buffer.h"
 #include "Features/Raytracing/Types.h"
 
@@ -16,16 +18,23 @@
 
 struct Model
 {
+	enum Flags {
+		BLASUpdate = 1 << 0,
+		BLASRebuild	= 1 << 1	
+	};
+
 	eastl::vector<eastl::unique_ptr<Shape>> shapes;
 
 	winrt::com_ptr<D3D12MA::Allocation> blasBuffer = nullptr;
 	winrt::com_ptr<D3D12MA::Allocation> blasScratchBuffer = nullptr;
 
+	Flags flags;
+
 	Model(eastl::vector<eastl::unique_ptr<Shape>>& shapes) :
 		shapes(eastl::move(shapes))
 	{
 		for (auto& shape : this->shapes) {
-			flags |= shape->flags;
+			shapeflags |= shape->flags;
 			shaderTypes |= shape->material.shaderType;
 			features |= static_cast<int>(shape->material.Feature);
 			shaderFlags.set(shape->material.shaderFlags.get());
@@ -39,7 +48,7 @@ struct Model
 
 	Shape::Flags GetFlags() const
 	{
-		return flags;
+		return shapeflags;
 	}
 
 	uint32_t GetShaderTypes() const
@@ -80,6 +89,36 @@ struct Model
 
 	void ConvertMSN();
 
+	bool BLASBuildExecuted() const;
+
+	bool BLASUpdateExecuted() const;
+
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS BuildFlags() const
+	{
+		if ((shapeflags & Shape::Flags::Skinned) || (shapeflags & Shape::Flags::Dynamic))
+			return D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+
+		return D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_COMPACTION | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+	}
+
+
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS UpdateFlags(bool rebuild) const
+	{
+		if (rebuild)
+			return BuildFlags();
+
+		return D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+	}
+
+	void BuildBLAS(ID3D12GraphicsCommandList4* commandList);
+
+	bool UpdateBLAS(ID3D12GraphicsCommandList4* commandList);
+
+	bool HideShape([[maybe_unused]]Shape* shape) const
+	{
+		return BLASBuildExecuted() && ((shape->state & Shape::State::Hidden) != Shape::State::None);
+	}
+
 	void AddRef()
 	{
 		refCount.fetch_add(1, eastl::memory_order_relaxed);
@@ -92,9 +131,11 @@ struct Model
 	}
 
 private:
-	Shape::Flags flags = Shape::Flags::None;
+	Shape::Flags shapeflags = Shape::Flags::None;
 	uint32_t shaderTypes = RE::BSShader::Type::None;
 	int features = static_cast<int>(RE::BSShaderMaterial::Feature::kNone);
 	REX::EnumSet<RE::BSShaderProperty::EShaderPropertyFlag, std::uint64_t> shaderFlags;
+	uint64_t blasBuildFrame;
+	uint64_t blasUpdateFrame;
 	eastl::atomic<int> refCount{ 0 };
 };

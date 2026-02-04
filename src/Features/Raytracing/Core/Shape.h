@@ -32,10 +32,11 @@ public:
 		DoubleSidedGeom = 1 << 6
 	};
 
-	enum State : uint8_t
+	enum class State : uint8_t
 	{
+		None = 0,
 		Hidden = 1 << 0,
-		HiddenDismember = 1 << 1
+		DismemberHidden = 1 << 1
 	};
 
 	// The position of this meshes SRV in the register stack
@@ -68,7 +69,7 @@ public:
 
 	Flags flags = Flags::None;
 
-	State state;
+	State state = State::None;
 
 	AABB aabb;
 
@@ -96,6 +97,8 @@ public:
 		return clone;
 	}*/
 
+	D3D12_RAYTRACING_GEOMETRY_DESC GeometryDesc() const;
+
 	D3D12_GPU_VIRTUAL_ADDRESS TransformBuffer() const;
 
 	void BuildMesh(RE::BSGraphics::TriShape* rendererData, const uint32_t& vertexCountIn, const uint32_t& triangleCountIn, const uint16_t& bonesPerVertex);
@@ -106,11 +109,17 @@ public:
 
 	void CalculateVectors(bool calculateNormal);
 
+	Flags Update(bool isRenderUseValid);
+
 	bool UpdateDynamicPosition();
 
 	void UpdateUploadDynamicBuffers(ID3D12GraphicsCommandList4* commandList);
 
 	bool UpdateSkinning();
+
+	void UpdateDismember(bool enable);
+
+	bool IsHidden() const;
 
 	eastl::shared_ptr<Allocation> TextureRegister(const RE::NiPointer<RE::NiSourceTexture> niPointer, eastl::shared_ptr<Allocation> defaultTexture, bool modelSpaceNormalMap);
 
@@ -121,3 +130,4 @@ public:
 };
 
 DEFINE_ENUM_FLAG_OPERATORS(Shape::Flags);
+DEFINE_ENUM_FLAG_OPERATORS(Shape::State);

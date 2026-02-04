@@ -175,40 +175,10 @@ void SkinningPipeline::RestoreResources(ID3D12GraphicsCommandList4* commandList)
 			barriers.push_back(barrier);
 	}
 
-	uint barrierCount = (uint)barriers.size();
+	const uint barrierCount = (uint)barriers.size();
 
 	if (barrierCount > 0)
 		commandList->ResourceBarrier(barrierCount, barriers.data());
-}
-
-void SkinningPipeline::UpdateBLASES(ID3D12GraphicsCommandList4* commandList)
-{
-	auto& rt = globals::features::raytracing;
-
-	barriers.clear();
-	barriers.reserve(queuedShapes.size());
-
-	// One model contains multiple shapes, lets make a unique list of all updated model
-	eastl::hash_set<eastl::string> paths;
-	for (auto& [shape, queuedShape] : queuedShapes) {
-		paths.emplace(queuedShape.path);
-	}
-
-	// Lets update all models which had at least one updated shape
-	for (auto& path : paths) {
-		if (auto it = rt.models.find(path); it != rt.models.end()) {
-			auto& model = it->second;
-
-			rt.UpdateModelBLAS(model.get());
-
-			barriers.push_back(CD3DX12_RESOURCE_BARRIER::UAV(model->blasBuffer->GetResource()));
-		}
-	}
-
-	uint blasUpdateCount = (uint)barriers.size();
-
-	if (blasUpdateCount > 0)
-		commandList->ResourceBarrier(blasUpdateCount, barriers.data());
 }
 
 void SkinningPipeline::ClearQueue()
@@ -250,8 +220,6 @@ void SkinningPipeline::Dispatch(ID3D12GraphicsCommandList4* commandList, ID3D12D
 	commandList->Dispatch(count, vertexDispatchSize, 1);
 
 	RestoreResources(commandList);
-
-	UpdateBLASES(commandList);
 
 	ClearQueue();
 }

@@ -9,6 +9,7 @@
 #include "Raytracing/Includes/RT/CommonRT.hlsli"
 #include "Raytracing/Includes/RT/Shading.hlsli"
 #include "Raytracing/Includes/RT/Geometry.hlsli"
+#include "Raytracing/Includes/RT/SubsurfaceShading.hlsli"
 
 #include "Common/Color.hlsli"
 #include "Common/BRDF.hlsli"
@@ -27,8 +28,26 @@ void main()
     uint2 idx = DispatchRaysIndex().xy;
     uint2 size = DispatchRaysDimensions().xy;
 
+#if defined(CHECKERBOARD)    
+    if ((idx.x + idx.y) & 1)
+#elif defined(TEMPORAL_CHECKERBOARD)
+    if ((idx.x + idx.y + Frame.FrameCount) & 1)
+#endif
+#if defined(CHECKERBOARD) || defined(TEMPORAL_CHECKERBOARD)
+    {
+        OutputTexture[idx] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        DiffuseAlbedoPathTracing[idx] = float4(0.0f, 0.0f, 0.0f, 1.0f);
+        NormalRoughnessPathTracing[idx] = float4(0.0f, 0.0f, 0.0f, 1.0f);
+        SpecularAlbedo[idx] = float4(0.5f, 0.5f, 0.5f, 0.0f);
+        SpecularHitDist[idx] = RAY_TMAX;
+    
+        return;
+    }       
+#endif   
+    
     uint randomSeed = InitRandomSeed(idx, size, Frame.FrameCount);
-
+    bool isSssPath = false;
+  
 #if defined(SHARC)
     SharcParameters sharcParameters = GetSharcParameters();
 
@@ -107,14 +126,22 @@ void main()
 
     Surface sourceSurface = Surface(sourcePosition, sourcePayload, sourceDirection, sourceRayCone, sourceInstance, sourceMaterial);
     BRDFContext sourceBRDFContext = BRDFContext(sourceSurface, -sourceDirection);
-    if ((sourceMaterial.ShaderFlags & ShaderFlags::kTwoSided) != 0 && dot(sourceSurface.FaceNormal, sourceBRDFContext.ViewDirection) < 0.0f) sourceSurface.FlipNormal();
+    if (dot(sourceSurface.FaceNormal, sourceBRDFContext.ViewDirection) < 0.0f) sourceSurface.FlipNormal();
 
     StandardBSDF sourceBSDF = StandardBSDF::make(sourceSurface, true);
 
     AdjustShadingNormal(sourceSurface, sourceBRDFContext, true, false);
 
     // Direct Light for PT
-    float3 direct = EvaluateDirectRadiance(sourceSurface, sourceBRDFContext, sourceInstance, sourceBSDF, randomSeed) + sourceSurface.Emissive;
+    float3 direct = sourceSurface.Emissive;
+#ifdef SUBSURFACE_SCATTERING
+    if (sourceSurface.SubsurfaceData.HasSubsurface != 0) {
+        direct += EvaluateSubsurfaceNEE(sourceSurface, sourceBRDFContext, sourceMaterial, sourceInstance, sourcePayload, sourceRayCone, randomSeed);
+        isSssPath = true;
+    }
+    else
+#endif
+        direct += EvaluateDirectRadiance(sourceMaterial, sourceSurface, sourceBRDFContext, sourceInstance, sourceBSDF, randomSeed);
 #else
     const float2 uv = float2(idx + 0.5f) / size;
 
@@ -298,8 +325,8 @@ void main()
             throughput *= surface.AO;
             throughput *= surface.Albedo;
 #else
-            float3 randomSample = float3(Random(randomSeed), Random(randomSeed), Random(randomSeed));
-            bool isValid = bsdf.SampleBSDF(randomSample, brdfContext, surface, bsdfSample);
+            float4 randomSample = float4(Random(randomSeed), Random(randomSeed), Random(randomSeed), Random(randomSeed));
+            bool isValid = bsdf.SampleBSDF(randomSample, brdfContext, material, surface, bsdfSample);
             isSpecular = bsdfSample.isLobe(LobeType::Specular);
             bool hasTransmission = bsdfSample.isLobe(LobeType::Transmission);
 
@@ -456,13 +483,20 @@ void main()
 #endif
 
             brdfContext = BRDFContext(surface, -direction);
-            if ((material.ShaderFlags & ShaderFlags::kTwoSided) != 0 && dot(surface.FaceNormal, brdfContext.ViewDirection) < 0.0f)
-                surface.FlipNormal();
+            if (dot(surface.FaceNormal, brdfContext.ViewDirection) < 0.0f) surface.FlipNormal();
 
             AdjustShadingNormal(surface, brdfContext, true, false);  // Adjusts the normal of the supplied shading frame to reduce black pixels due to back-facing view direction.
             bsdf = StandardBSDF::make(surface, isEnter);
 
-            float3 directRadiance = EvaluateDirectRadiance(surface, brdfContext, instance, bsdf, randomSeed);
+            float3 directRadiance = 0.0f;
+#ifdef SUBSURFACE_SCATTERING
+            if (surface.SubsurfaceData.HasSubsurface != 0 && !isSssPath) {
+                directRadiance += EvaluateSubsurfaceNEE(surface, brdfContext, material, instance, payload, rayCone, randomSeed);
+                isSssPath = true;
+            }
+            else
+#endif
+                directRadiance += EvaluateDirectRadiance(material, surface, brdfContext, instance, bsdf, randomSeed);
             sampleRadiance += directRadiance * throughput;
 
 #if defined(SHARC) && defined(SHARC_UPDATE)

@@ -34,7 +34,7 @@ bool Instance::ShouldUpdate(RE::NiAVObject* node, RE::NiPoint3 cameraPosition)
 }
 
 // Checks for skinned and dynamic trishapes update
-void Instance::Update(RE::NiAVObject* node, RE::NiPoint3 cameraPosition, const eastl::pair<eastl::string, Model*>& modelPair, SkinningPipeline* skinningPipeline)
+void Instance::Update(RE::NiAVObject* node, RE::NiPoint3 cameraPosition, const eastl::pair<eastl::string, Model*>& modelPair, [[maybe_unused]] SkinningPipeline* skinningPipeline)
 {
 	// Instance was not changed by the game, so there is no need to update it
 	// This doesn't work at all for actors
@@ -53,43 +53,41 @@ void Instance::Update(RE::NiAVObject* node, RE::NiPoint3 cameraPosition, const e
 
 	auto& [path, model] = modelPair;
 
-	if ((model->GetFlags() & Shape::Flags::Dynamic) || (model->GetFlags() & Shape::Flags::Skinned)) {
-		logger::trace("Update {} - [0x{:08X}] {}", filename, node->GetFlags().underlying(), GetFlagsString<RE::NiAVObject::Flag>(node->GetFlags().underlying()));
+	bool isRenderUseValid = model->IsRenderUseValid();
 
-		for (auto& shape : model->shapes) {
-			logger::trace("Update {} - [0x{:08X}] {}", shape->geometry->name, shape->geometry->GetFlags().underlying(), GetFlagsString<RE::NiAVObject::Flag>(shape->geometry->GetFlags().underlying()));
+	//bool changed = false;
 
-			Shape::Flags updateFlags = Shape::Flags::None;
+	for (auto& shape : model->shapes) {
+		const bool prevHidden = (shape->state & Shape::State::Hidden) != Shape::State::None;
 
-			if (shape->UpdateDynamicPosition()) {
-				updateFlags |= Shape::Flags::Dynamic;
-			}
+		auto updateFlags = shape->Update(isRenderUseValid);
 
-			if (shape->UpdateSkinning()) {
-				updateFlags |= Shape::Flags::Skinned;
-			}
+		const bool hidden = (shape->state & Shape::State::Hidden) != Shape::State::None;
 
-			if (updateFlags & Shape::Flags::Skinned) {
-				auto& skinInstance = shape->geometry->GetGeometryRuntimeData().skinInstance;
+		if (hidden != prevHidden) {
+			model->flags |= Model::Flags::BLASRebuild;
 
-				if (shape->boneMatrices.empty())
-					shape->boneMatrices.resize(skinInstance->numMatrices);
+			//changed = true;
+			logger::trace("Instance::Update {} - {} 0x{:08X} - Valid: {}, Hidden: {}, Flags: {}", 
+				path, shape->geometry->name, reinterpret_cast<uintptr_t>(this), isRenderUseValid,
+				hidden, GetFlagsString<RE::NiAVObject::Flag>(shape->geometry->GetFlags().underlying()));
+		}
 
-				float3x4* boneMatricesArray = reinterpret_cast<float3x4*>(skinInstance->boneMatrices);
+		if ((updateFlags & Shape::Flags::Dynamic) || (updateFlags & Shape::Flags::Skinned)) {
+			model->flags |= Model::Flags::BLASUpdate;
 
-				auto rootParent = skinInstance->rootParent;
-				auto skinRootInverse = GetXMFromNiTransform(rootParent->world.Invert());
-
-				shape->boundRadius = rootParent->worldBound.radius + (rootParent->world.translate + rootParent->worldBound.center).GetDistance(shape->geometry->world.translate);
-
-				for (uint i = 0; i < skinInstance->numMatrices; i++) {
-					XMStoreFloat3x4(&shape->boneMatrices[i], XMMatrixMultiply(XMLoadFloat3x4(&boneMatricesArray[i]), skinRootInverse));
-				}
-			}
-
-			if ((updateFlags & Shape::Flags::Dynamic) || (updateFlags & Shape::Flags::Skinned)) {
-				skinningPipeline->QueueUpdate(updateFlags, path, shape.get());
-			}
+			skinningPipeline->QueueUpdate(updateFlags, path, shape.get());
 		}
 	}
+
+	//RE::BSDismemberSkinInstance
+
+	/*if (changed) {
+		RE::BSVisit::TraverseScenegraphObjects(node, [&](RE::NiAVObject* pObject) -> RE::BSVisit::BSVisitControl {
+			logger::info("Instance::Update {} - {}, Flags: {}",
+				path, pObject->name, GetFlagsString<RE::NiAVObject::Flag>(pObject->GetFlags().underlying()));
+
+			return RE::BSVisit::BSVisitControl::kContinue;
+		});	
+	}*/
 }

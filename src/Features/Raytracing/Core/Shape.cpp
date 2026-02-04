@@ -461,6 +461,14 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 
 						pbrFlags = GetPBRShaderFlags(lightingPBRMaterial);
 
+						if (pbrFlags & PBRShaderFlags::Subsurface) {
+							textures[6] = TextureRegister(lightingPBRMaterial->featuresTexture0, blackTexture);
+
+							auto sssColor = lightingPBRMaterial->GetSubsurfaceColor();
+							colors[2] = { sssColor.red, sssColor.green, sssColor.blue, 1.0f };
+							scalars[2] = lightingPBRMaterial->GetSubsurfaceOpacity();
+						}
+
 						// Enforce TruePBR flag
 						shaderFlags.set(EShaderPropertyFlag::kMenuScreen);
 					} else {
@@ -522,6 +530,8 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 										lightingHairTintMaterial->tintColor.blue,
 										(float)colors[0].w
 									};
+									// Load flowmap texture for hair (stored in specularBackLightingTexture slot)
+									textures[3] = TextureRegister(lightingBaseMaterial->specularBackLightingTexture, blackTexture);
 								}
 							}
 
@@ -885,17 +895,95 @@ void Shape::CalculateVectors(bool calculateNormal)
 	}
 }
 
+D3D12_RAYTRACING_GEOMETRY_DESC Shape::GeometryDesc() const
+{
+	bool hasAlphaTesting = flags & Shape::Flags::AlphaTesting;
+	bool isBlend = (flags & Shape::Flags::AlphaBlending) && (material.Feature == RE::BSShaderMaterial::Feature::kHairTint || material.Feature == RE::BSShaderMaterial::Feature::kFaceGen || material.Feature == RE::BSShaderMaterial::Feature::kFaceGenRGBTint || material.Feature == RE::BSShaderMaterial::Feature::kEye);
+	bool isWindows = material.shaderFlags.any(RE::BSShaderProperty::EShaderPropertyFlag::kAssumeShadowmask) && (material.Feature == RE::BSShaderMaterial::Feature::kGlowMap || material.PBRFlags.any(PBRShaderFlags::HasEmissive));
+
+	bool isOpaque = !hasAlphaTesting && !isWindows && !isBlend;
+
+	return {
+		.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
+		.Flags = isOpaque ? D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE : D3D12_RAYTRACING_GEOMETRY_FLAG_NONE | D3D12_RAYTRACING_GEOMETRY_FLAG_NO_DUPLICATE_ANYHIT_INVOCATION,
+		.Triangles = {
+			.Transform3x4 = TransformBuffer(),
+			.IndexFormat = DXGI_FORMAT_R16_UINT,
+			.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
+			.IndexCount = triangleCount * 3,
+			.VertexCount = vertexCount,
+			.IndexBuffer = triangleBuffer->resource->GetGPUVirtualAddress(),
+			.VertexBuffer = {
+				.StartAddress = vertexBuffer->resource->GetGPUVirtualAddress(),
+				.StrideInBytes = sizeof(Vertex) } }
+	};
+}
+
 D3D12_GPU_VIRTUAL_ADDRESS Shape::TransformBuffer() const
 {
-	auto offset = allocation->GetIndex() * sizeof(float3x4);
+	auto offset = static_cast<uint64_t>(allocation->GetIndex()) * sizeof(float3x4);
 	return globals::features::raytracing.transformBuffer->resource->GetGPUVirtualAddress() + offset;
+}
+
+Shape::Flags Shape::Update([[maybe_unused]]bool isRenderUseValid)
+{
+	auto dynamic = flags & Shape::Flags::Dynamic;
+	auto skinned = flags & Shape::Flags::Skinned;
+
+	if ((dynamic || skinned) && geometry->GetFlags().any(RE::NiAVObject::Flag::kHidden)) {
+		state |= State::Hidden;
+	} else if (isRenderUseValid && geometry->GetFlags().none(RE::NiAVObject::Flag::kRenderUse)) {
+		state |= State::Hidden;
+	} else {
+		state &= ~State::Hidden;
+	}
+
+	//logger::info("Shape::Update {} - RenderUseValid: {} - Hidden: {}, Flags: {}", geometry->name, isRenderUseValid, (state & State::Hidden) != 0, GetFlagsString<RE::NiAVObject::Flag>(geometry->GetFlags().underlying()).c_str());
+
+	if ((state & State::Hidden) == State::Hidden) {
+		return Shape::Flags::None;
+	}
+
+	Shape::Flags updateFlags = Shape::Flags::None;
+
+	if (dynamic || skinned) {
+		logger::trace("Update {} - [0x{:08X}] {}", geometry->name, geometry->GetFlags().underlying(), GetFlagsString<RE::NiAVObject::Flag>(geometry->GetFlags().underlying()));
+
+		if (UpdateDynamicPosition()) {
+			updateFlags |= Shape::Flags::Dynamic;
+		}
+
+		if (UpdateSkinning()) {
+			updateFlags |= Shape::Flags::Skinned;
+		}
+
+		if (updateFlags & Shape::Flags::Skinned) {
+			auto& skinInstance = geometry->GetGeometryRuntimeData().skinInstance;
+
+			if (boneMatrices.empty())
+				boneMatrices.resize(skinInstance->numMatrices);
+
+			float3x4* boneMatricesArray = reinterpret_cast<float3x4*>(skinInstance->boneMatrices);
+
+			auto rootParent = skinInstance->rootParent;
+			auto skinRootInverse = GetXMFromNiTransform(rootParent->world.Invert());
+
+			boundRadius = rootParent->worldBound.radius + (rootParent->world.translate + rootParent->worldBound.center).GetDistance(geometry->world.translate);
+
+			for (uint i = 0; i < skinInstance->numMatrices; i++) {
+				XMStoreFloat3x4(&boneMatrices[i], XMMatrixMultiply(XMLoadFloat3x4(&boneMatricesArray[i]), skinRootInverse));
+			}
+		}
+	}
+
+	return updateFlags;
 }
 
 // Updates Dynamic Vertex position (and Bitangent.x) buffer
 // TODO: Test performance and stability of using a upload heap buffer and keeping it mapped to dynamicData
 bool Shape::UpdateDynamicPosition()
 {
-	if ((flags & Flags::Dynamic) != Flags::Dynamic)
+	if (!(flags & Flags::Dynamic))
 		return false;
 
 	if (!geometry)
@@ -935,6 +1023,11 @@ void Shape::UpdateUploadDynamicBuffers(ID3D12GraphicsCommandList4* commandList)
 	dynamicPositionBuffer->Upload(commandList);
 }
 
+bool Shape::IsHidden() const
+{
+	return ((state & State::Hidden) != State::None) || ((state & State::DismemberHidden) != State::None);
+}
+
 // TODO: Handle lazy skinned meshes update
 bool Shape::UpdateSkinning()
 {
@@ -953,6 +1046,14 @@ bool Shape::UpdateSkinning()
 		return false;*/
 
 	return true;
+}
+
+void Shape::UpdateDismember(bool enable)
+{
+	if (enable)
+		state &= ~State::DismemberHidden;
+	else
+		state |= State::DismemberHidden;
 }
 
 ShapeData Shape::GetData() const

@@ -23,6 +23,7 @@
 #include "Features/Raytracing/Core/Instance.h"
 #include "Features/Raytracing/Core/Model.h"
 #include "Features/Raytracing/Core/Shape.h"
+#include "Features/Raytracing/Core/DismemberReference.h"
 
 #include "Features/Raytracing/Helpers/ModelSpaceToTangent.h"
 
@@ -241,13 +242,9 @@ struct Raytracing : public OverlayFeature
 	eastl::vector<size_t> GatherInstanceLights(RE::NiAVObject* pNiNode);
 
 	void UpdateInstances();
+	void UpdateBLASes();
+
 	void UpdateShadowInstances();
-
-	void AddInstances();
-	void ClearInstances();
-
-	template <typename T>
-	void MakeAndCopy(const eastl::vector<T>& data, winrt::com_ptr<ID3D12Resource>& res);
 
 	void DeviceRemovedHandler();
 
@@ -501,12 +498,24 @@ struct Raytracing : public OverlayFeature
 		ReSTIRSettings ReSTIR;
 
 		bool GGXEnergyConservation = true;
+		bool UseHairChiangBSDF = true;
 
 		DiffuseBRDF DiffuseBRDF = DiffuseBRDF::Burley;
 		LightEvalMode LightEvalMode = LightEvalMode::BRDF;
 		LightingMode LightingMode = LightingMode::PBR;
 
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(AdvancedSettings, Culling, VariableUpdateRate, RIS, ReSTIR, GGXEnergyConservation, DiffuseBRDF, LightEvalMode, LightingMode)
+		bool EnableSubsurfaceScattering = true;
+		bool EnableSssTransmission = true;
+		bool SSSMaterialOverride = false;
+		int SSSSampleCount = 1;
+		float SSSMaxSampleRadius = 1.0f;
+
+		float3 OverrideSSSTransmissionColor = float3(1.0f, 0.735f, 0.612f);
+		float3 OverrideSSSScatteringColor = float3(1.0f, 1.0f, 1.0f);
+		float OverrideSSSScale = 40.0f;
+		float OverrideSSSAnisotropy = -0.5f;
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(AdvancedSettings, Culling, VariableUpdateRate, RIS, ReSTIR, GGXEnergyConservation, UseHairChiangBSDF, DiffuseBRDF, LightEvalMode, LightingMode, EnableSubsurfaceScattering, EnableSssTransmission, SSSMaterialOverride, SSSSampleCount, SSSMaxSampleRadius, OverrideSSSTransmissionColor, OverrideSSSScatteringColor, OverrideSSSScale, OverrideSSSAnisotropy)
 	};
 
 	////////////////////////////////////////////////// Feature Specific Data
@@ -594,19 +603,12 @@ struct Raytracing : public OverlayFeature
 	void CreateModel(RE::TESForm* form, const char* model, RE::NiAVObject* root);
 	void CreateModelInternal(RE::TESForm* refr, const char* path, RE::NiAVObject* root);
 
-	// Creates a single BLAS for a collection of Shapes
-	// TODO: Move to Model struct
-	void CommitModel(Model* model);
-
 	// Removes the instance and optionally also releases the model and all its buffers if refCount reaches 0
 	bool RemoveInstance(RE::NiAVObject* root, bool releaseModel);
 	bool RemoveInstance(RE::FormID formID, bool releaseModel);
 
 	void SetInstanceDetached(RE::NiAVObject* root, bool detached);
 	void SetInstanceDetached(RE::FormID formID, bool detached);
-
-	// TODO: Move to Model struct
-	void UpdateModelBLAS(Model* model);
 
 	eastl::shared_ptr<Allocation> GetTextureRegister(ID3D11Texture2D* texture, eastl::shared_ptr<Allocation> defaultTexture);
 	eastl::shared_ptr<Allocation> GetMSNormalMapRegister(Shape* shape, RE::BSGraphics::Texture* texture, eastl::shared_ptr<Allocation> defaultTexture);
@@ -662,6 +664,9 @@ struct Raytracing : public OverlayFeature
 	eastl::shared_ptr<DefaultTexture> defaultRMAOSTexture = nullptr;
 	eastl::shared_ptr<DefaultTexture> defaultDetailTexture = nullptr;
 
+	// TODO: Add cleanup for elements of this vector
+	eastl::unordered_map<RE::BSDismemberSkinInstance*, eastl::vector<DismemberReference>> dismemberReferences;
+
 	// We'll group trishapes by their parent nodes, hopefully trishapes don't move on their own
 	eastl::unordered_map<eastl::string, eastl::unique_ptr<Model>> models;
 
@@ -690,6 +695,9 @@ struct Raytracing : public OverlayFeature
 
 	eastl::array<InstanceData, RTConstants::MAX_INSTANCES> instanceData;
 	eastl::unique_ptr<DX12::StructuredBufferUpload<InstanceData>> instanceBuffer = nullptr;
+
+	Util::FrameChecker frameChecker;
+	uint64_t frameIndex;
 
 	Util::FrameChecker shadowFrameChecker;
 
@@ -796,9 +804,6 @@ struct Raytracing : public OverlayFeature
 	};
 
 	eastl::deque<TempGPUData> tempGPUData;
-
-	// All 'DestAccelerationStructureData' written with 'BuildRaytracingAccelerationStructure' this frame
-	eastl::hash_set<D3D12_GPU_VIRTUAL_ADDRESS> destASFrame;
 
 	// D3D11
 	winrt::com_ptr<ID3D11Device5> d3d11Device = nullptr;
@@ -910,7 +915,7 @@ struct Raytracing : public OverlayFeature
 
 	sl::ViewportHandle slViewportHandle{ 0 };
 
-	Util::FrameChecker frameChecker;
+	Util::FrameChecker dlssFrameChecker;
 	sl::FrameToken* frameToken = nullptr;
 
 	float2 jitter = { 0, 0 };
@@ -1378,6 +1383,26 @@ struct Raytracing : public OverlayFeature
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct BSDismemberSkinInstance_UpdateDismemberPartion
+		{
+			static void thunk(RE::BSDismemberSkinInstance* oThis, std::uint16_t a_slot, bool a_enable)
+			{
+				func(oThis, a_slot, a_enable);
+
+				auto& dismemberReferences = globals::features::raytracing.dismemberReferences;
+
+				if (auto it = dismemberReferences.find(oThis); it != dismemberReferences.end()) {
+					for (DismemberReference& dismemberRef : it->second) {
+						if (a_slot == dismemberRef.slot) {
+							dismemberRef.shape->UpdateDismember(a_enable);
+							break;
+						}
+					}
+				}
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+		
 		static void Install()
 		{
 			// Creates model and instances for all forms
@@ -1391,6 +1416,8 @@ struct Raytracing : public OverlayFeature
 			
 			// Makes Player FaceGenTint RenderTarget shareable
 			stl::write_thunk_call<CreateRenderTarget_PlayerFaceGenTint>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x606, 0x605, 0x0));
+
+			stl::detour_thunk<BSDismemberSkinInstance_UpdateDismemberPartion>(REL::RelocationID(15576, 15753));
 
 			//stl::detour_thunk<TESObjectREFR_Enable>(REL::RelocationID(19373, 19800));
 			//stl::write_vfunc<0x89, TESObjectREFR_Disable>(RE::VTABLE_TESObjectREFR[0]);

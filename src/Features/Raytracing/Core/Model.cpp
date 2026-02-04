@@ -124,3 +124,142 @@ void Model::ConvertMSN()
 		rt.allocationMSNormalMaps.erase(allocation);
 	}
 }
+
+bool Model::BLASBuildExecuted() const
+{
+	//logger::info("[RT] BLASBuildExecuted - Build Frame: {}, Current Frame: {} - {}", blasBuildFrame, globals::features::raytracing.frameIndex, blasBuildFrame < globals::features::raytracing.frameIndex);
+	return blasBuildFrame < globals::features::raytracing.frameIndex;
+}
+
+bool Model::BLASUpdateExecuted() const
+{
+	//logger::info("[RT] BLASUpdateExecuted - Update Frame: {}, Current Frame: {} - {}", blasUpdateFrame, globals::features::raytracing.frameIndex, blasUpdateFrame < globals::features::raytracing.frameIndex);
+	return blasUpdateFrame < globals::features::raytracing.frameIndex;
+}
+
+void Model::BuildBLAS(ID3D12GraphicsCommandList4* commandList)
+{
+	auto& rt = globals::features::raytracing;
+
+	std::lock_guard lock{ rt.renderMutex };
+
+	eastl::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs(shapes.size());
+
+	// Initial build with all shapes, visible or not, so the scratch buffer can be sized to fit all geometry
+	for (size_t i = 0; i < shapes.size(); i++) {
+		geometryDescs[i] = shapes[i]->GeometryDesc();
+	}
+
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {
+		.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL,
+		.Flags = BuildFlags(),
+		.NumDescs = static_cast<uint>(geometryDescs.size()),
+		.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
+		.pGeometryDescs = geometryDescs.data()
+	};
+
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
+	rt.d3d12Device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
+
+	D3D12_RESOURCE_DESC desc = {
+		.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
+		.Width = std::max(prebuildInfo.ScratchDataSizeInBytes, prebuildInfo.UpdateScratchDataSizeInBytes),
+		.Height = 1,
+		.DepthOrArraySize = 1,
+		.MipLevels = 1,
+		.SampleDesc = Raytracing::NO_AA,
+		.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+		.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
+	};
+
+	auto blasScratchDesc = Raytracing::DEFAULT_HEAP_MA;
+	blasScratchDesc.CustomPool = rt.blasScratchPool.get();
+
+	DX::ThrowIfFailed(rt.allocator->CreateResource(&blasScratchDesc, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, blasScratchBuffer.put(), IID_NULL, NULL));
+
+	auto blasDesc = Raytracing::DEFAULT_HEAP_MA;
+	blasDesc.CustomPool = rt.blasPool.get();
+
+	desc.Width = prebuildInfo.ResultDataMaxSizeInBytes;
+	DX::ThrowIfFailed(rt.allocator->CreateResource(&blasDesc, &desc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, blasBuffer.put(), IID_NULL, NULL));
+
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {
+		.DestAccelerationStructureData = blasBuffer->GetResource()->GetGPUVirtualAddress(),
+		.Inputs = inputs,
+		.SourceAccelerationStructureData = 0,
+		.ScratchAccelerationStructureData = blasScratchBuffer->GetResource()->GetGPUVirtualAddress()
+	};
+
+	commandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+
+	// Register frame that BLAS was created
+	blasBuildFrame = rt.frameIndex;
+
+	const auto& asBarrier = CD3DX12_RESOURCE_BARRIER::UAV(blasBuffer->GetResource());
+	commandList->ResourceBarrier(1, &asBarrier);
+}
+
+bool Model::UpdateBLAS(ID3D12GraphicsCommandList4* commandList)
+{
+	bool update = (flags & Flags::BLASUpdate); 
+	const bool rebuild = (flags & Flags::BLASRebuild);
+
+	if (!update && !rebuild)
+		return false;
+
+	if (!BLASBuildExecuted())
+		return false;
+
+	if (!BLASUpdateExecuted())
+		return false;
+	
+	if (update && !((shapeflags & Shape::Flags::Skinned) || (shapeflags & Shape::Flags::Dynamic))) {
+		logger::critical("[RT] Model::UpdateBLAS - Only Skinned and Dynamic geometry should get the 'BLASUpdate' flag - 0x{:08X}.", reinterpret_cast<uintptr_t>(this));
+
+		update = false;
+		flags &= ~Flags::BLASUpdate;
+
+		if (!rebuild)
+			return false;
+	}
+
+	static eastl::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
+	geometryDescs.clear();
+
+	if (geometryDescs.capacity() < shapes.size())
+		geometryDescs.reserve(shapes.size());
+
+	for (auto& shape : shapes) {
+		if (HideShape(shape.get()))
+			continue;
+
+		geometryDescs.push_back(shape->GeometryDesc());
+	}
+
+	if (geometryDescs.empty())
+		return false;
+
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {
+		.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL,
+		.Flags = UpdateFlags(rebuild),
+		.NumDescs = static_cast<uint>(geometryDescs.size()),
+		.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
+		.pGeometryDescs = geometryDescs.data()
+	};
+
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {
+		.DestAccelerationStructureData = blasBuffer->GetResource()->GetGPUVirtualAddress(),
+		.Inputs = inputs,
+		.SourceAccelerationStructureData = rebuild ? 0 : blasBuffer->GetResource()->GetGPUVirtualAddress(),
+		.ScratchAccelerationStructureData = blasScratchBuffer->GetResource()->GetGPUVirtualAddress()
+	};
+
+	commandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+
+	flags &= ~Flags::BLASUpdate;
+	flags &= ~Flags::BLASRebuild;
+
+	// Register frame that BLAS was updated
+	blasUpdateFrame = globals::features::raytracing.frameIndex;
+	return true;
+}
