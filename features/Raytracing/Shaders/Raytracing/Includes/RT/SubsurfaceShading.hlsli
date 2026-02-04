@@ -238,6 +238,7 @@ float3 EvaluateSubsurfaceNEE(
     {
         const float3 centerSpecularF0 = surface.F0;
         const float3 diffuseAlbedo = surface.DiffuseAlbedo;
+        subsurfaceMaterialData.transmissionColor = Frame.SSSMaterialOverride ? subsurfaceMaterialData.transmissionColor : diffuseAlbedo;
 
         const float3 cameraUp = float3(
             Frame.ViewInverse[0][0],
@@ -272,12 +273,16 @@ float3 EvaluateSubsurfaceNEE(
 
             Payload samplePayload = SampleSubsurface(Scene, subsurfaceSample.samplePosition, subsurfaceInteraction.normal, RAY_TMAX, randomSeed);
 
-            if (samplePayload.Hit() && samplePayload.InstanceIndex() == initialPayload.InstanceIndex() && samplePayload.GeometryIndex() == initialPayload.GeometryIndex())
+            if (samplePayload.Hit() && samplePayload.InstanceIndex() == initialPayload.InstanceIndex())
             {
                 const float3 sampleLocalPosition = subsurfaceSample.samplePosition + samplePayload.hitDistance * (-subsurfaceInteraction.normal);
                 Instance sampleInstance;
                 Material sampleMaterial;
                 Surface sampleSurface = Surface(sampleLocalPosition, samplePayload, -subsurfaceInteraction.normal, rayCone, sampleInstance, sampleMaterial);
+                if (sampleSurface.SubsurfaceData.HasSubsurface == 0)
+                {
+                    continue;
+                }
 
                 const float3 sampleGeometryNormal = sampleSurface.FaceNormal;
                 const float3 sampleShadingNormal = sampleSurface.Normal;
