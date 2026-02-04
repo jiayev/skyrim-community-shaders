@@ -302,6 +302,13 @@ void Streamline::SetDLSSOptions()
 	dlssOptions.colorBuffersHDR = sl::Boolean::eTrue;
 	dlssOptions.useAutoExposure = sl::Boolean::eTrue;
 
+	dlssOptions.dlaaPreset = sl::DLSSPreset::ePresetJ;
+	dlssOptions.ultraQualityPreset = sl::DLSSPreset::ePresetJ;
+	dlssOptions.qualityPreset = sl::DLSSPreset::ePresetM;
+	dlssOptions.balancedPreset = sl::DLSSPreset::ePresetM;
+	dlssOptions.performancePreset = sl::DLSSPreset::ePresetM;
+	dlssOptions.ultraPerformancePreset = sl::DLSSPreset::ePresetL;
+
 	dlssOptions.preExposure = 1.0f;
 	dlssOptions.sharpness = 0.0f;
 
@@ -486,107 +493,6 @@ void Streamline::RayReconstruction(ID3D12Resource* a_inputColorTexture,
 		logger::debug("[DLSS RR] slEvaluateFeature executed successfully, output texture updated");
 	}
 	logger::debug("[DLSS RR] slEvaluateFeature completed");
-}
-
-float2 Streamline::GetInputResolutionScale(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityMode)
-{
-	sl::DLSSMode dlssMode;
-	switch (qualityMode) {
-	case 1:
-		dlssMode = sl::DLSSMode::eMaxQuality;
-		break;
-	case 2:
-		dlssMode = sl::DLSSMode::eBalanced;
-		break;
-	case 3:
-		dlssMode = sl::DLSSMode::eMaxPerformance;
-		break;
-	case 4:
-		dlssMode = sl::DLSSMode::eUltraPerformance;
-		break;
-	default:
-		dlssMode = sl::DLSSMode::eDLAA;
-		break;
-	}
-
-	sl::DLSSOptions dlssOptions{};
-	dlssOptions.mode = dlssMode;
-	dlssOptions.outputWidth = outputWidth;
-	dlssOptions.outputHeight = outputHeight;
-
-	sl::DLSSOptimalSettings optimalSettings{};
-	sl::Result result = slDLSSGetOptimalSettings(dlssOptions, optimalSettings);
-	if (result != sl::Result::eOk) {
-		logger::critical("[Streamline] Failed to get DLSS optimal settings, error code: {}", (int)result);
-		return { 1.0f, 1.0f };
-	}
-
-	float scaleX;
-	float scaleY;
-
-	if (globals::game::ui->GameIsPaused()) {
-		// Calculate scale as ratio of minimum render resolution to output resolution
-		scaleX = (float)optimalSettings.renderWidthMin / (float)outputWidth;
-		scaleY = (float)optimalSettings.renderHeightMin / (float)outputHeight;
-	} else {
-		// Calculate scale as ratio of optimal render resolution to output resolution
-		scaleX = (float)optimalSettings.optimalRenderWidth / (float)outputWidth;
-		scaleY = (float)optimalSettings.optimalRenderHeight / (float)outputHeight;
-	}
-
-	// Return separate X and Y scales for more precision
-	return { scaleX, scaleY };
-}
-
-float2 Streamline::GetInputResolutionScaleRR(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityMode)
-{
-	logger::debug("[DLSS RR] Getting input resolution scale for output {}x{} and quality mode {}", outputWidth, outputHeight, qualityMode);
-	sl::DLSSMode dlssMode;
-	switch (qualityMode) {
-	case 1:
-		dlssMode = sl::DLSSMode::eMaxQuality;
-		break;
-	case 2:
-		dlssMode = sl::DLSSMode::eBalanced;
-		break;
-	case 3:
-		dlssMode = sl::DLSSMode::eMaxPerformance;
-		break;
-	case 4:
-		dlssMode = sl::DLSSMode::eUltraPerformance;
-		break;
-	default:
-		dlssMode = sl::DLSSMode::eDLAA;
-		break;
-	}
-
-	sl::DLSSDOptions dlssdOptions{};
-	dlssdOptions.mode = dlssMode;
-	dlssdOptions.outputWidth = outputWidth;
-	dlssdOptions.outputHeight = outputHeight;
-
-	sl::DLSSDOptimalSettings optimalSettings{};
-	sl::Result result = slDLSSDGetOptimalSettings(dlssdOptions, optimalSettings);
-	if (result != sl::Result::eOk) {
-		logger::critical("[Streamline] Failed to get DLSS RR optimal settings, error code: {}", (int)result);
-		return { 1.0f, 1.0f };
-	}
-
-	float scaleX;
-	float scaleY;
-
-	if (globals::game::ui->GameIsPaused()) {
-		// Calculate scale as ratio of minimum render resolution to output resolution
-		scaleX = (float)optimalSettings.renderWidthMin / (float)outputWidth;
-		scaleY = (float)optimalSettings.renderHeightMin / (float)outputHeight;
-	} else {
-		// Calculate scale as ratio of optimal render resolution to output resolution
-		scaleX = (float)optimalSettings.optimalRenderWidth / (float)outputWidth;
-		scaleY = (float)optimalSettings.optimalRenderHeight / (float)outputHeight;
-	}
-
-	// Return separate X and Y scales for more precision
-	return { scaleX, scaleY };
 }
 
 /**
