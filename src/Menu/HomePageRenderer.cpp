@@ -367,8 +367,15 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 	ImGui::SetWindowFontScale(fontScale * (isCapturing ? HOTKEY_TEXT_SCALE_CAPTURING : HOTKEY_TEXT_SCALE));
 
 	// Format hotkey with brackets to make it look like a button
-	std::string hotkeyDisplay = isCapturing ? "[ ... ]" : std::string("[ ") + Util::Input::KeyIdToString(menu->GetSettings().ToggleKey) + " ]";
-	ImVec2 hotkeyTextSize = ImGui::CalcTextSize(hotkeyDisplay.c_str());
+	std::string hotkeyStr;
+	if (isCapturing) {
+		hotkeyStr = "[ ... ]";
+	} else {
+		auto& keys = menu->GetSettings().ToggleKey;
+		hotkeyStr = std::string("[ ") + Util::Input::KeyIdToString(keys) + " ]";
+	}
+
+	ImVec2 hotkeyTextSize = ImGui::CalcTextSize(hotkeyStr.c_str());
 
 	centerWidth(hotkeyTextSize.x);
 	ImVec2 buttonPos = ImGui::GetCursorScreenPos();
@@ -396,14 +403,17 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 		hotkeyColor = themeSettings.StatusPalette.CurrentHotkey;
 	}
 
-	ImGui::TextColored(hotkeyColor, "%s", hotkeyDisplay.c_str());
+	ImGui::TextColored(hotkeyColor, "%s", hotkeyStr.c_str());
 
 	// Reset font scale
 	ImGui::SetWindowFontScale(fontScale);
 
 	// Handle click to start hotkey capture
 	if (clicked && !isCapturing) {
-		menu->settingToggleKey = true;
+		// Prevent starting capture if this click was caused by Enter key,
+		// because we want Enter to close the dialog instead.
+		if (!ImGui::IsKeyPressed(ImGuiKey_Enter))
+			menu->settingToggleKey = true;
 	}
 
 	// Show hotkey capture message when in capture mode
@@ -463,6 +473,8 @@ void HomePageRenderer::MarkFirstTimeSetupComplete(uint32_t closingKey)
 	// Set the flag in the Menu settings
 	auto menu = Menu::GetSingleton();
 	menu->GetSettings().FirstTimeSetupCompleted = true;
+	// Ensure we are not capturing a hotkey when closing the dialog
+	menu->settingToggleKey = false;
 
 	// Immediately save settings to ensure the flag is persisted
 	// This prevents the welcome screen from showing again even if user doesn't manually save

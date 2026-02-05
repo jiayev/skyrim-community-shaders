@@ -6,6 +6,7 @@
 #include "Menu/Fonts.h"
 #include "Menu/IconLoader.h"
 #include "Menu/ThemeManager.h"
+#include "PerfUtils.h"
 #include "ShaderCache.h"
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
@@ -21,9 +22,11 @@
 #include <wrl/client.h>
 
 #include "../Feature.h"
+#include "../Features/VR.h"  // Include VR.h to get VR::VRButton definition
 #include "../Globals.h"
 #include "../Menu.h"
 #include "FileSystem.h"
+#include "VRUtils.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <algorithm>
@@ -1255,6 +1258,32 @@ namespace Util
 
 			return keyboard_keys_international[key];
 		}
+
+		std::string KeyIdToString(const std::vector<InputCombo>& combo)
+		{
+			if (combo.empty())
+				return "None";
+
+			bool hasVRInput = false;
+			for (const auto& input : combo) {
+				if (input.GetDevice() != InputDeviceType::Keyboard && input.GetDevice() != InputDeviceType::Mouse) {
+					hasVRInput = true;
+					break;
+				}
+			}
+
+			if (hasVRInput && REL::Module::IsVR()) {
+				return InputCombo::GetVRString(combo);
+			}
+
+			std::string result;
+			for (size_t i = 0; i < combo.size(); ++i) {
+				if (i > 0)
+					result += " + ";
+				result += KeyIdToString(combo[i].GetKey());
+			}
+			return result;
+		}
 	}  // namespace Input
 
 	bool ButtonWithFlash(const char* label, const ImVec2& size, int flashDurationMs)
@@ -1712,6 +1741,115 @@ namespace Util
 
 			return changed;
 		}
+	}
+
+	bool InputComboWidget(
+		const char* label,
+		std::vector<InputCombo>& combo,
+		bool& isRecording,
+		const char* recordingLabel)
+	{
+		bool changed = false;
+		ImGui::Text("%s", label);
+		ImGui::SameLine();
+
+		// Use theme colors for consistent styling
+		auto& theme = globals::menu->GetTheme().StatusPalette;
+
+		if (isRecording) {
+			// Recording state visual
+			ImGui::PushStyleColor(ImGuiCol_Button, theme.CurrentHotkey);
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme.CurrentHotkey);
+			ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.CurrentHotkey);
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 1));  // Black text on recording color
+
+			// Show current pending combo if available, otherwise prompt
+			std::string buttonText;
+			if (!combo.empty()) {
+				buttonText = Util::Input::KeyIdToString(combo) + "...";  // Indicate it's still capturing
+			} else {
+				buttonText = "Recording... (Esc to cancel)";
+			}
+
+			if (ImGui::Button(buttonText.c_str(), ImVec2(240, 0))) {
+				isRecording = false;
+			}
+
+			ImGui::PopStyleColor(4);
+
+			// Add tooltip explaining how to record
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("Press any key combination.\nModifiers (Ctrl, Shift, Alt) are supported.\nPress Escape to cancel.");
+			}
+		} else {
+			// Display current binding with unique button ID
+			std::string keyString = Util::Input::KeyIdToString(combo);
+			std::string btnLabel = keyString + "##" + recordingLabel;
+			if (ImGui::Button(btnLabel.c_str(), ImVec2(240, 0))) {
+				isRecording = true;
+			}
+
+			// Context menu for clearing
+			if (ImGui::BeginPopupContextItem()) {
+				if (ImGui::Selectable("Clear Binding")) {
+					combo.clear();
+					changed = true;
+				}
+				ImGui::EndPopup();
+			}
+
+			// First run / empty state hint
+			if (combo.empty()) {
+				ImGui::SameLine();
+				ImGui::TextDisabled("(Click to bind)");
+			}
+		}
+
+		// Draw VR-specific color coding if applicable
+		if (REL::Module::IsVR() && !combo.empty()) {
+			ImGui::SameLine();
+
+			// Check if we have mixed devices
+			bool hasPrimary = false;
+			bool hasSecondary = false;
+			bool hasBoth = false;
+
+			for (const auto& input : combo) {
+				switch (input.GetDevice()) {
+				case InputDeviceType::Primary:
+					hasPrimary = true;
+					break;
+				case InputDeviceType::Secondary:
+					hasSecondary = true;
+					break;
+				case InputDeviceType::Both:
+					hasBoth = true;
+					break;
+				default:
+					break;
+				}
+			}
+
+			ImVec4 indicatorColor = GetControllerDefaultColor();
+			const char* indicatorText = "";
+
+			if (hasBoth || (hasPrimary && hasSecondary)) {
+				indicatorColor = GetControllerBothColor();
+				indicatorText = hasBoth ? "(Both)" : "(Mixed)";
+			} else if (hasPrimary) {
+				indicatorColor = GetControllerPrimaryColor();
+				indicatorText = "(Primary)";
+			} else if (hasSecondary) {
+				indicatorColor = GetControllerSecondaryColor();
+				indicatorText = "(Secondary)";
+			}
+
+			if (indicatorText[0] != '\0') {
+				ImGui::TextColored(indicatorColor, "%s", indicatorText);
+			}
+		}
+
+		return changed;
 	}
 
 }  // namespace Util
