@@ -32,6 +32,7 @@ struct ExtendedTranslucency;
 struct Upscaling;
 struct WeatherEditor;
 struct HDRDisplay;
+struct PostProcessing;
 
 class State;
 class Deferred;
@@ -42,6 +43,7 @@ class Menu;
 namespace SIE
 {
 	class ShaderCache;
+	class ShaderFileDependencyTracker;
 }
 
 namespace globals
@@ -88,6 +90,7 @@ namespace globals
 		extern HDRDisplay hdrDisplay;
 		extern RenderDoc renderDoc;
 		extern WeatherEditor weatherEditor;
+		extern PostProcessing postProcessing;
 
 		namespace llf
 		{

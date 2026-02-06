@@ -222,6 +222,7 @@ namespace SharedData
 		float vanillaDiffuseColorMult;
 		float directionalLightMult;
 		float pointLightMult;
+		float ambientMult;
 		float emitColorMult;
 		float glowmapMult;
 		float effectLightingMult;
@@ -230,13 +231,18 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		float pad0;
 	};
 
 	struct TerrainBlendingSettings
 	{
 		uint Enabled;
 		uint3 _padding;
+	};
+
+	struct PostProcessingSettings
+	{
+		uint DisableVanillaTonemapping;
+		uint3 pad0;
 	};
 
 	cbuffer FeatureData : register(b6)
@@ -256,6 +262,7 @@ namespace SharedData
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
+		PostProcessingSettings postProcessingSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

@@ -254,7 +254,7 @@ float3 GammaToLinearSafe(float3 color)
 
 	float3 Ambient(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.ambientGamma) : color;
+		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.ambientGamma) * SharedData::linearLightingSettings.ambientMult : color;
 	}
 
 	float3 Fog(float3 color)
