@@ -504,7 +504,7 @@ void Raytracing::DrawAdvancedSettings()
 	if (ImGui::Checkbox("GGX Energy Conservation", &advSettings.GGXEnergyConservation))
 		recompileReason |= RecompileReason::Advanced;
 
-	if (ImGui::Checkbox("Use Hair Chiang BSDF", &advSettings.UseHairChiangBSDF))
+	if (DrawEnumCombo("Hair BSDF", advSettings.HairBSDF))
 		recompileReason |= RecompileReason::Advanced;
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -2064,9 +2064,8 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 				auto shape = eastl::make_unique<Shape>(flags, shapeRegisters.Allocate(), pGeometry, localToRoot, dismemberPartition.editorVisible, dismemberPartition.slot);
 
 				// Diabolical Part II
-				if (emplacedDismemberRef) {
+				if (emplacedDismemberRef)
 					it->second[i] = shape.get();
-				}
 
 				shape->BuildMesh(partition.buffData, skinPartition->vertexCount, partition.triangles, partition.bonesPerVertex);
 				shape->BuildMaterial(geometryRuntimeData, name, formID);
@@ -3639,7 +3638,11 @@ void Raytracing::DataLoaded()
 void Raytracing::PostPostLoad()
 {
 	Hooks::Install();
-	Initialize();
+
+	RE::GetINISetting("bReflectLODLand:Water")->data.b = false;
+	RE::GetINISetting("bReflectLODObjects:Water")->data.b = false;
+	RE::GetINISetting("bReflectLODTrees:Water")->data.b = false;
+	RE::GetINISetting("bReflectSky:Water")->data.b = true;
 
 	//MenuOpenCloseEventHandler::Register();
 	//TESLoadGameEventHandler::Register();
@@ -4025,10 +4028,6 @@ void Raytracing::CreateShadowsRootSignature()
 	DX::ThrowIfFailed(shadowRS->SetName(L"Shadow Root Signature"));
 }
 
-void Raytracing::Initialize()
-{
-}
-
 void Raytracing::ClearShaderCache()
 {
 	copyDepthCS = nullptr;  // This is actually optional
@@ -4071,8 +4070,8 @@ void Raytracing::CompileRTGIShaders()
 	if (advSettings.GGXEnergyConservation)
 		defines.emplace_back(L"GGX_ENERGY_CONSERVATION");
 
-	if (advSettings.UseHairChiangBSDF)
-		defines.emplace_back(L"HAIR_CHIANG_BSDF");
+	const auto hairMode = std::to_wstring(static_cast<uint32_t>(advSettings.HairBSDF));
+	defines.emplace_back(L"HAIR_MODE", hairMode.c_str());
 
 	if (advSettings.EnableSubsurfaceScattering)
 		defines.emplace_back(L"SUBSURFACE_SCATTERING");
