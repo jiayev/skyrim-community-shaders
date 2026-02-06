@@ -16,6 +16,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
@@ -64,6 +65,7 @@ namespace globals
 		HairSpecular hairSpecular{};
 		InteriorSun interiorSun{};
 		InverseSquareLighting inverseSquareLighting{};
+		PhysicalSky physicalSky{};
 		ScreenSpaceGI screenSpaceGI{};
 		ScreenSpaceShadows screenSpaceShadows{};
 		Skylighting skylighting{};
