@@ -474,6 +474,34 @@ void Raytracing::DrawGeneralSettings()
 	ImGui::EndTabItem();
 }
 
+void Raytracing::DrawSSSSettings()
+{
+	if (ImGui::CollapsingHeader("Subsurface Scattering")) {
+		auto& sssSettings = settings.AdvancedSettings.SSSSettings;
+
+		if (ImGui::Checkbox("Enable Subsurface Scattering", &sssSettings.Enabled))
+			recompileReason |= RecompileReason::Advanced;
+
+		if (sssSettings.Enabled) {
+			ImGui::SliderInt("Sample Count", &sssSettings.SampleCount, 1, 16);
+			ImGui::SliderFloat("Max Sample Radius", &sssSettings.MaxSampleRadius, 0.01f, 64.0f, "%.2f");
+			ImGui::Checkbox("Enable Transmission", &sssSettings.EnableTransmission);
+			ImGui::Checkbox("Material Override", &sssSettings.MaterialOverride);
+
+			if (sssSettings.MaterialOverride) {
+				if (ImGui::TreeNodeEx("Subsurface Scattering", ImGuiTreeNodeFlags_DefaultOpen)) {
+					ImGui::ColorEdit3("Override Transmission Color", reinterpret_cast<float*>(&sssSettings.OverrideTransmissionColor), ImGuiColorEditFlags_Float);
+					ImGui::ColorEdit3("Override Scattering Color", reinterpret_cast<float*>(&sssSettings.OverrideScatteringColor), ImGuiColorEditFlags_Float);
+					ImGui::SliderFloat("Override Scale", &sssSettings.OverrideScale, 0.01f, 1000.0f, "%.2f");
+					ImGui::SliderFloat("Override Anisotropy", &sssSettings.OverrideAnisotropy, -0.99f, 0.99f);
+
+					ImGui::TreePop();
+				}
+			}
+		}
+	}
+}
+
 void Raytracing::DrawAdvancedSettings()
 {
 	if (!ImGui::BeginTabItem("Advanced"))
@@ -530,25 +558,7 @@ void Raytracing::DrawAdvancedSettings()
 		ImGui::Text("Best with hair specular feature enabled.\n");
 	}
 
-	if (ImGui::TreeNodeEx("Subsurface Scattering", ImGuiTreeNodeFlags_DefaultOpen)) {
-		if (ImGui::Checkbox("Enable Subsurface Scattering", &advSettings.EnableSubsurfaceScattering))
-			recompileReason |= RecompileReason::Advanced;
-
-		if (advSettings.EnableSubsurfaceScattering) {
-			ImGui::SliderInt("SSS Sample Count", &advSettings.SSSSampleCount, 1, 16);
-			ImGui::SliderFloat("Max Sample Radius", &advSettings.SSSMaxSampleRadius, 0.01f, 64.0f, "%.2f");
-			ImGui::Checkbox("Enable SSS Transmission", &advSettings.EnableSssTransmission);
-			ImGui::Checkbox("SSS Material Override", &advSettings.SSSMaterialOverride);
-
-			if (advSettings.SSSMaterialOverride) {
-				ImGui::ColorEdit3("Override SSS Transmission Color", reinterpret_cast<float*>(&advSettings.OverrideSSSTransmissionColor), ImGuiColorEditFlags_Float);
-				ImGui::ColorEdit3("Override SSS Scattering Color", reinterpret_cast<float*>(&advSettings.OverrideSSSScatteringColor), ImGuiColorEditFlags_Float);
-				ImGui::SliderFloat("Override SSS Scale", &advSettings.OverrideSSSScale, 0.01f, 1000.0f, "%.2f");
-				ImGui::SliderFloat("Override SSS Anisotropy", &advSettings.OverrideSSSAnisotropy, -0.99f, 0.99f);
-			}
-		}
-		ImGui::TreePop();
-	}
+	DrawSSSSettings();
 
 	if (DrawEnumCombo("Diffuse BRDF", advSettings.DiffuseBRDF))
 		recompileReason |= RecompileReason::Advanced;
@@ -661,6 +671,64 @@ void Raytracing::DrawDebugSettings()
 
 	ImGui::Checkbox("Enabled Debug Device", &settings.EnableDebugDevice);
 
+	ImGui::Checkbox("MSN Visualization", &debugNormalMap);
+
+	if (debugNormalMap) {
+		if (normalMaps.empty()) {
+			ImGui::Text("No normal maps converted.");
+		} else {
+			eastl::vector<std::pair<ID3D11Resource*, ConvertedNormalMap*>> normalMapVector;
+
+			for (auto& [msNormal, convertedNormal] : normalMaps) {
+				normalMapVector.emplace_back(msNormal, convertedNormal.get());
+			}
+
+			auto normalMapsCount = static_cast<uint>(normalMapVector.size());
+			debugNormalMapIndex = std::min(debugNormalMapIndex, normalMapsCount);
+
+			if (ImGui::BeginCombo("NormalMap", std::to_string(debugNormalMapIndex).c_str())) {
+				for (uint i = 0; i < normalMapsCount; i++) {
+					bool isSelected = debugNormalMapIndex == i;
+
+					auto& [msNormal, convertedNormal] = normalMapVector.at(i);
+
+					if (!convertedNormal->OriginalSRV)
+						continue;
+
+					if (!convertedNormal)
+						continue;
+
+					if (!convertedNormal->converted)
+						continue;
+
+					if (!convertedNormal->Texture || !convertedNormal->Texture->srv || !convertedNormal->Texture->srv.get())
+						continue;
+
+					if (ImGui::Selectable(std::to_string(i).c_str(), isSelected))
+						debugNormalMapIndex = i;
+
+					if (isSelected)
+						ImGui::SetItemDefaultFocus();
+				}
+
+				ImGui::EndCombo();
+			}
+
+			auto& [msNormal, convertedNormal] = normalMapVector.at(debugNormalMapIndex);
+
+			if (convertedNormal && convertedNormal->converted && convertedNormal->OriginalSRV && convertedNormal->Texture && convertedNormal->Texture->srv && convertedNormal->Texture->srv.get()) {
+				ImGui::Image(convertedNormal->OriginalSRV, ImVec2(256, 256));
+				ImGui::SameLine();
+				ImGui::Image(convertedNormal->Texture->srv.get(), ImVec2(256, 256));
+			}
+		}
+	}
+
+	ImGui::Checkbox("Sky Hemisphere Visualization", &debugSkyHemi);
+
+	if (debugSkyHemi)
+		ImGui::Image(skyHemisphere->srv, ImVec2(512, 512));
+
 	if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Text(std::format("Lights: {}", lights.size()).c_str());
 
@@ -671,7 +739,7 @@ void Raytracing::DrawDebugSettings()
 		auto instanceCount = instances.size();
 
 		if (ImGui::TreeNodeEx(std::format("Instances: {}", instanceCount).c_str())) {
-			for (auto& [root, instance]: instances) {
+			for (auto& [root, instance] : instances) {
 				ImGui::Text(std::format("{}, Detached: {}", std::string_view{ instance.filename }, instance.IsDetached()).c_str());
 			}
 		}
@@ -688,60 +756,6 @@ void Raytracing::DrawDebugSettings()
 
 		ImGui::TreePop();
 	}
-
-	// Debug Draw Original and Converted Normal Maps
-//#if defined(DEBUG_MSNCONVERSION)
-	if (normalMaps.empty()) {
-		ImGui::Text("No normal maps converted.");
-	} else {
-		eastl::vector<std::pair<ID3D11Resource*, ConvertedNormalMap*>> normalMapVector;
-
-		for (auto& [msNormal, convertedNormal] : normalMaps) {
-			normalMapVector.emplace_back(msNormal, convertedNormal.get());
-		}
-
-		auto normalMapsCount = static_cast<uint>(normalMapVector.size());
-		debugNormalMap = std::min(debugNormalMap, normalMapsCount);
-
-		if (ImGui::BeginCombo("NormalMap", std::to_string(debugNormalMap).c_str())) {
-			for (uint i = 0; i < normalMapsCount; i++) {
-				bool isSelected = debugNormalMap == i;
-
-				auto& [msNormal, convertedNormal] = normalMapVector.at(i);
-
-				if (!convertedNormal->OriginalSRV)
-					continue;
-
-				if (!convertedNormal)
-					continue;
-
-				if (!convertedNormal->converted)
-					continue;
-
-				if (!convertedNormal->Texture || !convertedNormal->Texture->srv || !convertedNormal->Texture->srv.get())
-					continue;
-
-				if (ImGui::Selectable(std::to_string(i).c_str(), isSelected))
-					debugNormalMap = i;
-
-				if (isSelected)
-					ImGui::SetItemDefaultFocus();
-			}
-
-			ImGui::EndCombo();
-		}
-
-		auto& [msNormal, convertedNormal] = normalMapVector.at(debugNormalMap);
-
-		if (convertedNormal && convertedNormal->converted && convertedNormal->OriginalSRV && convertedNormal->Texture && convertedNormal->Texture->srv && convertedNormal->Texture->srv.get()) {
-			ImGui::Image(convertedNormal->OriginalSRV, ImVec2(256, 256));
-			ImGui::SameLine();
-			ImGui::Image(convertedNormal->Texture->srv.get(), ImVec2(256, 256));
-		}
-	}
-//#endif
-
-	ImGui::Image(skyHemisphere->srv, ImVec2(512, 512));
 
 	ImGui::PopID();
 
@@ -1126,7 +1140,7 @@ void Raytracing::SetupResources()
 	// Light buffer
 	{
 		lightBuffer = eastl::make_unique<DX12::StructuredBufferUpload<Light>>(d3d12Device.get(), RTConstants::MAX_LIGHTS);
-		DX::ThrowIfFailed(lightBuffer->resource->SetName(L"Light Buffer"));
+		lightBuffer->SetName(L"Light Buffer");
 
 		lightBuffer->CreateSRV(giHeap->CPUHandle(GIHeap::Slot::Lights));
 	}
@@ -1134,7 +1148,7 @@ void Raytracing::SetupResources()
 	// Shape buffer
 	{
 		shapeBuffer = eastl::make_unique<DX12::StructuredBufferUpload<ShapeData>>(d3d12Device.get(), RTConstants::MAX_SHAPES);
-		DX::ThrowIfFailed(shapeBuffer->resource->SetName(L"Shape Buffer"));
+		shapeBuffer->SetName(L"Shape Buffer");
 
 		shapeBuffer->CreateSRV(giHeap->CPUHandle(GIHeap::Slot::Shapes));
 
@@ -1144,7 +1158,7 @@ void Raytracing::SetupResources()
 	// Instance buffer
 	{
 		instanceBuffer = eastl::make_unique<DX12::StructuredBufferUpload<InstanceData>>(d3d12Device.get(), RTConstants::MAX_INSTANCES);
-		DX::ThrowIfFailed(instanceBuffer->resource->SetName(L"Instance Buffer"));
+		instanceBuffer->SetName(L"Instance Buffer");
 
 		instanceBuffer->CreateSRV(giHeap->CPUHandle(GIHeap::Slot::Instances));
 	}
@@ -1152,7 +1166,7 @@ void Raytracing::SetupResources()
 	// Geometry transform buffer
 	{
 		transformBuffer = eastl::make_unique<DX12::StructuredBufferUpload<float3x4>>(d3d12Device.get(), RTConstants::MAX_TRANSFORMS);
-		DX::ThrowIfFailed(transformBuffer->resource->SetName(L"Transform Buffer"));
+		transformBuffer->SetName(L"Transform Buffer");
 
 		transformBuffer->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 	}
@@ -1160,7 +1174,7 @@ void Raytracing::SetupResources()
 	// Create instance buffer for BLAS
 	{
 		blasInstanceBuffer = eastl::make_unique<DX12::StructuredBufferUpload<D3D12_RAYTRACING_INSTANCE_DESC>>(d3d12Device.get(), RTConstants::MAX_INSTANCES, false);
-		DX::ThrowIfFailed(blasInstanceBuffer->resource->SetName(L"BLAS Instance Buffer"));
+		blasInstanceBuffer->SetName(L"BLAS Instance Buffer");
 
 		blasInstanceBuffer->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 	}
@@ -1168,7 +1182,7 @@ void Raytracing::SetupResources()
 	// Create shadow instance buffer for BLAS
 	{
 		blasShadowInstanceBuffer = eastl::make_unique<DX12::StructuredBufferUpload<D3D12_RAYTRACING_INSTANCE_DESC>>(d3d12Device.get(), RTConstants::MAX_INSTANCES, false);
-		DX::ThrowIfFailed(blasShadowInstanceBuffer->resource->SetName(L"BLAS Instance Buffer"));
+		blasShadowInstanceBuffer->SetName(L"BLAS Instance Buffer");
 
 		blasShadowInstanceBuffer->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 	}
@@ -1176,14 +1190,14 @@ void Raytracing::SetupResources()
 	logger::debug("Creating constant buffer...");
 	{
 		frameBuffer = eastl::make_unique<DX12::StructuredBufferUpload<FrameData>>(d3d12Device.get(), 1, false, 2);
-		DX::ThrowIfFailed(frameBuffer->resource->SetName(L"Frame Buffer"));
+		frameBuffer->SetName(L"Frame Buffer");
 
 		frameBuffer->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
 
 		frameData = eastl::make_unique<FrameData>();
 
 		shadowsCB = eastl::make_unique<DX12::StructuredBufferUpload<ShadowsFrameData>>(d3d12Device.get(), 1, false);
-		DX::ThrowIfFailed(shadowsCB->resource->SetName(L"Shadows Constant Buffer"));
+		shadowsCB->SetName(L"Shadows Constant Buffer");
 
 		shadowsCB->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
 
@@ -2302,10 +2316,15 @@ eastl::shared_ptr<Allocation> Raytracing::GetTextureRegister(ID3D11Texture2D* dx
 	if (emplaced) {
 		it->second = eastl::make_unique<TextureReference>(std::move(dx12Texture), eastl::shared_ptr<Allocation>(textureRegisters.Allocate(), AllocationDeleter()));
 
-		d3d12Device->CreateShaderResourceView(it->second->resource.get(), &texSrvDesc, giHeap->CPUHandle(GIHeap::Slot::Textures, it->second->allocation->GetIndex()));
+		auto allocationIndex = it->second->allocation->GetIndex();
+
+		it->second->resource->SetName(std::format(L"Shared Texture [{}]", allocationIndex).c_str());
+
+		d3d12Device->CreateShaderResourceView(it->second->resource.get(), &texSrvDesc, giHeap->CPUHandle(GIHeap::Slot::Textures, allocationIndex));
 
 		return it->second->allocation;
 	} else {
+		dx12Texture->SetName(L"Shared Texture [?]");
 		logger::error("[RT] GetTextureRegister - TextureReference emplace failed.");
 	}
 
@@ -2411,7 +2430,11 @@ eastl::shared_ptr<Allocation> Raytracing::GetMSNormalMapRegister([[maybe_unused]
 
 		normalMap->Reference = eastl::make_unique<TextureReference>(std::move(dx12Texture), eastl::shared_ptr<Allocation>(textureRegisters.Allocate(), AllocationDeleter()));
 
-		d3d12Device->CreateShaderResourceView(normalMap->Reference->resource.get(), &texSrvDesc, giHeap->CPUHandle(GIHeap::Slot::Textures, normalMap->Reference->allocation->GetIndex()));
+		auto allocationIndex = normalMap->Reference->allocation->GetIndex();
+
+		normalMap->Reference->resource->SetName(std::format(L"Shared MS Normalmap [{}]", allocationIndex).c_str());
+
+		d3d12Device->CreateShaderResourceView(normalMap->Reference->resource.get(), &texSrvDesc, giHeap->CPUHandle(GIHeap::Slot::Textures, allocationIndex));
 	
 		allocationMSNormalMaps.emplace(normalMap->Reference->allocation->GetIndex(), texture2D);
 
@@ -3123,7 +3146,7 @@ void Raytracing::DrawRTGI()
 		frameData->Metalness = settings.Metalness;
 
 		frameData->Emissive = settings.Emissive;
-		frameData->Effect = settings.Effect;
+		frameData->Effect = settings.Effect; 
 		frameData->Sky = settings.Sky;
 
 		frameData->Lights = static_cast<uint>(lights.size());
@@ -3131,14 +3154,15 @@ void Raytracing::DrawRTGI()
 		frameData->PixelConeSpreadAngle = std::atan((2.0f / eye.projMat.m[1][1]) / renderSize.y);
 		frameData->TexLODBias = settings.TexLODBias;
 
-		frameData->SSSSampleCount = settings.AdvancedSettings.SSSSampleCount;
-		frameData->SSSMaxSampleRadius = settings.AdvancedSettings.SSSMaxSampleRadius;
-		frameData->EnableSssTransmission = settings.AdvancedSettings.EnableSssTransmission;
-		frameData->SSSMaterialOverride = settings.AdvancedSettings.SSSMaterialOverride;
-		frameData->OverrideSSSTransmissionColor = settings.AdvancedSettings.OverrideSSSTransmissionColor;
-		frameData->OverrideSSSScatteringColor = settings.AdvancedSettings.OverrideSSSScatteringColor;
-		frameData->OverrideSSSScale = settings.AdvancedSettings.OverrideSSSScale;
-		frameData->OverrideSSSAnisotropy = settings.AdvancedSettings.OverrideSSSAnisotropy;
+		auto& sssSettings = settings.AdvancedSettings.SSSSettings;
+		frameData->SSSSampleCount = sssSettings.SampleCount;
+		frameData->SSSMaxSampleRadius = sssSettings.MaxSampleRadius;
+		frameData->EnableSssTransmission = sssSettings.EnableTransmission;
+		frameData->SSSMaterialOverride = sssSettings.MaterialOverride;
+		frameData->OverrideSSSTransmissionColor = sssSettings.OverrideTransmissionColor;
+		frameData->OverrideSSSScatteringColor = sssSettings.OverrideScatteringColor;
+		frameData->OverrideSSSScale = sssSettings.OverrideScale;
+		frameData->OverrideSSSAnisotropy = sssSettings.OverrideAnisotropy;
 
 		frameData->RussianRoulette = settings.RussianRoulette;
 
@@ -4145,7 +4169,7 @@ void Raytracing::CompileRTGIShaders()
 	const auto hairMode = std::to_wstring(static_cast<uint32_t>(advSettings.HairBSDF));
 	defines.emplace_back(L"HAIR_MODE", hairMode.c_str());
 
-	if (advSettings.EnableSubsurfaceScattering)
+	if (advSettings.SSSSettings.Enabled)
 		defines.emplace_back(L"SUBSURFACE_SCATTERING");
 
 	const auto diffuseMode = std::to_wstring(static_cast<uint32_t>(advSettings.DiffuseBRDF));
