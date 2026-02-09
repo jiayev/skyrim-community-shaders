@@ -1048,8 +1048,6 @@ void Raytracing::SetupResources()
 		D3D11_TEXTURE2D_DESC shadowMaskDesc;
 		shadowMask.texture->GetDesc(&shadowMaskDesc);
 
-		logger::info("[RT] Shadowmask Format: {}", magic_enum::enum_name(shadowMaskDesc.Format));
-
 		D3D11_TEXTURE2D_DESC texDesc{};
 		texDesc.Width = mainDesc.Width;
 		texDesc.Height = mainDesc.Height;
@@ -1821,7 +1819,7 @@ void Raytracing::Main_RenderWorld(bool a1)
 }
 
 // A custom visit controller built to ignore billboard/particle geometry
-static RE::BSVisit::BSVisitControl TraverseScenegraphRTGeometries(RE::NiAVObject* a_object, std::function<RE::BSVisit::BSVisitControl(RE::BSGeometry*)> a_func)
+static RE::BSVisit::BSVisitControl TraverseScenegraphRTGeometries(RE::NiAVObject* a_object, RE::BSFadeNode* validFadeNode, std::function<RE::BSVisit::BSVisitControl(RE::BSGeometry*)> a_func)
 {
 	auto result = RE::BSVisit::BSVisitControl::kContinue;
 
@@ -1849,7 +1847,46 @@ static RE::BSVisit::BSVisitControl TraverseScenegraphRTGeometries(RE::NiAVObject
 	auto node = a_object->AsNode();
 	if (node) {
 		for (auto& child : node->GetChildren()) {
-			result = TraverseScenegraphRTGeometries(child.get(), a_func);
+			if (!child)
+				continue;
+
+			if (validFadeNode) {
+				if (auto fadeNode = child->AsFadeNode(); fadeNode && fadeNode != validFadeNode) {
+					continue;
+				}
+			}
+
+			result = TraverseScenegraphRTGeometries(child.get(), validFadeNode, a_func);
+			if (result == RE::BSVisit::BSVisitControl::kStop) {
+				break;
+			}
+		}
+	}
+
+	return result;
+}
+
+static RE::BSVisit::BSVisitControl TraverseScenegraphFadeNodes(RE::NiAVObject* a_object, std::function<RE::BSVisit::BSVisitControl(RE::BSFadeNode*)> a_func)
+{
+	auto result = RE::BSVisit::BSVisitControl::kContinue;
+
+	if (!a_object) {
+		return result;
+	}
+
+	auto fadeNode = a_object->AsFadeNode();
+	if (fadeNode) {
+		result = a_func(fadeNode);
+
+		if (result == RE::BSVisit::BSVisitControl::kStop) {
+			return result;
+		}
+	}
+
+	auto node = a_object->AsNode();
+	if (node) {
+		for (auto& child : node->GetChildren()) {
+			result = TraverseScenegraphFadeNodes(child.get(), a_func);
 			if (result == RE::BSVisit::BSVisitControl::kStop) {
 				break;
 			}
@@ -1903,6 +1940,18 @@ void Raytracing::CreateModel(RE::TESForm* form, const char* model, RE::NiAVObjec
 	CreateModelInternal(form, model, root);
 }
 
+void Raytracing::CreateActorModel([[maybe_unused]] RE::Actor* actor, [[maybe_unused]] const char* name, RE::NiAVObject* root)
+{
+	TraverseScenegraphFadeNodes(root, [&]([[maybe_unused]] RE::BSFadeNode* fadeNode) -> RE::BSVisit::BSVisitControl {
+		const bool isRoot = (fadeNode == root);
+
+		auto fadeNodeName = std::format("{}.{}", name, fadeNode->name.c_str());
+		CreateModelInternal(actor, isRoot ? name : fadeNodeName.c_str(), fadeNode);
+
+		return RE::BSVisit::BSVisitControl::kContinue;
+	});
+}
+
 void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::NiAVObject* pRoot)
 {
 	if (!pRoot) {
@@ -1952,10 +2001,13 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 
 	eastl::vector<eastl::unique_ptr<Shape>> shapes;
 
-	TraverseScenegraphRTGeometries(pRoot, [&](RE::BSGeometry* pGeometry) -> RE::BSVisit::BSVisitControl {
+	// Will traverse and skip non-root fade nodes (and their children)
+	auto* validFadeNode = (formType == RE::FormType::ActorCharacter ? reinterpret_cast<RE::BSFadeNode*>(pRoot) : nullptr);
+
+	TraverseScenegraphRTGeometries(pRoot, validFadeNode, [&](RE::BSGeometry * pGeometry)->RE::BSVisit::BSVisitControl {
 		const char* name = pGeometry->name.c_str();
 
-		logger::debug("\t\t[RT] CreateModel::TraverseScenegraphGeometries - {}", name);
+		logger::trace("\t\t[RT] CreateModel::TraverseScenegraphGeometries - {}", name);
 
 		const auto& geometryType = pGeometry->GetType();
 
@@ -2581,8 +2633,6 @@ void Raytracing::UpdateBLASes()
 
 		if (model->UpdateBLAS(commandList.get()))
 			barriers.push_back(CD3DX12_RESOURCE_BARRIER::UAV(model->blasBuffer->GetResource()));
-
-		//logger::info("[RT] UpdateBLASes {} - {} - 0x{:08X} - {}", instance.filename, model->shapes.size(), reinterpret_cast<uintptr_t>(node), (flags & Model::Flags::BLASRebuild) ? "Rebuild" : "Update");
 	}
 
 	const uint blasUpdateCount = (uint)barriers.size();
@@ -2863,8 +2913,6 @@ void Raytracing::BuildTLAS()
 	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
 	d3d12Device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
 
-	//logger::info("[RT] Build TLAS - Instances: {}, ResultDataMaxSizeInBytes: {}, ScratchDataSizeInBytes: {}", MAX_INSTANCES, prebuildInfo.ResultDataMaxSizeInBytes, prebuildInfo.ScratchDataSizeInBytes);
-
 	auto desc = BASIC_BUFFER_DESC;
 	desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
@@ -2907,8 +2955,6 @@ void Raytracing::RebuildTLAS(ID3D12GraphicsCommandList4* pCommandList, size_t nu
 
 	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
 	d3d12Device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
-
-	//logger::info("[RT] Rebuild TLAS - Instances: {}, ResultDataMaxSizeInBytes: {}, ScratchDataSizeInBytes: {}", numDescs, prebuildInfo.ResultDataMaxSizeInBytes, prebuildInfo.ScratchDataSizeInBytes);
 
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {
 		.DestAccelerationStructureData = tlas->GetGPUVirtualAddress(),
@@ -3119,12 +3165,12 @@ void Raytracing::DrawRTGI()
 			auto wetnessEffect = globals::features::wetnessEffects.GetCommonBufferData();
 			auto linearLighting = globals::features::linearLighting.GetCommonBufferData();
 
-			frameData->Features.ExtendedMaterial = *reinterpret_cast<CPMSettings*>(&globals::features::extendedMaterials.settings);
-			frameData->Features.WetnessEffects = *reinterpret_cast<WetnessEffectsSettings*>(&wetnessEffect);
-			frameData->Features.CloudShadows = *reinterpret_cast<CloudShadowsSettings*>(&globals::features::cloudShadows.settings);
-			frameData->Features.HairSpecular = *reinterpret_cast<HairSpecularSettings*>(&globals::features::hairSpecular.settings);
-			frameData->Features.ExtendedTranslucency = *reinterpret_cast<ExtendedTranslucencySettings*>(&globals::features::extendedTranslucency.settings);
-			frameData->Features.LinearLighting = *reinterpret_cast<LinearLightingSettings*>(&linearLighting);
+			std::memcpy(&frameData->Features.ExtendedMaterial, &globals::features::extendedMaterials.settings, sizeof(CPMSettings));
+			std::memcpy(&frameData->Features.WetnessEffects, &wetnessEffect, sizeof(WetnessEffectsSettings));
+			std::memcpy(&frameData->Features.CloudShadows, &globals::features::cloudShadows.settings, sizeof(CloudShadowsSettings));
+			std::memcpy(&frameData->Features.HairSpecular, &globals::features::hairSpecular.settings, sizeof(HairSpecularSettings));
+			std::memcpy(&frameData->Features.ExtendedTranslucency, &globals::features::extendedTranslucency.GetCommonBufferData(), sizeof(ExtendedTranslucencySettings));
+			std::memcpy(&frameData->Features.LinearLighting, &linearLighting, sizeof(LinearLightingSettings));
 
 			static_assert(sizeof(CPMSettings) == sizeof(ExtendedMaterials::Settings));
 			static_assert(sizeof(WetnessEffectsSettings) == sizeof(WetnessEffects::PerFrame));

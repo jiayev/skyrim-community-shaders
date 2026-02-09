@@ -504,7 +504,7 @@ struct Raytracing : public OverlayFeature
 		ReSTIRSettings ReSTIR;
 
 		bool GGXEnergyConservation = true;
-		HairBSDF HairBSDF = HairBSDF::ChiangBSDF;
+		HairBSDF HairBSDF = HairBSDF::FarFieldBCSDF;
 
 		DiffuseBRDF DiffuseBRDF = DiffuseBRDF::Burley;
 		LightEvalMode LightEvalMode = LightEvalMode::BRDF;
@@ -607,6 +607,7 @@ struct Raytracing : public OverlayFeature
 
 	// Creates mesh buffers for all graph TriShapes, handles materials and builds a single BLAS for the node
 	void CreateModel(RE::TESForm* form, const char* model, RE::NiAVObject* root);
+	void CreateActorModel(RE::Actor* actor, const char* name, RE::NiAVObject* root);
 	void CreateModelInternal(RE::TESForm* refr, const char* path, RE::NiAVObject* root);
 
 	// Removes the instance and optionally also releases the model and all its buffers if refCount reaches 0
@@ -1204,7 +1205,7 @@ struct Raytracing : public OverlayFeature
 
 					auto* exteriorData = runtimeData.cellData.exterior;
 
-					logger::info("[RT] TESObjectLAND::Detach3D - {}", std::format("Landscape_{}_{}", exteriorData->cellX, exteriorData->cellY).c_str());
+					logger::debug("[RT] TESObjectLAND::Detach3D - {}", std::format("Landscape_{}_{}", exteriorData->cellX, exteriorData->cellY).c_str());
 				}
 
 				func(oThis);
@@ -1212,25 +1213,6 @@ struct Raytracing : public OverlayFeature
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct TESObjectLAND_Destructor
-		{
-			static void thunk(RE::TESObjectLAND* oThis)
-			{
-				auto* cell = oThis->parentCell;
-
-				if (cell->IsExteriorCell()) {
-					auto& runtimeData = cell->GetRuntimeData();
-
-					auto* exteriorData = runtimeData.cellData.exterior;
-
-					logger::info("[RT] TESObjectLAND::Destructor - {}", std::format("Landscape_{}_{}", exteriorData->cellX, exteriorData->cellY).c_str());
-				}
-
-				func(oThis);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-		
 		struct AttachDistant3DTask_Attach
 		{
 			static void thunk(void* a1, float a2)
@@ -1298,14 +1280,14 @@ struct Raytracing : public OverlayFeature
 								//rt.CreateModelInternal(refr, std::format("{}_1stPerson", name).c_str(), pNiAVObject);
 
 								// Third Person
-								rt.CreateModelInternal(refr, name, player->Get3D(false));
+								rt.CreateActorModel(player, name, player->Get3D(false));
 
 								return;
 							}
 						}
 						
 						if (auto* actor = refr->As<RE::Actor>()) {
-							rt.CreateModelInternal(refr, actor->GetName(), pNiAVObject);
+							rt.CreateActorModel(actor, actor->GetName(), pNiAVObject);
 							return;
 						}
 
@@ -1374,7 +1356,7 @@ struct Raytracing : public OverlayFeature
 				if (auto it = dismemberReferences.find(oThis); it != dismemberReferences.end()) {
 					for (auto& shape : it->second) {
 						if (a_slot == shape->slot) {
-							logger::info("[RT] BSDismemberSkinInstance::UpdateDismemberPartion {} {} - 0x{:08X} 0x{:08X}", a_slot, a_enable, reinterpret_cast<uintptr_t>(oThis), reinterpret_cast<uintptr_t>(shape));
+							logger::debug("[RT] BSDismemberSkinInstance::UpdateDismemberPartion {} {} - 0x{:08X} 0x{:08X}", a_slot, a_enable, reinterpret_cast<uintptr_t>(oThis), reinterpret_cast<uintptr_t>(shape));
 							shape->UpdateDismember(a_enable);
 							break;
 						}
@@ -1434,9 +1416,7 @@ struct Raytracing : public OverlayFeature
 			stl::detour_thunk<CreateTextureFromDDS>(REL::RelocationID(69334, 70716));
 
 			stl::detour_thunk<TESObjectLAND_Attach3D>(REL::RelocationID(18334, 18750));
-
-			stl::detour_thunk<TESObjectLAND_Detach3D>(REL::RelocationID(18333, 18749)); // sub_1402A8A80
-			//stl::detour_thunk<TESObjectLAND_Detach3D2>(REL::RelocationID(18334, 18750));  // sub_1402A8B00
+			stl::detour_thunk<TESObjectLAND_Detach3D>(REL::RelocationID(18333, 18749));
 
 			//stl::write_vfunc<0x6, AttachDistant3DTask_Attach>(RE::VTABLE_AttachDistant3DTask[0]);
 			
