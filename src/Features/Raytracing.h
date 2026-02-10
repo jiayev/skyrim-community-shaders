@@ -32,9 +32,10 @@
 #include "Features/Raytracing/Heap.h"
 #include "Features/Raytracing/HeapManager.h"
 #include "Features/Raytracing/magic_enum_spec.h"
+#include "Features/Raytracing/Pipelines/SkinningPipeline.h"
 #include "Features/Raytracing/Pipelines/SHaRCPipeline.h"
 #include "Features/Raytracing/Pipelines/SVGFPipeline.h"
-#include "Features/Raytracing/Pipelines/SkinningPipeline.h"
+#include "Features/Raytracing/Pipelines/NRDPipeline.h"
 #include "Features/Raytracing/RTConstants.h"
 #include "Features/Raytracing/RTPipelineBuilder.h"
 #include "Features/Raytracing/ShaderBindingTable.h"
@@ -44,7 +45,6 @@
 
 #include "Features/Raytracing/RE/CellAttachDetachEvent.h"
 
-#include "Raytracing/FeatureData.hlsli"
 #include "Raytracing/Includes/Types/FrameData.hlsli"
 #include "Raytracing/Includes/Types/Instance.hlsli"
 #include "Raytracing/Includes/Types/Light.hlsli"
@@ -248,8 +248,9 @@ struct Raytracing : public OverlayFeature
 
 	void DeviceRemovedHandler();
 
-	void CopyDepth();
-	void ConvertTextures() const;
+	void CopyDepth() const;
+	void UnpackMetallicAO() const;
+	void CopyConvertTextures() const;
 
 	void PostRaytraceCleanup();
 
@@ -290,9 +291,13 @@ struct Raytracing : public OverlayFeature
 		if (!sharcPipeline)
 			sharcPipeline = eastl::make_unique<SHaRCPipeline>();
 
-		static eastl::array<IPipeline*, 2> pipelines = {
+		if (!nrdPipeline)
+			nrdPipeline = eastl::make_unique<NRDPipeline>();
+
+		static eastl::array<IPipeline*, 3> pipelines = {
 			skinningPipeline.get(),
-			sharcPipeline.get()
+			sharcPipeline.get(),
+			nrdPipeline.get()
 		};
 
 		return pipelines;
@@ -319,6 +324,7 @@ struct Raytracing : public OverlayFeature
 		None,
 		SVGF,
 		Accumulation,
+		NRD,
 #ifdef DLSS_RR
 		DLSSRR
 #endif
@@ -784,8 +790,16 @@ struct Raytracing : public OverlayFeature
 	eastl::unique_ptr<ShadowsFrameData> shadowsCBData = nullptr;
 
 	// SVGF
+	struct alignas(16) SharedData
+	{
+		float InteriorDirectional;
+		float Ambient;
+		float EnvMap;
+		uint Albedo;
+	};
+	static_assert(sizeof(SharedData) % 16 == 0);
 
-	RaytracingFD::FeatureData GetCommonBufferData();
+	SharedData GetCommonBufferData() const;
 
 	// D3D12
 	winrt::com_ptr<ID3D12Device5> d3d12Device = nullptr;
@@ -801,6 +815,9 @@ struct Raytracing : public OverlayFeature
 
 	// SHaRC (Radiance cache)
 	eastl::unique_ptr<SHaRCPipeline> sharcPipeline = nullptr;
+
+	// SVGF (denoiser)
+	eastl::unique_ptr<NRDPipeline> nrdPipeline = nullptr;
 
 	// SVGF (denoiser)
 	eastl::unique_ptr<SVGFPipeline> svgfDenoiser = nullptr;
@@ -1435,8 +1452,8 @@ struct Raytracing : public OverlayFeature
 
 			stl::detour_thunk<CreateTextureFromDDS>(REL::RelocationID(69334, 70716));
 
-			stl::detour_thunk<TESObjectLAND_Attach3D>(REL::RelocationID(18334, 18750));
-			stl::detour_thunk<TESObjectLAND_Detach3D>(REL::RelocationID(18333, 18749));
+			//stl::detour_thunk<TESObjectLAND_Attach3D>(REL::RelocationID(18334, 18750));
+			//stl::detour_thunk<TESObjectLAND_Detach3D>(REL::RelocationID(18333, 18749));
 
 			//stl::write_vfunc<0x6, AttachDistant3DTask_Attach>(RE::VTABLE_AttachDistant3DTask[0]);
 			

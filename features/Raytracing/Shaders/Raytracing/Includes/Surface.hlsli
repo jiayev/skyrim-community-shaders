@@ -7,6 +7,7 @@
 #include "Raytracing/Includes/Types.hlsli"
 #include "Raytracing/Includes/RT/Geometry.hlsli"
 #include "Raytracing/Includes/RT/CommonRT.hlsli"
+#include "Raytracing/Includes/VanillaToPBR.hlsli"
 
 #include "Raytracing/Includes/Materials/TexLODHelpers.hlsli"
 
@@ -184,24 +185,25 @@ struct Surface
                 float3 hairTint = material.BaseColor().rgb;
                 Albedo *= VanillaDiffuseColor(hairTint);
             }
-
+            
             [branch]
             if (material.ShaderFlags & ShaderFlags::kSpecular) {
-                Roughness = material.RoughnessScale() >= 0.0f ? saturate(material.RoughnessScale()) : 1.0f;
-
-                float3 specularColor = 0.0f;
-
+                float3 specularColor = material.SpecularColor().rgb * material.SpecularColor().a;
+                
                 [branch]
                 if (material.ShaderFlags & ShaderFlags::kModelSpaceNormals) {
                     Texture2D specularTexture = Textures[NonUniformResourceIndex(material.SpecularTexture())];
-                    specularColor = specularTexture.SampleLevel(BaseSampler, texCoord0, MipLevel).r * material.SpecularColor().rgb * material.SpecularColor().a;
+                    specularColor *= specularTexture.SampleLevel(BaseSampler, texCoord0, MipLevel).r;
                 } else {
                     Texture2D normalTexture = Textures[NonUniformResourceIndex(material.NormalTexture())];
-                    specularColor = normalTexture.SampleLevel(BaseSampler, texCoord0, MipLevel).a * material.SpecularColor().rgb * material.SpecularColor().a;
+                    specularColor *= normalTexture.SampleLevel(BaseSampler, texCoord0, MipLevel).a;
                 }
-                F0 = clamp(0.08f * specularColor, 0.02f, 0.08f);
+                
+	            Roughness = material.RoughnessScale();
+                
+                F0 = clamp(0.08f * specularColor, 0.02f, 0.08f);         
             }
-
+            
             [branch]
             if (material.ShaderFlags & ShaderFlags::kEnvMap || material.ShaderFlags & ShaderFlags::kEyeReflect) {
                 Texture2D envTexture = Textures[NonUniformResourceIndex(material.EnvTexture())];
@@ -223,6 +225,10 @@ struct Surface
                     windowAlpha = glow;
                 }
                 Emissive = GlowToLinear(glow) * EmitColorToLinear(material.EffectColor().rgb) * material.EffectColor().a * Frame.Emissive * EmitColorMult();
+            }
+            else
+            {
+                Emissive = EmitColorToLinear(material.EffectColor().rgb) * material.EffectColor().a * Frame.Emissive * EmitColorMult();
             }
 
             [branch]
@@ -246,6 +252,7 @@ struct Surface
             [branch]
             if (material.Feature == Feature::kFaceGen || material.Feature == Feature::kFaceGenRGBTint) {
                 F0 = 0.02776f;
+                Metallic = 0.0f;
                 SubsurfaceData.HasSubsurface = 1;
                 SubsurfaceData.Anisotropy = -0.5f;
 
@@ -259,12 +266,13 @@ struct Surface
             if (material.Feature == Feature::kEye) {
                 Roughness = 0.08f;
                 F0 = 0.02776f;
+                Metallic = 0.0f;
                 SubsurfaceData.HasSubsurface = 1;
                 SubsurfaceData.Anisotropy = -0.5f;
                 // Typical eye values
                 SubsurfaceData.ScatteringColor = float3(1.0f, 0.8f, 0.6f);
                 SubsurfaceData.TransmissionColor = Albedo;
-                SubsurfaceData.Scale = 0.1f;
+                SubsurfaceData.Scale = 1.f;
             }
             
         } else if (material.ShaderType == ShaderType::Effect) {
@@ -512,7 +520,6 @@ struct Surface
         // Loads all geometry releated data
         Vertex v0, v1, v2;
         GetVertices(shape.GeometryIdx, payload.primitiveIndex, v0, v1, v2);
-
         float3 uvw = GetBary(payload.Barycentrics());
 
         material = shape.Material;
@@ -633,26 +640,28 @@ struct Surface
 
         surface.Position = position;
 
+        surface.FaceNormal = geomNormal;
+
+        surface.MipLevel = 0.0f + Frame.TexLODBias;
         surface.GeomNormal = geomNormal;
+        surface.GeomTangent = tangent; // not needed for hybrid
 
         surface.Normal = normal;
         surface.Tangent = tangent;
         surface.Bitangent = bitangent;
-
-        surface.GeomTangent = tangent; // not needed for hybrid
 
 #   ifdef DEBUG_WHITE_FURNACE
         surface.Albedo = float3(1.0f, 1.0f, 1.0f);
 #   else
         surface.Albedo = albedo;
  #   endif
-
+        surface.TransmissionColor = float3(0.0f, 0.0f, 0.0f);
+        surface.Emissive = emissive * Frame.Emissive;
+        
         surface.Roughness = PBR::Roughness(roughness, Frame.Roughness.x, Frame.Roughness.y);
         surface.Metallic = Remap(metallic, Frame.Metalness.x, Frame.Metalness.y);
-
-        surface.Emissive = emissive * Frame.Emissive;
         surface.AO = ao;
-
+        
         surface.DiffuseAlbedo = surface.Albedo * (1.0f - surface.Metallic);
 
         surface.F0 = PBR::F0(albedo, metallic);

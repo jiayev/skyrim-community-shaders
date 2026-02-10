@@ -979,6 +979,7 @@ void Raytracing::SetupResources()
 		giHeap->CPUHandle(GIHeap::Slot::SHaRCAccumulation),
 		giHeap->CPUHandle(GIHeap::Slot::SHaRCResolved));
 
+	// Not a standard DX12 pipeline
 	svgfDenoiser = eastl::make_unique<SVGFPipeline>();
 	svgfDenoiser->SetupResources();
 
@@ -1701,7 +1702,7 @@ static DirectX::XMFLOAT3X4 GetXMF3X4FromNiTransform(const RE::NiTransform& Trans
 	};
 }
 
-void Raytracing::CopyDepth()
+void Raytracing::CopyDepth() const
 {
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
@@ -1735,7 +1736,12 @@ void Raytracing::CopyDepth()
 	context->CSSetUnorderedAccessViews(0, (UINT)uavs.size(), uavs.data(), nullptr);
 }
 
-void Raytracing::ConvertTextures() const
+void Raytracing::UnpackMetallicAO() const
+{
+
+}
+
+void Raytracing::CopyConvertTextures() const
 {
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
@@ -3079,7 +3085,7 @@ void Raytracing::DrawRTGI()
 		d3d11Context->ClearRenderTargetView(rendererRuntimeData.renderTargets[ALBEDO].RTV, clearColor);
 	}
 
-	ConvertTextures();
+	CopyConvertTextures();
 
 	// Wait for D3D11 to finish
 	{
@@ -4417,16 +4423,14 @@ void Raytracing::CompileCompositeShader()
 		accumulationCS.attach(rawPtr);
 }
 
-RaytracingFD::FeatureData Raytracing::GetCommonBufferData()
+Raytracing::SharedData Raytracing::GetCommonBufferData() const
 {
-	RaytracingFD::FeatureData featureData{
+	return {
 		.InteriorDirectional = settings.GlobalIllumination ? 0.0f : 1.0f,
 		.Ambient = settings.GlobalIllumination ? 0.0f : 1.0f,
 		.EnvMap = settings.GlobalIllumination ? 0.0f : 1.0f,
 		.Albedo = settings.GlobalIllumination
 	};
-
-	return featureData;
 }
 
 RE::BSEventNotifyControl Raytracing::MenuOpenCloseEventHandler::ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
