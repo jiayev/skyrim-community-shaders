@@ -99,6 +99,7 @@ float2 TrLutUv(float r, float cosSunZenith)
 	float2 uv = float2(
 		saturate((cosSunZenith - cosHorZenith) / (1 - cosHorZenith)),
 		saturate((r - data.rPlanet) / (data.rAtmosphere - data.rPlanet)));
+	uv = clamp(uv, float2(0.5 / 256.0, 0.5 / 64.0), float2(1.0 - 0.5 / 256.0, 1.0 - 0.5 / 64.0));
 	return uv;
 }
 
