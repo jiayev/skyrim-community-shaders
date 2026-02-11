@@ -175,7 +175,7 @@ void VanillaImagespace::Draw(TextureInfo& inout_tex)
 
 	auto& pp = globals::features::postProcessing;
 	imageSpaceData = pp.imageSpaceManager->gameISData;
-	isInInterior = Util::IsInInterior();
+	isInInterior = Util::IsInterior();
 	
 	cinematic.x = imageSpaceData.baseData.cinematic.saturation;
 	cinematic.y = imageSpaceData.baseData.cinematic.brightness;
