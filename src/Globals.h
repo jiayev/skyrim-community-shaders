@@ -49,6 +49,7 @@ class Menu;
 namespace SIE
 {
 	class ShaderCache;
+	class ShaderFileDependencyTracker;
 }
 
 namespace globals
