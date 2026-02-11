@@ -355,8 +355,6 @@ void Deferred::StartDeferred()
 
 void Deferred::DeferredPasses()
 {
-	globals::features::upscaling.CheckFrameConstants();
-
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Deferred");
 
