@@ -4,6 +4,7 @@
 #include "Util.h"
 
 #include "ColourSpace.h"
+#include "Features/HDR.h"
 #include "Features/PostProcessing.h"
 
 #include <DDSTextureLoader.h>
@@ -209,12 +210,28 @@ struct TonemapperInfo
 			{ "GT7"sv, "GT7ToneMapping"sv,
 				"Tonemapper designed for Gran Turismo 7."sv,
 				[](CTP& params) {
-                    exposureSlider(&params[0].x);
-                    ImGui::Checkbox("HDR Output (not working for now)", (bool*)&params[0].y);
-                    if (params[0].y)
-                        ImGui::InputFloat("HDR Max Brightness", &params[0].z, 0.f, 0.f, "%1.f nits");
-                },
-				{ f4{ 1.f, 0.f, 400.f, 0.f } } }
+					exposureSlider(&params[0].x);
+					auto* hdr = HDR::GetSingleton();
+					bool hdrEnabled = hdr && hdr->settings.enableHDR;
+					if (hdrEnabled) {
+						bool hdrOutput = params[0].y != 0.f;
+						if (ImGui::Checkbox("HDR Output", &hdrOutput))
+							params[0].y = hdrOutput ? 1.f : 0.f;
+						if (hdrOutput) {
+							params[0].z = static_cast<float>(hdr->settings.hdrPeakNits);
+							ImGui::Text("Max Brightness: %1.f nits (synced from HDR settings)", params[0].z);
+						}
+					} else {
+						params[0].y = 0.f;
+						ImGui::BeginDisabled();
+						bool dummy = false;
+						ImGui::Checkbox("HDR Output", &dummy);
+						ImGui::EndDisabled();
+						if (auto _tt = Util::HoverTooltipWrapper())
+							ImGui::Text("Enable the HDR Display feature to use HDR output.");
+					}
+				},
+				{ f4{ 1.f, 0.f, 1000.f, 0.f } } }
 		};
 
 		static std::once_flag flag;
@@ -617,7 +634,19 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		.highlights = profile.params[20],
 		.shadowsHighlightsRange = profile.params[21],
         .tonemapParams = {
-            settings.tonemapParams[0],
+            [&]() {
+                auto tp0 = settings.tonemapParams[0];
+                // Auto-sync GT7 HDR max brightness from HDR feature
+                if (settings.currentTonemapper == "GT7" && tp0.y != 0.f) {
+                    auto* hdr = HDR::GetSingleton();
+                    if (hdr && hdr->settings.enableHDR) {
+                        tp0.z = static_cast<float>(hdr->settings.hdrPeakNits);
+                    } else {
+                        tp0.y = 0.f;  // Force SDR if HDR not enabled
+                    }
+                }
+                return tp0;
+            }(),
             settings.tonemapParams[1]
         },
         .colorSpaceTransform = {
