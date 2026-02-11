@@ -11,7 +11,9 @@
  *   1. Scene renders to kMAIN with linear HDR values (can exceed 1.0)
  *   2. This shader (ISHDR BLEND) reads from BlendTex, applies bloom and color grading
  *      - SDR mode: Applies tonemapping to compress to 0-1 range, outputs gamma-encoded
- *      - HDR mode: Skips tonemapping to preserve >1.0 values, outputs linear
+ *      - HDR mode: Skips tonemapping to preserve >1.0 values.
+ *        Bloom is Reinhard-compressed to SDR range to prevent excessive intensity.
+ *        Gamma-encodes output unless Linear Lighting is active.
  *   3. Output goes to kFRAMEBUFFER, then HDROutputCS reads it for final processing:
  *      - SDR: Passthrough + UI composite
  *      - HDR: BT.2020 conversion, nit scaling, PQ encoding + UI composite
@@ -82,24 +84,40 @@ PS_OUTPUT main(PS_INPUT input)
 	PS_OUTPUT psout;
 
 #	if defined(DOWNSAMPLE)
+	// === Auto-Exposure Luminance Downsampling ===
+	// Repeatedly downsample image to compute average luminance for exposure adjustment.
+	// Output is used by BLEND pass to normalize scene brightness.
+	
 	float3 downsampledColor = 0;
 	for (int sampleIndex = 0; sampleIndex < DOWNSAMPLE; ++sampleIndex) {
 		float2 texCoord = BlurOffsets[sampleIndex].xy * BlurScale.xy + input.TexCoord;
+		
+		// Adjust for dynamic resolution scaling
 		[branch] if (Flags.x > 0.5)
 		{
 			texCoord = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(texCoord);
 		}
+		
 		float3 imageColor = max(0.0, ImageTex.Sample(ImageSampler, texCoord).xyz);
+
+		// Extract luminance based on shader variant
 #		if defined(RGB2LUM)
+		// Full RGB to luminance conversion
 		imageColor = Color::RGBToLuminance(imageColor);
 #		elif (defined(LUM) || defined(LUMCLAMP)) && !defined(DOWNADAPT)
+		// Use pre-computed luminance channel
 		imageColor = imageColor.x;
 #		endif
+		// Accumulate weighted sample
 		downsampledColor += imageColor * BlurOffsets[sampleIndex].z;
 	}
+	
 #		if defined(DOWNADAPT)
+	// Adaptive exposure — smoothly adjust luminance target over time.
+	// Prevents jarring exposure changes when moving between light/dark areas.
 	float2 adaptValue = max(0.001, AdaptTex.Sample(AdaptSampler, input.TexCoord).xy);
 	float2 adaptDelta = downsampledColor.xy - adaptValue;
+	// Clamp delta to prevent extreme exposure swings
 	downsampledColor.xy =
 		sign(adaptDelta) * clamp(abs(Param.wz * adaptDelta), 0.00390625, abs(adaptDelta)) +
 		adaptValue;
@@ -107,23 +125,36 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color = float4(downsampledColor, BlurScale.z);
 
 #	elif defined(BLEND)
-	// BLEND path: Bloom, color grading, and tonemapping
-	// HDR mode: Preserves linear values >1.0, skips tonemapping
-	// SDR mode: Applies tonemapping to compress to 0-1
+	// === Final Tonemapping, Bloom Compositing, and Color Grading ===
+	// This is the final pass that combines scene, bloom, adjusts colors, and encodes for output.
+	// Output format depends on HDR mode:
+	//   - SDR: Tonemapped to [0,1] gamma-encoded sRGB
+	//   - HDR: Preserved >1.0 linear values, then converted to BT.2020 PQ for HDROutputCS
+	
 	float2 uv = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 
+	// Main scene color (already linearly lit from engine)
 	float3 inputColor = BlendTex.Sample(BlendSampler, uv).xyz;
+
+	bool isHDR = SharedData::HDRData.x > 0.5;
 
 #		if defined(POSTPROCESS)
 	if (SharedData::postProcessingSettings.DisableVanillaTonemapping) {
-		psout.Color = float4(inputColor, 1.0);
 		if (SharedData::linearLightingSettings.enableLinearLighting && SharedData::linearLightingSettings.enableGammaCorrection) {
-			psout.Color.xyz = Color::TrueLinearToGamma(psout.Color.xyz);
+			inputColor = Color::TrueLinearToGamma(inputColor);
 		}
+
+		if (isHDR) {
+			inputColor = Color::pq::Encode(inputColor, sRGB_WhiteLevelNits);
+		}
+
+		psout.Color = float4(inputColor, 1.0);
+
 		return psout;
 	}
 #		endif
 
+	// Bloom from separate high-pass filtered texture
 	float3 bloomColor = 0;
 	if (Flags.x > 0.5) {
 		bloomColor = ImageTex.Sample(ImageSampler, uv).xyz;
@@ -131,68 +162,131 @@ PS_OUTPUT main(PS_INPUT input)
 		bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
 	}
 
+	// Auto-exposure values: (x=current luminance, y=target luminance)
 	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
-
-	// Check if HDR output is enabled
-	bool isHDR = SharedData::HDRData.x > 0.5;
 
 	float3 outputColor = 0.0;
 
-	// Apply auto-exposure (same for both HDR and SDR)
+	// === Auto-Exposure Adjustment ===
+	// Normalizes scene brightness to target luminance computed by DOWNSAMPLE pass.
+	// Prevents exposure from drifting as lighting conditions change.
 	if (avgValue.x != 0 && avgValue.y != 0)
 		inputColor *= avgValue.y / avgValue.x;
 	inputColor = max(0, inputColor);
 
 	if (isHDR) {
-		// HDR path: Preserve linear values, skip tonemapping
-		// Bloom should act on SDR-equivalent values. Since we skip tonemapping in HDR,
-		// the scene can have values >1.0 for highlights. Bloom itself is derived from
-		// the downsampled scene and is already at a similar scale.
-		// Add bloom at its natural intensity — HDROutputCS handles range compression.
-		float3 blendedColor = inputColor + bloomColor * Param.x;
+		// === HDR Pipeline (Float16 RT) ===
+		// Input: HDR values (can exceed 1.0) - gamma-encoded (vanilla) OR linear (Linear Lighting)
+		// Output: PQ-encoded BT.2020 for HDROutputCS → display
+		
+		float paperWhiteNits = SharedData::HDRData.y;
+		float peakNits = SharedData::HDRData.z;
 
-		// Apply cinematic color grading while preserving HDR range
-		float blendedLuminance = Color::RGBToLuminance(blendedColor);
+		// === Convert to Linear Space ===
+		// If Linear Lighting is active, input is already linear.
+		float3 hdrLinear = ENABLE_LL ? inputColor : Color::GammaToLinear(inputColor);
+		
+		// === Color Grading (Mixed Linear/Gamma, matching vanilla order) ===
+		// Vanilla order: Saturation → Tint → Brightness → Contrast
+		// Physical accuracy: Saturation in linear; Tint & Contrast in gamma for artistic control.
+		
+		// Saturation adjustment in linear (can generate negative RGB for highly saturated colors)
+		hdrLinear = Color::Saturation(hdrLinear, Cinematic.x);
+		
+		// Tint and Contrast in gamma space (perceptual control matching SDR behavior)
+		float3 hdrGamma = Color::LinearToGamma(hdrLinear);
+		
+		// Color tint in gamma (blend to monochrome tint if nonzero)
+		float hdrLuminanceGamma = Color::RGBToLuminance(hdrGamma);
+		hdrGamma = lerp(hdrGamma, hdrLuminanceGamma * Tint.xyz, Tint.w);
+		
+		// Convert back to linear for brightness (uniform intensity scaling)
+		hdrLinear = Color::GammaToLinear(hdrGamma);
+		hdrLinear *= Cinematic.w;
+		
+		// Contrast adjustment in gamma space (pivot around scene average)
+		hdrGamma = Color::LinearToGamma(hdrLinear);
+		hdrGamma = lerp(avgValue.x, hdrGamma, Cinematic.z);
+		hdrLinear = Color::GammaToLinear(hdrGamma);
 
-		// Saturation (Cinematic.x)
-		float3 linearColor = lerp(blendedLuminance, blendedColor, Cinematic.x);
+#		if defined(FADE)
+		// Screen fade effect in linear (loading screens, death, etc.)
+		hdrLinear = lerp(hdrLinear, Fade.xyz, Fade.w);
+#		endif
 
-		// Tint (Tint.w controls blend amount)
-		linearColor = lerp(linearColor, blendedLuminance * Tint.xyz, Tint.w);
+		// === Bloom Compositing (Linear Space) ===
+		// High-pass filtered bloom adds glow to bright areas.
+		// Bloom is added in linear space to prevent excessive intensity at bright values.
+		hdrLinear += saturate(Param.x - hdrLinear) * bloomColor;
 
-		// Intensity multiplier (Cinematic.w)
-		linearColor *= Cinematic.w;
+		// === DICE Tonemapping ===
+		// INPUT: Linear BT.709 color in 80-nit reference (1.0 = 80 nits)
+		// Multiply paper-white scalar into color, as per Luma Framework design.
+		// DICE then compresses highlights from paper-white to peak, preserving mid-tone detail.
+		// OUTPUT: Still in 80-nit reference (1.0 = 80 nits), just with tonemapped values.
+		float pw = paperWhiteNits / sRGB_WhiteLevelNits;
+		float peak = peakNits / sRGB_WhiteLevelNits;
+		hdrLinear *= pw;  // Paper-white multiplied in (e.g., 2.5 for 200 nits)
+		hdrLinear = DisplayMapping::DICETonemap(hdrLinear, peak, 0.5, CS_BT709, CS_BT709);
 
-		// Contrast - apply gently to preserve HDR highlights
-		linearColor = lerp(avgValue.x, linearColor, lerp(Cinematic.z, 1.0, 0.5));
-
-		outputColor = max(0, linearColor);
+		// === Color Space Conversion and PQ Encoding ===
+		// Expand from BT.709 (SDR) to BT.2020 (HDR) for wider color gamut.
+		float3 bt2020 = Color::BT709ToBT2020(hdrLinear);
+		// Clamp to non-negative values to prevent NaN in pq::Encode pow operations
+		bt2020 = max(bt2020, 0.0);
+		// Encode to PQ curve: color remains in 80-nit reference (1.0 = 80 nits)
+		outputColor = Color::pq::Encode(bt2020, sRGB_WhiteLevelNits);
 	} else {
-		// SDR path: Apply tonemapping to compress HDR to 0-1
+		// === SDR Pipeline (LDR RT) ===
+		// Input: Linear HDR values (can exceed 1.0)
+		// Output: Tonemapped [0,1] gamma sRGB for traditional displays
+		
 		float3 blendedColor;
+		
+		// === Tonemapping + Bloom Selection ===
+		// Choose between two hue-preserving tonemap algorithms (user preference Param.z).
+		
 		[branch] if (Param.z > 0.5)
 		{
+			// Hejl-Burgess-Dawson: Smoother rolloff, better for cinematic look
 			blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor);
 		}
 		else
 		{
+			// Reinhard: Hue-preserving tone compression
+			// Extract luminance and compress with Reinhard curve
 			float maxCol = Color::RGBToLuminance(inputColor);
 			float mappedMax = GetTonemapFactorReinhard(maxCol).x;
+			// Apply compression uniformly to preserve hue
 			float3 compressedHuePreserving = inputColor * mappedMax / maxCol;
 			blendedColor = compressedHuePreserving;
+			// Add bloom to tonemapped result
 			blendedColor += saturate(Param.x - blendedColor) * bloomColor;
 		}
 
-		// Apply cinematic color grading
+		// === Color Grading (Post-Tonemap) ===
+		// Apply saturation, contrast, and tint to the tonemapped result.
+		
 		float blendedLuminance = Color::RGBToLuminance(blendedColor);
-		float3 linearColor = Cinematic.w * lerp(lerp(blendedLuminance, blendedColor, Cinematic.x), blendedLuminance * Tint.xyz, Tint.w).xyz;
+		
+		// Saturation adjustment: lerp between luminance (desaturated) and full color
+		float3 saturated = lerp(blendedLuminance, blendedColor, Cinematic.x);
+		
+		// Brightness scaling and tint application
+		float3 tinted = lerp(saturated, blendedLuminance * Tint.xyz, Tint.w);
+		
+		// Scale by brightness and apply contrast (pivot around scene average)
+		float3 linearColor = Cinematic.w * tinted;
 		linearColor = lerp(avgValue.x, linearColor, Cinematic.z);
+		
+		// Clamp to prevent negative values
 		outputColor = max(0, linearColor);
-	}
 
-#	if defined(FADE)
-	outputColor = lerp(outputColor, Fade.xyz, Fade.w);
-#	endif
+#		if defined(FADE)
+		// Screen fade (blending toward fade color)
+		outputColor = lerp(outputColor, Fade.xyz, Fade.w);
+#		endif
+	}
 
 	psout.Color = float4(outputColor, 1.0);
 

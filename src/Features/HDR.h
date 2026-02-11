@@ -22,10 +22,11 @@ public:
 
 	struct Settings
 	{
-		bool enableHDR = false;        // false = vanilla SDR, true = HDR output
-		uint hdrPaperWhite = 203;      // Reference white brightness in nits for HDR
-		uint hdrPeakNits = 1000;       // Maximum display brightness in nits for HDR
-		float hdrUIBrightness = 1.0f;  // UI brightness multiplier (1.0 = SDR equivalent)
+		bool enableHDR = false;           // false = vanilla SDR, true = HDR output
+		uint hdrPaperWhite = 203;         // Reference white brightness in nits for HDR
+		uint hdrPeakNits = 1000;          // Maximum display brightness in nits for HDR
+		float hdrUIBrightness = 2.3f;     // UI brightness multiplier for HDR mode (1.0x = 100 nits)
+		bool dontShowHDRWarning = false;  // User preference to suppress HDR warning popup
 	};
 
 	Settings settings;
@@ -45,6 +46,10 @@ public:
 	void EndUIRendering();
 	bool IsRenderingUI() const { return renderingUI; }
 
+	// Redirect kFRAMEBUFFER to hdrTexture (float16) so ISHDR writes HDR values >1.0
+	void RedirectFramebuffer();
+	void RestoreFramebuffer();
+
 	// Frame Gen style UI buffer - redirects kFRAMEBUFFER.RTV for vanilla UI capture
 	void SetUIBuffer();
 	void ClearUIBuffer();
@@ -55,7 +60,7 @@ public:
 
 	void ApplyHDR();
 
-	void DestroyResources() const;
+	void DestroyResources();
 	void ClearShaderCache();
 
 	XM_ALIGNED_STRUCT(16)
@@ -96,6 +101,11 @@ public:
 	ID3D11RenderTargetView* savedRTV = nullptr;
 	ID3D11DepthStencilView* savedDSV = nullptr;
 	ID3D11RenderTargetView* savedFramebufferRTV = nullptr;  // Original kFRAMEBUFFER.RTV for restoration
+
+	// Saved kFRAMEBUFFER state for HDR redirect (ISHDR writes to hdrTexture instead)
+	ID3D11Texture2D* savedFramebufferTexture = nullptr;
+	ID3D11ShaderResourceView* savedFramebufferSRV = nullptr;
+	bool framebufferRedirected = false;
 
 private:
 	bool showHDRWarningPopup = false;

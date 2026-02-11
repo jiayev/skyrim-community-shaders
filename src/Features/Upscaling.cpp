@@ -2,6 +2,7 @@
 
 #include "Deferred.h"
 #include "HDR.h"
+#include "HDRDisplay.h"
 #include "Hooks.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
@@ -26,7 +27,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameGenerationForceEnable,
 	streamlineLogLevel,
 	sharpnessFSR,
-	sharpnessDLSS);
+	sharpnessDLSS,
+	presetDLSS);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
 
@@ -235,6 +237,15 @@ void Upscaling::DrawSettings()
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
+
+			const char* presets[] = { "Default", "Preset J", "Preset K", "Preset L", "Preset M" };
+			ImGui::Combo("DLSS Model Preset", (int*)&settings.presetDLSS, presets, 5);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Choose which DLSS AI model preset to use.");
+				ImGui::Text("Each model offers different visual quality, performance, and motion stability.");
+				ImGui::Text("Set to 'Default' for automatic selection based on your Upscale Preset and hardware.");
+				ImGui::Text("Changing this setting requires a restart to take effect.");
+			}
 		}
 	}
 
@@ -439,6 +450,10 @@ void Upscaling::LoadSettings(json& o_json)
 	if (settings.upscaleMethodNoDLSS >= static_cast<uint>(enumCount)) {
 		logger::warn("[Upscaling] Loaded upscaleMethodNoDLSS {} out of range, clamping to {}", settings.upscaleMethodNoDLSS, enumCount ? enumCount - 1 : 0);
 		settings.upscaleMethodNoDLSS = enumCount ? enumCount - 1 : 0;
+	}
+	if (settings.presetDLSS > 4) {
+		logger::warn("[Upscaling] Loaded presetDLSS {} out of range, resetting to 0 (Default)", settings.presetDLSS);
+		settings.presetDLSS = 0;
 	}
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {
@@ -673,7 +688,6 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 						vrIntermediateReactiveMask[i].reset();
 						vrIntermediateTransparencyMask[i].reset();
 					}
-					vrResourcesAllocated[0] = vrResourcesAllocated[1] = false;
 				}
 			}
 			if (a_upscalemethod == UpscaleMethod::kFSR)
@@ -866,7 +880,6 @@ void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 			eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
 		CreateVRIntermediateTextures(eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut,
 			colorSrc, mvecSrc, reactiveSrc, transparencySrc);
-		vrResourcesAllocated[0] = vrResourcesAllocated[1] = false;
 	}
 
 	// Extract both eyes' inputs from combined stereo buffers
@@ -1188,10 +1201,12 @@ void Upscaling::SetupResources()
 
 	copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
 
-	// Setup HDR resources
-	auto hdr = HDR::GetSingleton();
-	if (hdr)
-		hdr->SetupResources();
+	// Setup HDR resources only when the HDR Display feature is loaded
+	if (globals::features::hdrDisplay.loaded) {
+		auto hdr = HDR::GetSingleton();
+		if (hdr)
+			hdr->SetupResources();
+	}
 }
 
 void Upscaling::ClearShaderCache()
@@ -1467,15 +1482,6 @@ void Upscaling::LoadUpscalingSDKs()
 	// This ensures all SDKs are available before any D3D device creation
 	streamline.LoadInterposer();
 	fidelityFX.LoadFFX();  // Only for frame generation now
-}
-
-void Upscaling::CheckFrameConstants()
-{
-	// In VR, constants are set per-eye in the Upscale() loop
-	// Skip the early call from DeferredPasses to avoid issues
-	if (globals::game::isVR)
-		return;
-	streamline.CheckFrameConstants(streamline.viewport, 0);
 }
 
 void Upscaling::SetUIBuffer()
@@ -1791,8 +1797,9 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 
 	// For non-Frame Gen HDR: redirect kFRAMEBUFFER.RTV to UI texture before vanilla UI renders
 	// When FG is active, its SetUIBuffer redirects to uiBufferWrapped instead
+	// When HDR Display is not loaded, skip entirely so vanilla UI renders to kFRAMEBUFFER
 	auto& upscaling = globals::features::upscaling;
-	if (!upscaling.d3d12SwapChainActive) {
+	if (!upscaling.d3d12SwapChainActive && globals::features::hdrDisplay.loaded) {
 		auto hdr = HDR::GetSingleton();
 		if (hdr)
 			hdr->SetUIBuffer();
@@ -1825,7 +1832,18 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	BSImagespaceShaderISTemporalAA->taaEnabled = upscaleMethod == UpscaleMethod::kTAA;
 
+	// Redirect kFRAMEBUFFER to float texture before ISHDR runs so HDR values >1.0 survive
+	// When HDR Display is not loaded, ISHDR writes to vanilla kFRAMEBUFFER (SDR path)
+	bool hdrLoaded = globals::features::hdrDisplay.loaded;
+	auto hdr = hdrLoaded ? HDR::GetSingleton() : nullptr;
+	if (hdr)
+		hdr->RedirectFramebuffer();
+
 	func(a_this, a3, a_target, a_4, a_5);
+
+	// Restore kFRAMEBUFFER after ISHDR — hdrTexture now has the HDR scene
+	if (hdr)
+		hdr->RestoreFramebuffer();
 
 	BSImagespaceShaderISTemporalAA->taaEnabled = false;
 }

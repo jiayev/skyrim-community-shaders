@@ -9,7 +9,7 @@ struct HDRDisplay : public Feature
 	virtual inline std::string GetShortName() override { return "HDRDisplay"; }
 	virtual inline std::string_view GetCategory() const override { return "Display"; }
 	virtual inline bool SupportsVR() override { return true; }
-	virtual inline bool IsCore() const override { return true; }
+	virtual inline bool IsCore() const override { return false; }
 
 	virtual inline std::string_view GetShaderDefineName() override { return "HDR_OUTPUT"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type shaderType) override
@@ -23,7 +23,8 @@ struct HDRDisplay : public Feature
 		return {
 			"Real High Dynamic Range output for HDR displays.",
 			{
-				"HDR10 output support (R10G10B10A2_UNORM)",
+				"HDR10 output support (10-bit) with upgraded HDR buffers (16-Bit), and fully unclamped rendering pipeline for true HDR values.",
+				"Upgraded DICE tonemapper for HDR, keeping Skyrim's distinct look while improving highlight handling and color vibrancy.",
 				"Configurable paper white and peak brightness",
 			}
 		};
@@ -37,8 +38,5 @@ struct HDRDisplay : public Feature
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
 
-	bool IsHDREnabled() const;
 	void ApplyHDR();
-
-	HDR* hdr = nullptr;
 };
