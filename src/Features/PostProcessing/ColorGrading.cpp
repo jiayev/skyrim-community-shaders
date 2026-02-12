@@ -4,6 +4,7 @@
 #include "Util.h"
 
 #include "ColourSpace.h"
+#include "Features/HDR.h"
 #include "Features/PostProcessing.h"
 
 #include <DDSTextureLoader.h>
@@ -17,9 +18,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     ColorGrading::Settings,
-    useToDInterior,
     skipLDR,
-    profiles,
+    skipLUT,
+    profile,
     currentTonemapper,
     tonemapParams,
     gameCinematicBlend,
@@ -208,14 +209,19 @@ struct TonemapperInfo
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "GT7"sv, "GT7ToneMapping"sv,
-				"Tonemapper designed for Gran Turismo 7."sv,
+				"Tonemapper designed for Gran Turismo 7. HDR output is automatically enabled when HDR Display feature is active."sv,
 				[](CTP& params) {
-                    exposureSlider(&params[0].x);
-                    ImGui::Checkbox("HDR Output (not working for now)", (bool*)&params[0].y);
-                    if (params[0].y)
-                        ImGui::InputFloat("HDR Max Brightness", &params[0].z, 0.f, 0.f, "%1.f nits");
-                },
-				{ f4{ 1.f, 0.f, 400.f, 0.f } } }
+					exposureSlider(&params[0].x);
+					auto* hdr = HDR::GetSingleton();
+					bool hdrEnabled = hdr && hdr->settings.enableHDR;
+					if (hdrEnabled) {
+						ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), ICON_FA_CHECK " HDR Output Active");
+						ImGui::Text("Peak Brightness: %.0f nits (from HDR settings)", static_cast<float>(hdr->settings.hdrPeakNits));
+					} else {
+						ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "SDR Output (HDR Display not enabled)");
+					}
+				},
+				{ f4{ 1.f, 0.f, 1000.f, 0.f } } }
 		};
 
 		static std::once_flag flag;
@@ -242,12 +248,13 @@ struct TonemapperInfo
 
 void ColorGrading::DrawSettings()
 {
-    static int page = 0;
-    ImGui::Checkbox("Use ToD and Interior Settings", &settings.useToDInterior);
-    ImGui::SameLine();
     ImGui::Checkbox("Skip LDR Color Grading", &settings.skipLDR);
     if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Skip color grading after tonemapping. This includes Lift Gamma Gain and Oklch adjustments.");
+		ImGui::Text("Skip color grading after tonemapping. This includes Lift Gamma Gain and Oklch adjustments. Will be automatically skipped with HDR on.");
+
+    ImGui::Checkbox("Skip LUT (Direct Color Grading)", &settings.skipLUT);
+    if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Skip baking color grading into a LUT and apply it directly per-pixel. More accurate but slower.");
 
     ImGui::Checkbox("Convert Linear to Log Before HDR Color Grading", &settings.useLog);
     if (settings.useLog) {
@@ -255,16 +262,9 @@ void ColorGrading::DrawSettings()
         ImGui::Combo("Log Type", (int*)&settings.logType, "ACEScct\0ARRILogC4\0SonySLog3\0");
     }
 
-    if (settings.useToDInterior) {
-        ImGui::Combo("Profile Page", &page, "Dawn\0Sunrise\0Day\0Sunset\0Dusk\0Night\0Interior\0");
-    }
-    int realPage = settings.useToDInterior ? page + 1 : 0;
-    auto& profile = settings.profiles[realPage];
-
+	auto& profile = settings.profile;
     ImGui::SeparatorText("Color Grading");
-    ImGui::PushID(realPage);
     {
-		ImGui::Text("Profile: %s", profileNames[realPage].data());
         ImGui::SliderFloat("Input Gamma", &profile.params[6].z, 0.f, 3.f, "%.3f");
         ImGui::SliderFloat("Output Gamma", &profile.params[6].w, 0.f, 3.f, "%.3f");
 
@@ -595,20 +595,8 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
     auto& pp = globals::features::postProcessing;
 
     RE::ImageSpaceData imageSpaceData = pp.imageSpaceManager->gameISData;
-	bool isInInterior = pp.imageSpaceManager->inInterior;
 
-    auto profile = settings.profiles[0];
-    if (settings.useToDInterior) {
-        if (isInInterior) {
-            profile = settings.profiles[7];
-        } else {
-            for (int i = 0; i < 6; i++) {
-                for (int j = 0; j < 22; j++) {
-                    profile.params[j] = (i == 0 ? float4{ 0.f, 0.f, 0.f, 0.f } : profile.params[j]) + settings.profiles[i + 1].params[j] * pp.imageSpaceManager->timeOfDay[i];
-                }
-            }
-        }
-    }
+    auto profile = settings.profile;
 
     ColorCB colorCBData = {
         .asccdl = {
@@ -673,8 +661,18 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		},
 		.logType = settings.useLog ? ((1u << settings.logType) | (settings.invertLog ? (1u << 3u) : 0u)) : 0u,
 		.skipLDR = settings.skipLDR,
+		.skipLUT = settings.skipLUT,
 		.enableTonemap = settings.enableTonemap,
-		.enableColorSpaceTransform = settings.enableColorSpaceTransform
+		.enableColorSpaceTransform = settings.enableColorSpaceTransform,
+		// Auto-populate HDR settings from HDR feature
+		.enableHDR = [&]() -> uint {
+			auto* hdr = HDR::GetSingleton();
+			return (hdr && hdr->settings.enableHDR) ? 1u : 0u;
+		}(),
+		.hdrPeakNits = [&]() -> float {
+			auto* hdr = HDR::GetSingleton();
+			return (hdr && hdr->settings.enableHDR) ? static_cast<float>(hdr->settings.hdrPeakNits) : 1000.f;
+		}()
 	};
 	colorCB->Update(colorCBData);
 
@@ -685,21 +683,23 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
     context->CSSetSamplers(0, 1, samplers.data());
 	ID3D11UnorderedAccessView* uav = nullptr;
 
-	// LUT Gen
-	uav = texLUT->uav.get();
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShader(lutgenCS.get(), nullptr, 0);
-	context->Dispatch(LUTDim >> 3, LUTDim >> 3, LUTDim >> 3);
+	if (!settings.skipLUT) {
+		// LUT Gen
+		uav = texLUT->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		context->CSSetShader(lutgenCS.get(), nullptr, 0);
+		context->Dispatch(LUTDim >> 3, LUTDim >> 3, LUTDim >> 3);
 
-	uav = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShader(nullptr, nullptr, 0);
+		uav = nullptr;
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		context->CSSetShader(nullptr, nullptr, 0);
+	}
 
-	// Apply LUT
+	// Apply Color Grading (via LUT or direct)
 	std::array<ID3D11ShaderResourceView*, 2> srvs = { inout_tex.srv, texLUT->srv.get() };
 	uav = texColor->uav.get();
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, 2, srvs.data());
+	context->CSSetShaderResources(0, (UINT)(settings.skipLUT ? 1 : 2), srvs.data());
 	context->CSSetShader(colorgradingCS.get(), nullptr, 0);
 
 	context->Dispatch((texColor->desc.Width + 7) >> 3, (texColor->desc.Height + 7) >> 3, 1);

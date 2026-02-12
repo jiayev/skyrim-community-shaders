@@ -1,6 +1,8 @@
 #include "Upscaling.h"
 
 #include "Deferred.h"
+#include "HDR.h"
+#include "HDRDisplay.h"
 #include "Hooks.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
@@ -63,6 +65,11 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 	// Use better swap effect to prevent tearing and improve performance
 	pSwapChainDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
+	// Upgrade swap chain format to HDR10 (R10G10B10A2_UNORM) for HDR output
+	logger::info("[Upscaling] Original swap chain format: {}", static_cast<int>(pSwapChainDesc->BufferDesc.Format));
+	pSwapChainDesc->BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+	logger::info("[Upscaling] Upgraded swap chain format to: {}", static_cast<int>(pSwapChainDesc->BufferDesc.Format));
 
 	bool shouldProxy = !globals::game::isVR;
 	if (shouldProxy)
@@ -1193,6 +1200,13 @@ void Upscaling::SetupResources()
 		dx12SwapChain.CreateSharedResources();
 
 	copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
+
+	// Setup HDR resources only when the HDR Display feature is loaded
+	if (globals::features::hdrDisplay.loaded) {
+		auto hdr = HDR::GetSingleton();
+		if (hdr)
+			hdr->SetupResources();
+	}
 }
 
 void Upscaling::ClearShaderCache()
@@ -1543,6 +1557,14 @@ IDXGISwapChain* Upscaling::GetProxySwapChain()
 	return dx12SwapChain.GetSwapChainProxy();
 }
 
+Upscaling::BlurResources Upscaling::GetBlurResources() const
+{
+	if (d3d12SwapChainActive) {
+		return dx12SwapChain.GetBlurResources();
+	}
+	return {};
+}
+
 void Upscaling::Upscale()
 {
 	auto upscaleMethod = GetUpscaleMethod();
@@ -1780,6 +1802,17 @@ void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
 void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 {
 	globals::features::upscaling.PostDisplay();
+
+	// For non-Frame Gen HDR: redirect kFRAMEBUFFER.RTV to UI texture before vanilla UI renders
+	// When FG is active, its SetUIBuffer redirects to uiBufferWrapped instead
+	// When HDR Display is not loaded, skip entirely so vanilla UI renders to kFRAMEBUFFER
+	auto& upscaling = globals::features::upscaling;
+	if (!upscaling.d3d12SwapChainActive && globals::features::hdrDisplay.loaded) {
+		auto hdr = HDR::GetSingleton();
+		if (hdr)
+			hdr->SetUIBuffer();
+	}
+
 	func(a1);
 }
 
@@ -1807,7 +1840,18 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	BSImagespaceShaderISTemporalAA->taaEnabled = upscaleMethod == UpscaleMethod::kTAA;
 
+	// Redirect kFRAMEBUFFER to float texture before ISHDR runs so HDR values >1.0 survive
+	// When HDR Display is not loaded, ISHDR writes to vanilla kFRAMEBUFFER (SDR path)
+	bool hdrLoaded = globals::features::hdrDisplay.loaded;
+	auto hdr = hdrLoaded ? HDR::GetSingleton() : nullptr;
+	if (hdr)
+		hdr->RedirectFramebuffer();
+
 	func(a_this, a3, a_target, a_4, a_5);
+
+	// Restore kFRAMEBUFFER after ISHDR — hdrTexture now has the HDR scene
+	if (hdr)
+		hdr->RestoreFramebuffer();
 
 	BSImagespaceShaderISTemporalAA->taaEnabled = false;
 }
