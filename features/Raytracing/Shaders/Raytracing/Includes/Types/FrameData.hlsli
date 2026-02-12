@@ -61,8 +61,8 @@ alignas(16)
     float OverrideSSSAnisotropy;
     float4 Pad1;
     float4 Pad2;    
-    float4x4 Pad3;
-    float4x4 Pad4;
+    float4x4 ViewProj;      // Current frame View * Projection matrix (for motion vectors)
+    float4x4 ViewProjPrev;  // Previous frame View * Projection matrix (for motion vectors)
     float3x4 Pad5;
 };
 #ifdef __cplusplus

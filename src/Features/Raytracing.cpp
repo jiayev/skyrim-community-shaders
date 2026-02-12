@@ -939,6 +939,48 @@ void Raytracing::SetupOutputRT()
 
 	svgfDenoiser->SetupTextureResources(renderSize);
 
+	// Path Tracing specific resources for separate Direct/Indirect pass architecture
+	{
+		// u9 - Depth (PT-generated)
+		createRT(depthPathTracingTexture, DXGI_FORMAT_R32_FLOAT, GIHeap::Slot::DepthPathTracing, L"Depth Path Tracing texture");
+
+		// u10 - Motion Vectors (PT-generated)
+		createRT(motionVectorsPathTracingTexture, DXGI_FORMAT_R16G16_FLOAT, GIHeap::Slot::MotionVectorsPathTracing, L"Motion Vectors Path Tracing texture");
+
+		// u11 - Hit Info (for Indirect pass to reconstruct surface)
+		// uint4: hitDistance (asuint), primitiveIndex, barycentricsPacked, instanceGeometryIndexPacked
+		createRT(hitInfoPathTracingTexture, DXGI_FORMAT_R32G32B32A32_UINT, GIHeap::Slot::HitInfoPathTracing, L"Hit Info Path Tracing texture");
+
+		// SRVs for Indirect pass to read from Direct pass outputs
+		// t10 - Direct Radiance (reads from outputTexture)
+		{
+			D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+			srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+			srvDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+			srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+			srvDesc.Texture2D.MostDetailedMip = 0;
+			srvDesc.Texture2D.MipLevels = 1;
+			srvDesc.Texture2D.PlaneSlice = 0;
+			srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+			d3d12Device->CreateShaderResourceView(outputTexture->resource.get(), &srvDesc, giHeap->CPUHandle(GIHeap::Slot::DirectRadianceTexture));
+		}
+
+		// t11 - Hit Info Texture (reads from hitInfoPathTracingTexture)
+		{
+			D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+			srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+			srvDesc.Format = DXGI_FORMAT_R32G32B32A32_UINT;
+			srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+			srvDesc.Texture2D.MostDetailedMip = 0;
+			srvDesc.Texture2D.MipLevels = 1;
+			srvDesc.Texture2D.PlaneSlice = 0;
+			srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+			d3d12Device->CreateShaderResourceView(hitInfoPathTracingTexture->resource.get(), &srvDesc, giHeap->CPUHandle(GIHeap::Slot::HitInfoTexture));
+		}
+	}
+
 	renderResData->RenderRes = renderSize;
 	renderResData->RenderResRcp = float2(1.0f / static_cast<float>(renderSize.x), 1.0f / static_cast<float>(renderSize.y));
 
@@ -3134,6 +3176,10 @@ void Raytracing::DrawRTGI()
 	{
 		frameData->ViewInverse = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
 		frameData->ProjInverse = globals::game::frameBufferCached.GetCameraProjInverse().Transpose();
+		
+		// ViewProj matrices for Path Tracing motion vectors
+		frameData->ViewProj = globals::game::frameBufferCached.GetCameraViewProjUnjittered().Transpose();
+		frameData->ViewProjPrev = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered().Transpose();
 
 		float4 position = globals::game::frameBufferCached.GetCameraPosAdjust();
 		frameData->Position = float3(position.x, position.y, position.z);
@@ -3294,23 +3340,73 @@ void Raytracing::DrawRTGI()
 				dispatchDesc.Width = renderSize.x;
 				dispatchDesc.Height = renderSize.y;
 
-				commandList->DispatchRays(&dispatchDesc);
+				if (settings.PathTracing && pipelinePTDirect && pipelinePTIndirect) {
+					// Path Tracing two-pass mode
+					
+					// === Pass 1: Direct Light ===
+					// Set up Direct pass pipeline
+					commandList->SetPipelineState1(pipelinePTDirect.get());
+					commandList->SetComputeRootSignature(rootSignature.get());
+					setupRTPipeline();
 
-				CD3DX12_RESOURCE_BARRIER rtUAVBarrier[3] = {
-					CD3DX12_RESOURCE_BARRIER::UAV(outputTexture->resource.get()),
-					CD3DX12_RESOURCE_BARRIER::UAV(specularAlbedoTexture->resource.get()),
-					CD3DX12_RESOURCE_BARRIER::UAV(specularHitDistanceTexture->resource.get())
-				};
+					D3D12_DISPATCH_RAYS_DESC directDispatchDesc = dispatchDesc;
+					shaderBindingTablePTDirect->FillDispatchShaderBindingTable(directDispatchDesc, shaderBindingTableBufferPTDirect->resource->GetGPUVirtualAddress());
+					directDispatchDesc.Width = renderSize.x;
+					directDispatchDesc.Height = renderSize.y;
 
-				commandList->ResourceBarrier(_countof(rtUAVBarrier), rtUAVBarrier);
+					commandList->DispatchRays(&directDispatchDesc);
 
-				if (settings.PathTracing) {
-					CD3DX12_RESOURCE_BARRIER ptUAVBarrier[2] = {
+					// UAV barriers after Direct pass - ensure writes are complete before Indirect pass reads
+					CD3DX12_RESOURCE_BARRIER directPassBarriers[] = {
+						CD3DX12_RESOURCE_BARRIER::UAV(outputTexture->resource.get()),
 						CD3DX12_RESOURCE_BARRIER::UAV(diffuseAlbedoPathTracingTexture->resource.get()),
-						CD3DX12_RESOURCE_BARRIER::UAV(normalRoughnessPathTracingTexture->resource.get())
+						CD3DX12_RESOURCE_BARRIER::UAV(normalRoughnessPathTracingTexture->resource.get()),
+						CD3DX12_RESOURCE_BARRIER::UAV(depthPathTracingTexture->resource.get()),
+						CD3DX12_RESOURCE_BARRIER::UAV(motionVectorsPathTracingTexture->resource.get()),
+						CD3DX12_RESOURCE_BARRIER::UAV(hitInfoPathTracingTexture->resource.get())
+					};
+					commandList->ResourceBarrier(_countof(directPassBarriers), directPassBarriers);
+
+					// === Pass 2: Indirect Light ===
+					// Set up Indirect pass pipeline
+					commandList->SetPipelineState1(pipelinePTIndirect.get());
+					commandList->SetComputeRootSignature(rootSignature.get());
+					setupRTPipeline();
+
+					D3D12_DISPATCH_RAYS_DESC indirectDispatchDesc = dispatchDesc;
+					shaderBindingTablePTIndirect->FillDispatchShaderBindingTable(indirectDispatchDesc, shaderBindingTableBufferPTIndirect->resource->GetGPUVirtualAddress());
+					indirectDispatchDesc.Width = renderSize.x;
+					indirectDispatchDesc.Height = renderSize.y;
+
+					commandList->DispatchRays(&indirectDispatchDesc);
+
+					// UAV barriers after Indirect pass
+					CD3DX12_RESOURCE_BARRIER indirectPassBarriers[] = {
+						CD3DX12_RESOURCE_BARRIER::UAV(outputTexture->resource.get()),
+						CD3DX12_RESOURCE_BARRIER::UAV(specularAlbedoTexture->resource.get()),
+						CD3DX12_RESOURCE_BARRIER::UAV(specularHitDistanceTexture->resource.get())
+					};
+					commandList->ResourceBarrier(_countof(indirectPassBarriers), indirectPassBarriers);
+				} else {
+					// Standard single-pass mode (non-PT or fallback)
+					commandList->DispatchRays(&dispatchDesc);
+
+					CD3DX12_RESOURCE_BARRIER rtUAVBarrier[3] = {
+						CD3DX12_RESOURCE_BARRIER::UAV(outputTexture->resource.get()),
+						CD3DX12_RESOURCE_BARRIER::UAV(specularAlbedoTexture->resource.get()),
+						CD3DX12_RESOURCE_BARRIER::UAV(specularHitDistanceTexture->resource.get())
 					};
 
-					commandList->ResourceBarrier(_countof(ptUAVBarrier), ptUAVBarrier);
+					commandList->ResourceBarrier(_countof(rtUAVBarrier), rtUAVBarrier);
+
+					if (settings.PathTracing) {
+						CD3DX12_RESOURCE_BARRIER ptUAVBarrier[2] = {
+							CD3DX12_RESOURCE_BARRIER::UAV(diffuseAlbedoPathTracingTexture->resource.get()),
+							CD3DX12_RESOURCE_BARRIER::UAV(normalRoughnessPathTracingTexture->resource.get())
+						};
+
+						commandList->ResourceBarrier(_countof(ptUAVBarrier), ptUAVBarrier);
+					}
 				}
 			}
 		}
@@ -3329,8 +3425,16 @@ void Raytracing::DrawRTGI()
 
 					sl::Resource colorIn = { sl::ResourceType::eTex2d, outputTexture->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
 					sl::Resource colorOut = { sl::ResourceType::eTex2d, mainTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
-					sl::Resource depth = { sl::ResourceType::eTex2d, depthTexture->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
-					sl::Resource mvec = { sl::ResourceType::eTex2d, motionVectorsTexture->resource.get(), 0 };
+					
+					// For Path Tracing mode with two-pass architecture, use PT-generated depth and motion vectors
+					bool usePTResources = settings.PathTracing && depthPathTracingTexture && motionVectorsPathTracingTexture;
+					sl::Resource depth = { sl::ResourceType::eTex2d, 
+						usePTResources ? depthPathTracingTexture->resource.get() : depthTexture->resource.get(), 
+						usePTResources ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
+					sl::Resource mvec = { sl::ResourceType::eTex2d, 
+						usePTResources ? motionVectorsPathTracingTexture->resource.get() : motionVectorsTexture->resource.get(), 
+						usePTResources ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : 0 };
+					
 					sl::Resource diffuseAlbedo = { sl::ResourceType::eTex2d, settings.PathTracing ? diffuseAlbedoPathTracingTexture->resource.get() : diffuseAlbedoTexture->resource.get(), state };
 					sl::Resource specularAlbedo = { sl::ResourceType::eTex2d, specularAlbedoTexture->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
 					sl::Resource normalRoughness = { sl::ResourceType::eTex2d, settings.PathTracing ? normalRoughnessPathTracingTexture->resource.get() : normalRoughnessTexture->resource.get(), state };
@@ -4210,9 +4314,7 @@ void Raytracing::CompileRTGIShaders()
 		defines.emplace_back(definesWStr.c_str());
 	}
 
-	winrt::com_ptr<IDxcBlob> rayGenBlob;
-	ShaderUtils::CompileShader(rayGenBlob, L"Data/Shaders/Raytracing/GI/RayGeneration.hlsl", defines);
-
+	// Common shaders for all pipelines
 	winrt::com_ptr<IDxcBlob> missBlob, closestHitBlob, anyHitBlob;
 	ShaderUtils::CompileShader(missBlob, L"Data/Shaders/Raytracing/GI/Miss.hlsl", defines);
 	ShaderUtils::CompileShader(closestHitBlob, L"Data/Shaders/Raytracing/GI/ClosestHit.hlsl", defines);
@@ -4222,12 +4324,19 @@ void Raytracing::CompileRTGIShaders()
 	ShaderUtils::CompileShader(shadowMissBlob, L"Data/Shaders/Raytracing/GI/ShadowMiss.hlsl");
 	ShaderUtils::CompileShader(shadowAnyHitBlob, L"Data/Shaders/Raytracing/GI/ShadowAnyHit.hlsl");
 
-	DX12::RTPipelineBuilder pipelineBuilder;
+	// Helper lambda for creating pipelines and SBTs
+	auto createPipelineAndSBT = [&](
+		winrt::com_ptr<IDxcBlob>& rayGenBlob,
+		LPCWSTR rayGenName,
+		winrt::com_ptr<ID3D12StateObject>& pipeline,
+		eastl::unique_ptr<DX12::ShaderBindingTable>& sbt,
+		eastl::unique_ptr<DX12::ResourceUpload>& sbtBuffer,
+		LPCWSTR pipelineName) {
+		
+		DX12::RTPipelineBuilder pipelineBuilder;
 
-	// Init pipeline
-	{
 		// Libraries
-		pipelineBuilder.AddRayGenLib(rayGenBlob.get(), L"RayGeneration");
+		pipelineBuilder.AddRayGenLib(rayGenBlob.get(), rayGenName);
 
 		pipelineBuilder.AddMissLib(missBlob.get(), L"IndirectMiss");
 		pipelineBuilder.AddMissLib(shadowMissBlob.get(), L"ShadowMiss");
@@ -4248,56 +4357,75 @@ void Raytracing::CompileRTGIShaders()
 
 		auto desc = pipelineBuilder.MakeStateObjectDesc();
 
-		auto createPipeline = [&](winrt::com_ptr<ID3D12StateObject>& pipeline, LPCWSTR name) {
-			if (pipeline)
-				pipeline = nullptr;
+		// Create pipeline
+		if (pipeline)
+			pipeline = nullptr;
 
-			HRESULT hr = d3d12Device->CreateStateObject(desc, IID_PPV_ARGS(&pipeline));
+		HRESULT hr = d3d12Device->CreateStateObject(desc, IID_PPV_ARGS(&pipeline));
 
-			if (FAILED(hr)) {
-				logger::critical("CreateStateObject failed: {}", hr);
-			}
-
-			DX::ThrowIfFailed(hr);
-
-			DX::ThrowIfFailed(pipeline->SetName(std::format(L"{} Pipeline", name).c_str()));
-		};
-
-		createPipeline(pipelineRT, L"RT");
-	}
-
-	// Init shader tables
-	{
-		winrt::com_ptr<ID3D12StateObjectProperties> props;
-		pipelineRT->QueryInterface(props.put());
-
-		uint64_t shaderBindingTableSizePrev = shaderBindingTable ? shaderBindingTable->GetTotalSize() : 0;
-
-		if (shaderBindingTable)
-			shaderBindingTable.reset();
-
-		shaderBindingTable = eastl::make_unique<DX12::ShaderBindingTable>(pipelineBuilder.CreateShaderBindingTable(props.get()));
-
-		auto shaderBindingTableSize = shaderBindingTable->GetTotalSize();
-		logger::debug("[RT] GI SBT size: {}", shaderBindingTableSize);
-
-		// Recreate buffer if necessary
-		if (!shaderBindingTableBuffer || shaderBindingTableSize > shaderBindingTableSizePrev) {
-			if (shaderBindingTableBuffer)
-				shaderBindingTableBuffer.reset();
-
-			shaderBindingTableBuffer = eastl::make_unique<DX12::ResourceUpload>(d3d12Device.get(), shaderBindingTableSize);
-			shaderBindingTableBuffer->SetName(L"RT Shader Binding Table Buffer");
+		if (FAILED(hr)) {
+			logger::critical("CreateStateObject failed for {}: {}", std::wstring(pipelineName), hr);
 		}
 
-		std::vector<uint8_t> shaderBindingTableCPU(shaderBindingTableSize);
-		shaderBindingTable->Build(shaderBindingTableCPU.data());
+		DX::ThrowIfFailed(hr);
+		DX::ThrowIfFailed(pipeline->SetName(std::format(L"{} Pipeline", pipelineName).c_str()));
 
-		shaderBindingTable->LogShaderBindingTable(shaderBindingTableBuffer->resource->GetGPUVirtualAddress());
+		// Create SBT
+		winrt::com_ptr<ID3D12StateObjectProperties> props;
+		pipeline->QueryInterface(props.put());
 
-		shaderBindingTableBuffer->Update(shaderBindingTableCPU.data(), shaderBindingTableSize);
-		shaderBindingTableBuffer->Upload(commandList.get());
-		shaderBindingTableBuffer->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		uint64_t sbtSizePrev = sbt ? sbt->GetTotalSize() : 0;
+
+		if (sbt)
+			sbt.reset();
+
+		sbt = eastl::make_unique<DX12::ShaderBindingTable>(pipelineBuilder.CreateShaderBindingTable(props.get()));
+
+		auto sbtSize = sbt->GetTotalSize();
+		logger::debug("[RT] {} SBT size: {}", std::wstring(pipelineName), sbtSize);
+
+		// Recreate buffer if necessary
+		if (!sbtBuffer || sbtSize > sbtSizePrev) {
+			if (sbtBuffer)
+				sbtBuffer.reset();
+
+			sbtBuffer = eastl::make_unique<DX12::ResourceUpload>(d3d12Device.get(), sbtSize);
+			sbtBuffer->SetName(std::format(L"{} SBT Buffer", pipelineName).c_str());
+		}
+
+		std::vector<uint8_t> sbtCPU(sbtSize);
+		sbt->Build(sbtCPU.data());
+
+		sbt->LogShaderBindingTable(sbtBuffer->resource->GetGPUVirtualAddress());
+
+		sbtBuffer->Update(sbtCPU.data(), sbtSize);
+		sbtBuffer->Upload(commandList.get());
+		sbtBuffer->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+	};
+
+	if (settings.PathTracing) {
+		// Path Tracing mode: compile Direct and Indirect pass pipelines
+		logger::info("[RT] Compiling Path Tracing pipelines (Direct + Indirect)");
+
+		// Direct Light Pass
+		winrt::com_ptr<IDxcBlob> directRayGenBlob;
+		ShaderUtils::CompileShader(directRayGenBlob, L"Data/Shaders/Raytracing/GI/DirectLightRayGeneration.hlsl", defines);
+		createPipelineAndSBT(directRayGenBlob, L"DirectLightRayGen", pipelinePTDirect, shaderBindingTablePTDirect, shaderBindingTableBufferPTDirect, L"PT Direct");
+
+		// Indirect Light Pass
+		winrt::com_ptr<IDxcBlob> indirectRayGenBlob;
+		ShaderUtils::CompileShader(indirectRayGenBlob, L"Data/Shaders/Raytracing/GI/IndirectLightRayGeneration.hlsl", defines);
+		createPipelineAndSBT(indirectRayGenBlob, L"IndirectLightRayGen", pipelinePTIndirect, shaderBindingTablePTIndirect, shaderBindingTableBufferPTIndirect, L"PT Indirect");
+
+		// Also compile the standard pipeline for fallback/hybrid mode
+		winrt::com_ptr<IDxcBlob> rayGenBlob;
+		ShaderUtils::CompileShader(rayGenBlob, L"Data/Shaders/Raytracing/GI/RayGeneration.hlsl", defines);
+		createPipelineAndSBT(rayGenBlob, L"RayGeneration", pipelineRT, shaderBindingTable, shaderBindingTableBuffer, L"RT");
+	} else {
+		// Non-PT mode: use standard single-pass pipeline
+		winrt::com_ptr<IDxcBlob> rayGenBlob;
+		ShaderUtils::CompileShader(rayGenBlob, L"Data/Shaders/Raytracing/GI/RayGeneration.hlsl", defines);
+		createPipelineAndSBT(rayGenBlob, L"RayGeneration", pipelineRT, shaderBindingTable, shaderBindingTableBuffer, L"RT");
 	}
 }
 

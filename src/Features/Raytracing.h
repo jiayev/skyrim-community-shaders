@@ -111,11 +111,18 @@ struct Raytracing : public OverlayFeature
 			SHaRCLock,
 			SHaRCAccumulation,
 			SHaRCResolved,
+			// Path Tracing additional UAVs (u9, u10, u11)
+			DepthPathTracing,
+			MotionVectorsPathTracing,
+			HitInfoPathTracing,
 			Main,
 			Depth,
 			Albedo,
 			NormalRoughness,
 			GNMD,
+			// Path Tracing additional SRVs (t10, t11) - for indirect pass reading from direct pass
+			DirectRadianceTexture,
+			HitInfoTexture,
 			TLAS,
 			SkyHemisphere,
 			Lights,
@@ -833,6 +840,15 @@ struct Raytracing : public OverlayFeature
 	eastl::unique_ptr<DX12::ResourceUpload> shaderBindingTableBuffer = nullptr;
 	eastl::unique_ptr<DX12::DescriptorHeap<GIHeap>> giHeap = nullptr;
 
+	// Path Tracing specific pipelines (two-pass architecture)
+	winrt::com_ptr<ID3D12StateObject> pipelinePTDirect = nullptr;
+	eastl::unique_ptr<DX12::ShaderBindingTable> shaderBindingTablePTDirect = nullptr;
+	eastl::unique_ptr<DX12::ResourceUpload> shaderBindingTableBufferPTDirect = nullptr;
+
+	winrt::com_ptr<ID3D12StateObject> pipelinePTIndirect = nullptr;
+	eastl::unique_ptr<DX12::ShaderBindingTable> shaderBindingTablePTIndirect = nullptr;
+	eastl::unique_ptr<DX12::ResourceUpload> shaderBindingTableBufferPTIndirect = nullptr;
+
 	// Shadows
 	winrt::com_ptr<ID3D12RootSignature> shadowRS = nullptr;
 	winrt::com_ptr<ID3D12StateObject> shadowPipeline = nullptr;
@@ -877,6 +893,11 @@ struct Raytracing : public OverlayFeature
 	eastl::unique_ptr<DX12::Texture2D> normalRoughnessPathTracingTexture = nullptr;
 	eastl::unique_ptr<WrappedResource> specularAlbedoTexture = nullptr;
 	eastl::unique_ptr<DX12::Texture2D> specularHitDistanceTexture = nullptr;
+
+	// Path Tracing specific resources (separate pass architecture)
+	eastl::unique_ptr<DX12::Texture2D> depthPathTracingTexture = nullptr;        // PT-generated depth
+	eastl::unique_ptr<DX12::Texture2D> motionVectorsPathTracingTexture = nullptr; // PT-generated motion vectors
+	eastl::unique_ptr<DX12::Texture2D> hitInfoPathTracingTexture = nullptr;       // Hit payload storage for indirect pass
 
 	eastl::unique_ptr<WrappedResource> depthTexture = nullptr;
 	eastl::unique_ptr<WrappedResource> motionVectorsTexture = nullptr;

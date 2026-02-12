@@ -12,6 +12,13 @@ RWTexture2D<float4> NormalRoughnessPathTracing  : register(u2);
 RWTexture2D<float4> SpecularAlbedo              : register(u3);
 RWTexture2D<float> SpecularHitDist              : register(u4);
 
+// Path Tracing additional outputs (for denoiser and indirect pass)
+#ifdef PATH_TRACING
+RWTexture2D<float> DepthPathTracing             : register(u9);
+RWTexture2D<float2> MotionVectorsPathTracing    : register(u10);
+RWTexture2D<uint4> HitInfoPathTracing           : register(u11);  // For indirect pass to reconstruct Surface
+#endif
+
 #ifdef SHARC
 RWStructuredBuffer<uint64_t>                u_SharcHashEntriesBuffer    : register(u5);
 RWStructuredBuffer<uint>                    u_SharcLockBuffer           : register(u6);
@@ -24,6 +31,12 @@ Texture2D<float> DepthTexture                   : register(t1, space0); // RENDE
 Texture2D<float4> AlbedoTexture                 : register(t2, space0); // ALBEDO - True albedo (not modulated by metalness)
 Texture2D<snorm float4> NormalRoughnessTexture  : register(t3, space0); // "NORMALROUGHNESS" - World normals and roughness - Processed from GBuffer encoded view normals and smoothness
 Texture2D<unorm float4> GNMAOTexture            : register(t4, space0); // MASKS2 - Geometry normals (Encoded) + metalness/AO (Packed)
+
+// Path Tracing: Read from Direct Pass outputs
+#ifdef PATH_TRACING_INDIRECT
+Texture2D<float4> DirectRadianceTexture         : register(t10, space0);  // Direct light output from Direct Pass
+Texture2D<uint4> HitInfoTexture                 : register(t11, space0);  // Hit info from Direct Pass
+#endif
 
 RaytracingAccelerationStructure Scene           : register(t5, space0);
 Texture2D<float4> SkyHemisphere                 : register(t6, space0);
