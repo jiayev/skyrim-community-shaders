@@ -122,6 +122,8 @@ struct PS_OUTPUT
 #ifdef PSHADER
 SamplerState SampDiffuse : register(s0);
 
+SamplerState SampShadowMaskSampler : register(s14);
+
 Texture2D<float4> TexDiffuse : register(t0);
 
 #	if !defined(VR)
@@ -177,6 +179,10 @@ const static float DepthOffsets[16] = {
 
 #	if defined(IBL)
 #		include "IBL/IBL.hlsli"
+#	endif
+
+#	if defined(PHYSICAL_SKY)
+#		include "PhysicalSky/Common.hlsli"
 #	endif
 
 #	define LinearSampler SampDiffuse
@@ -237,6 +243,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * 0.5 * llDirLightMult * Color::VanillaNormalization();
 
+#			if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+#			endif
+
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = -normalize(cross(ddx, ddy));
@@ -264,6 +275,13 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Diffuse.xyz = diffuseColor * baseColor.xyz;
 	psout.Diffuse.w = 1;
 
+#			if !defined(DEFERRED) && defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), input.Position.xy, length(input.WorldPosition.xyz), SampColorSampler);
+		psout.Diffuse.xyz = psout.Diffuse.xyz * apSample.w + apSample.xyz;
+	}
+#			endif
+
 	psout.MotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 
 	psout.Normal.xy = GBuffer::EncodeNormal(FrameBuffer::WorldToView(normal, false, eyeIndex));
@@ -276,6 +294,11 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * 0.5 * llDirLightMult * Color::VanillaNormalization();
+
+#			if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+#			endif
 
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
