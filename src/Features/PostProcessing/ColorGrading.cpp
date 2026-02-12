@@ -209,27 +209,16 @@ struct TonemapperInfo
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "GT7"sv, "GT7ToneMapping"sv,
-				"Tonemapper designed for Gran Turismo 7."sv,
+				"Tonemapper designed for Gran Turismo 7. HDR output is automatically enabled when HDR Display feature is active."sv,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					auto* hdr = HDR::GetSingleton();
 					bool hdrEnabled = hdr && hdr->settings.enableHDR;
 					if (hdrEnabled) {
-						bool hdrOutput = params[0].y != 0.f;
-						if (ImGui::Checkbox("HDR Output", &hdrOutput))
-							params[0].y = hdrOutput ? 1.f : 0.f;
-						if (hdrOutput) {
-							params[0].z = static_cast<float>(hdr->settings.hdrPeakNits);
-							ImGui::Text("Max Brightness: %1.f nits (synced from HDR settings)", params[0].z);
-						}
+						ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), ICON_FA_CHECK " HDR Output Active");
+						ImGui::Text("Peak Brightness: %.0f nits (from HDR settings)", static_cast<float>(hdr->settings.hdrPeakNits));
 					} else {
-						params[0].y = 0.f;
-						ImGui::BeginDisabled();
-						bool dummy = false;
-						ImGui::Checkbox("HDR Output", &dummy);
-						ImGui::EndDisabled();
-						if (auto _tt = Util::HoverTooltipWrapper())
-							ImGui::Text("Enable the HDR Display feature to use HDR output.");
+						ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "SDR Output (HDR Display not enabled)");
 					}
 				},
 				{ f4{ 1.f, 0.f, 1000.f, 0.f } } }
@@ -261,7 +250,7 @@ void ColorGrading::DrawSettings()
 {
     ImGui::Checkbox("Skip LDR Color Grading", &settings.skipLDR);
     if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Skip color grading after tonemapping. This includes Lift Gamma Gain and Oklch adjustments.");
+		ImGui::Text("Skip color grading after tonemapping. This includes Lift Gamma Gain and Oklch adjustments. Will be automatically skipped with HDR on.");
 
     ImGui::Checkbox("Skip LUT (Direct Color Grading)", &settings.skipLUT);
     if (auto _tt = Util::HoverTooltipWrapper())
@@ -639,19 +628,7 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		.highlights = profile.params[20],
 		.shadowsHighlightsRange = profile.params[21],
         .tonemapParams = {
-            [&]() {
-                auto tp0 = settings.tonemapParams[0];
-                // Auto-sync GT7 HDR max brightness from HDR feature
-                if (settings.currentTonemapper == "GT7" && tp0.y != 0.f) {
-                    auto* hdr = HDR::GetSingleton();
-                    if (hdr && hdr->settings.enableHDR) {
-                        tp0.z = static_cast<float>(hdr->settings.hdrPeakNits);
-                    } else {
-                        tp0.y = 0.f;  // Force SDR if HDR not enabled
-                    }
-                }
-                return tp0;
-            }(),
+            settings.tonemapParams[0],
             settings.tonemapParams[1]
         },
         .colorSpaceTransform = {
@@ -686,7 +663,16 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		.skipLDR = settings.skipLDR,
 		.skipLUT = settings.skipLUT,
 		.enableTonemap = settings.enableTonemap,
-		.enableColorSpaceTransform = settings.enableColorSpaceTransform
+		.enableColorSpaceTransform = settings.enableColorSpaceTransform,
+		// Auto-populate HDR settings from HDR feature
+		.enableHDR = [&]() -> uint {
+			auto* hdr = HDR::GetSingleton();
+			return (hdr && hdr->settings.enableHDR) ? 1u : 0u;
+		}(),
+		.hdrPeakNits = [&]() -> float {
+			auto* hdr = HDR::GetSingleton();
+			return (hdr && hdr->settings.enableHDR) ? static_cast<float>(hdr->settings.hdrPeakNits) : 1000.f;
+		}()
 	};
 	colorCB->Update(colorCBData);
 
