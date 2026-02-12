@@ -75,6 +75,31 @@ float3 EvalLight(in float3 l, in Material material, in Surface surface, in BRDFC
 void GetDirectionalLightIrradiance(out float3 irradiance, out float3 lr, inout uint randomSeed)
 {
     irradiance = DirLightToLinear(Frame.Directional.Color) * EvalSkyOcclusion(Frame.Directional.Vector);
+
+    // Physical Sky transmittance
+    if (Frame.PhysSkyEnabled)
+    {
+        float3 sunDir = Frame.Directional.Vector;
+        float trMix = Frame.PhysSkyTrMix;
+
+        if (trMix > 1e-8f)
+        {
+            float cosHorZenith = -0.414f;
+            float cosSunZenith = sunDir.z;
+            float2 lutUv = float2(
+                saturate((cosSunZenith - cosHorZenith) / (1.0f - cosHorZenith)),
+                saturate((Frame.PhysSkyZCameraPlanet - Frame.PhysSkyRPlanet) / (Frame.PhysSkyRAtmosphere - Frame.PhysSkyRPlanet)));
+            lutUv = clamp(lutUv, float2(0.5f / 256.0f, 0.5f / 64.0f), float2(1.0f - 0.5f / 256.0f, 1.0f - 0.5f / 64.0f));
+
+            float3 tr = PhySkyTrLut.SampleLevel(BaseSampler, lutUv, 0).rgb;
+            if (cosSunZenith <= -0.414f)
+                tr = 0;
+            tr = lerp(1.0f, tr, trMix);
+
+            irradiance *= tr;
+        }
+    }
+
     lr = Frame.Directional.Vector;
 
     // Sun angular radius is ~0.00465 radians (~0.266 degrees)

@@ -121,6 +121,7 @@ struct Raytracing : public OverlayFeature
 			Lights,
 			Shapes,
 			Instances,
+			PhySkyTrLut,
 			Vertices,
 			Triangles = Vertices + RTConstants::MAX_SHAPES,
 			Textures = Triangles + RTConstants::MAX_SHAPES,
@@ -866,6 +867,9 @@ struct Raytracing : public OverlayFeature
 
 	eastl::unique_ptr<WrappedResource> skyHemisphere = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> cubeToHemiCS = nullptr;
+
+	// Physical Sky TrLUT
+	eastl::unique_ptr<WrappedResource> phySkyTrLut = nullptr;
 
 	// Shadow maps
 	bool renderingShadowmap = false;

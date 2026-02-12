@@ -21,6 +21,7 @@
 #include "Features/ExtendedTranslucency.h"
 #include "Features/HairSpecular.h"
 #include "Features/LinearLighting.h"
+#include "Features/PhysicalSky.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Upscaling.h"
 
@@ -1256,6 +1257,33 @@ void Raytracing::SetupResources()
 		for (uint i = 0; i < 6; i++) {
 			waterReflections->cubeMapSides[i] = RE::TESWaterReflections::CubeMapSide(i, 0.0f);
 		}
+	}
+
+	// Physical Sky TrLUT
+	{
+		D3D11_TEXTURE2D_DESC texDesc{};
+		texDesc.Width = 256;   // PhysicalSky::kTrLutW
+		texDesc.Height = 64;   // PhysicalSky::kTrLutH
+		texDesc.MipLevels = 1;
+		texDesc.ArraySize = 1;
+		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		texDesc.SampleDesc.Count = 1;
+		texDesc.SampleDesc.Quality = 0;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+		phySkyTrLut = eastl::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
+		DX::ThrowIfFailed(phySkyTrLut->resource->SetName(L"PhySky TrLUT"));
+
+		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		srvDesc.Format = texDesc.Format;
+		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.MipLevels = texDesc.MipLevels;
+		srvDesc.Texture2D.PlaneSlice = 0;
+		srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+		d3d12Device->CreateShaderResourceView(phySkyTrLut->resource.get(), &srvDesc, giHeap->CPUHandle(GIHeap::Slot::PhySkyTrLut));
 	}
 
 	fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
@@ -3077,6 +3105,14 @@ void Raytracing::DrawRTGI()
 
 	d3d11Context->CopyResource(mainTexture->resource11, main.texture);
 
+	// Copy Physical Sky TrLUT if available
+	{
+		auto& physSky = globals::features::physicalSky;
+		if (physSky.loaded && physSky.texTrLut && physSky.cbData.enabled) {
+			d3d11Context->CopyResource(phySkyTrLut->resource11, physSky.texTrLut->resource.get());
+		}
+	}
+
 	if (!RaytracedShadows())
 		CopyDepth();
 
@@ -3174,6 +3210,20 @@ void Raytracing::DrawRTGI()
 		frameData->OverrideSSSAnisotropy = sssSettings.OverrideAnisotropy;
 
 		frameData->RussianRoulette = settings.RussianRoulette;
+
+		// Physical Sky
+		{
+			auto& physSky = globals::features::physicalSky;
+			if (physSky.loaded && physSky.cbData.enabled) {
+				frameData->PhysSkyEnabled = true;
+				frameData->PhysSkyTrMix = physSky.cbData.trMix;
+				frameData->PhysSkyZCameraPlanet = physSky.cbData.zCameraPlanet;
+				frameData->PhysSkyRPlanet = physSky.cbData.rPlanet;
+				frameData->PhysSkyRAtmosphere = physSky.cbData.rAtmosphere;
+			} else {
+				frameData->PhysSkyEnabled = false;
+			}
+		}
 
 		if (Util::IsInterior()) {
 			frameData->EmittanceColor = float3::One;
@@ -4031,7 +4081,8 @@ void Raytracing::CreateRootSignature()
 			{ GIHeap::Slot::SkyHemisphere, 1, 0 },
 			{ GIHeap::Slot::Lights, 1, 0 },
 			{ GIHeap::Slot::Shapes, 1, 0 },
-			{ GIHeap::Slot::Instances, 1, 0 } });
+			{ GIHeap::Slot::Instances, 1, 0 },
+			{ GIHeap::Slot::PhySkyTrLut, 1, 0 } });
 
 	// Vertex buffers (unbounded)
 	giHeap->CreateTable(

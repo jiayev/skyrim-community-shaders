@@ -31,6 +31,8 @@ StructuredBuffer<Light> Lights                  : register(t7, space0);
 StructuredBuffer<Shape> Shapes                  : register(t8, space0);
 StructuredBuffer<Instance> Instances            : register(t9, space0);
 
+Texture2D<float4> PhySkyTrLut                   : register(t10, space0);
+
 StructuredBuffer<Vertex> Vertices[]             : register(t0, space1);
 StructuredBuffer<Triangle> Triangles[]          : register(t0, space2);
 Texture2D<float4> Textures[]                    : register(t0, space3);
