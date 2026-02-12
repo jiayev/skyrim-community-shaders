@@ -42,7 +42,9 @@ cbuffer ColorCB : register(b1) {
     uint skipLUT;
     uint enableTonemap;
     uint enableColorSpaceTransform;
-	uint3 pad;
+	uint enableHDR;           // HDR display is enabled (auto-set from HDR feature)
+	float hdrPeakNits;        // Maximum display brightness in nits for HDR
+	uint pad;
 };
 
 namespace LogType {
@@ -583,10 +585,12 @@ float3 KajiyaTonemap(float3 col)
 float3 GT7ToneMapping(float3 color)
 {
     color *= tonemapParams[0].x;
-	if (tonemapParams[0].y == 0)
-		color = GT7ToneMappingSDR(color);
+	// Use global enableHDR and hdrPeakNits from CBuffer instead of tonemapParams
+	// This allows seamless HDR when HDR Display feature is enabled
+	if (enableHDR)
+		color = GT7ToneMappingHDR(color, hdrPeakNits);
 	else
-		color = GT7ToneMappingHDR(color, tonemapParams[0].z);
+		color = GT7ToneMappingSDR(color);
     return color;
 }
 
@@ -738,8 +742,8 @@ float3 ColorGrading(float3 color)
         color = mul(invColorSpaceTransformMat, color);
     }
 
-	// LDR
-	if (!skipLDR) {
+	// LDR (skip when HDR is enabled, as LDR color grading is designed for SDR output)
+	if (!skipLDR && !enableHDR) {
 		// Lift Gamma Gain
 		color = LiftGammaGain(color, liftgammagain[0].gbar, liftgammagain[1].gbar, liftgammagain[2].gbar);
 
