@@ -3,6 +3,7 @@
 #include "Deferred.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
+#include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/GrassCollision.h"
@@ -35,7 +36,6 @@
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
 #include "Features/WeatherEditor.h"
-#include "Features/WeatherPicker.h"
 #include "Features/WetnessEffects.h"
 
 #include "Menu.h"
@@ -81,7 +81,6 @@ namespace globals
 		VolumetricLighting volumetricLighting{};
 		VR vr{};
 		WaterEffects waterEffects{};
-		WeatherPicker weatherPicker{};
 		PerformanceOverlay performanceOverlay{};
 		WetnessEffects wetnessEffects{};
 		ExtendedTranslucency extendedTranslucency{};
@@ -89,6 +88,7 @@ namespace globals
 		HDRDisplay hdrDisplay{};
 		RenderDoc renderDoc{};
 		WeatherEditor weatherEditor{};
+		ExponentialHeightFog exponentialHeightFog{};
 		PostProcessing postProcessing{};
 		Raytracing raytracing{};
 

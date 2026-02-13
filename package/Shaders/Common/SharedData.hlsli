@@ -239,6 +239,21 @@ namespace SharedData
 		uint3 _padding;
 	};
 
+	struct ExponentialHeightFogSettings
+	{
+		uint enabled;
+		uint useDynamicCubemaps;
+		float startDistance;
+		float fogHeight;
+		float fogHeightFalloff;
+		float fogDensity;
+		float directionalInscatteringMultiplier;
+		float directionalInscatteringExponent;
+		float4 inscatteringTint;
+		float cubemapMipLevel;
+		float3 pad;
+	};
+
 	struct PostProcessingSettings
 	{
 		uint DisableVanillaTonemapping;
@@ -325,6 +340,7 @@ namespace SharedData
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
+		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		PostProcessingSettings postProcessingSettings;
 		PhysSkyData physSkyData;
 		RaytracingSettings raytracingSettings;
