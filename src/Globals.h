@@ -26,12 +26,12 @@ struct UnifiedWater;
 struct VolumetricLighting;
 struct VR;
 struct WaterEffects;
-struct WeatherPicker;
 struct PerformanceOverlay;
 struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
 struct WeatherEditor;
+struct ExponentialHeightFog;
 struct HDRDisplay;
 struct PostProcessing;
 
@@ -84,7 +84,6 @@ namespace globals
 		extern VolumetricLighting volumetricLighting;
 		extern VR vr;
 		extern WaterEffects waterEffects;
-		extern WeatherPicker weatherPicker;
 		extern PerformanceOverlay performanceOverlay;
 		extern WetnessEffects wetnessEffects;
 		extern ExtendedTranslucency extendedTranslucency;
@@ -92,6 +91,7 @@ namespace globals
 		extern HDRDisplay hdrDisplay;
 		extern RenderDoc renderDoc;
 		extern WeatherEditor weatherEditor;
+		extern ExponentialHeightFog exponentialHeightFog;
 		extern PostProcessing postProcessing;
 
 		namespace llf

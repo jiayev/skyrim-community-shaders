@@ -181,6 +181,11 @@ const static float DepthOffsets[16] = {
 #		include "IBL/IBL.hlsli"
 #	endif
 
+#	if defined(EXP_HEIGHT_FOG)
+#		define SampColorSampler SampDiffuse
+#		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
+#	endif
+
 #	if defined(PHYSICAL_SKY)
 #		include "PhysicalSky/Common.hlsli"
 #	endif
@@ -243,6 +248,12 @@ PS_OUTPUT main(PS_INPUT input)
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * 0.5 * llDirLightMult * Color::VanillaNormalization();
 
+#			if defined(EXP_HEIGHT_FOG)
+	if (SharedData::exponentialHeightFogSettings.enabled) {
+		diffuseColor *= ExponentialHeightFog::GetSunlightFogAttenuation(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
+	}
+#			endif
+
 #			if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
 		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
@@ -289,6 +300,12 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * 0.5 * llDirLightMult * Color::VanillaNormalization();
+
+#			if defined(EXP_HEIGHT_FOG)
+	if (SharedData::exponentialHeightFogSettings.enabled) {
+		diffuseColor *= ExponentialHeightFog::GetSunlightFogAttenuation(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
+	}
+#			endif
 
 #			if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
