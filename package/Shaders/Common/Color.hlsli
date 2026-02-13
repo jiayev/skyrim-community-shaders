@@ -15,8 +15,12 @@ cbuffer LLPerGeometry : register(b8)
 #endif
 
 // Float limits
+#ifndef FLT_MIN
 #define FLT_MIN asfloat(0x00800000) // 1.175494351e-38f
+#endif
+#ifndef FLT_MAX
 #define FLT_MAX asfloat(0x7F7FFFFF) // 3.402823466e+38f
+#endif
 
 namespace Color
 {
