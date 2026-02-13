@@ -449,16 +449,16 @@ cbuffer AlphaTestRefCB : register(b11)
 #		include "IBL/IBL.hlsli"
 #	endif
 
+#	if defined(EXP_HEIGHT_FOG)
+#		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
+#	endif
+
 #	if defined(PHYSICAL_SKY)
 #		include "PhysicalSky/Common.hlsli"
 #	endif
 
 #	if defined(PSEUDO_SUN_BOUNCE)
 #		include "PseudoSunBounce/sunbounce.hlsli"
-#	endif
-
-#	if defined(EXP_HEIGHT_FOG)
-#		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
 #	endif
 
 #	define LinearSampler SampBaseSampler

@@ -181,13 +181,13 @@ const static float DepthOffsets[16] = {
 #		include "IBL/IBL.hlsli"
 #	endif
 
-#	if defined(PHYSICAL_SKY)
-#		include "PhysicalSky/Common.hlsli"
-#	endif
-
 #	if defined(EXP_HEIGHT_FOG)
 #		define SampColorSampler SampDiffuse
 #		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
+#	endif
+
+#	if defined(PHYSICAL_SKY)
+#		include "PhysicalSky/Common.hlsli"
 #	endif
 
 #	define LinearSampler SampDiffuse

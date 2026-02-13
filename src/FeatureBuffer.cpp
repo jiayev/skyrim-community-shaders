@@ -60,12 +60,12 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::extendedTranslucency.GetCommonBufferData(),
 		globals::features::linearLighting.GetCommonBufferData(),
 		globals::features::terrainBlending.settings,
+		globals::features::exponentialHeightFog.settings,
 		globals::features::postProcessing.settings,
 		globals::features::skin.GetCommonBufferData(),
 		globals::features::screenSpacePointLightShadows.GetCommonBufferData(),
 		globals::features::vanillaFresnel.settings,
 		globals::features::physicalSky.cbData,
 		globals::features::screenSpaceRayTracing.GetCommonBufferData(),
-		globals::features::exponentialHeightFog.settings,
 		globals::features::pseudoSunBounce.settings);
 }

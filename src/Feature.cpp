@@ -41,7 +41,6 @@
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
 #include "Features/WeatherEditor.h"
-#include "Features/WeatherPicker.h"
 #include "Features/WetnessEffects.h"
 #include "Menu.h"
 #include "SettingsOverrideManager.h"
@@ -223,7 +222,6 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::dynamicCubemaps,
 		&globals::features::cloudShadows,
 		&globals::features::waterEffects,
-		&globals::features::weatherPicker,
 		&globals::features::performanceOverlay,
 		&globals::features::subsurfaceScattering,
 		&globals::features::terrainShadows,
@@ -248,11 +246,11 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::weatherEditor,
 		&globals::features::linearLighting,
 		&globals::features::unifiedWater,
+		&globals::features::exponentialHeightFog,,
 		&globals::features::hdrDisplay,
 		&globals::features::physicalSky,
 		&globals::features::postProcessing,
 		&globals::features::skin,
-		&globals::features::exponentialHeightFog,
 		&globals::features::pseudoSunBounce
 	};
 
