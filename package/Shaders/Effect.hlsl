@@ -562,16 +562,16 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 		float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 		float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult * 0.5 * Color::EffectLightingMult();
 
-#		if defined(PHYSICAL_SKY)
-		if (SharedData::physSkyData.enabled)
-			dirLightColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampDepthSampler);
-#		endif
-
-
 #		if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
 		dirLightColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
 	}
+#		endif
+
+
+#		if defined(PHYSICAL_SKY)
+		if (SharedData::physSkyData.enabled)
+			dirLightColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampDepthSampler);
 #		endif
 
 		float3 ambientColor = max(0, mul(SharedData::DirectionalAmbient, float4(0, 0, 1, 1)));

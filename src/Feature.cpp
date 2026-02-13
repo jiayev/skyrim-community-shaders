@@ -246,7 +246,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::weatherEditor,
 		&globals::features::linearLighting,
 		&globals::features::unifiedWater,
-		&globals::features::exponentialHeightFog,,
+		&globals::features::exponentialHeightFog,
 		&globals::features::hdrDisplay,
 		&globals::features::physicalSky,
 		&globals::features::postProcessing,
