@@ -41,7 +41,7 @@ float3 SampleSky(float3 dir)
 
     float3 color = SkyHemisphere.SampleLevel(BaseSampler, uv, 0.0f).rgb;
 
-    return LLGammaToTrueLinear(color);
+    return ColorSpaceFromSRGB(LLGammaToTrueLinear(color));
 }
 
 float EvalSkyOcclusion(float3 dir)
@@ -74,7 +74,7 @@ float3 EvalLight(in float3 l, in Material material, in Surface surface, in BRDFC
 
 void GetDirectionalLightIrradiance(out float3 irradiance, out float3 lr, inout uint randomSeed)
 {
-    irradiance = DirLightToLinear(Frame.Directional.Color) * EvalSkyOcclusion(Frame.Directional.Vector);
+    irradiance = ColorSpaceFromSRGB(DirLightToLinear(Frame.Directional.Color)) * EvalSkyOcclusion(Frame.Directional.Vector);
     lr = Frame.Directional.Vector;
 
     // Sun angular radius is ~0.00465 radians (~0.266 degrees)
@@ -186,7 +186,7 @@ void GetPointLightIrradiance(in LightData lightData, in Surface surface, out flo
 #endif
 
     const bool isLinear = (light.Flags & LightFlags::LinearLight) != 0;
-    light.Color = PointLightToLinear(light.Color, isLinear);
+    light.Color = ColorSpaceFromSRGB(PointLightToLinear(light.Color, isLinear));
 
     lr = (light.Vector - surface.Position);
     dist = length(lr);

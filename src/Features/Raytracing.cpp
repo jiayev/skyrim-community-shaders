@@ -551,7 +551,7 @@ void Raytracing::DrawAdvancedSettings()
 
 	ImGui::SliderFloat("Texture LOD Bias", &settings.TexLODBias, -4.0f, 4.0f, "%.1f");
 
-	if (ImGui::Checkbox("GGX Energy Conservation", &advSettings.GGXEnergyConservation))
+	if (ImGui::Checkbox("Use ACEScg for lighting", &advSettings.UseACEScg))
 		recompileReason |= RecompileReason::Advanced;
 
 	if (DrawEnumCombo("Hair BSDF", advSettings.HairBSDF))
@@ -4174,8 +4174,8 @@ void Raytracing::CompileRTGIShaders()
 	const auto risMaxCandidates = std::to_wstring(static_cast<uint32_t>(advSettings.RIS.MaxCandidates));
 	defines.emplace_back(L"RIS_MAX_CANDIDATES", risMaxCandidates.c_str());
 
-	if (advSettings.GGXEnergyConservation)
-		defines.emplace_back(L"GGX_ENERGY_CONSERVATION");
+	if (advSettings.UseACEScg)
+		defines.emplace_back(L"ACESCG");
 
 	const auto hairMode = std::to_wstring(static_cast<uint32_t>(advSettings.HairBSDF));
 	defines.emplace_back(L"HAIR_MODE", hairMode.c_str());
