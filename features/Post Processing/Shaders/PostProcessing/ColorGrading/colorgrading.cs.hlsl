@@ -1,8 +1,8 @@
 #include "Common/Color.hlsli"
+#include "Common/ColorSpaces.hlsli"
 #include "Common/Math.hlsli"
 
 #include "PostProcessing/common.hlsli"
-#include "PostProcessing/aces.hlsli"
 #include "PostProcessing/ColourTransforms/GT7ToneMapping.hlsli"
 
 #define LUT_SIZE 64
@@ -39,8 +39,10 @@ cbuffer ColorCB : register(b1) {
 
     uint logType;
     uint skipLDR;
+    uint skipLUT;
     uint enableTonemap;
     uint enableColorSpaceTransform;
+	uint3 pad;
 };
 
 namespace LogType {
@@ -764,8 +766,11 @@ float3 ApplyLUT(float3 color)
 	color = Saturation(color, cinematic.x);
 	color = LinearContrast(color, cinematic.z, 0.18);
 
-	// Apply LUT or Color Grading
-	color = ApplyLUT(color);
+	// Apply LUT or direct Color Grading
+	if (skipLUT)
+		color = ColorGrading(color);
+	else
+		color = ApplyLUT(color);
 
 	color = pow(abs(color), saturationHueInOutGamma.w);
 

@@ -238,6 +238,27 @@ namespace SharedData
 		uint3 _padding;
 	};
 
+	struct ExponentialHeightFogSettings
+	{
+		uint enabled;
+		uint useDynamicCubemaps;
+		float startDistance;
+		float fogHeight;
+		float fogHeightFalloff;
+		float fogDensity;
+		float directionalInscatteringMultiplier;
+		float directionalInscatteringExponent;
+		float4 inscatteringTint;
+		float cubemapMipLevel;
+		float3 pad;
+	};
+
+	struct PostProcessingSettings
+	{
+		uint DisableVanillaTonemapping;
+		uint3 pad0;
+	};
+
 	struct RaytracingSettings
     {
         float InteriorDirectional;
@@ -245,13 +266,6 @@ namespace SharedData
         float EnvMap;
         uint Albedo;
     }; // had to add this here to pass test
-
-
-	struct PostProcessingSettings
-	{
-		uint DisableVanillaTonemapping;
-		uint3 pad0;
-	};
 
 	cbuffer FeatureData : register(b6)
 	{
@@ -270,6 +284,7 @@ namespace SharedData
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
+		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		PostProcessingSettings postProcessingSettings;
 		RaytracingSettings raytracingSettings;
 	};
