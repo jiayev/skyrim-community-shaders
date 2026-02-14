@@ -537,7 +537,7 @@ struct Raytracing : public OverlayFeature
 		RISSettings RIS;
 		ReSTIRSettings ReSTIR;
 
-		bool GGXEnergyConservation = true;
+		bool UseACEScg = true;
 		HairBSDF HairBSDF = HairBSDF::FarFieldBCSDF;
 
 		DiffuseBRDF DiffuseBRDF = DiffuseBRDF::Burley;
@@ -546,7 +546,7 @@ struct Raytracing : public OverlayFeature
 
 		SSSSettings SSSSettings;
 
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(AdvancedSettings, Culling, VariableUpdateRate, RIS, ReSTIR, GGXEnergyConservation, HairBSDF, DiffuseBRDF, LightEvalMode, LightingMode, SSSSettings)
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(AdvancedSettings, Culling, VariableUpdateRate, RIS, ReSTIR, UseACEScg, HairBSDF, DiffuseBRDF, LightEvalMode, LightingMode, SSSSettings)
 	};
 
 	////////////////////////////////////////////////// Feature Specific Data

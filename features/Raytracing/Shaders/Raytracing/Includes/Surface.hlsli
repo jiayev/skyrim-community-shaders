@@ -153,12 +153,15 @@ struct Surface
             AO = rmaos.z;
             F0 = material.SpecularLevel() * rmaos.w;
 
+            Albedo = ColorSpaceFromSRGB(Albedo);
+            Emissive = ColorSpaceFromSRGB(Emissive);
+
             if ((material.PBRFlags & PBR::Flags::Subsurface) && !(material.ShaderFlags & ShaderFlags::kTwoSided)) {
                 Texture2D subsurfaceTexture = Textures[NonUniformResourceIndex(material.SubsurfaceTexture())];
 
                 float4 subsurfaceColor = subsurfaceTexture.SampleLevel(BaseSampler, texCoord0, MipLevel);
                 float thickness = subsurfaceColor.a * material.SubsurfaceScale();
-                SubsurfaceData.ScatteringColor = subsurfaceColor.rgb * material.SubsurfaceScatteringColor().rgb;
+                SubsurfaceData.ScatteringColor = ColorSpaceFromSRGB(subsurfaceColor.rgb * material.SubsurfaceScatteringColor().rgb);
                 SubsurfaceData.TransmissionColor = Albedo;
 
                 TransmissionColor = SubsurfaceData.ScatteringColor;
@@ -173,7 +176,7 @@ struct Surface
                 // Just use simple diffuse transmission for thin objects
                 float4 subsurfaceColor = subsurfaceTexture.SampleLevel(BaseSampler, texCoord0, MipLevel);
                 float thickness = subsurfaceColor.a * material.SubsurfaceScale();
-                TransmissionColor = subsurfaceColor.rgb * material.SubsurfaceScatteringColor().rgb;
+                TransmissionColor = ColorSpaceFromSRGB(subsurfaceColor.rgb * material.SubsurfaceScatteringColor().rgb);
                 DiffTrans = 1 - thickness;
             }
         } else if (material.ShaderType == ShaderType::Lighting) {
@@ -185,6 +188,8 @@ struct Surface
                 float3 hairTint = material.BaseColor().rgb;
                 Albedo *= VanillaDiffuseColor(hairTint);
             }
+
+            Albedo = ColorSpaceFromSRGB(Albedo);
     
             [branch]
             if (material.ShaderFlags & ShaderFlags::kSpecular) {
@@ -219,7 +224,7 @@ struct Surface
                 float3 envColor = ColorToLinear(envTexture.SampleLevel(BaseSampler, texCoord0, 15).rgb);
                 float envMask = envMaskTexture.SampleLevel(BaseSampler, texCoord0, MipLevel).r;
 
-                Albedo = lerp(Albedo, envColor, envMask);
+                Albedo = lerp(Albedo, ColorSpaceFromSRGB(envColor), envMask);
                 Metallic = envMask;
             }
 
@@ -238,6 +243,8 @@ struct Surface
                 Emissive = EmitColorToLinear(material.EffectColor().rgb) * material.EffectColor().a * Frame.Emissive * EmitColorMult();
             }
 
+            Emissive = ColorSpaceFromSRGB(Emissive);
+
             [branch]
             if (material.Feature == Feature::kFaceGen) {
                 Texture2D detailTexture = Textures[NonUniformResourceIndex(material.DetailTexture())];
@@ -245,13 +252,13 @@ struct Surface
 	            detailColor = float3(3.984375, 3.984375, 3.984375) * (float3(0.00392156886, 0, 0.00392156886) + detailColor);
 
                 Texture2D tintTexture = Textures[NonUniformResourceIndex(material.TintTexture())];
-	            float3 tintColor = tintTexture.SampleLevel(BaseSampler, texCoord0, MipLevel).rgb;
+	            float3 tintColor = ColorSpaceFromSRGB(tintTexture.SampleLevel(BaseSampler, texCoord0, MipLevel).rgb);
 	            tintColor = tintColor * Albedo * 2.0f;
 	            tintColor = tintColor - tintColor * Albedo;
 	            Albedo = (Albedo * Albedo + tintColor) * detailColor;
                 
             } else if (material.Feature == Feature::kFaceGenRGBTint) {
-	            float3 tintColor = material.BaseColor().rgb * Albedo * 2.0f;
+	            float3 tintColor = ColorSpaceFromSRGB(material.BaseColor().rgb) * Albedo * 2.0f;
 	            tintColor = tintColor - tintColor * Albedo;
 	            Albedo = float3(1.01171875f, 0.99609375f, 1.01171875f) * (Albedo * Albedo + tintColor);
             }
@@ -317,7 +324,7 @@ struct Surface
 
             //Albedo = baseColorLinear; // This breaks sharc
             Albedo = 0;
-            Emissive = baseColorLinear * Frame.Effect;
+            Emissive = ColorSpaceFromSRGB(baseColorLinear * Frame.Effect);
         }
         else
         {
@@ -449,7 +456,7 @@ struct Surface
         [branch]
         if (material.ShaderType == ShaderType::TruePBR)
         {
-            Albedo = baseColor;
+            Albedo = ColorSpaceFromSRGB(baseColor);
 
             float4 rmaos = BlendLandTexture(material.Texture12, texCoord0, landBlend0.x) + BlendLandTexture(material.Texture13, texCoord0, landBlend0.y) +
                            BlendLandTexture(material.Texture14, texCoord0, landBlend0.z) + BlendLandTexture(material.Texture15, texCoord0, landBlend0.w) +
@@ -462,7 +469,7 @@ struct Surface
         }
         else if (material.ShaderType == ShaderType::Lighting)
         {
-            Albedo = baseColor; // GammaToTrueLinear looks wonky
+            Albedo = ColorSpaceFromSRGB(VanillaDiffuseColor(baseColor));
         }
 
 #if defined(DEBUG_NONORMALMAP)
@@ -660,10 +667,10 @@ struct Surface
 #   ifdef DEBUG_WHITE_FURNACE
         surface.Albedo = float3(1.0f, 1.0f, 1.0f);
 #   else
-        surface.Albedo = albedo;
+        surface.Albedo = ColorSpaceFromSRGB(albedo);
  #   endif
         surface.TransmissionColor = float3(0.0f, 0.0f, 0.0f);
-        surface.Emissive = emissive * Frame.Emissive;
+        surface.Emissive = ColorSpaceFromSRGB(emissive) * Frame.Emissive;
         
         surface.Roughness = PBR::Roughness(roughness, Frame.Roughness.x, Frame.Roughness.y);
         surface.Metallic = Remap(metallic, Frame.Metalness.x, Frame.Metalness.y);

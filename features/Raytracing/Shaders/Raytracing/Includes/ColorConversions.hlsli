@@ -1,6 +1,8 @@
 #ifndef COLOR_CONVERSIONS_COMMON_HLSLI
 #define COLOR_CONVERSIONS_COMMON_HLSLI
 
+#include "Common/ColorSpaces.hlsli"
+
 #include "Raytracing/Includes/Registers.hlsli"
 #include "Raytracing/Includes/SharedData.hlsli"
 
@@ -60,5 +62,15 @@ float3 EmitColorToLinear(float3 color)
 float EmitColorMult()
 {
     return LLON ? LLSETTINGS.emitColorMult : 1.0f;
+}
+
+// input linear sRGB, output linear AP1 (ACEScg)
+float3 ColorSpaceFromSRGB(float3 srgb)
+{
+#if defined(ACESCG)
+	return sRGBToAP1(srgb);
+#else
+	return srgb;
+#endif
 }
 #endif
