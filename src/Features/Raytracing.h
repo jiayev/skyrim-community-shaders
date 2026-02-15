@@ -845,6 +845,7 @@ struct Raytracing : public OverlayFeature
 	struct TempGPUData
 	{
 		winrt::com_ptr<D3D12MA::Allocation> scratchBuffers;
+		eastl::vector<eastl::unique_ptr<Model>> retiredModels;
 		uint64_t fenceValue;
 	};
 
