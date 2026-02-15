@@ -1229,7 +1229,7 @@ void Raytracing::SetupResources()
 		texDesc.Height = RTConstants::SKY_HEMI_SIZE;
 		texDesc.MipLevels = 1;
 		texDesc.ArraySize = 1;
-		texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 		texDesc.SampleDesc.Count = 1;
 		texDesc.SampleDesc.Quality = 0;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -2202,6 +2202,8 @@ void Raytracing::CreateModelInternal(RE::TESForm* form, const char* path, RE::Ni
 
 bool Raytracing::RemoveInstance(RE::NiAVObject* pRoot, bool releaseModel)
 {
+	std::lock_guard lock{ renderMutex };
+
 	if (auto instanceIt = instances.find(pRoot); instanceIt != instances.end()) {
 		auto& instance = instanceIt->second;
 
@@ -2216,11 +2218,15 @@ bool Raytracing::RemoveInstance(RE::NiAVObject* pRoot, bool releaseModel)
 
 			// If this is the last Instance of the model, remove it
 			if (refCount <= 0 && releaseModel) {
-				// Not sure if its necesary to mutex here, but when the model goes out of scope the buffers are destroyed so I assume it is
-				std::lock_guard lock{ renderMutex };
-
 				logger::debug("[RT] RemoveInstance - No refs, erasing from collection");
+
+				auto retiredModel = eastl::move(modelIt->second);
 				models.erase(modelIt);
+
+				TempGPUData retiredData{};
+				retiredData.fenceValue = fenceValue + 1;
+				retiredData.retiredModels.push_back(eastl::move(retiredModel));
+				tempGPUData.push_back(eastl::move(retiredData));
 			}
 		}
 
@@ -2844,6 +2850,8 @@ bool SphereCastFrustum(const float3& sphereCenter, float radius, const float3& d
 
 void Raytracing::UpdateShadowInstances()
 {
+	std::lock_guard lock{ renderMutex };
+
 	//std::lock_guard lock{ geometryMutex };
 
 	blasShadowInstances.clear();
@@ -2916,7 +2924,9 @@ void Raytracing::UpdateShadowInstances()
 
 void Raytracing::PostRaytraceCleanup()
 {
-	while (!tempGPUData.empty() && tempGPUData.front().fenceValue <= fenceValue) {
+	uint64_t completedFenceValue = d3d12Fence ? d3d12Fence->GetCompletedValue() : 0;
+
+	while (!tempGPUData.empty() && tempGPUData.front().fenceValue <= completedFenceValue) {
 		tempGPUData.pop_front();
 	}
 }
@@ -3449,7 +3459,8 @@ void Raytracing::DrawRTGI()
 
 	// Wait until GPU is done with previous frame
 	if (d3d12Fence->GetCompletedValue() < fenceValue) {
-		DX::ThrowIfFailed(d3d12Fence->SetEventOnCompletion(fenceValue, nullptr));
+		DX::ThrowIfFailed(d3d12Fence->SetEventOnCompletion(fenceValue, fenceEvent));
+		WaitForSingleObject(fenceEvent, INFINITE);
 	}
 
 	if (frameChecker.IsNewFrame()) {
@@ -3709,7 +3720,8 @@ void Raytracing::RenderShadows()
 
 	// Wait for GPU
 	if (d3d12Fence->GetCompletedValue() < fenceValue) {
-		DX::ThrowIfFailed(d3d12Fence->SetEventOnCompletion(fenceValue, nullptr));
+		DX::ThrowIfFailed(d3d12Fence->SetEventOnCompletion(fenceValue, fenceEvent));
+		WaitForSingleObject(fenceEvent, INFINITE);
 	}
 
 	if (frameChecker.IsNewFrame())
