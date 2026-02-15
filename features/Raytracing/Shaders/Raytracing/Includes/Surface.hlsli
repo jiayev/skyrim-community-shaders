@@ -271,7 +271,7 @@ struct Surface
                 SubsurfaceData.Anisotropy = -0.5f;
 
                 // Typical skin values
-                SubsurfaceData.ScatteringColor = float3(4.820f, 1.690f, 1.090f);
+                SubsurfaceData.ScatteringColor = ColorSpaceFromSRGB(float3(4.820f, 1.690f, 1.090f));
                 SubsurfaceData.TransmissionColor = Albedo;
                 SubsurfaceData.Scale = 1.f;
             }
@@ -284,7 +284,7 @@ struct Surface
                 SubsurfaceData.HasSubsurface = 1;
                 SubsurfaceData.Anisotropy = -0.5f;
                 // Typical eye values
-                SubsurfaceData.ScatteringColor = float3(1.0f, 0.8f, 0.6f);
+                SubsurfaceData.ScatteringColor = ColorSpaceFromSRGB(float3(1.0f, 0.8f, 0.6f));
                 SubsurfaceData.TransmissionColor = Albedo;
                 SubsurfaceData.Scale = 1.f;
             }
