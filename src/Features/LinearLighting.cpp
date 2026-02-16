@@ -19,8 +19,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	waterGamma,
 	vlGamma,
 	vanillaDiffuseColorMult,
-	directionalLightMultExterior,
-	directionalLightMultInterior,
+	directionalLightMult,
 	pointLightMult,
 	ambientMult,
 	emitColorMult,
@@ -47,8 +46,7 @@ void LinearLighting::DrawSettings()
 			ImGui::SliderFloat("Water Gamma", &settings.waterGamma, 0.1f, 3.0f, "%.2f");
 
 			ImGui::SeparatorText("Multipliers");
-			ImGui::SliderFloat("Exterior Directional Light Multiplier", &settings.directionalLightMultExterior, 0.0f, 10.0f, "%.2f");
-			ImGui::SliderFloat("Interior Directional Light Multiplier", &settings.directionalLightMultInterior, 0.0f, 10.0f, "%.2f");
+			ImGui::SliderFloat("Directional Light Multiplier", &settings.directionalLightMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat("Ambient Multiplier", &settings.ambientMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat("Glowmap Multiplier", &settings.glowmapMult, 0.0f, 10.0f, "%.2f");
 
@@ -173,7 +171,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.waterGamma = settings.waterGamma;
 	data.vlGamma = settings.vlGamma;
 	data.vanillaDiffuseColorMult = settings.vanillaDiffuseColorMult;
-	data.directionalLightMult = Util::IsInterior() ? settings.directionalLightMultInterior : settings.directionalLightMultExterior;
+	data.directionalLightMult = settings.directionalLightMult;
 	data.pointLightMult = settings.pointLightMult;
 	data.ambientMult = settings.ambientMult;
 	data.emitColorMult = settings.emitColorMult;
