@@ -42,6 +42,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ozoneAltitude,
 	ozoneThickness,
 	ozoneAbsorption,
+	fallbackZBottom,
 	cloudRelightMix,
 	cloudOriginalMix,
 	silverLiningMix,
@@ -148,6 +149,11 @@ void PhysicalSky::SettingsGeneral()
 	ImGui::Checkbox("Enabled", &settings.enabled);
 	ImGui::SameLine();
 	ImGui::Checkbox("Enable All Exterior Cells", &settings.enableAllExteriorCells);
+	if (settings.enableAllExteriorCells) {
+		ImGui::InputFloat("Fallback Z Bottom", &settings.fallbackZBottom, 10.f, 100.f, "%1.f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Used when current worldspace is not in whitelist (or worldspace data is unavailable).");
+	}
 
 	ImGui::SeparatorText("Post Processing");
 	{
@@ -498,12 +504,15 @@ void PhysicalSky::Reset()
 	bool inMainLoadingMenu = globals::game::ui && (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
 
 	WorldspaceInfo worldspaceInfo = {};
+	float zBottom = settings.fallbackZBottom;
 	if (globals::game::tes) {
 		if (auto worldspace = globals::game::tes->GetRuntimeData2().worldSpace; worldspace) {
 			std::string worldspaceName = worldspace->GetFormEditorID();
 			worldspaceEnabled = settings.worldspaceWhitelist.contains(worldspaceName);
-			if (worldspaceEnabled)
+			if (worldspaceEnabled) {
 				worldspaceInfo = settings.worldspaceWhitelist.at(worldspaceName);
+				zBottom = worldspaceInfo.zBottom;
+			}
 		}
 		if (auto player = RE::PlayerCharacter::GetSingleton(); player) {
 			if (auto cell = player->GetParentCell(); cell) {
@@ -551,7 +560,7 @@ void PhysicalSky::Reset()
 		.enabled = allGood,
 		.tonemapper = linearLighting.settings.enableLinearLighting ? 0 : settings.tonemapper,
 		.vanillaMix = settings.vanillaMix,
-		.zBottom = worldspaceInfo.zBottom,
+		.zBottom = zBottom,
 		.rPlanet = settings.planetRadius / Util::Units::GAME_UNIT_TO_KM,
 		.rAtmosphere = settings.atmosphereRadius / Util::Units::GAME_UNIT_TO_KM,
 		.groundAlbedo = settings.groundAlbedo,
