@@ -203,6 +203,7 @@ namespace globals
 	void OnDataLoaded()
 	{
 		using namespace game;
+		tes = RE::TES::GetSingleton();
 		sky = RE::Sky::GetSingleton();
 		utilityShader = RE::BSUtilityShader::GetSingleton();
 
