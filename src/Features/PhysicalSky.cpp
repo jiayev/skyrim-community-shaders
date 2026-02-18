@@ -13,6 +13,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PhysicalSky::Settings,
 	enabled,
 	enableAllExteriorCells,
+	forceEnableAllInteriorCells,
 	overrideDirLight,
 	halfResApShadow,
 	tonemapper,
@@ -132,7 +133,10 @@ void PhysicalSky::SettingsGeneral()
 		bool inInterior = cell && cell->IsInteriorCell();
 
 		if (inInterior) {
-			ImGui::Text("Interior (Disabled)");
+			if (settings.forceEnableAllInteriorCells)
+				ImGui::Text("Interior (Enabled, Forced)");
+			else
+				ImGui::Text("Interior (Disabled)");
 		} else if (tes) {
 			auto* worldspace = tes->GetRuntimeData2().worldSpace;
 			if (!worldspace && cell)
@@ -160,10 +164,12 @@ void PhysicalSky::SettingsGeneral()
 	ImGui::Checkbox("Enabled", &settings.enabled);
 	ImGui::SameLine();
 	ImGui::Checkbox("Enable All Exterior Cells", &settings.enableAllExteriorCells);
-	if (settings.enableAllExteriorCells) {
+	ImGui::SameLine();
+	ImGui::Checkbox("Force Enable All Interior Cells", &settings.forceEnableAllInteriorCells);
+	if (settings.enableAllExteriorCells || settings.forceEnableAllInteriorCells) {
 		ImGui::InputFloat("Fallback Z Bottom", &settings.fallbackZBottom, 10.f, 100.f, "%.1f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Used when current worldspace is not in whitelist (or worldspace data is unavailable).");
+			ImGui::Text("Used when current worldspace is not in whitelist (or worldspace data is unavailable), including forced interiors.");
 	}
 
 	ImGui::SeparatorText("Post Processing");
@@ -533,7 +539,8 @@ void PhysicalSky::Reset()
 				zBottom = worldspaceIt->second.zBottom;
 		}
 	}
-	allGood &= (worldspaceEnabled || settings.enableAllExteriorCells) && !inInterior && !inMainLoadingMenu;
+	bool allowForcedInterior = inInterior && settings.forceEnableAllInteriorCells;
+	allGood &= (worldspaceEnabled || settings.enableAllExteriorCells || allowForcedInterior) && (!inInterior || allowForcedInterior) && !inMainLoadingMenu;
 
 	if (!allGood) {
 		cbData.enabled = allGood;
