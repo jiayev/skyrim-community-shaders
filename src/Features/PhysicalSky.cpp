@@ -136,10 +136,13 @@ void PhysicalSky::SettingsGeneral()
 				ImGui::Text("Interior (Disabled)");
 			else if (auto worldspace = globals::game::tes->GetRuntimeData2().worldSpace; worldspace) {
 				std::string worldspaceName = worldspace->GetFormEditorID();
-				if (settings.worldspaceWhitelist.contains(worldspaceName))
-					ImGui::Text("%s (Enabled)", worldspaceName.c_str());
-				else
+				if (settings.worldspaceWhitelist.contains(worldspaceName)) {
+					ImGui::Text("%s (Enabled, Whitelist)", worldspaceName.c_str());
+				} else if (settings.enableAllExteriorCells) {
+					ImGui::Text("%s (Enabled, Fallback Z Bottom)", worldspaceName.c_str());
+				} else {
 					ImGui::Text("%s (Disabled)", worldspaceName.c_str());
+				}
 			}
 		}
 
@@ -503,16 +506,15 @@ void PhysicalSky::Reset()
 	bool inInterior = false;
 	bool inMainLoadingMenu = globals::game::ui && (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
 
-	WorldspaceInfo worldspaceInfo = {};
+	std::map<std::string, WorldspaceInfo>::const_iterator worldspaceIt = settings.worldspaceWhitelist.end();
 	float zBottom = settings.fallbackZBottom;
 	if (globals::game::tes) {
 		if (auto worldspace = globals::game::tes->GetRuntimeData2().worldSpace; worldspace) {
 			std::string worldspaceName = worldspace->GetFormEditorID();
-			worldspaceEnabled = settings.worldspaceWhitelist.contains(worldspaceName);
-			if (worldspaceEnabled) {
-				worldspaceInfo = settings.worldspaceWhitelist.at(worldspaceName);
-				zBottom = worldspaceInfo.zBottom;
-			}
+			worldspaceIt = settings.worldspaceWhitelist.find(worldspaceName);
+			worldspaceEnabled = worldspaceIt != settings.worldspaceWhitelist.end();
+			if (worldspaceEnabled)
+				zBottom = worldspaceIt->second.zBottom;
 		}
 		if (auto player = RE::PlayerCharacter::GetSingleton(); player) {
 			if (auto cell = player->GetParentCell(); cell) {
