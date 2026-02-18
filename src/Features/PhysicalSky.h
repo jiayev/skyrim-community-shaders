@@ -111,6 +111,7 @@ struct PhysicalSky final : public Feature
 			{ "DLC01FalmerValley", { 3000.f } },
 			{ "DLC2SolstheimWorld", { 256.f } }
 		};
+		float fallbackZBottom = 0.f;
 		float3 groundAlbedo = { .2f, .2f, .2f };
 
 		float planetRadius = 6.36e3f;      // in km
