@@ -111,7 +111,7 @@ void main()
 
         const float4 mainColor = MainTexture.SampleLevel(BaseSampler, uv, 0);
     
-        OutputTexture[idx] = float4(LLGammaToTrueLinear(mainColor.rgb), 0.0f);
+        OutputTexture[idx] = float4(ColorSpaceFromSRGB(LLGammaToTrueLinear(mainColor.rgb)), 0.0f);
         DiffuseAlbedoPathTracing[idx] = float4(0.0f, 0.0f, 0.0f, 1.0f);
         NormalRoughnessPathTracing[idx] = float4(0.0f, 0.0f, 0.0f, 1.0f);
         SpecularAlbedo[idx] = float4(0.5f, 0.5f, 0.5f, 0.0f);
@@ -164,7 +164,7 @@ void main()
         OutputTexture[idx] = float4(0.0f, 0.0f, 0.0f, 0.0f);
         SpecularAlbedo[idx] = float4(0.0f, 0.0f, 0.0f, 0.0f);
 #else
-        OutputTexture[idx] = float4(LLGammaToTrueLinear(mainColor.rgb), mainColor.a);
+        OutputTexture[idx] = float4(ColorSpaceFromSRGB(LLGammaToTrueLinear(mainColor.rgb)), mainColor.a);
         SpecularAlbedo[idx] = float4(0.5f, 0.5f, 0.5f, 0.0f);
         SpecularHitDist[idx] = RAY_TMAX;
 #endif
