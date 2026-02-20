@@ -292,13 +292,25 @@ void EditorWindow::ShowObjectsWindow()
 				}
 			}
 
+			// Stable user IDs for sortable columns — used instead of ColumnIndex so reordering/insertion won't break sorting.
+			enum ColumnID : ImGuiID
+			{
+				ColFav = 0,
+				ColEditorID,
+				ColFormID,
+				ColFile,
+				ColStatus,
+				ColJson
+			};
+
 			// Create a table for the right column with "Name" and "ID" headers. Different weights to prevent truncation.
-			if (ImGui::BeginTable("DetailsTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Sortable)) {
-				ImGui::TableSetupColumn("Fav", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, 25.0f);  // Favorite indicator
-				ImGui::TableSetupColumn("Editor ID", ImGuiTableColumnFlags_WidthStretch, 3.5f);                          // Largest - weather/template names
-				ImGui::TableSetupColumn("Form ID", ImGuiTableColumnFlags_WidthFixed, 80.0f);                             // Fixed - 8 hex chars
-				ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch, 2.0f);                               // Medium - plugin names
-				ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 1.5f);                             // Smaller - status text
+			if (ImGui::BeginTable("DetailsTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Sortable)) {
+				ImGui::TableSetupColumn("Fav", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, 38.0f, ColFav);  // Favorite indicator
+				ImGui::TableSetupColumn("Editor ID", ImGuiTableColumnFlags_WidthStretch, 3.5f, ColEditorID);                     // Largest - weather/template names
+				ImGui::TableSetupColumn("Form ID", ImGuiTableColumnFlags_WidthFixed, 90.0f, ColFormID);                          // Fixed - 8 hex chars
+				ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch, 2.0f, ColFile);                              // Medium - plugin names
+				ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 1.5f, ColStatus);                          // Smaller - status text
+				ImGui::TableSetupColumn("json", ImGuiTableColumnFlags_WidthFixed, 55.0f, ColJson);                               // JSON file / delete
 
 				ImGui::TableHeadersRow();
 
@@ -307,7 +319,26 @@ void EditorWindow::ShowObjectsWindow()
 					if (sortSpecs->SpecsDirty) {
 						if (sortSpecs->SpecsCount > 0) {
 							const ImGuiTableColumnSortSpecs& spec = sortSpecs->Specs[0];
-							currentSortColumn = static_cast<SortColumn>(spec.ColumnIndex);
+							switch (spec.ColumnUserID) {
+							case ColEditorID:
+								currentSortColumn = SortColumn::EditorID;
+								break;
+							case ColFormID:
+								currentSortColumn = SortColumn::FormID;
+								break;
+							case ColFile:
+								currentSortColumn = SortColumn::File;
+								break;
+							case ColStatus:
+								currentSortColumn = SortColumn::Status;
+								break;
+							case ColJson:
+								currentSortColumn = SortColumn::JsonAttachment;
+								break;
+							default:
+								currentSortColumn = SortColumn::None;
+								break;
+							}
 							sortAscending = (spec.SortDirection == ImGuiSortDirection_Ascending);
 						} else {
 							currentSortColumn = SortColumn::None;
@@ -332,6 +363,7 @@ void EditorWindow::ShowObjectsWindow()
 				for (const auto& w : widgets) {
 					sortedWidgets.push_back(w.get());
 				}
+				RefreshJsonAttachmentCache(sortedWidgets);
 				if (currentSortColumn != SortColumn::None) {
 					std::sort(sortedWidgets.begin(), sortedWidgets.end(), [this](Widget* a, Widget* b) {
 						int comparison = 0;
@@ -354,12 +386,40 @@ void EditorWindow::ShowObjectsWindow()
 								comparison = _stricmp(statusA.c_str(), statusB.c_str());
 								break;
 							}
+						case SortColumn::JsonAttachment:
+							{
+								bool aHasJson = HasCachedJsonAttachment(a);
+								bool bHasJson = HasCachedJsonAttachment(b);
+								comparison = static_cast<int>(aHasJson) - static_cast<int>(bHasJson);
+								break;
+							}
 						default:
 							break;
 						}
 						return sortAscending ? (comparison < 0) : (comparison > 0);
 					});
 				}
+
+				// Helper lambda: renders the JSON delete button column for a widget
+				auto drawJsonDeleteButton = [&](Widget* widget) {
+					ImGui::TableNextColumn();
+					if (HasCachedJsonAttachment(widget)) {
+						auto* menu = globals::menu;
+						if (menu && menu->uiIcons.deleteSettings.texture) {
+							const float iconSize = ImGui::GetFrameHeight() * 0.85f;
+							auto _style = Util::ErrorButtonStyle();
+							ImGui::SetNextItemAllowOverlap();
+							char idBuf[32];
+							snprintf(idBuf, sizeof(idBuf), "##jsondel_%s", widget->GetFormID().c_str());
+							if (ImGui::ImageButton(idBuf, menu->uiIcons.deleteSettings.texture, { iconSize, iconSize })) {
+								pendingDeleteWidget = widget;
+								pendingDeletePopupRequested = true;
+							}
+							if (ImGui::IsItemHovered())
+								ImGui::SetTooltip("Delete JSON file");
+						}
+					}
+				};
 
 				// Special handling for Cell Lighting category
 				if (selectedCategory == "Cell Lighting") {
@@ -424,6 +484,9 @@ void EditorWindow::ShowObjectsWindow()
 							// Status column
 							ImGui::TableNextColumn();
 							ImGui::Text("Interior Cell");
+
+							// json column (empty for cells - no standalone json)
+							ImGui::TableNextColumn();
 						} else {
 							// Show message that cell lighting is only for interior cells
 							ImGui::TableNextRow();
@@ -486,7 +549,7 @@ void EditorWindow::ShowObjectsWindow()
 
 						// Editor ID column with [CURRENT] prefix
 						bool isSelected = sortedWidgets[i]->IsOpen();
-						if (ImGui::Selectable(editorLabel.c_str(), isSelected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
+						if (ImGui::Selectable(editorLabel.c_str(), isSelected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap)) {
 							if (ImGui::IsMouseDoubleClicked(0)) {
 								sortedWidgets[i]->SetOpen(true);
 								AddToRecent(sortedWidgets[i]->GetEditorID(), selectedCategory);
@@ -531,6 +594,9 @@ void EditorWindow::ShowObjectsWindow()
 						if (markedRecord != settings.markedRecords.end()) {
 							ImGui::Text("%s", markedRecord->second.c_str());
 						}
+
+						// json / delete column
+						drawJsonDeleteButton(sortedWidgets[i]);
 					}
 				}
 
@@ -574,7 +640,7 @@ void EditorWindow::ShowObjectsWindow()
 
 					// Editor ID column
 					bool isSelected = sortedWidgets[i]->IsOpen();
-					if (ImGui::Selectable(editorLabel.c_str(), isSelected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
+					if (ImGui::Selectable(editorLabel.c_str(), isSelected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap)) {
 						if (ImGui::IsMouseDoubleClicked(0)) {
 							sortedWidgets[i]->SetOpen(true);
 							AddToRecent(sortedWidgets[i]->GetEditorID(), selectedCategory);
@@ -652,6 +718,9 @@ void EditorWindow::ShowObjectsWindow()
 					if (markedRecord != settings.markedRecords.end()) {
 						ImGui::Text("%s", markedRecord->second.c_str());
 					}
+
+					// json / delete column
+					drawJsonDeleteButton(sortedWidgets[i]);
 				}
 
 				ImGui::EndTable();  // End DetailsTable
@@ -662,6 +731,18 @@ void EditorWindow::ShowObjectsWindow()
 
 		ImGui::EndTable();  // End ObjectTable
 	}  // End if BeginTable("ObjectTable")
+
+	// Confirmation modal for json deletion - must be outside BeginChild so the modal can block the root window
+	if (pendingDeleteWidget) {
+		if (pendingDeletePopupRequested) {
+			ImGui::OpenPopup("ListDeleteConfirmation");
+			pendingDeletePopupRequested = false;
+		}
+		pendingDeleteWidget->DrawDeleteConfirmationModal("ListDeleteConfirmation");
+		if (!ImGui::IsPopupOpen("ListDeleteConfirmation")) {
+			pendingDeleteWidget = nullptr;
+		}
+	}
 
 	// End the window
 	ImGui::End();
@@ -1146,6 +1227,7 @@ void EditorWindow::SetupResources()
 {
 	Load();
 	PaletteWindow::GetSingleton()->Load();
+	InvalidateJsonAttachmentCache();
 
 	// Populate all widget collections using WidgetFactory templates
 	WidgetFactory::PopulateWidgets<WeatherWidget, RE::TESWeather>(weatherWidgets);
@@ -1793,6 +1875,43 @@ void EditorWindow::RenderNotifications()
 
 		ImGui::PopStyleVar(2);
 	}
+}
+
+void EditorWindow::RefreshJsonAttachmentCache(const std::vector<Widget*>& widgets)
+{
+	for (auto* widget : widgets) {
+		if (!widget) {
+			continue;
+		}
+		if (!jsonAttachmentCache.contains(widget)) {
+			jsonAttachmentCache.emplace(widget, widget->HasSavedFile());
+		}
+	}
+}
+
+bool EditorWindow::HasCachedJsonAttachment(Widget* widget) const
+{
+	if (!widget) {
+		return false;
+	}
+	if (auto it = jsonAttachmentCache.find(widget); it != jsonAttachmentCache.end()) {
+		return it->second;
+	}
+	return false;
+}
+
+void EditorWindow::InvalidateJsonAttachmentCache(Widget* widget)
+{
+	if (widget) {
+		jsonAttachmentCache.erase(widget);
+		return;
+	}
+	jsonAttachmentCache.clear();
+}
+
+void EditorWindow::OnWidgetJsonAttachmentChanged(Widget* widget)
+{
+	InvalidateJsonAttachmentCache(widget);
 }
 
 void EditorWindow::AddToRecent(const std::string& widgetId, const std::string& category)
