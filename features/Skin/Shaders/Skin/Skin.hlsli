@@ -135,7 +135,7 @@ namespace Skin
 									  L,
 									  material.Thickness) *
 		                          SharedData::skinData.sssParams.w;
-		lightingOutput.transmission = min(sssTransmittance * context.lightColor * material.BaseColor, context.lightColor);
+		lightingOutput.transmission = min(sssTransmittance * context.lightColor * context.softShadow * material.BaseColor, context.lightColor);
 	}
 
 	void SkinIndirectLobeWeights(
