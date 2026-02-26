@@ -100,8 +100,8 @@ namespace SharedData
 
 		bool EnableSplashes;
 		bool EnableRipples;
-        uint EnableVanillaRipples;
-        float RaindropFxRange;
+		uint EnableVanillaRipples;
+		float RaindropFxRange;
 
 		float RaindropGridSizeRcp;
 		float RaindropIntervalRcp;
@@ -218,14 +218,10 @@ namespace SharedData
 		float skyGamma;
 		float waterGamma;
 		float vlGamma;
-		float vanillaDiffuseMult;
-		float vanillaSpecularMult;
-		float grassDiffuseMult;
-		float grassSpecularMult;
 		float vanillaDiffuseColorMult;
-		float lightMult;
 		float directionalLightMult;
 		float pointLightMult;
+		float ambientMult;
 		float emitColorMult;
 		float glowmapMult;
 		float effectLightingMult;
@@ -240,6 +236,21 @@ namespace SharedData
 	{
 		uint Enabled;
 		uint3 _padding;
+	};
+
+	struct ExponentialHeightFogSettings
+	{
+		uint enabled;
+		uint useDynamicCubemaps;
+		float startDistance;
+		float fogHeight;
+		float fogHeightFalloff;
+		float fogDensity;
+		float directionalInscatteringMultiplier;
+		float directionalInscatteringExponent;
+		float4 inscatteringTint;
+		float cubemapMipLevel;
+		float3 pad;
 	};
 
 	struct SkinData
@@ -270,6 +281,7 @@ namespace SharedData
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
+		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		SkinData skinData;
 	};
 
