@@ -110,20 +110,21 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 #	if defined(SKIN) && defined(CS_SKIN)
 	if (SharedData::skinData.skinParams.w > 0.0f) {
 		Skin::SkinDirectLightInput(lightingOutput, context, material);
+		float3 softLightColor = context.lightColor * context.softShadow;
 
 		// SSS fallback for forward skin rendering
 #		if !defined(DEFERRED)
 		const float NdotL = dot(context.worldNormal, context.lightDir);
 #			if defined(SOFT_LIGHTING)
-		lightingOutput.diffuse += context.lightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor;
+		lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor;
 #			endif
 
 #			if defined(RIM_LIGHTING)
-		lightingOutput.diffuse += context.lightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor;
+		lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor;
 #			endif
 
 #			if defined(BACK_LIGHTING)
-		lightingOutput.diffuse += context.lightColor * saturate(-NdotL) * material.backLightColor;
+		lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor;
 #			endif
 #		endif
 		return;
