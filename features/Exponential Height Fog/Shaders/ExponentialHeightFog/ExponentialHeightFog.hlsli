@@ -8,7 +8,6 @@
 #endif
 
 #if defined(PHYSICAL_SKY)
-#	undef CLOUD_SHADOWS
 #	include "PhysicalSky/Common.hlsli"
 #endif
 

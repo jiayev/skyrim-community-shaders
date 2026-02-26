@@ -3008,7 +3008,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #		endif
 	if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z)
-		color.xyz = lerp(color.xyz, fogColor, Color::FogAlpha(input.FogParam.w));
+		color.xyz = lerp(color.xyz, fogColor, fogFactor);
 
 #		if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
