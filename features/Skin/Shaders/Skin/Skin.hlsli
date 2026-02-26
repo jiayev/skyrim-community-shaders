@@ -12,7 +12,7 @@ namespace Skin
 		const float3 dNdy = ddy(N);
 		return length(float2(dot(dNdx, dNdx), dot(dNdy, dNdy)));
 	}
-	
+
 #if defined(PSHADER)
 	cbuffer SkinPerGeometry : register(b7)
 	{
@@ -60,7 +60,7 @@ namespace Skin
 		                 float3(0.358, 0.004, 0.0) * exp(dd / 1.99) +
 		                 float3(0.078, 0.0, 0.0) * exp(dd / 7.41);
 
-		/** 
+		/**
 		* Using the profile, we finally approximate the transmitted lighting from
 		* the back of the object:
 		*/
@@ -90,13 +90,13 @@ namespace Skin
 		MaterialProperties material)
 	{
 		lightingOutput = (DirectLightingOutput)0;
-		context.lightColor *= Color::PBRLightingCompensation;
+		context.lightColor *= Color::PBRLightingCompensation * context.detailedShadow;
 
 		const float3 N = context.worldNormal;
 		const float3 V = context.viewDir;
 		const float3 L = context.lightDir;
 		const float3 H = context.halfVector;
-	
+
 		const float oNdotL = dot(N, L);
 		float NdotL = clamp(oNdotL, 1e-5, 1.0);
 		float NdotV = saturate(abs(dot(N, V)) + 1e-5);
@@ -129,12 +129,12 @@ namespace Skin
 		}
 
 		float3 sssTransmittance = SSSSTransmittance(
-								SharedData::skinData.sssParams.x,
-								SharedData::skinData.sssParams.y,
-								N,
-								L,
-								material.Thickness) *
-							SharedData::skinData.sssParams.w;
+									  SharedData::skinData.sssParams.x,
+									  SharedData::skinData.sssParams.y,
+									  N,
+									  L,
+									  material.Thickness) *
+		                          SharedData::skinData.sssParams.w;
 		lightingOutput.transmission = min(sssTransmittance * context.lightColor * material.BaseColor, context.lightColor);
 	}
 
@@ -207,7 +207,7 @@ namespace Skin
 		float3 bitangent = normalize(dFdy * dUVdx.x - dFdx * dUVdy.x);
 		tangent = normalize(tangent - worldNormal * dot(worldNormal, tangent));
 		bitangent = normalize(bitangent - worldNormal * dot(worldNormal, bitangent));
-		
+
 		return float3x3(tangent, bitangent, normalize(worldNormal));
 	}
 
@@ -220,7 +220,7 @@ namespace Skin
 
 		float det = dUVdx.x * dUVdy.y - dUVdx.y * dUVdy.x;
 		if (det == 0.0f) {
-			return float3(0, 0, 1); // Avoid division by zero
+			return float3(0, 0, 1);  // Avoid division by zero
 		}
 
 		float dHdx_Tex = (dHdx * dUVdy.y - dHdy * dUVdx.y) / det;
@@ -235,10 +235,9 @@ namespace Skin
 		float frequency = base_scale;
 		float amplitude = 1.0;
 		float max_amplitude = 0.0;
-		for (int i = 0; i < octaves; i++)
-		{
+		for (int i = 0; i < octaves; i++) {
 			total += amplitude * (Random::perlinNoise(float3(uv * frequency, (float)i * z_offset_multiplier)) + 1.0) * 0.5;
-			
+
 			max_amplitude += amplitude;
 			amplitude *= persistence;
 			frequency *= lacunarity;
@@ -251,12 +250,10 @@ namespace Skin
 
 	float PerlinNoise(float2 uv, float scale, float lacunarity, float persistence, float strength)
 	{
-		if (strength <= 0.001f)
-		{
+		if (strength <= 0.001f) {
 			return 0.0f;
 		}
-		if (strength >= 0.999f)
-		{
+		if (strength >= 0.999f) {
 			return 1.0f;
 		}
 		int octaves = 5;
@@ -270,8 +267,7 @@ namespace Skin
 
 		sweat_intensity = pow(sweat_intensity, 1.5f);
 
-		if (strength > 0.8f)
-		{
+		if (strength > 0.8f) {
 			sweat_intensity = sweat_intensity * saturate(0.99f - (strength - 0.8f) * 5.0f) + (strength - 0.8f) * 5.0f;
 		}
 		return pow(sweat_intensity, 0.1f);
@@ -285,7 +281,7 @@ namespace Skin
 
 		float waterWet = 0.0f;
 		float waterLevel = skinPerGeometry.z + skinPerGeometry.w;
-		
+
 		waterWet = skinPerGeometry.y * (1 - smoothstep(waterLevel - 2.5f, waterLevel + 2.5f, z));
 
 		float sweatWet = skinPerGeometry.x;

@@ -128,21 +128,23 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 #	endif
 #	if defined(SKIN) && defined(CS_SKIN)
 	if (SharedData::skinData.skinParams.w > 0.0f) {
+		float3 diffuseLightColor = context.lightColor * context.detailedShadow;
+		float3 softLightColor = context.lightColor * context.softShadow;
 		Skin::SkinDirectLightInput(lightingOutput, context, material);
 
 		// SSS fallback for forward skin rendering
 #		if !defined(DEFERRED)
 		const float NdotL = dot(context.worldNormal, context.lightDir);
 #			if defined(SOFT_LIGHTING)
-		lightingOutput.diffuse += context.lightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor;
+		lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor;
 #			endif
 
 #			if defined(RIM_LIGHTING)
-		lightingOutput.diffuse += context.lightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor;
+		lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor;
 #			endif
 
 #			if defined(BACK_LIGHTING)
-		lightingOutput.diffuse += context.lightColor * saturate(-NdotL) * material.backLightColor;
+		lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor;
 #			endif
 #		endif
 		return;
@@ -166,7 +168,7 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 
 #	if defined(VANILLA_FRESNEL)
 	if (SharedData::vanillaFresnelSettings.Enable && SharedData::vanillaFresnelSettings.EnableGGX) {
-		lightingOutput.specular = MicrofacetSpecular(context, material.F0, material.Roughness) * context.lightColor * Color::PBRLightingCompensation * Color::PBRLightingScale;
+		lightingOutput.specular = diffuseLightColor * MicrofacetSpecular(context, material.F0, material.Roughness) * Color::PBRLightingCompensation * Color::PBRLightingScale;
 
 		float2 specularBRDF = BRDF::EnvBRDF(material.Roughness, saturate(dot(context.worldNormal, context.viewDir)));
 		lightingOutput.specular *= 1 + material.F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
