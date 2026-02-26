@@ -5,6 +5,7 @@
 #include "LinearLighting.h"
 #include "SkySync.h"
 #include "TerrainShadows.h"
+#include "VolumetricShadows.h"
 
 #include "State.h"
 #include "Util.h"
@@ -710,8 +711,8 @@ void PhysicalSky::AccumShadow()
 	auto state = globals::state;
 	auto context = globals::d3d::context;
 
-	auto deferred = globals::deferred;
-	if (!deferred)
+	auto& volumetricShadows = globals::features::volumetricShadows;
+	if (!volumetricShadows.loaded)
 		return;
 	auto& terrainShadows = globals::features::terrainShadows;
 	auto& cloudShadows = globals::features::cloudShadows;
@@ -727,8 +728,8 @@ void PhysicalSky::AccumShadow()
 		auto sampler = sampTr.get();
 		auto srvs = std::array{
 			globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV,
-			deferred->shadowView,
-			deferred->perShadow->srv.get(),
+			volumetricShadows.shadowView,
+			volumetricShadows.perShadow->srv.get(),
 			terrainShadows.IsHeightMapReady() ? terrainShadows.texShadowHeight->srv.get() : nullptr,
 			cloudShadows.loaded ? cloudShadows.texCubemapCloudOcc->srv.get() : nullptr,
 		};
