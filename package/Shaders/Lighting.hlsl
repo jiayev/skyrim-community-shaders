@@ -2628,30 +2628,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float llDirLightMult = SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear && (inWorld || inReflection) && !SharedData::InInterior ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 dirLightColor = Color::DirectionalLight(DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
-<<<<<<< HEAD
-	float3 dirLightColorMultiplier = 1;
-
-#		if defined(PHYSICAL_SKY)
-	if (SharedData::physSkyData.enabled)
-		dirLightColor *= PhysSky::SampleTr(normalize(DirLightDirection.xyz), SampShadowMaskSampler);
-#		endif
-
-	== == == =
->>>>>>> parametric-sky
 
 #	if defined(EXP_HEIGHT_FOG)
-				 if (SharedData::exponentialHeightFogSettings.enabled)
-	{
+	if (SharedData::exponentialHeightFogSettings.enabled) {
 		dirLightColor *= ExponentialHeightFog::GetSunlightFogAttenuation(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
 	}
-<<<<<<< HEAD
-	== == == =
-#		endif
+#	endif
 
-#		if defined(PHYSICAL_SKY)
-				 if (SharedData::physSkyData.enabled)
-					 dirLightColor *= PhysSky::SampleTr(normalize(DirLightDirection.xyz), SampShadowMaskSampler);
->>>>>>> parametric-sky
+#	if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		dirLightColor *= PhysSky::SampleTr(normalize(DirLightDirection.xyz), SampShadowMaskSampler);
 #	endif
 
 #	if defined(WATER_EFFECTS)
@@ -3333,11 +3319,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #		endif
 	if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z)
-<<<<<<< HEAD
 		color.xyz = lerp(color.xyz, fogColor, fogFactor);
-	== == == =
-				 color.xyz = lerp(color.xyz, fogColor, Color::FogAlpha(input.FogParam.w));
->>>>>>> parametric-sky
 
 #		if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {

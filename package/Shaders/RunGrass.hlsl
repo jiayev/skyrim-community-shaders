@@ -354,9 +354,7 @@ struct PS_OUTPUT
 	float4 NormalGlossiness: SV_Target2;
 	float4 Albedo: SV_Target3;
 	float4 Specular: SV_Target4;
-#		if defined(TRUE_PBR)
 	float4 Reflectance: SV_Target5;
-#		endif  // TRUE_PBR
 	float4 Masks: SV_Target6;
 #		if defined(TRUE_PBR)
 	float4 Parameters: SV_Target7;
