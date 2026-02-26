@@ -13,6 +13,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PhysicalSky::Settings,
 	enabled,
 	enableAllExteriorCells,
+	forceEnableAllInteriorCells,
 	overrideDirLight,
 	halfResApShadow,
 	tonemapper,
@@ -42,6 +43,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ozoneAltitude,
 	ozoneThickness,
 	ozoneAbsorption,
+	fallbackZBottom,
 	cloudRelightMix,
 	cloudOriginalMix,
 	silverLiningMix,
@@ -125,21 +127,35 @@ void PhysicalSky::SettingsGeneral()
 		ImGui::TableNextColumn();
 		ImGui::Text("Worldspace: ");
 		ImGui::TableNextColumn();
-		if (RE::TES::GetSingleton()) {
-			bool inInterior = false;
-			if (auto player = RE::PlayerCharacter::GetSingleton(); player)
-				if (auto cell = player->GetParentCell(); cell)
-					inInterior = cell->IsInteriorCell();
+		auto* tes = globals::game::tes ? globals::game::tes : RE::TES::GetSingleton();
+		auto* player = RE::PlayerCharacter::GetSingleton();
+		auto* cell = player ? player->GetParentCell() : nullptr;
+		bool inInterior = cell && cell->IsInteriorCell();
 
-			if (inInterior)
+		if (inInterior) {
+			if (settings.forceEnableAllInteriorCells)
+				ImGui::Text("Interior (Enabled, Forced)");
+			else
 				ImGui::Text("Interior (Disabled)");
-			else if (auto worldspace = RE::TES::GetSingleton()->GetRuntimeData2().worldSpace; worldspace) {
+		} else if (tes) {
+			auto* worldspace = tes->GetRuntimeData2().worldSpace;
+			if (!worldspace && cell)
+				worldspace = cell->GetRuntimeData().worldSpace;
+
+			if (worldspace) {
 				std::string worldspaceName = worldspace->GetFormEditorID();
-				if (settings.worldspaceWhitelist.contains(worldspaceName))
-					ImGui::Text("%s (Enabled)", worldspaceName.c_str());
-				else
+				if (settings.worldspaceWhitelist.contains(worldspaceName)) {
+					ImGui::Text("%s (Enabled, Whitelist)", worldspaceName.c_str());
+				} else if (settings.enableAllExteriorCells) {
+					ImGui::Text("%s (Enabled, Fallback Z Bottom)", worldspaceName.c_str());
+				} else {
 					ImGui::Text("%s (Disabled)", worldspaceName.c_str());
+				}
+			} else {
+				ImGui::Text("Unknown (Worldspace Unavailable)");
 			}
+		} else {
+			ImGui::Text("Unknown (TES Unavailable)");
 		}
 
 		ImGui::EndTable();
@@ -148,6 +164,13 @@ void PhysicalSky::SettingsGeneral()
 	ImGui::Checkbox("Enabled", &settings.enabled);
 	ImGui::SameLine();
 	ImGui::Checkbox("Enable All Exterior Cells", &settings.enableAllExteriorCells);
+	ImGui::SameLine();
+	ImGui::Checkbox("Force Enable All Interior Cells", &settings.forceEnableAllInteriorCells);
+	if (settings.enableAllExteriorCells || settings.forceEnableAllInteriorCells) {
+		ImGui::InputFloat("Fallback Z Bottom", &settings.fallbackZBottom, 10.f, 100.f, "%.1f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Used when current worldspace is not in whitelist (or worldspace data is unavailable), including forced interiors.");
+	}
 
 	ImGui::SeparatorText("Post Processing");
 	{
@@ -497,21 +520,27 @@ void PhysicalSky::Reset()
 	bool inInterior = false;
 	bool inMainLoadingMenu = globals::game::ui && (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
 
-	WorldspaceInfo worldspaceInfo = {};
-	if (RE::TES::GetSingleton()) {
-		if (auto worldspace = RE::TES::GetSingleton()->GetRuntimeData2().worldSpace; worldspace) {
+	std::map<std::string, WorldspaceInfo>::const_iterator worldspaceIt = settings.worldspaceWhitelist.end();
+	float zBottom = settings.fallbackZBottom;
+	auto* tes = globals::game::tes ? globals::game::tes : RE::TES::GetSingleton();
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	auto* cell = player ? player->GetParentCell() : nullptr;
+	inInterior = cell && cell->IsInteriorCell();
+	if (tes) {
+		auto* worldspace = tes->GetRuntimeData2().worldSpace;
+		if (!worldspace && cell)
+			worldspace = cell->GetRuntimeData().worldSpace;
+
+		if (worldspace) {
 			std::string worldspaceName = worldspace->GetFormEditorID();
-			worldspaceEnabled = settings.worldspaceWhitelist.contains(worldspaceName);
+			worldspaceIt = settings.worldspaceWhitelist.find(worldspaceName);
+			worldspaceEnabled = worldspaceIt != settings.worldspaceWhitelist.end();
 			if (worldspaceEnabled)
-				worldspaceInfo = settings.worldspaceWhitelist.at(worldspaceName);
-		}
-		if (auto player = RE::PlayerCharacter::GetSingleton(); player) {
-			if (auto cell = player->GetParentCell(); cell) {
-				inInterior = cell->IsInteriorCell();
-			}
+				zBottom = worldspaceIt->second.zBottom;
 		}
 	}
-	allGood &= (worldspaceEnabled || settings.enableAllExteriorCells) && !inInterior && !inMainLoadingMenu;
+	bool allowForcedInterior = inInterior && settings.forceEnableAllInteriorCells;
+	allGood &= (worldspaceEnabled || settings.enableAllExteriorCells || allowForcedInterior) && (!inInterior || allowForcedInterior) && !inMainLoadingMenu;
 
 	if (!allGood) {
 		if (skySync.loaded && skySync.settings.Enabled)
@@ -553,7 +582,7 @@ void PhysicalSky::Reset()
 		.enabled = allGood,
 		.tonemapper = linearLighting.settings.enableLinearLighting ? 0 : settings.tonemapper,
 		.vanillaMix = settings.vanillaMix,
-		.zBottom = worldspaceInfo.zBottom,
+		.zBottom = zBottom,
 		.rPlanet = settings.planetRadius / Util::Units::GAME_UNIT_TO_KM,
 		.rAtmosphere = settings.atmosphereRadius / Util::Units::GAME_UNIT_TO_KM,
 		.groundAlbedo = settings.groundAlbedo,

@@ -19,8 +19,8 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
-#include "Features/RenderDoc.h"
 #include "Features/PseudoSunBounce.h"
+#include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/ScreenSpaceRayTracing.h"
@@ -35,9 +35,10 @@
 #include "Features/TerrainVariation.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
-#include "Features/VanillaFresnel.h"
 #include "Features/VR.h"
+#include "Features/VanillaFresnel.h"
 #include "Features/VolumetricLighting.h"
+#include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
 #include "Features/WeatherEditor.h"
 #include "Features/WetnessEffects.h"
@@ -60,6 +61,7 @@ namespace globals
 	{
 		CloudShadows cloudShadows{};
 		DynamicCubemaps dynamicCubemaps{};
+		VolumetricShadows volumetricShadows{};
 		ExtendedMaterials extendedMaterials{};
 		GrassCollision grassCollision{};
 		GrassLighting grassLighting{};
@@ -123,6 +125,7 @@ namespace globals
 		RE::Sky* sky = nullptr;
 		RE::UI* ui = nullptr;
 		RE::Calendar* calendar = nullptr;
+		std::atomic<bool> quitGame{ false };
 
 		RE::BSGraphics::PixelShader** currentPixelShader = nullptr;
 		RE::BSGraphics::VertexShader** currentVertexShader = nullptr;
@@ -215,6 +218,7 @@ namespace globals
 	void OnDataLoaded()
 	{
 		using namespace game;
+		tes = RE::TES::GetSingleton();
 		sky = RE::Sky::GetSingleton();
 		utilityShader = RE::BSUtilityShader::GetSingleton();
 
@@ -222,6 +226,13 @@ namespace globals
 
 		bShadowsOnGrass = RE::GetINISetting("bShadowsOnGrass:Display");
 		shadowMaskQuarter = RE::GetINISetting("iShadowMaskQuarter:Display");
+	}
+
+	void OnGameWindowClose()
+	{
+		game::quitGame = true;
+		if (shaderCache)
+			shaderCache->StopCompilation();
 	}
 
 	/**
