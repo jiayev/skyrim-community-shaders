@@ -110,6 +110,12 @@ namespace Util
 		std::filesystem::path GetAppliedOverridesPath();
 
 		/**
+		 * Gets the SceneSettings directory path
+		 * @return CommunityShaderPath / "SceneSettings"
+		 */
+		std::filesystem::path GetSceneSettingsPath();
+
+		/**
 		 * Gets the main Shaders directory path
 		 * @return Data / "Shaders"
 		 */
@@ -201,6 +207,13 @@ namespace Util
 		 * @param path The directory path to ensure exists
 		 */
 		void EnsureDirectoryExists(const std::filesystem::path& path);
+
+		/**
+		 * Replaces Windows-invalid filename characters with underscore.
+		 * @param name Filename or path component to sanitize
+		 * @return Sanitized string safe for use as a filename
+		 */
+		std::string SanitizeFileName(std::string name);
 	}
 
 	/**

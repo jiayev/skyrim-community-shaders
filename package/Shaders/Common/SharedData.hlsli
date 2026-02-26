@@ -100,8 +100,8 @@ namespace SharedData
 
 		bool EnableSplashes;
 		bool EnableRipples;
-        uint EnableVanillaRipples;
-        float RaindropFxRange;
+		uint EnableVanillaRipples;
+		float RaindropFxRange;
 
 		float RaindropGridSizeRcp;
 		float RaindropIntervalRcp;
@@ -238,9 +238,23 @@ namespace SharedData
 		uint3 _padding;
 	};
 
+	struct ExponentialHeightFogSettings
+	{
+		uint enabled;
+		uint useDynamicCubemaps;
+		float startDistance;
+		float fogHeight;
+		float fogHeightFalloff;
+		float fogDensity;
+		float directionalInscatteringMultiplier;
+		float directionalInscatteringExponent;
+		float4 inscatteringTint;
+		float cubemapMipLevel;
+		float3 pad;
+	};
+
 	struct PhysSkyData
 	{
-		
 		// DYNAMIC
 		float2 texDim;
 		float2 rcpTexDim;  //
@@ -274,18 +288,18 @@ namespace SharedData
 		float2 cloudShadowRemapRange;
 
 		float aerosolFalloff;
-		float aerosolPhaseG; //
+		float aerosolPhaseG;  //
 		float3 aerosolScatter;
 		uint halfResApShadow;  //
 		float3 aerosolAbsorption;
-		
+
 		float rayleighFalloff;
 		float3 rayleighScatter;  //
 
 		float ozoneAltitude;  //
 		float ozoneThickness;
 		float3 ozoneAbsorption;  //
-		
+
 		// CLOUDS (VANILLA)
 		float cloudRelightMix;
 		float cloudOriginalMix;
@@ -310,6 +324,7 @@ namespace SharedData
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
+		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		PhysSkyData physSkyData;
 	};
 

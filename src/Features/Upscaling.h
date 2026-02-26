@@ -59,6 +59,7 @@ public:
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
 		float sharpnessDLSS = 0.0f;
+		uint presetDLSS = 0;  // 0=Default, 1=J, 2=K, 3=L, 4=M
 	};
 
 	Settings settings;
@@ -147,7 +148,6 @@ public:
 	eastl::unique_ptr<Texture2D> vrIntermediateMotionVectors[2];     // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateReactiveMask[2];      // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateTransparencyMask[2];  // per-eye render resolution
-	bool vrResourcesAllocated[2] = { false, false };
 
 	// Helper to create/resize per-eye buffers matching source formats
 	void CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
@@ -210,7 +210,6 @@ public:
 
 	// Unified interface methods - external code should use these instead of direct access
 	void LoadUpscalingSDKs();  // Loads all SDKs at once
-	void CheckFrameConstants();
 	void SetUIBuffer();
 	HANDLE GetFrameLatencyWaitableObject() const;
 	float GetFrameTime() const;
@@ -231,6 +230,11 @@ public:
 	void CreateProxySwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
 	void CreateProxyInterop();
 	IDXGISwapChain* GetProxySwapChain();
+
+	using BlurResources = DX12SwapChain::BlurResources;
+
+	// Get all D3D11 resources needed for background blur when D3D12 swap chain is active
+	BlurResources GetBlurResources() const;
 
 private:
 	struct Main_UpdateJitter
