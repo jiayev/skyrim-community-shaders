@@ -1,3 +1,6 @@
+#ifndef CLOUD_SHADOWS_HLSLI
+#define CLOUD_SHADOWS_HLSLI
+
 #ifndef CLOUD_SHADOW_REGISTER
 #	define CLOUD_SHADOW_REGISTER t25
 #endif
@@ -26,10 +29,11 @@ namespace CloudShadows
 	float GetCloudShadowMult(float3 worldPosition, SamplerState textureSampler)
 	{
 		float cloudDist = IntersectCloudDist(worldPosition, SharedData::DirLightDirection.xyz);
-		if(cloudDist < 0)
+		if (cloudDist < 0)
 			return 1;
 		float3 cloudSampleDir = worldPosition + cloudDist * SharedData::DirLightDirection.xyz;
 		float cloudCubeSample = CloudShadowsTexture.SampleLevel(textureSampler, cloudSampleDir, 0).x;
 		return lerp(1.0, 1.0 - cloudCubeSample, SharedData::cloudShadowsSettings.Opacity);
 	}
 }
+#endif
