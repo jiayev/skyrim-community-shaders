@@ -472,6 +472,8 @@ void HDR::LoadSettings(json& o_json)
 {
 	std::lock_guard<std::mutex> lock(settingsMutex);
 
+	bool oldEnableHDR = settings.enableHDR;
+
 	// Check if this is first launch (no enableHDR setting saved)
 	bool isFirstLaunch = !o_json.contains("enableHDR");
 
@@ -482,6 +484,11 @@ void HDR::LoadSettings(json& o_json)
 		bool hdrMonitor = DetectHDRDisplay();
 		settings.enableHDR = hdrMonitor;
 		logger::info("[HDR] First launch detected - auto-configuring HDR based on display: {}", hdrMonitor ? "enabled" : "disabled");
+	}
+
+	if (settings.enableHDR != oldEnableHDR) {
+		UpdateHDRData();
+		UpdateSwapChainColorSpace();
 	}
 }
 
@@ -582,9 +589,10 @@ void HDR::SetupResources()
 
 	UpdateHDRData();
 
-	// Eagerly compile compute shaders so availability is known before first frame
 	GetHDROutputCS();
 	GetUIBrightnessCS();
+
+	UpgradeLDRRenderTargets();
 }
 
 void HDR::BeginUIRendering()
@@ -693,9 +701,21 @@ void HDR::RestoreFramebuffer()
 
 void HDR::SetUIBuffer()
 {
-	// Skip if D3D12 frame gen is active - it has its own UI buffer handling
-	if (globals::features::upscaling.d3d12SwapChainActive)
+	auto& fb = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kFRAMEBUFFER];
+
+	// Handle Frame Generation case - redirect to FG's UI buffer
+	if (globals::features::upscaling.d3d12SwapChainActive) {
+		auto& upscaling = globals::features::upscaling;
+		if (!upscaling.dx12SwapChain.uiBufferWrapped || !upscaling.dx12SwapChain.uiBufferWrapped->rtv)
+			return;
+
+		float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		globals::d3d::context->ClearRenderTargetView(upscaling.dx12SwapChain.uiBufferWrapped->rtv, clearColor);
+
+		fb.RTV = upscaling.dx12SwapChain.uiBufferWrapped->rtv;
+		globals::d3d::context->OMSetRenderTargets(1, &fb.RTV, nullptr);
 		return;
+	}
 
 	// SDR mode: vanilla UI composites directly to kFRAMEBUFFER, no redirect needed
 	if (!settings.enableHDR)
@@ -709,12 +729,9 @@ void HDR::SetUIBuffer()
 	if (!uiTexture || !uiTexture->rtv || !hdrDataCB || !outputTexture)
 		return;
 
-	// Redirect kFRAMEBUFFER.RTV to our UI texture so vanilla UI renders to it
-	auto& data = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kFRAMEBUFFER];
-
 	// Save original RTV for restoration after Present
 	if (!savedFramebufferRTV) {
-		savedFramebufferRTV = data.RTV;
+		savedFramebufferRTV = fb.RTV;
 	}
 
 	// Clear UI texture before vanilla UI renders
@@ -722,8 +739,8 @@ void HDR::SetUIBuffer()
 	globals::d3d::context->ClearRenderTargetView(uiTexture->rtv.get(), clearColor);
 
 	// Redirect to our UI texture
-	data.RTV = uiTexture->rtv.get();
-	globals::d3d::context->OMSetRenderTargets(1, &data.RTV, nullptr);
+	fb.RTV = uiTexture->rtv.get();
+	globals::d3d::context->OMSetRenderTargets(1, &fb.RTV, nullptr);
 }
 
 void HDR::ClearUIBuffer()
@@ -896,6 +913,97 @@ void HDR::DestroyResources()
 		delete hdrDataCB;
 		hdrDataCB = nullptr;
 	}
+
+	RestoreLDRRenderTargets();
+}
+
+void HDR::UpgradeLDRRenderTargets()
+{
+	auto renderer = globals::game::renderer;
+	auto device = globals::d3d::device;
+
+	static const RE::RENDER_TARGETS::RENDER_TARGET ldrTargets[] = {
+		RE::RENDER_TARGETS::kLDR_DOWNSAMPLE0,
+		RE::RENDER_TARGETS::kLDR_BLURSWAP,
+		RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY,
+		RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2,
+		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
+		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
+	};
+
+	for (auto targetId : ldrTargets) {
+		auto& rt = renderer->GetRuntimeData().renderTargets[targetId];
+		if (!rt.texture)
+			continue;
+
+		D3D11_TEXTURE2D_DESC origDesc{};
+		rt.texture->GetDesc(&origDesc);
+
+		if (origDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+			continue;
+
+		SavedRenderTarget saved;
+		saved.texture = rt.texture;
+		saved.RTV = rt.RTV;
+		saved.SRV = rt.SRV;
+
+		D3D11_TEXTURE2D_DESC newDesc = origDesc;
+		newDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+		ID3D11Texture2D* newTexture = nullptr;
+		if (FAILED(device->CreateTexture2D(&newDesc, nullptr, &newTexture)))
+			continue;
+
+		ID3D11RenderTargetView* newRTV = nullptr;
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+		rtvDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+		rtvDesc.Texture2D.MipSlice = 0;
+		if (FAILED(device->CreateRenderTargetView(newTexture, &rtvDesc, &newRTV))) {
+			newTexture->Release();
+			continue;
+		}
+
+		ID3D11ShaderResourceView* newSRV = nullptr;
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.MipLevels = 1;
+		if (FAILED(device->CreateShaderResourceView(newTexture, &srvDesc, &newSRV))) {
+			newRTV->Release();
+			newTexture->Release();
+			continue;
+		}
+
+		rt.texture = newTexture;
+		rt.RTV = newRTV;
+		rt.SRV = newSRV;
+
+		savedLDRTargets.push_back({ targetId, saved });
+		logger::info("[HDR] Upgraded render target {} to R16G16B16A16_FLOAT (was format {})", static_cast<int>(targetId), static_cast<int>(origDesc.Format));
+	}
+}
+
+void HDR::RestoreLDRRenderTargets()
+{
+	auto renderer = globals::game::renderer;
+
+	for (auto& [targetId, saved] : savedLDRTargets) {
+		auto& rt = renderer->GetRuntimeData().renderTargets[targetId];
+
+		if (rt.texture)
+			rt.texture->Release();
+		if (rt.RTV)
+			rt.RTV->Release();
+		if (rt.SRV)
+			rt.SRV->Release();
+
+		rt.texture = saved.texture;
+		rt.RTV = saved.RTV;
+		rt.SRV = saved.SRV;
+	}
+	savedLDRTargets.clear();
 }
 
 void HDR::ClearShaderCache()
@@ -1030,18 +1138,14 @@ void HDR::UpdateHDRData() const
 	float effectivePeakNits = static_cast<float>(settings.hdrPeakNits);
 
 	HDRDataCB data;
-
-	data.parameters0 = DirectX::XMVectorSet(
-		settings.enableHDR ? 1.f : 0.f,
-		static_cast<float>(settings.hdrPaperWhite),
-		effectivePeakNits,
-		skipUIComposite ? 1.f : 0.f);
-	// UI brightness only used when HDR is enabled
-	float uiBrightness = settings.hdrUIBrightness;
-	data.parameters1 = DirectX::XMVectorSet(
-		uiBrightness,
-		isSceneLinear ? 1.f : 0.f,
-		0.f, 0.f);
+	data.enableHDR = settings.enableHDR ? 1.f : 0.f;
+	data.paperWhite = static_cast<float>(settings.hdrPaperWhite);
+	data.peakNits = effectivePeakNits;
+	data.skipUIComposite = skipUIComposite ? 1.f : 0.f;
+	data.uiBrightness = settings.hdrUIBrightness;
+	data.isSceneLinear = isSceneLinear ? 1.f : 0.f;
+	data.pad0 = 0.f;
+	data.pad1 = 0.f;
 	hdrDataCB->Update(data);
 }
 

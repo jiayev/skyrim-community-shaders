@@ -63,10 +63,10 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	// Use better swap effect to prevent tearing and improve performance
 	pSwapChainDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 
-	// Upgrade swap chain format to HDR10 (R10G10B10A2_UNORM) for HDR output
-	logger::info("[Upscaling] Original swap chain format: {}", static_cast<int>(pSwapChainDesc->BufferDesc.Format));
-	pSwapChainDesc->BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
-	logger::info("[Upscaling] Upgraded swap chain format to: {}", static_cast<int>(pSwapChainDesc->BufferDesc.Format));
+	if (globals::features::hdrDisplay.loaded) {
+		logger::info("[Upscaling] Upgrading swap chain format from {} to R10G10B10A2_UNORM for HDR", static_cast<int>(pSwapChainDesc->BufferDesc.Format));
+		pSwapChainDesc->BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+	}
 
 	bool shouldProxy = !globals::game::isVR;
 	if (shouldProxy)
@@ -1286,8 +1286,11 @@ void Upscaling::PostDisplay()
 	globals::game::renderer->UpdateViewPort(0, 0, 1);
 	UpdateCameraData();
 
-	if (d3d12SwapChainActive)
-		SetUIBuffer();
+	if (d3d12SwapChainActive) {
+		auto hdr = HDR::GetSingleton();
+		if (hdr)
+			hdr->SetUIBuffer();
+	}
 
 	globals::state->UpdateSharedData(false, false);
 }
@@ -1461,11 +1464,6 @@ void Upscaling::LoadUpscalingSDKs()
 	// This ensures all SDKs are available before any D3D device creation
 	streamline.LoadInterposer();
 	fidelityFX.LoadFFX();  // Only for frame generation now
-}
-
-void Upscaling::SetUIBuffer()
-{
-	dx12SwapChain.SetUIBuffer();
 }
 
 HANDLE Upscaling::GetFrameLatencyWaitableObject() const

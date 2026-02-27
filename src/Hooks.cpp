@@ -372,18 +372,14 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
 
-	// Upgrade swap chain to HDR10 format (R10G10B10A2_UNORM)
 	DXGI_SWAP_CHAIN_DESC modifiedDesc = *pSwapChainDesc;
-	modifiedDesc.BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
-	logger::info("[HDR] Upgrading D3D11 swap chain format from {} to R10G10B10A2_UNORM (24)", static_cast<int>(pSwapChainDesc->BufferDesc.Format));
 
-	// FLIP_DISCARD is required for SetColorSpace1 (HDR10 PQ output)
-	// Without it, the swap chain stays in sRGB mode and PQ-encoded data looks black
 	if (globals::features::hdrDisplay.loaded) {
+		modifiedDesc.BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
 		modifiedDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 		if (modifiedDesc.BufferCount < 2)
 			modifiedDesc.BufferCount = 2;
-		logger::info("[HDR] Set swap chain to FLIP_DISCARD for HDR color space support");
+		logger::info("[HDR] Upgraded swap chain: R10G10B10A2_UNORM + FLIP_DISCARD");
 	}
 
 	auto ret = ptrD3D11CreateDeviceAndSwapChain(pAdapter,
@@ -588,9 +584,6 @@ namespace Hooks
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
 			globals::state->ModifyRenderTarget(a_target, a_properties);
-			// Always use 16-bit HDR format for kMAIN render target
-			a_properties->format = RE::BSGraphics::Format::kR16G16B16A16_FLOAT;
-			logger::info("HDR: Upgrading kMAIN render target to R16G16B16A16_FLOAT");
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
