@@ -144,10 +144,6 @@ PS_OUTPUT main(PS_INPUT input)
 			inputColor = Color::TrueLinearToGamma(inputColor);
 		}
 
-		if (isHDR) {
-			inputColor = Color::pq::Encode(inputColor, sRGB_WhiteLevelNits);
-		}
-
 		psout.Color = float4(inputColor, 1.0);
 
 		return psout;
@@ -208,7 +204,7 @@ PS_OUTPUT main(PS_INPUT input)
 		hdrLinear *= Cinematic.w;
 
 		hdrGamma = Color::LinearToGamma(hdrLinear);
-		hdrGamma = lerp(avgValue.x, hdrGamma, (Cinematic.z * 0.5 + 0.5) + 0.25 * exteriorBoost); // Contrast adjustment around scene average. prevents crushing blacks in HDR.
+		hdrGamma = lerp(avgValue.x, hdrGamma, (Cinematic.z * 0.5 + 0.5) + 0.25 * exteriorBoost);  // Contrast adjustment around scene average. prevents crushing blacks in HDR.
 		hdrLinear = Color::GammaToLinear(hdrGamma);
 
 #		if defined(FADE)

@@ -33,8 +33,7 @@ cbuffer PerFrame : register(b0)
 
 static const float UI_REFERENCE_NITS = 80.0;
 
-[numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
-{
+[numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
 	uint width, height;
 	HDROutput.GetDimensions(width, height);
 	if (dispatchID.x >= width || dispatchID.y >= height)
@@ -51,9 +50,13 @@ static const float UI_REFERENCE_NITS = 80.0;
 	if (hdrEnabled) {
 		// Scene arrives gamma-encoded BT.709 from ISHDR (post-DICE tonemapping).
 		// Convert to linear, then BT.2020, then PQ for HDR10 output.
-		float3 sceneLinear = Color::GammaToLinear(max(0.0, scene.rgb));
+		float3 sceneLinear = scene.rgb;
+		float3 sceneBT2020 = sceneLinear;
 
-		float3 sceneBT2020 = Color::BT709ToBT2020(sceneLinear);
+		if (!SharedData::postProcessingSettings.DisableVanillaTonemapping) {
+			sceneLinear = Color::GammaToLinear(max(0.0, sceneLinear));
+			sceneBT2020 = Color::BT709ToBT2020(sceneLinear);
+		}
 		sceneBT2020 = max(sceneBT2020, 0.0);
 
 		if (skipUI) {
