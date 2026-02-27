@@ -207,10 +207,10 @@ namespace Hair
 			T = ShiftTangent(T, N, shift);
 		}
 
-		float transmission = SharedData::hairSpecularSettings.Transmission * context.hairShadow * context.detailedShadow;
+		float shadow = context.hairShadow * context.detailedShadow;
 
-		dirTransmission += D_Marschner(L, V, T, roughness, baseColor, 0, 1) * lightColor * transmission * SharedData::hairSpecularSettings.SpecularMult;
-		dirTransmission += GetHairDiffuseAttenuationKajiyaKay(T, V, L, context.detailedShadow, baseColor) * lightColor * transmission * SharedData::hairSpecularSettings.DiffuseMult;
+		dirTransmission += D_Marschner(L, V, T, roughness, baseColor, 0, SharedData::hairSpecularSettings.Transmission) * lightColor * shadow * SharedData::hairSpecularSettings.SpecularMult;
+		dirTransmission += GetHairDiffuseAttenuationKajiyaKay(T, V, L, shadow, baseColor) * lightColor * shadow * SharedData::hairSpecularSettings.DiffuseMult;
 	}
 
 	void GetHairDirectLight(out DirectLightingOutput lightingOutput, DirectContext context, MaterialProperties material, float3x3 tbnTr, float2 uv)
@@ -220,9 +220,6 @@ namespace Hair
 		const float3 N = normalize(context.vertexNormal);
 		const float3 VN = normalize(tbnTr[2]);
 		const float3 L = normalize(context.lightDir);
-
-		float3 lightColor = context.lightColor;
-		float selfShadow = context.hairShadow * context.softShadow;
 
 		if (SharedData::hairSpecularSettings.HairMode == 0) {
 			GetHairDirectLightScheuermann(lightingOutput.diffuse, lightingOutput.specular, lightingOutput.transmission, T, L, V, N, VN, context, material.Shininess, uv, material.BaseColor);
