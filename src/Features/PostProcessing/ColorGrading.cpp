@@ -211,11 +211,16 @@ struct TonemapperInfo
 				"Tonemapper designed for Gran Turismo 7. HDR output is automatically enabled when HDR Display feature is active."sv,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::Checkbox("HDR Output (not working for now)", (bool*)&params[0].y);
-					if (params[0].y)
-						ImGui::InputFloat("HDR Max Brightness", &params[0].z, 0.f, 0.f, "%1.f nits");
+					auto* hdr = HDR::GetSingleton();
+					bool hdrEnabled = hdr && hdr->settings.enableHDR;
+					if (hdrEnabled) {
+						ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), ICON_FA_CHECK " HDR Output Active");
+						ImGui::Text("Peak Brightness: %.0f nits (from HDR settings)", static_cast<float>(hdr->settings.hdrPeakNits));
+					} else {
+						ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "SDR Output (HDR Display not enabled)");
+					}
 				},
-				{ f4{ 1.f, 0.f, 400.f, 0.f } } }
+				{ f4{ 1.f, 0.f, 1000.f, 0.f } } }
 		};
 
 		static std::once_flag flag;
@@ -593,8 +598,7 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	auto profile = settings.profile;
 
 	ColorCB colorCBData = {
-		.asccdl = {
-			profile.params[0],
+		.asccdl = { profile.params[0],
 			profile.params[1],
 			profile.params[2] },
 		.liftgammagain = { profile.params[3], profile.params[4], profile.params[5] },
