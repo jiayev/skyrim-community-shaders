@@ -592,20 +592,6 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	ambientColor = Color::IrradianceToGamma(ambientColor);
 #		endif
 
-#		if defined(IBL)
-	if (SharedData::iblSettings.EnableDiffuseIBL) {
-		if (!SharedData::InInterior || SharedData::iblSettings.EnableInterior) {
-			ambientColor = Color::IrradianceToLinear(color);
-#			if defined(SKYLIGHTING)
-			ambientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(float3(0, 0, -1), skylightingDiffuse), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
-#			else
-			ambientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(float3(0, 0, -1)), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
-#			endif
-			ambientColor = Color::IrradianceToGamma(ambientColor);
-		}
-	}
-#		endif
-
 	color = dirColor + ambientColor;
 
 #		if defined(LIGHT_LIMIT_FIX)
@@ -858,16 +844,18 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float effectNormalization = 1.0;
 #	if defined(IBL) && !defined(LIGHTING) && !defined(DEFERRED) && !defined(BLOOD)
-	if (SharedData::iblSettings.EnableDiffuseIBL && SharedData::iblSettings.EffectNormalization && (!SharedData::InInterior || SharedData::iblSettings.EnableInterior) && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
-		float directionalAmbientColorLuminance = Color::RGBToLuminance(
-			max(0, mul(SharedData::DirectionalAmbient, float4(0, 0, 0, 1.0))));
-#		if defined(SKYLIGHTING)
-		float3 iblColor = ImageBasedLighting::GetIBLColor(float3(0, 0, 0), 1);
-#		else
-		float3 iblColor = ImageBasedLighting::GetIBLColor(float3(0, 0, 0));
-#		endif
-		float iblLuminance = Color::RGBToLuminance(iblColor);
-		effectNormalization = iblLuminance * SharedData::iblSettings.DiffuseIBLScale + directionalAmbientColorLuminance * SharedData::iblSettings.DALCAmount;
+	if (SharedData::iblSettings.EnableIBL && SharedData::iblSettings.EffectNormalization && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
+		float3 ambientLevel = 0;
+		if (SharedData::iblSettings.DALCMode == 2) {
+			// Mode 2: keep vanilla DALC, add sky IBL overlay
+			ambientLevel = Color::Ambient(max(0, mul(SharedData::DirectionalAmbient, float4(0, 0, 0, 1.0))));
+			ambientLevel += ImageBasedLighting::GetSkyIBLColor(float3(0, 0, 0));
+		} else {
+			// Mode 0/1: replace with envIBL + skyIBL
+			ambientLevel = ImageBasedLighting::GetEnvIBLColor(float3(0, 0, 0));
+			ambientLevel += ImageBasedLighting::GetSkyIBLColor(float3(0, 0, 0));
+		}
+		effectNormalization = Color::RGBToLuminance(ambientLevel);
 		effectNormalization *= SharedData::iblSettings.EffectNormalizationMult;
 		effectNormalization = max(effectNormalization, SharedData::iblSettings.MinEffectMult);
 	}
@@ -891,7 +879,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float fogFactor = Color::FogAlpha(input.FogParam.w);
 	float3 fogColor = Color::Fog(input.FogParam.xyz);
 #		if defined(IBL)
-	if (SharedData::iblSettings.EnableDiffuseIBL && !SharedData::InInterior) {
+	if (SharedData::iblSettings.EnableIBL) {
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
 	}
 #		endif
