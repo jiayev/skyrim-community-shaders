@@ -13,8 +13,10 @@
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
+#include "Features/VolumetricShadows.h"
 #include "Features/WeatherEditor.h"
 #include "Menu.h"
+#include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "ShaderCache.h"
 #include "TruePBR.h"
@@ -27,15 +29,18 @@ void State::Draw()
 	ZoneScoped;
 
 	auto shaderCache = globals::shaderCache;
-	auto deferred = globals::deferred;
 	auto& terrainBlending = globals::features::terrainBlending;
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
 	auto& weatherEditor = globals::features::weatherEditor;
 	auto truePBR = globals::truePBR;
 	auto context = globals::d3d::context;
+	auto& volumetricShadows = globals::features::volumetricShadows;
 
 	if (shaderCache->IsEnabled()) {
+		// Process deferred cell transitions (interior detection)
+		SceneSettingsManager::GetSingleton()->Update();
+
 		if (weatherEditor.loaded) {
 			ZoneScopedN("WeatherManager::UpdateFeatures");
 			WeatherManager::GetSingleton()->UpdateFeatures();
@@ -69,7 +74,8 @@ void State::Draw()
 		if (currentShader && updateShader) {
 			if (currentShader->shaderType.get() == RE::BSShader::Type::Utility) {
 				if (currentPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
-					deferred->CopyShadowData();
+					if (volumetricShadows.loaded)
+						volumetricShadows.CopyShadowData();
 				}
 			}
 		}
@@ -174,6 +180,9 @@ void State::Setup()
 
 	// Load per-weather settings after features are setup
 	WeatherManager::GetSingleton()->LoadPerWeatherSettingsFromDisk();
+
+	// Load scene-specific settings (Interior Only, etc.)
+	SceneSettingsManager::GetSingleton()->LoadAll();
 }
 
 static std::string GetConfigPath(State::ConfigMode a_configMode)
@@ -845,11 +854,14 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		// Populate HDR data only when HDR Display feature is loaded
 		// When not loaded, ISHDR.hlsl uses the SDR branch (HDRData.x = 0)
 		auto* hdr = HDR::GetSingleton();
+		bool isMainOrLoading = globals::game::ui &&
+		                       (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) ||
+								   globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
 		data.HDRData = {
 			hdr->settings.enableHDR ? 1.0f : 0.0f,
 			static_cast<float>(hdr->settings.hdrPaperWhite),
 			static_cast<float>(hdr->settings.hdrPeakNits),
-			0.0f
+			isMainOrLoading ? 1.0f : 0.0f
 		};
 
 		sharedDataCB->Update(data);
@@ -863,10 +875,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		delete[] data;
 	}
 
-	const auto& depth = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-	auto& terrainBlending = globals::features::terrainBlending;
-	auto srv = (terrainBlending.loaded && terrainBlending.settings.Enabled ? terrainBlending.blendedDepthTexture16->srv.get() : depth.depthSRV);
-
+	auto* srv = Util::GetCurrentSceneDepthSRV(true);
 	globals::d3d::context->PSSetShaderResources(17, 1, &srv);
 }
 

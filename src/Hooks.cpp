@@ -172,37 +172,7 @@ namespace EffectExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			func(shader, pass, renderFlags);
-
-			auto state = globals::state;
-
-			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::EffectShadows);
-
-			if (auto* shaderProperty = static_cast<RE::BSShaderProperty*>(pass->geometry->GetGeometryRuntimeData().properties[1].get())) {
-				if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kUniformScale)) {
-					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::EffectShadows);
-				}
-			}
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-}
-
-namespace LightingExtensions
-{
-	struct BSLightingShader_SetupGeometry
-	{
-		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
-		{
-			func(shader, pass, renderFlags);
-
-			auto state = globals::state;
-
-			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
-
-			if (auto userData = pass->geometry->GetUserData())
-				if (auto baseObject = userData->GetBaseObject())
-					if (baseObject->As<RE::TESObjectTREE>())
-						state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
+			globals::state->permutationData.EffectRadius = pass->geometry->worldBound.radius;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -404,18 +374,14 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
 
-	// Upgrade swap chain to HDR10 format (R10G10B10A2_UNORM)
 	DXGI_SWAP_CHAIN_DESC modifiedDesc = *pSwapChainDesc;
-	modifiedDesc.BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
-	logger::info("[HDR] Upgrading D3D11 swap chain format from {} to R10G10B10A2_UNORM (24)", static_cast<int>(pSwapChainDesc->BufferDesc.Format));
 
-	// FLIP_DISCARD is required for SetColorSpace1 (HDR10 PQ output)
-	// Without it, the swap chain stays in sRGB mode and PQ-encoded data looks black
 	if (globals::features::hdrDisplay.loaded) {
+		modifiedDesc.BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
 		modifiedDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 		if (modifiedDesc.BufferCount < 2)
 			modifiedDesc.BufferCount = 2;
-		logger::info("[HDR] Set swap chain to FLIP_DISCARD for HDR color space support");
+		logger::info("[HDR] Upgraded swap chain: R10G10B10A2_UNORM + FLIP_DISCARD");
 	}
 
 	auto ret = ptrD3D11CreateDeviceAndSwapChain(pAdapter,
@@ -491,8 +457,13 @@ struct BSShaderRenderTargets_Create
 	 *
 	 * Invokes the original function, then reinitializes global state and performs necessary setup for rendering targets.
 	 */
+	static inline Util::GameSetting iNumFocusShadow{ "Number of Focus Shadows (INI)",
+		"Controls the number of focus shadows.",
+		REL::Relocate<uintptr_t>(0, 0, 0x1ed6368), 4, 0, 4 };
+
 	static void thunk()
 	{
+		Util::SetGameSettingValue<std::int32_t>("iNumFocusShadow:Display", iNumFocusShadow, 0);
 		func();
 		globals::ReInit();
 		globals::state->Setup();
@@ -594,6 +565,9 @@ namespace Hooks
 			if ((a_msg == WM_KILLFOCUS || a_msg == WM_SETFOCUS) && menu->initialized) {
 				menu->focusChanged = true;
 			}
+			if (a_msg == WM_CLOSE) {
+				globals::OnGameWindowClose();
+			}
 			return func(a_hwnd, a_msg, a_wParam, a_lParam);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -616,9 +590,6 @@ namespace Hooks
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
 			globals::state->ModifyRenderTarget(a_target, a_properties);
-			// Always use 16-bit HDR format for kMAIN render target
-			a_properties->format = RE::BSGraphics::Format::kR16G16B16A16_FLOAT;
-			logger::info("HDR: Upgrading kMAIN render target to R16G16B16A16_FLOAT");
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -1038,7 +1009,6 @@ namespace Hooks
 
 		logger::info("Installing SetupGeometry hooks");
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
-		stl::write_vfunc<0x6, LightingExtensions::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + REL::Relocate(0x45B, 0x4F5));
 		stl::write_vfunc<0x6, GrassExtensions::BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
 

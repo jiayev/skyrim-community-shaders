@@ -15,6 +15,7 @@
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
+#include "Features/VR.h"
 #include "Features/WeatherEditor.h"
 
 #include "Hooks.h"
@@ -114,7 +115,7 @@ void Deferred::SetupResources()
 		// Specular
 		SetupRenderTarget(SPECULAR, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 		// Reflectance
-		SetupRenderTarget(REFLECTANCE, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, miscFlags);
+		SetupRenderTarget(REFLECTANCE, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, miscFlags);
 		// Normal + Roughness
 		SetupRenderTarget(NORMALROUGHNESS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R10G10B10A2_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 		// Masks
@@ -142,81 +143,6 @@ void Deferred::SetupResources()
 
 		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointSampler));
-	}
-
-	{
-		D3D11_BUFFER_DESC sbDesc{};
-		sbDesc.Usage = D3D11_USAGE_DEFAULT;
-		sbDesc.CPUAccessFlags = 0;
-		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		srvDesc.Buffer.FirstElement = 0;
-
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
-		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		uavDesc.Buffer.FirstElement = 0;
-		uavDesc.Buffer.Flags = 0;
-
-		std::uint32_t numElements = 1;
-
-		sbDesc.StructureByteStride = sizeof(PerGeometry);
-		sbDesc.ByteWidth = sizeof(PerGeometry) * numElements;
-		perShadow = new Buffer(sbDesc);
-		srvDesc.Buffer.NumElements = numElements;
-		perShadow->CreateSRV(srvDesc);
-		uavDesc.Buffer.NumElements = numElements;
-		perShadow->CreateUAV(uavDesc);
-
-		copyShadowCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\CopyShadowDataCS.hlsl", {}, "cs_5_0"));
-	}
-}
-
-void Deferred::CopyShadowData()
-{
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "CopyShadowData");
-
-	auto context = globals::d3d::context;
-
-	ID3D11UnorderedAccessView* uavs[1]{ perShadow->uav.get() };
-	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-	ID3D11Buffer* buffers[3];
-	context->PSGetConstantBuffers(0, 3, buffers);
-	context->PSGetConstantBuffers(12, 1, buffers + 1);
-
-	context->CSSetConstantBuffers(0, 3, buffers);
-
-	context->CSSetShader(copyShadowCS, nullptr, 0);
-
-	context->Dispatch(1, 1, 1);
-
-	uavs[0] = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-	std::fill(buffers, buffers + ARRAYSIZE(buffers), nullptr);
-	context->CSSetConstantBuffers(0, 3, buffers);
-
-	context->CSSetShader(nullptr, nullptr, 0);
-
-	{
-		context->PSGetShaderResources(4, 1, &shadowView);
-
-		ID3D11ShaderResourceView* srvs[2]{
-			shadowView,
-			perShadow->srv.get(),
-		};
-
-		context->PSSetShaderResources(18, ARRAYSIZE(srvs), srvs);
-
-		// Release COM object to prevent memory leak
-		if (shadowView)
-			shadowView->Release();
 	}
 }
 
@@ -411,7 +337,6 @@ void Deferred::DeferredPasses()
 	if (dynamicCubemaps.loaded)
 		dynamicCubemaps.UpdateCubemap();
 
-	auto& terrainBlending = globals::features::terrainBlending;
 	auto& ibl = globals::features::ibl;
 
 	auto& physSky = globals::features::physicalSky;
@@ -425,7 +350,7 @@ void Deferred::DeferredPasses()
 			albedo.SRV,
 			normalRoughness.SRV,
 			masks.SRV,
-			dynamicCubemaps.loaded || REL::Module::IsVR() ? (terrainBlending.loaded && terrainBlending.settings.Enabled ? terrainBlending.blendedDepthTexture16->srv.get() : depth.depthSRV) : nullptr,
+			dynamicCubemaps.loaded || REL::Module::IsVR() ? Util::GetCurrentSceneDepthSRV(true) : nullptr,
 			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,
 			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,
 			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,
@@ -457,6 +382,12 @@ void Deferred::DeferredPasses()
 
 		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 	}
+
+	// VR stereo consistency blend - depth-aware bilateral blend at the eye seam
+	// Runs after composite as a general safety net for all screen-space effects.
+	// Must run before clearing b12/b13 -- needs FrameBuffer matrices for reprojection.
+	if (globals::game::isVR)
+		globals::features::vr.DrawStereoBlend();
 
 	// Clear
 	{
@@ -555,7 +486,7 @@ void Deferred::OverrideBlendStates()
 								blendDesc.RenderTarget[i].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
 								blendDesc.RenderTarget[i].BlendOpAlpha = D3D11_BLEND_OP_ADD;
 								blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-							}; 
+							};
 
 							// Normals, motion vectors and geometry normals must use alpha blending
 							setAlphaBlending(1);

@@ -9,7 +9,6 @@
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
 #include "Utils/UI.h"
-#include "VR.h"
 #include <Windows.h>
 #include <algorithm>
 #include <directx/d3dx12.h>
@@ -66,10 +65,10 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	// Use better swap effect to prevent tearing and improve performance
 	pSwapChainDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 
-	// Upgrade swap chain format to HDR10 (R10G10B10A2_UNORM) for HDR output
-	logger::info("[Upscaling] Original swap chain format: {}", static_cast<int>(pSwapChainDesc->BufferDesc.Format));
-	pSwapChainDesc->BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
-	logger::info("[Upscaling] Upgraded swap chain format to: {}", static_cast<int>(pSwapChainDesc->BufferDesc.Format));
+	if (globals::features::hdrDisplay.loaded) {
+		logger::info("[Upscaling] Upgrading swap chain format from {} to R10G10B10A2_UNORM for HDR", static_cast<int>(pSwapChainDesc->BufferDesc.Format));
+		pSwapChainDesc->BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+	}
 
 	bool shouldProxy = !globals::game::isVR;
 	if (shouldProxy)
@@ -1096,24 +1095,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	// Disable dynamic resolution unless the game explicitly enables it
 	if (!globals::game::isVR)
 		runtimeData.dynamicResolutionLock = 1;
-
-	// If running in VR and an external upscaler is active, force-disable
-	// the engine's depth-buffer culling immediately. This ensures that
-	// enabling upscaling at runtime (after game load) does not leave the
-	// VR depth-buffer culling enabled which can cause incorrect occlusion.
-	if (globals::game::isVR) {
-		auto& vr = globals::features::vr;
-		if (IsUpscalingActive()) {
-			if (vr.gDepthBufferCulling) {
-				if (*vr.gDepthBufferCulling) {
-					*vr.gDepthBufferCulling = false;
-					logger::info("[Upscaling] VR detected - forcing depth buffer culling OFF due to active downscaling upscaler (scale={})", resolutionScale.x);
-				}
-			} else {
-				logger::warn("[Upscaling] VR depth buffer culling pointer is null, cannot force disable");
-			}
-		}
-	}
 }
 
 void Upscaling::SetupResources()
@@ -1307,8 +1288,11 @@ void Upscaling::PostDisplay()
 	globals::game::renderer->UpdateViewPort(0, 0, 1);
 	UpdateCameraData();
 
-	if (d3d12SwapChainActive)
-		SetUIBuffer();
+	if (d3d12SwapChainActive) {
+		auto hdr = HDR::GetSingleton();
+		if (hdr)
+			hdr->SetUIBuffer();
+	}
 
 	globals::state->UpdateSharedData(false, false);
 }
@@ -1482,11 +1466,6 @@ void Upscaling::LoadUpscalingSDKs()
 	// This ensures all SDKs are available before any D3D device creation
 	streamline.LoadInterposer();
 	fidelityFX.LoadFFX();  // Only for frame generation now
-}
-
-void Upscaling::SetUIBuffer()
-{
-	dx12SwapChain.SetUIBuffer();
 }
 
 HANDLE Upscaling::GetFrameLatencyWaitableObject() const

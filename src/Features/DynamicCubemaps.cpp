@@ -476,7 +476,7 @@ void DynamicCubemaps::UpdateCubemap()
 	TracyD3D11Zone(globals::state->tracyCtx, "Cubemap Update");
 
 	// Reset capture when game time jumps (wait menu, timescale changes, console commands)
-	if (auto calendar = RE::Calendar::GetSingleton()) {
+	if (auto calendar = globals::game::calendar) {
 		float currentHoursPassed = calendar->GetHoursPassed();
 		float hoursPassedDiff = std::abs(currentHoursPassed - previousHoursPassed);
 		previousHoursPassed = currentHoursPassed;
@@ -611,8 +611,7 @@ void DynamicCubemaps::SetupResources()
 		envCapturePositionReflectionsTexture->CreateSRV(srvDesc);
 		envCapturePositionReflectionsTexture->CreateUAV(uavDesc);
 
-		// Always use HDR format for environment maps
-		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
 		srvDesc.Format = texDesc.Format;
 		uavDesc.Format = texDesc.Format;
 

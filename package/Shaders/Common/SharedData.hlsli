@@ -101,8 +101,8 @@ namespace SharedData
 
 		bool EnableSplashes;
 		bool EnableRipples;
-        uint EnableVanillaRipples;
-        float RaindropFxRange;
+		uint EnableVanillaRipples;
+		float RaindropFxRange;
 
 		float RaindropGridSizeRcp;
 		float RaindropIntervalRcp;
@@ -262,7 +262,6 @@ namespace SharedData
 
 	struct PhysSkyData
 	{
-		
 		// DYNAMIC
 		float2 texDim;
 		float2 rcpTexDim;  //
@@ -296,18 +295,18 @@ namespace SharedData
 		float2 cloudShadowRemapRange;
 
 		float aerosolFalloff;
-		float aerosolPhaseG; //
+		float aerosolPhaseG;  //
 		float3 aerosolScatter;
 		uint halfResApShadow;  //
 		float3 aerosolAbsorption;
-		
+
 		float rayleighFalloff;
 		float3 rayleighScatter;  //
 
 		float ozoneAltitude;  //
 		float ozoneThickness;
 		float3 ozoneAbsorption;  //
-		
+
 		// CLOUDS (VANILLA)
 		float cloudRelightMix;
 		float cloudOriginalMix;
@@ -316,12 +315,12 @@ namespace SharedData
 	};
 
 	struct RaytracingSettings
-    {
-        float InteriorDirectional;
-        float Ambient;
-        float EnvMap;
-        uint Albedo;
-    }; // had to add this here to pass test
+	{
+		float InteriorDirectional;
+		float Ambient;
+		float EnvMap;
+		uint Albedo;
+	};  // had to add this here to pass test
 
 	cbuffer FeatureData : register(b6)
 	{
