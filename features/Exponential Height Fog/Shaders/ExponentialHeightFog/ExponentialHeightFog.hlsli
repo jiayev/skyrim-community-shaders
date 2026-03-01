@@ -7,6 +7,11 @@
 #	include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #endif
 
+#if defined(PHYSICAL_SKY)
+#	undef CLOUD_SHADOWS
+#	include "PhysicalSky/Common.hlsli"
+#endif
+
 namespace ExponentialHeightFog
 {
 	float4 GetExponentialHeightFog(float3 positionWS, float3 cameraWS, float3 fogColor)
@@ -54,7 +59,14 @@ namespace ExponentialHeightFog
 
 		// Calculate directional light inscattering
 		if (SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier > 0) {
-			float3 directionalLightInscattering = SharedData::DirLightColor.xyz * pow(saturate(dot(normalize(positionWS), SharedData::DirLightDirection.xyz)), SharedData::exponentialHeightFogSettings.directionalInscatteringExponent) / (2 * Math::TAU);
+			float3 dirLightColor = SharedData::DirLightColor.xyz;
+#if defined(PHYSICAL_SKY) && defined(COMMON_PHYS_SKY_HLSLI)
+			if (SharedData::physSkyData.enabled) {
+				float3 physSkyTransmittance = PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampColorSampler);
+				dirLightColor *= saturate(physSkyTransmittance);
+			}
+#endif
+			float3 directionalLightInscattering = dirLightColor * pow(saturate(dot(normalize(positionWS), SharedData::DirLightDirection.xyz)), SharedData::exponentialHeightFogSettings.directionalInscatteringExponent) / (2 * Math::TAU);
 			float dirExponentialHeightLineIntegral = exponentialHeightLineIntegralCalc * max(rayLength - SharedData::exponentialHeightFogSettings.startDistance, 0);
 			float dirExpFogFactor = saturate(exp2(-dirExponentialHeightLineIntegral));
 			directionalInscattering = directionalLightInscattering * (1 - dirExpFogFactor) * SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier;

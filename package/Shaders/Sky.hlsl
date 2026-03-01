@@ -213,7 +213,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(PS_CLOUDS)
 	float psCloudDist = 1e3f / 1.428e-2;
 	float3 viewDir = normalize(input.WorldPosition.xyz);
-#		if defined(CLOUD_SHADOWS) 
+#		if defined(CLOUD_SHADOWS)
 	if (SharedData::physSkyData.enabled)
 		psCloudDist = CloudShadows::IntersectCloudDist(float3(0, 0, 0), viewDir);
 #		endif
@@ -234,7 +234,7 @@ PS_OUTPUT main(PS_INPUT input)
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
 
-#		if defined(PS_CLOUDS) && defined(CLOUD_SHADOWS) 
+#		if defined(PS_CLOUDS) && defined(CLOUD_SHADOWS)
 	if (SharedData::physSkyData.enabled)
 		baseColor.rgb = PhysSky::RelightCloud(baseColor, viewDir, float3(0, 0, 0) + viewDir * psCloudDist, PhysSky::SampTr, SampBaseSampler);
 #		endif
@@ -271,10 +271,9 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color = float4(0, 0, 0, 1.0);
 #	endif  // OCCLUSION
 
-#if defined(PHYSICAL_SKY)
-	if (SharedData::physSkyData.enabled)
-	{
-# 		if defined(DITHER) && !defined(TEX)
+#	if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+#		if defined(DITHER) && !defined(TEX)
 		// SKY
 		float3 skyColor = PhysSky::SampleSky(normalize(input.WorldPosition.xyz), input.Position.xy, PhysSky::SampSv);
 		psout.Color.xyz = lerp(skyColor, psout.Color.xyz, SharedData::physSkyData.vanillaMix);
@@ -285,8 +284,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		elif defined(DEFERRED) && defined(TEX)
 		float3 sunDir = normalize(SharedData::physSkyData.sunDir);
 		float cosTheta = saturate(dot(normalize(input.WorldPosition.xyz), sunDir));
-		if (cosTheta > SharedData::physSkyData.sunDiskCos && SharedData::physSkyData.sunDiskCos > 0.0)
-		{
+		if (cosTheta > SharedData::physSkyData.sunDiskCos && SharedData::physSkyData.sunDiskCos > 0.0) {
 			float sunDiskSin = sqrt(1.0 - SharedData::physSkyData.sunDiskCos * SharedData::physSkyData.sunDiskCos);
 			float tanTheta = sqrt(1.0 - cosTheta * cosTheta) / cosTheta;
 			float normDist = tanTheta * SharedData::physSkyData.sunDiskCos * rcp(sunDiskSin);
@@ -303,52 +301,12 @@ PS_OUTPUT main(PS_INPUT input)
 		}
 #		endif
 	}
-#endif
+#	endif
 
 	float2 screenMotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 
 	psout.MotionVectors = float4(screenMotionVector, 0, psout.Color.w);
 	psout.Normal = float4(0.5, 0.5, 0, psout.Color.w);
-
-// #	if defined(DEFERRED) && defined(CLOUDS) && defined(CLOUD_SHADOWS) && defined(PHYSICAL_SKY)
-// 	float3 viewPosition = normalize(input.WorldPosition.xyz);
-// 	float brightness = saturate(dot(SharedData::DirLightDirection.xyz, viewPosition) * 0.5 + 0.5);
-
-// 	if (brightness > 0.0 && baseColor.w > 0.0)
-// 	{
-// 		float noise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
-
-// 		float rayStep = 1.0 / 32.0;
-// 		float rayPos = rayStep * noise; 
-// 		float4 rayShadow = 0.0;
-
-// 		float3 startPosition = viewPosition;
-// 		float3 endPosition = SharedData::DirLightDirection.xyz;
-
-// 		float3 PoissonDisc[] = {
-// 			float3(0.460921f, 0.615192f, 0.887539f),
-// 			float3(0.757347f, 0.911008f, 0.189581f),
-// 			float3(0.548753f, 0.145482f, 0.0548723f),
-// 			float3(0.90051f, 0.157048f, 0.623493f)
-// 		};
-
-// 		for(int i = 0; i < 4; i++)
-// 		{		
-// 			float3 raySample = normalize(lerp(startPosition, endPosition, rayPos));
-
-// 			raySample += (PoissonDisc[i] * 2.0 - 1.0) * 0.01;
-
-// 			if (raySample.z < 0.0)
-// 				rayShadow[i % 4] += -raySample.z; // World shadow
-// 			else
-// 				rayShadow[i % 4] = max(rayShadow[i % 4], CloudShadows::CloudShadowsTexture.SampleLevel(SampBaseSampler, raySample, 0).x);
-
-// 			rayPos += rayStep;
-// 		}
-
-// 		psout.Color.xyz += baseColor.a * baseColor.xyz * brightness * (1.0 - saturate(dot(rayShadow, 0.25))) * SharedData::DirLightColor.xyz;
-// 	}
-// #	endif
 
 #	if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
 	psout.CloudShadows = float4(1, 1, 1, psout.Color.w);
