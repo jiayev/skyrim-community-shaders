@@ -1,4 +1,5 @@
 
+#include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -159,13 +160,11 @@ Texture2D<float4> SSRTexture : register(t16);
 
 	float3 linAlbedo = Color::IrradianceToLinear(albedo / Color::PBRLightingScale);
 
-	float3 multiBounceAO = Color::MultiBounceAO(linAlbedo, ssgiAo);
-
-	linDiffuseColor *= sqrt(multiBounceAO);
+	linDiffuseColor *= sqrt(ssgiAo);
 
 	diffuseColor = Color::IrradianceToGamma(linDiffuseColor);
 
-	diffuseColor += Color::IrradianceToGamma(Color::IrradianceToLinear(directionalAmbientColor) * multiBounceAO);
+	diffuseColor += Color::IrradianceToGamma(Color::IrradianceToLinear(directionalAmbientColor) * ssgiAo);
 
 	linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
 
@@ -179,8 +178,8 @@ Texture2D<float4> SSRTexture : register(t16);
 	float3 reflectance = ReflectanceTexture[dispatchID.xy];
 
 	if (reflectance.x > 0.0 || reflectance.y > 0.0 || reflectance.z > 0.0) {
-		float3 V = normalize(positionWS.xyz);
-		float3 R = reflect(V, normalWS);
+		float3 V = -normalize(positionWS.xyz);
+		float3 R = reflect(-V, normalWS);
 
 		float roughness = 1.0 - glossiness;
 		float level = roughness * 7.0;

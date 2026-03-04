@@ -868,7 +868,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (!(SharedData::vanillaFresnelSettings.Enable && SharedData::vanillaFresnelSettings.EnableGGXOnGrass))
 #				endif
 		specularColor *= specColor.w * SharedData::grassLightingSettings.SpecularStrength;
-	specularColor = Color::IrradianceToLinear(specularColor);
 #			endif
 
 #			if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
