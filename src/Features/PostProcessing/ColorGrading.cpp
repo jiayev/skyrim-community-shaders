@@ -4,7 +4,7 @@
 #include "Util.h"
 
 #include "ColourSpace.h"
-#include "Features/HDR.h"
+#include "Features/HDRDisplay.h"
 #include "Features/PostProcessing.h"
 
 #include <DDSTextureLoader.h>
@@ -211,11 +211,16 @@ struct TonemapperInfo
 				"Tonemapper designed for Gran Turismo 7. HDR output is automatically enabled when HDR Display feature is active."sv,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::Checkbox("HDR Output (not working for now)", (bool*)&params[0].y);
-					if (params[0].y)
-						ImGui::InputFloat("HDR Max Brightness", &params[0].z, 0.f, 0.f, "%1.f nits");
+					auto& hdr = globals::features::hdrDisplay;
+					bool enableHDR = hdr.loaded && hdr.settings.enableHDR;
+					if (enableHDR) {
+						ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), ICON_FA_CHECK " HDR Output Active");
+						ImGui::Text("Peak Brightness: %.0f nits (from HDR settings)", static_cast<float>(hdr.settings.hdrPeakNits));
+					} else {
+						ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "SDR Output (HDR Display not enabled)");
+					}
 				},
-				{ f4{ 1.f, 0.f, 400.f, 0.f } } }
+				{ f4{ 1.f, 0.f, 1000.f, 0.f } } }
 		};
 
 		static std::once_flag flag;
@@ -591,10 +596,10 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	RE::ImageSpaceData imageSpaceData = pp.imageSpaceManager->gameISData;
 
 	auto profile = settings.profile;
+	auto& hdr = globals::features::hdrDisplay;
 
 	ColorCB colorCBData = {
-		.asccdl = {
-			profile.params[0],
+		.asccdl = { profile.params[0],
 			profile.params[1],
 			profile.params[2] },
 		.liftgammagain = { profile.params[3], profile.params[4], profile.params[5] },
@@ -621,12 +626,10 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		.enableColorSpaceTransform = settings.enableColorSpaceTransform,
 		// Auto-populate HDR settings from HDR feature
 		.enableHDR = [&]() -> uint {
-			auto* hdr = HDR::GetSingleton();
-			return (hdr && hdr->settings.enableHDR) ? 1u : 0u;
+			return (hdr.loaded && hdr.settings.enableHDR) ? 1u : 0u;
 		}(),
 		.hdrPeakNits = [&]() -> float {
-			auto* hdr = HDR::GetSingleton();
-			return (hdr && hdr->settings.enableHDR) ? static_cast<float>(hdr->settings.hdrPeakNits) : 1000.f;
+			return (hdr.loaded && hdr.settings.enableHDR) ? static_cast<float>(hdr.settings.hdrPeakNits) : 1000.f;
 		}()
 	};
 	colorCB->Update(colorCBData);
