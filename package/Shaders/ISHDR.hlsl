@@ -198,22 +198,13 @@ PS_OUTPUT main(PS_INPUT input)
 		hdrGamma = lerp(hdrGamma, hdrLuminanceGamma * Tint.xyz, Tint.w);
 
 		hdrLinear = Color::GammaToLinear(hdrGamma);
-		hdrLinear *= (Cinematic.w);
+		hdrLinear *= Cinematic.w;
 
-		hdrGamma = Color::LinearToGamma(hdrLinear);
-
-		// Vanilla contrast with shadow lift to prevent black crush
-		float contrastAmount = (Cinematic.z * 0.5 + 0.5);
-		hdrGamma = lerp(avgValue.x, hdrGamma, contrastAmount);
-
-		// Shadow lift: Gently raise blacks to prevent crushing while maintaining contrast
-		// This adds a subtle S-curve that protects shadows
-		float shadowLift = 0.03;  // Subtle lift amount
-		float shadowRange = 0.2;  // Affects values below this threshold
-		float3 shadowMask = saturate((shadowRange - hdrGamma) / shadowRange);
-		hdrGamma += shadowMask * shadowLift * shadowMask;  // Quadratic falloff for natural look
-
-		hdrLinear = Color::GammaToLinear(hdrGamma);
+		// Power-curve contrast pivoted around photographic midgrey (0.18 linear).
+		// Cinematic.z maps from [-1, 1] to a [0.5, 1.5] exponent: 1.0 = neutral,
+		// >1.0 deepens blacks and lifts highlights without crushing toward a variable grey pivot.
+		float contrastExp = Cinematic.z * 0.5 + 1.0;
+		hdrLinear = 0.18 * pow(max(0, hdrLinear / 0.18), contrastExp);
 
 #		if defined(FADE)
 		hdrLinear = lerp(hdrLinear, Fade.xyz, Fade.w);
@@ -226,7 +217,11 @@ PS_OUTPUT main(PS_INPUT input)
 		float pw = paperWhiteNits / sRGB_WhiteLevelNits;
 		float peak = peakNits / sRGB_WhiteLevelNits;
 		hdrLinear *= pw;
-		hdrLinear = DisplayMapping::DICETonemap(hdrLinear, peak, 0.5, CS_BT709, CS_BT709);
+
+		// Shoulder anchored per Luma Framework DICE defaults.
+		// ShoulderStart = 1/3 means compression starts at 33% of peak, giving highlights a gentle, perceptually-correct rolloff curve.
+		float shoulderStart = 1.0 / 3.0;
+		hdrLinear = DisplayMapping::DICETonemap(hdrLinear, peak, shoulderStart, CS_BT709, CS_BT709);
 
 		// Output gamma-encoded BT.709 to kFRAMEBUFFER (float16).
 		// BT.2020 conversion and PQ encoding happen in HDROutputCS after all post-processing.
