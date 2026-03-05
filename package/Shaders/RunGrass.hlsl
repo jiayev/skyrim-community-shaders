@@ -803,6 +803,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			envIBLColor = Color::IrradianceToGamma(ImageBasedLighting::GetEnvIBLColor(-normal));
 		}
 		skyIBLColor = Color::IrradianceToGamma(ImageBasedLighting::GetSkyIBLColor(-normal));
+#					if defined(SKYLIGHTING)
+		skyIBLColor *= skylightingDiffuse;
+#					endif
 		directionalAmbientColor = envIBLColor + skyIBLColor;
 	}
 #				endif
@@ -810,6 +813,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				if defined(SSRT)
 	if (SharedData::ssrtSettings.DiffuseMult > 0.0) {
 		directionalAmbientColor *= SharedData::ssrtSettings.AmbientMult;
+		envIBLColor *= SharedData::ssrtSettings.AmbientMult;
+		skyIBLColor *= SharedData::ssrtSettings.AmbientMult;
 	}
 #				endif
 
@@ -1065,6 +1070,9 @@ PS_OUTPUT main(PS_INPUT input)
 		} else {
 			envIBLColor = Color::IrradianceToGamma(ImageBasedLighting::GetEnvIBLColor(-normal));
 			float3 skyIBLColor = Color::IrradianceToGamma(ImageBasedLighting::GetSkyIBLColor(-normal));
+#				if defined(SKYLIGHTING)
+			skyIBLColor *= skylightingDiffuse;
+#				endif
 			directionalAmbientColor = envIBLColor + skyIBLColor;
 		}
 	}
@@ -1073,6 +1081,8 @@ PS_OUTPUT main(PS_INPUT input)
 #			if defined(SSRT)
 	if (SharedData::ssrtSettings.DiffuseMult > 0.0) {
 		directionalAmbientColor *= SharedData::ssrtSettings.AmbientMult;
+		envIBLColor *= SharedData::ssrtSettings.AmbientMult;
+		skyIBLColor *= SharedData::ssrtSettings.AmbientMult;
 	}
 #			endif
 
