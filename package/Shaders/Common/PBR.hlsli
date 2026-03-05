@@ -165,7 +165,7 @@ namespace PBR
 #if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 			[branch] if ((PBRFlags & Flags::Fuzz) != 0)
 			{
-				float3 fuzzSpecular = GetSpecularDirectLightMultiplierMicroflakes(material.Roughness, material.FuzzColor, satNdotL, satNdotV, satNdotH, satVdotH) * context.lightColor * satNdotL;
+				float3 fuzzSpecular = GetSpecularDirectLightMultiplierMicroflakes(material.Roughness, material.FuzzColor, satNdotL, satNdotV, satNdotH, satVdotH) * detailedLightColor * satNdotL;
 				lightingOutput.specular = lerp(lightingOutput.specular, fuzzSpecular, material.FuzzWeight);
 			}
 
