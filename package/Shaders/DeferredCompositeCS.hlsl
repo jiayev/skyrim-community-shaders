@@ -184,7 +184,7 @@ Texture2D<float4> SSRTexture : register(t16);
 		float roughness = 1.0 - glossiness;
 		float level = roughness * 7.0;
 
-		sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(normalWS, -V, roughness);
+		sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(normalWS, V, roughness);
 
 		float3 finalIrradiance = 0;
 

@@ -794,16 +794,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #				if defined(IBL)
 	float3 envIBLColor = 0;
+	float3 skyIBLColor = 0;
 	if (SharedData::iblSettings.EnableIBL) {
 		if (SharedData::iblSettings.DALCMode == 2) {
 			// Mode 2: keep vanilla DALC scaled by DALCAmount, add sky IBL overlay
 			envIBLColor = directionalAmbientColor * SharedData::iblSettings.DALCAmount;
-			directionalAmbientColor = envIBLColor + Color::IrradianceToGamma(ImageBasedLighting::GetSkyIBLColor(-normal));
 		} else {
 			envIBLColor = Color::IrradianceToGamma(ImageBasedLighting::GetEnvIBLColor(-normal));
-			float3 skyIBLColor = Color::IrradianceToGamma(ImageBasedLighting::GetSkyIBLColor(-normal));
-			directionalAmbientColor = envIBLColor + skyIBLColor;
 		}
+		skyIBLColor = Color::IrradianceToGamma(ImageBasedLighting::GetSkyIBLColor(-normal));
+		directionalAmbientColor = envIBLColor + skyIBLColor;
 	}
 #				endif
 
@@ -848,7 +848,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	diffuseColor += directionalAmbientColor;
 
 #				if defined(IBL) && defined(SKYLIGHTING)
-	directionalAmbientColor -= envIBLColor;
+	directionalAmbientColor -= envIBLColor + skyIBLColor;
 #				endif
 	diffuseColor *= albedo;
 	diffuseColor += max(0, sss * subsurfaceColor * SharedData::grassLightingSettings.SubsurfaceScatteringAmount);
@@ -860,7 +860,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				endif
 
 #				if defined(IBL) && defined(SKYLIGHTING)
-	directionalAmbientColor += envIBLColor * albedo;
+	directionalAmbientColor += (envIBLColor + skyIBLColor) * albedo;
 #				endif
 
 	specularColor += lightsSpecularColor;
