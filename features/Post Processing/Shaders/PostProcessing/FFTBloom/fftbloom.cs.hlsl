@@ -95,22 +95,50 @@ float3 ThresholdColor(float3 col, float threshold)
 }
 
 // ============================================================================
+// Zero-padding helpers to convert circular FFT convolution into linear.
+// The source image is rendered into a smaller inner region of the FFT
+// texture, with zero borders. This prevents bright pixels at one edge
+// from wrapping around and appearing on the opposite edge.
+// ============================================================================
+
+// Compute padding size based on kernel radius
+int GetPadding(int fftSize)
+{
+	// Padding must cover the kernel's effective spatial support.
+	// Gaussian: ~3 sigma, sigma = KernelRadius * 0.2, so support ≈ 0.6 * KernelRadius * fftSize
+	// Use generous padding, capped at 1/4 of FFT size to keep useful resolution.
+	int padding = int(ceil(KernelRadius * float(fftSize) * 0.6));
+	return clamp(padding, 4, fftSize / 4);
+}
+
+// ============================================================================
 // CS_ThresholdAndDownsample
 // Extracts bright pixels and downsamples to FFT resolution
+// Source is rendered into a zero-padded inner region for linear convolution
 // ============================================================================
 
 [numthreads(32, 32, 1)] void CS_ThresholdAndDownsample(uint2 tid : SV_DispatchThreadID) {
 	if (any(tid >= uint2(FFTSizeCB, FFTSizeCB)))
 		return;
 
-	float2 uv = (tid + 0.5) / float2(FFTSizeCB, FFTSizeCB);
+	int padding = GetPadding(FFTSizeCB);
+	int innerSize = FFTSizeCB - 2 * padding;
 
-	// Sample source with bilinear filtering
-	float3 col = TexColor.SampleLevel(SampLinear, uv, 0).rgb;
-	col = Sanitise(col);
-	col = ThresholdColor(col, Threshold);
+	// Check if this pixel is in the inner (non-padded) region
+	int2 innerPos = int2(tid) - int2(padding, padding);
+	if (innerPos.x >= 0 && innerPos.x < innerSize && innerPos.y >= 0 && innerPos.y < innerSize) {
+		// Map inner position to source UV [0, 1]
+		float2 uv = (float2(innerPos) + 0.5) / float2(innerSize, innerSize);
 
-	RWTexOut[tid] = float4(col, 1);
+		float3 col = TexColor.SampleLevel(SampLinear, uv, 0).rgb;
+		col = Sanitise(col);
+		col = ThresholdColor(col, Threshold);
+
+		RWTexOut[tid] = float4(col, 1);
+	} else {
+		// Zero padding border
+		RWTexOut[tid] = float4(0, 0, 0, 0);
+	}
 }
 
 	// ============================================================================
@@ -357,11 +385,44 @@ Texture2D<float2> TexKernelFFT : register(t2);
 }
 
 // ============================================================================
-// CS_Composite
-// Upsamples FFT bloom result and blends with original image
+// Bicubic Catmull-Rom sampling (4 bilinear taps = 16-tap equivalent)
+// Eliminates pixelation when upsampling low-res bloom to full resolution
 // ============================================================================
 
 Texture2D<float4> TexBloomResult : register(t3);
+
+float4 SampleBicubicCatmullRom(Texture2D<float4> tex, SamplerState samp, float2 uv, float2 texSize)
+{
+	float2 samplePos = uv * texSize;
+	float2 tc = floor(samplePos - 0.5) + 0.5;
+	float2 f = samplePos - tc;
+	float2 f2 = f * f;
+	float2 f3 = f2 * f;
+
+	// Catmull-Rom weights
+	float2 w0 = f2 - 0.5 * (f3 + f);
+	float2 w1 = 1.5 * f3 - 2.5 * f2 + 1.0;
+	float2 w2 = -1.5 * f3 + 2.0 * f2 + 0.5 * f;
+	float2 w3 = 0.5 * (f3 - f2);
+
+	// Combine pairs of taps for bilinear optimization (4 taps instead of 16)
+	float2 w12 = w1 + w2;
+	float2 tc0 = (tc - 1.0) / texSize;
+	float2 tc12 = (tc + w2 / w12) / texSize;
+	float2 tc3 = (tc + 2.0) / texSize;
+
+	float4 result =
+		(tex.SampleLevel(samp, float2(tc0.x, tc0.y), 0) * w0.x + tex.SampleLevel(samp, float2(tc12.x, tc0.y), 0) * w12.x + tex.SampleLevel(samp, float2(tc3.x, tc0.y), 0) * w3.x) * w0.y +
+		(tex.SampleLevel(samp, float2(tc0.x, tc12.y), 0) * w0.x + tex.SampleLevel(samp, float2(tc12.x, tc12.y), 0) * w12.x + tex.SampleLevel(samp, float2(tc3.x, tc12.y), 0) * w3.x) * w12.y +
+		(tex.SampleLevel(samp, float2(tc0.x, tc3.y), 0) * w0.x + tex.SampleLevel(samp, float2(tc12.x, tc3.y), 0) * w12.x + tex.SampleLevel(samp, float2(tc3.x, tc3.y), 0) * w3.x) * w3.y;
+
+	return max(result, 0);
+}
+
+// ============================================================================
+// CS_Composite
+// Upsamples FFT bloom result and blends with original image
+// ============================================================================
 
 [numthreads(32, 32, 1)] void CS_Composite(uint2 tid : SV_DispatchThreadID) {
 	uint2 dims;
@@ -372,8 +433,13 @@ Texture2D<float4> TexBloomResult : register(t3);
 
 	float2 uv = (tid + 0.5) / float2(dims);
 
+	// Map screen UV to the zero-padded inner region of the bloom texture
+	int padding = GetPadding(FFTSizeCB);
+	int innerSize = FFTSizeCB - 2 * padding;
+	float2 bloomUV = (float(padding) + uv * float(innerSize)) / float(FFTSizeCB);
+
 	float3 original = TexColor[tid].rgb;
-	float3 bloom = TexBloomResult.SampleLevel(SampLinear, uv, 0).rgb;
+	float3 bloom = SampleBicubicCatmullRom(TexBloomResult, SampLinear, bloomUV, float2(FFTSizeCB, FFTSizeCB)).rgb;
 
 	// Apply tint
 	bloom *= Tint.rgb;
