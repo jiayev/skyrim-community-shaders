@@ -7,6 +7,7 @@
 #include "PostProcessing/ColorGrading.h"
 #include "PostProcessing/ColourTransforms.h"
 #include "PostProcessing/DoF.h"
+#include "PostProcessing/FFTBloom.h"
 #include "PostProcessing/HistogramAutoExposure.h"
 #include "PostProcessing/LUT.h"
 #include "PostProcessing/LensFlare.h"
@@ -72,6 +73,7 @@ struct PostProcessing : Feature
 		MotionBlur,
 		DoF,
 		CODBloom,
+		FFTBloom,
 		LensFlare,
 		ColorGrading,
 		LUT,

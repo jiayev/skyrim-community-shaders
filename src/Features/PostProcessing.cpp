@@ -320,6 +320,7 @@ void PostProcessing::RestoreDefaultSettings()
 			pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
 			pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
 			pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
+			pipeline[static_cast<size_t>(FeaturePipelineIndex::FFTBloom)].get()->enabled = false;
 			pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
 			pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)].get()->enabled = true;
 			pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)].get()->enabled = false;
@@ -414,6 +415,8 @@ void PostProcessing::SetupResources()
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)] = std::make_unique<CODBloom>();
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
+		pipeline[static_cast<size_t>(FeaturePipelineIndex::FFTBloom)] = std::make_unique<FFTBloom>();
+		pipeline[static_cast<size_t>(FeaturePipelineIndex::FFTBloom)].get()->enabled = false;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)] = std::make_unique<LensFlare>();
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)] = std::make_unique<Vignette>();
