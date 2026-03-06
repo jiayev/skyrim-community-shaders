@@ -163,7 +163,6 @@ void FFTBloom::SaveSettings(json& o_json)
 
 void FFTBloom::CreateFFTTextures()
 {
-	auto device = globals::d3d::device;
 	auto renderer = globals::game::renderer;
 	int fftSize = NearestValidFFTSize(settings.FFTResolution);
 
