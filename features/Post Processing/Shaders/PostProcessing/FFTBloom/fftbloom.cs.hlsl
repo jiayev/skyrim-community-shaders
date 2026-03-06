@@ -348,6 +348,9 @@ Texture2D<float2> TexKernelFFT : register(t2);
 	float2 imageFreq = TexComplexIn[tid];
 	float2 kernelFreq = TexKernelFFT[tid];
 
+	float kernelSum = TexKernelFFT[uint2(0, 0)].x;
+	kernelFreq /= max(kernelSum, 1e-6);
+
 	float2 result = complexMul(imageFreq, kernelFreq);
 
 	RWTexComplexOut[tid] = result;
