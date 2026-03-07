@@ -3,6 +3,7 @@
 #include "State.h"
 #include "Util.h"
 
+#include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 #include <bit>
 
@@ -18,8 +19,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void ConvolutionBloom::DrawSettings()
 {
-	if (ImGui::SliderFloat("Intensity", &settings.Intensity, 0.0f, 5.0f, "%.2f"))
-		;
+	ImGui::SliderFloat("Intensity", &settings.Intensity, 0.0f, 5.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Overall strength of the bloom effect.");
 
@@ -30,19 +30,15 @@ void ConvolutionBloom::DrawSettings()
 
 	ImGui::Separator();
 
-	if (ImGui::SliderFloat("Pre-Filter Min", &settings.PreFilterMin, 0.0f, 20.0f, "%.1f"))
-		;
-	if (ImGui::SliderFloat("Pre-Filter Max", &settings.PreFilterMax, 0.0f, 50.0f, "%.1f"))
-		;
-	if (ImGui::SliderFloat("Pre-Filter Mult", &settings.PreFilterMult, 0.0f, 5.0f, "%.2f"))
-		;
+	ImGui::SliderFloat("Pre-Filter Min", &settings.PreFilterMin, 0.0f, 20.0f, "%.1f");
+	ImGui::SliderFloat("Pre-Filter Max", &settings.PreFilterMax, 0.0f, 50.0f, "%.1f");
+	ImGui::SliderFloat("Pre-Filter Mult", &settings.PreFilterMult, 0.0f, 5.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Boosts bright pixels above threshold before applying bloom.");
 
 	ImGui::Separator();
 
-	if (ImGui::SliderFloat("Buffer Scale", &settings.BufferScale, 0.1f, 1.0f, "%.2f"))
-		;
+	ImGui::SliderFloat("Buffer Scale", &settings.BufferScale, 0.1f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Lower values improve performance but reduce bloom quality. 0.5 is recommended.");
 
@@ -341,7 +337,6 @@ void ConvolutionBloom::Draw(TextureInfo& inout_tex)
 		return;
 
 	auto context = globals::d3d::context;
-	auto device = globals::d3d::device;
 	auto state = globals::state;
 
 	state->BeginPerfEvent("Convolution Bloom");
