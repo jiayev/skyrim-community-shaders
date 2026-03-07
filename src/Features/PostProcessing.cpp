@@ -414,6 +414,8 @@ void PostProcessing::SetupResources()
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)] = std::make_unique<CODBloom>();
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
+		pipeline[static_cast<size_t>(FeaturePipelineIndex::ConvolutionBloom)] = std::make_unique<ConvolutionBloom>();
+		pipeline[static_cast<size_t>(FeaturePipelineIndex::ConvolutionBloom)].get()->enabled = false;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)] = std::make_unique<LensFlare>();
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)] = std::make_unique<Vignette>();
