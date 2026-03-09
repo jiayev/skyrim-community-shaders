@@ -18,6 +18,7 @@
 #include "Features/ExtendedTranslucency.h"
 #include "Features/HairSpecular.h"
 #include "Features/LinearLighting.h"
+#include "Features/PhysicalSky.h"
 #include "Features/WetnessEffects.h"
 
 struct CreationEngineRaytracing
@@ -132,6 +133,7 @@ struct CreationEngineRaytracing
 	using SetCopyTargetFn = void (*)(ID3D12Resource*);
 	using UpdateFeatureDataFn = void (*)(void*, uint32_t);
 	using SetSkyHemisphereFn = void (*)(ID3D12Resource*);
+	using SetPhysicalSkyTrLUTFn = void (*)(ID3D12Resource*);
 	using GetFrameTimeFn = float* (*)();
 	using UpdateSettingsFn = void (*)(Settings);
 	using GetRRInputFn = void(*)(ID3D12Resource*&, ID3D12Resource*&, ID3D12Resource*&, ID3D12Resource*&);
@@ -145,6 +147,7 @@ struct CreationEngineRaytracing
 	SetCopyTargetFn SetCopyTarget = nullptr;
 	UpdateFeatureDataFn UpdateFeatureData = nullptr;
 	SetSkyHemisphereFn SetSkyHemisphere = nullptr;
+	SetPhysicalSkyTrLUTFn SetPhysicalSkyTrLUT = nullptr;
 	GetFrameTimeFn GetFrameTime = nullptr;
 	UpdateSettingsFn UpdateSettings = nullptr;
 	GetRRInputFn GetRRInput = nullptr;
@@ -201,6 +204,11 @@ struct CreationEngineRaytracing
 
 		if (!SetSkyHemisphere)
 			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' SetSkyHemisphere is nullptr");
+
+		SetPhysicalSkyTrLUT = reinterpret_cast<SetPhysicalSkyTrLUTFn>(GetProcAddress(handle, "SetPhysicalSkyTrLUT"));
+
+		if (!SetPhysicalSkyTrLUT)
+			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' SetPhysicalSkyTrLUT is nullptr");
 
 		GetFrameTime = reinterpret_cast<GetFrameTimeFn>(GetProcAddress(handle, "GetFrameTime"));
 
@@ -334,6 +342,7 @@ struct Raytracing : public OverlayFeature
 		HairSpecular::Settings HairSpecular;
 		ExtendedTranslucency::PerFrame ExtendedTranslucency;
 		LinearLighting::PerFrameData LinearLighting;
+		PhysicalSky::CbData PhysicalSky;
 	};
 
 	eastl::unique_ptr<FeatureData> featureData;
@@ -359,6 +368,7 @@ struct Raytracing : public OverlayFeature
 
 	eastl::unique_ptr<WrappedResource> skyHemisphere = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> cubeToHemiCS = nullptr;
+	winrt::com_ptr<ID3D12Resource> physicalSkyTrLUT = nullptr;
 
 	RE::NiPointer<RE::TESWaterReflections> waterReflections = nullptr;
 

@@ -506,6 +506,13 @@ void Raytracing::SetupResources()
 		creationEngineRaytracing->SetSkyHemisphere(skyHemisphere->resource.get());
 	}
 
+	if (globals::features::physicalSky.loaded && globals::features::physicalSky.texTrLut && globals::features::physicalSky.texTrLut->resource) {
+		ShareTexture(globals::features::physicalSky.texTrLut->resource.get(), physicalSkyTrLUT.put());
+	}
+
+	if (creationEngineRaytracing->SetPhysicalSkyTrLUT)
+		creationEngineRaytracing->SetPhysicalSkyTrLUT(physicalSkyTrLUT.get());
+
 	CompileShaders();
 }
 
@@ -531,12 +538,18 @@ void Raytracing::UpdateFeatureData()
 	std::memcpy(&featureData->ExtendedTranslucency, &globals::features::extendedTranslucency.GetCommonBufferData(), sizeof(ExtendedTranslucency::PerFrame));
 	std::memcpy(&featureData->LinearLighting, &linearLighting, sizeof(LinearLighting::PerFrameData));
 
+	auto& physicalSky = globals::features::physicalSky;
+	std::memcpy(&featureData->PhysicalSky, &physicalSky.cbData, sizeof(PhysicalSky::CbData));
+	if (!physicalSky.loaded)
+		featureData->PhysicalSky.enabled = 0;
+
 	static_assert(sizeof(FeatureData::ExtendedMaterials) == sizeof(ExtendedMaterials::Settings));
 	static_assert(sizeof(FeatureData::WetnessEffects) == sizeof(WetnessEffects::PerFrame));
 	static_assert(sizeof(FeatureData::CloudShadows) == sizeof(CloudShadows::Settings));
 	static_assert(sizeof(FeatureData::HairSpecular) == sizeof(HairSpecular::Settings));
 	static_assert(sizeof(FeatureData::ExtendedTranslucency) == sizeof(ExtendedTranslucency::PerFrame));
 	static_assert(sizeof(FeatureData::LinearLighting) == sizeof(LinearLighting::PerFrameData));
+	static_assert(sizeof(FeatureData::PhysicalSky) == sizeof(PhysicalSky::CbData));
 
 	creationEngineRaytracing->UpdateFeatureData(featureData.get(), sizeof(FeatureData));
 }
