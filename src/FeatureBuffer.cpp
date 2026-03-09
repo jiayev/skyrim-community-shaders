@@ -2,6 +2,7 @@
 
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
+#include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/GrassLighting.h"
@@ -10,6 +11,7 @@
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
+#include "Features/PhysicalSky.h"
 #include "Features/Raytracing.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
@@ -53,5 +55,7 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::extendedTranslucency.GetCommonBufferData(),
 		globals::features::linearLighting.GetCommonBufferData(),
 		globals::features::terrainBlending.settings,
+		globals::features::exponentialHeightFog.settings,
+		globals::features::physicalSky.cbData,
 		globals::features::raytracing.GetCommonBufferData());
 }

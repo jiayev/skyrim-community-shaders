@@ -1,51 +1,53 @@
 #include "Common/Color.hlsli"
+#include "Common/FastMath.hlsli"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/Random.hlsli"
 #include "Common/VR.hlsli"
 
 struct VS_INPUT
 {
-	float4 Position : POSITION0;
+	float4 Position: POSITION0;
 
 #if defined(TEX) || defined(HORIZFADE)
-	float2 TexCoord : TEXCOORD0;
+	float2 TexCoord: TEXCOORD0;
 #endif
 
-	float4 Color : COLOR0;
+	float4 Color: COLOR0;
 #if defined(VR)
-	uint InstanceID : SV_INSTANCEID;
+	uint InstanceID: SV_INSTANCEID;
 #endif  // VR
 };
 
 struct VS_OUTPUT
 {
-	float4 Position : SV_POSITION0;
+	float4 Position: SV_POSITION0;
 
 #if defined(DITHER) && defined(TEX)
-	float4 TexCoord0 : TEXCOORD0;
+	float4 TexCoord0: TEXCOORD0;
 #elif defined(DITHER)
-	float2 TexCoord0 : TEXCOORD3;
+	float2 TexCoord0: TEXCOORD3;
 #elif defined(TEX) || defined(HORIZFADE)
-	float2 TexCoord0 : TEXCOORD0;
+	float2 TexCoord0: TEXCOORD0;
 #endif
 
 #if defined(TEXLERP)
-	float2 TexCoord1 : TEXCOORD1;
+	float2 TexCoord1: TEXCOORD1;
 #endif
 
 #if defined(HORIZFADE)
-	float TexCoord2 : TEXCOORD2;
+	float TexCoord2: TEXCOORD2;
 #endif
 
 #if defined(TEX) || defined(DITHER) || defined(HORIZFADE)
-	float4 Color : COLOR0;
+	float4 Color: COLOR0;
 #endif
 
-	float4 WorldPosition : POSITION1;
-	float4 PreviousWorldPosition : POSITION2;
+	float4 WorldPosition: POSITION1;
+	float4 PreviousWorldPosition: POSITION2;
 #if defined(VR)
-	float ClipDistance : SV_ClipDistance0;  // o11
-	float CullDistance : SV_CullDistance0;  // p11
-	uint EyeIndex : EYEIDX0;
+	float ClipDistance: SV_ClipDistance0;  // o11
+	float CullDistance: SV_CullDistance0;  // p11
+	uint EyeIndex: EYEIDX0;
 #endif  // VR
 };
 
@@ -152,11 +154,11 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 Color : SV_Target0;
-	float4 MotionVectors : SV_Target1;
-	float4 Normal : SV_Target2;
+	float4 Color: SV_Target0;
+	float4 MotionVectors: SV_Target1;
+	float4 Normal: SV_Target2;
 #if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
-	float4 CloudShadows : SV_Target3;
+	float4 CloudShadows: SV_Target3;
 #endif
 };
 
@@ -188,6 +190,14 @@ cbuffer AlphaTestRefCB : register(b11)
 #		include "CloudShadows/CloudShadows.hlsli"
 #	endif
 
+#	if defined(PHYSICAL_SKY)
+#		define PS_SKY_SAMPLERS
+#		include "PhysicalSky/Common.hlsli"
+#		if defined(TEX) && defined(CLOUDS)
+#			define PS_CLOUDS
+#		endif
+#	endif
+
 Texture2D<float> TexDepthSampler : register(t17);
 
 PS_OUTPUT main(PS_INPUT input)
@@ -199,6 +209,15 @@ PS_OUTPUT main(PS_INPUT input)
 #	else
 	uint eyeIndex = input.EyeIndex;
 #	endif  // !VR
+
+#	if defined(PS_CLOUDS)
+	float psCloudDist = 1e3f / 1.428e-2;
+	float3 viewDir = normalize(input.WorldPosition.xyz);
+#		if defined(CLOUD_SHADOWS)
+	if (SharedData::physSkyData.enabled)
+		psCloudDist = CloudShadows::IntersectCloudDist(float3(0, 0, 0), viewDir);
+#		endif
+#	endif
 
 #	ifndef OCCLUSION
 #		ifndef TEXLERP
@@ -213,6 +232,11 @@ PS_OUTPUT main(PS_INPUT input)
 	blendColor.xyz = Color::Sky(blendColor.xyz);
 	baseColor.xyz = Color::Sky(baseColor.xyz);
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
+#		endif
+
+#		if defined(PS_CLOUDS) && defined(CLOUD_SHADOWS)
+	if (SharedData::physSkyData.enabled)
+		baseColor.rgb = PhysSky::RelightCloud(baseColor, viewDir, float3(0, 0, 0) + viewDir * psCloudDist, PhysSky::SampTr, SampBaseSampler);
 #		endif
 
 #		if defined(DITHER)
@@ -246,6 +270,38 @@ PS_OUTPUT main(PS_INPUT input)
 #	else
 	psout.Color = float4(0, 0, 0, 1.0);
 #	endif  // OCCLUSION
+
+#	if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+#		if defined(DITHER) && !defined(TEX)
+		// SKY
+		float3 skyColor = PhysSky::SampleSky(normalize(input.WorldPosition.xyz), input.Position.xy, PhysSky::SampSv);
+		psout.Color.xyz = lerp(skyColor, psout.Color.xyz, SharedData::physSkyData.vanillaMix);
+
+#		elif defined(PS_CLOUDS)
+		float4 apColor = PhysSky::SampleAp(viewDir, input.Position.xy, psCloudDist, PhysSky::SampSv);
+		psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
+#		elif defined(DEFERRED) && defined(TEX)
+		float3 sunDir = normalize(SharedData::physSkyData.sunDir);
+		float cosTheta = saturate(dot(normalize(input.WorldPosition.xyz), sunDir));
+		if (cosTheta > SharedData::physSkyData.sunDiskCos && SharedData::physSkyData.sunDiskCos > 0.0) {
+			float sunDiskSin = sqrt(1.0 - SharedData::physSkyData.sunDiskCos * SharedData::physSkyData.sunDiskCos);
+			float tanTheta = sqrt(1.0 - cosTheta * cosTheta) / cosTheta;
+			float normDist = tanTheta * SharedData::physSkyData.sunDiskCos * rcp(sunDiskSin);
+			float3 limbFactor = PhysSky::LimbDarkenHestroffer(normDist);
+
+			const float softEdge = saturate(8.0f * (cosTheta - SharedData::physSkyData.sunDiskCos) / (1.0f - SharedData::physSkyData.sunDiskCos));
+			const float sunSolidAngle = Math::TAU * (1.0f - SharedData::physSkyData.sunDiskCos);
+			const float3 transmittance = PhysSky::SampleTr(normalize(input.WorldPosition.xyz), SampBlendSampler);
+			const float3 sunDiskRadiance = min((SharedData::physSkyData.sunlightColor / max(sunSolidAngle, 1e-6f)) * transmittance, 62250.0f);
+
+			float3 sunDiskColor = sunDiskRadiance * limbFactor * softEdge;
+			psout.Color.xyz += sunDiskColor;
+			psout.Color.w = 1.0;
+		}
+#		endif
+	}
+#	endif
 
 	float2 screenMotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 

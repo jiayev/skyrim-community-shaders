@@ -1,8 +1,11 @@
 #pragma once
 
+#include <atomic>
+
 struct CloudShadows;
 struct DX12Interop;
 struct DynamicCubemaps;
+struct VolumetricShadows;
 struct ExtendedMaterials;
 struct GrassCollision;
 struct GrassLighting;
@@ -13,6 +16,7 @@ struct LinearLighting;
 struct LODBlending;
 struct InteriorSun;
 struct InverseSquareLighting;
+struct PhysicalSky;
 struct ScreenSpaceGI;
 struct ScreenSpaceShadows;
 struct Skylighting;
@@ -31,6 +35,7 @@ struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
 struct WeatherEditor;
+struct ExponentialHeightFog;
 struct Raytracing;
 
 class State;
@@ -59,6 +64,7 @@ namespace globals
 		extern CloudShadows cloudShadows;
 		extern DX12Interop dx12Interop;
 		extern DynamicCubemaps dynamicCubemaps;
+		extern VolumetricShadows volumetricShadows;
 		extern ExtendedMaterials extendedMaterials;
 		extern GrassCollision grassCollision;
 		extern GrassLighting grassLighting;
@@ -69,6 +75,7 @@ namespace globals
 		extern LODBlending lodBlending;
 		extern InteriorSun interiorSun;
 		extern InverseSquareLighting inverseSquareLighting;
+		extern PhysicalSky physicalSky;
 		extern ScreenSpaceGI screenSpaceGI;
 		extern ScreenSpaceShadows screenSpaceShadows;
 		extern Skylighting skylighting;
@@ -88,6 +95,7 @@ namespace globals
 		extern Upscaling upscaling;
 		extern RenderDoc renderDoc;
 		extern WeatherEditor weatherEditor;
+		extern ExponentialHeightFog exponentialHeightFog;
 		extern Raytracing raytracing;
 
 		namespace llf
@@ -221,6 +229,8 @@ namespace globals
 		extern RE::BSUtilityShader* utilityShader;
 		extern RE::Sky* sky;
 		extern RE::UI* ui;
+		extern RE::Calendar* calendar;
+		extern std::atomic<bool> quitGame;
 
 		extern RE::BSGraphics::PixelShader** currentPixelShader;
 		extern RE::BSGraphics::VertexShader** currentVertexShader;
@@ -257,5 +267,6 @@ namespace globals
 	void OnInit();
 	void ReInit();
 	void OnDataLoaded();
+	void OnGameWindowClose();
 	void InstallD3DHooks(ID3D11DeviceContext* a_context);
 }
