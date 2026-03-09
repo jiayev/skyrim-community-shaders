@@ -81,11 +81,15 @@ namespace DisplayMapping
 			Color *= compressedLuminanceNormalized / sourceLuminanceNormalized;
 		}
 
-		// Hue-preserving channel clamp: if any channel overshoots PeakWhite, scale all
-		// channels down uniformly so the brightest lands exactly on PeakWhite.
-		float peakChannel = max3(Color);
-		if (peakChannel > PeakWhite)
-			Color *= PeakWhite / peakChannel;
+		// Soft per-channel compression above peak (Reinhard-style asymptotic curve).
+		// The luminance pass compresses based on average, so saturated highlights (fires, emissives)
+		// can have peak channels far exceeding PeakWhite. Per-channel Reinhard preserves detail
+		// gradients by applying a smooth compression curve independently to each channel.
+		{
+			const float3 excess = max(0.0, Color - PeakWhite);
+			const float3 compressed = excess / (1.0 + excess / PeakWhite);
+			Color = min(Color, PeakWhite) + compressed;
+		}
 
 		return FromColorSpaceToColorSpace(Color, ProcessingColorSpace, InOutColorSpace);
 	}
