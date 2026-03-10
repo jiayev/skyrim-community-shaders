@@ -12,6 +12,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PhysicalSky.h"
+#include "Features/PostProcessing.h"
 #include "Features/Raytracing.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
@@ -56,6 +57,7 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::linearLighting.GetCommonBufferData(),
 		globals::features::terrainBlending.settings,
 		globals::features::exponentialHeightFog.settings,
+		globals::features::postProcessing.settings,
 		globals::features::physicalSky.cbData,
 		globals::features::raytracing.GetCommonBufferData());
 }

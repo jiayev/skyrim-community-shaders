@@ -23,6 +23,7 @@ namespace SharedData
 		bool InMapMenu;   // If the world/local map is open (note that the renderer is still deferred here)
 		bool HideSky;     // HideSky flag in WorldSpace, e.g. Blackreach
 		float MipBias;    // Offset to mip level for TAA sharpness#
+		float4 HDRData;
 	};
 
 	struct GrassLightingSettings
@@ -253,6 +254,12 @@ namespace SharedData
 		float3 pad;
 	};
 
+	struct PostProcessingSettings
+	{
+		uint DisableVanillaTonemapping;
+		uint3 pad0;
+	};
+
 	struct PhysSkyData
 	{
 		// DYNAMIC
@@ -333,6 +340,7 @@ namespace SharedData
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
+		PostProcessingSettings postProcessingSettings;
 		PhysSkyData physSkyData;
 		RaytracingSettings raytracingSettings;
 	};

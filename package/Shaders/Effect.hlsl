@@ -973,9 +973,11 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #		endif
 #	endif
+#	if !defined(HDR_OUTPUT)
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld) && SharedData::linearLightingSettings.enableLinearLighting) {
 		psout.Diffuse.xyz = Color::TrueLinearToGamma(psout.Diffuse.xyz);
 	}
+#	endif
 	return psout;
 }
 #endif
