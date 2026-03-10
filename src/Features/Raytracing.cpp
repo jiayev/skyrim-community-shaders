@@ -534,9 +534,22 @@ void Raytracing::SetupResources()
 		creationEngineRaytracing->SetSkyHemisphere(skyHemisphere->resource.get());
 	}
 
-	physicalSkyTrLUT.reset();
+	{
+		D3D11_TEXTURE2D_DESC texDesc{};
+		texDesc.Width = PhysicalSky::kTrLutW;
+		texDesc.Height = PhysicalSky::kTrLutH;
+		texDesc.MipLevels = 1;
+		texDesc.ArraySize = 1;
+		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		texDesc.SampleDesc.Count = 1;
+		texDesc.SampleDesc.Quality = 0;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+		physicalSkyTrLUT = eastl::make_unique<WrappedResource>(texDesc);
+	}
+
 	if (creationEngineRaytracing->SetPhysicalSkyTrLUT)
-		creationEngineRaytracing->SetPhysicalSkyTrLUT(nullptr);
+		creationEngineRaytracing->SetPhysicalSkyTrLUT(physicalSkyTrLUT->resource.get());
 
 	CompileShaders();
 }
@@ -655,16 +668,7 @@ void Raytracing::DeferredPasses()
 
 	auto* context = globals::d3d::context;
 	auto& physicalSky = globals::features::physicalSky;
-	if (physicalSky.loaded && physicalSky.settings.enabled && physicalSky.texTrLut && physicalSky.texTrLut->resource) {
-		if (!physicalSkyTrLUT) {
-			D3D11_TEXTURE2D_DESC trLutDesc{};
-			auto srcTrLut = physicalSky.texTrLut->resource.get();
-			srcTrLut->GetDesc(&trLutDesc);
-			physicalSkyTrLUT = eastl::make_unique<WrappedResource>(trLutDesc);
-			if (creationEngineRaytracing->SetPhysicalSkyTrLUT)
-				creationEngineRaytracing->SetPhysicalSkyTrLUT(physicalSkyTrLUT->resource.get());
-		}
-
+	if (physicalSkyTrLUT && physicalSky.loaded && physicalSky.settings.enabled && physicalSky.texTrLut && physicalSky.texTrLut->resource) {
 		context->CopyResource(physicalSkyTrLUT->resource11, physicalSky.texTrLut->resource.get());
 	}
 
