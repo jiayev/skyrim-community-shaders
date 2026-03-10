@@ -386,7 +386,7 @@ struct Raytracing : public OverlayFeature
 
 	eastl::unique_ptr<WrappedResource> skyHemisphere = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> cubeToHemiCS = nullptr;
-	winrt::com_ptr<ID3D12Resource> physicalSkyTrLUT = nullptr;
+	eastl::unique_ptr<WrappedResource> physicalSkyTrLUT = nullptr;
 
 	RE::NiPointer<RE::TESWaterReflections> waterReflections = nullptr;
 
