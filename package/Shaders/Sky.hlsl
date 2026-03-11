@@ -269,7 +269,8 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 
 #		if defined(TEX) && !defined(MOONMASK) && !defined(HORIZFADE) && !defined(CLOUDS)
-	if (SharedData::HDRData.x > 0.5) {
+	bool enableProceduralSun = SharedData::physSkyData.sunDiskCos > 0.0 && SharedData::physSkyData.enabled;
+	if (SharedData::HDRData.x > 0.5 && !enableProceduralSun) {
 		float paperWhite = SharedData::HDRData.y / sRGB_WhiteLevelNits;
 		float peakWhite = min(SharedData::HDRData.z, 2000.0) / sRGB_WhiteLevelNits;  // prevents the user from setting ridiculous peaknits then having their game explode when the sun is 10k nits.
 		float3 fogColor = yyy;
@@ -306,6 +307,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 		sunLinear *= requiredSourceLuminance / sourceLuminance;
 		psout.Color.xyz = ENABLE_LL ? sunLinear + fogColor : Color::LinearToGamma(sunLinear) + fogColor;
+	} else if (enableProceduralSun) {
+		psout.Color.xyz = 0;
 	}
 #		endif
 
