@@ -63,14 +63,31 @@ cbuffer PerFrame : register(b0)
 			// reference white to paperWhite nits on the display.
 			finalColor = Color::pq::Encode(sceneBT2020, sRGB_WhiteLevelNits);
 		} else {
-			// Composite in gamma space (matching SDR behavior), then convert to HDR.
-			// The vanilla UI was designed for gamma-space blending; compositing in PQ
-			// over-darkens and compositing in linear over-brightens behind UI overlays.
-			float3 composited = ui.rgb * uiBrightness + scene.rgb * (1.0 - ui.a);
+			if (SharedData::postProcessingSettings.DisableVanillaTonemapping) {
+				// In this path the scene is already linear BT.2020, while the UI is still
+				// gamma-encoded BT.709 with premultiplied alpha.
+				float3 uiBT2020Premultiplied;
 
-			float3 compositedLinear = Color::GammaToLinear(max(0.0, composited));
-			float3 compositedBT2020 = Color::BT709ToBT2020(compositedLinear);
-			finalColor = Color::pq::Encode(max(0.0, compositedBT2020), sRGB_WhiteLevelNits);
+				if (ui.a > 0.001) {
+					float3 uiStraight = ui.rgb / ui.a;
+					float3 uiLinear = Color::GammaToTrueLinear(max(0.0, uiStraight));
+					uiBT2020Premultiplied = Color::BT709ToBT2020(uiLinear) * (ui.a * uiBrightness);
+				} else {
+					uiBT2020Premultiplied = Color::BT709ToBT2020(Color::GammaToTrueLinear(max(0.0, ui.rgb))) * uiBrightness;
+				}
+
+				float3 compositedBT2020 = uiBT2020Premultiplied + sceneBT2020 * (1.0 - ui.a);
+				finalColor = Color::pq::Encode(max(0.0, compositedBT2020), sRGB_WhiteLevelNits);
+			} else {
+				// Composite in gamma space (matching SDR behavior), then convert to HDR.
+				// The vanilla UI was designed for gamma-space blending; compositing in PQ
+				// over-darkens and compositing in linear over-brightens behind UI overlays.
+				float3 composited = ui.rgb * uiBrightness + scene.rgb * (1.0 - ui.a);
+
+				float3 compositedLinear = Color::GammaToLinear(max(0.0, composited));
+				float3 compositedBT2020 = Color::BT709ToBT2020(compositedLinear);
+				finalColor = Color::pq::Encode(max(0.0, compositedBT2020), sRGB_WhiteLevelNits);
+			}
 		}
 	} else {
 		float3 sceneGamma = scene.rgb;
