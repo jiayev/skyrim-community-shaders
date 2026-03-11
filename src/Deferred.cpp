@@ -343,15 +343,18 @@ void Deferred::DeferredPasses()
 		dynamicCubemaps.UpdateCubemap();
 
 	auto& ibl = globals::features::ibl;
+	bool skipDeferredComposite = false;
 
 	auto& physSky = globals::features::physicalSky;
 
 	if (auto& rt = globals::features::raytracing; rt.loaded) {
 		rt.DeferredPasses();
+		skipDeferredComposite = rt.settings.CreationEngineRaytracingSettings.Enabled &&
+			rt.Mode() == CreationEngineRaytracing::Mode::PathTracing;
 	}
 
 	// Deferred Composite
-	{
+	if (!skipDeferredComposite) {
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
 		ID3D11ShaderResourceView* srvs[]{

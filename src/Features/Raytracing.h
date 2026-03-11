@@ -20,6 +20,7 @@
 #include "Features/LinearLighting.h"
 #include "Features/PhysicalSky.h"
 #include "Features/WetnessEffects.h"
+#include "Features/Upscaling.h"
 
 struct CreationEngineRaytracing
 {
@@ -29,8 +30,16 @@ struct CreationEngineRaytracing
 		PathTracing
 	};
 
+	enum class Denoiser
+	{
+		None,
+		DLSS_RR,
+		Other
+	};
+
 	struct GeneralSettings
 	{
+		Denoiser Denoiser = Denoiser::None;
 		Mode Mode = Mode::GlobalIllumination;
 		bool RaytracedShadows = false;
 
@@ -315,8 +324,13 @@ struct Raytracing : public OverlayFeature
 	void UpdateJitter(float2 jitter);
 	void UpdateFeatureData();
 	void SkyCubeToHemi() const;
-	void ConvertTextures() const;
+	void ConvertTextures();
 	void DeferredPasses();
+	void GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& specularAlbedo, ID3D12Resource*& normalRoughness, ID3D12Resource*& specHitDistance);
+
+	void SetUpscaler(Upscaling::UpscaleMethod method);
+
+	WrappedResource* GetDiffuseAlbedoTexture();
 
 	inline CreationEngineRaytracing::Mode Mode() const
 	{
@@ -385,6 +399,8 @@ struct Raytracing : public OverlayFeature
 	eastl::unique_ptr<WrappedResource> normalRoughnessTexture = nullptr; 
 	winrt::com_ptr<ID3D12Resource> gnmaoTexture = nullptr;
 
+	eastl::unique_ptr<WrappedResource> diffuseAlbedoTexture = nullptr; 
+
 	eastl::unique_ptr<WrappedResource> skyHemisphere = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> cubeToHemiCS = nullptr;
 	eastl::unique_ptr<WrappedResource> physicalSkyTrLUT = nullptr;
@@ -405,7 +421,7 @@ struct Raytracing : public OverlayFeature
 	eastl::unique_ptr<ScreenData> screenData;
 
 	winrt::com_ptr<ID3D11ComputeShader> ptCompositeCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> convertTexturesCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> convertTexturesCS[2];
 	winrt::com_ptr<ID3D11ComputeShader> giCompositeCS = nullptr;
 
 	float* frameTime;
