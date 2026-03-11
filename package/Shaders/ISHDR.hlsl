@@ -175,27 +175,17 @@ PS_OUTPUT main(PS_INPUT input)
 	inputColor = max(0, inputColor);
 
 	if (isHDR) {
-		// === HDR Pipeline (Float16 RT) ===
-		// Input: HDR values (can exceed 1.0) - gamma-encoded (vanilla) OR linear (Linear Lighting)
-		// Output: Gamma-encoded BT.709 (values can exceed 1.0) for HDROutputCS to convert
-
 		float paperWhiteNits = SharedData::HDRData.y;
 		float peakNits = SharedData::HDRData.z;
+		float pw = paperWhiteNits / sRGB_WhiteLevelNits;
+		float peak = peakNits / sRGB_WhiteLevelNits;
 
-		// === Color Grading in Gamma Space (matching SDR calibration) ===
-		// Skyrim's content and all imagespace settings were calibrated in gamma space.
-		// Applying grading in linear space (as we did before) amplifies chromatic differences
-		// and uses a different contrast neutral point, causing sky colours and SDR-range
-		// content to diverge noticeably from the SDR path.
-		// Apply grading identically to SDR: same gamma domain, same formulas, same ordering.
-		// Only the DICE tonemap (below) differs — it handles highlights above paper white.
 		float3 hdrGamma = ENABLE_LL ? Color::LinearToGamma(inputColor) : inputColor;
-
 		float hdrGammaLum = Color::RGBToLuminance(hdrGamma);
-		hdrGamma = lerp(hdrGammaLum, hdrGamma, Cinematic.x);        // saturation
-		hdrGamma = lerp(hdrGamma, hdrGammaLum * Tint.xyz, Tint.w);  // tint
-		hdrGamma *= Cinematic.w;                                    // brightness
-		hdrGamma = lerp(avgValue.x, hdrGamma, Cinematic.z);         // contrast
+		hdrGamma = lerp(hdrGammaLum, hdrGamma, Cinematic.x);
+		hdrGamma = lerp(hdrGamma, hdrGammaLum * Tint.xyz, Tint.w);
+		hdrGamma *= Cinematic.w;
+		hdrGamma = lerp(avgValue.x, hdrGamma, Cinematic.z);
 
 #		if defined(FADE)
 		hdrGamma = lerp(hdrGamma, Fade.xyz, Fade.w);
@@ -203,22 +193,28 @@ PS_OUTPUT main(PS_INPUT input)
 
 		hdrGamma += saturate(Param.x - hdrGamma) * bloomColor;
 
-		// Decode to linear for DICE tonemapping.
 		float3 hdrLinear = Color::GammaToLinear(max(0.0, hdrGamma));
+		float3 sdrReferenceLinear;
 
-		// DICE tonemapping: compresses highlights from paper-white to peak brightness.
-		// Output remains in linear BT.709, values can exceed 1.0 up to peak/80.
-		float pw = paperWhiteNits / sRGB_WhiteLevelNits;
-		float peak = peakNits / sRGB_WhiteLevelNits;
-		hdrLinear *= pw;
+		[branch] if (Param.z > 0.5)
+		{
+			float3 hejlGamma = DisplayMapping::HuePreservingHejlBurgessDawson(hdrLinear, 0.0.xxx);
+			sdrReferenceLinear = Color::GammaToLinear(max(0.0, hejlGamma));
+		}
+		else
+		{
+			float maxCol = Color::RGBToLuminance(hdrLinear);
+			float mappedMax = GetTonemapFactorReinhard(maxCol).x;
+			sdrReferenceLinear = maxCol > 1e-6 ? hdrLinear * (mappedMax / maxCol) : hdrLinear;
+		}
 
-		// Shoulder anchored at paper white so SDR-range content (<= pw) is untouched.
+		float3 sdrBase = saturate(sdrReferenceLinear) * pw;
+
 		float shoulderStart = pw / peak;
-		hdrLinear = DisplayMapping::DICETonemap(hdrLinear, peak, shoulderStart, CS_BT709, CS_BT709);
+		float3 diceLinear = DisplayMapping::DICETonemap(hdrLinear * pw, peak, shoulderStart, CS_BT709, CS_BT709);
+		float3 hdrLinearOut = lerp(sdrBase, diceLinear, saturate(sdrReferenceLinear));
 
-		// Output gamma-encoded BT.709 to kFRAMEBUFFER (float16).
-		// BT.2020 conversion and PQ encoding happen in HDROutputCS after all post-processing.
-		outputColor = Color::LinearToGamma(max(0.0, hdrLinear));
+		outputColor = Color::LinearToGamma(max(0.0, hdrLinearOut));
 	} else {
 		// === SDR Pipeline (LDR RT) ===
 		// Input: Linear HDR values (can exceed 1.0)
@@ -226,24 +222,16 @@ PS_OUTPUT main(PS_INPUT input)
 
 		float3 blendedColor;
 
-		// === Tonemapping + Bloom Selection ===
-		// Choose between two hue-preserving tonemap algorithms (user preference Param.z).
-
 		[branch] if (Param.z > 0.5)
 		{
-			// Hejl-Burgess-Dawson: Smoother rolloff, better for cinematic look
 			blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor);
 		}
 		else
 		{
-			// Reinhard: Hue-preserving tone compression
-			// Extract luminance and compress with Reinhard curve
 			float maxCol = Color::RGBToLuminance(inputColor);
 			float mappedMax = GetTonemapFactorReinhard(maxCol).x;
-			// Apply compression uniformly to preserve hue
 			float3 compressedHuePreserving = inputColor * mappedMax / maxCol;
 			blendedColor = compressedHuePreserving;
-			// Add bloom to tonemapped result
 			blendedColor += saturate(Param.x - blendedColor) * bloomColor;
 		}
 
