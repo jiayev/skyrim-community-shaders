@@ -269,14 +269,43 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 
 #		if defined(TEX) && !defined(MOONMASK) && !defined(HORIZFADE) && !defined(CLOUDS)
-	// Push the sun disc centre toward the display's peak brightness in HDR.
-	// ISHDR multiplies by paperWhite/80 then DICE tonemaps to peakNits/80,
-	// so we target peak/pw in gamma space. The alpha mask provides a smooth gradient.
 	if (SharedData::HDRData.x > 0.5) {
-		float peakOverPW = SharedData::HDRData.z / max(SharedData::HDRData.y, 1.0);
-		float targetGamma = Color::LinearToGamma(peakOverPW);
-		float sunMask = psout.Color.w * psout.Color.w;
-		psout.Color.xyz = lerp(psout.Color.xyz, max(psout.Color.xyz, targetGamma), sunMask);
+		float paperWhite = SharedData::HDRData.y / sRGB_WhiteLevelNits;
+		float peakWhite = min(SharedData::HDRData.z, 2000.0) / sRGB_WhiteLevelNits;  // prevents the user from setting ridiculous peaknits then having their game explode when the sun is 10k nits.
+		float3 fogColor = yyy;
+		float3 sunColor = Color::Sky(input.Color.xyz) * baseColor.xyz;
+		float sunCoreMask = pow(saturate(psout.Color.w), 8.0);
+		float3 sunLinear = ENABLE_LL ? sunColor : Color::GammaToLinear(sunColor);
+		float sunLuminance = max(Color::RGBToLuminance(sunLinear), 1e-4);
+		float3 fogLinear = ENABLE_LL ? fogColor : Color::GammaToLinear(fogColor);
+		float fogLuminance = Color::RGBToLuminance(fogLinear);
+		float sunVisibility = sunLuminance / max(sunLuminance + fogLuminance, 1e-4);
+		float sourceLuminance = sunLuminance * paperWhite;
+
+		static const float hdr10MaxWhite = HDR10_MaxWhiteNits / sRGB_WhiteLevelNits;
+		float shoulderPerceptual = Linear_to_PQ((paperWhite / hdr10MaxWhite).xxx, GCT_DEFAULT).x;
+		float peakPerceptual = Linear_to_PQ((peakWhite / hdr10MaxWhite).xxx, GCT_DEFAULT).x;
+		float sourcePerceptual = Linear_to_PQ((sourceLuminance / hdr10MaxWhite).xxx, GCT_POSITIVE).x;
+
+		float currentOutputLuminance = sourceLuminance;
+		if (sourcePerceptual > shoulderPerceptual) {
+			float compressedPerceptual = shoulderPerceptual +
+			                             (peakPerceptual - shoulderPerceptual) * (1.0 - exp(-(sourcePerceptual - shoulderPerceptual) / max(peakPerceptual - shoulderPerceptual, 1e-4)));
+			currentOutputLuminance = PQ_to_Linear(compressedPerceptual.xxx, GCT_DEFAULT).x * hdr10MaxWhite;
+		}
+
+		float desiredOutputLuminance = lerp(currentOutputLuminance, peakWhite, sunCoreMask * sunVisibility);
+		float requiredSourceLuminance = desiredOutputLuminance;
+		if (desiredOutputLuminance > paperWhite) {
+			float desiredPerceptual = Linear_to_PQ((desiredOutputLuminance / hdr10MaxWhite).xxx, GCT_DEFAULT).x;
+			float compressionT = saturate((desiredPerceptual - shoulderPerceptual) / max(peakPerceptual - shoulderPerceptual, 1e-4));
+			compressionT = min(compressionT, 0.9999);
+			float requiredPerceptual = shoulderPerceptual - (peakPerceptual - shoulderPerceptual) * log(1.0 - compressionT);
+			requiredSourceLuminance = PQ_to_Linear(requiredPerceptual.xxx, GCT_DEFAULT).x * hdr10MaxWhite;
+		}
+
+		sunLinear *= requiredSourceLuminance / sourceLuminance;
+		psout.Color.xyz = ENABLE_LL ? sunLinear + fogColor : Color::LinearToGamma(sunLinear) + fogColor;
 	}
 #		endif
 
