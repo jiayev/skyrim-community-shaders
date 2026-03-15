@@ -447,7 +447,7 @@ void HDRDisplay::DrawSettings()
 			ImGui::Text("203 nits is the ITU BT.2408 reference. Increase for a brighter image.");
 		}
 
-		ImGui::SliderInt("Peak Brightness (nits)", reinterpret_cast<int*>(&currentPeakNits), 400, 10000);
+		ImGui::SliderInt("Peak Brightness (nits)", reinterpret_cast<int*>(&currentPeakNits), 400, 2000);
 		{
 			std::lock_guard<std::mutex> lock(settingsMutex);
 			if (currentPeakNits <= settings.hdrPaperWhite) {
@@ -464,6 +464,11 @@ void HDRDisplay::DrawSettings()
 		}
 
 		ImGui::TextDisabled("Display reports: %.0f nits max", cachedDisplayMaxLuminance);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Reported by OS/driver (DXGI MaxLuminance), not a direct meter reading.");
+			ImGui::Text("It may be EDID metadata and can differ from real highlight peak output.");
+			ImGui::Text("Treat this as a starting point and tune Peak Brightness as needed.");
+		}
 	}
 
 	// UI brightness slider - only shown when HDR is enabled

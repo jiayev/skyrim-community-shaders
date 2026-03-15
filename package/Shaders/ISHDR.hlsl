@@ -175,44 +175,67 @@ PS_OUTPUT main(PS_INPUT input)
 	inputColor = max(0, inputColor);
 
 	if (isHDR) {
+		// === HDR Pipeline ===
+		// Run the exact SDR tonemap + bloom + color grading pipeline to produce the SDR
+		// reference image, then extend highlights above paperwhite using DICE.
+		// This guarantees HDR and SDR are identical up to paperwhite nits.
+
 		float paperWhiteNits = SharedData::HDRData.y;
 		float peakNits = SharedData::HDRData.z;
 		float pw = paperWhiteNits / sRGB_WhiteLevelNits;
 		float peak = peakNits / sRGB_WhiteLevelNits;
 
-		float3 hdrGamma = ENABLE_LL ? Color::LinearToGamma(inputColor) : inputColor;
-		float hdrGammaLum = Color::RGBToLuminance(hdrGamma);
-		hdrGamma = lerp(hdrGammaLum, hdrGamma, Cinematic.x);
-		hdrGamma = lerp(hdrGamma, hdrGammaLum * Tint.xyz, Tint.w);
-		hdrGamma *= Cinematic.w;
-		hdrGamma = lerp(avgValue.x, hdrGamma, Cinematic.z);
-
-#		if defined(FADE)
-		hdrGamma = lerp(hdrGamma, Fade.xyz, Fade.w);
-#		endif
-
-		hdrGamma += saturate(Param.x - hdrGamma) * bloomColor;
-
-		float3 hdrLinear = Color::GammaToLinear(max(0.0, hdrGamma));
-		float3 sdrReferenceLinear;
+		// --- Step 1: Identical SDR tonemap + bloom ---
+		float3 sdrTonemapped;
 
 		[branch] if (Param.z > 0.5)
 		{
-			float3 hejlGamma = DisplayMapping::HuePreservingHejlBurgessDawson(hdrLinear, 0.0.xxx);
-			sdrReferenceLinear = Color::GammaToLinear(max(0.0, hejlGamma));
+			sdrTonemapped = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor);
 		}
 		else
 		{
-			float maxCol = Color::RGBToLuminance(hdrLinear);
+			float maxCol = Color::RGBToLuminance(inputColor);
 			float mappedMax = GetTonemapFactorReinhard(maxCol).x;
-			sdrReferenceLinear = maxCol > 1e-6 ? hdrLinear * (mappedMax / maxCol) : hdrLinear;
+			float3 compressedHuePreserving = inputColor * mappedMax / maxCol;
+			sdrTonemapped = compressedHuePreserving;
+
+			// Standard SDR bloom: add bloom where there is headroom below the ceiling.
+			// The radial HDR sun profile from Sky.hlsl ensures the sun center tonemaps
+			// to ~1.0 (no headroom = no bloom bleed) while soft edges remain near
+			// paperwhite with natural headroom for gentle glow.
+			sdrTonemapped += saturate(Param.x - sdrTonemapped) * bloomColor;
 		}
 
-		float3 sdrBase = saturate(sdrReferenceLinear) * pw;
+		// --- Step 2: Identical SDR color grading ---
+		float sdrLuminance = Color::RGBToLuminance(sdrTonemapped);
+		float3 sdrGraded = Cinematic.w * lerp(lerp(sdrLuminance, sdrTonemapped, Cinematic.x), sdrLuminance * Tint.xyz, Tint.w).xyz;
+		sdrGraded = lerp(avgValue.x, sdrGraded, Cinematic.z);
+		sdrGraded = max(0.0, sdrGraded);
 
+#		if defined(FADE)
+		sdrGraded = lerp(sdrGraded, Fade.xyz, Fade.w);
+#		endif
+
+		// sdrGraded is now the exact SDR output (before final gamma encode).
+		// Convert to linear and scale to paperwhite for the HDR base layer.
+		float3 sdrLinear = Color::GammaToLinear(max(0.0, sdrGraded));
+		float3 sdrBase = sdrLinear * pw;
+
+		// DICE compresses the full HDR range above the shoulder start into peak nits.
 		float shoulderStart = pw / peak;
-		float3 diceLinear = DisplayMapping::DICETonemap(hdrLinear * pw, peak, shoulderStart, CS_BT709, CS_BT709);
-		float3 hdrLinearOut = lerp(sdrBase, diceLinear, saturate(sdrReferenceLinear));
+		float3 hdrInputLinear = ENABLE_LL ? inputColor : Color::GammaToLinear(inputColor);
+		float3 diceLinear = DisplayMapping::DICETonemap(hdrInputLinear * pw, peak, shoulderStart, CS_BT709, CS_BT709);
+
+		// DICE only extends highlights AT and ABOVE paperwhite.
+		// Below paperwhite the output is pure sdrBase — identical to SDR/vanilla.
+		// Use raw pre-tonemap luminance (in pw-relative units) to drive the blend:
+		// at shoulderStart the scene is at the paperwhite boundary; above that DICE
+		// takes over.  This avoids the SDR tonemap compressing away the blend signal
+		// (Reinhard maps very bright values to ~0.95, which after gamma roundtrip
+		// produces a diceBlend of only 0.2-0.5, capping output at ~500 nits).
+		float rawLum = average(hdrInputLinear * pw) / peak;
+		float diceBlend = saturate((rawLum - shoulderStart) / max(1.0 - shoulderStart, 1e-4));
+		float3 hdrLinearOut = lerp(sdrBase, diceLinear, diceBlend);
 
 		outputColor = Color::LinearToGamma(max(0.0, hdrLinearOut));
 	} else {
