@@ -5,6 +5,7 @@
 #include "Common/MotionBlur.hlsli"
 #include "Common/Permutation.hlsli"
 #include "Common/Random.hlsli"
+#include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"
 
 #define DEFERRED
@@ -841,7 +842,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		bounceLighting = max(0, bounceLighting);
 #					if defined(SKYLIGHTING)
-		float3 bouncedSkylighting = saturate(Color::MultiBounceAO(SharedData::pseudoSunBounceSettings.groundAlbedo, skylightingDiffuse) * skylightingDiffuse);
+		float3 bouncedSkylighting = saturate(MultiBounceAO(SharedData::pseudoSunBounceSettings.groundAlbedo, skylightingDiffuse) * skylightingDiffuse);
 		bounceLighting *= bouncedSkylighting;
 		specularBounce *= bouncedSkylighting;
 #					endif
