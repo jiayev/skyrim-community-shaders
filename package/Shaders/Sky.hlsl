@@ -312,7 +312,7 @@ PS_OUTPUT main(PS_INPUT input)
 		baseColor.w *= cloudTransmit;
 #		endif
 	} else if (enableProceduralSun) {
-		float4 baseColor = float4(0, 0, 0, 0);
+		baseColor = float4(0, 0, 0, 1);
 	}
 
 #		if defined(PS_CLOUDS) && defined(CLOUD_SHADOWS)
@@ -369,7 +369,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		elif defined(TEX)
 		float3 sunDir = normalize(SharedData::physSkyData.sunDir);
 		float cosTheta = saturate(dot(normalize(input.WorldPosition.xyz), sunDir));
-		if (enableProceduralSun) {
+		if (enableProceduralSun && cosTheta > SharedData::physSkyData.sunDiskCos) {
 			float sunDiskSin = sqrt(1.0 - SharedData::physSkyData.sunDiskCos * SharedData::physSkyData.sunDiskCos);
 			float tanTheta = sqrt(1.0 - cosTheta * cosTheta) / cosTheta;
 			float normDist = tanTheta * SharedData::physSkyData.sunDiskCos * rcp(sunDiskSin);
