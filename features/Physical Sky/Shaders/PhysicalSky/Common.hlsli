@@ -5,6 +5,10 @@
 #include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
 
+#if defined(CLOUD_SHADOWS)
+#	include "CloudShadows/CloudShadows.hlsli"
+#endif
+
 #ifndef OMIT_PS_NAMESPACE
 namespace PhysSky
 {
