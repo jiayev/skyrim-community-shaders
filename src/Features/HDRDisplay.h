@@ -37,9 +37,10 @@ struct HDRDisplay : public Feature
 	{
 		bool enableHDR = false;           // false = vanilla SDR, true = HDR output
 		uint hdrPaperWhite = 203;         // Reference white brightness in nits for HDR
-		uint hdrPeakNits = 1000;          // Maximum display brightness in nits for HDR
+		uint hdrPeakNits = 800;           // Maximum display brightness in nits for HDR
 		float hdrUIBrightness = 2.3f;     // UI brightness multiplier for HDR mode
 		bool dontShowHDRWarning = false;  // User preference to suppress HDR warning popup
+		bool hdrAutoDetected = false;     // Has auto-detection run at least once?
 	};
 
 	Settings settings;
@@ -88,7 +89,7 @@ struct HDRDisplay : public Feature
 		float skipUIComposite;  ///< 1.0 = FG handles UI, skip our compositing
 		float uiBrightness;     ///< UI brightness multiplier (Frame Gen compositing)
 		float isSceneLinear;    ///< 1.0 = Linear Lighting active, scene already linear
-		float pad0;             ///< Padding
+		float pad0;             ///< 1.0 = main menu/loading screen active
 		float pad1;             ///< Padding
 	};
 
@@ -108,6 +109,7 @@ struct HDRDisplay : public Feature
 
 	static bool DetectHDR();
 	static bool isHDRMonitor;
+	bool pendingAutoDetect = false;
 
 	float GetDisplayMaxLuminance() const;
 	mutable float cachedDisplayMaxLuminance = 1000.0f;

@@ -81,12 +81,6 @@ namespace DisplayMapping
 			Color *= compressedLuminanceNormalized / sourceLuminanceNormalized;
 		}
 
-		// Hue-preserving channel clamp: if any channel overshoots PeakWhite, scale all
-		// channels down uniformly so the brightest lands exactly on PeakWhite.
-		float peakChannel = max3(Color);
-		if (peakChannel > PeakWhite)
-			Color *= PeakWhite / peakChannel;
-
 		return FromColorSpaceToColorSpace(Color, ProcessingColorSpace, InOutColorSpace);
 	}
 

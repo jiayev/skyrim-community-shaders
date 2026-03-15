@@ -160,6 +160,8 @@ SH2Color SphericalHarmonics::Product(SH2Color shL, SH2Color shR)
 
 SH2 SphericalHarmonics::HanningConvolution(SH2 sh, float w)
 {
+	if (w <= 0)
+		return sh;
 	SH2 result;
 	float invW = 1.0f / w;
 	float factorBand1 = (1.0f + cos(3.14159265358979323846f * invW)) / 2.0f;
@@ -207,7 +209,11 @@ static T reflect(const T& i, const T& n)
 template <typename T>
 static T normalize(const T& v)
 {
-	return v * (1.0f / sqrtf(v.Dot(v)));
+	const float len2 = v.Dot(v);
+	if (len2 <= 1e-8f) {
+		return v;
+	}
+	return v * (1.0f / sqrtf(len2));
 }
 
 // Author: ProfJack
@@ -216,6 +222,7 @@ SH2 SphericalHarmonics::FauxSpecularLobe(float3 N, float3 V, float roughness)
 {
 	// https://www.gdcvault.com/play/1026701/Fast-Denoising-With-Self-Stabilizing
 	// get dominant ggx reflection direction
+	roughness = std::clamp(roughness, 0.0f, 1.0f);
 	float f = (1 - roughness) * (sqrt(1 - roughness) + roughness);
 	float3 R = reflect(-V, N);
 	float3 D = R * f + N * (1 - f);
@@ -236,7 +243,7 @@ float SphericalHarmonics::SHHallucinateZH3Irradiance(SH2 sh, float3 direction)
 	float3 zonalAxis = normalize(float3(sh.c1[2], sh.c1[0], sh.c1[1]));
 	float ratio = 0.0;
 	ratio = abs(zonalAxis.Dot(float3(-sh.c1[2], -sh.c1[0], sh.c1[1])));
-	ratio /= sh.c0;
+	ratio /= std::max(1e-8f, sh.c0);
 	float zonalL2Coeff = sh.c0 * (0.08f * ratio + 0.6f * ratio * ratio);  // Curve-fit; Section 3.4.3
 	float fZ = zonalAxis.Dot(direction);
 	float zhDir = sqrt(5.0f / (16.0f * 3.14159265358979323846f)) * (3.0f * fZ * fZ - 1.0f);

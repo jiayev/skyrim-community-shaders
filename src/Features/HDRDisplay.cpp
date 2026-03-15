@@ -247,7 +247,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	hdrPaperWhite,
 	hdrPeakNits,
 	hdrUIBrightness,
-	dontShowHDRWarning);
+	dontShowHDRWarning,
+	hdrAutoDetected);
 
 void HDRDisplay::DrawSettings()
 {
@@ -446,7 +447,7 @@ void HDRDisplay::DrawSettings()
 			ImGui::Text("203 nits is the ITU BT.2408 reference. Increase for a brighter image.");
 		}
 
-		ImGui::SliderInt("Peak Brightness (nits)", reinterpret_cast<int*>(&currentPeakNits), 400, 10000);
+		ImGui::SliderInt("Peak Brightness (nits)", reinterpret_cast<int*>(&currentPeakNits), 400, 2000);
 		{
 			std::lock_guard<std::mutex> lock(settingsMutex);
 			if (currentPeakNits <= settings.hdrPaperWhite) {
@@ -463,6 +464,11 @@ void HDRDisplay::DrawSettings()
 		}
 
 		ImGui::TextDisabled("Display reports: %.0f nits max", cachedDisplayMaxLuminance);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Reported by OS/driver (DXGI MaxLuminance), not a direct meter reading.");
+			ImGui::Text("It may be EDID metadata and can differ from real highlight peak output.");
+			ImGui::Text("Treat this as a starting point and tune Peak Brightness as needed.");
+		}
 	}
 
 	// UI brightness slider - only shown when HDR is enabled
@@ -498,16 +504,16 @@ void HDRDisplay::LoadSettings(json& o_json)
 
 	bool oldEnableHDR = settings.enableHDR;
 
-	// Check if this is first launch (no enableHDR setting saved)
-	bool isFirstLaunch = !o_json.contains("enableHDR");
-
 	settings = o_json;
 
-	// On first launch, auto-configure HDR based on display detection
-	if (isFirstLaunch) {
-		bool hdrMonitor = DetectHDR();
-		settings.enableHDR = hdrMonitor;
-		logger::info("[HDR] First launch detected - auto-configuring HDR based on display: {}", hdrMonitor ? "enabled" : "disabled");
+	// Defer auto-detection to SetupResources where the renderer is available.
+	// DetectHDR() needs a valid HWND which doesn't exist during early plugin init.
+	// hdrAutoDetected starts false in defaults and is only set true after auto-detect
+	// completes in SetupResources, so this correctly triggers on first launch even
+	// when the default config was auto-generated with enableHDR: false.
+	if (!settings.hdrAutoDetected) {
+		pendingAutoDetect = true;
+		logger::info("[HDR] Auto-detection not yet run - deferring to SetupResources");
 	}
 
 	if (settings.enableHDR != oldEnableHDR) {
@@ -557,6 +563,14 @@ void HDRDisplay::SetupResources()
 	}
 
 	DetectHDR();
+
+	if (pendingAutoDetect) {
+		pendingAutoDetect = false;
+		std::lock_guard<std::mutex> lock(settingsMutex);
+		settings.enableHDR = isHDRMonitor;
+		settings.hdrAutoDetected = true;
+		logger::info("[HDR] Auto-configured HDR based on display: {}", isHDRMonitor ? "enabled" : "disabled");
+	}
 
 	// Cache display max luminance for UI display
 	cachedDisplayMaxLuminance = GetDisplayMaxLuminance();
@@ -1093,10 +1107,15 @@ ID3D11ComputeShader* HDRDisplay::GetUIBrightnessCS()
 void HDRDisplay::ScaleUIBrightnessForFG()
 {
 	auto& upscaling = globals::features::upscaling;
+	bool isMainOrLoadingMenu = globals::game::ui &&
+	                           (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) ||
+								   globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
 
 	// Only run when FG is actively compositing UI this frame
 	bool fgCompositing = upscaling.d3d12SwapChainActive &&
 	                     upscaling.settings.frameGenerationMode &&
+	                     !globals::game::ui->GameIsPaused() &&
+	                     !isMainOrLoadingMenu &&
 	                     !globals::game::isVR;
 	if (!fgCompositing)
 		return;
@@ -1208,7 +1227,7 @@ void HDRDisplay::UpdateHDRData() const
 	data.skipUIComposite = skipUIComposite ? 1.f : 0.f;
 	data.uiBrightness = settings.hdrUIBrightness;
 	data.isSceneLinear = isSceneLinear ? 1.f : 0.f;
-	data.pad0 = 0.f;
+	data.pad0 = isMainOrLoadingMenu ? 1.f : 0.f;
 	data.pad1 = 0.f;
 	hdrDataCB->Update(data);
 }

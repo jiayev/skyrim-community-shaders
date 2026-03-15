@@ -4,6 +4,7 @@
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
 #include "Common/MotionBlur.hlsli"
+#include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 #include "Common/VR.hlsli"
@@ -51,11 +52,11 @@ void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 	il = max(0, Color::YCoCgToRGB(float3(ssgiIlY, ssgiIlCoCg)));
 }
 
-void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, in float3 normal, in float3 view, in float roughness)
+void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il, in float3 normal, in float3 view, in float roughness)
 {
-	ao = 1 - SsgiAoTexture[pixCoord].x;
 	float NdotV = dot(normal, view);
-	ao = Color::SpecularAOLagarde(saturate(NdotV), ao, roughness);
+	float alpha = roughness * roughness;
+	ao = SpecularOcclusion(saturate(NdotV), alpha, ao);
 #	if defined(SSRT)
 	if (SharedData::ssrtSettings.EnableSpecular) {
 		il = 0;
@@ -160,11 +161,13 @@ Texture2D<float4> SSRTexture : register(t16);
 
 	float3 linAlbedo = Color::IrradianceToLinear(albedo / Color::PBRLightingScale);
 
-	linDiffuseColor *= sqrt(ssgiAo);
+	float3 multiBounceSSGIAo = MultiBounceAO(linAlbedo, ssgiAo);
+
+	linDiffuseColor *= sqrt(multiBounceSSGIAo);
 
 	diffuseColor = Color::IrradianceToGamma(linDiffuseColor);
 
-	diffuseColor += Color::IrradianceToGamma(Color::IrradianceToLinear(directionalAmbientColor) * ssgiAo);
+	diffuseColor += Color::IrradianceToGamma(Color::IrradianceToLinear(directionalAmbientColor) * multiBounceSSGIAo);
 
 	linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
 
@@ -177,7 +180,7 @@ Texture2D<float4> SSRTexture : register(t16);
 
 	float3 reflectance = ReflectanceTexture[dispatchID.xy];
 
-	if (reflectance.x > 0.0 || reflectance.y > 0.0 || reflectance.z > 0.0) {
+	if (any(reflectance > 0.0)) {
 		float3 V = -normalize(positionWS.xyz);
 		float3 R = reflect(-V, normalWS);
 
@@ -268,7 +271,6 @@ Texture2D<float4> SSRTexture : register(t16);
 		}
 
 #	if defined(SSGI)
-		float ssgiAo;
 		float3 ssgiIlSpecular;
 		SampleSSGISpecular(dispatchID.xy, specularLobe, ssgiAo, ssgiIlSpecular, normalWS, V, roughness);
 

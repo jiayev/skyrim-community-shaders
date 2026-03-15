@@ -29,6 +29,7 @@ cbuffer PerFrame : register(b0)
 	float skipUIComposite : packoffset(c0.w);
 	float uiBrightness : packoffset(c1.x);
 	float isSceneLinear : packoffset(c1.y);
+	float isMainOrLoadingMenu : packoffset(c1.z);
 }
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
@@ -47,6 +48,7 @@ cbuffer PerFrame : register(b0)
 
 	if (hdrEnabled) {
 		// Scene arrives gamma-encoded BT.709 from ISHDR (post-DICE tonemapping).
+		// ISHDR already scales the scene into HDR paper-white space using 80-nit-relative units.
 		// Convert to linear, then BT.2020, then PQ for HDR10 output.
 		float3 sceneLinear = scene.rgb;
 		float3 sceneBT2020 = sceneLinear;
@@ -58,41 +60,38 @@ cbuffer PerFrame : register(b0)
 		sceneBT2020 = max(sceneBT2020, 0.0);
 
 		if (skipUI) {
-			// FG handles UI compositing. ISHDR pre-scales the scene by (paperWhite/80) before
-			// DICE tonemapping, so encoding at sRGB_WhiteLevelNits (80) correctly maps
-			// reference white to paperWhite nits on the display.
+			// FG handles UI compositing separately. Scene is already scaled by ISHDR.
 			finalColor = Color::pq::Encode(sceneBT2020, sRGB_WhiteLevelNits);
 		} else {
-			// Replicate FidelityFX FG compositing exactly: encode both scene and UI to PQ,
-			// then premultiplied-alpha blend in PQ space.
-			//
-			// FG path: UIBrightnessCS converts UI to PQ, FidelityFX does:
-			//   result = ui_pq_premult + scene_pq * (1 - ui.a)
-			// Matching that here makes FG-on and FG-off visually identical.
+			// On the main/loading menu the scene is SDR-range (80-nit baseline after PQ), so
+			// both the scene background and UI need the same uiBrightness lift to match the
+			// ~200-250 nit level that Windows applies when remapping SDR content on an HDR display.
+			float effectiveSceneScale = isMainOrLoadingMenu > 0.5 ? uiBrightness : 1.0;
+			if (SharedData::postProcessingSettings.DisableVanillaTonemapping) {
+				// In this path the scene is already linear BT.2020, while the UI is still
+				// gamma-encoded BT.709 with premultiplied alpha.
+				float3 uiBT2020Premultiplied;
 
-			// Scene: encode to PQ at 80 nits (ISHDR pre-scaled by pw/80, so ref white = pw nits)
-			float3 scenePQ = Color::pq::Encode(sceneBT2020, sRGB_WhiteLevelNits);
+				if (ui.a > 0.001) {
+					float3 uiStraight = ui.rgb / ui.a;
+					float3 uiLinear = Color::GammaToTrueLinear(max(0.0, uiStraight));
+					uiBT2020Premultiplied = Color::BT709ToBT2020(uiLinear) * (ui.a * uiBrightness);
+				} else {
+					uiBT2020Premultiplied = Color::BT709ToBT2020(Color::GammaToTrueLinear(max(0.0, ui.rgb))) * uiBrightness;
+				}
 
-			// Convert UI to premultiplied PQ, mirroring UIBrightnessCS.
-			// When alpha > 0: unpremultiply, convert to nits, re-premultiply in PQ space.
-			// When alpha == 0 but rgb != 0 (third-party/Scaleform UI that doesn't write dest alpha),
-			// apply the color transform on premultiplied values directly and composite additively.
-			float3 uiPremultPQ;
-			if (ui.a > 0.001) {
-				float3 uiStraight = ui.rgb / ui.a;
-				float3 uiLinear = Color::GammaToTrueLinear(max(0.0, uiStraight));
-				float3 uiBT2020 = Color::BT709ToBT2020(uiLinear);
-				float3 uiNits = uiBT2020 * sRGB_WhiteLevelNits * uiBrightness;
-				uiPremultPQ = Color::pq::Encode(uiNits / 10000.0, 10000.0) * ui.a;
+				float3 compositedBT2020 = uiBT2020Premultiplied + sceneBT2020 * (1.0 - ui.a) * effectiveSceneScale;
+				finalColor = Color::pq::Encode(max(0.0, compositedBT2020), sRGB_WhiteLevelNits);
 			} else {
-				float3 uiLinear = Color::GammaToTrueLinear(max(0.0, ui.rgb));
-				float3 uiBT2020 = Color::BT709ToBT2020(uiLinear);
-				float3 uiNits = uiBT2020 * sRGB_WhiteLevelNits * uiBrightness;
-				uiPremultPQ = Color::pq::Encode(uiNits / 10000.0, 10000.0);
-			}
+				// Composite in gamma space (matching SDR behavior), then convert to HDR.
+				// The vanilla UI was designed for gamma-space blending; compositing in PQ
+				// over-darkens and compositing in linear over-brightens behind UI overlays.
+				float3 composited = ui.rgb * uiBrightness + scene.rgb * (1.0 - ui.a) * effectiveSceneScale;
 
-			// Premultiplied alpha blend in PQ space (additive when alpha = 0)
-			finalColor = uiPremultPQ + scenePQ * (1.0 - ui.a);
+				float3 compositedLinear = Color::GammaToLinear(max(0.0, composited));
+				float3 compositedBT2020 = Color::BT709ToBT2020(compositedLinear);
+				finalColor = Color::pq::Encode(max(0.0, compositedBT2020), sRGB_WhiteLevelNits);
+			}
 		}
 	} else {
 		float3 sceneGamma = scene.rgb;

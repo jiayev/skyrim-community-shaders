@@ -1,7 +1,9 @@
 #include "Common/Color.hlsli"
 #include "Common/FastMath.hlsli"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/Permutation.hlsli"
 #include "Common/Random.hlsli"
+#include "Common/SharedData.hlsli"
 #include "Common/VR.hlsli"
 
 struct VS_INPUT
@@ -233,6 +235,85 @@ PS_OUTPUT main(PS_INPUT input)
 	baseColor.xyz = Color::Sky(baseColor.xyz);
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
+#		if defined(PHYSICAL_SKY)
+	bool enableProceduralSun = SharedData::physSkyData.sunDiskCos > 0.0 && SharedData::physSkyData.enabled && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun);
+#		else
+	bool enableProceduralSun = false;
+#		endif
+	if (SharedData::HDRData.x > 0.5 && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun) && !enableProceduralSun) {
+		// HDR sun: luminance-driven radial intensity profile.
+		// Uses the texture's own luminance as a 0-1 shape mask so only the bright
+		// center reaches peak display brightness while edges stay at paperwhite.
+		// This preserves the physical disc size regardless of peak/paperwhite settings
+		// and prevents bloom blowout (edges have natural headroom, center has none).
+
+		float paperWhiteNits = max(SharedData::HDRData.y, 1.0);
+		float peakNits = max(SharedData::HDRData.z, paperWhiteNits + 1.0);
+
+		// Working space: 80-nit-relative units (what ISHDR expects).
+		float pw = paperWhiteNits / sRGB_WhiteLevelNits;
+		float peak = peakNits / sRGB_WhiteLevelNits;
+		float peakRatio = peak / pw;
+
+		// Controls how tightly brightness concentrates at the disc center.
+		// 2.0 = quadratic falloff (natural, perceptual).
+		static const float kSoftness = 2.0;
+
+#		if defined(DITHER)
+		// --- Sun glare billboard ---
+		float glareLum = max(Color::RGBToLuminance(baseColor.xyz), 1e-5);
+
+		// Normalize weather-mod HDR textures that may exceed 1.0
+		float glareNormLum = saturate(glareLum);
+		if (glareLum > 1.0)
+			baseColor.xyz *= rcp(glareLum);
+
+		// Radial profile: center (1.0) -> peak/pw, edges (->0) -> 1.0 (paperwhite)
+		float glareShape = pow(glareNormLum, kSoftness);
+		float glareIntensity = lerp(1.0, peakRatio, glareShape);
+
+		// Scale color preserving hue. For dim texels intensity ~ 1.0, skip division.
+		baseColor.xyz *= (glareNormLum > 0.01) ? (glareIntensity / glareNormLum) : glareIntensity;
+
+		// Apply vertex colour tint (engine's glare envelope)
+		baseColor.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz;
+
+#		else
+		// --- Sun disc billboard ---
+		float srcLum = max(Color::RGBToLuminance(baseColor.xyz), 1e-5);
+
+		// Normalize weather-mod HDR textures
+		float normLum = saturate(srcLum);
+		if (srcLum > 1.0)
+			baseColor.xyz *= rcp(srcLum);
+
+		// Radial profile: center (1.0) -> peak/pw, edges (->0) -> 1.0 (paperwhite)
+		float shape = pow(normLum, kSoftness);
+		float intensity = lerp(1.0, peakRatio, shape);
+
+		// Scale color preserving hue. For dim texels intensity ~ 1.0, skip division.
+		baseColor.xyz *= (normLum > 0.01) ? (intensity / normLum) : intensity;
+
+		// Preserve disc shape: don't apply PParams additive sky blend to sun disc
+		yyy = 0.0;
+#		endif
+
+#		if defined(CLOUD_SHADOWS)
+		// Clouds are alpha-blended and don't write depth, so use the cloud shadow field to
+		// attenuate the sun where clouds are actually along the camera->sun path.
+		float3 cloudSampleDir = CloudShadows::GetCloudShadowSampleDir(input.WorldPosition.xyz, SharedData::DirLightDirection.xyz);
+		float cloudCube0 = CloudShadows::CloudShadowsTexture.SampleLevel(SampBaseSampler, cloudSampleDir, 0).x;
+		float cloudCube1 = CloudShadows::CloudShadowsTexture.SampleLevel(SampBaseSampler, cloudSampleDir, 1).x;
+		float cloudCube = lerp(cloudCube0, cloudCube1, 0.5);
+		float cloudMult = lerp(1.0, 1.0 - cloudCube, SharedData::cloudShadowsSettings.Opacity);
+		float edgeWidth = max(fwidth(cloudMult) * 2.0, 0.02);
+		float cloudTransmit = smoothstep(0.12 - edgeWidth, 0.88 + edgeWidth, saturate(cloudMult));
+		baseColor.xyz *= cloudTransmit;
+		baseColor.w *= cloudTransmit;
+#		endif
+	} else if (enableProceduralSun) {
+		float4 baseColor = float4(0, 0, 0, 0);
+	}
 
 #		if defined(PS_CLOUDS) && defined(CLOUD_SHADOWS)
 	if (SharedData::physSkyData.enabled)
@@ -245,7 +326,11 @@ PS_OUTPUT main(PS_INPUT input)
 		TexNoiseGradSampler.Sample(SampNoiseGradSampler, noiseGradUv).x * 0.03125 + -0.0078125;
 
 #			ifdef TEX
-	psout.Color.xyz = (Color::Sky(input.Color.xyz) * baseColor.xyz + yyy) + noiseGrad;
+	float3 sunGlareColor = Color::Sky(input.Color.xyz) * baseColor.xyz;
+	if (SharedData::HDRData.x > 0.5 && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun)) {
+		sunGlareColor = baseColor.xyz;
+	}
+	psout.Color.xyz = (sunGlareColor + yyy) + noiseGrad;
 	psout.Color.w = baseColor.w * input.Color.w;
 #			else
 	psout.Color.xyz = (yyy + Color::Sky(input.Color.xyz)) + noiseGrad;
@@ -262,7 +347,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		elif defined(HORIZFADE)
 	psout.Color.xyz = float3(1.5, 1.5, 1.5) * (Color::Sky(input.Color.xyz) * baseColor.xyz + yyy);
 	psout.Color.w = input.TexCoord2.x * (baseColor.w * input.Color.w);
-#		else
+#		else  // not DITHER, not MOONMASK, not HORIZFADE
 	psout.Color.w = input.Color.w * baseColor.w;
 	psout.Color.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz + yyy;
 #		endif
@@ -281,10 +366,10 @@ PS_OUTPUT main(PS_INPUT input)
 #		elif defined(PS_CLOUDS)
 		float4 apColor = PhysSky::SampleAp(viewDir, input.Position.xy, psCloudDist, PhysSky::SampSv);
 		psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
-#		elif defined(DEFERRED) && defined(TEX)
+#		elif defined(TEX)
 		float3 sunDir = normalize(SharedData::physSkyData.sunDir);
 		float cosTheta = saturate(dot(normalize(input.WorldPosition.xyz), sunDir));
-		if (cosTheta > SharedData::physSkyData.sunDiskCos && SharedData::physSkyData.sunDiskCos > 0.0) {
+		if (enableProceduralSun) {
 			float sunDiskSin = sqrt(1.0 - SharedData::physSkyData.sunDiskCos * SharedData::physSkyData.sunDiskCos);
 			float tanTheta = sqrt(1.0 - cosTheta * cosTheta) / cosTheta;
 			float normDist = tanTheta * SharedData::physSkyData.sunDiskCos * rcp(sunDiskSin);
@@ -315,6 +400,13 @@ PS_OUTPUT main(PS_INPUT input)
 	if (depth < input.Position.z)
 		psout.Color.w = 0;
 
+#	else
+	// Even without cloud shadows enabled, sun disc should be occluded by scene depth (clouds, terrain, etc.)
+	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun)) {
+		float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
+		if (depth < input.Position.z)
+			psout.Color.w = 0;
+	}
 #	endif
 
 	return psout;
