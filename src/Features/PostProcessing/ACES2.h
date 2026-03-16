@@ -66,6 +66,9 @@ namespace ACES2
 		float boundaryRGB_to_XYZ[12];
 		float boundaryXYZ_to_RGB[12];
 
+		// Limiting gamut → display encoding gamut matrix (P3-D65 → Rec.2020 for HDR, identity for SDR)
+		float limitToDisplayMtx[12];
+
 		// Gamut cusp table: J, M, h for TABLE_SIZE entries
 		float gamutCuspTableJ[TABLE_SIZE];
 		float gamutCuspTableM[TABLE_SIZE];
@@ -82,6 +85,7 @@ namespace ACES2
 	};
 
 	// Initialize all ACES 2.0 parameters
-	// When hdr=true, uses Rec.2020 as limiting/boundary gamut instead of sRGB
+	// When hdr=true, uses P3-D65 as limiting gamut (matching official ACES 2.0 for HDR Rec.2020 displays)
+	// and includes a P3-D65 → Rec.2020 conversion matrix
 	ACES2CB ComputeParams(float peakLuminance = 100.0f, bool hdr = false);
 }
