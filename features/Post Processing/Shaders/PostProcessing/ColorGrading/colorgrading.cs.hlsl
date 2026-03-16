@@ -30,8 +30,9 @@ cbuffer ColorCB : register(b1)
 	float4 shadowsHighlightsRange;  // shadowBegin, shadowEnd, highlightBegin, highlightEnd
 
 	float4 tonemapParams[2];
-	float4 colorSpaceTransform[3];
-	float4 invColorSpaceTransform[3];
+	float4 inputToWorking[3];      // sRGB → working color space
+	float4 workingToTonemap[3];    // working → tonemapper native space
+	float4 tonemapToOutput[3];     // tonemapper native → output space
 
 	// game value
 	float4 cinematic;  // saturation, brightness, contrast
@@ -289,23 +290,14 @@ float3 AldridgeFilmic(float3 val)
 
 float3 AcesHill(float3 val)
 {
-	static const float3x3 g_sRGBToACEScg = float3x3(
-		0.613117812906440, 0.341181995855625, 0.045787344282337,
-		0.069934082307513, 0.918103037508582, 0.011932775530201,
-		0.020462992637737, 0.106768663382511, 0.872715910619442);
-	static const float3x3 g_ACEScgToSRGB = float3x3(
-		1.704887331049502, -0.624157274479025, -0.080886773895704,
-		-0.129520935348888, 1.138399326040076, -0.008779241755018,
-		-0.024127059936902, -0.124620612286390, 1.148822109913262);
-
+	// Input is already in ACEScg (converted by workingToTonemap matrix)
 	val *= tonemapParams[0].x;
 
-	val = mul(g_sRGBToACEScg, val);
 	float3 a = val * (val + 0.0245786f) - 0.000090537f;
 	float3 b = val * (0.983729f * val + 0.4329510f) + 0.238081f;
 	val = a / b;
-	val = mul(g_ACEScgToSRGB, val);
 
+	// Output remains in ACEScg (converted to output space by tonemapToOutput matrix)
 	val = saturate(val);
 
 	return val;
@@ -693,13 +685,13 @@ float3 LogToLinearSpace(float3 val, uint logType)
 
 float3 ColorGrading(float3 color)
 {
-	// Color space transform (preferably sRGB to ACEScg)
+	// Stage 1: Input (sRGB) → Working color space
 	if (enableColorSpaceTransform) {
-		const float3x3 colorSpaceTransformMat = float3x3(colorSpaceTransform[0].xyz, colorSpaceTransform[1].xyz, colorSpaceTransform[2].xyz);
-		color = mul(colorSpaceTransformMat, color);
+		const float3x3 inputToWorkingMat = float3x3(inputToWorking[0].xyz, inputToWorking[1].xyz, inputToWorking[2].xyz);
+		color = mul(inputToWorkingMat, color);
 	}
 
-	// HDR
+	// HDR color grading (in working space)
 	// Exposure/White Balance
 	color *= exposureTemperatureTint.x;
 	color = WhiteBalance(color);
@@ -725,18 +717,25 @@ float3 ColorGrading(float3 color)
 		color = LogToLinearSpace(color, logType);
 	}
 
-	// Tonemap
+	// Stage 2: Working → Tonemapper native space
+	if (enableColorSpaceTransform) {
+		const float3x3 workingToTonemapMat = float3x3(workingToTonemap[0].xyz, workingToTonemap[1].xyz, workingToTonemap[2].xyz);
+		color = mul(workingToTonemapMat, color);
+	}
+
+	// Tonemap (in tonemapper's native space)
 	if (enableTonemap) {
 		color = TONEMAP_FUNC(color);
 	}
 
-	// Inverse color space transform
+	// Stage 3: Tonemapper native → Output space
 	if (enableColorSpaceTransform) {
-		const float3x3 invColorSpaceTransformMat = float3x3(invColorSpaceTransform[0].xyz, invColorSpaceTransform[1].xyz, invColorSpaceTransform[2].xyz);
-		color = mul(invColorSpaceTransformMat, color);
+		const float3x3 tonemapToOutputMat = float3x3(tonemapToOutput[0].xyz, tonemapToOutput[1].xyz, tonemapToOutput[2].xyz);
+		color = mul(tonemapToOutputMat, color);
 	}
 
-	// LDR (skip when HDR is enabled, as LDR color grading is designed for SDR output)
+	// LDR post-tonemap adjustments (in output space)
+	// Skip when HDR is enabled, as LDR color grading is designed for SDR output
 	if (!skipLDR && !enableHDR) {
 		// Lift Gamma Gain
 		color = LiftGammaGain(color, liftgammagain[0].gbar, liftgammagain[1].gbar, liftgammagain[2].gbar);
