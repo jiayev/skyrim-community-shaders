@@ -337,8 +337,13 @@ float3 ACES2OutputTransform(float3 acescg)
 	float3x3 limit_RGB_to_XYZ = ACES2_loadMat3(aces2_boundaryRGB_to_XYZ);
 	float3 displayRGB = ACES2_JMh_to_RGB(JMh_compressed, limit_XYZ_to_RGB, limit_RGB_to_XYZ);
 
-	// Clamp to [0,1] displayable range
-	displayRGB = saturate(displayRGB);
+	if (enableHDR) {
+		// HDR: allow values > 1.0, scale to nits range, clamp negatives only
+		displayRGB = max(0, displayRGB) * (aces2_peakLuminance / 100.0);
+	} else {
+		// SDR: clamp to [0,1] displayable range
+		displayRGB = saturate(displayRGB);
+	}
 
 	return displayRGB;
 }

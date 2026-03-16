@@ -106,8 +106,8 @@ struct ColorGrading : public PostProcessFeature
 		uint skipLUT;
 		uint enableTonemap;
 		uint enableColorSpaceTransform;
-        uint enableHDR;           // HDR display is enabled (auto-set from HDR feature)
-        float hdrPeakNits;        // Maximum display brightness in nits for HDR
+		uint enableHDR;     // HDR display is enabled (auto-set from HDR feature)
+		float hdrPeakNits;  // Maximum display brightness in nits for HDR
 		uint pad;
 	};
 	std::unique_ptr<ConstantBuffer> colorCB = nullptr;
@@ -121,6 +121,8 @@ struct ColorGrading : public PostProcessFeature
 	std::unique_ptr<StructuredBuffer> aces2UpperHullGamma = nullptr;
 	std::unique_ptr<StructuredBuffer> aces2LowerHullGamma = nullptr;
 	bool aces2Initialized = false;
+	bool aces2IsHDR = false;       // tracks whether current ACES2 tables are for HDR
+	float aces2PeakNits = 100.0f;  // tracks the peak luminance used for current ACES2 tables
 
 	std::unique_ptr<Texture2D> texColor = nullptr;
 	std::unique_ptr<Texture3D> texLUT = nullptr;

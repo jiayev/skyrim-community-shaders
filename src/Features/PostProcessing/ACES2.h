@@ -81,6 +81,7 @@ namespace ACES2
 		float lowerHullGamma[TABLE_SIZE];
 	};
 
-	// Initialize all ACES 2.0 parameters for SDR (100 nits, sRGB output)
-	ACES2CB ComputeParams(float peakLuminance = 100.0f);
+	// Initialize all ACES 2.0 parameters
+	// When hdr=true, uses Rec.2020 as limiting/boundary gamut instead of sRGB
+	ACES2CB ComputeParams(float peakLuminance = 100.0f, bool hdr = false);
 }

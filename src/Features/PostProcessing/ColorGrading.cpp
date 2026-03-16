@@ -84,8 +84,10 @@ struct TonemapperInfo
 	std::string_view name;
 	std::string_view func_name;
 	std::string_view desc;
-	int nativeInputSpace;   // color space the tonemapper expects as input
-	int nativeOutputSpace;  // color space the tonemapper produces as output
+	int nativeInputSpace;      // color space the tonemapper expects as input
+	int nativeOutputSpace;     // color space the tonemapper produces as output
+	bool supportsHDR;          // whether this tonemapper supports HDR output
+	int nativeOutputSpaceHDR;  // output color space index when HDR is active
 
 	using CTP = std::array<float4, 2>;
 	std::function<void(CTP&)> draw_settings_func;
@@ -100,14 +102,14 @@ struct TonemapperInfo
 
 		static std::vector<TonemapperInfo> tonemappers = {
 			{ "Reinhard"sv, "Reinhard"sv,
-				"Mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002."sv, 0, 0,
+				"Mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002."sv, 0, 0, false, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Reinhard Extended"sv, "ReinhardExt"sv,
 				"Extended mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002. "
 				"An additional user parameter specifies the smallest luminance that is mapped to 1, which allows high luminances to burn out."sv,
-				0, 0,
+				0, 0, false, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("White Point", &params[0].y, 0.f, 10.f, "%.2f"); },
@@ -116,14 +118,14 @@ struct TonemapperInfo
 			{ "Hejl Burgess-Dawson Filmic"sv, "HejlBurgessDawsonFilmic"sv,
 				"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
 				"See his blog post about \"Approximating Film with Tonemapping\"."sv,
-				0, 0,
+				0, 0, false, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Aldridge Filmic"sv, "AldridgeFilmic"sv,
 				"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
 				"See his blog post about \"Approximating Film with Tonemapping\"."sv,
-				0, 0,
+				0, 0, false, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Cutoff", &params[0].y, 0.f, .5f, "%.2f"); },
@@ -132,7 +134,7 @@ struct TonemapperInfo
 			{ "Lottes Filmic/AMD Curve"sv, "LottesFilmic"sv,
 				"Filmic curve by Timothy Lottes, described in his GDC talk \"Advanced Techniques and Optimization of HDR Color Pipelines\". "
 				"Also known as the \"AMD curve\"."sv,
-				0, 0,
+				0, 0, false, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Contrast", &params[0].y, 1.f, 2.f, "%.2f");
@@ -145,7 +147,7 @@ struct TonemapperInfo
 			{ "Day Filmic/Insomniac Curve"sv, "DayFilmic"sv,
 				"Filmic curve by Mike Day, described in his document \"An efficient and user-friendly tone mapping operator\". "
 				"Also known as the \"Insomniac curve\"."sv,
-				0, 0,
+				0, 0, false, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Black Point", &params[0].y, 0.f, 5.f, "%.2f");
@@ -165,7 +167,7 @@ struct TonemapperInfo
 			{ "Uchimura/Grand Turismo Curve"sv, "UchimuraFilmic"sv,
 				"Filmic curve by Hajime Uchimura, described in his CEDEC talk \"HDR Theory and Practice\". Characterised by its middle linear section. "
 				"Also known as the \"Gran Turismo curve\"."sv,
-				0, 0,
+				0, 0, false, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Max Brightness", &params[0].y, 0.01f, 2.f, "%.2f");
@@ -179,15 +181,25 @@ struct TonemapperInfo
 			{ "ACES 2.0"sv, "ACES2OutputTransform"sv,
 				"Standard ACES 2.0 Output Transform based on the official aces-aswf/aces-core reference. "
 				"Uses CAM16 color appearance model, perceptual tonescale, chroma compression and gamut mapping. "
-				"Output: sRGB SDR (100 nits)."sv,
-				5, 0,  // nativeInput=ACEScg, nativeOutput=sRGB (ACES2 does its own output transform)
-				[](CTP& params) { exposureSlider(&params[0].x); },
+				"HDR output with Rec.2020 gamut mapping is automatically enabled when HDR Display is active."sv,
+				5, 0, true, 2,  // nativeInput=ACEScg, nativeOutput=sRGB (SDR) / Rec2020 (HDR); ACES2 does its own output transform
+				[](CTP& params) {
+					exposureSlider(&params[0].x);
+					auto& hdr = globals::features::hdrDisplay;
+					bool enableHDR = hdr.loaded && hdr.settings.enableHDR;
+					if (enableHDR) {
+						ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), ICON_FA_CHECK " HDR Output Active");
+						ImGui::Text("Peak Brightness: %.0f nits (from HDR settings)", static_cast<float>(hdr.settings.hdrPeakNits));
+					} else {
+						ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "SDR Output (100 nits)");
+					}
+				},
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "AgX Minimal"sv, "AgxMinimal"sv,
 				"Minimal version of Troy Sobotka's AgX using a 6th order polynomial approximation. "
 				"Originally created by bwrensch, and improved by Troy Sobotka. Internally uses AgX input transform."sv,
-				0, 0,
+				0, 0, false, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Slope", &params[0].y, 0.f, 2.f, "%.2f");
@@ -197,17 +209,17 @@ struct TonemapperInfo
 				{ f4{ 1.f, 1.f, 1.f, 0.f }, f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Melon"sv, "MelonTonemap"sv,
-				"Tonemapper designed by TripleMelon to fix the ACES issue of intense colour being shifted."sv, 0, 0,
+				"Tonemapper designed by TripleMelon to fix the ACES issue of intense colour being shifted."sv, 0, 0, false, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Kajiya"sv, "KajiyaTonemap"sv,
-				"Tonemapper designed by Tomasz Stachowiak/Embark for their real time ray tracing engine Kajiya."sv, 0, 0,
+				"Tonemapper designed by Tomasz Stachowiak/Embark for their real time ray tracing engine Kajiya."sv, 0, 0, false, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "GT7"sv, "GT7ToneMapping"sv,
-				"Tonemapper designed for Gran Turismo 7. HDR output is automatically enabled when HDR Display feature is active."sv, 2, 2,
+				"Tonemapper designed for Gran Turismo 7. HDR output is automatically enabled when HDR Display feature is active."sv, 2, 2, true, 2,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					auto& hdr = globals::features::hdrDisplay;
@@ -353,8 +365,28 @@ void ColorGrading::DrawSettings()
 	if (settings.enableTonemap) {
 		auto& tonemappers = TonemapperInfo::GetTonemappers();
 
+		auto& hdrRef = globals::features::hdrDisplay;
+		const bool hdrActive = hdrRef.loaded && hdrRef.settings.enableHDR;
+
+		// Auto-switch to an HDR-capable tonemapper if current one doesn't support HDR
+		if (hdrActive && !tonemappers[tonemapperType].supportsHDR) {
+			for (int i = 0; i < (int)tonemappers.size(); ++i) {
+				if (tonemappers[i].supportsHDR) {
+					tonemappers[tonemapperType].cached_settings = settings.tonemapParams;
+					settings.tonemapParams = tonemappers[i].cached_settings;
+					tonemapperType = i;
+					recompileFlag = true;
+					break;
+				}
+			}
+		}
+
 		if (ImGui::BeginCombo("Tonemapper", tonemappers[tonemapperType].name.data(), ImGuiComboFlags_HeightLargest)) {
-			for (int i = 0; i < tonemappers.size(); ++i) {
+			for (int i = 0; i < (int)tonemappers.size(); ++i) {
+				// Hide non-HDR tonemappers when HDR is active
+				if (hdrActive && !tonemappers[i].supportsHDR)
+					continue;
+
 				if (ImGui::Selectable(tonemappers[i].name.data(), i == tonemapperType)) {
 					tonemappers[tonemapperType].cached_settings = settings.tonemapParams;
 					settings.tonemapParams = tonemappers[i].cached_settings;
@@ -470,7 +502,7 @@ void ColorGrading::UpdateColorSpaceTransforms(bool hdrEnabled)
 	constexpr int kSDRColorSpace = 0;    // sRGB / BT709 gamut
 	const int outputColorSpace = hdrEnabled ? kHDRColorSpace : kSDRColorSpace;
 	const int tonemapInputSpace = tonemappers[tonemapperType].nativeInputSpace;
-	const int tonemapOutputSpace = tonemappers[tonemapperType].nativeOutputSpace;
+	const int tonemapOutputSpace = (hdrEnabled && tonemappers[tonemapperType].supportsHDR) ? tonemappers[tonemapperType].nativeOutputSpaceHDR : tonemappers[tonemapperType].nativeOutputSpace;
 
 	auto storeMatrix = [](const DirectX::SimpleMath::Matrix& mat, std::array<float3, 3>& out) {
 		out = {
@@ -703,7 +735,24 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	// Bind ACES 2.0 resources if the current tonemapper is ACES 2.0
 	auto& tonemappers = TonemapperInfo::GetTonemappers();
 	bool isACES2 = (tonemappers[tonemapperType].func_name == "ACES2OutputTransform"sv);
-	if (isACES2 && aces2Initialized) {
+	if (isACES2) {
+		float peakNits = hdrEnabled ? static_cast<float>(hdr.settings.hdrPeakNits) : 100.0f;
+
+		// Recompute ACES2 tables when HDR state or peak luminance changes
+		if (!aces2Initialized || hdrEnabled != aces2IsHDR || peakNits != aces2PeakNits) {
+			auto params = ACES2::ComputeParams(peakNits, hdrEnabled);
+			aces2CB->Update(params);
+			aces2GamutCuspJ->Update(params.gamutCuspTableJ, sizeof(params.gamutCuspTableJ));
+			aces2GamutCuspM->Update(params.gamutCuspTableM, sizeof(params.gamutCuspTableM));
+			aces2GamutCuspH->Update(params.gamutCuspTableh, sizeof(params.gamutCuspTableh));
+			aces2ReachM->Update(params.reachMTable, sizeof(params.reachMTable));
+			aces2UpperHullGamma->Update(params.upperHullGamma, sizeof(params.upperHullGamma));
+			aces2LowerHullGamma->Update(params.lowerHullGamma, sizeof(params.lowerHullGamma));
+			aces2IsHDR = hdrEnabled;
+			aces2PeakNits = peakNits;
+			aces2Initialized = true;
+		}
+
 		ID3D11Buffer* aces2cb = aces2CB->CB();
 		context->CSSetConstantBuffers(2, 1, &aces2cb);
 

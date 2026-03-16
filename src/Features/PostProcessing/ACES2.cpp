@@ -464,11 +464,19 @@ namespace ACES2
 	// Build all lookup tables
 	// ================================================
 
-	static void buildTables(ACES2CB& cb, float peakLuminance)
+	// Rec.2020 primaries (matching ColorSpaces.hlsli)
+	static const Mat3 Rec2020_to_XYZ = { { { 0.6369580483f, 0.1446169036f, 0.1688809752f },
+		{ 0.2627002120f, 0.6779980715f, 0.0593017165f },
+		{ 0.0000000000f, 0.0280726930f, 1.0609850577f } } };
+	static const Mat3 XYZ_to_Rec2020 = { { { 1.7166511880f, -0.3556707838f, -0.2533662814f },
+		{ -0.6666843518f, 1.6164812366f, 0.0157685458f },
+		{ 0.0176398574f, -0.0427706133f, 0.9421031212f } } };
+
+	static void buildTables(ACES2CB& cb, float peakLuminance, bool hdr)
 	{
-		// Limiting gamut = sRGB (for SDR output)
-		const Mat3& limitRGB_to_XYZ = sRGB_to_XYZ;
-		const Mat3& limitXYZ_to_RGB = XYZ_to_sRGB;
+		// Limiting gamut: sRGB for SDR, Rec.2020 for HDR
+		const Mat3& limitRGB_to_XYZ = hdr ? Rec2020_to_XYZ : sRGB_to_XYZ;
+		const Mat3& limitXYZ_to_RGB = hdr ? XYZ_to_Rec2020 : XYZ_to_sRGB;
 
 		// Reach gamut = AP1 (wide enough to reach all saturated colors)
 		const Mat3& reachRGB_to_XYZ = AP1_to_XYZ;
@@ -519,7 +527,7 @@ namespace ACES2
 	// Public API
 	// ================================================
 
-	ACES2CB ComputeParams(float peakLuminance)
+	ACES2CB ComputeParams(float peakLuminance, bool hdr)
 	{
 		ACES2CB cb{};
 		std::memset(&cb, 0, sizeof(cb));
@@ -543,16 +551,18 @@ namespace ACES2
 		// Input: AP0 → XYZ (for JMh conversion)
 		storeMat3(cb.inputMtx, AP0_to_XYZ);
 
-		// Limit: sRGB → XYZ and XYZ → sRGB
-		storeMat3(cb.limitMtx, sRGB_to_XYZ);
-		storeMat3(cb.boundaryRGB_to_XYZ, sRGB_to_XYZ);
-		storeMat3(cb.boundaryXYZ_to_RGB, XYZ_to_sRGB);
+		// Limit/Boundary: sRGB for SDR, Rec.2020 for HDR
+		const Mat3& limitToXYZ = hdr ? Rec2020_to_XYZ : sRGB_to_XYZ;
+		const Mat3& xyzToLimit = hdr ? XYZ_to_Rec2020 : XYZ_to_sRGB;
+		storeMat3(cb.limitMtx, limitToXYZ);
+		storeMat3(cb.boundaryRGB_to_XYZ, limitToXYZ);
+		storeMat3(cb.boundaryXYZ_to_RGB, xyzToLimit);
 
 		// Reach: AP1 → XYZ
 		storeMat3(cb.reachMtx, AP1_to_XYZ);
 
 		// Build all lookup tables
-		buildTables(cb, peakLuminance);
+		buildTables(cb, peakLuminance, hdr);
 
 		return cb;
 	}
