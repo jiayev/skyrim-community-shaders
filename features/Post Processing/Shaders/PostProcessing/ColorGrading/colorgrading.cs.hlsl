@@ -292,14 +292,22 @@ float3 LottesFilmic(float3 val)
 {
 	val *= tonemapParams[0].x;
 	float a = tonemapParams[0].y,
-		  d = tonemapParams[0].z,
-		  b = (-pow(tonemapParams[1].x, a) + pow(tonemapParams[0].w, a) * tonemapParams[1].y) /
-	          ((pow(tonemapParams[0].w, a * d) - pow(tonemapParams[1].x, a * d)) * tonemapParams[1].y),
-		  c = (pow(tonemapParams[0].w, a * d) * pow(tonemapParams[1].x, a) - pow(tonemapParams[0].w, a) * pow(tonemapParams[1].x, a * d) * tonemapParams[1].y) /
-	          ((pow(tonemapParams[0].w, a * d) - pow(tonemapParams[1].x, a * d)) * tonemapParams[1].y);
+		  d = tonemapParams[0].z;
+	float maxHDR = tonemapParams[0].w;
+	float midIn = tonemapParams[1].x;
+	float midOut = tonemapParams[1].y;
+
+	// In HDR mode, re-derive curve constants so f(maxHDR) = peakOutput
+	// while keeping f(midIn) = midOut (SDR midtones unchanged)
+	float peakOutput = enableHDR ? (hdrPeakNits / REFERENCE_LUMINANCE) : 1.0;
+
+	float b = (pow(maxHDR, a) * midOut - pow(midIn, a) * peakOutput) /
+	          ((pow(maxHDR, a * d) - pow(midIn, a * d)) * midOut * peakOutput),
+		  c = (pow(maxHDR, a * d) * pow(midIn, a) * peakOutput - pow(maxHDR, a) * pow(midIn, a * d) * midOut) /
+	          ((pow(maxHDR, a * d) - pow(midIn, a * d)) * midOut * peakOutput);
 
 	val = pow(val, a) / (pow(val, a * d) * b + c);
-	val = saturate(val);
+	val = enableHDR ? clamp(val, 0.0, peakOutput) : saturate(val);
 	return val;
 }
 
@@ -336,7 +344,7 @@ float3 DayFilmic(float3 val)
 
 float3 UchimuraFilmic(float3 val)
 {
-	const float P = tonemapParams[0].y;
+	float P = tonemapParams[0].y;
 	const float a = tonemapParams[0].z;
 	const float m = tonemapParams[0].w;
 	const float l = tonemapParams[1].x;
@@ -344,6 +352,10 @@ float3 UchimuraFilmic(float3 val)
 	const float b = tonemapParams[1].z;
 
 	val *= tonemapParams[0].x;
+
+	// In HDR mode, extend the peak brightness proportionally to the display's capability
+	if (enableHDR)
+		P *= hdrPeakNits / REFERENCE_LUMINANCE;
 
 	float l0 = ((P - m) * l) / a,
 		  S0 = m + l0,
@@ -361,7 +373,7 @@ float3 UchimuraFilmic(float3 val)
 
 	val = T * w0 + L * w1 + S * w2;
 
-	val = saturate(val);
+	val = enableHDR ? clamp(val, 0.0, P) : saturate(val);
 	return val;
 }
 

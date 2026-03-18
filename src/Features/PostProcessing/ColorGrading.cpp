@@ -77,6 +77,17 @@ bool exposureSlider(float* val)
 	return retval;
 }
 
+void drawHDRStatus()
+{
+	auto& hdr = globals::features::hdrDisplay;
+	if (hdr.loaded && hdr.settings.enableHDR) {
+		ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), ICON_FA_CHECK " HDR Output Active");
+		ImGui::Text("Peak Brightness: %.0f nits (from HDR settings)", static_cast<float>(hdr.settings.hdrPeakNits));
+	} else {
+		ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "SDR Output (HDR Display not enabled)");
+	}
+}
+
 // Profjack Design
 struct TonemapperInfo
 {
@@ -132,15 +143,16 @@ struct TonemapperInfo
 
 			{ "Lottes Filmic/AMD Curve"sv, "LottesFilmic"sv,
 				"Filmic curve by Timothy Lottes, described in his GDC talk \"Advanced Techniques and Optimization of HDR Color Pipelines\". "
-				"Also known as the \"AMD curve\"."sv,
-				0, 0, false, 0,
+				"Also known as the \"AMD curve\". HDR output is automatically enabled when HDR Display feature is active."sv,
+				0, 0, true, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Contrast", &params[0].y, 1.f, 2.f, "%.2f");
 					ImGui::SliderFloat("Shoulder", &params[0].z, 0.01f, 2.f, "%.2f");
 					ImGui::SliderFloat("Maximum HDR Value", &params[0].w, 1.f, 10.f, "%.2f");
 					ImGui::SliderFloat("Input Mid-Level", &params[1].x, 0.f, 1.f, "%.2f");
-					ImGui::SliderFloat("Output Mid-Level", &params[1].y, 0.f, 1.f, "%.2f"); },
+					ImGui::SliderFloat("Output Mid-Level", &params[1].y, 0.f, 1.f, "%.2f");
+					drawHDRStatus(); },
 				{ f4{ 1.f, 1.6f, 0.977f, 8.f }, f4{ 0.18f, 0.267f, 0.f, 0.f } } },
 
 			{ "Day Filmic/Insomniac Curve"sv, "DayFilmic"sv,
@@ -165,8 +177,8 @@ struct TonemapperInfo
 
 			{ "Uchimura/Grand Turismo Curve"sv, "UchimuraFilmic"sv,
 				"Filmic curve by Hajime Uchimura, described in his CEDEC talk \"HDR Theory and Practice\". Characterised by its middle linear section. "
-				"Also known as the \"Gran Turismo curve\"."sv,
-				0, 0, false, 0,
+				"Also known as the \"Gran Turismo curve\". HDR output is automatically enabled when HDR Display feature is active."sv,
+				0, 0, true, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Max Brightness", &params[0].y, 0.01f, 2.f, "%.2f");
@@ -174,7 +186,8 @@ struct TonemapperInfo
 					ImGui::SliderFloat("Linear Section Start", &params[0].w, 0.f, 1.f, "%.2f");
 					ImGui::SliderFloat("Linear Section Length", &params[1].x, .01f, .99f, "%.2f");
 					ImGui::SliderFloat("Black Tightness Shape", &params[1].y, 1.f, 3.f, "%.2f");
-					ImGui::SliderFloat("Black Tightness Offset", &params[1].z, 0.f, 1.f, "%.2f"); },
+					ImGui::SliderFloat("Black Tightness Offset", &params[1].z, 0.f, 1.f, "%.2f");
+					drawHDRStatus(); },
 				{ f4{ 1.f, 1.f, 1.f, .22f }, f4{ 0.4f, 1.33f, 0.f, 0.f } } },
 
 			{ "AgX Minimal"sv, "AgxMinimal"sv,
@@ -203,14 +216,7 @@ struct TonemapperInfo
 				"Tonemapper designed for Gran Turismo 7. HDR output is automatically enabled when HDR Display feature is active."sv, 2, 2, true, 2,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					auto& hdr = globals::features::hdrDisplay;
-					bool enableHDR = hdr.loaded && hdr.settings.enableHDR;
-					if (enableHDR) {
-						ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), ICON_FA_CHECK " HDR Output Active");
-						ImGui::Text("Peak Brightness: %.0f nits (from HDR settings)", static_cast<float>(hdr.settings.hdrPeakNits));
-					} else {
-						ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "SDR Output (HDR Display not enabled)");
-					}
+					drawHDRStatus();
 				},
 				{ f4{ 1.f, 0.f, 1000.f, 0.f } } }
 		};
