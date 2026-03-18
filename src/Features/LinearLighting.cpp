@@ -1,5 +1,7 @@
 #include "LinearLighting.h"
 
+#include "State.h"
+
 #include "JiayeStatement.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -109,7 +111,7 @@ void LinearLighting::SetupResources()
 
 void LinearLighting::Prepass()
 {
-	bool isMainLoadingMenu = globals::game::ui && (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+	bool isMainLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
 	dirLightMult = 1.0f;
 	if (!settings.enableLinearLighting || isMainLoadingMenu)
 		return;
@@ -152,7 +154,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 		data.enableLinearLighting = false;
 		return data;
 	}
-	bool isMainLoadingMenu = globals::game::ui && (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+	bool isMainLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
 	auto data = PerFrameData{};
 	data.enableLinearLighting = settings.enableLinearLighting && !isMainLoadingMenu;
 	data.enableGammaCorrection = settings.enableGammaCorrection;
