@@ -35,10 +35,10 @@ struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
 struct WeatherEditor;
+struct Raytracing;
 struct ExponentialHeightFog;
 struct HDRDisplay;
 struct PostProcessing;
-struct Raytracing;
 
 class State;
 class Deferred;

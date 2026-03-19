@@ -31,7 +31,11 @@ struct DX12Interop : public Feature
 	struct Settings
 	{
 		bool EnablePIXCapture = false;
+
 		bool EnableDebugDevice = false;
+		bool DebugBreakCorruption = true;
+		bool DebugBreakError = true;
+		bool DebugBreakWarning = false;
 	} settings;
 
 	winrt::com_ptr<ID3D12Device5> d3d12Device;
@@ -61,6 +65,9 @@ struct DX12Interop : public Feature
 	HANDLE fenceEvent;
 
 	winrt::com_ptr<IDXGraphicsAnalysis> ga = nullptr;
+
+	bool pixCapture = false;
+	bool pixCaptureStarted = false;
 
 	bool active = false;
 
