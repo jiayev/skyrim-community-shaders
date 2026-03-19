@@ -63,4 +63,7 @@ struct HistogramAutoExposure : public PostProcessFeature
 	virtual void DrawSettings() override;
 
 	virtual void Draw(TextureInfo&) override;
+
+	// Controller parameter registration
+	virtual void RegisterControllableParams() override;
 };

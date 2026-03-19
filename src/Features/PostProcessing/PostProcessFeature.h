@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Feature.h"
+#include "PostProcessController.h"
 
 struct PostProcessFeature
 {
@@ -32,4 +33,18 @@ struct PostProcessFeature
 	virtual void Draw(TextureInfo& inout_tex) = 0;  // read from last pass, do the thing, and replace it with output texture
 
 	virtual inline void Reset() {};
+
+	/// @brief Register controllable parameters with the PostProcessController.
+	///
+	/// Subclasses override this to declare which of their settings can be
+	/// controlled externally (by Weather, other Features, or external APIs).
+	/// Each registered parameter gets a PPParamDesc with type info, pointer,
+	/// name, display name, tooltip, and optional range.
+	///
+	/// Called by PostProcessing::SetupResources() after pipeline construction.
+	/// The controller uses the registered descriptors to:
+	/// - Enumerate available parameters for a feature
+	/// - Validate override types at SetOverride time
+	/// - Apply/revert overrides by directly writing to the settings pointers
+	virtual void RegisterControllableParams() {}
 };

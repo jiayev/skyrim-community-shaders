@@ -152,3 +152,14 @@ void Vignette::Draw(TextureInfo& inout_tex)
 
 	inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
 }
+
+void Vignette::RegisterControllableParams()
+{
+	auto* ctrl = PostProcessController::GetSingleton();
+	const std::string ft = GetType();
+	using T = PPParamDesc::Type;
+
+	ctrl->RegisterParam({ ft, "FocalLength", "Focal Length", "Focal length of the lens, relative to image width", T::Float, &settings.FocalLength, 1.f, 0.1f, 2.f });
+	ctrl->RegisterParam({ ft, "Anamorphism", "Anamorphic Squeeze", "How flat the vignette looks, simulating anamorphic lens", T::Float, &settings.Anamorphism, 1.f, 0.1f, 1.f });
+	ctrl->RegisterParam({ ft, "Power", "Power", "Vignette power law exponent", T::Float, &settings.Power, 3.f, 0.f, 4.f });
+}

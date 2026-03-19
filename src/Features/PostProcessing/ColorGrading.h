@@ -165,4 +165,7 @@ struct ColorGrading : public PostProcessFeature
 	void UpdateColorSpaceTransforms();
 
 	void OutputTextures();
+
+	// Controller parameter registration
+	virtual void RegisterControllableParams() override;
 };

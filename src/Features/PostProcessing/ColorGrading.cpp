@@ -735,3 +735,65 @@ void ColorGrading::OutputTextures()
 	DX::ThrowIfFailed(SaveToDDSFile(lutImage.GetImages(), lutImage.GetImageCount(), lutImage.GetMetadata(), DirectX::DDS_FLAGS::DDS_FLAGS_NONE, lutPath.c_str()));
 	DX::ThrowIfFailed(SaveToDDSFile(colorImage.GetImages(), colorImage.GetImageCount(), colorImage.GetMetadata(), DirectX::DDS_FLAGS::DDS_FLAGS_NONE, colorPath.c_str()));
 }
+
+void ColorGrading::RegisterControllableParams()
+{
+	auto* ctrl = PostProcessController::GetSingleton();
+	const std::string ft = GetType();
+
+	auto reg = [&](const std::string& name, const std::string& display, const std::string& tip,
+				   PPParamDesc::Type type, void* ptr, PPOverrideValue defaultVal,
+				   std::optional<float> minV = std::nullopt, std::optional<float> maxV = std::nullopt) {
+		ctrl->RegisterParam({ ft, name, display, tip, type, ptr, defaultVal, minV, maxV });
+	};
+
+	using T = PPParamDesc::Type;
+
+	// ASC CDL
+	reg("slope", "Slope", "ASC CDL slope", T::Float4, &settings.slope, float4{ 1.f, 1.f, 1.f, 0.f });
+	reg("power", "Power", "ASC CDL power", T::Float4, &settings.power, float4{ 1.f, 1.f, 1.f, 0.f });
+	reg("cdlOffset", "CDL Offset", "ASC CDL offset", T::Float4, &settings.cdlOffset, float4{ 0.f, 0.f, 0.f, 0.f });
+
+	// Lift Gamma Gain
+	reg("lift", "Lift", "Lift adjustment", T::Float4, &settings.lift, float4{ 0.f, 0.f, 0.f, 0.f });
+	reg("gamma", "Gamma", "Gamma adjustment", T::Float4, &settings.gamma, float4{ 0.f, 0.f, 0.f, 0.f });
+	reg("gain", "Gain", "Gain adjustment", T::Float4, &settings.gain, float4{ 1.f, 1.f, 1.f, 1.f });
+
+	// Gamma
+	reg("inOutGamma", "Input/Output Gamma", "Input and output gamma values", T::Float4, &settings.inOutGamma, float4{ 1.f, 1.f, 1.f, 1.f });
+
+	// OKLCH
+	reg("oklchSaturation", "OKLCH Saturation", "Saturation, vibrance and hue shift in OKLCH space", T::Float4, &settings.oklchSaturation, float4{ 1.f, 1.f, 0.f, 0.f });
+
+	// OKLCH per-hue color mixer (7 hues: Red, Orange, Yellow, Cyan, Blue, Purple, Magenta)
+	static constexpr const char* hueNames[] = { "Red", "Orange", "Yellow", "Cyan", "Blue", "Purple", "Magenta" };
+	for (int i = 0; i < 7; ++i) {
+		reg(std::format("oklchColorMixer[{}]", i),
+			std::format("OKLCH Color Mixer - {}", hueNames[i]),
+			std::format("Hue shift, vibrance and brightness for {} hue channel", hueNames[i]),
+			T::Float4, &settings.oklchColorMixer[i], float4{ 0.f, 1.f, 0.f, 0.f });
+	}
+
+	// Contrast
+	reg("contrast", "Contrast", "Contrast adjustment", T::Float4, &settings.contrast, float4{ 1.f, 1.f, 1.f, 0.f });
+	reg("pivot", "Pivot", "Contrast pivot point", T::Float4, &settings.pivot, float4{ 0.18f, 0.18f, 0.18f, 0.f });
+
+	// Exposure/Temperature/Tint
+	reg("exposureTemperatureTint", "Exposure/Temperature/Tint", "Exposure, color temperature and tint", T::Float4, &settings.exposureTemperatureTint, float4{ 1.f, 65.f, 0.f, 0.f });
+
+	// Shadows/Midtones/Highlights
+	reg("shadowsGain", "Shadows Gain", "Shadows gain multiplier", T::Float4, &settings.shadowsGain, float4{ 1.f, 1.f, 1.f, 0.f });
+	reg("midtonesGain", "Midtones Gain", "Midtones gain multiplier", T::Float4, &settings.midtonesGain, float4{ 1.f, 1.f, 1.f, 0.f });
+	reg("highlightsGain", "Highlights Gain", "Highlights gain multiplier", T::Float4, &settings.highlightsGain, float4{ 1.f, 1.f, 1.f, 0.f });
+	reg("shadowsHighlightsRange", "Shadows/Highlights Range", "Shadow and highlight boundary ranges", T::Float4, &settings.shadowsHighlightsRange, float4{ 0.f, 0.3f, 0.55f, 1.f });
+
+	// SMH color offsets
+	reg("shadowsOffset", "Shadows Offset", "Shadows color offset", T::Float4, &settings.shadowsOffset, float4{ 0.f, 0.f, 0.f, 0.f });
+	reg("midtonesOffset", "Midtones Offset", "Midtones color offset", T::Float4, &settings.midtonesOffset, float4{ 0.f, 0.f, 0.f, 0.f });
+	reg("highlightsOffset", "Highlights Offset", "Highlights color offset", T::Float4, &settings.highlightsOffset, float4{ 0.f, 0.f, 0.f, 0.f });
+
+	// Game color grading blends
+	reg("gameCinematicBlend", "Game Cinematic Blend", "Blend factor for game cinematic (saturation, brightness, contrast)", T::Float3, &settings.gameCinematicBlend, float3{ 1.0f, 1.0f, 1.0f });
+	reg("gameFadeBlend", "Game Fade Blend", "Blend factor for game fade effect", T::Float, &settings.gameFadeBlend, 1.0f, 0.0f, 1.0f);
+	reg("gameTintBlend", "Game Tint Blend", "Blend factor for game tint effect", T::Float, &settings.gameTintBlend, 1.0f, 0.0f, 1.0f);
+}

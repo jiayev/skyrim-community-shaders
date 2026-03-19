@@ -241,3 +241,16 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 	inout_tex = { texAdapt->resource.get(), texAdapt->srv.get() };
 	state->EndPerfEvent();
 }
+
+void HistogramAutoExposure::RegisterControllableParams()
+{
+	auto* ctrl = PostProcessController::GetSingleton();
+	const std::string ft = GetType();
+	using T = PPParamDesc::Type;
+
+	ctrl->RegisterParam({ ft, "ExposureCompensation", "Exposure Compensation", "Additional exposure adjustment in EV", T::Float, &settings.ExposureCompensation, 0.f, -5.f, 5.f });
+	ctrl->RegisterParam({ ft, "AdaptSpeed", "Adaptation Speed", "Speed of eye adaptation", T::Float, &settings.AdaptSpeed, 1.5f, 0.1f, 5.f });
+	ctrl->RegisterParam({ ft, "PurkinjeStartEV", "Purkinje Start EV", "EV level where Purkinje effect begins", T::Float, &settings.PurkinjeStartEV, -1.5f, -10.f, 21.f });
+	ctrl->RegisterParam({ ft, "PurkinjeMaxEV", "Purkinje Max EV", "EV level where Purkinje effect is maximum", T::Float, &settings.PurkinjeMaxEV, -4.f, -10.f, 21.f });
+	ctrl->RegisterParam({ ft, "PurkinjeStrength", "Purkinje Strength", "Maximum strength of the Purkinje blue shift", T::Float, &settings.PurkinjeStrength, 0.f, 0.f, 5.f });
+}

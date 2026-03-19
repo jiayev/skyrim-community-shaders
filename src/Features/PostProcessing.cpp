@@ -424,6 +424,13 @@ void PostProcessing::SetupResources()
 		}
 	}
 
+	// Register controllable parameters with the PostProcessController
+	for (auto& pipe : pipeline) {
+		if (pipe) {
+			pipe->RegisterControllableParams();
+		}
+	}
+
 	ProcessSettings(pendingSettings);
 	pendingSettings = {};
 }
@@ -456,9 +463,12 @@ void PostProcessing::DrawBeforeUpscaling()
 	state->BeginPerfEvent("[Post Processing] Pre-Upscale");
 
 	// go through each fx
+	auto* ppController = PostProcessController::GetSingleton();
 	for (auto& pipe : pipeline) {
 		if (pipe && pipe->enabled && !pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && pipe->DrawBeforeUpscaling()) {
+			ppController->ApplyOverrides(pipe->GetType());
 			pipe->Draw(lastTexColor);
+			ppController->RevertOverrides(pipe->GetType());
 		}
 	}
 
@@ -535,15 +545,20 @@ void PostProcessing::PreProcess()
 	auto gameTexMainAlt = useMainCopy ? gameTexMainRT : gameTexMainCopyRT;
 
 	// go through each fx
+	auto* ppController = PostProcessController::GetSingleton();
 	for (auto& pipe : pipeline) {
 		if (pipe && pipe->enabled && !pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && (!pipe->DrawBeforeUpscaling() || !upscaling.loaded)) {
+			ppController->ApplyOverrides(pipe->GetType());
 			pipe->Draw(lastTexColor);
+			ppController->RevertOverrides(pipe->GetType());
 		}
 	}
 
 	for (auto& pipe : pipeline) {
 		if (pipe && pipe->enabled && pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && (!pipe->DrawBeforeUpscaling() || !upscaling.loaded)) {
+			ppController->ApplyOverrides(pipe->GetType());
 			pipe->Draw(lastTexColor);
+			ppController->RevertOverrides(pipe->GetType());
 		}
 	}
 

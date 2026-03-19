@@ -290,3 +290,14 @@ void CODBloom::Draw(TextureInfo& inout_tex)
 
 	state->EndPerfEvent();
 }
+
+void CODBloom::RegisterControllableParams()
+{
+	auto* ctrl = PostProcessController::GetSingleton();
+	const std::string ft = GetType();
+	using T = PPParamDesc::Type;
+
+	ctrl->RegisterParam({ ft, "Threshold", "Bloom Threshold", "Luminance threshold for bloom in EV", T::Float, &settings.Threshold, -6.f, -6.f, 21.f });
+	ctrl->RegisterParam({ ft, "UpsampleRadius", "Upsample Radius", "Radius for bloom upsampling blur", T::Float, &settings.UpsampleRadius, 2.f, 1.f, 5.f });
+	ctrl->RegisterParam({ ft, "BlendFactor", "Bloom Mix", "Blend factor between original and bloom", T::Float, &settings.BlendFactor, .05f, 0.f, 1.f });
+}
