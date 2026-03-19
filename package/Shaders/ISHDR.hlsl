@@ -175,44 +175,84 @@ PS_OUTPUT main(PS_INPUT input)
 	inputColor = max(0, inputColor);
 
 	if (isHDR) {
+		// === HDR Pipeline ===
+		// Run the exact SDR tonemap + bloom + color grading pipeline to produce the SDR
+		// reference image, then extend highlights above paperwhite using DICE.
+		// This guarantees HDR and SDR are identical up to paperwhite nits.
+
 		float paperWhiteNits = SharedData::HDRData.y;
 		float peakNits = SharedData::HDRData.z;
 		float pw = paperWhiteNits / sRGB_WhiteLevelNits;
 		float peak = peakNits / sRGB_WhiteLevelNits;
+		float3 hdrInputLinear = ENABLE_LL ? inputColor : Color::GammaToLinear(inputColor);
+		float3 hdrScene = hdrInputLinear * pw;
 
-		float3 hdrGamma = ENABLE_LL ? Color::LinearToGamma(inputColor) : inputColor;
-		float hdrGammaLum = Color::RGBToLuminance(hdrGamma);
-		hdrGamma = lerp(hdrGammaLum, hdrGamma, Cinematic.x);
-		hdrGamma = lerp(hdrGamma, hdrGammaLum * Tint.xyz, Tint.w);
-		hdrGamma *= Cinematic.w;
-		hdrGamma = lerp(avgValue.x, hdrGamma, Cinematic.z);
-
-#		if defined(FADE)
-		hdrGamma = lerp(hdrGamma, Fade.xyz, Fade.w);
-#		endif
-
-		hdrGamma += saturate(Param.x - hdrGamma) * bloomColor;
-
-		float3 hdrLinear = Color::GammaToLinear(max(0.0, hdrGamma));
-		float3 sdrReferenceLinear;
+		// --- Step 1: Identical SDR tonemap + bloom ---
+		float3 sdrTonemapped;
 
 		[branch] if (Param.z > 0.5)
 		{
-			float3 hejlGamma = DisplayMapping::HuePreservingHejlBurgessDawson(hdrLinear, 0.0.xxx);
-			sdrReferenceLinear = Color::GammaToLinear(max(0.0, hejlGamma));
+			sdrTonemapped = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor);
 		}
 		else
 		{
-			float maxCol = Color::RGBToLuminance(hdrLinear);
+			float maxCol = Color::RGBToLuminance(inputColor);
 			float mappedMax = GetTonemapFactorReinhard(maxCol).x;
-			sdrReferenceLinear = maxCol > 1e-6 ? hdrLinear * (mappedMax / maxCol) : hdrLinear;
+			float3 compressedHuePreserving = inputColor * mappedMax / maxCol;
+			sdrTonemapped = compressedHuePreserving;
+
+			// Standard SDR bloom: add bloom where there is headroom below the ceiling.
+			sdrTonemapped += saturate(Param.x - sdrTonemapped) * bloomColor;
 		}
 
-		float3 sdrBase = saturate(sdrReferenceLinear) * pw;
+		// --- Step 2: Identical SDR color grading ---
+		float sdrLuminance = Color::RGBToLuminance(sdrTonemapped);
+		float3 sdrGraded = Cinematic.w * lerp(lerp(sdrLuminance, sdrTonemapped, Cinematic.x), sdrLuminance * Tint.xyz, Tint.w).xyz;
+		sdrGraded = lerp(avgValue.x, sdrGraded, Cinematic.z);
+		sdrGraded = max(0.0, sdrGraded);
 
+#		if defined(FADE)
+		sdrGraded = lerp(sdrGraded, Fade.xyz, Fade.w);
+#		endif
+
+		// Secondary HDR tonemap path used for highlight shaping.
+		float3 hdrShaped = DisplayMapping::DICETonemap(hdrScene, peak, /*ShoulderStart=*/pw);
+
+		// Bloom
+		hdrShaped += saturate(Param.x - hdrShaped) * bloomColor;
+
+		// Desaturate toward luminance as brightness approaches peak.
+		// 0 at paperwhite, 1 at peak.
+		float hdrShapedLum = Color::RGBToLuminance(hdrShaped);
+		float desatStart = lerp(pw, peak, 0.4);
+		float desatT = saturate((hdrShapedLum - desatStart) / max(peak - desatStart, 1e-6));
+		hdrShaped = lerp(hdrShaped, hdrShapedLum, desatT);
+
+		// sdrGraded is now the exact SDR output (before final gamma encode).
+		// Convert to linear and scale to paperwhite for the HDR base layer.
+		float3 sdrLinear = Color::GammaToLinear(max(0.0, sdrGraded));
+		float3 sdrBase = sdrLinear * pw;
+
+		// DICE compresses the full HDR range above the shoulder start into peak nits.
 		float shoulderStart = pw / peak;
-		float3 diceLinear = DisplayMapping::DICETonemap(hdrLinear * pw, peak, shoulderStart, CS_BT709, CS_BT709);
-		float3 hdrLinearOut = lerp(sdrBase, diceLinear, saturate(sdrReferenceLinear));
+		float3 diceLinear = DisplayMapping::DICETonemap(hdrScene, peak, shoulderStart);
+
+		// DICE only extends highlights at and above paperwhite.
+		float rawLum = Color::RGBToLuminance(hdrScene) / peak;
+		float diceBlend = saturate((rawLum - shoulderStart) / max(1.0 - shoulderStart, 1e-4));
+		float3 hdrLinearOut = lerp(sdrBase, diceLinear, diceBlend);
+		hdrLinearOut = lerp(hdrLinearOut, hdrShaped, 0.35 * diceBlend);
+
+		// Cheap fire hue fix: when bright highlights are warm (R/G dominant over B),
+		// push them slightly toward orange/yellow to avoid pink cores.
+		float peakLum = Color::RGBToLuminance(hdrLinearOut);
+		float fireHighlight = smoothstep(pw * 0.75, pw * 4.0, peakLum);
+		float warmDominance = saturate((hdrLinearOut.r - hdrLinearOut.b) * 1.25) *
+		                      saturate((hdrLinearOut.g - hdrLinearOut.b) * 2.0);
+		float fireHueMask = fireHighlight * warmDominance;
+		hdrLinearOut.b *= 1.0 - 0.30 * fireHueMask;
+		hdrLinearOut.g += hdrLinearOut.r * (0.05 * fireHueMask);
+		hdrLinearOut *= 10.0 + (0.18 * fireHueMask * diceBlend);
 
 		outputColor = Color::LinearToGamma(max(0.0, hdrLinearOut));
 	} else {

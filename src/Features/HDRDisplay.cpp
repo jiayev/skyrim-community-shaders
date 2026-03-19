@@ -447,7 +447,7 @@ void HDRDisplay::DrawSettings()
 			ImGui::Text("203 nits is the ITU BT.2408 reference. Increase for a brighter image.");
 		}
 
-		ImGui::SliderInt("Peak Brightness (nits)", reinterpret_cast<int*>(&currentPeakNits), 400, 10000);
+		ImGui::SliderInt("Peak Brightness (nits)", reinterpret_cast<int*>(&currentPeakNits), 400, 2000);
 		{
 			std::lock_guard<std::mutex> lock(settingsMutex);
 			if (currentPeakNits <= settings.hdrPaperWhite) {
@@ -464,6 +464,11 @@ void HDRDisplay::DrawSettings()
 		}
 
 		ImGui::TextDisabled("Display reports: %.0f nits max", cachedDisplayMaxLuminance);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Reported by OS/driver (DXGI MaxLuminance), not a direct meter reading.");
+			ImGui::Text("It may be EDID metadata and can differ from real highlight peak output.");
+			ImGui::Text("Treat this as a starting point and tune Peak Brightness as needed.");
+		}
 	}
 
 	// UI brightness slider - only shown when HDR is enabled
@@ -1102,9 +1107,7 @@ ID3D11ComputeShader* HDRDisplay::GetUIBrightnessCS()
 void HDRDisplay::ScaleUIBrightnessForFG()
 {
 	auto& upscaling = globals::features::upscaling;
-	bool isMainOrLoadingMenu = globals::game::ui &&
-	                           (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) ||
-								   globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+	bool isMainOrLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
 
 	// Only run when FG is actively compositing UI this frame
 	bool fgCompositing = upscaling.d3d12SwapChainActive &&
@@ -1178,9 +1181,7 @@ float4 HDRDisplay::GetSharedDataHDR() const
 	if (!loaded)
 		return { 0.0f, 0.0f, 0.0f, 0.0f };
 
-	bool isMainOrLoading = globals::game::ui &&
-	                       (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) ||
-							   globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+	bool isMainOrLoading = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
 	return {
 		settings.enableHDR ? 1.0f : 0.0f,
 		static_cast<float>(settings.hdrPaperWhite),
@@ -1197,9 +1198,7 @@ void HDRDisplay::UpdateHDRData() const
 	auto& upscaling = globals::features::upscaling;
 
 	// Don't skip UI composite in main menu or loading screens - causes ghosting and brightness issues
-	bool isMainOrLoadingMenu = globals::game::ui &&
-	                           (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) ||
-								   globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+	bool isMainOrLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
 
 	bool fgActiveThisFrame = upscaling.d3d12SwapChainActive &&
 	                         upscaling.settings.frameGenerationMode &&

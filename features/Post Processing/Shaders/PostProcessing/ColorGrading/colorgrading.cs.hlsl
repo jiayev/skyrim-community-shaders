@@ -2,9 +2,6 @@
 #include "Common/ColorSpaces.hlsli"
 #include "Common/Math.hlsli"
 
-#include "PostProcessing/ColourTransforms/GT7ToneMapping.hlsli"
-#include "PostProcessing/common.hlsli"
-
 #define LUT_SIZE 64
 
 RWTexture2D<float4> RWTexOut : register(u0);
@@ -18,7 +15,7 @@ cbuffer ColorCB : register(b1)
 {
 	float4 asccdl[3];
 	float4 liftgammagain[3];  // lift，gamma，gain
-	float4 saturationHueInOutGamma;
+	float4 inOutGamma;        // .z = input gamma, .w = output gamma
 	float4 oklchSaturation;
 	float4 oklchColorMixer[7];
 	float4 contrast;
@@ -30,8 +27,18 @@ cbuffer ColorCB : register(b1)
 	float4 shadowsHighlightsRange;  // shadowBegin, shadowEnd, highlightBegin, highlightEnd
 
 	float4 tonemapParams[2];
-	float4 colorSpaceTransform[3];
-	float4 invColorSpaceTransform[3];
+	float4 inputToWorking[3];    // sRGB → working color space
+	float4 workingToTonemap[3];  // working → tonemapper native space
+	float4 tonemapToOutput[3];   // tonemapper native → output space
+
+	float4 workingToXYZ[3];  // working → CIE XYZ (for white balance)
+	float4 xyzToWorking[3];  // CIE XYZ → working (for white balance)
+
+	float4 workingWhitePoint;  // .xy = native white chromaticity of working space
+
+	float4 shadowsOffset;  // SMH color offsets
+	float4 midtonesOffset;
+	float4 highlightsOffset;
 
 	// game value
 	float4 cinematic;  // saturation, brightness, contrast
@@ -43,10 +50,13 @@ cbuffer ColorCB : register(b1)
 	uint skipLUT;
 	uint enableTonemap;
 	uint enableColorSpaceTransform;
-	uint enableHDR;           // HDR display is enabled (auto-set from HDR feature)
-	float hdrPeakNits;        // Maximum display brightness in nits for HDR
+	uint enableHDR;     // HDR display is enabled (auto-set from HDR feature)
+	float hdrPeakNits;  // Maximum display brightness in nits for HDR
 	uint pad;
 };
+
+#include "PostProcessing/ColorGrading/GT7ToneMapping.hlsli"
+#include "PostProcessing/common.hlsli"
 
 namespace LogType
 {
@@ -81,33 +91,31 @@ float3 LiftGammaGain(float3 rgb, float4 lift, float4 gamma, float4 gain)
 	return col;
 }
 
-float3 OklchSaturation(float3 val)
+// Combined Oklch adjustments: global saturation/vibrance/hue + per-hue colour mixer
+// Single Oklab round-trip for efficiency
+float3 OklchAdjustments(float3 val)
 {
-	float3 oklab = RgbToOklab(val);
-
-	float c = length(oklab.yz);
-	float h = atan2(oklab.z, oklab.y);
-
-	c = min(0.37, c * oklchSaturation.x);
-	c = (1 - pow(abs(1 - c / 0.37), oklchSaturation.y)) * 0.37;
-	h += oklchSaturation.z * Math::PI;
-
-	sincos(h, oklab.z, oklab.y);
-	oklab.yz *= c;
-
-	return max(0, OklabToRgb(oklab));
-}
-
-// mimicking lightroom colour mixer
-float3 OklchColourMixer(float3 val)
-{
-	static const float redHue = 0.08120523664;  //0xff0000
-
 	float3 oklab = RgbToOklab(val);
 
 	float l = oklab.x;
 	float c = length(oklab.yz);
 	float h = atan2(oklab.z, oklab.y);
+
+	// === Global adjustments ===
+
+	// Saturation
+	c *= oklchSaturation.x;
+
+	// Vibrance: perceptual boost for low-saturation colors, preserves already-saturated ones
+	float vibranceFactor = 1.0 + (oklchSaturation.y - 1.0) * (1.0 - smoothstep(0.0, 0.5, c));
+	c *= max(0, vibranceFactor);
+
+	// Global hue shift
+	h += oklchSaturation.z * Math::PI;
+
+	// === Per-hue colour mixer (mimicking Lightroom) ===
+
+	static const float redHue = 0.08120523664;  // 0xff0000
 
 	float lerpFactor = (h / (2 * Math::PI) - redHue) * 7;
 	int leftHue = floor(lerpFactor);
@@ -116,35 +124,41 @@ float3 OklchColourMixer(float3 val)
 	int rightHue = (leftHue + 1) % 7;
 	float effect = saturate(c / 0.37);
 
-	// hue shift
-	h = h + lerp(oklchColorMixer[leftHue].x, oklchColorMixer[rightHue].x, lerpFactor) * Math::PI / 4;
-	// vibrance
-	float c1 = (1 - pow(max(0, 1 - c / 0.37), oklchColorMixer[leftHue].y)) * 0.37;
-	float c2 = (1 - pow(max(0, 1 - c / 0.37), oklchColorMixer[rightHue].y)) * 0.37;
-	c = lerp(c1, c2, lerpFactor);
-	// brightness
-	l = l + lerp(oklchColorMixer[leftHue].z, oklchColorMixer[rightHue].z, lerpFactor) * effect;
+	// Per-hue hue shift
+	h += lerp(oklchColorMixer[leftHue].x, oklchColorMixer[rightHue].x, lerpFactor) * Math::PI / 4;
+
+	// Per-hue vibrance
+	float hueVibrance = lerp(oklchColorMixer[leftHue].y, oklchColorMixer[rightHue].y, lerpFactor);
+	float hueVibranceFactor = 1.0 + (hueVibrance - 1.0) * (1.0 - smoothstep(0.0, 0.5, c));
+	c *= max(0, hueVibranceFactor);
+
+	// Per-hue brightness
+	l += lerp(oklchColorMixer[leftHue].z, oklchColorMixer[rightHue].z, lerpFactor) * effect;
+
+	// === Reconstruct ===
 
 	oklab.x = l;
 	sincos(h, oklab.z, oklab.y);
 	oklab.yz *= c;
 
-	return max(0, OklabToRgb(oklab));
+	return OklabToRgb(oklab);
 }
 
-float3 ShadowsMidtonesHighlights(float3 color, float3 shadowsColor, float3 midtonesColor, float3 highlightsColor, float shadowBegin, float shadowEnd, float highlightBegin, float highlightEnd)
+float3 ShadowsMidtonesHighlights(float3 color, float3 shadowsGain, float3 midtonesGain, float3 highlightsGain,
+	float3 shadowsOff, float3 midtonesOff, float3 highlightsOff,
+	float shadowBegin, float shadowEnd, float highlightBegin, float highlightEnd)
 {
 	float luma = Color::RGBToLuminance(color);
 
 	float shadowWeight = 1.0 - smoothstep(shadowBegin, shadowEnd, luma);
-
 	float highlightWeight = smoothstep(highlightBegin, highlightEnd, luma);
-
 	float midtoneWeight = 1.0 - shadowWeight - highlightWeight;
 
-	float3 result = color * shadowsColor * shadowWeight + color * midtonesColor * midtoneWeight + color * highlightsColor * highlightWeight;
+	// Per-zone gain + offset (industry standard: allows both color scaling and color shift)
+	float3 gain = shadowsGain * shadowWeight + midtonesGain * midtoneWeight + highlightsGain * highlightWeight;
+	float3 offset = shadowsOff * shadowWeight + midtonesOff * midtoneWeight + highlightsOff * highlightWeight;
 
-	return result;
+	return color * gain + offset;
 }
 
 float2 IlluminantChromaticity(float temp)
@@ -183,22 +197,27 @@ float2 PlanckianIsothermal(float temp, float tint)
 
 float3 WhiteBalance(float3 linearColor)
 {
-	if (abs(exposureTemperatureTint.y - 65) < 0.1 && abs(exposureTemperatureTint.z) < 0.001)
-		return linearColor;
-
 	float temp = exposureTemperatureTint.y * 100;
 	float tint = exposureTemperatureTint.z;
 	float2 srcWhiteDaylight = IlluminantChromaticity(temp);
 	float2 srcWhitePlankian = PlanckianLocusChromaticity(temp);
 
 	float2 srcWhite = temp < 4000 ? srcWhitePlankian : srcWhiteDaylight;
-	float2 d65White = float2(0.31270, 0.32900);
 
 	float2 isothermal = PlanckianIsothermal(temp, tint) - srcWhitePlankian;
 	srcWhite += isothermal;
 
-	float3x3 whiteBalance = ChromaticAdaptation(srcWhite, d65White);
-	whiteBalance = mul(XYZ_2_sRGB_MAT, mul(whiteBalance, sRGB_2_XYZ_MAT));
+	// Adapt to working space native white (D65 for sRGB, D60 for ACEScg, etc.)
+	float2 dstWhite = workingWhitePoint.xy;
+
+	// Skip if source and destination are approximately equal
+	if (all(abs(srcWhite - dstWhite) < 0.001))
+		return linearColor;
+
+	float3x3 whiteBalance = ChromaticAdaptation(srcWhite, dstWhite);
+	const float3x3 xyzToWorkingMat = float3x3(xyzToWorking[0].xyz, xyzToWorking[1].xyz, xyzToWorking[2].xyz);
+	const float3x3 workingToXYZMat = float3x3(workingToXYZ[0].xyz, workingToXYZ[1].xyz, workingToXYZ[2].xyz);
+	whiteBalance = mul(xyzToWorkingMat, mul(whiteBalance, workingToXYZMat));
 
 	return mul(whiteBalance, linearColor);
 }
@@ -287,66 +306,26 @@ float3 AldridgeFilmic(float3 val)
 	return val;
 }
 
-float3 AcesHill(float3 val)
-{
-	static const float3x3 g_sRGBToACEScg = float3x3(
-		0.613117812906440, 0.341181995855625, 0.045787344282337,
-		0.069934082307513, 0.918103037508582, 0.011932775530201,
-		0.020462992637737, 0.106768663382511, 0.872715910619442);
-	static const float3x3 g_ACEScgToSRGB = float3x3(
-		1.704887331049502, -0.624157274479025, -0.080886773895704,
-		-0.129520935348888, 1.138399326040076, -0.008779241755018,
-		-0.024127059936902, -0.124620612286390, 1.148822109913262);
-
-	val *= tonemapParams[0].x;
-
-	val = mul(g_sRGBToACEScg, val);
-	float3 a = val * (val + 0.0245786f) - 0.000090537f;
-	float3 b = val * (0.983729f * val + 0.4329510f) + 0.238081f;
-	val = a / b;
-	val = mul(g_ACEScgToSRGB, val);
-
-	val = saturate(val);
-
-	return val;
-}
-
-float3 AcesNarkowicz(float3 val)
-{
-	val *= tonemapParams[0].x;
-
-	static const float A = 2.51;
-	static const float B = 0.03;
-	static const float C = 2.43;
-	static const float D = 0.59;
-	static const float E = 0.14;
-	val *= 0.6;
-	val = (val * (A * val + B)) / (val * (C * val + D) + E);
-	val = saturate(val);
-	return val;
-}
-
-float3 AcesGuy(float3 val)
-{
-	val *= tonemapParams[0].x;
-	val = val / (val + 0.155f) * 1.019;
-
-	val = pow(saturate(val), 2.2);
-	return val;
-}
-
 float3 LottesFilmic(float3 val)
 {
 	val *= tonemapParams[0].x;
 	float a = tonemapParams[0].y,
-		  d = tonemapParams[0].z,
-		  b = (-pow(tonemapParams[1].x, a) + pow(tonemapParams[0].w, a) * tonemapParams[1].y) /
-	          ((pow(tonemapParams[0].w, a * d) - pow(tonemapParams[1].x, a * d)) * tonemapParams[1].y),
-		  c = (pow(tonemapParams[0].w, a * d) * pow(tonemapParams[1].x, a) - pow(tonemapParams[0].w, a) * pow(tonemapParams[1].x, a * d) * tonemapParams[1].y) /
-	          ((pow(tonemapParams[0].w, a * d) - pow(tonemapParams[1].x, a * d)) * tonemapParams[1].y);
+		  d = tonemapParams[0].z;
+	float maxHDR = tonemapParams[0].w;
+	float midIn = tonemapParams[1].x;
+	float midOut = tonemapParams[1].y;
+
+	// In HDR mode, re-derive curve constants so f(maxHDR) = peakOutput
+	// while keeping f(midIn) = midOut (SDR midtones unchanged)
+	float peakOutput = enableHDR ? (hdrPeakNits / REFERENCE_LUMINANCE) : 1.0;
+
+	float b = (pow(maxHDR, a) * midOut - pow(midIn, a) * peakOutput) /
+	          ((pow(maxHDR, a * d) - pow(midIn, a * d)) * midOut * peakOutput),
+		  c = (pow(maxHDR, a * d) * pow(midIn, a) * peakOutput - pow(maxHDR, a) * pow(midIn, a * d) * midOut) /
+	          ((pow(maxHDR, a * d) - pow(midIn, a * d)) * midOut * peakOutput);
 
 	val = pow(val, a) / (pow(val, a * d) * b + c);
-	val = saturate(val);
+	val = enableHDR ? clamp(val, 0.0, peakOutput) : saturate(val);
 	return val;
 }
 
@@ -383,7 +362,7 @@ float3 DayFilmic(float3 val)
 
 float3 UchimuraFilmic(float3 val)
 {
-	const float P = tonemapParams[0].y;
+	float P = tonemapParams[0].y;
 	const float a = tonemapParams[0].z;
 	const float m = tonemapParams[0].w;
 	const float l = tonemapParams[1].x;
@@ -391,6 +370,10 @@ float3 UchimuraFilmic(float3 val)
 	const float b = tonemapParams[1].z;
 
 	val *= tonemapParams[0].x;
+
+	// In HDR mode, extend the peak brightness proportionally to the display's capability
+	if (enableHDR)
+		P *= hdrPeakNits / REFERENCE_LUMINANCE;
 
 	float l0 = ((P - m) * l) / a,
 		  S0 = m + l0,
@@ -408,7 +391,7 @@ float3 UchimuraFilmic(float3 val)
 
 	val = T * w0 + L * w1 + S * w2;
 
-	val = saturate(val);
+	val = enableHDR ? clamp(val, 0.0, P) : saturate(val);
 	return val;
 }
 
@@ -693,16 +676,19 @@ float3 LogToLinearSpace(float3 val, uint logType)
 
 float3 ColorGrading(float3 color)
 {
-	// Color space transform (preferably sRGB to ACEScg)
+	// Stage 1: Input (sRGB) → Working color space
 	if (enableColorSpaceTransform) {
-		const float3x3 colorSpaceTransformMat = float3x3(colorSpaceTransform[0].xyz, colorSpaceTransform[1].xyz, colorSpaceTransform[2].xyz);
-		color = mul(colorSpaceTransformMat, color);
+		const float3x3 inputToWorkingMat = float3x3(inputToWorking[0].xyz, inputToWorking[1].xyz, inputToWorking[2].xyz);
+		color = mul(inputToWorkingMat, color);
 	}
 
-	// HDR
+	// HDR color grading (in working space, linear)
 	// Exposure/White Balance
 	color *= exposureTemperatureTint.x;
 	color = WhiteBalance(color);
+
+	// Oklch adjustments (perceptual, HDR-safe: saturation, vibrance, hue shift, per-hue mixer)
+	color = OklchAdjustments(color);
 
 	// Log
 	if (logType)
@@ -711,12 +697,10 @@ float3 ColorGrading(float3 color)
 	// ASC CDL
 	color = ASC_CDL(color, asccdl[0].xyz, asccdl[1].xyz, asccdl[2].xyz);
 
-	// Saturation and Hue
-	color = Saturation(color, saturationHueInOutGamma.x);
-	color = HueShift(color, saturationHueInOutGamma.y);
-
-	// Shadows Midtones Highlights
-	color = ShadowsMidtonesHighlights(color, shadows.xyz, midtones.xyz, highlights.xyz, shadowsHighlightsRange.x, shadowsHighlightsRange.y, shadowsHighlightsRange.z, shadowsHighlightsRange.w);
+	// Shadows Midtones Highlights (gain + offset per zone)
+	color = ShadowsMidtonesHighlights(color, shadows.xyz, midtones.xyz, highlights.xyz,
+		shadowsOffset.xyz, midtonesOffset.xyz, highlightsOffset.xyz,
+		shadowsHighlightsRange.x, shadowsHighlightsRange.y, shadowsHighlightsRange.z, shadowsHighlightsRange.w);
 
 	// Contrast
 	color = logType ? LogContrast(color, contrast.xyz, pivot.xyz) : LinearContrast(color, contrast.xyz, pivot.xyz);
@@ -725,27 +709,28 @@ float3 ColorGrading(float3 color)
 		color = LogToLinearSpace(color, logType);
 	}
 
-	// Tonemap
+	// Stage 2: Working → Tonemapper native space
+	if (enableColorSpaceTransform) {
+		const float3x3 workingToTonemapMat = float3x3(workingToTonemap[0].xyz, workingToTonemap[1].xyz, workingToTonemap[2].xyz);
+		color = mul(workingToTonemapMat, color);
+	}
+
+	// Tonemap (in tonemapper's native space)
 	if (enableTonemap) {
 		color = TONEMAP_FUNC(color);
 	}
 
-	// Inverse color space transform
+	// Stage 3: Tonemapper native → Output space
 	if (enableColorSpaceTransform) {
-		const float3x3 invColorSpaceTransformMat = float3x3(invColorSpaceTransform[0].xyz, invColorSpaceTransform[1].xyz, invColorSpaceTransform[2].xyz);
-		color = mul(invColorSpaceTransformMat, color);
+		const float3x3 tonemapToOutputMat = float3x3(tonemapToOutput[0].xyz, tonemapToOutput[1].xyz, tonemapToOutput[2].xyz);
+		color = mul(tonemapToOutputMat, color);
 	}
 
-	// LDR (skip when HDR is enabled, as LDR color grading is designed for SDR output)
+	// LDR post-tonemap adjustments (in output space)
+	// Skip when HDR is enabled, as LDR color grading is designed for SDR output
 	if (!skipLDR && !enableHDR) {
 		// Lift Gamma Gain
 		color = LiftGammaGain(color, liftgammagain[0].gbar, liftgammagain[1].gbar, liftgammagain[2].gbar);
-
-		// Oklch Saturation
-		color = OklchSaturation(color);
-
-		// Oklch Colour Mixer
-		color = OklchColourMixer(color);
 	}
 
 	return color;
@@ -754,13 +739,14 @@ float3 ColorGrading(float3 color)
 float3 ApplyLUT(float3 color)
 {
 	color = LinearToLog(color + LogToLinear(0));
+	color = color * ((LUT_SIZE - 1.0) / LUT_SIZE) + (0.5 / LUT_SIZE);
 	color = TexLUT.SampleLevel(LinearSampler, color, 0).xyz;
 	return color;
 }
 
 [numthreads(8, 8, 1)] void CSColorGrading(uint2 DTid : SV_DispatchThreadID) {
 	// Game cinematic
-	float3 color = pow(abs(TexColor[DTid].xyz), saturationHueInOutGamma.z) * cinematic.y;
+	float3 color = pow(abs(TexColor[DTid].xyz), inOutGamma.z) * cinematic.y;
 	color = Saturation(color, cinematic.x);
 	color = LinearContrast(color, cinematic.z, 0.18);
 
@@ -770,7 +756,7 @@ float3 ApplyLUT(float3 color)
 	else
 		color = ApplyLUT(color);
 
-	color = pow(abs(color), saturationHueInOutGamma.w);
+	color = pow(abs(color), inOutGamma.w);
 
 	// Game tint
 	float luma = Color::RGBToLuminance(color);
@@ -785,7 +771,7 @@ float3 ApplyLUT(float3 color)
 RWTexture3D<float4> RWLUT : register(u0);
 
 [numthreads(8, 8, 8)] void CSLUTGen(uint3 DTid : SV_DispatchThreadID) {
-	float3 uvw = float3(DTid + 0.5) / float3((LUT_SIZE - 1).xxx);
+	float3 uvw = float3(DTid) / float3((LUT_SIZE - 1).xxx);
 	float4 neutralColor = float4(uvw, 1);
 	float3 linearColor = LogToLinear(neutralColor.xyz) - LogToLinear(0);
 	linearColor = ColorGrading(linearColor);

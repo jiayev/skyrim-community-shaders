@@ -13,14 +13,28 @@
 #include "IconsFontAwesome5.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	ColorGrading::ColorProfile,
-	params)
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ColorGrading::Settings,
 	skipLDR,
 	skipLUT,
-	profile,
+	slope,
+	power,
+	cdlOffset,
+	lift,
+	gamma,
+	gain,
+	inOutGamma,
+	oklchSaturation,
+	oklchColorMixer,
+	contrast,
+	pivot,
+	exposureTemperatureTint,
+	shadowsGain,
+	midtonesGain,
+	highlightsGain,
+	shadowsHighlightsRange,
+	shadowsOffset,
+	midtonesOffset,
+	highlightsOffset,
 	currentTonemapper,
 	tonemapParams,
 	gameCinematicBlend,
@@ -31,9 +45,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	invertLog,
 	enableTonemap,
 	enableColorSpaceTransform,
-	processColorSpace,
-	colorSpaceTransform,
-	invColorSpaceTransform)
+	processColorSpace)
 
 template <int num = 3>
 bool shiftSlider(const char* label, float* v, float v_min, float v_max, const char* format = "%.3f", ImGuiSliderFlags flags = 0)
@@ -79,12 +91,27 @@ bool exposureSlider(float* val)
 	return retval;
 }
 
+void drawHDRStatus()
+{
+	auto& hdr = globals::features::hdrDisplay;
+	if (hdr.loaded && hdr.settings.enableHDR) {
+		ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), ICON_FA_CHECK " HDR Output Active");
+		ImGui::Text("Peak Brightness: %.0f nits (from HDR settings)", static_cast<float>(hdr.settings.hdrPeakNits));
+	} else {
+		ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "SDR Output (HDR Display not enabled)");
+	}
+}
+
 // Profjack Design
 struct TonemapperInfo
 {
 	std::string_view name;
 	std::string_view func_name;
 	std::string_view desc;
+	int nativeInputSpace;      // color space the tonemapper expects as input
+	int nativeOutputSpace;     // color space the tonemapper produces as output
+	bool supportsHDR;          // whether this tonemapper supports HDR output
+	int nativeOutputSpaceHDR;  // output color space index when HDR is active
 
 	using CTP = std::array<float4, 2>;
 	std::function<void(CTP&)> draw_settings_func;
@@ -99,13 +126,14 @@ struct TonemapperInfo
 
 		static std::vector<TonemapperInfo> tonemappers = {
 			{ "Reinhard"sv, "Reinhard"sv,
-				"Mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002."sv,
+				"Mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002."sv, 0, 0, false, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Reinhard Extended"sv, "ReinhardExt"sv,
 				"Extended mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002. "
 				"An additional user parameter specifies the smallest luminance that is mapped to 1, which allows high luminances to burn out."sv,
+				0, 0, false, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("White Point", &params[0].y, 0.f, 10.f, "%.2f"); },
@@ -114,12 +142,14 @@ struct TonemapperInfo
 			{ "Hejl Burgess-Dawson Filmic"sv, "HejlBurgessDawsonFilmic"sv,
 				"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
 				"See his blog post about \"Approximating Film with Tonemapping\"."sv,
+				0, 0, false, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Aldridge Filmic"sv, "AldridgeFilmic"sv,
 				"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
 				"See his blog post about \"Approximating Film with Tonemapping\"."sv,
+				0, 0, false, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Cutoff", &params[0].y, 0.f, .5f, "%.2f"); },
@@ -127,19 +157,22 @@ struct TonemapperInfo
 
 			{ "Lottes Filmic/AMD Curve"sv, "LottesFilmic"sv,
 				"Filmic curve by Timothy Lottes, described in his GDC talk \"Advanced Techniques and Optimization of HDR Color Pipelines\". "
-				"Also known as the \"AMD curve\"."sv,
+				"Also known as the \"AMD curve\". HDR output is automatically enabled when HDR Display feature is active."sv,
+				0, 0, true, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Contrast", &params[0].y, 1.f, 2.f, "%.2f");
 					ImGui::SliderFloat("Shoulder", &params[0].z, 0.01f, 2.f, "%.2f");
 					ImGui::SliderFloat("Maximum HDR Value", &params[0].w, 1.f, 10.f, "%.2f");
 					ImGui::SliderFloat("Input Mid-Level", &params[1].x, 0.f, 1.f, "%.2f");
-					ImGui::SliderFloat("Output Mid-Level", &params[1].y, 0.f, 1.f, "%.2f"); },
+					ImGui::SliderFloat("Output Mid-Level", &params[1].y, 0.f, 1.f, "%.2f");
+					drawHDRStatus(); },
 				{ f4{ 1.f, 1.6f, 0.977f, 8.f }, f4{ 0.18f, 0.267f, 0.f, 0.f } } },
 
 			{ "Day Filmic/Insomniac Curve"sv, "DayFilmic"sv,
 				"Filmic curve by Mike Day, described in his document \"An efficient and user-friendly tone mapping operator\". "
 				"Also known as the \"Insomniac curve\"."sv,
+				0, 0, false, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Black Point", &params[0].y, 0.f, 5.f, "%.2f");
@@ -158,7 +191,8 @@ struct TonemapperInfo
 
 			{ "Uchimura/Grand Turismo Curve"sv, "UchimuraFilmic"sv,
 				"Filmic curve by Hajime Uchimura, described in his CEDEC talk \"HDR Theory and Practice\". Characterised by its middle linear section. "
-				"Also known as the \"Gran Turismo curve\"."sv,
+				"Also known as the \"Gran Turismo curve\". HDR output is automatically enabled when HDR Display feature is active."sv,
+				0, 0, true, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Max Brightness", &params[0].y, 0.01f, 2.f, "%.2f");
@@ -166,27 +200,14 @@ struct TonemapperInfo
 					ImGui::SliderFloat("Linear Section Start", &params[0].w, 0.f, 1.f, "%.2f");
 					ImGui::SliderFloat("Linear Section Length", &params[1].x, .01f, .99f, "%.2f");
 					ImGui::SliderFloat("Black Tightness Shape", &params[1].y, 1.f, 3.f, "%.2f");
-					ImGui::SliderFloat("Black Tightness Offset", &params[1].z, 0.f, 1.f, "%.2f"); },
+					ImGui::SliderFloat("Black Tightness Offset", &params[1].z, 0.f, 1.f, "%.2f");
+					drawHDRStatus(); },
 				{ f4{ 1.f, 1.f, 1.f, .22f }, f4{ 0.4f, 1.33f, 0.f, 0.f } } },
-
-			{ "ACES (Hill)"sv, "AcesHill"sv,
-				"ACES curve fit by Stephen Hill."sv,
-				[](CTP& params) { exposureSlider(&params[0].x); },
-				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
-
-			{ "ACES (Narkowicz)"sv, "AcesNarkowicz"sv,
-				"ACES curve fit by Krzysztof Narkowicz. See his blog post \"ACES Filmic Tone Mapping Curve\"."sv,
-				[](CTP& params) { exposureSlider(&params[0].x); },
-				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
-
-			{ "ACES (Guy)"sv, "AcesGuy"sv,
-				"Curve from Unreal 3 adapted by to close to the ACES curve by Romain Guy."sv,
-				[](CTP& params) { exposureSlider(&params[0].x); },
-				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "AgX Minimal"sv, "AgxMinimal"sv,
 				"Minimal version of Troy Sobotka's AgX using a 6th order polynomial approximation. "
-				"Originally created by bwrensch, and improved by Troy Sobotka."sv,
+				"Originally created by bwrensch, and improved by Troy Sobotka. Internally uses AgX input transform."sv,
+				0, 0, false, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Slope", &params[0].y, 0.f, 2.f, "%.2f");
@@ -196,27 +217,20 @@ struct TonemapperInfo
 				{ f4{ 1.f, 1.f, 1.f, 0.f }, f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Melon"sv, "MelonTonemap"sv,
-				"Tonemapper designed by TripleMelon to fix the ACES issue of intense colour being shifted."sv,
+				"Tonemapper designed by TripleMelon to fix the ACES issue of intense colour being shifted."sv, 0, 0, false, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Kajiya"sv, "KajiyaTonemap"sv,
-				"Tonemapper designed by Tomasz Stachowiak/Embark for their real time ray tracing engine Kajiya."sv,
+				"Tonemapper designed by Tomasz Stachowiak/Embark for their real time ray tracing engine Kajiya."sv, 0, 0, false, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "GT7"sv, "GT7ToneMapping"sv,
-				"Tonemapper designed for Gran Turismo 7. HDR output is automatically enabled when HDR Display feature is active."sv,
+				"Tonemapper designed for Gran Turismo 7. HDR output is automatically enabled when HDR Display feature is active."sv, 2, 2, true, 2,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					auto& hdr = globals::features::hdrDisplay;
-					bool enableHDR = hdr.loaded && hdr.settings.enableHDR;
-					if (enableHDR) {
-						ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), ICON_FA_CHECK " HDR Output Active");
-						ImGui::Text("Peak Brightness: %.0f nits (from HDR settings)", static_cast<float>(hdr.settings.hdrPeakNits));
-					} else {
-						ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "SDR Output (HDR Display not enabled)");
-					}
+					drawHDRStatus();
 				},
 				{ f4{ 1.f, 0.f, 1000.f, 0.f } } }
 		};
@@ -247,7 +261,7 @@ void ColorGrading::DrawSettings()
 {
 	ImGui::Checkbox("Skip LDR Color Grading", &settings.skipLDR);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Skip color grading after tonemapping. This includes Lift Gamma Gain and Oklch adjustments. Will be automatically skipped with HDR on.");
+		ImGui::Text("Skip color grading after tonemapping. This includes Lift Gamma Gain. Will be automatically skipped with HDR on.");
 
 	ImGui::Checkbox("Skip LUT (Direct Color Grading)", &settings.skipLUT);
 	if (auto _tt = Util::HoverTooltipWrapper())
@@ -259,60 +273,30 @@ void ColorGrading::DrawSettings()
 		ImGui::Combo("Log Type", (int*)&settings.logType, "ACEScct\0ARRILogC4\0SonySLog3\0");
 	}
 
-	auto& profile = settings.profile;
 	ImGui::SeparatorText("Color Grading");
 	{
-		ImGui::SliderFloat("Input Gamma", &profile.params[6].z, 0.f, 3.f, "%.3f");
-		ImGui::SliderFloat("Output Gamma", &profile.params[6].w, 0.f, 3.f, "%.3f");
+		ImGui::SliderFloat("Input Gamma", &settings.inOutGamma.z, 0.f, 3.f, "%.3f");
+		ImGui::SliderFloat("Output Gamma", &settings.inOutGamma.w, 0.f, 3.f, "%.3f");
 
 		ImGui::Text("Pre-Tonemapping Settings");
 		if (ImGui::TreeNode("Exposure/Temperature/Tint")) {
-			exposureSlider(&profile.params[17].x);
-			ImGui::SliderFloat("Temperature", &profile.params[17].y, 10.f, 150.f, "%1.f00K");
-			ImGui::SliderFloat("Tint", &profile.params[17].z, -1.f, 1.f, "%.3f");
+			exposureSlider(&settings.exposureTemperatureTint.x);
+			ImGui::SliderFloat("Temperature", &settings.exposureTemperatureTint.y, 10.f, 150.f, "%1.f00K");
+			ImGui::SliderFloat("Tint", &settings.exposureTemperatureTint.z, -1.f, 1.f, "%.3f");
 			ImGui::TreePop();
 		}
 
 		if (ImGui::TreeNode("ASC CDL")) {
-			shiftSlider("Slope", &profile.params[0].x, 0.f, 2.f, "%.2f");
-			shiftSlider("Power", &profile.params[1].x, 0.f, 2.f, "%.2f");
-			shiftSlider("Offset", &profile.params[2].x, -1.f, 1.f, "%.2f");
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNode("Saturation/Hue")) {
-			ImGui::SliderFloat("Saturation", &profile.params[6].x, 0.f, 3.f, "%.3f");
-			ImGui::SliderFloat("Hue Shift", &profile.params[6].y, -1.f, 1.f, "%.3f");
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNode("Shadows/Midtones/Highlights")) {
-			shiftSlider("Shadows", &profile.params[18].x, 0.f, 2.f, "%.3f");
-			shiftSlider("Midtones", &profile.params[19].x, 0.f, 2.f, "%.3f");
-			shiftSlider("Highlights", &profile.params[20].x, 0.f, 2.f, "%.3f");
-			ImGui::InputFloat2("Shadows Start/End", &profile.params[21].x, "%.3f");
-			ImGui::InputFloat2("Highlights Start/End", &profile.params[21].z, "%.3f");
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNode("Contrast")) {
-			shiftSlider("Contrast", &profile.params[15].x, 0.f, 2.f, "%.3f");
-			shiftSlider("Pivot", &profile.params[16].x, 0.f, 1.f, "%.3f");
-			ImGui::TreePop();
-		}
-
-		ImGui::Text("Post-Tonemapping Settings");
-		if (ImGui::TreeNode("Lift Gamma Gain")) {
-			ImGui::DragFloat4("Lift", &profile.params[3].x, 1e-3f, -1.f, 1.f, "%.3f");
-			ImGui::DragFloat4("Gamma", &profile.params[4].x, 1e-3f, -1.5f, 1.5f, "%.3f");
-			ImGui::DragFloat4("Gain", &profile.params[5].x, 1e-3f, 0.f, 2.f, "%.3f");
+			shiftSlider("Slope", &settings.slope.x, 0.f, 2.f, "%.2f");
+			shiftSlider("Power", &settings.power.x, 0.f, 2.f, "%.2f");
+			shiftSlider("Offset", &settings.cdlOffset.x, -1.f, 1.f, "%.2f");
 			ImGui::TreePop();
 		}
 
 		if (ImGui::TreeNode("OKLCH Saturation")) {
-			ImGui::SliderFloat("Saturation", &profile.params[7].x, 0.f, 2.f, "%.3f");
-			ImGui::SliderFloat("Vibrance", &profile.params[7].y, 0.f, 3.f, "%.3f");
-			ImGui::SliderFloat("Hue Shift", &profile.params[7].z, -1.f, 1.f, "%.3f");
+			ImGui::SliderFloat("Saturation", &settings.oklchSaturation.x, 0.f, 2.f, "%.3f");
+			ImGui::SliderFloat("Vibrance", &settings.oklchSaturation.y, 0.f, 3.f, "%.3f");
+			ImGui::SliderFloat("Hue Shift", &settings.oklchSaturation.z, -1.f, 1.f, "%.3f");
 			ImGui::TreePop();
 		}
 
@@ -340,9 +324,35 @@ void ColorGrading::DrawSettings()
 				}
 				ImGui::EndTable();
 			}
-			ImGui::SliderFloat("Hue Shift", &profile.params[8 + hueId].x, -1.f, 1.f, "%.3f");
-			ImGui::SliderFloat("Vibrance", &profile.params[8 + hueId].y, 0.f, 3.f, "%.3f");
-			ImGui::SliderFloat("Brightness", &profile.params[8 + hueId].z, -1.f, 1.f, "%.3f");
+			ImGui::SliderFloat("Hue Shift", &settings.oklchColorMixer[hueId].x, -1.f, 1.f, "%.3f");
+			ImGui::SliderFloat("Vibrance", &settings.oklchColorMixer[hueId].y, 0.f, 3.f, "%.3f");
+			ImGui::SliderFloat("Brightness", &settings.oklchColorMixer[hueId].z, -1.f, 1.f, "%.3f");
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Shadows/Midtones/Highlights")) {
+			shiftSlider("Shadows Gain", &settings.shadowsGain.x, 0.f, 2.f, "%.3f");
+			shiftSlider("Shadows Offset", &settings.shadowsOffset.x, -0.5f, 0.5f, "%.3f");
+			shiftSlider("Midtones Gain", &settings.midtonesGain.x, 0.f, 2.f, "%.3f");
+			shiftSlider("Midtones Offset", &settings.midtonesOffset.x, -0.5f, 0.5f, "%.3f");
+			shiftSlider("Highlights Gain", &settings.highlightsGain.x, 0.f, 2.f, "%.3f");
+			shiftSlider("Highlights Offset", &settings.highlightsOffset.x, -0.5f, 0.5f, "%.3f");
+			ImGui::InputFloat2("Shadows Start/End", &settings.shadowsHighlightsRange.x, "%.3f");
+			ImGui::InputFloat2("Highlights Start/End", &settings.shadowsHighlightsRange.z, "%.3f");
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Contrast")) {
+			shiftSlider("Contrast", &settings.contrast.x, 0.f, 2.f, "%.3f");
+			shiftSlider("Pivot", &settings.pivot.x, 0.f, 1.f, "%.3f");
+			ImGui::TreePop();
+		}
+
+		ImGui::Text("Post-Tonemapping Settings");
+		if (ImGui::TreeNode("Lift Gamma Gain")) {
+			ImGui::DragFloat4("Lift", &settings.lift.x, 1e-3f, -1.f, 1.f, "%.3f");
+			ImGui::DragFloat4("Gamma", &settings.gamma.x, 1e-3f, -1.5f, 1.5f, "%.3f");
+			ImGui::DragFloat4("Gain", &settings.gain.x, 1e-3f, 0.f, 2.f, "%.3f");
 			ImGui::TreePop();
 		}
 	}
@@ -352,8 +362,28 @@ void ColorGrading::DrawSettings()
 	if (settings.enableTonemap) {
 		auto& tonemappers = TonemapperInfo::GetTonemappers();
 
+		auto& hdrRef = globals::features::hdrDisplay;
+		const bool hdrActive = hdrRef.loaded && hdrRef.settings.enableHDR;
+
+		// Auto-switch to an HDR-capable tonemapper if current one doesn't support HDR
+		if (hdrActive && !tonemappers[tonemapperType].supportsHDR) {
+			for (int i = 0; i < (int)tonemappers.size(); ++i) {
+				if (tonemappers[i].supportsHDR) {
+					tonemappers[tonemapperType].cached_settings = settings.tonemapParams;
+					settings.tonemapParams = tonemappers[i].cached_settings;
+					tonemapperType = i;
+					recompileFlag = true;
+					break;
+				}
+			}
+		}
+
 		if (ImGui::BeginCombo("Tonemapper", tonemappers[tonemapperType].name.data(), ImGuiComboFlags_HeightLargest)) {
-			for (int i = 0; i < tonemappers.size(); ++i) {
+			for (int i = 0; i < (int)tonemappers.size(); ++i) {
+				// Hide non-HDR tonemappers when HDR is active
+				if (hdrActive && !tonemappers[i].supportsHDR)
+					continue;
+
 				if (ImGui::Selectable(tonemappers[i].name.data(), i == tonemapperType)) {
 					tonemappers[tonemapperType].cached_settings = settings.tonemapParams;
 					settings.tonemapParams = tonemappers[i].cached_settings;
@@ -391,9 +421,9 @@ void ColorGrading::DrawSettings()
 		auto& hdr = globals::features::hdrDisplay;
 		const bool hdrEnabled = hdr.loaded && hdr.settings.enableHDR;
 
-		constexpr int kInputColorSpace = 0;   // sRGB
-		constexpr int kHDRColorSpace = 2;     // BT2020
-		constexpr int kSDRColorSpace = 0;     // sRGB / BT709 gamut
+		constexpr int kInputColorSpace = 0;  // sRGB
+		constexpr int kHDRColorSpace = 2;    // BT2020
+		constexpr int kSDRColorSpace = 0;    // sRGB / BT709 gamut
 		const int outputColorSpace = hdrEnabled ? kHDRColorSpace : kSDRColorSpace;
 
 		ImGui::TextDisabled("Input Color Space: %s (fixed)", spaces[kInputColorSpace]);
@@ -410,8 +440,6 @@ void ColorGrading::DrawSettings()
 	}
 	ImGui::SameLine();
 	ImGui::Text("Output will be saved to: %s", outputPath.c_str());
-
-	ImGui::PopID();
 }
 
 void ColorGrading::RestoreDefaultSettings()
@@ -455,25 +483,26 @@ void ColorGrading::UpdateColorSpaceTransforms(bool hdrEnabled)
 	auto& spaces = getAvailableColourSpaces();
 	settings.processColorSpace = std::clamp(settings.processColorSpace, 0, static_cast<int>(spaces.size()) - 1);
 
-	constexpr int kInputColorSpace = 0;   // sRGB
-	constexpr int kHDRColorSpace = 2;     // BT2020
-	constexpr int kSDRColorSpace = 0;     // sRGB / BT709 gamut
+	auto& tonemappers = TonemapperInfo::GetTonemappers();
+
+	constexpr int kInputColorSpace = 0;  // sRGB
+	constexpr int kHDRColorSpace = 2;    // BT2020
+	constexpr int kSDRColorSpace = 0;    // sRGB / BT709 gamut
 	const int outputColorSpace = hdrEnabled ? kHDRColorSpace : kSDRColorSpace;
+	const int tonemapInputSpace = tonemappers[tonemapperType].nativeInputSpace;
+	const int tonemapOutputSpace = (hdrEnabled && tonemappers[tonemapperType].supportsHDR) ? tonemappers[tonemapperType].nativeOutputSpaceHDR : tonemappers[tonemapperType].nativeOutputSpace;
 
-	auto colorSpaceTransformMatrix = getRGBMatrix(spaces[kInputColorSpace], spaces[settings.processColorSpace]);
-	auto invColorSpaceTransformMatrix = getRGBMatrix(spaces[settings.processColorSpace], spaces[outputColorSpace]);
-
-	settings.colorSpaceTransform = {
-		float3{ colorSpaceTransformMatrix(0, 0), colorSpaceTransformMatrix(0, 1), colorSpaceTransformMatrix(0, 2) },
-		float3{ colorSpaceTransformMatrix(1, 0), colorSpaceTransformMatrix(1, 1), colorSpaceTransformMatrix(1, 2) },
-		float3{ colorSpaceTransformMatrix(2, 0), colorSpaceTransformMatrix(2, 1), colorSpaceTransformMatrix(2, 2) }
+	auto storeMatrix = [](const DirectX::SimpleMath::Matrix& mat, std::array<float3, 3>& out) {
+		out = {
+			float3{ mat(0, 0), mat(0, 1), mat(0, 2) },
+			float3{ mat(1, 0), mat(1, 1), mat(1, 2) },
+			float3{ mat(2, 0), mat(2, 1), mat(2, 2) }
+		};
 	};
 
-	settings.invColorSpaceTransform = {
-		float3{ invColorSpaceTransformMatrix(0, 0), invColorSpaceTransformMatrix(0, 1), invColorSpaceTransformMatrix(0, 2) },
-		float3{ invColorSpaceTransformMatrix(1, 0), invColorSpaceTransformMatrix(1, 1), invColorSpaceTransformMatrix(1, 2) },
-		float3{ invColorSpaceTransformMatrix(2, 0), invColorSpaceTransformMatrix(2, 1), invColorSpaceTransformMatrix(2, 2) }
-	};
+	storeMatrix(getRGBMatrix(spaces[kInputColorSpace], spaces[settings.processColorSpace]), inputToWorkingMatrix);
+	storeMatrix(getRGBMatrix(spaces[settings.processColorSpace], spaces[tonemapInputSpace]), workingToTonemapMatrix);
+	storeMatrix(getRGBMatrix(spaces[tonemapOutputSpace], spaces[outputColorSpace]), tonemapToOutputMatrix);
 }
 
 void ColorGrading::SetupResources()
@@ -617,31 +646,57 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	auto& pp = globals::features::postProcessing;
 
 	RE::ImageSpaceData imageSpaceData = pp.imageSpaceManager->gameISData;
-
-	auto profile = settings.profile;
 	auto& hdr = globals::features::hdrDisplay;
 	const bool hdrEnabled = hdr.loaded && hdr.settings.enableHDR;
 	if (settings.enableColorSpaceTransform)
 		UpdateColorSpaceTransforms(hdrEnabled);
 
+	// Always compute XYZ matrices for white balance
+	{
+		auto& spaces = getAvailableColourSpaces();
+		int wsIdx = settings.enableColorSpaceTransform ?
+		                std::clamp(settings.processColorSpace, 0, static_cast<int>(spaces.size()) - 1) :
+		                0;
+		auto storeMatrix = [](const DirectX::SimpleMath::Matrix& mat, std::array<float3, 3>& out) {
+			out = {
+				float3{ mat(0, 0), mat(0, 1), mat(0, 2) },
+				float3{ mat(1, 0), mat(1, 1), mat(1, 2) },
+				float3{ mat(2, 0), mat(2, 1), mat(2, 2) }
+			};
+		};
+		storeMatrix(getRGBMatrix(spaces[wsIdx], "XYZ"), workingToXYZMatrix);
+		storeMatrix(getRGBMatrix("XYZ", spaces[wsIdx]), xyzToWorkingMatrix);
+	}
+
 	ColorCB colorCBData = {
-		.asccdl = { profile.params[0],
-			profile.params[1],
-			profile.params[2] },
-		.liftgammagain = { profile.params[3], profile.params[4], profile.params[5] },
-		.saturationHueInOutGamma = profile.params[6],
-		.oklchSaturation = profile.params[7],
-		.oklchColorMixer = { profile.params[8], profile.params[9], profile.params[10], profile.params[11], profile.params[12], profile.params[13], profile.params[14] },
-		.contrast = profile.params[15],
-		.pivot = profile.params[16],
-		.exposureTemperatureTint = profile.params[17],
-		.shadows = profile.params[18],
-		.midtones = profile.params[19],
-		.highlights = profile.params[20],
-		.shadowsHighlightsRange = profile.params[21],
+		.asccdl = { settings.slope, settings.power, settings.cdlOffset },
+		.liftgammagain = { settings.lift, settings.gamma, settings.gain },
+		.inOutGamma = settings.inOutGamma,
+		.oklchSaturation = settings.oklchSaturation,
+		.oklchColorMixer = { settings.oklchColorMixer[0], settings.oklchColorMixer[1], settings.oklchColorMixer[2], settings.oklchColorMixer[3], settings.oklchColorMixer[4], settings.oklchColorMixer[5], settings.oklchColorMixer[6] },
+		.contrast = settings.contrast,
+		.pivot = settings.pivot,
+		.exposureTemperatureTint = settings.exposureTemperatureTint,
+		.shadows = settings.shadowsGain,
+		.midtones = settings.midtonesGain,
+		.highlights = settings.highlightsGain,
+		.shadowsHighlightsRange = settings.shadowsHighlightsRange,
 		.tonemapParams = { settings.tonemapParams[0], settings.tonemapParams[1] },
-		.colorSpaceTransform = { float4{ settings.colorSpaceTransform[0].x, settings.colorSpaceTransform[0].y, settings.colorSpaceTransform[0].z, 0.f }, float4{ settings.colorSpaceTransform[1].x, settings.colorSpaceTransform[1].y, settings.colorSpaceTransform[1].z, 0.f }, float4{ settings.colorSpaceTransform[2].x, settings.colorSpaceTransform[2].y, settings.colorSpaceTransform[2].z, 0.f } },
-		.invColorSpaceTransform = { float4{ settings.invColorSpaceTransform[0].x, settings.invColorSpaceTransform[0].y, settings.invColorSpaceTransform[0].z, 0.f }, float4{ settings.invColorSpaceTransform[1].x, settings.invColorSpaceTransform[1].y, settings.invColorSpaceTransform[1].z, 0.f }, float4{ settings.invColorSpaceTransform[2].x, settings.invColorSpaceTransform[2].y, settings.invColorSpaceTransform[2].z, 0.f } },
+		.inputToWorking = { float4{ inputToWorkingMatrix[0].x, inputToWorkingMatrix[0].y, inputToWorkingMatrix[0].z, 0.f }, float4{ inputToWorkingMatrix[1].x, inputToWorkingMatrix[1].y, inputToWorkingMatrix[1].z, 0.f }, float4{ inputToWorkingMatrix[2].x, inputToWorkingMatrix[2].y, inputToWorkingMatrix[2].z, 0.f } },
+		.workingToTonemap = { float4{ workingToTonemapMatrix[0].x, workingToTonemapMatrix[0].y, workingToTonemapMatrix[0].z, 0.f }, float4{ workingToTonemapMatrix[1].x, workingToTonemapMatrix[1].y, workingToTonemapMatrix[1].z, 0.f }, float4{ workingToTonemapMatrix[2].x, workingToTonemapMatrix[2].y, workingToTonemapMatrix[2].z, 0.f } },
+		.tonemapToOutput = { float4{ tonemapToOutputMatrix[0].x, tonemapToOutputMatrix[0].y, tonemapToOutputMatrix[0].z, 0.f }, float4{ tonemapToOutputMatrix[1].x, tonemapToOutputMatrix[1].y, tonemapToOutputMatrix[1].z, 0.f }, float4{ tonemapToOutputMatrix[2].x, tonemapToOutputMatrix[2].y, tonemapToOutputMatrix[2].z, 0.f } },
+		.workingToXYZ = { float4{ workingToXYZMatrix[0].x, workingToXYZMatrix[0].y, workingToXYZMatrix[0].z, 0.f }, float4{ workingToXYZMatrix[1].x, workingToXYZMatrix[1].y, workingToXYZMatrix[1].z, 0.f }, float4{ workingToXYZMatrix[2].x, workingToXYZMatrix[2].y, workingToXYZMatrix[2].z, 0.f } },
+		.xyzToWorking = { float4{ xyzToWorkingMatrix[0].x, xyzToWorkingMatrix[0].y, xyzToWorkingMatrix[0].z, 0.f }, float4{ xyzToWorkingMatrix[1].x, xyzToWorkingMatrix[1].y, xyzToWorkingMatrix[1].z, 0.f }, float4{ xyzToWorkingMatrix[2].x, xyzToWorkingMatrix[2].y, xyzToWorkingMatrix[2].z, 0.f } },
+		.workingWhitePoint = [&]() {
+			auto& spaces = getAvailableColourSpaces();
+			int wsIdx = settings.enableColorSpaceTransform ?
+		                    std::clamp(settings.processColorSpace, 0, static_cast<int>(spaces.size()) - 1) :
+		                    0;
+			auto wp = getWhitePoint(spaces[wsIdx]);
+			return float4{ wp.x, wp.y, 0.f, 0.f }; }(),
+		.shadowsOffset = settings.shadowsOffset,
+		.midtonesOffset = settings.midtonesOffset,
+		.highlightsOffset = settings.highlightsOffset,
 		.cinematic = float4{ std::lerp(1.f, imageSpaceData.baseData.cinematic.saturation, settings.gameCinematicBlend.x), std::lerp(1.f, imageSpaceData.baseData.cinematic.brightness, settings.gameCinematicBlend.y), std::lerp(1.f, imageSpaceData.baseData.cinematic.contrast, settings.gameCinematicBlend.z), imageSpaceData.baseAmount },
 		.fade = float4{ imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeR], imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeG], imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeB], imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeAmount] * settings.gameFadeBlend },
 		.tint = float4{ imageSpaceData.baseData.tint.color.red, imageSpaceData.baseData.tint.color.green, imageSpaceData.baseData.tint.color.blue, imageSpaceData.baseData.tint.amount * settings.gameTintBlend },

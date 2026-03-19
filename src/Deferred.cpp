@@ -9,6 +9,7 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/IBL.h"
 #include "Features/PhysicalSky.h"
+#include "Features/Raytracing.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -16,7 +17,6 @@
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Features/WeatherEditor.h"
-#include "Features/Raytracing.h"
 
 #include "Hooks.h"
 
@@ -350,7 +350,7 @@ void Deferred::DeferredPasses()
 	if (auto& rt = globals::features::raytracing; rt.loaded) {
 		rt.DeferredPasses();
 		skipDeferredComposite = rt.settings.CreationEngineRaytracingSettings.Enabled &&
-			rt.Mode() == CreationEngineRaytracing::Mode::PathTracing;
+		                        rt.Mode() == CreationEngineRaytracing::Mode::PathTracing;
 	}
 
 	// Deferred Composite
@@ -372,8 +372,8 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? nullptr : ssgi_y,
 			ssgi_hq_spec ? nullptr : ssgi_cocg,
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
-			ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
-			ibl.loaded ? ibl.diffuseSkyIBLTexture->srv.get() : nullptr,
+			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,
+			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,
 			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,
 			physSky.loaded ? physSky.texApShadow->srv.get() : nullptr,
 		};
@@ -577,7 +577,7 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		auto& rt = globals::features::raytracing;
 		if (rt.loaded)
 			defines.push_back({ rt.GetShaderDefineName().data(), nullptr });
-		
+
 		if (globals::features::physicalSky.loaded)
 			defines.push_back({ "PHYSICAL_SKY", nullptr });
 

@@ -154,7 +154,8 @@ public:
 		InWorld = 1 << 0,
 		IsReflections = 1 << 1,
 		IsBeastRace = 1 << 2,
-		GrassSphereNormal = 1 << 3
+		GrassSphereNormal = 1 << 3,
+		IsSun = 1 << 4
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t
@@ -172,7 +173,14 @@ public:
 	bool inWorld = false;
 	bool activeReflections = false;
 
+	// Cached menu open states, updated once per frame in Reset().
+	// Avoids repeated IsMenuOpen calls (each constructs a BSFixedString).
+	bool isMainMenuOpen = false;
+	bool isLoadingMenuOpen = false;
+	bool isMapMenuOpen = false;
+
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
+	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
 
 	struct PermutationCB
 	{
@@ -211,6 +219,9 @@ public:
 		uint HideSky;
 		float MipBias;
 		float pad0;
+		float4 AmbientSHR;
+		float4 AmbientSHG;
+		float4 AmbientSHB;
 		float4 HDRData;  // x=enableHDR, y=paperWhite, z=peakNits, w=unused
 	};
 	STATIC_ASSERT_ALIGNAS_16(SharedDataCB);

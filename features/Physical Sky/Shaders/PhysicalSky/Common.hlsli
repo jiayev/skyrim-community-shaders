@@ -1,5 +1,5 @@
-#ifndef COMMON_PHYS_SKY_HLSLI
-#define COMMON_PHYS_SKY_HLSLI
+#ifndef COMMON_HLSLI
+#define COMMON_HLSLI
 
 #include "Common/Color.hlsli"
 #include "Common/Math.hlsli"
@@ -398,4 +398,5 @@ Texture2D<unorm float> TexApShadow : register(t64);
 #ifndef OMIT_PS_NAMESPACE
 }
 #endif
-#endif
+
+#endif  // COMMON_HLSLI
