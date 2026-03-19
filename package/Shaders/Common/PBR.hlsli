@@ -242,8 +242,24 @@ namespace PBR
 			float2 specularBRDF = BRDF::EnvBRDF(material.Roughness, NdotV);
 			lobeWeights.specular = material.F0 * specularBRDF.x + specularBRDF.y;
 
+#if defined(MULTISCATTERING_BRDF)
+			// [Fdez-Aguera 2019, "A Multiple-Scattering Microfacet Model for Real-Time Image-based Lighting"]
+			float3 FssEss = lobeWeights.specular;
+
+			float Ess = specularBRDF.x + specularBRDF.y;
+			float Ems = 1.0 - Ess;
+			float3 Favg = material.F0 + (1.0 - material.F0) / 21.0;
+			float3 Fms = FssEss * Favg / (1.0 - Favg * (1.0 - Ess));
+
+			float3 FmsEms = Fms * Ems;
+
+			lobeWeights.diffuse *= 1.0 - (FssEss + FmsEms);
+			// Cosine-weighted irradiance
+			lobeWeights.diffuse += FmsEms;
+#else
 			// Energy conservation: diffuse receives only what specular does not reflect
 			lobeWeights.diffuse *= 1 - lobeWeights.specular;
+#endif
 
 #if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 			[branch] if ((PBRFlags & Flags::TwoLayer) != 0)
