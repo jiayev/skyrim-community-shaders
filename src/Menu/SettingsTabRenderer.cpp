@@ -340,6 +340,13 @@ void SettingsTabRenderer::RenderBehaviorTab()
 			ImGui::Text("Automatically hides the left feature list panel. Move cursor to the left edge to show it.");
 		}
 
+		if (ImGui::Checkbox("Require Shift to Dock", &globals::menu->GetSettings().RequireShiftToDock)) {
+			ImGui::GetIO().ConfigDockingWithShift = globals::menu->GetSettings().RequireShiftToDock;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("When enabled, you must hold Shift while dragging to dock/snap windows. Prevents accidental docking.");
+		}
+
 		ImGui::SliderFloat("Tooltip Hover Delay", &themeSettings.TooltipHoverDelay, 0.0f, 2.0f, "%.2f s", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Time in seconds to wait before a tooltip appears when hovering over an item.");
@@ -364,6 +371,7 @@ void SettingsTabRenderer::RenderThemesTab()
 		auto& themeSettings = globals::menu->GetSettings().Theme;
 
 		// Static variables for popup state and new theme creation
+		static Util::ConfirmationPopup deleteThemePopup("Delete Theme", "", "Delete", "Cancel");
 		static bool showCreateThemePopup = false;
 		static char newThemeName[128] = "";
 		static char newThemeDisplayName[128] = "";
@@ -476,7 +484,7 @@ void SettingsTabRenderer::RenderThemesTab()
 			ImGui::Spacing();
 			const auto& selectedTheme = themes[currentItem];
 			ImGui::Text("Selected Theme: ");
-			ImGui::SameLine();
+			ImGui::SameLine(0, 0);
 			ImGui::TextColored(themeSettings.StatusPalette.InfoColor, "%s", selectedTheme.displayName.c_str());
 			if (!selectedTheme.description.empty()) {
 				ImGui::TextWrapped("%s", selectedTheme.description.c_str());
@@ -485,10 +493,10 @@ void SettingsTabRenderer::RenderThemesTab()
 		ImGui::Spacing();
 
 		const bool isPreset = IsPresetThemeSelected();
+		const auto* currentThemeInfo = themeManager->GetThemeInfo(currentThemePreset);
 
 		if (!isPreset) {
 			if (Util::ButtonWithFlash("Save")) {
-				const auto* currentThemeInfo = themeManager->GetThemeInfo(currentThemePreset);
 				if (currentThemeInfo) {
 					// Get current settings
 					json currentThemeJson;
@@ -559,6 +567,22 @@ void SettingsTabRenderer::RenderThemesTab()
 			memset(newThemeDisplayName, 0, sizeof(newThemeDisplayName));
 			memset(newThemeDescription, 0, sizeof(newThemeDescription));
 			showValidationError = false;
+		}
+
+		if (!isPreset && currentThemeInfo && !currentThemeInfo->filePath.empty()) {
+			ImGui::SameLine();
+			auto _style = Util::ErrorButtonStyle();
+			if (Util::ButtonWithFlash("Delete")) {
+				deleteThemePopup.message =
+					"Are you sure you want to delete the theme '" +
+					(currentThemeInfo->displayName.empty() ? currentThemePreset : currentThemeInfo->displayName) +
+					"'?\n\nThis will permanently remove the theme file. This cannot be undone.";
+				deleteThemePopup.Request();
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Delete the theme file for '%s'. This cannot be undone.",
+					(currentThemeInfo->displayName.empty() ? currentThemePreset : currentThemeInfo->displayName).c_str());
+			}
 		}
 
 		// Display update feedback below the buttons
@@ -699,6 +723,17 @@ void SettingsTabRenderer::RenderThemesTab()
 			}
 
 			ImGui::EndPopup();
+		}
+
+		if (deleteThemePopup.Draw() && currentThemeInfo && !currentThemeInfo->filePath.empty()) {
+			auto result = Util::FileHelpers::SafeDelete(currentThemeInfo->filePath, "Theme '" + currentThemePreset + "'");
+			if (result.success) {
+				themeManager->RefreshThemes();
+				globals::menu->LoadThemePreset("Default");
+				currentThemePreset = "Default";
+			} else {
+				logger::warn("Failed to delete theme '{}': {}", currentThemePreset, result.errorMessage);
+			}
 		}
 
 		ImGui::EndTabItem();

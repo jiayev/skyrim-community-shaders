@@ -67,7 +67,7 @@ namespace Skin
 		return profile * saturate(0.3 + dot(light, -worldNormal));
 	}
 
-	float3 GetDualSpecularGGX(float AverageRoughness, float Lobe0Roughness, float Lobe1Roughness, float LobeMix, float3 SpecularColor, float NdotL, float NdotV, float NdotH, float VdotH, out float3 F)
+	float3 DualSpecularGGX(float AverageRoughness, float Lobe0Roughness, float Lobe1Roughness, float LobeMix, float3 SpecularColor, float NdotL, float NdotV, float NdotH, float VdotH, out float3 F)
 	{
 		float D = lerp(BRDF::D_GGX(Lobe0Roughness, NdotH), BRDF::D_GGX(Lobe1Roughness, NdotH), LobeMix);
 		float G = BRDF::Vis_SmithJointApprox(AverageRoughness, NdotV, NdotL);
@@ -111,10 +111,11 @@ namespace Skin
 		float3 F;
 		float3 F0 = material.F0 * saturate(1 - material.Curvature);
 
-		lightingOutput.specular += GetDualSpecularGGX(averageRoughness, material.Roughness, material.RoughnessSecondary, material.SecondarySpecIntensity, F0, NdotL, NdotV, NdotH, VdotH, F) * context.lightColor * NdotL;
+		lightingOutput.specular += DualSpecularGGX(averageRoughness, material.Roughness, material.RoughnessSecondary, material.SecondarySpecIntensity, F0, NdotL, NdotV, NdotH, VdotH, F) * context.lightColor * NdotL;
 
 		float2 specularBRDF = BRDF::EnvBRDF(averageRoughness, NdotV);
 		lightingOutput.specular *= 1 + F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
+		lightingOutput.diffuse *= 1 - F;
 
 		if (material.FuzzWeight > 0.0) {
 			float3 FuzzF0 = material.FuzzColor * saturate(1 - material.Curvature);
