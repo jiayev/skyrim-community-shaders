@@ -592,20 +592,6 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	ambientColor = Color::IrradianceToGamma(ambientColor);
 #		endif
 
-#		if defined(IBL)
-	if (SharedData::iblSettings.EnableDiffuseIBL) {
-		if (!SharedData::InInterior || SharedData::iblSettings.EnableInterior) {
-			ambientColor = Color::IrradianceToLinear(color);
-#			if defined(SKYLIGHTING)
-			ambientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(float3(0, 0, -1), skylightingDiffuse), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
-#			else
-			ambientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(float3(0, 0, -1)), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
-#			endif
-			ambientColor = Color::IrradianceToGamma(ambientColor);
-		}
-	}
-#		endif
-
 	color = dirColor + ambientColor;
 
 #		if defined(LIGHT_LIMIT_FIX)
