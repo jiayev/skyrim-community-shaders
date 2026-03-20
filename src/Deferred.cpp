@@ -357,8 +357,8 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? nullptr : ssgi_y,
 			ssgi_hq_spec ? nullptr : ssgi_cocg,
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
-			ibl.loaded ? ibl.diffuseIBLTexture->srv.get() : nullptr,
-			ibl.loaded ? ibl.diffuseSkyIBLTexture->srv.get() : nullptr,
+			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,
+			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,
 			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,
 			physSky.loaded ? physSky.texApShadow->srv.get() : nullptr,
 		};
