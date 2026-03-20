@@ -1,5 +1,7 @@
 #include "SkySync.h"
 
+#include "PhysicalSky.h"
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkySync::Settings,
 	Enabled,
@@ -136,8 +138,10 @@ void SkySync::Update(const RE::Sky* sky)
 			shadowFader.Reset();
 	}
 
+	auto& phyiscalSky = globals::features::physicalSky;
+	bool physicalSkyInteriorOverride = phyiscalSky.loaded && phyiscalSky.settings.enabled && phyiscalSky.settings.forceEnableAllInteriorCells;
 	// Exterior worldspaces always run; interior cells require the sunlight-shadows flag.
-	if (cell && cell->IsInteriorCell() && !cell->cellFlags.all(static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows))) {
+	if (cell && cell->IsInteriorCell() && !cell->cellFlags.all(static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows)) && !physicalSkyInteriorOverride) {
 		return;
 	}
 
