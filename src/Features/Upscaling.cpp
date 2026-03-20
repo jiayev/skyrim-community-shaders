@@ -1994,6 +1994,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	auto& postProcessing = globals::features::postProcessing;
 	if (postProcessing.loaded) {
 		postProcessing.DrawBeforeUpscaling();
+		postProcessing.ClearBorderMotionVectorsForFrameGen();
 	}
 
 	auto& upscaling = globals::features::upscaling;
