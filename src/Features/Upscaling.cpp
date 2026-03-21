@@ -1,6 +1,8 @@
 #include "Upscaling.h"
 
 #include "Deferred.h"
+#include "Features/DX12Interop.h"
+#include "Features/Raytracing.h"
 #include "Hooks.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
@@ -12,8 +14,6 @@
 #include <cfloat>
 #include <directx/d3dx12.h>
 #include <format>
-#include "Features/Raytracing.h"
-#include "Features/DX12Interop.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
@@ -148,11 +148,11 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 	if (upscaling.IsBackendInitialized()) {
 		if (dx12Interop.Active()) {
-			upscaling.SetBackendD3D12Device(dx12Interop.d3d12Device.get());	
+			upscaling.SetBackendD3D12Device(dx12Interop.d3d12Device.get());
 		} else {
 			upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
 			upscaling.UpgradeBackendInterface((void**)&(*ppSwapChain));
-			upscaling.SetBackendD3D11Device(*ppDevice);	
+			upscaling.SetBackendD3D11Device(*ppDevice);
 		}
 
 		upscaling.PostBackendDevice();
@@ -1373,7 +1373,7 @@ bool Upscaling::IsUpscalingActive() const
 	// Only consider vendor upscalers (FSR/DLSS) as "active" when the
 	// selected method actually produces a downscale. If the renderer is
 	// currently running at 1:1 (no downscale), treat upscaling as inactive.
-	if (!(method == UpscaleMethod::kFSR || method == UpscaleMethod::kDLSS)) {
+	if (!(method == UpscaleMethod::kFSR || method == UpscaleMethod::kDLSS || method == UpscaleMethod::kDLSS_RR)) {
 		return false;
 	}
 
@@ -1546,7 +1546,7 @@ void Upscaling::EncodeTextures()
 			ID3D11Buffer* buffers[] = {
 				upscalingDataCB->CB(),
 				jitterCB->CB()
-			}; 
+			};
 			context->CSSetConstantBuffers(0, ARRAYSIZE(buffers), buffers);
 
 			ID3D11SamplerState* samplers[] = { globals::deferred->pointSampler };
