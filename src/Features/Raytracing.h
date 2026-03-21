@@ -552,10 +552,24 @@ struct Raytracing : public OverlayFeature
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct BSImagespaceShaderRefraction_Dispatch
+		{
+			static void thunk(void* imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
+			{
+				auto& rt = globals::features::raytracing;
+				if (rt.Active() && rt.Mode() == CreationEngineRaytracing::Mode::PathTracing)
+					return;
+
+				func(imageSpaceShader, a1, a2, a3);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		static void Install()
 		{
 			stl::detour_thunk<Main_RenderWorld>(REL::RelocationID(100424, 107142));
 			stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
+			stl::write_vfunc<0xC, BSImagespaceShaderRefraction_Dispatch>(RE::VTABLE_BSImagespaceShaderRefraction[0]);
 		}
 	};
 

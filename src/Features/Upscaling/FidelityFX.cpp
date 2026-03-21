@@ -49,6 +49,7 @@ void FidelityFX::LoadFFX()
 void FidelityFX::SetupFrameGeneration()
 {
 	auto& swapChain = globals::features::upscaling.dx12SwapChain;
+	auto& dx12Interop = globals::features::dx12Interop;
 
 	ffx::CreateContextDescFrameGeneration createFg{};
 	createFg.displaySize = { swapChain.swapChainDesc.Width, swapChain.swapChainDesc.Height };
@@ -57,7 +58,7 @@ void FidelityFX::SetupFrameGeneration()
 	createFg.backBufferFormat = ffxApiGetSurfaceFormatDX12(swapChain.swapChainDesc.Format);
 
 	ffx::CreateBackendDX12Desc backendDesc{};
-	backendDesc.device = swapChain.d3d12Device.get();
+	backendDesc.device = dx12Interop.d3d12Device.get();
 
 	if (ffx::CreateContext(frameGenContext, nullptr, createFg, backendDesc) != ffx::ReturnCode::Ok)
 		logger::critical("[FidelityFX] Failed to create frame generation context!");
@@ -185,7 +186,9 @@ void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 	if (a_useFrameGeneration) {
 		ffx::DispatchDescFrameGenerationPrepare dispatchParameters{};
 
-		dispatchParameters.commandList = swapChain.commandLists[swapChain.frameIndex].get();
+		auto& dx12Interop = globals::features::dx12Interop;
+
+		dispatchParameters.commandList = dx12Interop.commandLists[swapChain.frameIndex].get();
 
 		dispatchParameters.motionVectorScale.x = renderSize.x;
 		dispatchParameters.motionVectorScale.y = renderSize.y;

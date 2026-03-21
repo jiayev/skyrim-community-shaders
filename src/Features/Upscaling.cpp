@@ -1,6 +1,9 @@
 #include "Upscaling.h"
 
 #include "Deferred.h"
+#include "Features/DX12Interop.h"
+#include "Features/PostProcessing.h"
+#include "Features/Raytracing.h"
 #include "HDRDisplay.h"
 #include "Hooks.h"
 #include "State.h"
@@ -13,10 +16,6 @@
 #include <cfloat>
 #include <directx/d3dx12.h>
 #include <format>
-
-#include "Features/DX12Interop.h"
-#include "Features/PostProcessing.h"
-#include "Features/Raytracing.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
@@ -58,6 +57,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	DXGI_ADAPTER_DESC adapterDesc;
 	pAdapter->GetDesc(&adapterDesc);
 	globals::state->SetAdapterDescription(adapterDesc.Description);
+
+	auto& dx12Interop = globals::features::dx12Interop;
 
 	auto& upscaling = globals::features::upscaling;
 	upscaling.LoadUpscalingSDKs();
@@ -114,6 +115,9 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 				pFeatureLevel,
 				ppImmediateContext));
 
+			if (dx12Interop.loaded)
+				dx12Interop.Init(*ppDevice, *ppImmediateContext, pAdapter);
+
 			upscaling.SetProxyD3D11Device(*ppDevice);
 			upscaling.SetProxyD3D11DeviceContext(*ppImmediateContext);
 			upscaling.CreateProxySwapChain(pAdapter, *pSwapChainDesc);
@@ -126,7 +130,12 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 			if (upscaling.IsBackendInitialized()) {
 				upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
 				upscaling.UpgradeBackendInterface((void**)&(*ppSwapChain));
-				upscaling.SetBackendD3D11Device(*ppDevice);
+
+				if (dx12Interop.Active())
+					upscaling.SetBackendD3D12Device(dx12Interop.d3d12Device.get());
+				else
+					upscaling.SetBackendD3D11Device(*ppDevice);
+
 				upscaling.PostBackendDevice();
 			}
 
@@ -150,7 +159,6 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		pFeatureLevel,
 		ppImmediateContext);
 
-	auto& dx12Interop = globals::features::dx12Interop;
 	if (dx12Interop.loaded)
 		dx12Interop.Init(*ppDevice, *ppImmediateContext, pAdapter);
 
@@ -1390,15 +1398,6 @@ bool Upscaling::IsFrameGenerationActive() const
 
 bool Upscaling::IsUpscalingActive() const
 {
-	auto method = GetUpscaleMethod();
-
-	// Only consider vendor upscalers (FSR/DLSS) as "active" when the
-	// selected method actually produces a downscale. If the renderer is
-	// currently running at 1:1 (no downscale), treat upscaling as inactive.
-	if (!(method == UpscaleMethod::kFSR || method == UpscaleMethod::kDLSS)) {
-		return false;
-	}
-
 	// resolutionScale.x represents renderWidth / displayWidth.
 	return resolutionScale.x < .99f;
 }
