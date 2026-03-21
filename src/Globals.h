@@ -36,6 +36,7 @@ struct Upscaling;
 struct WeatherEditor;
 struct Raytracing;
 struct ExponentialHeightFog;
+struct Skin;
 
 class State;
 class Deferred;
@@ -94,6 +95,7 @@ namespace globals
 		extern RenderDoc renderDoc;
 		extern WeatherEditor weatherEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
+		extern Skin skin;
 		extern Raytracing raytracing;
 
 		namespace llf

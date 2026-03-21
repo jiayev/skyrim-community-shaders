@@ -17,9 +17,11 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/Raytracing.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -35,7 +37,6 @@
 #include "Features/WaterEffects.h"
 #include "Features/WeatherEditor.h"
 #include "Features/WetnessEffects.h"
-#include "Features/Raytracing.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -86,6 +87,7 @@ namespace globals
 		RenderDoc renderDoc{};
 		WeatherEditor weatherEditor{};
 		ExponentialHeightFog exponentialHeightFog{};
+		Skin skin{};
 		DX12Interop dx12Interop{};
 		Raytracing raytracing{};
 

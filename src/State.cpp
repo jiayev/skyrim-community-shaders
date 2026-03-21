@@ -8,6 +8,7 @@
 #include "FeatureIssues.h"
 #include "Features/CloudShadows.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/Skin.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
@@ -32,6 +33,7 @@ void State::Draw()
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
 	auto& weatherEditor = globals::features::weatherEditor;
+	auto& skin = globals::features::skin;
 	auto truePBR = globals::truePBR;
 	auto context = globals::d3d::context;
 	auto& volumetricShadows = globals::features::volumetricShadows;
@@ -58,6 +60,11 @@ void State::Draw()
 		if (terrainHelper.loaded) {
 			ZoneScopedN("TerrainHelper::SetShaderResouces");
 			terrainHelper.SetShaderResouces(context);
+		}
+
+		if (skin.loaded) {
+			ZoneScopedN("Skin::SetShaderResouces");
+			skin.SetShaderResouces(context);
 		}
 
 		{
