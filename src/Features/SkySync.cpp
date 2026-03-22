@@ -138,8 +138,8 @@ void SkySync::Update(const RE::Sky* sky)
 			shadowFader.Reset();
 	}
 
-	auto& phyiscalSky = globals::features::physicalSky;
-	bool physicalSkyInteriorOverride = phyiscalSky.loaded && phyiscalSky.settings.enabled && phyiscalSky.settings.forceEnableAllInteriorCells;
+	auto& physicalSky = globals::features::physicalSky;
+	bool physicalSkyInteriorOverride = physicalSky.loaded && physicalSky.settings.enabled && physicalSky.settings.forceEnableAllInteriorCells;
 	// Exterior worldspaces always run; interior cells require the sunlight-shadows flag.
 	if (cell && cell->IsInteriorCell() && !cell->cellFlags.all(static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows)) && !physicalSkyInteriorOverride) {
 		return;
