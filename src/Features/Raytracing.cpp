@@ -667,6 +667,7 @@ void Raytracing::UpdateFeatureData()
 {
 	auto wetnessEffect = globals::features::wetnessEffects.GetCommonBufferData();
 	auto linearLighting = globals::features::linearLighting.GetCommonBufferData();
+	auto skinData = globals::features::skin.GetCommonBufferData();
 
 	std::memcpy(&featureData->ExtendedMaterials, &globals::features::extendedMaterials.settings, sizeof(ExtendedMaterials::Settings));
 	std::memcpy(&featureData->WetnessEffects, &wetnessEffect, sizeof(WetnessEffects::PerFrame));
@@ -674,7 +675,7 @@ void Raytracing::UpdateFeatureData()
 	std::memcpy(&featureData->HairSpecular, &globals::features::hairSpecular.settings, sizeof(HairSpecular::Settings));
 	std::memcpy(&featureData->ExtendedTranslucency, &globals::features::extendedTranslucency.GetCommonBufferData(), sizeof(ExtendedTranslucency::PerFrame));
 	std::memcpy(&featureData->LinearLighting, &linearLighting, sizeof(LinearLighting::PerFrameData));
-	std::memcpy(&featureData->Skin, &globals::features::skin.GetCommonBufferData(), sizeof(Skin::SkinData));
+	std::memcpy(&featureData->Skin, &skinData, sizeof(Skin::SkinData));
 
 	auto& physicalSky = globals::features::physicalSky;
 	std::memcpy(&featureData->PhysicalSky, &physicalSky.cbData, sizeof(PhysicalSky::CbData));
