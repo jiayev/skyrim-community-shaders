@@ -54,7 +54,7 @@ cbuffer PerFrame : register(b0)
 		float3 sceneBT2020 = sceneLinear;
 
 		if (!SharedData::postProcessingSettings.DisableVanillaTonemapping) {
-			sceneLinear = Color::GammaToLinear(max(0.0, sceneLinear));
+			sceneLinear = Color::SkyrimGammaToLinear(max(0.0, sceneLinear));
 			sceneBT2020 = Color::BT709ToBT2020(sceneLinear);
 		}
 		sceneBT2020 = max(sceneBT2020, 0.0);
@@ -74,10 +74,10 @@ cbuffer PerFrame : register(b0)
 
 				if (ui.a > 0.001) {
 					float3 uiStraight = ui.rgb / ui.a;
-					float3 uiLinear = Color::GammaToTrueLinear(max(0.0, uiStraight));
+					float3 uiLinear = Color::SrgbToLinear(max(0.0, uiStraight));
 					uiBT2020Premultiplied = Color::BT709ToBT2020(uiLinear) * (ui.a * uiBrightness);
 				} else {
-					uiBT2020Premultiplied = Color::BT709ToBT2020(Color::GammaToTrueLinear(max(0.0, ui.rgb))) * uiBrightness;
+					uiBT2020Premultiplied = Color::BT709ToBT2020(Color::SrgbToLinear(max(0.0, ui.rgb))) * uiBrightness;
 				}
 
 				float3 compositedBT2020 = uiBT2020Premultiplied + sceneBT2020 * (1.0 - ui.a) * effectiveSceneScale;
@@ -88,7 +88,7 @@ cbuffer PerFrame : register(b0)
 				// over-darkens and compositing in linear over-brightens behind UI overlays.
 				float3 composited = ui.rgb * uiBrightness + scene.rgb * (1.0 - ui.a) * effectiveSceneScale;
 
-				float3 compositedLinear = Color::GammaToLinear(max(0.0, composited));
+				float3 compositedLinear = Color::SkyrimGammaToLinear(max(0.0, composited));
 				float3 compositedBT2020 = Color::BT709ToBT2020(compositedLinear);
 				finalColor = Color::pq::Encode(max(0.0, compositedBT2020), sRGB_WhiteLevelNits);
 			}
