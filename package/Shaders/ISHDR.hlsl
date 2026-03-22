@@ -141,7 +141,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		if defined(POSTPROCESS)
 	if (SharedData::postProcessingSettings.DisableVanillaTonemapping) {
 		if (SharedData::linearLightingSettings.enableLinearLighting && SharedData::linearLightingSettings.enableGammaCorrection && !isHDR) {
-			inputColor = Color::TrueLinearToGamma(inputColor);
+			inputColor = Color::LinearToSrgb(inputColor);
 		}
 
 		psout.Color = float4(inputColor, 1.0);
