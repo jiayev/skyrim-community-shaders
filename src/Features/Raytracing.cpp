@@ -11,6 +11,7 @@
 #include "DX12Interop.h"
 
 #include "Deferred.h"
+#include "Features/Skin.h"
 #include "Features/Upscaling.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -359,7 +360,7 @@ void Raytracing::DrawOverlay()
 
 	if (!PositionSet) {
 		Position = ImVec2(10, 10);
-		ImGui::SetNextWindowPos(Position);	
+		ImGui::SetNextWindowPos(Position);
 		PositionSet = true;
 	} else {
 		ImGui::SetNextWindowPos(Position, ImGuiCond_FirstUseEver);
@@ -506,7 +507,7 @@ void Raytracing::UpdateJitter(float2 jitter)
 	creationEngineRaytracing->UpdateJitter(jitter);
 }
 
-void ShareTexture(ID3D11Texture2D* d3d11Texture, ID3D12Resource** d3d12Resource, bool nt = false, uint accessFlags = DXGI_SHARED_RESOURCE_READ) // DXGI_SHARED_RESOURCE_WRITE
+void ShareTexture(ID3D11Texture2D* d3d11Texture, ID3D12Resource** d3d12Resource, bool nt = false, uint accessFlags = DXGI_SHARED_RESOURCE_READ)  // DXGI_SHARED_RESOURCE_WRITE
 {
 	D3D11_TEXTURE2D_DESC desc;
 	d3d11Texture->GetDesc(&desc);
@@ -611,7 +612,7 @@ void Raytracing::SetupResources()
 		for (uint i = 0; i < 6; i++) {
 			waterReflections->cubeMapSides[i] = RE::TESWaterReflections::CubeMapSide(i, 0.0f);
 		}
-	
+
 		creationEngineRaytracing->SetSkyHemisphere(skyHemisphere->resource.get());
 	}
 
@@ -634,7 +635,7 @@ void Raytracing::SetUpscaler(Upscaling::UpscaleMethod method)
 Raytracing::SharedData Raytracing::GetCommonBufferData() const
 {
 	const bool pathTracingEnabled = settings.CreationEngineRaytracingSettings.Enabled &&
-		settings.CreationEngineRaytracingSettings.GeneralSettings.Mode == CreationEngineRaytracing::Mode::PathTracing;
+	                                settings.CreationEngineRaytracingSettings.GeneralSettings.Mode == CreationEngineRaytracing::Mode::PathTracing;
 
 	return {
 		.InteriorDirectional = settings.CreationEngineRaytracingSettings.Enabled ? 0.0f : 1.0f,
@@ -656,6 +657,7 @@ void Raytracing::UpdateFeatureData()
 	std::memcpy(&featureData->HairSpecular, &globals::features::hairSpecular.settings, sizeof(HairSpecular::Settings));
 	std::memcpy(&featureData->ExtendedTranslucency, &globals::features::extendedTranslucency.GetCommonBufferData(), sizeof(ExtendedTranslucency::PerFrame));
 	std::memcpy(&featureData->LinearLighting, &linearLighting, sizeof(LinearLighting::PerFrameData));
+	std::memcpy(&featureData->Skin, &globals::features::skin.GetCommonBufferData(), sizeof(Skin::SkinData));
 
 	static_assert(sizeof(FeatureData::ExtendedMaterials) == sizeof(ExtendedMaterials::Settings));
 	static_assert(sizeof(FeatureData::WetnessEffects) == sizeof(WetnessEffects::PerFrame));
@@ -663,8 +665,55 @@ void Raytracing::UpdateFeatureData()
 	static_assert(sizeof(FeatureData::HairSpecular) == sizeof(HairSpecular::Settings));
 	static_assert(sizeof(FeatureData::ExtendedTranslucency) == sizeof(ExtendedTranslucency::PerFrame));
 	static_assert(sizeof(FeatureData::LinearLighting) == sizeof(LinearLighting::PerFrameData));
+	static_assert(sizeof(FeatureData::Skin) == sizeof(Skin::SkinData));
 
 	creationEngineRaytracing->UpdateFeatureData(featureData.get(), sizeof(FeatureData));
+
+	UpdateSkinDetailNormal();
+}
+
+void Raytracing::UpdateSkinDetailNormal()
+{
+	if (!initialized || !creationEngineRaytracing->SetSkinDetailNormal)
+		return;
+
+	auto& skin = globals::features::skin;
+	if (!skin.texSkinDetail)
+		return;
+
+	auto* currentTex = skin.texSkinDetail->resource.get();
+	if (currentTex == lastSkinDetailTexture)
+		return;
+
+	lastSkinDetailTexture = currentTex;
+
+	D3D11_TEXTURE2D_DESC desc;
+	currentTex->GetDesc(&desc);
+
+	// Create a shared D3D11 texture matching the skin detail texture's format/size
+	desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+	skinDetailNormalShared = nullptr;
+	skinDetailNormalD3D12 = nullptr;
+
+	DX::ThrowIfFailed(globals::features::dx12Interop.d3d11Device->CreateTexture2D(&desc, nullptr, skinDetailNormalShared.put()));
+
+	auto context = globals::d3d::context;
+	context->CopyResource(skinDetailNormalShared.get(), currentTex);
+
+	winrt::com_ptr<IDXGIResource1> dxgiResource;
+	DX::ThrowIfFailed(skinDetailNormalShared->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
+
+	HANDLE sharedHandle = nullptr;
+	DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ, nullptr, &sharedHandle));
+
+	DX::ThrowIfFailed(globals::features::dx12Interop.d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(skinDetailNormalD3D12.put())));
+	CloseHandle(sharedHandle);
+
+	creationEngineRaytracing->SetSkinDetailNormal(skinDetailNormalD3D12.get());
+
+	logger::info("[Raytracing] Shared skin detail normal texture ({}x{}, {} mips)", desc.Width, desc.Height, desc.MipLevels);
 }
 
 void Raytracing::SkyCubeToHemi() const
@@ -814,8 +863,7 @@ void Raytracing::DeferredPasses()
 			uav = nullptr;
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		}
-	} 
-	else if (mode == CreationEngineRaytracing::Mode::PathTracing) {
+	} else if (mode == CreationEngineRaytracing::Mode::PathTracing) {
 		// Blend PT and Sky
 		{
 			context->CSSetShader(ptCompositeCS.get(), nullptr, 0);
