@@ -262,6 +262,17 @@ namespace SharedData
 		float3 pad;
 	};
 
+	struct SkinData
+	{
+		float4 skinParams;
+		float4 skinParams2;
+		float4 skinDetailParams;
+		float4 sssParams;
+		float4 fuzzParams;
+		float4 physicalParams;
+		float4 wetParams;
+	};
+
 	struct PostProcessingSettings
 	{
 		uint DisableVanillaTonemapping;
@@ -353,6 +364,7 @@ namespace SharedData
 		PostProcessingSettings postProcessingSettings;
 		PhysSkyData physSkyData;
 		RaytracingSettings raytracingSettings;
+		SkinData skinData;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

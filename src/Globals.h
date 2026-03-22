@@ -39,6 +39,7 @@ struct Raytracing;
 struct ExponentialHeightFog;
 struct HDRDisplay;
 struct PostProcessing;
+struct Skin;
 
 class State;
 class Deferred;
@@ -100,6 +101,7 @@ namespace globals
 		extern WeatherEditor weatherEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern PostProcessing postProcessing;
+		extern Skin skin;
 		extern Raytracing raytracing;
 
 		namespace llf

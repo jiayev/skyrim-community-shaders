@@ -25,6 +25,7 @@
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -249,7 +250,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::hdrDisplay,
 		&globals::features::postProcessing,
 		&globals::features::physicalSky,
-		&globals::features::raytracing
+		&globals::features::raytracing,
+		&globals::features::skin
 	};
 
 	if (REL::Module::IsVR()) {

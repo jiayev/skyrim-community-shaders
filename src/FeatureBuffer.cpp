@@ -14,6 +14,7 @@
 #include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "Features/Raytracing.h"
+#include "Features/Skin.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainShadows.h"
@@ -59,5 +60,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::exponentialHeightFog.settings,
 		globals::features::postProcessing.settings,
 		globals::features::physicalSky.cbData,
-		globals::features::raytracing.GetCommonBufferData());
+		globals::features::raytracing.GetCommonBufferData(),
+		globals::features::skin.GetCommonBufferData());
 }

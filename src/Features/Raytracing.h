@@ -19,6 +19,7 @@
 #include "Features/HairSpecular.h"
 #include "Features/LinearLighting.h"
 #include "Features/PhysicalSky.h"
+#include "Features/Skin.h"
 #include "Features/Upscaling.h"
 #include "Features/WetnessEffects.h"
 
@@ -231,6 +232,7 @@ struct CreationEngineRaytracing
 	using GetRRInputFn = void (*)(ID3D12Resource*&, ID3D12Resource*&);
 	using SetSharedTexturesFn = void (*)(ID3D12Resource*, ID3D12Resource*, ID3D12Resource*, ID3D12Resource*);
 	using UpdateJitterFn = void (*)(float2);
+	using SetSkinDetailNormalFn = void (*)(ID3D12Resource*);
 
 	InitializeFn Initialize = nullptr;
 	UpdateCameraFn UpdateCamera = nullptr;
@@ -247,6 +249,7 @@ struct CreationEngineRaytracing
 	GetRRInputFn GetRRInput = nullptr;
 	SetSharedTexturesFn SetSharedTextures = nullptr;
 	UpdateJitterFn UpdateJitter = nullptr;
+	SetSkinDetailNormalFn SetSkinDetailNormal = nullptr;
 
 	CreationEngineRaytracing()
 	{
@@ -334,6 +337,11 @@ struct CreationEngineRaytracing
 
 		if (!UpdateJitter)
 			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' UpdateJitter is nullptr");
+
+		SetSkinDetailNormal = reinterpret_cast<SetSkinDetailNormalFn>(GetProcAddress(handle, "SetSkinDetailNormal"));
+
+		if (!SetSkinDetailNormal)
+			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' SetSkinDetailNormal is nullptr");
 	}
 };
 
@@ -407,6 +415,7 @@ struct Raytracing : public OverlayFeature
 	bool UpdateResolution();
 	void UpdateJitter(float2 jitter);
 	void UpdateFeatureData();
+	void UpdateSkinDetailNormal();
 	void SkyCubeToHemi() const;
 	void ConvertTextures();
 	void DeferredPasses();
@@ -458,6 +467,7 @@ struct Raytracing : public OverlayFeature
 		ExtendedTranslucency::PerFrame ExtendedTranslucency;
 		LinearLighting::PerFrameData LinearLighting;
 		PhysicalSky::CbData PhysicalSky;
+		Skin::SkinData Skin;
 	};
 
 	eastl::unique_ptr<FeatureData> featureData;
@@ -509,6 +519,10 @@ struct Raytracing : public OverlayFeature
 	winrt::com_ptr<ID3D11ComputeShader> ptCompositeCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> convertTexturesCS[2];
 	winrt::com_ptr<ID3D11ComputeShader> giCompositeCS = nullptr;
+
+	ID3D11Texture2D* lastSkinDetailTexture = nullptr;
+	winrt::com_ptr<ID3D11Texture2D> skinDetailNormalShared = nullptr;
+	winrt::com_ptr<ID3D12Resource> skinDetailNormalD3D12 = nullptr;
 
 	float* frameTime;
 
