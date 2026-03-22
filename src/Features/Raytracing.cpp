@@ -715,29 +715,37 @@ void Raytracing::UpdateSkinDetailNormal()
 	currentTex->GetDesc(&desc);
 
 	// Create a shared D3D11 texture matching the skin detail texture's format/size
-	desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+	// Must sanitize desc: shared textures require DEFAULT usage, no CPU access, and only shared misc flags
+	desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	desc.Usage = D3D11_USAGE_DEFAULT;
+	desc.CPUAccessFlags = 0;
 
 	skinDetailNormalShared = nullptr;
 	skinDetailNormalD3D12 = nullptr;
 
-	DX::ThrowIfFailed(globals::features::dx12Interop.d3d11Device->CreateTexture2D(&desc, nullptr, skinDetailNormalShared.put()));
+	try {
+		DX::ThrowIfFailed(globals::features::dx12Interop.d3d11Device->CreateTexture2D(&desc, nullptr, skinDetailNormalShared.put()));
 
-	auto context = globals::d3d::context;
-	context->CopyResource(skinDetailNormalShared.get(), currentTex);
+		auto context = globals::d3d::context;
+		context->CopyResource(skinDetailNormalShared.get(), currentTex);
 
-	winrt::com_ptr<IDXGIResource1> dxgiResource;
-	DX::ThrowIfFailed(skinDetailNormalShared->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
+		winrt::com_ptr<IDXGIResource1> dxgiResource;
+		DX::ThrowIfFailed(skinDetailNormalShared->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
 
-	HANDLE sharedHandle = nullptr;
-	DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ, nullptr, &sharedHandle));
+		HANDLE sharedHandle = nullptr;
+		DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ, nullptr, &sharedHandle));
 
-	DX::ThrowIfFailed(globals::features::dx12Interop.d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(skinDetailNormalD3D12.put())));
-	CloseHandle(sharedHandle);
+		DX::ThrowIfFailed(globals::features::dx12Interop.d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(skinDetailNormalD3D12.put())));
+		CloseHandle(sharedHandle);
 
-	creationEngineRaytracing->SetSkinDetailNormal(skinDetailNormalD3D12.get());
+		creationEngineRaytracing->SetSkinDetailNormal(skinDetailNormalD3D12.get());
 
-	logger::info("[Raytracing] Shared skin detail normal texture ({}x{}, {} mips)", desc.Width, desc.Height, desc.MipLevels);
+		logger::info("[Raytracing] Shared skin detail normal texture ({}x{}, {} mips)", desc.Width, desc.Height, desc.MipLevels);
+	} catch (const DX::com_exception& e) {
+		logger::error("[Raytracing] Failed to share skin detail normal texture ({}x{}, fmt {}): {}", desc.Width, desc.Height, static_cast<uint32_t>(desc.Format), e.what());
+		lastSkinDetailTexture = nullptr;  // retry next frame in case conditions change
+	}
 }
 
 void Raytracing::SkyCubeToHemi() const
