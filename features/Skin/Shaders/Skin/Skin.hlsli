@@ -2,6 +2,7 @@
 #include "Common/Color.hlsli"
 #include "Common/LightingCommon.hlsli"
 #include "Common/Math.hlsli"
+#include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"
 
 namespace Skin
@@ -167,10 +168,10 @@ namespace Skin
 		lobeWeights.specular *= horizon;
 
 		float3 diffuseAO = material.AO;
-		float3 specularAO = Color::SpecularAOLagarde(NdotV, material.AO, averageRoughness);
+		float3 specularAO = SpecularAOLagarde(NdotV, material.AO, averageRoughness);
 
-		diffuseAO = Color::MultiBounceAO(material.BaseColor, diffuseAO.x).y;
-		specularAO = Color::MultiBounceAO(material.F0, specularAO.x).y;
+		diffuseAO = MultiBounceAO(material.BaseColor, diffuseAO.x).y;
+		specularAO = MultiBounceAO(material.F0, specularAO.x).y;
 
 		lobeWeights.diffuse *= diffuseAO;
 		lobeWeights.specular *= specularAO;
