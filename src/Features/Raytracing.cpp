@@ -231,6 +231,13 @@ void Raytracing::DrawGeneralSettings()
 			lightingSettings.Sky = std::max(0.0f, lightingSettings.Sky);
 	}
 
+	if (ImGui::CollapsingHeader("Water")) {
+		auto& waterSettings = ceRTSettings.WaterSettings;
+
+		if (ImGui::DragFloat("Absorption Scale", &waterSettings.AbsorptionScale, 0.01f, 0.01f, 10.0f, "%.2f"))
+			waterSettings.AbsorptionScale = std::clamp(waterSettings.AbsorptionScale, 0.01f, 10.0f);
+	}
+
 	ImGui::PopID();
 
 	ImGui::EndTabItem();
@@ -332,6 +339,8 @@ void Raytracing::DrawDebugSettings()
 	ImGui::Checkbox("Path Tracing Cull", &settings.CreationEngineRaytracingSettings.DebugSettings.PathTracingCull);
 
 	ImGui::Checkbox("Enable Water", &settings.CreationEngineRaytracingSettings.DebugSettings.EnableWater);
+
+	ImGui::Checkbox("Stable Planes", &settings.CreationEngineRaytracingSettings.DebugSettings.StablePlanes);
 
 	ImGui::Checkbox("Show Main Texture", &settings.ShowMainTexture);
 
