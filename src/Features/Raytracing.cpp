@@ -202,6 +202,8 @@ void Raytracing::DrawGeneralSettings()
 
 	DrawSHaRCSettings();
 
+	DrawReSTIRGISettings();
+
 	// Material
 	DrawFloat2("Roughness", ceRTSettings.MaterialSettings.Roughness);
 	DrawFloat2("Metalness", ceRTSettings.MaterialSettings.Metalness);
@@ -257,6 +259,34 @@ void Raytracing::DrawSHaRCSettings()
 		sharcSettings.StaleFrameNum = std::clamp(sharcSettings.StaleFrameNum, 8, 128);
 
 		ImGui::Checkbox("Antifirefly Filter", &sharcSettings.AntifireflyFilter);
+	}
+}
+
+void Raytracing::DrawReSTIRGISettings()
+{
+	if (ImGui::CollapsingHeader("ReSTIR GI")) {
+		auto& giSettings = settings.CreationEngineRaytracingSettings.ReSTIRGISettings;
+
+		ImGui::Checkbox("Enabled", &giSettings.Enabled);
+
+		if (giSettings.Enabled) {
+			ImGui::Checkbox("Temporal Resampling", &giSettings.EnableTemporalResampling);
+
+			ImGui::Checkbox("Boiling Filter", &giSettings.EnableBoilingFilter);
+			if (giSettings.EnableBoilingFilter) {
+				ImGui::SliderFloat("Boiling Filter Strength", &giSettings.BoilingFilterStrength, 0.0f, 1.0f);
+			}
+
+			ImGui::SliderInt("Max History Length", &giSettings.MaxHistoryLength, 1, 50);
+
+			ImGui::SliderInt("Spatial Samples", &giSettings.NumSpatialSamples, 0, 8);
+
+			ImGui::DragFloat("Spatial Radius", &giSettings.SpatialSamplingRadius, 0.5f, 1.0f, 64.0f);
+			giSettings.SpatialSamplingRadius = std::clamp(giSettings.SpatialSamplingRadius, 1.0f, 64.0f);
+
+			ImGui::Checkbox("Final Visibility", &giSettings.EnableFinalVisibility);
+			ImGui::Checkbox("Final MIS", &giSettings.EnableFinalMIS);
+		}
 	}
 }
 

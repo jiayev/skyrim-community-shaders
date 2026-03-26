@@ -198,6 +198,33 @@ struct CreationEngineRaytracing
 		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(DebugSettings, PathTracingCull, EnableWater, StablePlanes)
 	};
 
+	struct ReSTIRGISettings
+	{
+		bool Enabled = true;
+		bool EnableTemporalResampling = true;
+		bool EnableBoilingFilter = true;
+		float BoilingFilterStrength = 0.2f;
+		int MaxHistoryLength = 20;
+		int NumSpatialSamples = 3;
+		float SpatialSamplingRadius = 32.0f;
+		bool EnableFinalVisibility = true;
+		bool EnableFinalMIS = false;
+
+		bool operator==(const ReSTIRGISettings&) const = default;
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(
+			ReSTIRGISettings,
+			Enabled,
+			EnableTemporalResampling,
+			EnableBoilingFilter,
+			BoilingFilterStrength,
+			MaxHistoryLength,
+			NumSpatialSamples,
+			SpatialSamplingRadius,
+			EnableFinalVisibility,
+			EnableFinalMIS)
+	};
+
 	struct Settings
 	{
 		bool Enabled = true;
@@ -209,6 +236,7 @@ struct CreationEngineRaytracing
 		AdvancedSettings AdvancedSettings;
 		WaterSettings WaterSettings;
 		DebugSettings DebugSettings;
+		ReSTIRGISettings ReSTIRGISettings;
 
 		bool operator==(const Settings&) const = default;
 
@@ -222,7 +250,8 @@ struct CreationEngineRaytracing
 			SHaRCSettings,
 			AdvancedSettings,
 			WaterSettings,
-			DebugSettings)
+			DebugSettings,
+			ReSTIRGISettings)
 	};
 
 	HMODULE handle = nullptr;
@@ -409,6 +438,7 @@ struct Raytracing : public OverlayFeature
 
 	void DrawGeneralSettings();
 	void DrawSHaRCSettings();
+	void DrawReSTIRGISettings();
 	void DrawSSSSettings();
 	void DrawAdvancedSettings();
 	void DrawDebugSettings();
