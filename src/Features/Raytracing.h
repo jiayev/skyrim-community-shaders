@@ -246,6 +246,7 @@ struct CreationEngineRaytracing
 	using SetSharedTexturesFn = void (*)(ID3D12Resource*, ID3D12Resource*, ID3D12Resource*, ID3D12Resource*);
 	using UpdateJitterFn = void (*)(float2);
 	using SetSkinDetailNormalFn = void (*)(ID3D12Resource*);
+	using SetPTOutputTargetsFn = void (*)(ID3D12Resource*, ID3D12Resource*);
 
 	InitializeFn Initialize = nullptr;
 	UpdateCameraFn UpdateCamera = nullptr;
@@ -263,6 +264,7 @@ struct CreationEngineRaytracing
 	SetSharedTexturesFn SetSharedTextures = nullptr;
 	UpdateJitterFn UpdateJitter = nullptr;
 	SetSkinDetailNormalFn SetSkinDetailNormal = nullptr;
+	SetPTOutputTargetsFn SetPTOutputTargets = nullptr;
 
 	CreationEngineRaytracing()
 	{
@@ -355,6 +357,11 @@ struct CreationEngineRaytracing
 
 		if (!SetSkinDetailNormal)
 			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' SetSkinDetailNormal is nullptr");
+
+		SetPTOutputTargets = reinterpret_cast<SetPTOutputTargetsFn>(GetProcAddress(handle, "SetPTOutputTargets"));
+
+		if (!SetPTOutputTargets)
+			logger::warn("[Raytracing] 'CreationEngineRaytracing.dll' SetPTOutputTargets is nullptr (older version?)");
 	}
 };
 
@@ -503,6 +510,9 @@ struct Raytracing : public OverlayFeature
 	winrt::com_ptr<ID3D11SamplerState> samplerState = nullptr;
 
 	eastl::unique_ptr<WrappedResource> mainTexture = nullptr;
+
+	eastl::unique_ptr<WrappedResource> ptDepthTexture = nullptr;
+	eastl::unique_ptr<WrappedResource> ptMotionVectorsTexture = nullptr;
 
 	winrt::com_ptr<ID3D12Resource> albedoTexture = nullptr;
 	eastl::unique_ptr<WrappedResource> normalRoughnessTexture = nullptr;
