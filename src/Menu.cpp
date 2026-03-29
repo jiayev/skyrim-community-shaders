@@ -1080,10 +1080,8 @@ void Menu::ProcessInputEventQueue()
 							 } else if (ew->IsInPreviewMode()) {
 								 // Locked or PlayMode → fully exit preview
 								 ew->ExitPreviewMode();
-							 } else {
-								 auto p = RE::PlayerCharacter::GetSingleton();
-								 if (p && p->parentCell)
-									 ew->open = !ew->open;
+							 } else if (EditorWindow::CanBeOpen()) {
+								 ew->open = !ew->open;
 							 }
 						 } },
 					};

@@ -52,15 +52,13 @@ void OverlayRenderer::RenderOverlay(
 	RenderShaderCompilationStatus(keyIdToString);
 	RenderShaderBlockingStatus();
 
-	// Draw weather editor independently of main menu state
-	// Auto-close editor if player leaves valid game space (e.g., loading screen)
 	auto* editorWindow = EditorWindow::GetSingleton();
-	auto player = RE::PlayerCharacter::GetSingleton();
-	if (editorWindow->open && !(player && player->parentCell)) {
+	if (editorWindow->open && !EditorWindow::CanBeOpen()) {
 		editorWindow->open = false;
 		if (editorWindow->IsInPreviewMode())
 			editorWindow->ExitPreviewMode();
 	}
+	editorWindow->UpdateOpenState();
 	if (editorWindow->open) {
 		bool flying = editorWindow->IsPreviewFlying();
 		auto& io = ImGui::GetIO();
