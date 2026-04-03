@@ -188,6 +188,11 @@ cbuffer AlphaTestRefCB : register(b11)
 #		include "CloudShadows/CloudShadows.hlsli"
 #	endif
 
+#	if defined(CLOUD_RELIGHT) && defined(CLOUD_SHADOWS) && defined(TEX) && defined(CLOUDS)
+#		define CR_CLOUDS
+#		include "CloudRelight/CloudRelight.hlsli"
+#	endif
+
 Texture2D<float> TexDepthSampler : register(t17);
 
 PS_OUTPUT main(PS_INPUT input)
@@ -213,6 +218,15 @@ PS_OUTPUT main(PS_INPUT input)
 	blendColor.xyz = Color::Sky(blendColor.xyz);
 	baseColor.xyz = Color::Sky(baseColor.xyz);
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
+#		endif
+
+#		if defined(CR_CLOUDS)
+	if (SharedData::cloudRelightSettings.enabled) {
+		float3 crViewDir = normalize(input.WorldPosition.xyz);
+		float crCloudDist = CloudShadows::IntersectCloudDist(float3(0, 0, 0), crViewDir);
+		if (crCloudDist >= 0)
+			baseColor.rgb = CloudRelight::RelightCloud(baseColor, crViewDir, crViewDir * crCloudDist, SampBaseSampler);
+	}
 #		endif
 
 #		if defined(DITHER)
