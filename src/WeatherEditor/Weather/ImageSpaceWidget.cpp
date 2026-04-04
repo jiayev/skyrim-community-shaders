@@ -33,9 +33,8 @@ void ImageSpaceWidget::DrawWidget()
 	WeatherUtils::SetCurrentWidget(this);
 	auto editorWindow = EditorWindow::GetSingleton();
 
-	ImGui::SetNextWindowSizeConstraints(ImVec2(600, 0), ImVec2(FLT_MAX, FLT_MAX));
-	if (ImGui::Begin(GetEditorID().c_str(), &open, ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags)) {
-		// Draw header with search and Save/Load/Delete buttons
+	SetupWidgetWindowDefaults();
+	if (Util::BeginWithRoundedClose(GetWindowTitle().c_str(), &open, ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags)) {
 		DrawWidgetHeader("##ImageSpaceSearch", false, true);
 	}
 	BeginScrollableContent("##ISScroll");
