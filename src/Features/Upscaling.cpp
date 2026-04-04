@@ -3,6 +3,7 @@
 #include "Deferred.h"
 #include "HDRDisplay.h"
 #include "Hooks.h"
+#include "PostProcessing.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
@@ -1933,6 +1934,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	auto upscaleMethod = upscaling.GetUpscaleMethod();
 
 	if (upscaling.d3d12SwapChainActive && upscaling.settings.frameGenerationMode) {
+		auto& postProcessing = globals::features::postProcessing;
 		if (postProcessing.loaded)
 			postProcessing.ClearBorderMotionVectorsForFrameGen();
 		upscaling.CopySharedD3D12Resources();
