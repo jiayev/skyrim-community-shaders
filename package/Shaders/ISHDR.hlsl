@@ -1,25 +1,8 @@
 /**
  * @file ISHDR.hlsl
- * @brief Skyrim's tonemapping and post-processing imagespace shader.
+ * @brief Imagespace tonemap (DOWNSAMPLE / BLEND). HDR BLEND: SDR tonemap + DICE, output gamma BT.709; user paper white applied in HDROutputCS.
  *
- * @details This shader handles:
- *   - DOWNSAMPLE: Luminance downsampling for auto-exposure calculation
- *   - BLEND: Final tonemapping, bloom compositing, and color grading
- *   - FADE: Screen fade effects (loading screens, etc.)
- *
- * HDR Pipeline:
- *   1. Scene renders to kMAIN with linear HDR values (can exceed 1.0)
- *   2. This shader (ISHDR BLEND) reads from BlendTex, applies bloom and color grading
- *      - SDR mode: Applies tonemapping to compress to 0-1 range, outputs gamma-encoded
- *      - HDR mode: DICE tonemapping preserves dynamic range above 1.0.
- *        Outputs gamma-encoded BT.709 values (can exceed 1.0) to float16 kFRAMEBUFFER.
- *   3. Post-tonemapping effects (TAA, ISDownsample, DOF) run on gamma-encoded output.
- *   4. HDROutputCS reads kFRAMEBUFFER for final processing:
- *      - SDR: Passthrough + UI composite
- *      - HDR: Gamma decode, BT.2020 conversion, nit scaling, PQ encoding + UI composite
- *
- * @see HDROutputCS.hlsl for final format conversion and UI compositing
- * @see HDR.cpp for the C++ HDR feature implementation
+ * @see HDROutputCS.hlsl
  */
 
 #include "Common/Color.hlsli"
@@ -84,15 +67,10 @@ PS_OUTPUT main(PS_INPUT input)
 	PS_OUTPUT psout;
 
 #	if defined(DOWNSAMPLE)
-	// === Auto-Exposure Luminance Downsampling ===
-	// Repeatedly downsample image to compute average luminance for exposure adjustment.
-	// Output is used by BLEND pass to normalize scene brightness.
-
 	float3 downsampledColor = 0;
 	for (int sampleIndex = 0; sampleIndex < DOWNSAMPLE; ++sampleIndex) {
 		float2 texCoord = BlurOffsets[sampleIndex].xy * BlurScale.xy + input.TexCoord;
 
-		// Adjust for dynamic resolution scaling
 		[branch] if (Flags.x > 0.5)
 		{
 			texCoord = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(texCoord);
@@ -100,24 +78,17 @@ PS_OUTPUT main(PS_INPUT input)
 
 		float3 imageColor = clamp(ImageTex.Sample(ImageSampler, texCoord).xyz, 0.0, 50.0);  // Clamp to reasonable HDR bounds
 
-		// Extract luminance based on shader variant
 #		if defined(RGB2LUM)
-		// Full RGB to luminance conversion
 		imageColor = Color::RGBToLuminance(imageColor);
 #		elif (defined(LUM) || defined(LUMCLAMP)) && !defined(DOWNADAPT)
-		// Use pre-computed luminance channel
 		imageColor = imageColor.x;
 #		endif
-		// Accumulate weighted sample
 		downsampledColor += imageColor * BlurOffsets[sampleIndex].z;
 	}
 
 #		if defined(DOWNADAPT)
-	// Adaptive exposure — smoothly adjust luminance target over time.
-	// Prevents jarring exposure changes when moving between light/dark areas.
 	float2 adaptValue = max(0.001, AdaptTex.Sample(AdaptSampler, input.TexCoord).xy);
 	float2 adaptDelta = downsampledColor.xy - adaptValue;
-	// Clamp delta to prevent extreme exposure swings
 	downsampledColor.xy =
 		sign(adaptDelta) * clamp(abs(Param.wz * adaptDelta), 0.00390625, abs(adaptDelta)) +
 		adaptValue;
@@ -125,18 +96,16 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color = float4(downsampledColor, BlurScale.z);
 
 #	elif defined(BLEND)
-	// === Final Tonemapping, Bloom Compositing, and Color Grading ===
-	// This is the final pass that combines scene, bloom, adjusts colors, and encodes for output.
-	// Output format depends on HDR mode:
-	//   - SDR: Tonemapped to [0,1] gamma-encoded sRGB
-	//   - HDR: Preserved >1.0 linear values, then converted to BT.2020 PQ for HDROutputCS
-
 	float2 uv = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 
-	// Main scene color (already linearly lit from engine)
 	float3 inputColor = BlendTex.Sample(BlendSampler, uv).xyz;
 
-	bool isHDR = SharedData::HDRData.x > 0.5;
+	float4 hdrShared = SharedData::HDRData;
+	bool isHDR = hdrShared.x > 0.5;
+	float menuSceneEncoding = hdrShared.w;
+	static const float MENU_SCENE_ISHDR_BYPASS_THRESHOLD = 0.9;  // encoding 1.0 == main/loading
+	if (menuSceneEncoding > MENU_SCENE_ISHDR_BYPASS_THRESHOLD)
+		isHDR = false;
 
 #		if defined(POSTPROCESS)
 	if (SharedData::postProcessingSettings.DisableVanillaTonemapping) {
@@ -150,7 +119,6 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #		endif
 
-	// Bloom from separate high-pass filtered texture
 	float3 bloomColor = 0;
 	if (Flags.x > 0.5) {
 		bloomColor = ImageTex.Sample(ImageSampler, uv).xyz;
@@ -158,41 +126,36 @@ PS_OUTPUT main(PS_INPUT input)
 		bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
 	}
 
-	// Auto-exposure values: (x=current luminance, y=target luminance)
 	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
-
-	// Force SDR tonemapping during loading screens and main menu
-	if (SharedData::HDRData.w > 0.5)
-		isHDR = false;
 
 	float3 outputColor = 0.0;
 
-	// === Auto-Exposure Adjustment ===
-	// Normalizes scene brightness to target luminance computed by DOWNSAMPLE pass.
-	// Prevents exposure from drifting as lighting conditions change.
 	if (avgValue.x != 0 && avgValue.y != 0)
 		inputColor *= avgValue.y / avgValue.x;
 	inputColor = max(0, inputColor);
 
 	if (isHDR) {
-		// === HDR Pipeline ===
-		// Run the exact SDR tonemap + bloom + color grading pipeline to produce the SDR
-		// reference image, then extend highlights above paperwhite using DICE.
-		// This guarantees HDR and SDR are identical up to paperwhite nits.
-
-		float paperWhiteNits = SharedData::HDRData.y;
-		float peakNits = SharedData::HDRData.z;
-		float pw = paperWhiteNits / sRGB_WhiteLevelNits;
+		// pw = 203 nits here; user paper white in HDROutputCS.
+		static const float HDR_TONEMAP_REF_WHITE_NITS = 203.0;
+		float peakNits = hdrShared.z;
+		float pw = HDR_TONEMAP_REF_WHITE_NITS / sRGB_WhiteLevelNits;
 		float peak = peakNits / sRGB_WhiteLevelNits;
-		float3 hdrInputLinear = ENABLE_LL ? inputColor : Color::SkyrimGammaToLinear(inputColor);
-		float3 hdrScene = hdrInputLinear * pw;
 
-		// --- Step 1: Identical SDR tonemap + bloom ---
+		// Bloom "mask" so that dark pixels (things occluding the sun) don't get bloom applied to them.
+		float3 hdrInputLinear = ENABLE_LL ? inputColor : Color::SkyrimGammaToLinear(inputColor);
+		float3 bloomLinear = ENABLE_LL ? bloomColor : Color::SkyrimGammaToLinear(bloomColor);
+		float sceneL = Color::RGBToLuminance(hdrInputLinear);
+		float bloomL = Color::RGBToLuminance(bloomLinear);
+		const float bloomOccDenom = 0.54;
+		float bloomKeep = saturate(sceneL / (bloomL * bloomOccDenom + 1e-6));
+		float3 bloomForDice = bloomLinear * bloomKeep;
+		float3 bloomColorMod = bloomColor * bloomKeep;
+
 		float3 sdrTonemapped;
 
 		[branch] if (Param.z > 0.5)
 		{
-			sdrTonemapped = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor);
+			sdrTonemapped = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColorMod);
 		}
 		else
 		{
@@ -201,11 +164,9 @@ PS_OUTPUT main(PS_INPUT input)
 			float3 compressedHuePreserving = inputColor * mappedMax / maxCol;
 			sdrTonemapped = compressedHuePreserving;
 
-			// Standard SDR bloom: add bloom where there is headroom below the ceiling.
-			sdrTonemapped += saturate(Param.x - sdrTonemapped) * bloomColor;
+			sdrTonemapped += saturate(Param.x - sdrTonemapped) * bloomColorMod;
 		}
 
-		// --- Step 2: Identical SDR color grading ---
 		float sdrLuminance = Color::RGBToLuminance(sdrTonemapped);
 		float3 sdrGraded = Cinematic.w * lerp(lerp(sdrLuminance, sdrTonemapped, Cinematic.x), sdrLuminance * Tint.xyz, Tint.w).xyz;
 		sdrGraded = lerp(avgValue.x, sdrGraded, Cinematic.z);
@@ -215,51 +176,18 @@ PS_OUTPUT main(PS_INPUT input)
 		sdrGraded = lerp(sdrGraded, Fade.xyz, Fade.w);
 #		endif
 
-		// Secondary HDR tonemap path used for highlight shaping.
-		float3 hdrShaped = DisplayMapping::DICETonemap(hdrScene, peak, /*ShoulderStart=*/pw);
-
-		// Bloom
-		hdrShaped += saturate(Param.x - hdrShaped) * bloomColor;
-
-		// Desaturate toward luminance as brightness approaches peak.
-		// 0 at paperwhite, 1 at peak.
-		float hdrShapedLum = Color::RGBToLuminance(hdrShaped);
-		float desatStart = lerp(pw, peak, 0.4);
-		float desatT = saturate((hdrShapedLum - desatStart) / max(peak - desatStart, 1e-6));
-		hdrShaped = lerp(hdrShaped, hdrShapedLum, desatT);
-
-		// sdrGraded is now the exact SDR output (before final gamma encode).
-		// Convert to linear and scale to paperwhite for the HDR base layer.
 		float3 sdrLinear = Color::SkyrimGammaToLinear(max(0.0, sdrGraded));
 		float3 sdrBase = sdrLinear * pw;
 
-		// DICE compresses the full HDR range above the shoulder start into peak nits.
 		float shoulderStart = pw / peak;
-		float3 diceLinear = DisplayMapping::DICETonemap(hdrScene, peak, shoulderStart);
+		float3 hdrScene = (hdrInputLinear + bloomForDice) * pw;
+		float3 diceLinear = DisplayMapping::DICETonemap(hdrScene, peak, shoulderStart, CS_BT709, CS_BT709);
 
-		// DICE only extends highlights at and above paperwhite.
-		float rawLum = Color::RGBToLuminance(hdrScene) / peak;
-		float diceBlend = saturate((rawLum - shoulderStart) / max(1.0 - shoulderStart, 1e-4));
+		float diceBlend = saturate(Color::RGBToLuminance(hdrInputLinear * pw) / max(peak, 1e-6));
 		float3 hdrLinearOut = lerp(sdrBase, diceLinear, diceBlend);
-		hdrLinearOut = lerp(hdrLinearOut, hdrShaped, 0.35 * diceBlend);
-
-		// Cheap fire hue fix: when bright highlights are warm (R/G dominant over B),
-		// push them slightly toward orange/yellow to avoid pink cores.
-		float peakLum = Color::RGBToLuminance(hdrLinearOut);
-		float fireHighlight = smoothstep(pw * 0.75, pw * 4.0, peakLum);
-		float warmDominance = saturate((hdrLinearOut.r - hdrLinearOut.b) * 1.25) *
-		                      saturate((hdrLinearOut.g - hdrLinearOut.b) * 2.0);
-		float fireHueMask = fireHighlight * warmDominance;
-		hdrLinearOut.b *= 1.0 - 0.30 * fireHueMask;
-		hdrLinearOut.g += hdrLinearOut.r * (0.05 * fireHueMask);
-		hdrLinearOut *= 10.0 + (0.18 * fireHueMask * diceBlend);
 
 		outputColor = Color::LinearToSkyrimGamma(max(0.0, hdrLinearOut));
 	} else {
-		// === SDR Pipeline (LDR RT) ===
-		// Input: Linear HDR values (can exceed 1.0)
-		// Output: Tonemapped [0,1] gamma sRGB for traditional displays
-
 		float3 blendedColor;
 
 		[branch] if (Param.z > 0.5)
@@ -274,9 +202,6 @@ PS_OUTPUT main(PS_INPUT input)
 			blendedColor = compressedHuePreserving;
 			blendedColor += saturate(Param.x - blendedColor) * bloomColor;
 		}
-
-		// === Color Grading (Post-Tonemap) ===
-		// Apply saturation, contrast, and tint to the tonemapped result.
 
 		float blendedLuminance = Color::RGBToLuminance(blendedColor);
 		float3 linearColor = Cinematic.w * lerp(lerp(blendedLuminance, blendedColor, Cinematic.x), blendedLuminance * Tint.xyz, Tint.w).xyz;
