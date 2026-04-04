@@ -232,19 +232,7 @@ struct TonemapperInfo
 					exposureSlider(&params[0].x);
 					drawHDRStatus();
 				},
-				{ f4{ 1.f, 0.f, 1000.f, 0.f } } },
-
-			{ "ACES 2.0"sv, "ACES2Tonemap"sv,
-				"ACES 2.0 Output Transform. Full implementation of the Academy Color Encoding System v2.0 "
-				"including CAM16-based JMh color appearance model, Michaelis-Menten tonescale with flare compensation, "
-				"chroma compression and gamut compression. Faithfully translated from the official CTL reference. "
-				"Supports both SDR (Rec.709) and HDR (Rec.2020) output."sv,
-				0, 0, true, 2,
-				[](CTP& params) {
-					exposureSlider(&params[0].x);
-					drawHDRStatus();
-				},
-				{ f4{ 1.f, 0.f, 0.f, 0.f } } }
+				{ f4{ 1.f, 0.f, 1000.f, 0.f } } }
 		};
 
 		static std::once_flag flag;
@@ -401,7 +389,6 @@ void ColorGrading::DrawSettings()
 					settings.tonemapParams = tonemappers[i].cached_settings;
 					tonemapperType = i;
 					recompileFlag = true;
-					aces2Initialized = false;
 				}
 
 				if (auto _tt = Util::HoverTooltipWrapper())
@@ -631,19 +618,10 @@ void ColorGrading::CompileComputeShaders()
 		std::string entry = "main";
 	};
 
-	auto defines = std::vector<std::pair<const char*, const char*>>{
-		{ "TONEMAP_FUNC", tonemappers[tonemapperType].func_name.data() }
-	};
-
-	// Add ACES2_TONEMAP define when ACES 2.0 is the active tonemapper
-	bool isACES2 = (tonemappers[tonemapperType].name == "ACES 2.0");
-	if (isACES2)
-		defines.push_back({ "ACES2_TONEMAP", "1" });
-
 	std::vector<ShaderCompileInfo>
 		shaderInfos = {
-			{ &colorgradingCS, "colorgrading.cs.hlsl", defines, "CSColorGrading" },
-			{ &lutgenCS, "colorgrading.cs.hlsl", defines, "CSLUTGen" }
+			{ &colorgradingCS, "colorgrading.cs.hlsl", { { "TONEMAP_FUNC", tonemappers[tonemapperType].func_name.data() } }, "CSColorGrading" },
+			{ &lutgenCS, "colorgrading.cs.hlsl", { { "TONEMAP_FUNC", tonemappers[tonemapperType].func_name.data() } }, "CSLUTGen" }
 		};
 
 	for (auto& info : shaderInfos) {
@@ -740,22 +718,6 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	ID3D11Buffer* cb = colorCB->CB();
 	context->CSSetConstantBuffers(1, 1, &cb);
 
-	// ACES 2.0: Update and bind resources if active
-	const auto& tonemappers = TonemapperInfo::GetTonemappers();
-	bool isACES2Active = (tonemappers[tonemapperType].name == "ACES 2.0") && settings.enableTonemap;
-	if (isACES2Active) {
-		float peakNits = hdrEnabled ? static_cast<float>(hdr.settings.hdrPeakNits) : 100.f;
-		UpdateACES2(hdrEnabled, peakNits);
-		if (aces2CB) {
-			ID3D11Buffer* aces2CbBuf = aces2CB->CB();
-			context->CSSetConstantBuffers(2, 1, &aces2CbBuf);
-		}
-		if (aces2TableSB && !aces2TableSB->srvs.empty()) {
-			ID3D11ShaderResourceView* tableSrv = aces2TableSB->SRV();
-			context->CSSetShaderResources(2, 1, &tableSrv);
-		}
-	}
-
 	std::array<ID3D11SamplerState*, 1> samplers = { linearSampler.get() };
 	context->CSSetSamplers(0, 1, samplers.data());
 	ID3D11UnorderedAccessView* uav = nullptr;
@@ -788,12 +750,6 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 	context->CSSetShaderResources(0, 2, srvs.data());
 	context->CSSetConstantBuffers(0, 1, &cb);
-	if (isACES2Active) {
-		ID3D11Buffer* nullCB = nullptr;
-		context->CSSetConstantBuffers(2, 1, &nullCB);
-		ID3D11ShaderResourceView* nullSRV = nullptr;
-		context->CSSetShaderResources(2, 1, &nullSRV);
-	}
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	if (saveImagesFlag) {
@@ -804,52 +760,6 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	inout_tex = { texColor->resource.get(), texColor->srv.get() };
 
 	state->EndPerfEvent();
-}
-
-void ColorGrading::UpdateACES2(bool hdrEnabled, float peakNits)
-{
-	using namespace ACES2;
-
-	bool needsUpdate = !aces2Initialized || (peakNits != aces2LastPeakNits) || (hdrEnabled != aces2LastHDR);
-	if (!needsUpdate)
-		return;
-
-	logger::info("ACES 2.0: Initializing OT params (HDR={}, peakNits={})", hdrEnabled, peakNits);
-
-	// Choose limiting primaries based on HDR state
-	Chromaticities limitPri = hdrEnabled ? ACES2::BT2020_PRI : ACES2::REC709_PRI;
-	double peak = hdrEnabled ? static_cast<double>(peakNits) : 100.0;
-
-	ODTParams params = init_ODTParams(peak, limitPri);
-
-	// Build GPU constant buffer data
-	GPU_ODTParams gpuParams = buildGPUParams(params);
-	if (!aces2CB) {
-		aces2CB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<GPU_ODTParams>());
-	}
-	aces2CB->Update(gpuParams);
-
-	// Build GPU table structured buffer data
-	std::array<float, TABLE_DATA_COUNT> tableData;
-	buildGPUTableData(params, tableData);
-	if (!aces2TableSB) {
-		D3D11_BUFFER_DESC desc = {};
-		desc.ByteWidth = static_cast<UINT>(sizeof(float) * TABLE_DATA_COUNT);
-		desc.Usage = D3D11_USAGE_DYNAMIC;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		desc.StructureByteStride = sizeof(float);
-		aces2TableSB = std::make_unique<StructuredBuffer>(desc, TABLE_DATA_COUNT);
-		aces2TableSB->CreateSRV();
-	}
-	aces2TableSB->Update(tableData.data(), sizeof(float) * TABLE_DATA_COUNT);
-
-	aces2Initialized = true;
-	aces2LastPeakNits = peakNits;
-	aces2LastHDR = hdrEnabled;
-
-	logger::info("ACES 2.0: OT params initialized successfully.");
 }
 
 void ColorGrading::OutputTextures()
