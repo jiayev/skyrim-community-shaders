@@ -60,7 +60,7 @@ void HomePageRenderer::RenderWelcomeSection()
 
 	// Only push font if we have a valid one, otherwise use default scaled
 	if (titleFont) {
-		ImGui::PushFont(titleFont);
+		ImGui::PushFont(titleFont, titleFont->LegacySize);
 	}
 
 	ImVec2 windowSize = ImGui::GetWindowSize();
@@ -156,7 +156,7 @@ void HomePageRenderer::RenderQuickLinksSection()
 	ImGui::Text("Quick Links");
 
 	// Center the button layout
-	float buttonWidth = QUICK_LINKS_BUTTON_WIDTH;
+	float buttonWidth = QUICK_LINKS_BUTTON_WIDTH * Util::GetUIScale();
 	float totalWidth = buttonWidth * 3 + ImGui::GetStyle().ItemSpacing.x * 2;  // 3 buttons with spacing
 	ImGui::SetCursorPosX((windowSize.x - totalWidth) * 0.5f);
 

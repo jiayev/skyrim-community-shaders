@@ -406,8 +406,10 @@ SamplerState SampEnvSampler : register(s4);
 SamplerState SampEnvMaskSampler : register(s5);
 #		endif
 
-#		if defined(TRUE_PBR)
+#		if defined(TRUE_PBR) && !defined(FACEGEN)
 SamplerState SampParallaxSampler : register(s4);
+#		endif
+#		if defined(TRUE_PBR)
 SamplerState SampRMAOSSampler : register(s5);
 #		endif
 
@@ -505,8 +507,10 @@ TextureCube<float4> TexEnvSampler : register(t4);
 Texture2D<float4> TexEnvMaskSampler : register(t5);
 #		endif
 
-#		if defined(TRUE_PBR)
+#		if defined(TRUE_PBR) && !defined(FACEGEN)
 Texture2D<float4> TexParallaxSampler : register(t4);
+#		endif
+#		if defined(TRUE_PBR)
 Texture2D<float4> TexRMAOSSampler : register(t5);
 #		endif
 
@@ -1091,6 +1095,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 refractedViewDirection = viewDirection;
 	float4 sampledCoatColor = PBRParams2;
 	float3 complexSpecular = 1.0;  // Declare complexSpecular at a higher scope so it's available throughout the shader (NEEDED FOR STOCH. FIX)
+
 #	if defined(EMAT)
 #		if defined(PARALLAX)
 	if (SharedData::extendedMaterialSettings.EnableParallax) {
@@ -1105,25 +1110,34 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	bool complexMaterialParallax = false;
 	float4 complexMaterialColor = 1.0;
 
-#		if defined(EMAT_ENVMAP)
-
+#		if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
+	float4 envMaskSample = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
+	float envMaskBase = envMaskSample.x;
 	if (SharedData::extendedMaterialSettings.EnableComplexMaterial) {
-		float envMaskTest = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, 15).w;
-		complexMaterial = envMaskTest < (1.0 - (4.0 / 255.0));
+		const float kMaskEpsilon = (4.0 / 255.0);
+
+		complexMaterial = envMaskSample.w < (1.0 - kMaskEpsilon);
+
+		// Detect texture saved in the wrong format
+		if ((abs(envMaskSample.x - envMaskSample.y) < kMaskEpsilon) &&
+			(abs(envMaskSample.x - envMaskSample.z) < kMaskEpsilon) &&
+			(abs(envMaskSample.y - envMaskSample.z) < kMaskEpsilon))
+			complexMaterial = false;
 
 		if (complexMaterial) {
-			if (envMaskTest > (4.0 / 255.0)) {
+			if (envMaskSample.w > kMaskEpsilon) {
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler, screenNoise);
 				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, pixelOffset);
 				if (SharedData::extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || SharedData::extendedMaterialSettings.ExtendShadows))
 					sh0 = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, mipLevel).w;
+				complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
+			} else {
+				complexMaterialColor = envMaskSample;
 			}
-
-			complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
+			envMaskBase = complexMaterialColor.x;
 		}
 	}
-
 #		endif  // ENVMAP
 
 #		if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
@@ -1134,6 +1148,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		sampledCoatColor.rgb *= Color::Diffuse(sampledCoatProperties.rgb);
 		sampledCoatColor.a *= sampledCoatProperties.a;
 	}
+#			if !defined(FACEGEN)
 	[branch] if (SharedData::extendedMaterialSettings.EnableParallax && (PBRFlags & PBR::Flags::HasDisplacement) != 0)
 	{
 		PBRParallax = true;
@@ -1164,8 +1179,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (SharedData::extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || SharedData::extendedMaterialSettings.ExtendShadows))
 			sh0 = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
 	}
-#		endif  // TRUE_PBR
+#			endif  // !FACEGEN
+#		endif      // TRUE_PBR
 
+#	elif defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
+	float envMaskBase = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).x;
 #	endif  // EMAT
 
 #	if defined(SNOW)
@@ -1347,7 +1365,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TRUE_PBR)
 		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile0PBR) == 0)
 		{
-			landColorRGB1 = Color::GammaToTrueLinear(landColorRGB1 / Color::PBRLightingScale);
+			landColorRGB1 = Color::SrgbToLinear(landColorRGB1 / Color::PBRLightingScale);
 		}
 #		endif
 		float landAlpha1 = landColor1.a;
@@ -1428,7 +1446,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TRUE_PBR)
 		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile1PBR) == 0)
 		{
-			landColorRGB2 = Color::GammaToTrueLinear(landColorRGB2 / Color::PBRLightingScale);
+			landColorRGB2 = Color::SrgbToLinear(landColorRGB2 / Color::PBRLightingScale);
 		}
 #		endif
 		float landAlpha2 = landColor2.a;
@@ -1508,7 +1526,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TRUE_PBR)
 		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile2PBR) == 0)
 		{
-			landColorRGB3 = Color::GammaToTrueLinear(landColorRGB3 / Color::PBRLightingScale);
+			landColorRGB3 = Color::SrgbToLinear(landColorRGB3 / Color::PBRLightingScale);
 		}
 #		endif
 		float landAlpha3 = landColor3.a;
@@ -1588,7 +1606,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TRUE_PBR)
 		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile3PBR) == 0)
 		{
-			landColorRGB4 = Color::GammaToTrueLinear(landColorRGB4 / Color::PBRLightingScale);
+			landColorRGB4 = Color::SrgbToLinear(landColorRGB4 / Color::PBRLightingScale);
 		}
 #		endif
 		float landAlpha4 = landColor4.a;
@@ -1668,7 +1686,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TRUE_PBR)
 		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile4PBR) == 0)
 		{
-			landColorRGB5 = Color::GammaToTrueLinear(landColorRGB5 / Color::PBRLightingScale);
+			landColorRGB5 = Color::SrgbToLinear(landColorRGB5 / Color::PBRLightingScale);
 		}
 #		endif
 		float landAlpha5 = landColor5.a;
@@ -1749,7 +1767,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TRUE_PBR)
 		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile5PBR) == 0)
 		{
-			landColorRGB6 = Color::GammaToTrueLinear(landColorRGB6 / Color::PBRLightingScale);
+			landColorRGB6 = Color::SrgbToLinear(landColorRGB6 / Color::PBRLightingScale);
 		}
 #		endif
 		float landAlpha6 = landColor6.a;
@@ -1943,13 +1961,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (!SharedData::linearLightingSettings.enableLinearLighting) {
 		baseColor.xyz = GetFacegenBaseColor(baseColor.xyz, uv);
 	} else {
-		baseColor.xyz = Color::GammaToLinear(GetFacegenBaseColor(Color::LinearToGamma(baseColor.xyz), uv));
+		baseColor.xyz = Color::SkyrimGammaToLinear(GetFacegenBaseColor(Color::LinearToSkyrimGamma(baseColor.xyz), uv));
 	}
 #	elif defined(FACEGEN_RGB_TINT)
 	if (!SharedData::linearLightingSettings.enableLinearLighting) {
 		baseColor.xyz = GetFacegenRGBTintBaseColor(baseColor.xyz, uv);
 	} else {
-		baseColor.xyz = Color::GammaToLinear(GetFacegenRGBTintBaseColor(Color::LinearToGamma(baseColor.xyz), uv));
+		baseColor.xyz = Color::SkyrimGammaToLinear(GetFacegenRGBTintBaseColor(Color::LinearToSkyrimGamma(baseColor.xyz), uv));
 	}
 #	endif  // FACEGEN
 
@@ -2238,7 +2256,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	material.AO = rawRMAOS.z;
 
 	if (!SharedData::linearLightingSettings.enableLinearLighting) {
-		material.F0 = lerp(rawRMAOS.w, Color::GammaToTrueLinear(baseColor.xyz), material.Metallic);
+		material.F0 = lerp(rawRMAOS.w, Color::SrgbToLinear(baseColor.xyz), material.Metallic);
 	} else {
 		material.F0 = lerp(rawRMAOS.w, baseColor.xyz, material.Metallic);
 	}
@@ -2396,7 +2414,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	if (envMask > 0.0) {
 		if (EnvmapData.y) {
-			envMask *= TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).x;
+			envMask *= envMaskBase;
 		} else {
 			envMask *= glossiness;
 		}
@@ -2447,7 +2465,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float4 envColorBase = TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 15);
 
 				if (envColorBase.a < 1.0) {
-					material.F0 = Color::GammaToLinear(envColorBase.rgb);
+					material.F0 = Color::SkyrimGammaToLinear(envColorBase.rgb);
 					material.Roughness = envColorBase.a;
 				} else {
 #			if defined(VANILLA_FRESNEL)
@@ -2501,7 +2519,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 		if (!dynamicCubemap) {
-			float3 envColorBase = Color::GammaToLinear(TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz);
+			float3 envColorBase = Color::SkyrimGammaToLinear(TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz);
 			envColor = envColorBase.xyz * envMask;
 		}
 	}
@@ -2720,7 +2738,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		elif defined(EMAT_ENVMAP)
 		[branch] if (complexMaterialParallax)
 			dirDetailedShadow *= ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, lerp(parallaxShadowQuality, 1.0, SharedData::extendedMaterialSettings.ExtendShadows), screenNoise, displacementParams);
-#		elif defined(TRUE_PBR) && !defined(LODLANDSCAPE)
+#		elif defined(TRUE_PBR) && !defined(LODLANDSCAPE) && !defined(FACEGEN)
 		[branch] if (PBRParallax)
 			dirDetailedShadow *= ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, lerp(parallaxShadowQuality, 1.0, SharedData::extendedMaterialSettings.ExtendShadows), screenNoise, displacementParams);
 #		endif  // LANDSCAPE
@@ -2936,7 +2954,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				elif defined(EMAT_ENVMAP)
 			[branch] if (complexMaterialParallax)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, parallaxShadowQuality, screenNoise, displacementParams);
-#				elif defined(TRUE_PBR) && !defined(LODLANDSCAPE)
+#				elif defined(TRUE_PBR) && !defined(LODLANDSCAPE) && !defined(FACEGEN)
 			[branch] if (PBRParallax)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, parallaxShadowQuality, screenNoise, displacementParams);
 #				endif
@@ -3504,7 +3522,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #		endif
 
-	psout.Reflectance = float4(indirectLobeWeights.specular, psout.Diffuse.w);
+#		if defined(VR) && (defined(EMAT) || defined(TRUE_PBR)) && (defined(PARALLAX) || defined(LANDSCAPE) || defined(EMAT_ENVMAP) || defined(TRUE_PBR))
+	// VR: store POM parallax amount for stereo reprojection depth correction.
+	// Read by StereoBlendCS to adjust Eye 1 (right eye) reprojection depth
+	// at POM-displaced surfaces. Not consumed on flat (SE/AE).
+	psout.Reflectance = float4(indirectLobeWeights.specular,
+		(pixelOffset > 0.0) ? saturate(pixelOffset) : 0.0);
+#		else
+	psout.Reflectance = float4(indirectLobeWeights.specular, 0.0);
+#		endif
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - material.Roughness), psout.Diffuse.w);
 
 #		if defined(SNOW)
@@ -3529,7 +3555,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
 	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {
-		psout.Diffuse.xyz = Color::TrueLinearToGamma(psout.Diffuse.xyz);
+		psout.Diffuse.xyz = Color::LinearToSrgb(psout.Diffuse.xyz);
 	}
 #	endif
 

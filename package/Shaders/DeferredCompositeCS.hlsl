@@ -19,6 +19,11 @@ RWTexture2D<float4> NormalTAAMaskSpecularMaskRW : register(u1);
 RWTexture2D<float2> MotionVectorsRW : register(u2);
 Texture2D<float> DepthTexture : register(t4);
 
+#if defined(VR_STEREO_OPT)
+#	include "VRStereoOptimizations/modes.hlsli"
+Texture2D<uint> StereoOptModeTexture : register(t16);
+#endif
+
 #if defined(DYNAMIC_CUBEMAPS)
 Texture2D<float3> ReflectanceTexture : register(t5);
 TextureCube<float3> EnvTexture : register(t6);
@@ -110,6 +115,16 @@ Texture2D<float4> SSRTexture : register(t16);
 	uv *= FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
 
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
+
+#if defined(VR_STEREO_OPT)
+	if (eyeIndex == 1) {
+		uint mode = StereoOptModeTexture[uint2(dispatchID.xy)] & 0x0F;
+		if (mode == MODE_MAIN) {  // stencil-culled in Eye 1, filled by ReprojectionCS
+			return;
+		}
+	}
+#endif
+
 	uv = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
 	float3 normalGlossiness = NormalRoughnessTexture[dispatchID.xy];

@@ -241,66 +241,54 @@ PS_OUTPUT main(PS_INPUT input)
 	bool enableProceduralSun = false;
 #		endif
 	if (SharedData::HDRData.x > 0.5 && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun) && !enableProceduralSun) {
-		// HDR sun: luminance-driven radial intensity profile.
-		// Uses the texture's own luminance as a 0-1 shape mask so only the bright
-		// center reaches peak display brightness while edges stay at paperwhite.
-		// This preserves the physical disc size regardless of peak/paperwhite settings
-		// and prevents bloom blowout (edges have natural headroom, center has none).
-
+		const float SUN_REF_PAPER_WHITE_NITS = 203.0;
 		float paperWhiteNits = max(SharedData::HDRData.y, 1.0);
 		float peakNits = max(SharedData::HDRData.z, paperWhiteNits + 1.0);
 
-		// Working space: 80-nit-relative units (what ISHDR expects).
-		float pw = paperWhiteNits / sRGB_WhiteLevelNits;
-		float peak = peakNits / sRGB_WhiteLevelNits;
-		float peakRatio = peak / pw;
+		float peakRatio = peakNits / SUN_REF_PAPER_WHITE_NITS;
 
-		// Controls how tightly brightness concentrates at the disc center.
-		// 2.0 = quadratic falloff (natural, perceptual).
-		static const float kSoftness = 2.0;
+		// Non-LL: scale in gamma with pow(PR,1/1.6) so linear matches peak/203 after decode.
+		float menuSceneEncoding = SharedData::HDRData.w;
+		static const float SUN_DIM_IN_MENU_SCENES = 0.58;  // HDRDisplay::kHdrMenuScenePauseOrMap
+		float hdrSunMenuMul = (menuSceneEncoding > 1e-3) ? SUN_DIM_IN_MENU_SCENES : 1.0;
+		float hdrScale = (ENABLE_LL ? peakRatio : pow(peakRatio, rcp(1.6))) * hdrSunMenuMul;
 
 #		if defined(DITHER)
-		// --- Sun glare billboard ---
 		float glareLum = max(Color::RGBToLuminance(baseColor.xyz), 1e-5);
 
-		// Normalize weather-mod HDR textures that may exceed 1.0
-		float glareNormLum = saturate(glareLum);
 		if (glareLum > 1.0)
 			baseColor.xyz *= rcp(glareLum);
 
-		// Radial profile: center (1.0) -> peak/pw, edges (->0) -> 1.0 (paperwhite)
-		float glareShape = pow(glareNormLum, kSoftness);
-		float glareIntensity = lerp(1.0, peakRatio, glareShape);
+		baseColor.xyz *= hdrScale;
 
-		// Scale color preserving hue. For dim texels intensity ~ 1.0, skip division.
-		baseColor.xyz *= (glareNormLum > 0.01) ? (glareIntensity / glareNormLum) : glareIntensity;
-
-		// Apply vertex colour tint (engine's glare envelope)
 		baseColor.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz;
 
+#			ifdef TEX
+		float2 glareUv = saturate(input.TexCoord0.xy);
+		float glareEdge = min(min(glareUv.x, glareUv.y), min(1.0 - glareUv.x, 1.0 - glareUv.y));
+		float glareEdgeFade = smoothstep(0.0, 0.08, glareEdge);
+		baseColor.xyz *= glareEdgeFade;
+		baseColor.w *= glareEdgeFade;
+#			endif
+
 #		else
-		// --- Sun disc billboard ---
 		float srcLum = max(Color::RGBToLuminance(baseColor.xyz), 1e-5);
 
-		// Normalize weather-mod HDR textures
-		float normLum = saturate(srcLum);
 		if (srcLum > 1.0)
 			baseColor.xyz *= rcp(srcLum);
 
-		// Radial profile: center (1.0) -> peak/pw, edges (->0) -> 1.0 (paperwhite)
-		float shape = pow(normLum, kSoftness);
-		float intensity = lerp(1.0, peakRatio, shape);
+		float sunCoreBoost = peakRatio;
+		float sunCoreMask = smoothstep(0.9, 1.0, saturate(srcLum));
+		float discScale = hdrScale * lerp(1.0, sunCoreBoost, sunCoreMask);
+		baseColor.xyz *= discScale;
 
-		// Scale color preserving hue. For dim texels intensity ~ 1.0, skip division.
-		baseColor.xyz *= (normLum > 0.01) ? (intensity / normLum) : intensity;
+		float ign = frac(52.9829189 * frac(dot(floor(input.Position.xy), float2(0.06711056, 0.00583715))));
+		baseColor.xyz += (ign - 0.5) * (discScale / 255.0);
 
-		// Preserve disc shape: don't apply PParams additive sky blend to sun disc
 		yyy = 0.0;
 #		endif
 
 #		if defined(CLOUD_SHADOWS)
-		// Clouds are alpha-blended and don't write depth, so use the cloud shadow field to
-		// attenuate the sun where clouds are actually along the camera->sun path.
 		float3 cloudSampleDir = CloudShadows::GetCloudShadowSampleDir(input.WorldPosition.xyz, SharedData::DirLightDirection.xyz);
 		float cloudCube0 = CloudShadows::CloudShadowsTexture.SampleLevel(SampBaseSampler, cloudSampleDir, 0).x;
 		float cloudCube1 = CloudShadows::CloudShadowsTexture.SampleLevel(SampBaseSampler, cloudSampleDir, 1).x;

@@ -22,6 +22,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkyIBLSaturation,
 	FogAmount,
 	DALCMode,
+	DisableInInteriors,
 	EffectNormalization,
 	EffectNormalizationMult,
 	MinEffectMult)
@@ -79,6 +80,10 @@ void IBL::DrawSettings()
 	ImGui::Checkbox("Preserve Fog Luminance", (bool*)&settings.PreserveFogLuminance);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("When Fog Mix is active, rescales the IBL-tinted fog to keep the original fog brightness.\nPrevents fog from becoming too bright or too dark.");
+	}
+	ImGui::Checkbox("Disable in interiors", (bool*)&settings.DisableInInteriors);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Disables IBL in interior cells.");
 	}
 	ImGui::Checkbox("Effect Normalization", (bool*)&settings.EffectNormalization);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -175,16 +180,26 @@ void IBL::RegisterWeatherVariables()
 		0.0f, 1.0f));
 }
 
+IBL::Settings IBL::GetCommonBufferData() const
+{
+	Settings data = settings;
+	if (settings.DisableInInteriors && Util::IsInterior())
+		data.EnableIBL = 0;
+	return data;
+}
+
 void IBL::ReflectionsPrepass()
 {
 	if (loaded) {
 		auto context = globals::d3d::context;
 
+		bool interiorDisabled = settings.DisableInInteriors && Util::IsInterior();
+
 		// Set PS shader resource
 		{
 			std::array<ID3D11ShaderResourceView*, 4> srvs = {
-				envIBLTexture->srv.get(),
-				skyIBLTexture->srv.get(),
+				interiorDisabled ? nullptr : envIBLTexture->srv.get(),
+				interiorDisabled ? nullptr : skyIBLTexture->srv.get(),
 				staticDiffuseIBLTexture->srv.get(),
 				staticSpecularIBLTexture->srv.get()
 			};
@@ -195,6 +210,9 @@ void IBL::ReflectionsPrepass()
 
 void IBL::Prepass()
 {
+	if (settings.DisableInInteriors && Util::IsInterior())
+		return;
+
 	auto context = globals::d3d::context;
 	auto state = globals::state;
 

@@ -13,6 +13,7 @@
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
+#include "Features/VRStereoOptimizations.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WeatherEditor.h"
 #include "Menu.h"

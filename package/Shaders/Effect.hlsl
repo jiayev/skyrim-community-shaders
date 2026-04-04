@@ -444,7 +444,6 @@ struct PS_OUTPUT
 	float2 MotionVectors: SV_Target1;
 	float4 ScreenSpaceNormals: SV_Target2;
 #	else
-	float4 Normal: SV_Target1;
 	float4 Color2: SV_Target2;
 #	endif
 };
@@ -590,6 +589,20 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	ambientColor = Color::IrradianceToLinear(ambientColor);
 	ambientColor *= skylightingDiffuse;
 	ambientColor = Color::IrradianceToGamma(ambientColor);
+#		endif
+
+#		if defined(IBL)
+	if (SharedData::iblSettings.EnableDiffuseIBL) {
+		if (!SharedData::InInterior || SharedData::iblSettings.EnableInterior) {
+			ambientColor = Color::IrradianceToLinear(color);
+#			if defined(SKYLIGHTING)
+			ambientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(float3(0, 0, -1), skylightingDiffuse), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
+#			else
+			ambientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(float3(0, 0, -1)), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
+#			endif
+			ambientColor = Color::IrradianceToGamma(ambientColor);
+		}
+	}
 #		endif
 
 	color = dirColor + ambientColor;
@@ -967,7 +980,6 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.ScreenSpaceNormals.xy = screenSpaceNormal.xy + 0.5.xx;
 	psout.ScreenSpaceNormals.zw = 0.0.xx;
 #	else
-	psout.Normal = float4(shadowVariance, 0, 0, finalColor.w);
 	psout.Color2 = finalColor;
 #	endif
 
@@ -981,7 +993,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 #	if !defined(HDR_OUTPUT)
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld) && SharedData::linearLightingSettings.enableLinearLighting) {
-		psout.Diffuse.xyz = Color::TrueLinearToGamma(psout.Diffuse.xyz);
+		psout.Diffuse.xyz = Color::LinearToSrgb(psout.Diffuse.xyz);
 	}
 #	endif
 	return psout;

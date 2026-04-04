@@ -1,17 +1,6 @@
 /**
  * @file HDROutputCS.hlsl
- * @brief Final output compute shader - colorspace conversion and UI compositing.
- *
- * @details ISHDR outputs gamma-encoded BT.709 values after DICE tonemapping.
- *   Post-processing (TAA, ISDownsample, DOF) runs in that standard color space.
- *   This shader performs the final HDR colorspace conversion and UI compositing.
- *
- * Pipeline:
- *   - SDR: Passthrough + UI composite
- *   - HDR: Gamma decode -> BT.709->BT.2020 -> PQ encode + UI composite
- *
- * @see ISHDR.hlsl for bloom, DICE tonemapping, and color grading
- * @see HDR.cpp ApplyHDR() for the dispatch logic
+ * @brief HDR: gamma decode, paper-white × (nits/203), BT.2020, PQ. SDR: passthrough + UI.
  */
 
 #include "Common/Color.hlsli"
@@ -30,6 +19,7 @@ cbuffer PerFrame : register(b0)
 	float uiBrightness : packoffset(c1.x);
 	float isSceneLinear : packoffset(c1.y);
 	float isMainOrLoadingMenu : packoffset(c1.z);
+	float fgTweenMenuMidAlphaBoost : packoffset(c1.w);  ///< TweenMenu: soften AA band when compositing here (UIBrightnessCS skips while paused)
 }
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
@@ -47,51 +37,58 @@ cbuffer PerFrame : register(b0)
 	float3 finalColor;
 
 	if (hdrEnabled) {
-		// Scene arrives gamma-encoded BT.709 from ISHDR (post-DICE tonemapping).
-		// ISHDR already scales the scene into HDR paper-white space using 80-nit-relative units.
-		// Convert to linear, then BT.2020, then PQ for HDR10 output.
+		static const float HDR_TONEMAP_REF_WHITE_NITS = 203.0;
+		float paperWhiteNits = max(paperWhite, 1.0);
+		float paperWhiteDisplayScale = paperWhiteNits / HDR_TONEMAP_REF_WHITE_NITS;
+
 		float3 sceneLinear = scene.rgb;
 		float3 sceneBT2020 = sceneLinear;
 
 		if (!SharedData::postProcessingSettings.DisableVanillaTonemapping) {
-			sceneLinear = Color::GammaToLinear(max(0.0, sceneLinear));
+			sceneLinear *= paperWhiteDisplayScale;
+			sceneLinear = Color::SkyrimGammaToLinear(max(0.0, sceneLinear));
 			sceneBT2020 = Color::BT709ToBT2020(sceneLinear);
 		}
 		sceneBT2020 = max(sceneBT2020, 0.0);
 
 		if (skipUI) {
-			// FG handles UI compositing separately. Scene is already scaled by ISHDR.
 			finalColor = Color::pq::Encode(sceneBT2020, sRGB_WhiteLevelNits);
 		} else {
-			// On the main/loading menu the scene is SDR-range (80-nit baseline after PQ), so
-			// both the scene background and UI need the same uiBrightness lift to match the
-			// ~200-250 nit level that Windows applies when remapping SDR content on an HDR display.
-			float effectiveSceneScale = isMainOrLoadingMenu > 0.5 ? uiBrightness : 1.0;
-			if (SharedData::postProcessingSettings.DisableVanillaTonemapping) {
-				// In this path the scene is already linear BT.2020, while the UI is still
-				// gamma-encoded BT.709 with premultiplied alpha.
-				float3 uiBT2020Premultiplied;
-
-				if (ui.a > 0.001) {
-					float3 uiStraight = ui.rgb / ui.a;
-					float3 uiLinear = Color::GammaToTrueLinear(max(0.0, uiStraight));
-					uiBT2020Premultiplied = Color::BT709ToBT2020(uiLinear) * (ui.a * uiBrightness);
-				} else {
-					uiBT2020Premultiplied = Color::BT709ToBT2020(Color::GammaToTrueLinear(max(0.0, ui.rgb))) * uiBrightness;
-				}
-
-				float3 compositedBT2020 = uiBT2020Premultiplied + sceneBT2020 * (1.0 - ui.a) * effectiveSceneScale;
-				finalColor = Color::pq::Encode(max(0.0, compositedBT2020), sRGB_WhiteLevelNits);
-			} else {
-				// Composite in gamma space (matching SDR behavior), then convert to HDR.
-				// The vanilla UI was designed for gamma-space blending; compositing in PQ
-				// over-darkens and compositing in linear over-brightens behind UI overlays.
-				float3 composited = ui.rgb * uiBrightness + scene.rgb * (1.0 - ui.a) * effectiveSceneScale;
-
-				float3 compositedLinear = Color::GammaToLinear(max(0.0, composited));
-				float3 compositedBT2020 = Color::BT709ToBT2020(compositedLinear);
-				finalColor = Color::pq::Encode(max(0.0, compositedBT2020), sRGB_WhiteLevelNits);
+			const float menuUIBrightnessScale = 0.695652f;
+			float effectiveUIBrightness = (isMainOrLoadingMenu > 0.5) ? (uiBrightness * menuUIBrightnessScale) : uiBrightness;
+			// Match UIBrightnessCS: pause menu (TweenMenu) soft-AA band — FG PQ pass skips while paused, so boost runs here.
+			float aIn = ui.a;
+			float aOut = aIn;
+			if (fgTweenMenuMidAlphaBoost > 0.5 && aIn > 1e-3) {
+				float midBand = smoothstep(0.3, 0.35, aIn) * (1.0 - smoothstep(0.55, 0.6, aIn));
+				const float fgMidAlphaBoost = 0.12;
+				aOut = saturate(aIn + midBand * fgMidAlphaBoost);
 			}
+			float3 uiPremul = ui.rgb * (aOut / aIn);
+			float3 uiLinear = Color::SkyrimGammaToLinear(max(0.0, uiPremul * effectiveUIBrightness));
+			uiLinear *= paperWhiteDisplayScale;
+			float a = aOut;
+
+			float3 compositedBT2020;
+			if (SharedData::postProcessingSettings.DisableVanillaTonemapping) {
+				// Scene is already linear BT.2020; UI is gamma-encoded BT.709 premultiplied alpha.
+				float3 uiBT2020 = Color::BT709ToBT2020(uiLinear);
+				compositedBT2020 = uiBT2020 * a + sceneLinear * (1.0 - a);
+				if (isMainOrLoadingMenu > 0.5) {
+					const float menuSaturation = 1.25f;
+					float luma = Color::RGBToLuminance(compositedBT2020);
+					compositedBT2020 = max(0.0, lerp(luma.xxx, compositedBT2020, menuSaturation));
+				}
+			} else {
+				float3 compositedLinear = uiLinear * a + sceneLinear * (1.0 - a);
+				if (isMainOrLoadingMenu > 0.5) {
+					const float menuSaturation = 1.25f;
+					float luma = Color::RGBToLuminance(compositedLinear);
+					compositedLinear = max(0.0, lerp(luma.xxx, compositedLinear, menuSaturation));
+				}
+				compositedBT2020 = Color::BT709ToBT2020(compositedLinear);
+			}
+			finalColor = Color::pq::Encode(max(0.0, compositedBT2020), sRGB_WhiteLevelNits);
 		}
 	} else {
 		float3 sceneGamma = scene.rgb;
