@@ -1,7 +1,6 @@
 #pragma once
 #include "PostProcessFeature.h"
 
-#include "ACES2.h"
 #include "Buffer.h"
 
 struct ColorGrading : public PostProcessFeature
@@ -153,14 +152,6 @@ struct ColorGrading : public PostProcessFeature
 	winrt::com_ptr<ID3D11ComputeShader> lutgenCS = nullptr;
 
 	winrt::com_ptr<ID3D11SamplerState> linearSampler = nullptr;
-
-	// ACES 2.0 resources
-	std::unique_ptr<ConstantBuffer> aces2CB = nullptr;
-	std::unique_ptr<StructuredBuffer> aces2TableSB = nullptr;
-	bool aces2Initialized = false;
-	float aces2LastPeakNits = 0.f;
-	bool aces2LastHDR = false;
-	void UpdateACES2(bool hdrEnabled, float peakNits);
 
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;

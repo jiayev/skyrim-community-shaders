@@ -58,14 +58,6 @@ cbuffer ColorCB : register(b1)
 #include "PostProcessing/ColorGrading/GT7ToneMapping.hlsli"
 #include "PostProcessing/common.hlsli"
 
-#ifdef ACES2_TONEMAP
-#	include "PostProcessing/ColorGrading/ACES2.hlsli"
-cbuffer ACES2CB : register(b2)
-{
-	ACES2_ODTParamsGPU aces2Params;
-};
-#endif
-
 namespace LogType
 {
 	static const uint ACEScct = (1 << 0);
