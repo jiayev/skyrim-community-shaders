@@ -859,7 +859,6 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		if defined(RENDER_DEPTH)
 	float diffuseAlpha = input.VertexColor.w * baseColor.w;
-
 	if ((diffuseAlpha - AlphaTestRefRS) < 0) {
 		discard;
 	}
