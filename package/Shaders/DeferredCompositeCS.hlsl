@@ -290,7 +290,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 		color += reflectance * finalIrradiance;
 	}
 
-#endif
+#endif  // DYNAMIC_CUBEMAPS
 
 	color = Color::IrradianceToGamma(color);
 
