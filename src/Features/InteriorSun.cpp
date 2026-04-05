@@ -1,6 +1,8 @@
 ﻿#include "InteriorSun.h"
 #include "State.h"
 
+#include "PhysicalSky.h"
+
 #include <numbers>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -80,7 +82,9 @@ void InteriorSun::EarlyPrepass()
 
 inline bool InteriorSun::IsInteriorWithSun(const RE::TESObjectCELL* cell)
 {
-	return cell && cell->cellFlags.all(RE::TESObjectCELL::Flag::kIsInteriorCell, RE::TESObjectCELL::Flag::kShowSky, RE::TESObjectCELL::Flag::kUseSkyLighting, static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows));
+	auto& physicalSky = globals::features::physicalSky;
+	bool physicalSkyInteriorOverride = physicalSky.loaded && physicalSky.settings.enabled && physicalSky.settings.forceEnableAllInteriorCells;
+	return cell && (cell->cellFlags.all(RE::TESObjectCELL::Flag::kIsInteriorCell, RE::TESObjectCELL::Flag::kShowSky, RE::TESObjectCELL::Flag::kUseSkyLighting, static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows)) || physicalSkyInteriorOverride);
 }
 
 RE::TESWorldSpace* InteriorSun::GetWorldSpace::thunk(RE::TES* tes)
