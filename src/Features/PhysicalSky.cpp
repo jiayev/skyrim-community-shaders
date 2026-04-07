@@ -38,6 +38,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	atmosphereRadius,
 	rayleighFalloff,
 	rayleighScatter,
+	rayleighScatterAP1,
 	aerosolFalloff,
 	aerosolPhaseG,
 	aerosolScatter,
@@ -45,6 +46,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ozoneAltitude,
 	ozoneThickness,
 	ozoneAbsorption,
+	ozoneAbsorptionAP1,
 	fallbackZBottom,
 	cloudRelightMix,
 	cloudOriginalMix,
@@ -279,7 +281,10 @@ void PhysicalSky::SettingsAtmosphere()
 			"Particles much smaller than the wavelength of light. They have almost complete symmetry in forward and backward scattering. "
 			"On earth, they are what makes the sky blue and, at sunset, red. Usually needs no extra change.");
 
-		ImGui::ColorEdit3("Scatter", &settings.rayleighScatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3("Scatter (sRGB)", &settings.rayleighScatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3("Scatter (AP1)", &settings.rayleighScatterAP1.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Band-averaged coefficients for ACEScg (AP1) primaries, computed via CIE 1931 spectral integration.");
 		ImGui::SliderFloat("Falloff", &settings.rayleighFalloff, 0.f, 2.f, "%.2f km^-1");
 		ImGui::PopID();
 	}
@@ -307,7 +312,10 @@ void PhysicalSky::SettingsAtmosphere()
 			"The ozone layer high up in the sky that mainly absorbs light of certain wavelength. "
 			"It keeps the zenith sky blue, especially at sunrise or sunset.");
 
-		ImGui::ColorEdit3("Absorption", &settings.ozoneAbsorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3("Absorption (sRGB)", &settings.ozoneAbsorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3("Absorption (AP1)", &settings.ozoneAbsorptionAP1.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Band-averaged coefficients for ACEScg (AP1) primaries, computed via CIE 1931 spectral integration.");
 		ImGui::DragFloat("Mean Altitude", &settings.ozoneAltitude, .1f, 0.f, 100.f, "%.3f km");
 		ImGui::DragFloat("Layer Thickness", &settings.ozoneThickness, .1f, 0.f, 50.f, "%.3f km");
 		ImGui::PopID();
@@ -574,9 +582,12 @@ void PhysicalSky::Reset()
 	adaptAmount = std::min(1.f, std::max(0.f, adaptAmount));
 	float exposure = settings.dayExposure * exp(log(settings.nightExposure / settings.dayExposure) * adaptAmount);
 
-	// Wide gamut support: when ACEScg is active, transform all color/spectral parameters
+	// Wide gamut support: when ACEScg is active, transform color parameters
 	// from sRGB gamut to AP1 gamut so that the LUTs are natively generated in AP1 space.
-	// This avoids lossy post-hoc color space conversion of the LUT output.
+	// Spectral scattering/absorption coefficients use pre-computed AP1 band-averaged
+	// values (from CIE 1931 spectral integration) rather than color-space matrix
+	// transforms, since they represent wavelength-dependent physical quantities,
+	// not tristimulus colors.
 	bool wideGamut = linearLighting.settings.enableACEScg && linearLighting.settings.enableLinearLighting;
 	auto sRGBToWorkingGamut = [wideGamut](float3 v) -> float3 {
 		if (!wideGamut)
@@ -610,14 +621,14 @@ void PhysicalSky::Reset()
 		.cloudShadowRemapRange = settings.cloudShadowRemapRange,
 		.aerosolFalloff = settings.aerosolFalloff * Util::Units::GAME_UNIT_TO_KM,
 		.aerosolPhaseG = settings.aerosolPhaseG,
-		.aerosolScatter = sRGBToWorkingGamut(settings.aerosolScatter) * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
+		.aerosolScatter = settings.aerosolScatter * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
 		.halfResApShadow = settings.halfResApShadow ? 1u : 0u,
-		.aerosolAbsorption = sRGBToWorkingGamut(settings.aerosolAbsorption) * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
+		.aerosolAbsorption = settings.aerosolAbsorption * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
 		.rayleighFalloff = settings.rayleighFalloff * Util::Units::GAME_UNIT_TO_KM,
-		.rayleighScatter = sRGBToWorkingGamut(settings.rayleighScatter) * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
+		.rayleighScatter = (wideGamut ? settings.rayleighScatterAP1 : settings.rayleighScatter) * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
 		.ozoneAltitude = settings.ozoneAltitude / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneThickness = settings.ozoneThickness / Util::Units::GAME_UNIT_TO_KM,
-		.ozoneAbsorption = sRGBToWorkingGamut(settings.ozoneAbsorption) * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
+		.ozoneAbsorption = (wideGamut ? settings.ozoneAbsorptionAP1 : settings.ozoneAbsorption) * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
 		.cloudRelightMix = settings.cloudRelightMix,
 		.cloudOriginalMix = settings.cloudOriginalMix,
 		.silverLiningMix = settings.silverLiningMix,
