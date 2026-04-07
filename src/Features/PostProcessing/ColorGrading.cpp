@@ -5,6 +5,7 @@
 
 #include "ColourSpace.h"
 #include "Features/HDRDisplay.h"
+#include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
 
 #include <DDSTextureLoader.h>
@@ -426,7 +427,10 @@ void ColorGrading::DrawSettings()
 		constexpr int kSDRColorSpace = 0;    // sRGB / BT709 gamut
 		const int outputColorSpace = hdrEnabled ? kHDRColorSpace : kSDRColorSpace;
 
-		ImGui::TextDisabled("Input Color Space: %s (fixed)", spaces[kInputColorSpace]);
+		auto& llSettings = globals::features::linearLighting.settings;
+		const bool wideGamutActive = llSettings.enableACEScg && llSettings.enableLinearLighting;
+		const char* inputSpaceName = wideGamutActive ? spaces[5] : spaces[0];
+		ImGui::TextDisabled("Input Color Space: %s (%s)", inputSpaceName, wideGamutActive ? "auto-detected from Linear Lighting ACEScg" : "fixed");
 		ImGui::Combo("Working Color Space", &settings.processColorSpace, spaces.data(), (int)spaces.size());
 		ImGui::TextDisabled("Output Color Space: %s (auto from HDR Display)", spaces[outputColorSpace]);
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -485,9 +489,12 @@ void ColorGrading::UpdateColorSpaceTransforms(bool hdrEnabled)
 
 	auto& tonemappers = TonemapperInfo::GetTonemappers();
 
-	constexpr int kInputColorSpace = 0;  // sRGB
-	constexpr int kHDRColorSpace = 2;    // BT2020
-	constexpr int kSDRColorSpace = 0;    // sRGB / BT709 gamut
+	// Auto-detect input color space: ACEScg when wide gamut mode is active, otherwise sRGB
+	auto& llSettings = globals::features::linearLighting.settings;
+	const bool wideGamutActive = llSettings.enableACEScg && llSettings.enableLinearLighting;
+	const int kInputColorSpace = wideGamutActive ? 5 : 0;  // 5 = ACEScg, 0 = sRGB
+	constexpr int kHDRColorSpace = 2;                      // BT2020
+	constexpr int kSDRColorSpace = 0;                      // sRGB / BT709 gamut
 	const int outputColorSpace = hdrEnabled ? kHDRColorSpace : kSDRColorSpace;
 	const int tonemapInputSpace = tonemappers[tonemapperType].nativeInputSpace;
 	const int tonemapOutputSpace = (hdrEnabled && tonemappers[tonemapperType].supportsHDR) ? tonemappers[tonemapperType].nativeOutputSpaceHDR : tonemappers[tonemapperType].nativeOutputSpace;
@@ -654,9 +661,12 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	// Always compute XYZ matrices for white balance
 	{
 		auto& spaces = getAvailableColourSpaces();
+		auto& llSettings = globals::features::linearLighting.settings;
+		const bool wideGamutActive = llSettings.enableACEScg && llSettings.enableLinearLighting;
+		int defaultInputIdx = wideGamutActive ? 5 : 0;  // 5 = ACEScg, 0 = sRGB
 		int wsIdx = settings.enableColorSpaceTransform ?
 		                std::clamp(settings.processColorSpace, 0, static_cast<int>(spaces.size()) - 1) :
-		                0;
+		                defaultInputIdx;
 		auto storeMatrix = [](const DirectX::SimpleMath::Matrix& mat, std::array<float3, 3>& out) {
 			out = {
 				float3{ mat(0, 0), mat(0, 1), mat(0, 2) },

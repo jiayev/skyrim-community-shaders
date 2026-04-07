@@ -1,6 +1,7 @@
 #include "LinearLighting.h"
 
 #include "State.h"
+#include "Util.h"
 
 #include "JiayeStatement.h"
 
@@ -8,6 +9,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
 	enableLinearLighting,
 	enableGammaCorrection,
+	enableACEScg,
 	lightGamma,
 	colorGamma,
 	emitColorGamma,
@@ -37,6 +39,9 @@ void LinearLighting::DrawSettings()
 {
 	ImGui::Checkbox("Enable Linear Lighting", (bool*)&settings.enableLinearLighting);
 	ImGui::Checkbox("Enable Gamma Correction", (bool*)&settings.enableGammaCorrection);
+	ImGui::Checkbox("Enable ACEScg Wide Gamut", (bool*)&settings.enableACEScg);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Render in ACEScg color space for wider gamut and more accurate lighting.\nRequires Linear Lighting and Post Processing enabled.\nAll sRGB-gamut textures and colors will be converted to ACEScg during shading.");
 
 	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("General")) {
@@ -158,6 +163,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	auto data = PerFrameData{};
 	data.enableLinearLighting = settings.enableLinearLighting && !isMainLoadingMenu;
 	data.enableGammaCorrection = settings.enableGammaCorrection;
+	data.enableACEScg = settings.enableACEScg && settings.enableLinearLighting && !isMainLoadingMenu;
 	data.isDirLightLinear = isDirLightLinear;
 	data.dirLightMult = dirLightMult;
 	data.lightGamma = settings.lightGamma;

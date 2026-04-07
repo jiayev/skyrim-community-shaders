@@ -218,6 +218,7 @@ namespace SharedData
 	{
 		uint enableLinearLighting;
 		uint enableGammaCorrection;
+		uint enableACEScg;
 		uint isDirLightLinear;
 		float dirLightMult;
 		float lightGamma;
@@ -244,6 +245,9 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
+		float _pad0;
+		float _pad1;
+		float _pad2;
 	};
 
 	struct TerrainBlendingSettings

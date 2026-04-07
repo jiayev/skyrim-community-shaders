@@ -3,6 +3,7 @@
 #include "CloudShadows.h"
 #include "Deferred.h"
 #include "LinearLighting.h"
+#include "PostProcessing/ColourSpace.h"
 #include "SkySync.h"
 #include "TerrainShadows.h"
 #include "VolumetricShadows.h"
@@ -59,6 +60,16 @@ namespace
 			ImGui::TextWrapped(str);
 			ImGui::EndTable();
 		}
+	}
+
+	// Transform a float3 color/coefficient by a 3x3 color space matrix stored in a 4x4 Matrix
+	float3 TransformColor(const float3& v, const DirectX::SimpleMath::Matrix& m)
+	{
+		return {
+			v.x * m._11 + v.y * m._12 + v.z * m._13,
+			v.x * m._21 + v.y * m._22 + v.z * m._23,
+			v.x * m._31 + v.y * m._32 + v.z * m._33
+		};
 	}
 }
 
@@ -565,39 +576,50 @@ void PhysicalSky::Reset()
 	adaptAmount = std::min(1.f, std::max(0.f, adaptAmount));
 	float exposure = settings.dayExposure * exp(log(settings.nightExposure / settings.dayExposure) * adaptAmount);
 
+	// Wide gamut support: when ACEScg is active, transform all color/spectral parameters
+	// from sRGB gamut to AP1 gamut so that the LUTs are natively generated in AP1 space.
+	// This avoids lossy post-hoc color space conversion of the LUT output.
+	bool wideGamut = linearLighting.settings.enableACEScg && linearLighting.settings.enableLinearLighting;
+	auto sRGBToWorkingGamut = [wideGamut](float3 v) -> float3 {
+		if (!wideGamut)
+			return v;
+		static auto mat = getRGBMatrix("sRGB", "ACEScg");
+		return TransformColor(v, mat);
+	};
+
 	cbData = {
 		.texDim = res,
 		.rcpTexDim = float2(1.0f) / res,
 		.frameDim = dynres,
 		.rcpFrameDim = float2(1.0f) / dynres,
 		.sunDir = { sunDir.x, sunDir.y, sunDir.z },
-		.sunlightColor = settings.sunlightColor * exposure,
+		.sunlightColor = sRGBToWorkingGamut(settings.sunlightColor) * exposure,
 		.trMix = settings.trMix,
 		.masserDir = { masserDir.x, masserDir.y, masserDir.z },
 		.apLumMix = settings.apLumMix,
-		.masserColor = settings.masserColor * exposure,
+		.masserColor = sRGBToWorkingGamut(settings.masserColor) * exposure,
 		.apTrMix = settings.apTrMix,
 		.secundaDir = { secundaDir.x, secundaDir.y, secundaDir.z },
 		.sunDiskCos = cos(settings.sunDiskRad) * (settings.proceduralSun ? 1.f : 0.f),
-		.secundaColor = settings.secundaColor * exposure,
+		.secundaColor = sRGBToWorkingGamut(settings.secundaColor) * exposure,
 		.enabled = allGood,
 		.tonemapper = linearLighting.settings.enableLinearLighting ? 0 : settings.tonemapper,
 		.vanillaMix = settings.vanillaMix,
 		.zBottom = zBottom,
 		.rPlanet = settings.planetRadius / Util::Units::GAME_UNIT_TO_KM,
 		.rAtmosphere = settings.atmosphereRadius / Util::Units::GAME_UNIT_TO_KM,
-		.groundAlbedo = settings.groundAlbedo,
+		.groundAlbedo = sRGBToWorkingGamut(settings.groundAlbedo),
 		.cloudShadowRemapRange = settings.cloudShadowRemapRange,
 		.aerosolFalloff = settings.aerosolFalloff * Util::Units::GAME_UNIT_TO_KM,
 		.aerosolPhaseG = settings.aerosolPhaseG,
-		.aerosolScatter = settings.aerosolScatter * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.aerosolScatter = sRGBToWorkingGamut(settings.aerosolScatter) * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
 		.halfResApShadow = settings.halfResApShadow ? 1u : 0u,
-		.aerosolAbsorption = settings.aerosolAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.aerosolAbsorption = sRGBToWorkingGamut(settings.aerosolAbsorption) * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
 		.rayleighFalloff = settings.rayleighFalloff * Util::Units::GAME_UNIT_TO_KM,
-		.rayleighScatter = settings.rayleighScatter * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.rayleighScatter = sRGBToWorkingGamut(settings.rayleighScatter) * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
 		.ozoneAltitude = settings.ozoneAltitude / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneThickness = settings.ozoneThickness / Util::Units::GAME_UNIT_TO_KM,
-		.ozoneAbsorption = settings.ozoneAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.ozoneAbsorption = sRGBToWorkingGamut(settings.ozoneAbsorption) * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
 		.cloudRelightMix = settings.cloudRelightMix,
 		.cloudOriginalMix = settings.cloudOriginalMix,
 		.silverLiningMix = settings.silverLiningMix,
