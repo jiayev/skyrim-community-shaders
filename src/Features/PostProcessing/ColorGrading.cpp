@@ -422,9 +422,8 @@ void ColorGrading::DrawSettings()
 		auto& hdr = globals::features::hdrDisplay;
 		const bool hdrEnabled = hdr.loaded && hdr.settings.enableHDR;
 
-		constexpr int kInputColorSpace = 0;  // sRGB
-		constexpr int kHDRColorSpace = 2;    // BT2020
-		constexpr int kSDRColorSpace = 0;    // sRGB / BT709 gamut
+		constexpr int kHDRColorSpace = 2;  // BT2020
+		constexpr int kSDRColorSpace = 0;  // sRGB / BT709 gamut
 		const int outputColorSpace = hdrEnabled ? kHDRColorSpace : kSDRColorSpace;
 
 		auto& llSettings = globals::features::linearLighting.settings;
