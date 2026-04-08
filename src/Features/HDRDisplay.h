@@ -12,7 +12,7 @@ struct HDRDisplay : public Feature
 	virtual inline std::string GetName() override { return "HDR Display"; }
 	virtual inline std::string GetShortName() override { return "HDRDisplay"; }
 	virtual inline std::string_view GetCategory() const override { return "Display"; }
-	virtual inline bool SupportsVR() override { return true; }
+	virtual inline bool SupportsVR() override { return false; }
 	virtual inline bool IsCore() const override { return false; }
 
 	virtual inline std::string_view GetShaderDefineName() override { return "HDR_OUTPUT"; }
@@ -27,8 +27,8 @@ struct HDRDisplay : public Feature
 			"Real High Dynamic Range output for HDR displays.",
 			{
 				"HDR10 output support (10-bit) with upgraded HDR buffers (16-Bit), and fully unclamped rendering pipeline for true HDR values.",
-				"Upgraded DICE tonemapper for HDR, keeping Skyrim's distinct look while improving highlight handling and color vibrancy.",
-				"Configurable paper white and peak brightness",
+				"HDR-aware tonemapping based on Skyrim's ISHDR path (Reinhard/Hejl-Burgess-Dawson), preserving the vanilla look while improving highlight handling on HDR displays.",
+				"Configurable paper white and peak brightness.",
 			}
 		};
 	}
@@ -38,7 +38,7 @@ struct HDRDisplay : public Feature
 		bool enableHDR = false;           // false = vanilla SDR, true = HDR output
 		uint hdrPaperWhite = 203;         // Reference white brightness in nits for HDR
 		uint hdrPeakNits = 800;           // Maximum display brightness in nits for HDR
-		float hdrUIBrightness = 2.3f;     // UI brightness multiplier for HDR mode
+		float hdrUIBrightness = 1.0f;     // UI brightness multiplier for HDR mode
 		bool dontShowHDRWarning = false;  // User preference to suppress HDR warning popup
 		bool hdrAutoDetected = false;     // Has auto-detection run at least once?
 	};
