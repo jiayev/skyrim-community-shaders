@@ -1,10 +1,3 @@
-/**
- * @file ISHDR.hlsl
- * @brief Imagespace tonemap (DOWNSAMPLE / BLEND). HDR BLEND: SDR tonemap + DICE, output gamma BT.709; user paper white applied in HDROutputCS.
- *
- * @see HDROutputCS.hlsl
- */
-
 #include "Common/Color.hlsli"
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
@@ -46,18 +39,58 @@ cbuffer PerGeometry : register(b2)
 	float4 BlurOffsets[16] : packoffset(c7);
 };
 
-/// Reinhard tonemapping operator
-float3 GetTonemapFactorReinhard(float3 luminance)
+float ReinhardDerivative(float x, float p)
 {
-	return (luminance * (luminance * Param.y + 1)) / (luminance + 1);
+	return (p * x * x + 2.0 * p * x + 1.0) / ((x + 1.0) * (x + 1.0));
 }
 
-/// Hejl-Burgess-Dawson filmic tonemapping operator (includes gamma)
-float3 GetTonemapFactorHejlBurgessDawson(float3 luminance)
+// finds f'(x) = x for the Reinhard operator, which can be used as a branching point for piecewise tonemapping to preserve highlights
+float ReinhardFindBranchingPoint(float p)
+{
+	float inner = 31.0 - 46.0 * p + 27.0 * p * p - 8.0 * p * p * p - 4.0 * p * p * p * p;
+	float A = 29.0 - 21.0 * p + 6.0 * p * p + 2.0 * p * p * p + 3.0 * sqrt(3.0) * sqrt(inner);
+
+	float cbrtA = pow(A, 1.0 / 3.0);
+	float cbrt2 = pow(2.0, 1.0 / 3.0);
+
+	return (p - 2.0) / 3.0 - (-1.0 - 2.0 * p - p * p) / (3.0 * cbrt2 * cbrt2 * cbrtA) + cbrtA / (3.0 * cbrt2);
+}
+
+/// Reinhard tonemapping operator
+float3 GetTonemapFactorReinhard(float3 luminance, bool isHDR = false)
+{
+	float p = Param.y;
+	float3 tonemapped = (luminance * (luminance * p + 1)) / (luminance + 1);
+
+	if (isHDR && p < 1.0) {
+		float x0 = ReinhardFindBranchingPoint(p);
+		float y0 = (x0 * (x0 * p + 1.0)) / (x0 + 1.0);
+
+		float m = ReinhardDerivative(x0, p);
+		float b = y0 - m * x0;
+
+		float3 extended = m * luminance + b;
+
+		tonemapped = lerp(tonemapped, extended, step(x0, luminance));
+	}
+
+	return tonemapped;
+}
+
+/// Hejl-Burgess-Dawson filmic tonemapping operator
+/// modified to output in linear instead of gamma
+/// includes an HDR mode that skips the highlight rolloff
+float3 GetTonemapFactorHejlBurgessDawson(float3 luminance, bool isHDR = false)
 {
 	float3 tmp = max(0, luminance - 0.004);
-	return Param.y *
-	       pow(((tmp * 6.2 + 0.5) * tmp) / (tmp * (tmp * 6.2 + 1.7) + 0.06), Color::GammaCorrectionValue);
+	float3 color = Color::SrgbToLinear(((tmp * 6.2 + 0.5) * tmp) / (tmp * (tmp * 6.2 + 1.7) + 0.06));
+
+	if (isHDR)  // branch before shoulder (f''(x) = 0)
+	{
+		color = (luminance < 0.0843247172) ? color : (1.47829915 * luminance - 0.0321621545);
+	}
+
+	return Param.y * color;
 }
 
 #	include "Common/DisplayMapping.hlsli"
@@ -134,89 +167,69 @@ PS_OUTPUT main(PS_INPUT input)
 		inputColor *= avgValue.y / avgValue.x;
 	inputColor = max(0, inputColor);
 
+	float3 blendedColor;
+
+	[branch] if (Param.z > 0.5)
+	{
+		blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor, isHDR);
+	}
+	else
+	{
+		float maxCol = Color::RGBToLuminance(inputColor);
+		float mappedMax = GetTonemapFactorReinhard(maxCol, isHDR).x;
+		float3 compressedHuePreserving = inputColor * mappedMax / maxCol;
+		blendedColor = compressedHuePreserving;
+		blendedColor += saturate(Param.x - (1.0 - exp2(-blendedColor))) * bloomColor;
+	}
+
+	float blendedLuminance = Color::RGBToLuminance(blendedColor);
+	float3 tintedColor = Cinematic.w * lerp(lerp(blendedLuminance, blendedColor, Cinematic.x), blendedLuminance * Tint.xyz, Tint.w).xyz;
+	float3 contrastedColor = lerp(avgValue.x, tintedColor, Cinematic.z);
+
+	// Contrast modified to fix crushed shadows
+	float3 contrastedColorModified = pow(abs(tintedColor) / avgValue.x, Cinematic.z) * avgValue.x * sign(tintedColor);
+	contrastedColor = lerp(contrastedColorModified, contrastedColor, saturate(contrastedColorModified / 0.1f));  // blend in modified contrast for shadows
+
+	outputColor = contrastedColor;
+
+#		if defined(FADE)
+	outputColor = lerp(outputColor, Fade.xyz, Fade.w);
+#		endif
+
+	if (SharedData::linearLightingSettings.enableLinearLighting && SharedData::linearLightingSettings.enableGammaCorrection) {
+		outputColor = Color::GammaToLinearSafe(outputColor);
+	}
+
 	if (isHDR) {
-		// pw = 203 nits here; user paper white in HDROutputCS.
-		static const float HDR_TONEMAP_REF_WHITE_NITS = 203.0;
-		float peakNits = hdrShared.z;
-		float pw = HDR_TONEMAP_REF_WHITE_NITS / sRGB_WhiteLevelNits;
-		float peak = peakNits / sRGB_WhiteLevelNits;
+		if (!ENABLE_LL)
+			outputColor = Color::GammaToLinearSafe(outputColor);
+		float paperWhiteNits = max(hdrShared.y, 1e-6);
+		float peakWhiteRatio = max(hdrShared.z / paperWhiteNits, 1.0);  // peakNits / paperWhite
 
-		// Bloom "mask" so that dark pixels (things occluding the sun) don't get bloom applied to them.
-		float3 hdrInputLinear = ENABLE_LL ? inputColor : Color::SkyrimGammaToLinear(inputColor);
-		float3 bloomLinear = ENABLE_LL ? bloomColor : Color::SkyrimGammaToLinear(bloomColor);
-		float sceneL = Color::RGBToLuminance(hdrInputLinear);
-		float bloomL = Color::RGBToLuminance(bloomLinear);
-		const float bloomOccDenom = 0.54;
-		float bloomKeep = saturate(sceneL / (bloomL * bloomOccDenom + 1e-6));
-		float3 bloomForDice = bloomLinear * bloomKeep;
-		float3 bloomColorMod = bloomColor * bloomKeep;
+		// reduce highlights
+		float y_in = Color::RGBToLuminance(outputColor);
+		float highlight_start = 1.f;
+		float y_in_normalized = y_in / highlight_start;
+		float y_out = (y_in_normalized > 1.0) ? pow(y_in_normalized, 0.85) : y_in_normalized;
+		y_out *= highlight_start;
+		float scale = (y_in > 0.0) ? (y_out / y_in) : 0.0;
+		outputColor *= scale;
 
-		float3 sdrTonemapped;
+		// force stronger hue shift
+		outputColor = Color::Correct::Hue(outputColor, DisplayMapping::RangeCompress(outputColor, 1.f, 6.f), 0.25f);
 
-		[branch] if (Param.z > 0.5)
-		{
-			sdrTonemapped = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColorMod);
-		}
-		else
-		{
-			float maxCol = Color::RGBToLuminance(inputColor);
-			float mappedMax = GetTonemapFactorReinhard(maxCol).x;
-			float3 compressedHuePreserving = inputColor * mappedMax / maxCol;
-			sdrTonemapped = compressedHuePreserving;
-
-			sdrTonemapped += saturate(Param.x - sdrTonemapped) * bloomColorMod;
-		}
-
-		float sdrLuminance = Color::RGBToLuminance(sdrTonemapped);
-		float3 sdrGraded = Cinematic.w * lerp(lerp(sdrLuminance, sdrTonemapped, Cinematic.x), sdrLuminance * Tint.xyz, Tint.w).xyz;
-		sdrGraded = lerp(avgValue.x, sdrGraded, Cinematic.z);
-		sdrGraded = max(0.0, sdrGraded);
-
-#		if defined(FADE)
-		sdrGraded = lerp(sdrGraded, Fade.xyz, Fade.w);
-#		endif
-
-		float3 sdrLinear = Color::SkyrimGammaToLinear(max(0.0, sdrGraded));
-		float3 sdrBase = sdrLinear * pw;
-
-		float shoulderStart = pw / peak;
-		float3 hdrScene = (hdrInputLinear + bloomForDice) * pw;
-		float3 diceLinear = DisplayMapping::DICETonemap(hdrScene, peak, shoulderStart, CS_BT709, CS_BT709);
-
-		float diceBlend = saturate(Color::RGBToLuminance(hdrInputLinear * pw) / max(peak, 1e-6));
-		float3 hdrLinearOut = lerp(sdrBase, diceLinear, diceBlend);
-
-		outputColor = Color::LinearToSkyrimGamma(max(0.0, hdrLinearOut));
+		// map to display peak
+		outputColor = Color::BT709ToBT2020(outputColor);
+		outputColor = exp2(DisplayMapping::RangeCompress(log2(max(0, outputColor)), log2(0.4 * peakWhiteRatio), log2(peakWhiteRatio), log2(100.f)));
+		outputColor = Color::BT2020ToBT709(outputColor);
+		if (!ENABLE_LL)
+			outputColor = Color::LinearToGammaSafe(outputColor);
 	} else {
-		float3 blendedColor;
-
-		[branch] if (Param.z > 0.5)
-		{
-			blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor);
-		}
-		else
-		{
-			float maxCol = Color::RGBToLuminance(inputColor);
-			float mappedMax = GetTonemapFactorReinhard(maxCol).x;
-			float3 compressedHuePreserving = inputColor * mappedMax / maxCol;
-			blendedColor = compressedHuePreserving;
-			blendedColor += saturate(Param.x - blendedColor) * bloomColor;
-		}
-
-		float blendedLuminance = Color::RGBToLuminance(blendedColor);
-		float3 linearColor = Cinematic.w * lerp(lerp(blendedLuminance, blendedColor, Cinematic.x), blendedLuminance * Tint.xyz, Tint.w).xyz;
-		linearColor = lerp(avgValue.x, linearColor, Cinematic.z);
-		outputColor = max(0, linearColor);
-
-#		if defined(FADE)
-		outputColor = lerp(outputColor, Fade.xyz, Fade.w);
-#		endif
-
-		if (SharedData::linearLightingSettings.enableLinearLighting && SharedData::linearLightingSettings.enableGammaCorrection) {
-			outputColor = Color::LinearToSrgb(outputColor);
-		}
+		outputColor = max(0, outputColor);
 		outputColor = FrameBuffer::ToSRGBColor(outputColor);
 	}
+
+	// outputColor = blendedColor; // debug: bypass color grading and hdr display mapping
 
 	psout.Color = float4(outputColor, 1.0);
 

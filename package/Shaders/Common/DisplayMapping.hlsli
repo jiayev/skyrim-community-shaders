@@ -6,96 +6,6 @@
 
 namespace DisplayMapping
 {
-	// =============================================================================
-	// DICE Tonemapper (Simplified for DICE_TYPE_BY_LUMINANCE_PQ)
-	// Licenced under MIT
-	// Copyright (c) 2024+ Filippo Tarpini
-	// https://github.com/Filoppi/Luma-Framework/blob/main/Shaders/Includes/DICE.hlsl
-	// =============================================================================
-
-	namespace DICE
-	{
-		// Applies exponential ("Photographic") luminance compression.
-		float3 RangeCompress(float3 X, float Max = FLT_MAX)
-		{
-			float3 compression = 1.f - exp(-X);
-			if (Max == FLT_MAX)
-				return compression;
-
-			const float maxCompression = 1.f - exp(-Max);
-			return compression / maxCompression;
-		}
-
-		float RangeCompress(float X, float Max = FLT_MAX)
-		{
-			return RangeCompress(X.xxx, Max).x;
-		}
-
-		// DICE HDR tonemapper per luminance.
-		float3 LuminanceCompress(
-			float3 InValue,
-			float OutMaxValue,
-			float ShoulderStart = 0.f,
-			bool ConsiderMaxValue = false,
-			float InMaxValue = FLT_MAX)
-		{
-			const float3 compressableValue = InValue - ShoulderStart;
-			const float compressableRange = InMaxValue - ShoulderStart;
-			const float compressedRange = OutMaxValue - ShoulderStart;
-			return ShoulderStart + compressedRange * RangeCompress(compressableValue / compressedRange, ConsiderMaxValue ? (compressableRange / compressedRange) : FLT_MAX);
-		}
-
-		float LuminanceCompress(
-			float InValue,
-			float OutMaxValue,
-			float ShoulderStart = 0.f,
-			bool ConsiderMaxValue = false,
-			float InMaxValue = FLT_MAX)
-		{
-			return LuminanceCompress(InValue.xxx, OutMaxValue, ShoulderStart, ConsiderMaxValue, InMaxValue).x;
-		}
-	}
-
-	// Tonemapper inspired from DICE. Works by luminance to maintain hue.
-	// Takes BT.709 colors with a white level of 80 nits (sRGB).
-	// Paper white is expected to have already been multiplied in the color.
-	// ShoulderStart: 0.0-1.0 ratio of PeakWhite where compression starts (e.g., 0.5 = start at 50% of peak)
-	float3 DICETonemap(float3 Color, float PeakWhite, float ShoulderStart, uint InOutColorSpace, uint ProcessingColorSpace)
-	{
-		const float sourceLuminance = average(FromColorSpaceToColorSpace(Color, InOutColorSpace, ProcessingColorSpace));
-		const float shoulderStart = ShoulderStart * PeakWhite;
-
-		static const float HDR10_MaxWhite = HDR10_MaxWhiteNits / sRGB_WhiteLevelNits;
-
-		const float shoulderStartPerceptual = Linear_to_PQ((shoulderStart / HDR10_MaxWhite).xxx, GCT_DEFAULT).x;
-		const float peakWhitePerceptual = Linear_to_PQ((PeakWhite / HDR10_MaxWhite).xxx, GCT_DEFAULT).x;
-
-		Color = FromColorSpaceToColorSpace(Color, InOutColorSpace, ProcessingColorSpace);
-
-		const float sourceLuminanceNormalized = sourceLuminance / HDR10_MaxWhite;
-		const float sourceLuminancePerceptual = Linear_to_PQ(sourceLuminanceNormalized.xxx, GCT_POSITIVE).x;
-
-		if (sourceLuminancePerceptual > shoulderStartPerceptual) {
-			const float compressedLuminancePerceptual = DICE::LuminanceCompress(sourceLuminancePerceptual, peakWhitePerceptual, shoulderStartPerceptual, false, FLT_MAX);
-			const float compressedLuminanceNormalized = PQ_to_Linear(compressedLuminancePerceptual.xxx, GCT_DEFAULT).x;
-			Color *= compressedLuminanceNormalized / sourceLuminanceNormalized;
-
-			// Slight desaturation in compressed highlights (PQ-distance–weighted toward white).
-			const float highlightT =
-				saturate((sourceLuminancePerceptual - shoulderStartPerceptual) / max(peakWhitePerceptual - shoulderStartPerceptual, 1e-6));
-			const float maxHighlightDesat = 0.5;
-			float desat = highlightT * highlightT * maxHighlightDesat;
-			float luma = Color::RGBToLuminance(max(Color, 0.0));
-			Color = lerp(Color, luma.xxx, desat);
-		}
-
-		return FromColorSpaceToColorSpace(Color, ProcessingColorSpace, InOutColorSpace);
-	}
-
-	// =============================================================================
-	// End DICE Tonemapper
-	// =============================================================================
-
 	// https://www.ea.com/frostbite/news/high-dynamic-range-color-grading-and-display-in-frostbite
 
 	// Applies exponential ("Photographic") luma compression
@@ -117,6 +27,47 @@ namespace DisplayMapping
 			RangeCompress(val.x, threshold),
 			RangeCompress(val.y, threshold),
 			RangeCompress(val.z, threshold));
+	}
+
+	float RangeCompress(float val, float threshold, float maxValue)
+	{
+		if (val < threshold)
+			return val;
+		if (maxValue <= threshold)
+			return threshold;
+
+		float range = maxValue - threshold;
+		return threshold + range * RangeCompress((val - threshold) / range);
+	}
+
+	float3 RangeCompress(float3 val, float threshold, float maxValue)
+	{
+		return float3(
+			RangeCompress(val.x, threshold, maxValue),
+			RangeCompress(val.y, threshold, maxValue),
+			RangeCompress(val.z, threshold, maxValue));
+	}
+
+	float RangeCompress(float val, float threshold, float maxValue, float clip)
+	{
+		if (val < threshold)
+			return val;
+		if (maxValue <= threshold)
+			return threshold;
+
+		float range = maxValue - threshold;
+		float clipValue = 1.0 - exp((threshold - clip) / range);
+		float rolloffValue = 1.0 - exp(-(val - threshold) / range);
+
+		return threshold + range * (rolloffValue / clipValue);
+	}
+
+	float3 RangeCompress(float3 val, float threshold, float maxValue, float clip)
+	{
+		return float3(
+			RangeCompress(val.x, threshold, maxValue, clip),
+			RangeCompress(val.y, threshold, maxValue, clip),
+			RangeCompress(val.z, threshold, maxValue, clip));
 	}
 
 	static const float PQ_constant_N = (2610.0 / 4096.0 / 4.0);
@@ -221,7 +172,7 @@ namespace DisplayMapping
 	}
 
 #if defined(PSHADER) && defined(BLEND)
-	float3 HuePreservingHejlBurgessDawson(float3 col, float3 bloomCol)
+	float3 HuePreservingHejlBurgessDawson(float3 col, float3 bloomCol, bool isHDR = false)
 	{
 		float3 ictcp = RGBToICtCp(col);
 
@@ -230,7 +181,7 @@ namespace DisplayMapping
 		col = ICtCpToRGB(ictcp * float3(1, saturationAmount.xx));
 
 		// Non-hue preserving mapping
-		float3 perChannelCompressed = GetTonemapFactorHejlBurgessDawson(col);
+		float3 perChannelCompressed = GetTonemapFactorHejlBurgessDawson(col, isHDR);
 		perChannelCompressed += saturate(Param.x - perChannelCompressed) * bloomCol;
 
 		col = perChannelCompressed;
@@ -249,8 +200,9 @@ namespace DisplayMapping
 
 		return col;
 	}
+
 #endif
 
-}
+}  // namespace DisplayMapping
 
 #endif  // __DISPLAY_MAPPING_DEPENDENCY_HLSL__
