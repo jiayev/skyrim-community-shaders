@@ -118,15 +118,17 @@ struct PhysicalSky final : public Feature
 		float planetRadius = 6.36e3f;      // in km
 		float atmosphereRadius = 6.42e3f;  // in km
 
-		float rayleighFalloff = 1 / 8.69645f;                    // in km^-1
-		float3 rayleighScatter = { 6.6049f, 12.345f, 29.413f };  // in megameter^-1
+		float rayleighFalloff = 1 / 8.69645f;                         // in km^-1
+		float3 rayleighScatter = { 6.6049f, 12.345f, 29.413f };       // in megameter^-1 (sRGB band-averaged)
+		float3 rayleighScatterAP1 = { 6.9344f, 12.0203f, 28.9100f };  // in megameter^-1 (AP1 band-averaged via CIE 1931 spectral integration)
 		float aerosolFalloff = 1 / 1.2f;
 		float aerosolPhaseG = 0.8f;
 		float3 aerosolScatter = { 39.96f, 39.96f, 39.96f };
 		float3 aerosolAbsorption = { 4.44f, 4.44f, 4.44f };
 		float ozoneAltitude = 22.3499f + 35.66071f * .5f;  // in km
 		float ozoneThickness = 35.66071f;
-		float3 ozoneAbsorption = { 2.2911f, 1.5404f, 0 };
+		float3 ozoneAbsorption = { 2.2911f, 1.5404f, 0 };        // sRGB band-averaged
+		float3 ozoneAbsorptionAP1 = { 2.2499f, 1.6602f, 0.0f };  // AP1 band-averaged via CIE 1931 spectral integration
 
 		float cloudRelightMix = 1.f;
 		float cloudOriginalMix = 0.5f;
