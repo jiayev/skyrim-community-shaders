@@ -23,6 +23,7 @@
 #include "Features/PostProcessing.h"
 #include "Features/Raytracing.h"
 #include "Features/RenderDoc.h"
+#include "Features/SceneGraphExplorer.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skin.h"
@@ -243,6 +244,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::extendedTranslucency,
 		&globals::features::upscaling,
 		&globals::features::renderDoc,
+		&globals::features::raytracing,
+		&globals::features::sceneGraphExplorer,
 		&globals::features::weatherEditor,
 		&globals::features::linearLighting,
 		&globals::features::unifiedWater,
@@ -250,7 +253,6 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::hdrDisplay,
 		&globals::features::postProcessing,
 		&globals::features::physicalSky,
-		&globals::features::raytracing,
 		&globals::features::skin
 	};
 

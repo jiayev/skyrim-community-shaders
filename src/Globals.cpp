@@ -22,6 +22,7 @@
 #include "Features/PostProcessing.h"
 #include "Features/Raytracing.h"
 #include "Features/RenderDoc.h"
+#include "Features/SceneGraphExplorer.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skin.h"
@@ -96,6 +97,7 @@ namespace globals
 		Skin skin{};
 		DX12Interop dx12Interop{};
 		Raytracing raytracing{};
+		SceneGraphExplorer sceneGraphExplorer{};
 
 		namespace llf
 		{

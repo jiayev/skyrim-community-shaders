@@ -36,6 +36,7 @@ struct ExtendedTranslucency;
 struct Upscaling;
 struct WeatherEditor;
 struct Raytracing;
+struct SceneGraphExplorer;
 struct ExponentialHeightFog;
 struct HDRDisplay;
 struct PostProcessing;
@@ -103,6 +104,7 @@ namespace globals
 		extern PostProcessing postProcessing;
 		extern Skin skin;
 		extern Raytracing raytracing;
+		extern SceneGraphExplorer sceneGraphExplorer;
 
 		namespace llf
 		{
