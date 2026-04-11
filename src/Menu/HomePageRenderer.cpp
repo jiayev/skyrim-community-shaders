@@ -186,6 +186,7 @@ void HomePageRenderer::RenderQuickLinksSection()
 	ImGui::Text("About this AIO version");
 
 	static bool englishShown = true;
+	float buttonWidth = ThemeManager::Constants::POPUP_BUTTON_WIDTH;
 	ImGui::SetCursorPosX((windowSize.x - buttonWidth) * 0.5f);
 	if (ImGui::Button("English / 中文", ImVec2(buttonWidth, 0))) {
 		englishShown = !englishShown;
