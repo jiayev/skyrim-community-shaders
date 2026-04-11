@@ -96,6 +96,11 @@ void PostProcessing::DrawSettings()
 				ImGui::TextWrapped(feat->GetDesc().c_str());
 
 				ImGui::Spacing();
+				if (ImGui::Button(ICON_FA_SYNC " Recompile Shaders")) {
+					feat->ClearShaderCache();
+				}
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Recompile shaders for this sub-feature only.");
 				ImGui::Separator();
 				ImGui::Spacing();
 				ImGui::Checkbox("Enabled", &feat->enabled);
@@ -410,6 +415,8 @@ void PostProcessing::SetupResources()
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)] = std::make_unique<DoF>();
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
+		pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)] = std::make_unique<PhysicalGlare>();
+		pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)].get()->enabled = false;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)] = std::make_unique<CODBloom>();
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)] = std::make_unique<LensFlare>();
