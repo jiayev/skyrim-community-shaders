@@ -852,6 +852,7 @@ void Raytracing::UpdateFeatureData()
 	std::memcpy(&featureData->HairSpecular, &globals::features::hairSpecular.settings, sizeof(HairSpecular::Settings));
 	std::memcpy(&featureData->ExtendedTranslucency, &globals::features::extendedTranslucency.GetCommonBufferData(), sizeof(ExtendedTranslucency::PerFrame));
 	std::memcpy(&featureData->LinearLighting, &linearLighting, sizeof(LinearLighting::PerFrameData));
+	std::memcpy(&featureData->ExponentialHeightFog, &globals::features::exponentialHeightFog.settings, sizeof(ExponentialHeightFog::Settings));
 	std::memcpy(&featureData->Skin, &skinData, sizeof(Skin::SkinData));
 
 	auto& physicalSky = globals::features::physicalSky;
@@ -865,6 +866,7 @@ void Raytracing::UpdateFeatureData()
 	static_assert(sizeof(FeatureData::HairSpecular) == sizeof(HairSpecular::Settings));
 	static_assert(sizeof(FeatureData::ExtendedTranslucency) == sizeof(ExtendedTranslucency::PerFrame));
 	static_assert(sizeof(FeatureData::LinearLighting) == sizeof(LinearLighting::PerFrameData));
+	static_assert(sizeof(FeatureData::ExponentialHeightFog) == sizeof(ExponentialHeightFog::Settings));
 	static_assert(sizeof(FeatureData::PhysicalSky) == sizeof(PhysicalSky::CbData));
 	static_assert(sizeof(FeatureData::Skin) == sizeof(Skin::SkinData));
 

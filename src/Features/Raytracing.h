@@ -16,6 +16,7 @@
 #include <DXProgrammableCapture.h>
 
 #include "Features/CloudShadows.h"
+#include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/HairSpecular.h"
@@ -650,6 +651,7 @@ struct Raytracing : public OverlayFeature
 		HairSpecular::Settings HairSpecular;
 		ExtendedTranslucency::PerFrame ExtendedTranslucency;
 		LinearLighting::PerFrameData LinearLighting;
+		ExponentialHeightFog::Settings ExponentialHeightFog;
 		PhysicalSky::CbData PhysicalSky;
 		Skin::SkinData Skin;
 	};
