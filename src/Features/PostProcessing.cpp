@@ -438,6 +438,8 @@ void PostProcessing::SetupResources()
 		}
 	}
 
+	bokehResources.Setup();
+
 	ProcessSettings(pendingSettings);
 	pendingSettings = {};
 }
