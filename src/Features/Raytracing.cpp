@@ -541,7 +541,7 @@ void Raytracing::DrawExperimentalSettings()
 
 	if (experimentalSettings.TextureMode == CreationEngineRaytracing::TextureMode::Exclusive) {
 		auto label = experimentalSettings.TextureCutOff == 0 ? "Never Share" : std::format("Share smaller than {}", 1 << (experimentalSettings.TextureCutOff + 7));
-		ImGui::SliderInt("Exclusive Mode Cutoff", reinterpret_cast<int*>(&experimentalSettings.TextureCutOff), 0, 13, label.c_str());
+		ImGui::SliderInt("Exclusive Mode Cutoff", reinterpret_cast<int*>(&experimentalSettings.TextureCutOff), 0, 6, label.c_str());
 	}
 
 	ImGui::PopID();
@@ -613,29 +613,16 @@ void Raytracing::DrawOverlay()
 		ImGui::TableSetupColumn("GPU");
 		ImGui::TableHeadersRow();
 
-		CreationEngineRaytracing::PassTiming* passTimings = nullptr;
-		uint32_t numPasses = 0;
+		float totalTime = 0.0f;
 
-		creationEngineRaytracing->GetFrameTime(passTimings, numPasses);
+		for (const auto& passTiming : passTimings) {
+			if (settings.PerfOverlay == OverlayMode::Complete)
+				DrawRow(passTiming.name.c_str(), passTiming.timing);
 
-		if (settings.PerfOverlay == OverlayMode::Simple) {
-			float totalTime = 0.0f;
-
-			for (size_t i = 0; i < numPasses; i++)
-				totalTime += passTimings[i].timing;
-
-			DrawRow("Total", totalTime);
-		} else {
-			float totalTime = 0.0f;
-
-			for (size_t i = 0; i < numPasses; i++) {
-				auto& passTiming = passTimings[i];
-				DrawRow(passTiming.name, passTiming.timing);
-				totalTime += passTiming.timing;
-			}
-
-			DrawRow("Total", totalTime);
+			totalTime += passTiming.timing;
 		}
+
+		DrawRow("Total", totalTime);
 
 		ImGui::EndTable();
 	}
@@ -1224,6 +1211,9 @@ void Raytracing::DeferredPasses()
 		// Waits for path tracing execution to finish
 		creationEngineRaytracing->WaitExecution();
 	}
+
+	if (settings.PerfOverlay != OverlayMode::None)
+		creationEngineRaytracing->GetPassTimings(passTimings);
 
 	auto screenSize = globals::state->screenSize;
 	auto dynamicScreenSize = Util::ConvertToDynamic(screenSize);
