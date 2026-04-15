@@ -262,6 +262,10 @@ void Deferred::StartDeferred()
 	{
 		auto context = globals::d3d::context;
 
+		// Clear POM offset texture to -1.0 sentinel so pixels the Lighting PS never touches read "no POM"
+		if (globals::features::vr.stereoOpt.loaded)
+			globals::features::vr.stereoOpt.ClearPomOffsetTexture();
+
 		ID3D11Buffer* buffers[1] = { *globals::game::perFrame.get() };
 
 		ID3D11Buffer* vrBuffer = nullptr;
@@ -526,10 +530,6 @@ void Deferred::OverrideBlendStates()
 								blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 							}
 
-							// RT[5] = REFLECTANCE: enable alpha writes for POM depth data
-							// stored in Reflectance.w, used by StereoBlendCS for depth-aware reprojection
-							blendDesc.RenderTarget[5].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-
 							DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &deferredBlendStates[a][b][c][d]));
 						} else {
 							deferredBlendStates[a][b][c][d] = nullptr;
@@ -612,7 +612,7 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
 
-		if (REL::Module::IsVR() && globals::features::vr.stereoOpt.loaded)
+		if (REL::Module::IsVR())
 			defines.push_back({ "VR_STEREO_OPT", nullptr });
 
 		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
@@ -643,7 +643,7 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
 
-		if (REL::Module::IsVR() && globals::features::vr.stereoOpt.loaded)
+		if (REL::Module::IsVR())
 			defines.push_back({ "VR_STEREO_OPT", nullptr });
 
 		mainCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
