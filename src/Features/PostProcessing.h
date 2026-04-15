@@ -3,8 +3,10 @@
 #include "PostProcessing/PostProcessFeature.h"
 
 #include "PostProcessing/BloomFlareComposite.h"
+#include "PostProcessing/BokehResources.h"
 #include "PostProcessing/Border.h"
 #include "PostProcessing/CODBloom.h"
+#include "PostProcessing/Camera.h"
 #include "PostProcessing/ColorGrading.h"
 #include "PostProcessing/DoF.h"
 #include "PostProcessing/HistogramAutoExposure.h"
@@ -13,7 +15,6 @@
 #include "PostProcessing/MotionBlur.h"
 #include "PostProcessing/PhysicalGlare.h"
 #include "PostProcessing/Vignette.h"
-#include "PostProcessing/pCamera.h"
 
 struct PostProcessing : Feature
 {
@@ -84,6 +85,8 @@ struct PostProcessing : Feature
 	};
 
 	std::array<std::unique_ptr<PostProcessFeature>, static_cast<size_t>(FeaturePipelineIndex::COUNT)> pipeline;
+
+	BokehResources bokehResources;
 
 	template <typename T>
 	T* GetPipelineFeature(FeaturePipelineIndex idx)

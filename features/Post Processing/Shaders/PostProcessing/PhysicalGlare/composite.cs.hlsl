@@ -51,6 +51,37 @@ cbuffer GlareCB : register(b1)
 	float PSFNoiseFloor;
 	uint EnableEyelashes;
 	float EyelashCurvature;
+
+	// (remaining fields omitted — only needed by aperture/PSF shaders)
+	// Row 5-10: eye/lens mode params (not needed here)
+	uint EyelashCount;
+	float EyelashLength;
+	uint ParticleCount;
+	float ParticleSize;
+	uint GratingCount;
+	float GratingStrength;
+	float TearFilmStrength;
+	float TearFilmSpeed;
+	uint TearFilmComplexity;
+	float TearFilmTime;
+	uint SutureBranches;
+	float SutureStrength;
+	float SutureWidth;
+	uint StarburstCount;
+	float StarburstStrength;
+	float StarburstIrregularity;
+	uint DustCount;
+	float DustSize;
+	uint BladeRoughnessFreq;
+	float BladeRoughnessAmp;
+	uint ScratchCount;
+	float ScratchOpacity;
+	float ScratchLength;
+	float ScratchWidth;
+	float SphericalAberration;
+	uint UseAP1;
+	float KernelScale;
+	float _pad11;
 };
 
 // ---------------------------------------------------------------------------
@@ -105,9 +136,14 @@ float CatmullRomSample(Texture2D<float2> tex, SamplerState samp, float2 uv, floa
 	// Map screen UV [0,1] → IFFT UV [P, 1-P], reading only the centre
 	// region that contained the original scene within the zero-padded
 	// texture [1, section 2.5].
+	// KernelScale zooms into the center of the IFFT result:
+	// 1.0 = full glare extent, <1.0 = more concentrated/smaller glare.
 	float sceneScale = 1.0 - 2.0 * PaddingRatio;
 	float2 uv = (float2(tid) + 0.5) / float2(ScreenWidth, ScreenHeight);
+	float2 centerUV = float2(0.5, 0.5);
 	float2 ifftUV = uv * sceneScale + PaddingRatio;
+	// Apply KernelScale: zoom toward center of the IFFT buffer
+	ifftUV = (ifftUV - centerUV) / max(KernelScale, 0.01) + centerUV;
 
 	// Bicubic (Catmull-Rom) upsample — eliminates blocky artifacts at high upscale ratios
 	float2 texSize = float2(FFTResolution, FFTResolution);
@@ -121,12 +157,13 @@ float CatmullRomSample(Texture2D<float2> tex, SamplerState samp, float2 uv, floa
 	if (any(isnan(glare)) || any(isinf(glare)))
 		glare = 0;
 
-	// Energy-conserving composite:
-	// Subtract the thresholded bright component and add the convolved
+	// Energy-conserving glare contribution:
+	// Subtract the thresholded bright component and output the convolved
 	// (spread) result.  At Intensity = 1 total energy is redistributed,
 	// not gained.  Values != 1 allow artistic attenuation or exaggeration.
+	// This output is combined with the scene in the BloomFlareComposite pass.
 	float3 bright = max(0, scene - Threshold);
-	float3 output = scene + (glare - bright) * Intensity;
+	float3 output = (glare - bright) * Intensity;
 
 	// Clamp to prevent negative values at Intensity > 1.0
 	output = max(output, 0);
