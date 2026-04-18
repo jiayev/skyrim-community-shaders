@@ -42,7 +42,8 @@ struct CreationEngineRaytracing
 	{
 		None,
 		NRD_REBLUR,
-		DLSS_RR
+		DLSS_RR,
+		Accumulation
 	};
 
 	struct GeneralSettings
@@ -434,6 +435,7 @@ struct CreationEngineRaytracing
 	using UpdateJitterFn = void (*)(float2);
 	using SetSkinDetailNormalFn = void (*)(ID3D12Resource*);
 	using SetPTOutputTargetsFn = void (*)(ID3D12Resource*, ID3D12Resource*);
+	using GetAccumulatedFrameCountFn = uint32_t (*)();
 
 	InitializeRendererFn InitializeRenderer = nullptr;
 	InitializeFn Initialize = nullptr;
@@ -453,6 +455,7 @@ struct CreationEngineRaytracing
 	UpdateJitterFn UpdateJitter = nullptr;
 	SetSkinDetailNormalFn SetSkinDetailNormal = nullptr;
 	SetPTOutputTargetsFn SetPTOutputTargets = nullptr;
+	GetAccumulatedFrameCountFn GetAccumulatedFrameCount = nullptr;
 
 	CreationEngineRaytracing()
 	{
@@ -555,6 +558,11 @@ struct CreationEngineRaytracing
 
 		if (!SetPTOutputTargets)
 			logger::warn("[Raytracing] 'CreationEngineRaytracing.dll' SetPTOutputTargets is nullptr (older version?)");
+
+		GetAccumulatedFrameCount = reinterpret_cast<GetAccumulatedFrameCountFn>(GetProcAddress(handle, "GetAccumulatedFrameCount"));
+
+		if (!GetAccumulatedFrameCount)
+			logger::warn("[Raytracing] 'CreationEngineRaytracing.dll' GetAccumulatedFrameCount is nullptr (older version?)");
 	}
 };
 
