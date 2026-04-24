@@ -474,6 +474,7 @@ void Skylighting::SetViewFrustumVR::thunk(RE::NiCamera* a_camera, RE::NiFrustum*
 
 void Skylighting::RenderOcclusion()
 {
+	ZoneScopedS(8);
 	auto shaderCache = globals::shaderCache;
 	auto state = globals::state;
 	auto renderer = globals::game::renderer;
@@ -574,8 +575,11 @@ void Skylighting::RenderOcclusion()
 				PrecipitationShaderDirection = { PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z };
 
 				static REL::Relocation<void(RE::Precipitation*, RE::NiPointer<RE::NiCamera>)> _computeProjection{ REL::RelocationID(25643, 26185) };
-				_computeProjection(precip, precip->occlusionData.camera);
-				precip->SetupMask();
+				{
+					ZoneScopedN("Skylighting - Setup Projection");
+					_computeProjection(precip, precip->occlusionData.camera);
+					precip->SetupMask();
+				}
 
 				BSParticleShaderRainEmitter* rain = new BSParticleShaderRainEmitter;
 				{
@@ -596,7 +600,10 @@ void Skylighting::RenderOcclusion()
 
 				precipitation = precipitationCopy;
 
-				_computeProjection(precip, precip->occlusionData.camera);
+				{
+					ZoneScopedN("Skylighting - Restore Projection");
+					_computeProjection(precip, precip->occlusionData.camera);
+				}
 
 				state->EndPerfEvent();
 			}
