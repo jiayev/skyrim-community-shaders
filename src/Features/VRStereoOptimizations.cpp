@@ -96,7 +96,7 @@ void VRStereoOptimizations::SetupResources()
 	auto renderer = globals::game::renderer;
 
 	// Constant buffers
-	paramsCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<VRStereoOptParams>());
+	paramsCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<VRStereoOptParams>(), "VRStereoOpt::ParamsCB");
 
 	// Get main RT dimensions for per-eye calculations
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
@@ -118,7 +118,7 @@ void VRStereoOptimizations::SetupResources()
 		modeDesc.CPUAccessFlags = 0;
 		modeDesc.MiscFlags = 0;
 
-		texPerPixelMode = eastl::make_unique<Texture2D>(modeDesc);
+		texPerPixelMode = eastl::make_unique<Texture2D>(modeDesc, "VRStereoOpt::PerPixelMode");
 		texPerPixelMode->CreateSRV(D3D11_SHADER_RESOURCE_VIEW_DESC{
 			.Format = DXGI_FORMAT_R8_UINT,
 			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
@@ -146,7 +146,7 @@ void VRStereoOptimizations::SetupResources()
 		pomDesc.CPUAccessFlags = 0;
 		pomDesc.MiscFlags = 0;
 
-		texPomOffset = eastl::make_unique<Texture2D>(pomDesc);
+		texPomOffset = eastl::make_unique<Texture2D>(pomDesc, "VRStereoOpt::PomOffset");
 		texPomOffset->CreateSRV(D3D11_SHADER_RESOURCE_VIEW_DESC{
 			.Format = DXGI_FORMAT_R16_FLOAT,
 			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
@@ -174,6 +174,7 @@ void VRStereoOptimizations::SetupResources()
 		dssDesc.BackFace = dssDesc.FrontFace;
 
 		DX::ThrowIfFailed(device->CreateDepthStencilState(&dssDesc, stencilWriteDSS.put()));
+		Util::SetResourceName(stencilWriteDSS.get(), "VRStereoOpt::StencilWriteDSS");
 	}
 
 	// Rasterizer state for stencil write: no culling, no depth clip

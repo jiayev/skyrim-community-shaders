@@ -1,6 +1,7 @@
 #include "ScreenSpaceShadows.h"
 
 #include "State.h"
+#include "Utils/D3D.h"
 
 #pragma warning(push)
 #pragma warning(disable: 4838 4244)
@@ -345,10 +346,10 @@ bool ScreenSpaceShadows::HasShaderDefine(RE::BSShader::Type)
 
 void ScreenSpaceShadows::SetupResources()
 {
-	raymarchCB = new ConstantBuffer(ConstantBufferDesc<RaymarchCB>());
+	raymarchCB = new ConstantBuffer(ConstantBufferDesc<RaymarchCB>(), "SSS::RaymarchCB");
 
 	if (globals::game::isVR) {
-		stereoSyncCB = new ConstantBuffer(ConstantBufferDesc<StereoSyncCB>());
+		stereoSyncCB = new ConstantBuffer(ConstantBufferDesc<StereoSyncCB>(), "SSS::StereoSyncCB");
 	}
 
 	{
@@ -367,6 +368,7 @@ void ScreenSpaceShadows::SetupResources()
 		samplerDesc.BorderColor[2] = 1.0f;
 		samplerDesc.BorderColor[3] = 1.0f;
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointBorderSampler));
+		Util::SetResourceName(pointBorderSampler, "SSS::PointBorderSampler");
 	}
 
 	{
@@ -389,12 +391,12 @@ void ScreenSpaceShadows::SetupResources()
 			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 }
 		};
-		screenSpaceShadowsTexture = new Texture2D(texDesc);
+		screenSpaceShadowsTexture = new Texture2D(texDesc, "SSS::ShadowTexture");
 		screenSpaceShadowsTexture->CreateSRV(srvDesc);
 		screenSpaceShadowsTexture->CreateUAV(uavDesc);
 
 		if (globals::game::isVR) {
-			stereoSyncCopyTex = new Texture2D(texDesc);
+			stereoSyncCopyTex = new Texture2D(texDesc, "SSS::StereoSyncCopy");
 			stereoSyncCopyTex->CreateSRV(srvDesc);
 		}
 	}

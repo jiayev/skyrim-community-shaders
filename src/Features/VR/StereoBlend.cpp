@@ -143,6 +143,7 @@ void VR::DrawStereoBlend()
 			sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
 			sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
 			globals::d3d::device->CreateSamplerState(&sampDesc, stereoBlendLinearSampler.put());
+			Util::SetResourceName(stereoBlendLinearSampler.get(), "VR::StereoBlendLinearSampler");
 		}
 		ID3D11SamplerState* samplers[] = { stereoBlendLinearSampler.get() };
 		context->CSSetSamplers(0, 1, samplers);
