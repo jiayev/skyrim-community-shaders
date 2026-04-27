@@ -133,6 +133,23 @@ void Raytracing::DrawSettings()
 {
 	bool forcedDisabledReason = disableReason != DisableReason::None;
 
+	if (forcedDisabledReason) {
+		ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Ray tracing is disabled: %s", [&]() {
+			switch (disableReason) {
+			case DisableReason::UnsupportedGPU:
+				return "Unsupported GPU.";
+			case DisableReason::OutdatedDrivers:
+				return "Outdated Drivers.";
+			case DisableReason::MissingPlugin:
+				return "Missing 'CreationEngineRaytracing.dll', check your mod manager.";
+			case DisableReason::InitFailed:
+				return "Initialization Failed, check CreationEngineRaytracing.txt log";
+			default:
+				return "Unknown Reason";
+			}
+		}());
+	}
+
 	if (forcedDisabledReason)
 		ImGui::BeginDisabled();
 
@@ -170,26 +187,6 @@ void Raytracing::DrawSettings()
 	if (ptMode)
 		ImGui::EndDisabled();
 
-	if (forcedDisabledReason)
-		ImGui::EndDisabled();
-
-	if (forcedDisabledReason) {
-		ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Ray tracing is disabled: %s", [&]() {
-			switch (disableReason) {
-			case DisableReason::UnsupportedGPU:
-				return "Unsupported GPU.";
-			case DisableReason::OutdatedDrivers:
-				return "Outdated Drivers.";
-			case DisableReason::MissingPlugin:
-				return "Missing 'CreationEngineRaytracing.dll', check your mod manager.";
-			case DisableReason::InitFailed:
-				return "Initialization Failed, check CreationEngineRaytracing.txt log";
-			default:
-				return "Unknown Reason";
-			}
-		}());
-	}
-
 	if (ImGui::BeginTabBar("Settings")) {
 		DrawGeneralSettings();
 		DrawAdvancedSettings();
@@ -199,6 +196,9 @@ void Raytracing::DrawSettings()
 
 		ImGui::EndTabBar();
 	}
+
+	if (forcedDisabledReason)
+		ImGui::EndDisabled();
 
 	if (ceRTSettingsBefore != settings.CreationEngineRaytracingSettings)
 		UpdateSettings();
@@ -653,6 +653,9 @@ bool Raytracing::Active() const
 	if (!loaded)
 		return false;
 
+	if (forcedDisabled)
+		return false;
+
 	if (!settings.CreationEngineRaytracingSettings.Enabled)
 		return false;
 
@@ -664,6 +667,9 @@ bool Raytracing::Active() const
 
 void Raytracing::Load()
 {
+	if (forcedDisabled)
+		return;
+
 	Hooks::Install();
 }
 
@@ -686,6 +692,9 @@ void Raytracing::PostPostLoad()
 
 void Raytracing::DataLoaded()
 {
+	if (forcedDisabled)
+		return;
+
 	BGSActorCellEventHandler::Register();
 }
 
@@ -712,6 +721,9 @@ void Raytracing::CompileShaders()
 
 void Raytracing::InitializeCERaytracing(ID3D11Device5* d3d11Device, ID3D12Device5* d3d12Device, ID3D12CommandQueue* commandQueue, ID3D12CommandQueue* computeCommandQueue, ID3D12CommandQueue* copyCommandQueue)
 {
+	if (forcedDisabled)
+		return;
+
 	if (initialized)
 		return;
 
@@ -775,6 +787,9 @@ void ShareTexture(ID3D11Texture2D* d3d11Texture, ID3D12Resource** d3d12Resource,
 
 void Raytracing::SetupResources()
 {
+	if (forcedDisabled)
+		return;
+
 	auto renderer = globals::game::renderer;
 
 	D3D11_TEXTURE2D_DESC mainDesc;

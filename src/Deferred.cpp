@@ -361,7 +361,7 @@ void Deferred::DeferredPasses()
 
 	auto& physSky = globals::features::physicalSky;
 
-	if (auto& rt = globals::features::raytracing; rt.loaded) {
+	if (auto& rt = globals::features::raytracing; rt.Active()) {
 		rt.DeferredPasses();
 		skipDeferredComposite = rt.settings.CreationEngineRaytracingSettings.Enabled &&
 		                        rt.Mode() == CreationEngineRaytracing::Mode::PathTracing;

@@ -349,7 +349,7 @@ struct PS_OUTPUT
 #	if defined(SNOW)
 	float4 Parameters: SV_Target7;
 #	elif defined(RAYTRACING)
-	float4 GeomNormalMetalnessAO: SV_Target7;
+	float4 MetallicAO: SV_Target7;
 #	endif
 };
 #else
@@ -3457,6 +3457,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TRUE_PBR)
 	const float roughness = material.Roughness;
 	const float metallic = material.Metallic;
+	const float ao = material.AO;
+
 #		else
 	const float specularity = VanillaToPBR::CalcSpecularity(material.SpecularColor, glossiness);
 	const float roughness = VanillaToPBR::ShininessToRoughness(material.Shininess) * (1.0f - specularity);
@@ -3467,6 +3469,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	const float metallic = 0.0f;
 #			endif
 
+	const float ao = 1.0f;
 #		endif  // !TRUE_PBR
 
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - roughness), psout.Diffuse.w);
@@ -3499,21 +3502,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(RAYTRACING)
 #			if !defined(SNOW)
-
-	float3 worldGeomNormal;
-
-#				if defined(MODELSPACENORMALS)
-	float3 dd_x = ddx(input.WorldPosition.xyz);
-	float3 dd_y = ddy(input.WorldPosition.xyz);
-
-	worldGeomNormal = -normalize(cross(dd_x, dd_y));
-#				else
-	worldGeomNormal = vertexNormal;
-#				endif
-
-	float3 screenGeomNormal = normalize(FrameBuffer::WorldToView(worldGeomNormal, false, eyeIndex));
-
-	psout.GeomNormalMetalnessAO = float4(GBuffer::EncodeNormal(screenGeomNormal), metallic, psout.Diffuse.w);
+	psout.MetallicAO = float4(metallic, ao, 0, psout.Diffuse.w);
 #			endif  // !defined(SNOW)
 #		endif      // !defined(RAYTRACING)
 #	endif          // DEFERRED
