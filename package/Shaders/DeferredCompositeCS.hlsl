@@ -17,7 +17,14 @@ Texture2D<float3> MasksTexture : register(t3);
 RWTexture2D<float4> MainRW : register(u0);
 RWTexture2D<float4> NormalTAAMaskSpecularMaskRW : register(u1);
 RWTexture2D<float2> MotionVectorsRW : register(u2);
+
+// 24/32-bit depth: TerrainBlending ON -> R32_FLOAT (no unorm),
+// OFF -> R24_UNORM_X8_TYPELESS game depth (unorm).
+#if defined(TERRAIN_BLENDING)
 Texture2D<float> DepthTexture : register(t4);
+#else
+Texture2D<unorm float> DepthTexture : register(t4);
+#endif
 
 #if defined(VR_STEREO_OPT)
 #	include "VRStereoOptimizations/modes.hlsli"
