@@ -145,20 +145,17 @@ jobs:
                   fi
                   python tools/feature_version_audit.py "${ARGS[@]}"
 
-                  # Inject GitHub release body as the core changelog.
-                  # Fetch releases list as raw JSON and let Python search it — avoids
-                  # jq version quirks where array[0] on an empty array produces no output
-                  # instead of null, leaving the file empty and breaking json.load.
-                  gh api "repos/$GITHUB_REPOSITORY/releases" \
-                    2>/dev/null > releases.json || echo '[]' > releases.json
+                  # Fetch the specific release by tag — avoids pagination issues with
+                  # the releases list endpoint (default page size is 30).
+                  gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+                    2>/dev/null > release.json || echo '{}' > release.json
                   python -c "
                   import json, os
-                  with open('releases.json') as f:
-                      releases = json.load(f)
-                  if not isinstance(releases, list):
-                      releases = []
-                  tag = os.environ.get('RELEASE_TAG', '')
-                  body = next((r.get('body') or '' for r in releases if r.get('tag_name') == tag), '')
+                  with open('release.json') as f:
+                      release = json.load(f)
+                  if not isinstance(release, dict):
+                      release = {}
+                  body = release.get('body') or ''
                   with open('nexus-matrix-raw.json') as f:
                       data = json.load(f)
                   for row in data:
@@ -170,11 +167,26 @@ jobs:
                   "
 
                   python -c "
-                  import json
+                  import json, os, fnmatch
                   with open('nexus-matrix-raw.json') as f:
                       data = json.load(f)
+                  # Load asset names from the release to skip uploads where the
+                  # artifact was not included — applies to all rows including core.
+                  try:
+                      with open('release.json') as f:
+                          release = json.load(f)
+                      if not isinstance(release, dict):
+                          release = {}
+                  except Exception:
+                      release = {}
+                  asset_names = [a['name'] for a in release.get('assets', [])]
+                  def artifact_in_release(row):
+                      pat = row.get('artifact_pattern', '')
+                      return bool(pat) and any(fnmatch.fnmatch(n, pat) for n in asset_names)
                   # Full matrix for artifact prep; upload matrix excludes auto_upload=false
-                  upload_data = [row for row in data if row.get('auto_upload', True)]
+                  # and features whose standalone artifact is absent from the release.
+                  upload_data = [row for row in data
+                                 if row.get('auto_upload', True) and artifact_in_release(row)]
                   has_uploads = bool(upload_data)
                   with open('nexus-matrix.json', 'w') as f:
                       json.dump({'include': data}, f)
@@ -211,7 +223,7 @@ jobs:
             - name: Download GitHub release assets
               run: |
                   mkdir -p release-assets
-                  gh release download "${{ needs.prepare-nexus-matrix.outputs.tag }}" --pattern "*.7z" --dir release-assets
+                  gh release download "${{ needs.prepare-nexus-matrix.outputs.tag }}" --repo "$GITHUB_REPOSITORY" --pattern "*.7z" --dir release-assets
                   ls -lah release-assets
               env:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -262,6 +274,92 @@ jobs:
                     fi
                   fi
 
+    check-nexus-versions:
+        name: Dry Run — Check Nexus Versions
+        needs: prepare-nexus-matrix
+        if: >
+            needs.prepare-nexus-matrix.outputs.dry_run == 'true' &&
+            needs.prepare-nexus-matrix.outputs.has_uploads == 'true'
+        runs-on: ubuntu-latest
+        steps:
+            - name: Query Nexus for existing versions
+              run: |
+                  python3 << 'PYEOF'
+                  import json, os, urllib.request, urllib.error
+
+                  rows = json.loads(os.environ['UPLOAD_MATRIX']).get('include', [])
+                  rows = [r for r in rows if not r.get('skip')]
+                  version = os.environ.get('VERSION', '')
+                  game_id = os.environ.get('NEXUS_GAME_ID', 'skyrimspecialedition')
+                  api_key = os.environ.get('UNEX_APIKEY', '')
+                  summary = open(os.environ['GITHUB_STEP_SUMMARY'], 'a')
+
+                  def w(line=''):
+                      print(line)
+                      summary.write(line + '\n')
+
+                  w('## Dry Run — Nexus Version Check')
+                  w()
+                  if not api_key:
+                      w('> **Warning:** UNEX_APIKEY is not set — cannot query Nexus.')
+                      w()
+                  w('| Feature | Planned | Status | Versions on Nexus |')
+                  w('|---------|---------|--------|-------------------|')
+
+                  api_ok = False
+                  for row in rows:
+                      name = row.get('name', '')
+                      mod_id = str(row.get('nexus_mod_id', ''))
+                      planned = row.get('mod_version') or version
+                      label = row.get('mod_filename', name)
+                      url = f'https://www.nexusmods.com/{game_id}/mods/{mod_id}'
+                      link = f'[{label}]({url})'
+
+                      if not api_key or not mod_id:
+                          w(f'| {link} | `{planned}` | ⚠️ skipped | — |')
+                          continue
+
+                      api_url = f'https://api.nexusmods.com/v1/games/{game_id}/mods/{mod_id}/files.json'
+                      req = urllib.request.Request(api_url, headers={
+                          'apikey': api_key,
+                          'User-Agent': 'community-shaders-ci/1.0',
+                          'Accept': 'application/json',
+                      })
+                      try:
+                          with urllib.request.urlopen(req, timeout=15) as resp:
+                              data = json.load(resp)
+                          api_ok = True
+                          files = data.get('files', [])
+                          main = [f for f in files if f.get('category_name') == 'MAIN']
+                          check = main if main else files
+                          seen = []
+                          for f in check:
+                              v = f.get('version', '')
+                              if v and v not in seen:
+                                  seen.append(v)
+                          versions_str = ', '.join(f'`{v}`' for v in seen[-5:]) or '—'
+                          status = '✅ exists' if planned in seen else '🆕 new'
+                          w(f'| {link} | `{planned}` | {status} | {versions_str} |')
+                      except urllib.error.HTTPError as e:
+                          err = {401: '❌ auth failed', 403: '❌ forbidden'}.get(e.code, f'❌ HTTP {e.code}')
+                          w(f'| {link} | `{planned}` | {err} | — |')
+                      except Exception:
+                          w(f'| {link} | `{planned}` | ❌ error | — |')
+
+                  w()
+                  if api_key:
+                      if api_ok:
+                          w('> ✓ UNEX_APIKEY validated.')
+                      else:
+                          w('> ⚠️ UNEX_APIKEY may be invalid — all API calls failed.')
+                  summary.close()
+                  PYEOF
+              env:
+                  UPLOAD_MATRIX: ${{ needs.prepare-nexus-matrix.outputs.upload_matrix }}
+                  VERSION: ${{ needs.prepare-nexus-matrix.outputs.version }}
+                  NEXUS_GAME_ID: ${{ inputs.nexus_game_id || 'skyrimspecialedition' }}
+                  UNEX_APIKEY: ${{ secrets.UNEX_APIKEY }}
+
     upload-to-nexus:
         # Reusable workflow call: runs-on is intentionally omitted (runner is defined by the
         # called workflow). IDE schema validators may flag this as an error — it is valid syntax.
@@ -282,7 +380,8 @@ jobs:
             tag_name: ${{ needs.prepare-nexus-matrix.outputs.tag }}
             mod_version: ${{ matrix.mod_version || needs.prepare-nexus-matrix.outputs.version }}
             mod_filename: ${{ matrix.mod_filename }}
-            changelog: ${{ matrix.changelog || inputs.changelog || '' }}
+            changelog: ${{ inputs.changelog || matrix.changelog || '' }}
+            check_existing: true
         secrets:
             UNEX_NEXUSMODS_SESSION_COOKIE: ${{ secrets.UNEX_NEXUSMODS_SESSION_COOKIE }}
             UNEX_APIKEY: ${{ secrets.UNEX_APIKEY }}
@@ -290,7 +389,7 @@ jobs:
     upload-summary:
         name: Upload Summary
         runs-on: ubuntu-latest
-        needs: [prepare-nexus-matrix, prepare-artifacts, upload-to-nexus]
+        needs: [prepare-nexus-matrix, prepare-artifacts, upload-to-nexus, check-nexus-versions]
         if: always() && needs.prepare-nexus-matrix.result == 'success'
         steps:
             - name: Check upload status
@@ -314,17 +413,53 @@ jobs:
             - name: Report upload result
               if: needs.prepare-nexus-matrix.outputs.dry_run != 'true' && needs.prepare-nexus-matrix.outputs.has_uploads == 'true'
               run: |
-                  RESULT="${{ needs.upload-to-nexus.result }}"
-                  if [ "$RESULT" = "success" ]; then
-                    echo "✓ All Nexus uploads completed successfully" >> $GITHUB_STEP_SUMMARY
-                    echo "" >> $GITHUB_STEP_SUMMARY
-                    echo "- [Community Shaders](https://www.nexusmods.com/skyrimspecialedition/mods/86492)" >> $GITHUB_STEP_SUMMARY
-                  else
-                    echo "⚠️ Some uploads failed or were skipped (result: $RESULT)" >> $GITHUB_STEP_SUMMARY
-                    echo "" >> $GITHUB_STEP_SUMMARY
-                    echo "**Recovery steps:**" >> $GITHUB_STEP_SUMMARY
-                    echo "1. Check the upload-to-nexus job logs for details" >> $GITHUB_STEP_SUMMARY
-                    echo "2. Verify credentials: UNEX_NEXUSMODS_SESSION_COOKIE, UNEX_APIKEY" >> $GITHUB_STEP_SUMMARY
-                    echo "3. Download failed artifacts from this workflow run and upload manually" >> $GITHUB_STEP_SUMMARY
-                    echo "4. Or re-run this workflow with the same tag to retry" >> $GITHUB_STEP_SUMMARY
-                  fi
+                  python3 << 'PYEOF'
+                  import json, os
+
+                  result = os.environ.get('UPLOAD_RESULT', '')
+                  rows = json.loads(os.environ['UPLOAD_MATRIX']).get('include', [])
+                  rows = [r for r in rows if not r.get('skip')]
+                  version = os.environ.get('VERSION', '')
+                  game_id = os.environ.get('NEXUS_GAME_ID', 'skyrimspecialedition')
+                  summary = open(os.environ['GITHUB_STEP_SUMMARY'], 'a')
+
+                  def w(line=''):
+                      summary.write(line + '\n')
+
+                  if result == 'success':
+                      w('✅ All Nexus uploads completed successfully')
+                      w()
+                      w('| Feature | Version | Nexus |')
+                      w('|---------|---------|-------|')
+                      for row in rows:
+                          mod_id = str(row.get('nexus_mod_id', ''))
+                          planned = row.get('mod_version') or version
+                          label = row.get('mod_filename', row.get('name', ''))
+                          url = f'https://www.nexusmods.com/{game_id}/mods/{mod_id}'
+                          w(f'| [{label}]({url}) | `{planned}` | [View]({url}) |')
+                  else:
+                      w(f'⚠️ Some uploads may have failed (result: `{result}`)')
+                      w()
+                      w('The following uploads were planned. Re-run this workflow to retry,')
+                      w('or download the artifact and upload manually to Nexus.')
+                      w()
+                      w('| Feature | Version | Nexus | Artifact |')
+                      w('|---------|---------|-------|----------|')
+                      for row in rows:
+                          name = row.get('name', '')
+                          mod_id = str(row.get('nexus_mod_id', ''))
+                          planned = row.get('mod_version') or version
+                          label = row.get('mod_filename', name)
+                          url = f'https://www.nexusmods.com/{game_id}/mods/{mod_id}'
+                          artifact = f'nexus-upload-{name}'
+                          w(f'| [{label}]({url}) | `{planned}` | [View]({url}) | `{artifact}` |')
+                      w()
+                      w('Re-run is safe: already-uploaded versions will be automatically skipped.')
+
+                  summary.close()
+                  PYEOF
+              env:
+                  UPLOAD_RESULT: ${{ needs.upload-to-nexus.result }}
+                  UPLOAD_MATRIX: ${{ needs.prepare-nexus-matrix.outputs.upload_matrix }}
+                  VERSION: ${{ needs.prepare-nexus-matrix.outputs.version }}
+                  NEXUS_GAME_ID: ${{ inputs.nexus_game_id || 'skyrimspecialedition' }}
