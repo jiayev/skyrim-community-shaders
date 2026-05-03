@@ -8,7 +8,6 @@
 #include "SceneSettingsManager.h"
 #include "ShaderCache.h"
 #include "State.h"
-#include "TruePBR.h"
 
 
 #define DLLEXPORT __declspec(dllexport)
@@ -81,7 +80,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		{
 			if (errors.empty()) {
 				Deferred::Hooks::Install();
-				globals::truePBR->PostPostLoad();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
 				FrameAnnotations::OnPostPostLoad();
@@ -131,7 +129,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 					shaderCache->WriteDiskCacheInfo();
 				}
 
-				globals::truePBR->DataLoaded();
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
 			}
 
