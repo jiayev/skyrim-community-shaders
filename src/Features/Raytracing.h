@@ -774,6 +774,10 @@ struct Raytracing : public OverlayFeature
 	winrt::com_ptr<ID3D11ComputeShader> convertTexturesCS[2];
 	winrt::com_ptr<ID3D11ComputeShader> giCompositeCS = nullptr;
 
+	winrt::com_ptr<ID3D11VertexShader> copyDMVVS = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> copyDMVPS = nullptr;
+	winrt::com_ptr<ID3D11DepthStencilState> depthStencilState = nullptr;
+
 	ID3D11Texture2D* lastSkinDetailTexture = nullptr;
 	winrt::com_ptr<ID3D12Resource> skinDetailNormalD3D12 = nullptr;
 

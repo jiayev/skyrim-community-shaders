@@ -3460,10 +3460,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	const float ao = material.AO;
 
 #		else
-	const float specularity = VanillaToPBR::CalcSpecularity(material.SpecularColor, glossiness);
-	const float roughness = VanillaToPBR::ShininessToRoughness(material.Shininess) * (1.0f - specularity);
+	const float roughness = VanillaToPBR::Roughness(material.Shininess, material.SpecularColor, glossiness);
 
-#			if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
+#			if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)) && !defined(EYE)
 	const float metallic = envMask;
 #			else
 	const float metallic = 0.0f;
@@ -3503,8 +3502,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(RAYTRACING)
 #			if !defined(SNOW)
 	psout.MetallicAO = float4(metallic, ao, 0, psout.Diffuse.w);
-#			endif  // !defined(SNOW)
-#		endif      // !defined(RAYTRACING)
+#			endif  // SNOW
+#		endif      // RAYTRACING
 #	endif          // DEFERRED
 
 #	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
