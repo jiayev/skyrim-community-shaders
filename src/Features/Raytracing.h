@@ -269,7 +269,6 @@ struct CreationEngineRaytracing
 		HairBSDF HairBSDF = HairBSDF::FarFieldBCSDF;
 		DiffuseBRDF DiffuseBRDF = DiffuseBRDF::Burley;
 		SSSSettings SSSSettings;
-		bool EnableWater = false;
 		bool StablePlanes = false;
 
 		bool operator==(const AdvancedSettings&) const = default;
@@ -284,7 +283,6 @@ struct CreationEngineRaytracing
 			HairBSDF,
 			DiffuseBRDF,
 			SSSSettings,
-			EnableWater,
 			StablePlanes)
 	};
 
