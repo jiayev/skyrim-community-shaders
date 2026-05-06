@@ -1,10 +1,126 @@
 #include "WeatherUtils.h"
 #include "EditorWindow.h"
 #include "PaletteWindow.h"
+#include "Utils/FileSystem.h"
 #include "Utils/UI.h"
+
+namespace WeatherUtils::TexturePath
+{
+	std::string Normalize(std::string_view path)
+	{
+		std::string result(path);
+		std::transform(result.begin(), result.end(), result.begin(),
+			[](unsigned char c) { return std::tolower(c); });
+		std::replace(result.begin(), result.end(), '/', '\\');
+		return result;
+	}
+
+	bool HasDdsExtension(std::string_view path)
+	{
+		return Normalize(path).ends_with(kDdsExtension);
+	}
+
+	bool ExistsOnDisk(std::string_view path)
+	{
+		const std::string lower = Normalize(path);
+		if (!lower.ends_with(kDdsExtension))
+			return false;
+
+		// Reject absolute paths and ".." traversal
+		const std::filesystem::path fsPath(lower);
+		if (fsPath.is_absolute())
+			return false;
+		for (const auto& part : fsPath)
+			if (part == "..")
+				return false;
+
+		const std::filesystem::path dataPath = Util::PathHelpers::GetDataPath();
+		const std::filesystem::path fullPath = lower.starts_with(kTexturePrefix) ?
+		                                           dataPath / lower :
+		                                           dataPath / kTexturePrefix / lower;
+
+		std::error_code ec;
+		return std::filesystem::exists(fullPath, ec) && !ec;
+	}
+
+	std::string BuildResourcePath(std::string_view path)
+	{
+		std::string result(kResourcePrefix);
+		result.append(path);
+		if (!Normalize(result).ends_with(kDdsExtension))
+			result += kDdsExtension;
+		return result;
+	}
+}
+
+namespace WeatherUtils
+{
+	RE::TESForm* FindFormByEditorID(std::string_view editorID, const std::vector<std::unique_ptr<Widget>>& widgets)
+	{
+		if (editorID.empty())
+			return nullptr;
+		for (const auto& w : widgets)
+			if (w->GetEditorID() == editorID)
+				return w->form;
+		return nullptr;
+	}
+
+	std::string FindEditorIDByForm(const RE::TESForm* form, const std::vector<std::unique_ptr<Widget>>& widgets)
+	{
+		if (!form)
+			return "";
+		for (const auto& w : widgets)
+			if (w->form == form)
+				return w->GetEditorID();
+		return "";
+	}
+}
 
 // Global widget context for undo tracking
 static Widget* g_currentWidget = nullptr;
+
+// Per-widget-type window sizes — shared across all instances of the same widget type
+static std::unordered_map<std::string, ImVec2> s_widgetTypeSizes;
+
+void SetupWidgetWindowDefaults(const char* widgetType)
+{
+	const bool resetting = EditorWindow::GetSingleton()->resetLayout;
+	const auto cond = resetting ? ImGuiCond_Always : ImGuiCond_Appearing;
+	const ImVec2 defaultSize(WidgetDefaults::kInitialWidth * Util::GetUIScale(), WidgetDefaults::kInitialHeight * Util::GetUIScale());
+	auto it = s_widgetTypeSizes.find(widgetType);
+	ImGui::SetNextWindowSize(resetting || it == s_widgetTypeSizes.end() ? defaultSize : it->second, cond);
+}
+
+void UpdateWidgetTypeSize(const char* widgetType)
+{
+	if (!EditorWindow::GetSingleton()->resetLayout && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+		s_widgetTypeSizes[widgetType] = ImGui::GetWindowSize();
+}
+
+void ResetWidgetTypeSizes()
+{
+	s_widgetTypeSizes.clear();
+}
+
+json GetWidgetTypeSizesJson()
+{
+	json j;
+	for (const auto& [type, size] : s_widgetTypeSizes)
+		j[type] = { size.x, size.y };
+	return j;
+}
+
+void SetWidgetTypeSizesFromJson(const json& j)
+{
+	s_widgetTypeSizes.clear();
+	for (auto& [key, val] : j.items()) {
+		if (val.is_array() && val.size() == 2 && val[0].is_number() && val[1].is_number()) {
+			float w = std::max(val[0].get<float>(), WidgetDefaults::kMinWidth);
+			float h = std::max(val[1].get<float>(), WidgetDefaults::kMinHeight);
+			s_widgetTypeSizes[key] = ImVec2(w, h);
+		}
+	}
+}
 
 bool ContainsStringIgnoreCase(const std::string_view a_string, const std::string_view a_substring)
 {
@@ -46,9 +162,9 @@ void Float3ToColor(const float3& f3, RE::Color& color)
 
 void Float3ToColor(const float3& f3, RE::TESWeather::Data::Color3& color)
 {
-	color.red = FloatToInt8(f3.x);
-	color.green = FloatToInt8(f3.y);
-	color.blue = FloatToInt8(f3.z);
+	color.red = FloatToUint8(f3.x);
+	color.green = FloatToUint8(f3.y);
+	color.blue = FloatToUint8(f3.z);
 }
 
 void ColorToFloat3(const RE::Color& color, float3& f3)
@@ -60,9 +176,9 @@ void ColorToFloat3(const RE::Color& color, float3& f3)
 
 void ColorToFloat3(const RE::TESWeather::Data::Color3& color, float3& f3)
 {
-	f3.x = Int8ToFloat(color.red);
-	f3.y = Int8ToFloat(color.green);
-	f3.z = Int8ToFloat(color.blue);
+	f3.x = Uint8ToFloat(color.red);
+	f3.y = Uint8ToFloat(color.green);
+	f3.z = Uint8ToFloat(color.blue);
 }
 
 std::string ColorTimeLabel(const int i)
@@ -164,7 +280,7 @@ namespace WeatherUtils
 		const double debounceDelay = 2.0;
 		double currentTime = ImGui::GetTime();
 
-		bool changed = ImGui::SliderInt(label.c_str(), &property, -128, 127);
+		bool changed = ImGui::SliderInt(label.c_str(), &property, -127, 127);
 		bool isNowActive = ImGui::IsItemActive();
 
 		// Push undo state when slider becomes active
@@ -400,6 +516,7 @@ namespace TOD
 
 	static void DrawCenteredLabel(const char* label)
 	{
+		ImGui::AlignTextToFramePadding();
 		float colWidth = ImGui::GetColumnWidth();
 		float textWidth = ImGui::CalcTextSize(label).x;
 		float offset = (colWidth - textWidth) * 0.5f;
@@ -442,8 +559,7 @@ namespace TOD
 				s_todSliderTracker.OnValueChanged(valueName, values[i], currentTime);
 			}
 
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("%.0f%%", factors[i] * 100.0f);
+			Util::AddTooltip(std::format("{:.0f}%", factors[i] * 100.0f).c_str());
 			ImGui::PopItemWidth();
 
 			if (!isActive)
@@ -578,8 +694,7 @@ namespace TOD
 
 			wasPopupOpen[id] = isPopupOpen;
 
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("%s - %.0f%%", GetPeriodName(i), factors[i] * 100.0f);
+			Util::AddTooltip(std::format("{} - {:.0f}%", GetPeriodName(i), factors[i] * 100.0f).c_str());
 
 			ImGui::EndChild();
 		}
@@ -627,8 +742,7 @@ namespace TOD
 						changed = true;
 					}
 				}
-				if (ImGui::IsItemHovered())
-					ImGui::SetTooltip("Inherit from parent");
+				Util::AddTooltip("Inherit from parent");
 				ImGui::PopStyleVar();
 				ImGui::SameLine(0, 2 * scale);
 			}
@@ -665,8 +779,7 @@ namespace TOD
 
 			ImGui::EndDisabled();
 
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("%.0f%%", factors[i] * 100.0f);
+			Util::AddTooltip(std::format("{:.0f}%", factors[i] * 100.0f).c_str());
 			ImGui::PopItemWidth();
 
 			if (!isActive || (inheritFlags && inheritFlags[i]))
@@ -728,9 +841,7 @@ namespace TOD
 			ImGui::PopStyleVar();
 			ImGui::PopStyleColor(2);
 
-			if (ImGui::IsItemHovered()) {
-				ImGui::SetTooltip("Inherit from parent weather");
-			}
+			Util::AddTooltip("Inherit from parent weather");
 		}
 
 		if (!anyActive)
@@ -924,9 +1035,7 @@ namespace TOD
 			ImGui::PopStyleVar();
 			ImGui::PopStyleColor(2);
 
-			if (ImGui::IsItemHovered()) {
-				ImGui::SetTooltip("Inherit from parent weather");
-			}
+			Util::AddTooltip("Inherit from parent weather");
 		}
 
 		ImGui::TableSetColumnIndex(1);
@@ -981,11 +1090,10 @@ namespace TOD
 
 			ImGui::PushItemWidth(sliderWidth);
 			std::string id = std::string("##") + label + std::to_string(i);
-			if (ImGui::SliderInt(id.c_str(), &values[i], -128, 127))
+			if (ImGui::SliderInt(id.c_str(), &values[i], -127, 127))
 				changed = true;
 
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("%.0f%%", factors[i] * 100.0f);
+			Util::AddTooltip(std::format("{:.0f}%", factors[i] * 100.0f).c_str());
 
 			ImGui::PopItemWidth();
 
@@ -999,9 +1107,9 @@ namespace TOD
 	bool BeginTODTable(const char* tableId, float paramColumnWidth)
 	{
 		if (paramColumnWidth <= 0.0f)
-			paramColumnWidth = 200.0f;
+			paramColumnWidth = WidgetDefaults::kTODLabelWidth;
 		if (ImGui::BeginTable(tableId, 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
-			ImGui::TableSetupColumn("Parameter", ImGuiTableColumnFlags_WidthFixed, paramColumnWidth);
+			ImGui::TableSetupColumn("Parameter", ImGuiTableColumnFlags_WidthFixed, paramColumnWidth * Util::GetUIScale());
 			ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 			return true;
 		}
@@ -1090,6 +1198,16 @@ namespace PropertyDrawer
 		ImGui::Separator();
 	}
 
+	void DrawLabel(const char* label)
+	{
+		ImGui::TableNextRow();
+		ImGui::TableSetColumnIndex(0);
+		ImGui::AlignTextToFramePadding();
+		ImGui::Text("%s", label);
+		ImGui::TableSetColumnIndex(1);
+		ImGui::SetNextItemWidth(-1);
+	}
+
 	bool MatchesSearch(const char* label, const char* searchBuffer)
 	{
 		if (!searchBuffer || searchBuffer[0] == '\0')
@@ -1103,11 +1221,7 @@ namespace PropertyDrawer
 		if (!MatchesSearch(label, searchBuffer))
 			return false;
 
-		ImGui::TableNextRow();
-		ImGui::TableSetColumnIndex(0);
-		ImGui::Text("%s", label);
-		ImGui::TableSetColumnIndex(1);
-		ImGui::SetNextItemWidth(-1);
+		DrawLabel(label);
 
 		std::string id = std::string("##") + label;
 		return ImGui::SliderFloat(id.c_str(), &value, minVal, maxVal, format);
@@ -1118,11 +1232,7 @@ namespace PropertyDrawer
 		if (!MatchesSearch(label, searchBuffer))
 			return false;
 
-		ImGui::TableNextRow();
-		ImGui::TableSetColumnIndex(0);
-		ImGui::Text("%s", label);
-		ImGui::TableSetColumnIndex(1);
-		ImGui::SetNextItemWidth(-1);
+		DrawLabel(label);
 
 		std::string id = std::string("##") + label;
 		return ImGui::SliderInt(id.c_str(), &value, minVal, maxVal);
@@ -1133,11 +1243,7 @@ namespace PropertyDrawer
 		if (!MatchesSearch(label, searchBuffer))
 			return false;
 
-		ImGui::TableNextRow();
-		ImGui::TableSetColumnIndex(0);
-		ImGui::Text("%s", label);
-		ImGui::TableSetColumnIndex(1);
-		ImGui::SetNextItemWidth(-1);
+		DrawLabel(label);
 
 		return WeatherUtils::DrawColorEdit(label, value);
 	}
@@ -1147,10 +1253,7 @@ namespace PropertyDrawer
 		if (!MatchesSearch(label, searchBuffer))
 			return false;
 
-		ImGui::TableNextRow();
-		ImGui::TableSetColumnIndex(0);
-		ImGui::Text("%s", label);
-		ImGui::TableSetColumnIndex(1);
+		DrawLabel(label);
 
 		std::string id = std::string("##") + label;
 		return ImGui::Checkbox(id.c_str(), &value);

@@ -1,5 +1,6 @@
 #include "PaletteWindow.h"
 #include "EditorWindow.h"
+#include "Menu/ThemeManager.h"
 #include "Utils/UI.h"
 
 // Forward declaration from EditorWindow.cpp
@@ -10,10 +11,20 @@ void PaletteWindow::Draw()
 	if (!open)
 		return;
 
+	const auto* editor = EditorWindow::GetSingleton();
 	const float scale = Util::GetUIScale();
-	ImGui::SetNextWindowSize(ImVec2(600 * scale, 400 * scale), ImGuiCond_FirstUseEver);
-	ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 620 * scale, ImGui::GetIO().DisplaySize.y - 420 * scale), ImGuiCond_FirstUseEver);
-	if (ImGui::Begin("Palette", &open, ImGuiWindowFlags_NoFocusOnAppearing)) {
+	const float pad = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
+	const auto& displaySize = ImGui::GetIO().DisplaySize;
+	const float paletteWidth = std::min(600.0f * scale, displaySize.x - pad * 2.0f);
+	const float bottomY = displaySize.y - pad;
+	const float spaceBelow = bottomY - editor->viewportBottomY - pad;  // room between viewport bottom and screen bottom
+	const float paletteHeight = std::min(400.0f * scale, spaceBelow);
+	const auto layoutCond = editor->resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
+	ImGui::SetNextWindowSize(ImVec2(paletteWidth, paletteHeight), layoutCond);
+	ImGui::SetNextWindowPos(
+		ImVec2(displaySize.x - paletteWidth - pad, bottomY - paletteHeight),
+		layoutCond);
+	if (Util::BeginWithRoundedClose("Palette", &open, ImGuiWindowFlags_NoFocusOnAppearing)) {
 		if (ImGui::BeginTabBar("PaletteTabs")) {
 			if (ImGui::BeginTabItem("Colours")) {
 				DrawColorsTab();
@@ -75,9 +86,7 @@ void PaletteWindow::DrawColorsTab()
 				ImGui::EndPopup();
 			}
 
-			if (ImGui::IsItemHovered()) {
-				ImGui::SetTooltip("RGB: %.3f, %.3f, %.3f\nClick to copy\nRight-click to clear", color.x, color.y, color.z);
-			}
+			Util::AddTooltip(std::format("RGB: {:.3f}, {:.3f}, {:.3f}\nClick to copy\nRight-click to clear", color.x, color.y, color.z).c_str());
 		} else {
 			// Show empty favorite slot with star
 			ImVec4 emptyColor(0.2f, 0.2f, 0.2f, 1.0f);
@@ -94,9 +103,7 @@ void PaletteWindow::DrawColorsTab()
 
 			DrawIconStar(center, starSize, starColor, false);
 
-			if (ImGui::IsItemHovered()) {
-				ImGui::SetTooltip("Drag a colour here to add to favourites");
-			}
+			Util::AddTooltip("Drag a colour here to add to favourites");
 		}
 
 		// Drag-and-drop target
@@ -141,10 +148,9 @@ void PaletteWindow::DrawColorsTab()
 				ImGui::EndDragDropSource();
 			}
 
-			if (ImGui::IsItemHovered()) {
-				ImGui::SetTooltip("RGB: %.3f, %.3f, %.3f\nUsed %d times\nClick to copy",
-					entry->color.x, entry->color.y, entry->color.z, entry->useCount);
-			}
+			Util::AddTooltip(std::format("RGB: {:.3f}, {:.3f}, {:.3f}\nUsed {} times\nClick to copy",
+				entry->color.x, entry->color.y, entry->color.z, entry->useCount)
+					.c_str());
 		}
 	}
 	ImGui::Spacing();
@@ -197,10 +203,9 @@ void PaletteWindow::DrawColorsTab()
 				ImGui::EndPopup();
 			}
 
-			if (ImGui::IsItemHovered()) {
-				ImGui::SetTooltip("RGB: %.3f, %.3f, %.3f\nUsed %d times\nClick to copy\nRight-click to remove",
-					entry->color.x, entry->color.y, entry->color.z, entry->useCount);
-			}
+			Util::AddTooltip(std::format("RGB: {:.3f}, {:.3f}, {:.3f}\nUsed {} times\nClick to copy\nRight-click to remove",
+				entry->color.x, entry->color.y, entry->color.z, entry->useCount)
+					.c_str());
 
 			colorIndex++;
 		}
@@ -224,9 +229,7 @@ void PaletteWindow::DrawValuesTab()
 				ImGui::SetClipboardText(std::to_string(entry->value).c_str());
 			}
 
-			if (ImGui::IsItemHovered()) {
-				ImGui::SetTooltip("Used %d times\nClick to copy", entry->useCount);
-			}
+			Util::AddTooltip(std::format("Used {} times\nClick to copy", entry->useCount).c_str());
 		}
 	}
 	ImGui::Spacing();
@@ -266,9 +269,7 @@ void PaletteWindow::DrawValuesTab()
 				ImGui::EndPopup();
 			}
 
-			if (ImGui::IsItemHovered()) {
-				ImGui::SetTooltip("Used %d times\nClick to copy\nRight-click to remove", entry->useCount);
-			}
+			Util::AddTooltip(std::format("Used {} times\nClick to copy\nRight-click to remove", entry->useCount).c_str());
 		}
 	}
 }

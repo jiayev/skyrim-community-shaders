@@ -6,7 +6,7 @@ public:
 	virtual inline std::string GetName() override { return "Terrain Blending"; }
 	virtual inline std::string GetShortName() override { return "TerrainBlending"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "TERRAIN_BLENDING"; }
-	virtual std::string_view GetCategory() const override { return "Landscape & Textures"; }
+	virtual std::string_view GetCategory() const override { return FeatureCategories::kLandscapeAndTextures; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
@@ -72,6 +72,7 @@ public:
 
 	Texture2D* blendedDepthTexture = nullptr;
 	Texture2D* blendedDepthTexture16 = nullptr;
+	Texture2D* mainDepthCopy = nullptr;  // R32_FLOAT snapshot written inline by DepthBlend CS, replaces CopyResource
 
 	ID3D11ShaderResourceView* GetBlendedDepthSRV() const
 	{

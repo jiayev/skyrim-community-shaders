@@ -82,8 +82,11 @@ void LightLimitFix::SetupResources()
 	uint clusterCount = clusterSize[0] * clusterSize[1] * clusterSize[2];
 
 	{
-		clusterBuildingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0");
-		clusterCullingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0");
+		std::vector<std::pair<const char*, const char*>> clusterDefines;
+		if (REL::Module::IsVR())
+			clusterDefines = { { "VR", "" } };
+		clusterBuildingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", clusterDefines, "cs_5_0");
+		clusterCullingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", clusterDefines, "cs_5_0");
 
 		lightBuildingCB = new ConstantBuffer(ConstantBufferDesc<LightBuildingCB>());
 		lightCullingCB = new ConstantBuffer(ConstantBufferDesc<LightCullingCB>());
@@ -111,7 +114,7 @@ void LightLimitFix::SetupResources()
 
 		sbDesc.StructureByteStride = sizeof(ClusterAABB);
 		sbDesc.ByteWidth = sizeof(ClusterAABB) * numElements;
-		clusters = eastl::make_unique<Buffer>(sbDesc);
+		clusters = eastl::make_unique<Buffer>(sbDesc, nullptr, "LLF::Clusters");
 		srvDesc.Buffer.NumElements = numElements;
 		clusters->CreateSRV(srvDesc);
 		uavDesc.Buffer.NumElements = numElements;
@@ -120,7 +123,7 @@ void LightLimitFix::SetupResources()
 		numElements = 1;
 		sbDesc.StructureByteStride = sizeof(uint32_t);
 		sbDesc.ByteWidth = sizeof(uint32_t) * numElements;
-		lightIndexCounter = eastl::make_unique<Buffer>(sbDesc);
+		lightIndexCounter = eastl::make_unique<Buffer>(sbDesc, nullptr, "LLF::LightIndexCounter");
 		srvDesc.Buffer.NumElements = numElements;
 		lightIndexCounter->CreateSRV(srvDesc);
 		uavDesc.Buffer.NumElements = numElements;
@@ -129,7 +132,7 @@ void LightLimitFix::SetupResources()
 		numElements = clusterCount * CLUSTER_MAX_LIGHTS;
 		sbDesc.StructureByteStride = sizeof(uint32_t);
 		sbDesc.ByteWidth = sizeof(uint32_t) * numElements;
-		lightIndexList = eastl::make_unique<Buffer>(sbDesc);
+		lightIndexList = eastl::make_unique<Buffer>(sbDesc, nullptr, "LLF::LightIndexList");
 		srvDesc.Buffer.NumElements = numElements;
 		lightIndexList->CreateSRV(srvDesc);
 		uavDesc.Buffer.NumElements = numElements;
@@ -138,7 +141,7 @@ void LightLimitFix::SetupResources()
 		numElements = clusterCount;
 		sbDesc.StructureByteStride = sizeof(LightGrid);
 		sbDesc.ByteWidth = sizeof(LightGrid) * numElements;
-		lightGrid = eastl::make_unique<Buffer>(sbDesc);
+		lightGrid = eastl::make_unique<Buffer>(sbDesc, nullptr, "LLF::LightGrid");
 		srvDesc.Buffer.NumElements = numElements;
 		lightGrid->CreateSRV(srvDesc);
 		uavDesc.Buffer.NumElements = numElements;
@@ -153,7 +156,7 @@ void LightLimitFix::SetupResources()
 		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 		sbDesc.StructureByteStride = sizeof(LightData);
 		sbDesc.ByteWidth = sizeof(LightData) * MAX_LIGHTS;
-		lights = eastl::make_unique<Buffer>(sbDesc);
+		lights = eastl::make_unique<Buffer>(sbDesc, nullptr, "LLF::Lights");
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
 		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
@@ -219,9 +222,14 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 	strictLightDataTemp.NumStrictLights = inWorld ? 0 : (a_pass->numLights - 1);
 
+	uint32_t writeIdx = 0;
 	for (uint32_t i = 0; i < strictLightDataTemp.NumStrictLights; i++) {
 		auto bsLight = a_pass->sceneLights[i + 1];
+		if (!bsLight)
+			continue;
 		auto niLight = bsLight->light.get();
+		if (!niLight)
+			continue;
 
 		auto& runtimeData = niLight->GetLightRuntimeData();
 
@@ -248,14 +256,17 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 			light.lightFlags.set(LightFlags::Shadow);
 		}
 
-		strictLightDataTemp.StrictLights[i] = light;
+		strictLightDataTemp.StrictLights[writeIdx++] = light;
 	}
+	strictLightDataTemp.NumStrictLights = writeIdx;
 
 	for (uint32_t i = 0; i < a_pass->numShadowLights; i++) {
 		auto bsLight = a_pass->sceneLights[i + 1];
+		if (!bsLight)
+			continue;
 		auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
 		GET_INSTANCE_MEMBER(maskIndex, shadowLight);
-		strictLightDataTemp.ShadowBitMask |= (1 << maskIndex);
+		strictLightDataTemp.ShadowBitMask |= (1u << maskIndex);
 	}
 }
 
@@ -315,6 +326,8 @@ void LightLimitFix::Prepass()
 
 	auto state = globals::state;
 
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "LightLimitFix Prepass");
 	state->BeginPerfEvent("LightLimitFix Prepass");
 	UpdateLights();
 
@@ -359,8 +372,11 @@ void LightLimitFix::ClearShaderCache()
 		clusterCullingCS->Release();
 		clusterCullingCS = nullptr;
 	}
-	clusterBuildingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0");
-	clusterCullingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0");
+	std::vector<std::pair<const char*, const char*>> clusterDefines;
+	if (REL::Module::IsVR())
+		clusterDefines = { { "VR", "" } };
+	clusterBuildingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", clusterDefines, "cs_5_0");
+	clusterCullingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", clusterDefines, "cs_5_0");
 }
 
 void LightLimitFix::UpdateLights()

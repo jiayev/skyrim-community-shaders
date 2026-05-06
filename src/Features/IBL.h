@@ -9,7 +9,7 @@ public:
 	virtual inline std::string GetName() override { return "Image Based Lighting"; }
 	virtual inline std::string GetShortName() override { return "ImageBasedLighting"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "IBL"; }
-	virtual std::string_view GetCategory() const override { return "Lighting"; }
+	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
@@ -52,13 +52,14 @@ public:
 		float EnvIBLSaturation = 1.0f;
 		float SkyIBLSaturation = 1.0f;
 		float FogAmount = 0.0f;
-		uint DALCMode = 2;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky
-		float pad0 = 0.0f;
+		uint DALCMode = 2;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
+		uint DisableInInteriors = 1;
 		float pad1 = 0.0f;
 	} settings;
 
 	eastl::unique_ptr<Texture2D> staticDiffuseIBLTexture = nullptr;
 	eastl::unique_ptr<Texture2D> staticSpecularIBLTexture = nullptr;
 
+	Settings GetCommonBufferData() const;
 	ID3D11ComputeShader* GetDiffuseIBLCS();
 };
