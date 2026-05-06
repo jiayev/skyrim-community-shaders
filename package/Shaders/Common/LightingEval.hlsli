@@ -176,7 +176,7 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 	}
 #	endif
 
-	lightingOutput.specular = diffuseLightColor * VanillaSpecular(context, material.Shininess, uv, uv_ddx, uv_ddy) * material.SpecularColor * material.Glossiness * Color::VanillaNormalization();
+	lightingOutput.specular = VanillaSpecular(context, material.Shininess, uv, uv_ddx, uv_ddy) * material.SpecularColor * material.Glossiness * diffuseLightColor * Color::VanillaNormalization();
 #endif
 }
 
