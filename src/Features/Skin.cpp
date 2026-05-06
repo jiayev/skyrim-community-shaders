@@ -2,6 +2,7 @@
 #include <DirectXTex.h>
 
 #include "Deferred.h"
+#include "Globals.h"
 #include "Hooks.h"
 #include "JiayeStatement.h"
 #include "Menu.h"
@@ -73,7 +74,7 @@ void Skin::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Fresnel reflectance");
 	}
-	
+
 	ImGui::SliderFloat("Base Color Multiplier", &settings.BaseColorMultiplier, 0.0f, 2.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Multiplier for the base color texture");
@@ -132,9 +133,8 @@ void Skin::DrawSettings()
 		settings.UseDynamicWetness = false;
 	}
 
-	if (!settings.UseDynamicWetness)
-	{
-		ImGui::SliderFloat("Stamina Threshold for Sweat", &settings.StartSweat, 0.0f, 1.0f, "%.2f", 
+	if (!settings.UseDynamicWetness) {
+		ImGui::SliderFloat("Stamina Threshold for Sweat", &settings.StartSweat, 0.0f, 1.0f, "%.2f",
 			ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Full Sweat Threshold", &settings.FullSweat, 0.0f, 1.0f, "%.2f",
 			ImGuiSliderFlags_AlwaysClamp);
@@ -271,9 +271,24 @@ void Skin::Prepass()
 	}
 }
 
+struct SKIN_BSLightingShader_SetupMaterial
+{
+	static void thunk(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
+	{
+		func(shader, material);
+
+		auto& skin = globals::features::skin;
+		if (skin.loaded) {
+			skin.BSLightingShader_SetupMaterial(material);
+		}
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
 void Skin::PostPostLoad()
 {
-	Hooks::Install();
+	logger::info("[Advanced Skin] Hooking BSLightingShader::SetupMaterial");
+	stl::write_vfunc<0x4, SKIN_BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);
 }
 
 Skin::SkinData Skin::GetCommonBufferData()
@@ -323,7 +338,7 @@ float Skin::GetWaterHeight(const RE::TESObjectREFR* a_ref, const RE::NiPoint3& a
 					for (const auto& bound : waterObject->multiBounds) {
 						if (bound) {
 							if (auto size{ bound->size }; size.z <= 10.0f) {  //avoid sloped water
-								auto       center{ bound->center };
+								auto center{ bound->center };
 								const auto boundMin = center - size;
 								const auto boundMax = center + size;
 								if (!(a_pos.x < boundMin.x || a_pos.x > boundMax.x || a_pos.y < boundMin.y || a_pos.y > boundMax.y)) {
@@ -348,8 +363,7 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 {
 	float4 wetness = float4(0.0f, 0.0f, 0.0f, 0.0f);
 	if (auto userData = geometry->GetUserData())
-		if (auto actor = userData->As<RE::Character>())
-		{
+		if (auto actor = userData->As<RE::Character>()) {
 			// uint32_t refid = actor->AsReference()->formID;
 			const float positionZ = actor->GetPositionZ();
 			wetness.z = positionZ;
@@ -362,9 +376,9 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 				const float temporaryStamina = actor->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary, RE::ActorValue::kStamina);
 				const float maxStamina = permanentStamina + temporaryStamina;
 				const float staminaPercentage = actor->IsDead() ? 1.0f : (stamina / maxStamina);
-				wetness.x = (staminaPercentage >= settings.StartSweat) ? 0.0f : 
-							(staminaPercentage <= settings.FullSweat) ? 1.0f : 
-							(settings.StartSweat - staminaPercentage) / (settings.StartSweat - settings.FullSweat);
+				wetness.x = (staminaPercentage >= settings.StartSweat) ? 0.0f :
+				            (staminaPercentage <= settings.FullSweat)  ? 1.0f :
+				                                                         (settings.StartSweat - staminaPercentage) / (settings.StartSweat - settings.FullSweat);
 			}
 			if (actor->IsInWater()) {
 				wetness.y = 2.0f;
@@ -377,7 +391,7 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 
 			void* geometryPtr = static_cast<void*>(geometry);
 
-			if(actorWetnessMap.contains(geometryPtr)) {
+			if (actorWetnessMap.contains(geometryPtr)) {
 				if (actorWetnessMap[geometryPtr].x < wetness.x) {
 					actorWetnessMap[geometryPtr].x = wetness.x;
 				} else if (actorWetnessMap[geometryPtr].x > wetness.x) {

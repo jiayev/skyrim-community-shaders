@@ -2,6 +2,7 @@
 #include "Common/Color.hlsli"
 #include "Common/LightingCommon.hlsli"
 #include "Common/Math.hlsli"
+#include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"
 
 namespace Skin
@@ -169,7 +170,7 @@ namespace Skin
 		float3 diffuseAO = material.AO;
 		float3 specularAO = SpecularAOLagarde(NdotV, material.AO, averageRoughness);
 
-		diffuseAO = MultiBounceAO(material.BaseColor, diffuseAO.x).y;
+		diffuseAO = MultiBounceAO(material.BaseColor, diffuseAO.x);
 
 		lobeWeights.diffuse *= diffuseAO;
 		lobeWeights.specular *= specularAO;
