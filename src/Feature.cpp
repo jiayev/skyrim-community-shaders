@@ -50,6 +50,7 @@
 #include "WeatherVariableRegistry.h"
 
 #include "State.h"
+#include "TruePBR.h"
 
 void Feature::Load(json& o_json)
 {
@@ -216,6 +217,7 @@ void Feature::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 const std::vector<Feature*>& Feature::GetFeatureList()
 {
 	static std::vector<Feature*> features = {
+		&globals::features::truePBR,
 		&globals::features::volumetricShadows,
 		&globals::features::grassLighting,
 		&globals::features::grassCollision,

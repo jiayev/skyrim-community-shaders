@@ -104,6 +104,7 @@ namespace globals
 		extern RenderDoc renderDoc;
 		extern WeatherEditor weatherEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
+		extern TruePBR truePBR;
 		extern PostProcessing postProcessing;
 		extern Skin skin;
 		extern PseudoSunBounce pseudoSunBounce;
@@ -271,7 +272,6 @@ namespace globals
 
 	extern State* state;
 	extern Deferred* deferred;
-	extern TruePBR* truePBR;
 	extern Menu* menu;
 	extern SIE::ShaderCache* shaderCache;
 

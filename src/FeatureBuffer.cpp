@@ -24,8 +24,6 @@
 #include "Features/VanillaFresnel.h"
 #include "Features/WetnessEffects.h"
 
-#include "TruePBR.h"
-
 template <class... Ts>
 std::pair<unsigned char*, size_t> _GetFeatureBufferData(Ts... feat_datas)
 {

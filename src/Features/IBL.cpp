@@ -56,7 +56,7 @@ void IBL::DrawSettings()
 			"0 = no matching (pure IBL brightness), 1 = fully matched to vanilla ambient.");
 	}
 	{
-		static const char* dalcModeNames[] = { "Luminance Ratio", "Color Ratio", "DALC + Sky" };
+		static const char* dalcModeNames[] = { "Luminance Ratio", "Color Ratio", "DALC + Sky", "DALC + Sky (Directional)" };
 		int dalcMode = static_cast<int>(settings.DALCMode);
 		if (ImGui::Combo("DALC Mode", &dalcMode, dalcModeNames, IM_ARRAYSIZE(dalcModeNames))) {
 			settings.DALCMode = static_cast<uint>(dalcMode);
@@ -66,7 +66,8 @@ void IBL::DrawSettings()
 				"How the DALC-to-IBL brightness ratio is computed:\n"
 				"Luminance Ratio: Scalar ratio from overall luminance (loses DALC color tint).\n"
 				"Color Ratio: Per-channel ratio (preserves DALC color tint).\n"
-				"DALC + Sky: Uses vanilla DALC as base and overlays sky IBL on top.");
+				"DALC + Sky: Uses vanilla ambient as base, sky IBL on top. Skylighting only affects sky.\n"
+				"DALC + Sky (Directional): Same, but Skylighting also dims vanilla ambient per-direction.");
 		}
 	}
 	ImGui::Checkbox("Use Static IBL For Out-of-World Objects", (bool*)&settings.UseStaticIBL);
@@ -214,7 +215,6 @@ void IBL::Prepass()
 		return;
 
 	auto context = globals::d3d::context;
-	auto state = globals::state;
 
 	auto& dynamicCubemaps = globals::features::dynamicCubemaps;
 
@@ -226,13 +226,12 @@ void IBL::Prepass()
 		context->PSSetShaderResources(76, 2, views);
 	}
 
-	state->BeginPerfEvent("IBL");
 	std::array<ID3D11ShaderResourceView*, 1> srvs = { (dynamicCubemaps.loaded && envTexture) ? envTexture->srv.get() : nullptr };
 	std::array<ID3D11UnorderedAccessView*, 1> uavs = { envIBLTexture->uav.get() };
 	std::array<ID3D11SamplerState*, 1> samplers = { Deferred::GetSingleton()->linearSampler };
 
-	// IBL
-	{
+	// IBL - Environment cubemap SH projection (skip for DALC-based modes that don't use EnvIBL)
+	if (settings.DALCMode < 2) {
 		samplers[0] = Deferred::GetSingleton()->linearSampler;
 
 		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
@@ -240,6 +239,10 @@ void IBL::Prepass()
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(GetDiffuseIBLCS(), nullptr, 0);
 		context->Dispatch(1, 1, 1);
+	} else {
+		// Still need to set sampler and shader for sky IBL dispatch below
+		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
+		context->CSSetShader(GetDiffuseIBLCS(), nullptr, 0);
 	}
 
 	// IBL with sky (use game's native reflections cubemap directly)
@@ -265,7 +268,6 @@ void IBL::Prepass()
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
-	state->EndPerfEvent();
 
 	// Set PS shader resource
 	{
@@ -336,7 +338,7 @@ void IBL::SetupResources()
 			return;
 		}
 
-		staticDiffuseIBLTexture = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource));
+		staticDiffuseIBLTexture = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource), "IBL::StaticDiffuse");
 
 		staticDiffuseIBLTexture->desc.MiscFlags |= D3D11_RESOURCE_MISC_TEXTURECUBE;
 
@@ -372,7 +374,7 @@ void IBL::SetupResources()
 			return;
 		}
 
-		staticSpecularIBLTexture = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource));
+		staticSpecularIBLTexture = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource), "IBL::StaticSpecular");
 
 		staticSpecularIBLTexture->desc.MiscFlags |= D3D11_RESOURCE_MISC_TEXTURECUBE;
 
