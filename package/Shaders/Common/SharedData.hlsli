@@ -268,7 +268,8 @@ namespace SharedData
 		float directionalInscatteringExponent;
 		float4 inscatteringTint;
 		float cubemapMipLevel;
-		float3 pad;
+		uint respectVanillaFogFade;
+		float2 pad;
 	};
 
 	struct PostProcessingSettings
