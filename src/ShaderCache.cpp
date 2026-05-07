@@ -2944,13 +2944,8 @@ namespace SIE
 
 		const auto taskKey = task.GetString();
 
-		// Thread priority serves as a signal to Intel Thread Director and
-		// the Windows scheduler for P-core vs E-core placement on hybrid CPUs.
-		// Heavy shaders compile at normal priority (favouring P-cores); light
-		// shaders stay below-normal (allowing E-core placement).  On non-hybrid
-		// CPUs this still gives heavy compiles slightly more scheduler attention.
-		SetThreadPriority(GetCurrentThread(),
-			task.GetPriority() >= SIE::kHeavyPriorityThreshold ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_BELOW_NORMAL);
+		// Run all shader compilation work at below-normal priority.
+		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 
 		LARGE_INTEGER start, end, freq;
 		QueryPerformanceFrequency(&freq);
@@ -2971,7 +2966,15 @@ namespace SIE
 
 		QueryPerformanceCounter(&end);
 		const double elapsedMs = static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / freq.QuadPart;
-		const uint64_t remaining = compilationSet.totalTasks - compilationSet.completedTasks.load(std::memory_order_relaxed) - compilationSet.failedTasks.load(std::memory_order_relaxed);
+		// Use saturating math: without a lock, Clear() can zero totalTasks while completedTasks
+		// still reads high briefly, which would otherwise underflow uint64_t (logs as ~2^64-1).
+		const uint64_t total = compilationSet.totalTasks.load(std::memory_order_relaxed);
+		const uint64_t done = compilationSet.completedTasks.load(std::memory_order_relaxed) +
+		                     compilationSet.failedTasks.load(std::memory_order_relaxed);
+		// This task has already finished running, but Complete(task) has not yet updated the counters.
+		// Include the current task in the local progress snapshot so the logged remaining count is accurate.
+		const uint64_t doneIncludingCurrent = (done < total) ? (done + 1) : total;
+		const uint64_t remaining = (total > doneIncludingCurrent) ? (total - doneIncludingCurrent) : 0;
 
 		// Proxy for permutation complexity: descriptor low 32 bits from GetId(); popcount = active defines.
 		// Shader file size provides a secondary signal for source complexity.

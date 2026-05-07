@@ -28,6 +28,8 @@ void FidelityFX::LoadFFX()
 	// Cache all DLL versions in the FidelityFX directory
 	std::filesystem::path pluginDir = std::filesystem::path(FidelityFX::PluginDir);
 	FidelityFX::dllVersions = Util::EnumerateDllVersions(pluginDir);
+	for (const auto& [name, versionStr] : FidelityFX::dllVersions)
+		logger::info("[FidelityFX] {} version: {}", name, versionStr);
 
 	if (module) {
 		logger::info("[FidelityFX] Loader DLL loaded successfully from plugin directory");
@@ -249,7 +251,7 @@ void FidelityFX::CreateFSRResources()
 		return;
 	}
 
-	auto fsrDevice = ffxGetDeviceDX11(globals::d3d::device);
+	auto fsrDevice = ffxGetDeviceDX11_Fsr31(globals::d3d::device);
 
 	uint32_t numContexts = globals::game::isVR ? 2 : 1;
 	size_t scratchBufferSize = ffxGetScratchMemorySizeDX11(numContexts);
@@ -413,14 +415,14 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 	if (globals::game::isVR) {
 		// Prepare per-eye inputs and clear mask
-		upscaling.PreparePerEyeInputs(a_upscalingTexture, depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask);
+		upscaling.PreparePerEyeInputs(a_upscalingTexture);
 
 		uint32_t numViews = 2;
 		uint32_t eyeWidth = (uint32_t)(renderSize.x / 2);
 		for (uint32_t i = 0; i < numViews; ++i) {
 			DispatchFSR(i,
 				upscaling.vrIntermediateColorIn[i]->resource.get(),
-				upscaling.vrIntermediateDepth[i]->resource.get(),
+				upscaling.vrIntermediateLinearDepth[i]->resource.get(),
 				upscaling.vrIntermediateMotionVectors[i]->resource.get(),
 				upscaling.vrIntermediateReactiveMask[i]->resource.get(),
 				upscaling.vrIntermediateTransparencyMask[i]->resource.get(),

@@ -20,11 +20,11 @@ namespace SharedData
 		float Timer;
 		uint FrameCount;
 		uint FrameCountAlwaysActive;
-		bool InInterior;  // If the area lacks a directional shadow light e.g. the sun or moon
-		bool InMapMenu;   // If the world/local map is open (note that the renderer is still deferred here)
-		bool HideSky;     // HideSky flag in WorldSpace, e.g. Blackreach
-		float MipBias;    // Offset to mip level for TAA sharpness
-		float pad0;
+		bool InInterior;          // If the area lacks a directional shadow light e.g. the sun or moon
+		bool InMapMenu;           // If the world/local map is open (note that the renderer is still deferred here)
+		bool HideSky;             // HideSky flag in WorldSpace, e.g. Blackreach
+		float MipBias;            // Offset to mip level for TAA sharpness
+		float WaterSystemHeight;  // TES::GetWaterHeight at eye-0 in camera-relative Z; -FLT_MAX when no water body found (VR only)
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
@@ -197,7 +197,7 @@ namespace SharedData
 		float EnvIBLSaturation;
 		float SkyIBLSaturation;
 		float FogAmount;
-		uint DALCMode;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky
+		uint DALCMode;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
 		uint DisableInInteriors;
 		float pad0;
 	};
@@ -260,7 +260,8 @@ namespace SharedData
 		float directionalInscatteringExponent;
 		float4 inscatteringTint;
 		float cubemapMipLevel;
-		float3 pad;
+		uint respectVanillaFogFade;
+		float2 pad;
 	};
 
 	struct PhysSkyData
