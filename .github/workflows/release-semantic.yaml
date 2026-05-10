@@ -1,4 +1,4 @@
-name: Semantic Release
+name: "Release: Semantic Version"
 
 # Dispatch on:
 #   - dev           → cuts vX.Y.Z-rc.N (RC channel)
