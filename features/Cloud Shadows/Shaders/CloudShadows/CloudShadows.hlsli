@@ -1,13 +1,13 @@
-#include "Common/Game.hlsli"
-
 #ifndef CLOUD_SHADOWS_HLSLI
-#	define CLOUD_SHADOWS_HLSLI
+#define CLOUD_SHADOWS_HLSLI
 
-#	ifndef CLOUD_SHADOW_REGISTER
-#		define CLOUD_SHADOW_REGISTER t25
-#	endif
+#ifndef CLOUD_SHADOW_REGISTER
+#	define CLOUD_SHADOW_REGISTER t25
+#endif
 
 // TODO move to PSky
+#include "Common/Game.hlsli"
+
 namespace CloudShadows
 {
 	TextureCube<float> CloudShadowsTexture : register(CLOUD_SHADOW_REGISTER);

@@ -1,5 +1,10 @@
 #include "PhysicalSky.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cfloat>
+#include <imgui_stdlib.h>
+
 #include "CloudShadows.h"
 #include "Deferred.h"
 #include "LinearLighting.h"
@@ -10,6 +15,10 @@
 
 #include "State.h"
 #include "Util.h"
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	PhysicalSky::WorldspaceInfo,
+	zBottom)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PhysicalSky::Settings,
@@ -33,6 +42,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	adaptationEnd,
 	dayExposure,
 	nightExposure,
+	worldspaceWhitelist,
 	groundAlbedo,
 	planetRadius,
 	atmosphereRadius,
@@ -55,6 +65,50 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	RE::TESWorldSpace* GetCurrentWorldspace()
+	{
+		auto* tes = globals::game::tes ? globals::game::tes : RE::TES::GetSingleton();
+		auto* player = RE::PlayerCharacter::GetSingleton();
+		auto* cell = player ? player->GetParentCell() : nullptr;
+
+		auto* worldspace = tes ? tes->GetRuntimeData2().worldSpace : nullptr;
+		if (!worldspace && cell)
+			worldspace = cell->GetRuntimeData().worldSpace;
+
+		return worldspace;
+	}
+
+	bool IsCurrentCellInterior()
+	{
+		auto* player = RE::PlayerCharacter::GetSingleton();
+		auto* cell = player ? player->GetParentCell() : nullptr;
+		return cell && cell->IsInteriorCell();
+	}
+
+	std::string GetCurrentWorldspaceEditorID()
+	{
+		auto* worldspace = GetCurrentWorldspace();
+		if (!worldspace)
+			return {};
+
+		return worldspace->GetFormEditorID();
+	}
+
+	std::string TrimEditorID(std::string editorID)
+	{
+		const auto first = std::ranges::find_if_not(editorID, [](unsigned char c) {
+			return std::isspace(c);
+		});
+		const auto last = std::find_if_not(editorID.rbegin(), editorID.rend(), [](unsigned char c) {
+			return std::isspace(c);
+		}).base();
+
+		if (first >= last)
+			return {};
+
+		return { first, last };
+	}
+
 	void InfoBox(const char* str)
 	{
 		if (ImGui::BeginTable("Info", 1, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
@@ -129,6 +183,9 @@ void PhysicalSky::DrawSettings()
 
 void PhysicalSky::SettingsGeneral()
 {
+	const auto currentWorldspaceName = GetCurrentWorldspaceEditorID();
+	const bool inInterior = IsCurrentCellInterior();
+
 	if (ImGui::BeginTable("Info", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
 		ImGui::TableNextColumn();
 		ImGui::Text("Shader Status: ");
@@ -141,35 +198,22 @@ void PhysicalSky::SettingsGeneral()
 		ImGui::TableNextColumn();
 		ImGui::Text("Worldspace: ");
 		ImGui::TableNextColumn();
-		auto* tes = globals::game::tes ? globals::game::tes : RE::TES::GetSingleton();
-		auto* player = RE::PlayerCharacter::GetSingleton();
-		auto* cell = player ? player->GetParentCell() : nullptr;
-		bool inInterior = cell && cell->IsInteriorCell();
 
 		if (inInterior) {
 			if (settings.forceEnableAllInteriorCells)
 				ImGui::Text("Interior (Enabled, Forced)");
 			else
 				ImGui::Text("Interior (Disabled)");
-		} else if (tes) {
-			auto* worldspace = tes->GetRuntimeData2().worldSpace;
-			if (!worldspace && cell)
-				worldspace = cell->GetRuntimeData().worldSpace;
-
-			if (worldspace) {
-				std::string worldspaceName = worldspace->GetFormEditorID();
-				if (settings.worldspaceWhitelist.contains(worldspaceName)) {
-					ImGui::Text("%s (Enabled, Whitelist)", worldspaceName.c_str());
-				} else if (settings.enableAllExteriorCells) {
-					ImGui::Text("%s (Enabled, Fallback Z Bottom)", worldspaceName.c_str());
-				} else {
-					ImGui::Text("%s (Disabled)", worldspaceName.c_str());
-				}
+		} else if (!currentWorldspaceName.empty()) {
+			if (settings.worldspaceWhitelist.contains(currentWorldspaceName)) {
+				ImGui::Text("%s (Enabled, Whitelist)", currentWorldspaceName.c_str());
+			} else if (settings.enableAllExteriorCells) {
+				ImGui::Text("%s (Enabled, Fallback Z Bottom)", currentWorldspaceName.c_str());
 			} else {
-				ImGui::Text("Unknown (Worldspace Unavailable)");
+				ImGui::Text("%s (Disabled)", currentWorldspaceName.c_str());
 			}
 		} else {
-			ImGui::Text("Unknown (TES Unavailable)");
+			ImGui::Text("Unknown (Worldspace Unavailable)");
 		}
 
 		ImGui::EndTable();
@@ -184,6 +228,74 @@ void PhysicalSky::SettingsGeneral()
 		ImGui::InputFloat("Fallback Z Bottom", &settings.fallbackZBottom, 10.f, 100.f, "%.1f");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Used when current worldspace is not in whitelist (or worldspace data is unavailable), including forced interiors.");
+	}
+
+	ImGui::SeparatorText("Worldspace Whitelist");
+	{
+		static std::string newWorldspaceEditorID;
+		static float newWorldspaceZBottom = -14500.f;
+
+		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.55f);
+		ImGui::InputTextWithHint("Editor ID", "Tamriel", &newWorldspaceEditorID);
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
+		ImGui::InputFloat("Z Bottom", &newWorldspaceZBottom, 10.f, 100.f, "%.1f");
+
+		const auto addOrUpdateWorldspace = [&](std::string editorID, float zBottom) {
+			editorID = TrimEditorID(std::move(editorID));
+			if (!editorID.empty())
+				settings.worldspaceWhitelist[editorID].zBottom = zBottom;
+		};
+
+		if (ImGui::Button("Add / Update")) {
+			addOrUpdateWorldspace(newWorldspaceEditorID, newWorldspaceZBottom);
+		}
+
+		if (!currentWorldspaceName.empty()) {
+			ImGui::SameLine();
+			const auto currentIt = settings.worldspaceWhitelist.find(currentWorldspaceName);
+			const bool currentWhitelisted = currentIt != settings.worldspaceWhitelist.end();
+			if (ImGui::Button(currentWhitelisted ? "Remove Current Worldspace" : "Add Current Worldspace")) {
+				if (currentWhitelisted) {
+					settings.worldspaceWhitelist.erase(currentIt);
+				} else {
+					addOrUpdateWorldspace(currentWorldspaceName, newWorldspaceZBottom);
+				}
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", currentWorldspaceName.c_str());
+		}
+
+		if (ImGui::BeginTable("WorldspaceWhitelist", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp, { -1, 0 })) {
+			ImGui::TableSetupColumn("Editor ID");
+			ImGui::TableSetupColumn("Z Bottom", ImGuiTableColumnFlags_WidthFixed, 160.f);
+			ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 90.f);
+			ImGui::TableHeadersRow();
+
+			std::string removeEditorID;
+			for (auto& [editorID, info] : settings.worldspaceWhitelist) {
+				ImGui::PushID(editorID.c_str());
+				ImGui::TableNextRow();
+
+				ImGui::TableSetColumnIndex(0);
+				ImGui::TextUnformatted(editorID.c_str());
+
+				ImGui::TableSetColumnIndex(1);
+				ImGui::SetNextItemWidth(-FLT_MIN);
+				ImGui::InputFloat("##ZBottom", &info.zBottom, 10.f, 100.f, "%.1f");
+
+				ImGui::TableSetColumnIndex(2);
+				if (ImGui::Button("Remove", { -1, 0 }))
+					removeEditorID = editorID;
+
+				ImGui::PopID();
+			}
+
+			if (!removeEditorID.empty())
+				settings.worldspaceWhitelist.erase(removeEditorID);
+
+			ImGui::EndTable();
+		}
 	}
 
 	ImGui::SeparatorText("Post Processing");
