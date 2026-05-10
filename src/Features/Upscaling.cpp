@@ -1920,9 +1920,8 @@ void Upscaling::UpscaleDepth()
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Depth Upscale");
 
-		// Keep the depth-upscale source current. The vanilla copy is not reliable
-		// on every image-space path; paused menus such as the console used to mask
-		// this by forcing a copy only in menu contexts.
+		// Sometimes this is not already copied e.g. map menu.
+		// Skip alias copies to reduce unnecessary copy churn.
 		copyIfNonAliased(depthCopy.texture, depth.texture);
 
 		// Clear stencil to be 0xFF
