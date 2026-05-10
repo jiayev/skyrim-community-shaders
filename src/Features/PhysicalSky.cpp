@@ -871,10 +871,13 @@ void PhysicalSky::AccumShadow()
 		TracyD3D11Zone(state->tracyCtx, debugStr);
 
 		auto sampler = sampTr.get();
+		ID3D11ShaderResourceView* directionalShadowLights = nullptr;
+		if (auto* directionalShadowBuffer = Deferred::GetSingleton()->directionalShadowLights)
+			directionalShadowLights = directionalShadowBuffer->srv.get();
 		auto srvs = std::array{
 			globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV,
 			volumetricShadows.shadowView,
-			volumetricShadows.perShadow->srv.get(),
+			static_cast<ID3D11ShaderResourceView*>(nullptr),
 			terrainShadows.IsHeightMapReady() ? terrainShadows.texShadowHeight->srv.get() : nullptr,
 			cloudShadows.loaded ? cloudShadows.texCubemapCloudOcc->srv.get() : nullptr,
 		};
@@ -883,6 +886,7 @@ void PhysicalSky::AccumShadow()
 		/* ---- DISPATCH ---- */
 		context->CSSetSamplers(0, 1, &sampler);
 		context->CSSetShaderResources(0, (int)srvs.size(), srvs.data());
+		context->CSSetShaderResources(98, 1, &directionalShadowLights);
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShader(settings.halfResApShadow ? csShadowAccumHalfRes.get() : csShadowAccum.get(), nullptr, 0);
 		context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
@@ -890,11 +894,13 @@ void PhysicalSky::AccumShadow()
 		/* ---- RESTORE ---- */
 		sampler = nullptr;
 		srvs.fill(nullptr);
+		directionalShadowLights = nullptr;
 		uav = nullptr;
 
 		context->CSSetSamplers(0, 1, &sampler);
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShaderResources(0, (int)srvs.size(), srvs.data());
+		context->CSSetShaderResources(98, 1, &directionalShadowLights);
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
 	state->EndPerfEvent();
