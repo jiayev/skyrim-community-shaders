@@ -28,7 +28,7 @@ Texture2D<unorm float> DepthTexture : register(t4);
 
 #if defined(VR_STEREO_OPT)
 #	include "VRStereoOptimizations/modes.hlsli"
-Texture2D<uint> StereoOptModeTexture : register(t16);
+Texture2D<uint> StereoOptModeTexture : register(t19);
 #endif
 
 #if defined(DYNAMIC_CUBEMAPS)
