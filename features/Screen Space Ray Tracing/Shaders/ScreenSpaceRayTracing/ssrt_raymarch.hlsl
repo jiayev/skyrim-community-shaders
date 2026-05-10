@@ -40,9 +40,8 @@ TextureCube<float3> EnvReflectionsTexture : register(t8);
 Texture2D<float> SsgiAoTexture : register(t9);
 #	endif
 #	if defined(SKYLIGHTING)
+#		define SKYLIGHTING_PROBE_REGISTER t10
 #		include "Skylighting/Skylighting.hlsli"
-Texture3D<sh2> SkylightingProbeArray : register(t10);
-Texture2DArray<float3> stbn_vec3_2Dx1D_128x128x64 : register(t11);
 #	endif
 #endif
 Texture2D<float3> AlbedoTexture : register(t12);
@@ -590,7 +589,7 @@ bool ShouldProcessPixel(uint2 GroupThreadID, uint FrameCount)
 			if (!SharedData::InInterior) {
 				float3 positionMS = positionWS.xyz;
 
-				sh2 skylighting = Skylighting::sample(SharedData::skylightingSettings, SkylightingProbeArray, stbn_vec3_2Dx1D_128x128x64, coords.xy, positionMS.xyz, world_space_reflected_direction);
+				sh2 skylighting = Skylighting::Sample(positionMS.xyz, world_space_reflected_direction);
 				float3 skylightingNormal = normalize(float3(world_space_normal.xy, max(0, world_space_normal.z)));
 				float skylightingDiffuse = SphericalHarmonics::FuncProductIntegral(skylighting, SphericalHarmonics::EvaluateCosineLobe(skylightingNormal)) / Math::PI;
 				skylightingDiffuse = saturate(skylightingDiffuse);
