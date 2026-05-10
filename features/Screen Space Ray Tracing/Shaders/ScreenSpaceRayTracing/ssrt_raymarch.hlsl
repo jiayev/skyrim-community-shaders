@@ -594,11 +594,11 @@ bool ShouldProcessPixel(uint2 GroupThreadID, uint FrameCount)
 				float skylightingDiffuse = SphericalHarmonics::FuncProductIntegral(skylighting, SphericalHarmonics::EvaluateCosineLobe(skylightingNormal)) / Math::PI;
 				skylightingDiffuse = saturate(skylightingDiffuse);
 
-				skylightingDiffuse = lerp(1.0, skylightingDiffuse, Skylighting::getFadeOutFactor(positionMS.xyz));
+				skylightingDiffuse = lerp(1.0, skylightingDiffuse, Skylighting::GetFadeOutFactor(positionMS.xyz));
 
 				skylightingDiffuse *= 1.0 + saturate(world_space_normal.z) * (1.0 - SharedData::skylightingSettings.MinDiffuseVisibility);
 
-				skylightingDiffuse = Skylighting::mixDiffuse(SharedData::skylightingSettings, skylightingDiffuse);
+				skylightingDiffuse = Skylighting::MixDiffuse(skylightingDiffuse);
 #		if defined(SSRT_SPECULAR)
 				skylightingDiffuse = GetSpecularOcclusionFromAmbientOcclusion(NdotV, skylightingDiffuse, roughness);
 #		endif

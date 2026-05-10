@@ -3174,6 +3174,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
+#	if defined(SSRT) && defined(DEFERRED)
+	if (SharedData::ssrtSettings.DiffuseMult > 0.0) {
+		directionalAmbientColor *= SharedData::ssrtSettings.AmbientMult;
+	}
+#	endif
+
 #	if defined(PSEUDO_SUN_BOUNCE)
 	float3 specularBounce = 0;
 	if (!SharedData::InInterior && inWorld && SharedData::pseudoSunBounceSettings.intensity > 0.0) {
