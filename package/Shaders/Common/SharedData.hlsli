@@ -307,12 +307,14 @@ namespace SharedData
 		uint EnableGGX;
 		uint EnableGGXOnGrass;
 		uint EnableDynamicCubemapsConversion;
+		uint EnableEyeSpecialHandling;
 		float RoughnessMultiplier;
+		float SpecularRoughnessBlend;
 		float BaseF0Multiplier;
 		float MinF0;
 		float CubemapToF0Multiplier;
 		float ComplexMaterialF0Multiplier;
-		float3 pad;
+		float pad;
 	};
 
 	struct PhysSkyData
