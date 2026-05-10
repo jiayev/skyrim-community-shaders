@@ -265,11 +265,15 @@ namespace SharedData
 		float fogHeightFalloff;
 		float fogDensity;
 		float directionalInscatteringMultiplier;
-		float directionalInscatteringExponent;
+		float directionalInscatteringAnisotropy;
 		float4 inscatteringTint;
 		float cubemapMipLevel;
+		float sunlightAttenuationAmount;
 		uint respectVanillaFogFade;
-		float2 pad;
+		uint disableVanillaFog;
+		float4 fogInscatteringColor;
+		float originalFogColorAmount;
+		float3 pad;
 	};
 
 	struct PostProcessingSettings

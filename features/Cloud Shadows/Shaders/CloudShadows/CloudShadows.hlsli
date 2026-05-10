@@ -1,17 +1,23 @@
-#ifndef CLOUD_SHADOWS_HLSLI
-#define CLOUD_SHADOWS_HLSLI
+#include "Common/Game.hlsli"
 
-#ifndef CLOUD_SHADOW_REGISTER
-#	define CLOUD_SHADOW_REGISTER t25
-#endif
+#ifndef CLOUD_SHADOWS_HLSLI
+#	define CLOUD_SHADOWS_HLSLI
+
+#	ifndef CLOUD_SHADOW_REGISTER
+#		define CLOUD_SHADOW_REGISTER t25
+#	endif
 
 // TODO move to PSky
 namespace CloudShadows
 {
 	TextureCube<float> CloudShadowsTexture : register(CLOUD_SHADOW_REGISTER);
 
-	const static float CloudHeight = (2e3f / 1.428e-2) * 0.25;
-	const static float PlanetRadius = (6371e3f / 1.428e-2);
+	// 2 km cloud altitude / 6371 km planet radius converted from metres
+	// to game units. The original 1.428e-2 is GAME_UNIT_TO_M (1.428f / 100),
+	// so dividing by GAME_UNIT_TO_M is the exact same value. Game.hlsli
+	// parenthesizes the macro, so the operator precedence is preserved.
+	const static float CloudHeight = (2e3f / GAME_UNIT_TO_M) * 0.25;
+	const static float PlanetRadius = (6371e3f / GAME_UNIT_TO_M);
 	const static float RcpHPlusR = (1.0 / (CloudHeight + PlanetRadius));
 
 	float IntersectCloudDist(float3 rel_pos, float3 dir)
