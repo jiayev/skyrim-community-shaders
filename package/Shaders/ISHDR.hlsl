@@ -202,10 +202,6 @@ PS_OUTPUT main(PS_INPUT input)
 	outputColor = lerp(outputColor, Fade.xyz, Fade.w);
 #		endif
 
-	if (SharedData::linearLightingSettings.enableLinearLighting && SharedData::linearLightingSettings.enableGammaCorrection) {
-		outputColor = Color::GammaToLinearSafe(outputColor);
-	}
-
 	if (isHDR) {
 		if (!ENABLE_LL)
 			outputColor = Color::GammaToLinearSafe(outputColor);
