@@ -289,6 +289,7 @@ void Skin::PostPostLoad()
 {
 	logger::info("[Advanced Skin] Hooking BSLightingShader::SetupMaterial");
 	stl::write_vfunc<0x4, SKIN_BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);
+	Hooks::Install();
 }
 
 Skin::SkinData Skin::GetCommonBufferData()
