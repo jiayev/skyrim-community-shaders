@@ -3,6 +3,7 @@
 
 #include "Common/Color.hlsli"
 #include "Common/SharedData.hlsli"
+#include "ExponentialHeightFog/VolumetricFogCommon.hlsli"
 
 #if defined(DYNAMIC_CUBEMAPS)
 #	include "DynamicCubemaps/DynamicCubemaps.hlsli"
@@ -11,6 +12,8 @@
 #if defined(PHYSICAL_SKY)
 #	include "PhysicalSky/Common.hlsli"
 #endif
+
+Texture3D<float4> ExponentialHeightFogIntegratedLightScattering : register(t19);
 
 namespace ExponentialHeightFog
 {
@@ -24,13 +27,97 @@ namespace ExponentialHeightFog
 		return SharedData::exponentialHeightFogSettings.enabled && SharedData::exponentialHeightFogSettings.disableVanillaFog != 0;
 	}
 
-	// Henyey-Greenstein phase function for physically-based inscattering.
-	// g: asymmetry parameter [-1, 1]. Positive = forward scattering, 0 = isotropic.
-	float HenyeyGreenstein(float cosTheta, float g)
+	uint GetEyeIndexFromCameraWS(float3 cameraWS)
 	{
-		float g2 = g * g;
-		float denom = 1.0f + g2 - 2.0f * g * cosTheta;
-		return (1.0f - g2) / (4.0f * Math::PI * pow(max(denom, 1e-5f), 1.5f));
+#if defined(VR)
+		return distance(cameraWS, FrameBuffer::CameraPosAdjust[1].xyz) < distance(cameraWS, FrameBuffer::CameraPosAdjust[0].xyz) ? 1u : 0u;
+#else
+		return 0u;
+#endif
+	}
+
+	bool ShouldApplyVolumetricFog()
+	{
+		return SharedData::exponentialHeightFogSettings.enabled != 0 &&
+		       SharedData::exponentialHeightFogSettings.volumetricFogEnabled != 0 &&
+		       SharedData::exponentialHeightFogSettings.volumetricFogDistance > SharedData::exponentialHeightFogSettings.volumetricFogStartDistance + 1.0f;
+	}
+
+	float GetSceneDepthFromClip(float4 clipPosition)
+	{
+		return max(clipPosition.w, SharedData::CameraData.y);
+	}
+
+	float GetSceneDepthForFog(float3 positionWS, uint eyeIndex, out float2 volumeUV, out float projectedDepth)
+	{
+		float4 clipPosition = mul(FrameBuffer::CameraViewProj[eyeIndex], float4(positionWS, 1.0f));
+		[branch] if (clipPosition.w <= 0.0f)
+		{
+			volumeUV = 0.0f.xx;
+			projectedDepth = 0.0f;
+			return 0.0f;
+		}
+
+		projectedDepth = GetSceneDepthFromClip(clipPosition);
+		volumeUV = clipPosition.xy / clipPosition.w * float2(0.5f, -0.5f) + 0.5f;
+
+		float sceneDepth = projectedDepth;
+		[branch] if (clipPosition.w > 0.0f && !any(volumeUV < 0.0f) && !any(volumeUV > 1.0f))
+		{
+			sceneDepth = max(sceneDepth, SharedData::GetScreenDepth(volumeUV, eyeIndex));
+		}
+
+		volumeUV = saturate(volumeUV);
+		return sceneDepth;
+	}
+
+	float4 SampleVolumetricFog(float3 positionWS, uint eyeIndex)
+	{
+		if (!ShouldApplyVolumetricFog())
+			return float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+		uint volumeWidth;
+		uint volumeHeight;
+		uint volumeDepth;
+		ExponentialHeightFogIntegratedLightScattering.GetDimensions(volumeWidth, volumeHeight, volumeDepth);
+		if (volumeWidth == 0 || volumeHeight == 0 || volumeDepth == 0)
+			return float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+		float2 volumeUV;
+		float projectedDepth;
+		float sceneDepth = GetSceneDepthForFog(positionWS, eyeIndex, volumeUV, projectedDepth);
+		if (projectedDepth <= 0.0f)
+			return float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+#if defined(VR)
+		volumeUV = Stereo::ConvertToStereoUV(volumeUV, eyeIndex);
+#endif
+
+		float volumeZ = saturate(ComputeVolumetricNormalizedSlice(sceneDepth, float(volumeDepth)));
+
+		float3 volumeTexelCenter = 0.5f / float3(volumeWidth, volumeHeight, volumeDepth);
+		float2 volumeUVMin = volumeTexelCenter.xy;
+		float2 volumeUVMax = 1.0f.xx - volumeTexelCenter.xy;
+#if defined(VR)
+		float eyeMinX = (eyeIndex == 0u ? 0.0f : 0.5f) + volumeTexelCenter.x;
+		float eyeMaxX = (eyeIndex == 0u ? 0.5f : 1.0f) - volumeTexelCenter.x;
+		volumeUVMin.x = eyeMinX;
+		volumeUVMax.x = eyeMaxX;
+#endif
+		float3 volumeUVW = float3(clamp(volumeUV, volumeUVMin, volumeUVMax), clamp(volumeZ, volumeTexelCenter.z, 1.0f - volumeTexelCenter.z));
+		float4 volumetricFog = ExponentialHeightFogIntegratedLightScattering.SampleLevel(SampColorSampler, volumeUVW, 0);
+		return lerp(float4(0.0f, 0.0f, 0.0f, 1.0f), volumetricFog, saturate((sceneDepth - GetVolumetricStartDistance()) * 100000000.0f));
+	}
+
+	float4 CombineVolumetricFog(float4 analyticalFog, float3 positionWS, uint eyeIndex)
+	{
+		float4 volumetricFog = SampleVolumetricFog(positionWS, eyeIndex);
+		float analyticalTransmittance = 1.0f - analyticalFog.w;
+		float combinedTransmittance = volumetricFog.a * analyticalTransmittance;
+		float combinedOpacity = saturate(1.0f - combinedTransmittance);
+		float3 analyticalPremultiplied = analyticalFog.rgb * analyticalFog.w;
+		float3 combinedPremultiplied = volumetricFog.rgb + volumetricFog.a * analyticalPremultiplied;
+		return float4(combinedOpacity > 1e-4f ? combinedPremultiplied / combinedOpacity : float3(0.0f, 0.0f, 0.0f), combinedOpacity);
 	}
 
 	float4 GetExponentialHeightFog(float3 positionWS, float3 cameraWS, float3 fogColor)
@@ -40,16 +127,33 @@ namespace ExponentialHeightFog
 		if (fogDensity <= 0.0f) {
 			return 0.0f;
 		}
+		uint eyeIndex = GetEyeIndexFromCameraWS(cameraWS);
 		float3 viewToPos = positionWS;
+		float2 volumeUV;
+		float projectedDepth;
+		float sceneDepth = GetSceneDepthForFog(positionWS, eyeIndex, volumeUV, projectedDepth);
+		[branch] if (projectedDepth > 1e-4f && sceneDepth > projectedDepth)
+		{
+			viewToPos *= sceneDepth / projectedDepth;
+		}
+
 		float viewToPosLength = length(viewToPos);
-		float viewToPosLengthInv = rcp(viewToPosLength);
+		float viewToPosLengthInv = rcp(max(viewToPosLength, 1e-4f));
 
 		float rayOriginTerms = fogDensity * exp2(-fogHeightFalloff * max(cameraWS.z - SharedData::exponentialHeightFogSettings.fogHeight, 0));
 		float rayLength = viewToPosLength;
 		float rayDirectionZ = viewToPos.z;
 
-		if (SharedData::exponentialHeightFogSettings.startDistance > 0) {
-			float excludeIntersectionTime = SharedData::exponentialHeightFogSettings.startDistance * viewToPosLengthInv;
+		float excludeDistance = SharedData::exponentialHeightFogSettings.startDistance;
+		if (ShouldApplyVolumetricFog()) {
+			float cosAngle = sceneDepth * viewToPosLengthInv;
+			float invCosAngle = cosAngle > 0.001f ? rcp(cosAngle) : 0.0f;
+			excludeDistance = max(excludeDistance, GetVolumetricEndDistance() * invCosAngle);
+		}
+
+		if (excludeDistance > 0) {
+			excludeDistance = min(excludeDistance, viewToPosLength);
+			float excludeIntersectionTime = excludeDistance * viewToPosLengthInv;
 			float cameraToExclusionIntersectionZ = excludeIntersectionTime * viewToPos.z;
 			float exclusionIntersectionZ = cameraWS.z + cameraToExclusionIntersectionZ;
 			rayLength = (1.0f - excludeIntersectionTime) * viewToPosLength;
@@ -99,7 +203,7 @@ namespace ExponentialHeightFog
 		}
 
 		fogColor += directionalInscattering;
-		return float4(fogColor, 1.0f - expFogFactor);
+		return CombineVolumetricFog(float4(fogColor, 1.0f - expFogFactor), positionWS, eyeIndex);
 	}
 
 	float GetSunlightFogAttenuation(float3 positionWS, float3 cameraWS)

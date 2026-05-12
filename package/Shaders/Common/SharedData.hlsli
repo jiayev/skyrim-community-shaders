@@ -20,7 +20,7 @@ namespace SharedData
 		float Timer;
 		uint FrameCount;
 		uint FrameCountAlwaysActive;
-		bool InInterior;          // If the current cell is an interior
+		bool InInterior;  // If the current cell is an interior
 		bool HasDirectionalShadows;
 		bool InMapMenu;           // If the world/local map is open (note that the renderer is still deferred here)
 		bool HideSky;             // HideSky flag in WorldSpace, e.g. Blackreach
@@ -270,7 +270,25 @@ namespace SharedData
 		uint disableVanillaFog;
 		float4 fogInscatteringColor;
 		float originalFogColorAmount;
-		float3 pad;
+		uint volumetricFogEnabled;
+		uint volumetricGridPixelSize;
+		uint volumetricGridSizeZ;
+		float volumetricFogDistance;
+		float volumetricFogStartDistance;
+		float volumetricFogNearFadeInDistance;
+		float volumetricFogExtinctionScale;
+		float4 volumetricFogAlbedo;
+		float4 volumetricFogEmissive;
+		float volumetricDirectionalScatteringIntensity;
+		float volumetricShadowBias;
+		float volumetricDepthDistributionScale;
+		float volumetricSkyLightingIntensity;
+		float volumetricFogScatteringDistribution;
+		float volumetricHistoryWeight;
+		uint volumetricHistoryMissSampleCount;
+		float volumetricSampleJitterMultiplier;
+		float volumetricLocalLightScatteringIntensity;
+		float3 pad0;
 	};
 
 	struct PostProcessingSettings
