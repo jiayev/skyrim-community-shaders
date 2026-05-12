@@ -1,10 +1,13 @@
 #include "ExponentialHeightFog.h"
 
 #include "Deferred.h"
+#include "Features/CloudShadows.h"
 #include "Features/IBL.h"
 #include "Features/LightLimitFix.h"
 #include "Features/PhysicalSky.h"
 #include "Features/Skylighting.h"
+#include "Features/TerrainShadows.h"
+#include "Features/VolumetricShadows.h"
 #include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
@@ -137,9 +140,9 @@ void ExponentialHeightFog::DrawSettings()
 			ImGui::SliderFloat("Sample Jitter Multiplier", &settings.volumetricSampleJitterMultiplier, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Adds per-voxel random noise on top of the Halton jitter.\n"
-					"This decorrelates the jitter pattern across voxels, reducing\n"
-					"coherent temporal flickering. 0 = UE default, 0.5 = recommended.");
+					"Matches UE's r.VolumetricFog.LightScatteringSampleJitterMultiplier.\n"
+					"Adds per-voxel random offset on top of the Halton sequence.\n"
+					"0 = UE default; nonzero values need stronger temporal filtering.");
 			}
 			ImGui::SliderFloat("Upsample Jitter Multiplier", &settings.volumetricUpsampleJitterMultiplier, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -341,6 +344,15 @@ ID3D11ComputeShader* ExponentialHeightFog::GetLightScatteringCS()
 		if (globals::features::lightLimitFix.loaded) {
 			defines.emplace_back("LIGHT_LIMIT_FIX", "");
 		}
+		if (globals::features::terrainShadows.loaded) {
+			defines.emplace_back("TERRAIN_SHADOWS", "");
+		}
+		if (globals::features::cloudShadows.loaded) {
+			defines.emplace_back("CLOUD_SHADOWS", "");
+		}
+		if (globals::features::volumetricShadows.loaded) {
+			defines.emplace_back("VOLUMETRIC_SHADOWS", "");
+		}
 		if (globals::features::physicalSky.loaded) {
 			defines.emplace_back("PHYSICAL_SKY", "");
 		}
@@ -437,7 +449,7 @@ void ExponentialHeightFog::Prepass()
 	}
 
 	for (uint32_t i = 0; i < std::size(cb.frameJitterOffsets); i++) {
-		const uint32_t temporalFrame = (globals::state->frameCount + 1023u - i) % 1023u + 1u;
+		const uint32_t temporalFrame = (globals::state->frameCount - i) & 1023u;
 		cb.frameJitterOffsets[i] = {
 			temporalReprojection ? Halton(temporalFrame, 2) : 0.5f,
 			temporalReprojection ? Halton(temporalFrame, 3) : 0.5f,
@@ -550,6 +562,7 @@ void ExponentialHeightFog::Prepass()
 	ID3D11Buffer* nullCb[1]{ nullptr };
 	context->CSSetShaderResources(0, 5, nullSrvs);
 	context->CSSetShaderResources(17, 1, nullDepthSrv);
+	context->CSSetShaderResources(18, 1, nullDepthSrv);
 	context->CSSetShaderResources(35, 3, nullSrvs);
 	context->CSSetShaderResources(50, 1, nullDepthSrv);
 	context->CSSetShaderResources(61, 4, nullSrvs);

@@ -10,6 +10,12 @@ RWTexture3D<float4> LightScattering : register(u0);
 #include "Common/Random.hlsli"
 #include "ExponentialHeightFog/VolumetricFogCSCommon.hlsli"
 #include "IBL/IBL.hlsli"
+#if defined(TERRAIN_SHADOWS)
+#	include "TerrainShadows/TerrainShadows.hlsli"
+#endif
+#if defined(CLOUD_SHADOWS)
+#	include "CloudShadows/CloudShadows.hlsli"
+#endif
 #if defined(LIGHT_LIMIT_FIX)
 #	include "LightLimitFix/LightLimitFix.hlsli"
 #	include "InverseSquareLighting/InverseSquareLighting.hlsli"
@@ -29,6 +35,10 @@ struct DirectionalShadowLightData
 };
 
 StructuredBuffer<DirectionalShadowLightData> DirectionalShadowLights : register(t98);
+
+#if defined(VOLUMETRIC_SHADOWS)
+#	include "VolumetricShadows/VolumetricShadows.hlsli"
+#endif
 
 // 4D PCG hash matching UE's Rand4DPCG32 (jcgt.org/published/0009/03/02/)
 uint4 Rand4DPCG32(int4 p)
@@ -157,6 +167,10 @@ float SampleDirectionalShadow(float3 positionWS, uint eyeIndex)
 	if (!VolumetricFogHasDirectionalShadowMap)
 		return 1.0f;
 
+#if defined(VOLUMETRIC_SHADOWS)
+	float detailedShadow;
+	return VolumetricShadows::GetVSMShadow2D(positionWS, eyeIndex, detailedShadow);
+#else
 	DirectionalShadowLightData directionalShadowLightData = DirectionalShadowLights[0];
 	float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(positionWS, eyeIndex));
 	if (shadowMapDepth >= directionalShadowLightData.EndSplitDistances.y)
@@ -186,6 +200,22 @@ float SampleDirectionalShadow(float3 positionWS, uint eyeIndex)
 	float fade = saturate(shadowMapDepth / max(directionalShadowLightData.EndSplitDistances.y, 1.0f));
 	float fadeFactor = 1.0f - pow(fade * fade, 8.0f);
 	return lerp(1.0f, shadow, fadeFactor);
+#endif
+}
+
+float SampleDirectionalWorldShadow(float3 positionWS, uint eyeIndex)
+{
+	if (SharedData::InInterior || SharedData::HideSky || SharedData::InMapMenu)
+		return 1.0f;
+
+	float worldShadow = 1.0f;
+#if defined(TERRAIN_SHADOWS)
+	worldShadow *= TerrainShadows::GetTerrainShadow(positionWS + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, LinearSampler);
+#endif
+#if defined(CLOUD_SHADOWS)
+	worldShadow *= CloudShadows::GetCloudShadowMult(positionWS, LinearSampler);
+#endif
+	return worldShadow;
 }
 
 float3 ComputeSkyLightScattering(float3 positionWS, float3 viewDirection, uint eyeIndex)
@@ -325,7 +355,8 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 		dot(normalize(SharedData::DirLightDirection.xyz), -viewDirection),
 		SharedData::exponentialHeightFogSettings.volumetricFogScatteringDistribution);
 
-	float directionalShadow = SampleDirectionalShadow(positionWS, eyeIndex);
+	float directionalShadow = SampleDirectionalShadow(positionWS, eyeIndex) *
+	                          SampleDirectionalWorldShadow(positionWS, eyeIndex);
 	float3 directionalScattering =
 		ComputeDirectionalLightColor() *
 		SharedData::exponentialHeightFogSettings.volumetricDirectionalScatteringIntensity *
