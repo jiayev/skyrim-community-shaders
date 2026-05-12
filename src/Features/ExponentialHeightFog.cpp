@@ -3,6 +3,7 @@
 #include "Deferred.h"
 #include "Features/IBL.h"
 #include "Features/LightLimitFix.h"
+#include "Features/PhysicalSky.h"
 #include "Features/Skylighting.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -332,6 +333,9 @@ ID3D11ComputeShader* ExponentialHeightFog::GetLightScatteringCS()
 		if (globals::features::lightLimitFix.loaded) {
 			defines.emplace_back("LIGHT_LIMIT_FIX", "");
 		}
+		if (globals::features::physicalSky.loaded) {
+			defines.emplace_back("PHYSICAL_SKY", "");
+		}
 
 		lightScatteringCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ExponentialHeightFog\\VolumetricFogLightScatteringCS.hlsl", defines, "cs_5_0"));
 	}
@@ -363,12 +367,14 @@ void ExponentialHeightFog::Prepass()
 		lightLimitFix.lightGrid;
 	auto* depthSrv = Util::GetCurrentSceneDepthSRV(true);
 	auto& ibl = globals::features::ibl;
+	auto& physicalSky = globals::features::physicalSky;
 	auto& skylighting = globals::features::skylighting;
 	const bool hasIBL = ibl.loaded &&
 	                    ibl.settings.EnableIBL != 0 &&
 	                    !(ibl.settings.DisableInInteriors && Util::IsInterior()) &&
 	                    ibl.envIBLTexture &&
 	                    ibl.skyIBLTexture;
+	const bool hasPhysicalSky = physicalSky.loaded && physicalSky.texTrLut;
 	const bool hasSkylighting = skylighting.loaded && skylighting.texProbeArray;
 
 	const bool temporalReprojection = Util::GetTemporal();
@@ -469,6 +475,13 @@ void ExponentialHeightFog::Prepass()
 		hasIBL ? ibl.skyIBLTexture->srv.get() : nullptr
 	};
 	context->CSSetShaderResources(50, 1, &skylightingSrv);
+	ID3D11ShaderResourceView* physicalSkySrvs[4]{
+		hasPhysicalSky ? physicalSky.texTrLut->srv.get() : nullptr,
+		physicalSky.loaded && physicalSky.texSvLut ? physicalSky.texSvLut->srv.get() : nullptr,
+		physicalSky.loaded && physicalSky.texApLut ? physicalSky.texApLut->srv.get() : nullptr,
+		physicalSky.loaded && physicalSky.texApShadow ? physicalSky.texApShadow->srv.get() : nullptr
+	};
+	context->CSSetShaderResources(61, 4, physicalSkySrvs);
 	context->CSSetShaderResources(76, 2, iblSrvs);
 
 	if (depthSrv) {
@@ -531,6 +544,7 @@ void ExponentialHeightFog::Prepass()
 	context->CSSetShaderResources(17, 1, nullDepthSrv);
 	context->CSSetShaderResources(35, 3, nullSrvs);
 	context->CSSetShaderResources(50, 1, nullDepthSrv);
+	context->CSSetShaderResources(61, 4, nullSrvs);
 	context->CSSetShaderResources(76, 2, nullSrvs);
 	context->CSSetShaderResources(98, 1, nullSrvs);
 	context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
