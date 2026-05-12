@@ -145,6 +145,12 @@ namespace globals
 		FrameBufferCache frameBufferCached{};
 	}
 
+	static void RefreshTES()
+	{
+		if (auto tes = RE::TES::GetSingleton())
+			game::tes = tes;
+	}
+
 	namespace rtti
 	{
 		REL::Relocation<const RE::NiRTTI*> NiIntegerExtraDataRTTI;
@@ -183,7 +189,7 @@ namespace globals
 			iniSettingCollection = RE::INISettingCollection::GetSingleton();
 			iniPrefSettingCollection = RE::INIPrefSettingCollection::GetSingleton();
 			gameSettingCollection = RE::GameSettingCollection::GetSingleton();
-			tes = RE::TES::GetSingleton();
+			RefreshTES();
 			waterSystem = RE::TESWaterSystem::GetSingleton();
 			cameraNear = (float*)(REL::RelocationID(517032, 403540).address() + 0x40);
 			cameraFar = (float*)(REL::RelocationID(517032, 403540).address() + 0x44);
@@ -220,6 +226,7 @@ namespace globals
 	void OnDataLoaded()
 	{
 		using namespace game;
+		RefreshTES();
 		player = RE::PlayerCharacter::GetSingleton();
 		tes = RE::TES::GetSingleton();
 		sky = RE::Sky::GetSingleton();
