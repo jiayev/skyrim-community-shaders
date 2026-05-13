@@ -78,18 +78,18 @@ void State::Draw()
 		}
 
 		if (terrainHelper.loaded) {
-			ZoneScopedN("TerrainHelper::SetShaderResouces");
-			terrainHelper.SetShaderResouces(context);
+			ZoneScopedN("TerrainHelper::SetShaderResources");
+			terrainHelper.SetShaderResources(context);
 		}
 
 		if (skin.loaded) {
-			ZoneScopedN("Skin::SetShaderResouces");
-			skin.SetShaderResouces(context);
+			ZoneScopedN("Skin::SetShaderResources");
+			skin.SetShaderResources(context);
 		}
 
 		if (truePBR.loaded) {
-			ZoneScopedN("TruePBR::SetShaderResouces");
-			truePBR.SetShaderResouces(context);
+			ZoneScopedN("TruePBR::SetShaderResources");
+			truePBR.SetShaderResources(context);
 		}
 
 		if (permutationData != permutationDataPrevious) {

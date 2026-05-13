@@ -173,47 +173,47 @@ void Skin::DrawSettings()
 	BUFFER_VIEWER_NODE(texSkinDetail, 1.0f)
 }
 
-void Skin::SetupResources()
+void Skin::LoadSkinDetailTexture()
 {
 	auto device = globals::d3d::device;
 
+	DirectX::ScratchImage image;
+	try {
+		std::filesystem::path path{ "Data\\Shaders\\Skin\\skin_detail_n.dds" };
+		DX::ThrowIfFailed(LoadFromDDSFile(path.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image));
+	} catch (const DX::com_exception& e) {
+		logger::error("{}", e.what());
+		return;
+	}
+
+	ID3D11Resource* pResource = nullptr;
+	try {
+		DX::ThrowIfFailed(CreateTexture(device,
+			image.GetImages(), image.GetImageCount(),
+			image.GetMetadata(), &pResource));
+	} catch (const DX::com_exception& e) {
+		logger::error("{}", e.what());
+		return;
+	}
+
+	texSkinDetail = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource));
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+		.Format = texSkinDetail->desc.Format,
+		.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+		.Texture2D = {
+			.MostDetailedMip = 0,
+			.MipLevels = static_cast<UINT>(image.GetMetadata().mipLevels) }
+	};
+	texSkinDetail->CreateSRV(srvDesc);
+}
+
+void Skin::SetupResources()
+{
 	logger::debug("Loading skin detail texture...");
-	{
-		DirectX::ScratchImage image;
-		try {
-			std::filesystem::path path{ "Data\\Shaders\\Skin\\skin_detail_n.dds" };
+	LoadSkinDetailTexture();
 
-			DX::ThrowIfFailed(LoadFromDDSFile(path.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image));
-		} catch (const DX::com_exception& e) {
-			logger::error("{}", e.what());
-			return;
-		}
-
-		ID3D11Resource* pResource = nullptr;
-		try {
-			DX::ThrowIfFailed(CreateTexture(device,
-				image.GetImages(), image.GetImageCount(),
-				image.GetMetadata(), &pResource));
-		} catch (const DX::com_exception& e) {
-			logger::error("{}", e.what());
-			return;
-		}
-
-		texSkinDetail = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource));
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = texSkinDetail->desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = {
-				.MostDetailedMip = 0,
-				.MipLevels = 10 }
-		};
-		texSkinDetail->CreateSRV(srvDesc);
-	}
-
-	{
-		PerGeometryCB = new ConstantBuffer(ConstantBufferDesc<PerGeometryData>());
-	}
+	PerGeometryCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<PerGeometryData>());
 
 	// Check for Dynamic Wetness availability
 	isDynamicWetnessAvailable = SWE::API::Init();
@@ -221,41 +221,8 @@ void Skin::SetupResources()
 
 void Skin::ReloadSkinDetail()
 {
-	auto device = globals::d3d::device;
-
 	logger::debug("Reloading skin detail texture...");
-	{
-		DirectX::ScratchImage image;
-		try {
-			std::filesystem::path path{ "Data\\Shaders\\Skin\\skin_detail_n.dds" };
-
-			DX::ThrowIfFailed(LoadFromDDSFile(path.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image));
-		} catch (const DX::com_exception& e) {
-			logger::error("{}", e.what());
-			return;
-		}
-
-		ID3D11Resource* pResource = nullptr;
-		try {
-			DX::ThrowIfFailed(CreateTexture(device,
-				image.GetImages(), image.GetImageCount(),
-				image.GetMetadata(), &pResource));
-		} catch (const DX::com_exception& e) {
-			logger::error("{}", e.what());
-			return;
-		}
-
-		texSkinDetail = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource));
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = texSkinDetail->desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = {
-				.MostDetailedMip = 0,
-				.MipLevels = 10 }
-		};
-		texSkinDetail->CreateSRV(srvDesc);
-	}
+	LoadSkinDetailTexture();
 }
 
 void Skin::Prepass()
@@ -362,7 +329,6 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 	float4 wetness = float4(0.0f, 0.0f, 0.0f, 0.0f);
 	if (auto userData = geometry->GetUserData())
 		if (auto actor = userData->As<RE::Character>()) {
-			// uint32_t refid = actor->AsReference()->formID;
 			const float positionZ = actor->GetPositionZ();
 			wetness.z = positionZ;
 			if (settings.UseDynamicWetness && isDynamicWetnessAvailable) {
@@ -372,11 +338,13 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 				const float stamina = actor->AsActorValueOwner()->GetActorValue(RE::ActorValue::kStamina);
 				const float permanentStamina = actor->AsActorValueOwner()->GetPermanentActorValue(RE::ActorValue::kStamina);
 				const float temporaryStamina = actor->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary, RE::ActorValue::kStamina);
-				const float maxStamina = permanentStamina + temporaryStamina;
+				const float maxStamina = std::max(permanentStamina + temporaryStamina, 1.0f);
 				const float staminaPercentage = actor->IsDead() ? 1.0f : (stamina / maxStamina);
-				wetness.x = (staminaPercentage >= settings.StartSweat) ? 0.0f :
+				const float sweatRange = settings.StartSweat - settings.FullSweat;
+				wetness.x = (std::abs(sweatRange) < 1e-5f)             ? 0.0f :
+				            (staminaPercentage >= settings.StartSweat) ? 0.0f :
 				            (staminaPercentage <= settings.FullSweat)  ? 1.0f :
-				                                                         (settings.StartSweat - staminaPercentage) / (settings.StartSweat - settings.FullSweat);
+				                                                         (settings.StartSweat - staminaPercentage) / sweatRange;
 			}
 			if (actor->IsInWater()) {
 				wetness.y = 2.0f;
@@ -387,43 +355,51 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 				wetness.w = 0.0f;
 			}
 
-			void* geometryPtr = static_cast<void*>(geometry);
+			const uint32_t actorFormID = actor->AsReference()->formID;
 
-			if (actorWetnessMap.contains(geometryPtr)) {
-				if (actorWetnessMap[geometryPtr].x < wetness.x) {
-					actorWetnessMap[geometryPtr].x = wetness.x;
-				} else if (actorWetnessMap[geometryPtr].x > wetness.x) {
-					actorWetnessMap[geometryPtr].x -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
-					actorWetnessMap[geometryPtr].x = std::max(actorWetnessMap[geometryPtr].x, 0.0f);
-					wetness.x = actorWetnessMap[geometryPtr].x;
+			// Prevent unbounded growth: clear stale entries periodically
+			if (actorWetnessMap.size() > 1024) {
+				actorWetnessMap.clear();
+			}
+
+			auto it = actorWetnessMap.find(actorFormID);
+			if (it != actorWetnessMap.end()) {
+				auto& cached = it->second;
+
+				if (cached.x < wetness.x) {
+					cached.x = wetness.x;
+				} else if (cached.x > wetness.x) {
+					cached.x -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
+					cached.x = std::max(cached.x, 0.0f);
+					wetness.x = cached.x;
 				}
 
-				if (actorWetnessMap[geometryPtr].y < wetness.y) {
-					actorWetnessMap[geometryPtr].y = wetness.y;
-					if (actorWetnessMap[geometryPtr].w < wetness.w) {
-						actorWetnessMap[geometryPtr].w = wetness.w;
+				if (cached.y < wetness.y) {
+					cached.y = wetness.y;
+					if (cached.w < wetness.w) {
+						cached.w = wetness.w;
 					} else {
-						wetness.w = actorWetnessMap[geometryPtr].w;
+						wetness.w = cached.w;
 					}
-				} else if (actorWetnessMap[geometryPtr].y > wetness.y) {
-					actorWetnessMap[geometryPtr].y -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
-					actorWetnessMap[geometryPtr].y = std::max(actorWetnessMap[geometryPtr].y, 0.0f);
-					wetness.y = actorWetnessMap[geometryPtr].y;
+				} else if (cached.y > wetness.y) {
+					cached.y -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
+					cached.y = std::max(cached.y, 0.0f);
+					wetness.y = cached.y;
 					if (wetness.y == 0.0f) {
 						wetness.w = 0.0f;
-						actorWetnessMap[geometryPtr].w = 0.0f;
-					} else if (actorWetnessMap[geometryPtr].w < wetness.w) {
-						actorWetnessMap[geometryPtr].w = wetness.w;
+						cached.w = 0.0f;
+					} else if (cached.w < wetness.w) {
+						cached.w = wetness.w;
 					} else {
-						wetness.w = actorWetnessMap[geometryPtr].w;
+						wetness.w = cached.w;
 					}
-				} else if (actorWetnessMap[geometryPtr].w < wetness.w) {
-					actorWetnessMap[geometryPtr].w = wetness.w;
+				} else if (cached.w < wetness.w) {
+					cached.w = wetness.w;
 				} else {
-					wetness.w = actorWetnessMap[geometryPtr].w;
+					wetness.w = cached.w;
 				}
 			} else {
-				actorWetnessMap.emplace(geometryPtr, wetness);
+				actorWetnessMap.emplace(actorFormID, wetness);
 			}
 		}
 	return wetness;
@@ -431,9 +407,6 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 
 struct SkinExtendedRendererState
 {
-	static constexpr uint32_t NumPSTextures = 1;
-	static constexpr uint32_t FirstPSTexture = 71;
-
 	uint32_t PSResourceModifiedBits = 0;
 	std::array<ID3D11ShaderResourceView*, 2> PSTexture;
 
@@ -500,9 +473,6 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 	const char* foundPath = nullptr;
 	std::string extraTexturePath = "";
 	std::string wetnessTexturePath = "";
-	if (!workingSpecularPath && !workingNormalPath) {
-		return;
-	}
 
 	auto findIgnoreCase = [](std::string_view str, std::string_view pattern) -> size_t {
 		auto it = std::search(str.begin(), str.end(), pattern.begin(), pattern.end(),
@@ -510,56 +480,32 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 		return it == str.end() ? std::string_view::npos : std::distance(str.begin(), it);
 	};
 
-	if (hasSpecular && workingSpecularPath && findIgnoreCase(workingSpecularPath, "_s.dds") != std::string_view::npos) {
-		auto pos = findIgnoreCase(workingSpecularPath, "_s.dds");
-		if (pos != std::string_view::npos) {
-			auto newPath = std::string(workingSpecularPath);
-			auto newPath2 = std::string(workingSpecularPath);
-			newPath.replace(pos, 6, extraTextureName);
-			newPath2.replace(pos, 6, wetnessTextureName);
-			extraTexturePath = newPath;
-			wetnessTexturePath = newPath2;
-			foundPath = workingSpecularPath;
-		}
-	} else {
-		if (workingNormalPath && findIgnoreCase(workingNormalPath, "_n.dds") != std::string_view::npos) {
-			auto pos = findIgnoreCase(workingNormalPath, "_n.dds");
-			if (pos != std::string_view::npos) {
-				auto newPath = std::string(workingNormalPath);
-				auto newPath2 = std::string(workingNormalPath);
-				newPath.replace(pos, 6, extraTextureName);
-				newPath2.replace(pos, 6, wetnessTextureName);
-				extraTexturePath = newPath;
-				wetnessTexturePath = newPath2;
-				foundPath = workingNormalPath;
-			}
-		} else if (workingNormalPath && findIgnoreCase(workingNormalPath, "_msn.dds") != std::string_view::npos) {
-			auto pos = findIgnoreCase(workingNormalPath, "_msn.dds");
-			if (pos != std::string_view::npos) {
-				auto newPath = std::string(workingNormalPath);
-				auto newPath2 = std::string(workingNormalPath);
-				newPath.replace(pos, 8, extraTextureName);
-				newPath2.replace(pos, 8, wetnessTextureName);
-				extraTexturePath = newPath;
-				wetnessTexturePath = newPath2;
-				foundPath = workingNormalPath;
-			}
-		} else {
-			auto pos = findIgnoreCase(std::string_view(workingNormalPath), ".dds");
-			if (pos != std::string_view::npos) {
-				auto newPath = std::string(workingNormalPath);
-				auto newPath2 = std::string(workingNormalPath);
-				newPath.replace(pos, 4, extraTextureName);
-				newPath2.replace(pos, 4, wetnessTextureName);
-				extraTexturePath = newPath;
-				wetnessTexturePath = newPath2;
-				foundPath = workingNormalPath;
+	auto tryReplaceSuffix = [&](const char* basePath, std::string_view suffix) -> bool {
+		auto pos = findIgnoreCase(basePath, suffix);
+		if (pos == std::string_view::npos)
+			return false;
+		extraTexturePath = std::string(basePath);
+		wetnessTexturePath = std::string(basePath);
+		extraTexturePath.replace(pos, suffix.size(), extraTextureName);
+		wetnessTexturePath.replace(pos, suffix.size(), wetnessTextureName);
+		foundPath = basePath;
+		return true;
+	};
+
+	if (hasSpecular && workingSpecularPath) {
+		tryReplaceSuffix(workingSpecularPath, "_s.dds");
+	}
+
+	if (!foundPath && workingNormalPath) {
+		if (!tryReplaceSuffix(workingNormalPath, "_n.dds")) {
+			if (!tryReplaceSuffix(workingNormalPath, "_msn.dds")) {
+				tryReplaceSuffix(workingNormalPath, ".dds");
 			}
 		}
 	}
 
-	logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture path: {} for {}", extraTexturePath, foundPath);
-	logger::debug("[Advanced Skin] SetupExtraTexture : Wetness texture path: {} for {}", wetnessTexturePath, foundPath);
+	logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture path: {} for {}", extraTexturePath, foundPath ? foundPath : "(none)");
+	logger::debug("[Advanced Skin] SetupExtraTexture : Wetness texture path: {} for {}", wetnessTexturePath, foundPath ? foundPath : "(none)");
 
 	auto& workingExtraPtr = skinExtraTextures.try_emplace(hashKey).first->second;
 	workingExtraPtr.rfaosTexture = stateData.defaultTextureWhite;
@@ -605,7 +551,7 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 	}
 
 	auto graphicsState = globals::game::graphicsState;
-	auto workingExtraPtr = skinExtraTextures[hashKey];
+	const auto& workingExtraPtr = skinExtraTextures[hashKey];
 
 	if (workingExtraPtr.hasExtraTexture || workingExtraPtr.hasWetnessTexture) {
 		skinExtendedRendererState.SetExtraSkinPSTexture(workingExtraPtr.rfaosTexture->rendererTexture, workingExtraPtr.wetnessTexture->rendererTexture);
@@ -635,7 +581,7 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	}
 }
 
-void Skin::SetShaderResouces(ID3D11DeviceContext* a_context)
+void Skin::SetShaderResources(ID3D11DeviceContext* a_context)
 {
 	if (skinExtendedRendererState.PSResourceModifiedBits != 0) {
 		a_context->PSSetShaderResources(71, 1, &skinExtendedRendererState.PSTexture.at(0));

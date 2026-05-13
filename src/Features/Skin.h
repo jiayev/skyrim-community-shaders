@@ -16,12 +16,10 @@ struct Skin : Feature
 	{
 		return {
 			"Advanced Skin enhances character skin rendering with multiple techniques.",
-			{
-				"Physically-based dual specular lobes for realistic skin highlights",
+			{ "Physically-based dual specular lobes for realistic skin highlights",
 				"Tiled skin detail textures for enhanced realism",
 				"Extra textures support for roughness, translucency, and more",
-				"Reworked wetness system for dynamic skin effects"
-			}
+				"Reworked wetness system for dynamic skin effects" }
 		};
 	}
 	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override
@@ -43,6 +41,7 @@ struct Skin : Feature
 	virtual void SetupResources() override;
 
 	void ReloadSkinDetail();
+	void LoadSkinDetailTexture();
 
 	struct Settings
 	{
@@ -91,7 +90,7 @@ struct Skin : Feature
 		float4 skinPerGeometry;
 	};
 
-	ConstantBuffer* PerGeometryCB = nullptr;
+	eastl::unique_ptr<ConstantBuffer> PerGeometryCB;
 	float4 currentWetness = { 0.0f, 0.0f, 0.0f, 0.0f };
 	float playerStamina = 0.0f;
 	float playerStaminaMax = 0.0f;
@@ -108,7 +107,7 @@ struct Skin : Feature
 
 	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;
 	std::unordered_map<uint32_t, ExtraTextures> skinExtraTextures;
-	std::unordered_map<void*, float4> actorWetnessMap;
+	std::unordered_map<uint32_t, float4> actorWetnessMap;  // keyed by actor formID
 
 	SkinData GetCommonBufferData();
 	float GetWaterHeight(const RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_pos);
@@ -117,7 +116,7 @@ struct Skin : Feature
 	void SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet, uint32_t i_hashKey);
 	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
-	void SetShaderResouces(ID3D11DeviceContext* a_context);
+	void SetShaderResources(ID3D11DeviceContext* a_context);
 
 	struct Hooks
 	{
