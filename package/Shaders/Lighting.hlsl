@@ -2320,6 +2320,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	// Apply vertex color to base color so PBR metals use it
 	float3 pbrVertexColor = Color::SrgbToLinear(input.Color.xyz);
+	float pbrVertexAO = max(max(pbrVertexColor.x, pbrVertexColor.y), pbrVertexColor.z);
+	pbrVertexColor *= lerp(max(1 / pbrVertexAO, 0.001), 1, SharedData::truePBRSettings.VertexAOStrength);
 
 	if (!SharedData::linearLightingSettings.enableLinearLighting) {
 		baseColor.xyz = Color::SrgbToLinear(baseColor.xyz) * pbrVertexColor;
@@ -3191,8 +3193,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 vertexColor = input.Color.xyz;
 	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
 #		if defined(TRUE_PBR)
-	if (SharedData::truePBRSettings.DisableVertexAO)
-		vertexAO = 1;
+	vertexAO = lerp(1, vertexAO, SharedData::truePBRSettings.VertexAOStrength);
 	vertexColor = 1;
 #		endif
 	// Modify skylightingDiffuse such that skylightingDiffuse * vertexAO = min(skylightingDiffuse, vertexAO)

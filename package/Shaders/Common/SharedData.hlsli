@@ -409,7 +409,7 @@ namespace SharedData
 
 	struct TruePBRSettings
 	{
-		uint DisableVertexAO;
+		float VertexAOStrength;
 		uint3 pad;
 	};
 
