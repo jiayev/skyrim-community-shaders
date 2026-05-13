@@ -39,7 +39,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	FuzzStrength,
 	FuzzRoughness,
 	FuzzF0,
-	UseDynamicWetness);
+	UseDynamicWetness,
+	EvaporationRate);
 
 void Skin::DrawSettings()
 {
@@ -126,6 +127,11 @@ void Skin::DrawSettings()
 		ImGui::Text("Time it takes for the wetness to reduce from 1.0 to 0.0 after leaving water");
 	}
 
+	ImGui::SliderFloat("Evaporation Rate", &settings.EvaporationRate, 0.1f, 5.0f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("How fast bone-anchored wetness evaporates (multiplier on Fade Out Time)");
+	}
+
 	if (isDynamicWetnessAvailable) {
 		ImGui::Text("Dynamic Wetness detected.");
 		ImGui::Checkbox("Use Dynamic Wetness", &settings.UseDynamicWetness);
@@ -176,47 +182,47 @@ void Skin::DrawSettings()
 	JiayeStatement::GetSingleton()->DrawJSInfo();
 }
 
-void Skin::SetupResources()
+void Skin::LoadSkinDetailTexture()
 {
 	auto device = globals::d3d::device;
 
+	DirectX::ScratchImage image;
+	try {
+		std::filesystem::path path{ "Data\\Shaders\\Skin\\skin_detail_n.dds" };
+		DX::ThrowIfFailed(LoadFromDDSFile(path.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image));
+	} catch (const DX::com_exception& e) {
+		logger::error("{}", e.what());
+		return;
+	}
+
+	ID3D11Resource* pResource = nullptr;
+	try {
+		DX::ThrowIfFailed(CreateTexture(device,
+			image.GetImages(), image.GetImageCount(),
+			image.GetMetadata(), &pResource));
+	} catch (const DX::com_exception& e) {
+		logger::error("{}", e.what());
+		return;
+	}
+
+	texSkinDetail = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource));
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+		.Format = texSkinDetail->desc.Format,
+		.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+		.Texture2D = {
+			.MostDetailedMip = 0,
+			.MipLevels = static_cast<UINT>(image.GetMetadata().mipLevels) }
+	};
+	texSkinDetail->CreateSRV(srvDesc);
+}
+
+void Skin::SetupResources()
+{
 	logger::debug("Loading skin detail texture...");
-	{
-		DirectX::ScratchImage image;
-		try {
-			std::filesystem::path path{ "Data\\Shaders\\Skin\\skin_detail_n.dds" };
+	LoadSkinDetailTexture();
 
-			DX::ThrowIfFailed(LoadFromDDSFile(path.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image));
-		} catch (const DX::com_exception& e) {
-			logger::error("{}", e.what());
-			return;
-		}
-
-		ID3D11Resource* pResource = nullptr;
-		try {
-			DX::ThrowIfFailed(CreateTexture(device,
-				image.GetImages(), image.GetImageCount(),
-				image.GetMetadata(), &pResource));
-		} catch (const DX::com_exception& e) {
-			logger::error("{}", e.what());
-			return;
-		}
-
-		texSkinDetail = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource));
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = texSkinDetail->desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = {
-				.MostDetailedMip = 0,
-				.MipLevels = 10 }
-		};
-		texSkinDetail->CreateSRV(srvDesc);
-	}
-
-	{
-		PerGeometryCB = new ConstantBuffer(ConstantBufferDesc<PerGeometryData>());
-	}
+	PerGeometryCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<PerGeometryData>());
 
 	// Check for Dynamic Wetness availability
 	isDynamicWetnessAvailable = SWE::API::Init();
@@ -224,41 +230,8 @@ void Skin::SetupResources()
 
 void Skin::ReloadSkinDetail()
 {
-	auto device = globals::d3d::device;
-
 	logger::debug("Reloading skin detail texture...");
-	{
-		DirectX::ScratchImage image;
-		try {
-			std::filesystem::path path{ "Data\\Shaders\\Skin\\skin_detail_n.dds" };
-
-			DX::ThrowIfFailed(LoadFromDDSFile(path.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image));
-		} catch (const DX::com_exception& e) {
-			logger::error("{}", e.what());
-			return;
-		}
-
-		ID3D11Resource* pResource = nullptr;
-		try {
-			DX::ThrowIfFailed(CreateTexture(device,
-				image.GetImages(), image.GetImageCount(),
-				image.GetMetadata(), &pResource));
-		} catch (const DX::com_exception& e) {
-			logger::error("{}", e.what());
-			return;
-		}
-
-		texSkinDetail = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource));
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = texSkinDetail->desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = {
-				.MostDetailedMip = 0,
-				.MipLevels = 10 }
-		};
-		texSkinDetail->CreateSRV(srvDesc);
-	}
+	LoadSkinDetailTexture();
 }
 
 void Skin::Prepass()
@@ -365,7 +338,6 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 	float4 wetness = float4(0.0f, 0.0f, 0.0f, 0.0f);
 	if (auto userData = geometry->GetUserData())
 		if (auto actor = userData->As<RE::Character>()) {
-			// uint32_t refid = actor->AsReference()->formID;
 			const float positionZ = actor->GetPositionZ();
 			wetness.z = positionZ;
 			if (settings.UseDynamicWetness && isDynamicWetnessAvailable) {
@@ -375,11 +347,13 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 				const float stamina = actor->AsActorValueOwner()->GetActorValue(RE::ActorValue::kStamina);
 				const float permanentStamina = actor->AsActorValueOwner()->GetPermanentActorValue(RE::ActorValue::kStamina);
 				const float temporaryStamina = actor->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary, RE::ActorValue::kStamina);
-				const float maxStamina = permanentStamina + temporaryStamina;
+				const float maxStamina = std::max(permanentStamina + temporaryStamina, 1.0f);
 				const float staminaPercentage = actor->IsDead() ? 1.0f : (stamina / maxStamina);
-				wetness.x = (staminaPercentage >= settings.StartSweat) ? 0.0f :
+				const float sweatRange = settings.StartSweat - settings.FullSweat;
+				wetness.x = (std::abs(sweatRange) < 1e-5f)             ? 0.0f :
+				            (staminaPercentage >= settings.StartSweat) ? 0.0f :
 				            (staminaPercentage <= settings.FullSweat)  ? 1.0f :
-				                                                         (settings.StartSweat - staminaPercentage) / (settings.StartSweat - settings.FullSweat);
+				                                                         (settings.StartSweat - staminaPercentage) / sweatRange;
 			}
 			if (actor->IsInWater()) {
 				wetness.y = 2.0f;
@@ -390,53 +364,131 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 				wetness.w = 0.0f;
 			}
 
-			void* geometryPtr = static_cast<void*>(geometry);
+			const uint32_t actorFormID = actor->AsReference()->formID;
 
-			if (actorWetnessMap.contains(geometryPtr)) {
-				if (actorWetnessMap[geometryPtr].x < wetness.x) {
-					actorWetnessMap[geometryPtr].x = wetness.x;
-				} else if (actorWetnessMap[geometryPtr].x > wetness.x) {
-					actorWetnessMap[geometryPtr].x -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
-					actorWetnessMap[geometryPtr].x = std::max(actorWetnessMap[geometryPtr].x, 0.0f);
-					wetness.x = actorWetnessMap[geometryPtr].x;
+			// Prevent unbounded growth: clear stale entries periodically
+			if (actorWetnessMap.size() > 1024) {
+				actorWetnessMap.clear();
+			}
+
+			auto it = actorWetnessMap.find(actorFormID);
+			if (it != actorWetnessMap.end()) {
+				auto& cached = it->second;
+
+				if (cached.x < wetness.x) {
+					cached.x = wetness.x;
+				} else if (cached.x > wetness.x) {
+					cached.x -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
+					cached.x = std::max(cached.x, 0.0f);
+					wetness.x = cached.x;
 				}
 
-				if (actorWetnessMap[geometryPtr].y < wetness.y) {
-					actorWetnessMap[geometryPtr].y = wetness.y;
-					if (actorWetnessMap[geometryPtr].w < wetness.w) {
-						actorWetnessMap[geometryPtr].w = wetness.w;
+				if (cached.y < wetness.y) {
+					cached.y = wetness.y;
+					if (cached.w < wetness.w) {
+						cached.w = wetness.w;
 					} else {
-						wetness.w = actorWetnessMap[geometryPtr].w;
+						wetness.w = cached.w;
 					}
-				} else if (actorWetnessMap[geometryPtr].y > wetness.y) {
-					actorWetnessMap[geometryPtr].y -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
-					actorWetnessMap[geometryPtr].y = std::max(actorWetnessMap[geometryPtr].y, 0.0f);
-					wetness.y = actorWetnessMap[geometryPtr].y;
+				} else if (cached.y > wetness.y) {
+					cached.y -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
+					cached.y = std::max(cached.y, 0.0f);
+					wetness.y = cached.y;
 					if (wetness.y == 0.0f) {
 						wetness.w = 0.0f;
-						actorWetnessMap[geometryPtr].w = 0.0f;
-					} else if (actorWetnessMap[geometryPtr].w < wetness.w) {
-						actorWetnessMap[geometryPtr].w = wetness.w;
+						cached.w = 0.0f;
+					} else if (cached.w < wetness.w) {
+						cached.w = wetness.w;
 					} else {
-						wetness.w = actorWetnessMap[geometryPtr].w;
+						wetness.w = cached.w;
 					}
-				} else if (actorWetnessMap[geometryPtr].w < wetness.w) {
-					actorWetnessMap[geometryPtr].w = wetness.w;
+				} else if (cached.w < wetness.w) {
+					cached.w = wetness.w;
 				} else {
-					wetness.w = actorWetnessMap[geometryPtr].w;
+					wetness.w = cached.w;
 				}
 			} else {
-				actorWetnessMap.emplace(geometryPtr, wetness);
+				actorWetnessMap.emplace(actorFormID, wetness);
 			}
 		}
 	return wetness;
 }
 
+bool Skin::ComputeBoneWetness(RE::BSGeometry* geometry, uint32_t actorFormID, float waterHeight, float* outBoneWetness, uint32_t& outBoneCount)
+{
+	outBoneCount = 0;
+	std::memset(outBoneWetness, 0, sizeof(float) * MAX_BONES);
+
+	// Get skin instance from geometry
+	auto& rtData = geometry->GetGeometryRuntimeData();
+	auto* skinInstance = rtData.skinInstance.get();
+	if (!skinInstance || !skinInstance->bones)
+		return false;
+
+	const uint32_t boneCount = std::min(static_cast<uint32_t>(skinInstance->numMatrices), MAX_BONES);
+	if (boneCount == 0)
+		return false;
+
+	outBoneCount = boneCount;
+
+	if (actorFormID == 0)
+		return false;
+
+	// Prevent unbounded growth of bone wetness map
+	if (actorBoneWetnessMap.size() > 1024) {
+		actorBoneWetnessMap.clear();
+	}
+
+	auto& boneHistory = actorBoneWetnessMap[actorFormID];
+	if (boneHistory.boneCount != boneCount) {
+		// Actor bone count changed (new actor or mesh change), reset history
+		boneHistory = ActorBoneWetness{};
+		boneHistory.boneCount = boneCount;
+	}
+
+	const float deltaTime = *globals::game::deltaTime;
+	const float evapRate = deltaTime * settings.EvaporationRate / std::max(settings.WetFadeTime, 0.01f);
+	const bool hasValidWaterHeight = (waterHeight > -1e10f);
+
+	// Transition width for smooth water line (in game units)
+	static constexpr float kTransitionWidth = 5.0f;  // 2.5 units above/below water surface
+	static constexpr float kHalfTransition = kTransitionWidth * 0.5f;
+
+	for (uint32_t i = 0; i < boneCount; i++) {
+		auto* boneNode = skinInstance->bones[i];
+		if (!boneNode) {
+			outBoneWetness[i] = boneHistory.boneWet[i];
+			continue;
+		}
+
+		// Get bone's absolute world-space Z position
+		const float boneWorldZ = boneNode->world.translate.z;
+
+		// Compute target wetness based on water height comparison
+		float targetWet = 0.0f;
+		if (hasValidWaterHeight) {
+			// Smooth transition around water surface
+			targetWet = 1.0f - std::clamp((boneWorldZ - waterHeight + kHalfTransition) / kTransitionWidth, 0.0f, 1.0f);
+		}
+
+		// Update bone wetness with temporal persistence
+		float& cachedWet = boneHistory.boneWet[i];
+		if (targetWet > cachedWet) {
+			// Getting wetter — increase quickly (clamped by target)
+			cachedWet = targetWet;
+		} else if (cachedWet > 0.0f) {
+			// Drying out — evaporate gradually
+			cachedWet = std::max(0.0f, cachedWet - evapRate);
+		}
+
+		outBoneWetness[i] = cachedWet;
+	}
+
+	return true;
+}
+
 struct SkinExtendedRendererState
 {
-	static constexpr uint32_t NumPSTextures = 1;
-	static constexpr uint32_t FirstPSTexture = 71;
-
 	uint32_t PSResourceModifiedBits = 0;
 	std::array<ID3D11ShaderResourceView*, 2> PSTexture;
 
@@ -503,9 +555,6 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 	const char* foundPath = nullptr;
 	std::string extraTexturePath = "";
 	std::string wetnessTexturePath = "";
-	if (!workingSpecularPath && !workingNormalPath) {
-		return;
-	}
 
 	auto findIgnoreCase = [](std::string_view str, std::string_view pattern) -> size_t {
 		auto it = std::search(str.begin(), str.end(), pattern.begin(), pattern.end(),
@@ -513,56 +562,32 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 		return it == str.end() ? std::string_view::npos : std::distance(str.begin(), it);
 	};
 
-	if (hasSpecular && workingSpecularPath && findIgnoreCase(workingSpecularPath, "_s.dds") != std::string_view::npos) {
-		auto pos = findIgnoreCase(workingSpecularPath, "_s.dds");
-		if (pos != std::string_view::npos) {
-			auto newPath = std::string(workingSpecularPath);
-			auto newPath2 = std::string(workingSpecularPath);
-			newPath.replace(pos, 6, extraTextureName);
-			newPath2.replace(pos, 6, wetnessTextureName);
-			extraTexturePath = newPath;
-			wetnessTexturePath = newPath2;
-			foundPath = workingSpecularPath;
-		}
-	} else {
-		if (workingNormalPath && findIgnoreCase(workingNormalPath, "_n.dds") != std::string_view::npos) {
-			auto pos = findIgnoreCase(workingNormalPath, "_n.dds");
-			if (pos != std::string_view::npos) {
-				auto newPath = std::string(workingNormalPath);
-				auto newPath2 = std::string(workingNormalPath);
-				newPath.replace(pos, 6, extraTextureName);
-				newPath2.replace(pos, 6, wetnessTextureName);
-				extraTexturePath = newPath;
-				wetnessTexturePath = newPath2;
-				foundPath = workingNormalPath;
-			}
-		} else if (workingNormalPath && findIgnoreCase(workingNormalPath, "_msn.dds") != std::string_view::npos) {
-			auto pos = findIgnoreCase(workingNormalPath, "_msn.dds");
-			if (pos != std::string_view::npos) {
-				auto newPath = std::string(workingNormalPath);
-				auto newPath2 = std::string(workingNormalPath);
-				newPath.replace(pos, 8, extraTextureName);
-				newPath2.replace(pos, 8, wetnessTextureName);
-				extraTexturePath = newPath;
-				wetnessTexturePath = newPath2;
-				foundPath = workingNormalPath;
-			}
-		} else {
-			auto pos = findIgnoreCase(std::string_view(workingNormalPath), ".dds");
-			if (pos != std::string_view::npos) {
-				auto newPath = std::string(workingNormalPath);
-				auto newPath2 = std::string(workingNormalPath);
-				newPath.replace(pos, 4, extraTextureName);
-				newPath2.replace(pos, 4, wetnessTextureName);
-				extraTexturePath = newPath;
-				wetnessTexturePath = newPath2;
-				foundPath = workingNormalPath;
+	auto tryReplaceSuffix = [&](const char* basePath, std::string_view suffix) -> bool {
+		auto pos = findIgnoreCase(basePath, suffix);
+		if (pos == std::string_view::npos)
+			return false;
+		extraTexturePath = std::string(basePath);
+		wetnessTexturePath = std::string(basePath);
+		extraTexturePath.replace(pos, suffix.size(), extraTextureName);
+		wetnessTexturePath.replace(pos, suffix.size(), wetnessTextureName);
+		foundPath = basePath;
+		return true;
+	};
+
+	if (hasSpecular && workingSpecularPath) {
+		tryReplaceSuffix(workingSpecularPath, "_s.dds");
+	}
+
+	if (!foundPath && workingNormalPath) {
+		if (!tryReplaceSuffix(workingNormalPath, "_n.dds")) {
+			if (!tryReplaceSuffix(workingNormalPath, "_msn.dds")) {
+				tryReplaceSuffix(workingNormalPath, ".dds");
 			}
 		}
 	}
 
-	logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture path: {} for {}", extraTexturePath, foundPath);
-	logger::debug("[Advanced Skin] SetupExtraTexture : Wetness texture path: {} for {}", wetnessTexturePath, foundPath);
+	logger::debug("[Advanced Skin] SetupExtraTexture : Extra texture path: {} for {}", extraTexturePath, foundPath ? foundPath : "(none)");
+	logger::debug("[Advanced Skin] SetupExtraTexture : Wetness texture path: {} for {}", wetnessTexturePath, foundPath ? foundPath : "(none)");
 
 	auto& workingExtraPtr = skinExtraTextures.try_emplace(hashKey).first->second;
 	workingExtraPtr.rfaosTexture = stateData.defaultTextureWhite;
@@ -608,7 +633,7 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 	}
 
 	auto graphicsState = globals::game::graphicsState;
-	auto workingExtraPtr = skinExtraTextures[hashKey];
+	const auto& workingExtraPtr = skinExtraTextures[hashKey];
 
 	if (workingExtraPtr.hasExtraTexture || workingExtraPtr.hasWetnessTexture) {
 		skinExtendedRendererState.SetExtraSkinPSTexture(workingExtraPtr.rfaosTexture->rendererTexture, workingExtraPtr.wetnessTexture->rendererTexture);
@@ -619,26 +644,77 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 
 void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
-	// auto deferred = globals::deferred;
 	auto context = globals::d3d::context;
 
 	if (settings.EnableSkin) {
 		auto geometry = a_pass->geometry;
 		float4 wetness = GetWetness(geometry);
 
-		if (currentWetness != wetness) {
-			currentWetness = wetness;
-			PerGeometryData perGeometryData{};
-			perGeometryData.skinPerGeometry = wetness;
-			PerGeometryCB->Update(perGeometryData);
+		PerGeometryData perGeometryData{};
+		perGeometryData.skinPerGeometry = wetness;
+
+		// Get actor formID for bone wetness tracking
+		uint32_t actorFormID = 0;
+		if (auto userData = geometry->GetUserData()) {
+			if (auto actor = userData->As<RE::Character>()) {
+				actorFormID = actor->AsReference()->formID;
+			}
 		}
 
+		// Compute per-bone wetness for bone-anchored water memory.
+		// This fixes the issue where the water line follows model movement.
+		float boneWetnessData[MAX_BONES] = {};
+		uint32_t boneCount = 0;
+		float waterHeight = wetness.z + wetness.w;  // actorPosZ + waterDepth = waterHeight
+		bool hasBoneWetness = false;
+
+		if (actorFormID != 0) {
+			// Only compute bone wetness if actor is wet or was recently wet
+			if (wetness.y > 0.0f || wetness.w > 0.0f) {
+				hasBoneWetness = ComputeBoneWetness(geometry, actorFormID, waterHeight, boneWetnessData, boneCount);
+			} else {
+				// Actor not in water — still need to evaporate existing bone wetness
+				auto it = actorBoneWetnessMap.find(actorFormID);
+				if (it != actorBoneWetnessMap.end()) {
+					auto& boneHistory = it->second;
+					bool anyWet = false;
+					for (uint32_t i = 0; i < boneHistory.boneCount && i < MAX_BONES; i++) {
+						if (boneHistory.boneWet[i] > 0.0f)
+							anyWet = true;
+					}
+					if (anyWet) {
+						// Pass a very low water height so all bones are "above water" → evaporation
+						hasBoneWetness = ComputeBoneWetness(geometry, actorFormID, -1e20f, boneWetnessData, boneCount);
+					} else {
+						// All bones fully evaporated, remove entries from both maps
+						actorBoneWetnessMap.erase(it);
+						actorWetnessMap.erase(actorFormID);
+					}
+				}
+			}
+		}
+
+		// Pack bone wetness into float4 array
+		if (hasBoneWetness) {
+			perGeometryData.boneWetnessParams = float4(1.0f, 0.0f, 0.0f, 0.0f);  // hasBoneWetness = true
+			for (uint32_t i = 0; i < boneCount && i < MAX_BONES; i++) {
+				uint32_t groupIdx = i >> 2;  // i / 4
+				uint32_t compIdx = i & 3;    // i % 4
+				reinterpret_cast<float*>(&perGeometryData.boneWetness[groupIdx])[compIdx] = boneWetnessData[i];
+			}
+		} else {
+			perGeometryData.boneWetnessParams = float4(0.0f, 0.0f, 0.0f, 0.0f);  // no bone data
+		}
+
+		PerGeometryCB->Update(perGeometryData);
+
 		ID3D11Buffer* buffer = { PerGeometryCB->CB() };
-		context->PSSetConstantBuffers(7, 1, &buffer);
+		context->VSSetConstantBuffers(7, 1, &buffer);  // Bone wetness read in VS
+		context->PSSetConstantBuffers(7, 1, &buffer);  // Wetness params read in PS
 	}
 }
 
-void Skin::SetShaderResouces(ID3D11DeviceContext* a_context)
+void Skin::SetShaderResources(ID3D11DeviceContext* a_context)
 {
 	if (skinExtendedRendererState.PSResourceModifiedBits != 0) {
 		a_context->PSSetShaderResources(71, 1, &skinExtendedRendererState.PSTexture.at(0));

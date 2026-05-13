@@ -16,12 +16,10 @@ struct Skin : Feature
 	{
 		return {
 			"Advanced Skin enhances character skin rendering with multiple techniques.",
-			{
-				"Physically-based dual specular lobes for realistic skin highlights",
+			{ "Physically-based dual specular lobes for realistic skin highlights",
 				"Tiled skin detail textures for enhanced realism",
 				"Extra textures support for roughness, translucency, and more",
-				"Reworked wetness system for dynamic skin effects"
-			}
+				"Reworked wetness system with bone-anchored water memory" }
 		};
 	}
 	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override
@@ -43,6 +41,7 @@ struct Skin : Feature
 	virtual void SetupResources() override;
 
 	void ReloadSkinDetail();
+	void LoadSkinDetailTexture();
 
 	struct Settings
 	{
@@ -73,6 +72,7 @@ struct Skin : Feature
 		float FuzzRoughness = 0.35f;
 		float FuzzF0 = 0.045f;
 		bool UseDynamicWetness = false;
+		float EvaporationRate = 1.0f;  // How fast wetness evaporates (multiplier on WetFadeTime)
 	} settings;
 
 	struct alignas(16) SkinData
@@ -86,12 +86,25 @@ struct Skin : Feature
 		float4 wetParams;
 	};
 
+	// Must match SkinData.hlsli layout
+	static constexpr uint32_t MAX_BONES = 80;
+	static constexpr uint32_t BONE_WETNESS_GROUPS = 20;  // MAX_BONES / 4
+
 	struct alignas(16) PerGeometryData
 	{
-		float4 skinPerGeometry;
+		float4 skinPerGeometry;                   // x=sweat, y=waterWet, z=actorPosZ, w=waterDepth
+		float4 boneWetness[BONE_WETNESS_GROUPS];  // per-bone wetness packed as float4 (80 bones)
+		float4 boneWetnessParams;                 // x=hasBoneWetness(1.0 or 0.0)
 	};
 
-	ConstantBuffer* PerGeometryCB = nullptr;
+	// Per-actor bone wetness history for temporal persistence
+	struct ActorBoneWetness
+	{
+		float boneWet[MAX_BONES] = {};  // current wetness per bone (0..1)
+		uint32_t boneCount = 0;         // actual number of bones for this actor
+	};
+
+	eastl::unique_ptr<ConstantBuffer> PerGeometryCB;
 	float4 currentWetness = { 0.0f, 0.0f, 0.0f, 0.0f };
 	float playerStamina = 0.0f;
 	float playerStaminaMax = 0.0f;
@@ -108,16 +121,23 @@ struct Skin : Feature
 
 	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;
 	std::unordered_map<uint32_t, ExtraTextures> skinExtraTextures;
-	std::unordered_map<void*, float4> actorWetnessMap;
+	std::unordered_map<uint32_t, float4> actorWetnessMap;                // keyed by actor formID — global wetness state
+	std::unordered_map<uint32_t, ActorBoneWetness> actorBoneWetnessMap;  // keyed by actor formID — per-bone wetness history
 
 	SkinData GetCommonBufferData();
 	float GetWaterHeight(const RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_pos);
 	float4 GetWetness(RE::BSGeometry* geometry);
 
+	// Compute per-bone wetness for the given geometry's actor.
+	// Reads bone world positions from NiSkinInstance, compares with water height,
+	// maintains temporal history with evaporation.
+	// Returns true if bone wetness data was computed (i.e., actor has skin instance).
+	bool ComputeBoneWetness(RE::BSGeometry* geometry, uint32_t actorFormID, float waterHeight, float* outBoneWetness, uint32_t& outBoneCount);
+
 	void SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet, uint32_t i_hashKey);
 	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
-	void SetShaderResouces(ID3D11DeviceContext* a_context);
+	void SetShaderResources(ID3D11DeviceContext* a_context);
 
 	struct Hooks
 	{

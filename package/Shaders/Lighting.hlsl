@@ -15,6 +15,10 @@
 #include "Common/Triplanar.hlsli"
 #include "Common/VR.hlsli"
 
+#if defined(CS_SKIN)
+#	include "Skin/SkinData.hlsli"
+#endif
+
 #if defined(FACEGEN) || defined(FACEGEN_RGB_TINT)
 #	define SKIN
 #endif
@@ -98,6 +102,10 @@ struct VS_OUTPUT
 #endif
 
 	float3 ModelPosition: TEXCOORD12;
+
+#if defined(SKINNED) && defined(CS_SKIN)
+	float BoneWetnessInterp: TEXCOORD13;
+#endif
 };
 #ifdef VSHADER
 
@@ -325,6 +333,19 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif  // VR
 
 	vsout.ModelPosition = input.Position.xyz;
+
+#	if defined(SKINNED) && defined(CS_SKIN)
+	// Compute per-bone wetness interpolation for bone-anchored water wetness.
+	// Uses the same bone indices/weights as skeletal animation to look up
+	// per-bone wetness values, producing a per-vertex wetness that stays
+	// fixed on the model surface regardless of pose changes.
+	if (Skin::skinBoneWetnessParams.x > 0.5f) {
+		precise int4 boneRowIndices = 765.01.xxxx * input.BoneIndices.xyzw;
+		vsout.BoneWetnessInterp = Skin::ComputeInterpolatedBoneWetness(boneRowIndices, input.BoneWeights);
+	} else {
+		vsout.BoneWetnessInterp = 0.0f;
+	}
+#	endif
 
 	return vsout;
 }
@@ -2111,7 +2132,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			else
 	float2 wetUV = uv * SharedData::skinData.skinDetailParams.y;
 #			endif
-	float2 dynamicWet = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z, worldNormal.xyz);
+	float2 dynamicWet = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z, worldNormal.xyz,
+#			if defined(SKINNED)
+		input.BoneWetnessInterp
+#			else
+		0.0f
+#			endif
+	);
 	float skinWetness = Skin::PerlinNoise(wetUV, SharedData::skinData.wetParams.x, SharedData::skinData.wetParams.y, SharedData::skinData.wetParams.z, clamp(dynamicWet.x + dynamicWet.y + SharedData::skinData.skinParams2.y, 0.f, 2.f) * (hasSkinWetness ? 1.0 : 0.5));
 	if ((SharedData::skinData.skinDetailParams.w > 0.0f || skinWetness > 0.0f) && skinEnabled)
 #		else
@@ -2651,7 +2678,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(CS_SKIN) && !defined(SKIN)
 	if (skinEnabled) {
-		float2 dynamicWetness = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z, worldNormal.xyz);
+		float2 dynamicWetness = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z, worldNormal.xyz,
+#			if defined(SKINNED)
+			input.BoneWetnessInterp
+#			else
+			0.0f
+#			endif
+		);
 #			if defined(TRUE_PBR)
 		dynamicWetness.x = lerp(dynamicWetness.x, 0.0f, material.Metallic);
 #			endif
