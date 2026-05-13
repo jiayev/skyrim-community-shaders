@@ -407,6 +407,12 @@ namespace SharedData
 		float windowWidth;
 	};
 
+	struct TruePBRSettings
+	{
+		uint DisableVertexAO;
+		uint3 pad;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -425,6 +431,7 @@ namespace SharedData
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
+		TruePBRSettings truePBRSettings;
 		PostProcessingSettings postProcessingSettings;
 		SkinData skinData;
 		SSPLSSettings ssplsSettings;
