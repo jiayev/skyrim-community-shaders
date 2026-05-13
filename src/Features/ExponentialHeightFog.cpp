@@ -7,7 +7,6 @@
 #include "Features/PhysicalSky.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainShadows.h"
-#include "Features/VolumetricShadows.h"
 #include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
@@ -350,9 +349,6 @@ ID3D11ComputeShader* ExponentialHeightFog::GetLightScatteringCS()
 		if (globals::features::cloudShadows.loaded) {
 			defines.emplace_back("CLOUD_SHADOWS", "");
 		}
-		if (globals::features::volumetricShadows.loaded) {
-			defines.emplace_back("VOLUMETRIC_SHADOWS", "");
-		}
 		if (globals::features::physicalSky.loaded) {
 			defines.emplace_back("PHYSICAL_SKY", "");
 		}
@@ -562,7 +558,6 @@ void ExponentialHeightFog::Prepass()
 	ID3D11Buffer* nullCb[1]{ nullptr };
 	context->CSSetShaderResources(0, 5, nullSrvs);
 	context->CSSetShaderResources(17, 1, nullDepthSrv);
-	context->CSSetShaderResources(18, 1, nullDepthSrv);
 	context->CSSetShaderResources(35, 3, nullSrvs);
 	context->CSSetShaderResources(50, 1, nullDepthSrv);
 	context->CSSetShaderResources(61, 4, nullSrvs);
