@@ -37,10 +37,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	secundaColor,
 	proceduralSun,
 	sunDiskRad,
-	adaptationStart,
-	adaptationEnd,
-	dayExposure,
-	nightExposure,
+
 	worldspaceWhitelist,
 	groundAlbedo,
 	planetRadius,
@@ -287,13 +284,8 @@ void PhysicalSky::SettingsGeneral()
 
 	ImGui::SeparatorText("Post Processing");
 	{
-		ImGui::InputFloat("Day Exposure", &settings.dayExposure);
-		settings.dayExposure = std::max(1e-10f, settings.dayExposure);
-		ImGui::InputFloat("Night Exposure", &settings.nightExposure);
-		settings.nightExposure = std::max(1e-10f, settings.nightExposure);
-		ImGui::SliderAngle("Adaptation Start", &settings.adaptationStart, -90.f, 0.f);
-		ImGui::SliderAngle("Adaptation End", &settings.adaptationEnd, -90.f, 0.f);
-
+		const bool llEnabled = globals::features::linearLighting.settings.enableLinearLighting;
+		ImGui::BeginDisabled(llEnabled);
 		if (ImGui::BeginTable("tonemap", 4, ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
 			ImGui::TableNextColumn();
 			ImGui::Text("Tonemapper");
@@ -304,6 +296,11 @@ void PhysicalSky::SettingsGeneral()
 			ImGui::TableNextColumn();
 			ImGui::RadioButton("Reinherd", &settings.tonemapper, 2);
 			ImGui::EndTable();
+		}
+		ImGui::EndDisabled();
+		if (llEnabled) {
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Tonemapper is forced to Linear when Linear Lighting is enabled.");
 		}
 		ImGui::SliderFloat("Vanilla Mix", &settings.vanillaMix, 0.f, 1.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -670,26 +667,21 @@ void PhysicalSky::Reset()
 	auto masserDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Masser)];
 	auto secundaDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Secunda)];
 
-	float sunAngle = DirectX::XMConvertToRadians(90.f) - acos(sunDir.z);
-	float adaptAmount = (sunAngle - settings.adaptationStart) / (settings.adaptationEnd - settings.adaptationStart);
-	adaptAmount = std::min(1.f, std::max(0.f, adaptAmount));
-	float exposure = settings.dayExposure * exp(log(settings.nightExposure / settings.dayExposure) * adaptAmount);
-
 	cbData = {
 		.texDim = res,
 		.rcpTexDim = float2(1.0f) / res,
 		.frameDim = dynres,
 		.rcpFrameDim = float2(1.0f) / dynres,
 		.sunDir = { sunDir.x, sunDir.y, sunDir.z },
-		.sunlightColor = settings.sunlightColor * exposure,
+		.sunlightColor = settings.sunlightColor,
 		.trMix = settings.trMix,
 		.masserDir = { masserDir.x, masserDir.y, masserDir.z },
 		.apLumMix = settings.apLumMix,
-		.masserColor = settings.masserColor * exposure,
+		.masserColor = settings.masserColor,
 		.apTrMix = settings.apTrMix,
 		.secundaDir = { secundaDir.x, secundaDir.y, secundaDir.z },
 		.sunDiskCos = cos(settings.sunDiskRad) * (settings.proceduralSun ? 1.f : 0.f),
-		.secundaColor = settings.secundaColor * exposure,
+		.secundaColor = settings.secundaColor,
 		.enabled = allGood,
 		.tonemapper = linearLighting.settings.enableLinearLighting ? 0 : settings.tonemapper,
 		.vanillaMix = settings.vanillaMix,
