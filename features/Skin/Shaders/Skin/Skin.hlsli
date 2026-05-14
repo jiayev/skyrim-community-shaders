@@ -273,23 +273,28 @@ namespace Skin
 #endif
 
 	// Compute wetness for a skin pixel.
-	// boneWetnessInterp: pre-interpolated bone wetness from VS (>= 0 means valid bone data available).
+	// boneWetnessInterp: pre-interpolated bone wetness from VS (0..1, bone history data).
 	// z: absolute world-space Z of the pixel.
 	// modelNormal: world-space normal.
 	float2 GetWetness(float z, float3 modelNormal, float boneWetnessInterp)
 	{
-		if (skinPerGeometry.x == 0.f && skinPerGeometry.y == 0.f)
+		bool hasBoneData = (skinBoneWetnessParams.x > 0.5f);
+
+		// Early-out only when all wetness sources are zero
+		if (skinPerGeometry.x == 0.f && skinPerGeometry.y == 0.f &&
+			(!hasBoneData || boneWetnessInterp <= 0.f))
 			return 0.f;
 
 		float waterWet = 0.0f;
 
-		// Use per-bone wetness if available (fixes water line following model movement)
-		if (skinBoneWetnessParams.x > 0.5f) {
-			// Bone wetness was computed on CPU with history tracking;
-			// it remembers which parts of the body were submerged.
-			waterWet = skinPerGeometry.y * boneWetnessInterp;
+		if (hasBoneData) {
+			// Bone wetness handles spatial (which bones) and temporal (evaporation)
+			// aspects independently. Use fixed intensity 2.0 matching the original
+			// skinPerGeometry.y value when in water. The bone data itself fades
+			// via CPU-side evaporation, so no need for the global y fade here.
+			waterWet = 2.0f * boneWetnessInterp;
 		} else {
-			// Fallback: original world-Z comparison (no bone data)
+			// Fallback: original world-Z comparison (no bone data available)
 			float waterLevel = skinPerGeometry.z + skinPerGeometry.w;
 			waterWet = skinPerGeometry.y * (1 - smoothstep(waterLevel - 2.5f, waterLevel + 2.5f, z));
 		}
