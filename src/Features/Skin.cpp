@@ -118,17 +118,17 @@ void Skin::DrawSettings()
 
 	ImGui::SliderFloat("Extra Skin Wetness", &settings.ExtraSkinWetness, 0.0f, 2.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Extra wetness for skin adding to wetness feature");
+		ImGui::Text("Adds a constant layer of wetness to all skin, making it look slightly damp or sweaty at all times, even when not in water or exerting effort.");
 	}
 
 	ImGui::SliderFloat("Wetness Fade Out Time", &settings.WetFadeTime, 0.0f, 50.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Time it takes for the wetness to reduce from 1.0 to 0.0 after leaving water");
+		ImGui::Text("How many seconds it takes for skin to fully dry after leaving water. Higher values mean wetness lingers longer.");
 	}
 
 	ImGui::SliderFloat("Evaporation Rate", &settings.EvaporationRate, 0.1f, 5.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("How fast bone-anchored wetness evaporates (multiplier on Fade Out Time)");
+		ImGui::Text("How quickly wetness dries on different body parts. Higher values make the character dry faster. Works as a multiplier on Fade Out Time.");
 	}
 
 	if (isDynamicWetnessAvailable) {
@@ -141,14 +141,32 @@ void Skin::DrawSettings()
 	if (!settings.UseDynamicWetness) {
 		ImGui::SliderFloat("Stamina Threshold for Sweat", &settings.StartSweat, 0.0f, 1.0f, "%.2f",
 			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("The character starts sweating when their stamina drops below this percentage. For example, 0.75 means sweat appears below 75%% stamina.");
+		}
 		ImGui::SliderFloat("Full Sweat Threshold", &settings.FullSweat, 0.0f, 1.0f, "%.2f",
 			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("The character reaches maximum sweat when stamina drops below this percentage. For example, 0.15 means full sweat below 15%% stamina.");
+		}
 	}
 
 	ImGui::SliderFloat("Wetness Perlin Noise Scale", &settings.WetParams.x, 0.0f, 1024.0f, "%1.f");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Controls the size of the wet/dry pattern on skin. Higher values create a finer, more detailed pattern; lower values produce larger, broader wet patches.");
+	}
 	ImGui::SliderFloat("Wetness Perlin Noise Lacunarity", &settings.WetParams.y, 0.0f, 2.0f, "%.1f");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Controls how much fine detail is added to the wetness pattern. Higher values add more small-scale variation on top of the base pattern.");
+	}
 	ImGui::SliderFloat("Wetness Perlin Noise Persistence", &settings.WetParams.z, 0.0f, 20.0f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Controls the overall contrast and roughness of the wetness pattern. Higher values make the pattern more pronounced and varied.");
+	}
 	ImGui::SliderFloat("Wetness Normal Scale", &settings.WetParams.w, 0.0f, 20.0f, "%.1f");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Controls how bumpy wet skin appears. Higher values create more visible surface ripples and distortion on wet areas.");
+	}
 
 	ImGui::Spacing();
 
