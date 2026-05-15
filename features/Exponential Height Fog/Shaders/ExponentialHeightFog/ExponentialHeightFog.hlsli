@@ -242,7 +242,9 @@ namespace ExponentialHeightFog
 				dirLightColor *= saturate(physSkyTransmittance);
 			}
 #endif
-			float cosTheta = dot(normalize(positionWS), SharedData::DirLightDirection.xyz);
+			float3 viewDirection = viewToPos * viewToPosLengthInv;
+			float3 lightDirection = normalize(SharedData::DirLightDirection.xyz);
+			float cosTheta = dot(lightDirection, -viewDirection);
 			float phase = HenyeyGreenstein(cosTheta, SharedData::exponentialHeightFogSettings.directionalInscatteringAnisotropy);
 			float3 directionalLightInscattering = dirLightColor * phase;
 			float dirExponentialHeightLineIntegral = exponentialHeightLineIntegralCalc * max(rayLength - SharedData::exponentialHeightFogSettings.startDistance, 0);
