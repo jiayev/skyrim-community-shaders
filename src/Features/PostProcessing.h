@@ -2,16 +2,17 @@
 
 #include "PostProcessing/PostProcessFeature.h"
 
-#include "PostProcessing/BloomFlareComposite.h"
 #include "PostProcessing/BokehResources.h"
 #include "PostProcessing/Border.h"
 #include "PostProcessing/CODBloom.h"
 #include "PostProcessing/Camera.h"
 #include "PostProcessing/ColorGrading.h"
+#include "PostProcessing/Composite.h"
 #include "PostProcessing/DoF.h"
 #include "PostProcessing/HistogramAutoExposure.h"
 #include "PostProcessing/LUT.h"
 #include "PostProcessing/LensFlare.h"
+#include "PostProcessing/LocalExposure.h"
 #include "PostProcessing/MotionBlur.h"
 #include "PostProcessing/PhysicalGlare.h"
 #include "PostProcessing/Vignette.h"
@@ -69,13 +70,14 @@ struct PostProcessing : Feature
 
 	enum class FeaturePipelineIndex : size_t
 	{
+		LocalExposure,
 		AutoExposure,
 		MotionBlur,
 		DoF,
 		PhysicalGlare,
 		CODBloom,
 		LensFlare,
-		BloomFlareComposite,
+		Composite,
 		ColorGrading,
 		LUT,
 		Vignette,

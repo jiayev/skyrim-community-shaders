@@ -1,14 +1,16 @@
-#include "BloomFlareComposite.h"
+#include "Composite.h"
 
 #include "CODBloom.h"
 #include "Features/PostProcessing.h"
+#include "HistogramAutoExposure.h"
 #include "LensFlare.h"
+#include "LocalExposure.h"
 #include "PhysicalGlare.h"
 
 #include "State.h"
 #include "Util.h"
 
-void BloomFlareComposite::UpdateAutoEnabled()
+void Composite::UpdateAutoEnabled()
 {
 	if (!owner)
 		return;
@@ -16,11 +18,13 @@ void BloomFlareComposite::UpdateAutoEnabled()
 	auto* bloom = owner->GetPipelineFeature<CODBloom>(PostProcessing::FeaturePipelineIndex::CODBloom);
 	auto* flare = owner->GetPipelineFeature<LensFlare>(PostProcessing::FeaturePipelineIndex::LensFlare);
 	auto* glare = owner->GetPipelineFeature<PhysicalGlare>(PostProcessing::FeaturePipelineIndex::PhysicalGlare);
+	auto* exposure = owner->GetPipelineFeature<HistogramAutoExposure>(PostProcessing::FeaturePipelineIndex::AutoExposure);
+	auto* localExposure = owner->GetPipelineFeature<LocalExposure>(PostProcessing::FeaturePipelineIndex::LocalExposure);
 
-	enabled = (bloom && bloom->enabled) || (flare && flare->enabled) || (glare && glare->enabled);
+	enabled = (bloom && bloom->enabled) || (flare && flare->enabled) || (glare && glare->enabled) || (exposure && exposure->enabled) || (localExposure && localExposure->enabled);
 }
 
-void BloomFlareComposite::SetupResources()
+void Composite::SetupResources()
 {
 	auto renderer = globals::game::renderer;
 
@@ -55,7 +59,7 @@ void BloomFlareComposite::SetupResources()
 	CompileComputeShaders();
 }
 
-void BloomFlareComposite::ClearShaderCache()
+void Composite::ClearShaderCache()
 {
 	for (auto& shader : compositeShaders) {
 		if (shader) {
@@ -67,11 +71,11 @@ void BloomFlareComposite::ClearShaderCache()
 	CompileComputeShaders();
 }
 
-void BloomFlareComposite::CompileComputeShaders()
+void Composite::CompileComputeShaders()
 {
-	auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\BloomFlareComposite\\composite.cs.hlsl");
+	auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\Composite\\composite.cs.hlsl");
 
-	// Compile all non-empty flag combinations (1..7)
+	// Compile all non-empty flag combinations (1..31)
 	for (uint flags = 1; flags < CompositeFlags::FLAG_COUNT; flags++) {
 		std::vector<std::pair<const char*, const char*>> defines;
 		if (flags & BLOOM)
@@ -80,13 +84,17 @@ void BloomFlareComposite::CompileComputeShaders()
 			defines.push_back({ "HAS_LENS_FLARE", "" });
 		if (flags & GLARE)
 			defines.push_back({ "HAS_GLARE", "" });
+		if (flags & EXPOSURE)
+			defines.push_back({ "HAS_EXPOSURE", "" });
+		if (flags & LOCAL_EXPOSURE)
+			defines.push_back({ "HAS_LOCAL_EXPOSURE", "" });
 
 		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), defines, "cs_5_0", "CSComposite")))
 			compositeShaders[flags].attach(rawPtr);
 	}
 }
 
-void BloomFlareComposite::Draw(TextureInfo& inout_tex)
+void Composite::Draw(TextureInfo& inout_tex)
 {
 	if (!owner)
 		return;
@@ -94,19 +102,23 @@ void BloomFlareComposite::Draw(TextureInfo& inout_tex)
 	auto* bloom = owner->GetPipelineFeature<CODBloom>(PostProcessing::FeaturePipelineIndex::CODBloom);
 	auto* flare = owner->GetPipelineFeature<LensFlare>(PostProcessing::FeaturePipelineIndex::LensFlare);
 	auto* glare = owner->GetPipelineFeature<PhysicalGlare>(PostProcessing::FeaturePipelineIndex::PhysicalGlare);
+	auto* exposure = owner->GetPipelineFeature<HistogramAutoExposure>(PostProcessing::FeaturePipelineIndex::AutoExposure);
+	auto* localExposure = owner->GetPipelineFeature<LocalExposure>(PostProcessing::FeaturePipelineIndex::LocalExposure);
 
 	bool hasBloom = bloom && bloom->enabled;
 	bool hasFlare = flare && flare->enabled;
 	bool hasGlare = glare && glare->enabled;
+	bool hasExposure = exposure && exposure->enabled;
+	bool hasLocalExposure = localExposure && localExposure->enabled;
 
-	uint flags = (hasBloom ? BLOOM : 0) | (hasFlare ? FLARE : 0) | (hasGlare ? GLARE : 0);
+	uint flags = (hasBloom ? BLOOM : 0) | (hasFlare ? FLARE : 0) | (hasGlare ? GLARE : 0) | (hasExposure ? EXPOSURE : 0) | (hasLocalExposure ? LOCAL_EXPOSURE : 0);
 	if (flags == NONE)
 		return;
 
 	auto state = globals::state;
 	auto context = globals::d3d::context;
 
-	state->BeginPerfEvent("Bloom/Flare/Glare Composite");
+	state->BeginPerfEvent("Composite");
 
 	ID3D11ComputeShader* shader = compositeShaders[flags].get();
 	if (!shader) {
@@ -119,8 +131,11 @@ void BloomFlareComposite::Draw(TextureInfo& inout_tex)
 	//   t1 = bloom texture (if available)
 	//   t2 = flare texture (if available)
 	//   t3 = glare texture (if available)
+	//   t4 = adaptation buffer (if exposure enabled)
+	//   t5 = local exposure texture (if local exposure enabled)
 	//   u0 = output
-	std::array<ID3D11ShaderResourceView*, 4> srvs = { nullptr };
+	//   b1 = auto exposure constant buffer (if exposure enabled)
+	std::array<ID3D11ShaderResourceView*, 6> srvs = { nullptr };
 	std::array<ID3D11UnorderedAccessView*, 1> uavs = { nullptr };
 
 	srvs[0] = inout_tex.srv;
@@ -136,6 +151,16 @@ void BloomFlareComposite::Draw(TextureInfo& inout_tex)
 	if (hasGlare) {
 		auto glareOutput = glare->GetGlareOutput();
 		srvs[3] = glareOutput.srv;
+	}
+	if (hasExposure) {
+		srvs[4] = exposure->GetAdaptationSRV();
+
+		// Bind the auto exposure constant buffer at b1
+		ID3D11Buffer* cb = exposure->GetConstantBuffer();
+		context->CSSetConstantBuffers(1, 1, &cb);
+	}
+	if (hasLocalExposure) {
+		srvs[5] = localExposure->GetExposureSRV();
 	}
 
 	uavs[0] = texOutput->uav.get();
@@ -155,6 +180,11 @@ void BloomFlareComposite::Draw(TextureInfo& inout_tex)
 	context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 	context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 	context->CSSetShader(nullptr, nullptr, 0);
+
+	if (hasExposure) {
+		ID3D11Buffer* nullCB = nullptr;
+		context->CSSetConstantBuffers(1, 1, &nullCB);
+	}
 
 	inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
 	state->EndPerfEvent();
