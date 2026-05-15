@@ -266,12 +266,13 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 	}
 
 	// Don't lookup radiance from the background.
+	static const float SKY_DEPTH_THRESHOLD = 1e-4;
 	int2 texel_coords = int2(screen_size * hit.xy * FrameBuffer::DynamicResolutionParams1.xy);
 	float surface_z = SSRT_LoadDepth(texel_coords / 2, 1);
 #if SSRT_OPTION_INVERTED_DEPTH
-	if (surface_z == 0.0) {
+	if (surface_z < SKY_DEPTH_THRESHOLD) {
 #else
-	if (surface_z == 1.0) {
+	if (surface_z > (1.0 - SKY_DEPTH_THRESHOLD)) {
 #endif
 		return 0;
 	}
