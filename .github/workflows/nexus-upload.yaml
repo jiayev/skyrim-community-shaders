@@ -147,6 +147,11 @@ jobs:
                   if [ -n "$INPUT_ARTIFACT_PATTERN" ]; then
                     ARGS+=( --core-artifact-pattern "$INPUT_ARTIFACT_PATTERN" )
                   fi
+                  # Strip the leading 'v' so we get e.g. "1.5.2" — the value
+                  # is rendered into Nexus file descriptions, where the
+                  # bare semver is what users see in the UI.
+                  RELEASE_VER="${RELEASE_TAG#v}"
+                  ARGS+=( --release-version "$RELEASE_VER" )
                   python tools/feature_version_audit.py "${ARGS[@]}"
 
                   # Fetch the specific release by tag — avoids pagination issues with
@@ -388,6 +393,11 @@ jobs:
             mod_version: ${{ matrix.mod_version || needs.prepare-nexus-matrix.outputs.version }}
             mod_filename: ${{ matrix.mod_filename }}
             changelog: ${{ inputs.changelog || matrix.changelog || '' }}
+            # file_description anchors each .7z to the CS release it shipped
+            # with. Empty string falls back to the upstream default
+            # ("See mod description for details.") so non-release dispatches
+            # without an audit-tool-built matrix still work.
+            file_description: ${{ matrix.file_description || '' }}
             check_existing: true
         secrets:
             UNEX_NEXUSMODS_SESSION_COOKIE: ${{ secrets.UNEX_NEXUSMODS_SESSION_COOKIE }}
