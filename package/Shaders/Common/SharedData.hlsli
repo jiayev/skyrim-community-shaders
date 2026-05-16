@@ -60,9 +60,13 @@ namespace SharedData
 	struct CubemapCreatorSettings
 	{
 		uint Enabled;
-		float3 pad0;
+		uint EnabledSSR;
+		float2 pad0;
 
 		float4 CubemapColor;
+
+		float ReflectionFallbackAmount;
+		float3 pad1;
 	};
 
 	struct TerraOccSettings
@@ -269,6 +273,12 @@ namespace SharedData
 		float3 pad;
 	};
 
+	struct TruePBRSettings
+	{
+		float VertexAOStrength;
+		uint3 pad;
+	};
+
 	struct PhysSkyData
 	{
 		// DYNAMIC
@@ -341,6 +351,7 @@ namespace SharedData
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
+		TruePBRSettings truePBRSettings;
 		PhysSkyData physSkyData;
 	};
 
