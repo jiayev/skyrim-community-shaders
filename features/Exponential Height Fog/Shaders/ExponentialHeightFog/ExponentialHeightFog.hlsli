@@ -292,5 +292,30 @@ namespace ExponentialHeightFog
 
 		return lerp(1.0f, sunlightFogAttenuation, SharedData::exponentialHeightFogSettings.sunlightAttenuationAmount);
 	}
+
+	float GetSunFogAttenuation(float3 cameraWS)
+	{
+		float fogHeightFalloff = SharedData::exponentialHeightFogSettings.fogHeightFalloff * 0.001f;
+		float fogDensity = SharedData::exponentialHeightFogSettings.fogDensity * 0.001f;
+		if (fogDensity <= 0.0f) {
+			return 1.0f;
+		}
+
+		float exponent = fogHeightFalloff * max(cameraWS.z - SharedData::exponentialHeightFogSettings.fogHeight, 0.0f);
+		float localDensity = fogDensity * exp2(-exponent);
+
+		float3 lightDir = SharedData::DirLightDirection.xyz;
+		float lightDirZ = lightDir.z;
+
+		float sunFogAttenuation = 0.0f;
+
+		// Integral = Density * (1 - exp2(-slope * inf)) / slope
+		if (lightDirZ > 0.001f) {
+			float slope = max(fogHeightFalloff * lightDirZ, 1e-8f);
+			float exponentialHeightLineIntegral = localDensity / slope;
+			sunFogAttenuation = saturate(exp2(-exponentialHeightLineIntegral));
+		}
+		return sunFogAttenuation;
+	}
 }
 #endif
