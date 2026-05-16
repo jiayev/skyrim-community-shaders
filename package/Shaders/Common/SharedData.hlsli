@@ -296,6 +296,12 @@ namespace SharedData
 		float2 pad0;
 	};
 
+	struct TruePBRSettings
+	{
+		float VertexAOStrength;
+		uint3 pad;
+	};
+
 	struct PostProcessingSettings
 	{
 		uint DisableVanillaTonemapping;
@@ -409,12 +415,6 @@ namespace SharedData
 		float intensity;
 		float3 wallAlbedo;
 		float windowWidth;
-	};
-
-	struct TruePBRSettings
-	{
-		float VertexAOStrength;
-		uint3 pad;
 	};
 
 	cbuffer FeatureData : register(b6)

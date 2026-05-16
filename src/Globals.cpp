@@ -25,6 +25,7 @@
 #include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/ScreenSpaceRayTracing.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
@@ -95,6 +96,7 @@ namespace globals
 		Upscaling upscaling{};
 		HDRDisplay hdrDisplay{};
 		RenderDoc renderDoc{};
+		ScreenshotFeature screenshotFeature{};
 		WeatherEditor weatherEditor{};
 		ExponentialHeightFog exponentialHeightFog{};
 		TruePBR truePBR{};

@@ -42,6 +42,7 @@ struct HDRDisplay;
 struct PostProcessing;
 struct Skin;
 struct PseudoSunBounce;
+struct ScreenshotFeature;
 
 class State;
 class Deferred;
@@ -102,6 +103,7 @@ namespace globals
 		extern Upscaling upscaling;
 		extern HDRDisplay hdrDisplay;
 		extern RenderDoc renderDoc;
+		extern ScreenshotFeature screenshotFeature;
 		extern WeatherEditor weatherEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
