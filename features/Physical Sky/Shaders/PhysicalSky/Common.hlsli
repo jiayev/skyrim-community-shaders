@@ -14,6 +14,10 @@
 #	include "IBL/IBL.hlsli"
 #endif
 
+#if defined(CLOUD_SHADOWS) && defined(PS_SKY_SAMPLERS)
+TextureCube<float> TexCloudShadowLayer : register(t26);
+#endif
+
 #ifndef OMIT_PS_NAMESPACE
 namespace PhysSky
 {
@@ -363,7 +367,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 				if (raySample.z < 0.0)
 					rayShadow[i % 4] += -raySample.z;  // World shadow
 				else
-					rayShadow[i % 4] = max(rayShadow[i % 4], CloudShadows::CloudShadowsTexture.SampleLevel(sampCube, raySample, 0).x);
+					rayShadow[i % 4] = max(rayShadow[i % 4], TexCloudShadowLayer.SampleLevel(sampCube, raySample, 0).x);
 
 				rayPos += rayStep;
 			}
