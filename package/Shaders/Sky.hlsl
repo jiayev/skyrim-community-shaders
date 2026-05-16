@@ -205,6 +205,11 @@ cbuffer AlphaTestRefCB : register(b11)
 #		endif
 #	endif
 
+#	if defined(EXP_HEIGHT_FOG)
+#		define SampColorSampler SampBlendSampler
+#		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
+#	endif
+
 Texture2D<float> TexDepthSampler : register(t17);
 
 PS_OUTPUT main(PS_INPUT input)
@@ -244,6 +249,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 #		if defined(PHYSICAL_SKY)
 	bool enableProceduralSun = SharedData::physSkyData.sunDiskCos > 0.0 && SharedData::physSkyData.enabled && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun);
+	baseColor.xyz *= enableProceduralSun ? 0.f : 1.f;
 #		else
 	bool enableProceduralSun = false;
 #		endif
@@ -272,7 +278,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		if defined(PS_CLOUDS) && defined(CLOUD_SHADOWS)
 	if (SharedData::physSkyData.enabled)
-		baseColor.rgb = PhysSky::RelightCloud(baseColor, viewDir, float3(0, 0, 0) + viewDir * psCloudDist, PhysSky::SampTr, SampBaseSampler);
+		baseColor.rgb = PhysSky::RelightCloud(baseColor, viewDir, float3(0, 0, 0) + viewDir * psCloudDist, PhysSky::SampTr, SampBaseSampler, input.Position.xy);
 #		endif
 
 #		if defined(DITHER)
@@ -336,6 +342,16 @@ PS_OUTPUT main(PS_INPUT input)
 			float3 sunDiskColor = sunDiskRadiance * limbFactor * softEdge;
 			psout.Color.xyz += sunDiskColor;
 			psout.Color.w = 1.0;
+#			if defined(CLOUD_SHADOWS)
+			float cloudMult = CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, SampBaseSampler);
+			psout.Color.w *= cloudMult;
+#			endif
+#			if defined(EXP_HEIGHT_FOG)
+			if (SharedData::exponentialHeightFogSettings.enabled) {
+				float attenuation = ExponentialHeightFog::GetSunFogAttenuation(FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
+				psout.Color.w *= attenuation;
+			}
+#			endif
 		}
 #		endif
 	}

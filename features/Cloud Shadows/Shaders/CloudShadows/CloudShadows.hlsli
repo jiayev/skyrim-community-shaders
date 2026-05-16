@@ -36,10 +36,11 @@ namespace CloudShadows
 	{
 		float cloudDist = IntersectCloudDist(worldPosition, SharedData::DirLightDirection.xyz);
 		if (cloudDist < 0)
-			return 1;
+			return 1.0;
+
 		float3 cloudSampleDir = worldPosition + cloudDist * SharedData::DirLightDirection.xyz;
 		float cloudCubeSample = CloudShadowsTexture.SampleLevel(textureSampler, cloudSampleDir, 0).x;
 		return lerp(1.0, 1.0 - cloudCubeSample, SharedData::cloudShadowsSettings.Opacity);
 	}
 }
-#endif
+#endif  // CLOUD_SHADOWS_HLSLI
