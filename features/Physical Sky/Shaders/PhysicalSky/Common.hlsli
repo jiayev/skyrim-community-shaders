@@ -313,7 +313,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		return tr;
 	}
 
-#		if defined(CLOUD_SHADOWS)
+#		if defined(CLOUD_SHADOWS) && defined(PS_SKY_SAMPLERS)
 	float3 RelightCloud(float4 baseColor, float3 viewDir, float3 cloudPosWS, SamplerState sampTr, SamplerState sampCube, float2 screenPosition)
 	{
 		if (baseColor.w <= 0)
