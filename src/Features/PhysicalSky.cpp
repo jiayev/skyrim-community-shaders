@@ -871,7 +871,7 @@ void PhysicalSky::AccumShadow()
 			volumetricShadows.shadowView,
 			static_cast<ID3D11ShaderResourceView*>(nullptr),
 			terrainShadows.IsHeightMapReady() ? terrainShadows.texShadowHeight->srv.get() : nullptr,
-			cloudShadows.loaded ? cloudShadows.texCubemapCloudOcc->srv.get() : nullptr,
+			cloudShadows.loaded ? cloudShadows.texCloudShadowLayers[CloudShadows::kMaxCloudLayers - 1]->srv.get() : nullptr,
 		};
 		auto uav = texApShadow->uav.get();
 
