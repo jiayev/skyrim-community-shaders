@@ -914,10 +914,12 @@ PS_OUTPUT main(PS_INPUT input)
 		fogColor = exponentialHeightFog.xyz;
 		fogFactor = exponentialHeightFog.w;
 #			else
-		fogColor = lightColor;
+		fogColor = exponentialHeightFog.xyz;
+		fogFactor = exponentialHeightFog.w;
 		alpha *= 1 - exponentialHeightFog.w;
 #			endif
 		if (ExponentialHeightFog::ShouldDisableVanillaFog()) {
+			vanillaFogColor = lightColor;
 			vanillaFogFactor = 0;
 		}
 	}
@@ -938,6 +940,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		else
 #			if defined(EXP_HEIGHT_FOG)
 	float3 blendedColor = lerp(lightColor, vanillaFogColor, vanillaFogFactor.xxx);
+	blendedColor = lerp(lightColor, fogColor, fogFactor.xxx);
 #			else
 	float3 blendedColor = lerp(lightColor, fogColor, fogFactor.xxx);
 #			endif
