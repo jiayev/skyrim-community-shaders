@@ -131,6 +131,7 @@ HRESULT DX12SwapChain::GetBuffer(void** ppSurface)
 HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 {
 	auto& upscaling = globals::features::upscaling;
+	auto& dx12Interop = globals::features::dx12Interop;
 
 	// Scale UI brightness BEFORE fence sync so the D3D11 UIBrightnessCS dispatch
 	// is covered by the D3D11→D3D12 fence. Without this, FidelityFX may read
