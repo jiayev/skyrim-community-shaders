@@ -1,9 +1,13 @@
+#ifndef __SKIN_HLSLI__
+#define __SKIN_HLSLI__
+
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/LightingCommon.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"
+#include "Skin/SkinData.hlsli"
 
 namespace Skin
 {
@@ -13,13 +17,6 @@ namespace Skin
 		const float3 dNdy = ddy(N);
 		return length(float2(dot(dNdx, dNdx), dot(dNdy, dNdy)));
 	}
-
-#if defined(PSHADER)
-	cbuffer SkinPerGeometry : register(b7)
-	{
-		float4 skinPerGeometry;
-	};
-#endif
 #if defined(SKIN)
 	Texture2D<float4> TexSkinDetailNormal : register(t72);
 
@@ -276,15 +273,32 @@ namespace Skin
 	}
 #endif
 
-	float2 GetWetness(float z, float3 modelNormal)
+	// Compute wetness for a skin pixel.
+	// boneWetnessInterp: pre-interpolated bone wetness from VS (0..1, bone history data).
+	// z: absolute world-space Z of the pixel.
+	// modelNormal: world-space normal.
+	float2 GetWetness(float z, float3 modelNormal, float boneWetnessInterp)
 	{
-		if (skinPerGeometry.x == 0.f && skinPerGeometry.y == 0.f)
+		bool hasBoneData = (skinBoneWetnessParams.x > 0.5f);
+
+		// Early-out only when all wetness sources are zero
+		if (skinPerGeometry.x == 0.f && skinPerGeometry.y == 0.f &&
+			(!hasBoneData || boneWetnessInterp <= 0.f))
 			return 0.f;
 
 		float waterWet = 0.0f;
-		float waterLevel = skinPerGeometry.z + skinPerGeometry.w;
 
-		waterWet = skinPerGeometry.y * (1 - smoothstep(waterLevel - 2.5f, waterLevel + 2.5f, z));
+		if (hasBoneData) {
+			// Bone wetness handles spatial (which bones) and temporal (evaporation)
+			// aspects independently. Use fixed intensity 2.0 matching the original
+			// skinPerGeometry.y value when in water. The bone data itself fades
+			// via CPU-side evaporation, so no need for the global y fade here.
+			waterWet = 2.0f * boneWetnessInterp;
+		} else {
+			// Fallback: original world-Z comparison (no bone data available)
+			float waterLevel = skinPerGeometry.z + skinPerGeometry.w;
+			waterWet = skinPerGeometry.y * (1 - smoothstep(waterLevel - 2.5f, waterLevel + 2.5f, z));
+		}
 
 		float sweatWet = skinPerGeometry.x;
 #if !defined(SKIN)
@@ -292,4 +306,12 @@ namespace Skin
 #endif
 		return float2(sweatWet, waterWet);
 	}
+
+	// Legacy overload for non-SKINNED paths (no bone data available)
+	float2 GetWetness(float z, float3 modelNormal)
+	{
+		return GetWetness(z, modelNormal, 0.0f);
+	}
 }
+
+#endif  // __SKIN_HLSLI__
