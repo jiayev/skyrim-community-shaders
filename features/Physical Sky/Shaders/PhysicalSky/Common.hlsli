@@ -273,16 +273,22 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 #ifndef PS_PREPASS_RSRCS
 
+	float GetApShadow(uint2 pxCoord)
+	{
+		SharedData::PhysSkyData data = SharedData::physSkyData;
+
+		const uint2 apCoord = data.halfResApShadow ? pxCoord / 2 : pxCoord;
+		return TexApShadow[apCoord];
+	}
+
 #	ifndef PS_DEFERRED_RSRCS
-	float3 SampleSky(float3 viewDir, uint2 pxCoord, SamplerState sampSv)
+	float3 SampleSky(float3 viewDir, float shadow, SamplerState sampSv)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
 
 		const float2 skyLutUv = SkyViewLutUv(viewDir);
 		float3 skyColor = TexSvLut.SampleLevel(sampSv, skyLutUv, 0).rgb;
 
-		const uint2 apCoord = data.halfResApShadow ? pxCoord / 2 : pxCoord;
-		float shadow = TexApShadow[apCoord];  // this actually works???
 		skyColor *= 1 - shadow;
 
 		if (data.tonemapper == 1)
@@ -291,6 +297,11 @@ Texture2D<unorm float> TexApShadow : register(t64);
 			skyColor = skyColor / (1 + skyColor);
 
 		return skyColor;
+	}
+
+	float3 SampleSky(float3 viewDir, uint2 pxCoord, SamplerState sampSv)
+	{
+		return SampleSky(viewDir, GetApShadow(pxCoord), sampSv);
 	}
 
 	float3 SampleTr(float3 sunDir, SamplerState sampSv)
@@ -404,7 +415,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 #		endif
 #	endif
 
-	float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)
+	float4 SampleAp(float3 viewDir, float dist, float shadow, SamplerState sampSv)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
 
@@ -415,8 +426,6 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		const float depth_slice = lerp(.5 / apDims.z, 1 - .5 / apDims.z, saturate(dist / AP_MAX_DIST));
 		float4 apColor = TexApLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0);
 
-		const uint2 apCoord = data.halfResApShadow ? pxCoord / 2 : pxCoord;
-		float shadow = TexApShadow[apCoord];
 		apColor.rgb *= 1 - shadow;
 
 		if (data.tonemapper == 1)
@@ -428,6 +437,11 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		apColor.a = lerp(1, apColor.a, data.apTrMix);
 
 		return apColor;
+	}
+
+	float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)
+	{
+		return SampleAp(viewDir, dist, GetApShadow(pxCoord), sampSv);
 	}
 #endif
 
