@@ -379,9 +379,19 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 #			if defined(IBL)
 			if (SharedData::iblSettings.EnableIBL) {
-				float3 vanillaAmbient = Color::Ambient(max(0.0, SharedData::GetAmbient(float3(0.0, 0.0, 1.0))));
-				float3 iblAmbient = ImageBasedLighting::GetDiffuseIBL(vanillaAmbient, 0.0.xxx);
-				float iblFill = baseColor.a * lerp(0.25, 1.0, 1.0 - directVisibility);
+				float3 cloudAmbientDir = normalize(-viewDir);
+				float skyVisibility = saturate(cloudAmbientDir.z * 0.5 + 0.5) * exp(-cloudOpticalDepth);
+				float3 vanillaAmbient = Color::Ambient(max(0.0, SharedData::GetAmbient(cloudAmbientDir)));
+
+				float3 linIblAmbient = 0.0;
+				if (SharedData::iblSettings.DALCMode >= 2)
+					linIblAmbient += Color::IrradianceToLinear(vanillaAmbient * SharedData::iblSettings.DALCAmount);
+				else
+					linIblAmbient += ImageBasedLighting::GetEnvIBLColor(cloudAmbientDir);
+				linIblAmbient += ImageBasedLighting::GetSkyIBLColorOccluded(cloudAmbientDir, skyVisibility);
+
+				float3 iblAmbient = Color::IrradianceToGamma(linIblAmbient);
+				float iblFill = baseColor.a * exp(-0.35 * cloudOpticalDepth) * lerp(0.25, 1.0, 1.0 - directVisibility);
 				cloudColor += baseColor.xyz * iblAmbient * iblFill * data.cloudRelightMix;
 			}
 #			endif
