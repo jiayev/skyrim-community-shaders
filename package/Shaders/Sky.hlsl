@@ -278,7 +278,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		if defined(PS_CLOUDS) && defined(CLOUD_SHADOWS)
 	if (SharedData::physSkyData.enabled)
-		baseColor.rgb = PhysSky::RelightCloud(baseColor, viewDir, float3(0, 0, 0) + viewDir * psCloudDist, PhysSky::SampTr, SampBaseSampler, input.Position.xy);
+		baseColor.rgb = PhysSky::RelightCloud(baseColor, viewDir, float3(0, 0, 0) + viewDir * psCloudDist, PhysSky::SampTr, SampBaseSampler);
 #		endif
 
 #		if defined(DITHER)
