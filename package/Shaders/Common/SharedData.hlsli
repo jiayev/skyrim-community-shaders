@@ -273,6 +273,12 @@ namespace SharedData
 		float3 pad;
 	};
 
+	struct TruePBRSettings
+	{
+		float VertexAOStrength;
+		uint3 pad;
+	};
+
 	struct SkinData
 	{
 		float4 skinParams;
@@ -354,12 +360,6 @@ namespace SharedData
 		uint3 _padding;
 	};
 
-	struct TruePBRSettings
-	{
-		float VertexAOStrength;
-		uint3 pad;
-	};
-
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -378,10 +378,10 @@ namespace SharedData
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
+		TruePBRSettings truePBRSettings;
 		PostProcessingSettings postProcessingSettings;
 		PhysSkyData physSkyData;
 		RaytracingSettings raytracingSettings;
-		TruePBRSettings truePBRSettings;
 		SkinData skinData;
 	};
 

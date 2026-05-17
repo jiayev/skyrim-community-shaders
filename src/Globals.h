@@ -39,8 +39,8 @@ struct Raytracing;
 struct SceneGraphExplorer;
 struct ExponentialHeightFog;
 struct HDRDisplay;
-struct ScreenshotFeature;
 struct PostProcessing;
+struct ScreenshotFeature;
 struct Skin;
 
 class State;
@@ -103,11 +103,11 @@ namespace globals
 		extern ScreenshotFeature screenshotFeature;
 		extern WeatherEditor weatherEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
+		extern TruePBR truePBR;
 		extern PostProcessing postProcessing;
 		extern Skin skin;
 		extern Raytracing raytracing;
 		extern SceneGraphExplorer sceneGraphExplorer;
-		extern TruePBR truePBR;
 
 		namespace llf
 		{

@@ -2222,6 +2222,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			upscaling.CopySharedD3D12Resources();
 		upscaling.PerformUpscaling();
 	} else if (upscaling.ShouldUseFrameGenerationThisFrame()) {
+		if (postProcessing.loaded)
+			postProcessing.ClearBorderMotionVectorsForFrameGen();
 		upscaling.CopySharedD3D12Resources();
 	}
 

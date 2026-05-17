@@ -2,16 +2,17 @@
 
 #include "PostProcessing/PostProcessFeature.h"
 
-#include "PostProcessing/BloomFlareComposite.h"
 #include "PostProcessing/BokehResources.h"
 #include "PostProcessing/Border.h"
 #include "PostProcessing/CODBloom.h"
 #include "PostProcessing/Camera.h"
 #include "PostProcessing/ColorGrading.h"
+#include "PostProcessing/Composite.h"
 #include "PostProcessing/DoF.h"
 #include "PostProcessing/HistogramAutoExposure.h"
 #include "PostProcessing/LUT.h"
 #include "PostProcessing/LensFlare.h"
+#include "PostProcessing/LocalExposure.h"
 #include "PostProcessing/MotionBlur.h"
 #include "PostProcessing/PhysicalGlare.h"
 #include "PostProcessing/Vignette.h"
@@ -69,13 +70,14 @@ struct PostProcessing : Feature
 
 	enum class FeaturePipelineIndex : size_t
 	{
+		LocalExposure,
 		AutoExposure,
 		MotionBlur,
 		DoF,
 		PhysicalGlare,
 		CODBloom,
 		LensFlare,
-		BloomFlareComposite,
+		Composite,
 		ColorGrading,
 		LUT,
 		Vignette,
@@ -106,6 +108,13 @@ struct PostProcessing : Feature
 	void DrawBeforeUpscaling();
 	void ClearBorderMotionVectorsForFrameGen();
 
+	/// Copy lastTexColor to a render target, performing format conversion via copyCS if needed.
+	void CopyToRenderTarget(
+		RE::BSGraphics::RenderTargetData& targetRT,
+		Texture2D* convertTex,
+		ID3D11Texture2D* srcTex,
+		ID3D11ShaderResourceView* srcSRV);
+
 	/////////////////////////////////////////////////////////////////////////////////
 
 	bool bypass = false;
@@ -116,7 +125,7 @@ struct PostProcessing : Feature
 		RE::ImageSpaceData gameISData;
 	};
 
-	ImageSpaceManager* imageSpaceManager = new ImageSpaceManager();
+	std::unique_ptr<ImageSpaceManager> imageSpaceManager = std::make_unique<ImageSpaceManager>();
 
 	eastl::unique_ptr<Texture2D> texCopyMain = nullptr;
 	eastl::unique_ptr<Texture2D> texCopyMainCopy = nullptr;

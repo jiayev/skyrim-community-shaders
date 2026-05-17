@@ -45,29 +45,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	logType,
 	invertLog,
 	enableTonemap,
-	enableColorSpaceTransform,
 	processColorSpace)
-
-template <int num = 3>
-bool shiftSlider(const char* label, float* v, float v_min, float v_max, const char* format = "%.3f", ImGuiSliderFlags flags = 0)
-{
-	static_assert(num > 1 && num < 5);
-
-	if (ImGui::GetIO().KeyShift) {
-		auto changed = ImGui::SliderFloat(label, v, v_min, v_max, format, flags);
-		if (changed)
-			for (int i = 1; i < num; i++)
-				v[i] = v[0];
-		return changed;
-	} else {
-		if constexpr (num == 2)
-			return ImGui::SliderFloat2(label, v, v_min, v_max, format, flags);
-		else if constexpr (num == 3)
-			return ImGui::SliderFloat3(label, v, v_min, v_max, format, flags);
-		else if constexpr (num == 4)
-			return ImGui::SliderFloat4(label, v, v_min, v_max, format, flags);
-	}
-}
 
 template <int num = 1>
 bool exposureSlider(float* val)
@@ -80,11 +58,11 @@ bool exposureSlider(float* val)
 	if constexpr (num == 1)
 		retval = ImGui::SliderFloat("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
 	else if constexpr (num == 2)
-		retval = shiftSlider<2>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = Util::ShiftSlider<2>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
 	else if constexpr (num == 3)
-		retval = shiftSlider<3>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = Util::ShiftSlider<3>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
 	else if constexpr (num == 4)
-		retval = shiftSlider<4>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = Util::ShiftSlider<4>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
 
 	for (int i = 0; i < num; i++)
 		val[i] = exp2(tempVal[i]);
@@ -97,6 +75,7 @@ void drawHDRStatus()
 	auto& hdr = globals::features::hdrDisplay;
 	if (hdr.loaded && hdr.settings.enableHDR) {
 		ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), ICON_FA_CHECK " HDR Output Active");
+		ImGui::Text("Paper White: %.0f nits (from HDR settings)", static_cast<float>(hdr.settings.hdrPaperWhite));
 		ImGui::Text("Peak Brightness: %.0f nits (from HDR settings)", static_cast<float>(hdr.settings.hdrPeakNits));
 	} else {
 		ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "SDR Output (HDR Display not enabled)");
@@ -112,6 +91,7 @@ struct TonemapperInfo
 	int nativeInputSpace;      // color space the tonemapper expects as input
 	int nativeOutputSpace;     // color space the tonemapper produces as output
 	bool supportsHDR;          // whether this tonemapper supports HDR output
+	int nativeInputSpaceHDR;   // input color space index when HDR is active
 	int nativeOutputSpaceHDR;  // output color space index when HDR is active
 
 	using CTP = std::array<float4, 2>;
@@ -127,14 +107,14 @@ struct TonemapperInfo
 
 		static std::vector<TonemapperInfo> tonemappers = {
 			{ "Reinhard"sv, "Reinhard"sv,
-				"Mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002."sv, 0, 0, false, 0,
+				"Mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002."sv, 0, 0, false, 0, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Reinhard Extended"sv, "ReinhardExt"sv,
 				"Extended mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002. "
 				"An additional user parameter specifies the smallest luminance that is mapped to 1, which allows high luminances to burn out."sv,
-				0, 0, false, 0,
+				0, 0, false, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("White Point", &params[0].y, 0.f, 10.f, "%.2f"); },
@@ -143,14 +123,14 @@ struct TonemapperInfo
 			{ "Hejl Burgess-Dawson Filmic"sv, "HejlBurgessDawsonFilmic"sv,
 				"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
 				"See his blog post about \"Approximating Film with Tonemapping\"."sv,
-				0, 0, false, 0,
+				0, 0, false, 0, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Aldridge Filmic"sv, "AldridgeFilmic"sv,
 				"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
 				"See his blog post about \"Approximating Film with Tonemapping\"."sv,
-				0, 0, false, 0,
+				0, 0, false, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Cutoff", &params[0].y, 0.f, .5f, "%.2f"); },
@@ -158,8 +138,8 @@ struct TonemapperInfo
 
 			{ "Lottes Filmic/AMD Curve"sv, "LottesFilmic"sv,
 				"Filmic curve by Timothy Lottes, described in his GDC talk \"Advanced Techniques and Optimization of HDR Color Pipelines\". "
-				"Also known as the \"AMD curve\". HDR output is automatically enabled when HDR Display feature is active."sv,
-				0, 0, true, 0,
+				"Also known as the \"AMD curve\"."sv,
+				0, 0, true, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Contrast", &params[0].y, 1.f, 2.f, "%.2f");
@@ -173,7 +153,7 @@ struct TonemapperInfo
 			{ "Day Filmic/Insomniac Curve"sv, "DayFilmic"sv,
 				"Filmic curve by Mike Day, described in his document \"An efficient and user-friendly tone mapping operator\". "
 				"Also known as the \"Insomniac curve\"."sv,
-				0, 0, false, 0,
+				0, 0, false, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Black Point", &params[0].y, 0.f, 5.f, "%.2f");
@@ -192,8 +172,8 @@ struct TonemapperInfo
 
 			{ "Uchimura/Grand Turismo Curve"sv, "UchimuraFilmic"sv,
 				"Filmic curve by Hajime Uchimura, described in his CEDEC talk \"HDR Theory and Practice\". Characterised by its middle linear section. "
-				"Also known as the \"Gran Turismo curve\". HDR output is automatically enabled when HDR Display feature is active."sv,
-				0, 0, true, 0,
+				"Also known as the \"Gran Turismo curve\"."sv,
+				0, 0, true, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Max Brightness", &params[0].y, 0.01f, 2.f, "%.2f");
@@ -208,7 +188,7 @@ struct TonemapperInfo
 			{ "AgX Minimal"sv, "AgxMinimal"sv,
 				"Minimal version of Troy Sobotka's AgX using a 6th order polynomial approximation. "
 				"Originally created by bwrensch, and improved by Troy Sobotka. Internally uses AgX input transform."sv,
-				0, 0, false, 0,
+				0, 0, false, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					ImGui::SliderFloat("Slope", &params[0].y, 0.f, 2.f, "%.2f");
@@ -218,22 +198,73 @@ struct TonemapperInfo
 				{ f4{ 1.f, 1.f, 1.f, 0.f }, f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Melon"sv, "MelonTonemap"sv,
-				"Tonemapper designed by TripleMelon to fix the ACES issue of intense colour being shifted."sv, 0, 0, false, 0,
+				"Tonemapper designed by TripleMelon to fix the ACES issue of intense colour being shifted."sv, 0, 0, false, 0, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Kajiya"sv, "KajiyaTonemap"sv,
-				"Tonemapper designed by Tomasz Stachowiak/Embark for their real time ray tracing engine Kajiya."sv, 0, 0, false, 0,
+				"Tonemapper designed by Tomasz Stachowiak/Embark for their real time ray tracing engine Kajiya."sv, 0, 0, false, 0, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "GT7"sv, "GT7ToneMapping"sv,
-				"Tonemapper designed for Gran Turismo 7. HDR output is automatically enabled when HDR Display feature is active."sv, 2, 2, true, 2,
+				"Tonemapper designed for Gran Turismo 7."sv, 2, 2, true, 2, 2,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					drawHDRStatus();
 				},
-				{ f4{ 1.f, 0.f, 1000.f, 0.f } } }
+				{ f4{ 1.f, 0.f, 1000.f, 0.f } } },
+
+			{ "PsychoV"sv, "PsychoVTonemap"sv,
+				"PsychoV 17 tonemapper by Carlos Lopez, from RenoDX."sv,
+				0, 0, true, 0, 0,
+				[](CTP& params) {
+					exposureSlider(&params[0].x);
+					drawHDRStatus();
+				},
+				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
+
+			{ "Neutwo"sv, "NeutwoTonemap"sv,
+				"Neutwo tonemapper by Carlos Lopez, from RenoDX."sv,
+				0, 0, true, 2, 2,
+				[](CTP& params) {
+					exposureSlider(&params[0].x);
+					ImGui::SliderFloat("Clip Point", &params[0].y, 1.f, 100.f, "%.2f");
+					drawHDRStatus();
+				},
+				{ f4{ 1.f, 100.f, 0.f, 0.f } } },
+
+			{ "ACES"sv, "ACESTonemap"sv,
+				"ACES RRT+ODT tonemapper implementation from RenoDX."sv,
+				0, 0, true, 2, 2,
+				[](CTP& params) {
+					exposureSlider(&params[0].x);
+					ImGui::SliderFloat("Min Luminance", &params[0].y, 0.0001f, 1.f, "%.4f");
+					drawHDRStatus();
+				},
+				{ f4{ 1.f, 0.0001f, 0.f, 0.f } } },
+
+			{ "Frostbite"sv, "FrostbiteTonemap"sv,
+				"Frostbite HDR display mapping implementation from RenoDX, based on EA's Frostbite color grading and display presentation work."sv,
+				0, 0, true, 2, 2,
+				[](CTP& params) {
+					exposureSlider(&params[0].x);
+					ImGui::SliderFloat("Rolloff Start", &params[0].y, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat("Saturation Boost", &params[0].z, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat("Hue Correction", &params[0].w, 0.f, 1.f, "%.2f");
+					drawHDRStatus();
+				},
+				{ f4{ 1.f, 0.25f, 0.3f, 0.6f } } },
+
+			{ "Hermite Spline"sv, "HermiteSplineTonemap"sv,
+				"Hermite spline tonemapper by Musa, from RenoDX."sv,
+				0, 0, true, 2, 2,
+				[](CTP& params) {
+					exposureSlider(&params[0].x);
+					ImGui::SliderFloat("White Clip", &params[0].y, 1.f, 500.f, "%.2f");
+					drawHDRStatus();
+				},
+				{ f4{ 1.f, 100.f, 0.f, 0.f } } }
 		};
 
 		static std::once_flag flag;
@@ -288,9 +319,9 @@ void ColorGrading::DrawSettings()
 		}
 
 		if (ImGui::TreeNode("ASC CDL")) {
-			shiftSlider("Slope", &settings.slope.x, 0.f, 2.f, "%.2f");
-			shiftSlider("Power", &settings.power.x, 0.f, 2.f, "%.2f");
-			shiftSlider("Offset", &settings.cdlOffset.x, -1.f, 1.f, "%.2f");
+			Util::ShiftSlider("Slope", &settings.slope.x, 0.f, 2.f, "%.2f");
+			Util::ShiftSlider("Power", &settings.power.x, 0.f, 2.f, "%.2f");
+			Util::ShiftSlider("Offset", &settings.cdlOffset.x, -1.f, 1.f, "%.2f");
 			ImGui::TreePop();
 		}
 
@@ -332,20 +363,20 @@ void ColorGrading::DrawSettings()
 		}
 
 		if (ImGui::TreeNode("Shadows/Midtones/Highlights")) {
-			shiftSlider("Shadows Gain", &settings.shadowsGain.x, 0.f, 2.f, "%.3f");
-			shiftSlider("Shadows Offset", &settings.shadowsOffset.x, -0.5f, 0.5f, "%.3f");
-			shiftSlider("Midtones Gain", &settings.midtonesGain.x, 0.f, 2.f, "%.3f");
-			shiftSlider("Midtones Offset", &settings.midtonesOffset.x, -0.5f, 0.5f, "%.3f");
-			shiftSlider("Highlights Gain", &settings.highlightsGain.x, 0.f, 2.f, "%.3f");
-			shiftSlider("Highlights Offset", &settings.highlightsOffset.x, -0.5f, 0.5f, "%.3f");
+			Util::ShiftSlider("Shadows Gain", &settings.shadowsGain.x, 0.f, 2.f, "%.3f");
+			Util::ShiftSlider("Shadows Offset", &settings.shadowsOffset.x, -0.5f, 0.5f, "%.3f");
+			Util::ShiftSlider("Midtones Gain", &settings.midtonesGain.x, 0.f, 2.f, "%.3f");
+			Util::ShiftSlider("Midtones Offset", &settings.midtonesOffset.x, -0.5f, 0.5f, "%.3f");
+			Util::ShiftSlider("Highlights Gain", &settings.highlightsGain.x, 0.f, 2.f, "%.3f");
+			Util::ShiftSlider("Highlights Offset", &settings.highlightsOffset.x, -0.5f, 0.5f, "%.3f");
 			ImGui::InputFloat2("Shadows Start/End", &settings.shadowsHighlightsRange.x, "%.3f");
 			ImGui::InputFloat2("Highlights Start/End", &settings.shadowsHighlightsRange.z, "%.3f");
 			ImGui::TreePop();
 		}
 
 		if (ImGui::TreeNode("Contrast")) {
-			shiftSlider("Contrast", &settings.contrast.x, 0.f, 2.f, "%.3f");
-			shiftSlider("Pivot", &settings.pivot.x, 0.f, 1.f, "%.3f");
+			Util::ShiftSlider("Contrast", &settings.contrast.x, 0.f, 2.f, "%.3f");
+			Util::ShiftSlider("Pivot", &settings.pivot.x, 0.f, 1.f, "%.3f");
 			ImGui::TreePop();
 		}
 
@@ -365,19 +396,6 @@ void ColorGrading::DrawSettings()
 
 		auto& hdrRef = globals::features::hdrDisplay;
 		const bool hdrActive = hdrRef.loaded && hdrRef.settings.enableHDR;
-
-		// Auto-switch to an HDR-capable tonemapper if current one doesn't support HDR
-		if (hdrActive && !tonemappers[tonemapperType].supportsHDR) {
-			for (int i = 0; i < (int)tonemappers.size(); ++i) {
-				if (tonemappers[i].supportsHDR) {
-					tonemappers[tonemapperType].cached_settings = settings.tonemapParams;
-					settings.tonemapParams = tonemappers[i].cached_settings;
-					tonemapperType = i;
-					recompileFlag = true;
-					break;
-				}
-			}
-		}
 
 		if (ImGui::BeginCombo("Tonemapper", tonemappers[tonemapperType].name.data(), ImGuiComboFlags_HeightLargest)) {
 			for (int i = 0; i < (int)tonemappers.size(); ++i) {
@@ -416,8 +434,7 @@ void ColorGrading::DrawSettings()
 	ImGui::SliderFloat("Fade Blend", &settings.gameFadeBlend, 0.f, 1.f, "%.3f");
 	ImGui::SliderFloat("Tint Blend", &settings.gameTintBlend, 0.f, 1.f, "%.3f");
 	ImGui::SeparatorText("Color Space Transform");
-	ImGui::Checkbox("Enable Working Color Space Conversion", &settings.enableColorSpaceTransform);
-	if (settings.enableColorSpaceTransform) {
+	{
 		auto& spaces = getAvailableColourSpaces();
 		auto& hdr = globals::features::hdrDisplay;
 		const bool hdrEnabled = hdr.loaded && hdr.settings.enableHDR;
@@ -495,7 +512,7 @@ void ColorGrading::UpdateColorSpaceTransforms(bool hdrEnabled)
 	constexpr int kHDRColorSpace = 2;                      // BT2020
 	constexpr int kSDRColorSpace = 0;                      // sRGB / BT709 gamut
 	const int outputColorSpace = hdrEnabled ? kHDRColorSpace : kSDRColorSpace;
-	const int tonemapInputSpace = tonemappers[tonemapperType].nativeInputSpace;
+	const int tonemapInputSpace = (hdrEnabled && tonemappers[tonemapperType].supportsHDR) ? tonemappers[tonemapperType].nativeInputSpaceHDR : tonemappers[tonemapperType].nativeInputSpace;
 	const int tonemapOutputSpace = (hdrEnabled && tonemappers[tonemapperType].supportsHDR) ? tonemappers[tonemapperType].nativeOutputSpaceHDR : tonemappers[tonemapperType].nativeOutputSpace;
 
 	auto storeMatrix = [](const DirectX::SimpleMath::Matrix& mat, std::array<float3, 3>& out) {
@@ -644,6 +661,27 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	auto context = globals::d3d::context;
 	auto state = globals::state;
 
+	// Auto-switch to an HDR-capable tonemapper if current one doesn't support HDR.
+	// This runs every frame so the switch happens immediately when HDR is toggled,
+	// regardless of which settings page the user is viewing.
+	{
+		auto& hdrRef = globals::features::hdrDisplay;
+		const bool hdrActive = hdrRef.loaded && hdrRef.settings.enableHDR;
+		auto& tonemappers = TonemapperInfo::GetTonemappers();
+
+		if (hdrActive && !tonemappers[tonemapperType].supportsHDR) {
+			for (int i = 0; i < (int)tonemappers.size(); ++i) {
+				if (tonemappers[i].supportsHDR) {
+					tonemappers[tonemapperType].cached_settings = settings.tonemapParams;
+					settings.tonemapParams = tonemappers[i].cached_settings;
+					tonemapperType = i;
+					recompileFlag = true;
+					break;
+				}
+			}
+		}
+	}
+
 	if (recompileFlag)
 		ClearShaderCache();
 
@@ -654,18 +692,12 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	RE::ImageSpaceData imageSpaceData = pp.imageSpaceManager->gameISData;
 	auto& hdr = globals::features::hdrDisplay;
 	const bool hdrEnabled = hdr.loaded && hdr.settings.enableHDR;
-	if (settings.enableColorSpaceTransform)
-		UpdateColorSpaceTransforms(hdrEnabled);
+	UpdateColorSpaceTransforms(hdrEnabled);
 
 	// Always compute XYZ matrices for white balance
 	{
 		auto& spaces = getAvailableColourSpaces();
-		auto& llSettings = globals::features::linearLighting.settings;
-		const bool wideGamutActive = llSettings.enableACEScg && llSettings.enableLinearLighting;
-		int defaultInputIdx = wideGamutActive ? 5 : 0;  // 5 = ACEScg, 0 = sRGB
-		int wsIdx = settings.enableColorSpaceTransform ?
-		                std::clamp(settings.processColorSpace, 0, static_cast<int>(spaces.size()) - 1) :
-		                defaultInputIdx;
+		int wsIdx = std::clamp(settings.processColorSpace, 0, static_cast<int>(spaces.size()) - 1);
 		auto storeMatrix = [](const DirectX::SimpleMath::Matrix& mat, std::array<float3, 3>& out) {
 			out = {
 				float3{ mat(0, 0), mat(0, 1), mat(0, 2) },
@@ -698,9 +730,7 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		.xyzToWorking = { float4{ xyzToWorkingMatrix[0].x, xyzToWorkingMatrix[0].y, xyzToWorkingMatrix[0].z, 0.f }, float4{ xyzToWorkingMatrix[1].x, xyzToWorkingMatrix[1].y, xyzToWorkingMatrix[1].z, 0.f }, float4{ xyzToWorkingMatrix[2].x, xyzToWorkingMatrix[2].y, xyzToWorkingMatrix[2].z, 0.f } },
 		.workingWhitePoint = [&]() {
 			auto& spaces = getAvailableColourSpaces();
-			int wsIdx = settings.enableColorSpaceTransform ?
-		                    std::clamp(settings.processColorSpace, 0, static_cast<int>(spaces.size()) - 1) :
-		                    0;
+			int wsIdx = std::clamp(settings.processColorSpace, 0, static_cast<int>(spaces.size()) - 1);
 			auto wp = getWhitePoint(spaces[wsIdx]);
 			return float4{ wp.x, wp.y, 0.f, 0.f }; }(),
 		.shadowsOffset = settings.shadowsOffset,
@@ -713,13 +743,16 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		.skipLDR = settings.skipLDR,
 		.skipLUT = settings.skipLUT,
 		.enableTonemap = settings.enableTonemap,
-		.enableColorSpaceTransform = settings.enableColorSpaceTransform,
+		.enableColorSpaceTransform = true,
 		// Auto-populate HDR settings from HDR feature
 		.enableHDR = [&]() -> uint {
 			return hdrEnabled ? 1u : 0u;
 		}(),
 		.hdrPeakNits = [&]() -> float {
 			return hdrEnabled ? static_cast<float>(hdr.settings.hdrPeakNits) : 1000.f;
+		}(),
+		.hdrPaperWhiteNits = [&]() -> float {
+			return hdrEnabled ? static_cast<float>(hdr.settings.hdrPaperWhite) : 203.f;
 		}()
 	};
 	colorCB->Update(colorCBData);
@@ -758,7 +791,7 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	cb = nullptr;
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 	context->CSSetShaderResources(0, 2, srvs.data());
-	context->CSSetConstantBuffers(0, 1, &cb);
+	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	if (saveImagesFlag) {

@@ -95,12 +95,12 @@ namespace globals
 		ScreenshotFeature screenshotFeature{};
 		WeatherEditor weatherEditor{};
 		ExponentialHeightFog exponentialHeightFog{};
+		TruePBR truePBR{};
 		PostProcessing postProcessing{};
 		Skin skin{};
 		DX12Interop dx12Interop{};
 		Raytracing raytracing{};
 		SceneGraphExplorer sceneGraphExplorer{};
-		TruePBR truePBR{};
 
 		namespace llf
 		{

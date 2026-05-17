@@ -351,7 +351,10 @@ void DoF::Draw(TextureInfo& inout_tex)
 	auto state = globals::state;
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
-	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto* depthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
+	if (!depthSRV) {
+		return;
+	}
 
 	float2 res = { (float)texOutput->desc.Width, (float)texOutput->desc.Height };
 
@@ -425,7 +428,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 	};
 	dofCB->Update(dofData);
 
-	std::array<ID3D11ShaderResourceView*, 9> srvs = { inout_tex.srv, texPreFocus->srv.get(), depth.depthSRV, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+	std::array<ID3D11ShaderResourceView*, 9> srvs = { inout_tex.srv, texPreFocus->srv.get(), depthSRV, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 	std::array<ID3D11UnorderedAccessView*, 3> uavs = { texOutput->uav.get(), texFocus->uav.get(), texCoC->uav.get() };
 	std::array<ID3D11SamplerState*, 1> samplers = { linearSampler.get() };
 	auto cb = dofCB->CB();
@@ -448,7 +451,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 	{
 		srvs.at(0) = inout_tex.srv;
 		srvs.at(1) = texPreFocus->srv.get();
-		srvs.at(2) = depth.depthSRV;
+		srvs.at(2) = depthSRV;
 		uavs.at(1) = texFocus->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
@@ -466,7 +469,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 		state->BeginPerfEvent("Calculate CoC");
 		srvs.at(0) = inout_tex.srv;
 		srvs.at(1) = texPreFocus->srv.get();
-		srvs.at(2) = depth.depthSRV;
+		srvs.at(2) = depthSRV;
 		uavs.at(2) = texCoC->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());

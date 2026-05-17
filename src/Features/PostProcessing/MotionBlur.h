@@ -4,7 +4,7 @@
 
 /**
  * Motion Blur Effect
- * 
+ *
  * Three-pass compute shader approach based on CoD:AW:
  * 1. Reduction: Horizontal pass to [grid×height], then vertical to [grid×grid]
  * 2. Neighbor: Calculate neighborhood max velocities in 3×3 grid groups
@@ -92,17 +92,21 @@ struct MotionBlur : public PostProcessFeature
 	// Dimensions tracking
 	uint32_t lastWidth = 0;
 	uint32_t lastHeight = 0;
+	uint32_t dynamicWidth = 0;   // Dynamic resolution width for dispatch (not for resource sizing)
+	uint32_t dynamicHeight = 0;  // Dynamic resolution height for dispatch (not for resource sizing)
 
 	// Constant buffer structs
 	struct alignas(16) MotionBlurConstantBuffer
 	{
-		float VelocityScale;
+		float4 VelocityParams;  // x: velocity scale, yz: motion-vector source/display scale
 		int32_t SampleCount;
+		float Padding[3] = {};
 	};
 
 	struct alignas(16) ReductionPassConstantBuffer
 	{
-		float VelocityScale;
+		float4 VelocityParams;    // x: velocity scale, yz: motion-vector source/display scale
+		float4 TargetResolution;  // xy: output color resolution
 	};
 
 	// CB instances

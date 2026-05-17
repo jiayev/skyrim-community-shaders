@@ -3,8 +3,6 @@
 #include "State.h"
 #include "Util.h"
 
-#include "Features/PostProcessing.h"
-
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HistogramAutoExposure::Settings,
 	ExposureCompensation,
@@ -38,10 +36,10 @@ void HistogramAutoExposure::DrawSettings()
 			"If you don't like the effect, you can set the strength to zero.");
 
 		ImGui::SliderFloat("Max Strength", &settings.PurkinjeStrength, 0.f, 5.f, "%.2f");
-		ImGui::SliderFloat("Fade In EV", &settings.PurkinjeStartEV, -10.f, 21.f, "%.2f EV");
+		ImGui::SliderFloat("Fade In EV", &settings.PurkinjeStartEV, -10.f, 0.f, "%.2f EV");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("The Purkinje effect will start to take place when the average scene luminance falls lower than this.");
-		ImGui::SliderFloat("Max Effect EV", &settings.PurkinjeMaxEV, -10.f, 21.f, "%.2f EV");
+		ImGui::SliderFloat("Max Effect EV", &settings.PurkinjeMaxEV, -10.f, 0.f, "%.2f EV");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("From this point onward, the Purkinje effect remains the greatest.");
 
@@ -66,8 +64,6 @@ void HistogramAutoExposure::SaveSettings(json& o_json)
 
 void HistogramAutoExposure::SetupResources()
 {
-	auto renderer = globals::game::renderer;
-
 	logger::debug("Creating buffers...");
 	{
 		autoExposureCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<AutoExposureCB>());
@@ -80,42 +76,13 @@ void HistogramAutoExposure::SetupResources()
 		adaptationSB->CreateUAV();
 	}
 
-	logger::debug("Creating 2D textures...");
-	{
-		// texAdapt for adaptation
-		auto gameTexMainCopy = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN_COPY];
-
-		D3D11_TEXTURE2D_DESC texDesc;
-		gameTexMainCopy.texture->GetDesc(&texDesc);
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = texDesc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-			.Format = texDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-
-		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 1;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		texDesc.MiscFlags = 0;
-
-		texAdapt = std::make_unique<Texture2D>(texDesc);
-		texAdapt->CreateSRV(srvDesc);
-		texAdapt->CreateUAV(uavDesc);
-	}
-
 	CompileComputeShaders();
 }
 
 void HistogramAutoExposure::ClearShaderCache()
 {
 	const auto shaderPtrs = std::array{
-		&histogramCS, &histogramAvgCS, &adaptCS
+		&histogramCS, &histogramAvgCS
 	};
 
 	for (auto shader : shaderPtrs)
@@ -141,7 +108,6 @@ void HistogramAutoExposure::CompileComputeShaders()
 		shaderInfos = {
 			{ &histogramCS, "histogram.cs.hlsl", {}, "CS_Histogram" },
 			{ &histogramAvgCS, "histogram.cs.hlsl", {}, "CS_Average" },
-			{ &adaptCS, "adapt.cs.hlsl", {} },
 		};
 
 	for (auto& info : shaderInfos) {
@@ -161,7 +127,7 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 
 	AutoExposureCB cbData = {
 		.AdaptArea = settings.AdaptArea,
-		.AdaptationRange = { exp2(adaptationRange.x) * 0.125f, exp2(adaptationRange.y) * 0.125f },
+		.AdaptationRange = { exp2(adaptationRange.x), exp2(adaptationRange.y) },
 		.AdaptLerp = std::clamp(1.f - exp(-RE::BSTimer::GetSingleton()->realTimeDelta * settings.AdaptSpeed), 0.f, 1.f),
 		.ExposureCompensation = exp2(exposureCompensation),
 		.PurkinjeStartEV = settings.PurkinjeStartEV,
@@ -194,14 +160,18 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 		context->CSSetShaderResources(0, (UINT)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (UINT)uavs.size(), uavs.data(), nullptr);
 
-		// Calculate histogram - optimized for 32x32 threads
-		// Reduced number of dispatches due to increased thread count and sampling optimization
+		// Calculate histogram
 		context->CSSetShader(histogramCS.get(), nullptr, 0);
-		uint32_t dispatchX = ((texAdapt->desc.Width - 1) >> 5) + 1;
-		uint32_t dispatchY = ((texAdapt->desc.Height - 1) >> 5) + 1;
-
-		// Further reduce dispatches based on our sampling pattern
-		// Since we're sampling at 8x spacing, we can reduce dispatches by 8x
+		uint texWidth = 0;
+		uint texHeight = 0;
+		{
+			D3D11_TEXTURE2D_DESC desc;
+			inout_tex.tex->GetDesc(&desc);
+			texWidth = desc.Width;
+			texHeight = desc.Height;
+		}
+		uint32_t dispatchX = ((texWidth - 1) >> 5) + 1;
+		uint32_t dispatchY = ((texHeight - 1) >> 5) + 1;
 		dispatchX = (dispatchX + 7) / 8;
 		dispatchY = (dispatchY + 7) / 8;
 
@@ -213,31 +183,14 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 		state->EndPerfEvent();
 	}
 
-	// Adapt
-	{
-		resetViews();
-		state->BeginPerfEvent("Adapt Exposure");
-
-		srvs[0] = inout_tex.srv;
-		srvs[1] = adaptationSB->SRV();
-		uavs[0] = texAdapt->uav.get();
-
-		context->CSSetShaderResources(0, (UINT)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (UINT)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(adaptCS.get(), nullptr, 0);
-
-		// Maintain the same number of threads for the adapt shader
-		// Since we're not changing the sampling pattern of the adapt shader
-		context->Dispatch(((texAdapt->desc.Width - 1) >> 5) + 1, ((texAdapt->desc.Height - 1) >> 5) + 1, 1);
-		state->EndPerfEvent();
-	}
-
 	// Clean up
 	resetViews();
 	cb = nullptr;
 	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetShader(nullptr, nullptr, 0);
 
-	inout_tex = { texAdapt->resource.get(), texAdapt->srv.get() };
+	// NOTE: We intentionally do NOT modify inout_tex here.
+	// The adaptation result is stored in adaptationSB and will be consumed
+	// by the Composite pass which applies exposure before color grading.
 	state->EndPerfEvent();
 }

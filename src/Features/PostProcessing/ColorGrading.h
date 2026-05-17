@@ -9,7 +9,7 @@ struct ColorGrading : public PostProcessFeature
 	virtual inline std::string GetDesc() const override { return "Color grading operations and multiple tone mapping options."; }
 	virtual inline bool DisableInMainLoadingMenu() const override { return true; }
 
-	virtual bool SupportsVR() { return true; }
+	virtual bool SupportsVR() const override { return true; }
 
 	template <size_t N, typename T>
 	constexpr auto make_array(T value) -> std::array<T, N>
@@ -75,7 +75,6 @@ struct ColorGrading : public PostProcessFeature
 		uint logType = 0;
 		bool invertLog = false;
 		bool enableTonemap = true;
-		bool enableColorSpaceTransform = true;
 		int processColorSpace = 0;
 	} settings;
 
@@ -135,9 +134,9 @@ struct ColorGrading : public PostProcessFeature
 		uint skipLUT;
 		uint enableTonemap;
 		uint enableColorSpaceTransform;
-		uint enableHDR;     // HDR display is enabled (auto-set from HDR feature)
-		float hdrPeakNits;  // Maximum display brightness in nits for HDR
-		uint pad;
+		uint enableHDR;           // HDR display is enabled (auto-set from HDR feature)
+		float hdrPeakNits;        // Maximum display brightness in nits for HDR
+		float hdrPaperWhiteNits;  // Reference white brightness in nits for HDR
 	};
 	std::unique_ptr<ConstantBuffer> colorCB = nullptr;
 

@@ -84,7 +84,7 @@ namespace ExponentialHeightFog
 		if (SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier > 0) {
 			float cosTheta = dot(normalize(positionWS), SharedData::DirLightDirection.xyz);
 			float phase = HenyeyGreenstein(cosTheta, SharedData::exponentialHeightFogSettings.directionalInscatteringAnisotropy);
-			float3 directionalLightInscattering = SharedData::DirLightColor.xyz * phase;
+			float3 directionalLightInscattering = Color::GamutTransform(SharedData::DirLightColor.xyz) * phase;
 			float dirExponentialHeightLineIntegral = exponentialHeightLineIntegralCalc * max(rayLength - SharedData::exponentialHeightFogSettings.startDistance, 0);
 			float dirExpFogFactor = saturate(exp2(-dirExponentialHeightLineIntegral));
 			directionalInscattering = directionalLightInscattering * (1 - dirExpFogFactor) * SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier;
