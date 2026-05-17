@@ -4,6 +4,7 @@
 
 #define OMIT_PS_NAMESPACE
 #define PS_PREPASS_SAMPLERS
+#define CLOUD_SHADOW_REGISTER t4
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/VR.hlsli"
@@ -27,9 +28,8 @@ struct DirectionalShadowLightData
 };
 StructuredBuffer<DirectionalShadowLightData> DirectionalShadowLights : register(t98);
 #define TERRAIN_SHADOW_REGISTER t3
-#include "TerrainShadows/TerrainShadows.hlsli"
-#define CLOUD_SHADOW_REGISTER t4
 #include "CloudShadows/CloudShadows.hlsli"
+#include "TerrainShadows/TerrainShadows.hlsli"
 
 RWTexture2D<unorm float> RWTexOutput : register(u0);
 
@@ -87,7 +87,7 @@ float SampleShadow(float3 posWorldRel, uint eyeIndex)
 		return;
 	stereoUv *= RES_MULT;
 	const uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(stereoUv);
-	const float2 uv = Stereo::ConvertFromStereoUV(stereoUv, eyeIndex);
+	const float2 uv = Stereo::ConvertFromStereoUV(stereoUv, eyeIndex) * FrameBuffer::DynamicResolutionParams2.xy;
 
 	const float depth = TexDepth.SampleLevel(SampTr, stereoUv, 0);
 	float4 posWorld = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);

@@ -375,7 +375,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 			float silverEdgeMask = smoothstep(0.08, 0.35, baseColor.a) * (1.0 - smoothstep(0.45, 0.85, baseColor.a));
 			float silverSingleScatter = 1.35 * silverEdgeMask * (1.0 - exp(-cloudOpticalDepth)) * exp(-0.5 * cloudOpticalDepth);
 			float directSingleScatter = 0.9 * cloudOpticalDepth * exp(-0.75 * cloudOpticalDepth);
-			cloudColor += baseColor.xyz * dirLightColor * forwardMiePhase * silverSingleScatter * data.silverLiningMix * data.cloudRelightMix;
+			cloudColor += baseColor.xyz * dirLightColor * forwardMiePhase * silverSingleScatter * directVisibility * data.silverLiningMix * data.cloudRelightMix;
 
 #			if defined(IBL)
 			if (SharedData::iblSettings.EnableIBL) {
