@@ -21,6 +21,7 @@
 #include "Feature.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
+#include "Features/Raytracing.h"
 #include "Features/Upscaling.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -505,7 +506,13 @@ void PerformanceOverlay::DrawVRAM()
 
 	// Only proceed if the call succeeded and Budget is not zero
 	if (SUCCEEDED(hr) && videoMemoryInfo.Budget > 0) {
-		float currentGpuUsage = videoMemoryInfo.CurrentUsage / (1024.f * 1024.f * 1024.f);
+		uint64_t currentGpuUsageBytes = videoMemoryInfo.CurrentUsage;
+
+		auto& rt = globals::features::raytracing;
+		if (rt.loaded)
+			currentGpuUsageBytes -= rt.GetSharedVRAMOffset();
+
+		float currentGpuUsage = currentGpuUsageBytes / (1024.f * 1024.f * 1024.f);
 		float totalGpuMemory = videoMemoryInfo.Budget / (1024.f * 1024.f * 1024.f);
 		float percent = currentGpuUsage / totalGpuMemory;
 
@@ -1212,9 +1219,9 @@ void PerformanceOverlay::DrawABTestSection(const std::vector<DrawCallRow>& allRo
 					// Pull structured diff entries directly from ABTestingManager (in-memory snapshots)
 					this->settingsDiff = abTestingManager->GetConfigDiffEntries();
 				} else {
-					std::filesystem::path userPath = Util::PathHelpers::GetDataPath() / "SKSE/Plugins/CommunityShaders/SettingsUser.json";
-					std::filesystem::path testPath = Util::PathHelpers::GetDataPath() / "SKSE/Plugins/CommunityShaders/SettingsTest.json";
-					this->settingsDiff = Util::FileSystem::LoadJsonDiff(userPath, testPath);
+					this->settingsDiff = Util::FileSystem::LoadJsonDiff(
+						Util::PathHelpers::GetSettingsUserPath(),
+						Util::PathHelpers::GetSettingsTestPath());
 				}
 				this->settingsDiffLoaded = true;
 			}

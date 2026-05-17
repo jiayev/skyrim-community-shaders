@@ -20,7 +20,6 @@
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
 #include "Features/WetnessEffects.h"
-
 #include "TruePBR.h"
 
 template <class... Ts>
@@ -61,5 +60,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::postProcessing.settings,
 		globals::features::physicalSky.cbData,
 		globals::features::raytracing.GetCommonBufferData(),
+		globals::features::truePBR.settings,
 		globals::features::skin.GetCommonBufferData());
 }

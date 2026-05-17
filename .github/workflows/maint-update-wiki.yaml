@@ -1,4 +1,4 @@
-name: Update Buffers Wiki
+name: "Maint: Update Buffers Wiki"
 
 on:
     push:
@@ -20,7 +20,7 @@ jobs:
         runs-on: windows-2022
         steps:
             - name: Checkout code
-              uses: actions/checkout@v4
+              uses: actions/checkout@v6
               with:
                   submodules: recursive
 

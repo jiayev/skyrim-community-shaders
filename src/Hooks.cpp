@@ -1,13 +1,13 @@
 #include "Hooks.h"
 
 #include "ShaderTools/BSShaderHooks.h"
+#include "Utils/ExternalEmittance.h"
 
 #include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
-#include "TruePBR.h"
 #include "Util.h"
 
 #include "Features/DX12Interop.h"
@@ -80,11 +80,11 @@ struct BSShader_LoadShaders
 
 		auto state = globals::state;
 		auto shaderCache = globals::shaderCache;
-		auto truePBR = globals::truePBR;
-
 		if (shaderCache->IsDiskCache() || shaderCache->IsDump()) {
 			if (shaderCache->IsDiskCache()) {
-				truePBR->GenerateShaderPermutations(shader);
+				Feature::ForEachLoadedFeature("GenerateShaderPermutations", [shader](Feature* feature) {
+					feature->GenerateShaderPermutations(shader);
+				});
 			}
 
 			for (const auto& entry : shader->vertexShaders) {
@@ -173,6 +173,7 @@ namespace EffectExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			func(shader, pass, renderFlags);
+			ExternalEmittance::UpdatePermutation(pass);
 			globals::state->permutationData.EffectRadius = pass->geometry->worldBound.radius;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -316,8 +317,10 @@ struct IDXGISwapChain_Present
 		// OMGetRenderTargets to find a target to render overlays into. Without this, they
 		// get nullptr (we unbound everything for the ApplyHDR resource hazard) and their
 		// UI elements are invisible.
-		if (hdrReady && !frameGenActive) {
-			hdr->ClearUIBuffer();  // restores kFRAMEBUFFER.RTV to original backbuffer RTV
+		if (hdrReady) {
+			if (!frameGenActive) {
+				hdr->ClearUIBuffer();  // restores kFRAMEBUFFER.RTV to original backbuffer RTV
+			}
 			auto& data = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kFRAMEBUFFER];
 			globals::d3d::context->OMSetRenderTargets(1, &data.RTV, nullptr);
 		}
@@ -367,6 +370,9 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 		modifiedDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 		if (modifiedDesc.BufferCount < 2)
 			modifiedDesc.BufferCount = 2;
+
+		HDRDisplay::wasExclusiveFullscreen = !modifiedDesc.Windowed;
+
 		logger::info("[HDR] Upgraded swap chain: R10G10B10A2_UNORM + FLIP_DISCARD");
 	}
 
@@ -590,6 +596,11 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	// kNORMAL_TAAMASK_SSRMASK and its swap need UAV bind because DeferredCompositeCS
+	// writes vanilla-encoded normals through UAV1 (`normals.UAV` in Deferred::DeferredPasses),
+	// which feeds the post-pass vanilla SSAO chain (ISSAORawAO -> ISSAOComposite). Without
+	// these hooks the UAV is null, the CS write is silently dropped, and vanilla SSAO reads
+	// uninitialized data and produces hard wedge-shaped shadow artifacts.
 	struct CreateRenderTarget_Normals
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
@@ -754,59 +765,6 @@ namespace Hooks
 
 			return ret;
 		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct TESObjectLAND_SetupMaterial
-	{
-		static bool thunk(RE::TESObjectLAND* land)
-		{
-			bool vanillaResult = func(land);
-
-			// setup material for PBR
-			auto TruePBRSingleton = globals::truePBR;
-			if (TruePBRSingleton->TESObjectLAND_SetupMaterial(land)) {
-				// if PBR, we are done
-				return true;
-			}
-
-			// setup material for terrain helper
-			auto& terrainHelper = globals::features::terrainHelper;
-			if (vanillaResult && terrainHelper.loaded) {
-				terrainHelper.TESObjectLAND_SetupMaterial(land);
-			}
-
-			return vanillaResult;
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct BSLightingShader_SetupMaterial
-	{
-		static void thunk(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
-		{
-			// setup material for PBR
-			auto TruePBRSingleton = globals::truePBR;
-			if (TruePBRSingleton->BSLightingShader_SetupMaterial(shader, material)) {
-				// if PBR, we are done
-				return;
-			}
-
-			// vanilla
-			func(shader, material);
-
-			// terrain helper
-			auto& terrainHelper = globals::features::terrainHelper;
-			if (terrainHelper.loaded) {
-				terrainHelper.BSLightingShader_SetupMaterial(material);
-			}
-
-			// advanced skin
-			auto& skin = globals::features::skin;
-			if (skin.loaded && skin.settings.EnableSkin) {
-				skin.BSLightingShader_SetupMaterial(material);
-			}
-		};
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -1014,12 +972,6 @@ namespace Hooks
 		stl::write_vfunc<0x6, SkyExtensions::BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
 		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + REL::Relocate(0x45B, 0x4F5));
 		stl::write_vfunc<0x6, GrassExtensions::BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
-
-		logger::info("Hooking TESObjectLAND");
-		stl::detour_thunk<TESObjectLAND_SetupMaterial>(REL::RelocationID(18368, 18791));
-
-		logger::info("Hooking BSLightingShader");
-		stl::write_vfunc<0x4, BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);
 
 		// Patch render space in BSLightingShader::SetupGeometry to always use world space
 		// The variable updateEyePosition is set to 1 when not skinned. By patching to be 0 it will always use world space

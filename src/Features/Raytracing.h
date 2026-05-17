@@ -29,6 +29,11 @@
 #define STATIC_ASSERT_ENUM_COUNT(EnumType, Array) \
 	static_assert(_countof(Array) == magic_enum::enum_count<EnumType>(), "Array size must match enum count");
 
+#define LOAD_FN(name)                                                 \
+	name = reinterpret_cast<name##Fn>(GetProcAddress(handle, #name)); \
+	if (!name)                                                        \
+		logger::error("[Raytracing] 'CreationEngineRaytracing.dll' " #name " is nullptr (older version?)");
+
 struct CreationEngineRaytracing
 {
 	enum class Mode
@@ -206,7 +211,7 @@ struct CreationEngineRaytracing
 	// Resampled Importance Sampling
 	struct RISSettings
 	{
-		bool Enabled = true;
+		bool Enabled = false;
 		int MaxCandidates = 4;
 
 		bool operator==(const RISSettings&) const = default;
@@ -426,6 +431,7 @@ struct CreationEngineRaytracing
 	using UpdateFeatureDataFn = void (*)(void*, uint32_t);
 	using SetSkyHemisphereFn = void (*)(ID3D12Resource*);
 	using SetPhysicalSkyTrLUTFn = void (*)(ID3D12Resource*);
+	using SetWaterFlowMapFn = void (*)(ID3D12Resource*);
 	using GetPassTimingsFn = void (*)(eastl::vector<PassTiming>&);
 	using UpdateSettingsFn = void (*)(Settings);
 	using GetRRInputFn = void (*)(ID3D12Resource*&, ID3D12Resource*&);
@@ -434,6 +440,8 @@ struct CreationEngineRaytracing
 	using SetSkinDetailNormalFn = void (*)(ID3D12Resource*);
 	using SetPTOutputTargetsFn = void (*)(ID3D12Resource*, ID3D12Resource*);
 	using GetAccumulatedFrameCountFn = uint32_t (*)();
+	using GetFakeDoubledVRAMUsageFn = uint64_t (*)();
+	using GetSceneGraphCountersFn = void (*)(uint32_t& textures, uint32_t& models, uint32_t& instances);
 
 	InitializeRendererFn InitializeRenderer = nullptr;
 	InitializeFn Initialize = nullptr;
@@ -446,7 +454,9 @@ struct CreationEngineRaytracing
 	UpdateFeatureDataFn UpdateFeatureData = nullptr;
 	SetSkyHemisphereFn SetSkyHemisphere = nullptr;
 	SetPhysicalSkyTrLUTFn SetPhysicalSkyTrLUT = nullptr;
+	SetWaterFlowMapFn SetWaterFlowMap = nullptr;
 	GetPassTimingsFn GetPassTimings = nullptr;
+	GetSceneGraphCountersFn GetSceneGraphCounters = nullptr;
 	UpdateSettingsFn UpdateSettings = nullptr;
 	GetRRInputFn GetRRInput = nullptr;
 	SetSharedTexturesFn SetSharedTextures = nullptr;
@@ -454,6 +464,7 @@ struct CreationEngineRaytracing
 	SetSkinDetailNormalFn SetSkinDetailNormal = nullptr;
 	SetPTOutputTargetsFn SetPTOutputTargets = nullptr;
 	GetAccumulatedFrameCountFn GetAccumulatedFrameCount = nullptr;
+	GetFakeDoubledVRAMUsageFn GetFakeDoubledVRAMUsage = nullptr;
 
 	CreationEngineRaytracing()
 	{
@@ -467,100 +478,28 @@ struct CreationEngineRaytracing
 			return;
 		}
 
-		InitializeRenderer = reinterpret_cast<InitializeRendererFn>(GetProcAddress(handle, "InitializeRenderer"));
-
-		if (!InitializeRenderer)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' InitializeRenderer is nullptr");
-
-		Initialize = reinterpret_cast<InitializeFn>(GetProcAddress(handle, "Initialize"));
-
-		if (!Initialize)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' Initialize is nullptr");
-
-		UpdateCamera = reinterpret_cast<UpdateCameraFn>(GetProcAddress(handle, "UpdateCamera"));
-
-		if (!UpdateCamera)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' UpdateCamera is nullptr");
-
-		Execute = reinterpret_cast<ExecuteFn>(GetProcAddress(handle, "Execute"));
-
-		if (!Execute)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' Execute is nullptr");
-
-		WaitExecution = reinterpret_cast<WaitExecutionFn>(GetProcAddress(handle, "WaitExecution"));
-
-		if (!WaitExecution)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' WaitExecution is nullptr");
-
-		PostExecution = reinterpret_cast<PostExecutionFn>(GetProcAddress(handle, "PostExecution"));
-
-		if (!PostExecution)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' PostExecution is nullptr");
-
-		SetResolution = reinterpret_cast<SetResolutionFn>(GetProcAddress(handle, "SetResolution"));
-
-		if (!SetResolution)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' SetResolution is nullptr");
-
-		SetCopyTarget = reinterpret_cast<SetCopyTargetFn>(GetProcAddress(handle, "SetCopyTarget"));
-
-		if (!SetCopyTarget)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' SetCopyTarget is nullptr");
-
-		UpdateFeatureData = reinterpret_cast<UpdateFeatureDataFn>(GetProcAddress(handle, "UpdateFeatureData"));
-
-		if (!UpdateFeatureData)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' UpdateFeatureData is nullptr");
-
-		SetSkyHemisphere = reinterpret_cast<SetSkyHemisphereFn>(GetProcAddress(handle, "SetSkyHemisphere"));
-
-		if (!SetSkyHemisphere)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' SetSkyHemisphere is nullptr");
-
-		SetPhysicalSkyTrLUT = reinterpret_cast<SetPhysicalSkyTrLUTFn>(GetProcAddress(handle, "SetPhysicalSkyTrLUT"));
-
-		if (!SetPhysicalSkyTrLUT)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' SetPhysicalSkyTrLUT is nullptr");
-
-		GetPassTimings = reinterpret_cast<GetPassTimingsFn>(GetProcAddress(handle, "GetPassTimings"));
-
-		if (!GetPassTimings)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' GetPassTimings is nullptr");
-
-		UpdateSettings = reinterpret_cast<UpdateSettingsFn>(GetProcAddress(handle, "UpdateSettings"));
-
-		if (!UpdateSettings)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' UpdateSettings is nullptr");
-
-		GetRRInput = reinterpret_cast<GetRRInputFn>(GetProcAddress(handle, "GetRRInput"));
-
-		if (!GetRRInput)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' GetRRInput is nullptr");
-
-		SetSharedTextures = reinterpret_cast<SetSharedTexturesFn>(GetProcAddress(handle, "SetSharedTextures"));
-
-		if (!SetSharedTextures)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' SetSharedTextures is nullptr");
-
-		UpdateJitter = reinterpret_cast<UpdateJitterFn>(GetProcAddress(handle, "UpdateJitter"));
-
-		if (!UpdateJitter)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' UpdateJitter is nullptr");
-
-		SetSkinDetailNormal = reinterpret_cast<SetSkinDetailNormalFn>(GetProcAddress(handle, "SetSkinDetailNormal"));
-
-		if (!SetSkinDetailNormal)
-			logger::error("[Raytracing] 'CreationEngineRaytracing.dll' SetSkinDetailNormal is nullptr");
-
-		SetPTOutputTargets = reinterpret_cast<SetPTOutputTargetsFn>(GetProcAddress(handle, "SetPTOutputTargets"));
-
-		if (!SetPTOutputTargets)
-			logger::warn("[Raytracing] 'CreationEngineRaytracing.dll' SetPTOutputTargets is nullptr (older version?)");
-
-		GetAccumulatedFrameCount = reinterpret_cast<GetAccumulatedFrameCountFn>(GetProcAddress(handle, "GetAccumulatedFrameCount"));
-
-		if (!GetAccumulatedFrameCount)
-			logger::warn("[Raytracing] 'CreationEngineRaytracing.dll' GetAccumulatedFrameCount is nullptr (older version?)");
+		LOAD_FN(InitializeRenderer);
+		LOAD_FN(Initialize);
+		LOAD_FN(UpdateCamera);
+		LOAD_FN(Execute);
+		LOAD_FN(WaitExecution);
+		LOAD_FN(PostExecution);
+		LOAD_FN(SetResolution);
+		LOAD_FN(SetCopyTarget);
+		LOAD_FN(UpdateFeatureData);
+		LOAD_FN(SetSkyHemisphere);
+		LOAD_FN(SetPhysicalSkyTrLUT);
+		LOAD_FN(SetWaterFlowMap);
+		LOAD_FN(GetPassTimings);
+		LOAD_FN(GetSceneGraphCounters);
+		LOAD_FN(UpdateSettings);
+		LOAD_FN(GetRRInput);
+		LOAD_FN(SetSharedTextures);
+		LOAD_FN(UpdateJitter);
+		LOAD_FN(SetSkinDetailNormal);
+		LOAD_FN(SetPTOutputTargets);
+		LOAD_FN(GetAccumulatedFrameCount);
+		LOAD_FN(GetFakeDoubledVRAMUsage);
 	}
 };
 
@@ -578,6 +517,8 @@ struct Raytracing : public OverlayFeature
 {
 	static constexpr uint SKY_CUBEMAP_SIZE = 256;
 	static constexpr uint SKY_HEMI_SIZE = SKY_CUBEMAP_SIZE * 2;
+
+	static constexpr uint WATER_FLOWMAP_SIZE = 320;
 
 	// Metadata
 	virtual inline std::string GetName() override { return "Raytracing"; }
@@ -646,6 +587,11 @@ struct Raytracing : public OverlayFeature
 
 	void CompileShaders();
 
+	uint64_t GetSharedVRAMOffset() const
+	{
+		return loaded && initialized ? creationEngineRaytracing->GetFakeDoubledVRAMUsage() : 0;
+	}
+
 	void InitializeCERaytracing(ID3D11Device5* d3d11Device, ID3D12Device5* d3d12Device, ID3D12CommandQueue* commandQueue, ID3D12CommandQueue* computeCommandQueue, ID3D12CommandQueue* copyCommandQueue);
 	bool UpdateResolution();
 	void UpdateJitter(float2 jitter);
@@ -681,7 +627,7 @@ struct Raytracing : public OverlayFeature
 	struct Settings
 	{
 		OverlayMode PerfOverlay = OverlayMode::None;
-		bool ShowMainTexture = false;
+		bool DisplaySceneGraphCounters = false;
 		CreationEngineRaytracing::Settings CreationEngineRaytracingSettings;
 	} settings;
 
@@ -751,6 +697,7 @@ struct Raytracing : public OverlayFeature
 	winrt::com_ptr<ID3D11ComputeShader> cubeToHemiCS = nullptr;
 	eastl::unique_ptr<WrappedResource> physicalSkyTrLUT = nullptr;
 
+	eastl::unique_ptr<WrappedResource> waterFlowMap = nullptr;
 	RE::NiPointer<RE::TESWaterReflections> waterReflections = nullptr;
 
 	eastl::unique_ptr<CreationEngineRaytracing> creationEngineRaytracing = nullptr;
@@ -836,11 +783,30 @@ struct Raytracing : public OverlayFeature
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct CreateFlowMap
+		{
+			static void thunk(void* a1, RE::TESObjectCELL* a2, RE::BSTriShape* a3)
+			{
+				func(a1, a2, a3);
+
+				REL::Relocation<RE::NiPointer<RE::NiSourceTexture>*> gFlowMapSourceTex{ REL::RelocationID(527694, 414616) };
+				if (gFlowMapSourceTex.get()) {
+					if (auto* rendererTexture = gFlowMapSourceTex->get()->rendererTexture) {
+						auto& rt = globals::features::raytracing;
+						globals::d3d::context->CopyResource(rt.waterFlowMap->resource11, rendererTexture->texture);
+					}
+				}
+			}
+
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		static void Install()
 		{
 			stl::detour_thunk<Main_RenderWorld>(REL::RelocationID(100424, 107142));
 			stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
 			stl::write_vfunc<0x1, BSImagespaceShaderRefraction_Render>(RE::VTABLE_BSImagespaceShaderRefraction[0]);
+			stl::detour_thunk<CreateFlowMap>(REL::RelocationID(31231, 32031));
 		}
 	};
 

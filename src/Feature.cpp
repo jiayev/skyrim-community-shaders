@@ -26,6 +26,7 @@
 #include "Features/SceneGraphExplorer.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
@@ -49,6 +50,7 @@
 #include "WeatherVariableRegistry.h"
 
 #include "State.h"
+#include "TruePBR.h"
 
 void Feature::Load(json& o_json)
 {
@@ -215,6 +217,7 @@ void Feature::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 const std::vector<Feature*>& Feature::GetFeatureList()
 {
 	static std::vector<Feature*> features = {
+		&globals::features::truePBR,
 		&globals::features::volumetricShadows,
 		&globals::features::grassLighting,
 		&globals::features::grassCollision,
@@ -247,6 +250,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::raytracing,
 		&globals::features::sceneGraphExplorer,
 		&globals::features::weatherEditor,
+		&globals::features::screenshotFeature,
 		&globals::features::linearLighting,
 		&globals::features::unifiedWater,
 		&globals::features::exponentialHeightFog,

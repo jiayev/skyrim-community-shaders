@@ -39,6 +39,7 @@ struct Raytracing;
 struct SceneGraphExplorer;
 struct ExponentialHeightFog;
 struct HDRDisplay;
+struct ScreenshotFeature;
 struct PostProcessing;
 struct Skin;
 
@@ -99,12 +100,14 @@ namespace globals
 		extern Upscaling upscaling;
 		extern HDRDisplay hdrDisplay;
 		extern RenderDoc renderDoc;
+		extern ScreenshotFeature screenshotFeature;
 		extern WeatherEditor weatherEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern PostProcessing postProcessing;
 		extern Skin skin;
 		extern Raytracing raytracing;
 		extern SceneGraphExplorer sceneGraphExplorer;
+		extern TruePBR truePBR;
 
 		namespace llf
 		{
@@ -269,7 +272,6 @@ namespace globals
 
 	extern State* state;
 	extern Deferred* deferred;
-	extern TruePBR* truePBR;
 	extern Menu* menu;
 	extern SIE::ShaderCache* shaderCache;
 

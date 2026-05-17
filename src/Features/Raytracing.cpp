@@ -17,6 +17,7 @@
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Raytracing::Settings,
 	PerfOverlay,
+	DisplaySceneGraphCounters,
 	CreationEngineRaytracingSettings)
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -563,10 +564,30 @@ void Raytracing::DrawDebugSettings()
 
 	DrawEnumRadio("Performance Overlay", settings.PerfOverlay);
 
-	ImGui::Checkbox("Show Main Texture", &settings.ShowMainTexture);
+	ImGui::Checkbox("Display SceneGraph Counters", &settings.DisplaySceneGraphCounters);
 
-	if (settings.ShowMainTexture && mainTexture)
-		ImGui::Image(mainTexture->srv, { 1280, 720 });
+	if (ImGui::TreeNode("Buffer Viewer")) {
+		static float debugRescale = .3f;
+		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+
+		if (ImGui::TreeNode("Main")) {
+			D3D11_TEXTURE2D_DESC desc;
+			mainTexture->resource11->GetDesc(&desc);
+
+			ImGui::Image(mainTexture->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("FlowMap")) {
+			D3D11_TEXTURE2D_DESC desc;
+			waterFlowMap->resource11->GetDesc(&desc);
+
+			ImGui::ImageWithBg(waterFlowMap->srv, { desc.Width * debugRescale, desc.Height * debugRescale }, { 0, 0 }, { 1, 1 }, { 0, 0, 0, 1 });
+			ImGui::TreePop();
+		}
+
+		ImGui::TreePop();
+	}
 
 	ImGui::PopID();
 
@@ -639,9 +660,17 @@ void Raytracing::DrawOverlay()
 		ImGui::Text("Accumulated Frames: %u", accumulatedFrames);
 	}
 
-	/*ImGui::Text("Textures %zu", instances);
-	ImGui::Text("Meshes %zu", instances);
-	ImGui::Text("Instances %zu", instances);*/
+	if (settings.DisplaySceneGraphCounters && creationEngineRaytracing) {
+		uint32_t textures = 0;
+		uint32_t models = 0;
+		uint32_t instances = 0;
+
+		creationEngineRaytracing->GetSceneGraphCounters(textures, models, instances);
+
+		ImGui::Text("Textures %zu", textures);
+		ImGui::Text("Models %zu", models);
+		ImGui::Text("Instances %zu", instances);
+	}
 
 	ImGui::End();
 }
@@ -789,7 +818,9 @@ void ShareTexture(ID3D11Texture2D* d3d11Texture, ID3D12Resource** d3d12Resource,
 
 	DX::ThrowIfFailed(globals::features::dx12Interop.d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(d3d12Resource)));
 
-	CloseHandle(sharedHandle);
+	// Only close handle if it was created here
+	if (nt)
+		CloseHandle(sharedHandle);
 }
 
 void Raytracing::SetupResources()
@@ -892,6 +923,7 @@ void Raytracing::SetupResources()
 		creationEngineRaytracing->SetSkyHemisphere(skyHemisphere->resource.get());
 	}
 
+	// Physical Sky Transmittance LUT
 	{
 		D3D11_TEXTURE2D_DESC texDesc{};
 		texDesc.Width = PhysicalSky::kTrLutW;
@@ -899,6 +931,7 @@ void Raytracing::SetupResources()
 		texDesc.MipLevels = 1;
 		texDesc.ArraySize = 1;
 		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
 		texDesc.SampleDesc.Count = 1;
 		texDesc.SampleDesc.Quality = 0;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -908,6 +941,25 @@ void Raytracing::SetupResources()
 
 	if (creationEngineRaytracing->SetPhysicalSkyTrLUT)
 		creationEngineRaytracing->SetPhysicalSkyTrLUT(physicalSkyTrLUT->resource.get());
+
+	// Water FlowMap
+	{
+		D3D11_TEXTURE2D_DESC texDesc{};
+		texDesc.Width = WATER_FLOWMAP_SIZE;
+		texDesc.Height = WATER_FLOWMAP_SIZE;
+		texDesc.MipLevels = 1;
+		texDesc.ArraySize = 1;
+		texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		texDesc.SampleDesc.Count = 1;
+		texDesc.SampleDesc.Quality = 0;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+		waterFlowMap = eastl::make_unique<WrappedResource>(texDesc);
+		DX::ThrowIfFailed(waterFlowMap->resource->SetName(L"Water FlowMap"));
+
+		if (creationEngineRaytracing->SetWaterFlowMap)
+			creationEngineRaytracing->SetWaterFlowMap(waterFlowMap->resource.get());
+	}
 
 	CompileShaders();
 }
@@ -1324,7 +1376,23 @@ void Raytracing::DeferredPasses()
 		// Copy Depth and Motion Vectors if culling is enabled
 		if (settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull) {
 			auto depthStencils = renderer->GetDepthStencilData().depthStencils;
+
 			auto& mainDepth = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+			auto& mainDepthCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
+			auto& zPrePassCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
+			context->ClearDepthStencilView(mainDepth.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+			context->ClearDepthStencilView(mainDepthCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+			context->ClearDepthStencilView(zPrePassCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+
+			ID3D11DepthStencilState* oldDSS = nullptr;
+			UINT oldRef = 0;
+
+			context->OMGetDepthStencilState(&oldDSS, &oldRef);
+
+			ID3D11RenderTargetView* oldRTV;
+			ID3D11DepthStencilView* oldDSV;
+			context->OMGetRenderTargets(1, &oldRTV, &oldDSV);
 
 			context->OMSetRenderTargets(1,
 				&renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].RTV,
@@ -1351,8 +1419,29 @@ void Raytracing::DeferredPasses()
 
 			context->Draw(3, 0);
 
-			context->CopyResource(depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY].texture, mainDepth.texture);
-			context->CopyResource(depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].texture, mainDepth.texture);
+			context->OMSetDepthStencilState(oldDSS, oldRef);
+
+			context->OMSetRenderTargets(1,
+				&oldRTV,
+				oldDSV);
+
+			if (oldDSS) {
+				oldDSS->Release();
+				oldDSS = nullptr;
+			}
+
+			if (oldRTV) {
+				oldRTV->Release();
+				oldRTV = nullptr;
+			}
+
+			if (oldDSV) {
+				oldDSV->Release();
+				oldDSV = nullptr;
+			}
+
+			context->CopyResource(mainDepthCopy.texture, mainDepth.texture);
+			context->CopyResource(zPrePassCopy.texture, mainDepth.texture);
 		}
 	}
 

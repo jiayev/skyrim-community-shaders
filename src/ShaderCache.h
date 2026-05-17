@@ -58,6 +58,7 @@ namespace ShaderConstants
 				.LandscapeTexture4GlintParameters = 55,
 				.LandscapeTexture5GlintParameters = 56,
 				.LandscapeTexture6GlintParameters = 57,
+				.MaterialObjectRGBScale = 58,	// RGB multipliers for material objects
 
 				.ShadowSampleParam = 18,
 				.EndSplitDistances = 19,
@@ -120,6 +121,8 @@ namespace ShaderConstants
 		const int32_t LandscapeTexture4GlintParameters = 47;
 		const int32_t LandscapeTexture5GlintParameters = 48;
 		const int32_t LandscapeTexture6GlintParameters = 49;
+
+		const int32_t MaterialObjectRGBScale = 50;  // RGB multipliers for material objects
 
 		const int32_t ShadowSampleParam = -1;
 		const int32_t EndSplitDistances = -1;
@@ -544,10 +547,21 @@ namespace SIE
 
 		ShaderFileDependencyTracker* GetDependencyTracker() { return dependencyTracker.get(); }
 
-		// Use all logical cores minus one at startup for OS headroom (E-cores included).
+		static constexpr int32_t kLowCoreCompilationThreadThreshold = 8;
+		static constexpr int32_t kLowCoreReservedCompilationThreads = 1;
+		static constexpr int32_t kDefaultReservedCompilationThreads = 2;
+
+		static int32_t GetDefaultCompilationThreadCount()
+		{
+			const auto threadCount = static_cast<int32_t>(std::thread::hardware_concurrency());
+			const auto reservedThreads = threadCount <= kLowCoreCompilationThreadThreshold ? kLowCoreReservedCompilationThreads : kDefaultReservedCompilationThreads;
+			return std::max(threadCount - reservedThreads, 1);
+		}
+
+		// Reserve fewer threads on low-core systems to avoid overly slow startup compilation.
 		// Management and file watcher run on dedicated jthreads, not pool slots.
 		// Background (in-game): half of P-cores only, to avoid starving the render thread.
-		int32_t compilationThreadCount = std::max(static_cast<int32_t>(std::thread::hardware_concurrency()) - 1, 1);
+		int32_t compilationThreadCount = GetDefaultCompilationThreadCount();
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)

@@ -20,11 +20,13 @@ namespace SharedData
 		float Timer;
 		uint FrameCount;
 		uint FrameCountAlwaysActive;
-		bool InInterior;          // If the area lacks a directional shadow light e.g. the sun or moon
+		bool InInterior;  // If the current cell is an interior
+		bool HasDirectionalShadows;
 		bool InMapMenu;           // If the world/local map is open (note that the renderer is still deferred here)
 		bool HideSky;             // HideSky flag in WorldSpace, e.g. Blackreach
 		float MipBias;            // Offset to mip level for TAA sharpness
 		float WaterSystemHeight;  // TES::GetWaterHeight at eye-0 in camera-relative Z; -FLT_MAX when no water body found (VR only)
+		float3 pad0;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
@@ -39,9 +41,8 @@ namespace SharedData
 		bool OverrideComplexGrassSettings;
 
 		float BasicGrassBrightness;
-		bool EnableWrappedLighting;
 		float ComplexGrassThreshold;
-		float1 pad0;
+		float2 pad0;
 	};
 
 	struct CPMSettings
@@ -59,9 +60,13 @@ namespace SharedData
 	struct CubemapCreatorSettings
 	{
 		uint Enabled;
-		float3 pad0;
+		uint EnabledSSR;
+		float2 pad0;
 
 		float4 CubemapColor;
+
+		float ReflectionFallbackAmount;
+		float3 pad1;
 	};
 
 	struct TerraOccSettings
@@ -197,7 +202,7 @@ namespace SharedData
 		float EnvIBLSaturation;
 		float SkyIBLSaturation;
 		float FogAmount;
-		uint DALCMode;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky
+		uint DALCMode;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
 		uint DisableInInteriors;
 		float pad0;
 	};
@@ -213,7 +218,6 @@ namespace SharedData
 	struct LinearLightingSettings
 	{
 		uint enableLinearLighting;
-		uint enableGammaCorrection;
 		uint enableACEScg;
 		uint isDirLightLinear;
 		float dirLightMult;
@@ -241,9 +245,6 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		float _pad0;
-		float _pad1;
-		float _pad2;
 	};
 
 	struct TerrainBlendingSettings
@@ -261,9 +262,14 @@ namespace SharedData
 		float fogHeightFalloff;
 		float fogDensity;
 		float directionalInscatteringMultiplier;
-		float directionalInscatteringExponent;
+		float directionalInscatteringAnisotropy;
 		float4 inscatteringTint;
 		float cubemapMipLevel;
+		float sunlightAttenuationAmount;
+		uint respectVanillaFogFade;
+		uint disableVanillaFog;
+		float4 fogInscatteringColor;
+		float originalFogColorAmount;
 		float3 pad;
 	};
 
@@ -348,6 +354,12 @@ namespace SharedData
 		uint3 _padding;
 	};
 
+	struct TruePBRSettings
+	{
+		float VertexAOStrength;
+		uint3 pad;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -369,6 +381,7 @@ namespace SharedData
 		PostProcessingSettings postProcessingSettings;
 		PhysSkyData physSkyData;
 		RaytracingSettings raytracingSettings;
+		TruePBRSettings truePBRSettings;
 		SkinData skinData;
 	};
 
