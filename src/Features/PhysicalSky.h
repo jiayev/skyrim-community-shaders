@@ -79,7 +79,7 @@ struct PhysicalSky final : public Feature
 		bool enabled = true;
 		bool enableAllExteriorCells = false;
 		bool forceEnableAllInteriorCells = false;
-		bool overrideDirLight = false;
+		bool overrideDirLight = true;
 		bool lightSkyStatics = true;
 		bool halfResApShadow = false;
 		int tonemapper = 2;
