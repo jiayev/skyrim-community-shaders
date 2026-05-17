@@ -870,7 +870,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha && lightingInfluence == 1.0) {
 #		if defined(PHYSICAL_SKY)
 		if (SharedData::physSkyData.enabled && SharedData::physSkyData.lightSkyStatics) {
-			float3 sceneLighting = ShadowSampling::GetSceneLightingColor() / (effectNormalization * Math::PI);
+			float3 sceneLighting = ShadowSampling::GetSceneLightingColor() / effectNormalization;
 			lightColor = baseColor.xyz * GetLightingShadow(sceneLighting, input.WorldPosition.xyz, input.Position.xy, depth, eyeIndex, shadowVariance);
 		} else
 #		endif
