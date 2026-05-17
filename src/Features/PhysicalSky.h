@@ -84,7 +84,7 @@ struct PhysicalSky final : public Feature
 		bool halfResApShadow = false;
 		int tonemapper = 2;
 		float vanillaMix = 0;
-		float trMix = 0;
+		float trMix = 1;
 		float apLumMix = 1;
 		float apTrMix = 1;
 
