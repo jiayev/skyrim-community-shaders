@@ -3,10 +3,15 @@
 
 #include "Common/Color.hlsli"
 #include "Common/Math.hlsli"
+#include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 
 #if defined(CLOUD_SHADOWS)
 #	include "CloudShadows/CloudShadows.hlsli"
+#endif
+
+#if defined(IBL)
+#	include "IBL/IBL.hlsli"
 #endif
 
 #ifndef OMIT_PS_NAMESPACE
@@ -268,16 +273,22 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 #ifndef PS_PREPASS_RSRCS
 
+	float GetApShadow(uint2 pxCoord)
+	{
+		SharedData::PhysSkyData data = SharedData::physSkyData;
+
+		const uint2 apCoord = data.halfResApShadow ? pxCoord / 2 : pxCoord;
+		return TexApShadow[apCoord];
+	}
+
 #	ifndef PS_DEFERRED_RSRCS
-	float3 SampleSky(float3 viewDir, uint2 pxCoord, SamplerState sampSv)
+	float3 SampleSky(float3 viewDir, float shadow, SamplerState sampSv)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
 
 		const float2 skyLutUv = SkyViewLutUv(viewDir);
 		float3 skyColor = TexSvLut.SampleLevel(sampSv, skyLutUv, 0).rgb;
 
-		const uint2 apCoord = data.halfResApShadow ? pxCoord / 2 : pxCoord;
-		float shadow = TexApShadow[apCoord];  // this actually works???
 		skyColor *= 1 - shadow;
 
 		if (data.tonemapper == 1)
@@ -286,6 +297,11 @@ Texture2D<unorm float> TexApShadow : register(t64);
 			skyColor = skyColor / (1 + skyColor);
 
 		return skyColor;
+	}
+
+	float3 SampleSky(float3 viewDir, uint2 pxCoord, SamplerState sampSv)
+	{
+		return SampleSky(viewDir, GetApShadow(pxCoord), sampSv);
 	}
 
 	float3 SampleTr(float3 sunDir, SamplerState sampSv)
@@ -304,7 +320,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		return tr;
 	}
 
-#		if defined(CLOUD_SHADOWS)
+#		if defined(CLOUD_SHADOWS) && defined(PS_SKY_SAMPLERS)
 	float3 RelightCloud(float4 baseColor, float3 viewDir, float3 cloudPosWS, SamplerState sampTr, SamplerState sampCube)
 	{
 		if (baseColor.w <= 0)
@@ -325,7 +341,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 		float u = dot(viewDir, dirLightDir);
 		float phaseCloud = Remap(
-							   baseColor.w,
+							   baseColor.a,
 							   data.silverLiningSpread > 0 ? data.silverLiningSpread : 0,
 							   data.silverLiningSpread < 0 ? 1 + data.silverLiningSpread : 1,
 							   lerp(0.25 * RCP_PI, Phase::ThomasSchander(u), data.silverLiningMix),
@@ -334,7 +350,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 		float3 cloudColor = baseColor.rgb * data.cloudOriginalMix;
 
-		if (baseColor.w > 0.0) {
+		if (baseColor.a > 0.0) {
 			float rayStep = 1.0 / 32.0;
 			float rayPos = rayStep * 0.5;
 			float4 rayShadow = 0.0;
@@ -355,12 +371,43 @@ Texture2D<unorm float> TexApShadow : register(t64);
 				if (raySample.z < 0.0)
 					rayShadow[i % 4] += -raySample.z;  // World shadow
 				else
-					rayShadow[i % 4] = max(rayShadow[i % 4], CloudShadows::CloudShadowsTexture.SampleLevel(sampCube, raySample, 0).x);
+					rayShadow[i % 4] = max(rayShadow[i % 4], CloudShadows::CloudSelfShadowTexture.SampleLevel(sampCube, raySample, 0).x);
 
 				rayPos += rayStep;
 			}
 
-			cloudColor += baseColor.a * baseColor.xyz * phaseCloud * (1.0 - saturate(dot(rayShadow, 0.25))) * dirLightColor;
+			float directVisibility = 1.0 - saturate(dot(rayShadow, 0.25));
+
+			float cloudOpticalDepth = -log(max(1.0 - baseColor.a, 1e-3));
+			float forwardG = lerp(0.82, 0.94, saturate(1.0 - abs(data.silverLiningSpread)));
+			float forwardMieCore = max(0.0, Phase::HG(u, forwardG) - 0.25 * RCP_PI);
+			float forwardMieAureole = max(0.0, Phase::Draine(u, 0.78, 2.0) - 0.25 * RCP_PI);
+			float forwardMiePhase = forwardMieCore + 0.45 * forwardMieAureole;
+			float silverEdgeMask = smoothstep(0.08, 0.35, baseColor.a) * (1.0 - smoothstep(0.45, 0.85, baseColor.a));
+			float silverSingleScatter = 1.35 * silverEdgeMask * (1.0 - exp(-cloudOpticalDepth)) * exp(-0.5 * cloudOpticalDepth);
+			float directSingleScatter = 0.9 * cloudOpticalDepth * exp(-0.75 * cloudOpticalDepth);
+			cloudColor += baseColor.xyz * dirLightColor * forwardMiePhase * silverSingleScatter * directVisibility * data.silverLiningMix * data.cloudRelightMix;
+
+#			if defined(IBL)
+			if (SharedData::iblSettings.EnableIBL) {
+				float3 cloudAmbientDir = normalize(-viewDir);
+				float skyVisibility = saturate(cloudAmbientDir.z * 0.5 + 0.5) * exp(-cloudOpticalDepth);
+				float3 vanillaAmbient = Color::Ambient(max(0.0, SharedData::GetAmbient(cloudAmbientDir)));
+
+				float3 linIblAmbient = 0.0;
+				if (SharedData::iblSettings.DALCMode >= 2)
+					linIblAmbient += Color::IrradianceToLinear(vanillaAmbient * SharedData::iblSettings.DALCAmount);
+				else
+					linIblAmbient += ImageBasedLighting::GetEnvIBLColor(cloudAmbientDir);
+				linIblAmbient += ImageBasedLighting::GetSkyIBLColorOccluded(cloudAmbientDir, skyVisibility);
+
+				float3 iblAmbient = Color::IrradianceToGamma(linIblAmbient);
+				float iblFill = baseColor.a * exp(-0.35 * cloudOpticalDepth) * lerp(0.25, 1.0, 1.0 - directVisibility);
+				cloudColor += baseColor.xyz * iblAmbient * iblFill * data.cloudRelightMix;
+			}
+#			endif
+
+			cloudColor += baseColor.xyz * phaseCloud * directVisibility * directSingleScatter * dirLightColor;
 		}
 
 		return cloudColor;
@@ -368,7 +415,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 #		endif
 #	endif
 
-	float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)
+	float4 SampleAp(float3 viewDir, float dist, float shadow, SamplerState sampSv)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
 
@@ -379,8 +426,6 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		const float depth_slice = lerp(.5 / apDims.z, 1 - .5 / apDims.z, saturate(dist / AP_MAX_DIST));
 		float4 apColor = TexApLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0);
 
-		const uint2 apCoord = data.halfResApShadow ? pxCoord / 2 : pxCoord;
-		float shadow = TexApShadow[apCoord];
 		apColor.rgb *= 1 - shadow;
 
 		if (data.tonemapper == 1)
@@ -393,10 +438,14 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 		return apColor;
 	}
+
+	float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)
+	{
+		return SampleAp(viewDir, dist, GetApShadow(pxCoord), sampSv);
+	}
 #endif
 
 #ifndef OMIT_PS_NAMESPACE
 }
 #endif
-
-#endif  // COMMON_HLSLI
+#endif

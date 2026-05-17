@@ -1,5 +1,10 @@
 #include "PhysicalSky.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cfloat>
+#include <imgui_stdlib.h>
+
 #include "CloudShadows.h"
 #include "Deferred.h"
 #include "LinearLighting.h"
@@ -12,11 +17,16 @@
 #include "Util.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	PhysicalSky::WorldspaceInfo,
+	zBottom)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PhysicalSky::Settings,
 	enabled,
 	enableAllExteriorCells,
 	forceEnableAllInteriorCells,
 	overrideDirLight,
+	lightSkyStatics,
 	halfResApShadow,
 	tonemapper,
 	vanillaMix,
@@ -29,10 +39,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	secundaColor,
 	proceduralSun,
 	sunDiskRad,
-	adaptationStart,
-	adaptationEnd,
-	dayExposure,
-	nightExposure,
+
+	worldspaceWhitelist,
 	groundAlbedo,
 	planetRadius,
 	atmosphereRadius,
@@ -55,6 +63,50 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	RE::TESWorldSpace* GetCurrentWorldspace()
+	{
+		auto* tes = globals::game::tes ? globals::game::tes : RE::TES::GetSingleton();
+		auto* player = RE::PlayerCharacter::GetSingleton();
+		auto* cell = player ? player->GetParentCell() : nullptr;
+
+		auto* worldspace = tes ? tes->GetRuntimeData2().worldSpace : nullptr;
+		if (!worldspace && cell)
+			worldspace = cell->GetRuntimeData().worldSpace;
+
+		return worldspace;
+	}
+
+	bool IsCurrentCellInterior()
+	{
+		auto* player = RE::PlayerCharacter::GetSingleton();
+		auto* cell = player ? player->GetParentCell() : nullptr;
+		return cell && cell->IsInteriorCell();
+	}
+
+	std::string GetCurrentWorldspaceEditorID()
+	{
+		auto* worldspace = GetCurrentWorldspace();
+		if (!worldspace)
+			return {};
+
+		return worldspace->GetFormEditorID();
+	}
+
+	std::string TrimEditorID(std::string editorID)
+	{
+		const auto first = std::ranges::find_if_not(editorID, [](unsigned char c) {
+			return std::isspace(c);
+		});
+		const auto last = std::find_if_not(editorID.rbegin(), editorID.rend(), [](unsigned char c) {
+			return std::isspace(c);
+		}).base();
+
+		if (first >= last)
+			return {};
+
+		return { first, last };
+	}
+
 	void InfoBox(const char* str)
 	{
 		if (ImGui::BeginTable("Info", 1, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
@@ -129,6 +181,9 @@ void PhysicalSky::DrawSettings()
 
 void PhysicalSky::SettingsGeneral()
 {
+	const auto currentWorldspaceName = GetCurrentWorldspaceEditorID();
+	const bool inInterior = IsCurrentCellInterior();
+
 	if (ImGui::BeginTable("Info", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
 		ImGui::TableNextColumn();
 		ImGui::Text("Shader Status: ");
@@ -141,35 +196,22 @@ void PhysicalSky::SettingsGeneral()
 		ImGui::TableNextColumn();
 		ImGui::Text("Worldspace: ");
 		ImGui::TableNextColumn();
-		auto* tes = globals::game::tes ? globals::game::tes : RE::TES::GetSingleton();
-		auto* player = RE::PlayerCharacter::GetSingleton();
-		auto* cell = player ? player->GetParentCell() : nullptr;
-		bool inInterior = cell && cell->IsInteriorCell();
 
 		if (inInterior) {
 			if (settings.forceEnableAllInteriorCells)
 				ImGui::Text("Interior (Enabled, Forced)");
 			else
 				ImGui::Text("Interior (Disabled)");
-		} else if (tes) {
-			auto* worldspace = tes->GetRuntimeData2().worldSpace;
-			if (!worldspace && cell)
-				worldspace = cell->GetRuntimeData().worldSpace;
-
-			if (worldspace) {
-				std::string worldspaceName = worldspace->GetFormEditorID();
-				if (settings.worldspaceWhitelist.contains(worldspaceName)) {
-					ImGui::Text("%s (Enabled, Whitelist)", worldspaceName.c_str());
-				} else if (settings.enableAllExteriorCells) {
-					ImGui::Text("%s (Enabled, Fallback Z Bottom)", worldspaceName.c_str());
-				} else {
-					ImGui::Text("%s (Disabled)", worldspaceName.c_str());
-				}
+		} else if (!currentWorldspaceName.empty()) {
+			if (settings.worldspaceWhitelist.contains(currentWorldspaceName)) {
+				ImGui::Text("%s (Enabled, Whitelist)", currentWorldspaceName.c_str());
+			} else if (settings.enableAllExteriorCells) {
+				ImGui::Text("%s (Enabled, Fallback Z Bottom)", currentWorldspaceName.c_str());
 			} else {
-				ImGui::Text("Unknown (Worldspace Unavailable)");
+				ImGui::Text("%s (Disabled)", currentWorldspaceName.c_str());
 			}
 		} else {
-			ImGui::Text("Unknown (TES Unavailable)");
+			ImGui::Text("Unknown (Worldspace Unavailable)");
 		}
 
 		ImGui::EndTable();
@@ -186,15 +228,82 @@ void PhysicalSky::SettingsGeneral()
 			ImGui::Text("Used when current worldspace is not in whitelist (or worldspace data is unavailable), including forced interiors.");
 	}
 
+	ImGui::Checkbox("Light Sky Statics", &settings.lightSkyStatics);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Treat sky statics as albedo and tint them with Physical Sky lighting.");
+
+	ImGui::SeparatorText("Worldspace Whitelist");
+	{
+		static std::string newWorldspaceEditorID;
+		static float newWorldspaceZBottom = -14500.f;
+
+		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.55f);
+		ImGui::InputTextWithHint("Editor ID", "Tamriel", &newWorldspaceEditorID);
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
+		ImGui::InputFloat("Z Bottom", &newWorldspaceZBottom, 10.f, 100.f, "%.1f");
+
+		const auto addOrUpdateWorldspace = [&](std::string editorID, float zBottom) {
+			editorID = TrimEditorID(std::move(editorID));
+			if (!editorID.empty())
+				settings.worldspaceWhitelist[editorID].zBottom = zBottom;
+		};
+
+		if (ImGui::Button("Add / Update")) {
+			addOrUpdateWorldspace(newWorldspaceEditorID, newWorldspaceZBottom);
+		}
+
+		if (!currentWorldspaceName.empty()) {
+			ImGui::SameLine();
+			const auto currentIt = settings.worldspaceWhitelist.find(currentWorldspaceName);
+			const bool currentWhitelisted = currentIt != settings.worldspaceWhitelist.end();
+			if (ImGui::Button(currentWhitelisted ? "Remove Current Worldspace" : "Add Current Worldspace")) {
+				if (currentWhitelisted) {
+					settings.worldspaceWhitelist.erase(currentIt);
+				} else {
+					addOrUpdateWorldspace(currentWorldspaceName, newWorldspaceZBottom);
+				}
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", currentWorldspaceName.c_str());
+		}
+
+		if (ImGui::BeginTable("WorldspaceWhitelist", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp, { -1, 0 })) {
+			ImGui::TableSetupColumn("Editor ID");
+			ImGui::TableSetupColumn("Z Bottom", ImGuiTableColumnFlags_WidthFixed, 160.f);
+			ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 90.f);
+			ImGui::TableHeadersRow();
+
+			std::string removeEditorID;
+			for (auto& [editorID, info] : settings.worldspaceWhitelist) {
+				ImGui::PushID(editorID.c_str());
+				ImGui::TableNextRow();
+
+				ImGui::TableSetColumnIndex(0);
+				ImGui::TextUnformatted(editorID.c_str());
+
+				ImGui::TableSetColumnIndex(1);
+				ImGui::SetNextItemWidth(-FLT_MIN);
+				ImGui::InputFloat("##ZBottom", &info.zBottom, 10.f, 100.f, "%.1f");
+
+				ImGui::TableSetColumnIndex(2);
+				if (ImGui::Button("Remove", { -1, 0 }))
+					removeEditorID = editorID;
+
+				ImGui::PopID();
+			}
+
+			if (!removeEditorID.empty())
+				settings.worldspaceWhitelist.erase(removeEditorID);
+
+			ImGui::EndTable();
+		}
+	}
+
 	ImGui::SeparatorText("Post Processing");
 	{
-		ImGui::InputFloat("Day Exposure", &settings.dayExposure);
-		settings.dayExposure = std::max(1e-10f, settings.dayExposure);
-		ImGui::InputFloat("Night Exposure", &settings.nightExposure);
-		settings.nightExposure = std::max(1e-10f, settings.nightExposure);
-		ImGui::SliderAngle("Adaptation Start", &settings.adaptationStart, -90.f, 0.f);
-		ImGui::SliderAngle("Adaptation End", &settings.adaptationEnd, -90.f, 0.f);
-
+		const bool llEnabled = globals::features::linearLighting.settings.enableLinearLighting;
+		ImGui::BeginDisabled(llEnabled);
 		if (ImGui::BeginTable("tonemap", 4, ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
 			ImGui::TableNextColumn();
 			ImGui::Text("Tonemapper");
@@ -205,6 +314,11 @@ void PhysicalSky::SettingsGeneral()
 			ImGui::TableNextColumn();
 			ImGui::RadioButton("Reinherd", &settings.tonemapper, 2);
 			ImGui::EndTable();
+		}
+		ImGui::EndDisabled();
+		if (llEnabled) {
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Tonemapper is forced to Linear when Linear Lighting is enabled.");
 		}
 		ImGui::SliderFloat("Vanilla Mix", &settings.vanillaMix, 0.f, 1.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -563,6 +677,8 @@ void PhysicalSky::Reset()
 	allGood &= (worldspaceEnabled || settings.enableAllExteriorCells || allowForcedInterior) && (!inInterior || allowForcedInterior) && !inMainLoadingMenu;
 
 	if (!allGood) {
+		if (skySync.loaded && skySync.settings.Enabled)
+			skySync.lightColors = std::nullopt;
 		cbData.enabled = allGood;
 		linearLighting.isDirLightLinear = false;
 		return;
@@ -576,11 +692,6 @@ void PhysicalSky::Reset()
 	auto sunDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Sun)];
 	auto masserDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Masser)];
 	auto secundaDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Secunda)];
-
-	float sunAngle = DirectX::XMConvertToRadians(90.f) - acos(sunDir.z);
-	float adaptAmount = (sunAngle - settings.adaptationStart) / (settings.adaptationEnd - settings.adaptationStart);
-	adaptAmount = std::min(1.f, std::max(0.f, adaptAmount));
-	float exposure = settings.dayExposure * exp(log(settings.nightExposure / settings.dayExposure) * adaptAmount);
 
 	// Wide gamut support: when ACEScg is active, transform color parameters
 	// from sRGB gamut to AP1 gamut so that the LUTs are natively generated in AP1 space.
@@ -602,15 +713,15 @@ void PhysicalSky::Reset()
 		.frameDim = dynres,
 		.rcpFrameDim = float2(1.0f) / dynres,
 		.sunDir = { sunDir.x, sunDir.y, sunDir.z },
-		.sunlightColor = sRGBToWorkingGamut(settings.sunlightColor) * exposure,
+		.sunlightColor = sRGBToWorkingGamut(settings.sunlightColor),
 		.trMix = settings.trMix,
 		.masserDir = { masserDir.x, masserDir.y, masserDir.z },
 		.apLumMix = settings.apLumMix,
-		.masserColor = sRGBToWorkingGamut(settings.masserColor) * exposure,
+		.masserColor = sRGBToWorkingGamut(settings.masserColor),
 		.apTrMix = settings.apTrMix,
 		.secundaDir = { secundaDir.x, secundaDir.y, secundaDir.z },
 		.sunDiskCos = cos(settings.sunDiskRad) * (settings.proceduralSun ? 1.f : 0.f),
-		.secundaColor = sRGBToWorkingGamut(settings.secundaColor) * exposure,
+		.secundaColor = sRGBToWorkingGamut(settings.secundaColor),
 		.enabled = allGood,
 		.tonemapper = linearLighting.settings.enableLinearLighting ? 0 : settings.tonemapper,
 		.vanillaMix = settings.vanillaMix,
@@ -633,6 +744,8 @@ void PhysicalSky::Reset()
 		.cloudOriginalMix = settings.cloudOriginalMix,
 		.silverLiningMix = settings.silverLiningMix,
 		.silverLiningSpread = settings.silverLiningSpread,
+		.lightSkyStatics = settings.lightSkyStatics ? 1u : 0u,
+		.pad0 = { 0u, 0u, 0u },
 	};
 
 	if (settings.overrideDirLight) {
@@ -757,18 +870,22 @@ void PhysicalSky::AccumShadow()
 		TracyD3D11Zone(state->tracyCtx, debugStr);
 
 		auto sampler = sampTr.get();
+		ID3D11ShaderResourceView* directionalShadowLights = nullptr;
+		if (auto* directionalShadowBuffer = Deferred::GetSingleton()->directionalShadowLights)
+			directionalShadowLights = directionalShadowBuffer->srv.get();
 		auto srvs = std::array{
 			globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV,
 			volumetricShadows.shadowView,
-			volumetricShadows.perShadow->srv.get(),
+			static_cast<ID3D11ShaderResourceView*>(nullptr),
 			terrainShadows.IsHeightMapReady() ? terrainShadows.texShadowHeight->srv.get() : nullptr,
-			cloudShadows.loaded ? cloudShadows.texCubemapCloudOcc->srv.get() : nullptr,
+			cloudShadows.loaded ? cloudShadows.texCloudShadowLayers[CloudShadows::kMaxCloudLayers - 1]->srv.get() : nullptr,
 		};
 		auto uav = texApShadow->uav.get();
 
 		/* ---- DISPATCH ---- */
 		context->CSSetSamplers(0, 1, &sampler);
 		context->CSSetShaderResources(0, (int)srvs.size(), srvs.data());
+		context->CSSetShaderResources(98, 1, &directionalShadowLights);
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShader(settings.halfResApShadow ? csShadowAccumHalfRes.get() : csShadowAccum.get(), nullptr, 0);
 		context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
@@ -776,11 +893,13 @@ void PhysicalSky::AccumShadow()
 		/* ---- RESTORE ---- */
 		sampler = nullptr;
 		srvs.fill(nullptr);
+		directionalShadowLights = nullptr;
 		uav = nullptr;
 
 		context->CSSetSamplers(0, 1, &sampler);
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShaderResources(0, (int)srvs.size(), srvs.data());
+		context->CSSetShaderResources(98, 1, &directionalShadowLights);
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
 	state->EndPerfEvent();

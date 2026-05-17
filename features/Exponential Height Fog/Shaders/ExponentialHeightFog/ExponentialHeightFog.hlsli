@@ -239,11 +239,19 @@ namespace ExponentialHeightFog
 
 		// Calculate directional light inscattering using Henyey-Greenstein phase function
 		if (SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier > 0) {
+			float llDirLightMult = SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear && !SharedData::InInterior ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
+			float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+#if defined(PHYSICAL_SKY) && defined(COMMON_HLSLI)
+			if (SharedData::physSkyData.enabled) {
+				float3 physSkyTransmittance = PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampColorSampler);
+				dirLightColor *= saturate(physSkyTransmittance);
+			}
+#endif
 			float3 viewDirection = viewToPos * viewToPosLengthInv;
 			float3 lightDirection = normalize(SharedData::DirLightDirection.xyz);
 			float cosTheta = dot(lightDirection, viewDirection);
 			float phase = HenyeyGreenstein(cosTheta, SharedData::exponentialHeightFogSettings.directionalInscatteringAnisotropy);
-			float3 directionalLightInscattering = Color::GamutTransform(SharedData::DirLightColor.xyz) * phase;
+			float3 directionalLightInscattering = dirLightColor * phase;
 			directionalInscattering = directionalLightInscattering * (1.0f - expFogFactor) * SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier;
 		}
 
@@ -286,6 +294,31 @@ namespace ExponentialHeightFog
 		}
 
 		return lerp(1.0f, sunlightFogAttenuation, SharedData::exponentialHeightFogSettings.sunlightAttenuationAmount);
+	}
+
+	float GetSunFogAttenuation(float3 cameraWS)
+	{
+		float fogHeightFalloff = SharedData::exponentialHeightFogSettings.fogHeightFalloff * 0.001f;
+		float fogDensity = SharedData::exponentialHeightFogSettings.fogDensity * 0.001f;
+		if (fogDensity <= 0.0f) {
+			return 1.0f;
+		}
+
+		float exponent = fogHeightFalloff * max(cameraWS.z - SharedData::exponentialHeightFogSettings.fogHeight, 0.0f);
+		float localDensity = fogDensity * exp2(-exponent);
+
+		float3 lightDir = SharedData::DirLightDirection.xyz;
+		float lightDirZ = lightDir.z;
+
+		float sunFogAttenuation = 0.0f;
+
+		// Integral = Density * (1 - exp2(-slope * inf)) / slope
+		if (lightDirZ > 0.001f) {
+			float slope = max(fogHeightFalloff * lightDirZ, 1e-8f);
+			float exponentialHeightLineIntegral = localDensity / slope;
+			sunFogAttenuation = saturate(exp2(-exponentialHeightLineIntegral));
+		}
+		return sunFogAttenuation;
 	}
 }
 #endif

@@ -79,27 +79,23 @@ struct PhysicalSky final : public Feature
 		bool enabled = true;
 		bool enableAllExteriorCells = false;
 		bool forceEnableAllInteriorCells = false;
-		bool overrideDirLight = false;
+		bool overrideDirLight = true;
+		bool lightSkyStatics = true;
 		bool halfResApShadow = false;
 		int tonemapper = 2;
 		float vanillaMix = 0;
-		float trMix = 0;
+		float trMix = 1;
 		float apLumMix = 1;
 		float apTrMix = 1;
 
 		float2 cloudShadowRemapRange = float2{ 0, 1.f };
 
-		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 1e3f;
-		float3 masserColor = float3{ 1.0f, 0.6f, 0.6f } * 5e-3f;
-		float3 secundaColor = float3{ 0.8f, 1.0f, 1.0f } * 5e-3f;
+		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 10.f;
+		float3 masserColor = float3{ 1.0f, 0.6f, 0.6f } * 0.1f;
+		float3 secundaColor = float3{ 0.8f, 1.0f, 1.0f } * 0.05f;
 
 		bool proceduralSun = true;
 		float sunDiskRad = DirectX::XMConvertToRadians(0.53f);
-
-		float adaptationStart = DirectX::XMConvertToRadians(-2);
-		float adaptationEnd = DirectX::XMConvertToRadians(-15);
-		float dayExposure = 1e-2f;
-		float nightExposure = 1e2f;
 
 		std::map<std::string, WorldspaceInfo> worldspaceWhitelist = {
 			{ "Tamriel", { -14500.f } },
@@ -188,8 +184,12 @@ struct PhysicalSky final : public Feature
 		float cloudOriginalMix;
 		float silverLiningMix;
 		float silverLiningSpread;  //
+
+		// SETTINGS
+		uint lightSkyStatics;
+		uint pad0[3];
 	} cbData;
-	static_assert(sizeof(CbData) % 16 == 0);
+	STATIC_ASSERT_ALIGNAS_16(CbData);
 
 	eastl::unique_ptr<Texture2D> texTrLut = nullptr;  // transmittance
 	eastl::unique_ptr<Texture2D> texMsLut = nullptr;  // multiscattering

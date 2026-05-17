@@ -367,6 +367,10 @@ namespace SharedData
 		float cloudOriginalMix;
 		float silverLiningMix;
 		float silverLiningSpread;  //
+
+		// SETTINGS
+		uint lightSkyStatics;
+		uint3 pad0;
 	};
 
 	struct RaytracingSettings
