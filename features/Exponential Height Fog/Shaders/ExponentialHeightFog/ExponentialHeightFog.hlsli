@@ -244,12 +244,10 @@ namespace ExponentialHeightFog
 #endif
 			float3 viewDirection = viewToPos * viewToPosLengthInv;
 			float3 lightDirection = normalize(SharedData::DirLightDirection.xyz);
-			float cosTheta = dot(lightDirection, -viewDirection);
+			float cosTheta = dot(lightDirection, viewDirection);
 			float phase = HenyeyGreenstein(cosTheta, SharedData::exponentialHeightFogSettings.directionalInscatteringAnisotropy);
 			float3 directionalLightInscattering = dirLightColor * phase;
-			float dirExponentialHeightLineIntegral = exponentialHeightLineIntegralCalc * max(rayLength - SharedData::exponentialHeightFogSettings.startDistance, 0);
-			float dirExpFogFactor = saturate(exp2(-dirExponentialHeightLineIntegral));
-			directionalInscattering = directionalLightInscattering * (1 - dirExpFogFactor) * SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier;
+			directionalInscattering = directionalLightInscattering * (1.0f - expFogFactor) * SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier;
 		}
 
 		fogColor += directionalInscattering;
