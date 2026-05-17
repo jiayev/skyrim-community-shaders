@@ -14,10 +14,6 @@
 #	include "IBL/IBL.hlsli"
 #endif
 
-#if defined(CLOUD_SHADOWS) && defined(PS_SKY_SAMPLERS)
-TextureCube<float> TexCloudShadowLayer : register(t26);
-#endif
-
 #ifndef OMIT_PS_NAMESPACE
 namespace PhysSky
 {
@@ -314,15 +310,12 @@ Texture2D<unorm float> TexApShadow : register(t64);
 	}
 
 #		if defined(CLOUD_SHADOWS) && defined(PS_SKY_SAMPLERS)
-	float3 RelightCloud(float4 baseColor, float3 viewDir, float3 cloudPosWS, SamplerState sampTr, SamplerState sampCube, float2 screenPosition)
+	float3 RelightCloud(float4 baseColor, float3 viewDir, float3 cloudPosWS, SamplerState sampTr, SamplerState sampCube)
 	{
 		if (baseColor.w <= 0)
 			return baseColor.rgb;
 
 		SharedData::PhysSkyData data = SharedData::physSkyData;
-		float alphaNoise = Random::InterleavedGradientNoise(screenPosition, SharedData::FrameCount) - 0.5;
-		float alphaDitherWidth = (1.0 / 64.0) * (1.0 - smoothstep(0.0, 0.25, saturate(baseColor.a)));
-		float cloudAlpha = saturate(baseColor.a + alphaNoise * alphaDitherWidth);
 
 		// TODO: use proper light Dir
 		float3 dirLightDir = SharedData::DirLightDirection.xyz;
@@ -337,7 +330,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 		float u = dot(viewDir, dirLightDir);
 		float phaseCloud = Remap(
-							   cloudAlpha,
+							   baseColor.a,
 							   data.silverLiningSpread > 0 ? data.silverLiningSpread : 0,
 							   data.silverLiningSpread < 0 ? 1 + data.silverLiningSpread : 1,
 							   lerp(0.25 * RCP_PI, Phase::ThomasSchander(u), data.silverLiningMix),
@@ -346,7 +339,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 		float3 cloudColor = baseColor.rgb * data.cloudOriginalMix;
 
-		if (cloudAlpha > 0.0) {
+		if (baseColor.a > 0.0) {
 			float rayStep = 1.0 / 32.0;
 			float rayPos = rayStep * 0.5;
 			float4 rayShadow = 0.0;
@@ -367,19 +360,19 @@ Texture2D<unorm float> TexApShadow : register(t64);
 				if (raySample.z < 0.0)
 					rayShadow[i % 4] += -raySample.z;  // World shadow
 				else
-					rayShadow[i % 4] = max(rayShadow[i % 4], TexCloudShadowLayer.SampleLevel(sampCube, raySample, 0).x);
+					rayShadow[i % 4] = max(rayShadow[i % 4], CloudShadows::CloudSelfShadowTexture.SampleLevel(sampCube, raySample, 0).x);
 
 				rayPos += rayStep;
 			}
 
 			float directVisibility = 1.0 - saturate(dot(rayShadow, 0.25));
 
-			float cloudOpticalDepth = -log(max(1.0 - cloudAlpha, 1e-3));
+			float cloudOpticalDepth = -log(max(1.0 - baseColor.a, 1e-3));
 			float forwardG = lerp(0.82, 0.94, saturate(1.0 - abs(data.silverLiningSpread)));
 			float forwardMieCore = max(0.0, Phase::HG(u, forwardG) - 0.25 * RCP_PI);
 			float forwardMieAureole = max(0.0, Phase::Draine(u, 0.78, 2.0) - 0.25 * RCP_PI);
 			float forwardMiePhase = forwardMieCore + 0.45 * forwardMieAureole;
-			float silverEdgeMask = smoothstep(0.08, 0.35, cloudAlpha) * (1.0 - smoothstep(0.45, 0.85, cloudAlpha));
+			float silverEdgeMask = smoothstep(0.08, 0.35, baseColor.a) * (1.0 - smoothstep(0.45, 0.85, baseColor.a));
 			float silverSingleScatter = 1.35 * silverEdgeMask * (1.0 - exp(-cloudOpticalDepth)) * exp(-0.5 * cloudOpticalDepth);
 			float directSingleScatter = 0.9 * cloudOpticalDepth * exp(-0.75 * cloudOpticalDepth);
 			cloudColor += baseColor.xyz * dirLightColor * forwardMiePhase * silverSingleScatter * data.silverLiningMix * data.cloudRelightMix;
@@ -388,7 +381,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 			if (SharedData::iblSettings.EnableIBL) {
 				float3 vanillaAmbient = Color::Ambient(max(0.0, SharedData::GetAmbient(float3(0.0, 0.0, 1.0))));
 				float3 iblAmbient = ImageBasedLighting::GetDiffuseIBL(vanillaAmbient, 0.0.xxx);
-				float iblFill = cloudAlpha * lerp(0.25, 1.0, 1.0 - directVisibility);
+				float iblFill = baseColor.a * lerp(0.25, 1.0, 1.0 - directVisibility);
 				cloudColor += baseColor.xyz * iblAmbient * iblFill * data.cloudRelightMix;
 			}
 #			endif
