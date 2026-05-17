@@ -25,6 +25,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	enableAllExteriorCells,
 	forceEnableAllInteriorCells,
 	overrideDirLight,
+	lightSkyStatics,
 	halfResApShadow,
 	tonemapper,
 	vanillaMix,
@@ -213,6 +214,10 @@ void PhysicalSky::SettingsGeneral()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Used when current worldspace is not in whitelist (or worldspace data is unavailable), including forced interiors.");
 	}
+
+	ImGui::Checkbox("Light Sky Statics", &settings.lightSkyStatics);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Treat sky statics as albedo and tint them with Physical Sky lighting.");
 
 	ImGui::SeparatorText("Worldspace Whitelist");
 	{
@@ -704,6 +709,8 @@ void PhysicalSky::Reset()
 		.cloudOriginalMix = settings.cloudOriginalMix,
 		.silverLiningMix = settings.silverLiningMix,
 		.silverLiningSpread = settings.silverLiningSpread,
+		.lightSkyStatics = settings.lightSkyStatics ? 1u : 0u,
+		.pad0 = { 0u, 0u, 0u },
 	};
 
 	if (settings.overrideDirLight) {
