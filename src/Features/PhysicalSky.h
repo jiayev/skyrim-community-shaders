@@ -80,6 +80,7 @@ struct PhysicalSky final : public Feature
 		bool enableAllExteriorCells = false;
 		bool forceEnableAllInteriorCells = false;
 		bool overrideDirLight = false;
+		bool lightSkyStatics = true;
 		bool halfResApShadow = false;
 		int tonemapper = 2;
 		float vanillaMix = 0;
@@ -181,8 +182,12 @@ struct PhysicalSky final : public Feature
 		float cloudOriginalMix;
 		float silverLiningMix;
 		float silverLiningSpread;  //
+
+		// SETTINGS
+		uint lightSkyStatics;
+		uint pad0[3];
 	} cbData;
-	static_assert(sizeof(CbData) % 16 == 0);
+	STATIC_ASSERT_ALIGNAS_16(CbData);
 
 	eastl::unique_ptr<Texture2D> texTrLut = nullptr;  // transmittance
 	eastl::unique_ptr<Texture2D> texMsLut = nullptr;  // multiscattering
