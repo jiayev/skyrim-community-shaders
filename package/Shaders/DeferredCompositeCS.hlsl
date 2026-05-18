@@ -317,7 +317,11 @@ Texture2D<float4> SSRTexture : register(t16);
 		finalIrradiance = (finalIrradiance * ssgiAo);
 
 		ssgiIlSpecular = Color::RGBToYCoCg(ssgiIlSpecular);
-		ssgiIlSpecular = max(0, Color::YCoCgToRGB(float3(ssgiIlSpecular.x, lerp(ssgiIlSpecular.yz, Color::RGBToYCoCg(finalIrradiance).yz, 0.5))));
+		if (ssgiIlSpecular.x > 0.0) {
+			ssgiIlSpecular = max(0, Color::YCoCgToRGB(float3(ssgiIlSpecular.x, lerp(ssgiIlSpecular.yz, Color::RGBToYCoCg(finalIrradiance).yz, 0.5))));
+		} else {
+			ssgiIlSpecular = 0;
+		}
 
 		finalIrradiance += ssgiIlSpecular;
 #	endif
