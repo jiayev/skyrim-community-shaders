@@ -334,7 +334,8 @@ namespace SharedData
 
 		// SETTINGS
 		uint lightSkyStatics;
-		uint3 pad0;
+		float skyStaticsBrightness;
+		uint2 pad0;
 	};
 
 	cbuffer FeatureData : register(b6)

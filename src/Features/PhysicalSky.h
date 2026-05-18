@@ -81,6 +81,7 @@ struct PhysicalSky final : public Feature
 		bool forceEnableAllInteriorCells = false;
 		bool overrideDirLight = true;
 		bool lightSkyStatics = true;
+		float skyStaticsBrightness = 1.0f;
 		bool halfResApShadow = false;
 		int tonemapper = 2;
 		float vanillaMix = 0;
@@ -185,7 +186,8 @@ struct PhysicalSky final : public Feature
 
 		// SETTINGS
 		uint lightSkyStatics;
-		uint pad0[3];
+		float skyStaticsBrightness;
+		uint pad0[2];
 	} cbData;
 	STATIC_ASSERT_ALIGNAS_16(CbData);
 
