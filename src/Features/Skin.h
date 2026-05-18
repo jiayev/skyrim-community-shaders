@@ -64,7 +64,7 @@ struct Skin : Feature
 		float WetFadeTime = 10.0f;
 		float StartSweat = 0.75f;
 		float FullSweat = 0.15f;
-		float4 WetParams = { 512.0f, 0.7, 10.0, 4.0f };
+		float4 WetParams = { 512.0f, 0.7f, 10.0f, 4.0f };
 		float Translucency = 0.1f;
 		float sssWidth = 0.2f;
 		bool UseSSS = true;
