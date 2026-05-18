@@ -8,7 +8,7 @@
 #include "CloudShadows.h"
 #include "Deferred.h"
 #include "LinearLighting.h"
-#include "PostProcessing/ColourSpace.h"
+#include "PostProcessing/ColorSpace.h"
 #include "SkySync.h"
 #include "TerrainShadows.h"
 #include "VolumetricShadows.h"
