@@ -20,6 +20,7 @@
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
@@ -85,6 +86,7 @@ namespace globals
 		Upscaling upscaling{};
 		HDRDisplay hdrDisplay{};
 		RenderDoc renderDoc{};
+		ScreenshotFeature screenshotFeature{};
 		WeatherEditor weatherEditor{};
 		ExponentialHeightFog exponentialHeightFog{};
 		TruePBR truePBR{};
@@ -133,6 +135,12 @@ namespace globals
 		FrameBufferCache frameBufferCached{};
 	}
 
+	static void RefreshTES()
+	{
+		if (auto tes = RE::TES::GetSingleton())
+			game::tes = tes;
+	}
+
 	namespace rtti
 	{
 		REL::Relocation<const RE::NiRTTI*> NiIntegerExtraDataRTTI;
@@ -171,7 +179,7 @@ namespace globals
 			iniSettingCollection = RE::INISettingCollection::GetSingleton();
 			iniPrefSettingCollection = RE::INIPrefSettingCollection::GetSingleton();
 			gameSettingCollection = RE::GameSettingCollection::GetSingleton();
-			tes = RE::TES::GetSingleton();
+			RefreshTES();
 			waterSystem = RE::TESWaterSystem::GetSingleton();
 			cameraNear = (float*)(REL::RelocationID(517032, 403540).address() + 0x40);
 			cameraFar = (float*)(REL::RelocationID(517032, 403540).address() + 0x44);
@@ -208,6 +216,7 @@ namespace globals
 	void OnDataLoaded()
 	{
 		using namespace game;
+		RefreshTES();
 		player = RE::PlayerCharacter::GetSingleton();
 		sky = RE::Sky::GetSingleton();
 		utilityShader = RE::BSUtilityShader::GetSingleton();

@@ -35,6 +35,7 @@ struct Upscaling;
 struct WeatherEditor;
 struct ExponentialHeightFog;
 struct HDRDisplay;
+struct ScreenshotFeature;
 struct Skin;
 
 class State;
@@ -92,6 +93,7 @@ namespace globals
 		extern Upscaling upscaling;
 		extern HDRDisplay hdrDisplay;
 		extern RenderDoc renderDoc;
+		extern ScreenshotFeature screenshotFeature;
 		extern WeatherEditor weatherEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
