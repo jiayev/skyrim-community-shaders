@@ -877,7 +877,8 @@ PS_OUTPUT main(PS_INPUT input)
 #		if defined(PHYSICAL_SKY)
 		if (SharedData::physSkyData.enabled && SharedData::physSkyData.lightSkyStatics) {
 			float3 sceneLighting = ShadowSampling::GetSceneLightingColor();
-			lightColor = baseColor.xyz * GetLightingShadow(sceneLighting, input.WorldPosition.xyz, input.Position.xy, depth, eyeIndex, shadowVariance) / Math::PI;
+			float3 skyStaticLighting = GetLightingShadow(sceneLighting, input.WorldPosition.xyz, input.Position.xy, depth, eyeIndex, shadowVariance);
+			lightColor = baseColor.xyz * skyStaticLighting * SharedData::physSkyData.skyStaticsBrightness / Math::PI;
 		} else
 #		endif
 		{
