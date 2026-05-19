@@ -46,59 +46,95 @@ void HistogramAutoExposure::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	// Debug: Histogram visualization
-	if (ImGui::CollapsingHeader("Debug")) {
-		debugReadbackRequested = true;
+	if (ImGui::CollapsingHeader("Histogram", ImGuiTreeNodeFlags_DefaultOpen)) {
+		histogramReadbackRequested = true;
 
-		// Show current adaptation value as EV
-		float currentEV = (adaptationValue > 0.f) ? log2(adaptationValue) : -20.f;
-		ImGui::Text("Current Adaptation: %.3f (%.2f EV)", adaptationValue, currentEV);
-
-		// Histogram plot
-		// The histogram covers a log-luminance range of approximately [-8, 13] EV (256 bins)
 		constexpr float kMinLogLum = -8.f;
 		constexpr float kMaxLogLum = 13.f;
+		constexpr int kHistogramBins = 256;
+		constexpr int kFirstLuminanceBin = 1;
+		constexpr int kLastLuminanceBin = kHistogramBins - 1;
+		constexpr float kMiddleGray = 0.18f;
 
-		// Convert uint histogram to float for ImGui
-		float histogramFloat[256];
+		const float adaptedLum = std::max(adaptationValue, 1e-5f);
+		const float adaptedEV = log2(adaptedLum);
+		const float compensationEV = settings.ExposureCompensation;
+		const float compensationScale = exp2(compensationEV);
+		const float clampedAdaptedLum = std::clamp(adaptedLum, exp2(settings.AdaptationRange.x), exp2(settings.AdaptationRange.y));
+		const float compensatedTargetLum = clampedAdaptedLum / std::max(compensationScale, 1e-5f);
+		const float compensatedTargetEV = log2(compensatedTargetLum);
+		const float finalExposure = kMiddleGray * compensationScale / clampedAdaptedLum;
+		const float finalExposureEV = log2(std::max(finalExposure, 1e-5f));
+
+		ImGui::Text("Adapted Luminance: %.6g (%.2f EV)", adaptedLum, adaptedEV);
+		ImGui::Text("Compensated Target: %.6g (%.2f EV)", compensatedTargetLum, compensatedTargetEV);
+		ImGui::Text("Final Global Exposure: %.6g (%+.2f EV)", finalExposure, finalExposureEV);
+
 		float maxBin = 1.f;
-		for (int i = 0; i < 256; i++) {
-			histogramFloat[i] = (float)histogramData[i];
-			if (histogramFloat[i] > maxBin)
-				maxBin = histogramFloat[i];
+		for (int i = 0; i < kHistogramBins; i++) {
+			maxBin = std::max(maxBin, static_cast<float>(histogramData[i]));
 		}
 
 		ImGui::Text("Luminance Histogram (%.0f - %.0f EV)", kMinLogLum, kMaxLogLum);
-		ImGui::PlotHistogram("##histogram", histogramFloat, 256, 0, nullptr, 0.f, maxBin, ImVec2(ImGui::GetContentRegionAvail().x, 120));
+		const ImVec2 canvasPos = ImGui::GetCursorScreenPos();
+		const ImVec2 canvasSize = ImVec2(ImGui::GetContentRegionAvail().x, 120.f);
+		ImGui::InvisibleButton("##histogram_canvas", canvasSize);
 
-		// Draw adaptation range markers below the histogram
-		{
-			float rangeMinNorm = (settings.AdaptationRange.x - kMinLogLum) / (kMaxLogLum - kMinLogLum);
-			float rangeMaxNorm = (settings.AdaptationRange.y - kMinLogLum) / (kMaxLogLum - kMinLogLum);
-			float currentNorm = (currentEV - kMinLogLum) / (kMaxLogLum - kMinLogLum);
+		auto* drawList = ImGui::GetWindowDrawList();
+		drawList->AddRectFilled(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(18, 18, 18, 255));
+		drawList->AddRect(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(80, 80, 80, 255));
 
-			float plotWidth = ImGui::GetContentRegionAvail().x;
-			ImVec2 plotPos = ImGui::GetCursorScreenPos();
-
-			auto* drawList = ImGui::GetWindowDrawList();
-
-			// Adaptation range lines (yellow)
-			float xMin = plotPos.x + rangeMinNorm * plotWidth;
-			float xMax = plotPos.x + rangeMaxNorm * plotWidth;
-			drawList->AddLine(ImVec2(xMin, plotPos.y), ImVec2(xMin, plotPos.y + 16), IM_COL32(255, 200, 0, 255), 2.f);
-			drawList->AddLine(ImVec2(xMax, plotPos.y), ImVec2(xMax, plotPos.y + 16), IM_COL32(255, 200, 0, 255), 2.f);
-
-			// Current adaptation line (green)
-			float xCur = plotPos.x + currentNorm * plotWidth;
-			drawList->AddLine(ImVec2(xCur, plotPos.y), ImVec2(xCur, plotPos.y + 16), IM_COL32(0, 255, 0, 255), 2.f);
-
-			ImGui::Dummy(ImVec2(plotWidth, 20));
-			ImGui::TextColored(ImVec4(0, 1, 0, 1), "Green: Current EV");
-			ImGui::SameLine();
-			ImGui::TextColored(ImVec4(1, 0.8f, 0, 1), "Yellow: Adaptation Range");
+		const float binWidth = canvasSize.x / static_cast<float>(kHistogramBins);
+		for (int i = 0; i < kHistogramBins; i++) {
+			const float binValue = static_cast<float>(histogramData[i]);
+			const float barHeight = canvasSize.y * std::clamp(binValue / maxBin, 0.f, 1.f);
+			const float x0 = canvasPos.x + static_cast<float>(i) * binWidth;
+			const float x1 = canvasPos.x + static_cast<float>(i + 1) * binWidth;
+			const float y0 = canvasPos.y + canvasSize.y - barHeight;
+			const ImU32 color = i == 0 ? IM_COL32(90, 90, 90, 180) : IM_COL32(90, 150, 220, 220);
+			drawList->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, canvasPos.y + canvasSize.y), color);
 		}
+
+		auto evToX = [&](float ev) {
+			const float norm = std::clamp((ev - kMinLogLum) / (kMaxLogLum - kMinLogLum), 0.f, 1.f);
+			const float bin = static_cast<float>(kFirstLuminanceBin) + norm * static_cast<float>(kLastLuminanceBin - kFirstLuminanceBin);
+			return canvasPos.x + (bin + 0.5f) * binWidth;
+		};
+
+		auto drawMarker = [&](float ev, ImU32 color) {
+			const float x = evToX(ev);
+			drawList->AddLine(ImVec2(x, canvasPos.y), ImVec2(x, canvasPos.y + canvasSize.y), color, 2.f);
+		};
+
+		drawMarker(settings.AdaptationRange.x, IM_COL32(255, 200, 0, 255));
+		drawMarker(settings.AdaptationRange.y, IM_COL32(255, 200, 0, 255));
+		drawMarker(adaptedEV, IM_COL32(0, 255, 0, 255));
+		drawMarker(compensatedTargetEV, IM_COL32(0, 220, 255, 255));
+
+		if (ImGui::IsItemHovered()) {
+			const float mouseX = ImGui::GetIO().MousePos.x;
+			const int bin = std::clamp(static_cast<int>((mouseX - canvasPos.x) / binWidth), 0, kHistogramBins - 1);
+			ImGui::BeginTooltip();
+			if (bin == 0) {
+				ImGui::Text("Bin 0: below luminance threshold");
+			} else {
+				const float histogramPos = static_cast<float>(bin - kFirstLuminanceBin) / static_cast<float>(kLastLuminanceBin - kFirstLuminanceBin);
+				const float ev = histogramPos * (kMaxLogLum - kMinLogLum) + kMinLogLum;
+				ImGui::Text("Bin: %d", bin);
+				ImGui::Text("Luminance: %.6g", exp2(ev));
+				ImGui::Text("EV: %.2f", ev);
+			}
+			ImGui::Text("Samples: %u", histogramData[bin]);
+			ImGui::EndTooltip();
+		}
+
+		ImGui::TextColored(ImVec4(0, 1, 0, 1), "Green: Adapted EV");
+		ImGui::SameLine();
+		ImGui::TextColored(ImVec4(0, 0.86f, 1, 1), "Cyan: Compensation Target");
+		ImGui::SameLine();
+		ImGui::TextColored(ImVec4(1, 0.8f, 0, 1), "Yellow: Adaptation Range");
 	} else {
-		debugReadbackRequested = false;
+		histogramReadbackRequested = false;
 	}
 }
 
@@ -131,7 +167,7 @@ void HistogramAutoExposure::SetupResources()
 		adaptationSB->CreateUAV();
 	}
 
-	// Create staging buffers for debug readback
+	// Create staging buffers for histogram readback
 	{
 		auto device = globals::d3d::device;
 
@@ -142,6 +178,14 @@ void HistogramAutoExposure::SetupResources()
 		stagingDesc.StructureByteStride = sizeof(uint32_t);
 		stagingDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 		device->CreateBuffer(&stagingDesc, nullptr, histogramStagingBuffer.put());
+
+		D3D11_BUFFER_DESC adaptDesc{};
+		adaptDesc.ByteWidth = sizeof(float);
+		adaptDesc.Usage = D3D11_USAGE_STAGING;
+		adaptDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		adaptDesc.StructureByteStride = sizeof(float);
+		adaptDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		device->CreateBuffer(&adaptDesc, nullptr, adaptationStagingBuffer.put());
 	}
 
 	CompileComputeShaders();
@@ -245,6 +289,20 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 
 		context->Dispatch(dispatchX, dispatchY, 1);
 
+		if (histogramReadbackRequested && histogramStagingBuffer) {
+			uavs.fill(nullptr);
+			context->CSSetUnorderedAccessViews(0, (UINT)uavs.size(), uavs.data(), nullptr);
+
+			ID3D11Resource* histResource = nullptr;
+			histogramSB->UAV()->GetResource(&histResource);
+			context->CopyResource(histogramStagingBuffer.get(), histResource);
+			histResource->Release();
+
+			uavs[0] = histogramSB->UAV();
+			uavs[1] = adaptationSB->UAV();
+			context->CSSetUnorderedAccessViews(0, (UINT)uavs.size(), uavs.data(), nullptr);
+		}
+
 		// Calculate average
 		context->CSSetShader(histogramAvgCS.get(), nullptr, 0);
 		context->Dispatch(1, 1, 1);
@@ -262,40 +320,25 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 	// by the Composite pass which applies exposure before color grading.
 	state->EndPerfEvent();
 
-	// Debug readback: copy histogram and adaptation data to CPU when debug panel is open
-	if (debugReadbackRequested && histogramStagingBuffer) {
-		// Get underlying resource from the UAV
-		ID3D11Resource* histResource = nullptr;
-		histogramSB->UAV()->GetResource(&histResource);
-		context->CopyResource(histogramStagingBuffer.get(), histResource);
-		histResource->Release();
-
+	// Readback histogram and adaptation data when the histogram panel is open.
+	// histogramStagingBuffer was copied before CS_Average cleared the GPU histogram.
+	if (histogramReadbackRequested && histogramStagingBuffer) {
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		if (SUCCEEDED(context->Map(histogramStagingBuffer.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
 			memcpy(histogramData.data(), mapped.pData, sizeof(uint32_t) * 256);
 			context->Unmap(histogramStagingBuffer.get(), 0);
 		}
 
-		// Read adaptation value via a small staging buffer
-		D3D11_BUFFER_DESC adaptDesc{};
-		adaptDesc.ByteWidth = sizeof(float);
-		adaptDesc.Usage = D3D11_USAGE_STAGING;
-		adaptDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-		adaptDesc.StructureByteStride = sizeof(float);
-		adaptDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-
-		winrt::com_ptr<ID3D11Buffer> adaptStaging;
-		auto device = globals::d3d::device;
-		if (SUCCEEDED(device->CreateBuffer(&adaptDesc, nullptr, adaptStaging.put()))) {
+		if (adaptationStagingBuffer) {
 			ID3D11Resource* adaptResource = nullptr;
 			adaptationSB->SRV()->GetResource(&adaptResource);
-			context->CopyResource(adaptStaging.get(), adaptResource);
+			context->CopyResource(adaptationStagingBuffer.get(), adaptResource);
 			adaptResource->Release();
 
 			D3D11_MAPPED_SUBRESOURCE adaptMapped{};
-			if (SUCCEEDED(context->Map(adaptStaging.get(), 0, D3D11_MAP_READ, 0, &adaptMapped))) {
+			if (SUCCEEDED(context->Map(adaptationStagingBuffer.get(), 0, D3D11_MAP_READ, 0, &adaptMapped))) {
 				adaptationValue = *reinterpret_cast<float*>(adaptMapped.pData);
-				context->Unmap(adaptStaging.get(), 0);
+				context->Unmap(adaptationStagingBuffer.get(), 0);
 			}
 		}
 	}
