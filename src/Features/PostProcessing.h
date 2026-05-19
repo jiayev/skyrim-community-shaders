@@ -71,6 +71,7 @@ struct PostProcessing : Feature
 	enum class FeaturePipelineIndex : size_t
 	{
 		DoF,
+		Vignette,
 		LocalExposure,
 		AutoExposure,
 		MotionBlur,
@@ -80,7 +81,6 @@ struct PostProcessing : Feature
 		Composite,
 		ColorGrading,
 		LUT,
-		Vignette,
 		Camera,
 		Border,
 		COUNT
