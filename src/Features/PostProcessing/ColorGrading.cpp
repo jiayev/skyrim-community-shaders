@@ -4,6 +4,7 @@
 #include "Util.h"
 
 #include "ColorSpace.h"
+#include "OpenDRTIo.h"
 #include "Features/HDRDisplay.h"
 #include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
@@ -37,6 +38,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	shadowsOffset,
 	midtonesOffset,
 	highlightsOffset,
+	useOpenDrt,
 	currentTonemapper,
 	tonemapParams,
 	gameCinematicBlend,
@@ -393,39 +395,49 @@ void ColorGrading::DrawSettings()
 	ImGui::SeparatorText("Tonemapping");
 	ImGui::Checkbox("Enable Tonemapping", &settings.enableTonemap);
 	if (settings.enableTonemap) {
-		auto& tonemappers = TonemapperInfo::GetTonemappers();
-
 		auto& hdrRef = globals::features::hdrDisplay;
-		const bool hdrActive = hdrRef.loaded && hdrRef.settings.enableHDR;
 
-		if (ImGui::BeginCombo("Tonemapper", tonemappers[tonemapperType].name.data(), ImGuiComboFlags_HeightLargest)) {
-			for (int i = 0; i < (int)tonemappers.size(); ++i) {
-				// Hide non-HDR tonemappers when HDR is active
-				if (hdrActive && !tonemappers[i].supportsHDR)
-					continue;
+		if (ImGui::Checkbox("Use OpenDRT", &settings.useOpenDrt))
+			recompileFlag = true;
 
-				if (ImGui::Selectable(tonemappers[i].name.data(), i == tonemapperType)) {
-					tonemappers[tonemapperType].cached_settings = settings.tonemapParams;
-					settings.tonemapParams = tonemappers[i].cached_settings;
-					tonemapperType = i;
-					recompileFlag = true;
+		if (settings.useOpenDrt) {
+			ImGui::PushID("OpenDRT");
+			OpenDRTDrawSettings(settings.odrtConfig);
+			ImGui::PopID();
+		} else {
+			auto& tonemappers = TonemapperInfo::GetTonemappers();
+
+			const bool hdrActive = hdrRef.loaded && hdrRef.settings.enableHDR;
+
+			if (ImGui::BeginCombo("Tonemapper", tonemappers[tonemapperType].name.data(), ImGuiComboFlags_HeightLargest)) {
+				for (int i = 0; i < (int)tonemappers.size(); ++i) {
+					// Hide non-HDR tonemappers when HDR is active
+					if (hdrActive && !tonemappers[i].supportsHDR)
+						continue;
+
+					if (ImGui::Selectable(tonemappers[i].name.data(), i == tonemapperType)) {
+						tonemappers[tonemapperType].cached_settings = settings.tonemapParams;
+						settings.tonemapParams = tonemappers[i].cached_settings;
+						tonemapperType = i;
+						recompileFlag = true;
+					}
+
+					if (auto _tt = Util::HoverTooltipWrapper())
+						ImGui::Text(tonemappers[i].desc.data());
 				}
-
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text(tonemappers[i].desc.data());
+				ImGui::EndCombo();
 			}
-			ImGui::EndCombo();
-		}
-		ImGui::Spacing();
-		ImGui::TextWrapped(tonemappers[tonemapperType].desc.data());
-		ImGui::Spacing();
-		if (ImGui::Button("Reset", { -1, 0 }))
-			settings.tonemapParams = tonemappers[tonemapperType].default_settings;
-		ImGui::Spacing();
+			ImGui::Spacing();
+			ImGui::TextWrapped(tonemappers[tonemapperType].desc.data());
+			ImGui::Spacing();
+			if (ImGui::Button("Reset", { -1, 0 }))
+				settings.tonemapParams = tonemappers[tonemapperType].default_settings;
+			ImGui::Spacing();
 
-		ImGui::PushID(tonemapperType);
-		tonemappers[tonemapperType].draw_settings_func(settings.tonemapParams);
-		ImGui::PopID();
+			ImGui::PushID(tonemapperType);
+			tonemappers[tonemapperType].draw_settings_func(settings.tonemapParams);
+			ImGui::PopID();
+		}
 
 		// Tonemapping curve visualization (GPU-evaluated, RGB overlay)
 		if (ImGui::TreeNode("Curve Preview")) {
@@ -583,6 +595,15 @@ void ColorGrading::LoadSettings(json& o_json)
 		RestoreDefaultSettings();
 	}
 
+	try {
+		auto part1 = o_json["ODRT1"].get<OpenDRTSettingsPart1>();
+		auto part2 = o_json["ODRT2"].get<OpenDRTSettingsPart2>();
+		std::memcpy(&settings.odrtConfig, &part1, sizeof(OpenDRTSettingsPart1));
+		std::memcpy(&settings.odrtConfig + sizeof(OpenDRTSettingsPart1), &part2, sizeof(OpenDRTSettingsPart2));
+	} catch (const json::exception&) {
+		settings.odrtConfig = {};
+	}
+
 	recompileFlag = true;
 }
 
@@ -591,6 +612,11 @@ void ColorGrading::SaveSettings(json& o_json)
 	auto& tonemappers = TonemapperInfo::GetTonemappers();
 	settings.currentTonemapper = tonemappers[tonemapperType].name.data();
 	o_json = settings;
+
+	auto part1 = *reinterpret_cast<OpenDRTSettingsPart1*>(&settings.odrtConfig);
+	auto part2 = *reinterpret_cast<OpenDRTSettingsPart2*>(&settings.odrtConfig + sizeof(OpenDRTSettingsPart1));
+	o_json["ODRT1"] = part1;
+	o_json["ODRT2"] = part2;
 }
 
 void ColorGrading::UpdateColorSpaceTransforms(bool hdrEnabled)
@@ -607,8 +633,16 @@ void ColorGrading::UpdateColorSpaceTransforms(bool hdrEnabled)
 	constexpr int kHDRColorSpace = 2;                      // BT2020
 	constexpr int kSDRColorSpace = 0;                      // sRGB / BT709 gamut
 	const int outputColorSpace = hdrEnabled ? kHDRColorSpace : kSDRColorSpace;
-	const int tonemapInputSpace = (hdrEnabled && tonemappers[tonemapperType].supportsHDR) ? tonemappers[tonemapperType].nativeInputSpaceHDR : tonemappers[tonemapperType].nativeInputSpace;
-	const int tonemapOutputSpace = (hdrEnabled && tonemappers[tonemapperType].supportsHDR) ? tonemappers[tonemapperType].nativeOutputSpaceHDR : tonemappers[tonemapperType].nativeOutputSpace;
+	const int tonemapInputSpace =
+		settings.useOpenDrt ? 4 :
+							  ((hdrEnabled && tonemappers[tonemapperType].supportsHDR) ?
+									  tonemappers[tonemapperType].nativeInputSpaceHDR :
+									  tonemappers[tonemapperType].nativeInputSpace);
+	const int tonemapOutputSpace =
+		settings.useOpenDrt ? 2 :
+							  ((hdrEnabled && tonemappers[tonemapperType].supportsHDR) ?
+									  tonemappers[tonemapperType].nativeOutputSpaceHDR :
+									  tonemappers[tonemapperType].nativeOutputSpace);
 
 	auto storeMatrix = [](const DirectX::SimpleMath::Matrix& mat, std::array<float3, 3>& out) {
 		out = {
@@ -790,10 +824,12 @@ void ColorGrading::CompileComputeShaders()
 		std::string entry = "main";
 	};
 
+	auto tonemapFuncName = settings.useOpenDrt ? "OpenDRTTransform" : tonemappers[tonemapperType].func_name.data();
+
 	std::vector<ShaderCompileInfo>
 		shaderInfos = {
-			{ &colorgradingCS, "colorgrading.cs.hlsl", { { "TONEMAP_FUNC", tonemappers[tonemapperType].func_name.data() } }, "CSColorGrading" },
-			{ &lutgenCS, "colorgrading.cs.hlsl", { { "TONEMAP_FUNC", tonemappers[tonemapperType].func_name.data() } }, "CSLUTGen" }
+			{ &colorgradingCS, "colorgrading.cs.hlsl", { { "TONEMAP_FUNC", tonemapFuncName } }, "CSColorGrading" },
+			{ &lutgenCS, "colorgrading.cs.hlsl", { { "TONEMAP_FUNC", tonemapFuncName } }, "CSLUTGen" }
 		};
 
 	for (auto& info : shaderInfos) {
@@ -903,7 +939,8 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		}(),
 		.hdrPaperWhiteNits = [&]() -> float {
 			return hdrEnabled ? static_cast<float>(hdr.settings.hdrPaperWhite) : 203.f;
-		}()
+		}(),
+		.odrtConfig = settings.odrtConfig,
 	};
 	colorCB->Update(colorCBData);
 
