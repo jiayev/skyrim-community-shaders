@@ -1,9 +1,9 @@
 /// Local Exposure Compute Shader
-/// Exposure-fusion local tonemapping adapted to output a raw-HDR multiplier
+/// Exposure-fusion local adaptation adapted to output a raw-HDR multiplier
 /// consumed later by Composite.
 ///
 /// Raw scene color is normalized with global exposure when available so the
-/// exposure-fusion weights operate in a stable display-referred range.
+/// exposure-fusion weights operate in a stable perceptual luminance range.
 ///
 /// Reference:
 ///   https://bartwronski.com/2022/02/28/exposure-fusion-local-tonemapping-for-real-time-rendering/
@@ -54,33 +54,27 @@ float GetPreExposure()
 	return ManualExposure;
 }
 
-float3 ACESFilmicToneMapping(float3 color)
+float LinearLuminance(float3 preExposedColor)
 {
-	// Match the ACES filmic curve used by the reference implementation.
-	color *= 1.0 / 0.6;
+	return max(Color::RGBToLuminance(max(preExposedColor, 0.0)), 1e-5);
+}
 
-	const float3x3 ACESInputMat = float3x3(
-		0.59719, 0.35458, 0.04823,
-		0.07600, 0.90834, 0.01566,
-		0.02840, 0.13383, 0.83777);
-	const float3x3 ACESOutputMat = float3x3(
-		1.60475, -0.53108, -0.07367,
-		-0.10208, 1.10813, -0.00605,
-		-0.00327, -0.07276, 1.07602);
+float ExposureFusionTonemap(float linearLum)
+{
+	linearLum = max(linearLum, 0.0);
+	return sqrt(linearLum / (1.0 + linearLum));
+}
 
-	color = mul(ACESInputMat, color);
-
-	float3 a = color * (color + 0.0245786) - 0.000090537;
-	float3 b = color * (0.983729 * color + 0.4329510) + 0.238081;
-	color = a / b;
-
-	return saturate(mul(ACESOutputMat, color));
+float ExposureFusionInverseTonemap(float tonemappedLum)
+{
+	float value = saturate(tonemappedLum);
+	value *= value;
+	return value / max(1.0 - value, 1e-4);
 }
 
 float ExposureFusionLuminance(float3 preExposedColor, float exposureScale)
 {
-	float3 tonemapped = ACESFilmicToneMapping(preExposedColor * exposureScale);
-	return sqrt(dot(saturate(tonemapped), float3(0.1, 0.7, 0.2)));
+	return ExposureFusionTonemap(LinearLuminance(preExposedColor) * exposureScale);
 }
 
 float3 NormalizeWeights(float3 weights)
@@ -189,11 +183,16 @@ float3 NormalizeWeights(float3 weights)
 	float B = momentY - A * momentX;
 
 	float3 preExposedColor = TexInput0[tid].rgb * GetPreExposure();
-	float luminance = ExposureFusionLuminance(preExposedColor, 1.0) + 0.00001;
-	float localExposure = max(A * luminance + B, 0.0) / luminance;
+	float linearLuminance = LinearLuminance(preExposedColor);
+	float guideLuminance = ExposureFusionTonemap(linearLuminance);
+	float fusedLuminance = max(A * guideLuminance + B, 0.0);
+	float localExposure = ExposureFusionInverseTonemap(fusedLuminance) / linearLuminance;
 
-	localExposure = luminance > DarkThreshold ? localExposure :
-	                                            lerp(1.0, localExposure, (luminance / DarkThreshold) * (luminance / DarkThreshold));
+	float shadowProtection = 1.0 - smoothstep(0.045, 0.18, linearLuminance);
+	localExposure = lerp(localExposure, max(localExposure, 1.0), shadowProtection);
+
+	localExposure = guideLuminance > DarkThreshold ? localExposure :
+	                                                 lerp(1.0, localExposure, (guideLuminance / DarkThreshold) * (guideLuminance / DarkThreshold));
 
 	if (UseGlobalExposure == 0)
 		localExposure *= ManualExposure;
