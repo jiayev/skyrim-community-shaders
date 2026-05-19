@@ -10,7 +10,39 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <string_view>
 #include <unordered_set>
+
+namespace
+{
+	constexpr auto kOverwriteJsonIndent = 2;
+	constexpr auto kMaxSceneOverwriteFileSize = 1024 * 1024;
+	constexpr const char* kFeatureKey = "_feature";
+	constexpr const char* kMetadataKey = "_metadata";
+	constexpr const char* kMetadataDescriptionKey = "description";
+	constexpr const char* kMetadataEnabledKey = "enabled";
+
+	bool IsSceneMetadataKey(std::string_view key)
+	{
+		return !key.empty() && key.front() == '_';
+	}
+
+	size_t CountSceneOverwriteKeys(const json& data)
+	{
+		if (!data.is_object())
+			return 0;
+
+		size_t count = 0;
+		for (const auto& [key, _] : data.items())
+			if (!IsSceneMetadataKey(key))
+				++count;
+		return count;
+	}
+}
+
+static std::filesystem::path GetSceneOverwritePath(SceneSettingsManager::SceneType type, const SceneSettingsManager::SettingEntry& entry);
+static bool RemoveSettingFromOverwriteFile(const std::filesystem::path& path, const std::string& settingKey);
 
 // --- Path Resolution ---
 
@@ -403,21 +435,9 @@ void SceneSettingsManager::RemoveSetting(SceneType type, size_t index)
 		return;
 
 	auto& entry = vec[index];
-	if (entry.source == EntrySource::Overwrite && !entry.sourceFilename.empty()) {
-		// For TimeOfDay overwrites, files are in period subfolders
-		auto basePath = GetOverwritesPath(type);
-		auto filepath = (type == SceneType::TimeOfDay && entry.period != TimeOfDayPeriod::Count) ? basePath / GetPeriodName(entry.period) / entry.sourceFilename : basePath / entry.sourceFilename;
-		std::error_code ec;
-		bool removed = std::filesystem::remove(filepath, ec);
-		if (removed) {
-			logger::info("[SceneSettings] Deleted overwrite file: {}", filepath.string());
-		} else if (ec && ec.value() != 0) {
-			// Real I/O error — keep in-memory entry so the overwrite stays active
-			logger::error("[SceneSettings] Failed to delete overwrite file: {} ({}) — keeping entry", filepath.string(), ec.message());
-			return;
-		}
-		// ec.value()==0 && !removed means file didn't exist — safe to drop entry
-	}
+	if (entry.source == EntrySource::Overwrite && !entry.sourceFilename.empty() &&
+		!RemoveSettingFromOverwriteFile(GetSceneOverwritePath(type, entry), entry.settingKey))
+		return;
 
 	logger::info("[SceneSettings] Removed {} entry: {}.{} (source={})", GetSceneTypeName(type),
 		entry.featureShortName, entry.settingKey,
@@ -467,32 +487,31 @@ bool SceneSettingsManager::AreAllOverwritesPaused(SceneType type) const
 
 void SceneSettingsManager::DeleteAllOverwrites(SceneType type)
 {
-	auto overwritesPath = GetOverwritesPath(type);
-
 	auto& vec = GetEntriesMut(type);
 
-	// Track which overwrite entries had their files successfully removed (or already absent).
-	// Entries whose disk delete fails are kept in memory so they stay visible for retry.
 	std::vector<bool> shouldErase(vec.size(), false);
+	std::map<std::filesystem::path, bool> deleteResults;
 	for (size_t i = 0; i < vec.size(); ++i) {
 		const auto& entry = vec[i];
 		if (entry.source != EntrySource::Overwrite)
 			continue;
 		if (entry.sourceFilename.empty()) {
-			// No backing file — safe to drop
 			shouldErase[i] = true;
 			continue;
 		}
-		auto filepath = (type == SceneType::TimeOfDay && entry.period != TimeOfDayPeriod::Count) ? overwritesPath / GetPeriodName(entry.period) / entry.sourceFilename : overwritesPath / entry.sourceFilename;
-		std::error_code ec;
-		bool removed = std::filesystem::remove(filepath, ec);
-		if (removed || (!ec || ec.value() == 0)) {
-			// File deleted or already absent — mark for in-memory removal
-			shouldErase[i] = true;
-		} else {
-			logger::error("[SceneSettings] Failed to delete overwrite file: {} ({}) — keeping entry", filepath.string(), ec.message());
+		auto filepath = GetSceneOverwritePath(type, entry);
+		auto [resultIt, inserted] = deleteResults.try_emplace(filepath, false);
+		if (inserted) {
+			std::error_code ec;
+			auto removed = std::filesystem::remove(filepath, ec);
+			resultIt->second = removed || !ec;
+			if (!resultIt->second)
+				logger::error("[SceneSettings] Failed to delete overwrite file: {} ({}) - keeping entry", filepath.string(), ec.message());
 		}
+		if (resultIt->second)
+			shouldErase[i] = true;
 	}
+
 
 	// Erase only entries whose backing files were successfully cleaned up
 	// (iterate in reverse to preserve index validity)
@@ -532,53 +551,168 @@ void SceneSettingsManager::DeleteAllUserSettings(SceneType type)
 	ReapplyIfActive();
 }
 
-/// Write a single setting as an overwrite JSON file; creates parent dirs as needed.
-static bool WriteOverwriteFile(const std::filesystem::path& path,
-	const std::string& featureShortName, const std::string& key, const json& value)
+static std::string GetSceneOverwriteTypeDescription(SceneSettingsManager::SceneType type, SceneSettingsManager::TimeOfDayPeriod period)
+{
+	if (type == SceneSettingsManager::SceneType::InteriorOnly)
+		return "Interior Only";
+	if (period != SceneSettingsManager::TimeOfDayPeriod::Count)
+		return std::format("Time of Day - {}", SceneSettingsManager::GetPeriodName(period));
+	return "Time of Day";
+}
+
+static std::string GetWeatherOverwriteTypeDescription(SceneSettingsManager::TimeOfDayPeriod period)
+{
+	if (period != SceneSettingsManager::TimeOfDayPeriod::Count)
+		return std::format("Weather - {}", SceneSettingsManager::GetPeriodName(period));
+	return "Weather";
+}
+
+static std::filesystem::path GetSceneOverwritePath(SceneSettingsManager::SceneType type, const SceneSettingsManager::SettingEntry& entry)
+{
+	if (!entry.sourcePath.empty())
+		return entry.sourcePath;
+
+	auto basePath = SceneSettingsManager::GetOverwritesPath(type);
+	if (type == SceneSettingsManager::SceneType::TimeOfDay && entry.period != SceneSettingsManager::TimeOfDayPeriod::Count)
+		return basePath / SceneSettingsManager::GetPeriodName(entry.period) / entry.sourceFilename;
+	return basePath / entry.sourceFilename;
+}
+
+static std::filesystem::path GetWeatherOverwritePath(RE::FormID weatherId, const SceneSettingsManager::SettingEntry& entry)
+{
+	if (!entry.sourcePath.empty())
+		return entry.sourcePath;
+
+	auto basePath = SceneSettingsManager::GetWeatherOverwritesDir() / Util::FormIdToSpid(weatherId);
+	if (entry.period != SceneSettingsManager::TimeOfDayPeriod::Count)
+		return basePath / SceneSettingsManager::GetPeriodName(entry.period) / entry.sourceFilename;
+	return basePath / entry.sourceFilename;
+}
+
+static bool WriteGroupedOverwriteFile(const std::filesystem::path& path, const std::string& featureShortName,
+	const std::string& overwriteType, const std::vector<const SceneSettingsManager::SettingEntry*>& entries)
 {
 	std::error_code ec;
 	std::filesystem::create_directories(path.parent_path(), ec);
 	if (ec) {
-		logger::error("[SceneSettings] WriteOverwriteFile: failed to create dirs for '{}': {}", path.string(), ec.message());
+		logger::error("[SceneSettings] WriteGroupedOverwriteFile: failed to create dirs for '{}': {}", path.string(), ec.message());
 		return false;
 	}
+
+	json data = json::object();
+	if (std::filesystem::exists(path, ec)) {
+		std::ifstream existing(path);
+		if (existing.is_open()) {
+			auto parsed = json::parse(existing, nullptr, false);
+			if (parsed.is_object())
+				data = std::move(parsed);
+		}
+	}
+
+	data.erase(kFeatureKey);
+	data[kMetadataKey] = {
+		{ kMetadataDescriptionKey, std::format("{} scene settings overwrite ({})", SceneSettingsManager::GetFeatureDisplayName(featureShortName), overwriteType) },
+		{ kMetadataEnabledKey, true }
+	};
+	for (const auto* entry : entries)
+		data[entry->settingKey] = entry->value;
+
 	std::ofstream f(path);
 	if (!f.is_open()) {
-		logger::error("[SceneSettings] WriteOverwriteFile: could not open '{}' for writing", path.string());
+		logger::error("[SceneSettings] WriteGroupedOverwriteFile: could not open '{}' for writing", path.string());
 		return false;
 	}
-	f << json{ { "_feature", featureShortName }, { key, value } }.dump(2);
+	f << data.dump(kOverwriteJsonIndent);
 	return true;
 }
 
-void SceneSettingsManager::ExportUserSettingsToOverwrites(SceneType type, const std::vector<size_t>& indices)
+static bool RemoveSettingFromOverwriteFile(const std::filesystem::path& path, const std::string& settingKey)
+{
+	if (path.empty())
+		return true;
+
+	std::error_code ec;
+	if (!std::filesystem::exists(path, ec))
+		return !ec;
+
+	std::ifstream in(path);
+	if (!in.is_open()) {
+		logger::error("[SceneSettings] Could not open overwrite file '{}' for editing", path.string());
+		return false;
+	}
+
+	auto data = json::parse(in, nullptr, false);
+	if (!data.is_object()) {
+		logger::error("[SceneSettings] Could not parse overwrite file '{}' for editing", path.string());
+		return false;
+	}
+
+	data.erase(settingKey);
+	if (CountSceneOverwriteKeys(data) == 0) {
+		auto removed = std::filesystem::remove(path, ec);
+		if (removed || !ec)
+			return true;
+		logger::error("[SceneSettings] Failed to delete overwrite file '{}': {}", path.string(), ec.message());
+		return false;
+	}
+
+	std::ofstream out(path);
+	if (!out.is_open()) {
+		logger::error("[SceneSettings] Could not open overwrite file '{}' for writing", path.string());
+		return false;
+	}
+	out << data.dump(kOverwriteJsonIndent);
+	return true;
+}
+
+void SceneSettingsManager::ExportUserSettingsToOverwrites(SceneType type, const std::vector<size_t>& indices, const std::string& modName)
 {
 	auto& vec = GetEntriesMut(type);
 	auto basePath = GetOverwritesPath(type);
+	auto safeModName = Util::FileHelpers::SanitizeFileName(modName);
+	if (safeModName.empty())
+		return;
+
+	std::map<std::pair<std::filesystem::path, std::string>, std::vector<const SettingEntry*>> groupedEntries;
 	for (auto idx : indices) {
 		if (idx >= vec.size() || vec[idx].source != EntrySource::User)
 			continue;
 		auto& e = vec[idx];
-		auto filename = std::format("{}_{}.json", e.settingKey, e.featureShortName);
 		auto dir = (type == SceneType::TimeOfDay && e.period != TimeOfDayPeriod::Count) ? basePath / GetPeriodName(e.period) : basePath;
-		WriteOverwriteFile(dir / filename, e.featureShortName, e.settingKey, e.value);
+		groupedEntries[{ dir, e.featureShortName }].push_back(&e);
+	}
+
+	for (const auto& [group, grouped] : groupedEntries) {
+		const auto& [dir, featureShortName] = group;
+		auto typeDescription = GetSceneOverwriteTypeDescription(type, grouped.front()->period);
+		WriteGroupedOverwriteFile(dir / std::format("{}_{}.json", safeModName, featureShortName), featureShortName, typeDescription, grouped);
 	}
 }
 
-void SceneSettingsManager::ExportWeatherUserSettingsToOverwrites(RE::FormID weatherId, const std::vector<size_t>& indices)
+void SceneSettingsManager::ExportWeatherUserSettingsToOverwrites(RE::FormID weatherId, const std::vector<size_t>& indices, const std::string& modName)
 {
 	if (!TryEnsureWeatherDataLoaded())
 		return;
 
 	auto& vec = GetWeatherConfigMut(weatherId).entries;
 	auto baseDir = GetWeatherOverwritesDir() / Util::FormIdToSpid(weatherId);
+	auto safeModName = Util::FileHelpers::SanitizeFileName(modName);
+	if (safeModName.empty())
+		return;
+
+	std::map<std::pair<std::filesystem::path, std::string>, std::vector<const SettingEntry*>> groupedEntries;
 	for (auto idx : indices) {
 		if (idx >= vec.size() || vec[idx].source != EntrySource::User)
 			continue;
 		auto& e = vec[idx];
-		auto filename = std::format("{}_{}.json", e.settingKey, e.featureShortName);
 		auto dir = (e.period != TimeOfDayPeriod::Count) ? baseDir / GetPeriodName(e.period) : baseDir;
-		WriteOverwriteFile(dir / filename, e.featureShortName, e.settingKey, e.value);
+		groupedEntries[{ dir, e.featureShortName }].push_back(&e);
+	}
+
+	for (const auto& [group, grouped] : groupedEntries) {
+		const auto& [dir, featureShortName] = group;
+		auto typeDescription = GetWeatherOverwriteTypeDescription(grouped.front()->period);
+		WriteGroupedOverwriteFile(dir / std::format("{}_{}.json", safeModName, featureShortName), featureShortName, typeDescription, grouped);
 	}
 }
 
@@ -1416,19 +1550,13 @@ void SceneSettingsManager::DiscoverOverwrites(SceneType type)
 	DiscoverOverwritesInDir(type, GetOverwritesPath(type));
 }
 
-/// Parse a single overwrite JSON file into a SettingEntry.
-/// Returns true on success; fills outEntry with the parsed data.
-/// When requireNumeric is true, non-numeric or non-finite values are rejected
-/// and the value is normalized to float.
-static bool ParseOverwriteFile(const std::filesystem::path& filePath,
+static bool ParseOverwriteFileEntries(const std::filesystem::path& filePath,
 	SceneSettingsManager::SceneType allowedType, bool requireNumeric,
-	SceneSettingsManager::SettingEntry& outEntry)
+	std::vector<SceneSettingsManager::SettingEntry>& outEntries)
 {
 	using SSM = SceneSettingsManager;
 
-	auto filename = filePath.filename().string();
-
-	if (std::filesystem::file_size(filePath) > 1024 * 1024)
+	if (std::filesystem::file_size(filePath) > kMaxSceneOverwriteFileSize)
 		return false;
 
 	std::ifstream file(filePath);
@@ -1436,63 +1564,45 @@ static bool ParseOverwriteFile(const std::filesystem::path& filePath,
 		return false;
 
 	json data = json::parse(file);
+	if (!data.is_object())
+		return false;
 
-	// Resolve feature name: explicit _feature field, or infer from filename stem
-	std::string featureShortName = data.value("_feature", "");
+	std::string featureShortName = data.value(kFeatureKey, "");
 	if (featureShortName.empty()) {
 		auto stem = filePath.stem().string();
 		auto lastUnderscore = stem.rfind('_');
-		if (lastUnderscore != std::string::npos) {
-			auto candidate = stem.substr(lastUnderscore + 1);
-			if (Feature::FindFeatureByShortName(candidate))
-				featureShortName = candidate;
-		}
+		if (lastUnderscore != std::string::npos)
+			featureShortName = stem.substr(lastUnderscore + 1);
 	}
-
-	if (featureShortName.empty() || !Feature::FindFeatureByShortName(featureShortName))
-		return false;
-
-	if (!SSM::IsFeatureAllowedForType(allowedType, featureShortName))
-		return false;
 
 	auto* featurePtr = Feature::FindFeatureByShortName(featureShortName);
-
-	// Exactly one non-metadata setting per file
-	int settingCount = 0;
-	std::string settingKey;
-	json settingValue;
-	for (auto& [key, val] : data.items()) {
-		if (!key.starts_with("_")) {
-			settingCount++;
-			if (settingCount == 1) {
-				settingKey = key;
-				settingValue = val;
-			}
-		}
-	}
-	if (settingCount != 1)
+	if (!featurePtr || !SSM::IsFeatureAllowedForType(allowedType, featureShortName))
 		return false;
 
-	// Validate key exists in feature
-	{
-		json featureSettings;
-		featurePtr->SaveSettings(featureSettings);
-		if (!featureSettings.is_object() || !featureSettings.contains(settingKey))
-			return false;
-	}
+	json featureSettings;
+	featurePtr->SaveSettings(featureSettings);
+	if (!featureSettings.is_object())
+		return false;
 
-	if (requireNumeric) {
-		if (!IsNumericValue(settingValue) || !std::isfinite(settingValue.get<float>()))
-			return false;
-	}
+	bool foundAny = false;
+	for (auto& [key, value] : data.items()) {
+		if (IsSceneMetadataKey(key) || !featureSettings.contains(key))
+			continue;
+		if (requireNumeric && (!IsNumericValue(value) || !std::isfinite(value.get<float>())))
+			continue;
 
-	outEntry.featureShortName = featureShortName;
-	outEntry.settingKey = settingKey;
-	outEntry.value = requireNumeric ? NormalizeToFloat(settingValue) : settingValue;
-	outEntry.originalValue = outEntry.value;
-	outEntry.source = SSM::EntrySource::Overwrite;
-	outEntry.sourceFilename = filename;
-	return true;
+		SSM::SettingEntry entry;
+		entry.featureShortName = featureShortName;
+		entry.settingKey = key;
+		entry.value = requireNumeric ? NormalizeToFloat(value) : value;
+		entry.originalValue = entry.value;
+		entry.source = SSM::EntrySource::Overwrite;
+		entry.sourceFilename = filePath.filename().string();
+		entry.sourcePath = filePath;
+		outEntries.push_back(std::move(entry));
+		foundAny = true;
+	}
+	return foundAny;
 }
 
 void SceneSettingsManager::DiscoverOverwritesInDir(SceneType type, const std::filesystem::path& dir, TimeOfDayPeriod period)
@@ -1519,14 +1629,14 @@ void SceneSettingsManager::DiscoverOverwritesInDir(SceneType type, const std::fi
 
 		filesFound++;
 		try {
-			SettingEntry entry;
-			if (!ParseOverwriteFile(dirEntry.path(), type, requireNumeric, entry))
+			std::vector<SettingEntry> parsedEntries;
+			if (!ParseOverwriteFileEntries(dirEntry.path(), type, requireNumeric, parsedEntries))
 				continue;
-			if (HasDuplicateEntry(type, entry.featureShortName, entry.settingKey, EntrySource::Overwrite, period))
-				continue;
-			entry.period = period;
-			vec.push_back(std::move(entry));
-			overwritesLoaded++;
+			for (auto& entry : parsedEntries) {
+				entry.period = period;
+				vec.push_back(std::move(entry));
+				overwritesLoaded++;
+			}
 		} catch (const std::exception& e) {
 			logger::error("[SceneSettings] Failed to load {} overwrite '{}': {}", typeName, dirEntry.path().filename().string(), e.what());
 		}
@@ -1625,6 +1735,11 @@ void SceneSettingsManager::RemoveWeatherSetting(RE::FormID weatherId, size_t ind
 	auto it = weatherSceneConfigs.find(weatherId);
 	if (it == weatherSceneConfigs.end() || index >= it->second.entries.size())
 		return;
+	auto& entry = it->second.entries[index];
+	if (entry.source == EntrySource::Overwrite && !entry.sourceFilename.empty() &&
+		!RemoveSettingFromOverwriteFile(GetWeatherOverwritePath(weatherId, entry), entry.settingKey))
+		return;
+
 	it->second.entries.erase(it->second.entries.begin() + static_cast<ptrdiff_t>(index));
 	SaveAllUserSettings();
 }
@@ -1754,14 +1869,15 @@ void SceneSettingsManager::DiscoverWeatherOverwritesForSpid(RE::FormID weatherId
 		for (const auto& fileEntry : std::filesystem::directory_iterator(periodDir, ec)) {
 			if (!fileEntry.is_regular_file() || fileEntry.path().extension() != ".json")
 				continue;
+
 			try {
-				SettingEntry entry;
-				if (!ParseOverwriteFile(fileEntry.path(), SceneType::TimeOfDay, true, entry))
+				std::vector<SettingEntry> parsedEntries;
+				if (!ParseOverwriteFileEntries(fileEntry.path(), SceneType::TimeOfDay, true, parsedEntries))
 					continue;
-				if (HasWeatherEntryForPeriod(weatherId, entry.featureShortName, entry.settingKey, period))
-					continue;
-				entry.period = period;
-				config.entries.push_back(std::move(entry));
+				for (auto& entry : parsedEntries) {
+					entry.period = period;
+					config.entries.push_back(std::move(entry));
+				}
 			} catch (const std::exception& e) {
 				logger::error("[SceneSettings] Failed to load weather overwrite '{}': {}", fileEntry.path().filename().string(), e.what());
 			}
@@ -1774,17 +1890,17 @@ void SceneSettingsManager::DiscoverWeatherOverwritesForSpid(RE::FormID weatherId
 		for (const auto& fileEntry : std::filesystem::directory_iterator(weatherDir, ec)) {
 			if (!fileEntry.is_regular_file() || fileEntry.path().extension() != ".json")
 				continue;
+
 			try {
-				SettingEntry parsed;
-				if (!ParseOverwriteFile(fileEntry.path(), SceneType::TimeOfDay, true, parsed))
+				std::vector<SettingEntry> parsedEntries;
+				if (!ParseOverwriteFileEntries(fileEntry.path(), SceneType::TimeOfDay, true, parsedEntries))
 					continue;
-				for (int p = 0; p < kPeriodCount; ++p) {
-					auto period = static_cast<TimeOfDayPeriod>(p);
-					if (HasWeatherEntryForPeriod(weatherId, parsed.featureShortName, parsed.settingKey, period))
-						continue;
-					SettingEntry entry = parsed;
-					entry.period = period;
-					config.entries.push_back(std::move(entry));
+				for (auto& parsed : parsedEntries) {
+					for (int p = 0; p < kPeriodCount; ++p) {
+						SettingEntry entry = parsed;
+						entry.period = static_cast<TimeOfDayPeriod>(p);
+						config.entries.push_back(std::move(entry));
+					}
 				}
 			} catch (const std::exception& e) {
 				logger::error("[SceneSettings] Failed to load weather overwrite '{}': {}", fileEntry.path().filename().string(), e.what());

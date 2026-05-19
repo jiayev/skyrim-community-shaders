@@ -129,9 +129,12 @@ namespace SceneSettingsUI
 	/// State for the export-to-overwrites selection popup.
 	struct ExportAllPopupState
 	{
+		static constexpr size_t kModNameBufferSize = 128;
+
 		bool dialogOpen = false;
 		std::vector<size_t> userIndices;
 		std::vector<uint8_t> selected;
+		char modName[kModNameBufferSize] = "";
 
 		void Open(const std::vector<size_t>& indices)
 		{

@@ -116,6 +116,7 @@ public:
 		bool paused = false;           // Temporarily disabled
 		EntrySource source = EntrySource::User;
 		std::string sourceFilename;                       // For overwrites: the filename it came from
+		std::filesystem::path sourcePath;                 // For overwrites: exact file path
 		TimeOfDayPeriod period = TimeOfDayPeriod::Count;  // Which period this entry belongs to (TimeOfDay only)
 	};
 
@@ -147,9 +148,9 @@ public:
 	bool AreAllUserPaused(SceneType type) const;
 	void DeleteAllUserSettings(SceneType type);
 
-	/// Export selected user entries to individual overwrite JSON files; promotes them to Overwrite source.
-	void ExportUserSettingsToOverwrites(SceneType type, const std::vector<size_t>& indices);
-	void ExportWeatherUserSettingsToOverwrites(RE::FormID weatherId, const std::vector<size_t>& indices);
+	/// Export selected user entries to grouped per-feature overwrite JSON files.
+	void ExportUserSettingsToOverwrites(SceneType type, const std::vector<size_t>& indices, const std::string& modName);
+	void ExportWeatherUserSettingsToOverwrites(RE::FormID weatherId, const std::vector<size_t>& indices, const std::string& modName);
 
 	// --- Scene Application ---
 

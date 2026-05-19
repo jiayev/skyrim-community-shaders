@@ -9,6 +9,7 @@
 #include "../Globals.h"
 #include "../Menu.h"
 #include "../Menu/ThemeManager.h"
+#include "../Utils/FileSystem.h"
 #include "../SceneSettingsManager.h"
 #include "../Utils/Format.h"
 
@@ -104,7 +105,7 @@ namespace SceneSettingsUI
 		}
 		popups.pendingDeleteRow = indices;
 		popups.deleteRowOverwrite.message = std::format(
-			"Delete overwrite entries from {}?\nThis will permanently remove the file(s) from disk.",
+			"Delete overwrite entries from {}?\nEmpty overwrite files will be removed from disk.",
 			fileList);
 		popups.deleteRowOverwrite.Request();
 	}
@@ -697,7 +698,7 @@ namespace SceneSettingsUI
 							if (popups && entry.source == EntrySource::Overwrite) {
 								popups->pendingDeleteIndex = entryIndex;
 								popups->deleteSingleOverwrite.message = std::format(
-									"Delete overwrite file '{}'?\nThis will permanently remove the file from disk.",
+									"Delete overwrite entry from '{}'?\nThe file will be removed if no settings remain.",
 									entry.sourceFilename);
 								popups->deleteSingleOverwrite.Request();
 							} else {
@@ -850,7 +851,7 @@ namespace SceneSettingsUI
 		const char* popupId,
 		const std::vector<SceneSettingsManager::SettingEntry>& entries,
 		ExportAllPopupState& state,
-		std::function<void(const std::vector<size_t>&)> exportFn,
+		std::function<void(const std::string&, const std::vector<size_t>&)> exportFn,
 		bool showPeriod = true)
 	{
 		if (!state.dialogOpen)
@@ -861,6 +862,12 @@ namespace SceneSettingsUI
 		auto popup = Util::CenteredPopupModal(popupId, &state.dialogOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
 		if (!popup)
 			return;
+
+		ImGui::InputText("Mod Name", state.modName, IM_ARRAYSIZE(state.modName));
+		auto modName = Util::FileHelpers::SanitizeFileName(state.modName);
+		if (modName.empty())
+			Util::Text::WrappedDisabled("Enter a mod name to export.");
+		ImGui::Spacing();
 
 		ImGui::TextUnformatted("Select settings to export as overwrite files:");
 		ImGui::Spacing();
@@ -911,13 +918,13 @@ namespace SceneSettingsUI
 
 		int count = static_cast<int>(std::count_if(state.selected.begin(), state.selected.end(), [](uint8_t v) { return v != 0; }));
 		{
-			auto _ = Util::DisableGuard(count == 0);
+			auto _ = Util::DisableGuard(count == 0 || modName.empty());
 			if (ImGui::Button(std::format("Export ({})", count).c_str(), ImVec2(-FLT_MIN, 0))) {
 				std::vector<size_t> toExport;
 				for (size_t i = 0; i < state.userIndices.size(); ++i)
 					if (state.selected[i])
 						toExport.push_back(state.userIndices[i]);
-				exportFn(toExport);
+				exportFn(modName, toExport);
 				state.dialogOpen = false;
 				ImGui::CloseCurrentPopup();
 			}
@@ -927,8 +934,8 @@ namespace SceneSettingsUI
 	void DrawExportAllPopup(SceneType type, const std::vector<SceneSettingsManager::SettingEntry>& entries, ExportAllPopupState& state)
 	{
 		DrawExportPopupCore("Export User Settings##scene", entries, state,
-			[type](const std::vector<size_t>& indices) {
-				SceneSettingsManager::GetSingleton()->ExportUserSettingsToOverwrites(type, indices);
+			[type](const std::string& modName, const std::vector<size_t>& indices) {
+				SceneSettingsManager::GetSingleton()->ExportUserSettingsToOverwrites(type, indices, modName);
 			});
 	}
 
@@ -936,8 +943,8 @@ namespace SceneSettingsUI
 	{
 		auto popupId = std::format("Export User Settings##wx{:08X}", weatherId);
 		DrawExportPopupCore(popupId.c_str(), entries, state,
-			[weatherId](const std::vector<size_t>& indices) {
-				SceneSettingsManager::GetSingleton()->ExportWeatherUserSettingsToOverwrites(weatherId, indices);
+			[weatherId](const std::string& modName, const std::vector<size_t>& indices) {
+				SceneSettingsManager::GetSingleton()->ExportWeatherUserSettingsToOverwrites(weatherId, indices, modName);
 			}, showTod);
 	}
 
