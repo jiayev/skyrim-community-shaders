@@ -1,5 +1,6 @@
 #pragma once
 #include "PostProcessFeature.h"
+#include "OpenDRT.h"
 
 #include "Buffer.h"
 
@@ -66,6 +67,7 @@ struct ColorGrading : public PostProcessFeature
 		float4 midtonesOffset = { 0.f, 0.f, 0.f, 0.f };
 		float4 highlightsOffset = { 0.f, 0.f, 0.f, 0.f };
 
+		bool useOpenDrt = true;
 		std::string currentTonemapper = "GT7";
 		std::array<float4, 2> tonemapParams = { float4{ 1.f, 2.f, 0.f, 0.f }, float4{ 0.f, 0.f, 0.f, 0.f } };
 		float3 gameCinematicBlend = { 1.0f, 1.0f, 1.0f };
@@ -76,6 +78,8 @@ struct ColorGrading : public PostProcessFeature
 		bool invertLog = false;
 		bool enableTonemap = true;
 		int processColorSpace = 0;
+
+		OpenDRTSettings odrtConfig;
 	} settings;
 
 	// Computed matrices (not serialized)
@@ -137,6 +141,8 @@ struct ColorGrading : public PostProcessFeature
 		uint enableHDR;           // HDR display is enabled (auto-set from HDR feature)
 		float hdrPeakNits;        // Maximum display brightness in nits for HDR
 		float hdrPaperWhiteNits;  // Reference white brightness in nits for HDR
+
+		OpenDRTSettings odrtConfig;
 	};
 	std::unique_ptr<ConstantBuffer> colorCB = nullptr;
 
