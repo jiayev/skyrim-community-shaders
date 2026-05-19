@@ -122,6 +122,21 @@ namespace Util
 	bool IEquals(std::string_view a, std::string_view b);
 
 	/**
+	 * Compile-time FNV-1a 32-bit hash.  Useful for mapping define strings,
+	 * resource table identifiers, or any other constant key to a fixed
+	 * integer at compile time without pulling in heavier hashing libraries.
+	 */
+	constexpr uint32_t StaticStringHash(const char* str, uint32_t basis = 2166136261u)
+	{
+		uint32_t h = basis;
+		for (; *str; ++str) {
+			h ^= static_cast<uint32_t>(static_cast<unsigned char>(*str));
+			h *= 16777619u;
+		}
+		return h;
+	}
+
+	/**
 	 * Returns the defines-based shader cache filename suffix for the given shader
 	 * defines string, or an empty string when definesStr is empty.  The suffix
 	 * has the form "_{:08X}" where the hex value is a 32-bit FNV-1a hash of the string.

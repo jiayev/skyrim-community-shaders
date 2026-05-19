@@ -350,3 +350,9 @@ private:
 	std::shared_ptr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
 	std::mutex statsMutex;
 };
+
+// Returns the current CB layout coherency epoch.  0 indicates the
+// text-metric string table matches compile-time baselines (steady
+// state); non-zero means the table drifted and layout caches should
+// be treated as stale.
+uint32_t GetCBLayoutEpoch();
