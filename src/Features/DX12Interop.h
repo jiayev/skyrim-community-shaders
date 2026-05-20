@@ -148,7 +148,7 @@ struct DX12Interop : public Feature
 
 	bool Active() const;
 	
-	// Wether DirectX 12 is required or not
+	// Whether DirectX 12 is required or not
 	// True when Raytracing is loaded or Upscaling is loaded in frame generation mode
 	static bool D3D12Mode();
 

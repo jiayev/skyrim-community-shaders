@@ -415,6 +415,11 @@ struct CreationEngineRaytracing
 			DebugSettings)
 	};
 
+	struct SharedTexture {
+		ID3D12Resource* native = nullptr;
+		ID3D11Texture2D* shared = nullptr;
+	};
+
 	HMODULE handle = nullptr;
 
 	using InitializeRendererFn = bool (*)(ID3D11Device5*, ID3D12Device5*, ID3D12CommandQueue*, ID3D12CommandQueue*, ID3D12CommandQueue*);
@@ -432,7 +437,8 @@ struct CreationEngineRaytracing
 	using GetPassTimingsFn = void (*)(eastl::vector<PassTiming>&);
 	using UpdateSettingsFn = void (*)(Settings);
 	using GetRRInputFn = void (*)(ID3D12Resource*&, ID3D12Resource*&);
-	using SetSharedTexturesFn = void (*)(ID3D12Resource*, ID3D12Resource*, ID3D12Resource*, ID3D12Resource*);
+	using SetSharedTexturesFn = void (*)(ID3D12Resource*, ID3D12Resource*, ID3D12Resource*);
+	using GetSharedTexturesFn = void (*)(SharedTexture&);
 	using UpdateJitterFn = void (*)(float2);
 	using SetPTOutputTargetsFn = void (*)(ID3D12Resource*, ID3D12Resource*);
 	using GetAccumulatedFrameCountFn = uint32_t (*)();
@@ -455,6 +461,7 @@ struct CreationEngineRaytracing
 	UpdateSettingsFn UpdateSettings = nullptr;
 	GetRRInputFn GetRRInput = nullptr;
 	SetSharedTexturesFn SetSharedTextures = nullptr;
+	GetSharedTexturesFn GetSharedTextures = nullptr;
 	UpdateJitterFn UpdateJitter = nullptr;
 	SetPTOutputTargetsFn SetPTOutputTargets = nullptr;
 	GetAccumulatedFrameCountFn GetAccumulatedFrameCount = nullptr;
@@ -488,6 +495,7 @@ struct CreationEngineRaytracing
 		LOAD_FN(UpdateSettings);
 		LOAD_FN(GetRRInput);
 		LOAD_FN(SetSharedTextures);
+		LOAD_FN(GetSharedTextures);
 		LOAD_FN(UpdateJitter);
 		LOAD_FN(SetPTOutputTargets);
 		LOAD_FN(GetAccumulatedFrameCount);

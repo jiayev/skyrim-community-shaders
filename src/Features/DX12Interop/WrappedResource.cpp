@@ -64,6 +64,53 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc) :
 
 }
 
+WrappedResource::WrappedResource(ID3D12Resource* native, ID3D11Texture2D* shared) :
+	resourcePtr(native), resource11(shared)
+{
+
+	D3D11_TEXTURE2D_DESC desc{};
+	shared->GetDesc(&desc);
+
+	auto* device = globals::d3d::device;
+
+	if (desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Format = desc.Format;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.MipLevels = 1;
+
+		DX::ThrowIfFailed(device->CreateShaderResourceView(shared, &srvDesc, &srv));
+	}
+
+	if (desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) {
+		if (desc.ArraySize > 1) {
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+			uavDesc.Format = desc.Format;
+			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+			uavDesc.Texture2DArray.FirstArraySlice = 0;
+			uavDesc.Texture2DArray.ArraySize = desc.ArraySize;
+
+			DX::ThrowIfFailed(device->CreateUnorderedAccessView(shared, &uavDesc, &uav));
+		} else {
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+			uavDesc.Format = desc.Format;
+			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+			uavDesc.Texture2D.MipSlice = 0;
+
+			DX::ThrowIfFailed(device->CreateUnorderedAccessView(shared, &uavDesc, &uav));
+		}
+	}
+
+	if (desc.BindFlags & D3D11_BIND_RENDER_TARGET) {
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
+		rtvDesc.Format = desc.Format;
+		rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+		rtvDesc.Texture2D.MipSlice = 0;
+		DX::ThrowIfFailed(device->CreateRenderTargetView(shared, &rtvDesc, &rtv));
+	}
+}
+
 WrappedResource::~WrappedResource()
 {
 	if (resource11) {

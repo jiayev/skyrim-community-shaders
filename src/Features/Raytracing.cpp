@@ -851,17 +851,20 @@ void Raytracing::SetupResources()
 		// Normal Roughness Texture
 		texDesc.Format = DXGI_FORMAT_R16G16B16A16_SNORM;
 		normalRoughnessTexture = eastl::make_unique<WrappedResource>(texDesc);
-
-		// Diffuse Albedo Texture
-		texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
-		diffuseAlbedoTexture = eastl::make_unique<WrappedResource>(texDesc);
 	}
 
 	if (initialized) {
 		creationEngineRaytracing->Initialize(GetSettings());
 
 		creationEngineRaytracing->SetResolution(mainDesc.Width, mainDesc.Height);
-		creationEngineRaytracing->SetSharedTextures(albedoTexture.get(), normalRoughnessTexture->resource.get(), gnmaoTexture.get(), diffuseAlbedoTexture->resource.get());
+		creationEngineRaytracing->SetSharedTextures(albedoTexture.get(), normalRoughnessTexture->GetResource(), gnmaoTexture.get());
+
+		// Diffuse Albedo Texture
+		{
+			CreationEngineRaytracing::SharedTexture diffuseAlbedo;
+			creationEngineRaytracing->GetSharedTextures(diffuseAlbedo);
+			diffuseAlbedoTexture = eastl::make_unique<WrappedResource>(diffuseAlbedo.native, diffuseAlbedo.shared);			
+		}
 	}
 
 	auto& d3d11Device = globals::features::dx12Interop.d3d11Device;
@@ -908,7 +911,7 @@ void Raytracing::SetupResources()
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
 		skyHemisphere = eastl::make_unique<WrappedResource>(texDesc);
-		DX::ThrowIfFailed(skyHemisphere->resource->SetName(L"Sky Hemisphere"));
+		DX::ThrowIfFailed(skyHemisphere->GetResource()->SetName(L"Sky Hemisphere"));
 
 		// Setup TESWaterReflections
 		waterReflections = RE::NiPointer(new RE::TESWaterReflections());
@@ -919,7 +922,7 @@ void Raytracing::SetupResources()
 			waterReflections->cubeMapSides[i] = RE::TESWaterReflections::CubeMapSide(i, 0.0f);
 		}
 
-		creationEngineRaytracing->SetSkyHemisphere(skyHemisphere->resource.get());
+		creationEngineRaytracing->SetSkyHemisphere(skyHemisphere->GetResource());
 	}
 
 	// Water FlowMap
@@ -935,9 +938,9 @@ void Raytracing::SetupResources()
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 
 		waterFlowMap = eastl::make_unique<WrappedResource>(texDesc);
-		DX::ThrowIfFailed(waterFlowMap->resource->SetName(L"Water FlowMap"));
+		DX::ThrowIfFailed(waterFlowMap->GetResource()->SetName(L"Water FlowMap"));
 
-		creationEngineRaytracing->SetWaterFlowMap(waterFlowMap->resource.get());
+		creationEngineRaytracing->SetWaterFlowMap(waterFlowMap->GetResource());
 	}
 
 	CompileShaders();
@@ -1077,10 +1080,10 @@ void Raytracing::DeferredPasses()
 	if (!mainTexture || resolutionChanged) {
 		desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 		mainTexture = eastl::make_unique<WrappedResource>(desc);
-		creationEngineRaytracing->SetCopyTarget(mainTexture->resource.get());
+		creationEngineRaytracing->SetCopyTarget(mainTexture->GetResource());
 	}
 
-	if (Mode() == CreationEngineRaytracing::Mode::PathTracing && creationEngineRaytracing->SetPTOutputTargets) {
+	if (Mode() == CreationEngineRaytracing::Mode::PathTracing) {
 		if (!ptDepthTexture || resolutionChanged) {
 			desc.Format = DXGI_FORMAT_R32_FLOAT;
 			ptDepthTexture = eastl::make_unique<WrappedResource>(desc);
@@ -1089,7 +1092,7 @@ void Raytracing::DeferredPasses()
 			desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 			ptMotionVectorsTexture = eastl::make_unique<WrappedResource>(desc);
 		}
-		creationEngineRaytracing->SetPTOutputTargets(ptDepthTexture->resource.get(), ptMotionVectorsTexture->resource.get());
+		creationEngineRaytracing->SetPTOutputTargets(ptDepthTexture->GetResource(), ptMotionVectorsTexture->GetResource());
 	} else {
 		ptDepthTexture.reset();
 		ptMotionVectorsTexture.reset();
@@ -1267,8 +1270,8 @@ void Raytracing::GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D
 	if (Mode() != CreationEngineRaytracing::Mode::GlobalIllumination && Mode() != CreationEngineRaytracing::Mode::PathTracing)
 		return;
 
-	diffuseAlbedo = diffuseAlbedoTexture->resource.get();
-	normalRoughness = normalRoughnessTexture->resource.get();
+	diffuseAlbedo = diffuseAlbedoTexture->GetResource();
+	normalRoughness = normalRoughnessTexture->GetResource();
 
 	creationEngineRaytracing->GetRRInput(specularAlbedo, specHitDistance);
 }
