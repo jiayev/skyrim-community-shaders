@@ -146,6 +146,8 @@ jobs:
                   # App token required for two reasons:
                   # 1. Allows pushing the version commit and tag to the protected
                   #    target branch (GITHUB_TOKEN cannot bypass branch protection).
+                  #    Prerequisite: the GitHub App must be in the bypass actor
+                  #    list for main and dev — the token alone is not sufficient.
                   # 2. An app-token tag push triggers downstream workflows
                   #    (release-build.yaml); GITHUB_TOKEN pushes do not.
                   GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

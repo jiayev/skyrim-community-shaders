@@ -3,10 +3,11 @@ name: "Auto-rebase open PRs"
 # Rebase open PRs against `dev` whenever it moves. Thin wrapper over
 # peter-evans/rebase@v3.
 #
-# Forks: pushing to a fork PR head requires (a) a user PAT belonging to
-# a maintainer of this repo and (b) the PR author having "Allow edits
-# by maintainers" checked. The action silently skips PRs missing either,
-# and skips conflicts.
+# Forks: the app token is scoped to repos where the app is installed, so
+# fork PR heads cannot be pushed. The action silently skips them (same
+# behaviour as before; fork authors need "Allow edits by maintainers"
+# enabled and the app installed on their fork, or rebase manually).
+# Conflicts are also silently skipped.
 #
 # Token: GitHub App token (APP_ID + APP_PRIVATE_KEY). The app must have
 # Contents R/W, Pull requests R/W, and Workflows R/W permissions so that
