@@ -46,6 +46,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	BRDFBias,
 	OcclusionStrength,
 	UseDynamicCubemapsAsFallback,
+	SpecCubemapMult,
+	DiffuseCubemapMult,
 	HitDistA,
 	HitDistB,
 	HitDistC,
@@ -169,6 +171,11 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::Checkbox("Use Dynamic Cubemaps as Fallback", &settings.UseDynamicCubemapsAsFallback);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("When ray marching misses, fall back to dynamic cubemaps for reflections.");
+			}
+			{
+				auto cubemapGuard = Util::DisableGuard(!settings.UseDynamicCubemapsAsFallback);
+				ImGui::SliderFloat("Specular Cubemap Multiplier", &settings.SpecCubemapMult, 0.0f, 5.0f, "%.2f");
+				ImGui::SliderFloat("Diffuse Cubemap Multiplier", &settings.DiffuseCubemapMult, 0.0f, 5.0f, "%.2f");
 			}
 
 			if (showAdvanced) {
@@ -611,7 +618,7 @@ void ScreenSpaceGI::CompileComputeShaders()
 			{ &prefilterDepthsCompute, "prefilterDepths.cs.hlsl", { { "LINEAR_FILTER", "" } } },
 			{ &prefilterRadianceCompute, "prefilterRadiance.cs.hlsl", {} },
 			{ &prefilterNormalCompute, "prefilterNormal.cs.hlsl", {} },
-			{ &giCompute, "gi.cs.hlsl", {} },
+			{ &giCompute, "diffuseGI.cs.hlsl", {} },
 		};
 
 	if (REL::Module::IsVR())
@@ -728,6 +735,8 @@ void ScreenSpaceGI::UpdateSB()
 		data.HitDistC = settings.HitDistC;
 		data.HitDistD = settings.HitDistD;
 		data.SpecUseDynamicCubemap = (settings.UseDynamicCubemapsAsFallback && globals::features::dynamicCubemaps.loaded) ? 1u : 0u;
+		data.SpecCubemapMult = settings.SpecCubemapMult;
+		data.DiffuseCubemapMult = settings.DiffuseCubemapMult;
 	}
 
 	ssgiCB->Update(data);

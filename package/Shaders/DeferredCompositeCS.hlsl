@@ -192,7 +192,7 @@ void SampleSSGITracedSpecular(uint2 pixCoord, out float3 specularRadiance, out f
 		directionalAmbientColor = max(0, directionalAmbientColor);
 	}
 
-	{
+	if (SharedData::ssgiSettings.DiffuseMult > 0) {
 		float maxScale = 1.0;
 		if (directionalAmbientColor.x > 0.0)
 			maxScale = min(maxScale, diffuseColor.x / directionalAmbientColor.x);
@@ -205,9 +205,9 @@ void SampleSSGITracedSpecular(uint2 pixCoord, out float3 specularRadiance, out f
 		diffuseColor = max(0.0, diffuseColor - directionalAmbientColor);
 		linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
 		linDiffuseColor *= sqrt(multiBounceSSGIAo);
-	}
 
-	linDiffuseColor += ssgiIl * linAlbedo;
+		linDiffuseColor += ssgiIl * linAlbedo;
+	}
 #endif
 
 	float3 color = linDiffuseColor + specularColor;

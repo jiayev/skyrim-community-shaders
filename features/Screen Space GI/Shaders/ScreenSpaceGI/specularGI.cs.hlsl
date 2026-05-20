@@ -457,6 +457,7 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 		}
 #	endif
 		envColor = Color::IrradianceToLinear(envColor);
+		envColor *= SpecCubemapMult;
 		float ao = lerp(1.0, occlusion, OcclusionStrength);
 		ao = GetSpecularOcclusionFromAmbientOcclusion(NdotV, ao, roughness);
 		envColor *= ao;
