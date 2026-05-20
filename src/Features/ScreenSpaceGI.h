@@ -83,7 +83,7 @@ public:
 		bool Enabled = true;
 		bool EnableGI = REL::Module::IsVR() ? false : true;
 		bool EnableVanillaSSAO = false;
-		bool EnableSH = false;
+		bool EnableSH = true;
 		// performance/quality
 		uint NumSteps = 8u;
 		bool HalfRes = true;
@@ -101,6 +101,8 @@ public:
 		float BRDFBias = 0.25f;
 		float OcclusionStrength = 1.0f;
 		bool UseDynamicCubemapsAsFallback = true;
+		float SpecCubemapMult = 1.0f;
+		float DiffuseCubemapMult = 1.0f;
 		float HitDistA = 210.0f;
 		float HitDistB = 0.1f;
 		float HitDistC = 20.0f;
@@ -142,6 +144,9 @@ public:
 		float HitDistC;
 		float HitDistD;
 		uint SpecUseDynamicCubemap;
+		float SpecCubemapMult;
+		float DiffuseCubemapMult;
+		uint pad0[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SSGICB);
 	eastl::unique_ptr<ConstantBuffer> ssgiCB;

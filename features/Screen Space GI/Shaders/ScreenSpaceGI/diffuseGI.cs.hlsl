@@ -98,6 +98,7 @@ void CalculateGI(
 
 	float visibility = 0;
 	float3 totalRadiance = 0;
+	float3 fallbackRadiance = 0;
 #ifdef SSGI_SH
 	float3 totalDirection = 0;
 #endif
@@ -248,6 +249,8 @@ void CalculateGI(
 					float3 rayDir = normalize(sliceTangent * cos(angle) + viewspaceNormal * sin(angle));
 					rayDir = normalize(rayDir - axisVec * dot(rayDir, axisVec));
 
+					float cosWeight = saturate(dot(rayDir, viewspaceNormal));
+
 					float3 worldDir = ViewToWorldVector(rayDir, FrameBuffer::CameraViewInverse[eyeIndex]);
 					float3 envColor = EnvReflectionsTexture.SampleLevel(samplerLinearClamp, worldDir, 0);
 
@@ -264,7 +267,8 @@ void CalculateGI(
 #	endif
 
 					envColor = Color::IrradianceToLinear(envColor);
-					totalRadiance += envColor * weight;
+					envColor *= DiffuseCubemapMult;
+					fallbackRadiance += envColor * cosWeight * weight;
 				}
 
 				bitmaskCopy >>= BITS_PER_SAMPLE;
@@ -277,7 +281,7 @@ void CalculateGI(
 	visibility = 1 - pow(abs(1 - visibility), AOPower);
 
 	o_ao = visibility;
-	o_radiance = totalRadiance;
+	o_radiance = totalRadiance + fallbackRadiance;
 #ifdef SSGI_SH
 	o_direction = normalize(totalDirection + 1e-6);
 #endif

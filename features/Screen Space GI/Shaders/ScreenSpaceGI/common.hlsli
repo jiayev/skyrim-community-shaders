@@ -56,6 +56,8 @@ cbuffer SSGICB : register(b1)
 	float HitDistC;
 	float HitDistD;
 	uint SpecUseDynamicCubemap;
+	float SpecCubemapMult;
+	float DiffuseCubemapMult;
 };
 
 SamplerState samplerPointClamp : register(s0);
