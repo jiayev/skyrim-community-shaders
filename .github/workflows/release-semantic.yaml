@@ -30,6 +30,13 @@ jobs:
     release:
         runs-on: ubuntu-latest
         steps:
+            - name: Generate app token
+              uses: actions/create-github-app-token@v1
+              id: app-token
+              with:
+                  app-id: ${{ secrets.APP_ID }}
+                  private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
             - name: Checkout repository
               uses: actions/checkout@v6
               with:
@@ -37,9 +44,9 @@ jobs:
                   persist-credentials: false
                   # Token used for the working checkout. The actual pushes
                   # (FF main, semantic-release commit/tag, FF dev) all go
-                  # through RELEASE_PAT below so they can bypass branch
+                  # through the app token below so they can bypass branch
                   # protection and fire downstream workflows.
-                  token: ${{ secrets.RELEASE_PAT }}
+                  token: ${{ steps.app-token.outputs.token }}
 
             - name: Configure git identity
               run: |
@@ -107,7 +114,7 @@ jobs:
             - name: Fast-forward main to ff_target
               if: ${{ inputs.ff_target != '' }}
               env:
-                  TOKEN: ${{ secrets.RELEASE_PAT }}
+                  TOKEN: ${{ steps.app-token.outputs.token }}
                   FF_TARGET: ${{ inputs.ff_target }}
               run: |
                   set -euo pipefail
@@ -136,17 +143,17 @@ jobs:
                       @semantic-release/github
                   tag_format: "v${version}"
               env:
-                  # RELEASE_PAT required for two reasons:
+                  # App token required for two reasons:
                   # 1. Allows pushing the version commit and tag to the protected
                   #    target branch (GITHUB_TOKEN cannot bypass branch protection).
-                  # 2. A PAT-sourced tag push triggers downstream workflows
+                  # 2. An app-token tag push triggers downstream workflows
                   #    (release-build.yaml); GITHUB_TOKEN pushes do not.
-                  GITHUB_TOKEN: ${{ secrets.RELEASE_PAT }}
+                  GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
             - name: Reconcile dev with release commit (promotion mode, dev source only)
               if: ${{ inputs.ff_target != '' && steps.semantic.outputs.new_release_published == 'true' && steps.validate.outputs.source == 'dev' }}
               env:
-                  TOKEN: ${{ secrets.RELEASE_PAT }}
+                  TOKEN: ${{ steps.app-token.outputs.token }}
               run: |
                   set -euo pipefail
                   git fetch origin main dev
@@ -177,7 +184,7 @@ jobs:
             - name: Rebase-reconcile dev with release commit (promotion mode, hotfix-staging source)
               if: ${{ inputs.ff_target != '' && steps.semantic.outputs.new_release_published == 'true' && steps.validate.outputs.source != 'dev' && steps.validate.outputs.source != '' }}
               env:
-                  TOKEN: ${{ secrets.RELEASE_PAT }}
+                  TOKEN: ${{ steps.app-token.outputs.token }}
               run: |
                   set -euo pipefail
                   git fetch origin main dev

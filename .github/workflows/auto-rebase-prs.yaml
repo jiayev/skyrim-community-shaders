@@ -8,8 +8,9 @@ name: "Auto-rebase open PRs"
 # by maintainers" checked. The action silently skips PRs missing either,
 # and skips conflicts.
 #
-# Token: RELEASE_PAT (classic PAT, `repo` + `workflow`). `workflow` is
-# required because rebased PRs may include `.github/workflows/` diffs.
+# Token: GitHub App token (APP_ID + APP_PRIVATE_KEY). The app must have
+# Contents R/W, Pull requests R/W, and Workflows R/W permissions so that
+# rebased PRs containing `.github/workflows/` diffs can be pushed.
 
 on:
     push:
@@ -35,17 +36,24 @@ jobs:
     rebase:
         runs-on: ubuntu-latest
         steps:
+            - name: Generate app token
+              uses: actions/create-github-app-token@v1
+              id: app-token
+              with:
+                  app-id: ${{ secrets.APP_ID }}
+                  private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
             - name: Checkout
               uses: actions/checkout@v6
               with:
                   fetch-depth: 0
-                  token: ${{ secrets.RELEASE_PAT }}
+                  token: ${{ steps.app-token.outputs.token }}
 
             - name: Resolve single-PR head spec (if pr_number given)
               id: resolve_head
               if: inputs.pr_number != ''
               env:
-                  GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+                  GH_TOKEN: ${{ steps.app-token.outputs.token }}
                   PR_NUMBER: ${{ inputs.pr_number }}
               run: |
                   set -euo pipefail
@@ -75,7 +83,7 @@ jobs:
               if: inputs.pr_number == '' || steps.resolve_head.outputs.head != ''
               uses: peter-evans/rebase@v3
               with:
-                  token: ${{ secrets.RELEASE_PAT }}
+                  token: ${{ steps.app-token.outputs.token }}
                   base: dev
                   head: ${{ steps.resolve_head.outputs.head }}
                   exclude-drafts: true
