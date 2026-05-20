@@ -396,6 +396,7 @@ void ColorGrading::DrawSettings()
 	ImGui::Checkbox("Enable Tonemapping", &settings.enableTonemap);
 	if (settings.enableTonemap) {
 		auto& hdrRef = globals::features::hdrDisplay;
+		const bool hdrActive = hdrRef.loaded && hdrRef.settings.enableHDR;
 
 		if (ImGui::Checkbox("Use OpenDRT", &settings.useOpenDrt))
 			recompileFlag = true;
@@ -406,8 +407,6 @@ void ColorGrading::DrawSettings()
 			ImGui::PopID();
 		} else {
 			auto& tonemappers = TonemapperInfo::GetTonemappers();
-
-			const bool hdrActive = hdrRef.loaded && hdrRef.settings.enableHDR;
 
 			if (ImGui::BeginCombo("Tonemapper", tonemappers[tonemapperType].name.data(), ImGuiComboFlags_HeightLargest)) {
 				for (int i = 0; i < (int)tonemappers.size(); ++i) {
