@@ -465,7 +465,13 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 	}
 #endif
 
-	float sampleW = world_ray_length * screenConfidence;
-	float normHitDist = REBLUR_FrontEnd_GetNormHitDist(sampleW, viewZ, kHitDistParams, roughness);
+	float normHitDist;
+	if (screenConfidence > 0.0f) {
+		normHitDist = REBLUR_FrontEnd_GetNormHitDist(world_ray_length, viewZ, kHitDistParams, roughness);
+	} else if (confidence > 0.0f) {
+		normHitDist = 1.0;
+	} else {
+		normHitDist = 0.0;
+	}
 	OutSpecRadianceHitDist[outPixelPos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(sampleColor, normHitDist, true);
 }
