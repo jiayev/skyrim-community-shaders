@@ -2255,13 +2255,12 @@ void Upscaling::ApplySharpening()
 
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	// RR runs in DX12 mode
-	if (GetUpscaleMethod() == UpscaleMethod::kDLSS_RR)
+	// DX12 mode does not write to sharpenerTexture
+	if (d3d12Mode)
 		context->CopyResource(sharpenerTexture->resource.get(), main.texture);
 
 	// Zero-copy path: DLSS has already written to sharpenerTexture; sharpen directly into kMAIN.UAV.
 	rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness);
-
 
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }
