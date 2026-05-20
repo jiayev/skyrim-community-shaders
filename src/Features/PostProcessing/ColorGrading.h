@@ -1,6 +1,6 @@
 #pragma once
-#include "PostProcessFeature.h"
 #include "OpenDRT.h"
+#include "PostProcessFeature.h"
 
 #include "Buffer.h"
 
@@ -67,7 +67,7 @@ struct ColorGrading : public PostProcessFeature
 		float4 midtonesOffset = { 0.f, 0.f, 0.f, 0.f };
 		float4 highlightsOffset = { 0.f, 0.f, 0.f, 0.f };
 
-		bool useOpenDrt = true;
+		bool useOpenDrt = false;
 		std::string currentTonemapper = "GT7";
 		std::array<float4, 2> tonemapParams = { float4{ 1.f, 2.f, 0.f, 0.f }, float4{ 0.f, 0.f, 0.f, 0.f } };
 		float3 gameCinematicBlend = { 1.0f, 1.0f, 1.0f };
