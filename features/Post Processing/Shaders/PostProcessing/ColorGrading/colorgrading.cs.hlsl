@@ -11,6 +11,8 @@ Texture3D<float4> TexLUT : register(t1);
 
 SamplerState LinearSampler : register(s0);
 
+#include "PostProcessing/ColorGrading/Include/OpenDRTConfig.hlsli"
+
 cbuffer ColorCB : register(b1)
 {
 	float4 asccdl[3];
@@ -53,12 +55,14 @@ cbuffer ColorCB : register(b1)
 	uint enableHDR;           // HDR display is enabled (auto-set from HDR feature)
 	float hdrPeakNits;        // Maximum display brightness in nits for HDR
 	float hdrPaperWhiteNits;  // Reference white brightness in nits for HDR
+
+	OpenDRTConfig odrtConfig;
 };
 
+#include "PostProcessing/ColorGrading/Include/OpenDRT.hlsli"
 #include "PostProcessing/ColorGrading/Include/GT7ToneMapping.hlsli"
 #include "PostProcessing/ColorGrading/Include/RenoDXToneMapping.hlsli"
 #include "PostProcessing/common.hlsli"
-
 namespace LogType
 {
 	static const uint ACEScct = (1 << 0);
