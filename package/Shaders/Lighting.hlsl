@@ -2397,9 +2397,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 					material.F0 = max(lerp(0, material.F0, envMask), SharedData::vanillaFresnelSettings.MinF0);
 #				endif
 #				if defined(EMAT)
-					if (!complexMaterial)
+					if (!complexMaterial) {
 #				endif
 						material.Roughness = lerp(originRoughness, material.Roughness, envMask);
+						material.F0 = saturate(material.F0 + envMask * material.BaseColor);
+						material.BaseColor = lerp(material.BaseColor, 0, envMask);
+#				if defined(EMAT)
+					}
+#				endif
 				}
 #			endif
 			}
