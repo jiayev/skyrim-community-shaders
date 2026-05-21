@@ -244,7 +244,7 @@ void Raytracing::DrawGeneralSettings()
 			rtSettings.SamplesPerPixel = std::clamp(rtSettings.SamplesPerPixel, 1, 32);
 	}
 
-	if (ceRTSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::NRD_REBLUR)
+	if (ceRTSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::NRD)
 		DrawReblurSettings();
 
 	DrawSHaRCSettings();

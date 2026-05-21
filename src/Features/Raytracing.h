@@ -44,7 +44,7 @@ struct CreationEngineRaytracing
 	enum class Denoiser
 	{
 		None,
-		NRD_REBLUR,
+		NRD,
 		DLSS_RR,
 		Accumulation
 	};
