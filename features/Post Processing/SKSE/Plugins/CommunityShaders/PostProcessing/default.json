@@ -32,7 +32,7 @@
         "settings": {
             "cdlOffset": [0.0, 0.0, 0.0, 0.0],
             "contrast": [1.0, 1.0, 1.0, 0.0],
-            "currentTonemapper": "ACES",
+            "currentTonemapper": "GT7",
             "enableTonemap": true,
             "exposureTemperatureTint": [1.0, 65.0, 0.0, 0.0],
             "gain": [1.0, 1.0, 1.0, 1.0],
@@ -71,7 +71,8 @@
                 [1.0, 9.999999747378752e-5, 0.0, 0.0],
                 [0.0, 0.0, 0.0, 0.0]
             ],
-            "useLog": true
+            "useLog": true,
+            "useOpenDrts": false
         }
     },
     "Composite": {
@@ -190,7 +191,7 @@
             "HaloWidth": 0.5,
             "Intensity": 0.25,
             "KernelScale": 0.10000000149011612,
-            "ThresholdEV": -6.0,
+            "ThresholdEV": 0.0,
             "ThresholdRange": 1.0,
             "Tint": [1.0, 0.8500000238418579, 0.699999988079071]
         }
@@ -202,9 +203,9 @@
             "DisplayMip": 2,
             "Exposure": 0.699999988079071,
             "ExposurePreferenceSigma": 5.0,
-            "Highlights": 3.5,
+            "Highlights": 1.5,
             "Mip": 6,
-            "Shadows": 1.5
+            "Shadows": 1.0
         }
     },
     "Motion Blur": {

@@ -17,10 +17,10 @@ struct CODBloom : public PostProcessFeature
 	struct Settings
 	{
 		// bloom & lens
-		float Threshold = -9.f;  // EV (0 EV = 1.0 linear)
+		float Threshold = 0.f;  // EV (0 EV = 1.0 linear)
 		float UpsampleRadius = 2.f;
-		float BlendFactor = .05f;
-		std::array<float, s_BloomMips - 1> MipBlendFactor = { 1.f, 1.f, 1.f, 1.f, 1.f, 1.f };
+		float BlendFactor = .01f;
+		std::array<float, s_BloomMips - 1> MipBlendFactor = { 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f };
 	} settings;
 
 	struct alignas(16) BloomCB

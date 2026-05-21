@@ -34,8 +34,8 @@ struct LocalExposure : public PostProcessFeature
 	struct Settings
 	{
 		float Exposure = 0.7f;                 // Manual input normalization when Auto Exposure is unavailable
-		float Shadows = 1.5f;                  // Shadow recovery EV
-		float Highlights = 2.0f;               // Highlight recovery EV
+		float Shadows = 1.0f;                  // Shadow recovery EV
+		float Highlights = 1.5f;               // Highlight recovery EV
 		float ExposurePreferenceSigma = 5.0f;  // Exposure selection sharpness
 		uint Mip = 6;                          // Coarsest pyramid level used for reconstruction
 		uint DisplayMip = 2;                   // Finest reconstructed level before guided upsample
