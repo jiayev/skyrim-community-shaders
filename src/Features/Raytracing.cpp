@@ -440,8 +440,10 @@ void Raytracing::DrawAdvancedSettings()
 
 	DrawEnumCombo("Diffuse BRDF", advSettings.DiffuseBRDF);
 
-	ImGui::Checkbox("Stable Planes", &settings.CreationEngineRaytracingSettings.AdvancedSettings.StablePlanes);
+	ImGui::Checkbox("Stable Planes", &advSettings.StablePlanes);
 
+	ImGui::Checkbox("Disable vanilla fog when pathtracing", &settings.DisableVanillaFogPT);
+	
 	ImGui::PopID();
 
 	ImGui::EndTabItem();
@@ -1132,7 +1134,16 @@ void Raytracing::DeferredPasses()
 
 	auto& main = renderTargets[RE::RENDER_TARGETS::kMAIN];
 
-	if (mode == CreationEngineRaytracing::Mode::GlobalIllumination) {
+	const bool globalIllumation = (mode == CreationEngineRaytracing::Mode::GlobalIllumination);
+	const bool pathtracing = (mode == CreationEngineRaytracing::Mode::PathTracing);
+
+	// Force fog off
+	if (settings.DisableVanillaFogPT) {
+		static auto& enableFog = (*(bool*)REL::RelocationID(528125, 415070).address());
+		enableFog = !pathtracing;
+	}
+
+	if (globalIllumation) {
 		// Add GI result to kMain
 		{
 			context->CSSetShader(giCompositeCS.get(), nullptr, 0);
@@ -1151,7 +1162,7 @@ void Raytracing::DeferredPasses()
 			uav = nullptr;
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		}
-	} else if (mode == CreationEngineRaytracing::Mode::PathTracing) {
+	} else if (pathtracing) {
 		// Blend PT and Sky
 		{
 			context->CSSetShader(ptCompositeCS.get(), nullptr, 0);

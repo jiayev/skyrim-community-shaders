@@ -627,6 +627,7 @@ struct Raytracing : public OverlayFeature
 	{
 		OverlayMode PerfOverlay = OverlayMode::None;
 		bool DisplaySceneGraphCounters = false;
+		bool DisableVanillaFogPT = false;
 		CreationEngineRaytracing::Settings CreationEngineRaytracingSettings;
 	} settings;
 
