@@ -81,4 +81,4 @@ struct OpenDRTSettings
 };
 static_assert(sizeof(OpenDRTSettings) % 16 == 0);
 
-void OpenDRTDrawSettings(OpenDRTSettings& s);
+void OpenDRTDrawSettings(OpenDRTSettings& s, bool hdrActive = false, float hdrPaperWhite = 203.0f, float hdrPeakNits = 1000.0f);
