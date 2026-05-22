@@ -147,6 +147,7 @@ target_link_libraries(
 # Some third-party libs (e.g. FFX backend) are built with /GL.
 # In RelWithDebInfo, align linker options to avoid LNK4075/LNK1218 when warnings are treated as errors.
 if(MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
     target_link_options(
         ${PROJECT_NAME}
         PRIVATE
