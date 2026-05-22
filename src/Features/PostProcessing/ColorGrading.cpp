@@ -4,10 +4,10 @@
 #include "Util.h"
 
 #include "ColorSpace.h"
-#include "OpenDRTIo.h"
 #include "Features/HDRDisplay.h"
 #include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
+#include "OpenDRTIo.h"
 
 #include <DDSTextureLoader.h>
 #include <DirectXPackedVector.h>
@@ -403,7 +403,11 @@ void ColorGrading::DrawSettings()
 
 		if (settings.useOpenDrt) {
 			ImGui::PushID("OpenDRT");
-			OpenDRTDrawSettings(settings.odrtConfig);
+			OpenDRTDrawSettings(
+				settings.odrtConfig,
+				hdrActive,
+				static_cast<float>(hdrRef.settings.hdrPaperWhite),
+				static_cast<float>(hdrRef.settings.hdrPeakNits));
 			ImGui::PopID();
 		} else {
 			auto& tonemappers = TonemapperInfo::GetTonemappers();

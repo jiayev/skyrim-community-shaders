@@ -1,6 +1,8 @@
 #include "OpenDRT.h"
 #include "Util.h"
 
+#include <algorithm>
+
 namespace
 {
 	enum class LookPreset : int32_t
@@ -855,7 +857,7 @@ void ApplyTonescalePreset(OpenDRTSettings& s, TonescalePreset preset)
 	}
 }
 
-void OpenDRTDrawSettings(OpenDRTSettings& s)
+void OpenDRTDrawSettings(OpenDRTSettings& s, bool hdrActive, float hdrPaperWhite, float hdrPeakNits)
 {
 	static OpenDRTPresetSelection presets{};
 
@@ -876,11 +878,20 @@ void OpenDRTDrawSettings(OpenDRTSettings& s)
 	// }
 
 	if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (hdrActive)
+			ImGui::BeginDisabled();
 		ImGui::SliderFloat("Display Peak Luminance", &s.tn_Lp, 100.0f, 1000.0f, "%.0f");
+		if (hdrActive)
+			ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(
 				"Peak display luminance in nits.\n"
-				"In SDR, the max value stays pinned at 1.0. In HDR, the max value is adjusted to match peak luminance in the HDR container.");
+				"In SDR, the max value stays pinned at 1.0. In HDR, this is overridden by HDR Display Peak Brightness.");
+		if (hdrActive) {
+			const float paperWhite = std::max(hdrPaperWhite, 1.0f);
+			const float peakNits = std::max(hdrPeakNits, paperWhite);
+			ImGui::TextDisabled("HDR Display: %.0f nits paper white, %.0f nits peak (%.2f linear)", paperWhite, peakNits, peakNits / paperWhite);
+		}
 		ImGui::SliderFloat("HDR Grey Boost", &s.tn_gb, 0.0f, 1.0f, "%.3f");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(
