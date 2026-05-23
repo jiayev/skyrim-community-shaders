@@ -1150,6 +1150,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			if defined(SPECULAR) && (NUM_SPECULAR_LIGHTS != 0)
 	float3 finalColor = 0.0.xxx;
 
+#				if !defined(LIGHT_LIMIT_FIX)
 	[unroll] for (int lightIndex = 0; lightIndex < NUM_SPECULAR_LIGHTS; ++lightIndex)
 	{
 		float3 lightVector = LightPos[lightIndex].xyz - (PosAdjust[eyeIndex].xyz + input.WPosition.xyz);
@@ -1160,6 +1161,7 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 lightColor = (Color::PointLight(LightColor[lightIndex].xyz) * pow(LdotN, FresnelRI.z)) * lightColorMul;
 		finalColor += lightColor;
 	}
+#				endif
 
 	finalColor *= fresnel;
 #				if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
