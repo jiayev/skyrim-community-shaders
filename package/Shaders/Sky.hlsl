@@ -345,10 +345,10 @@ PS_OUTPUT main(PS_INPUT input)
 		float apShadow = GetPhysSkyCloudShadow(viewDir, input.Position.xy);
 		float4 apColor = PhysSky::SampleAp(viewDir, psCloudDist, apShadow, PhysSky::SampSv);
 		psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
-#		elif defined(TEX)
+#		elif defined(TEX) && defined(DEFERRED)
 		float3 sunDir = normalize(SharedData::physSkyData.sunDir);
 		float cosTheta = saturate(dot(normalize(input.WorldPosition.xyz), sunDir));
-		if (enableProceduralSun && cosTheta > SharedData::physSkyData.sunDiskCos) {
+		if (enableProceduralSun && cosTheta > SharedData::physSkyData.sunDiskCos && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
 			float sunDiskSin = sqrt(1.0 - SharedData::physSkyData.sunDiskCos * SharedData::physSkyData.sunDiskCos);
 			float tanTheta = sqrt(1.0 - cosTheta * cosTheta) / cosTheta;
 			float normDist = tanTheta * SharedData::physSkyData.sunDiskCos * rcp(sunDiskSin);
@@ -360,18 +360,8 @@ PS_OUTPUT main(PS_INPUT input)
 			const float3 sunDiskRadiance = min((SharedData::physSkyData.sunlightColor / max(sunSolidAngle, 1e-6f)) * transmittance, 62250.0f);
 
 			float3 sunDiskColor = sunDiskRadiance * limbFactor * softEdge;
-			psout.Color.xyz += sunDiskColor;
+			psout.Color.xyz = sunDiskColor;
 			psout.Color.w = 1.0;
-#			if defined(CLOUD_SHADOWS)
-			float cloudMult = CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, SampBaseSampler);
-			psout.Color.w *= cloudMult;
-#			endif
-#			if defined(EXP_HEIGHT_FOG)
-			if (SharedData::exponentialHeightFogSettings.enabled) {
-				float attenuation = ExponentialHeightFog::GetSunFogAttenuation(FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
-				psout.Color.w *= attenuation;
-			}
-#			endif
 		}
 #		endif
 	}
