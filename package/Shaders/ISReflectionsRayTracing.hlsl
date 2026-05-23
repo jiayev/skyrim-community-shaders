@@ -32,6 +32,7 @@ static const int iterations = 64.0;
 static const int binaryIterations = ceil(log2(iterations));
 
 static const float rayLength = 1.0;
+static const float maxValidDepth = 0.9999;
 
 float2 ConvertRaySample(float2 raySample, uint eyeIndex)
 {
@@ -63,6 +64,8 @@ float4 GetReflectionColor(
 			return 0.0;
 
 		float iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV, sampleEyeIndex), 0).x;
+		if (iterationDepth > maxValidDepth)
+			continue;
 
 		if (saturate((raySample.z - iterationDepth) / SSRParams.y) > 0.0) {
 			float3 binaryMinRaySample = prevRaySample;
@@ -76,6 +79,11 @@ float4 GetReflectionColor(
 
 				Stereo::ResolveMonoUVForEye(binaryRaySample, eyeIndex, sampleUV, hitEyeIndex);
 				iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV, hitEyeIndex), 0).x;
+				if (iterationDepth > maxValidDepth) {
+					binaryMinRaySample = binaryRaySample;
+					depthThicknessFactor = 0.0;
+					continue;
+				}
 
 				// Compute expected depth vs actual depth
 				depthThicknessFactor = 1.0 - saturate(abs(binaryRaySample.z - iterationDepth) / SSRParams.y);
@@ -168,6 +176,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 viewNormal = DefaultNormal;
 
 	float depth = DepthTex.SampleLevel(DepthSampler, screenPosition, 0).x;
+	[branch] if (depth > maxValidDepth)
+	{
+		return psout;
+	}
 
 	float4 positionVS = float4(float2(uv.x, 1.0 - uv.y) * 2.0 - 1.0, depth, 1.0);
 	positionVS = mul(FrameBuffer::CameraProjInverse[eyeIndex], positionVS);

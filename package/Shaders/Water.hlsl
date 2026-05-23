@@ -48,6 +48,8 @@ PS_OUTPUT main(PS_INPUT input)
 #	include "Common/Permutation.hlsli"
 #	include "Common/Random.hlsli"
 #	include "Common/Color.hlsli"
+#	include "Common/BRDF.hlsli"
+#	include "Common/Game.hlsli"
 
 #	define WATER
 
@@ -426,12 +428,60 @@ float CalculateDepthMultFromUV(float2 uv, float depth, uint eyeIndex = 0)
 #		define SampColorSampler Normals01Sampler
 #		define LinearSampler Normals01Sampler
 
+static const float WATER_F0 = 0.02f;
+static const float WATER_SUN_ANGULAR_RADIUS = 0.00465f;
+
+float GetWaterProjectedSolidAngle(float cosAngularRadius)
+{
+	return max(Math::PI * (1.0f - cosAngularRadius * cosAngularRadius), EPSILON_DIVISION);
+}
+
+float GetWaterSunDiskCos()
+{
+	float cosAngularRadius = cos(WATER_SUN_ANGULAR_RADIUS);
+#		if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled && SharedData::physSkyData.sunDiskCos > 0.0f)
+		cosAngularRadius = SharedData::physSkyData.sunDiskCos;
+#		endif
+	return cosAngularRadius;
+}
+
+float GetWaterFresnel(float cosTheta)
+{
+	return BRDF::F_Schlick(WATER_F0.xxx, saturate(cosTheta)).x;
+}
+
+float GetWaterDirectSpecularScale()
+{
+	return Color::PBRLightingCompensation * Color::PBRLightingScale;
+}
+
+float GetWaterDeltaLightDistributionFromCos(float3 normal, float3 viewDirection, float3 lightDirection, float cosAngularRadius)
+{
+	float3 V = -viewDirection;
+	float3 R = reflect(viewDirection, normal);
+
+	float NdotV = saturate(dot(normal, V));
+	float lightMask = step(cosAngularRadius, dot(R, lightDirection));
+
+	return lightMask * GetWaterFresnel(NdotV) / GetWaterProjectedSolidAngle(cosAngularRadius);
+}
+
+float GetWaterDeltaLightDistribution(float3 normal, float3 viewDirection, float3 lightDirection, float angularRadius)
+{
+	return GetWaterDeltaLightDistributionFromCos(normal, viewDirection, lightDirection, cos(angularRadius));
+}
+
 #		if defined(SKYLIGHTING)
 #			include "Skylighting/Skylighting.hlsli"
 #		endif
 
 #		if defined(EXP_HEIGHT_FOG)
 #			include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
+#		endif
+
+#		if defined(PHYSICAL_SKY)
+#			include "PhysicalSky/Common.hlsli"
 #		endif
 
 #		include "Common/ShadowSampling.hlsli"
@@ -930,8 +980,7 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 #			else
 	float3 actualNormal = normal;
 #			endif
-	float viewAngle = 1 - saturate(dot(-viewDirection, actualNormal));
-	return (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
+	return GetWaterFresnel(dot(-viewDirection, actualNormal));
 }
 
 struct DiffuseOutput
@@ -1024,17 +1073,21 @@ float3 GetSunColor(float3 normal, float3 viewDirection, float3 worldPosition, ui
 	if (Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Interior)
 		return 0.0.xxx;
 
-	float3 reflectionDirection = reflect(viewDirection, normal);
-	float reflectionMul = exp2(VarAmounts.x * log2(saturate(dot(reflectionDirection, SunDir.xyz))));
+	float lightDistribution = GetWaterDeltaLightDistributionFromCos(normal, viewDirection, SunDir.xyz, GetWaterSunDiskCos());
 
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-	float3 sunColor = Color::DirectionalLight((SunColor.xyz * SunDir.w) / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * (1.0 - exp(-DeepColor.w)) * llDirLightMult;
+	float3 sunColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * (1.0 - exp(-DeepColor.w)) * llDirLightMult;
+#				if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		sunColor *= PhysSky::SampleTr(normalize(reflect(viewDirection, normal)), DepthSampler);
+#				endif
+
 #				if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
 		sunColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
 	}
 #				endif
-	return reflectionMul * sunColor;
+	return lightDistribution * sunColor * GetWaterDirectSpecularScale();
 #			endif
 }
 #		endif
