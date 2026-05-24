@@ -336,6 +336,9 @@ void ScreenSpaceReflections::DrawSSR()
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "SSR");
 
+	if (globals::state->frameAnnotations)
+		globals::state->BeginPerfEvent("SSR");
+
 	if (recompileFlag)
 		ClearShaderCache();
 
@@ -367,6 +370,8 @@ void ScreenSpaceReflections::DrawSSR()
 	// Hi-Z depth pyramid
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "SSR - Hi-Z Depth");
+		if (globals::state->frameAnnotations)
+			globals::state->BeginPerfEvent("SSR - Hi-Z Depth");
 
 		auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 
@@ -396,11 +401,16 @@ void ScreenSpaceReflections::DrawSSR()
 		}
 
 		resetViews();
+
+		if (globals::state->frameAnnotations)
+			globals::state->EndPerfEvent();
 	}
 
 	// Specular GI ray march
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "SSR - Specular GI");
+		if (globals::state->frameAnnotations)
+			globals::state->BeginPerfEvent("SSR - Specular GI");
 
 		auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 		auto normal = rts[NORMALROUGHNESS];
@@ -430,12 +440,17 @@ void ScreenSpaceReflections::DrawSSR()
 		context->Dispatch((specDispatchX + 7u) >> 3, (specDispatchY + 7u) >> 3, 1);
 
 		resetViews();
+
+		if (globals::state->frameAnnotations)
+			globals::state->EndPerfEvent();
 	}
 
 	// REBLUR denoise (specular)
 	auto& nrdSvc = globals::features::nrd;
 	if (settings.EnableREBLUR && nrdReblurSpecular.IsValid() && nrdSvc.loaded && nrdSvc.AreGuidesReady()) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSR - REBLUR Specular");
+		if (globals::state->frameAnnotations)
+			globals::state->BeginPerfEvent("SSR - REBLUR Specular");
 
 		nrdReblurSpecular.SetCommonSettings(nrdSvc.GetCommonSettings());
 
@@ -455,6 +470,9 @@ void ScreenSpaceReflections::DrawSSR()
 		nrdReblurSpecular.SetNamedUAV(nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST, texNRDSpecOutput->uav.get());
 
 		nrdReblurSpecular.Dispatch();
+
+		if (globals::state->frameAnnotations)
+			globals::state->EndPerfEvent();
 	}
 
 	// cleanup
@@ -465,6 +483,9 @@ void ScreenSpaceReflections::DrawSSR()
 	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 	context->CSSetShader(nullptr, nullptr, 0);
+
+	if (globals::state->frameAnnotations)
+		globals::state->EndPerfEvent();
 }
 
 ID3D11ShaderResourceView* ScreenSpaceReflections::GetOutputTexture()
