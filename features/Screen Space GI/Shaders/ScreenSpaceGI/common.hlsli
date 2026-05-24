@@ -42,22 +42,8 @@ cbuffer SSGICB : register(b1)
 	float AOPower;
 
 	float GIStrength;
-
-	uint SpecMaxSteps;
-	uint SpecMaxMips;
-	float SpecThickness;
-	float NormalBias;
-
-	float BRDFBias;
-	float OcclusionStrength;
-	float HitDistA;
-	float HitDistB;
-
-	float HitDistC;
-	float HitDistD;
-	uint SpecUseDynamicCubemap;
-	float SpecCubemapMult;
 	float DiffuseCubemapMult;
+	uint UseDynamicCubemap;
 };
 
 SamplerState samplerPointClamp : register(s0);

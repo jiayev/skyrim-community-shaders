@@ -217,7 +217,7 @@ void CalculateGI(
 		visibility += countbits(bitmask) * 0.03125;
 
 #if defined(DYNAMIC_CUBEMAPS)
-		if (SpecUseDynamicCubemap != 0) {
+		if (UseDynamicCubemap != 0) {
 			float3 worldPos = ViewToWorldPosition(pixCenterPos, FrameBuffer::CameraViewInverse[eyeIndex]);
 			float3 worldNormal = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse[eyeIndex]);
 

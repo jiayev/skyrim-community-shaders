@@ -44,9 +44,11 @@ SamplerState LinearSampler : register(s0);
 #	include "Skylighting/Skylighting.hlsli"
 #endif
 
-#if defined(SSGI)
+#if defined(SSGI) || defined(SSR)
 #	include "NRD/NRDReblurSH.hlsli"
+#endif
 
+#if defined(SSGI)
 Texture2D<float4> SsgiTexture : register(t9);
 #	if defined(SSGI_SH)
 Texture2D<float4> SsgiSH1Texture : register(t10);
@@ -85,16 +87,16 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 #	endif
 	il = max(0, radiance * SharedData::ssgiSettings.DiffuseMult);
 }
+#endif
 
-#	if defined(SSGI_SPECULAR)
-Texture2D<float4> SsgiSpecularTexture : register(t13);
+#if defined(SSR)
+Texture2D<float4> SsrTexture : register(t13);
 
-void SampleSSGITracedSpecular(uint2 pixCoord, out float3 specularRadiance, out float normHitDist)
+void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out float normHitDist)
 {
-	float4 data = SsgiSpecularTexture[pixCoord];
+	float4 data = SsrTexture[pixCoord];
 	REBLUR_BackEnd_UnpackRadianceAndNormHitDist(data, specularRadiance, normHitDist);
 }
-#	endif
 #endif
 
 #if defined(IBL)
@@ -227,10 +229,10 @@ void SampleSSGITracedSpecular(uint2 pixCoord, out float3 specularRadiance, out f
 
 		float3 finalIrradiance = 0;
 
-#	if defined(SSGI) && defined(SSGI_SPECULAR)
+#	if defined(SSR)
 		float3 tracedSpecular;
 		float specNormHitDist;
-		SampleSSGITracedSpecular(dispatchID.xy, tracedSpecular, specNormHitDist);
+		SampleSSRTracedSpecular(dispatchID.xy, tracedSpecular, specNormHitDist);
 
 #		if defined(SKYLIGHTING)
 #			if defined(VR)

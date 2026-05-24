@@ -8,7 +8,9 @@
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/IBL.h"
+#include "Features/NRD.h"
 #include "Features/ScreenSpaceGI.h"
+#include "Features/ScreenSpaceReflections.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
@@ -329,12 +331,21 @@ void Deferred::DeferredPasses()
 
 	auto& skylighting = globals::features::skylighting;
 
+	auto& nrd = globals::features::nrd;
+	if (nrd.loaded)
+		nrd.PrepareGuides();
+
 	auto& ssgi = globals::features::screenSpaceGI;
 	if (ssgi.loaded)
 		ssgi.DrawSSGI();
+
+	auto& ssr = globals::features::screenSpaceReflections;
+	if (ssr.loaded)
+		ssr.DrawSSR();
+
 	auto ssgiOutput = ssgi.GetDiffuseOutputTexture();
 	auto ssgiSH1Output = ssgi.GetDiffuseSH1Texture();
-	auto ssgiSpecOutput = ssgi.GetSpecularOutputTexture();
+	auto ssrOutput = ssr.GetOutputTexture();
 
 	auto dispatchCount = Util::GetScreenDispatchCount(true);
 
@@ -366,7 +377,7 @@ void Deferred::DeferredPasses()
 			ssgiSH1Output,                                                                                   // t10 SsgiSH1Texture
 			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                             // t11 EnvIBLTexture
 			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,                                             // t12 SkyIBLTexture
-			ssgiSpecOutput,                                                                                  // t13 SsgiSpecularTexture
+			ssrOutput,                                                                                       // t13 SsrTexture (Screen Space Reflections)
 		};
 
 		if (dynamicCubemaps.loaded)
@@ -628,9 +639,10 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 			defines.push_back({ "SSGI", nullptr });
 			if (globals::features::screenSpaceGI.settings.EnableSH && globals::features::screenSpaceGI.settings.EnableGI)
 				defines.push_back({ "SSGI_SH", nullptr });
-			if (globals::features::screenSpaceGI.settings.EnableSpecular)
-				defines.push_back({ "SSGI_SPECULAR", nullptr });
 		}
+
+		if (globals::features::screenSpaceReflections.loaded && globals::features::screenSpaceReflections.settings.Enabled)
+			defines.push_back({ "SSR", nullptr });
 
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });
@@ -664,9 +676,10 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 			defines.push_back({ "SSGI", nullptr });
 			if (globals::features::screenSpaceGI.settings.EnableSH && globals::features::screenSpaceGI.settings.EnableGI)
 				defines.push_back({ "SSGI_SH", nullptr });
-			if (globals::features::screenSpaceGI.settings.EnableSpecular)
-				defines.push_back({ "SSGI_SPECULAR", nullptr });
 		}
+
+		if (globals::features::screenSpaceReflections.loaded && globals::features::screenSpaceReflections.settings.Enabled)
+			defines.push_back({ "SSR", nullptr });
 
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });

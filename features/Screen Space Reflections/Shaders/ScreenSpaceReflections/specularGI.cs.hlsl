@@ -14,7 +14,7 @@
 #include "Common/SharedData.hlsli"
 #include "Common/VR.hlsli"
 #include "NRD/NRDReblurSH.hlsli"
-#include "ScreenSpaceGI/common.hlsli"
+#include "ScreenSpaceReflections/common.hlsli"
 
 Texture2D<float> DepthTexture : register(t0);
 Texture2D<unorm float3> NormalRoughnessTexture : register(t1);
@@ -344,7 +344,7 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 	uint2 fullResCoords;
 	uint2 outPixelPos;
 
-#if defined(SSGI_HALF)
+#if defined(SSR_HALF)
 	uint colOffset = ((DTid.y + FrameIndex) & 1) ^ 1;
 	fullResCoords = uint2(DTid.x * 2 + colOffset, DTid.y);
 	outPixelPos = DTid.xy;
@@ -430,7 +430,7 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 	float3 sampleColor = 0;
 	if (confidence > 0.0f) {
 		sampleColor = Color::IrradianceToLinear(ScreenColorTexture.SampleLevel(LinearSampler, hit.xy * FrameBuffer::DynamicResolutionParams1.xy, 0).xyz);
-		sampleColor *= SharedData::ssgiSettings.SpecularMult;
+		sampleColor *= SharedData::ssrSettings.SpecularMult;
 	}
 
 	const float NdotV = saturate(dot(normalize(view_space_ray), view_space_surface_normal));

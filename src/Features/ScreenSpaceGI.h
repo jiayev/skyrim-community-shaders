@@ -1,10 +1,20 @@
 #pragma once
 
 #include "Buffer.h"
+#include "NRD.h"
 #include "NRDReblurIntegration.h"
 
 #include <NRDSettings.h>
 
+/**
+ * ScreenSpaceGI: indirect lighting and ambient occlusion via XeGTAO-style
+ * horizon scanning, optionally directional via spherical harmonics, denoised
+ * by NVIDIA REBLUR.
+ *
+ * Diffuse-only. Specular reflections live in the standalone
+ * ScreenSpaceReflections feature; denoising guides come from the core NRD
+ * service.
+ */
 struct ScreenSpaceGI : Feature
 {
 private:
@@ -59,25 +69,6 @@ public:
 
 	bool recompileFlag = false;
 
-	struct REBLURSettings
-	{
-		uint32_t MaxAccumulatedFrameNum = 30;
-		uint32_t MaxFastAccumulatedFrameNum = 6;
-		uint32_t MaxStabilizedFrameNum = 5;
-		uint32_t HistoryFixFrameNum = 3;
-		uint32_t HistoryFixBasePixelStride = 14;
-		uint32_t HistoryFixAlternatePixelStride = 1;
-		float FastHistoryClampingSigmaScale = 2.0f;
-		float MinHitDistanceWeight = 0.1f;
-		float MinBlurRadius = 1.0f;
-		float MaxBlurRadius = 35.0f;
-		float LobeAngleFraction = 0.5f;
-		float RoughnessFraction = 0.15f;
-		float PlaneDistanceSensitivity = 0.005f;
-		float SplitScreen = 0.0f;
-		uint32_t HitDistanceReconstructionMode = 0;
-	};
-
 	struct Settings
 	{
 		bool Enabled = true;
@@ -92,24 +83,11 @@ public:
 		// mix
 		float AOPower = 1.0f;
 		float GIStrength = 1.0f;
-		// specular Hi-Z ray march
-		bool EnableSpecular = true;
-		float SpecularMult = 1.0f;
-		uint SpecMaxSteps = 128;
-		float SpecThickness = 5.0f;
-		float NormalBias = 0.1f;
-		float BRDFBias = 0.25f;
-		float OcclusionStrength = 1.0f;
 		bool UseDynamicCubemapsAsFallback = true;
-		float SpecCubemapMult = 1.0f;
 		float DiffuseCubemapMult = 1.0f;
-		float HitDistA = 210.0f;
-		float HitDistB = 0.1f;
-		float HitDistC = 20.0f;
-		float HitDistD = -25.0f;
 		// NRD REBLUR
 		bool EnableREBLUR = true;
-		REBLURSettings Reblur;
+		NRD::REBLURSettings Reblur;
 	} settings;
 
 	struct alignas(16) SSGICB
@@ -130,23 +108,9 @@ public:
 		float AOPower;
 
 		float GIStrength;
-
-		uint SpecMaxSteps;
-		uint SpecMaxMips;
-		float SpecThickness;
-		float NormalBias;
-
-		float BRDFBias;
-		float OcclusionStrength;
-		float HitDistA;
-		float HitDistB;
-
-		float HitDistC;
-		float HitDistD;
-		uint SpecUseDynamicCubemap;
-		float SpecCubemapMult;
 		float DiffuseCubemapMult;
-		uint pad0[2];
+		uint UseDynamicCubemap;
+		uint pad0;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SSGICB);
 	eastl::unique_ptr<ConstantBuffer> ssgiCB;
@@ -155,8 +119,8 @@ public:
 	{
 		float DiffuseMult;
 		uint DebugMode;
-		uint EnableSpecular;
-		float SpecularMult;
+		uint pad0;
+		uint pad1;
 	};
 
 	SharedData GetCommonBufferData();
@@ -170,29 +134,14 @@ public:
 	eastl::unique_ptr<Texture2D> texNormal = nullptr;
 	winrt::com_ptr<ID3D11UnorderedAccessView> uavNormal[5] = { nullptr };
 
-	// NRD textures
+	// REBLUR diffuse radiance in/out (RGBA16F, full-res)
 	eastl::unique_ptr<Texture2D> texNRDInput = nullptr;
 	eastl::unique_ptr<Texture2D> texNRDOutput = nullptr;
 	eastl::unique_ptr<Texture2D> texNRDInputSH1 = nullptr;
 	eastl::unique_ptr<Texture2D> texNRDOutputSH1 = nullptr;
-	eastl::unique_ptr<Texture2D> texNRDMV = nullptr;
-	eastl::unique_ptr<Texture2D> texNRDViewZ = nullptr;
-	eastl::unique_ptr<Texture2D> texNRDNormalRoughness = nullptr;
 
 	ID3D11ShaderResourceView* GetDiffuseOutputTexture();
 	ID3D11ShaderResourceView* GetDiffuseSH1Texture();
-	ID3D11ShaderResourceView* GetSpecularOutputTexture();
-
-	// Hi-Z depth pyramid (R32F, raw NDC depth with min-Z mip chain)
-	eastl::unique_ptr<Texture2D> texHiZDepth = nullptr;
-	static const uint kMaxHiZMips = 12;
-	uint numHiZMips = 1;
-	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, kMaxHiZMips> hiZDepthSRVs = { nullptr };
-	std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, kMaxHiZMips> hiZDepthUAVs = { nullptr };
-
-	// NRD specular textures (RGBA16F, full-res)
-	eastl::unique_ptr<Texture2D> texNRDSpecInput = nullptr;
-	eastl::unique_ptr<Texture2D> texNRDSpecOutput = nullptr;
 
 	winrt::com_ptr<ID3D11SamplerState> linearClampSampler = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> pointClampSampler = nullptr;
@@ -202,19 +151,7 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> prefilterNormalCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> giCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> stereoSyncCompute = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> prepareNRDGuidesCompute = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> prefilterHiZDepthCompute = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> depthDownsampleCompute = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> specularGICompute = nullptr;
 
 	NRDReblurIntegration nrdReblur;
 	nrd::ReblurSettings reblurSettings{};
-	NRDReblurIntegration nrdReblurSpecular;
-	nrd::ReblurSettings reblurSpecularSettings{};
-	uint32_t frameIndex = 0;
-
-	Matrix worldToViewMat{};
-	Matrix prevWorldToViewMat{};
-	Matrix prevProjMatrix{};
-	float2 prevJitter{};
 };
