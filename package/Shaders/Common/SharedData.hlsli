@@ -251,8 +251,16 @@ namespace SharedData
 	{
 		float DiffuseMult;
 		uint DebugMode;
-		uint EnableSpecular;
+		uint pad0;
+		uint pad1;
+	};
+
+	struct SSRSettings
+	{
+		uint Enabled;
 		float SpecularMult;
+		uint pad0;
+		uint pad1;
 	};
 
 	struct ExponentialHeightFogSettings
@@ -294,6 +302,7 @@ namespace SharedData
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		SSGISettings ssgiSettings;
+		SSRSettings ssrSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);
