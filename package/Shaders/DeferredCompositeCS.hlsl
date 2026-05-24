@@ -69,24 +69,6 @@ void SampleSSGIDiffuse(uint2 pixCoord, float3 normalWS, float3 viewWS, out float
 #	endif
 	il = max(0, radiance * SharedData::ssgiSettings.DiffuseMult);
 }
-
-void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il, in float3 normal, in float3 view, in float roughness)
-{
-	float NdotV = dot(normal, view);
-	float alpha = roughness * roughness;
-	ao = SpecularOcclusion(saturate(NdotV), alpha, ao);
-
-#	if defined(SSGI_SH)
-	NRD_SG sg = REBLUR_BackEnd_UnpackSh(SsgiTexture[pixCoord], SsgiSH1Texture[pixCoord]);
-	float3 radiance = NRD_SG_ResolveDiffuse(sg, normal, view, roughness);
-#	else
-	float4 data = SsgiTexture[pixCoord];
-	float normHitDist;
-	float3 radiance;
-	REBLUR_BackEnd_UnpackRadianceAndNormHitDist(data, radiance, normHitDist);
-#	endif
-	il = max(0, radiance * SharedData::ssgiSettings.DiffuseMult);
-}
 #endif
 
 #if defined(SSR)
@@ -322,17 +304,6 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 #		endif
 		}
 
-#		if defined(SSGI)
-		float3 ssgiIlSpecular;
-		SampleSSGISpecular(dispatchID.xy, specularLobe, ssgiAo, ssgiIlSpecular, normalWS, V, roughness);
-
-		finalIrradiance = (finalIrradiance * ssgiAo);
-
-		ssgiIlSpecular = Color::RGBToYCoCg(ssgiIlSpecular);
-		ssgiIlSpecular = max(0, Color::YCoCgToRGB(float3(ssgiIlSpecular.x, lerp(ssgiIlSpecular.yz, Color::RGBToYCoCg(finalIrradiance).yz, 0.5))));
-
-		finalIrradiance += ssgiIlSpecular;
-#		endif
 #	endif
 
 		color += reflectance * finalIrradiance;
