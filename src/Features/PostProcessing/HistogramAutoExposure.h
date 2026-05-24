@@ -78,4 +78,5 @@ struct HistogramAutoExposure : public PostProcessFeature
 	std::array<uint32_t, 256> histogramData = {};
 	float adaptationValue = 0.f;
 	bool histogramReadbackRequested = false;
+	int histogramReadbackRequestFrame = -1;
 };
