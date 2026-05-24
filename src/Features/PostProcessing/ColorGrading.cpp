@@ -604,7 +604,10 @@ void ColorGrading::LoadSettings(json& o_json)
 		auto part1 = o_json["ODRT1"].get<OpenDRTSettingsPart1>();
 		auto part2 = o_json["ODRT2"].get<OpenDRTSettingsPart2>();
 		std::memcpy(&settings.odrtConfig, &part1, sizeof(OpenDRTSettingsPart1));
-		std::memcpy(&settings.odrtConfig + sizeof(OpenDRTSettingsPart1), &part2, sizeof(OpenDRTSettingsPart2));
+		std::memcpy(
+			reinterpret_cast<char*>(&settings.odrtConfig) + sizeof(OpenDRTSettingsPart1),
+			&part2,
+			sizeof(OpenDRTSettingsPart2));
 	} catch (const json::exception&) {
 		settings.odrtConfig = {};
 	}
@@ -618,8 +621,13 @@ void ColorGrading::SaveSettings(json& o_json)
 	settings.currentTonemapper = tonemappers[tonemapperType].name.data();
 	o_json = settings;
 
-	auto part1 = *reinterpret_cast<OpenDRTSettingsPart1*>(&settings.odrtConfig);
-	auto part2 = *reinterpret_cast<OpenDRTSettingsPart2*>(&settings.odrtConfig + sizeof(OpenDRTSettingsPart1));
+	OpenDRTSettingsPart1 part1;
+	OpenDRTSettingsPart2 part2;
+	std::memcpy(&part1, &settings.odrtConfig, sizeof(part1));
+	std::memcpy(
+		&part2,
+		reinterpret_cast<const char*>(&settings.odrtConfig) + sizeof(part1),
+		sizeof(part2));
 	o_json["ODRT1"] = part1;
 	o_json["ODRT2"] = part2;
 }
