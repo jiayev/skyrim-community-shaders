@@ -7,6 +7,7 @@
 #include "Features/HDRDisplay.h"
 #include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
+#include "Menu.h"
 #include "OpenDRTIo.h"
 
 #include <DDSTextureLoader.h>
@@ -445,6 +446,7 @@ void ColorGrading::DrawSettings()
 		// Tonemapping curve visualization (GPU-evaluated, RGB overlay)
 		if (ImGui::TreeNode("Curve Preview")) {
 			curveReadbackRequested = true;
+			curveReadbackRequestFrame = ImGui::GetFrameCount();
 
 			if (settings.skipLUT) {
 				ImGui::TextDisabled("Enable LUT generation to see curve preview (uncheck 'Skip LUT')");
@@ -997,8 +999,16 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 
 	inout_tex = { texColor->resource.get(), texColor->srv.get() };
 
+	const bool curveReadbackActive =
+		Menu::GetSingleton()->IsEnabled &&
+		curveReadbackRequested &&
+		ImGui::GetCurrentContext() &&
+		curveReadbackRequestFrame >= ImGui::GetFrameCount() - 1;
+	if (!curveReadbackActive)
+		curveReadbackRequested = false;
+
 	// Debug: evaluate color grading pipeline on a neutral ramp for curve preview
-	if (curveReadbackRequested && curveNeedsUpdate && texCurveInput && texCurveOutput && colorgradingCS) {
+	if (curveReadbackActive && curveNeedsUpdate && texCurveInput && texCurveOutput && colorgradingCS) {
 		curveNeedsUpdate = false;
 		// Re-bind CB and samplers for the curve dispatch
 		ID3D11Buffer* curveCB = colorCB->CB();

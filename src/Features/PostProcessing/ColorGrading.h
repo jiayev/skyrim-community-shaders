@@ -183,6 +183,7 @@ struct ColorGrading : public PostProcessFeature
 	std::array<float, CurveSamples> curveG = {};
 	std::array<float, CurveSamples> curveB = {};
 	bool curveReadbackRequested = false;
+	int curveReadbackRequestFrame = -1;
 	bool curveNeedsUpdate = true;
 	std::array<char, sizeof(ColorCB)> prevCurveCB = {};
 };

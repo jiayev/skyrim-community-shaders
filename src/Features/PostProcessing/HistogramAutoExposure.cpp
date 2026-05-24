@@ -1,5 +1,6 @@
 #include "HistogramAutoExposure.h"
 
+#include "Menu.h"
 #include "State.h"
 #include "Util.h"
 
@@ -48,6 +49,7 @@ void HistogramAutoExposure::DrawSettings()
 
 	if (ImGui::CollapsingHeader("Histogram", ImGuiTreeNodeFlags_DefaultOpen)) {
 		histogramReadbackRequested = true;
+		histogramReadbackRequestFrame = ImGui::GetFrameCount();
 
 		constexpr float kMinLogLum = -8.f;
 		constexpr float kMaxLogLum = 13.f;
@@ -263,6 +265,14 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 	context->CSSetConstantBuffers(1, 1, &cb);
 	state->BeginPerfEvent("Histogram Auto Exposure");
 
+	const bool histogramReadbackActive =
+		Menu::GetSingleton()->IsEnabled &&
+		histogramReadbackRequested &&
+		ImGui::GetCurrentContext() &&
+		histogramReadbackRequestFrame >= ImGui::GetFrameCount() - 1;
+	if (!histogramReadbackActive)
+		histogramReadbackRequested = false;
+
 	{
 		state->BeginPerfEvent("Calculate Histogram");
 		srvs[0] = inout_tex.srv;
@@ -289,7 +299,7 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 
 		context->Dispatch(dispatchX, dispatchY, 1);
 
-		if (histogramReadbackRequested && histogramStagingBuffer) {
+		if (histogramReadbackActive && histogramStagingBuffer) {
 			uavs.fill(nullptr);
 			context->CSSetUnorderedAccessViews(0, (UINT)uavs.size(), uavs.data(), nullptr);
 
@@ -322,7 +332,7 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 
 	// Readback histogram and adaptation data when the histogram panel is open.
 	// histogramStagingBuffer was copied before CS_Average cleared the GPU histogram.
-	if (histogramReadbackRequested && histogramStagingBuffer) {
+	if (histogramReadbackActive && histogramStagingBuffer) {
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		if (SUCCEEDED(context->Map(histogramStagingBuffer.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
 			memcpy(histogramData.data(), mapped.pData, sizeof(uint32_t) * 256);
