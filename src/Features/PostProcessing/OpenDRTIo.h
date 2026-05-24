@@ -1,5 +1,7 @@
 #pragma once
 
+#include "OpenDRT.h"
+
 // Helper structs for JSON serialization (split due to macro limitations)
 struct OpenDRTSettingsPart1
 {
@@ -81,6 +83,7 @@ struct OpenDRTSettingsPart2
 	float hs_y = 0.0f;
 	float hs_y_rng = 1.0f;
 };
+static_assert(sizeof(OpenDRTSettingsPart1) + sizeof(OpenDRTSettingsPart2) == sizeof(OpenDRTSettings));
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	OpenDRTSettingsPart1,
