@@ -1932,7 +1932,8 @@ void Upscaling::CopySharedD3D12Resources()
 	}
 
 	// Copy Reactive Mask
-	context->CopyResource(sharedResources.reactiveMask->resource11, reactiveMaskTexture->resource.get());
+	if (upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kDLSS_RR || upscaleMethod == UpscaleMethod::kFSR)
+		context->CopyResource(sharedResources.reactiveMask->resource11, reactiveMaskTexture->resource.get());
 
 	// Depth
 	{
