@@ -2361,8 +2361,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 			if (dynamicCubemap) {
 				float4 envColorBase = TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 15);
+				bool usingDynamicCubemap = envColorBase.a < 1.0;
 
-				if (envColorBase.a < 1.0) {
+				if (usingDynamicCubemap) {
 					material.F0 = Color::SkyrimGammaToLinear(envColorBase.rgb);
 					material.Roughness = envColorBase.a;
 				} else {
@@ -2400,8 +2401,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 					if (!complexMaterial) {
 #				endif
 						material.Roughness = lerp(originRoughness, material.Roughness, envMask);
-						material.F0 = saturate(material.F0 + envMask * material.BaseColor);
-						material.BaseColor = lerp(material.BaseColor, 0, envMask);
+#				if !defined(EYE)
+						if (!usingDynamicCubemap) {
+							material.F0 = saturate(material.F0 + envMask * material.BaseColor);
+							material.BaseColor = lerp(material.BaseColor, 0, envMask);
+						}
+#				endif
 #				if defined(EMAT)
 					}
 #				endif
