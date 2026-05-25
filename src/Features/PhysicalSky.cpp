@@ -628,7 +628,8 @@ void PhysicalSky::CompileShaders()
 
 bool PhysicalSky::ShadersOK()
 {
-	return csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum && csShadowAccumHalfRes;
+	return csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum && csShadowAccumHalfRes &&
+	       texTrLut && texSvLut && texApLut && texApShadow;
 }
 
 void PhysicalSky::Reset()
