@@ -4,6 +4,7 @@
 
 #include "BackgroundBlur.h"
 #include "Fonts.h"
+#include "I18n/I18n.h"
 
 #include <algorithm>
 #include <atomic>
@@ -359,6 +360,91 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 	cachedFontSize = fontSize;
 	const_cast<Menu&>(menu).GetSettings().Theme.FontName = menu.cachedFontName;
 	const_cast<Menu&>(menu).cachedFontSignature = const_cast<Menu&>(menu).BuildFontSignature(fontSize);
+
+	// ─── CJK Font Merging ────────────────────────────────────────────────────────
+	// When the current locale requires CJK glyphs, merge a CJK font into every
+	// loaded atlas font so that Chinese/Japanese/Korean characters render correctly.
+	//
+	// ImGui MergeMode: merges into the LAST non-merge font added to the atlas.
+	// Since all role fonts are already added, we need to re-add them with CJK merged.
+	// Strategy: clear atlas, re-add each role font followed by its CJK merge.
+	{
+		auto locale = I18n::GetSingleton()->GetCurrentLocale();
+		bool needsCJK = (locale.starts_with("zh") || locale == "ja" || locale == "ko");
+
+		if (needsCJK) {
+			auto cjkFontPath = fontsRoot / "SourceHanSansSC-Regular.otf";
+			if (std::filesystem::exists(cjkFontPath)) {
+				const ImWchar* glyphRanges = nullptr;
+				if (locale.starts_with("zh")) {
+					glyphRanges = io.Fonts->GetGlyphRangesChineseFull();
+				} else if (locale == "ja") {
+					glyphRanges = io.Fonts->GetGlyphRangesJapanese();
+				} else if (locale == "ko") {
+					glyphRanges = io.Fonts->GetGlyphRangesKorean();
+				}
+
+				if (glyphRanges) {
+					// Clear and rebuild entire atlas with CJK merged into each font
+					io.Fonts->Clear();
+
+					// Track unique (file, size) pairs to avoid duplicate atlas entries
+					std::unordered_map<std::string, ImFont*> cjkAtlasCache;
+
+					for (size_t i = 0; i < static_cast<size_t>(Menu::FontRole::Count); ++i) {
+						float roleSize = menu.cachedFontPixelSizesByRole[i];
+						std::string roleFile = const_cast<Menu&>(menu).cachedFontFilesByRole[i];
+
+						if (roleFile.empty()) {
+							roleFile = Menu::GetDefaultFontRole(static_cast<Menu::FontRole>(i)).File;
+						}
+
+						auto fontPath = fontsRoot / roleFile;
+						std::string cacheKey = std::format("{}|{}", roleFile, static_cast<int>(roleSize));
+
+						auto cached = cjkAtlasCache.find(cacheKey);
+						if (cached != cjkAtlasCache.end()) {
+							// Reuse previously loaded font (same file+size)
+							menu.loadedFontRoles[i] = cached->second;
+						} else {
+							// Add base font
+							ImFontConfig baseCfg = font_config;
+							ImFont* baseFont = nullptr;
+
+							if (std::filesystem::exists(fontPath)) {
+								baseFont = io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(), roleSize, &baseCfg);
+							}
+
+							if (!baseFont) {
+								baseFont = io.Fonts->AddFontDefault();
+							}
+
+							// Immediately merge CJK glyphs into this font
+							ImFontConfig mergeCfg;
+							mergeCfg.MergeMode = true;
+							mergeCfg.OversampleH = Constants::FCONF_OVERSAMPLE_H;
+							mergeCfg.OversampleV = Constants::FCONF_OVERSAMPLE_V;
+							mergeCfg.PixelSnapH = Constants::FCONF_PIXELSNAP_H;
+							mergeCfg.GlyphRanges = glyphRanges;
+							io.Fonts->AddFontFromFileTTF(cjkFontPath.string().c_str(), roleSize, &mergeCfg);
+
+							menu.loadedFontRoles[i] = baseFont;
+							cjkAtlasCache.emplace(cacheKey, baseFont);
+						}
+					}
+
+					// Update default font pointer
+					bodyFont = menu.loadedFontRoles[static_cast<size_t>(Menu::FontRole::Body)];
+					io.FontDefault = bodyFont;
+
+					logger::info("[I18n] Rebuilt font atlas with CJK glyphs for locale '{}'", locale);
+				}
+			} else {
+				logger::warn("[I18n] CJK locale '{}' active but font not found: {}",
+					locale, cjkFontPath.string());
+			}
+		}
+	}
 
 	// Build the font atlas - this bakes all fonts into the texture
 	if (!io.Fonts->Build()) {

@@ -105,6 +105,15 @@ public:
 	/** Reload translation files from disk (useful during development). */
 	void Reload();
 
+	/**
+	 * Detect the system UI language and return the best matching available locale.
+	 * Uses Windows GetUserDefaultUILanguage() to determine the system language,
+	 * then matches against available translation files.
+	 *
+	 * @return Best matching locale code (e.g. "zh_CN", "ja", "de"), or "en" if no match.
+	 */
+	std::string DetectSystemLocale() const;
+
 private:
 	I18n() = default;
 

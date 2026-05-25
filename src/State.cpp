@@ -536,6 +536,14 @@ void State::LoadFromJson(nlohmann::json& settings)
 			if (locale != i18n->GetCurrentLocale()) {
 				i18n->SetLocale(locale);
 			}
+		} else {
+			// No saved language preference — auto-detect from system locale on first launch
+			auto* i18n = I18n::GetSingleton();
+			auto detected = i18n->DetectSystemLocale();
+			if (detected != "en" && detected != i18n->GetCurrentLocale()) {
+				i18n->SetLocale(detected);
+				logger::info("[I18n] Auto-detected system locale: '{}'", detected);
+			}
 		}
 	}
 

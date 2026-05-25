@@ -1,5 +1,6 @@
 #include "I18n.h"
 
+#include <Windows.h>
 #include <fstream>
 
 #include "Utils/FileSystem.h"
@@ -302,4 +303,89 @@ std::string I18n::SubstitutePlaceholders(const std::string& tmpl,
 	}
 
 	return result;
+}
+
+std::string I18n::DetectSystemLocale() const
+{
+	// Get the Windows UI language (LANGID = primary + sublanguage)
+	LANGID langId = GetUserDefaultUILanguage();
+	WORD primary = PRIMARYLANGID(langId);
+	WORD sub = SUBLANGID(langId);
+
+	// Map Windows LANG_* constants to our locale codes
+	std::string detected;
+	switch (primary) {
+	case LANG_CHINESE:
+		// Distinguish Simplified vs Traditional
+		if (sub == SUBLANG_CHINESE_SIMPLIFIED || sub == SUBLANG_CHINESE_SINGAPORE) {
+			detected = "zh_CN";
+		} else {
+			detected = "zh_TW";
+		}
+		break;
+	case LANG_JAPANESE:
+		detected = "ja";
+		break;
+	case LANG_KOREAN:
+		detected = "ko";
+		break;
+	case LANG_GERMAN:
+		detected = "de";
+		break;
+	case LANG_FRENCH:
+		detected = "fr";
+		break;
+	case LANG_SPANISH:
+		detected = "es";
+		break;
+	case LANG_PORTUGUESE:
+		if (sub == SUBLANG_PORTUGUESE_BRAZILIAN) {
+			detected = "pt_BR";
+		} else {
+			detected = "pt";
+		}
+		break;
+	case LANG_RUSSIAN:
+		detected = "ru";
+		break;
+	case LANG_ITALIAN:
+		detected = "it";
+		break;
+	case LANG_POLISH:
+		detected = "pl";
+		break;
+	case LANG_TURKISH:
+		detected = "tr";
+		break;
+	case LANG_THAI:
+		detected = "th";
+		break;
+	case LANG_VIETNAMESE:
+		detected = "vi";
+		break;
+	case LANG_UKRAINIAN:
+		detected = "uk";
+		break;
+	default:
+		detected = "en";
+		break;
+	}
+
+	// Check if the detected locale has a translation file available
+	std::shared_lock lock(mutex_);
+	for (const auto& [code, name] : availableLocales_) {
+		if (code == detected) {
+			return detected;
+		}
+	}
+
+	// Try matching just the primary language prefix (e.g. "zh" matches "zh_CN")
+	std::string prefix = detected.substr(0, 2);
+	for (const auto& [code, name] : availableLocales_) {
+		if (code.starts_with(prefix)) {
+			return code;
+		}
+	}
+
+	return "en";
 }

@@ -2,9 +2,12 @@
     "_meta": {
         "language": "简体中文",
         "locale": "zh_CN",
-        "auto_generated": true,
-        "generator": "tools/extract-i18n.py",
-        "note": "DO NOT EDIT MANUALLY. Run: python tools/extract-i18n.py --write"
+        "version": "1.0.0",
+        "authors": ["Community Shaders Team"],
+        "fontHint": {
+            "file": "SourceHanSansSC-Regular.otf",
+            "glyphRanges": "ChineseFull"
+        }
     },
     "common.active": "激活",
     "common.inactive": "未激活",
