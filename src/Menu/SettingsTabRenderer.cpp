@@ -9,6 +9,7 @@
 #include "Features/VR.h"
 #include "Fonts.h"
 #include "Globals.h"
+#include "I18n/I18n.h"
 #include "IconLoader.h"
 #include "Menu.h"
 #include "ShaderCache.h"
@@ -408,6 +409,39 @@ void SettingsTabRenderer::RenderBehaviorTab()
 	if (BeginTabItemWithFont("Behavior", Menu::FontRole::Heading)) {
 		auto& themeSettings = globals::menu->GetSettings().Theme;
 		RenderSaveInfoText();
+
+		SeparatorTextWithFont("Language", Menu::FontRole::Subheading);
+
+		{
+			auto* i18n = I18n::GetSingleton();
+			auto locales = i18n->GetAvailableLocales();
+			auto currentLocale = i18n->GetCurrentLocale();
+
+			// Find the display name for the current locale
+			std::string currentDisplayName = currentLocale;
+			for (const auto& [code, name] : locales) {
+				if (code == currentLocale) {
+					currentDisplayName = name;
+					break;
+				}
+			}
+
+			if (ImGui::BeginCombo(T("menu.settings.language", "Language"), currentDisplayName.c_str())) {
+				for (const auto& [code, name] : locales) {
+					bool isSelected = (code == currentLocale);
+					if (ImGui::Selectable(name.c_str(), isSelected)) {
+						i18n->SetLocale(code);
+					}
+					if (isSelected) {
+						ImGui::SetItemDefaultFocus();
+					}
+				}
+				ImGui::EndCombo();
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("%s", T("menu.settings.language_tooltip", "Select the display language for the Community Shaders interface."));
+			}
+		}
 
 		SeparatorTextWithFont("UI Behavior", Menu::FontRole::Subheading);
 

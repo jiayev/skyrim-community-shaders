@@ -16,6 +16,7 @@
 #include "Features/VRStereoOptimizations.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WeatherEditor.h"
+#include "I18n/I18n.h"
 #include "Menu.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
@@ -445,6 +446,7 @@ void State::SaveToJson(nlohmann::json& settings)
 	general["Enable Disk Cache"] = shaderCache->IsDiskCache();
 	general["Skip Unchanged Shaders"] = shaderCache->IsSkipUnchangedShaders();
 	general["Enable Async"] = shaderCache->IsAsync();
+	general["Language"] = I18n::GetSingleton()->GetCurrentLocale();
 
 	settings["General"] = general;
 
@@ -526,6 +528,15 @@ void State::LoadFromJson(nlohmann::json& settings)
 			shaderCache->SetSkipUnchangedShaders(general["Skip Unchanged Shaders"]);
 		if (general.contains("Enable Async") && general["Enable Async"].is_boolean())
 			shaderCache->SetAsync(general["Enable Async"]);
+
+		// Load i18n locale preference
+		if (general.contains("Language") && general["Language"].is_string()) {
+			auto locale = general["Language"].get<std::string>();
+			auto* i18n = I18n::GetSingleton();
+			if (locale != i18n->GetCurrentLocale()) {
+				i18n->SetLocale(locale);
+			}
+		}
 	}
 
 	if (settings.contains("Replace Original Shaders") && settings["Replace Original Shaders"].is_object()) {
