@@ -1,5 +1,6 @@
 #include "EditorWindow.h"
 
+#include "../I18n/I18n.h"
 #include "Features/HDRDisplay.h"
 #include "Features/Upscaling.h"
 #include "Features/WeatherEditor.h"
@@ -13,6 +14,8 @@
 #include "Weather/LightingTemplateWidget.h"
 #include "WeatherUtils.h"
 #include "imgui_internal.h"
+
+#define I18N_KEY_PREFIX "weather_editor."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteColorEntry, r, g, b, useCount, lastUsedTime, isFavorite)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteFavoriteColor, hasValue, r, g, b)
@@ -117,7 +120,7 @@ bool IconButton(const char* label, bool filled, const char* iconType)
 
 namespace
 {
-	constexpr const char* kFilterColumnNames[] = { "All", "Editor ID", "Form ID", "File", "Status" };
+	const char* kFilterColumnNames[] = { T(TKEY("filter_all"), "All"), T(TKEY("filter_editor_id"), "Editor ID"), T(TKEY("filter_form_id"), "Form ID"), T(TKEY("filter_file"), "File"), T(TKEY("filter_status"), "Status") };
 }  // namespace
 
 void EditorWindow::ResetObjectsFilter()
@@ -180,7 +183,7 @@ std::string EditorWindow::ResolveEditorId(RE::TESForm* form, const WidgetVec& wi
 
 void EditorWindow::ShowObjectsWindow()
 {
-	Util::BeginWithRoundedClose("Weather and Lighting Browser", nullptr);
+	Util::BeginWithRoundedClose(T(TKEY("weather_lighting_browser"), "Weather and Lighting Browser"), nullptr);
 
 	// Reset filter state when the user switches categories so stale column
 	// selections (e.g. Status) don't hide all items in the new category.
@@ -193,8 +196,8 @@ void EditorWindow::ShowObjectsWindow()
 	if (ImGui::BeginTable("ObjectTable", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInner)) {
 		// Fixed categories column, objects column fills remaining width
 		const float categoriesWidth = 180.0f * Util::GetUIScale();
-		ImGui::TableSetupColumn("Categories", ImGuiTableColumnFlags_WidthFixed, categoriesWidth);
-		ImGui::TableSetupColumn("Objects", ImGuiTableColumnFlags_WidthStretch);
+		ImGui::TableSetupColumn(T(TKEY("categories"), "Categories"), ImGuiTableColumnFlags_WidthFixed, categoriesWidth);
+		ImGui::TableSetupColumn(T(TKEY("objects"), "Objects"), ImGuiTableColumnFlags_WidthStretch);
 
 		ImGui::TableNextRow();
 
@@ -207,13 +210,23 @@ void EditorWindow::ShowObjectsWindow()
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
 		ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4());
 		if (ImGui::BeginListBox("##CategoriesList", { -FLT_MIN, -FLT_MIN })) {
-			ImGui::Text("Categories");
+			ImGui::Text("%s", T(TKEY("categories"), "Categories"));
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();
 
 			// List of categories
-			const char* categories[] = { "Weather", "ImageSpace", "Lighting Template", "Cell Lighting", "Volumetric Lighting", "Shader Particle Geometry", "Lens Flare", "Visual Effect", "Interior Only" };
+			const char* categories[] = {
+				T(TKEY("category_weather"), "Weather"),
+				T(TKEY("category_imagespace"), "ImageSpace"),
+				T(TKEY("category_lighting_template"), "Lighting Template"),
+				T(TKEY("category_cell_lighting"), "Cell Lighting"),
+				T(TKEY("category_volumetric_lighting"), "Volumetric Lighting"),
+				T(TKEY("category_shader_particle"), "Shader Particle Geometry"),
+				T(TKEY("category_lens_flare"), "Lens Flare"),
+				T(TKEY("category_visual_effect"), "Visual Effect"),
+				T(TKEY("category_interior_only"), "Interior Only")
+			};
 			for (int i = 0; i < IM_ARRAYSIZE(categories); ++i) {
 				// Highlight the selected category
 				if (ImGui::Selectable(categories[i], m_selectedCategory == categories[i])) {
@@ -260,7 +273,8 @@ void EditorWindow::ShowObjectsWindow()
 			};
 
 			// Build active records for the current category tab
-			struct ActiveRecord {
+			struct ActiveRecord
+			{
 				std::string label;
 				std::string suffix;
 				RE::FormID formId;
@@ -285,15 +299,17 @@ void EditorWindow::ShowObjectsWindow()
 				};
 
 				auto addSingle = [&](RE::TESForm* form, const WidgetVec& widgets, std::string suffix = "") {
-					if (!form) return;
+					if (!form)
+						return;
 					auto id = form->GetFormID();
 					activeRecords.push_back({ ResolveEditorId(form, widgets), std::move(suffix), id, openByFormId(id, &widgets) });
 				};
 
-				auto addTOD = [&](auto* (&fields)[RE::TESWeather::ColorTimes::kTotal], const WidgetVec& widgets) {
+				auto addTOD = [&](auto*(&fields)[RE::TESWeather::ColorTimes::kTotal], const WidgetVec& widgets) {
 					for (int tod = 0; tod < RE::TESWeather::ColorTimes::kTotal; ++tod) {
 						auto* form = fields[tod];
-						if (!form) continue;
+						if (!form)
+							continue;
 						auto id = form->GetFormID();
 						bool already = std::any_of(activeRecords.begin(), activeRecords.end(),
 							[&](const ActiveRecord& r) { return r.formId == id; });
@@ -303,7 +319,8 @@ void EditorWindow::ShowObjectsWindow()
 				};
 
 				auto addWeather = [&](RE::TESWeather* weatherRecord, std::string suffix = "") {
-					if (!weatherRecord) return;
+					if (!weatherRecord)
+						return;
 					auto id = weatherRecord->GetFormID();
 					activeRecords.push_back({ ResolveEditorId(weatherRecord, weatherWidgets), std::move(suffix), id, openByFormId(id, &weatherWidgets) });
 				};
@@ -313,7 +330,8 @@ void EditorWindow::ShowObjectsWindow()
 					if (sky && sky->lastWeather != weather)
 						addWeather(sky->lastWeather, "transitioning");
 				} else if (m_selectedCategory == "ImageSpace") {
-					if (weather) addTOD(weather->imageSpaces, imageSpaceWidgets);
+					if (weather)
+						addTOD(weather->imageSpaces, imageSpaceWidgets);
 				} else if (m_selectedCategory == "Lighting Template") {
 					auto* player = RE::PlayerCharacter::GetSingleton();
 					if (player && player->parentCell)
@@ -339,13 +357,17 @@ void EditorWindow::ShowObjectsWindow()
 							} });
 					}
 				} else if (m_selectedCategory == "Volumetric Lighting") {
-					if (weather) addTOD(weather->volumetricLighting, volumetricLightingWidgets);
+					if (weather)
+						addTOD(weather->volumetricLighting, volumetricLightingWidgets);
 				} else if (m_selectedCategory == "Shader Particle Geometry") {
-					if (weather) addSingle(weather->precipitationData, precipitationWidgets);
+					if (weather)
+						addSingle(weather->precipitationData, precipitationWidgets);
 				} else if (m_selectedCategory == "Lens Flare") {
-					if (weather) addSingle(weather->sunGlareLensFlare, lensFlareWidgets);
+					if (weather)
+						addSingle(weather->sunGlareLensFlare, lensFlareWidgets);
 				} else if (m_selectedCategory == "Visual Effect") {
-					if (weather) addSingle(weather->referenceEffect, referenceEffectWidgets);
+					if (weather)
+						addSingle(weather->referenceEffect, referenceEffectWidgets);
 				}
 
 				// Fall back to current weather when the active category has no active record
@@ -360,7 +382,7 @@ void EditorWindow::ShowObjectsWindow()
 				const auto& theme = Menu::GetSingleton()->GetTheme();
 
 				ImGui::PushStyleColor(ImGuiCol_Text, theme.StatusPalette.RestartNeeded);
-				ImGui::Text("Active:");
+				ImGui::Text("%s", T(TKEY("active"), "Active:"));
 				ImGui::PopStyleColor();
 				ImGui::SameLine();
 				const float recordX = ImGui::GetCursorPosX();
@@ -436,7 +458,7 @@ void EditorWindow::ShowObjectsWindow()
 				m_showOnlyFavorites = !m_showOnlyFavorites;
 			}
 			ImGui::SameLine();
-			ImGui::Text("Favorites");
+			ImGui::Text("%s", T(TKEY("favorites"), "Favorites"));
 
 			ImGui::SameLine();
 			ImGui::Dummy(filterSpacer);
@@ -445,13 +467,13 @@ void EditorWindow::ShowObjectsWindow()
 				m_showOnlyFlagged = !m_showOnlyFlagged;
 			}
 			ImGui::SameLine();
-			ImGui::Text("Flagged");
+			ImGui::Text("%s", T(TKEY("flagged"), "Flagged"));
 
 			// Show recent widgets section for current category
 			auto recentIt = settings.recentWidgets.find(m_selectedCategory);
 			if (recentIt != settings.recentWidgets.end() && !recentIt->second.empty()) {
 				ImGui::Spacing();
-				ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "Recent:");
+				ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("recent"), "Recent:"));
 				ImGui::SameLine();
 				for (size_t i = 0; i < std::min(size_t(5), recentIt->second.size()); ++i) {
 					if (i > 0)
@@ -485,12 +507,12 @@ void EditorWindow::ShowObjectsWindow()
 
 			// Create a table for the right column with "Name" and "ID" headers. Different weights to prevent truncation.
 			if (ImGui::BeginTable("DetailsTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Sortable)) {
-				ImGui::TableSetupColumn("Fav", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, 38.0f * scale, ColFav);  // Favorite indicator
-				ImGui::TableSetupColumn("Editor ID", ImGuiTableColumnFlags_WidthStretch, 3.5f, ColEditorID);                             // Largest - weather/template names
-				ImGui::TableSetupColumn("Form ID", ImGuiTableColumnFlags_WidthFixed, 90.0f * scale, ColFormID);                          // Fixed - 8 hex chars
-				ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch, 2.0f, ColFile);                                      // Medium - plugin names
-				ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 1.5f, ColStatus);                                  // Smaller - status text
-				ImGui::TableSetupColumn("json", ImGuiTableColumnFlags_WidthFixed, 55.0f * scale, ColJson);                               // JSON file / delete
+				ImGui::TableSetupColumn(T(TKEY("fav"), "Fav"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, 38.0f * scale, ColFav);  // Favorite indicator
+				ImGui::TableSetupColumn(T(TKEY("editor_id"), "Editor ID"), ImGuiTableColumnFlags_WidthStretch, 3.5f, ColEditorID);                       // Largest - weather/template names
+				ImGui::TableSetupColumn(T(TKEY("form_id"), "Form ID"), ImGuiTableColumnFlags_WidthFixed, 90.0f * scale, ColFormID);                      // Fixed - 8 hex chars
+				ImGui::TableSetupColumn(T(TKEY("file"), "File"), ImGuiTableColumnFlags_WidthStretch, 2.0f, ColFile);                                     // Medium - plugin names
+				ImGui::TableSetupColumn(T(TKEY("status"), "Status"), ImGuiTableColumnFlags_WidthStretch, 1.5f, ColStatus);                               // Smaller - status text
+				ImGui::TableSetupColumn(T(TKEY("json"), "json"), ImGuiTableColumnFlags_WidthFixed, 55.0f * scale, ColJson);                              // JSON file / delete
 
 				ImGui::TableHeadersRow();
 
@@ -587,7 +609,7 @@ void EditorWindow::ShowObjectsWindow()
 								pendingDeleteWidget = widget;
 								pendingDeletePopupRequested = true;
 							}
-							Util::AddTooltip("Delete JSON file");
+							Util::AddTooltip(T(TKEY("delete_json_file"), "Delete JSON file"));
 						}
 					}
 				};
@@ -653,7 +675,7 @@ void EditorWindow::ShowObjectsWindow()
 
 							// Status column
 							ImGui::TableNextColumn();
-							ImGui::Text("Interior Cell");
+							ImGui::Text("%s", T(TKEY("interior_cell"), "Interior Cell"));
 
 							// json column (empty for cells - no standalone json)
 							ImGui::TableNextColumn();
@@ -662,8 +684,8 @@ void EditorWindow::ShowObjectsWindow()
 							ImGui::TableNextRow();
 							ImGui::TableSetColumnIndex(1);
 							ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Warning, "Cell Lighting is only available for interior cells.");
-							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Disable, "You are currently in an exterior cell.");
+							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Warning, "%s", T(TKEY("cell_lighting_interior_only"), "Cell Lighting is only available for interior cells."));
+							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Disable, "%s", T(TKEY("currently_exterior_cell"), "You are currently in an exterior cell."));
 							ImGui::PopTextWrapPos();
 						}
 					} else {
@@ -671,7 +693,7 @@ void EditorWindow::ShowObjectsWindow()
 						ImGui::TableNextRow();
 						ImGui::TableSetColumnIndex(1);
 						ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-						ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Error, "Player cell not available.");
+						ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Error, "%s", T(TKEY("player_cell_unavailable"), "Player cell not available."));
 						ImGui::PopTextWrapPos();
 					}
 				}
@@ -773,7 +795,7 @@ void EditorWindow::ShowObjectsWindow()
 							}
 						}
 
-						if (ImGui::MenuItem("Remove")) {
+						if (ImGui::MenuItem(T(TKEY("remove"), "Remove"))) {
 							markedRecords.erase(editorLabel);
 							Save();
 						}
@@ -833,7 +855,7 @@ void EditorWindow::ShowObjectsWindow()
 
 void EditorWindow::ShowViewportWindow()
 {
-	Util::BeginWithRoundedClose("Viewport", nullptr, ImGuiWindowFlags_NoFocusOnAppearing);
+	Util::BeginWithRoundedClose(T(TKEY("viewport"), "Viewport"), nullptr, ImGuiWindowFlags_NoFocusOnAppearing);
 
 	// The size of the image in ImGui																														   // Get the available space in the current window
 	ImVec2 availableSpace = ImGui::GetContentRegionAvail();
@@ -856,7 +878,7 @@ void EditorWindow::ShowViewportWindow()
 	if (tempTexture && tempTexture->srv) {
 		ImGui::Image((void*)tempTexture->srv.get(), imageSize);
 	} else {
-		ImGui::TextDisabled("Viewport unavailable");
+		ImGui::TextDisabled("%s", T(TKEY("viewport_unavailable"), "Viewport unavailable"));
 	}
 
 	ImGui::End();
@@ -911,13 +933,13 @@ void EditorWindow::RenderUI()
 				ImVec2(window->ClipRect.Max.x, window->ClipRect.Max.y - borderInset), true);
 		}
 
-		if (ImGui::BeginMenu("File")) {
-			if (ImGui::MenuItem("Save All Open Widgets", "Ctrl+S")) {
+		if (ImGui::BeginMenu(T(TKEY("file"), "File"))) {
+			if (ImGui::MenuItem(T(TKEY("save_all_open_widgets"), "Save All Open Widgets"), "Ctrl+S")) {
 				SaveAll();
 			}
 
 			// Save individual widgets submenu
-			if (ImGui::BeginMenu("Save")) {
+			if (ImGui::BeginMenu(T(TKEY("save"), "Save"))) {
 				bool hasOpen = false;
 				for (auto* collection : GetWidgetCollections())
 					hasOpen = WidgetFactory::DrawSaveWidgetMenuItems(*collection, hasOpen);
@@ -929,7 +951,7 @@ void EditorWindow::RenderUI()
 				}
 
 				if (!hasOpen)
-					ImGui::TextDisabled("No open widgets");
+					ImGui::TextDisabled("%s", T(TKEY("no_open_widgets"), "No open widgets"));
 
 				ImGui::EndMenu();
 			}
@@ -939,12 +961,12 @@ void EditorWindow::RenderUI()
 				WidgetFactory::DrawCloseAllMenuItem(*collection);
 			ImGui::EndMenu();
 		}
-		if (ImGui::BeginMenu("Settings")) {
-			if (ImGui::MenuItem("General Settings")) {
+		if (ImGui::BeginMenu(T(TKEY("settings"), "Settings"))) {
+			if (ImGui::MenuItem(T(TKEY("general_settings"), "General Settings"))) {
 				showSettingsWindow = true;
 				settingsSelectedCategory = "General";
 			}
-			if (ImGui::MenuItem("Editor Flags")) {
+			if (ImGui::MenuItem(T(TKEY("editor_flags"), "Editor Flags"))) {
 				showSettingsWindow = true;
 				settingsSelectedCategory = "Flags";
 			}
@@ -953,7 +975,7 @@ void EditorWindow::RenderUI()
 			// Current cell lighting
 			auto player = RE::PlayerCharacter::GetSingleton();
 			if (player && player->parentCell && player->parentCell->IsInteriorCell()) {
-				if (ImGui::MenuItem("Edit Current Cell Lighting")) {
+				if (ImGui::MenuItem(T(TKEY("edit_current_cell_lighting"), "Edit Current Cell Lighting"))) {
 					// Check if widget already exists
 					bool found = false;
 					if (currentCellLightingWidget && currentCellLightingWidget->cell == player->parentCell) {
@@ -971,45 +993,45 @@ void EditorWindow::RenderUI()
 				}
 			} else {
 				ImGui::BeginDisabled();
-				ImGui::MenuItem("Edit Current Cell Lighting");
+				ImGui::MenuItem(T(TKEY("edit_current_cell_lighting"), "Edit Current Cell Lighting"));
 				ImGui::EndDisabled();
-				Util::AddTooltip("Only available in interior cells", ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+				Util::AddTooltip(T(TKEY("interior_only_available"), "Only available in interior cells"), ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 			}
 
 			ImGui::Separator();
 
-			if (ImGui::Checkbox("Auto-Apply Changes", &settings.autoApplyChanges)) {
+			if (ImGui::Checkbox(T(TKEY("auto_apply_changes"), "Auto-Apply Changes"), &settings.autoApplyChanges)) {
 				Save();
 			}
-			Util::AddTooltip("Automatically apply weather changes to the game as you edit");
+			Util::AddTooltip(T(TKEY("auto_apply_changes_tooltip"), "Automatically apply weather changes to the game as you edit"));
 
-			if (ImGui::Checkbox("Enable Inherit From Parent", &settings.enableInheritFromParent)) {
+			if (ImGui::Checkbox(T(TKEY("enable_inherit_from_parent"), "Enable Inherit From Parent"), &settings.enableInheritFromParent)) {
 				Save();
 			}
-			Util::AddTooltip("Show inherit from parent options in weather widgets");
+			Util::AddTooltip(T(TKEY("enable_inherit_tooltip"), "Show inherit from parent options in weather widgets"));
 			ImGui::EndMenu();
 		}
-		if (ImGui::BeginMenu("Window")) {
+		if (ImGui::BeginMenu(T(TKEY("window"), "Window"))) {
 			const bool hdrActive = globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.settings.enableHDR;
 			if (hdrActive)
 				ImGui::BeginDisabled();
-			if (ImGui::Checkbox("Viewport", &settings.showViewport)) {
+			if (ImGui::Checkbox(T(TKEY("viewport"), "Viewport"), &settings.showViewport)) {
 				BackgroundBlur::SetWeatherEditorActive(settings.showViewport);
 				Save();
 			}
 			if (hdrActive) {
 				ImGui::EndDisabled();
-				Util::AddTooltip("Viewport is unavailable when HDR Display is enabled", ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+				Util::AddTooltip(T(TKEY("viewport_unavailable_hdr"), "Viewport is unavailable when HDR Display is enabled"), ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 			}
-			if (ImGui::Checkbox("Palette", &PaletteWindow::GetSingleton()->open)) {
+			if (ImGui::Checkbox(T(TKEY("palette"), "Palette"), &PaletteWindow::GetSingleton()->open)) {
 			}
 
-			if (ImGui::MenuItem("Reset Window Layout")) {
+			if (ImGui::MenuItem(T(TKEY("reset_window_layout"), "Reset Window Layout"))) {
 				resetLayout = true;
 			}
 
 			ImGui::Separator();
-			ImGui::Text("Open Widgets:");
+			ImGui::Text("%s", T(TKEY("open_widgets"), "Open Widgets:"));
 
 			int openCount = 0;
 			for (auto* collection : GetWidgetCollections())
@@ -1022,30 +1044,30 @@ void EditorWindow::RenderUI()
 			}
 
 			if (openCount == 0)
-				ImGui::TextDisabled("No widgets open");
+				ImGui::TextDisabled("%s", T(TKEY("no_widgets_open"), "No widgets open"));
 
 			ImGui::EndMenu();
 		}
-		if (ImGui::BeginMenu("Help")) {
-			ImGui::Text("Weather Editor");
+		if (ImGui::BeginMenu(T(TKEY("help"), "Help"))) {
+			ImGui::Text("%s", T(TKEY("weather_editor"), "Weather Editor"));
 			ImGui::Separator();
-			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "Keyboard Shortcuts:");
-			ImGui::BulletText("Ctrl+F: Focus search");
-			ImGui::BulletText("Ctrl+S: Save all open widgets");
-			ImGui::BulletText("Ctrl+W: Close focused widget");
-			ImGui::BulletText("Enter: Open selected widget");
-			ImGui::BulletText("Esc: Close editor");
+			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("keyboard_shortcuts"), "Keyboard Shortcuts:"));
+			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_f"), "Ctrl+F: Focus search"));
+			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_s"), "Ctrl+S: Save all open widgets"));
+			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_w"), "Ctrl+W: Close focused widget"));
+			ImGui::BulletText("%s", T(TKEY("shortcut_enter"), "Enter: Open selected widget"));
+			ImGui::BulletText("%s", T(TKEY("shortcut_esc"), "Esc: Close editor"));
 			ImGui::Separator();
-			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "Quick Tips:");
-			ImGui::BulletText("Double-click to edit");
-			ImGui::BulletText("Right-click to mark status");
-			ImGui::BulletText("Click star icon to favorite");
-			ImGui::BulletText("Use quick filters for fast sorting");
-			ImGui::BulletText("Auto-Apply updates game live");
-			ImGui::BulletText("Lock weather to prevent changes");
-			ImGui::BulletText("Undo button reverts recent changes (Ctrl+Z)");
+			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("quick_tips"), "Quick Tips:"));
+			ImGui::BulletText("%s", T(TKEY("tip_double_click"), "Double-click to edit"));
+			ImGui::BulletText("%s", T(TKEY("tip_right_click"), "Right-click to mark status"));
+			ImGui::BulletText("%s", T(TKEY("tip_star_favorite"), "Click star icon to favorite"));
+			ImGui::BulletText("%s", T(TKEY("tip_quick_filters"), "Use quick filters for fast sorting"));
+			ImGui::BulletText("%s", T(TKEY("tip_auto_apply"), "Auto-Apply updates game live"));
+			ImGui::BulletText("%s", T(TKEY("tip_lock_weather"), "Lock weather to prevent changes"));
+			ImGui::BulletText("%s", T(TKEY("tip_undo"), "Undo button reverts recent changes (Ctrl+Z)"));
 			ImGui::Separator();
-			ImGui::Text("Total Objects:");
+			ImGui::Text("%s", T(TKEY("total_objects"), "Total Objects:"));
 			ImGui::BulletText("Weathers: %d", (int)weatherWidgets.size());
 			ImGui::BulletText("Lighting: %d", (int)lightingTemplateWidgets.size());
 			ImGui::BulletText("ImageSpaces: %d", (int)imageSpaceWidgets.size());
@@ -1083,7 +1105,7 @@ void EditorWindow::RenderUI()
 				ImGui::PopStyleColor();
 			}
 			ImGui::PopStyleVar(2);
-			Util::AddTooltip(canUndo ? std::format("Undo (Ctrl+Z) - {} states", (int)undoStack.size()).c_str() : "Undo (Ctrl+Z) - No changes to undo");
+			Util::AddTooltip(canUndo ? std::format("Undo (Ctrl+Z) - {} states", (int)undoStack.size()).c_str() : T(TKEY("undo_no_changes"), "Undo (Ctrl+Z) - No changes to undo"));
 		}
 
 		// Right-aligned items — use SetCursorScreenPos to bypass menu bar GroupOffset
@@ -1222,20 +1244,20 @@ void EditorWindow::RenderUI()
 			bool isActive = previewMode == PreviewMode::FreeCamera || previewMode == PreviewMode::FreeCameraLocked;
 			if (DrawToggleIconButton("##FreeCamera", menu->uiIcons.freeCamera.texture, isActive, freeCameraX))
 				EnterPreviewMode(PreviewMode::FreeCamera);
-			Util::AddTooltip(isActive ? "Exit Free Camera" : "Free Camera (scroll to adjust speed)");
+			Util::AddTooltip(isActive ? T(TKEY("exit_free_camera"), "Exit Free Camera") : T(TKEY("free_camera_scroll"), "Free Camera (scroll to adjust speed)"));
 		}
 		if (hasPlayMode) {
 			bool isActive = previewMode == PreviewMode::PlayMode;
 			if (DrawToggleIconButton("##PlayMode", menu->uiIcons.playMode.texture, isActive, playModeX))
 				EnterPreviewMode(PreviewMode::PlayMode);
-			Util::AddTooltip(isActive ? "Exit Play Mode" : "Play Mode - Walk around normally");
+			Util::AddTooltip(isActive ? T(TKEY("exit_play_mode"), "Exit Play Mode") : T(TKEY("play_mode_walk"), "Play Mode - Walk around normally"));
 		}
 
 		if (hasPauseButton) {
 			bool isPaused = IsTimePaused();
 			if (DrawToggleIconButton("##GlobalPauseTime", menu->uiIcons.pauseTime.texture, isPaused, pauseButtonX))
 				TogglePause();
-			Util::AddTooltip(isPaused ? "Resume Time" : "Pause Time");
+			Util::AddTooltip(isPaused ? T(TKEY("resume_time"), "Resume Time") : T(TKEY("pause_time"), "Pause Time"));
 		}
 
 		// Period text and time slider
@@ -1252,7 +1274,7 @@ void EditorWindow::RenderUI()
 		ImGui::SetCursorScreenPos(ImVec2(xButtonX, cursorY));
 		if (Util::ErrorButton("X", ImVec2(closeButtonSize, closeButtonSize)))
 			open = false;
-		Util::AddTooltip("Close Weather Editor (Esc)");
+		Util::AddTooltip(T(TKEY("close_weather_editor"), "Close Weather Editor (Esc)"));
 
 		ImGui::PopClipRect();  // End bottom-border clip rect
 
@@ -1507,16 +1529,16 @@ void EditorWindow::LoadSettings()
 
 void EditorWindow::ShowSettingsWindow()
 {
-	Util::BeginWithRoundedClose("Settings", &showSettingsWindow);
+	Util::BeginWithRoundedClose(T(TKEY("settings"), "Settings"), &showSettingsWindow);
 
 	if (ImGui::BeginTable("SettingsTable", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInner | ImGuiTableFlags_NoHostExtendX)) {
-		ImGui::TableSetupColumn("Options", ImGuiTableColumnFlags_WidthStretch, 0.3f);
+		ImGui::TableSetupColumn(T(TKEY("options"), "Options"), ImGuiTableColumnFlags_WidthStretch, 0.3f);
 		ImGui::TableSetupColumn("##Settings", ImGuiTableColumnFlags_WidthStretch, 0.7f);
 
 		ImGui::TableNextRow();
 
 		ImGui::TableSetColumnIndex(0);
-		const char* options[] = { "General", "Flags" };
+		const char* options[] = { T(TKEY("general"), "General"), T(TKEY("flags"), "Flags") };
 		for (int i = 0; i < IM_ARRAYSIZE(options); ++i) {
 			if (ImGui::Selectable(options[i], settingsSelectedCategory == options[i])) {
 				settingsSelectedCategory = options[i];
@@ -1526,53 +1548,53 @@ void EditorWindow::ShowSettingsWindow()
 		ImGui::TableSetColumnIndex(1);
 
 		if (settingsSelectedCategory == "General") {
-			ImGui::Checkbox("Auto-apply changes", &settings.autoApplyChanges);
-			Util::AddTooltip("Automatically apply changes to weather/lighting when editing");
+			ImGui::Checkbox(T(TKEY("auto_apply_changes"), "Auto-apply changes"), &settings.autoApplyChanges);
+			Util::AddTooltip(T(TKEY("auto_apply_changes_tooltip"), "Automatically apply changes to weather/lighting when editing"));
 
-			ImGui::Checkbox("Use text buttons instead of icons", &settings.useTextButtons);
-			Util::AddTooltip("Display action buttons as text labels instead of icons");
+			ImGui::Checkbox(T(TKEY("use_text_buttons"), "Use text buttons instead of icons"), &settings.useTextButtons);
+			Util::AddTooltip(T(TKEY("text_buttons_tooltip"), "Display action buttons as text labels instead of icons"));
 
-			ImGui::Checkbox("Enable 'Inherit From Parent' feature", &settings.enableInheritFromParent);
-			Util::AddTooltip("Show checkboxes to copy settings from parent weather (editor-only feature)");
+			ImGui::Checkbox(T(TKEY("enable_inherit_feature"), "Enable 'Inherit From Parent' feature"), &settings.enableInheritFromParent);
+			Util::AddTooltip(T(TKEY("enable_inherit_feature_tooltip"), "Show checkboxes to copy settings from parent weather (editor-only feature)"));
 
 			ImGui::Separator();
-			ImGui::TextUnformatted("UI Scale");
+			ImGui::TextUnformatted(T(TKEY("ui_scale"), "UI Scale"));
 			ImGui::Spacing();
 
-			if (ImGui::SliderFloat("Editor UI Scale", &settings.editorUIScale, 0.5f, 2.0f, "%.2f")) {
+			if (ImGui::SliderFloat(T(TKEY("editor_ui_scale"), "Editor UI Scale"), &settings.editorUIScale, 0.5f, 2.0f, "%.2f")) {
 				Save();
 			}
-			Util::AddTooltip("Scale the size of all editor UI elements (0.5 = 50%, 2.0 = 200%)");
+			Util::AddTooltip(T(TKEY("editor_ui_scale_tooltip"), "Scale the size of all editor UI elements (0.5 = 50%, 2.0 = 200%)"));
 
-			if (Util::ButtonWithFlash("Reset to 1.0")) {
+			if (Util::ButtonWithFlash(T(TKEY("reset_to_default"), "Reset to 1.0"))) {
 				settings.editorUIScale = 1.0f;
 				Save();
 			}
 			ImGui::SameLine();
-			Util::AddTooltip("Reset UI scale to default (100%)");
+			Util::AddTooltip(T(TKEY("reset_ui_scale_tooltip"), "Reset UI scale to default (100%)"));
 
 			ImGui::Separator();
-			ImGui::TextUnformatted("Session & History");
+			ImGui::TextUnformatted(T(TKEY("session_history"), "Session & History"));
 			ImGui::Spacing();
 
-			ImGui::SliderInt("Max recent widgets", &settings.maxRecentWidgets, 5, 20);
-			Util::AddTooltip("Maximum number of recent widgets to remember");
+			ImGui::SliderInt(T(TKEY("max_recent_widgets"), "Max recent widgets"), &settings.maxRecentWidgets, 5, 20);
+			Util::AddTooltip(T(TKEY("max_recent_widgets_tooltip"), "Maximum number of recent widgets to remember"));
 
-			if (Util::ButtonWithFlash("Clear Recent History")) {
+			if (Util::ButtonWithFlash(T(TKEY("clear_recent_history"), "Clear Recent History"))) {
 				settings.recentWidgets.clear();
 				Save();
 			}
 			ImGui::SameLine();
-			if (Util::ButtonWithFlash("Clear Favorites")) {
+			if (Util::ButtonWithFlash(T(TKEY("clear_favorites"), "Clear Favorites"))) {
 				settings.favoriteWidgets.clear();
 				Save();
 			}
 
 		} else if (settingsSelectedCategory == "Flags") {
 			if (ImGui::BeginTable("FlagsTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-				ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch);
-				ImGui::TableSetupColumn("Colour", ImGuiTableColumnFlags_WidthStretch);
-				ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 60.0f * Util::GetUIScale());
+				ImGui::TableSetupColumn(T(TKEY("label"), "Label"), ImGuiTableColumnFlags_WidthStretch);
+				ImGui::TableSetupColumn(T(TKEY("colour"), "Colour"), ImGuiTableColumnFlags_WidthStretch);
+				ImGui::TableSetupColumn(T(TKEY("actions"), "Actions"), ImGuiTableColumnFlags_WidthFixed, 60.0f * Util::GetUIScale());
 
 				auto& recordMarkers = settings.recordMarkers;
 
@@ -1664,7 +1686,7 @@ void EditorWindow::ShowSettingsWindow()
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
 
-				if (recordMarkers.size() < maxRecordMarkers && ImGui::Selectable("Add new marker")) {
+				if (recordMarkers.size() < maxRecordMarkers && ImGui::Selectable(T(TKEY("add_new_marker"), "Add new marker"))) {
 					recordMarkers.insert({ std::format("New marker {}", recordMarkers.size()), { 0.5f, 0.5f, 0.5f, 1.0f } });
 					Save();
 				}
@@ -1859,8 +1881,8 @@ void EditorWindow::DrawTimeControls()
 
 	const float framePadX = ImGui::GetStyle().FramePadding.x * 2.0f;
 	const float buttonWidth = std::max({ ImGui::CalcTextSize("Resume Time").x,
-							   ImGui::CalcTextSize("Pause Time").x,
-							   ImGui::CalcTextSize("Reset Speed").x }) +
+								  ImGui::CalcTextSize("Pause Time").x,
+								  ImGui::CalcTextSize("Reset Speed").x }) +
 	                          framePadX;
 	if (ImGui::Button(timePaused ? "Resume Time" : "Pause Time", ImVec2(buttonWidth, 0)))
 		TogglePause();
@@ -2226,3 +2248,5 @@ bool EditorWindow::IsFavorite(const std::string& widgetId) const
 {
 	return std::find(settings.favoriteWidgets.begin(), settings.favoriteWidgets.end(), widgetId) != settings.favoriteWidgets.end();
 }
+
+#undef I18N_KEY_PREFIX

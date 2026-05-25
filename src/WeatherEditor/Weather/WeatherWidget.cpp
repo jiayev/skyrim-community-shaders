@@ -5,12 +5,15 @@
 
 #include "imgui_internal.h"
 
+#include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
 #include "FeatureIssues.h"
 #include "State.h"
 #include "Utils/UI.h"
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
+
+#define I18N_KEY_PREFIX "weather_editor."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::Atmosphere, colorTimes)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::DirectionalColor, max, min)
@@ -127,9 +130,9 @@ void WeatherWidget::DrawWidget()
 		}
 
 		if (editorWindow->settings.enableInheritFromParent) {
-			if (ImGui::BeginCombo("Parent", settings.parent.c_str())) {
+			if (ImGui::BeginCombo(T(TKEY("parent"), "Parent"), settings.parent.c_str())) {
 				// Option for "None"
-				if (ImGui::Selectable("None", parent == nullptr)) {
+				if (ImGui::Selectable(T(TKEY("none"), "None"), parent == nullptr)) {
 					parent = nullptr;
 					settings.parent = "None";
 				}
@@ -158,22 +161,22 @@ void WeatherWidget::DrawWidget()
 			ImGui::TextDisabled("(?)");
 			if (ImGui::IsItemHovered()) {
 				ImGui::BeginTooltip();
-				ImGui::TextUnformatted("Editor-only feature: Set a parent weather to copy settings from.");
-				ImGui::TextUnformatted("Use 'Inherit From Parent' checkboxes to copy specific values.");
-				Util::Text::Warning("Note: This is NOT the same as cell lighting template inheritance.");
+				ImGui::TextUnformatted(T(TKEY("parent_weather_editor_feature"), "Editor-only feature: Set a parent weather to copy settings from."));
+				ImGui::TextUnformatted(T(TKEY("use_inherit_checkboxes"), "Use 'Inherit From Parent' checkboxes to copy specific values."));
+				Util::Text::Warning("%s", T(TKEY("not_same_as_cell_lighting"), "Note: This is NOT the same as cell lighting template inheritance."));
 				ImGui::EndTooltip();
 			}
 
 			if (parent) {
 				ImGui::SameLine();
-				if (Util::ButtonWithFlash("Inherit All")) {
+				if (Util::ButtonWithFlash(T(TKEY("inherit_all"), "Inherit All"))) {
 					InheritAllFromParent();
 				}
-				Util::AddTooltip("Copy all parameter values from parent weather");
+				Util::AddTooltip(T(TKEY("copy_all_from_parent"), "Copy all parameter values from parent weather"));
 
 				if (!parent->IsOpen()) {
 					ImGui::SameLine();
-					if (Util::ButtonWithFlash("Open"))
+					if (Util::ButtonWithFlash(T(TKEY("open"), "Open")))
 						parent->SetOpen(true);
 				}
 			}
@@ -190,7 +193,7 @@ void WeatherWidget::DrawWidget()
 		const ImGuiTabItemFlags featuresFlags = GetTabFlagsForOverride("Features");
 		const ImGuiTabItemFlags recordsFlags = GetTabFlagsForOverride(WeatherTab::kRecords);
 
-		if (ImGui::BeginTabItem(WeatherTab::kBasic, nullptr, basicFlags)) {
+		if (ImGui::BeginTabItem(T(TKEY("basic"), WeatherTab::kBasic), nullptr, basicFlags)) {
 			BeginScrollableContent("##BasicScroll");
 			DrawProperties("Sun", { { "Sun Damage", UINT8_SLIDER } });
 			DrawProperties("Wind", { { "Wind Speed", UINT8_SLIDER }, { "Wind Direction", UINT8_SLIDER }, { "Wind Direction Range", UINT8_SLIDER } });
@@ -202,45 +205,45 @@ void WeatherWidget::DrawWidget()
 			EndScrollableContent();
 			ImGui::EndTabItem();
 		}
-		if (ImGui::BeginTabItem(WeatherTab::kDalc, nullptr, dalcFlags)) {
+		if (ImGui::BeginTabItem(T(TKEY("lighting_dalc"), WeatherTab::kDalc), nullptr, dalcFlags)) {
 			BeginScrollableContent("##DALCScroll");
 			DrawDALCSettings();
 			EndScrollableContent();
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem(WeatherTab::kAtmosphere, nullptr, atmosphereFlags)) {
+		if (ImGui::BeginTabItem(T(TKEY("atmosphere_colors"), WeatherTab::kAtmosphere), nullptr, atmosphereFlags)) {
 			BeginScrollableContent("##AtmosphereScroll");
 			DrawWeatherColorSettings();
 			EndScrollableContent();
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem(WeatherTab::kClouds, nullptr, cloudsFlags)) {
+		if (ImGui::BeginTabItem(T(TKEY("clouds"), WeatherTab::kClouds), nullptr, cloudsFlags)) {
 			BeginScrollableContent("##CloudsScroll");
 			DrawCloudSettings();
 			EndScrollableContent();
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem(WeatherTab::kFog, nullptr, fogFlags)) {
+		if (ImGui::BeginTabItem(T(TKEY("fog"), WeatherTab::kFog), nullptr, fogFlags)) {
 			BeginScrollableContent("##FogScroll");
 			DrawFogSettings();
 			EndScrollableContent();
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem("Features", nullptr, featuresFlags)) {
+		if (ImGui::BeginTabItem(T(TKEY("features"), "Features"), nullptr, featuresFlags)) {
 			BeginScrollableContent("##FeaturesScroll");
 			DrawFeatureSettings();
 			EndScrollableContent();
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem(WeatherTab::kRecords, nullptr, recordsFlags)) {
+		if (ImGui::BeginTabItem(T(TKEY("records"), WeatherTab::kRecords), nullptr, recordsFlags)) {
 			BeginScrollableContent("##RecordsScroll");
 			ImGui::Spacing();
-			ImGui::TextWrapped("Form record references used by this weather.");
+			ImGui::TextWrapped("%s", T(TKEY("form_record_references"), "Form record references used by this weather."));
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();
@@ -287,7 +290,7 @@ void WeatherWidget::DrawWidget()
 					recordRef = parentRef;
 					pendingReinit = true;
 				}
-				Util::AddTooltip(inheritFlag ? "Inheriting from parent" : "Inherit from parent");
+				Util::AddTooltip(inheritFlag ? T(TKEY("inheriting_from_parent"), "Inheriting from parent") : T(TKEY("inherit_from_parent"), "Inherit from parent"));
 				ImGui::SameLine();
 				return inheritFlag;
 			};
@@ -311,12 +314,17 @@ void WeatherWidget::DrawWidget()
 					const bool isInherited = drawInheritCheckbox(inheritKey, recordRefs[i], parentRefs[i]);
 					ImGui::Text("%s:", label.c_str());
 					ImGui::SameLine(todLabelOffset);
-					if (isInherited) PushInheritedStyle();
+					if (isInherited)
+						PushInheritedStyle();
 					if (WeatherUtils::DrawFormPickerCached(pickerId, recordRefs[i], widgets, false, true, pickerWidth)) {
 						pendingReinit = true;
-						if (isInherited) settings.inheritFlags[inheritKey] = false;
+						if (isInherited)
+							settings.inheritFlags[inheritKey] = false;
 					}
-					if (isInherited) { Util::AddTooltip("Inherited from parent weather"); PopInheritedStyle(); }
+					if (isInherited) {
+						Util::AddTooltip(T(TKEY("inherited_from_parent_weather"), "Inherited from parent weather"));
+						PopInheritedStyle();
+					}
 					drawOpenButton(recordRefs[i], widgets, std::format("Open##{}", i), openTooltip);
 
 					if (recordHighlighted)
@@ -337,12 +345,17 @@ void WeatherWidget::DrawWidget()
 				const bool isInherited = drawInheritCheckbox(inheritKey, recordRef, parentRef);
 				ImGui::Text("%s:", valueLabel);
 				ImGui::SameLine(formLabelOffset);
-				if (isInherited) PushInheritedStyle();
+				if (isInherited)
+					PushInheritedStyle();
 				if (WeatherUtils::DrawFormPickerCached(pickerId, recordRef, widgets, false, true, pickerWidth)) {
 					pendingReinit = true;
-					if (isInherited) settings.inheritFlags[inheritKey] = false;
+					if (isInherited)
+						settings.inheritFlags[inheritKey] = false;
 				}
-				if (isInherited) { Util::AddTooltip("Inherited from parent weather"); PopInheritedStyle(); }
+				if (isInherited) {
+					Util::AddTooltip("Inherited from parent weather");
+					PopInheritedStyle();
+				}
 				drawOpenButton(recordRef, widgets, buttonId, openTooltip);
 
 				if (recordHighlighted)
@@ -354,10 +367,10 @@ void WeatherWidget::DrawWidget()
 			auto* parentVolumetricLightingRefs = parentWidget ? parentWidget->settings.volumetricLightingRefs : settings.volumetricLightingRefs;
 			auto* parentPrecipitationData = parentWidget ? parentWidget->settings.precipitationData : settings.precipitationData;
 			auto* parentReferenceEffect = parentWidget ? parentWidget->settings.referenceEffect : settings.referenceEffect;
-			drawTimeRecordSection(WeatherRecord::kImageSpace, WeatherRecord::kImageSpaceIdOffset, WeatherRecord::kImageSpace, settings.imageSpaceRefs, parentImageSpaceRefs, editorWindow->imageSpaceWidgets, "##ImageSpace", "Open this ImageSpace for editing");
-			drawTimeRecordSection(WeatherRecord::kVolumetricLighting, WeatherRecord::kVolumetricLightingIdOffset, "VolumetricLighting", settings.volumetricLightingRefs, parentVolumetricLightingRefs, editorWindow->volumetricLightingWidgets, "##VolumetricLighting", "Open this Volumetric Lighting for editing");
-			drawSingleRecordSection(WeatherRecord::kPrecipitation, WeatherRecord::kPrecipitation, WeatherRecord::kPrecipitation, "Particle Shader", "##Precipitation", settings.precipitationData, parentPrecipitationData, editorWindow->precipitationWidgets, "Open##Precip", "Open this Precipitation for editing");
-			drawSingleRecordSection(WeatherRecord::kVisualEffect, WeatherRecord::kVisualEffect, "ReferenceEffect", WeatherRecord::kVisualEffect, "##ReferenceEffect", settings.referenceEffect, parentReferenceEffect, editorWindow->referenceEffectWidgets, "Open##RefEffect", "Open this Visual Effect for editing");
+			drawTimeRecordSection(WeatherRecord::kImageSpace, WeatherRecord::kImageSpaceIdOffset, WeatherRecord::kImageSpace, settings.imageSpaceRefs, parentImageSpaceRefs, editorWindow->imageSpaceWidgets, "##ImageSpace", T(TKEY("open_imagespace_edit"), "Open this ImageSpace for editing"));
+			drawTimeRecordSection(WeatherRecord::kVolumetricLighting, WeatherRecord::kVolumetricLightingIdOffset, "VolumetricLighting", settings.volumetricLightingRefs, parentVolumetricLightingRefs, editorWindow->volumetricLightingWidgets, "##VolumetricLighting", T(TKEY("open_volumetric_edit"), "Open this Volumetric Lighting for editing"));
+			drawSingleRecordSection(WeatherRecord::kPrecipitation, WeatherRecord::kPrecipitation, WeatherRecord::kPrecipitation, "Particle Shader", "##Precipitation", settings.precipitationData, parentPrecipitationData, editorWindow->precipitationWidgets, "Open##Precip", T(TKEY("open_precipitation_edit"), "Open this Precipitation for editing"));
+			drawSingleRecordSection(WeatherRecord::kVisualEffect, WeatherRecord::kVisualEffect, "ReferenceEffect", WeatherRecord::kVisualEffect, "##ReferenceEffect", settings.referenceEffect, parentReferenceEffect, editorWindow->referenceEffectWidgets, "Open##RefEffect", T(TKEY("open_visual_effect_edit"), "Open this Visual Effect for editing"));
 
 			if (pendingReinit) {
 				ApplyChanges();
@@ -821,12 +834,12 @@ void WeatherWidget::DrawDALCSettings()
 		}
 
 		// Draw with per-parameter inheritance
-		auto drawDalcColor = [&](const char* settingId, const char* label, float3 (&values)[4], bool* inheritFlag = nullptr, float3* parentValues = nullptr) {
+		auto drawDalcColor = [&](const char* settingId, const char* label, float3(&values)[4], bool* inheritFlag = nullptr, float3* parentValues = nullptr) {
 			return DrawIfMatchesSearch(settingId, [&](const char*) {
 				return DrawWithHighlight(settingId, [&]() {
 					return inheritFlag ?
-						TOD::DrawTODColorRow(label, values, *inheritFlag, parentValues) :
-						TOD::DrawTODColorRow(label, values);
+					           TOD::DrawTODColorRow(label, values, *inheritFlag, parentValues) :
+					           TOD::DrawTODColorRow(label, values);
 				});
 			});
 		};
@@ -834,8 +847,8 @@ void WeatherWidget::DrawDALCSettings()
 			return DrawIfMatchesSearch(settingId, [&](const char*) {
 				return DrawWithHighlight(settingId, [&]() {
 					return inheritFlag ?
-						TOD::DrawTODFloatRow(label, values, *inheritFlag, parentValues, 0.0f, 10.0f) :
-						TOD::DrawTODFloatRow(label, values, 0.0f, 10.0f);
+					           TOD::DrawTODFloatRow(label, values, *inheritFlag, parentValues, 0.0f, 10.0f) :
+					           TOD::DrawTODFloatRow(label, values, 0.0f, 10.0f);
 				});
 			});
 		};
@@ -1209,10 +1222,10 @@ void WeatherWidget::DrawFogSettings()
 		ImGui::TableSetColumnIndex(0);
 		ImGui::TableSetColumnIndex(1);
 		ImGui::AlignTextToFramePadding();
-		ImGui::Text("Day");
+		ImGui::Text("%s", T(TKEY("day"), "Day"));
 		ImGui::TableSetColumnIndex(2);
 		ImGui::AlignTextToFramePadding();
-		ImGui::Text("Night");
+		ImGui::Text("%s", T(TKEY("night"), "Night"));
 
 		ImGui::TableNextRow();
 		ImGui::TableSetColumnIndex(0);
@@ -1222,10 +1235,10 @@ void WeatherWidget::DrawFogSettings()
 		ImGui::TableSetColumnIndex(2);
 		ImGui::Separator();
 
-		DrawFogRow(nearMatches,  WeatherInherit::kFogNear,  "Near",  WeatherSetting::kDayNear,  WeatherSetting::kNightNear,  0.0f, 1000000.0f, "%.0f", hasParent, parentWidget, changed);
-		DrawFogRow(farMatches,   WeatherInherit::kFogFar,   "Far",   WeatherSetting::kDayFar,   WeatherSetting::kNightFar,   0.0f, 1000000.0f, "%.0f", hasParent, parentWidget, changed);
-		DrawFogRow(powerMatches, WeatherInherit::kFogPower, "Power", WeatherSetting::kDayPower, WeatherSetting::kNightPower, 0.0f, 10.0f,      "%.3f", hasParent, parentWidget, changed);
-		DrawFogRow(maxMatches,   WeatherInherit::kFogMax,   "Max",   WeatherSetting::kDayMax,   WeatherSetting::kNightMax,   0.0f, 1.0f,       "%.3f", hasParent, parentWidget, changed);
+		DrawFogRow(nearMatches, WeatherInherit::kFogNear, "Near", WeatherSetting::kDayNear, WeatherSetting::kNightNear, 0.0f, 1000000.0f, "%.0f", hasParent, parentWidget, changed);
+		DrawFogRow(farMatches, WeatherInherit::kFogFar, "Far", WeatherSetting::kDayFar, WeatherSetting::kNightFar, 0.0f, 1000000.0f, "%.0f", hasParent, parentWidget, changed);
+		DrawFogRow(powerMatches, WeatherInherit::kFogPower, "Power", WeatherSetting::kDayPower, WeatherSetting::kNightPower, 0.0f, 10.0f, "%.3f", hasParent, parentWidget, changed);
+		DrawFogRow(maxMatches, WeatherInherit::kFogMax, "Max", WeatherSetting::kDayMax, WeatherSetting::kNightMax, 0.0f, 1.0f, "%.3f", hasParent, parentWidget, changed);
 
 		ImGui::EndTable();
 	}
@@ -1238,12 +1251,16 @@ void WeatherWidget::DrawFogSettings()
 void WeatherWidget::DrawFogSlider(const char* id, float& prop, float min, float max, const char* fmt, bool& inheritRef, bool isInherited, bool& changed)
 {
 	ImGui::SetNextItemWidth(-1);
-	if (isInherited) PushInheritedStyle();
+	if (isInherited)
+		PushInheritedStyle();
 	if (WeatherUtils::DrawSliderFloat(id, prop, min, max, nullptr, fmt)) {
 		changed = true;
 		inheritRef = false;
 	}
-	if (isInherited) { Util::AddTooltip("Inherited from parent weather"); PopInheritedStyle(); }
+	if (isInherited) {
+		Util::AddTooltip("Inherited from parent weather");
+		PopInheritedStyle();
+	}
 }
 
 void WeatherWidget::DrawFogRow(bool matches, const char* inheritKey, const char* label,
@@ -1290,7 +1307,8 @@ void WeatherWidget::DrawFogRow(bool matches, const char* inheritKey, const char*
 	ImGui::TableSetColumnIndex(2);
 	DrawFogSlider(std::format("##Night {}", label).c_str(), settings.fogProperties[nightPropKey], min, max, fmt, inheritRef, isInherited, changed);
 
-	if (highlightId) PopHighlightIfNeeded(highlightId, true);
+	if (highlightId)
+		PopHighlightIfNeeded(highlightId, true);
 }
 
 void WeatherWidget::DrawProperties(std::string category, std::map<std::string, int> properties)
@@ -1320,24 +1338,38 @@ void WeatherWidget::DrawProperties(std::string category, std::map<std::string, i
 					InheritFromParent(p.first);
 					changed = true;
 				}
-				Util::AddTooltip(inheritFlag ? "Inheriting from parent" : "Inherit from parent");
+				Util::AddTooltip(inheritFlag ? T(TKEY("inheriting_from_parent"), "Inheriting from parent") : T(TKEY("inherit_from_parent"), "Inherit from parent"));
 				ImGui::SameLine();
 			}
 
-			if (isInherited) PushInheritedStyle();
+			if (isInherited)
+				PushInheritedStyle();
 			bool controlChanged = false;
 			switch (p.second) {
-			case 0: controlChanged = WeatherUtils::DrawSliderInt8(p.first, settings.weatherProperties[p.first]); break;
-			case 1: controlChanged = WeatherUtils::DrawColorEdit(p.first, settings.weatherColors[p.first]); break;
-			case 2: controlChanged = WeatherUtils::DrawSliderUint8(p.first, settings.weatherProperties[p.first]); break;
-			case 3: controlChanged = WeatherUtils::DrawSliderFloat(p.first, settings.fogProperties[p.first]); break;
-			default: break;
+			case 0:
+				controlChanged = WeatherUtils::DrawSliderInt8(p.first, settings.weatherProperties[p.first]);
+				break;
+			case 1:
+				controlChanged = WeatherUtils::DrawColorEdit(p.first, settings.weatherColors[p.first]);
+				break;
+			case 2:
+				controlChanged = WeatherUtils::DrawSliderUint8(p.first, settings.weatherProperties[p.first]);
+				break;
+			case 3:
+				controlChanged = WeatherUtils::DrawSliderFloat(p.first, settings.fogProperties[p.first]);
+				break;
+			default:
+				break;
 			}
 			if (controlChanged) {
 				changed = true;
-				if (isInherited) settings.inheritFlags[p.first] = false;
+				if (isInherited)
+					settings.inheritFlags[p.first] = false;
 			}
-			if (isInherited) { Util::AddTooltip("Inherited from parent weather"); PopInheritedStyle(); }
+			if (isInherited) {
+				Util::AddTooltip(T(TKEY("inherited_from_parent_weather"), "Inherited from parent weather"));
+				PopInheritedStyle();
+			}
 		});
 	}
 
@@ -1388,23 +1420,23 @@ void WeatherWidget::SyncInheritedValuesFromParent()
 		if (inherited(key))
 			value = parentWidget->settings.weatherColors[key];
 
-	syncFogPair(WeatherInherit::kFogNear,  WeatherSetting::kDayNear,  WeatherSetting::kNightNear);
-	syncFogPair(WeatherInherit::kFogFar,   WeatherSetting::kDayFar,   WeatherSetting::kNightFar);
+	syncFogPair(WeatherInherit::kFogNear, WeatherSetting::kDayNear, WeatherSetting::kNightNear);
+	syncFogPair(WeatherInherit::kFogFar, WeatherSetting::kDayFar, WeatherSetting::kNightFar);
 	syncFogPair(WeatherInherit::kFogPower, WeatherSetting::kDayPower, WeatherSetting::kNightPower);
-	syncFogPair(WeatherInherit::kFogMax,   WeatherSetting::kDayMax,   WeatherSetting::kNightMax);
+	syncFogPair(WeatherInherit::kFogMax, WeatherSetting::kDayMax, WeatherSetting::kNightMax);
 
 	for (int i = 0; i < ColorTypes::kTotal; i++)
 		if (inherited("Atmosphere_" + ColorTypeLabel(i)))
 			settings.atmosphereColors[i] = parentWidget->settings.atmosphereColors[i];
 
 	syncDalcTOD(WeatherInherit::kDalcSpecular, [](DALC& d) -> auto& { return d.specular; });
-	syncDalcTOD(WeatherInherit::kDalcFresnel,  [](DALC& d) -> auto& { return d.fresnelPower; });
-	syncDalcTOD(WeatherInherit::kDalcDirXMax,  [](DALC& d) -> auto& { return d.directional[0].max; });
-	syncDalcTOD(WeatherInherit::kDalcDirXMin,  [](DALC& d) -> auto& { return d.directional[0].min; });
-	syncDalcTOD(WeatherInherit::kDalcDirYMax,  [](DALC& d) -> auto& { return d.directional[1].max; });
-	syncDalcTOD(WeatherInherit::kDalcDirYMin,  [](DALC& d) -> auto& { return d.directional[1].min; });
-	syncDalcTOD(WeatherInherit::kDalcDirZMax,  [](DALC& d) -> auto& { return d.directional[2].max; });
-	syncDalcTOD(WeatherInherit::kDalcDirZMin,  [](DALC& d) -> auto& { return d.directional[2].min; });
+	syncDalcTOD(WeatherInherit::kDalcFresnel, [](DALC& d) -> auto& { return d.fresnelPower; });
+	syncDalcTOD(WeatherInherit::kDalcDirXMax, [](DALC& d) -> auto& { return d.directional[0].max; });
+	syncDalcTOD(WeatherInherit::kDalcDirXMin, [](DALC& d) -> auto& { return d.directional[0].min; });
+	syncDalcTOD(WeatherInherit::kDalcDirYMax, [](DALC& d) -> auto& { return d.directional[1].max; });
+	syncDalcTOD(WeatherInherit::kDalcDirYMin, [](DALC& d) -> auto& { return d.directional[1].min; });
+	syncDalcTOD(WeatherInherit::kDalcDirZMax, [](DALC& d) -> auto& { return d.directional[2].max; });
+	syncDalcTOD(WeatherInherit::kDalcDirZMin, [](DALC& d) -> auto& { return d.directional[2].min; });
 
 	for (int i = 0; i < TESWeather::kTotalLayers; i++) {
 		if (inherited(std::format("Cloud{}_Color", i)))
@@ -1416,11 +1448,11 @@ void WeatherWidget::SyncInheritedValuesFromParent()
 	}
 
 	for (size_t i = 0; i < ColorTimes::kTotal; i++) {
-		syncRecord("ImageSpace_" + std::to_string(i),         settings.imageSpaceRefs[i],         parentWidget->settings.imageSpaceRefs[i]);
+		syncRecord("ImageSpace_" + std::to_string(i), settings.imageSpaceRefs[i], parentWidget->settings.imageSpaceRefs[i]);
 		syncRecord("VolumetricLighting_" + std::to_string(i), settings.volumetricLightingRefs[i], parentWidget->settings.volumetricLightingRefs[i]);
 	}
-	syncRecord("Precipitation",   settings.precipitationData, parentWidget->settings.precipitationData);
-	syncRecord("ReferenceEffect", settings.referenceEffect,   parentWidget->settings.referenceEffect);
+	syncRecord("Precipitation", settings.precipitationData, parentWidget->settings.precipitationData);
+	syncRecord("ReferenceEffect", settings.referenceEffect, parentWidget->settings.referenceEffect);
 
 	ApplyChanges();
 }
@@ -1440,7 +1472,10 @@ void WeatherWidget::PropagateToChildren()
 		if (child != this && child->settings.parent == myId) {
 			bool hasAnyInherit = false;
 			for (const auto& [key, val] : child->settings.inheritFlags)
-				if (val) { hasAnyInherit = true; break; }
+				if (val) {
+					hasAnyInherit = true;
+					break;
+				}
 			if (hasAnyInherit && !visiting.contains(child))
 				child->SyncInheritedValuesFromParent();
 		}
@@ -1488,10 +1523,14 @@ void WeatherWidget::InheritAllFromParent()
 
 	// DALC tab
 	static constexpr const char* kDalcFlags[] = {
-		WeatherInherit::kDalcSpecular, WeatherInherit::kDalcFresnel,
-		WeatherInherit::kDalcDirXMax,  WeatherInherit::kDalcDirXMin,
-		WeatherInherit::kDalcDirYMax,  WeatherInherit::kDalcDirYMin,
-		WeatherInherit::kDalcDirZMax,  WeatherInherit::kDalcDirZMin,
+		WeatherInherit::kDalcSpecular,
+		WeatherInherit::kDalcFresnel,
+		WeatherInherit::kDalcDirXMax,
+		WeatherInherit::kDalcDirXMin,
+		WeatherInherit::kDalcDirYMax,
+		WeatherInherit::kDalcDirYMin,
+		WeatherInherit::kDalcDirZMax,
+		WeatherInherit::kDalcDirZMin,
 	};
 	for (int i = 0; i < ColorTimes::kTotal; i++)
 		settings.dalc[i] = parentWidget->settings.dalc[i];
@@ -1514,8 +1553,10 @@ void WeatherWidget::InheritAllFromParent()
 	// Fog tab
 	settings.fogProperties = parentWidget->settings.fogProperties;
 	static constexpr const char* kFogFlags[] = {
-		WeatherInherit::kFogNear, WeatherInherit::kFogFar,
-		WeatherInherit::kFogPower, WeatherInherit::kFogMax,
+		WeatherInherit::kFogNear,
+		WeatherInherit::kFogFar,
+		WeatherInherit::kFogPower,
+		WeatherInherit::kFogMax,
 	};
 	for (const auto* key : kFogFlags)
 		settings.inheritFlags[key] = true;
@@ -1724,9 +1765,10 @@ bool WeatherWidget::HasUnsavedChanges() const
 
 void WeatherWidget::DrawFeatureSettings()
 {
-	ImGui::TextWrapped(
-		"Configure feature-specific settings that will be applied when this weather is active. "
-		"These override the feature's global settings for this weather only.");
+	ImGui::TextWrapped("%s",
+		T(TKEY("feature_specific_settings"),
+			"Configure feature-specific settings that will be applied when this weather is active. "
+			"These override the feature's global settings for this weather only."));
 	ImGui::Spacing();
 
 	auto* globalRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
@@ -1992,12 +2034,12 @@ std::vector<Widget::SearchResult> WeatherWidget::CollectSearchableSettings() con
 
 	const std::vector<std::pair<std::string, std::vector<std::string>>> tabEntries = {
 		{ WeatherTab::kBasic, { "Sun Damage", "Wind Speed", "Wind Direction", "Wind Direction Range",
-					   "Precipitation Begin Fade In", "Precipitation End Fade Out",
-					   "Thunder Lightning Begin Fade In", "Thunder Lightning End Fade Out",
-					   "Thunder Lightning Frequency", "Lightning Color",
-					   "Visual Effect Begin", "Visual Effect End", "Trans Delta" } },
+								  "Precipitation Begin Fade In", "Precipitation End Fade Out",
+								  "Thunder Lightning Begin Fade In", "Thunder Lightning End Fade Out",
+								  "Thunder Lightning Frequency", "Lightning Color",
+								  "Visual Effect Begin", "Visual Effect End", "Trans Delta" } },
 		{ WeatherTab::kFog, { WeatherSetting::kDayNear, WeatherSetting::kDayFar, WeatherSetting::kDayPower, WeatherSetting::kDayMax,
-								 WeatherSetting::kNightNear, WeatherSetting::kNightFar, WeatherSetting::kNightPower, WeatherSetting::kNightMax } },
+								WeatherSetting::kNightNear, WeatherSetting::kNightFar, WeatherSetting::kNightPower, WeatherSetting::kNightMax } },
 	};
 
 	for (const auto& [tab, names] : tabEntries) {
@@ -2050,6 +2092,8 @@ ID3D11ShaderResourceView* WeatherWidget::GetCloudTexture(int layerIndex)
 	if (texturePath.empty()) {
 		return nullptr;
 	}
+
+#undef I18N_KEY_PREFIX
 
 	std::string resourcePath = WeatherUtils::TexturePath::BuildResourcePath(texturePath);
 

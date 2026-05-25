@@ -1,8 +1,11 @@
 #include "WeatherUtils.h"
+#include "../I18n/I18n.h"
 #include "EditorWindow.h"
 #include "PaletteWindow.h"
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
+
+#define I18N_KEY_PREFIX "weather_editor."
 
 #include <cassert>
 
@@ -841,7 +844,7 @@ namespace TOD
 						changed = true;
 					}
 				}
-				Util::AddTooltip("Inherit from parent");
+				Util::AddTooltip(T(TKEY("inherit_from_parent"), "Inherit from parent"));
 				ImGui::PopStyleVar();
 				ImGui::SameLine(0, 2 * scale);
 			}
@@ -949,7 +952,7 @@ namespace TOD
 			ImGui::PopStyleVar();
 			ImGui::PopStyleColor(2);
 
-			Util::AddTooltip("Inherit from parent weather");
+			Util::AddTooltip(T(TKEY("inherit_from_parent_weather"), "Inherit from parent weather"));
 		}
 
 		if (!anyActive)
@@ -1061,7 +1064,7 @@ namespace TOD
 			ImGui::EndDisabled();
 
 			if (inheritFlag) {
-				Util::AddTooltip("Inherited from parent weather");
+				Util::AddTooltip(T(TKEY("inherited_from_parent_weather"), "Inherited from parent weather"));
 				PopInheritedStyle();
 			}
 
@@ -1149,7 +1152,7 @@ namespace TOD
 			ImGui::PopStyleVar();
 			ImGui::PopStyleColor(2);
 
-			Util::AddTooltip("Inherit from parent weather");
+			Util::AddTooltip(T(TKEY("inherit_from_parent_weather"), "Inherit from parent weather"));
 		}
 
 		ImGui::TableSetColumnIndex(1);
@@ -1177,7 +1180,7 @@ namespace TOD
 				changed = true;
 			}
 			if (inheritFlag)
-				Util::AddTooltip("Inherited from parent weather");
+				Util::AddTooltip(T(TKEY("inherited_from_parent_weather"), "Inherited from parent weather"));
 			ImGui::PopID();
 		}
 		ImGui::EndDisabled();
@@ -1342,3 +1345,5 @@ namespace PropertyDrawer
 		});
 	}
 }  // namespace PropertyDrawer
+
+#undef I18N_KEY_PREFIX

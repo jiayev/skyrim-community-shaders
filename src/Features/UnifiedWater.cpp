@@ -1,11 +1,14 @@
 ﻿#include "UnifiedWater.h"
 
+#include "I18n/I18n.h"
 #include "Menu.h"
 #include "Menu/ThemeManager.h"
 #include "Util.h"
 
-#include <imgui_internal.h>
+#define I18N_KEY_PREFIX "feature.unified_water."
+
 #include <cmath>
+#include <imgui_internal.h>
 #include <unordered_map>
 #include <vector>
 
@@ -330,22 +333,22 @@ void UnifiedWater::RestoreDefaultSettings()
 
 void UnifiedWater::DrawSettings()
 {
-	ImGui::Checkbox("Use Optimised Meshes", &settings.UseOptimisedMeshes);
+	ImGui::Checkbox(T(TKEY("use_optimised_meshes"), "Use Optimised Meshes"), &settings.UseOptimisedMeshes);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text(
-			"Uses meshes with significantly lower tri-count for improved performance with no visual quality loss.\n"
-			"Will only affect newly created water - requires a change of location or game restart to take effect.");
+		ImGui::Text("%s", T(TKEY("use_optimised_meshes_tooltip"),
+							  "Uses meshes with significantly lower tri-count for improved performance with no visual quality loss.\n"
+							  "Will only affect newly created water - requires a change of location or game restart to take effect."));
 	}
 
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx("Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
-		if (ImGui::Button("Regenerate Flowmap") && flowmap) {
+	if (ImGui::TreeNodeEx(T(TKEY("debug"), "Debug"), ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::Button(T(TKEY("regenerate_flowmap"), "Regenerate Flowmap")) && flowmap) {
 			if (flowmap->RegenerateAndLoadFlowmap())
 				SetFlowmapTex();
 		}
 
-		if (ImGui::Button("Regenerate Caches") && waterCache)
+		if (ImGui::Button(T(TKEY("regenerate_caches"), "Regenerate Caches")) && waterCache)
 			waterCache->RegenerateCaches();
 
 		ImGui::TreePop();
@@ -717,3 +720,4 @@ void UnifiedWater::TESWaterSystem_UpdateDisplacementMeshPosition::thunk(RE::TESW
 	// Previously the values were calculated relative to the 5x5 flow grid
 	*uw.gDisplacementCellTexCoordOffset = float4(posX + offsetX, height - (posY + offsetY), posX, 1 - posY);
 }
+#undef I18N_KEY_PREFIX

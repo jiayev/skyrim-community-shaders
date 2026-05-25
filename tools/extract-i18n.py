@@ -276,7 +276,7 @@ def main():
         return
 
     output = build_output(strings)
-    output_text = json.dumps(output, indent=2, ensure_ascii=False) + "\n"
+    output_text = json.dumps(output, indent=4, ensure_ascii=False) + "\n"
 
     if args.check:
         if en_json_path.exists():

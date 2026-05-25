@@ -3,8 +3,11 @@
 #include <DirectXTex.h>
 #include <pystring/pystring.h>
 
+#include "I18n/I18n.h"
 #include "State.h"
 #include "Util.h"
+
+#define I18N_KEY_PREFIX "feature.terrain_shadows."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainShadows::Settings,
@@ -22,9 +25,9 @@ void TerrainShadows::SaveSettings(json& o_json)
 
 void TerrainShadows::DrawSettings()
 {
-	ImGui::Checkbox("Enable Terrain Shadow", &settings.EnableTerrainShadow);
+	ImGui::Checkbox(T(TKEY("enable_terrain_shadow"), "Enable Terrain Shadow"), &settings.EnableTerrainShadow);
 
-	if (ImGui::CollapsingHeader("Debug")) {
+	if (ImGui::CollapsingHeader(T(TKEY("debug"), "Debug"))) {
 		std::string curr_worldspace = "N/A";
 		std::string curr_worldspace_name = "N/A";
 		auto tes = RE::TES::GetSingleton();
@@ -50,7 +53,7 @@ void TerrainShadows::DrawSettings()
 		}
 		ImGui::Unindent();
 
-		if (ImGui::TreeNode("Buffer Viewer")) {
+		if (ImGui::TreeNode(T(TKEY("buffer_viewer"), "Buffer Viewer"))) {
 			static float debugRescale = .1f;
 			ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
@@ -275,36 +278,8 @@ void TerrainShadows::Precompute()
 			context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
 			context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
 		}
-
-		texShadowHeight.release();
-
-		D3D11_TEXTURE2D_DESC texDesc = {
-			.Width = texHeightMap->desc.Width,
-			.Height = texHeightMap->desc.Height,
-			.MipLevels = 1,
-			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R16G16_UNORM,
-			.SampleDesc = { .Count = 1 },
-			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
-		};
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = texDesc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = {
-				.MostDetailedMip = 0,
-				.MipLevels = 1 }
-		};
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-			.Format = texDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-
-		texShadowHeight = std::make_unique<Texture2D>(texDesc, "TerrainShadows::ShadowHeight");
-		texShadowHeight->CreateSRV(srvDesc);
-		texShadowHeight->CreateUAV(uavDesc);
 	}
+#undef I18N_KEY_PREFIX
 
 	needPrecompute = false;
 }

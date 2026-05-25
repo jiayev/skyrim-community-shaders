@@ -6,8 +6,12 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/HDRDisplay.h"
 #include "Globals.h"
+#include "I18n/I18n.h"
 #include "Menu.h"
 #include "Utils/FileSystem.h"
+
+#define I18N_KEY_PREFIX "feature.screenshot."
+
 #include <DirectXTex.h>
 #include <PCH.h>
 #include <algorithm>
@@ -360,23 +364,23 @@ void ScreenshotFeature::SaveSettings(json& a_json)
 
 void ScreenshotFeature::DrawSettings()
 {
-	Util::Text::Disabled("Capture and save run asynchronously - no frame stall.");
-	Util::Text::Disabled(
+	Util::Text::Disabled(T(TKEY("async_note"), "Capture and save run asynchronously - no frame stall."));
+	Util::Text::Disabled(T(TKEY("sdr_note"),
 		"Saves SDR .bmp files. HDR scenes are tonemapped (Reinhard) so the saved\n"
 		"image matches what's on screen. For true HDR files with HDR10 metadata,\n"
-		"use Xbox Game Bar (Win+G) or your GPU vendor's overlay (saves .jxr).");
+		"use Xbox Game Bar (Win+G) or your GPU vendor's overlay (saves .jxr)."));
 
-	if (ImGui::Button("Take Screenshot Now")) {
+	if (ImGui::Button(T(TKEY("take_screenshot"), "Take Screenshot Now"))) {
 		Capture();
 	}
 	ImGui::SameLine();
-	ImGui::Checkbox("Apply crop", &applyCropToScreenshot);
+	ImGui::Checkbox(T(TKEY("apply_crop"), "Apply crop"), &applyCropToScreenshot);
 
-	ImGui::SeparatorText("Output");
+	ImGui::SeparatorText(T(TKEY("output"), "Output"));
 
 	char buf[260];
 	strncpy_s(buf, sizeof(buf), screenshotPath.c_str(), _TRUNCATE);
-	ImGui::PushItemWidth(-FLT_MIN - 120.0f);  // leave room for Open button + label
+	ImGui::PushItemWidth(-FLT_MIN - 120.0f);
 	if (ImGui::InputText("##ScreenshotFolder", buf, sizeof(buf))) {
 		screenshotPath = buf;
 	}
@@ -384,35 +388,35 @@ void ScreenshotFeature::DrawSettings()
 	ImGui::SameLine();
 	const bool canOpen = !screenshotPath.empty();
 	ImGui::BeginDisabled(!canOpen);
-	if (ImGui::Button("Open")) {
+	if (ImGui::Button(T(TKEY("open"), "Open"))) {
 		std::error_code ec;
 		std::filesystem::create_directories(screenshotPath, ec);
 		ShellExecuteA(nullptr, "open", screenshotPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 	}
 	ImGui::EndDisabled();
 	ImGui::SameLine();
-	ImGui::Text("Folder");
+	ImGui::Text("%s", T(TKEY("folder"), "Folder"));
 	if (ImGui::IsItemHovered()) {
-		ImGui::SetTooltip(
-			"Relative paths resolve against the Skyrim install dir.\n"
-			"Absolute paths (e.g. D:\\Captures) save there directly.");
+		ImGui::SetTooltip("%s", T(TKEY("folder_tooltip"),
+									"Relative paths resolve against the Skyrim install dir.\n"
+									"Absolute paths (e.g. D:\\Captures) save there directly."));
 	}
 
 	auto& menuSettings = Menu::GetSingleton()->GetSettings();
 	Util::InputComboWidget(
-		"Hotkey",
+		T(TKEY("hotkey"), "Hotkey"),
 		menuSettings.ScreenshotKey,
 		Menu::GetSingleton()->settingScreenshotKey,
 		"Change##ScreenshotFeature");
 
 	if (HotkeyCollidesWithVanilla()) {
-		Util::Text::Disabled(
+		Util::Text::Disabled(T(TKEY("hotkey_collision"),
 			"This hotkey collides with vanilla PrintScreen; both saves will fire.\n"
 			"Set bAllowScreenShot=0 in Skyrim.ini to suppress vanilla, or pick a\n"
-			"different hotkey above.");
+			"different hotkey above."));
 	}
 
-	ImGui::SeparatorText("Crop");
+	ImGui::SeparatorText(T(TKEY("crop"), "Crop"));
 
 	// Preview reflects what Capture() would save. Full source frame so VR users
 	// can drag-crop across the eye boundary if a seeded preset doesn't fit.
@@ -656,3 +660,4 @@ void ScreenshotFeature::Capture()
 	screenshot.outputPath = BuildScreenshotPath(screenshotPath);
 	EnqueueScreenshot(std::move(screenshot));
 }
+#undef I18N_KEY_PREFIX

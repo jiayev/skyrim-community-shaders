@@ -37,6 +37,7 @@
 #include "Features/WaterEffects.h"
 #include "Features/WeatherEditor.h"
 #include "Features/WetnessEffects.h"
+#include "I18n/I18n.h"
 #include "Menu.h"
 #include "SettingsOverrideManager.h"
 #include "Utils/Format.h"
@@ -366,7 +367,7 @@ void Feature::DrawUnloadedUI()
 		if (description.empty()) {
 			ImGui::Spacing();
 		}
-		ImGui::TextWrapped("Key features:");
+		ImGui::TextWrapped("%s", T("feature.key_features", "Key features:"));
 		for (const auto& feature : keyFeatures) {
 			ImGui::BulletText("%s", feature.c_str());
 		}

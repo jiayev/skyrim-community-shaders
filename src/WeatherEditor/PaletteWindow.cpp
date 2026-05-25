@@ -1,7 +1,10 @@
 #include "PaletteWindow.h"
+#include "../I18n/I18n.h"
 #include "EditorWindow.h"
 #include "Menu/ThemeManager.h"
 #include "Utils/UI.h"
+
+#define I18N_KEY_PREFIX "weather_editor."
 
 // Forward declaration from EditorWindow.cpp
 void DrawIconStar(ImVec2 center, float radius, ImU32 color, bool filled);
@@ -24,14 +27,14 @@ void PaletteWindow::Draw()
 	ImGui::SetNextWindowPos(
 		ImVec2(displaySize.x - paletteWidth - pad, bottomY - paletteHeight),
 		layoutCond);
-	if (Util::BeginWithRoundedClose("Palette", &open, ImGuiWindowFlags_NoFocusOnAppearing)) {
+	if (Util::BeginWithRoundedClose(T(TKEY("palette"), "Palette"), &open, ImGuiWindowFlags_NoFocusOnAppearing)) {
 		if (ImGui::BeginTabBar("PaletteTabs")) {
-			if (ImGui::BeginTabItem("Colours")) {
+			if (ImGui::BeginTabItem(T(TKEY("colours"), "Colours"))) {
 				DrawColorsTab();
 				ImGui::EndTabItem();
 			}
 
-			if (ImGui::BeginTabItem("Values")) {
+			if (ImGui::BeginTabItem(T(TKEY("values"), "Values"))) {
 				DrawValuesTab();
 				ImGui::EndTabItem();
 			}
@@ -49,8 +52,8 @@ void PaletteWindow::DrawColorsTab()
 	const float spacing = 8.0f * scale;
 
 	// Favorites section at top
-	ImGui::SeparatorText("Favourites");
-	ImGui::TextWrapped("Drag colours here to save as favourites.");
+	ImGui::SeparatorText(T(TKEY("favourites"), "Favourites"));
+	ImGui::TextWrapped("%s", T(TKEY("drag_colours_here"), "Drag colours here to save as favourites."));
 	ImGui::Spacing();
 
 	for (int i = 0; i < maxFavoriteSlots; i++) {
@@ -79,7 +82,7 @@ void PaletteWindow::DrawColorsTab()
 
 			// Right-click to clear
 			if (ImGui::BeginPopupContextItem()) {
-				if (ImGui::Selectable("Clear favourite")) {
+				if (ImGui::Selectable(T(TKEY("clear_favourite"), "Clear favourite"))) {
 					favoriteColors[i].reset();
 					Save();
 				}
@@ -103,7 +106,7 @@ void PaletteWindow::DrawColorsTab()
 
 			DrawIconStar(center, starSize, starColor, false);
 
-			Util::AddTooltip("Drag a colour here to add to favourites");
+			Util::AddTooltip(T(TKEY("drag_to_favourites"), "Drag a colour here to add to favourites"));
 		}
 
 		// Drag-and-drop target
@@ -121,11 +124,11 @@ void PaletteWindow::DrawColorsTab()
 	ImGui::Spacing();
 
 	// Recently Used section
-	ImGui::SeparatorText("Recently Used");
+	ImGui::SeparatorText(T(TKEY("recently_used"), "Recently Used"));
 	auto recentColors = GetRecentColors(5);
 
 	if (recentColors.empty()) {
-		ImGui::TextDisabled("No recent colors");
+		ImGui::TextDisabled("%s", T(TKEY("no_recent_colors"), "No recent colors"));
 	} else {
 		for (size_t i = 0; i < recentColors.size(); i++) {
 			if (i > 0)
@@ -158,16 +161,16 @@ void PaletteWindow::DrawColorsTab()
 	// Most Used section
 	ImGui::Separator();
 	ImGui::Spacing();
-	ImGui::TextUnformatted("Most Used");
+	ImGui::TextUnformatted(T(TKEY("most_used"), "Most Used"));
 	ImGui::Spacing();
-	ImGui::TextWrapped("Favourite/most commonly used colours here.");
+	ImGui::TextWrapped("%s", T(TKEY("fav_most_colours"), "Favourite/most commonly used colours here."));
 	ImGui::Spacing();
 
 	auto mostUsedColors = GetMostUsedColors(20);
 
 	if (mostUsedColors.empty()) {
-		ImGui::TextDisabled("No frequently used colors yet");
-		ImGui::TextDisabled("(Colors used 3+ times will appear here)");
+		ImGui::TextDisabled("%s", T(TKEY("no_frequent_colors"), "No frequently used colors yet"));
+		ImGui::TextDisabled("%s", T(TKEY("colors_3_plus"), "(Colors used 3+ times will appear here)"));
 	} else {
 		int colorIndex = 0;
 		for (auto* entry : mostUsedColors) {
@@ -192,7 +195,7 @@ void PaletteWindow::DrawColorsTab()
 
 			// Right-click to remove
 			if (ImGui::BeginPopupContextItem()) {
-				if (ImGui::Selectable("Remove from palette")) {
+				if (ImGui::Selectable(T(TKEY("remove_from_palette"), "Remove from palette"))) {
 					auto it = std::find_if(colorEntries.begin(), colorEntries.end(),
 						[entry](const ColorEntry& e) { return &e == entry; });
 					if (it != colorEntries.end()) {
@@ -215,10 +218,10 @@ void PaletteWindow::DrawColorsTab()
 void PaletteWindow::DrawValuesTab()
 {
 	// Recently Used section
-	ImGui::SeparatorText("Recently Used");
+	ImGui::SeparatorText(T(TKEY("recently_used"), "Recently Used"));
 	auto recentValues = GetRecentValues(3);
 	if (recentValues.empty()) {
-		ImGui::TextDisabled("No recent values");
+		ImGui::TextDisabled("%s", T(TKEY("no_recent_values"), "No recent values"));
 	} else {
 		for (auto* entry : recentValues) {
 			std::string label = std::format("{}: {:.3f}", entry->name, entry->value);
@@ -236,16 +239,16 @@ void PaletteWindow::DrawValuesTab()
 	// Most Used section
 	ImGui::Separator();
 	ImGui::Spacing();
-	ImGui::TextUnformatted("Most Used");
+	ImGui::TextUnformatted(T(TKEY("most_used"), "Most Used"));
 	ImGui::Spacing();
-	ImGui::TextWrapped("Favourite/most commonly used values here.");
+	ImGui::TextWrapped("%s", T(TKEY("fav_most_values"), "Favourite/most commonly used values here."));
 	ImGui::Spacing();
 
 	auto mostUsedValues = GetMostUsedValues(20);
 
 	if (mostUsedValues.empty()) {
-		ImGui::TextDisabled("No frequently used values yet");
-		ImGui::TextDisabled("(Values used 3+ times will appear here)");
+		ImGui::TextDisabled("%s", T(TKEY("no_frequent_values"), "No frequently used values yet"));
+		ImGui::TextDisabled("%s", T(TKEY("values_3_plus"), "(Values used 3+ times will appear here)"));
 	} else {
 		for (auto* entry : mostUsedValues) {
 			std::string label = std::format("{}: {:.3f}##{}", entry->name, entry->value, (void*)entry);
@@ -258,7 +261,7 @@ void PaletteWindow::DrawValuesTab()
 
 			// Right-click to remove
 			if (ImGui::BeginPopupContextItem()) {
-				if (ImGui::Selectable("Remove from palette")) {
+				if (ImGui::Selectable(T(TKEY("remove_from_palette"), "Remove from palette"))) {
 					auto it = std::find_if(valueEntries.begin(), valueEntries.end(),
 						[entry](const ValueEntry& e) { return &e == entry; });
 					if (it != valueEntries.end()) {
@@ -497,3 +500,5 @@ void PaletteWindow::Load()
 		valueEntries.push_back(entry);
 	}
 }
+
+#undef I18N_KEY_PREFIX
