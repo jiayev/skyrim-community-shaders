@@ -1,5 +1,4 @@
 #include "I18n.h"
-#include "PCH.h"
 
 #include <fstream>
 
@@ -39,36 +38,52 @@ void I18n::Init()
 
 const char* I18n::Get(std::string_view key, const char* defaultText) const
 {
-	std::shared_lock lock(mutex_);
-
 	std::string keyStr(key);
 
-	// 1. Try current locale
-	if (!strings_.empty()) {
-		auto it = strings_.find(keyStr);
-		if (it != strings_.end()) {
-			return it->second.c_str();
+	// Fast path: try under shared lock (concurrent readers OK)
+	{
+		std::shared_lock lock(mutex_);
+
+		// 1. Try current locale
+		if (!strings_.empty()) {
+			auto it = strings_.find(keyStr);
+			if (it != strings_.end()) {
+				return it->second.c_str();
+			}
+		}
+
+		// 2. Try English fallback (from en.json)
+		{
+			auto it = fallback_.find(keyStr);
+			if (it != fallback_.end()) {
+				return it->second.c_str();
+			}
+		}
+
+		// 3. Check if already cached
+		{
+			auto it = defaultCache_.find(keyStr);
+			if (it != defaultCache_.end()) {
+				return it->second;
+			}
 		}
 	}
 
-	// 2. Try English fallback (from en.json)
+	// Slow path: need to insert into defaultCache_ — acquire exclusive lock
 	{
-		auto it = fallback_.find(keyStr);
-		if (it != fallback_.end()) {
-			return it->second.c_str();
-		}
-	}
+		std::unique_lock lock(mutex_);
 
-	// 3. Use inline default or key itself (cached for pointer stability)
-	{
+		// Double-check after acquiring exclusive lock (another thread may have inserted)
 		auto it = defaultCache_.find(keyStr);
 		if (it != defaultCache_.end()) {
-			return it->second.c_str();
+			return it->second;
 		}
-		// Cache the default text (or key as last resort) so the pointer stays valid
-		std::string cached = defaultText ? std::string(defaultText) : keyStr;
-		auto [inserted, _] = defaultCache_.emplace(keyStr, std::move(cached));
-		return inserted->second.c_str();
+
+		// Store string in deque (pointer-stable: deque never invalidates on push_back)
+		defaultStorage_.emplace_back(defaultText ? std::string(defaultText) : keyStr);
+		const char* ptr = defaultStorage_.back().c_str();
+		defaultCache_.emplace(keyStr, ptr);
+		return ptr;
 	}
 }
 
@@ -97,6 +112,7 @@ void I18n::SetLocale(const std::string& locale)
 		// English uses fallback_ directly; no need for strings_
 		strings_.clear();
 		defaultCache_.clear();
+		defaultStorage_.clear();
 		currentLocale_ = "en";
 		logger::info("[I18n] Switched to English (en).");
 		return;
@@ -106,6 +122,7 @@ void I18n::SetLocale(const std::string& locale)
 	if (LoadLocaleInto(locale, loaded)) {
 		strings_ = std::move(loaded);
 		defaultCache_.clear();
+		defaultStorage_.clear();
 		currentLocale_ = locale;
 		logger::info("[I18n] Switched to locale '{}'.", locale);
 	} else {
@@ -127,6 +144,7 @@ void I18n::Reload()
 	fallback_.clear();
 	strings_.clear();
 	defaultCache_.clear();
+	defaultStorage_.clear();
 	availableLocales_.clear();
 
 	DiscoverLocales();

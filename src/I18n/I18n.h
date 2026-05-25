@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <filesystem>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -141,8 +142,11 @@ private:
 	std::vector<std::pair<std::string, std::string>> availableLocales_;
 
 	// Cache of inline defaults and missing keys — ensures pointer stability.
+	// Uses deque for string storage (deque never invalidates pointers on push_back)
+	// and unordered_map for O(1) lookup by key.
 	// Mutable because it's populated lazily from const Get().
-	mutable std::unordered_map<std::string, std::string> defaultCache_;
+	mutable std::deque<std::string> defaultStorage_;
+	mutable std::unordered_map<std::string, const char*> defaultCache_;
 };
 
 // ─── Convenience free function ───────────────────────────────────────────────
