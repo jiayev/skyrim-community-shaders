@@ -18,6 +18,18 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void SkySync::DrawSettings()
 {
+	const char* sunPathNames[] = {
+		T(TKEY("sun_path_southern"), "Southern Sky"),
+		T(TKEY("sun_path_northern"), "Northern Sky"),
+		T(TKEY("sun_path_vanilla"), "Vanilla"),
+		T(TKEY("sun_path_custom"), "Custom")
+	};
+	const char* moonLightSourceNames[] = {
+		T(TKEY("moon_light_source_brightest"), "Brightest"),
+		T(TKEY("moon_light_source_masser"), "Masser"),
+		T(TKEY("moon_light_source_secunda"), "Secunda")
+	};
+
 	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(T(TKEY("enabled_tooltip"), "Enable or disable Sky Sync features."));
@@ -29,7 +41,7 @@ void SkySync::DrawSettings()
 	}
 
 	if (settings.UseAlternateSunPath) {
-		if (ImGui::SliderInt(T(TKEY("sun_path"), "Sun path"), &settings.SunPath, 0, static_cast<uint8_t>(SunPath::Count) - 1, SunPathNames[settings.SunPath], ImGuiSliderFlags_AlwaysClamp))
+		if (ImGui::SliderInt(T(TKEY("sun_path"), "Sun path"), &settings.SunPath, 0, static_cast<uint8_t>(SunPath::Count) - 1, sunPathNames[settings.SunPath], ImGuiSliderFlags_AlwaysClamp))
 			SetSunAngle();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(T(TKEY("sun_path_tooltip"), "Choose the trajectory the sun takes across the sky."));
@@ -44,7 +56,7 @@ void SkySync::DrawSettings()
 		}
 	}
 
-	ImGui::SliderInt(T(TKEY("moon_light_source"), "Moon light source"), &settings.MoonLightSource, 0, static_cast<uint8_t>(MoonLightSource::Count) - 1, MoonLightSourceNames[settings.MoonLightSource], ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderInt(T(TKEY("moon_light_source"), "Moon light source"), &settings.MoonLightSource, 0, static_cast<uint8_t>(MoonLightSource::Count) - 1, moonLightSourceNames[settings.MoonLightSource], ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(T(TKEY("moon_light_source_tooltip"), "Select which moon casts shadows during the night."));
 	}

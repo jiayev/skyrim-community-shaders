@@ -134,23 +134,6 @@ static const std::unordered_map<RE::BSShader::Type, std::string> kShaderTypeTool
 // VIRTUAL OVERRIDES (Feature.h interface)
 // ============================================================================
 
-std::pair<std::string, std::vector<std::string>> PerformanceOverlay::GetFeatureSummary()
-{
-	std::string description = "Real-time performance monitoring system that displays FPS, frame times, draw calls, VRAM usage, and detailed shader performance analysis.";
-
-	std::vector<std::string> keyFeatures = {
-		"Real-time FPS and frame time monitoring with configurable update intervals",
-		"Interactive draw call analysis with per-shader type performance breakdown",
-		"VRAM usage monitoring with visual progress bars",
-		"Frame time graphs for pre and post-frame generation analysis",
-		"A/B testing support for performance comparison between configurations",
-		"Color-coded performance metrics with customizable thresholds",
-		"Movable overlay window with persistent positioning"
-	};
-
-	return { description, keyFeatures };
-}
-
 void PerformanceOverlay::DrawSettings()
 {
 	auto menu = Menu::GetSingleton();

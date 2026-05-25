@@ -15,6 +15,7 @@ public:
 	}
 
 	virtual inline std::string GetName() override { return "Weather Editor"; }
+	virtual std::string GetDisplayName() override { return T("feature.weather_editor.name", "Weather Editor"); }
 	virtual inline std::string GetShortName() override { return "WeatherEditor"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "WEATHER"; }
 	virtual inline std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
@@ -24,18 +25,16 @@ public:
 
 	virtual inline std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return {
-			"Development tool for editing weather, testing weather transitions, and managing weather-related feature settings.",
-			{ "Provides weather editing functionality",
-				"Includes dynamic saving and loading of vanilla post processing and weather settings.",
-				"Real-time editing and previewing of effects",
-				"Instantly switch between any weather with immediate or gradual transitions",
-				"Filter weather by type (Pleasant, Cloudy, Rainy, Snow, Aurora) for easy browsing",
-				"View detailed weather information including wind, precipitation, and lightning data",
-				"Color-coded weather names show all weather properties at a glance",
-				"Persistent overlay window for continuous weather monitoring while playing" }
-		};
-	}
+		return { T("feature.weather_editor.description", "Development tool for editing weather, testing weather transitions, and managing weather-related feature settings."),
+			{ T("feature.weather_editor.key_feature_1", "Provides weather editing functionality"),
+				T("feature.weather_editor.key_feature_2", "Includes dynamic saving and loading of vanilla post processing and weather settings."),
+				T("feature.weather_editor.key_feature_3", "Real-time editing and previewing of effects"),
+				T("feature.weather_editor.key_feature_4", "Instantly switch between any weather with immediate or gradual transitions"),
+				T("feature.weather_editor.key_feature_5", "Filter weather by type (Pleasant, Cloudy, Rainy, Snow, Aurora) for easy browsing"),
+				T("feature.weather_editor.key_feature_6", "View detailed weather information including wind, precipitation, and lightning data"),
+				T("feature.weather_editor.key_feature_7", "Color-coded weather names show all weather properties at a glance"),
+				T("feature.weather_editor.key_feature_8", "Persistent overlay window for continuous weather monitoring while playing") } };
+	};
 
 	virtual void DrawSettings() override;
 	virtual void DataLoaded() override;

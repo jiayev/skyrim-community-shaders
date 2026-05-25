@@ -25,6 +25,87 @@ import sys
 from pathlib import Path
 
 
+def find_matching_paren(text: str, open_index: int) -> int:
+    """Find the matching ')' for text[open_index] == '(' while respecting strings."""
+    depth = 0
+    in_string = False
+    escape = False
+
+    for index in range(open_index, len(text)):
+        char = text[index]
+
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == '(':
+            depth += 1
+        elif char == ')':
+            depth -= 1
+            if depth == 0:
+                return index
+
+    return -1
+
+
+def split_top_level_args(arg_text: str) -> list[str]:
+    """Split a C++ argument list on top-level commas only."""
+    args = []
+    current = []
+    paren_depth = 0
+    brace_depth = 0
+    bracket_depth = 0
+    in_string = False
+    escape = False
+
+    for char in arg_text:
+        if in_string:
+            current.append(char)
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            current.append(char)
+            continue
+
+        if char == '(':
+            paren_depth += 1
+        elif char == ')':
+            paren_depth -= 1
+        elif char == '{':
+            brace_depth += 1
+        elif char == '}':
+            brace_depth -= 1
+        elif char == '[':
+            bracket_depth += 1
+        elif char == ']':
+            bracket_depth -= 1
+        elif char == ',' and paren_depth == 0 and brace_depth == 0 and bracket_depth == 0:
+            args.append("".join(current).strip())
+            current = []
+            continue
+
+        current.append(char)
+
+    tail = "".join(current).strip()
+    if tail:
+        args.append(tail)
+    return args
+
+
 def find_project_root():
     """Find the project root by looking for CMakeLists.txt."""
     d = Path(__file__).resolve().parent.parent
@@ -56,6 +137,41 @@ def strip_comments(source: str) -> str:
     return pattern.sub(replacer, source)
 
 
+def extract_format_calls(clean: str, prefix: str) -> list[tuple[str, str]]:
+    """Extract Format(key, args, default) calls using balanced parsing instead of regex."""
+    results = []
+
+    for match in re.finditer(r'->Format\s*\(', clean):
+        open_paren = match.end() - 1
+        close_paren = find_matching_paren(clean, open_paren)
+        if close_paren == -1:
+            continue
+
+        args = split_top_level_args(clean[open_paren + 1:close_paren])
+        if len(args) < 3:
+            continue
+
+        key_expr = args[0].strip()
+        default_expr = args[-1].strip()
+
+        key_match = re.fullmatch(r'"([^"]+)"', key_expr)
+        tkey_match = re.fullmatch(r'TKEY\(\s*"([^"]+)"\s*\)', key_expr)
+
+        if key_match:
+            key = key_match.group(1)
+        elif tkey_match and prefix:
+            key = prefix + tkey_match.group(1)
+        else:
+            continue
+
+        if not re.fullmatch(r'(?:(?:"(?:[^"\\]|\\.)*"\s*)+)', default_expr, re.DOTALL):
+            continue
+
+        results.append((key, default_expr))
+
+    return results
+
+
 def extract_strings(src_dir: Path):
     """
     Extract all T("key", "default") and Format("key", {...}, "default") strings.
@@ -85,24 +201,6 @@ def extract_strings(src_dir: Path):
     # T(TKEY("suffix")) — key-only with macro
     tkey_keyonly_pattern = re.compile(
         r'\bT\(\s*TKEY\(\s*"([^"]+)"\s*\)\s*\)',
-        re.DOTALL
-    )
-
-    # ->Format(TKEY("suffix"), {args}, "default text")
-    format_tkey_pattern = re.compile(
-        r'->Format\(\s*TKEY\(\s*"([^"]+)"\s*\)\s*,'  # ->Format(TKEY("suffix"),
-        r'.*?'                                         # {args}
-        r',\s*((?:"(?:[^"\\]|\\.)*"\s*)+)'             # , "default text"
-        r'\)',                                          # )
-        re.DOTALL
-    )
-
-    # ->Format("key", {args}, "default text")
-    format_pattern = re.compile(
-        r'->Format\(\s*"([^"]+)"\s*,'      # ->Format("key",
-        r'.*?'                              # {args} — skip anything
-        r',\s*((?:"(?:[^"\\]|\\.)*"\s*)+)'  # , "default text"
-        r'\)',                               # )
         re.DOTALL
     )
 
@@ -158,18 +256,10 @@ def extract_strings(src_dir: Path):
                     default = concat_string_literals(match.group(2))
                     add_string(key, default, rel_path)
 
-            # Extract ->Format("key", {...}, "default") calls
-            for match in format_pattern.finditer(clean):
-                key = match.group(1)
-                default = concat_string_literals(match.group(2))
+            # Extract ->Format(..., ..., "default") calls with balanced parsing.
+            for key, default_expr in extract_format_calls(clean, prefix):
+                default = concat_string_literals(default_expr)
                 add_string(key, default, rel_path)
-
-            # Extract ->Format(TKEY("suffix"), {...}, "default") calls
-            if prefix:
-                for match in format_tkey_pattern.finditer(clean):
-                    key = prefix + match.group(1)
-                    default = concat_string_literals(match.group(2))
-                    add_string(key, default, rel_path)
 
             # Track T("key") key-only calls
             for match in t_keyonly_pattern.finditer(clean):

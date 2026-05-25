@@ -55,7 +55,12 @@ void IBL::DrawSettings()
 							  "0 = no matching (pure IBL brightness), 1 = fully matched to vanilla ambient."));
 	}
 	{
-		static const char* dalcModeNames[] = { "Luminance Ratio", "Color Ratio", "DALC + Sky", "DALC + Sky (Directional)" };
+		const char* dalcModeNames[] = {
+			T(TKEY("dalc_mode_luminance_ratio"), "Luminance Ratio"),
+			T(TKEY("dalc_mode_color_ratio"), "Color Ratio"),
+			T(TKEY("dalc_mode_dalc_plus_sky"), "DALC + Sky"),
+			T(TKEY("dalc_mode_dalc_plus_sky_directional"), "DALC + Sky (Directional)")
+		};
 		int dalcMode = static_cast<int>(settings.DALCMode);
 		if (ImGui::Combo(T(TKEY("dalc_mode"), "DALC Mode"), &dalcMode, dalcModeNames, IM_ARRAYSIZE(dalcModeNames))) {
 			settings.DALCMode = static_cast<uint>(dalcMode);

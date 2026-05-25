@@ -254,7 +254,8 @@ void AdvancedSettingsRenderer::RenderShaderDebugSection()
 
 					// Add button to copy shader info to clipboard
 					ImGui::PushID(shader.key.c_str());
-					if (ImGui::SmallButton(T("menu.advanced.copy_info", "Copy Info##BlockedShader"))) {
+					auto copyInfoLabel = std::format("{}##BlockedShader", T("menu.advanced.copy_info", "Copy Info"));
+					if (ImGui::SmallButton(copyInfoLabel.c_str())) {
 						std::string diskPathStr;
 						diskPathStr.reserve(shader.diskPath.size());
 						for (wchar_t wc : shader.diskPath) {
@@ -421,13 +422,15 @@ void AdvancedSettingsRenderer::RenderShaderDebugSection()
 		};
 		auto getRowTooltip = [shaderCache](const ShaderRow& row) {
 			std::string clickAction = (row.shader.key == shaderCache->blockedKey) ? T("menu.advanced.click_to_unblock", "Left-click to unblock this shader") : T("menu.advanced.click_to_block", "Left-click to block this shader");
+			auto shaderType = magic_enum::enum_name(row.shader.shaderType);
+			auto shaderClass = magic_enum::enum_name(row.shader.shaderClass);
 
-			return std::format(T("menu.advanced.shader_row_tooltip", "Type: {}\nClass: {}\nDescriptor: 0x{:X}\nKey: {}\n\n{}"),
-				magic_enum::enum_name(row.shader.shaderType).data(),
-				magic_enum::enum_name(row.shader.shaderClass).data(),
-				row.shader.descriptor,
-				row.shader.key,
-				clickAction);
+			return std::vformat(T("menu.advanced.shader_row_tooltip", "Type: {}\nClass: {}\nDescriptor: 0x{:X}\nKey: {}\n\n{}"), std::make_format_args(
+																																	 shaderType,
+																																	 shaderClass,
+																																	 row.shader.descriptor,
+																																	 row.shader.key,
+																																	 clickAction));
 		};
 
 		// Define function to extract filterable fields (for TableFilterState)
@@ -538,7 +541,8 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 
 	// Statistics section (moved from Advanced/Logging)
 	if (ImGui::TreeNodeEx(T("menu.advanced.statistics", "Statistics"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Text("%s", std::format(T("menu.advanced.shader_compiler_stats", "Shader Compiler : {}"), shaderCache->GetShaderStatsString()).c_str());
+		std::string shaderStatsString = shaderCache->GetShaderStatsString();
+		ImGui::Text("%s", std::vformat(T("menu.advanced.shader_compiler_stats", "Shader Compiler : {}"), std::make_format_args(shaderStatsString)).c_str());
 
 		// Derived parallelism metrics are computed lazily on demand and only shown
 		// once compilation has completed to avoid per-frame analysis while compiling.
@@ -593,7 +597,9 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 				ImGui::Spacing();
 				ImGui::TextDisabled("%s", T("menu.advanced.infinite_core_efficiency", "Infinite-core efficiency"));
 				float efficiency = static_cast<float>(std::clamp(p.infiniteCoreEfficiency, 0.0, 1.0));
-				ImGui::ProgressBar(efficiency, ImVec2(-1.0f, 0.0f), std::format(T("menu.advanced.efficiency_progress", "{:.1f}% efficient / {:.1f}% gap"), 100.0 * p.infiniteCoreEfficiency, p.infiniteCoreGapPercent).c_str());
+				double efficiencyPercent = 100.0 * p.infiniteCoreEfficiency;
+				std::string efficiencyProgress = std::vformat(T("menu.advanced.efficiency_progress", "{:.1f}% efficient / {:.1f}% gap"), std::make_format_args(efficiencyPercent, p.infiniteCoreGapPercent));
+				ImGui::ProgressBar(efficiency, ImVec2(-1.0f, 0.0f), efficiencyProgress.c_str());
 
 				ImGui::Spacing();
 				ImGui::TextDisabled("%s", T("menu.advanced.relative_durations", "Relative durations (normalized)"));
@@ -602,7 +608,10 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 					float ratio = static_cast<float>(std::clamp(value / maxMs, 0.0, 1.0));
 					ImGui::TextUnformatted(label);
 					ImGui::SameLine();
-					ImGui::ProgressBar(ratio, ImVec2(-1.0f, 0.0f), std::format(T("menu.advanced.relative_bar_format", "{} ({:.1f}%)"), Util::FormatDuration(value), 100.0 * ratio).c_str());
+					std::string duration = Util::FormatDuration(value);
+					double percent = 100.0 * ratio;
+					std::string progressText = std::vformat(T("menu.advanced.relative_bar_format", "{} ({:.1f}%)"), std::make_format_args(duration, percent));
+					ImGui::ProgressBar(ratio, ImVec2(-1.0f, 0.0f), progressText.c_str());
 				};
 				drawRelativeBar(T("menu.advanced.span_label", "Span (S)"), p.spanMs);
 				drawRelativeBar(T("menu.advanced.makespan_label", "Makespan (T_p)"), p.makespanMs);

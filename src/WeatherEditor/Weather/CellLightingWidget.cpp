@@ -64,7 +64,7 @@ void CellLightingWidget::DrawWidget()
 
 	if (!cell || !cell->IsInteriorCell()) {
 		Util::Text::Warning("%s", T(TKEY("not_interior_cell"), "This cell is not an interior cell."));
-		ImGui::TextWrapped("%s", T(TKEY("cell_lighting_interior_only"), "Cell lighting properties only apply to interior cells."));
+		ImGui::TextWrapped("%s", T(TKEY("cell_lighting_interior_only"), "Cell Lighting is only available for interior cells."));
 	} else if (!cell->GetLighting()) {
 		Util::Text::Error("%s", T(TKEY("no_lighting_data"), "No lighting data available for this cell."));
 	} else {
@@ -87,7 +87,7 @@ void CellLightingWidget::DrawWidget()
 				return result;
 			};
 
-			if (ImGui::BeginTabItem(CellLightingTab::kBasic, nullptr, basicFlags)) {
+			if (ImGui::BeginTabItem(T(TKEY("tab_basic"), "Basic"), nullptr, basicFlags)) {
 				BeginScrollableContent("##BasicScroll");
 
 				auto drawMatchedHeader = [&](bool matches, const char* label, auto draw) {
@@ -118,7 +118,7 @@ void CellLightingWidget::DrawWidget()
 					if (DrawIfMatchesSearch(CellLightingSetting::kXYRotation, [&](const char* label) {
 							return drawInherited(settings.inheritDirectionalRotation, [&]() {
 								return DrawWithHighlight(label, [&]() {
-									return ImGui::SliderInt(label, &xyDegrees, 0, 360);
+									return ImGui::SliderInt(std::format("{}##{}", T(TKEY("xy_rotation"), "XY Rotation"), CellLightingSetting::kXYRotation).c_str(), &xyDegrees, 0, 360);
 								});
 							});
 						})) {
@@ -129,7 +129,7 @@ void CellLightingWidget::DrawWidget()
 					if (DrawIfMatchesSearch(CellLightingSetting::kZRotation, [&](const char* label) {
 							return drawInherited(settings.inheritDirectionalRotation, [&]() {
 								return DrawWithHighlight(label, [&]() {
-									return ImGui::SliderInt(label, &zDegrees, 0, 360);
+									return ImGui::SliderInt(std::format("{}##{}", T(TKEY("z_rotation"), "Z Rotation"), CellLightingSetting::kZRotation).c_str(), &zDegrees, 0, 360);
 								});
 							});
 						})) {
@@ -162,7 +162,7 @@ void CellLightingWidget::DrawWidget()
 				ImGui::EndTabItem();
 			}
 
-			if (ImGui::BeginTabItem(CellLightingTab::kFog, nullptr, fogFlags)) {
+			if (ImGui::BeginTabItem(T(TKEY("tab_fog"), "Fog"), nullptr, fogFlags)) {
 				BeginScrollableContent("##FogScroll");
 
 				DrawSearchSectionIfMatches(CellLightingSetting::kFogNearColor, [&](const char*) {
@@ -211,7 +211,7 @@ void CellLightingWidget::DrawWidget()
 				ImGui::EndTabItem();
 			}
 
-			if (ImGui::BeginTabItem(CellLightingTab::kDalc, nullptr, dalcFlags)) {
+			if (ImGui::BeginTabItem(T(TKEY("tab_dalc"), "DALC"), nullptr, dalcFlags)) {
 				BeginScrollableContent("##DALCScroll");
 
 				if (MatchesAnySearch({ CellLightingSetting::kSpecular, CellLightingSetting::kFresnelPower })) {
@@ -251,7 +251,7 @@ void CellLightingWidget::DrawWidget()
 				ImGui::EndTabItem();
 			}
 
-			if (ImGui::BeginTabItem(CellLightingTab::kInheritance, nullptr, inheritFlags)) {
+			if (ImGui::BeginTabItem(T(TKEY("tab_inheritance"), "Inheritance"), nullptr, inheritFlags)) {
 				BeginScrollableContent("##InheritanceScroll");
 				ImGui::TextWrapped("%s", T(TKEY("inherit_flags_desc"), "These flags control which lighting properties are inherited from the cell's lighting template."));
 				ImGui::Separator();
@@ -590,7 +590,7 @@ std::vector<Widget::SearchResult> CellLightingWidget::CollectSearchableSettings(
 	std::vector<SearchResult> results;
 	for (const auto& [tab, names] : entries) {
 		for (const auto& name : names) {
-			results.push_back({ name, tab, name });
+			results.push_back({ WeatherUtils::TranslateControlLabel(name), tab, name });
 		}
 	}
 	return results;

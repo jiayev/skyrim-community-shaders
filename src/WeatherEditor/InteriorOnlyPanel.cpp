@@ -300,11 +300,13 @@ namespace InteriorOnlyPanel
 			}
 
 			bool allUserPaused = manager->AreAllUserPaused(kSceneType);
-			if (ImGui::SmallButton(allUserPaused ? T(TKEY("unpause_all"), "Unpause All##user") : T(TKEY("pause_all"), "Pause All##user")))
+			auto pauseAllLabel = std::format("{}##user", allUserPaused ? T(TKEY("unpause_all"), "Unpause All") : T(TKEY("pause_all"), "Pause All"));
+			if (ImGui::SmallButton(pauseAllLabel.c_str()))
 				manager->SetAllUserPaused(kSceneType, !allUserPaused);
 
 			ImGui::SameLine();
-			if (ImGui::SmallButton(T(TKEY("delete_all"), "Delete All##user")))
+			auto deleteAllLabel = std::format("{}##user", T(TKEY("delete_all"), "Delete All"));
+			if (ImGui::SmallButton(deleteAllLabel.c_str()))
 				deleteAllUserPopup.Request();
 
 			if (!overwriteIndices.empty())

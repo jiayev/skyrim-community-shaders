@@ -15,6 +15,7 @@
 #include "WeatherEditor/EditorWindow.h"
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <nlohmann/json.hpp>
 
 namespace
@@ -350,10 +351,12 @@ void WeatherEditor::DrawWeatherStatusPanel()
 			ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
 		}
 
-		ImGui::ProgressBar(displayPct, ImVec2(-1, 0),
-			isTransitioning ?
-				std::format(T(TKEY("transition_progress"), "Transition: {:.1f}%"), currentWeathers.lerpFactor * 100.0f).c_str() :
-				"");
+		std::string transitionOverlay;
+		if (isTransitioning) {
+			float transitionPct = currentWeathers.lerpFactor * 100.0f;
+			transitionOverlay = std::vformat(T(TKEY("transition_progress"), "Transition: {:.1f}%"), std::make_format_args(transitionPct));
+		}
+		ImGui::ProgressBar(displayPct, ImVec2(-1, 0), transitionOverlay.c_str());
 
 		if (!isTransitioning) {
 			ImGui::PopStyleColor();
@@ -612,8 +615,12 @@ void WeatherEditor::DisplayWindInfo(RE::TESWeather* weather)
 			Util::DrawMultiLineTooltip({
 				T(TKEY("wind_vs_player_tooltip_0"), "Wind relative to player direction:"),
 				T(TKEY("wind_vs_player_tooltip_1"), "- ~0\xc2\xb0 = Tailwind (wind behind player)"),
-				T(TKEY("wind_vs_player_tooltip_2"), "- ~\xc2\xb190\xc2\xb0 = Crosswind (left/right)"),
-				T(TKEY("wind_vs_player_tooltip_3"), "- ~\xc2\xb1180\xc2\xb0 = Headwind (wind coming toward player)"),
+				T(TKEY("wind_vs_player_tooltip_2"),
+					"- ~\xc2\xb1"
+					"90\xc2\xb0 = Crosswind (left/right)"),
+				T(TKEY("wind_vs_player_tooltip_3"),
+					"- ~\xc2\xb1"
+					"180\xc2\xb0 = Headwind (wind coming toward player)"),
 			});
 		}
 	}
@@ -684,9 +691,9 @@ void WeatherEditor::RenderWeatherControls(RE::Sky* sky)
 			// Special handling for None filter - use CheckboxFlags for consistency
 			ImGui::CheckboxFlags(filters[i].label, &s_weatherFlagFilter, UNCLASSIFIED_FLAG);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				Util::DrawMultiLineTooltip({ "Shows weathers that are not classified under any specific category.",
-					"Includes weathers with no flags or only untracked flags.",
-					"Categories tracked: Pleasant, Cloudy, Rainy, Snow, Aurora, Aurora Sun" });
+				Util::DrawMultiLineTooltip({ T(TKEY("none_filter_tooltip_0"), "Shows weathers that are not classified under any specific category."),
+					T(TKEY("none_filter_tooltip_1"), "Includes weathers with no flags or only untracked flags."),
+					T(TKEY("none_filter_tooltip_2"), "Categories tracked: Pleasant, Cloudy, Rainy, Snow, Aurora, Aurora Sun") });
 			}
 		} else {
 			ImGui::CheckboxFlags(filters[i].label, &s_weatherFlagFilter, static_cast<uint32_t>(filters[i].flag));
@@ -970,10 +977,11 @@ void WeatherEditor::RenderFeatureWeatherAnalysis()
 			bool isExpanded = ImGui::CollapsingHeader(weatherConfig.sectionName.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("%s", T(TKEY("feature_weather_analysis_tooltip_0"), "Weather analysis provided by: "));
-				ImGui::Text("%s", feature->GetName().c_str());
+				ImGui::Text("%s", feature->GetDisplayName().c_str());
 				ImGui::Text("%s", T(TKEY("feature_weather_analysis_tooltip_1"), "Feature category: "));
-				ImGui::Text("%s", std::string(feature->GetCategory()).c_str());
-				ImGui::Text(T(TKEY("feature_weather_analysis_tooltip_2"), "Click to %s this feature's weather data"), isExpanded ? "collapse" : "expand");
+				ImGui::Text("%s", feature->GetDisplayCategory().c_str());
+				ImGui::Text(T(TKEY("feature_weather_analysis_tooltip_2"), "Click to %s this feature's weather data"),
+					isExpanded ? T(TKEY("collapse"), "collapse") : T(TKEY("expand"), "expand"));
 			}
 
 			if (isExpanded && weatherConfig.drawFunction) {
@@ -995,7 +1003,7 @@ std::vector<std::string> WeatherEditor::GetWeatherFlagNames(RE::TESWeather* weat
 
 	uint32_t flags = weather->data.flags.underlying();
 	if (flags == 0) {
-		flagNames.push_back("None");
+		flagNames.push_back(T(TKEY("none_filter"), "None"));
 		return flagNames;
 	}
 
@@ -1013,9 +1021,17 @@ std::vector<std::string> WeatherEditor::GetWeatherFlagNames(RE::TESWeather* weat
 
 			// Convert specific cases to more readable names
 			if (flagName == "PermAurora") {
-				flagName = "Aurora";
+				flagName = T(TKEY("aurora"), "Aurora");
 			} else if (flagName == "AuroraFollowsSun") {
-				flagName = "Aurora Sun";
+				flagName = T(TKEY("aurora_sun"), "Aurora Sun");
+			} else if (flagName == "Pleasant") {
+				flagName = T(TKEY("pleasant"), "Pleasant");
+			} else if (flagName == "Cloudy") {
+				flagName = T(TKEY("cloudy"), "Cloudy");
+			} else if (flagName == "Rainy") {
+				flagName = T(TKEY("rainy"), "Rainy");
+			} else if (flagName == "Snow") {
+				flagName = T(TKEY("snow"), "Snow");
 			}
 
 			flagNames.push_back(flagName);
@@ -1032,7 +1048,7 @@ std::vector<std::string> WeatherEditor::GetWeatherFlagNames(RE::TESWeather* weat
 
 	uint32_t unknownFlags = flags & ~knownFlags;
 	if (unknownFlags != 0) {
-		flagNames.push_back("Unknown(" + std::to_string(unknownFlags) + ")");
+		flagNames.push_back(std::format("{}({})", T(TKEY("unknown"), "Unknown"), unknownFlags));
 	}
 
 	return flagNames;

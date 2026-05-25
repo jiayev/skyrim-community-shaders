@@ -744,36 +744,36 @@ namespace Util
 		return m_shouldDraw;
 	}
 
-	bool DrawCategoryHeader(const char* categoryName, bool& isExpanded, int categoryCount)
+	bool DrawCategoryHeader(const char* categoryKey, const char* displayName, bool& isExpanded, int categoryCount)
 	{
 		// Get the appropriate icon for this category
 		ID3D11ShaderResourceView* categoryIcon = nullptr;
 		auto& menu = Menu::GetSingleton()->uiIcons;
 
-		if (strcmp(categoryName, "Characters") == 0) {
+		if (strcmp(categoryKey, "Characters") == 0) {
 			categoryIcon = menu.characters.texture;
-		} else if (strcmp(categoryName, "Display") == 0) {
+		} else if (strcmp(categoryKey, "Display") == 0) {
 			categoryIcon = menu.display.texture;
-		} else if (strcmp(categoryName, "Grass") == 0) {
+		} else if (strcmp(categoryKey, "Grass") == 0) {
 			categoryIcon = menu.grass.texture;
-		} else if (strcmp(categoryName, "Lighting") == 0) {
+		} else if (strcmp(categoryKey, "Lighting") == 0) {
 			categoryIcon = menu.lighting.texture;
-		} else if (strcmp(categoryName, "Sky") == 0) {
+		} else if (strcmp(categoryKey, "Sky") == 0) {
 			categoryIcon = menu.sky.texture;
-		} else if (strcmp(categoryName, "Landscape & Textures") == 0) {
+		} else if (strcmp(categoryKey, "Landscape & Textures") == 0) {
 			categoryIcon = menu.landscape.texture;
-		} else if (strcmp(categoryName, "Water") == 0) {
+		} else if (strcmp(categoryKey, "Water") == 0) {
 			categoryIcon = menu.water.texture;
-		} else if (strcmp(categoryName, "Utility") == 0) {
+		} else if (strcmp(categoryKey, "Utility") == 0) {
 			categoryIcon = menu.debug.texture;
-		} else if (strcmp(categoryName, "Materials") == 0) {
+		} else if (strcmp(categoryKey, "Materials") == 0) {
 			categoryIcon = menu.materials.texture;
-		} else if (strcmp(categoryName, "Post-Processing") == 0) {
+		} else if (strcmp(categoryKey, "Post-Processing") == 0) {
 			categoryIcon = menu.postProcessing.texture;
 		}
 
-		// Add categoryCount to categoryName
-		std::string displayName = std::format("{} ({})", categoryName, categoryCount);
+		// Keep icon lookup on the stable category key and render the translated label separately.
+		std::string headerText = std::format("{} ({})", displayName, categoryCount);
 
 		// Draw category header with custom styling
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -785,7 +785,7 @@ namespace Util
 		const float currentFontSize = ImGui::GetFontSize();
 		const float iconSize = currentFontSize * 1.2f;     // 20% larger than font height
 		const float iconSpacing = currentFontSize * 0.3f;  // 30% of font height for spacing
-		ImVec2 textSize = ImGui::CalcTextSize(displayName.c_str());
+		ImVec2 textSize = ImGui::CalcTextSize(headerText.c_str());
 
 		// Calculate total content width (icon + spacing + text)
 		float contentWidth = textSize.x;
@@ -798,7 +798,7 @@ namespace Util
 		float lineLength = (availableWidth - contentWidth - 20.0f) * 0.5f;  // 20px for padding
 
 		// Create selectable area for the entire header
-		ImGui::PushID(displayName.c_str());
+		ImGui::PushID(categoryKey);
 		bool hovered = false;
 		bool clicked = false;
 
@@ -852,7 +852,7 @@ namespace Util
 
 		// Center text
 		ImVec2 textPos = ImVec2(currentX, pos.y + 2.0f);
-		drawList->AddText(textPos, headerColor, displayName.c_str());
+		drawList->AddText(textPos, headerColor, headerText.c_str());
 
 		// Handle click to toggle expansion
 		if (clicked) {

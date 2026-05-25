@@ -1,5 +1,6 @@
 #include "SettingsTabRenderer.h"
 
+#include <format>
 #include <set>
 #include <string>
 #include <windows.h>
@@ -22,6 +23,15 @@ using json = nlohmann::json;
 namespace
 {
 	using FontRoleGuard = MenuFonts::FontRoleGuard;  // Convenience alias
+
+	std::string GetLocaleDisplayLabel(std::string_view localeCode, std::string_view metadataName)
+	{
+		if (!metadataName.empty()) {
+			return std::string(metadataName);
+		}
+
+		return std::string(localeCode);
+	}
 
 	// Convert ImGui internal color names to user-friendly display names
 	const char* GetFriendlyColorName(int colorIndex)
@@ -208,7 +218,8 @@ void SettingsTabRenderer::RenderGeneralSettings(SettingsState& state)
 
 void SettingsTabRenderer::RenderShadersTab()
 {
-	if (BeginTabItemWithFont(T("menu.settings.tab_shaders", "Shaders"), Menu::FontRole::Heading)) {
+	auto tabLabel = std::format("{}##{}", T("menu.settings.tab_shaders", "Shaders"), "GeneralShadersTab");
+	if (BeginTabItemWithFont(tabLabel.c_str(), Menu::FontRole::Heading)) {
 		auto shaderCache = globals::shaderCache;
 
 		bool useCustomShaders = shaderCache->IsEnabled();
@@ -346,7 +357,8 @@ void SettingsTabRenderer::RenderShadersTab()
 void SettingsTabRenderer::RenderKeybindingsTab(
 	SettingsState& state)
 {
-	if (BeginTabItemWithFont(T("menu.settings.tab_keybindings", "Keybindings"), Menu::FontRole::Heading)) {
+	auto tabLabel = std::format("{}##{}", T("menu.settings.tab_keybindings", "Keybindings"), "GeneralKeybindingsTab");
+	if (BeginTabItemWithFont(tabLabel.c_str(), Menu::FontRole::Heading)) {
 		auto& settings = globals::menu->GetSettings();
 
 		Util::InputComboWidget(
@@ -391,7 +403,8 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 
 void SettingsTabRenderer::RenderInterfaceTab()
 {
-	if (BeginTabItemWithFont(T("menu.settings.tab_interface", "Interface"), Menu::FontRole::Heading)) {
+	auto tabLabel = std::format("{}##{}", T("menu.settings.tab_interface", "Interface"), "GeneralInterfaceTab");
+	if (BeginTabItemWithFont(tabLabel.c_str(), Menu::FontRole::Heading)) {
 		MenuFonts::TabBarPaddingGuard tabPaddingGuard(Menu::FontRole::Subheading);
 		if (ImGui::BeginTabBar("##tabs", ImGuiTabBarFlags_None)) {
 			RenderBehaviorTab();
@@ -407,7 +420,8 @@ void SettingsTabRenderer::RenderInterfaceTab()
 
 void SettingsTabRenderer::RenderBehaviorTab()
 {
-	if (BeginTabItemWithFont(T("menu.settings.tab_behavior", "Behavior"), Menu::FontRole::Heading)) {
+	auto tabLabel = std::format("{}##{}", T("menu.settings.tab_behavior", "Behavior"), "InterfaceBehaviorTab");
+	if (BeginTabItemWithFont(tabLabel.c_str(), Menu::FontRole::Heading)) {
 		auto& themeSettings = globals::menu->GetSettings().Theme;
 		RenderSaveInfoText();
 
@@ -422,7 +436,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
 			std::string currentDisplayName = currentLocale;
 			for (const auto& [code, name] : locales) {
 				if (code == currentLocale) {
-					currentDisplayName = name;
+					currentDisplayName = GetLocaleDisplayLabel(code, name);
 					break;
 				}
 			}
@@ -430,8 +444,10 @@ void SettingsTabRenderer::RenderBehaviorTab()
 			if (ImGui::BeginCombo(T("menu.settings.language", "Language"), currentDisplayName.c_str())) {
 				for (const auto& [code, name] : locales) {
 					bool isSelected = (code == currentLocale);
-					if (ImGui::Selectable(name.c_str(), isSelected)) {
+					auto displayName = GetLocaleDisplayLabel(code, name);
+					if (ImGui::Selectable(displayName.c_str(), isSelected)) {
 						i18n->SetLocale(code);
+						globals::menu->pendingFontReload = true;
 					}
 					if (isSelected) {
 						ImGui::SetItemDefaultFocus();
@@ -513,7 +529,8 @@ void SettingsTabRenderer::RenderBehaviorTab()
 
 void SettingsTabRenderer::RenderThemesTab()
 {
-	if (BeginTabItemWithFont(T("menu.settings.tab_themes", "Themes"), Menu::FontRole::Heading)) {
+	auto tabLabel = std::format("{}##{}", T("menu.settings.tab_themes", "Themes"), "InterfaceThemesTab");
+	if (BeginTabItemWithFont(tabLabel.c_str(), Menu::FontRole::Heading)) {
 		auto& themeSettings = globals::menu->GetSettings().Theme;
 
 		// Static variables for popup state and new theme creation
@@ -893,7 +910,8 @@ void SettingsTabRenderer::RenderThemesTab()
 
 void SettingsTabRenderer::RenderFontsTab()
 {
-	if (BeginTabItemWithFont(T("menu.settings.tab_fonts", "Fonts"), Menu::FontRole::Heading)) {
+	auto tabLabel = std::format("{}##{}", T("menu.settings.tab_fonts", "Fonts"), "InterfaceFontsTab");
+	if (BeginTabItemWithFont(tabLabel.c_str(), Menu::FontRole::Heading)) {
 		auto* menuInstance = globals::menu;
 		auto& themeSettings = menuInstance->GetSettings().Theme;
 		RenderSaveInfoText();
@@ -1089,7 +1107,8 @@ void SettingsTabRenderer::RenderFontsTab()
 
 void SettingsTabRenderer::RenderStylingTab()
 {
-	if (BeginTabItemWithFont(T("menu.settings.tab_styling", "Styling"), Menu::FontRole::Heading)) {
+	auto tabLabel = std::format("{}##{}", T("menu.settings.tab_styling", "Styling"), "InterfaceStylingTab");
+	if (BeginTabItemWithFont(tabLabel.c_str(), Menu::FontRole::Heading)) {
 		auto& themeSettings = globals::menu->GetSettings().Theme;
 		auto& style = themeSettings.Style;
 		RenderSaveInfoText();
@@ -1155,7 +1174,7 @@ void SettingsTabRenderer::RenderStylingTab()
 			};
 			int colorButtonPos = (int)style.ColorButtonPosition;
 			if (ImGui::Combo(T("menu.settings.color_button_position", "ColorButtonPosition"), &colorButtonPos, colorButtonPositions, IM_ARRAYSIZE(colorButtonPositions))) {
-				style.ColorButtonPosition = colorButtonPos;
+				style.ColorButtonPosition = static_cast<ImGuiDir>(colorButtonPos);
 			}
 		}
 		ImGui::SliderFloat2(T("menu.settings.button_text_align", "Button Text Align"), (float*)&style.ButtonTextAlign, 0.0f, 1.0f, "%.2f");
@@ -1178,7 +1197,8 @@ void SettingsTabRenderer::RenderStylingTab()
 
 void SettingsTabRenderer::RenderColorsTab()
 {
-	if (BeginTabItemWithFont(T("menu.settings.tab_colors", "Colors"), Menu::FontRole::Heading)) {
+	auto tabLabel = std::format("{}##{}", T("menu.settings.tab_colors", "Colors"), "InterfaceColorsTab");
+	if (BeginTabItemWithFont(tabLabel.c_str(), Menu::FontRole::Heading)) {
 		auto& themeSettings = globals::menu->GetSettings().Theme;
 		auto& colors = themeSettings.FullPalette;
 		RenderSaveInfoText();

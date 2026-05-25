@@ -4,6 +4,8 @@
 #include "Menu/ThemeManager.h"
 #include "Utils/UI.h"
 
+#include <format>
+
 #define I18N_KEY_PREFIX "weather_editor."
 
 // Forward declaration from EditorWindow.cpp
@@ -89,7 +91,13 @@ void PaletteWindow::DrawColorsTab()
 				ImGui::EndPopup();
 			}
 
-			Util::AddTooltip(std::format("RGB: {:.3f}, {:.3f}, {:.3f}\nClick to copy\nRight-click to clear", color.x, color.y, color.z).c_str());
+			Util::AddTooltip(std::format("RGB: {:.3f}, {:.3f}, {:.3f}\n{}\n{}",
+				color.x,
+				color.y,
+				color.z,
+				T(TKEY("click_to_copy"), "Click to copy"),
+				T(TKEY("right_click_to_clear"), "Right-click to clear"))
+					.c_str());
 		} else {
 			// Show empty favorite slot with star
 			ImVec4 emptyColor(0.2f, 0.2f, 0.2f, 1.0f);
@@ -151,8 +159,10 @@ void PaletteWindow::DrawColorsTab()
 				ImGui::EndDragDropSource();
 			}
 
-			Util::AddTooltip(std::format("RGB: {:.3f}, {:.3f}, {:.3f}\nUsed {} times\nClick to copy",
-				entry->color.x, entry->color.y, entry->color.z, entry->useCount)
+			Util::AddTooltip(std::format("RGB: {:.3f}, {:.3f}, {:.3f}\n{}\n{}",
+				entry->color.x, entry->color.y, entry->color.z,
+				std::vformat(T(TKEY("used_times"), "Used {} times"), std::make_format_args(entry->useCount)),
+				T(TKEY("click_to_copy"), "Click to copy"))
 					.c_str());
 		}
 	}
@@ -206,8 +216,11 @@ void PaletteWindow::DrawColorsTab()
 				ImGui::EndPopup();
 			}
 
-			Util::AddTooltip(std::format("RGB: {:.3f}, {:.3f}, {:.3f}\nUsed {} times\nClick to copy\nRight-click to remove",
-				entry->color.x, entry->color.y, entry->color.z, entry->useCount)
+			Util::AddTooltip(std::format("RGB: {:.3f}, {:.3f}, {:.3f}\n{}\n{}\n{}",
+				entry->color.x, entry->color.y, entry->color.z,
+				std::vformat(T(TKEY("used_times"), "Used {} times"), std::make_format_args(entry->useCount)),
+				T(TKEY("click_to_copy"), "Click to copy"),
+				T(TKEY("right_click_to_remove"), "Right-click to remove"))
 					.c_str());
 
 			colorIndex++;
@@ -232,7 +245,10 @@ void PaletteWindow::DrawValuesTab()
 				ImGui::SetClipboardText(std::to_string(entry->value).c_str());
 			}
 
-			Util::AddTooltip(std::format("Used {} times\nClick to copy", entry->useCount).c_str());
+			Util::AddTooltip(std::format("{}\n{}",
+				std::vformat(T(TKEY("used_times"), "Used {} times"), std::make_format_args(entry->useCount)),
+				T(TKEY("click_to_copy"), "Click to copy"))
+					.c_str());
 		}
 	}
 	ImGui::Spacing();
@@ -272,7 +288,11 @@ void PaletteWindow::DrawValuesTab()
 				ImGui::EndPopup();
 			}
 
-			Util::AddTooltip(std::format("Used {} times\nClick to copy\nRight-click to remove", entry->useCount).c_str());
+			Util::AddTooltip(std::format("{}\n{}\n{}",
+				std::vformat(T(TKEY("used_times"), "Used {} times"), std::make_format_args(entry->useCount)),
+				T(TKEY("click_to_copy"), "Click to copy"),
+				T(TKEY("right_click_to_remove"), "Right-click to remove"))
+					.c_str());
 		}
 	}
 }

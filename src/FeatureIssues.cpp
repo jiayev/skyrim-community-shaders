@@ -644,7 +644,7 @@ namespace FeatureIssues
 					if (!issue.minimumVersionRequired.empty()) {
 						auto tipText = I18n::GetSingleton()->Format("menu.issues.download_version_tooltip",
 							{ { "name", issue.replacementFeatureDisplayName }, { "version", issue.minimumVersionRequired } },
-							("Download " + issue.replacementFeatureDisplayName + " version " + issue.minimumVersionRequired + " or later").c_str());
+							"Download {name} version {version} or later");
 						ImGui::Text("%s", tipText.c_str());
 					} else {
 						auto tipText = I18n::GetSingleton()->Format("menu.issues.download_latest_tooltip",
@@ -660,7 +660,7 @@ namespace FeatureIssues
 				} else {
 					auto updateText = I18n::GetSingleton()->Format("menu.issues.update_to_version_required",
 						{ { "version", issue.minimumVersionRequired } },
-						("Update to " + issue.minimumVersionRequired + "+ Required").c_str());
+						"Update to {version}+ Required");
 					ImGui::TextWrapped("%s", updateText.c_str());
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -693,7 +693,7 @@ namespace FeatureIssues
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				auto tipText = I18n::GetSingleton()->Format("menu.issues.download_tooltip",
 					{ { "name", issue.replacementFeatureDisplayName } },
-					("Download " + issue.replacementFeatureDisplayName).c_str());
+					"Download {name}");
 				ImGui::Text("%s", tipText.c_str());
 			}
 		}
@@ -993,7 +993,7 @@ namespace FeatureIssues
 
 			std::string description = I18n::GetSingleton()->Format("menu.issues.test.active_inis_count",
 				{ { "count", std::to_string(s_activeTestInis.size()) } },
-				std::format("Active test INI files ({}):\n", s_activeTestInis.size()).c_str());
+				"Active test INI files ({count}):\n");
 
 			int activeCount = 0, deletedCount = 0, obsoleteCount = 0, unknownCount = 0, versionCount = 0;
 			std::vector<std::string> obsoleteFeatures, unknownFeatures, versionFeatures, deletedFeatures;

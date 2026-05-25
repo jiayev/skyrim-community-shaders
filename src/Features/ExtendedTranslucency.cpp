@@ -88,11 +88,11 @@ void ExtendedTranslucency::PostPostLoad()
 void ExtendedTranslucency::DrawSettings()
 {
 	if (ImGui::TreeNodeEx(T(TKEY("translucent_material"), "Translucent Material"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		static constexpr const char* AlphaModeNames[] = {
-			"0 - Disabled",
-			"1 - Rim Edge",
-			"2 - Isotropic Fabric, Glass, ...",
-			"3 - Anisotropic Fabric",
+		const char* AlphaModeNames[] = {
+			T(TKEY("alpha_mode_disabled"), "0 - Disabled"),
+			T(TKEY("alpha_mode_rim_edge"), "1 - Rim Edge"),
+			T(TKEY("alpha_mode_isotropic_fabric"), "2 - Isotropic Fabric, Glass, ..."),
+			T(TKEY("alpha_mode_anisotropic_fabric"), "3 - Anisotropic Fabric"),
 		};
 
 		static constexpr int AlphaModeSize = static_cast<int>(std::size(AlphaModeNames));
@@ -156,19 +156,6 @@ void ExtendedTranslucency::SaveSettings(json& o_json)
 void ExtendedTranslucency::RestoreDefaultSettings()
 {
 	settings = {};
-}
-
-std::pair<std::string, std::vector<std::string>> ExtendedTranslucency::GetFeatureSummary()
-{
-	return {
-		"Extended Translucency provides realistic rendering of thin fabric and other translucent materials.\n"
-		"This feature supports multiple material models for different types of translucent surfaces.",
-		{ "Multiple translucency material models (rim edge, isotropic/anisotropic fabric)",
-			"Realistic fabric translucency with directional light transmission",
-			"Per-material override support via NIF extra data",
-			"Configurable transparency and softness controls",
-			"Performance-optimized translucency calculations" }
-	};
 }
 
 #undef I18N_KEY_PREFIX

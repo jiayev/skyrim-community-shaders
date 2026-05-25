@@ -120,6 +120,34 @@ namespace
 		return MenuFonts::BeginTabItemWithFont(label, role, flags);
 	}
 
+	std::string TranslateFeatureCategory(std::string_view category)
+	{
+		if (category == FeatureCategories::kCharacters)
+			return T("feature.category.characters", "Characters");
+		if (category == FeatureCategories::kDisplay)
+			return T("feature.category.display", "Display");
+		if (category == FeatureCategories::kGrass)
+			return T("feature.category.grass", "Grass");
+		if (category == FeatureCategories::kLandscapeAndTextures)
+			return T("feature.category.landscape_and_textures", "Landscape & Textures");
+		if (category == FeatureCategories::kLighting)
+			return T("feature.category.lighting", "Lighting");
+		if (category == FeatureCategories::kMaterials)
+			return T("feature.category.materials", "Materials");
+		if (category == "Post-Processing")
+			return T("feature.category.post_processing", "Post-Processing");
+		if (category == FeatureCategories::kOther)
+			return T("feature.category.other", "Other");
+		if (category == FeatureCategories::kSky)
+			return T("feature.category.sky", "Sky");
+		if (category == FeatureCategories::kUtility)
+			return T("feature.category.utility", "Utility");
+		if (category == FeatureCategories::kWater)
+			return T("feature.category.water", "Water");
+
+		return std::string(category);
+	}
+
 	/**
 	 * @brief Draws a feature header with the feature name in large text and version in smaller text
 	 * @param featureName The display name of the feature
@@ -278,7 +306,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	auto& featureList = Feature::GetFeatureList();
 	auto sortedFeatureList{ featureList };  // need a copy so the load order is not lost
 	std::ranges::sort(sortedFeatureList, [](Feature* a, Feature* b) {
-		return a->GetName() < b->GetName();
+		return a->GetDisplayName() < b->GetDisplayName();
 	});
 
 	// Filter features by search string
@@ -308,7 +336,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	// Sort features within each category
 	for (auto& [category, features] : categorizedFeatures) {
 		std::ranges::sort(features, [](Feature* a, Feature* b) {
-			return a->GetName() < b->GetName();
+			return a->GetDisplayName() < b->GetDisplayName();
 		});
 	}
 
@@ -422,7 +450,7 @@ void FeatureListRenderer::RenderLeftColumn(
 		}
 
 		// Add Features header and search bar after built-in settings
-		Util::DrawSectionHeader("Features", true);
+		Util::DrawSectionHeader(T("menu.features.features", "Features"), true);
 		Util::DrawFeatureSearchBar(featureSearch);
 
 		// Then render the rest (features and categories, but skip already rendered core menus)
@@ -497,7 +525,8 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const CategoryHeader& head
 	{
 		MenuFonts::FontRoleGuard fontGuard(Menu::FontRole::Heading);
 		int count = Menu::categoryCounts[std::string(header.name)];
-		Util::DrawCategoryHeader(header.name.c_str(), isExpanded, count);
+		const auto categoryLabel = TranslateFeatureCategory(header.name);
+		Util::DrawCategoryHeader(header.name.c_str(), categoryLabel.c_str(), isExpanded, count);
 	}
 
 	// Update expansion state
@@ -536,7 +565,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 
 	// Create selectable item with semantic color
 	ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-	if (ImGui::Selectable(fmt::format(" {} ", feat->GetName()).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns)) {
+	if (ImGui::Selectable(fmt::format(" {} ", feat->GetDisplayName()).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns)) {
 		selectedMenuRef = listId;
 	}
 	ImGui::PopStyleColor();
@@ -641,7 +670,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 
 	// Draw feature title, version, and description on the left
 	// Returns title-only height for button alignment
-	float titleOnlyHeight = DrawFeatureHeader(feat->GetName(), isLoaded ? feat->version : "", description);
+	float titleOnlyHeight = DrawFeatureHeader(feat->GetDisplayName(), isLoaded ? feat->version : "", description);
 
 	// Save cursor position after header (for restoring after buttons are drawn)
 	ImVec2 cursorPosAfterHeader = ImGui::GetCursorScreenPos();
@@ -832,10 +861,11 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				feat->DrawUnloadedUI();
 				if (!feat->GetFeatureModLink().empty()) {
 					ImGui::Spacing();
-					const auto downloadText = fmt::format(
-						T("menu.features.download_link", "Click here to download this feature ({})"), feat->GetFeatureModLink());
+					auto featureModLink = feat->GetFeatureModLink();
+					const auto downloadText = std::vformat(
+						T("menu.features.download_link", "Click here to download this feature ({})"), std::make_format_args(featureModLink));
 					if (ImGui::Selectable(downloadText.c_str())) {
-						ShellExecuteA(NULL, "open", feat->GetFeatureModLink().c_str(), NULL, NULL, SW_SHOWNORMAL);
+						ShellExecuteA(NULL, "open", featureModLink.c_str(), NULL, NULL, SW_SHOWNORMAL);
 					}
 					if (auto _tt = Util::HoverTooltipWrapper()) {
 						ImGui::Text("%s", T("menu.features.download_tooltip", "Download the feature from the mod page."));
@@ -932,7 +962,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog
 					std::string targetDisplayName = settingId.featureShortName;
 					for (auto* f : Feature::GetFeatureList()) {
 						if (f->GetShortName() == settingId.featureShortName) {
-							targetDisplayName = f->GetName();
+							targetDisplayName = f->GetDisplayName();
 							break;
 						}
 					}

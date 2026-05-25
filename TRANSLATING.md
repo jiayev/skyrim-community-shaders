@@ -116,19 +116,4 @@ weather_editor.<item>           — Weather editor
 ## CJK Font Support
 
 CJK languages (Chinese, Japanese, Korean) require fonts with appropriate glyph coverage.
-The translation file can specify a font hint in `_meta`:
-
-```json
-{
-    "_meta": {
-        "language": "简体中文",
-        "locale": "zh_CN",
-        "fontHint": {
-            "file": "NotoSansSC-Regular.ttf",
-            "glyphRanges": "ChineseFull"
-        }
-    }
-}
-```
-
-Place the font file in `Interface/CommunityShaders/Fonts/`.
+Community Shaders uses system CJK fonts by default.

@@ -183,7 +183,10 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 void Upscaling::DrawSettings()
 {
 	// Display upscaling options in the UI
-	std::vector<std::string> upscaleModes = { "None", "TAA" };
+	std::vector<std::string> upscaleModes = {
+		T(TKEY("method_none"), "None"),
+		T(TKEY("method_taa"), "TAA")
+	};
 
 	std::string fsrLabel = "AMD FSR 3.1";
 	upscaleModes.push_back(fsrLabel);
@@ -227,8 +230,20 @@ void Upscaling::DrawSettings()
 
 	// Display upscaling settings if applicable
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
-		const char* upscalePresetsDLSS[] = { "Ultra Performance", "Performance", "Balanced", "Quality", "DLAA" };
-		const char* upscalePresets[] = { "Ultra Performance", "Performance", "Balanced", "Quality", "Native AA" };
+		const char* upscalePresetsDLSS[] = {
+			T(TKEY("preset_ultra_performance"), "Ultra Performance"),
+			T(TKEY("preset_performance"), "Performance"),
+			T(TKEY("preset_balanced"), "Balanced"),
+			T(TKEY("preset_quality"), "Quality"),
+			T(TKEY("preset_dlaa"), "DLAA")
+		};
+		const char* upscalePresets[] = {
+			T(TKEY("preset_ultra_performance"), "Ultra Performance"),
+			T(TKEY("preset_performance"), "Performance"),
+			T(TKEY("preset_balanced"), "Balanced"),
+			T(TKEY("preset_quality"), "Quality"),
+			T(TKEY("preset_native_aa"), "Native AA")
+		};
 
 		// Compute a safe preset index (4 - qualityMode) clamped to [0,4] to avoid negative/overflow indexing
 		int presetIndex = 0;
@@ -258,7 +273,13 @@ void Upscaling::DrawSettings()
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
 			ImGui::SliderFloat(T(TKEY("sharpness"), "Sharpness"), &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
 
-			const char* presets[] = { "Default", "Preset J", "Preset K", "Preset L", "Preset M" };
+			const char* presets[] = {
+				T(TKEY("dlss_model_preset_default"), "Default"),
+				T(TKEY("dlss_model_preset_j"), "Preset J"),
+				T(TKEY("dlss_model_preset_k"), "Preset K"),
+				T(TKEY("dlss_model_preset_l"), "Preset L"),
+				T(TKEY("dlss_model_preset_m"), "Preset M")
+			};
 			ImGui::Combo(T(TKEY("dlss_model_preset"), "DLSS Model Preset"), (int*)&settings.presetDLSS, presets, 5);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("%s", T(TKEY("dlss_model_preset_tooltip"),
