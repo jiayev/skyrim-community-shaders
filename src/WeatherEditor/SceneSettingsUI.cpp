@@ -2,9 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <map>
 #include <set>
 #include <tuple>
+
+#include "imgui_stdlib.h"
 
 #include "../Globals.h"
 #include "../Menu.h"
@@ -16,6 +19,13 @@
 namespace SceneSettingsUI
 {
 	using C = ThemeManager::Constants;
+	constexpr int kNoSubFeatureSelection = -1;
+	constexpr int kPeriodlessEntrySlot = 0;
+	constexpr float kSingleValueColumnScale = 1.25f;
+	constexpr float kLabelOverflowTolerance = 0.5f;
+	constexpr const char* kEllipsis = "...";
+	constexpr size_t kEllipsisLength = 3;
+	constexpr const char* kSelectSubFeatureLabel = "Select Sub Feature...";
 
 	// --- Shared helpers ---
 
@@ -31,7 +41,7 @@ namespace SceneSettingsUI
 			if (p < 0)
 				continue;
 			if (p >= kPeriodCount)
-				p = 0;  // Period-less entries (InteriorOnly) map to slot 0
+				p = kPeriodlessEntrySlot;
 			auto& featureMap = group.map[e.featureShortName];
 			auto [it, inserted] = featureMap.try_emplace(e.settingKey);
 			if (inserted) {
@@ -88,6 +98,12 @@ namespace SceneSettingsUI
 			[&](const auto& entry) { return entry.source == EntrySource::User && IsOverridden(overrides, entry); });
 	}
 
+	static bool AreAllPaused(const std::vector<size_t>& indices, const std::vector<SettingEntry>& entries)
+	{
+		return std::all_of(indices.begin(), indices.end(),
+			[&](size_t idx) { return idx < entries.size() && entries[idx].paused; });
+	}
+
 	/// Request a confirmation popup for deleting overwrite entries by indices.
 	static void RequestOverwriteRowDelete(PopupState& popups,
 		const std::vector<SceneSettingsManager::SettingEntry>& entries,
@@ -110,11 +126,157 @@ namespace SceneSettingsUI
 		popups.deleteRowOverwrite.Request();
 	}
 
+	static void CloseFlyout(Util::FlyoutState& state)
+	{
+		state.isOpen = false;
+		state.activeId = 0;
+	}
+
+	static void ApplyGroupFlyoutResult(const FlyoutResult& result, const std::vector<size_t>& indices,
+		bool allPaused, bool isOverwrite, PopupState* popups, const std::vector<SettingEntry>& entries,
+		const TableCallbacks& cb, Util::FlyoutState& flyout)
+	{
+		if (result.toggled)
+			for (auto idx : indices)
+				if (idx < entries.size() && entries[idx].paused == allPaused)
+					cb.togglePause(idx);
+		if (result.reverted)
+			for (auto idx : indices)
+				cb.revert(idx);
+		if (!result.deleted)
+			return;
+
+		if (popups && isOverwrite)
+			RequestOverwriteRowDelete(*popups, entries, indices);
+		else
+			RemoveIndicesReversed(indices, cb.remove);
+		CloseFlyout(flyout);
+	}
+
 	// --- Feature name resolution by scene type ---
 
 	static std::vector<std::string> GetFeatureNamesForType(SceneType type)
 	{
 		return (type == SceneType::InteriorOnly) ? SceneSettingsManager::GetInteriorRelevantFeatureNames() : SceneSettingsManager::GetExteriorRelevantFeatureNames();
+	}
+
+	static std::string GetDescriptorDisplayName(const SceneSettingDescriptor& descriptor)
+	{
+		return descriptor.displayName.empty() ? SceneSettingsManager::GetSettingDisplayName(descriptor.key) : descriptor.displayName;
+	}
+
+	static void RebuildSettingTree(AddSettingState& state)
+	{
+		state.settingTree = {};
+		state.selectedSubFeaturePath.clear();
+
+		for (size_t i = 0; i < state.cachedSettings.size(); ++i) {
+			auto* node = &state.settingTree;
+			for (const auto& part : state.cachedSettings[i].displayPath)
+				node = &node->children[part];
+			node->settings.push_back(i);
+		}
+	}
+
+	static void CacheSettings(AddSettingState& state, std::vector<SceneSettingDescriptor> settings)
+	{
+		state.cachedSettings = std::move(settings);
+		state.selectedSettings.assign(state.cachedSettings.size(), false);
+		RebuildSettingTree(state);
+	}
+
+	static bool IsValidChildIndex(const AddSettingNode& node, int index)
+	{
+		return index >= 0 && index < static_cast<int>(node.children.size());
+	}
+
+	static const AddSettingNode* GetChildByIndex(const AddSettingNode& node, int index)
+	{
+		if (!IsValidChildIndex(node, index))
+			return nullptr;
+		auto it = node.children.begin();
+		std::advance(it, index);
+		return &it->second;
+	}
+
+	static bool DrawSubFeatureBackButton(size_t level)
+	{
+		auto* menu = globals::menu;
+		float buttonSize = ImGui::GetFrameHeight();
+		float iconPadding = buttonSize * C::FLYOUT_REVERT_PAD_SCALE;
+		ImGui::PushID(static_cast<int>(level));
+		bool clicked = menu && menu->uiIcons.undo.texture ?
+		                   Util::IconButton("##SubFeatureBack", menu->uiIcons.undo.texture,
+							   ImVec2(buttonSize, buttonSize), iconPadding) :
+		                   ImGui::ArrowButton("##SubFeatureBack", ImGuiDir_Left);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Show parent settings");
+		ImGui::PopID();
+		return clicked;
+	}
+
+	static const AddSettingNode* DrawSubFeatureSelectors(AddSettingState& state)
+	{
+		const auto* node = &state.settingTree;
+		for (size_t level = 0; !node->children.empty(); ++level) {
+			int selectedIdx = level < state.selectedSubFeaturePath.size() ?
+			                      state.selectedSubFeaturePath[level] :
+			                      kNoSubFeatureSelection;
+			auto selectedIt = node->children.begin();
+			bool hasSelection = IsValidChildIndex(*node, selectedIdx);
+			if (hasSelection)
+				std::advance(selectedIt, selectedIdx);
+			auto label = hasSelection ? selectedIt->first : kSelectSubFeatureLabel;
+
+			ImGui::Spacing();
+			bool canGoBack = level > 0 && hasSelection && !node->settings.empty();
+			float width = ImGui::GetContentRegionAvail().x;
+			if (canGoBack)
+				width = std::max(ImGui::GetFrameHeight(), width - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
+			ImGui::SetNextItemWidth(width);
+			ImGui::PushID(static_cast<int>(level));
+			if (ImGui::BeginCombo("##SubFeatureSelect", label.c_str())) {
+				int i = 0;
+				for (const auto& [name, _] : node->children) {
+					if (ImGui::Selectable(name.c_str(), i == selectedIdx)) {
+						if (state.selectedSubFeaturePath.size() <= level)
+							state.selectedSubFeaturePath.resize(level + 1, kNoSubFeatureSelection);
+						state.selectedSubFeaturePath[level] = i;
+						state.selectedSubFeaturePath.resize(level + 1);
+						selectedIdx = i;
+						hasSelection = true;
+					}
+					if (i == selectedIdx)
+						ImGui::SetItemDefaultFocus();
+					++i;
+				}
+				ImGui::EndCombo();
+			}
+			ImGui::PopID();
+
+			if (canGoBack) {
+				ImGui::SameLine();
+				if (DrawSubFeatureBackButton(level)) {
+					state.selectedSubFeaturePath.resize(level);
+					return node;
+				}
+			}
+
+			if (!hasSelection)
+				return node;
+
+			node = GetChildByIndex(*node, selectedIdx);
+			if (!node)
+				return nullptr;
+		}
+		return node;
+	}
+
+	template <class Callback>
+	static void ForEachSettingIndex(const AddSettingNode& node, Callback&& callback)
+	{
+		for (auto idx : node.settings)
+			callback(idx);
 	}
 
 	// --- Duplicate checking by scene type ---
@@ -123,6 +285,19 @@ namespace SceneSettingsUI
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
 		return (type == SceneType::TimeOfDay) ? manager->HasEntryForPeriod(feature, key, period, EntrySource::User) : manager->HasEntryFromSource(type, feature, key, EntrySource::User);
+	}
+
+	template <class IsAddedFn>
+	static bool IsAddedForTargetPeriods(const std::string& feature, const std::string& key, Period period, bool addToAllPeriods,
+		IsAddedFn&& isAddedFn)
+	{
+		if (!addToAllPeriods)
+			return isAddedFn(feature, key, period);
+
+		for (int p = 0; p < kPeriodCount; ++p)
+			if (!isAddedFn(feature, key, static_cast<Period>(p)))
+				return false;
+		return true;
 	}
 
 	// --- Shared Drawing ---
@@ -143,7 +318,7 @@ namespace SceneSettingsUI
 
 	// Core add-setting dialog: renders UI and delegates data ops to callbacks.
 	static void DrawAddDialogCore(AddSettingState& state, Period period, bool addToAllPeriods,
-		std::function<std::vector<std::string>(const std::string&)> settingKeysFn,
+		std::function<std::vector<SceneSettingDescriptor>(const std::string&)> settingsFn,
 		std::function<bool(const std::string&, const std::string&, Period)> isAddedFn,
 		std::function<void(const std::string&, const std::string&, const json&, Period)> addFn)
 	{
@@ -170,8 +345,7 @@ namespace SceneSettingsUI
 				auto itemLabel = SceneSettingsManager::GetFeatureDisplayName(state.cachedFeatureNames[i]);
 				if (ImGui::Selectable(itemLabel.c_str(), i == state.selectedFeatureIdx)) {
 					state.selectedFeatureIdx = i;
-					state.cachedSettingKeys = settingKeysFn(state.cachedFeatureNames[i]);
-					state.selectedSettings.assign(state.cachedSettingKeys.size(), false);
+					CacheSettings(state, settingsFn(state.cachedFeatureNames[i]));
 				}
 				if (i == state.selectedFeatureIdx)
 					ImGui::SetItemDefaultFocus();
@@ -179,37 +353,41 @@ namespace SceneSettingsUI
 			ImGui::EndCombo();
 		}
 
-		bool hasFeature = state.selectedFeatureIdx >= 0 && !state.cachedSettingKeys.empty();
+		const AddSettingNode* visibleNode = nullptr;
+		if (!state.cachedSettings.empty())
+			visibleNode = !state.settingTree.children.empty() ? DrawSubFeatureSelectors(state) : &state.settingTree;
 
-		if (hasFeature) {
+		bool hasVisibleSettings = state.selectedFeatureIdx >= 0 && visibleNode && !visibleNode->settings.empty();
+		if (hasVisibleSettings) {
 			ImGui::Spacing();
 			ImGui::Separator();
 
 			if (ImGui::SmallButton("Select All"))
-				std::fill(state.selectedSettings.begin(), state.selectedSettings.end(), true);
+				ForEachSettingIndex(*visibleNode, [&](size_t i) { state.selectedSettings[i] = true; });
 			ImGui::SameLine();
 			if (ImGui::SmallButton("Select None"))
-				std::fill(state.selectedSettings.begin(), state.selectedSettings.end(), false);
+				ForEachSettingIndex(*visibleNode, [&](size_t i) { state.selectedSettings[i] = false; });
 
 			ImGui::Spacing();
 
 			auto& featureName = state.cachedFeatureNames[state.selectedFeatureIdx];
 			if (ImGui::BeginChild("##SettingList", ImVec2(-FLT_MIN, C::Em(C::SCENE_ADD_LIST_HEIGHT_EM)), ImGuiChildFlags_Borders)) {
-				for (int i = 0; i < static_cast<int>(state.cachedSettingKeys.size()); ++i) {
-					auto& key = state.cachedSettingKeys[i];
-					bool alreadyAdded = addToAllPeriods ? [&] { for (int p = 0; p < kPeriodCount; ++p) if (!isAddedFn(featureName, key, static_cast<Period>(p))) return false; return true; }() : isAddedFn(featureName, key, period);
+				ForEachSettingIndex(*visibleNode, [&](size_t i) {
+					const auto& descriptor = state.cachedSettings[i];
+					auto& key = descriptor.key;
+					bool alreadyAdded = IsAddedForTargetPeriods(featureName, key, period, addToAllPeriods, isAddedFn);
 
-				auto prettyKey = Util::PrettifyIdentifier(key);
-				if (alreadyAdded) {
-					auto _ = Util::DisableGuard(true);
-					bool checked = true;
-					ImGui::Checkbox(prettyKey.c_str(), &checked);
-				} else {
-					bool sel = state.selectedSettings[i];
-					if (ImGui::Checkbox(prettyKey.c_str(), &sel))
+					auto prettyKey = GetDescriptorDisplayName(descriptor);
+					if (alreadyAdded) {
+						auto _ = Util::DisableGuard(true);
+						bool checked = true;
+						ImGui::Checkbox(prettyKey.c_str(), &checked);
+					} else {
+						bool sel = state.selectedSettings[i];
+						if (ImGui::Checkbox(prettyKey.c_str(), &sel))
 							state.selectedSettings[i] = sel;
 					}
-				}
+				});
 			}
 			ImGui::EndChild();
 
@@ -224,11 +402,14 @@ namespace SceneSettingsUI
 				auto _ = Util::DisableGuard(selectedCount == 0);
 				auto label = std::format("Add ({})", selectedCount);
 				if (ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0))) {
-					for (size_t i = 0; i < state.cachedSettingKeys.size(); ++i) {
+					for (size_t i = 0; i < state.cachedSettings.size(); ++i) {
 						if (!state.selectedSettings[i])
 							continue;
-						auto& key = state.cachedSettingKeys[i];
+						const auto& descriptor = state.cachedSettings[i];
+						auto& key = descriptor.key;
 						auto currentValue = SceneSettingsManager::GetFeatureSettingValue(featureName, key);
+						if (currentValue.is_null())
+							currentValue = descriptor.value;
 						if (addToAllPeriods) {
 							for (int p = 0; p < kPeriodCount; ++p)
 								if (!isAddedFn(featureName, key, static_cast<Period>(p)))
@@ -250,7 +431,7 @@ namespace SceneSettingsUI
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
 		DrawAddDialogCore(state, period, addToAllPeriods,
-			[type](const std::string& feat) { return (type == SceneType::TimeOfDay) ? SceneSettingsManager::GetTransitionableSettingKeys(feat) : SceneSettingsManager::GetFeatureSettingKeys(feat); },
+			[type](const std::string& feat) { return (type == SceneType::TimeOfDay) ? SceneSettingsManager::GetTransitionableSceneSettings(feat) : SceneSettingsManager::GetFeatureSceneSettings(feat); },
 			[type](const std::string& feat, const std::string& key, Period p) { return IsAlreadyAdded(type, feat, key, p); },
 			[=](const std::string& feat, const std::string& key, const json& val, Period p) { manager->AddSetting(type, feat, key, val, p); });
 	}
@@ -259,7 +440,7 @@ namespace SceneSettingsUI
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
 		DrawAddDialogCore(state, period, addToAllPeriods,
-			[](const std::string& feat) { return SceneSettingsManager::GetTransitionableSettingKeys(feat); },
+			[](const std::string& feat) { return SceneSettingsManager::GetTransitionableSceneSettings(feat); },
 			[=](const std::string& feat, const std::string& key, Period p) { return manager->HasWeatherEntryForPeriod(weatherId, feat, key, p); },
 			[=](const std::string& feat, const std::string& key, const json& val, Period p) { manager->AddWeatherSetting(weatherId, feat, key, val, p); });
 	}
@@ -345,8 +526,10 @@ namespace SceneSettingsUI
 		case SceneSettingsManager::SettingType::Boolean:
 			{
 				bool val = value.is_boolean() ? value.get<bool>() : (value.get<int>() != 0);
-				if (ImGui::Checkbox("##val", &val) && !readOnly)
+				if (ImGui::Checkbox("##val", &val) && !readOnly) {
 					updateFn(value.is_boolean() ? json(val) : json(val ? 1 : 0));
+					commitFn();
+				}
 			}
 			break;
 		case SceneSettingsManager::SettingType::Float:
@@ -367,6 +550,16 @@ namespace SceneSettingsUI
 				int val = value.get<int>();
 				ImGui::SetNextItemWidth(inputWidth);
 				if (ImGui::InputInt("##val", &val, 0, 0) && !readOnly)
+					updateFn(json(val));
+				if (!readOnly && ImGui::IsItemDeactivatedAfterEdit())
+					commitFn();
+			}
+			break;
+		case SceneSettingsManager::SettingType::String:
+			{
+				std::string val = value.is_string() ? value.get<std::string>() : std::string();
+				ImGui::SetNextItemWidth(inputWidth);
+				if (ImGui::InputText("##val", &val) && !readOnly)
 					updateFn(json(val));
 				if (!readOnly && ImGui::IsItemDeactivatedAfterEdit())
 					commitFn();
@@ -472,7 +665,8 @@ namespace SceneSettingsUI
 				ImGui::TableSetupColumn(SceneSettingsManager::kPeriodNames[i],
 					ImGuiTableColumnFlags_WidthFixed, C::Em(C::SCENE_TOD_PERIOD_COL_EM));
 		} else {
-			ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, C::Em(C::SCENE_TOD_PERIOD_COL_EM) * 1.25f);
+			ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed,
+				C::Em(C::SCENE_TOD_PERIOD_COL_EM) * kSingleValueColumnScale);
 		}
 		if (multiColumn) {
 			ImGui::TableSetupScrollFreeze(0, 1);
@@ -494,25 +688,10 @@ namespace SceneSettingsUI
 					ImGui::PushID(i);
 					ImGuiID colId = ImGui::GetID("##colFlyout");
 					if (Util::BeginFlyout(flyout.col, colId, cellMin, cellMax)) {
-						bool allPaused = std::all_of(indices.begin(), indices.end(),
-							[&](size_t idx) { return idx < entries.size() && entries[idx].paused; });
+						bool allPaused = AreAllPaused(indices, entries);
 						auto result = DrawFlyoutControls(allPaused, true, isOverwrite);
-
-						if (result.toggled)
-							for (auto idx : indices)
-								if (idx < entries.size() && entries[idx].paused == allPaused)
-									cb.togglePause(idx);
-						if (result.reverted)
-							for (auto idx : indices)
-								cb.revert(idx);
-						if (result.deleted) {
-							if (popups && isOverwrite)
-								RequestOverwriteRowDelete(*popups, entries, indices);
-							else
-								RemoveIndicesReversed(indices, cb.remove);
-							flyout.col.isOpen = false;
-							flyout.col.activeId = 0;
-						}
+						ApplyGroupFlyoutResult(result, indices, allPaused, isOverwrite,
+							popups, entries, cb, flyout.col);
 						Util::EndFlyout(flyout.col);
 					}
 					ImGui::PopID();
@@ -550,6 +729,7 @@ namespace SceneSettingsUI
 			// Collect valid indices for this row
 			// In single-column mode, collect from ALL period slots (entries may span multiple periods)
 			std::vector<size_t> rowIndices;
+			rowIndices.reserve(kPeriodCount);
 			int scanCols = multiColumn ? numValueColumns : kPeriodCount;
 			for (int p = 0; p < scanCols; ++p)
 				if (perKey[p] != SIZE_MAX)
@@ -569,13 +749,13 @@ namespace SceneSettingsUI
 
 			float textBottomY = 0.0f;
 			{
-				auto text = Util::PrettifyIdentifier(sid.key);
+				auto text = SceneSettingsManager::GetSettingDisplayName(sid.feature, sid.key);
 				float wrapWidth = ImGui::GetContentRegionAvail().x;
 				float lineH = ImGui::GetTextLineHeight();
 				float fixedH = lineH * C::SCENE_SETTING_MAX_LINES;
 				ImVec2 textSize = ImGui::CalcTextSize(text.c_str(), nullptr, false, wrapWidth);
 
-				if (textSize.y > fixedH + 0.5f) {
+				if (textSize.y > fixedH + kLabelOverflowTolerance) {
 					// Text overflows — find where line 2 ends and truncate with "..."
 					auto* font = ImGui::GetFont();
 					const char* textEnd = text.c_str() + text.size();
@@ -584,9 +764,10 @@ namespace SceneSettingsUI
 						lineStart = font->CalcWordWrapPositionA(1.0f, lineStart, textEnd, wrapWidth);
 					// Trim back for "..." and rebuild
 					size_t visibleLen = static_cast<size_t>(lineStart - text.c_str());
-					while (visibleLen > 3 && ImGui::CalcTextSize(text.substr(0, visibleLen).append("...").c_str(), nullptr, false, wrapWidth).y > fixedH + 0.5f)
+					while (visibleLen > kEllipsisLength &&
+					       ImGui::CalcTextSize((text.substr(0, visibleLen) + kEllipsis).c_str(), nullptr, false, wrapWidth).y > fixedH + kLabelOverflowTolerance)
 						--visibleLen;
-					text = text.substr(0, visibleLen) + "...";
+					text = text.substr(0, visibleLen) + kEllipsis;
 				}
 
 				ImGui::TextWrapped("%s", text.c_str());
@@ -613,25 +794,10 @@ namespace SceneSettingsUI
 				// Flyout anchors to text bottom so it appears right under the text
 				ImVec2 anchorMax(hoverMax.x, textBottomY);
 				if (Util::BeginFlyout(flyout.row, rowId, hoverMin, hoverMax, anchorMax)) {
-					bool allPaused = std::all_of(rowIndices.begin(), rowIndices.end(),
-						[&](size_t i) { return i < entries.size() && entries[i].paused; });
+					bool allPaused = AreAllPaused(rowIndices, entries);
 					auto result = DrawFlyoutControls(allPaused, true, isOverwrite);
-
-					if (result.toggled)
-						for (auto idx : rowIndices)
-							if (idx < entries.size() && entries[idx].paused == allPaused)
-								cb.togglePause(idx);
-					if (result.reverted)
-						for (auto idx : rowIndices)
-							cb.revert(idx);
-					if (result.deleted) {
-						if (popups && isOverwrite)
-							RequestOverwriteRowDelete(*popups, entries, rowIndices);
-						else
-							RemoveIndicesReversed(rowIndices, cb.remove);
-						flyout.row.isOpen = false;
-						flyout.row.activeId = 0;
-					}
+					ApplyGroupFlyoutResult(result, rowIndices, allPaused, isOverwrite,
+						popups, entries, cb, flyout.row);
 					Util::EndFlyout(flyout.row);
 				}
 			}
@@ -704,8 +870,7 @@ namespace SceneSettingsUI
 							} else {
 								cb.remove(entryIndex);
 							}
-							flyout.cell.isOpen = false;
-							flyout.cell.activeId = 0;
+							CloseFlyout(flyout.cell);
 						}
 						Util::EndFlyout(flyout.cell);
 					}
@@ -751,25 +916,10 @@ namespace SceneSettingsUI
 					// Cell flyout operates on all row indices (centered for wide single-column)
 					ImGuiID cellId = ImGui::GetItemID();
 					if (Util::BeginFlyout(flyout.cell, cellId, true)) {
-						bool allPaused = std::all_of(rowIndices.begin(), rowIndices.end(),
-							[&](size_t i) { return i < entries.size() && entries[i].paused; });
+						bool allPaused = AreAllPaused(rowIndices, entries);
 						auto result = DrawFlyoutControls(allPaused, rowIndices.size() > 1, isOverwrite);
-
-						if (result.toggled)
-							for (auto idx : rowIndices)
-								if (idx < entries.size() && entries[idx].paused == allPaused)
-									cb.togglePause(idx);
-						if (result.reverted)
-							for (auto idx : rowIndices)
-								cb.revert(idx);
-						if (result.deleted) {
-							if (popups && isOverwrite)
-								RequestOverwriteRowDelete(*popups, entries, rowIndices);
-							else
-								RemoveIndicesReversed(rowIndices, cb.remove);
-							flyout.cell.isOpen = false;
-							flyout.cell.activeId = 0;
-						}
+						ApplyGroupFlyoutResult(result, rowIndices, allPaused, isOverwrite,
+							popups, entries, cb, flyout.cell);
 						Util::EndFlyout(flyout.cell);
 					}
 
@@ -795,7 +945,7 @@ namespace SceneSettingsUI
 		int totalCols = multiColumn ? 1 + numValueColumns : 2;
 		float colSum = C::Em(C::SCENE_TOD_PARAM_COL_EM);
 		colSum += multiColumn ? numValueColumns * C::Em(C::SCENE_TOD_PERIOD_COL_EM)
-		                      : C::Em(C::SCENE_TOD_PERIOD_COL_EM) * 1.25f;
+		                      : C::Em(C::SCENE_TOD_PERIOD_COL_EM) * kSingleValueColumnScale;
 		float tableWidth = colSum + totalCols * style.CellPadding.x * 2.0f + (totalCols + 1) * 1.0f;
 		// Fewer value columns → header extends past table; at kPeriodCount columns it's flush
 		float extraCols = C::SCENE_SECTION_HEADER_TARGET_COLS - numValueColumns;
@@ -888,9 +1038,9 @@ namespace SceneSettingsUI
 					const auto& e = entries[idx];
 					auto label = e.period != SceneSettingsManager::TimeOfDayPeriod::Count
 						? std::format("{} \u2014 {} ({})", SceneSettingsManager::GetFeatureDisplayName(e.featureShortName),
-							Util::PrettifyIdentifier(e.settingKey), SceneSettingsManager::GetPeriodName(e.period))
+							SceneSettingsManager::GetSettingDisplayName(e.featureShortName, e.settingKey), SceneSettingsManager::GetPeriodName(e.period))
 						: std::format("{} \u2014 {}", SceneSettingsManager::GetFeatureDisplayName(e.featureShortName),
-							Util::PrettifyIdentifier(e.settingKey));
+							SceneSettingsManager::GetSettingDisplayName(e.featureShortName, e.settingKey));
 					DrawSelectedCheckbox(std::format("{}##exp{}", label, i), state.selected[i]);
 				}
 			} else {
@@ -904,7 +1054,7 @@ namespace SceneSettingsUI
 				for (auto& [gk, stateIs] : groups) {
 					bool checked = std::all_of(stateIs.begin(), stateIs.end(), [&](size_t i) { return state.selected[i]; });
 					auto label = std::format("{} \u2014 {}##expg{}{}",
-						SceneSettingsManager::GetFeatureDisplayName(gk.first), Util::PrettifyIdentifier(gk.second),
+						SceneSettingsManager::GetFeatureDisplayName(gk.first), SceneSettingsManager::GetSettingDisplayName(gk.first, gk.second),
 						gk.first, gk.second);
 					if (ImGui::Checkbox(label.c_str(), &checked))
 						for (auto i : stateIs)

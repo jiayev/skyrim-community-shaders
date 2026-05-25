@@ -169,6 +169,75 @@ void Feature::Save(json& o_json)
 	SaveSettings(o_json[GetName()]);
 }
 
+namespace
+{
+	bool IsSceneSettingPrimitive(const json& value)
+	{
+		return value.is_boolean() || value.is_number_integer() || value.is_number_float() || value.is_string();
+	}
+}
+
+std::vector<SceneSettingDescriptor> Feature::GetSceneSettings()
+{
+	json settings;
+	SaveSettings(settings);
+	if (!settings.is_object())
+		return {};
+
+	std::vector<SceneSettingDescriptor> descriptors;
+	descriptors.reserve(settings.size());
+	for (const auto& [key, value] : settings.items()) {
+		if (!IsSceneSettingPrimitive(value))
+			continue;
+		descriptors.push_back({
+			.key = key,
+			.value = value,
+		});
+	}
+	return descriptors;
+}
+
+bool Feature::GetSceneSettingValue(const std::string& key, json& outValue)
+{
+	if (key.empty())
+		return false;
+
+	json settings;
+	SaveSettings(settings);
+	if (!settings.is_object())
+		return false;
+
+	auto it = settings.find(key);
+	if (it == settings.end() || !IsSceneSettingPrimitive(*it))
+		return false;
+
+	outValue = *it;
+	return true;
+}
+
+bool Feature::ApplySceneSettings(const std::vector<std::pair<std::string, json>>& updates)
+{
+	if (updates.empty())
+		return true;
+
+	json settings;
+	SaveSettings(settings);
+	if (!settings.is_object())
+		return false;
+
+	for (const auto& [key, value] : updates) {
+		auto it = settings.find(key);
+		if (key.empty() || it == settings.end() || !IsSceneSettingPrimitive(*it) || !IsSceneSettingPrimitive(value))
+			return false;
+	}
+
+	for (const auto& [key, value] : updates)
+		settings[key] = value;
+
+	LoadSettings(settings);
+	return true;
+}
+
 bool Feature::ValidateCache(CSimpleIniA& a_ini)
 {
 	auto name = GetName();

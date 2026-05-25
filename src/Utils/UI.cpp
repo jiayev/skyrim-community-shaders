@@ -2494,15 +2494,16 @@ namespace Util
 	{
 		if (!texture)
 			return false;
-		// Shrink icon within button area so it visually matches text buttons
 		float pad = (iconPadding >= 0.0f) ? iconPadding : size.x * kIconShrink;
 		ImVec2 iconSize(size.x - pad * 2.0f, size.y - pad * 2.0f);
-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.8f, 0.8f, 0.25f));
+		auto& colors = ImGui::GetStyle().Colors;
+		ImGui::PushStyleColor(ImGuiCol_Button, colors[ImGuiCol_FrameBg]);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colors[ImGuiCol_FrameBgHovered]);
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, colors[ImGuiCol_FrameBgActive]);
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(pad, pad));
 		bool clicked = ImGui::ImageButton(id, texture, iconSize);
 		ImGui::PopStyleVar();
-		ImGui::PopStyleColor(2);
+		ImGui::PopStyleColor(3);
 		return clicked;
 	}
 

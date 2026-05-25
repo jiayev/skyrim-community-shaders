@@ -4,6 +4,7 @@
 #include "Globals.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
+#include "Utils/Format.h"
 #include "Utils/Game.h"
 
 #include <algorithm>
@@ -22,10 +23,21 @@ namespace
 	constexpr const char* kMetadataKey = "_metadata";
 	constexpr const char* kMetadataDescriptionKey = "description";
 	constexpr const char* kMetadataEnabledKey = "enabled";
+	constexpr std::string_view kSceneSettingDisplaySeparator = " / ";
 
 	bool IsSceneMetadataKey(std::string_view key)
 	{
 		return !key.empty() && key.front() == '_';
+	}
+
+	bool IsSupportedSceneSettingValue(const json& value)
+	{
+		return value.is_boolean() || value.is_number_integer() || value.is_number_float() || value.is_string();
+	}
+
+	bool IsNumericValue(const json& value)
+	{
+		return value.is_number_float();
 	}
 
 	size_t CountSceneOverwriteKeys(const json& data)
@@ -34,15 +46,75 @@ namespace
 			return 0;
 
 		size_t count = 0;
-		for (const auto& [key, _] : data.items())
-			if (!IsSceneMetadataKey(key))
+		for (const auto& [key, value] : data.items())
+			if (!IsSceneMetadataKey(key) && IsSupportedSceneSettingValue(value))
 				++count;
 		return count;
+	}
+
+	bool IsBooleanLikeSceneSettingValue(const json& value)
+	{
+		return value.is_boolean() ||
+		       (value.is_number_integer() && (value.get<int>() == 0 || value.get<int>() == 1));
+	}
+
+	bool IsCompatibleSceneSettingValue(const json& featureValue, const json& value)
+	{
+		if (featureValue.type() == value.type())
+			return true;
+		if (featureValue.is_number() && value.is_number())
+			return true;
+		return IsBooleanLikeSceneSettingValue(featureValue) && IsBooleanLikeSceneSettingValue(value);
+	}
+
+	std::string GetDescriptorDisplayName(const SceneSettingDescriptor& descriptor)
+	{
+		return descriptor.displayName.empty() ? Util::PrettifyIdentifier(descriptor.key) : descriptor.displayName;
+	}
+
+	std::string JoinDisplayParts(const std::vector<std::string>& parts, std::string_view leaf)
+	{
+		std::string displayName;
+		for (const auto& part : parts) {
+			if (!displayName.empty())
+				displayName += kSceneSettingDisplaySeparator;
+			displayName += part;
+		}
+		if (!leaf.empty()) {
+			if (!displayName.empty())
+				displayName += kSceneSettingDisplaySeparator;
+			displayName += leaf;
+		}
+		return displayName;
 	}
 }
 
 static std::filesystem::path GetSceneOverwritePath(SceneSettingsManager::SceneType type, const SceneSettingsManager::SettingEntry& entry);
 static bool RemoveSettingFromOverwriteFile(const std::filesystem::path& path, const std::string& settingKey);
+
+static bool HasOverwriteEntryForPeriod(const std::vector<SceneSettingsManager::SettingEntry>& entries,
+	const SceneSettingsManager::SettingEntry& candidate)
+{
+	return std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
+		return entry.source == SceneSettingsManager::EntrySource::Overwrite &&
+		       entry.period == candidate.period &&
+		       entry.featureShortName == candidate.featureShortName &&
+		       entry.settingKey == candidate.settingKey;
+	});
+}
+
+static bool AddOverwriteEntryIfUnique(std::vector<SceneSettingsManager::SettingEntry>& entries,
+	SceneSettingsManager::SettingEntry&& entry, std::string_view context)
+{
+	if (HasOverwriteEntryForPeriod(entries, entry)) {
+		logger::warn("[SceneSettings] Duplicate {} overwrite for {}.{} ({}) skipped",
+			context, entry.featureShortName, entry.settingKey, entry.sourceFilename);
+		return false;
+	}
+
+	entries.push_back(std::move(entry));
+	return true;
+}
 
 // --- Path Resolution ---
 
@@ -186,7 +258,7 @@ static const std::unordered_set<std::string>& GetInteriorWhitelist()
 
 static const std::unordered_set<std::string>& GetExteriorWhitelist()
 {
-	// NOTE: ScreenSpaceGI excluded — its LoadSettings() unconditionally triggers
+	// NOTE: ScreenSpaceGI excluded - its LoadSettings() unconditionally triggers
 	// synchronous recompilation of 6 compute shaders, causing massive lag.
 	static const std::unordered_set<std::string> whitelist = {
 		"CloudShadows",
@@ -194,6 +266,7 @@ static const std::unordered_set<std::string>& GetExteriorWhitelist()
 		"GrassLighting",
 		"ImageBasedLighting",
 		"LinearLighting",
+		"PostProcessing",
 		"Skylighting",
 		"SubsurfaceScattering",
 		"WetnessEffects",
@@ -240,23 +313,69 @@ std::string SceneSettingsManager::GetFeatureDisplayName(const std::string& featu
 	return feature ? feature->GetName() : featureShortName;
 }
 
+std::vector<SceneSettingDescriptor> SceneSettingsManager::GetFeatureSceneSettings(const std::string& featureShortName)
+{
+	auto* feature = Feature::FindFeatureByShortName(featureShortName);
+	if (!feature)
+		return {};
+
+	auto descriptors = feature->GetSceneSettings();
+	std::erase_if(descriptors, [](const auto& descriptor) {
+		return descriptor.key.empty() || !IsSupportedSceneSettingValue(descriptor.value);
+	});
+
+	std::sort(descriptors.begin(), descriptors.end(), [](const auto& lhs, const auto& rhs) {
+		return std::tie(lhs.displayPath, lhs.displayName, lhs.key) <
+		       std::tie(rhs.displayPath, rhs.displayName, rhs.key);
+	});
+	return descriptors;
+}
+
+std::vector<SceneSettingDescriptor> SceneSettingsManager::GetTransitionableSceneSettings(const std::string& featureShortName)
+{
+	auto descriptors = GetFeatureSceneSettings(featureShortName);
+	std::erase_if(descriptors, [](const auto& descriptor) { return !IsNumericValue(descriptor.value); });
+	return descriptors;
+}
+
 std::vector<std::string> SceneSettingsManager::GetFeatureSettingKeys(const std::string& featureShortName)
 {
 	std::vector<std::string> keys;
-	auto* feature = Feature::FindFeatureByShortName(featureShortName);
-	if (!feature)
-		return keys;
-
-	json settings;
-	feature->SaveSettings(settings);
-	if (!settings.is_object())
-		return keys;
-
-	for (auto& [key, _] : settings.items())
-		keys.push_back(key);
-
-	std::sort(keys.begin(), keys.end());
+	auto descriptors = GetFeatureSceneSettings(featureShortName);
+	keys.reserve(descriptors.size());
+	for (const auto& descriptor : descriptors)
+		keys.push_back(descriptor.key);
 	return keys;
+}
+
+std::string SceneSettingsManager::GetSettingDisplayName(const std::string& settingKey)
+{
+	return Util::PrettifyIdentifier(settingKey);
+}
+
+std::string SceneSettingsManager::GetSettingDisplayName(const std::string& featureShortName, const std::string& settingKey)
+{
+	std::vector<std::string> pathParts;
+	std::string settingName;
+	if (GetSettingDisplayPath(featureShortName, settingKey, pathParts, settingName))
+		return JoinDisplayParts(pathParts, settingName);
+	return GetSettingDisplayName(settingKey);
+}
+
+bool SceneSettingsManager::GetSettingDisplayPath(const std::string& featureShortName, const std::string& settingKey,
+	std::vector<std::string>& pathParts, std::string& settingName)
+{
+	pathParts.clear();
+	settingName.clear();
+
+	for (const auto& descriptor : GetFeatureSceneSettings(featureShortName)) {
+		if (descriptor.key != settingKey)
+			continue;
+		pathParts = descriptor.displayPath;
+		settingName = GetDescriptorDisplayName(descriptor);
+		return true;
+	}
+	return false;
 }
 
 json SceneSettingsManager::GetFeatureSettingValue(const std::string& featureShortName, const std::string& settingKey)
@@ -265,11 +384,9 @@ json SceneSettingsManager::GetFeatureSettingValue(const std::string& featureShor
 	if (!feature)
 		return {};
 
-	json settings;
-	feature->SaveSettings(settings);
-	if (settings.is_object() && settings.contains(settingKey))
-		return settings[settingKey];
-
+	json value;
+	if (feature->GetSceneSettingValue(settingKey, value) && IsSupportedSceneSettingValue(value))
+		return value;
 	return {};
 }
 
@@ -288,12 +405,6 @@ SceneSettingsManager::SettingType SceneSettingsManager::DetectSettingType(const 
 	return SettingType::Unknown;
 }
 
-// Only float values are transitionable (excludes integer toggles/combos like EnableIBL, DALCMode)
-static bool IsNumericValue(const json& value)
-{
-	return value.is_number_float();
-}
-
 // Normalize an integer JSON value to float (e.g. json(1) -> json(1.0f))
 static json NormalizeToFloat(const json& value)
 {
@@ -302,23 +413,46 @@ static json NormalizeToFloat(const json& value)
 	return value;
 }
 
-std::vector<std::string> SceneSettingsManager::GetTransitionableSettingKeys(const std::string& featureShortName)
+static bool IsSceneSettingValueAllowed(Feature& feature, const std::string& settingKey,
+	const json& value, bool requireNumeric)
+{
+	json featureValue;
+	if (!feature.GetSceneSettingValue(settingKey, featureValue) || !IsSupportedSceneSettingValue(featureValue))
+		return false;
+
+	if (requireNumeric && (!IsNumericValue(featureValue) || !IsNumericValue(value) || !std::isfinite(value.get<float>())))
+		return false;
+	if (!requireNumeric && !IsSupportedSceneSettingValue(value))
+		return false;
+
+	return IsCompatibleSceneSettingValue(featureValue, value);
+}
+
+static bool ValidateSceneSettingEntry(std::string_view context, const std::string& featureShortName,
+	const std::string& settingKey, const json& value, bool requireNumeric)
 {
 	auto* feature = Feature::FindFeatureByShortName(featureShortName);
-	if (!feature)
-		return {};
-
-	json settings;
-	feature->SaveSettings(settings);
-	if (!settings.is_object())
-		return {};
-
-	std::vector<std::string> keys;
-	for (auto& [key, val] : settings.items()) {
-		if (IsNumericValue(val))
-			keys.push_back(key);
+	if (!feature) {
+		logger::warn("[SceneSettings] {} entry {}.{} - feature '{}' not found/loaded",
+			context, featureShortName, settingKey, featureShortName);
+		return false;
 	}
-	std::sort(keys.begin(), keys.end());
+
+	if (!IsSceneSettingValueAllowed(*feature, settingKey, value, requireNumeric)) {
+		logger::warn("[SceneSettings] {} entry {}.{} is not a supported scene-manager setting",
+			context, featureShortName, settingKey);
+		return false;
+	}
+	return true;
+}
+
+std::vector<std::string> SceneSettingsManager::GetTransitionableSettingKeys(const std::string& featureShortName)
+{
+	std::vector<std::string> keys;
+	auto descriptors = GetTransitionableSceneSettings(featureShortName);
+	keys.reserve(descriptors.size());
+	for (const auto& descriptor : descriptors)
+		keys.push_back(descriptor.key);
 	return keys;
 }
 
@@ -391,25 +525,16 @@ bool SceneSettingsManager::HasDuplicateEntry(SceneType type, const std::string& 
 void SceneSettingsManager::AddSetting(SceneType type, const std::string& featureShortName, const std::string& settingKey, const json& value,
 	TimeOfDayPeriod period)
 {
-	if (type == SceneType::TimeOfDay) {
+	const bool requireNumeric = type == SceneType::TimeOfDay;
+	if (requireNumeric) {
 		// Reject invalid period values (Count is the sentinel, not a real period)
 		if (period == TimeOfDayPeriod::Count || static_cast<int>(period) < 0 || static_cast<int>(period) >= kPeriodCount) {
 			logger::warn("[SceneSettings] Rejecting TOD setting with invalid period: {}.{}", featureShortName, settingKey);
 			return;
 		}
-
-		// TOD only supports numeric settings (smooth interpolation)
-		if (!IsNumericValue(value)) {
-			logger::warn("[SceneSettings] Rejecting non-numeric TOD setting: {}.{}", featureShortName, settingKey);
-			return;
-		}
-
-		// Reject non-finite values (NaN/Inf) to prevent unstable blending
-		if (!std::isfinite(value.get<float>())) {
-			logger::warn("[SceneSettings] Rejecting non-finite TOD value for {}.{}", featureShortName, settingKey);
-			return;
-		}
 	}
+	if (!ValidateSceneSettingEntry(GetSceneTypeName(type), featureShortName, settingKey, value, requireNumeric))
+		return;
 
 	if (HasDuplicateEntry(type, featureShortName, settingKey, EntrySource::User, period))
 		return;
@@ -453,6 +578,8 @@ void SceneSettingsManager::TogglePauseEntry(SceneType type, size_t index)
 	auto& vec = GetEntriesMut(type);
 	if (index < vec.size()) {
 		vec[index].paused = !vec[index].paused;
+		if (vec[index].source == EntrySource::User)
+			SaveAllUserSettings();
 		ReapplyIfActive();
 	}
 }
@@ -530,6 +657,7 @@ void SceneSettingsManager::SetAllUserPaused(SceneType type, bool paused)
 	for (auto& entry : GetEntriesMut(type))
 		if (entry.source == EntrySource::User)
 			entry.paused = paused;
+	SaveAllUserSettings();
 	ReapplyIfActive();
 }
 
@@ -609,7 +737,7 @@ static bool WriteGroupedOverwriteFile(const std::filesystem::path& path, const s
 		}
 	}
 
-	data.erase(kFeatureKey);
+	data[kFeatureKey] = featureShortName;
 	data[kMetadataKey] = {
 		{ kMetadataDescriptionKey, std::format("{} scene settings overwrite ({})", SceneSettingsManager::GetFeatureDisplayName(featureShortName), overwriteType) },
 		{ kMetadataEnabledKey, true }
@@ -934,16 +1062,15 @@ void SceneSettingsManager::SaveBaselineForKeys(const std::map<std::string, std::
 		if (!feature)
 			continue;
 
-		json fullSettings;
-		feature->SaveSettings(fullSettings);
-
 		json& partial = outBaseline[shortName];
 		if (!partial.is_object())
 			partial = json::object();
 
-		for (const auto& key : keys)
-			if (fullSettings.contains(key) && !partial.contains(key))
-				partial[key] = fullSettings[key];
+		for (const auto& key : keys) {
+			json value;
+			if (feature->GetSceneSettingValue(key, value) && !partial.contains(key))
+				partial[key] = std::move(value);
+		}
 	}
 }
 
@@ -983,11 +1110,11 @@ void SceneSettingsManager::RevertFromBaseline(std::map<std::string, json>& basel
 		if (!feature)
 			continue;
 
-		json current;
-		feature->SaveSettings(current);
+		std::vector<std::pair<std::string, json>> updates;
+		updates.reserve(savedKeys.size());
 		for (auto& [key, val] : savedKeys.items())
-			current[key] = val;
-		feature->LoadSettings(current);
+			updates.emplace_back(key, val);
+		feature->ApplySceneSettings(updates);
 	}
 	baseline.clear();
 }
@@ -1003,28 +1130,14 @@ void SceneSettingsManager::ApplySettingToFeature(const SettingEntry& entry)
 	if (!feature)
 		return;
 
-	json settings;
-	feature->SaveSettings(settings);
-
-	if (!settings.is_object())
-		return;
-
-	if (!settings.contains(entry.settingKey)) {
+	json currentValue;
+	if (!feature->GetSceneSettingValue(entry.settingKey, currentValue)) {
 		logger::warn("[SceneSettings] Setting '{}' not found in feature '{}', skipping", entry.settingKey, entry.featureShortName);
 		return;
 	}
 
-	settings[entry.settingKey] = entry.value;
-	feature->LoadSettings(settings);
-
-	// Round-trip verification: check if the feature clamped the value
-	json verify;
-	feature->SaveSettings(verify);
-	if (verify.contains(entry.settingKey) && verify[entry.settingKey] != entry.value) {
-		logger::warn("[SceneSettings] Feature '{}' clamped setting '{}' from {} to {}",
-			entry.featureShortName, entry.settingKey,
-			entry.value.dump(), verify[entry.settingKey].dump());
-	}
+	if (!feature->ApplySceneSettings({ { entry.settingKey, entry.value } }))
+		logger::warn("[SceneSettings] Failed to apply setting '{}' to feature '{}'", entry.settingKey, entry.featureShortName);
 }
 
 // --- Time of Day ---
@@ -1182,20 +1295,11 @@ void SceneSettingsManager::ApplyTimeOfDayBlended()
 		if (dirtyKeys.empty())
 			continue;
 
-		// Get FRESH settings from the feature (cheap to_json, keeps non-TOD keys current)
 		auto* feature = Feature::FindFeatureByShortName(shortName);
 		if (!feature)
 			continue;
 
-		json current;
-		feature->SaveSettings(current);
-
-		// Patch only our TOD-controlled keys into the fresh blob
-		for (auto& [k, v] : dirtyKeys)
-			current[k] = std::move(v);
-
-		// Single LoadSettings with up-to-date non-TOD values intact
-		feature->LoadSettings(current);
+		feature->ApplySceneSettings(dirtyKeys);
 	}
 
 	lastDominantPeriod = dominant;
@@ -1412,10 +1516,8 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 		}
 	}
 
-	if (!Feature::FindFeatureByShortName(entry.featureShortName)) {
-		logger::warn("[SceneSettings] {} entry {}.{} — feature '{}' not found/loaded", typeName, entry.featureShortName, entry.settingKey, entry.featureShortName);
+	if (!ValidateSceneSettingEntry(typeName, entry.featureShortName, entry.settingKey, entry.value, requirePeriod))
 		return false;
-	}
 
 	return true;
 }
@@ -1579,16 +1681,11 @@ static bool ParseOverwriteFileEntries(const std::filesystem::path& filePath,
 	if (!featurePtr || !SSM::IsFeatureAllowedForType(allowedType, featureShortName))
 		return false;
 
-	json featureSettings;
-	featurePtr->SaveSettings(featureSettings);
-	if (!featureSettings.is_object())
-		return false;
-
 	bool foundAny = false;
-	for (auto& [key, value] : data.items()) {
-		if (IsSceneMetadataKey(key) || !featureSettings.contains(key))
+	for (const auto& [key, value] : data.items()) {
+		if (IsSceneMetadataKey(key))
 			continue;
-		if (requireNumeric && (!IsNumericValue(value) || !std::isfinite(value.get<float>())))
+		if (!IsSceneSettingValueAllowed(*featurePtr, key, value, requireNumeric))
 			continue;
 
 		SSM::SettingEntry entry;
@@ -1634,8 +1731,8 @@ void SceneSettingsManager::DiscoverOverwritesInDir(SceneType type, const std::fi
 				continue;
 			for (auto& entry : parsedEntries) {
 				entry.period = period;
-				vec.push_back(std::move(entry));
-				overwritesLoaded++;
+				if (AddOverwriteEntryIfUnique(vec, std::move(entry), typeName))
+					overwritesLoaded++;
 			}
 		} catch (const std::exception& e) {
 			logger::error("[SceneSettings] Failed to load {} overwrite '{}': {}", typeName, dirEntry.path().filename().string(), e.what());
@@ -1707,9 +1804,7 @@ void SceneSettingsManager::AddWeatherSetting(RE::FormID weatherId, const std::st
 	// All weather entries are per-period
 	if (period == TimeOfDayPeriod::Count || static_cast<int>(period) < 0 || static_cast<int>(period) >= kPeriodCount)
 		return;
-	if (!IsNumericValue(value))
-		return;
-	if (!std::isfinite(value.get<float>()))
+	if (!ValidateSceneSettingEntry("Weather", featureShortName, settingKey, value, true))
 		return;
 	if (HasWeatherEntryForPeriod(weatherId, featureShortName, settingKey, period, EntrySource::User))
 		return;
@@ -1876,7 +1971,7 @@ void SceneSettingsManager::DiscoverWeatherOverwritesForSpid(RE::FormID weatherId
 					continue;
 				for (auto& entry : parsedEntries) {
 					entry.period = period;
-					config.entries.push_back(std::move(entry));
+					AddOverwriteEntryIfUnique(config.entries, std::move(entry), "weather");
 				}
 			} catch (const std::exception& e) {
 				logger::error("[SceneSettings] Failed to load weather overwrite '{}': {}", fileEntry.path().filename().string(), e.what());
@@ -1899,7 +1994,7 @@ void SceneSettingsManager::DiscoverWeatherOverwritesForSpid(RE::FormID weatherId
 					for (int p = 0; p < kPeriodCount; ++p) {
 						SettingEntry entry = parsed;
 						entry.period = static_cast<TimeOfDayPeriod>(p);
-						config.entries.push_back(std::move(entry));
+						AddOverwriteEntryIfUnique(config.entries, std::move(entry), "weather");
 					}
 				}
 			} catch (const std::exception& e) {
@@ -2151,9 +2246,7 @@ void SceneSettingsManager::UpdateWeatherScene()
 		if (!feature)
 			continue;
 
-		json current;
-		feature->SaveSettings(current);
-		bool dirty = false;
+		std::vector<std::pair<std::string, json>> dirtyValues;
 
 		for (auto& key : keys) {
 			float blended = 0.0f;
@@ -2165,11 +2258,10 @@ void SceneSettingsManager::UpdateWeatherScene()
 			if (cacheIt != cache.end() && std::abs(cacheIt->second - blended) < kBlendEpsilon)
 				continue;
 			cache[key] = blended;
-			current[key] = blended;
-			dirty = true;
+			dirtyValues.emplace_back(key, blended);
 		}
 
-		if (dirty)
-			feature->LoadSettings(current);
+		if (!dirtyValues.empty())
+			feature->ApplySceneSettings(dirtyValues);
 	}
 }

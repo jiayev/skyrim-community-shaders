@@ -9,12 +9,11 @@
 #include <string>
 #include <vector>
 
-#include "Globals.h"
-#include "Utils/Form.h"
-
 using json = nlohmann::json;
 
-struct Feature;
+#include "Feature.h"
+#include "Globals.h"
+#include "Utils/Form.h"
 
 /// Manages scene-specific setting overrides (Interior Only, TimeOfDay).
 /// Applies overrides via Feature::SaveSettings/LoadSettings JSON round-trips with
@@ -110,7 +109,7 @@ public:
 	struct SettingEntry
 	{
 		std::string featureShortName;  // Feature's GetShortName()
-		std::string settingKey;        // JSON key within the feature's settings
+		std::string settingKey;        // Feature-owned scene setting key
 		json value;                    // Override value (bool, float, int, etc.)
 		json originalValue;            // Value at time of creation, for revert
 		bool paused = false;           // Temporarily disabled
@@ -213,6 +212,20 @@ public:
 
 	/// Get setting keys for a feature by JSON round-tripping its current settings
 	static std::vector<std::string> GetFeatureSettingKeys(const std::string& featureShortName);
+
+	/// Get scene-safe setting descriptors for a feature.
+	static std::vector<SceneSettingDescriptor> GetFeatureSceneSettings(const std::string& featureShortName);
+
+	/// Get scene-safe float setting descriptors for time/weather blending.
+	static std::vector<SceneSettingDescriptor> GetTransitionableSceneSettings(const std::string& featureShortName);
+
+	/// Get a UI-friendly display label for a setting key.
+	static std::string GetSettingDisplayName(const std::string& settingKey);
+	static std::string GetSettingDisplayName(const std::string& featureShortName, const std::string& settingKey);
+
+	/// Split a scene setting into add-dialog subfeature path and leaf label.
+	static bool GetSettingDisplayPath(const std::string& featureShortName, const std::string& settingKey,
+		std::vector<std::string>& pathParts, std::string& settingName);
 
 	/// Get only float setting keys that can be smoothly transitioned in Time of Day
 	static std::vector<std::string> GetTransitionableSettingKeys(const std::string& featureShortName);

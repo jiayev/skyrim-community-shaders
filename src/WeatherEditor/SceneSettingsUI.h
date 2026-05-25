@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <tuple>
 
 #include "SceneSettingsManager.h"
@@ -41,13 +42,21 @@ namespace SceneSettingsUI
 	void RemoveIndicesReversed(const std::vector<size_t>& indices,
 		std::function<void(size_t)> removeFn);
 
+	struct AddSettingNode
+	{
+		std::map<std::string, AddSettingNode> children;
+		std::vector<size_t> settings;
+	};
+
 	/// Persistent state for the "+" add-setting dialog.
 	struct AddSettingState
 	{
 		bool dialogOpen = false;
 		int selectedFeatureIdx = -1;
 		std::vector<std::string> cachedFeatureNames;
-		std::vector<std::string> cachedSettingKeys;
+		std::vector<SceneSettingDescriptor> cachedSettings;
+		std::vector<int> selectedSubFeaturePath;
+		AddSettingNode settingTree;
 		std::vector<bool> selectedSettings;  // Checkbox state per setting key
 
 		void Reset()
@@ -55,7 +64,9 @@ namespace SceneSettingsUI
 			dialogOpen = false;
 			selectedFeatureIdx = -1;
 			cachedFeatureNames.clear();
-			cachedSettingKeys.clear();
+			cachedSettings.clear();
+			selectedSubFeaturePath.clear();
+			settingTree = {};
 			selectedSettings.clear();
 		}
 	};
