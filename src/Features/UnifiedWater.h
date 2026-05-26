@@ -3,8 +3,6 @@
 #include "UnifiedWater/Flowmap.h"
 #include "UnifiedWater/WaterCache.h"
 
-#include <vector>
-
 struct UnifiedWater : OverlayFeature
 {
 	virtual inline std::string GetName() override { return "Unified Water"; }
@@ -60,6 +58,18 @@ struct UnifiedWater : OverlayFeature
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct TES_SetWorldSpace
+	{
+		static void thunk(RE::TES* tes, RE::TESWorldSpace* worldSpace, bool isExterior);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct TES_DestroySkyCell
+	{
+		static void thunk(RE::TES* tes);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct BSWaterShader_SetupGeometry
 	{
 		static void thunk(RE::BSShader* waterShader, RE::BSRenderPass* pass);
@@ -84,6 +94,7 @@ struct UnifiedWater : OverlayFeature
 
 	virtual void RestoreDefaultSettings() override;
 
+	virtual bool IsCore() const override { return true; }
 	virtual bool SupportsVR() override { return true; }
 
 	virtual void PostPostLoad() override;
@@ -100,8 +111,6 @@ private:
 	float4* gDisplacementCellTexCoordOffset = nullptr;
 	RE::NiPoint2* gDisplacementMeshPos = nullptr;
 	RE::NiPoint2* gDisplacementMeshFlowCellOffset = nullptr;
-
-	bool BuildWaterForBlock(RE::BGSTerrainBlock* block, RE::TESWaterSystem* waterSystem);
 
 	void SetFlowmapTex() const;
 	static bool LoadOrderChanged();
