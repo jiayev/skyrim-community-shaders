@@ -101,7 +101,8 @@ namespace
 		if (label == "Trans Delta")
 			return T(TKEY("trans_delta"), "Trans Delta");
 
-		return label.data();
+		// Fallback: return the original label via T() which caches a stable null-terminated copy
+		return T(std::string(label).c_str(), std::string(label).c_str());
 	}
 
 	namespace WeatherInherit
@@ -1832,7 +1833,7 @@ void WeatherWidget::DrawFeatureSettings()
 			ImGui::SetNextItemOpen(true);
 		}
 
-		if (ImGui::TreeNodeEx(displayName.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth)) {
+		if (ImGui::TreeNodeEx(std::format("{}##{}", displayName, featureName).c_str(), ImGuiTreeNodeFlags_SpanAvailWidth)) {
 			// Check if weather-specific overrides are enabled (using special key)
 			bool overridesEnabled = featureJsonView ? featureJsonView->value("__enabled", false) : false;
 

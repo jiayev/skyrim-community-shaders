@@ -237,7 +237,8 @@ const char* WeatherUtils::TranslateControlLabel(std::string_view label)
 	if (label == "Cloud Layer Speed Y")
 		return T(TKEY("cloud_layer_speed_y"), "Cloud Layer Speed Y");
 
-	return label.data();
+	// Fallback: return the original label via T() which caches a stable null-terminated copy
+	return T(std::string(label).c_str(), std::string(label).c_str());
 }
 
 static std::string BuildLocalizedControlLabel(const std::string& label)

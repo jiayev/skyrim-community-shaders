@@ -1003,7 +1003,7 @@ std::vector<std::string> WeatherEditor::GetWeatherFlagNames(RE::TESWeather* weat
 
 	uint32_t flags = weather->data.flags.underlying();
 	if (flags == 0) {
-		flagNames.push_back(T(TKEY("none_filter"), "None"));
+		flagNames.push_back("None");
 		return flagNames;
 	}
 
@@ -1011,27 +1011,17 @@ std::vector<std::string> WeatherEditor::GetWeatherFlagNames(RE::TESWeather* weat
 	for (auto flagValue : magic_enum::enum_values<RE::TESWeather::WeatherDataFlag>()) {
 		if (flagValue != RE::TESWeather::WeatherDataFlag::kNone &&
 			weather->data.flags.any(flagValue)) {
-			// Convert enum name to human-readable format
+			// Convert enum name to canonical format (strip 'k' prefix)
 			std::string flagName = std::string(magic_enum::enum_name(flagValue));
-
-			// Remove 'k' prefix and convert to readable format
 			if (flagName.starts_with("k")) {
 				flagName = flagName.substr(1);
 			}
 
-			// Convert specific cases to more readable names
+			// Use canonical English names for logic (PermAurora → Aurora, AuroraFollowsSun → Aurora Sun)
 			if (flagName == "PermAurora") {
-				flagName = T(TKEY("aurora"), "Aurora");
+				flagName = "Aurora";
 			} else if (flagName == "AuroraFollowsSun") {
-				flagName = T(TKEY("aurora_sun"), "Aurora Sun");
-			} else if (flagName == "Pleasant") {
-				flagName = T(TKEY("pleasant"), "Pleasant");
-			} else if (flagName == "Cloudy") {
-				flagName = T(TKEY("cloudy"), "Cloudy");
-			} else if (flagName == "Rainy") {
-				flagName = T(TKEY("rainy"), "Rainy");
-			} else if (flagName == "Snow") {
-				flagName = T(TKEY("snow"), "Snow");
+				flagName = "Aurora Sun";
 			}
 
 			flagNames.push_back(flagName);
@@ -1107,7 +1097,11 @@ bool WeatherEditor::RenderMultiColorWeatherName(RE::TESWeather* weather, const s
 		ImGui::SameLine();
 		ImVec4 flagColor = GetWeatherFlagColorByName(flagNames[i]);
 		ImGui::PushStyleColor(ImGuiCol_Text, flagColor);
-		ImGui::Text("[%s]", flagNames[i].c_str());
+		// Translate canonical flag name for display
+		std::string flagKey = std::string(TKEY("flag_")) + flagNames[i];
+		std::transform(flagKey.begin(), flagKey.end(), flagKey.begin(), ::tolower);
+		const char* displayFlag = T(flagKey.c_str(), flagNames[i].c_str());
+		ImGui::Text("[%s]", displayFlag);
 		ImGui::PopStyleColor();
 	}
 

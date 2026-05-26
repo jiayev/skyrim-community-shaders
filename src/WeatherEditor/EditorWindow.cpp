@@ -120,7 +120,25 @@ bool IconButton(const char* label, bool filled, const char* iconType)
 
 namespace
 {
-	const char* kFilterColumnNames[] = { T(TKEY("filter_all"), "All"), T(TKEY("filter_editor_id"), "Editor ID"), T(TKEY("filter_form_id"), "Form ID"), T(TKEY("filter_file"), "File"), T(TKEY("filter_status"), "Status") };
+	const char* GetFilterColumnName(int index)
+	{
+		switch (index) {
+		case 0:
+			return T(TKEY("filter_all"), "All");
+		case 1:
+			return T(TKEY("filter_editor_id"), "Editor ID");
+		case 2:
+			return T(TKEY("filter_form_id"), "Form ID");
+		case 3:
+			return T(TKEY("filter_file"), "File");
+		case 4:
+			return T(TKEY("filter_status"), "Status");
+		default:
+			return "";
+		}
+	}
+
+	constexpr int kFilterColumnCount = 5;
 }  // namespace
 
 void EditorWindow::ResetObjectsFilter()
@@ -133,8 +151,8 @@ void EditorWindow::ResetObjectsFilter()
 
 bool EditorWindow::MatchesObjectFilter(Widget* w) const
 {
-	static_assert(static_cast<int>(FilterColumn::Count_) == IM_ARRAYSIZE(kFilterColumnNames),
-		"kFilterColumnNames must have one entry per FilterColumn value");
+	static_assert(static_cast<int>(FilterColumn::Count_) == kFilterColumnCount,
+		"kFilterColumnCount must match FilterColumn enum");
 	if (!w)
 		return false;
 	if (m_filterBuffer[0] == '\0')
@@ -449,7 +467,9 @@ void EditorWindow::ShowObjectsWindow()
 			ImGui::SameLine();
 			ImGui::SetNextItemWidth(comboW);
 			int col = static_cast<int>(m_currentFilterColumn);
-			if (ImGui::Combo("##FilterBy", &col, kFilterColumnNames, IM_ARRAYSIZE(kFilterColumnNames)))
+			if (ImGui::Combo("##FilterBy", &col, [](void*, int idx, const char** out) -> bool {
+					*out = GetFilterColumnName(idx);
+					return true; }, nullptr, kFilterColumnCount))
 				m_currentFilterColumn = static_cast<FilterColumn>(col);
 
 			ImGui::SameLine();

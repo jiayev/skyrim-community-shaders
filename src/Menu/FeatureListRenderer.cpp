@@ -27,21 +27,27 @@
 namespace
 {
 	// Core built-in menu names that always appear first in the menu list
-	std::array<const char*, 4> GetCoreMenuNames()
+	// These are canonical identifiers used for logic — NOT translated
+	constexpr std::array<const char*, 4> CORE_MENU_NAMES = {
+		"Home", "General", "Advanced", "Display"
+	};
+
+	const char* GetCoreMenuDisplayName(const char* canonicalName)
 	{
-		static const std::array<const char*, 4> names = {
-			T("menu.features.home", "Home"),
-			T("menu.features.general", "General"),
-			T("menu.features.advanced", "Advanced"),
-			T("menu.features.display", "Display")
-		};
-		return names;
+		if (std::strcmp(canonicalName, "Home") == 0)
+			return T("menu.features.home", "Home");
+		if (std::strcmp(canonicalName, "General") == 0)
+			return T("menu.features.general", "General");
+		if (std::strcmp(canonicalName, "Advanced") == 0)
+			return T("menu.features.advanced", "Advanced");
+		if (std::strcmp(canonicalName, "Display") == 0)
+			return T("menu.features.display", "Display");
+		return canonicalName;
 	}
 
 	bool IsCoreMenu(const std::string& menuName)
 	{
-		auto names = GetCoreMenuNames();
-		return std::find(names.begin(), names.end(), menuName) != names.end();
+		return std::find(CORE_MENU_NAMES.begin(), CORE_MENU_NAMES.end(), menuName) != CORE_MENU_NAMES.end();
 	}
 
 	/**
@@ -439,7 +445,7 @@ void FeatureListRenderer::RenderLeftColumn(
 
 		// First render the core built-in menus (Home, General, Advanced, Display)
 		size_t renderedCoreMenus = 0;
-		for (size_t i = 0; i < menuList.size() && renderedCoreMenus < GetCoreMenuNames().size(); i++) {
+		for (size_t i = 0; i < menuList.size() && renderedCoreMenus < CORE_MENU_NAMES.size(); i++) {
 			if (std::holds_alternative<BuiltInMenu>(menuList[i])) {
 				const BuiltInMenu& menu = std::get<BuiltInMenu>(menuList[i]);
 				if (IsCoreMenu(menu.name)) {

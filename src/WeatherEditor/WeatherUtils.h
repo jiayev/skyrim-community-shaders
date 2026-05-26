@@ -191,7 +191,8 @@ namespace WidgetFactory
 		if (widgetTypeName == "Visual Effect")
 			return T("weather_editor.widget_type_visual_effect", "Visual Effect");
 
-		return widgetTypeName.data();
+		// Fallback: use T() to cache a stable null-terminated copy
+		return T(std::string(widgetTypeName).c_str(), std::string(widgetTypeName).c_str());
 	}
 
 	// Populate a widget container from a form array

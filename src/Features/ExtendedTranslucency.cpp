@@ -103,8 +103,8 @@ void ExtendedTranslucency::DrawSettings()
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("default_material_model_tooltip"),
-								  "Anisotropic transluency will adjust the opacity based on your view angle to the translucent surface.\n"
-								  "  - Disabled: No anisotropic transluency, flat alpha.\n"
+								  "Anisotropic translucency will adjust the opacity based on your view angle to the translucent surface.\n"
+								  "  - Disabled: No anisotropic translucency, flat alpha.\n"
 								  "  - Rim Edge: Naive rim light effect with no physics model, the edge of the geometry is always opaque even its full transparent.\n"
 								  "  - Isotropic Fabric: Imaginary fabric weaved from threads in one direction, respect normal map, also works well for layer of glass panels.\n"
 								  "  - Anisotropic Fabric: Common fabric weaved from tangent and birnormal direction, ignores normal map.\n"));
@@ -113,14 +113,14 @@ void ExtendedTranslucency::DrawSettings()
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("skinned_mesh_only_tooltip"), "Control if this effect should only apply to skinned mesh, check this option if your are seeing undesired effect on random objects."));
+			ImGui::Text("%s", T(TKEY("skinned_mesh_only_tooltip"), "Control if this effect should only apply to skinned mesh. Check this option if you are seeing undesired effects on random objects."));
 		}
 
 		if (ImGui::SliderFloat(T(TKEY("transparency_increase"), "Transparency Increase"), &settings.AlphaReduction, 0, 1.f)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("transparency_increase_tooltip"), "Transluent material will make the material more opaque on average, which could be different from the intent, reduce the alpha to counter this effect and increase the dynamic range of the output."));
+			ImGui::Text("%s", T(TKEY("transparency_increase_tooltip"), "Translucent material will make the material more opaque on average, which could be different from the intent. Reduce the alpha to counter this effect and increase the dynamic range of the output."));
 		}
 
 		if (ImGui::SliderFloat(T(TKEY("softness"), "Softness"), &settings.AlphaSoftness, 0.0f, 1.0f)) {
