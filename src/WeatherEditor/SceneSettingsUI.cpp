@@ -26,27 +26,45 @@ namespace SceneSettingsUI
 	constexpr const char* kEllipsis = "...";
 	constexpr size_t kEllipsisLength = 3;
 	constexpr const char* kSelectSubFeatureLabel = "Select Sub Feature...";
+	using SettingEntry = SceneSettingsManager::SettingEntry;
 
 	// --- Shared helpers ---
 
+	static bool IsTransitionEntry(const SettingEntry& entry)
+	{
+		return entry.value.is_number_float();
+	}
+
+	static bool HasTransitionEntries(const std::vector<SettingEntry>& entries)
+	{
+		return std::any_of(entries.begin(), entries.end(), IsTransitionEntry);
+	}
+
+	static std::string GetEntryDisplayName(const SettingEntry& entry)
+	{
+		return entry.displayName.empty() ? SceneSettingsManager::GetSettingDisplayName(entry.settingKey) : entry.displayName;
+	}
+
 	SourceGroup BuildSourceGroup(const std::vector<SceneSettingsManager::SettingEntry>& entries,
-		EntrySource sourceFilter, bool filterBySource)
+		EntrySource sourceFilter, bool filterBySource, bool transitionOnly)
 	{
 		SourceGroup group;
 		for (size_t idx = 0; idx < entries.size(); ++idx) {
 			const auto& e = entries[idx];
 			if (filterBySource && e.source != sourceFilter)
 				continue;
+			if (transitionOnly && !IsTransitionEntry(e))
+				continue;
 			int p = static_cast<int>(e.period);
 			if (p < 0)
 				continue;
 			if (p >= kPeriodCount)
 				p = kPeriodlessEntrySlot;
-			auto& featureMap = group.map[e.featureShortName];
-			auto [it, inserted] = featureMap.try_emplace(e.settingKey);
+			SettingId setting{ e.featureShortName, e.settingPath, e.settingKey, GetEntryDisplayName(e) };
+			auto [it, inserted] = group.map.try_emplace(setting);
 			if (inserted) {
 				it->second.fill(SIZE_MAX);
-				group.order.push_back({ e.featureShortName, e.settingKey });
+				group.order.push_back(setting);
 			}
 			it->second[p] = idx;
 		}
@@ -55,10 +73,13 @@ namespace SceneSettingsUI
 	}
 
 	void SplitBySource(const std::vector<SceneSettingsManager::SettingEntry>& entries,
-		std::vector<size_t>& overwriteOut, std::vector<size_t>& userOut)
+		std::vector<size_t>& overwriteOut, std::vector<size_t>& userOut, bool transitionOnly)
 	{
-		for (size_t i = 0; i < entries.size(); ++i)
+		for (size_t i = 0; i < entries.size(); ++i) {
+			if (transitionOnly && !IsTransitionEntry(entries[i]))
+				continue;
 			(entries[i].source == EntrySource::Overwrite ? overwriteOut : userOut).push_back(i);
+		}
 	}
 
 	void RemoveIndicesReversed(const std::vector<size_t>& indices, std::function<void(size_t)> removeFn)
@@ -69,12 +90,11 @@ namespace SceneSettingsUI
 			removeFn(idx);
 	}
 
-	using SettingEntry = SceneSettingsManager::SettingEntry;
-	using OverrideKey = std::tuple<std::string, std::string, int>;
+	using OverrideKey = std::tuple<std::string, std::vector<std::string>, std::string, int>;
 
 	static OverrideKey MakeOverrideKey(const SettingEntry& entry)
 	{
-		return { entry.featureShortName, entry.settingKey, static_cast<int>(entry.period) };
+		return { entry.featureShortName, entry.settingPath, entry.settingKey, static_cast<int>(entry.period) };
 	}
 
 	static std::set<OverrideKey> BuildActiveOverrideSet(const std::vector<SettingEntry>& entries)
@@ -281,21 +301,23 @@ namespace SceneSettingsUI
 
 	// --- Duplicate checking by scene type ---
 
-	static bool IsAlreadyAdded(SceneType type, const std::string& feature, const std::string& key, Period period)
+	static bool IsAlreadyAdded(SceneType type, const std::string& feature,
+		const std::vector<std::string>& path, const std::string& key, Period period)
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
-		return (type == SceneType::TimeOfDay) ? manager->HasEntryForPeriod(feature, key, period, EntrySource::User) : manager->HasEntryFromSource(type, feature, key, EntrySource::User);
+		return (type == SceneType::TimeOfDay) ? manager->HasEntryForPeriod(feature, path, key, period, EntrySource::User) : manager->HasEntryFromSource(type, feature, path, key, EntrySource::User);
 	}
 
 	template <class IsAddedFn>
-	static bool IsAddedForTargetPeriods(const std::string& feature, const std::string& key, Period period, bool addToAllPeriods,
+	static bool IsAddedForTargetPeriods(const std::string& feature,
+		const std::vector<std::string>& path, const std::string& key, Period period, bool addToAllPeriods,
 		IsAddedFn&& isAddedFn)
 	{
 		if (!addToAllPeriods)
-			return isAddedFn(feature, key, period);
+			return isAddedFn(feature, path, key, period);
 
 		for (int p = 0; p < kPeriodCount; ++p)
-			if (!isAddedFn(feature, key, static_cast<Period>(p)))
+			if (!isAddedFn(feature, path, key, static_cast<Period>(p)))
 				return false;
 		return true;
 	}
@@ -319,8 +341,9 @@ namespace SceneSettingsUI
 	// Core add-setting dialog: renders UI and delegates data ops to callbacks.
 	static void DrawAddDialogCore(AddSettingState& state, Period period, bool addToAllPeriods,
 		std::function<std::vector<SceneSettingDescriptor>(const std::string&)> settingsFn,
-		std::function<bool(const std::string&, const std::string&, Period)> isAddedFn,
-		std::function<void(const std::string&, const std::string&, const json&, Period)> addFn)
+		std::function<bool(const std::string&, const std::vector<std::string>&, const std::string&, Period)> isAddedFn,
+		std::function<bool(const std::string&, const std::vector<std::string>&, const std::string&, const json&, Period)> addFn,
+		std::function<void()> commitFn)
 	{
 		if (!state.dialogOpen)
 			return;
@@ -375,7 +398,7 @@ namespace SceneSettingsUI
 				ForEachSettingIndex(*visibleNode, [&](size_t i) {
 					const auto& descriptor = state.cachedSettings[i];
 					auto& key = descriptor.key;
-					bool alreadyAdded = IsAddedForTargetPeriods(featureName, key, period, addToAllPeriods, isAddedFn);
+					bool alreadyAdded = IsAddedForTargetPeriods(featureName, descriptor.settingPath, key, period, addToAllPeriods, isAddedFn);
 
 					auto prettyKey = GetDescriptorDisplayName(descriptor);
 					if (alreadyAdded) {
@@ -402,23 +425,26 @@ namespace SceneSettingsUI
 				auto _ = Util::DisableGuard(selectedCount == 0);
 				auto label = std::format("Add ({})", selectedCount);
 				if (ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0))) {
+					bool added = false;
 					for (size_t i = 0; i < state.cachedSettings.size(); ++i) {
 						if (!state.selectedSettings[i])
 							continue;
 						const auto& descriptor = state.cachedSettings[i];
 						auto& key = descriptor.key;
-						auto currentValue = SceneSettingsManager::GetFeatureSettingValue(featureName, key);
+						auto currentValue = SceneSettingsManager::GetFeatureSettingValue(featureName, descriptor.settingPath, key);
 						if (currentValue.is_null())
 							currentValue = descriptor.value;
 						if (addToAllPeriods) {
 							for (int p = 0; p < kPeriodCount; ++p)
-								if (!isAddedFn(featureName, key, static_cast<Period>(p)))
-									addFn(featureName, key, currentValue, static_cast<Period>(p));
+								if (!isAddedFn(featureName, descriptor.settingPath, key, static_cast<Period>(p)))
+									added |= addFn(featureName, descriptor.settingPath, key, currentValue, static_cast<Period>(p));
 						} else {
-							if (!isAddedFn(featureName, key, period))
-								addFn(featureName, key, currentValue, period);
+							if (!isAddedFn(featureName, descriptor.settingPath, key, period))
+								added |= addFn(featureName, descriptor.settingPath, key, currentValue, period);
 						}
 					}
+					if (added)
+						commitFn();
 					state.dialogOpen = false;
 				}
 			}
@@ -432,8 +458,9 @@ namespace SceneSettingsUI
 		auto* manager = SceneSettingsManager::GetSingleton();
 		DrawAddDialogCore(state, period, addToAllPeriods,
 			[type](const std::string& feat) { return (type == SceneType::TimeOfDay) ? SceneSettingsManager::GetTransitionableSceneSettings(feat) : SceneSettingsManager::GetFeatureSceneSettings(feat); },
-			[type](const std::string& feat, const std::string& key, Period p) { return IsAlreadyAdded(type, feat, key, p); },
-			[=](const std::string& feat, const std::string& key, const json& val, Period p) { manager->AddSetting(type, feat, key, val, p); });
+			[type](const std::string& feat, const std::vector<std::string>& path, const std::string& key, Period p) { return IsAlreadyAdded(type, feat, path, key, p); },
+			[=](const std::string& feat, const std::vector<std::string>& path, const std::string& key, const json& val, Period p) { return manager->AddSetting(type, feat, path, key, val, p, true); },
+			[=]() { manager->CommitSceneSettingChanges(); });
 	}
 
 	void DrawWeatherAddDialog(RE::FormID weatherId, AddSettingState& state, Period period, bool addToAllPeriods)
@@ -441,8 +468,9 @@ namespace SceneSettingsUI
 		auto* manager = SceneSettingsManager::GetSingleton();
 		DrawAddDialogCore(state, period, addToAllPeriods,
 			[](const std::string& feat) { return SceneSettingsManager::GetTransitionableSceneSettings(feat); },
-			[=](const std::string& feat, const std::string& key, Period p) { return manager->HasWeatherEntryForPeriod(weatherId, feat, key, p); },
-			[=](const std::string& feat, const std::string& key, const json& val, Period p) { manager->AddWeatherSetting(weatherId, feat, key, val, p); });
+			[=](const std::string& feat, const std::vector<std::string>& path, const std::string& key, Period p) { return manager->HasWeatherEntryForPeriod(weatherId, feat, path, key, p); },
+			[=](const std::string& feat, const std::vector<std::string>& path, const std::string& key, const json& val, Period p) { return manager->AddWeatherSetting(weatherId, feat, path, key, val, p, true); },
+			[=]() { manager->SaveAllUserSettings(); });
 	}
 
 	FlyoutResult DrawFlyoutControls(bool paused, bool isGroup, bool isOverwrite)
@@ -525,9 +553,9 @@ namespace SceneSettingsUI
 		switch (settingType) {
 		case SceneSettingsManager::SettingType::Boolean:
 			{
-				bool val = value.is_boolean() ? value.get<bool>() : (value.get<int>() != 0);
+				bool val = value.get<bool>();
 				if (ImGui::Checkbox("##val", &val) && !readOnly) {
-					updateFn(value.is_boolean() ? json(val) : json(val ? 1 : 0));
+					updateFn(json(val));
 					commitFn();
 				}
 			}
@@ -647,11 +675,12 @@ namespace SceneSettingsUI
 		// Pre-collect per-column indices for header controls (multi-column only)
 		std::array<std::vector<size_t>, kPeriodCount> perColumn{};
 		if (multiColumn) {
-			for (const auto& [_, featureMap] : group.map)
-				for (const auto& [__, perKey] : featureMap)
-					for (int p = 0; p < numValueColumns; ++p)
-						if (perKey[p] != SIZE_MAX)
-							perColumn[p].push_back(perKey[p]);
+			for (const auto& item : group.map) {
+				const auto& perKey = item.second;
+				for (int p = 0; p < numValueColumns; ++p)
+					if (perKey[p] != SIZE_MAX)
+						perColumn[p].push_back(perKey[p]);
+			}
 		}
 
 		if (!ImGui::BeginTable(tableId, totalCols,
@@ -718,11 +747,8 @@ namespace SceneSettingsUI
 				ImGui::SetWindowFontScale(1.0f);
 			}
 
-			auto mapIt = group.map.find(sid.feature);
-			if (mapIt == group.map.end())
-				continue;
-			auto keyIt = mapIt->second.find(sid.key);
-			if (keyIt == mapIt->second.end())
+			auto keyIt = group.map.find(sid);
+			if (keyIt == group.map.end())
 				continue;
 			const auto& perKey = keyIt->second;
 
@@ -742,6 +768,8 @@ namespace SceneSettingsUI
 			const float labelRowStartY = ImGui::GetCursorPosY();
 
 			ImGui::PushID(sid.key.c_str());
+			for (const auto& part : sid.path)
+				ImGui::PushID(part.c_str());
 			ImGui::PushID(sid.feature.c_str());
 
 			ImGui::Indent(C::Em(C::SCENE_ENTRY_INDENT_EM));
@@ -749,7 +777,7 @@ namespace SceneSettingsUI
 
 			float textBottomY = 0.0f;
 			{
-				auto text = SceneSettingsManager::GetSettingDisplayName(sid.feature, sid.key);
+				auto text = sid.displayName.empty() ? SceneSettingsManager::GetSettingDisplayName(sid.key) : sid.displayName;
 				float wrapWidth = ImGui::GetContentRegionAvail().x;
 				float lineH = ImGui::GetTextLineHeight();
 				float fixedH = lineH * C::SCENE_SETTING_MAX_LINES;
@@ -821,7 +849,7 @@ namespace SceneSettingsUI
 								ImGui::GetCursorPosY() + std::max(0.f, (visualH - btnSz) * 0.5f)));
 							ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 0.f));
 							if (ImGui::Button("+", ImVec2(btnSz, btnSz)))
-								cb.onAddPeriod(sid.feature, sid.key, p);
+								cb.onAddPeriod(sid.feature, sid.path, sid.key, p);
 							ImGui::PopStyleVar();
 							ImGui::PopID();
 						} else {
@@ -932,6 +960,8 @@ namespace SceneSettingsUI
 				flyout.row.closing = true;
 
 			ImGui::PopID();
+			for (size_t i = 0; i < sid.path.size(); ++i)
+				ImGui::PopID();
 			ImGui::PopID();
 		}
 
@@ -1038,24 +1068,29 @@ namespace SceneSettingsUI
 					const auto& e = entries[idx];
 					auto label = e.period != SceneSettingsManager::TimeOfDayPeriod::Count
 						? std::format("{} \u2014 {} ({})", SceneSettingsManager::GetFeatureDisplayName(e.featureShortName),
-							SceneSettingsManager::GetSettingDisplayName(e.featureShortName, e.settingKey), SceneSettingsManager::GetPeriodName(e.period))
+							GetEntryDisplayName(e), SceneSettingsManager::GetPeriodName(e.period))
 						: std::format("{} \u2014 {}", SceneSettingsManager::GetFeatureDisplayName(e.featureShortName),
-							SceneSettingsManager::GetSettingDisplayName(e.featureShortName, e.settingKey));
+							GetEntryDisplayName(e));
 					DrawSelectedCheckbox(std::format("{}##exp{}", label, i), state.selected[i]);
 				}
 			} else {
-				using GroupKey = std::pair<std::string, std::string>;
+				using GroupKey = std::tuple<std::string, std::vector<std::string>, std::string>;
 				std::map<GroupKey, std::vector<size_t>> groups;
 				for (size_t i = 0; i < state.userIndices.size(); ++i) {
 					auto idx = state.userIndices[i];
 					if (idx < entries.size())
-						groups[{ entries[idx].featureShortName, entries[idx].settingKey }].push_back(i);
+						groups[{ entries[idx].featureShortName, entries[idx].settingPath, entries[idx].settingKey }].push_back(i);
 				}
 				for (auto& [gk, stateIs] : groups) {
 					bool checked = std::all_of(stateIs.begin(), stateIs.end(), [&](size_t i) { return state.selected[i]; });
+					const auto& [feature, path, key] = gk;
+					auto entryIndex = state.userIndices[stateIs.front()];
+					auto labelId = key;
+					for (const auto& part : path)
+						labelId += part;
 					auto label = std::format("{} \u2014 {}##expg{}{}",
-						SceneSettingsManager::GetFeatureDisplayName(gk.first), SceneSettingsManager::GetSettingDisplayName(gk.first, gk.second),
-						gk.first, gk.second);
+						SceneSettingsManager::GetFeatureDisplayName(feature), GetEntryDisplayName(entries[entryIndex]),
+						feature, labelId);
 					if (ImGui::Checkbox(label.c_str(), &checked))
 						for (auto i : stateIs)
 							state.selected[i] = checked ? 1 : 0;
@@ -1238,7 +1273,7 @@ namespace SceneSettingsUI
 
 		DrawPopups(SceneType::TimeOfDay, s_todPopups);
 
-		if (entries.empty()) {
+		if (!HasTransitionEntries(entries)) {
 			ImGui::Spacing();
 			ImGui::TextColored(theme.StatusPalette.Disable,
 				"No time-of-day settings configured.");
@@ -1255,14 +1290,14 @@ namespace SceneSettingsUI
 			[](size_t idx) { SceneSettingsManager::GetSingleton()->TogglePauseEntry(SceneType::TimeOfDay, idx); },
 			[](size_t idx) { SceneSettingsManager::GetSingleton()->RevertEntryToDefault(SceneType::TimeOfDay, idx); },
 			[](size_t idx) { SceneSettingsManager::GetSingleton()->RemoveSetting(SceneType::TimeOfDay, idx); },
-			[](const std::string& feat, const std::string& key, int p) {
-				SceneSettingsManager::GetSingleton()->AddSetting(SceneType::TimeOfDay, feat, key,
-					SceneSettingsManager::GetFeatureSettingValue(feat, key), static_cast<Period>(p));
+			[](const std::string& feat, const std::vector<std::string>& path, const std::string& key, int p) {
+				SceneSettingsManager::GetSingleton()->AddSetting(SceneType::TimeOfDay, feat, path, key,
+					SceneSettingsManager::GetFeatureSettingValue(feat, path, key), static_cast<Period>(p));
 			}
 		};
 
-		auto overwriteGroup = BuildSourceGroup(entries, EntrySource::Overwrite);
-		auto userGroup = BuildSourceGroup(entries, EntrySource::User);
+		auto overwriteGroup = BuildSourceGroup(entries, EntrySource::Overwrite, true, true);
+		auto userGroup = BuildSourceGroup(entries, EntrySource::User, true, true);
 
 		if (!overwriteGroup.order.empty()) {
 			if (DrawSectionHeader("Overwrite Files", "##tow", manager->AreAllOverwritesPaused(SceneType::TimeOfDay), [&] { manager->SetAllOverwritesPaused(SceneType::TimeOfDay, !manager->AreAllOverwritesPaused(SceneType::TimeOfDay)); }, [&] { s_todPopups.deleteAllOverwrites.Request(); }, kPeriodCount))
@@ -1272,7 +1307,7 @@ namespace SceneSettingsUI
 
 		if (!userGroup.order.empty()) {
 			std::vector<size_t> owTmp, userIndices;
-			SplitBySource(entries, owTmp, userIndices);
+			SplitBySource(entries, owTmp, userIndices, true);
 			if (DrawSectionHeader("User Settings", "##tusr", manager->AreAllUserPaused(SceneType::TimeOfDay),
 					[&] { manager->SetAllUserPaused(SceneType::TimeOfDay, !manager->AreAllUserPaused(SceneType::TimeOfDay)); },
 					[&] { s_todPopups.deleteAllUser.Request(); }, kPeriodCount,
@@ -1306,9 +1341,9 @@ namespace SceneSettingsUI
 			[weatherId](size_t idx) { SceneSettingsManager::GetSingleton()->TogglePauseWeatherEntry(weatherId, idx); },
 			[weatherId](size_t idx) { SceneSettingsManager::GetSingleton()->RevertWeatherEntryToDefault(weatherId, idx); },
 			[weatherId](size_t idx) { SceneSettingsManager::GetSingleton()->RemoveWeatherSetting(weatherId, idx); },
-			[weatherId](const std::string& feat, const std::string& key, int p) {
-				SceneSettingsManager::GetSingleton()->AddWeatherSetting(weatherId, feat, key,
-					SceneSettingsManager::GetFeatureSettingValue(feat, key), static_cast<Period>(p));
+			[weatherId](const std::string& feat, const std::vector<std::string>& path, const std::string& key, int p) {
+				SceneSettingsManager::GetSingleton()->AddWeatherSetting(weatherId, feat, path, key,
+					SceneSettingsManager::GetFeatureSettingValue(feat, path, key), static_cast<Period>(p));
 			}
 		};
 	}
@@ -1321,10 +1356,10 @@ namespace SceneSettingsUI
 		auto cb = MakeWeatherCallbacks(weatherId, numValueColumns == 1);
 
 		std::vector<size_t> overwriteIndices, userIndices;
-		SplitBySource(entries, overwriteIndices, userIndices);
+		SplitBySource(entries, overwriteIndices, userIndices, true);
 
 		if (!overwriteIndices.empty()) {
-			auto group = BuildSourceGroup(entries, EntrySource::Overwrite);
+			auto group = BuildSourceGroup(entries, EntrySource::Overwrite, true, true);
 			bool allPaused = std::all_of(overwriteIndices.begin(), overwriteIndices.end(),
 				[&](size_t i) { return entries[i].paused; });
 			if (DrawSectionHeader("Overwrite Files", "##wow",
@@ -1337,7 +1372,7 @@ namespace SceneSettingsUI
 		}
 
 		if (!userIndices.empty()) {
-			auto group = BuildSourceGroup(entries, EntrySource::User);
+			auto group = BuildSourceGroup(entries, EntrySource::User, true, true);
 			bool allPaused = std::all_of(userIndices.begin(), userIndices.end(),
 				[&](size_t i) { return entries[i].paused; });
 			if (DrawSectionHeader("User Settings", "##wusr",
@@ -1391,7 +1426,7 @@ namespace SceneSettingsUI
 			for (int p = 0; p < kPeriodCount; ++p)
 				DrawWeatherAddDialog(weatherId, state.periodAddStates[p], static_cast<Period>(p));
 
-		if (config.entries.empty()) {
+		if (!HasTransitionEntries(config.entries)) {
 			ImGui::Spacing();
 			ImGui::TextColored(theme.StatusPalette.Disable,
 				"No scene settings for this weather.");

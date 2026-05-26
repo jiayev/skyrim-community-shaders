@@ -109,7 +109,9 @@ public:
 	struct SettingEntry
 	{
 		std::string featureShortName;  // Feature's GetShortName()
+		std::vector<std::string> settingPath;  // Feature-owned subfeature/object path
 		std::string settingKey;        // Feature-owned scene setting key
+		std::string displayName;       // Cached UI label
 		json value;                    // Override value (bool, float, int, etc.)
 		json originalValue;            // Value at time of creation, for revert
 		bool paused = false;           // Temporarily disabled
@@ -122,21 +124,26 @@ public:
 	// --- Generic Entry Management (scene-type agnostic) ---
 
 	const std::vector<SettingEntry>& GetEntries(SceneType type) const;
-	bool HasEntryFromSource(SceneType type, const std::string& featureShortName, const std::string& settingKey, EntrySource source) const;
-	bool HasActiveOverwrite(SceneType type, const std::string& featureShortName, const std::string& settingKey) const;
+	bool HasEntryFromSource(SceneType type, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey, EntrySource source) const;
+	bool HasActiveOverwrite(SceneType type, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey) const;
 
 	/// Add a setting.  For TimeOfDay entries, specify the target period.
-	void AddSetting(SceneType type, const std::string& featureShortName, const std::string& settingKey, const json& value,
-		TimeOfDayPeriod period = TimeOfDayPeriod::Count);
+	bool AddSetting(SceneType type, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey, const json& value,
+		TimeOfDayPeriod period = TimeOfDayPeriod::Count, bool deferCommit = false);
 	void RemoveSetting(SceneType type, size_t index);
 	void TogglePauseEntry(SceneType type, size_t index);
 	void UpdateEntryValue(SceneType type, size_t index, const json& newValue, bool deferSave = false);
+	void CommitSceneSettingChanges();
 
 	/// Revert an entry's value to its originalValue (captured at creation).
 	void RevertEntryToDefault(SceneType type, size_t index);
 
 	/// Check if an entry already exists for a specific period (TimeOfDay)
-	bool HasEntryForPeriod(const std::string& featureShortName, const std::string& settingKey,
+	bool HasEntryForPeriod(const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey,
 		TimeOfDayPeriod period, EntrySource source) const;
 
 	void SetAllOverwritesPaused(SceneType type, bool paused);
@@ -221,17 +228,20 @@ public:
 
 	/// Get a UI-friendly display label for a setting key.
 	static std::string GetSettingDisplayName(const std::string& settingKey);
-	static std::string GetSettingDisplayName(const std::string& featureShortName, const std::string& settingKey);
+	static std::string GetSettingDisplayName(const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey);
 
 	/// Split a scene setting into add-dialog subfeature path and leaf label.
-	static bool GetSettingDisplayPath(const std::string& featureShortName, const std::string& settingKey,
+	static bool GetSettingDisplayPath(const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey,
 		std::vector<std::string>& pathParts, std::string& settingName);
 
 	/// Get only float setting keys that can be smoothly transitioned in Time of Day
 	static std::vector<std::string> GetTransitionableSettingKeys(const std::string& featureShortName);
 
 	/// Get current value of a specific setting from a feature
-	static json GetFeatureSettingValue(const std::string& featureShortName, const std::string& settingKey);
+	static json GetFeatureSettingValue(const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey);
 
 	/// Detect the JSON type of a setting value for UI rendering
 	enum class SettingType
@@ -257,8 +267,9 @@ public:
 	bool HasWeatherConfig(RE::FormID weatherId);
 
 	/// Add a weather setting.  Requires a valid period (all entries are per-period).
-	void AddWeatherSetting(RE::FormID weatherId, const std::string& featureShortName,
-		const std::string& settingKey, const json& value, TimeOfDayPeriod period);
+	bool AddWeatherSetting(RE::FormID weatherId, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey, const json& value, TimeOfDayPeriod period,
+		bool deferSave = false);
 	void RemoveWeatherSetting(RE::FormID weatherId, size_t index);
 	void TogglePauseWeatherEntry(RE::FormID weatherId, size_t index);
 	void UpdateWeatherEntryValue(RE::FormID weatherId, size_t index, const json& newValue, bool deferSave = false);
@@ -266,7 +277,7 @@ public:
 	void DeleteAllWeatherSettings(RE::FormID weatherId);
 
 	bool HasWeatherEntryForPeriod(RE::FormID weatherId, const std::string& featureShortName,
-		const std::string& settingKey, TimeOfDayPeriod period,
+		const std::vector<std::string>& settingPath, const std::string& settingKey, TimeOfDayPeriod period,
 		std::optional<EntrySource> source = std::nullopt);
 
 	/// Weather UI preference: show TOD table vs flat view (view-only, data is always per-period).
@@ -303,9 +314,6 @@ private:
 	/// Cache of last-applied blended float values per feature+key.
 	/// Used with epsilon comparison to skip redundant LoadSettings calls.
 	std::map<std::string, std::map<std::string, float>> lastAppliedTODFloats;
-
-	/// Cache of last-applied non-float values per feature+key.
-	std::map<std::string, std::map<std::string, json>> lastAppliedTODOther;
 
 	/// Float epsilon — changes smaller than this skip the LoadSettings call.
 	static constexpr float kBlendEpsilon = 1e-3f;
@@ -358,28 +366,29 @@ private:
 
 	/// Compute a single float override for a feature+key across two transitioning weathers.
 	/// Returns true if an override was computed, with the result in outValue.
-	bool ComputeWeatherBlendedFloat(const std::string& shortName, const std::string& key,
+	bool ComputeWeatherBlendedFloat(const std::string& shortName,
+		const std::vector<std::string>& settingPath, const std::string& key,
 		RE::FormID currentId, RE::FormID lastId, float weatherLerp, float& outValue);
-	bool IsActiveWeatherSetting(const std::string& shortName, const std::string& key);
+	bool IsActiveWeatherSetting(const std::string& shortName, const std::vector<std::string>& settingPath, const std::string& key);
 	float GetTimeOfDayPeriodFallbackFloat(float baseVal, const std::string& shortName,
-		const std::string& key, int periodIdx) const;
+		const std::vector<std::string>& settingPath, const std::string& key, int periodIdx) const;
 
 	// --- Helpers ---
 	std::vector<SettingEntry>& GetEntriesMut(SceneType type);
 	bool IsEntryActive(const SettingEntry& entry) const;
 	bool HasActiveEntries(SceneType type) const;
-	bool HasDuplicateEntry(SceneType type, const std::string& featureShortName, const std::string& settingKey,
+	bool HasDuplicateEntry(SceneType type, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey,
 		EntrySource source, TimeOfDayPeriod period = TimeOfDayPeriod::Count) const;
 
 	void ReapplyIfActive();
-	void ApplySettings(SceneType type);
-	void SaveBaselineForKeys(const std::map<std::string, std::set<std::string>>& keysToSave,
+	void ApplyActiveSettings(SceneType type);
+	void SaveBaselineForEntries(const std::vector<SettingEntry>& sourceEntries,
 		std::map<std::string, json>& outBaseline);
 	void SavePartialBaseline(SceneType type, std::map<std::string, json>& outBaseline);
 	void RevertFromBaseline(std::map<std::string, json>& baseline);
 	void RevertToExteriorSettings();
 	void SaveExteriorSettings(SceneType type);
-	static void ApplySettingToFeature(const SettingEntry& entry);
 
 	// --- Time of Day lifecycle ---
 	void UpdateTimeOfDay();
@@ -401,19 +410,14 @@ private:
 
 	/// Look up the saved baseline value for a feature+key pair.
 	/// @return Pointer to the baseline JSON, or nullptr if not found.
-	const json* FindTODBaseline(const std::string& shortName, const std::string& key) const;
+	const json* FindTODBaseline(const std::string& shortName, const std::vector<std::string>& settingPath, const std::string& key) const;
 
 	/// Compute a weighted blend of float values across active TOD periods.
 	/// Uncovered periods fall back to @p baseVal so the sum is always complete.
 	float BlendFloatForPeriods(float baseVal, const std::vector<PeriodRef>& periodRefs,
-		const float* factors, const std::string& shortName, const std::string& key) const;
+		const float* factors, const std::string& shortName, const std::vector<std::string>& settingPath, const std::string& key) const;
 	float BlendFloatForWeatherPeriods(float baseVal, const std::vector<PeriodRef>& periodRefs,
-		const float* factors, const std::string& shortName, const std::string& key) const;
-
-	/// Select the non-float value from the dominant period with type validation.
-	/// Falls back to @p baseline if no matching period or on type mismatch.
-	json SnapNonFloatToDominant(const json& baseline, const std::vector<PeriodRef>& periodRefs,
-		TimeOfDayPeriod dominant, const std::string& shortName, const std::string& key) const;
+		const float* factors, const std::string& shortName, const std::vector<std::string>& settingPath, const std::string& key) const;
 
 	// --- Overwrite discovery helper ---
 	void DiscoverOverwritesInDir(SceneType type, const std::filesystem::path& dir,

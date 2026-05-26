@@ -10,9 +10,17 @@
 
 struct SceneSettingDescriptor
 {
+	std::vector<std::string> settingPath;
 	std::string key;
 	std::string displayName;
 	std::vector<std::string> displayPath;
+	json value;
+};
+
+struct SceneSettingUpdate
+{
+	std::vector<std::string> settingPath;
+	std::string key;
 	json value;
 };
 
@@ -124,10 +132,11 @@ public:
 
 	virtual void SaveSettings(json&) {}
 	virtual void LoadSettings(json&) {}
+	static bool IsSceneSettingPrimitive(const json& value);
 	/// Scene manager-facing settings; override for composite features with subfeatures.
 	virtual std::vector<SceneSettingDescriptor> GetSceneSettings();
-	virtual bool GetSceneSettingValue(const std::string& key, json& outValue);
-	virtual bool ApplySceneSettings(const std::vector<std::pair<std::string, json>>& settings);
+	virtual bool GetSceneSettingValue(const std::vector<std::string>& settingPath, const std::string& key, json& outValue);
+	virtual bool ApplySceneSettings(const std::vector<SceneSettingUpdate>& settings);
 
 	virtual void RestoreDefaultSettings() {}
 	virtual bool ToggleAtBootSetting();

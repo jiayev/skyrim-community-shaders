@@ -15,28 +15,30 @@ namespace SceneSettingsUI
 	using Period = SceneSettingsManager::TimeOfDayPeriod;
 	static constexpr int kPeriodCount = SceneSettingsManager::kPeriodCount;
 
-	/// Unique feature+key identifier for TOD table ordering.
+	/// Unique setting identifier for TOD table ordering.
 	struct SettingId
 	{
 		std::string feature;
+		std::vector<std::string> path;
 		std::string key;
-		bool operator<(const SettingId& o) const { return std::tie(feature, key) < std::tie(o.feature, o.key); }
+		std::string displayName;
+		bool operator<(const SettingId& o) const { return std::tie(feature, path, key) < std::tie(o.feature, o.path, o.key); }
 	};
 
 	/// Period-indexed entry map built from a set of entries.
 	struct SourceGroup
 	{
 		std::vector<SettingId> order;
-		std::map<std::string, std::map<std::string, std::array<size_t, kPeriodCount>>> map;
+		std::map<SettingId, std::array<size_t, kPeriodCount>> map;
 	};
 
 	/// Build a SourceGroup from entries, optionally filtered to a single source.
 	SourceGroup BuildSourceGroup(const std::vector<SceneSettingsManager::SettingEntry>& entries,
-		EntrySource sourceFilter, bool filterBySource = true);
+		EntrySource sourceFilter, bool filterBySource = true, bool transitionOnly = false);
 
 	/// Split entry indices by source (Overwrite vs User).
 	void SplitBySource(const std::vector<SceneSettingsManager::SettingEntry>& entries,
-		std::vector<size_t>& overwriteOut, std::vector<size_t>& userOut);
+		std::vector<size_t>& overwriteOut, std::vector<size_t>& userOut, bool transitionOnly = false);
 
 	/// Remove entries by indices in reverse order.
 	void RemoveIndicesReversed(const std::vector<size_t>& indices,
@@ -121,7 +123,7 @@ namespace SceneSettingsUI
 		std::function<void(size_t idx)> revert;
 		std::function<void(size_t idx)> remove;
 		// Optional: called when user clicks + in an empty period cell (multi-column only)
-		std::function<void(const std::string& feature, const std::string& key, int period)> onAddPeriod;
+		std::function<void(const std::string& feature, const std::vector<std::string>& path, const std::string& key, int period)> onAddPeriod;
 	};
 
 	/// Draw flyout controls (toggle + revert + delete). Works for both single and group.
