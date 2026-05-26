@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <functional>
 #include <map>
 #include <tuple>
@@ -22,6 +23,8 @@ namespace SceneSettingsUI
 		std::vector<std::string> path;
 		std::string key;
 		std::string displayName;
+		std::string categoryName;
+		std::vector<std::string> parentPath;
 		bool operator<(const SettingId& o) const { return std::tie(feature, path, key) < std::tie(o.feature, o.path, o.key); }
 	};
 
@@ -162,8 +165,7 @@ namespace SceneSettingsUI
 
 	/// Draw a source table with feature-grouped rows and per-cell value editing.
 	/// @param numValueColumns 1 for single-value (Interior), kPeriodCount for TOD.
-	/// When numValueColumns == 1, row and column flyouts are suppressed to avoid
-	/// dual-functionality with the section header's Pause All / Delete All buttons.
+	/// When numValueColumns == 1, row actions are drawn in a fixed right-side column.
 	void DrawSourceTable(
 		const SourceGroup& group,
 		const std::vector<SceneSettingsManager::SettingEntry>& entries,

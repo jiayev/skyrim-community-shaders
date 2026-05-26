@@ -1488,7 +1488,6 @@ namespace Util
 		bool isOpen = false;
 		bool closing = false;    // True when close animation is playing
 		bool flyoutHovered = false;  // True when mouse is over the flyout window (set by EndFlyout)
-		bool slideRight = false;     // True when flyout slides right from item (set by BeginFlyout)
 		float closeTimer = 0.f;  // Countdown before closing on mouse-leave
 		float openProgress = 0.f;  // Slide animation progress (0..1)
 		ImVec2 sourceMin{};      // Source item rect min (for hover tracking)
@@ -1501,19 +1500,22 @@ namespace Util
 	/// Call between the value widget and EndFlyout().
 	/// @param state  Shared flyout state (one per panel).
 	/// @param itemId Unique ID for this flyout instance (use ImGui::GetItemID() after the value widget).
-	/// @param slideRight If true, flyout appears to the right of the item with a left-to-right animation.
-	bool BeginFlyout(FlyoutState& state, ImGuiID itemId, bool slideRight = false);
+	bool BeginFlyout(FlyoutState& state, ImGuiID itemId);
 
 	/// Begin a flyout with an explicit hover source rect.
 	/// Use when the hover target should be larger than the last item (e.g. full table cell).
-	bool BeginFlyout(FlyoutState& state, ImGuiID itemId, const ImVec2& hoverMin, const ImVec2& hoverMax, bool slideRight = false);
+	bool BeginFlyout(FlyoutState& state, ImGuiID itemId, const ImVec2& hoverMin, const ImVec2& hoverMax);
 
 	/// Begin a flyout with separate hover detection and flyout anchor rects.
 	/// Hover uses hoverMin/hoverMax, but the flyout position anchors to anchorMax.y.
-	bool BeginFlyout(FlyoutState& state, ImGuiID itemId, const ImVec2& hoverMin, const ImVec2& hoverMax, const ImVec2& anchorMax, bool slideRight = false);
+	bool BeginFlyout(FlyoutState& state, ImGuiID itemId, const ImVec2& hoverMin, const ImVec2& hoverMax, const ImVec2& anchorMax);
 
 	/// End the flyout region. Must be called if BeginFlyout returned true.
 	void EndFlyout(FlyoutState& state);
+
+	/// Size helpers for compact flyout/action-row controls.
+	ImVec2 GetSmallFeatureToggleSize();
+	float GetThemedDeleteButtonSize();
 
 	/// Draw a small toggle switch (20% smaller than FeatureToggle).
 	bool SmallFeatureToggle(const char* label, bool* enabled);

@@ -1,10 +1,12 @@
 #include "SceneSettingsUI.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <iterator>
 #include <map>
 #include <set>
+#include <string_view>
 #include <tuple>
 
 #include "imgui_stdlib.h"
@@ -23,8 +25,12 @@ namespace SceneSettingsUI
 	constexpr int kPeriodlessEntrySlot = 0;
 	constexpr float kSingleValueColumnScale = 1.25f;
 	constexpr float kLabelOverflowTolerance = 0.5f;
+	constexpr float kSceneFloatDragSpeed = 0.01f;
+	constexpr float kSceneIntDragSpeed = 1.0f;
+	constexpr float kActionsColumnMinWidthEm = 4.5f;
+	constexpr float kActionControlSpacingCount = 2.0f;
 	constexpr const char* kEllipsis = "...";
-	constexpr size_t kEllipsisLength = 3;
+	constexpr std::string_view kDisplaySeparator = " / ";
 	constexpr const char* kSelectSubFeatureLabel = "Select Sub Feature...";
 	using SettingEntry = SceneSettingsManager::SettingEntry;
 
@@ -45,10 +51,63 @@ namespace SceneSettingsUI
 		return entry.displayName.empty() ? SceneSettingsManager::GetSettingDisplayName(entry.settingKey) : entry.displayName;
 	}
 
+	static std::vector<std::string> SplitDisplayName(std::string_view displayName)
+	{
+		std::vector<std::string> parts;
+		if (displayName.empty())
+			return parts;
+		for (size_t start = 0; start <= displayName.size();) {
+			size_t end = displayName.find(kDisplaySeparator, start);
+			if (end == std::string_view::npos) {
+				parts.emplace_back(displayName.substr(start));
+				break;
+			}
+			parts.emplace_back(displayName.substr(start, end - start));
+			start = end + kDisplaySeparator.size();
+		}
+		return parts;
+	}
+
+	static std::string JoinDisplayParts(const std::vector<std::string>& parts)
+	{
+		std::string result;
+		for (const auto& part : parts) {
+			if (!result.empty())
+				result += kDisplaySeparator;
+			result += part;
+		}
+		return result;
+	}
+
+	static SettingId MakeSettingId(const SettingEntry& entry, const std::string& rootCategoryName)
+	{
+		auto displayParts = SplitDisplayName(GetEntryDisplayName(entry));
+		if (displayParts.empty())
+			displayParts.push_back(SceneSettingsManager::GetSettingDisplayName(entry.settingKey));
+
+		auto settingName = displayParts.back();
+		displayParts.pop_back();
+
+		std::string categoryName = displayParts.empty() ? rootCategoryName : displayParts.front();
+		std::vector<std::string> parentPath;
+		if (displayParts.size() > 1)
+			parentPath.assign(std::next(displayParts.begin()), displayParts.end());
+
+		return { entry.featureShortName, entry.settingPath, entry.settingKey, settingName, categoryName, parentPath };
+	}
+
 	SourceGroup BuildSourceGroup(const std::vector<SceneSettingsManager::SettingEntry>& entries,
 		EntrySource sourceFilter, bool filterBySource, bool transitionOnly)
 	{
 		SourceGroup group;
+		std::map<std::string, std::string> featureDisplayNames;
+		auto getFeatureDisplayName = [&](const std::string& feature) -> const std::string& {
+			auto it = featureDisplayNames.find(feature);
+			if (it == featureDisplayNames.end())
+				it = featureDisplayNames.emplace(feature, SceneSettingsManager::GetFeatureDisplayName(feature)).first;
+			return it->second;
+		};
+
 		for (size_t idx = 0; idx < entries.size(); ++idx) {
 			const auto& e = entries[idx];
 			if (filterBySource && e.source != sourceFilter)
@@ -60,7 +119,7 @@ namespace SceneSettingsUI
 				continue;
 			if (p >= kPeriodCount)
 				p = kPeriodlessEntrySlot;
-			SettingId setting{ e.featureShortName, e.settingPath, e.settingKey, GetEntryDisplayName(e) };
+			SettingId setting = MakeSettingId(e, getFeatureDisplayName(e.featureShortName));
 			auto [it, inserted] = group.map.try_emplace(setting);
 			if (inserted) {
 				it->second.fill(SIZE_MAX);
@@ -152,9 +211,9 @@ namespace SceneSettingsUI
 		state.activeId = 0;
 	}
 
-	static void ApplyGroupFlyoutResult(const FlyoutResult& result, const std::vector<size_t>& indices,
+	static void ApplyGroupControlResult(const FlyoutResult& result, const std::vector<size_t>& indices,
 		bool allPaused, bool isOverwrite, PopupState* popups, const std::vector<SettingEntry>& entries,
-		const TableCallbacks& cb, Util::FlyoutState& flyout)
+		const TableCallbacks& cb, Util::FlyoutState* flyout)
 	{
 		if (result.toggled)
 			for (auto idx : indices)
@@ -170,7 +229,8 @@ namespace SceneSettingsUI
 			RequestOverwriteRowDelete(*popups, entries, indices);
 		else
 			RemoveIndicesReversed(indices, cb.remove);
-		CloseFlyout(flyout);
+		if (flyout)
+			CloseFlyout(*flyout);
 	}
 
 	// --- Feature name resolution by scene type ---
@@ -566,7 +626,7 @@ namespace SceneSettingsUI
 				if (!std::isfinite(val))
 					val = 0.0f;
 				ImGui::SetNextItemWidth(inputWidth);
-				if (ImGui::InputFloat("##val", &val, 0.0f, 0.0f, "%.3f") && !readOnly)
+				if (ImGui::DragFloat("##val", &val, kSceneFloatDragSpeed, 0.0f, 0.0f, "%.3f") && !readOnly)
 					if (std::isfinite(val))
 						updateFn(json(val));
 				if (!readOnly && ImGui::IsItemDeactivatedAfterEdit())
@@ -577,7 +637,7 @@ namespace SceneSettingsUI
 			{
 				int val = value.get<int>();
 				ImGui::SetNextItemWidth(inputWidth);
-				if (ImGui::InputInt("##val", &val, 0, 0) && !readOnly)
+				if (ImGui::DragInt("##val", &val, kSceneIntDragSpeed) && !readOnly)
 					updateFn(json(val));
 				if (!readOnly && ImGui::IsItemDeactivatedAfterEdit())
 					commitFn();
@@ -658,6 +718,116 @@ namespace SceneSettingsUI
 			manager->DeleteAllUserSettings(type);
 	}
 
+	static int GetSettingLabelMaxLines()
+	{
+		return static_cast<int>(C::SCENE_SETTING_MAX_LINES);
+	}
+
+	static std::string GetSettingLabel(const SettingId& setting)
+	{
+		return setting.displayName.empty() ? SceneSettingsManager::GetSettingDisplayName(setting.key) : setting.displayName;
+	}
+
+	static float GetSettingLabelVisualHeight()
+	{
+		return ImGui::GetTextLineHeight() * C::SCENE_SETTING_MAX_LINES;
+	}
+
+	static std::string TruncateTextToFitWidth(std::string text, float width)
+	{
+		if (text.empty() || width <= 0.0f || ImGui::CalcTextSize(text.c_str()).x <= width)
+			return text;
+
+		size_t visibleLen = text.size();
+		while (visibleLen > 0 &&
+		       ImGui::CalcTextSize((text.substr(0, visibleLen) + kEllipsis).c_str()).x > width)
+			--visibleLen;
+		return text.substr(0, visibleLen) + kEllipsis;
+	}
+
+	static std::string TruncateWrappedTextToLines(std::string text, float wrapWidth, int maxLines)
+	{
+		assert(maxLines > 0);
+		if (text.empty() || wrapWidth <= 0.0f)
+			return text;
+
+		const float fixedH = ImGui::GetTextLineHeight() * maxLines;
+		if (ImGui::CalcTextSize(text.c_str(), nullptr, false, wrapWidth).y <= fixedH + kLabelOverflowTolerance)
+			return text;
+
+		auto* font = ImGui::GetFont();
+		const char* textBegin = text.c_str();
+		const char* textEnd = textBegin + text.size();
+		const char* lineStart = textBegin;
+		for (int line = 0; line < maxLines && lineStart < textEnd; ++line) {
+			const char* nextLine = font->CalcWordWrapPositionA(1.0f, lineStart, textEnd, wrapWidth);
+			if (nextLine <= lineStart)
+				break;
+			lineStart = nextLine;
+		}
+
+		size_t visibleLen = static_cast<size_t>(lineStart - textBegin);
+		while (visibleLen > 0 &&
+		       ImGui::CalcTextSize((text.substr(0, visibleLen) + kEllipsis).c_str(), nullptr, false, wrapWidth).y > fixedH + kLabelOverflowTolerance)
+			--visibleLen;
+		return text.substr(0, visibleLen) + kEllipsis;
+	}
+
+	static float DrawSettingLabel(const SettingId& setting)
+	{
+		const float wrapWidth = ImGui::GetContentRegionAvail().x;
+		const float fixedH = GetSettingLabelVisualHeight();
+
+		if (setting.parentPath.empty()) {
+			auto text = TruncateWrappedTextToLines(GetSettingLabel(setting), wrapWidth, GetSettingLabelMaxLines());
+			ImGui::TextWrapped("%s", text.c_str());
+		} else {
+			auto parent = TruncateTextToFitWidth(JoinDisplayParts(setting.parentPath), wrapWidth);
+			auto leaf = TruncateTextToFitWidth(GetSettingLabel(setting), wrapWidth);
+			auto text = std::format("{}\n{}", parent, leaf);
+			ImGui::TextUnformatted(text.c_str());
+		}
+
+		const float textBottomY = ImGui::GetItemRectMax().y;
+		const float usedH = ImGui::GetItemRectSize().y;
+		if (usedH < fixedH) {
+			const float pad = fixedH - usedH - ImGui::GetStyle().ItemSpacing.y;
+			if (pad > 0.0f)
+				ImGui::Dummy(ImVec2(0, pad));
+		}
+		return textBottomY;
+	}
+
+	static bool HasInlineActionColumn(int numValueColumns)
+	{
+		return numValueColumns == 1;
+	}
+
+	static float GetActionsColumnWidth()
+	{
+		const float controlWidth = Util::GetSmallFeatureToggleSize().x +
+		                           ImGui::GetFrameHeight() * C::FLYOUT_BUTTON_SCALE +
+		                           Util::GetThemedDeleteButtonSize() +
+		                           ImGui::GetStyle().ItemSpacing.x * kActionControlSpacingCount;
+		return std::max(C::Em(kActionsColumnMinWidthEm), controlWidth);
+	}
+
+	static void CenterCursorY(float rowContentHeight, float itemHeight)
+	{
+		ImGui::SetCursorPosY(ImGui::GetCursorPosY() + std::max(0.0f, (rowContentHeight - itemHeight) * 0.5f));
+	}
+
+	static void DrawInlineControls(const std::vector<size_t>& indices, bool isOverwrite, PopupState* popups,
+		const std::vector<SettingEntry>& entries, const TableCallbacks& cb)
+	{
+		if (indices.empty())
+			return;
+
+		const bool allPaused = AreAllPaused(indices, entries);
+		auto result = DrawFlyoutControls(allPaused, indices.size() > 1, isOverwrite);
+		ApplyGroupControlResult(result, indices, allPaused, isOverwrite, popups, entries, cb, nullptr);
+	}
+
 	void DrawSourceTable(
 		const SourceGroup& group,
 		const std::vector<SceneSettingsManager::SettingEntry>& entries,
@@ -670,7 +840,11 @@ namespace SceneSettingsUI
 	{
 		bool isOverwrite = source == EntrySource::Overwrite;
 		bool multiColumn = numValueColumns > 1;
-		int totalCols = multiColumn ? 1 + numValueColumns : 2;
+		bool inlineActions = HasInlineActionColumn(numValueColumns);
+		constexpr int kSettingColumn = 0;
+		constexpr int kFirstValueColumn = 1;
+		const int actionsColumn = kFirstValueColumn + numValueColumns;
+		int totalCols = actionsColumn + (inlineActions ? 1 : 0);
 
 		// Pre-collect per-column indices for header controls (multi-column only)
 		std::array<std::vector<size_t>, kPeriodCount> perColumn{};
@@ -697,16 +871,19 @@ namespace SceneSettingsUI
 			ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed,
 				C::Em(C::SCENE_TOD_PERIOD_COL_EM) * kSingleValueColumnScale);
 		}
+		if (inlineActions)
+			ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, GetActionsColumnWidth());
+
 		if (multiColumn) {
 			ImGui::TableSetupScrollFreeze(0, 1);
 
 			// Header row
 			ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-			ImGui::TableSetColumnIndex(0);
+			ImGui::TableSetColumnIndex(kSettingColumn);
 			ImGui::TableHeader("Setting");
 
 			for (int i = 0; i < numValueColumns; ++i) {
-				ImGui::TableSetColumnIndex(1 + i);
+				ImGui::TableSetColumnIndex(kFirstValueColumn + i);
 				ImVec2 cellMin = ImGui::GetCursorScreenPos();
 				float colW = ImGui::GetContentRegionAvail().x;
 				ImGui::Text("%s", SceneSettingsManager::kPeriodNames[i]);
@@ -719,8 +896,8 @@ namespace SceneSettingsUI
 					if (Util::BeginFlyout(flyout.col, colId, cellMin, cellMax)) {
 						bool allPaused = AreAllPaused(indices, entries);
 						auto result = DrawFlyoutControls(allPaused, true, isOverwrite);
-						ApplyGroupFlyoutResult(result, indices, allPaused, isOverwrite,
-							popups, entries, cb, flyout.col);
+						ApplyGroupControlResult(result, indices, allPaused, isOverwrite,
+							popups, entries, cb, &flyout.col);
 						Util::EndFlyout(flyout.col);
 					}
 					ImGui::PopID();
@@ -730,20 +907,21 @@ namespace SceneSettingsUI
 
 		// Data rows
 		auto& theme = globals::menu->GetSettings().Theme;
-		std::string lastFeature;
+		std::string lastCategoryFeature;
+		std::string lastCategoryName;
 
 		auto overrideSet = (source == EntrySource::User) ? BuildActiveOverrideSet(entries) : std::set<OverrideKey>{};
 
 		for (const auto& sid : group.order) {
-			// Feature header
-			if (sid.feature != lastFeature) {
-				lastFeature = sid.feature;
+			// Category header
+			if (sid.feature != lastCategoryFeature || sid.categoryName != lastCategoryName) {
+				lastCategoryFeature = sid.feature;
+				lastCategoryName = sid.categoryName;
 				ImGui::TableNextRow();
 				ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImGuiCol_TableRowBgAlt));
-				ImGui::TableSetColumnIndex(0);
+				ImGui::TableSetColumnIndex(kSettingColumn);
 				ImGui::SetWindowFontScale(C::SCENE_TOD_FEATURE_TEXT_SCALE);
-				ImGui::TextColored(theme.FeatureHeading.ColorDefault, "%s:",
-					SceneSettingsManager::GetFeatureDisplayName(sid.feature).c_str());
+				ImGui::TextColored(theme.FeatureHeading.ColorDefault, "%s:", sid.categoryName.c_str());
 				ImGui::SetWindowFontScale(1.0f);
 			}
 
@@ -762,7 +940,7 @@ namespace SceneSettingsUI
 					rowIndices.push_back(perKey[p]);
 
 			ImGui::TableNextRow();
-			ImGui::TableSetColumnIndex(0);
+			ImGui::TableSetColumnIndex(kSettingColumn);
 			ImVec2 cellStart = ImGui::GetCursorScreenPos();
 			float cellWidth = ImGui::GetContentRegionAvail().x;
 			const float labelRowStartY = ImGui::GetCursorPosY();
@@ -775,40 +953,8 @@ namespace SceneSettingsUI
 			ImGui::Indent(C::Em(C::SCENE_ENTRY_INDENT_EM));
 			ImGui::SetWindowFontScale(C::SCENE_TOD_FEATURE_TEXT_SCALE);
 
-			float textBottomY = 0.0f;
-			{
-				auto text = sid.displayName.empty() ? SceneSettingsManager::GetSettingDisplayName(sid.key) : sid.displayName;
-				float wrapWidth = ImGui::GetContentRegionAvail().x;
-				float lineH = ImGui::GetTextLineHeight();
-				float fixedH = lineH * C::SCENE_SETTING_MAX_LINES;
-				ImVec2 textSize = ImGui::CalcTextSize(text.c_str(), nullptr, false, wrapWidth);
-
-				if (textSize.y > fixedH + kLabelOverflowTolerance) {
-					// Text overflows — find where line 2 ends and truncate with "..."
-					auto* font = ImGui::GetFont();
-					const char* textEnd = text.c_str() + text.size();
-					const char* lineStart = text.c_str();
-					for (int line = 0; line < static_cast<int>(C::SCENE_SETTING_MAX_LINES); ++line)
-						lineStart = font->CalcWordWrapPositionA(1.0f, lineStart, textEnd, wrapWidth);
-					// Trim back for "..." and rebuild
-					size_t visibleLen = static_cast<size_t>(lineStart - text.c_str());
-					while (visibleLen > kEllipsisLength &&
-					       ImGui::CalcTextSize((text.substr(0, visibleLen) + kEllipsis).c_str(), nullptr, false, wrapWidth).y > fixedH + kLabelOverflowTolerance)
-						--visibleLen;
-					text = text.substr(0, visibleLen) + kEllipsis;
-				}
-
-				ImGui::TextWrapped("%s", text.c_str());
-				textBottomY = ImGui::GetItemRectMax().y;
-				// Pad to fixed height so all rows are consistent
-				float usedH = ImGui::GetItemRectSize().y;
-				if (usedH < fixedH) {
-					float pad = fixedH - usedH - ImGui::GetStyle().ItemSpacing.y;
-					if (pad > 0.0f)
-						ImGui::Dummy(ImVec2(0, pad));
-				}
-			}
-
+			float textBottomY = DrawSettingLabel(sid);
+			const float labelVisualH = GetSettingLabelVisualHeight();
 			ImGui::SetWindowFontScale(1.0f);
 			const float labelContentH = ImGui::GetCursorPosY() - labelRowStartY;
 
@@ -824,8 +970,8 @@ namespace SceneSettingsUI
 				if (Util::BeginFlyout(flyout.row, rowId, hoverMin, hoverMax, anchorMax)) {
 					bool allPaused = AreAllPaused(rowIndices, entries);
 					auto result = DrawFlyoutControls(allPaused, true, isOverwrite);
-					ApplyGroupFlyoutResult(result, rowIndices, allPaused, isOverwrite,
-						popups, entries, cb, flyout.row);
+					ApplyGroupControlResult(result, rowIndices, allPaused, isOverwrite,
+						popups, entries, cb, &flyout.row);
 					Util::EndFlyout(flyout.row);
 				}
 			}
@@ -835,7 +981,7 @@ namespace SceneSettingsUI
 			// Value columns
 			if (multiColumn) {
 				for (int p = 0; p < numValueColumns; ++p) {
-					ImGui::TableSetColumnIndex(1 + p);
+					ImGui::TableSetColumnIndex(kFirstValueColumn + p);
 					size_t entryIndex = perKey[p];
 
 					if (entryIndex == SIZE_MAX) {
@@ -907,10 +1053,16 @@ namespace SceneSettingsUI
 				}
 			} else {
 				// Single-column: collapsed view of all entries for this key
-				ImGui::TableSetColumnIndex(1);
+				ImGui::TableSetColumnIndex(kFirstValueColumn);
+				CenterCursorY(labelVisualH, ImGui::GetFrameHeight());
 
 				if (rowIndices.empty()) {
 					ImGui::TextDisabled("--");
+					if (inlineActions) {
+						ImGui::TableSetColumnIndex(actionsColumn);
+						CenterCursorY(labelVisualH, ImGui::GetFrameHeight());
+						ImGui::TextDisabled("--");
+					}
 				} else {
 					size_t displayIndex = rowIndices[0];
 					bool anyPaused = std::any_of(rowIndices.begin(), rowIndices.end(),
@@ -941,14 +1093,10 @@ namespace SceneSettingsUI
 					if (anyPaused)
 						ImGui::EndDisabled();
 
-					// Cell flyout operates on all row indices (centered for wide single-column)
-					ImGuiID cellId = ImGui::GetItemID();
-					if (Util::BeginFlyout(flyout.cell, cellId, true)) {
-						bool allPaused = AreAllPaused(rowIndices, entries);
-						auto result = DrawFlyoutControls(allPaused, rowIndices.size() > 1, isOverwrite);
-						ApplyGroupFlyoutResult(result, rowIndices, allPaused, isOverwrite,
-							popups, entries, cb, flyout.cell);
-						Util::EndFlyout(flyout.cell);
+					if (inlineActions) {
+						ImGui::TableSetColumnIndex(actionsColumn);
+						CenterCursorY(labelVisualH, ImGui::GetFrameHeight());
+						DrawInlineControls(rowIndices, isOverwrite, popups, entries, cb);
 					}
 
 					ImGui::PopID();
@@ -956,7 +1104,7 @@ namespace SceneSettingsUI
 			}
 
 			// Suppress row flyout when a cell flyout is active to prevent accidental whole-row deletion
-			if (flyout.cell.isOpen && !flyout.cell.closing && flyout.row.isOpen && !flyout.row.flyoutHovered)
+			if (multiColumn && flyout.cell.isOpen && !flyout.cell.closing && flyout.row.isOpen && !flyout.row.flyoutHovered)
 				flyout.row.closing = true;
 
 			ImGui::PopID();
@@ -972,10 +1120,13 @@ namespace SceneSettingsUI
 	{
 		auto& style = ImGui::GetStyle();
 		bool multiColumn = numValueColumns > 1;
-		int totalCols = multiColumn ? 1 + numValueColumns : 2;
+		bool inlineActions = HasInlineActionColumn(numValueColumns);
+		int totalCols = 1 + numValueColumns + (inlineActions ? 1 : 0);
 		float colSum = C::Em(C::SCENE_TOD_PARAM_COL_EM);
 		colSum += multiColumn ? numValueColumns * C::Em(C::SCENE_TOD_PERIOD_COL_EM)
 		                      : C::Em(C::SCENE_TOD_PERIOD_COL_EM) * kSingleValueColumnScale;
+		if (inlineActions)
+			colSum += GetActionsColumnWidth();
 		float tableWidth = colSum + totalCols * style.CellPadding.x * 2.0f + (totalCols + 1) * 1.0f;
 		// Fewer value columns → header extends past table; at kPeriodCount columns it's flush
 		float extraCols = C::SCENE_SECTION_HEADER_TARGET_COLS - numValueColumns;

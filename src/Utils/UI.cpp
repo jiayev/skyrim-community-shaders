@@ -2254,7 +2254,6 @@ namespace Util
 	static constexpr float kFlyoutPaddingX = 6.0f;
 	static constexpr float kFlyoutPaddingY = 2.0f;
 	static constexpr float kIconShrink = 0.15f;            // shrink icon within button by this fraction
-	static constexpr float kFlyoutEdgeTolerance = 0.5f;
 
 	static void ResetFlyout(FlyoutState& state) noexcept
 	{
@@ -2282,19 +2281,6 @@ namespace Util
 				std::min(viewport->Pos.y + viewport->Size.y, rootWin->Pos.y + rootWin->Size.y)));
 	}
 
-	static bool IsRectFullyVisible(const ImVec2& min, const ImVec2& max, const ImRect& visible)
-	{
-		return min.x >= visible.Min.x - kFlyoutEdgeTolerance &&
-		       min.y >= visible.Min.y - kFlyoutEdgeTolerance &&
-		       max.x <= visible.Max.x + kFlyoutEdgeTolerance &&
-		       max.y <= visible.Max.y + kFlyoutEdgeTolerance;
-	}
-
-	static float ClampVisible(float value, float min, float max)
-	{
-		return std::clamp(value, min, std::max(min, max));
-	}
-
 	static bool IsFlyoutSourceHovered(const ImVec2& min, const ImVec2& max)
 	{
 		constexpr auto popupFlags = ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel;
@@ -2308,35 +2294,23 @@ namespace Util
 		float slideOffset, float scale, const ImRect& visible, bool& canOpen)
 	{
 		const float gap = kFlyoutGap * scale;
-		ImVec2 pos;
-
-		if (state.slideRight) {
-			pos = ImVec2(anchorMax.x + gap - slideOffset, hoverMin.y);
-			pos.y = ClampVisible(pos.y, visible.Min.y, visible.Max.y - state.lastSize.y);
-		} else {
-			pos = ImVec2(hoverMin.x - kFlyoutLeftOffset * scale, anchorMax.y + gap - slideOffset);
-			canOpen = state.lastSize.y <= 0.0f || anchorMax.y + gap + state.lastSize.y <= visible.Max.y;
-			if (state.lastSize.x > 0.0f && pos.x < visible.Min.x)
-				pos.x = visible.Min.x;
-		}
+		ImVec2 pos(hoverMin.x - kFlyoutLeftOffset * scale, anchorMax.y + gap - slideOffset);
+		canOpen = state.lastSize.y <= 0.0f || anchorMax.y + gap + state.lastSize.y <= visible.Max.y;
+		if (state.lastSize.x > 0.0f && pos.x < visible.Min.x)
+			pos.x = visible.Min.x;
 
 		pos.x = std::floor(pos.x + 0.5f);
 		pos.y = std::floor(pos.y + 0.5f);
 		return pos;
 	}
 
-	bool BeginFlyout(FlyoutState& state, ImGuiID itemId, bool slideRight)
+	bool BeginFlyout(FlyoutState& state, ImGuiID itemId)
 	{
-		return BeginFlyout(state, itemId, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), slideRight);
+		return BeginFlyout(state, itemId, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
 	}
 
-	bool BeginFlyout(FlyoutState& state, ImGuiID itemId, const ImVec2& hoverMin, const ImVec2& hoverMax, const ImVec2& anchorMax, bool slideRight)
+	bool BeginFlyout(FlyoutState& state, ImGuiID itemId, const ImVec2& hoverMin, const ImVec2& hoverMax, const ImVec2& anchorMax)
 	{
-		if (slideRight && !IsRectFullyVisible(hoverMin, hoverMax, ImGui::GetCurrentWindow()->ClipRect)) {
-			ResetFlyout(state);
-			return false;
-		}
-
 		float dt = ImGui::GetIO().DeltaTime;
 		bool hovered = IsFlyoutSourceHovered(hoverMin, hoverMax);
 
@@ -2349,7 +2323,6 @@ namespace Util
 			state.closeTimer = 0.0f;
 			if (freshOpen)
 				state.openProgress = 0.0f;
-			state.slideRight = slideRight;
 		}
 
 		if (hovered && state.closing && state.activeId == itemId) {
@@ -2407,9 +2380,9 @@ namespace Util
 		return true;
 	}
 
-	bool BeginFlyout(FlyoutState& state, ImGuiID itemId, const ImVec2& hoverMin, const ImVec2& hoverMax, bool slideRight)
+	bool BeginFlyout(FlyoutState& state, ImGuiID itemId, const ImVec2& hoverMin, const ImVec2& hoverMax)
 	{
-		return BeginFlyout(state, itemId, hoverMin, hoverMax, hoverMax, slideRight);
+		return BeginFlyout(state, itemId, hoverMin, hoverMax, hoverMax);
 	}
 
 	void EndFlyout(FlyoutState& state)
@@ -2436,16 +2409,9 @@ namespace Util
 		float scale = GetUIScale();
 		float gap = kFlyoutGap * scale;
 		bool mouseDragging = ImGui::IsMouseDragging(ImGuiMouseButton_Left);
-		bool itemHovered;
-		if (state.slideRight) {
-			// Cover source item and the horizontal gap to the right
-			itemHovered = ContainsPoint(state.sourceMin, ImVec2(state.sourceMax.x + gap, state.sourceMax.y), mousePos);
-		} else {
-			// Cover source item (with left offset) and the vertical gap below
-			float leftOffset = kFlyoutLeftOffset * scale;
-			itemHovered = ContainsPoint(ImVec2(state.sourceMin.x - leftOffset, state.sourceMin.y),
-				ImVec2(state.sourceMax.x, state.sourceMax.y + gap), mousePos);
-		}
+		float leftOffset = kFlyoutLeftOffset * scale;
+		bool itemHovered = ContainsPoint(ImVec2(state.sourceMin.x - leftOffset, state.sourceMin.y),
+			ImVec2(state.sourceMax.x, state.sourceMax.y + gap), mousePos);
 
 		// Once close animation has started, commit to it — only BeginFlyout
 		// re-hover on the source item can cancel slide-into-cursor oscillation.
@@ -2463,13 +2429,20 @@ namespace Util
 		}
 	}
 
+	ImVec2 GetSmallFeatureToggleSize()
+	{
+		float scale = kSmallToggleScale;
+		return ImVec2(ImGui::GetFrameHeight() * 1.6f * scale, ImGui::GetFrameHeight() * 0.8f * scale);
+	}
 
+	float GetThemedDeleteButtonSize()
+	{
+		return ImGui::GetFrameHeight() * 0.8f;
+	}
 
 	bool SmallFeatureToggle(const char* label, bool* enabled)
 	{
-		float scale = kSmallToggleScale;
-		ImVec2 size(ImGui::GetFrameHeight() * 1.6f * scale, ImGui::GetFrameHeight() * 0.8f * scale);
-		return FeatureToggle(label, enabled, size);
+		return FeatureToggle(label, enabled, GetSmallFeatureToggleSize());
 	}
 
 	bool ThemedDeleteButton(const char* label)
@@ -2478,7 +2451,7 @@ namespace Util
 		ImGui::PushStyleColor(ImGuiCol_Button, colors[ImGuiCol_FrameBg]);
 		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colors[ImGuiCol_FrameBgHovered]);
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, colors[ImGuiCol_FrameBgActive]);
-		float h = ImGui::GetFrameHeight() * 0.8f;
+		float h = GetThemedDeleteButtonSize();
 		// Center text within the small button
 		float fontSize = ImGui::GetFontSize();
 		float padY = std::max(0.f, (h - fontSize) * 0.5f);
@@ -2501,7 +2474,7 @@ namespace Util
 		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colors[ImGuiCol_FrameBgHovered]);
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, colors[ImGuiCol_FrameBgActive]);
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(pad, pad));
-		bool clicked = ImGui::ImageButton(id, texture, iconSize);
+		bool clicked = ImGui::ImageButton(id, texture, iconSize, ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), GetIconTint());
 		ImGui::PopStyleVar();
 		ImGui::PopStyleColor(3);
 		return clicked;
