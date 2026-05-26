@@ -2,8 +2,21 @@
 
 #include <Windows.h>
 #include <fstream>
+#include <regex>
 
 #include "Utils/FileSystem.h"
+
+namespace
+{
+	/** Validates a locale code against a strict pattern to prevent path traversal. */
+	bool IsValidLocaleCode(const std::string& locale)
+	{
+		// Allow: 2-3 letter language, optional underscore + 2-4 letter region
+		// Examples: "en", "zh_CN", "pt_BR", "ja", "kok_IN"
+		static const std::regex pattern(R"(^[a-zA-Z]{2,3}(_[a-zA-Z]{2,4})?$)");
+		return std::regex_match(locale, pattern);
+	}
+}
 
 void I18n::Init()
 {
@@ -108,6 +121,11 @@ void I18n::SetLocale(const std::string& locale)
 
 	if (locale == currentLocale_)
 		return;
+
+	if (!IsValidLocaleCode(locale)) {
+		logger::warn("[I18n] Rejected invalid locale code: '{}'", locale);
+		return;
+	}
 
 	if (locale == "en") {
 		// English uses fallback_ directly; no need for strings_
@@ -215,11 +233,15 @@ void I18n::DiscoverLocales()
 	// Sort with "en" (English) first, then alphabetically by display name
 	std::sort(availableLocales_.begin(), availableLocales_.end(),
 		[](const auto& a, const auto& b) {
+			if (a.first == b.first)
+				return false;
 			if (a.first == "en")
 				return true;
 			if (b.first == "en")
 				return false;
-			return a.second < b.second;
+			if (a.second != b.second)
+				return a.second < b.second;
+			return a.first < b.first;
 		});
 
 	if (availableLocales_.empty()) {

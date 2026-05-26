@@ -445,6 +445,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
 				for (const auto& [code, name] : locales) {
 					bool isSelected = (code == currentLocale);
 					auto displayName = GetLocaleDisplayLabel(code, name);
+					ImGui::PushID(code.c_str());
 					if (ImGui::Selectable(displayName.c_str(), isSelected)) {
 						i18n->SetLocale(code);
 						globals::menu->pendingFontReload = true;
@@ -452,6 +453,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
 					if (isSelected) {
 						ImGui::SetItemDefaultFocus();
 					}
+					ImGui::PopID();
 				}
 				ImGui::EndCombo();
 			}

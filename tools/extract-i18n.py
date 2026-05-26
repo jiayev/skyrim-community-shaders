@@ -242,6 +242,9 @@ def extract_strings(src_dir: Path):
                 if key in strings and strings[key] != default:
                     conflicts.append((key, strings[key], default, str(source_path)))
                 strings[key] = default
+                # If this key was previously seen without a default, it's no longer "key-only"
+                if default and key in key_only:
+                    key_only.discard(key)
 
             # Extract T("key", "default") calls (full key)
             for match in t_pattern.finditer(clean):
