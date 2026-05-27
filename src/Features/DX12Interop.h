@@ -77,8 +77,6 @@ struct DX12Interop : public Feature
 
 	void Init(ID3D11Device* d3d11Device, ID3D11DeviceContext* a_immediateContext, IDXGIAdapter* a_adapter);
 
-	void SetUIBuffer();
-
 	template <typename Func>
 	void Fence(Func func)
 	{
