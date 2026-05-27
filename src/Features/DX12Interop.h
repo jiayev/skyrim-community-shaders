@@ -77,11 +77,10 @@ struct DX12Interop : public Feature
 
 	void Init(ID3D11Device* d3d11Device, ID3D11DeviceContext* a_immediateContext, IDXGIAdapter* a_adapter);
 
+	// Fences the GPU, waits for both D3D11 and D3D12 to be idle, then executes the provided function, then waits for both to be idle again before returning.
 	template <typename Func>
 	void Fence(Func func)
 	{
-		d3d11Context->Flush();
-
 		// Wait for D3D11 to finish
 		DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), fenceValue));
 		DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), fenceValue));
@@ -105,20 +104,22 @@ struct DX12Interop : public Feature
 		DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), fenceValue));
 		fenceValue++;
 
-		auto& commandList = commandLists[frameIndex];
+		auto* commandAllocator = commandAllocators[frameIndex].get();
+		auto* commandList = commandLists[frameIndex].get();
 
 		// New frame, reset
-		DX::ThrowIfFailed(commandAllocators[frameIndex]->Reset());
-		DX::ThrowIfFailed(commandList->Reset(commandAllocators[frameIndex].get(), nullptr));
+		DX::ThrowIfFailed(commandAllocator->Reset());
+		DX::ThrowIfFailed(commandList->Reset(commandAllocator, nullptr));
 
 		// Execute
-		func(commandList.get());
+		func(commandList);
 
 		DX::ThrowIfFailed(commandList->Close());
 
-		ID3D12CommandList* commandListsToExecute[] = { commandList.get() };
+		ID3D12CommandList* commandListsToExecute[] = { commandList };
 		commandQueue->ExecuteCommandLists(1, commandListsToExecute);
-
+		
+		// Execute if present
 		if constexpr (!std::is_same_v<Func2, std::nullptr_t>)
 			func2();
 
