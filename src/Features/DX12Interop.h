@@ -4,7 +4,6 @@
 
 #include <d3d11_4.h>
 #include <directx/d3dx12.h>
-#include <limits>
 
 #include "DX12Interop/WrappedResource.h"
 
