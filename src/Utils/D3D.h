@@ -22,8 +22,10 @@ namespace Util
 	template <class T, std::size_t N>
 	void ResetComPtrs(const std::array<winrt::com_ptr<T>*, N>& ptrs)
 	{
-		for (auto* ptr : ptrs)
-			ResetComPtr(*ptr);
+		for (auto* ptr : ptrs) {
+			if (ptr)
+				ResetComPtr(*ptr);
+		}
 	}
 
 	template <class T, std::size_t N>
