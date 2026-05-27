@@ -677,7 +677,7 @@ void Raytracing::DrawOverlay()
 	ImGui::End();
 }
 
-bool Raytracing::Active() const
+bool Raytracing::Available(bool a_initialized) const
 {
 	if (!loaded)
 		return false;
@@ -688,7 +688,7 @@ bool Raytracing::Active() const
 	if (!settings.CreationEngineRaytracingSettings.Enabled)
 		return false;
 
-	if (!initialized)
+	if (a_initialized && !initialized)
 		return false;
 
 	return true;

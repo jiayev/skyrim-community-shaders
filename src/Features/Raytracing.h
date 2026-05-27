@@ -550,7 +550,7 @@ struct Raytracing : public OverlayFeature
 
 	virtual bool IsInMenu() const override { return true; }
 
-	virtual bool IsOverlayVisible() const override { return Active() && settings.PerfOverlay != OverlayMode::None; };
+	virtual bool IsOverlayVisible() const override { return Available() && settings.PerfOverlay != OverlayMode::None; };
 
 	virtual void DrawOverlay() override;
 
@@ -567,7 +567,7 @@ struct Raytracing : public OverlayFeature
 		};
 	}
 
-	bool Active() const;
+	bool Available(bool a_initialized = true) const;
 
 	// Resources
 	virtual void SetupResources() override;
@@ -607,7 +607,7 @@ struct Raytracing : public OverlayFeature
 
 	inline CreationEngineRaytracing::Mode Mode() const
 	{
-		return Active() ? settings.CreationEngineRaytracingSettings.GeneralSettings.Mode : CreationEngineRaytracing::Mode::None;
+		return Available() ? settings.CreationEngineRaytracingSettings.GeneralSettings.Mode : CreationEngineRaytracing::Mode::None;
 	}
 
 	inline bool IsPathTracing() const
@@ -728,7 +728,7 @@ struct Raytracing : public OverlayFeature
 			{
 				auto& rt = globals::features::raytracing;
 
-				if (rt.Active()) {
+				if (rt.Available()) {
 					rt.UpdateFeatureData();
 					rt.SkyCubeToHemi();
 
@@ -769,7 +769,7 @@ struct Raytracing : public OverlayFeature
 			static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
 			{
 				auto& rt = globals::features::raytracing;
-				if (rt.Active() && rt.Mode() == CreationEngineRaytracing::Mode::PathTracing)
+				if (rt.Available() && rt.Mode() == CreationEngineRaytracing::Mode::PathTracing)
 					return;
 
 				func(imageSpaceShader, shape, param);

@@ -674,7 +674,7 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 	// when the user selects DLSS and the Raytracing Denoiser is set to DLSS_RR.
 	if (settings.upscaleMethod == UpscaleMethod::kDLSS) {
 		auto& rt = globals::features::raytracing;
-		if (rt.Active() &&
+		if (rt.Available() &&
 			rt.settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::DLSS_RR &&
 			(streamline.loadedFeatures & Streamline::Features::kDLSS_RR)) {
 			return UpscaleMethod::kDLSS_RR;
@@ -1147,7 +1147,7 @@ void Upscaling::ConvertColorSpace(bool toLinear)
 
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
-	ID3D11UnorderedAccessView* texture = (toLinear && settings.sharpnessDLSS > 0.0f && sharpenerTexture) ? sharpenerTexture->uav.get() : main.UAV;
+	ID3D11UnorderedAccessView* texture = (!d3d12Mode && toLinear && settings.sharpnessDLSS > 0.0f && sharpenerTexture) ? sharpenerTexture->uav.get() : main.UAV;
 
 	{
 		state->BeginPerfEvent("Color Space Convertion");
@@ -1407,7 +1407,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	}
 
 	auto& rt = globals::features::raytracing;
-	if (rt.Active())
+	if (rt.Available())
 		rt.UpdateJitter(jitter);
 
 	auto& runtimeData = a_viewport->GetRuntimeData();
@@ -1712,7 +1712,7 @@ float Upscaling::GetFrameGenerationFrameTime() const
 void Upscaling::LoadUpscalingSDKs()
 {
 	auto& rt = globals::features::raytracing;
-	d3d12Mode = DX12Interop::D3D12Mode() && rt.Active();
+	d3d12Mode = DX12Interop::D3D12Mode() && rt.Available(false);
 
 	// Initialize upscaling SDK components during plugin startup
 	// This ensures all SDKs are available before any D3D device creation

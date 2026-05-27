@@ -356,7 +356,7 @@ void Deferred::DeferredPasses()
 	auto& ibl = globals::features::ibl;
 	bool skipDeferredComposite = false;
 
-	if (auto& rt = globals::features::raytracing; rt.Active()) {
+	if (auto& rt = globals::features::raytracing; rt.Available()) {
 		rt.DeferredPasses();
 		skipDeferredComposite = rt.settings.CreationEngineRaytracingSettings.Enabled &&
 		                        rt.Mode() == CreationEngineRaytracing::Mode::PathTracing;
