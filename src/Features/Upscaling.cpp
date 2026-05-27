@@ -149,7 +149,10 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 				// rely on.  Streamline's wrapper would bypass this override and
 				// forward to the underlying D3D12 swap chain, causing
 				// E_NOINTERFACE.  The proxy must remain the outermost layer.
-				upscaling.SetBackendD3D12Device(dx12Interop.d3d12Device.get());
+				if (upscaling.d3d12Mode)
+					upscaling.SetBackendD3D12Device(dx12Interop.d3d12Device.get());
+				else
+					upscaling.SetBackendD3D11Device(*ppDevice);
 				// Some features (notably Reflex/PCL) may report availability only after device bind.
 				upscaling.CheckBackendFeatures(pAdapter);
 				upscaling.PostBackendDevice();
@@ -179,7 +182,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		dx12Interop.Init(*ppDevice, *ppImmediateContext, pAdapter);
 
 	if (upscaling.IsBackendInitialized()) {
-		if (dx12Interop.Active()) {
+		if (upscaling.d3d12Mode) {
 			upscaling.SetBackendD3D12Device(dx12Interop.d3d12Device.get());
 		} else {
 			upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
@@ -1706,7 +1709,8 @@ float Upscaling::GetFrameGenerationFrameTime() const
 // Unified interface methods
 void Upscaling::LoadUpscalingSDKs()
 {
-	d3d12Mode = DX12Interop::D3D12Mode();
+	auto& rt = globals::features::raytracing;
+	d3d12Mode = DX12Interop::D3D12Mode() && rt.Active();
 
 	// Initialize upscaling SDK components during plugin startup
 	// This ensures all SDKs are available before any D3D device creation
