@@ -119,24 +119,23 @@ bool DX12Interop::D3D12Mode()
 	return false;
 }
 
-void DX12Interop::Init(ID3D11Device* a_d3d11Device, ID3D11DeviceContext* immediateContext, IDXGIAdapter* adapter)
+void DX12Interop::Init(ID3D11Device* a_d3d11Device, ID3D11DeviceContext* a_immediateContext, IDXGIAdapter* a_adapter)
 {
-	auto& rt = globals::features::raytracing;
-
 	if (!D3D12Mode())
 		return;
 
 	active = true;
 
 	SetD3D11Device(a_d3d11Device);
-	SetD3D11DeviceContext(immediateContext);
+	SetD3D11DeviceContext(a_immediateContext);
 
 	InitializePIX();
 
-	CreateD3D12Device(adapter);
+	CreateD3D12Device(a_adapter);
 
 	CreateInterop();
 
+	auto& rt = globals::features::raytracing;
 	if (rt.loaded)
 		rt.InitializeCERaytracing(d3d11Device.get(), d3d12Device.get(), commandQueue.get(), computeCommandQueue.get(), copyCommandQueue.get());
 }
@@ -208,6 +207,19 @@ void DX12Interop::SetD3D11Device(ID3D11Device* a_d3d11Device)
 void DX12Interop::SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context)
 {
 	DX::ThrowIfFailed(a_d3d11Context->QueryInterface(IID_PPV_ARGS(&d3d11Context)));
+}
+
+UINT DX12Interop::GetCurrentBackBufferIndex()
+{
+	auto& up = globals::features::upscaling;
+	if (up.d3d12SwapChainActive)
+		return up.dx12SwapChain.swapChain->GetCurrentBackBufferIndex();
+	else {
+		if (!swapChain)
+			DX::ThrowIfFailed(globals::d3d::swapChain->QueryInterface(IID_PPV_ARGS(&swapChain)));
+
+		return swapChain->GetCurrentBackBufferIndex();
+	}
 }
 
 void DX12Interop::SetupResources()

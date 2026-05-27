@@ -47,6 +47,8 @@ struct DX12Interop : public Feature
 	winrt::com_ptr<ID3D12CommandAllocator> commandAllocators[2];
 	winrt::com_ptr<ID3D12GraphicsCommandList4> commandLists[2];
 
+	winrt::com_ptr<IDXGISwapChain3> swapChain;
+	
 	struct SharedResources
 	{
 		WrappedResource* main = nullptr;
@@ -73,13 +75,9 @@ struct DX12Interop : public Feature
 
 	UINT frameIndex = 0;
 
-	void CreateInterop();
+	void Init(ID3D11Device* d3d11Device, ID3D11DeviceContext* a_immediateContext, IDXGIAdapter* a_adapter);
 
 	void SetUIBuffer();
-
-	void CreateSharedResources();
-
-	void Init(ID3D11Device* d3d11Device, ID3D11DeviceContext* immediateContext, IDXGIAdapter* adapter);
 
 	template <typename Func>
 	void Fence(Func func)
@@ -110,8 +108,6 @@ struct DX12Interop : public Feature
 	template <typename Func, typename Func2 = std::nullptr_t>
 	void Execute(Func func, Func2 func2 = nullptr)
 	{
-		d3d11Context->Flush();
-
 		// Wait for D3D11 to finish
 		DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), fenceValue));
 		DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), fenceValue));
@@ -136,14 +132,10 @@ struct DX12Interop : public Feature
 
 		// Wait for D3D12 to finish
 		DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), fenceValue));
-
-		if (d3d12Fence->GetCompletedValue() < fenceValue) {
-			DX::ThrowIfFailed(d3d12Fence->SetEventOnCompletion(fenceValue, fenceEvent));
-			WaitForSingleObject(fenceEvent, INFINITE);
-		}
-
 		DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), fenceValue));
 		fenceValue++;
+
+		frameIndex = GetCurrentBackBufferIndex();
 	}
 
 	bool Active() const;
@@ -153,8 +145,10 @@ struct DX12Interop : public Feature
 	static bool D3D12Mode();
 
 private:
+	void CreateInterop();
 	void SetD3D11Device(ID3D11Device* a_d3d11Device);
 	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
 	void InitializePIX();
 	void CreateD3D12Device(IDXGIAdapter* a_adapter);
+	UINT GetCurrentBackBufferIndex();
 };
