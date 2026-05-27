@@ -183,10 +183,10 @@ void DX12Interop::CreateD3D12Device(IDXGIAdapter* a_adapter)
 	queueDesc.Type = D3D12_COMMAND_LIST_TYPE_COPY;
 	DX::ThrowIfFailed(d3d12Device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&copyCommandQueue)));
 
-	for (size_t i = 0; i < 2; i++) {
-		DX::ThrowIfFailed(d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocators[i])));
-		DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocators[i].get(), nullptr, IID_PPV_ARGS(&commandLists[i])));
-		commandLists[i]->Close();
+	for (size_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
+		DX::ThrowIfFailed(d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&frameContexts[i].commandAllocator)));
+		DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, frameContexts[i].commandAllocator.get(), nullptr, IID_PPV_ARGS(&frameContexts[i].commandList)));
+		frameContexts[i].commandList->Close();
 	}
 }
 
@@ -197,6 +197,8 @@ void DX12Interop::CreateInterop()
 	DX::ThrowIfFailed(d3d12Device->CreateSharedHandle(d3d12Fence.get(), nullptr, GENERIC_ALL, nullptr, &sharedFenceHandle));
 	DX::ThrowIfFailed(d3d11Device->OpenSharedFence(sharedFenceHandle, IID_PPV_ARGS(&d3d11Fence)));
 	CloseHandle(sharedFenceHandle);
+
+	fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 }
 
 void DX12Interop::SetD3D11Device(ID3D11Device* a_d3d11Device)
@@ -207,19 +209,6 @@ void DX12Interop::SetD3D11Device(ID3D11Device* a_d3d11Device)
 void DX12Interop::SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context)
 {
 	DX::ThrowIfFailed(a_d3d11Context->QueryInterface(IID_PPV_ARGS(&d3d11Context)));
-}
-
-UINT DX12Interop::GetCurrentBackBufferIndex()
-{
-	auto& up = globals::features::upscaling;
-	if (up.d3d12SwapChainActive)
-		return up.dx12SwapChain.swapChain->GetCurrentBackBufferIndex();
-	else {
-		if (!swapChain)
-			DX::ThrowIfFailed(globals::d3d::swapChain->QueryInterface(IID_PPV_ARGS(&swapChain)));
-
-		return swapChain->GetCurrentBackBufferIndex();
-	}
 }
 
 void DX12Interop::SetupResources()

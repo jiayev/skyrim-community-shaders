@@ -13,6 +13,8 @@
 
 #include <DXProgrammableCapture.h>
 
+#include "State.h"
+
 struct DX12Interop : public Feature
 {
 	virtual inline std::string GetName() override { return "DirectX 12 Interoperability"; }
@@ -44,11 +46,21 @@ struct DX12Interop : public Feature
 	winrt::com_ptr<ID3D12CommandQueue> computeCommandQueue;
 	winrt::com_ptr<ID3D12CommandQueue> copyCommandQueue;
 
-	winrt::com_ptr<ID3D12CommandAllocator> commandAllocators[2];
-	winrt::com_ptr<ID3D12GraphicsCommandList4> commandLists[2];
+	struct FrameContext
+	{
+		winrt::com_ptr<ID3D12CommandAllocator> commandAllocator;
+		winrt::com_ptr<ID3D12GraphicsCommandList4> commandList;
+		UINT64 fenceValueAtSubmission = 0;  // what value was signaled when this frame was submitted
+		bool hasBeenReset = false;          // whether we've reset this context's command allocator at least once since it was last used (to avoid redundant resets)
+	};
 
-	winrt::com_ptr<IDXGISwapChain3> swapChain;
-	
+	static constexpr UINT FRAMES_IN_FLIGHT = 2;
+	FrameContext frameContexts[FRAMES_IN_FLIGHT];
+	UINT64 currentFenceValue = 0;
+	UINT64 lastCompletedFenceValue = 0;
+	UINT currentFrameContextIndex = 0;
+	HANDLE fenceEvent;
+
 	struct SharedResources
 	{
 		WrappedResource* main = nullptr;
@@ -63,9 +75,6 @@ struct DX12Interop : public Feature
 	winrt::com_ptr<ID3D11Fence> d3d11Fence;
 	winrt::com_ptr<ID3D12Fence> d3d12Fence;
 
-	UINT64 fenceValue = 0;
-	HANDLE fenceEvent;
-
 	winrt::com_ptr<IDXGraphicsAnalysis> ga = nullptr;
 
 	bool pixCapture = false;
@@ -73,62 +82,72 @@ struct DX12Interop : public Feature
 
 	bool active = false;
 
-	UINT frameIndex = 0;
-
 	void Init(ID3D11Device* d3d11Device, ID3D11DeviceContext* a_immediateContext, IDXGIAdapter* a_adapter);
 
-	// Fences the GPU, waits for both D3D11 and D3D12 to be idle, then executes the provided function, then waits for both to be idle again before returning.
+	// Fences the GPU, waits for D3D11 to be idle, executes the provided function, then waits for D3D12 to be idle before returning.
 	template <typename Func>
 	void Fence(Func func)
 	{
 		// Wait for D3D11 to finish
-		DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), fenceValue));
-		DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), fenceValue));
-		fenceValue++;
+		DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), ++currentFenceValue));
+		DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), currentFenceValue));
 
 		// Execute
 		func();
 
 		// Wait for D3D12 to finish
-		DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), fenceValue));
-		DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), fenceValue));
-		fenceValue++;
+		DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), ++currentFenceValue));
+		DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), currentFenceValue));
+
+		frameContexts[currentFrameContextIndex].fenceValueAtSubmission = currentFenceValue;
 	}
 
 	// Executes D3D12 commands mid D3D11 execution, probably huge overhead from wait commands so use sparsely and wisely
 	template <typename Func, typename Func2 = std::nullptr_t>
 	void Execute(Func func, Func2 func2 = nullptr)
 	{
-		// Wait for D3D11 to finish
-		DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), fenceValue));
-		DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), fenceValue));
-		fenceValue++;
+		// Get to next frame context slot (ring buffer)
+		currentFrameContextIndex = globals::state->frameCount % FRAMES_IN_FLIGHT;
+		FrameContext& ctx = frameContexts[currentFrameContextIndex];
 
-		auto* commandAllocator = commandAllocators[frameIndex].get();
-		auto* commandList = commandLists[frameIndex].get();
+		// CPU-side wait: stall if this slot's previous submission isn't done yet
+		// (i.e. we've lapped the GPU)
+		if (ctx.fenceValueAtSubmission != 0) {
+			if (d3d12Fence->GetCompletedValue() < ctx.fenceValueAtSubmission) {
+				// GPU hasn't finished with this allocator yet — stall CPU
+				DX::ThrowIfFailed(d3d12Fence->SetEventOnCompletion(ctx.fenceValueAtSubmission, fenceEvent));
+				WaitForSingleObject(fenceEvent, INFINITE);
+			}
+		}
 
-		// New frame, reset
-		DX::ThrowIfFailed(commandAllocator->Reset());
-		DX::ThrowIfFailed(commandList->Reset(commandAllocator, nullptr));
+		// Safe to reset now - GPU is done with this allocator
+		// Reset allocator only on first use this frame
+		if (!ctx.hasBeenReset) {
+			DX::ThrowIfFailed(ctx.commandAllocator->Reset());
+			ctx.hasBeenReset = true;
+		}
 
-		// Execute
-		func(commandList);
+		DX::ThrowIfFailed(ctx.commandList->Reset(ctx.commandAllocator.get(), nullptr));
 
-		DX::ThrowIfFailed(commandList->Close());
+		// DX11 -> DX12 handoff
+		DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), ++currentFenceValue));
+		DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), currentFenceValue));
 
-		ID3D12CommandList* commandListsToExecute[] = { commandList };
-		commandQueue->ExecuteCommandLists(1, commandListsToExecute);
-		
-		// Execute if present
+		func(ctx.commandList.get());
+		DX::ThrowIfFailed(ctx.commandList->Close());
+
+		ID3D12CommandList* lists[] = { ctx.commandList.get() };
+		commandQueue->ExecuteCommandLists(1, lists);
+
 		if constexpr (!std::is_same_v<Func2, std::nullptr_t>)
 			func2();
 
-		// Wait for D3D12 to finish
-		DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), fenceValue));
-		DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), fenceValue));
-		fenceValue++;
+		// DX12 -> DX11 handoff
+		DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), ++currentFenceValue));
+		DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), currentFenceValue));
 
-		frameIndex = GetCurrentBackBufferIndex();
+		// Record what fence value this frame context was submitted at
+		ctx.fenceValueAtSubmission = currentFenceValue;
 	}
 
 	bool Active() const;

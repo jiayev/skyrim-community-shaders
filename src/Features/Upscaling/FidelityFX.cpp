@@ -73,7 +73,7 @@ void FidelityFX::SetupFrameGeneration()
  *
  * @param a_useFrameGeneration If true, enables frame generation and dispatches the necessary workloads; otherwise, presents without frame generation.
  */
-void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
+void FidelityFX::Present(ID3D12GraphicsCommandList4* commandList, bool a_useFrameGeneration, bool a_isHDR)
 {
 	auto& upscaling = globals::features::upscaling;
 	auto& swapChain = globals::features::upscaling.dx12SwapChain;
@@ -188,9 +188,7 @@ void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 	if (a_useFrameGeneration) {
 		ffx::DispatchDescFrameGenerationPrepare dispatchParameters{};
 
-		auto& dx12Interop = globals::features::dx12Interop;
-
-		dispatchParameters.commandList = dx12Interop.commandLists[swapChain.frameIndex].get();
+		dispatchParameters.commandList = commandList;
 
 		dispatchParameters.motionVectorScale.x = renderSize.x;
 		dispatchParameters.motionVectorScale.y = renderSize.y;
