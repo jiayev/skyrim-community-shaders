@@ -4,44 +4,169 @@
 #include "State.h"
 #include "Util.h"
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	LensFlare::Settings,
-	Intensity,
-	ThresholdEV,
-	ThresholdRange,
-	GhostStrength,
-	GhostChromaShift,
-	GhostModeInt,
-	FFTResolution,
-	KernelScale,
-	FStop,
-	ApertureBlades,
-	ApertureRotation,
-	HaloStrength,
-	HaloRadius,
-	HaloWidth,
-	HaloCompression,
-	HaloChromaShift,
-	Tint,
-	GLocalMask,
-	Ghosts)
+namespace
+{
+	using LensFlareSettings = LensFlare::Settings;
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	LensFlare::GhostSettings,
-	Color,
-	Scale,
-	Enabled,
-	KernelScale)
+	bool IsBokehGhostMode(int mode)
+	{
+		return mode >= static_cast<int>(LensFlare::GhostMode::Quality);
+	}
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	LensFlare::DebugSettings,
-	blurIterations,
-	disableThreshold,
-	disableGhosts,
-	disableBlur)
+	bool IsUltraGhostMode(int mode)
+	{
+		return mode == static_cast<int>(LensFlare::GhostMode::Ultra);
+	}
+
+	bool HasUltraKernelChanged(const LensFlareSettings& oldSettings, const LensFlareSettings& newSettings)
+	{
+		for (size_t i = 0; i < oldSettings.Ghosts.size(); ++i) {
+			if (oldSettings.Ghosts[i].Enabled != newSettings.Ghosts[i].Enabled ||
+				oldSettings.Ghosts[i].KernelScale != newSettings.Ghosts[i].KernelScale) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool ShouldInvalidateBokehFFT(const LensFlareSettings& oldSettings, const LensFlareSettings& newSettings)
+	{
+		if (!IsBokehGhostMode(oldSettings.GhostModeInt) && !IsBokehGhostMode(newSettings.GhostModeInt))
+			return false;
+
+		if (oldSettings.GhostModeInt != newSettings.GhostModeInt ||
+			oldSettings.FFTResolution != newSettings.FFTResolution ||
+			oldSettings.KernelScale != newSettings.KernelScale ||
+			oldSettings.FStop != newSettings.FStop ||
+			oldSettings.ApertureBlades != newSettings.ApertureBlades ||
+			oldSettings.ApertureRotation != newSettings.ApertureRotation) {
+			return true;
+		}
+
+		return (IsUltraGhostMode(oldSettings.GhostModeInt) || IsUltraGhostMode(newSettings.GhostModeInt)) &&
+		       HasUltraKernelChanged(oldSettings, newSettings);
+	}
+
+	constexpr auto kIntensity = "Intensity";
+	constexpr auto kThresholdEV = "Threshold (EV)";
+	constexpr auto kThresholdRange = "Threshold Range";
+	constexpr auto kGhostSettings = "Ghost Settings";
+	constexpr auto kGhostMode = "Ghost Mode";
+	constexpr auto kApertureBlades = "Aperture Blades";
+	constexpr auto kFStop = "F-Stop";
+	constexpr auto kApertureRotation = "Aperture Rotation";
+	constexpr auto kFFTResolution = "FFT Resolution";
+	constexpr auto kKernelScale = "Kernel Scale";
+	constexpr auto kGhostStrength = "Ghost Strength";
+	constexpr auto kGhostChromaShift = "Ghost Chroma Shift";
+	constexpr auto kNonIntrusiveGhosts = "Non-intrusive Ghosts";
+	constexpr auto kCustomGhosts = "Custom Ghost Colors & Scales";
+	constexpr auto kHaloSettings = "Halo Settings";
+	constexpr auto kHaloStrength = "Halo Strength";
+	constexpr auto kHaloRadius = "Halo Radius";
+	constexpr auto kHaloWidth = "Halo Width";
+	constexpr auto kHaloCompression = "Halo Compression";
+	constexpr auto kHaloChromaShift = "Halo Chroma Shift";
+	constexpr auto kColorTint = "Color Tint";
+	constexpr auto kTint = "Tint";
+}
+
+void to_json(json& j, const LensFlare::GhostSettings& settings)
+{
+	j = {
+		{ "Color", { { "r", settings.Color[0] }, { "g", settings.Color[1] }, { "b", settings.Color[2] }, { "a", settings.Color[3] } } },
+		{ "Scale", settings.Scale },
+		{ "Enabled", settings.Enabled },
+		{ kKernelScale, settings.KernelScale }
+	};
+}
+
+void from_json(const json& j, LensFlare::GhostSettings& settings)
+{
+	if (auto it = j.find("Color"); it != j.end() && it->is_object()) {
+		settings.Color[0] = it->value("r", settings.Color[0]);
+		settings.Color[1] = it->value("g", settings.Color[1]);
+		settings.Color[2] = it->value("b", settings.Color[2]);
+		settings.Color[3] = it->value("a", settings.Color[3]);
+	}
+	settings.Scale = j.value("Scale", settings.Scale);
+	settings.Enabled = j.value("Enabled", settings.Enabled);
+	settings.KernelScale = j.value(kKernelScale, settings.KernelScale);
+}
+
+void to_json(json& j, const LensFlare::Settings& settings)
+{
+	json ghosts = json::object();
+	for (size_t i = 0; i < settings.Ghosts.size(); ++i)
+		ghosts[std::format("Ghost {}", i + 1)] = settings.Ghosts[i];
+
+	j = {
+		{ kIntensity, settings.Intensity },
+		{ kThresholdEV, settings.ThresholdEV },
+		{ kThresholdRange, settings.ThresholdRange },
+		{ kGhostSettings, {
+			{ kGhostMode, settings.GhostModeInt },
+			{ kApertureBlades, settings.ApertureBlades },
+			{ kFStop, settings.FStop },
+			{ kApertureRotation, settings.ApertureRotation },
+			{ kFFTResolution, settings.FFTResolution },
+			{ kKernelScale, settings.KernelScale },
+			{ kGhostStrength, settings.GhostStrength },
+			{ kGhostChromaShift, settings.GhostChromaShift },
+			{ kNonIntrusiveGhosts, settings.GLocalMask },
+			{ kCustomGhosts, std::move(ghosts) } } },
+		{ kHaloSettings, {
+			{ kHaloStrength, settings.HaloStrength },
+			{ kHaloRadius, settings.HaloRadius },
+			{ kHaloWidth, settings.HaloWidth },
+			{ kHaloCompression, settings.HaloCompression },
+			{ kHaloChromaShift, settings.HaloChromaShift } } },
+		{ kColorTint, { { kTint, { { "r", settings.Tint[0] }, { "g", settings.Tint[1] }, { "b", settings.Tint[2] } } } } }
+	};
+}
+
+void from_json(const json& j, LensFlare::Settings& settings)
+{
+	settings = {};
+	settings.Intensity = j.value(kIntensity, settings.Intensity);
+	settings.ThresholdEV = j.value(kThresholdEV, settings.ThresholdEV);
+	settings.ThresholdRange = j.value(kThresholdRange, settings.ThresholdRange);
+	if (auto it = j.find(kGhostSettings); it != j.end() && it->is_object()) {
+		settings.GhostModeInt = it->value(kGhostMode, settings.GhostModeInt);
+		settings.ApertureBlades = it->value(kApertureBlades, settings.ApertureBlades);
+		settings.FStop = it->value(kFStop, settings.FStop);
+		settings.ApertureRotation = it->value(kApertureRotation, settings.ApertureRotation);
+		settings.FFTResolution = it->value(kFFTResolution, settings.FFTResolution);
+		settings.KernelScale = it->value(kKernelScale, settings.KernelScale);
+		settings.GhostStrength = it->value(kGhostStrength, settings.GhostStrength);
+		settings.GhostChromaShift = it->value(kGhostChromaShift, settings.GhostChromaShift);
+		settings.GLocalMask = it->value(kNonIntrusiveGhosts, settings.GLocalMask);
+		if (auto ghosts = it->find(kCustomGhosts); ghosts != it->end() && ghosts->is_object()) {
+			for (size_t i = 0; i < settings.Ghosts.size(); ++i) {
+				if (auto ghost = ghosts->find(std::format("Ghost {}", i + 1)); ghost != ghosts->end())
+					ghost->get_to(settings.Ghosts[i]);
+			}
+		}
+	}
+	if (auto it = j.find(kHaloSettings); it != j.end() && it->is_object()) {
+		settings.HaloStrength = it->value(kHaloStrength, settings.HaloStrength);
+		settings.HaloRadius = it->value(kHaloRadius, settings.HaloRadius);
+		settings.HaloWidth = it->value(kHaloWidth, settings.HaloWidth);
+		settings.HaloCompression = it->value(kHaloCompression, settings.HaloCompression);
+		settings.HaloChromaShift = it->value(kHaloChromaShift, settings.HaloChromaShift);
+	}
+	if (auto group = j.find(kColorTint); group != j.end() && group->is_object()) {
+		if (auto it = group->find(kTint); it != group->end() && it->is_object()) {
+			settings.Tint[0] = it->value("r", settings.Tint[0]);
+			settings.Tint[1] = it->value("g", settings.Tint[1]);
+			settings.Tint[2] = it->value("b", settings.Tint[2]);
+		}
+	}
+}
 
 void LensFlare::DrawSettings()
 {
+	const auto oldSettings = settings;
 	auto tooltip = [](const char* text) {
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(text);
@@ -50,10 +175,6 @@ void LensFlare::DrawSettings()
 	ImGui::SliderFloat("Intensity", &settings.Intensity, 0.0f, 1.0f, "%.3f");
 	tooltip("Master intensity for the entire lens flare effect");
 
-	// Threshold
-	ImGui::Spacing();
-	ImGui::Text("Threshold");
-	ImGui::Separator();
 	ImGui::SliderFloat("Threshold (EV)", &settings.ThresholdEV, -10.0f, 20.0f, "%+.2f EV");
 	tooltip("Brightness threshold in EV (0 EV = 1.0 linear).");
 	ImGui::SliderFloat("Threshold Range", &settings.ThresholdRange, 0.01f, 5.0f, "%.3f");
@@ -81,20 +202,8 @@ void LensFlare::DrawSettings()
 		ImGui::SliderFloat("Aperture Rotation", &settings.ApertureRotation, -180.0f, 180.0f, "%.1f deg");
 		tooltip("Rotation of the procedural aperture.");
 
-		// FFT Resolution
-		{
-			const char* resNames[] = { "128", "256", "512", "1024" };
-			int resValues[] = { 128, 256, 512, 1024 };
-			int curIdx = 1;
-			for (int i = 0; i < 4; i++)
-				if (resValues[i] == settings.FFTResolution)
-					curIdx = i;
-
-			if (ImGui::Combo("FFT Resolution", &curIdx, resNames, 4))
-				settings.FFTResolution = resValues[curIdx];
-
-			tooltip("Resolution of the FFT convolution. Higher = sharper bokeh ghost shapes but more expensive.");
-		}
+		Util::FFTResolutionCombo("FFT Resolution", settings.FFTResolution);
+		tooltip("Resolution of the FFT convolution. Higher = sharper bokeh ghost shapes but more expensive.");
 
 		ImGui::SliderFloat("Kernel Scale", &settings.KernelScale, 0.01f, 0.5f, "%.3f");
 		tooltip("Base size of the bokeh kernel relative to FFT resolution.\nPer-ghost scales multiply this value in Ultra mode.");
@@ -169,25 +278,33 @@ void LensFlare::DrawSettings()
 		tooltip("Kawase blur cycles (down+up). 1 = sharp, 2+ = smoother");
 
 		static float debugRescale = .25f;
+		const float debugTextureScale = debugRescale * Util::GetUIScale();
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
-		BUFFER_VIEWER_NODE_TITLE(texThreshold, "Threshold (half-res)", debugRescale);
-		BUFFER_VIEWER_NODE_TITLE(texGhostHalo, "Ghost + Halo (half-res)", debugRescale);
-		BUFFER_VIEWER_NODE_TITLE(texFlare, "Final Flare Output", debugRescale);
-		BUFFER_VIEWER_NODE_TITLE(texBlurTemp, "Blur Temp (quarter-res)", debugRescale);
+		BUFFER_VIEWER_NODE_TITLE(texThreshold, "Threshold (half-res)", debugTextureScale);
+		BUFFER_VIEWER_NODE_TITLE(texGhostHalo, "Ghost + Halo (half-res)", debugTextureScale);
+		BUFFER_VIEWER_NODE_TITLE(texFlare, "Final Flare Output", debugTextureScale);
+		BUFFER_VIEWER_NODE_TITLE(texBlurTemp, "Blur Temp (quarter-res)", debugTextureScale);
 		if (settings.GhostModeInt >= (int)GhostMode::Quality) {
-			BUFFER_VIEWER_NODE_TITLE(texFFTResult, "FFT Convolution Result", debugRescale);
+			BUFFER_VIEWER_NODE_TITLE(texFFTResult, "FFT Convolution Result", debugTextureScale);
 		}
 	}
+
+	if (ShouldInvalidateBokehFFT(oldSettings, settings))
+		bokehFFTDirty = true;
 }
 
 void LensFlare::RestoreDefaultSettings()
 {
 	settings = {};
+	bokehFFTDirty = true;
 }
 
 void LensFlare::LoadSettings(json& o_json)
 {
+	const auto oldSettings = settings;
 	settings = o_json;
+	if (ShouldInvalidateBokehFFT(oldSettings, settings))
+		bokehFFTDirty = true;
 }
 
 void LensFlare::SaveSettings(json& o_json)
@@ -352,11 +469,7 @@ void LensFlare::ClearShaderCache()
 		&bokehPrepareCS, &fftThresholdCS, &fftGhostComposeCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	Util::ResetComPtrs(shaderPtrs);
 
 	CompileComputeShaders();
 }

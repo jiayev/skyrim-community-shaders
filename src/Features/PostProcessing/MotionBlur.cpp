@@ -5,12 +5,26 @@
 
 #pragma warning(disable: 4324)
 
-// Define serialization for settings
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	MotionBlur::Settings,
-	VelocityScale,
-	SampleCount,
-	ScalePreset)
+namespace
+{
+	constexpr auto kMotionLength = "Motion Length";
+	constexpr auto kSamples = "Samples";
+}
+
+void to_json(json& j, const MotionBlur::Settings& settings)
+{
+	j = {
+		{ kMotionLength, static_cast<int>(settings.ScalePreset) },
+		{ kSamples, settings.SampleCount }
+	};
+}
+
+void from_json(const json& j, MotionBlur::Settings& settings)
+{
+	settings = {};
+	settings.ScalePreset = static_cast<MotionBlur::MotionScale>(j.value(kMotionLength, static_cast<int>(settings.ScalePreset)));
+	settings.SampleCount = j.value(kSamples, settings.SampleCount);
+}
 
 void MotionBlur::SetupResources()
 {
@@ -112,22 +126,16 @@ void MotionBlur::CompileComputeShaders()
 
 void MotionBlur::ClearShaderCache()
 {
-	// Release resources
-	horizontalPassShader = nullptr;
-	verticalPassShader = nullptr;
-	neighborMaxPassShader = nullptr;
-	blurPassShader = nullptr;
+	const auto shaderPtrs = std::array{
+		&horizontalPassShader,
+		&verticalPassShader,
+		&neighborMaxPassShader,
+		&blurPassShader
+	};
 
-	horizontalPassTexture = nullptr;
-	verticalPassTexture = nullptr;
-	neighborMaxTexture = nullptr;
-	blurOutputTexture = nullptr;
+	Util::ResetComPtrs(shaderPtrs);
 
-	// Release constant buffer objects
-	blurConstantBufferObj = nullptr;
-	reductionPassConstantBufferObj = nullptr;
-
-	lastWidth = lastHeight = 0;
+	CompileComputeShaders();
 }
 
 void MotionBlur::RestoreDefaultSettings()
@@ -179,13 +187,8 @@ void MotionBlur::DrawSettings()
 
 	// Samples (each UI sample represents 2 actual samples)
 	ImGui::SliderInt("Samples", &settings.SampleCount, 8, 16, "%d");
-	ImGui::SameLine();
-	ImGui::TextDisabled("(?)");
-	if (ImGui::IsItemHovered()) {
-		ImGui::BeginTooltip();
+	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Sample count is doubled internally for smoother results.\nMore samples = better quality but slower performance");
-		ImGui::EndTooltip();
-	}
 }
 
 void MotionBlur::Draw(TextureInfo& inout_tex)

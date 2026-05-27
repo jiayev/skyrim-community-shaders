@@ -4,15 +4,51 @@
 #include "State.h"
 #include "Util.h"
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	HistogramAutoExposure::Settings,
-	ExposureCompensation,
-	AdaptationRange,
-	AdaptArea,
-	AdaptSpeed,
-	PurkinjeStartEV,
-	PurkinjeMaxEV,
-	PurkinjeStrength)
+namespace
+{
+	constexpr auto kExposureCompensation = "Exposure Compensation";
+	constexpr auto kAdaptationSpeed = "Adaptation Speed";
+	constexpr auto kFocusAreaWidth = "Focus Area Width";
+	constexpr auto kFocusAreaHeight = "Focus Area Height";
+	constexpr auto kAdaptationRangeMin = "Adaptation Range Min";
+	constexpr auto kAdaptationRangeMax = "Adaptation Range Max";
+	constexpr auto kPurkinjeEffect = "Purkinje Effect";
+	constexpr auto kMaxStrength = "Max Strength";
+	constexpr auto kFadeInEV = "Fade In EV";
+	constexpr auto kMaxEffectEV = "Max Effect EV";
+}
+
+void to_json(json& j, const HistogramAutoExposure::Settings& settings)
+{
+	j = {
+		{ kExposureCompensation, settings.ExposureCompensation },
+		{ kAdaptationSpeed, settings.AdaptSpeed },
+		{ kFocusAreaWidth, settings.AdaptArea.x },
+		{ kFocusAreaHeight, settings.AdaptArea.y },
+		{ kAdaptationRangeMin, settings.AdaptationRange.x },
+		{ kAdaptationRangeMax, settings.AdaptationRange.y },
+		{ kPurkinjeEffect, {
+			{ kMaxStrength, settings.PurkinjeStrength },
+			{ kFadeInEV, settings.PurkinjeStartEV },
+			{ kMaxEffectEV, settings.PurkinjeMaxEV } } }
+	};
+}
+
+void from_json(const json& j, HistogramAutoExposure::Settings& settings)
+{
+	settings = {};
+	settings.ExposureCompensation = j.value(kExposureCompensation, settings.ExposureCompensation);
+	settings.AdaptSpeed = j.value(kAdaptationSpeed, settings.AdaptSpeed);
+	settings.AdaptArea.x = j.value(kFocusAreaWidth, settings.AdaptArea.x);
+	settings.AdaptArea.y = j.value(kFocusAreaHeight, settings.AdaptArea.y);
+	settings.AdaptationRange.x = j.value(kAdaptationRangeMin, settings.AdaptationRange.x);
+	settings.AdaptationRange.y = j.value(kAdaptationRangeMax, settings.AdaptationRange.y);
+	if (auto it = j.find(kPurkinjeEffect); it != j.end() && it->is_object()) {
+		settings.PurkinjeStrength = it->value(kMaxStrength, settings.PurkinjeStrength);
+		settings.PurkinjeStartEV = it->value(kFadeInEV, settings.PurkinjeStartEV);
+		settings.PurkinjeMaxEV = it->value(kMaxEffectEV, settings.PurkinjeMaxEV);
+	}
+}
 
 void HistogramAutoExposure::DrawSettings()
 {
@@ -21,11 +57,11 @@ void HistogramAutoExposure::DrawSettings()
 		ImGui::Text("Applying additional exposure adjustment to the image.");
 
 	ImGui::SliderFloat("Adaptation Speed", &settings.AdaptSpeed, 0.1f, 5.f, "%.2f");
-	ImGui::SliderFloat2("Focus Area", &settings.AdaptArea.x, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat2("Focus Area Width/Height", &settings.AdaptArea.x, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Specifies the proportion of the area [width, height] that auto exposure will adapt to.");
 
-	ImGui::SliderFloat2("Adaptation Range", &settings.AdaptationRange.x, -10.f, 21.f, "%.2f EV");
+	ImGui::SliderFloat2("Adaptation Range Min/Max", &settings.AdaptationRange.x, -10.f, 21.f, "%.2f EV");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(
 			"[Min, Max] The average scene luminance will be clamped between them when doing auto exposure."
@@ -78,8 +114,11 @@ void HistogramAutoExposure::DrawSettings()
 		}
 
 		ImGui::Text("Luminance Histogram (%.0f - %.0f EV)", kMinLogLum, kMaxLogLum);
+		const float uiScale = Util::GetUIScale();
+		constexpr float kHistogramHeight = 120.f;
+		constexpr float kMarkerThickness = 2.f;
 		const ImVec2 canvasPos = ImGui::GetCursorScreenPos();
-		const ImVec2 canvasSize = ImVec2(ImGui::GetContentRegionAvail().x, 120.f);
+		const ImVec2 canvasSize = ImVec2(ImGui::GetContentRegionAvail().x, kHistogramHeight * uiScale);
 		ImGui::InvisibleButton("##histogram_canvas", canvasSize);
 
 		auto* drawList = ImGui::GetWindowDrawList();
@@ -105,7 +144,7 @@ void HistogramAutoExposure::DrawSettings()
 
 		auto drawMarker = [&](float ev, ImU32 color) {
 			const float x = evToX(ev);
-			drawList->AddLine(ImVec2(x, canvasPos.y), ImVec2(x, canvasPos.y + canvasSize.y), color, 2.f);
+			drawList->AddLine(ImVec2(x, canvasPos.y), ImVec2(x, canvasPos.y + canvasSize.y), color, kMarkerThickness * uiScale);
 		};
 
 		drawMarker(settings.AdaptationRange.x, IM_COL32(255, 200, 0, 255));
@@ -199,11 +238,7 @@ void HistogramAutoExposure::ClearShaderCache()
 		&histogramCS, &histogramAvgCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	Util::ResetComPtrs(shaderPtrs);
 
 	CompileComputeShaders();
 }

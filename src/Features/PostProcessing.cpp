@@ -8,9 +8,26 @@
 
 #include "Features/Upscaling.h"
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	PostProcessing::Settings,
-	DisableVanillaTonemapping)
+namespace
+{
+	constexpr auto kBypass = "Bypass";
+	constexpr auto kDisableVanillaTonemapping = "Disable Vanilla Tonemapping";
+	constexpr auto kCopyShaderPath = L"Data\\Shaders\\PostProcessing\\copy.cs.hlsl";
+	constexpr auto kComputeShaderModel = "cs_5_0";
+}
+
+void to_json(json& j, const PostProcessing::Settings& settings)
+{
+	j = {
+		{ kDisableVanillaTonemapping, settings.DisableVanillaTonemapping }
+	};
+}
+
+void from_json(const json& j, PostProcessing::Settings& settings)
+{
+	settings = {};
+	settings.DisableVanillaTonemapping = j.value(kDisableVanillaTonemapping, settings.DisableVanillaTonemapping);
+}
 
 void PostProcessing::DrawSettings()
 {
@@ -197,21 +214,22 @@ void PostProcessing::LoadSettings(json& o_json)
 
 void PostProcessing::ProcessSettings(json& o_json)
 {
-	logger::info("Loading post processing settings...");
+	logger::debug("Loading post processing settings...");
 
 	for (auto& feat : pipeline) {
 		if (feat && o_json.contains(feat->GetType())) {
 			if (!feat->IsAutoEnabled())
 				feat->enabled = o_json.value(feat->GetType(), json::object()).value("enabled", true);
 			json featSettings = o_json.value(feat->GetType(), json::object()).value("settings", json::object());
+			// SetupResources is reserved for PP lifecycle events; JSON loads only apply settings.
 			feat->LoadSettings(featSettings);
-			if (loaded)
-				feat->SetupResources();
 		}
 	}
 
-	if (o_json.contains("ppsettings"))
+	if (o_json.contains("ppsettings")) {
 		settings = o_json["ppsettings"];
+		bypass = o_json["ppsettings"].value(kBypass, bypass);
+	}
 }
 
 void PostProcessing::SaveSettings(json& o_json)
@@ -233,6 +251,7 @@ void PostProcessing::SaveSettings(json& o_json)
 	}
 
 	o_json["ppsettings"] = settings;
+	o_json["ppsettings"][kBypass] = bypass;
 }
 
 std::vector<std::string> PostProcessing::LoadPresets()
@@ -339,10 +358,20 @@ void PostProcessing::RestoreDefaultSettings()
 
 void PostProcessing::ClearShaderCache()
 {
+	CompileCopyShader();
+
 	for (auto& pipe : pipeline) {
 		if (pipe)
 			pipe->ClearShaderCache();
 	}
+}
+
+void PostProcessing::CompileCopyShader()
+{
+	Util::ResetComPtr(copyCS);
+
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(kCopyShaderPath, {}, kComputeShaderModel)))
+		copyCS.attach(rawPtr);
 }
 
 void PostProcessing::SetupResources()
@@ -401,8 +430,7 @@ void PostProcessing::SetupResources()
 		texAfterTAA->CreateUAV(uavDesc);
 	}
 
-	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PostProcessing\\copy.cs.hlsl", {}, "cs_5_0")))
-		copyCS.attach(rawPtr);
+	CompileCopyShader();
 
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)] = std::make_unique<LocalExposure>();
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)].get()->enabled = false;
@@ -625,7 +653,7 @@ void PostProcessing::ClearBorderMotionVectorsForFrameGen()
 void PostProcessing::Prepass()
 {
 	if (!pendingSettings.empty()) {
-		logger::info("Processing pending post processing settings...");
+		logger::debug("Processing pending post processing settings...");
 		ProcessSettings(pendingSettings);
 		pendingSettings = {};
 	}

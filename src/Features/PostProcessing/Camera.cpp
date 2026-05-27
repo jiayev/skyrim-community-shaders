@@ -3,47 +3,77 @@
 #include "State.h"
 #include "Util.h"
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	Camera::Settings,
-	UseFE,
-	FEFoV,
-	FECrop,
-	CAStrength,
-	NoiseStrength,
-	NoiseType)
+namespace
+{
+	constexpr auto kFisheye = "Fisheye";
+	constexpr auto kEnableFisheye = "Enable Fisheye";
+	constexpr auto kFov = "FOV";
+	constexpr auto kCrop = "Crop";
+	constexpr auto kCaAmount = "CA amount";
+	constexpr auto kNoiseAmount = "Noise amount";
+	constexpr auto kNoiseType = "Noise type";
+}
+
+void to_json(json& j, const Camera::Settings& settings)
+{
+	j = {
+		{ kFisheye, {
+			{ kEnableFisheye, settings.UseFE },
+			{ kFov, settings.FEFoV },
+			{ kCrop, settings.FECrop } } },
+		{ kCaAmount, settings.CAStrength },
+		{ kNoiseAmount, settings.NoiseStrength },
+		{ kNoiseType, settings.NoiseType }
+	};
+}
+
+void from_json(const json& j, Camera::Settings& settings)
+{
+	settings = {};
+	if (auto it = j.find(kFisheye); it != j.end() && it->is_object()) {
+		settings.UseFE = it->value(kEnableFisheye, settings.UseFE);
+		settings.FEFoV = it->value(kFov, settings.FEFoV);
+		settings.FECrop = it->value(kCrop, settings.FECrop);
+	}
+	settings.CAStrength = j.value(kCaAmount, settings.CAStrength);
+	settings.NoiseStrength = j.value(kNoiseAmount, settings.NoiseStrength);
+	settings.NoiseType = j.value(kNoiseType, settings.NoiseType);
+}
 
 void Camera::DrawSettings()
 {
-	ImGui::Checkbox("Fisheye", &settings.UseFE);
-	if (ImGui::IsItemHovered()) {
-		ImGui::SetTooltip("Enable fisheye effect");
-	}
-
-	if (settings.UseFE) {
-		ImGui::SliderFloat("FOV", &settings.FEFoV, 20.0f, 180.0f, "%1.0f °");
-		if (ImGui::IsItemHovered()) {
-			ImGui::SetTooltip("FOV in degrees\n\n(set to in-game FOV)");
-		}
-
-		ImGui::SliderFloat("Crop", &settings.FECrop, 0.0f, 1.0f, "%.3f");
-		if (ImGui::IsItemHovered()) {
-			ImGui::SetTooltip("How much to crop into the image\n\n(0 = circular, 1 = full-frame)");
-		}
-	}
-
-	ImGui::SliderFloat("CA amount", &settings.CAStrength, 0.0f, 1.0f, "%.3f");
+	ImGui::SliderFloat(kCaAmount, &settings.CAStrength, 0.0f, 1.0f, "%.3f");
 	if (ImGui::IsItemHovered()) {
 		ImGui::SetTooltip("Chromatic aberration strength");
 	}
 
-	ImGui::SliderFloat("Noise amount", &settings.NoiseStrength, 0.0f, 1.0f, "%.3f");
+	ImGui::SliderFloat(kNoiseAmount, &settings.NoiseStrength, 0.0f, 1.0f, "%.3f");
 	if (ImGui::IsItemHovered()) {
 		ImGui::SetTooltip("Amount of noise to apply");
 	}
 
-	ImGui::Combo("Noise type", &settings.NoiseType, "Film grain\0Color grain\0\0");
+	ImGui::Combo(kNoiseType, &settings.NoiseType, "Film grain\0Color grain\0\0");
 	if (ImGui::IsItemHovered()) {
 		ImGui::SetTooltip("Type of noise to apply");
+	}
+
+	if (ImGui::CollapsingHeader(kFisheye)) {
+		ImGui::Checkbox("Enable Fisheye", &settings.UseFE);
+		if (ImGui::IsItemHovered()) {
+			ImGui::SetTooltip("Enable fisheye effect");
+		}
+
+		if (settings.UseFE) {
+			ImGui::SliderFloat(kFov, &settings.FEFoV, 20.0f, 180.0f, "%1.0f deg");
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("FOV in degrees\n\n(set to in-game FOV)");
+			}
+
+			ImGui::SliderFloat(kCrop, &settings.FECrop, 0.0f, 1.0f, "%.3f");
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("How much to crop into the image\n\n(0 = circular, 1 = full-frame)");
+			}
+		}
 	}
 }
 
@@ -127,11 +157,7 @@ void Camera::ClearShaderCache()
 		&cameraCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	Util::ResetComPtrs(shaderPtrs);
 
 	CompileComputeShaders();
 }

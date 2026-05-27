@@ -59,6 +59,4 @@ struct LUT : PostProcessFeature
 	void ReadTexture(std::filesystem::path path);
 
 	virtual void Draw(TextureInfo&) override;
-
-	bool firstLoad = true;
 };

@@ -52,6 +52,16 @@ namespace Util
 
 	static int g_lastWindowWidth = 0;
 	static int g_lastWindowHeight = 0;
+	constexpr int RGBFloatDragComponentCount = 3;
+	constexpr std::array<const char*, RGBFloatDragComponentCount> RGBFloatDragIds = { "##X", "##Y", "##Z" };
+	constexpr std::array<ImU32, RGBFloatDragComponentCount> RGBFloatDragMarkers = {
+		IM_COL32(240, 20, 20, 255),
+		IM_COL32(20, 240, 20, 255),
+		IM_COL32(20, 20, 240, 255)
+	};
+	constexpr std::array<const char*, 4> FFTResolutionLabels = { "128", "256", "512", "1024" };
+	constexpr std::array<int, FFTResolutionLabels.size()> FFTResolutionValues = { 128, 256, 512, 1024 };
+	constexpr int FFTResolutionDefaultIndex = 1;
 
 	void RefreshScreenScale(HWND hwnd, float bufferWidth, float bufferHeight)
 	{
@@ -394,6 +404,57 @@ namespace Util
 		bool retval = ImGui::SliderFloat(label, &percentageData, lb, ub, format);
 		(*data) = percentageData * 1e-2f;
 		return retval;
+	}
+
+	bool RGBFloatDrag3(const char* label, float* values, float speed, const char* format, ImGuiSliderFlags flags)
+	{
+		return RGBFloatDrag3(label, values, speed, 0.f, 0.f, format, flags);
+	}
+
+	bool RGBFloatDrag3(const char* label, float* values, float speed, float min, float max, const char* format, ImGuiSliderFlags flags)
+	{
+		const auto& style = ImGui::GetStyle();
+		const float spacing = style.ItemInnerSpacing.x;
+		const float width = ImGui::CalcItemWidth();
+		const float itemWidth = width - spacing * (RGBFloatDragComponentCount - 1);
+		float prevSplit = 0.f;
+
+		bool changed = false;
+		ImGui::BeginGroup();
+		ImGui::PushID(label);
+		for (int i = 0; i < RGBFloatDragComponentCount; i++) {
+			if (i > 0)
+				ImGui::SameLine(0.f, spacing);
+			const float nextSplit = std::floor(itemWidth * static_cast<float>(i + 1) / RGBFloatDragComponentCount);
+			ImGui::SetNextItemWidth(std::max(nextSplit - prevSplit, 1.f));
+			prevSplit = nextSplit;
+			ImGui::SetNextItemColorMarker(RGBFloatDragMarkers[i]);
+			changed |= ImGui::DragFloat(RGBFloatDragIds[i], &values[i], speed, min, max, format, flags | ImGuiSliderFlags_ColorMarkers);
+		}
+		ImGui::PopID();
+
+		const char* labelEnd = ImGui::FindRenderedTextEnd(label);
+		if (label != labelEnd) {
+			ImGui::SameLine(0.f, spacing);
+			ImGui::TextUnformatted(label, labelEnd);
+		}
+		ImGui::EndGroup();
+		return changed;
+	}
+
+	bool FFTResolutionCombo(const char* label, int& resolution)
+	{
+		int currentIndex = FFTResolutionDefaultIndex;
+		for (int i = 0; i < static_cast<int>(FFTResolutionValues.size()); i++) {
+			if (FFTResolutionValues[i] == resolution)
+				currentIndex = i;
+		}
+
+		if (!ImGui::Combo(label, &currentIndex, FFTResolutionLabels.data(), static_cast<int>(FFTResolutionLabels.size())))
+			return false;
+
+		resolution = FFTResolutionValues[currentIndex];
+		return true;
 	}
 
 	ImVec2 GetNativeViewportSizeScaled(float scale)

@@ -3,12 +3,39 @@
 #include "State.h"
 #include "Util.h"
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	CODBloom::Settings,
-	Threshold,
-	UpsampleRadius,
-	BlendFactor,
-	MipBlendFactor)
+namespace
+{
+	constexpr auto kThreshold = "Threshold";
+	constexpr auto kUpsamplingRadius = "Upsampling Radius";
+	constexpr auto kMix = "Mix";
+	constexpr auto kMipLevelIntensity = "Mip Level Intensity";
+}
+
+void to_json(json& j, const CODBloom::Settings& settings)
+{
+	json mipBlendFactor = json::object();
+	for (size_t i = 0; i < settings.MipBlendFactor.size(); ++i)
+		mipBlendFactor[std::format("Mip {}", i + 1)] = settings.MipBlendFactor[i];
+
+	j = {
+		{ kThreshold, settings.Threshold },
+		{ kUpsamplingRadius, settings.UpsampleRadius },
+		{ kMix, settings.BlendFactor },
+		{ kMipLevelIntensity, std::move(mipBlendFactor) }
+	};
+}
+
+void from_json(const json& j, CODBloom::Settings& settings)
+{
+	settings = {};
+	settings.Threshold = j.value(kThreshold, settings.Threshold);
+	settings.UpsampleRadius = j.value(kUpsamplingRadius, settings.UpsampleRadius);
+	settings.BlendFactor = j.value(kMix, settings.BlendFactor);
+	if (auto it = j.find(kMipLevelIntensity); it != j.end() && it->is_object()) {
+		for (size_t i = 0; i < settings.MipBlendFactor.size(); ++i)
+			settings.MipBlendFactor[i] = it->value(std::format("Mip {}", i + 1), settings.MipBlendFactor[i]);
+	}
+}
 
 void CODBloom::DrawSettings()
 {
@@ -22,21 +49,26 @@ void CODBloom::DrawSettings()
 	ImGui::Separator();
 
 	static int mipLevel = 1;
-	ImGui::SliderInt("Mip Level", &mipLevel, 1, (int)settings.MipBlendFactor.size() + 1, "%d", ImGuiSliderFlags_AlwaysClamp);
+	const int maxMipLevel = static_cast<int>(settings.MipBlendFactor.size());
+	if (mipLevel > maxMipLevel)
+		mipLevel = maxMipLevel;
+	ImGui::SliderInt("Mip Level", &mipLevel, 1, maxMipLevel, "%d", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("The greater the level, the blurrier the part it controls");
 	ImGui::Indent();
 	{
-		ImGui::SliderFloat("Intensity", &settings.MipBlendFactor[mipLevel - 1], 0.f, 1.f, "%.2f");
+		ImGui::SliderFloat("Mip Level Intensity", &settings.MipBlendFactor[mipLevel - 1], 0.f, 1.f, "%.2f");
 	}
 	ImGui::Unindent();
 
 	if (ImGui::CollapsingHeader("Debug")) {
+		constexpr float kDebugMipPreviewScale = 0.2f;
+		const float previewScale = kDebugMipPreviewScale * Util::GetUIScale();
 		static int mip = 0;
 		ImGui::SliderInt("Debug Mip Level", &mip, 0, (int)s_BloomMips - 1, "%d", ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp);
 
 		ImGui::BulletText("texBloom");
-		ImGui::Image(texBloomMipSRVs[mip].get(), { texBloom->desc.Width * .2f, texBloom->desc.Height * .2f });
+		ImGui::Image(texBloomMipSRVs[mip].get(), { texBloom->desc.Width * previewScale, texBloom->desc.Height * previewScale });
 	}
 }
 
@@ -137,11 +169,7 @@ void CODBloom::ClearShaderCache()
 		&thresholdCS, &downsampleCS, &downsampleFirstMipCS, &upsampleCS, &compositeCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	Util::ResetComPtrs(shaderPtrs);
 
 	CompileComputeShaders();
 }

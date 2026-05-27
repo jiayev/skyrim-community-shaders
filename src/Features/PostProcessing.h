@@ -101,6 +101,8 @@ struct PostProcessing : Feature
 	virtual void SetupResources() override;
 	virtual void Reset() override;
 
+	void CompileCopyShader();
+
 	virtual void PostPostLoad() override;
 	virtual void Prepass() override;
 

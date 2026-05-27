@@ -13,6 +13,26 @@ namespace Util
 
 	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program = "main");
 
+	template <class T>
+	void ResetComPtr(winrt::com_ptr<T>& ptr)
+	{
+		ptr = nullptr;
+	}
+
+	template <class T, std::size_t N>
+	void ResetComPtrs(const std::array<winrt::com_ptr<T>*, N>& ptrs)
+	{
+		for (auto* ptr : ptrs)
+			ResetComPtr(*ptr);
+	}
+
+	template <class T, std::size_t N>
+	void ResetComPtrs(std::array<winrt::com_ptr<T>, N>& ptrs)
+	{
+		for (auto& ptr : ptrs)
+			ResetComPtr(ptr);
+	}
+
 	// Texture manipulation utilities
 	void ApplyHighlightTintToTexture(ID3D11Texture2D* texture, bool isHighlighted, const std::array<float, 4>& highlightColor = { 1.0f, 0.5f, 0.0f, 0.3f });
 	HRESULT CreateOverlayTextureAndRTV(ID3D11Device* device, int width, int height, ID3D11Texture2D** outTex, ID3D11RenderTargetView** outRTV);

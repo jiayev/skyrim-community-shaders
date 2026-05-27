@@ -10,11 +10,38 @@
 #include <cctype>
 #include <imgui_stdlib.h>
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	LUT::Settings,
-	LutPath,
-	InputMin,
-	InputMax)
+namespace
+{
+	constexpr auto kLUTTexturePath = "LUT Texture Path";
+	constexpr auto kInputMin = "Input Min";
+	constexpr auto kInputMax = "Input Max";
+	constexpr float kLUTInputDragSpeed = 1e-3f;
+}
+
+void to_json(json& j, const LUT::Settings& settings)
+{
+	j = {
+		{ kLUTTexturePath, settings.LutPath },
+		{ kInputMin, { { "r", settings.InputMin.x }, { "g", settings.InputMin.y }, { "b", settings.InputMin.z } } },
+		{ kInputMax, { { "r", settings.InputMax.x }, { "g", settings.InputMax.y }, { "b", settings.InputMax.z } } }
+	};
+}
+
+void from_json(const json& j, LUT::Settings& settings)
+{
+	settings = {};
+	settings.LutPath = j.value(kLUTTexturePath, settings.LutPath);
+	if (auto it = j.find(kInputMin); it != j.end() && it->is_object()) {
+		settings.InputMin.x = it->value("r", settings.InputMin.x);
+		settings.InputMin.y = it->value("g", settings.InputMin.y);
+		settings.InputMin.z = it->value("b", settings.InputMin.z);
+	}
+	if (auto it = j.find(kInputMax); it != j.end() && it->is_object()) {
+		settings.InputMax.x = it->value("r", settings.InputMax.x);
+		settings.InputMax.y = it->value("g", settings.InputMax.y);
+		settings.InputMax.z = it->value("b", settings.InputMax.z);
+	}
+}
 
 void LUT::DrawSettings()
 {
@@ -52,27 +79,31 @@ void LUT::DrawSettings()
 			ImGui::RadioButton("Map Per Channel", &LutType, 1);
 			ImGui::EndTable();
 		}
-	ImGui::InputFloat3("Input Min", &settings.InputMin.x);
-	ImGui::InputFloat3("Input Max", &settings.InputMax.x);
+	Util::RGBFloatDrag3("Input Min", &settings.InputMin.x, kLUTInputDragSpeed);
+	Util::RGBFloatDrag3("Input Max", &settings.InputMax.x, kLUTInputDragSpeed);
 }
 
 void LUT::RestoreDefaultSettings()
 {
 	settings = {};
+	tempPath = {};
+	Clear();
 }
 
 void LUT::LoadSettings(json& o_json)
 {
+	const auto oldPath = settings.LutPath;
 	settings = o_json;
 
 	tempPath = settings.LutPath;
-	logger::info("Loading LUT settings, LUT Path: {}", settings.LutPath);
 
 	try {
-		if (!tempPath.empty() && !firstLoad)
+		if (tempPath.empty()) {
+			Clear();
+		} else if (tempPath != oldPath || LutType == -1) {
+			logger::debug("Loading LUT texture: {}", tempPath);
 			ReadTexture(tempPath);
-		else if (firstLoad)
-			firstLoad = false;
+		}
 	} catch (const std::exception& e) {
 		logger::warn("Failed to load LUT settings: {}", e.what());
 	}
@@ -216,11 +247,7 @@ void LUT::ClearShaderCache()
 		&lutCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	Util::ResetComPtrs(shaderPtrs);
 
 	CompileComputeShaders();
 }

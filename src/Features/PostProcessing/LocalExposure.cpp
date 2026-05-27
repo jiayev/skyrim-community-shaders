@@ -5,15 +5,41 @@
 #include "State.h"
 #include "Util.h"
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	LocalExposure::Settings,
-	Exposure,
-	Shadows,
-	Highlights,
-	ExposurePreferenceSigma,
-	Mip,
-	DisplayMip,
-	BoostLocalContrast)
+namespace
+{
+	constexpr auto kExposure = "Exposure";
+	constexpr auto kShadowRecovery = "Shadow Recovery";
+	constexpr auto kHighlightRecovery = "Highlight Recovery";
+	constexpr auto kExposurePreference = "Exposure Preference";
+	constexpr auto kCoarseScaleMip = "Coarse Scale (Mip)";
+	constexpr auto kDetailScaleDisplayMip = "Detail Scale (Display Mip)";
+	constexpr auto kBoostLocalContrast = "Boost Local Contrast";
+}
+
+void to_json(json& j, const LocalExposure::Settings& settings)
+{
+	j = {
+		{ kExposure, settings.Exposure },
+		{ kShadowRecovery, settings.Shadows },
+		{ kHighlightRecovery, settings.Highlights },
+		{ kExposurePreference, settings.ExposurePreferenceSigma },
+		{ kCoarseScaleMip, settings.Mip },
+		{ kDetailScaleDisplayMip, settings.DisplayMip },
+		{ kBoostLocalContrast, settings.BoostLocalContrast }
+	};
+}
+
+void from_json(const json& j, LocalExposure::Settings& settings)
+{
+	settings = {};
+	settings.Exposure = j.value(kExposure, settings.Exposure);
+	settings.Shadows = j.value(kShadowRecovery, settings.Shadows);
+	settings.Highlights = j.value(kHighlightRecovery, settings.Highlights);
+	settings.ExposurePreferenceSigma = j.value(kExposurePreference, settings.ExposurePreferenceSigma);
+	settings.Mip = j.value(kCoarseScaleMip, settings.Mip);
+	settings.DisplayMip = j.value(kDetailScaleDisplayMip, settings.DisplayMip);
+	settings.BoostLocalContrast = j.value(kBoostLocalContrast, settings.BoostLocalContrast);
+}
 
 void LocalExposure::DrawSettings()
 {
@@ -51,11 +77,12 @@ void LocalExposure::DrawSettings()
 
 	if (ImGui::CollapsingHeader("Debug")) {
 		static float debugRescale = .3f;
+		const float debugTextureScale = debugRescale * Util::GetUIScale();
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
-		BUFFER_VIEWER_NODE_TITLE(texExposure, "Exposure Map (per-pixel multiplier)", debugRescale);
-		BUFFER_VIEWER_NODE_TITLE(texExposures, "Synthetic Exposures (RGB=H/M/S)", debugRescale);
-		BUFFER_VIEWER_NODE_TITLE(texWeights, "Fusion Weights", debugRescale);
-		BUFFER_VIEWER_NODE_TITLE(texAssemble, "Reconstructed Fusion", debugRescale);
+		BUFFER_VIEWER_NODE_TITLE(texExposure, "Exposure Map (per-pixel multiplier)", debugTextureScale);
+		BUFFER_VIEWER_NODE_TITLE(texExposures, "Synthetic Exposures (RGB=H/M/S)", debugTextureScale);
+		BUFFER_VIEWER_NODE_TITLE(texWeights, "Fusion Weights", debugTextureScale);
+		BUFFER_VIEWER_NODE_TITLE(texAssemble, "Reconstructed Fusion", debugTextureScale);
 	}
 }
 
@@ -206,11 +233,7 @@ void LocalExposure::ClearShaderCache()
 		&setupCS, &downsampleCS, &blendCS, &computeExpCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	Util::ResetComPtrs(shaderPtrs);
 
 	CompileComputeShaders();
 }

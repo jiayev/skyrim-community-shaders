@@ -61,12 +61,7 @@ void Composite::SetupResources()
 
 void Composite::ClearShaderCache()
 {
-	for (auto& shader : compositeShaders) {
-		if (shader) {
-			shader->Release();
-			shader.detach();
-		}
-	}
+	Util::ResetComPtrs(compositeShaders);
 
 	CompileComputeShaders();
 }

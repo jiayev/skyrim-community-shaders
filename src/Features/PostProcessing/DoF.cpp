@@ -8,34 +8,87 @@
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	DoF::Settings,
-	AutoFocus,
-	TransitionSpeed,
-	FocusCoord,
-	ManualFocusPlane,
-	FocalLength,
-	FNumber,
-	FarPlaneMaxBlur,
-	NearPlaneMaxBlur,
-	BlurQuality,
-	NearFarDistanceCompensation,
-	HighlightBoost,
-	BokehBusyFactor,
-	PostBlurSmoothing,
-	PetzvalStrength,
-	HighlightShape,
-	HighlightShapeRotationAngle,
-	targetFocus,
-	targetFocusFocalLength,
-	consoleSelection)
+namespace
+{
+	constexpr auto kAutoFocus = "Auto Focus";
+	constexpr auto kFocusPointX = "Focus Point X";
+	constexpr auto kFocusPointY = "Focus Point Y";
+	constexpr auto kTransitionSpeed = "Transition Speed";
+	constexpr auto kManualFocus = "Manual Focus";
+	constexpr auto kFocalLength = "Focal Length";
+	constexpr auto kFNumber = "F-Number";
+	constexpr auto kFarPlaneMaxBlur = "Far Plane Max Blur";
+	constexpr auto kNearPlaneMaxBlur = "Near Plane Max Blur";
+	constexpr auto kBlurQuality = "Blur Quality";
+	constexpr auto kNearFarPlaneDistanceCompensation = "Near-Far Plane Distance Compensation";
+	constexpr auto kHighlightBoost = "Highlight Boost";
+	constexpr auto kBokehBusyFactor = "Bokeh Busy Factor";
+	constexpr auto kPostBlurSmoothing = "Post Blur Smoothing";
+	constexpr auto kPetzvalStrength = "Petzval Strength";
+	constexpr auto kHighlightCustomShape = "Highlight Custom Shape";
+	constexpr auto kHighlightShapeRotation = "Highlight Shape Rotation";
+	constexpr auto kTargetFocus = "Target Focus";
+	constexpr auto kTargetFocusFocalLength = "Target Focus Focal Length";
+	constexpr auto kConsoleSelection = "Console Selection";
+}
+
+void to_json(json& j, const DoF::Settings& settings)
+{
+	j = {
+		{ kAutoFocus, settings.AutoFocus },
+		{ kFocusPointX, settings.FocusCoord.x },
+		{ kFocusPointY, settings.FocusCoord.y },
+		{ kTransitionSpeed, settings.TransitionSpeed },
+		{ kManualFocus, settings.ManualFocusPlane },
+		{ kFocalLength, settings.FocalLength },
+		{ kFNumber, settings.FNumber },
+		{ kFarPlaneMaxBlur, settings.FarPlaneMaxBlur },
+		{ kNearPlaneMaxBlur, settings.NearPlaneMaxBlur },
+		{ kBlurQuality, settings.BlurQuality },
+		{ kNearFarPlaneDistanceCompensation, settings.NearFarDistanceCompensation },
+		{ kBokehBusyFactor, settings.BokehBusyFactor },
+		{ kPetzvalStrength, settings.PetzvalStrength },
+		{ kHighlightBoost, settings.HighlightBoost },
+		{ kPostBlurSmoothing, settings.PostBlurSmoothing },
+		{ kHighlightCustomShape, settings.HighlightShape },
+		{ kHighlightShapeRotation, settings.HighlightShapeRotationAngle },
+		{ kTargetFocus, settings.targetFocus },
+		{ kTargetFocusFocalLength, settings.targetFocusFocalLength },
+		{ kConsoleSelection, settings.consoleSelection }
+	};
+}
+
+void from_json(const json& j, DoF::Settings& settings)
+{
+	settings = {};
+	settings.AutoFocus = j.value(kAutoFocus, settings.AutoFocus);
+	settings.FocusCoord.x = j.value(kFocusPointX, settings.FocusCoord.x);
+	settings.FocusCoord.y = j.value(kFocusPointY, settings.FocusCoord.y);
+	settings.TransitionSpeed = j.value(kTransitionSpeed, settings.TransitionSpeed);
+	settings.ManualFocusPlane = j.value(kManualFocus, settings.ManualFocusPlane);
+	settings.FocalLength = j.value(kFocalLength, settings.FocalLength);
+	settings.FNumber = j.value(kFNumber, settings.FNumber);
+	settings.FarPlaneMaxBlur = j.value(kFarPlaneMaxBlur, settings.FarPlaneMaxBlur);
+	settings.NearPlaneMaxBlur = j.value(kNearPlaneMaxBlur, settings.NearPlaneMaxBlur);
+	settings.BlurQuality = j.value(kBlurQuality, settings.BlurQuality);
+	settings.NearFarDistanceCompensation = j.value(kNearFarPlaneDistanceCompensation, settings.NearFarDistanceCompensation);
+	settings.BokehBusyFactor = j.value(kBokehBusyFactor, settings.BokehBusyFactor);
+	settings.PetzvalStrength = j.value(kPetzvalStrength, settings.PetzvalStrength);
+	settings.HighlightBoost = j.value(kHighlightBoost, settings.HighlightBoost);
+	settings.PostBlurSmoothing = j.value(kPostBlurSmoothing, settings.PostBlurSmoothing);
+	settings.HighlightShape = j.value(kHighlightCustomShape, settings.HighlightShape);
+	settings.HighlightShapeRotationAngle = j.value(kHighlightShapeRotation, settings.HighlightShapeRotationAngle);
+	settings.targetFocus = j.value(kTargetFocus, settings.targetFocus);
+	settings.targetFocusFocalLength = j.value(kTargetFocusFocalLength, settings.targetFocusFocalLength);
+	settings.consoleSelection = j.value(kConsoleSelection, settings.consoleSelection);
+}
 
 void DoF::DrawSettings()
 {
 	ImGui::Checkbox("Auto Focus", &settings.AutoFocus);
 
 	if (settings.AutoFocus) {
-		ImGui::SliderFloat2("Focus Point", &settings.FocusCoord.x, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat2("Focus Point X/Y", &settings.FocusCoord.x, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	}
 	ImGui::SliderFloat("Transition Speed", &settings.TransitionSpeed, 0.1f, 1.0f, "%.2f");
 	ImGui::SliderFloat("Manual Focus", &settings.ManualFocusPlane, 0.1f, 150.0f, "%.2f m");
@@ -44,7 +97,7 @@ void DoF::DrawSettings()
 	ImGui::SliderFloat("Far Plane Max Blur", &settings.FarPlaneMaxBlur, 0.0f, 8.0f, "%.2f");
 	ImGui::SliderFloat("Near Plane Max Blur", &settings.NearPlaneMaxBlur, 0.0f, 4.0f, "%.2f");
 	ImGui::SliderFloat("Blur Quality", &settings.BlurQuality, 2.0f, 30.0f, "%.1f");
-	ImGui::SliderFloat("Near-Far Plane Distance Compenation", &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
+	ImGui::SliderFloat("Near-Far Plane Distance Compensation", &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
 	ImGui::SliderFloat("Bokeh Busy Factor", &settings.BokehBusyFactor, 0.0f, 1.0f, "%.2f");
 	ImGui::SliderFloat("Petzval Strength", &settings.PetzvalStrength, 0.0f, 2.0f, "%.2f");
 	ImGui::SliderFloat("Highlight Boost", &settings.HighlightBoost, 0.0f, 1.0f, "%.2f");
@@ -59,28 +112,31 @@ void DoF::DrawSettings()
 	}
 
 	if (ImGui::CollapsingHeader("Debug")) {
+		const float uiScale = Util::GetUIScale();
+		const float focusPreviewScale = 64.0f * uiScale;
 		static float debugRescale = .3f;
+		const float debugTextureScale = debugRescale * uiScale;
 		ImGui::Text("Debug Distance: %f", debugDistance);
 		ImGui::Text("Debug Focus Plane: %f", debugFocusPlane);
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
-		BUFFER_VIEWER_NODE(texFocus, 64.0f)
-		BUFFER_VIEWER_NODE(texPreFocus, 64.0f)
+		BUFFER_VIEWER_NODE(texFocus, focusPreviewScale)
+		BUFFER_VIEWER_NODE(texPreFocus, focusPreviewScale)
 
-		BUFFER_VIEWER_NODE(texCoC, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCTileTmp, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCTileTmp2, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCTileNeighbor, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCBlur1, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCBlur2, debugRescale)
+		BUFFER_VIEWER_NODE(texCoC, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCTileTmp, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCTileTmp2, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCTileNeighbor, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCBlur1, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCBlur2, debugTextureScale)
 
-		BUFFER_VIEWER_NODE(texPreBlurred, debugRescale)
-		BUFFER_VIEWER_NODE(texFarBlurred, debugRescale)
-		BUFFER_VIEWER_NODE(texNearBlurred, debugRescale)
+		BUFFER_VIEWER_NODE(texPreBlurred, debugTextureScale)
+		BUFFER_VIEWER_NODE(texFarBlurred, debugTextureScale)
+		BUFFER_VIEWER_NODE(texNearBlurred, debugTextureScale)
 
-		BUFFER_VIEWER_NODE(texBlurredFiltered, debugRescale)
-		BUFFER_VIEWER_NODE(texPostSmooth, debugRescale)
-		BUFFER_VIEWER_NODE(texPostSmooth2, debugRescale)
+		BUFFER_VIEWER_NODE(texBlurredFiltered, debugTextureScale)
+		BUFFER_VIEWER_NODE(texPostSmooth, debugTextureScale)
+		BUFFER_VIEWER_NODE(texPostSmooth2, debugTextureScale)
 	}
 }
 
@@ -249,11 +305,7 @@ void DoF::ClearShaderCache()
 		&PostSmoothing2AndFocusingCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	Util::ResetComPtrs(shaderPtrs);
 
 	CompileComputeShaders();
 }

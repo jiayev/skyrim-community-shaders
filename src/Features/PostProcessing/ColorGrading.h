@@ -29,8 +29,8 @@ struct ColorGrading : public PostProcessFeature
 		bool skipLUT = false;
 
 		// ASC CDL
-		float4 slope = { 1.f, 1.f, 1.f, 0.f };
-		float4 power = { 1.f, 1.f, 1.f, 0.f };
+		float4 slope = { 1.f, 1.f, 1.f, 1.f };
+		float4 power = { 1.f, 1.f, 1.f, 1.f };
 		float4 cdlOffset = { 0.f, 0.f, 0.f, 0.f };
 
 		// Lift Gamma Gain
@@ -50,16 +50,16 @@ struct ColorGrading : public PostProcessFeature
 		};
 
 		// Contrast
-		float4 contrast = { 1.f, 1.f, 1.f, 0.f };
-		float4 pivot = { 0.18f, 0.18f, 0.18f, 0.f };
+		float4 contrast = { 1.f, 1.f, 1.f, 1.f };
+		float4 pivot = { 0.18f, 0.18f, 0.18f, 0.18f };
 
 		// Exposure/Temperature/Tint
 		float4 exposureTemperatureTint = { 1.f, 65.f, 0.f, 0.f };
 
 		// Shadows/Midtones/Highlights
-		float4 shadowsGain = { 1.f, 1.f, 1.f, 0.f };
-		float4 midtonesGain = { 1.f, 1.f, 1.f, 0.f };
-		float4 highlightsGain = { 1.f, 1.f, 1.f, 0.f };
+		float4 shadowsGain = { 1.f, 1.f, 1.f, 1.f };
+		float4 midtonesGain = { 1.f, 1.f, 1.f, 1.f };
+		float4 highlightsGain = { 1.f, 1.f, 1.f, 1.f };
 		float4 shadowsHighlightsRange = { 0.f, 0.3f, 0.55f, 1.f };
 
 		// SMH color offsets
@@ -69,7 +69,7 @@ struct ColorGrading : public PostProcessFeature
 
 		bool useOpenDrt = false;
 		std::string currentTonemapper = "GT7";
-		std::array<float4, 2> tonemapParams = { float4{ 1.f, 2.f, 0.f, 0.f }, float4{ 0.f, 0.f, 0.f, 0.f } };
+		std::array<float4, 2> tonemapParams = { float4{ 1.f, 0.f, 1000.f, 0.f }, float4{ 0.f, 0.f, 0.f, 0.f } };
 		float3 gameCinematicBlend = { 1.0f, 1.0f, 1.0f };
 		float gameFadeBlend = 1.0f;
 		float gameTintBlend = 1.0f;
@@ -169,6 +169,7 @@ struct ColorGrading : public PostProcessFeature
 	virtual void DrawSettings() override;
 
 	virtual void Draw(TextureInfo&) override;
+	void ResolveTonemapperFromSettings();
 	void UpdateColorSpaceTransforms(bool hdrEnabled = false);
 
 	void OutputTextures();

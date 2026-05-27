@@ -4,11 +4,38 @@
 #include "State.h"
 #include "Util.h"
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	Border::Settings,
-	BorderColor,
-	DepthThreshold,
-	Scale)
+namespace
+{
+	constexpr auto kBorderColor = "Border Color";
+	constexpr auto kDepthThreshold = "Depth Threshold";
+	constexpr auto kScale = "Scale (Top, Down, Left, Right)";
+}
+
+void to_json(json& j, const Border::Settings& settings)
+{
+	j = {
+		{ kBorderColor, { { "r", settings.BorderColor.x }, { "g", settings.BorderColor.y }, { "b", settings.BorderColor.z } } },
+		{ kDepthThreshold, settings.DepthThreshold },
+		{ kScale, { { "Top", settings.Scale.x }, { "Down", settings.Scale.y }, { "Left", settings.Scale.z }, { "Right", settings.Scale.w } } }
+	};
+}
+
+void from_json(const json& j, Border::Settings& settings)
+{
+	settings = {};
+	if (auto it = j.find(kBorderColor); it != j.end() && it->is_object()) {
+		settings.BorderColor.x = it->value("r", settings.BorderColor.x);
+		settings.BorderColor.y = it->value("g", settings.BorderColor.y);
+		settings.BorderColor.z = it->value("b", settings.BorderColor.z);
+	}
+	settings.DepthThreshold = j.value(kDepthThreshold, settings.DepthThreshold);
+	if (auto it = j.find(kScale); it != j.end() && it->is_object()) {
+		settings.Scale.x = it->value("Top", settings.Scale.x);
+		settings.Scale.y = it->value("Down", settings.Scale.y);
+		settings.Scale.z = it->value("Left", settings.Scale.z);
+		settings.Scale.w = it->value("Right", settings.Scale.w);
+	}
+}
 
 void Border::DrawSettings()
 {
@@ -87,11 +114,7 @@ void Border::ClearShaderCache()
 		&borderClearMVCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	Util::ResetComPtrs(shaderPtrs);
 
 	CompileComputeShaders();
 }

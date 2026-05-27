@@ -5,282 +5,366 @@
 #include "State.h"
 #include "Util.h"
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	PhysicalGlare::Settings,
-	ThresholdEV,
-	Intensity,
-	ApertureMode,
-	ApertureBlades,
-	ApertureRotation,
-	ScatterStrength,
-	AdaptSpeed,
-	FFTResolution,
-	FresnelExponent,
-	ChromaticSpread,
-	FStop,
-	SphericalAberration,
-	KernelScale,
-	PSFSharpness,
-	PSFNoiseFloor,
-	PaddingRatio,
-	EnableEyelashes,
-	EyelashCount,
-	EyelashLength,
-	EyelashCurvature,
-	ParticleCount,
-	ParticleSize,
-	GratingCount,
-	GratingStrength,
-	TearFilmStrength,
-	TearFilmSpeed,
-	TearFilmComplexity,
-	SutureBranches,
-	SutureStrength,
-	SutureWidth,
-	StarburstCount,
-	StarburstStrength,
-	StarburstIrregularity,
-	DustCount,
-	DustSize,
-	BladeRoughnessFreq,
-	BladeRoughnessAmp,
-	ScratchCount,
-	ScratchOpacity,
-	ScratchLength,
-	ScratchWidth)
+namespace
+{
+	constexpr auto kLensMode = "Lens (N-polygon)";
+	constexpr auto kPupilMode = "Pupil (Circle)";
+	constexpr auto kEyelashes = "Eyelashes";
+	constexpr auto kPSFShaping = "PSF Shaping";
+	constexpr auto kThreshold = "Threshold";
+	constexpr auto kIntensity = "Intensity";
+	constexpr auto kApertureMode = "Aperture Mode";
+	constexpr auto kApertureBlades = "Aperture Blades";
+	constexpr auto kFStop = "F-Stop";
+	constexpr auto kSphericalAberration = "Spherical Aberration";
+	constexpr auto kDustCount = "Dust Count";
+	constexpr auto kDustSize = "Dust Size";
+	constexpr auto kBladeRoughness = "Blade Roughness";
+	constexpr auto kRoughnessFrequency = "Roughness Frequency";
+	constexpr auto kScratchCount = "Scratch Count";
+	constexpr auto kScratchOpacity = "Scratch Opacity";
+	constexpr auto kScratchLength = "Scratch Length";
+	constexpr auto kScratchWidth = "Scratch Width";
+	constexpr auto kApertureRotation = "Aperture Rotation";
+	constexpr auto kScatterStrength = "Scatter Strength";
+	constexpr auto kParticleCount = "Particle Count";
+	constexpr auto kParticleSize = "Particle Size";
+	constexpr auto kGratingCount = "Grating Count";
+	constexpr auto kGratingStrength = "Grating Strength";
+	constexpr auto kTearFilmStrength = "Tear Film Strength";
+	constexpr auto kTearFilmSpeed = "Tear Film Speed";
+	constexpr auto kTearFilmComplexity = "Tear Film Complexity";
+	constexpr auto kSutureBranches = "Suture Branches";
+	constexpr auto kSutureStrength = "Suture Strength";
+	constexpr auto kSutureWidth = "Suture Width";
+	constexpr auto kStarburstSpikes = "Starburst Spikes";
+	constexpr auto kStarburstStrength = "Starburst Strength";
+	constexpr auto kStarburstIrregularity = "Starburst Irregularity";
+	constexpr auto kEnableEyelashes = "Enable Eyelashes";
+	constexpr auto kEyelashCount = "Eyelash Count";
+	constexpr auto kEyelashLength = "Eyelash Length";
+	constexpr auto kEyelashCurvature = "Eyelash Curvature";
+	constexpr auto kAdaptSpeed = "Adapt Speed";
+	constexpr auto kFFTResolution = "FFT Resolution";
+	constexpr auto kPaddingRatio = "Padding Ratio";
+	constexpr auto kKernelScale = "Kernel Scale";
+	constexpr auto kFresnelExponent = "Fresnel Exponent";
+	constexpr auto kChromaticSpread = "Chromatic Spread";
+	constexpr auto kPSFSharpness = "PSF Sharpness";
+	constexpr auto kPSFNoiseFloor = "PSF Noise Floor";
+
+	template <class T>
+	void ReadField(const json& j, const char* key, T& value)
+	{
+		value = j.value(key, value);
+	}
+
+	const json& GroupOrEmpty(const json& j, const char* key)
+	{
+		static const json empty = json::object();
+		if (auto it = j.find(key); it != j.end() && it->is_object())
+			return *it;
+		return empty;
+	}
+}
+
+void to_json(json& j, const PhysicalGlare::Settings& settings)
+{
+	j = {
+		{ kThreshold, settings.ThresholdEV },
+		{ kIntensity, settings.Intensity },
+		{ kApertureMode, settings.ApertureMode },
+		{ kApertureRotation, settings.ApertureRotation },
+		{ kAdaptSpeed, settings.AdaptSpeed },
+		{ kFFTResolution, settings.FFTResolution },
+		{ kPaddingRatio, settings.PaddingRatio },
+		{ kKernelScale, settings.KernelScale },
+		{ kFresnelExponent, settings.FresnelExponent },
+		{ kChromaticSpread, settings.ChromaticSpread },
+		{ kLensMode, {
+			{ kApertureBlades, settings.ApertureBlades },
+			{ kFStop, settings.FStop },
+			{ kSphericalAberration, settings.SphericalAberration },
+			{ kDustCount, settings.DustCount },
+			{ kDustSize, settings.DustSize },
+			{ kBladeRoughness, settings.BladeRoughnessAmp },
+			{ kRoughnessFrequency, settings.BladeRoughnessFreq },
+			{ kScratchCount, settings.ScratchCount },
+			{ kScratchOpacity, settings.ScratchOpacity },
+			{ kScratchLength, settings.ScratchLength },
+			{ kScratchWidth, settings.ScratchWidth } } },
+		{ kPupilMode, {
+			{ kScatterStrength, settings.ScatterStrength },
+			{ kParticleCount, settings.ParticleCount },
+			{ kParticleSize, settings.ParticleSize },
+			{ kGratingCount, settings.GratingCount },
+			{ kGratingStrength, settings.GratingStrength },
+			{ kTearFilmStrength, settings.TearFilmStrength },
+			{ kTearFilmSpeed, settings.TearFilmSpeed },
+			{ kTearFilmComplexity, settings.TearFilmComplexity },
+			{ kSutureBranches, settings.SutureBranches },
+			{ kSutureStrength, settings.SutureStrength },
+			{ kSutureWidth, settings.SutureWidth },
+			{ kStarburstSpikes, settings.StarburstCount },
+			{ kStarburstStrength, settings.StarburstStrength },
+			{ kStarburstIrregularity, settings.StarburstIrregularity },
+			{ kEyelashes, {
+				{ kEnableEyelashes, settings.EnableEyelashes },
+				{ kEyelashCount, settings.EyelashCount },
+				{ kEyelashLength, settings.EyelashLength },
+				{ kEyelashCurvature, settings.EyelashCurvature } } } } },
+		{ kPSFShaping, {
+			{ kPSFSharpness, settings.PSFSharpness },
+			{ kPSFNoiseFloor, settings.PSFNoiseFloor } } }
+	};
+}
+
+void from_json(const json& j, PhysicalGlare::Settings& settings)
+{
+	settings = {};
+	ReadField(j, kThreshold, settings.ThresholdEV);
+	ReadField(j, kIntensity, settings.Intensity);
+	ReadField(j, kApertureMode, settings.ApertureMode);
+	ReadField(j, kApertureRotation, settings.ApertureRotation);
+	ReadField(j, kAdaptSpeed, settings.AdaptSpeed);
+	ReadField(j, kFFTResolution, settings.FFTResolution);
+	ReadField(j, kPaddingRatio, settings.PaddingRatio);
+	ReadField(j, kKernelScale, settings.KernelScale);
+	ReadField(j, kFresnelExponent, settings.FresnelExponent);
+	ReadField(j, kChromaticSpread, settings.ChromaticSpread);
+
+	const auto& lens = GroupOrEmpty(j, kLensMode);
+	ReadField(lens, kApertureBlades, settings.ApertureBlades);
+	ReadField(lens, kFStop, settings.FStop);
+	ReadField(lens, kSphericalAberration, settings.SphericalAberration);
+	ReadField(lens, kDustCount, settings.DustCount);
+	ReadField(lens, kDustSize, settings.DustSize);
+	ReadField(lens, kBladeRoughness, settings.BladeRoughnessAmp);
+	ReadField(lens, kRoughnessFrequency, settings.BladeRoughnessFreq);
+	ReadField(lens, kScratchCount, settings.ScratchCount);
+	ReadField(lens, kScratchOpacity, settings.ScratchOpacity);
+	ReadField(lens, kScratchLength, settings.ScratchLength);
+	ReadField(lens, kScratchWidth, settings.ScratchWidth);
+
+	const auto& pupil = GroupOrEmpty(j, kPupilMode);
+	ReadField(pupil, kScatterStrength, settings.ScatterStrength);
+	ReadField(pupil, kParticleCount, settings.ParticleCount);
+	ReadField(pupil, kParticleSize, settings.ParticleSize);
+	ReadField(pupil, kGratingCount, settings.GratingCount);
+	ReadField(pupil, kGratingStrength, settings.GratingStrength);
+	ReadField(pupil, kTearFilmStrength, settings.TearFilmStrength);
+	ReadField(pupil, kTearFilmSpeed, settings.TearFilmSpeed);
+	ReadField(pupil, kTearFilmComplexity, settings.TearFilmComplexity);
+	ReadField(pupil, kSutureBranches, settings.SutureBranches);
+	ReadField(pupil, kSutureStrength, settings.SutureStrength);
+	ReadField(pupil, kSutureWidth, settings.SutureWidth);
+	ReadField(pupil, kStarburstSpikes, settings.StarburstCount);
+	ReadField(pupil, kStarburstStrength, settings.StarburstStrength);
+	ReadField(pupil, kStarburstIrregularity, settings.StarburstIrregularity);
+
+	const auto& eyelashes = GroupOrEmpty(pupil, kEyelashes);
+	ReadField(eyelashes, kEnableEyelashes, settings.EnableEyelashes);
+	ReadField(eyelashes, kEyelashCount, settings.EyelashCount);
+	ReadField(eyelashes, kEyelashLength, settings.EyelashLength);
+	ReadField(eyelashes, kEyelashCurvature, settings.EyelashCurvature);
+
+	const auto& psf = GroupOrEmpty(j, kPSFShaping);
+	ReadField(psf, kPSFSharpness, settings.PSFSharpness);
+	ReadField(psf, kPSFNoiseFloor, settings.PSFNoiseFloor);
+}
 
 void PhysicalGlare::DrawSettings()
 {
+	auto tooltip = [](const char* text) {
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(text);
+	};
+
 	ImGui::SliderFloat("Threshold", &settings.ThresholdEV, -10.f, 20.f, "%+.2f EV");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Per-channel brightness threshold for glare extraction in EV (0 EV = 1.0 linear).");
+	tooltip("Per-channel brightness threshold for glare extraction in EV (0 EV = 1.0 linear).");
 
 	ImGui::SliderFloat("Intensity", &settings.Intensity, 0.f, 2.f, "%.2f");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Overall glare intensity.");
+	tooltip("Overall glare intensity.");
 
 	{
-		const char* modeNames[] = { "Lens (N-polygon)", "Pupil (Circle)" };
-		ImGui::Combo("Aperture Mode", &settings.ApertureMode, modeNames, 2);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Lens: camera lens polygon starburst. Pupil: circular human eye aperture.");
-	}
-
-	if (settings.ApertureMode == 0) {
-		ImGui::SliderInt("Aperture Blades", &settings.ApertureBlades, 3, 10);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Number of aperture blades. Controls starburst pattern.");
-
-		ImGui::SliderFloat("F-Stop", &settings.FStop, 1.0f, 22.0f, "F%.1f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Aperture f-number (e.g. F2.8). Smaller = larger aperture = wider diffraction spikes.\nPhysically: aperture radius = 1 / f-number.");
-
-		ImGui::SliderFloat("Spherical Aberration", &settings.SphericalAberration, 0.f, 100.f, "%.1f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(
-				"Seidel spherical aberration (r^4 wavefront error).\n"
-				"Models lens curvature: outer rays focus at a different point\n"
-				"than central rays, producing concentric ring structure in the\n"
-				"PSF and softer glare edges. Physical range: 0-50.");
-
-		ImGui::SliderInt("Dust Count", &settings.DustCount, 0, 500);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Dust particles on lens element surfaces.\nProduces scattered haze via Babinet's principle.");
-
-		if (settings.DustCount > 0) {
-			ImGui::SliderFloat("Dust Size", &settings.DustSize, 0.5f, 5.f, "%.1f");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Radius of each dust particle in pixels.");
-		}
-
-		ImGui::SliderFloat("Blade Roughness", &settings.BladeRoughnessAmp, 0.f, 2.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Micro-serrations on aperture blade edges (manufacturing imperfections).\nMakes star spikes slightly fuzzy/irregular. 0 = perfect edges.");
-
-		if (settings.BladeRoughnessAmp > 0.f) {
-			ImGui::SliderInt("Roughness Frequency", &settings.BladeRoughnessFreq, 5, 100);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Number of bumps per blade edge. Higher = finer serrations.");
-		}
-
-		ImGui::SliderInt("Scratch Count", &settings.ScratchCount, 0, 20);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Linear scratches on lens element surfaces.\nEach scratch produces a perpendicular streak in the glare.");
-
-		if (settings.ScratchCount > 0) {
-			ImGui::SliderFloat("Scratch Opacity", &settings.ScratchOpacity, 0.f, 1.f, "%.2f");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("How opaque each scratch is. Higher = more visible streaks.");
-
-			ImGui::SliderFloat("Scratch Length", &settings.ScratchLength, 0.2f, 1.5f, "%.2f");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Length of scratches relative to aperture size.");
-
-			ImGui::SliderFloat("Scratch Width", &settings.ScratchWidth, 0.5f, 4.f, "%.1f");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Pixel width of each scratch.");
-		}
+		const char* modeNames[] = { kLensMode, kPupilMode };
+		ImGui::Combo("Aperture Mode", &settings.ApertureMode, modeNames, IM_ARRAYSIZE(modeNames));
+		tooltip("Lens: camera lens polygon starburst. Pupil: circular human eye aperture.");
 	}
 
 	ImGui::SliderFloat("Aperture Rotation", &settings.ApertureRotation, -180.f, 180.f, "%.1f deg");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Rotation angle of the aperture.");
+	tooltip("Rotation angle of the aperture.");
+
+	ImGui::SliderFloat("Adapt Speed", &settings.AdaptSpeed, 0.5f, 10.f, "%.1f");
+	tooltip("How fast the glare adapts to brightness changes.");
+
+	Util::FFTResolutionCombo("FFT Resolution", settings.FFTResolution);
+	tooltip("Resolution of the FFT convolution. Higher = sharper starburst but more expensive.");
+
+	ImGui::SliderFloat("Padding Ratio", &settings.PaddingRatio, 0.f, 0.25f, "%.3f");
+	tooltip(
+		"Zero-padding per side to prevent FFT wrap-around.\n"
+		"0.25 = paper default (50% effective resolution).\n"
+		"0.1  = 80% effective (recommended for high-res).\n"
+		"0.0  = 100% (maximum sharpness, may wrap at edges).\n"
+		"Lower = sharper glare on high-res screens.");
+
+	ImGui::SliderFloat("Kernel Scale", &settings.KernelScale, 0.01f, 1.f, "%.2f");
+	tooltip(
+		"Scale of the glare kernel size on screen.\n"
+		"1.0 = default. Smaller = more concentrated glare.\n"
+		"Does not affect aperture physics.");
+
+	ImGui::SliderFloat("Fresnel Exponent", &settings.FresnelExponent, 0.f, 80.f, "%.1f");
+	tooltip("Fresnel phase at aperture edge (radians). Paper eq 2.12: e^(i*pi/(lambda*z) * r^2).\nHigher = more Fresnel rings. 0 = pure Fraunhofer (no rings).");
+
+	ImGui::SliderFloat("Chromatic Spread", &settings.ChromaticSpread, 0.f, 3.f, "%.2f");
+	tooltip("Multiplier on wavelength-dependent UV scaling (paper section 2.3: lambda/575nm).\n1.0 = physically correct. Higher = more rainbow spread. 0 = monochrome.");
+
+	if (settings.ApertureMode == 0) {
+		ImGui::SeparatorText(kLensMode);
+
+		ImGui::SliderInt("Aperture Blades", &settings.ApertureBlades, 3, 10);
+		tooltip("Number of aperture blades. Controls starburst pattern.");
+
+		ImGui::SliderFloat("F-Stop", &settings.FStop, 1.0f, 22.0f, "F%.1f");
+		tooltip("Aperture f-number (e.g. F2.8). Smaller = larger aperture = wider diffraction spikes.\nPhysically: aperture radius = 1 / f-number.");
+
+		ImGui::SliderFloat("Spherical Aberration", &settings.SphericalAberration, 0.f, 100.f, "%.1f");
+		tooltip(
+			"Seidel spherical aberration (r^4 wavefront error).\n"
+			"Models lens curvature: outer rays focus at a different point\n"
+			"than central rays, producing concentric ring structure in the\n"
+			"PSF and softer glare edges. Physical range: 0-50.");
+
+		ImGui::SliderInt("Dust Count", &settings.DustCount, 0, 500);
+		tooltip("Dust particles on lens element surfaces.\nProduces scattered haze via Babinet's principle.");
+
+		if (settings.DustCount > 0) {
+			ImGui::SliderFloat("Dust Size", &settings.DustSize, 0.5f, 5.f, "%.1f");
+			tooltip("Radius of each dust particle in pixels.");
+		}
+
+		ImGui::SliderFloat("Blade Roughness", &settings.BladeRoughnessAmp, 0.f, 2.f, "%.2f");
+		tooltip("Micro-serrations on aperture blade edges (manufacturing imperfections).\nMakes star spikes slightly fuzzy/irregular. 0 = perfect edges.");
+
+		if (settings.BladeRoughnessAmp > 0.f) {
+			ImGui::SliderInt("Roughness Frequency", &settings.BladeRoughnessFreq, 5, 100);
+			tooltip("Number of bumps per blade edge. Higher = finer serrations.");
+		}
+
+		ImGui::SliderInt("Scratch Count", &settings.ScratchCount, 0, 20);
+		tooltip("Linear scratches on lens element surfaces.\nEach scratch produces a perpendicular streak in the glare.");
+
+		if (settings.ScratchCount > 0) {
+			ImGui::SliderFloat("Scratch Opacity", &settings.ScratchOpacity, 0.f, 1.f, "%.2f");
+			tooltip("How opaque each scratch is. Higher = more visible streaks.");
+
+			ImGui::SliderFloat("Scratch Length", &settings.ScratchLength, 0.2f, 1.5f, "%.2f");
+			tooltip("Length of scratches relative to aperture size.");
+
+			ImGui::SliderFloat("Scratch Width", &settings.ScratchWidth, 0.5f, 4.f, "%.1f");
+			tooltip("Pixel width of each scratch.");
+		}
+	}
 
 	if (settings.ApertureMode == 1) {
+		ImGui::SeparatorText(kPupilMode);
+
 		ImGui::SliderFloat("Scatter Strength", &settings.ScatterStrength, 0.f, 1.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Opacity of scatter particles in pupil mode (paper section 2.4).\n0 = transparent (no scatter), 1 = fully opaque.");
+		tooltip("Opacity of scatter particles in pupil mode (paper section 2.4).\n0 = transparent (no scatter), 1 = fully opaque.");
 
 		ImGui::SliderInt("Particle Count", &settings.ParticleCount, 0, 1000);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Number of scatter particles in lens/vitreous (Ritschel: 750).\nProduces ciliary corona needle pattern via Babinet's principle.");
+		tooltip("Number of scatter particles in lens/vitreous (Ritschel: 750).\nProduces ciliary corona needle pattern via Babinet's principle.");
 
 		ImGui::SliderFloat("Particle Size", &settings.ParticleSize, 0.5f, 5.f, "%.1f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Radius of each particle in pixels.");
+		tooltip("Radius of each particle in pixels.");
 
 		ImGui::SliderInt("Grating Count", &settings.GratingCount, 0, 400);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Number of radial lens gratings (paper section 2.4: Ritschel uses 200).\nProduces lenticular halo via edge diffraction.");
+		tooltip("Number of radial lens gratings (paper section 2.4: Ritschel uses 200).\nProduces lenticular halo via edge diffraction.");
 
 		if (settings.GratingCount > 0) {
 			ImGui::SliderFloat("Grating Strength", &settings.GratingStrength, 0.f, 1.f, "%.2f");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Opacity of lens gratings. Higher = stronger lenticular halo.");
+			tooltip("Opacity of lens gratings. Higher = stronger lenticular halo.");
 		}
 
 		ImGui::SliderFloat("Tear Film Strength", &settings.TearFilmStrength, 0.f, 1.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Simulates tear film irregularities on the cornea surface.\nProduces flickering, sharp, irregular star spikes.\n0 = disabled (static PSF).");
+		tooltip("Simulates tear film irregularities on the cornea surface.\nProduces flickering, sharp, irregular star spikes.\n0 = disabled (static PSF).");
 
 		if (settings.TearFilmStrength > 0.f) {
 			ImGui::SliderFloat("Tear Film Speed", &settings.TearFilmSpeed, 0.1f, 8.f, "%.1f");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("How fast the tear film fluctuates (blink refresh rate ~0.3Hz, breakup ~2-5Hz).");
+			tooltip("How fast the tear film fluctuates (blink refresh rate ~0.3Hz, breakup ~2-5Hz).");
 
 			ImGui::SliderInt("Tear Film Complexity", &settings.TearFilmComplexity, 3, 16);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Number of angular harmonics. More = more spikes, finer detail.");
+			tooltip("Number of angular harmonics. More = more spikes, finer detail.");
 		}
 
 		ImGui::SliderInt("Suture Branches", &settings.SutureBranches, 0, 8);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(
-				"Lens suture lines: Y-shaped junctions where lens fiber cells meet.\n"
-				"3 = young eye (anterior Y + posterior inverted Y = 6 spikes).\n"
-				"More branches = older/more complex lens. 0 = disabled.");
+		tooltip(
+			"Lens suture lines: Y-shaped junctions where lens fiber cells meet.\n"
+			"3 = young eye (anterior Y + posterior inverted Y = 6 spikes).\n"
+			"More branches = older/more complex lens. 0 = disabled.");
 
 		if (settings.SutureBranches > 0) {
 			ImGui::SliderFloat("Suture Strength", &settings.SutureStrength, 0.f, 1.f, "%.2f");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Opacity of suture lines. Higher = stronger star spikes.");
+			tooltip("Opacity of suture lines. Higher = stronger star spikes.");
 
 			ImGui::SliderFloat("Suture Width", &settings.SutureWidth, 0.5f, 5.f, "%.1f");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Pixel width of each suture line. Thinner = sharper spikes.");
+			tooltip("Pixel width of each suture line. Thinner = sharper spikes.");
 		}
 
 		ImGui::SliderInt("Starburst Spikes", &settings.StarburstCount, 0, 128);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(
-				"Lens fiber radial phase grating.\nCreates many thin, sharp radial star spikes.\n"
-				"Higher count = more spikes (typical human eye: 20-80). 0 = disabled.");
+		tooltip(
+			"Lens fiber radial phase grating.\nCreates many thin, sharp radial star spikes.\n"
+			"Higher count = more spikes (typical human eye: 20-80). 0 = disabled.");
 
 		if (settings.StarburstCount > 0) {
 			ImGui::SliderFloat("Starburst Strength", &settings.StarburstStrength, 0.f, 2.f, "%.2f");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Phase shift strength per fiber. Higher = brighter spikes.");
+			tooltip("Phase shift strength per fiber. Higher = brighter spikes.");
 
 			ImGui::SliderFloat("Starburst Irregularity", &settings.StarburstIrregularity, 0.f, 1.f, "%.2f");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text(
-					"Random variation in fiber spacing and strength.\n"
-					"0 = perfectly regular (even spikes).\n"
-					"1 = maximally irregular (natural look).");
+			tooltip(
+				"Random variation in fiber spacing and strength.\n"
+				"0 = perfectly regular (even spikes).\n"
+				"1 = maximally irregular (natural look).");
 		}
 
-		if (ImGui::CollapsingHeader("Eyelashes")) {
+		if (ImGui::CollapsingHeader(kEyelashes)) {
 			ImGui::Checkbox("Enable Eyelashes", &settings.EnableEyelashes);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Simulate eyelash occlusion for streak effects (paper section 3.1).");
+			tooltip("Simulate eyelash occlusion for streak effects (paper section 3.1).");
 
 			if (settings.EnableEyelashes) {
 				ImGui::SliderInt("Eyelash Count", &settings.EyelashCount, 5, 80);
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("Total number of eyelash hairs (upper + lower).");
+				tooltip("Total number of eyelash hairs (upper + lower).");
 
 				ImGui::SliderFloat("Eyelash Length", &settings.EyelashLength, 0.1f, 0.8f, "%.2f");
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("Length of eyelashes relative to aperture radius.");
+				tooltip("Length of eyelashes relative to aperture radius.");
 
 				ImGui::SliderFloat("Eyelash Curvature", &settings.EyelashCurvature, 0.f, 1.f, "%.2f");
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("Streak curvature via UV bending (paper fig 3.7: sin(x) vertical offset).");
+				tooltip("Streak curvature via UV bending (paper fig 3.7: sin(x) vertical offset).");
 			}
 		}
 	}
 
-	ImGui::SliderFloat("Adapt Speed", &settings.AdaptSpeed, 0.5f, 10.f, "%.1f");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("How fast the glare adapts to brightness changes.");
+	ImGui::SeparatorText(kPSFShaping);
 
-	{
-		const char* resNames[] = { "128", "256", "512", "1024" };
-		int resValues[] = { 128, 256, 512, 1024 };
-		int curIdx = 1;
-		for (int i = 0; i < 4; i++)
-			if (resValues[i] == settings.FFTResolution)
-				curIdx = i;
+	ImGui::SliderFloat("PSF Sharpness", &settings.PSFSharpness, 0.2f, 1.f, "%.2f");
+	tooltip(
+		"Dynamic range compression exponent (paper Table 3.9: 0.45).\n"
+		"Lower = wider/softer glare, higher = concentrated near light source.\n"
+		"Increase if glare looks too blurry/spreads too far.");
 
-		if (ImGui::Combo("FFT Resolution", &curIdx, resNames, 4))
-			settings.FFTResolution = resValues[curIdx];
-
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Resolution of the FFT convolution. Higher = sharper starburst but more expensive.");
-	}
-
-	ImGui::SliderFloat("Padding Ratio", &settings.PaddingRatio, 0.f, 0.25f, "%.3f");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(
-			"Zero-padding per side to prevent FFT wrap-around.\n"
-			"0.25 = paper default (50%% effective resolution).\n"
-			"0.1  = 80%% effective (recommended for high-res).\n"
-			"0.0  = 100%% (maximum sharpness, may wrap at edges).\n"
-			"Lower = sharper glare on high-res screens.");
-
-	ImGui::SliderFloat("Kernel Scale", &settings.KernelScale, 0.01f, 1.f, "%.2f");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(
-			"Scale of the glare kernel size on screen.\n"
-			"1.0 = default. Smaller = more concentrated glare.\n"
-			"Does not affect aperture physics.");
-
-	ImGui::SliderFloat("Fresnel Exponent", &settings.FresnelExponent, 0.f, 80.f, "%.1f");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Fresnel phase at aperture edge (radians). Paper eq 2.12: e^(i*pi/(lambda*z) * r^2).\nHigher = more Fresnel rings. 0 = pure Fraunhofer (no rings).");
-
-	ImGui::SliderFloat("Chromatic Spread", &settings.ChromaticSpread, 0.f, 3.f, "%.2f");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Multiplier on wavelength-dependent UV scaling (paper section 2.3: lambda/575nm).\n1.0 = physically correct. Higher = more rainbow spread. 0 = monochrome.");
-
-	if (ImGui::CollapsingHeader("PSF Shaping")) {
-		ImGui::SliderFloat("PSF Sharpness", &settings.PSFSharpness, 0.2f, 1.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(
-				"Dynamic range compression exponent (paper Table 3.9: 0.45).\n"
-				"Lower = wider/softer glare, higher = concentrated near light source.\n"
-				"Increase if glare looks too blurry/spreads too far.");
-
-		ImGui::SliderFloat("PSF Noise Floor", &settings.PSFNoiseFloor, 0.f, 0.01f, "%.4f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(
-				"Threshold to remove low-level FFT noise from the PSF.\n"
-				"Paper default: 0.001. Higher = cleaner glare wings.");
-	}
+	ImGui::SliderFloat("PSF Noise Floor", &settings.PSFNoiseFloor, 0.f, 0.01f, "%.4f");
+	tooltip(
+		"Threshold to remove low-level FFT noise from the PSF.\n"
+		"Paper default: 0.001. Higher = cleaner glare wings.");
 
 	if (ImGui::CollapsingHeader("Debug")) {
-		if (texGlareResult)
-			ImGui::Image(texGlareResult->srv.get(), { 256.f, 256.f });
+		if (texGlareResult) {
+			constexpr float kDebugPreviewSize = 256.f;
+			const float previewSize = kDebugPreviewSize * Util::GetUIScale();
+			ImGui::Image(texGlareResult->srv.get(), { previewSize, previewSize });
+		}
 	}
 }
 
@@ -443,11 +527,7 @@ void PhysicalGlare::ClearShaderCache()
 		&thresholdCS, &apertureCS, &psfCS, &fftRowCS, &fftColCS, &fftRowInvCS, &fftColInvCS, &multiplyCS, &compositeCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	Util::ResetComPtrs(shaderPtrs);
 
 	CompileComputeShaders();
 }

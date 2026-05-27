@@ -3,10 +3,29 @@
 #include "State.h"
 #include "Util.h"
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	Vignette::Settings,
-	FocalLength,
-	Power)
+namespace
+{
+	constexpr auto kFocalLength = "Focal Length";
+	constexpr auto kAnamorphicSqueeze = "Anamorphic Squeeze";
+	constexpr auto kPower = "Power";
+}
+
+void to_json(json& j, const Vignette::Settings& settings)
+{
+	j = {
+		{ kFocalLength, settings.FocalLength },
+		{ kAnamorphicSqueeze, settings.Anamorphism },
+		{ kPower, settings.Power }
+	};
+}
+
+void from_json(const json& j, Vignette::Settings& settings)
+{
+	settings = {};
+	settings.FocalLength = j.value(kFocalLength, settings.FocalLength);
+	settings.Anamorphism = j.value(kAnamorphicSqueeze, settings.Anamorphism);
+	settings.Power = j.value(kPower, settings.Power);
+}
 
 void Vignette::DrawSettings()
 {
@@ -86,11 +105,7 @@ void Vignette::ClearShaderCache()
 		&vignetteCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	Util::ResetComPtrs(shaderPtrs);
 
 	CompileComputeShaders();
 }
