@@ -119,6 +119,17 @@ namespace ImageBasedLighting
 		return Color::IrradianceToGamma(linEnv + linSky);
 	}
 
+	float3 GetDiffuseIBLNoSky(float3 vanillaDALC, float3 rayDir)
+	{
+		float3 linEnv;
+		if (SharedData::iblSettings.DALCMode >= 2) {
+			linEnv = Color::IrradianceToLinear(vanillaDALC * SharedData::iblSettings.DALCAmount);
+		} else {
+			linEnv = GetEnvIBLColor(rayDir);
+		}
+		return Color::IrradianceToGamma(linEnv);
+	}
+
 	/// Compute diffuse IBL ambient (gamma-space) with visibility applied per DALCMode.
 	/// visibility: scalar skylighting factor (already computed in Lighting.hlsl).
 	float3 GetDiffuseIBLOccluded(float3 vanillaDALC, float3 rayDir, float visibility)
