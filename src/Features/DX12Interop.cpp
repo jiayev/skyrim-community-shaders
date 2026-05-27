@@ -183,7 +183,7 @@ void DX12Interop::CreateD3D12Device(IDXGIAdapter* a_adapter)
 	queueDesc.Type = D3D12_COMMAND_LIST_TYPE_COPY;
 	DX::ThrowIfFailed(d3d12Device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&copyCommandQueue)));
 
-	for (size_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
+	for (size_t i = 0; i < kMaxFramesInFlight; i++) {
 		DX::ThrowIfFailed(d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&frameContexts[i].commandAllocator)));
 		DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, frameContexts[i].commandAllocator.get(), nullptr, IID_PPV_ARGS(&frameContexts[i].commandList)));
 		frameContexts[i].commandList->Close();
@@ -238,4 +238,9 @@ void DX12Interop::SetupResources()
 	mainDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 	mainDesc.Format = DXGI_FORMAT_R8_UNORM;
 	sharedResources.reactiveMask = new WrappedResource(mainDesc, d3d11Device.get(), d3d12Device.get());
+}
+
+UINT DX12Interop::GetFrameContextIndex()
+{
+	return globals::state->frameCount % kMaxFramesInFlight;
 }

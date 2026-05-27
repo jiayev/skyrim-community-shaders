@@ -54,11 +54,10 @@ struct DX12Interop : public Feature
 		bool hasBeenReset = false;          // whether we've reset this context's command allocator at least once since it was last used (to avoid redundant resets)
 	};
 
-	static constexpr UINT FRAMES_IN_FLIGHT = 2;
-	FrameContext frameContexts[FRAMES_IN_FLIGHT];
+	static constexpr UINT kMaxFramesInFlight = 2;
+	FrameContext frameContexts[kMaxFramesInFlight];
 	UINT64 currentFenceValue = 0;
 	UINT64 lastCompletedFenceValue = 0;
-	UINT currentFrameContextIndex = 0;
 	HANDLE fenceEvent;
 
 	struct SharedResources
@@ -99,16 +98,15 @@ struct DX12Interop : public Feature
 		DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), ++currentFenceValue));
 		DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), currentFenceValue));
 
-		frameContexts[currentFrameContextIndex].fenceValueAtSubmission = currentFenceValue;
+		frameContexts[GetFrameContextIndex()].fenceValueAtSubmission = currentFenceValue;
 	}
 
 	// Executes D3D12 commands mid D3D11 execution, probably huge overhead from wait commands so use sparsely and wisely
 	template <typename Func, typename Func2 = std::nullptr_t>
 	void Execute(Func func, Func2 func2 = nullptr)
 	{
-		// Get to next frame context slot (ring buffer)
-		currentFrameContextIndex = globals::state->frameCount % FRAMES_IN_FLIGHT;
-		FrameContext& ctx = frameContexts[currentFrameContextIndex];
+		// Get to next frame context
+		FrameContext& ctx = frameContexts[GetFrameContextIndex()];
 
 		// CPU-side wait: stall if this slot's previous submission isn't done yet
 		// (i.e. we've lapped the GPU)
@@ -162,5 +160,5 @@ private:
 	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
 	void InitializePIX();
 	void CreateD3D12Device(IDXGIAdapter* a_adapter);
-	UINT GetCurrentBackBufferIndex();
+	UINT GetFrameContextIndex();
 };
