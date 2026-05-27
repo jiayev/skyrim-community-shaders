@@ -93,11 +93,17 @@ namespace ImageBasedLighting
 
 	float3 GetSkyIBLColor(float3 rayDir)
 	{
+		if (SharedData::InInterior) {
+			return 0;
+		}
 		return Color::Saturation(GetSkyIBL(rayDir), SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
 	}
 
 	float3 GetSkyIBLColorOccluded(float3 rayDir, float visibility)
 	{
+		if (SharedData::InInterior) {
+			return 0;
+		}
 		return Color::Saturation(GetSkyIBLOccluded(rayDir, visibility), SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
 	}
 
@@ -117,17 +123,6 @@ namespace ImageBasedLighting
 			linSky = GetSkyIBLColor(rayDir);
 		}
 		return Color::IrradianceToGamma(linEnv + linSky);
-	}
-
-	float3 GetDiffuseIBLNoSky(float3 vanillaDALC, float3 rayDir)
-	{
-		float3 linEnv;
-		if (SharedData::iblSettings.DALCMode >= 2) {
-			linEnv = Color::IrradianceToLinear(vanillaDALC * SharedData::iblSettings.DALCAmount);
-		} else {
-			linEnv = GetEnvIBLColor(rayDir);
-		}
-		return Color::IrradianceToGamma(linEnv);
 	}
 
 	/// Compute diffuse IBL ambient (gamma-space) with visibility applied per DALCMode.
