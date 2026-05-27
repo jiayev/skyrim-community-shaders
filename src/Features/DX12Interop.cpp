@@ -206,10 +206,6 @@ void DX12Interop::CreateInterop()
 	DX::ThrowIfFailed(d3d11Device->OpenSharedFence(sharedFenceHandle, IID_PPV_ARGS(&d3d11Fence)));
 	CloseHandle(sharedFenceHandle);
 
-	if (fenceEvent) {
-		CloseHandle(fenceEvent);
-		fenceEvent = nullptr;
-	}
 	fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 	if (!fenceEvent)
 		DX::ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
