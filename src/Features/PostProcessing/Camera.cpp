@@ -14,31 +14,14 @@ namespace
 	constexpr auto kNoiseType = "Noise type";
 }
 
-void to_json(json& j, const Camera::Settings& settings)
-{
-	j = {
-		{ kFisheye, {
-			{ kEnableFisheye, settings.UseFE },
-			{ kFov, settings.FEFoV },
-			{ kCrop, settings.FECrop } } },
-		{ kCaAmount, settings.CAStrength },
-		{ kNoiseAmount, settings.NoiseStrength },
-		{ kNoiseType, settings.NoiseType }
-	};
-}
-
-void from_json(const json& j, Camera::Settings& settings)
-{
-	settings = {};
-	if (auto it = j.find(kFisheye); it != j.end() && it->is_object()) {
-		settings.UseFE = it->value(kEnableFisheye, settings.UseFE);
-		settings.FEFoV = it->value(kFov, settings.FEFoV);
-		settings.FECrop = it->value(kCrop, settings.FECrop);
-	}
-	settings.CAStrength = j.value(kCaAmount, settings.CAStrength);
-	settings.NoiseStrength = j.value(kNoiseAmount, settings.NoiseStrength);
-	settings.NoiseType = j.value(kNoiseType, settings.NoiseType);
-}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Camera::Settings,
+	UseFE,
+	FEFoV,
+	FECrop,
+	CAStrength,
+	NoiseStrength,
+	NoiseType)
 
 void Camera::DrawSettings()
 {
@@ -58,7 +41,7 @@ void Camera::DrawSettings()
 	}
 
 	if (ImGui::CollapsingHeader(kFisheye)) {
-		ImGui::Checkbox("Enable Fisheye", &settings.UseFE);
+		ImGui::Checkbox(kEnableFisheye, &settings.UseFE);
 		if (ImGui::IsItemHovered()) {
 			ImGui::SetTooltip("Enable fisheye effect");
 		}

@@ -22,17 +22,7 @@
 namespace
 {
 	using ColorSettings = ColorGrading::Settings;
-	using Vec3Keys = std::array<std::string_view, 3>;
-	using Vec4Keys = std::array<std::string_view, 4>;
 
-	constexpr Vec3Keys RGB = { "r", "g", "b" };
-	constexpr Vec3Keys SaturationBrightnessContrast = { "Saturation", "Brightness", "Contrast" };
-	constexpr Vec3Keys ExposureTemperatureTint = { "Exposure", "Temperature", "Tint" };
-	constexpr Vec3Keys SaturationVibranceHueShift = { "Saturation", "Vibrance", "Hue Shift" };
-	constexpr Vec3Keys HueShiftVibranceBrightness = { "Hue Shift", "Vibrance", "Brightness" };
-	constexpr Vec4Keys XYZW = { "x", "y", "z", "w" };
-	constexpr Vec4Keys AllRGB = { "All", "R", "G", "B" };
-	constexpr Vec4Keys ShadowHighlightRange = { "Shadows Start", "Shadows End", "Highlights Start", "Highlights End" };
 	constexpr std::array<std::string_view, 7> ColorMixerHues = { "Reds", "Oranges", "Greens", "Cyans", "Blues", "Purples", "Magentas" };
 	constexpr std::array<std::array<float, 4>, ColorMixerHues.size()> ColorMixerHueColors = { {
 		{ 1.f, 0.f, 0.f, 1.f },
@@ -43,7 +33,6 @@ namespace
 		{ 0.522f, 0.392f, 1.f, 1.f },
 		{ 1.f, 0.137f, 0.741f, 1.f },
 	} };
-	constexpr std::array<std::string_view, 2> TonemapParamGroups = { "Primary", "Secondary" };
 	constexpr int AllRGBChannelCount = 3;
 	constexpr float AllRGBAllSliderWeight = 2.f;
 	constexpr float AllRGBChannelSliderWeight = 1.f;
@@ -55,44 +44,7 @@ namespace
 	constexpr float SelectedSwatchThickness = 2.f;
 	constexpr float ZeroAllNeutral = 0.f;
 	constexpr float UnitAllNeutral = 1.f;
-	constexpr float PivotAllNeutral = 0.18f;
-	constexpr float MinExposureMultiplier = 1e-6f;
-	constexpr auto kSkipLDRColorGrading = "Skip LDR Color Grading";
-	constexpr auto kSkipLUT = "Skip LUT (Direct Color Grading)";
-	constexpr auto kConvertLinearToLog = "Convert Linear to Log Before HDR Color Grading";
-	constexpr auto kConvertLogToLinear = "Convert Log to Linear After HDR Color Grading";
-	constexpr auto kLogType = "Log Type";
-	constexpr auto kInputGamma = "Input Gamma";
-	constexpr auto kOutputGamma = "Output Gamma";
-	constexpr auto kOKLCHColorMixer = "OKLCH Color Mixer";
-	constexpr auto kExposureTemperatureTint = "Exposure/Temperature/Tint";
-	constexpr auto kAscCdl = "ASC CDL";
-	constexpr auto kShadowsMidtonesHighlights = "Shadows/Midtones/Highlights";
-	constexpr auto kShadowsMidtonesHighlightsRange = "Shadows/Midtones/Highlights Range";
 	constexpr auto kContrast = "Contrast";
-	constexpr auto kLiftGammaGain = "Lift Gamma Gain";
-	constexpr auto kUseOpenDRT = "Use OpenDRT";
-	constexpr auto kTonemapper = "Tonemapper";
-	constexpr auto kTonemapperSettings = "Tonemapper Settings";
-	constexpr auto kCinematicBlend = "Cinematic Blend";
-	constexpr auto kFadeBlend = "Fade Blend";
-	constexpr auto kTintBlend = "Tint Blend";
-	constexpr auto kEnableTonemapping = "Enable Tonemapping";
-	constexpr auto kWorkingColorSpace = "Working Color Space";
-
-	struct Vec3Field
-	{
-		std::string_view key;
-		float4 ColorSettings::* value;
-		const Vec3Keys* keys;
-	};
-
-	struct Vec4Field
-	{
-		std::string_view key;
-		float4 ColorSettings::* value;
-		const Vec4Keys* keys;
-	};
 
 	struct AllRGBControl
 	{
@@ -101,115 +53,6 @@ namespace
 		float min;
 		float max;
 		const char* format;
-	};
-
-	enum class JsonValueScale
-	{
-		Linear,
-		ExposureEV
-	};
-
-	template <class T>
-	void ReadField(const json& source, std::string_view key, T& value)
-	{
-		if (auto it = source.find(std::string(key)); it != source.end())
-			it->get_to(value);
-	}
-
-	template <size_t N>
-	json Floats(const float* values, const std::array<std::string_view, N>& keys)
-	{
-		json out = json::object();
-		for (size_t i = 0; i < N; ++i)
-			out[std::string(keys[i])] = values[i];
-		return out;
-	}
-
-	template <size_t N>
-	void ReadFloats(const json& source, float* values, const std::array<std::string_view, N>& keys)
-	{
-		if (!source.is_object())
-			return;
-		for (size_t i = 0; i < N; ++i)
-			ReadField(source, keys[i], values[i]);
-	}
-
-	template <size_t N>
-	void ReadFloatsField(const json& source, std::string_view key, float* values, const std::array<std::string_view, N>& keys)
-	{
-		if (auto it = source.find(std::string(key)); it != source.end())
-			ReadFloats(*it, values, keys);
-	}
-
-	json Vec3(const float3& value, const Vec3Keys& keys)
-	{
-		return Floats(&value.x, keys);
-	}
-
-	json Vec4(const float4& value, const Vec4Keys& keys = XYZW)
-	{
-		return Floats(&value.x, keys);
-	}
-
-	void ReadVec3Field(const json& source, std::string_view key, float3& value, const Vec3Keys& keys)
-	{
-		ReadFloatsField(source, key, &value.x, keys);
-	}
-
-	void ReadVec4(const json& source, float4& value)
-	{
-		ReadFloats(source, &value.x, XYZW);
-	}
-
-	template <class Array, size_t N, class ToJson>
-	json NamedObjects(const Array& values, const std::array<std::string_view, N>& keys, ToJson&& toJson)
-	{
-		json out = json::object();
-		for (size_t i = 0; i < values.size() && i < N; ++i)
-			out[std::string(keys[i])] = toJson(values[i]);
-		return out;
-	}
-
-	template <class Array, size_t N, class ReadJson>
-	void ReadNamedObjects(const json& source, Array& values, const std::array<std::string_view, N>& keys, ReadJson&& readJson)
-	{
-		if (!source.is_object())
-			return;
-		for (size_t i = 0; i < values.size() && i < N; ++i) {
-			if (auto it = source.find(std::string(keys[i])); it != source.end())
-				readJson(*it, values[i]);
-		}
-	}
-
-	constexpr std::array kVec3Fields = {
-		Vec3Field{ "OKLCH Saturation", &ColorSettings::oklchSaturation, &SaturationVibranceHueShift },
-	};
-
-	constexpr std::array kAscCdlFields = {
-		Vec4Field{ "Slope", &ColorSettings::slope, &AllRGB },
-		Vec4Field{ "Power", &ColorSettings::power, &AllRGB },
-		Vec4Field{ "Offset", &ColorSettings::cdlOffset, &AllRGB },
-	};
-
-	constexpr std::array kShadowsMidtonesHighlightsFields = {
-		Vec4Field{ "Shadows Gain", &ColorSettings::shadowsGain, &AllRGB },
-		Vec4Field{ "Shadows Offset", &ColorSettings::shadowsOffset, &AllRGB },
-		Vec4Field{ "Midtones Gain", &ColorSettings::midtonesGain, &AllRGB },
-		Vec4Field{ "Midtones Offset", &ColorSettings::midtonesOffset, &AllRGB },
-		Vec4Field{ "Highlights Gain", &ColorSettings::highlightsGain, &AllRGB },
-		Vec4Field{ "Highlights Offset", &ColorSettings::highlightsOffset, &AllRGB },
-		Vec4Field{ kShadowsMidtonesHighlightsRange, &ColorSettings::shadowsHighlightsRange, &ShadowHighlightRange },
-	};
-
-	constexpr std::array kContrastFields = {
-		Vec4Field{ kContrast, &ColorSettings::contrast, &AllRGB },
-		Vec4Field{ "Pivot", &ColorSettings::pivot, &AllRGB },
-	};
-
-	constexpr std::array kLiftGammaGainFields = {
-		Vec4Field{ "Lift", &ColorSettings::lift, &AllRGB },
-		Vec4Field{ "Gamma", &ColorSettings::gamma, &AllRGB },
-		Vec4Field{ "Gain", &ColorSettings::gain, &AllRGB },
 	};
 
 	constexpr std::array kAscCdlControls = {
@@ -238,112 +81,29 @@ namespace
 		AllRGBControl{ "Gain", &ColorSettings::gain, 0.f, 2.f, "%.3f" },
 	};
 
-	void WriteVec3Fields(json& j, const ColorSettings& settings)
+	float AverageRGB(const float4& value)
 	{
-		for (const auto& field : kVec3Fields) {
-			const auto& value = settings.*field.value;
-			j[std::string(field.key)] = Floats(&value.x, *field.keys);
-		}
+		float total = 0.f;
+		for (int i = 0; i < AllRGBChannelCount; i++)
+			total += (&value.x)[i];
+		return total / static_cast<float>(AllRGBChannelCount);
 	}
 
-	void ReadVec3Fields(const json& j, ColorSettings& settings)
+	void OffsetRGB(float4& value, float offset)
 	{
-		for (const auto& field : kVec3Fields) {
-			auto& value = settings.*field.value;
-			ReadFloatsField(j, field.key, &value.x, *field.keys);
-		}
+		for (int i = 0; i < AllRGBChannelCount; i++)
+			(&value.x)[i] += offset;
 	}
 
-	template <size_t N>
-	void WriteVec4Fields(json& j, const ColorSettings& settings, const std::array<Vec4Field, N>& fields)
-	{
-		for (const auto& field : fields) {
-			const auto& value = settings.*field.value;
-			j[std::string(field.key)] = Floats(&value.x, *field.keys);
-		}
-	}
-
-	template <size_t N>
-	void ReadVec4Fields(const json& j, ColorSettings& settings, const std::array<Vec4Field, N>& fields)
-	{
-		for (const auto& field : fields) {
-			auto& value = settings.*field.value;
-			ReadFloatsField(j, field.key, &value.x, *field.keys);
-		}
-	}
-
-	template <size_t N>
-	void WriteVec4Group(json& j, std::string_view group, const ColorSettings& settings, const std::array<Vec4Field, N>& fields)
-	{
-		auto& node = j[std::string(group)] = json::object();
-		WriteVec4Fields(node, settings, fields);
-	}
-
-	template <size_t N>
-	void ReadVec4Group(const json& j, std::string_view group, ColorSettings& settings, const std::array<Vec4Field, N>& fields)
-	{
-		if (auto it = j.find(std::string(group)); it != j.end() && it->is_object())
-			ReadVec4Fields(*it, settings, fields);
-	}
-
-	float ToJsonValue(JsonValueScale scale, float value)
-	{
-		switch (scale) {
-		case JsonValueScale::ExposureEV:
-			return std::log2(std::max(value, MinExposureMultiplier));
-		default:
-			return value;
-		}
-	}
-
-	float FromJsonValue(JsonValueScale scale, float value)
-	{
-		switch (scale) {
-		case JsonValueScale::ExposureEV:
-			return std::exp2(value);
-		default:
-			return value;
-		}
-	}
-
-	json ExposureTemperatureTintJson(const float4& value)
-	{
-		return {
-			{ std::string(ExposureTemperatureTint[0]), ToJsonValue(JsonValueScale::ExposureEV, value.x) },
-			{ std::string(ExposureTemperatureTint[1]), value.y },
-			{ std::string(ExposureTemperatureTint[2]), value.z }
-		};
-	}
-
-	void ReadExposureTemperatureTint(const json& source, float4& value)
-	{
-		if (auto it = source.find(kExposureTemperatureTint); it != source.end() && it->is_object()) {
-			for (size_t i = 0; i < ExposureTemperatureTint.size(); ++i) {
-				if (auto field = it->find(std::string(ExposureTemperatureTint[i])); field != it->end())
-					(&value.x)[i] = FromJsonValue(i == 0 ? JsonValueScale::ExposureEV : JsonValueScale::Linear, field->get<float>());
-			}
-		}
-	}
-
-	float4 ApplyAllRGB(const float4& value, float neutral)
+	float4 ApplyStoredAllRGB(const float4& value, float neutral)
 	{
 		const float commonOffset = value.x - neutral;
 		return { value.y + commonOffset, value.z + commonOffset, value.w + commonOffset, value.x };
 	}
 
-	float4 ApplyUnitAllRGB(const float4& value)
-	{
-		return ApplyAllRGB(value, UnitAllNeutral);
-	}
-
-	float4 ApplyZeroAllRGB(const float4& value)
-	{
-		return ApplyAllRGB(value, ZeroAllNeutral);
-	}
-
 	float4 PackLiftGammaGainAllRGB(const float4& value, float neutral)
 	{
-		const auto applied = ApplyAllRGB(value, neutral);
+		const auto applied = ApplyStoredAllRGB(value, neutral);
 		return { applied.w, applied.x, applied.y, applied.z };
 	}
 
@@ -355,9 +115,9 @@ namespace
 		return std::max(availableWidth * AllRGBAllSliderWeight / AllRGBSliderWeight, ImGui::GetFrameHeight());
 	}
 
-	void DrawAllRGB(ColorSettings& settings, const AllRGBControl& control)
+	template <class OnAllChanged>
+	void DrawAllRGBSliders(const AllRGBControl& control, float& allValue, float* rgbValues, OnAllChanged onAllChanged)
 	{
-		auto& value = settings.*control.value;
 		ImGui::PushID(control.label.data());
 
 		const auto& style = ImGui::GetStyle();
@@ -365,21 +125,45 @@ namespace
 		const float rgbWidth = ImGui::CalcItemWidth() - allWidth - style.ItemSpacing.x;
 
 		ImGui::SetNextItemWidth(allWidth);
-		ImGui::SliderFloat("##All", &value.x, control.min, control.max, control.format);
+		if (ImGui::SliderFloat("##All", &allValue, control.min, control.max, control.format))
+			onAllChanged(allValue);
 		ImGui::SameLine(0.f, style.ItemSpacing.x);
 		ImGui::SetNextItemWidth(rgbWidth);
-		Util::RGBFloatDrag3("##RGB", &value.y, AllRGBDragSpeed, control.min, control.max, control.format);
+		Util::RGBFloatDrag3("##RGB", rgbValues, AllRGBDragSpeed, control.min, control.max, control.format);
 		ImGui::SameLine();
 		ImGui::TextUnformatted(control.label.data());
 
 		ImGui::PopID();
 	}
 
+	void DrawRGBAll(ColorSettings& settings, const AllRGBControl& control)
+	{
+		auto& value = settings.*control.value;
+		const float previousAll = AverageRGB(value);
+		float allValue = previousAll;
+		DrawAllRGBSliders(control, allValue, &value.x, [&](float newAll) {
+			OffsetRGB(value, newAll - previousAll);
+		});
+	}
+
+	void DrawStoredAllRGB(ColorSettings& settings, const AllRGBControl& control)
+	{
+		auto& value = settings.*control.value;
+		DrawAllRGBSliders(control, value.x, &value.y, [](float) {});
+	}
+
 	template <size_t N>
-	void DrawAllRGBControls(ColorSettings& settings, const std::array<AllRGBControl, N>& controls)
+	void DrawRGBAllControls(ColorSettings& settings, const std::array<AllRGBControl, N>& controls)
 	{
 		for (const auto& control : controls)
-			DrawAllRGB(settings, control);
+			DrawRGBAll(settings, control);
+	}
+
+	template <size_t N>
+	void DrawStoredAllRGBControls(ColorSettings& settings, const std::array<AllRGBControl, N>& controls)
+	{
+		for (const auto& control : controls)
+			DrawStoredAllRGB(settings, control);
 	}
 
 	float Scaled(float value)
@@ -435,71 +219,40 @@ namespace
 	}
 }
 
-void to_json(json& j, const ColorGrading::Settings& settings)
-{
-	j = {
-		{ kSkipLDRColorGrading, settings.skipLDR },
-		{ kSkipLUT, settings.skipLUT },
-		{ kConvertLinearToLog, settings.useLog },
-		{ kLogType, settings.logType },
-		{ kConvertLogToLinear, settings.invertLog },
-		{ kInputGamma, settings.inOutGamma.z },
-		{ kOutputGamma, settings.inOutGamma.w },
-		{ kOKLCHColorMixer, NamedObjects(settings.oklchColorMixer, ColorMixerHues, [](const float4& value) {
-			 return Floats(&value.x, HueShiftVibranceBrightness);
-		 }) },
-		{ kUseOpenDRT, settings.useOpenDrt },
-		{ kTonemapper, settings.currentTonemapper },
-		{ kTonemapperSettings, NamedObjects(settings.tonemapParams, TonemapParamGroups, [](const float4& value) {
-			 return Vec4(value);
-		}) },
-		{ kCinematicBlend, Vec3(settings.gameCinematicBlend, SaturationBrightnessContrast) },
-		{ kFadeBlend, settings.gameFadeBlend },
-		{ kTintBlend, settings.gameTintBlend },
-		{ kEnableTonemapping, settings.enableTonemap },
-		{ kWorkingColorSpace, settings.processColorSpace }
-	};
-
-	WriteVec3Fields(j, settings);
-	j[kExposureTemperatureTint] = ExposureTemperatureTintJson(settings.exposureTemperatureTint);
-	WriteVec4Group(j, kAscCdl, settings, kAscCdlFields);
-	WriteVec4Group(j, kShadowsMidtonesHighlights, settings, kShadowsMidtonesHighlightsFields);
-	WriteVec4Group(j, kContrast, settings, kContrastFields);
-	WriteVec4Group(j, kLiftGammaGain, settings, kLiftGammaGainFields);
-}
-
-void from_json(const json& j, ColorGrading::Settings& settings)
-{
-	settings = {};
-	ReadField(j, kSkipLDRColorGrading, settings.skipLDR);
-	ReadField(j, kSkipLUT, settings.skipLUT);
-	ReadField(j, kInputGamma, settings.inOutGamma.z);
-	ReadField(j, kOutputGamma, settings.inOutGamma.w);
-	ReadVec3Fields(j, settings);
-	ReadExposureTemperatureTint(j, settings.exposureTemperatureTint);
-	ReadVec4Group(j, kAscCdl, settings, kAscCdlFields);
-	ReadVec4Group(j, kShadowsMidtonesHighlights, settings, kShadowsMidtonesHighlightsFields);
-	ReadVec4Group(j, kContrast, settings, kContrastFields);
-	ReadVec4Group(j, kLiftGammaGain, settings, kLiftGammaGainFields);
-	if (auto it = j.find(kOKLCHColorMixer); it != j.end())
-		ReadNamedObjects(*it, settings.oklchColorMixer, ColorMixerHues, [](const json& source, float4& value) {
-			ReadFloats(source, &value.x, HueShiftVibranceBrightness);
-		});
-	ReadField(j, kUseOpenDRT, settings.useOpenDrt);
-	ReadField(j, kTonemapper, settings.currentTonemapper);
-	if (auto it = j.find(kTonemapperSettings); it != j.end())
-		ReadNamedObjects(*it, settings.tonemapParams, TonemapParamGroups, [](const json& source, float4& value) {
-			ReadVec4(source, value);
-		});
-	ReadVec3Field(j, kCinematicBlend, settings.gameCinematicBlend, SaturationBrightnessContrast);
-	ReadField(j, kFadeBlend, settings.gameFadeBlend);
-	ReadField(j, kTintBlend, settings.gameTintBlend);
-	ReadField(j, kConvertLinearToLog, settings.useLog);
-	ReadField(j, kLogType, settings.logType);
-	ReadField(j, kConvertLogToLinear, settings.invertLog);
-	ReadField(j, kEnableTonemapping, settings.enableTonemap);
-	ReadField(j, kWorkingColorSpace, settings.processColorSpace);
-}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	ColorGrading::Settings,
+	skipLDR,
+	skipLUT,
+	slope,
+	power,
+	cdlOffset,
+	lift,
+	gamma,
+	gain,
+	inOutGamma,
+	oklchSaturation,
+	oklchColorMixer,
+	contrast,
+	pivot,
+	exposureTemperatureTint,
+	shadowsGain,
+	midtonesGain,
+	highlightsGain,
+	shadowsHighlightsRange,
+	shadowsOffset,
+	midtonesOffset,
+	highlightsOffset,
+	useOpenDrt,
+	currentTonemapper,
+	tonemapParams,
+	gameCinematicBlend,
+	gameFadeBlend,
+	gameTintBlend,
+	useLog,
+	logType,
+	invertLog,
+	enableTonemap,
+	processColorSpace)
 
 template <int num = 1>
 bool exposureSlider(float* val)
@@ -773,7 +526,7 @@ void ColorGrading::DrawSettings()
 		}
 
 		if (ImGui::TreeNode("ASC CDL")) {
-			DrawAllRGBControls(settings, kAscCdlControls);
+			DrawRGBAllControls(settings, kAscCdlControls);
 			ImGui::TreePop();
 		}
 
@@ -796,20 +549,20 @@ void ColorGrading::DrawSettings()
 		}
 
 		if (ImGui::TreeNode("Shadows/Midtones/Highlights")) {
-			DrawAllRGBControls(settings, kShadowsMidtonesHighlightsControls);
+			DrawRGBAllControls(settings, kShadowsMidtonesHighlightsControls);
 			ImGui::InputFloat2("Shadows Start/End", &settings.shadowsHighlightsRange.x, "%.3f");
 			ImGui::InputFloat2("Highlights Start/End", &settings.shadowsHighlightsRange.z, "%.3f");
 			ImGui::TreePop();
 		}
 
 		if (ImGui::TreeNode("Contrast")) {
-			DrawAllRGBControls(settings, kContrastControls);
+			DrawRGBAllControls(settings, kContrastControls);
 			ImGui::TreePop();
 		}
 
 		ImGui::Text("Post-Tonemapping Settings");
 		if (ImGui::TreeNode("Lift Gamma Gain")) {
-			DrawAllRGBControls(settings, kLiftGammaGainControls);
+			DrawStoredAllRGBControls(settings, kLiftGammaGainControls);
 			ImGui::TreePop();
 		}
 	}
@@ -1344,7 +1097,7 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	}
 
 	ColorCB colorCBData = {
-		.asccdl = { ApplyUnitAllRGB(settings.slope), ApplyUnitAllRGB(settings.power), ApplyZeroAllRGB(settings.cdlOffset) },
+		.asccdl = { settings.slope, settings.power, settings.cdlOffset },
 		.liftgammagain = {
 			PackLiftGammaGainAllRGB(settings.lift, ZeroAllNeutral),
 			PackLiftGammaGainAllRGB(settings.gamma, ZeroAllNeutral),
@@ -1352,12 +1105,12 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		.inOutGamma = settings.inOutGamma,
 		.oklchSaturation = settings.oklchSaturation,
 		.oklchColorMixer = { settings.oklchColorMixer[0], settings.oklchColorMixer[1], settings.oklchColorMixer[2], settings.oklchColorMixer[3], settings.oklchColorMixer[4], settings.oklchColorMixer[5], settings.oklchColorMixer[6] },
-		.contrast = ApplyUnitAllRGB(settings.contrast),
-		.pivot = ApplyAllRGB(settings.pivot, PivotAllNeutral),
+		.contrast = settings.contrast,
+		.pivot = settings.pivot,
 		.exposureTemperatureTint = settings.exposureTemperatureTint,
-		.shadows = ApplyUnitAllRGB(settings.shadowsGain),
-		.midtones = ApplyUnitAllRGB(settings.midtonesGain),
-		.highlights = ApplyUnitAllRGB(settings.highlightsGain),
+		.shadows = settings.shadowsGain,
+		.midtones = settings.midtonesGain,
+		.highlights = settings.highlightsGain,
 		.shadowsHighlightsRange = settings.shadowsHighlightsRange,
 		.tonemapParams = { settings.tonemapParams[0], settings.tonemapParams[1] },
 		.inputToWorking = { float4{ inputToWorkingMatrix[0].x, inputToWorkingMatrix[0].y, inputToWorkingMatrix[0].z, 0.f }, float4{ inputToWorkingMatrix[1].x, inputToWorkingMatrix[1].y, inputToWorkingMatrix[1].z, 0.f }, float4{ inputToWorkingMatrix[2].x, inputToWorkingMatrix[2].y, inputToWorkingMatrix[2].z, 0.f } },
@@ -1370,9 +1123,9 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 			int wsIdx = std::clamp(settings.processColorSpace, 0, static_cast<int>(spaces.size()) - 1);
 			auto wp = getWhitePoint(spaces[wsIdx]);
 			return float4{ wp.x, wp.y, 0.f, 0.f }; }(),
-		.shadowsOffset = ApplyZeroAllRGB(settings.shadowsOffset),
-		.midtonesOffset = ApplyZeroAllRGB(settings.midtonesOffset),
-		.highlightsOffset = ApplyZeroAllRGB(settings.highlightsOffset),
+		.shadowsOffset = settings.shadowsOffset,
+		.midtonesOffset = settings.midtonesOffset,
+		.highlightsOffset = settings.highlightsOffset,
 		.cinematic = float4{ std::lerp(1.f, imageSpaceData.baseData.cinematic.saturation, settings.gameCinematicBlend.x), std::lerp(1.f, imageSpaceData.baseData.cinematic.brightness, settings.gameCinematicBlend.y), std::lerp(1.f, imageSpaceData.baseData.cinematic.contrast, settings.gameCinematicBlend.z), imageSpaceData.baseAmount },
 		.fade = float4{ imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeR], imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeG], imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeB], imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeAmount] * settings.gameFadeBlend },
 		.tint = float4{ imageSpaceData.baseData.tint.color.red, imageSpaceData.baseData.tint.color.green, imageSpaceData.baseData.tint.color.blue, imageSpaceData.baseData.tint.amount * settings.gameTintBlend },

@@ -11,167 +11,51 @@ namespace
 	constexpr auto kPupilMode = "Pupil (Circle)";
 	constexpr auto kEyelashes = "Eyelashes";
 	constexpr auto kPSFShaping = "PSF Shaping";
-	constexpr auto kThreshold = "Threshold";
-	constexpr auto kIntensity = "Intensity";
-	constexpr auto kApertureMode = "Aperture Mode";
-	constexpr auto kApertureBlades = "Aperture Blades";
-	constexpr auto kFStop = "F-Stop";
-	constexpr auto kSphericalAberration = "Spherical Aberration";
-	constexpr auto kDustCount = "Dust Count";
-	constexpr auto kDustSize = "Dust Size";
-	constexpr auto kBladeRoughness = "Blade Roughness";
-	constexpr auto kRoughnessFrequency = "Roughness Frequency";
-	constexpr auto kScratchCount = "Scratch Count";
-	constexpr auto kScratchOpacity = "Scratch Opacity";
-	constexpr auto kScratchLength = "Scratch Length";
-	constexpr auto kScratchWidth = "Scratch Width";
-	constexpr auto kApertureRotation = "Aperture Rotation";
-	constexpr auto kScatterStrength = "Scatter Strength";
-	constexpr auto kParticleCount = "Particle Count";
-	constexpr auto kParticleSize = "Particle Size";
-	constexpr auto kGratingCount = "Grating Count";
-	constexpr auto kGratingStrength = "Grating Strength";
-	constexpr auto kTearFilmStrength = "Tear Film Strength";
-	constexpr auto kTearFilmSpeed = "Tear Film Speed";
-	constexpr auto kTearFilmComplexity = "Tear Film Complexity";
-	constexpr auto kSutureBranches = "Suture Branches";
-	constexpr auto kSutureStrength = "Suture Strength";
-	constexpr auto kSutureWidth = "Suture Width";
-	constexpr auto kStarburstSpikes = "Starburst Spikes";
-	constexpr auto kStarburstStrength = "Starburst Strength";
-	constexpr auto kStarburstIrregularity = "Starburst Irregularity";
-	constexpr auto kEnableEyelashes = "Enable Eyelashes";
-	constexpr auto kEyelashCount = "Eyelash Count";
-	constexpr auto kEyelashLength = "Eyelash Length";
-	constexpr auto kEyelashCurvature = "Eyelash Curvature";
-	constexpr auto kAdaptSpeed = "Adapt Speed";
-	constexpr auto kFFTResolution = "FFT Resolution";
-	constexpr auto kPaddingRatio = "Padding Ratio";
-	constexpr auto kKernelScale = "Kernel Scale";
-	constexpr auto kFresnelExponent = "Fresnel Exponent";
-	constexpr auto kChromaticSpread = "Chromatic Spread";
-	constexpr auto kPSFSharpness = "PSF Sharpness";
-	constexpr auto kPSFNoiseFloor = "PSF Noise Floor";
-
-	template <class T>
-	void ReadField(const json& j, const char* key, T& value)
-	{
-		value = j.value(key, value);
-	}
-
-	const json& GroupOrEmpty(const json& j, const char* key)
-	{
-		static const json empty = json::object();
-		if (auto it = j.find(key); it != j.end() && it->is_object())
-			return *it;
-		return empty;
-	}
 }
 
-void to_json(json& j, const PhysicalGlare::Settings& settings)
-{
-	j = {
-		{ kThreshold, settings.ThresholdEV },
-		{ kIntensity, settings.Intensity },
-		{ kApertureMode, settings.ApertureMode },
-		{ kApertureRotation, settings.ApertureRotation },
-		{ kAdaptSpeed, settings.AdaptSpeed },
-		{ kFFTResolution, settings.FFTResolution },
-		{ kPaddingRatio, settings.PaddingRatio },
-		{ kKernelScale, settings.KernelScale },
-		{ kFresnelExponent, settings.FresnelExponent },
-		{ kChromaticSpread, settings.ChromaticSpread },
-		{ kLensMode, {
-			{ kApertureBlades, settings.ApertureBlades },
-			{ kFStop, settings.FStop },
-			{ kSphericalAberration, settings.SphericalAberration },
-			{ kDustCount, settings.DustCount },
-			{ kDustSize, settings.DustSize },
-			{ kBladeRoughness, settings.BladeRoughnessAmp },
-			{ kRoughnessFrequency, settings.BladeRoughnessFreq },
-			{ kScratchCount, settings.ScratchCount },
-			{ kScratchOpacity, settings.ScratchOpacity },
-			{ kScratchLength, settings.ScratchLength },
-			{ kScratchWidth, settings.ScratchWidth } } },
-		{ kPupilMode, {
-			{ kScatterStrength, settings.ScatterStrength },
-			{ kParticleCount, settings.ParticleCount },
-			{ kParticleSize, settings.ParticleSize },
-			{ kGratingCount, settings.GratingCount },
-			{ kGratingStrength, settings.GratingStrength },
-			{ kTearFilmStrength, settings.TearFilmStrength },
-			{ kTearFilmSpeed, settings.TearFilmSpeed },
-			{ kTearFilmComplexity, settings.TearFilmComplexity },
-			{ kSutureBranches, settings.SutureBranches },
-			{ kSutureStrength, settings.SutureStrength },
-			{ kSutureWidth, settings.SutureWidth },
-			{ kStarburstSpikes, settings.StarburstCount },
-			{ kStarburstStrength, settings.StarburstStrength },
-			{ kStarburstIrregularity, settings.StarburstIrregularity },
-			{ kEyelashes, {
-				{ kEnableEyelashes, settings.EnableEyelashes },
-				{ kEyelashCount, settings.EyelashCount },
-				{ kEyelashLength, settings.EyelashLength },
-				{ kEyelashCurvature, settings.EyelashCurvature } } } } },
-		{ kPSFShaping, {
-			{ kPSFSharpness, settings.PSFSharpness },
-			{ kPSFNoiseFloor, settings.PSFNoiseFloor } } }
-	};
-}
-
-void from_json(const json& j, PhysicalGlare::Settings& settings)
-{
-	settings = {};
-	ReadField(j, kThreshold, settings.ThresholdEV);
-	ReadField(j, kIntensity, settings.Intensity);
-	ReadField(j, kApertureMode, settings.ApertureMode);
-	ReadField(j, kApertureRotation, settings.ApertureRotation);
-	ReadField(j, kAdaptSpeed, settings.AdaptSpeed);
-	ReadField(j, kFFTResolution, settings.FFTResolution);
-	ReadField(j, kPaddingRatio, settings.PaddingRatio);
-	ReadField(j, kKernelScale, settings.KernelScale);
-	ReadField(j, kFresnelExponent, settings.FresnelExponent);
-	ReadField(j, kChromaticSpread, settings.ChromaticSpread);
-
-	const auto& lens = GroupOrEmpty(j, kLensMode);
-	ReadField(lens, kApertureBlades, settings.ApertureBlades);
-	ReadField(lens, kFStop, settings.FStop);
-	ReadField(lens, kSphericalAberration, settings.SphericalAberration);
-	ReadField(lens, kDustCount, settings.DustCount);
-	ReadField(lens, kDustSize, settings.DustSize);
-	ReadField(lens, kBladeRoughness, settings.BladeRoughnessAmp);
-	ReadField(lens, kRoughnessFrequency, settings.BladeRoughnessFreq);
-	ReadField(lens, kScratchCount, settings.ScratchCount);
-	ReadField(lens, kScratchOpacity, settings.ScratchOpacity);
-	ReadField(lens, kScratchLength, settings.ScratchLength);
-	ReadField(lens, kScratchWidth, settings.ScratchWidth);
-
-	const auto& pupil = GroupOrEmpty(j, kPupilMode);
-	ReadField(pupil, kScatterStrength, settings.ScatterStrength);
-	ReadField(pupil, kParticleCount, settings.ParticleCount);
-	ReadField(pupil, kParticleSize, settings.ParticleSize);
-	ReadField(pupil, kGratingCount, settings.GratingCount);
-	ReadField(pupil, kGratingStrength, settings.GratingStrength);
-	ReadField(pupil, kTearFilmStrength, settings.TearFilmStrength);
-	ReadField(pupil, kTearFilmSpeed, settings.TearFilmSpeed);
-	ReadField(pupil, kTearFilmComplexity, settings.TearFilmComplexity);
-	ReadField(pupil, kSutureBranches, settings.SutureBranches);
-	ReadField(pupil, kSutureStrength, settings.SutureStrength);
-	ReadField(pupil, kSutureWidth, settings.SutureWidth);
-	ReadField(pupil, kStarburstSpikes, settings.StarburstCount);
-	ReadField(pupil, kStarburstStrength, settings.StarburstStrength);
-	ReadField(pupil, kStarburstIrregularity, settings.StarburstIrregularity);
-
-	const auto& eyelashes = GroupOrEmpty(pupil, kEyelashes);
-	ReadField(eyelashes, kEnableEyelashes, settings.EnableEyelashes);
-	ReadField(eyelashes, kEyelashCount, settings.EyelashCount);
-	ReadField(eyelashes, kEyelashLength, settings.EyelashLength);
-	ReadField(eyelashes, kEyelashCurvature, settings.EyelashCurvature);
-
-	const auto& psf = GroupOrEmpty(j, kPSFShaping);
-	ReadField(psf, kPSFSharpness, settings.PSFSharpness);
-	ReadField(psf, kPSFNoiseFloor, settings.PSFNoiseFloor);
-}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	PhysicalGlare::Settings,
+	ThresholdEV,
+	Intensity,
+	ApertureMode,
+	ApertureBlades,
+	ApertureRotation,
+	ScatterStrength,
+	AdaptSpeed,
+	FFTResolution,
+	FresnelExponent,
+	ChromaticSpread,
+	FStop,
+	SphericalAberration,
+	KernelScale,
+	PSFSharpness,
+	PSFNoiseFloor,
+	PaddingRatio,
+	EnableEyelashes,
+	EyelashCount,
+	EyelashLength,
+	EyelashCurvature,
+	ParticleCount,
+	ParticleSize,
+	GratingCount,
+	GratingStrength,
+	TearFilmStrength,
+	TearFilmSpeed,
+	TearFilmComplexity,
+	SutureBranches,
+	SutureStrength,
+	SutureWidth,
+	StarburstCount,
+	StarburstStrength,
+	StarburstIrregularity,
+	DustCount,
+	DustSize,
+	BladeRoughnessFreq,
+	BladeRoughnessAmp,
+	ScratchCount,
+	ScratchOpacity,
+	ScratchLength,
+	ScratchWidth)
 
 void PhysicalGlare::DrawSettings()
 {

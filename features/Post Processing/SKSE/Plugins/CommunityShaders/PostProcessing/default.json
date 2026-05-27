@@ -2,307 +2,77 @@
     "Border": {
         "enabled": false,
         "settings": {
-            "Border Color": {
-                "r": 0,
-                "g": 0,
-                "b": 0
-            },
-            "Depth Threshold": 0,
-            "Scale (Top, Down, Left, Right)": {
-                "Top": 0,
-                "Down": 0,
-                "Left": 0,
-                "Right": 0
-            }
+            "BorderColor": [0.0, 0.0, 0.0],
+            "DepthThreshold": 0.0,
+            "Scale": [0.0, 0.0, 0.0, 0.0]
         }
     },
     "COD Bloom": {
         "enabled": true,
         "settings": {
-            "Threshold": -3,
-            "Upsampling Radius": 5,
-            "Mix": 0.009999999776482582,
-            "Mip Level Intensity": {
-                "Mip 1": 1,
-                "Mip 2": 1,
-                "Mip 3": 1,
-                "Mip 4": 1,
-                "Mip 5": 1,
-                "Mip 6": 1,
-                "Mip 7": 1,
-                "Mip 8": 0
-            }
+            "BlendFactor": 0.009999999776482582,
+            "MipBlendFactor": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0],
+            "Threshold": -3.0,
+            "UpsampleRadius": 5.0
         }
     },
     "Camera": {
         "enabled": false,
         "settings": {
-            "CA amount": 0.03999999910593033,
-            "Noise amount": 0.07999999821186066,
-            "Noise type": 0,
-            "Fisheye": {
-                "Enable Fisheye": false,
-                "FOV": 90,
-                "Crop": 0
-            }
+            "CAStrength": 0.03999999910593033,
+            "FECrop": 0.0,
+            "FEFoV": 90.0,
+            "NoiseStrength": 0.07999999821186066,
+            "NoiseType": 0,
+            "UseFE": false
         }
     },
     "Color Grading and Tone Mapping": {
         "enabled": true,
         "settings": {
-            "Skip LDR Color Grading": false,
-            "Skip LUT (Direct Color Grading)": false,
-            "Convert Linear to Log Before HDR Color Grading": true,
-            "Log Type": 0,
-            "Convert Log to Linear After HDR Color Grading": true,
-            "Input Gamma": 1,
-            "Output Gamma": 1,
-            "OKLCH Saturation": {
-                "Saturation": 1,
-                "Vibrance": 1,
-                "Hue Shift": 0
-            },
-            "Exposure/Temperature/Tint": {
-                "Exposure": 0,
-                "Temperature": 65,
-                "Tint": 0
-            },
-            "ASC CDL": {
-                "Slope": {
-                    "All": 1,
-                    "R": 1,
-                    "G": 1,
-                    "B": 1
-                },
-                "Power": {
-                    "All": 1,
-                    "R": 1,
-                    "G": 1,
-                    "B": 1
-                },
-                "Offset": {
-                    "All": 0,
-                    "R": 0,
-                    "G": 0,
-                    "B": 0
-                }
-            },
-            "OKLCH Color Mixer": {
-                "Reds": {
-                    "Hue Shift": 0,
-                    "Vibrance": 1,
-                    "Brightness": 0
-                },
-                "Oranges": {
-                    "Hue Shift": 0,
-                    "Vibrance": 1,
-                    "Brightness": 0
-                },
-                "Greens": {
-                    "Hue Shift": 0,
-                    "Vibrance": 1,
-                    "Brightness": 0
-                },
-                "Cyans": {
-                    "Hue Shift": 0,
-                    "Vibrance": 1,
-                    "Brightness": 0
-                },
-                "Blues": {
-                    "Hue Shift": 0,
-                    "Vibrance": 1,
-                    "Brightness": 0
-                },
-                "Purples": {
-                    "Hue Shift": 0,
-                    "Vibrance": 1,
-                    "Brightness": 0
-                },
-                "Magentas": {
-                    "Hue Shift": 0,
-                    "Vibrance": 1,
-                    "Brightness": 0
-                }
-            },
-            "Shadows/Midtones/Highlights": {
-                "Shadows Gain": {
-                    "All": 1,
-                    "R": 1,
-                    "G": 1,
-                    "B": 1
-                },
-                "Shadows Offset": {
-                    "All": 0,
-                    "R": 0,
-                    "G": 0,
-                    "B": 0
-                },
-                "Midtones Gain": {
-                    "All": 1,
-                    "R": 1,
-                    "G": 1,
-                    "B": 1
-                },
-                "Midtones Offset": {
-                    "All": 0,
-                    "R": 0,
-                    "G": 0,
-                    "B": 0
-                },
-                "Highlights Gain": {
-                    "All": 1,
-                    "R": 1,
-                    "G": 1,
-                    "B": 1
-                },
-                "Highlights Offset": {
-                    "All": 0,
-                    "R": 0,
-                    "G": 0,
-                    "B": 0
-                },
-                "Shadows/Midtones/Highlights Range": {
-                    "Shadows Start": 0,
-                    "Shadows End": 0.30000001192092896,
-                    "Highlights Start": 0.550000011920929,
-                    "Highlights End": 1
-                }
-            },
-            "Contrast": {
-                "Contrast": {
-                    "All": 1,
-                    "R": 1,
-                    "G": 1,
-                    "B": 1
-                },
-                "Pivot": {
-                    "All": 0.18,
-                    "R": 0.18000000715255737,
-                    "G": 0.18000000715255737,
-                    "B": 0.18000000715255737
-                }
-            },
-            "Lift Gamma Gain": {
-                "Lift": {
-                    "All": 0,
-                    "R": 0,
-                    "G": 0,
-                    "B": 0
-                },
-                "Gamma": {
-                    "All": 0,
-                    "R": 0,
-                    "G": 0,
-                    "B": 0
-                },
-                "Gain": {
-                    "All": 1,
-                    "R": 1,
-                    "G": 1,
-                    "B": 1
-                }
-            },
-            "Use OpenDRT": false,
-            "Tonemapper": "GT7",
-            "Tonemapper Settings": {
-                "Primary": {
-                    "x": 1,
-                    "y": 0,
-                    "z": 1000,
-                    "w": 0
-                },
-                "Secondary": {
-                    "x": 0,
-                    "y": 0,
-                    "z": 0,
-                    "w": 0
-                }
-            },
-            "Enable Tonemapping": true,
-            "Cinematic Blend": {
-                "Saturation": 0,
-                "Brightness": 0,
-                "Contrast": 0
-            },
-            "Fade Blend": 1,
-            "Tint Blend": 0,
-            "Working Color Space": 5,
-            "ODRT1": {
-                "input_color_space": 0,
-                "output_encoding": 0,
-                "clamp": 1,
-                "tn_su": 1,
-                "tn_Lp": 100,
-                "tn_gb": 0.13,
-                "pt_hdr": 0.5,
-                "tn_Lg": 10,
-                "tn_con": 1.66,
-                "tn_sh": 0.5,
-                "tn_toe": 0.003,
-                "tn_off": 0.005,
-                "tn_hcon_enable": 0,
-                "tn_hcon": 0,
-                "tn_hcon_pv": 1,
-                "tn_hcon_st": 4,
-                "tn_lcon_enable": 0,
-                "tn_lcon": 0,
-                "tn_lcon_w": 0.5,
-                "cwp": 2,
-                "cwp_lm": 0.25,
-                "rs_sa": 0.35,
-                "rs_rw": 0.25,
-                "rs_bw": 0.55,
-                "pt_enable": 1,
-                "pt_lml": 0.25,
-                "pt_lml_r": 0.5,
-                "pt_lml_g": 0,
-                "pt_lml_b": 0.1,
-                "pt_lmh": 0.25,
-                "pt_lmh_r": 0.5,
-                "pt_lmh_b": 0,
-                "ptl_enable": 1,
-                "ptl_c": 0.06,
-                "ptl_m": 0.08,
-                "ptl_y": 0.06,
-                "ptm_enable": 1,
-                "ptm_low": 0.4,
-                "ptm_low_rng": 0.25,
-                "ptm_low_st": 0.5,
-                "ptm_high": -0.8,
-                "ptm_high_rng": 0.35,
-                "ptm_high_st": 0.4
-            },
-            "ODRT2": {
-                "brl_enable": 1,
-                "brl": 0,
-                "brl_r": -2.5,
-                "brl_g": -1.5,
-                "brl_b": -1.5,
-                "brl_rng": 0.5,
-                "brl_st": 0.35,
-                "brlp_enable": 1,
-                "brlp": -0.5,
-                "brlp_r": -1.25,
-                "brlp_g": -1.25,
-                "brlp_b": -0.25,
-                "hc_enable": 1,
-                "hc_r": 1,
-                "hc_r_rng": 0.3,
-                "hs_rgb_enable": 1,
-                "hs_r": 0.6,
-                "hs_r_rng": 0.6,
-                "hs_g": 0.35,
-                "hs_g_rng": 1,
-                "hs_b": 0.66,
-                "hs_b_rng": 1,
-                "hs_cmy_enable": 1,
-                "hs_c": 0.25,
-                "hs_c_rng": 1,
-                "hs_m": 0,
-                "hs_m_rng": 1,
-                "hs_y": 0,
-                "hs_y_rng": 1
-            }
+            "cdlOffset": [0.0, 0.0, 0.0, 0.0],
+            "contrast": [1.0, 1.0, 1.0, 0.0],
+            "currentTonemapper": "GT7",
+            "enableTonemap": true,
+            "exposureTemperatureTint": [1.0, 65.0, 0.0, 0.0],
+            "gain": [1.0, 1.0, 1.0, 1.0],
+            "gameCinematicBlend": [0.0, 0.0, 0.0],
+            "gameFadeBlend": 1.0,
+            "gameTintBlend": 0.0,
+            "gamma": [0.0, 0.0, 0.0, 0.0],
+            "highlightsGain": [1.0, 1.0, 1.0, 0.0],
+            "highlightsOffset": [0.0, 0.0, 0.0, 0.0],
+            "inOutGamma": [1.0, 1.0, 1.0, 1.0],
+            "invertLog": true,
+            "lift": [0.0, 0.0, 0.0, 0.0],
+            "logType": 0,
+            "midtonesGain": [1.0, 1.0, 1.0, 0.0],
+            "midtonesOffset": [0.0, 0.0, 0.0, 0.0],
+            "oklchColorMixer": [
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0]
+            ],
+            "oklchSaturation": [1.0, 1.0, 0.0, 0.0],
+            "pivot": [0.18000000715255737, 0.18000000715255737, 0.18000000715255737, 0.0],
+            "power": [1.0, 1.0, 1.0, 0.0],
+            "processColorSpace": 5,
+            "shadowsGain": [1.0, 1.0, 1.0, 0.0],
+            "shadowsHighlightsRange": [0.0, 0.30000001192092896, 0.550000011920929, 1.0],
+            "shadowsOffset": [0.0, 0.0, 0.0, 0.0],
+            "skipLDR": false,
+            "skipLUT": false,
+            "slope": [1.0, 1.0, 1.0, 0.0],
+            "tonemapParams": [
+                [1.0, 9.999999747378752e-5, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0]
+            ],
+            "useLog": true,
+            "useOpenDrts": false
         }
     },
     "Composite": {
@@ -312,267 +82,195 @@
     "Depth of Field": {
         "enabled": true,
         "settings": {
-            "Auto Focus": true,
-            "Focus Point X": 0.5,
-            "Focus Point Y": 0.5,
-            "Transition Speed": 0.5,
-            "Manual Focus": 0.4000000059604645,
-            "Focal Length": 50,
-            "F-Number": 5.599999904632568,
-            "Far Plane Max Blur": 1,
-            "Near Plane Max Blur": 0.20000000298023224,
-            "Blur Quality": 7,
-            "Near-Far Plane Distance Compensation": 1,
-            "Bokeh Busy Factor": 0.5,
-            "Petzval Strength": 0,
-            "Highlight Boost": 0,
-            "Post Blur Smoothing": 0,
-            "Highlight Custom Shape": 0,
-            "Highlight Shape Rotation": 0,
-            "Target Focus": true,
-            "Target Focus Focal Length": 50,
-            "Console Selection": true
+            "AutoFocus": true,
+            "BlurQuality": 7.0,
+            "BokehBusyFactor": 0.5,
+            "FNumber": 5.599999904632568,
+            "FarPlaneMaxBlur": 1.0,
+            "FocalLength": 50.0,
+            "FocusCoord": [0.5, 0.5],
+            "HighlightBoost": 0.0,
+            "HighlightShape": 0,
+            "HighlightShapeRotationAngle": 0.0,
+            "ManualFocusPlane": 0.4000000059604645,
+            "NearFarDistanceCompensation": 1.0,
+            "NearPlaneMaxBlur": 0.20000000298023224,
+            "PetzvalStrength": 0.0,
+            "PostBlurSmoothing": 0.0,
+            "TransitionSpeed": 0.5,
+            "consoleSelection": true,
+            "targetFocus": true,
+            "targetFocusFocalLength": 50.0
         }
     },
     "Histogram Auto Exposure": {
         "enabled": true,
         "settings": {
-            "Exposure Compensation": 0,
-            "Adaptation Speed": 1.5,
-            "Focus Area Width": 0.6000000238418579,
-            "Focus Area Height": 0.6000000238418579,
-            "Adaptation Range Min": -5,
-            "Adaptation Range Max": 3,
-            "Purkinje Effect": {
-                "Max Strength": 0,
-                "Fade In EV": -1.5,
-                "Max Effect EV": -4
-            }
+            "AdaptArea": [0.6000000238418579, 0.6000000238418579],
+            "AdaptSpeed": 1.5,
+            "AdaptationRange": [-5.0, 3.0],
+            "ExposureCompensation": 0.0,
+            "PurkinjeMaxEV": -4.0,
+            "PurkinjeStartEV": -1.5,
+            "PurkinjeStrength": 0.0
         }
     },
     "LUT": {
         "enabled": false,
         "settings": {
-            "LUT Texture Path": "",
-            "Input Min": {
-                "r": 0,
-                "g": 0,
-                "b": 0
-            },
-            "Input Max": {
-                "r": 1,
-                "g": 1,
-                "b": 1
-            }
+            "InputMax": [1.0, 1.0, 1.0],
+            "InputMin": [0.0, 0.0, 0.0],
+            "LutPath": ""
         }
     },
     "Lens Flare": {
         "enabled": true,
         "settings": {
+            "ApertureBlades": 6,
+            "ApertureRotation": 0.0,
+            "FFTResolution": 512,
+            "FStop": 14.300000190734863,
+            "GLocalMask": true,
+            "GhostChromaShift": 0.014999999664723873,
+            "GhostModeInt": 1,
+            "GhostStrength": 0.30000001192092896,
+            "Ghosts": [
+                {
+                    "Color": [1.0, 0.800000011920929, 0.4000000059604645, 1.0],
+                    "Enabled": true,
+                    "KernelScale": 1.0,
+                    "Scale": -1.5
+                },
+                {
+                    "Color": [1.0, 1.0, 0.6000000238418579, 1.0],
+                    "Enabled": true,
+                    "KernelScale": 1.0,
+                    "Scale": 2.5
+                },
+                {
+                    "Color": [0.800000011920929, 0.800000011920929, 1.0, 1.0],
+                    "Enabled": true,
+                    "KernelScale": 1.0,
+                    "Scale": -5.0
+                },
+                {
+                    "Color": [0.5, 1.0, 0.4000000059604645, 1.0],
+                    "Enabled": true,
+                    "KernelScale": 1.0,
+                    "Scale": 10.0
+                },
+                {
+                    "Color": [0.5, 0.800000011920929, 1.0, 1.0],
+                    "Enabled": true,
+                    "KernelScale": 1.0,
+                    "Scale": 0.699999988079071
+                },
+                {
+                    "Color": [0.8999999761581421, 1.0, 0.800000011920929, 1.0],
+                    "Enabled": true,
+                    "KernelScale": 1.0,
+                    "Scale": -0.4000000059604645
+                },
+                {
+                    "Color": [1.0, 0.800000011920929, 0.4000000059604645, 1.0],
+                    "Enabled": true,
+                    "KernelScale": 1.0,
+                    "Scale": -0.20000000298023224
+                },
+                {
+                    "Color": [0.8999999761581421, 0.699999988079071, 0.699999988079071, 1.0],
+                    "Enabled": true,
+                    "KernelScale": 1.0,
+                    "Scale": -0.10000000149011612
+                }
+            ],
+            "HaloChromaShift": 0.014999999664723873,
+            "HaloCompression": 0.6499999761581421,
+            "HaloRadius": 0.5,
+            "HaloStrength": 0.20000000298023224,
+            "HaloWidth": 0.5,
             "Intensity": 0.25,
-            "Threshold (EV)": 0,
-            "Threshold Range": 1,
-            "Ghost Settings": {
-                "Ghost Mode": 1,
-                "Aperture Blades": 6,
-                "F-Stop": 14.300000190734863,
-                "Aperture Rotation": 0,
-                "FFT Resolution": 512,
-                "Kernel Scale": 0.10000000149011612,
-                "Ghost Strength": 0.30000001192092896,
-                "Ghost Chroma Shift": 0.014999999664723873,
-                "Non-intrusive Ghosts": true,
-                "Custom Ghost Colors & Scales": {
-                    "Ghost 1": {
-                        "Color": {
-                            "r": 1,
-                            "g": 0.800000011920929,
-                            "b": 0.4000000059604645,
-                            "a": 1
-                        },
-                        "Scale": -1.5,
-                        "Enabled": true,
-                        "Kernel Scale": 1
-                    },
-                    "Ghost 2": {
-                        "Color": {
-                            "r": 1,
-                            "g": 1,
-                            "b": 0.6000000238418579,
-                            "a": 1
-                        },
-                        "Scale": 2.5,
-                        "Enabled": true,
-                        "Kernel Scale": 1
-                    },
-                    "Ghost 3": {
-                        "Color": {
-                            "r": 0.800000011920929,
-                            "g": 0.800000011920929,
-                            "b": 1,
-                            "a": 1
-                        },
-                        "Scale": -5,
-                        "Enabled": true,
-                        "Kernel Scale": 1
-                    },
-                    "Ghost 4": {
-                        "Color": {
-                            "r": 0.5,
-                            "g": 1,
-                            "b": 0.4000000059604645,
-                            "a": 1
-                        },
-                        "Scale": 10,
-                        "Enabled": true,
-                        "Kernel Scale": 1
-                    },
-                    "Ghost 5": {
-                        "Color": {
-                            "r": 0.5,
-                            "g": 0.800000011920929,
-                            "b": 1,
-                            "a": 1
-                        },
-                        "Scale": 0.699999988079071,
-                        "Enabled": true,
-                        "Kernel Scale": 1
-                    },
-                    "Ghost 6": {
-                        "Color": {
-                            "r": 0.8999999761581421,
-                            "g": 1,
-                            "b": 0.800000011920929,
-                            "a": 1
-                        },
-                        "Scale": -0.4000000059604645,
-                        "Enabled": true,
-                        "Kernel Scale": 1
-                    },
-                    "Ghost 7": {
-                        "Color": {
-                            "r": 1,
-                            "g": 0.800000011920929,
-                            "b": 0.4000000059604645,
-                            "a": 1
-                        },
-                        "Scale": -0.20000000298023224,
-                        "Enabled": true,
-                        "Kernel Scale": 1
-                    },
-                    "Ghost 8": {
-                        "Color": {
-                            "r": 0.8999999761581421,
-                            "g": 0.699999988079071,
-                            "b": 0.699999988079071,
-                            "a": 1
-                        },
-                        "Scale": -0.10000000149011612,
-                        "Enabled": true,
-                        "Kernel Scale": 1
-                    }
-                }
-            },
-            "Halo Settings": {
-                "Halo Strength": 0.20000000298023224,
-                "Halo Radius": 0.5,
-                "Halo Width": 0.5,
-                "Halo Compression": 0.6499999761581421,
-                "Halo Chroma Shift": 0.014999999664723873
-            },
-            "Color Tint": {
-                "Tint": {
-                    "r": 1,
-                    "g": 0.8500000238418579,
-                    "b": 0.699999988079071
-                }
-            }
+            "KernelScale": 0.10000000149011612,
+            "ThresholdEV": 0.0,
+            "ThresholdRange": 1.0,
+            "Tint": [1.0, 0.8500000238418579, 0.699999988079071]
         }
     },
     "Local Exposure": {
         "enabled": true,
         "settings": {
+            "BoostLocalContrast": false,
+            "DisplayMip": 2,
             "Exposure": 0.699999988079071,
-            "Shadow Recovery": 1,
-            "Highlight Recovery": 1.5,
-            "Exposure Preference": 5,
-            "Coarse Scale (Mip)": 6,
-            "Detail Scale (Display Mip)": 2,
-            "Boost Local Contrast": false
+            "ExposurePreferenceSigma": 5.0,
+            "Highlights": 1.5,
+            "Mip": 6,
+            "Shadows": 1.0
         }
     },
     "Motion Blur": {
         "enabled": false,
         "settings": {
-            "Motion Length": 4,
-            "Samples": 8
+            "SampleCount": 8,
+            "ScalePreset": 4,
+            "VelocityScale": 300.0
         }
     },
     "Physical Glare": {
         "enabled": false,
         "settings": {
-            "Threshold": 5,
+            "AdaptSpeed": 3.0,
+            "ApertureBlades": 6,
+            "ApertureMode": 0,
+            "ApertureRotation": 0.0,
+            "BladeRoughnessAmp": 0.30000001192092896,
+            "BladeRoughnessFreq": 20,
+            "ChromaticSpread": 1.0,
+            "DustCount": 295,
+            "DustSize": 2.4000000953674316,
+            "EnableEyelashes": true,
+            "EyelashCount": 40,
+            "EyelashCurvature": 0.30000001192092896,
+            "EyelashLength": 0.4000000059604645,
+            "FFTResolution": 1024,
+            "FStop": 2.799999952316284,
+            "FresnelExponent": 0.0,
+            "GratingCount": 200,
+            "GratingStrength": 0.5,
             "Intensity": 0.10000000149011612,
-            "Aperture Mode": 0,
-            "Aperture Rotation": 0,
-            "Adapt Speed": 3,
-            "FFT Resolution": 1024,
-            "Padding Ratio": 0.25,
-            "Kernel Scale": 1,
-            "Fresnel Exponent": 0,
-            "Chromatic Spread": 1,
-            "Lens (N-polygon)": {
-                "Aperture Blades": 6,
-                "F-Stop": 2.799999952316284,
-                "Spherical Aberration": 0,
-                "Dust Count": 295,
-                "Dust Size": 2.4000000953674316,
-                "Blade Roughness": 0.30000001192092896,
-                "Roughness Frequency": 20,
-                "Scratch Count": 4,
-                "Scratch Opacity": 0.3100000023841858,
-                "Scratch Length": 0.7900000214576721,
-                "Scratch Width": 2
-            },
-            "Pupil (Circle)": {
-                "Scatter Strength": 1,
-                "Particle Count": 200,
-                "Particle Size": 1.5,
-                "Grating Count": 200,
-                "Grating Strength": 0.5,
-                "Tear Film Strength": 0.7799999713897705,
-                "Tear Film Speed": 2,
-                "Tear Film Complexity": 8,
-                "Suture Branches": 3,
-                "Suture Strength": 0.5,
-                "Suture Width": 2,
-                "Starburst Spikes": 48,
-                "Starburst Strength": 0.800000011920929,
-                "Starburst Irregularity": 0.30000001192092896,
-                "Eyelashes": {
-                    "Enable Eyelashes": true,
-                    "Eyelash Count": 40,
-                    "Eyelash Length": 0.4000000059604645,
-                    "Eyelash Curvature": 0.30000001192092896
-                }
-            },
-            "PSF Shaping": {
-                "PSF Sharpness": 0.49000000953674316,
-                "PSF Noise Floor": 0.0010000000474974513
-            }
+            "KernelScale": 1.0,
+            "PSFNoiseFloor": 0.0010000000474974513,
+            "PSFSharpness": 0.49000000953674316,
+            "PaddingRatio": 0.25,
+            "ParticleCount": 200,
+            "ParticleSize": 1.5,
+            "ScatterStrength": 1.0,
+            "ScratchCount": 4,
+            "ScratchLength": 0.7900000214576721,
+            "ScratchOpacity": 0.3100000023841858,
+            "ScratchWidth": 2.0,
+            "SphericalAberration": 0.0,
+            "StarburstCount": 48,
+            "StarburstIrregularity": 0.30000001192092896,
+            "StarburstStrength": 0.800000011920929,
+            "SutureBranches": 3,
+            "SutureStrength": 0.5,
+            "SutureWidth": 2.0,
+            "TearFilmComplexity": 8,
+            "TearFilmSpeed": 2.0,
+            "TearFilmStrength": 0.7799999713897705,
+            "ThresholdEV": 5.0
         }
     },
     "Vignette": {
         "enabled": true,
         "settings": {
-            "Focal Length": 1,
-            "Anamorphic Squeeze": 1,
-            "Power": 3
+            "FocalLength": 1.0,
+            "Power": 3.0
         }
     },
     "ppsettings": {
-        "Disable Vanilla Tonemapping": 1,
-        "Bypass": false
+        "DisableVanillaTonemapping": 1
     },
     "preset_name": "default"
 }

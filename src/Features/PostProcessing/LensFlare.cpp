@@ -47,122 +47,43 @@ namespace
 		       HasUltraKernelChanged(oldSettings, newSettings);
 	}
 
-	constexpr auto kIntensity = "Intensity";
-	constexpr auto kThresholdEV = "Threshold (EV)";
-	constexpr auto kThresholdRange = "Threshold Range";
-	constexpr auto kGhostSettings = "Ghost Settings";
-	constexpr auto kGhostMode = "Ghost Mode";
-	constexpr auto kApertureBlades = "Aperture Blades";
-	constexpr auto kFStop = "F-Stop";
-	constexpr auto kApertureRotation = "Aperture Rotation";
-	constexpr auto kFFTResolution = "FFT Resolution";
-	constexpr auto kKernelScale = "Kernel Scale";
-	constexpr auto kGhostStrength = "Ghost Strength";
-	constexpr auto kGhostChromaShift = "Ghost Chroma Shift";
-	constexpr auto kNonIntrusiveGhosts = "Non-intrusive Ghosts";
-	constexpr auto kCustomGhosts = "Custom Ghost Colors & Scales";
-	constexpr auto kHaloSettings = "Halo Settings";
-	constexpr auto kHaloStrength = "Halo Strength";
-	constexpr auto kHaloRadius = "Halo Radius";
-	constexpr auto kHaloWidth = "Halo Width";
-	constexpr auto kHaloCompression = "Halo Compression";
-	constexpr auto kHaloChromaShift = "Halo Chroma Shift";
-	constexpr auto kColorTint = "Color Tint";
-	constexpr auto kTint = "Tint";
 }
 
-void to_json(json& j, const LensFlare::GhostSettings& settings)
-{
-	j = {
-		{ "Color", { { "r", settings.Color[0] }, { "g", settings.Color[1] }, { "b", settings.Color[2] }, { "a", settings.Color[3] } } },
-		{ "Scale", settings.Scale },
-		{ "Enabled", settings.Enabled },
-		{ kKernelScale, settings.KernelScale }
-	};
-}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	LensFlare::Settings,
+	Intensity,
+	ThresholdEV,
+	ThresholdRange,
+	GhostStrength,
+	GhostChromaShift,
+	GhostModeInt,
+	FFTResolution,
+	KernelScale,
+	FStop,
+	ApertureBlades,
+	ApertureRotation,
+	HaloStrength,
+	HaloRadius,
+	HaloWidth,
+	HaloCompression,
+	HaloChromaShift,
+	Tint,
+	GLocalMask,
+	Ghosts)
 
-void from_json(const json& j, LensFlare::GhostSettings& settings)
-{
-	if (auto it = j.find("Color"); it != j.end() && it->is_object()) {
-		settings.Color[0] = it->value("r", settings.Color[0]);
-		settings.Color[1] = it->value("g", settings.Color[1]);
-		settings.Color[2] = it->value("b", settings.Color[2]);
-		settings.Color[3] = it->value("a", settings.Color[3]);
-	}
-	settings.Scale = j.value("Scale", settings.Scale);
-	settings.Enabled = j.value("Enabled", settings.Enabled);
-	settings.KernelScale = j.value(kKernelScale, settings.KernelScale);
-}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	LensFlare::GhostSettings,
+	Color,
+	Scale,
+	Enabled,
+	KernelScale)
 
-void to_json(json& j, const LensFlare::Settings& settings)
-{
-	json ghosts = json::object();
-	for (size_t i = 0; i < settings.Ghosts.size(); ++i)
-		ghosts[std::format("Ghost {}", i + 1)] = settings.Ghosts[i];
-
-	j = {
-		{ kIntensity, settings.Intensity },
-		{ kThresholdEV, settings.ThresholdEV },
-		{ kThresholdRange, settings.ThresholdRange },
-		{ kGhostSettings, {
-			{ kGhostMode, settings.GhostModeInt },
-			{ kApertureBlades, settings.ApertureBlades },
-			{ kFStop, settings.FStop },
-			{ kApertureRotation, settings.ApertureRotation },
-			{ kFFTResolution, settings.FFTResolution },
-			{ kKernelScale, settings.KernelScale },
-			{ kGhostStrength, settings.GhostStrength },
-			{ kGhostChromaShift, settings.GhostChromaShift },
-			{ kNonIntrusiveGhosts, settings.GLocalMask },
-			{ kCustomGhosts, std::move(ghosts) } } },
-		{ kHaloSettings, {
-			{ kHaloStrength, settings.HaloStrength },
-			{ kHaloRadius, settings.HaloRadius },
-			{ kHaloWidth, settings.HaloWidth },
-			{ kHaloCompression, settings.HaloCompression },
-			{ kHaloChromaShift, settings.HaloChromaShift } } },
-		{ kColorTint, { { kTint, { { "r", settings.Tint[0] }, { "g", settings.Tint[1] }, { "b", settings.Tint[2] } } } } }
-	};
-}
-
-void from_json(const json& j, LensFlare::Settings& settings)
-{
-	settings = {};
-	settings.Intensity = j.value(kIntensity, settings.Intensity);
-	settings.ThresholdEV = j.value(kThresholdEV, settings.ThresholdEV);
-	settings.ThresholdRange = j.value(kThresholdRange, settings.ThresholdRange);
-	if (auto it = j.find(kGhostSettings); it != j.end() && it->is_object()) {
-		settings.GhostModeInt = it->value(kGhostMode, settings.GhostModeInt);
-		settings.ApertureBlades = it->value(kApertureBlades, settings.ApertureBlades);
-		settings.FStop = it->value(kFStop, settings.FStop);
-		settings.ApertureRotation = it->value(kApertureRotation, settings.ApertureRotation);
-		settings.FFTResolution = it->value(kFFTResolution, settings.FFTResolution);
-		settings.KernelScale = it->value(kKernelScale, settings.KernelScale);
-		settings.GhostStrength = it->value(kGhostStrength, settings.GhostStrength);
-		settings.GhostChromaShift = it->value(kGhostChromaShift, settings.GhostChromaShift);
-		settings.GLocalMask = it->value(kNonIntrusiveGhosts, settings.GLocalMask);
-		if (auto ghosts = it->find(kCustomGhosts); ghosts != it->end() && ghosts->is_object()) {
-			for (size_t i = 0; i < settings.Ghosts.size(); ++i) {
-				if (auto ghost = ghosts->find(std::format("Ghost {}", i + 1)); ghost != ghosts->end())
-					ghost->get_to(settings.Ghosts[i]);
-			}
-		}
-	}
-	if (auto it = j.find(kHaloSettings); it != j.end() && it->is_object()) {
-		settings.HaloStrength = it->value(kHaloStrength, settings.HaloStrength);
-		settings.HaloRadius = it->value(kHaloRadius, settings.HaloRadius);
-		settings.HaloWidth = it->value(kHaloWidth, settings.HaloWidth);
-		settings.HaloCompression = it->value(kHaloCompression, settings.HaloCompression);
-		settings.HaloChromaShift = it->value(kHaloChromaShift, settings.HaloChromaShift);
-	}
-	if (auto group = j.find(kColorTint); group != j.end() && group->is_object()) {
-		if (auto it = group->find(kTint); it != group->end() && it->is_object()) {
-			settings.Tint[0] = it->value("r", settings.Tint[0]);
-			settings.Tint[1] = it->value("g", settings.Tint[1]);
-			settings.Tint[2] = it->value("b", settings.Tint[2]);
-		}
-	}
-}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	LensFlare::DebugSettings,
+	blurIterations,
+	disableThreshold,
+	disableGhosts,
+	disableBlur)
 
 void LensFlare::DrawSettings()
 {

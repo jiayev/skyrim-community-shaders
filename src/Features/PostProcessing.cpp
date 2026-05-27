@@ -10,24 +10,13 @@
 
 namespace
 {
-	constexpr auto kBypass = "Bypass";
-	constexpr auto kDisableVanillaTonemapping = "Disable Vanilla Tonemapping";
 	constexpr auto kCopyShaderPath = L"Data\\Shaders\\PostProcessing\\copy.cs.hlsl";
 	constexpr auto kComputeShaderModel = "cs_5_0";
 }
 
-void to_json(json& j, const PostProcessing::Settings& settings)
-{
-	j = {
-		{ kDisableVanillaTonemapping, settings.DisableVanillaTonemapping }
-	};
-}
-
-void from_json(const json& j, PostProcessing::Settings& settings)
-{
-	settings = {};
-	settings.DisableVanillaTonemapping = j.value(kDisableVanillaTonemapping, settings.DisableVanillaTonemapping);
-}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	PostProcessing::Settings,
+	DisableVanillaTonemapping)
 
 void PostProcessing::DrawSettings()
 {
@@ -228,7 +217,6 @@ void PostProcessing::ProcessSettings(json& o_json)
 
 	if (o_json.contains("ppsettings")) {
 		settings = o_json["ppsettings"];
-		bypass = o_json["ppsettings"].value(kBypass, bypass);
 	}
 }
 
@@ -251,7 +239,6 @@ void PostProcessing::SaveSettings(json& o_json)
 	}
 
 	o_json["ppsettings"] = settings;
-	o_json["ppsettings"][kBypass] = bypass;
 }
 
 std::vector<std::string> PostProcessing::LoadPresets()

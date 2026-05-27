@@ -3,39 +3,12 @@
 #include "State.h"
 #include "Util.h"
 
-namespace
-{
-	constexpr auto kThreshold = "Threshold";
-	constexpr auto kUpsamplingRadius = "Upsampling Radius";
-	constexpr auto kMix = "Mix";
-	constexpr auto kMipLevelIntensity = "Mip Level Intensity";
-}
-
-void to_json(json& j, const CODBloom::Settings& settings)
-{
-	json mipBlendFactor = json::object();
-	for (size_t i = 0; i < settings.MipBlendFactor.size(); ++i)
-		mipBlendFactor[std::format("Mip {}", i + 1)] = settings.MipBlendFactor[i];
-
-	j = {
-		{ kThreshold, settings.Threshold },
-		{ kUpsamplingRadius, settings.UpsampleRadius },
-		{ kMix, settings.BlendFactor },
-		{ kMipLevelIntensity, std::move(mipBlendFactor) }
-	};
-}
-
-void from_json(const json& j, CODBloom::Settings& settings)
-{
-	settings = {};
-	settings.Threshold = j.value(kThreshold, settings.Threshold);
-	settings.UpsampleRadius = j.value(kUpsamplingRadius, settings.UpsampleRadius);
-	settings.BlendFactor = j.value(kMix, settings.BlendFactor);
-	if (auto it = j.find(kMipLevelIntensity); it != j.end() && it->is_object()) {
-		for (size_t i = 0; i < settings.MipBlendFactor.size(); ++i)
-			settings.MipBlendFactor[i] = it->value(std::format("Mip {}", i + 1), settings.MipBlendFactor[i]);
-	}
-}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	CODBloom::Settings,
+	Threshold,
+	UpsampleRadius,
+	BlendFactor,
+	MipBlendFactor)
 
 void CODBloom::DrawSettings()
 {

@@ -8,80 +8,27 @@
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 
-namespace
-{
-	constexpr auto kAutoFocus = "Auto Focus";
-	constexpr auto kFocusPointX = "Focus Point X";
-	constexpr auto kFocusPointY = "Focus Point Y";
-	constexpr auto kTransitionSpeed = "Transition Speed";
-	constexpr auto kManualFocus = "Manual Focus";
-	constexpr auto kFocalLength = "Focal Length";
-	constexpr auto kFNumber = "F-Number";
-	constexpr auto kFarPlaneMaxBlur = "Far Plane Max Blur";
-	constexpr auto kNearPlaneMaxBlur = "Near Plane Max Blur";
-	constexpr auto kBlurQuality = "Blur Quality";
-	constexpr auto kNearFarPlaneDistanceCompensation = "Near-Far Plane Distance Compensation";
-	constexpr auto kHighlightBoost = "Highlight Boost";
-	constexpr auto kBokehBusyFactor = "Bokeh Busy Factor";
-	constexpr auto kPostBlurSmoothing = "Post Blur Smoothing";
-	constexpr auto kPetzvalStrength = "Petzval Strength";
-	constexpr auto kHighlightCustomShape = "Highlight Custom Shape";
-	constexpr auto kHighlightShapeRotation = "Highlight Shape Rotation";
-	constexpr auto kTargetFocus = "Target Focus";
-	constexpr auto kTargetFocusFocalLength = "Target Focus Focal Length";
-	constexpr auto kConsoleSelection = "Console Selection";
-}
-
-void to_json(json& j, const DoF::Settings& settings)
-{
-	j = {
-		{ kAutoFocus, settings.AutoFocus },
-		{ kFocusPointX, settings.FocusCoord.x },
-		{ kFocusPointY, settings.FocusCoord.y },
-		{ kTransitionSpeed, settings.TransitionSpeed },
-		{ kManualFocus, settings.ManualFocusPlane },
-		{ kFocalLength, settings.FocalLength },
-		{ kFNumber, settings.FNumber },
-		{ kFarPlaneMaxBlur, settings.FarPlaneMaxBlur },
-		{ kNearPlaneMaxBlur, settings.NearPlaneMaxBlur },
-		{ kBlurQuality, settings.BlurQuality },
-		{ kNearFarPlaneDistanceCompensation, settings.NearFarDistanceCompensation },
-		{ kBokehBusyFactor, settings.BokehBusyFactor },
-		{ kPetzvalStrength, settings.PetzvalStrength },
-		{ kHighlightBoost, settings.HighlightBoost },
-		{ kPostBlurSmoothing, settings.PostBlurSmoothing },
-		{ kHighlightCustomShape, settings.HighlightShape },
-		{ kHighlightShapeRotation, settings.HighlightShapeRotationAngle },
-		{ kTargetFocus, settings.targetFocus },
-		{ kTargetFocusFocalLength, settings.targetFocusFocalLength },
-		{ kConsoleSelection, settings.consoleSelection }
-	};
-}
-
-void from_json(const json& j, DoF::Settings& settings)
-{
-	settings = {};
-	settings.AutoFocus = j.value(kAutoFocus, settings.AutoFocus);
-	settings.FocusCoord.x = j.value(kFocusPointX, settings.FocusCoord.x);
-	settings.FocusCoord.y = j.value(kFocusPointY, settings.FocusCoord.y);
-	settings.TransitionSpeed = j.value(kTransitionSpeed, settings.TransitionSpeed);
-	settings.ManualFocusPlane = j.value(kManualFocus, settings.ManualFocusPlane);
-	settings.FocalLength = j.value(kFocalLength, settings.FocalLength);
-	settings.FNumber = j.value(kFNumber, settings.FNumber);
-	settings.FarPlaneMaxBlur = j.value(kFarPlaneMaxBlur, settings.FarPlaneMaxBlur);
-	settings.NearPlaneMaxBlur = j.value(kNearPlaneMaxBlur, settings.NearPlaneMaxBlur);
-	settings.BlurQuality = j.value(kBlurQuality, settings.BlurQuality);
-	settings.NearFarDistanceCompensation = j.value(kNearFarPlaneDistanceCompensation, settings.NearFarDistanceCompensation);
-	settings.BokehBusyFactor = j.value(kBokehBusyFactor, settings.BokehBusyFactor);
-	settings.PetzvalStrength = j.value(kPetzvalStrength, settings.PetzvalStrength);
-	settings.HighlightBoost = j.value(kHighlightBoost, settings.HighlightBoost);
-	settings.PostBlurSmoothing = j.value(kPostBlurSmoothing, settings.PostBlurSmoothing);
-	settings.HighlightShape = j.value(kHighlightCustomShape, settings.HighlightShape);
-	settings.HighlightShapeRotationAngle = j.value(kHighlightShapeRotation, settings.HighlightShapeRotationAngle);
-	settings.targetFocus = j.value(kTargetFocus, settings.targetFocus);
-	settings.targetFocusFocalLength = j.value(kTargetFocusFocalLength, settings.targetFocusFocalLength);
-	settings.consoleSelection = j.value(kConsoleSelection, settings.consoleSelection);
-}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	DoF::Settings,
+	AutoFocus,
+	TransitionSpeed,
+	FocusCoord,
+	ManualFocusPlane,
+	FocalLength,
+	FNumber,
+	FarPlaneMaxBlur,
+	NearPlaneMaxBlur,
+	BlurQuality,
+	NearFarDistanceCompensation,
+	HighlightBoost,
+	BokehBusyFactor,
+	PostBlurSmoothing,
+	PetzvalStrength,
+	HighlightShape,
+	HighlightShapeRotationAngle,
+	targetFocus,
+	targetFocusFocalLength,
+	consoleSelection)
 
 void DoF::DrawSettings()
 {

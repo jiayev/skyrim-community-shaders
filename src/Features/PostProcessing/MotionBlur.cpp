@@ -5,26 +5,11 @@
 
 #pragma warning(disable: 4324)
 
-namespace
-{
-	constexpr auto kMotionLength = "Motion Length";
-	constexpr auto kSamples = "Samples";
-}
-
-void to_json(json& j, const MotionBlur::Settings& settings)
-{
-	j = {
-		{ kMotionLength, static_cast<int>(settings.ScalePreset) },
-		{ kSamples, settings.SampleCount }
-	};
-}
-
-void from_json(const json& j, MotionBlur::Settings& settings)
-{
-	settings = {};
-	settings.ScalePreset = static_cast<MotionBlur::MotionScale>(j.value(kMotionLength, static_cast<int>(settings.ScalePreset)));
-	settings.SampleCount = j.value(kSamples, settings.SampleCount);
-}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	MotionBlur::Settings,
+	VelocityScale,
+	SampleCount,
+	ScalePreset)
 
 void MotionBlur::SetupResources()
 {

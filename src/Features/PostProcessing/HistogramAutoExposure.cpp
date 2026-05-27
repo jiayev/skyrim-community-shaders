@@ -4,51 +4,15 @@
 #include "State.h"
 #include "Util.h"
 
-namespace
-{
-	constexpr auto kExposureCompensation = "Exposure Compensation";
-	constexpr auto kAdaptationSpeed = "Adaptation Speed";
-	constexpr auto kFocusAreaWidth = "Focus Area Width";
-	constexpr auto kFocusAreaHeight = "Focus Area Height";
-	constexpr auto kAdaptationRangeMin = "Adaptation Range Min";
-	constexpr auto kAdaptationRangeMax = "Adaptation Range Max";
-	constexpr auto kPurkinjeEffect = "Purkinje Effect";
-	constexpr auto kMaxStrength = "Max Strength";
-	constexpr auto kFadeInEV = "Fade In EV";
-	constexpr auto kMaxEffectEV = "Max Effect EV";
-}
-
-void to_json(json& j, const HistogramAutoExposure::Settings& settings)
-{
-	j = {
-		{ kExposureCompensation, settings.ExposureCompensation },
-		{ kAdaptationSpeed, settings.AdaptSpeed },
-		{ kFocusAreaWidth, settings.AdaptArea.x },
-		{ kFocusAreaHeight, settings.AdaptArea.y },
-		{ kAdaptationRangeMin, settings.AdaptationRange.x },
-		{ kAdaptationRangeMax, settings.AdaptationRange.y },
-		{ kPurkinjeEffect, {
-			{ kMaxStrength, settings.PurkinjeStrength },
-			{ kFadeInEV, settings.PurkinjeStartEV },
-			{ kMaxEffectEV, settings.PurkinjeMaxEV } } }
-	};
-}
-
-void from_json(const json& j, HistogramAutoExposure::Settings& settings)
-{
-	settings = {};
-	settings.ExposureCompensation = j.value(kExposureCompensation, settings.ExposureCompensation);
-	settings.AdaptSpeed = j.value(kAdaptationSpeed, settings.AdaptSpeed);
-	settings.AdaptArea.x = j.value(kFocusAreaWidth, settings.AdaptArea.x);
-	settings.AdaptArea.y = j.value(kFocusAreaHeight, settings.AdaptArea.y);
-	settings.AdaptationRange.x = j.value(kAdaptationRangeMin, settings.AdaptationRange.x);
-	settings.AdaptationRange.y = j.value(kAdaptationRangeMax, settings.AdaptationRange.y);
-	if (auto it = j.find(kPurkinjeEffect); it != j.end() && it->is_object()) {
-		settings.PurkinjeStrength = it->value(kMaxStrength, settings.PurkinjeStrength);
-		settings.PurkinjeStartEV = it->value(kFadeInEV, settings.PurkinjeStartEV);
-		settings.PurkinjeMaxEV = it->value(kMaxEffectEV, settings.PurkinjeMaxEV);
-	}
-}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	HistogramAutoExposure::Settings,
+	ExposureCompensation,
+	AdaptationRange,
+	AdaptArea,
+	AdaptSpeed,
+	PurkinjeStartEV,
+	PurkinjeMaxEV,
+	PurkinjeStrength)
 
 void HistogramAutoExposure::DrawSettings()
 {
