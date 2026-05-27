@@ -89,10 +89,10 @@ namespace
 		return total / static_cast<float>(AllRGBChannelCount);
 	}
 
-	void OffsetRGB(float4& value, float offset)
+	void SetRGB(float4& value, float rgb)
 	{
 		for (int i = 0; i < AllRGBChannelCount; i++)
-			(&value.x)[i] += offset;
+			(&value.x)[i] = rgb;
 	}
 
 	float4 ApplyStoredAllRGB(const float4& value, float neutral)
@@ -139,10 +139,12 @@ namespace
 	void DrawRGBAll(ColorSettings& settings, const AllRGBControl& control)
 	{
 		auto& value = settings.*control.value;
-		const float previousAll = AverageRGB(value);
-		float allValue = previousAll;
-		DrawAllRGBSliders(control, allValue, &value.x, [&](float newAll) {
-			OffsetRGB(value, newAll - previousAll);
+		ImGui::PushID(control.label.data());
+		auto* allValue = ImGui::GetStateStorage()->GetFloatRef(ImGui::GetID("##AllState"), AverageRGB(value));
+		ImGui::PopID();
+
+		DrawAllRGBSliders(control, *allValue, &value.x, [&](float newAll) {
+			SetRGB(value, newAll);
 		});
 	}
 
