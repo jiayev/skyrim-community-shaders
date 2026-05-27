@@ -1108,13 +1108,11 @@ void Raytracing::DeferredPasses()
 			// Executes the render graph for Global Illumination, depends on gbuffer render targets so we call it late
 			creationEngineRaytracing->Execute();
 		});
-
-		// Fence function already has built-in wait, so we just call post execution for metrics and cleanup
-		creationEngineRaytracing->PostExecution();
-	} else {
-		// Waits for path tracing execution to finish
-		creationEngineRaytracing->WaitExecution();
 	}
+
+	// Waits for execution to finish (blocks CPU)
+	// TODO: Implement double buffering to avoid stalling the CPU while waiting for GPU results
+	creationEngineRaytracing->WaitExecution();
 
 	if (settings.PerfOverlay != OverlayMode::None)
 		creationEngineRaytracing->GetPassTimings(passTimings);
