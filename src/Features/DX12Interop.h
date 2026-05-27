@@ -4,6 +4,7 @@
 
 #include <d3d11_4.h>
 #include <directx/d3dx12.h>
+#include <limits>
 
 #include "DX12Interop/WrappedResource.h"
 
@@ -17,6 +18,8 @@
 
 struct DX12Interop : public Feature
 {
+	~DX12Interop();
+
 	virtual inline std::string GetName() override { return "DirectX 12 Interoperability"; }
 	virtual inline std::string GetShortName() override { return "DX12Interop"; }
 	virtual bool IsCore() const override { return true; }
@@ -51,14 +54,13 @@ struct DX12Interop : public Feature
 		winrt::com_ptr<ID3D12CommandAllocator> commandAllocator;
 		winrt::com_ptr<ID3D12GraphicsCommandList4> commandList;
 		UINT64 fenceValueAtSubmission = 0;  // what value was signaled when this frame was submitted
-		bool hasBeenReset = false;          // whether we've reset this context's command allocator at least once since it was last used (to avoid redundant resets)
+		UINT lastUsedFrame = UINT_MAX;
 	};
 
 	static constexpr UINT kMaxFramesInFlight = 2;
 	FrameContext frameContexts[kMaxFramesInFlight];
 	UINT64 currentFenceValue = 0;
-	UINT64 lastCompletedFenceValue = 0;
-	HANDLE fenceEvent;
+	HANDLE fenceEvent = nullptr;
 
 	struct SharedResources
 	{
@@ -107,22 +109,25 @@ struct DX12Interop : public Feature
 	{
 		// Get to next frame context
 		FrameContext& ctx = frameContexts[GetFrameContextIndex()];
+		const UINT frameCount = globals::state->frameCount;
 
-		// CPU-side wait: stall if this slot's previous submission isn't done yet
-		// (i.e. we've lapped the GPU)
-		if (ctx.fenceValueAtSubmission != 0) {
-			if (d3d12Fence->GetCompletedValue() < ctx.fenceValueAtSubmission) {
-				// GPU hasn't finished with this allocator yet — stall CPU
-				DX::ThrowIfFailed(d3d12Fence->SetEventOnCompletion(ctx.fenceValueAtSubmission, fenceEvent));
-				WaitForSingleObject(fenceEvent, INFINITE);
+		// Reset/wait once per frame-context per frame to allow multiple Execute calls in the same frame.
+		if (ctx.lastUsedFrame != frameCount) {
+			ctx.lastUsedFrame = frameCount;
+
+			// CPU-side wait: stall if this slot's previous submission isn't done yet
+			// (i.e. we've lapped the GPU)
+			if (ctx.fenceValueAtSubmission != 0) {
+				if (d3d12Fence->GetCompletedValue() < ctx.fenceValueAtSubmission) {
+					// GPU hasn't finished with this allocator yet - stall CPU
+					DX::ThrowIfFailed(d3d12Fence->SetEventOnCompletion(ctx.fenceValueAtSubmission, fenceEvent));
+					WaitForSingleObject(fenceEvent, INFINITE);
+				}
 			}
-		}
 
-		// Safe to reset now - GPU is done with this allocator
-		// Reset allocator only on first use this frame
-		if (!ctx.hasBeenReset) {
+			// Safe to reset now - GPU is done with this allocator
+			// Reset allocator only on first use this frame
 			DX::ThrowIfFailed(ctx.commandAllocator->Reset());
-			ctx.hasBeenReset = true;
 		}
 
 		DX::ThrowIfFailed(ctx.commandList->Reset(ctx.commandAllocator.get(), nullptr));
@@ -160,5 +165,5 @@ private:
 	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
 	void InitializePIX();
 	void CreateD3D12Device(IDXGIAdapter* a_adapter);
-	UINT GetFrameContextIndex();
+	UINT GetFrameContextIndex() const;
 };

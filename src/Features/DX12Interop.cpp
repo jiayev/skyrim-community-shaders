@@ -18,6 +18,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DebugBreakError,
 	DebugBreakWarning)
 
+DX12Interop::~DX12Interop()
+{
+	if (fenceEvent) {
+		CloseHandle(fenceEvent);
+		fenceEvent = nullptr;
+	}
+}
+
 bool DX12Interop::Active() const
 {
 	return active;
@@ -198,7 +206,13 @@ void DX12Interop::CreateInterop()
 	DX::ThrowIfFailed(d3d11Device->OpenSharedFence(sharedFenceHandle, IID_PPV_ARGS(&d3d11Fence)));
 	CloseHandle(sharedFenceHandle);
 
+	if (fenceEvent) {
+		CloseHandle(fenceEvent);
+		fenceEvent = nullptr;
+	}
 	fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+	if (!fenceEvent)
+		DX::ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
 }
 
 void DX12Interop::SetD3D11Device(ID3D11Device* a_d3d11Device)
@@ -240,7 +254,7 @@ void DX12Interop::SetupResources()
 	sharedResources.reactiveMask = new WrappedResource(mainDesc, d3d11Device.get(), d3d12Device.get());
 }
 
-UINT DX12Interop::GetFrameContextIndex()
+UINT DX12Interop::GetFrameContextIndex() const
 {
 	return globals::state->frameCount % kMaxFramesInFlight;
 }
