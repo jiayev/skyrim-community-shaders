@@ -1147,6 +1147,8 @@ void Upscaling::ConvertColorSpace(bool toLinear)
 
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
+	ID3D11UnorderedAccessView* texture = (toLinear && settings.sharpnessDLSS > 0.0f && sharpenerTexture) ? sharpenerTexture->uav.get() : main.UAV;
+
 	{
 		state->BeginPerfEvent("Color Space Convertion");
 		TracyD3D11Zone(globals::state->tracyCtx, "Color Space Convertion");
@@ -1172,7 +1174,7 @@ void Upscaling::ConvertColorSpace(bool toLinear)
 		for (uint32_t i = 0; i < numEyes; ++i) {
 			// Idk what kMain is for VR
 			ID3D11UnorderedAccessView* uavs[] = {
-				globals::game::isVR ? nullptr : main.UAV
+				globals::game::isVR ? nullptr : texture
 			};
 
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
@@ -2034,7 +2036,11 @@ void Upscaling::Upscale()
 				streamline.DestroyDLSSResources();
 			}
 
-			streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorCopyTexture->resource.get());
+			// When RCAS sharpening is active, direct DLSS output to sharpenerTexture so RCAS can
+			// sharpen directly into kMAIN.UAV without a CopyResource round-trip.
+			ID3D11Resource* colorOut = (settings.sharpnessDLSS > 0.0f && sharpenerTexture) ? sharpenerTexture->resource.get() : main.texture;
+
+			streamline.Upscale(main.texture, colorOut, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorCopyTexture->resource.get());
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
 			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR);
 		}

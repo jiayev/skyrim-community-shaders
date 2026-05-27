@@ -133,7 +133,7 @@ public:
 
 	void SetDLSSDOptions(sl::ViewportHandle p_viewport, uint32_t width);
 
-	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
+	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* colorOut, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
 
 	void Upscale(ID3D12GraphicsCommandList4* commandList, ID3D12Resource* a_input, ID3D12Resource* a_output, ID3D12Resource* a_depth, ID3D12Resource* a_motionVectors, ID3D12Resource* a_reactiveMask);
 
