@@ -94,12 +94,6 @@ struct DX12Interop : public Feature
 
 		// Wait for D3D12 to finish
 		DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), fenceValue));
-
-		if (d3d12Fence->GetCompletedValue() < fenceValue) {
-			DX::ThrowIfFailed(d3d12Fence->SetEventOnCompletion(fenceValue, fenceEvent));
-			WaitForSingleObject(fenceEvent, INFINITE);
-		}
-
 		DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), fenceValue));
 		fenceValue++;
 	}
