@@ -260,8 +260,6 @@ Texture2D<float4> SSRTexture : register(t16);
 #		if defined(SKYLIGHTING)
 				envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingSpecular : 1.0;
 				skySpecular *= skylightingSpecular;
-#		elif defined(INTERIOR)
-				skySpecular = 0;
 #		endif
 			} else {
 				// Mode 0/1: IBL ratio-based
@@ -270,9 +268,10 @@ Texture2D<float4> SSRTexture : register(t16);
 				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
 #		if defined(SKYLIGHTING)
 				skySpecular *= skylightingSpecular;
-#		elif defined(INTERIOR)
-				skySpecular = 0;
 #		endif
+			}
+			if (SharedData::InInterior) {
+				skySpecular = 0;
 			}
 
 			finalIrradiance = envSpecular + skySpecular;
