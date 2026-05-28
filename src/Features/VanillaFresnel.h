@@ -23,6 +23,7 @@ struct VanillaFresnel : public Feature
 	virtual bool inline IsCore() const override { return true; }
 	virtual inline std::string_view GetShaderDefineName() override { return "VANILLA_FRESNEL"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
+	virtual void PostPostLoad() override;
 
 	// Settings & UI
 	virtual void RestoreDefaultSettings() override;

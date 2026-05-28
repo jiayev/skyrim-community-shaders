@@ -2271,20 +2271,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(VANILLA_FRESNEL)
 	const bool enableVanillaFresnel = SharedData::vanillaFresnelSettings.Enable;
+	const bool isEyeMaterial = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsEye) != 0;
 	material.F0 = enableVanillaFresnel ? SharedData::vanillaFresnelSettings.MinF0 : 0.0;
-#			if defined(EYE)
-	if (enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableEyeSpecialHandling) {
-		material.F0 = 0.027;
-		material.Roughness = 0.1;
-	}
-#			elif defined(SPECULAR)
-	if (enableVanillaFresnel) {
+#			if defined(SPECULAR)
+	if (enableVanillaFresnel && !isEyeMaterial) {
 		material.F0 = saturate(glossiness * SpecularColor.xyz / Math::PI);
 		float roughnessFromSpecular = (1.0 - glossiness) * (1.0 - glossiness);
 		float roughnessFromShininess = ShininessToRoughness(material.Shininess);
 		material.Roughness = lerp(roughnessFromShininess, roughnessFromSpecular, SharedData::vanillaFresnelSettings.SpecularRoughnessBlend * (1.0 - glossiness));
 	}
 #			endif
+	if (enableVanillaFresnel && isEyeMaterial && SharedData::vanillaFresnelSettings.EnableEyeSpecialHandling) {
+		material.F0 = 0.027;
+		material.Roughness = 0.1;
+	}
 	material.F0 = max((enableVanillaFresnel ? SharedData::vanillaFresnelSettings.MinF0 : 0.0), material.F0 * SharedData::vanillaFresnelSettings.BaseF0Multiplier);
 	const float3 baseF0 = material.F0;
 #		endif  // VANILLA_FRESNEL
@@ -2401,12 +2401,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 					if (!complexMaterial) {
 #				endif
 						material.Roughness = lerp(originRoughness, material.Roughness, envMask);
-#				if !defined(EYE)
-						if (!usingDynamicCubemap) {
+						if (!isEyeMaterial && !usingDynamicCubemap) {
 							material.F0 = saturate(material.F0 + envMask * material.BaseColor);
 							material.BaseColor = lerp(material.BaseColor, 0, envMask);
 						}
-#				endif
 #				if defined(EMAT)
 					}
 #				endif
@@ -2418,12 +2416,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(VANILLA_FRESNEL) && !defined(TRUE_PBR)
 		if (enableVanillaFresnel) {
-#			if defined(EYE)
-			if (SharedData::vanillaFresnelSettings.EnableEyeSpecialHandling) {
+			if (isEyeMaterial && SharedData::vanillaFresnelSettings.EnableEyeSpecialHandling) {
 				material.F0 = 0.027;
 				material.Roughness = 0.1;
 			}
-#			endif
 			material.Roughness = clamp(material.Roughness * SharedData::vanillaFresnelSettings.RoughnessMultiplier, 0.04, 1.0);
 		}
 #		endif
