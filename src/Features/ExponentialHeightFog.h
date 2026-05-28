@@ -53,7 +53,7 @@ public:
 		float directionalInscatteringAnisotropy = 0.2f;
 		float4 inscatteringTint = { 1.0f, 1.0f, 1.0f, 1.0f };
 		float cubemapMipLevel = 7.0f;
-		float sunlightAttenuationAmount = 0.0f;
+		float sunlightAttenuationAmount = 1.0f;
 		uint respectVanillaFogFade = 0;
 		uint disableVanillaFog = 1;
 		float4 fogInscatteringColor = { 0.0f, 0.0f, 0.0f, 1.0f };

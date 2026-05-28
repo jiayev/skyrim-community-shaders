@@ -362,12 +362,20 @@ ID3D11ComputeShader* ExponentialHeightFog::GetIntegrationCS()
 
 void ExponentialHeightFog::Prepass()
 {
-	if (!settings.enabled || !settings.volumetricFogEnabled || settings.fogDensity <= 0.0f || settings.volumetricFogExtinctionScale <= 0.0f) {
+	if (!settings.enabled || !settings.volumetricFogEnabled || settings.volumetricFogExtinctionScale <= 0.0f) {
 		ReleaseVolumetricResources();
 		return;
 	}
 
 	EnsureVolumetricResources();
+
+	if (settings.fogDensity <= 0.0f) {
+		hasLightScatteringHistory = false;
+		hasConservativeDepthHistory = false;
+		lastPrepassFrame = UINT32_MAX;
+		BindIntegratedLightScattering();
+		return;
+	}
 
 	ID3D11ShaderResourceView* directionalShadowLightData = globals::deferred && globals::deferred->directionalShadowLights ? globals::deferred->directionalShadowLights->srv.get() : nullptr;
 	auto& lightLimitFix = globals::features::lightLimitFix;
