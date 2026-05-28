@@ -173,7 +173,7 @@ namespace ExponentialHeightFog
 		return float4(combinedOpacity > 1e-4f ? combinedPremultiplied / combinedOpacity : float3(0.0f, 0.0f, 0.0f), combinedOpacity);
 	}
 
-	float4 GetExponentialHeightFogInternal(float3 positionWS, float3 cameraWS, float3 fogColor, bool useScreenPosition, float4 screenPosition)
+	float4 GetExponentialHeightFogInternal(float3 positionWS, float3 cameraWS, float3 fogColor, bool useScreenPosition, float4 screenPosition, bool applyVolumetricFog)
 	{
 		float fogHeightFalloff = SharedData::exponentialHeightFogSettings.fogHeightFalloff * 0.001f;
 		float fogDensity = SharedData::exponentialHeightFogSettings.fogDensity * 0.001f;
@@ -198,7 +198,7 @@ namespace ExponentialHeightFog
 		float rayDirectionZ = viewToPos.z;
 
 		float excludeDistance = SharedData::exponentialHeightFogSettings.startDistance;
-		if (ShouldApplyVolumetricFog()) {
+		if (applyVolumetricFog && ShouldApplyVolumetricFog()) {
 			float cosAngle = sceneDepth * viewToPosLengthInv;
 			float invCosAngle = cosAngle > 0.001f ? rcp(cosAngle) : 0.0f;
 			excludeDistance = max(excludeDistance, GetVolumetricEndDistance() * invCosAngle);
@@ -257,17 +257,30 @@ namespace ExponentialHeightFog
 
 		fogColor += directionalInscattering;
 		float4 analyticalFog = float4(fogColor, 1.0f - expFogFactor);
+		if (!applyVolumetricFog) {
+			return analyticalFog;
+		}
 		return useScreenPosition ? CombineVolumetricFog(analyticalFog, screenPosition, eyeIndex) : CombineVolumetricFog(analyticalFog, positionWS, eyeIndex);
 	}
 
 	float4 GetExponentialHeightFog(float3 positionWS, float3 cameraWS, float3 fogColor)
 	{
-		return GetExponentialHeightFogInternal(positionWS, cameraWS, fogColor, false, 0.0f.xxxx);
+		return GetExponentialHeightFogInternal(positionWS, cameraWS, fogColor, false, 0.0f.xxxx, true);
 	}
 
 	float4 GetExponentialHeightFog(float3 positionWS, float3 cameraWS, float3 fogColor, float4 screenPosition)
 	{
-		return GetExponentialHeightFogInternal(positionWS, cameraWS, fogColor, true, screenPosition);
+		return GetExponentialHeightFogInternal(positionWS, cameraWS, fogColor, true, screenPosition, true);
+	}
+
+	float4 GetExponentialHeightFogNoVolumetric(float3 positionWS, float3 cameraWS, float3 fogColor)
+	{
+		return GetExponentialHeightFogInternal(positionWS, cameraWS, fogColor, false, 0.0f.xxxx, false);
+	}
+
+	float4 GetExponentialHeightFogNoVolumetric(float3 positionWS, float3 cameraWS, float3 fogColor, float4 screenPosition)
+	{
+		return GetExponentialHeightFogInternal(positionWS, cameraWS, fogColor, true, screenPosition, false);
 	}
 
 	float GetSunlightFogAttenuation(float3 positionWS, float3 cameraWS)
