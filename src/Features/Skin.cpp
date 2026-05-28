@@ -39,8 +39,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	FuzzStrength,
 	FuzzRoughness,
 	FuzzF0,
-	UseDynamicWetness,
-	EvaporationRate);
+	UseDynamicWetness);
 
 void Skin::DrawSettings()
 {
@@ -125,11 +124,6 @@ void Skin::DrawSettings()
 	ImGui::SliderFloat("Wetness Fade Out Time", &settings.WetFadeTime, 0.0f, 50.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("How many seconds it takes for skin to fully dry after leaving water. Higher values mean wetness lingers longer.");
-	}
-
-	ImGui::SliderFloat("Evaporation Rate", &settings.EvaporationRate, 0.1f, 5.0f, "%.2f");
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("How quickly wetness dries on different body parts. Higher values make the character dry faster. Works as a multiplier on Fade Out Time.");
 	}
 
 	if (isDynamicWetnessAvailable) {
@@ -432,79 +426,6 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 	return wetness;
 }
 
-bool Skin::ComputeBoneWetness(RE::BSGeometry* geometry, uint32_t actorFormID, float waterHeight, float* outBoneWetness, uint32_t& outBoneCount)
-{
-	outBoneCount = 0;
-	std::memset(outBoneWetness, 0, sizeof(float) * MAX_BONES);
-
-	// Get skin instance from geometry
-	auto& rtData = geometry->GetGeometryRuntimeData();
-	auto* skinInstance = rtData.skinInstance.get();
-	if (!skinInstance || !skinInstance->bones)
-		return false;
-
-	const uint32_t boneCount = std::min(static_cast<uint32_t>(skinInstance->numMatrices), MAX_BONES);
-	if (boneCount == 0)
-		return false;
-
-	outBoneCount = boneCount;
-
-	if (actorFormID == 0)
-		return false;
-
-	// Prevent unbounded growth of bone wetness map
-	if (actorBoneWetnessMap.size() > 1024) {
-		actorBoneWetnessMap.clear();
-	}
-
-	auto& boneHistory = actorBoneWetnessMap[actorFormID];
-	if (boneHistory.boneCount != boneCount) {
-		// Actor bone count changed (new actor or mesh change), reset history
-		boneHistory = ActorBoneWetness{};
-		boneHistory.boneCount = boneCount;
-	}
-
-	const float deltaTime = *globals::game::deltaTime;
-	const float evapRate = deltaTime * settings.EvaporationRate / std::max(settings.WetFadeTime, 0.01f);
-	const bool hasValidWaterHeight = (waterHeight > -1e10f);
-
-	// Transition width for smooth water line (in game units)
-	static constexpr float kTransitionWidth = 5.0f;  // 2.5 units above/below water surface
-	static constexpr float kHalfTransition = kTransitionWidth * 0.5f;
-
-	for (uint32_t i = 0; i < boneCount; i++) {
-		auto* boneNode = skinInstance->bones[i];
-		if (!boneNode) {
-			outBoneWetness[i] = boneHistory.boneWet[i];
-			continue;
-		}
-
-		// Get bone's absolute world-space Z position
-		const float boneWorldZ = boneNode->world.translate.z;
-
-		// Compute target wetness based on water height comparison
-		float targetWet = 0.0f;
-		if (hasValidWaterHeight) {
-			// Smooth transition around water surface
-			targetWet = 1.0f - std::clamp((boneWorldZ - waterHeight + kHalfTransition) / kTransitionWidth, 0.0f, 1.0f);
-		}
-
-		// Update bone wetness with temporal persistence
-		float& cachedWet = boneHistory.boneWet[i];
-		if (targetWet > cachedWet) {
-			// Getting wetter — increase quickly (clamped by target)
-			cachedWet = targetWet;
-		} else if (cachedWet > 0.0f) {
-			// Drying out — evaporate gradually
-			cachedWet = std::max(0.0f, cachedWet - evapRate);
-		}
-
-		outBoneWetness[i] = cachedWet;
-	}
-
-	return true;
-}
-
 struct SkinExtendedRendererState
 {
 	uint32_t PSResourceModifiedBits = 0;
@@ -668,67 +589,15 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		auto geometry = a_pass->geometry;
 		float4 wetness = GetWetness(geometry);
 
-		PerGeometryData perGeometryData{};
-		perGeometryData.skinPerGeometry = wetness;
-
-		// Get actor formID for bone wetness tracking
-		uint32_t actorFormID = 0;
-		if (auto userData = geometry->GetUserData()) {
-			if (auto actor = userData->As<RE::Character>()) {
-				actorFormID = actor->AsReference()->formID;
-			}
+		if (currentWetness != wetness) {
+			currentWetness = wetness;
+			PerGeometryData perGeometryData{};
+			perGeometryData.skinPerGeometry = wetness;
+			PerGeometryCB->Update(perGeometryData);
 		}
-
-		// Compute per-bone wetness for bone-anchored water memory.
-		// This fixes the issue where the water line follows model movement.
-		float boneWetnessData[MAX_BONES] = {};
-		uint32_t boneCount = 0;
-		float waterHeight = wetness.z + wetness.w;  // actorPosZ + waterDepth = waterHeight
-		bool hasBoneWetness = false;
-
-		if (actorFormID != 0) {
-			// Only compute bone wetness if actor is wet or was recently wet
-			if (wetness.y > 0.0f || wetness.w > 0.0f) {
-				hasBoneWetness = ComputeBoneWetness(geometry, actorFormID, waterHeight, boneWetnessData, boneCount);
-			} else {
-				// Actor not in water — still need to evaporate existing bone wetness
-				auto it = actorBoneWetnessMap.find(actorFormID);
-				if (it != actorBoneWetnessMap.end()) {
-					auto& boneHistory = it->second;
-					bool anyWet = false;
-					for (uint32_t i = 0; i < boneHistory.boneCount && i < MAX_BONES; i++) {
-						if (boneHistory.boneWet[i] > 0.0f)
-							anyWet = true;
-					}
-					if (anyWet) {
-						// Pass a very low water height so all bones are "above water" → evaporation
-						hasBoneWetness = ComputeBoneWetness(geometry, actorFormID, -1e20f, boneWetnessData, boneCount);
-					} else {
-						// All bones fully evaporated, remove entries from both maps
-						actorBoneWetnessMap.erase(it);
-						actorWetnessMap.erase(actorFormID);
-					}
-				}
-			}
-		}
-
-		// Pack bone wetness into float4 array
-		if (hasBoneWetness) {
-			perGeometryData.boneWetnessParams = float4(1.0f, 0.0f, 0.0f, 0.0f);  // hasBoneWetness = true
-			for (uint32_t i = 0; i < boneCount && i < MAX_BONES; i++) {
-				uint32_t groupIdx = i >> 2;  // i / 4
-				uint32_t compIdx = i & 3;    // i % 4
-				reinterpret_cast<float*>(&perGeometryData.boneWetness[groupIdx])[compIdx] = boneWetnessData[i];
-			}
-		} else {
-			perGeometryData.boneWetnessParams = float4(0.0f, 0.0f, 0.0f, 0.0f);  // no bone data
-		}
-
-		PerGeometryCB->Update(perGeometryData);
 
 		ID3D11Buffer* buffer = { PerGeometryCB->CB() };
-		context->VSSetConstantBuffers(7, 1, &buffer);  // Bone wetness read in VS
-		context->PSSetConstantBuffers(7, 1, &buffer);  // Wetness params read in PS
+		context->PSSetConstantBuffers(7, 1, &buffer);
 	}
 }
 
