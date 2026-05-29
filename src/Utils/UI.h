@@ -381,7 +381,6 @@ namespace Util
 	bool PercentageSlider(const char* label, float* data, float lb = 0.f, float ub = 100.f, const char* format = "%.1f %%");
 	bool RGBFloatDrag3(const char* label, float* values, float speed, const char* format = "%.3f", ImGuiSliderFlags flags = 0);
 	bool RGBFloatDrag3(const char* label, float* values, float speed, float min, float max, const char* format = "%.3f", ImGuiSliderFlags flags = 0);
-	bool FFTResolutionCombo(const char* label, int& resolution);
 
 	/**
 	 * Draws a 2-4 component float slider. Holding Shift edits all components from the first component.

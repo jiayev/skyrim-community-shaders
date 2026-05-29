@@ -1,6 +1,7 @@
 #include "LensFlare.h"
 
 #include "Features/PostProcessing.h"
+#include "PostProcessingUI.h"
 #include "State.h"
 #include "Util.h"
 
@@ -123,7 +124,7 @@ void LensFlare::DrawSettings()
 		ImGui::SliderFloat("Aperture Rotation", &settings.ApertureRotation, -180.0f, 180.0f, "%.1f deg");
 		tooltip("Rotation of the procedural aperture.");
 
-		Util::FFTResolutionCombo("FFT Resolution", settings.FFTResolution);
+		PostProcessingUI::FFTResolutionCombo("FFT Resolution", settings.FFTResolution);
 		tooltip("Resolution of the FFT convolution. Higher = sharper bokeh ghost shapes but more expensive.");
 
 		ImGui::SliderFloat("Kernel Scale", &settings.KernelScale, 0.01f, 0.5f, "%.3f");

@@ -1,6 +1,7 @@
 #include "PhysicalGlare.h"
 
 #include "Features/LinearLighting.h"
+#include "PostProcessingUI.h"
 #include "Globals.h"
 #include "State.h"
 #include "Util.h"
@@ -82,7 +83,7 @@ void PhysicalGlare::DrawSettings()
 	ImGui::SliderFloat("Adapt Speed", &settings.AdaptSpeed, 0.5f, 10.f, "%.1f");
 	tooltip("How fast the glare adapts to brightness changes.");
 
-	Util::FFTResolutionCombo("FFT Resolution", settings.FFTResolution);
+	PostProcessingUI::FFTResolutionCombo("FFT Resolution", settings.FFTResolution);
 	tooltip("Resolution of the FFT convolution. Higher = sharper starburst but more expensive.");
 
 	ImGui::SliderFloat("Padding Ratio", &settings.PaddingRatio, 0.f, 0.25f, "%.3f");
