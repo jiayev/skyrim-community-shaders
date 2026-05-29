@@ -146,9 +146,36 @@ namespace ExponentialHeightFog
 		return lerp(float4(0.0f, 0.0f, 0.0f, 1.0f), volumetricFog, saturate((sceneDepth - GetVolumetricStartDistance()) * 100000000.0f));
 	}
 
-	float4 CombineVolumetricFog(float4 analyticalFog, float3 positionWS, uint eyeIndex)
+	// Apply per-pixel directional light phase correction to volumetric fog.
+	// The volumetric compute stores directional scattering with isotropic phase (1/4PI) to
+	// avoid angular aliasing at coarse froxel XY resolution. Here we restore the correct
+	// per-pixel HG phase, weighted by the estimated directional light fraction.
+	float4 ApplyDirectionalPhaseCorrection(float4 volumetricFog, float3 viewDirection)
+	{
+		if (volumetricFog.r + volumetricFog.g + volumetricFog.b < 1e-7f)
+			return volumetricFog;
+
+		float g = SharedData::exponentialHeightFogSettings.volumetricFogScatteringDistribution;
+		float cosTheta = dot(normalize(SharedData::DirLightDirection.xyz), viewDirection);
+		float perPixelPhase = HenyeyGreenstein(cosTheta, g);
+		float isotropicPhase = 1.0f / (4.0f * Math::PI);
+
+		// Estimate directional light's fraction of total volumetric inscattering
+		float dirStrength = dot(SharedData::DirLightColor.xyz, float3(0.2126f, 0.7152f, 0.0722f)) *
+		                    SharedData::exponentialHeightFogSettings.volumetricDirectionalScatteringIntensity;
+		float skyStrength = SharedData::exponentialHeightFogSettings.volumetricSkyLightingIntensity;
+		float dirFraction = saturate(dirStrength / max(dirStrength + skyStrength, 1e-5f));
+
+		// Apply phase correction only to the estimated directional portion
+		float correction = lerp(1.0f, perPixelPhase / isotropicPhase, dirFraction);
+		volumetricFog.rgb *= correction;
+		return volumetricFog;
+	}
+
+	float4 CombineVolumetricFog(float4 analyticalFog, float3 positionWS, uint eyeIndex, float3 viewDirection)
 	{
 		float4 volumetricFog = SampleVolumetricFog(positionWS, eyeIndex);
+		volumetricFog = ApplyDirectionalPhaseCorrection(volumetricFog, viewDirection);
 		float analyticalTransmittance = 1.0f - analyticalFog.w;
 		float combinedTransmittance = volumetricFog.a * analyticalTransmittance;
 		float combinedOpacity = saturate(1.0f - combinedTransmittance);
@@ -157,9 +184,10 @@ namespace ExponentialHeightFog
 		return float4(combinedOpacity > 1e-4f ? combinedPremultiplied / combinedOpacity : float3(0.0f, 0.0f, 0.0f), combinedOpacity);
 	}
 
-	float4 CombineVolumetricFog(float4 analyticalFog, float4 screenPosition, uint eyeIndex)
+	float4 CombineVolumetricFog(float4 analyticalFog, float4 screenPosition, uint eyeIndex, float3 viewDirection)
 	{
 		float4 volumetricFog = SampleVolumetricFog(screenPosition, eyeIndex);
+		volumetricFog = ApplyDirectionalPhaseCorrection(volumetricFog, viewDirection);
 		float analyticalTransmittance = 1.0f - analyticalFog.w;
 		float combinedTransmittance = volumetricFog.a * analyticalTransmittance;
 		float combinedOpacity = saturate(1.0f - combinedTransmittance);
@@ -232,9 +260,10 @@ namespace ExponentialHeightFog
 
 		float3 directionalInscattering = 0;
 
+		float3 viewDirection = viewToPos * viewToPosLengthInv;
+
 		// Calculate directional light inscattering using Henyey-Greenstein phase function
 		if (SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier > 0) {
-			float3 viewDirection = viewToPos * viewToPosLengthInv;
 			float3 lightDirection = normalize(SharedData::DirLightDirection.xyz);
 			float cosTheta = dot(lightDirection, viewDirection);
 			float phase = HenyeyGreenstein(cosTheta, SharedData::exponentialHeightFogSettings.directionalInscatteringAnisotropy);
@@ -247,7 +276,7 @@ namespace ExponentialHeightFog
 		if (!applyVolumetricFog) {
 			return analyticalFog;
 		}
-		return useScreenPosition ? CombineVolumetricFog(analyticalFog, screenPosition, eyeIndex) : CombineVolumetricFog(analyticalFog, positionWS, eyeIndex);
+		return useScreenPosition ? CombineVolumetricFog(analyticalFog, screenPosition, eyeIndex, viewDirection) : CombineVolumetricFog(analyticalFog, positionWS, eyeIndex, viewDirection);
 	}
 
 	float4 GetExponentialHeightFog(float3 positionWS, float3 cameraWS, float3 fogColor)
