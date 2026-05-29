@@ -1,6 +1,6 @@
 #include "WrappedResource.h"
 
-#include "Features/DX12Interop.h"
+#include "DX12Interop.h"
 
 WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device)
 {
@@ -58,8 +58,8 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 
 WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc) :
 	WrappedResource(a_texDesc,
-		globals::features::dx12Interop.d3d11Device.get(),
-		globals::features::dx12Interop.d3d12Device.get())
+		globals::dx12Interop->d3d11Device.get(),
+		globals::dx12Interop->d3d12Device.get())
 {
 
 }

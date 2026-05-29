@@ -209,7 +209,8 @@ CreationEngineRaytracing::Settings Raytracing::GetSettings() const
 {
 	auto certSettings = settings.CreationEngineRaytracingSettings;
 
-	certSettings.DebugSettings.Markers = globals::features::dx12Interop.settings.EnablePIXCapture;
+	// Only if PIX is enabled (globals::dx12Interop.enablePIXCapture)
+	certSettings.DebugSettings.Markers = false;
 	certSettings.DebugSettings.Timings = settings.PerfOverlay != OverlayMode::None;
 
 	return certSettings;
@@ -818,7 +819,7 @@ void ShareTexture(ID3D11Texture2D* d3d11Texture, ID3D12Resource** d3d12Resource,
 	else
 		DX::ThrowIfFailed(dxgiResource->GetSharedHandle(&sharedHandle));
 
-	DX::ThrowIfFailed(globals::features::dx12Interop.d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(d3d12Resource)));
+	DX::ThrowIfFailed(globals::dx12Interop->d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(d3d12Resource)));
 
 	// Only close handle if it was created here
 	if (nt)
@@ -870,7 +871,7 @@ void Raytracing::SetupResources()
 		}
 	}
 
-	auto& d3d11Device = globals::features::dx12Interop.d3d11Device;
+	auto& d3d11Device = globals::dx12Interop->d3d11Device;
 
 	featureData = eastl::make_unique<FeatureData>();
 
@@ -1104,7 +1105,7 @@ void Raytracing::DeferredPasses()
 	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination) {
 		ConvertTextures();
 
-		globals::features::dx12Interop.Fence([&]() {
+		globals::dx12Interop->Fence([&]() {
 			// Executes the render graph for Global Illumination, depends on gbuffer render targets so we call it late
 			creationEngineRaytracing->Execute();
 		});
@@ -1257,21 +1258,6 @@ void Raytracing::DeferredPasses()
 			context->CopyResource(mainDepthCopy.texture, mainDepth.texture);
 			context->CopyResource(zPrePassCopy.texture, mainDepth.texture);
 		}
-	}
-
-	auto& dx12Interop = globals::features::dx12Interop;
-
-	if (dx12Interop.pixCapture && dx12Interop.pixCaptureStarted) {
-		dx12Interop.ga->EndCapture();
-
-		dx12Interop.pixCapture = false;
-		dx12Interop.pixCaptureStarted = false;
-	}
-
-	if (dx12Interop.pixCapture && !dx12Interop.pixCaptureStarted) {
-		dx12Interop.pixCaptureStarted = true;
-
-		dx12Interop.ga->BeginCapture();
 	}
 }
 

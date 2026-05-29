@@ -10,7 +10,7 @@
 #include "State.h"
 #include "Util.h"
 
-#include "Features/DX12Interop.h"
+#include "DX12Interop.h"
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
@@ -391,9 +391,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 		pFeatureLevel,
 		ppImmediateContext);
 
-	auto& dx12Interop = globals::features::dx12Interop;
-	if (dx12Interop.loaded)
-		dx12Interop.Init(*ppDevice, *ppImmediateContext, pAdapter);
+		globals::dx12Interop->Init(*ppDevice, *ppImmediateContext, pAdapter);
 
 	return ret;
 }

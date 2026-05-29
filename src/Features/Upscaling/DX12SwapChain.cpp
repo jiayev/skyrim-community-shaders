@@ -8,11 +8,11 @@
 #include "FidelityFX.h"
 #include "Streamline.h"
 
-#include "Features/DX12Interop.h"
+#include "DX12Interop.h"
 
 void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC a_swapChainDesc)
 {
-	auto& dx12Interop = globals::features::dx12Interop;
+	auto interop = globals::dx12Interop;
 
 	IDXGIFactory4* dxgiFactory;
 	DX::ThrowIfFailed(adapter->GetParent(IID_PPV_ARGS(&dxgiFactory)));
@@ -25,7 +25,7 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 
 	// Test R10G10B10A2 support (applies to both VR and non-VR for HDR capability)
 	D3D12_FEATURE_DATA_FORMAT_SUPPORT formatSupport = { DXGI_FORMAT_R10G10B10A2_UNORM, D3D12_FORMAT_SUPPORT1_RENDER_TARGET, D3D12_FORMAT_SUPPORT2_NONE };
-	if (SUCCEEDED(dx12Interop.d3d12Device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &formatSupport, sizeof(formatSupport)))) {
+	if (SUCCEEDED(interop->d3d12Device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &formatSupport, sizeof(formatSupport)))) {
 		if ((formatSupport.Support1 & D3D12_FORMAT_SUPPORT1_RENDER_TARGET) == 0) {
 			logger::warn("[DX12SwapChain] R10G10B10A2_UNORM not supported as render target, falling back to R8G8B8A8_UNORM");
 			negotiatedFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -60,7 +60,7 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 	ffxSwapChainDesc.desc = &swapChainDesc;
 	ffxSwapChainDesc.dxgiFactory = dxgiFactory;
 	ffxSwapChainDesc.fullscreenDesc = nullptr;
-	ffxSwapChainDesc.gameQueue = dx12Interop.commandQueue.get();
+	ffxSwapChainDesc.gameQueue = interop->commandQueue.get();
 	ffxSwapChainDesc.hwnd = a_swapChainDesc.OutputWindow;
 	ffxSwapChainDesc.swapchain = &swapChain;
 
@@ -82,6 +82,8 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 	SetColorSpace(enableHDR && !fallbackUsed);
 
 	fidelityFX.SetupFrameGeneration();
+
+	interopContext = eastl::unique_ptr<InteropContext>(InteropContext::Make());
 }
 
 void DX12SwapChain::CreateInterop()
@@ -119,7 +121,7 @@ HRESULT DX12SwapChain::GetBuffer(void** ppSurface)
 HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 {
 	auto& upscaling = globals::features::upscaling;
-	auto& dx12Interop = globals::features::dx12Interop;
+	auto dx12Interop = globals::dx12Interop;
 
 	// Scale UI brightness BEFORE fence sync so the D3D11 UIBrightnessCS dispatch
 	// is covered by the D3D11→D3D12 fence. Without this, FidelityFX may read
@@ -131,39 +133,43 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 
 	bool isHDR = hdr && hdr->settings.enableHDR;
 
-	dx12Interop.Execute([&](ID3D12GraphicsCommandList4* commandList) {
-		// Copy shared texture to swap chain buffer
-		{
-			auto fakeSwapChain = swapChainBufferWrapped->GetResource();
-			auto realSwapChain = swapChainBuffers[frameIndex].get();
+	if (interopContext) {
+		interopContext->Execute([&](ID3D12GraphicsCommandList4* commandList) {
+			// Copy shared texture to swap chain buffer
 			{
-				std::vector<D3D12_RESOURCE_BARRIER> barriers;
-				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(fakeSwapChain, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE));
-				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(realSwapChain, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST));
-				commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+				auto fakeSwapChain = swapChainBufferWrapped->GetResource();
+				auto realSwapChain = swapChainBuffers[frameIndex].get();
+				{
+					D3D12_RESOURCE_BARRIER barriers[2] = {
+						CD3DX12_RESOURCE_BARRIER::Transition(fakeSwapChain, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE),
+						CD3DX12_RESOURCE_BARRIER::Transition(realSwapChain, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST)
+					};
+					commandList->ResourceBarrier(ARRAYSIZE(barriers), barriers);
+				}
+
+				commandList->CopyResource(realSwapChain, fakeSwapChain);
+
+				{
+					D3D12_RESOURCE_BARRIER barriers[2] = {
+						CD3DX12_RESOURCE_BARRIER::Transition(fakeSwapChain, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON),
+						CD3DX12_RESOURCE_BARRIER::Transition(realSwapChain, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT)
+					};
+					commandList->ResourceBarrier(ARRAYSIZE(barriers), barriers);
+				}
 			}
 
-			commandList->CopyResource(realSwapChain, fakeSwapChain);
-
-			{
-				std::vector<D3D12_RESOURCE_BARRIER> barriers;
-				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(fakeSwapChain, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON));
-				barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(realSwapChain, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT));
-				commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-			}
-		}
-
-		upscaling.fidelityFX.Present(commandList, upscaling.ShouldUseFrameGenerationThisFrame(), isHDR); 
-	}, [&]() {
-		// Present the frame
-		DX::ThrowIfFailed(swapChain->Present(SyncInterval, Flags)); 
-	});
+			upscaling.fidelityFX.Present(commandList, upscaling.ShouldUseFrameGenerationThisFrame(), isHDR); 
+		}, [&]() {
+			// Present the frame
+			DX::ThrowIfFailed(swapChain->Present(SyncInterval, Flags)); 
+		});
+	}
 
 	// Update the frame index
 	frameIndex = swapChain->GetCurrentBackBufferIndex();
 
 	float clearColor[4]{ 0, 0, 0, 0 };
-	dx12Interop.d3d11Context->ClearRenderTargetView(uiBufferWrapped->rtv, clearColor);
+	dx12Interop->d3d11Context->ClearRenderTargetView(uiBufferWrapped->rtv, clearColor);
 
 	// If VSync is disabled, use frame limiter to prevent tearing and optimise pacing
 	if (SyncInterval == 0)
@@ -174,10 +180,8 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 
 HRESULT DX12SwapChain::GetDevice(REFIID uuid, void** ppDevice)
 {
-	auto& dx12Interop = globals::features::dx12Interop;
-
 	if (uuid == __uuidof(ID3D11Device) || uuid == __uuidof(ID3D11Device1) || uuid == __uuidof(ID3D11Device2) || uuid == __uuidof(ID3D11Device3) || uuid == __uuidof(ID3D11Device4) || uuid == __uuidof(ID3D11Device5)) {
-		*ppDevice = dx12Interop.d3d11Device.get();
+		*ppDevice = globals::dx12Interop->d3d11Device.get();
 		return S_OK;
 	}
 

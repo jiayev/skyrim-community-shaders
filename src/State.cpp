@@ -5,6 +5,7 @@
 #include <pystring/pystring.h>
 
 #include "Deferred.h"
+#include "DX12Interop.h"
 #include "FeatureIssues.h"
 #include "Features/CloudShadows.h"
 #include "Features/HDRDisplay.h"
@@ -213,6 +214,7 @@ void State::Setup()
 	CheckTypedUAVLoadSupport();
 
 	globals::deferred->SetupResources();
+	globals::dx12Interop->SetupResources();
 	Feature::ForEachLoadedFeature("SetupResources", [](Feature* feature) { feature->SetupResources(); });
 
 	// Load per-weather settings after features are setup

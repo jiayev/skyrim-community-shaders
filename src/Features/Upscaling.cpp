@@ -1,7 +1,7 @@
 #include "Upscaling.h"
 
 #include "Deferred.h"
-#include "Features/DX12Interop.h"
+#include "DX12Interop.h"
 #include "Features/HDRDisplay.h"
 #include "Features/Raytracing.h"
 #include "Hooks.h"
@@ -63,7 +63,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	pAdapter->GetDesc(&adapterDesc);
 	globals::state->SetAdapterDescription(adapterDesc.Description);
 
-	auto& dx12Interop = globals::features::dx12Interop;
+	auto dx12Interop = globals::dx12Interop;
 
 	auto& upscaling = globals::features::upscaling;
 	upscaling.LoadUpscalingSDKs();
@@ -129,8 +129,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 				pFeatureLevel,
 				ppImmediateContext));
 
-			if (dx12Interop.loaded)
-				dx12Interop.Init(*ppDevice, *ppImmediateContext, pAdapter);
+			dx12Interop->Init(*ppDevice, *ppImmediateContext, pAdapter);
 
 			upscaling.CreateProxySwapChain(pAdapter, *pSwapChainDesc);
 			upscaling.CreateProxyInterop();
@@ -148,7 +147,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 				// forward to the underlying D3D12 swap chain, causing
 				// E_NOINTERFACE.  The proxy must remain the outermost layer.
 				if (upscaling.d3d12Mode)
-					upscaling.SetBackendD3D12Device(dx12Interop.d3d12Device.get());
+					upscaling.SetBackendD3D12Device(dx12Interop->d3d12Device.get());
 				else
 					upscaling.SetBackendD3D11Device(*ppDevice);
 				// Some features (notably Reflex/PCL) may report availability only after device bind.
@@ -176,12 +175,11 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		pFeatureLevel,
 		ppImmediateContext);
 
-	if (dx12Interop.loaded)
-		dx12Interop.Init(*ppDevice, *ppImmediateContext, pAdapter);
+	dx12Interop->Init(*ppDevice, *ppImmediateContext, pAdapter);
 
 	if (upscaling.IsBackendInitialized()) {
 		if (upscaling.d3d12Mode) {
-			upscaling.SetBackendD3D12Device(dx12Interop.d3d12Device.get());
+			upscaling.SetBackendD3D12Device(dx12Interop->d3d12Device.get());
 		} else {
 			upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
 			upscaling.UpgradeBackendInterface((void**)&(*ppSwapChain));
@@ -1509,6 +1507,9 @@ void Upscaling::SetupResources()
 	if (globals::features::hdrDisplay.loaded) {
 		globals::features::hdrDisplay.SetupResources();
 	}
+
+	if (d3d12Mode)
+		interopContext = eastl::unique_ptr<InteropContext>(InteropContext::Make());
 }
 
 void Upscaling::ClearShaderCache()
@@ -1870,7 +1871,7 @@ void Upscaling::EncodeTextures()
 			if (upscaleMethod == UpscaleMethod::kDLSS) {
 				uavs[2] = globals::game::isVR ? vrIntermediateMotionVectors[i]->uav.get() : motionVectorCopyTexture->uav.get();
 			} else if (upscaleMethod == UpscaleMethod::kDLSS_RR) {
-				uavs[2] = globals::features::dx12Interop.sharedResources.motionVector->uav;
+				uavs[2] = globals::dx12Interop->sharedResources.motionVector->uav;
 			} else if (upscaleMethod == UpscaleMethod::kFSR && pathTracing) {
 				uavs[2] = globals::game::isVR ? vrIntermediateMotionVectors[i]->uav.get() : motionVectorCopyTexture->uav.get();
 			}
@@ -1906,7 +1907,7 @@ void Upscaling::CopySharedD3D12Resources()
 	auto context = globals::d3d::context;
 	auto& rt = globals::features::raytracing;
 
-	auto& sharedResources = globals::features::dx12Interop.sharedResources;
+	auto& sharedResources = globals::dx12Interop->sharedResources;
 
 	// Copy kMain
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
@@ -1991,14 +1992,13 @@ void Upscaling::Upscale()
 	const auto dlss = upscaleMethod == UpscaleMethod::kDLSS;
 
 	if (d3d12Mode) {
-		auto& dx12Interop = globals::features::dx12Interop;
-		auto& sharedResources = dx12Interop.sharedResources;
+		auto& sharedResources = globals::dx12Interop->sharedResources;
 		auto context = globals::d3d::context;
 
 		const auto dlssrr = upscaleMethod == UpscaleMethod::kDLSS_RR;
 
 		if (dlss || dlssrr) {
-			dx12Interop.Execute([&](ID3D12GraphicsCommandList4* commandList) {
+			interopContext->Execute([&](ID3D12GraphicsCommandList4* commandList) {
 				if (dlss) {
 					streamline.Upscale(commandList,
 						sharedResources.main->GetResource(), sharedResources.main->GetResource(),

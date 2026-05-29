@@ -108,6 +108,8 @@ public:
 	float2 resolutionScale = { 1.0f, 1.0f };
 	LARGE_INTEGER qpf;
 
+	eastl::unique_ptr<InteropContext> interopContext;
+
 	// FG FPS Measurement for Overlay
 	bool IsFrameGenerationDx12PathActive() const;
 	bool IsFrameGenerationActive() const;

@@ -7,9 +7,13 @@
 #include <wrl\wrappers\corewrappers.h>
 
 #include <d3d11_4.h>
+#include <d3d12.h>
+
 #include <directx/d3dx12.h>
 
-#include "Features/DX12Interop/WrappedResource.h"
+#include "DX12Interop.h"
+#include "DX12Interop/InteropContext.h"
+#include "DX12Interop/WrappedResource.h"
 
 struct DXGISwapChainProxy : IDXGISwapChain
 {
@@ -64,6 +68,8 @@ public:
 	double refreshRate = 0;
 
 	DXGISwapChainProxy* swapChainProxy = nullptr;
+
+	eastl::unique_ptr<InteropContext> interopContext;
 
 	// Returns the current frame time (in seconds) for accurate FPS calculation when frame generation is active
 	float GetFrameTime() const;
