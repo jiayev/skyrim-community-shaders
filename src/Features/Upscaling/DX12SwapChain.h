@@ -58,7 +58,6 @@ public:
 	winrt::com_ptr<ID3D12Resource> swapChainBuffers[2];
 
 	UINT frameIndex = 0;
-	UINT64 fenceValue = 0;
 
 	LARGE_INTEGER qpf;
 
@@ -74,8 +73,6 @@ public:
 	void CreateInterop();
 
 	DXGISwapChainProxy* GetSwapChainProxy();
-	void SetD3D11Device(ID3D11Device* a_d3d11Device);
-	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
 
 	HRESULT GetBuffer(void** ppSurface);
 	HRESULT Present(UINT SyncInterval, UINT Flags);

@@ -110,18 +110,6 @@ DXGISwapChainProxy* DX12SwapChain::GetSwapChainProxy()
 	return swapChainProxy;
 }
 
-void DX12SwapChain::SetD3D11Device(ID3D11Device* a_d3d11Device)
-{
-	auto& dx12Interop = globals::features::dx12Interop;
-	DX::ThrowIfFailed(a_d3d11Device->QueryInterface(IID_PPV_ARGS(&dx12Interop.d3d11Device)));
-}
-
-void DX12SwapChain::SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context)
-{
-	auto& dx12Interop = globals::features::dx12Interop;
-	DX::ThrowIfFailed(a_d3d11Context->QueryInterface(IID_PPV_ARGS(&dx12Interop.d3d11Context)));
-}
-
 HRESULT DX12SwapChain::GetBuffer(void** ppSurface)
 {
 	*ppSurface = swapChainBufferWrapped->resource11;
