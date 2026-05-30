@@ -1,4 +1,9 @@
+#ifndef WETNESS_EFFECTS_HLSLI
+#define WETNESS_EFFECTS_HLSLI
+
 #include "Common/BRDF.hlsli"
+#include "Common/Random.hlsli"
+#include "Common/SharedData.hlsli"
 #include "WetnessEffects/optimized-ggx.hlsli"
 
 namespace WetnessEffects
@@ -146,6 +151,183 @@ namespace WetnessEffects
 		return LightingFuncGGX_OPT3(N, V, L, roughness, 0.02) * lightColor;
 	}
 
+	struct SurfaceWetnessState
+	{
+		float3 normal;
+		float roughness;
+		float glossinessAlbedo;
+		float glossinessSpecular;
+	};
+
+	SurfaceWetnessState InitSurfaceWetnessState(float3 normal, float roughness)
+	{
+		SurfaceWetnessState state;
+		state.normal = normal;
+		state.roughness = roughness;
+		state.glossinessAlbedo = 0.0;
+		state.glossinessSpecular = 0.0;
+		return state;
+	}
+
+	float GetSurfaceWetnessRoughness(float glossinessSpecular)
+	{
+		static const float wetnessMinPuddleRoughness = 0.05;
+		return max(saturate(1.0 - glossinessSpecular), wetnessMinPuddleRoughness);
+	}
+
+	SurfaceWetnessState GetSurfaceWetnessState(
+		float3 worldPosition,
+		float3 ripplePosition,
+		float3 puddlePosition,
+		float3 shadingNormal,
+		float3 vertexNormal,
+		float waterHeight,
+		float wetnessOcclusion,
+		float nearFactor,
+		float rainWetnessOverride,
+		float rainWetnessAdd,
+		bool enablePuddleEffects)
+	{
+		SurfaceWetnessState state;
+		state.normal = vertexNormal;
+		state.roughness = 1.0;
+		state.glossinessAlbedo = 0.0;
+		state.glossinessSpecular = 0.0;
+
+		float wetnessDistToWater = abs(worldPosition.z - waterHeight);
+		float shoreFactor = saturate(1.0 - (wetnessDistToWater / SharedData::wetnessEffectsSettings.ShoreRange));
+		float shoreFactorAlbedo = (worldPosition.z < waterHeight) ? 1.0 : shoreFactor;
+
+		float minWetnessValue = SharedData::wetnessEffectsSettings.MinRainWetness;
+		float minWetnessAngle = saturate(max(minWetnessValue, vertexNormal.z));
+		float flatnessAmount = smoothstep(SharedData::wetnessEffectsSettings.PuddleMaxAngle, 1.0, minWetnessAngle);
+
+		float4 raindropInfo = float4(0, 0, 1, 0);
+		bool shouldCalculateRaindrops = (shadingNormal.z > 0.0) &&
+		                                (SharedData::wetnessEffectsSettings.Raining > 0.0) &&
+		                                (SharedData::wetnessEffectsSettings.EnableRaindropFx) &&
+		                                (wetnessOcclusion > 0.5);
+
+		if (shouldCalculateRaindrops) {
+			raindropInfo = GetRainDrops(ripplePosition, SharedData::wetnessEffectsSettings.Time, state.normal, flatnessAmount);
+		}
+
+		float rainWetness = SharedData::wetnessEffectsSettings.Wetness * minWetnessAngle * SharedData::wetnessEffectsSettings.MaxRainWetness;
+		rainWetness = max(rainWetness, raindropInfo.w);
+		if (rainWetnessOverride >= 0.0) {
+			rainWetness = rainWetnessOverride;
+		}
+		rainWetness += rainWetnessAdd;
+
+		float shoreWetness = shoreFactor * SharedData::wetnessEffectsSettings.MaxShoreWetness;
+		float wetness = max(shoreWetness, rainWetness);
+
+		float puddleWetness = enablePuddleEffects ? SharedData::wetnessEffectsSettings.PuddleWetness * minWetnessAngle : 0.0;
+		float puddle = wetness;
+
+		if (enablePuddleEffects && (wetness > 0.0 || puddleWetness > 0.0)) {
+			float3 puddleCoords = (puddlePosition * 0.5 + 0.5) * 0.01 / SharedData::wetnessEffectsSettings.PuddleRadius;
+			puddle = Random::perlinNoise(puddleCoords) * 0.5 + 0.5;
+			puddle = puddle * ((minWetnessAngle / SharedData::wetnessEffectsSettings.PuddleMaxAngle) * SharedData::wetnessEffectsSettings.MaxPuddleWetness * 0.25) + 0.5;
+			puddle *= lerp(wetness, puddleWetness, saturate(puddle - 0.25));
+		}
+
+		puddle *= saturate(wetnessOcclusion * 2.0) * nearFactor;
+		state.normal = lerp(shadingNormal, state.normal, saturate(puddle));
+
+		state.glossinessAlbedo = max(puddle, shoreFactorAlbedo * SharedData::wetnessEffectsSettings.MaxShoreWetness);
+		state.glossinessAlbedo *= state.glossinessAlbedo;
+
+		state.glossinessSpecular = puddle;
+		if (worldPosition.z < waterHeight) {
+			state.glossinessSpecular *= shoreFactor;
+		}
+
+		flatnessAmount *= smoothstep(SharedData::wetnessEffectsSettings.PuddleMinWetness, 1.0, state.glossinessSpecular);
+
+		float3 rippleNormal = normalize(lerp(float3(0, 0, 1), raindropInfo.xyz, lerp(flatnessAmount, 1.0, 0.5)));
+		state.normal = ReorientNormal(rippleNormal, state.normal);
+		state.roughness = GetSurfaceWetnessRoughness(state.glossinessSpecular);
+
+		return state;
+	}
+
+	void ApplySurfaceWetnessAlbedo(inout float3 baseColor, SurfaceWetnessState wetnessState, float porosity)
+	{
+		float wetnessDarkeningAmount = porosity * wetnessState.glossinessAlbedo;
+		baseColor = lerp(baseColor, pow(abs(baseColor), 1.0 + wetnessDarkeningAmount), 0.5);
+	}
+
+	void ApplySurfaceWetnessDirectLighting(
+		SurfaceWetnessState wetnessState,
+		float3 viewDirection,
+		float3 lightDirection,
+		float3 lightColor,
+		float specularScale,
+		inout float3 diffuse,
+		inout float3 specular,
+		inout float3 wetnessSpecular)
+	{
+		if (wetnessState.roughness >= 1.0)
+			return;
+
+		const float wetnessStrength = saturate(1.0 - wetnessState.roughness);
+		const float wetnessF0 = 0.02;
+
+		const float3 N = wetnessState.normal;
+		const float3 V = viewDirection;
+		const float3 L = lightDirection;
+		const float3 H = normalize(V + L);
+
+		float NdotL = clamp(dot(N, L), EPSILON_DOT_CLAMP, 1);
+		float NdotV = saturate(abs(dot(N, V)) + EPSILON_DOT_CLAMP);
+		float NdotH = saturate(dot(N, H));
+		float VdotH = saturate(dot(V, H));
+
+		float D = BRDF::D_GGX(wetnessState.roughness, NdotH);
+		float G = BRDF::Vis_SmithJointApprox(wetnessState.roughness, NdotV, NdotL);
+		float3 F = BRDF::F_Schlick(wetnessF0, VdotH);
+		float3 wetnessF = F * wetnessStrength;
+
+		float3 wetnessSpecularInput = D * G * wetnessF * NdotL * lightColor * specularScale;
+
+		diffuse *= 1.0 - wetnessF;
+		specular *= 1.0 - wetnessF;
+		wetnessSpecular += wetnessSpecularInput;
+	}
+
+	float3 ApplySurfaceWetnessIndirectLobeWeights(inout float3 diffuseLobeWeight, inout float3 specularLobeWeight, SurfaceWetnessState wetnessState, float3 viewDirection)
+	{
+#if defined(DYNAMIC_CUBEMAPS)
+		if (wetnessState.roughness >= 1.0)
+			return 0.0;
+
+		const float wetnessF0 = 0.02;
+		const float wetnessStrength = saturate(1.0 - wetnessState.roughness);
+
+		float NdotV = saturate(abs(dot(wetnessState.normal, viewDirection)) + EPSILON_DOT_CLAMP);
+		float2 specularBRDF = BRDF::EnvBRDF(wetnessState.roughness, NdotV);
+		float3 wetnessLobeWeight = wetnessF0 * specularBRDF.x + specularBRDF.y;
+		wetnessLobeWeight *= wetnessStrength;
+
+		diffuseLobeWeight *= 1.0 - wetnessLobeWeight;
+		specularLobeWeight *= 1.0 - wetnessLobeWeight;
+
+		return wetnessLobeWeight;
+#else
+		return 0.0;
+#endif
+	}
+
+	void ApplySurfaceWetnessOutput(SurfaceWetnessState wetnessState, inout float3 normal, inout float roughness)
+	{
+		if (wetnessState.roughness >= 1.0)
+			return;
+
+		normal = wetnessState.normal;
+		roughness = wetnessState.roughness;
+	}
+
 // Debug visualization functions for DEBUG_WETNESS_EFFECTS
 #ifdef DEBUG_WETNESS_EFFECTS
 	/**
@@ -263,3 +445,5 @@ namespace WetnessEffects
 	}
 
 }
+
+#endif

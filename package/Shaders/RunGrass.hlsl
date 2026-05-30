@@ -473,6 +473,10 @@ cbuffer PerMaterial : register(b1)
 
 #		include "GrassLighting/GrassLighting.hlsli"
 
+#		if defined(WETNESS_EFFECTS)
+#			include "WetnessEffects/WetnessEffects.hlsli"
+#		endif
+
 float GetSoftLightMultiplier(float angle, float rolloff)
 {
 	float softLight = saturate((rolloff + angle) / (1 + rolloff));
@@ -570,6 +574,35 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 	float roughness = saturate(1.0 - SharedData::grassLightingSettings.Glossiness * 0.01);
 
+	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
+	vertexColor /= max(max(max(vertexColor.r, vertexColor.g), vertexColor.b), EPSILON_DIVISION);
+
+#			if defined(SKYLIGHTING)
+#				if defined(VR)
+	float3 positionMSSkylight = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
+#				else
+	float3 positionMSSkylight = input.WorldPosition.xyz;
+#				endif
+	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, normal);
+	float3 skylightingNormal = normal;
+	skylightingNormal.z = max(0.0, skylightingNormal.z);
+	skylightingNormal = normalize(skylightingNormal);
+	float skylightingDiffuse = saturate(Skylighting::EvaluateDiffuse(skylightingSH, skylightingNormal, Skylighting::GetFadeOutFactor(positionMSSkylight)) / max(vertexAO, 1e-5));
+#			endif  // SKYLIGHTING
+
+#			if defined(WETNESS_EFFECTS)
+	float nearFactor = smoothstep(4096.0 * 2.5, 0.0, viewPosition.z);
+	float waterHeight = SharedData::GetWaterData(input.WorldPosition.xyz, eyeIndex).w;
+	float3 wetnessWorldPosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
+#				if defined(SKYLIGHTING)
+	float wetnessOcclusion = saturate(SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1)));
+#				else
+	float wetnessOcclusion = 1.0;
+#				endif
+	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessWorldPosition, wetnessWorldPosition, normal, normalize(input.VertexNormal.xyz), waterHeight, wetnessOcclusion, nearFactor, -1.0, 0.0, false);
+#			endif
+
 #			if defined(TRUE_PBR)
 	float4 rawRMAOS = TexRMAOSSampler.SampleBias(SampRMAOSSampler, input.TexCoord.xy, SharedData::MipBias) * float4(PBRParams1.x, 1, 1, PBRParams1.y);
 
@@ -596,6 +629,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 specularColorPBR = 0;
 	float3 transmissionColor = 0;
 #			endif  // TRUE_PBR
+
+#			if defined(WETNESS_EFFECTS)
+#				if defined(TRUE_PBR)
+	float wetnessPorosity = lerp(1.0, 0.0, saturate(sqrt(pbrSurfaceProperties.Metallic)));
+#				else
+	float wetnessPorosity = 1.0;
+#				endif
+	WetnessEffects::ApplySurfaceWetnessAlbedo(baseColor.xyz, wetnessState, wetnessPorosity);
+#				if defined(TRUE_PBR)
+	pbrSurfaceProperties.BaseColor = baseColor.xyz;
+#				endif
+#			endif
 
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
@@ -635,12 +680,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 lightsDiffuseColor = 0;
 	float3 lightsSpecularColor = 0;
+#			if defined(WETNESS_EFFECTS)
+	float3 wetnessDirectSpecularColor = 0;
+#			endif
 
 #			if defined(TRUE_PBR)
 	{
 		PBR::LightProperties lightProperties = PBR::InitLightProperties(Color::GamutTransform(SharedData::DirLightColor.xyz), dirLightColorMultiplier * dirDetailedShadow, 1);
 		float3 dirDiffuseColor, coatDirDiffuseColor, dirTransmissionColor, dirSpecularColor;
 		PBR::GetDirectLightInput(dirDiffuseColor, coatDirDiffuseColor, dirTransmissionColor, dirSpecularColor, normal, normal, viewDirection, viewDirection, DirLightDirection, DirLightDirection, lightProperties, pbrSurfaceProperties, tbn, input.TexCoord.xy);
+#				if defined(WETNESS_EFFECTS)
+		WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, DirLightDirection, Color::GamutTransform(SharedData::DirLightColor.xyz), dirLightColorMultiplier * dirDetailedShadow, dirDiffuseColor, dirSpecularColor, wetnessDirectSpecularColor);
+#				endif
 		lightsDiffuseColor += dirDiffuseColor;
 		transmissionColor += dirTransmissionColor;
 		specularColorPBR += dirSpecularColor;
@@ -651,27 +702,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float softLightRolloff = saturate(input.VertexNormal.w * 10.0) * SharedData::grassLightingSettings.SubsurfaceScatteringAmount * 2.0;
 
-	lightsDiffuseColor += dirLightColor * dirDetailedShadow * saturate(dirLightAngle) * Color::VanillaNormalization();
-
-	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
-	vertexColor /= max(max(max(vertexColor.r, vertexColor.g), vertexColor.b), EPSILON_DIVISION);
-
-#				if defined(SKYLIGHTING)
-#					if defined(VR)
-	float3 positionMSSkylight = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
-#					else
-	float3 positionMSSkylight = input.WorldPosition.xyz;
-#					endif
-	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
-	float skylightingDiffuse = Skylighting::GetVertexSkylightingDiffuse(positionMSSkylight, normal, vertexAO);
-#				endif  // SKYLIGHTING
-
 	float3 albedo = baseColor.xyz * vertexColor;
 
 	float3 subsurfaceColor = dirLightColor * dirDetailedShadow * (GetSoftLightMultiplier(dirLightAngle, softLightRolloff)) * Color::VanillaNormalization();
 
+	float3 dirDiffuseColor = dirLightColor * dirDetailedShadow * saturate(dirLightAngle) * Color::VanillaNormalization();
+	float3 dirSpecularColor = 0;
 	if (complex)
-		lightsSpecularColor += dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, roughness, F0) * Color::VanillaNormalization();
+		dirSpecularColor = dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, roughness, F0) * Color::VanillaNormalization();
+#				if defined(WETNESS_EFFECTS)
+	WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, SharedData::DirLightDirection.xyz, dirLightColor, dirDetailedShadow * Color::PBRLightingCompensation * Color::PBRLightingScale, dirDiffuseColor, dirSpecularColor, wetnessDirectSpecularColor);
+#				endif
+	lightsDiffuseColor += dirDiffuseColor;
+	lightsSpecularColor += dirSpecularColor;
 #			endif
 
 #			if defined(LIGHT_LIMIT_FIX)
@@ -719,25 +762,31 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 					PBR::LightProperties lightProperties = PBR::InitLightProperties(lightColor, lightShadow, 1);
 					float3 pointDiffuseColor, coatDirDiffuseColor, pointTransmissionColor, pointSpecularColor;
 					PBR::GetDirectLightInput(pointDiffuseColor, coatDirDiffuseColor, pointTransmissionColor, pointSpecularColor, normal, normal, viewDirection, viewDirection, normalizedLightDirection, normalizedLightDirection, lightProperties, pbrSurfaceProperties, tbn, input.TexCoord.xy);
+#					if defined(WETNESS_EFFECTS)
+					WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, normalizedLightDirection, lightColor, lightShadow, pointDiffuseColor, pointSpecularColor, wetnessDirectSpecularColor);
+#					endif
 					lightsDiffuseColor += pointDiffuseColor;
 					transmissionColor += pointTransmissionColor;
 					specularColorPBR += pointSpecularColor;
 				}
 #				else
+				float3 pointLightColor = lightColor;
 				lightColor *= lightShadow;
 
 				float lightAngle = dot(normal, normalizedLightDirection);
 				float lightNoL = dot(normalizedLightDirection.xyz, viewDirection);
-				float3 lightDiffuseColor;
-
-				lightDiffuseColor = lightColor * saturate(lightAngle);
+				float3 lightDiffuseColor = lightColor * saturate(lightAngle) * Color::VanillaNormalization();
+				float3 lightSpecularColor = 0;
 
 				subsurfaceColor += lightColor * GetSoftLightMultiplier(lightAngle, softLightRolloff) * Color::VanillaNormalization();
 
-				lightsDiffuseColor += lightDiffuseColor * Color::VanillaNormalization();
-
 				if (complex)
-					lightsSpecularColor += GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, roughness, F0) * Color::VanillaNormalization();
+					lightSpecularColor = GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, roughness, F0) * Color::VanillaNormalization();
+#					if defined(WETNESS_EFFECTS)
+				WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, normalizedLightDirection, pointLightColor, lightShadow * Color::PBRLightingCompensation * Color::PBRLightingScale, lightDiffuseColor, lightSpecularColor, wetnessDirectSpecularColor);
+#					endif
+				lightsDiffuseColor += lightDiffuseColor;
+				lightsSpecularColor += lightSpecularColor;
 #				endif
 			}
 		}
@@ -749,9 +798,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(TRUE_PBR)
 	float3 indirectDiffuseLobeWeight, indirectSpecularLobeWeight;
 	PBR::GetIndirectLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, normal, normal, viewDirection, baseColor.xyz, pbrSurfaceProperties);
+#				if defined(WETNESS_EFFECTS)
+	float3 wetnessReflectance = 0;
+	wetnessReflectance = WetnessEffects::ApplySurfaceWetnessIndirectLobeWeights(indirectDiffuseLobeWeight, indirectSpecularLobeWeight, wetnessState, viewDirection);
+#				endif
 
 	diffuseColor.xyz += transmissionColor;
 	specularColor.xyz += specularColorPBR;
+#				if defined(WETNESS_EFFECTS)
+	specularColor.xyz += wetnessDirectSpecularColor;
+#				endif
 	specularColor.xyz = Color::IrradianceToGamma(specularColor.xyz);
 	diffuseColor.xyz = Color::IrradianceToGamma(diffuseColor.xyz);
 #			else
@@ -766,6 +822,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -normal);
 #					endif
 	}
+#				endif
+
+	float3 reflectance = 0;
+#				if defined(DYNAMIC_CUBEMAPS) && (defined(VANILLA_FRESNEL) || defined(TRUE_PBR))
+#					if defined(VANILLA_FRESNEL)
+	if (SharedData::vanillaFresnelSettings.Enable) {
+#					endif
+		float2 specularBDRF = BRDF::EnvBRDF(roughness, saturate(dot(viewDirection, normal)));
+		reflectance = F0 * specularBDRF.x + specularBDRF.y;
+#					if defined(VANILLA_FRESNEL)
+	}
+#					endif
+#				endif
+
+#				if defined(WETNESS_EFFECTS)
+	float3 wetnessReflectance = 0;
+	wetnessReflectance = WetnessEffects::ApplySurfaceWetnessIndirectLobeWeights(albedo, reflectance, wetnessState, viewDirection);
 #				endif
 
 #				if defined(PSEUDO_SUN_BOUNCE)
@@ -820,6 +893,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (!(SharedData::vanillaFresnelSettings.Enable && SharedData::vanillaFresnelSettings.EnableGGXOnGrass))
 #				endif
 		specularColor *= specColor.w * SharedData::grassLightingSettings.SpecularStrength;
+#				if defined(WETNESS_EFFECTS)
+	specularColor += wetnessDirectSpecularColor;
+#				endif
 #			endif
 
 #			if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
@@ -838,36 +914,46 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Diffuse.xyz = diffuseColor;
 #			endif
 
-	float3 normalVS = normalize(FrameBuffer::WorldToView(normal, false, eyeIndex));
+	float3 outputNormal = normal;
+#			if defined(TRUE_PBR)
+	float outputRoughness = pbrSurfaceProperties.Roughness;
+#			else
+	float outputRoughness = roughness;
+#			endif
+#			if defined(WETNESS_EFFECTS)
+	WetnessEffects::ApplySurfaceWetnessOutput(wetnessState, outputNormal, outputRoughness);
+#			endif
+	float3 normalVS = normalize(FrameBuffer::WorldToView(outputNormal, false, eyeIndex));
 #			if defined(TRUE_PBR)
 	psout.Albedo = float4(Color::IrradianceToGamma(indirectDiffuseLobeWeight), 1);
-	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), 1 - pbrSurfaceProperties.Roughness, 1);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), 1 - outputRoughness, 1);
+#				if defined(WETNESS_EFFECTS)
+	psout.Reflectance = float4(indirectSpecularLobeWeight + wetnessReflectance, 1);
+#				else
 	psout.Reflectance = float4(indirectSpecularLobeWeight, 1);
-#			else
-
-	float3 reflectance = 0;
-#				if defined(DYNAMIC_CUBEMAPS) && (defined(VANILLA_FRESNEL) || defined(TRUE_PBR))
-#					if defined(VANILLA_FRESNEL)
-	if (SharedData::vanillaFresnelSettings.Enable) {
-#					endif
-		float2 specularBDRF = BRDF::EnvBRDF(roughness, saturate(dot(viewDirection, normal)));
-		reflectance = F0 * specularBDRF.x + specularBDRF.y;
-#					if defined(VANILLA_FRESNEL)
-	}
-#					endif
 #				endif
-
+#			else
+#				if defined(WETNESS_EFFECTS)
+	psout.Reflectance = float4(reflectance + wetnessReflectance, 1);
+#				else
 	psout.Reflectance = float4(reflectance, 1);
+#				endif
 	psout.Albedo = float4(albedo, 1);
-	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), 1.0 - roughness, 1);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), 1.0 - outputRoughness, 1);
 #			endif
 
 #			if defined(PSEUDO_SUN_BOUNCE)
 	if (!SharedData::InInterior && SharedData::pseudoSunBounceSettings.intensity > 0.0) {
 #				if defined(TRUE_PBR)
 		specularColor += specularBounce * indirectSpecularLobeWeight;
+#					if defined(WETNESS_EFFECTS)
+		specularColor += specularBounce * wetnessReflectance;
+#					endif
 #				else
 		specularColor += specularBounce * reflectance;
+#					if defined(WETNESS_EFFECTS)
+		specularColor += specularBounce * wetnessReflectance;
+#					endif
 #				endif
 	}
 #			endif
