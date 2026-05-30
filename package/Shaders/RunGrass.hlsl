@@ -1089,14 +1089,6 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #			endif
 
-#			if defined(SSRT)
-	if (SharedData::ssrtSettings.DiffuseMult > 0.0) {
-		directionalAmbientColor *= SharedData::ssrtSettings.AmbientMult;
-		envIBLColor *= SharedData::ssrtSettings.AmbientMult;
-		skyIBLColor *= SharedData::ssrtSettings.AmbientMult;
-	}
-#			endif
-
 	diffuseColor += directionalAmbientColor;
 
 	float3 albedo = baseColor.xyz * vertexColor;

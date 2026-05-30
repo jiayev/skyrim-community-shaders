@@ -411,14 +411,6 @@ namespace SharedData
 		uint2 pad0;
 	};
 
-	struct SSRTSettings
-	{
-		uint EnableSpecular;
-		float SpecularMult;
-		float DiffuseMult;
-		float AmbientMult;
-	};
-
 	struct PseudoSunBounceSettings
 	{
 		float3 groundAlbedo;
@@ -451,7 +443,6 @@ namespace SharedData
 		SSPLSSettings ssplsSettings;
 		VanillaFresnelSettings vanillaFresnelSettings;
 		PhysSkyData physSkyData;
-		SSRTSettings ssrtSettings;
 		PseudoSunBounceSettings pseudoSunBounceSettings;
 	};
 
