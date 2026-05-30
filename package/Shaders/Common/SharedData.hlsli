@@ -262,6 +262,22 @@ namespace SharedData
 		uint3 _padding;
 	};
 
+	struct SSGISettings
+	{
+		float DiffuseMult;
+		uint DebugMode;
+		uint pad0;
+		uint pad1;
+	};
+
+	struct SSRSettings
+	{
+		uint Enabled;
+		float SpecularMult;
+		uint pad0;
+		uint pad1;
+	};
+
 	struct ExponentialHeightFogSettings
 	{
 		uint enabled;
@@ -438,6 +454,8 @@ namespace SharedData
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		TruePBRSettings truePBRSettings;
+		SSGISettings ssgiSettings;
+		SSRSettings ssrSettings;
 		PostProcessingSettings postProcessingSettings;
 		SkinData skinData;
 		SSPLSSettings ssplsSettings;

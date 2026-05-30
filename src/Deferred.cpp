@@ -8,8 +8,10 @@
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/IBL.h"
+#include "Features/NRD.h"
 #include "Features/PhysicalSky.h"
 #include "Features/ScreenSpaceGI.h"
+#include "Features/ScreenSpaceReflections.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
@@ -330,11 +332,21 @@ void Deferred::DeferredPasses()
 
 	auto& skylighting = globals::features::skylighting;
 
+	auto& nrd = globals::features::nrd;
+	if (nrd.loaded)
+		nrd.PrepareGuides();
+
 	auto& ssgi = globals::features::screenSpaceGI;
 	if (ssgi.loaded)
 		ssgi.DrawSSGI();
-	auto [ssgi_ao, ssgi_y, ssgi_cocg, ssgi_gi_spec] = ssgi.GetOutputTextures();
-	bool ssgi_hq_spec = ssgi.settings.EnableExperimentalSpecularGI;
+
+	auto& ssr = globals::features::screenSpaceReflections;
+	if (ssr.loaded)
+		ssr.DrawSSR();
+
+	auto ssgiOutput = ssgi.GetDiffuseOutputTexture();
+	auto ssgiSH1Output = ssgi.GetDiffuseSH1Texture();
+	auto ssrOutput = ssr.GetOutputTexture();
 
 	auto dispatchCount = Util::GetScreenDispatchCount(true);
 
@@ -364,16 +376,13 @@ void Deferred::DeferredPasses()
 			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,                        // t6  EnvTexture
 			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,             // t7  EnvReflectionsTexture
 			dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr,   // t8  SkylightingProbeArray
-			nullptr,                                                                                         // t9  unused
-			ssgi_ao,                                                                                         // t10 SsgiAoTexture
-			ssgi_hq_spec ? nullptr : ssgi_y,                                                                 // t11 SsgiYTexture
-			ssgi_hq_spec ? nullptr : ssgi_cocg,                                                              // t12 SsgiCoCgTexture
-			ssgi_hq_spec ? ssgi_gi_spec : nullptr,                                                           // t13 SsgiSpecularTexture
-			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                             // t14 EnvIBLTexture
-			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,                                             // t15 SkyIBLTexture
-			nullptr,
-			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,
-			physSky.loaded ? physSky.texApShadow->srv.get() : nullptr,
+			ssgiOutput,                                                                                      // t9  SsgiTexture / SH0
+			ssgiSH1Output,                                                                                   // t10 SsgiSH1Texture
+			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                             // t11 EnvIBLTexture
+			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,                                             // t12 SkyIBLTexture
+			ssrOutput,                                                                                       // t13 SsrTexture (Screen Space Reflections)
+			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,                                          // t14 PhysicalSky AP LUT
+			physSky.loaded ? physSky.texApShadow->srv.get() : nullptr,                                       // t15 PhysicalSky AP Shadow
 		};
 
 		ID3D11SamplerState* samplers[]{
@@ -390,7 +399,7 @@ void Deferred::DeferredPasses()
 		auto& vrStereoOpt = globals::features::vr.stereoOpt;
 		bool stereoCullingReady = globals::features::vr.IsStereoOptimizationCullingReady();
 		ID3D11ShaderResourceView* modeSRV = stereoCullingReady ? vrStereoOpt.GetModeTextureSRV() : nullptr;
-		context->CSSetShaderResources(19, 1, &modeSRV);
+		context->CSSetShaderResources(16, 1, &modeSRV);
 
 		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
@@ -405,7 +414,7 @@ void Deferred::DeferredPasses()
 
 		// Unbind mode texture SRV
 		ID3D11ShaderResourceView* nullSRV = nullptr;
-		context->CSSetShaderResources(19, 1, &nullSRV);
+		context->CSSetShaderResources(16, 1, &nullSRV);
 	}
 
 	// VR: Deactivate stencil culling now that geometry rendering is complete.
@@ -637,8 +646,14 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		if (globals::features::skylighting.loaded)
 			defines.push_back({ "SKYLIGHTING", nullptr });
 
-		if (globals::features::screenSpaceGI.loaded)
+		if (globals::features::screenSpaceGI.loaded) {
 			defines.push_back({ "SSGI", nullptr });
+			if (globals::features::screenSpaceGI.settings.EnableSH && globals::features::screenSpaceGI.settings.EnableGI)
+				defines.push_back({ "SSGI_SH", nullptr });
+		}
+
+		if (globals::features::screenSpaceReflections.loaded && globals::features::screenSpaceReflections.settings.Enabled)
+			defines.push_back({ "SSR", nullptr });
 
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });
@@ -652,8 +667,6 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		if (REL::Module::IsVR())
 			defines.push_back({ "VR_STEREO_OPT", nullptr });
 
-		// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
-		// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
 		if (globals::features::terrainBlending.loaded)
 			defines.push_back({ "TERRAIN_BLENDING", nullptr });
 
@@ -673,8 +686,14 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 		if (globals::features::dynamicCubemaps.loaded)
 			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
 
-		if (globals::features::screenSpaceGI.loaded)
+		if (globals::features::screenSpaceGI.loaded) {
 			defines.push_back({ "SSGI", nullptr });
+			if (globals::features::screenSpaceGI.settings.EnableSH && globals::features::screenSpaceGI.settings.EnableGI)
+				defines.push_back({ "SSGI_SH", nullptr });
+		}
+
+		if (globals::features::screenSpaceReflections.loaded && globals::features::screenSpaceReflections.settings.Enabled)
+			defines.push_back({ "SSR", nullptr });
 
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });
@@ -685,8 +704,6 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 		if (REL::Module::IsVR())
 			defines.push_back({ "VR_STEREO_OPT", nullptr });
 
-		// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
-		// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
 		if (globals::features::terrainBlending.loaded)
 			defines.push_back({ "TERRAIN_BLENDING", nullptr });
 

@@ -1,7 +1,20 @@
 #pragma once
 
 #include "Buffer.h"
+#include "NRD.h"
+#include "NRDReblurIntegration.h"
 
+#include <NRDSettings.h>
+
+/**
+ * ScreenSpaceGI: indirect lighting and ambient occlusion via XeGTAO-style
+ * horizon scanning, optionally directional via spherical harmonics, denoised
+ * by NVIDIA REBLUR.
+ *
+ * Diffuse-only. Specular reflections live in the standalone
+ * ScreenSpaceReflections feature; denoising guides come from the core NRD
+ * service.
+ */
 struct ScreenSpaceGI : Feature
 {
 private:
@@ -33,7 +46,7 @@ public:
 				"Realistic indirect lighting",
 				"Enhanced ambient occlusion",
 				"Improved visual depth and atmosphere",
-				"Temporal denoising for smooth results",
+				"NVIDIA REBLUR temporal denoising",
 				"Configurable quality and performance settings" });
 	}
 
@@ -50,43 +63,31 @@ public:
 
 	void DrawSSGI();
 	void UpdateSB();
+	void SetupNRDResources();
 
 	//////////////////////////////////////////////////////////////////////////////////
 
 	bool recompileFlag = false;
-	uint outputAoIdx = 0;
-	uint outputIlIdx = 0;
 
 	struct Settings
 	{
 		bool Enabled = true;
-		bool EnableGI = REL::Module::IsVR() ? false : true;  // AO only for VR by default
-		bool EnableExperimentalSpecularGI = false;
+		bool EnableGI = REL::Module::IsVR() ? false : true;
 		bool EnableVanillaSSAO = false;
+		bool EnableSH = true;
 		// performance/quality
-		uint NumSlices = REL::Module::IsVR() ? 3u : 4u;  // AO preset for VR
-		uint NumSteps = REL::Module::IsVR() ? 6u : 8u;
-		int ResolutionMode = 1;  // 0-full, 1-half, 2-quarter - DBF default
+		uint NumSteps = 8u;
+		bool HalfRes = true;
 		// visual
-		float MinScreenRadius = 0.01f;
-		float AORadius = 256.f;
-		float GIRadius = 256.f;
-		float Thickness = 32.f;
-		float2 DepthFadeRange = { 4e4, 5e4 };
-		// gi
-		float GISaturation = 0.8f;
-		float GIDistanceCompensation = 0.f;
+		float Thickness = 0.1f;
 		// mix
 		float AOPower = 1.0f;
 		float GIStrength = 1.0f;
-		// denoise
-		bool EnableTemporalDenoiser = true;
-		bool EnableBlur = true;
-		float DepthDisocclusion = .1f;
-		float NormalDisocclusion = .1f;
-		uint MaxAccumFrames = 16;
-		float BlurRadius = 2.f;
-		float DistanceNormalisation = 2.f;
+		bool UseDynamicCubemapsAsFallback = true;
+		float DiffuseCubemapMult = 1.0f;
+		// NRD REBLUR
+		bool EnableREBLUR = true;
+		NRD::REBLURSettings Reblur;
 	} settings;
 
 	struct alignas(16) SSGICB
@@ -96,67 +97,51 @@ public:
 		float2 NDCToViewAdd[2];
 
 		float2 TexDim;
-		float2 RcpTexDim;  //
+		float2 RcpTexDim;
 		float2 FrameDim;
-		float2 RcpFrameDim;  //
+		float2 RcpFrameDim;
 		uint FrameIndex;
 
-		uint NumSlices;
 		uint NumSteps;
 
-		float MinScreenRadius;  //
-		float AORadius;
-		float GIRadius;
-		float EffectRadius;
-		float Thickness;  //
-		float2 DepthFadeRange;
-		float DepthFadeScaleConst;
+		float Thickness;
+		float AOPower;
 
-		float GISaturation;  //
-		float GIDistanceCompensation;
-		float GICompensationMaxDist;
-		float pad1;
-
-		float AOPower;  //
 		float GIStrength;
-
-		float DepthDisocclusion;
-		float NormalDisocclusion;
-		uint MaxAccumFrames;  //
-
-		float BlurRadius;
-		float DistanceNormalisation;
-
-		float2 pad;
+		float DiffuseCubemapMult;
+		uint UseDynamicCubemap;
+		uint pad0;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SSGICB);
 	eastl::unique_ptr<ConstantBuffer> ssgiCB;
+
+	struct alignas(16) SharedData
+	{
+		float DiffuseMult;
+		uint DebugMode;
+		uint pad0;
+		uint pad1;
+	};
+
+	SharedData GetCommonBufferData();
 
 	eastl::unique_ptr<Texture2D> texNoise = nullptr;
 	eastl::unique_ptr<Texture2D> texWorkingDepth = nullptr;
 	winrt::com_ptr<ID3D11UnorderedAccessView> uavWorkingDepth[5] = { nullptr };
 	eastl::unique_ptr<Texture2D> texPrevGeo = nullptr;
 	eastl::unique_ptr<Texture2D> texRadiance = nullptr;
-	eastl::unique_ptr<Texture2D> texRadianceTemp = nullptr;
 	winrt::com_ptr<ID3D11UnorderedAccessView> uavRadiance[5] = { nullptr };
 	eastl::unique_ptr<Texture2D> texNormal = nullptr;
 	winrt::com_ptr<ID3D11UnorderedAccessView> uavNormal[5] = { nullptr };
-	eastl::unique_ptr<Texture2D> texAccumFrames[2] = { nullptr };
-	eastl::unique_ptr<Texture2D> texAo[2] = { nullptr };
-	eastl::unique_ptr<Texture2D> texIlY[2] = { nullptr };
-	eastl::unique_ptr<Texture2D> texIlCoCg[2] = { nullptr };
-	eastl::unique_ptr<Texture2D> texGiSpecular[2] = { nullptr };
 
-	inline auto GetOutputTextures()
-	{
-		return (loaded && settings.Enabled) ?
-		           std::make_tuple(
-					   texAo[outputAoIdx]->srv.get(),
-					   texIlY[outputIlIdx]->srv.get(),
-					   texIlCoCg[outputIlIdx]->srv.get(),
-					   texGiSpecular[outputAoIdx]->srv.get()) :
-		           std::make_tuple(nullptr, nullptr, nullptr, nullptr);
-	}
+	// REBLUR diffuse radiance in/out (RGBA16F, full-res)
+	eastl::unique_ptr<Texture2D> texNRDInput = nullptr;
+	eastl::unique_ptr<Texture2D> texNRDOutput = nullptr;
+	eastl::unique_ptr<Texture2D> texNRDInputSH1 = nullptr;
+	eastl::unique_ptr<Texture2D> texNRDOutputSH1 = nullptr;
+
+	ID3D11ShaderResourceView* GetDiffuseOutputTexture();
+	ID3D11ShaderResourceView* GetDiffuseSH1Texture();
 
 	winrt::com_ptr<ID3D11SamplerState> linearClampSampler = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> pointClampSampler = nullptr;
@@ -164,9 +149,9 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> prefilterDepthsCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> prefilterRadianceCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> prefilterNormalCompute = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> radianceDisoccCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> giCompute = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> blurCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> stereoSyncCompute = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> upsampleCompute = nullptr;
+
+	NRDReblurIntegration nrdReblur;
+	nrd::ReblurSettings reblurSettings{};
 };

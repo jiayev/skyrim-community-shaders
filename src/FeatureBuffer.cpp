@@ -14,7 +14,9 @@
 #include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "Features/PseudoSunBounce.h"
+#include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpacePointLightShadows.h"
+#include "Features/ScreenSpaceReflections.h"
 #include "Features/Skin.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
@@ -59,6 +61,9 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::linearLighting.GetCommonBufferData(),
 		globals::features::terrainBlending.settings,
 		globals::features::exponentialHeightFog.settings,
+		globals::features::truePBR.settings,
+		globals::features::screenSpaceGI.GetCommonBufferData(),
+		globals::features::screenSpaceReflections.GetCommonBufferData(),
 		globals::features::truePBR.settings,
 		globals::features::postProcessing.settings,
 		globals::features::skin.GetCommonBufferData(),
