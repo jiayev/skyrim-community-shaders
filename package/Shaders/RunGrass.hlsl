@@ -587,7 +587,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				else
 	float wetnessOcclusion = 1.0;
 #				endif
-	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessWorldPosition, wetnessWorldPosition, normal, normalize(input.VertexNormal.xyz), waterHeight, wetnessOcclusion, nearFactor, -1.0, 0.0, false);
+	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessWorldPosition, wetnessWorldPosition, normal, normalize(input.VertexNormal.xyz), waterHeight, wetnessOcclusion, nearFactor, -1.0, 0.0, false, false);
 #			endif
 
 #			if defined(TRUE_PBR)

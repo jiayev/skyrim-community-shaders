@@ -30,7 +30,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RippleStrength,
 	RippleRadius,
 	RippleBreadth,
-	RippleLifetime)
+	RippleLifetime,
+	WallRainDensity,
+	WallRainDropSize,
+	WallRainSpeed,
+	WallRainLayering,
+	WallRainNormalStrength,
+	WallRainWetness,
+	WallRainDarkening)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	WetnessEffects::DebugSettings,
@@ -415,6 +422,38 @@ void WetnessEffects::DrawSettings()
 				ImGui::Text("As portion of grid size.");
 			ImGui::SliderFloat("Breadth", &settings.RippleBreadth, 0.f, 1.f, "%.2f");
 			ImGui::SliderFloat("Lifetime", &settings.RippleLifetime, 0.f, settings.RaindropInterval, "%.2f sec", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNodeEx("Wall Rain Flow")) {
+			ImGui::SliderFloat("Density", &settings.WallRainDensity, 0.5f, 3.0f, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Overall wall-rain coverage. Higher values add more streaks, especially in heavier rain.");
+
+			ImGui::SliderFloat("Drop Size", &settings.WallRainDropSize, 0.5f, 2.0f, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Size of individual wall streak droplets. Higher values make drops larger.");
+
+			ImGui::SliderFloat("Flow Speed", &settings.WallRainSpeed, 0.2f, 2.0f, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("How fast wall rain moves downward.");
+
+			ImGui::SliderFloat("Layering", &settings.WallRainLayering, 0.0f, 2.0f, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Strength of the secondary streak layer that fills gaps during heavier rain.");
+
+			ImGui::SliderFloat("Normal Strength", &settings.WallRainNormalStrength, 0.0f, 4.0f, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("How strongly wall rain distorts surface normals.");
+
+			ImGui::SliderFloat("Wet Look", &settings.WallRainWetness, 0.0f, 2.0f, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Boosts the glossy wet highlight created by wall rain.");
+
+			ImGui::SliderFloat("Darkening", &settings.WallRainDarkening, 0.0f, 1.5f, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("How much wall rain darkens the underlying surface.");
+
 			ImGui::TreePop();
 		}
 

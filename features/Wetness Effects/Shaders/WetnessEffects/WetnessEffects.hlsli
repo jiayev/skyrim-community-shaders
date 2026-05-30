@@ -2,6 +2,7 @@
 #define WETNESS_EFFECTS_HLSLI
 
 #include "Common/BRDF.hlsli"
+#include "Common/Game.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "WetnessEffects/optimized-ggx.hlsli"
@@ -151,6 +152,128 @@ namespace WetnessEffects
 		return LightingFuncGGX_OPT3(N, V, L, roughness, 0.02) * lightColor;
 	}
 
+	float4 HashWallRainFlow(float2 cell)
+	{
+		uint2 seed = asuint(int2(floor(cell)));
+		uint3 hash = Random::pcg3d(uint3(seed, 0xA511E9B3u));
+		uint hashW = hash.x * 1664525u + hash.y * 1013904223u + hash.z;
+		return float4(float(hash.x), float(hash.y), float(hash.z), float(hashW)) * (1.0 / 4294967296.0);
+	}
+
+	float3 Hash31(float p)
+	{
+		float3 p3 = frac(float3(p, p, p) * float3(0.1031, 0.11369, 0.13787));
+		p3 += dot(p3, p3.yzx + 19.19);
+		return frac(float3((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y, (p3.y + p3.z) * p3.x));
+	}
+
+	float SawTooth(float t)
+	{
+		return cos(t + cos(t)) + sin(2.0 * t) * 0.2 + sin(4.0 * t) * 0.02;
+	}
+
+	float DeltaSawTooth(float t)
+	{
+		return 0.4 * cos(2.0 * t) + 0.08 * cos(4.0 * t) - (1.0 - sin(t)) * sin(t + cos(t));
+	}
+
+	float3 GetWallRainMainDropOffset(float2 uv, float seed, float time)
+	{
+		uv.y -= time * 0.32;
+		uv *= float2(40.0, 6.0);
+
+		float2 id = floor(uv);
+		float3 n = Hash31(id.x + (id.y + seed) * 546.3524);
+		float2 bd = frac(uv) - 0.5;
+
+		bd.y *= 0.72;
+		bd.x += (n.x - 0.5) * 0.28;
+
+		float slidePhase = frac(time * 0.18 + n.z);
+		float slide = slidePhase * 2.0 - 1.0;
+		bd.y += slide * 1.55;
+		bd.y += bd.x * bd.x * slide * 0.85;
+
+		float d = length(bd);
+		float mainDrop = smoothstep(0.2, 0.1, d);
+		float2 offset = -bd * mainDrop * saturate(1.0 - d);
+		return float3(offset, mainDrop);
+	}
+
+	float3 GetWallRainFineDropOffset(float2 uv, float time, float layerScale, float layerSpeed)
+	{
+		float2 p = uv * layerScale + float2(0.0, -time * layerSpeed);
+		float2 x = float2(30.0, 30.0);
+		float2 xuv = x * p;
+		float4 n = HashWallRainFlow(floor(xuv - 0.3 + 0.5));
+		float2 offset = (HashWallRainFlow(floor(p * 4.0)).xy - 0.5) * 2.0;
+		float2 z = xuv * 6.3 + offset;
+
+		float phase = frac(time * (n.b + 0.1) + n.g);
+		float2 wave = sin(z) - phase * 0.5;
+		float mask = step(0.5, wave.x + wave.y - n.r * 3.0);
+		float2 dir = cos(z);
+		return float3(dir * mask * 0.09, mask);
+	}
+
+	float3 GetWallRainDropOffset(float horizontalCoord, float downCoord)
+	{
+		static const float2 wallRainUvPerMeter = float2(0.45, 1.9);
+		float rainAmount = saturate(SharedData::wetnessEffectsSettings.Raining);
+		float densityScale = lerp(1.35, 2.4, rainAmount) * SharedData::wetnessEffectsSettings.WallRainDensity;
+		float sizeScale = max(SharedData::wetnessEffectsSettings.WallRainDropSize, 0.1);
+		float secondaryLayerWeight = smoothstep(0.3, 1.0, rainAmount) * 0.7 * SharedData::wetnessEffectsSettings.WallRainLayering;
+		float2 uv = float2(horizontalCoord, downCoord) * (wallRainUvPerMeter * GAME_UNIT_TO_M * densityScale / sizeScale);
+		float time = SharedData::wetnessEffectsSettings.Time * 0.55 * SharedData::wetnessEffectsSettings.WallRainSpeed;
+
+		float3 mainDrop = GetWallRainMainDropOffset(uv, 1.0, time * 1.25);
+		float3 secondaryMainDrop = GetWallRainMainDropOffset(uv * 1.23 + float2(7.13, 3.71), 5.31, time * 1.12) * secondaryLayerWeight;
+		float3 fineDrop0 = GetWallRainFineDropOffset(uv, time, 1.0, 0.42) * float3(0.18, 0.10, 0.20);
+		float2 rotatedUv = float2(0.8 * uv.x + 0.6 * uv.y, -0.6 * uv.x + 0.8 * uv.y);
+		float3 fineDrop1 = GetWallRainFineDropOffset(rotatedUv, time, 2.02, 0.24) * float3(0.10, 0.08, 0.12);
+		float3 fineDrop2 = GetWallRainFineDropOffset(rotatedUv * 2.53, time, 1.25, 0.24) * float3(0.06, 0.05, 0.08);
+
+		float2 offset = mainDrop.xy + secondaryMainDrop.xy + fineDrop0.xy + fineDrop1.xy + fineDrop2.xy;
+		float mask = saturate(max(mainDrop.z, secondaryMainDrop.z) + max(max(fineDrop0.z, fineDrop1.z), fineDrop2.z) * 0.25);
+		return float3(clamp(offset * SharedData::wetnessEffectsSettings.WallRainNormalStrength, -3.0, 3.0), mask);
+	}
+
+	float4 GetWallRainFlowNormal(float3 worldPosition, float3 baseNormal)
+	{
+		float3 N = normalize(baseNormal);
+		float3 absN = abs(N);
+		float3 worldDown = float3(0, 0, -1);
+		float3 horizontalAxis = absN.x > absN.y ? float3(0, 1, 0) : float3(1, 0, 0);
+
+		float3 flowDirection = worldDown - N * dot(worldDown, N);
+		float flowLengthSqr = dot(flowDirection, flowDirection);
+		flowDirection = flowLengthSqr > 1e-4 ? flowDirection * rsqrt(flowLengthSqr) : worldDown;
+
+		float3 horizontalTangent = horizontalAxis - N * dot(horizontalAxis, N);
+		horizontalTangent -= flowDirection * dot(horizontalTangent, flowDirection);
+		float horizontalLengthSqr = dot(horizontalTangent, horizontalTangent);
+		horizontalTangent = horizontalLengthSqr > 1e-4 ? horizontalTangent * rsqrt(horizontalLengthSqr) : horizontalAxis;
+
+		float horizontalCoord = dot(worldPosition, horizontalAxis);
+		float downCoord = -worldPosition.z;
+		float3 drop = GetWallRainDropOffset(horizontalCoord, downCoord);
+		float2 slope = drop.xy;
+
+		float3 localNormal = normalize(float3(-slope, 1.0));
+		float3 rainNormal = normalize(localNormal.x * horizontalTangent + localNormal.y * flowDirection + localNormal.z * N);
+		return float4(normalize(lerp(N, rainNormal, drop.z)), drop.z);
+	}
+
+	float GetWallRainFlowBlend(float3 vertexNormal, float wetnessOcclusion, float nearFactor)
+	{
+		if (SharedData::wetnessEffectsSettings.Raining <= 0.0)
+			return 0.0;
+
+		float verticalAmount = smoothstep(0.35, 0.95, 1.0 - saturate(abs(vertexNormal.z)));
+		float rainAmount = saturate(SharedData::wetnessEffectsSettings.Raining);
+		return verticalAmount * rainAmount * saturate(wetnessOcclusion * 2.0) * nearFactor;
+	}
+
 	struct SurfaceWetnessState
 	{
 		float3 normal;
@@ -186,7 +309,8 @@ namespace WetnessEffects
 		float nearFactor,
 		float rainWetnessOverride,
 		float rainWetnessAdd,
-		bool enablePuddleEffects)
+		bool enablePuddleEffects,
+		bool enableRainFlowEffects)
 	{
 		SurfaceWetnessState state;
 		state.normal = vertexNormal;
@@ -247,6 +371,19 @@ namespace WetnessEffects
 
 		float3 rippleNormal = normalize(lerp(float3(0, 0, 1), raindropInfo.xyz, lerp(flatnessAmount, 1.0, 0.5)));
 		state.normal = ReorientNormal(rippleNormal, state.normal);
+
+		if (enableRainFlowEffects) {
+			float rainFlowBlend = GetWallRainFlowBlend(vertexNormal, wetnessOcclusion, nearFactor);
+			if (rainFlowBlend > 0.0) {
+				float4 rainFlowNormal = GetWallRainFlowNormal(puddlePosition, state.normal);
+				float rainFlowCoverage = saturate(rainFlowBlend * rainFlowNormal.w);
+				float rainFlowNormalBlend = saturate(rainFlowBlend * rainFlowNormal.w * 1.5);
+				state.normal = normalize(lerp(state.normal, rainFlowNormal.xyz, rainFlowNormalBlend));
+				state.glossinessSpecular = max(state.glossinessSpecular, rainFlowCoverage * 0.9 * SharedData::wetnessEffectsSettings.WallRainWetness);
+				state.glossinessAlbedo = max(state.glossinessAlbedo, rainFlowCoverage * SharedData::wetnessEffectsSettings.WallRainDarkening);
+			}
+		}
+
 		state.roughness = GetSurfaceWetnessRoughness(state.glossinessSpecular);
 
 		return state;

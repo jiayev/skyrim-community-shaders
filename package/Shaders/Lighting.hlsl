@@ -2403,12 +2403,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #		if !defined(SKINNED)
 	static const bool enableWetnessPuddleEffects = true;
+	static const bool enableWetnessRainFlowEffects = true;
 #		else
 	static const bool enableWetnessPuddleEffects = false;
+	static const bool enableWetnessRainFlowEffects = false;
 #		endif
 
 	float3 wetnessPuddlePosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
-	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessRipplePosition, wetnessPuddlePosition, worldNormal.xyz, vertexNormal.xyz, waterHeight, wetnessOcclusion, nearFactor, rainWetnessOverride, rainWetnessAdd, enableWetnessPuddleEffects);
+	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessRipplePosition, wetnessPuddlePosition, worldNormal.xyz, vertexNormal.xyz, waterHeight, wetnessOcclusion, nearFactor, rainWetnessOverride, rainWetnessAdd, enableWetnessPuddleEffects, enableWetnessRainFlowEffects);
 
 	float3 wetnessNormal = wetnessState.normal;
 	waterRoughnessSpecular = wetnessState.roughness;
