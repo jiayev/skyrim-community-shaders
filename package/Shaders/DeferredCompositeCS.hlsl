@@ -269,6 +269,9 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 				skySpecular = 0;
 #			endif
 			}
+			if (SharedData::InInterior) {
+				skySpecular = 0;
+			}
 
 			finalIrradiance = envSpecular + skySpecular;
 		} else

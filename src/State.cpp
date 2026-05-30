@@ -8,6 +8,7 @@
 #include "FeatureIssues.h"
 #include "Features/CloudShadows.h"
 #include "Features/HDRDisplay.h"
+#include "Features/InteriorSun.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
@@ -962,6 +963,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		}
 
 		data.InInterior = Util::IsInterior();
+		data.HasDirectionalShadows = HasDirectionalShadows();
 
 		if (globals::game::sky)
 			data.HideSky = globals::game::sky->flags.any(RE::Sky::Flags::kHideSky);
@@ -976,7 +978,9 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 			auto upscaleMethod = upscaling.GetUpscaleMethod();
 			if (temporal && upscaleMethod != Upscaling::UpscaleMethod::kTAA) {
 				auto renderSize = Util::ConvertToDynamic(screenSize, true);
-				data.MipBias = std::log2f(renderSize.x / screenSize.x) - 1.0f;
+				data.MipBias = std::log2f(renderSize.x / screenSize.x);
+				if (upscaleMethod == Upscaling::UpscaleMethod::kDLSS)
+					data.MipBias -= 1.0f;
 			} else {
 				data.MipBias = 0;
 			}
@@ -1080,6 +1084,11 @@ void State::LoadTheme()
 			logger::warn("Fallback to 'Default' theme failed");
 		}
 	}
+}
+
+bool State::HasDirectionalShadows() const
+{
+	return !Util::IsInterior() || globals::features::interiorSun.IsActiveInteriorSun();
 }
 
 void State::SaveTheme()
