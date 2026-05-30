@@ -18,6 +18,7 @@
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
 #include "Features/WetnessEffects.h"
+#include "TruePBR.h"
 
 template <class... Ts>
 std::pair<unsigned char*, size_t> _GetFeatureBufferData(Ts... feat_datas)
@@ -54,6 +55,7 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::linearLighting.GetCommonBufferData(),
 		globals::features::terrainBlending.settings,
 		globals::features::exponentialHeightFog.settings,
+		globals::features::truePBR.settings,
 		globals::features::screenSpaceGI.GetCommonBufferData(),
 		globals::features::screenSpaceReflections.GetCommonBufferData());
 }

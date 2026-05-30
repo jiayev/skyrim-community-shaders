@@ -37,6 +37,7 @@ struct Upscaling;
 struct WeatherEditor;
 struct ExponentialHeightFog;
 struct HDRDisplay;
+struct ScreenshotFeature;
 
 class State;
 class Deferred;
@@ -95,6 +96,7 @@ namespace globals
 		extern Upscaling upscaling;
 		extern HDRDisplay hdrDisplay;
 		extern RenderDoc renderDoc;
+		extern ScreenshotFeature screenshotFeature;
 		extern WeatherEditor weatherEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
@@ -218,7 +220,6 @@ namespace globals
 		extern RE::BSGraphics::Renderer* renderer;
 		extern RE::BSShaderManager::State* smState;
 		extern RE::TES* tes;
-		extern RE::TESWaterSystem* waterSystem;
 		extern bool isVR;
 		extern RE::MemoryManager* memoryManager;
 		extern RE::INISettingCollection* iniSettingCollection;
