@@ -2023,12 +2023,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #		if !defined(SKINNED) && !(defined(SKIN) && defined(CS_SKIN))
 	static const bool enableWetnessPuddleEffects = true;
+	static const bool enableWetnessRainFlowEffects = true;
 #		else
 	static const bool enableWetnessPuddleEffects = false;
+	static const bool enableWetnessRainFlowEffects = false;
 #		endif
 
 	float3 wetnessPuddlePosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
-	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessRipplePosition, wetnessPuddlePosition, worldNormal.xyz, vertexNormal.xyz, waterHeight, wetnessOcclusion, nearFactor, rainWetnessOverride, rainWetnessAdd, enableWetnessPuddleEffects);
+	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessRipplePosition, wetnessPuddlePosition, worldNormal.xyz, vertexNormal.xyz, waterHeight, wetnessOcclusion, nearFactor, rainWetnessOverride, rainWetnessAdd, enableWetnessPuddleEffects, enableWetnessRainFlowEffects);
 
 #		if defined(SKIN) && defined(CS_SKIN)
 	if (skinEnabled && (skinWetness > 0.0f)) {
