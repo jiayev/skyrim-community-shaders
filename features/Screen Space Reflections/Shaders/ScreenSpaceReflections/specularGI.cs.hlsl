@@ -437,7 +437,7 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 
 #if defined(DYNAMIC_CUBEMAPS)
 	if (SpecUseDynamicCubemap != 0 && (confidence < 0.999f)) {
-		float3 envColor = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
+		float3 envColor = EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
 #	if defined(SKYLIGHTING)
 		if (!SharedData::InInterior) {
 			float3 positionMS = world_space_origin;
@@ -445,15 +445,11 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 			sh2 skylightingSH = Skylighting::Sample(positionMS, world_space_reflected_direction);
 			float fadeOutFactor = Skylighting::GetFadeOutFactor(positionMS);
 			float3 skylightingNormal = normalize(float3(world_space_normal.xy, max(0, world_space_normal.z)));
-			float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, skylightingNormal, fadeOutFactor);
+			float skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, SphericalHarmonics::FauxSpecularLobe(view_space_surface_normal, normalize(view_space_ray), roughness), fadeOutFactor);
 
-			skylightingDiffuse *= 1.0 + saturate(world_space_normal.z) * (1.0 - SharedData::skylightingSettings.MinDiffuseVisibility);
-			skylightingDiffuse = GetSpecularOcclusionFromAmbientOcclusion(NdotV, skylightingDiffuse, roughness);
-			float3 envNoSkyColor = EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
-			float3 envSkyColor = envColor;
-			float3 skyColor = max(envSkyColor - envNoSkyColor, 0);
-			envColor = envNoSkyColor * skylightingDiffuse;
-			envColor += skyColor * skylightingDiffuse;
+			float3 envSkyColor = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
+			float3 skyColor = max(envSkyColor - envColor, 0);
+			envColor += skyColor * skylightingSpecular;
 		}
 #	endif
 		envColor = Color::IrradianceToLinear(envColor);
