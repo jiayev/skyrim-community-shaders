@@ -56,7 +56,10 @@ void ScreenSpaceGI::DrawSettings()
 		ImGui::TableNextColumn();
 		{
 			auto ilToggleGuard = Util::DisableGuard(!settings.Enabled);
-			recompileFlag |= ImGui::Checkbox("Indirect Lighting (IL)", &settings.EnableGI);
+			if (ImGui::Checkbox("Indirect Lighting (IL)", &settings.EnableGI)) {
+				recompileFlag = true;
+				SetupNRDResources();
+			}
 		}
 		ImGui::TableNextColumn();
 		{
@@ -155,8 +158,10 @@ void ScreenSpaceGI::DrawSettings()
 		BUFFER_VIEWER_NODE(texRadiance, debugRescale)
 		BUFFER_VIEWER_NODE(texNRDInput, debugRescale)
 		BUFFER_VIEWER_NODE(texNRDOutput, debugRescale)
-		if (texNRDInputSH1) BUFFER_VIEWER_NODE(texNRDInputSH1, debugRescale)
-		if (texNRDOutputSH1) BUFFER_VIEWER_NODE(texNRDOutputSH1, debugRescale)
+		if (texNRDInputSH1)
+			BUFFER_VIEWER_NODE(texNRDInputSH1, debugRescale)
+		if (texNRDOutputSH1)
+			BUFFER_VIEWER_NODE(texNRDOutputSH1, debugRescale)
 
 		ImGui::TreePop();
 	}
@@ -370,7 +375,13 @@ void ScreenSpaceGI::SetupNRDResources()
 	texNRDOutput->CreateSRV(srvDesc);
 	texNRDOutput->CreateUAV(uavDesc);
 
-	if (settings.EnableSH) {
+	const float clearColor[4] = {};
+	globals::d3d::context->ClearUnorderedAccessViewFloat(texNRDInput->uav.get(), clearColor);
+	globals::d3d::context->ClearUnorderedAccessViewFloat(texNRDOutput->uav.get(), clearColor);
+
+	const bool enableSH = settings.EnableSH && settings.EnableGI;
+
+	if (enableSH) {
 		texNRDInputSH1 = eastl::make_unique<Texture2D>(texDesc, "SSGI::NRDInputSH1");
 		texNRDInputSH1->CreateSRV(srvDesc);
 		texNRDInputSH1->CreateUAV(uavDesc);
@@ -378,12 +389,15 @@ void ScreenSpaceGI::SetupNRDResources()
 		texNRDOutputSH1 = eastl::make_unique<Texture2D>(texDesc, "SSGI::NRDOutputSH1");
 		texNRDOutputSH1->CreateSRV(srvDesc);
 		texNRDOutputSH1->CreateUAV(uavDesc);
+
+		globals::d3d::context->ClearUnorderedAccessViewFloat(texNRDInputSH1->uav.get(), clearColor);
+		globals::d3d::context->ClearUnorderedAccessViewFloat(texNRDOutputSH1->uav.get(), clearColor);
 	} else {
 		texNRDInputSH1.reset();
 		texNRDOutputSH1.reset();
 	}
 
-	auto denoiser = settings.EnableSH ? nrd::Denoiser::REBLUR_DIFFUSE_SH : nrd::Denoiser::REBLUR_DIFFUSE;
+	auto denoiser = enableSH ? nrd::Denoiser::REBLUR_DIFFUSE_SH : nrd::Denoiser::REBLUR_DIFFUSE;
 	nrdReblur.Init(fullW, fullH, denoiser, 0);
 
 	globals::deferred->ClearShaderCache();
@@ -563,13 +577,18 @@ void ScreenSpaceGI::DrawSSGI()
 
 		resetViews();
 		srvs.at(0) = rts[deferred->forwardRenderTargets[0]].SRV;
+		srvs.at(1) = GetDiffuseOutputTexture();
+		if (settings.EnableSH && settings.EnableGI)
+			srvs.at(2) = GetDiffuseSH1Texture();
+		srvs.at(3) = texWorkingDepth->srv.get();
+		srvs.at(4) = rts[NORMALROUGHNESS].SRV;
 		uavs.at(0) = uavRadiance[0].get();
 		uavs.at(1) = uavRadiance[1].get();
 		uavs.at(2) = uavRadiance[2].get();
 		uavs.at(3) = uavRadiance[3].get();
 		uavs.at(4) = uavRadiance[4].get();
 
-		context->CSSetShaderResources(0, 1, srvs.data());
+		context->CSSetShaderResources(0, 5, srvs.data());
 		context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
 		context->CSSetShader(prefilterRadianceCompute.get(), nullptr, 0);
 		context->Dispatch((resolution[0] + 15u) >> 4, (resolution[1] + 15u) >> 4, 1);
@@ -614,7 +633,8 @@ void ScreenSpaceGI::DrawSSGI()
 
 		uavs.at(0) = texNRDInput->uav.get();
 		uavs.at(1) = texPrevGeo->uav.get();
-		if (settings.EnableSH && texNRDInputSH1)
+		const bool enableSH = settings.EnableSH && settings.EnableGI;
+		if (enableSH && texNRDInputSH1)
 			uavs.at(2) = texNRDInputSH1->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
@@ -643,7 +663,8 @@ void ScreenSpaceGI::DrawSSGI()
 		nrdReblur.SetNamedSRV(nrd::ResourceType::IN_NORMAL_ROUGHNESS, nrdSvc.GetNormalRoughnessSRV());
 		nrdReblur.SetNamedSRV(nrd::ResourceType::IN_VIEWZ, nrdSvc.GetViewZSRV());
 
-		if (settings.EnableSH && texNRDInputSH1) {
+		const bool enableSH = settings.EnableSH && settings.EnableGI;
+		if (enableSH && texNRDInputSH1) {
 			nrdReblur.SetNamedSRV(nrd::ResourceType::IN_DIFF_SH0, texNRDInput->srv.get());
 			nrdReblur.SetNamedSRV(nrd::ResourceType::IN_DIFF_SH1, texNRDInputSH1->srv.get());
 			nrdReblur.SetNamedSRV(nrd::ResourceType::OUT_DIFF_SH0, texNRDOutput->srv.get());
@@ -682,7 +703,7 @@ ID3D11ShaderResourceView* ScreenSpaceGI::GetDiffuseOutputTexture()
 
 ID3D11ShaderResourceView* ScreenSpaceGI::GetDiffuseSH1Texture()
 {
-	if (!loaded || !settings.Enabled || !settings.EnableSH)
+	if (!loaded || !settings.Enabled || !settings.EnableGI || !settings.EnableSH)
 		return nullptr;
 	if (settings.EnableREBLUR && nrdReblur.IsValid() && globals::features::nrd.loaded && globals::features::nrd.AreGuidesReady() && texNRDOutputSH1)
 		return texNRDOutputSH1->srv.get();
@@ -694,7 +715,7 @@ ID3D11ShaderResourceView* ScreenSpaceGI::GetDiffuseSH1Texture()
 ScreenSpaceGI::SharedData ScreenSpaceGI::GetCommonBufferData()
 {
 	SharedData data;
-	data.DiffuseMult = (settings.Enabled && settings.EnableGI) ? settings.GIStrength : 0.0f;
+	data.DiffuseMult = (settings.Enabled && settings.EnableGI) ? 1.0f : 0.0f;
 	data.DebugMode = 0;
 	data.pad0 = 0;
 	data.pad1 = 0;

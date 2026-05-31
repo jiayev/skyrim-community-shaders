@@ -747,6 +747,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #				endif
 
+	if (SharedData::ssgiSettings.DiffuseMult > 0.0)
+		directionalAmbientColor = 0;
+
 	diffuseColor += directionalAmbientColor;
 	diffuseColor += subsurfaceColor * albedo;
 	diffuseColor *= albedo;
