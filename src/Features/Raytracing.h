@@ -23,6 +23,7 @@
 #include "Features/LinearLighting.h"
 #include "Features/Upscaling.h"
 #include "Features/WetnessEffects.h"
+#include "Features/LODBlending.h"
 
 #define STATIC_ASSERT_ENUM_COUNT(EnumType, Array) \
 	static_assert(_countof(Array) == magic_enum::enum_count<EnumType>(), "Array size must match enum count");
@@ -659,6 +660,7 @@ struct Raytracing : public OverlayFeature
 		ExtendedTranslucency::PerFrame ExtendedTranslucency;
 		LinearLighting::PerFrameData LinearLighting;
 		ExponentialHeightFog::Settings ExponentialHeightFog;
+		LODBlending::Settings LODBlending;
 	};
 
 	eastl::unique_ptr<FeatureData> featureData;

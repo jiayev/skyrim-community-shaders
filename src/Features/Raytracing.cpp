@@ -976,6 +976,7 @@ void Raytracing::UpdateFeatureData()
 	std::memcpy(&featureData->ExtendedTranslucency, &globals::features::extendedTranslucency.GetCommonBufferData(), sizeof(ExtendedTranslucency::PerFrame));
 	std::memcpy(&featureData->LinearLighting, &linearLighting, sizeof(LinearLighting::PerFrameData));
 	std::memcpy(&featureData->ExponentialHeightFog, &globals::features::exponentialHeightFog.settings, sizeof(ExponentialHeightFog::Settings));
+	std::memcpy(&featureData->LODBlending, &globals::features::lodBlending.settings, sizeof(LODBlending::Settings));
 
 	static_assert(sizeof(FeatureData::ExtendedMaterials) == sizeof(ExtendedMaterials::Settings));
 	static_assert(sizeof(FeatureData::WetnessEffects) == sizeof(WetnessEffects::PerFrame));
@@ -984,6 +985,7 @@ void Raytracing::UpdateFeatureData()
 	static_assert(sizeof(FeatureData::ExtendedTranslucency) == sizeof(ExtendedTranslucency::PerFrame));
 	static_assert(sizeof(FeatureData::LinearLighting) == sizeof(LinearLighting::PerFrameData));
 	static_assert(sizeof(FeatureData::ExponentialHeightFog) == sizeof(ExponentialHeightFog::Settings));
+	static_assert(sizeof(FeatureData::LODBlending) == sizeof(LODBlending::Settings));
 
 	creationEngineRaytracing->UpdateFeatureData(featureData.get(), sizeof(FeatureData));
 }
