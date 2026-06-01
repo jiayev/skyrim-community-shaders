@@ -131,9 +131,8 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 #	endif
 #	if defined(SKIN) && defined(CS_SKIN)
 	if (SharedData::skinData.skinParams.w > 0.0f) {
-		float3 diffuseLightColor = context.lightColor * context.detailedShadow;
-		float3 softLightColor = context.lightColor * context.softShadow;
 		Skin::SkinDirectLightInput(lightingOutput, context, material);
+		float3 softLightColor = context.lightColor * context.softShadow;
 
 		// SSS fallback for forward skin rendering
 #		if !defined(DEFERRED)

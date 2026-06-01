@@ -14,9 +14,21 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "Common/Color.hlsli"
+#include "Common/FrameBuffer.hlsli"
+#include "Common/GBuffer.hlsli"
+#include "Common/VR.hlsli"
+#include "NRD/NRDReblurSH.hlsli"
 #include "ScreenSpaceGI/common.hlsli"
 
 Texture2D<float4> srcRadiance : register(t0);
+#ifdef GI
+Texture2D<float4> srcPrevSsgi : register(t1);
+#	ifdef SSGI_SH
+Texture2D<float4> srcPrevSsgiSH1 : register(t2);
+Texture2D<float> srcWorkingDepth : register(t3);
+Texture2D<float2> srcNormal : register(t4);
+#	endif
+#endif
 
 RWTexture2D<float3> outRadiance0 : register(u0);
 RWTexture2D<float3> outRadiance1 : register(u1);
@@ -29,6 +41,35 @@ float3 RadianceMIPFilter(float3 radiance0, float3 radiance1, float3 radiance2, f
 	// Linear filtering for radiance - simple average
 	return (radiance0 + radiance1 + radiance2 + radiance3) * 0.25;
 }
+
+#ifdef GI
+float3 LoadSsgiMultiBounce(uint2 pixCoord)
+{
+	float4 packed = srcPrevSsgi[pixCoord];
+
+#	ifdef SSGI_SH
+	float viewspaceZ = READ_DEPTH(srcWorkingDepth, pixCoord);
+	if (viewspaceZ <= FP_Z)
+		return 0;
+
+	float2 uv = (pixCoord + 0.5) * RCP_OUT_FRAME_DIM;
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
+	float2 normalizedScreenPos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
+	float3 viewspacePos = ScreenToViewPosition(normalizedScreenPos, viewspaceZ, eyeIndex);
+	float3 viewspaceNormal = GBuffer::DecodeNormal(srcNormal[pixCoord]);
+	float3 normalWS = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse[eyeIndex]);
+	float3 viewWS = ViewToWorldVector(normalize(-viewspacePos), FrameBuffer::CameraViewInverse[eyeIndex]);
+
+	NRD_SG sg = REBLUR_BackEnd_UnpackSh(packed, srcPrevSsgiSH1[pixCoord]);
+	return NRD_SG_ResolveDiffuse(sg, normalWS, viewWS, 1.0);
+#	else
+	float normHitDist;
+	float3 radiance;
+	REBLUR_BackEnd_UnpackRadianceAndNormHitDist(packed, radiance, normHitDist);
+	return radiance;
+#	endif
+}
+#endif
 
 groupshared float3 g_scratchRadiance[8][8];
 [numthreads(8, 8, 1)] void main(uint2 dispatchThreadID : SV_DispatchThreadID, uint2 groupThreadID : SV_GroupThreadID) {
@@ -43,10 +84,17 @@ groupshared float3 g_scratchRadiance[8][8];
 	float4 rad1 = srcRadiance.GatherGreen(samplerPointClamp, uv * frameScale);
 	float4 rad2 = srcRadiance.GatherBlue(samplerPointClamp, uv * frameScale);
 
-	float3 radiance0 = Color::RadianceToLinear(float3(rad0.w, rad1.w, rad2.w) * GIStrength);
-	float3 radiance1 = Color::RadianceToLinear(float3(rad0.z, rad1.z, rad2.z) * GIStrength);
-	float3 radiance2 = Color::RadianceToLinear(float3(rad0.x, rad1.x, rad2.x) * GIStrength);
-	float3 radiance3 = Color::RadianceToLinear(float3(rad0.y, rad1.y, rad2.y) * GIStrength);
+	float3 radiance0 = Color::RadianceToLinear(float3(rad0.w, rad1.w, rad2.w));
+	float3 radiance1 = Color::RadianceToLinear(float3(rad0.z, rad1.z, rad2.z));
+	float3 radiance2 = Color::RadianceToLinear(float3(rad0.x, rad1.x, rad2.x));
+	float3 radiance3 = Color::RadianceToLinear(float3(rad0.y, rad1.y, rad2.y));
+
+#ifdef GI
+	radiance0 += LoadSsgiMultiBounce(pixCoord + uint2(0, 0));
+	radiance1 += LoadSsgiMultiBounce(pixCoord + uint2(1, 0));
+	radiance2 += LoadSsgiMultiBounce(pixCoord + uint2(0, 1));
+	radiance3 += LoadSsgiMultiBounce(pixCoord + uint2(1, 1));
+#endif
 
 	outRadiance0[pixCoord + uint2(0, 0)] = radiance0;
 	outRadiance0[pixCoord + uint2(1, 0)] = radiance1;

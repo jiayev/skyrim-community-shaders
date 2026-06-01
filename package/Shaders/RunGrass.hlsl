@@ -824,6 +824,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #				endif
 
+	if (SharedData::ssgiSettings.DiffuseMult > 0.0)
+		directionalAmbientColor = 0;
+
 	float3 reflectance = 0;
 #				if defined(DYNAMIC_CUBEMAPS) && (defined(VANILLA_FRESNEL) || defined(TRUE_PBR))
 #					if defined(VANILLA_FRESNEL)

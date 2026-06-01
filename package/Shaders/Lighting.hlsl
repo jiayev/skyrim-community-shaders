@@ -3147,6 +3147,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
+#	if defined(DEFERRED)
+	if (SharedData::ssgiSettings.DiffuseMult > 0.0)
+		directionalAmbientColor = 0;
+#	endif
+
 #	if defined(PSEUDO_SUN_BOUNCE)
 	float3 specularBounce = 0;
 	if (!SharedData::InInterior && inWorld && SharedData::pseudoSunBounceSettings.intensity > 0.0) {

@@ -12,6 +12,8 @@ RWTexture2D<float4> outNormalRoughness : register(u1);
 
 float ScreenToViewDepth(float screenDepth)
 {
+	if (screenDepth >= 1.0 - 1e-6 || screenDepth <= 0.0)
+		return 3.402823466e+38;
 	return (SharedData::CameraData.w / (-screenDepth * SharedData::CameraData.z + SharedData::CameraData.x));
 }
 

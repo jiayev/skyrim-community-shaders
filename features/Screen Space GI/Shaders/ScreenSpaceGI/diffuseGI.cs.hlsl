@@ -25,10 +25,38 @@
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// New version is based on SSRT 3
+// https://github.com/cdrinmatane/SSRT3
+//
+// MIT License
+//
+// Copyright (c) 2024 CDRIN
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 #include "Common/Color.hlsli"
 #include "Common/FastMath.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
+#include "Common/Game.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/VR.hlsli"
 #include "NRD/NRDReblurSH.hlsli"
@@ -46,12 +74,26 @@ TextureCube<float3> EnvReflectionsTexture : register(t5);
 #	endif
 #endif
 Texture2D<float2> srcNormal : register(t8);
+Texture2D<float4> srcPrevGI : register(t9);
+#ifdef SSGI_SH
+Texture2D<float4> srcPrevGISH1 : register(t10);
+#endif
 
 RWTexture2D<float4> outRadianceHitDist : register(u0);
 RWTexture2D<half3> outPrevGeo : register(u1);
 #ifdef SSGI_SH
 RWTexture2D<float4> outSH1 : register(u2);
 #endif
+
+static const float SSGI_NORMAL_BIAS = 0.01;
+static const uint SSGI_MAX_RAY = 32;
+static const uint SSGI_ROTATION_COUNT = 1;
+static const uint SSGI_FALLBACK_SAMPLE_COUNT = 4;
+static const float SSGI_EXP_FACTOR = 2.0;
+static const float SSGI_FALLBACK_POWER = 1.0;
+static const float SSGI_FALLBACK_MIP = 3.0;
+static const float SSGI_BACKFACE_LIGHTING = 0.0;
+static const float SSGI_MULTI_BOUNCE_GI = 1.0;
 
 // Engine-specific screen & temporal noise loader
 float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)  // without TAA, temporalIndex is always 0
@@ -60,6 +102,61 @@ float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)  // without TAA, 
 	// 128x128x64
 	uint2 noiseCoord = (pixCoord % 128) + uint2(0, (temporalIndex % 64) * 128);
 	return srcNoise.Load(uint3(noiseCoord, 0));
+}
+
+uint ComputeOccludedBitfield(float minHorizon, float maxHorizon, inout uint globalOccludedBitfield, out uint numOccludedZones)
+{
+	uint startHorizonInt = min((uint)(saturate(minHorizon) * SSGI_MAX_RAY), SSGI_MAX_RAY);
+	uint angleHorizonInt = min((uint)ceil(saturate(maxHorizon - minHorizon) * SSGI_MAX_RAY), SSGI_MAX_RAY - startHorizonInt);
+
+	numOccludedZones = 0;
+	if (angleHorizonInt == 0)
+		return 0;
+
+	uint angleHorizonBitfield = 0xFFFFFFFFu;
+	if (angleHorizonInt < SSGI_MAX_RAY)
+		angleHorizonBitfield = (1u << angleHorizonInt) - 1u;
+	uint currentOccludedBitfield = angleHorizonBitfield << startHorizonInt;
+	currentOccludedBitfield &= ~globalOccludedBitfield;
+	globalOccludedBitfield |= currentOccludedBitfield;
+	numOccludedZones = countbits(currentOccludedBitfield);
+	return currentOccludedBitfield;
+}
+
+#if defined(DYNAMIC_CUBEMAPS)
+float3 SampleDiffuseFallbackCubemap(float3 worldPos, float3 worldNormal, float3 worldDir)
+{
+	float3 envColor = EnvTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
+#	if defined(SKYLIGHTING)
+	if (!SharedData::InInterior) {
+		float fadeOutFactor = Skylighting::GetFadeOutFactor(worldPos);
+		float3 skylightingNormal = normalize(float3(worldNormal.xy, max(0, worldNormal.z)));
+		float skylightingBoost = 1.0 + saturate(worldNormal.z) * (1.0 - SharedData::skylightingSettings.MinDiffuseVisibility);
+		sh2 skylightingSH = Skylighting::Sample(worldPos, worldDir);
+		float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, skylightingNormal, fadeOutFactor) * skylightingBoost;
+		float3 envSkyColor = EnvReflectionsTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
+		float3 skyColor = max(envSkyColor - envColor, 0);
+		envColor += skyColor * skylightingDiffuse;
+	}
+#	endif
+	return Color::IrradianceToLinear(envColor);
+}
+#endif
+
+float3 SamplePreviousGIRadiance(float2 uv, float3 viewspaceNormal, float3 viewVec, float2 frameScale)
+{
+	float2 prevUV = uv * frameScale;
+#ifdef SSGI_SH
+	NRD_SG sg = REBLUR_BackEnd_UnpackSh(
+		srcPrevGI.SampleLevel(samplerPointClamp, prevUV, 0),
+		srcPrevGISH1.SampleLevel(samplerPointClamp, prevUV, 0));
+	return max(0, NRD_SG_ResolveDiffuse(sg, viewspaceNormal, viewVec, 1.0));
+#else
+	float3 radiance;
+	float normHitDist;
+	REBLUR_BackEnd_UnpackRadianceAndNormHitDist(srcPrevGI.SampleLevel(samplerPointClamp, prevUV, 0), radiance, normHitDist);
+	return max(0, radiance);
+#endif
 }
 
 void CalculateGI(
@@ -75,36 +172,31 @@ void CalculateGI(
 
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
 	float2 normalizedScreenPos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
-
 	const float rcpNumSteps = rcp((float)NumSteps);
-
-	//////////////////////////////////////////////////////////////////
 
 	// Use mono screen-space position for noise indexing so both eyes
 	// sample the same noise for corresponding world positions.
 	uint2 noiseCoord = uint2(normalizedScreenPos * OUT_FRAME_DIM);
 	const float2 localNoise = SpatioTemporalNoise(noiseCoord, FrameIndex);
-	const float noiseSlice = localNoise.x;
 	const float noiseStep = localNoise.y;
+	const float noiseDirection = localNoise.x;
 
-	//////////////////////////////////////////////////////////////////
-
-	const float3 pixCenterPos = ScreenToViewPosition(normalizedScreenPos, viewspaceZ, eyeIndex);
+	const float3 pixCenterPos = ScreenToViewPosition(normalizedScreenPos, viewspaceZ, eyeIndex) + viewspaceNormal * SSGI_NORMAL_BIAS * viewspaceZ;
 	const float3 viewVec = normalize(-pixCenterPos);
 
-	// flip foliage normal
 	if (dot(viewVec, pixCenterPos) > 0)
 		viewspaceNormal = -viewspaceNormal;
 
-	float visibility = 0;
+	float normHitDist = 0;
 	float3 totalRadiance = 0;
 	float3 fallbackRadiance = 0;
 #ifdef SSGI_SH
 	float3 totalDirection = 0;
 #endif
 
+	[loop] for (uint rotation = 0; rotation < SSGI_ROTATION_COUNT; rotation++)
 	{
-		float phi = Math::PI * noiseSlice;
+		float phi = (rotation + noiseDirection) * (Math::PI / SSGI_ROTATION_COUNT);
 		float3 directionVec = 0;
 		sincos(phi, directionVec.y, directionVec.x);
 
@@ -112,23 +204,15 @@ void CalculateGI(
 		float2 pixPos = dtid + 0.5;
 		float2 absDir = max(abs(omega_dir), 1e-6);
 
-		const float3 orthoDirectionVec = directionVec - (dot(directionVec, viewVec) * viewVec);
-		const float3 axisVec = normalize(cross(orthoDirectionVec, viewVec));
+		float3 planeNormal = normalize(cross(directionVec, viewVec));
+		float3 tangent = cross(viewVec, planeNormal);
+		float3 projectedNormalVec = viewspaceNormal - planeNormal * dot(viewspaceNormal, planeNormal);
+		float3 projectedNormalNormalized = projectedNormalVec * rsqrt(max(dot(projectedNormalVec, projectedNormalVec), EPSILON_LENGTH_SQ));
+		float3 realTangent = cross(projectedNormalNormalized, planeNormal);
+		float cosN = clamp(dot(projectedNormalNormalized, viewVec), -1.0, 1.0);
+		float n = -sign(dot(projectedNormalVec, tangent)) * FastMath::ACos(cosN);
 
-		float3 projectedNormalVec = viewspaceNormal - axisVec * dot(viewspaceNormal, axisVec);
-		// 1/length(v) == rsqrt(dot(v,v)). max() guards against a zero-length projection.
-		float rcpProjectedNormalVecLength = rsqrt(max(dot(projectedNormalVec, projectedNormalVec), EPSILON_LENGTH_SQ));
-		float signNorm = sign(dot(orthoDirectionVec, projectedNormalVec));
-		float cosNorm = saturate(dot(projectedNormalVec, viewVec) * rcpProjectedNormalVecLength);
-
-		float n = signNorm * FastMath::ACos(cosNorm);
-
-		uint bitmask = 0;
-#ifdef GI
-		uint bitmaskGI = 0;
-#endif
-
-		float stepNoise = noiseStep;
+		uint globalOccludedBitfield = 0;
 
 		[unroll] for (int sideSign = -1; sideSign <= 1; sideSign += 2)
 		{
@@ -138,32 +222,26 @@ void CalculateGI(
 			edgeDist.y = sideDir.y >= 0 ? (OUT_FRAME_DIM.y - pixPos.y) : pixPos.y;
 			float screenspaceRadius = min(edgeDist.x / absDir.x, edgeDist.y / absDir.y);
 
-			float2 omega = omega_dir * screenspaceRadius;
-			float logLenOmega = 0.5 * log2(max(dot(omega, omega), EPSILON_LENGTH_SQ));
-
 			[loop] for (uint step = 0; step < NumSteps; step++)
 			{
-				float s = (step + stepNoise) * rcpNumSteps;
-				s *= s;
+				float s = (step + noiseStep) * rcpNumSteps;
+				float sampleOffset = pow(abs(s), SSGI_EXP_FACTOR) * screenspaceRadius;
+				sampleOffset = max(sampleOffset, 1.0 + step);
 
-				float2 sampleOffset = s * omega;
-
-				float2 samplePxCoord = dtid + .5 + sampleOffset * sideSign;
+				float2 samplePxCoord = pixPos + omega_dir * sampleOffset * sideSign;
 				float2 sampleUV = samplePxCoord * RCP_OUT_FRAME_DIM;
 
 				uint sampleEyeIndex = Stereo::GetEyeIndexFromTexCoord(sampleUV);
 				float2 sampleScreenPos = Stereo::ConvertFromStereoUV(sampleUV, sampleEyeIndex);
-				[branch] if (any(sampleScreenPos > 1.0) || any(sampleScreenPos < 0.0)) continue;
+				[branch] if (any(sampleScreenPos > 1.0) || any(sampleScreenPos < 0.0)) break;
 
-				float mipLevel = clamp(log2(s) + logLenOmega - 3.3, 0, 5);
-				float mipLevelRadiance = max(mipLevel, 1);
+				float mipLevel = min((step + 1) / 2, 4);
 
 				float SZ = srcWorkingDepth.SampleLevel(samplerPointClamp, sampleUV * frameScale, mipLevel);
+				if (SZ <= FP_Z)
+					continue;
 
-				// Reconstruct sample in current eye's viewspace for correct horizon angles.
 				float3 samplePos = ScreenToViewPosition(sampleScreenPos, SZ, sampleEyeIndex);
-				// For cross-eye samples, reject if the depth differs too much from the
-				// center pixel -- the other eye may see a different surface due to occlusion.
 #if defined(VR)
 				if (sampleEyeIndex != eyeIndex) {
 					if (abs(SZ - viewspaceZ) > viewspaceZ * 0.1)
@@ -174,113 +252,91 @@ void CalculateGI(
 				float3 sampleDelta = samplePos - pixCenterPos;
 				float3 sampleHorizonVec = normalize(sampleDelta);
 
-				// Back-side horizon vector for the surface-thickness offset.
 				float3 sampleBackHorizonVec = normalize(sampleDelta - viewVec * Thickness * viewspaceZ);
 
-				float angleFront = FastMath::ACos(dot(sampleHorizonVec, viewVec));
-				float angleBack = FastMath::ACos(dot(sampleBackHorizonVec, viewVec));
-				float2 angleRange = -sideSign * (sideSign == -1 ? float2(angleFront, angleBack) : float2(angleBack, angleFront));
-				angleRange = smoothstep(0, 1, (angleRange + n) * Math::INV_PI + .5);
+				float2 frontBackHorizon = float2(dot(sampleHorizonVec, viewVec), dot(sampleBackHorizonVec, viewVec));
+				frontBackHorizon = clamp(frontBackHorizon, -1.0, 1.0);
+				frontBackHorizon = float2(FastMath::ACos(frontBackHorizon.x), FastMath::ACos(frontBackHorizon.y));
+				frontBackHorizon = saturate(((sideSign * -frontBackHorizon) - n + Math::HALF_PI) * Math::INV_PI);
+				frontBackHorizon = sideSign > 0 ? frontBackHorizon.yx : frontBackHorizon.xy;
 
-				uint2 bitsRange = uint2(round(angleRange.x * 32u), round((angleRange.y - angleRange.x) * 32u));
-				uint maskedBits = ((1 << bitsRange.y) - 1) << bitsRange.x;
+				uint numOccludedZones;
+				ComputeOccludedBitfield(frontBackHorizon.x, frontBackHorizon.y, globalOccludedBitfield, numOccludedZones);
 
 #ifdef GI
-				uint validBits = maskedBits & ~bitmaskGI;
-
-				if (validBits) {
-					float3 normalSample = GBuffer::DecodeNormal(srcNormal.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevelRadiance));
+				if (numOccludedZones > 0) {
+					float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevel).rgb;
+					float3 normalSample = GBuffer::DecodeNormal(srcNormal.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevel));
 					if (dot(samplePos, normalSample) > 0)
 						normalSample = -normalSample;
-					float frontBackMult = -dot(normalSample, sampleHorizonVec);
-					frontBackMult = frontBackMult < 0 ? 0.0 : frontBackMult;
 
-					if (frontBackMult > 0.f) {
-						float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevelRadiance).rgb * frontBackMult;
-						sampleRadiance = max(sampleRadiance, 0);
+					sampleRadiance += SamplePreviousGIRadiance(sampleUV, normalSample, normalize(-samplePos), frameScale) * SSGI_MULTI_BOUNCE_GI;
 
-						float3 diffuseRadiance = sampleRadiance * 4.0 * Math::PI * countbits(validBits) * 0.03125;
-						totalRadiance += diffuseRadiance;
-#ifdef SSGI_SH
-						totalDirection += sampleHorizonVec * Color::RGBToLuminance(diffuseRadiance);
-#endif
+					if (Color::RGBToLuminance(sampleRadiance) > 0.001) {
+						float3 lightDirection = sampleHorizonVec;
+						float receiverNdotL = saturate(dot(viewspaceNormal, lightDirection));
+						float sourceNdotL = dot(normalSample, -lightDirection);
+						sourceNdotL = SSGI_BACKFACE_LIGHTING > 0 && dot(normalSample, viewVec) > 0 ?
+						                  (sign(sourceNdotL) < 0 ? abs(sourceNdotL) * SSGI_BACKFACE_LIGHTING : abs(sourceNdotL)) :
+						                  saturate(sourceNdotL);
+
+						if (receiverNdotL > 0.001 && sourceNdotL > 0.001) {
+							float weight = float(numOccludedZones) / float(SSGI_MAX_RAY);
+							float3 diffuseRadiance = max(sampleRadiance, 0) * receiverNdotL * sourceNdotL * weight * GIStrength;
+							totalRadiance += diffuseRadiance;
+#	ifdef SSGI_SH
+							totalDirection += lightDirection * Color::RGBToLuminance(diffuseRadiance);
+#	endif
+						}
 					}
 				}
-
-				bitmaskGI |= maskedBits;
 #endif  // GI
-
-				bitmask |= maskedBits;
 			}
 		}
 
-		visibility += countbits(bitmask) * 0.03125;
+		normHitDist += float(countbits(globalOccludedBitfield)) / float(SSGI_MAX_RAY);
 
 #if defined(DYNAMIC_CUBEMAPS)
 		if (UseDynamicCubemap != 0) {
 			float3 worldPos = ViewToWorldPosition(pixCenterPos, FrameBuffer::CameraViewInverse[eyeIndex]);
 			float3 worldNormal = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse[eyeIndex]);
+			uint globalOccludedBitfieldCopy = globalOccludedBitfield;
+			[unroll] for (uint j = 0; j < SSGI_FALLBACK_SAMPLE_COUNT; j++)
+			{
+				uint maskSize = SSGI_MAX_RAY / SSGI_FALLBACK_SAMPLE_COUNT;
+				uint mask = 0xFFFFFFFFu >> (SSGI_MAX_RAY - maskSize);
+				uint hitCount = countbits(globalOccludedBitfieldCopy & mask);
+				float openWeight = saturate(float(maskSize - hitCount) / float(SSGI_MAX_RAY));
 
-#	if defined(SKYLIGHTING)
-			float fadeOutFactor = 1.0;
-			float3 skylightingNormal = worldNormal;
-			float skylightingBoost = 1.0;
-			if (!SharedData::InInterior) {
-				fadeOutFactor = Skylighting::GetFadeOutFactor(worldPos);
-				skylightingNormal = normalize(float3(worldNormal.xy, max(0, worldNormal.z)));
-				skylightingBoost = 1.0 + saturate(worldNormal.z) * (1.0 - SharedData::skylightingSettings.MinDiffuseVisibility);
-			}
+				if (openWeight <= 0)
+					continue;
+
+				float cosine = (1.0 - ((float(j) + 0.5) / float(SSGI_FALLBACK_SAMPLE_COUNT))) * 2.0 - 1.0;
+				float sine = sqrt(saturate(1.0 - cosine * cosine));
+				float3 rayDir = normalize(realTangent * cosine + viewspaceNormal * sine);
+				rayDir = normalize(rayDir - planeNormal * dot(rayDir, planeNormal));
+				float3 worldDir = ViewToWorldVector(rayDir, FrameBuffer::CameraViewInverse[eyeIndex]);
+				float3 contrib = SampleDiffuseFallbackCubemap(worldPos, worldNormal, worldDir) * openWeight;
+				fallbackRadiance += contrib;
+#	ifdef SSGI_SH
+				totalDirection += rayDir * Color::RGBToLuminance(contrib);
 #	endif
 
-			const uint FALLBACK_SAMPLES = 4;
-			const uint BITS_PER_SAMPLE = 32 / FALLBACK_SAMPLES;
-			uint bitmaskCopy = bitmask;
-			float orthoLen = max(dot(orthoDirectionVec, orthoDirectionVec), EPSILON_LENGTH_SQ);
-			float3 sliceTangent = orthoDirectionVec * rsqrt(orthoLen);
-
-			for (uint j = 0; j < FALLBACK_SAMPLES; j++) {
-				uint segMask = (1u << BITS_PER_SAMPLE) - 1u;
-				uint occluded = countbits(bitmaskCopy & segMask);
-				float weight = float(BITS_PER_SAMPLE - occluded) * 0.03125;
-
-				if (weight > 0) {
-					float cosAngle = (1.0 - ((float(j) + 0.5) / float(FALLBACK_SAMPLES))) * 2.0 - 1.0;
-					float angle = FastMath::ACos(cosAngle);
-					float3 rayDir = normalize(sliceTangent * cos(angle) + viewspaceNormal * sin(angle));
-					rayDir = normalize(rayDir - axisVec * dot(rayDir, axisVec));
-
-					float cosWeight = saturate(dot(rayDir, viewspaceNormal));
-
-					float3 worldDir = ViewToWorldVector(rayDir, FrameBuffer::CameraViewInverse[eyeIndex]);
-					float3 envColor = EnvReflectionsTexture.SampleLevel(samplerLinearClamp, worldDir, 0);
-
-#	if defined(SKYLIGHTING)
-					if (!SharedData::InInterior) {
-						sh2 skylightingSH = Skylighting::Sample(worldPos, worldDir);
-						float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, skylightingNormal, fadeOutFactor);
-						skylightingDiffuse *= skylightingBoost;
-
-						float3 envNoSkyColor = EnvTexture.SampleLevel(samplerLinearClamp, worldDir, 0);
-						float3 skyColor = max(envColor - envNoSkyColor, 0);
-						envColor = envNoSkyColor * skylightingDiffuse + skyColor * skylightingDiffuse;
-					}
-#	endif
-
-					envColor = Color::IrradianceToLinear(envColor);
-					envColor *= DiffuseCubemapMult;
-					fallbackRadiance += envColor * cosWeight * weight;
-				}
-
-				bitmaskCopy >>= BITS_PER_SAMPLE;
+				globalOccludedBitfieldCopy >>= maskSize;
 			}
 		}
 #endif
 	}
 
-	visibility = saturate(visibility);
-	visibility = 1 - pow(abs(1 - visibility), AOPower);
+	normHitDist /= SSGI_ROTATION_COUNT;
+	totalRadiance /= SSGI_ROTATION_COUNT;
+	fallbackRadiance /= SSGI_ROTATION_COUNT;
 
-	o_ao = visibility;
+	normHitDist = saturate(normHitDist);
+	normHitDist = 1 - pow(abs(1 - normHitDist), AOPower);
+	fallbackRadiance = pow(abs(fallbackRadiance), SSGI_FALLBACK_POWER) * DiffuseCubemapMult;
+
+	o_ao = normHitDist;
 	o_radiance = totalRadiance + fallbackRadiance;
 #ifdef SSGI_SH
 	o_direction = normalize(totalDirection + 1e-6);
@@ -303,6 +359,17 @@ void CalculateGI(
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
 
 	float viewspaceZ = READ_DEPTH(srcWorkingDepth, pxCoord);
+	if (viewspaceZ <= FP_Z) {
+#ifdef SSGI_SH
+		float4 sh1;
+		outRadianceHitDist[outCoord] = REBLUR_FrontEnd_PackSh(float3(0, 0, 0), 0, float3(0, 0, 0), sh1, true);
+		outSH1[outCoord] = sh1;
+#else
+		outRadianceHitDist[outCoord] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(float3(0, 0, 0), 0, true);
+#endif
+		outPrevGeo[pxCoord] = 0;
+		return;
+	}
 
 	float2 normalSample = FULLRES_LOAD(srcNormal, pxCoord, uv * OUT_FRAME_SCALE, samplerLinearClamp);
 	float3 viewspaceNormal = GBuffer::DecodeNormal(normalSample);
@@ -317,15 +384,12 @@ void CalculateGI(
 	float3 direction = 0;
 #endif
 
-	bool needGI = viewspaceZ > FP_Z;
-	if (needGI) {
-		CalculateGI(pxCoord, uv, viewspaceZ, viewspaceNormal, ao, radiance
+	CalculateGI(pxCoord, uv, viewspaceZ, viewspaceNormal, ao, radiance
 #ifdef SSGI_SH
-			,
-			direction
+		,
+		direction
 #endif
-		);
-	}
+	);
 
 	radiance = filterNaN(radiance);
 

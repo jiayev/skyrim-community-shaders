@@ -31,6 +31,8 @@ float ClampDepth(float depth)
 	if (depth == 0.0)  // VR 0 indicates a mask
 		return 0.0;
 #endif
+	if (depth >= 1.0 - 1e-6)
+		return 0.0;
 	depth = ScreenToViewDepth(depth);
 	return clamp(depth, 0.0, 3.402823466e+38);
 }

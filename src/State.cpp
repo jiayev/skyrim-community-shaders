@@ -8,6 +8,7 @@
 
 #include "Deferred.h"
 #include "FeatureIssues.h"
+#include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/ExponentialHeightFog.h"
 #include "Features/HDRDisplay.h"
@@ -19,7 +20,6 @@
 #include "Features/Upscaling.h"
 #include "Features/VRStereoOptimizations.h"
 #include "Features/VolumetricShadows.h"
-#include "Features/WeatherEditor.h"
 #include "JiayeStatement.h"
 #include "Menu.h"
 #include "SceneSettingsManager.h"
@@ -67,7 +67,7 @@ void State::Draw()
 	auto& terrainBlending = globals::features::terrainBlending;
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
-	auto& weatherEditor = globals::features::weatherEditor;
+	auto& csEditor = globals::features::csEditor;
 	auto& skin = globals::features::skin;
 	auto& truePBR = globals::features::truePBR;
 	auto context = globals::d3d::context;
@@ -77,7 +77,7 @@ void State::Draw()
 		// Process deferred cell transitions (interior detection)
 		SceneSettingsManager::GetSingleton()->Update();
 
-		if (weatherEditor.loaded) {
+		if (csEditor.loaded) {
 			ZoneScopedN("WeatherManager::UpdateFeatures");
 			WeatherManager::GetSingleton()->UpdateFeatures();
 		}
@@ -187,6 +187,8 @@ void State::Debug()
 
 void State::Reset()
 {
+	globals::profiler->EndFrame();
+
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
@@ -778,6 +780,16 @@ void State::SetupResources()
 #ifdef TRACY_ENABLE
 	Feature::SetTracyCtx(tracyCtx);
 #endif
+
+	globals::profiler->Initialize(globals::d3d::device, globals::d3d::context);
+
+	if (frameAnnotations) {
+		globals::profiler->SetPerfEventCallbacks(
+			[this](std::string_view name) { BeginPerfEvent(name); },
+			[this](std::string_view) { EndPerfEvent(); });
+	} else {
+		globals::profiler->SetPerfEventCallbacks({}, {});
+	}
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred)
