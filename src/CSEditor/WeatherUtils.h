@@ -175,21 +175,21 @@ namespace WidgetFactory
 	inline const char* TranslateWidgetTypeName(std::string_view widgetTypeName)
 	{
 		if (widgetTypeName == "Weather")
-			return T("weather_editor.widget_type_weather", "Weather");
+			return T("cs_editor.widget_type_weather", "Weather");
 		if (widgetTypeName == "ImageSpace")
-			return T("weather_editor.widget_type_imagespace", "ImageSpace");
+			return T("cs_editor.widget_type_imagespace", "ImageSpace");
 		if (widgetTypeName == "Lighting")
-			return T("weather_editor.widget_type_lighting", "Lighting");
+			return T("cs_editor.widget_type_lighting", "Lighting");
 		if (widgetTypeName == "Cell Lighting")
-			return T("weather_editor.widget_type_cell_lighting", "Cell Lighting");
+			return T("cs_editor.widget_type_cell_lighting", "Cell Lighting");
 		if (widgetTypeName == "Volumetric Lighting")
-			return T("weather_editor.widget_type_volumetric_lighting", "Volumetric Lighting");
+			return T("cs_editor.widget_type_volumetric_lighting", "Volumetric Lighting");
 		if (widgetTypeName == "Precipitation")
-			return T("weather_editor.widget_type_precipitation", "Precipitation");
+			return T("cs_editor.widget_type_precipitation", "Precipitation");
 		if (widgetTypeName == "Lens Flare")
-			return T("weather_editor.widget_type_lens_flare", "Lens Flare");
+			return T("cs_editor.widget_type_lens_flare", "Lens Flare");
 		if (widgetTypeName == "Visual Effect")
-			return T("weather_editor.widget_type_visual_effect", "Visual Effect");
+			return T("cs_editor.widget_type_visual_effect", "Visual Effect");
 
 		// Fallback: use T() to cache a stable null-terminated copy
 		return T(std::string(widgetTypeName).c_str(), std::string(widgetTypeName).c_str());
@@ -274,7 +274,7 @@ namespace WidgetFactory
 			if (widget->IsOpen()) {
 				hasOpen = true;
 				auto editorId = widget->GetEditorID();
-				if (ImGui::MenuItem(std::vformat(T("weather_editor.save_widget", "Save {}"), std::make_format_args(editorId)).c_str()))
+				if (ImGui::MenuItem(std::vformat(T("cs_editor.save_widget", "Save {}"), std::make_format_args(editorId)).c_str()))
 					widget->Save();
 			}
 		}
@@ -288,7 +288,7 @@ namespace WidgetFactory
 		if (widgets.empty())
 			return;
 		auto typeName = TranslateWidgetTypeName(widgets[0]->GetWidgetTypeName());
-		if (ImGui::MenuItem(std::vformat(T("weather_editor.close_all_widgets", "Close All {} Widgets"), std::make_format_args(typeName)).c_str())) {
+		if (ImGui::MenuItem(std::vformat(T("cs_editor.close_all_widgets", "Close All {} Widgets"), std::make_format_args(typeName)).c_str())) {
 			for (auto& widget : widgets)
 				widget->SetOpen(false);
 		}
@@ -430,14 +430,14 @@ namespace WeatherUtils
 				                  std::format("{} (0x{:08X})", effectiveID, currentForm->GetFormID()) :
 				                  effectiveID;
 			} else {
-				previewText = ::T("weather_editor.none_filter", "None");
+				previewText = ::T("cs_editor.none_filter", "None");
 			}
 
 			if (width > 0.0f)
 				ImGui::SetNextItemWidth(width);
 
 			if (ImGui::BeginCombo(label, previewText.c_str())) {
-				if (allowNone && ImGui::Selectable(::T("weather_editor.none_filter", "None"), currentForm == nullptr)) {
+				if (allowNone && ImGui::Selectable(::T("cs_editor.none_filter", "None"), currentForm == nullptr)) {
 					currentForm = nullptr;
 					changed = true;
 				}

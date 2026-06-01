@@ -13,7 +13,7 @@
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
 
-#define I18N_KEY_PREFIX "weather_editor."
+#define I18N_KEY_PREFIX "cs_editor."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::Atmosphere, colorTimes)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::DirectionalColor, max, min)
@@ -194,7 +194,7 @@ void WeatherWidget::DrawWidget()
 			ImGui::TextDisabled("(?)");
 			if (ImGui::IsItemHovered()) {
 				ImGui::BeginTooltip();
-				ImGui::TextUnformatted(T(TKEY("parent_weather_editor_feature"), "Editor-only feature: Set a parent weather to copy settings from."));
+				ImGui::TextUnformatted(T(TKEY("parent_cs_editor_feature"), "Editor-only feature: Set a parent weather to copy settings from."));
 				ImGui::TextUnformatted(T(TKEY("use_inherit_checkboxes"), "Use 'Inherit From Parent' checkboxes to copy specific values."));
 				Util::Text::Warning("%s", T(TKEY("not_same_as_cell_lighting"), "Note: This is NOT the same as cell lighting template inheritance."));
 				ImGui::EndTooltip();

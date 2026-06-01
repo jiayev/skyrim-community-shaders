@@ -10,6 +10,7 @@
 #include <imgui_internal.h>
 #include <winrt/base.h>
 
+#include "CSEditor/EditorWindow.h"
 #include "Feature.h"
 #include "FeatureIssues.h"
 #include "Features/RenderDoc.h"
@@ -19,7 +20,6 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
-#include "WeatherEditor/EditorWindow.h"
 
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"

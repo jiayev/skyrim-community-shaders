@@ -8,7 +8,7 @@
 #include "../Utils/UI.h"
 #include "EditorWindow.h"
 
-#define I18N_KEY_PREFIX "weather_editor."
+#define I18N_KEY_PREFIX "cs_editor."
 
 namespace InteriorOnlyPanel
 {

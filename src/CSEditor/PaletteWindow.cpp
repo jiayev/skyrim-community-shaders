@@ -6,7 +6,7 @@
 
 #include <format>
 
-#define I18N_KEY_PREFIX "weather_editor."
+#define I18N_KEY_PREFIX "cs_editor."
 
 // Forward declaration from EditorWindow.cpp
 void DrawIconStar(ImVec2 center, float radius, ImU32 color, bool filled);

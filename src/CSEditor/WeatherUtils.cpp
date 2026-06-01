@@ -5,7 +5,7 @@
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 
-#define I18N_KEY_PREFIX "weather_editor."
+#define I18N_KEY_PREFIX "cs_editor."
 
 #include <algorithm>
 #include <cassert>

@@ -1,7 +1,7 @@
 #include "UI.h"
 
+#include "../CSEditor/EditorWindow.h"
 #include "../I18n/I18n.h"
-#include "../WeatherEditor/EditorWindow.h"
 #include "D3D.h"
 #include "FileSystem.h"
 #include "Menu.h"
@@ -2110,7 +2110,7 @@ namespace Util
 					ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
 						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
 					ImGui::Separator();
-					ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "Click to open Weather Editor");
+					ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "Click to open CS Editor");
 					ImGui::PopTextWrapPos();
 					ImGui::EndTooltip();
 				}
@@ -2164,7 +2164,7 @@ namespace Util
 					ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
 						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
 					ImGui::Separator();
-					ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "Click to open Weather Editor");
+					ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "Click to open CS Editor");
 					ImGui::PopTextWrapPos();
 					ImGui::EndTooltip();
 				}
@@ -2215,7 +2215,7 @@ namespace Util
 					ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
 						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
 					ImGui::Separator();
-					ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "Click to open Weather Editor");
+					ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "Click to open CS Editor");
 					ImGui::PopTextWrapPos();
 					ImGui::EndTooltip();
 				}
@@ -2266,7 +2266,7 @@ namespace Util
 					ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
 						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
 					ImGui::Separator();
-					ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "Click to open Weather Editor");
+					ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "Click to open CS Editor");
 					ImGui::PopTextWrapPos();
 					ImGui::EndTooltip();
 				}

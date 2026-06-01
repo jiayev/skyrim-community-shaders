@@ -11,7 +11,7 @@
 #include "WeatherUtils.h"
 #include "imgui_internal.h"
 
-#define I18N_KEY_PREFIX "weather_editor."
+#define I18N_KEY_PREFIX "cs_editor."
 
 void Widget::Save()
 {

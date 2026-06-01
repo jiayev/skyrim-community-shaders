@@ -23,11 +23,11 @@ public:
 
 	void DrawWidget() override
 	{
-		ImGui::Text(T("weather_editor.editor_id_label", "EditorID: %s"), editorID.c_str());
-		ImGui::Text(T("weather_editor.form_id_label", "FormID: %08X"), formID);
-		ImGui::Text(T("weather_editor.file_label", "File: %s"), filename.c_str());
+		ImGui::Text(T("cs_editor.editor_id_label", "EditorID: %s"), editorID.c_str());
+		ImGui::Text(T("cs_editor.form_id_label", "FormID: %08X"), formID);
+		ImGui::Text(T("cs_editor.file_label", "File: %s"), filename.c_str());
 		ImGui::Separator();
-		ImGui::TextWrapped("%s", T("weather_editor.form_reference_note", "This form is referenced by weather records. To change which form is used, edit the Records tab in the Weather widget."));
+		ImGui::TextWrapped("%s", T("cs_editor.form_reference_note", "This form is referenced by weather records. To change which form is used, edit the Records tab in the Weather widget."));
 	}
 
 	void LoadSettings() override {}
