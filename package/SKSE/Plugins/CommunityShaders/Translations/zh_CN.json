@@ -3,7 +3,9 @@
         "language": "简体中文",
         "locale": "zh_CN",
         "version": "1.0.0",
-        "authors": ["Community Shaders Team"]
+        "authors": [
+            "Community Shaders Team"
+        ]
     },
     "common.active": "激活",
     "common.inactive": "未激活",
