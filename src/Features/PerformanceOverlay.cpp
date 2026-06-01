@@ -25,6 +25,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "Menu/ProfilingRenderer.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
@@ -107,6 +108,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ShowInOverlay,
 	ShowDrawCalls,
 	ShowVRAM,
+	ShowCSPasses,
 	ShowFPS,
 	ShowPreFGFrameTimeGraph,
 	ShowPostFGFrameTimeGraph,
@@ -158,6 +160,7 @@ void PerformanceOverlay::DrawSettings()
 		ImGui::Checkbox(T(TKEY("show_fps"), "Show FPS Counter"), &this->settings.ShowFPS);
 		ImGui::Checkbox(T(TKEY("show_draw_calls"), "Show Draw Calls"), &this->settings.ShowDrawCalls);
 		ImGui::Checkbox(T(TKEY("show_vram"), "Show VRAM Usage"), &this->settings.ShowVRAM);
+		ImGui::Checkbox(T(TKEY("show_cs_passes"), "Show CS Render Passes"), &this->settings.ShowCSPasses);
 
 		bool isFrameGenerationActive = globals::features::upscaling.IsFrameGenerationActive();
 		if (this->settings.ShowFPS && isFrameGenerationActive) {
@@ -360,19 +363,32 @@ void PerformanceOverlay::DrawOverlay()
 	// Update graph values
 	this->UpdateGraphValues();
 
-	// Show FPS counter if enabled
+	bool needsSeparator = false;
+
 	if (this->settings.ShowFPS) {
 		DrawFPS();
+		needsSeparator = true;
 	}
 
-	// Show Draw Calls if enabled
 	if (this->settings.ShowDrawCalls) {
+		if (needsSeparator)
+			ImGui::Separator();
 		DrawDrawCallsTable(mainRows, summaryRows);
+		needsSeparator = true;
 	}
 
-	// VRAM & GPU Usage
+	if (this->settings.ShowCSPasses) {
+		if (needsSeparator)
+			ImGui::Separator();
+		ProfilingRenderer::RenderStatistics(false, false);
+		needsSeparator = true;
+	}
+
 	if (this->settings.ShowVRAM && menu->GetDXGIAdapter3()) {
+		if (needsSeparator)
+			ImGui::Separator();
 		DrawVRAM();
+		needsSeparator = true;
 	}
 
 	ImGui::PopStyleVar();             // ItemSpacing
@@ -1555,6 +1571,12 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
 	auto [otherFrameTime, otherPercent, totalCostPerCall] = CalculateSummaryData(smoothedFrameTime, measuredSum);
 	if (std::abs(otherFrameTime) < 1e-4f)
 		otherFrameTime = 0.0f;
+
+	float csPassesTime = globals::profiler->GetTotalTimeMs();
+	float csPercent = smoothedFrameTime > 0.0f ? (csPassesTime / smoothedFrameTime) * 100.0f : 0.0f;
+	float remainingOtherTime = std::max(0.0f, otherFrameTime - csPassesTime);
+	float remainingOtherPercent = smoothedFrameTime > 0.0f ? (remainingOtherTime / smoothedFrameTime) * 100.0f : 0.0f;
+
 	std::optional<float> otherTestFrameTime, otherTestCostPerCall, totalTestFrameTime, totalTestCostPerCall;
 	auto itOther = this->testData.find(magic_enum::enum_integer(SpecialShaderType::Other));
 	if (itOther != this->testData.end()) {
@@ -1566,15 +1588,20 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
 		totalTestFrameTime = itTotal->second.frameTime;
 		totalTestCostPerCall = itTotal->second.costPerCall;
 	}
-	DrawCallRow otherRow = {
-		"Other:", magic_enum::enum_integer(SpecialShaderType::Other), kDrawCallsNotApplicable, otherFrameTime, otherPercent,
+	DrawCallRow csPassesRow = {
+		"CS Passes:", magic_enum::enum_integer(SpecialShaderType::CSPasses), kDrawCallsNotApplicable, csPassesTime, csPercent,
 		0.0f,
-		std::string("Frame time not attributed to any measured shader type. This includes UI, post-processing, engine work, and any GPU activity not directly measured by the overlay."),
+		std::string("GPU time spent in Community Shaders compute passes (profiled)."),
+		true, std::nullopt, std::nullopt
+	};
+	DrawCallRow otherRow = {
+		"Other:", magic_enum::enum_integer(SpecialShaderType::Other), kDrawCallsNotApplicable, remainingOtherTime, remainingOtherPercent,
+		0.0f,
+		std::string("Frame time not attributed to any measured shader type or CS compute pass. This includes UI, post-processing, engine work, and any GPU activity not directly measured."),
 		true, otherTestFrameTime, otherTestCostPerCall
 	};
-	// Always use the actual total frame time for live data
 	float totalFrameTime = smoothedFrameTime;
-	float totalPercent = 100.0f;  // Total is always 100% of total
+	float totalPercent = 100.0f;
 
 	DrawCallRow totalRow = {
 		"Total:", magic_enum::enum_integer(SpecialShaderType::Total), static_cast<int>(globals::state->GetTotalSmoothedDrawCalls()), totalFrameTime, totalPercent,
@@ -1583,6 +1610,7 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
 		true, totalTestFrameTime, totalTestCostPerCall
 	};
 	std::vector<DrawCallRow> summaryRows;
+	summaryRows.push_back(csPassesRow);
 	summaryRows.push_back(otherRow);
 	summaryRows.push_back(totalRow);
 	return { mainRows, summaryRows };

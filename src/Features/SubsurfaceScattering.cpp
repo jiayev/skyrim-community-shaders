@@ -258,7 +258,9 @@ void SubsurfaceScattering::DrawSSS()
 				auto shader = GetComputeShaderHorizontalBlur();
 				context->CSSetShader(shader, nullptr, 0);
 
+				globals::profiler->BeginPass("SubsurfaceScattering::HorizontalBlur");
 				context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+				globals::profiler->EndPass();
 			}
 
 			uav = nullptr;
@@ -277,7 +279,9 @@ void SubsurfaceScattering::DrawSSS()
 				auto shader = GetComputeShaderVerticalBlur();
 				context->CSSetShader(shader, nullptr, 0);
 
+				globals::profiler->BeginPass("SubsurfaceScattering::VerticalBlur");
 				context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+				globals::profiler->EndPass();
 			}
 		} else if (settings.SSMode == 1) {
 			// Burley pass to main texture
@@ -287,7 +291,9 @@ void SubsurfaceScattering::DrawSSS()
 				auto shader = GetComputeShaderBurley();
 				context->CSSetShader(shader, nullptr, 0);
 
+				globals::profiler->BeginPass("SubsurfaceScattering::Burley");
 				context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+				globals::profiler->EndPass();
 
 				context->CopyResource(main.texture, blurHorizontalTemp->resource.get());
 			}

@@ -17,6 +17,7 @@
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Menu/HomePageRenderer.h"
+#include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
@@ -28,8 +29,8 @@ namespace
 {
 	// Core built-in menu names that always appear first in the menu list
 	// These are canonical identifiers used for logic — NOT translated
-	constexpr std::array<const char*, 4> CORE_MENU_NAMES = {
-		"Home", "General", "Advanced", "Display"
+	constexpr std::array<const char*, 5> CORE_MENU_NAMES = {
+		"Home", "General", "Advanced", "Profiling", "Display"
 	};
 
 	const char* GetCoreMenuDisplayName(const char* canonicalName)
@@ -40,6 +41,8 @@ namespace
 			return T("menu.features.general", "General");
 		if (std::strcmp(canonicalName, "Advanced") == 0)
 			return T("menu.features.advanced", "Advanced");
+		if (std::strcmp(canonicalName, "Profiling") == 0)
+			return T("menu.features.profiling", "Profiling");
 		if (std::strcmp(canonicalName, "Display") == 0)
 			return T("menu.features.display", "Display");
 		return canonicalName;
@@ -325,7 +328,8 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	auto menuList = std::vector<MenuFuncInfo>{
 		BuiltInMenu{ T("menu.features.home", "Home"), []() { HomePageRenderer::RenderHomePage(); } },
 		BuiltInMenu{ T("menu.features.general", "General"), drawGeneralSettings },
-		BuiltInMenu{ T("menu.features.advanced", "Advanced"), drawAdvancedSettings }
+		BuiltInMenu{ T("menu.features.advanced", "Advanced"), drawAdvancedSettings },
+		BuiltInMenu{ T("menu.features.profiling", "Profiling"), []() { ProfilingRenderer::RenderStatistics(); } }
 	};  // NOTE: The menu list is rebuilt every frame, so category expansion states
 	// persist correctly. This is acceptable since the list is small and built
 	// infrequently, but could be optimized if performance becomes an issue.
@@ -805,6 +809,10 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 
 			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
 			feat->DrawSettings();
+
+			ImGui::SeparatorText("Profiling");
+			ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
+
 			ImVec2 cursorPosAfter = ImGui::GetCursorPos();
 
 			if (sceneControlled)

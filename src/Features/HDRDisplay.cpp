@@ -1251,7 +1251,9 @@ void HDRDisplay::ApplyHDR()
 		}
 
 		context->CSSetShader(computeShader, nullptr, 0);
+		globals::profiler->BeginPass("HDRDisplay::HDROutput");
 		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+		globals::profiler->EndPass();
 
 		views[0] = nullptr;
 		views[1] = nullptr;
@@ -1505,7 +1507,9 @@ void HDRDisplay::ScaleUIBrightnessForFG()
 	auto computeShader = GetUIBrightnessCS();
 	if (computeShader) {
 		context->CSSetShader(computeShader, nullptr, 0);
+		globals::profiler->BeginPass("HDRDisplay::UIBrightness");
 		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+		globals::profiler->EndPass();
 	}
 
 	// Cleanup

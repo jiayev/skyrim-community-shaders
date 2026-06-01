@@ -381,7 +381,9 @@ void VRStereoOptimizations::DispatchStencil()
 
 			uint32_t fullWidth = texPerPixelMode->desc.Width;
 			uint32_t fullHeight = texPerPixelMode->desc.Height;
+			globals::profiler->BeginPass("VR::StencilClassify");
 			context->Dispatch((fullWidth + 7) / 8, (fullHeight + 7) / 8, 1);
+			globals::profiler->EndPass();
 		}
 
 		// Cleanup CS bindings
@@ -397,7 +399,9 @@ void VRStereoOptimizations::DispatchStencil()
 	// Transfer classification to hardware stencil buffer
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "StereoOpt - Stencil Write");
+		globals::profiler->BeginPass("VR::StencilWrite");
 		ExecuteStencilWritePass();
+		globals::profiler->EndPass();
 	}
 
 	stencilActive = true;
