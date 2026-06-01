@@ -116,9 +116,12 @@ void ScreenSpaceReflections::DrawSettings()
 		static float debugRescale = .3f;
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
-		if (texHiZDepth) BUFFER_VIEWER_NODE(texHiZDepth, debugRescale)
-		if (texNRDSpecInput) BUFFER_VIEWER_NODE(texNRDSpecInput, debugRescale)
-		if (texNRDSpecOutput) BUFFER_VIEWER_NODE(texNRDSpecOutput, debugRescale)
+		if (texHiZDepth)
+			BUFFER_VIEWER_NODE(texHiZDepth, debugRescale)
+		if (texNRDSpecInput)
+			BUFFER_VIEWER_NODE(texNRDSpecInput, debugRescale)
+		if (texNRDSpecOutput)
+			BUFFER_VIEWER_NODE(texNRDSpecOutput, debugRescale)
 
 		ImGui::TreePop();
 	}
@@ -373,6 +376,8 @@ void ScreenSpaceReflections::DrawSSR()
 		if (globals::state->frameAnnotations)
 			globals::state->BeginPerfEvent("SSR - Hi-Z Depth");
 
+		globals::profiler->BeginPass("ScreenSpaceReflections::HiZDepth");
+
 		auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 
 		// Copy NDC depth → Hi-Z mip 0
@@ -401,6 +406,8 @@ void ScreenSpaceReflections::DrawSSR()
 		}
 
 		resetViews();
+
+		globals::profiler->EndPass();
 
 		if (globals::state->frameAnnotations)
 			globals::state->EndPerfEvent();
@@ -437,7 +444,9 @@ void ScreenSpaceReflections::DrawSSR()
 
 		uint specDispatchX = settings.HalfRes ? (resolution[0] + 1) / 2 : resolution[0];
 		uint specDispatchY = resolution[1];
+		globals::profiler->BeginPass("ScreenSpaceReflections::SpecularGI");
 		context->Dispatch((specDispatchX + 7u) >> 3, (specDispatchY + 7u) >> 3, 1);
+		globals::profiler->EndPass();
 
 		resetViews();
 
@@ -469,7 +478,9 @@ void ScreenSpaceReflections::DrawSSR()
 		nrdReblurSpecular.SetNamedSRV(nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST, texNRDSpecOutput->srv.get());
 		nrdReblurSpecular.SetNamedUAV(nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST, texNRDSpecOutput->uav.get());
 
+		globals::profiler->BeginPass("ScreenSpaceReflections::ReblurSpecular");
 		nrdReblurSpecular.Dispatch();
+		globals::profiler->EndPass();
 
 		if (globals::state->frameAnnotations)
 			globals::state->EndPerfEvent();
