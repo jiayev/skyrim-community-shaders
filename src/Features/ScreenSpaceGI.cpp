@@ -568,7 +568,9 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(prefilterDepthsCompute.get(), nullptr, 0);
+		globals::profiler->BeginPass("ScreenSpaceGI::PrefilterDepths");
 		context->Dispatch((resolution[0] + 15) >> 4, (resolution[1] + 15) >> 4, 1);
+		globals::profiler->EndPass();
 	}
 
 	// Prefilter radiance mip chain (reads main RT directly)
@@ -591,7 +593,9 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, 5, srvs.data());
 		context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
 		context->CSSetShader(prefilterRadianceCompute.get(), nullptr, 0);
+		globals::profiler->BeginPass("ScreenSpaceGI::PrefilterRadiance");
 		context->Dispatch((resolution[0] + 15u) >> 4, (resolution[1] + 15u) >> 4, 1);
+		globals::profiler->EndPass();
 	}
 
 	// Prefilter normals
@@ -609,7 +613,9 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, 1, srvs.data());
 		context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
 		context->CSSetShader(prefilterNormalCompute.get(), nullptr, 0);
+		globals::profiler->BeginPass("ScreenSpaceGI::PrefilterNormals");
 		context->Dispatch((resolution[0] + 15u) >> 4, (resolution[1] + 15u) >> 4, 1);
+		globals::profiler->EndPass();
 	}
 
 	// GI → NRD input
@@ -643,7 +649,9 @@ void ScreenSpaceGI::DrawSSGI()
 
 		uint dispatchX = settings.HalfRes ? (resolution[0] + 1) / 2 : resolution[0];
 		uint dispatchY = resolution[1];
+		globals::profiler->BeginPass("ScreenSpaceGI::GI");
 		context->Dispatch((dispatchX + 7u) >> 3, (dispatchY + 7u) >> 3, 1);
+		globals::profiler->EndPass();
 	}
 
 	// REBLUR diffuse denoising via core NRD service
@@ -677,7 +685,9 @@ void ScreenSpaceGI::DrawSSGI()
 			nrdReblur.SetNamedUAV(nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST, texNRDOutput->uav.get());
 		}
 
+		globals::profiler->BeginPass("ScreenSpaceGI::Reblur");
 		nrdReblur.Dispatch();
+		globals::profiler->EndPass();
 	}
 
 	// cleanup
