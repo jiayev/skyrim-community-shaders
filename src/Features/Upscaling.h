@@ -40,11 +40,12 @@ public:
 
 	enum UpscaleMethod : uint32_t
 	{
-		kNONE = 1 << 0,
-		kTAA = 1 << 1,
-		kFSR = 1 << 2,
-		kDLSS = 1 << 3,
-		kDLSS_RR = 1 << 4
+		kNONE,
+		kTAA,
+		kFSR,
+		kDLSS,
+		kDLSS_RR,
+		kNumMethods
 	};
 
 	// User-facing labels (kDLSS_RR is internal-only, driven by Raytracing Denoiser setting)
@@ -330,5 +331,3 @@ private:
 		static bool Register();
 	};
 };
-
-DEFINE_ENUM_FLAG_OPERATORS(Upscaling::UpscaleMethod);

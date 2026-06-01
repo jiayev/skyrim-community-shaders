@@ -196,14 +196,18 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 void Upscaling::DrawSettings()
 {
-	// TAA and FSR are always available; DLSS RR is not user-selectable (driven by Raytracing Denoiser)
-	UpscaleMethod availableMethods = UpscaleMethod::kNONE | UpscaleMethod::kTAA | UpscaleMethod::kFSR;
+	bool availableMethods[UpscaleMethod::kNumMethods] = { false };
 
-	if (streamline.loadedFeatures & Streamline::Features::kDLSS)
-		availableMethods |= UpscaleMethod::kDLSS;
+	// TAA and FSR are always available; DLSS RR is not user-selectable (driven by Raytracing Denoiser)
+	availableMethods[UpscaleMethod::kNONE] = true;
+	availableMethods[UpscaleMethod::kTAA] = true;
+	availableMethods[UpscaleMethod::kFSR] = true;
+
+	// DLSS only available if streamline reports it as supported
+	availableMethods[UpscaleMethod::kDLSS] = streamline.loadedFeatures & Streamline::Features::kDLSS;
 
 	// Mode not available, default to FSR
-	if (!(availableMethods & settings.upscaleMethod))
+	if (!availableMethods[settings.upscaleMethod])
 		settings.upscaleMethod = UpscaleMethod::kFSR;
 
 	eastl::vector<eastl::pair<UpscaleMethod, int>> availableModeVector;
@@ -212,7 +216,7 @@ void Upscaling::DrawSettings()
 	int index = 0;
 
 	for (auto& value : magic_enum::enum_values<UpscaleMethod>()) {
-		if (availableMethods & value) {
+		if (availableMethods[value]) {
 			availableModeVector.emplace_back(value, availableModeVector.size());
 
 			if (settings.upscaleMethod == value)
