@@ -1146,7 +1146,9 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 		ID3D11Buffer* cbs[1] = { vrClearHMDMaskCB.get() };
 		context->CSSetConstantBuffers(0, 1, cbs);
 
+		globals::profiler->BeginPass("Upscaling::ClearHMDMask");
 		context->Dispatch(dispatchX, dispatchY, 1);
+		globals::profiler->EndPass();
 
 		// Unbind
 		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
@@ -1416,7 +1418,9 @@ void Upscaling::CopySharedD3D12Resources()
 
 		context->PSSetShader(copyDepthToSharedBufferPS.get(), nullptr, 0);
 
+		globals::profiler->BeginPass("Upscaling::CopyDepthD3D12");
 		context->Draw(3, 0);
+		globals::profiler->EndPass();
 	}
 
 	// Clean up
@@ -1711,6 +1715,7 @@ void Upscaling::Upscale()
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 
 	{
+		globals::profiler->BeginPass("Upscaling::EncodeTextures");
 		state->BeginPerfEvent("Encode Upscaling Textures");
 		TracyD3D11Zone(globals::state->tracyCtx, "Encode Upscaling Textures");
 
@@ -1770,9 +1775,11 @@ void Upscaling::Upscale()
 		context->CSSetShader(shader, nullptr, 0);
 
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	{
+		globals::profiler->BeginPass("Upscaling::Upscale");
 		state->BeginPerfEvent("Upscaling");
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
 
@@ -1791,6 +1798,7 @@ void Upscaling::Upscale()
 		}
 
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 }
 
@@ -1949,7 +1957,9 @@ void Upscaling::UpscaleDepth()
 		context->OMSetRenderTargets(2, rtvs, depth.views[0]);
 
 		context->PSSetShader(depthUpscalePS, nullptr, 0);
+		globals::profiler->BeginPass("Upscaling::DepthUpscale");
 		context->Draw(3, 0);
+		globals::profiler->EndPass();
 	}
 
 	{
@@ -1972,7 +1982,9 @@ void Upscaling::UpscaleDepth()
 		context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
 
 		context->PSSetShader(underwaterMaskPS, nullptr, 0);
+		globals::profiler->BeginPass("Upscaling::UnderwaterMaskUpscale");
 		context->Draw(3, 0);
+		globals::profiler->EndPass();
 	}
 
 	// Now propagate the upscaled depth to kMAIN_COPY so downstream VR passes see it.
