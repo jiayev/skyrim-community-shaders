@@ -10,6 +10,7 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/Skin.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
@@ -53,6 +54,7 @@ void State::Draw()
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
 	auto& weatherEditor = globals::features::weatherEditor;
+	auto& skin = globals::features::skin;
 	auto& truePBR = globals::features::truePBR;
 	auto context = globals::d3d::context;
 	auto& volumetricShadows = globals::features::volumetricShadows;
@@ -77,13 +79,18 @@ void State::Draw()
 		}
 
 		if (terrainHelper.loaded) {
-			ZoneScopedN("TerrainHelper::SetShaderResouces");
-			terrainHelper.SetShaderResouces(context);
+			ZoneScopedN("TerrainHelper::SetShaderResources");
+			terrainHelper.SetShaderResources(context);
+		}
+
+		if (skin.loaded) {
+			ZoneScopedN("Skin::SetShaderResources");
+			skin.SetShaderResources(context);
 		}
 
 		if (truePBR.loaded) {
-			ZoneScopedN("TruePBR::SetShaderResouces");
-			truePBR.SetShaderResouces(context);
+			ZoneScopedN("TruePBR::SetShaderResources");
+			truePBR.SetShaderResources(context);
 		}
 
 		if (permutationData != permutationDataPrevious) {
