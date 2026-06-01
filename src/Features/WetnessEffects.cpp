@@ -615,12 +615,13 @@ void WetnessEffects::DrawSettings()
 	ImGui::Spacing();
 	auto& csEditor = globals::features::csEditor;
 	if (csEditor.loaded) {
-		if (ImGui::SmallButton(std::vformat(T(TKEY("open_feature"), "Open {}"), std::make_format_args(csEditor.GetName())).c_str())) {
+		std::string csEditorName = csEditor.GetName();
+		if (ImGui::SmallButton(std::vformat(T(TKEY("open_feature"), "Open {}"), std::make_format_args(csEditorName)).c_str())) {
 			// Navigate to the replacement feature in the menu
 			Menu::GetSingleton()->SelectFeatureMenu(csEditor.GetShortName());
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(T(TKEY("open_installed_feature_tooltip"), "Open the installed %s feature"), csEditor.GetName().c_str());
+			ImGui::Text(T(TKEY("open_installed_feature_tooltip"), "Open the installed %s feature"), csEditorName.c_str());
 		}
 	}
 
