@@ -33,11 +33,12 @@ struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
 class Profiler;
-struct WeatherEditor;
+struct CSEditor;
 struct ExponentialHeightFog;
 struct HDRDisplay;
 struct PostProcessing;
 struct ScreenshotFeature;
+struct Skin;
 
 class State;
 class Deferred;
@@ -95,9 +96,10 @@ namespace globals
 		extern HDRDisplay hdrDisplay;
 		extern RenderDoc renderDoc;
 		extern ScreenshotFeature screenshotFeature;
-		extern WeatherEditor weatherEditor;
+		extern CSEditor csEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
+		extern Skin skin;
 		extern PostProcessing postProcessing;
 
 		namespace llf
