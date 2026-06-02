@@ -892,8 +892,11 @@ void Raytracing::SetupResources()
 
 		// Diffuse Albedo Texture
 		{
+			CreationEngineRaytracing::SharedTexture main;
 			CreationEngineRaytracing::SharedTexture diffuseAlbedo;
-			creationEngineRaytracing->GetSharedTextures(diffuseAlbedo);
+			creationEngineRaytracing->GetSharedTextures(main, diffuseAlbedo);
+
+			mainTexture = eastl::make_unique<WrappedResource>(main.native, main.shared);	
 			diffuseAlbedoTexture = eastl::make_unique<WrappedResource>(diffuseAlbedo.native, diffuseAlbedo.shared);			
 		}
 	}
@@ -1109,12 +1112,6 @@ void Raytracing::DeferredPasses()
 	desc.SampleDesc.Count = 1;
 	desc.SampleDesc.Quality = 0;
 	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-	if (!mainTexture || resolutionChanged) {
-		desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-		mainTexture = eastl::make_unique<WrappedResource>(desc);
-		creationEngineRaytracing->SetCopyTarget(mainTexture->GetResource());
-	}
 
 	if (Mode() == CreationEngineRaytracing::Mode::PathTracing) {
 		if (!ptDepthTexture || resolutionChanged) {

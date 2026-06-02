@@ -431,7 +431,6 @@ struct CreationEngineRaytracing
 	using PostExecutionFn = void (*)();
 	using GetResolutionFn = void (*)(uint32_t&, uint32_t&);
 	using SetResolutionFn = void (*)(uint32_t, uint32_t);
-	using SetCopyTargetFn = void (*)(ID3D12Resource*);
 	using UpdateFeatureDataFn = void (*)(void*, uint32_t);
 	using SetSkyHemisphereFn = void (*)(ID3D12Resource*);
 	using SetWaterFlowMapFn = void (*)(ID3D12Resource*);
@@ -439,7 +438,7 @@ struct CreationEngineRaytracing
 	using UpdateSettingsFn = void (*)(Settings);
 	using GetRRInputFn = void (*)(ID3D12Resource*&, ID3D12Resource*&);
 	using SetSharedTexturesFn = void (*)(ID3D12Resource*, ID3D12Resource*, ID3D12Resource*);
-	using GetSharedTexturesFn = void (*)(SharedTexture&);
+	using GetSharedTexturesFn = void (*)(SharedTexture&, SharedTexture&);
 	using UpdateJitterFn = void (*)(float2);
 	using SetPTOutputTargetsFn = void (*)(ID3D12Resource*, ID3D12Resource*);
 	using GetAccumulatedFrameCountFn = uint32_t (*)();
@@ -453,7 +452,6 @@ struct CreationEngineRaytracing
 	WaitExecutionFn WaitExecution = nullptr;
 	PostExecutionFn PostExecution = nullptr;
 	SetResolutionFn SetResolution = nullptr;
-	SetCopyTargetFn SetCopyTarget = nullptr;
 	UpdateFeatureDataFn UpdateFeatureData = nullptr;
 	SetSkyHemisphereFn SetSkyHemisphere = nullptr;
 	SetWaterFlowMapFn SetWaterFlowMap = nullptr;
@@ -487,7 +485,6 @@ struct CreationEngineRaytracing
 		LOAD_FN(WaitExecution);
 		LOAD_FN(PostExecution);
 		LOAD_FN(SetResolution);
-		LOAD_FN(SetCopyTarget);
 		LOAD_FN(UpdateFeatureData);
 		LOAD_FN(SetSkyHemisphere);
 		LOAD_FN(SetWaterFlowMap);
