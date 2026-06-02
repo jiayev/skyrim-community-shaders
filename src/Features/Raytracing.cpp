@@ -178,7 +178,7 @@ void Raytracing::DrawSettings()
 		}
 	}
 
-	bool ptMode = settings.CreationEngineRaytracingSettings.GeneralSettings.Mode == CreationEngineRaytracing::Mode::PathTracing;
+	/*bool ptMode = settings.CreationEngineRaytracingSettings.GeneralSettings.Mode == CreationEngineRaytracing::Mode::PathTracing;
 
 	if (ptMode)
 		ImGui::BeginDisabled();
@@ -186,7 +186,7 @@ void Raytracing::DrawSettings()
 	ImGui::Checkbox("Raytraced Shadows", &settings.CreationEngineRaytracingSettings.GeneralSettings.RaytracedShadows);
 
 	if (ptMode)
-		ImGui::EndDisabled();
+		ImGui::EndDisabled();*/
 
 	if (ImGui::BeginTabBar("Settings")) {
 		DrawGeneralSettings();
