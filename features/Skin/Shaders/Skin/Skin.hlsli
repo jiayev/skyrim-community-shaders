@@ -173,7 +173,8 @@ namespace Skin
 		float3 diffuseAO = material.AO;
 		float3 specularAO = SpecularAOLagarde(NdotV, material.AO, averageRoughness);
 
-		diffuseAO = MultiBounceAO(material.BaseColor, diffuseAO.x);
+		diffuseAO = MultiBounceAO(material.BaseColor, diffuseAO.x).y;
+		specularAO = MultiBounceAO(material.F0, specularAO.x).y;
 
 		lobeWeights.diffuse *= diffuseAO;
 		lobeWeights.specular *= specularAO;

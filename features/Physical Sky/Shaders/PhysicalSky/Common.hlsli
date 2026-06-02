@@ -40,8 +40,8 @@ namespace PhysSky
 	Texture2D<float4> TexSvLut : register(t2);
 	Texture3D<float4> TexApLut : register(t3);
 #elif defined(PS_DEFERRED_RSRCS)
-Texture3D<float4> TexApLut : register(t17);
-Texture2D<unorm float> TexApShadow : register(t18);
+Texture3D<float4> TexApLut : register(t14);
+Texture2D<unorm float> TexApShadow : register(t15);
 #else
 Texture2D<float4> TexTrLut : register(t61);
 Texture2D<float4> TexSvLut : register(t62);

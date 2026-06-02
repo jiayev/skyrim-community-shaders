@@ -274,11 +274,6 @@ PS_OUTPUT main(PS_INPUT input)
 		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -normal);
 	}
 #			endif
-#			if defined(SSRT) && defined(DEFERRED)
-	if (SharedData::ssrtSettings.DiffuseMult > 0.0) {
-		directionalAmbientColor *= SharedData::ssrtSettings.AmbientMult;
-	}
-#			endif
 	diffuseColor += directionalAmbientColor;
 
 	psout.Diffuse.xyz = diffuseColor * baseColor.xyz;
@@ -329,11 +324,6 @@ PS_OUTPUT main(PS_INPUT input)
 #			if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -normal);
-	}
-#			endif
-#			if defined(SSRT) && defined(DEFERRED)
-	if (SharedData::ssrtSettings.DiffuseMult > 0.0) {
-		directionalAmbientColor *= SharedData::ssrtSettings.AmbientMult;
 	}
 #			endif
 	diffuseColor += directionalAmbientColor;

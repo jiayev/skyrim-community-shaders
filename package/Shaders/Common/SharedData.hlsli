@@ -262,6 +262,22 @@ namespace SharedData
 		uint3 _padding;
 	};
 
+	struct SSGISettings
+	{
+		float DiffuseMult;
+		uint DebugMode;
+		uint pad0;
+		uint pad1;
+	};
+
+	struct SSRSettings
+	{
+		uint Enabled;
+		float SpecularMult;
+		uint pad0;
+		uint pad1;
+	};
+
 	struct ExponentialHeightFogSettings
 	{
 		uint enabled;
@@ -411,14 +427,6 @@ namespace SharedData
 		uint2 pad0;
 	};
 
-	struct SSRTSettings
-	{
-		uint EnableSpecular;
-		float SpecularMult;
-		float DiffuseMult;
-		float AmbientMult;
-	};
-
 	struct PseudoSunBounceSettings
 	{
 		float3 groundAlbedo;
@@ -446,12 +454,13 @@ namespace SharedData
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		TruePBRSettings truePBRSettings;
-		PostProcessingSettings postProcessingSettings;
 		SkinData skinData;
+		SSGISettings ssgiSettings;
+		SSRSettings ssrSettings;
+		PostProcessingSettings postProcessingSettings;
 		SSPLSSettings ssplsSettings;
 		VanillaFresnelSettings vanillaFresnelSettings;
 		PhysSkyData physSkyData;
-		SSRTSettings ssrtSettings;
 		PseudoSunBounceSettings pseudoSunBounceSettings;
 	};
 

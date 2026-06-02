@@ -3147,10 +3147,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
-#	if defined(SSRT) && defined(DEFERRED)
-	if (SharedData::ssrtSettings.DiffuseMult > 0.0) {
-		directionalAmbientColor *= SharedData::ssrtSettings.AmbientMult;
-	}
+#	if defined(DEFERRED)
+	if (SharedData::ssgiSettings.DiffuseMult > 0.0)
+		directionalAmbientColor = 0;
 #	endif
 
 #	if defined(PSEUDO_SUN_BOUNCE)

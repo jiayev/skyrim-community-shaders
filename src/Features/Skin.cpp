@@ -369,7 +369,16 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 			}
 			if (actor->IsInWater()) {
 				wetness.y = 2.0f;
-				float waterHeight = GetWaterHeight(actor->AsReference(), actor->GetPosition());
+				float waterHeight = -RE::NI_INFINITY;
+				const uint32_t formID = actor->AsReference()->formID;
+				const uint currentFrame = globals::state->frameCount;
+				auto cacheIt = waterHeightCache.find(formID);
+				if (cacheIt != waterHeightCache.end() && cacheIt->second.frameCount == currentFrame) {
+					waterHeight = cacheIt->second.waterHeight;
+				} else {
+					waterHeight = GetWaterHeight(actor->AsReference(), actor->GetPosition());
+					waterHeightCache[formID] = { currentFrame, waterHeight };
+				}
 				wetness.w = std::max(0.0f, waterHeight - positionZ);
 			} else {
 				wetness.y = 0.0f;
@@ -387,10 +396,11 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 			if (it != actorWetnessMap.end()) {
 				auto& cached = it->second;
 
+				const float fadeTime = std::max(settings.WetFadeTime, 0.001f);
 				if (cached.x < wetness.x) {
 					cached.x = wetness.x;
 				} else if (cached.x > wetness.x) {
-					cached.x -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
+					cached.x -= *globals::game::deltaTime / fadeTime;
 					cached.x = std::max(cached.x, 0.0f);
 					wetness.x = cached.x;
 				}
@@ -403,7 +413,7 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 						wetness.w = cached.w;
 					}
 				} else if (cached.y > wetness.y) {
-					cached.y -= *globals::game::deltaTime * (1.0f / settings.WetFadeTime);
+					cached.y -= *globals::game::deltaTime / fadeTime;
 					cached.y = std::max(cached.y, 0.0f);
 					wetness.y = cached.y;
 					if (wetness.y == 0.0f) {
