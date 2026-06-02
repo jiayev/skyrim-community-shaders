@@ -581,6 +581,33 @@ void Raytracing::DrawDebugSettings()
 			ImGui::TreePop();
 		}
 
+		if (ImGui::TreeNode("NormalRoughness")) {
+			D3D11_TEXTURE2D_DESC desc;
+			normalRoughnessTexture->resource11->GetDesc(&desc);
+
+			ImGui::Image(normalRoughnessTexture->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Diffuse Albedo")) {
+			D3D11_TEXTURE2D_DESC desc;
+			diffuseAlbedoTexture->resource11->GetDesc(&desc);
+
+			ImGui::Image(diffuseAlbedoTexture->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Masks 2")) {
+			auto renderer = globals::game::renderer;
+			auto masks2 = renderer->GetRuntimeData().renderTargets[MASKS2];
+
+			D3D11_TEXTURE2D_DESC desc;
+			masks2.texture->GetDesc(&desc);
+
+			ImGui::ImageWithBg(masks2.SRV, { desc.Width * debugRescale, desc.Height * debugRescale }, { 0, 0 }, { 1, 1 }, { 0, 0, 0, 1 });
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNode("FlowMap")) {
 			D3D11_TEXTURE2D_DESC desc;
 			waterFlowMap->resource11->GetDesc(&desc);
