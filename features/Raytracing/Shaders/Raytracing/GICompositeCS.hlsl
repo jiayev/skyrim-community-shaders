@@ -8,5 +8,6 @@ RWTexture2D<float4> MainOutput : register(u0);
 	if (any(id >= DynamicResolution))
 		return;
 
-	MainOutput[id.xy] = MainOutput[id.xy] + float4(Color::LinearToSrgb(GIInput[id.xy].rgb), 0.0f);
+    const float3 gi = GIInput[id.xy].rgb;
+    MainOutput[id.xy] = MainOutput[id.xy] + float4(ENABLE_LL ? gi : Color::LinearToSrgb(gi), 0.0f);
 }
