@@ -1795,7 +1795,7 @@
     "cs_editor.max_recent_widgets": "最大最近控件数",
     "cs_editor.max_recent_widgets_tooltip": "要记住的最大最近控件数量",
     "cs_editor.menu": "菜单",
-    "cs_editor.more_results": "... 还有%zu个结果",
+    "cs_editor.more_results": "... 还有{}个结果",
     "cs_editor.most_used": "最常用",
     "cs_editor.night": "夜晚",
     "cs_editor.night_far": "夜晚远",

@@ -225,7 +225,7 @@
     "cs_editor.max_recent_widgets": "Max recent widgets",
     "cs_editor.max_recent_widgets_tooltip": "Maximum number of recent widgets to remember",
     "cs_editor.menu": "Menu",
-    "cs_editor.more_results": "... %zu more results",
+    "cs_editor.more_results": "... {} more results",
     "cs_editor.most_used": "Most Used",
     "cs_editor.night": "Night",
     "cs_editor.night_far": "Night Far",
