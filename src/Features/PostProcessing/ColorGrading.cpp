@@ -78,11 +78,11 @@ void drawHDRStatus()
 {
 	auto& hdr = globals::features::hdrDisplay;
 	if (hdr.loaded && hdr.settings.enableHDR) {
-		ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), ICON_FA_CHECK " HDR Output Active");
+		ImGui::TextColored(Util::Colors::GetSuccess(), ICON_FA_CHECK " HDR Output Active");
 		ImGui::Text("Paper White: %.0f nits (from HDR settings)", static_cast<float>(hdr.settings.hdrPaperWhite));
 		ImGui::Text("Peak Brightness: %.0f nits (from HDR settings)", static_cast<float>(hdr.settings.hdrPeakNits));
 	} else {
-		ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "SDR Output (HDR Display not enabled)");
+		ImGui::TextColored(Util::Colors::GetDisabled(), "SDR Output (HDR Display not enabled)");
 	}
 }
 

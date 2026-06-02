@@ -4,11 +4,14 @@
 
 #include "Deferred.h"
 #include "DynamicCubemaps.h"
+#include "I18n/I18n.h"
 #include "NRD.h"
 #include "Skylighting.h"
 #include "State.h"
 #include "Upscaling.h"
 #include "Util.h"
+
+#define I18N_KEY_PREFIX "feature.screen_space_gi."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ScreenSpaceGI::Settings,
@@ -39,48 +42,45 @@ void ScreenSpaceGI::DrawSettings()
 	static bool showAdvanced;
 
 	if (!ShadersOK())
-		ImGui::TextColored({ 1, 0, 0, 1 }, "Compute shaders failed to compile!");
+		ImGui::TextColored({ 1, 0, 0, 1 }, "%s", T(TKEY("compute_shaders_failed_to_compile"), "Compute shaders failed to compile!"));
 
 	///////////////////////////////
-	ImGui::SeparatorText("Toggles");
+	ImGui::SeparatorText(T(TKEY("toggles"), "Toggles"));
 
-	ImGui::Checkbox("Show Advanced Options", &showAdvanced);
+	ImGui::Checkbox(T(TKEY("show_advanced_options"), "Show Advanced Options"), &showAdvanced);
 
 	if (ImGui::BeginTable("Toggles", 4)) {
 		ImGui::TableNextColumn();
-		ImGui::Checkbox("Enabled", &settings.Enabled);
+		ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enable Screen Space Global Illumination. When disabled, all other settings are ignored.");
+			ImGui::Text("%s", T(TKEY("enabled_tooltip"), "Enable Screen Space Global Illumination. When disabled, all other settings are ignored."));
 		}
 
 		ImGui::TableNextColumn();
 		{
 			auto ilToggleGuard = Util::DisableGuard(!settings.Enabled);
-			if (ImGui::Checkbox("Indirect Lighting (IL)", &settings.EnableGI)) {
-				recompileFlag = true;
-				SetupNRDResources();
-			}
+			recompileFlag |= ImGui::Checkbox(T(TKEY("indirect_lighting"), "Indirect Lighting (IL)"), &settings.EnableGI);
 		}
 		ImGui::TableNextColumn();
 		{
 			auto shGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
-			if (ImGui::Checkbox("SH Mode", &settings.EnableSH)) {
+			if (ImGui::Checkbox(T(TKEY("sh_mode"), "SH Mode"), &settings.EnableSH)) {
 				recompileFlag = true;
 				SetupNRDResources();
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Use Spherical Harmonics for directional GI. Higher quality but more expensive.");
+				ImGui::Text("%s", T(TKEY("sh_mode_tooltip"), "Use Spherical Harmonics for directional GI. Higher quality but more expensive."));
 			}
 		}
 		ImGui::TableNextColumn();
 		{
 			auto vanillaSSAOGuard = Util::DisableGuard(globals::game::isVR);
-			ImGui::Checkbox("Vanilla SSAO", &settings.EnableVanillaSSAO);
+			ImGui::Checkbox(T(TKEY("vanilla_ssao"), "Vanilla SSAO"), &settings.EnableVanillaSSAO);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				if (globals::game::isVR)
-					ImGui::Text("Vanilla SSAO is not supported in VR.");
+					ImGui::Text("%s", T(TKEY("vanilla_ssao_vr_tooltip"), "Vanilla SSAO is not supported in VR."));
 				else
-					ImGui::Text("Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening.");
+					ImGui::Text("%s", T(TKEY("vanilla_ssao_tooltip"), "Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening."));
 			}
 		}
 
@@ -88,69 +88,69 @@ void ScreenSpaceGI::DrawSettings()
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Quality/Performance");
+	ImGui::SeparatorText(T(TKEY("quality_performance"), "Quality/Performance"));
 
 	{
 		auto qualityGuard = Util::DisableGuard(!settings.Enabled);
 
-		if (ImGui::Checkbox("Half Resolution (Checkerboard)", &settings.HalfRes)) {
+		if (ImGui::Checkbox(T(TKEY("half_resolution_checkerboard"), "Half Resolution (Checkerboard)"), &settings.HalfRes)) {
 			recompileFlag = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels.");
+			ImGui::Text("%s", T(TKEY("half_resolution_checkerboard_tooltip"), "Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels."));
 		}
 
 		if (showAdvanced) {
-			ImGui::SliderInt("Steps Per Slice", (int*)&settings.NumSteps, 1, 32);
+			ImGui::SliderInt(T(TKEY("steps_per_slice"), "Steps Per Slice"), (int*)&settings.NumSteps, 1, 32);
 		}
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Visual");
+	ImGui::SeparatorText(T(TKEY("visual"), "Visual"));
 
 	{
 		auto visualGuard = Util::DisableGuard(!settings.Enabled);
 
-		ImGui::SliderFloat("AO Power", &settings.AOPower, 0.f, 6.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ao_power"), "AO Power"), &settings.AOPower, 0.f, 6.f, "%.2f");
 
 		{
 			auto ilGuard = Util::DisableGuard(!settings.EnableGI);
-			ImGui::SliderFloat("IL Source Brightness", &settings.GIStrength, 0.f, 6.f, "%.2f");
+			ImGui::SliderFloat(T(TKEY("il_source_brightness"), "IL Source Brightness"), &settings.GIStrength, 0.f, 6.f, "%.2f");
 
-			ImGui::Checkbox("Use Dynamic Cubemaps as Fallback", &settings.UseDynamicCubemapsAsFallback);
+			ImGui::Checkbox(T(TKEY("use_dynamic_cubemaps_as_fallback"), "Use Dynamic Cubemaps as Fallback"), &settings.UseDynamicCubemapsAsFallback);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Where indirect rays miss the screen, sample dynamic cubemaps for diffuse fallback.");
+				ImGui::Text("%s", T(TKEY("use_dynamic_cubemaps_as_fallback_tooltip"), "Where indirect rays miss the screen, sample dynamic cubemaps for diffuse fallback."));
 			}
 			{
 				auto cubemapGuard = Util::DisableGuard(!settings.UseDynamicCubemapsAsFallback);
-				ImGui::SliderFloat("Diffuse Cubemap Multiplier", &settings.DiffuseCubemapMult, 0.0f, 5.0f, "%.2f");
+				ImGui::SliderFloat(T(TKEY("diffuse_cubemap_multiplier"), "Diffuse Cubemap Multiplier"), &settings.DiffuseCubemapMult, 0.0f, 5.0f, "%.2f");
 			}
 		}
 
 		if (showAdvanced) {
 			ImGui::Separator();
-			ImGui::SliderFloat("Thickness", &settings.Thickness, 0.f, 0.2f, "%.3f");
+			ImGui::SliderFloat(T(TKEY("thickness"), "Thickness"), &settings.Thickness, 0.f, 0.2f, "%.3f");
 		}
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("REBLUR Denoiser");
+	ImGui::SeparatorText(T(TKEY("reblur_denoiser"), "REBLUR Denoiser"));
 
 	{
 		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
 
-		ImGui::Checkbox("Enable REBLUR", &settings.EnableREBLUR);
+		ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR);
 
 		if (settings.EnableREBLUR)
 			globals::features::nrd.DrawReblurSettings(settings.Reblur, showAdvanced, "ssgi_reblur");
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Debug");
+	ImGui::SeparatorText(T(TKEY("debug"), "Debug"));
 
-	if (ImGui::TreeNode("Buffer Viewer")) {
+	if (ImGui::TreeNode(T(TKEY("buffer_viewer"), "Buffer Viewer"))) {
 		static float debugRescale = .3f;
-		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+		ImGui::SliderFloat(T(TKEY("view_resize"), "View Resize"), &debugRescale, 0.f, 1.f);
 
 		BUFFER_VIEWER_NODE(texNoise, debugRescale)
 		BUFFER_VIEWER_NODE(texWorkingDepth, debugRescale)
@@ -166,6 +166,8 @@ void ScreenSpaceGI::DrawSettings()
 		ImGui::TreePop();
 	}
 }
+
+#undef I18N_KEY_PREFIX
 
 void ScreenSpaceGI::LoadSettings(json& o_json)
 {
@@ -375,13 +377,7 @@ void ScreenSpaceGI::SetupNRDResources()
 	texNRDOutput->CreateSRV(srvDesc);
 	texNRDOutput->CreateUAV(uavDesc);
 
-	const float clearColor[4] = {};
-	globals::d3d::context->ClearUnorderedAccessViewFloat(texNRDInput->uav.get(), clearColor);
-	globals::d3d::context->ClearUnorderedAccessViewFloat(texNRDOutput->uav.get(), clearColor);
-
-	const bool enableSH = settings.EnableSH && settings.EnableGI;
-
-	if (enableSH) {
+	if (settings.EnableSH) {
 		texNRDInputSH1 = eastl::make_unique<Texture2D>(texDesc, "SSGI::NRDInputSH1");
 		texNRDInputSH1->CreateSRV(srvDesc);
 		texNRDInputSH1->CreateUAV(uavDesc);
@@ -389,15 +385,12 @@ void ScreenSpaceGI::SetupNRDResources()
 		texNRDOutputSH1 = eastl::make_unique<Texture2D>(texDesc, "SSGI::NRDOutputSH1");
 		texNRDOutputSH1->CreateSRV(srvDesc);
 		texNRDOutputSH1->CreateUAV(uavDesc);
-
-		globals::d3d::context->ClearUnorderedAccessViewFloat(texNRDInputSH1->uav.get(), clearColor);
-		globals::d3d::context->ClearUnorderedAccessViewFloat(texNRDOutputSH1->uav.get(), clearColor);
 	} else {
 		texNRDInputSH1.reset();
 		texNRDOutputSH1.reset();
 	}
 
-	auto denoiser = enableSH ? nrd::Denoiser::REBLUR_DIFFUSE_SH : nrd::Denoiser::REBLUR_DIFFUSE;
+	auto denoiser = settings.EnableSH ? nrd::Denoiser::REBLUR_DIFFUSE_SH : nrd::Denoiser::REBLUR_DIFFUSE;
 	nrdReblur.Init(fullW, fullH, denoiser, 0);
 
 	globals::deferred->ClearShaderCache();
@@ -568,9 +561,7 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(prefilterDepthsCompute.get(), nullptr, 0);
-		globals::profiler->BeginPass("ScreenSpaceGI::PrefilterDepths");
 		context->Dispatch((resolution[0] + 15) >> 4, (resolution[1] + 15) >> 4, 1);
-		globals::profiler->EndPass();
 	}
 
 	// Prefilter radiance mip chain (reads main RT directly)
@@ -579,23 +570,16 @@ void ScreenSpaceGI::DrawSSGI()
 
 		resetViews();
 		srvs.at(0) = rts[deferred->forwardRenderTargets[0]].SRV;
-		srvs.at(1) = GetDiffuseOutputTexture();
-		if (settings.EnableSH && settings.EnableGI)
-			srvs.at(2) = GetDiffuseSH1Texture();
-		srvs.at(3) = texWorkingDepth->srv.get();
-		srvs.at(4) = rts[NORMALROUGHNESS].SRV;
 		uavs.at(0) = uavRadiance[0].get();
 		uavs.at(1) = uavRadiance[1].get();
 		uavs.at(2) = uavRadiance[2].get();
 		uavs.at(3) = uavRadiance[3].get();
 		uavs.at(4) = uavRadiance[4].get();
 
-		context->CSSetShaderResources(0, 5, srvs.data());
+		context->CSSetShaderResources(0, 1, srvs.data());
 		context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
 		context->CSSetShader(prefilterRadianceCompute.get(), nullptr, 0);
-		globals::profiler->BeginPass("ScreenSpaceGI::PrefilterRadiance");
 		context->Dispatch((resolution[0] + 15u) >> 4, (resolution[1] + 15u) >> 4, 1);
-		globals::profiler->EndPass();
 	}
 
 	// Prefilter normals
@@ -613,9 +597,7 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, 1, srvs.data());
 		context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
 		context->CSSetShader(prefilterNormalCompute.get(), nullptr, 0);
-		globals::profiler->BeginPass("ScreenSpaceGI::PrefilterNormals");
 		context->Dispatch((resolution[0] + 15u) >> 4, (resolution[1] + 15u) >> 4, 1);
-		globals::profiler->EndPass();
 	}
 
 	// GI → NRD input
@@ -639,8 +621,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 		uavs.at(0) = texNRDInput->uav.get();
 		uavs.at(1) = texPrevGeo->uav.get();
-		const bool enableSH = settings.EnableSH && settings.EnableGI;
-		if (enableSH && texNRDInputSH1)
+		if (settings.EnableSH && texNRDInputSH1)
 			uavs.at(2) = texNRDInputSH1->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
@@ -649,9 +630,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 		uint dispatchX = settings.HalfRes ? (resolution[0] + 1) / 2 : resolution[0];
 		uint dispatchY = resolution[1];
-		globals::profiler->BeginPass("ScreenSpaceGI::GI");
 		context->Dispatch((dispatchX + 7u) >> 3, (dispatchY + 7u) >> 3, 1);
-		globals::profiler->EndPass();
 	}
 
 	// REBLUR diffuse denoising via core NRD service
@@ -659,11 +638,12 @@ void ScreenSpaceGI::DrawSSGI()
 	if (settings.EnableREBLUR && nrdReblur.IsValid() && nrdSvc.loaded && nrdSvc.AreGuidesReady()) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - REBLUR");
 
-		nrdReblur.SetCommonSettings(nrdSvc.GetCommonSettings());
+		auto commonSettings = nrdSvc.GetCommonSettings();
+		commonSettings.splitScreen = settings.Reblur.SplitScreen;
+		nrdReblur.SetCommonSettings(commonSettings);
 
 		nrdSvc.ApplyReblurSettings(reblurSettings, settings.Reblur,
 			settings.HalfRes ? nrd::CheckerboardMode::WHITE : nrd::CheckerboardMode::OFF);
-		reblurSettings.splitScreen = settings.Reblur.SplitScreen;
 		nrdReblur.SetDenoiserSettings(&reblurSettings);
 
 		nrdReblur.SetNamedSRV(nrd::ResourceType::IN_MV, nrdSvc.GetMotionVectorSRV());
@@ -671,8 +651,7 @@ void ScreenSpaceGI::DrawSSGI()
 		nrdReblur.SetNamedSRV(nrd::ResourceType::IN_NORMAL_ROUGHNESS, nrdSvc.GetNormalRoughnessSRV());
 		nrdReblur.SetNamedSRV(nrd::ResourceType::IN_VIEWZ, nrdSvc.GetViewZSRV());
 
-		const bool enableSH = settings.EnableSH && settings.EnableGI;
-		if (enableSH && texNRDInputSH1) {
+		if (settings.EnableSH && texNRDInputSH1) {
 			nrdReblur.SetNamedSRV(nrd::ResourceType::IN_DIFF_SH0, texNRDInput->srv.get());
 			nrdReblur.SetNamedSRV(nrd::ResourceType::IN_DIFF_SH1, texNRDInputSH1->srv.get());
 			nrdReblur.SetNamedSRV(nrd::ResourceType::OUT_DIFF_SH0, texNRDOutput->srv.get());
@@ -685,9 +664,7 @@ void ScreenSpaceGI::DrawSSGI()
 			nrdReblur.SetNamedUAV(nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST, texNRDOutput->uav.get());
 		}
 
-		globals::profiler->BeginPass("ScreenSpaceGI::Reblur");
 		nrdReblur.Dispatch();
-		globals::profiler->EndPass();
 	}
 
 	// cleanup
@@ -713,7 +690,7 @@ ID3D11ShaderResourceView* ScreenSpaceGI::GetDiffuseOutputTexture()
 
 ID3D11ShaderResourceView* ScreenSpaceGI::GetDiffuseSH1Texture()
 {
-	if (!loaded || !settings.Enabled || !settings.EnableGI || !settings.EnableSH)
+	if (!loaded || !settings.Enabled || !settings.EnableSH)
 		return nullptr;
 	if (settings.EnableREBLUR && nrdReblur.IsValid() && globals::features::nrd.loaded && globals::features::nrd.AreGuidesReady() && texNRDOutputSH1)
 		return texNRDOutputSH1->srv.get();
@@ -725,7 +702,7 @@ ID3D11ShaderResourceView* ScreenSpaceGI::GetDiffuseSH1Texture()
 ScreenSpaceGI::SharedData ScreenSpaceGI::GetCommonBufferData()
 {
 	SharedData data;
-	data.DiffuseMult = (settings.Enabled && settings.EnableGI) ? 1.0f : 0.0f;
+	data.DiffuseMult = (settings.Enabled && settings.EnableGI) ? settings.GIStrength : 0.0f;
 	data.DebugMode = 0;
 	data.pad0 = 0;
 	data.pad1 = 0;

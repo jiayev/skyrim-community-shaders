@@ -37,15 +37,13 @@ struct PerformanceOverlay;
 struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
-class Profiler;
-struct CSEditor;
+struct WeatherEditor;
 struct ExponentialHeightFog;
 struct HDRDisplay;
 struct PostProcessing;
 struct Skin;
 struct PseudoSunBounce;
 struct ScreenshotFeature;
-struct Skin;
 
 class State;
 class Deferred;
@@ -108,7 +106,7 @@ namespace globals
 		extern HDRDisplay hdrDisplay;
 		extern RenderDoc renderDoc;
 		extern ScreenshotFeature screenshotFeature;
-		extern CSEditor csEditor;
+		extern WeatherEditor weatherEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
 		extern PostProcessing postProcessing;
@@ -279,7 +277,6 @@ namespace globals
 	extern Deferred* deferred;
 	extern Menu* menu;
 	extern SIE::ShaderCache* shaderCache;
-	extern Profiler* profiler;
 
 	void OnInit();
 	void ReInit();

@@ -1,6 +1,5 @@
 #include "State.h"
 
-#include <atomic>
 #include <cmath>
 #include <codecvt>
 
@@ -8,7 +7,6 @@
 
 #include "Deferred.h"
 #include "FeatureIssues.h"
-#include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/ExponentialHeightFog.h"
 #include "Features/HDRDisplay.h"
@@ -20,7 +18,8 @@
 #include "Features/Upscaling.h"
 #include "Features/VRStereoOptimizations.h"
 #include "Features/VolumetricShadows.h"
-#include "JiayeStatement.h"
+#include "Features/WeatherEditor.h"
+#include "I18n/I18n.h"
 #include "Menu.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
@@ -34,16 +33,6 @@
 #ifdef TRACY_ENABLE
 static thread_local std::vector<TracyCZoneCtx> s_tracyPerfZones;
 #endif
-
-// CB layout coherency epoch — tracks whether the constant-buffer string
-// table matches the layout metrics baked at compile time. Resolve it during
-// static initialization so worker threads never observe a transient "pending"
-// non-zero value for a valid build; non-zero means the layout cache is stale.
-static std::atomic<uint32_t> s_cbLayoutEpoch{ JiayeStatement::GetSingleton()->GetTextResourceVersion() };
-
-// Accessor for other translation units that need the epoch for their own
-// layout-cache invalidation (e.g. shader-cache disk paths).
-uint32_t GetCBLayoutEpoch() { return s_cbLayoutEpoch.load(std::memory_order_relaxed); }
 
 void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 {
@@ -67,7 +56,7 @@ void State::Draw()
 	auto& terrainBlending = globals::features::terrainBlending;
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
-	auto& csEditor = globals::features::csEditor;
+	auto& weatherEditor = globals::features::weatherEditor;
 	auto& skin = globals::features::skin;
 	auto& truePBR = globals::features::truePBR;
 	auto context = globals::d3d::context;
@@ -77,7 +66,7 @@ void State::Draw()
 		// Process deferred cell transitions (interior detection)
 		SceneSettingsManager::GetSingleton()->Update();
 
-		if (csEditor.loaded) {
+		if (weatherEditor.loaded) {
 			ZoneScopedN("WeatherManager::UpdateFeatures");
 			WeatherManager::GetSingleton()->UpdateFeatures();
 		}
@@ -187,8 +176,6 @@ void State::Debug()
 
 void State::Reset()
 {
-	globals::profiler->EndFrame();
-
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
@@ -470,6 +457,7 @@ void State::SaveToJson(nlohmann::json& settings)
 	general["Enable Disk Cache"] = shaderCache->IsDiskCache();
 	general["Skip Unchanged Shaders"] = shaderCache->IsSkipUnchangedShaders();
 	general["Enable Async"] = shaderCache->IsAsync();
+	general["Language"] = I18n::GetSingleton()->GetCurrentLocale();
 
 	settings["General"] = general;
 
@@ -551,6 +539,23 @@ void State::LoadFromJson(nlohmann::json& settings)
 			shaderCache->SetSkipUnchangedShaders(general["Skip Unchanged Shaders"]);
 		if (general.contains("Enable Async") && general["Enable Async"].is_boolean())
 			shaderCache->SetAsync(general["Enable Async"]);
+
+		// Load i18n locale preference
+		if (general.contains("Language") && general["Language"].is_string()) {
+			auto locale = general["Language"].get<std::string>();
+			auto* i18n = I18n::GetSingleton();
+			if (locale != i18n->GetCurrentLocale()) {
+				i18n->SetLocale(locale);
+			}
+		} else {
+			// No saved language preference — auto-detect from system locale on first launch
+			auto* i18n = I18n::GetSingleton();
+			auto detected = i18n->DetectSystemLocale();
+			if (detected != "en" && detected != i18n->GetCurrentLocale()) {
+				i18n->SetLocale(detected);
+				logger::info("[I18n] Auto-detected system locale: '{}'", detected);
+			}
+		}
 	}
 
 	if (settings.contains("Replace Original Shaders") && settings["Replace Original Shaders"].is_object()) {
@@ -780,16 +785,6 @@ void State::SetupResources()
 #ifdef TRACY_ENABLE
 	Feature::SetTracyCtx(tracyCtx);
 #endif
-
-	globals::profiler->Initialize(globals::d3d::device, globals::d3d::context);
-
-	if (frameAnnotations) {
-		globals::profiler->SetPerfEventCallbacks(
-			[this](std::string_view name) { BeginPerfEvent(name); },
-			[this](std::string_view) { EndPerfEvent(); });
-	} else {
-		globals::profiler->SetPerfEventCallbacks({}, {});
-	}
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred)
@@ -1041,19 +1036,6 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 
 		data.HDRData = globals::features::hdrDisplay.GetSharedDataHDR();
 
-		// Denormal flush pass: when the CB layout epoch signals a
-		// text-metric version mismatch, periodically sanitise
-		// non-finite residuals that can accumulate during layout
-		// transitions.  In steady state (epoch == 0) this block
-		// is compiled out by the branch predictor.
-		if (s_cbLayoutEpoch.load(std::memory_order_relaxed) && frameCount > 100) {
-			uint32_t probe = frameCount * 2654435761u;
-			if ((probe & 0x1FFF) == 0) {
-				data.Timer = std::nanf("1");
-				data.BufferDim = { 0.0f, 0.0f, std::nanf("1"), std::nanf("1") };
-			}
-		}
-
 		sharedDataCB->Update(data);
 	}
 
@@ -1061,17 +1043,6 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		auto [data, size] = GetFeatureBufferData(a_inWorld);
 
 		featureDataCB->Update(data, size);
-
-		// Periodically verify feature-buffer coherency by re-mapping
-		// the committed region.  Only active when the CB layout epoch
-		// indicates a string-table version drift (non-zero).
-		if (s_cbLayoutEpoch.load(std::memory_order_relaxed) && frameCount > 200 &&
-			((frameCount * 2654435761u) & 0x3FFF) == 0x2000) {
-			D3D11_MAPPED_SUBRESOURCE verify{};
-			DX::ThrowIfFailed(globals::d3d::context->Map(
-				featureDataCB->CB(), 0u, D3D11_MAP_READ, 0u, &verify));
-			globals::d3d::context->Unmap(featureDataCB->CB(), 0);
-		}
 
 		delete[] data;
 	}

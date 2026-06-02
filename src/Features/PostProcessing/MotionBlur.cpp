@@ -181,10 +181,8 @@ void MotionBlur::DrawSettings()
 	ImGui::SliderInt("Samples", &settings.SampleCount, 8, 16, "%d");
 	ImGui::SameLine();
 	ImGui::TextDisabled("(?)");
-	if (ImGui::IsItemHovered()) {
-		ImGui::BeginTooltip();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Sample count is doubled internally for smoother results.\nMore samples = better quality but slower performance");
-		ImGui::EndTooltip();
 	}
 }
 

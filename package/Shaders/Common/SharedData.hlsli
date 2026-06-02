@@ -454,10 +454,10 @@ namespace SharedData
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		TruePBRSettings truePBRSettings;
-		SkinData skinData;
 		SSGISettings ssgiSettings;
 		SSRSettings ssrSettings;
 		PostProcessingSettings postProcessingSettings;
+		SkinData skinData;
 		SSPLSSettings ssplsSettings;
 		VanillaFresnelSettings vanillaFresnelSettings;
 		PhysSkyData physSkyData;

@@ -9,6 +9,8 @@
 
 #include "Features/Upscaling.h"
 
+#include <format>
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PostProcessing::Settings,
 	DisableVanillaTonemapping)
@@ -20,7 +22,7 @@ void PostProcessing::DrawSettings()
 	static int presetIdx = -1;
 
 	ImGui::BeginGroup();
-	std::string currentPreset = (presetIdx >= 0 && presetIdx < presets.size()) ? presets[presetIdx] : "Select a preset";
+	std::string currentPreset = (presetIdx >= 0 && presetIdx < presets.size()) ? presets[presetIdx] : T("feature.post_processing.select_a_preset", "Select a preset");
 
 	if (ImGui::BeginCombo("##PresetCombo", currentPreset.c_str())) {
 		presets = LoadPresets();
@@ -36,7 +38,7 @@ void PostProcessing::DrawSettings()
 	}
 
 	ImGui::SameLine();
-	if (ImGui::Button("Load")) {
+	if (ImGui::Button(T("feature.post_processing.load", "Load"))) {
 		if (presetIdx >= 0 && presetIdx < presets.size()) {
 			LoadPresetFrom(presets[presetIdx]);
 		}
@@ -48,7 +50,7 @@ void PostProcessing::DrawSettings()
 	ImGui::InputText("##NewPresetName", &newPresetName);
 
 	ImGui::SameLine();
-	if (ImGui::Button("Save")) {
+	if (ImGui::Button(T("feature.post_processing.save", "Save"))) {
 		if (!newPresetName.empty())
 			SavePresetTo(newPresetName);
 	}
@@ -56,9 +58,9 @@ void PostProcessing::DrawSettings()
 	ImGui::EndGroup();
 
 	ImGui::Separator();
-	ImGui::Checkbox("Bypass", &bypass);
+	ImGui::Checkbox(T("feature.post_processing.bypass", "Bypass"), &bypass);
 	ImGui::SameLine();
-	ImGui::Checkbox("Disable Vanilla Tonemapping", (bool*)&settings.DisableVanillaTonemapping);
+	ImGui::Checkbox(T("feature.post_processing.disable_vanilla_tonemapping", "Disable Vanilla Tonemapping"), (bool*)&settings.DisableVanillaTonemapping);
 
 	ImGui::Separator();
 
@@ -66,6 +68,8 @@ void PostProcessing::DrawSettings()
 		for (int i = 0; i < pipeline.size(); ++i) {
 			auto& feat = pipeline[i];
 			if (feat && feat->IsVisible()) {
+				auto displayName = feat->GetDisplayName();
+				auto description = feat->GetDesc();
 				ImGui::PushID(feat->GetType().c_str());
 				ImGui::Checkbox("##Enabled", &feat->enabled);
 				ImGui::SameLine();
@@ -74,69 +78,73 @@ void PostProcessing::DrawSettings()
 					pipelinePageNum = 1;
 				}
 				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("Edit settings for this feature.");
+					ImGui::Text("%s", T("feature.post_processing.edit_settings_for_this_feature", "Edit settings for this feature."));
 				ImGui::SameLine();
-				ImGui::Text("%s", feat->GetType().c_str());
+				ImGui::Text("%s", displayName.c_str());
 				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text(feat->GetDesc().c_str());
+					ImGui::Text("%s", description.c_str());
 				ImGui::PopID();
 			}
 		}
 	} else if (pipelinePageNum == 1) {
-		if (ImGui::Button(ICON_FA_ARROW_LEFT " Back to Pipeline")) {
+		auto backLabel = std::format("{} {}", ICON_FA_ARROW_LEFT, T("feature.post_processing.back_to_pipeline", "Back to Pipeline"));
+		if (ImGui::Button(backLabel.c_str())) {
 			pipelinePageNum = 0;
 		}
 		ImGui::Separator();
 		if (pipelineFeatIdx >= 0 && pipelineFeatIdx < pipeline.size()) {
 			auto& feat = pipeline[pipelineFeatIdx];
 			if (feat) {
+				auto displayName = feat->GetDisplayName();
+				auto description = feat->GetDesc();
 				ImGui::PushID(feat->GetType().c_str());
 
-				ImGui::SeparatorText(feat->GetType().c_str());
-				ImGui::TextWrapped(feat->GetDesc().c_str());
+				ImGui::SeparatorText(displayName.c_str());
+				ImGui::TextWrapped("%s", description.c_str());
 
 				ImGui::Spacing();
-				if (ImGui::Button(ICON_FA_SYNC " Recompile Shaders")) {
+				auto recompileLabel = std::format("{} {}", ICON_FA_SYNC, T("feature.post_processing.recompile_shaders", "Recompile Shaders"));
+				if (ImGui::Button(recompileLabel.c_str())) {
 					feat->ClearShaderCache();
 				}
 				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("Recompile shaders for this sub-feature only.");
+					ImGui::Text("%s", T("feature.post_processing.recompile_shaders_for_this_sub_feature_only", "Recompile shaders for this sub-feature only."));
 				ImGui::Separator();
 				ImGui::Spacing();
-				ImGui::Checkbox("Enabled", &feat->enabled);
+				ImGui::Checkbox(T("feature.post_processing.enabled", "Enabled"), &feat->enabled);
 				if (feat->enabled) {
 					ImGui::Indent();
 					feat->DrawSettings();
 					ImGui::Unindent();
 				} else {
-					ImGui::TextDisabled("Enable the feature to see its settings.");
+					ImGui::TextDisabled("%s", T("feature.post_processing.enable_the_feature_to_see_its_settings", "Enable the feature to see its settings."));
 				}
 
 				ImGui::PopID();
 			} else {
-				ImGui::TextDisabled("Selected feature is not valid.");
+				ImGui::TextDisabled("%s", T("feature.post_processing.selected_feature_is_not_valid", "Selected feature is not valid."));
 				pipelinePageNum = 0;
 			}
 		} else {
-			ImGui::TextDisabled("Invalid feature selected. Returning to list.");
+			ImGui::TextDisabled("%s", T("feature.post_processing.invalid_feature_selected_returning_to_list", "Invalid feature selected. Returning to list."));
 			pipelinePageNum = 0;
 		}
 	}
 
 	ImGui::Separator();
 
-	if (ImGui::TreeNode("Debug")) {
-		if (ImGui::TreeNode("Game ImageSpace Values")) {
-			ImGui::Text("Base Amount: %.3f", imageSpaceManager->gameISData.baseAmount);
-			ImGui::Text("Base Data:");
-			ImGui::Text("Cinematic Values:");
-			ImGui::Text("Saturation: %.3f\nBrightness: %.3f\nContrast: %.3f",
+	if (ImGui::TreeNode(T("feature.post_processing.debug", "Debug"))) {
+		if (ImGui::TreeNode(T("feature.post_processing.game_imagespace_values", "Game ImageSpace Values"))) {
+			ImGui::Text(T("feature.post_processing.base_amount", "Base Amount: %.3f"), imageSpaceManager->gameISData.baseAmount);
+			ImGui::Text("%s", T("feature.post_processing.base_data", "Base Data:"));
+			ImGui::Text("%s", T("feature.post_processing.cinematic_values", "Cinematic Values:"));
+			ImGui::Text(T("feature.post_processing.saturation_brightness_contrast_values", "Saturation: %.3f\nBrightness: %.3f\nContrast: %.3f"),
 				imageSpaceManager->gameISData.baseData.cinematic.saturation,
 				imageSpaceManager->gameISData.baseData.cinematic.brightness,
 				imageSpaceManager->gameISData.baseData.cinematic.contrast);
 
-			ImGui::Text("HDR Values:");
-			ImGui::Text("Eye Adapt Speed: %.3f\nBloom Blur Radius: %.3f\nBloom Threshold: %.3f\nBloom Scale: %.3f\nReceive Bloom Threshold: %.3f\nWhite: %.3f\nSunlight Scale: %.3f\nSky Scale: %.3f\nEye Adapt Strength: %.3f",
+			ImGui::Text("%s", T("feature.post_processing.hdr_values", "HDR Values:"));
+			ImGui::Text(T("feature.post_processing.hdr_values_detail", "Eye Adapt Speed: %.3f\nBloom Blur Radius: %.3f\nBloom Threshold: %.3f\nBloom Scale: %.3f\nReceive Bloom Threshold: %.3f\nWhite: %.3f\nSunlight Scale: %.3f\nSky Scale: %.3f\nEye Adapt Strength: %.3f"),
 				imageSpaceManager->gameISData.baseData.hdr.eyeAdaptSpeed,
 				imageSpaceManager->gameISData.baseData.hdr.bloomBlurRadius,
 				imageSpaceManager->gameISData.baseData.hdr.bloomThreshold,
@@ -147,31 +155,31 @@ void PostProcessing::DrawSettings()
 				imageSpaceManager->gameISData.baseData.hdr.skyScale,
 				imageSpaceManager->gameISData.baseData.hdr.eyeAdaptStrength);
 
-			ImGui::Text("Tint Values:");
-			ImGui::Text("Tint Amount: %.3f\nTint Color: (%.3f, %.3f, %.3f)",
+			ImGui::Text("%s", T("feature.post_processing.tint_values", "Tint Values:"));
+			ImGui::Text(T("feature.post_processing.tint_values_detail", "Tint Amount: %.3f\nTint Color: (%.3f, %.3f, %.3f)"),
 				imageSpaceManager->gameISData.baseData.tint.amount,
 				imageSpaceManager->gameISData.baseData.tint.color.red,
 				imageSpaceManager->gameISData.baseData.tint.color.green,
 				imageSpaceManager->gameISData.baseData.tint.color.blue);
 
-			ImGui::Text("Depth of Field Values:");
-			ImGui::Text("DOF Strength: %.3f\nDOF Distance: %.3f\nDOF Range: %.3f\nDOF Flags: %d\nDOF Sky Blur Radius: %d",
+			ImGui::Text("%s", T("feature.post_processing.depth_of_field_values", "Depth of Field Values:"));
+			ImGui::Text(T("feature.post_processing.depth_of_field_values_detail", "DOF Strength: %.3f\nDOF Distance: %.3f\nDOF Range: %.3f\nDOF Flags: %d\nDOF Sky Blur Radius: %d"),
 				imageSpaceManager->gameISData.baseData.depthOfField.strength,
 				imageSpaceManager->gameISData.baseData.depthOfField.distance,
 				imageSpaceManager->gameISData.baseData.depthOfField.range,
 				imageSpaceManager->gameISData.baseData.depthOfField.flags,
 				static_cast<int>(imageSpaceManager->gameISData.baseData.depthOfField.skyBlurRadius.get()));
 
-			ImGui::Text("Mod Amount: %.3f", imageSpaceManager->gameISData.modAmount);
-			ImGui::Text("Mod Data:");
-			ImGui::Text("Fade Amount: %.3f\nFade Color: (%.3f, %.3f, %.3f)\nBlur Radius: %.3f\nDouble Vision Strength: %.3f\n",
+			ImGui::Text(T("feature.post_processing.mod_amount", "Mod Amount: %.3f"), imageSpaceManager->gameISData.modAmount);
+			ImGui::Text("%s", T("feature.post_processing.mod_data", "Mod Data:"));
+			ImGui::Text(T("feature.post_processing.mod_fade_values_detail", "Fade Amount: %.3f\nFade Color: (%.3f, %.3f, %.3f)\nBlur Radius: %.3f\nDouble Vision Strength: %.3f\n"),
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kFadeAmount],
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kFadeR],
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kFadeG],
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kFadeB],
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kBlurRadius],
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kDoubleVisionStrength]);
-			ImGui::Text("Radial Blur Strength: %.3f\nRadial Blur Rampup: %.3f\nRadial Blur Start: %.3f\nRadial Blur Rampdown: %.3f\nRadial Blur Down Start: %.3f\nRadial Blur Center: (%.3f, %.3f)",
+			ImGui::Text(T("feature.post_processing.radial_blur_values_detail", "Radial Blur Strength: %.3f\nRadial Blur Rampup: %.3f\nRadial Blur Start: %.3f\nRadial Blur Rampdown: %.3f\nRadial Blur Down Start: %.3f\nRadial Blur Center: (%.3f, %.3f)"),
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kRadialBlurStrength],
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kRadialBlurRampup],
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kRadialBlurStart],
@@ -179,12 +187,12 @@ void PostProcessing::DrawSettings()
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kRadialBlurDownStart],
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kRadialBlurCenterX],
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kRadialBlurCenterY]);
-			ImGui::Text("DOF Strength: %.3f\nDOF Distance: %.3f\nDOF Range: %.3f\nDOF Mode: %d",
+			ImGui::Text(T("feature.post_processing.mod_dof_values_detail", "DOF Strength: %.3f\nDOF Distance: %.3f\nDOF Range: %.3f\nDOF Mode: %d"),
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kDOFStrength],
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kDOFDistance],
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kDOFRange],
 				imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kDOFMode]);
-			ImGui::Text("Motion Blur Strength: %.3f", imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kMotionBlurStrength]);
+			ImGui::Text(T("feature.post_processing.motion_blur_strength", "Motion Blur Strength: %.3f"), imageSpaceManager->gameISData.modData.data[RE::ImageSpaceModData::kMotionBlurStrength]);
 			ImGui::TreePop();
 		}
 		ImGui::TreePop();
