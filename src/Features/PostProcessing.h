@@ -107,6 +107,7 @@ struct PostProcessing : Feature
 	void PreProcess();
 	void DrawBeforeUpscaling();
 	void ClearBorderMotionVectorsForFrameGen();
+	void DrawFeature(PostProcessFeature& feature, PostProcessFeature::TextureInfo& lastTexColor);
 
 	/// Copy lastTexColor to a render target, performing format conversion via copyCS if needed.
 	void CopyToRenderTarget(
