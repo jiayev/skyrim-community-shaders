@@ -59,7 +59,10 @@ void ScreenSpaceGI::DrawSettings()
 		ImGui::TableNextColumn();
 		{
 			auto ilToggleGuard = Util::DisableGuard(!settings.Enabled);
-			recompileFlag |= ImGui::Checkbox(T(TKEY("indirect_lighting"), "Indirect Lighting (IL)"), &settings.EnableGI);
+			if (ImGui::Checkbox(T(TKEY("indirect_lighting"), "Indirect Lighting (IL)"), &settings.EnableGI)) {
+				recompileFlag = true;
+				SetupNRDResources();
+			}
 		}
 		ImGui::TableNextColumn();
 		{
@@ -166,8 +169,6 @@ void ScreenSpaceGI::DrawSettings()
 		ImGui::TreePop();
 	}
 }
-
-#undef I18N_KEY_PREFIX
 
 void ScreenSpaceGI::LoadSettings(json& o_json)
 {
@@ -708,3 +709,5 @@ ScreenSpaceGI::SharedData ScreenSpaceGI::GetCommonBufferData()
 	data.pad1 = 0;
 	return data;
 }
+
+#undef I18N_KEY_PREFIX

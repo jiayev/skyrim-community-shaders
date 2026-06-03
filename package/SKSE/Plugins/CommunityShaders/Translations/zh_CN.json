@@ -1145,7 +1145,7 @@
     "feature.screen_space_gi.key_feature_1": "逼真的间接光照",
     "feature.screen_space_gi.key_feature_2": "增强的环境光遮蔽",
     "feature.screen_space_gi.key_feature_3": "提升视觉深度和氛围",
-    "feature.screen_space_gi.key_feature_4": "时间降噪，带来平滑结果",
+    "feature.screen_space_gi.key_feature_4": "NVIDIA REBLUR 时间降噪",
     "feature.screen_space_gi.key_feature_5": "可配置的质量和性能设置",
     "feature.screen_space_gi.name": "屏幕空间GI",
     "feature.screen_space_gi.quality_performance": "质量/性能",
