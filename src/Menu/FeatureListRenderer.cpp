@@ -21,6 +21,7 @@
 #include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
+#include "SceneSettingsUIHooks.h"
 #include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Util.h"
@@ -788,12 +789,11 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				}
 			}
 
-			// Disable feature settings while scene overrides are actively applied (not paused)
-			if (sceneControlled)
-				ImGui::BeginDisabled();
-
 			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
-			feat->DrawSettings();
+			{
+				SceneSettingsUIHooks::FeatureDrawGuard sceneDrawGuard(feat, sceneControlled);
+				feat->DrawSettings();
+			}
 
 			if (feat != &globals::features::csEditor) {
 				ImGui::SeparatorText(T("menu.features.profiling", "Profiling"));
@@ -801,9 +801,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			}
 
 			ImVec2 cursorPosAfter = ImGui::GetCursorPos();
-
-			if (sceneControlled)
-				ImGui::EndDisabled();
 
 			// --- Reactive constraint detection ---
 			// Compare the current full constraint set against g_knownConstraintKeys.
@@ -905,14 +902,19 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 1.0f, 1.0f, 0.3f));
 	ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 1.0f, 1.0f, 0.5f));
 
+	auto restoreDefaults = [&]() {
+		SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
+		feat->RestoreDefaultSettings();
+	};
+
 	auto& menu = *globals::menu;
 	if (menu.uiIcons.featureSettingRevert.texture) {
 		if (ImGui::ImageButton("##RestoreDefaults", menu.uiIcons.featureSettingRevert.texture, iconSize)) {
-			feat->RestoreDefaultSettings();
+			restoreDefaults();
 		}
 	} else {
 		if (ImGui::Button("R##RestoreDefaults", iconSize)) {
-			feat->RestoreDefaultSettings();
+			restoreDefaults();
 		}
 	}
 

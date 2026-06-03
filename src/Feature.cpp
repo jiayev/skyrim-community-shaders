@@ -178,57 +178,6 @@ bool Feature::IsSceneSettingPrimitive(const json& value)
 
 namespace
 {
-	constexpr std::string_view kHiddenSceneSettingPathSegments[] = { "settings", "ppsettings" };
-
-	bool IsHiddenSceneSettingPathSegment(const std::string& segment)
-	{
-		return std::find(std::begin(kHiddenSceneSettingPathSegments), std::end(kHiddenSceneSettingPathSegments), segment) !=
-		       std::end(kHiddenSceneSettingPathSegments);
-	}
-
-	std::string GetSceneSettingDisplayText(const std::string& text)
-	{
-		return text.find(' ') == std::string::npos ? Util::PrettifyIdentifier(text) : text;
-	}
-
-	std::vector<std::string> GetSceneSettingDisplayPath(const std::vector<std::string>& path)
-	{
-		std::vector<std::string> displayPath;
-		displayPath.reserve(path.size());
-		for (const auto& segment : path) {
-			if (!IsHiddenSceneSettingPathSegment(segment))
-				displayPath.push_back(GetSceneSettingDisplayText(segment));
-		}
-		return displayPath;
-	}
-
-	void CollectSceneSettings(const json& settings, std::vector<std::string>& path,
-		std::vector<SceneSettingDescriptor>& descriptors)
-	{
-		if (!settings.is_object())
-			return;
-
-		for (const auto& [key, value] : settings.items()) {
-			if (Feature::IsSceneSettingPrimitive(value)) {
-				descriptors.push_back({
-					.settingPath = path,
-					.key = key,
-					.displayName = GetSceneSettingDisplayText(key),
-					.displayPath = GetSceneSettingDisplayPath(path),
-					.value = value,
-				});
-				continue;
-			}
-
-			if (!value.is_object())
-				continue;
-
-			path.push_back(key);
-			CollectSceneSettings(value, path, descriptors);
-			path.pop_back();
-		}
-	}
-
 	json* FindSceneSetting(json& settings, const std::vector<std::string>& path, const std::string& key)
 	{
 		json* node = &settings;
@@ -246,19 +195,6 @@ namespace
 		auto it = node->find(key);
 		return it != node->end() ? &*it : nullptr;
 	}
-}
-
-std::vector<SceneSettingDescriptor> Feature::GetSceneSettings()
-{
-	json settings;
-	SaveSettings(settings);
-	if (!settings.is_object())
-		return {};
-
-	std::vector<SceneSettingDescriptor> descriptors;
-	std::vector<std::string> path;
-	CollectSceneSettings(settings, path, descriptors);
-	return descriptors;
 }
 
 bool Feature::GetSceneSettingValue(const std::vector<std::string>& settingPath, const std::string& key, json& outValue)

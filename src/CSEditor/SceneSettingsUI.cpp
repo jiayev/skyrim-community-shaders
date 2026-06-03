@@ -309,7 +309,7 @@ namespace SceneSettingsUI
 			auto label = hasSelection ? selectedIt->first : kSelectSubFeatureLabel;
 
 			ImGui::Spacing();
-			bool canGoBack = level > 0 && hasSelection && !node->settings.empty();
+			bool canGoBack = hasSelection;
 			float width = ImGui::GetContentRegionAvail().x;
 			if (canGoBack)
 				width = std::max(ImGui::GetFrameHeight(), width - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);

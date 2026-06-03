@@ -7,6 +7,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using json = nlohmann::json;
@@ -168,10 +169,27 @@ public:
 
 	/// Check if any scene settings are active for a given feature
 	bool HasActiveSettingsForFeature(const std::string& featureShortName) const;
+	bool IsActiveSceneSetting(std::string_view featureShortName,
+		std::string_view settingPath, std::string_view settingKey) const;
+	bool IsActiveSceneSetting(const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey) const;
 
 	/// Per-feature pause: temporarily disable all scene-specific settings for a feature
 	bool IsFeaturePaused(const std::string& featureShortName) const;
 	void SetFeaturePaused(const std::string& featureShortName, bool paused);
+
+	class SceneLayerGuard
+	{
+	public:
+		explicit SceneLayerGuard(SceneSettingsManager& manager);
+		~SceneLayerGuard();
+
+		SceneLayerGuard(const SceneLayerGuard&) = delete;
+		SceneLayerGuard& operator=(const SceneLayerGuard&) = delete;
+
+	private:
+		SceneSettingsManager& manager;
+	};
 
 	// --- Persistence ---
 
@@ -217,9 +235,6 @@ public:
 	/// Get the display name for a feature (e.g. "Screen Space GI" from "ScreenSpaceGI")
 	static std::string GetFeatureDisplayName(const std::string& featureShortName);
 
-	/// Get setting keys for a feature by JSON round-tripping its current settings
-	static std::vector<std::string> GetFeatureSettingKeys(const std::string& featureShortName);
-
 	/// Get scene-safe setting descriptors for a feature.
 	static std::vector<SceneSettingDescriptor> GetFeatureSceneSettings(const std::string& featureShortName);
 
@@ -228,16 +243,6 @@ public:
 
 	/// Get a UI-friendly display label for a setting key.
 	static std::string GetSettingDisplayName(const std::string& settingKey);
-	static std::string GetSettingDisplayName(const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey);
-
-	/// Split a scene setting into add-dialog subfeature path and leaf label.
-	static bool GetSettingDisplayPath(const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey,
-		std::vector<std::string>& pathParts, std::string& settingName);
-
-	/// Get only float setting keys that can be smoothly transitioned in Time of Day
-	static std::vector<std::string> GetTransitionableSettingKeys(const std::string& featureShortName);
 
 	/// Get current value of a specific setting from a feature
 	static json GetFeatureSettingValue(const std::string& featureShortName,
@@ -294,6 +299,7 @@ private:
 
 	// --- Per scene-type storage ---
 	std::map<SceneType, std::vector<SettingEntry>> entries;
+	std::map<SceneType, std::vector<json>> unresolvedUserEntries;
 	std::map<SceneType, bool> allOverwritesPausedMap;
 	std::map<SceneType, bool> allUserPausedMap;
 
@@ -329,8 +335,10 @@ private:
 
 	// --- Pause states ---
 	std::map<std::string, bool> featurePauseStates;
-
-	static constexpr size_t MAX_OVERWRITE_FILE_SIZE = 1024 * 1024;
+	int sceneLayerSuspendDepth = 0;
+	bool suspendedInteriorLayer = false;
+	bool suspendedTimeOfDayLayer = false;
+	bool suspendedWeatherLayer = false;
 
 	// --- Per-Weather Scene storage ---
 	std::map<RE::FormID, WeatherSceneConfig> weatherSceneConfigs;
@@ -338,6 +346,7 @@ private:
 
 	/// UI preference per weather: show TOD table vs flat view (keyed by FormID for fast access).
 	std::map<RE::FormID, bool> weatherShowTimeOfDay_;
+	json unresolvedWeatherUserSettings = json::object();
 
 	/// Baseline settings saved before weather scene activation, for reverting.
 	std::map<std::string, json> savedWeatherBaseline;
@@ -382,6 +391,8 @@ private:
 		EntrySource source, TimeOfDayPeriod period = TimeOfDayPeriod::Count) const;
 
 	void ReapplyIfActive();
+	void SuspendSceneLayer();
+	void ResumeSceneLayer();
 	void ApplyActiveSettings(SceneType type);
 	void SaveBaselineForEntries(const std::vector<SettingEntry>& sourceEntries,
 		std::map<std::string, json>& outBaseline);

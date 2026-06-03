@@ -136,8 +136,6 @@ public:
 	virtual void SaveSettings(json&) {}
 	virtual void LoadSettings(json&) {}
 	static bool IsSceneSettingPrimitive(const json& value);
-	/// Scene manager-facing settings; override for composite features with subfeatures.
-	virtual std::vector<SceneSettingDescriptor> GetSceneSettings();
 	virtual bool GetSceneSettingValue(const std::vector<std::string>& settingPath, const std::string& key, json& outValue);
 	virtual bool ApplySceneSettings(const std::vector<SceneSettingUpdate>& settings);
 

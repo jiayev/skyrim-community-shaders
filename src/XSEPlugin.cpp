@@ -7,6 +7,7 @@
 #include "Menu.h"
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
+#include "SceneSettingsUIHooks.h"
 #include "ShaderCache.h"
 #include "State.h"
 
@@ -168,6 +169,7 @@ bool Load()
 
 	state->Load();
 	state->LoadTheme();  // Load theme settings from SettingsTheme.json
+	SceneSettingsUIHooks::Install();
 
 	// Initialize theme system - create default themes and discover existing ones
 	globals::menu->CreateDefaultThemes();  // Creates JSON files if they don't exist

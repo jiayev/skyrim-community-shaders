@@ -1718,6 +1718,7 @@
     "menu.features.profiling": "Profiling",
     "menu.features.restore_defaults_tooltip": "Restore default settings for this feature",
     "menu.features.restore_override_tooltip": "Restores original override settings from mod files.\nThis will discard your customizations and revert to\nthe mod author's recommended settings.",
+    "menu.features.scene_setting_controlled_tooltip": "Controlled by active scene settings. Disable Scene Specific Settings for this feature to edit this setting.",
     "menu.features.scene_specific_settings": "Scene Specific Settings",
     "menu.features.select_feature_left": "Please select a feature from the left.",
     "menu.features.select_item_left": "Please select an item on the left.",

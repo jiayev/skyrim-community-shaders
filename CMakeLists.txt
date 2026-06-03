@@ -297,6 +297,58 @@ target_sources(
 )
 
 # #######################################################################################################################
+# # Scene settings catalog
+# #######################################################################################################################
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(NOT Python3_Interpreter_FOUND)
+    find_program(Python3_EXECUTABLE NAMES py python3 python REQUIRED)
+endif()
+
+set(SCENE_SETTINGS_CATALOG_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(SCENE_SETTINGS_CATALOG_HEADER "${SCENE_SETTINGS_CATALOG_DIR}/SceneSettingsCatalog.generated.h")
+set(SCENE_SETTINGS_CATALOG_SOURCE "${SCENE_SETTINGS_CATALOG_DIR}/SceneSettingsCatalog.generated.cpp")
+
+file(
+    GLOB_RECURSE SCENE_SETTINGS_CATALOG_INPUTS
+    LIST_DIRECTORIES false
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cxx"
+)
+
+add_custom_command(
+    OUTPUT
+        "${SCENE_SETTINGS_CATALOG_HEADER}"
+        "${SCENE_SETTINGS_CATALOG_SOURCE}"
+    COMMAND
+        ${Python3_EXECUTABLE}
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_scene_settings_catalog.py"
+        --source-dir
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        --out-dir
+        "${SCENE_SETTINGS_CATALOG_DIR}"
+    DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_scene_settings_catalog.py"
+        ${SCENE_SETTINGS_CATALOG_INPUTS}
+    COMMENT "Generating scene settings catalog"
+    VERBATIM
+)
+
+target_include_directories(
+    ${PROJECT_NAME}
+    PRIVATE "${SCENE_SETTINGS_CATALOG_DIR}"
+)
+
+target_sources(
+    "${PROJECT_NAME}"
+    PRIVATE
+        "${SCENE_SETTINGS_CATALOG_HEADER}"
+        "${SCENE_SETTINGS_CATALOG_SOURCE}"
+)
+
+# #######################################################################################################################
 # # clang-format
 # #######################################################################################################################
 

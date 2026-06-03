@@ -2,12 +2,14 @@
 
 #include "Feature.h"
 #include "Globals.h"
+#include "SceneSettingsCatalog.generated.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 #include "Utils/Game.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
@@ -17,7 +19,6 @@
 #include <set>
 #include <string_view>
 #include <tuple>
-#include <unordered_set>
 
 namespace
 {
@@ -155,6 +156,55 @@ namespace
 		return displayName;
 	}
 
+	std::vector<std::string> SplitCatalogPath(std::string_view path)
+	{
+		std::vector<std::string> parts;
+		size_t start = 0;
+		while (start < path.size()) {
+			auto end = path.find('/', start);
+			auto part = path.substr(start, end == std::string_view::npos ? path.size() - start : end - start);
+			if (!part.empty())
+				parts.emplace_back(part);
+			if (end == std::string_view::npos)
+				break;
+			start = end + 1;
+		}
+		return parts;
+	}
+
+	std::string ToCatalogPath(const std::vector<std::string>& path)
+	{
+		std::string result;
+		for (const auto& part : path) {
+			if (!result.empty())
+				result += '/';
+			result += part;
+		}
+		return result;
+	}
+
+	std::vector<std::string> GetCatalogDisplayPath(const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		return SplitCatalogPath(setting.displayPath.empty() ? setting.settingPath : setting.displayPath);
+	}
+
+	bool IsCatalogValueCompatible(const SceneSettingsCatalog::SettingMetadata& setting, const json& value)
+	{
+		using enum SceneSettingsCatalog::ValueType;
+		switch (setting.valueType) {
+		case Boolean:
+			return value.is_boolean();
+		case Integer:
+			return value.is_number_integer();
+		case Float:
+			return value.is_number_float() || value.is_number_integer();
+		case String:
+			return value.is_string();
+		default:
+			return false;
+		}
+	}
+
 	bool IsSameSetting(const SceneSettingsManager::SettingEntry& entry, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey)
 	{
@@ -259,48 +309,69 @@ namespace
 		}
 	}
 
-	const std::unordered_set<std::string>& GetInteriorFeatureWhitelist()
+	template <size_t Size>
+	bool ContainsFeatureName(const std::array<std::string_view, Size>& featureNames, std::string_view featureShortName)
 	{
-		static const std::unordered_set<std::string> whitelist = {
-			"ScreenSpaceGI",
-			"ScreenSpaceShadows",
-			"SubsurfaceScattering",
-			"LinearLighting",
-			"ImageBasedLighting",
-			"PostProcessing",
-			"ScreenSpacePointLightShadows",
-			"ScreenSpaceRayTracing",
-			"VanillaFresnel",
-		};
-		return whitelist;
+		return std::find(featureNames.begin(), featureNames.end(), featureShortName) != featureNames.end();
 	}
 
-	const std::unordered_set<std::string>& GetExteriorFeatureWhitelist()
+	constexpr std::array<std::string_view, 9> kInteriorOnlyFeatureWhitelist = {
+		"ScreenSpaceGI",
+		"ScreenSpaceShadows",
+		"SubsurfaceScattering",
+		"LinearLighting",
+		"ImageBasedLighting",
+		"PostProcessing",
+		"ScreenSpacePointLightShadows",
+		"ScreenSpaceRayTracing",
+		"VanillaFresnel",
+	};
+
+	constexpr std::array<std::string_view, 9> kExteriorFeatureWhitelist = {
+		"CloudShadows",
+		"ExponentialHeightFog",
+		"GrassLighting",
+		"ImageBasedLighting",
+		"LinearLighting",
+		"PostProcessing",
+		"Skylighting",
+		"SubsurfaceScattering",
+		"WetnessEffects",
+	};
+
+	bool IsInteriorOnlyFeatureAllowed(std::string_view featureShortName)
 	{
-		static const std::unordered_set<std::string> whitelist = {
-			"CloudShadows",
-			"ExponentialHeightFog",
-			"GrassLighting",
-			"ImageBasedLighting",
-			"LinearLighting",
-			"PostProcessing",
-			"Skylighting",
-			"SubsurfaceScattering",
-			"WetnessEffects",
-		};
-		return whitelist;
+		return ContainsFeatureName(kInteriorOnlyFeatureWhitelist, featureShortName);
 	}
 
-	std::vector<std::string> FilterLoadedFeatureNames(const std::unordered_set<std::string>& whitelist)
+	bool IsExteriorFeatureAllowed(std::string_view featureShortName)
+	{
+		return ContainsFeatureName(kExteriorFeatureWhitelist, featureShortName);
+	}
+
+	bool IsCatalogSettingHiddenByPolicy(const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		return SceneSettingsCatalog::HasFlag(setting.flags, SceneSettingsCatalog::SettingFlag::Hidden) ||
+		       IsHiddenSceneSetting(std::string(setting.featureShortName), SplitCatalogPath(setting.settingPath), std::string(setting.settingKey));
+	}
+
+	bool CatalogHasSceneSettings(std::string_view featureShortName, bool transitionableOnly)
+	{
+		for (const auto& setting : SceneSettingsCatalog::GetSettings()) {
+			if (setting.featureShortName != featureShortName || IsCatalogSettingHiddenByPolicy(setting))
+				continue;
+			if (!transitionableOnly ||
+				SceneSettingsCatalog::HasFlag(setting.flags, SceneSettingsCatalog::SettingFlag::Transitionable))
+				return true;
+		}
+		return false;
+	}
+
+	std::vector<std::string> GetLoadedCatalogFeatureNames(bool transitionableOnly)
 	{
 		auto names = Feature::GetLoadedFeatureNames();
-		std::vector<std::string> filtered;
-		filtered.reserve(names.size());
-		for (auto& name : names) {
-			if (whitelist.contains(name))
-				filtered.push_back(std::move(name));
-		}
-		return filtered;
+		std::erase_if(names, [&](const auto& name) { return !CatalogHasSceneSettings(name, transitionableOnly); });
+		return names;
 	}
 }
 
@@ -459,9 +530,13 @@ bool SceneSettingsManager::IsFeatureAllowedForType(SceneType type, const std::st
 {
 	switch (type) {
 	case SceneType::InteriorOnly:
-		return GetInteriorFeatureWhitelist().contains(featureShortName);
+		return IsInteriorOnlyFeatureAllowed(featureShortName) &&
+		       Feature::FindFeatureByShortName(featureShortName) &&
+		       CatalogHasSceneSettings(featureShortName, false);
 	case SceneType::TimeOfDay:
-		return GetExteriorFeatureWhitelist().contains(featureShortName);
+		return IsExteriorFeatureAllowed(featureShortName) &&
+		       Feature::FindFeatureByShortName(featureShortName) &&
+		       CatalogHasSceneSettings(featureShortName, true);
 	default:
 		return Feature::FindFeatureByShortName(featureShortName) != nullptr;
 	}
@@ -469,12 +544,16 @@ bool SceneSettingsManager::IsFeatureAllowedForType(SceneType type, const std::st
 
 std::vector<std::string> SceneSettingsManager::GetInteriorRelevantFeatureNames()
 {
-	return FilterLoadedFeatureNames(GetInteriorFeatureWhitelist());
+	auto names = GetLoadedCatalogFeatureNames(false);
+	std::erase_if(names, [](const auto& name) { return !IsInteriorOnlyFeatureAllowed(name); });
+	return names;
 }
 
 std::vector<std::string> SceneSettingsManager::GetExteriorRelevantFeatureNames()
 {
-	return FilterLoadedFeatureNames(GetExteriorFeatureWhitelist());
+	auto names = GetLoadedCatalogFeatureNames(true);
+	std::erase_if(names, [](const auto& name) { return !IsExteriorFeatureAllowed(name); });
+	return names;
 }
 
 std::string SceneSettingsManager::GetFeatureDisplayName(const std::string& featureShortName)
@@ -489,11 +568,31 @@ std::vector<SceneSettingDescriptor> SceneSettingsManager::GetFeatureSceneSetting
 	if (!feature)
 		return {};
 
-	auto descriptors = feature->GetSceneSettings();
-	std::erase_if(descriptors, [&](const auto& descriptor) {
-		return descriptor.key.empty() || !Feature::IsSceneSettingPrimitive(descriptor.value) ||
-		       IsHiddenSceneSetting(featureShortName, descriptor.settingPath, descriptor.key);
-	});
+	SceneLayerGuard guard(*GetSingleton());
+	std::vector<SceneSettingDescriptor> descriptors;
+	for (const auto& setting : SceneSettingsCatalog::GetSettings()) {
+		if (setting.featureShortName != featureShortName ||
+			SceneSettingsCatalog::HasFlag(setting.flags, SceneSettingsCatalog::SettingFlag::Hidden))
+			continue;
+
+		auto settingPath = SplitCatalogPath(setting.settingPath);
+		if (setting.settingKey.empty() || IsHiddenSceneSetting(featureShortName, settingPath, std::string(setting.settingKey)))
+			continue;
+
+		json value;
+		if (!feature->GetSceneSettingValue(settingPath, std::string(setting.settingKey), value) ||
+			!Feature::IsSceneSettingPrimitive(value) ||
+			!IsCatalogValueCompatible(setting, value))
+			continue;
+
+		descriptors.push_back({
+			.settingPath = std::move(settingPath),
+			.key = std::string(setting.settingKey),
+			.displayName = std::string(setting.displayName.empty() ? setting.settingKey : setting.displayName),
+			.displayPath = GetCatalogDisplayPath(setting),
+			.value = std::move(value),
+		});
+	}
 
 	std::sort(descriptors.begin(), descriptors.end(), [](const auto& lhs, const auto& rhs) {
 		return std::tie(lhs.displayPath, lhs.settingPath, lhs.displayName, lhs.key) <
@@ -505,18 +604,13 @@ std::vector<SceneSettingDescriptor> SceneSettingsManager::GetFeatureSceneSetting
 std::vector<SceneSettingDescriptor> SceneSettingsManager::GetTransitionableSceneSettings(const std::string& featureShortName)
 {
 	auto descriptors = GetFeatureSceneSettings(featureShortName);
-	std::erase_if(descriptors, [](const auto& descriptor) { return !IsNumericValue(descriptor.value); });
+	std::erase_if(descriptors, [&](const auto& descriptor) {
+		auto* setting = SceneSettingsCatalog::FindSetting(featureShortName, ToCatalogPath(descriptor.settingPath), descriptor.key);
+		return !setting ||
+		       !SceneSettingsCatalog::HasFlag(setting->flags, SceneSettingsCatalog::SettingFlag::Transitionable) ||
+		       !IsNumericValue(descriptor.value);
+	});
 	return descriptors;
-}
-
-std::vector<std::string> SceneSettingsManager::GetFeatureSettingKeys(const std::string& featureShortName)
-{
-	std::vector<std::string> keys;
-	auto descriptors = GetFeatureSceneSettings(featureShortName);
-	keys.reserve(descriptors.size());
-	for (const auto& descriptor : descriptors)
-		keys.push_back(descriptor.key);
-	return keys;
 }
 
 std::string SceneSettingsManager::GetSettingDisplayName(const std::string& settingKey)
@@ -524,31 +618,15 @@ std::string SceneSettingsManager::GetSettingDisplayName(const std::string& setti
 	return Util::PrettifyIdentifier(settingKey);
 }
 
-std::string SceneSettingsManager::GetSettingDisplayName(const std::string& featureShortName,
+static std::string GetSceneSettingDisplayName(const std::string& featureShortName,
 	const std::vector<std::string>& settingPath, const std::string& settingKey)
 {
-	std::vector<std::string> pathParts;
-	std::string settingName;
-	if (GetSettingDisplayPath(featureShortName, settingPath, settingKey, pathParts, settingName))
-		return JoinDisplayParts(pathParts, settingName);
-	return GetSettingDisplayName(settingKey);
-}
-
-bool SceneSettingsManager::GetSettingDisplayPath(const std::string& featureShortName,
-	const std::vector<std::string>& settingPath, const std::string& settingKey,
-	std::vector<std::string>& pathParts, std::string& settingName)
-{
-	pathParts.clear();
-	settingName.clear();
-
-	for (const auto& descriptor : GetFeatureSceneSettings(featureShortName)) {
+	for (const auto& descriptor : SceneSettingsManager::GetFeatureSceneSettings(featureShortName)) {
 		if (descriptor.settingPath != settingPath || descriptor.key != settingKey)
 			continue;
-		pathParts = descriptor.displayPath;
-		settingName = GetDescriptorDisplayName(descriptor);
-		return true;
+		return JoinDisplayParts(descriptor.displayPath, GetDescriptorDisplayName(descriptor));
 	}
-	return false;
+	return SceneSettingsManager::GetSettingDisplayName(settingKey);
 }
 
 json SceneSettingsManager::GetFeatureSettingValue(const std::string& featureShortName,
@@ -558,6 +636,7 @@ json SceneSettingsManager::GetFeatureSettingValue(const std::string& featureShor
 	if (!feature)
 		return {};
 
+	SceneLayerGuard guard(*GetSingleton());
 	json value;
 	if (feature->GetSceneSettingValue(settingPath, settingKey, value) && Feature::IsSceneSettingPrimitive(value))
 		return value;
@@ -577,14 +656,18 @@ SceneSettingsManager::SettingType SceneSettingsManager::DetectSettingType(const 
 	return SettingType::Unknown;
 }
 
-static bool IsSceneSettingValueAllowed(Feature& feature, const std::vector<std::string>& settingPath,
-	const std::string& settingKey, const json& value, bool requireNumeric)
+static bool IsSceneSettingValueAllowed(Feature& feature, const SceneSettingsCatalog::SettingMetadata& setting,
+	const std::vector<std::string>& settingPath, const std::string& settingKey, const json& value, bool requireNumeric)
 {
 	json featureValue;
 	if (!feature.GetSceneSettingValue(settingPath, settingKey, featureValue) || !Feature::IsSceneSettingPrimitive(featureValue))
 		return false;
 
-	if (requireNumeric && (!IsNumericValue(featureValue) || !IsNumericValue(value) || !std::isfinite(value.get<float>())))
+	if (!IsCatalogValueCompatible(setting, featureValue) || !IsCatalogValueCompatible(setting, value))
+		return false;
+
+	if (requireNumeric && (!SceneSettingsCatalog::HasFlag(setting.flags, SceneSettingsCatalog::SettingFlag::Transitionable) ||
+		                      !IsNumericValue(featureValue) || !IsNumericValue(value) || !std::isfinite(value.get<float>())))
 		return false;
 	if (!requireNumeric && !Feature::IsSceneSettingPrimitive(value))
 		return false;
@@ -601,6 +684,14 @@ static bool ValidateSceneSettingEntry(std::string_view context, const std::strin
 		return false;
 	}
 
+	auto* setting = SceneSettingsCatalog::FindSetting(featureShortName, ToCatalogPath(settingPath), settingKey);
+	if (!setting ||
+		SceneSettingsCatalog::HasFlag(setting->flags, SceneSettingsCatalog::SettingFlag::Hidden)) {
+		logger::warn("[SceneSettings] {} entry {} is not in the compiled scene settings catalog",
+			context, GetSettingLogName(featureShortName, settingPath, settingKey));
+		return false;
+	}
+
 	auto* feature = Feature::FindFeatureByShortName(featureShortName);
 	if (!feature) {
 		logger::warn("[SceneSettings] {} entry {} - feature '{}' not found/loaded",
@@ -608,22 +699,12 @@ static bool ValidateSceneSettingEntry(std::string_view context, const std::strin
 		return false;
 	}
 
-	if (!IsSceneSettingValueAllowed(*feature, settingPath, settingKey, value, requireNumeric)) {
+	if (!IsSceneSettingValueAllowed(*feature, *setting, settingPath, settingKey, value, requireNumeric)) {
 		logger::warn("[SceneSettings] {} entry {} is not a supported scene-manager setting",
 			context, GetSettingLogName(featureShortName, settingPath, settingKey));
 		return false;
 	}
 	return true;
-}
-
-std::vector<std::string> SceneSettingsManager::GetTransitionableSettingKeys(const std::string& featureShortName)
-{
-	std::vector<std::string> keys;
-	auto descriptors = GetTransitionableSceneSettings(featureShortName);
-	keys.reserve(descriptors.size());
-	for (const auto& descriptor : descriptors)
-		keys.push_back(descriptor.key);
-	return keys;
 }
 
 // --- Generic Entry Management ---
@@ -701,6 +782,9 @@ bool SceneSettingsManager::AddSetting(SceneType type, const std::string& feature
 	const std::vector<std::string>& settingPath, const std::string& settingKey, const json& value,
 	TimeOfDayPeriod period, bool deferCommit)
 {
+	if (!IsFeatureAllowedForType(type, featureShortName))
+		return false;
+
 	const bool requireNumeric = type == SceneType::TimeOfDay;
 	if (requireNumeric) {
 		// Reject invalid period values (Count is the sentinel, not a real period)
@@ -721,7 +805,7 @@ bool SceneSettingsManager::AddSetting(SceneType type, const std::string& feature
 	entry.featureShortName = featureShortName;
 	entry.settingPath = settingPath;
 	entry.settingKey = settingKey;
-	entry.displayName = GetSettingDisplayName(featureShortName, settingPath, settingKey);
+	entry.displayName = GetSceneSettingDisplayName(featureShortName, settingPath, settingKey);
 	entry.value = value;
 	entry.originalValue = entry.value;
 	entry.source = EntrySource::User;
@@ -1231,6 +1315,61 @@ bool SceneSettingsManager::HasActiveSettingsForFeature(const std::string& featur
 	return false;
 }
 
+bool SceneSettingsManager::IsActiveSceneSetting(std::string_view featureShortName,
+	std::string_view settingPath, std::string_view settingKey) const
+{
+	return IsActiveSceneSetting(std::string(featureShortName), SplitCatalogPath(settingPath), std::string(settingKey));
+}
+
+bool SceneSettingsManager::IsActiveSceneSetting(const std::string& featureShortName,
+	const std::vector<std::string>& settingPath, const std::string& settingKey) const
+{
+	if (!isCurrentlyApplied && !isTimeOfDayActive && !isWeatherSceneActive)
+		return false;
+
+	auto hasActiveEntry = [&](SceneType type) {
+		for (const auto& entry : GetEntries(type)) {
+			if (IsEntryActive(entry) && IsSameSetting(entry, featureShortName, settingPath, settingKey))
+				return true;
+		}
+		return false;
+	};
+
+	if (isCurrentlyApplied && hasActiveEntry(SceneType::InteriorOnly))
+		return true;
+	if (isTimeOfDayActive && hasActiveEntry(SceneType::TimeOfDay))
+		return true;
+
+	if (!isWeatherSceneActive)
+		return false;
+
+	for (RE::FormID weatherId : { lastCurrentWeatherId, lastLastWeatherId }) {
+		if (weatherId == 0)
+			continue;
+
+		auto it = weatherSceneConfigs.find(weatherId);
+		if (it == weatherSceneConfigs.end())
+			continue;
+
+		for (const auto& entry : it->second.entries)
+			if (IsEntryActive(entry) && IsSameSetting(entry, featureShortName, settingPath, settingKey))
+				return true;
+	}
+
+	return false;
+}
+
+SceneSettingsManager::SceneLayerGuard::SceneLayerGuard(SceneSettingsManager& manager) :
+	manager(manager)
+{
+	manager.SuspendSceneLayer();
+}
+
+SceneSettingsManager::SceneLayerGuard::~SceneLayerGuard()
+{
+	manager.ResumeSceneLayer();
+}
+
 bool SceneSettingsManager::IsFeaturePaused(const std::string& featureShortName) const
 {
 	auto it = featurePauseStates.find(featureShortName);
@@ -1241,6 +1380,68 @@ void SceneSettingsManager::SetFeaturePaused(const std::string& featureShortName,
 {
 	featurePauseStates[featureShortName] = paused;
 	ReapplyIfActive();
+}
+
+void SceneSettingsManager::SuspendSceneLayer()
+{
+	if (++sceneLayerSuspendDepth > 1)
+		return;
+
+	suspendedInteriorLayer = isCurrentlyApplied;
+	suspendedTimeOfDayLayer = isTimeOfDayActive;
+	suspendedWeatherLayer = isWeatherSceneActive;
+
+	if (suspendedWeatherLayer) {
+		RevertWeatherBaseline();
+		isWeatherSceneActive = false;
+	}
+	if (suspendedTimeOfDayLayer) {
+		RevertTimeOfDayBaseline();
+		isTimeOfDayActive = false;
+		lastDominantPeriod = TimeOfDayPeriod::Count;
+	}
+	if (suspendedInteriorLayer) {
+		RevertToExteriorSettings();
+		isCurrentlyApplied = false;
+	}
+}
+
+void SceneSettingsManager::ResumeSceneLayer()
+{
+	if (sceneLayerSuspendDepth <= 0) {
+		logger::warn("[SceneSettings] ResumeSceneLayer called without a matching suspend");
+		sceneLayerSuspendDepth = 0;
+		return;
+	}
+	if (--sceneLayerSuspendDepth > 0)
+		return;
+
+	if (suspendedInteriorLayer && HasActiveEntries(SceneType::InteriorOnly)) {
+		SaveExteriorSettings(SceneType::InteriorOnly);
+		ApplyActiveSettings(SceneType::InteriorOnly);
+		isCurrentlyApplied = true;
+	}
+	if (suspendedTimeOfDayLayer && HasActiveEntries(SceneType::TimeOfDay)) {
+		SaveTimeOfDayBaseline();
+		isTimeOfDayActive = true;
+		lastDominantPeriod = GetDominantPeriod();
+		lastBlendedHour = -1.0f;
+		ApplyTimeOfDayBlended();
+	}
+	if (suspendedWeatherLayer) {
+		SaveWeatherBaseline();
+		isWeatherSceneActive = true;
+		lastAppliedWeatherFloats.clear();
+		lastCurrentWeatherId = 0;
+		lastLastWeatherId = 0;
+		lastWeatherLerp = -1.0f;
+		lastBlendedWeatherHour = -1.0f;
+		UpdateWeatherScene();
+	}
+
+	suspendedInteriorLayer = false;
+	suspendedTimeOfDayLayer = false;
+	suspendedWeatherLayer = false;
 }
 
 // --- Apply / Revert ---
@@ -1562,6 +1763,32 @@ static json UserEntriesToArray(const std::vector<SceneSettingsManager::SettingEn
 	return arr;
 }
 
+static void AppendRawEntries(json& arr, const std::vector<json>& rawEntries)
+{
+	if (!arr.is_array())
+		arr = json::array();
+	for (const auto& raw : rawEntries)
+		arr.push_back(raw);
+}
+
+static void MergePreservedWeatherSettings(json& weatherObj, const json& preserved)
+{
+	if (!preserved.is_object())
+		return;
+
+	for (const auto& [spid, rawWeather] : preserved.items()) {
+		if (!rawWeather.is_object())
+			continue;
+		auto& target = weatherObj[spid];
+		if (!target.is_object()) {
+			target = rawWeather;
+			continue;
+		}
+		if (rawWeather.contains("entries") && rawWeather["entries"].is_array())
+			AppendRawEntries(target["entries"], rawWeather["entries"].get<std::vector<json>>());
+	}
+}
+
 void SceneSettingsManager::SaveAllUserSettings()
 {
 	const bool weatherLoaded = TryEnsureWeatherDataLoaded();
@@ -1580,7 +1807,9 @@ void SceneSettingsManager::SaveAllUserSettings()
 	}
 
 	data["interiorOnly"] = UserEntriesToArray(GetEntries(SceneType::InteriorOnly));
+	AppendRawEntries(data["interiorOnly"], unresolvedUserEntries[SceneType::InteriorOnly]);
 	data["timeOfDay"] = UserEntriesToArray(GetEntries(SceneType::TimeOfDay), true);
+	AppendRawEntries(data["timeOfDay"], unresolvedUserEntries[SceneType::TimeOfDay]);
 
 	// Weather entries (keyed by SPID)
 	if (weatherLoaded) {
@@ -1602,6 +1831,7 @@ void SceneSettingsManager::SaveAllUserSettings()
 			weatherEntry["entries"] = UserEntriesToArray(config.entries, true);
 			weatherObj[spid] = std::move(weatherEntry);
 		}
+		MergePreservedWeatherSettings(weatherObj, unresolvedWeatherUserSettings);
 		data["weather"] = std::move(weatherObj);
 	} else if (!data.contains("weather")) {
 		data["weather"] = json::object();
@@ -1650,6 +1880,12 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 	entry.paused = (item.contains("paused") && item["paused"].is_boolean()) ? item["paused"].get<bool>() : false;
 	entry.source = SSM::EntrySource::User;
 
+	auto sceneType = requirePeriod ? SSM::SceneType::TimeOfDay : SSM::SceneType::InteriorOnly;
+	if (!SSM::IsFeatureAllowedForType(sceneType, entry.featureShortName)) {
+		logger::warn("[SceneSettings] {} entry feature '{}' is not allowed for this scene type", typeName, entry.featureShortName);
+		return false;
+	}
+
 	if (requirePeriod) {
 		if (!item.contains("period") || !item["period"].is_string()) {
 			logger::warn("[SceneSettings] {} entry {}.{} missing period — skipping", typeName, entry.featureShortName, entry.settingKey);
@@ -1675,7 +1911,7 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 	if (!ValidateSceneSettingEntry(typeName, entry.featureShortName, entry.settingPath, entry.settingKey, entry.value, requirePeriod))
 		return false;
 
-	entry.displayName = SceneSettingsManager::GetSettingDisplayName(entry.featureShortName, entry.settingPath, entry.settingKey);
+	entry.displayName = GetSceneSettingDisplayName(entry.featureShortName, entry.settingPath, entry.settingKey);
 	return true;
 }
 
@@ -1683,6 +1919,8 @@ void SceneSettingsManager::LoadAllUserSettings()
 {
 	auto path = GetUserSettingsFilePath();
 	logger::info("[SceneSettings] Loading user settings from: {}", path.string());
+	unresolvedUserEntries[SceneType::InteriorOnly].clear();
+	unresolvedUserEntries[SceneType::TimeOfDay].clear();
 	std::error_code ec;
 	if (!std::filesystem::exists(path, ec)) {
 		logger::info("[SceneSettings] SceneManager.json not found at {}", path.string());
@@ -1702,8 +1940,10 @@ void SceneSettingsManager::LoadAllUserSettings()
 			int loaded = 0;
 			for (const auto& item : data["interiorOnly"]) {
 				SettingEntry entry;
-				if (!LoadEntryFromJson(item, entry, false, "InteriorOnly"))
+				if (!LoadEntryFromJson(item, entry, false, "InteriorOnly")) {
+					unresolvedUserEntries[SceneType::InteriorOnly].push_back(item);
 					continue;
+				}
 				if (HasDuplicateEntry(SceneType::InteriorOnly, entry.featureShortName, entry.settingPath, entry.settingKey, EntrySource::User, entry.period))
 					continue;
 				vec.push_back(std::move(entry));
@@ -1719,8 +1959,10 @@ void SceneSettingsManager::LoadAllUserSettings()
 			int loaded = 0;
 			for (const auto& item : data["timeOfDay"]) {
 				SettingEntry entry;
-				if (!LoadEntryFromJson(item, entry, true, "TimeOfDay"))
+				if (!LoadEntryFromJson(item, entry, true, "TimeOfDay")) {
+					unresolvedUserEntries[SceneType::TimeOfDay].push_back(item);
 					continue;
+				}
 				if (HasDuplicateEntry(SceneType::TimeOfDay, entry.featureShortName, entry.settingPath, entry.settingKey, EntrySource::User, entry.period))
 					continue;
 				vec.push_back(std::move(entry));
@@ -1741,6 +1983,7 @@ void SceneSettingsManager::LoadAllUserSettings()
 void SceneSettingsManager::LoadWeatherUserSettings()
 {
 	auto path = GetUserSettingsFilePath();
+	unresolvedWeatherUserSettings = json::object();
 	std::error_code ec;
 	if (!std::filesystem::exists(path, ec))
 		return;
@@ -1759,6 +2002,7 @@ void SceneSettingsManager::LoadWeatherUserSettings()
 				logger::info("[SceneSettings] Processing weather SPID '{}'", spidKey);
 				RE::FormID weatherId = Util::SpidToFormId(spidKey);
 				if (weatherId == 0) {
+					unresolvedWeatherUserSettings[spidKey] = weatherData;
 					logger::warn("[SceneSettings] Weather SPID '{}' could not be resolved — skipping", spidKey);
 					continue;
 				}
@@ -1775,8 +2019,10 @@ void SceneSettingsManager::LoadWeatherUserSettings()
 				int loaded = 0;
 				for (const auto& item : weatherData["entries"]) {
 					SettingEntry entry;
-					if (!LoadEntryFromJson(item, entry, true, "Weather"))
+					if (!LoadEntryFromJson(item, entry, true, "Weather")) {
+						unresolvedWeatherUserSettings[spidKey]["entries"].push_back(item);
 						continue;
+					}
 					if (HasWeatherEntryForPeriod(weatherId, entry.featureShortName, entry.settingPath, entry.settingKey, entry.period, EntrySource::User))
 						continue;
 					config.entries.push_back(std::move(entry));
@@ -1847,7 +2093,7 @@ static bool ParseOverwriteFileEntries(const std::filesystem::path& filePath,
 		entry.featureShortName = featureShortName;
 		entry.settingPath = settingPath;
 		entry.settingKey = key;
-		entry.displayName = SSM::GetSettingDisplayName(featureShortName, settingPath, key);
+		entry.displayName = GetSceneSettingDisplayName(featureShortName, settingPath, key);
 		entry.value = value;
 		entry.originalValue = entry.value;
 		entry.source = SSM::EntrySource::Overwrite;
@@ -1959,6 +2205,8 @@ bool SceneSettingsManager::AddWeatherSetting(RE::FormID weatherId, const std::st
 {
 	if (!TryEnsureWeatherDataLoaded())
 		return false;
+	if (!IsFeatureAllowedForType(SceneType::TimeOfDay, featureShortName))
+		return false;
 
 	// All weather entries are per-period
 	if (period == TimeOfDayPeriod::Count || static_cast<int>(period) < 0 || static_cast<int>(period) >= kPeriodCount)
@@ -1974,7 +2222,7 @@ bool SceneSettingsManager::AddWeatherSetting(RE::FormID weatherId, const std::st
 	entry.featureShortName = featureShortName;
 	entry.settingPath = settingPath;
 	entry.settingKey = settingKey;
-	entry.displayName = GetSettingDisplayName(featureShortName, settingPath, settingKey);
+	entry.displayName = GetSceneSettingDisplayName(featureShortName, settingPath, settingKey);
 	entry.value = value;
 	entry.originalValue = value;
 	entry.source = EntrySource::User;
