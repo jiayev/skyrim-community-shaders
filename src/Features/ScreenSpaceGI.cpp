@@ -2,6 +2,7 @@
 
 #include <DirectXTex.h>
 
+#include "../I18n/I18n.h"
 #include "Deferred.h"
 #include "DynamicCubemaps.h"
 #include "NRD.h"
@@ -9,6 +10,8 @@
 #include "State.h"
 #include "Upscaling.h"
 #include "Util.h"
+
+#define I18N_KEY_PREFIX "feature.screen_space_gi."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ScreenSpaceGI::Settings,
@@ -39,24 +42,24 @@ void ScreenSpaceGI::DrawSettings()
 	static bool showAdvanced;
 
 	if (!ShadersOK())
-		ImGui::TextColored({ 1, 0, 0, 1 }, "Compute shaders failed to compile!");
+		ImGui::TextColored({ 1, 0, 0, 1 }, "%s", T(TKEY("compute_shaders_failed_to_compile"), "Compute shaders failed to compile!"));
 
 	///////////////////////////////
-	ImGui::SeparatorText("Toggles");
+	ImGui::SeparatorText(T(TKEY("toggles"), "Toggles"));
 
-	ImGui::Checkbox("Show Advanced Options", &showAdvanced);
+	ImGui::Checkbox(T(TKEY("show_advanced_options"), "Show Advanced Options"), &showAdvanced);
 
 	if (ImGui::BeginTable("Toggles", 4)) {
 		ImGui::TableNextColumn();
-		ImGui::Checkbox("Enabled", &settings.Enabled);
+		ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enable Screen Space Global Illumination. When disabled, all other settings are ignored.");
+			ImGui::Text("%s", T(TKEY("enabled_tooltip"), "Enable Screen Space Global Illumination. When disabled, all other settings are ignored."));
 		}
 
 		ImGui::TableNextColumn();
 		{
 			auto ilToggleGuard = Util::DisableGuard(!settings.Enabled);
-			if (ImGui::Checkbox("Indirect Lighting (IL)", &settings.EnableGI)) {
+			if (ImGui::Checkbox(T(TKEY("indirect_lighting"), "Indirect Lighting (IL)"), &settings.EnableGI)) {
 				recompileFlag = true;
 				SetupNRDResources();
 			}
@@ -64,23 +67,23 @@ void ScreenSpaceGI::DrawSettings()
 		ImGui::TableNextColumn();
 		{
 			auto shGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
-			if (ImGui::Checkbox("SH Mode", &settings.EnableSH)) {
+			if (ImGui::Checkbox(T(TKEY("sh_mode"), "SH Mode"), &settings.EnableSH)) {
 				recompileFlag = true;
 				SetupNRDResources();
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Use Spherical Harmonics for directional GI. Higher quality but more expensive.");
+				ImGui::Text("%s", T(TKEY("sh_mode_tooltip"), "Use Spherical Harmonics for directional GI. Higher quality but more expensive."));
 			}
 		}
 		ImGui::TableNextColumn();
 		{
 			auto vanillaSSAOGuard = Util::DisableGuard(globals::game::isVR);
-			ImGui::Checkbox("Vanilla SSAO", &settings.EnableVanillaSSAO);
+			ImGui::Checkbox(T(TKEY("vanilla_ssao"), "Vanilla SSAO"), &settings.EnableVanillaSSAO);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				if (globals::game::isVR)
-					ImGui::Text("Vanilla SSAO is not supported in VR.");
+					ImGui::Text("%s", T(TKEY("vanilla_ssao_vr_tooltip"), "Vanilla SSAO is not supported in VR."));
 				else
-					ImGui::Text("Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening.");
+					ImGui::Text("%s", T(TKEY("vanilla_ssao_tooltip"), "Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening."));
 			}
 		}
 
@@ -88,69 +91,69 @@ void ScreenSpaceGI::DrawSettings()
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Quality/Performance");
+	ImGui::SeparatorText(T(TKEY("quality_performance"), "Quality/Performance"));
 
 	{
 		auto qualityGuard = Util::DisableGuard(!settings.Enabled);
 
-		if (ImGui::Checkbox("Half Resolution (Checkerboard)", &settings.HalfRes)) {
+		if (ImGui::Checkbox(T(TKEY("half_resolution_checkerboard"), "Half Resolution (Checkerboard)"), &settings.HalfRes)) {
 			recompileFlag = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels.");
+			ImGui::Text("%s", T(TKEY("half_resolution_checkerboard_tooltip"), "Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels."));
 		}
 
 		if (showAdvanced) {
-			ImGui::SliderInt("Steps Per Slice", (int*)&settings.NumSteps, 1, 32);
+			ImGui::SliderInt(T(TKEY("steps_per_slice"), "Steps Per Slice"), (int*)&settings.NumSteps, 1, 32);
 		}
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Visual");
+	ImGui::SeparatorText(T(TKEY("visual"), "Visual"));
 
 	{
 		auto visualGuard = Util::DisableGuard(!settings.Enabled);
 
-		ImGui::SliderFloat("AO Power", &settings.AOPower, 0.f, 6.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ao_power"), "AO Power"), &settings.AOPower, 0.f, 6.f, "%.2f");
 
 		{
 			auto ilGuard = Util::DisableGuard(!settings.EnableGI);
-			ImGui::SliderFloat("IL Source Brightness", &settings.GIStrength, 0.f, 6.f, "%.2f");
+			ImGui::SliderFloat(T(TKEY("il_source_brightness"), "IL Source Brightness"), &settings.GIStrength, 0.f, 6.f, "%.2f");
 
-			ImGui::Checkbox("Use Dynamic Cubemaps as Fallback", &settings.UseDynamicCubemapsAsFallback);
+			ImGui::Checkbox(T(TKEY("use_dynamic_cubemaps_as_fallback"), "Use Dynamic Cubemaps as Fallback"), &settings.UseDynamicCubemapsAsFallback);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Where indirect rays miss the screen, sample dynamic cubemaps for diffuse fallback.");
+				ImGui::Text("%s", T(TKEY("use_dynamic_cubemaps_as_fallback_tooltip"), "Where indirect rays miss the screen, sample dynamic cubemaps for diffuse fallback."));
 			}
 			{
 				auto cubemapGuard = Util::DisableGuard(!settings.UseDynamicCubemapsAsFallback);
-				ImGui::SliderFloat("Diffuse Cubemap Multiplier", &settings.DiffuseCubemapMult, 0.0f, 5.0f, "%.2f");
+				ImGui::SliderFloat(T(TKEY("diffuse_cubemap_multiplier"), "Diffuse Cubemap Multiplier"), &settings.DiffuseCubemapMult, 0.0f, 5.0f, "%.2f");
 			}
 		}
 
 		if (showAdvanced) {
 			ImGui::Separator();
-			ImGui::SliderFloat("Thickness", &settings.Thickness, 0.f, 0.2f, "%.3f");
+			ImGui::SliderFloat(T(TKEY("thickness"), "Thickness"), &settings.Thickness, 0.f, 0.2f, "%.3f");
 		}
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("REBLUR Denoiser");
+	ImGui::SeparatorText(T(TKEY("reblur_denoiser"), "REBLUR Denoiser"));
 
 	{
 		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
 
-		ImGui::Checkbox("Enable REBLUR", &settings.EnableREBLUR);
+		ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR);
 
 		if (settings.EnableREBLUR)
 			globals::features::nrd.DrawReblurSettings(settings.Reblur, showAdvanced, "ssgi_reblur");
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Debug");
+	ImGui::SeparatorText(T(TKEY("debug"), "Debug"));
 
-	if (ImGui::TreeNode("Buffer Viewer")) {
+	if (ImGui::TreeNode(T(TKEY("buffer_viewer"), "Buffer Viewer"))) {
 		static float debugRescale = .3f;
-		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+		ImGui::SliderFloat(T(TKEY("view_resize"), "View Resize"), &debugRescale, 0.f, 1.f);
 
 		BUFFER_VIEWER_NODE(texNoise, debugRescale)
 		BUFFER_VIEWER_NODE(texWorkingDepth, debugRescale)
@@ -731,3 +734,5 @@ ScreenSpaceGI::SharedData ScreenSpaceGI::GetCommonBufferData()
 	data.pad1 = 0;
 	return data;
 }
+
+#undef I18N_KEY_PREFIX
