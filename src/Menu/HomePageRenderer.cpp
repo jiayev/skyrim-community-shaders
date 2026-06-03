@@ -571,7 +571,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 	{
 		auto& csEditorKey = menu->GetSettings().CSEditorToggleKey;
 		if (csEditorKey.empty()) {
-			const char* warnText = T("menu.setup.cs_editor_unbound", "CS Editor hotkey unbound \xe2\x80\x94 chosen key uses Shift");
+			const char* warnText = T("menu.setup.cs_editor_unbound", "CS Editor hotkey unbound - chosen key uses Shift");
 			centerText(warnText);
 			ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.0f, 1.0f), "%s", warnText);
 		} else {

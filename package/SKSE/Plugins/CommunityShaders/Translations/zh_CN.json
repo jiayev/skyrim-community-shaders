@@ -1019,7 +1019,6 @@
     "feature.physical_sky.enabled_whitelist": "%s（启用，白名单）",
     "feature.physical_sky.fallback_z_bottom": "回退 Z 底部",
     "feature.physical_sky.falloff": "衰减",
-    "feature.physical_sky.falloff_2": "衰减",
     "feature.physical_sky.force_enable_all_interior_cells": "强制启用所有室内单元",
     "feature.physical_sky.gamma": "伽马",
     "feature.physical_sky.general": "通用",

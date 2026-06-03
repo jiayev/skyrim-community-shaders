@@ -135,7 +135,7 @@ static constexpr const char* MONSOON_DETAILED[] = {
 	"Max precipitation: ~22 mm/hr (extreme)",
 	"Multipliers: Wetness 2.0x, Puddle 2.5x, Transition 2.0x.",
 	"Raindrop: 100% chance, grid 2.0 units, interval 0.2s.",
-	"Skryim light rain will not match wetness.",
+	"Skyrim light rain will not match wetness.",
 	"Performance impact: High (may impact GPU)",
 	nullptr
 };
@@ -288,7 +288,7 @@ static std::vector<const char*> GetClimatePresetDetailedDescription(size_t a_ind
 			T(TKEY("climate_monsoon_detail_1"), "Max precipitation: ~22 mm/hr (extreme)"),
 			T(TKEY("climate_monsoon_detail_2"), "Multipliers: Wetness 2.0x, Puddle 2.5x, Transition 2.0x."),
 			T(TKEY("climate_monsoon_detail_3"), "Raindrop: 100% chance, grid 2.0 units, interval 0.2s."),
-			T(TKEY("climate_monsoon_detail_4"), "Skryim light rain will not match wetness."),
+			T(TKEY("climate_monsoon_detail_4"), "Skyrim light rain will not match wetness."),
 			T(TKEY("climate_monsoon_detail_5"), "Performance impact: High (may impact GPU)")
 		};
 	default:
