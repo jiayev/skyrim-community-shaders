@@ -275,6 +275,17 @@ namespace SharedData
 		uint3 pad;
 	};
 
+	struct SkinData
+	{
+		float4 skinParams;
+		float4 skinParams2;
+		float4 skinDetailParams;
+		float4 sssParams;
+		float4 fuzzParams;
+		float4 physicalParams;
+		float4 wetParams;
+	};
+
 	struct PhysSkyData
 	{
 		// DYNAMIC
@@ -353,6 +364,7 @@ namespace SharedData
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		TruePBRSettings truePBRSettings;
+		SkinData skinData;
 		PhysSkyData physSkyData;
 	};
 
