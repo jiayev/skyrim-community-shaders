@@ -573,6 +573,15 @@ void Raytracing::DrawDebugSettings()
 		static float debugRescale = .3f;
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
+		if (ImGui::TreeNode("Depth"))
+		{
+			D3D11_TEXTURE2D_DESC desc;
+			ptDepthTexture->resource11->GetDesc(&desc);
+
+			ImGui::Image(ptDepthTexture->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNode("Main")) {
 			D3D11_TEXTURE2D_DESC desc;
 			mainTexture->resource11->GetDesc(&desc);
@@ -923,12 +932,34 @@ void Raytracing::SetupResources()
 		DX::ThrowIfFailed(d3d11Device->CreateSamplerState(&samplerDesc, samplerState.put()));
 	}
 
+	// PT Depth/MV Copy
 	{
+		D3D11_BLEND_DESC blendDesc = {};
+		blendDesc.AlphaToCoverageEnable = false;
+		blendDesc.IndependentBlendEnable = false;
+		blendDesc.RenderTarget[0].BlendEnable = false;
+		blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+		DX::ThrowIfFailed(globals::d3d::device->CreateBlendState(&blendDesc, copyBlendState.put()));
+
+		// Create rasterizer state for fullscreen rendering
+		D3D11_RASTERIZER_DESC rasterizerDesc = {};
+		rasterizerDesc.FillMode = D3D11_FILL_SOLID;
+		rasterizerDesc.CullMode = D3D11_CULL_NONE;
+		rasterizerDesc.FrontCounterClockwise = false;
+		rasterizerDesc.DepthBias = 0;
+		rasterizerDesc.DepthBiasClamp = 0.0f;
+		rasterizerDesc.SlopeScaledDepthBias = 0.0f;
+		rasterizerDesc.DepthClipEnable = false;
+		rasterizerDesc.ScissorEnable = false;
+		rasterizerDesc.MultisampleEnable = false;
+		rasterizerDesc.AntialiasedLineEnable = false;
+		DX::ThrowIfFailed(globals::d3d::device->CreateRasterizerState(&rasterizerDesc, copyRasterizerState.put()));
+
 		D3D11_DEPTH_STENCIL_DESC dsDesc = {};
 		dsDesc.DepthEnable = TRUE;
 		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
 		dsDesc.DepthFunc = D3D11_COMPARISON_ALWAYS;
-
+		dsDesc.StencilEnable = false;  // Disable stencil testing
 		d3d11Device->CreateDepthStencilState(&dsDesc, depthStencilState.put());
 	}
 
@@ -1235,28 +1266,46 @@ void Raytracing::DeferredPasses()
 			ID3D11DepthStencilView* oldDSV;
 			context->OMGetRenderTargets(1, &oldRTV, &oldDSV);
 
+			UINT numViewports = 1;
+			D3D11_VIEWPORT oldViewport = {};
+			context->RSGetViewports(&numViewports, &oldViewport);
+
+			D3D11_VIEWPORT viewport = {};
+			viewport.TopLeftX = 0.0f;
+			viewport.TopLeftY = 0.0f;
+			viewport.Width = screenSize.x;
+			viewport.Height = screenSize.y;
+			viewport.MinDepth = 0.0f;
+			viewport.MaxDepth = 1.0f;
+			context->RSSetViewports(1, &viewport);
+
+			context->IASetInputLayout(nullptr);
+			context->IASetVertexBuffers(0, 0, nullptr, nullptr, nullptr);
+			context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
 			context->OMSetRenderTargets(1,
 				&renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].RTV,
 				mainDepth.views[0]);
 
 			context->OMSetDepthStencilState(depthStencilState.get(), 0);
 
-			D3D11_VIEWPORT vp = {};
-			vp.Width = screenSize.x;
-			vp.Height = screenSize.y;
-			vp.MinDepth = 0.0f;
-			vp.MaxDepth = 1.0f;
+			// Set up rasterizer and blend states
+			context->RSSetState(copyRasterizerState.get());
+			context->OMSetBlendState(copyBlendState.get(), nullptr, 0xffffffff);
 
-			context->RSSetViewports(1, &vp);
-
-			context->IASetInputLayout(nullptr);
-			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
+			// Set up vertex shader
 			context->VSSetShader(copyDMVVS.get(), nullptr, 0);
+
+			// Set up pixel shader
 			context->PSSetShader(copyDMVPS.get(), nullptr, 0);
 
-			context->PSSetShaderResources(0, 1, &ptDepthTexture->srv);
-			context->PSSetShaderResources(1, 1, &ptMotionVectorsTexture->srv);
+			ID3D11ShaderResourceView* srvs[] = { 
+				ptDepthTexture->srv, 
+				ptMotionVectorsTexture->srv 
+			};
+
+			context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
 			context->Draw(3, 0);
 
@@ -1265,6 +1314,8 @@ void Raytracing::DeferredPasses()
 			context->OMSetRenderTargets(1,
 				&oldRTV,
 				oldDSV);
+
+			context->RSSetViewports(1, &oldViewport);
 
 			if (oldDSS) {
 				oldDSS->Release();
@@ -1280,6 +1331,9 @@ void Raytracing::DeferredPasses()
 				oldDSV->Release();
 				oldDSV = nullptr;
 			}
+
+			context->PSSetShader(nullptr, nullptr, 0);
+			context->VSSetShader(nullptr, nullptr, 0);
 
 			context->CopyResource(mainDepthCopy.texture, mainDepth.texture);
 			context->CopyResource(zPrePassCopy.texture, mainDepth.texture);

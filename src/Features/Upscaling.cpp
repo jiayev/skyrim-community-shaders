@@ -1807,9 +1807,6 @@ void Upscaling::EncodeTextures()
 {
 	ZoneScoped;
 	auto upscaleMethod = GetUpscaleMethod();
-	auto& rt = globals::features::raytracing;
-	const bool pathTracing = rt.IsPathTracing();
-
 	auto state = globals::state;
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
@@ -1840,16 +1837,7 @@ void Upscaling::EncodeTextures()
 		ID3D11ShaderResourceView* views[4] = { temporalAAMask.SRV, normals.SRV, motionVector.SRV, depth.depthSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		if (pathTracing) {
-			ID3D11ShaderResourceView* ptViews[] = {
-				rt.ptMotionVectorsTexture->srv,
-				rt.mainTexture->srv,
-				rt.ptDepthTexture->srv
-			};
-			context->CSSetShaderResources(4, ARRAYSIZE(ptViews), ptViews);
-		}
-
-		context->CSSetShader(GetEncodeTexturesCS(pathTracing), nullptr, 0);
+		context->CSSetShader(GetEncodeTexturesCS(false), nullptr, 0);
 
 		for (uint32_t i = 0; i < numEyes; ++i) {
 			uint32_t offsetX = i * eyeRenderWidth;
@@ -1876,7 +1864,7 @@ void Upscaling::EncodeTextures()
 				uavs[2] = globals::game::isVR ? vrIntermediateMotionVectors[i]->uav.get() : motionVectorCopyTexture->uav.get();
 			} else if (upscaleMethod == UpscaleMethod::kDLSS_RR) {
 				uavs[2] = globals::dx12Interop->sharedResources.motionVector->uav;
-			} else if (upscaleMethod == UpscaleMethod::kFSR && pathTracing) {
+			} else if (upscaleMethod == UpscaleMethod::kFSR) {
 				uavs[2] = globals::game::isVR ? vrIntermediateMotionVectors[i]->uav.get() : motionVectorCopyTexture->uav.get();
 			}
 
@@ -1909,7 +1897,6 @@ void Upscaling::CopySharedD3D12Resources()
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
-	auto& rt = globals::features::raytracing;
 
 	auto& sharedResources = globals::dx12Interop->sharedResources;
 
@@ -1923,10 +1910,7 @@ void Upscaling::CopySharedD3D12Resources()
 	if (upscaleMethod == UpscaleMethod::kDLSS) {
 		context->CopyResource(sharedResources.motionVector->resource11, motionVectorCopyTexture->resource.get());
 	} else if (upscaleMethod == UpscaleMethod::kFSR) {
-		if (rt.IsPathTracing())
-			context->CopyResource(sharedResources.motionVector->resource11, motionVectorCopyTexture->resource.get());
-		else
-			context->CopyResource(sharedResources.motionVector->resource11, renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].texture);
+		context->CopyResource(sharedResources.motionVector->resource11, renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].texture);
 	}
 
 	// Copy Reactive Mask
@@ -1949,18 +1933,10 @@ void Upscaling::CopySharedD3D12Resources()
 		auto srv = depth.depthSRV;
 		context->CSSetShaderResources(0, 1, &srv);
 
-		if (rt.IsPathTracing()) {
-			ID3D11ShaderResourceView* views[] = {
-				rt.ptDepthTexture->srv,
-				rt.mainTexture->srv
-			};
-			context->CSSetShaderResources(1, ARRAYSIZE(views), views);
-		}
-
 		auto* uav = sharedResources.depth->uav;
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
-		context->CSSetShader(GetCopyDepthCS(rt.IsPathTracing()), nullptr, 0);
+		context->CSSetShader(GetCopyDepthCS(false), nullptr, 0);
 
 		context->Dispatch((uint32_t(renderSize.x) + 7) / 8, (uint32_t(renderSize.y) + 7) / 8, 1);
 

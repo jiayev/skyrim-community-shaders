@@ -2,6 +2,7 @@
 
 #include "Deferred.h"
 #include "Globals.h"
+#include "Raytracing.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -228,6 +229,10 @@ namespace
 	bool IsEngineHookFeatureGateSatisfied(const TerrainBlending& a_singleton)
 	{
 		if (!globals::game::isVR || !a_singleton.loaded || !a_singleton.settings.Enabled) {
+			return false;
+		}
+
+		if (globals::features::raytracing.IsPathTracing()) {
 			return false;
 		}
 

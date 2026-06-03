@@ -613,6 +613,11 @@ struct Raytracing : public OverlayFeature
 		return Mode() == CreationEngineRaytracing::Mode::PathTracing;
 	}
 
+	inline bool IsPathTracingCull() const
+	{
+		return Mode() == CreationEngineRaytracing::Mode::PathTracing && settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull;
+	}
+
 	enum struct OverlayMode
 	{
 		None,
@@ -717,6 +722,8 @@ struct Raytracing : public OverlayFeature
 
 	winrt::com_ptr<ID3D11VertexShader> copyDMVVS = nullptr;
 	winrt::com_ptr<ID3D11PixelShader> copyDMVPS = nullptr;
+	winrt::com_ptr<ID3D11BlendState> copyBlendState;
+	winrt::com_ptr<ID3D11RasterizerState> copyRasterizerState;
 	winrt::com_ptr<ID3D11DepthStencilState> depthStencilState = nullptr;
 
 	struct Hooks
@@ -735,6 +742,20 @@ struct Raytracing : public OverlayFeature
 
 					// Executes the render graph for path tracing, no dependecy on any game render target so we start as early as possible
 					if (rt.Mode() == CreationEngineRaytracing::Mode::PathTracing) {
+						// Clear Depth if culling is enabled
+						if (rt.IsPathTracingCull()) {
+							auto depthStencils = globals::game::renderer->GetDepthStencilData().depthStencils;
+
+							auto& mainDepth = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+							auto& mainDepthCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
+							auto& zPrePassCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
+							auto context = globals::d3d::context;
+							context->ClearDepthStencilView(mainDepth.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+							context->ClearDepthStencilView(mainDepthCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+							context->ClearDepthStencilView(zPrePassCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+						}
+
 						rt.creationEngineRaytracing->Execute();
 					}
 				}
