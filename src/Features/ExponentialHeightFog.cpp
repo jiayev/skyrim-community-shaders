@@ -355,7 +355,6 @@ ID3D11ComputeShader* ExponentialHeightFog::GetLightScatteringCS()
 		if (globals::features::physicalSky.loaded) {
 			defines.emplace_back("PHYSICAL_SKY", "");
 		}
-
 		lightScatteringCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ExponentialHeightFog\\VolumetricFogLightScatteringCS.hlsl", defines, "cs_5_0"));
 	}
 	return lightScatteringCS;
@@ -571,7 +570,6 @@ void ExponentialHeightFog::Prepass()
 	context->CSSetShaderResources(17, 1, nullDepthSrv);
 	context->CSSetShaderResources(35, 3, nullSrvs);
 	context->CSSetShaderResources(50, 1, nullDepthSrv);
-	context->CSSetShaderResources(61, 4, nullSrvs);
 	context->CSSetShaderResources(76, 2, nullSrvs);
 	context->CSSetShaderResources(98, 1, nullSrvs);
 	context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
