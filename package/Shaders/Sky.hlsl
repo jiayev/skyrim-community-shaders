@@ -193,11 +193,6 @@ cbuffer AlphaTestRefCB : register(b11)
 #		include "CloudShadows/CloudShadows.hlsli"
 #	endif
 
-#	if defined(EXP_HEIGHT_FOG)
-#		define SampColorSampler SampBaseSampler
-#		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
-#	endif
-
 #	ifdef HDR_OUTPUT
 #		include "HDRDisplay/HDRSun.hlsli"
 #		include "Common/Random.hlsli"
