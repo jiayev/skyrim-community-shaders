@@ -439,7 +439,8 @@ void State::SaveToJson(nlohmann::json& settings)
 	advanced["Background Compiler Threads"] = shaderCache->backgroundCompilationThreadCount;
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
 	advanced["Frame Annotations"] = frameAnnotations;
-	advanced["Partial Precision"] = enablePartialPrecision.load(std::memory_order_relaxed);
+	advanced["Partial Precision"] = enablePartialPrecision.load(std::memory_order_relaxed);	
+	advanced["Debug Device"] = debugDevice;
 	settings["Advanced"] = advanced;
 
 	json general;
@@ -447,7 +448,6 @@ void State::SaveToJson(nlohmann::json& settings)
 	general["Enable Disk Cache"] = shaderCache->IsDiskCache();
 	general["Skip Unchanged Shaders"] = shaderCache->IsSkipUnchangedShaders();
 	general["Enable Async"] = shaderCache->IsAsync();
-
 	settings["General"] = general;
 
 	auto& upscaling = globals::features::upscaling;
@@ -516,6 +516,8 @@ void State::LoadFromJson(nlohmann::json& settings)
 			frameAnnotations = advanced["Frame Annotations"];
 		if (advanced.contains("Partial Precision") && advanced["Partial Precision"].is_boolean())
 			enablePartialPrecision.store(advanced["Partial Precision"].get<bool>(), std::memory_order_relaxed);
+		if (advanced.contains("Debug Device") && advanced["Debug Device"].is_boolean())
+			debugDevice = advanced["Debug Device"];		
 	}
 
 	if (settings.contains("General") && settings["General"].is_object()) {
