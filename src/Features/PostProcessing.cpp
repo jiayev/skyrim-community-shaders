@@ -312,6 +312,24 @@ void PostProcessing::SavePresetTo(std::string a_name)
 
 void PostProcessing::RestoreDefaultSettings()
 {
+	// If pipeline isn't initialized yet (called during early loading before SetupResources),
+	// load default.json into pendingSettings for deferred application in SetupResources.
+	// This ensures first-startup defaults match what "Restore Defaults" produces later.
+	bool pipelineReady = pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] != nullptr;
+	if (!pipelineReady) {
+		try {
+			std::ifstream i{ std::format("{}\\{}.json", ppPresetPath, "default") };
+			json defaultPreset;
+			i >> defaultPreset;
+			pendingSettings = defaultPreset;
+			logger::info("Pipeline not ready, loaded default preset into pending settings");
+		} catch (const std::exception& e) {
+			logger::info("No default preset available during early load, C++ defaults will be used. Error: {}", e.what());
+			pendingSettings = {};
+		}
+		return;
+	}
+
 	try {
 		LoadPresetFrom("default");
 	} catch (const std::exception& e) {
