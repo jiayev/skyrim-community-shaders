@@ -615,6 +615,7 @@ The CI workflow checks:
 
 -   `en.json` is in sync with source code (`--check`)
 -   No orphaned keys exist (`--orphans`)
+-   Translation file key order matches `en.json` (`sort-i18n.py --check`)
 -   Translation files have valid JSON format
 -   Placeholders `{name}` are consistent across languages
 
@@ -623,4 +624,13 @@ The CI workflow checks:
 ```bash
 python tools/extract-i18n.py --check
 python tools/extract-i18n.py --orphans
+python tools/sort-i18n.py --check
 ```
+
+If `sort-i18n.py --check` fails, fix it with:
+
+```bash
+python tools/sort-i18n.py --write
+```
+
+This reorders non-English translation files so their keys follow `en.json`'s order (with `_meta` first, then keys in en.json order, then any extra keys alphabetically).
