@@ -1253,8 +1253,8 @@ void Raytracing::DeferredPasses()
 			context->ClearRenderTargetView(renderTargets[RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED].RTV, clearColor);
 		}
 
-		// Copy Depth and Motion Vectors if culling is enabled
-		if (settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull) {
+		// Always copy Depth and Motion Vectors
+		{
 			auto depthStencils = renderer->GetDepthStencilData().depthStencils;
 
 			auto& mainDepth = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
