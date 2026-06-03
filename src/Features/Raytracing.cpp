@@ -625,6 +625,14 @@ void Raytracing::DrawDebugSettings()
 			ImGui::TreePop();
 		}
 
+		if (ImGui::TreeNode("Sky Hemisphere")) {
+			D3D11_TEXTURE2D_DESC desc;
+			skyHemisphere->resource11->GetDesc(&desc);
+
+			ImGui::ImageWithBg(skyHemisphere->srv, { desc.Width * debugRescale, desc.Height * debugRescale }, { 0, 0 }, { 1, 1 }, { 0, 0, 0, 1 });
+			ImGui::TreePop();
+		}
+
 		ImGui::TreePop();
 	}
 
