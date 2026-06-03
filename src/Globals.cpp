@@ -1,6 +1,7 @@
 #include "Globals.h"
 
 #include "Deferred.h"
+#include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExponentialHeightFog.h"
@@ -22,6 +23,7 @@
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
+#include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -35,7 +37,6 @@
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
-#include "Features/WeatherEditor.h"
 #include "Features/WetnessEffects.h"
 #include "Menu.h"
 #include "ShaderCache.h"
@@ -88,9 +89,10 @@ namespace globals
 		HDRDisplay hdrDisplay{};
 		RenderDoc renderDoc{};
 		ScreenshotFeature screenshotFeature{};
-		WeatherEditor weatherEditor{};
+		CSEditor csEditor{};
 		ExponentialHeightFog exponentialHeightFog{};
 		TruePBR truePBR{};
+		Skin skin{};
 
 		namespace llf
 		{
@@ -104,7 +106,6 @@ namespace globals
 		RE::BSGraphics::Renderer* renderer = nullptr;
 		RE::BSShaderManager::State* smState = nullptr;
 		RE::TES* tes = nullptr;
-		RE::TESWaterSystem* waterSystem = nullptr;
 		bool isVR = false;
 		RE::MemoryManager* memoryManager = nullptr;
 		RE::INISettingCollection* iniSettingCollection = nullptr;
@@ -158,6 +159,9 @@ namespace globals
 	Menu* menu = nullptr;
 	SIE::ShaderCache* shaderCache = nullptr;
 
+	static Profiler profilerInstance;
+	Profiler* profiler = &profilerInstance;
+
 	void OnInit()
 	{
 		shaderCache = &SIE::ShaderCache::Instance();
@@ -180,7 +184,6 @@ namespace globals
 			iniPrefSettingCollection = RE::INIPrefSettingCollection::GetSingleton();
 			gameSettingCollection = RE::GameSettingCollection::GetSingleton();
 			RefreshTES();
-			waterSystem = RE::TESWaterSystem::GetSingleton();
 			cameraNear = (float*)(REL::RelocationID(517032, 403540).address() + 0x40);
 			cameraFar = (float*)(REL::RelocationID(517032, 403540).address() + 0x44);
 			deltaTime = (float*)REL::RelocationID(523660, 410199).address();
@@ -221,7 +224,6 @@ namespace globals
 		tes = RE::TES::GetSingleton();
 		sky = RE::Sky::GetSingleton();
 		utilityShader = RE::BSUtilityShader::GetSingleton();
-		waterSystem = RE::TESWaterSystem::GetSingleton();
 
 		bEnableLandFade = iniSettingCollection->GetSetting("bEnableLandFade:Display");
 
