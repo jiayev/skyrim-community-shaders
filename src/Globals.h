@@ -37,7 +37,7 @@ struct PerformanceOverlay;
 struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
-struct WeatherEditor;
+struct CSEditor;
 struct ExponentialHeightFog;
 struct HDRDisplay;
 struct PostProcessing;
@@ -106,7 +106,7 @@ namespace globals
 		extern HDRDisplay hdrDisplay;
 		extern RenderDoc renderDoc;
 		extern ScreenshotFeature screenshotFeature;
-		extern WeatherEditor weatherEditor;
+		extern CSEditor csEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
 		extern PostProcessing postProcessing;

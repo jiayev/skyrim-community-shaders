@@ -567,17 +567,17 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 		ImGui::TextDisabled("%s", pressKeyText);
 	}
 
-	// Weather Editor hotkey status — updates live as user picks keys
+	// CS Editor hotkey status — updates live as user picks keys
 	{
-		auto& weatherKey = menu->GetSettings().WeatherEditorToggleKey;
-		if (weatherKey.empty()) {
-			const char* warnText = T("menu.setup.weather_editor_unbound", "Weather Editor hotkey unbound \xe2\x80\x94 chosen key uses Shift");
+		auto& csEditorKey = menu->GetSettings().CSEditorToggleKey;
+		if (csEditorKey.empty()) {
+			const char* warnText = T("menu.setup.cs_editor_unbound", "CS Editor hotkey unbound \xe2\x80\x94 chosen key uses Shift");
 			centerText(warnText);
 			ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.0f, 1.0f), "%s", warnText);
 		} else {
-			std::string infoStr = I18n::GetSingleton()->Format("menu.setup.weather_editor_will_be",
-				{ { "key", Util::Input::KeyIdToString(weatherKey) } },
-				"Weather Editor hotkey will be: {key}");
+			std::string infoStr = I18n::GetSingleton()->Format("menu.setup.cs_editor_will_be",
+				{ { "key", Util::Input::KeyIdToString(csEditorKey) } },
+				"CS Editor hotkey will be: {key}");
 			centerText(infoStr.c_str());
 			ImGui::TextDisabled("%s", infoStr.c_str());
 		}

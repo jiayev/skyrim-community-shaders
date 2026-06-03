@@ -7,6 +7,7 @@
 
 #include "CloudShadows.h"
 #include "Deferred.h"
+#include "I18n/I18n.h"
 #include "LinearLighting.h"
 #include "PostProcessing/ColorSpace.h"
 #include "SkySync.h"
@@ -14,6 +15,8 @@
 #include "VolumetricShadows.h"
 
 #include "State.h"
+
+#define I18N_KEY_PREFIX "feature.physical_sky."
 #include "Util.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -156,23 +159,23 @@ void PhysicalSky::SaveSettings(json& o_json)
 void PhysicalSky::DrawSettings()
 {
 	if (ImGui::BeginTabBar("##PHYSSKY")) {
-		if (ImGui::BeginTabItem("General")) {
+		if (ImGui::BeginTabItem(T(TKEY("general"), "General"))) {
 			SettingsGeneral();
 			ImGui::EndTabItem();
 		}
-		if (ImGui::BeginTabItem("Celestials")) {
+		if (ImGui::BeginTabItem(T(TKEY("celestials"), "Celestials"))) {
 			SettingsCelestials();
 			ImGui::EndTabItem();
 		}
-		if (ImGui::BeginTabItem("Atmosphere")) {
+		if (ImGui::BeginTabItem(T(TKEY("atmosphere"), "Atmosphere"))) {
 			SettingsAtmosphere();
 			ImGui::EndTabItem();
 		}
-		if (ImGui::BeginTabItem("Clouds")) {
+		if (ImGui::BeginTabItem(T(TKEY("clouds"), "Clouds"))) {
 			SettingsClouds();
 			ImGui::EndTabItem();
 		}
-		if (ImGui::BeginTabItem("Debug")) {
+		if (ImGui::BeginTabItem(T(TKEY("debug"), "Debug"))) {
 			SettingsDebug();
 			ImGui::EndTabItem();
 		}
@@ -187,7 +190,7 @@ void PhysicalSky::SettingsGeneral()
 
 	if (ImGui::BeginTable("Info", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
 		ImGui::TableNextColumn();
-		ImGui::Text("Shader Status: ");
+		ImGui::Text("%s", T(TKEY("shader_status"), "Shader Status: "));
 		ImGui::TableNextColumn();
 		if (ShadersOK())
 			ImGui::TextColored({ 0, 1, 0, 1 }, "OK");
@@ -195,50 +198,50 @@ void PhysicalSky::SettingsGeneral()
 			ImGui::TextColored({ 1, 0, 0, 1 }, "ERROR");
 
 		ImGui::TableNextColumn();
-		ImGui::Text("Worldspace: ");
+		ImGui::Text("%s", T(TKEY("worldspace"), "Worldspace: "));
 		ImGui::TableNextColumn();
 
 		if (inInterior) {
 			if (settings.forceEnableAllInteriorCells)
-				ImGui::Text("Interior (Enabled, Forced)");
+				ImGui::Text("%s", T(TKEY("interior_enabled_forced"), "Interior (Enabled, Forced)"));
 			else
-				ImGui::Text("Interior (Disabled)");
+				ImGui::Text("%s", T(TKEY("interior_disabled"), "Interior (Disabled)"));
 		} else if (!currentWorldspaceName.empty()) {
 			if (settings.worldspaceWhitelist.contains(currentWorldspaceName)) {
-				ImGui::Text("%s (Enabled, Whitelist)", currentWorldspaceName.c_str());
+				ImGui::Text(T(TKEY("enabled_whitelist"), "%s (Enabled, Whitelist)"), currentWorldspaceName.c_str());
 			} else if (settings.enableAllExteriorCells) {
-				ImGui::Text("%s (Enabled, Fallback Z Bottom)", currentWorldspaceName.c_str());
+				ImGui::Text(T(TKEY("enabled_fallback_z_bottom"), "%s (Enabled, Fallback Z Bottom)"), currentWorldspaceName.c_str());
 			} else {
-				ImGui::Text("%s (Disabled)", currentWorldspaceName.c_str());
+				ImGui::Text(T(TKEY("disabled"), "%s (Disabled)"), currentWorldspaceName.c_str());
 			}
 		} else {
-			ImGui::Text("Unknown (Worldspace Unavailable)");
+			ImGui::Text("%s", T(TKEY("unknown_worldspace_unavailable"), "Unknown (Worldspace Unavailable)"));
 		}
 
 		ImGui::EndTable();
 	}
 
-	ImGui::Checkbox("Enabled", &settings.enabled);
+	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.enabled);
 	ImGui::SameLine();
-	ImGui::Checkbox("Enable All Exterior Cells", &settings.enableAllExteriorCells);
+	ImGui::Checkbox(T(TKEY("enable_all_exterior_cells"), "Enable All Exterior Cells"), &settings.enableAllExteriorCells);
 	ImGui::SameLine();
-	ImGui::Checkbox("Force Enable All Interior Cells", &settings.forceEnableAllInteriorCells);
+	ImGui::Checkbox(T(TKEY("force_enable_all_interior_cells"), "Force Enable All Interior Cells"), &settings.forceEnableAllInteriorCells);
 	if (settings.enableAllExteriorCells || settings.forceEnableAllInteriorCells) {
-		ImGui::InputFloat("Fallback Z Bottom", &settings.fallbackZBottom, 10.f, 100.f, "%.1f");
+		ImGui::InputFloat(T(TKEY("fallback_z_bottom"), "Fallback Z Bottom"), &settings.fallbackZBottom, 10.f, 100.f, "%.1f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Used when current worldspace is not in whitelist (or worldspace data is unavailable), including forced interiors.");
+			ImGui::Text("%s", T(TKEY("used_when_current_worldspace_is_not_in_whitelist"), "Used when current worldspace is not in whitelist (or worldspace data is unavailable), including forced interiors."));
 	}
 
-	ImGui::SeparatorText("Worldspace Whitelist");
+	ImGui::SeparatorText(T(TKEY("worldspace_whitelist"), "Worldspace Whitelist"));
 	{
 		static std::string newWorldspaceEditorID;
 		static float newWorldspaceZBottom = -14500.f;
 
 		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.55f);
-		ImGui::InputTextWithHint("Editor ID", "Tamriel", &newWorldspaceEditorID);
+		ImGui::InputTextWithHint(T(TKEY("editor_id"), "Editor ID"), "Tamriel", &newWorldspaceEditorID);
 		ImGui::SameLine();
 		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
-		ImGui::InputFloat("Z Bottom", &newWorldspaceZBottom, 10.f, 100.f, "%.1f");
+		ImGui::InputFloat(T(TKEY("z_bottom"), "Z Bottom"), &newWorldspaceZBottom, 10.f, 100.f, "%.1f");
 
 		const auto addOrUpdateWorldspace = [&](std::string editorID, float zBottom) {
 			editorID = TrimEditorID(std::move(editorID));
@@ -246,7 +249,7 @@ void PhysicalSky::SettingsGeneral()
 				settings.worldspaceWhitelist[editorID].zBottom = zBottom;
 		};
 
-		if (ImGui::Button("Add / Update")) {
+		if (ImGui::Button(T(TKEY("add_update"), "Add / Update"))) {
 			addOrUpdateWorldspace(newWorldspaceEditorID, newWorldspaceZBottom);
 		}
 
@@ -254,7 +257,7 @@ void PhysicalSky::SettingsGeneral()
 			ImGui::SameLine();
 			const auto currentIt = settings.worldspaceWhitelist.find(currentWorldspaceName);
 			const bool currentWhitelisted = currentIt != settings.worldspaceWhitelist.end();
-			if (ImGui::Button(currentWhitelisted ? "Remove Current Worldspace" : "Add Current Worldspace")) {
+			if (ImGui::Button(currentWhitelisted ? T(TKEY("remove_current_worldspace"), "Remove Current Worldspace") : T(TKEY("add_current_worldspace"), "Add Current Worldspace"))) {
 				if (currentWhitelisted) {
 					settings.worldspaceWhitelist.erase(currentIt);
 				} else {
@@ -266,9 +269,9 @@ void PhysicalSky::SettingsGeneral()
 		}
 
 		if (ImGui::BeginTable("WorldspaceWhitelist", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp, { -1, 0 })) {
-			ImGui::TableSetupColumn("Editor ID");
-			ImGui::TableSetupColumn("Z Bottom", ImGuiTableColumnFlags_WidthFixed, 160.f);
-			ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 90.f);
+			ImGui::TableSetupColumn(T(TKEY("editor_id"), "Editor ID"));
+			ImGui::TableSetupColumn(T(TKEY("z_bottom"), "Z Bottom"), ImGuiTableColumnFlags_WidthFixed, 160.f);
+			ImGui::TableSetupColumn(T(TKEY("action"), "Action"), ImGuiTableColumnFlags_WidthFixed, 90.f);
 			ImGui::TableHeadersRow();
 
 			std::string removeEditorID;
@@ -284,7 +287,7 @@ void PhysicalSky::SettingsGeneral()
 				ImGui::InputFloat("##ZBottom", &info.zBottom, 10.f, 100.f, "%.1f");
 
 				ImGui::TableSetColumnIndex(2);
-				if (ImGui::Button("Remove", { -1, 0 }))
+				if (ImGui::Button(T(TKEY("remove"), "Remove"), { -1, 0 }))
 					removeEditorID = editorID;
 
 				ImGui::PopID();
@@ -297,194 +300,192 @@ void PhysicalSky::SettingsGeneral()
 		}
 	}
 
-	ImGui::SeparatorText("Post Processing");
+	ImGui::SeparatorText(T(TKEY("post_processing"), "Post Processing"));
 	{
 		const bool llEnabled = globals::features::linearLighting.settings.enableLinearLighting;
 		ImGui::BeginDisabled(llEnabled);
 		if (ImGui::BeginTable("tonemap", 4, ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
 			ImGui::TableNextColumn();
-			ImGui::Text("Tonemapper");
+			ImGui::Text("%s", T(TKEY("tonemapper"), "Tonemapper"));
 			ImGui::TableNextColumn();
-			ImGui::RadioButton("Linear", &settings.tonemapper, 0);
+			ImGui::RadioButton(T(TKEY("linear"), "Linear"), &settings.tonemapper, 0);
 			ImGui::TableNextColumn();
-			ImGui::RadioButton("Gamma", &settings.tonemapper, 1);
+			ImGui::RadioButton(T(TKEY("gamma"), "Gamma"), &settings.tonemapper, 1);
 			ImGui::TableNextColumn();
-			ImGui::RadioButton("Reinherd", &settings.tonemapper, 2);
+			ImGui::RadioButton(T(TKEY("reinherd"), "Reinherd"), &settings.tonemapper, 2);
 			ImGui::EndTable();
 		}
 		ImGui::EndDisabled();
 		if (llEnabled) {
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Tonemapper is forced to Linear when Linear Lighting is enabled.");
+				ImGui::Text("%s", T(TKEY("tonemapper_is_forced_to_linear_when_linear_lighting"), "Tonemapper is forced to Linear when Linear Lighting is enabled."));
 		}
-		ImGui::SliderFloat("Vanilla Mix", &settings.vanillaMix, 0.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("vanilla_mix"), "Vanilla Mix"), &settings.vanillaMix, 0.f, 1.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Blend in vanilla sky color.");
+			ImGui::Text("%s", T(TKEY("blend_in_vanilla_sky_color"), "Blend in vanilla sky color."));
 	}
 }
 
 void PhysicalSky::SettingsCelestials()
 {
-	constexpr auto lightColorHint = "This sets the light color BEFORE it goes through the atmosphere i.e. extraterrestrial radiance.";
+	InfoBox(T(TKEY("the_sun_and_moons_and_their_lights"), "The sun and moons, and their lights."));
 
-	InfoBox("The sun and moons, and their lights.");
-
-	ImGui::Checkbox("Override Directional Light", &settings.overrideDirLight);
+	ImGui::Checkbox(T(TKEY("override_directional_light"), "Override Directional Light"), &settings.overrideDirLight);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Overrides the color of directional light. Linear tonemapper and 1.0 transmittance mix are recommended.");
-	ImGui::SliderFloat("Transmittance Mix", &settings.trMix, 0.f, 1.f, "%.2f");
+		ImGui::Text("%s", T(TKEY("overrides_the_color_of_directional_light_linear_tonemapper"), "Overrides the color of directional light. Linear tonemapper and 1.0 transmittance mix are recommended."));
+	ImGui::SliderFloat(T(TKEY("transmittance_mix"), "Transmittance Mix"), &settings.trMix, 0.f, 1.f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(
-			"Apply additional atmospheric tranmisttance on the directional light.\n"
-			"Introduces natural yellowening at sunset with white sunlight.");
+		ImGui::Text("%s", T(TKEY("apply_additional_atmospheric_tranmisttance_on_the_directional_light"),
+							  "Apply additional atmospheric tranmisttance on the directional light.\n"
+							  "Introduces natural yellowening at sunset with white sunlight."));
 
-	ImGui::SeparatorText("Sky Statics");
+	ImGui::SeparatorText(T(TKEY("sky_statics"), "Sky Statics"));
 	{
-		ImGui::Checkbox("Light Sky Statics", &settings.lightSkyStatics);
+		ImGui::Checkbox(T(TKEY("light_sky_statics"), "Light Sky Statics"), &settings.lightSkyStatics);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Treat sky statics as albedo and tint them with directional lighting.");
+			ImGui::Text("%s", T(TKEY("treat_sky_statics_as_albedo_and_tint_them"), "Treat sky statics as albedo and tint them with directional lighting."));
 
 		ImGui::BeginDisabled(!settings.lightSkyStatics);
-		ImGui::SliderFloat("Brightness", &settings.skyStaticsBrightness, 0.f, 4.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("brightness"), "Brightness"), &settings.skyStaticsBrightness, 0.f, 4.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Multiplies directional lighting applied to sky statics.");
+			ImGui::Text("%s", T(TKEY("multiplies_directional_lighting_applied_to_sky_statics"), "Multiplies directional lighting applied to sky statics."));
 		ImGui::EndDisabled();
 	}
 
-	ImGui::SeparatorText("Sun");
+	ImGui::SeparatorText(T(TKEY("sun"), "Sun"));
 	{
 		ImGui::PushID("Sun");
-		ImGui::ColorEdit3("Light Color", &settings.sunlightColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3(T(TKEY("light_color"), "Light Color"), &settings.sunlightColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(lightColorHint);
-		ImGui::Checkbox("Procedural Sun", &settings.proceduralSun);
-		ImGui::SliderAngle("Sun Disk Angular Radius", &settings.sunDiskRad, 0.f, 10.f, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::Text("%s", T(TKEY("light_color_hint"), "This sets the light color BEFORE it goes through the atmosphere i.e. extraterrestrial radiance."));
+		ImGui::Checkbox(T(TKEY("procedural_sun"), "Procedural Sun"), &settings.proceduralSun);
+		ImGui::SliderAngle(T(TKEY("sun_disk_angular_radius"), "Sun Disk Angular Radius"), &settings.sunDiskRad, 0.f, 10.f, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Real world sun disk angular radius is about 0.27 degrees.");
+			ImGui::Text("%s", T(TKEY("real_world_sun_disk_angular_radius_is_about"), "Real world sun disk angular radius is about 0.27 degrees."));
 		ImGui::PopID();
 	}
 
-	ImGui::SeparatorText("Masser");
+	ImGui::SeparatorText(T(TKEY("masser"), "Masser"));
 	{
 		ImGui::PushID("Masser");
-		ImGui::ColorEdit3("Light Color", &settings.masserColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3(T(TKEY("light_color"), "Light Color"), &settings.masserColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(lightColorHint);
+			ImGui::Text("%s", T(TKEY("light_color_hint"), "This sets the light color BEFORE it goes through the atmosphere i.e. extraterrestrial radiance."));
 		ImGui::PopID();
 	}
 
-	ImGui::SeparatorText("Secunda");
+	ImGui::SeparatorText(T(TKEY("secunda"), "Secunda"));
 	{
 		ImGui::PushID("Secunda");
-		ImGui::ColorEdit3("Light Color", &settings.secundaColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3(T(TKEY("light_color"), "Light Color"), &settings.secundaColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(lightColorHint);
+			ImGui::Text("%s", T(TKEY("light_color_hint"), "This sets the light color BEFORE it goes through the atmosphere i.e. extraterrestrial radiance."));
 		ImGui::PopID();
 	}
 }
 
 void PhysicalSky::SettingsAtmosphere()
 {
-	InfoBox("The composition and physical properties of the atmosphere.");
+	InfoBox(T(TKEY("the_composition_and_physical_properties_of_the_atmosphere"), "The composition and physical properties of the atmosphere."));
 
-	ImGui::SliderFloat("AP Luminance Mix", &settings.apLumMix, 0.f, 1.f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("ap_luminance_mix"), "AP Luminance Mix"), &settings.apLumMix, 0.f, 1.f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Add light scattered by air (Aerial Perspective) to the scene.");
-	ImGui::SliderFloat("AP Transmittance Mix", &settings.apTrMix, 0.f, 1.f, "%.2f");
+		ImGui::Text("%s", T(TKEY("add_light_scattered_by_air_aerial_perspective_to"), "Add light scattered by air (Aerial Perspective) to the scene."));
+	ImGui::SliderFloat(T(TKEY("ap_transmittance_mix"), "AP Transmittance Mix"), &settings.apTrMix, 0.f, 1.f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Remove light absorbed by air (Aerial Perspective) from the scene.");
+		ImGui::Text("%s", T(TKEY("remove_light_absorbed_by_air_aerial_perspective_from"), "Remove light absorbed by air (Aerial Perspective) from the scene."));
 
-	ImGui::Checkbox("Half Resolution Cloud Shadow", &settings.halfResApShadow);
+	ImGui::Checkbox(T(TKEY("half_resolution_cloud_shadow"), "Half Resolution Cloud Shadow"), &settings.halfResApShadow);
 
-	ImGui::SliderFloat2("Cloud Shadow Remap", &settings.cloudShadowRemapRange.x, 0.f, 1.f, "%.2f");
+	ImGui::SliderFloat2(T(TKEY("cloud_shadow_remap"), "Cloud Shadow Remap"), &settings.cloudShadowRemapRange.x, 0.f, 1.f, "%.2f");
 
-	ImGui::SeparatorText("Air Molecules (Rayleigh)");
+	ImGui::SeparatorText(T(TKEY("air_molecules_rayleigh"), "Air Molecules (Rayleigh)"));
 	{
 		ImGui::PushID("Rayleigh");
-		ImGui::TextWrapped(
-			"Particles much smaller than the wavelength of light. They have almost complete symmetry in forward and backward scattering. "
-			"On earth, they are what makes the sky blue and, at sunset, red. Usually needs no extra change.");
+		ImGui::TextWrapped("%s", T(TKEY("particles_much_smaller_than_the_wavelength_of_light"),
+									 "Particles much smaller than the wavelength of light. They have almost complete symmetry in forward and backward scattering. "
+									 "On earth, they are what makes the sky blue and, at sunset, red. Usually needs no extra change."));
 
-		ImGui::ColorEdit3("Scatter (sRGB)", &settings.rayleighScatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-		ImGui::ColorEdit3("Scatter (AP1)", &settings.rayleighScatterAP1.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3(T(TKEY("scatter_srgb"), "Scatter (sRGB)"), &settings.rayleighScatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3(T(TKEY("scatter_ap1"), "Scatter (AP1)"), &settings.rayleighScatterAP1.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Band-averaged coefficients for ACEScg (AP1) primaries, computed via CIE 1931 spectral integration.");
-		ImGui::SliderFloat("Falloff", &settings.rayleighFalloff, 0.f, 2.f, "%.2f km^-1");
+			ImGui::Text("%s", T(TKEY("band_averaged_coefficients_for_acescg_ap1_primaries_computed"), "Band-averaged coefficients for ACEScg (AP1) primaries, computed via CIE 1931 spectral integration."));
+		ImGui::SliderFloat(T(TKEY("falloff"), "Falloff"), &settings.rayleighFalloff, 0.f, 2.f, "%.2f km^-1");
 		ImGui::PopID();
 	}
 
-	ImGui::SeparatorText("Aerosol (Mie)");
+	ImGui::SeparatorText(T(TKEY("aerosol_mie"), "Aerosol (Mie)"));
 	{
 		ImGui::PushID("Mie");
-		ImGui::TextWrapped(
-			"Solid and liquid particles greater than 1/10 of the light wavelength but not too much, like dust. Strongly anisotropic (Mie Scattering). "
-			"They contributes to the aureole around bright celestial bodies.");
+		ImGui::TextWrapped("%s", T(TKEY("solid_and_liquid_particles_greater_than_1_10"),
+									 "Solid and liquid particles greater than 1/10 of the light wavelength but not too much, like dust. Strongly anisotropic (Mie Scattering). "
+									 "They contributes to the aureole around bright celestial bodies."));
 
-		ImGui::SliderFloat("Anisotropy", &settings.aerosolPhaseG, -1, 1);
-		ImGui::ColorEdit3("Scatter", &settings.aerosolScatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-		ImGui::ColorEdit3("Absorption", &settings.aerosolAbsorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::SliderFloat(T(TKEY("anisotropy"), "Anisotropy"), &settings.aerosolPhaseG, -1, 1);
+		ImGui::ColorEdit3(T(TKEY("scatter"), "Scatter"), &settings.aerosolScatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3(T(TKEY("absorption"), "Absorption"), &settings.aerosolAbsorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Usually 1/9 of scatter coefficient. Dust/pollution is lower, fog is higher.");
-		ImGui::SliderFloat("Falloff", &settings.aerosolFalloff, 0.f, 2.f, "%.2f km^-1");
+			ImGui::Text("%s", T(TKEY("usually_1_9_of_scatter_coefficient_dust_pollution"), "Usually 1/9 of scatter coefficient. Dust/pollution is lower, fog is higher."));
+		ImGui::SliderFloat(T(TKEY("falloff"), "Falloff"), &settings.aerosolFalloff, 0.f, 2.f, "%.2f km^-1");
 		ImGui::PopID();
 	}
 
-	ImGui::SeparatorText("Ozone");
+	ImGui::SeparatorText(T(TKEY("ozone"), "Ozone"));
 	{
 		ImGui::PushID("Ozone");
-		ImGui::TextWrapped(
-			"The ozone layer high up in the sky that mainly absorbs light of certain wavelength. "
-			"It keeps the zenith sky blue, especially at sunrise or sunset.");
+		ImGui::TextWrapped("%s", T(TKEY("the_ozone_layer_high_up_in_the_sky"),
+									 "The ozone layer high up in the sky that mainly absorbs light of certain wavelength. "
+									 "It keeps the zenith sky blue, especially at sunrise or sunset."));
 
-		ImGui::ColorEdit3("Absorption (sRGB)", &settings.ozoneAbsorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-		ImGui::ColorEdit3("Absorption (AP1)", &settings.ozoneAbsorptionAP1.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3(T(TKEY("absorption_srgb"), "Absorption (sRGB)"), &settings.ozoneAbsorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3(T(TKEY("absorption_ap1"), "Absorption (AP1)"), &settings.ozoneAbsorptionAP1.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Band-averaged coefficients for ACEScg (AP1) primaries, computed via CIE 1931 spectral integration.");
-		ImGui::DragFloat("Mean Altitude", &settings.ozoneAltitude, .1f, 0.f, 100.f, "%.3f km");
-		ImGui::DragFloat("Layer Thickness", &settings.ozoneThickness, .1f, 0.f, 50.f, "%.3f km");
+			ImGui::Text("%s", T(TKEY("band_averaged_coefficients_for_acescg_ap1_primaries_computed_2"), "Band-averaged coefficients for ACEScg (AP1) primaries, computed via CIE 1931 spectral integration."));
+		ImGui::DragFloat(T(TKEY("mean_altitude"), "Mean Altitude"), &settings.ozoneAltitude, .1f, 0.f, 100.f, "%.3f km");
+		ImGui::DragFloat(T(TKEY("layer_thickness"), "Layer Thickness"), &settings.ozoneThickness, .1f, 0.f, 50.f, "%.3f km");
 		ImGui::PopID();
 	}
 
-	ImGui::SeparatorText("Planetary Parameters");
+	ImGui::SeparatorText(T(TKEY("planetary_parameters"), "Planetary Parameters"));
 	{
-		ImGui::InputFloat("Planet Radius", &settings.planetRadius, 1.f, 100000.f, "%.1f km");
-		ImGui::InputFloat("Atmosphere Radius", &settings.atmosphereRadius, 1.f, 100000.f, "%.1f km");
+		ImGui::InputFloat(T(TKEY("planet_radius"), "Planet Radius"), &settings.planetRadius, 1.f, 100000.f, "%.1f km");
+		ImGui::InputFloat(T(TKEY("atmosphere_radius"), "Atmosphere Radius"), &settings.atmosphereRadius, 1.f, 100000.f, "%.1f km");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(
-				"Planet radius is the distance from the planet center to sea level.\n"
-				"Atmosphere radius is the distance from the planet center to the top of atmosphere.\n"
-				"On Earth, they are about 6360 km and 6420 km respectively.");
+			ImGui::Text("%s", T(TKEY("planet_radius_is_the_distance_from_the_planet"),
+								  "Planet radius is the distance from the planet center to sea level.\n"
+								  "Atmosphere radius is the distance from the planet center to the top of atmosphere.\n"
+								  "On Earth, they are about 6360 km and 6420 km respectively."));
 	}
 }
 
 void PhysicalSky::SettingsClouds()
 {
-	InfoBox("Clouds.");
+	InfoBox(T(TKEY("clouds_2"), "Clouds."));
 
-	ImGui::SliderFloat("Vanilla Mix", &settings.cloudOriginalMix, 0.f, 2.f, "%.2f");
-	ImGui::SliderFloat("Relight Mix", &settings.cloudRelightMix, 0.f, 2.f, "%.2f");
-	ImGui::SliderFloat("Silver Lining Accent", &settings.silverLiningMix, 0.f, 1.f, "%.2f");
-	ImGui::SliderFloat("Silver Lining Spread", &settings.silverLiningSpread, -0.99f, 0.99f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("vanilla_mix"), "Vanilla Mix"), &settings.cloudOriginalMix, 0.f, 2.f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("relight_mix"), "Relight Mix"), &settings.cloudRelightMix, 0.f, 2.f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("silver_lining_accent"), "Silver Lining Accent"), &settings.silverLiningMix, 0.f, 1.f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("silver_lining_spread"), "Silver Lining Spread"), &settings.silverLiningSpread, -0.99f, 0.99f, "%.2f");
 }
 
 void PhysicalSky::SettingsDebug()
 {
-	InfoBox("Beep Boop.");
+	InfoBox(T(TKEY("beep_boop"), "Beep Boop."));
 
-	if (ImGui::Button("Recompile Shaders"))
+	if (ImGui::Button(T(TKEY("recompile_shaders"), "Recompile Shaders")))
 		ClearShaderCache();
 
-	ImGui::SeparatorText("Values");
+	ImGui::SeparatorText(T(TKEY("values"), "Values"));
 	{
-		ImGui::InputFloat3("Sun Direction", &cbData.sunDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
-		ImGui::InputFloat3("Masser Direction", &cbData.masserDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
-		ImGui::InputFloat3("Secunda Direction", &cbData.secundaDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+		ImGui::InputFloat3(T(TKEY("sun_direction"), "Sun Direction"), &cbData.sunDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+		ImGui::InputFloat3(T(TKEY("masser_direction"), "Masser Direction"), &cbData.masserDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+		ImGui::InputFloat3(T(TKEY("secunda_direction"), "Secunda Direction"), &cbData.secundaDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
 	}
 
-	ImGui::SeparatorText("Textures");
+	ImGui::SeparatorText(T(TKEY("textures"), "Textures"));
 	{
 		static float debugScale = 0.2f;
-		ImGui::SliderFloat("View Scale", &debugScale, 0.1f, 1.f);
+		ImGui::SliderFloat(T(TKEY("view_scale"), "View Scale"), &debugScale, 0.1f, 1.f);
 
 		BUFFER_VIEWER_NODE_BULLET(texTrLut, 1.f);
 		BUFFER_VIEWER_NODE_BULLET(texMsLut, 1.f);
@@ -492,6 +493,8 @@ void PhysicalSky::SettingsDebug()
 		BUFFER_VIEWER_NODE_BULLET(texApShadow, debugScale);
 	}
 }
+
+#undef I18N_KEY_PREFIX
 
 void PhysicalSky::SetupResources()
 {

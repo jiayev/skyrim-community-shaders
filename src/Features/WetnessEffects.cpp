@@ -1,7 +1,7 @@
 #include "WetnessEffects.h"
+#include "CSEditor.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
-#include "WeatherEditor.h"
 
 #define I18N_KEY_PREFIX "feature.wetness_effects."
 
@@ -663,7 +663,7 @@ void WetnessEffects::DrawSettings()
 	if (csEditor.loaded) {
 		if (ImGui::SmallButton(T(TKEY("open_weather_picker"), "Open Weather Picker"))) {
 			// Navigate to the replacement feature in the menu
-			Menu::GetSingleton()->SelectFeatureMenu(weatherEditor.GetShortName());
+			Menu::GetSingleton()->SelectFeatureMenu(csEditor.GetShortName());
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("open_weather_picker_tooltip"), "Open the Weather Picker in CS Utility"));
