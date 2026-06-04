@@ -514,7 +514,9 @@ void ExponentialHeightFog::Prepass()
 		ID3D11UnorderedAccessView* uavs[1]{ conservativeDepth->uav.get() };
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 		context->CSSetShader(GetConservativeDepthCS(), nullptr, 0);
+		globals::profiler->BeginPass("ExponentialHeightFog::ConservativeDepth");
 		context->Dispatch(groupX, groupY, 1);
+		globals::profiler->EndPass();
 		uavs[0] = nullptr;
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	}
@@ -523,7 +525,9 @@ void ExponentialHeightFog::Prepass()
 		ID3D11UnorderedAccessView* uavs[1]{ vBufferA->uav.get() };
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 		context->CSSetShader(GetMaterialSetupCS(), nullptr, 0);
+		globals::profiler->BeginPass("ExponentialHeightFog::MaterialSetup");
 		context->Dispatch(groupX, groupY, groupZ);
+		globals::profiler->EndPass();
 		uavs[0] = nullptr;
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	}
@@ -547,7 +551,9 @@ void ExponentialHeightFog::Prepass()
 		context->CSSetShaderResources(98, 1, &directionalShadowLightData);
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 		context->CSSetShader(GetLightScatteringCS(), nullptr, 0);
+		globals::profiler->BeginPass("ExponentialHeightFog::LightScattering");
 		context->Dispatch(groupX, groupY, groupZ);
+		globals::profiler->EndPass();
 		uavs[0] = nullptr;
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	}
@@ -558,7 +564,9 @@ void ExponentialHeightFog::Prepass()
 		context->CSSetShaderResources(0, 1, srvs);
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 		context->CSSetShader(GetIntegrationCS(), nullptr, 0);
+		globals::profiler->BeginPass("ExponentialHeightFog::Integration");
 		context->Dispatch(groupX, groupY, 1);
+		globals::profiler->EndPass();
 	}
 
 	ID3D11ShaderResourceView* nullSrvs[5]{ nullptr, nullptr, nullptr, nullptr, nullptr };

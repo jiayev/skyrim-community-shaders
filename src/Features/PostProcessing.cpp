@@ -524,6 +524,20 @@ void PostProcessing::CopyToRenderTarget(
 	context->CopySubresourceRegion(targetRT.texture, 0, 0, 0, 0, convertTex->resource.get(), 0, nullptr);
 }
 
+void PostProcessing::DrawFeature(PostProcessFeature& feature, PostProcessFeature::TextureInfo& lastTexColor)
+{
+	globals::profiler->BeginPass(std::format("PostProcessing::{}", feature.GetType()));
+
+	if (feature.WritesToMainTexture()) {
+		feature.Draw(lastTexColor);
+	} else {
+		PostProcessFeature::TextureInfo inTex = lastTexColor;
+		feature.Draw(inTex);
+	}
+
+	globals::profiler->EndPass();
+}
+
 void PostProcessing::DrawBeforeUpscaling()
 {
 	if (bypass)
@@ -551,12 +565,7 @@ void PostProcessing::DrawBeforeUpscaling()
 	// go through each fx
 	for (auto& pipe : pipeline) {
 		if (pipe && pipe->enabled && !pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && pipe->DrawBeforeUpscaling()) {
-			if (pipe->WritesToMainTexture()) {
-				pipe->Draw(lastTexColor);
-			} else {
-				PostProcessFeature::TextureInfo inTex = lastTexColor;
-				pipe->Draw(inTex);
-			}
+			DrawFeature(*pipe, lastTexColor);
 		}
 	}
 
@@ -609,23 +618,13 @@ void PostProcessing::PreProcess()
 	// go through each fx
 	for (auto& pipe : pipeline) {
 		if (pipe && pipe->enabled && !pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && (!pipe->DrawBeforeUpscaling() || !upscaling.loaded)) {
-			if (pipe->WritesToMainTexture()) {
-				pipe->Draw(lastTexColor);
-			} else {
-				PostProcessFeature::TextureInfo inTex = lastTexColor;
-				pipe->Draw(inTex);
-			}
+			DrawFeature(*pipe, lastTexColor);
 		}
 	}
 
 	for (auto& pipe : pipeline) {
 		if (pipe && pipe->enabled && pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && (!pipe->DrawBeforeUpscaling() || !upscaling.loaded)) {
-			if (pipe->WritesToMainTexture()) {
-				pipe->Draw(lastTexColor);
-			} else {
-				PostProcessFeature::TextureInfo inTex = lastTexColor;
-				pipe->Draw(inTex);
-			}
+			DrawFeature(*pipe, lastTexColor);
 		}
 	}
 
