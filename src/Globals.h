@@ -37,6 +37,7 @@ struct PerformanceOverlay;
 struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
+class Profiler;
 struct CSEditor;
 struct ExponentialHeightFog;
 struct HDRDisplay;
@@ -277,6 +278,7 @@ namespace globals
 	extern Deferred* deferred;
 	extern Menu* menu;
 	extern SIE::ShaderCache* shaderCache;
+	extern Profiler* profiler;
 
 	void OnInit();
 	void ReInit();
