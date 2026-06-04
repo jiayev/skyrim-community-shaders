@@ -295,8 +295,10 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 
 #		if defined(PS_CLOUDS) && defined(CLOUD_SHADOWS)
-	if (SharedData::physSkyData.enabled)
+	if (SharedData::physSkyData.enabled && SharedData::physSkyData.enableVanillaClouds)
 		baseColor.rgb = PhysSky::RelightCloud(baseColor, viewDir, float3(0, 0, 0) + viewDir * psCloudDist, PhysSky::SampTr, SampBaseSampler);
+	else if (SharedData::physSkyData.enabled && !SharedData::physSkyData.enableVanillaClouds)
+		baseColor.a = 0;  // Hide vanilla clouds when disabled
 #		endif
 
 #		if defined(DITHER)
