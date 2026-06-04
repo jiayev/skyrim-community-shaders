@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PhysicalSky/Ndf.h"
+
 struct PhysicalSky final : public Feature
 {
 	////////////////////////////////////////////////// Boilerplate
@@ -44,6 +46,7 @@ struct PhysicalSky final : public Feature
 	void SettingsCelestials();
 	void SettingsAtmosphere();
 	void SettingsClouds();
+	void SettingsVolumetricClouds();
 	void SettingsDebug();
 
 	// Resources
@@ -128,10 +131,19 @@ struct PhysicalSky final : public Feature
 		float ozoneThickness = 35.66071f;
 		float3 ozoneAbsorption = { 2.2911f, 1.5404f, 0 };
 
+		// VANILLA CLOUDS
+		bool enableVanillaClouds = true;
 		float cloudRelightMix = 1.f;
 		float cloudOriginalMix = 0.5f;
 		float silverLiningMix = 1.f;
 		float silverLiningSpread = 0.f;
+
+		// VOLUMETRIC CLOUDS
+		bool enableVolumetricClouds = false;
+		float rayMarchRange = 32.f;     // km
+		float shadowVolumeRange = 8.f;  // km
+		uint32_t cloudMaxStep = 97;
+		CloudLayer cloudLayer = {};
 	} settings;
 
 	struct CbData
@@ -182,10 +194,20 @@ struct PhysicalSky final : public Feature
 		float3 ozoneAbsorption;  //
 
 		// CLOUDS (VANILLA)
+		uint enableVanillaClouds;
 		float cloudRelightMix;
 		float cloudOriginalMix;
-		float silverLiningMix;
-		float silverLiningSpread;  //
+		float silverLiningMix;  //
+		float silverLiningSpread;
+
+		// VOLUMETRIC CLOUDS (toggle + shadow volume params for getDirlightTransmittance)
+		uint enableVolumetricClouds;
+		float shadowVolumeRange;
+		float volCloudBottom;  //
+		float volCloudThickness;
+		float3 volCloudScatter;  //
+		float volCloudAverageDensity;
+		float3 volCloudAbsorption;  //
 
 		// SETTINGS
 		uint lightSkyStatics;
@@ -199,6 +221,74 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texSvLut = nullptr;  // sky view
 	eastl::unique_ptr<Texture3D> texApLut = nullptr;  // aerial perspective
 	eastl::unique_ptr<Texture2D> texApShadow = nullptr;
+
+	// Volumetric cloud resources
+	constexpr static uint16_t kShadowVolW = 256;
+	constexpr static uint16_t kShadowVolH = 256;
+	constexpr static uint16_t kShadowVolD = 64;
+	constexpr static uint16_t kNubisSize = 128;
+
+	eastl::unique_ptr<Texture2D> texVolTr = nullptr;         // volumetric transmittance result
+	eastl::unique_ptr<Texture2D> texVolLum = nullptr;        // volumetric luminance result
+	eastl::unique_ptr<Texture3D> texShadowVolume = nullptr;  // cloud shadow volume 3D
+
+	winrt::com_ptr<ID3D11ShaderResourceView> cloudTopLutSrv = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> cloudBottomLutSrv = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> nubisNoiseSrv = nullptr;
+
+	TextureManager ndfTexManager{ "Cloud Map" };
+	NdfSettings ndfSettings = CumuliformNdfSettings{};
+	NdfManager ndfManager;
+
+	// Volumetric cloud StructuredBuffer (compute-only)
+	struct VolumetricCloudSB
+	{
+		// Performance
+		float rayMarchRange;
+		float shadowVolumeRange;
+		uint cloudMaxStep;
+		float _pad0;
+
+		// Dynamic
+		float2 frameDim;
+		float2 rcpFrameDim;
+		float3 dirlightDir;
+		float _pad1;
+		float3 dirlightColor;
+		float _pad2;
+		float bottomZ;
+		float planetRadius;
+		float atmosThickness;
+		float aerialPerspectiveMaxDist;
+
+		// Cloud layer (must match HLSL CloudLayer struct)
+		float cloudBottom;
+		float cloudThickness;
+		float2 ndfFreq;
+		float noiseFreq;
+		float3 noiseOffset;  // offset (computed from speed * time)
+		float power;
+		float3 cloudScatter;
+		float3 cloudAbsorption;
+		float averageDensity;
+		float msMult;
+		float msTransmittancePower;
+		float msHeightPower;
+		float ambientMult;
+	};
+
+	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
+
+	winrt::com_ptr<ID3D11ComputeShader> csVolMainView = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolShadowVolume = nullptr;
+
+	winrt::com_ptr<ID3D11SamplerState> sampTileable = nullptr;
+
+	// Volumetric cloud methods
+	void SetupVolumetricResources();
+	void CompileVolumetricShaders();
+	void LoadCloudTextures();
+	void RenderVolumetricClouds();
 
 	winrt::com_ptr<ID3D11SamplerState> sampTr = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> sampSv = nullptr;

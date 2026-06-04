@@ -353,13 +353,23 @@ namespace SharedData
 		float3 ozoneAbsorption;  //
 
 		// CLOUDS (VANILLA)
+		uint enableVanillaClouds;
 		float cloudRelightMix;
 		float cloudOriginalMix;
-		float silverLiningMix;
-		float silverLiningSpread;  //
+		float silverLiningMix;  //
+		float silverLiningSpread;
+
+		// VOLUMETRIC CLOUDS
+		uint enableVolumetricClouds;
+		float shadowVolumeRange;
+		float volCloudBottom;  //
+		float volCloudThickness;
+		float3 volCloudScatter;
+		float volCloudAverageDensity;  //
+		float3 volCloudAbsorption;
 
 		// SETTINGS
-		uint lightSkyStatics;
+		uint lightSkyStatics;  //
 		float skyStaticsBrightness;
 		uint2 pad0;
 	};

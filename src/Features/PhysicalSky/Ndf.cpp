@@ -1,0 +1,250 @@
+#include "Features/PhysicalSky.h"
+
+#include "I18n/I18n.h"
+#include "State.h"
+#include "Util.h"
+
+#include <DDSTextureLoader.h>
+#include <imgui_stdlib.h>
+
+#define I18N_KEY_PREFIX "feature.physical_sky."
+
+template <class... Ts>
+struct overloads : Ts...
+{
+	using Ts::operator()...;
+};
+
+bool TextureManager::LoadTexture(std::filesystem::path path)
+{
+	auto device = globals::d3d::device;
+	auto context = globals::d3d::context;
+
+	auto path_str = path.string();
+	if (!texList.contains(path_str))
+		texList.emplace(path_str, nullptr);
+
+	return SUCCEEDED(DirectX::CreateDDSTextureFromFile(device, context, path.wstring().c_str(), nullptr, texList.at(path_str).put()));
+}
+
+void TextureManager::DrawUI()
+{
+	ImGui::InputText(T(TKEY("path"), "Path"), &uiPath, 0);
+	if (ImGui::Button(T(TKEY("load"), "Load"))) {
+		LoadTexture(uiPath);
+	}
+	ImGui::SameLine();
+	if (ImGui::Button(T(TKEY("remove"), "Remove"))) {
+		texList.erase(uiPath);
+	}
+
+	if (ImGui::BeginListBox(T(TKEY("loaded_textures"), "Loaded Textures"))) {
+		for (auto& [path, srv] : texList) {
+			if (ImGui::Selectable(path.c_str(), uiPath == path))
+				uiPath = path;
+		}
+		ImGui::EndListBox();
+	}
+}
+
+namespace nlohmann
+{
+	void to_json(json& j, const TextureManager& v)
+	{
+		std::vector<std::string> tex_list;
+		std::ranges::transform(v.texList, std::back_inserter(tex_list), [](auto kvpair) { return kvpair.first; });
+		j = tex_list;
+	}
+
+	void from_json(const json& j, TextureManager& v)
+	{
+		if (j.empty())
+			return;
+		std::vector<std::string> tex_list = j;
+		for (auto& tex : tex_list)
+			if (!v.LoadTexture(tex))
+				logger::warn("Loading texture manager from config: Texture {} missing.", tex);
+	}
+}
+
+void NdfManager::SetupResources()
+{
+	logger::debug("Creating NDF resources...");
+	{
+		cumuliformCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<CumuliformNdfSettings>());
+
+		D3D11_TEXTURE2D_DESC tex_desc{
+			.Width = kNdfDim,
+			.Height = kNdfDim,
+			.MipLevels = 1,
+			.ArraySize = 5,
+			.Format = DXGI_FORMAT_R8_UNORM,
+			.SampleDesc = { .Count = 1, .Quality = 0 },
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET,
+			.CPUAccessFlags = 0,
+			.MiscFlags = 0
+		};
+		D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {
+			.Format = tex_desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY,
+			.Texture2DArray = { .MostDetailedMip = 0, .MipLevels = 1, .FirstArraySlice = 0, .ArraySize = 5 }
+		};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {
+			.Format = tex_desc.Format,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY,
+			.Texture2DArray = { .MipSlice = 0, .FirstArraySlice = 0, .ArraySize = 5 }
+		};
+
+		texNdfOutput = eastl::make_unique<Texture2D>(tex_desc);
+		texNdfOutput->CreateSRV(srv_desc);
+		texNdfOutput->CreateUAV(uav_desc);
+	}
+
+	CompileShaders();
+}
+
+void NdfManager::CompileShaders()
+{
+	logger::debug("Compiling NDF shaders...");
+
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\NdfCumuliform.cs.hlsl", {}, "cs_5_0")))
+		cumuliformProgram.attach(rawPtr);
+}
+
+const char* NdfManager::GetSettingsTypeName(const NdfSettings& ndfSettings)
+{
+	auto visitor = overloads{
+		[&](const TexNdfSettings&) { return "Texture"; },
+		[&](const CumuliformNdfSettings&) { return "Cumuliform"; }
+	};
+
+	return std::visit(visitor, ndfSettings);
+}
+
+const char* NdfManager::GetSettingsHint(const NdfSettings& ndfSettings)
+{
+	auto visitor = overloads{
+		[&](const TexNdfSettings&) {
+			return "Read the cloud map from dds textures. More static but you can draw arbitrary shapes.\n"
+				   "The texture should be a 256x256 Texture2DArray consists of 5 grayscale images:\n"
+				   "1. min height\n"
+				   "2. max height\n"
+				   "3. coverage\n"
+				   "4. cloud type\n"
+				   "5. bottom type";
+		},
+		[&](const CumuliformNdfSettings&) {
+			return "A simple-yet-versatile cloud map generator that gets you from billowy cumulus to thick stratus sheets.";
+		}
+	};
+
+	return std::visit(visitor, ndfSettings);
+}
+
+void NdfManager::DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texManager)
+{
+	// ndf type selector
+	const static auto types = []() {
+		std::vector<std::pair<std::string, NdfSettings>> retval = {
+			{ "", TexNdfSettings() },
+			{ "", CumuliformNdfSettings() },
+		};
+		for (auto& [name, s] : retval)
+			name = GetSettingsTypeName(s);
+		return retval;
+	}();
+
+	if (ImGui::BeginCombo(T(TKEY("cloud_map_generator"), "Cloud Map Generator"), GetSettingsTypeName(ndfSettings))) {
+		for (auto& [name, s] : types)
+			if (ImGui::Selectable(name.c_str(), false)) {
+				ndfSettings = s;
+				break;
+			}
+		ImGui::EndCombo();
+	}
+
+	ImGui::Separator();
+
+	if (ImGui::BeginTable("NdfHint", 1, ImGuiTableFlags_BordersOuter, { -FLT_MIN, 0 })) {
+		ImGui::TableNextColumn();
+		ImGui::TextWrapped("%s", GetSettingsHint(ndfSettings));
+		ImGui::EndTable();
+	}
+
+	auto visitor = overloads{
+		[&](TexNdfSettings& s) {
+			if (ImGui::BeginCombo(T(TKEY("texture_path"), "Texture Path"), s.texPath.c_str())) {
+				for (auto& path_choice : texManager.ListPaths())
+					if (ImGui::Selectable(path_choice.c_str(), path_choice == s.texPath))
+						s.texPath = path_choice;
+				ImGui::EndCombo();
+			}
+
+			if (!texManager.Query(s.texPath))
+				ImGui::TextColored({ 1, 0, 0, 1 }, "%s", T(TKEY("failed_to_load_texture"), "Failed to load texture."));
+		},
+		[&](CumuliformNdfSettings& s) {
+			constexpr uint32_t pmin = 2;
+			constexpr uint32_t pmax = 50;
+			ImGui::SliderScalarN(T(TKEY("layer_1_frequency"), "Layer 1 - Frequency"), ImGuiDataType_U32, (void*)&s.scale0.x, 2, &pmin, &pmax, "%u");
+			ImGui::SliderFloat2(T(TKEY("layer_1_velocity"), "Layer 1 - Velocity"), &s.offset0.x, -100.f, 100.f, "%.1f");
+			ImGui::SliderAngle(T(TKEY("layer_1_rotation"), "Layer 1 - Rotation"), &s.rot0, 0.f, 360.f);
+
+			ImGui::SliderScalarN(T(TKEY("layer_2_frequency"), "Layer 2 - Frequency"), ImGuiDataType_U32, (void*)&s.scale1.x, 2, &pmin, &pmax, "%u");
+			ImGui::SliderFloat2(T(TKEY("layer_2_velocity"), "Layer 2 - Velocity"), &s.offset1.x, -100.f, 100.f, "%.1f");
+			ImGui::SliderAngle(T(TKEY("layer_2_rotation"), "Layer 2 - Rotation"), &s.rot1, 0.f, 360.f);
+
+			ImGui::SliderScalarN(T(TKEY("layer_3_frequency"), "Layer 3 - Frequency"), ImGuiDataType_U32, (void*)&s.scale2.x, 2, &pmin, &pmax, "%u");
+			ImGui::SliderFloat2(T(TKEY("layer_3_velocity"), "Layer 3 - Velocity"), &s.offset2.x, -100.f, 100.f, "%.1f");
+			ImGui::SliderAngle(T(TKEY("layer_3_rotation"), "Layer 3 - Rotation"), &s.rot2, 0.f, 360.f);
+
+			ImGui::SliderFloat2(T(TKEY("coverage_clamping"), "Coverage Clamping"), &s.clipRange.x, 0, 1, "%.2f");
+			ImGui::SliderFloat(T(TKEY("power"), "Power"), &s.power, 0.2f, 5, "%.2f");
+			ImGui::SliderFloat(T(TKEY("bottom_type"), "Bottom Type"), &s.wispiness, 0.f, 1.f, "%.2f");
+		},
+		[&](auto&) {}
+	};
+	std::visit(visitor, ndfSettings);
+}
+
+#undef I18N_KEY_PREFIX
+
+void NdfManager::UpdateNdf(const NdfSettings& ndfSettings)
+{
+	auto visitor = overloads{
+		[&](const TexNdfSettings&) {},
+		[&](const CumuliformNdfSettings& s) {
+			CumuliformNdfSettings data = s;
+			data.offset0 *= -globals::state->timer * 1e-3f;
+			data.offset1 *= -globals::state->timer * 1e-3f;
+			data.offset2 *= -globals::state->timer * 1e-3f;
+			cumuliformCb->Update(data);
+
+			auto context = globals::d3d::context;
+
+			auto uav = texNdfOutput->uav.get();
+			auto cb = cumuliformCb->CB();
+			context->CSSetConstantBuffers(1, 1, &cb);
+			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+			context->CSSetShader(cumuliformProgram.get(), nullptr, 0);
+			context->Dispatch((kNdfDim + 7) >> 3, (kNdfDim + 7) >> 3, 1);
+
+			uav = nullptr;
+			cb = nullptr;
+			context->CSSetConstantBuffers(1, 1, &cb);
+			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+			context->CSSetShader(nullptr, nullptr, 0);
+		}
+	};
+	std::visit(visitor, ndfSettings);
+}
+
+ID3D11ShaderResourceView* NdfManager::GetNdf(const NdfSettings& ndfSettings, TextureManager& texManager)
+{
+	auto visitor = overloads{
+		[&](const TexNdfSettings& s) { return texManager.Query(s.texPath); },
+		[&](const auto&) { return texNdfOutput->srv.get(); },
+	};
+	return std::visit(visitor, ndfSettings);
+}
