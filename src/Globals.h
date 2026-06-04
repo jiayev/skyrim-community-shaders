@@ -29,6 +29,7 @@ struct VolumetricLighting;
 struct VR;
 struct WaterEffects;
 struct PerformanceOverlay;
+struct PhysicalLighting;
 struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
@@ -89,6 +90,7 @@ namespace globals
 		extern VR vr;
 		extern WaterEffects waterEffects;
 		extern PerformanceOverlay performanceOverlay;
+		extern PhysicalLighting physicalLighting;
 		extern WetnessEffects wetnessEffects;
 		extern ExtendedTranslucency extendedTranslucency;
 		extern Upscaling upscaling;

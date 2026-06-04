@@ -910,6 +910,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "InverseSquareLighting/InverseSquareLighting.hlsli"
 #	endif
 
+#	if defined(PHYSICAL_LIGHTING) && defined(LIGHT_LIMIT_FIX)
+#		include "PhysicalLighting/PhysicalLighting.hlsli"
+#	endif
+
 #	if defined(TREE_ANIM)
 #		undef WETNESS_EFFECTS
 #	endif
@@ -2867,11 +2871,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
 	{
 		LightLimitFix::Light light;
+		uint physicalLightIndex = 0;
+		bool hasPhysicalLightIndex = false;
 		if (lightIndex < LightLimitFix::NumStrictLights) {
 			light = LightLimitFix::StrictLights[lightIndex];
 		} else {
 			uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + (lightIndex - LightLimitFix::NumStrictLights)];
 			light = LightLimitFix::lights[clusteredLightIndex];
+			physicalLightIndex = clusteredLightIndex;
+			hasPhysicalLightIndex = true;
 
 			if (LightLimitFix::IsLightIgnored(light))
 				continue;
@@ -2892,7 +2900,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 
 		const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
+
+#			if defined(PHYSICAL_LIGHTING)
+		float3 lightColor;
+		if (hasPhysicalLightIndex && PhysicalLighting::IsPhysicalLight(light.lightFlags)) {
+			lightColor = Color::PointLight(PhysicalLighting::GetLightColor(physicalLightIndex, light), true) * intensityMultiplier * PhysicalLighting::GetIntensity(physicalLightIndex, light);
+		} else {
+			lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * light.fade;
+		}
+#			else
 		float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * light.fade;
+#			endif
 		float lightShadow = 1.0;
 
 		float shadowComponent = 1.0;
@@ -2904,6 +2922,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 
 		float3 normalizedLightDirection = normalize(lightDirection);
+#			if defined(PHYSICAL_LIGHTING)
+		if (hasPhysicalLightIndex && (light.lightFlags & LightLimitFix::LightFlags::AreaLight) != 0) {
+			float3 reflectionDirection = reflect(-viewDirection, worldNormal.xyz);
+			normalizedLightDirection = PhysicalLighting::GetAreaLightDirection(physicalLightIndex, input.WorldPosition.xyz, worldNormal.xyz, reflectionDirection, light.positionWS[eyeIndex].xyz);
+		}
+#			endif
 		float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
 
 		float3 refractedLightDirection = normalizedLightDirection;

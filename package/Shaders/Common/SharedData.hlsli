@@ -294,6 +294,13 @@ namespace SharedData
 		uint3 pad;
 	};
 
+	struct PhysicalLightingSettings
+	{
+		float globalIntensityScale;
+		uint enableAreaLights;
+		float2 pad0;
+	};
+
 	struct SkinData
 	{
 		float4 skinParams;
@@ -324,6 +331,7 @@ namespace SharedData
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		TruePBRSettings truePBRSettings;
+		PhysicalLightingSettings physicalLightingSettings;
 		SkinData skinData;
 	};
 

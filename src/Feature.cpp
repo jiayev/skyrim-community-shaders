@@ -19,6 +19,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/PhysicalLighting.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
@@ -235,6 +236,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::volumetricLighting,
 		&globals::features::lodBlending,
 		&globals::features::inverseSquareLighting,
+		&globals::features::physicalLighting,
 		&globals::features::hairSpecular,
 		&globals::features::interiorSun,
 		&globals::features::terrainVariation,

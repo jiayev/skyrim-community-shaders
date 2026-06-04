@@ -17,6 +17,9 @@ namespace LightFlags
 	static const uint Disabled = (1 << 9);
 	static const uint InverseSquare = (1 << 10);
 	static const uint Linear = (1 << 11);
+	static const uint Physical = (1 << 12);
+	static const uint UseColorTemp = (1 << 13);
+	static const uint AreaLight = (1 << 14);
 }
 
 struct ClusterAABB

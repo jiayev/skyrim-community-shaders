@@ -1,6 +1,7 @@
 #include "LightLimitFix.h"
 #include "InverseSquareLighting.h"
 #include "LinearLighting.h"
+#include "PhysicalLighting.h"
 
 #include "I18n/I18n.h"
 #include "Menu/ThemeManager.h"
@@ -431,6 +432,10 @@ void LightLimitFix::UpdateLights()
 						light.radius = runtimeData.radius.x;
 						// light.color *= runtimeData.fade;
 						light.fade = runtimeData.fade;
+					}
+
+					if (globals::features::physicalLighting.loaded) {
+						globals::features::physicalLighting.ProcessPhysicalLight(light, niLight, static_cast<std::uint32_t>(lightsData.size()));
 					}
 
 					light.fade *= bsLight->lodDimmer;

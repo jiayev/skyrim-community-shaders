@@ -1,6 +1,7 @@
 #include "Globals.h"
 
 #include "Deferred.h"
+#include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExponentialHeightFog.h"
@@ -17,6 +18,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/PhysicalLighting.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
@@ -35,7 +37,6 @@
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
-#include "Features/CSEditor.h"
 #include "Features/WetnessEffects.h"
 #include "Menu.h"
 #include "ShaderCache.h"
@@ -81,6 +82,7 @@ namespace globals
 		VR vr{};
 		WaterEffects waterEffects{};
 		PerformanceOverlay performanceOverlay{};
+		PhysicalLighting physicalLighting{};
 		WetnessEffects wetnessEffects{};
 		ExtendedTranslucency extendedTranslucency{};
 		Upscaling upscaling{};

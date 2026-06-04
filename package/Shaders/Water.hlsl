@@ -1047,6 +1047,10 @@ float3 GetSunColor(float3 normal, float3 viewDirection, float3 worldPosition, ui
 #			include "InverseSquareLighting/InverseSquareLighting.hlsli"
 #		endif
 
+#		if defined(PHYSICAL_LIGHTING) && defined(LIGHT_LIMIT_FIX)
+#			include "PhysicalLighting/PhysicalLighting.hlsli"
+#		endif
+
 #		if defined(IBL)
 #			include "IBL/IBL.hlsli"
 #		endif
@@ -1235,7 +1239,17 @@ PS_OUTPUT main(PS_INPUT input)
 			float HdotN = saturate(dot(H, normal));
 
 			const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
+
+#					if defined(PHYSICAL_LIGHTING)
+			float3 lightColor;
+			if (PhysicalLighting::IsPhysicalLight(light.lightFlags)) {
+				lightColor = Color::PointLight(PhysicalLighting::GetLightColor(clusteredLightIndex, light), true) * pow(HdotN, FresnelRI.z) * PhysicalLighting::GetIntensity(clusteredLightIndex, light);
+			} else {
+				lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * pow(HdotN, FresnelRI.z) * light.fade;
+			}
+#					else
 			float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * pow(HdotN, FresnelRI.z) * light.fade;
+#					endif
 			specularLighting += lightColor * intensityMultiplier;
 		}
 	}

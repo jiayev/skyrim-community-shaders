@@ -428,6 +428,10 @@ cbuffer AlphaTestRefCB : register(b11)
 #		include "InverseSquareLighting/InverseSquareLighting.hlsli"
 #	endif
 
+#	if defined(PHYSICAL_LIGHTING) && defined(LIGHT_LIMIT_FIX)
+#		include "PhysicalLighting/PhysicalLighting.hlsli"
+#	endif
+
 #	define SampColorSampler SampBaseSampler
 
 #	if defined(DYNAMIC_CUBEMAPS)
@@ -682,7 +686,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #				endif
 
+#				if defined(PHYSICAL_LIGHTING)
+				float3 lightColor;
+				if (PhysicalLighting::IsPhysicalLight(light.lightFlags)) {
+					lightColor = Color::PointLight(PhysicalLighting::GetLightColor(clusteredLightIndex, light), true) * intensityMultiplier * PhysicalLighting::GetIntensity(clusteredLightIndex, light);
+				} else {
+					lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * light.fade;
+				}
+#				else
 				float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * light.fade;
+#				endif
 				float lightShadow = 1.0;
 
 				float shadowComponent = 1.0;
@@ -877,7 +890,17 @@ PS_OUTPUT main(PS_INPUT input)
 #				endif
 
 				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
+
+#				if defined(PHYSICAL_LIGHTING)
+				float3 lightColor;
+				if (PhysicalLighting::IsPhysicalLight(light.lightFlags)) {
+					lightColor = Color::PointLight(PhysicalLighting::GetLightColor(clusteredLightIndex, light), true) * intensityMultiplier * PhysicalLighting::GetIntensity(clusteredLightIndex, light);
+				} else {
+					lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * light.fade;
+				}
+#				else
 				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * light.fade;
+#				endif
 
 				float lightShadow = 1.0;
 

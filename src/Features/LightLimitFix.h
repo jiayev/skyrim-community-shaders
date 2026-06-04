@@ -34,6 +34,9 @@ public:
 		Disabled = (1 << 9),
 		InverseSquare = (1 << 10),
 		Linear = (1 << 11),
+		Physical = (1 << 12),
+		UseColorTemp = (1 << 13),
+		AreaLight = (1 << 14),
 	};
 
 	struct PositionOpt

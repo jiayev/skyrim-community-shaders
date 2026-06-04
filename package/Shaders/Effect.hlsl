@@ -511,6 +511,10 @@ cbuffer PerGeometry : register(b2)
 #		include "InverseSquareLighting/InverseSquareLighting.hlsli"
 #	endif
 
+#	if defined(PHYSICAL_LIGHTING) && defined(LIGHT_LIMIT_FIX)
+#		include "PhysicalLighting/PhysicalLighting.hlsli"
+#	endif
+
 #	define LinearSampler SampBaseSampler
 
 #	if defined(SKYLIGHTING)
@@ -788,7 +792,17 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 
 			const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
+
+#			if defined(PHYSICAL_LIGHTING)
+			float3 lightColor;
+			if (PhysicalLighting::IsPhysicalLight(light.lightFlags)) {
+				lightColor = Color::PointLight(PhysicalLighting::GetLightColor(clusteredLightIndex, light), true) * intensityMultiplier * 0.5 * PhysicalLighting::GetIntensity(clusteredLightIndex, light) * Color::EffectLightingMult();
+			} else {
+				lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingMult();
+			}
+#			else
 			float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingMult();
+#			endif
 			propertyColor += lightColor;
 		}
 	}
