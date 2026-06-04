@@ -2466,6 +2466,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif  // CS_SKIN
 
+#	if defined(SKIN)
+	material.BaseColor = max(material.BaseColor, EPSILON_SKIN_ALBEDO);
+#	endif
+
 #	if defined(CS_HAIR) && defined(HAIR)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		material.Shininess = SharedData::hairSpecularSettings.HairGlossiness;
