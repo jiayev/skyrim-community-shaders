@@ -780,15 +780,18 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 
 	// ========== Step 1: Regenerate PSF if parameters changed ==========
 	if (NeedsPSFRegeneration()) {
+		globals::profiler->BeginPass("PostProcessing::PhysicalGlare::PSF");
 		GeneratePSF();
 
 		// Re-update CB because GeneratePSF() overwrites it with DeltaTime=0
 		glareCB->Update(cbData);
 		cb = glareCB->CB();
 		context->CSSetConstantBuffers(1, 1, &cb);
+		globals::profiler->EndPass();
 	}
 
 	// ========== Step 2: Threshold + downsample scene into FFT textures ==========
+	globals::profiler->BeginPass("PostProcessing::PhysicalGlare::FFT");
 	{
 		// We write R, G, B channels into texFFT[0..2][0]
 		ID3D11ShaderResourceView* srv = inout_tex.srv;
@@ -848,8 +851,10 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 		// Col IFFT: texFFT[ch][0] -> texFFT[ch][1]
 		DispatchFFT(fftColInvCS.get(), texFFT[ch][0].get(), texFFT[ch][1].get(), currentFFTResolution);
 	}
+	globals::profiler->EndPass();
 
 	// ========== Step 6: Composite (upsample + add to scene) ==========
+	globals::profiler->BeginPass("PostProcessing::PhysicalGlare::Composite");
 	{
 		// t0 = scene, t1/t2/t3 = IFFT result R/G/B (texFFT[ch][1]),
 		// u0 = output
@@ -883,6 +888,7 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 	cb = nullptr;
 	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetShader(nullptr, nullptr, 0);
+	globals::profiler->EndPass();
 
 	state->EndPerfEvent();
 }

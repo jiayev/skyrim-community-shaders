@@ -296,6 +296,7 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 
 	// === Pass 1: Compute synthetic exposure luminances and weights ===
 	{
+		globals::profiler->BeginPass("PostProcessing::LocalExposure::FusionSetup");
 		state->BeginPerfEvent("Fusion Setup");
 
 		updateCB();
@@ -314,10 +315,12 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	// === Pass 2: Build exposure and weight mip chains ===
 	{
+		globals::profiler->BeginPass("PostProcessing::LocalExposure::MipChain");
 		state->BeginPerfEvent("Mip Chain");
 
 		for (uint i = 1; i <= mipLevel; i++) {
@@ -339,10 +342,12 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		}
 
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	// === Pass 3: Reconstruct Gaussian/Laplacian exposure-fusion result ===
 	{
+		globals::profiler->BeginPass("PostProcessing::LocalExposure::FusionBlend");
 		state->BeginPerfEvent("Fusion Blend");
 
 		for (int i = (int)mipLevel; i >= (int)displayMip; i--) {
@@ -373,10 +378,12 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		}
 
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	// === Pass 4: Guided upsample and output raw-HDR exposure multiplier ===
 	{
+		globals::profiler->BeginPass("PostProcessing::LocalExposure::ComputeExposure");
 		state->BeginPerfEvent("Compute Exposure");
 
 		cbData.CurrentMip = 0;
@@ -407,6 +414,7 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	// Cleanup

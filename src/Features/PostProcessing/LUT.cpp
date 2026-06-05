@@ -252,6 +252,7 @@ void LUT::Draw(TextureInfo& inout_tex)
 	if (LutType == -1)
 		return;
 
+	globals::profiler->BeginPass("PostProcessing::LUT");
 	auto context = globals::d3d::context;
 
 	float2 res = { (float)texOutput->desc.Width, (float)texOutput->desc.Height };
@@ -290,4 +291,5 @@ void LUT::Draw(TextureInfo& inout_tex)
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
+	globals::profiler->EndPass();
 }

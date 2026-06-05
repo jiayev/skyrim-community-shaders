@@ -174,6 +174,7 @@ void Border::ClearMotionVectorsForFrameGen()
 
 void Border::Draw(TextureInfo& inout_tex)
 {
+	globals::profiler->BeginPass("PostProcessing::Border");
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 
@@ -188,6 +189,7 @@ void Border::Draw(TextureInfo& inout_tex)
 
 	auto* depthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
 	if (!depthSRV) {
+		globals::profiler->EndPass();
 		return;
 	}
 	auto motion = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
@@ -212,4 +214,5 @@ void Border::Draw(TextureInfo& inout_tex)
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
+	globals::profiler->EndPass();
 }
