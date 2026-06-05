@@ -644,6 +644,12 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 		ImGui::Text("Enable detailed frame annotations for debugging render passes and draw calls.");
 	}
 
+	// Debug device toggle for DirectX 11
+	ImGui::Checkbox("Debug Device", &globals::state->debugDevice);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Enable debug device which will output warnings and errors from DirectX 11");
+	}
+
 	// Half-precision (partial precision) shader compile flag
 	bool partialPrecision = globals::state->enablePartialPrecision.load(std::memory_order_relaxed);
 	if (ImGui::Checkbox("Half Precision (Partial Precision)", &partialPrecision)) {

@@ -171,7 +171,7 @@ void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 	// When paused, UI is composited in HDROutputCS to avoid flickering from inconsistent FidelityFX compositing
 	ffx::ConfigureDescFrameGenerationSwapChainRegisterUiResourceDX12 uiConfig{};
 	if (a_useFrameGeneration) {
-		uiConfig.uiResource = ffxApiGetResourceDX12(swapChain.uiBufferWrapped->resource.get());
+		uiConfig.uiResource = ffxApiGetResourceDX12(swapChain.uiBufferWrapped->GetResource());
 		// Use both premultiplied alpha and double buffering for consistent blending
 		uiConfig.flags = FFX_FRAMEGENERATION_UI_COMPOSITION_FLAG_USE_PREMUL_ALPHA |
 		                 FFX_FRAMEGENERATION_UI_COMPOSITION_FLAG_ENABLE_INTERNAL_UI_DOUBLE_BUFFERING;
@@ -212,8 +212,8 @@ void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 
 		auto& sharedResources = globals::features::dx12Interop.sharedResources;
 
-		dispatchParameters.depth = ffxApiGetResourceDX12(sharedResources.depth->resource.get());
-		dispatchParameters.motionVectors = ffxApiGetResourceDX12(sharedResources.motionVector->resource.get());
+		dispatchParameters.depth = ffxApiGetResourceDX12(sharedResources.depth->GetResource());
+		dispatchParameters.motionVectors = ffxApiGetResourceDX12(sharedResources.motionVector->GetResource());
 
 		ffx::DispatchDescFrameGenerationPrepareCameraInfo cameraConfig{};
 

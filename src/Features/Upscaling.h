@@ -137,6 +137,9 @@ public:
 	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 
+	eastl::array<winrt::com_ptr<ID3D11ComputeShader>, 2> colorSpaceCS;
+	ID3D11ComputeShader* GetColorSpaceCS(bool toLinear);
+
 	eastl::unordered_map<UpscaleMethod, winrt::com_ptr<ID3D11ComputeShader>> encodeTexturesCS;    // One for each UpscaleMethod
 	eastl::unordered_map<UpscaleMethod, winrt::com_ptr<ID3D11ComputeShader>> encodeTexturesPTCS;  // PATH_TRACING variants
 	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCSDepthOutput;                              // FSR + VR: converts R24G8_TYPELESS depth to R32_FLOAT
@@ -240,6 +243,7 @@ public:
 	void PerformUpscaling();
 	void UpscaleDepth();
 	void EncodeTextures();
+	void ConvertColorSpace(bool toLinear);
 
 	/**
 	 * @brief Applies RCAS sharpening to the main render target after DLSS upscaling.

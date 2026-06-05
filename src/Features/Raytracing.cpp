@@ -18,6 +18,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Raytracing::Settings,
 	PerfOverlay,
 	DisplaySceneGraphCounters,
+	DisableVanillaFogPT,
 	CreationEngineRaytracingSettings)
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -245,7 +246,7 @@ void Raytracing::DrawGeneralSettings()
 			rtSettings.SamplesPerPixel = std::clamp(rtSettings.SamplesPerPixel, 1, 32);
 	}
 
-	if (ceRTSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::NRD_REBLUR)
+	if (ceRTSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::NRD)
 		DrawReblurSettings();
 
 	DrawSHaRCSettings();
@@ -441,7 +442,9 @@ void Raytracing::DrawAdvancedSettings()
 
 	DrawEnumCombo("Diffuse BRDF", advSettings.DiffuseBRDF);
 
-	ImGui::Checkbox("Stable Planes", &settings.CreationEngineRaytracingSettings.AdvancedSettings.StablePlanes);
+	ImGui::Checkbox("Stable Planes", &advSettings.StablePlanes);
+
+	ImGui::Checkbox("Disable vanilla fog when pathtracing", &settings.DisableVanillaFogPT);
 
 	ImGui::PopID();
 
@@ -852,17 +855,20 @@ void Raytracing::SetupResources()
 		// Normal Roughness Texture
 		texDesc.Format = DXGI_FORMAT_R16G16B16A16_SNORM;
 		normalRoughnessTexture = eastl::make_unique<WrappedResource>(texDesc);
-
-		// Diffuse Albedo Texture
-		texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
-		diffuseAlbedoTexture = eastl::make_unique<WrappedResource>(texDesc);
 	}
 
 	if (initialized) {
 		creationEngineRaytracing->Initialize(GetSettings());
 
 		creationEngineRaytracing->SetResolution(mainDesc.Width, mainDesc.Height);
-		creationEngineRaytracing->SetSharedTextures(albedoTexture.get(), normalRoughnessTexture->resource.get(), gnmaoTexture.get(), diffuseAlbedoTexture->resource.get());
+		creationEngineRaytracing->SetSharedTextures(albedoTexture.get(), normalRoughnessTexture->GetResource(), gnmaoTexture.get());
+
+		// Diffuse Albedo Texture
+		{
+			CreationEngineRaytracing::SharedTexture diffuseAlbedo;
+			creationEngineRaytracing->GetSharedTextures(diffuseAlbedo);
+			diffuseAlbedoTexture = eastl::make_unique<WrappedResource>(diffuseAlbedo.native, diffuseAlbedo.shared);
+		}
 	}
 
 	auto& d3d11Device = globals::features::dx12Interop.d3d11Device;
@@ -909,7 +915,7 @@ void Raytracing::SetupResources()
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
 		skyHemisphere = eastl::make_unique<WrappedResource>(texDesc);
-		DX::ThrowIfFailed(skyHemisphere->resource->SetName(L"Sky Hemisphere"));
+		DX::ThrowIfFailed(skyHemisphere->GetResource()->SetName(L"Sky Hemisphere"));
 
 		// Setup TESWaterReflections
 		waterReflections = RE::NiPointer(new RE::TESWaterReflections());
@@ -920,7 +926,7 @@ void Raytracing::SetupResources()
 			waterReflections->cubeMapSides[i] = RE::TESWaterReflections::CubeMapSide(i, 0.0f);
 		}
 
-		creationEngineRaytracing->SetSkyHemisphere(skyHemisphere->resource.get());
+		creationEngineRaytracing->SetSkyHemisphere(skyHemisphere->GetResource());
 	}
 
 	// Physical Sky Transmittance LUT
@@ -952,14 +958,12 @@ void Raytracing::SetupResources()
 		texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 		texDesc.SampleDesc.Count = 1;
 		texDesc.SampleDesc.Quality = 0;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 
 		waterFlowMap = eastl::make_unique<WrappedResource>(texDesc);
-		waterFlowMapFallbackCleared = false;
-		DX::ThrowIfFailed(waterFlowMap->resource->SetName(L"Water FlowMap"));
+		DX::ThrowIfFailed(waterFlowMap->GetResource()->SetName(L"Water FlowMap"));
 
-		if (creationEngineRaytracing->SetWaterFlowMap)
-			creationEngineRaytracing->SetWaterFlowMap(waterFlowMap->resource.get());
+		creationEngineRaytracing->SetWaterFlowMap(waterFlowMap->GetResource());
 	}
 
 	CompileShaders();
@@ -1277,10 +1281,10 @@ void Raytracing::DeferredPasses()
 	if (!mainTexture || resolutionChanged) {
 		desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 		mainTexture = eastl::make_unique<WrappedResource>(desc);
-		creationEngineRaytracing->SetCopyTarget(mainTexture->resource.get());
+		creationEngineRaytracing->SetCopyTarget(mainTexture->GetResource());
 	}
 
-	if (Mode() == CreationEngineRaytracing::Mode::PathTracing && creationEngineRaytracing->SetPTOutputTargets) {
+	if (Mode() == CreationEngineRaytracing::Mode::PathTracing) {
 		if (!ptDepthTexture || resolutionChanged) {
 			desc.Format = DXGI_FORMAT_R32_FLOAT;
 			ptDepthTexture = eastl::make_unique<WrappedResource>(desc);
@@ -1289,7 +1293,7 @@ void Raytracing::DeferredPasses()
 			desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 			ptMotionVectorsTexture = eastl::make_unique<WrappedResource>(desc);
 		}
-		creationEngineRaytracing->SetPTOutputTargets(ptDepthTexture->resource.get(), ptMotionVectorsTexture->resource.get());
+		creationEngineRaytracing->SetPTOutputTargets(ptDepthTexture->GetResource(), ptMotionVectorsTexture->GetResource());
 	} else {
 		ptDepthTexture.reset();
 		ptMotionVectorsTexture.reset();
@@ -1329,7 +1333,16 @@ void Raytracing::DeferredPasses()
 
 	auto& main = renderTargets[RE::RENDER_TARGETS::kMAIN];
 
-	if (mode == CreationEngineRaytracing::Mode::GlobalIllumination) {
+	const bool globalIllumation = (mode == CreationEngineRaytracing::Mode::GlobalIllumination);
+	const bool pathtracing = (mode == CreationEngineRaytracing::Mode::PathTracing);
+
+	// Force fog off
+	if (settings.DisableVanillaFogPT) {
+		static auto& enableFog = (*(bool*)REL::RelocationID(528125, 415070).address());
+		enableFog = !pathtracing;
+	}
+
+	if (globalIllumation) {
 		// Add GI result to kMain
 		{
 			context->CSSetShader(giCompositeCS.get(), nullptr, 0);
@@ -1348,7 +1361,7 @@ void Raytracing::DeferredPasses()
 			uav = nullptr;
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		}
-	} else if (mode == CreationEngineRaytracing::Mode::PathTracing) {
+	} else if (pathtracing) {
 		// Blend PT and Sky
 		{
 			context->CSSetShader(ptCompositeCS.get(), nullptr, 0);
@@ -1467,8 +1480,8 @@ void Raytracing::GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D
 	if (Mode() != CreationEngineRaytracing::Mode::GlobalIllumination && Mode() != CreationEngineRaytracing::Mode::PathTracing)
 		return;
 
-	diffuseAlbedo = diffuseAlbedoTexture->resource.get();
-	normalRoughness = normalRoughnessTexture->resource.get();
+	diffuseAlbedo = diffuseAlbedoTexture->GetResource();
+	normalRoughness = normalRoughnessTexture->GetResource();
 
 	creationEngineRaytracing->GetRRInput(specularAlbedo, specHitDistance);
 }

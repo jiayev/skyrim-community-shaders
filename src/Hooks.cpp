@@ -361,6 +361,9 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 	pAdapter->GetDesc(&adapterDesc);
 	globals::state->SetAdapterDescription(adapterDesc.Description);
 
+	if (globals::state->debugDevice)
+		Flags |= D3D11_CREATE_DEVICE_DEBUG;
+
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
 
 	DXGI_SWAP_CHAIN_DESC modifiedDesc = *pSwapChainDesc;
