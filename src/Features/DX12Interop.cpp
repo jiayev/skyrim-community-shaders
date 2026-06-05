@@ -2,8 +2,9 @@
 
 #include <dxgi1_6.h>
 
-#include "Features/Upscaling.h"
+#include "../I18n/I18n.h"
 #include "Features/Raytracing.h"
+#include "Features/Upscaling.h"
 
 // Microsoft Pix
 #include <filesystem>
@@ -38,26 +39,28 @@ void DX12Interop::SaveSettings(json& o_json)
 	o_json = settings;
 }
 
+#define I18N_KEY_PREFIX "feature.dx12_interop."
 
 void DX12Interop::DrawSettings()
 {
-	ImGui::Checkbox("Enable PIX Capture", &settings.EnablePIXCapture);
+	ImGui::Checkbox(T(TKEY("enable_pix_capture"), "Enable PIX Capture"), &settings.EnablePIXCapture);
 
 	if (settings.EnablePIXCapture)
-		if (ImGui::Button("Capture")) {
+		if (ImGui::Button(T(TKEY("capture"), "Capture"))) {
 			pixCapture = true;
 			pixCaptureStarted = false;
 		}
 
-	ImGui::Checkbox("Enable Debug Device", &settings.EnableDebugDevice);
+	ImGui::Checkbox(T(TKEY("enable_debug_device"), "Enable Debug Device"), &settings.EnableDebugDevice);
 
 	if (settings.EnableDebugDevice) {
-		ImGui::Checkbox("Break on corruption", &settings.DebugBreakCorruption);
-		ImGui::Checkbox("Break on error", &settings.DebugBreakError);
-		ImGui::Checkbox("Break on warning", &settings.DebugBreakWarning);
-
+		ImGui::Checkbox(T(TKEY("break_on_corruption"), "Break on corruption"), &settings.DebugBreakCorruption);
+		ImGui::Checkbox(T(TKEY("break_on_error"), "Break on error"), &settings.DebugBreakError);
+		ImGui::Checkbox(T(TKEY("break_on_warning"), "Break on warning"), &settings.DebugBreakWarning);
 	}
 }
+
+#undef I18N_KEY_PREFIX
 
 static std::wstring GetLatestWinPixGpuCapturerPath()
 {
@@ -150,7 +153,7 @@ void DX12Interop::CreateD3D12Device(IDXGIAdapter* a_adapter)
 			debugController->SetEnableGPUBasedValidation(FALSE);
 		} else {
 			logger::critical("[DX12Interop] Debug layer creation failed.");
-		}		
+		}
 	}
 
 	auto& rt = globals::features::raytracing;
@@ -229,7 +232,7 @@ void DX12Interop::SetupResources()
 	mainDesc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
 	sharedResources.motionVector = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
 
-	// 
+	//
 	mainDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
 	sharedResources.main = new WrappedResource(mainDesc, d3d11Device.get(), d3d12Device.get());
 

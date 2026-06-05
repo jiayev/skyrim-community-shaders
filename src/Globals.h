@@ -33,12 +33,14 @@ struct PerformanceOverlay;
 struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
-struct WeatherEditor;
+class Profiler;
+struct CSEditor;
 struct Raytracing;
 struct SceneGraphExplorer;
 struct ExponentialHeightFog;
 struct HDRDisplay;
 struct ScreenshotFeature;
+struct Skin;
 
 class State;
 class Deferred;
@@ -97,11 +99,12 @@ namespace globals
 		extern HDRDisplay hdrDisplay;
 		extern RenderDoc renderDoc;
 		extern ScreenshotFeature screenshotFeature;
-		extern WeatherEditor weatherEditor;
+		extern CSEditor csEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern Raytracing raytracing;
 		extern SceneGraphExplorer sceneGraphExplorer;
 		extern TruePBR truePBR;
+		extern Skin skin;
 
 		namespace llf
 		{
@@ -222,7 +225,6 @@ namespace globals
 		extern RE::BSGraphics::Renderer* renderer;
 		extern RE::BSShaderManager::State* smState;
 		extern RE::TES* tes;
-		extern RE::TESWaterSystem* waterSystem;
 		extern bool isVR;
 		extern RE::MemoryManager* memoryManager;
 		extern RE::INISettingCollection* iniSettingCollection;
@@ -268,6 +270,7 @@ namespace globals
 	extern Deferred* deferred;
 	extern Menu* menu;
 	extern SIE::ShaderCache* shaderCache;
+	extern Profiler* profiler;
 
 	void OnInit();
 	void ReInit();

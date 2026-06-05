@@ -14,6 +14,7 @@ struct ScreenshotFeature : public Feature
 {
 	virtual ~ScreenshotFeature();
 	virtual std::string GetName() override { return "Screenshot"; }
+	virtual std::string GetDisplayName() override { return T("feature.screenshot.name", "Screenshot"); }
 	virtual std::string GetShortName() override { return "Screenshot"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 
@@ -27,10 +28,18 @@ struct ScreenshotFeature : public Feature
 	virtual void PostPostLoad() override;
 
 	void Capture();
+	// Runs after HDR Present processing so the back buffer matches what's on screen.
+	void ProcessCaptureRequest();
 	bool applyCropToScreenshot = true;
 
 	// Settings
 	std::string screenshotPath = "Screenshots";
+	// HDR PNG quantization (7-16); used when HDR Display captures the back buffer.
+	unsigned int hdrPngBitDepth = 11;
+	// SDR / VR output (HDR captures always use PNG).
+	bool sdrUsePng = false;
+	// After save, put the file path on the clipboard (CF_HDROP).
+	bool copyToClipboard = false;
 
 	std::atomic<bool> captureRequested{ false };
 
@@ -42,6 +51,10 @@ private:
 		uint32_t width = 0;
 		uint32_t height = 0;
 		std::filesystem::path outputPath;
+		bool saveAsHdrPng = false;
+		bool saveAsSdrPng = false;
+		int hdrPngBitDepth = 11;
+		bool copyToClipboard = false;
 	};
 
 	std::mutex screenshotQueueMutex;

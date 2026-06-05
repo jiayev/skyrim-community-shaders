@@ -60,13 +60,9 @@ namespace SharedData
 	struct CubemapCreatorSettings
 	{
 		uint Enabled;
-		uint EnabledSSR;
-		float2 pad0;
+		float3 pad0;
 
 		float4 CubemapColor;
-
-		float ReflectionFallbackAmount;
-		float3 pad1;
 	};
 
 	struct TerraOccSettings
@@ -270,7 +266,26 @@ namespace SharedData
 		uint disableVanillaFog;
 		float4 fogInscatteringColor;
 		float originalFogColorAmount;
-		float3 pad;
+		uint volumetricFogEnabled;
+		uint volumetricGridPixelSize;
+		uint volumetricGridSizeZ;
+		float volumetricFogDistance;
+		float volumetricFogStartDistance;
+		float volumetricFogNearFadeInDistance;
+		float volumetricFogExtinctionScale;
+		float4 volumetricFogAlbedo;
+		float4 volumetricFogEmissive;
+		float volumetricDirectionalScatteringIntensity;
+		float volumetricShadowBias;
+		float volumetricDepthDistributionScale;
+		float volumetricSkyLightingIntensity;
+		float volumetricFogScatteringDistribution;
+		float volumetricHistoryWeight;
+		uint volumetricHistoryMissSampleCount;
+		float volumetricSampleJitterMultiplier;
+		float volumetricUpsampleJitterMultiplier;
+		float volumetricLocalLightScatteringIntensity;
+		float2 pad0;
 	};
 
 	struct RaytracingSettings
@@ -287,6 +302,17 @@ namespace SharedData
 	{
 		float VertexAOStrength;
 		uint3 pad;
+	};
+
+	struct SkinData
+	{
+		float4 skinParams;
+		float4 skinParams2;
+		float4 skinDetailParams;
+		float4 sssParams;
+		float4 fuzzParams;
+		float4 physicalParams;
+		float4 wetParams;
 	};
 
 	cbuffer FeatureData : register(b6)
@@ -309,6 +335,7 @@ namespace SharedData
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		RaytracingSettings raytracingSettings;
 		TruePBRSettings truePBRSettings;
+		SkinData skinData;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

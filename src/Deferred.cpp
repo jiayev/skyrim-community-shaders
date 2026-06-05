@@ -6,6 +6,7 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
+#include "Features/CSEditor.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/IBL.h"
 #include "Features/Raytracing.h"
@@ -15,7 +16,6 @@
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
-#include "Features/WeatherEditor.h"
 
 #include "Hooks.h"
 
@@ -116,8 +116,8 @@ void Deferred::SetupResources()
 		SetupRenderTarget(MASKS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 
 		// TAA Water Buffers
-		SetupRenderTarget(RE::RENDER_TARGETS::kWATER_1, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
-		SetupRenderTarget(RE::RENDER_TARGETS::kWATER_2, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+		SetupRenderTarget(RE::RENDER_TARGETS::kWATER_1, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+		SetupRenderTarget(RE::RENDER_TARGETS::kWATER_2, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 
 		if (rt.loaded)
 			SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R10G10B10A2_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, miscFlags);
@@ -406,7 +406,9 @@ void Deferred::DeferredPasses()
 
 		{
 			TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite - Dispatch");
+			globals::profiler->BeginPass("DeferredComposite");
 			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+			globals::profiler->EndPass();
 		}
 
 		// Unbind mode texture SRV
@@ -426,7 +428,9 @@ void Deferred::DeferredPasses()
 	// VR: Stereo reprojection fills Eye 1 holes here (after DeferredComposite, before SSR/water/sky)
 	// so that ISReflectionsRayTracing sees valid pixels in both eyes.
 	if (globals::game::isVR) {
+		globals::profiler->BeginPass("VR::StereoBlend");
 		globals::features::vr.DrawStereoBlend();
+		globals::profiler->EndPass();
 	}
 
 	// Clear
