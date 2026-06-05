@@ -955,8 +955,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #			if !defined(DEFERRED) && defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
-		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), input.Position.xy, length(input.WorldPosition.xyz), SampColorSampler);
-		psout.Diffuse.xyz = psout.Diffuse.xyz * apSample.w + apSample.xyz;
+		psout.Diffuse.xyz = PhysSky::CompositeAerialPerspective(psout.Diffuse.xyz, normalize(input.WorldPosition.xyz), input.Position.xy, screenUV, length(input.WorldPosition.xyz), SampColorSampler);
 	}
 #			endif
 

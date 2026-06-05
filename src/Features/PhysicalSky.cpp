@@ -885,12 +885,14 @@ void PhysicalSky::Prepass()
 			FLOAT lumClr[4] = { 0.f, 0.f, 0.f, 0.f };
 			context->ClearUnorderedAccessViewFloat(texVolTr->uav.get(), trClr);
 			context->ClearUnorderedAccessViewFloat(texVolLum->uav.get(), lumClr);
+			if (texShadowVolume)
+				context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), lumClr);
 		}
 
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get(), texApShadow->srv.get() };
 		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
 
-		// Bind volumetric cloud results for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
+		// Bind volumetric cloud results and shadow volume for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
 		if (texVolTr && texVolLum) {
 			std::array<ID3D11ShaderResourceView*, 3> volSrvs = { texVolTr->srv.get(), texVolLum->srv.get(), texShadowVolume ? texShadowVolume->srv.get() : nullptr };
 			globals::d3d::context->PSSetShaderResources(110, (uint)volSrvs.size(), volSrvs.data());
