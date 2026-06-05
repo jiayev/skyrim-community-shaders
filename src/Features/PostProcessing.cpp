@@ -516,16 +516,12 @@ void PostProcessing::CopyToRenderTarget(
 
 void PostProcessing::DrawFeature(PostProcessFeature& feature, PostProcessFeature::TextureInfo& lastTexColor)
 {
-	globals::profiler->BeginPass(std::format("PostProcessing::{}", feature.GetType()));
-
 	if (feature.WritesToMainTexture()) {
 		feature.Draw(lastTexColor);
 	} else {
 		PostProcessFeature::TextureInfo inTex = lastTexColor;
 		feature.Draw(inTex);
 	}
-
-	globals::profiler->EndPass();
 }
 
 void PostProcessing::DrawBeforeUpscaling()

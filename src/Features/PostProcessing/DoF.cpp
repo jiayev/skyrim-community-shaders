@@ -466,6 +466,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 	// Calculate CoC
 	{
+		globals::profiler->BeginPass("PostProcessing::DoF::CoC");
 		state->BeginPerfEvent("Calculate CoC");
 		srvs.at(0) = inout_tex.srv;
 		srvs.at(1) = texPreFocus->srv.get();
@@ -478,12 +479,14 @@ void DoF::Draw(TextureInfo& inout_tex)
 		context->CSSetShader(CalculateCoCCS.get(), nullptr, 0);
 		context->Dispatch(dispatchWidth, dispatchHeight, 1);
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	resetViews();
 
 	// CoC Tile
 	{
+		globals::profiler->BeginPass("PostProcessing::DoF::CoCTile");
 		state->BeginPerfEvent("CoC Tile");
 		srvs.at(3) = texCoC->srv.get();
 		uavs.at(2) = texCoCTileTmp->uav.get();
@@ -518,10 +521,12 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	// CoC Gaussian Blur (coc uses srv3 and uav2)
 	{
+		globals::profiler->BeginPass("PostProcessing::DoF::CoCBlur");
 		state->BeginPerfEvent("CoC Gaussian Blur");
 		srvs.at(3) = texCoCTileNeighbor->srv.get();
 		uavs.at(2) = texCoCBlur1->uav.get();
@@ -545,10 +550,12 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	// Blur
 	{
+		globals::profiler->BeginPass("PostProcessing::DoF::PreBlur");
 		state->BeginPerfEvent("Pre Blur");
 		srvs.at(0) = inout_tex.srv;
 		srvs.at(3) = texCoC->srv.get();
@@ -563,7 +570,9 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 
+		globals::profiler->BeginPass("PostProcessing::DoF::FarBlur");
 		state->BeginPerfEvent("Far Blur");
 		srvs.at(0) = texPreBlurred->srv.get();
 		srvs.at(3) = texCoC->srv.get();
@@ -580,7 +589,9 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 
+		globals::profiler->BeginPass("PostProcessing::DoF::NearBlur");
 		state->BeginPerfEvent("Near Blur");
 		srvs.at(0) = texFarBlurred->srv.get();
 		srvs.at(3) = texCoCTileNeighbor->srv.get();
@@ -597,10 +608,12 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	// Tent Filter
 	{
+		globals::profiler->BeginPass("PostProcessing::DoF::TentFilter");
 		state->BeginPerfEvent("Tent Filter");
 		srvs.at(0) = texFarBlurred->srv.get();
 		uavs.at(0) = texBlurredFiltered->uav.get();
@@ -613,10 +626,12 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	// Combiner
 	{
+		globals::profiler->BeginPass("PostProcessing::DoF::Combiner");
 		state->BeginPerfEvent("Combiner");
 		srvs.at(0) = inout_tex.srv;
 		srvs.at(3) = texCoC->srv.get();
@@ -632,10 +647,12 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	// Post Smooth
 	{
+		globals::profiler->BeginPass("PostProcessing::DoF::PostSmooth");
 		state->BeginPerfEvent("Post Smooth");
 		srvs.at(0) = texPostSmooth->srv.get();
 		srvs.at(3) = texCoC->srv.get();
@@ -662,6 +679,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	samplers.fill(nullptr);
