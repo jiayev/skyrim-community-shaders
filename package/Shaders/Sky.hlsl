@@ -299,6 +299,9 @@ PS_OUTPUT main(PS_INPUT input)
 		baseColor.rgb = PhysSky::RelightCloud(baseColor, viewDir, float3(0, 0, 0) + viewDir * psCloudDist, PhysSky::SampTr, SampBaseSampler);
 	else if (SharedData::physSkyData.enabled && !SharedData::physSkyData.enableVanillaClouds)
 		baseColor.a = 0;  // Hide vanilla clouds when disabled
+#		elif defined(PS_CLOUDS)
+	if (SharedData::physSkyData.enabled && !SharedData::physSkyData.enableVanillaClouds)
+		baseColor.a = 0;  // Hide vanilla clouds when disabled (no cloud shadows)
 #		endif
 
 #		if defined(DITHER)
@@ -336,19 +339,24 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color = float4(0, 0, 0, 1.0);
 #	endif  // OCCLUSION
 
+	const bool inReflection = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0;
 #	if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
 #		if defined(DITHER) && !defined(TEX)
 		// SKY
 		float3 skyViewDir = normalize(input.WorldPosition.xyz);
 		float skyShadow = GetPhysSkyCloudShadow(skyViewDir, input.Position.xy);
-		float3 skyColor = PhysSky::SampleSky(skyViewDir, skyShadow, PhysSky::SampSv);
+		float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
+		float3 physSkyColor = PhysSky::SampleSky(skyViewDir, skyShadow, PhysSky::SampSv);
+		float3 skyColor = (SharedData::physSkyData.enableVolumetricClouds && !inReflection) ? PhysSky::CompositeVolumetricCloudsUv(physSkyColor, physSkyScreenUV, PhysSky::SampSv) : physSkyColor;
 		psout.Color.xyz = lerp(skyColor, psout.Color.xyz, SharedData::physSkyData.vanillaMix);
 
 #		elif defined(PS_CLOUDS)
-		float apShadow = GetPhysSkyCloudShadow(viewDir, input.Position.xy);
-		float4 apColor = PhysSky::SampleAp(viewDir, psCloudDist, apShadow, PhysSky::SampSv);
-		psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
+		if (!SharedData::physSkyData.enableVolumetricClouds) {
+			float apShadow = GetPhysSkyCloudShadow(viewDir, input.Position.xy);
+			float4 apColor = PhysSky::SampleAp(viewDir, psCloudDist, apShadow, PhysSky::SampSv);
+			psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
+		}
 #		elif defined(TEX) && defined(DEFERRED)
 		float3 sunDir = normalize(SharedData::physSkyData.sunDir);
 		float cosTheta = saturate(dot(normalize(input.WorldPosition.xyz), sunDir));
@@ -367,12 +375,13 @@ PS_OUTPUT main(PS_INPUT input)
 			psout.Color.xyz = sunDiskColor;
 			psout.Color.w = 1.0;
 		}
+		float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
+		psout.Color.xyz = PhysSky::CompositeVolumetricCloudsUv(psout.Color.xyz, physSkyScreenUV, PhysSky::SampSv);
 #		endif
 	}
 #	endif
 
 #	if defined(EXP_HEIGHT_FOG)
-	const bool inReflection = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0;
 	if (inReflection && SharedData::exponentialHeightFogSettings.enabled) {
 		float3 skyFogPosition = normalize(input.FogPosition.xyz) * SharedData::CameraData.x;
 		float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFogNoVolumetric(skyFogPosition, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, psout.Color.xyz, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
