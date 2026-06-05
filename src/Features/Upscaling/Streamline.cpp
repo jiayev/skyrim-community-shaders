@@ -181,6 +181,8 @@ void Streamline::LoadInterposer(bool a_d3d12Mode)
 void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 {
 	logger::info("[Streamline] Checking features");
+	loadedFeatures = Features::kNone;
+
 	DXGI_ADAPTER_DESC adapterDesc;
 	a_adapter->GetDesc(&adapterDesc);
 	reflexSupportedOnCurrentAdapter = adapterDesc.VendorId == NVIDIA_VENDOR_ID;
@@ -814,7 +816,7 @@ void Streamline::EvaluateDLSSD(ID3D12GraphicsCommandList4* commandList, sl::View
 	}
 }
 
-void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)
+void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* colorOut, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)
 {
 	if (d3d12Mode) {
 		logger::critical("[Upscaling] D3D11 Upscale method called in D3D12 mode.");
@@ -829,11 +831,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	auto screenSize = state->screenSize;
 	auto renderSize = Util::ConvertToDynamic(screenSize);
 
-	// When RCAS sharpening is active, direct DLSS output to sharpenerTexture so RCAS can
-	// sharpen directly into kMAIN.UAV without a CopyResource round-trip.
 	auto& upscaling = globals::features::upscaling;
-	ID3D11Resource* colorOut =
-		(upscaling.settings.sharpnessDLSS > 0.0f && upscaling.sharpenerTexture) ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
 
 	// VR stereo DLSS: NGX D3D11 only accepts zero-offset subrects. Non-zero offsets return
 	// FAIL_InvalidParameter because Streamline's dlssEntry.cpp never sets

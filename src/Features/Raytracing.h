@@ -20,6 +20,7 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/HairSpecular.h"
+#include "Features/LODBlending.h"
 #include "Features/LinearLighting.h"
 #include "Features/Skin.h"
 #include "Features/Upscaling.h"
@@ -358,7 +359,7 @@ struct CreationEngineRaytracing
 
 	struct ExperimentalSettings
 	{
-		bool PathTracingCull = false;
+		bool PathTracingCull = true;
 		TextureMode TextureMode = TextureMode::Share;
 		uint32_t TextureCutOff = 0;
 
@@ -432,7 +433,6 @@ struct CreationEngineRaytracing
 	using PostExecutionFn = void (*)();
 	using GetResolutionFn = void (*)(uint32_t&, uint32_t&);
 	using SetResolutionFn = void (*)(uint32_t, uint32_t);
-	using SetCopyTargetFn = void (*)(ID3D12Resource*);
 	using UpdateFeatureDataFn = void (*)(void*, uint32_t);
 	using SetSkyHemisphereFn = void (*)(ID3D12Resource*);
 	using SetWaterFlowMapFn = void (*)(ID3D12Resource*);
@@ -440,7 +440,7 @@ struct CreationEngineRaytracing
 	using UpdateSettingsFn = void (*)(Settings);
 	using GetRRInputFn = void (*)(ID3D12Resource*&, ID3D12Resource*&);
 	using SetSharedTexturesFn = void (*)(ID3D12Resource*, ID3D12Resource*, ID3D12Resource*);
-	using GetSharedTexturesFn = void (*)(SharedTexture&);
+	using GetSharedTexturesFn = void (*)(SharedTexture&, SharedTexture&);
 	using UpdateJitterFn = void (*)(float2);
 	using SetSkinDetailNormalFn = void (*)(ID3D12Resource*);
 	using SetPTOutputTargetsFn = void (*)(ID3D12Resource*, ID3D12Resource*);
@@ -455,7 +455,6 @@ struct CreationEngineRaytracing
 	WaitExecutionFn WaitExecution = nullptr;
 	PostExecutionFn PostExecution = nullptr;
 	SetResolutionFn SetResolution = nullptr;
-	SetCopyTargetFn SetCopyTarget = nullptr;
 	UpdateFeatureDataFn UpdateFeatureData = nullptr;
 	SetSkyHemisphereFn SetSkyHemisphere = nullptr;
 	SetWaterFlowMapFn SetWaterFlowMap = nullptr;
@@ -490,7 +489,6 @@ struct CreationEngineRaytracing
 		LOAD_FN(WaitExecution);
 		LOAD_FN(PostExecution);
 		LOAD_FN(SetResolution);
-		LOAD_FN(SetCopyTarget);
 		LOAD_FN(UpdateFeatureData);
 		LOAD_FN(SetSkyHemisphere);
 		LOAD_FN(SetWaterFlowMap);
@@ -555,7 +553,7 @@ struct Raytracing : public OverlayFeature
 
 	virtual bool IsInMenu() const override { return true; }
 
-	virtual bool IsOverlayVisible() const override { return Active() && settings.PerfOverlay != OverlayMode::None; };
+	virtual bool IsOverlayVisible() const override { return Available() && settings.PerfOverlay != OverlayMode::None; };
 
 	virtual void DrawOverlay() override;
 
@@ -572,7 +570,7 @@ struct Raytracing : public OverlayFeature
 		};
 	}
 
-	bool Active() const;
+	bool Available(bool a_initialized = true) const;
 
 	// Resources
 	virtual void SetupResources() override;
@@ -613,12 +611,17 @@ struct Raytracing : public OverlayFeature
 
 	inline CreationEngineRaytracing::Mode Mode() const
 	{
-		return Active() ? settings.CreationEngineRaytracingSettings.GeneralSettings.Mode : CreationEngineRaytracing::Mode::None;
+		return Available() ? settings.CreationEngineRaytracingSettings.GeneralSettings.Mode : CreationEngineRaytracing::Mode::None;
 	}
 
 	inline bool IsPathTracing() const
 	{
 		return Mode() == CreationEngineRaytracing::Mode::PathTracing;
+	}
+
+	inline bool IsPathTracingCull() const
+	{
+		return Mode() == CreationEngineRaytracing::Mode::PathTracing && settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull;
 	}
 
 	enum struct OverlayMode
@@ -665,6 +668,7 @@ struct Raytracing : public OverlayFeature
 		ExtendedTranslucency::PerFrame ExtendedTranslucency;
 		LinearLighting::PerFrameData LinearLighting;
 		ExponentialHeightFog::Settings ExponentialHeightFog;
+		LODBlending::Settings LODBlending;
 		Skin::SkinData Skin;
 	};
 
@@ -725,6 +729,8 @@ struct Raytracing : public OverlayFeature
 
 	winrt::com_ptr<ID3D11VertexShader> copyDMVVS = nullptr;
 	winrt::com_ptr<ID3D11PixelShader> copyDMVPS = nullptr;
+	winrt::com_ptr<ID3D11BlendState> copyBlendState;
+	winrt::com_ptr<ID3D11RasterizerState> copyRasterizerState;
 	winrt::com_ptr<ID3D11DepthStencilState> depthStencilState = nullptr;
 
 	ID3D11Texture2D* lastSkinDetailTexture = nullptr;
@@ -738,7 +744,7 @@ struct Raytracing : public OverlayFeature
 			{
 				auto& rt = globals::features::raytracing;
 
-				if (rt.Active()) {
+				if (rt.Available()) {
 					rt.UpdateFeatureData();
 					rt.SkyCubeToHemi();
 
@@ -746,6 +752,20 @@ struct Raytracing : public OverlayFeature
 
 					// Executes the render graph for path tracing, no dependecy on any game render target so we start as early as possible
 					if (rt.Mode() == CreationEngineRaytracing::Mode::PathTracing) {
+						// Clear Depth if culling is enabled
+						if (rt.IsPathTracingCull()) {
+							auto depthStencils = globals::game::renderer->GetDepthStencilData().depthStencils;
+
+							auto& mainDepth = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+							auto& mainDepthCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
+							auto& zPrePassCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
+							auto context = globals::d3d::context;
+							context->ClearDepthStencilView(mainDepth.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+							context->ClearDepthStencilView(mainDepthCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+							context->ClearDepthStencilView(zPrePassCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+						}
+
 						rt.creationEngineRaytracing->Execute();
 					}
 				}
@@ -779,7 +799,7 @@ struct Raytracing : public OverlayFeature
 			static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
 			{
 				auto& rt = globals::features::raytracing;
-				if (rt.Active() && rt.Mode() == CreationEngineRaytracing::Mode::PathTracing)
+				if (rt.Available() && rt.Mode() == CreationEngineRaytracing::Mode::PathTracing)
 					return;
 
 				func(imageSpaceShader, shape, param);

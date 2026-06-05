@@ -51,15 +51,22 @@ static void DrawFloat2(const char* label, float2& v, float min = 0.0f, float max
 	}
 }
 
-template <typename T>
-	requires std::is_enum_v<T>
-static bool DrawEnumRadio(const char* label, T& variable, const char* tooltip = nullptr, const char* const* tooltips = nullptr)
+static std::string StableLabel(const char* label, std::string_view id)
 {
-	ImGui::PushID(label);
+	return std::format("{}###{}", label, id);
+}
+
+template <typename T, size_t N>
+	requires std::is_enum_v<T>
+static bool DrawEnumRadio(const char* label, const char* id, T& variable, const std::array<const char*, N>& labels, const char* tooltip = nullptr)
+{
+	static_assert(N == magic_enum::enum_count<T>(), "Enum label count must match enum count.");
+
+	ImGui::PushID(id);
 
 	auto variablePrev = variable;
 
-	int denoiser = static_cast<int32_t>(variable);
+	int enumValue = static_cast<int32_t>(variable);
 	ImGui::TextUnformatted(label);
 
 	if (tooltip != nullptr)
@@ -73,42 +80,41 @@ static bool DrawEnumRadio(const char* label, T& variable, const char* tooltip = 
 
 	for (auto& [value, name] : magic_enum::enum_entries<T>()) {
 		ImGui::SameLine();
-		ImGui::RadioButton(name.data(), &denoiser, static_cast<int32_t>(value));
-
-		if (tooltips != nullptr)
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", tooltips[i]);
+		const auto itemLabel = StableLabel(labels[i], name);
+		ImGui::RadioButton(itemLabel.c_str(), &enumValue, static_cast<int32_t>(value));
 
 		i++;
 	}
 
 	ImGui::PopID();
 
-	variable = static_cast<T>(denoiser);
+	variable = static_cast<T>(enumValue);
 
 	return variable != variablePrev;
 }
 
-template <typename T>
+template <typename T, size_t N>
 	requires std::is_enum_v<T>
-static bool DrawEnumCombo(const char* label, T& variable, const char* tooltip = nullptr, const char* const* tooltips = nullptr)
+static bool DrawEnumCombo(const char* label, const char* id, T& variable, const std::array<const char*, N>& labels, const char* tooltip = nullptr)
 {
-	ImGui::PushID(label);
+	static_assert(N == magic_enum::enum_count<T>(), "Enum label count must match enum count.");
+
+	ImGui::PushID(id);
 
 	auto variablePrev = variable;
 
-	if (ImGui::BeginCombo(label, magic_enum::enum_name(variable).data())) {
+	const auto currentIndex = magic_enum::enum_index(variable);
+	const auto comboLabel = StableLabel(label, "Combo");
+
+	if (ImGui::BeginCombo(comboLabel.c_str(), currentIndex ? labels[*currentIndex] : "")) {
 		auto i = 0;
 
 		for (auto& value : magic_enum::enum_values<T>()) {
 			bool isSelected = (variable == value);
+			const auto itemLabel = StableLabel(labels[i], magic_enum::enum_name(value));
 
-			if (ImGui::Selectable(magic_enum::enum_name(value).data(), isSelected))
+			if (ImGui::Selectable(itemLabel.c_str(), isSelected))
 				variable = value;
-
-			if (tooltips != nullptr)
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", tooltips[i]);
 
 			if (isSelected)
 				ImGui::SetItemDefaultFocus();
@@ -143,15 +149,15 @@ void Raytracing::DrawSettings()
 		ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), T(TKEY("ray_tracing_disabled"), "Ray tracing is disabled: %s"), [&]() {
 			switch (disableReason) {
 			case DisableReason::UnsupportedGPU:
-				return "Unsupported GPU.";
+				return T(TKEY("disable_reason_unsupported_gpu"), "Unsupported GPU.");
 			case DisableReason::OutdatedDrivers:
-				return "Outdated Drivers.";
+				return T(TKEY("disable_reason_outdated_drivers"), "Outdated Drivers.");
 			case DisableReason::MissingPlugin:
-				return "Missing 'CreationEngineRaytracing.dll', check your mod manager.";
+				return T(TKEY("disable_reason_missing_plugin"), "Missing 'CreationEngineRaytracing.dll', check your mod manager.");
 			case DisableReason::InitFailed:
-				return "Initialization Failed, check CreationEngineRaytracing.txt log";
+				return T(TKEY("disable_reason_init_failed"), "Initialization Failed, check CreationEngineRaytracing.txt log");
 			default:
-				return "Unknown Reason";
+				return T(TKEY("disable_reason_unknown"), "Unknown Reason");
 			}
 		}());
 	}
@@ -163,9 +169,26 @@ void Raytracing::DrawSettings()
 
 	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.CreationEngineRaytracingSettings.Enabled);
 
-	DrawEnumRadio(T(TKEY("mode"), "Mode"), settings.CreationEngineRaytracingSettings.GeneralSettings.Mode);
+	DrawEnumRadio(
+		T(TKEY("mode"), "Mode"),
+		"Mode",
+		settings.CreationEngineRaytracingSettings.GeneralSettings.Mode,
+		std::array{
+			T(TKEY("mode_none"), "None"),
+			T(TKEY("mode_global_illumination"), "Global Illumination"),
+			T(TKEY("mode_path_tracing"), "Path Tracing"),
+		});
 
-	DrawEnumRadio(T(TKEY("denoiser"), "Denoiser"), settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser);
+	DrawEnumRadio(
+		T(TKEY("denoiser"), "Denoiser"),
+		"Denoiser",
+		settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser,
+		std::array{
+			T(TKEY("denoiser_none"), "None"),
+			T(TKEY("denoiser_nrd"), "NRD"),
+			T(TKEY("denoiser_dlss_rr"), "DLSS RR"),
+			T(TKEY("denoiser_accumulation"), "Accumulation"),
+		});
 
 	// Show DLSS RR availability status
 	if (settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::DLSS_RR) {
@@ -183,7 +206,7 @@ void Raytracing::DrawSettings()
 		}
 	}
 
-	bool ptMode = settings.CreationEngineRaytracingSettings.GeneralSettings.Mode == CreationEngineRaytracing::Mode::PathTracing;
+	/*bool ptMode = settings.CreationEngineRaytracingSettings.GeneralSettings.Mode == CreationEngineRaytracing::Mode::PathTracing;
 
 	if (ptMode)
 		ImGui::BeginDisabled();
@@ -191,7 +214,7 @@ void Raytracing::DrawSettings()
 	ImGui::Checkbox(T(TKEY("raytraced_shadows"), "Raytraced Shadows"), &settings.CreationEngineRaytracingSettings.GeneralSettings.RaytracedShadows);
 
 	if (ptMode)
-		ImGui::EndDisabled();
+		ImGui::EndDisabled();*/
 
 	if (ImGui::BeginTabBar("Settings")) {
 		DrawGeneralSettings();
@@ -214,7 +237,8 @@ CreationEngineRaytracing::Settings Raytracing::GetSettings() const
 {
 	auto certSettings = settings.CreationEngineRaytracingSettings;
 
-	certSettings.DebugSettings.Markers = globals::features::dx12Interop.settings.EnablePIXCapture;
+	// Only if PIX is enabled (globals::dx12Interop.enablePIXCapture)
+	certSettings.DebugSettings.Markers = false;
 	certSettings.DebugSettings.Timings = settings.PerfOverlay != OverlayMode::None;
 
 	return certSettings;
@@ -363,7 +387,7 @@ void Raytracing::DrawReblurSettings()
 
 void Raytracing::DrawSHaRCSettings()
 {
-	if (ImGui::CollapsingHeader("SHaRC")) {
+	if (ImGui::CollapsingHeader(T(TKEY("sharc"), "SHaRC"))) {
 		auto& sharcSettings = settings.CreationEngineRaytracingSettings.SHaRCSettings;
 
 		ImGui::Checkbox(T(TKEY("sharc_enabled"), "Enabled"), &sharcSettings.Enabled);
@@ -371,13 +395,13 @@ void Raytracing::DrawSHaRCSettings()
 		if (!sharcSettings.Enabled)
 			ImGui::BeginDisabled();
 
-		ImGui::DragFloat("Scale", &sharcSettings.SceneScale, 0.001f, 0.1f, 10.0f);
+		ImGui::DragFloat(T(TKEY("sharc_scale"), "Scale"), &sharcSettings.SceneScale, 0.001f, 0.1f, 10.0f);
 		sharcSettings.SceneScale = std::clamp(sharcSettings.SceneScale, 0.1f, 10.0f);
 
-		ImGui::InputInt("Accumulation Frames", &sharcSettings.AccumFrameNum);
+		ImGui::InputInt(T(TKEY("sharc_accumulation_frames"), "Accumulation Frames"), &sharcSettings.AccumFrameNum);
 		sharcSettings.AccumFrameNum = std::clamp(sharcSettings.AccumFrameNum, 5, 100);
 
-		ImGui::InputInt("Stale Frames", &sharcSettings.StaleFrameNum);
+		ImGui::InputInt(T(TKEY("sharc_stale_frames"), "Stale Frames"), &sharcSettings.StaleFrameNum);
 		sharcSettings.StaleFrameNum = std::clamp(sharcSettings.StaleFrameNum, 8, 128);
 
 		if (!sharcSettings.Enabled)
@@ -394,7 +418,7 @@ void Raytracing::DrawSSSSettings()
 	if (!sssSettings.Enabled)
 		return;
 
-	if (ImGui::CollapsingHeader("Subsurface Scattering")) {
+	if (ImGui::CollapsingHeader(T(TKEY("subsurface_scattering"), "Subsurface Scattering"))) {
 		if (sssSettings.Enabled) {
 			ImGui::SliderInt(T(TKEY("sss_sample_count"), "Sample Count"), &sssSettings.SampleCount, 1, 16);
 			ImGui::SliderFloat(T(TKEY("sss_max_sample_radius"), "Max Sample Radius"), &sssSettings.MaxSampleRadius, 0.01f, 64.0f, "%.2f");
@@ -403,8 +427,10 @@ void Raytracing::DrawSSSSettings()
 
 			if (sssSettings.MaterialOverride) {
 				if (ImGui::TreeNodeEx(T(TKEY("sss_overrides"), "Subsurface Scattering"), ImGuiTreeNodeFlags_DefaultOpen)) {
-					ImGui::ColorEdit3("Override Transmission Color", reinterpret_cast<float*>(&sssSettings.OverrideTransmissionColor), ImGuiColorEditFlags_Float);
-					ImGui::ColorEdit3("Override Scattering Color", reinterpret_cast<float*>(&sssSettings.OverrideScatteringColor), ImGuiColorEditFlags_Float);
+					const auto overrideTransmissionLabel = StableLabel(T(TKEY("sss_override_transmission_color"), "Override Transmission Color"), "OverrideTransmissionColor");
+					const auto overrideScatteringLabel = StableLabel(T(TKEY("sss_override_scattering_color"), "Override Scattering Color"), "OverrideScatteringColor");
+					ImGui::ColorEdit3(overrideTransmissionLabel.c_str(), reinterpret_cast<float*>(&sssSettings.OverrideTransmissionColor), ImGuiColorEditFlags_Float);
+					ImGui::ColorEdit3(overrideScatteringLabel.c_str(), reinterpret_cast<float*>(&sssSettings.OverrideScatteringColor), ImGuiColorEditFlags_Float);
 					ImGui::SliderFloat(T(TKEY("sss_override_scale"), "Override Scale"), &sssSettings.OverrideScale, 0.01f, 1000.0f, "%.2f");
 					ImGui::SliderFloat(T(TKEY("sss_override_anisotropy"), "Override Anisotropy"), &sssSettings.OverrideAnisotropy, -0.99f, 0.99f);
 
@@ -436,15 +462,33 @@ void Raytracing::DrawAdvancedSettings()
 
 	ImGui::SliderInt(T(TKEY("ris_max_candidates"), "RIS Max Candidates"), &advSettings.RIS.MaxCandidates, 2, 16);
 
-	DrawEnumCombo("Hair BSDF", advSettings.HairBSDF);
+	DrawEnumCombo(
+		T(TKEY("hair_bsdf"), "Hair BSDF"),
+		"HairBSDF",
+		advSettings.HairBSDF,
+		std::array{
+			T(TKEY("hair_bsdf_none"), "None"),
+			T(TKEY("hair_bsdf_chiang"), "Chiang BSDF"),
+			T(TKEY("hair_bsdf_far_field"), "Far Field BCSDF"),
+		});
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Best with hair specular feature enabled.\n");
+		ImGui::Text(T(TKEY("hair_bsdf_tooltip"), "Best with hair specular feature enabled.\n"));
 	}
 
 	DrawSSSSettings();
 
-	DrawEnumCombo("Diffuse BRDF", advSettings.DiffuseBRDF);
+	DrawEnumCombo(
+		T(TKEY("diffuse_brdf"), "Diffuse BRDF"),
+		"DiffuseBRDF",
+		advSettings.DiffuseBRDF,
+		std::array{
+			T(TKEY("diffuse_brdf_lambert"), "Lambert"),
+			T(TKEY("diffuse_brdf_burley"), "Burley"),
+			T(TKEY("diffuse_brdf_oren_nayar"), "Oren Nayar"),
+			T(TKEY("diffuse_brdf_gotanda"), "Gotanda"),
+			T(TKEY("diffuse_brdf_chan"), "Chan"),
+		});
 
 	ImGui::Checkbox(T(TKEY("stable_planes"), "Stable Planes"), &advSettings.StablePlanes);
 
@@ -467,15 +511,30 @@ void Raytracing::DrawReSTIRGISettings()
 	ImGui::Checkbox(T(TKEY("restir_enabled"), "Enabled"), &giSettings.Enabled);
 
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Enable ReSTIR GI indirect lighting resampling.");
+		ImGui::Text("%s", T(TKEY("restir_enabled_tooltip"), "Enable ReSTIR GI indirect lighting resampling."));
 
-	DrawEnumCombo("Resampling Mode", giSettings.ResamplingMode);
+	DrawEnumCombo(
+		T(TKEY("restir_resampling_mode"), "Resampling Mode"),
+		"ReSTIRGIResamplingMode",
+		giSettings.ResamplingMode,
+		std::array{
+			T(TKEY("restir_resampling_mode_none"), "None"),
+			T(TKEY("restir_resampling_mode_temporal"), "Temporal"),
+			T(TKEY("restir_resampling_mode_spatial"), "Spatial"),
+			T(TKEY("restir_resampling_mode_temporal_and_spatial"), "Temporal and Spatial"),
+			T(TKEY("restir_resampling_mode_fused_spatiotemporal"), "Fused Spatiotemporal"),
+		});
 
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("None: Disabled\nTemporal: Reuse from previous frames\nSpatial: Reuse from nearby pixels\nTemporalAndSpatial: Both (recommended)\nFusedSpatiotemporal: Combined pass");
+		ImGui::Text("%s", T(TKEY("restir_resampling_mode_tooltip"),
+							  "None: Disabled\n"
+							  "Temporal: Reuse from previous frames\n"
+							  "Spatial: Reuse from nearby pixels\n"
+							  "Temporal and Spatial: Both (recommended)\n"
+							  "Fused Spatiotemporal: Combined pass"));
 
 	ImGui::Separator();
-	ImGui::Text("Temporal Resampling");
+	ImGui::Text(T(TKEY("temporal_resampling"), "Temporal Resampling"));
 
 	if (ImGui::SliderFloat(T(TKEY("restir_temporal_depth_threshold"), "Temporal Depth Threshold"), &giSettings.TemporalDepthThreshold, 0.0f, 1.0f, "%.2f"))
 		giSettings.TemporalDepthThreshold = std::clamp(giSettings.TemporalDepthThreshold, 0.0f, 1.0f);
@@ -492,10 +551,18 @@ void Raytracing::DrawReSTIRGISettings()
 	ImGui::Checkbox(T(TKEY("restir_permutation_sampling"), "Permutation Sampling"), &giSettings.EnablePermutationSampling);
 	ImGui::Checkbox(T(TKEY("restir_fallback_sampling"), "Fallback Sampling"), &giSettings.EnableFallbackSampling);
 
-	DrawEnumCombo("Temporal Bias Correction", giSettings.TemporalBiasCorrection);
+	DrawEnumCombo(
+		T(TKEY("temporal_bias_correction"), "Temporal Bias Correction"),
+		"TemporalBiasCorrection",
+		giSettings.TemporalBiasCorrection,
+		std::array{
+			T(TKEY("bias_correction_off"), "Off"),
+			T(TKEY("bias_correction_basic"), "Basic"),
+			T(TKEY("bias_correction_raytraced"), "Raytraced"),
+		});
 
 	ImGui::Separator();
-	ImGui::Text("Spatial Resampling");
+	ImGui::Text(T(TKEY("spatial_resampling"), "Spatial Resampling"));
 
 	if (ImGui::SliderFloat(T(TKEY("restir_spatial_depth_threshold"), "Spatial Depth Threshold"), &giSettings.SpatialDepthThreshold, 0.0f, 1.0f, "%.2f"))
 		giSettings.SpatialDepthThreshold = std::clamp(giSettings.SpatialDepthThreshold, 0.0f, 1.0f);
@@ -509,10 +576,18 @@ void Raytracing::DrawReSTIRGISettings()
 	if (ImGui::SliderFloat(T(TKEY("restir_spatial_sampling_radius"), "Spatial Sampling Radius"), &giSettings.SpatialSamplingRadius, 1.0f, 64.0f, "%.1f"))
 		giSettings.SpatialSamplingRadius = std::clamp(giSettings.SpatialSamplingRadius, 1.0f, 64.0f);
 
-	DrawEnumCombo("Spatial Bias Correction", giSettings.SpatialBiasCorrection);
+	DrawEnumCombo(
+		T(TKEY("spatial_bias_correction"), "Spatial Bias Correction"),
+		"SpatialBiasCorrection",
+		giSettings.SpatialBiasCorrection,
+		std::array{
+			T(TKEY("bias_correction_off"), "Off"),
+			T(TKEY("bias_correction_basic"), "Basic"),
+			T(TKEY("bias_correction_raytraced"), "Raytraced"),
+		});
 
 	ImGui::Separator();
-	ImGui::Text("Boiling Filter");
+	ImGui::Text(T(TKEY("boiling_filter"), "Boiling Filter"));
 
 	ImGui::Checkbox(T(TKEY("restir_enable_boiling_filter"), "Enable Boiling Filter"), &giSettings.EnableBoilingFilter);
 
@@ -522,17 +597,17 @@ void Raytracing::DrawReSTIRGISettings()
 	}
 
 	ImGui::Separator();
-	ImGui::Text("Final Shading");
+	ImGui::Text(T(TKEY("final_shading"), "Final Shading"));
 
 	ImGui::Checkbox(T(TKEY("restir_final_visibility"), "Final Visibility"), &giSettings.EnableFinalVisibility);
 
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Trace a visibility ray for the final GI sample to remove shadows.");
+		ImGui::Text(T(TKEY("restir_final_visibility_tooltip"), "Trace a visibility ray for the final GI sample to remove shadows."));
 
 	ImGui::Checkbox(T(TKEY("restir_final_mis"), "Final MIS"), &giSettings.EnableFinalMIS);
 
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Apply multiple importance sampling with the initial sample.");
+		ImGui::Text(T(TKEY("restir_final_mis_tooltip"), "Apply multiple importance sampling with the initial sample."));
 
 	ImGui::PopID();
 
@@ -550,10 +625,17 @@ void Raytracing::DrawExperimentalSettings()
 
 	ImGui::Checkbox(T(TKEY("path_tracing_cull"), "Path Tracing Cull"), &experimentalSettings.PathTracingCull);
 
-	DrawEnumRadio("Texture Mode", experimentalSettings.TextureMode);
+	DrawEnumRadio(
+		T(TKEY("texture_mode"), "Texture Mode"),
+		"TextureMode",
+		experimentalSettings.TextureMode,
+		std::array{
+			T(TKEY("texture_mode_share"), "Share"),
+			T(TKEY("texture_mode_exclusive"), "Exclusive"),
+		});
 
 	if (experimentalSettings.TextureMode == CreationEngineRaytracing::TextureMode::Exclusive) {
-		auto label = experimentalSettings.TextureCutOff == 0 ? "Never Share" : std::format("Share smaller than {}", 1 << (experimentalSettings.TextureCutOff + 7));
+		auto label = experimentalSettings.TextureCutOff == 0 ? T(TKEY("never_share"), "Never Share") : std::format(T(TKEY("share_smaller_than"), "Share smaller than {}"), 1 << (experimentalSettings.TextureCutOff + 7));
 		ImGui::SliderInt(T(TKEY("exclusive_mode_cutoff"), "Exclusive Mode Cutoff"), reinterpret_cast<int*>(&experimentalSettings.TextureCutOff), 0, 6, label.c_str());
 	}
 
@@ -569,15 +651,34 @@ void Raytracing::DrawDebugSettings()
 
 	ImGui::PushID("DebugSettings");
 
-	DrawEnumRadio("Performance Overlay", settings.PerfOverlay);
+	DrawEnumRadio(
+		T(TKEY("performance_overlay"), "Performance Overlay"),
+		"PerformanceOverlay",
+		settings.PerfOverlay,
+		std::array{
+			T(TKEY("performance_overlay_none"), "None"),
+			T(TKEY("performance_overlay_simple"), "Simple"),
+			T(TKEY("performance_overlay_complete"), "Complete"),
+		});
 
 	ImGui::Checkbox(T(TKEY("display_scenegraph_counters"), "Display SceneGraph Counters"), &settings.DisplaySceneGraphCounters);
 
-	if (ImGui::TreeNode("Buffer Viewer")) {
+	const auto bufferViewerLabel = StableLabel(T(TKEY("buffer_viewer"), "Buffer Viewer"), "BufferViewer");
+	if (ImGui::TreeNode(bufferViewerLabel.c_str())) {
 		static float debugRescale = .3f;
 		ImGui::SliderFloat(T(TKEY("debug_view_resize"), "View Resize"), &debugRescale, 0.f, 1.f);
 
-		if (ImGui::TreeNode("Main")) {
+		const auto depthLabel = StableLabel(T(TKEY("debug_depth"), "Depth"), "Depth");
+		if (ImGui::TreeNode(depthLabel.c_str())) {
+			D3D11_TEXTURE2D_DESC desc;
+			ptDepthTexture->resource11->GetDesc(&desc);
+
+			ImGui::Image(ptDepthTexture->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			ImGui::TreePop();
+		}
+
+		const auto mainLabel = StableLabel(T(TKEY("debug_main"), "Main"), "Main");
+		if (ImGui::TreeNode(mainLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
 			mainTexture->resource11->GetDesc(&desc);
 
@@ -585,11 +686,51 @@ void Raytracing::DrawDebugSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("FlowMap")) {
+		const auto normalRoughnessLabel = StableLabel(T(TKEY("debug_normal_roughness"), "NormalRoughness"), "NormalRoughness");
+		if (ImGui::TreeNode(normalRoughnessLabel.c_str())) {
+			D3D11_TEXTURE2D_DESC desc;
+			normalRoughnessTexture->resource11->GetDesc(&desc);
+
+			ImGui::Image(normalRoughnessTexture->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			ImGui::TreePop();
+		}
+
+		const auto diffuseAlbedoLabel = StableLabel(T(TKEY("debug_diffuse_albedo"), "Diffuse Albedo"), "DiffuseAlbedo");
+		if (ImGui::TreeNode(diffuseAlbedoLabel.c_str())) {
+			D3D11_TEXTURE2D_DESC desc;
+			diffuseAlbedoTexture->resource11->GetDesc(&desc);
+
+			ImGui::Image(diffuseAlbedoTexture->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			ImGui::TreePop();
+		}
+
+		const auto masks2Label = StableLabel(T(TKEY("debug_masks2"), "Masks 2"), "Masks2");
+		if (ImGui::TreeNode(masks2Label.c_str())) {
+			auto renderer = globals::game::renderer;
+			auto masks2 = renderer->GetRuntimeData().renderTargets[MASKS2];
+
+			D3D11_TEXTURE2D_DESC desc;
+			masks2.texture->GetDesc(&desc);
+
+			ImGui::ImageWithBg(masks2.SRV, { desc.Width * debugRescale, desc.Height * debugRescale }, { 0, 0 }, { 1, 1 }, { 0, 0, 0, 1 });
+			ImGui::TreePop();
+		}
+
+		const auto flowMapLabel = StableLabel(T(TKEY("debug_flowmap"), "FlowMap"), "FlowMap");
+		if (ImGui::TreeNode(flowMapLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
 			waterFlowMap->resource11->GetDesc(&desc);
 
 			ImGui::ImageWithBg(waterFlowMap->srv, { desc.Width * debugRescale, desc.Height * debugRescale }, { 0, 0 }, { 1, 1 }, { 0, 0, 0, 1 });
+			ImGui::TreePop();
+		}
+
+		const auto skyHemisphereLabel = StableLabel(T(TKEY("debug_sky_hemisphere"), "Sky Hemisphere"), "SkyHemisphere");
+		if (ImGui::TreeNode(skyHemisphereLabel.c_str())) {
+			D3D11_TEXTURE2D_DESC desc;
+			skyHemisphere->resource11->GetDesc(&desc);
+
+			ImGui::ImageWithBg(skyHemisphere->srv, { desc.Width * debugRescale, desc.Height * debugRescale }, { 0, 0 }, { 1, 1 }, { 0, 0, 0, 1 });
 			ImGui::TreePop();
 		}
 
@@ -600,8 +741,6 @@ void Raytracing::DrawDebugSettings()
 
 	ImGui::EndTabItem();
 }
-
-#undef I18N_KEY_PREFIX
 
 void Raytracing::DrawOverlay()
 {
@@ -631,21 +770,22 @@ void Raytracing::DrawOverlay()
 		ImGui::SetNextWindowPos(Position, ImGuiCond_FirstUseEver);
 	}
 
-	ImGui::Begin("Raytracing Overlay", NULL, windowFlags);
+	const auto overlayTitle = StableLabel(T(TKEY("overlay_title"), "Raytracing Overlay"), "RaytracingOverlay");
+	ImGui::Begin(overlayTitle.c_str(), NULL, windowFlags);
 
 	auto DrawRow = [](const char* label, float gpums) {
 		ImGui::TableNextRow();
 
 		ImGui::TableNextColumn();
-		ImGui::Text(label);
+		ImGui::TextUnformatted(label);
 
 		ImGui::TableNextColumn();
-		ImGui::Text("%g ms", gpums);
+		ImGui::Text(T(TKEY("overlay_gpu_ms"), "%g ms"), gpums);
 	};
 
 	if (ImGui::BeginTable("Passes", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-		ImGui::TableSetupColumn("Pass");
-		ImGui::TableSetupColumn("GPU");
+		ImGui::TableSetupColumn(T(TKEY("overlay_pass"), "Pass"));
+		ImGui::TableSetupColumn(T(TKEY("overlay_gpu"), "GPU"));
 		ImGui::TableHeadersRow();
 
 		float totalTime = 0.0f;
@@ -657,7 +797,7 @@ void Raytracing::DrawOverlay()
 			totalTime += passTiming.timing;
 		}
 
-		DrawRow("Total", totalTime);
+		DrawRow(T(TKEY("overlay_total"), "Total"), totalTime);
 
 		ImGui::EndTable();
 	}
@@ -666,7 +806,7 @@ void Raytracing::DrawOverlay()
 	if (settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::Accumulation &&
 		creationEngineRaytracing && creationEngineRaytracing->GetAccumulatedFrameCount) {
 		uint32_t accumulatedFrames = creationEngineRaytracing->GetAccumulatedFrameCount();
-		ImGui::Text("Accumulated Frames: %u", accumulatedFrames);
+		ImGui::Text(T(TKEY("overlay_accumulated_frames"), "Accumulated Frames: %u"), accumulatedFrames);
 	}
 
 	if (settings.DisplaySceneGraphCounters && creationEngineRaytracing) {
@@ -676,15 +816,17 @@ void Raytracing::DrawOverlay()
 
 		creationEngineRaytracing->GetSceneGraphCounters(textures, models, instances);
 
-		ImGui::Text("Textures %zu", textures);
-		ImGui::Text("Models %zu", models);
-		ImGui::Text("Instances %zu", instances);
+		ImGui::Text(T(TKEY("overlay_textures"), "Textures %zu"), textures);
+		ImGui::Text(T(TKEY("overlay_models"), "Models %zu"), models);
+		ImGui::Text(T(TKEY("overlay_instances"), "Instances %zu"), instances);
 	}
 
 	ImGui::End();
 }
 
-bool Raytracing::Active() const
+#undef I18N_KEY_PREFIX
+
+bool Raytracing::Available(bool a_initialized) const
 {
 	if (!loaded)
 		return false;
@@ -695,7 +837,7 @@ bool Raytracing::Active() const
 	if (!settings.CreationEngineRaytracingSettings.Enabled)
 		return false;
 
-	if (!initialized)
+	if (a_initialized && !initialized)
 		return false;
 
 	return true;
@@ -825,7 +967,7 @@ void ShareTexture(ID3D11Texture2D* d3d11Texture, ID3D12Resource** d3d12Resource,
 	else
 		DX::ThrowIfFailed(dxgiResource->GetSharedHandle(&sharedHandle));
 
-	DX::ThrowIfFailed(globals::features::dx12Interop.d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(d3d12Resource)));
+	DX::ThrowIfFailed(globals::dx12Interop->d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(d3d12Resource)));
 
 	// Only close handle if it was created here
 	if (nt)
@@ -871,13 +1013,16 @@ void Raytracing::SetupResources()
 
 		// Diffuse Albedo Texture
 		{
+			CreationEngineRaytracing::SharedTexture main;
 			CreationEngineRaytracing::SharedTexture diffuseAlbedo;
-			creationEngineRaytracing->GetSharedTextures(diffuseAlbedo);
+			creationEngineRaytracing->GetSharedTextures(main, diffuseAlbedo);
+
+			mainTexture = eastl::make_unique<WrappedResource>(main.native, main.shared);
 			diffuseAlbedoTexture = eastl::make_unique<WrappedResource>(diffuseAlbedo.native, diffuseAlbedo.shared);
 		}
 	}
 
-	auto& d3d11Device = globals::features::dx12Interop.d3d11Device;
+	auto& d3d11Device = globals::dx12Interop->d3d11Device;
 
 	featureData = eastl::make_unique<FeatureData>();
 
@@ -899,12 +1044,34 @@ void Raytracing::SetupResources()
 		DX::ThrowIfFailed(d3d11Device->CreateSamplerState(&samplerDesc, samplerState.put()));
 	}
 
+	// PT Depth/MV Copy
 	{
+		D3D11_BLEND_DESC blendDesc = {};
+		blendDesc.AlphaToCoverageEnable = false;
+		blendDesc.IndependentBlendEnable = false;
+		blendDesc.RenderTarget[0].BlendEnable = false;
+		blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+		DX::ThrowIfFailed(globals::d3d::device->CreateBlendState(&blendDesc, copyBlendState.put()));
+
+		// Create rasterizer state for fullscreen rendering
+		D3D11_RASTERIZER_DESC rasterizerDesc = {};
+		rasterizerDesc.FillMode = D3D11_FILL_SOLID;
+		rasterizerDesc.CullMode = D3D11_CULL_NONE;
+		rasterizerDesc.FrontCounterClockwise = false;
+		rasterizerDesc.DepthBias = 0;
+		rasterizerDesc.DepthBiasClamp = 0.0f;
+		rasterizerDesc.SlopeScaledDepthBias = 0.0f;
+		rasterizerDesc.DepthClipEnable = false;
+		rasterizerDesc.ScissorEnable = false;
+		rasterizerDesc.MultisampleEnable = false;
+		rasterizerDesc.AntialiasedLineEnable = false;
+		DX::ThrowIfFailed(globals::d3d::device->CreateRasterizerState(&rasterizerDesc, copyRasterizerState.put()));
+
 		D3D11_DEPTH_STENCIL_DESC dsDesc = {};
 		dsDesc.DepthEnable = TRUE;
 		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
 		dsDesc.DepthFunc = D3D11_COMPARISON_ALWAYS;
-
+		dsDesc.StencilEnable = false;  // Disable stencil testing
 		d3d11Device->CreateDepthStencilState(&dsDesc, depthStencilState.put());
 	}
 
@@ -983,6 +1150,7 @@ void Raytracing::UpdateFeatureData()
 	std::memcpy(&featureData->ExtendedTranslucency, &globals::features::extendedTranslucency.GetCommonBufferData(), sizeof(ExtendedTranslucency::PerFrame));
 	std::memcpy(&featureData->LinearLighting, &linearLighting, sizeof(LinearLighting::PerFrameData));
 	std::memcpy(&featureData->ExponentialHeightFog, &globals::features::exponentialHeightFog.settings, sizeof(ExponentialHeightFog::Settings));
+	std::memcpy(&featureData->LODBlending, &globals::features::lodBlending.settings, sizeof(LODBlending::Settings));
 	std::memcpy(&featureData->Skin, &skinData, sizeof(Skin::SkinData));
 
 	static_assert(sizeof(FeatureData::ExtendedMaterials) == sizeof(ExtendedMaterials::Settings));
@@ -992,6 +1160,7 @@ void Raytracing::UpdateFeatureData()
 	static_assert(sizeof(FeatureData::ExtendedTranslucency) == sizeof(ExtendedTranslucency::PerFrame));
 	static_assert(sizeof(FeatureData::LinearLighting) == sizeof(LinearLighting::PerFrameData));
 	static_assert(sizeof(FeatureData::ExponentialHeightFog) == sizeof(ExponentialHeightFog::Settings));
+	static_assert(sizeof(FeatureData::LODBlending) == sizeof(LODBlending::Settings));
 	static_assert(sizeof(FeatureData::Skin) == sizeof(Skin::SkinData));
 
 	creationEngineRaytracing->UpdateFeatureData(featureData.get(), sizeof(FeatureData));
@@ -1022,7 +1191,7 @@ void Raytracing::UpdateSkinDetailNormal()
 	try {
 		auto device = globals::d3d::device;
 		auto context = globals::d3d::context;
-		auto& d3d12Dev = globals::features::dx12Interop.d3d12Device;
+		auto& d3d12Dev = globals::dx12Interop.d3d12Device;
 
 		// BC-compressed formats cannot be shared between D3D11 and D3D12 via shared handles.
 		// Instead, read back the texture data through a D3D11 staging texture,
@@ -1111,7 +1280,7 @@ void Raytracing::UpdateSkinDetailNormal()
 		uploadBuffer->Unmap(0, nullptr);
 
 		// 6. Use DX12 interop fence to copy upload buffer to texture
-		globals::features::dx12Interop.Fence([&]() {
+		globals::dx12Interop.Fence([&]() {
 			winrt::com_ptr<ID3D12CommandAllocator> cmdAlloc;
 			winrt::com_ptr<ID3D12GraphicsCommandList> cmdList;
 			DX::ThrowIfFailed(d3d12Dev->CreateCommandAllocator(
@@ -1148,7 +1317,7 @@ void Raytracing::UpdateSkinDetailNormal()
 			cmdList->Close();
 
 			ID3D12CommandList* lists[] = { cmdList.get() };
-			globals::features::dx12Interop.commandQueue->ExecuteCommandLists(1, lists);
+			globals::dx12Interop.commandQueue->ExecuteCommandLists(1, lists);
 		});
 
 		creationEngineRaytracing->SetSkinDetailNormal(skinDetailNormalD3D12.get());
@@ -1255,12 +1424,6 @@ void Raytracing::DeferredPasses()
 	desc.SampleDesc.Quality = 0;
 	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
-	if (!mainTexture || resolutionChanged) {
-		desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-		mainTexture = eastl::make_unique<WrappedResource>(desc);
-		creationEngineRaytracing->SetCopyTarget(mainTexture->GetResource());
-	}
-
 	if (Mode() == CreationEngineRaytracing::Mode::PathTracing) {
 		if (!ptDepthTexture || resolutionChanged) {
 			desc.Format = DXGI_FORMAT_R32_FLOAT;
@@ -1279,17 +1442,15 @@ void Raytracing::DeferredPasses()
 	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination) {
 		ConvertTextures();
 
-		globals::features::dx12Interop.Fence([&]() {
+		globals::dx12Interop->Fence([&]() {
 			// Executes the render graph for Global Illumination, depends on gbuffer render targets so we call it late
 			creationEngineRaytracing->Execute();
 		});
-
-		// Fence function already has built-in wait, so we just call post execution for metrics and cleanup
-		creationEngineRaytracing->PostExecution();
-	} else {
-		// Waits for path tracing execution to finish
-		creationEngineRaytracing->WaitExecution();
 	}
+
+	// Waits for execution to finish (blocks CPU)
+	// TODO: Implement double buffering to avoid stalling the CPU while waiting for GPU results
+	creationEngineRaytracing->WaitExecution();
 
 	if (settings.PerfOverlay != OverlayMode::None)
 		creationEngineRaytracing->GetPassTimings(passTimings);
@@ -1364,8 +1525,8 @@ void Raytracing::DeferredPasses()
 			context->ClearRenderTargetView(renderTargets[RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED].RTV, clearColor);
 		}
 
-		// Copy Depth and Motion Vectors if culling is enabled
-		if (settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull) {
+		// Always copy Depth and Motion Vectors
+		{
 			auto depthStencils = renderer->GetDepthStencilData().depthStencils;
 
 			auto& mainDepth = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -1385,28 +1546,46 @@ void Raytracing::DeferredPasses()
 			ID3D11DepthStencilView* oldDSV;
 			context->OMGetRenderTargets(1, &oldRTV, &oldDSV);
 
+			UINT numViewports = 1;
+			D3D11_VIEWPORT oldViewport = {};
+			context->RSGetViewports(&numViewports, &oldViewport);
+
+			D3D11_VIEWPORT viewport = {};
+			viewport.TopLeftX = 0.0f;
+			viewport.TopLeftY = 0.0f;
+			viewport.Width = screenSize.x;
+			viewport.Height = screenSize.y;
+			viewport.MinDepth = 0.0f;
+			viewport.MaxDepth = 1.0f;
+			context->RSSetViewports(1, &viewport);
+
+			context->IASetInputLayout(nullptr);
+			context->IASetVertexBuffers(0, 0, nullptr, nullptr, nullptr);
+			context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
 			context->OMSetRenderTargets(1,
 				&renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].RTV,
 				mainDepth.views[0]);
 
 			context->OMSetDepthStencilState(depthStencilState.get(), 0);
 
-			D3D11_VIEWPORT vp = {};
-			vp.Width = screenSize.x;
-			vp.Height = screenSize.y;
-			vp.MinDepth = 0.0f;
-			vp.MaxDepth = 1.0f;
+			// Set up rasterizer and blend states
+			context->RSSetState(copyRasterizerState.get());
+			context->OMSetBlendState(copyBlendState.get(), nullptr, 0xffffffff);
 
-			context->RSSetViewports(1, &vp);
-
-			context->IASetInputLayout(nullptr);
-			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
+			// Set up vertex shader
 			context->VSSetShader(copyDMVVS.get(), nullptr, 0);
+
+			// Set up pixel shader
 			context->PSSetShader(copyDMVPS.get(), nullptr, 0);
 
-			context->PSSetShaderResources(0, 1, &ptDepthTexture->srv);
-			context->PSSetShaderResources(1, 1, &ptMotionVectorsTexture->srv);
+			ID3D11ShaderResourceView* srvs[] = {
+				ptDepthTexture->srv,
+				ptMotionVectorsTexture->srv
+			};
+
+			context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
 			context->Draw(3, 0);
 
@@ -1415,6 +1594,8 @@ void Raytracing::DeferredPasses()
 			context->OMSetRenderTargets(1,
 				&oldRTV,
 				oldDSV);
+
+			context->RSSetViewports(1, &oldViewport);
 
 			if (oldDSS) {
 				oldDSS->Release();
@@ -1431,24 +1612,12 @@ void Raytracing::DeferredPasses()
 				oldDSV = nullptr;
 			}
 
+			context->PSSetShader(nullptr, nullptr, 0);
+			context->VSSetShader(nullptr, nullptr, 0);
+
 			context->CopyResource(mainDepthCopy.texture, mainDepth.texture);
 			context->CopyResource(zPrePassCopy.texture, mainDepth.texture);
 		}
-	}
-
-	auto& dx12Interop = globals::features::dx12Interop;
-
-	if (dx12Interop.pixCapture && dx12Interop.pixCaptureStarted) {
-		dx12Interop.ga->EndCapture();
-
-		dx12Interop.pixCapture = false;
-		dx12Interop.pixCaptureStarted = false;
-	}
-
-	if (dx12Interop.pixCapture && !dx12Interop.pixCaptureStarted) {
-		dx12Interop.pixCaptureStarted = true;
-
-		dx12Interop.ga->BeginCapture();
 	}
 }
 

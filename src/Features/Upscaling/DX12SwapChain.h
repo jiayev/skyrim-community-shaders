@@ -7,9 +7,13 @@
 #include <wrl\wrappers\corewrappers.h>
 
 #include <d3d11_4.h>
+#include <d3d12.h>
+
 #include <directx/d3dx12.h>
 
-#include "Features/DX12Interop/WrappedResource.h"
+#include "DX12Interop.h"
+#include "DX12Interop/InteropContext.h"
+#include "DX12Interop/WrappedResource.h"
 
 struct DXGISwapChainProxy : IDXGISwapChain
 {
@@ -58,13 +62,14 @@ public:
 	winrt::com_ptr<ID3D12Resource> swapChainBuffers[2];
 
 	UINT frameIndex = 0;
-	UINT64 fenceValue = 0;
 
 	LARGE_INTEGER qpf;
 
 	double refreshRate = 0;
 
 	DXGISwapChainProxy* swapChainProxy = nullptr;
+
+	eastl::unique_ptr<InteropContext> interopContext;
 
 	// Returns the current frame time (in seconds) for accurate FPS calculation when frame generation is active
 	float GetFrameTime() const;
@@ -74,8 +79,6 @@ public:
 	void CreateInterop();
 
 	DXGISwapChainProxy* GetSwapChainProxy();
-	void SetD3D11Device(ID3D11Device* a_d3d11Device);
-	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
 
 	HRESULT GetBuffer(void** ppSurface);
 	HRESULT Present(UINT SyncInterval, UINT Flags);

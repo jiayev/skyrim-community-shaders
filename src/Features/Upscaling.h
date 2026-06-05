@@ -43,23 +43,13 @@ public:
 
 	enum UpscaleMethod : uint32_t
 	{
-		kNONE = 1 << 0,
-		kTAA = 1 << 1,
-		kFSR = 1 << 2,
-		kDLSS = 1 << 3,
-		kDLSS_RR = 1 << 4
+		kNONE,
+		kTAA,
+		kFSR,
+		kDLSS,
+		kDLSS_RR,
+		kNumMethods
 	};
-
-	// User-facing labels (kDLSS_RR is internal-only, driven by Raytracing Denoiser setting)
-	constexpr static const char* upscaleModeLabels[] = {
-		"None",
-		"TAA",
-		"AMD FSR 3.1",
-		"NVIDIA DLSS"
-	};
-
-	constexpr static const char* dlssModelPresets[] = { "Default", "Preset J", "Preset K", "Preset L", "Preset M" };
-	constexpr static const char* dlssRRModelPresets[] = { "Default", "Preset D", "Preset E" };
 
 	struct Settings
 	{
@@ -110,6 +100,8 @@ public:
 	double refreshRate = 0.0f;
 	float2 resolutionScale = { 1.0f, 1.0f };
 	LARGE_INTEGER qpf;
+
+	eastl::unique_ptr<InteropContext> interopContext;
 
 	// FG FPS Measurement for Overlay
 	bool IsFrameGenerationDx12PathActive() const;
@@ -278,8 +270,6 @@ public:
 	bool HasFrameGenModule() const;
 
 	// Proxy interface methods
-	void SetProxyD3D11Device(ID3D11Device* device);
-	void SetProxyD3D11DeviceContext(ID3D11DeviceContext* context);
 	void CreateProxySwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
 	void CreateProxyInterop();
 	IDXGISwapChain* GetProxySwapChain();
@@ -333,5 +323,3 @@ private:
 		static bool Register();
 	};
 };
-
-DEFINE_ENUM_FLAG_OPERATORS(Upscaling::UpscaleMethod);

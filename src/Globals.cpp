@@ -1,9 +1,9 @@
 #include "Globals.h"
 
+#include "DX12Interop.h"
 #include "Deferred.h"
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
-#include "Features/DX12Interop.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
@@ -92,7 +92,6 @@ namespace globals
 		ScreenshotFeature screenshotFeature{};
 		CSEditor csEditor{};
 		ExponentialHeightFog exponentialHeightFog{};
-		DX12Interop dx12Interop{};
 		Raytracing raytracing{};
 		SceneGraphExplorer sceneGraphExplorer{};
 		TruePBR truePBR{};
@@ -162,6 +161,7 @@ namespace globals
 	Deferred* deferred = nullptr;
 	Menu* menu = nullptr;
 	SIE::ShaderCache* shaderCache = nullptr;
+	DX12Interop* dx12Interop = nullptr;
 
 	static Profiler profilerInstance;
 	Profiler* profiler = &profilerInstance;
@@ -172,6 +172,7 @@ namespace globals
 		state = State::GetSingleton();
 		menu = Menu::GetSingleton();
 		deferred = Deferred::GetSingleton();
+		dx12Interop = DX12Interop::GetSingleton();
 	}
 
 	void ReInit()

@@ -66,7 +66,6 @@ namespace globals
 	namespace features
 	{
 		extern CloudShadows cloudShadows;
-		extern DX12Interop dx12Interop;
 		extern DynamicCubemaps dynamicCubemaps;
 		extern VolumetricShadows volumetricShadows;
 		extern ExtendedMaterials extendedMaterials;
@@ -270,6 +269,7 @@ namespace globals
 	extern Deferred* deferred;
 	extern Menu* menu;
 	extern SIE::ShaderCache* shaderCache;
+	extern DX12Interop* dx12Interop;
 	extern Profiler* profiler;
 
 	void OnInit();

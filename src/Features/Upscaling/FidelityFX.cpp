@@ -7,7 +7,7 @@
 #include "../HDRDisplay.h"
 #include "../Upscaling.h"
 #include "DX12SwapChain.h"
-#include "Features/DX12Interop.h"
+#include "DX12Interop.h"
 
 ffxFunctions ffxModule;
 
@@ -51,7 +51,7 @@ void FidelityFX::LoadFFX()
 void FidelityFX::SetupFrameGeneration()
 {
 	auto& swapChain = globals::features::upscaling.dx12SwapChain;
-	auto& dx12Interop = globals::features::dx12Interop;
+	auto dx12Interop = globals::dx12Interop;
 
 	ffx::CreateContextDescFrameGeneration createFg{};
 	createFg.displaySize = { swapChain.swapChainDesc.Width, swapChain.swapChainDesc.Height };
@@ -60,7 +60,7 @@ void FidelityFX::SetupFrameGeneration()
 	createFg.backBufferFormat = ffxApiGetSurfaceFormatDX12(swapChain.swapChainDesc.Format);
 
 	ffx::CreateBackendDX12Desc backendDesc{};
-	backendDesc.device = dx12Interop.d3d12Device.get();
+	backendDesc.device = dx12Interop->d3d12Device.get();
 
 	if (ffx::CreateContext(frameGenContext, nullptr, createFg, backendDesc) != ffx::ReturnCode::Ok)
 		logger::critical("[FidelityFX] Failed to create frame generation context!");
@@ -73,7 +73,7 @@ void FidelityFX::SetupFrameGeneration()
  *
  * @param a_useFrameGeneration If true, enables frame generation and dispatches the necessary workloads; otherwise, presents without frame generation.
  */
-void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
+void FidelityFX::Present(ID3D12GraphicsCommandList4* commandList, bool a_useFrameGeneration, bool a_isHDR)
 {
 	auto& upscaling = globals::features::upscaling;
 	auto& swapChain = globals::features::upscaling.dx12SwapChain;
@@ -188,9 +188,7 @@ void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 	if (a_useFrameGeneration) {
 		ffx::DispatchDescFrameGenerationPrepare dispatchParameters{};
 
-		auto& dx12Interop = globals::features::dx12Interop;
-
-		dispatchParameters.commandList = dx12Interop.commandLists[swapChain.frameIndex].get();
+		dispatchParameters.commandList = commandList;
 
 		dispatchParameters.motionVectorScale.x = renderSize.x;
 		dispatchParameters.motionVectorScale.y = renderSize.y;
@@ -210,7 +208,7 @@ void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 
 		dispatchParameters.frameID = frameID;
 
-		auto& sharedResources = globals::features::dx12Interop.sharedResources;
+		auto& sharedResources = globals::dx12Interop->sharedResources;
 
 		dispatchParameters.depth = ffxApiGetResourceDX12(sharedResources.depth->GetResource());
 		dispatchParameters.motionVectors = ffxApiGetResourceDX12(sharedResources.motionVector->GetResource());

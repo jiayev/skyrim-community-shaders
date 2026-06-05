@@ -4,6 +4,7 @@
 
 #include <pystring/pystring.h>
 
+#include "DX12Interop.h"
 #include "Deferred.h"
 #include "FeatureIssues.h"
 #include "Features/CSEditor.h"
@@ -225,6 +226,7 @@ void State::Setup()
 	CheckTypedUAVLoadSupport();
 
 	globals::deferred->SetupResources();
+	globals::dx12Interop->SetupResources();
 	Feature::ForEachLoadedFeature("SetupResources", [](Feature* feature) { feature->SetupResources(); });
 
 	// Load per-weather settings after features are setup
@@ -450,6 +452,7 @@ void State::SaveToJson(nlohmann::json& settings)
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
 	advanced["Frame Annotations"] = frameAnnotations;
 	advanced["Partial Precision"] = enablePartialPrecision.load(std::memory_order_relaxed);
+	advanced["Debug Device"] = debugDevice;
 	settings["Advanced"] = advanced;
 
 	json general;
@@ -527,6 +530,8 @@ void State::LoadFromJson(nlohmann::json& settings)
 			frameAnnotations = advanced["Frame Annotations"];
 		if (advanced.contains("Partial Precision") && advanced["Partial Precision"].is_boolean())
 			enablePartialPrecision.store(advanced["Partial Precision"].get<bool>(), std::memory_order_relaxed);
+		if (advanced.contains("Debug Device") && advanced["Debug Device"].is_boolean())
+			debugDevice = advanced["Debug Device"];
 	}
 
 	if (settings.contains("General") && settings["General"].is_object()) {
