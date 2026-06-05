@@ -24,6 +24,22 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	zBottom)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	CloudLayer,
+	bottom,
+	thickness,
+	ndfScale,
+	noiseScale,
+	noiseSpeed,
+	power,
+	scatter,
+	absorption,
+	averageDensity,
+	msMult,
+	msTransmittancePower,
+	msHeightPower,
+	ambientMult)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PhysicalSky::Settings,
 	enabled,
 	enableAllExteriorCells,
@@ -60,10 +76,16 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ozoneAbsorption,
 	ozoneAbsorptionAP1,
 	fallbackZBottom,
+	enableVanillaClouds,
 	cloudRelightMix,
 	cloudOriginalMix,
 	silverLiningMix,
-	silverLiningSpread)
+	silverLiningSpread,
+	enableVolumetricClouds,
+	rayMarchRange,
+	shadowVolumeRange,
+	cloudMaxStep,
+	cloudLayer)
 
 namespace
 {
@@ -460,12 +482,81 @@ void PhysicalSky::SettingsAtmosphere()
 
 void PhysicalSky::SettingsClouds()
 {
-	InfoBox(T(TKEY("clouds_2"), "Clouds."));
+	ImGui::Checkbox(T(TKEY("enable_vanilla_clouds"), "Enable Vanilla Clouds"), &settings.enableVanillaClouds);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("enable_vanilla_clouds_tooltip"), "Enable vanilla cloud geometry rendering with Physical Sky relighting."));
 
-	ImGui::SliderFloat(T(TKEY("vanilla_mix"), "Vanilla Mix"), &settings.cloudOriginalMix, 0.f, 2.f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("relight_mix"), "Relight Mix"), &settings.cloudRelightMix, 0.f, 2.f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("silver_lining_accent"), "Silver Lining Accent"), &settings.silverLiningMix, 0.f, 1.f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("silver_lining_spread"), "Silver Lining Spread"), &settings.silverLiningSpread, -0.99f, 0.99f, "%.2f");
+	ImGui::BeginDisabled(!settings.enableVanillaClouds);
+	{
+		ImGui::SliderFloat(T(TKEY("vanilla_mix"), "Vanilla Mix"), &settings.cloudOriginalMix, 0.f, 2.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("relight_mix"), "Relight Mix"), &settings.cloudRelightMix, 0.f, 2.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("silver_lining_accent"), "Silver Lining Accent"), &settings.silverLiningMix, 0.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("silver_lining_spread"), "Silver Lining Spread"), &settings.silverLiningSpread, -0.99f, 0.99f, "%.2f");
+	}
+	ImGui::EndDisabled();
+
+	ImGui::Separator();
+
+	ImGui::Checkbox(T(TKEY("enable_volumetric_clouds"), "Enable Volumetric Clouds"), &settings.enableVolumetricClouds);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("enable_volumetric_clouds_tooltip"), "Enable ray-marched volumetric clouds with NDF-based cloud shapes."));
+
+	ImGui::BeginDisabled(!settings.enableVolumetricClouds);
+	SettingsVolumetricClouds();
+	ImGui::EndDisabled();
+}
+
+void PhysicalSky::SettingsVolumetricClouds()
+{
+	ImGui::SeparatorText(T(TKEY("performance"), "Performance"));
+	{
+		ImGui::SliderFloat(T(TKEY("ray_march_range"), "Ray March Range"), &settings.rayMarchRange, 1.f, 64.f, "%.1f km");
+		ImGui::SliderFloat(T(TKEY("shadow_volume_range"), "Shadow Volume Range"), &settings.shadowVolumeRange, 1.f, 16.f, "%.1f km");
+		uint32_t minStep = 1, maxStep = 200;
+		ImGui::SliderScalar(T(TKEY("cloud_max_steps"), "Cloud Max Steps"), ImGuiDataType_U32, &settings.cloudMaxStep, &minStep, &maxStep);
+	}
+
+	ImGui::SeparatorText(T(TKEY("placement"), "Placement"));
+	{
+		ImGui::SliderFloat(T(TKEY("layer_bottom"), "Layer Bottom"), &settings.cloudLayer.bottom, 0.f, 5.f, "%.2f km");
+		ImGui::SliderFloat(T(TKEY("layer_thickness"), "Layer Thickness"), &settings.cloudLayer.thickness, 0.05f, 3.f, "%.2f km");
+	}
+
+	ImGui::SeparatorText(T(TKEY("composition"), "Composition"));
+	{
+		ImGui::SliderFloat2(T(TKEY("ndf_scale"), "NDF Scale"), &settings.cloudLayer.ndfScale.x, 1.f, 50.f, "%.2f km");
+		ImGui::SliderFloat(T(TKEY("noise_scale"), "Noise Scale"), &settings.cloudLayer.noiseScale, 0.01f, 5.f, "%.3f km");
+		ImGui::SliderFloat3(T(TKEY("noise_velocity"), "Noise Velocity"), &settings.cloudLayer.noiseSpeed.x, -30.f, 30.f, "%.1f m/s");
+		ImGui::SliderFloat(T(TKEY("post_power"), "Post Power"), &settings.cloudLayer.power, 0.2f, 5.f, "%.2f");
+	}
+
+	ImGui::SeparatorText(T(TKEY("optics"), "Optics"));
+	{
+		ImGui::ColorEdit3(T(TKEY("scatter"), "Scatter"), &settings.cloudLayer.scatter.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::ColorEdit3(T(TKEY("absorption"), "Absorption"), &settings.cloudLayer.absorption.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+	}
+
+	ImGui::SeparatorText(T(TKEY("lighting"), "Lighting"));
+	{
+		ImGui::SliderFloat(T(TKEY("average_density"), "Average Density"), &settings.cloudLayer.averageDensity, 0.f, 0.1f, "%.3f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("average_density_tooltip"), "For approximating shadowing on far away clouds where the shadow volume doesn't cover."));
+		ImGui::SliderFloat(T(TKEY("multiscatter_mult"), "Multiscatter Mult"), &settings.cloudLayer.msMult, 0.1f, 20.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ms_transmittance_power"), "MS Transmittance Power"), &settings.cloudLayer.msTransmittancePower, 0.01f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ms_height_power"), "MS Height Power"), &settings.cloudLayer.msHeightPower, 0.2f, 5.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ambient_strength"), "Ambient Strength"), &settings.cloudLayer.ambientMult, 0.f, 5.f, "%.2f");
+	}
+
+	ImGui::SeparatorText(T(TKEY("cloud_map"), "Cloud Map"));
+	{
+		ndfManager.DrawNdfSettings(ndfSettings, ndfTexManager);
+		if (ImGui::Button(T(TKEY("reload_cloud_textures"), "Reload Cloud Textures"), { -FLT_MIN, 0 }))
+			LoadCloudTextures();
+		if (cloudTopLutSrv && cloudBottomLutSrv && nubisNoiseSrv)
+			ImGui::TextColored({ 0, 1, 0, 1 }, "%s", T(TKEY("cloud_textures_loaded"), "Cloud Textures: Loaded"));
+		else
+			ImGui::TextColored({ 1, 0, 0, 1 }, "%s", T(TKEY("cloud_textures_missing"), "Cloud Textures: Missing"));
+	}
 }
 
 void PhysicalSky::SettingsDebug()
@@ -615,11 +706,15 @@ void PhysicalSky::SetupResources()
 	}
 
 	CompileShaders();
+
+	// Volumetric cloud resources
+	SetupVolumetricResources();
 }
 
 void PhysicalSky::ClearShaderCache()
 {
 	CompileShaders();
+	CompileVolumetricShaders();
 }
 
 void PhysicalSky::CompileShaders()
@@ -650,8 +745,12 @@ void PhysicalSky::CompileShaders()
 
 bool PhysicalSky::ShadersOK()
 {
-	return csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum && csShadowAccumHalfRes &&
-	       texTrLut && texSvLut && texApLut && texApShadow;
+	bool baseShadersOk = csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum && csShadowAccumHalfRes &&
+	                     texTrLut && texSvLut && texApLut && texApShadow;
+	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
+	                           (csVolMainView && csVolShadowVolume && ndfManager.cumuliformProgram &&
+								   texVolTr && texVolLum && texShadowVolume && nubisNoiseSrv && cloudTopLutSrv && cloudBottomLutSrv);
+	return baseShadersOk && volumetricShadersOk;
 }
 
 void PhysicalSky::Reset()
@@ -754,10 +853,18 @@ void PhysicalSky::Reset()
 		.ozoneAltitude = settings.ozoneAltitude / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneThickness = settings.ozoneThickness / Util::Units::GAME_UNIT_TO_KM,
 		.ozoneAbsorption = (wideGamut ? settings.ozoneAbsorptionAP1 : settings.ozoneAbsorption) * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
+		.enableVanillaClouds = settings.enableVanillaClouds ? 1u : 0u,
 		.cloudRelightMix = settings.cloudRelightMix,
 		.cloudOriginalMix = settings.cloudOriginalMix,
 		.silverLiningMix = settings.silverLiningMix,
 		.silverLiningSpread = settings.silverLiningSpread,
+		.enableVolumetricClouds = settings.enableVolumetricClouds ? 1u : 0u,
+		.shadowVolumeRange = settings.shadowVolumeRange / Util::Units::GAME_UNIT_TO_KM,
+		.volCloudBottom = settings.cloudLayer.bottom / Util::Units::GAME_UNIT_TO_KM,
+		.volCloudThickness = settings.cloudLayer.thickness / Util::Units::GAME_UNIT_TO_KM,
+		.volCloudScatter = settings.cloudLayer.scatter * Util::Units::GAME_UNIT_TO_KM,
+		.volCloudAverageDensity = settings.cloudLayer.averageDensity,
+		.volCloudAbsorption = settings.cloudLayer.absorption * Util::Units::GAME_UNIT_TO_KM,
 		.lightSkyStatics = settings.lightSkyStatics ? 1u : 0u,
 		.skyStaticsBrightness = settings.skyStaticsBrightness,
 		.pad0 = { 0u, 0u },
@@ -802,8 +909,27 @@ void PhysicalSky::Prepass()
 	if (cbData.enabled) {
 		AccumShadow();
 
+		// Volumetric clouds
+		if (settings.enableVolumetricClouds && csVolMainView && csVolShadowVolume) {
+			ndfManager.UpdateNdf(ndfSettings);
+			RenderVolumetricClouds();
+		} else if (texVolTr && texVolLum) {
+			// Clear to neutral when disabled (white transmittance, black luminance)
+			auto context = globals::d3d::context;
+			FLOAT trClr[4] = { 1.f, 1.f, 1.f, 1.f };
+			FLOAT lumClr[4] = { 0.f, 0.f, 0.f, 0.f };
+			context->ClearUnorderedAccessViewFloat(texVolTr->uav.get(), trClr);
+			context->ClearUnorderedAccessViewFloat(texVolLum->uav.get(), lumClr);
+		}
+
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get(), texApShadow->srv.get() };
 		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
+
+		// Bind volumetric cloud results for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
+		if (texVolTr && texVolLum) {
+			std::array<ID3D11ShaderResourceView*, 3> volSrvs = { texVolTr->srv.get(), texVolLum->srv.get(), texShadowVolume ? texShadowVolume->srv.get() : nullptr };
+			globals::d3d::context->PSSetShaderResources(110, (uint)volSrvs.size(), volSrvs.data());
+		}
 	}
 }
 

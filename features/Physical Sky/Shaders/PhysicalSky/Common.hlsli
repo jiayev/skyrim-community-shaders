@@ -443,6 +443,86 @@ Texture2D<unorm float> TexApShadow : register(t64);
 	{
 		return SampleAp(viewDir, dist, GetApShadow(pxCoord), sampSv);
 	}
+
+#	ifndef PS_PREPASS_RSRCS
+	// Volumetric cloud results. Pixel shaders use t110-t112 to avoid feature texture conflicts; DeferredCompositeCS binds them at t18-t20.
+#		if defined(PS_DEFERRED_RSRCS)
+	Texture2D<float3> TexVolTr : register(t18);
+	Texture2D<float3> TexVolLum : register(t19);
+	Texture3D<float> TexShadowVolume : register(t20);
+#		else
+	Texture2D<float3> TexVolTr : register(t110);
+	Texture2D<float3> TexVolLum : register(t111);
+	Texture3D<float> TexShadowVolume : register(t112);
+#		endif
+
+	float3 GetShadowVolumeUvw(float3 posAbs, float3 sunDir)
+	{
+		SharedData::PhysSkyData data = SharedData::physSkyData;
+		float3 boundsMin = float3(FrameBuffer::CameraPosAdjust[0].xy - 0.5 * data.shadowVolumeRange, data.volCloudBottom);
+		float3 boundsMax = float3(FrameBuffer::CameraPosAdjust[0].xy + 0.5 * data.shadowVolumeRange, data.volCloudBottom + data.volCloudThickness);
+
+		float3 samplePos = posAbs;
+		// If outside bounds, project along sun direction to find entry point.
+		if (any(posAbs < boundsMin) || any(posAbs > boundsMax)) {
+			float3 safeSunDir = sign(sunDir) * max(abs(sunDir), 1e-6);
+			float3 tMin = (boundsMin - posAbs) / safeSunDir;
+			float3 tMax = (boundsMax - posAbs) / safeSunDir;
+			float3 t1 = min(tMin, tMax);
+			float3 t2 = max(tMin, tMax);
+			float tNear = max(max(t1.x, t1.y), t1.z);
+			float tFar = min(min(t2.x, t2.y), t2.z);
+			if (tNear > tFar)
+				return -1;
+			samplePos += (tNear + 128) * sunDir;
+		}
+
+		float3 uvw = samplePos - float3(FrameBuffer::CameraPosAdjust[0].xy, data.volCloudBottom);
+		uvw /= float3(data.shadowVolumeRange.xx, data.volCloudThickness);
+		uvw.xy += 0.5;
+		return uvw;
+	}
+
+	float3 GetDirlightTransmittance(float3 worldPosAbs, SamplerState samp)
+	{
+		SharedData::PhysSkyData data = SharedData::physSkyData;
+		float3 transmittance = 1.0;
+
+		float3 posRelative = worldPosAbs;
+		posRelative.z -= data.zBottom;
+
+		// Atmosphere transmittance
+		if (data.enabled && data.trMix > 1e-3) {
+			float r = data.zCameraPlanet + posRelative.z;
+			float cosSunZenith = data.sunDir.z;  // approximation: ignore height change
+			float2 lutUv = TrLutUv(r, cosSunZenith);
+			float3 trSample = TexTrLut.SampleLevel(samp, lutUv, 0).rgb;
+			trSample = lerp(1, trSample, data.trMix);
+			transmittance *= trSample;
+		}
+
+		// Volumetric cloud shadow volume
+		if (data.enableVolumetricClouds && data.volCloudThickness > 0) {
+			float3 uvw = GetShadowVolumeUvw(posRelative, data.sunDir);
+			float cloudDensity = 0;
+			if (all(uvw > 0) && all(uvw < 1))
+				cloudDensity = TexShadowVolume.SampleLevel(samp, uvw, 0);
+			else {
+				float3 posPlanet = posRelative + float3(-FrameBuffer::CameraPosAdjust[0].xy, data.rPlanet);
+				float rInner = data.rPlanet + data.volCloudBottom;
+				float rOuter = rInner + data.volCloudThickness;
+				float innerDist = RayIntersectSphere(posPlanet, data.sunDir, 0, rInner);
+				float outerDist = RayIntersectSphere(posPlanet, data.sunDir, 0, rOuter);
+				innerDist = max(innerDist, 0);
+				outerDist = max(outerDist, 0);
+				cloudDensity = abs(outerDist - innerDist) * data.volCloudAverageDensity;
+			}
+			transmittance *= exp(-(data.volCloudScatter + data.volCloudAbsorption) * cloudDensity);
+		}
+
+		return transmittance;
+	}
+#	endif
 #endif
 
 #ifndef OMIT_PS_NAMESPACE

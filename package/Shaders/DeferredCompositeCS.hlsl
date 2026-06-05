@@ -331,6 +331,13 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 	if (SharedData::physSkyData.enabled && depth < 1 - 1e-6) {
 		const float4 apSample = PhysSky::SampleAp(normalize(positionWS.xyz), dispatchID.xy, length(positionWS.xyz), PhysSky::SampSv);
 		color.xyz = color.xyz * apSample.w + apSample.xyz;
+
+		// Volumetric cloud compositing
+		if (SharedData::physSkyData.enableVolumetricClouds) {
+			float3 volTr = PhysSky::TexVolTr[dispatchID.xy];
+			float3 volLum = PhysSky::TexVolLum[dispatchID.xy];
+			color.xyz = color.xyz * volTr + volLum;
+		}
 	}
 #endif
 

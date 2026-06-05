@@ -2700,8 +2700,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(PHYSICAL_SKY)
-	if (SharedData::physSkyData.enabled)
+	if (SharedData::physSkyData.enabled) {
 		dirLightColor *= PhysSky::SampleTr(normalize(DirLightDirection.xyz), SampShadowMaskSampler);
+		dirLightColor *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, SampColorSampler);
+	}
 #	endif
 
 #	if defined(WATER_EFFECTS)
@@ -3639,6 +3641,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
 	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {
 		psout.Diffuse.xyz = Color::LinearToSrgb(psout.Diffuse.xyz);
+	}
+#	endif
+
+#	if defined(PHYSICAL_SKY) && !defined(DEFERRED)
+	if (SharedData::physSkyData.enabled && SharedData::physSkyData.enableVolumetricClouds) {
+		float2 screenUV = input.Position.xy * SharedData::physSkyData.rcpFrameDim;
+		float3 volTr = PhysSky::TexVolTr.SampleLevel(PhysSky::SampTr, screenUV, 0);
+		float3 volLum = PhysSky::TexVolLum.SampleLevel(PhysSky::SampTr, screenUV, 0);
+		psout.Diffuse.xyz = Color::LinearToGamma(Color::GammaToLinear(psout.Diffuse.xyz) * volTr + volLum);
 	}
 #	endif
 

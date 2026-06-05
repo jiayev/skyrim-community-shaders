@@ -383,6 +383,9 @@ void Deferred::DeferredPasses()
 			ssrOutput,                                                                                       // t13 SsrTexture (Screen Space Reflections)
 			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,                                          // t14 PhysicalSky AP LUT
 			physSky.loaded ? physSky.texApShadow->srv.get() : nullptr,                                       // t15 PhysicalSky AP Shadow
+			physSky.loaded && physSky.texVolTr ? physSky.texVolTr->srv.get() : nullptr,                      // t16 PhysicalSky Volumetric Transmittance
+			physSky.loaded && physSky.texVolLum ? physSky.texVolLum->srv.get() : nullptr,                    // t17 PhysicalSky Volumetric Luminance
+			physSky.loaded && physSky.texShadowVolume ? physSky.texShadowVolume->srv.get() : nullptr,        // t18 PhysicalSky Shadow Volume
 		};
 
 		ID3D11SamplerState* samplers[]{
@@ -399,7 +402,7 @@ void Deferred::DeferredPasses()
 		auto& vrStereoOpt = globals::features::vr.stereoOpt;
 		bool stereoCullingReady = globals::features::vr.IsStereoOptimizationCullingReady();
 		ID3D11ShaderResourceView* modeSRV = stereoCullingReady ? vrStereoOpt.GetModeTextureSRV() : nullptr;
-		context->CSSetShaderResources(16, 1, &modeSRV);
+		context->CSSetShaderResources(19, 1, &modeSRV);
 
 		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
@@ -416,7 +419,7 @@ void Deferred::DeferredPasses()
 
 		// Unbind mode texture SRV
 		ID3D11ShaderResourceView* nullSRV = nullptr;
-		context->CSSetShaderResources(16, 1, &nullSRV);
+		context->CSSetShaderResources(19, 1, &nullSRV);
 	}
 
 	// VR: Deactivate stencil culling now that geometry rendering is complete.
@@ -438,7 +441,7 @@ void Deferred::DeferredPasses()
 
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[20]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[19]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
