@@ -115,6 +115,7 @@ void Composite::Draw(TextureInfo& inout_tex)
 	if (flags == NONE)
 		return;
 
+	globals::profiler->BeginPass("PostProcessing::Composite");
 	auto state = globals::state;
 	auto context = globals::d3d::context;
 
@@ -123,6 +124,7 @@ void Composite::Draw(TextureInfo& inout_tex)
 	ID3D11ComputeShader* shader = compositeShaders[flags].get();
 	if (!shader) {
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 		return;
 	}
 
@@ -188,4 +190,5 @@ void Composite::Draw(TextureInfo& inout_tex)
 
 	inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
 	state->EndPerfEvent();
+	globals::profiler->EndPass();
 }
