@@ -447,9 +447,9 @@ Texture2D<unorm float> TexApShadow : register(t64);
 #	ifndef PS_PREPASS_RSRCS
 	// Volumetric cloud results. Pixel shaders use t110-t112 to avoid feature texture conflicts; DeferredCompositeCS binds them at t18-t20.
 #		if defined(PS_DEFERRED_RSRCS)
-	Texture2D<float3> TexVolTr : register(t18);
-	Texture2D<float3> TexVolLum : register(t19);
-	Texture3D<float> TexShadowVolume : register(t20);
+	Texture2D<float3> TexVolTr : register(t16);
+	Texture2D<float3> TexVolLum : register(t17);
+	Texture3D<float> TexShadowVolume : register(t18);
 #		else
 	Texture2D<float3> TexVolTr : register(t110);
 	Texture2D<float3> TexVolLum : register(t111);
