@@ -228,7 +228,9 @@ void NdfManager::UpdateNdf(const NdfSettings& ndfSettings)
 			context->CSSetConstantBuffers(1, 1, &cb);
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 			context->CSSetShader(cumuliformProgram.get(), nullptr, 0);
+			globals::profiler->BeginPass("PhysicalSky::CloudNdf");
 			context->Dispatch((kNdfDim + 7) >> 3, (kNdfDim + 7) >> 3, 1);
+			globals::profiler->EndPass();
 
 			uav = nullptr;
 			cb = nullptr;
