@@ -729,8 +729,9 @@ bool PhysicalSky::ShadersOK()
 	bool baseShadersOk = csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum && csShadowAccumHalfRes &&
 	                     texTrLut && texSvLut && texApLut && texApShadow;
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
-	                           (csVolMainView && csVolShadowVolume && ndfManager.cumuliformProgram &&
-								   texVolTr && texVolLum && texShadowVolume && nubisNoiseSrv && cloudTopLutSrv && cloudBottomLutSrv);
+	                           (csVolMainView && csVolShadowVolume && csVolCubemap && csVolCubemapHistory && volCubeHistoryCb && ndfManager.cumuliformProgram &&
+								   texVolTr && texVolLum && texVolCubeTr && texVolCubeLum && texVolCubeTrHistory && texVolCubeLumHistory &&
+								   texShadowVolume && nubisNoiseSrv && cloudTopLutSrv && cloudBottomLutSrv);
 	return baseShadersOk && volumetricShadersOk;
 }
 
@@ -866,18 +867,30 @@ void PhysicalSky::ReflectionsPrepass()
 	if (cbData.enabled) {
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get() };
 		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
+		ID3D11ShaderResourceView* msSrv = texMsLut ? texMsLut->srv.get() : nullptr;
+		globals::d3d::context->PSSetShaderResources(113, 1, &msSrv);
+		if (texVolCubeTr && texVolCubeLum) {
+			std::array<ID3D11ShaderResourceView*, 2> volCubeSrvs = { texVolCubeTr->srv.get(), texVolCubeLum->srv.get() };
+			globals::d3d::context->PSSetShaderResources(114, (uint)volCubeSrvs.size(), volCubeSrvs.data());
+		}
 	}
 }
 
 void PhysicalSky::Prepass()
 {
 	if (cbData.enabled) {
+		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolShadowVolume && csVolCubemap && csVolCubemapHistory && volCubeHistoryCb;
+
+		if (renderVolumetricClouds) {
+			ndfManager.UpdateNdf(ndfSettings);
+			RenderVolumetricClouds(VolumetricCloudPass::kShadowVolume);
+		}
+
 		AccumShadow();
 
 		// Volumetric clouds
-		if (settings.enableVolumetricClouds && csVolMainView && csVolShadowVolume) {
-			ndfManager.UpdateNdf(ndfSettings);
-			RenderVolumetricClouds();
+		if (renderVolumetricClouds) {
+			RenderVolumetricClouds(VolumetricCloudPass::kMainViewAndCubemap);
 		} else if (texVolTr && texVolLum) {
 			// Clear to neutral when disabled (white transmittance, black luminance)
 			auto context = globals::d3d::context;
@@ -885,17 +898,32 @@ void PhysicalSky::Prepass()
 			FLOAT lumClr[4] = { 0.f, 0.f, 0.f, 0.f };
 			context->ClearUnorderedAccessViewFloat(texVolTr->uav.get(), trClr);
 			context->ClearUnorderedAccessViewFloat(texVolLum->uav.get(), lumClr);
+			if (texVolCubeTr)
+				context->ClearUnorderedAccessViewFloat(texVolCubeTr->uav.get(), trClr);
+			if (texVolCubeLum)
+				context->ClearUnorderedAccessViewFloat(texVolCubeLum->uav.get(), lumClr);
+			if (texVolCubeTrHistory)
+				context->ClearUnorderedAccessViewFloat(texVolCubeTrHistory->uav.get(), trClr);
+			if (texVolCubeLumHistory)
+				context->ClearUnorderedAccessViewFloat(texVolCubeLumHistory->uav.get(), lumClr);
 			if (texShadowVolume)
 				context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), lumClr);
+			volCubeHistoryValid = false;
 		}
 
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get(), texApShadow->srv.get() };
 		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
+		ID3D11ShaderResourceView* msSrv = texMsLut ? texMsLut->srv.get() : nullptr;
+		globals::d3d::context->PSSetShaderResources(113, 1, &msSrv);
 
 		// Bind volumetric cloud results and shadow volume for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
 		if (texVolTr && texVolLum) {
 			std::array<ID3D11ShaderResourceView*, 3> volSrvs = { texVolTr->srv.get(), texVolLum->srv.get(), texShadowVolume ? texShadowVolume->srv.get() : nullptr };
 			globals::d3d::context->PSSetShaderResources(110, (uint)volSrvs.size(), volSrvs.data());
+		}
+		if (texVolCubeTr && texVolCubeLum) {
+			std::array<ID3D11ShaderResourceView*, 2> volCubeSrvs = { texVolCubeTr->srv.get(), texVolCubeLum->srv.get() };
+			globals::d3d::context->PSSetShaderResources(114, (uint)volCubeSrvs.size(), volCubeSrvs.data());
 		}
 	}
 }
@@ -979,6 +1007,10 @@ void PhysicalSky::AccumShadow()
 
 	float2 size = Util::ConvertToDynamic(state->screenSize);
 	uint resolution[2] = { (uint)size.x, (uint)size.y };
+	if (settings.halfResApShadow) {
+		resolution[0] = std::max(1u, resolution[0] / 2u);
+		resolution[1] = std::max(1u, resolution[1] / 2u);
+	}
 
 	constexpr auto debugStr = "Physical Sky: Shadow Accumulation";
 	state->BeginPerfEvent(debugStr);
@@ -995,6 +1027,7 @@ void PhysicalSky::AccumShadow()
 			static_cast<ID3D11ShaderResourceView*>(nullptr),
 			terrainShadows.IsHeightMapReady() ? terrainShadows.texShadowHeight->srv.get() : nullptr,
 			cloudShadows.loaded ? cloudShadows.texCloudShadowLayers[CloudShadows::kMaxCloudLayers - 1]->srv.get() : nullptr,
+			settings.enableVolumetricClouds && texShadowVolume ? texShadowVolume->srv.get() : nullptr,
 		};
 		auto uav = texApShadow->uav.get();
 

@@ -348,7 +348,9 @@ PS_OUTPUT main(PS_INPUT input)
 		float skyShadow = GetPhysSkyCloudShadow(skyViewDir, input.Position.xy);
 		float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
 		float3 physSkyColor = PhysSky::SampleSky(skyViewDir, skyShadow, PhysSky::SampSv);
-		float3 skyColor = (SharedData::physSkyData.enableVolumetricClouds && !inReflection) ? PhysSky::CompositeVolumetricCloudsUv(physSkyColor, physSkyScreenUV, PhysSky::SampSv) : physSkyColor;
+		float3 skyColor = physSkyColor;
+		if (SharedData::physSkyData.enableVolumetricClouds)
+			skyColor = inReflection ? PhysSky::CompositeVolumetricCloudsCube(physSkyColor, skyViewDir, PhysSky::SampSv) : PhysSky::CompositeVolumetricCloudsUv(physSkyColor, physSkyScreenUV, PhysSky::SampSv);
 		psout.Color.xyz = lerp(skyColor, psout.Color.xyz, SharedData::physSkyData.vanillaMix);
 
 #		elif defined(PS_CLOUDS)
@@ -375,8 +377,16 @@ PS_OUTPUT main(PS_INPUT input)
 			psout.Color.xyz = sunDiskColor;
 			psout.Color.w = 1.0;
 		}
-		float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
-		psout.Color.xyz = PhysSky::CompositeVolumetricCloudsUv(psout.Color.xyz, physSkyScreenUV, PhysSky::SampSv);
+		if (SharedData::physSkyData.enableVolumetricClouds) {
+			float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
+			psout.Color.xyz = PhysSky::ApplyVolumetricCloudTransmittanceUv(psout.Color.xyz, physSkyScreenUV, PhysSky::SampSv);
+		}
+#		else
+		if (SharedData::physSkyData.enableVolumetricClouds) {
+			float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
+			float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
+			psout.Color.xyz = inReflection ? PhysSky::CompositeVolumetricCloudsCube(psout.Color.xyz, physSkyViewDir, PhysSky::SampSv) : PhysSky::CompositeVolumetricCloudsUv(psout.Color.xyz, physSkyScreenUV, PhysSky::SampSv);
+		}
 #		endif
 	}
 #	endif
