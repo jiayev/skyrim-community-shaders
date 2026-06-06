@@ -261,7 +261,9 @@ void PhysicalSky::RenderVolumetricClouds()
 			dispatch_size[0] = dispatch_size[1] = kShadowVolW;
 		}
 
+		globals::profiler->BeginPass("PhysicalSky::VolumetricShadowVolume");
 		context->Dispatch(dispatch_size[0], dispatch_size[1], 1);
+		globals::profiler->EndPass();
 	}
 	state->EndPerfEvent();
 
@@ -278,7 +280,9 @@ void PhysicalSky::RenderVolumetricClouds()
 
 		uint32_t resW = (uint32_t)cbData.frameDim.x;
 		uint32_t resH = (uint32_t)cbData.frameDim.y;
+		globals::profiler->BeginPass("PhysicalSky::VolumetricMainView");
 		context->Dispatch((resW + 7u) >> 3, (resH + 7u) >> 3, 1);
+		globals::profiler->EndPass();
 	}
 	state->EndPerfEvent();
 

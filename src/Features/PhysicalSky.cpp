@@ -921,7 +921,9 @@ void PhysicalSky::GenerateLuts()
 		uav = texTrLut->uav.get();
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShader(csTrLutGen.get(), nullptr, 0);
+		globals::profiler->BeginPass("PhysicalSky::TransmittanceLut");
 		context->Dispatch((kTrLutW + 7) >> 3, (kTrLutH + 7) >> 3, 1);
+		globals::profiler->EndPass();
 
 		// -> multiscatter
 		uav = texMsLut->uav.get();
@@ -929,7 +931,9 @@ void PhysicalSky::GenerateLuts()
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShaderResources(0, (int)srvs.size(), srvs.data());
 		context->CSSetShader(csMsLutGen.get(), nullptr, 0);
+		globals::profiler->BeginPass("PhysicalSky::MultiscatterLut");
 		context->Dispatch((kMsLutW + 7) >> 3, (kMsLutH + 7) >> 3, 1);
+		globals::profiler->EndPass();
 
 		// -> sky-view
 		uav = texSvLut->uav.get();
@@ -937,13 +941,17 @@ void PhysicalSky::GenerateLuts()
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShaderResources(0, (int)srvs.size(), srvs.data());
 		context->CSSetShader(csSvLutGen.get(), nullptr, 0);
+		globals::profiler->BeginPass("PhysicalSky::SkyViewLut");
 		context->Dispatch((kSvLutW + 7) >> 3, (kSvLutH + 7) >> 3, 1);
+		globals::profiler->EndPass();
 
 		// -> aerial perspective
 		uav = texApLut->uav.get();
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShader(csApLutGen.get(), nullptr, 0);
+		globals::profiler->BeginPass("PhysicalSky::AerialPerspectiveLut");
 		context->Dispatch((kApLutW + 7) >> 3, (kApLutH + 7) >> 3, 1);
+		globals::profiler->EndPass();
 
 		/* ---- RESTORE ---- */
 		samplers.fill(nullptr);
@@ -996,7 +1004,9 @@ void PhysicalSky::AccumShadow()
 		context->CSSetShaderResources(98, 1, &directionalShadowLights);
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShader(settings.halfResApShadow ? csShadowAccumHalfRes.get() : csShadowAccum.get(), nullptr, 0);
+		globals::profiler->BeginPass("PhysicalSky::AccumShadow");
 		context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
+		globals::profiler->EndPass();
 
 		/* ---- RESTORE ---- */
 		sampler = nullptr;
