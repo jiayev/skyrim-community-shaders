@@ -226,10 +226,15 @@ struct PhysicalSky final : public Feature
 	constexpr static uint16_t kShadowVolW = 256;
 	constexpr static uint16_t kShadowVolH = 256;
 	constexpr static uint16_t kShadowVolD = 64;
+	constexpr static uint16_t kVolCubeSize = 64;
 	constexpr static uint16_t kNubisSize = 128;
 
-	eastl::unique_ptr<Texture2D> texVolTr = nullptr;         // volumetric transmittance result
-	eastl::unique_ptr<Texture2D> texVolLum = nullptr;        // volumetric luminance result
+	eastl::unique_ptr<Texture2D> texVolTr = nullptr;       // volumetric transmittance result
+	eastl::unique_ptr<Texture2D> texVolLum = nullptr;      // volumetric luminance result
+	eastl::unique_ptr<Texture2D> texVolCubeTr = nullptr;   // low-resolution cubemap transmittance result
+	eastl::unique_ptr<Texture2D> texVolCubeLum = nullptr;  // low-resolution cubemap luminance result
+	eastl::unique_ptr<Texture2D> texVolCubeTrHistory = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeLumHistory = nullptr;
 	eastl::unique_ptr<Texture3D> texShadowVolume = nullptr;  // cloud shadow volume 3D
 
 	winrt::com_ptr<ID3D11ShaderResourceView> cloudTopLutSrv = nullptr;
@@ -279,16 +284,32 @@ struct PhysicalSky final : public Feature
 
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
 
+	struct VolumetricCloudCubeHistoryCB
+	{
+		float historyWeight;
+		float3 _pad0;
+	};
+
+	eastl::unique_ptr<ConstantBuffer> volCubeHistoryCb = nullptr;
+	bool volCubeHistoryValid = false;
+
 	winrt::com_ptr<ID3D11ComputeShader> csVolMainView = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowVolume = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolCubemap = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolCubemapHistory = nullptr;
 
 	winrt::com_ptr<ID3D11SamplerState> sampTileable = nullptr;
 
 	// Volumetric cloud methods
+	enum class VolumetricCloudPass
+	{
+		kShadowVolume,
+		kMainViewAndCubemap
+	};
 	void SetupVolumetricResources();
 	void CompileVolumetricShaders();
 	void LoadCloudTextures();
-	void RenderVolumetricClouds();
+	void RenderVolumetricClouds(VolumetricCloudPass a_pass);
 
 	winrt::com_ptr<ID3D11SamplerState> sampTr = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> sampSv = nullptr;

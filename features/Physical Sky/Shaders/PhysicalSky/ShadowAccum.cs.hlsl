@@ -4,10 +4,14 @@
 
 #define OMIT_PS_NAMESPACE
 #define PS_PREPASS_SAMPLERS
+#define PS_PREPASS_RSRCS
+#define PS_NO_RSRCS
+#define PS_ENABLE_DIRLIGHT_TRANSMITTANCE
 #define CLOUD_SHADOW_REGISTER t4
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/VR.hlsli"
+Texture3D<float> TexShadowVolume : register(t5);
 #include "PhysicalSky/Common.hlsli"
 
 #if defined(HALF_RES)
@@ -36,6 +40,11 @@ RWTexture2D<unorm float> RWTexOutput : register(u0);
 const static uint nStep = 30;
 const static float rcpNStep = rcp(nStep);
 
+float3 GetVolumetricCloudTransmittance(float3 posWorldRel, uint eyeIndex)
+{
+	return GetDirlightTransmittance(posWorldRel + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, SampTr);
+}
+
 float SampleShadow(float3 posWorldRel, uint eyeIndex)
 {
 	const SharedData::PhysSkyData data = SharedData::physSkyData;
@@ -44,6 +53,10 @@ float SampleShadow(float3 posWorldRel, uint eyeIndex)
 
 	// cloud shadows
 	shadow *= Remap(CloudShadows::GetCloudShadowMult(posWorldRel, SampTr), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1);
+	[branch] if (all(shadow < 1e-8)) return 0;
+
+	// physical sky volumetric cloud shadows
+	shadow *= Remap(dot(GetVolumetricCloudTransmittance(posWorldRel, eyeIndex), float3(0.2126, 0.7152, 0.0722)), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1);
 	[branch] if (all(shadow < 1e-8)) return 0;
 
 	// dir shadow map
@@ -83,9 +96,9 @@ float SampleShadow(float3 posWorldRel, uint eyeIndex)
 	const float2 rnd = Random::R2Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
 
 	float2 stereoUv = (pxCoords + 0.5) * data.rcpFrameDim;
+	stereoUv *= RES_MULT;
 	if (stereoUv.x >= 1.f || stereoUv.y >= 1.f)
 		return;
-	stereoUv *= RES_MULT;
 	const uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(stereoUv);
 	const float2 uv = Stereo::ConvertFromStereoUV(stereoUv, eyeIndex) * FrameBuffer::DynamicResolutionParams2.xy;
 

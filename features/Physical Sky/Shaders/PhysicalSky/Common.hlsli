@@ -44,11 +44,13 @@ namespace PhysSky
 #elif defined(PS_DEFERRED_RSRCS)
 Texture3D<float4> TexApLut : register(t16);
 Texture2D<unorm float> TexApShadow : register(t17);
+Texture2D<float4> TexMsLut : register(t20);
 #else
 Texture2D<float4> TexTrLut : register(t61);
 Texture2D<float4> TexSvLut : register(t62);
 Texture3D<float4> TexApLut : register(t63);
 Texture2D<unorm float> TexApShadow : register(t64);
+Texture2D<float4> TexMsLut : register(t113);
 #endif
 
 	static const float RCP_PI = 1 / Math::PI;         // PI
@@ -273,6 +275,15 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		}
 	}
 
+	float GetApShadowedMultiScatterVisibility(float shadow, float3 multiScatter)
+	{
+		SharedData::PhysSkyData data = SharedData::physSkyData;
+
+		float shadowableLum = Color::RGBToLuminance(max(0.0, data.sunlightColor));
+		float unshadowedLum = Color::RGBToLuminance(max(0.0, data.masserColor + data.secundaColor + multiScatter));
+		return (unshadowedLum + shadowableLum * (1.0 - saturate(shadow))) / max(unshadowedLum + shadowableLum, 1e-6);
+	}
+
 #ifndef PS_PREPASS_RSRCS
 
 	float GetApShadow(uint2 pxCoord)
@@ -417,6 +428,16 @@ Texture2D<unorm float> TexApShadow : register(t64);
 #		endif
 #	endif
 
+	float3 SampleApMultiScatter(SamplerState samp)
+	{
+		SharedData::PhysSkyData data = SharedData::physSkyData;
+
+		float3 multiScatter = TexMsLut.SampleLevel(samp, TrLutUv(data.zCameraPlanet, data.sunDir.z), 0).rgb * data.sunlightColor;
+		multiScatter += TexMsLut.SampleLevel(samp, TrLutUv(data.zCameraPlanet, data.masserDir.z), 0).rgb * data.masserColor;
+		multiScatter += TexMsLut.SampleLevel(samp, TrLutUv(data.zCameraPlanet, data.secundaDir.z), 0).rgb * data.secundaColor;
+		return multiScatter;
+	}
+
 	float4 SampleAp(float3 viewDir, float dist, float shadow, SamplerState sampSv)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
@@ -428,7 +449,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		const float depth_slice = lerp(.5 / apDims.z, 1 - .5 / apDims.z, saturate(dist / AP_MAX_DIST));
 		float4 apColor = TexApLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0);
 
-		apColor.rgb *= 1 - shadow;
+		apColor.rgb *= GetApShadowedMultiScatterVisibility(shadow, SampleApMultiScatter(sampSv));
 
 		if (data.tonemapper == 1)
 			apColor.rgb = Color::LinearToGamma(apColor.rgb);
@@ -456,6 +477,8 @@ Texture2D<unorm float> TexApShadow : register(t64);
 	Texture2D<float3> TexVolTr : register(t110);
 	Texture2D<float3> TexVolLum : register(t111);
 	Texture3D<float> TexShadowVolume : register(t112);
+	TextureCube<float3> TexVolCubeTr : register(t114);
+	TextureCube<float3> TexVolCubeLum : register(t115);
 #		endif
 
 	float3 CompositeVolumetricClouds(float3 color, uint2 pxCoord)
@@ -477,6 +500,21 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		return CompositeVolumetricCloudsUvDr(color, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(screenUv), samp);
 	}
 
+	float3 ApplyVolumetricCloudTransmittanceUv(float3 color, float2 screenUv, SamplerState samp)
+	{
+		const float3 volTr = TexVolTr.SampleLevel(samp, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(screenUv), 0);
+		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * volTr);
+	}
+
+#		ifndef PS_DEFERRED_RSRCS
+	float3 CompositeVolumetricCloudsCube(float3 color, float3 viewDir, SamplerState samp)
+	{
+		float3 volTr = TexVolCubeTr.SampleLevel(samp, viewDir, 0);
+		float3 volLum = TexVolCubeLum.SampleLevel(samp, viewDir, 0);
+		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * volTr + volLum);
+	}
+#		endif
+
 	float3 CompositeAerialPerspective(float3 color, float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)
 	{
 		if (SharedData::physSkyData.enableVolumetricClouds)
@@ -496,6 +534,21 @@ Texture2D<unorm float> TexApShadow : register(t64);
 	}
 
 #		ifndef PS_DEFERRED_RSRCS
+	float3 CompositeAerialPerspectiveReflection(float3 color, float3 viewDir, float dist, SamplerState sampSv)
+	{
+		if (SharedData::physSkyData.enableVolumetricClouds)
+			return CompositeVolumetricCloudsCube(color, viewDir, sampSv);
+
+		const float4 apSample = SampleAp(viewDir, dist, 0.0, sampSv);
+		return color * apSample.w + apSample.xyz;
+	}
+#		endif
+
+#	endif
+
+#endif
+
+#if !defined(PS_DEFERRED_RSRCS) && (!defined(PS_PREPASS_RSRCS) || defined(PS_ENABLE_DIRLIGHT_TRANSMITTANCE))
 	float3 GetShadowVolumeUvw(float3 posRelative, float3 sunDir)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
@@ -512,9 +565,9 @@ Texture2D<unorm float> TexApShadow : register(t64);
 			float3 t2 = max(tMin, tMax);
 			float tNear = max(max(t1.x, t1.y), t1.z);
 			float tFar = min(min(t2.x, t2.y), t2.z);
-			if (tNear > tFar)
+			if (tNear > tFar || tFar < 0)
 				return -1;
-			samplePos += (tNear + 128) * sunDir;
+			samplePos += (max(tNear, 0) + 128) * sunDir;
 		}
 
 		float3 uvw = samplePos - float3(FrameBuffer::CameraPosAdjust[0].xy, data.volCloudBottom);
@@ -549,8 +602,6 @@ Texture2D<unorm float> TexApShadow : register(t64);
 
 		return exp(-(data.volCloudScatter + data.volCloudAbsorption) * cloudDensity);
 	}
-#		endif
-#	endif
 #endif
 
 #ifndef OMIT_PS_NAMESPACE

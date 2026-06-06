@@ -262,6 +262,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
 		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+	diffuseColor *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, SampShadowMaskSampler);
 #			endif
 
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
@@ -283,7 +284,11 @@ PS_OUTPUT main(PS_INPUT input)
 	if (SharedData::physSkyData.enabled) {
 		float3 physSkyViewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 		float2 physSkyScreenUV = FrameBuffer::ViewToUV(physSkyViewPosition, true, eyeIndex);
-		psout.Diffuse.xyz = PhysSky::CompositeAerialPerspective(psout.Diffuse.xyz, normalize(input.WorldPosition.xyz), input.Position.xy, physSkyScreenUV, length(input.WorldPosition.xyz), SampColorSampler);
+		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
+		if (inReflection)
+			psout.Diffuse.xyz = PhysSky::CompositeAerialPerspectiveReflection(psout.Diffuse.xyz, physSkyViewDir, length(input.WorldPosition.xyz), SampColorSampler);
+		else
+			psout.Diffuse.xyz = PhysSky::CompositeAerialPerspective(psout.Diffuse.xyz, physSkyViewDir, input.Position.xy, physSkyScreenUV, length(input.WorldPosition.xyz), SampColorSampler);
 	}
 #			endif
 
@@ -315,6 +320,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
 		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+	diffuseColor *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, SampShadowMaskSampler);
 #			endif
 
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
