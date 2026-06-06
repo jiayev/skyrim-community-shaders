@@ -31,14 +31,16 @@ namespace PhysSky
 #endif
 
 #ifdef PS_DEFERRED_SAMPLERS
-	SamplerState SampSv : register(s2);
+	SamplerState SampSv : register(s1);
 #endif
 
 #ifdef PS_PREPASS_RSRCS
+#	ifndef PS_NO_RSRCS
 	Texture2D<float4> TexTrLut : register(t0);
 	Texture2D<float4> TexMsLut : register(t1);
 	Texture2D<float4> TexSvLut : register(t2);
 	Texture3D<float4> TexApLut : register(t3);
+#	endif
 #elif defined(PS_DEFERRED_RSRCS)
 Texture3D<float4> TexApLut : register(t14);
 Texture2D<unorm float> TexApShadow : register(t15);
@@ -445,7 +447,7 @@ Texture2D<unorm float> TexApShadow : register(t64);
 	}
 
 #	ifndef PS_PREPASS_RSRCS
-	// Volumetric cloud results. Pixel shaders use t110-t112 to avoid feature texture conflicts; DeferredCompositeCS binds them at t18-t20.
+	// Volumetric cloud main-view result and shadow volume. Pixel shaders use t110-t112 to avoid feature texture conflicts.
 #		if defined(PS_DEFERRED_RSRCS)
 	Texture2D<float3> TexVolTr : register(t16);
 	Texture2D<float3> TexVolLum : register(t17);
@@ -456,18 +458,56 @@ Texture2D<unorm float> TexApShadow : register(t64);
 	Texture3D<float> TexShadowVolume : register(t112);
 #		endif
 
-	float3 GetShadowVolumeUvw(float3 posAbs, float3 sunDir)
+	float3 CompositeVolumetricClouds(float3 color, uint2 pxCoord)
+	{
+		float3 volTr = TexVolTr[pxCoord];
+		float3 volLum = TexVolLum[pxCoord];
+		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * volTr + volLum);
+	}
+
+	float3 CompositeVolumetricCloudsUvDr(float3 color, float2 screenUvDr, SamplerState samp)
+	{
+		float3 volTr = TexVolTr.SampleLevel(samp, screenUvDr, 0);
+		float3 volLum = TexVolLum.SampleLevel(samp, screenUvDr, 0);
+		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * volTr + volLum);
+	}
+
+	float3 CompositeVolumetricCloudsUv(float3 color, float2 screenUv, SamplerState samp)
+	{
+		return CompositeVolumetricCloudsUvDr(color, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(screenUv), samp);
+	}
+
+	float3 CompositeAerialPerspective(float3 color, float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)
+	{
+		if (SharedData::physSkyData.enableVolumetricClouds)
+			return CompositeVolumetricClouds(color, pxCoord);
+
+		const float4 apSample = SampleAp(viewDir, pxCoord, dist, sampSv);
+		return color * apSample.w + apSample.xyz;
+	}
+
+	float3 CompositeAerialPerspective(float3 color, float3 viewDir, float2 screenPos, float2 screenUv, float dist, SamplerState sampSv)
+	{
+		if (SharedData::physSkyData.enableVolumetricClouds)
+			return CompositeVolumetricCloudsUv(color, screenUv, sampSv);
+
+		const float4 apSample = SampleAp(viewDir, uint2(screenPos), dist, sampSv);
+		return color * apSample.w + apSample.xyz;
+	}
+
+#		ifndef PS_DEFERRED_RSRCS
+	float3 GetShadowVolumeUvw(float3 posRelative, float3 sunDir)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
 		float3 boundsMin = float3(FrameBuffer::CameraPosAdjust[0].xy - 0.5 * data.shadowVolumeRange, data.volCloudBottom);
 		float3 boundsMax = float3(FrameBuffer::CameraPosAdjust[0].xy + 0.5 * data.shadowVolumeRange, data.volCloudBottom + data.volCloudThickness);
 
-		float3 samplePos = posAbs;
-		// If outside bounds, project along sun direction to find entry point.
-		if (any(posAbs < boundsMin) || any(posAbs > boundsMax)) {
-			float3 safeSunDir = sign(sunDir) * max(abs(sunDir), 1e-6);
-			float3 tMin = (boundsMin - posAbs) / safeSunDir;
-			float3 tMax = (boundsMax - posAbs) / safeSunDir;
+		float3 samplePos = posRelative;
+		if (any(posRelative < boundsMin) || any(posRelative > boundsMax)) {
+			float3 sunSign = float3(sunDir.x < 0 ? -1 : 1, sunDir.y < 0 ? -1 : 1, sunDir.z < 0 ? -1 : 1);
+			float3 safeSunDir = sunSign * max(abs(sunDir), 1e-6);
+			float3 tMin = (boundsMin - posRelative) / safeSunDir;
+			float3 tMax = (boundsMax - posRelative) / safeSunDir;
 			float3 t1 = min(tMin, tMax);
 			float3 t2 = max(tMin, tMax);
 			float tNear = max(max(t1.x, t1.y), t1.z);
@@ -488,40 +528,28 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		SharedData::PhysSkyData data = SharedData::physSkyData;
 		float3 transmittance = 1.0;
 
+		if (!data.enableVolumetricClouds || data.volCloudThickness <= 0)
+			return transmittance;
+
 		float3 posRelative = worldPosAbs;
 		posRelative.z -= data.zBottom;
 
-		// Atmosphere transmittance
-		if (data.enabled && data.trMix > 1e-3) {
-			float r = data.zCameraPlanet + posRelative.z;
-			float cosSunZenith = data.sunDir.z;  // approximation: ignore height change
-			float2 lutUv = TrLutUv(r, cosSunZenith);
-			float3 trSample = TexTrLut.SampleLevel(samp, lutUv, 0).rgb;
-			trSample = lerp(1, trSample, data.trMix);
-			transmittance *= trSample;
+		float3 uvw = GetShadowVolumeUvw(posRelative, data.sunDir);
+		float cloudDensity = 0;
+		if (all(uvw > 0) && all(uvw < 1)) {
+			cloudDensity = TexShadowVolume.SampleLevel(samp, uvw, 0);
+		} else {
+			float3 posPlanet = posRelative + float3(-FrameBuffer::CameraPosAdjust[0].xy, data.rPlanet);
+			float rInner = data.rPlanet + data.volCloudBottom;
+			float rOuter = rInner + data.volCloudThickness;
+			float innerDist = max(RayIntersectSphere(posPlanet, data.sunDir, 0, rInner), 0);
+			float outerDist = max(RayIntersectSphere(posPlanet, data.sunDir, 0, rOuter), 0);
+			cloudDensity = abs(outerDist - innerDist) * data.volCloudAverageDensity;
 		}
 
-		// Volumetric cloud shadow volume
-		if (data.enableVolumetricClouds && data.volCloudThickness > 0) {
-			float3 uvw = GetShadowVolumeUvw(posRelative, data.sunDir);
-			float cloudDensity = 0;
-			if (all(uvw > 0) && all(uvw < 1))
-				cloudDensity = TexShadowVolume.SampleLevel(samp, uvw, 0);
-			else {
-				float3 posPlanet = posRelative + float3(-FrameBuffer::CameraPosAdjust[0].xy, data.rPlanet);
-				float rInner = data.rPlanet + data.volCloudBottom;
-				float rOuter = rInner + data.volCloudThickness;
-				float innerDist = RayIntersectSphere(posPlanet, data.sunDir, 0, rInner);
-				float outerDist = RayIntersectSphere(posPlanet, data.sunDir, 0, rOuter);
-				innerDist = max(innerDist, 0);
-				outerDist = max(outerDist, 0);
-				cloudDensity = abs(outerDist - innerDist) * data.volCloudAverageDensity;
-			}
-			transmittance *= exp(-(data.volCloudScatter + data.volCloudAbsorption) * cloudDensity);
-		}
-
-		return transmittance;
+		return exp(-(data.volCloudScatter + data.volCloudAbsorption) * cloudDensity);
 	}
+#		endif
 #	endif
 #endif
 

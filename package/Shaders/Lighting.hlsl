@@ -3396,8 +3396,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	color.xyz = Color::IrradianceToGamma(color.xyz);
 #		if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
-		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), input.Position.xy, length(input.WorldPosition.xyz), SampColorSampler);
-		color.xyz = color.xyz * apSample.w + apSample.xyz;
+		color.xyz = PhysSky::CompositeAerialPerspective(color.xyz, normalize(input.WorldPosition.xyz), input.Position.xy, screenUV, length(input.WorldPosition.xyz), SampColorSampler);
 	}
 #		endif
 
@@ -3641,15 +3640,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
 	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {
 		psout.Diffuse.xyz = Color::LinearToSrgb(psout.Diffuse.xyz);
-	}
-#	endif
-
-#	if defined(PHYSICAL_SKY) && !defined(DEFERRED)
-	if (SharedData::physSkyData.enabled && SharedData::physSkyData.enableVolumetricClouds) {
-		float2 screenUV = input.Position.xy * SharedData::physSkyData.rcpFrameDim;
-		float3 volTr = PhysSky::TexVolTr.SampleLevel(PhysSky::SampTr, screenUV, 0);
-		float3 volLum = PhysSky::TexVolLum.SampleLevel(PhysSky::SampTr, screenUV, 0);
-		psout.Diffuse.xyz = Color::LinearToGamma(Color::GammaToLinear(psout.Diffuse.xyz) * volTr + volLum);
 	}
 #	endif
 

@@ -2,12 +2,89 @@
 #ifndef COMPUTESHADER
 #	define COMPUTESHADER
 #endif
-#define SKY_SAMPLERS
-#include "PhysicalSky/PhysicalSky.hlsli"
+#define PS_SKY_SAMPLERS
+#define PS_PREPASS_RSRCS
+#define PS_NO_RSRCS
+#define OMIT_PS_NAMESPACE
+#include "PhysicalSky/Common.hlsli"
 
-#include "Common/FrameBuffer.hlsli"
-#include "Common/SharedData.hlsli"
-#include "Common/VR.hlsli"
+SamplerState TileableSampler : register(s2);
+#define TransmittanceSampler SampTr
+#define SkyViewSampler SampSv
+
+struct CloudLayer
+{
+	float bottom;
+	float thickness;
+	float2 ndf_freq;
+	float noise_scale_or_freq;
+	float3 noise_offset_or_speed;
+	float power;
+	float3 scatter;
+	float3 absorption;
+	float average_density;
+	float ms_mult;
+	float ms_transmittance_power;
+	float ms_height_power;
+	float ambient_mult;
+};
+
+struct VolumetricCloudData
+{
+	float rayMarchRange;
+	float shadowVolumeRange;
+	uint cloudMaxStep;
+	float _pad0;
+
+	float2 frameDim;
+	float2 rcpFrameDim;
+	float3 dirlightDir;
+	float _pad1;
+	float3 dirlightColor;
+	float _pad2;
+	float bottomZ;
+	float planetRadius;
+	float atmosThickness;
+	float aerialPerspectiveMaxDist;
+
+	float cloudBottom;
+	float cloudThickness;
+	float2 ndfFreq;
+	float noiseFreq;
+	float3 noiseOffset;
+	float power;
+	float3 cloudScatter;
+	float3 cloudAbsorption;
+	float averageDensity;
+	float msMult;
+	float msTransmittancePower;
+	float msHeightPower;
+	float ambientMult;
+};
+
+CloudLayer GetCloudLayer(VolumetricCloudData info)
+{
+	CloudLayer cloud;
+	cloud.bottom = info.cloudBottom;
+	cloud.thickness = info.cloudThickness;
+	cloud.ndf_freq = info.ndfFreq;
+	cloud.noise_scale_or_freq = info.noiseFreq;
+	cloud.noise_offset_or_speed = info.noiseOffset;
+	cloud.power = info.power;
+	cloud.scatter = info.cloudScatter;
+	cloud.absorption = info.cloudAbsorption;
+	cloud.average_density = info.averageDensity;
+	cloud.ms_mult = info.msMult;
+	cloud.ms_transmittance_power = info.msTransmittancePower;
+	cloud.ms_height_power = info.msHeightPower;
+	cloud.ambient_mult = info.ambientMult;
+	return cloud;
+}
+
+StructuredBuffer<VolumetricCloudData> VolumetricCloudBuffer : register(t0);
+Texture2D<float4> TexTransmittance : register(t1);
+Texture2D<float4> TexMultiScatter : register(t2);
+Texture3D<float4> TexAerialPerspective : register(t3);
 
 Texture2D<float> TexDepth : register(t4);
 
@@ -35,6 +112,63 @@ RWTexture2D<float3> RWTexLum : register(u1);
 RWTexture3D<float> RWShadowVolume : register(u0);
 
 #define ISNAN(x) (!(x < 0.f || x > 0.f || x == 0.f))
+
+float RayIntersectSphereCentered(float3 orig, float3 dir, float r)
+{
+	return RayIntersectSphere(orig, dir, 0, r);
+}
+
+float4 ApplyAerialPerspectiveSettings(float4 apSample)
+{
+	const SharedData::PhysSkyData data = SharedData::physSkyData;
+
+	if (data.tonemapper == 2)
+		apSample.rgb = apSample.rgb / (1 + apSample.rgb);
+
+	apSample.rgb = lerp(0, apSample.rgb, data.apLumMix);
+	apSample.a = lerp(1, apSample.a, data.apTrMix);
+
+	return apSample;
+}
+
+float InBetweenSphereDistance(float3 orig, float3 dir, float rInner, float rOuter)
+{
+	float innerDist = max(RayIntersectSphereCentered(orig, dir, rInner), 0);
+	float outerDist = max(RayIntersectSphereCentered(orig, dir, rOuter), 0);
+	return abs(outerDist - innerDist);
+}
+
+float2 RayIntersectAABB(float3 rayOrigin, float3 rayDir, float3 boxMin, float3 boxMax)
+{
+	float3 raySign = float3(rayDir.x < 0 ? -1 : 1, rayDir.y < 0 ? -1 : 1, rayDir.z < 0 ? -1 : 1);
+	float3 safeRayDir = raySign * max(abs(rayDir), 1e-6);
+	float3 tMin = (boxMin - rayOrigin) / safeRayDir;
+	float3 tMax = (boxMax - rayOrigin) / safeRayDir;
+	float3 t1 = min(tMin, tMax);
+	float3 t2 = max(tMin, tMax);
+	float tNear = max(max(t1.x, t1.y), t1.z);
+	float tFar = min(min(t2.x, t2.y), t2.z);
+	return float2(tNear, tFar);
+}
+
+float3 GetShadowVolumeSampleUvw(float3 pos, float3 rayDir, VolumetricCloudData info, CloudLayer cloud)
+{
+	float3 boundsMin = float3(FrameBuffer::CameraPosAdjust[0].xy - 0.5 * info.shadowVolumeRange, cloud.bottom);
+	float3 boundsMax = float3(FrameBuffer::CameraPosAdjust[0].xy + 0.5 * info.shadowVolumeRange, cloud.bottom + cloud.thickness);
+
+	float3 samplePos = pos;
+	if (any(pos < boundsMin) || any(pos > boundsMax)) {
+		float2 hitDists = RayIntersectAABB(pos, rayDir, boundsMin, boundsMax);
+		if (hitDists.x > hitDists.y)
+			return -1;
+		samplePos += (hitDists.x + 128) * rayDir;
+	}
+
+	float3 uvw = samplePos - float3(FrameBuffer::CameraPosAdjust[0].xy, cloud.bottom);
+	uvw /= float3(info.shadowVolumeRange.xx, cloud.thickness);
+	uvw.xy += 0.5;
+	return uvw;
+}
 
 struct RayMarchInfo
 {
@@ -138,7 +272,8 @@ NDFInfo sampleNDF(
 	NDFInfo ndf;
 	initNDFInfo(ndf);
 
-	float planet_z = length(pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, PhysSkyBuffer[0].planet_radius)) - PhysSkyBuffer[0].planet_radius;
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	float planet_z = length(pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planetRadius)) - info.planetRadius;
 	if (planet_z < cloud.bottom || planet_z > cloud.bottom + cloud.thickness)
 		return ndf;
 
@@ -214,18 +349,19 @@ float sampleCloudDensity(
 // sample sun transmittance / shadowing
 float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 seed, out float3 cloud_transmittance)
 {
-	const PhySkyBufferContent info = PhysSkyBuffer[0];
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const CloudLayer cloud = GetCloudLayer(info);
 
 	cloud_transmittance = 1.0;
 
 	float3 shadow = 1.0;
 
-	float3 pos_world = pos + float3(0, 0, info.bottom_z);
+	float3 pos_world = pos + float3(0, 0, info.bottomZ);
 	float3 pos_world_relative = pos_world - FrameBuffer::CameraPosAdjust[eye_index].xyz;
-	float3 pos_planet = pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planet_radius);
+	float3 pos_planet = pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planetRadius);
 
 	// earth shadowing
-	[branch] if (rayIntersectSphere(pos_planet, sun_dir, info.planet_radius) > 0.0) return 0;
+	[branch] if (RayIntersectSphereCentered(pos_planet, sun_dir, info.planetRadius) > 0.0) return 0;
 
 	// dir shadow map
 	{
@@ -251,7 +387,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 
 	// atmosphere
 	{
-		float2 lut_uv = getHeightZenithLutUv(pos_planet.z, sun_dir);
+		float2 lut_uv = TrLutUv(pos_planet.z, sun_dir.z);
 		shadow *= TexTransmittance.SampleLevel(TransmittanceSampler, lut_uv, 0).rgb;
 	}
 	[branch] if (all(shadow < 1e-8)) return 0;
@@ -267,21 +403,21 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 		for (uint i = 0; i < visibility_step; i++) {
 			float3 vis_pos = pos + sun_dir * visibility_stride * (i + 1) + jitter * visibility_stride * (i + 1) / visibility_step;
 			NDFInfo _;
-			cloud_density += sampleCloudDensity(vis_pos, 1e8, info.cloud_layer, i * 0.5, true, _) * visibility_stride;
+			cloud_density += sampleCloudDensity(vis_pos, 1e8, cloud, i * 0.5, true, _) * visibility_stride;
 		}
 
 		// long range
 		float3 vis_pos = pos + sun_dir * visibility_stride * visibility_step;
-		float3 pos_sample_shadow_uvw = getShadowVolumeSampleUvw(vis_pos, sun_dir);
+		float3 pos_sample_shadow_uvw = GetShadowVolumeSampleUvw(vis_pos, sun_dir, info, cloud);
 		if (all(pos_sample_shadow_uvw.xyz > 0))
 			cloud_density += TexShadowVolume.SampleLevel(TransmittanceSampler, pos_sample_shadow_uvw.xyz, 0);
 		else
-			cloud_density += inBetweenSphereDistance(
-								 vis_pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planet_radius), sun_dir,
-								 info.planet_radius + info.cloud_layer.bottom, info.planet_radius + info.cloud_layer.bottom + info.cloud_layer.thickness) *
-			                 info.cloud_layer.average_density;
+			cloud_density += InBetweenSphereDistance(
+								 vis_pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planetRadius), sun_dir,
+								 info.planetRadius + cloud.bottom, info.planetRadius + cloud.bottom + cloud.thickness) *
+			                 cloud.average_density;
 
-		float3 scaled_density = (info.cloud_layer.scatter + info.cloud_layer.absorption) * cloud_density;
+		float3 scaled_density = (cloud.scatter + cloud.absorption) * cloud_density;
 
 		cloud_transmittance = exp(-scaled_density);
 		shadow *= cloud_transmittance;
@@ -291,7 +427,8 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 }
 
 [numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
-	const PhySkyBufferContent info = PhysSkyBuffer[0];
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const CloudLayer cloud = GetCloudLayer(info);
 	const static float zero_density_stride_mult = 1.5;
 
 	const uint2 px_coords = tid;
@@ -303,29 +440,29 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	const float depth = TexDepth[px_coords.xy];
 	const bool is_sky = depth > 1 - 1e-6;
 
-	const float2 stereo_uv = (px_coords + rnd.xy) * info.rcp_frame_dim;
+	const float2 stereo_uv = (px_coords + rnd.xy) * info.rcpFrameDim;
 	const uint eye_index = Stereo::GetEyeIndexFromTexCoord(stereo_uv);
-	const float2 uv = Stereo::ConvertFromStereoUV(stereo_uv, eye_index);
+	const float2 uv = Stereo::ConvertFromStereoUV(stereo_uv, eye_index) * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
 
 	float4 pos_world = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
 	pos_world = mul(FrameBuffer::CameraViewProjInverse[eye_index], pos_world);
 	pos_world.xyz = pos_world.xyz / pos_world.w;
 
-	const float ceil = info.cloud_layer.bottom + info.cloud_layer.thickness;
+	const float ceil = cloud.bottom + cloud.thickness;
 	const float bottom = 0;
 
 	RayMarchInfo ray;
 	initRayMarchInfo(ray);
 
 	const float solid_dist = length(pos_world.xyz);
-	ray.eye_pos = FrameBuffer::CameraPosAdjust[eye_index].xyz - float3(0, 0, info.bottom_z);
+	ray.eye_pos = FrameBuffer::CameraPosAdjust[eye_index].xyz - float3(0, 0, info.bottomZ);
 	ray.ray_dir = pos_world.xyz / solid_dist;
-	snapMarch(ray, bottom, ceil, is_sky ? info.ray_march_range : min(info.ray_march_range, solid_dist));
+	snapMarch(ray, bottom, ceil, is_sky ? info.rayMarchRange : min(info.rayMarchRange, solid_dist));
 
 	///////////// precalc
-	const float cos_theta = dot(ray.ray_dir, info.dirlight_dir);
-	const float cloud_phase = lerp(miePhaseThomasSchander(cos_theta), miePhaseHenyeyGreenstein(cos_theta, -0.3), 0.3);
-	const float cloud_secondary_phase = miePhaseHenyeyGreensteinDualLobe(cos_theta, 0.21, -0.15, 0.3);
+	const float cos_theta = dot(ray.ray_dir, info.dirlightDir);
+	const float cloud_phase = lerp(Phase::ThomasSchander(cos_theta), Phase::HG(cos_theta, -0.3), 0.3);
+	const float cloud_secondary_phase = Phase::HGDualLobe(cos_theta, 0.21, -0.15, 0.3);
 
 	///////////// ray march
 	float ap_dist = 0.0;
@@ -340,10 +477,10 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 		const float dt = ray.ray_dist - ray.last_ray_dist;
 
 		NDFInfo ndf;
-		float cloud_density = sampleCloudDensity(ray.pos, ray.start_dist + ray.ray_dist, info.cloud_layer, (ray.start_dist + ray.ray_dist) * 1.428e-5f, true, ndf);
-		float3 cloud_scatter = cloud_density * info.cloud_layer.scatter;
+		float cloud_density = sampleCloudDensity(ray.pos, ray.start_dist + ray.ray_dist, cloud, (ray.start_dist + ray.ray_dist) * 1.428e-5f, true, ndf);
+		float3 cloud_scatter = cloud_density * cloud.scatter;
 
-		const float3 extinction = cloud_density * (info.cloud_layer.scatter + info.cloud_layer.absorption);
+		const float3 extinction = cloud_density * (cloud.scatter + cloud.absorption);
 
 		// scattering
 		[branch] if (max(extinction.x, max(extinction.y, extinction.z)) > 1e-7)
@@ -351,22 +488,22 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 			// dir light
 			float3 scatter = cloud_scatter * cloud_phase;
 			float3 cloud_transmittance;
-			float3 sun_transmittance = sampleSunTransmittance(ray.pos, info.dirlight_dir, eye_index, seed + ray.step, cloud_transmittance);
-			float3 in_scatter = scatter * sun_transmittance * info.dirlight_color;
+			float3 sun_transmittance = sampleSunTransmittance(ray.pos, info.dirlightDir, eye_index, seed + ray.step, cloud_transmittance);
+			float3 in_scatter = scatter * sun_transmittance * info.dirlightColor;
 
 			sum_shadowing_weights += dt;
 			mean_shadowing += sun_transmittance * dt;
 
 			// multiscatter
 			float3 ms_volume = saturate((ndf.dimension_profile - 0.1) / (1.0 - 0.1)) * pow(ndf.coverage * ndf.cloud_type, 0.25);
-			ms_volume *= pow(cloud_transmittance, info.cloud_layer.ms_transmittance_power);
-			ms_volume *= pow(saturate(ndf.height_fraction), info.cloud_layer.ms_height_power);
-			ms_volume *= info.cloud_layer.ms_mult;
-			in_scatter += (sun_transmittance / max(1e-8, cloud_transmittance)) * cloud_scatter * cloud_secondary_phase * ms_volume * info.dirlight_color;
+			ms_volume *= pow(cloud_transmittance, cloud.ms_transmittance_power);
+			ms_volume *= pow(saturate(ndf.height_fraction), cloud.ms_height_power);
+			ms_volume *= cloud.ms_mult;
+			in_scatter += (sun_transmittance / max(1e-8, cloud_transmittance)) * cloud_scatter * cloud_secondary_phase * ms_volume * info.dirlightColor;
 
 			// ambient
-			float3 ambient = Color::GammaToLinear(SharedData::DirectionalAmbient._14_24_34);
-			in_scatter += cloud_scatter * sqrt(1.0 - ndf.dimension_profile) * info.cloud_layer.ambient_mult * ambient * RCP_PI;
+			float3 ambient = Color::IrradianceToLinear(SharedData::DirectionalAmbient._14_24_34);
+			in_scatter += cloud_scatter * sqrt(1.0 - ndf.dimension_profile) * cloud.ambient_mult * ambient * RCP_PI;
 
 			const float3 sample_transmittance = exp(-dt * extinction);
 			const float3 scatter_factor = (1 - sample_transmittance) / max(extinction, 1e-8);
@@ -378,32 +515,37 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 		}
 
 		// stride
-		float rcp_step = ndf.in_layer ? rcp(info.cloud_max_step) * (ndf.dimension_profile > 1e-8 ? 1 : zero_density_stride_mult) : rcp(info.cloud_max_step);
-		float march_prop = (ray.start_dist + ray.march_dist) / info.ray_march_range;
-		stride = (pow(sqrt(march_prop) + rcp_step, 2) - march_prop) * info.ray_march_range;
+		float rcp_step = ndf.in_layer ? rcp(info.cloudMaxStep) * (ndf.dimension_profile > 1e-8 ? 1 : zero_density_stride_mult) : rcp(info.cloudMaxStep);
+		float march_prop = (ray.start_dist + ray.march_dist) / info.rayMarchRange;
+		stride = (pow(sqrt(march_prop) + rcp_step, 2) - march_prop) * info.rayMarchRange;
 
 		const float tr = max(ray.transmittance.x, max(ray.transmittance.y, ray.transmittance.z));
 		ap_dist += tr * dt;
 		[branch] if (tr < 1e-3) break;
 	}
 
-	// ap
 	mean_shadowing = sum_shadowing_weights > 1e-8 ? mean_shadowing / sum_shadowing_weights : 1.0;
 
 	uint3 ap_dims;
 	TexAerialPerspective.GetDimensions(ap_dims.x, ap_dims.y, ap_dims.z);
-	float2 ap_uv = cylinderMapAdjusted(ray.ray_dir);
-	const float depth_slice = lerp(.5 / ap_dims.z, 1 - .5 / ap_dims.z, saturate(solid_dist / info.aerial_perspective_max_dist));
-	const float4 ap_sample = TexAerialPerspective.SampleLevel(SkyViewSampler, float3(ap_uv, depth_slice), 0);
-	const float vol_depth_slice = lerp(.5 / ap_dims.z, 1 - .5 / ap_dims.z, saturate(ap_dist / info.aerial_perspective_max_dist));
-	const float4 vol_ap_sample = TexAerialPerspective.SampleLevel(SkyViewSampler, float3(ap_uv, vol_depth_slice), 0);
+	float2 ap_uv = SkyViewLutUv(ray.ray_dir);
+	const float depth_slice = lerp(.5 / ap_dims.z, 1 - .5 / ap_dims.z, saturate(solid_dist / info.aerialPerspectiveMaxDist));
+	float4 ap_sample = TexAerialPerspective.SampleLevel(SkyViewSampler, float3(ap_uv, depth_slice), 0);
+	const float vol_depth_slice = lerp(.5 / ap_dims.z, 1 - .5 / ap_dims.z, saturate(ap_dist / info.aerialPerspectiveMaxDist));
+	float4 vol_ap_sample = TexAerialPerspective.SampleLevel(SkyViewSampler, float3(ap_uv, vol_depth_slice), 0);
+
+	vol_ap_sample.rgb *= mean_shadowing;
+
+	ap_sample = ApplyAerialPerspectiveSettings(ap_sample);
+	vol_ap_sample = ApplyAerialPerspectiveSettings(vol_ap_sample);
 
 	if (!is_sky) {
-		ray.lum = ray.lum + (ap_sample.rgb - vol_ap_sample.rgb) * ray.transmittance * info.dirlight_color;
+		ray.lum += (ap_sample.rgb - vol_ap_sample.rgb) * ray.transmittance;
 		ray.transmittance *= ap_sample.a;
-	} else
+	} else {
 		ray.transmittance *= vol_ap_sample.a;
-	ray.lum = ray.lum * vol_ap_sample.a + vol_ap_sample.rgb * mean_shadowing * info.dirlight_color;
+	}
+	ray.lum = ray.lum * vol_ap_sample.a + vol_ap_sample.rgb;
 
 	RWTexTr[px_coords] = ray.transmittance;
 	RWTexLum[px_coords] = ray.lum;
@@ -413,16 +555,16 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 groupshared float g_density[NTHREADS];
 
 [numthreads(NTHREADS, 1, 1)] void renderShadowVolume(const uint gtid : SV_GroupThreadID, const uint2 gid : SV_GroupID) {
-	const PhySkyBufferContent info = PhysSkyBuffer[0];
-	const CloudLayer cloud = info.cloud_layer;
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const CloudLayer cloud = GetCloudLayer(info);
 
 	uint3 dims;
 	RWShadowVolume.GetDimensions(dims.x, dims.y, dims.z);
 	const float3 rcp_dims = rcp(dims);
-	const float3 scale = float3(info.shadow_volume_range.xx, cloud.thickness);
+	const float3 scale = float3(info.shadowVolumeRange.xx, cloud.thickness);
 	const float3 rcp_scale = rcp(scale);
 
-	const float3 ray_dir = -info.dirlight_dir;  // from sun
+	const float3 ray_dir = -info.dirlightDir;  // from sun
 
 	float3 ray_px_increment = ray_dir * rcp_scale * dims;
 	const float dir_max_component = max(max(abs(ray_px_increment.x), abs(ray_px_increment.y)), abs(ray_px_increment.z));
@@ -455,7 +597,7 @@ groupshared float g_density[NTHREADS];
 		past_density = 0;
 
 	if (is_valid) {
-		const float3 pos = float3(FrameBuffer::CameraPosAdjust[0].xy + (thread_uv.xy - 0.5) * info.shadow_volume_range, cloud.bottom + cloud.thickness * thread_uv.z);
+		const float3 pos = float3(FrameBuffer::CameraPosAdjust[0].xy + (thread_uv.xy - 0.5) * info.shadowVolumeRange, cloud.bottom + cloud.thickness * thread_uv.z);
 
 		// fetch density using only ndf
 		NDFInfo _;
@@ -463,11 +605,11 @@ groupshared float g_density[NTHREADS];
 
 		// average visibility for boundary
 		float3 prev_uv = thread_uv - ray_uv_increment;
-		float3 prev_pos = float3(FrameBuffer::CameraPosAdjust[0].xy + (prev_uv.xy - 0.5) * info.shadow_volume_range, cloud.bottom + cloud.thickness * prev_uv.z);
+		float3 prev_pos = float3(FrameBuffer::CameraPosAdjust[0].xy + (prev_uv.xy - 0.5) * info.shadowVolumeRange, cloud.bottom + cloud.thickness * prev_uv.z);
 		if ((any(prev_uv < 0) || any(prev_uv > 1)) && prev_pos.z > cloud.bottom && prev_pos.z < cloud.bottom + cloud.thickness)
-			density += inBetweenSphereDistance(
-						   prev_pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planet_radius), info.dirlight_dir,
-						   info.planet_radius + cloud.bottom, info.planet_radius + cloud.bottom + cloud.thickness) *
+			density += InBetweenSphereDistance(
+						   prev_pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planetRadius), info.dirlightDir,
+						   info.planetRadius + cloud.bottom, info.planetRadius + cloud.bottom + cloud.thickness) *
 			           cloud.average_density;
 
 		g_density[gtid] = density;
