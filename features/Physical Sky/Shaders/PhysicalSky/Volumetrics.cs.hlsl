@@ -92,6 +92,8 @@ Texture3D<unorm float4> TexNubisNoise : register(t5);
 Texture2DArray<unorm float> TexCloudNDF : register(t6);
 Texture2D<unorm float> TexCloudTopLUT : register(t7);
 Texture2D<unorm float> TexCloudBottomLUT : register(t8);
+Texture2D<unorm float> TexApShadow : register(t9);
+Texture2D<float4> TexSkyView : register(t10);
 
 Texture2DArray<float4> TexDirectShadows : register(t20);
 struct DirectionalShadowLightData
@@ -105,11 +107,22 @@ StructuredBuffer<DirectionalShadowLightData> DirectionalShadowLights : register(
 #define TERRAIN_SHADOW_REGISTER t22
 #include "TerrainShadows/TerrainShadows.hlsli"
 Texture3D<float> TexShadowVolume : register(t23);
+TextureCube<float3> TexVolCubeTrHistory : register(t24);
+TextureCube<float3> TexVolCubeLumHistory : register(t25);
+
+cbuffer VolumetricCloudCubeHistoryCB : register(b1)
+{
+	float CubeHistoryWeight;
+	float3 CubeHistoryPad0;
+};
 
 RWTexture2D<float3> RWTexTr : register(u0);
 RWTexture2D<float3> RWTexLum : register(u1);
 
 RWTexture3D<float> RWShadowVolume : register(u0);
+
+RWTexture2DArray<float3> RWTexCubeTr : register(u0);
+RWTexture2DArray<float3> RWTexCubeLum : register(u1);
 
 #define ISNAN(x) (!(x < 0.f || x > 0.f || x == 0.f))
 
@@ -129,6 +142,50 @@ float4 ApplyAerialPerspectiveSettings(float4 apSample)
 	apSample.a = lerp(1, apSample.a, data.apTrMix);
 
 	return apSample;
+}
+
+float3 SampleApMultiScatter()
+{
+	const SharedData::PhysSkyData data = SharedData::physSkyData;
+
+	float3 multi_scatter = TexMultiScatter.SampleLevel(SkyViewSampler, TrLutUv(data.zCameraPlanet, data.sunDir.z), 0).rgb * data.sunlightColor;
+	multi_scatter += TexMultiScatter.SampleLevel(SkyViewSampler, TrLutUv(data.zCameraPlanet, data.masserDir.z), 0).rgb * data.masserColor;
+	multi_scatter += TexMultiScatter.SampleLevel(SkyViewSampler, TrLutUv(data.zCameraPlanet, data.secundaDir.z), 0).rgb * data.secundaColor;
+	return multi_scatter;
+}
+
+float3 SampleCloudAmbientSkyView(float3 pos)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const float3 pos_planet = pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planetRadius);
+	const float altitude = length(pos_planet);
+	const float3 up_dir = pos_planet / max(altitude, 1e-8);
+
+	const float3 basis_ref = abs(up_dir.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
+	const float3 tangent = normalize(cross(basis_ref, up_dir));
+	const float3 bitangent = cross(up_dir, tangent);
+
+	const float horizonLift = 0.35;
+	float3 ambientRadiance = TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(up_dir), 0).rgb * 0.4;
+	ambientRadiance += TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(normalize(tangent + up_dir * horizonLift)), 0).rgb * 0.15;
+	ambientRadiance += TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(normalize(-tangent + up_dir * horizonLift)), 0).rgb * 0.15;
+	ambientRadiance += TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(normalize(bitangent + up_dir * horizonLift)), 0).rgb * 0.15;
+	ambientRadiance += TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(normalize(-bitangent + up_dir * horizonLift)), 0).rgb * 0.15;
+	return ambientRadiance * Math::PI;
+}
+
+float SampleFilteredApShadow(uint2 pxCoord)
+{
+	const SharedData::PhysSkyData data = SharedData::physSkyData;
+
+	uint2 apDims;
+	TexApShadow.GetDimensions(apDims.x, apDims.y);
+
+	float2 apCoord = float2(pxCoord) + 0.5;
+	if (data.halfResApShadow)
+		apCoord *= 0.5;
+
+	return TexApShadow.SampleLevel(TransmittanceSampler, apCoord / apDims, 0);
 }
 
 float InBetweenSphereDistance(float3 orig, float3 dir, float rInner, float rOuter)
@@ -426,27 +483,17 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	return shadow;
 }
 
-[numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
+struct VolumetricCloudResult
+{
+	float3 transmittance;
+	float3 lum;
+};
+
+VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, float solid_dist, bool is_sky, uint eye_index, uint3 seed, float jitter, float ap_shadow)
+{
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const CloudLayer cloud = GetCloudLayer(info);
 	const static float zero_density_stride_mult = 1.5;
-
-	const uint2 px_coords = tid;
-
-	const uint3 seed = Random::pcg3d(uint3(px_coords.xy, px_coords.x ^ 0xf874));
-	const float3 rnd = Random::R3Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
-
-	///////////// get start and end
-	const float depth = TexDepth[px_coords.xy];
-	const bool is_sky = depth > 1 - 1e-6;
-
-	const float2 stereo_uv = (px_coords + rnd.xy) * info.rcpFrameDim;
-	const uint eye_index = Stereo::GetEyeIndexFromTexCoord(stereo_uv);
-	const float2 uv = Stereo::ConvertFromStereoUV(stereo_uv, eye_index) * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
-
-	float4 pos_world = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
-	pos_world = mul(FrameBuffer::CameraViewProjInverse[eye_index], pos_world);
-	pos_world.xyz = pos_world.xyz / pos_world.w;
 
 	const float ceil = cloud.bottom + cloud.thickness;
 	const float bottom = 0;
@@ -454,9 +501,8 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	RayMarchInfo ray;
 	initRayMarchInfo(ray);
 
-	const float solid_dist = length(pos_world.xyz);
-	ray.eye_pos = FrameBuffer::CameraPosAdjust[eye_index].xyz - float3(0, 0, info.bottomZ);
-	ray.ray_dir = pos_world.xyz / solid_dist;
+	ray.eye_pos = eye_pos;
+	ray.ray_dir = ray_dir;
 	snapMarch(ray, bottom, ceil, is_sky ? info.rayMarchRange : min(info.rayMarchRange, solid_dist));
 
 	///////////// precalc
@@ -471,8 +517,8 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 
 	float stride = 0.003 / 1.428e-5f;
 
-	advanceRay(ray, stride, rnd.z);
-	[loop] for (ray.step = 0; ray.step < 150 && ray.ray_dist < ray.march_dist; advanceRay(ray, stride, rnd.z))
+	advanceRay(ray, stride, jitter);
+	[loop] for (ray.step = 0; ray.step < 150 && ray.ray_dist < ray.march_dist; advanceRay(ray, stride, jitter))
 	{
 		const float dt = ray.ray_dist - ray.last_ray_dist;
 
@@ -502,7 +548,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 			in_scatter += (sun_transmittance / max(1e-8, cloud_transmittance)) * cloud_scatter * cloud_secondary_phase * ms_volume * info.dirlightColor;
 
 			// ambient
-			float3 ambient = Color::IrradianceToLinear(SharedData::DirectionalAmbient._14_24_34);
+			float3 ambient = SampleCloudAmbientSkyView(ray.pos);
 			in_scatter += cloud_scatter * sqrt(1.0 - ndf.dimension_profile) * cloud.ambient_mult * ambient * RCP_PI;
 
 			const float3 sample_transmittance = exp(-dt * extinction);
@@ -534,7 +580,11 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	const float vol_depth_slice = lerp(.5 / ap_dims.z, 1 - .5 / ap_dims.z, saturate(ap_dist / info.aerialPerspectiveMaxDist));
 	float4 vol_ap_sample = TexAerialPerspective.SampleLevel(SkyViewSampler, float3(ap_uv, vol_depth_slice), 0);
 
-	vol_ap_sample.rgb *= mean_shadowing;
+	const float ap_direct_visibility = 1.0 - saturate(ap_shadow);
+	const float vol_ap_direct_visibility = saturate(dot(mean_shadowing, float3(0.2126, 0.7152, 0.0722))) * ap_direct_visibility;
+	const float3 ap_multi_scatter = SampleApMultiScatter();
+	ap_sample.rgb *= GetApShadowedMultiScatterVisibility(1.0 - ap_direct_visibility, ap_multi_scatter);
+	vol_ap_sample.rgb *= GetApShadowedMultiScatterVisibility(1.0 - vol_ap_direct_visibility, ap_multi_scatter);
 
 	ap_sample = ApplyAerialPerspectiveSettings(ap_sample);
 	vol_ap_sample = ApplyAerialPerspectiveSettings(vol_ap_sample);
@@ -547,8 +597,110 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	}
 	ray.lum = ray.lum * vol_ap_sample.a + vol_ap_sample.rgb;
 
-	RWTexTr[px_coords] = ray.transmittance;
-	RWTexLum[px_coords] = ray.lum;
+	VolumetricCloudResult result;
+	result.transmittance = ray.transmittance;
+	result.lum = ray.lum;
+	return result;
+}
+
+[numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+
+	const uint2 px_coords = tid;
+
+	const uint3 seed = Random::pcg3d(uint3(px_coords.xy, px_coords.x ^ 0xf874));
+	const float3 rnd = Random::R3Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
+
+	///////////// get start and end
+	const float depth = TexDepth[px_coords.xy];
+	const bool is_sky = depth > 1 - 1e-6;
+
+	const float2 stereo_uv = (px_coords + rnd.xy) * info.rcpFrameDim;
+	const uint eye_index = Stereo::GetEyeIndexFromTexCoord(stereo_uv);
+	const float2 uv = Stereo::ConvertFromStereoUV(stereo_uv, eye_index) * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
+
+	float4 pos_world = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
+	pos_world = mul(FrameBuffer::CameraViewProjInverse[eye_index], pos_world);
+	pos_world.xyz = pos_world.xyz / pos_world.w;
+
+	const float solid_dist = length(pos_world.xyz);
+	const float3 eye_pos = FrameBuffer::CameraPosAdjust[eye_index].xyz - float3(0, 0, info.bottomZ);
+	const float3 ray_dir = pos_world.xyz / solid_dist;
+
+	const float ap_shadow = SampleFilteredApShadow(px_coords);
+	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, solid_dist, is_sky, eye_index, seed, rnd.z, ap_shadow);
+
+	RWTexTr[px_coords] = result.transmittance;
+	RWTexLum[px_coords] = result.lum;
+};
+
+float3 GetCubemapSamplingVector(uint3 threadId, in RWTexture2DArray<float3> outputTexture)
+{
+	float width = 0.0f;
+	float height = 0.0f;
+	float depth = 0.0f;
+	outputTexture.GetDimensions(width, height, depth);
+
+	float2 st = threadId.xy / float2(width, height);
+	float2 uv = 2.0 * float2(st.x, 1.0 - st.y) - 1.0;
+
+	float3 result = 0.0f;
+	switch (threadId.z) {
+	case 0:
+		result = float3(1.0, uv.y, -uv.x);
+		break;
+	case 1:
+		result = float3(-1.0, uv.y, uv.x);
+		break;
+	case 2:
+		result = float3(uv.x, 1.0, -uv.y);
+		break;
+	case 3:
+		result = float3(uv.x, -1.0, uv.y);
+		break;
+	case 4:
+		result = float3(uv.x, uv.y, 1.0);
+		break;
+	case 5:
+		result = float3(-uv.x, uv.y, -1.0);
+		break;
+	}
+	return normalize(result);
+}
+
+[numthreads(8, 8, 1)] void renderCubemap(uint3 tid : SV_DispatchThreadID) {
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+
+	uint3 dims;
+	RWTexCubeTr.GetDimensions(dims.x, dims.y, dims.z);
+	if (any(tid >= dims))
+		return;
+
+	const uint3 seed = Random::pcg3d(uint3(tid.xy, tid.z * 0x9e37u + tid.x ^ 0xf874u));
+	const float3 rnd = Random::R3Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
+
+	const float3 eye_pos = FrameBuffer::CameraPosAdjust[0].xyz - float3(0, 0, info.bottomZ);
+	const float3 ray_dir = GetCubemapSamplingVector(tid, RWTexCubeTr);
+	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, info.rayMarchRange, true, 0, seed, rnd.z, 0.0);
+
+	RWTexCubeTr[tid] = result.transmittance;
+	RWTexCubeLum[tid] = result.lum;
+};
+
+[numthreads(8, 8, 1)] void accumulateCubemap(uint3 tid : SV_DispatchThreadID) {
+	uint3 dims;
+	RWTexCubeTr.GetDimensions(dims.x, dims.y, dims.z);
+	if (any(tid >= dims))
+		return;
+
+	const float3 ray_dir = GetCubemapSamplingVector(tid, RWTexCubeTr);
+	const float3 tr = RWTexCubeTr[tid];
+	const float3 lum = RWTexCubeLum[tid];
+	const float3 history_tr = TexVolCubeTrHistory.SampleLevel(SkyViewSampler, ray_dir, 0);
+	const float3 history_lum = TexVolCubeLumHistory.SampleLevel(SkyViewSampler, ray_dir, 0);
+
+	RWTexCubeTr[tid] = lerp(tr, history_tr, CubeHistoryWeight);
+	RWTexCubeLum[tid] = lerp(lum, history_lum, CubeHistoryWeight);
 };
 
 #define NTHREADS 256

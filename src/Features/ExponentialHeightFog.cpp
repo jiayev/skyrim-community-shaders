@@ -507,8 +507,10 @@ void ExponentialHeightFog::Prepass()
 		physicalSky.loaded && physicalSky.texApLut ? physicalSky.texApLut->srv.get() : nullptr,
 		physicalSky.loaded && physicalSky.texApShadow ? physicalSky.texApShadow->srv.get() : nullptr
 	};
+	ID3D11ShaderResourceView* physicalSkyShadowVolumeSrv = physicalSky.loaded && physicalSky.texShadowVolume ? physicalSky.texShadowVolume->srv.get() : nullptr;
 	context->CSSetShaderResources(61, 4, physicalSkySrvs);
 	context->CSSetShaderResources(76, 2, iblSrvs);
+	context->CSSetShaderResources(112, 1, &physicalSkyShadowVolumeSrv);
 
 	if (depthSrv) {
 		ID3D11UnorderedAccessView* uavs[1]{ conservativeDepth->uav.get() };
@@ -580,6 +582,7 @@ void ExponentialHeightFog::Prepass()
 	context->CSSetShaderResources(50, 1, nullDepthSrv);
 	context->CSSetShaderResources(76, 2, nullSrvs);
 	context->CSSetShaderResources(98, 1, nullSrvs);
+	context->CSSetShaderResources(112, 1, nullSrvs);
 	context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
 	context->CSSetSamplers(0, 2, nullSamplers);
 	context->CSSetConstantBuffers(0, 1, nullCb);

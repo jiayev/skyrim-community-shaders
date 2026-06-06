@@ -387,6 +387,7 @@ void Deferred::DeferredPasses()
 			physSky.loaded && physSky.texVolLum ? physSky.texVolLum->srv.get() : nullptr,                    // t17 PhysicalSky Volumetric Luminance
 			physSky.loaded && physSky.texShadowVolume ? physSky.texShadowVolume->srv.get() : nullptr,        // t18 PhysicalSky Shadow Volume
 		};
+		ID3D11ShaderResourceView* physSkyMsLut = physSky.loaded && physSky.texMsLut ? physSky.texMsLut->srv.get() : nullptr;  // t20 PhysicalSky Multiscatter LUT
 
 		ID3D11SamplerState* samplers[]{
 			dynamicCubemaps.loaded ? linearSampler : nullptr,
@@ -395,6 +396,7 @@ void Deferred::DeferredPasses()
 		context->CSSetSamplers(0, ARRAYSIZE(samplers), samplers);
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+		context->CSSetShaderResources(20, 1, &physSkyMsLut);
 
 		// Bind VRStereoOptimizations mode texture for Eye 1 skip.
 		// Bind null when disabled so stale mode data doesn't cause incorrect early-exits
@@ -420,6 +422,7 @@ void Deferred::DeferredPasses()
 		// Unbind mode texture SRV
 		ID3D11ShaderResourceView* nullSRV = nullptr;
 		context->CSSetShaderResources(19, 1, &nullSRV);
+		context->CSSetShaderResources(20, 1, &nullSRV);
 	}
 
 	// VR: Deactivate stencil culling now that geometry rendering is complete.

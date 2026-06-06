@@ -655,6 +655,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
 		dirLightColorMultiplier *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+	dirLightColorMultiplier *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, SampShadowMaskSampler);
 #			endif
 
 	float dirLightAngle = dot(normal, SharedData::DirLightDirection.xyz);
@@ -1114,7 +1115,12 @@ PS_OUTPUT main(PS_INPUT input)
 
 #			if !defined(DEFERRED) && defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
-		psout.Diffuse.xyz = PhysSky::CompositeAerialPerspective(psout.Diffuse.xyz, normalize(input.WorldPosition.xyz), input.Position.xy, screenUV, length(input.WorldPosition.xyz), SampColorSampler);
+		const bool inReflection = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0;
+		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
+		if (inReflection)
+			psout.Diffuse.xyz = PhysSky::CompositeAerialPerspectiveReflection(psout.Diffuse.xyz, physSkyViewDir, length(input.WorldPosition.xyz), SampColorSampler);
+		else
+			psout.Diffuse.xyz = PhysSky::CompositeAerialPerspective(psout.Diffuse.xyz, physSkyViewDir, input.Position.xy, screenUV, length(input.WorldPosition.xyz), SampColorSampler);
 	}
 #			endif
 

@@ -212,6 +212,10 @@ float SampleDirectionalWorldShadow(float3 positionWS, uint eyeIndex)
 #if defined(CLOUD_SHADOWS)
 	worldShadow *= CloudShadows::GetCloudShadowMult(positionWS, LinearSampler);
 #endif
+#if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		worldShadow *= dot(PhysSky::GetDirlightTransmittance(positionWS + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, LinearSampler), 1.0f.xxx / 3.0f);
+#endif
 	return worldShadow;
 }
 

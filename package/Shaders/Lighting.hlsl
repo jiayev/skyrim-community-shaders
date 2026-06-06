@@ -3395,8 +3395,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	color.xyz = Color::IrradianceToGamma(color.xyz);
 #		if defined(PHYSICAL_SKY)
-	if (SharedData::physSkyData.enabled) {
-		color.xyz = PhysSky::CompositeAerialPerspective(color.xyz, normalize(input.WorldPosition.xyz), input.Position.xy, screenUV, length(input.WorldPosition.xyz), SampColorSampler);
+	if (SharedData::physSkyData.enabled && inWorld) {
+		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
+		if (inReflection)
+			color.xyz = PhysSky::CompositeAerialPerspectiveReflection(color.xyz, physSkyViewDir, length(input.WorldPosition.xyz), SampColorSampler);
+		else
+			color.xyz = PhysSky::CompositeAerialPerspective(color.xyz, physSkyViewDir, input.Position.xy, screenUV, length(input.WorldPosition.xyz), SampColorSampler);
 	}
 #		endif
 

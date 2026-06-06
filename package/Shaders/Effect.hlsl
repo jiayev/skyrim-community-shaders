@@ -688,7 +688,12 @@ float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPositi
 		for (uint i = 0; i < sampleCount; i++) {
 			float t = (float(i) + noise) * rcpSampleCount;
 			float3 samplePositionWS = lerp(startPosition, endPosition, t);
-			shadow += ShadowSampling::GetWorldShadow(samplePositionWS, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+			float sampleShadow = ShadowSampling::GetWorldShadow(samplePositionWS, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+#		if defined(PHYSICAL_SKY)
+			if (SharedData::physSkyData.enabled)
+				sampleShadow *= dot(PhysSky::GetDirlightTransmittance(samplePositionWS + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, SampDepthSampler), 1.0f.xxx / 3.0f);
+#		endif
+			shadow += sampleShadow;
 		}
 		shadow *= rcpSampleCount;
 	}
@@ -936,7 +941,11 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if !defined(DEFERRED) && defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
-		lightColor = PhysSky::CompositeAerialPerspective(lightColor, normalize(input.WorldPosition.xyz), input.Position.xy, screenUV, length(input.WorldPosition.xyz), SampBaseSampler);
+		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
+		if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0)
+			lightColor = PhysSky::CompositeAerialPerspectiveReflection(lightColor, physSkyViewDir, length(input.WorldPosition.xyz), SampBaseSampler);
+		else
+			lightColor = PhysSky::CompositeAerialPerspective(lightColor, physSkyViewDir, input.Position.xy, screenUV, length(input.WorldPosition.xyz), SampBaseSampler);
 	}
 #	endif
 
