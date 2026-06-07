@@ -6,6 +6,7 @@
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 
+#include "I18n/I18n.h"
 #include <algorithm>
 #include <cctype>
 #include <imgui_stdlib.h>
@@ -18,17 +19,17 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void LUT::DrawSettings()
 {
-	ImGui::TextWrapped("Relative path starts from game executable directory. Supports dds/bmp/png format.");
-	ImGui::BulletText("1D LUT: N x 1 sized images.");
-	ImGui::BulletText("3D LUT in 2D format: N (R) x N (G) sized images, stacked horizontally along blue axis.");
-	ImGui::BulletText("3D LUT: 3D dds only.");
+	ImGui::TextWrapped(T("feature.post_processing.lut.relative_path_starts_from_game_executable_directory_supports", "Relative path starts from game executable directory. Supports dds/bmp/png format."));
+	ImGui::BulletText(T("feature.post_processing.lut.1d_lut_n_x_1_sized_images", "1D LUT: N x 1 sized images."));
+	ImGui::BulletText(T("feature.post_processing.lut.3d_lut_in_2d_format_n_r_x", "3D LUT in 2D format: N (R) x N (G) sized images, stacked horizontally along blue axis."));
+	ImGui::BulletText(T("feature.post_processing.lut.3d_lut_3d_dds_only", "3D LUT: 3D dds only."));
 
-	ImGui::InputText("LUT Texture Path", &tempPath);
+	ImGui::InputText(T("feature.post_processing.lut.lut_texture_path", "LUT Texture Path"), &tempPath);
 
-	if (ImGui::Button("Load"))
+	if (ImGui::Button(T("feature.post_processing.lut.load", "Load")))
 		ReadTexture(tempPath);
 	ImGui::SameLine();
-	if (ImGui::Button("Clear")) {
+	if (ImGui::Button(T("feature.post_processing.lut.clear", "Clear"))) {
 		Clear();
 		tempPath = "";
 	}
@@ -38,22 +39,22 @@ void LUT::DrawSettings()
 	}
 
 	if (LutType == -1)
-		ImGui::Text("Loaded Texture: None");
+		ImGui::Text(T("feature.post_processing.lut.loaded_texture_none", "Loaded Texture: None"));
 	else
-		ImGui::Text("Loaded Texture: %s", settings.LutPath.c_str());
+		ImGui::Text(T("feature.post_processing.lut.loaded_texture", "Loaded Texture: %s"), settings.LutPath.c_str());
 
 	ImGui::Separator();
 
 	if (LutType == 0 || LutType == 1)
 		if (ImGui::BeginTable("##1d", 2)) {
 			ImGui::TableNextColumn();
-			ImGui::RadioButton("Map Luma", &LutType, 0);
+			ImGui::RadioButton(T("feature.post_processing.lut.map_luma", "Map Luma"), &LutType, 0);
 			ImGui::TableNextColumn();
-			ImGui::RadioButton("Map Per Channel", &LutType, 1);
+			ImGui::RadioButton(T("feature.post_processing.lut.map_per_channel", "Map Per Channel"), &LutType, 1);
 			ImGui::EndTable();
 		}
-	ImGui::InputFloat3("Input Min", &settings.InputMin.x);
-	ImGui::InputFloat3("Input Max", &settings.InputMax.x);
+	ImGui::InputFloat3(T("feature.post_processing.lut.input_min", "Input Min"), &settings.InputMin.x);
+	ImGui::InputFloat3(T("feature.post_processing.lut.input_max", "Input Max"), &settings.InputMax.x);
 }
 
 void LUT::RestoreDefaultSettings()

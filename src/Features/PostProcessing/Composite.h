@@ -7,9 +7,14 @@
 struct Composite : public PostProcessFeature
 {
 	virtual inline std::string GetType() const override { return "Composite"; }
-	virtual inline std::string GetDesc() const override { return "Composites Bloom, Lens Flare, Physical Glare, and Auto Exposure onto the main image. "
-																 "Applies exposure (SceneColor * Exposure + Bloom * Exposure) before Color Grading. "
-																 "Automatically enabled when any contributing feature is active."; }
+	virtual inline std::string GetDisplayName() const override { return T("feature.post_processing.composite.name", "Composite"); }
+	virtual inline std::string GetDesc() const override
+	{
+		return T("feature.post_processing.composite.description",
+			"Composites Bloom, Lens Flare, Physical Glare, and Auto Exposure onto the main image. "
+			"Applies exposure (SceneColor * Exposure + Bloom * Exposure) before Color Grading. "
+			"Automatically enabled when any contributing feature is active.");
+	}
 	virtual bool IsVisible() const override { return false; }
 	virtual bool IsAutoEnabled() const override { return true; }
 	virtual void UpdateAutoEnabled() override;

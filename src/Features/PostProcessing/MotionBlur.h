@@ -19,9 +19,10 @@ struct MotionBlur : public PostProcessFeature
 {
 	// Feature interface
 	inline std::string GetType() const override { return "Motion Blur"; }
+	inline std::string GetDisplayName() const override { return T("feature.post_processing.motion_blur.name", "Motion Blur"); }
 	inline std::string GetDesc() const override
 	{
-		return "Creates cinematic motion blur based on camera and object movement.";
+		return T("feature.post_processing.motion_blur.description", "Creates cinematic motion blur based on camera and object movement.");
 	}
 	virtual inline bool DisableInMainLoadingMenu() const override { return true; }
 

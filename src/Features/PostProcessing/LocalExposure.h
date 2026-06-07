@@ -21,11 +21,11 @@
 struct LocalExposure : public PostProcessFeature
 {
 	virtual inline std::string GetType() const override { return "Local Exposure"; }
+	virtual inline std::string GetDisplayName() const override { return T("feature.post_processing.local_exposure.name", "Local Exposure"); }
 	virtual inline std::string GetDesc() const override
 	{
-		return "Local Exposure that brightens shadows and compresses highlights "
-			   "based on local neighborhood luminance. Runs before Auto Exposure and is "
-			   "applied in the Composite pass.";
+		return T("feature.post_processing.local_exposure.description",
+			"Local Exposure brightens shadows and compresses highlights based on local neighborhood luminance. Runs before Auto Exposure and is applied in the Composite pass.");
 	}
 	virtual bool WritesToMainTexture() const override { return false; }
 	virtual bool SupportsVR() const override { return true; }

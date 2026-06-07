@@ -2,6 +2,7 @@
 
 #include "Features/PostProcessing.h"
 #include "HistogramAutoExposure.h"
+#include "I18n/I18n.h"
 #include "State.h"
 #include "Util.h"
 
@@ -17,41 +18,41 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void LocalExposure::DrawSettings()
 {
-	ImGui::SliderFloat("Exposure", &settings.Exposure, 0.f, 4.f, "%.2f");
+	ImGui::SliderFloat(T("feature.post_processing.local_exposure.exposure", "Exposure"), &settings.Exposure, 0.f, 4.f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Manual brightness normalization used when Histogram Auto Exposure is disabled. Higher values make the scene behave brighter.");
+		ImGui::Text(T("feature.post_processing.local_exposure.manual_brightness_normalization_used_when_histogram_auto_exposure", "Manual brightness normalization used when Histogram Auto Exposure is disabled. Higher values make the scene behave brighter."));
 
-	ImGui::SliderFloat("Shadow Recovery", &settings.Shadows, 0.f, 4.f, "%.1f EV");
+	ImGui::SliderFloat(T("feature.post_processing.local_exposure.shadow_recovery", "Shadow Recovery"), &settings.Shadows, 0.f, 4.f, "%.1f EV");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("How strongly darker areas are lifted. Higher values recover more shadow detail.");
+		ImGui::Text(T("feature.post_processing.local_exposure.how_strongly_darker_areas_are_lifted_higher_values", "How strongly darker areas are lifted. Higher values recover more shadow detail."));
 
-	ImGui::SliderFloat("Highlight Recovery", &settings.Highlights, 0.f, 4.f, "%.1f EV");
+	ImGui::SliderFloat(T("feature.post_processing.local_exposure.highlight_recovery", "Highlight Recovery"), &settings.Highlights, 0.f, 4.f, "%.1f EV");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("How strongly bright areas are compressed. Higher values preserve more highlight detail.");
+		ImGui::Text(T("feature.post_processing.local_exposure.how_strongly_bright_areas_are_compressed_higher_values", "How strongly bright areas are compressed. Higher values preserve more highlight detail."));
 
-	ImGui::SliderFloat("Exposure Preference", &settings.ExposurePreferenceSigma, 0.f, 10.f, "%.1f");
+	ImGui::SliderFloat(T("feature.post_processing.local_exposure.exposure_preference", "Exposure Preference"), &settings.ExposurePreferenceSigma, 0.f, 10.f, "%.1f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("How selectively each area chooses its best exposure. Higher values create stronger local adaptation; lower values blend more softly.");
+		ImGui::Text(T("feature.post_processing.local_exposure.how_selectively_each_area_chooses_its_best_exposure", "How selectively each area chooses its best exposure. Higher values create stronger local adaptation; lower values blend more softly."));
 
 	int mipVal = (int)settings.Mip;
-	ImGui::SliderInt("Coarse Scale (Mip)", &mipVal, 0, (int)s_MaxMips - 1);
+	ImGui::SliderInt(T("feature.post_processing.local_exposure.coarse_scale_mip", "Coarse Scale (Mip)"), &mipVal, 0, (int)s_MaxMips - 1);
 	settings.Mip = (uint)std::clamp(mipVal, 0, (int)s_MaxMips - 1);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Largest image scale used by the effect. Higher values affect broader lighting regions.");
+		ImGui::Text(T("feature.post_processing.local_exposure.largest_image_scale_used_by_the_effect_higher", "Largest image scale used by the effect. Higher values affect broader lighting regions."));
 
 	int displayMipVal = (int)settings.DisplayMip;
-	ImGui::SliderInt("Detail Scale (Display Mip)", &displayMipVal, 0, (int)s_MaxMips - 1);
+	ImGui::SliderInt(T("feature.post_processing.local_exposure.detail_scale_display_mip", "Detail Scale (Display Mip)"), &displayMipVal, 0, (int)s_MaxMips - 1);
 	settings.DisplayMip = (uint)std::clamp(displayMipVal, 0, (int)settings.Mip);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Finest pyramid level reconstructed before full-resolution upsampling. Lower values keep smaller local details.");
+		ImGui::Text(T("feature.post_processing.local_exposure.finest_pyramid_level_reconstructed_before_full_resolution_upsampling", "Finest pyramid level reconstructed before full-resolution upsampling. Lower values keep smaller local details."));
 
-	ImGui::Checkbox("Boost Local Contrast", &settings.BoostLocalContrast);
+	ImGui::Checkbox(T("feature.post_processing.local_exposure.boost_local_contrast", "Boost Local Contrast"), &settings.BoostLocalContrast);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Gives high-contrast local details more influence during pyramid reconstruction.");
+		ImGui::Text(T("feature.post_processing.local_exposure.gives_high_contrast_local_details_more_influence_during", "Gives high-contrast local details more influence during pyramid reconstruction."));
 
-	if (ImGui::CollapsingHeader("Debug")) {
+	if (ImGui::CollapsingHeader(T("feature.post_processing.local_exposure.debug", "Debug"))) {
 		static float debugRescale = .3f;
-		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+		ImGui::SliderFloat(T("feature.post_processing.local_exposure.view_resize", "View Resize"), &debugRescale, 0.f, 1.f);
 		BUFFER_VIEWER_NODE_TITLE(texExposure, "Exposure Map (per-pixel multiplier)", debugRescale);
 		BUFFER_VIEWER_NODE_TITLE(texExposures, "Synthetic Exposures (RGB=H/M/S)", debugRescale);
 		BUFFER_VIEWER_NODE_TITLE(texWeights, "Fusion Weights", debugRescale);

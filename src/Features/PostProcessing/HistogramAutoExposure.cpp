@@ -1,5 +1,6 @@
 #include "HistogramAutoExposure.h"
 
+#include "I18n/I18n.h"
 #include "Menu.h"
 #include "State.h"
 #include "Util.h"
@@ -16,38 +17,40 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void HistogramAutoExposure::DrawSettings()
 {
-	ImGui::SliderFloat("Exposure Compensation", &settings.ExposureCompensation, -5.f, 5.f, "%+.2f EV");
+	ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.exposure_compensation", "Exposure Compensation"), &settings.ExposureCompensation, -5.f, 5.f, "%+.2f EV");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Applying additional exposure adjustment to the image.");
+		ImGui::Text(T("feature.post_processing.histogram_auto_exposure.applying_additional_exposure_adjustment_to_the_image", "Applying additional exposure adjustment to the image."));
 
-	ImGui::SliderFloat("Adaptation Speed", &settings.AdaptSpeed, 0.1f, 5.f, "%.2f");
-	ImGui::SliderFloat2("Focus Area", &settings.AdaptArea.x, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.adaptation_speed", "Adaptation Speed"), &settings.AdaptSpeed, 0.1f, 5.f, "%.2f");
+	ImGui::SliderFloat2(T("feature.post_processing.histogram_auto_exposure.focus_area", "Focus Area"), &settings.AdaptArea.x, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Specifies the proportion of the area [width, height] that auto exposure will adapt to.");
+		ImGui::Text(T("feature.post_processing.histogram_auto_exposure.specifies_the_proportion_of_the_area_width_height", "Specifies the proportion of the area [width, height] that auto exposure will adapt to."));
 
-	ImGui::SliderFloat2("Adaptation Range", &settings.AdaptationRange.x, -10.f, 21.f, "%.2f EV");
+	ImGui::SliderFloat2(T("feature.post_processing.histogram_auto_exposure.adaptation_range", "Adaptation Range"), &settings.AdaptationRange.x, -10.f, 21.f, "%.2f EV");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(
-			"[Min, Max] The average scene luminance will be clamped between them when doing auto exposure."
-			"Turning up the minimum, for example, makes it adapt less to darkness and therefore prevents over-brightening of dark scenes.");
+			T("feature.post_processing.histogram_auto_exposure.min_max_the_average_scene_luminance_will_be",
+				"[Min, Max] The average scene luminance will be clamped between them when doing auto exposure."
+				"Turning up the minimum, for example, makes it adapt less to darkness and therefore prevents over-brightening of dark scenes."));
 
-	if (ImGui::TreeNodeEx("Purkinje Effect", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx(T("feature.post_processing.histogram_auto_exposure.purkinje_effect", "Purkinje Effect"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::TextWrapped(
-			"The Purkinje effect simulates the blue shift of human vision under low light.\n"
-			"If you don't like the effect, you can set the strength to zero.");
+			T("feature.post_processing.histogram_auto_exposure.the_purkinje_effect_simulates_the_blue_shift_of",
+				"The Purkinje effect simulates the blue shift of human vision under low light.\n"
+				"If you don't like the effect, you can set the strength to zero."));
 
-		ImGui::SliderFloat("Max Strength", &settings.PurkinjeStrength, 0.f, 5.f, "%.2f");
-		ImGui::SliderFloat("Fade In EV", &settings.PurkinjeStartEV, -10.f, 0.f, "%.2f EV");
+		ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.max_strength", "Max Strength"), &settings.PurkinjeStrength, 0.f, 5.f, "%.2f");
+		ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.fade_in_ev", "Fade In EV"), &settings.PurkinjeStartEV, -10.f, 0.f, "%.2f EV");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("The Purkinje effect will start to take place when the average scene luminance falls lower than this.");
-		ImGui::SliderFloat("Max Effect EV", &settings.PurkinjeMaxEV, -10.f, 0.f, "%.2f EV");
+			ImGui::Text(T("feature.post_processing.histogram_auto_exposure.the_purkinje_effect_will_start_to_take_place", "The Purkinje effect will start to take place when the average scene luminance falls lower than this."));
+		ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.max_effect_ev", "Max Effect EV"), &settings.PurkinjeMaxEV, -10.f, 0.f, "%.2f EV");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("From this point onward, the Purkinje effect remains the greatest.");
+			ImGui::Text(T("feature.post_processing.histogram_auto_exposure.from_this_point_onward_the_purkinje_effect_remains", "From this point onward, the Purkinje effect remains the greatest."));
 
 		ImGui::TreePop();
 	}
 
-	if (ImGui::CollapsingHeader("Histogram", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::CollapsingHeader(T("feature.post_processing.histogram_auto_exposure.histogram", "Histogram"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		histogramReadbackRequested = true;
 		histogramReadbackRequestFrame = ImGui::GetFrameCount();
 
@@ -68,16 +71,16 @@ void HistogramAutoExposure::DrawSettings()
 		const float finalExposure = kMiddleGray * compensationScale / clampedAdaptedLum;
 		const float finalExposureEV = log2(std::max(finalExposure, 1e-5f));
 
-		ImGui::Text("Adapted Luminance: %.6g (%.2f EV)", adaptedLum, adaptedEV);
-		ImGui::Text("Compensated Target: %.6g (%.2f EV)", compensatedTargetLum, compensatedTargetEV);
-		ImGui::Text("Final Global Exposure: %.6g (%+.2f EV)", finalExposure, finalExposureEV);
+		ImGui::Text(T("feature.post_processing.histogram_auto_exposure.adapted_luminance_ev", "Adapted Luminance: %.6g (%.2f EV)"), adaptedLum, adaptedEV);
+		ImGui::Text(T("feature.post_processing.histogram_auto_exposure.compensated_target_ev", "Compensated Target: %.6g (%.2f EV)"), compensatedTargetLum, compensatedTargetEV);
+		ImGui::Text(T("feature.post_processing.histogram_auto_exposure.final_global_exposure_ev", "Final Global Exposure: %.6g (%+.2f EV)"), finalExposure, finalExposureEV);
 
 		float maxBin = 1.f;
 		for (int i = 0; i < kHistogramBins; i++) {
 			maxBin = std::max(maxBin, static_cast<float>(histogramData[i]));
 		}
 
-		ImGui::Text("Luminance Histogram (%.0f - %.0f EV)", kMinLogLum, kMaxLogLum);
+		ImGui::Text(T("feature.post_processing.histogram_auto_exposure.luminance_histogram_ev", "Luminance Histogram (%.0f - %.0f EV)"), kMinLogLum, kMaxLogLum);
 		const ImVec2 canvasPos = ImGui::GetCursorScreenPos();
 		const ImVec2 canvasSize = ImVec2(ImGui::GetContentRegionAvail().x, 120.f);
 		ImGui::InvisibleButton("##histogram_canvas", canvasSize);
@@ -118,23 +121,23 @@ void HistogramAutoExposure::DrawSettings()
 			const int bin = std::clamp(static_cast<int>((mouseX - canvasPos.x) / binWidth), 0, kHistogramBins - 1);
 			ImGui::BeginTooltip();
 			if (bin == 0) {
-				ImGui::Text("Bin 0: below luminance threshold");
+				ImGui::Text(T("feature.post_processing.histogram_auto_exposure.bin_0_below_luminance_threshold", "Bin 0: below luminance threshold"));
 			} else {
 				const float histogramPos = static_cast<float>(bin - kFirstLuminanceBin) / static_cast<float>(kLastLuminanceBin - kFirstLuminanceBin);
 				const float ev = histogramPos * (kMaxLogLum - kMinLogLum) + kMinLogLum;
-				ImGui::Text("Bin: %d", bin);
-				ImGui::Text("Luminance: %.6g", exp2(ev));
-				ImGui::Text("EV: %.2f", ev);
+				ImGui::Text(T("feature.post_processing.histogram_auto_exposure.bin", "Bin: %d"), bin);
+				ImGui::Text(T("feature.post_processing.histogram_auto_exposure.luminance", "Luminance: %.6g"), exp2(ev));
+				ImGui::Text(T("feature.post_processing.histogram_auto_exposure.ev", "EV: %.2f"), ev);
 			}
-			ImGui::Text("Samples: %u", histogramData[bin]);
+			ImGui::Text(T("feature.post_processing.histogram_auto_exposure.samples", "Samples: %u"), histogramData[bin]);
 			ImGui::EndTooltip();
 		}
 
-		ImGui::TextColored(ImVec4(0, 1, 0, 1), "Green: Adapted EV");
+		ImGui::TextColored(ImVec4(0, 1, 0, 1), T("feature.post_processing.histogram_auto_exposure.green_adapted_ev", "Green: Adapted EV"));
 		ImGui::SameLine();
-		ImGui::TextColored(ImVec4(0, 0.86f, 1, 1), "Cyan: Compensation Target");
+		ImGui::TextColored(ImVec4(0, 0.86f, 1, 1), T("feature.post_processing.histogram_auto_exposure.cyan_compensation_target", "Cyan: Compensation Target"));
 		ImGui::SameLine();
-		ImGui::TextColored(ImVec4(1, 0.8f, 0, 1), "Yellow: Adaptation Range");
+		ImGui::TextColored(ImVec4(1, 0.8f, 0, 1), T("feature.post_processing.histogram_auto_exposure.yellow_adaptation_range", "Yellow: Adaptation Range"));
 	} else {
 		histogramReadbackRequested = false;
 	}
