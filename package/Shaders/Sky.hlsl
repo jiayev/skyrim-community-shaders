@@ -376,13 +376,20 @@ PS_OUTPUT main(PS_INPUT input)
 			float3 sunDiskColor = sunDiskRadiance * limbFactor * softEdge;
 			psout.Color.xyz = sunDiskColor;
 			psout.Color.w = 1.0;
+		} else if (enableProceduralSun) {
+			psout.Color = 0.0f;
 		}
 		if (SharedData::physSkyData.enableVolumetricClouds) {
 			float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
 			psout.Color.xyz = PhysSky::ApplyVolumetricCloudTransmittanceUv(psout.Color.xyz, physSkyScreenUV, PhysSky::SampSv);
 		}
 #		else
-		if (SharedData::physSkyData.enableVolumetricClouds) {
+#			ifndef OCCLUSION
+		if (enableProceduralSun) {
+			psout.Color = 0.0f;
+		} else
+#			endif
+			if (SharedData::physSkyData.enableVolumetricClouds) {
 			float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
 			float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
 			psout.Color.xyz = inReflection ? PhysSky::CompositeVolumetricCloudsCube(psout.Color.xyz, physSkyViewDir, PhysSky::SampSv) : PhysSky::CompositeVolumetricCloudsUv(psout.Color.xyz, physSkyScreenUV, PhysSky::SampSv);
