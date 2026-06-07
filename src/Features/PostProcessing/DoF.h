@@ -9,7 +9,8 @@
 struct DoF : public PostProcessFeature
 {
 	virtual inline std::string GetType() const override { return "Depth of Field"; }
-	virtual inline std::string GetDesc() const override { return "Depth of Field, based on CinematicDOF by Frans Bouma"; }
+	virtual inline std::string GetDisplayName() const override { return T("feature.post_processing.do_f.name", "Depth of Field"); }
+	virtual inline std::string GetDesc() const override { return T("feature.post_processing.do_f.description", "Depth of Field, based on CinematicDOF by Frans Bouma."); }
 	virtual inline bool DisableInMainLoadingMenu() const override { return true; }
 
 	struct Settings
