@@ -6,7 +6,8 @@
 struct Border : public PostProcessFeature
 {
 	virtual inline std::string GetType() const override { return "Border"; }
-	virtual inline std::string GetDesc() const override { return "Add colored border, optionally with depth threshold"; }
+	virtual inline std::string GetDisplayName() const override { return T("feature.post_processing.border.name", "Border"); }
+	virtual inline std::string GetDesc() const override { return T("feature.post_processing.border.description", "Add colored border, optionally with depth threshold."); }
 	virtual inline bool DrawAfterColorGrading() const override { return true; }
 	virtual inline bool DisableInMainLoadingMenu() const override { return true; }
 

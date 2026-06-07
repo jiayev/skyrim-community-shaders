@@ -7,8 +7,12 @@
 struct HistogramAutoExposure : public PostProcessFeature
 {
 	virtual inline std::string GetType() const override { return "Histogram Auto Exposure"; }
-	virtual inline std::string GetDesc() const override { return "Auto exposure/Eye adaptation method that uses histogram to calculate average screen brightness. "
-																 "Expects HDR linear RGB inputs."; }
+	virtual inline std::string GetDisplayName() const override { return T("feature.post_processing.histogram_auto_exposure.name", "Histogram Auto Exposure"); }
+	virtual inline std::string GetDesc() const override
+	{
+		return T("feature.post_processing.histogram_auto_exposure.description",
+			"Auto exposure and eye adaptation method that uses a histogram to calculate average screen brightness. Expects HDR linear RGB inputs.");
+	}
 	virtual inline bool DisableInMainLoadingMenu() const override { return true; }
 
 	/// This feature no longer writes to the main texture.

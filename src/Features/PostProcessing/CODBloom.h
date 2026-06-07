@@ -7,7 +7,8 @@
 struct CODBloom : public PostProcessFeature
 {
 	virtual inline std::string GetType() const override { return "COD Bloom"; }
-	virtual inline std::string GetDesc() const override { return "Bloom effect used in Call of Duty: Advanced Warfare. Expect HDR linear RGB Inputs."; }
+	virtual inline std::string GetDisplayName() const override { return T("feature.post_processing.codbloom.name", "COD Bloom"); }
+	virtual inline std::string GetDesc() const override { return T("feature.post_processing.codbloom.description", "Bloom effect used in Call of Duty: Advanced Warfare. Expect HDR linear RGB inputs."); }
 	virtual bool WritesToMainTexture() const override { return false; }
 
 	TextureInfo GetBloomOutput() const { return { texBloom->resource.get(), texBloomMipSRVs[0].get() }; }

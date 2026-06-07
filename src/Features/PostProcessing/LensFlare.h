@@ -6,7 +6,8 @@
 struct LensFlare : public PostProcessFeature
 {
 	virtual inline std::string GetType() const override { return "Lens Flare"; }
-	virtual inline std::string GetDesc() const override { return "Screen-space lens flare with ghosts and halo. Supports FFT bokeh convolution for physically-shaped ghosts."; }
+	virtual inline std::string GetDisplayName() const override { return T("feature.post_processing.lens_flare.name", "Lens Flare"); }
+	virtual inline std::string GetDesc() const override { return T("feature.post_processing.lens_flare.description", "Screen-space lens flare with ghosts and halo. Supports FFT bokeh convolution for physically-shaped ghosts."); }
 	virtual bool WritesToMainTexture() const override { return false; }
 
 	TextureInfo GetFlareOutput() const;

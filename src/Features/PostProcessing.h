@@ -34,21 +34,22 @@ struct PostProcessing : Feature
 	const std::string ppPresetPath = "Data\\SKSE\\Plugins\\CommunityShaders\\PostProcessing";
 
 	virtual inline std::string GetName() override { return "Post Processing"; }
+	virtual inline std::string GetDisplayName() override { return T("feature.post_processing.name", "Post Processing"); }
 	virtual inline std::string GetShortName() override { return "PostProcessing"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "POSTPROCESS"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override
 	{
 		return t == RE::BSShader::Type::ImageSpace;
 	};
-	virtual std::string_view GetCategory() const override { return "Post-Processing"; }
+	virtual std::string_view GetCategory() const override { return FeatureCategories::kPostProcessing; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Post Processing provides advanced image effects and enhancements to improve the visual quality of the game.",
-			{ "Customizable post-processing effects",
-				"Supports various presets for different visual styles",
-				"Improves overall image quality and immersion",
-				"Includes features like bloom, depth of field, and color grading" }
+			T("feature.post_processing.description", "Post Processing provides advanced image effects and enhancements to improve the visual quality of the game."),
+			{ T("feature.post_processing.key_feature_1", "Customizable post-processing effects"),
+				T("feature.post_processing.key_feature_2", "Supports various presets for different visual styles"),
+				T("feature.post_processing.key_feature_3", "Improves overall image quality and immersion"),
+				T("feature.post_processing.key_feature_4", "Includes features like bloom, depth of field, and color grading") }
 		};
 	}
 

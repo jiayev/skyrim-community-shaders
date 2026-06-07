@@ -78,11 +78,12 @@ void drawHDRStatus()
 {
 	auto& hdr = globals::features::hdrDisplay;
 	if (hdr.loaded && hdr.settings.enableHDR) {
-		ImGui::TextColored(Util::Colors::GetSuccess(), ICON_FA_CHECK " HDR Output Active");
-		ImGui::Text("Paper White: %.0f nits (from HDR settings)", static_cast<float>(hdr.settings.hdrPaperWhite));
-		ImGui::Text("Peak Brightness: %.0f nits (from HDR settings)", static_cast<float>(hdr.settings.hdrPeakNits));
+		auto hdrOutputActive = std::format("{} {}", ICON_FA_CHECK, T("feature.post_processing.color_grading.hdr_output_active", "HDR Output Active"));
+		ImGui::TextColored(Util::Colors::GetSuccess(), "%s", hdrOutputActive.c_str());
+		ImGui::Text(T("feature.post_processing.color_grading.paper_white_nits_from_hdr_settings", "Paper White: %.0f nits (from HDR settings)"), static_cast<float>(hdr.settings.hdrPaperWhite));
+		ImGui::Text(T("feature.post_processing.color_grading.peak_brightness_nits_from_hdr_settings", "Peak Brightness: %.0f nits (from HDR settings)"), static_cast<float>(hdr.settings.hdrPeakNits));
 	} else {
-		ImGui::TextColored(Util::Colors::GetDisabled(), "SDR Output (HDR Display not enabled)");
+		ImGui::TextColored(Util::Colors::GetDisabled(), "%s", T("feature.post_processing.color_grading.sdr_output_hdr_display_not_enabled", "SDR Output (HDR Display not enabled)"));
 	}
 }
 

@@ -1,5 +1,6 @@
 #include "CODBloom.h"
 
+#include "I18n/I18n.h"
 #include "State.h"
 #include "Util.h"
 
@@ -12,30 +13,30 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void CODBloom::DrawSettings()
 {
-	ImGui::SliderFloat("Threshold", &settings.Threshold, -10.f, 20.f, "%+.2f EV");
-	ImGui::SliderFloat("Upsampling Radius", &settings.UpsampleRadius, 1.f, 5.f, "%.1f px");
+	ImGui::SliderFloat(T("feature.post_processing.codbloom.threshold", "Threshold"), &settings.Threshold, -10.f, 20.f, "%+.2f EV");
+	ImGui::SliderFloat(T("feature.post_processing.codbloom.upsampling_radius", "Upsampling Radius"), &settings.UpsampleRadius, 1.f, 5.f, "%.1f px");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("A greater radius makes the bloom slightly blurrier.");
+		ImGui::Text(T("feature.post_processing.codbloom.a_greater_radius_makes_the_bloom_slightly_blurrier", "A greater radius makes the bloom slightly blurrier."));
 
-	ImGui::SliderFloat("Mix", &settings.BlendFactor, 0.f, 1.f, "%.2f");
+	ImGui::SliderFloat(T("feature.post_processing.codbloom.mix", "Mix"), &settings.BlendFactor, 0.f, 1.f, "%.2f");
 
 	ImGui::Separator();
 
 	static int mipLevel = 1;
-	ImGui::SliderInt("Mip Level", &mipLevel, 1, (int)settings.MipBlendFactor.size() + 1, "%d", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderInt(T("feature.post_processing.codbloom.mip_level", "Mip Level"), &mipLevel, 1, (int)settings.MipBlendFactor.size() + 1, "%d", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("The greater the level, the blurrier the part it controls");
+		ImGui::Text(T("feature.post_processing.codbloom.the_greater_the_level_the_blurrier_the_part", "The greater the level, the blurrier the part it controls"));
 	ImGui::Indent();
 	{
-		ImGui::SliderFloat("Intensity", &settings.MipBlendFactor[mipLevel - 1], 0.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T("feature.post_processing.codbloom.intensity", "Intensity"), &settings.MipBlendFactor[mipLevel - 1], 0.f, 1.f, "%.2f");
 	}
 	ImGui::Unindent();
 
-	if (ImGui::CollapsingHeader("Debug")) {
+	if (ImGui::CollapsingHeader(T("feature.post_processing.codbloom.debug", "Debug"))) {
 		static int mip = 0;
-		ImGui::SliderInt("Debug Mip Level", &mip, 0, (int)s_BloomMips - 1, "%d", ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderInt(T("feature.post_processing.codbloom.debug_mip_level", "Debug Mip Level"), &mip, 0, (int)s_BloomMips - 1, "%d", ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp);
 
-		ImGui::BulletText("texBloom");
+		ImGui::BulletText(T("feature.post_processing.codbloom.texbloom", "texBloom"));
 		ImGui::Image(texBloomMipSRVs[mip].get(), { texBloom->desc.Width * .2f, texBloom->desc.Height * .2f });
 	}
 }
