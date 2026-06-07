@@ -305,7 +305,7 @@ Texture2D<float4> TexMsLut : register(t113);
 		skyColor *= 1 - shadow;
 
 		if (data.tonemapper == 1)
-			skyColor = Color::LinearToGamma(skyColor);
+			skyColor = Color::LinearToSkyrimGamma(skyColor);
 		else if (data.tonemapper == 2)
 			skyColor = skyColor / (1 + skyColor);
 
@@ -452,7 +452,7 @@ Texture2D<float4> TexMsLut : register(t113);
 		apColor.rgb *= GetApShadowedMultiScatterVisibility(shadow, SampleApMultiScatter(sampSv));
 
 		if (data.tonemapper == 1)
-			apColor.rgb = Color::LinearToGamma(apColor.rgb);
+			apColor.rgb = Color::LinearToSkyrimGamma(apColor.rgb);
 		else if (data.tonemapper == 2)
 			apColor.rgb = apColor.rgb / (1 + apColor.rgb);
 
