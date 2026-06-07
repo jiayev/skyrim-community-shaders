@@ -1,5 +1,6 @@
 #include "Camera.h"
 
+#include "I18n/I18n.h"
 #include "State.h"
 #include "Util.h"
 
@@ -14,36 +15,36 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void Camera::DrawSettings()
 {
-	ImGui::Checkbox("Fisheye", &settings.UseFE);
+	ImGui::Checkbox(T("feature.post_processing.camera.fisheye", "Fisheye"), &settings.UseFE);
 	if (ImGui::IsItemHovered()) {
-		ImGui::SetTooltip("Enable fisheye effect");
+		ImGui::SetTooltip("%s", T("feature.post_processing.camera.enable_fisheye_effect", "Enable fisheye effect."));
 	}
 
 	if (settings.UseFE) {
-		ImGui::SliderFloat("FOV", &settings.FEFoV, 20.0f, 180.0f, "%1.0f °");
+		ImGui::SliderFloat(T("feature.post_processing.camera.fov", "FOV"), &settings.FEFoV, 20.0f, 180.0f, "%1.0f °");
 		if (ImGui::IsItemHovered()) {
-			ImGui::SetTooltip("FOV in degrees\n\n(set to in-game FOV)");
+			ImGui::SetTooltip("%s", T("feature.post_processing.camera.fov_in_degrees_set_to_in_game_fov", "FOV in degrees.\n\nSet to in-game FOV."));
 		}
 
-		ImGui::SliderFloat("Crop", &settings.FECrop, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat(T("feature.post_processing.camera.crop", "Crop"), &settings.FECrop, 0.0f, 1.0f, "%.3f");
 		if (ImGui::IsItemHovered()) {
-			ImGui::SetTooltip("How much to crop into the image\n\n(0 = circular, 1 = full-frame)");
+			ImGui::SetTooltip("%s", T("feature.post_processing.camera.how_much_to_crop_into_the_image", "How much to crop into the image.\n\n0 = circular, 1 = full-frame."));
 		}
 	}
 
-	ImGui::SliderFloat("CA amount", &settings.CAStrength, 0.0f, 1.0f, "%.3f");
+	ImGui::SliderFloat(T("feature.post_processing.camera.ca_amount", "CA amount"), &settings.CAStrength, 0.0f, 1.0f, "%.3f");
 	if (ImGui::IsItemHovered()) {
-		ImGui::SetTooltip("Chromatic aberration strength");
+		ImGui::SetTooltip("%s", T("feature.post_processing.camera.chromatic_aberration_strength", "Chromatic aberration strength."));
 	}
 
-	ImGui::SliderFloat("Noise amount", &settings.NoiseStrength, 0.0f, 1.0f, "%.3f");
+	ImGui::SliderFloat(T("feature.post_processing.camera.noise_amount", "Noise amount"), &settings.NoiseStrength, 0.0f, 1.0f, "%.3f");
 	if (ImGui::IsItemHovered()) {
-		ImGui::SetTooltip("Amount of noise to apply");
+		ImGui::SetTooltip("%s", T("feature.post_processing.camera.amount_of_noise_to_apply", "Amount of noise to apply."));
 	}
 
-	ImGui::Combo("Noise type", &settings.NoiseType, "Film grain\0Color grain\0\0");
+	ImGui::Combo(T("feature.post_processing.camera.noise_type", "Noise type"), &settings.NoiseType, "Film grain\0Color grain\0\0");
 	if (ImGui::IsItemHovered()) {
-		ImGui::SetTooltip("Type of noise to apply");
+		ImGui::SetTooltip("%s", T("feature.post_processing.camera.type_of_noise_to_apply", "Type of noise to apply."));
 	}
 }
 

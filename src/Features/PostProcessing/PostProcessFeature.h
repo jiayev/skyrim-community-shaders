@@ -12,6 +12,7 @@ struct PostProcessFeature
 	PostProcessing* owner = nullptr;
 
 	virtual std::string GetType() const = 0;
+	virtual std::string GetDisplayName() const { return GetType(); }
 	std::string name;
 	virtual std::string GetDesc() const = 0;
 	virtual bool SupportsVR() const { return true; }
