@@ -27,6 +27,11 @@ struct CloudLayer
 	float ms_transmittance_power;
 	float ms_height_power;
 	float ambient_mult;
+
+	float2 low_frame_dim;
+	float2 rcp_low_frame_dim;
+	uint history_valid;
+	uint3 padding;
 };
 
 struct VolumetricCloudData
@@ -60,6 +65,11 @@ struct VolumetricCloudData
 	float msTransmittancePower;
 	float msHeightPower;
 	float ambientMult;
+
+	float2 lowFrameDim;
+	float2 rcpLowFrameDim;
+	uint historyValid;
+	uint3 padding;
 };
 
 CloudLayer GetCloudLayer(VolumetricCloudData info)
@@ -78,6 +88,10 @@ CloudLayer GetCloudLayer(VolumetricCloudData info)
 	cloud.ms_transmittance_power = info.msTransmittancePower;
 	cloud.ms_height_power = info.msHeightPower;
 	cloud.ambient_mult = info.ambientMult;
+	cloud.low_frame_dim = info.lowFrameDim;
+	cloud.rcp_low_frame_dim = info.rcpLowFrameDim;
+	cloud.history_valid = info.historyValid;
+	cloud.padding = info.padding;
 	return cloud;
 }
 
@@ -109,6 +123,15 @@ StructuredBuffer<DirectionalShadowLightData> DirectionalShadowLights : register(
 Texture3D<float> TexShadowVolume : register(t23);
 TextureCube<float3> TexVolCubeTrHistory : register(t24);
 TextureCube<float3> TexVolCubeLumHistory : register(t25);
+Texture2D<float3> TexVolHistoryTr : register(t26);
+Texture2D<float3> TexVolHistoryLum : register(t27);
+Texture2D<float4> TexVolHistoryAux : register(t28);
+Texture2D<float3> TexVolLowTr : register(t29);
+Texture2D<float3> TexVolLowLum : register(t30);
+Texture2D<float4> TexVolLowAux : register(t31);
+Texture2D<float3> TexVolUpscaleTr : register(t32);
+Texture2D<float3> TexVolUpscaleLum : register(t33);
+Texture2D<float4> TexVolUpscaleAux : register(t34);
 
 cbuffer VolumetricCloudCubeHistoryCB : register(b1)
 {
@@ -118,6 +141,7 @@ cbuffer VolumetricCloudCubeHistoryCB : register(b1)
 
 RWTexture2D<float3> RWTexTr : register(u0);
 RWTexture2D<float3> RWTexLum : register(u1);
+RWTexture2D<float4> RWTexAux : register(u2);
 
 RWTexture3D<float> RWShadowVolume : register(u0);
 
@@ -487,6 +511,10 @@ struct VolumetricCloudResult
 {
 	float3 transmittance;
 	float3 lum;
+	float cloud_depth;
+	float scatter_weight;
+	float weighted_depth;
+	float opacity;
 };
 
 VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, float solid_dist, bool is_sky, uint eye_index, uint3 seed, float jitter, float ap_shadow)
@@ -514,6 +542,9 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	float ap_dist = 0.0;
 	float3 mean_shadowing = 0.0;
 	float sum_shadowing_weights = 0.0;
+	float scatter_weight = 0.0;
+	float weighted_depth = 0.0;
+	float opacity = 0.0;
 
 	float stride = 0.003 / 1.428e-5f;
 
@@ -566,6 +597,10 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 		stride = (pow(sqrt(march_prop) + rcp_step, 2) - march_prop) * info.rayMarchRange;
 
 		const float tr = max(ray.transmittance.x, max(ray.transmittance.y, ray.transmittance.z));
+		const float step_opacity = saturate(1.0 - tr);
+		scatter_weight += step_opacity * dt;
+		weighted_depth += step_opacity * dt * (ray.start_dist + ray.ray_dist);
+		opacity = max(opacity, step_opacity);
 		ap_dist += tr * dt;
 		[branch] if (tr < 1e-3) break;
 	}
@@ -600,24 +635,31 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	VolumetricCloudResult result;
 	result.transmittance = ray.transmittance;
 	result.lum = ray.lum;
+	result.cloud_depth = scatter_weight > 1e-6 ? weighted_depth / scatter_weight : (is_sky ? 16384.0 : solid_dist);
+	result.scatter_weight = scatter_weight;
+	result.weighted_depth = weighted_depth;
+	result.opacity = opacity;
 	return result;
 }
 
 [numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 
+	if (any(tid >= uint2(info.lowFrameDim)))
+		return;
+
 	const uint2 px_coords = tid;
+	const uint2 full_px_coords = min(px_coords * 4u + 2u, uint2(info.frameDim) - 1u);
 
 	const uint3 seed = Random::pcg3d(uint3(px_coords.xy, px_coords.x ^ 0xf874));
 	const float3 rnd = Random::R3Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
 
 	///////////// get start and end
-	const float depth = TexDepth[px_coords.xy];
+	const float depth = TexDepth[full_px_coords.xy];
 	const bool is_sky = depth > 1 - 1e-6;
 
-	const float2 stereo_uv = (px_coords + rnd.xy) * info.rcpFrameDim;
-	const uint eye_index = Stereo::GetEyeIndexFromTexCoord(stereo_uv);
-	const float2 uv = Stereo::ConvertFromStereoUV(stereo_uv, eye_index) * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
+	const float2 uv = (full_px_coords + rnd.xy) * info.rcpFrameDim * FrameBuffer::DynamicResolutionParams2.xy;
+	const uint eye_index = 0;
 
 	float4 pos_world = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
 	pos_world = mul(FrameBuffer::CameraViewProjInverse[eye_index], pos_world);
@@ -632,6 +674,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 
 	RWTexTr[px_coords] = result.transmittance;
 	RWTexLum[px_coords] = result.lum;
+	RWTexAux[px_coords] = float4(result.cloud_depth, result.opacity, result.weighted_depth, result.scatter_weight);
 };
 
 float3 GetCubemapSamplingVector(uint3 threadId, in RWTexture2DArray<float3> outputTexture)
@@ -701,6 +744,194 @@ float3 GetCubemapSamplingVector(uint3 threadId, in RWTexture2DArray<float3> outp
 
 	RWTexCubeTr[tid] = lerp(tr, history_tr, CubeHistoryWeight);
 	RWTexCubeLum[tid] = lerp(lum, history_lum, CubeHistoryWeight);
+};
+
+float2 GetPreviousCloudUv(float2 uv, float depth, out bool valid)
+{
+	valid = false;
+	if (depth >= 16384.0)
+		return uv;
+
+	float4 pos_world = float4(2 * float2(uv.x, -uv.y + 1) - 1, 1.0, 1);
+	pos_world = mul(FrameBuffer::CameraViewProjInverse[0], pos_world);
+	pos_world.xyz = normalize(pos_world.xyz / pos_world.w) * depth;
+	pos_world.w = 1.0;
+	pos_world.xyz += FrameBuffer::CameraPosAdjust[0].xyz - FrameBuffer::CameraPreviousPosAdjust[0].xyz;
+
+	float4 prev_clip = mul(FrameBuffer::CameraPreviousViewProjUnjittered[0], pos_world);
+	if (prev_clip.w <= 0.0)
+		return uv;
+
+	float2 prev_uv = prev_clip.xy / prev_clip.w * float2(0.5, -0.5) + 0.5;
+	valid = all(prev_uv >= 0.0) && all(prev_uv <= 1.0);
+	return prev_uv;
+}
+
+float3 ReprojectHistory(float2 uv, float depth, Texture2D<float3> history, float3 current, bool historyValid, out float confidence)
+{
+	bool valid;
+	float2 history_uv = GetPreviousCloudUv(uv, depth, valid);
+	confidence = (historyValid && valid) ? 0.875 : 0.0;
+	return lerp(current, history.SampleLevel(SkyViewSampler, history_uv, 0), confidence);
+}
+
+float SafeCloudDepth(float4 aux, float minDepth)
+{
+	return aux.x < 19500.0 ? aux.x : minDepth;
+}
+
+float4 BilinearWeights(float2 frac)
+{
+	return float4((1.0 - frac.x) * (1.0 - frac.y), frac.x * (1.0 - frac.y), (1.0 - frac.x) * frac.y, frac.x * frac.y);
+}
+
+void SampleCloudBilinear(float2 texelPos, uint2 dims, out float3 tr, out float3 lum, out float4 aux)
+{
+	const int2 basePx = int2(floor(texelPos));
+	const float2 frac = saturate(texelPos - floor(texelPos));
+	const uint2 px00 = min(uint2(max(basePx, 0)), dims - 1);
+	const uint2 px10 = min(uint2(max(basePx + int2(1, 0), 0)), dims - 1);
+	const uint2 px01 = min(uint2(max(basePx + int2(0, 1), 0)), dims - 1);
+	const uint2 px11 = min(uint2(max(basePx + int2(1, 1), 0)), dims - 1);
+
+	const float4 aux00 = TexVolLowAux[px00];
+	const float4 aux10 = TexVolLowAux[px10];
+	const float4 aux01 = TexVolLowAux[px01];
+	const float4 aux11 = TexVolLowAux[px11];
+	const float min_depth = min(min(aux00.x, aux10.x), min(aux01.x, aux11.x));
+
+	const float4 weights = BilinearWeights(frac);
+	tr = TexVolLowTr[px00] * weights.x + TexVolLowTr[px10] * weights.y + TexVolLowTr[px01] * weights.z + TexVolLowTr[px11] * weights.w;
+	lum = TexVolLowLum[px00] * weights.x + TexVolLowLum[px10] * weights.y + TexVolLowLum[px01] * weights.z + TexVolLowLum[px11] * weights.w;
+	aux = float4(
+		SafeCloudDepth(aux00, min_depth) * weights.x + SafeCloudDepth(aux10, min_depth) * weights.y + SafeCloudDepth(aux01, min_depth) * weights.z + SafeCloudDepth(aux11, min_depth) * weights.w,
+		aux00.y * weights.x + aux10.y * weights.y + aux01.y * weights.z + aux11.y * weights.w,
+		aux00.z * weights.x + aux10.z * weights.y + aux01.z * weights.z + aux11.z * weights.w,
+		aux00.w * weights.x + aux10.w * weights.y + aux01.w * weights.z + aux11.w * weights.w);
+}
+
+void SampleCloudFallback(float2 texelPos, uint2 dims, out float3 tr, out float3 lum, out float4 aux)
+{
+	const int2 basePx = int2(floor(texelPos));
+	const float2 frac = saturate(texelPos - floor(texelPos));
+	const uint2 px00 = min(uint2(max(basePx, 0)), dims - 1);
+	const uint2 px10 = min(uint2(max(basePx + int2(1, 0), 0)), dims - 1);
+	const uint2 px01 = min(uint2(max(basePx + int2(0, 1), 0)), dims - 1);
+	const uint2 px11 = min(uint2(max(basePx + int2(1, 1), 0)), dims - 1);
+
+	const float4 aux00 = TexVolLowAux[px00];
+	const float4 aux10 = TexVolLowAux[px10];
+	const float4 aux01 = TexVolLowAux[px01];
+	const float4 aux11 = TexVolLowAux[px11];
+	const float min_depth = min(min(aux00.x, aux10.x), min(aux01.x, aux11.x));
+	const float4 rawWeights = BilinearWeights(frac);
+	float4 weights = float4(aux00.y == 0.0 ? 0.01 : rawWeights.x, aux10.y == 0.0 ? 0.01 : rawWeights.y, aux01.y == 0.0 ? 0.01 : rawWeights.z, aux11.y == 0.0 ? 0.01 : rawWeights.w);
+	weights /= weights.x + weights.y + weights.z + weights.w;
+
+	tr = TexVolLowTr[px00] * weights.x + TexVolLowTr[px10] * weights.y + TexVolLowTr[px01] * weights.z + TexVolLowTr[px11] * weights.w;
+	lum = TexVolLowLum[px00] * weights.x + TexVolLowLum[px10] * weights.y + TexVolLowLum[px01] * weights.z + TexVolLowLum[px11] * weights.w;
+	aux = float4(
+		SafeCloudDepth(aux00, min_depth) * weights.x + SafeCloudDepth(aux10, min_depth) * weights.y + SafeCloudDepth(aux01, min_depth) * weights.z + SafeCloudDepth(aux11, min_depth) * weights.w,
+		aux00.y * weights.x + aux10.y * weights.y + aux01.y * weights.z + aux11.y * weights.w,
+		aux00.z * weights.x + aux10.z * weights.y + aux01.z * weights.z + aux11.z * weights.w,
+		aux00.w * weights.x + aux10.w * weights.y + aux01.w * weights.z + aux11.w * weights.w);
+}
+
+[numthreads(8, 8, 1)] void resample(uint2 tid : SV_DispatchThreadID) {
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	if (any(tid >= uint2(info.frameDim)))
+		return;
+
+	uint2 low_dims;
+	TexVolLowTr.GetDimensions(low_dims.x, low_dims.y);
+	const float2 uv = (tid + 0.5) * info.rcpFrameDim;
+	const uint frame_subpixel = SharedData::FrameCountAlwaysActive & 15u;
+	const uint pixel_subpixel = ((tid.y & 3u) << 2u) + (tid.x & 3u);
+	const float2 pattern_offset = (float2(frame_subpixel & 3u, frame_subpixel >> 2u) * 0.25 - 0.375) * info.rcpLowFrameDim;
+	const bool history_available = info.historyValid != 0;
+	bool projection_valid;
+	float2 projected_uv = GetPreviousCloudUv(uv, TexDepth[tid], projection_valid);
+	projection_valid = projection_valid && history_available;
+
+	float3 tr;
+	float3 lum;
+	float4 aux;
+	if (projection_valid) {
+		tr = TexVolHistoryTr.SampleLevel(SkyViewSampler, projected_uv, 0);
+		lum = TexVolHistoryLum.SampleLevel(SkyViewSampler, projected_uv, 0);
+		aux = TexVolHistoryAux.SampleLevel(SkyViewSampler, projected_uv, 0);
+	} else {
+		SampleCloudBilinear(uv * low_dims - 0.5, low_dims, tr, lum, aux);
+	}
+
+	if (pixel_subpixel == frame_subpixel) {
+		const uint2 low_px = min(uint2(uv * low_dims), low_dims - 1);
+		const float3 low_tr = TexVolLowTr[low_px];
+		const float3 low_lum = TexVolLowLum[low_px];
+		const float4 low_aux = TexVolLowAux[low_px];
+
+		float color_confidence = projection_valid ? 1.0 - saturate(pow(length(low_lum - lum), 0.5)) * 0.8 : 1.0;
+		float reprojection_confidence = projection_valid ? (saturate((length(projected_uv - uv) - 0.0001) * 2500.0) * 0.5 + 0.5) : 1.0;
+		float direct_weight = color_confidence * reprojection_confidence;
+
+		tr = lerp(tr, low_tr, direct_weight);
+		lum = lerp(lum, low_lum, direct_weight);
+		aux = lerp(aux, low_aux, direct_weight);
+	} else if (projection_valid) {
+		const float2 previous_uv = FrameBuffer::GetPreviousDynamicResolutionAdjustedScreenPosition(projected_uv);
+		const uint2 history_px = min(uint2(previous_uv * info.frameDim), uint2(info.frameDim) - 1u);
+		const uint2 current_px = min(uint2(saturate(uv * 2.0) * info.frameDim), uint2(info.frameDim) - 1u);
+		const float previous_depth = TexVolHistoryAux[history_px].x;
+		const float current_depth = TexDepth[current_px];
+		if (abs(current_depth - previous_depth) > 64.0) {
+			const float2 fallback_texel_pos = (uv - pattern_offset) * low_dims - 0.5;
+			SampleCloudFallback(fallback_texel_pos, low_dims, tr, lum, aux);
+		}
+	} else {
+		const float2 fallback_texel_pos = (uv - pattern_offset) * low_dims - 0.5;
+		SampleCloudFallback(fallback_texel_pos, low_dims, tr, lum, aux);
+	}
+
+	RWTexTr[tid] = tr;
+	RWTexLum[tid] = lum;
+	RWTexAux[tid] = aux;
+};
+
+[numthreads(8, 8, 1)] void blur(uint2 tid : SV_DispatchThreadID) {
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	if (any(tid >= uint2(info.frameDim)))
+		return;
+
+	const float2 uv = (tid + 0.5) * info.rcpFrameDim;
+	const float4 aux_center = TexVolUpscaleAux[tid];
+	const float falloff = pow(1.0 - saturate(abs(aux_center.x - 1000.0) * 0.00016666667), 4.0) * 0.67 + 0.33;
+	const float2 radius = falloff * info.rcpFrameDim;
+	const float2 uv0 = max(uv - radius, 0.5 * info.rcpFrameDim);
+	const float2 uv1 = min(uv + radius, 1.0 - 0.5 * info.rcpFrameDim);
+
+	float3 tr = (TexVolUpscaleTr.SampleLevel(SkyViewSampler, float2(uv0.x, uv1.y), 0) +
+					TexVolUpscaleTr.SampleLevel(SkyViewSampler, uv1, 0) +
+					TexVolUpscaleTr.SampleLevel(SkyViewSampler, uv0, 0) +
+					TexVolUpscaleTr.SampleLevel(SkyViewSampler, float2(uv1.x, uv0.y), 0)) *
+	            0.25;
+	float3 lum = (TexVolUpscaleLum.SampleLevel(SkyViewSampler, float2(uv0.x, uv1.y), 0) +
+					 TexVolUpscaleLum.SampleLevel(SkyViewSampler, uv1, 0) +
+					 TexVolUpscaleLum.SampleLevel(SkyViewSampler, uv0, 0) +
+					 TexVolUpscaleLum.SampleLevel(SkyViewSampler, float2(uv1.x, uv0.y), 0)) *
+	             0.25;
+
+	float aux_z = 0.0;
+	if (aux_center.z > 0.0) {
+		aux_z = (TexVolUpscaleAux.SampleLevel(SkyViewSampler, float2(uv1.x, uv1.y), 0).z +
+					TexVolUpscaleAux.SampleLevel(SkyViewSampler, float2(uv0.x, uv1.y), 0).z +
+					TexVolUpscaleAux.SampleLevel(SkyViewSampler, float2(uv0.x, uv0.y), 0).z +
+					TexVolUpscaleAux.SampleLevel(SkyViewSampler, float2(uv1.x, uv0.y), 0).z) *
+		        0.25;
+	}
+
+	RWTexTr[tid] = tr;
+	RWTexLum[tid] = lum;
+	RWTexAux[tid] = float4(aux_center.x, aux_center.y, aux_z, aux_center.w);
 };
 
 #define NTHREADS 256

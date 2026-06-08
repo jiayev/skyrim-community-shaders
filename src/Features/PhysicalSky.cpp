@@ -729,8 +729,9 @@ bool PhysicalSky::ShadersOK()
 	bool baseShadersOk = csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum && csShadowAccumHalfRes &&
 	                     texTrLut && texSvLut && texApLut && texApShadow;
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
-	                           (csVolMainView && csVolShadowVolume && csVolCubemap && csVolCubemapHistory && volCubeHistoryCb && ndfManager.cumuliformProgram &&
-								   texVolTr && texVolLum && texVolCubeTr && texVolCubeLum && texVolCubeTrHistory && texVolCubeLumHistory &&
+	                           (csVolMainView && csVolResample && csVolBlur && csVolShadowVolume && csVolCubemap && csVolCubemapHistory && volCubeHistoryCb && ndfManager.cumuliformProgram &&
+								   texVolTr && texVolLum && texVolAux && texVolLowTr && texVolLowLum && texVolLowAux && texVolUpscaleTr && texVolUpscaleLum && texVolUpscaleAux &&
+								   texVolHistoryTr && texVolHistoryLum && texVolHistoryAux && texVolCubeTr && texVolCubeLum && texVolCubeTrHistory && texVolCubeLumHistory &&
 								   texShadowVolume && nubisNoiseSrv && cloudTopLutSrv && cloudBottomLutSrv);
 	return baseShadersOk && volumetricShadersOk;
 }
@@ -879,7 +880,7 @@ void PhysicalSky::ReflectionsPrepass()
 void PhysicalSky::Prepass()
 {
 	if (cbData.enabled) {
-		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolShadowVolume && csVolCubemap && csVolCubemapHistory && volCubeHistoryCb;
+		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolResample && csVolBlur && csVolShadowVolume && csVolCubemap && csVolCubemapHistory && volCubeHistoryCb;
 
 		if (renderVolumetricClouds) {
 			ndfManager.UpdateNdf(ndfSettings);
@@ -898,6 +899,26 @@ void PhysicalSky::Prepass()
 			FLOAT lumClr[4] = { 0.f, 0.f, 0.f, 0.f };
 			context->ClearUnorderedAccessViewFloat(texVolTr->uav.get(), trClr);
 			context->ClearUnorderedAccessViewFloat(texVolLum->uav.get(), lumClr);
+			if (texVolAux)
+				context->ClearUnorderedAccessViewFloat(texVolAux->uav.get(), lumClr);
+			if (texVolLowTr)
+				context->ClearUnorderedAccessViewFloat(texVolLowTr->uav.get(), trClr);
+			if (texVolLowLum)
+				context->ClearUnorderedAccessViewFloat(texVolLowLum->uav.get(), lumClr);
+			if (texVolLowAux)
+				context->ClearUnorderedAccessViewFloat(texVolLowAux->uav.get(), lumClr);
+			if (texVolUpscaleTr)
+				context->ClearUnorderedAccessViewFloat(texVolUpscaleTr->uav.get(), trClr);
+			if (texVolUpscaleLum)
+				context->ClearUnorderedAccessViewFloat(texVolUpscaleLum->uav.get(), lumClr);
+			if (texVolUpscaleAux)
+				context->ClearUnorderedAccessViewFloat(texVolUpscaleAux->uav.get(), lumClr);
+			if (texVolHistoryTr)
+				context->ClearUnorderedAccessViewFloat(texVolHistoryTr->uav.get(), trClr);
+			if (texVolHistoryLum)
+				context->ClearUnorderedAccessViewFloat(texVolHistoryLum->uav.get(), lumClr);
+			if (texVolHistoryAux)
+				context->ClearUnorderedAccessViewFloat(texVolHistoryAux->uav.get(), lumClr);
 			if (texVolCubeTr)
 				context->ClearUnorderedAccessViewFloat(texVolCubeTr->uav.get(), trClr);
 			if (texVolCubeLum)
@@ -909,6 +930,9 @@ void PhysicalSky::Prepass()
 			if (texShadowVolume)
 				context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), lumClr);
 			volCubeHistoryValid = false;
+			volMainHistoryValid = false;
+			volHistoryWidth = 0;
+			volHistoryHeight = 0;
 		}
 
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get(), texApShadow->srv.get() };

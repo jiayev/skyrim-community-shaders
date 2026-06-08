@@ -228,9 +228,20 @@ struct PhysicalSky final : public Feature
 	constexpr static uint16_t kShadowVolD = 64;
 	constexpr static uint16_t kVolCubeSize = 64;
 	constexpr static uint16_t kNubisSize = 128;
+	constexpr static uint16_t kVolCloudDownsample = 4;
 
-	eastl::unique_ptr<Texture2D> texVolTr = nullptr;       // volumetric transmittance result
-	eastl::unique_ptr<Texture2D> texVolLum = nullptr;      // volumetric luminance result
+	eastl::unique_ptr<Texture2D> texVolTr = nullptr;      // blurred full-resolution volumetric transmittance result
+	eastl::unique_ptr<Texture2D> texVolLum = nullptr;     // blurred full-resolution volumetric luminance result
+	eastl::unique_ptr<Texture2D> texVolAux = nullptr;     // blurred full-resolution Nubis cloud depth/metadata
+	eastl::unique_ptr<Texture2D> texVolLowTr = nullptr;   // 1/4-resolution Nubis raymarch transmittance
+	eastl::unique_ptr<Texture2D> texVolLowLum = nullptr;  // 1/4-resolution Nubis raymarch luminance
+	eastl::unique_ptr<Texture2D> texVolLowAux = nullptr;  // 1/4-resolution Nubis cloud depth/metadata
+	eastl::unique_ptr<Texture2D> texVolUpscaleTr = nullptr;
+	eastl::unique_ptr<Texture2D> texVolUpscaleLum = nullptr;
+	eastl::unique_ptr<Texture2D> texVolUpscaleAux = nullptr;
+	eastl::unique_ptr<Texture2D> texVolHistoryTr = nullptr;
+	eastl::unique_ptr<Texture2D> texVolHistoryLum = nullptr;
+	eastl::unique_ptr<Texture2D> texVolHistoryAux = nullptr;
 	eastl::unique_ptr<Texture2D> texVolCubeTr = nullptr;   // low-resolution cubemap transmittance result
 	eastl::unique_ptr<Texture2D> texVolCubeLum = nullptr;  // low-resolution cubemap luminance result
 	eastl::unique_ptr<Texture2D> texVolCubeTrHistory = nullptr;
@@ -280,6 +291,11 @@ struct PhysicalSky final : public Feature
 		float msTransmittancePower;
 		float msHeightPower;
 		float ambientMult;
+
+		float2 lowFrameDim;
+		float2 rcpLowFrameDim;
+		uint historyValid;
+		uint padding[3];
 	};
 
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
@@ -292,8 +308,13 @@ struct PhysicalSky final : public Feature
 
 	eastl::unique_ptr<ConstantBuffer> volCubeHistoryCb = nullptr;
 	bool volCubeHistoryValid = false;
+	bool volMainHistoryValid = false;
+	uint32_t volHistoryWidth = 0;
+	uint32_t volHistoryHeight = 0;
 
 	winrt::com_ptr<ID3D11ComputeShader> csVolMainView = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolResample = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolBlur = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowVolume = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubemap = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubemapHistory = nullptr;
