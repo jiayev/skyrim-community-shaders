@@ -235,12 +235,14 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	auto state = globals::state;
 	auto context = globals::d3d::context;
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-	const uint32_t resW = (uint32_t)cbData.frameDim.x;
-	const uint32_t resH = (uint32_t)cbData.frameDim.y;
-	if (volHistoryWidth != resW || volHistoryHeight != resH) {
+	const uint32_t textureW = (uint32_t)cbData.texDim.x;
+	const uint32_t textureH = (uint32_t)cbData.texDim.y;
+	const uint32_t renderW = (uint32_t)cbData.frameDim.x;
+	const uint32_t renderH = (uint32_t)cbData.frameDim.y;
+	if (volHistoryWidth != textureW || volHistoryHeight != textureH) {
 		volMainHistoryValid = false;
-		volHistoryWidth = resW;
-		volHistoryHeight = resH;
+		volHistoryWidth = textureW;
+		volHistoryHeight = textureH;
 	}
 
 	// Convert cloud layer settings to noise offset (speed * time)
@@ -249,8 +251,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	// Aerial perspective max distance (same as LUT generation)
 	float apMaxDist = 40.f / 1.428e-5f;  // 40km in game units
 
-	uint32_t lowW = texVolLowTr ? texVolLowTr->desc.Width : std::max(1u, (resW + kVolCloudDownsample - 1u) / kVolCloudDownsample);
-	uint32_t lowH = texVolLowTr ? texVolLowTr->desc.Height : std::max(1u, (resH + kVolCloudDownsample - 1u) / kVolCloudDownsample);
+	uint32_t lowW = texVolLowTr ? texVolLowTr->desc.Width : std::max(1u, (textureW + kVolCloudDownsample - 1u) / kVolCloudDownsample);
+	uint32_t lowH = texVolLowTr ? texVolLowTr->desc.Height : std::max(1u, (textureH + kVolCloudDownsample - 1u) / kVolCloudDownsample);
 
 	// Update StructuredBuffer
 	VolumetricCloudSB sbData = {
@@ -258,8 +260,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.shadowVolumeRange = settings.shadowVolumeRange / 1.428e-5f,
 		.cloudMaxStep = settings.cloudMaxStep,
 		._pad0 = 0,
-		.frameDim = { cbData.frameDim.x, cbData.frameDim.y },
-		.rcpFrameDim = { cbData.rcpFrameDim.x, cbData.rcpFrameDim.y },
+		.frameDim = { cbData.texDim.x, cbData.texDim.y },
+		.rcpFrameDim = { cbData.rcpTexDim.x, cbData.rcpTexDim.y },
 		.dirlightDir = { cbData.sunDir.x, cbData.sunDir.y, cbData.sunDir.z },
 		._pad1 = 0,
 		.dirlightColor = { cbData.sunlightColor.x, cbData.sunlightColor.y, cbData.sunlightColor.z },
@@ -393,7 +395,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 			context->CSSetShader(csVolResample.get(), nullptr, 0);
 			globals::profiler->BeginPass("PhysicalSky::VolumetricResample");
-			context->Dispatch((resW + 7u) >> 3, (resH + 7u) >> 3, 1);
+			context->Dispatch((renderW + 7u) >> 3, (renderH + 7u) >> 3, 1);
 			globals::profiler->EndPass();
 		}
 		state->EndPerfEvent();
@@ -422,7 +424,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 			context->CSSetShader(csVolBlur.get(), nullptr, 0);
 			globals::profiler->BeginPass("PhysicalSky::VolumetricBlur");
-			context->Dispatch((resW + 7u) >> 3, (resH + 7u) >> 3, 1);
+			context->Dispatch((renderW + 7u) >> 3, (renderH + 7u) >> 3, 1);
 			globals::profiler->EndPass();
 		}
 		state->EndPerfEvent();
@@ -432,9 +434,9 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			ID3D11ShaderResourceView* nullSrvs[9] = {};
 			context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 			context->CSSetShaderResources(26, 9, nullSrvs);
-			context->CopyResource(texVolHistoryTr->resource.get(), texVolTr->resource.get());
-			context->CopyResource(texVolHistoryLum->resource.get(), texVolLum->resource.get());
-			context->CopyResource(texVolHistoryAux->resource.get(), texVolAux->resource.get());
+			context->CopyResource(texVolHistoryTr->resource.get(), texVolUpscaleTr->resource.get());
+			context->CopyResource(texVolHistoryLum->resource.get(), texVolUpscaleLum->resource.get());
+			context->CopyResource(texVolHistoryAux->resource.get(), texVolUpscaleAux->resource.get());
 			volMainHistoryValid = true;
 		}
 
