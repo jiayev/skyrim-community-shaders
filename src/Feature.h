@@ -49,12 +49,6 @@ protected:
 
 public:
 	virtual bool HasShaderDefine(RE::BSShader::Type) { return false; }
-	/**
-	 * Whether the feature supports VR.
-	 *
-	 * \return true if VR supported; else false
-	 */
-	virtual bool SupportsVR() { return false; }
 
 	/**
 	 * Whether the feature is a CORE feature
@@ -72,6 +66,13 @@ public:
 	 * Core features will be distributed to their respective categories
 	 */
 	virtual std::string_view GetCategory() const { return FeatureCategories::kOther; }
+
+	/**
+	 * Whether the feature is disabled at boot by default (before any user override).
+	 * Features that override this to return true will start disabled on first install;
+	 * users can still enable them via the "Disable at Boot" menu.
+	 */
+	virtual bool IsDisabledByDefault() const { return false; }
 
 	/**
 	 * Whether the feature will show up in the GUI menu

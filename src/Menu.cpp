@@ -30,6 +30,7 @@
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
 #include "Menu/HomePageRenderer.h"
+#include "Menu/CursorLoader.h"
 #include "Menu/IconLoader.h"
 #include "Menu/MenuHeaderRenderer.h"
 #include "Menu/OverlayRenderer.h"
@@ -46,7 +47,6 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/ScreenshotFeature.h"
-#include "Features/VR.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
@@ -137,6 +137,19 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	MouseCursorScale)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Menu::ThemeSettings::CursorImageSettings,
+	File,
+	HotspotX,
+	HotspotY)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Menu::ThemeSettings::CursorSettings,
+	Scale,
+	File,
+	HotspotX,
+	HotspotY)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings,
 	FontSize,
 	FontName,
@@ -150,6 +163,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CenterHeader,
 	TooltipHoverDelay,
 	BackgroundBlurEnabled,
+	UseCustomCursor,
+	Cursor,
 	ScrollbarOpacity,
 	Palette,
 	StatusPalette,
@@ -177,6 +192,69 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 bool IsEnabled = false;
 std::unordered_map<std::string, int> Menu::categoryCounts;
+
+namespace
+{
+	struct CursorTypeKey
+	{
+		const char* key;
+		ImGuiMouseCursor type;
+	};
+
+	constexpr CursorTypeKey kCursorTypeKeys[] = {
+		{ "Arrow", ImGuiMouseCursor_Arrow },
+		{ "TextInput", ImGuiMouseCursor_TextInput },
+		{ "ResizeAll", ImGuiMouseCursor_ResizeAll },
+		{ "ResizeNS", ImGuiMouseCursor_ResizeNS },
+		{ "ResizeEW", ImGuiMouseCursor_ResizeEW },
+		{ "ResizeNESW", ImGuiMouseCursor_ResizeNESW },
+		{ "ResizeNWSE", ImGuiMouseCursor_ResizeNWSE },
+		{ "Hand", ImGuiMouseCursor_Hand },
+		{ "NotAllowed", ImGuiMouseCursor_NotAllowed },
+	};
+}
+
+void Menu::CursorFromJson(const json& cursorJson, ThemeSettings::CursorSettings& cursor)
+{
+	cursor.Types = {};
+
+	if (!cursorJson.contains("Types")) {
+		return;
+	}
+
+	const auto& types = cursorJson["Types"];
+	if (types.is_object()) {
+		for (const auto& [key, type] : kCursorTypeKeys) {
+			if (types.contains(key) && types[key].is_object()) {
+				types[key].get_to(cursor.Types[static_cast<size_t>(type)]);
+			}
+		}
+		return;
+	}
+
+	// Legacy: sparse array indexed by ImGuiMouseCursor_*
+	if (types.is_array()) {
+		for (size_t i = 0; i < ImGuiMouseCursor_COUNT && i < types.size(); ++i) {
+			if (types[i].is_object()) {
+				types[i].get_to(cursor.Types[i]);
+			}
+		}
+	}
+}
+
+void Menu::CursorToJson(json& cursorJson, const ThemeSettings::CursorSettings& cursor)
+{
+	json types = json::object();
+	for (const auto& [key, type] : kCursorTypeKeys) {
+		const auto& settings = cursor.Types[static_cast<size_t>(type)];
+		if (!settings.File.empty() || settings.HotspotX != 0.0f || settings.HotspotY != 0.0f) {
+			types[key] = settings;
+		}
+	}
+	if (!types.empty()) {
+		cursorJson["Types"] = types;
+	}
+}
 
 // Pad FontRoles JSON array with defaults if shorter than FontRole::Count.
 // Prevents deserialization failure when loading old settings with fewer font roles.
@@ -307,6 +385,8 @@ Menu::~Menu()
 	uiIcons.playMode.Release();
 	uiIcons.search.Release();
 
+	Util::CursorLoader::Shutdown();
+
 	// Clean up blur resources
 	BackgroundBlur::Cleanup();
 
@@ -373,6 +453,9 @@ void Menu::Load(json& o_json)
 		SanitizeFontRolesJson(o_json["Theme"]);
 		settings.Theme = o_json["Theme"];
 		PaletteFromJson(o_json["Theme"], settings.Theme.FullPalette);
+		if (o_json["Theme"].contains("Cursor") && o_json["Theme"]["Cursor"].is_object()) {
+			CursorFromJson(o_json["Theme"]["Cursor"], settings.Theme.Cursor);
+		}
 		MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
 
 		auto& bodyRole = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)];
@@ -440,7 +523,11 @@ void Menu::LoadTheme(json& o_json)
 		SanitizeFontRolesJson(o_json["Theme"]);
 		settings.Theme = o_json["Theme"];
 		PaletteFromJson(o_json["Theme"], settings.Theme.FullPalette);
+		if (o_json["Theme"].contains("Cursor") && o_json["Theme"]["Cursor"].is_object()) {
+			CursorFromJson(o_json["Theme"]["Cursor"], settings.Theme.Cursor);
+		}
 		MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
+		Util::CursorLoader::MigrateLegacyCursorSettings(settings.Theme);
 
 		auto& bodyRole = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)];
 		if (!Util::ValidateFont(bodyRole.File)) {
@@ -469,6 +556,7 @@ void Menu::SaveTheme(json& o_json)
 
 	o_json["Theme"] = settings.Theme;
 	PaletteToJson(o_json["Theme"], settings.Theme.FullPalette);
+	CursorToJson(o_json["Theme"]["Cursor"], settings.Theme.Cursor);
 }
 
 std::vector<std::string> Menu::DiscoverThemes()
@@ -502,8 +590,12 @@ bool Menu::LoadThemePreset(const std::string& themeName)
 		try {
 			settings.Theme = themeSettings;
 			PaletteFromJson(themeSettings, settings.Theme.FullPalette);
+			if (themeSettings.contains("Cursor") && themeSettings["Cursor"].is_object()) {
+				CursorFromJson(themeSettings["Cursor"], settings.Theme.Cursor);
+			}
 
 			MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
+			Util::CursorLoader::MigrateLegacyCursorSettings(settings.Theme);
 			auto& bodyRole = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)];
 			if (!Util::ValidateFont(bodyRole.File)) {
 				const auto& defaults = Menu::GetDefaultFontRole(FontRole::Body);
@@ -522,6 +614,7 @@ bool Menu::LoadThemePreset(const std::string& themeName)
 
 			// Schedule deferred icon reload to apply theme-specific icon overrides
 			pendingIconReload = true;
+			pendingCursorReload = true;
 
 			// Apply background blur enabled state from theme
 			BackgroundBlur::SetEnabled(settings.Theme.BackgroundBlurEnabled);
@@ -628,6 +721,8 @@ void Menu::Init()
 	if (!Util::InitializeMenuIcons(this)) {
 		logger::warn("Menu::Init() - Failed to load UI icons. Will fallback to text buttons");
 	}
+
+	Util::CursorLoader::Reload(this);
 
 	// Initialize background blur system
 	if (!BackgroundBlur::Initialize()) {
@@ -840,7 +935,7 @@ void Menu::DrawFooter()
  * callbacks for input processing, settings rendering, and key mapping. This method
  * serves as the bridge between Menu's state and the extracted overlay rendering logic.
  *
- * Handles VR setup, input event processing, shader compilation status, feature overlays,
+ * Handles input event processing, shader compilation status, feature overlays,
  * A/B testing, and ImGui frame management through the specialized renderer component.
  */
 void Menu::DrawOverlay()
@@ -871,6 +966,17 @@ void Menu::DrawOverlay()
 		}
 	}
 
+	if (pendingCursorReload && canReload) {
+		static bool loggedCursorReloadRetry = false;
+		if (Util::CursorLoader::Reload(this)) {
+			pendingCursorReload = false;
+			loggedCursorReloadRetry = false;
+		} else if (!loggedCursorReloadRetry) {
+			logger::warn("Menu::DrawOverlay() - Cursor reload deferred (will retry when ready)");
+			loggedCursorReloadRetry = true;
+		}
+	}
+
 	OverlayRenderer::RenderOverlay(
 		*this,
 		[this]() { ProcessInputEventQueue(); },
@@ -885,11 +991,10 @@ void Menu::DrawOverlay()
 }
 
 /**
- * @brief Processes queued input events for both VR and non-VR devices
+ * @brief Processes queued input events
  *
- * This method handles the complex logic of routing input events to appropriate handlers:
- * - VR controller events are forwarded to the VR system for specialized processing
- * - Non-VR events (keyboard, mouse) are processed directly for ImGui integration
+ * This method handles the logic of routing input events to appropriate handlers:
+ * - Keyboard and mouse events are processed directly for ImGui integration
  * - Includes key state normalization and stuck key detection/correction
  *
  * The method maintains thread safety through mutex protection of the input event queue.
@@ -922,28 +1027,7 @@ void Menu::ProcessInputEventQueue()
 {
 	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
 	ImGuiIO& io = ImGui::GetIO();
-	// Split the queue into VR and non-VR events
-	std::vector<KeyEvent> vrEvents;
-	std::vector<KeyEvent> nonVREvents;
 	for (auto& event : _keyEventQueue) {
-		bool isVRController = ((event.device == RE::INPUT_DEVICE::kVivePrimary || event.device == RE::INPUT_DEVICE::kViveSecondary ||
-								event.device == RE::INPUT_DEVICE::kOculusPrimary || event.device == RE::INPUT_DEVICE::kOculusSecondary ||
-								event.device == RE::INPUT_DEVICE::kWMRPrimary || event.device == RE::INPUT_DEVICE::kWMRSecondary));
-
-		if (globals::features::vr.IsOpenVRCompatible() && isVRController) {
-			vrEvents.push_back(event);
-		} else {
-			nonVREvents.push_back(event);
-		}
-	}
-	// Process VR events in VR
-	if (!vrEvents.empty()) {
-		globals::features::vr.ProcessVREvents(vrEvents);
-		globals::features::vr.UpdateOverlayMenuStateFromInput();
-	}
-
-	// Process non-VR events in Menu
-	for (auto& event : nonVREvents) {
 		if (event.eventType == RE::INPUT_EVENT_TYPE::kChar) {
 			io.AddInputCharacter(event.keyCode);
 			continue;
