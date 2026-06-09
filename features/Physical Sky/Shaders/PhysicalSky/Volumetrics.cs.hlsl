@@ -27,6 +27,13 @@ struct CloudLayer
 	float ms_transmittance_power;
 	float ms_height_power;
 	float ambient_mult;
+	float density_erosion_weak;
+	float density_erosion_strong;
+	float noise_mip_bias_weak;
+	float noise_mip_bias_strong;
+	float hhf_min_blend;
+	float hhf_profile_threshold;
+	float2 _pad0;
 
 	float2 low_frame_dim;
 	float2 rcp_low_frame_dim;
@@ -39,7 +46,7 @@ struct VolumetricCloudData
 	float rayMarchRange;
 	float shadowVolumeRange;
 	uint cloudMaxStep;
-	float _pad0;
+	uint fullResolution;
 
 	float2 frameDim;
 	float2 rcpFrameDim;
@@ -65,6 +72,13 @@ struct VolumetricCloudData
 	float msTransmittancePower;
 	float msHeightPower;
 	float ambientMult;
+	float densityErosionWeak;
+	float densityErosionStrong;
+	float noiseMipBiasWeak;
+	float noiseMipBiasStrong;
+	float hhfMinBlend;
+	float hhfProfileThreshold;
+	float2 _pad3;
 
 	float2 lowFrameDim;
 	float2 rcpLowFrameDim;
@@ -88,6 +102,13 @@ CloudLayer GetCloudLayer(VolumetricCloudData info)
 	cloud.ms_transmittance_power = info.msTransmittancePower;
 	cloud.ms_height_power = info.msHeightPower;
 	cloud.ambient_mult = info.ambientMult;
+	cloud.density_erosion_weak = info.densityErosionWeak;
+	cloud.density_erosion_strong = info.densityErosionStrong;
+	cloud.noise_mip_bias_weak = info.noiseMipBiasWeak;
+	cloud.noise_mip_bias_strong = info.noiseMipBiasStrong;
+	cloud.hhf_min_blend = info.hhfMinBlend;
+	cloud.hhf_profile_threshold = info.hhfProfileThreshold;
+	cloud._pad0 = 0;
 	cloud.low_frame_dim = info.lowFrameDim;
 	cloud.rcp_low_frame_dim = info.rcpLowFrameDim;
 	cloud.history_valid = info.historyValid;
@@ -362,6 +383,12 @@ float NubisVerticalStep(float rayDistance)
 	return rayDistance * 0.003662109375 + 0.003 / 1.428e-5f;
 }
 
+float StabilizeVerticalProfileDensity(float dimensionProfile, float noiseComposite, CloudLayer cloud)
+{
+	float erosionWidth = max(1.0 - noiseComposite, lerp(cloud.density_erosion_weak, cloud.density_erosion_strong, saturate(dimensionProfile)));
+	return saturate((dimensionProfile - noiseComposite) / erosionWidth);
+}
+
 struct NDFInfo
 {
 	bool in_layer;
@@ -404,7 +431,7 @@ NDFInfo sampleNDF(
 	const float min_h = lerp(cloud.bottom, cloud.bottom + cloud.thickness, tex_ndf.SampleLevel(TileableSampler, float3(uv, 0), 0));
 	const float max_h = lerp(cloud.bottom, cloud.bottom + cloud.thickness, tex_ndf.SampleLevel(TileableSampler, float3(uv, 1), 0));
 
-	ndf.height_fraction = (planet_z - min_h) / (max_h - min_h);
+	ndf.height_fraction = (planet_z - min_h) / max(max_h - min_h, 1e-5);
 
 	if (ndf.height_fraction < 0 || ndf.height_fraction > 1)
 		return ndf;
@@ -431,7 +458,8 @@ float sampleCloudDensity(
 		return 0;
 
 	// sample noise
-	float4 noise = TexNubisNoise.SampleLevel(TileableSampler, (pos + cloud.noise_offset_or_speed) * cloud.noise_scale_or_freq, mip_level);
+	float noise_mip = mip_level + lerp(cloud.noise_mip_bias_weak, cloud.noise_mip_bias_strong, saturate(ndf.dimension_profile));
+	float4 noise = TexNubisNoise.SampleLevel(TileableSampler, (pos + cloud.noise_offset_or_speed) * cloud.noise_scale_or_freq, noise_mip);
 	// Define wispy noise
 	float wispy_noise = lerp(noise.r, noise.g, ndf.dimension_profile);
 	// Define billowy noise
@@ -447,11 +475,12 @@ float sampleCloudDensity(
 		float hhf_noise = saturate(lerp(1.0 - pow(abs(abs(noise.g * 2.0 - 1.0) * 2.0 - 1.0), 4.0), pow(abs(abs(noise.a * 2.0 - 1.0) * 2.0 - 1.0), 2.0), ndf.bottom_value));
 
 		hhf_fraction = (eye_dist - 0.05 / 1.428e-5f) / (0.15 / 1.428e-5f - 0.05 / 1.428e-5f);
-		float hhf_noise_distance_range_blender = lerp(0.9, 1.0, hhf_fraction);
+		float profile_edge_suppression = saturate((ndf.dimension_profile - cloud.hhf_profile_threshold) / max(1.0 - cloud.hhf_profile_threshold, 1e-5));
+		float hhf_noise_distance_range_blender = lerp(1.0, lerp(cloud.hhf_min_blend, 1.0, hhf_fraction), profile_edge_suppression);
 		noise_composite = lerp(hhf_noise, noise_composite, hhf_noise_distance_range_blender);
 	}
 
-	float density = saturate((ndf.dimension_profile - noise_composite) / (1 - noise_composite));
+	float density = StabilizeVerticalProfileDensity(ndf.dimension_profile, noise_composite, cloud);
 
 	// Sharpen result
 	density = pow(density, cloud.power);
@@ -628,7 +657,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 		// stride
 		const bool empty_layer_sample = ndf.in_layer && ndf.dimension_profile <= 1e-8;
 		float rcp_step = (empty_layer_sample ? zero_density_stride_mult : 1.0) / (float)info.cloudMaxStep;
-		float march_prop = (ray.start_dist + ray.march_dist) / info.rayMarchRange;
+		float march_prop = saturate((ray.start_dist + ray.segment_dist) / info.rayMarchRange);
 		stride = (pow(sqrt(march_prop) + rcp_step, 2) - march_prop) * info.rayMarchRange;
 
 		const float tr = max(ray.transmittance.x, max(ray.transmittance.y, ray.transmittance.z));
@@ -683,9 +712,10 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 		return;
 
 	const uint2 px_coords = tid;
-	const uint frame_subpixel = SharedData::FrameCountAlwaysActive & 15u;
-	const uint2 phase_offset = uint2(frame_subpixel & 3u, frame_subpixel >> 2u);
-	const uint2 full_px_coords = min(px_coords * 4u + phase_offset, uint2(info.frameDim) - 1u);
+	const bool full_resolution = info.fullResolution != 0u;
+	const uint frame_subpixel = full_resolution ? 0u : (SharedData::FrameCountAlwaysActive & 15u);
+	const uint2 phase_offset = full_resolution ? 0u.xx : uint2(frame_subpixel & 3u, frame_subpixel >> 2u);
+	const uint2 full_px_coords = full_resolution ? px_coords : min(px_coords * 4u + phase_offset, uint2(info.frameDim) - 1u);
 
 	const uint3 seed = Random::pcg3d(uint3(px_coords.xy, px_coords.x ^ 0xf874));
 	const float3 rnd = Random::R3Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
