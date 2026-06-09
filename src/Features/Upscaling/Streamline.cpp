@@ -181,6 +181,8 @@ void Streamline::LoadInterposer(bool a_d3d12Mode)
 void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 {
 	logger::info("[Streamline] Checking features");
+	loadedFeatures = Features::kNone;
+
 	DXGI_ADAPTER_DESC adapterDesc;
 	a_adapter->GetDesc(&adapterDesc);
 	reflexSupportedOnCurrentAdapter = adapterDesc.VendorId == NVIDIA_VENDOR_ID;

@@ -44,7 +44,7 @@ public:
 		kNone = 0,
 		kDLSS = 1 << 0,
 		kDLSS_RR = 1 << 1
-	} loadedFeatures;
+	} loadedFeatures = Features::kNone;
 
 	bool d3d12Mode = false;
 

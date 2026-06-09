@@ -8,6 +8,7 @@
 
 #include "SceneGraphExplorer.h"
 
+#include "../I18n/I18n.h"
 #include "Globals.h"
 #include "State.h"
 
@@ -32,10 +33,14 @@ void SceneGraphExplorer::SaveSettings(json& o_json)
 	o_json = settings;
 }
 
+#define I18N_KEY_PREFIX "feature.scene_graph_explorer."
+
 void SceneGraphExplorer::DrawSettings()
 {
-	ImGui::Checkbox("Enabled", &settings.Enabled);
+	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled);
 }
+
+#undef I18N_KEY_PREFIX
 
 void SceneGraphExplorer::DrawOverlay()
 {

@@ -12,10 +12,6 @@ public:
 struct DynamicCubemaps : Feature
 {
 public:
-	static constexpr float kReflectionFallbackMin = 0.0f;
-	static constexpr float kReflectionFallbackMax = 1.0f;
-	static constexpr float kReflectionFallbackDefault = 0.5f;
-
 	const std::string defaultDynamicCubeMapSavePath = "Data\\textures\\DynamicCubemaps";
 
 	// Specular irradiance
@@ -120,10 +116,7 @@ public:
 		uint EnabledSSR = true;
 		uint pad0[2];
 		float4 CubemapColor{ 1.0f, 1.0f, 1.0f, 0.0f };
-		float ReflectionFallbackAmount = kReflectionFallbackDefault;
-		float pad1[3];
 	};
-	STATIC_ASSERT_ALIGNAS_16(Settings);
 
 	Settings settings;
 	bool enabledAtBoot = false;
@@ -132,20 +125,20 @@ public:
 	void PostDeferred();
 
 	virtual inline std::string GetName() override { return "Dynamic Cubemaps"; }
+	virtual std::string GetDisplayName() override { return T("feature.dynamic_cubemaps.name", "Dynamic Cubemaps"); }
 	virtual inline std::string GetShortName() override { return "DynamicCubemaps"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "DYNAMIC_CUBEMAPS"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kMaterials; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return {
-			"Provides real-time environment mapping and reflections by generating dynamic cube maps that capture the surrounding environment, enabling realistic reflections on surfaces.",
-			{ "Real-time environment capture for realistic reflections",
-				"Dynamic cube map generation based on camera position",
-				"Enhanced water reflections with environmental details",
-				"Support for both standard and VR rendering modes",
-				"Optimized cubemap inference and irradiance calculation" }
-		};
-	}
+		return { T("feature.dynamic_cubemaps.description", "Provides real-time environment mapping and reflections by generating dynamic cube maps that capture the surrounding environment, enabling realistic reflections on surfaces."),
+			{ T("feature.dynamic_cubemaps.key_feature_1", "Real-time environment capture for realistic reflections"),
+				T("feature.dynamic_cubemaps.key_feature_2", "Dynamic cube map generation based on camera position"),
+				T("feature.dynamic_cubemaps.key_feature_3", "Enhanced water reflections with environmental details"),
+				T("feature.dynamic_cubemaps.key_feature_4", "Support for both standard and VR rendering modes"),
+				T("feature.dynamic_cubemaps.key_feature_5", "Optimized cubemap inference and irradiance calculation") } };
+	};
+
 	virtual std::vector<std::pair<std::string_view, std::string_view>> GetShaderDefineOptions() override;
 
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };

@@ -10,7 +10,10 @@
 
 #include "DX12Interop.h"
 
+#include "../I18n/I18n.h"
+
 #include "Deferred.h"
+#include "Features/Skin.h"
 #include "Features/Upscaling.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -48,15 +51,22 @@ static void DrawFloat2(const char* label, float2& v, float min = 0.0f, float max
 	}
 }
 
-template <typename T>
-	requires std::is_enum_v<T>
-static bool DrawEnumRadio(const char* label, T& variable, const char* tooltip = nullptr, const char* const* tooltips = nullptr)
+static std::string StableLabel(const char* label, std::string_view id)
 {
-	ImGui::PushID(label);
+	return std::format("{}###{}", label, id);
+}
+
+template <typename T, size_t N>
+	requires std::is_enum_v<T>
+static bool DrawEnumRadio(const char* label, const char* id, T& variable, const std::array<const char*, N>& labels, const char* tooltip = nullptr)
+{
+	static_assert(N == magic_enum::enum_count<T>(), "Enum label count must match enum count.");
+
+	ImGui::PushID(id);
 
 	auto variablePrev = variable;
 
-	int denoiser = static_cast<int32_t>(variable);
+	int enumValue = static_cast<int32_t>(variable);
 	ImGui::TextUnformatted(label);
 
 	if (tooltip != nullptr)
@@ -70,42 +80,41 @@ static bool DrawEnumRadio(const char* label, T& variable, const char* tooltip = 
 
 	for (auto& [value, name] : magic_enum::enum_entries<T>()) {
 		ImGui::SameLine();
-		ImGui::RadioButton(name.data(), &denoiser, static_cast<int32_t>(value));
-
-		if (tooltips != nullptr)
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", tooltips[i]);
+		const auto itemLabel = StableLabel(labels[i], name);
+		ImGui::RadioButton(itemLabel.c_str(), &enumValue, static_cast<int32_t>(value));
 
 		i++;
 	}
 
 	ImGui::PopID();
 
-	variable = static_cast<T>(denoiser);
+	variable = static_cast<T>(enumValue);
 
 	return variable != variablePrev;
 }
 
-template <typename T>
+template <typename T, size_t N>
 	requires std::is_enum_v<T>
-static bool DrawEnumCombo(const char* label, T& variable, const char* tooltip = nullptr, const char* const* tooltips = nullptr)
+static bool DrawEnumCombo(const char* label, const char* id, T& variable, const std::array<const char*, N>& labels, const char* tooltip = nullptr)
 {
-	ImGui::PushID(label);
+	static_assert(N == magic_enum::enum_count<T>(), "Enum label count must match enum count.");
+
+	ImGui::PushID(id);
 
 	auto variablePrev = variable;
 
-	if (ImGui::BeginCombo(label, magic_enum::enum_name(variable).data())) {
+	const auto currentIndex = magic_enum::enum_index(variable);
+	const auto comboLabel = StableLabel(label, "Combo");
+
+	if (ImGui::BeginCombo(comboLabel.c_str(), currentIndex ? labels[*currentIndex] : "")) {
 		auto i = 0;
 
 		for (auto& value : magic_enum::enum_values<T>()) {
 			bool isSelected = (variable == value);
+			const auto itemLabel = StableLabel(labels[i], magic_enum::enum_name(value));
 
-			if (ImGui::Selectable(magic_enum::enum_name(value).data(), isSelected))
+			if (ImGui::Selectable(itemLabel.c_str(), isSelected))
 				variable = value;
-
-			if (tooltips != nullptr)
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", tooltips[i]);
 
 			if (isSelected)
 				ImGui::SetItemDefaultFocus();
@@ -130,23 +139,25 @@ static void ClampSetting(T& value, T min, T max)
 	value = std::clamp(value, min, max);
 }
 
+#define I18N_KEY_PREFIX "feature.raytracing."
+
 void Raytracing::DrawSettings()
 {
 	bool forcedDisabledReason = disableReason != DisableReason::None;
 
 	if (forcedDisabledReason) {
-		ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Ray tracing is disabled: %s", [&]() {
+		ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), T(TKEY("ray_tracing_disabled"), "Ray tracing is disabled: %s"), [&]() {
 			switch (disableReason) {
 			case DisableReason::UnsupportedGPU:
-				return "Unsupported GPU.";
+				return T(TKEY("disable_reason_unsupported_gpu"), "Unsupported GPU.");
 			case DisableReason::OutdatedDrivers:
-				return "Outdated Drivers.";
+				return T(TKEY("disable_reason_outdated_drivers"), "Outdated Drivers.");
 			case DisableReason::MissingPlugin:
-				return "Missing 'CreationEngineRaytracing.dll', check your mod manager.";
+				return T(TKEY("disable_reason_missing_plugin"), "Missing 'CreationEngineRaytracing.dll', check your mod manager.");
 			case DisableReason::InitFailed:
-				return "Initialization Failed, check CreationEngineRaytracing.txt log";
+				return T(TKEY("disable_reason_init_failed"), "Initialization Failed, check CreationEngineRaytracing.txt log");
 			default:
-				return "Unknown Reason";
+				return T(TKEY("disable_reason_unknown"), "Unknown Reason");
 			}
 		}());
 	}
@@ -156,25 +167,42 @@ void Raytracing::DrawSettings()
 
 	auto ceRTSettingsBefore = settings.CreationEngineRaytracingSettings;
 
-	ImGui::Checkbox("Enabled", &settings.CreationEngineRaytracingSettings.Enabled);
+	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.CreationEngineRaytracingSettings.Enabled);
 
-	DrawEnumRadio("Mode", settings.CreationEngineRaytracingSettings.GeneralSettings.Mode);
+	DrawEnumRadio(
+		T(TKEY("mode"), "Mode"),
+		"Mode",
+		settings.CreationEngineRaytracingSettings.GeneralSettings.Mode,
+		std::array{
+			T(TKEY("mode_none"), "None"),
+			T(TKEY("mode_global_illumination"), "Global Illumination"),
+			T(TKEY("mode_path_tracing"), "Path Tracing"),
+		});
 
-	DrawEnumRadio("Denoiser", settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser);
+	DrawEnumRadio(
+		T(TKEY("denoiser"), "Denoiser"),
+		"Denoiser",
+		settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser,
+		std::array{
+			T(TKEY("denoiser_none"), "None"),
+			T(TKEY("denoiser_nrd"), "NRD"),
+			T(TKEY("denoiser_dlss_rr"), "DLSS RR"),
+			T(TKEY("denoiser_accumulation"), "Accumulation"),
+		});
 
 	// Show DLSS RR availability status
 	if (settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::DLSS_RR) {
 		if (!(Upscaling::streamline.loadedFeatures & Streamline::Features::kDLSS_RR)) {
-			ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "DLSS Ray Reconstruction is not available on this system.");
+			ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "%s", T(TKEY("dlss_rr_not_available"), "DLSS Ray Reconstruction is not available on this system."));
 		} else if (globals::features::upscaling.settings.upscaleMethod != Upscaling::UpscaleMethod::kDLSS) {
-			ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Set Upscaling method to DLSS to enable Ray Reconstruction.");
+			ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "%s", T(TKEY("set_upscaling_to_dlss"), "Set Upscaling method to DLSS to enable Ray Reconstruction."));
 		}
 	}
 
 	// Accumulation only works in Path Tracing mode
 	if (settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::Accumulation) {
 		if (settings.CreationEngineRaytracingSettings.GeneralSettings.Mode != CreationEngineRaytracing::Mode::PathTracing) {
-			ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Accumulation is only available in Path Tracing mode.");
+			ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "%s", T(TKEY("accumulation_pt_only"), "Accumulation is only available in Path Tracing mode."));
 		}
 	}
 
@@ -183,7 +211,7 @@ void Raytracing::DrawSettings()
 	if (ptMode)
 		ImGui::BeginDisabled();
 
-	ImGui::Checkbox("Raytraced Shadows", &settings.CreationEngineRaytracingSettings.GeneralSettings.RaytracedShadows);
+	ImGui::Checkbox(T(TKEY("raytraced_shadows"), "Raytraced Shadows"), &settings.CreationEngineRaytracingSettings.GeneralSettings.RaytracedShadows);
 
 	if (ptMode)
 		ImGui::EndDisabled();*/
@@ -226,7 +254,7 @@ void Raytracing::UpdateSettings()
 
 void Raytracing::DrawGeneralSettings()
 {
-	if (!ImGui::BeginTabItem("General"))
+	if (!ImGui::BeginTabItem(T(TKEY("tab_general"), "General")))
 		return;
 
 	ImGui::PushID("GeneralSettings");
@@ -238,11 +266,11 @@ void Raytracing::DrawGeneralSettings()
 		auto& rtSettings = ceRTSettings.RaytracingSettings;
 
 		// Bounces
-		if (ImGui::SliderInt("Bounces", &rtSettings.Bounces, 1, 32))
+		if (ImGui::SliderInt(T(TKEY("bounces"), "Bounces"), &rtSettings.Bounces, 1, 32))
 			rtSettings.Bounces = std::clamp(rtSettings.Bounces, 1, 32);
 
 		// Samples Per Pixel
-		if (ImGui::SliderInt("Samples Per Pixel", &rtSettings.SamplesPerPixel, 1, 32))
+		if (ImGui::SliderInt(T(TKEY("samples_per_pixel"), "Samples Per Pixel"), &rtSettings.SamplesPerPixel, 1, 32))
 			rtSettings.SamplesPerPixel = std::clamp(rtSettings.SamplesPerPixel, 1, 32);
 	}
 
@@ -252,37 +280,37 @@ void Raytracing::DrawGeneralSettings()
 	DrawSHaRCSettings();
 
 	// Material
-	DrawFloat2("Roughness", ceRTSettings.MaterialSettings.Roughness);
-	DrawFloat2("Metalness", ceRTSettings.MaterialSettings.Metalness);
+	DrawFloat2(T(TKEY("roughness"), "Roughness"), ceRTSettings.MaterialSettings.Roughness);
+	DrawFloat2(T(TKEY("metalness"), "Metalness"), ceRTSettings.MaterialSettings.Metalness);
 
-	if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::CollapsingHeader(T(TKEY("lighting"), "Lighting"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		auto& lightingSettings = ceRTSettings.LightingSettings;
 
-		if (ImGui::DragFloat("Directional Strength", &lightingSettings.Directional, 0.001f))
+		if (ImGui::DragFloat(T(TKEY("directional_strength"), "Directional Strength"), &lightingSettings.Directional, 0.001f))
 			lightingSettings.Directional = std::max(0.0f, lightingSettings.Directional);
 
-		if (ImGui::DragFloat("Point Strength", &lightingSettings.Point, 0.001f))
+		if (ImGui::DragFloat(T(TKEY("point_strength"), "Point Strength"), &lightingSettings.Point, 0.001f))
 			lightingSettings.Point = std::max(0.0f, lightingSettings.Point);
 
-		ImGui::Checkbox("Lod Dimmer", &lightingSettings.LodDimmer);
+		ImGui::Checkbox(T(TKEY("lod_dimmer"), "Lod Dimmer"), &lightingSettings.LodDimmer);
 
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Vanilla behaviour of dimming lights that are far enough.\n");
+			ImGui::Text("%s", T(TKEY("lod_dimmer_desc"), "Vanilla behaviour of dimming lights that are far enough.\n"));
 
-		if (ImGui::DragFloat("Emissive Strength", &lightingSettings.Emissive, 0.001f))
+		if (ImGui::DragFloat(T(TKEY("emissive_strength"), "Emissive Strength"), &lightingSettings.Emissive, 0.001f))
 			lightingSettings.Emissive = std::max(0.0f, lightingSettings.Emissive);
 
-		if (ImGui::DragFloat("Effect Strength", &lightingSettings.Effect, 0.001f))
+		if (ImGui::DragFloat(T(TKEY("effect_strength"), "Effect Strength"), &lightingSettings.Effect, 0.001f))
 			lightingSettings.Effect = std::max(0.0f, lightingSettings.Effect);
 
-		if (ImGui::DragFloat("Sky Strength", &lightingSettings.Sky, 0.001f))
+		if (ImGui::DragFloat(T(TKEY("sky_strength"), "Sky Strength"), &lightingSettings.Sky, 0.001f))
 			lightingSettings.Sky = std::max(0.0f, lightingSettings.Sky);
 	}
 
-	if (ImGui::CollapsingHeader("Water")) {
+	if (ImGui::CollapsingHeader(T(TKEY("water"), "Water"))) {
 		auto& waterSettings = ceRTSettings.WaterSettings;
 
-		if (ImGui::DragFloat("Absorption Scale", &waterSettings.AbsorptionScale, 0.01f, 0.01f, 10.0f, "%.2f"))
+		if (ImGui::DragFloat(T(TKEY("absorption_scale"), "Absorption Scale"), &waterSettings.AbsorptionScale, 0.01f, 0.01f, 10.0f, "%.2f"))
 			waterSettings.AbsorptionScale = std::clamp(waterSettings.AbsorptionScale, 0.01f, 10.0f);
 	}
 
@@ -293,87 +321,87 @@ void Raytracing::DrawGeneralSettings()
 
 void Raytracing::DrawReblurSettings()
 {
-	if (!ImGui::CollapsingHeader("Reblur")) {
+	if (!ImGui::CollapsingHeader(T(TKEY("reblur"), "Reblur"))) {
 		return;
 	}
 
 	auto& reblurSettings = settings.CreationEngineRaytracingSettings.ReblurSettings;
 
-	if (ImGui::InputScalar("Max Accumulated Frames", ImGuiDataType_U32, &reblurSettings.maxAccumulatedFrameNum))
+	if (ImGui::InputScalar(T(TKEY("max_accumulated_frames"), "Max Accumulated Frames"), ImGuiDataType_U32, &reblurSettings.maxAccumulatedFrameNum))
 		ClampSetting(reblurSettings.maxAccumulatedFrameNum, 0u, 63u);
 
-	if (ImGui::InputScalar("Max Fast Accumulated Frames", ImGuiDataType_U32, &reblurSettings.maxFastAccumulatedFrameNum))
+	if (ImGui::InputScalar(T(TKEY("max_fast_accumulated_frames"), "Max Fast Accumulated Frames"), ImGuiDataType_U32, &reblurSettings.maxFastAccumulatedFrameNum))
 		ClampSetting(reblurSettings.maxFastAccumulatedFrameNum, 0u, reblurSettings.maxAccumulatedFrameNum);
 
-	if (ImGui::InputScalar("Max Stabilized Frames", ImGuiDataType_U32, &reblurSettings.maxStabilizedFrameNum))
+	if (ImGui::InputScalar(T(TKEY("max_stabilized_frames"), "Max Stabilized Frames"), ImGuiDataType_U32, &reblurSettings.maxStabilizedFrameNum))
 		ClampSetting(reblurSettings.maxStabilizedFrameNum, 0u, reblurSettings.maxAccumulatedFrameNum);
 
-	if (ImGui::InputScalar("History Fix Frames", ImGuiDataType_U32, &reblurSettings.historyFixFrameNum))
+	if (ImGui::InputScalar(T(TKEY("history_fix_frames"), "History Fix Frames"), ImGuiDataType_U32, &reblurSettings.historyFixFrameNum))
 		ClampSetting(reblurSettings.historyFixFrameNum, 0u, reblurSettings.maxFastAccumulatedFrameNum);
 
-	if (ImGui::InputScalar("History Fix Base Pixel Stride", ImGuiDataType_U32, &reblurSettings.historyFixBasePixelStride))
+	if (ImGui::InputScalar(T(TKEY("history_fix_base_pixel_stride"), "History Fix Base Pixel Stride"), ImGuiDataType_U32, &reblurSettings.historyFixBasePixelStride))
 		ClampSetting(reblurSettings.historyFixBasePixelStride, 1u, 64u);
 
-	if (ImGui::InputScalar("History Fix Alternate Pixel Stride", ImGuiDataType_U32, &reblurSettings.historyFixAlternatePixelStride))
+	if (ImGui::InputScalar(T(TKEY("history_fix_alternate_pixel_stride"), "History Fix Alternate Pixel Stride"), ImGuiDataType_U32, &reblurSettings.historyFixAlternatePixelStride))
 		ClampSetting(reblurSettings.historyFixAlternatePixelStride, 1u, 64u);
 
-	if (ImGui::SliderFloat("Fast History Clamping Sigma Scale", &reblurSettings.fastHistoryClampingSigmaScale, 1.0f, 3.0f, "%.2f"))
+	if (ImGui::SliderFloat(T(TKEY("fast_history_clamping_sigma_scale"), "Fast History Clamping Sigma Scale"), &reblurSettings.fastHistoryClampingSigmaScale, 1.0f, 3.0f, "%.2f"))
 		ClampSetting(reblurSettings.fastHistoryClampingSigmaScale, 1.0f, 3.0f);
 
-	if (ImGui::SliderFloat("Diffuse Prepass Blur Radius", &reblurSettings.diffusePrepassBlurRadius, 0.0f, 100.0f, "%.1f"))
+	if (ImGui::SliderFloat(T(TKEY("diffuse_prepass_blur_radius"), "Diffuse Prepass Blur Radius"), &reblurSettings.diffusePrepassBlurRadius, 0.0f, 100.0f, "%.1f"))
 		ClampSetting(reblurSettings.diffusePrepassBlurRadius, 0.0f, 100.0f);
 
-	if (ImGui::SliderFloat("Specular Prepass Blur Radius", &reblurSettings.specularPrepassBlurRadius, 0.0f, 100.0f, "%.1f"))
+	if (ImGui::SliderFloat(T(TKEY("specular_prepass_blur_radius"), "Specular Prepass Blur Radius"), &reblurSettings.specularPrepassBlurRadius, 0.0f, 100.0f, "%.1f"))
 		ClampSetting(reblurSettings.specularPrepassBlurRadius, 0.0f, 100.0f);
 
-	if (ImGui::SliderFloat("Min Hit Distance Weight", &reblurSettings.minHitDistanceWeight, 0.001f, 0.2f, "%.3f"))
+	if (ImGui::SliderFloat(T(TKEY("min_hit_distance_weight"), "Min Hit Distance Weight"), &reblurSettings.minHitDistanceWeight, 0.001f, 0.2f, "%.3f"))
 		ClampSetting(reblurSettings.minHitDistanceWeight, 0.001f, 0.2f);
 
-	if (ImGui::SliderFloat("Min Blur Radius", &reblurSettings.minBlurRadius, 0.0f, 10.0f, "%.2f"))
+	if (ImGui::SliderFloat(T(TKEY("min_blur_radius"), "Min Blur Radius"), &reblurSettings.minBlurRadius, 0.0f, 10.0f, "%.2f"))
 		ClampSetting(reblurSettings.minBlurRadius, 0.0f, 10.0f);
 
-	if (ImGui::SliderFloat("Max Blur Radius", &reblurSettings.maxBlurRadius, 0.0f, 100.0f, "%.1f"))
+	if (ImGui::SliderFloat(T(TKEY("max_blur_radius"), "Max Blur Radius"), &reblurSettings.maxBlurRadius, 0.0f, 100.0f, "%.1f"))
 		ClampSetting(reblurSettings.maxBlurRadius, 0.0f, 100.0f);
 
-	if (ImGui::SliderFloat("Lobe Angle Fraction", &reblurSettings.lobeAngleFraction, 0.0f, 1.0f, "%.3f"))
+	if (ImGui::SliderFloat(T(TKEY("lobe_angle_fraction"), "Lobe Angle Fraction"), &reblurSettings.lobeAngleFraction, 0.0f, 1.0f, "%.3f"))
 		ClampSetting(reblurSettings.lobeAngleFraction, 0.0f, 1.0f);
 
-	if (ImGui::SliderFloat("Roughness Fraction", &reblurSettings.roughnessFraction, 0.0f, 1.0f, "%.3f"))
+	if (ImGui::SliderFloat(T(TKEY("roughness_fraction"), "Roughness Fraction"), &reblurSettings.roughnessFraction, 0.0f, 1.0f, "%.3f"))
 		ClampSetting(reblurSettings.roughnessFraction, 0.0f, 1.0f);
 
-	if (ImGui::SliderFloat("Plane Distance Sensitivity", &reblurSettings.planeDistanceSensitivity, 0.0f, 1.0f, "%.3f"))
+	if (ImGui::SliderFloat(T(TKEY("plane_distance_sensitivity"), "Plane Distance Sensitivity"), &reblurSettings.planeDistanceSensitivity, 0.0f, 1.0f, "%.3f"))
 		ClampSetting(reblurSettings.planeDistanceSensitivity, 0.0f, 1.0f);
 
-	if (ImGui::SliderFloat2("Specular Probability Thresholds For MV Modification", reblurSettings.specularProbabilityThresholdsForMvModification.data(), 0.0f, 1.0f, "%.2f")) {
+	if (ImGui::SliderFloat2(T(TKEY("specular_probability_thresholds_for_mv_modification"), "Specular Probability Thresholds For MV Modification"), reblurSettings.specularProbabilityThresholdsForMvModification.data(), 0.0f, 1.0f, "%.2f")) {
 		ClampSetting(reblurSettings.specularProbabilityThresholdsForMvModification[0], 0.0f, 1.0f);
 		ClampSetting(reblurSettings.specularProbabilityThresholdsForMvModification[1], reblurSettings.specularProbabilityThresholdsForMvModification[0], 1.0f);
 	}
 
-	if (ImGui::SliderFloat("Firefly Suppressor Min Relative Scale", &reblurSettings.fireflySuppressorMinRelativeScale, 1.0f, 3.0f, "%.2f"))
+	if (ImGui::SliderFloat(T(TKEY("firefly_suppressor_min_relative_scale"), "Firefly Suppressor Min Relative Scale"), &reblurSettings.fireflySuppressorMinRelativeScale, 1.0f, 3.0f, "%.2f"))
 		ClampSetting(reblurSettings.fireflySuppressorMinRelativeScale, 1.0f, 3.0f);
 
-	ImGui::Checkbox("Enable Anti Firefly", &reblurSettings.enableAntiFirefly);
-	ImGui::Checkbox("Use Prepass Only For Specular Motion Estimation", &reblurSettings.usePrepassOnlyForSpecularMotionEstimation);
-	ImGui::Checkbox("Return History Length Instead Of Occlusion", &reblurSettings.returnHistoryLengthInsteadOfOcclusion);
+	ImGui::Checkbox(T(TKEY("enable_anti_firefly"), "Enable Anti Firefly"), &reblurSettings.enableAntiFirefly);
+	ImGui::Checkbox(T(TKEY("use_prepass_only_for_specular_motion_estimation"), "Use Prepass Only For Specular Motion Estimation"), &reblurSettings.usePrepassOnlyForSpecularMotionEstimation);
+	ImGui::Checkbox(T(TKEY("return_history_length_instead_of_occlusion"), "Return History Length Instead Of Occlusion"), &reblurSettings.returnHistoryLengthInsteadOfOcclusion);
 }
 
 void Raytracing::DrawSHaRCSettings()
 {
-	if (ImGui::CollapsingHeader("SHaRC")) {
+	if (ImGui::CollapsingHeader(T(TKEY("sharc"), "SHaRC"))) {
 		auto& sharcSettings = settings.CreationEngineRaytracingSettings.SHaRCSettings;
 
-		ImGui::Checkbox("Enabled", &sharcSettings.Enabled);
+		ImGui::Checkbox(T(TKEY("sharc_enabled"), "Enabled"), &sharcSettings.Enabled);
 
 		if (!sharcSettings.Enabled)
 			ImGui::BeginDisabled();
 
-		ImGui::DragFloat("Scale", &sharcSettings.SceneScale, 0.001f, 0.1f, 10.0f);
+		ImGui::DragFloat(T(TKEY("sharc_scale"), "Scale"), &sharcSettings.SceneScale, 0.001f, 0.1f, 10.0f);
 		sharcSettings.SceneScale = std::clamp(sharcSettings.SceneScale, 0.1f, 10.0f);
 
-		ImGui::InputInt("Accumulation Frames", &sharcSettings.AccumFrameNum);
+		ImGui::InputInt(T(TKEY("sharc_accumulation_frames"), "Accumulation Frames"), &sharcSettings.AccumFrameNum);
 		sharcSettings.AccumFrameNum = std::clamp(sharcSettings.AccumFrameNum, 5, 100);
 
-		ImGui::InputInt("Stale Frames", &sharcSettings.StaleFrameNum);
+		ImGui::InputInt(T(TKEY("sharc_stale_frames"), "Stale Frames"), &sharcSettings.StaleFrameNum);
 		sharcSettings.StaleFrameNum = std::clamp(sharcSettings.StaleFrameNum, 8, 128);
 
 		if (!sharcSettings.Enabled)
@@ -385,24 +413,26 @@ void Raytracing::DrawSSSSettings()
 {
 	auto& sssSettings = settings.CreationEngineRaytracingSettings.AdvancedSettings.SSSSettings;
 
-	ImGui::Checkbox("Enable Subsurface Scattering", &sssSettings.Enabled);
+	ImGui::Checkbox(T(TKEY("sss_enabled"), "Enable Subsurface Scattering"), &sssSettings.Enabled);
 
 	if (!sssSettings.Enabled)
 		return;
 
-	if (ImGui::CollapsingHeader("Subsurface Scattering")) {
+	if (ImGui::CollapsingHeader(T(TKEY("subsurface_scattering"), "Subsurface Scattering"))) {
 		if (sssSettings.Enabled) {
-			ImGui::SliderInt("Sample Count", &sssSettings.SampleCount, 1, 16);
-			ImGui::SliderFloat("Max Sample Radius", &sssSettings.MaxSampleRadius, 0.01f, 64.0f, "%.2f");
-			ImGui::Checkbox("Enable Transmission", &sssSettings.EnableTransmission);
-			ImGui::Checkbox("Material Override", &sssSettings.MaterialOverride);
+			ImGui::SliderInt(T(TKEY("sss_sample_count"), "Sample Count"), &sssSettings.SampleCount, 1, 16);
+			ImGui::SliderFloat(T(TKEY("sss_max_sample_radius"), "Max Sample Radius"), &sssSettings.MaxSampleRadius, 0.01f, 64.0f, "%.2f");
+			ImGui::Checkbox(T(TKEY("sss_enable_transmission"), "Enable Transmission"), &sssSettings.EnableTransmission);
+			ImGui::Checkbox(T(TKEY("sss_material_override"), "Material Override"), &sssSettings.MaterialOverride);
 
 			if (sssSettings.MaterialOverride) {
-				if (ImGui::TreeNodeEx("Subsurface Scattering", ImGuiTreeNodeFlags_DefaultOpen)) {
-					ImGui::ColorEdit3("Override Transmission Color", reinterpret_cast<float*>(&sssSettings.OverrideTransmissionColor), ImGuiColorEditFlags_Float);
-					ImGui::ColorEdit3("Override Scattering Color", reinterpret_cast<float*>(&sssSettings.OverrideScatteringColor), ImGuiColorEditFlags_Float);
-					ImGui::SliderFloat("Override Scale", &sssSettings.OverrideScale, 0.01f, 1000.0f, "%.2f");
-					ImGui::SliderFloat("Override Anisotropy", &sssSettings.OverrideAnisotropy, -0.99f, 0.99f);
+				if (ImGui::TreeNodeEx(T(TKEY("sss_overrides"), "Subsurface Scattering"), ImGuiTreeNodeFlags_DefaultOpen)) {
+					const auto overrideTransmissionLabel = StableLabel(T(TKEY("sss_override_transmission_color"), "Override Transmission Color"), "OverrideTransmissionColor");
+					const auto overrideScatteringLabel = StableLabel(T(TKEY("sss_override_scattering_color"), "Override Scattering Color"), "OverrideScatteringColor");
+					ImGui::ColorEdit3(overrideTransmissionLabel.c_str(), reinterpret_cast<float*>(&sssSettings.OverrideTransmissionColor), ImGuiColorEditFlags_Float);
+					ImGui::ColorEdit3(overrideScatteringLabel.c_str(), reinterpret_cast<float*>(&sssSettings.OverrideScatteringColor), ImGuiColorEditFlags_Float);
+					ImGui::SliderFloat(T(TKEY("sss_override_scale"), "Override Scale"), &sssSettings.OverrideScale, 0.01f, 1000.0f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("sss_override_anisotropy"), "Override Anisotropy"), &sssSettings.OverrideAnisotropy, -0.99f, 0.99f);
 
 					ImGui::TreePop();
 				}
@@ -413,39 +443,57 @@ void Raytracing::DrawSSSSettings()
 
 void Raytracing::DrawAdvancedSettings()
 {
-	if (!ImGui::BeginTabItem("Advanced"))
+	if (!ImGui::BeginTabItem(T(TKEY("tab_advanced"), "Advanced")))
 		return;
 
 	ImGui::PushID("AdvancedSettings");
 
 	auto& advSettings = settings.CreationEngineRaytracingSettings.AdvancedSettings;
 
-	ImGui::SliderFloat("Texture LOD Bias", &advSettings.TexLODBias, -4.0f, 4.0f, "%.1f");
+	ImGui::SliderFloat(T(TKEY("texture_lod_bias"), "Texture LOD Bias"), &advSettings.TexLODBias, -4.0f, 4.0f, "%.1f");
 
-	ImGui::Checkbox("Variable Update Rate", &advSettings.VariableUpdateRate);
+	ImGui::Checkbox(T(TKEY("variable_update_rate"), "Variable Update Rate"), &advSettings.VariableUpdateRate);
 
-	ImGui::Checkbox("GGX Energy Conservation", &advSettings.GGXEnergyConservation);
+	ImGui::Checkbox(T(TKEY("ggx_energy_conservation"), "GGX Energy Conservation"), &advSettings.GGXEnergyConservation);
 
-	ImGui::Checkbox("Per Light Top-Level Acceleration Structures", &advSettings.PerLightTLAS);
+	ImGui::Checkbox(T(TKEY("per_light_tlas"), "Per Light Top-Level Acceleration Structures"), &advSettings.PerLightTLAS);
 
-	ImGui::Checkbox("Resampled Importance Sampling", &advSettings.RIS.Enabled);
+	ImGui::Checkbox(T(TKEY("ris_enabled"), "Resampled Importance Sampling"), &advSettings.RIS.Enabled);
 
-	ImGui::SliderInt("RIS Max Candidates", &advSettings.RIS.MaxCandidates, 2, 16);
+	ImGui::SliderInt(T(TKEY("ris_max_candidates"), "RIS Max Candidates"), &advSettings.RIS.MaxCandidates, 2, 16);
 
-	DrawEnumCombo("Hair BSDF", advSettings.HairBSDF);
+	DrawEnumCombo(
+		T(TKEY("hair_bsdf"), "Hair BSDF"),
+		"HairBSDF",
+		advSettings.HairBSDF,
+		std::array{
+			T(TKEY("hair_bsdf_none"), "None"),
+			T(TKEY("hair_bsdf_chiang"), "Chiang BSDF"),
+			T(TKEY("hair_bsdf_far_field"), "Far Field BCSDF"),
+		});
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Best with hair specular feature enabled.\n");
+		ImGui::Text(T(TKEY("hair_bsdf_tooltip"), "Best with hair specular feature enabled.\n"));
 	}
 
 	DrawSSSSettings();
 
-	DrawEnumCombo("Diffuse BRDF", advSettings.DiffuseBRDF);
+	DrawEnumCombo(
+		T(TKEY("diffuse_brdf"), "Diffuse BRDF"),
+		"DiffuseBRDF",
+		advSettings.DiffuseBRDF,
+		std::array{
+			T(TKEY("diffuse_brdf_lambert"), "Lambert"),
+			T(TKEY("diffuse_brdf_burley"), "Burley"),
+			T(TKEY("diffuse_brdf_oren_nayar"), "Oren Nayar"),
+			T(TKEY("diffuse_brdf_gotanda"), "Gotanda"),
+			T(TKEY("diffuse_brdf_chan"), "Chan"),
+		});
 
-	ImGui::Checkbox("Stable Planes", &advSettings.StablePlanes);
+	ImGui::Checkbox(T(TKEY("stable_planes"), "Stable Planes"), &advSettings.StablePlanes);
 
-	ImGui::Checkbox("Disable vanilla fog when pathtracing", &settings.DisableVanillaFogPT);
-	
+	ImGui::Checkbox(T(TKEY("disable_vanilla_fog_pt"), "Disable vanilla fog when pathtracing"), &settings.DisableVanillaFogPT);
+
 	ImGui::PopID();
 
 	ImGui::EndTabItem();
@@ -453,82 +501,113 @@ void Raytracing::DrawAdvancedSettings()
 
 void Raytracing::DrawReSTIRGISettings()
 {
-	if (!ImGui::BeginTabItem("ReSTIR GI"))
+	if (!ImGui::BeginTabItem(T(TKEY("tab_restir_gi"), "ReSTIR GI")))
 		return;
 
 	ImGui::PushID("ReSTIRGISettings");
 
 	auto& giSettings = settings.CreationEngineRaytracingSettings.ReSTIRGI;
 
-	ImGui::Checkbox("Enabled", &giSettings.Enabled);
+	ImGui::Checkbox(T(TKEY("restir_enabled"), "Enabled"), &giSettings.Enabled);
 
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Enable ReSTIR GI indirect lighting resampling.");
+		ImGui::Text("%s", T(TKEY("restir_enabled_tooltip"), "Enable ReSTIR GI indirect lighting resampling."));
 
-	DrawEnumCombo("Resampling Mode", giSettings.ResamplingMode);
+	DrawEnumCombo(
+		T(TKEY("restir_resampling_mode"), "Resampling Mode"),
+		"ReSTIRGIResamplingMode",
+		giSettings.ResamplingMode,
+		std::array{
+			T(TKEY("restir_resampling_mode_none"), "None"),
+			T(TKEY("restir_resampling_mode_temporal"), "Temporal"),
+			T(TKEY("restir_resampling_mode_spatial"), "Spatial"),
+			T(TKEY("restir_resampling_mode_temporal_and_spatial"), "Temporal and Spatial"),
+			T(TKEY("restir_resampling_mode_fused_spatiotemporal"), "Fused Spatiotemporal"),
+		});
 
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("None: Disabled\nTemporal: Reuse from previous frames\nSpatial: Reuse from nearby pixels\nTemporalAndSpatial: Both (recommended)\nFusedSpatiotemporal: Combined pass");
+		ImGui::Text("%s", T(TKEY("restir_resampling_mode_tooltip"),
+							  "None: Disabled\n"
+							  "Temporal: Reuse from previous frames\n"
+							  "Spatial: Reuse from nearby pixels\n"
+							  "Temporal and Spatial: Both (recommended)\n"
+							  "Fused Spatiotemporal: Combined pass"));
 
 	ImGui::Separator();
-	ImGui::Text("Temporal Resampling");
+	ImGui::Text(T(TKEY("temporal_resampling"), "Temporal Resampling"));
 
-	if (ImGui::SliderFloat("Temporal Depth Threshold", &giSettings.TemporalDepthThreshold, 0.0f, 1.0f, "%.2f"))
+	if (ImGui::SliderFloat(T(TKEY("restir_temporal_depth_threshold"), "Temporal Depth Threshold"), &giSettings.TemporalDepthThreshold, 0.0f, 1.0f, "%.2f"))
 		giSettings.TemporalDepthThreshold = std::clamp(giSettings.TemporalDepthThreshold, 0.0f, 1.0f);
 
-	if (ImGui::SliderFloat("Temporal Normal Threshold", &giSettings.TemporalNormalThreshold, 0.0f, 1.0f, "%.2f"))
+	if (ImGui::SliderFloat(T(TKEY("restir_temporal_normal_threshold"), "Temporal Normal Threshold"), &giSettings.TemporalNormalThreshold, 0.0f, 1.0f, "%.2f"))
 		giSettings.TemporalNormalThreshold = std::clamp(giSettings.TemporalNormalThreshold, 0.0f, 1.0f);
 
-	if (ImGui::SliderInt("Max History Length", &giSettings.MaxHistoryLength, 1, 50))
+	if (ImGui::SliderInt(T(TKEY("restir_max_history_length"), "Max History Length"), &giSettings.MaxHistoryLength, 1, 50))
 		giSettings.MaxHistoryLength = std::clamp(giSettings.MaxHistoryLength, 1, 50);
 
-	if (ImGui::SliderInt("Max Reservoir Age", &giSettings.MaxReservoirAge, 1, 200))
+	if (ImGui::SliderInt(T(TKEY("restir_max_reservoir_age"), "Max Reservoir Age"), &giSettings.MaxReservoirAge, 1, 200))
 		giSettings.MaxReservoirAge = std::clamp(giSettings.MaxReservoirAge, 1, 200);
 
-	ImGui::Checkbox("Permutation Sampling", &giSettings.EnablePermutationSampling);
-	ImGui::Checkbox("Fallback Sampling", &giSettings.EnableFallbackSampling);
+	ImGui::Checkbox(T(TKEY("restir_permutation_sampling"), "Permutation Sampling"), &giSettings.EnablePermutationSampling);
+	ImGui::Checkbox(T(TKEY("restir_fallback_sampling"), "Fallback Sampling"), &giSettings.EnableFallbackSampling);
 
-	DrawEnumCombo("Temporal Bias Correction", giSettings.TemporalBiasCorrection);
+	DrawEnumCombo(
+		T(TKEY("temporal_bias_correction"), "Temporal Bias Correction"),
+		"TemporalBiasCorrection",
+		giSettings.TemporalBiasCorrection,
+		std::array{
+			T(TKEY("bias_correction_off"), "Off"),
+			T(TKEY("bias_correction_basic"), "Basic"),
+			T(TKEY("bias_correction_raytraced"), "Raytraced"),
+		});
 
 	ImGui::Separator();
-	ImGui::Text("Spatial Resampling");
+	ImGui::Text(T(TKEY("spatial_resampling"), "Spatial Resampling"));
 
-	if (ImGui::SliderFloat("Spatial Depth Threshold", &giSettings.SpatialDepthThreshold, 0.0f, 1.0f, "%.2f"))
+	if (ImGui::SliderFloat(T(TKEY("restir_spatial_depth_threshold"), "Spatial Depth Threshold"), &giSettings.SpatialDepthThreshold, 0.0f, 1.0f, "%.2f"))
 		giSettings.SpatialDepthThreshold = std::clamp(giSettings.SpatialDepthThreshold, 0.0f, 1.0f);
 
-	if (ImGui::SliderFloat("Spatial Normal Threshold", &giSettings.SpatialNormalThreshold, 0.0f, 1.0f, "%.2f"))
+	if (ImGui::SliderFloat(T(TKEY("restir_spatial_normal_threshold"), "Spatial Normal Threshold"), &giSettings.SpatialNormalThreshold, 0.0f, 1.0f, "%.2f"))
 		giSettings.SpatialNormalThreshold = std::clamp(giSettings.SpatialNormalThreshold, 0.0f, 1.0f);
 
-	if (ImGui::SliderInt("Spatial Samples", &giSettings.SpatialNumSamples, 0, 8))
+	if (ImGui::SliderInt(T(TKEY("restir_spatial_samples"), "Spatial Samples"), &giSettings.SpatialNumSamples, 0, 8))
 		giSettings.SpatialNumSamples = std::clamp(giSettings.SpatialNumSamples, 0, 8);
 
-	if (ImGui::SliderFloat("Spatial Sampling Radius", &giSettings.SpatialSamplingRadius, 1.0f, 64.0f, "%.1f"))
+	if (ImGui::SliderFloat(T(TKEY("restir_spatial_sampling_radius"), "Spatial Sampling Radius"), &giSettings.SpatialSamplingRadius, 1.0f, 64.0f, "%.1f"))
 		giSettings.SpatialSamplingRadius = std::clamp(giSettings.SpatialSamplingRadius, 1.0f, 64.0f);
 
-	DrawEnumCombo("Spatial Bias Correction", giSettings.SpatialBiasCorrection);
+	DrawEnumCombo(
+		T(TKEY("spatial_bias_correction"), "Spatial Bias Correction"),
+		"SpatialBiasCorrection",
+		giSettings.SpatialBiasCorrection,
+		std::array{
+			T(TKEY("bias_correction_off"), "Off"),
+			T(TKEY("bias_correction_basic"), "Basic"),
+			T(TKEY("bias_correction_raytraced"), "Raytraced"),
+		});
 
 	ImGui::Separator();
-	ImGui::Text("Boiling Filter");
+	ImGui::Text(T(TKEY("boiling_filter"), "Boiling Filter"));
 
-	ImGui::Checkbox("Enable Boiling Filter", &giSettings.EnableBoilingFilter);
+	ImGui::Checkbox(T(TKEY("restir_enable_boiling_filter"), "Enable Boiling Filter"), &giSettings.EnableBoilingFilter);
 
 	if (giSettings.EnableBoilingFilter) {
-		if (ImGui::SliderFloat("Boiling Filter Strength", &giSettings.BoilingFilterStrength, 0.0f, 1.0f, "%.2f"))
+		if (ImGui::SliderFloat(T(TKEY("restir_boiling_filter_strength"), "Boiling Filter Strength"), &giSettings.BoilingFilterStrength, 0.0f, 1.0f, "%.2f"))
 			giSettings.BoilingFilterStrength = std::clamp(giSettings.BoilingFilterStrength, 0.0f, 1.0f);
 	}
 
 	ImGui::Separator();
-	ImGui::Text("Final Shading");
+	ImGui::Text(T(TKEY("final_shading"), "Final Shading"));
 
-	ImGui::Checkbox("Final Visibility", &giSettings.EnableFinalVisibility);
-
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Trace a visibility ray for the final GI sample to remove shadows.");
-
-	ImGui::Checkbox("Final MIS", &giSettings.EnableFinalMIS);
+	ImGui::Checkbox(T(TKEY("restir_final_visibility"), "Final Visibility"), &giSettings.EnableFinalVisibility);
 
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Apply multiple importance sampling with the initial sample.");
+		ImGui::Text(T(TKEY("restir_final_visibility_tooltip"), "Trace a visibility ray for the final GI sample to remove shadows."));
+
+	ImGui::Checkbox(T(TKEY("restir_final_mis"), "Final MIS"), &giSettings.EnableFinalMIS);
+
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T(TKEY("restir_final_mis_tooltip"), "Apply multiple importance sampling with the initial sample."));
 
 	ImGui::PopID();
 
@@ -537,20 +616,27 @@ void Raytracing::DrawReSTIRGISettings()
 
 void Raytracing::DrawExperimentalSettings()
 {
-	if (!ImGui::BeginTabItem("Experimental"))
+	if (!ImGui::BeginTabItem(T(TKEY("tab_experimental"), "Experimental")))
 		return;
 
 	ImGui::PushID("ExperimentalSettings");
 
 	auto& experimentalSettings = settings.CreationEngineRaytracingSettings.ExperimentalSettings;
 
-	ImGui::Checkbox("Path Tracing Cull", &experimentalSettings.PathTracingCull);
+	ImGui::Checkbox(T(TKEY("path_tracing_cull"), "Path Tracing Cull"), &experimentalSettings.PathTracingCull);
 
-	DrawEnumRadio("Texture Mode", experimentalSettings.TextureMode);
+	DrawEnumRadio(
+		T(TKEY("texture_mode"), "Texture Mode"),
+		"TextureMode",
+		experimentalSettings.TextureMode,
+		std::array{
+			T(TKEY("texture_mode_share"), "Share"),
+			T(TKEY("texture_mode_exclusive"), "Exclusive"),
+		});
 
 	if (experimentalSettings.TextureMode == CreationEngineRaytracing::TextureMode::Exclusive) {
-		auto label = experimentalSettings.TextureCutOff == 0 ? "Never Share" : std::format("Share smaller than {}", 1 << (experimentalSettings.TextureCutOff + 7));
-		ImGui::SliderInt("Exclusive Mode Cutoff", reinterpret_cast<int*>(&experimentalSettings.TextureCutOff), 0, 6, label.c_str());
+		auto label = experimentalSettings.TextureCutOff == 0 ? T(TKEY("never_share"), "Never Share") : std::format(T(TKEY("share_smaller_than"), "Share smaller than {}"), 1 << (experimentalSettings.TextureCutOff + 7));
+		ImGui::SliderInt(T(TKEY("exclusive_mode_cutoff"), "Exclusive Mode Cutoff"), reinterpret_cast<int*>(&experimentalSettings.TextureCutOff), 0, 6, label.c_str());
 	}
 
 	ImGui::PopID();
@@ -560,21 +646,30 @@ void Raytracing::DrawExperimentalSettings()
 
 void Raytracing::DrawDebugSettings()
 {
-	if (!ImGui::BeginTabItem("Debug"))
+	if (!ImGui::BeginTabItem(T(TKEY("tab_debug"), "Debug")))
 		return;
 
 	ImGui::PushID("DebugSettings");
 
-	DrawEnumRadio("Performance Overlay", settings.PerfOverlay);
+	DrawEnumRadio(
+		T(TKEY("performance_overlay"), "Performance Overlay"),
+		"PerformanceOverlay",
+		settings.PerfOverlay,
+		std::array{
+			T(TKEY("performance_overlay_none"), "None"),
+			T(TKEY("performance_overlay_simple"), "Simple"),
+			T(TKEY("performance_overlay_complete"), "Complete"),
+		});
 
-	ImGui::Checkbox("Display SceneGraph Counters", &settings.DisplaySceneGraphCounters);
+	ImGui::Checkbox(T(TKEY("display_scenegraph_counters"), "Display SceneGraph Counters"), &settings.DisplaySceneGraphCounters);
 
-	if (ImGui::TreeNode("Buffer Viewer")) {
+	const auto bufferViewerLabel = StableLabel(T(TKEY("buffer_viewer"), "Buffer Viewer"), "BufferViewer");
+	if (ImGui::TreeNode(bufferViewerLabel.c_str())) {
 		static float debugRescale = .3f;
-		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+		ImGui::SliderFloat(T(TKEY("debug_view_resize"), "View Resize"), &debugRescale, 0.f, 1.f);
 
-		if (ImGui::TreeNode("Depth"))
-		{
+		const auto depthLabel = StableLabel(T(TKEY("debug_depth"), "Depth"), "Depth");
+		if (ImGui::TreeNode(depthLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
 			ptDepthTexture->resource11->GetDesc(&desc);
 
@@ -582,7 +677,8 @@ void Raytracing::DrawDebugSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("Main")) {
+		const auto mainLabel = StableLabel(T(TKEY("debug_main"), "Main"), "Main");
+		if (ImGui::TreeNode(mainLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
 			mainTexture->resource11->GetDesc(&desc);
 
@@ -590,7 +686,8 @@ void Raytracing::DrawDebugSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("NormalRoughness")) {
+		const auto normalRoughnessLabel = StableLabel(T(TKEY("debug_normal_roughness"), "NormalRoughness"), "NormalRoughness");
+		if (ImGui::TreeNode(normalRoughnessLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
 			normalRoughnessTexture->resource11->GetDesc(&desc);
 
@@ -598,7 +695,8 @@ void Raytracing::DrawDebugSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("Diffuse Albedo")) {
+		const auto diffuseAlbedoLabel = StableLabel(T(TKEY("debug_diffuse_albedo"), "Diffuse Albedo"), "DiffuseAlbedo");
+		if (ImGui::TreeNode(diffuseAlbedoLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
 			diffuseAlbedoTexture->resource11->GetDesc(&desc);
 
@@ -606,7 +704,8 @@ void Raytracing::DrawDebugSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("Masks 2")) {
+		const auto masks2Label = StableLabel(T(TKEY("debug_masks2"), "Masks 2"), "Masks2");
+		if (ImGui::TreeNode(masks2Label.c_str())) {
 			auto renderer = globals::game::renderer;
 			auto masks2 = renderer->GetRuntimeData().renderTargets[MASKS2];
 
@@ -617,7 +716,8 @@ void Raytracing::DrawDebugSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("FlowMap")) {
+		const auto flowMapLabel = StableLabel(T(TKEY("debug_flowmap"), "FlowMap"), "FlowMap");
+		if (ImGui::TreeNode(flowMapLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
 			waterFlowMap->resource11->GetDesc(&desc);
 
@@ -625,7 +725,8 @@ void Raytracing::DrawDebugSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("Sky Hemisphere")) {
+		const auto skyHemisphereLabel = StableLabel(T(TKEY("debug_sky_hemisphere"), "Sky Hemisphere"), "SkyHemisphere");
+		if (ImGui::TreeNode(skyHemisphereLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
 			skyHemisphere->resource11->GetDesc(&desc);
 
@@ -669,21 +770,22 @@ void Raytracing::DrawOverlay()
 		ImGui::SetNextWindowPos(Position, ImGuiCond_FirstUseEver);
 	}
 
-	ImGui::Begin("Raytracing Overlay", NULL, windowFlags);
+	const auto overlayTitle = StableLabel(T(TKEY("overlay_title"), "Raytracing Overlay"), "RaytracingOverlay");
+	ImGui::Begin(overlayTitle.c_str(), NULL, windowFlags);
 
 	auto DrawRow = [](const char* label, float gpums) {
 		ImGui::TableNextRow();
 
 		ImGui::TableNextColumn();
-		ImGui::Text(label);
+		ImGui::TextUnformatted(label);
 
 		ImGui::TableNextColumn();
-		ImGui::Text("%g ms", gpums);
+		ImGui::Text(T(TKEY("overlay_gpu_ms"), "%g ms"), gpums);
 	};
 
 	if (ImGui::BeginTable("Passes", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-		ImGui::TableSetupColumn("Pass");
-		ImGui::TableSetupColumn("GPU");
+		ImGui::TableSetupColumn(T(TKEY("overlay_pass"), "Pass"));
+		ImGui::TableSetupColumn(T(TKEY("overlay_gpu"), "GPU"));
 		ImGui::TableHeadersRow();
 
 		float totalTime = 0.0f;
@@ -695,7 +797,7 @@ void Raytracing::DrawOverlay()
 			totalTime += passTiming.timing;
 		}
 
-		DrawRow("Total", totalTime);
+		DrawRow(T(TKEY("overlay_total"), "Total"), totalTime);
 
 		ImGui::EndTable();
 	}
@@ -704,7 +806,7 @@ void Raytracing::DrawOverlay()
 	if (settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::Accumulation &&
 		creationEngineRaytracing && creationEngineRaytracing->GetAccumulatedFrameCount) {
 		uint32_t accumulatedFrames = creationEngineRaytracing->GetAccumulatedFrameCount();
-		ImGui::Text("Accumulated Frames: %u", accumulatedFrames);
+		ImGui::Text(T(TKEY("overlay_accumulated_frames"), "Accumulated Frames: %u"), accumulatedFrames);
 	}
 
 	if (settings.DisplaySceneGraphCounters && creationEngineRaytracing) {
@@ -714,13 +816,15 @@ void Raytracing::DrawOverlay()
 
 		creationEngineRaytracing->GetSceneGraphCounters(textures, models, instances);
 
-		ImGui::Text("Textures %zu", textures);
-		ImGui::Text("Models %zu", models);
-		ImGui::Text("Instances %zu", instances);
+		ImGui::Text(T(TKEY("overlay_textures"), "Textures %zu"), textures);
+		ImGui::Text(T(TKEY("overlay_models"), "Models %zu"), models);
+		ImGui::Text(T(TKEY("overlay_instances"), "Instances %zu"), instances);
 	}
 
 	ImGui::End();
 }
+
+#undef I18N_KEY_PREFIX
 
 bool Raytracing::Available(bool a_initialized) const
 {
@@ -913,8 +1017,8 @@ void Raytracing::SetupResources()
 			CreationEngineRaytracing::SharedTexture diffuseAlbedo;
 			creationEngineRaytracing->GetSharedTextures(main, diffuseAlbedo);
 
-			mainTexture = eastl::make_unique<WrappedResource>(main.native, main.shared);	
-			diffuseAlbedoTexture = eastl::make_unique<WrappedResource>(diffuseAlbedo.native, diffuseAlbedo.shared);			
+			mainTexture = eastl::make_unique<WrappedResource>(main.native, main.shared);
+			diffuseAlbedoTexture = eastl::make_unique<WrappedResource>(diffuseAlbedo.native, diffuseAlbedo.shared);
 		}
 	}
 
@@ -1037,6 +1141,7 @@ void Raytracing::UpdateFeatureData()
 {
 	auto wetnessEffect = globals::features::wetnessEffects.GetCommonBufferData();
 	auto linearLighting = globals::features::linearLighting.GetCommonBufferData();
+	auto skinData = globals::features::skin.GetCommonBufferData();
 
 	std::memcpy(&featureData->ExtendedMaterials, &globals::features::extendedMaterials.settings, sizeof(ExtendedMaterials::Settings));
 	std::memcpy(&featureData->WetnessEffects, &wetnessEffect, sizeof(WetnessEffects::PerFrame));
@@ -1046,6 +1151,7 @@ void Raytracing::UpdateFeatureData()
 	std::memcpy(&featureData->LinearLighting, &linearLighting, sizeof(LinearLighting::PerFrameData));
 	std::memcpy(&featureData->ExponentialHeightFog, &globals::features::exponentialHeightFog.settings, sizeof(ExponentialHeightFog::Settings));
 	std::memcpy(&featureData->LODBlending, &globals::features::lodBlending.settings, sizeof(LODBlending::Settings));
+	std::memcpy(&featureData->Skin, &skinData, sizeof(Skin::SkinData));
 
 	static_assert(sizeof(FeatureData::ExtendedMaterials) == sizeof(ExtendedMaterials::Settings));
 	static_assert(sizeof(FeatureData::WetnessEffects) == sizeof(WetnessEffects::PerFrame));
@@ -1055,8 +1161,174 @@ void Raytracing::UpdateFeatureData()
 	static_assert(sizeof(FeatureData::LinearLighting) == sizeof(LinearLighting::PerFrameData));
 	static_assert(sizeof(FeatureData::ExponentialHeightFog) == sizeof(ExponentialHeightFog::Settings));
 	static_assert(sizeof(FeatureData::LODBlending) == sizeof(LODBlending::Settings));
+	static_assert(sizeof(FeatureData::Skin) == sizeof(Skin::SkinData));
 
 	creationEngineRaytracing->UpdateFeatureData(featureData.get(), sizeof(FeatureData));
+
+	UpdateSkinDetailNormal();
+}
+
+void Raytracing::UpdateSkinDetailNormal()
+{
+	if (!initialized || !creationEngineRaytracing->SetSkinDetailNormal)
+		return;
+
+	auto& skin = globals::features::skin;
+	if (!skin.texSkinDetail)
+		return;
+
+	auto* currentTex = skin.texSkinDetail->resource.get();
+	if (currentTex == lastSkinDetailTexture)
+		return;
+
+	lastSkinDetailTexture = currentTex;
+
+	D3D11_TEXTURE2D_DESC srcDesc;
+	currentTex->GetDesc(&srcDesc);
+
+	skinDetailNormalD3D12 = nullptr;
+
+	try {
+		auto device = globals::d3d::device;
+		auto context = globals::d3d::context;
+		auto& d3d12Dev = globals::dx12Interop.d3d12Device;
+
+		// BC-compressed formats cannot be shared between D3D11 and D3D12 via shared handles.
+		// Instead, read back the texture data through a D3D11 staging texture,
+		// then upload it to D3D12 via an upload heap.
+
+		// 1. Create D3D11 staging texture and copy from source
+		D3D11_TEXTURE2D_DESC stagingDesc = srcDesc;
+		stagingDesc.Usage = D3D11_USAGE_STAGING;
+		stagingDesc.BindFlags = 0;
+		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		stagingDesc.MiscFlags = 0;
+
+		winrt::com_ptr<ID3D11Texture2D> stagingTex;
+		DX::ThrowIfFailed(device->CreateTexture2D(&stagingDesc, nullptr, stagingTex.put()));
+		context->CopyResource(stagingTex.get(), currentTex);
+
+		// 2. Create D3D12 destination texture
+		D3D12_RESOURCE_DESC resDesc = {};
+		resDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+		resDesc.Alignment = 0;
+		resDesc.Width = srcDesc.Width;
+		resDesc.Height = srcDesc.Height;
+		resDesc.DepthOrArraySize = 1;
+		resDesc.MipLevels = static_cast<UINT16>(srcDesc.MipLevels);
+		resDesc.Format = srcDesc.Format;
+		resDesc.SampleDesc = { 1, 0 };
+		resDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+		resDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+		D3D12_HEAP_PROPERTIES defaultHeap = {};
+		defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+		DX::ThrowIfFailed(d3d12Dev->CreateCommittedResource(
+			&defaultHeap, D3D12_HEAP_FLAG_NONE, &resDesc,
+			D3D12_RESOURCE_STATE_COMMON, nullptr,
+			IID_PPV_ARGS(skinDetailNormalD3D12.put())));
+
+		// 3. Calculate total upload buffer size for all mip levels
+		eastl::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> layouts(srcDesc.MipLevels);
+		eastl::vector<UINT> numRows(srcDesc.MipLevels);
+		eastl::vector<UINT64> rowSizes(srcDesc.MipLevels);
+		UINT64 totalSize = 0;
+		d3d12Dev->GetCopyableFootprints(&resDesc, 0, srcDesc.MipLevels, 0,
+			layouts.data(), numRows.data(), rowSizes.data(), &totalSize);
+
+		// 4. Create D3D12 upload buffer
+		D3D12_RESOURCE_DESC uploadDesc = {};
+		uploadDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		uploadDesc.Width = totalSize;
+		uploadDesc.Height = 1;
+		uploadDesc.DepthOrArraySize = 1;
+		uploadDesc.MipLevels = 1;
+		uploadDesc.Format = DXGI_FORMAT_UNKNOWN;
+		uploadDesc.SampleDesc = { 1, 0 };
+		uploadDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+		D3D12_HEAP_PROPERTIES uploadHeap = {};
+		uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+		winrt::com_ptr<ID3D12Resource> uploadBuffer;
+		DX::ThrowIfFailed(d3d12Dev->CreateCommittedResource(
+			&uploadHeap, D3D12_HEAP_FLAG_NONE, &uploadDesc,
+			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+			IID_PPV_ARGS(uploadBuffer.put())));
+
+		// 5. Map staging texture and copy data to upload buffer
+		BYTE* uploadData = nullptr;
+		DX::ThrowIfFailed(uploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&uploadData)));
+
+		for (UINT mip = 0; mip < srcDesc.MipLevels; mip++) {
+			D3D11_MAPPED_SUBRESOURCE mapped;
+			DX::ThrowIfFailed(context->Map(stagingTex.get(), mip, D3D11_MAP_READ, 0, &mapped));
+
+			auto& layout = layouts[mip];
+			BYTE* destSlice = uploadData + layout.Offset;
+
+			for (UINT row = 0; row < numRows[mip]; row++) {
+				memcpy(destSlice + row * layout.Footprint.RowPitch,
+					static_cast<BYTE*>(mapped.pData) + row * mapped.RowPitch,
+					static_cast<size_t>(rowSizes[mip]));
+			}
+
+			context->Unmap(stagingTex.get(), mip);
+		}
+
+		uploadBuffer->Unmap(0, nullptr);
+
+		// 6. Use DX12 interop fence to copy upload buffer to texture
+		globals::dx12Interop.Fence([&]() {
+			winrt::com_ptr<ID3D12CommandAllocator> cmdAlloc;
+			winrt::com_ptr<ID3D12GraphicsCommandList> cmdList;
+			DX::ThrowIfFailed(d3d12Dev->CreateCommandAllocator(
+				D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(cmdAlloc.put())));
+			DX::ThrowIfFailed(d3d12Dev->CreateCommandList(
+				0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.get(), nullptr, IID_PPV_ARGS(cmdList.put())));
+
+			D3D12_RESOURCE_BARRIER barrier = {};
+			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+			barrier.Transition.pResource = skinDetailNormalD3D12.get();
+			barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+			barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+			barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+			cmdList->ResourceBarrier(1, &barrier);
+
+			for (UINT mip = 0; mip < srcDesc.MipLevels; mip++) {
+				D3D12_TEXTURE_COPY_LOCATION dst = {};
+				dst.pResource = skinDetailNormalD3D12.get();
+				dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+				dst.SubresourceIndex = mip;
+
+				D3D12_TEXTURE_COPY_LOCATION src = {};
+				src.pResource = uploadBuffer.get();
+				src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+				src.PlacedFootprint = layouts[mip];
+
+				cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+			}
+
+			barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+			barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+			cmdList->ResourceBarrier(1, &barrier);
+
+			cmdList->Close();
+
+			ID3D12CommandList* lists[] = { cmdList.get() };
+			globals::dx12Interop.commandQueue->ExecuteCommandLists(1, lists);
+		});
+
+		creationEngineRaytracing->SetSkinDetailNormal(skinDetailNormalD3D12.get());
+
+		logger::info("[Raytracing] Shared skin detail normal texture ({}x{}, {} mips, fmt {})",
+			srcDesc.Width, srcDesc.Height, srcDesc.MipLevels, static_cast<uint32_t>(srcDesc.Format));
+	} catch (const DX::com_exception& e) {
+		logger::error("[Raytracing] Failed to share skin detail normal texture ({}x{}, fmt {}): {}",
+			srcDesc.Width, srcDesc.Height, static_cast<uint32_t>(srcDesc.Format), e.what());
+		lastSkinDetailTexture = nullptr;
+	}
 }
 
 void Raytracing::SkyCubeToHemi() const
@@ -1308,9 +1580,9 @@ void Raytracing::DeferredPasses()
 			// Set up pixel shader
 			context->PSSetShader(copyDMVPS.get(), nullptr, 0);
 
-			ID3D11ShaderResourceView* srvs[] = { 
-				ptDepthTexture->srv, 
-				ptMotionVectorsTexture->srv 
+			ID3D11ShaderResourceView* srvs[] = {
+				ptDepthTexture->srv,
+				ptMotionVectorsTexture->srv
 			};
 
 			context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);

@@ -20,10 +20,11 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/HairSpecular.h"
+#include "Features/LODBlending.h"
 #include "Features/LinearLighting.h"
+#include "Features/Skin.h"
 #include "Features/Upscaling.h"
 #include "Features/WetnessEffects.h"
-#include "Features/LODBlending.h"
 
 #define STATIC_ASSERT_ENUM_COUNT(EnumType, Array) \
 	static_assert(_countof(Array) == magic_enum::enum_count<EnumType>(), "Array size must match enum count");
@@ -416,7 +417,8 @@ struct CreationEngineRaytracing
 			DebugSettings)
 	};
 
-	struct SharedTexture {
+	struct SharedTexture
+	{
 		ID3D12Resource* native = nullptr;
 		ID3D11Texture2D* shared = nullptr;
 	};
@@ -440,6 +442,7 @@ struct CreationEngineRaytracing
 	using SetSharedTexturesFn = void (*)(ID3D12Resource*, ID3D12Resource*, ID3D12Resource*);
 	using GetSharedTexturesFn = void (*)(SharedTexture&, SharedTexture&);
 	using UpdateJitterFn = void (*)(float2);
+	using SetSkinDetailNormalFn = void (*)(ID3D12Resource*);
 	using SetPTOutputTargetsFn = void (*)(ID3D12Resource*, ID3D12Resource*);
 	using GetAccumulatedFrameCountFn = uint32_t (*)();
 	using GetFakeDoubledVRAMUsageFn = uint64_t (*)();
@@ -462,6 +465,7 @@ struct CreationEngineRaytracing
 	SetSharedTexturesFn SetSharedTextures = nullptr;
 	GetSharedTexturesFn GetSharedTextures = nullptr;
 	UpdateJitterFn UpdateJitter = nullptr;
+	SetSkinDetailNormalFn SetSkinDetailNormal = nullptr;
 	SetPTOutputTargetsFn SetPTOutputTargets = nullptr;
 	GetAccumulatedFrameCountFn GetAccumulatedFrameCount = nullptr;
 	GetFakeDoubledVRAMUsageFn GetFakeDoubledVRAMUsage = nullptr;
@@ -495,6 +499,7 @@ struct CreationEngineRaytracing
 		LOAD_FN(SetSharedTextures);
 		LOAD_FN(GetSharedTextures);
 		LOAD_FN(UpdateJitter);
+		LOAD_FN(SetSkinDetailNormal);
 		LOAD_FN(SetPTOutputTargets);
 		LOAD_FN(GetAccumulatedFrameCount);
 		LOAD_FN(GetFakeDoubledVRAMUsage);
@@ -594,6 +599,7 @@ struct Raytracing : public OverlayFeature
 	bool UpdateResolution();
 	void UpdateJitter(float2 jitter);
 	void UpdateFeatureData();
+	void UpdateSkinDetailNormal();
 	void SkyCubeToHemi() const;
 	void ConvertTextures();
 	void DeferredPasses();
@@ -663,6 +669,7 @@ struct Raytracing : public OverlayFeature
 		LinearLighting::PerFrameData LinearLighting;
 		ExponentialHeightFog::Settings ExponentialHeightFog;
 		LODBlending::Settings LODBlending;
+		Skin::SkinData Skin;
 	};
 
 	eastl::unique_ptr<FeatureData> featureData;
@@ -725,6 +732,9 @@ struct Raytracing : public OverlayFeature
 	winrt::com_ptr<ID3D11BlendState> copyBlendState;
 	winrt::com_ptr<ID3D11RasterizerState> copyRasterizerState;
 	winrt::com_ptr<ID3D11DepthStencilState> depthStencilState = nullptr;
+
+	ID3D11Texture2D* lastSkinDetailTexture = nullptr;
+	winrt::com_ptr<ID3D12Resource> skinDetailNormalD3D12 = nullptr;
 
 	struct Hooks
 	{
