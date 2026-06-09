@@ -19,6 +19,15 @@
 
 #include "OverlayFeature.h"
 
+namespace magic_enum::customize
+{
+	template <>
+	struct enum_range<RE::NiAVObject::Flag>
+	{
+		static constexpr bool is_flags = true;
+	};
+}
+
 struct SceneGraphExplorer : public OverlayFeature
 {
 	////////////////////////////////////////////////// Boilerplate

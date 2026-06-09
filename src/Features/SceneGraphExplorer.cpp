@@ -61,8 +61,27 @@ void SceneGraphExplorer::DrawObject(RE::NiAVObject* object, bool root)
 
 	ImGui::PushID(static_cast<int>(reinterpret_cast<intptr_t>(object)));
 
-	if (ImGui::TreeNodeEx(std::format("{} \"{}\"", object->GetRTTI()->name, object->name.c_str()).c_str(), flag)) {
+	auto childCountLabel = node ? std::format(" ({})", node->GetChildren().size()) : "";
+
+	const auto& flags = object->GetFlags();
+
+	const bool hidden = flags.all(RE::NiAVObject::Flag::kHidden);
+
+	if (hidden)
+		ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 0, 0, 255));
+
+	if (ImGui::TreeNodeEx(std::format("{} \"{}\"{} [0x{:08X}]", object->GetRTTI()->name, object->name.c_str(), childCountLabel, reinterpret_cast<uintptr_t>(object)).c_str(), flag)) {
 		ImGui::Text("Position (%.2f, %.2f, %.2f)", object->world.translate.x, object->world.translate.y, object->world.translate.z);
+
+		std::bitset<32> flagsBits = flags.underlying();
+
+		if (ImGui::BeginCombo(std::format("{} set", flagsBits.count()).c_str() , "Flags")) {
+			for (const auto& [value, name] : magic_enum::enum_entries<RE::NiAVObject::Flag>()) {
+				ImGui::Selectable(name.data(), flags.all(value));
+			}
+
+			ImGui::EndCombo();
+		}
 
 		if (object->controllers)
 			ImGui::Text("Controller %s", object->controllers->GetRTTI()->name);
@@ -88,6 +107,9 @@ void SceneGraphExplorer::DrawObject(RE::NiAVObject* object, bool root)
 
 		ImGui::TreePop();
 	}
+
+	if (hidden)
+		ImGui::PopStyleColor();
 
 	ImGui::PopID();
 }
