@@ -30,6 +30,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	noiseScale,
 	noiseSpeed,
 	power,
+	densityErosionWeak,
+	densityErosionStrong,
+	noiseMipBiasWeak,
+	noiseMipBiasStrong,
+	hhfMinBlend,
+	hhfProfileThreshold,
 	scatter,
 	absorption,
 	averageDensity,
@@ -82,6 +88,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	rayMarchRange,
 	shadowVolumeRange,
 	cloudMaxStep,
+	volCloudFullResolution,
+	volCloudPostBlur,
 	cloudLayer)
 
 namespace
@@ -495,6 +503,12 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderFloat(T(TKEY("shadow_volume_range"), "Shadow Volume Range"), &settings.shadowVolumeRange, 1.f, 16.f, "%.1f km");
 		uint32_t minStep = 1, maxStep = 200;
 		ImGui::SliderScalar(T(TKEY("cloud_max_steps"), "Cloud Max Steps"), ImGuiDataType_U32, &settings.cloudMaxStep, &minStep, &maxStep);
+		ImGui::Checkbox(T(TKEY("cloud_full_resolution"), "Full Resolution Main View"), &settings.volCloudFullResolution);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cloud_full_resolution_tooltip"), "Ray march at full resolution and skip the temporal resample pass. Much more expensive, useful for isolating resample noise."));
+		ImGui::Checkbox(T(TKEY("cloud_post_blur"), "Post Blur"), &settings.volCloudPostBlur);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cloud_post_blur_tooltip"), "Apply the final light blur after the main view pass. Disable for sharper debugging."));
 	}
 
 	ImGui::SeparatorText(T(TKEY("placement"), "Placement"));
@@ -509,6 +523,12 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderFloat(T(TKEY("noise_scale"), "Noise Scale"), &settings.cloudLayer.noiseScale, 0.01f, 5.f, "%.3f km");
 		ImGui::SliderFloat3(T(TKEY("noise_velocity"), "Noise Velocity"), &settings.cloudLayer.noiseSpeed.x, -30.f, 30.f, "%.1f m/s");
 		ImGui::SliderFloat(T(TKEY("post_power"), "Post Power"), &settings.cloudLayer.power, 0.2f, 5.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("density_erosion_weak"), "Density Erosion Weak"), &settings.cloudLayer.densityErosionWeak, 0.0f, 1.0f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("density_erosion_strong"), "Density Erosion Strong"), &settings.cloudLayer.densityErosionStrong, 0.0f, 1.0f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("noise_mip_bias_weak"), "Noise Mip Bias Weak"), &settings.cloudLayer.noiseMipBiasWeak, -1.0f, 3.0f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("noise_mip_bias_strong"), "Noise Mip Bias Strong"), &settings.cloudLayer.noiseMipBiasStrong, -1.0f, 3.0f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("hhf_min_blend"), "HHF Min Blend"), &settings.cloudLayer.hhfMinBlend, 0.0f, 1.0f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("hhf_profile_threshold"), "HHF Profile Threshold"), &settings.cloudLayer.hhfProfileThreshold, 0.0f, 1.0f, "%.2f");
 	}
 
 	ImGui::SeparatorText(T(TKEY("optics"), "Optics"));

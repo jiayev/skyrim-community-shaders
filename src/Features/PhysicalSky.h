@@ -143,6 +143,8 @@ struct PhysicalSky final : public Feature
 		float rayMarchRange = 32.f;     // km
 		float shadowVolumeRange = 8.f;  // km
 		uint32_t cloudMaxStep = 97;
+		bool volCloudFullResolution = false;
+		bool volCloudPostBlur = true;
 		CloudLayer cloudLayer = {};
 	} settings;
 
@@ -263,7 +265,7 @@ struct PhysicalSky final : public Feature
 		float rayMarchRange;
 		float shadowVolumeRange;
 		uint cloudMaxStep;
-		float _pad0;
+		uint fullResolution;
 
 		// Dynamic
 		float2 frameDim;
@@ -291,6 +293,13 @@ struct PhysicalSky final : public Feature
 		float msTransmittancePower;
 		float msHeightPower;
 		float ambientMult;
+		float densityErosionWeak;
+		float densityErosionStrong;
+		float noiseMipBiasWeak;
+		float noiseMipBiasStrong;
+		float hhfMinBlend;
+		float hhfProfileThreshold;
+		float2 _pad3;
 
 		float2 lowFrameDim;
 		float2 rcpLowFrameDim;
