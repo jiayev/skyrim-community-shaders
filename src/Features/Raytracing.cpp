@@ -13,7 +13,6 @@
 #include "../I18n/I18n.h"
 
 #include "Deferred.h"
-#include "Features/Skin.h"
 #include "Features/Upscaling.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -635,7 +634,13 @@ void Raytracing::DrawExperimentalSettings()
 		});
 
 	if (experimentalSettings.TextureMode == CreationEngineRaytracing::TextureMode::Exclusive) {
-		auto label = experimentalSettings.TextureCutOff == 0 ? T(TKEY("never_share"), "Never Share") : std::format(T(TKEY("share_smaller_than"), "Share smaller than {}"), 1 << (experimentalSettings.TextureCutOff + 7));
+		auto neverShare = std::string(T(TKEY("never_share"), "Never Share"));
+		auto shareSmaller = std::string_view(T(TKEY("share_smaller_than"), "Share smaller than {}"));
+		auto condition = std::to_string(1 << (experimentalSettings.TextureCutOff + 7));
+
+		auto shareConditionLabel = std::vformat(shareSmaller, std::make_format_args(condition));
+
+		auto label = (experimentalSettings.TextureCutOff == 0) ? neverShare : shareConditionLabel;
 		ImGui::SliderInt(T(TKEY("exclusive_mode_cutoff"), "Exclusive Mode Cutoff"), reinterpret_cast<int*>(&experimentalSettings.TextureCutOff), 0, 6, label.c_str());
 	}
 
@@ -1164,171 +1169,19 @@ void Raytracing::UpdateFeatureData()
 	static_assert(sizeof(FeatureData::Skin) == sizeof(Skin::SkinData));
 
 	creationEngineRaytracing->UpdateFeatureData(featureData.get(), sizeof(FeatureData));
-
-	UpdateSkinDetailNormal();
 }
 
-void Raytracing::UpdateSkinDetailNormal()
+void Raytracing::UpdateSkinDetailNormal(ID3D11Texture2D* skinDetailNormalTextureD3D11)
 {
-	if (!initialized || !creationEngineRaytracing->SetSkinDetailNormal)
+	if (!initialized || !skinDetailNormalTextureD3D11)
 		return;
 
-	auto& skin = globals::features::skin;
-	if (!skin.texSkinDetail)
-		return;
+	D3D11_TEXTURE2D_DESC desc;
+	skinDetailNormalTextureD3D11->GetDesc(&desc);
 
-	auto* currentTex = skin.texSkinDetail->resource.get();
-	if (currentTex == lastSkinDetailTexture)
-		return;
+	ShareTexture(skinDetailNormalTextureD3D11, skinDetailNormalTexture.put());
 
-	lastSkinDetailTexture = currentTex;
-
-	D3D11_TEXTURE2D_DESC srcDesc;
-	currentTex->GetDesc(&srcDesc);
-
-	skinDetailNormalD3D12 = nullptr;
-
-	try {
-		auto device = globals::d3d::device;
-		auto context = globals::d3d::context;
-		auto& d3d12Dev = globals::dx12Interop.d3d12Device;
-
-		// BC-compressed formats cannot be shared between D3D11 and D3D12 via shared handles.
-		// Instead, read back the texture data through a D3D11 staging texture,
-		// then upload it to D3D12 via an upload heap.
-
-		// 1. Create D3D11 staging texture and copy from source
-		D3D11_TEXTURE2D_DESC stagingDesc = srcDesc;
-		stagingDesc.Usage = D3D11_USAGE_STAGING;
-		stagingDesc.BindFlags = 0;
-		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-		stagingDesc.MiscFlags = 0;
-
-		winrt::com_ptr<ID3D11Texture2D> stagingTex;
-		DX::ThrowIfFailed(device->CreateTexture2D(&stagingDesc, nullptr, stagingTex.put()));
-		context->CopyResource(stagingTex.get(), currentTex);
-
-		// 2. Create D3D12 destination texture
-		D3D12_RESOURCE_DESC resDesc = {};
-		resDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-		resDesc.Alignment = 0;
-		resDesc.Width = srcDesc.Width;
-		resDesc.Height = srcDesc.Height;
-		resDesc.DepthOrArraySize = 1;
-		resDesc.MipLevels = static_cast<UINT16>(srcDesc.MipLevels);
-		resDesc.Format = srcDesc.Format;
-		resDesc.SampleDesc = { 1, 0 };
-		resDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-		resDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-		D3D12_HEAP_PROPERTIES defaultHeap = {};
-		defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-		DX::ThrowIfFailed(d3d12Dev->CreateCommittedResource(
-			&defaultHeap, D3D12_HEAP_FLAG_NONE, &resDesc,
-			D3D12_RESOURCE_STATE_COMMON, nullptr,
-			IID_PPV_ARGS(skinDetailNormalD3D12.put())));
-
-		// 3. Calculate total upload buffer size for all mip levels
-		eastl::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> layouts(srcDesc.MipLevels);
-		eastl::vector<UINT> numRows(srcDesc.MipLevels);
-		eastl::vector<UINT64> rowSizes(srcDesc.MipLevels);
-		UINT64 totalSize = 0;
-		d3d12Dev->GetCopyableFootprints(&resDesc, 0, srcDesc.MipLevels, 0,
-			layouts.data(), numRows.data(), rowSizes.data(), &totalSize);
-
-		// 4. Create D3D12 upload buffer
-		D3D12_RESOURCE_DESC uploadDesc = {};
-		uploadDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-		uploadDesc.Width = totalSize;
-		uploadDesc.Height = 1;
-		uploadDesc.DepthOrArraySize = 1;
-		uploadDesc.MipLevels = 1;
-		uploadDesc.Format = DXGI_FORMAT_UNKNOWN;
-		uploadDesc.SampleDesc = { 1, 0 };
-		uploadDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-		D3D12_HEAP_PROPERTIES uploadHeap = {};
-		uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-		winrt::com_ptr<ID3D12Resource> uploadBuffer;
-		DX::ThrowIfFailed(d3d12Dev->CreateCommittedResource(
-			&uploadHeap, D3D12_HEAP_FLAG_NONE, &uploadDesc,
-			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-			IID_PPV_ARGS(uploadBuffer.put())));
-
-		// 5. Map staging texture and copy data to upload buffer
-		BYTE* uploadData = nullptr;
-		DX::ThrowIfFailed(uploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&uploadData)));
-
-		for (UINT mip = 0; mip < srcDesc.MipLevels; mip++) {
-			D3D11_MAPPED_SUBRESOURCE mapped;
-			DX::ThrowIfFailed(context->Map(stagingTex.get(), mip, D3D11_MAP_READ, 0, &mapped));
-
-			auto& layout = layouts[mip];
-			BYTE* destSlice = uploadData + layout.Offset;
-
-			for (UINT row = 0; row < numRows[mip]; row++) {
-				memcpy(destSlice + row * layout.Footprint.RowPitch,
-					static_cast<BYTE*>(mapped.pData) + row * mapped.RowPitch,
-					static_cast<size_t>(rowSizes[mip]));
-			}
-
-			context->Unmap(stagingTex.get(), mip);
-		}
-
-		uploadBuffer->Unmap(0, nullptr);
-
-		// 6. Use DX12 interop fence to copy upload buffer to texture
-		globals::dx12Interop.Fence([&]() {
-			winrt::com_ptr<ID3D12CommandAllocator> cmdAlloc;
-			winrt::com_ptr<ID3D12GraphicsCommandList> cmdList;
-			DX::ThrowIfFailed(d3d12Dev->CreateCommandAllocator(
-				D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(cmdAlloc.put())));
-			DX::ThrowIfFailed(d3d12Dev->CreateCommandList(
-				0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.get(), nullptr, IID_PPV_ARGS(cmdList.put())));
-
-			D3D12_RESOURCE_BARRIER barrier = {};
-			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-			barrier.Transition.pResource = skinDetailNormalD3D12.get();
-			barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-			barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-			barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-			cmdList->ResourceBarrier(1, &barrier);
-
-			for (UINT mip = 0; mip < srcDesc.MipLevels; mip++) {
-				D3D12_TEXTURE_COPY_LOCATION dst = {};
-				dst.pResource = skinDetailNormalD3D12.get();
-				dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-				dst.SubresourceIndex = mip;
-
-				D3D12_TEXTURE_COPY_LOCATION src = {};
-				src.pResource = uploadBuffer.get();
-				src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-				src.PlacedFootprint = layouts[mip];
-
-				cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-			}
-
-			barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-			barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
-			cmdList->ResourceBarrier(1, &barrier);
-
-			cmdList->Close();
-
-			ID3D12CommandList* lists[] = { cmdList.get() };
-			globals::dx12Interop.commandQueue->ExecuteCommandLists(1, lists);
-		});
-
-		creationEngineRaytracing->SetSkinDetailNormal(skinDetailNormalD3D12.get());
-
-		logger::info("[Raytracing] Shared skin detail normal texture ({}x{}, {} mips, fmt {})",
-			srcDesc.Width, srcDesc.Height, srcDesc.MipLevels, static_cast<uint32_t>(srcDesc.Format));
-	} catch (const DX::com_exception& e) {
-		logger::error("[Raytracing] Failed to share skin detail normal texture ({}x{}, fmt {}): {}",
-			srcDesc.Width, srcDesc.Height, static_cast<uint32_t>(srcDesc.Format), e.what());
-		lastSkinDetailTexture = nullptr;
-	}
+	creationEngineRaytracing->SetSkinDetailNormal(skinDetailNormalTexture.get());
 }
 
 void Raytracing::SkyCubeToHemi() const

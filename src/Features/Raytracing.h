@@ -599,7 +599,7 @@ struct Raytracing : public OverlayFeature
 	bool UpdateResolution();
 	void UpdateJitter(float2 jitter);
 	void UpdateFeatureData();
-	void UpdateSkinDetailNormal();
+	void UpdateSkinDetailNormal(ID3D11Texture2D* skinDetailTexture);
 	void SkyCubeToHemi() const;
 	void ConvertTextures();
 	void DeferredPasses();
@@ -733,8 +733,7 @@ struct Raytracing : public OverlayFeature
 	winrt::com_ptr<ID3D11RasterizerState> copyRasterizerState;
 	winrt::com_ptr<ID3D11DepthStencilState> depthStencilState = nullptr;
 
-	ID3D11Texture2D* lastSkinDetailTexture = nullptr;
-	winrt::com_ptr<ID3D12Resource> skinDetailNormalD3D12 = nullptr;
+	winrt::com_ptr<ID3D12Resource> skinDetailNormalTexture = nullptr;
 
 	struct Hooks
 	{
