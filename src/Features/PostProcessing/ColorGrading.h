@@ -11,8 +11,6 @@ struct ColorGrading : public PostProcessFeature
 	virtual inline std::string GetDesc() const override { return T("feature.post_processing.color_grading.description", "Color grading operations and multiple tone mapping options."); }
 	virtual inline bool DisableInMainLoadingMenu() const override { return true; }
 
-	virtual bool SupportsVR() const override { return true; }
-
 	template <size_t N, typename T>
 	constexpr auto make_array(T value) -> std::array<T, N>
 	{

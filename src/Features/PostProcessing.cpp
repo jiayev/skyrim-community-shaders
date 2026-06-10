@@ -347,14 +347,12 @@ void PostProcessing::RestoreDefaultSettings()
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get()->enabled = true;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)].get()->enabled = false;
 
-		if (!REL::Module::IsVR()) {
-			pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
-			pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
-			pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
-			pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
-			pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)].get()->enabled = true;
-			pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)].get()->enabled = false;
-		}
+		pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
+		pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
+		pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
+		pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
+		pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)].get()->enabled = true;
+		pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)].get()->enabled = false;
 
 		for (auto& pipe : pipeline) {
 			if (pipe) {
@@ -440,26 +438,24 @@ void PostProcessing::SetupResources()
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)] = std::make_unique<LUT>();
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)].get()->enabled = false;
 
-	if (!REL::Module::IsVR()) {
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)] = std::make_unique<MotionBlur>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)] = std::make_unique<DoF>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)] = std::make_unique<PhysicalGlare>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)] = std::make_unique<CODBloom>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)] = std::make_unique<LensFlare>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)] = std::make_unique<Composite>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)] = std::make_unique<Vignette>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)] = std::make_unique<Camera>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)] = std::make_unique<Border>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)].get()->enabled = false;
-	}
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)] = std::make_unique<MotionBlur>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)] = std::make_unique<DoF>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)] = std::make_unique<PhysicalGlare>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)].get()->enabled = false;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)] = std::make_unique<CODBloom>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)] = std::make_unique<LensFlare>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)] = std::make_unique<Composite>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)].get()->enabled = true;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)] = std::make_unique<Vignette>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)].get()->enabled = true;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)] = std::make_unique<Camera>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)].get()->enabled = false;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)] = std::make_unique<Border>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)].get()->enabled = false;
 
 	for (auto& pipe : pipeline) {
 		if (pipe) {
@@ -654,22 +650,12 @@ void PostProcessing::Prepass()
 
 	// Update gameISData
 	const auto ImageSpace = RE::ImageSpaceManager::GetSingleton();
-	if (globals::game::isVR) {
-		const auto& iSRuntimeData = ImageSpace->GetVRRuntimeData();
-		imageSpaceManager->gameISData = iSRuntimeData.data;
-		if (const auto& overrideBaseData = iSRuntimeData.overrideBaseData) {
-			imageSpaceManager->gameISData.baseData = *overrideBaseData;
-		} else {
-			imageSpaceManager->gameISData.baseData = *iSRuntimeData.currentBaseData;
-		}
+	const auto& iSRuntimeData = ImageSpace->GetRuntimeData();
+	imageSpaceManager->gameISData = iSRuntimeData.data;
+	if (const auto& overrideBaseData = iSRuntimeData.overrideBaseData) {
+		imageSpaceManager->gameISData.baseData = *overrideBaseData;
 	} else {
-		const auto& iSRuntimeData = ImageSpace->GetRuntimeData();
-		imageSpaceManager->gameISData = iSRuntimeData.data;
-		if (const auto& overrideBaseData = iSRuntimeData.overrideBaseData) {
-			imageSpaceManager->gameISData.baseData = *overrideBaseData;
-		} else {
-			imageSpaceManager->gameISData.baseData = *iSRuntimeData.currentBaseData;
-		}
+		imageSpaceManager->gameISData.baseData = *iSRuntimeData.currentBaseData;
 	}
 }
 

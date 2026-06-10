@@ -28,7 +28,6 @@ struct LocalExposure : public PostProcessFeature
 			"Local Exposure brightens shadows and compresses highlights based on local neighborhood luminance. Runs before Auto Exposure and is applied in the Composite pass.");
 	}
 	virtual bool WritesToMainTexture() const override { return false; }
-	virtual bool SupportsVR() const override { return true; }
 	virtual inline bool DisableInMainLoadingMenu() const override { return true; }
 
 	struct Settings

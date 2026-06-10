@@ -19,8 +19,6 @@ struct HistogramAutoExposure : public PostProcessFeature
 	/// It only computes the adaptation value which is consumed by the Composite pass.
 	virtual bool WritesToMainTexture() const override { return false; }
 
-	virtual bool SupportsVR() const override { return true; }
-
 	struct Settings
 	{
 		float ExposureCompensation = 0.f;
