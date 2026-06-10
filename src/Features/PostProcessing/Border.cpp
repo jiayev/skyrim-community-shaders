@@ -133,7 +133,8 @@ void Border::ClearMotionVectorsForFrameGen()
 	auto context = globals::d3d::context;
 
 	// Compute dynamic resolution dimensions (actual rendered area before upscaling)
-	float2 dynResDim = Util::ConvertToDynamic(globals::state->screenSize);
+	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+	auto dynResDim = Util::ConvertToDynamic(screenSize);
 
 	BorderCB data = {
 		.BorderColor = float4(settings.BorderColor.x, settings.BorderColor.y, settings.BorderColor.z, settings.DepthThreshold),
