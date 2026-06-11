@@ -650,6 +650,8 @@ struct Raytracing : public OverlayFeature
 
 	uint2 m_Resolution;
 
+	bool fogEnabled = false;
+
 	enum DisableReason
 	{
 		None,
@@ -727,8 +729,8 @@ struct Raytracing : public OverlayFeature
 	winrt::com_ptr<ID3D11ComputeShader> convertTexturesCS[2];
 	winrt::com_ptr<ID3D11ComputeShader> giCompositeCS = nullptr;
 
-	winrt::com_ptr<ID3D11VertexShader> copyDMVVS = nullptr;
-	winrt::com_ptr<ID3D11PixelShader> copyDMVPS = nullptr;
+	winrt::com_ptr<ID3D11VertexShader> copyDepthVS = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> copyDepthPS = nullptr;
 	winrt::com_ptr<ID3D11BlendState> copyBlendState;
 	winrt::com_ptr<ID3D11RasterizerState> copyRasterizerState;
 	winrt::com_ptr<ID3D11DepthStencilState> depthStencilState = nullptr;

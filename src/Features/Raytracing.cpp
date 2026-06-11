@@ -901,13 +901,13 @@ void Raytracing::CompileShaders()
 	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\GICompositeCS.hlsl", {}, "cs_5_0")); rawPtr)
 		giCompositeCS.attach(rawPtr);
 
-	// Depth/MV Copy
+	// Depth copy
 	{
-		if (auto rawPtr = reinterpret_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\CopyDepthMotionVector.hlsl", {}, "vs_5_0", "MainVS")); rawPtr)
-			copyDMVVS.attach(rawPtr);
+		if (auto rawPtr = reinterpret_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\CopyDepth.hlsl", {}, "vs_5_0", "MainVS")); rawPtr)
+			copyDepthVS.attach(rawPtr);
 
-		if (auto rawPtr = reinterpret_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\CopyDepthMotionVector.hlsl", {}, "ps_5_0", "MainPS")); rawPtr)
-			copyDMVPS.attach(rawPtr);
+		if (auto rawPtr = reinterpret_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\Raytracing\\CopyDepth.hlsl", {}, "ps_5_0", "MainPS")); rawPtr)
+			copyDepthPS.attach(rawPtr);
 	}
 }
 
@@ -1327,14 +1327,15 @@ void Raytracing::DeferredPasses()
 	const bool globalIllumation = (mode == CreationEngineRaytracing::Mode::GlobalIllumination);
 	const bool pathtracing = (mode == CreationEngineRaytracing::Mode::PathTracing);
 
-	// Force fog off
-	if (settings.DisableVanillaFogPT) {
-		static auto& enableFog = (*(bool*)REL::RelocationID(528125, 415070).address());
-		enableFog = !pathtracing;
-	}
+	// Fog management
+	static auto& enableFog = (*(bool*)REL::RelocationID(528125, 415070).address());
+	if (enableFog)
+		fogEnabled = true;
+
+	enableFog = settings.DisableVanillaFogPT && pathtracing ? false : fogEnabled;
 
 	if (globalIllumation) {
-		// Add GI result to kMain
+		// Add global illumination result to kMain
 		{
 			context->CSSetShader(giCompositeCS.get(), nullptr, 0);
 
@@ -1353,32 +1354,36 @@ void Raytracing::DeferredPasses()
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		}
 	} else if (pathtracing) {
-		// Blend PT and Sky
+		// Blend pathtracing and sky (colors and motion vectors)
 		{
+			auto& mv = renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+
 			context->CSSetShader(ptCompositeCS.get(), nullptr, 0);
 
 			ID3D11Buffer* cb = screenCB->CB();
 			context->CSSetConstantBuffers(0, 1, &cb);
 
-			context->CSSetShaderResources(0, 1, &mainTexture->srv);
+			ID3D11ShaderResourceView* srvs[] = {
+				mainTexture->srv,
+				ptMotionVectorsTexture->srv
+			};
+			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-			ID3D11UnorderedAccessView* uav = main.UAV;
-			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+			ID3D11UnorderedAccessView* uavs[] = { 
+				main.UAV,
+				mv.UAV
+			};
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 			auto dispatchCount = Util::GetScreenDispatchCount(true);
 			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 
-			uav = nullptr;
-			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+			uavs[0] = nullptr;
+			uavs[1] = nullptr;
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 		}
 
-		// Clear Specular RT
-		{
-			float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-			context->ClearRenderTargetView(renderTargets[RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED].RTV, clearColor);
-		}
-
-		// Always copy Depth and Motion Vectors
+		// Copy Depth buffer
 		{
 			auto depthStencils = renderer->GetDepthStencilData().depthStencils;
 
@@ -1417,9 +1422,7 @@ void Raytracing::DeferredPasses()
 			context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-			context->OMSetRenderTargets(1,
-				&renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].RTV,
-				mainDepth.views[0]);
+			context->OMSetRenderTargets(0, nullptr, mainDepth.views[0]);
 
 			context->OMSetDepthStencilState(depthStencilState.get(), 0);
 
@@ -1428,15 +1431,12 @@ void Raytracing::DeferredPasses()
 			context->OMSetBlendState(copyBlendState.get(), nullptr, 0xffffffff);
 
 			// Set up vertex shader
-			context->VSSetShader(copyDMVVS.get(), nullptr, 0);
+			context->VSSetShader(copyDepthVS.get(), nullptr, 0);
 
 			// Set up pixel shader
-			context->PSSetShader(copyDMVPS.get(), nullptr, 0);
+			context->PSSetShader(copyDepthPS.get(), nullptr, 0);
 
-			ID3D11ShaderResourceView* srvs[] = {
-				ptDepthTexture->srv,
-				ptMotionVectorsTexture->srv
-			};
+			ID3D11ShaderResourceView* srvs[] = { ptDepthTexture->srv };
 
 			context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -1470,6 +1470,12 @@ void Raytracing::DeferredPasses()
 
 			context->CopyResource(mainDepthCopy.texture, mainDepth.texture);
 			context->CopyResource(zPrePassCopy.texture, mainDepth.texture);
+		}
+
+		// Clear Specular render target
+		{
+			float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+			context->ClearRenderTargetView(renderTargets[RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED].RTV, clearColor);
 		}
 	}
 }

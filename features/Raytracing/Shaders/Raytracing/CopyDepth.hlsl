@@ -24,25 +24,10 @@ VSOut MainVS(uint id : SV_VertexID)
 }
 
 Texture2D<float> DepthTex : register(t0);
-Texture2D<float4> MotionTex : register(t1);
 
-SamplerState s0 : register(s0);
-
-struct PSOut
+float MainPS(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Depth
 {
-    float2 motion : SV_Target0;
-    float depth : SV_Depth;
-};
-
-PSOut MainPS(float4 pos : SV_Position, float2 uv : TEXCOORD0)
-{
-    PSOut o;
-
     // Load is better than Sample for exact copy
     int2 pixel = int2(pos.xy);
-
-    o.depth = DepthTex.Load(int3(pixel, 0));
-    o.motion = MotionTex.Load(int3(pixel, 0)).xy;
-
-    return o;
+    return DepthTex.Load(int3(pixel, 0));
 }
