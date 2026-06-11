@@ -6,6 +6,7 @@
 #define PS_PREPASS_RSRCS
 #define PS_NO_RSRCS
 #define OMIT_PS_NAMESPACE
+#include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 #include "PhysicalSky/Common.hlsli"
 
 SamplerState TileableSampler : register(s2);
@@ -129,6 +130,7 @@ Texture2D<unorm float> TexCloudTopLUT : register(t7);
 Texture2D<unorm float> TexCloudBottomLUT : register(t8);
 Texture2D<unorm float> TexApShadow : register(t9);
 Texture2D<float4> TexSkyView : register(t10);
+Texture2D<sh2> TexCloudAmbientSH : register(t11);
 
 Texture2DArray<float4> TexDirectShadows : register(t20);
 struct DirectionalShadowLightData
@@ -168,6 +170,7 @@ RWTexture3D<float> RWShadowVolume : register(u0);
 
 RWTexture2DArray<float3> RWTexCubeTr : register(u0);
 RWTexture2DArray<float3> RWTexCubeLum : register(u1);
+RWTexture2D<sh2> RWCloudAmbientSH : register(u0);
 
 #define ISNAN(x) (!(x < 0.f || x > 0.f || x == 0.f))
 
@@ -216,18 +219,11 @@ float3 SampleCloudAmbientSkyView(float3 pos)
 	const float3 pos_planet = pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planetRadius);
 	const float altitude = length(pos_planet);
 	const float3 up_dir = pos_planet / max(altitude, 1e-8);
-
-	const float3 basis_ref = abs(up_dir.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
-	const float3 tangent = normalize(cross(basis_ref, up_dir));
-	const float3 bitangent = cross(up_dir, tangent);
-
-	const float horizonLift = 0.35;
-	float3 ambientRadiance = TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(up_dir), 0).rgb * 0.4;
-	ambientRadiance += TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(normalize(tangent + up_dir * horizonLift)), 0).rgb * 0.15;
-	ambientRadiance += TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(normalize(-tangent + up_dir * horizonLift)), 0).rgb * 0.15;
-	ambientRadiance += TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(normalize(bitangent + up_dir * horizonLift)), 0).rgb * 0.15;
-	ambientRadiance += TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(normalize(-bitangent + up_dir * horizonLift)), 0).rgb * 0.15;
-	return ambientRadiance * Math::PI;
+	const float3 sh_up_dir = float3(up_dir.x, up_dir.z, up_dir.y);
+	sh2 shR = SphericalHarmonics::DiffuseConvolution(TexCloudAmbientSH[int2(0, 0)]);
+	sh2 shG = SphericalHarmonics::DiffuseConvolution(TexCloudAmbientSH[int2(1, 0)]);
+	sh2 shB = SphericalHarmonics::DiffuseConvolution(TexCloudAmbientSH[int2(2, 0)]);
+	return max(0.0, SphericalHarmonics::Unproject(shR, shG, shB, sh_up_dir));
 }
 
 float SampleFilteredApShadow(uint2 fullPxCoord)
@@ -241,6 +237,41 @@ float SampleFilteredApShadow(uint2 fullPxCoord)
 	const float2 apCoord = min(float2(apPxCoord) + 0.5, float2(apDims) - 0.5);
 
 	return TexApShadow.SampleLevel(TransmittanceSampler, apCoord / apDims, 0);
+}
+
+groupshared sh2 gCloudAmbientSHR[256];
+groupshared sh2 gCloudAmbientSHG[256];
+groupshared sh2 gCloudAmbientSHB[256];
+
+[numthreads(16, 16, 1)] void buildCloudAmbientSH(uint3 tid : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex) {
+	const float2 sampleCoord = (float2(tid.xy) + 0.5) / 16.0;
+	const float3 shSampleDir = SphericalHarmonics::GetUniformSphereSample(sampleCoord.x, sampleCoord.y);
+	const float3 rayDir = float3(shSampleDir.x, shSampleDir.z, shSampleDir.y);
+	const float3 skyColor = TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(rayDir), 0).rgb;
+	const float shFactor = 4.0 * Math::PI / 256.0;
+	const sh2 sh = SphericalHarmonics::Evaluate(shSampleDir);
+
+	gCloudAmbientSHR[groupIndex] = SphericalHarmonics::Scale(sh, skyColor.r * shFactor);
+	gCloudAmbientSHG[groupIndex] = SphericalHarmonics::Scale(sh, skyColor.g * shFactor);
+	gCloudAmbientSHB[groupIndex] = SphericalHarmonics::Scale(sh, skyColor.b * shFactor);
+
+	GroupMemoryBarrierWithGroupSync();
+
+	[unroll] for (uint stride = 128; stride > 0; stride >>= 1)
+	{
+		if (groupIndex < stride) {
+			gCloudAmbientSHR[groupIndex] = SphericalHarmonics::Add(gCloudAmbientSHR[groupIndex], gCloudAmbientSHR[groupIndex + stride]);
+			gCloudAmbientSHG[groupIndex] = SphericalHarmonics::Add(gCloudAmbientSHG[groupIndex], gCloudAmbientSHG[groupIndex + stride]);
+			gCloudAmbientSHB[groupIndex] = SphericalHarmonics::Add(gCloudAmbientSHB[groupIndex], gCloudAmbientSHB[groupIndex + stride]);
+		}
+		GroupMemoryBarrierWithGroupSync();
+	}
+
+	if (groupIndex == 0) {
+		RWCloudAmbientSH[int2(0, 0)] = gCloudAmbientSHR[0];
+		RWCloudAmbientSH[int2(1, 0)] = gCloudAmbientSHG[0];
+		RWCloudAmbientSH[int2(2, 0)] = gCloudAmbientSHB[0];
+	}
 }
 
 float InBetweenSphereDistance(float3 orig, float3 dir, float rInner, float rOuter)
@@ -643,7 +674,10 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 
 			// ambient
 			float3 ambient = SampleCloudAmbientSkyView(ray.pos);
-			in_scatter += cloud_scatter * sqrt(1.0 - ndf.dimension_profile) * cloud.ambient_mult * ambient * RCP_PI;
+			float profile_indirect = sqrt(1.0 - saturate(ndf.dimension_profile));
+			float vertical_transmittance = dot(TexTransmittance.SampleLevel(TransmittanceSampler, TrLutUvPlanet(ray.pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planetRadius), info.dirlightDir), 0).rgb, float3(0.2126, 0.7152, 0.0722));
+			float vertical_indirect = exp(vertical_transmittance);
+			in_scatter += cloud_scatter * profile_indirect * vertical_indirect * cloud.ambient_mult * ambient * RCP_PI;
 
 			const float3 sample_transmittance = exp(-dt * extinction);
 			const float3 scatter_factor = (1 - sample_transmittance) / max(extinction, 1e-8);

@@ -900,7 +900,7 @@ void PhysicalSky::ReflectionsPrepass()
 void PhysicalSky::Prepass()
 {
 	if (cbData.enabled) {
-		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolResample && csVolBlur && csVolShadowVolume && csVolCubemap && csVolCubemapHistory && volCubeHistoryCb;
+		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolResample && csVolBlur && csVolShadowVolume && csVolCubemap && csVolCubemapHistory && csVolAmbientSH && volCubeHistoryCb && texVolCloudAmbientSH;
 
 		if (renderVolumetricClouds) {
 			ndfManager.UpdateNdf(ndfSettings);
