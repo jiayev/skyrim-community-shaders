@@ -422,6 +422,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetShaderResources(11, 1, &ambientShSrv);
 		context->CSSetShaderResources(20, (uint)shadowSrvs.size(), shadowSrvs.data());
 		context->CSSetShader(csVolMainView.get(), nullptr, 0);
 
