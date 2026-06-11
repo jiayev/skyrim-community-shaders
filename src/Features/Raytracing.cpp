@@ -1261,7 +1261,7 @@ void Raytracing::ConvertTextures()
 
 void Raytracing::DeferredPasses()
 {
-	if (!settings.CreationEngineRaytracingSettings.Enabled)
+	if (!settings.CreationEngineRaytracingSettings.Enabled || Mode() == CreationEngineRaytracing::Mode::None)
 		return;
 
 	auto* context = globals::d3d::context;
@@ -1320,7 +1320,7 @@ void Raytracing::DeferredPasses()
 
 	auto renderer = globals::game::renderer;
 
-	auto renderTargets = renderer->GetRuntimeData().renderTargets;
+	const auto& renderTargets = renderer->GetRuntimeData().renderTargets;
 
 	auto& main = renderTargets[RE::RENDER_TARGETS::kMAIN];
 
