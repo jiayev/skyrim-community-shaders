@@ -940,7 +940,7 @@ void Raytracing::InitializeCERaytracing(ID3D11Device5* d3d11Device, ID3D12Device
 
 bool Raytracing::UpdateResolution()
 {
-	uint2 resolution = { static_cast<uint32_t>(globals::state->screenSize.x), static_cast<uint32_t>(globals::state->screenSize.y) };
+	uint2 resolution = { globals::game::graphicsState->screenWidth, globals::game::graphicsState->screenHeight };
 
 	if (resolution == m_Resolution)
 		return false;
@@ -1308,7 +1308,7 @@ void Raytracing::DeferredPasses()
 	if (settings.PerfOverlay != OverlayMode::None)
 		creationEngineRaytracing->GetPassTimings(passTimings);
 
-	auto screenSize = globals::state->screenSize;
+	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 	auto dynamicScreenSize = Util::ConvertToDynamic(screenSize);
 
 	screenData->Resolution = { static_cast<uint>(screenSize.x), static_cast<uint>(screenSize.y) };
@@ -1369,7 +1369,7 @@ void Raytracing::DeferredPasses()
 			};
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-			ID3D11UnorderedAccessView* uavs[] = { 
+			ID3D11UnorderedAccessView* uavs[] = {
 				main.UAV,
 				mv.UAV
 			};
