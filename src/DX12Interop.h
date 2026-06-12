@@ -11,6 +11,9 @@
 #include <type_traits>
 #include <utility>
 
+#define NTDDI_VERSION NTDDI_WINBLUE
+#include <DXProgrammableCapture.h>
+
 struct DX12Interop
 {
 	static constexpr UINT kMaxFramesInFlight = 2;
@@ -38,6 +41,8 @@ struct DX12Interop
 
 	winrt::com_ptr<ID3D11Fence> d3d11Fence;
 	winrt::com_ptr<ID3D12Fence> d3d12Fence;
+
+	winrt::com_ptr<IDXGraphicsAnalysis> ga = nullptr;
 
 	static DX12Interop* GetSingleton()
 	{
@@ -82,5 +87,7 @@ private:
 	void CreateInterop();
 	void SetD3D11Device(ID3D11Device* a_d3d11Device);
 	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
+	void InitializePIX();
+	void CreateDebugDevice();
 	void CreateD3D12Device(IDXGIAdapter* a_adapter);
 };

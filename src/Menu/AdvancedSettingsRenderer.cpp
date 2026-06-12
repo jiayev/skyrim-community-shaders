@@ -660,6 +660,18 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 		ImGui::Text("Enable debug device which will output warnings and errors from DirectX 11");
 	}
 
+	// Debug device toggle for DirectX 12
+	ImGui::Checkbox("Interop Debug Device", &globals::state->interopDebugDevice);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Enable debug device which will output warnings and errors from DirectX 12");
+	}
+
+	// Loads PIX at launch for DirectX 12 GPU captures
+	ImGui::Checkbox("Interop Load PIX", &globals::state->interopLoadPIX);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Enable loading of PIX at launch for GPU captures");
+	}
+
 	// Half-precision (partial precision) shader compile flag
 	bool partialPrecision = globals::state->enablePartialPrecision.load(std::memory_order_relaxed);
 	if (ImGui::Checkbox(T("menu.advanced.half_precision", "Half Precision (Partial Precision)"), &partialPrecision)) {
