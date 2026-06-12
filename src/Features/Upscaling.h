@@ -190,7 +190,7 @@ public:
 	/// rebuild.
 	std::atomic<bool> pendingDLSSReset{ false };
 
-	void CopySharedD3D12Resources();
+	void CopySharedD3D12Resources(bool preserveMotionVector = false);
 	void PostDisplay();
 	void PerformUpscaling();
 	void UpscaleDepth();

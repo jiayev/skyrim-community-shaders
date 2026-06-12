@@ -1,8 +1,8 @@
 #pragma once
 
+#include "DX12Interop/WrappedResource.h"
 #include "Feature.h"
 #include "State.h"
-#include "DX12Interop/WrappedResource.h"
 
 #include <winrt/base.h>
 
@@ -27,6 +27,7 @@ struct DX12Interop
 	struct SharedResources
 	{
 		WrappedResource* main = nullptr;
+		WrappedResource* upscaleOutput = nullptr;
 		WrappedResource* depth = nullptr;
 		WrappedResource* motionVector = nullptr;
 		WrappedResource* reactiveMask = nullptr;

@@ -1101,7 +1101,7 @@ void Upscaling::ClearShaderCache()
 	upscaleVS = nullptr;                 // com_ptr automatically releases
 }
 
-void Upscaling::CopySharedD3D12Resources()
+void Upscaling::CopySharedD3D12Resources(bool preserveMotionVector)
 {
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Copy Shared D3D12 Resources");
@@ -1110,8 +1110,12 @@ void Upscaling::CopySharedD3D12Resources()
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 
+	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	context->CopyResource(globals::dx12Interop->sharedResources.main->resource11, main.texture);
+
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-	context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11, motionVector.texture);
+	if (!preserveMotionVector)
+		context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11, motionVector.texture);
 
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
@@ -1523,19 +1527,21 @@ void Upscaling::Upscale()
 		const auto dlssrr = upscaleMethod == UpscaleMethod::kDLSS_RR;
 
 		if (dlss || dlssrr) {
+			auto* upscaleOutput = sharedResources.upscaleOutput ? sharedResources.upscaleOutput : sharedResources.main;
+
 			interopContext->Execute([&](ID3D12GraphicsCommandList4* commandList) {
 				if (dlss) {
 					streamline.Upscale(commandList,
-						sharedResources.main->GetResource(), sharedResources.main->GetResource(),
+						sharedResources.main->GetResource(), upscaleOutput->GetResource(),
 						sharedResources.depth->GetResource(), sharedResources.motionVector->GetResource(), sharedResources.reactiveMask->GetResource());
 				} else if (dlssrr) {
 					streamline.DenoiseUpscale(commandList,
-						sharedResources.main->GetResource(), sharedResources.depth->GetResource(),
+						sharedResources.main->GetResource(), upscaleOutput->GetResource(), sharedResources.depth->GetResource(),
 						sharedResources.motionVector->GetResource(), sharedResources.reactiveMask->GetResource());
 				}
 			});
 
-			context->CopyResource(main.texture, sharedResources.main->resource11);
+			context->CopyResource(main.texture, upscaleOutput->resource11);
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
 			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR);
 		}
@@ -1800,7 +1806,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		upscaling.ConvertColorSpace(true);
 
 		if (upscaling.d3d12Mode)
-			upscaling.CopySharedD3D12Resources();
+			upscaling.CopySharedD3D12Resources(upscaleMethod == UpscaleMethod::kDLSS_RR);
 
 		upscaling.PerformUpscaling();
 
