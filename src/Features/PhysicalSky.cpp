@@ -799,7 +799,7 @@ void PhysicalSky::Reset()
 	}
 
 	// resolution
-	float2 res = globals::state->screenSize;
+	float2 res{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
@@ -1040,7 +1040,8 @@ void PhysicalSky::AccumShadow()
 	auto& terrainShadows = globals::features::terrainShadows;
 	auto& cloudShadows = globals::features::cloudShadows;
 
-	float2 size = Util::ConvertToDynamic(state->screenSize);
+	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+	float2 size = Util::ConvertToDynamic(screenSize);
 	uint resolution[2] = { (uint)size.x, (uint)size.y };
 	if (settings.halfResApShadow) {
 		resolution[0] = std::max(1u, resolution[0] / 2u);

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "RE/M/Moon.h"
 #include "Utils/Moon.h"
 

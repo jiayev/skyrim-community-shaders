@@ -362,25 +362,25 @@ void Deferred::DeferredPasses()
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
 		ID3D11ShaderResourceView* srvs[]{
-			specular.SRV,                                                                                    // t0  SpecularTexture
-			albedo.SRV,                                                                                      // t1  AlbedoTexture
-			normalRoughness.SRV,                                                                             // t2  NormalRoughnessTexture
-			masks.SRV,                                                                                       // t3  MasksTexture
-			dynamicCubemaps.loaded || REL::Module::IsVR() ? Util::GetCurrentSceneDepthSRV(false) : nullptr,  // t4  DepthTexture (24/32-bit; HLSL type baked at compile via TERRAIN_BLENDING)
-			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,                                              // t5  ReflectanceTexture
-			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,                        // t6  EnvTexture
-			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,             // t7  EnvReflectionsTexture
-			dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr,   // t8  SkylightingProbeArray
-			ssgiOutput,                                                                                      // t9  SsgiTexture / SH0
-			ssgiSH1Output,                                                                                   // t10 SsgiSH1Texture
-			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                             // t11 EnvIBLTexture
-			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,                                             // t12 SkyIBLTexture
-			ssrOutput,                                                                                       // t13 SsrTexture (Screen Space Reflections)
-			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,                                          // t14 PhysicalSky AP LUT
-			physSky.loaded ? physSky.texApShadow->srv.get() : nullptr,                                       // t15 PhysicalSky AP Shadow
-			physSky.loaded && physSky.texVolTr ? physSky.texVolTr->srv.get() : nullptr,                      // t16 PhysicalSky Volumetric Transmittance
-			physSky.loaded && physSky.texVolLum ? physSky.texVolLum->srv.get() : nullptr,                    // t17 PhysicalSky Volumetric Luminance
-			physSky.loaded && physSky.texShadowVolume ? physSky.texShadowVolume->srv.get() : nullptr,        // t18 PhysicalSky Shadow Volume
+			specular.SRV,                                                                                   // t0  SpecularTexture
+			albedo.SRV,                                                                                     // t1  AlbedoTexture
+			normalRoughness.SRV,                                                                            // t2  NormalRoughnessTexture
+			masks.SRV,                                                                                      // t3  MasksTexture
+			dynamicCubemaps.loaded ? Util::GetCurrentSceneDepthSRV(false) : nullptr,                        // t4  DepthTexture (24/32-bit; HLSL type baked at compile via TERRAIN_BLENDING)
+			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,                                             // t5  ReflectanceTexture
+			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,                       // t6  EnvTexture
+			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,            // t7  EnvReflectionsTexture
+			dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr,  // t8  SkylightingProbeArray
+			ssgiOutput,                                                                                     // t9  SsgiTexture / SH0
+			ssgiSH1Output,                                                                                  // t10 SsgiSH1Texture
+			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                            // t11 EnvIBLTexture
+			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,                                            // t12 SkyIBLTexture
+			ssrOutput,                                                                                      // t13 SsrTexture (Screen Space Reflections)
+			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,                                         // t14 PhysicalSky AP LUT
+			physSky.loaded ? physSky.texApShadow->srv.get() : nullptr,                                      // t15 PhysicalSky AP Shadow
+			physSky.loaded && physSky.texVolTr ? physSky.texVolTr->srv.get() : nullptr,                     // t16 PhysicalSky Volumetric Transmittance
+			physSky.loaded && physSky.texVolLum ? physSky.texVolLum->srv.get() : nullptr,                   // t17 PhysicalSky Volumetric Luminance
+			physSky.loaded && physSky.texShadowVolume ? physSky.texShadowVolume->srv.get() : nullptr,       // t18 PhysicalSky Shadow Volume
 		};
 		ID3D11ShaderResourceView* physSkyMsLut = physSky.loaded && physSky.texMsLut ? physSky.texMsLut->srv.get() : nullptr;  // t20 PhysicalSky Multiscatter LUT
 

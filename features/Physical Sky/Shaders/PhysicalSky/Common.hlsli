@@ -73,7 +73,7 @@ Texture2D<float4> TexMsLut : register(t113);
 	float3 PosWs2Planet(float3 posWorld)
 	{
 		const SharedData::PhysSkyData data = SharedData::physSkyData;
-		return posWorld - float3(FrameBuffer::CameraPosAdjust[0].xy, data.zBottom - data.rPlanet);
+		return posWorld - float3(FrameBuffer::CameraPosAdjust.xy, data.zBottom - data.rPlanet);
 	}
 
 	// return distance to sphere surface
