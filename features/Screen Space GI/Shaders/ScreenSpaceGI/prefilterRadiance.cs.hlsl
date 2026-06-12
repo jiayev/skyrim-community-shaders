@@ -16,7 +16,6 @@
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
-#include "Common/VR.hlsli"
 #include "NRD/NRDReblurSH.hlsli"
 #include "ScreenSpaceGI/common.hlsli"
 
@@ -53,12 +52,11 @@ float3 LoadSsgiMultiBounce(uint2 pixCoord)
 		return 0;
 
 	float2 uv = (pixCoord + 0.5) * RCP_OUT_FRAME_DIM;
-	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
-	float2 normalizedScreenPos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
-	float3 viewspacePos = ScreenToViewPosition(normalizedScreenPos, viewspaceZ, eyeIndex);
+	float2 normalizedScreenPos = uv;
+	float3 viewspacePos = ScreenToViewPosition(normalizedScreenPos, viewspaceZ);
 	float3 viewspaceNormal = GBuffer::DecodeNormal(srcNormal[pixCoord]);
-	float3 normalWS = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse[eyeIndex]);
-	float3 viewWS = ViewToWorldVector(normalize(-viewspacePos), FrameBuffer::CameraViewInverse[eyeIndex]);
+	float3 normalWS = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse);
+	float3 viewWS = ViewToWorldVector(normalize(-viewspacePos), FrameBuffer::CameraViewInverse);
 
 	NRD_SG sg = REBLUR_BackEnd_UnpackSh(packed, srcPrevSsgiSH1[pixCoord]);
 	return NRD_SG_ResolveDiffuse(sg, normalWS, viewWS, 1.0);

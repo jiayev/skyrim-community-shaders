@@ -17,8 +17,6 @@
  */
 struct NRD : Feature
 {
-	bool inline SupportsVR() override { return true; }
-
 	virtual inline std::string GetName() override { return "NRD"; }
 	virtual inline std::string GetShortName() override { return "NRD"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }

@@ -1,7 +1,6 @@
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
 #include "Common/SharedData.hlsli"
-#include "Common/VR.hlsli"
 #include "NRD/NRDReblurSH.hlsli"
 
 Texture2D<float> srcDepth : register(t0);
@@ -21,8 +20,6 @@ float ScreenToViewDepth(float screenDepth)
 	float2 uv = (dtid + 0.5) * SharedData::BufferDim.zw;
 	uv *= FrameBuffer::DynamicResolutionParams2.xy;
 
-	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
-
 	float depth = srcDepth[dtid];
 	float viewZ = ScreenToViewDepth(depth);
 
@@ -30,7 +27,7 @@ float ScreenToViewDepth(float screenDepth)
 
 	float4 normalGloss = srcNormalRoughness[dtid];
 	float3 normalVS = GBuffer::DecodeNormal(normalGloss.xy);
-	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
+	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
 
 	float roughness = 1.0 - normalGloss.z;
 
