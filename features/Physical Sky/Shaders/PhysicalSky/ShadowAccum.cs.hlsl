@@ -85,7 +85,6 @@ float SampleShadow(float3 posWorldRel)
 	if (uv.x >= 1.f || uv.y >= 1.f)
 		return;
 	uv *= RES_MULT;
-	uv *= FrameBuffer::DynamicResolutionParams2.xy;
 
 	const float depth = TexDepth.SampleLevel(SampTr, uv, 0);
 	float4 posWorld = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
