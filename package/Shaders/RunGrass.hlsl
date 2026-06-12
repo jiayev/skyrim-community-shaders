@@ -28,9 +28,6 @@ struct VS_INPUT
 	float4 InstanceData2: TEXCOORD5;
 	float4 InstanceData3: TEXCOORD6;
 	float4 InstanceData4: TEXCOORD7;
-#ifdef VR
-	uint InstanceID: SV_INSTANCEID;
-#endif  // VR
 };
 
 #ifdef GRASS_LIGHTING
@@ -40,27 +37,13 @@ struct VS_OUTPUT
 	float4 Color: COLOR0;
 	float VertexMult: COLOR1;
 	float3 TexCoord: TEXCOORD0;
-	float3 ViewSpacePosition:
-#	if !defined(VR)
-		TEXCOORD1;
-#	else
-		TEXCOORD2;
-#	endif
+	float3 ViewSpacePosition: TEXCOORD1;
 #	if defined(RENDER_DEPTH)
-	float2 Depth:
-#		if !defined(VR)
-		TEXCOORD2;
-#		else
-		TEXCOORD3;
-#		endif
+	float2 Depth: TEXCOORD2;
 #	endif  // RENDER_DEPTH
 	float4 WorldPosition: POSITION1;
 	float4 PreviousWorldPosition: POSITION2;
 	float4 VertexNormal: POSITION4;
-#	ifdef VR
-	float ClipDistance: SV_ClipDistance0;
-	float CullDistance: SV_CullDistance0;
-#	endif  // VR
 };
 #else
 struct VS_OUTPUT
@@ -76,14 +59,9 @@ struct VS_OUTPUT
 #	endif  // RENDER_DEPTH
 	float4 WorldPosition: POSITION1;
 	float4 PreviousWorldPosition: POSITION2;
-#	ifdef VR
-	float ClipDistance: SV_ClipDistance0;
-	float CullDistance: SV_CullDistance0;
-#	endif  // VR
 };
 #endif
 
-// Constant Buffers (Flat and VR)
 cbuffer PerGeometry : register(
 #ifdef VSHADER
 						  b2
@@ -92,11 +70,10 @@ cbuffer PerGeometry : register(
 #endif
 					  )
 {
-#if !defined(VR)
-	row_major float4x4 WorldViewProj[1] : packoffset(c0);
-	row_major float4x4 WorldView[1] : packoffset(c4);
-	row_major float4x4 World[1] : packoffset(c8);
-	row_major float4x4 PreviousWorld[1] : packoffset(c12);
+	row_major float4x4 WorldViewProj : packoffset(c0);
+	row_major float4x4 WorldView : packoffset(c4);
+	row_major float4x4 World : packoffset(c8);
+	row_major float4x4 PreviousWorld : packoffset(c12);
 	float4 FogNearColor : packoffset(c16);
 	float3 WindVector : packoffset(c17);
 	float WindTimer : packoffset(c17.w);
@@ -108,23 +85,6 @@ cbuffer PerGeometry : register(
 	float AlphaParam2 : packoffset(c20.w);
 	float3 ScaleMask : packoffset(c21);
 	float ShadowClampValue : packoffset(c21.w);
-#else
-	row_major float4x4 WorldViewProj[2] : packoffset(c0);
-	row_major float4x4 WorldView[2] : packoffset(c8);
-	row_major float4x4 World[2] : packoffset(c16);
-	row_major float4x4 PreviousWorld[2] : packoffset(c24);
-	float4 FogNearColor : packoffset(c32);
-	float3 WindVector : packoffset(c33);
-	float WindTimer : packoffset(c33.w);
-	float3 DirLightDirection : packoffset(c34);
-	float PreviousWindTimer : packoffset(c34.w);
-	float3 DirLightColor : packoffset(c35);
-	float AlphaParam1 : packoffset(c35.w);
-	float3 AmbientColor : packoffset(c36);
-	float AlphaParam2 : packoffset(c36.w);
-	float3 ScaleMask : packoffset(c37);
-	float ShadowClampValue : packoffset(c37.w);
-#endif  // !VR
 }
 
 #ifdef VSHADER
@@ -191,11 +151,6 @@ VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
 
-	uint eyeIndex = Stereo::GetEyeIndexVS(
-#		if defined(VR)
-		input.InstanceID
-#		endif  // VR
-	);
 	float3x3 world3x3 = float3x3(input.InstanceData2.xyz, input.InstanceData3.xyz, float3(input.InstanceData4.x, input.InstanceData2.w, input.InstanceData3.w));
 
 	float4 msPosition = GetMSPosition(input, world3x3);
@@ -211,10 +166,8 @@ VS_OUTPUT main(VS_INPUT input)
 
 	msPosition.xyz += windDisplacement;
 
-	float4 projSpacePosition = mul(WorldViewProj[eyeIndex], msPosition);
-#		if !defined(VR)
+	float4 projSpacePosition = mul(WorldViewProj, msPosition);
 	vsout.HPosition = projSpacePosition;
-#		endif  // !VR
 
 #		if defined(RENDER_DEPTH)
 	vsout.Depth = projSpacePosition.zw;
@@ -222,11 +175,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	float perInstanceFade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, Math::IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
 
-#		if defined(VR)
-	float distanceFade = 1 - saturate((length(mul(World[0], msPosition).xyz) - AlphaParam1) / AlphaParam2);
-#		else
 	float distanceFade = 1 - saturate((length(projSpacePosition.xyz) - AlphaParam1) / AlphaParam2);
-#		endif
 
 	// Note: input.Color.w is used for wind speed
 	vsout.Color.xyz = input.Color.xyz;
@@ -236,8 +185,8 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.TexCoord.xy = input.TexCoord.xy;
 	vsout.TexCoord.z = FogNearColor.w;
 
-	vsout.ViewSpacePosition = mul(WorldView[eyeIndex], msPosition).xyz;
-	vsout.WorldPosition = mul(World[eyeIndex], msPosition);
+	vsout.ViewSpacePosition = mul(WorldView, msPosition).xyz;
+	vsout.WorldPosition = mul(World, msPosition);
 
 	float4 previousMsPosition = GetMSPosition(input, world3x3);
 
@@ -247,13 +196,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	previousMsPosition.xyz += previousWindDisplacement;
 
-	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], previousMsPosition);
-#		if defined(VR)
-	Stereo::VR_OUTPUT VRout = Stereo::GetVRVSOutput(projSpacePosition, eyeIndex);
-	vsout.HPosition = VRout.VRPosition;
-	vsout.ClipDistance.x = VRout.ClipDistance;
-	vsout.CullDistance.x = VRout.CullDistance;
-#		endif  // !VR
+	vsout.PreviousWorldPosition = mul(PreviousWorld, previousMsPosition);
 
 	// Vertex normal needs to be transformed to world-space for lighting calculations.
 	vsout.VertexNormal.xyz = mul(world3x3, input.Normal.xyz * 2.0 - 1.0);
@@ -265,12 +208,6 @@ VS_OUTPUT main(VS_INPUT input)
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
-
-	uint eyeIndex = Stereo::GetEyeIndexVS(
-#		if defined(VR)
-		input.InstanceID
-#		endif  // VR
-	);
 
 	float4 msPosition = GetMSPosition(input);
 
@@ -285,10 +222,8 @@ VS_OUTPUT main(VS_INPUT input)
 
 	msPosition.xyz += windDisplacement;
 
-	float4 projSpacePosition = mul(WorldViewProj[eyeIndex], msPosition);
-#		if !defined(VR)
+	float4 projSpacePosition = mul(WorldViewProj, msPosition);
 	vsout.HPosition = projSpacePosition;
-#		endif  // !VR	vsout.HPosition = projSpacePosition;
 
 #		if defined(RENDER_DEPTH)
 	vsout.Depth = projSpacePosition.zw;
@@ -300,11 +235,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	float perInstanceFade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, Math::IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
 
-#		if defined(VR)
-	float distanceFade = 1 - saturate((length(mul(World[0], msPosition).xyz) - AlphaParam1) / AlphaParam2);
-#		else
 	float distanceFade = 1 - saturate((length(projSpacePosition.xyz) - AlphaParam1) / AlphaParam2);
-#		endif
 
 	vsout.Color.xyz = input.Color.xyz;
 	vsout.Color.w = distanceFade * perInstanceFade;
@@ -316,16 +247,10 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.AmbientColor.xyz = input.InstanceData1.www * (AmbientColor.xyz * input.Color.xyz);
 	vsout.AmbientColor.w = ShadowClampValue;
 
-	vsout.ViewSpacePosition = mul(WorldView[eyeIndex], msPosition).xyz;
-	vsout.WorldPosition = mul(World[eyeIndex], msPosition);
+	vsout.ViewSpacePosition = mul(WorldView, msPosition).xyz;
+	vsout.WorldPosition = mul(World, msPosition);
 
 	float4 previousMsPosition = GetMSPosition(input);
-#		if defined(VR)
-	Stereo::VR_OUTPUT VRout = Stereo::GetVRVSOutput(projSpacePosition, eyeIndex);
-	vsout.HPosition = VRout.VRPosition;
-	vsout.ClipDistance.x = VRout.ClipDistance;
-	vsout.CullDistance.x = VRout.CullDistance;
-#		endif  // !VR
 
 #		ifdef GRASS_COLLISION
 	previousMsPosition.xyz += previousDisplacement;
@@ -333,7 +258,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	previousMsPosition.xyz += previousWindDisplacement;
 
-	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], previousMsPosition);
+	vsout.PreviousWorldPosition = mul(PreviousWorld, previousMsPosition);
 
 	return vsout;
 }
@@ -357,10 +282,8 @@ struct PS_OUTPUT
 	float4 Specular: SV_Target4;
 	float4 Reflectance: SV_Target5;
 	float4 Masks: SV_Target6;
-#		if defined(TRUE_PBR)
-	float4 Parameters: SV_Target7;
-#		endif  // TRUE_PBR
-#	endif      // RENDER_DEPTH
+	float4 Masks2: SV_Target7;
+#	endif  // RENDER_DEPTH
 };
 #else
 struct PS_OUTPUT
@@ -373,6 +296,7 @@ struct PS_OUTPUT
 	float4 Normal: SV_Target2;
 	float4 Albedo: SV_Target3;
 	float4 Masks: SV_Target6;
+	float4 Masks2: SV_Target7;
 #	endif
 };
 #endif
@@ -408,12 +332,10 @@ Texture2D<float4> TexSubsurfaceSampler : register(t4);
 
 #	endif  // GRASS_LIGHTING
 
-#	if !defined(VR)
 cbuffer AlphaTestRefCB : register(b11)
 {
 	float AlphaTestRefRS : packoffset(c0);
 }
-#	endif  // !VR
 
 #	if defined(SCREEN_SPACE_SHADOWS)
 #		include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
@@ -533,14 +455,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float4 specColor = TexNormalSampler.SampleBias(SampNormalSampler, input.TexCoord.xy, SharedData::MipBias);
 #			endif
 
-	uint eyeIndex = Stereo::GetEyeIndexPS(input.HPosition, VPOSOffset);
-	psout.MotionVectors = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
+	psout.MotionVectors = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition);
 
 	float3 viewDirection = -normalize(input.WorldPosition.xyz);
 	float3 normal = normalize(input.VertexNormal.xyz);
 
-	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
-	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
+	float3 viewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;
+	float2 screenUV = FrameBuffer::ViewToUV(viewPosition);
 	float screenNoise = Random::InterleavedGradientNoise(input.HPosition.xy, SharedData::FrameCount);
 
 	// Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
@@ -648,7 +569,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #			if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
-		dirLightColor *= ExponentialHeightFog::GetSunlightFogAttenuation(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
+		dirLightColor *= ExponentialHeightFog::GetSunlightFogAttenuation(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 	}
 #			endif
 
@@ -664,7 +585,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	// Apply world shadow (terrain shadows, cloud shadows) directly to light color
 	if (!SharedData::InInterior)
-		dirLightColor *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+		dirLightColor *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 
 	float dirDetailedShadow = 1.0;
 
@@ -673,7 +594,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #			if defined(SCREEN_SPACE_SHADOWS)
 	if (!SharedData::InInterior && dirLightAngle >= 0.0)
-		dirDetailedShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
+		dirDetailedShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise);
 #			endif  // SCREEN_SPACE_SHADOWS
 
 	float3 diffuseColor = 0;
@@ -732,7 +653,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
 				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
 
-				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
+				float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightDirection);
 
 #				if defined(ISL)
@@ -927,7 +848,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(WETNESS_EFFECTS)
 	WetnessEffects::ApplySurfaceWetnessOutput(wetnessState, outputNormal, outputRoughness);
 #			endif
-	float3 normalVS = normalize(FrameBuffer::WorldToView(outputNormal, false, eyeIndex));
+	float3 normalVS = normalize(FrameBuffer::WorldToView(outputNormal, false));
 #			if defined(TRUE_PBR)
 	psout.Albedo = float4(Color::IrradianceToGamma(indirectDiffuseLobeWeight), 1);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), 1 - outputRoughness, 1);
@@ -964,6 +885,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	psout.Specular = float4(specularColor, 1);
 	psout.Masks = float4(0, 0, Color::RGBToYCoCg(directionalAmbientColor).x, 0);
+	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, 0);
 #		endif
 	return psout;
 }
@@ -989,10 +911,8 @@ PS_OUTPUT main(PS_INPUT input)
 	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
 		input.Color.xyz = 1;
 
-	uint eyeIndex = Stereo::GetEyeIndexPS(input.HPosition, VPOSOffset);
-
-	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
-	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
+	float3 viewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;
+	float2 screenUV = FrameBuffer::ViewToUV(viewPosition);
 	float screenNoise = Random::InterleavedGradientNoise(input.HPosition.xy, SharedData::FrameCount);
 
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
@@ -1002,7 +922,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	// Apply world shadow (terrain shadows, cloud shadows) directly to light color
 	if (!SharedData::InInterior)
-		dirLightColor *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+		dirLightColor *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 
 	float dirDetailedShadow = 1.0;
 
@@ -1011,7 +931,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #			if defined(SCREEN_SPACE_SHADOWS)
 	if (!SharedData::InInterior)
-		dirDetailedShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
+		dirDetailedShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise);
 #			endif  // SCREEN_SPACE_SHADOWS
 
 	float3 diffuseColor = dirLightColor * dirDetailedShadow;
@@ -1030,7 +950,7 @@ PS_OUTPUT main(PS_INPUT input)
 				uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
 				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
 
-				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
+				float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightDirection);
 
 #				if defined(ISL)
@@ -1069,15 +989,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 normal = -normalize(cross(ddx, ddy));
 
 	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
-	vertexColor /= max(max(max(vertexColor.r, vertexColor.g), vertexColor.b), EPSILON_DIVISION);
+	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
+	vertexColor /= max(vertexAO, EPSILON_DIVISION);
 
 #			if defined(SKYLIGHTING)
-#				if defined(VR)
-	float3 positionMSSkylight = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
-#				else
 	float3 positionMSSkylight = input.WorldPosition.xyz;
-#				endif
-	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
 	float skylightingDiffuse = Skylighting::GetVertexSkylightingDiffuse(positionMSSkylight, normal, vertexAO);
 #			endif  // SKYLIGHTING
 
@@ -1124,12 +1040,13 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #			endif
 
-	psout.MotionVectors = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
-	psout.Normal.xy = GBuffer::EncodeNormal(FrameBuffer::WorldToView(normal, false, eyeIndex));
+	psout.MotionVectors = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition);
+	psout.Normal.xy = GBuffer::EncodeNormal(FrameBuffer::WorldToView(normal, false));
 	psout.Normal.zw = 0;
 
 	psout.Albedo = float4(albedo, 1);
 	psout.Masks = float4(0, 0, Color::RGBToYCoCg(directionalAmbientColor).x, 0);
+	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, 0);
 #		endif
 
 	return psout;

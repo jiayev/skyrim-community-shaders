@@ -36,9 +36,12 @@ void NRD::DrawSettings()
 		static float debugRescale = .3f;
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
-		if (texNRDViewZ) BUFFER_VIEWER_NODE(texNRDViewZ, debugRescale)
-		if (texNRDNormalRoughness) BUFFER_VIEWER_NODE(texNRDNormalRoughness, debugRescale)
-		if (texNRDMV) BUFFER_VIEWER_NODE(texNRDMV, debugRescale)
+		if (texNRDViewZ)
+			BUFFER_VIEWER_NODE(texNRDViewZ, debugRescale)
+		if (texNRDNormalRoughness)
+			BUFFER_VIEWER_NODE(texNRDNormalRoughness, debugRescale)
+		if (texNRDMV)
+			BUFFER_VIEWER_NODE(texNRDMV, debugRescale)
 
 		ImGui::TreePop();
 	}
@@ -108,8 +111,6 @@ void NRD::ClearShaderCache()
 void NRD::CompileComputeShaders()
 {
 	std::vector<std::pair<const char*, const char*>> defines;
-	if (REL::Module::IsVR())
-		defines.push_back({ "VR", "" });
 
 	auto path = std::filesystem::path("Data\\Shaders\\NRD") / "prepareNRDGuides.cs.hlsl";
 	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), defines, "cs_5_0")))
@@ -135,7 +136,8 @@ void NRD::PrepareGuides()
 	auto normal = rts[NORMALROUGHNESS];
 	auto motion = rts[RE::RENDER_TARGETS::kMOTION_VECTOR];
 
-	float2 dynres = Util::ConvertToDynamic(globals::state->screenSize);
+	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+	float2 dynres = Util::ConvertToDynamic(screenSize);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
 	auto* sharedDataBuf = globals::state->sharedDataCB->CB();
@@ -173,11 +175,12 @@ const nrd::CommonSettings& NRD::GetCommonSettings()
 	if (commonSettingsValidThisFrame)
 		return commonSettings;
 
-	float2 dynres = Util::ConvertToDynamic(globals::state->screenSize);
+	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+	float2 dynres = Util::ConvertToDynamic(screenSize);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
-	auto fullW = texNRDViewZ ? texNRDViewZ->desc.Width : (uint32_t)globals::state->screenSize.x;
-	auto fullH = texNRDViewZ ? texNRDViewZ->desc.Height : (uint32_t)globals::state->screenSize.y;
+	auto fullW = texNRDViewZ ? texNRDViewZ->desc.Width : (uint32_t)screenSize.x;
+	auto fullH = texNRDViewZ ? texNRDViewZ->desc.Height : (uint32_t)screenSize.y;
 
 	commonSettings = nrd::CommonSettings{};
 	commonSettings.resourceSize[0] = (uint16_t)fullW;
@@ -189,10 +192,10 @@ const nrd::CommonSettings& NRD::GetCommonSettings()
 	commonSettings.rectSizePrev[0] = commonSettings.rectSize[0];
 	commonSettings.rectSizePrev[1] = commonSettings.rectSize[1];
 
-	auto viewMat = globals::game::frameBufferCached.GetCameraView(0).Transpose();
-	auto projMat = globals::game::frameBufferCached.GetCameraProj(0).Transpose();
+	auto viewMat = globals::game::frameBufferCached.GetCameraView().Transpose();
+	auto projMat = globals::game::frameBufferCached.GetCameraProj().Transpose();
 
-	float3 cameraWorldPos = float3(globals::game::frameBufferCached.GetCameraPosAdjust(0));
+	float3 cameraWorldPos = float3(globals::game::frameBufferCached.GetCameraPosAdjust());
 	DirectX::XMMATRIX translationMat = DirectX::XMMatrixTranslation(-cameraWorldPos.x, -cameraWorldPos.y, -cameraWorldPos.z);
 	worldToViewMat = DirectX::XMMatrixMultiply(translationMat, viewMat);
 

@@ -183,7 +183,7 @@ void CloudShadows::ModifySky(RE::BSRenderPass* Pass)
 {
 	auto shadowState = globals::game::shadowState;
 
-	GET_INSTANCE_MEMBER(cubeMapRenderTarget, shadowState);
+	auto& cubeMapRenderTarget = shadowState->GetRuntimeData().cubeMapRenderTarget;
 
 	auto skyProperty = static_cast<const RE::BSSkyShaderProperty*>(Pass->shaderProperty);
 
