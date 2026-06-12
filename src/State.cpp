@@ -461,7 +461,7 @@ void State::SaveToJson(nlohmann::json& settings)
 	advanced["Partial Precision"] = enablePartialPrecision.load(std::memory_order_relaxed);
 	advanced["Debug Device"] = debugDevice;
 	advanced["Interop Debug Device"] = interopDebugDevice;
-	advanced["Interop Load Pix"] = interopLoadPIX;
+	advanced["Interop Load PIX"] = interopLoadPIX;
 	
 	settings["Advanced"] = advanced;
 
