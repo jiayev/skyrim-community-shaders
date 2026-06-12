@@ -62,6 +62,12 @@ namespace Util
 		std::filesystem::path GetIconsPath();
 
 		/**
+		 * Gets the CommunityShaders Cursors directory path
+		 * @return Interface / "Cursors"
+		 */
+		std::filesystem::path GetCursorsPath();
+
+		/**
 		 * Gets the SettingsUser.json file path
 		 * @return CommunityShaderPath / "SettingsUser.json"
 		 */
@@ -90,6 +96,12 @@ namespace Util
 		 * @return CommunityShaderPath / "Themes"
 		 */
 		std::filesystem::path GetThemesPath();
+
+		/**
+		 * Gets the Translations directory path for i18n locale files
+		 * @return CommunityShaderPath / "Translations"
+		 */
+		std::filesystem::path GetTranslationsPath();
 
 		/**
 		 * Gets the Overrides directory path

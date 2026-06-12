@@ -21,12 +21,10 @@ powershell.exe -Command "./BuildRelease.bat [PRESET_NAME]"
 
 **Available Presets** (from CMakePresets.json):
 
--   `ALL` (default) - Builds universal binary supporting SE/AE/VR runtime detection
+-   `ALL` (default) - Builds universal binary supporting SE/AE runtime detection
 -   `SE` - Skyrim Special Edition only (compile-time targeting)
 -   `AE` - Anniversary Edition only (compile-time targeting)
--   `VR` - Skyrim VR only (compile-time targeting)
--   `PRE-AE` - SE + VR (excludes AE)
--   `FLATRIM` - SE + AE (excludes VR)
+-   `FLATRIM` - SE + AE
 -   `ALL-TRACY` - Universal binary with Tracy profiler support enabled
 
 **User Preset Template**:
@@ -51,7 +49,7 @@ powershell.exe -Command "./BuildRelease.bat [PRESET_NAME]"
 Set `CommunityShadersOutputDir` environment variable to semicolon-separated Skyrim Data directories:
 
 ```
-CommunityShadersOutputDir=F:/MySkyrimModpack/mods/CommunityShaders;F:/SteamLibrary/steamapps/common/SkyrimVR/Data;F:/SteamLibrary/steamapps/common/Skyrim Special Edition/Data
+CommunityShadersOutputDir=F:/MySkyrimModpack/mods/CommunityShaders;F:/SteamLibrary/steamapps/common/Skyrim Special Edition/Data
 ```
 
 ### Shader Development and Testing
@@ -65,9 +63,6 @@ cmake --build ./build/ALL --target prepare_shaders
 
 # Full shader suite validation (can be time-consuming)
 hlslkit-compile --shader-dir build/ALL/aio/Shaders --output-dir build/ShaderCache --config .github/configs/shader-validation.yaml --max-warnings 0 --suppress-warnings X1519
-
-# VR-specific validation
-hlslkit-compile --shader-dir build/ALL/aio/Shaders --output-dir build/ShaderCache --config .github/configs/shader-validation-vr.yaml --max-warnings 0 --suppress-warnings X1519
 
 # Targeted testing for faster development (recommended during development)
 # Test specific base shader
@@ -87,7 +82,20 @@ hlslkit-generate-defines --log CommunityShaders.log
 
 # Scan for buffer conflicts across features
 hlslkit-buffer-scan --features-dir features/
+
+# Prove a shader refactor changed no behavior (compiles base ref vs working tree,
+# compares DXBC across HDR_OUTPUT permutations; exit 0 identical / 2 differs)
+pwsh tools/verify-shader-refactor.ps1 package/Shaders/Foo.hlsl   # bash: tools/verify-shader-refactor.sh
 ```
+
+When refactoring an existing shader (especially the decompile-transcription shaders like
+`ISTemporalAA.hlsl`), use `tools/verify-shader-refactor.ps1` to prove the change is
+behavior-preserving: identical compiled bytecode means a provable no-op. When the refactor
+legitimately reorders ops (bytecode differs but behavior shouldn't), validate it with the runtime
+A/B harness instead — capture one frame, swap just that shader, and diff the output against the
+shipping baseline (`tools/taa-renderdoc-ab.py`). See `docs/development/shader-workflow.md` and
+`docs/development/shader-runtime-ab.md` for details.
+
 
 ### Custom CMake Targets
 
@@ -188,8 +196,7 @@ Each feature follows consistent structure:
 
 ### Cross-Platform Support
 
-**Single Binary**: Supports SE/AE/VR through CommonLibSSE-NG runtime detection
-**VR Adaptations**: Specialized rendering paths in `src/Features/VR/`
+**Single Binary**: Supports SE/AE through CommonLibSSE-NG runtime detection
 **API Abstraction**: Dual DirectX 11 support with feature-specific rendering strategies
 
 ## Critical Dependencies
@@ -219,20 +226,11 @@ CommonLibSSE-NG supports multiple Skyrim versions through sophisticated runtime 
 
 -   `SE` - Skyrim Special Edition only
 -   `AE` - Anniversary Edition only
--   `VR` - Skyrim VR only
--   `ALL` - Multi-runtime support (default for this project)
+-   `ALL` - Multi-runtime SE/AE support (default for this project)
 
 **Compile-Time vs Runtime Patterns**:
 
-**Single Runtime (compile-time)**: When targeting one version, `#ifdef ENABLE_SKYRIM_VR` conditionally compiles VR-specific code:
-
-```cpp
-#ifdef ENABLE_SKYRIM_VR
-    virtual void Unk_09(UI_MENU_Unk09 a_unk);  // VR-only vfunc
-#endif
-```
-
-**Multi-Runtime (runtime detection)**: When targeting ALL, uses runtime accessors:
+**Multi-Runtime (runtime detection)**: When targeting ALL, uses runtime accessors for SE vs AE differences:
 
 ```cpp
 // Runtime member access with different offsets per version
@@ -240,26 +238,16 @@ auto& GetRuntimeData() {
     return REL::RelocateMemberIfNewer<PLAYER_RUNTIME_DATA>(
         SKSE::RUNTIME_SSE_1_6_629, this, 0x3D8, 0x3E0);
 }
-
-// VR-specific runtime data (only exists in VR)
-auto& GetVRRuntimeData() {
-    return REL::RelocateMember<VR_PLAYER_RUNTIME_DATA>(this, 0, 0x3D8);
-}
-
-// Runtime detection
-if (REL::Module::IsVR()) {
-    // VR-specific code path
-}
 ```
 
 **Key Runtime Utilities**:
 
 -   `REL::RelocateMember<T>()` - Access members with different offsets
 -   `REL::RelocateVirtual<T>()` - Call virtual functions with variant vtables
--   `REL::Module::IsVR()`, `IsAE()`, `IsSE()` - Runtime version detection
+-   `REL::Module::IsAE()`, `IsSE()` - Runtime version detection
 -   `REL::RelocationID()` - Dynamic address resolution based on version
 
-**Critical for Development**: When modifying classes that inherit from game objects, always check if they have runtime-specific variations and use appropriate accessor patterns.
+**Critical for Development**: When modifying classes that inherit from game objects, always check if they have runtime-specific variations (SE vs AE) and use appropriate accessor patterns.
 
 ## Core Architecture
 
@@ -289,7 +277,6 @@ All graphics features are globally accessible for cross-feature coordination:
 -   Materials: `extendedMaterials`, `hairSpecular`, `subsurfaceScattering`
 -   Effects: `screenSpaceGI`, `screenSpaceShadows`, `waterEffects`, `wetnessEffects`
 -   Environment: `cloudShadows`, `dynamicCubemaps`, `weatherEditor`, `skySync`
--   VR: `vr` - VR-specific adaptations and coordinate transformations
 
 ### Shared Utilities (`src/Utils/`)
 
@@ -298,7 +285,6 @@ Common functionality organized by domain:
 -   `UI.h/cpp` - ImGui utilities, input mapping, and UI helper functions
 -   `D3D.h/cpp` - DirectX utilities and helper functions
 -   `Game.h/cpp` - Skyrim-specific game state and object utilities
--   `VRUtils.h/cpp` - VR-specific utilities and coordinate transformations
 -   `FileSystem.h/cpp` - File I/O and path manipulation helpers
 -   `Format.h/cpp` - String formatting and conversion utilities
 -   `Serialize.h/cpp` - JSON serialization helpers
@@ -378,7 +364,6 @@ Feature versions are automatically extracted from `.ini` files and compiled into
 -   **Deferred Rendering Impact**: Features hook into Skyrim's rendering pipeline, adding GPU workload
 -   **Feature Toggles**: Users can disable individual features at boot if performance is impacted (`Disable at Boot` buttons)
 -   **A/B Testing Framework**: Built-in performance comparison system for measuring feature impact
--   **VR Performance**: VR has higher performance requirements; some features may need different settings
 -   **Tracy Profiler**: Optional build-time integration (`TRACY_SUPPORT`) for detailed performance analysis
 
 **Shader Performance Patterns**:
@@ -392,7 +377,6 @@ Feature versions are automatically extracted from `.ini` files and compiled into
 
 -   **In-Game Profiling**: Use Tracy integration to measure actual frame impact
 -   **Feature Isolation**: Test features individually to identify performance bottlenecks
--   **Cross-Edition Impact**: SE/AE/VR may have different performance characteristics for the same feature
 
 ### Development Performance
 
@@ -418,7 +402,7 @@ Feature versions are automatically extracted from `.ini` files and compiled into
 
 -   **Performance Concerns**: If code could impact rendering performance, suggest optimizations or user toggles
 -   **Security Risks**: Flag potential crashes from unvalidated user input, malformed configs, or unsafe DirectX operations
--   **Runtime Compatibility**: Warn when code might break SE/AE/VR compatibility or suggest `REL::RelocateMember()` patterns
+-   **Runtime Compatibility**: Warn when code might break SE/AE compatibility or suggest `REL::RelocateMember()` patterns
 -   **Buffer Conflicts**: Highlight potential GPU register conflicts and recommend hlslkit buffer scanning
 -   **Graphics Best Practices**: Suggest more idiomatic DirectX/HLSL patterns when appropriate
 
@@ -463,12 +447,12 @@ Conventional commits drive semantic-release. `feat:` triggers a minor bump, `fix
 
 **Default branch for PRs is `dev`.** Feature work, fixes, and refactors all land there via normal PRs. `main` is updated only through the release workflows — never PR a feature branch directly into `main`.
 
-**Branch lineage invariant:** after every release reconciles, `main` is an ancestor of `dev`, so every tag on `main` is reachable from `dev`. The `Release: Semantic Version` workflow keeps this invariant in two ways depending on the promotion source:
+**Branch lineage invariant:** `main` becomes an ancestor of `dev` at **each minor/major promotion** (every tag on `main` is then reachable from `dev`). Current-line hotfixes intentionally let `main` diverge from `dev` until the next promotion folds them back in. `dev` is **never rewritten** — the `Release: Semantic Version` workflow reconciles per promotion source:
 
--   **dev → main promotion** (minor/major): main fast-forwards to the dev SHA, semantic-release appends a `chore(release):` commit on top, then dev fast-forwards to absorb that commit. No history rewrites on either branch.
--   **hotfix-staging → main promotion** (current-line patch): main fast-forwards to the hotfix-staging SHA, semantic-release appends the `chore(release):` commit, then dev is **rebase-reconciled** onto the new main. `git rebase` drops dev's originals of the cherry-picked fixes (patch-id match) and replays any unique dev work on top. This is the only place the workflow force-pushes (`--force-with-lease`) — it is intentional and load-bearing.
+-   **dev → main promotion** (minor/major): if interim hotfixes have diverged `main`, the workflow first **merges `main` into `dev`** (a single ancestry-only merge commit; the merge tree equals `dev`'s, with version-bump files resolved to `dev`, and any non-`dev`-sourced divergence hard-fails before pushing). That merge is a fast-forward push of `dev` (**no force** — the App's PR-bypass authorizes it). Then `main` FFs to the merge commit, semantic-release appends `chore(release):`, and `dev` FFs to absorb it. A best-effort step dedups the new release's notes of the carried-over hotfix entries.
+-   **hotfix-staging → main promotion** (current-line patch): `main` fast-forwards to the hotfix-staging SHA and semantic-release appends `chore(release):`. **`dev` is not touched** — it is reconciled at the next minor/major promotion via the merge above. No rebase, no force-push of `dev`.
 
-After a hotfix release, open PRs targeting `dev` are auto-rebased by the `Auto-rebase open PRs` workflow (a thin wrapper around `peter-evans/rebase@v3`). PRs from forks need "Allow edits by maintainers" enabled or the action silently skips them; drafts and PRs labeled `no-auto-rebase` are also excluded. The workflow's job summary reports the rebased count and lists the buckets PRs can fall into; conflict-skipped PRs need a manual `git rebase origin/dev` by the author.
+**Prerequisite:** the release App (`community-shaders-release-bot`) must be in the **"Allow specified actors to bypass required pull requests"** list for **both `main` and `dev`** — the app token alone cannot bypass the PR requirement, so a missing entry fails the FF push with `GH006: Changes must be made through a pull request`.
 
 **Patch flow (current line _or_ older line, same staging mechanism):**
 
@@ -477,17 +461,17 @@ After a hotfix release, open PRs targeting `dev` are auto-rebased by the `Auto-r
 3. PR checks build a `vX.Y.Z-prNNNN` prerelease for verification.
 4. Merge the candidate PR.
 5. Cut the release:
-    - **Current line** (`main` is on `X.Y`): dispatch **Release: Semantic Version** on `main` with `ff_target = <hotfix/X.Y.x tip SHA>`.
+    - **Current line** (`main` is on `X.Y`): dispatch **Release: Semantic Version** on `main` with `ff_target = <hotfix-staging branch tip SHA>` — **not** the `hotfix/X.Y.x` tip, which is a merge commit that `main`'s branch protection rejects. Use the second parent of the merge commit: `git rev-parse origin/hotfix/X.Y.x^2`. `dev` is left untouched and is reconciled at the next minor/major promotion.
     - **Older line** (`main` has shipped a newer minor/major): dispatch **Release: Semantic Version** on `hotfix/X.Y.x` with `ff_target` empty.
 
 **Minor/major release flow:**
 
 1. Cut RCs from `dev`: dispatch **Release: Semantic Version** on `dev`, `ff_target` empty → `vX.Y.Z-rc.N`.
-2. When ready, dispatch **Release: Semantic Version** on `main` with `ff_target = <dev SHA>` (typically the latest RC's SHA). The workflow FFs `main`, runs semantic-release to cut stable, then FFs `dev` to absorb the `chore(release):` commit.
+2. When ready, dispatch **Release: Semantic Version** on `main` with `ff_target = <dev SHA>` (typically the latest RC's SHA). If interim hotfixes have diverged `main`, the workflow first merges `main` into `dev` (ancestry-only, no force) and retargets to that merge commit; it then FFs `main`, runs semantic-release to cut stable, dedups the notes, and FFs `dev` to absorb the `chore(release):` commit.
 
 **Things agents should not do without explicit user direction:**
 
--   Force-push or rebase `main`, `dev`, or any `hotfix/*` branch. (The release workflow's rebase-reconcile of `dev` after a hotfix-staging promotion is the one sanctioned exception; humans should not replicate it manually unless the workflow's remediation block explicitly instructs them to.)
+-   Force-push or rebase `main`, `dev`, or any `hotfix/*` branch. (The release workflow reconciles `dev` only via fast-forward and ancestry-only merge commits — it never rewrites `dev`.)
 -   Manually create tags matching `v*` (semantic-release owns these).
 -   Bump `CMakeLists.txt`'s `VERSION` field outside the release workflow.
 -   PR a feature branch directly into `main`.
@@ -523,7 +507,7 @@ Full details: [Developers wiki — Patch Release Process](https://github.com/com
 ### Testing and Validation
 
 -   **Build Verification**: Always test builds after significant refactoring - this codebase has complex dependencies
--   **Cross-Edition Testing**: Changes may affect SE/AE/VR differently due to engine differences
+-   **Cross-Edition Testing**: Changes may affect SE/AE differently due to engine differences
 -   **Memory Management**: Pay attention to smart pointer usage and RAII patterns when modifying existing code
 
 ### Security and Input Validation
@@ -554,10 +538,82 @@ Full details: [Developers wiki — Patch Release Process](https://github.com/com
 
 -   **Include Dependencies**: New features often require adding includes (ShaderCache.h, imgui_stdlib.h, etc.)
 -   **Forward Declarations**: Use forward declarations in headers when possible, full includes in .cpp files
--   **VR Considerations**: VR has different rendering requirements - check VR-specific code paths when modifying graphics features
 -   **Feature Versioning**: Feature .ini files use semantic versioning - increment appropriately when changing settings structure
 -   **Performance Impact**: Always consider GPU workload when adding new rendering features - provide toggle options for users
 -   **Buffer Conflicts**: Check hlslkit buffer scanning to avoid GPU register conflicts that cause rendering issues
 -   **Graphics State Corruption**: Minimize DirectX state changes; restore state after modifications
 -   **Thread Safety**: Graphics operations must consider Skyrim's rendering thread vs game logic thread
 -   **DRY Violations in Cross-Cutting Refactors**: When adding a utility pattern across many files (e.g., resource naming, debug hooks), check whether the implementation exists in multiple places before writing a new one. For example, `Buffer.h` helper classes and raw `device->Create*` callsites both need `SetResourceName` — ensure they share a single implementation, not duplicate GUID definitions or parallel helper functions. Use a forward declaration in headers to delegate to the canonical implementation in `Utils/D3D.cpp` rather than re-implementing inline.
+
+## Internationalization (i18n) System
+
+### Using Translations in Code
+
+All user-visible strings must use the translation system. The source of truth for English strings is `package/SKSE/Plugins/CommunityShaders/Translations/en.json`.
+
+**API**:
+
+```cpp
+// T() macro: key + inline English default
+ImGui::Text("%s", T("menu.faq.q10", "My new FAQ question?"));
+
+// TKEY macro: for feature files, prefixes are defined to keep keys short
+#define I18N_KEY_PREFIX "feature.my_feature."
+ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.enabled);
+#undef I18N_KEY_PREFIX
+```
+
+**After adding new translatable strings**, regenerate `en.json`:
+
+```bash
+python tools/extract-i18n.py --write
+```
+
+### Key Naming Convention
+
+```
+menu.<page>.<item>              — Menu UI labels
+menu.<page>.<item>_tooltip      — Tooltip text
+feature.<short_name>.<setting>  — Feature settings
+overlay.<type>                  — Overlay messages
+common.<term>                   — Shared/reused text
+ui.<component>                  — Utility UI
+weather_editor.<item>           — Weather editor
+```
+
+### Translation Rules (Must Follow When Writing Strings)
+
+| Rule                              | Detail                                                        |
+| --------------------------------- | ------------------------------------------------------------- |
+| **Translate values, not keys**    | Keys (left side of JSON) are never translated                 |
+| **Preserve placeholders**         | `{version}`, `{count}`, `{key}` must be kept in all languages |
+| **Preserve format specifiers**    | `%s`, `%d`, `%.1f` must be kept                               |
+| **`\n` = line break**             | Line break positions may be adjusted                          |
+| **Don't translate `##` suffixes** | If a value contains `##xxx`, the part after `##` stays as-is  |
+| **Partial translations OK**       | Missing keys automatically fall back to English               |
+
+### CI Validation (`pr-i18n.yaml`)
+
+The CI workflow checks:
+
+-   `en.json` is in sync with source code (`--check`)
+-   No orphaned keys exist (`--orphans`)
+-   Translation file key order matches `en.json` (`sort-i18n.py --check`)
+-   Translation files have valid JSON format
+-   Placeholders `{name}` are consistent across languages
+
+**Before submitting PRs that add/modify UI strings**, run locally:
+
+```bash
+python tools/extract-i18n.py --check
+python tools/extract-i18n.py --orphans
+python tools/sort-i18n.py --check
+```
+
+If `sort-i18n.py --check` fails, fix it with:
+
+```bash
+python tools/sort-i18n.py --write
+```
+
+This reorders non-English translation files so their keys follow `en.json`'s order (with `_meta` first, then keys in en.json order, then any extra keys alphabetically).

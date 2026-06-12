@@ -6,21 +6,20 @@ struct GrassCollision : Feature
 {
 public:
 	virtual inline std::string GetName() override { return "Grass Collision"; }
+	virtual std::string GetDisplayName() override { return T("feature.grass_collision.name", "Grass Collision"); }
 	virtual inline std::string GetShortName() override { return "GrassCollision"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "GRASS_COLLISION"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kGrass; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return {
-			"Enables dynamic grass interactions where grass bends and moves in response to actors walking through it, creating more immersive environmental reactions.",
-			{ "Real-time grass deformation from actor movement",
-				"Collision detection for up to 256 simultaneous interactions",
-				"Dynamic tracking of actor positions for grass response",
-				"Performance-optimized collision calculation",
-				"Seamless integration with existing grass rendering" }
-		};
-	}
+		return { T("feature.grass_collision.description", "Enables dynamic grass interactions where grass bends and moves in response to actors walking through it, creating more immersive environmental reactions."),
+			{ T("feature.grass_collision.key_feature_1", "Real-time grass deformation from actor movement"),
+				T("feature.grass_collision.key_feature_2", "Collision detection for up to 256 simultaneous interactions"),
+				T("feature.grass_collision.key_feature_3", "Dynamic tracking of actor positions for grass response"),
+				T("feature.grass_collision.key_feature_4", "Performance-optimized collision calculation"),
+				T("feature.grass_collision.key_feature_5", "Seamless integration with existing grass rendering") } };
+	};
 
 	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
@@ -87,7 +86,6 @@ public:
 
 	virtual void PostPostLoad() override;
 
-	virtual bool SupportsVR() override { return true; };
 
 	struct Hooks
 	{
@@ -106,7 +104,7 @@ public:
 		static void Install()
 		{
 			stl::write_vfunc<0x6, BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
-			stl::write_thunk_call<MainUpdate_QueueCollisions>(REL::RelocationID(35565, 36564).address() + REL::Relocate(0x748, 0xC26, 0x7EE));
+			stl::write_thunk_call<MainUpdate_QueueCollisions>(REL::RelocationID(35565, 36564).address() + REL::Relocate(0x748, 0xC26));
 			logger::info("[GRASS COLLISION] Installed hooks");
 		}
 	};

@@ -3,6 +3,7 @@
 #include "FrameAnnotations.h"
 #include "Globals.h"
 #include "Hooks.h"
+#include "I18n/I18n.h"
 #include "Menu.h"
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
@@ -145,10 +146,6 @@ bool Load()
 		return true;
 	}
 
-	if (REL::Module::IsVR()) {
-		REL::IDDatabase::get().IsVRAddressLibraryAtLeastVersion("0.207.0", true);
-	}
-
 	auto privateProfileRedirectorVersion = Util::GetDllVersion(L"Data/SKSE/Plugins/PrivateProfileRedirector.dll");
 	if (privateProfileRedirectorVersion.has_value() && privateProfileRedirectorVersion.value().compare(REL::Version(0, 6, 2)) == std::strong_ordering::less) {
 		stl::report_and_fail("Old version of PrivateProfileRedirector detected, 0.6.2+ required if using it."sv);
@@ -161,6 +158,10 @@ bool Load()
 	globals::ReInit();
 
 	auto state = globals::state;
+
+	// Initialize i18n system (loads English fallback and discovers available locales)
+	I18n::GetSingleton()->Init();
+
 	state->Load();
 	state->LoadTheme();  // Load theme settings from SettingsTheme.json
 
@@ -198,15 +199,8 @@ bool Load()
 		errors.push_back(errorMessage);
 	};
 
-	// Engine Fixes: VR accepts either EngineFixesVR.dll or the EngineFixes.dll NG
-	if (REL::Module::IsVR()) {
-		if (!LoadLibrary(L"Data/SKSE/Plugins/EngineFixesVR.dll") && !LoadLibrary(L"Data/SKSE/Plugins/EngineFixes.dll")) {
-			pushMissingDllError("EngineFixesVR.dll or EngineFixes.dll");
-		}
-	} else {
-		if (!LoadLibrary(L"Data/SKSE/Plugins/EngineFixes.dll")) {
-			pushMissingDllError(stl::utf16_to_utf8(L"Data/SKSE/Plugins/EngineFixes.dll").value_or("<unicode conversion error>"s));
-		}
+	if (!LoadLibrary(L"Data/SKSE/Plugins/EngineFixes.dll")) {
+		pushMissingDllError(stl::utf16_to_utf8(L"Data/SKSE/Plugins/EngineFixes.dll").value_or("<unicode conversion error>"s));
 	}
 
 	// Empty RequiredDLLs array, if necessary we can add a dll here in the future without needing to modify the plugin loading logic.

@@ -4,10 +4,12 @@
 
 #include "BackgroundBlur.h"
 #include "Fonts.h"
+#include "I18n/I18n.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <format>
@@ -26,8 +28,6 @@
 #include "../Util.h"
 #include "../Utils/FileSystem.h"
 #include "../Utils/UI.h"
-#include "Features/VR.h"
-
 using namespace SKSE;
 
 namespace
@@ -58,6 +58,94 @@ namespace
 		} catch (...) {
 			return 0;
 		}
+	}
+
+	bool IsSimplifiedChineseLocale(const std::string& locale)
+	{
+		return locale == "zh" ||
+		       locale == "zh_CN" ||
+		       locale == "zh_SG" ||
+		       locale == "zh_Hans" ||
+		       locale.starts_with("zh-Hans");
+	}
+
+	bool IsTraditionalChineseLocale(const std::string& locale)
+	{
+		return locale == "zh_TW" ||
+		       locale == "zh_HK" ||
+		       locale == "zh_MO" ||
+		       locale == "zh_Hant" ||
+		       locale.starts_with("zh-Hant");
+	}
+
+	std::vector<std::string> GetCJKFontPathCandidates(const std::string& locale)
+	{
+		std::vector<std::string> candidates;
+
+		auto addCandidate = [&](std::filesystem::path path) {
+			auto candidate = path.string();
+			if (!candidate.empty() && std::find(candidates.begin(), candidates.end(), candidate) == candidates.end()) {
+				candidates.push_back(std::move(candidate));
+			}
+		};
+
+		std::filesystem::path windowsFonts = "C:\\Windows\\Fonts";
+		if (const char* windir = std::getenv("WINDIR"); windir && windir[0] != '\0') {
+			windowsFonts = std::filesystem::path(windir) / "Fonts";
+		}
+
+		if (locale.starts_with("zh")) {
+			if (IsTraditionalChineseLocale(locale)) {
+				addCandidate(windowsFonts / "msjh.ttc");
+				addCandidate(windowsFonts / "mingliu.ttc");
+			} else {
+				addCandidate(windowsFonts / "msyh.ttc");
+				addCandidate(windowsFonts / "simsun.ttc");
+				addCandidate(windowsFonts / "simhei.ttf");
+			}
+		} else if (locale == "ja") {
+			addCandidate(windowsFonts / "meiryo.ttc");
+			addCandidate(windowsFonts / "msgothic.ttc");
+		} else if (locale == "ko") {
+			addCandidate(windowsFonts / "malgun.ttf");
+			addCandidate(windowsFonts / "gulim.ttc");
+		}
+
+		return candidates;
+	}
+
+	std::string FormatFontCandidateStatus(const std::vector<std::string>& candidates)
+	{
+		std::string result;
+		for (const auto& candidate : candidates) {
+			if (!result.empty()) {
+				result += "; ";
+			}
+			result += std::format("{} exists={}", candidate, std::filesystem::exists(candidate) ? "yes" : "no");
+		}
+		return result;
+	}
+
+	bool ContainsNonAscii(std::string_view text)
+	{
+		return std::ranges::any_of(text, [](unsigned char ch) { return ch >= 0x80; });
+	}
+
+	const ImWchar* GetPrimaryCJKGlyphRanges(ImFontAtlas* atlas, const std::string& locale)
+	{
+		if (locale.starts_with("zh")) {
+			if (IsTraditionalChineseLocale(locale)) {
+				return atlas->GetGlyphRangesChineseFull();
+			}
+			return atlas->GetGlyphRangesChineseSimplifiedCommon();
+		}
+		if (locale == "ja") {
+			return atlas->GetGlyphRangesJapanese();
+		}
+		if (locale == "ko") {
+			return atlas->GetGlyphRangesKorean();
+		}
+		return nullptr;
 	}
 }
 
@@ -119,8 +207,8 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 	styleCopy.TabBarBorderSize = scaleSize(themeSettings.Style.TabBarBorderSize);
 	styleCopy.SeparatorTextBorderSize = scaleSize(themeSettings.Style.SeparatorTextBorderSize);
 	styleCopy.DockingSeparatorSize = scaleSize(themeSettings.Style.DockingSeparatorSize);
+	styleCopy.MouseCursorScale = ImMax(1.0f, themeSettings.Style.MouseCursorScale);
 
-	styleCopy.MouseCursorScale = 1.f;
 	style = styleCopy;
 	style.HoverDelayNormal = themeSettings.TooltipHoverDelay;
 	style.FontScaleMain = exp2(globalScale);
@@ -359,6 +447,135 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 	cachedFontSize = fontSize;
 	const_cast<Menu&>(menu).GetSettings().Theme.FontName = menu.cachedFontName;
 	const_cast<Menu&>(menu).cachedFontSignature = const_cast<Menu&>(menu).BuildFontSignature(fontSize);
+
+	// ─── CJK Font Merging ────────────────────────────────────────────────────────
+	// Merge glyphs needed by the active locale, plus the minimum glyph set needed
+	// to render available locale names in the language picker.
+	{
+		auto* i18n = I18n::GetSingleton();
+		auto locale = i18n->GetCurrentLocale();
+		const ImWchar* primaryGlyphRanges = GetPrimaryCJKGlyphRanges(io.Fonts, locale);
+		auto primaryCJKFontPaths = primaryGlyphRanges ? GetCJKFontPathCandidates(locale) : std::vector<std::string>{};
+
+		struct SupplementalGlyphMerge
+		{
+			std::string locale;
+			std::vector<std::string> fontPaths;
+			ImVector<ImWchar> glyphRanges;
+		};
+
+		std::vector<SupplementalGlyphMerge> supplementalGlyphMerges;
+		for (const auto& [availableLocale, displayName] : i18n->GetAvailableLocales()) {
+			if (!ContainsNonAscii(displayName)) {
+				continue;
+			}
+			if (availableLocale == locale && primaryGlyphRanges) {
+				continue;
+			}
+
+			auto fontPaths = GetCJKFontPathCandidates(availableLocale);
+			if (fontPaths.empty()) {
+				logger::warn("[I18n] No supplemental CJK font path candidates for locale display '{}': {}", availableLocale, displayName);
+				continue;
+			}
+
+			ImFontGlyphRangesBuilder builder;
+			builder.AddText(displayName.c_str());
+
+			SupplementalGlyphMerge merge{ .locale = availableLocale, .fontPaths = std::move(fontPaths) };
+			builder.BuildRanges(&merge.glyphRanges);
+			if (merge.glyphRanges.Size > 0) {
+				supplementalGlyphMerges.push_back(std::move(merge));
+			}
+		}
+
+		if (primaryGlyphRanges || !supplementalGlyphMerges.empty()) {
+			if (primaryGlyphRanges && primaryCJKFontPaths.empty()) {
+				logger::warn("[I18n] CJK locale '{}' active but no CJK font path candidates were available.", locale);
+			} else {
+				io.Fonts->Clear();
+
+				std::unordered_map<std::string, ImFont*> cjkAtlasCache;
+				bool mergedAnyCJKFont = false;
+
+				auto tryMergeGlyphSet = [&](ImFont* baseFont,
+											float roleSize,
+											const std::vector<std::string>& fontPaths,
+											const ImWchar* glyphRanges,
+											const std::string& description,
+											Menu::FontRole role) {
+					if (!glyphRanges || fontPaths.empty()) {
+						return;
+					}
+
+					ImFontConfig mergeCfg;
+					mergeCfg.MergeMode = true;
+					mergeCfg.DstFont = baseFont;
+					mergeCfg.OversampleH = Constants::FCONF_OVERSAMPLE_H;
+					mergeCfg.OversampleV = Constants::FCONF_OVERSAMPLE_V;
+					mergeCfg.PixelSnapH = Constants::FCONF_PIXELSNAP_H;
+
+					for (const auto& cjkFontPath : fontPaths) {
+						if (io.Fonts->AddFontFromFileTTF(cjkFontPath.c_str(), roleSize, &mergeCfg, glyphRanges)) {
+							mergedAnyCJKFont = true;
+							return;
+						}
+					}
+
+					logger::warn("[I18n] Failed to merge {} for role '{}'. Tried: {}",
+						description,
+						Menu::GetFontRoleKey(role),
+						FormatFontCandidateStatus(fontPaths));
+				};
+
+				for (size_t i = 0; i < static_cast<size_t>(Menu::FontRole::Count); ++i) {
+					float roleSize = menu.cachedFontPixelSizesByRole[i];
+					std::string roleFile = const_cast<Menu&>(menu).cachedFontFilesByRole[i];
+					Menu::FontRole role = static_cast<Menu::FontRole>(i);
+
+					if (roleFile.empty()) {
+						roleFile = Menu::GetDefaultFontRole(role).File;
+					}
+
+					auto fontPath = fontsRoot / roleFile;
+					std::string cacheKey = std::format("{}|{}", roleFile, static_cast<int>(roleSize));
+
+					auto cached = cjkAtlasCache.find(cacheKey);
+					if (cached != cjkAtlasCache.end()) {
+						menu.loadedFontRoles[i] = cached->second;
+						continue;
+					}
+
+					ImFontConfig baseCfg = font_config;
+					ImFont* baseFont = nullptr;
+					if (std::filesystem::exists(fontPath)) {
+						baseFont = io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(), roleSize, &baseCfg);
+					}
+
+					if (!baseFont) {
+						baseFont = io.Fonts->AddFontDefault();
+					}
+
+					tryMergeGlyphSet(baseFont, roleSize, primaryCJKFontPaths, primaryGlyphRanges, std::format("active locale '{}' glyphs", locale), role);
+					for (const auto& merge : supplementalGlyphMerges) {
+						tryMergeGlyphSet(baseFont, roleSize, merge.fontPaths, merge.glyphRanges.Data, std::format("locale display '{}'", merge.locale), role);
+					}
+
+					menu.loadedFontRoles[i] = baseFont;
+					cjkAtlasCache.emplace(cacheKey, baseFont);
+				}
+
+				bodyFont = menu.loadedFontRoles[static_cast<size_t>(Menu::FontRole::Body)];
+				io.FontDefault = bodyFont;
+
+				if (mergedAnyCJKFont) {
+					logger::info("[I18n] Rebuilt font atlas with locale glyph support for '{}'", locale);
+				} else {
+					logger::warn("[I18n] Rebuilt font atlas without supplemental locale glyphs for '{}'", locale);
+				}
+			}
+		}
+	}
 
 	// Build the font atlas - this bakes all fonts into the texture
 	if (!io.Fonts->Build()) {
@@ -802,12 +1019,9 @@ float ThemeManager::ResolveFontSize(const Menu& menu)
 
 	// Compute dynamic size from screen resolution
 	float dynamicSize;
-	if (globals::game::isVR) {
-		// VR: use overlay height
-		dynamicSize = VR::Config::kOverlayHeight * Constants::DEFAULT_FONT_RATIO;
-	} else if (globals::state && globals::state->screenSize.y > 0) {
-		// Non-VR: use current screen height
-		dynamicSize = globals::state->screenSize.y * Constants::DEFAULT_FONT_RATIO;
+	if (globals::game::graphicsState && globals::game::graphicsState->screenHeight > 0) {
+		// Use current screen height
+		dynamicSize = (float)globals::game::graphicsState->screenHeight * Constants::DEFAULT_FONT_RATIO;
 	} else {
 		// Fallback: use default font size
 		logger::warn("ThemeManager::ResolveFontSize() - Falling back to Constants::DEFAULT_FONT_SIZE due to missing screen height.");

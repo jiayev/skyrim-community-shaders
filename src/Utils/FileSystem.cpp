@@ -57,6 +57,11 @@ namespace Util
 			return GetInterfacePath() / "Icons";
 		}
 
+		std::filesystem::path GetCursorsPath()
+		{
+			return GetInterfacePath() / "Cursors";
+		}
+
 		std::filesystem::path GetSettingsUserPath()
 		{
 			return GetCommunityShaderPath() / "SettingsUser.json";
@@ -80,6 +85,11 @@ namespace Util
 		std::filesystem::path GetThemesPath()
 		{
 			return GetCommunityShaderPath() / "Themes";
+		}
+
+		std::filesystem::path GetTranslationsPath()
+		{
+			return GetCommunityShaderPath() / "Translations";
 		}
 
 		std::filesystem::path GetOverridesPath()

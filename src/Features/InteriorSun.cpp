@@ -1,5 +1,8 @@
 ﻿#include "InteriorSun.h"
+#include "I18n/I18n.h"
 #include "State.h"
+
+#define I18N_KEY_PREFIX "feature.interior_sun."
 
 #include <numbers>
 
@@ -10,21 +13,21 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void InteriorSun::DrawSettings()
 {
-	ImGui::Checkbox("Force Double-Sided Rendering", &settings.ForceDoubleSidedRendering);
+	ImGui::Checkbox(T(TKEY("force_double_sided"), "Force Double-Sided Rendering"), &settings.ForceDoubleSidedRendering);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text(
-			"Disables backface culling during sun shadowmap rendering in interiors. "
-			"Will prevent most light leaking through unmasked/unprepared interiors at a small performance cost. ");
+		ImGui::Text("%s", T(TKEY("force_double_sided_tooltip"),
+							  "Disables backface culling during sun shadowmap rendering in interiors. "
+							  "Will prevent most light leaking through unmasked/unprepared interiors at a small performance cost. "));
 	}
-	if (ImGui::SliderFloat("Interior Shadow Distance", &settings.InteriorShadowDistance, 1000.0f, 8000.0f)) {
+	if (ImGui::SliderFloat(T(TKEY("interior_shadow_distance"), "Interior Shadow Distance"), &settings.InteriorShadowDistance, 1000.0f, 8000.0f)) {
 		*gInteriorShadowDistance = settings.InteriorShadowDistance;
 		auto tes = RE::TES::GetSingleton();
 		SetShadowDistance(tes && tes->interiorCell);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text(
-			"Sets the distance shadows are rendered at in interiors. "
-			"Lower values provide higher quality shadows and improved performance but may cause distant interior spaces to light up incorrectly. ");
+		ImGui::Text("%s", T(TKEY("interior_shadow_distance_tooltip"),
+							  "Sets the distance shadows are rendered at in interiors. "
+							  "Lower values provide higher quality shadows and improved performance but may cause distant interior spaces to light up incorrectly. "));
 	}
 }
 
@@ -48,9 +51,9 @@ void InteriorSun::PostPostLoad()
 	stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately>(REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
 
 	// Hooks and patch to enable directional lighting for interiors
-	stl::write_thunk_call<GetWorldSpace>(REL::RelocationID(35562, 36561).address() + REL::Relocate(0x399, 0x37D, 0x639));
-	stl::write_thunk_call<GetWorldSpace>(REL::RelocationID(35562, 36561).address() + REL::Relocate(0x3AE, 0x392, 0x64E));
-	REL::safe_fill(REL::RelocationID(35562, 36561).address() + REL::Relocate(0x397, 0x37B, 0x637), REL::NOP, 2);
+	stl::write_thunk_call<GetWorldSpace>(REL::RelocationID(35562, 36561).address() + REL::Relocate(0x399, 0x37D));
+	stl::write_thunk_call<GetWorldSpace>(REL::RelocationID(35562, 36561).address() + REL::Relocate(0x3AE, 0x392));
+	REL::safe_fill(REL::RelocationID(35562, 36561).address() + REL::Relocate(0x397, 0x37B), REL::NOP, 2);
 
 	// Hook for overriding the rooms and portals passed to the directional light culling step to fix light leaking through unrendered geometry
 	stl::detour_thunk<DirShadowLightCulling>(REL::RelocationID(101498, 108492));
@@ -64,11 +67,11 @@ void InteriorSun::PostPostLoad()
 	gInteriorShadowDistance = reinterpret_cast<float*>(REL::RelocationID(513755, 391724).address());
 
 	// Patches BSShadowDirectionalLight::SetFrameCamera to read the correct shadow distance value in interior cells
-	const std::uintptr_t address = REL::RelocationID(101499, 108496).address() + REL::Relocate(0xD62, 0xE6C, 0xE72);
+	const std::uintptr_t address = REL::RelocationID(101499, 108496).address() + REL::Relocate(0xD62, 0xE6C);
 	const std::int32_t displacement = static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(gShadowDistance) - (address + 8));
 	REL::safe_write(address + 4, &displacement, sizeof(displacement));
 
-	rasterStateCullMode = globals::game::isVR ? &globals::game::shadowState->GetVRRuntimeData().rasterStateCullMode : &globals::game::shadowState->GetRuntimeData().rasterStateCullMode;
+	rasterStateCullMode = &globals::game::shadowState->GetRuntimeData().rasterStateCullMode;
 
 	logger::info("[Interior Sun] Installed hooks");
 }
@@ -222,3 +225,4 @@ void InteriorSun::SetShadowDistance(bool inInterior)
 	static REL::Relocation<func_t> func{ REL::RelocationID(98978, 105631).address() };
 	func(inInterior);
 }
+#undef I18N_KEY_PREFIX

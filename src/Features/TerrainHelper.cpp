@@ -121,7 +121,7 @@ struct THExtendedRendererState
 	}
 } thExtendedRendererState;
 
-void TerrainHelper::SetShaderResouces(ID3D11DeviceContext* a_context)
+void TerrainHelper::SetShaderResources(ID3D11DeviceContext* a_context)
 {
 	uint32_t mask = thExtendedRendererState.PSResourceModifiedBits;
 
@@ -228,8 +228,7 @@ void TerrainHelper::Load()
 {
 	// Install TESObjectLAND hook early so TH is inner relative to TruePBR's PostPostLoad hook.
 	// This ensures TH reads the vanilla material hashKey before TruePBR replaces it with a PBR material.
-	// This intentionally matches TruePBR's REL::RelocationID(18368, 18791), so no extra
-	// VR gate is needed unless those offsets diverge.
+	// This intentionally matches TruePBR's REL::RelocationID(18368, 18791).
 	logger::info("[Terrain Helper] Hooking TESObjectLAND");
 	stl::detour_thunk<TH_TESObjectLAND_SetupMaterial>(REL::RelocationID(18368, 18791));
 }

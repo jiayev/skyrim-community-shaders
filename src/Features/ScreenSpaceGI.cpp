@@ -2,9 +2,12 @@
 
 #include <DirectXTex.h>
 
+#include "../I18n/I18n.h"
 #include "Deferred.h"
 #include "State.h"
 #include "Util.h"
+
+#define I18N_KEY_PREFIX "feature.screen_space_gi."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ScreenSpaceGI::Settings,
@@ -45,69 +48,63 @@ void ScreenSpaceGI::DrawSettings()
 	static bool showAdvanced;
 
 	if (!ShadersOK())
-		ImGui::TextColored({ 1, 0, 0, 1 }, "Compute shaders failed to compile!");
+		ImGui::TextColored({ 1, 0, 0, 1 }, "%s", T(TKEY("shader_compile_error"), "Compute shaders failed to compile!"));
 
 	///////////////////////////////
-	ImGui::SeparatorText("Toggles");
+	ImGui::SeparatorText(T(TKEY("toggles"), "Toggles"));
 
-	ImGui::Checkbox("Show Advanced Options", &showAdvanced);
+	ImGui::Checkbox(T(TKEY("show_advanced"), "Show Advanced Options"), &showAdvanced);
 
 	if (ImGui::BeginTable("Toggles", 4)) {
 		ImGui::TableNextColumn();
-		ImGui::Checkbox("Enabled", &settings.Enabled);
+		ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enable Screen Space Global Illumination. When disabled, all other settings are ignored.");
+			ImGui::Text("%s", T(TKEY("enabled_tooltip"), "Enable Screen Space Global Illumination. When disabled, all other settings are ignored."));
 		}
 
 		ImGui::TableNextColumn();
 		{
 			auto ilToggleGuard = Util::DisableGuard(!settings.Enabled);
-			recompileFlag |= ImGui::Checkbox("Indirect Lighting (IL)", &settings.EnableGI);
+			recompileFlag |= ImGui::Checkbox(T(TKEY("indirect_lighting"), "Indirect Lighting (IL)"), &settings.EnableGI);
 		}
 		ImGui::TableNextColumn();
 		{
-			auto vanillaSSAOGuard = Util::DisableGuard(globals::game::isVR);
-			ImGui::Checkbox("Vanilla SSAO", &settings.EnableVanillaSSAO);
+			ImGui::Checkbox(T(TKEY("vanilla_ssao"), "Vanilla SSAO"), &settings.EnableVanillaSSAO);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				if (globals::game::isVR)
-					ImGui::Text("Vanilla SSAO is not supported in VR.");
-				else
-					ImGui::Text("Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening.");
+				ImGui::Text("%s", T(TKEY("vanilla_ssao_tooltip"), "Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening."));
 			}
 		}
 		ImGui::TableNextColumn();
 		if (showAdvanced) {
-			recompileFlag |= ImGui::Checkbox("(Experimental) HQ Specular IL", &settings.EnableExperimentalSpecularGI);
+			recompileFlag |= ImGui::Checkbox(T(TKEY("hq_specular_il"), "(Experimental) HQ Specular IL"), &settings.EnableExperimentalSpecularGI);
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("An experimental specular GI that is more accurate but requires more samples. Won't be blurred.");
+				ImGui::Text("%s", T(TKEY("hq_specular_il_tooltip"), "An experimental specular GI that is more accurate but requires more samples. Won't be blurred."));
 		}
 
 		ImGui::EndTable();
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Quality/Performance");
+	ImGui::SeparatorText(T(TKEY("quality_performance"), "Quality/Performance"));
 
 	{
 		auto qualityGuard = Util::DisableGuard(!settings.Enabled);
 
 		if (ImGui::BeginTable("Presets", 5)) {
-			auto select = [](auto flatVal, auto vrVal) { return globals::game::isVR ? vrVal : flatVal; };
-
 			ImGui::TableNextColumn();
-			if (ImGui::Button("AO only", { -1, 0 })) {
-				settings.NumSlices = select(1, 3);
-				settings.NumSteps = select(6, 8);
+			if (ImGui::Button(T(TKEY("ao_only"), "AO only"), { -1, 0 })) {
+				settings.NumSlices = 1;
+				settings.NumSteps = 6;
 				settings.EnableBlur = true;
 				settings.EnableGI = false;
 				recompileFlag = true;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(select("1 Slice, 6 Steps, blur enabled, no GI\n", "3 Slices, 8 Steps, blur enabled, no GI\n"));
+				ImGui::Text("1 Slice, 6 Steps, blur enabled, no GI\n");
 			}
 
 			ImGui::TableNextColumn();
-			if (ImGui::Button("Low", { -1, 0 })) {
+			if (ImGui::Button(T(TKEY("low"), "Low"), { -1, 0 })) {
 				settings.NumSlices = 10;
 				settings.NumSteps = 12;
 				settings.ResolutionMode = 2;
@@ -116,10 +113,10 @@ void ScreenSpaceGI::DrawSettings()
 				recompileFlag = true;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Quarter res and blurry.");
+				ImGui::Text("%s", T(TKEY("low_tooltip"), "Quarter res and blurry."));
 
 			ImGui::TableNextColumn();
-			if (ImGui::Button("Standard", { -1, 0 })) {
+			if (ImGui::Button(T(TKEY("standard"), "Standard"), { -1, 0 })) {
 				settings.NumSlices = 4;
 				settings.NumSteps = 8;
 				settings.ResolutionMode = 1;
@@ -128,10 +125,10 @@ void ScreenSpaceGI::DrawSettings()
 				recompileFlag = true;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Half res and somewhat stable.");
+				ImGui::Text("%s", T(TKEY("standard_tooltip"), "Half res and somewhat stable."));
 
 			ImGui::TableNextColumn();
-			if (ImGui::Button("Extreme", { -1, 0 })) {
+			if (ImGui::Button(T(TKEY("extreme"), "Extreme"), { -1, 0 })) {
 				settings.NumSlices = 4;
 				settings.NumSteps = 8;
 				settings.ResolutionMode = 0;
@@ -140,10 +137,10 @@ void ScreenSpaceGI::DrawSettings()
 				recompileFlag = true;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Full res and clean.");
+				ImGui::Text("%s", T(TKEY("extreme_tooltip"), "Full res and clean."));
 
 			ImGui::TableNextColumn();
-			if (ImGui::Button("Reference", { -1, 0 })) {
+			if (ImGui::Button(T(TKEY("reference"), "Reference"), { -1, 0 })) {
 				settings.NumSlices = 8;
 				settings.NumSteps = 10;
 				settings.ResolutionMode = 0;
@@ -152,56 +149,56 @@ void ScreenSpaceGI::DrawSettings()
 				recompileFlag = true;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Reference mode.");
+				ImGui::Text("%s", T(TKEY("reference_tooltip"), "Reference mode."));
 
 			ImGui::EndTable();
 		}
 
 		if (showAdvanced) {
-			ImGui::SliderInt("Slices", (int*)&settings.NumSlices, 1, 10);
+			ImGui::SliderInt(T(TKEY("slices"), "Slices"), (int*)&settings.NumSlices, 1, 10);
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text(
-					"How many directions do the samples take.\n"
-					"Controls noise.");
+				ImGui::Text("%s", T(TKEY("slices_tooltip"),
+									  "How many directions do the samples take.\n"
+									  "Controls noise."));
 
-			ImGui::SliderInt("Steps Per Slice", (int*)&settings.NumSteps, 1, 20);
+			ImGui::SliderInt(T(TKEY("steps_per_slice"), "Steps Per Slice"), (int*)&settings.NumSteps, 1, 20);
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text(
-					"How many samples does it take in one direction.\n"
-					"Controls accuracy of lighting, and noise when effect radius is large.");
+				ImGui::Text("%s", T(TKEY("steps_per_slice_tooltip"),
+									  "How many samples does it take in one direction.\n"
+									  "Controls accuracy of lighting, and noise when effect radius is large."));
 		}
 
 		if (ImGui::BeginTable("Less Work", 3)) {
 			ImGui::TableNextColumn();
-			recompileFlag |= ImGui::RadioButton("Full Res", &settings.ResolutionMode, 0);
+			recompileFlag |= ImGui::RadioButton(T(TKEY("full_res"), "Full Res"), &settings.ResolutionMode, 0);
 			ImGui::TableNextColumn();
-			recompileFlag |= ImGui::RadioButton("Half Res", &settings.ResolutionMode, 1);
+			recompileFlag |= ImGui::RadioButton(T(TKEY("half_res"), "Half Res"), &settings.ResolutionMode, 1);
 			ImGui::TableNextColumn();
-			recompileFlag |= ImGui::RadioButton("Quarter Res", &settings.ResolutionMode, 2);
+			recompileFlag |= ImGui::RadioButton(T(TKEY("quarter_res"), "Quarter Res"), &settings.ResolutionMode, 2);
 
 			ImGui::EndTable();
 		}
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Visual");
+	ImGui::SeparatorText(T(TKEY("visual"), "Visual"));
 
 	{
 		auto visualGuard = Util::DisableGuard(!settings.Enabled);
 
-		ImGui::SliderFloat("AO Power", &settings.AOPower, 0.f, 6.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ao_power"), "AO Power"), &settings.AOPower, 0.f, 6.f, "%.2f");
 
 		{
 			auto ilGuard = Util::DisableGuard(!settings.EnableGI);
-			ImGui::SliderFloat("IL Source Brightness", &settings.GIStrength, 0.f, 6.f, "%.2f");
+			ImGui::SliderFloat(T(TKEY("il_source_brightness"), "IL Source Brightness"), &settings.GIStrength, 0.f, 6.f, "%.2f");
 		}
 
 		ImGui::Separator();
 
-		ImGui::SliderFloat("AO radius", &settings.AORadius, 10.f, 1024.0f, "%.1f units");
+		ImGui::SliderFloat(T(TKEY("ao_radius"), "AO radius"), &settings.AORadius, 10.f, 1024.0f, "%.1f units");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			std::vector<std::string> tooltipLines = {
-				"A smaller radius produces tighter AO.",
+				T(TKEY("ao_radius_tooltip"), "A smaller radius produces tighter AO."),
 				Util::Units::FormatDistance(settings.AORadius)
 			};
 			Util::DrawMultiLineTooltip(tooltipLines);
@@ -210,10 +207,10 @@ void ScreenSpaceGI::DrawSettings()
 		{
 			auto ilRadiusGuard = Util::DisableGuard(!settings.EnableGI);
 
-			ImGui::SliderFloat("IL radius", &settings.GIRadius, 10.f, 1024.0f, "%.1f units");
+			ImGui::SliderFloat(T(TKEY("il_radius"), "IL radius"), &settings.GIRadius, 10.f, 1024.0f, "%.1f units");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				std::vector<std::string> tooltipLines = {
-					"A larger radius produces wider IL.",
+					T(TKEY("il_radius_tooltip"), "A larger radius produces wider IL."),
 					Util::Units::FormatDistance(settings.GIRadius)
 				};
 				Util::DrawMultiLineTooltip(tooltipLines);
@@ -221,16 +218,16 @@ void ScreenSpaceGI::DrawSettings()
 		}
 
 		if (showAdvanced) {
-			ImGui::SliderFloat("Min Screen Radius", &settings.MinScreenRadius, 0.f, 0.05f, "%.3f");
+			ImGui::SliderFloat(T(TKEY("min_screen_radius"), "Min Screen Radius"), &settings.MinScreenRadius, 0.f, 0.05f, "%.3f");
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text(
-					"The minimum screen-space effect radius as proportion of display width, to prevent far field AO being too small.");
+				ImGui::Text("%s", T(TKEY("min_screen_radius_tooltip"),
+									  "The minimum screen-space effect radius as proportion of display width, to prevent far field AO being too small."));
 		}
 
-		ImGui::SliderFloat2("Depth Fade Range", &settings.DepthFadeRange.x, 1e4, 5e4, "%.0f units");
+		ImGui::SliderFloat2(T(TKEY("depth_fade_range"), "Depth Fade Range"), &settings.DepthFadeRange.x, 1e4, 5e4, "%.0f units");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			std::vector<std::string> tooltipLines = {
-				"Distance range where depth-based effects fade out.",
+				T(TKEY("depth_fade_range_tooltip"), "Distance range where depth-based effects fade out."),
 				"Near: " + Util::Units::FormatDistance(settings.DepthFadeRange.x),
 				"Far: " + Util::Units::FormatDistance(settings.DepthFadeRange.y)
 			};
@@ -240,10 +237,10 @@ void ScreenSpaceGI::DrawSettings()
 		if (showAdvanced) {
 			ImGui::Separator();
 
-			ImGui::SliderFloat("Thickness", &settings.Thickness, 0.f, 128.0f, "%.1f units");
+			ImGui::SliderFloat(T(TKEY("thickness"), "Thickness"), &settings.Thickness, 0.f, 128.0f, "%.1f units");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				std::vector<std::string> tooltipLines = {
-					"How thick the occluders are. Only affects AO.",
+					T(TKEY("thickness_tooltip"), "How thick the occluders are. Only affects AO."),
 					Util::Units::FormatDistance(settings.Thickness)
 				};
 				Util::DrawMultiLineTooltip(tooltipLines);
@@ -252,34 +249,34 @@ void ScreenSpaceGI::DrawSettings()
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Visual - IL");
+	ImGui::SeparatorText(T(TKEY("visual_il"), "Visual - IL"));
 
 	{
 		auto visualILGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
 
 		if (showAdvanced) {
-			ImGui::SliderFloat("IL Distance Compensation", &settings.GIDistanceCompensation, -5.0f, 5.0f, "%.1f");
+			ImGui::SliderFloat(T(TKEY("il_distance_compensation"), "IL Distance Compensation"), &settings.GIDistanceCompensation, -5.0f, 5.0f, "%.1f");
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Brighten/Dimming further radiance samples.");
+				ImGui::Text("%s", T(TKEY("il_distance_compensation_tooltip"), "Brighten/Dimming further radiance samples."));
 
 			ImGui::Separator();
 		}
 
-		Util::PercentageSlider("IL Saturation", &settings.GISaturation);
+		Util::PercentageSlider(T(TKEY("il_saturation"), "IL Saturation"), &settings.GISaturation);
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Denoising");
+	ImGui::SeparatorText(T(TKEY("denoising"), "Denoising"));
 
 	{
 		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
 
 		if (ImGui::BeginTable("denoisers", 2)) {
 			ImGui::TableNextColumn();
-			recompileFlag |= ImGui::Checkbox("Temporal Denoiser", &settings.EnableTemporalDenoiser);
+			recompileFlag |= ImGui::Checkbox(T(TKEY("temporal_denoiser"), "Temporal Denoiser"), &settings.EnableTemporalDenoiser);
 
 			ImGui::TableNextColumn();
-			ImGui::Checkbox("Blur", &settings.EnableBlur);
+			ImGui::Checkbox(T(TKEY("blur"), "Blur"), &settings.EnableBlur);
 
 			ImGui::EndTable();
 		}
@@ -289,9 +286,9 @@ void ScreenSpaceGI::DrawSettings()
 
 			{
 				auto temporalGuard = Util::DisableGuard(!settings.EnableTemporalDenoiser);
-				ImGui::SliderInt("Max Frame Accumulation", (int*)&settings.MaxAccumFrames, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp);
+				ImGui::SliderInt(T(TKEY("max_frame_accumulation"), "Max Frame Accumulation"), (int*)&settings.MaxAccumFrames, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp);
 				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("How many past frames to accumulate results with. Higher values are less noisy but potentially cause ghosting.");
+					ImGui::Text("%s", T(TKEY("max_frame_accumulation_tooltip"), "How many past frames to accumulate results with. Higher values are less noisy but potentially cause ghosting."));
 			}
 
 			ImGui::Separator();
@@ -299,35 +296,35 @@ void ScreenSpaceGI::DrawSettings()
 			{
 				auto disocclusionGuard = Util::DisableGuard(!settings.EnableTemporalDenoiser && !settings.EnableGI);
 
-				Util::PercentageSlider("Movement Disocclusion", &settings.DepthDisocclusion, 0.f, 20.f);
+				Util::PercentageSlider(T(TKEY("movement_disocclusion"), "Movement Disocclusion"), &settings.DepthDisocclusion, 0.f, 20.f);
 				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text(
-						"If a pixel has moved too far from the last frame, its radiance will not be carried to this frame.\n"
-						"Lower values are stricter.");
+					ImGui::Text("%s", T(TKEY("movement_disocclusion_tooltip"),
+										  "If a pixel has moved too far from the last frame, its radiance will not be carried to this frame.\n"
+										  "Lower values are stricter."));
 
 				ImGui::Separator();
 			}
 
 			{
 				auto blurGuard = Util::DisableGuard(!settings.EnableBlur);
-				ImGui::SliderFloat("Blur Radius", &settings.BlurRadius, 0.f, 30.f, "%.1f px");
+				ImGui::SliderFloat(T(TKEY("blur_radius"), "Blur Radius"), &settings.BlurRadius, 0.f, 30.f, "%.1f px");
 
 				if (showAdvanced) {
-					ImGui::SliderFloat("Geometry Weight", &settings.DistanceNormalisation, 0.f, 5.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("geometry_weight"), "Geometry Weight"), &settings.DistanceNormalisation, 0.f, 5.f, "%.2f");
 					if (auto _tt = Util::HoverTooltipWrapper())
-						ImGui::Text(
-							"Higher value makes the blur more sensitive to differences in geometry.");
+						ImGui::Text("%s", T(TKEY("geometry_weight_tooltip"),
+											  "Higher value makes the blur more sensitive to differences in geometry."));
 				}
 			}
 		}
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Debug");
+	ImGui::SeparatorText(T(TKEY("debug"), "Debug"));
 
-	if (ImGui::TreeNode("Buffer Viewer")) {
+	if (ImGui::TreeNode(T(TKEY("buffer_viewer"), "Buffer Viewer"))) {
 		static float debugRescale = .3f;
-		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+		ImGui::SliderFloat(T(TKEY("view_resize"), "View Resize"), &debugRescale, 0.f, 1.f);
 
 		BUFFER_VIEWER_NODE(texNoise, debugRescale)
 		BUFFER_VIEWER_NODE(texWorkingDepth, debugRescale)
@@ -584,7 +581,7 @@ void ScreenSpaceGI::SetupResources()
 void ScreenSpaceGI::ClearShaderCache()
 {
 	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
-		&prefilterDepthsCompute, &prefilterRadianceCompute, &prefilterNormalCompute, &radianceDisoccCompute, &giCompute, &blurCompute, &stereoSyncCompute, &upsampleCompute
+		&prefilterDepthsCompute, &prefilterRadianceCompute, &prefilterNormalCompute, &radianceDisoccCompute, &giCompute, &blurCompute, &upsampleCompute
 	};
 
 	for (auto shader : shaderPtrs)
@@ -613,11 +610,7 @@ void ScreenSpaceGI::CompileComputeShaders()
 			{ &upsampleCompute, "upsample.cs.hlsl", {} },
 		};
 
-	if (REL::Module::IsVR())
-		shaderInfos.push_back({ &stereoSyncCompute, "stereoSync.cs.hlsl", { { "FRAMEBUFFER", "" } } });
 	for (auto& info : shaderInfos) {
-		if (REL::Module::IsVR())
-			info.defines.push_back({ "VR", "" });
 		if (settings.ResolutionMode == 1)
 			info.defines.push_back({ "HALF_RES", "" });
 		if (settings.ResolutionMode == 2)
@@ -650,20 +643,18 @@ void ScreenSpaceGI::UpdateSB()
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
-	static float4x4 prevInvView[2] = {};
+	static float4x4 prevInvView = {};
 
 	SSGICB data;
 	{
-		for (int eyeIndex = 0; eyeIndex < (1 + REL::Module::IsVR()); ++eyeIndex) {
-			auto eye = Util::GetCameraData(eyeIndex);
+		{
+			auto eye = globals::game::shadowState->GetRuntimeData().cameraData.getEye();
 
-			data.PrevInvViewMat[eyeIndex] = prevInvView[eyeIndex];
-			data.NDCToViewMul[eyeIndex] = { 2.0f / eye.projMat(0, 0), -2.0f / eye.projMat(1, 1) };
-			data.NDCToViewAdd[eyeIndex] = { -1.0f / eye.projMat(0, 0), 1.0f / eye.projMat(1, 1) };
-			if (REL::Module::IsVR())
-				data.NDCToViewMul[eyeIndex].x *= 2;
+			data.PrevInvViewMat = prevInvView;
+			data.NDCToViewMul = { 2.0f / eye.projMat(0, 0), -2.0f / eye.projMat(1, 1), 0.0f, 0.0f };
+			data.NDCToViewAdd = { -1.0f / eye.projMat(0, 0), 1.0f / eye.projMat(1, 1), 0.0f, 0.0f };
 
-			prevInvView[eyeIndex] = eye.viewMat.Invert();
+			prevInvView = eye.viewMat.Invert();
 		}
 
 		data.TexDim = res;
@@ -705,7 +696,7 @@ void ScreenSpaceGI::DrawSSGI()
 	auto context = globals::d3d::context;
 
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-	GET_INSTANCE_MEMBER(BSImagespaceShaderISSAOBlurH, imageSpaceManager);
+	auto& BSImagespaceShaderISSAOBlurH = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISSAOBlurH;
 
 	// Toggle vanilla SSAO
 	static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH.get()) + 0x50LL);
@@ -741,7 +732,7 @@ void ScreenSpaceGI::DrawSSGI()
 	auto rts = renderer->GetRuntimeData().renderTargets;
 	auto deferred = globals::deferred;
 
-	float2 size = Util::ConvertToDynamic(globals::state->screenSize);
+	float2 size = Util::ConvertToDynamic(float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight });
 	auto resolution = std::array{ (uint)size.x, (uint)size.y };
 	auto resChoices = std::array{
 		resolution, std::array{ resolution[0] >> 1, resolution[1] >> 1 }, std::array{ resolution[0] >> 2, resolution[1] >> 2 }
@@ -779,7 +770,9 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(prefilterDepthsCompute.get(), nullptr, 0);
+		globals::profiler->BeginPass("ScreenSpaceGI::PrefilterDepths");
 		context->Dispatch((resolution[0] + 15) >> 4, (resolution[1] + 15) >> 4, 1);
+		globals::profiler->EndPass();
 	}
 
 	// fetch radiance and disocclusion
@@ -809,7 +802,9 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(radianceDisoccCompute.get(), nullptr, 0);
+		globals::profiler->BeginPass("ScreenSpaceGI::RadianceDisocc");
 		context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
+		globals::profiler->EndPass();
 
 		// Prefilter radiance texture instead of using GenerateMips for proper dynamic resolution handling.
 		// radianceDisocc wrote mip 0 directly to texRadianceTemp above, so we can bind it
@@ -828,7 +823,9 @@ void ScreenSpaceGI::DrawSSGI()
 			context->CSSetShaderResources(0, 1, srvs.data());
 			context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
 			context->CSSetShader(prefilterRadianceCompute.get(), nullptr, 0);
+			globals::profiler->BeginPass("ScreenSpaceGI::PrefilterRadiance");
 			context->Dispatch((internalRes[0] + 15u) >> 4, (internalRes[1] + 15u) >> 4, 1);
+			globals::profiler->EndPass();
 		}
 
 		inputAoTexIdx = !inputAoTexIdx;
@@ -851,7 +848,9 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, 1, srvs.data());
 		context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
 		context->CSSetShader(prefilterNormalCompute.get(), nullptr, 0);
+		globals::profiler->BeginPass("ScreenSpaceGI::PrefilterNormals");
 		context->Dispatch((internalRes[0] + 15u) >> 4, (internalRes[1] + 15u) >> 4, 1);
+		globals::profiler->EndPass();
 	}
 
 	// GI
@@ -878,7 +877,9 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(giCompute.get(), nullptr, 0);
+		globals::profiler->BeginPass("ScreenSpaceGI::GI");
 		context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
+		globals::profiler->EndPass();
 
 		inputAoTexIdx = !inputAoTexIdx;
 		inputGITexIdx = !inputGITexIdx;
@@ -904,41 +905,13 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(blurCompute.get(), nullptr, 0);
+		globals::profiler->BeginPass("ScreenSpaceGI::Blur");
 		context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
+		globals::profiler->EndPass();
 
 		inputGITexIdx = !inputGITexIdx;
 		lastFrameGITexIdx = inputGITexIdx;
 		lastFrameAccumTexIdx = !lastFrameAccumTexIdx;
-	}
-
-	// VR stereo sync: bilateral blend of SSGI buffers between eyes
-	// Shi, Billeter, Eisemann 2022, "Stereo-consistent screen-space ambient occlusion"
-	if (REL::Module::IsVR() && stereoSyncCompute) {
-		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Stereo Sync");
-
-		if (globals::state->frameAnnotations)
-			globals::state->BeginPerfEvent("SSGI - Stereo Sync");
-
-		resetViews();
-		srvs.at(0) = texWorkingDepth->srv.get();
-		srvs.at(1) = texAo[inputAoTexIdx]->srv.get();
-		srvs.at(2) = texIlY[inputGITexIdx]->srv.get();
-		srvs.at(3) = texIlCoCg[inputGITexIdx]->srv.get();
-
-		uavs.at(0) = texAo[!inputAoTexIdx]->uav.get();
-		uavs.at(1) = texIlY[!inputGITexIdx]->uav.get();
-		uavs.at(2) = texIlCoCg[!inputGITexIdx]->uav.get();
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(stereoSyncCompute.get(), nullptr, 0);
-		context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
-
-		inputAoTexIdx = !inputAoTexIdx;
-		inputGITexIdx = !inputGITexIdx;
-
-		if (globals::state->frameAnnotations)
-			globals::state->EndPerfEvent();
 	}
 
 	// upsample
@@ -958,7 +931,9 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(upsampleCompute.get(), nullptr, 0);
+		globals::profiler->BeginPass("ScreenSpaceGI::Upsample");
 		context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
+		globals::profiler->EndPass();
 
 		inputAoTexIdx = !inputAoTexIdx;
 		inputGITexIdx = !inputGITexIdx;
@@ -977,3 +952,5 @@ void ScreenSpaceGI::DrawSSGI()
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 	context->CSSetShader(nullptr, nullptr, 0);
 }
+
+#undef I18N_KEY_PREFIX

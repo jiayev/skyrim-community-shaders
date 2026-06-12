@@ -24,11 +24,13 @@
 #include "FeatureVersions.h"
 #include "Features/RenderDoc.h"
 #include "Features/Upscaling.h"
+#include "I18n/I18n.h"
 #include "Menu/AdvancedSettingsRenderer.h"
 #include "Menu/BackgroundBlur.h"
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
 #include "Menu/HomePageRenderer.h"
+#include "Menu/CursorLoader.h"
 #include "Menu/IconLoader.h"
 #include "Menu/MenuHeaderRenderer.h"
 #include "Menu/OverlayRenderer.h"
@@ -39,13 +41,12 @@
 #include "Util.h"
 #include "Utils/UI.h"
 
+#include "CSEditor/EditorWindow.h"
+#include "Features/CSEditor.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/ScreenshotFeature.h"
-#include "Features/VR.h"
-#include "Features/WeatherEditor.h"
-#include "WeatherEditor/EditorWindow.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
@@ -136,6 +137,19 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	MouseCursorScale)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Menu::ThemeSettings::CursorImageSettings,
+	File,
+	HotspotX,
+	HotspotY)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Menu::ThemeSettings::CursorSettings,
+	Scale,
+	File,
+	HotspotX,
+	HotspotY)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings,
 	FontSize,
 	FontName,
@@ -149,6 +163,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CenterHeader,
 	TooltipHoverDelay,
 	BackgroundBlurEnabled,
+	UseCustomCursor,
+	Cursor,
 	ScrollbarOpacity,
 	Palette,
 	StatusPalette,
@@ -163,7 +179,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	OverlayToggleKey,
 	ShaderBlockPrevKey,
 	ShaderBlockNextKey,
-	WeatherEditorToggleKey,
+	CSEditorToggleKey,
 	EnableShaderBlocking,
 	FirstTimeSetupCompleted,
 	SkipClearCacheConfirmation,
@@ -176,6 +192,69 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 bool IsEnabled = false;
 std::unordered_map<std::string, int> Menu::categoryCounts;
+
+namespace
+{
+	struct CursorTypeKey
+	{
+		const char* key;
+		ImGuiMouseCursor type;
+	};
+
+	constexpr CursorTypeKey kCursorTypeKeys[] = {
+		{ "Arrow", ImGuiMouseCursor_Arrow },
+		{ "TextInput", ImGuiMouseCursor_TextInput },
+		{ "ResizeAll", ImGuiMouseCursor_ResizeAll },
+		{ "ResizeNS", ImGuiMouseCursor_ResizeNS },
+		{ "ResizeEW", ImGuiMouseCursor_ResizeEW },
+		{ "ResizeNESW", ImGuiMouseCursor_ResizeNESW },
+		{ "ResizeNWSE", ImGuiMouseCursor_ResizeNWSE },
+		{ "Hand", ImGuiMouseCursor_Hand },
+		{ "NotAllowed", ImGuiMouseCursor_NotAllowed },
+	};
+}
+
+void Menu::CursorFromJson(const json& cursorJson, ThemeSettings::CursorSettings& cursor)
+{
+	cursor.Types = {};
+
+	if (!cursorJson.contains("Types")) {
+		return;
+	}
+
+	const auto& types = cursorJson["Types"];
+	if (types.is_object()) {
+		for (const auto& [key, type] : kCursorTypeKeys) {
+			if (types.contains(key) && types[key].is_object()) {
+				types[key].get_to(cursor.Types[static_cast<size_t>(type)]);
+			}
+		}
+		return;
+	}
+
+	// Legacy: sparse array indexed by ImGuiMouseCursor_*
+	if (types.is_array()) {
+		for (size_t i = 0; i < ImGuiMouseCursor_COUNT && i < types.size(); ++i) {
+			if (types[i].is_object()) {
+				types[i].get_to(cursor.Types[i]);
+			}
+		}
+	}
+}
+
+void Menu::CursorToJson(json& cursorJson, const ThemeSettings::CursorSettings& cursor)
+{
+	json types = json::object();
+	for (const auto& [key, type] : kCursorTypeKeys) {
+		const auto& settings = cursor.Types[static_cast<size_t>(type)];
+		if (!settings.File.empty() || settings.HotspotX != 0.0f || settings.HotspotY != 0.0f) {
+			types[key] = settings;
+		}
+	}
+	if (!types.empty()) {
+		cursorJson["Types"] = types;
+	}
+}
 
 // Pad FontRoles JSON array with defaults if shorter than FontRole::Count.
 // Prevents deserialization failure when loading old settings with fewer font roles.
@@ -306,6 +385,8 @@ Menu::~Menu()
 	uiIcons.playMode.Release();
 	uiIcons.search.Release();
 
+	Util::CursorLoader::Shutdown();
+
 	// Clean up blur resources
 	BackgroundBlur::Cleanup();
 
@@ -342,7 +423,7 @@ void Menu::Load(json& o_json)
 	migrateKey(o_json, "OverlayToggleKey", settings.OverlayToggleKey);
 	migrateKey(o_json, "ShaderBlockPrevKey", settings.ShaderBlockPrevKey);
 	migrateKey(o_json, "ShaderBlockNextKey", settings.ShaderBlockNextKey);
-	migrateKey(o_json, "WeatherEditorToggleKey", settings.WeatherEditorToggleKey);
+	migrateKey(o_json, "CSEditorToggleKey", settings.CSEditorToggleKey);
 	migrateKey(o_json, "ScreenshotKey", settings.ScreenshotKey);
 
 	// Helper for new smart serialization with error handling
@@ -363,7 +444,7 @@ void Menu::Load(json& o_json)
 	loadComboList(o_json, "OverlayToggleKey", settings.OverlayToggleKey);
 	loadComboList(o_json, "ShaderBlockPrevKey", settings.ShaderBlockPrevKey);
 	loadComboList(o_json, "ShaderBlockNextKey", settings.ShaderBlockNextKey);
-	loadComboList(o_json, "WeatherEditorToggleKey", settings.WeatherEditorToggleKey);
+	loadComboList(o_json, "CSEditorToggleKey", settings.CSEditorToggleKey);
 	loadComboList(o_json, "ScreenshotKey", settings.ScreenshotKey);
 
 	// Legacy support: If old config has Theme data and no SelectedThemePreset, load it
@@ -372,6 +453,9 @@ void Menu::Load(json& o_json)
 		SanitizeFontRolesJson(o_json["Theme"]);
 		settings.Theme = o_json["Theme"];
 		PaletteFromJson(o_json["Theme"], settings.Theme.FullPalette);
+		if (o_json["Theme"].contains("Cursor") && o_json["Theme"]["Cursor"].is_object()) {
+			CursorFromJson(o_json["Theme"]["Cursor"], settings.Theme.Cursor);
+		}
 		MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
 
 		auto& bodyRole = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)];
@@ -428,7 +512,7 @@ void Menu::Save(json& o_json)
 	InputCombo::ComboList::to_json(o_json["OverlayToggleKey"], settings.OverlayToggleKey);
 	InputCombo::ComboList::to_json(o_json["ShaderBlockPrevKey"], settings.ShaderBlockPrevKey);
 	InputCombo::ComboList::to_json(o_json["ShaderBlockNextKey"], settings.ShaderBlockNextKey);
-	InputCombo::ComboList::to_json(o_json["WeatherEditorToggleKey"], settings.WeatherEditorToggleKey);
+	InputCombo::ComboList::to_json(o_json["CSEditorToggleKey"], settings.CSEditorToggleKey);
 	InputCombo::ComboList::to_json(o_json["ScreenshotKey"], settings.ScreenshotKey);
 }
 
@@ -439,7 +523,11 @@ void Menu::LoadTheme(json& o_json)
 		SanitizeFontRolesJson(o_json["Theme"]);
 		settings.Theme = o_json["Theme"];
 		PaletteFromJson(o_json["Theme"], settings.Theme.FullPalette);
+		if (o_json["Theme"].contains("Cursor") && o_json["Theme"]["Cursor"].is_object()) {
+			CursorFromJson(o_json["Theme"]["Cursor"], settings.Theme.Cursor);
+		}
 		MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
+		Util::CursorLoader::MigrateLegacyCursorSettings(settings.Theme);
 
 		auto& bodyRole = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)];
 		if (!Util::ValidateFont(bodyRole.File)) {
@@ -468,6 +556,7 @@ void Menu::SaveTheme(json& o_json)
 
 	o_json["Theme"] = settings.Theme;
 	PaletteToJson(o_json["Theme"], settings.Theme.FullPalette);
+	CursorToJson(o_json["Theme"]["Cursor"], settings.Theme.Cursor);
 }
 
 std::vector<std::string> Menu::DiscoverThemes()
@@ -501,8 +590,12 @@ bool Menu::LoadThemePreset(const std::string& themeName)
 		try {
 			settings.Theme = themeSettings;
 			PaletteFromJson(themeSettings, settings.Theme.FullPalette);
+			if (themeSettings.contains("Cursor") && themeSettings["Cursor"].is_object()) {
+				CursorFromJson(themeSettings["Cursor"], settings.Theme.Cursor);
+			}
 
 			MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
+			Util::CursorLoader::MigrateLegacyCursorSettings(settings.Theme);
 			auto& bodyRole = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)];
 			if (!Util::ValidateFont(bodyRole.File)) {
 				const auto& defaults = Menu::GetDefaultFontRole(FontRole::Body);
@@ -521,6 +614,7 @@ bool Menu::LoadThemePreset(const std::string& themeName)
 
 			// Schedule deferred icon reload to apply theme-specific icon overrides
 			pendingIconReload = true;
+			pendingCursorReload = true;
 
 			// Apply background blur enabled state from theme
 			BackgroundBlur::SetEnabled(settings.Theme.BackgroundBlurEnabled);
@@ -628,6 +722,8 @@ void Menu::Init()
 		logger::warn("Menu::Init() - Failed to load UI icons. Will fallback to text buttons");
 	}
 
+	Util::CursorLoader::Reload(this);
+
 	// Initialize background blur system
 	if (!BackgroundBlur::Initialize()) {
 		logger::warn("Menu::Init() - Failed to initialize background blur system");
@@ -669,7 +765,7 @@ void Menu::DrawSettings()
 	resetLayout = false;
 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
 	auto expectedTag = std::format("v{}", versionStr);
-	auto displayTitle = Plugin::BUILD_DESCRIBE == expectedTag ? std::format("Community Shaders {}", versionStr) : std::format("Community Shaders {} [{}]", versionStr, Plugin::BUILD_DESCRIBE);
+	auto displayTitle = Plugin::BUILD_DESCRIBE == expectedTag ? I18n::GetSingleton()->Format("menu.window_title", { { "version", versionStr } }, "Community Shaders {version}") : I18n::GetSingleton()->Format("menu.window_title_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Community Shaders {version} [{build}]");
 	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state
 	auto title = std::format("{}###CommunityShaders", displayTitle);
 
@@ -684,7 +780,7 @@ void Menu::DrawSettings()
 		windowFlags |= ImGuiWindowFlags_NoTitleBar;
 	}
 
-	ImGui::Begin(title.c_str(), &IsEnabled, windowFlags);
+	Util::BeginWithRoundedClose(title.c_str(), &IsEnabled, windowFlags);
 	{
 		// Update docking state tracking
 		bool isDocked = ImGui::IsWindowDocked();
@@ -759,7 +855,7 @@ void Menu::DrawGeneralSettings()
 		.settingOverlayToggleKey = settingOverlayToggleKey,
 		.settingShaderBlockPrevKey = settingShaderBlockPrevKey,
 		.settingShaderBlockNextKey = settingShaderBlockNextKey,
-		.settingWeatherEditorToggleKey = settingWeatherEditorToggleKey,
+		.settingCSEditorToggleKey = settingCSEditorToggleKey,
 		.settingScreenshotKey = settingScreenshotKey
 	};
 
@@ -785,14 +881,15 @@ void Menu::DrawDisableAtBootSettings()
 	auto state = globals::state;
 	auto& disabledFeatures = state->GetDisabledFeatures();
 
-	ImGui::Text(
-		"Select features to disable at boot. "
-		"This is the same as deleting a feature.ini file. "
-		"Restart will be required to reenable.");
+	ImGui::Text("%s",
+		T("menu.disable_at_boot_desc",
+			"Select features to disable at boot. "
+			"This is the same as deleting a feature.ini file. "
+			"Restart will be required to reenable."));
 
 	ImGui::Spacing();
 
-	if (ImGui::CollapsingHeader("Features", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::CollapsingHeader(T("menu.features", "Features"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		// Prepare a sorted list of feature pointers
 		auto featureList = Feature::GetFeatureList();
 		std::sort(featureList.begin(), featureList.end(), [](Feature* a, Feature* b) {
@@ -814,11 +911,21 @@ void Menu::DrawDisableAtBootSettings()
 
 void Menu::DrawFooter()
 {
-	ImGui::BulletText(std::format("Game Version: {} {}", magic_enum::enum_name(REL::Module::GetRuntime()), Util::GetFormattedVersion(REL::Module::get().version()).c_str()).c_str());
+	ImGui::BulletText("%s", I18n::GetSingleton()->Format("menu.footer.game_version",
+													{ { "runtime", std::string(magic_enum::enum_name(REL::Module::GetRuntime())) },
+														{ "version", Util::GetFormattedVersion(REL::Module::get().version()) } },
+													"Game Version: {runtime} {version}")
+								.c_str());
 	ImGui::SameLine();
-	ImGui::BulletText(std::format("D3D12 Swap Chain: {}", globals::features::upscaling.d3d12SwapChainActive ? "Active" : "Inactive").c_str());
+	ImGui::BulletText("%s", I18n::GetSingleton()->Format("menu.footer.d3d12_swap_chain",
+													{ { "status", globals::features::upscaling.d3d12SwapChainActive ? std::string(T("common.active", "Active")) : std::string(T("common.inactive", "Inactive")) } },
+													"D3D12 Swap Chain: {status}")
+								.c_str());
 	ImGui::SameLine();
-	ImGui::BulletText(std::format("GPU: {}", globals::state->adapterDescription.c_str()).c_str());
+	ImGui::BulletText("%s", I18n::GetSingleton()->Format("menu.footer.gpu",
+													{ { "name", globals::state->adapterDescription } },
+													"GPU: {name}")
+								.c_str());
 }
 
 /**
@@ -828,7 +935,7 @@ void Menu::DrawFooter()
  * callbacks for input processing, settings rendering, and key mapping. This method
  * serves as the bridge between Menu's state and the extracted overlay rendering logic.
  *
- * Handles VR setup, input event processing, shader compilation status, feature overlays,
+ * Handles input event processing, shader compilation status, feature overlays,
  * A/B testing, and ImGui frame management through the specialized renderer component.
  */
 void Menu::DrawOverlay()
@@ -859,6 +966,17 @@ void Menu::DrawOverlay()
 		}
 	}
 
+	if (pendingCursorReload && canReload) {
+		static bool loggedCursorReloadRetry = false;
+		if (Util::CursorLoader::Reload(this)) {
+			pendingCursorReload = false;
+			loggedCursorReloadRetry = false;
+		} else if (!loggedCursorReloadRetry) {
+			logger::warn("Menu::DrawOverlay() - Cursor reload deferred (will retry when ready)");
+			loggedCursorReloadRetry = true;
+		}
+	}
+
 	OverlayRenderer::RenderOverlay(
 		*this,
 		[this]() { ProcessInputEventQueue(); },
@@ -873,11 +991,10 @@ void Menu::DrawOverlay()
 }
 
 /**
- * @brief Processes queued input events for both VR and non-VR devices
+ * @brief Processes queued input events
  *
- * This method handles the complex logic of routing input events to appropriate handlers:
- * - VR controller events are forwarded to the VR system for specialized processing
- * - Non-VR events (keyboard, mouse) are processed directly for ImGui integration
+ * This method handles the logic of routing input events to appropriate handlers:
+ * - Keyboard and mouse events are processed directly for ImGui integration
  * - Includes key state normalization and stuck key detection/correction
  *
  * The method maintains thread safety through mutex protection of the input event queue.
@@ -885,7 +1002,7 @@ void Menu::DrawOverlay()
  * @note This method contains Menu-specific logic and state management that makes it
  *       inappropriate for extraction to a utility class.
  */
-static std::vector<InputCombo> DeriveWeatherEditorKey(const std::vector<InputCombo>& menuKey)
+static std::vector<InputCombo> DeriveCSEditorKey(const std::vector<InputCombo>& menuKey)
 {
 	bool hasShift = false;
 	uint32_t baseKey = 0;
@@ -910,28 +1027,7 @@ void Menu::ProcessInputEventQueue()
 {
 	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
 	ImGuiIO& io = ImGui::GetIO();
-	// Split the queue into VR and non-VR events
-	std::vector<KeyEvent> vrEvents;
-	std::vector<KeyEvent> nonVREvents;
 	for (auto& event : _keyEventQueue) {
-		bool isVRController = ((event.device == RE::INPUT_DEVICE::kVivePrimary || event.device == RE::INPUT_DEVICE::kViveSecondary ||
-								event.device == RE::INPUT_DEVICE::kOculusPrimary || event.device == RE::INPUT_DEVICE::kOculusSecondary ||
-								event.device == RE::INPUT_DEVICE::kWMRPrimary || event.device == RE::INPUT_DEVICE::kWMRSecondary));
-
-		if (globals::features::vr.IsOpenVRCompatible() && isVRController) {
-			vrEvents.push_back(event);
-		} else {
-			nonVREvents.push_back(event);
-		}
-	}
-	// Process VR events in VR
-	if (!vrEvents.empty()) {
-		globals::features::vr.ProcessVREvents(vrEvents);
-		globals::features::vr.UpdateOverlayMenuStateFromInput();
-	}
-
-	// Process non-VR events in Menu
-	for (auto& event : nonVREvents) {
 		if (event.eventType == RE::INPUT_EVENT_TYPE::kChar) {
 			io.AddInputCharacter(event.keyCode);
 			continue;
@@ -962,6 +1058,61 @@ void Menu::ProcessInputEventQueue()
 			const bool wasCapturingHotkey = IsCapturingHotkeyInput();
 			const bool allowSetupCloseKey = wasCapturingHotkey && HomePageRenderer::ShouldShowFirstTimeSetup() &&
 			                                (key == VK_RETURN || key == VK_ESCAPE);
+
+			// Dispatch bound hotkey actions for `key`. Combo bindings (modifier + key)
+			// fire on key-down for responsiveness; single-key bindings fire on key-up.
+			auto dispatchHotkeyActions = [this, key](bool combosOnly) {
+				struct KeyAction
+				{
+					std::vector<InputCombo>& settingKey;
+					std::function<void()> action;
+				};
+				auto shaderCache = globals::shaderCache;
+				KeyAction keyActions[] = {
+					{ settings.ToggleKey, [this]() {
+						 if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
+							 IsEnabled = !IsEnabled;
+							 if (IsEnabled)
+								 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
+						 }
+					 } },
+					{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->backgroundCompilation = true; } },
+					{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnabled()); } },
+					{ settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
+					{ settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },
+					{ settings.OverlayToggleKey, []() { Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible; } },
+					{ settings.CSEditorToggleKey, []() {
+						 auto* ew = EditorWindow::GetSingleton();
+						 if (!ew)
+							 return;
+						 if (ew->GetPreviewMode() == EditorWindow::PreviewMode::FreeCamera) {
+							 // Flying → lock camera position for editing
+							 ew->ToggleFreeCameraLock();
+						 } else if (ew->IsInPreviewMode()) {
+							 // Locked or PlayMode → fully exit preview
+							 ew->ExitPreviewMode();
+						 } else {
+							 CSEditor::ToggleEditorWindow();
+						 }
+					 } },
+					{ settings.ScreenshotKey, []() {
+						 if (globals::features::screenshotFeature.loaded)
+							 globals::features::screenshotFeature.captureRequested = true;
+					 } },
+				};
+				// RenderDoc's capture key is a single, unmodified key; only consider it on key-up.
+				if (!combosOnly && globals::features::renderDoc.HandleCaptureHotkey(key))
+					return true;
+				for (const auto& ka : keyActions) {
+					const bool isCombo = ka.settingKey.size() > 1;
+					if (isCombo == combosOnly && InputCombo::MatchesKeyboardCombo(ka.settingKey, key)) {
+						ka.action();
+						return true;
+					}
+				}
+				return false;
+			};
+
 			if (!event.IsPressed()) {
 				// Skip key release if it was used to close the first-time setup dialog
 				if (HomePageRenderer::ShouldSkipKeyRelease(key)) {
@@ -975,20 +1126,19 @@ void Menu::ProcessInputEventQueue()
 					bool* settingFlag;
 					std::function<void(std::vector<InputCombo>)> action;
 				};
-				auto shaderCache = globals::shaderCache;
 				HotkeyAction hotkeyActions[] = {
 					{ &settings.ToggleKey, &settingToggleKey, [this](std::vector<InputCombo> keys) {
 						 settings.ToggleKey = keys;
 						 settingToggleKey = false;
 						 if (!settings.FirstTimeSetupCompleted)
-							 settings.WeatherEditorToggleKey = DeriveWeatherEditorKey(keys);
+							 settings.CSEditorToggleKey = DeriveCSEditorKey(keys);
 					 } },
 					{ &settings.SkipCompilationKey, &settingSkipCompilationKey, [this](std::vector<InputCombo> keys) { settings.SkipCompilationKey = keys; settingSkipCompilationKey = false; } },
 					{ &settings.EffectToggleKey, &settingsEffectsToggle, [this](std::vector<InputCombo> keys) { settings.EffectToggleKey = keys; settingsEffectsToggle = false; } },
 					{ &settings.OverlayToggleKey, &settingOverlayToggleKey, [this](std::vector<InputCombo> keys) { settings.OverlayToggleKey = keys; settingOverlayToggleKey = false; } },
 					{ &settings.ShaderBlockPrevKey, &settingShaderBlockPrevKey, [this](std::vector<InputCombo> keys) { settings.ShaderBlockPrevKey = keys; settingShaderBlockPrevKey = false; } },
 					{ &settings.ShaderBlockNextKey, &settingShaderBlockNextKey, [this](std::vector<InputCombo> keys) { settings.ShaderBlockNextKey = keys; settingShaderBlockNextKey = false; } },
-					{ &settings.WeatherEditorToggleKey, &settingWeatherEditorToggleKey, [this](std::vector<InputCombo> keys) { settings.WeatherEditorToggleKey = keys; settingWeatherEditorToggleKey = false; } },
+					{ &settings.CSEditorToggleKey, &settingCSEditorToggleKey, [this](std::vector<InputCombo> keys) { settings.CSEditorToggleKey = keys; settingCSEditorToggleKey = false; } },
 					{ &settings.ScreenshotKey, &settingScreenshotKey, [this](std::vector<InputCombo> keys) { settings.ScreenshotKey = keys; settingScreenshotKey = false; } },
 				};
 				bool handled = false;
@@ -1036,51 +1186,11 @@ void Menu::ProcessInputEventQueue()
 					}
 				}
 				if (!handled) {
-					struct KeyAction
-					{
-						std::vector<InputCombo>& settingKey;
-						std::function<void()> action;
-					};
-					KeyAction keyActions[] = {
-						{ settings.ToggleKey, [this]() {
-							 if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
-								 IsEnabled = !IsEnabled;
-								 if (IsEnabled)
-									 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
-							 }
-						 } },
-						{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->backgroundCompilation = true; } },
-						{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnabled()); } },
-						{ settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
-						{ settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },
-						{ settings.OverlayToggleKey, []() { Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible; } },
-						{ settings.WeatherEditorToggleKey, []() {
-							 auto* ew = EditorWindow::GetSingleton();
-							 if (!ew)
-								 return;
-							 if (ew->GetPreviewMode() == EditorWindow::PreviewMode::FreeCamera) {
-								 // Flying → lock camera position for editing
-								 ew->ToggleFreeCameraLock();
-							 } else if (ew->IsInPreviewMode()) {
-								 // Locked or PlayMode → fully exit preview
-								 ew->ExitPreviewMode();
-							 } else {
-								 WeatherEditor::ToggleEditorWindow();
-							 }
-						 } },
-						{ settings.ScreenshotKey, []() {
-							 if (globals::features::screenshotFeature.loaded)
-								 globals::features::screenshotFeature.captureRequested = true;
-						 } },
-					};
-					if (!globals::features::renderDoc.HandleCaptureHotkey(key)) {
-						for (const auto& ka : keyActions) {
-							if (InputCombo::MatchesKeyboardCombo(ka.settingKey, key)) {
-								ka.action();
-								break;
-							}
-						}
-					}
+					// Single-key hotkeys fire on key-up; combos already fired on key-down.
+					// If this key's key-down already fired a combo, suppress the single-key
+					// binding so releasing the modifier first doesn't trigger it as well.
+					if (_comboFiredKeys.erase(key) == 0)
+						dispatchHotkeyActions(false);
 				}
 
 				// Handle ESC key for menu and editor window
@@ -1094,6 +1204,12 @@ void Menu::ProcessInputEventQueue()
 						IsEnabled = false;
 					}
 				}
+			} else if (event.IsDown() && !wasCapturingHotkey) {
+				// Fire combo hotkeys on the key-down transition so they respond on
+				// press rather than release. IsDown() (not IsPressed()) ensures we
+				// trigger only once instead of every frame the key is held.
+				if (dispatchHotkeyActions(true))
+					_comboFiredKeys.insert(key);
 			}
 
 			// Don't forward hotkey events to ImGui when input is captured (prevents e.g. End key scrolling the feature list)
@@ -1101,7 +1217,7 @@ void Menu::ProcessInputEventQueue()
 			const std::vector<InputCombo>* hotkeys[] = {
 				&settings.ToggleKey, &settings.EffectToggleKey,
 				&settings.OverlayToggleKey, &settings.ShaderBlockPrevKey, &settings.ShaderBlockNextKey,
-				&settings.WeatherEditorToggleKey,
+				&settings.CSEditorToggleKey,
 				&settings.ScreenshotKey
 			};
 			bool isHotkey = ShouldSwallowInput() && std::any_of(std::begin(hotkeys), std::end(hotkeys),
@@ -1132,7 +1248,7 @@ void Menu::ProcessInputEventQueue()
 bool Menu::IsCapturingHotkeyInput() const
 {
 	return settingToggleKey || settingSkipCompilationKey || settingsEffectsToggle ||
-	       settingOverlayToggleKey || settingShaderBlockPrevKey || settingShaderBlockNextKey || settingWeatherEditorToggleKey || settingScreenshotKey;
+	       settingOverlayToggleKey || settingShaderBlockPrevKey || settingShaderBlockNextKey || settingCSEditorToggleKey || settingScreenshotKey;
 }
 
 void Menu::addToEventQueue(KeyEvent e)
@@ -1197,23 +1313,23 @@ void Menu::SelectFeatureMenu(const std::string& featureName)
 /**
  * @brief Renders the standalone weather details window when enabled
  *
- * Delegates to the WeatherEditor feature for rendering the weather details window
+ * Delegates to the CSEditor feature for rendering the weather details window
  * that can remain open even when the main menu is closed. This provides a simple
- * coordination layer between the Menu system and the WeatherEditor feature.
+ * coordination layer between the Menu system and the CSEditor feature.
  */
 void Menu::DrawWeatherDetailsWindow()
 {
-	if (!globals::features::weatherEditor.WeatherDetailsWindow.Enabled) {
+	if (!globals::features::csEditor.WeatherDetailsWindow.Enabled) {
 		return;
 	}
-	if (!globals::features::weatherEditor.loaded) {
+	if (!globals::features::csEditor.loaded) {
 		return;
 	}
 
 	// Use Weather core feature for all window management and rendering
-	auto& weather = globals::features::weatherEditor;
-	bool* p_open = &globals::features::weatherEditor.WeatherDetailsWindow.Enabled;
-	weather.RenderWeatherDetailsWindow(p_open);
+	auto& weather = globals::features::csEditor;
+	bool* p_open = &globals::features::csEditor.WeatherDetailsWindow.Enabled;
+	weather.RenderWeatherDetailsWindow(p_open, !weather.WeatherDetailsWindow.ShowInOverlay);
 }
 
 /**
