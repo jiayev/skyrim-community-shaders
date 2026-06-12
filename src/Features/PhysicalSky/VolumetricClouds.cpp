@@ -53,6 +53,35 @@ void PhysicalSky::SetupVolumetricResources()
 		volCubeHistoryCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<VolumetricCloudCubeHistoryCB>(), "PhysicalSky::VolumetricCubeHistoryCB");
 	}
 
+	{
+		D3D11_TEXTURE2D_DESC texDesc{
+			.Width = 3,
+			.Height = 1,
+			.MipLevels = 1,
+			.ArraySize = 1,
+			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+			.SampleDesc = { 1, 0 },
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+			.CPUAccessFlags = 0,
+			.MiscFlags = 0
+		};
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = texDesc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+			.Format = texDesc.Format,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+
+		texVolCloudAmbientSH = eastl::make_unique<Texture2D>(texDesc, "PhysicalSky::VolumetricCloudAmbientSH");
+		texVolCloudAmbientSH->CreateSRV(srvDesc);
+		texVolCloudAmbientSH->CreateUAV(uavDesc);
+	}
+
 	// Get main render target dimensions for TR/Lum textures
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
 	auto& mainTex = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
@@ -60,14 +89,13 @@ void PhysicalSky::SetupVolumetricResources()
 	D3D11_TEXTURE2D_DESC mainDesc;
 	mainTex.texture->GetDesc(&mainDesc);
 
-	// Volumetric transmittance texture (R11G11B10_FLOAT, screen resolution)
-	{
+	auto createCloudTexture = [](uint32_t a_width, uint32_t a_height, DXGI_FORMAT a_format, const char* a_name) {
 		D3D11_TEXTURE2D_DESC tex_desc = {
-			.Width = mainDesc.Width,
-			.Height = mainDesc.Height,
+			.Width = a_width,
+			.Height = a_height,
 			.MipLevels = 1,
 			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R11G11B10_FLOAT,
+			.Format = a_format,
 			.SampleDesc = { .Count = 1, .Quality = 0 },
 			.Usage = D3D11_USAGE_DEFAULT,
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
@@ -85,13 +113,29 @@ void PhysicalSky::SetupVolumetricResources()
 			.Texture2D = { .MipSlice = 0 }
 		};
 
-		texVolTr = eastl::make_unique<Texture2D>(tex_desc);
-		texVolTr->CreateSRV(srv_desc);
-		texVolTr->CreateUAV(uav_desc);
+		auto texture = eastl::make_unique<Texture2D>(tex_desc, a_name);
+		texture->CreateSRV(srv_desc);
+		texture->CreateUAV(uav_desc);
+		return texture;
+	};
 
-		texVolLum = eastl::make_unique<Texture2D>(tex_desc);
-		texVolLum->CreateSRV(srv_desc);
-		texVolLum->CreateUAV(uav_desc);
+	// Nubis main-view cloud textures: 1/4-resolution raymarch, full-resolution resample, then full-resolution blur.
+	{
+		const uint32_t lowW = std::max(1u, (mainDesc.Width + kVolCloudDownsample - 1u) / kVolCloudDownsample);
+		const uint32_t lowH = std::max(1u, (mainDesc.Height + kVolCloudDownsample - 1u) / kVolCloudDownsample);
+
+		texVolLowTr = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLowTr");
+		texVolLowLum = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLowLum");
+		texVolLowAux = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLowAux");
+		texVolUpscaleTr = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricUpscaleTr");
+		texVolUpscaleLum = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricUpscaleLum");
+		texVolUpscaleAux = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricUpscaleAux");
+		texVolTr = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricTr");
+		texVolLum = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLum");
+		texVolAux = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricAux");
+		texVolHistoryTr = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryTr");
+		texVolHistoryLum = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryLum");
+		texVolHistoryAux = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryAux");
 	}
 
 	// Low-resolution cubemap volumetric cloud textures for Dynamic Cubemaps inference.
@@ -101,7 +145,7 @@ void PhysicalSky::SetupVolumetricResources()
 			.Height = kVolCubeSize,
 			.MipLevels = 1,
 			.ArraySize = 6,
-			.Format = DXGI_FORMAT_R11G11B10_FLOAT,
+			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
 			.SampleDesc = { .Count = 1, .Quality = 0 },
 			.Usage = D3D11_USAGE_DEFAULT,
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
@@ -193,7 +237,10 @@ void PhysicalSky::CompileVolumetricShaders()
 	};
 
 	std::array shaderInfos = {
+		ShaderInfo{ &csVolAmbientSH, "Volumetrics.cs.hlsl", {}, "buildCloudAmbientSH" },
 		ShaderInfo{ &csVolMainView, "Volumetrics.cs.hlsl" },
+		ShaderInfo{ &csVolResample, "Volumetrics.cs.hlsl", {}, "resample" },
+		ShaderInfo{ &csVolBlur, "Volumetrics.cs.hlsl", {}, "blur" },
 		ShaderInfo{ &csVolShadowVolume, "Volumetrics.cs.hlsl", {}, "renderShadowVolume" },
 		ShaderInfo{ &csVolCubemap, "Volumetrics.cs.hlsl", {}, "renderCubemap" },
 		ShaderInfo{ &csVolCubemapHistory, "Volumetrics.cs.hlsl", {}, "accumulateCubemap" }
@@ -210,7 +257,7 @@ void PhysicalSky::CompileVolumetricShaders()
 
 void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 {
-	if (!csVolMainView || !csVolShadowVolume || !csVolCubemap)
+	if (!csVolMainView || !csVolResample || !csVolBlur || !csVolShadowVolume || !csVolCubemap || !csVolAmbientSH)
 		return;
 	if (!nubisNoiseSrv || !cloudTopLutSrv || !cloudBottomLutSrv)
 		return;
@@ -218,6 +265,15 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	auto state = globals::state;
 	auto context = globals::d3d::context;
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+	const uint32_t textureW = (uint32_t)cbData.texDim.x;
+	const uint32_t textureH = (uint32_t)cbData.texDim.y;
+	const uint32_t renderW = (uint32_t)cbData.frameDim.x;
+	const uint32_t renderH = (uint32_t)cbData.frameDim.y;
+	if (volHistoryWidth != textureW || volHistoryHeight != textureH) {
+		volMainHistoryValid = false;
+		volHistoryWidth = textureW;
+		volHistoryHeight = textureH;
+	}
 
 	// Convert cloud layer settings to noise offset (speed * time)
 	float3 noiseOffset = settings.cloudLayer.noiseSpeed * (state->timer * 1e-3f);
@@ -225,14 +281,18 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	// Aerial perspective max distance (same as LUT generation)
 	float apMaxDist = 40.f / 1.428e-5f;  // 40km in game units
 
+	const bool fullResolutionMainView = settings.volCloudFullResolution;
+	uint32_t lowW = fullResolutionMainView ? renderW : (texVolLowTr ? texVolLowTr->desc.Width : std::max(1u, (textureW + kVolCloudDownsample - 1u) / kVolCloudDownsample));
+	uint32_t lowH = fullResolutionMainView ? renderH : (texVolLowTr ? texVolLowTr->desc.Height : std::max(1u, (textureH + kVolCloudDownsample - 1u) / kVolCloudDownsample));
+
 	// Update StructuredBuffer
 	VolumetricCloudSB sbData = {
 		.rayMarchRange = settings.rayMarchRange / 1.428e-5f,  // km to game units
 		.shadowVolumeRange = settings.shadowVolumeRange / 1.428e-5f,
 		.cloudMaxStep = settings.cloudMaxStep,
-		._pad0 = 0,
-		.frameDim = { cbData.frameDim.x, cbData.frameDim.y },
-		.rcpFrameDim = { cbData.rcpFrameDim.x, cbData.rcpFrameDim.y },
+		.fullResolution = fullResolutionMainView ? 1u : 0u,
+		.frameDim = { cbData.texDim.x, cbData.texDim.y },
+		.rcpFrameDim = { cbData.rcpTexDim.x, cbData.rcpTexDim.y },
 		.dirlightDir = { cbData.sunDir.x, cbData.sunDir.y, cbData.sunDir.z },
 		._pad1 = 0,
 		.dirlightColor = { cbData.sunlightColor.x, cbData.sunlightColor.y, cbData.sunlightColor.z },
@@ -254,6 +314,17 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.msTransmittancePower = settings.cloudLayer.msTransmittancePower,
 		.msHeightPower = settings.cloudLayer.msHeightPower,
 		.ambientMult = settings.cloudLayer.ambientMult,
+		.densityErosionWeak = settings.cloudLayer.densityErosionWeak,
+		.densityErosionStrong = settings.cloudLayer.densityErosionStrong,
+		.noiseMipBiasWeak = settings.cloudLayer.noiseMipBiasWeak,
+		.noiseMipBiasStrong = settings.cloudLayer.noiseMipBiasStrong,
+		.hhfMinBlend = settings.cloudLayer.hhfMinBlend,
+		.hhfProfileThreshold = settings.cloudLayer.hhfProfileThreshold,
+		._pad3 = { 0.0f, 0.0f },
+		.lowFrameDim = { static_cast<float>(lowW), static_cast<float>(lowH) },
+		.rcpLowFrameDim = { 1.0f / static_cast<float>(lowW), 1.0f / static_cast<float>(lowH) },
+		.historyValid = volMainHistoryValid ? 1u : 0u,
+		.padding = { 0u, 0u, 0u },
 	};
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
@@ -275,6 +346,22 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		texApShadow ? texApShadow->srv.get() : nullptr,                                                                // t9
 		texSvLut->srv.get(),                                                                                           // t10
 	};
+	ID3D11ShaderResourceView* ambientShSrv = texVolCloudAmbientSH ? texVolCloudAmbientSH->srv.get() : nullptr;
+	if (a_pass == VolumetricCloudPass::kMainViewAndCubemap && texVolCloudAmbientSH) {
+		state->BeginPerfEvent("Volumetric Clouds: Ambient SH");
+		std::array<ID3D11UnorderedAccessView*, 1> ambientUavs = { texVolCloudAmbientSH->uav.get() };
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)ambientUavs.size(), ambientUavs.data(), nullptr);
+		context->CSSetShader(csVolAmbientSH.get(), nullptr, 0);
+		globals::profiler->BeginPass("PhysicalSky::VolumetricCloudAmbientSH");
+		context->Dispatch(1, 1, 1);
+		globals::profiler->EndPass();
+
+		ID3D11UnorderedAccessView* nullUav = nullptr;
+		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+		context->CSSetShader(nullptr, nullptr, 0);
+		state->EndPerfEvent();
+	}
 
 	// Shadow-related SRVs (t20-t23)
 	auto& volumetricShadows = globals::features::volumetricShadows;
@@ -300,6 +387,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		std::array<ID3D11UnorderedAccessView*, 2> uavs = { texShadowVolume->uav.get(), nullptr };
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetShaderResources(11, 1, &ambientShSrv);
 		context->CSSetShaderResources(20, (uint)shadowSrvs.size(), shadowSrvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(csVolShadowVolume.get(), nullptr, 0);
@@ -325,31 +413,110 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	}
 
 	if (a_pass == VolumetricCloudPass::kMainViewAndCubemap) {
-		// ===== Pass 2: Main View Ray March =====
+		// ===== Pass 2: Nubis Main View Ray March =====
 		state->BeginPerfEvent("Volumetric Clouds: Main View");
-		std::array<ID3D11UnorderedAccessView*, 2> uavs = { texVolTr->uav.get(), texVolLum->uav.get() };
+		std::array<ID3D11UnorderedAccessView*, 3> uavs = fullResolutionMainView ?
+		                                                     std::array<ID3D11UnorderedAccessView*, 3>{ texVolUpscaleTr->uav.get(), texVolUpscaleLum->uav.get(), texVolUpscaleAux->uav.get() } :
+		                                                     std::array<ID3D11UnorderedAccessView*, 3>{ texVolLowTr->uav.get(), texVolLowLum->uav.get(), texVolLowAux->uav.get() };
 		shadowSrvs[3] = texShadowVolume->srv.get();
 
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetShaderResources(11, 1, &ambientShSrv);
 		context->CSSetShaderResources(20, (uint)shadowSrvs.size(), shadowSrvs.data());
 		context->CSSetShader(csVolMainView.get(), nullptr, 0);
 
-		uint32_t resW = (uint32_t)cbData.frameDim.x;
-		uint32_t resH = (uint32_t)cbData.frameDim.y;
 		globals::profiler->BeginPass("PhysicalSky::VolumetricMainView");
-		context->Dispatch((resW + 7u) >> 3, (resH + 7u) >> 3, 1);
+		context->Dispatch((lowW + 7u) >> 3, (lowH + 7u) >> 3, 1);
 		globals::profiler->EndPass();
 		state->EndPerfEvent();
 
-		// ===== Pass 3: Cubemap Ray March =====
+		if (!fullResolutionMainView) {
+			// ===== Pass 3: Nubis Resample/Upscale =====
+			state->BeginPerfEvent("Volumetric Clouds: Resample");
+			{
+				ID3D11UnorderedAccessView* nullUavs[3] = {};
+				context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
+
+				std::array<ID3D11ShaderResourceView*, 9> passSrvs = {
+					texVolHistoryTr->srv.get(),
+					texVolHistoryLum->srv.get(),
+					texVolHistoryAux->srv.get(),
+					texVolLowTr->srv.get(),
+					texVolLowLum->srv.get(),
+					texVolLowAux->srv.get(),
+					nullptr,
+					nullptr,
+					nullptr,
+				};
+				uavs = { texVolUpscaleTr->uav.get(), texVolUpscaleLum->uav.get(), texVolUpscaleAux->uav.get() };
+				context->CSSetShaderResources(26, (uint)passSrvs.size(), passSrvs.data());
+				context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+				context->CSSetShader(csVolResample.get(), nullptr, 0);
+				globals::profiler->BeginPass("PhysicalSky::VolumetricResample");
+				context->Dispatch((renderW + 7u) >> 3, (renderH + 7u) >> 3, 1);
+				globals::profiler->EndPass();
+			}
+			state->EndPerfEvent();
+		}
+
+		// ===== Pass 4: Nubis Blur =====
+		if (settings.volCloudPostBlur) {
+			state->BeginPerfEvent("Volumetric Clouds: Blur");
+			{
+				ID3D11UnorderedAccessView* nullUavs[3] = {};
+				ID3D11ShaderResourceView* nullSrvs[9] = {};
+				context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
+				context->CSSetShaderResources(26, 9, nullSrvs);
+
+				std::array<ID3D11ShaderResourceView*, 9> passSrvs = {
+					nullptr,
+					nullptr,
+					nullptr,
+					nullptr,
+					nullptr,
+					nullptr,
+					texVolUpscaleTr->srv.get(),
+					texVolUpscaleLum->srv.get(),
+					texVolUpscaleAux->srv.get(),
+				};
+				uavs = { texVolTr->uav.get(), texVolLum->uav.get(), texVolAux->uav.get() };
+				context->CSSetShaderResources(26, (uint)passSrvs.size(), passSrvs.data());
+				context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+				context->CSSetShader(csVolBlur.get(), nullptr, 0);
+				globals::profiler->BeginPass("PhysicalSky::VolumetricBlur");
+				context->Dispatch((renderW + 7u) >> 3, (renderH + 7u) >> 3, 1);
+				globals::profiler->EndPass();
+			}
+			state->EndPerfEvent();
+		} else {
+			ID3D11UnorderedAccessView* nullUavs[3] = {};
+			context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
+			context->CopyResource(texVolTr->resource.get(), texVolUpscaleTr->resource.get());
+			context->CopyResource(texVolLum->resource.get(), texVolUpscaleLum->resource.get());
+			context->CopyResource(texVolAux->resource.get(), texVolUpscaleAux->resource.get());
+		}
+
+		{
+			ID3D11UnorderedAccessView* nullUavs[3] = {};
+			ID3D11ShaderResourceView* nullSrvs[9] = {};
+			context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
+			context->CSSetShaderResources(26, 9, nullSrvs);
+			context->CopyResource(texVolHistoryTr->resource.get(), texVolUpscaleTr->resource.get());
+			context->CopyResource(texVolHistoryLum->resource.get(), texVolUpscaleLum->resource.get());
+			context->CopyResource(texVolHistoryAux->resource.get(), texVolUpscaleAux->resource.get());
+			volMainHistoryValid = true;
+		}
+
+		// ===== Cubemap Ray March =====
 		if (texVolCubeTr && texVolCubeLum) {
 			state->BeginPerfEvent("Volumetric Clouds: Cubemap");
-			uavs = { texVolCubeTr->uav.get(), texVolCubeLum->uav.get() };
+			uavs = { texVolCubeTr->uav.get(), texVolCubeLum->uav.get(), nullptr };
 			shadowSrvs[3] = texShadowVolume->srv.get();
 
 			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+			context->CSSetShaderResources(11, 1, &ambientShSrv);
 			context->CSSetShaderResources(20, (uint)shadowSrvs.size(), shadowSrvs.data());
 			context->CSSetShader(csVolCubemap.get(), nullptr, 0);
 
@@ -397,16 +564,16 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 	// Cleanup
 	{
-		ID3D11ShaderResourceView* nullSrvs[11] = {};
+		ID3D11ShaderResourceView* nullSrvs[12] = {};
 		ID3D11ShaderResourceView* nullShadowSrvs[4] = {};
-		ID3D11ShaderResourceView* nullHistorySrvs[2] = {};
-		ID3D11UnorderedAccessView* nullUavs[2] = {};
+		ID3D11ShaderResourceView* nullHistorySrvs[11] = {};
+		ID3D11UnorderedAccessView* nullUavs[3] = {};
 		ID3D11Buffer* nullCb[1] = {};
 		ID3D11SamplerState* nullSamplers[3] = {};
-		context->CSSetShaderResources(0, 11, nullSrvs);
+		context->CSSetShaderResources(0, 12, nullSrvs);
 		context->CSSetShaderResources(20, 4, nullShadowSrvs);
-		context->CSSetShaderResources(24, 2, nullHistorySrvs);
-		context->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
+		context->CSSetShaderResources(24, 11, nullHistorySrvs);
+		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 		context->CSSetConstantBuffers(1, 1, nullCb);
 		context->CSSetSamplers(2, 3, nullSamplers);
 		context->CSSetShader(nullptr, nullptr, 0);

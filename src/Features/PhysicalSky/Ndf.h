@@ -87,6 +87,12 @@ struct CloudLayer
 	float3 noiseSpeed = { 0.f, -4.8f, 5.7f };  // m/s
 
 	float power = 1.0f;
+	float densityErosionWeak = 0.35f;
+	float densityErosionStrong = 0.18f;
+	float noiseMipBiasWeak = 0.75f;
+	float noiseMipBiasStrong = 0.15f;
+	float hhfMinBlend = 0.97f;
+	float hhfProfileThreshold = 0.12f;
 
 	// density
 	float3 scatter = { 85.f, 90.f, 95.f };

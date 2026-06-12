@@ -87,10 +87,17 @@ float Worley(float2 uv, uint2 freq)
 	noise2 = 1 - noise2;
 	float noise = noise0 * noise1 * noise2;
 	noise = saturate((noise - clip_range.x) / (clip_range.y - clip_range.x));
+	float coverage = pow(noise, power);
 
-	RWTexOutput[uint3(tid, 0)] = 0.;                 // min_h
-	RWTexOutput[uint3(tid, 1)] = 1.;                 // max_h
-	RWTexOutput[uint3(tid, 2)] = pow(noise, power);  // coverage
-	RWTexOutput[uint3(tid, 3)] = noise;              // cloud_type
-	RWTexOutput[uint3(tid, 4)] = wispiness;          // bottom_type
+	float height_noise = saturate(noise0 * 0.55 + noise1 * 0.30 + noise2 * 0.15);
+	float base_min_h = saturate(0.03 + (1.0 - height_noise) * 0.20 + (1.0 - coverage) * 0.10);
+	float layer_thickness = lerp(0.30, 0.94, coverage);
+	float max_h = saturate(base_min_h + layer_thickness);
+	float min_h = saturate(min(base_min_h, max_h - 0.08));
+
+	RWTexOutput[uint3(tid, 0)] = min_h;
+	RWTexOutput[uint3(tid, 1)] = max_h;
+	RWTexOutput[uint3(tid, 2)] = coverage;
+	RWTexOutput[uint3(tid, 3)] = noise;
+	RWTexOutput[uint3(tid, 4)] = wispiness;
 }

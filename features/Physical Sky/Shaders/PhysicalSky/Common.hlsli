@@ -552,8 +552,8 @@ Texture2D<float4> TexMsLut : register(t113);
 	float3 GetShadowVolumeUvw(float3 posRelative, float3 sunDir)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
-		float3 boundsMin = float3(FrameBuffer::CameraPosAdjust[0].xy - 0.5 * data.shadowVolumeRange, data.volCloudBottom);
-		float3 boundsMax = float3(FrameBuffer::CameraPosAdjust[0].xy + 0.5 * data.shadowVolumeRange, data.volCloudBottom + data.volCloudThickness);
+		float3 boundsMin = float3(FrameBuffer::CameraPosAdjust.xy - 0.5 * data.shadowVolumeRange, data.volCloudBottom);
+		float3 boundsMax = float3(FrameBuffer::CameraPosAdjust.xy + 0.5 * data.shadowVolumeRange, data.volCloudBottom + data.volCloudThickness);
 
 		float3 samplePos = posRelative;
 		if (any(posRelative < boundsMin) || any(posRelative > boundsMax)) {
@@ -570,7 +570,7 @@ Texture2D<float4> TexMsLut : register(t113);
 			samplePos += (max(tNear, 0) + 128) * sunDir;
 		}
 
-		float3 uvw = samplePos - float3(FrameBuffer::CameraPosAdjust[0].xy, data.volCloudBottom);
+		float3 uvw = samplePos - float3(FrameBuffer::CameraPosAdjust.xy, data.volCloudBottom);
 		uvw /= float3(data.shadowVolumeRange.xx, data.volCloudThickness);
 		uvw.xy += 0.5;
 		return uvw;
@@ -592,7 +592,7 @@ Texture2D<float4> TexMsLut : register(t113);
 		if (all(uvw > 0) && all(uvw < 1)) {
 			cloudDensity = TexShadowVolume.SampleLevel(samp, uvw, 0);
 		} else {
-			float3 posPlanet = posRelative + float3(-FrameBuffer::CameraPosAdjust[0].xy, data.rPlanet);
+			float3 posPlanet = posRelative + float3(-FrameBuffer::CameraPosAdjust.xy, data.rPlanet);
 			float rInner = data.rPlanet + data.volCloudBottom;
 			float rOuter = rInner + data.volCloudThickness;
 			float innerDist = max(RayIntersectSphere(posPlanet, data.sunDir, 0, rInner), 0);

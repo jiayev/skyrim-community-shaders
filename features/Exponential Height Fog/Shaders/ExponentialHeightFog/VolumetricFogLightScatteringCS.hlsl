@@ -211,7 +211,7 @@ float SampleDirectionalWorldShadow(float3 positionWS)
 #endif
 #if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
-		worldShadow *= dot(PhysSky::GetDirlightTransmittance(positionWS + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, LinearSampler), 1.0f.xxx / 3.0f);
+		worldShadow *= dot(PhysSky::GetDirlightTransmittance(positionWS + FrameBuffer::CameraPosAdjust.xyz, LinearSampler), 1.0f.xxx / 3.0f);
 #endif
 	return worldShadow;
 }

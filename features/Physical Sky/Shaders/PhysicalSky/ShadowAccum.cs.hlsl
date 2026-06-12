@@ -55,7 +55,7 @@ float SampleShadow(float3 posWorldRel)
 	[branch] if (all(shadow < 1e-8)) return 0;
 
 	// physical sky volumetric cloud shadows
-	shadow *= Remap(dot(GetVolumetricCloudTransmittance(posWorldRel, eyeIndex), float3(0.2126, 0.7152, 0.0722)), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1);
+	shadow *= Remap(dot(GetVolumetricCloudTransmittance(posWorldRel), float3(0.2126, 0.7152, 0.0722)), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1);
 	[branch] if (all(shadow < 1e-8)) return 0;
 
 	// dir shadow map
