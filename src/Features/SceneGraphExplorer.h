@@ -49,7 +49,6 @@ struct SceneGraphExplorer : public OverlayFeature
 	}
 
 	// Functionality
-	virtual bool inline SupportsVR() override { return true; }
 	virtual inline std::string_view GetShaderDefineName() override { return "SHADER_MACRO"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override { return t == RE::BSShader::Type::Lighting; };
 

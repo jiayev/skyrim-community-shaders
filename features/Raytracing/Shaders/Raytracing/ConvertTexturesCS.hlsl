@@ -19,7 +19,7 @@ SamplerState Sampler : register(s0);
 	const float2 uv = float2(id.xy + 0.5f) / Resolution;
 
 	const unorm half3 normalSmoothness = NormalSmoothness.SampleLevel(Sampler, uv, 0).xyz;
-	const snorm half3 normalWS = normalize(ViewToWorldVector(GBuffer::DecodeNormal(normalSmoothness.xy), FrameBuffer::CameraViewInverse[0]));
+	const snorm half3 normalWS = normalize(ViewToWorldVector(GBuffer::DecodeNormal(normalSmoothness.xy), FrameBuffer::CameraViewInverse));
 	NormalRoughness[id] = half4(normalWS, 1.0f - normalSmoothness.z);
 
 #if DLSS_RR

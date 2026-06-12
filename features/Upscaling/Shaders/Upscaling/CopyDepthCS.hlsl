@@ -3,8 +3,7 @@
 cbuffer UpscalingData : register(b0)
 {
 	float2 TrueSamplingDim;
-	uint EyeOffsetX;
-	uint pad0;
+	float2 pad0;
 };
 
 Texture2D<float> DepthIn : register(t0);
@@ -19,12 +18,11 @@ Texture2D<float4> PTColor : register(t2);
 	if (any(id >= uint2(TrueSamplingDim)))
 		return;
 
-	uint2 srcCoord = id.xy + uint2(EyeOffsetX, 0);
-	float depth = DepthIn[srcCoord];
+	float depth = DepthIn[id];
 
 #ifdef PATH_TRACING
-	if (PTColor[srcCoord].a > 0.5)
-		depth = PTDepth[srcCoord];
+	if (PTColor[id].a > 0.5)
+		depth = PTDepth[id];
 #endif
 
 	DepthOut[id.xy] = depth;
