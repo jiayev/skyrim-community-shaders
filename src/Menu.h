@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <winrt/base.h>
 
@@ -166,6 +167,7 @@ public:
 	// Deferred reload systems (public for SettingsTabRenderer access)
 	bool pendingFontReload = false;
 	bool pendingIconReload = false;
+	bool pendingCursorReload = false;
 
 	// Display size tracking for cross-session resolution change detection
 	float2 lastDisplaySize{};
@@ -237,7 +239,7 @@ public:
 
 		float FontSize = ThemeManager::Constants::DEFAULT_FONT_SIZE;
 		std::string FontName = "Jost/Jost-Regular.ttf";         // Default font file name (legacy)
-		float GlobalScale = REL::Module::IsVR() ? -0.5f : 0.f;  // exponential
+		float GlobalScale = 0.f;  // exponential
 		std::array<FontRoleSettings, static_cast<size_t>(FontRole::Count)> FontRoles = []() {
 			std::array<FontRoleSettings, static_cast<size_t>(FontRole::Count)> roles{};
 			auto setRole = [&roles](FontRole role, std::string family, std::string style, std::string file, float sizeScale) {
@@ -265,6 +267,21 @@ public:
 		bool CenterHeader = false;          // whether to center the header title and logo
 		float TooltipHoverDelay = 0.5f;     // tooltip hover delay in seconds
 		bool BackgroundBlurEnabled = true;  // enable background blur effect
+		bool UseCustomCursor = false;     // use theme cursor images instead of default ImGui cursors
+		struct CursorImageSettings
+		{
+			std::string File;
+			float HotspotX = 0.0f;
+			float HotspotY = 0.0f;
+		};
+		struct CursorSettings
+		{
+			float Scale = 1.0f;
+			std::string File;  // legacy arrow file (migrated into Types[Arrow] on load)
+			float HotspotX = 0.0f;
+			float HotspotY = 0.0f;
+			std::array<CursorImageSettings, ImGuiMouseCursor_COUNT> Types = {};
+		} Cursor;
 		// Scrollbar opacity settings
 		struct ScrollbarOpacitySettings
 		{
@@ -397,6 +414,9 @@ public:
 	static void PaletteToJson(json& themeJson, const std::array<ImVec4, ImGuiCol_COUNT>& palette);
 	static void PaletteFromJson(const json& themeJson, std::array<ImVec4, ImGuiCol_COUNT>& palette);
 
+	static void CursorToJson(json& cursorJson, const ThemeSettings::CursorSettings& cursorSettings);
+	static void CursorFromJson(const json& cursorJson, ThemeSettings::CursorSettings& cursor);
+
 	struct Settings
 	{
 		std::vector<InputCombo> ToggleKey = { InputCombo::Keyboard(VK_END) };
@@ -480,8 +500,6 @@ public:
 		[[nodiscard]] constexpr bool IsHeld() const noexcept { return IsPressed() && IsRepeating(); }
 		[[nodiscard]] constexpr bool IsUp() const noexcept { return (value == 0.0F) && IsRepeating(); }
 	};
-	// VR overlay input and cursor helpers
-	void ProcessVROverlayInput();
 
 private:
 	Settings settings;
@@ -494,6 +512,11 @@ private:
 	// Input event handling
 	std::vector<KeyEvent> _keyEventQueue;
 	mutable std::shared_mutex _inputEventMutex;
+
+	// Keys whose key-down already fired a combo hotkey. Their matching key-up is
+	// suppressed so a shared single-key binding (e.g. End) doesn't also fire once
+	// the modifier is released first.
+	std::unordered_set<uint32_t> _comboFiredKeys;
 
 	Menu() = default;
 

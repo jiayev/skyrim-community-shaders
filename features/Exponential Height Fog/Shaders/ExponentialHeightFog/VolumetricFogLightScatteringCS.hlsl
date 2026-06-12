@@ -71,10 +71,10 @@ bool IsFroxelBehindSceneDepth(uint3 coord)
 	return sceneDepth < frontDepth;
 }
 
-float3 ComputeHistoryVolumeUVAndDepth(float3 positionWS, uint eyeIndex, out bool validHistory, out float previousViewDepth)
+float3 ComputeHistoryVolumeUVAndDepth(float3 positionWS, out bool validHistory, out float previousViewDepth)
 {
-	float3 previousPositionWS = positionWS + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPreviousPosAdjust[eyeIndex].xyz;
-	float4 previousClip = mul(FrameBuffer::CameraPreviousViewProjUnjittered[eyeIndex], float4(previousPositionWS, 1.0f));
+	float3 previousPositionWS = positionWS + FrameBuffer::CameraPosAdjust.xyz - FrameBuffer::CameraPreviousPosAdjust.xyz;
+	float4 previousClip = mul(FrameBuffer::CameraPreviousViewProjUnjittered, float4(previousPositionWS, 1.0f));
 
 	previousViewDepth = abs(previousClip.w);
 	validHistory = previousClip.w > 0.0f;
@@ -82,9 +82,6 @@ float3 ComputeHistoryVolumeUVAndDepth(float3 positionWS, uint eyeIndex, out bool
 		return 0.0f.xxx;
 
 	float2 historyUV = previousClip.xy / previousClip.w * float2(0.5f, -0.5f) + 0.5f;
-#if defined(VR)
-	historyUV = Stereo::ConvertToStereoUV(historyUV, eyeIndex);
-#endif
 
 	float historyZ = ExponentialHeightFog::ComputeVolumetricNormalizedSlice(previousViewDepth);
 	float3 volumeUV = float3(historyUV, historyZ);
@@ -92,10 +89,10 @@ float3 ComputeHistoryVolumeUVAndDepth(float3 positionWS, uint eyeIndex, out bool
 	return saturate(volumeUV);
 }
 
-float3 ComputeHistoryVolumeUV(float3 positionWS, uint eyeIndex, out bool validHistory)
+float3 ComputeHistoryVolumeUV(float3 positionWS, out bool validHistory)
 {
 	float previousViewDepth;
-	return ComputeHistoryVolumeUVAndDepth(positionWS, eyeIndex, validHistory, previousViewDepth);
+	return ComputeHistoryVolumeUVAndDepth(positionWS, validHistory, previousViewDepth);
 }
 
 float2 FixupHistoryUV(float2 uv, float previousCellDepth, out bool validHistory)
@@ -162,7 +159,7 @@ float SampleDirectionalShadowPCF(float3 positionLS, uint cascadeIndex)
 	return (center * 4.0f + cross) * rcp(8.0f);
 }
 
-float SampleDirectionalShadow(float3 positionWS, uint eyeIndex)
+float SampleDirectionalShadow(float3 positionWS)
 {
 	if (SharedData::InInterior || SharedData::HideSky || SharedData::InMapMenu)
 		return 1.0f;
@@ -170,7 +167,7 @@ float SampleDirectionalShadow(float3 positionWS, uint eyeIndex)
 		return 1.0f;
 
 	DirectionalShadowLightData directionalShadowLightData = DirectionalShadowLights[0];
-	float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(positionWS, eyeIndex));
+	float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(positionWS));
 	if (shadowMapDepth >= directionalShadowLightData.EndSplitDistances.y)
 		return 1.0f;
 
@@ -178,7 +175,7 @@ float SampleDirectionalShadow(float3 positionWS, uint eyeIndex)
 	float cascadeSelect = smoothstep(0.0f, 1.0f, saturate((shadowMapDepth - directionalShadowLightData.StartSplitDistances.y) / splitDenom));
 	uint primaryCascade = (uint)cascadeSelect;
 
-	float3 absolutePositionWS = positionWS + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
+	float3 absolutePositionWS = positionWS + FrameBuffer::CameraPosAdjust.xyz;
 	float3 positionLS = mul(directionalShadowLightData.ShadowProj[primaryCascade], float4(absolutePositionWS, 1.0f)).xyz;
 	if (any(positionLS.xy < 0.0f) || any(positionLS.xy > 1.0f))
 		return 1.0f;
@@ -200,37 +197,33 @@ float SampleDirectionalShadow(float3 positionWS, uint eyeIndex)
 	return lerp(1.0f, shadow, fadeFactor);
 }
 
-float SampleDirectionalWorldShadow(float3 positionWS, uint eyeIndex)
+float SampleDirectionalWorldShadow(float3 positionWS)
 {
 	if (SharedData::InInterior || SharedData::HideSky || SharedData::InMapMenu)
 		return 1.0f;
 
 	float worldShadow = 1.0f;
 #if defined(TERRAIN_SHADOWS)
-	worldShadow *= TerrainShadows::GetTerrainShadow(positionWS + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, LinearSampler);
+	worldShadow *= TerrainShadows::GetTerrainShadow(positionWS + FrameBuffer::CameraPosAdjust.xyz, LinearSampler);
 #endif
 #if defined(CLOUD_SHADOWS)
 	worldShadow *= CloudShadows::GetCloudShadowMult(positionWS, LinearSampler);
 #endif
 #if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
-		worldShadow *= dot(PhysSky::GetDirlightTransmittance(positionWS + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, LinearSampler), 1.0f.xxx / 3.0f);
+		worldShadow *= dot(PhysSky::GetDirlightTransmittance(positionWS + FrameBuffer::CameraPosAdjust.xyz, LinearSampler), 1.0f.xxx / 3.0f);
 #endif
 	return worldShadow;
 }
 
-float3 ComputeSkyLightScattering(float3 positionWS, float3 viewDirection, uint eyeIndex)
+float3 ComputeSkyLightScattering(float3 positionWS, float3 viewDirection)
 {
 	float phaseG = SharedData::exponentialHeightFogSettings.volumetricFogScatteringDistribution;
 	float3 skyDirection = abs(phaseG) > 0.001f ? normalize(-viewDirection * phaseG) : 0.0f.xxx;
 	float3 skyVisibilityDirection = abs(phaseG) > 0.001f ? skyDirection : float3(0.0f, 0.0f, 1.0f);
 	float skyVisibility = 1.0f;
 	if (VolumetricFogHasSkylighting && !SharedData::InInterior) {
-#if defined(VR)
-		float3 skylightingPosition = positionWS + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
-#else
 		float3 skylightingPosition = positionWS;
-#endif
 		sh2 skylightingSH = Skylighting::SampleNoBias(skylightingPosition);
 		skyVisibility = Skylighting::EvaluateDiffuse(skylightingSH, skyVisibilityDirection, Skylighting::GetFadeOutFactor(skylightingPosition));
 	}
@@ -278,14 +271,13 @@ float3 AccumulateLocalLightScattering(
 	float3 positionWS,
 	float viewDepth,
 	float3 viewDirection,
-	uint eyeIndex,
 	float3 materialScattering)
 {
 	if (!VolumetricFogHasLocalLights)
 		return 0.0f.xxx;
 
 	float2 volumeUV = (float2(coord.xy) + cellOffset.xy) * VolumetricFogInvGridSize.xy;
-	float2 screenUV = Stereo::ConvertFromStereoUV(volumeUV, eyeIndex);
+	float2 screenUV = volumeUV;
 
 	uint clusterIndex = 0;
 	if (!LightLimitFix::GetClusterIndex(screenUV, viewDepth, clusterIndex))
@@ -294,9 +286,8 @@ float3 AccumulateLocalLightScattering(
 	LightLimitFix::LightGrid grid = LightLimitFix::lightGrid[clusterIndex];
 	uint lightCount = min(grid.lightCount, (uint)MAX_CLUSTER_LIGHTS);
 
-	uint cornerEyeIndex;
 	float cornerViewDepth;
-	float3 cellCornerWS = ExponentialHeightFog::ComputeCellWorldPosition(coord + uint3(1, 1, 1), cellOffset, cornerEyeIndex, cornerViewDepth);
+	float3 cellCornerWS = ExponentialHeightFog::ComputeCellWorldPosition(coord + uint3(1, 1, 1), cellOffset, cornerViewDepth);
 	float cellRadius = max(length(cellCornerWS - positionWS), 1.0f);
 
 	float phaseG = SharedData::exponentialHeightFogSettings.volumetricFogScatteringDistribution;
@@ -309,7 +300,7 @@ float3 AccumulateLocalLightScattering(
 		if (light.lightFlags & LightLimitFix::LightFlags::Disabled)
 			continue;
 
-		float3 toLight = light.positionWS[eyeIndex].xyz - positionWS;
+		float3 toLight = light.positionWS.xyz - positionWS;
 		float distanceSqr = dot(toLight, toLight);
 		if (distanceSqr < 1e-6f)
 			continue;
@@ -337,7 +328,6 @@ float3 AccumulateLocalLightScattering(
 	float3 positionWS,
 	float viewDepth,
 	float3 viewDirection,
-	uint eyeIndex,
 	float3 materialScattering)
 {
 	return 0.0f.xxx;
@@ -346,9 +336,8 @@ float3 AccumulateLocalLightScattering(
 
 float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 {
-	uint eyeIndex;
 	float viewDepth;
-	float3 positionWS = ExponentialHeightFog::ComputeCellWorldPosition(coord, cellOffset, eyeIndex, viewDepth);
+	float3 positionWS = ExponentialHeightFog::ComputeCellWorldPosition(coord, cellOffset, viewDepth);
 
 	float4 materialScatteringAndExtinction = VBufferA[coord];
 	float extinction = materialScatteringAndExtinction.w;
@@ -360,8 +349,8 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 	// resolution during compositing in SampleVolumetricFog().
 	float directionalPhase = 1.0f / (4.0f * Math::PI);
 
-	float directionalShadow = SampleDirectionalShadow(positionWS, eyeIndex) *
-	                          SampleDirectionalWorldShadow(positionWS, eyeIndex);
+	float directionalShadow = SampleDirectionalShadow(positionWS) *
+	                          SampleDirectionalWorldShadow(positionWS);
 	float3 directionalScattering =
 		ComputeDirectionalLightColor() *
 		SharedData::exponentialHeightFogSettings.volumetricDirectionalScatteringIntensity *
@@ -369,7 +358,7 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 		directionalPhase *
 		materialScatteringAndExtinction.rgb;
 
-	float3 skyScattering = ComputeSkyLightScattering(positionWS, viewDirection, eyeIndex) *
+	float3 skyScattering = ComputeSkyLightScattering(positionWS, viewDirection) *
 	                       materialScatteringAndExtinction.rgb;
 
 	float3 localScattering = AccumulateLocalLightScattering(
@@ -378,7 +367,6 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 		positionWS,
 		viewDepth,
 		viewDirection,
-		eyeIndex,
 		materialScatteringAndExtinction.rgb);
 
 	float3 emissive = SharedData::exponentialHeightFogSettings.volumetricFogEmissive.rgb *
@@ -392,23 +380,21 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 	if (!ExponentialHeightFog::IsInsideVolumetricGrid(dispatchID))
 		return;
 
-	uint eyeIndex;
 	float viewDepth;
-	float3 centerPositionWS = ExponentialHeightFog::ComputeCellWorldPosition(dispatchID, 0.5f.xxx, eyeIndex, viewDepth);
+	float3 centerPositionWS = ExponentialHeightFog::ComputeCellWorldPosition(dispatchID, 0.5f.xxx, viewDepth);
 	if (VolumetricFogHasConservativeDepth && IsFroxelBehindSceneDepth(dispatchID)) {
 		LightScattering[dispatchID] = 0.0f.xxxx;
 		return;
 	}
 
 	bool validHistory;
-	float3 historyUV = ComputeHistoryVolumeUV(centerPositionWS, eyeIndex, validHistory);
+	float3 historyUV = ComputeHistoryVolumeUV(centerPositionWS, validHistory);
 	if (VolumetricFogHasPrevConservativeDepth && validHistory) {
-		uint frontEyeIndex;
 		float frontDepth;
-		float3 frontPositionWS = ExponentialHeightFog::ComputeCellWorldPosition(dispatchID, float3(0.5f, 0.5f, -0.5f), frontEyeIndex, frontDepth);
+		float3 frontPositionWS = ExponentialHeightFog::ComputeCellWorldPosition(dispatchID, float3(0.5f, 0.5f, -0.5f), frontDepth);
 		bool validFrontHistory;
 		float previousFrontDepth;
-		ComputeHistoryVolumeUVAndDepth(frontPositionWS, frontEyeIndex, validFrontHistory, previousFrontDepth);
+		ComputeHistoryVolumeUVAndDepth(frontPositionWS, validFrontHistory, previousFrontDepth);
 		if (validFrontHistory) {
 			historyUV.xy = saturate(FixupHistoryUV(historyUV.xy, previousFrontDepth, validHistory));
 		} else {
