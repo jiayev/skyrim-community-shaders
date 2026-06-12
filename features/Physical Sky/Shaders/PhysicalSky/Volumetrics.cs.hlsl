@@ -300,8 +300,8 @@ float2 RayIntersectAABB(float3 rayOrigin, float3 rayDir, float3 boxMin, float3 b
 
 float3 GetShadowVolumeSampleUvw(float3 pos, float3 rayDir, VolumetricCloudData info, CloudLayer cloud)
 {
-	float3 boundsMin = float3(FrameBuffer::CameraPosAdjust[0].xy - 0.5 * info.shadowVolumeRange, cloud.bottom);
-	float3 boundsMax = float3(FrameBuffer::CameraPosAdjust[0].xy + 0.5 * info.shadowVolumeRange, cloud.bottom + cloud.thickness);
+	float3 boundsMin = float3(FrameBuffer::CameraPosAdjust.xy - 0.5 * info.shadowVolumeRange, cloud.bottom);
+	float3 boundsMax = float3(FrameBuffer::CameraPosAdjust.xy + 0.5 * info.shadowVolumeRange, cloud.bottom + cloud.thickness);
 
 	float3 samplePos = pos;
 	if (any(pos < boundsMin) || any(pos > boundsMax)) {
@@ -311,7 +311,7 @@ float3 GetShadowVolumeSampleUvw(float3 pos, float3 rayDir, VolumetricCloudData i
 		samplePos += (hitDists.x + 128) * rayDir;
 	}
 
-	float3 uvw = samplePos - float3(FrameBuffer::CameraPosAdjust[0].xy, cloud.bottom);
+	float3 uvw = samplePos - float3(FrameBuffer::CameraPosAdjust.xy, cloud.bottom);
 	uvw /= float3(info.shadowVolumeRange.xx, cloud.thickness);
 	uvw.xy += 0.5;
 	return uvw;
@@ -451,7 +451,7 @@ NDFInfo sampleNDF(
 	initNDFInfo(ndf);
 
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	float planet_z = length(pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planetRadius)) - info.planetRadius;
+	float planet_z = length(pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius)) - info.planetRadius;
 	if (planet_z < cloud.bottom || planet_z > cloud.bottom + cloud.thickness)
 		return ndf;
 
@@ -527,7 +527,7 @@ float sampleCloudDensity(
 }
 
 // sample sun transmittance / shadowing
-float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 seed, out float3 cloud_transmittance)
+float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint3 seed, out float3 cloud_transmittance)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const CloudLayer cloud = GetCloudLayer(info);
@@ -537,8 +537,8 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	float3 shadow = 1.0;
 
 	float3 pos_world = pos + float3(0, 0, info.bottomZ);
-	float3 pos_world_relative = pos_world - FrameBuffer::CameraPosAdjust[eye_index].xyz;
-	float3 pos_planet = pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planetRadius);
+	float3 pos_world_relative = pos_world - FrameBuffer::CameraPosAdjust.xyz;
+	float3 pos_planet = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
 
 	// earth shadowing
 	[branch] if (RayIntersectSphereCentered(pos_planet, sun_dir, info.planetRadius) > 0.0) return 0;
@@ -546,7 +546,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 	// dir shadow map
 	{
 		DirectionalShadowLightData directionalShadowLightData = DirectionalShadowLights[0];
-		float shadow_depth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(pos_world_relative, eye_index));
+		float shadow_depth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(pos_world_relative));
 		[branch] if (directionalShadowLightData.EndSplitDistances.y > 0.0 &&
 					 shadow_depth < directionalShadowLightData.EndSplitDistances.y)
 		{
@@ -593,7 +593,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint eye_index, uint3 
 			cloud_density += TexShadowVolume.SampleLevel(TransmittanceSampler, pos_sample_shadow_uvw.xyz, 0);
 		else
 			cloud_density += InBetweenSphereDistance(
-								 vis_pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planetRadius), sun_dir,
+								 vis_pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius), sun_dir,
 								 info.planetRadius + cloud.bottom, info.planetRadius + cloud.bottom + cloud.thickness) *
 			                 cloud.average_density;
 
@@ -616,7 +616,7 @@ struct VolumetricCloudResult
 	float weighted_depth;
 };
 
-VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, float solid_dist, bool is_sky, uint eye_index, uint3 seed, float jitter, float ap_shadow)
+VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, float solid_dist, bool is_sky, uint3 seed, float jitter, float ap_shadow)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const CloudLayer cloud = GetCloudLayer(info);
@@ -663,7 +663,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 			// dir light
 			float3 scatter = cloud_scatter * cloud_phase;
 			float3 cloud_transmittance;
-			float3 sun_transmittance = sampleSunTransmittance(ray.pos, info.dirlightDir, eye_index, seed + ray.step, cloud_transmittance);
+			float3 sun_transmittance = sampleSunTransmittance(ray.pos, info.dirlightDir, seed + ray.step, cloud_transmittance);
 			float3 in_scatter = scatter * sun_transmittance * info.dirlightColor;
 
 			sum_shadowing_weights += dt;
@@ -679,7 +679,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 			// ambient
 			float3 ambient = SampleCloudAmbientSkyView(ray.ray_dir);
 			float profile_indirect = sqrt(1.0 - saturate(ndf.dimension_profile));
-			float vertical_transmittance = dot(TexTransmittance.SampleLevel(TransmittanceSampler, TrLutUvPlanet(ray.pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planetRadius), info.dirlightDir), 0).rgb, float3(0.2126, 0.7152, 0.0722));
+			float vertical_transmittance = dot(TexTransmittance.SampleLevel(TransmittanceSampler, TrLutUvPlanet(ray.pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius), info.dirlightDir), 0).rgb, float3(0.2126, 0.7152, 0.0722));
 			float vertical_indirect = exp(vertical_transmittance);
 			in_scatter += cloud_scatter * profile_indirect * vertical_indirect * cloud.ambient_mult * ambient;
 
@@ -764,18 +764,17 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 
 	const float2 texture_uv = (full_px_coords + 0.5) * info.rcpFrameDim;
 	const float2 logic_uv = FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition(texture_uv);
-	const uint eye_index = 0;
 
 	float4 pos_world = float4(2 * float2(logic_uv.x, -logic_uv.y + 1) - 1, depth, 1);
-	pos_world = mul(FrameBuffer::CameraViewProjInverse[eye_index], pos_world);
+	pos_world = mul(FrameBuffer::CameraViewProjInverse, pos_world);
 	pos_world.xyz = pos_world.xyz / pos_world.w;
 
 	const float solid_dist = length(pos_world.xyz);
-	const float3 eye_pos = FrameBuffer::CameraPosAdjust[eye_index].xyz - float3(0, 0, info.bottomZ);
+	const float3 eye_pos = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
 	const float3 ray_dir = pos_world.xyz / solid_dist;
 
 	const float ap_shadow = SampleFilteredApShadow(full_px_coords);
-	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, solid_dist, is_sky, eye_index, seed, rnd.z, ap_shadow);
+	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, solid_dist, is_sky, seed, rnd.z, ap_shadow);
 
 	RWTexTr[px_coords] = float4(result.transmittance, CloudAlphaFromTransmittance(result.transmittance));
 	RWTexLum[px_coords] = result.lum;
@@ -827,9 +826,9 @@ float3 GetCubemapSamplingVector(uint3 threadId, in RWTexture2DArray<float3> outp
 	const uint3 seed = Random::pcg3d(uint3(tid.xy, tid.z * 0x9e37u + tid.x ^ 0xf874u));
 	const float3 rnd = Random::R3Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
 
-	const float3 eye_pos = FrameBuffer::CameraPosAdjust[0].xyz - float3(0, 0, info.bottomZ);
+	const float3 eye_pos = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
 	const float3 ray_dir = GetCubemapSamplingVector(tid, RWTexCubeTr);
-	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, info.rayMarchRange, true, 0, seed, rnd.z, 0.0);
+	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, info.rayMarchRange, true, seed, rnd.z, 0.0);
 
 	RWTexCubeTr[tid] = result.transmittance;
 	RWTexCubeLum[tid] = result.lum;
@@ -857,12 +856,12 @@ float2 GetPreviousCloudUv(float2 logic_uv, float depth, out bool valid)
 	const float reprojection_depth = min(depth, 16384.0);
 
 	float4 pos_world = float4(2 * float2(logic_uv.x, -logic_uv.y + 1) - 1, 1.0, 1);
-	pos_world = mul(FrameBuffer::CameraViewProjInverse[0], pos_world);
+	pos_world = mul(FrameBuffer::CameraViewProjInverse, pos_world);
 	pos_world.xyz = normalize(pos_world.xyz / pos_world.w) * reprojection_depth;
 	pos_world.w = 1.0;
-	pos_world.xyz += FrameBuffer::CameraPosAdjust[0].xyz - FrameBuffer::CameraPreviousPosAdjust[0].xyz;
+	pos_world.xyz += FrameBuffer::CameraPosAdjust.xyz - FrameBuffer::CameraPreviousPosAdjust.xyz;
 
-	float4 prev_clip = mul(FrameBuffer::CameraPreviousViewProjUnjittered[0], pos_world);
+	float4 prev_clip = mul(FrameBuffer::CameraPreviousViewProjUnjittered, pos_world);
 	if (prev_clip.w <= 0.0)
 		return logic_uv;
 
@@ -1191,7 +1190,7 @@ groupshared float g_density[NTHREADS];
 		past_density = 0;
 
 	if (is_valid) {
-		const float3 pos = float3(FrameBuffer::CameraPosAdjust[0].xy + (thread_uv.xy - 0.5) * info.shadowVolumeRange, cloud.bottom + cloud.thickness * thread_uv.z);
+		const float3 pos = float3(FrameBuffer::CameraPosAdjust.xy + (thread_uv.xy - 0.5) * info.shadowVolumeRange, cloud.bottom + cloud.thickness * thread_uv.z);
 
 		// fetch density using only ndf
 		NDFInfo _;
@@ -1199,10 +1198,10 @@ groupshared float g_density[NTHREADS];
 
 		// average visibility for boundary
 		float3 prev_uv = thread_uv - ray_uv_increment;
-		float3 prev_pos = float3(FrameBuffer::CameraPosAdjust[0].xy + (prev_uv.xy - 0.5) * info.shadowVolumeRange, cloud.bottom + cloud.thickness * prev_uv.z);
+		float3 prev_pos = float3(FrameBuffer::CameraPosAdjust.xy + (prev_uv.xy - 0.5) * info.shadowVolumeRange, cloud.bottom + cloud.thickness * prev_uv.z);
 		if ((any(prev_uv < 0) || any(prev_uv > 1)) && prev_pos.z > cloud.bottom && prev_pos.z < cloud.bottom + cloud.thickness)
 			density += InBetweenSphereDistance(
-						   prev_pos + float3(-FrameBuffer::CameraPosAdjust[0].xy, info.planetRadius), info.dirlightDir,
+						   prev_pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius), info.dirlightDir,
 						   info.planetRadius + cloud.bottom, info.planetRadius + cloud.bottom + cloud.thickness) *
 			           cloud.average_density;
 
