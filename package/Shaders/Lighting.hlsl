@@ -297,7 +297,11 @@ struct PS_OUTPUT
 	float4 Specular: SV_Target4;
 	float4 Reflectance: SV_Target5;
 	float4 Masks: SV_Target6;
+#	if defined(RAYTRACING)
+	float4 MetallicAO: SV_Target7;
+#	else
 	float4 Masks2: SV_Target7;
+#	endif
 };
 #else
 struct PS_OUTPUT
@@ -3427,19 +3431,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
 #		endif
 
+	float vertexAOMask = 1.0 - vertexAO;
+
+#		if defined(RAYTRACING)
+	psout.MetallicAO = float4(metallic, ao, vertexAOMask, psout.Diffuse.w);
+#		else
 	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion
 	// for pixels that do not write to this RT (sky, water, grass, effects).
-	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, 0);
+	psout.Masks2 = float4(vertexAOMask, 0, 0, 0);
+#		endif
 
 	float stochasticBlend = (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
 	psout.NormalGlossiness.w = stochasticBlend;
-
-#		if defined(RAYTRACING)
-#			if !defined(SNOW)
-	psout.MetallicAO = float4(metallic, ao, 0, psout.Diffuse.w);
-#			endif  // SNOW
-#		endif      // RAYTRACING
-#	endif          // DEFERRED
+#	endif  // DEFERRED
 
 #	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
 	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {
