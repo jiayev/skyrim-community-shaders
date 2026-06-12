@@ -17,12 +17,10 @@ struct ScreenSpacePointLightShadows : Feature
 	{
 		return {
 			"Screen Space Point Light Shadows adds contact shadows and soft shadows for point lights in the game.",
-			{
-				"Adjustable settings",
+			{ "Adjustable settings",
 				"Drain your GPU",
 				"Greatly enhances vibes",
-				"Won't really look correct"
-			}
+				"Won't really look correct" }
 		};
 	}
 
@@ -96,8 +94,6 @@ struct ScreenSpacePointLightShadows : Feature
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
-
-	virtual bool SupportsVR() override { return true; };
 
 	PerFrame GetCommonBufferData();
 };

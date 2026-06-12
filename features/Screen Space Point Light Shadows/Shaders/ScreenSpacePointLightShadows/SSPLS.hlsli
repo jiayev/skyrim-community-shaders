@@ -11,7 +11,7 @@ namespace ScreenSpacePointLightShadows
 	Texture2D<float4> LinearDepthTexture : register(t56);
 	Texture2D<float4> BlurredLinearDepthTexture : register(t57);
 
-	float Raymarch(SamplerState s, float3 viewPosition, float3 lightDirectionVS, uint steps, float step, float2 stepScale, float compareToleranceScale, float radius, float2x2 rotationMatrix, uint a_eyeIndex = 0)
+	float Raymarch(SamplerState s, float3 viewPosition, float3 lightDirectionVS, uint steps, float step, float2 stepScale, float compareToleranceScale, float radius, float2x2 rotationMatrix)
 	{
 		float opacity = 1.0;
 		radius *= SharedData::ssplsSettings.SoftShadowScale * 0.0001;
@@ -26,14 +26,14 @@ namespace ScreenSpacePointLightShadows
 			const float stepScaleMult = steps == 1 ? 1.0 : (stepScale.x + i * (stepScale.y - stepScale.x) / (steps - 1));
 			viewPosition += lightDirectionVS * step * stepScaleMult;
 			float compareTolerance = totalCompareTolerance * stepScaleMult;
-			float2 rayUV = FrameBuffer::ViewToUV(viewPosition, true, a_eyeIndex);
+			float2 rayUV = FrameBuffer::ViewToUV(viewPosition, true);
 
 			// Ensure the UV coordinates are inside the screen
 			if (!(rayUV.x >= 0.0 && rayUV.x <= 1.0 && rayUV.y >= 0.0 && rayUV.y <= 1.0))
 				break;
 
 			// Compute the difference between the ray's and the camera's depth
-			float rayDepth = SharedData::GetScreenDepth(rayUV, a_eyeIndex);
+			float rayDepth = SharedData::GetScreenDepth(rayUV);
 			if (rayDepth < 16.5 || rayDepth > SharedData::ssplsSettings.MaxDistance)
 				break;
 
@@ -62,7 +62,7 @@ namespace ScreenSpacePointLightShadows
 						{
 							float2 sampleOffset = mul(Random::PoissonSampleOffsets16[(j * i) % 16], rotationMatrix);
 							float2 sampleUV = sampleOffset * distanceMult * radius + rayUV;
-							float sampleDepth = SharedData::GetScreenDepth(sampleUV, a_eyeIndex);
+							float sampleDepth = SharedData::GetScreenDepth(sampleUV);
 
 							float sampleDepthDelta = viewPosition.z - sampleDepth;
 							bool hit = abs(sampleDepthDelta - compareTolerance) < compareTolerance;
@@ -81,7 +81,7 @@ namespace ScreenSpacePointLightShadows
 		return opacity;
 	}
 
-	float GetShadow(SamplerState s, float3 viewPosition, float noise2D, float3 lightDirectionVS, uint steps, float radius, uint a_eyeIndex = 0, bool isShadowCaster = false)
+	float GetShadow(SamplerState s, float3 viewPosition, float noise2D, float3 lightDirectionVS, uint steps, float radius, bool isShadowCaster = false)
 	{
 		if (steps == 0)
 			return 1.0;
@@ -119,9 +119,9 @@ namespace ScreenSpacePointLightShadows
 		// Accumulate samples
 		float shadow = 1.0;
 
-		uint2 sampleCoord = SharedData::ConvertUVToSampleCoord(FrameBuffer::ViewToUV(viewPosition, true, a_eyeIndex), a_eyeIndex).xy;
+		uint2 sampleCoord = SharedData::ConvertUVToSampleCoord(FrameBuffer::ViewToUV(viewPosition, true)).xy;
 
-		shadow = Raymarch(s, viewPosition, lightDirectionVS, steps, step, stepScale, compareToleranceScale, radius, rotationMatrix, a_eyeIndex);
+		shadow = Raymarch(s, viewPosition, lightDirectionVS, steps, step, stepScale, compareToleranceScale, radius, rotationMatrix);
 		return shadow;
 	}
 }

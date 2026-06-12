@@ -2549,7 +2549,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	static const bool enableWetnessRainFlowEffects = false;
 #		endif
 
-	float3 wetnessPuddlePosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
+	float3 wetnessPuddlePosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessRipplePosition, wetnessPuddlePosition, worldNormal.xyz, vertexNormal.xyz, waterHeight, wetnessOcclusion, nearFactor, rainWetnessOverride, rainWetnessAdd, enableWetnessPuddleEffects, enableWetnessRainFlowEffects);
 
 #		if defined(SKIN) && defined(CS_SKIN)
@@ -2829,8 +2829,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			shadowComponent != 0.0 &&
 			lightAngle > 0.0)
 		{
-			float3 lightDirectionVS = FrameBuffer::WorldToView(light.positionWS[eyeIndex].xyz, true, eyeIndex) - viewPosition.xyz;
-			float SSPLSShadow = lerp(1.0, ScreenSpacePointLightShadows::GetShadow(LinearSampler, viewPosition, screenNoise, lightDirectionVS, ssplsSteps, light.radius, eyeIndex, light.lightFlags & LightLimitFix::LightFlags::Shadow), SharedData::ssplsSettings.Strength);
+			float3 lightDirectionVS = FrameBuffer::WorldToView(light.positionWS.xyz, true) - viewPosition.xyz;
+			float SSPLSShadow = lerp(1.0, ScreenSpacePointLightShadows::GetShadow(LinearSampler, viewPosition, screenNoise, lightDirectionVS, ssplsSteps, light.radius, light.lightFlags & LightLimitFix::LightFlags::Shadow), SharedData::ssplsSettings.Strength);
 			lightShadow *= SSPLSShadow;
 		}
 #			endif

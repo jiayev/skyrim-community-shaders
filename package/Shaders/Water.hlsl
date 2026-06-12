@@ -1202,8 +1202,8 @@ PS_OUTPUT main(PS_INPUT input)
 				lightAngle > 0.0)
 			{
 				float screenNoise = Random::InterleavedGradientNoise(input.HPosition.xy, SharedData::FrameCount);
-				float3 lightDirectionVS = FrameBuffer::WorldToView(light.positionWS[eyeIndex].xyz, true, eyeIndex) - viewPosition.xyz;
-				float SSPLSShadow = lerp(1.0, ScreenSpacePointLightShadows::GetShadow(LinearSampler, viewPosition, screenNoise, lightDirectionVS, ssplsSteps, light.radius, eyeIndex, light.lightFlags & LightLimitFix::LightFlags::Shadow), SharedData::ssplsSettings.Strength);
+				float3 lightDirectionVS = FrameBuffer::WorldToView(light.positionWS.xyz, true) - viewPosition.xyz;
+				float SSPLSShadow = lerp(1.0, ScreenSpacePointLightShadows::GetShadow(LinearSampler, viewPosition, screenNoise, lightDirectionVS, ssplsSteps, light.radius, light.lightFlags & LightLimitFix::LightFlags::Shadow), SharedData::ssplsSettings.Strength);
 				lightColor *= SSPLSShadow;
 			}
 #					endif
