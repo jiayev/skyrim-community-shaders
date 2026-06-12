@@ -77,8 +77,6 @@ void DX12Interop::Init(ID3D11Device* a_d3d11Device, ID3D11DeviceContext* a_immed
 
 	CreateD3D12Device(a_adapter);
 
-	CreateDebugDevice();
-
 	CreateInterop();
 
 	auto& rt = globals::features::raytracing;
@@ -104,39 +102,38 @@ bool DX12Interop::D3D12Mode()
 	return false;
 }
 
-void DX12Interop::CreateDebugDevice()
-{
-	if (globals::state->interopLoadPIX || !globals::state->interopDebugDevice)
-		return;
-
-	// Create debug device
-	winrt::com_ptr<ID3D12Debug3> debugController;
-	if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {
-		debugController->EnableDebugLayer();
-		debugController->SetEnableGPUBasedValidation(TRUE);
-	} else {
-		logger::critical("[DX12Interop] Debug layer creation failed.");
-	}
-
-	winrt::com_ptr<ID3D12DeviceRemovedExtendedDataSettings1> pDredSettings;
-	if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&pDredSettings)))) {
-		pDredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
-		pDredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
-	}
-
-	winrt::com_ptr<ID3D12InfoQueue> infoQueue;
-	if (SUCCEEDED(d3d12Device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
-		infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
-		infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
-		infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
-	} else {
-		logger::critical("[DX12Interop] Debug break creation failed.");
-	}
-}
-
 void DX12Interop::CreateD3D12Device(IDXGIAdapter* a_adapter)
 {
+	const bool enableDebug = !globals::state->interopLoadPIX && globals::state->interopDebugDevice;
+
+	if (enableDebug) {
+		winrt::com_ptr<ID3D12Debug3> debugController;
+		if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {
+			debugController->EnableDebugLayer();
+			debugController->SetEnableGPUBasedValidation(TRUE);
+		} else {
+			logger::critical("[DX12Interop] Debug layer creation failed");
+		}
+
+		winrt::com_ptr<ID3D12DeviceRemovedExtendedDataSettings1> pDredSettings;
+		if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&pDredSettings)))) {
+			pDredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+			pDredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+		}
+	}
+
 	DX::ThrowIfFailed(D3D12CreateDevice(a_adapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&d3d12Device)));
+
+	if (enableDebug) {
+		winrt::com_ptr<ID3D12InfoQueue> infoQueue;
+		if (SUCCEEDED(d3d12Device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
+		} else {
+			logger::critical("[DX12Interop] Debug break creation failed");
+		}
+	}
 
 	D3D12_COMMAND_QUEUE_DESC queueDesc = {};
 	queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;

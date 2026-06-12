@@ -88,6 +88,6 @@ private:
 	void SetD3D11Device(ID3D11Device* a_d3d11Device);
 	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
 	void InitializePIX();
-	void CreateDebugDevice();
+
 	void CreateD3D12Device(IDXGIAdapter* a_adapter);
 };
