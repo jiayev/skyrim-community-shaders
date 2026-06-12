@@ -25,11 +25,9 @@
 #include <wrl/client.h>
 
 #include "../Feature.h"
-#include "../Features/VR.h"
 #include "../Globals.h"
 #include "../Menu.h"
 #include "FileSystem.h"
-#include "VRUtils.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <algorithm>
@@ -1273,6 +1271,8 @@ namespace Util
 
 		ImVec2 center = ImVec2(position.x + size * 0.46f, position.y + size * 0.5f);
 		float radius = size * 0.3f;
+		const float circleStroke = size * ThemeManager::Constants::SEARCH_ICON_STROKE_RATIO;
+		const float handleStroke = size * ThemeManager::Constants::SEARCH_ICON_HANDLE_STROKE_RATIO;
 
 		// Use themed text color with reduced alpha for search icon
 		auto& theme = globals::menu->GetTheme().Palette;
@@ -1281,12 +1281,12 @@ namespace Util
 		ImU32 placeholderColor = ImGui::GetColorU32(iconColor);
 
 		// Draw circle
-		drawList->AddCircle(center, radius, placeholderColor, 12, 2.2f);
+		drawList->AddCircle(center, radius, placeholderColor, 12, circleStroke);
 
 		// Draw handle
 		ImVec2 handleStart = ImVec2(center.x + radius * 0.81f, center.y + radius * 0.81f);
 		ImVec2 handleEnd = ImVec2(handleStart.x + size * 0.29f, handleStart.y + size * 0.29f);
-		drawList->AddLine(handleStart, handleEnd, placeholderColor, 2.1f);
+		drawList->AddLine(handleStart, handleEnd, placeholderColor, handleStroke);
 	}
 
 	namespace detail
@@ -1313,10 +1313,11 @@ namespace Util
 			state.needsFocus = false;
 		}
 
-		constexpr float iconSize = ThemeManager::Constants::COMBO_SEARCH_ICON_SIZE;
+		const float scale = GetSearchUIScale();
+		const float iconSize = ThemeManager::Constants::COMBO_SEARCH_ICON_SIZE * scale;
 		constexpr float iconAlpha = ThemeManager::Constants::COMBO_SEARCH_ICON_ALPHA;
-		constexpr float iconOffsetX = ThemeManager::Constants::COMBO_SEARCH_ICON_OFFSET_X;
-		constexpr float paddingLeft = ThemeManager::Constants::COMBO_SEARCH_PADDING_LEFT;
+		const float iconOffsetX = ThemeManager::Constants::COMBO_SEARCH_ICON_OFFSET_X * scale;
+		const float paddingLeft = ThemeManager::Constants::COMBO_SEARCH_PADDING_LEFT * scale;
 
 		char widgetId[128];
 		snprintf(widgetId, sizeof(widgetId), "##%s_search", id);
@@ -1346,8 +1347,9 @@ namespace Util
 	{
 		ImGui::PushID("FeatureSearchBar");
 
-		float iconSize = 20.0f;
-		float iconSpace = iconSize + 14.0f;
+		const float scale = GetSearchUIScale();
+		const float iconSize = ThemeManager::Constants::SEARCH_ICON_SIZE * scale;
+		const float iconSpace = iconSize + ThemeManager::Constants::SEARCH_INPUT_PADDING_EXTRA * scale;
 
 		// Get the current cursor position and available width
 		ImVec2 cursorPos = ImGui::GetCursorScreenPos();
@@ -1369,7 +1371,7 @@ namespace Util
 		ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
 		ImGui::PushStyleColor(ImGuiCol_Text, textColor);
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(iconSpace, 6.0f));
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(iconSpace, ThemeManager::Constants::SEARCH_INPUT_FRAME_PADDING_Y * scale));
 
 		// Draw the input field
 		ImGui::SetNextItemWidth(availableWidth);
@@ -1382,8 +1384,8 @@ namespace Util
 		}
 
 		// Draw search icon using the reusable function
-		ImVec2 iconPos = ImVec2(cursorPos.x + 8.0f, cursorPos.y + (frameHeight - iconSize) * 0.5f);
-		DrawSearchIcon(iconPos, iconSize, 0.7f);
+		ImVec2 iconPos = ImVec2(cursorPos.x + ThemeManager::Constants::SEARCH_ICON_OFFSET_X * scale, cursorPos.y + (frameHeight - iconSize) * 0.5f);
+		DrawSearchIcon(iconPos, iconSize, ThemeManager::Constants::SEARCH_ICON_ALPHA);
 
 		ImGui::PopStyleVar(2);
 		ImGui::PopStyleColor(5);
@@ -1878,18 +1880,6 @@ namespace Util
 		{
 			if (combo.empty())
 				return "None";
-
-			bool hasVRInput = false;
-			for (const auto& input : combo) {
-				if (input.GetDevice() != InputDeviceType::Keyboard && input.GetDevice() != InputDeviceType::Mouse) {
-					hasVRInput = true;
-					break;
-				}
-			}
-
-			if (hasVRInput && REL::Module::IsVR()) {
-				return InputCombo::GetVRString(combo);
-			}
 
 			std::string result;
 			for (size_t i = 0; i < combo.size(); ++i) {
@@ -2424,50 +2414,6 @@ namespace Util
 			if (combo.empty()) {
 				ImGui::SameLine();
 				ImGui::TextDisabled("(Click to bind)");
-			}
-		}
-
-		// Draw VR-specific color coding if applicable
-		if (REL::Module::IsVR() && !combo.empty()) {
-			ImGui::SameLine();
-
-			// Check if we have mixed devices
-			bool hasPrimary = false;
-			bool hasSecondary = false;
-			bool hasBoth = false;
-
-			for (const auto& input : combo) {
-				switch (input.GetDevice()) {
-				case InputDeviceType::Primary:
-					hasPrimary = true;
-					break;
-				case InputDeviceType::Secondary:
-					hasSecondary = true;
-					break;
-				case InputDeviceType::Both:
-					hasBoth = true;
-					break;
-				default:
-					break;
-				}
-			}
-
-			ImVec4 indicatorColor = GetControllerDefaultColor();
-			const char* indicatorText = "";
-
-			if (hasBoth || (hasPrimary && hasSecondary)) {
-				indicatorColor = GetControllerBothColor();
-				indicatorText = hasBoth ? "(Both)" : "(Mixed)";
-			} else if (hasPrimary) {
-				indicatorColor = GetControllerPrimaryColor();
-				indicatorText = "(Primary)";
-			} else if (hasSecondary) {
-				indicatorColor = GetControllerSecondaryColor();
-				indicatorText = "(Secondary)";
-			}
-
-			if (indicatorText[0] != '\0') {
-				ImGui::TextColored(indicatorColor, "%s", indicatorText);
 			}
 		}
 

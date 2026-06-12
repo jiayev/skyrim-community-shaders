@@ -281,8 +281,6 @@ void ScreenSpaceReflections::CompileComputeShaders()
 	}
 	{
 		std::vector<std::pair<const char*, const char*>> defines;
-		if (REL::Module::IsVR())
-			defines.push_back({ "VR", "" });
 		if (settings.HalfRes)
 			defines.push_back({ "SSR_HALF", "" });
 		if (globals::features::dynamicCubemaps.loaded)
@@ -351,7 +349,8 @@ void ScreenSpaceReflections::DrawSSR()
 	auto renderer = globals::game::renderer;
 	auto rts = renderer->GetRuntimeData().renderTargets;
 
-	float2 size = Util::ConvertToDynamic(globals::state->screenSize);
+	float2 size{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+	size = Util::ConvertToDynamic(size);
 	auto resolution = std::array{ (uint)size.x, (uint)size.y };
 	float2 dynres = { floor(size.x), floor(size.y) };
 

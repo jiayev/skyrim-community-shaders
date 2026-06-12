@@ -2,11 +2,12 @@ name: "PR: i18n Check"
 
 on:
     pull_request:
-        types: [opened, synchronize, reopened]
+        types: [opened, synchronize, reopened, ready_for_review]
         paths:
             - "src/**"
             - "package/SKSE/Plugins/CommunityShaders/Translations/**"
             - "tools/extract-i18n.py"
+            - "tools/sort-i18n.py"
 
 permissions:
     contents: read
@@ -14,6 +15,7 @@ permissions:
 jobs:
     i18n-check:
         name: Verify en.json is in sync with source
+        if: ${{ !github.event.pull_request.draft }}
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
@@ -29,6 +31,9 @@ jobs:
 
             - name: Check for orphaned keys
               run: python tools/extract-i18n.py --orphans
+
+            - name: Check translation file key order matches en.json
+              run: python tools/sort-i18n.py --check
 
             - name: Validate translation file formats
               run: |

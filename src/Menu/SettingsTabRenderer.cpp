@@ -7,10 +7,10 @@
 
 #include "BackgroundBlur.h"
 #include "Features/ScreenshotFeature.h"
-#include "Features/VR.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
+#include "CursorLoader.h"
 #include "IconLoader.h"
 #include "Menu.h"
 #include "ShaderCache.h"
@@ -514,6 +514,25 @@ void SettingsTabRenderer::RenderBehaviorTab()
 		ImGui::SliderFloat(T("menu.settings.tooltip_hover_delay", "Tooltip Hover Delay"), &themeSettings.TooltipHoverDelay, 0.0f, 2.0f, "%.2f s", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(T("menu.settings.tooltip_hover_delay_tooltip", "Time in seconds to wait before a tooltip appears when hovering over an item."));
+		}
+
+		if (ImGui::Checkbox(T("menu.settings.use_custom_cursor", "Use Custom Theme Cursor"), &themeSettings.UseCustomCursor)) {
+			globals::menu->pendingCursorReload = true;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T("menu.settings.use_custom_cursor_tooltip",
+				"Loads cursor PNGs from the active theme folder (Themes/<preset>/).\n"
+				"Supported files include cursor.png (arrow), cursor_text.png (typing), cursor_resize_ew.png, cursor_resize_ns.png, and more.\n"
+				"Missing types fall back to the default ImGui cursor. Configure per-type hotspots in theme JSON."));
+		}
+
+		if (themeSettings.UseCustomCursor) {
+			ImGui::Indent();
+			const int loadedCount = Util::CursorLoader::GetLoadedCount();
+			ImGui::TextDisabled("%s: %d",
+				T("menu.settings.custom_cursor_status", "Custom cursor images loaded"),
+				loadedCount);
+			ImGui::Unindent();
 		}
 
 		SeparatorTextWithFont(T("menu.settings.visual_effects", "Visual Effects"), Menu::FontRole::Subheading);
@@ -1208,33 +1227,21 @@ void SettingsTabRenderer::RenderColorsTab()
 		// Color filter at the top with search icon
 		static ImGuiTextFilter colorFilter;
 
-		float iconSize = 20.0f;
-		float iconSpace = iconSize + 14.0f;
-		ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+		const float scale = Util::GetSearchUIScale();
+		const float iconSize = ThemeManager::Constants::SEARCH_ICON_SIZE * scale;
+		const float iconSpace = iconSize + ThemeManager::Constants::SEARCH_INPUT_PADDING_EXTRA * scale;
 		float availableWidth = ImGui::GetFontSize() * 16;
-		float frameHeight = ImGui::GetFrameHeight();
 
 		// Custom style for filter with icon space
-		float scale = Util::GetUIScale();
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(iconSpace, 6.0f * scale));
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(iconSpace, ThemeManager::Constants::SEARCH_INPUT_FRAME_PADDING_Y * scale));
 		colorFilter.Draw(T("menu.settings.filter_colors", "Filter colors"), availableWidth);
 		ImGui::PopStyleVar();
 
 		// Draw search icon
-		ImVec2 iconPos = ImVec2(cursorPos.x + 8.0f * scale, cursorPos.y + (frameHeight - iconSize) * 0.5f);
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		ImVec2 center = ImVec2(iconPos.x + iconSize * 0.46f, iconPos.y + iconSize * 0.5f);
-		float radius = iconSize * 0.3f;
-
-		auto& palette = globals::menu->GetTheme().Palette;
-		ImVec4 iconColor = palette.Text;
-		iconColor.w *= 0.7f;
-		ImU32 iconColorU32 = ImGui::GetColorU32(iconColor);
-
-		drawList->AddCircle(center, radius, iconColorU32, 12, 2.2f);
-		ImVec2 handleStart = ImVec2(center.x + radius * 0.81f, center.y + radius * 0.81f);
-		ImVec2 handleEnd = ImVec2(handleStart.x + iconSize * 0.29f, handleStart.y + iconSize * 0.29f);
-		drawList->AddLine(handleStart, handleEnd, iconColorU32, 2.1f);
+		const ImVec2 filterMin = ImGui::GetItemRectMin();
+		const ImVec2 filterSize = ImGui::GetItemRectSize();
+		ImVec2 iconPos = ImVec2(filterMin.x + ThemeManager::Constants::SEARCH_ICON_OFFSET_X * scale, filterMin.y + (filterSize.y - iconSize) * 0.5f);
+		Util::DrawSearchIcon(iconPos, iconSize, ThemeManager::Constants::SEARCH_ICON_ALPHA);
 
 		ImGui::Spacing();
 

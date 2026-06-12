@@ -58,7 +58,6 @@
 #include "Common/GBuffer.hlsli"
 #include "Common/Game.hlsli"
 #include "Common/Math.hlsli"
-#include "Common/VR.hlsli"
 #include "NRD/NRDReblurSH.hlsli"
 #include "ScreenSpaceGI/common.hlsli"
 
@@ -170,18 +169,14 @@ void CalculateGI(
 {
 	const float2 frameScale = FrameDim * RcpTexDim;
 
-	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
-	float2 normalizedScreenPos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
+	float2 normalizedScreenPos = uv;
 	const float rcpNumSteps = rcp((float)NumSteps);
-
-	// Use mono screen-space position for noise indexing so both eyes
-	// sample the same noise for corresponding world positions.
 	uint2 noiseCoord = uint2(normalizedScreenPos * OUT_FRAME_DIM);
 	const float2 localNoise = SpatioTemporalNoise(noiseCoord, FrameIndex);
 	const float noiseStep = localNoise.y;
 	const float noiseDirection = localNoise.x;
 
-	const float3 pixCenterPos = ScreenToViewPosition(normalizedScreenPos, viewspaceZ, eyeIndex) + viewspaceNormal * SSGI_NORMAL_BIAS * viewspaceZ;
+	const float3 pixCenterPos = ScreenToViewPosition(normalizedScreenPos, viewspaceZ) + viewspaceNormal * SSGI_NORMAL_BIAS * viewspaceZ;
 	const float3 viewVec = normalize(-pixCenterPos);
 
 	if (dot(viewVec, pixCenterPos) > 0)
@@ -231,8 +226,7 @@ void CalculateGI(
 				float2 samplePxCoord = pixPos + omega_dir * sampleOffset * sideSign;
 				float2 sampleUV = samplePxCoord * RCP_OUT_FRAME_DIM;
 
-				uint sampleEyeIndex = Stereo::GetEyeIndexFromTexCoord(sampleUV);
-				float2 sampleScreenPos = Stereo::ConvertFromStereoUV(sampleUV, sampleEyeIndex);
+				float2 sampleScreenPos = sampleUV;
 				[branch] if (any(sampleScreenPos > 1.0) || any(sampleScreenPos < 0.0)) break;
 
 				float mipLevel = min((step + 1) / 2, 4);
@@ -241,14 +235,7 @@ void CalculateGI(
 				if (SZ <= FP_Z)
 					continue;
 
-				float3 samplePos = ScreenToViewPosition(sampleScreenPos, SZ, sampleEyeIndex);
-#if defined(VR)
-				if (sampleEyeIndex != eyeIndex) {
-					if (abs(SZ - viewspaceZ) > viewspaceZ * 0.1)
-						continue;
-					samplePos = FrameBuffer::WorldToView(FrameBuffer::ViewToWorld(samplePos, true, sampleEyeIndex), true, eyeIndex);
-				}
-#endif
+				float3 samplePos = ScreenToViewPosition(sampleScreenPos, SZ);
 				float3 sampleDelta = samplePos - pixCenterPos;
 				float3 sampleHorizonVec = normalize(sampleDelta);
 
@@ -298,8 +285,8 @@ void CalculateGI(
 
 #if defined(DYNAMIC_CUBEMAPS)
 		if (UseDynamicCubemap != 0) {
-			float3 worldPos = ViewToWorldPosition(pixCenterPos, FrameBuffer::CameraViewInverse[eyeIndex]);
-			float3 worldNormal = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse[eyeIndex]);
+			float3 worldPos = ViewToWorldPosition(pixCenterPos, FrameBuffer::CameraViewInverse);
+			float3 worldNormal = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse);
 			uint globalOccludedBitfieldCopy = globalOccludedBitfield;
 			[unroll] for (uint j = 0; j < SSGI_FALLBACK_SAMPLE_COUNT; j++)
 			{
@@ -315,7 +302,7 @@ void CalculateGI(
 				float sine = sqrt(saturate(1.0 - cosine * cosine));
 				float3 rayDir = normalize(realTangent * cosine + viewspaceNormal * sine);
 				rayDir = normalize(rayDir - planeNormal * dot(rayDir, planeNormal));
-				float3 worldDir = ViewToWorldVector(rayDir, FrameBuffer::CameraViewInverse[eyeIndex]);
+				float3 worldDir = ViewToWorldVector(rayDir, FrameBuffer::CameraViewInverse);
 				float3 contrib = SampleDiffuseFallbackCubemap(worldPos, worldNormal, worldDir) * openWeight;
 				fallbackRadiance += contrib;
 #	ifdef SSGI_SH
@@ -356,7 +343,6 @@ void CalculateGI(
 #endif
 
 	float2 uv = (pxCoord + .5) * RCP_OUT_FRAME_DIM;
-	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
 
 	float viewspaceZ = READ_DEPTH(srcWorkingDepth, pxCoord);
 	if (viewspaceZ <= FP_Z) {
@@ -374,7 +360,7 @@ void CalculateGI(
 	float2 normalSample = FULLRES_LOAD(srcNormal, pxCoord, uv * OUT_FRAME_SCALE, samplerLinearClamp);
 	float3 viewspaceNormal = GBuffer::DecodeNormal(normalSample);
 
-	float3 worldNormal = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse[eyeIndex]);
+	float3 worldNormal = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse);
 	half2 encodedWorldNormal = GBuffer::EncodeNormal(worldNormal);
 	outPrevGeo[pxCoord] = half3(viewspaceZ, encodedWorldNormal);
 

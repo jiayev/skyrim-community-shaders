@@ -77,13 +77,9 @@ void ScreenSpaceGI::DrawSettings()
 		}
 		ImGui::TableNextColumn();
 		{
-			auto vanillaSSAOGuard = Util::DisableGuard(globals::game::isVR);
 			ImGui::Checkbox(T(TKEY("vanilla_ssao"), "Vanilla SSAO"), &settings.EnableVanillaSSAO);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				if (globals::game::isVR)
-					ImGui::Text("%s", T(TKEY("vanilla_ssao_vr_tooltip"), "Vanilla SSAO is not supported in VR."));
-				else
-					ImGui::Text("%s", T(TKEY("vanilla_ssao_tooltip"), "Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening."));
+				ImGui::Text("%s", T(TKEY("vanilla_ssao_tooltip"), "Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening."));
 			}
 		}
 
@@ -409,7 +405,7 @@ void ScreenSpaceGI::SetupNRDResources()
 void ScreenSpaceGI::ClearShaderCache()
 {
 	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
-		&prefilterDepthsCompute, &prefilterRadianceCompute, &prefilterNormalCompute, &giCompute, &stereoSyncCompute
+		&prefilterDepthsCompute, &prefilterRadianceCompute, &prefilterNormalCompute, &giCompute
 	};
 
 	for (auto shader : shaderPtrs)
@@ -435,11 +431,7 @@ void ScreenSpaceGI::CompileComputeShaders()
 			{ &giCompute, "diffuseGI.cs.hlsl", {} },
 		};
 
-	if (REL::Module::IsVR())
-		shaderInfos.push_back({ &stereoSyncCompute, "stereoSync.cs.hlsl", { { "FRAMEBUFFER", "" } } });
 	for (auto& info : shaderInfos) {
-		if (REL::Module::IsVR())
-			info.defines.push_back({ "VR", "" });
 		if (settings.EnableGI)
 			info.defines.push_back({ "GI", "" });
 		if (settings.EnableSH && settings.EnableGI)
@@ -472,21 +464,18 @@ void ScreenSpaceGI::UpdateSB()
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
-	static float4x4 prevInvView[2] = {};
+	static float4x4 prevInvView = {};
 
 	SSGICB data;
 	{
-		for (int eyeIndex = 0; eyeIndex < (1 + REL::Module::IsVR()); ++eyeIndex) {
-			auto eye = Util::GetCameraData(eyeIndex);
+		const auto& projMat = globals::game::frameBufferCached.GetCameraProj();
+		const auto& viewMat = globals::game::frameBufferCached.GetCameraView();
 
-			data.PrevInvViewMat[eyeIndex] = prevInvView[eyeIndex];
-			data.NDCToViewMul[eyeIndex] = { 2.0f / eye.projMat(0, 0), -2.0f / eye.projMat(1, 1) };
-			data.NDCToViewAdd[eyeIndex] = { -1.0f / eye.projMat(0, 0), 1.0f / eye.projMat(1, 1) };
-			if (REL::Module::IsVR())
-				data.NDCToViewMul[eyeIndex].x *= 2;
+		data.PrevInvViewMat = prevInvView;
+		data.NDCToViewMul = { 2.0f / projMat(0, 0), -2.0f / projMat(1, 1) };
+		data.NDCToViewAdd = { -1.0f / projMat(0, 0), 1.0f / projMat(1, 1) };
 
-			prevInvView[eyeIndex] = eye.viewMat.Invert();
-		}
+		prevInvView = viewMat.Invert();
 
 		data.TexDim = res;
 		data.RcpTexDim = float2(1.0f) / res;
@@ -512,7 +501,7 @@ void ScreenSpaceGI::DrawSSGI()
 	auto context = globals::d3d::context;
 
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-	GET_INSTANCE_MEMBER(BSImagespaceShaderISSAOBlurH, imageSpaceManager);
+	auto& BSImagespaceShaderISSAOBlurH = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISSAOBlurH;
 
 	static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH.get()) + 0x50LL);
 	*enableSSAO = settings.EnableVanillaSSAO;
@@ -537,7 +526,8 @@ void ScreenSpaceGI::DrawSSGI()
 	auto rts = renderer->GetRuntimeData().renderTargets;
 	auto deferred = globals::deferred;
 
-	float2 size = Util::ConvertToDynamic(globals::state->screenSize);
+	float2 size{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+	size = Util::ConvertToDynamic(size);
 	auto resolution = std::array{ (uint)size.x, (uint)size.y };
 
 	std::array<ID3D11ShaderResourceView*, 11> srvs = { nullptr };
@@ -666,7 +656,6 @@ void ScreenSpaceGI::DrawSSGI()
 
 		nrdSvc.ApplyReblurSettings(reblurSettings, settings.Reblur,
 			settings.HalfRes ? nrd::CheckerboardMode::WHITE : nrd::CheckerboardMode::OFF);
-		reblurSettings.splitScreen = settings.Reblur.SplitScreen;
 		nrdReblur.SetDenoiserSettings(&reblurSettings);
 
 		nrdReblur.SetNamedSRV(nrd::ResourceType::IN_MV, nrdSvc.GetMotionVectorSRV());

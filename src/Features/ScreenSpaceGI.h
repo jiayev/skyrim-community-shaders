@@ -21,8 +21,6 @@ private:
 	static constexpr std::string_view MOD_ID = "130375";
 
 public:
-	bool inline SupportsVR() override { return true; }
-
 	virtual inline std::string GetName() override { return "Screen Space GI"; }
 	virtual std::string GetDisplayName() override { return T("feature.screen_space_gi.name", "Screen Space GI"); }
 	virtual inline std::string GetShortName() override { return "ScreenSpaceGI"; }
@@ -32,9 +30,6 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		std::string desc = T("feature.screen_space_gi.description", "Screen Space Global Illumination adds realistic indirect lighting and ambient occlusion to the game. This technique simulates how light bounces off surfaces to illuminate other objects naturally.");
-		if (REL::Module::IsVR()) {
-			desc += T("feature.screen_space_gi.vr_warning", "\n\nWarning: In VR, this feature may have visual artifacts and can have a significant performance impact due to the nature of screen space effects.");
-		}
 		return std::make_pair(
 			desc,
 			std::vector<std::string>{
@@ -67,7 +62,7 @@ public:
 	struct Settings
 	{
 		bool Enabled = true;
-		bool EnableGI = REL::Module::IsVR() ? false : true;
+		bool EnableGI = true;
 		bool EnableVanillaSSAO = false;
 		bool EnableSH = true;
 		// performance/quality
@@ -87,9 +82,9 @@ public:
 
 	struct alignas(16) SSGICB
 	{
-		float4x4 PrevInvViewMat[2];
-		float2 NDCToViewMul[2];
-		float2 NDCToViewAdd[2];
+		float4x4 PrevInvViewMat;
+		float2 NDCToViewMul;
+		float2 NDCToViewAdd;
 
 		float2 TexDim;
 		float2 RcpTexDim;
@@ -145,7 +140,6 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> prefilterRadianceCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> prefilterNormalCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> giCompute = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> stereoSyncCompute = nullptr;
 
 	NRDReblurIntegration nrdReblur;
 	nrd::ReblurSettings reblurSettings{};

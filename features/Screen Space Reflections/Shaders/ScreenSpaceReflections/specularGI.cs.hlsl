@@ -12,7 +12,6 @@
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
-#include "Common/VR.hlsli"
 #include "NRD/NRDReblurSH.hlsli"
 #include "ScreenSpaceReflections/common.hlsli"
 
@@ -194,9 +193,9 @@ float SSRT_LoadDepth(int2 pixel_coordinate, int mip)
 	return DepthTextureMips.Load(int3(pixel_coordinate, mip)).x;
 }
 
-float3 SSRT_ScreenSpaceToViewSpace(float3 screen_space_position, uint eyeIndex)
+float3 SSRT_ScreenSpaceToViewSpace(float3 screen_space_position)
 {
-	return InvProjectPosition(screen_space_position, FrameBuffer::CameraProjInverse[eyeIndex]);
+	return InvProjectPosition(screen_space_position, FrameBuffer::CameraProjInverse);
 }
 
 void SSRT_InitialAdvanceRay(float3 origin,
@@ -292,7 +291,7 @@ float3 SSRT_HierarchicalRaymarch(float3 origin, float3 direction, float2 screen_
 // Hit validation
 ///////////////////////////////////////////////////////////////////////////////
 
-float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, float2 screen_size, float depth_buffer_thickness, uint eyeIndex, out float occlusion, out bool isBackfaceHit)
+float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, float2 screen_size, float depth_buffer_thickness, out float occlusion, out bool isBackfaceHit)
 {
 	occlusion = 1.f;
 	isBackfaceHit = false;
@@ -307,8 +306,8 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 		return 0;
 	}
 
-	float3 view_space_surface = SSRT_ScreenSpaceToViewSpace(float3(hit.xy, surface_z), eyeIndex);
-	float3 view_space_hit = SSRT_ScreenSpaceToViewSpace(hit, eyeIndex);
+	float3 view_space_surface = SSRT_ScreenSpaceToViewSpace(float3(hit.xy, surface_z));
+	float3 view_space_hit = SSRT_ScreenSpaceToViewSpace(hit);
 	float distance = length(view_space_surface - view_space_hit);
 
 	float confidence = 1.0f - smoothstep(0.0f, depth_buffer_thickness, distance);
@@ -317,7 +316,7 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 	float3 hit_normalVS;
 	float hit_roughness;
 	GetNormalRoughness(texel_coords, hit_normalVS, hit_roughness);
-	float3 hit_normal = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(hit_normalVS, 0)).xyz);
+	float3 hit_normal = normalize(mul(FrameBuffer::CameraViewInverse, float4(hit_normalVS, 0)).xyz);
 	if (dot(hit_normal, world_space_ray_direction) > 0) {
 		occlusion = 1 - confidence;
 		isBackfaceHit = true;
@@ -354,7 +353,6 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 #endif
 
 	float2 uv = float2(fullResCoords + 0.5) * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;
-	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
 
 	float3 normalVS;
 	float roughness;
@@ -380,24 +378,24 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 	}
 
 	float3 screen_uv_space_ray_origin = float3(uv, z);
-	float3 view_space_ray = InvProjectPosition(screen_uv_space_ray_origin, FrameBuffer::CameraProjInverse[eyeIndex]);
-	float3 world_space_normal = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
+	float3 view_space_ray = InvProjectPosition(screen_uv_space_ray_origin, FrameBuffer::CameraProjInverse);
+	float3 world_space_normal = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
 	float3 view_space_surface_normal = normalVS;
 	float3 view_space_ray_direction = normalize(view_space_ray);
 	float viewZ = abs(view_space_ray.z);
 	static const float4 kHitDistParams = float4(HitDistA, HitDistB, HitDistC, HitDistD);
 
-	float3 world_space_origin = mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(view_space_ray, 1)).xyz;
+	float3 world_space_origin = mul(FrameBuffer::CameraViewInverse, float4(view_space_ray, 1)).xyz;
 
 	view_space_ray += view_space_surface_normal * NormalBias * view_space_ray.z * GAME_UNIT_TO_M;
 
 	float pdf;
 	float3 view_space_reflected_direction = SampleReflectionVector(view_space_ray_direction, view_space_surface_normal, roughness, fullResCoords, pdf);
-	screen_uv_space_ray_origin = ProjectPosition(view_space_ray, FrameBuffer::CameraProj[eyeIndex]);
-	float3 screen_space_ray_direction = ProjectDirection(view_space_ray, view_space_reflected_direction, screen_uv_space_ray_origin, FrameBuffer::CameraProj[eyeIndex]);
-	float3 world_space_reflected_direction = mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(view_space_reflected_direction, 0)).xyz;
+	screen_uv_space_ray_origin = ProjectPosition(view_space_ray, FrameBuffer::CameraProj);
+	float3 screen_space_ray_direction = ProjectDirection(view_space_ray, view_space_reflected_direction, screen_uv_space_ray_origin, FrameBuffer::CameraProj);
+	float3 world_space_reflected_direction = mul(FrameBuffer::CameraViewInverse, float4(view_space_reflected_direction, 0)).xyz;
 
-	float3 world_space_ray_origin = mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(view_space_ray, 1)).xyz;
+	float3 world_space_ray_origin = mul(FrameBuffer::CameraViewInverse, float4(view_space_ray, 1)).xyz;
 
 	// Ray march
 	bool valid_hit;
@@ -412,7 +410,7 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 		HIZ_MAX_ITERATIONS,
 		valid_hit, numIterations);
 
-	float3 world_space_hit = InvProjectPosition(hit, FrameBuffer::CameraViewProjInverse[eyeIndex]);
+	float3 world_space_hit = InvProjectPosition(hit, FrameBuffer::CameraViewProjInverse);
 	float3 world_space_ray = world_space_hit - world_space_ray_origin;
 	float world_ray_length = length(world_space_ray);
 	float occlusion;
@@ -422,7 +420,6 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 									   world_space_ray,
 									   screen_size,
 									   thickness,
-									   eyeIndex,
 									   occlusion,
 									   isBackfaceHit) :
 	                               0;
