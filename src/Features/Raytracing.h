@@ -22,6 +22,7 @@
 #include "Features/HairSpecular.h"
 #include "Features/LODBlending.h"
 #include "Features/LinearLighting.h"
+#include "Features/PhysicalSky.h"
 #include "Features/Skin.h"
 #include "Features/Upscaling.h"
 #include "Features/WetnessEffects.h"
@@ -435,6 +436,7 @@ struct CreationEngineRaytracing
 	using SetResolutionFn = void (*)(uint32_t, uint32_t);
 	using UpdateFeatureDataFn = void (*)(void*, uint32_t);
 	using SetSkyHemisphereFn = void (*)(ID3D12Resource*);
+	using SetPhysicalSkyTrLUTFn = void (*)(ID3D12Resource*);
 	using SetWaterFlowMapFn = void (*)(ID3D12Resource*);
 	using GetPassTimingsFn = void (*)(eastl::vector<PassTiming>&);
 	using UpdateSettingsFn = void (*)(Settings);
@@ -457,6 +459,7 @@ struct CreationEngineRaytracing
 	SetResolutionFn SetResolution = nullptr;
 	UpdateFeatureDataFn UpdateFeatureData = nullptr;
 	SetSkyHemisphereFn SetSkyHemisphere = nullptr;
+	SetPhysicalSkyTrLUTFn SetPhysicalSkyTrLUT = nullptr;
 	SetWaterFlowMapFn SetWaterFlowMap = nullptr;
 	GetPassTimingsFn GetPassTimings = nullptr;
 	GetSceneGraphCountersFn GetSceneGraphCounters = nullptr;
@@ -491,6 +494,7 @@ struct CreationEngineRaytracing
 		LOAD_FN(SetResolution);
 		LOAD_FN(UpdateFeatureData);
 		LOAD_FN(SetSkyHemisphere);
+		LOAD_FN(SetPhysicalSkyTrLUT);
 		LOAD_FN(SetWaterFlowMap);
 		LOAD_FN(GetPassTimings);
 		LOAD_FN(GetSceneGraphCounters);
@@ -541,7 +545,6 @@ struct Raytracing : public OverlayFeature
 	}
 
 	// Functionality
-	virtual bool inline SupportsVR() override { return false; }
 	virtual inline std::string_view GetShaderDefineName() override { return "RAYTRACING"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override { return t == RE::BSShader::Type::Lighting; };
 
@@ -671,6 +674,7 @@ struct Raytracing : public OverlayFeature
 		LinearLighting::PerFrameData LinearLighting;
 		ExponentialHeightFog::Settings ExponentialHeightFog;
 		LODBlending::Settings LODBlending;
+		PhysicalSky::CbData PhysicalSky;
 		Skin::SkinData Skin;
 	};
 
@@ -706,6 +710,7 @@ struct Raytracing : public OverlayFeature
 
 	eastl::unique_ptr<WrappedResource> skyHemisphere = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> cubeToHemiCS = nullptr;
+	eastl::unique_ptr<WrappedResource> physicalSkyTrLUT = nullptr;
 
 	eastl::unique_ptr<WrappedResource> waterFlowMap = nullptr;
 	RE::NiPointer<RE::TESWaterReflections> waterReflections = nullptr;

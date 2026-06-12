@@ -3,6 +3,8 @@
 
 #define I18N_KEY_PREFIX "feature.sky_sync."
 
+#include "PhysicalSky.h"
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkySync::Settings,
 	Enabled,
@@ -226,8 +228,10 @@ void SkySync::Update(const RE::Sky* sky)
 			shadowFader.Reset();
 	}
 
+	auto& physicalSky = globals::features::physicalSky;
+	bool physicalSkyInteriorOverride = physicalSky.loaded && physicalSky.settings.enabled && physicalSky.settings.forceEnableAllInteriorCells;
 	// Exterior worldspaces always run; interior cells require the sunlight-shadows flag.
-	if (cell && cell->IsInteriorCell() && !cell->cellFlags.all(static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows))) {
+	if (cell && cell->IsInteriorCell() && !cell->cellFlags.all(static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows)) && !physicalSkyInteriorOverride) {
 		currentDim = 1.0f;
 		return;
 	}
@@ -265,7 +269,8 @@ void SkySync::Update(const RE::Sky* sky)
 	ProcessMoon(sky, Caster::Masser, directions, intensities);
 	ProcessMoon(sky, Caster::Secunda, directions, intensities);
 
-	shadowFader.Update(sky, directions, intensities, settings.ShadowTransitionDuration);
+	std::copy(std::begin(directions), std::end(directions), std::begin(rawDirections));
+	shadowFader.Update(sky, directions, intensities, lightColors, settings.ShadowTransitionDuration);
 }
 void SkySync::SetSunAngle()
 {
@@ -415,7 +420,7 @@ void SkySync::ShadowFader::Reset()
 	transitioning = false;
 }
 
-void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration)
+void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], std::optional<std::array<RE::NiColor, 3>> colors, float fadeDuration)
 {
 	auto isValidDir = [](const RE::NiPoint3& d) { return d.x != 0.0f || d.y != 0.0f || d.z != 0.0f; };
 
@@ -428,7 +433,7 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 		if (!masserValid && !secundaValid) {
 			// No valid night caster — default to directly above (shadows point down)
 			currentDir = { 0.0f, 0.0f, 1.0f };
-			SetLighting(sky, currentDir);
+			SetLighting(sky, currentDir, 0.0f, colors ? std::optional<RE::NiColor>(RE::NiColor{ 0.0f, 0.0f, 0.0f }) : std::nullopt);
 			return;
 		}
 
@@ -456,14 +461,14 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 		if (snap) {
 			transitioning = false;
 			currentDir = dirs[static_cast<int>(best)];
-			SetLighting(sky, currentDir);
+			SetLighting(sky, currentDir, intensities[static_cast<int>(best)], colors ? std::optional<RE::NiColor>((*colors)[static_cast<int>(best)]) : std::nullopt);
 			return;
 		}
 	}
 
 	if (!transitioning) {
 		currentDir = dirs[static_cast<int>(target)];
-		SetLighting(sky, currentDir);
+		SetLighting(sky, currentDir, intensities[static_cast<int>(target)], colors ? std::optional<RE::NiColor>((*colors)[static_cast<int>(target)]) : std::nullopt);
 		return;
 	}
 
@@ -486,10 +491,10 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 		transitioning = false;
 	}
 
-	SetLighting(sky, currentDir);
+	SetLighting(sky, currentDir, intensities[static_cast<int>(target)], colors ? std::optional<RE::NiColor>((*colors)[static_cast<int>(target)]) : std::nullopt);
 }
 
-void SkySync::ShadowFader::SetLighting(const RE::Sky* sky, RE::NiPoint3 dir)
+void SkySync::ShadowFader::SetLighting(const RE::Sky* sky, RE::NiPoint3 dir, float intensity, std::optional<RE::NiColor> color)
 {
 	ClampDirection(dir);
 
@@ -497,6 +502,9 @@ void SkySync::ShadowFader::SetLighting(const RE::Sky* sky, RE::NiPoint3 dir)
 	m.entry[0][0] = -dir.x;
 	m.entry[1][0] = -dir.y;
 	m.entry[2][0] = -dir.z;
+
+	if (color.has_value())
+		sky->sun->light->GetLightRuntimeData().diffuse = *color * intensity;
 
 	RE::NiUpdateData updateData;
 	sky->sun->light->Update(updateData);
@@ -519,7 +527,5 @@ inline void SkySync::ShadowFader::ClampDirection(RE::NiPoint3& dir)
 	dir.y = cosElev * sinHeading;
 	dir.z = sinElev;
 }
-
-
 
 #undef I18N_KEY_PREFIX

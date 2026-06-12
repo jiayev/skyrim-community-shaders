@@ -10,6 +10,7 @@
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
+#include "Utils/Game.h"
 #include "Utils/UI.h"
 #include <Windows.h>
 #include <algorithm>
@@ -553,7 +554,7 @@ void Upscaling::RestoreDefaultSettings()
 void Upscaling::DataLoaded()
 {
 	// Fix screenshots fix from Engine Fixes
-	RE::GetINISetting("bUseTAA:Display")->data.b = false;
+	Util::DisableVanillaTAA();
 
 	// The game defaults this to a non-zero value
 	static auto fDRClampOffset = RE::GetINISetting("fDRClampOffset:Display");
@@ -953,11 +954,8 @@ void Upscaling::ConfigureTAA()
 {
 	auto upscaleMethod = GetUpscaleMethod();
 
-	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-	auto& BSImagespaceShaderISTemporalAA = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA;
-
 	// Force enable TAA if needed
-	BSImagespaceShaderISTemporalAA->taaEnabled = upscaleMethod != UpscaleMethod::kNONE;
+	Util::SetTemporal(upscaleMethod != UpscaleMethod::kNONE);
 }
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
@@ -1113,7 +1111,7 @@ void Upscaling::CopySharedD3D12Resources()
 	auto context = globals::d3d::context;
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-	context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11, motionVector.texture);
+	context->CopyResource(globals::dx12Interop->sharedResources.motionVector->resource11, motionVector.texture);
 
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
@@ -1141,7 +1139,7 @@ void Upscaling::CopySharedD3D12Resources()
 		ID3D11ShaderResourceView* views[1] = { depth.depthSRV };
 		context->PSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11RenderTargetView* rtvs[1] = { dx12SwapChain.depthBufferShared12->rtv };
+		ID3D11RenderTargetView* rtvs[1] = { globals::dx12Interop->sharedResources.depth->rtv };
 		context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
 
 		context->PSSetShader(copyDepthToSharedBufferPS.get(), nullptr, 0);
@@ -1432,6 +1430,54 @@ Upscaling::BlurResources Upscaling::GetBlurResources() const
 		return dx12SwapChain.GetBlurResources();
 	}
 	return {};
+}
+
+void Upscaling::ConvertColorSpace(bool toLinear)
+{
+	ZoneScoped;
+	const bool linearLightingEnabled = globals::features::linearLighting.settings.enableLinearLighting;
+
+	if (linearLightingEnabled)
+		return;
+
+	auto state = globals::state;
+	auto context = globals::d3d::context;
+	auto renderer = globals::game::renderer;
+
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+
+	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+
+	state->BeginPerfEvent("Color Space Convertion");
+	TracyD3D11Zone(globals::state->tracyCtx, "Color Space Convertion");
+
+	auto renderSize = Util::ConvertToDynamic(float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight });
+	uint32_t renderWidth = (uint32_t)renderSize.x;
+	uint32_t renderHeight = (uint32_t)renderSize.y;
+
+	context->CSSetShader(GetColorSpaceCS(toLinear), nullptr, 0);
+
+	UpscalingDataCB upscalingData;
+	upscalingData.trueSamplingDim = float2((float)renderWidth, (float)renderHeight);
+	upscalingDataCB->Update(upscalingData);
+
+	auto upscalingBuffer = upscalingDataCB->CB();
+	context->CSSetConstantBuffers(0, 1, &upscalingBuffer);
+
+	ID3D11UnorderedAccessView* uavs[] = { main.UAV };
+	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+	context->Dispatch((renderWidth + 7) / 8, (renderHeight + 7) / 8, 1);
+
+	ID3D11UnorderedAccessView* nullUAVs[4] = { nullptr, nullptr, nullptr, nullptr };
+	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUAVs), nullUAVs, nullptr);
+
+	ID3D11Buffer* nullBuffer = nullptr;
+	context->CSSetConstantBuffers(0, 1, &nullBuffer);
+
+	context->CSSetShader(nullptr, nullptr, 0);
+
+	state->EndPerfEvent();
 }
 
 void Upscaling::EncodeTextures()
@@ -1823,10 +1869,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	if (upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kDLSS_RR)
 		upscaling.ApplySharpening();
 
-	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-	auto& BSImagespaceShaderISTemporalAA = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA;
-
-	BSImagespaceShaderISTemporalAA->taaEnabled = upscaleMethod == UpscaleMethod::kTAA;
+	Util::SetTemporal(upscaleMethod == UpscaleMethod::kTAA);
 
 	// Redirect kFRAMEBUFFER to float texture before ISHDR runs so HDR values >1.0 survive
 	// When HDR Display is not loaded, ISHDR writes to vanilla kFRAMEBUFFER (SDR path)
@@ -1840,7 +1883,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	if (hdrLoaded)
 		globals::features::hdrDisplay.RestoreFramebuffer();
 
-	BSImagespaceShaderISTemporalAA->taaEnabled = false;
+	Util::SetTemporal(false);
 }
 
 void Upscaling::SetScissorRect::thunk(RE::BSGraphics::Renderer* This, int a_left, int a_top, int a_right, int a_bottom)

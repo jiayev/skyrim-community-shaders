@@ -1,7 +1,8 @@
-﻿#pragma once
+#pragma once
 #include "RE/M/Moon.h"
-
 #include "Utils/Moon.h"
+
+struct PhysicalSky;
 
 struct SkySync : Feature
 {
@@ -9,6 +10,8 @@ private:
 	static constexpr std::string_view MOD_ID = "153543";
 
 public:
+	friend struct PhysicalSky;
+
 	virtual inline std::string GetName() override { return "Sky Sync"; }
 	virtual std::string GetDisplayName() override { return T("feature.sky_sync.name", "Sky Sync"); }
 	virtual inline std::string GetShortName() override { return "SkySync"; }
@@ -62,7 +65,6 @@ public:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-
 private:
 	enum class CellFlagExt : uint16_t
 	{
@@ -106,8 +108,8 @@ private:
 		float fadeTimer = 0.0f;
 		bool transitioning = false;
 
-		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration);
-		static void SetLighting(const RE::Sky* sky, RE::NiPoint3 dir);
+		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], std::optional<std::array<RE::NiColor, 3>> colors, float fadeDuration);
+		static void SetLighting(const RE::Sky* sky, RE::NiPoint3 dir, float intensity, std::optional<RE::NiColor> color);
 		static void ClampDirection(RE::NiPoint3& dir);
 		void Reset();
 	};
@@ -125,8 +127,10 @@ private:
 	float sunAngle = 90.0f;
 	float currentSkyRotation = D3D11_FLOAT32_MAX;
 
+	RE::NiPoint3 rawDirections[3] = {};
 	float4 colors[3] = {};
 	float currentDim = 1.0f;
+	std::optional<std::array<RE::NiColor, 3>> lightColors = {};
 	ShadowFader shadowFader;
 
 	void DisableOnConflict(std::string_view conflictName);

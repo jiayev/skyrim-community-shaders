@@ -467,6 +467,10 @@ cbuffer PerGeometry : register(b2)
 #		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
 #	endif
 
+#	if defined(PHYSICAL_SKY)
+#		include "PhysicalSky/Common.hlsli"
+#	endif
+
 #	include "Common/ShadowSampling.hlsli"
 
 float3 GetEffectAmbientLighting(float skylightingDiffuse)
@@ -553,6 +557,11 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	}
 #		endif
 
+#		if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		dirColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampDepthSampler);
+#		endif
+
 #		if defined(SKYLIGHTING)
 #			if defined(IBL)
 	if (!SharedData::iblSettings.EnableIBL)
@@ -561,6 +570,20 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 		ambientColor = Color::IrradianceToLinear(ambientColor);
 		ambientColor *= skylightingDiffuse;
 		ambientColor = Color::IrradianceToGamma(ambientColor);
+	}
+#		endif
+
+#		if defined(IBL)
+	if (SharedData::iblSettings.EnableDiffuseIBL) {
+		if (!SharedData::InInterior || SharedData::iblSettings.EnableInterior) {
+			ambientColor = Color::IrradianceToLinear(color);
+#			if defined(SKYLIGHTING)
+			ambientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(float3(0, 0, -1), skylightingDiffuse), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
+#			else
+			ambientColor += Color::Saturation(ImageBasedLighting::GetIBLColor(float3(0, 0, -1)), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
+#			endif
+			ambientColor = Color::IrradianceToGamma(ambientColor);
+		}
 	}
 #		endif
 
@@ -629,6 +652,11 @@ float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPositi
 	if (SharedData::exponentialHeightFogSettings.enabled) {
 		dirColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 	}
+#		endif
+
+#		if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		dirColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampDepthSampler);
 #		endif
 
 	return dirColor + ambientColor;
@@ -815,11 +843,28 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 #	if !defined(LIGHTING) && defined(VC) && defined(TEXCOORD) && defined(NORMALS) && defined(TEXTURE) && defined(FALLOFF) && defined(SOFT)
-	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha && lightingInfluence == 1.0)
-		lightColor = GetLightingShadow(lightColor, input.WorldPosition.xyz, input.Position.xy, depth, shadowVariance);
+	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha && lightingInfluence == 1.0) {
+#		if defined(PHYSICAL_SKY)
+		if (SharedData::physSkyData.enabled && SharedData::physSkyData.lightSkyStatics) {
+			float3 sceneLighting = ShadowSampling::GetSceneLightingColor();
+			float3 skyStaticLighting = GetLightingShadow(sceneLighting, input.WorldPosition.xyz, input.Position.xy, depth, shadowVariance);
+			lightColor = baseColor.xyz * skyStaticLighting * SharedData::physSkyData.skyStaticsBrightness / Math::PI;
+		} else
+#		endif
+		{
+			lightColor = GetLightingShadow(lightColor, input.WorldPosition.xyz, input.Position.xy, depth, shadowVariance);
+		}
+	}
 #	endif
 
 	lightColor = Color::EffectMult(lightColor);
+
+#	if !defined(DEFERRED) && defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
+		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), input.Position.xy, length(input.WorldPosition.xyz), SampBaseSampler);
+		lightColor = lightColor * apSample.w + apSample.xyz;
+	}
+#	endif
 
 #	if !defined(MOTIONVECTORS_NORMALS)
 	float fogFactor = Color::FogAlpha(input.FogParam.w);

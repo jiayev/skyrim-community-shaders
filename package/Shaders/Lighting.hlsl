@@ -867,6 +867,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Skin/Skin.hlsli"
 #	endif
 
+#	if defined(PHYSICAL_SKY)
+#		include "PhysicalSky/Common.hlsli"
+#	endif
+
 #	define LinearSampler SampColorSampler
 
 #	include "Common/ShadowSampling.hlsli"
@@ -946,7 +950,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
 		float depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
 
-		blendFactorTerrain = saturate((depthSampledLinear - depthPixelLinear) / 5.0);
+		blendFactorTerrain = saturate((depthSampledLinear - depthPixelLinear) / 10.0);
 
 		if (input.Position.z == depthSampled)
 			blendFactorTerrain = 1;
@@ -2561,6 +2565,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
+#	if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		dirLightColor *= PhysSky::SampleTr(normalize(DirLightDirection.xyz), SampShadowMaskSampler);
+#	endif
+
 #	if defined(WATER_EFFECTS)
 	dirLightColor *= WaterEffects::ComputeCaustics(waterData, input.WorldPosition.xyz);
 #	endif
@@ -3185,6 +3194,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 	color.xyz = Color::IrradianceToGamma(color.xyz);
+#		if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		const float4 apSample = PhysSky::SampleAp(normalize(input.WorldPosition.xyz), input.Position.xy, length(input.WorldPosition.xyz), SampColorSampler);
+		color.xyz = color.xyz * apSample.w + apSample.xyz;
+	}
+#		endif
+
 	float3 fogColor = Color::Fog(input.FogParam.xyz);
 	float fogFactor = Color::FogAlpha(input.FogParam.w);
 #		if defined(IBL)

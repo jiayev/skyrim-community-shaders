@@ -9,6 +9,7 @@
 #include "Features/CSEditor.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/IBL.h"
+#include "Features/PhysicalSky.h"
 #include "Features/Raytracing.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
@@ -357,11 +358,13 @@ void Deferred::DeferredPasses()
 		                        rt.Mode() == CreationEngineRaytracing::Mode::PathTracing;
 	}
 
+	auto& physSky = globals::features::physicalSky;
+
 	// Deferred Composite
 	if (!skipDeferredComposite) {
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
-		ID3D11ShaderResourceView* srvs[16]{
+		ID3D11ShaderResourceView* srvs[]{
 			specular.SRV,                                                                                   // t0  SpecularTexture
 			albedo.SRV,                                                                                     // t1  AlbedoTexture
 			normalRoughness.SRV,                                                                            // t2  NormalRoughnessTexture
@@ -378,10 +381,15 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,                                                          // t13 SsgiSpecularTexture
 			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                            // t14 EnvIBLTexture
 			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,                                            // t15 SkyIBLTexture
+			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,                                         // t16 TexApLut
+			physSky.loaded ? physSky.texApShadow->srv.get() : nullptr,                                      // t17 TexApShadow
 		};
 
-		if (dynamicCubemaps.loaded)
-			context->CSSetSamplers(0, 1, &linearSampler);
+		ID3D11SamplerState* samplers[]{
+			dynamicCubemaps.loaded ? linearSampler : nullptr,
+			physSky.loaded ? physSky.sampSv.get() : nullptr,
+		};
+		context->CSSetSamplers(0, ARRAYSIZE(samplers), samplers);
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -401,7 +409,7 @@ void Deferred::DeferredPasses()
 
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[16]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[18]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
@@ -409,6 +417,9 @@ void Deferred::DeferredPasses()
 
 		ID3D11Buffer* buffers[1] = { nullptr };
 		context->CSSetConstantBuffers(12, 1, buffers);
+
+		ID3D11SamplerState* samplers[2]{ nullptr, nullptr };
+		context->CSSetSamplers(0, ARRAYSIZE(samplers), samplers);
 
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
@@ -612,6 +623,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });
+
+		if (globals::features::physicalSky.loaded)
+			defines.push_back({ "PHYSICAL_SKY", nullptr });
 
 		// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
 		// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).

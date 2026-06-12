@@ -19,6 +19,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "Features/Raytracing.h"
 #include "Features/RenderDoc.h"
@@ -70,6 +71,7 @@ namespace globals
 		HairSpecular hairSpecular{};
 		InteriorSun interiorSun{};
 		InverseSquareLighting inverseSquareLighting{};
+		PhysicalSky physicalSky{};
 		ScreenSpaceGI screenSpaceGI{};
 		ScreenSpaceShadows screenSpaceShadows{};
 		Skylighting skylighting{};
@@ -121,6 +123,7 @@ namespace globals
 		RE::Sky* sky = nullptr;
 		RE::UI* ui = nullptr;
 		RE::Calendar* calendar = nullptr;
+		RE::ImageSpaceManager* imageSpaceManager = nullptr;
 		std::atomic<bool> quitGame{ false };
 
 		RE::BSGraphics::PixelShader** currentPixelShader = nullptr;
@@ -224,8 +227,10 @@ namespace globals
 		using namespace game;
 		RefreshTES();
 		player = RE::PlayerCharacter::GetSingleton();
+		tes = RE::TES::GetSingleton();
 		sky = RE::Sky::GetSingleton();
 		utilityShader = RE::BSUtilityShader::GetSingleton();
+		imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 
 		bEnableLandFade = iniSettingCollection->GetSetting("bEnableLandFade:Display");
 

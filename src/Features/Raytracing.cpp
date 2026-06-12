@@ -13,6 +13,7 @@
 #include "../I18n/I18n.h"
 
 #include "Deferred.h"
+#include "Features/PhysicalSky.h"
 #include "Features/Upscaling.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -940,7 +941,7 @@ void Raytracing::InitializeCERaytracing(ID3D11Device5* d3d11Device, ID3D12Device
 
 bool Raytracing::UpdateResolution()
 {
-	uint2 resolution = { static_cast<uint32_t>(globals::state->screenSize.x), static_cast<uint32_t>(globals::state->screenSize.y) };
+	uint2 resolution = { globals::game::graphicsState->screenWidth, globals::game::graphicsState->screenHeight };
 
 	if (resolution == m_Resolution)
 		return false;
@@ -1107,6 +1108,25 @@ void Raytracing::SetupResources()
 		creationEngineRaytracing->SetSkyHemisphere(skyHemisphere->GetResource());
 	}
 
+	// Physical Sky Transmittance LUT
+	{
+		D3D11_TEXTURE2D_DESC texDesc{};
+		texDesc.Width = PhysicalSky::kTrLutW;
+		texDesc.Height = PhysicalSky::kTrLutH;
+		texDesc.MipLevels = 1;
+		texDesc.ArraySize = 1;
+		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		texDesc.SampleDesc.Count = 1;
+		texDesc.SampleDesc.Quality = 0;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+		physicalSkyTrLUT = eastl::make_unique<WrappedResource>(texDesc);
+		DX::ThrowIfFailed(physicalSkyTrLUT->GetResource()->SetName(L"Physical Sky Transmittance LUT"));
+	}
+
+	if (creationEngineRaytracing->SetPhysicalSkyTrLUT)
+		creationEngineRaytracing->SetPhysicalSkyTrLUT(physicalSkyTrLUT->GetResource());
+
 	// Water FlowMap
 	{
 		D3D11_TEXTURE2D_DESC texDesc{};
@@ -1156,6 +1176,10 @@ void Raytracing::UpdateFeatureData()
 	std::memcpy(&featureData->LinearLighting, &linearLighting, sizeof(LinearLighting::PerFrameData));
 	std::memcpy(&featureData->ExponentialHeightFog, &globals::features::exponentialHeightFog.settings, sizeof(ExponentialHeightFog::Settings));
 	std::memcpy(&featureData->LODBlending, &globals::features::lodBlending.settings, sizeof(LODBlending::Settings));
+	auto& physicalSky = globals::features::physicalSky;
+	std::memcpy(&featureData->PhysicalSky, &physicalSky.cbData, sizeof(PhysicalSky::CbData));
+	if (!physicalSky.loaded)
+		featureData->PhysicalSky.enabled = 0;
 	std::memcpy(&featureData->Skin, &skinData, sizeof(Skin::SkinData));
 
 	static_assert(sizeof(FeatureData::ExtendedMaterials) == sizeof(ExtendedMaterials::Settings));
@@ -1166,6 +1190,7 @@ void Raytracing::UpdateFeatureData()
 	static_assert(sizeof(FeatureData::LinearLighting) == sizeof(LinearLighting::PerFrameData));
 	static_assert(sizeof(FeatureData::ExponentialHeightFog) == sizeof(ExponentialHeightFog::Settings));
 	static_assert(sizeof(FeatureData::LODBlending) == sizeof(LODBlending::Settings));
+	static_assert(sizeof(FeatureData::PhysicalSky) == sizeof(PhysicalSky::CbData));
 	static_assert(sizeof(FeatureData::Skin) == sizeof(Skin::SkinData));
 
 	creationEngineRaytracing->UpdateFeatureData(featureData.get(), sizeof(FeatureData));
@@ -1265,6 +1290,10 @@ void Raytracing::DeferredPasses()
 		return;
 
 	auto* context = globals::d3d::context;
+	auto& physicalSky = globals::features::physicalSky;
+	if (physicalSkyTrLUT && physicalSky.loaded && physicalSky.settings.enabled && physicalSky.texTrLut && physicalSky.texTrLut->resource) {
+		context->CopyResource(physicalSkyTrLUT->resource11, physicalSky.texTrLut->resource.get());
+	}
 
 	bool resolutionChanged = UpdateResolution();
 
@@ -1308,7 +1337,7 @@ void Raytracing::DeferredPasses()
 	if (settings.PerfOverlay != OverlayMode::None)
 		creationEngineRaytracing->GetPassTimings(passTimings);
 
-	auto screenSize = globals::state->screenSize;
+	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 	auto dynamicScreenSize = Util::ConvertToDynamic(screenSize);
 
 	screenData->Resolution = { static_cast<uint>(screenSize.x), static_cast<uint>(screenSize.y) };
@@ -1369,7 +1398,7 @@ void Raytracing::DeferredPasses()
 			};
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-			ID3D11UnorderedAccessView* uavs[] = { 
+			ID3D11UnorderedAccessView* uavs[] = {
 				main.UAV,
 				mv.UAV
 			};

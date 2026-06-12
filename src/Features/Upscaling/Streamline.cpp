@@ -782,8 +782,6 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* col
 	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 	auto renderSize = Util::ConvertToDynamic(screenSize);
 
-	auto& upscaling = globals::features::upscaling;
-
 	sl::Extent extentIn{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
 	sl::Extent extentOut{ 0, 0, (uint)screenSize.x, (uint)screenSize.y };
 
@@ -795,7 +793,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* col
 
 void Streamline::Upscale(ID3D12GraphicsCommandList4* a_commandList, ID3D12Resource* a_input, ID3D12Resource* a_output, ID3D12Resource* a_depth, ID3D12Resource* a_motionVectors, ID3D12Resource* a_reactiveMask)
 {
-	auto screenSize = globals::state->screenSize;
+	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 	auto renderSize = Util::ConvertToDynamic(screenSize);
 
 	sl::Extent extentIn{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
@@ -815,7 +813,7 @@ void Streamline::DenoiseUpscale(ID3D12GraphicsCommandList4* a_commandList, ID3D1
 
 	globals::features::raytracing.GetRayReconstructionInputs(diffuseAlbedo, specularAlbedo, normalRoughness, specHitDistance);
 
-	auto screenSize = globals::state->screenSize;
+	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 	auto renderSize = Util::ConvertToDynamic(screenSize);
 
 	sl::Extent extentIn{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
