@@ -2,9 +2,8 @@
 
 cbuffer UpscalingData : register(b0)
 {
-	float2 TrueSamplingDim;  // per-eye render dim in VR, full render dim otherwise
-	uint EyeOffsetX;         // X offset into stereo source buffers; 0 for non-VR / left eye
-	uint pad0;
+	float2 TrueSamplingDim;
+	float2 pad0;
 };
 
 Texture2D<float2> TAAMask : register(t0);
@@ -29,19 +28,17 @@ RWTexture2D<float> DepthOutput : register(u3);
 	if (any(dispatchID.xy >= uint2(TrueSamplingDim)))
 		return;
 
-	uint2 srcCoord = dispatchID.xy + uint2(EyeOffsetX, 0);
-
-	float2 taaMask = TAAMask[srcCoord];
-	float transparencyCompositionMask = NormalsWaterMask[srcCoord].z;
+	float2 taaMask = TAAMask[dispatchID.xy];
+	float transparencyCompositionMask = NormalsWaterMask[dispatchID.xy].z;
 
 #if defined(DLSS) || defined(DLSS_RR)
 #	ifdef PATH_TRACING
-	float ptAlpha = PTColor[srcCoord].a;
-	float depth = ptAlpha > 0.5 ? PTDepth[srcCoord] : DepthMask[srcCoord];
-	float2 motionVector = ptAlpha > 0.5 ? PTMotionVectors[srcCoord].xy : MotionVectorMask[srcCoord];
+	float ptAlpha = PTColor[dispatchID.xy].a;
+	float depth = ptAlpha > 0.5 ? PTDepth[dispatchID.xy] : DepthMask[dispatchID.xy];
+	float2 motionVector = ptAlpha > 0.5 ? PTMotionVectors[dispatchID.xy].xy : MotionVectorMask[dispatchID.xy];
 #	else
-	const float depth = DepthMask[srcCoord];
-	const float2 motionVector = MotionVectorMask[srcCoord];
+	const float depth = DepthMask[dispatchID.xy];
+	const float2 motionVector = MotionVectorMask[dispatchID.xy];
 #	endif
 	float nearFactor = smoothstep(4096.0 * 2.5, 0.0, SharedData::GetScreenDepth(depth));
 	float2 longestMotionVector = motionVector;
@@ -56,11 +53,10 @@ RWTexture2D<float> DepthOutput : register(u3);
 			if (any(samplePos < 0) || any(samplePos >= int2(TrueSamplingDim)))
 				continue;
 
-			int2 srcPos = samplePos + int2(EyeOffsetX, 0);
-			float neighborDepth = DepthMask[srcPos];
+			float neighborDepth = DepthMask[samplePos];
 
 			if (neighborDepth < depth) {
-				float2 neighborMotionVector = MotionVectorMask[srcPos];
+				float2 neighborMotionVector = MotionVectorMask[samplePos];
 				float motionLengthSq = dot(neighborMotionVector, neighborMotionVector);
 
 				if (motionLengthSq > maxMotionLengthSq) {
@@ -73,13 +69,13 @@ RWTexture2D<float> DepthOutput : register(u3);
 
 	MotionVectorOutput[dispatchID.xy] = lerp(longestMotionVector, motionVector, nearFactor);
 #elif defined(PATH_TRACING)
-	float ptAlpha = PTColor[srcCoord].a;
-	float2 motionVector = ptAlpha > 0.5 ? PTMotionVectors[srcCoord].xy : MotionVectorMask[srcCoord];
+	float ptAlpha = PTColor[dispatchID.xy].a;
+	float2 motionVector = ptAlpha > 0.5 ? PTMotionVectors[dispatchID.xy].xy : MotionVectorMask[dispatchID.xy];
 	MotionVectorOutput[dispatchID.xy] = motionVector;
 #endif
 
 #if defined(DEPTH_OUTPUT)
-	DepthOutput[dispatchID.xy] = DepthMask[srcCoord];
+	DepthOutput[dispatchID.xy] = DepthMask[dispatchID.xy];
 #endif
 
 	TransparencyCompositionMask[dispatchID.xy] = transparencyCompositionMask;
