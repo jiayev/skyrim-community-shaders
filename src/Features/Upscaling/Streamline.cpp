@@ -804,7 +804,7 @@ void Streamline::Upscale(ID3D12GraphicsCommandList4* a_commandList, ID3D12Resour
 		extentIn, extentOut, (uint)screenSize.x);
 }
 
-void Streamline::DenoiseUpscale(ID3D12GraphicsCommandList4* a_commandList, ID3D12Resource* a_upscalingTexture, ID3D12Resource* a_depth, ID3D12Resource* a_motionVectors, ID3D12Resource* a_reactiveMask)
+void Streamline::DenoiseUpscale(ID3D12GraphicsCommandList4* a_commandList, ID3D12Resource* a_input, ID3D12Resource* a_output, ID3D12Resource* a_depth, ID3D12Resource* a_motionVectors, ID3D12Resource* a_reactiveMask)
 {
 	ID3D12Resource* diffuseAlbedo = nullptr;
 	ID3D12Resource* specularAlbedo = nullptr;
@@ -820,7 +820,7 @@ void Streamline::DenoiseUpscale(ID3D12GraphicsCommandList4* a_commandList, ID3D1
 	sl::Extent extentOut{ 0, 0, (uint)screenSize.x, (uint)screenSize.y };
 
 	EvaluateDLSSD(a_commandList, viewport,
-		a_upscalingTexture, a_upscalingTexture,
+		a_input, a_output,
 		a_depth, a_motionVectors, a_reactiveMask,
 		diffuseAlbedo, specularAlbedo, normalRoughness, specHitDistance,
 		extentIn, extentOut, (uint)screenSize.x);

@@ -2,8 +2,8 @@
 
 #include <dxgi1_6.h>
 
-#include "Features/Upscaling.h"
 #include "Features/Raytracing.h"
+#include "Features/Upscaling.h"
 
 DX12Interop::~DX12Interop()
 {
@@ -105,6 +105,7 @@ void DX12Interop::SetupResources()
 	// Main render target
 	mainDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
 	sharedResources.main = new WrappedResource(mainDesc, d3d11Device.get(), d3d12Device.get());
+	sharedResources.upscaleOutput = new WrappedResource(mainDesc, d3d11Device.get(), d3d12Device.get());
 
 	// Depth
 	mainDesc.Format = DXGI_FORMAT_R32_FLOAT;
