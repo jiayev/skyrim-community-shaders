@@ -29,7 +29,6 @@ struct PhysicalSky final : public Feature
 	}
 
 	// Functionality
-	bool inline SupportsVR() override { return true; }
 	inline std::string_view GetShaderDefineName() override { return "PHYSICAL_SKY"; }
 	inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 

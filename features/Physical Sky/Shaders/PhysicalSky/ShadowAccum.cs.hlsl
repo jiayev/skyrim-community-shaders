@@ -7,7 +7,6 @@
 #define CLOUD_SHADOW_REGISTER t4
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Random.hlsli"
-#include "Common/VR.hlsli"
 #include "PhysicalSky/Common.hlsli"
 
 #if defined(HALF_RES)
@@ -36,7 +35,7 @@ RWTexture2D<unorm float> RWTexOutput : register(u0);
 const static uint nStep = 30;
 const static float rcpNStep = rcp(nStep);
 
-float SampleShadow(float3 posWorldRel, uint eyeIndex)
+float SampleShadow(float3 posWorldRel)
 {
 	const SharedData::PhysSkyData data = SharedData::physSkyData;
 
@@ -49,7 +48,7 @@ float SampleShadow(float3 posWorldRel, uint eyeIndex)
 	// dir shadow map
 	{
 		DirectionalShadowLightData directionalShadowLightData = DirectionalShadowLights[0];
-		float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(posWorldRel, eyeIndex));
+		float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(posWorldRel));
 
 		[branch] if (directionalShadowLightData.EndSplitDistances.y > 0.0 &&
 					 shadowMapDepth < directionalShadowLightData.EndSplitDistances.y)
@@ -59,7 +58,7 @@ float SampleShadow(float3 posWorldRel, uint eyeIndex)
 				(directionalShadowLightData.EndSplitDistances.x - directionalShadowLightData.StartSplitDistances.y));
 			uint cascadeIndex = uint(cascadeSelect);
 
-			float3 posWorldAbs = posWorldRel + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
+			float3 posWorldAbs = posWorldRel + FrameBuffer::CameraPosAdjust.xyz;
 			float3 positionLS = mul(directionalShadowLightData.ShadowProj[cascadeIndex], float4(posWorldAbs, 1)).xyz;
 			float4 depths = TexDirectShadows.GatherRed(SampTr, float3(saturate(positionLS.xy), cascadeIndex), 0);
 			shadow *= dot(float4(depths > positionLS.z), 0.25);
@@ -68,7 +67,7 @@ float SampleShadow(float3 posWorldRel, uint eyeIndex)
 	[branch] if (all(shadow < 1e-8)) return 0;
 
 	// terrain shadow
-	float3 posWorldAbs = posWorldRel + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
+	float3 posWorldAbs = posWorldRel + FrameBuffer::CameraPosAdjust.xyz;
 	shadow *= TerrainShadows::GetTerrainShadow(posWorldAbs, SampTr);
 	[branch] if (all(shadow < 1e-8)) return 0;
 
@@ -82,16 +81,15 @@ float SampleShadow(float3 posWorldRel, uint eyeIndex)
 	const uint2 seed = Random::pcg2d(pxCoords.xy);
 	const float2 rnd = Random::R2Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
 
-	float2 stereoUv = (pxCoords + 0.5) * data.rcpFrameDim;
-	if (stereoUv.x >= 1.f || stereoUv.y >= 1.f)
+	float2 uv = (pxCoords + 0.5) * data.rcpFrameDim;
+	if (uv.x >= 1.f || uv.y >= 1.f)
 		return;
-	stereoUv *= RES_MULT;
-	const uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(stereoUv);
-	const float2 uv = Stereo::ConvertFromStereoUV(stereoUv, eyeIndex) * FrameBuffer::DynamicResolutionParams2.xy;
+	uv *= RES_MULT;
+	uv *= FrameBuffer::DynamicResolutionParams2.xy;
 
-	const float depth = TexDepth.SampleLevel(SampTr, stereoUv, 0);
+	const float depth = TexDepth.SampleLevel(SampTr, uv, 0);
 	float4 posWorld = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
-	posWorld = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], posWorld);
+	posWorld = mul(FrameBuffer::CameraViewProjInverse, posWorld);
 	posWorld.xyz /= posWorld.w;
 
 	float dist = length(posWorld.xyz);
@@ -106,7 +104,7 @@ float SampleShadow(float3 posWorldRel, uint eyeIndex)
 	for (uint i = 1; i <= nStep; ++i) {
 		float tSample = -rcpExtGr * log(1 - (i - 1 + rnd.x) * rcpNStep * estContrib);  // map to truncated exponential distribution
 
-		float shadowSample = SampleShadow(dir * tSample, eyeIndex);
+		float shadowSample = SampleShadow(dir * tSample);
 		shadow += (1 - shadowSample) * rcpNStep;
 	}
 

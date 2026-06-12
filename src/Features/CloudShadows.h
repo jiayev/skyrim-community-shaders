@@ -86,5 +86,4 @@ public:
 			logger::info("[Cloud Shadows] Installed hooks");
 		}
 	};
-	virtual bool SupportsVR() override { return true; };
 };
