@@ -2537,9 +2537,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(SKINNED)
 	float3 wetnessRipplePosition = input.ModelPosition.xyz;
 #		elif defined(DEFERRED)
-	float3 wetnessRipplePosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
+	float3 wetnessRipplePosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 #		else
-	float3 wetnessRipplePosition = !FrameBuffer::FrameParams.y ? input.ModelPosition.xyz : input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
+	float3 wetnessRipplePosition = !FrameBuffer::FrameParams.y ? input.ModelPosition.xyz : input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 #		endif
 #		if !defined(SKINNED) && !(defined(SKIN) && defined(CS_SKIN))
 	static const bool enableWetnessPuddleEffects = true;

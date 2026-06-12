@@ -499,11 +499,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	vertexColor /= max(max(max(vertexColor.r, vertexColor.g), vertexColor.b), EPSILON_DIVISION);
 
 #			if defined(SKYLIGHTING)
-#				if defined(VR)
-	float3 positionMSSkylight = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
-#				else
 	float3 positionMSSkylight = input.WorldPosition.xyz;
-#				endif
 	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
 	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, normal);
 	float3 skylightingNormal = normal;
@@ -514,8 +510,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #			if defined(WETNESS_EFFECTS)
 	float nearFactor = smoothstep(4096.0 * 2.5, 0.0, viewPosition.z);
-	float waterHeight = SharedData::GetWaterData(input.WorldPosition.xyz, eyeIndex).w;
-	float3 wetnessWorldPosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
+	float waterHeight = SharedData::GetWaterData(input.WorldPosition.xyz).w;
+	float3 wetnessWorldPosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 #				if defined(SKYLIGHTING)
 	float wetnessOcclusion = saturate(SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1)));
 #				else
