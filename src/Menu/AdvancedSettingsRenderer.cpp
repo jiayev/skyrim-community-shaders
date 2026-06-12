@@ -669,7 +669,7 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 	// Loads PIX at launch for DirectX 12 GPU captures
 	ImGui::Checkbox("Interop Load PIX", &globals::state->interopLoadPIX);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Enable loading of PIX at launch for GPU captures");
+		ImGui::Text("Enable loading of PIX at launch for DirectX 12 GPU captures");
 	}
 
 	// Half-precision (partial precision) shader compile flag
