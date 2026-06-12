@@ -2181,7 +2181,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
 		pbrVertexColorSrc = 1;
 #		endif
-	float3 pbrVertexColor = Color::SrgbToLinear(pbrVertexColorSrc);
+	float3 pbrVertexColor = Color::GamutTransform(Color::SrgbToLinear(pbrVertexColorSrc));
 	float pbrVertexAO = max(max(pbrVertexColor.x, pbrVertexColor.y), pbrVertexColor.z);
 	pbrVertexColor = pbrVertexAO == 0.0f ? 1.0f : pbrVertexColor * lerp(1 / max(pbrVertexAO, 0.001), 1, SharedData::truePBRSettings.VertexAOStrength);
 
@@ -2404,7 +2404,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #			if defined(CREATOR)
 				if (SharedData::cubemapCreatorSettings.Enabled) {
-					material.F0 = SharedData::cubemapCreatorSettings.CubemapColor.rgb;
+					material.F0 = Color::GamutTransform(Color::SrgbToLinear(SharedData::cubemapCreatorSettings.CubemapColor.rgb));
 					material.Roughness = SharedData::cubemapCreatorSettings.CubemapColor.a;
 				}
 #			endif
@@ -2983,8 +2983,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		vertexColor = 1;
 #		endif
 #	elif defined(SKYLIGHTING)
-	float3 vertexColor = input.Color.xyz;
-	float vertexAO = Color::ColorToLinear(max(max(vertexColor.r, vertexColor.g), vertexColor.b).xxx).x;
+	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
+	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
 #		if defined(TRUE_PBR)
 	vertexAO = lerp(1, vertexAO, SharedData::truePBRSettings.VertexAOStrength);
 	vertexColor = 1;
@@ -2995,7 +2995,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TRUE_PBR)
 	float3 vertexColor = 1;
 #		else
-	float3 vertexColor = input.Color.xyz;
+	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
 #		endif
 	float vertexAO = Color::ColorToLinear(max(max(vertexColor.r, vertexColor.g), vertexColor.b).xxx).x;
 #	endif  // defined (HAIR)

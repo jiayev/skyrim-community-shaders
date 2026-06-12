@@ -2,12 +2,14 @@
 
 #include "../I18n/I18n.h"
 #include "State.h"
+#include "Util.h"
 
 #define I18N_KEY_PREFIX "feature.linear_lighting."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
 	enableLinearLighting,
+	enableACEScg,
 	lightGamma,
 	colorGamma,
 	emitColorGamma,
@@ -36,6 +38,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void LinearLighting::DrawSettings()
 {
 	ImGui::Checkbox(T(TKEY("enable"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
+	ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("enable_acescg_tooltip"),
+							  "Render in ACEScg color space for wider gamut and more accurate lighting.\n"
+							  "Requires Linear Lighting and Post Processing enabled.\n"
+							  "All sRGB-gamut textures and colors will be converted to ACEScg during shading."));
 
 	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem(T(TKEY("tab_general"), "General"))) {
@@ -154,6 +162,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	bool isMainLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
 	auto data = PerFrameData{};
 	data.enableLinearLighting = settings.enableLinearLighting && !isMainLoadingMenu;
+	data.enableACEScg = settings.enableACEScg && settings.enableLinearLighting && !isMainLoadingMenu;
 	data.isDirLightLinear = isDirLightLinear;
 	data.dirLightMult = dirLightMult;
 	data.lightGamma = settings.lightGamma;
