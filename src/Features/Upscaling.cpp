@@ -1489,54 +1489,6 @@ Upscaling::BlurResources Upscaling::GetBlurResources() const
 	return {};
 }
 
-void Upscaling::ConvertColorSpace(bool toLinear)
-{
-	ZoneScoped;
-	const bool linearLightingEnabled = globals::features::linearLighting.settings.enableLinearLighting;
-
-	if (linearLightingEnabled)
-		return;
-
-	auto state = globals::state;
-	auto context = globals::d3d::context;
-	auto renderer = globals::game::renderer;
-
-	context->OMSetRenderTargets(0, nullptr, nullptr);
-
-	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-
-	state->BeginPerfEvent("Color Space Convertion");
-	TracyD3D11Zone(globals::state->tracyCtx, "Color Space Convertion");
-
-	auto renderSize = Util::ConvertToDynamic(float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight });
-	uint32_t renderWidth = (uint32_t)renderSize.x;
-	uint32_t renderHeight = (uint32_t)renderSize.y;
-
-	context->CSSetShader(GetColorSpaceCS(toLinear), nullptr, 0);
-
-	UpscalingDataCB upscalingData;
-	upscalingData.trueSamplingDim = float2((float)renderWidth, (float)renderHeight);
-	upscalingDataCB->Update(upscalingData);
-
-	auto upscalingBuffer = upscalingDataCB->CB();
-	context->CSSetConstantBuffers(0, 1, &upscalingBuffer);
-
-	ID3D11UnorderedAccessView* uavs[] = { main.UAV };
-	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-
-	context->Dispatch((renderWidth + 7) / 8, (renderHeight + 7) / 8, 1);
-
-	ID3D11UnorderedAccessView* nullUAVs[4] = { nullptr, nullptr, nullptr, nullptr };
-	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUAVs), nullUAVs, nullptr);
-
-	ID3D11Buffer* nullBuffer = nullptr;
-	context->CSSetConstantBuffers(0, 1, &nullBuffer);
-
-	context->CSSetShader(nullptr, nullptr, 0);
-
-	state->EndPerfEvent();
-}
-
 void Upscaling::EncodeTextures()
 {
 	ZoneScoped;
