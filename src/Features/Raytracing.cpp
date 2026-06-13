@@ -1182,7 +1182,7 @@ void Raytracing::UpdateFeatureData()
 
 void Raytracing::UpdateSkinDetailNormal(ID3D11Texture2D* skinDetailNormalTextureD3D11)
 {
-	if (!initialized || !skinDetailNormalTextureD3D11)
+	if (!initialized || !skinDetailNormalTextureD3D11 || !creationEngineRaytracing->SetSkinDetailNormal)
 		return;
 
 	D3D11_TEXTURE2D_DESC desc;

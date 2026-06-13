@@ -41,7 +41,7 @@ void DX12Interop::InitializePIX()
 		}
 
 		if (newestVersionFound.empty()) {
-			// TODO: Error, no PIX installation found
+			logger::warn("[DX12Interop] PIX installation not found");
 		}
 
 		return std::wstring{ pixInstallationPath / newestVersionFound / L"WinPixGpuCapturer.dll" };
@@ -61,7 +61,6 @@ void DX12Interop::InitializePIX()
 
 	DX::ThrowIfFailed(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&ga)));
 }
-
 
 void DX12Interop::Init(ID3D11Device* a_d3d11Device, ID3D11DeviceContext* a_immediateContext, IDXGIAdapter* a_adapter)
 {
