@@ -677,9 +677,18 @@ void Raytracing::DrawDebugSettings()
 		const auto depthLabel = StableLabel(T(TKEY("debug_depth"), "Depth"), "Depth");
 		if (ImGui::TreeNode(depthLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
-			ptDepthTexture->resource11->GetDesc(&desc);
+			ID3D11ShaderResourceView* srv = nullptr;
 
-			ImGui::Image(ptDepthTexture->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			if (Mode() == CreationEngineRaytracing::Mode::PathTracing) {
+				ptDepthTexture->resource11->GetDesc(&desc);
+				srv = ptDepthTexture->srv;
+			} else {
+				const auto& mainDepth = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+				mainDepth.texture->GetDesc(&desc);
+				srv = mainDepth.depthSRV;
+			}
+
+			ImGui::Image(srv, { desc.Width * debugRescale, desc.Height * debugRescale });
 			ImGui::TreePop();
 		}
 

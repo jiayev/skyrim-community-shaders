@@ -5,6 +5,11 @@
 #include "Features/Raytracing.h"
 #include "Features/Upscaling.h"
 
+// Microsoft Pix
+#include <filesystem>
+#include <shlobj.h>
+#include <KnownFolders.h>
+
 DX12Interop::~DX12Interop()
 {
 	if (fenceEvent) {
@@ -12,6 +17,51 @@ DX12Interop::~DX12Interop()
 		fenceEvent = nullptr;
 	}
 }
+
+void DX12Interop::InitializePIX()
+{
+	if (!globals::state->interopLoadPIX)
+		return;
+
+	auto getLatestWinPixGpuCapturerPath = [] {
+		LPWSTR programFilesPath = nullptr;
+		SHGetKnownFolderPath(FOLDERID_ProgramFiles, KF_FLAG_DEFAULT, NULL, &programFilesPath);
+
+		std::filesystem::path pixInstallationPath = programFilesPath;
+		pixInstallationPath /= "Microsoft PIX";
+
+		std::wstring newestVersionFound;
+
+		for (auto const& directory_entry : std::filesystem::directory_iterator(pixInstallationPath)) {
+			if (directory_entry.is_directory()) {
+				if (newestVersionFound.empty() || newestVersionFound < directory_entry.path().filename().c_str()) {
+					newestVersionFound = directory_entry.path().filename().c_str();
+				}
+			}
+		}
+
+		if (newestVersionFound.empty()) {
+			// TODO: Error, no PIX installation found
+		}
+
+		return std::wstring{ pixInstallationPath / newestVersionFound / L"WinPixGpuCapturer.dll" };
+	};
+
+	// Check to see if a copy of WinPixGpuCapturer.dll has already been injected into the application.
+	// This may happen if the application is launched through the PIX UI.
+	if (GetModuleHandleW(L"WinPixGpuCapturer.dll") == 0) {
+		auto pixGPUCapturerPath = getLatestWinPixGpuCapturerPath();
+
+		if (pixGPUCapturerPath.empty()) {
+			logger::warn("[DX12Interop] PIX capture is enabled but binaries where not found.");
+		} else {
+			LoadLibraryW(pixGPUCapturerPath.c_str());
+		}
+	}
+
+	DX::ThrowIfFailed(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&ga)));
+}
+
 
 void DX12Interop::Init(ID3D11Device* a_d3d11Device, ID3D11DeviceContext* a_immediateContext, IDXGIAdapter* a_adapter)
 {
@@ -22,6 +72,8 @@ void DX12Interop::Init(ID3D11Device* a_d3d11Device, ID3D11DeviceContext* a_immed
 
 	SetD3D11Device(a_d3d11Device);
 	SetD3D11DeviceContext(a_immediateContext);
+
+	InitializePIX();
 
 	CreateD3D12Device(a_adapter);
 
@@ -52,7 +104,36 @@ bool DX12Interop::D3D12Mode()
 
 void DX12Interop::CreateD3D12Device(IDXGIAdapter* a_adapter)
 {
+	const bool enableDebug = !globals::state->interopLoadPIX && globals::state->interopDebugDevice;
+
+	if (enableDebug) {
+		winrt::com_ptr<ID3D12Debug3> debugController;
+		if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {
+			debugController->EnableDebugLayer();
+			debugController->SetEnableGPUBasedValidation(TRUE);
+		} else {
+			logger::critical("[DX12Interop] Debug layer creation failed");
+		}
+
+		winrt::com_ptr<ID3D12DeviceRemovedExtendedDataSettings1> pDredSettings;
+		if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&pDredSettings)))) {
+			pDredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+			pDredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+		}
+	}
+
 	DX::ThrowIfFailed(D3D12CreateDevice(a_adapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&d3d12Device)));
+
+	if (enableDebug) {
+		winrt::com_ptr<ID3D12InfoQueue> infoQueue;
+		if (SUCCEEDED(d3d12Device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
+		} else {
+			logger::critical("[DX12Interop] Debug break creation failed");
+		}
+	}
 
 	D3D12_COMMAND_QUEUE_DESC queueDesc = {};
 	queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;

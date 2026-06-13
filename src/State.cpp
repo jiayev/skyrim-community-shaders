@@ -460,6 +460,9 @@ void State::SaveToJson(nlohmann::json& settings)
 	advanced["Frame Annotations"] = frameAnnotations;
 	advanced["Partial Precision"] = enablePartialPrecision.load(std::memory_order_relaxed);
 	advanced["Debug Device"] = debugDevice;
+	advanced["Interop Debug Device"] = interopDebugDevice;
+	advanced["Interop Load PIX"] = interopLoadPIX;
+	
 	settings["Advanced"] = advanced;
 
 	json general;
@@ -539,6 +542,10 @@ void State::LoadFromJson(nlohmann::json& settings)
 			enablePartialPrecision.store(advanced["Partial Precision"].get<bool>(), std::memory_order_relaxed);
 		if (advanced.contains("Debug Device") && advanced["Debug Device"].is_boolean())
 			debugDevice = advanced["Debug Device"];
+		if (advanced.contains("Interop Debug Device") && advanced["Interop Debug Device"].is_boolean())
+			interopDebugDevice = advanced["Interop Debug Device"];
+		if (advanced.contains("Interop Load PIX") && advanced["Interop Load PIX"].is_boolean())
+			interopLoadPIX = advanced["Interop Load PIX"];
 	}
 
 	if (settings.contains("General") && settings["General"].is_object()) {

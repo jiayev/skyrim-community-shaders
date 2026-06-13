@@ -920,6 +920,59 @@ eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* 
 	return tex;
 }
 
+void Upscaling::ConvertColorSpace(bool toLinear)
+{
+	ZoneScoped;
+	const bool linearLightingEnabled = globals::features::linearLighting.settings.enableLinearLighting;
+
+	if (linearLightingEnabled)
+		return;
+
+	auto state = globals::state;
+	auto context = globals::d3d::context;
+	auto renderer = globals::game::renderer;
+
+	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
+
+	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+
+	ID3D11UnorderedAccessView* texture = (!d3d12Mode && toLinear && settings.sharpnessDLSS > 0.0f && sharpenerTexture) ? sharpenerTexture->uav.get() : main.UAV;
+
+	{
+		state->BeginPerfEvent("Color Space Convertion");
+		TracyD3D11Zone(globals::state->tracyCtx, "Color Space Convertion");
+
+		float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+		float2 renderSize = Util::ConvertToDynamic(screenSize);
+		uint32_t renderWidth = (uint32_t)renderSize.x;
+		uint32_t renderHeight = (uint32_t)renderSize.y;
+
+		context->CSSetShader(GetColorSpaceCS(toLinear), nullptr, 0);
+
+		UpscalingDataCB upscalingData;
+		upscalingData.trueSamplingDim = renderSize;
+		upscalingDataCB->Update(upscalingData);
+
+		auto upscalingBuffer = upscalingDataCB->CB();
+		context->CSSetConstantBuffers(0, 1, &upscalingBuffer);
+
+		ID3D11UnorderedAccessView* uavs[] = { texture };
+		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+		context->Dispatch((renderWidth + 7) / 8, (renderHeight + 7) / 8, 1);
+
+		uavs[0] = nullptr;
+		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+		ID3D11Buffer* nullBuffer = nullptr;
+		context->CSSetConstantBuffers(0, 1, &nullBuffer);
+
+		context->CSSetShader(nullptr, nullptr, 0);
+
+		state->EndPerfEvent();
+	}
+}
+
 int32_t GetJitterPhaseCount(int32_t renderWidth, int32_t displayWidth)
 {
 	const float basePhaseCount = 8.0f;
