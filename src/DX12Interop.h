@@ -44,6 +44,9 @@ struct DX12Interop
 
 	winrt::com_ptr<IDXGraphicsAnalysis> ga = nullptr;
 
+	bool pixCapture = false;
+	bool pixCaptureStarted = false;
+
 	static DX12Interop* GetSingleton()
 	{
 		static DX12Interop singleton;
@@ -81,6 +84,7 @@ struct DX12Interop
 		DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), currentFenceValue));
 	}
 
+	void StartCapture();
 private:
 	bool active = false;
 

@@ -1321,6 +1321,14 @@ void Raytracing::DeferredPasses()
 	// Returns current frame index
 	currentFrame = creationEngineRaytracing->PostExecution();
 
+	auto dx12Interop = globals::dx12Interop;
+	if (dx12Interop->pixCapture && dx12Interop->pixCaptureStarted) {
+		dx12Interop->ga->EndCapture();
+		dx12Interop->pixCapture = false;
+		dx12Interop->pixCaptureStarted = false;
+	}
+
+
 	if (settings.PerfOverlay != OverlayMode::None)
 		creationEngineRaytracing->GetPassTimings(passTimings);
 

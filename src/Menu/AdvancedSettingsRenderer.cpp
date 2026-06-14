@@ -6,6 +6,7 @@
 #include <imgui_stdlib.h>
 #include <thread>
 
+#include "DX12Interop.h"
 #include "FeatureIssues.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Fonts.h"
@@ -671,6 +672,9 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Enable loading of PIX at launch for DirectX 12 GPU captures");
 	}
+
+	if (globals::state->interopLoadPIX && ImGui::Button("Start PIX Capture"))
+		globals::dx12Interop->StartCapture();
 
 	// Half-precision (partial precision) shader compile flag
 	bool partialPrecision = globals::state->enablePartialPrecision.load(std::memory_order_relaxed);
