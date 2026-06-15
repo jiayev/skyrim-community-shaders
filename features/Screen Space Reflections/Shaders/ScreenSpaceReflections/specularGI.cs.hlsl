@@ -434,7 +434,38 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 
 #if defined(DYNAMIC_CUBEMAPS)
 	if (SpecUseDynamicCubemap != 0 && (confidence < 0.999f)) {
-		float3 envColor = EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
+		float3 envSampleRaw = EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
+		float3 envColor = envSampleRaw;
+
+#	if defined(IBL)
+		if (SharedData::iblSettings.EnableIBL) {
+			uint dalcMode = SharedData::iblSettings.DALCMode;
+
+			if (dalcMode >= 2) {
+				// Mode 2/3: DALC-normalized env scaled by DALCAmount
+				float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
+				float directionalAmbientColorSpecular = Color::RGBToLuminance(Color::Ambient(max(0, SharedData::GetAmbient(world_space_reflected_direction)))) * Color::ReflectionNormalisationScale;
+				envColor = (envSampleRaw / max(envLum, 0.001)) * directionalAmbientColorSpecular * SharedData::iblSettings.DALCAmount;
+			} else {
+				// Mode 0/1: ratio-based
+				float3 dalc0 = Color::Ambient(max(0, SharedData::GetAmbient(float3(0, 0, 0))));
+				float3 envAvg = EnvTexture.SampleLevel(LinearSampler, float3(0, 0, 0), 15);
+
+				if (dalcMode == 1) {
+					// Color Ratio: per-channel
+					float3 ratio = dalc0 / max(envAvg, 0.001);
+					envColor = envSampleRaw * lerp(1.0, ratio, SharedData::iblSettings.DALCAmount) * SharedData::iblSettings.EnvIBLScale;
+				} else {
+					// Luminance Ratio: scalar
+					float dalcLum = Color::RGBToLuminance(dalc0);
+					float envLum = Color::RGBToLuminance(envAvg);
+					float ratio = (envLum > 0.001) ? (dalcLum / envLum) : 1.0;
+					envColor = envSampleRaw * lerp(1.0, ratio, SharedData::iblSettings.DALCAmount) * SharedData::iblSettings.EnvIBLScale;
+				}
+			}
+		}
+#	endif
+
 #	if defined(SKYLIGHTING)
 		if (!SharedData::InInterior) {
 			float3 positionMS = world_space_origin;
@@ -445,10 +476,24 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 			float skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, SphericalHarmonics::FauxSpecularLobe(view_space_surface_normal, normalize(view_space_ray), roughness), fadeOutFactor);
 
 			float3 envSkyColor = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
-			float3 skyColor = max(envSkyColor - envColor, 0);
-			envColor += skyColor * skylightingSpecular;
+			float3 skyColor = max(envSkyColor - envSampleRaw, 0);
+
+#		if defined(IBL)
+			if (SharedData::iblSettings.EnableIBL) {
+				skyColor *= SharedData::iblSettings.SkyIBLScale;
+				envColor += skyColor * skylightingSpecular;
+				// Mode 3: Skylighting also dims the env part
+				if (SharedData::iblSettings.DALCMode == 3) {
+					envColor *= skylightingSpecular;
+				}
+			} else
+#		endif
+			{
+				envColor += skyColor * skylightingSpecular;
+			}
 		}
 #	endif
+
 		envColor = Color::IrradianceToLinear(envColor);
 		envColor *= SpecCubemapMult;
 		float ao = lerp(1.0, occlusion, OcclusionStrength);
