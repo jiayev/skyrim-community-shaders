@@ -351,6 +351,56 @@ struct CreationEngineRaytracing
 			EnableFinalVisibility, EnableFinalMIS)
 	};
 
+	enum struct ReSTIRPTResamplingMode : int32_t
+	{
+		None = 0,
+		Temporal = 1,
+		Spatial = 2,
+		TemporalAndSpatial = 3,
+	};
+
+	struct ReSTIRPTSettings
+	{
+		bool Enabled = false;
+		ReSTIRPTResamplingMode ResamplingMode = ReSTIRPTResamplingMode::TemporalAndSpatial;
+
+		int MaxBounceDepth = 3;
+		int MaxRcVertexLength = 5;
+
+		float RoughnessThreshold = 0.1f;
+		float DistanceThreshold = 0.0f;
+		float MinConnectionFootprint = 0.02f;
+		bool UseFootprintMode = true;
+
+		float TemporalDepthThreshold = 0.1f;
+		float TemporalNormalThreshold = 0.6f;
+		int MaxHistoryLength = 8;
+		int MaxReservoirAge = 30;
+		bool EnablePermutationSampling = false;
+		bool EnableFallbackSampling = true;
+		bool EnableTemporalVisibility = true;
+
+		int SpatialNumSamples = 1;
+		int SpatialDisocclusionBoostSamples = 8;
+		float SpatialSamplingRadius = 32.0f;
+		float SpatialDepthThreshold = 0.1f;
+		float SpatialNormalThreshold = 0.6f;
+
+		bool EnableBoilingFilter = true;
+		float BoilingFilterStrength = 0.2f;
+
+		bool operator==(const ReSTIRPTSettings&) const = default;
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ReSTIRPTSettings, Enabled, ResamplingMode,
+			MaxBounceDepth, MaxRcVertexLength,
+			RoughnessThreshold, DistanceThreshold, MinConnectionFootprint, UseFootprintMode,
+			TemporalDepthThreshold, TemporalNormalThreshold, MaxHistoryLength, MaxReservoirAge,
+			EnablePermutationSampling, EnableFallbackSampling, EnableTemporalVisibility,
+			SpatialNumSamples, SpatialDisocclusionBoostSamples, SpatialSamplingRadius,
+			SpatialDepthThreshold, SpatialNormalThreshold,
+			EnableBoilingFilter, BoilingFilterStrength)
+	};
+
 	enum struct TextureMode : uint32_t
 	{
 		Share = 0,
@@ -397,6 +447,7 @@ struct CreationEngineRaytracing
 		WaterSettings WaterSettings;
 		ExperimentalSettings ExperimentalSettings;
 		ReSTIRGISettings ReSTIRGI;
+		ReSTIRPTSettings ReSTIRPT;
 		DebugSettings DebugSettings;
 
 		bool operator==(const Settings&) const = default;
@@ -414,6 +465,7 @@ struct CreationEngineRaytracing
 			WaterSettings,
 			ExperimentalSettings,
 			ReSTIRGI,
+			ReSTIRPT,
 			DebugSettings)
 	};
 
@@ -584,6 +636,7 @@ struct Raytracing : public OverlayFeature
 	void DrawSSSSettings();
 	void DrawAdvancedSettings();
 	void DrawReSTIRGISettings();
+	void DrawReSTIRPTSettings();
 	void DrawExperimentalSettings();
 	void DrawDebugSettings();
 
