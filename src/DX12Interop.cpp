@@ -109,7 +109,7 @@ void DX12Interop::CreateD3D12Device(IDXGIAdapter* a_adapter)
 		winrt::com_ptr<ID3D12Debug3> debugController;
 		if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {
 			debugController->EnableDebugLayer();
-			debugController->SetEnableGPUBasedValidation(TRUE);
+			debugController->SetEnableGPUBasedValidation(FALSE);
 		} else {
 			logger::critical("[DX12Interop] Debug layer creation failed");
 		}
