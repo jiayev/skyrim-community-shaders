@@ -650,6 +650,7 @@ struct Raytracing : public OverlayFeature
 	uint2 m_Resolution;
 
 	bool fogEnabled = false;
+	bool ssaoEnabled = false;
 
 	enum DisableReason
 	{

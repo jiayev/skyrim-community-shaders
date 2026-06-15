@@ -1337,11 +1337,26 @@ void Raytracing::DeferredPasses()
 	const bool pathtracing = (mode == CreationEngineRaytracing::Mode::PathTracing);
 
 	// Fog management
-	static auto& enableFog = (*(bool*)REL::RelocationID(528125, 415070).address());
-	if (enableFog)
-		fogEnabled = true;
+	{
+		static auto& enableFog = (*(bool*)REL::RelocationID(528125, 415070).address());
+		if (enableFog)
+			fogEnabled = true;
 
-	enableFog = settings.DisableVanillaFogPT && pathtracing ? false : fogEnabled;
+		enableFog = settings.DisableVanillaFogPT && pathtracing ? false : fogEnabled;
+	}
+
+	// SSAO management
+	{
+		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+		auto& BSImagespaceShaderISSAOBlurH = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISSAOBlurH;
+
+		// Toggle vanilla SSAO
+		static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH.get()) + 0x50LL);
+		if (enableSSAO)
+			ssaoEnabled = true;
+
+		*enableSSAO = (globalIllumation || pathtracing) ? false : ssaoEnabled;	
+	}
 
 	if (globalIllumation) {
 		// Add global illumination result to kMain
