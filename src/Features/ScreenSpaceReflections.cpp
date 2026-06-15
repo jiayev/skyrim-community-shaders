@@ -2,6 +2,7 @@
 
 #include "Deferred.h"
 #include "DynamicCubemaps.h"
+#include "IBL.h"
 #include "NRD.h"
 #include "Skylighting.h"
 #include "State.h"
@@ -287,6 +288,8 @@ void ScreenSpaceReflections::CompileComputeShaders()
 			defines.push_back({ "DYNAMIC_CUBEMAPS", "" });
 		if (globals::features::skylighting.loaded)
 			defines.push_back({ "SKYLIGHTING", "" });
+		if (globals::features::ibl.loaded)
+			defines.push_back({ "IBL", "" });
 		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceReflections") / "specularGI.cs.hlsl";
 		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), defines, "cs_5_0")))
 			specularGICompute.attach(rawPtr);
