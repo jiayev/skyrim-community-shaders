@@ -43,7 +43,7 @@ void ScreenSpaceGI::DrawSettings()
 	static bool showAdvanced;
 
 	if (!ShadersOK())
-		ImGui::TextColored({ 1, 0, 0, 1 }, "%s", T(TKEY("compute_shaders_failed_to_compile"), "Compute shaders failed to compile!"));
+		Util::Text::Error("%s", T(TKEY("compute_shaders_failed_to_compile"), "Compute shaders failed to compile!"));
 
 	///////////////////////////////
 	ImGui::SeparatorText(T(TKEY("toggles"), "Toggles"));
