@@ -220,6 +220,7 @@ void Raytracing::DrawSettings()
 		DrawGeneralSettings();
 		DrawAdvancedSettings();
 		DrawReSTIRGISettings();
+		DrawReSTIRPTSettings();
 		DrawExperimentalSettings();
 		DrawDebugSettings();
 
@@ -608,6 +609,138 @@ void Raytracing::DrawReSTIRGISettings()
 
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T(TKEY("restir_final_mis_tooltip"), "Apply multiple importance sampling with the initial sample."));
+
+	ImGui::PopID();
+
+	ImGui::EndTabItem();
+}
+
+void Raytracing::DrawReSTIRPTSettings()
+{
+	if (!ImGui::BeginTabItem(T(TKEY("tab_restir_pt"), "ReSTIR PT")))
+		return;
+
+	ImGui::PushID("ReSTIRPTSettings");
+
+	auto& ptSettings = settings.CreationEngineRaytracingSettings.ReSTIRPT;
+
+	ImGui::Checkbox(T(TKEY("restir_pt_enabled"), "Enabled"), &ptSettings.Enabled);
+
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("restir_pt_enabled_tooltip"), "Enable ReSTIR PT path-level resampling.\nMutually exclusive with ReSTIR GI (GI will be disabled)."));
+
+	// Show mutual exclusion warning
+	if (ptSettings.Enabled && settings.CreationEngineRaytracingSettings.ReSTIRGI.Enabled) {
+		ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "%s",
+			T(TKEY("restir_pt_mutual_exclusion_warning"), "ReSTIR GI will be disabled (mutually exclusive with ReSTIR PT)."));
+	}
+
+	DrawEnumCombo(
+		T(TKEY("restir_pt_resampling_mode"), "Resampling Mode"),
+		"ReSTIRPTResamplingMode",
+		ptSettings.ResamplingMode,
+		std::array{
+			T(TKEY("restir_pt_resampling_mode_none"), "None"),
+			T(TKEY("restir_pt_resampling_mode_temporal"), "Temporal"),
+			T(TKEY("restir_pt_resampling_mode_spatial"), "Spatial"),
+			T(TKEY("restir_pt_resampling_mode_temporal_and_spatial"), "Temporal and Spatial"),
+		});
+
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("restir_pt_resampling_mode_tooltip"),
+							  "None: Disabled\n"
+							  "Temporal: Reuse paths from previous frames\n"
+							  "Spatial: Reuse paths from nearby pixels\n"
+							  "Temporal and Spatial: Both (recommended)"));
+
+	// Initial Sampling
+	ImGui::Separator();
+	ImGui::Text("%s", T(TKEY("restir_pt_initial_sampling"), "Initial Sampling"));
+
+	if (ImGui::SliderInt(T(TKEY("restir_pt_max_bounce_depth"), "Max Bounce Depth"), &ptSettings.MaxBounceDepth, 1, 8))
+		ptSettings.MaxBounceDepth = std::clamp(ptSettings.MaxBounceDepth, 1, 8);
+
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("restir_pt_max_bounce_depth_tooltip"), "Maximum path length for initial sampling."));
+
+	if (ImGui::SliderInt(T(TKEY("restir_pt_max_rc_vertex_length"), "Max Reconnection Depth"), &ptSettings.MaxRcVertexLength, 2, 8))
+		ptSettings.MaxRcVertexLength = std::clamp(ptSettings.MaxRcVertexLength, 2, 8);
+
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("restir_pt_max_rc_vertex_length_tooltip"), "Maximum depth at which a reconnection vertex can be placed.\nHigher = more opportunities for path reuse, but more expensive."));
+
+	// Reconnection
+	ImGui::Separator();
+	ImGui::Text("%s", T(TKEY("restir_pt_reconnection"), "Reconnection"));
+
+	ImGui::Checkbox(T(TKEY("restir_pt_use_footprint_mode"), "Use Footprint Mode"), &ptSettings.UseFootprintMode);
+
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("restir_pt_use_footprint_mode_tooltip"), "Footprint: Ray footprint-based reconnection (recommended).\nOff: Fixed roughness/distance threshold."));
+
+	if (ptSettings.UseFootprintMode) {
+		if (ImGui::SliderFloat(T(TKEY("restir_pt_min_connection_footprint"), "Min Connection Footprint"), &ptSettings.MinConnectionFootprint, 0.001f, 0.2f, "%.3f"))
+			ptSettings.MinConnectionFootprint = std::clamp(ptSettings.MinConnectionFootprint, 0.001f, 0.2f);
+	} else {
+		if (ImGui::SliderFloat(T(TKEY("restir_pt_roughness_threshold"), "Roughness Threshold"), &ptSettings.RoughnessThreshold, 0.0f, 1.0f, "%.2f"))
+			ptSettings.RoughnessThreshold = std::clamp(ptSettings.RoughnessThreshold, 0.0f, 1.0f);
+
+		if (ImGui::SliderFloat(T(TKEY("restir_pt_distance_threshold"), "Distance Threshold"), &ptSettings.DistanceThreshold, 0.0f, 10.0f, "%.2f"))
+			ptSettings.DistanceThreshold = std::clamp(ptSettings.DistanceThreshold, 0.0f, 10.0f);
+	}
+
+	// Temporal Resampling
+	ImGui::Separator();
+	ImGui::Text("%s", T(TKEY("restir_pt_temporal_resampling"), "Temporal Resampling"));
+
+	if (ImGui::SliderFloat(T(TKEY("restir_pt_temporal_depth_threshold"), "Depth Threshold"), &ptSettings.TemporalDepthThreshold, 0.0f, 1.0f, "%.2f"))
+		ptSettings.TemporalDepthThreshold = std::clamp(ptSettings.TemporalDepthThreshold, 0.0f, 1.0f);
+
+	if (ImGui::SliderFloat(T(TKEY("restir_pt_temporal_normal_threshold"), "Normal Threshold"), &ptSettings.TemporalNormalThreshold, 0.0f, 1.0f, "%.2f"))
+		ptSettings.TemporalNormalThreshold = std::clamp(ptSettings.TemporalNormalThreshold, 0.0f, 1.0f);
+
+	if (ImGui::SliderInt(T(TKEY("restir_pt_max_history_length"), "Max History Length"), &ptSettings.MaxHistoryLength, 1, 30))
+		ptSettings.MaxHistoryLength = std::clamp(ptSettings.MaxHistoryLength, 1, 30);
+
+	if (ImGui::SliderInt(T(TKEY("restir_pt_max_reservoir_age"), "Max Reservoir Age"), &ptSettings.MaxReservoirAge, 1, 60))
+		ptSettings.MaxReservoirAge = std::clamp(ptSettings.MaxReservoirAge, 1, 60);
+
+	ImGui::Checkbox(T(TKEY("restir_pt_permutation_sampling"), "Permutation Sampling"), &ptSettings.EnablePermutationSampling);
+	ImGui::Checkbox(T(TKEY("restir_pt_fallback_sampling"), "Fallback Sampling"), &ptSettings.EnableFallbackSampling);
+	ImGui::Checkbox(T(TKEY("restir_pt_temporal_visibility"), "Visibility Before Combine"), &ptSettings.EnableTemporalVisibility);
+
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("restir_pt_temporal_visibility_tooltip"), "Trace visibility ray before combining temporal sample.\nReduces bias at the cost of one extra ray per pixel."));
+
+	// Spatial Resampling
+	ImGui::Separator();
+	ImGui::Text("%s", T(TKEY("restir_pt_spatial_resampling"), "Spatial Resampling"));
+
+	if (ImGui::SliderInt(T(TKEY("restir_pt_spatial_samples"), "Spatial Samples"), &ptSettings.SpatialNumSamples, 0, 8))
+		ptSettings.SpatialNumSamples = std::clamp(ptSettings.SpatialNumSamples, 0, 8);
+
+	if (ImGui::SliderInt(T(TKEY("restir_pt_spatial_disocclusion_boost"), "Disocclusion Boost Samples"), &ptSettings.SpatialDisocclusionBoostSamples, 0, 16))
+		ptSettings.SpatialDisocclusionBoostSamples = std::clamp(ptSettings.SpatialDisocclusionBoostSamples, 0, 16);
+
+	if (ImGui::SliderFloat(T(TKEY("restir_pt_spatial_sampling_radius"), "Sampling Radius"), &ptSettings.SpatialSamplingRadius, 1.0f, 64.0f, "%.1f"))
+		ptSettings.SpatialSamplingRadius = std::clamp(ptSettings.SpatialSamplingRadius, 1.0f, 64.0f);
+
+	if (ImGui::SliderFloat(T(TKEY("restir_pt_spatial_depth_threshold"), "Depth Threshold"), &ptSettings.SpatialDepthThreshold, 0.0f, 1.0f, "%.2f"))
+		ptSettings.SpatialDepthThreshold = std::clamp(ptSettings.SpatialDepthThreshold, 0.0f, 1.0f);
+
+	if (ImGui::SliderFloat(T(TKEY("restir_pt_spatial_normal_threshold"), "Normal Threshold"), &ptSettings.SpatialNormalThreshold, 0.0f, 1.0f, "%.2f"))
+		ptSettings.SpatialNormalThreshold = std::clamp(ptSettings.SpatialNormalThreshold, 0.0f, 1.0f);
+
+	// Boiling Filter
+	ImGui::Separator();
+	ImGui::Text("%s", T(TKEY("restir_pt_boiling_filter"), "Boiling Filter"));
+
+	ImGui::Checkbox(T(TKEY("restir_pt_enable_boiling_filter"), "Enable Boiling Filter"), &ptSettings.EnableBoilingFilter);
+
+	if (ptSettings.EnableBoilingFilter) {
+		if (ImGui::SliderFloat(T(TKEY("restir_pt_boiling_filter_strength"), "Boiling Filter Strength"), &ptSettings.BoilingFilterStrength, 0.0f, 1.0f, "%.2f"))
+			ptSettings.BoilingFilterStrength = std::clamp(ptSettings.BoilingFilterStrength, 0.0f, 1.0f);
+	}
 
 	ImGui::PopID();
 
