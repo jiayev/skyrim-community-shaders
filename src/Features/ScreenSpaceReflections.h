@@ -19,22 +19,23 @@
 struct ScreenSpaceReflections : Feature
 {
 	virtual inline std::string GetName() override { return "Screen Space Reflections"; }
+	virtual std::string GetDisplayName() override { return T("feature.screen_space_reflections.name", "Screen Space Reflections"); }
 	virtual inline std::string GetShortName() override { return "ScreenSpaceReflections"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		std::string desc =
-			"Hierarchical screen-space specular reflections. Uses a Hi-Z depth "
-			"pyramid for fast ray marching and GGX importance sampling for "
-			"physically based rough reflections, denoised by NVIDIA REBLUR.";
+		std::string desc = T(
+			"feature.screen_space_reflections.description",
+			"Hierarchical screen-space specular reflections. Uses a Hi-Z depth pyramid for fast ray marching and GGX importance sampling for physically based rough reflections, denoised by NVIDIA REBLUR.");
+
 		return std::make_pair(
 			desc,
 			std::vector<std::string>{
-				"Hierarchical Hi-Z ray marching",
-				"GGX importance sampling for rough reflections",
-				"Dynamic cubemap fallback for off-screen rays",
-				"NVIDIA REBLUR specular denoising" });
+				T("feature.screen_space_reflections.key_feature_1", "Hierarchical Hi-Z ray marching"),
+				T("feature.screen_space_reflections.key_feature_2", "GGX importance sampling for rough reflections"),
+				T("feature.screen_space_reflections.key_feature_3", "Dynamic cubemap fallback for off-screen rays"),
+				T("feature.screen_space_reflections.key_feature_4", "NVIDIA REBLUR specular denoising") });
 	}
 
 	virtual void RestoreDefaultSettings() override;

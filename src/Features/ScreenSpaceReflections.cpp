@@ -2,12 +2,15 @@
 
 #include "Deferred.h"
 #include "DynamicCubemaps.h"
+#include "I18n/I18n.h"
 #include "IBL.h"
 #include "NRD.h"
 #include "Skylighting.h"
 #include "State.h"
 #include "Upscaling.h"
 #include "Util.h"
+
+#define I18N_KEY_PREFIX "feature.screen_space_reflections."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ScreenSpaceReflections::Settings,
@@ -41,81 +44,81 @@ void ScreenSpaceReflections::DrawSettings()
 	static bool showAdvanced;
 
 	if (!ShadersOK())
-		ImGui::TextColored({ 1, 0, 0, 1 }, "Compute shaders failed to compile!");
+		ImGui::TextColored({ 1, 0, 0, 1 }, "%s", T(TKEY("compute_shaders_failed_to_compile"), "Compute shaders failed to compile!"));
 
-	ImGui::SeparatorText("Toggles");
+	ImGui::SeparatorText(T(TKEY("toggles"), "Toggles"));
 
-	ImGui::Checkbox("Show Advanced Options", &showAdvanced);
+	ImGui::Checkbox(T(TKEY("show_advanced_options"), "Show Advanced Options"), &showAdvanced);
 
-	if (ImGui::Checkbox("Enabled", &settings.Enabled))
+	if (ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled))
 		globals::deferred->ClearShaderCache();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Enable screen-space reflections. When disabled, the deferred composite falls back to cubemap-only reflections.");
+		ImGui::Text("%s", T(TKEY("enabled_tooltip"), "Enable screen-space reflections. When disabled, the deferred composite falls back to cubemap-only reflections."));
 	}
 
 	{
 		auto enabledGuard = Util::DisableGuard(!settings.Enabled);
 
-		if (ImGui::Checkbox("Half Resolution (Checkerboard)", &settings.HalfRes)) {
+		if (ImGui::Checkbox(T(TKEY("half_resolution_checkerboard"), "Half Resolution (Checkerboard)"), &settings.HalfRes)) {
 			recompileFlag = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels.");
+			ImGui::Text("%s", T(TKEY("half_resolution_checkerboard_tooltip"), "Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels."));
 		}
 	}
 
-	ImGui::SeparatorText("Visual");
+	ImGui::SeparatorText(T(TKEY("visual"), "Visual"));
 
 	{
 		auto visualGuard = Util::DisableGuard(!settings.Enabled);
-		ImGui::SliderFloat("Specular Multiplier", &settings.SpecularMult, 0.0f, 5.0f, "%.2f");
-		ImGui::Checkbox("Use Dynamic Cubemaps as Fallback", &settings.UseDynamicCubemapsAsFallback);
+		ImGui::SliderFloat(T(TKEY("specular_multiplier"), "Specular Multiplier"), &settings.SpecularMult, 0.0f, 5.0f, "%.2f");
+		ImGui::Checkbox(T(TKEY("use_dynamic_cubemaps_as_fallback"), "Use Dynamic Cubemaps as Fallback"), &settings.UseDynamicCubemapsAsFallback);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("When ray marching misses, fall back to dynamic cubemaps for reflections.");
+			ImGui::Text("%s", T(TKEY("use_dynamic_cubemaps_as_fallback_tooltip"), "When ray marching misses, fall back to dynamic cubemaps for reflections."));
 		}
 		{
 			auto cubemapGuard = Util::DisableGuard(!settings.UseDynamicCubemapsAsFallback);
-			ImGui::SliderFloat("Specular Cubemap Multiplier", &settings.SpecCubemapMult, 0.0f, 5.0f, "%.2f");
+			ImGui::SliderFloat(T(TKEY("specular_cubemap_multiplier"), "Specular Cubemap Multiplier"), &settings.SpecCubemapMult, 0.0f, 5.0f, "%.2f");
 		}
 
 		if (showAdvanced) {
 			ImGui::Separator();
-			ImGui::SliderInt("Max Steps", (int*)&settings.SpecMaxSteps, 1, 256);
-			ImGui::SliderFloat("Thickness", &settings.SpecThickness, 0.0f, 50.0f, "%.2f");
-			ImGui::SliderFloat("Normal Bias", &settings.NormalBias, 0.0f, 1.0f, "%.2f");
+			ImGui::SliderInt(T(TKEY("max_steps"), "Max Steps"), (int*)&settings.SpecMaxSteps, 1, 256);
+			ImGui::SliderFloat(T(TKEY("thickness"), "Thickness"), &settings.SpecThickness, 0.0f, 50.0f, "%.2f");
+			ImGui::SliderFloat(T(TKEY("normal_bias"), "Normal Bias"), &settings.NormalBias, 0.0f, 1.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Push ray origin along surface normal to avoid self-intersection artifacts.");
+				ImGui::Text("%s", T(TKEY("normal_bias_tooltip"), "Push ray origin along surface normal to avoid self-intersection artifacts."));
 			}
-			ImGui::SliderFloat("BRDF Bias", &settings.BRDFBias, 0.0f, 1.0f, "%.2f");
+			ImGui::SliderFloat(T(TKEY("brdf_bias"), "BRDF Bias"), &settings.BRDFBias, 0.0f, 1.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Higher values reduce noise but make reflections more glossy.");
+				ImGui::Text("%s", T(TKEY("brdf_bias_tooltip"), "Higher values reduce noise but make reflections more glossy."));
 			}
-			ImGui::SliderFloat("Occlusion Strength", &settings.OcclusionStrength, 0.0f, 1.0f, "%.2f");
+			ImGui::SliderFloat(T(TKEY("occlusion_strength"), "Occlusion Strength"), &settings.OcclusionStrength, 0.0f, 1.0f, "%.2f");
 
-			ImGui::SeparatorText("NRD Hit Distance Parameters");
-			ImGui::SliderFloat("Hit Dist A", &settings.HitDistA, 1.0f, 1000.0f, "%.1f");
-			ImGui::SliderFloat("Hit Dist B", &settings.HitDistB, 0.0f, 1.0f, "%.3f");
-			ImGui::SliderFloat("Hit Dist C", &settings.HitDistC, 0.0f, 200.0f, "%.1f");
-			ImGui::SliderFloat("Hit Dist D", &settings.HitDistD, -200.0f, 0.0f, "%.1f");
+			ImGui::SeparatorText(T(TKEY("nrd_hit_distance_parameters"), "NRD Hit Distance Parameters"));
+			ImGui::SliderFloat(T(TKEY("hit_dist_a"), "Hit Dist A"), &settings.HitDistA, 1.0f, 1000.0f, "%.1f");
+			ImGui::SliderFloat(T(TKEY("hit_dist_b"), "Hit Dist B"), &settings.HitDistB, 0.0f, 1.0f, "%.3f");
+			ImGui::SliderFloat(T(TKEY("hit_dist_c"), "Hit Dist C"), &settings.HitDistC, 0.0f, 200.0f, "%.1f");
+			ImGui::SliderFloat(T(TKEY("hit_dist_d"), "Hit Dist D"), &settings.HitDistD, -200.0f, 0.0f, "%.1f");
 		}
 	}
 
-	ImGui::SeparatorText("REBLUR Denoiser");
+	ImGui::SeparatorText(T(TKEY("reblur_denoiser"), "REBLUR Denoiser"));
 
 	{
 		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
 
-		ImGui::Checkbox("Enable REBLUR", &settings.EnableREBLUR);
+		ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR);
 
 		if (settings.EnableREBLUR)
 			globals::features::nrd.DrawReblurSettings(settings.Reblur, showAdvanced, "ssr_reblur");
 	}
 
-	ImGui::SeparatorText("Debug");
+	ImGui::SeparatorText(T(TKEY("debug"), "Debug"));
 
-	if (ImGui::TreeNode("Buffer Viewer")) {
+	if (ImGui::TreeNode(T(TKEY("buffer_viewer"), "Buffer Viewer"))) {
 		static float debugRescale = .3f;
-		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+		ImGui::SliderFloat(T(TKEY("view_resize"), "View Resize"), &debugRescale, 0.f, 1.f);
 
 		if (texHiZDepth)
 			BUFFER_VIEWER_NODE(texHiZDepth, debugRescale)
@@ -127,6 +130,8 @@ void ScreenSpaceReflections::DrawSettings()
 		ImGui::TreePop();
 	}
 }
+
+#undef I18N_KEY_PREFIX
 
 void ScreenSpaceReflections::LoadSettings(json& o_json)
 {
