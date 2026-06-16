@@ -1007,6 +1007,8 @@
     "feature.raytracing.lobe_angle_fraction": "波瓣角比例",
     "feature.raytracing.lod_dimmer": "LOD 调光",
     "feature.raytracing.lod_dimmer_desc": "原版会调暗距离足够远的光源。\n",
+    "feature.raytracing.log_texture_memory_stats": "记录纹理内存统计",
+    "feature.raytracing.log_texture_memory_stats_tooltip": "将 RT 纹理内存总计写入日志。",
     "feature.raytracing.max_accumulated_frames": "最大累积帧数",
     "feature.raytracing.max_blur_radius": "最大模糊半径",
     "feature.raytracing.max_fast_accumulated_frames": "最大快速累积帧数",

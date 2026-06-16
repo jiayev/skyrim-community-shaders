@@ -457,6 +457,7 @@ struct CreationEngineRaytracing
 	using SetPTOutputTargetsFn = void (*)(ID3D12Resource*, ID3D12Resource*);
 	using GetAccumulatedFrameCountFn = uint32_t (*)();
 	using GetFakeDoubledVRAMUsageFn = uint64_t (*)();
+	using LogTextureMemoryStatsFn = void (*)();
 	using GetSceneGraphCountersFn = void (*)(uint32_t& textures, uint32_t& models, uint32_t& instances);
 
 	InitializeRendererFn InitializeRenderer = nullptr;
@@ -480,6 +481,7 @@ struct CreationEngineRaytracing
 	SetPTOutputTargetsFn SetPTOutputTargets = nullptr;
 	GetAccumulatedFrameCountFn GetAccumulatedFrameCount = nullptr;
 	GetFakeDoubledVRAMUsageFn GetFakeDoubledVRAMUsage = nullptr;
+	LogTextureMemoryStatsFn LogTextureMemoryStats = nullptr;
 
 	CreationEngineRaytracing()
 	{
@@ -514,6 +516,7 @@ struct CreationEngineRaytracing
 		LOAD_FN(SetPTOutputTargets);
 		LOAD_FN(GetAccumulatedFrameCount);
 		LOAD_FN(GetFakeDoubledVRAMUsage);
+		LOAD_FN(LogTextureMemoryStats);
 	}
 };
 

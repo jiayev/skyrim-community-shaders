@@ -642,37 +642,45 @@ void Raytracing::DrawExperimentalSettings()
 
 		auto label = (experimentalSettings.TextureCutOff == 0) ? neverShare : shareConditionLabel;
 		ImGui::SliderInt(T(TKEY("exclusive_mode_cutoff"), "Exclusive Mode Cutoff"), reinterpret_cast<int*>(&experimentalSettings.TextureCutOff), 0, 6, label.c_str());
-
-		DrawEnumCombo(
-			T(TKEY("texture_streaming_mode"), "Texture Streaming Mode"),
-			"TextureStreamingMode",
-			experimentalSettings.TextureStreamingMode,
-			std::array{
-				T(TKEY("texture_streaming_off"), "Off"),
-				T(TKEY("texture_streaming_conservative"), "Conservative"),
-				T(TKEY("texture_streaming_balanced"), "Balanced"),
-				T(TKEY("texture_streaming_aggressive"), "Aggressive"),
-			},
-			T(TKEY("texture_streaming_mode_tooltip"), "Reduces RT-side texture memory by dropping high mips for large Exclusive-mode textures."));
-
-		if (experimentalSettings.TextureStreamingMode != CreationEngineRaytracing::TextureStreamingMode::Off) {
-			int textureBudgetMB = static_cast<int>(experimentalSettings.TextureBudgetMB);
-			if (ImGui::InputInt(T(TKEY("texture_budget_mb"), "Texture Budget MB"), &textureBudgetMB))
-				experimentalSettings.TextureBudgetMB = static_cast<uint32_t>(std::clamp(textureBudgetMB, 0, 65536));
-
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("texture_budget_mb_tooltip"), "Reserved for future budget-driven streaming. 0 disables the budget limit for now."));
-
-			int maxMipBias = static_cast<int>(experimentalSettings.TextureMaxMipBias);
-			if (ImGui::SliderInt(T(TKEY("texture_max_mip_bias"), "Max Mip Bias"), &maxMipBias, 0, 4))
-				experimentalSettings.TextureMaxMipBias = static_cast<uint32_t>(std::clamp(maxMipBias, 0, 4));
-
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("texture_max_mip_bias_tooltip"), "Maximum number of top mips that can be skipped by the streaming MVP."));
-		}
-	} else {
-		experimentalSettings.TextureStreamingMode = CreationEngineRaytracing::TextureStreamingMode::Off;
 	}
+
+	const bool textureStreamingAvailable =
+		experimentalSettings.TextureMode == CreationEngineRaytracing::TextureMode::Exclusive ||
+		settings.CreationEngineRaytracingSettings.GeneralSettings.Mode == CreationEngineRaytracing::Mode::PathTracing;
+
+	if (!textureStreamingAvailable)
+		ImGui::BeginDisabled();
+
+	DrawEnumCombo(
+		T(TKEY("texture_streaming_mode"), "Texture Streaming Mode"),
+		"TextureStreamingMode",
+		experimentalSettings.TextureStreamingMode,
+		std::array{
+			T(TKEY("texture_streaming_off"), "Off"),
+			T(TKEY("texture_streaming_conservative"), "Conservative"),
+			T(TKEY("texture_streaming_balanced"), "Balanced"),
+			T(TKEY("texture_streaming_aggressive"), "Aggressive"),
+		},
+		T(TKEY("texture_streaming_mode_tooltip"), "Reduces texture memory by dropping high mips. In Share mode this is active only for Path Tracing and also affects game-side textures."));
+
+	if (experimentalSettings.TextureStreamingMode != CreationEngineRaytracing::TextureStreamingMode::Off) {
+		int textureBudgetMB = static_cast<int>(experimentalSettings.TextureBudgetMB);
+		if (ImGui::InputInt(T(TKEY("texture_budget_mb"), "Texture Budget MB"), &textureBudgetMB))
+			experimentalSettings.TextureBudgetMB = static_cast<uint32_t>(std::clamp(textureBudgetMB, 0, 65536));
+
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("texture_budget_mb_tooltip"), "Reserved for future budget-driven streaming. 0 disables the budget limit for now."));
+
+		int maxMipBias = static_cast<int>(experimentalSettings.TextureMaxMipBias);
+		if (ImGui::SliderInt(T(TKEY("texture_max_mip_bias"), "Max Mip Bias"), &maxMipBias, 0, 4))
+			experimentalSettings.TextureMaxMipBias = static_cast<uint32_t>(std::clamp(maxMipBias, 0, 4));
+
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("texture_max_mip_bias_tooltip"), "Maximum number of top mips that can be skipped by the streaming MVP."));
+	}
+
+	if (!textureStreamingAvailable)
+		ImGui::EndDisabled();
 
 	ImGui::PopID();
 
@@ -697,6 +705,15 @@ void Raytracing::DrawDebugSettings()
 		});
 
 	ImGui::Checkbox(T(TKEY("display_scenegraph_counters"), "Display SceneGraph Counters"), &settings.DisplaySceneGraphCounters);
+
+	if (initialized && creationEngineRaytracing && creationEngineRaytracing->LogTextureMemoryStats) {
+		if (ImGui::Button(T(TKEY("log_texture_memory_stats"), "Log Texture Memory Stats"))) {
+			creationEngineRaytracing->LogTextureMemoryStats();
+		}
+
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("log_texture_memory_stats_tooltip"), "Writes RT texture memory totals to log."));
+	}
 
 	const auto bufferViewerLabel = StableLabel(T(TKEY("buffer_viewer"), "Buffer Viewer"), "BufferViewer");
 	if (ImGui::TreeNode(bufferViewerLabel.c_str())) {
