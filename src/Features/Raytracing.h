@@ -440,10 +440,9 @@ struct CreationEngineRaytracing
 	using UpdateSettingsFn = void (*)(Settings);
 	using GetRRInputFn = void (*)(ID3D12Resource*&, ID3D12Resource*&);
 	using SetSharedTexturesFn = void (*)(ID3D12Resource*, ID3D12Resource*, ID3D12Resource*);
-	using GetSharedTexturesFn = void (*)(SharedTexture&, SharedTexture&);
+	using GetSharedTexturesFn = void (*)(SharedTexture&, SharedTexture&, SharedTexture&, SharedTexture&);
 	using UpdateJitterFn = void (*)(float2);
 	using SetSkinDetailNormalFn = void (*)(ID3D12Resource*);
-	using SetPTOutputTargetsFn = void (*)(ID3D12Resource*, ID3D12Resource*);
 	using GetAccumulatedFrameCountFn = uint32_t (*)();
 	using GetFakeDoubledVRAMUsageFn = uint64_t (*)();
 	using GetSceneGraphCountersFn = void (*)(uint32_t& textures, uint32_t& models, uint32_t& instances);
@@ -466,7 +465,6 @@ struct CreationEngineRaytracing
 	GetSharedTexturesFn GetSharedTextures = nullptr;
 	UpdateJitterFn UpdateJitter = nullptr;
 	SetSkinDetailNormalFn SetSkinDetailNormal = nullptr;
-	SetPTOutputTargetsFn SetPTOutputTargets = nullptr;
 	GetAccumulatedFrameCountFn GetAccumulatedFrameCount = nullptr;
 	GetFakeDoubledVRAMUsageFn GetFakeDoubledVRAMUsage = nullptr;
 
@@ -500,7 +498,6 @@ struct CreationEngineRaytracing
 		LOAD_FN(GetSharedTextures);
 		LOAD_FN(UpdateJitter);
 		LOAD_FN(SetSkinDetailNormal);
-		LOAD_FN(SetPTOutputTargets);
 		LOAD_FN(GetAccumulatedFrameCount);
 		LOAD_FN(GetFakeDoubledVRAMUsage);
 	}
@@ -693,16 +690,17 @@ struct Raytracing : public OverlayFeature
 
 	winrt::com_ptr<ID3D11SamplerState> samplerState = nullptr;
 
-	eastl::unique_ptr<WrappedResource> mainTexture = nullptr;
+	// Available when Pathtracing
+	eastl::unique_ptr<WrappedResource> depthTexture = nullptr;
+	eastl::unique_ptr<WrappedResource> motionVectorsTexture = nullptr;
 
-	eastl::unique_ptr<WrappedResource> ptDepthTexture = nullptr;
-	eastl::unique_ptr<WrappedResource> ptMotionVectorsTexture = nullptr;
+	// Available for both GI and PT
+	eastl::unique_ptr<WrappedResource> mainTexture = nullptr;
+	eastl::unique_ptr<WrappedResource> diffuseAlbedoTexture = nullptr;
 
 	winrt::com_ptr<ID3D12Resource> albedoTexture = nullptr;
 	eastl::unique_ptr<WrappedResource> normalRoughnessTexture = nullptr;
 	winrt::com_ptr<ID3D12Resource> gnmaoTexture = nullptr;
-
-	eastl::unique_ptr<WrappedResource> diffuseAlbedoTexture = nullptr;
 
 	eastl::unique_ptr<WrappedResource> skyHemisphere = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> cubeToHemiCS = nullptr;
