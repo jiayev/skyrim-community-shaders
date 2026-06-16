@@ -393,6 +393,15 @@ void advanceRay(inout RayMarchInfo ray, float dist, float jitter)
 	ray.pos = ray.start_pos + ray.ray_dist * ray.ray_dir;
 }
 
+void setRayDistance(inout RayMarchInfo ray, float ray_dist)
+{
+	ray.last_segment_dist = ray_dist;
+	ray.segment_dist = ray_dist;
+	ray.last_ray_dist = ray_dist;
+	ray.ray_dist = ray_dist;
+	ray.pos = ray.start_pos + ray.ray_dist * ray.ray_dir;
+}
+
 float2 NubisRayJitter(uint2 pixelCoord, uint frameIndex)
 {
 	const float jitter_x = frac(float(pixelCoord.x) * 0.1031000018);
@@ -526,6 +535,45 @@ float sampleCloudDensity(
 	return saturate(density);
 }
 
+bool sampleCoarseCloudPresence(float3 pos, CloudLayer cloud, out NDFInfo ndf)
+{
+	ndf = sampleNDF(pos, cloud, TexCloudNDF, TexCloudTopLUT, TexCloudBottomLUT);
+	return ndf.dimension_profile > 1e-8;
+}
+
+float RefineCoarseCloudEntry(RayMarchInfo ray, CloudLayer cloud)
+{
+	float min_dist = ray.last_ray_dist;
+	float max_dist = ray.ray_dist;
+
+	[unroll] for (uint i = 0; i < 2; i++)
+	{
+		const float mid_dist = 0.5 * (min_dist + max_dist);
+		NDFInfo _;
+		if (sampleCoarseCloudPresence(ray.start_pos + mid_dist * ray.ray_dir, cloud, _))
+			max_dist = mid_dist;
+		else
+			min_dist = mid_dist;
+	}
+
+	return max_dist;
+}
+
+float GetHorizonStepFactor(float3 ray_dir)
+{
+	const float horizon_width = 0.25;
+	const float horizon = 1.0 - saturate(abs(ray_dir.z) / horizon_width);
+	return horizon * horizon;
+}
+
+float GetAdaptiveRayStride(float start_dist, float segment_dist, float ray_march_range, uint cloud_max_step, float step_mult, float horizon_factor)
+{
+	const float effective_steps = max(1.0, (float)cloud_max_step * lerp(1.0, 1.75, horizon_factor));
+	const float rcp_step = step_mult / effective_steps;
+	const float march_prop = saturate((start_dist + segment_dist) / ray_march_range);
+	return (pow(sqrt(march_prop) + rcp_step, 2) - march_prop) * ray_march_range;
+}
+
 // sample sun transmittance / shadowing
 float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint3 seed, out float3 cloud_transmittance)
 {
@@ -616,21 +664,34 @@ struct VolumetricCloudResult
 	float weighted_depth;
 };
 
-VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, float solid_dist, bool is_sky, uint3 seed, float jitter, float ap_shadow)
+VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, float solid_dist, bool is_sky, uint3 seed, float jitter, float ap_shadow, bool use_main_view_step_strategy)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const CloudLayer cloud = GetCloudLayer(info);
 	const static float zero_density_stride_mult = 1.5;
 
 	const float ceil = cloud.bottom + cloud.thickness;
-	const float bottom = 0;
+	const float bottom = use_main_view_step_strategy ? cloud.bottom : 0.0;
 
 	RayMarchInfo ray;
 	initRayMarchInfo(ray);
 
 	ray.eye_pos = eye_pos;
 	ray.ray_dir = ray_dir;
-	snapMarch(ray, bottom, ceil, is_sky ? info.rayMarchRange : min(info.rayMarchRange, solid_dist));
+	const float max_march_dist = is_sky ? info.rayMarchRange : min(info.rayMarchRange, solid_dist);
+	snapMarch(ray, bottom, ceil, max_march_dist);
+
+	float skipped_ap_dist = 0.0;
+	if (use_main_view_step_strategy) {
+		float3 legacy_start_pos;
+		float3 legacy_end_pos;
+		float legacy_march_dist;
+		float legacy_start_dist;
+		float legacy_end_dist;
+		snapMarch(0.0, ceil, ray.eye_pos, ray.ray_dir, max_march_dist,
+			legacy_start_pos, legacy_end_pos, legacy_march_dist, legacy_start_dist, legacy_end_dist);
+		skipped_ap_dist = max(0.0, ray.start_dist - legacy_start_dist);
+	}
 
 	///////////// precalc
 	const float cos_theta = dot(ray.ray_dir, info.dirlightDir);
@@ -638,17 +699,41 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	const float cloud_secondary_phase = Phase::HGDualLobe(cos_theta, 0.21, -0.15, 0.3);
 
 	///////////// ray march
-	float ap_dist = 0.0;
+	float ap_dist = skipped_ap_dist;
 	float3 mean_shadowing = 0.0;
 	float sum_shadowing_weights = 0.0;
 	float scatter_weight = 0.0;
 	float weighted_depth = 0.0;
 
+	const float horizon_factor = use_main_view_step_strategy ? GetHorizonStepFactor(ray.ray_dir) : 0.0;
+	const static float coarse_stride_mult = 4.0;
 	float stride = 0.003 / 1.428e-5f;
+	bool coarse_seeking = use_main_view_step_strategy;
 
 	advanceRay(ray, stride, jitter);
-	[loop] for (ray.step = 0; ray.step < 150 && ray.ray_dist < ray.march_dist; advanceRay(ray, stride, jitter))
+	ray.step = 0;
+	[loop] while (ray.step < info.cloudMaxStep && ray.ray_dist < ray.march_dist)
 	{
+		if (use_main_view_step_strategy && coarse_seeking) {
+			NDFInfo coarse_ndf;
+			if (!sampleCoarseCloudPresence(ray.pos, cloud, coarse_ndf)) {
+				const float tr = max(ray.transmittance.x, max(ray.transmittance.y, ray.transmittance.z));
+				ap_dist += tr * max(0.0, ray.ray_dist - ray.last_ray_dist);
+				stride = GetAdaptiveRayStride(ray.start_dist, ray.segment_dist, info.rayMarchRange, info.cloudMaxStep, coarse_stride_mult, horizon_factor);
+				advanceRay(ray, stride, jitter);
+				continue;
+			}
+
+			const float entry_dist = RefineCoarseCloudEntry(ray, cloud);
+			const float tr = max(ray.transmittance.x, max(ray.transmittance.y, ray.transmittance.z));
+			ap_dist += tr * max(0.0, entry_dist - ray.last_ray_dist);
+			setRayDistance(ray, entry_dist);
+			coarse_seeking = false;
+			stride = GetAdaptiveRayStride(ray.start_dist, ray.segment_dist, info.rayMarchRange, info.cloudMaxStep, 1.0, horizon_factor);
+			advanceRay(ray, stride, jitter);
+			continue;
+		}
+
 		const float dt = ray.ray_dist - ray.last_ray_dist;
 
 		NDFInfo ndf;
@@ -694,9 +779,8 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 
 		// stride
 		const bool empty_layer_sample = ndf.in_layer && ndf.dimension_profile <= 1e-8;
-		float rcp_step = (empty_layer_sample ? zero_density_stride_mult : 1.0) / (float)info.cloudMaxStep;
-		float march_prop = saturate((ray.start_dist + ray.segment_dist) / info.rayMarchRange);
-		stride = (pow(sqrt(march_prop) + rcp_step, 2) - march_prop) * info.rayMarchRange;
+		const float step_mult = empty_layer_sample ? zero_density_stride_mult : 1.0;
+		stride = GetAdaptiveRayStride(ray.start_dist, ray.segment_dist, info.rayMarchRange, info.cloudMaxStep, step_mult, horizon_factor);
 
 		const float tr = max(ray.transmittance.x, max(ray.transmittance.y, ray.transmittance.z));
 		const float step_opacity = saturate(1.0 - tr);
@@ -704,6 +788,11 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 		weighted_depth += step_opacity * dt * (ray.start_dist + ray.ray_dist);
 		ap_dist += tr * dt;
 		[branch] if (tr < 1e-3) break;
+
+		if (!ndf.in_layer || ndf.dimension_profile <= 1e-8)
+			coarse_seeking = true;
+
+		advanceRay(ray, stride, jitter);
 	}
 
 	mean_shadowing = sum_shadowing_weights > 1e-8 ? mean_shadowing / sum_shadowing_weights : 1.0;
@@ -774,7 +863,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	const float3 ray_dir = pos_world.xyz / solid_dist;
 
 	const float ap_shadow = SampleFilteredApShadow(full_px_coords);
-	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, solid_dist, is_sky, seed, rnd.z, ap_shadow);
+	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, solid_dist, is_sky, seed, rnd.z, ap_shadow, true);
 
 	RWTexTr[px_coords] = float4(result.transmittance, CloudAlphaFromTransmittance(result.transmittance));
 	RWTexLum[px_coords] = result.lum;
@@ -828,7 +917,7 @@ float3 GetCubemapSamplingVector(uint3 threadId, in RWTexture2DArray<float3> outp
 
 	const float3 eye_pos = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
 	const float3 ray_dir = GetCubemapSamplingVector(tid, RWTexCubeTr);
-	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, info.rayMarchRange, true, seed, rnd.z, 0.0);
+	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, info.rayMarchRange, true, seed, rnd.z, 0.0, false);
 
 	RWTexCubeTr[tid] = result.transmittance;
 	RWTexCubeLum[tid] = result.lum;
