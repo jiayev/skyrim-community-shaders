@@ -1,6 +1,7 @@
 #include "TerrainBlending.h"
 
 #include "Deferred.h"
+#include "Features/Raytracing.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Raytracing.h"
@@ -715,6 +716,11 @@ void TerrainBlending::DataLoaded()
 	bEnableLandFade->data.b = false;
 }
 
+bool TerrainBlending::Active() const
+{
+	return settings.Enabled && !globals::features::raytracing.IsPathTracing();
+}
+
 void TerrainBlending::TerrainShaderHacks()
 {
 	if (renderTerrainDepth) {
@@ -840,7 +846,7 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 
 	singleton.eyePosition = Util::GetEyePosition();
 
-	const bool tbActive = shaderCache->IsEnabled() && singleton.settings.Enabled;
+	const bool tbActive = shaderCache->IsEnabled() && singleton.Active();
 	const bool useBlendedDepthSRV = tbActive && ShouldUseBlendedDepthSRV();
 
 	if (tbActive) {
@@ -884,7 +890,7 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 	auto& singleton = globals::features::terrainBlending;
 	auto shaderCache = globals::shaderCache;
 
-	if (shaderCache->IsEnabled() && singleton.settings.Enabled) {
+	if (shaderCache->IsEnabled() && singleton.Active()) {
 		if (singleton.renderDepth) {
 			// Entering or exiting terrain depth section
 			bool inTerrain = a_pass->shaderProperty && a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
@@ -969,7 +975,7 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 {
 	ZoneScoped;
 
-	if (!settings.Enabled) {
+	if (!Active()) {
 		renderDepth = false;
 		renderTerrainDepth = false;
 		renderAltTerrain = false;
