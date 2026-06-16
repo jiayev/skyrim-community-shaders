@@ -134,8 +134,7 @@ public:
 	ID3D11ComputeShader* GetColorSpaceCS(bool toLinear);
 
 	eastl::unordered_map<UpscaleMethod, winrt::com_ptr<ID3D11ComputeShader>> encodeTexturesCS;
-	eastl::unordered_map<UpscaleMethod, winrt::com_ptr<ID3D11ComputeShader>> encodeTexturesPTCS;
-	ID3D11ComputeShader* GetEncodeTexturesCS(bool pathTracing = false);
+	ID3D11ComputeShader* GetEncodeTexturesCS();
 
 	winrt::com_ptr<ID3D11PixelShader> depthRefractionUpscalePS;
 	ID3D11PixelShader* GetDepthRefractionUpscalePS();
