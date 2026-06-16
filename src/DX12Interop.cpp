@@ -121,7 +121,7 @@ void DX12Interop::CreateD3D12Device(IDXGIAdapter* a_adapter)
 		}
 	}
 
-	DX::ThrowIfFailed(D3D12CreateDevice(a_adapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&d3d12Device)));
+	DX::ThrowIfFailed(D3D12CreateDevice(a_adapter, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&d3d12Device)));
 
 	if (enableDebug) {
 		winrt::com_ptr<ID3D12InfoQueue> infoQueue;
