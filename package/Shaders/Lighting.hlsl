@@ -297,11 +297,7 @@ struct PS_OUTPUT
 	float4 Specular: SV_Target4;
 	float4 Reflectance: SV_Target5;
 	float4 Masks: SV_Target6;
-#	if defined(RAYTRACING)
-	float4 MetallicAO: SV_Target7;
-#	else
 	float4 Masks2: SV_Target7;
-#	endif
 };
 #else
 struct PS_OUTPUT
@@ -3415,7 +3411,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	const float metallic = material.Metallic;
 	const float ao = material.AO;
 
-#		else
+#		else  // TRUE_PBR
 	const float roughness = VanillaToPBR::Roughness(material.Shininess, material.SpecularColor, glossiness);
 
 #			if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)) && !defined(EYE)
@@ -3437,7 +3433,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Parameters.x = Color::RGBToLuminanceAlternative(lightsSpecularColor);
 #			endif
 	psout.Parameters.w = psout.Diffuse.w;
-#		endif
+#		endif  // SNOW
 
 	float masksZ = Color::RGBToYCoCg(directionalAmbientColor).x;
 
@@ -3450,7 +3446,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float vertexAOMask = 1.0 - vertexAO;
 
 #		if defined(RAYTRACING)
-	psout.MetallicAO = float4(metallic, ao, vertexAOMask, psout.Diffuse.w);
+	psout.Masks2 = float4(vertexAOMask, metallic, 1.0f - ao, psout.Diffuse.w);
 #		else
 	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion
 	// for pixels that do not write to this RT (sky, water, grass, effects).

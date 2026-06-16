@@ -1299,7 +1299,7 @@ Raytracing::SharedData Raytracing::GetCommonBufferData() const
 		.InteriorDirectional = settings.CreationEngineRaytracingSettings.Enabled ? 0.0f : 1.0f,
 		.Ambient = settings.CreationEngineRaytracingSettings.Enabled ? 0.0f : 1.0f,
 		.EnvMap = settings.CreationEngineRaytracingSettings.Enabled ? 0.0f : 1.0f,
-		.Albedo = settings.CreationEngineRaytracingSettings.Enabled,
+		.Albedo = settings.CreationEngineRaytracingSettings.Enabled ? 1u : 0u,
 		.PathTracing = pathTracingEnabled ? 1u : 0u,
 	};
 }
@@ -1340,7 +1340,7 @@ void Raytracing::UpdateFeatureData()
 
 void Raytracing::UpdateSkinDetailNormal(ID3D11Texture2D* skinDetailNormalTextureD3D11)
 {
-	if (!initialized || !skinDetailNormalTextureD3D11)
+	if (!initialized || !skinDetailNormalTextureD3D11 || !creationEngineRaytracing->SetSkinDetailNormal)
 		return;
 
 	D3D11_TEXTURE2D_DESC desc;
@@ -1499,11 +1499,26 @@ void Raytracing::DeferredPasses()
 	const bool pathtracing = (mode == CreationEngineRaytracing::Mode::PathTracing);
 
 	// Fog management
-	static auto& enableFog = (*(bool*)REL::RelocationID(528125, 415070).address());
-	if (enableFog)
-		fogEnabled = true;
+	{
+		static auto& enableFog = (*(bool*)REL::RelocationID(528125, 415070).address());
+		if (enableFog)
+			fogEnabled = true;
 
-	enableFog = settings.DisableVanillaFogPT && pathtracing ? false : fogEnabled;
+		enableFog = settings.DisableVanillaFogPT && pathtracing ? false : fogEnabled;
+	}
+
+	// SSAO management
+	{
+		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+		auto& BSImagespaceShaderISSAOBlurH = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISSAOBlurH;
+
+		// Toggle vanilla SSAO
+		static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH.get()) + 0x50LL);
+		if (enableSSAO)
+			ssaoEnabled = true;
+
+		*enableSSAO = (globalIllumation || pathtracing) ? false : ssaoEnabled;
+	}
 
 	if (globalIllumation) {
 		// Add global illumination result to kMain

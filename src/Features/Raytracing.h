@@ -707,6 +707,7 @@ struct Raytracing : public OverlayFeature
 	uint2 m_Resolution;
 
 	bool fogEnabled = false;
+	bool ssaoEnabled = false;
 
 	enum DisableReason
 	{
@@ -744,7 +745,7 @@ struct Raytracing : public OverlayFeature
 		uint _padding1;
 		uint _padding2;
 	};
-	static_assert(sizeof(SharedData) % 16 == 0);
+	STATIC_ASSERT_ALIGNAS_16(SharedData);
 
 	SharedData GetCommonBufferData() const;
 

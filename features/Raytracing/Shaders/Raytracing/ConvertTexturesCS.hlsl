@@ -5,7 +5,7 @@
 
 Texture2D<unorm half4> NormalSmoothness : register(t0);
 Texture2D<unorm half4> Albedo : register(t1);
-Texture2D<unorm half4> MAO : register(t2);
+Texture2D<half3>	   VAOMAO : register(t2);
 
 RWTexture2D<snorm half4> NormalRoughness : register(u0);
 RWTexture2D<half3> DiffuseAlbedo : register(u1);
@@ -24,7 +24,7 @@ SamplerState Sampler : register(s0);
 
 #if DLSS_RR
 	const float4 albedo = Albedo.SampleLevel(Sampler, uv, 0);
-	const float metallic = MAO.SampleLevel(Sampler, uv, 0).x;
+	const float metallic = VAOMAO.SampleLevel(Sampler, uv, 0).y;
 
 	DiffuseAlbedo[id] = float4(Color::SrgbToLinear(albedo.rgb) * (1.0f - metallic), albedo.a);
 #endif
