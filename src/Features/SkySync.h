@@ -3,6 +3,7 @@
 
 #include "Utils/Moon.h"
 
+/** @brief Synchronizes volumetric lighting and shadow direction with actual sun and moon positions. */
 struct SkySync : Feature
 {
 private:
@@ -15,6 +16,7 @@ public:
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kSky; }
 
+	/** @brief Returns a description and list of key features for the UI summary. */
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return { T("feature.sky_sync.description", "Synchronizes volumetric lighting and shadows with the actual sun and moon positions in the sky."),
@@ -43,6 +45,7 @@ public:
 
 	Settings settings;
 
+	/** @brief Draws the ImGui settings panel for Sky Sync configuration. */
 	virtual void DrawSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
@@ -51,9 +54,15 @@ public:
 
 	virtual bool IsCore() const override { return true; }
 
+	/**
+	 * @brief Dims sunlight color when the sun is below the horizon during sky color updates.
+	 * @param sky The sky object whose directional light color may be modified.
+	 */
 	void OnSkyUpdateColors(RE::Sky* sky);
 
+	/** @brief Installs rendering hooks and detects conflicting mods after plugin load. */
 	virtual void PostPostLoad() override;
+	/** @brief Checks for conflicting ESP files after game data is loaded. */
 	virtual void DataLoaded() override;
 
 	struct Sky_Update
