@@ -127,13 +127,13 @@ void HistogramAutoExposure::DrawSettings()
 				const float ev = histogramPos * (kMaxEV100 - kMinEV100) + kMinEV100;
 				ImGui::Text(T("feature.post_processing.histogram_auto_exposure.bin", "Bin: %d"), bin);
 				ImGui::Text(T("feature.post_processing.histogram_auto_exposure.luminance", "Luminance: %.6g"), exp2(ev - 3.0f));
-				ImGui::Text(T("feature.post_processing.histogram_auto_exposure.ev", "EV: %.2f"), ev);
+				ImGui::Text(T("feature.post_processing.histogram_auto_exposure.ev", "EV100: %.2f"), ev);
 			}
 			ImGui::Text(T("feature.post_processing.histogram_auto_exposure.samples", "Samples: %u"), histogramData[bin]);
 			ImGui::EndTooltip();
 		}
 
-		ImGui::TextColored(ImVec4(0, 1, 0, 1), T("feature.post_processing.histogram_auto_exposure.green_adapted_ev", "Green: Adapted EV"));
+		ImGui::TextColored(ImVec4(0, 1, 0, 1), T("feature.post_processing.histogram_auto_exposure.green_adapted_ev", "Green: Adapted EV100"));
 		ImGui::SameLine();
 		ImGui::TextColored(ImVec4(0, 0.86f, 1, 1), T("feature.post_processing.histogram_auto_exposure.cyan_compensation_target", "Cyan: Compensation Target"));
 		ImGui::SameLine();
