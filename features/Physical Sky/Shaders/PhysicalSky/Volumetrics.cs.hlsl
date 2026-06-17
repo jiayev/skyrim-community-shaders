@@ -393,6 +393,16 @@ void advanceRay(inout RayMarchInfo ray, float dist, float jitter)
 	ray.pos = ray.start_pos + ray.ray_dist * ray.ray_dir;
 }
 
+float NarrowRayJitter(float jitter)
+{
+	return 0.5 + (jitter - 0.5) * 0.5;
+}
+
+float3 NarrowSignedJitter(float3 jitter)
+{
+	return (jitter * 2.0 - 1.0) * 0.5;
+}
+
 float2 NubisRayJitter(uint2 pixelCoord, uint frameIndex)
 {
 	const float jitter_x = frac(float(pixelCoord.x) * 0.1031000018);
@@ -416,12 +426,6 @@ float SelectNubisRayJitter(float rayDistance, float2 jitter)
 float NubisVerticalStep(float rayDistance)
 {
 	return rayDistance * 0.003662109375 + 0.003 / 1.428e-5f;
-}
-
-void advanceNubisRay(inout RayMarchInfo ray, float2 jitter)
-{
-	const float ray_distance = ray.start_dist + ray.segment_dist;
-	advanceRay(ray, NubisVerticalStep(ray_distance), SelectNubisRayJitter(ray_distance, jitter));
 }
 
 float StabilizeVerticalProfileDensity(float dimensionProfile, float noiseComposite, CloudLayer cloud)
@@ -533,7 +537,7 @@ float sampleCloudDensity(
 }
 
 // sample sun transmittance / shadowing
-float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint3 seed, out float3 cloud_transmittance)
+float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint3 seed, uint jitter_frame, out float3 cloud_transmittance)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const CloudLayer cloud = GetCloudLayer(info);
@@ -582,7 +586,7 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint3 seed, out float3
 	{
 		const static uint visibility_step = 6;
 		const static float visibility_stride = 0.05 / 1.428e-5f;
-		const float3 jitter = Random::R3Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f) * 2 - 1;
+		const float3 jitter = NarrowSignedJitter(Random::R3Modified(jitter_frame, seed / 4294967295.f));
 
 		float cloud_density = 0;
 
@@ -622,10 +626,11 @@ struct VolumetricCloudResult
 	float weighted_depth;
 };
 
-VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, float solid_dist, bool is_sky, uint3 seed, float2 jitter, float ap_shadow, bool skip_below_cloud_bottom)
+VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, float solid_dist, bool is_sky, uint3 seed, float jitter, uint jitter_frame, float ap_shadow, bool skip_below_cloud_bottom)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const CloudLayer cloud = GetCloudLayer(info);
+	const static float zero_density_stride_mult = 1.5;
 
 	const float ceil = cloud.bottom + cloud.thickness;
 	const float bottom = skip_below_cloud_bottom ? cloud.bottom : 0.0;
@@ -662,10 +667,12 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	float scatter_weight = 0.0;
 	float weighted_depth = 0.0;
 
-	advanceNubisRay(ray, jitter);
-	[loop] for (ray.step = 0; ray.step < info.cloudMaxStep && ray.ray_dist < ray.march_dist; advanceNubisRay(ray, jitter))
+	float stride = 0.003 / 1.428e-5f;
+
+	advanceRay(ray, stride, jitter);
+	[loop] for (ray.step = 0; ray.step < info.cloudMaxStep && ray.ray_dist < ray.march_dist; advanceRay(ray, stride, jitter))
 	{
-		const float dt = ray.ray_dist - ray.last_ray_dist;
+		const float dt = ray.segment_dist - ray.last_segment_dist;
 
 		NDFInfo ndf;
 		float cloud_density = sampleCloudDensity(ray.pos, ray.start_dist + ray.ray_dist, cloud, (ray.start_dist + ray.ray_dist) * 1.428e-5f, true, ndf);
@@ -679,7 +686,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 			// dir light
 			float3 scatter = cloud_scatter * cloud_phase;
 			float3 cloud_transmittance;
-			float3 sun_transmittance = sampleSunTransmittance(ray.pos, info.dirlightDir, seed + ray.step, cloud_transmittance);
+			float3 sun_transmittance = sampleSunTransmittance(ray.pos, info.dirlightDir, seed + ray.step, jitter_frame, cloud_transmittance);
 			float3 in_scatter = scatter * sun_transmittance * info.dirlightColor;
 
 			sum_shadowing_weights += dt;
@@ -707,6 +714,12 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 			ray.lum += scatter_integeral * ray.transmittance;
 			ray.transmittance *= sample_transmittance;
 		}
+
+		// stride
+		const bool empty_layer_sample = ndf.in_layer && ndf.dimension_profile <= 1e-8;
+		float rcp_step = (empty_layer_sample ? zero_density_stride_mult : 1.0) / (float)info.cloudMaxStep;
+		float march_prop = saturate((ray.start_dist + ray.segment_dist) / info.rayMarchRange);
+		stride = (pow(sqrt(march_prop) + rcp_step, 2) - march_prop) * info.rayMarchRange;
 
 		const float tr = max(ray.transmittance.x, max(ray.transmittance.y, ray.transmittance.z));
 		const float step_opacity = saturate(1.0 - tr);
@@ -765,8 +778,8 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	const uint2 phase_offset = full_resolution ? 0u.xx : uint2(frame_subpixel & 3u, frame_subpixel >> 2u);
 	const uint2 full_px_coords = full_resolution ? px_coords : min(px_coords * 4u + phase_offset, uint2(info.frameDim) - 1u);
 
-	const uint3 seed = Random::pcg3d(uint3(px_coords.xy, px_coords.x ^ 0xf874));
-	const float2 ray_jitter = NubisRayJitter(full_px_coords, SharedData::FrameCountAlwaysActive);
+	const uint3 seed = Random::pcg3d(uint3(full_px_coords.xy, full_px_coords.x ^ 0xf874));
+	const float3 rnd = Random::R3Modified(frame_subpixel, seed / 4294967295.f);
 
 	///////////// get start and end
 	const float depth = TexDepth[full_px_coords.xy];
@@ -784,7 +797,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	const float3 ray_dir = pos_world.xyz / solid_dist;
 
 	const float ap_shadow = SampleFilteredApShadow(full_px_coords);
-	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, solid_dist, is_sky, seed, ray_jitter, ap_shadow, true);
+	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, solid_dist, is_sky, seed, NarrowRayJitter(rnd.z), frame_subpixel, ap_shadow, true);
 
 	RWTexTr[px_coords] = float4(result.transmittance, CloudAlphaFromTransmittance(result.transmittance));
 	RWTexLum[px_coords] = result.lum;
@@ -834,11 +847,11 @@ float3 GetCubemapSamplingVector(uint3 threadId, in RWTexture2DArray<float3> outp
 		return;
 
 	const uint3 seed = Random::pcg3d(uint3(tid.xy, tid.z * 0x9e37u + tid.x ^ 0xf874u));
-	const float2 ray_jitter = NubisRayJitter(tid.xy + tid.z * uint2(131u, 719u), SharedData::FrameCountAlwaysActive);
+	const float3 rnd = Random::R3Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
 
 	const float3 eye_pos = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
 	const float3 ray_dir = GetCubemapSamplingVector(tid, RWTexCubeTr);
-	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, info.rayMarchRange, true, seed, ray_jitter, 0.0, false);
+	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, info.rayMarchRange, true, seed, NarrowRayJitter(rnd.z), SharedData::FrameCountAlwaysActive, 0.0, false);
 
 	RWTexCubeTr[tid] = result.transmittance;
 	RWTexCubeLum[tid] = result.lum;
@@ -863,7 +876,7 @@ float3 GetCubemapSamplingVector(uint3 threadId, in RWTexture2DArray<float3> outp
 float2 GetPreviousCloudUv(float2 logic_uv, float depth, out bool valid)
 {
 	valid = false;
-	const float reprojection_depth = min(depth, 16384.0);
+	const float reprojection_depth = depth;
 
 	float4 pos_world = float4(2 * float2(logic_uv.x, -logic_uv.y + 1) - 1, 1.0, 1);
 	pos_world = mul(FrameBuffer::CameraViewProjInverse, pos_world);
