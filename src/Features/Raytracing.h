@@ -367,7 +367,7 @@ struct CreationEngineRaytracing
 
 	struct ExperimentalSettings
 	{
-		bool PathTracingCull = true;
+		bool PathTracingCull = false;
 		TextureMode TextureMode = TextureMode::Share;
 		uint32_t TextureCutOff = 0;
 		TextureStreamingMode TextureStreamingMode = TextureStreamingMode::Off;
