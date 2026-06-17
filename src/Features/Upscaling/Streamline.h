@@ -52,6 +52,9 @@ public:
 	static constexpr uint32_t MAX_RESOLUTION = 8192;
 	HMODULE interposer = NULL;
 
+	using PFun_slHookPresent = HRESULT(IDXGISwapChain* swapChain, UINT SyncInterval, UINT Flags, bool& Skip);
+	using PFun_slHookAfterPresent = HRESULT(UINT Flags);
+
 	// SL Interposer Functions
 	PFun_slInit* slInit{};
 	PFun_slShutdown* slShutdown{};
@@ -76,7 +79,12 @@ public:
 	PFun_slDLSSGetState* slDLSSGetState{};
 	PFun_slDLSSSetOptions* slDLSSSetOptions{};
 
+	// DLSS RR
 	SL_FUN_DECL(slDLSSDSetOptions);
+
+	// DX12
+	SL_FUN_DECL(slHookPresent);
+	SL_FUN_DECL(slHookAfterPresent);
 
 	// Reflex specific functions
 	PFun_slReflexGetState* slReflexGetState{};
@@ -113,6 +121,9 @@ public:
 		ID3D12Resource* colorIn, ID3D12Resource* colorOut, ID3D12Resource* depth, ID3D12Resource* mvec, ID3D12Resource* reactiveMask,
 		ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo, ID3D12Resource* normalRoughness, ID3D12Resource* specHitDistance,
 		const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth);
+
+	// Necessary for DX12 mode for garbage collection since there is no swapchain present, where these methods would normally be called
+	void PostPresent() const;
 
 	// Cached DLL version info for Streamline plugin directory
 	static std::vector<std::pair<std::string, std::string>> dllVersions;

@@ -47,19 +47,35 @@ void DX12Interop::InitializePIX()
 		return std::wstring{ pixInstallationPath / newestVersionFound / L"WinPixGpuCapturer.dll" };
 	};
 
-	// Check to see if a copy of WinPixGpuCapturer.dll has already been injected into the application.
-	// This may happen if the application is launched through the PIX UI.
-	if (GetModuleHandleW(L"WinPixGpuCapturer.dll") == 0) {
-		auto pixGPUCapturerPath = getLatestWinPixGpuCapturerPath();
+	try {
+		auto module = GetModuleHandleW(L"WinPixGpuCapturer.dll");
 
-		if (pixGPUCapturerPath.empty()) {
-			logger::warn("[DX12Interop] PIX capture is enabled but binaries where not found.");
-		} else {
-			LoadLibraryW(pixGPUCapturerPath.c_str());
+		// Check to see if a copy of WinPixGpuCapturer.dll has already been injected into the application.
+		// This may happen if the application is launched through the PIX UI.
+		if (module == 0) {
+			auto pixGPUCapturerPath = getLatestWinPixGpuCapturerPath();
+
+			if (pixGPUCapturerPath.empty()) {
+				logger::warn("[DX12Interop] PIX capture is enabled but binaries where not found.");
+				return;
+			} else {
+				module = LoadLibraryW(pixGPUCapturerPath.c_str());
+
+				if (module == 0) {
+					auto pathString = Util::WStringToString(pixGPUCapturerPath);
+					logger::warn("[DX12Interop] Failed to load PIX from path: \"{}\"", pathString);
+					return;
+				}
+			}
 		}
-	}
 
-	DX::ThrowIfFailed(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&ga)));
+		DXGIGetDebugInterface1(0, IID_PPV_ARGS(&ga));
+	} catch (const std::exception& e) {
+		logger::error("[DX12Interop] Failed to load PIX with exception: {}", e.what());
+	}	
+	catch (...) {
+		logger::error("[DX12Interop] Failed to load PIX with unknown exception.");
+	}
 }
 
 void DX12Interop::Init(ID3D11Device* a_d3d11Device, ID3D11DeviceContext* a_immediateContext, IDXGIAdapter* a_adapter)

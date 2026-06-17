@@ -67,6 +67,8 @@ public:
 	std::vector<RenderPass> renderPasses;
 	std::vector<RenderPass> terrainRenderPasses;
 
+	bool Active() const;
+
 	void TerrainShaderHacks();
 
 	void ResetDepth();

@@ -451,10 +451,9 @@ struct CreationEngineRaytracing
 	using UpdateSettingsFn = void (*)(Settings);
 	using GetRRInputFn = void (*)(ID3D12Resource*&, ID3D12Resource*&);
 	using SetSharedTexturesFn = void (*)(ID3D12Resource*, ID3D12Resource*, ID3D12Resource*);
-	using GetSharedTexturesFn = void (*)(SharedTexture&, SharedTexture&);
+	using GetSharedTexturesFn = void (*)(SharedTexture&, SharedTexture&, SharedTexture&, SharedTexture&);
 	using UpdateJitterFn = void (*)(float2);
 	using SetSkinDetailNormalFn = void (*)(ID3D12Resource*);
-	using SetPTOutputTargetsFn = void (*)(ID3D12Resource*, ID3D12Resource*);
 	using GetAccumulatedFrameCountFn = uint32_t (*)();
 	using GetFakeDoubledVRAMUsageFn = uint64_t (*)();
 	using LogTextureMemoryStatsFn = void (*)();
@@ -478,7 +477,6 @@ struct CreationEngineRaytracing
 	GetSharedTexturesFn GetSharedTextures = nullptr;
 	UpdateJitterFn UpdateJitter = nullptr;
 	SetSkinDetailNormalFn SetSkinDetailNormal = nullptr;
-	SetPTOutputTargetsFn SetPTOutputTargets = nullptr;
 	GetAccumulatedFrameCountFn GetAccumulatedFrameCount = nullptr;
 	GetFakeDoubledVRAMUsageFn GetFakeDoubledVRAMUsage = nullptr;
 	LogTextureMemoryStatsFn LogTextureMemoryStats = nullptr;
@@ -513,7 +511,6 @@ struct CreationEngineRaytracing
 		LOAD_FN(GetSharedTextures);
 		LOAD_FN(UpdateJitter);
 		LOAD_FN(SetSkinDetailNormal);
-		LOAD_FN(SetPTOutputTargets);
 		LOAD_FN(GetAccumulatedFrameCount);
 		LOAD_FN(GetFakeDoubledVRAMUsage);
 		LOAD_FN(LogTextureMemoryStats);
@@ -707,16 +704,17 @@ struct Raytracing : public OverlayFeature
 
 	winrt::com_ptr<ID3D11SamplerState> samplerState = nullptr;
 
-	eastl::unique_ptr<WrappedResource> mainTexture = nullptr;
+	// Available when Pathtracing
+	eastl::unique_ptr<WrappedResource> depthTexture = nullptr;
+	eastl::unique_ptr<WrappedResource> motionVectorsTexture = nullptr;
 
-	eastl::unique_ptr<WrappedResource> ptDepthTexture = nullptr;
-	eastl::unique_ptr<WrappedResource> ptMotionVectorsTexture = nullptr;
+	// Available for both GI and PT
+	eastl::unique_ptr<WrappedResource> mainTexture = nullptr;
+	eastl::unique_ptr<WrappedResource> diffuseAlbedoTexture = nullptr;
 
 	winrt::com_ptr<ID3D12Resource> albedoTexture = nullptr;
 	eastl::unique_ptr<WrappedResource> normalRoughnessTexture = nullptr;
 	winrt::com_ptr<ID3D12Resource> gnmaoTexture = nullptr;
-
-	eastl::unique_ptr<WrappedResource> diffuseAlbedoTexture = nullptr;
 
 	eastl::unique_ptr<WrappedResource> skyHemisphere = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> cubeToHemiCS = nullptr;
@@ -767,18 +765,28 @@ struct Raytracing : public OverlayFeature
 
 					// Executes the render graph for path tracing, no dependecy on any game render target so we start as early as possible
 					if (rt.Mode() == CreationEngineRaytracing::Mode::PathTracing) {
-						// Clear Depth if culling is enabled
 						if (rt.IsPathTracingCull()) {
-							auto depthStencils = globals::game::renderer->GetDepthStencilData().depthStencils;
-
-							auto& mainDepth = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-							auto& mainDepthCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
-							auto& zPrePassCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-
+							auto renderer = globals::game::renderer;
 							auto context = globals::d3d::context;
-							context->ClearDepthStencilView(mainDepth.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
-							context->ClearDepthStencilView(mainDepthCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
-							context->ClearDepthStencilView(zPrePassCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+
+							// Clear Depth
+							{
+								auto depthStencils = renderer->GetDepthStencilData().depthStencils;
+								auto& mainDepth = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+								auto& mainDepthCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
+								auto& zPrePassCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
+								context->ClearDepthStencilView(mainDepth.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+								context->ClearDepthStencilView(mainDepthCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+								context->ClearDepthStencilView(zPrePassCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+							}
+
+							// Clear Motion Vector
+							{
+								auto renderTargets = renderer->GetRuntimeData().renderTargets;
+								float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+								context->ClearRenderTargetView(renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].RTV, clearColor);
+							}
 						}
 
 						rt.creationEngineRaytracing->Execute();

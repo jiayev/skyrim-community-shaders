@@ -726,8 +726,8 @@ void Raytracing::DrawDebugSettings()
 			ID3D11ShaderResourceView* srv = nullptr;
 
 			if (Mode() == CreationEngineRaytracing::Mode::PathTracing) {
-				ptDepthTexture->resource11->GetDesc(&desc);
-				srv = ptDepthTexture->srv;
+				depthTexture->resource11->GetDesc(&desc);
+				srv = depthTexture->srv;
 			} else {
 				const auto& mainDepth = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 				mainDepth.texture->GetDesc(&desc);
@@ -1074,10 +1074,14 @@ void Raytracing::SetupResources()
 
 		// Diffuse Albedo Texture
 		{
+			CreationEngineRaytracing::SharedTexture depth;
+			CreationEngineRaytracing::SharedTexture motionVector;
 			CreationEngineRaytracing::SharedTexture main;
 			CreationEngineRaytracing::SharedTexture diffuseAlbedo;
-			creationEngineRaytracing->GetSharedTextures(main, diffuseAlbedo);
+			creationEngineRaytracing->GetSharedTextures(depth, motionVector, main, diffuseAlbedo);
 
+			depthTexture = eastl::make_unique<WrappedResource>(depth.native, depth.shared);
+			motionVectorsTexture = eastl::make_unique<WrappedResource>(motionVector.native, motionVector.shared);
 			mainTexture = eastl::make_unique<WrappedResource>(main.native, main.shared);
 			diffuseAlbedoTexture = eastl::make_unique<WrappedResource>(diffuseAlbedo.native, diffuseAlbedo.shared);
 		}
@@ -1320,34 +1324,6 @@ void Raytracing::DeferredPasses()
 	if (!settings.CreationEngineRaytracingSettings.Enabled || Mode() == CreationEngineRaytracing::Mode::None)
 		return;
 
-	auto* context = globals::d3d::context;
-
-	bool resolutionChanged = UpdateResolution();
-
-	D3D11_TEXTURE2D_DESC desc{};
-	desc.Width = m_Resolution.x;
-	desc.Height = m_Resolution.y;
-	desc.MipLevels = 1;
-	desc.ArraySize = 1;
-	desc.SampleDesc.Count = 1;
-	desc.SampleDesc.Quality = 0;
-	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-	if (Mode() == CreationEngineRaytracing::Mode::PathTracing) {
-		if (!ptDepthTexture || resolutionChanged) {
-			desc.Format = DXGI_FORMAT_R32_FLOAT;
-			ptDepthTexture = eastl::make_unique<WrappedResource>(desc);
-		}
-		if (!ptMotionVectorsTexture || resolutionChanged) {
-			desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-			ptMotionVectorsTexture = eastl::make_unique<WrappedResource>(desc);
-		}
-		creationEngineRaytracing->SetPTOutputTargets(ptDepthTexture->GetResource(), ptMotionVectorsTexture->GetResource());
-	} else {
-		ptDepthTexture.reset();
-		ptMotionVectorsTexture.reset();
-	}
-
 	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination) {
 		ConvertTextures();
 
@@ -1405,6 +1381,8 @@ void Raytracing::DeferredPasses()
 		*enableSSAO = (globalIllumation || pathtracing) ? false : ssaoEnabled;
 	}
 
+	auto* context = globals::d3d::context;
+
 	if (globalIllumation) {
 		// Add global illumination result to kMain
 		{
@@ -1436,7 +1414,7 @@ void Raytracing::DeferredPasses()
 
 			ID3D11ShaderResourceView* srvs[] = {
 				mainTexture->srv,
-				ptMotionVectorsTexture->srv
+				motionVectorsTexture->srv
 			};
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -1507,7 +1485,7 @@ void Raytracing::DeferredPasses()
 			// Set up pixel shader
 			context->PSSetShader(copyDepthPS.get(), nullptr, 0);
 
-			ID3D11ShaderResourceView* srvs[] = { ptDepthTexture->srv };
+			ID3D11ShaderResourceView* srvs[] = { depthTexture->srv };
 
 			context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
