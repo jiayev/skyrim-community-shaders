@@ -55,8 +55,8 @@ void LensFlare::DrawSettings()
 	ImGui::Spacing();
 	ImGui::Text(T("feature.post_processing.lens_flare.threshold", "Threshold"));
 	ImGui::Separator();
-	ImGui::SliderFloat(T("feature.post_processing.lens_flare.threshold_ev", "Threshold (EV)"), &settings.ThresholdEV, -10.0f, 20.0f, "%+.2f EV");
-	tooltip("Brightness threshold in EV (0 EV = 1.0 linear).");
+	ImGui::SliderFloat(T("feature.post_processing.lens_flare.threshold_ev", "Threshold (EV100)"), &settings.ThresholdEV, -7.0f, 23.0f, "%+.2f EV100");
+	tooltip("Brightness threshold in EV100 (0 EV100 = 0.125 linear luminance).");
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.threshold_range", "Threshold Range"), &settings.ThresholdRange, 0.01f, 5.0f, "%.3f");
 	tooltip("Fade range for the threshold cutoff");
 
@@ -721,7 +721,7 @@ void LensFlare::Draw(TextureInfo& inout_tex)
 
 	// Build base constant buffer data
 	LensFlareCB data = {};
-	data.ThresholdLevel = std::exp2f(settings.ThresholdEV);  // EV → linear
+	data.ThresholdLevel = std::exp2f(settings.ThresholdEV - 3.0f);  // EV100 → linear luminance
 	data.ThresholdRange = settings.ThresholdRange;
 	data.GhostStrength = settings.GhostStrength;
 	data.GhostChromaShift = settings.GhostChromaShift;

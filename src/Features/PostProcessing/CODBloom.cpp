@@ -13,7 +13,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void CODBloom::DrawSettings()
 {
-	ImGui::SliderFloat(T("feature.post_processing.codbloom.threshold", "Threshold"), &settings.Threshold, -10.f, 20.f, "%+.2f EV");
+	ImGui::SliderFloat(T("feature.post_processing.codbloom.threshold", "Threshold"), &settings.Threshold, -7.f, 23.f, "%+.2f EV100");
 	ImGui::SliderFloat(T("feature.post_processing.codbloom.upsampling_radius", "Upsampling Radius"), &settings.UpsampleRadius, 1.f, 5.f, "%.1f px");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T("feature.post_processing.codbloom.a_greater_radius_makes_the_bloom_slightly_blurrier", "A greater radius makes the bloom slightly blurrier."));
@@ -182,7 +182,7 @@ void CODBloom::Draw(TextureInfo& inout_tex)
 
 	// update cb
 	BloomCB cbData = {
-		.Threshold = exp2(settings.Threshold),
+		.Threshold = exp2(settings.Threshold - 3.0f),
 		.UpsampleRadius = settings.UpsampleRadius,
 		.UpsampleMult = 1.f,
 		.CurrentMipMult = 1.f

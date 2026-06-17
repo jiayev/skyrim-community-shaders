@@ -12,7 +12,7 @@
         "settings": {
             "BlendFactor": 0.009999999776482582,
             "MipBlendFactor": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0],
-            "Threshold": -3.0,
+            "Threshold": 0.0,
             "UpsampleRadius": 5.0
         }
     },
@@ -108,10 +108,10 @@
         "settings": {
             "AdaptArea": [0.6000000238418579, 0.6000000238418579],
             "AdaptSpeed": 1.5,
-            "AdaptationRange": [-5.0, 3.0],
+            "AdaptationRange": [-2.0, 6.0],
             "ExposureCompensation": 0.0,
-            "PurkinjeMaxEV": -4.0,
-            "PurkinjeStartEV": -1.5,
+            "PurkinjeMaxEV": -1.0,
+            "PurkinjeStartEV": 1.5,
             "PurkinjeStrength": 0.0
         }
     },
@@ -191,7 +191,7 @@
             "HaloWidth": 0.5,
             "Intensity": 0.25,
             "KernelScale": 0.10000000149011612,
-            "ThresholdEV": 0.0,
+            "ThresholdEV": 3.0,
             "ThresholdRange": 1.0,
             "Tint": [1.0, 0.8500000238418579, 0.699999988079071]
         }
@@ -259,7 +259,7 @@
             "TearFilmComplexity": 8,
             "TearFilmSpeed": 2.0,
             "TearFilmStrength": 0.7799999713897705,
-            "ThresholdEV": 5.0
+            "ThresholdEV": 8.0
         }
     },
     "Vignette": {
