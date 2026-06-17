@@ -1590,6 +1590,8 @@ void Upscaling::Upscale()
 			});
 
 			context->CopyResource(main.texture, upscaleOutput->resource11);
+
+			streamline.PostPresent();
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
 			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR);
 		}
