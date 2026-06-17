@@ -16,13 +16,17 @@ using json = nlohmann::json;
 #include "Globals.h"
 #include "Utils/Form.h"
 
-/// Manages scene-specific setting overrides (Interior Only, TimeOfDay).
-/// Applies overrides via Feature::SaveSettings/LoadSettings JSON round-trips with
-/// epsilon-cached blending to minimise redundant updates during time-of-day transitions.
-/// Event-driven: cell transitions detected via MenuOpenCloseEvent, mutations applied immediately.
+/**
+ * @brief Manages scene-specific setting overrides (Interior Only, TimeOfDay).
+ *
+ * Applies overrides via Feature::SaveSettings/LoadSettings JSON round-trips with
+ * epsilon-cached blending to minimise redundant updates during time-of-day transitions.
+ * Event-driven: cell transitions detected via MenuOpenCloseEvent, mutations applied immediately.
+ */
 class SceneSettingsManager
 {
 public:
+	/** @brief Gets the singleton instance. */
 	static SceneSettingsManager* GetSingleton()
 	{
 		static SceneSettingsManager singleton;
@@ -73,13 +77,18 @@ public:
 
 	// --- Event Handler ---
 
-	/// Listens for LoadingMenu close to detect cell transitions.
-	/// Same pattern as Skylighting::MenuOpenCloseEventHandler.
+	/**
+	 * @brief Listens for LoadingMenu close to detect cell transitions.
+	 *
+	 * Same pattern as Skylighting::MenuOpenCloseEventHandler.
+	 */
 	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
 	{
 	public:
+		/** @brief Handles menu open/close events, queuing cell transitions on loading screen close. */
 		virtual RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override;
 
+		/** @brief Registers this handler with the UI event source. */
 		static bool Register()
 		{
 			static MenuOpenCloseEventHandler singleton;
@@ -109,13 +118,13 @@ public:
 
 	struct SettingEntry
 	{
-		std::string featureShortName;  // Feature's GetShortName()
+		std::string featureShortName;          // Feature's GetShortName()
 		std::vector<std::string> settingPath;  // Feature-owned subfeature/object path
-		std::string settingKey;        // Feature-owned scene setting key
-		std::string displayName;       // Cached UI label
-		json value;                    // Override value (bool, float, int, etc.)
-		json originalValue;            // Value at time of creation, for revert
-		bool paused = false;           // Temporarily disabled
+		std::string settingKey;                // Feature-owned scene setting key
+		std::string displayName;               // Cached UI label
+		json value;                            // Override value (bool, float, int, etc.)
+		json originalValue;                    // Value at time of creation, for revert
+		bool paused = false;                   // Temporarily disabled
 		EntrySource source = EntrySource::User;
 		std::string sourceFilename;                       // For overwrites: the filename it came from
 		std::filesystem::path sourcePath;                 // For overwrites: exact file path
@@ -124,35 +133,68 @@ public:
 
 	// --- Generic Entry Management (scene-type agnostic) ---
 
+	/** @brief Gets the read-only entry list for the given scene type. */
 	const std::vector<SettingEntry>& GetEntries(SceneType type) const;
+
+	/** @brief Checks whether an entry with the given source already exists for a feature+setting pair. */
 	bool HasEntryFromSource(SceneType type, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey, EntrySource source) const;
+
+	/** @brief Checks whether an active (non-paused) overwrite entry exists for a feature+setting pair. */
 	bool HasActiveOverwrite(SceneType type, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey) const;
 
-	/// Add a setting.  For TimeOfDay entries, specify the target period.
+	/**
+	 * @brief Adds a user setting override, persists it, and reapplies if scene is active.
+	 * @param type Scene type to add the setting to.
+	 * @param featureShortName Target feature's short name.
+	 * @param settingKey JSON key within the feature's settings.
+	 * @param value Override value.
+	 * @param period For TimeOfDay settings, which period this entry belongs to. Ignored for InteriorOnly.
+	 * @param deferCommit If true, skips applying changes immediately (for batched UI edits like sliders).
+	 * @return True if the setting was added successfully, false otherwise.
+	 */
 	bool AddSetting(SceneType type, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey, const json& value,
 		TimeOfDayPeriod period = TimeOfDayPeriod::Count, bool deferCommit = false);
+
+	/** @brief Removes an entry by index, deleting its overwrite file if applicable. */
 	void RemoveSetting(SceneType type, size_t index);
+
+	/** @brief Toggles the paused state of an entry by index. */
 	void TogglePauseEntry(SceneType type, size_t index);
+
+	/**
+	 * @brief Updates an entry's override value.
+	 * @param deferSave If true, skips persisting to disk (for batched UI edits like sliders).
+	 */
 	void UpdateEntryValue(SceneType type, size_t index, const json& newValue, bool deferSave = false);
 	void CommitSceneSettingChanges();
 
-	/// Revert an entry's value to its originalValue (captured at creation).
+	/** @brief Revert an entry's value to its originalValue (captured at creation). */
 	void RevertEntryToDefault(SceneType type, size_t index);
 
-	/// Check if an entry already exists for a specific period (TimeOfDay)
+	/** @brief Checks if an entry already exists for a specific period (TimeOfDay). */
 	bool HasEntryForPeriod(const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey,
 		TimeOfDayPeriod period, EntrySource source) const;
 
+	/** @brief Pauses or unpauses all overwrite-sourced entries for a scene type. */
 	void SetAllOverwritesPaused(SceneType type, bool paused);
+
+	/** @brief Checks whether all overwrites are currently paused for a scene type. */
 	bool AreAllOverwritesPaused(SceneType type) const;
+
+	/** @brief Deletes all overwrite entries and their backing files for a scene type. */
 	void DeleteAllOverwrites(SceneType type);
 
+	/** @brief Pauses or unpauses all user-sourced entries for a scene type. */
 	void SetAllUserPaused(SceneType type, bool paused);
+
+	/** @brief Checks whether all user entries are currently paused for a scene type. */
 	bool AreAllUserPaused(SceneType type) const;
+
+	/** @brief Deletes all user-sourced entries for a scene type and persists the change. */
 	void DeleteAllUserSettings(SceneType type);
 
 	/// Export selected user entries to grouped per-feature overwrite JSON files.
@@ -161,21 +203,31 @@ public:
 
 	// --- Scene Application ---
 
-	/// Called every frame from State::Update().
+	/**
+	 * @brief Called each frame from State::Draw() to process deferred cell transitions.
+	 *
+	 * Cell data is not yet available when the LoadingMenu close event fires,
+	 * so the actual transition check is deferred to the next rendered frame.
+	 */
 	void Update();
 
-	/// Called by MenuOpenCloseEventHandler when a cell transition is detected.
+	/** @brief Processes a deferred cell transition, applying or reverting interior overrides. */
 	void OnCellTransition();
 
-	/// Check if any scene settings are active for a given feature
+	/** @brief Checks if a specific feature+setting is currently being overridden by any active scene setting. */
+	bool IsSettingControlled(const std::string& featureShortName, const std::string& settingKey) const;
+
+	/** @brief Checks if any scene settings are active for a given feature. */
 	bool HasActiveSettingsForFeature(const std::string& featureShortName) const;
 	bool IsActiveSceneSetting(std::string_view featureShortName,
 		std::string_view settingPath, std::string_view settingKey) const;
 	bool IsActiveSceneSetting(const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey) const;
 
-	/// Per-feature pause: temporarily disable all scene-specific settings for a feature
+	/** @brief Checks whether all scene-specific settings are temporarily disabled for a feature. */
 	bool IsFeaturePaused(const std::string& featureShortName) const;
+
+	/** @brief Temporarily disables or re-enables all scene-specific settings for a feature. */
 	void SetFeaturePaused(const std::string& featureShortName, bool paused);
 
 	class SceneLayerGuard
@@ -193,21 +245,27 @@ public:
 
 	// --- Persistence ---
 
-	/// Save all user data (interior, TOD, weather) to unified SceneManager.json.
+	/** @brief Persists all user-sourced entries for a scene type to disk as JSON. */
 	void SaveAllUserSettings();
 
+	/** @brief Scans the overwrites directory for JSON overwrite files and loads them. */
 	void DiscoverOverwrites(SceneType type);
 
-	/// Discover weather-specific overwrite files from Weather/{SPID}/ folders.
+	/** @brief Discover weather-specific overwrite files from Weather/{SPID}/ folders. */
 	void DiscoverWeatherOverwrites();
 
-	/// Load non-weather scene types (overwrites + user settings). Called early from Setup().
+	/** @brief Loads overwrites and user settings for all scene types. */
 	void LoadAll();
 
 	// --- Path Resolution ---
 
+	/** @brief Returns the human-readable name for a scene type (e.g. "InteriorOnly"). */
 	static std::string GetSceneTypeName(SceneType type);
+
+	/** @brief Returns the JSON file path for user settings of a scene type. */
 	static std::filesystem::path GetUserSettingsFilePath();
+
+	/** @brief Returns the directory path where overwrite files are discovered for a scene type. */
 	static std::filesystem::path GetOverwritesPath(SceneType type);
 
 	// --- Time of Day Helpers (public for UI) ---
@@ -223,32 +281,32 @@ public:
 
 	// --- Feature Metadata ---
 
-	/// Get loaded feature short names filtered to only interior-relevant features
+	/** @brief Gets loaded feature short names filtered to only interior-relevant features. */
 	static std::vector<std::string> GetInteriorRelevantFeatureNames();
 
-	/// Get loaded feature short names filtered to exterior/TOD-relevant features
+	/** @brief Gets loaded feature short names filtered to exterior/TOD-relevant features. */
 	static std::vector<std::string> GetExteriorRelevantFeatureNames();
 
-	/// Check if a feature is allowed for the given scene type (whitelist check)
+	/** @brief Check if a feature is allowed for the given scene type (whitelist check). */
 	static bool IsFeatureAllowedForType(SceneType type, const std::string& featureShortName);
 
-	/// Get the display name for a feature (e.g. "Screen Space GI" from "ScreenSpaceGI")
+	/** @brief Get the display name for a feature (e.g. "Screen Space GI" from "ScreenSpaceGI"). */
 	static std::string GetFeatureDisplayName(const std::string& featureShortName);
 
-	/// Get scene-safe setting descriptors for a feature.
+	/** @brief Get scene-safe setting descriptors for a feature. */
 	static std::vector<SceneSettingDescriptor> GetFeatureSceneSettings(const std::string& featureShortName);
 
-	/// Get scene-safe float setting descriptors for time/weather blending.
+	/** @brief Get scene-safe float setting descriptors for time/weather blending. */
 	static std::vector<SceneSettingDescriptor> GetTransitionableSceneSettings(const std::string& featureShortName);
 
-	/// Get a UI-friendly display label for a setting key.
+	/** @brief Get a UI-friendly display label for a setting key. */
 	static std::string GetSettingDisplayName(const std::string& settingKey);
 
-	/// Get current value of a specific setting from a feature
+	/** @brief Gets the current value of a specific setting from a feature via JSON round-trip. */
 	static json GetFeatureSettingValue(const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey);
 
-	/// Detect the JSON type of a setting value for UI rendering
+	/** @brief Classifies JSON value types for scene settings UI rendering. */
 	enum class SettingType
 	{
 		Boolean,
@@ -257,6 +315,8 @@ public:
 		String,
 		Unknown
 	};
+
+	/** @brief Detects the JSON type of a setting value for UI rendering. */
 	static SettingType DetectSettingType(const json& value);
 
 	// --- Per-Weather Scene Settings ---

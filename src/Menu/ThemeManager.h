@@ -38,6 +38,14 @@ using json = nlohmann::json;
  *
  *     "TooltipHoverDelay": 0.5,            // Seconds before tooltip appears
  *     "ShowActionIcons": true,             // Show icons on action buttons
+ *     "UseCustomCursor": false,
+ *     "Cursor": {
+ *       "Scale": 1.0,
+ *       "Types": {
+ *         "Arrow": { "File": "cursor.png", "HotspotX": 0, "HotspotY": 0 },
+ *         "TextInput": { "File": "cursor_text.png", "HotspotX": 8, "HotspotY": 12 }
+ *       }
+ *     },
  *
  *     // Simple color palette (6 key colors)
  *     "Palette": {
@@ -193,35 +201,35 @@ public:
 		static constexpr float AUTOHIDE_PANEL_WIDTH_RATIO = 0.2f;       // Ratio of window width for panel (2/10)
 
 		// Scene settings panel constants (multipliers of ImGui::GetFontSize())
-		static constexpr float SCENE_VALUE_INPUT_EM = 3.4f;            // Width for float/int value inputs
-		static constexpr float SCENE_DELETE_BUTTON_EM = 1.0f;          // Width for delete (X) buttons
-		static constexpr float SCENE_VALUE_LABEL_OFFSET_RATIO = 0.4f;  // Value label right-alignment ratio
-		static constexpr float SCENE_TOD_PARAM_COL_EM = 5.0f;          // Parameter column width (TOD table)
-		static constexpr float SCENE_TOD_PERIOD_COL_EM = 2.6f;         // Per-period column width (TOD table)
-		static constexpr float SCENE_TOD_INACTIVE_ALPHA = 0.5f;        // Alpha for inactive TOD periods
-		static constexpr float SCENE_TOD_ACTIVE_THRESHOLD = 0.01f;     // Factor threshold to consider a period active
-		static constexpr float SCENE_ENTRY_INDENT_EM = 0.4f;           // Indent for setting entries under feature headers
-		static constexpr float SCENE_TOD_FEATURE_TEXT_SCALE = 0.85f;   // Smaller text scale for feature names in TOD table
-		static constexpr float SCENE_SETTING_MAX_LINES = 2;            // Max visible lines for setting names in table rows
-		static constexpr float SCENE_SECTION_HEADER_TARGET_COLS = 4.3f; // Header extends as if this many value columns exist
-		static constexpr float SCENE_ADD_PERIOD_BTN_EM = 1.2f;          // Size of + button in empty period cells
-		static constexpr float SCENE_ADD_DIALOG_WIDTH_EM = 22.0f;      // Width of add-setting dialog
-		static constexpr float SCENE_ADD_LIST_HEIGHT_EM = 12.0f;       // Height of scrollable setting list in dialog
-		static constexpr float FLYOUT_BUTTON_SCALE = 0.8f;            // Button size relative to frame height
-		static constexpr float FLYOUT_TOGGLE_SCALE = 0.7f;            // Toggle icon scale within flyout
-		static constexpr float FLYOUT_REVERT_PAD_SCALE = 0.08f;       // Revert icon inner padding ratio
+		static constexpr float SCENE_VALUE_INPUT_EM = 3.4f;              // Width for float/int value inputs
+		static constexpr float SCENE_DELETE_BUTTON_EM = 1.0f;            // Width for delete (X) buttons
+		static constexpr float SCENE_VALUE_LABEL_OFFSET_RATIO = 0.4f;    // Value label right-alignment ratio
+		static constexpr float SCENE_TOD_PARAM_COL_EM = 5.0f;            // Parameter column width (TOD table)
+		static constexpr float SCENE_TOD_PERIOD_COL_EM = 2.6f;           // Per-period column width (TOD table)
+		static constexpr float SCENE_TOD_INACTIVE_ALPHA = 0.5f;          // Alpha for inactive TOD periods
+		static constexpr float SCENE_TOD_ACTIVE_THRESHOLD = 0.01f;       // Factor threshold to consider a period active
+		static constexpr float SCENE_ENTRY_INDENT_EM = 0.4f;             // Indent for setting entries under feature headers
+		static constexpr float SCENE_TOD_FEATURE_TEXT_SCALE = 0.85f;     // Smaller text scale for feature names in TOD table
+		static constexpr float SCENE_SETTING_MAX_LINES = 2;              // Max visible lines for setting names in table rows
+		static constexpr float SCENE_SECTION_HEADER_TARGET_COLS = 4.3f;  // Header extends as if this many value columns exist
+		static constexpr float SCENE_ADD_PERIOD_BTN_EM = 1.2f;           // Size of + button in empty period cells
+		static constexpr float SCENE_ADD_DIALOG_WIDTH_EM = 22.0f;        // Width of add-setting dialog
+		static constexpr float SCENE_ADD_LIST_HEIGHT_EM = 12.0f;         // Height of scrollable setting list in dialog
+		static constexpr float FLYOUT_BUTTON_SCALE = 0.8f;               // Button size relative to frame height
+		static constexpr float FLYOUT_TOGGLE_SCALE = 0.7f;               // Toggle icon scale within flyout
+		static constexpr float FLYOUT_REVERT_PAD_SCALE = 0.08f;          // Revert icon inner padding ratio
 
 		/// Resolve a font-relative multiplier to pixels using current font size.
 		static float Em(float multiplier) { return multiplier * ImGui::GetFontSize(); }
 
 		// Search input constants
 		static constexpr float SEARCH_BASELINE_SCREEN_HEIGHT = 1440.0f;  // Search chrome is authored for 2K.
-		static constexpr float SEARCH_ICON_SIZE = 20.0f;              // Default search icon size
-		static constexpr float SEARCH_ICON_ALPHA = 0.7f;              // Default search icon opacity
-		static constexpr float SEARCH_ICON_OFFSET_X = 8.0f;           // Search icon offset from input edge
-		static constexpr float SEARCH_INPUT_PADDING_EXTRA = 14.0f;    // Extra input padding after icon
-		static constexpr float SEARCH_INPUT_FRAME_PADDING_Y = 6.0f;   // Search input vertical padding
-		static constexpr float SEARCH_ICON_STROKE_RATIO = 0.11f;      // Search icon stroke thickness relative to size
+		static constexpr float SEARCH_ICON_SIZE = 20.0f;                 // Default search icon size
+		static constexpr float SEARCH_ICON_ALPHA = 0.7f;                 // Default search icon opacity
+		static constexpr float SEARCH_ICON_OFFSET_X = 8.0f;              // Search icon offset from input edge
+		static constexpr float SEARCH_INPUT_PADDING_EXTRA = 14.0f;       // Extra input padding after icon
+		static constexpr float SEARCH_INPUT_FRAME_PADDING_Y = 6.0f;      // Search input vertical padding
+		static constexpr float SEARCH_ICON_STROKE_RATIO = 0.11f;         // Search icon stroke thickness relative to size
 		static constexpr float SEARCH_ICON_HANDLE_STROKE_RATIO = 0.105f;
 		static constexpr float COMBO_SEARCH_ICON_SIZE = 16.0f;     // Icon size for search inside combos
 		static constexpr float COMBO_SEARCH_ICON_ALPHA = 0.5f;     // Icon alpha for subtle appearance

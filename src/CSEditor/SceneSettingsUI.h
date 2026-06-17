@@ -80,15 +80,20 @@ namespace SceneSettingsUI
 	struct PopupState
 	{
 		Util::ConfirmationPopup deleteAllOverwrites;
-		Util::ConfirmationPopup deleteSingleOverwrite{ "Delete Overwrite File?", "", "Delete" };
-		Util::ConfirmationPopup deleteRowOverwrite{ "Delete Overwrite Row?", "", "Delete" };
+		Util::ConfirmationPopup deleteSingleOverwrite;
+		Util::ConfirmationPopup deleteRowOverwrite;
 		Util::ConfirmationPopup deleteAllUser;
 		size_t pendingDeleteIndex = SIZE_MAX;
 		std::vector<size_t> pendingDeleteRow;
 
-		PopupState(const char* overwriteMsg, const char* userMsg) :
-			deleteAllOverwrites("Delete All Overwrites?", overwriteMsg, "Delete All"),
-			deleteAllUser("Delete All User Settings?", userMsg, "Delete All") {}
+		PopupState(const char* deleteOverwriteTitle, const char* deleteRowTitle,
+			const char* overwriteTitle, const char* overwriteMsg,
+			const char* userTitle, const char* userMsg,
+			const char* deleteLabel, const char* deleteAllLabel) :
+			deleteAllOverwrites(overwriteTitle, overwriteMsg, deleteAllLabel),
+			deleteSingleOverwrite(deleteOverwriteTitle, "", deleteLabel),
+			deleteRowOverwrite(deleteRowTitle, "", deleteLabel),
+			deleteAllUser(userTitle, userMsg, deleteAllLabel) {}
 	};
 
 	/// Reset and open the add-setting dialog.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -9,17 +10,52 @@
 #include "Profiler.h"
 #include "Utils/LegitProfiler.h"
 
+/**
+ * @brief Renders GPU and CPU profiling statistics, timing graphs, and per-feature timer breakdowns.
+ *
+ * Provides the Profiling page in the menu with frame time graphs, sortable
+ * timing tables grouped by rendering pass, and per-feature timer views that
+ * can be embedded in individual feature settings panels.
+ */
 class ProfilingRenderer
 {
 public:
+	/** @brief Selects whether profiling displays GPU or CPU timing data. */
 	enum class TimingMode
 	{
 		GPU,
 		CPU
 	};
 
+	/**
+	 * @brief Renders the main profiling statistics view with timing graph and pass table.
+	 *
+	 * Draws a frame time graph, a GPU/CPU mode toggle, and a grouped table of
+	 * per-pass timing statistics with average, P95, and P99 columns.
+	 *
+	 * @param showTable If true, renders the detailed timing table below the graph.
+	 * @param showModeToggle If true, renders the GPU/CPU timing mode toggle.
+	 */
 	static void RenderStatistics(bool showTable = true, bool showModeToggle = true);
+
+	/**
+	 * @brief Renders timer entries for a specific feature as an inline graph and table.
+	 *
+	 * Filters profiler results to those matching the given feature prefix and
+	 * displays them with a dedicated per-feature timing graph.
+	 *
+	 * @param featurePrefix The profiler timer name prefix identifying the feature
+	 *        (e.g. "ScreenSpaceGI").
+	 */
 	static void RenderFeatureTimers(const std::string& featurePrefix);
+
+	/**
+	 * @brief Checks whether any profiler timer results exist for the given feature.
+	 *
+	 * @param featurePrefix The profiler timer name prefix to search for.
+	 * @return true if at least one timer result matches the prefix, false otherwise.
+	 */
+	static bool HasFeatureTimers(const std::string& featurePrefix);
 
 private:
 	static inline TimingMode timingMode = TimingMode::GPU;
@@ -67,4 +103,6 @@ private:
 	static void RenderTimingModeToggle();
 	static void SetupTimingTableColumns(bool includePercentColumn);
 	static void RenderGraph();
+	static std::string GetFeatureTimerPrefix(const std::string& featurePrefix);
+	static bool IsFeatureTimerResult(const Profiler::TimerResult& result, std::string_view prefix);
 };

@@ -3,7 +3,6 @@
 struct IBL : Feature
 {
 public:
-	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; };
 
 	virtual inline std::string GetName() override { return "Image Based Lighting"; }
@@ -29,14 +28,19 @@ public:
 	ID3D11ComputeShader* diffuseIBLCS = nullptr;
 
 	virtual void RestoreDefaultSettings() override;
+	/** @brief Draws the ImGui settings UI for IBL intensity, saturation, DALC, and fog options. */
 	virtual void DrawSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 
+	/** @brief Binds IBL and static fallback textures as pixel shader resources for the reflections prepass. */
 	virtual void ReflectionsPrepass() override;
+	/** @brief Projects environment and sky cubemaps into spherical harmonics and binds the resulting IBL textures. */
 	virtual void Prepass() override;
+	/** @brief Creates IBL textures, compiles the diffuse IBL compute shader, and loads static fallback cubemaps. */
 	virtual void SetupResources() override;
+	/** @brief Releases the cached diffuse IBL compute shader so it can be recompiled. */
 	virtual void ClearShaderCache() override;
 
 	struct Settings
@@ -58,6 +62,8 @@ public:
 	eastl::unique_ptr<Texture2D> staticDiffuseIBLTexture = nullptr;
 	eastl::unique_ptr<Texture2D> staticSpecularIBLTexture = nullptr;
 
+	/** @brief Returns settings data for the GPU constant buffer, with IBL disabled in interiors if configured. */
 	Settings GetCommonBufferData() const;
+	/** @brief Returns the diffuse IBL spherical harmonics compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetDiffuseIBLCS();
 };

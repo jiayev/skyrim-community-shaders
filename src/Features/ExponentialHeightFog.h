@@ -8,7 +8,6 @@ private:
 	static constexpr std::string_view MOD_ID = "180146";
 
 public:
-	virtual bool SupportsVR() override { return true; };
 	virtual inline std::string GetName() override { return "Exponential Height Fog"; }
 	virtual std::string GetDisplayName() override { return T("feature.exponential_height_fog.name", "Exponential Height Fog"); }
 	virtual inline std::string GetShortName() override { return "ExponentialHeightFog"; }
@@ -26,9 +25,16 @@ public:
 	virtual inline std::string_view GetShaderDefineName() override { return "EXP_HEIGHT_FOG"; }
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
+	/** @brief Draws the ImGui settings UI for fog parameters and volumetric fog options. */
 	virtual void DrawSettings() override;
+	/** @brief Creates samplers and the volumetric fog constant buffer. */
 	virtual void SetupResources() override;
+	/** @brief Releases all cached volumetric fog compute shaders so they can be recompiled. */
 	virtual void ClearShaderCache() override;
+	/**
+	 * @brief Runs the volumetric fog pipeline: material setup, conservative depth,
+	 * light scattering, and front-to-back integration.
+	 */
 	virtual void Prepass() override;
 
 	virtual void RestoreDefaultSettings() override;
@@ -83,7 +89,7 @@ private:
 		DirectX::XMUINT4 gridSizeAndFlags = {};
 		float4 invGridSizeAndNearFade = {};
 		float4 gridZParams = {};
-		float4x4 clipToWorld[2] = {};
+		float4x4 clipToWorld = {};
 		float4 frameJitterOffsets[16] = {};
 		float4 historyParameters = {};
 		float4 jitterParameters = {};  // x = LightScatteringSampleJitterMultiplier, y = StateFrameIndexMod8, zw = unused

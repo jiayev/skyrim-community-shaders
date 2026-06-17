@@ -2,10 +2,18 @@
 
 #include "Buffer.h"
 
+/** @brief Event handler that resets cubemap capture state when the loading menu closes. */
 class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
 {
 public:
+	/**
+	 * @brief Handles menu open/close events; resets cubemap capture on loading screen exit.
+	 * @param a_event The menu open/close event data.
+	 * @param a_eventSource The event source dispatcher.
+	 * @return Event processing control (always kContinue).
+	 */
 	virtual RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>* a_eventSource);
+	/** @brief Registers the singleton event handler with the UI event source. */
 	static bool Register();
 };
 
@@ -119,9 +127,15 @@ public:
 	};
 
 	Settings settings;
-	bool enabledAtBoot = false;
+	/**
+	 * @brief Advances the cubemap pipeline by one task each frame.
+	 *
+	 * Cycles through capture, inference, irradiance, and BC6H compression
+	 * stages for both primary and reflection cubemaps.
+	 */
 	void UpdateCubemap();
 
+	/** @brief Binds the BC6H-compressed cubemap textures as pixel shader resources after deferred rendering. */
 	void PostDeferred();
 
 	virtual inline std::string GetName() override { return "Dynamic Cubemaps"; }
@@ -135,59 +149,76 @@ public:
 			{ T("feature.dynamic_cubemaps.key_feature_1", "Real-time environment capture for realistic reflections"),
 				T("feature.dynamic_cubemaps.key_feature_2", "Dynamic cube map generation based on camera position"),
 				T("feature.dynamic_cubemaps.key_feature_3", "Enhanced water reflections with environmental details"),
-				T("feature.dynamic_cubemaps.key_feature_4", "Support for both standard and VR rendering modes"),
-				T("feature.dynamic_cubemaps.key_feature_5", "Optimized cubemap inference and irradiance calculation") } };
+				T("feature.dynamic_cubemaps.key_feature_4", "Optimized cubemap inference and irradiance calculation") } };
 	};
 
+	/** @brief Returns additional shader define options based on current settings (e.g., ENABLESSR). */
 	virtual std::vector<std::pair<std::string_view, std::string_view>> GetShaderDefineOptions() override;
 
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
+	/** @brief Creates all GPU resources: textures, UAVs, constant buffers, samplers, and BC6H scratch buffers. */
 	virtual void SetupResources() override;
+	/** @brief Resets reflection state each frame based on sky visibility and interior status. */
 	virtual void Reset() override;
 
 	virtual void SaveSettings(json&) override;
+	/** @brief Loads dynamic cubemap settings from JSON and flags shaders for recompilation. */
 	virtual void LoadSettings(json&) override;
+	/** @brief Resets all settings to their default values and flags shaders for recompilation. */
 	virtual void RestoreDefaultSettings() override;
+	/** @brief Draws the ImGui settings UI for screen-space reflections and cubemap creator. */
 	virtual void DrawSettings() override;
+	/** @brief Registers the menu open/close event handler after game data is loaded. */
 	virtual void DataLoaded() override;
+	/** @brief Called after all plugins have loaded. */
 	virtual void PostPostLoad() override;
 
-	std::map<std::string, Util::GameSetting> iniVRCubeMapSettings{
-		{ "bAutoWaterSilhouetteReflections:Water", { "Auto Water Silhouette Reflections", "Automatically reflects silhouettes on water surfaces.", 0, true, false, true } },
-		{ "bForceHighDetailReflections:Water", { "Force High Detail Reflections", "Forces the use of high-detail reflections on water surfaces.", 0, true, false, true } }
-	};
-
-	std::map<std::string, Util::GameSetting> hiddenVRCubeMapSettings{
-		{ "bReflectExplosions:Water", { "Reflect Explosions", "Enables reflection of explosions on water surfaces.", 0x1eaa000, true, false, true } },
-		{ "bReflectLODLand:Water", { "Reflect LOD Land", "Enables reflection of low-detail (LOD) terrain on water surfaces.", 0x1eaa060, true, false, true } },
-		{ "bReflectLODObjects:Water", { "Reflect LOD Objects", "Enables reflection of low-detail (LOD) objects on water surfaces.", 0x1eaa078, true, false, true } },
-		{ "bReflectLODTrees:Water", { "Reflect LOD Trees", "Enables reflection of low-detail (LOD) trees on water surfaces.", 0x1eaa090, true, false, true } },
-		{ "bReflectSky:Water", { "Reflect Sky", "Enables reflection of the sky on water surfaces.", 0x1eaa0a8, true, false, true } },
-		{ "bUseWaterRefractions:Water", { "Use Water Refractions", "Enables refractions for water surfaces, affecting how light bends through water.", 0x1eaa0c0, true, false, true } }
-	};
-
+	/** @brief Releases all cached compute shaders so they can be recompiled on next use. */
 	virtual void ClearShaderCache() override;
+	/** @brief Returns the cubemap update compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetComputeShaderUpdate();
+	/** @brief Returns the reflections cubemap update compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetComputeShaderUpdateReflections();
+	/** @brief Returns the fake reflections cubemap update compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetComputeShaderUpdateFakeReflections();
 
+	/** @brief Returns the cubemap inference compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetComputeShaderInferrence();
+	/** @brief Returns the reflections cubemap inference compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetComputeShaderInferrenceReflections();
+	/** @brief Returns the fake reflections cubemap inference compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetComputeShaderInferrenceFakeReflections();
 
+	/** @brief Returns the specular irradiance compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetComputeShaderSpecularIrradiance();
 
+	/**
+	 * @brief Captures the current scene into the environment cubemap using depth and color data.
+	 * @param a_reflections If true, captures into the reflections cubemap; otherwise the primary cubemap.
+	 */
 	void UpdateCubemapCapture(bool a_reflections);
 
+	/**
+	 * @brief Infers a complete cubemap from captured data using the default cubemap as a fallback.
+	 * @param a_reflections If true, processes the reflections cubemap; otherwise the primary cubemap.
+	 */
 	void Inferrence(bool a_reflections);
 
+	/**
+	 * @brief Computes pre-filtered specular irradiance mip levels for the cubemap.
+	 * @param a_reflections If true, processes the reflections cubemap; otherwise the primary cubemap.
+	 */
 	void Irradiance(bool a_reflections);
 
+	/**
+	 * @brief Compresses the irradiance cubemap to BC6H format via a compute shader encoder.
+	 * @param a_reflections If true, compresses the reflections cubemap; otherwise the primary cubemap.
+	 */
 	void CompressToBC6H(bool a_reflections);
 
+	/** @brief Returns the BC6H block encoder compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetComputeShaderBC6HEncode();
 
-	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; };
 };

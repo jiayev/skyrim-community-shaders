@@ -23,11 +23,9 @@
 #include <wrl/client.h>
 
 #include "../Feature.h"
-#include "../Features/VR.h"
 #include "../Globals.h"
 #include "../Menu.h"
 #include "FileSystem.h"
-#include "VRUtils.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <algorithm>
@@ -1881,18 +1879,6 @@ namespace Util
 			if (combo.empty())
 				return "None";
 
-			bool hasVRInput = false;
-			for (const auto& input : combo) {
-				if (input.GetDevice() != InputDeviceType::Keyboard && input.GetDevice() != InputDeviceType::Mouse) {
-					hasVRInput = true;
-					break;
-				}
-			}
-
-			if (hasVRInput && REL::Module::IsVR()) {
-				return InputCombo::GetVRString(combo);
-			}
-
 			std::string result;
 			for (size_t i = 0; i < combo.size(); ++i) {
 				if (i > 0)
@@ -2178,50 +2164,6 @@ namespace Util
 			}
 		}
 
-		// Draw VR-specific color coding if applicable
-		if (REL::Module::IsVR() && !combo.empty()) {
-			ImGui::SameLine();
-
-			// Check if we have mixed devices
-			bool hasPrimary = false;
-			bool hasSecondary = false;
-			bool hasBoth = false;
-
-			for (const auto& input : combo) {
-				switch (input.GetDevice()) {
-				case InputDeviceType::Primary:
-					hasPrimary = true;
-					break;
-				case InputDeviceType::Secondary:
-					hasSecondary = true;
-					break;
-				case InputDeviceType::Both:
-					hasBoth = true;
-					break;
-				default:
-					break;
-				}
-			}
-
-			ImVec4 indicatorColor = GetControllerDefaultColor();
-			const char* indicatorText = "";
-
-			if (hasBoth || (hasPrimary && hasSecondary)) {
-				indicatorColor = GetControllerBothColor();
-				indicatorText = hasBoth ? "(Both)" : "(Mixed)";
-			} else if (hasPrimary) {
-				indicatorColor = GetControllerPrimaryColor();
-				indicatorText = "(Primary)";
-			} else if (hasSecondary) {
-				indicatorColor = GetControllerSecondaryColor();
-				indicatorText = "(Secondary)";
-			}
-
-			if (indicatorText[0] != '\0') {
-				ImGui::TextColored(indicatorColor, "%s", indicatorText);
-			}
-		}
-
 		return changed;
 	}
 
@@ -2237,7 +2179,7 @@ namespace Util
 
 				ImGui::BeginTooltip();
 				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-				ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Setting Constrained");
+				Util::Text::Warning("Setting Constrained");
 				ImGui::Text("This setting is constrained by:");
 				ImGui::Spacing();
 				for (const auto& src : constraint.sources) {
@@ -2245,8 +2187,7 @@ namespace Util
 					ImGui::Indent();
 					ImGui::TextWrapped("%s", src.reason.c_str());
 					if (src.recommendDisableAtBoot) {
-						ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f),
-							"Consider disabling this feature at boot for best compatibility.");
+						Util::Text::WrappedError("Consider disabling this feature at boot for best compatibility.");
 					}
 					ImGui::Unindent();
 				}
@@ -2337,16 +2278,16 @@ namespace Util
 	static constexpr float kFlyoutCloseDelay = 0.25f;
 	static constexpr float kFlyoutRounding = 4.0f;
 	static constexpr float kSmallToggleScale = 0.7f;
-	static constexpr float kFlyoutSlideOpenSpeed = 10.0f;  // progress/sec (0→1 in 0.1s)
-	static constexpr float kFlyoutSlideCloseSpeed = 14.0f; // progress/sec (1→0 in ~0.07s)
-	static constexpr float kFlyoutSlideDistance = 6.0f;    // unscaled px of slide offset
-	static constexpr float kFlyoutLeftOffset = 8.0f;       // shift below-flyout left by this many unscaled px
+	static constexpr float kFlyoutSlideOpenSpeed = 10.0f;   // progress/sec (0→1 in 0.1s)
+	static constexpr float kFlyoutSlideCloseSpeed = 14.0f;  // progress/sec (1→0 in ~0.07s)
+	static constexpr float kFlyoutSlideDistance = 6.0f;     // unscaled px of slide offset
+	static constexpr float kFlyoutLeftOffset = 8.0f;        // shift below-flyout left by this many unscaled px
 	static constexpr float kFlyoutGap = 2.0f;
 	static constexpr float kFlyoutAlphaScale = 4.0f;
 	static constexpr float kFlyoutWindowAlpha = 0.95f;
 	static constexpr float kFlyoutPaddingX = 6.0f;
 	static constexpr float kFlyoutPaddingY = 2.0f;
-	static constexpr float kIconShrink = 0.15f;            // shrink icon within button by this fraction
+	static constexpr float kIconShrink = 0.15f;  // shrink icon within button by this fraction
 
 	static void ResetFlyout(FlyoutState& state) noexcept
 	{

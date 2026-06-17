@@ -21,12 +21,10 @@ powershell.exe -Command "./BuildRelease.bat [PRESET_NAME]"
 
 **Available Presets** (from CMakePresets.json):
 
--   `ALL` (default) - Builds universal binary supporting SE/AE/VR runtime detection
+-   `ALL` (default) - Builds universal binary supporting SE/AE runtime detection
 -   `SE` - Skyrim Special Edition only (compile-time targeting)
 -   `AE` - Anniversary Edition only (compile-time targeting)
--   `VR` - Skyrim VR only (compile-time targeting)
--   `PRE-AE` - SE + VR (excludes AE)
--   `FLATRIM` - SE + AE (excludes VR)
+-   `FLATRIM` - SE + AE
 -   `ALL-TRACY` - Universal binary with Tracy profiler support enabled
 
 **User Preset Template**:
@@ -51,7 +49,7 @@ powershell.exe -Command "./BuildRelease.bat [PRESET_NAME]"
 Set `CommunityShadersOutputDir` environment variable to semicolon-separated Skyrim Data directories:
 
 ```
-CommunityShadersOutputDir=F:/MySkyrimModpack/mods/CommunityShaders;F:/SteamLibrary/steamapps/common/SkyrimVR/Data;F:/SteamLibrary/steamapps/common/Skyrim Special Edition/Data
+CommunityShadersOutputDir=F:/MySkyrimModpack/mods/CommunityShaders;F:/SteamLibrary/steamapps/common/Skyrim Special Edition/Data
 ```
 
 ### Shader Development and Testing
@@ -65,9 +63,6 @@ cmake --build ./build/ALL --target prepare_shaders
 
 # Full shader suite validation (can be time-consuming)
 hlslkit-compile --shader-dir build/ALL/aio/Shaders --output-dir build/ShaderCache --config .github/configs/shader-validation.yaml --max-warnings 0 --suppress-warnings X1519
-
-# VR-specific validation
-hlslkit-compile --shader-dir build/ALL/aio/Shaders --output-dir build/ShaderCache --config .github/configs/shader-validation-vr.yaml --max-warnings 0 --suppress-warnings X1519
 
 # Targeted testing for faster development (recommended during development)
 # Test specific base shader
@@ -89,14 +84,18 @@ hlslkit-generate-defines --log CommunityShaders.log
 hlslkit-buffer-scan --features-dir features/
 
 # Prove a shader refactor changed no behavior (compiles base ref vs working tree,
-# compares DXBC across VR x HDR_OUTPUT permutations; exit 0 identical / 2 differs)
+# compares DXBC across HDR_OUTPUT permutations; exit 0 identical / 2 differs)
 pwsh tools/verify-shader-refactor.ps1 package/Shaders/Foo.hlsl   # bash: tools/verify-shader-refactor.sh
 ```
 
 When refactoring an existing shader (especially the decompile-transcription shaders like
 `ISTemporalAA.hlsl`), use `tools/verify-shader-refactor.ps1` to prove the change is
-behavior-preserving: identical compiled bytecode means a provable no-op. See
-`docs/development/shader-workflow.md` for details.
+behavior-preserving: identical compiled bytecode means a provable no-op. When the refactor
+legitimately reorders ops (bytecode differs but behavior shouldn't), validate it with the runtime
+A/B harness instead — capture one frame, swap just that shader, and diff the output against the
+shipping baseline (`tools/taa-renderdoc-ab.py`). See `docs/development/shader-workflow.md` and
+`docs/development/shader-runtime-ab.md` for details.
+
 
 ### Custom CMake Targets
 
@@ -197,8 +196,7 @@ Each feature follows consistent structure:
 
 ### Cross-Platform Support
 
-**Single Binary**: Supports SE/AE/VR through CommonLibSSE-NG runtime detection
-**VR Adaptations**: Specialized rendering paths in `src/Features/VR/`
+**Single Binary**: Supports SE/AE through CommonLibSSE-NG runtime detection
 **API Abstraction**: Dual DirectX 11 support with feature-specific rendering strategies
 
 ## Critical Dependencies
@@ -228,20 +226,11 @@ CommonLibSSE-NG supports multiple Skyrim versions through sophisticated runtime 
 
 -   `SE` - Skyrim Special Edition only
 -   `AE` - Anniversary Edition only
--   `VR` - Skyrim VR only
--   `ALL` - Multi-runtime support (default for this project)
+-   `ALL` - Multi-runtime SE/AE support (default for this project)
 
 **Compile-Time vs Runtime Patterns**:
 
-**Single Runtime (compile-time)**: When targeting one version, `#ifdef ENABLE_SKYRIM_VR` conditionally compiles VR-specific code:
-
-```cpp
-#ifdef ENABLE_SKYRIM_VR
-    virtual void Unk_09(UI_MENU_Unk09 a_unk);  // VR-only vfunc
-#endif
-```
-
-**Multi-Runtime (runtime detection)**: When targeting ALL, uses runtime accessors:
+**Multi-Runtime (runtime detection)**: When targeting ALL, uses runtime accessors for SE vs AE differences:
 
 ```cpp
 // Runtime member access with different offsets per version
@@ -249,26 +238,16 @@ auto& GetRuntimeData() {
     return REL::RelocateMemberIfNewer<PLAYER_RUNTIME_DATA>(
         SKSE::RUNTIME_SSE_1_6_629, this, 0x3D8, 0x3E0);
 }
-
-// VR-specific runtime data (only exists in VR)
-auto& GetVRRuntimeData() {
-    return REL::RelocateMember<VR_PLAYER_RUNTIME_DATA>(this, 0, 0x3D8);
-}
-
-// Runtime detection
-if (REL::Module::IsVR()) {
-    // VR-specific code path
-}
 ```
 
 **Key Runtime Utilities**:
 
 -   `REL::RelocateMember<T>()` - Access members with different offsets
 -   `REL::RelocateVirtual<T>()` - Call virtual functions with variant vtables
--   `REL::Module::IsVR()`, `IsAE()`, `IsSE()` - Runtime version detection
+-   `REL::Module::IsAE()`, `IsSE()` - Runtime version detection
 -   `REL::RelocationID()` - Dynamic address resolution based on version
 
-**Critical for Development**: When modifying classes that inherit from game objects, always check if they have runtime-specific variations and use appropriate accessor patterns.
+**Critical for Development**: When modifying classes that inherit from game objects, always check if they have runtime-specific variations (SE vs AE) and use appropriate accessor patterns.
 
 ## Core Architecture
 
@@ -298,7 +277,6 @@ All graphics features are globally accessible for cross-feature coordination:
 -   Materials: `extendedMaterials`, `hairSpecular`, `subsurfaceScattering`
 -   Effects: `screenSpaceGI`, `screenSpaceShadows`, `waterEffects`, `wetnessEffects`
 -   Environment: `cloudShadows`, `dynamicCubemaps`, `weatherEditor`, `skySync`
--   VR: `vr` - VR-specific adaptations and coordinate transformations
 
 ### Shared Utilities (`src/Utils/`)
 
@@ -307,7 +285,6 @@ Common functionality organized by domain:
 -   `UI.h/cpp` - ImGui utilities, input mapping, and UI helper functions
 -   `D3D.h/cpp` - DirectX utilities and helper functions
 -   `Game.h/cpp` - Skyrim-specific game state and object utilities
--   `VRUtils.h/cpp` - VR-specific utilities and coordinate transformations
 -   `FileSystem.h/cpp` - File I/O and path manipulation helpers
 -   `Format.h/cpp` - String formatting and conversion utilities
 -   `Serialize.h/cpp` - JSON serialization helpers
@@ -357,6 +334,41 @@ Modular ImGui-based configuration interface with specialized renderers for diffe
 
 Feature versions are automatically extracted from `.ini` files and compiled into `FeatureVersions.h` at build time for backward compatibility checking.
 
+### Release Stages (Alpha / Beta)
+
+Features can declare a release-maturity stage in their `.ini` `[Info]` section. This drives the default-enabled state, a UI marker, and the version-audit policy.
+
+**Declaring a stage** (in `features/<Feature>/Shaders/Features/<Feature>.ini`):
+
+```ini
+[Info]
+Version = 0-2-0
+Beta = True
+```
+
+-   Flags: `Alpha` or `Beta`. Truthy values are `true`, `1`, `yes`, `on` (case-insensitive). Absent or non-truthy means full **Release**.
+-   `Alpha` takes precedence over `Beta` when both are set.
+-   The flag line must start the line (after optional whitespace). The CMake parser in `CMakeLists.txt` and the Python parser in `tools/feature_version_audit.py` are both line-anchored; **keep these two regexes in sync** so build-time classification and audit enforcement agree.
+
+**Build-time baking**: `CMakeLists.txt` collects flagged features into `FEATURE_ALPHA_NAMES` / `FEATURE_BETA_NAMES` in the generated `FeatureVersions.h` (same mechanism as `FEATURE_CORE_NAMES`).
+
+**Runtime API** (`src/Feature.h`):
+
+-   `Feature::GetReleaseStage()` returns `ReleaseStage::{Release, Beta, Alpha}` by looking the short name up in the baked sets. Resolve it once and pass it around; it is not cached.
+-   `IsAlpha()` / `IsBeta()` convenience predicates.
+-   `static GetReleaseStageTag(ReleaseStage)` returns the localized `[ALPHA]` / `[BETA]` marker (empty for Release). It takes the stage so callers that already resolved it avoid a redundant lookup.
+-   `IsDisabledByDefault()` returns `true` for any non-Release stage, so **Alpha/Beta features start disabled on first install**. Users can still enable them via the "Disable at Boot" menu. Do not add a redundant `IsDisabledByDefault` override on a feature that already carries a stage flag.
+
+**UI**: `FeatureListRenderer` draws the stage tag next to the feature name. Alpha uses the theme `StatusPalette.Error` color, Beta uses `StatusPalette.Warning`.
+
+**Versioning convention** (enforced by `tools/feature_version_audit.py`):
+
+-   Pre-release features use `0.x` versions. Entering pre-release from a release/fresh baseline: Beta starts at `0-2-0`, Alpha at `0-1-0`.
+-   `alpha -> beta` bumps the minor and resets the patch.
+-   Within the same pre-release stage, normal semver applies inside `0.x`.
+-   A breaking change (`feat!:` / `BREAKING CHANGE:`) on a pre-release feature **promotes it to release `1-0-0` and strips the Alpha/Beta flag**. `--apply-bumps` performs both the version bump and the flag removal automatically.
+-   Stage transitions are exact-match enforced (they may legitimately lower the version, e.g. release `1.x` -> beta `0-2-0`), unlike the lenient `>` check used within a stage.
+
 ## Key Development Patterns
 
 ### Memory Management
@@ -387,7 +399,6 @@ Feature versions are automatically extracted from `.ini` files and compiled into
 -   **Deferred Rendering Impact**: Features hook into Skyrim's rendering pipeline, adding GPU workload
 -   **Feature Toggles**: Users can disable individual features at boot if performance is impacted (`Disable at Boot` buttons)
 -   **A/B Testing Framework**: Built-in performance comparison system for measuring feature impact
--   **VR Performance**: VR has higher performance requirements; some features may need different settings
 -   **Tracy Profiler**: Optional build-time integration (`TRACY_SUPPORT`) for detailed performance analysis
 
 **Shader Performance Patterns**:
@@ -401,7 +412,6 @@ Feature versions are automatically extracted from `.ini` files and compiled into
 
 -   **In-Game Profiling**: Use Tracy integration to measure actual frame impact
 -   **Feature Isolation**: Test features individually to identify performance bottlenecks
--   **Cross-Edition Impact**: SE/AE/VR may have different performance characteristics for the same feature
 
 ### Development Performance
 
@@ -427,7 +437,7 @@ Feature versions are automatically extracted from `.ini` files and compiled into
 
 -   **Performance Concerns**: If code could impact rendering performance, suggest optimizations or user toggles
 -   **Security Risks**: Flag potential crashes from unvalidated user input, malformed configs, or unsafe DirectX operations
--   **Runtime Compatibility**: Warn when code might break SE/AE/VR compatibility or suggest `REL::RelocateMember()` patterns
+-   **Runtime Compatibility**: Warn when code might break SE/AE compatibility or suggest `REL::RelocateMember()` patterns
 -   **Buffer Conflicts**: Highlight potential GPU register conflicts and recommend hlslkit buffer scanning
 -   **Graphics Best Practices**: Suggest more idiomatic DirectX/HLSL patterns when appropriate
 
@@ -532,7 +542,7 @@ Full details: [Developers wiki — Patch Release Process](https://github.com/com
 ### Testing and Validation
 
 -   **Build Verification**: Always test builds after significant refactoring - this codebase has complex dependencies
--   **Cross-Edition Testing**: Changes may affect SE/AE/VR differently due to engine differences
+-   **Cross-Edition Testing**: Changes may affect SE/AE differently due to engine differences
 -   **Memory Management**: Pay attention to smart pointer usage and RAII patterns when modifying existing code
 
 ### Security and Input Validation
@@ -563,7 +573,6 @@ Full details: [Developers wiki — Patch Release Process](https://github.com/com
 
 -   **Include Dependencies**: New features often require adding includes (ShaderCache.h, imgui_stdlib.h, etc.)
 -   **Forward Declarations**: Use forward declarations in headers when possible, full includes in .cpp files
--   **VR Considerations**: VR has different rendering requirements - check VR-specific code paths when modifying graphics features
 -   **Feature Versioning**: Feature .ini files use semantic versioning - increment appropriately when changing settings structure
 -   **Performance Impact**: Always consider GPU workload when adding new rendering features - provide toggle options for users
 -   **Buffer Conflicts**: Check hlslkit buffer scanning to avoid GPU register conflicts that cause rendering issues

@@ -71,10 +71,10 @@ namespace Util
 
 	inline float GetUIScaleForBaseline(float baselineFontSize) { return ImGui::GetFontSize() / baselineFontSize; }
 
-	/// Returns a scale factor relative to the 1080p baseline font size.
+	/** @brief Returns a scale factor relative to the 1080p baseline font size. */
 	inline float GetUIScale() { return GetUIScaleForBaseline(kBaselineFontSize); }
 
-	/// Returns a scale factor for search controls authored against the 2K baseline.
+	/** @brief Returns a scale factor for search controls authored against the 2K baseline. */
 	inline float GetSearchUIScale() { return GetUIScaleForBaseline(ThemeManager::Constants::SEARCH_BASELINE_SCREEN_HEIGHT * ThemeManager::Constants::DEFAULT_FONT_RATIO); }
 
 	/**
@@ -325,15 +325,15 @@ namespace Util
 	/** Returns theme text color if monochrome icons enabled, otherwise white. */
 	ImVec4 GetIconTint();
 
-	/// Draws a theme-rounded hover/active fill over a button rect.
+	/** @brief Draws a theme-rounded hover/active fill over a button rect. */
 	bool DrawRoundedButtonHighlight(const ImRect& rect, bool hovered, bool active, ImDrawList* drawList = nullptr);
 	bool DrawRoundedButtonHighlight(const ImVec2& min, const ImVec2& max, bool hovered, bool active, ImDrawList* drawList = nullptr);
 	bool DrawRoundedButtonHighlight(const ImVec2& min, const ImVec2& max, bool hovered, bool active, float rounding, ImDrawList* drawList);
 
-	/// Draws the rounded hover/active fill for the last submitted item.
+	/** @brief Draws the rounded hover/active fill for the last submitted item. */
 	bool DrawCurrentItemRoundedButtonHighlight(ImDrawList* drawList = nullptr);
 
-	/// ImGui::Begin() wrappers that replace native title-bar button highlights with rounded ones.
+	/** @brief ImGui::Begin() wrappers that replace native title-bar button highlights with rounded ones. */
 	bool BeginWithRoundedClose(const char* name, bool* p_open, ImGuiWindowFlags flags = 0);
 	bool BeginPopupModalWithRoundedClose(const char* name, bool* p_open = nullptr, ImGuiWindowFlags flags = 0);
 
@@ -1034,7 +1034,7 @@ namespace Util
 		 * @brief Converts a key combo (vector of InputCombo) to a human-readable string
 		 *
 		 * For keyboard-only combos, produces strings like "Ctrl + Shift + A".
-		 * For VR inputs, delegates to InputCombo::GetVRString for proper formatting.
+		 * For non-keyboard inputs, formats using the packed device+key representation.
 		 *
 		 * @param combo Vector of InputCombo representing the key combination
 		 * @return Human-readable string representation of the combo, or "None" if empty
@@ -1476,9 +1476,9 @@ namespace Util
 	}
 
 	/**
-	 * @brief Unified input recording widget for both VR and Desktop
+	 * @brief Unified input recording widget
 	 *
-	 * Handles recording of multi-key sequences for keyboard, mouse, and VR controllers.
+	 * Handles recording of multi-key sequences for keyboard and mouse.
 	 * Supports modifiers, combo sequences, and device-specific rendering.
 	 *
 	 * @param label The label for the input setting
@@ -1499,15 +1499,15 @@ namespace Util
 	/// Persistent state for a flyout menu attached to a value cell.
 	struct FlyoutState
 	{
-		ImGuiID activeId = 0;    // ID of the item the flyout is open for
+		ImGuiID activeId = 0;  // ID of the item the flyout is open for
 		bool isOpen = false;
-		bool closing = false;    // True when close animation is playing
-		bool flyoutHovered = false;  // True when mouse is over the flyout window (set by EndFlyout)
-		float closeTimer = 0.f;  // Countdown before closing on mouse-leave
-		float openProgress = 0.f;  // Slide animation progress (0..1)
-		ImVec2 sourceMin{};      // Source item rect min (for hover tracking)
-		ImVec2 sourceMax{};      // Source item rect max (for hover tracking)
-		ImVec2 lastSize{};       // Flyout window size from previous frame, used to clamp position
+		bool closing = false;            // True when close animation is playing
+		bool flyoutHovered = false;      // True when mouse is over the flyout window (set by EndFlyout)
+		float closeTimer = 0.f;          // Countdown before closing on mouse-leave
+		float openProgress = 0.f;        // Slide animation progress (0..1)
+		ImVec2 sourceMin{};              // Source item rect min (for hover tracking)
+		ImVec2 sourceMax{};              // Source item rect max (for hover tracking)
+		ImVec2 lastSize{};               // Flyout window size from previous frame, used to clamp position
 		bool draggedFromFlyout = false;  // True while a drag that started inside the flyout is active
 	};
 

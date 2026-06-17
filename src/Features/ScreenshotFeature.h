@@ -12,23 +12,28 @@
 
 struct ScreenshotFeature : public Feature
 {
+	/** @brief Stops the background screenshot worker thread on destruction. */
 	virtual ~ScreenshotFeature();
 	virtual std::string GetName() override { return "Screenshot"; }
 	virtual std::string GetDisplayName() override { return T("feature.screenshot.name", "Screenshot"); }
 	virtual std::string GetShortName() override { return "Screenshot"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 
-	virtual bool SupportsVR() override { return true; }
+	/** @brief Returns true, indicating this feature's settings are always visible in the menu. */
 	virtual bool IsInMenu() const override;
 
+	/** @brief Draws the ImGui settings UI for screenshot path, format, crop, and hotkey configuration. */
 	virtual void DrawSettings() override;
 	virtual void LoadSettings(json& a_json) override;
 	virtual void SaveSettings(json& a_json) override;
+	/** @brief Resets transient state (no-op for this feature). */
 	virtual void Reset() override;
+	/** @brief Called after all features are loaded (no-op for this feature). */
 	virtual void PostPostLoad() override;
 
+	/** @brief Captures a screenshot from the current back buffer and enqueues it for async encoding and save. */
 	void Capture();
-	// Runs after HDR Present processing so the back buffer matches what's on screen.
+	/** @brief Checks for a pending capture request and executes Capture() if one is pending. Called after HDR Present processing. */
 	void ProcessCaptureRequest();
 	bool applyCropToScreenshot = true;
 
@@ -36,7 +41,7 @@ struct ScreenshotFeature : public Feature
 	std::string screenshotPath = "Screenshots";
 	// HDR PNG quantization (7-16); used when HDR Display captures the back buffer.
 	unsigned int hdrPngBitDepth = 11;
-	// SDR / VR output (HDR captures always use PNG).
+	// SDR output (HDR captures always use PNG).
 	bool sdrUsePng = false;
 	// After save, put the file path on the clipboard (CF_HDROP).
 	bool copyToClipboard = false;

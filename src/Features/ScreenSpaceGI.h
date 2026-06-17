@@ -8,7 +8,6 @@ private:
 	static constexpr std::string_view MOD_ID = "130375";
 
 public:
-	bool inline SupportsVR() override { return true; }
 
 	virtual inline std::string GetName() override { return "Screen Space GI"; }
 	virtual std::string GetDisplayName() override { return T("feature.screen_space_gi.name", "Screen Space GI"); }
@@ -16,12 +15,10 @@ public:
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 
+	/** @brief Returns a localized description and list of key features for the UI summary panel. */
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		std::string desc = T("feature.screen_space_gi.description", "Screen Space Global Illumination adds realistic indirect lighting and ambient occlusion to the game. This technique simulates how light bounces off surfaces to illuminate other objects naturally.");
-		if (REL::Module::IsVR()) {
-			desc += T("feature.screen_space_gi.vr_warning", "\n\nWarning: In VR, this feature may have visual artifacts and can have a significant performance impact due to the nature of screen space effects.");
-		}
 		return { desc,
 			{ T("feature.screen_space_gi.key_feature_1", "Realistic indirect lighting"),
 				T("feature.screen_space_gi.key_feature_2", "Enhanced ambient occlusion"),
@@ -30,18 +27,26 @@ public:
 				T("feature.screen_space_gi.key_feature_5", "Configurable quality and performance settings") } };
 	}
 
+	/** @brief Resets all settings to their default values and flags shaders for recompilation. */
 	virtual void RestoreDefaultSettings() override;
+	/** @brief Draws the ImGui settings UI with quality presets, visual parameters, and denoising options. */
 	virtual void DrawSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 
+	/** @brief Creates GPU textures, samplers, constant buffers, and compiles compute shaders. */
 	virtual void SetupResources() override;
+	/** @brief Releases and recompiles all SSGI compute shaders. */
 	virtual void ClearShaderCache() override;
+	/** @brief Compiles all SSGI compute shaders with current resolution and feature defines. */
 	void CompileComputeShaders();
+	/** @brief Checks whether all required compute shaders and the noise texture loaded successfully. */
 	bool ShadersOK();
 
+	/** @brief Executes the full SSGI pipeline: depth prefilter, radiance fetch, GI, blur, and upsample. */
 	void DrawSSGI();
+	/** @brief Updates the SSGI constant buffer with current camera, resolution, and settings data. */
 	void UpdateSB();
 
 	//////////////////////////////////////////////////////////////////////////////////
@@ -53,12 +58,12 @@ public:
 	struct Settings
 	{
 		bool Enabled = true;
-		bool EnableGI = REL::Module::IsVR() ? false : true;  // AO only for VR by default
+		bool EnableGI = true;
 		bool EnableExperimentalSpecularGI = false;
 		bool EnableVanillaSSAO = false;
 		// performance/quality
-		uint NumSlices = REL::Module::IsVR() ? 3u : 4u;  // AO preset for VR
-		uint NumSteps = REL::Module::IsVR() ? 6u : 8u;
+		uint NumSlices = 4u;
+		uint NumSteps = 8u;
 		int ResolutionMode = 1;  // 0-full, 1-half, 2-quarter - DBF default
 		// visual
 		float MinScreenRadius = 0.01f;
@@ -84,9 +89,9 @@ public:
 
 	struct alignas(16) SSGICB
 	{
-		float4x4 PrevInvViewMat[2];
-		float2 NDCToViewMul[2];
-		float2 NDCToViewAdd[2];
+		float4x4 PrevInvViewMat;
+		float4 NDCToViewMul;
+		float4 NDCToViewAdd;
 
 		float2 TexDim;
 		float2 RcpTexDim;  //
@@ -140,6 +145,7 @@ public:
 	eastl::unique_ptr<Texture2D> texIlCoCg[2] = { nullptr };
 	eastl::unique_ptr<Texture2D> texGiSpecular[2] = { nullptr };
 
+	/** @brief Returns the current output SRVs for AO, indirect lighting Y/CoCg, and specular GI (or nullptrs if disabled). */
 	inline auto GetOutputTextures()
 	{
 		return (loaded && settings.Enabled) ?
@@ -160,6 +166,5 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> radianceDisoccCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> giCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> blurCompute = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> stereoSyncCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> upsampleCompute = nullptr;
 };

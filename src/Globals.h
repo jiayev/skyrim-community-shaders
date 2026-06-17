@@ -26,7 +26,6 @@ struct TerrainHelper;
 struct TerrainShadows;
 struct UnifiedWater;
 struct VolumetricLighting;
-struct VR;
 struct WaterEffects;
 struct PerformanceOverlay;
 struct WetnessEffects;
@@ -86,7 +85,6 @@ namespace globals
 		extern TerrainShadows terrainShadows;
 		extern UnifiedWater unifiedWater;
 		extern VolumetricLighting volumetricLighting;
-		extern VR vr;
 		extern WaterEffects waterEffects;
 		extern PerformanceOverlay performanceOverlay;
 		extern WetnessEffects wetnessEffects;
@@ -100,11 +98,9 @@ namespace globals
 		extern TruePBR truePBR;
 		extern Skin skin;
 
-		namespace llf
-		{
-		}
 	}
 
+	/** @brief GPU constant buffer layout matching Skyrim's per-frame camera data. */
 	struct FrameBuffer
 	{
 		Matrix CameraView;
@@ -124,92 +120,41 @@ namespace globals
 		float4 DynamicResolutionParams2;
 	};
 
-	struct FrameBufferVR
+	/** @brief Cached snapshot of per-frame camera data, captured between Map/Unmap of the per-frame constant buffer. */
+	struct FrameBufferCache
 	{
-		// Must match HLSL VR layout exactly - packoffsets c0 to c86
-		Matrix CameraView[2];                        // packoffset(c0) - 8 registers
-		Matrix CameraProj[2];                        // packoffset(c8) - 8 registers
-		Matrix CameraViewProj[2];                    // packoffset(c16) - 8 registers
-		Matrix CameraViewProjUnjittered[2];          // packoffset(c24) - 8 registers
-		Matrix CameraPreviousViewProjUnjittered[2];  // packoffset(c32) - 8 registers
-		Matrix CameraProjUnjittered[2];              // packoffset(c40) - 8 registers
-		Matrix CameraProjUnjitteredInverse[2];       // packoffset(c48) - 8 registers
-		Matrix CameraViewInverse[2];                 // packoffset(c56) - 8 registers
-		Matrix CameraViewProjInverse[2];             // packoffset(c64) - 8 registers
-		Matrix CameraProjInverse[2];                 // packoffset(c72) - 8 registers
-		float4 CameraPosAdjust[2];                   // packoffset(c80) - 2 registers
-		float4 CameraPreviousPosAdjust[2];           // packoffset(c82) - 2 registers
-		float4 FrameParams;                          // packoffset(c84) - 1 register
-		float4 DynamicResolutionParams1;             // packoffset(c85) - 1 register
-		float4 DynamicResolutionParams2;             // packoffset(c86) - 1 register
-	};
+		FrameBuffer data;
 
-	union FrameBufferCache
-	{
-		FrameBuffer nonVR;
-		FrameBufferVR vr;
-
-		// Helper functions for VR-agnostic access to eye 0 (or single eye)
-		const Matrix& GetCameraView(uint32_t eyeIndex = 0) const
-		{
-			return REL::Module::IsVR() ? vr.CameraView[eyeIndex] : nonVR.CameraView;
-		}
-		const Matrix& GetCameraProj(uint32_t eyeIndex = 0) const
-		{
-			return REL::Module::IsVR() ? vr.CameraProj[eyeIndex] : nonVR.CameraProj;
-		}
-		const Matrix& GetCameraViewProj(uint32_t eyeIndex = 0) const
-		{
-			return REL::Module::IsVR() ? vr.CameraViewProj[eyeIndex] : nonVR.CameraViewProj;
-		}
-		const Matrix& GetCameraViewProjUnjittered(uint32_t eyeIndex = 0) const
-		{
-			return REL::Module::IsVR() ? vr.CameraViewProjUnjittered[eyeIndex] : nonVR.CameraViewProjUnjittered;
-		}
-		const Matrix& GetCameraPreviousViewProjUnjittered(uint32_t eyeIndex = 0) const
-		{
-			return REL::Module::IsVR() ? vr.CameraPreviousViewProjUnjittered[eyeIndex] : nonVR.CameraPreviousViewProjUnjittered;
-		}
-		const Matrix& GetCameraProjUnjittered(uint32_t eyeIndex = 0) const
-		{
-			return REL::Module::IsVR() ? vr.CameraProjUnjittered[eyeIndex] : nonVR.CameraProjUnjittered;
-		}
-		const Matrix& GetCameraProjUnjitteredInverse(uint32_t eyeIndex = 0) const
-		{
-			return REL::Module::IsVR() ? vr.CameraProjUnjitteredInverse[eyeIndex] : nonVR.CameraProjUnjitteredInverse;
-		}
-		const Matrix& GetCameraViewInverse(uint32_t eyeIndex = 0) const
-		{
-			return REL::Module::IsVR() ? vr.CameraViewInverse[eyeIndex] : nonVR.CameraViewInverse;
-		}
-		const Matrix& GetCameraViewProjInverse(uint32_t eyeIndex = 0) const
-		{
-			return REL::Module::IsVR() ? vr.CameraViewProjInverse[eyeIndex] : nonVR.CameraViewProjInverse;
-		}
-		const Matrix& GetCameraProjInverse(uint32_t eyeIndex = 0) const
-		{
-			return REL::Module::IsVR() ? vr.CameraProjInverse[eyeIndex] : nonVR.CameraProjInverse;
-		}
-		const float4& GetCameraPosAdjust(uint32_t eyeIndex = 0) const
-		{
-			return REL::Module::IsVR() ? vr.CameraPosAdjust[eyeIndex] : nonVR.CameraPosAdjust;
-		}
-		const float4& GetCameraPreviousPosAdjust(uint32_t eyeIndex = 0) const
-		{
-			return REL::Module::IsVR() ? vr.CameraPreviousPosAdjust[eyeIndex] : nonVR.CameraPreviousPosAdjust;
-		}
-		const float4& GetFrameParams() const
-		{
-			return REL::Module::IsVR() ? vr.FrameParams : nonVR.FrameParams;
-		}
-		const float4& GetDynamicResolutionParams1() const
-		{
-			return REL::Module::IsVR() ? vr.DynamicResolutionParams1 : nonVR.DynamicResolutionParams1;
-		}
-		const float4& GetDynamicResolutionParams2() const
-		{
-			return REL::Module::IsVR() ? vr.DynamicResolutionParams2 : nonVR.DynamicResolutionParams2;
-		}
+		/** Gets the camera view matrix. */
+		const Matrix& GetCameraView() const { return data.CameraView; }
+		/** Gets the camera projection matrix. */
+		const Matrix& GetCameraProj() const { return data.CameraProj; }
+		/** Gets the combined camera view-projection matrix. */
+		const Matrix& GetCameraViewProj() const { return data.CameraViewProj; }
+		/** Gets the unjittered camera view-projection matrix. */
+		const Matrix& GetCameraViewProjUnjittered() const { return data.CameraViewProjUnjittered; }
+		/** Gets the previous frame's unjittered view-projection matrix. */
+		const Matrix& GetCameraPreviousViewProjUnjittered() const { return data.CameraPreviousViewProjUnjittered; }
+		/** Gets the unjittered camera projection matrix. */
+		const Matrix& GetCameraProjUnjittered() const { return data.CameraProjUnjittered; }
+		/** Gets the inverse of the unjittered camera projection matrix. */
+		const Matrix& GetCameraProjUnjitteredInverse() const { return data.CameraProjUnjitteredInverse; }
+		/** Gets the inverse camera view matrix. */
+		const Matrix& GetCameraViewInverse() const { return data.CameraViewInverse; }
+		/** Gets the inverse camera view-projection matrix. */
+		const Matrix& GetCameraViewProjInverse() const { return data.CameraViewProjInverse; }
+		/** Gets the inverse camera projection matrix. */
+		const Matrix& GetCameraProjInverse() const { return data.CameraProjInverse; }
+		/** Gets the camera position adjustment vector. */
+		const float4& GetCameraPosAdjust() const { return data.CameraPosAdjust; }
+		/** Gets the previous frame's camera position adjustment vector. */
+		const float4& GetCameraPreviousPosAdjust() const { return data.CameraPreviousPosAdjust; }
+		/** Gets the frame parameters (timer, frame count, etc.). */
+		const float4& GetFrameParams() const { return data.FrameParams; }
+		/** Gets the first set of dynamic resolution parameters. */
+		const float4& GetDynamicResolutionParams1() const { return data.DynamicResolutionParams1; }
+		/** Gets the second set of dynamic resolution parameters. */
+		const float4& GetDynamicResolutionParams2() const { return data.DynamicResolutionParams2; }
 	};
 
 	namespace game
@@ -219,7 +164,6 @@ namespace globals
 		extern RE::BSGraphics::Renderer* renderer;
 		extern RE::BSShaderManager::State* smState;
 		extern RE::TES* tes;
-		extern bool isVR;
 		extern RE::MemoryManager* memoryManager;
 		extern RE::INISettingCollection* iniSettingCollection;
 		extern RE::INIPrefSettingCollection* iniPrefSettingCollection;
@@ -232,6 +176,8 @@ namespace globals
 		extern RE::Sky* sky;
 		extern RE::UI* ui;
 		extern RE::Calendar* calendar;
+		extern RE::ImageSpaceManager* imageSpaceManager;
+		extern bool* bEnableVolumetricLighting;
 		extern std::atomic<bool> quitGame;
 
 		extern RE::BSGraphics::PixelShader** currentPixelShader;
@@ -266,9 +212,17 @@ namespace globals
 	extern SIE::ShaderCache* shaderCache;
 	extern Profiler* profiler;
 
+	/** @brief Initializes core singletons (ShaderCache, State, Menu, Deferred). Called once at plugin load. */
 	void OnInit();
+	/** @brief Resolves runtime game pointers, RTTI relocations, and D3D device references. Called when the renderer is ready. */
 	void ReInit();
+	/** @brief Caches late-binding game singletons (player, sky, INI settings) after Skyrim's data files are loaded. */
 	void OnDataLoaded();
+	/** @brief Signals shader compilation to stop when the game window is closing. */
 	void OnGameWindowClose();
+	/**
+	 * @brief Installs Detours hooks on the device context's Map/Unmap vtable slots to capture per-frame constant buffer data.
+	 * @param a_context The D3D11 device context to hook.
+	 */
 	void InstallD3DHooks(ID3D11DeviceContext* a_context);
 }
