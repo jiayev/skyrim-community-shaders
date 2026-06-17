@@ -810,17 +810,15 @@ ID3D11ComputeShader* Upscaling::GetColorSpaceCS(bool toLinear)
 	return shader.get();
 }
 
-ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS(bool pathTracing)
+ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
 {
 	auto upscaleMethod = GetUpscaleMethod();
 
-	auto& cache = pathTracing ? encodeTexturesPTCS : encodeTexturesCS;
-	auto it = cache.find(upscaleMethod);
-
-	if (it != cache.end())
+	auto it = encodeTexturesCS.find(upscaleMethod);
+	if (it != encodeTexturesCS.end())
 		return it->second.get();
 
-	logger::debug("Compiling EncodeTexturesCS.hlsl for upscale method {} (PT={})", magic_enum::enum_name(upscaleMethod), pathTracing);
+	logger::debug("Compiling EncodeTexturesCS.hlsl for upscale method {}", magic_enum::enum_name(upscaleMethod));
 
 	std::vector<std::pair<const char*, const char*>> defines;
 
@@ -840,10 +838,7 @@ ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS(bool pathTracing)
 		break;
 	}
 
-	if (pathTracing)
-		defines.push_back({ "PATH_TRACING", "" });
-
-	auto [emplacedIt, emplaced] = cache.emplace(upscaleMethod, nullptr);
+	auto [emplacedIt, emplaced] = encodeTexturesCS.emplace(upscaleMethod, nullptr);
 	emplacedIt->second.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0"));
 	return emplacedIt->second.get();
 }
@@ -1147,7 +1142,6 @@ void Upscaling::SetupResources()
 void Upscaling::ClearShaderCache()
 {
 	encodeTexturesCS.clear();
-	encodeTexturesPTCS.clear();
 
 	depthRefractionUpscalePS = nullptr;  // com_ptr automatically releases
 	underwaterMaskUpscalePS = nullptr;   // com_ptr automatically releases
@@ -1517,7 +1511,7 @@ void Upscaling::EncodeTextures()
 		ID3D11ShaderResourceView* views[4] = { temporalAAMask.SRV, normals.SRV, motionVector.SRV, depth.depthSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		context->CSSetShader(GetEncodeTexturesCS(false), nullptr, 0);
+		context->CSSetShader(GetEncodeTexturesCS(), nullptr, 0);
 
 		UpscalingDataCB upscalingData;
 		upscalingData.trueSamplingDim = float2((float)renderWidth, (float)renderHeight);
@@ -1525,16 +1519,17 @@ void Upscaling::EncodeTextures()
 		auto upscalingBuffer = upscalingDataCB->CB();
 		context->CSSetConstantBuffers(0, 1, &upscalingBuffer);
 
+		const bool hasMasks = settings.upscaleMethod == UpscaleMethod::kFSR || settings.upscaleMethod == UpscaleMethod::kDLSS;
+
 		// u2 (MotionVectorOutput): DLSS/DLSS RR/FSR — 5x5 dilated MVec for ghosting reduction.
-		ID3D11UnorderedAccessView* uavs[4] = {
-			reactiveMaskTexture->uav.get(),
-			transparencyCompositionMaskTexture->uav.get(),
-			(upscaleMethod == UpscaleMethod::kDLSS) ? motionVectorCopyTexture->uav.get() : nullptr,
+		ID3D11UnorderedAccessView* uavs[] = {
+			hasMasks ? reactiveMaskTexture->uav.get() : nullptr,
+			hasMasks ? transparencyCompositionMaskTexture->uav.get() : nullptr,
 			nullptr
 		};
 
-		if (upscaleMethod == UpscaleMethod::kDLSS_RR)
-			uavs[2] = globals::dx12Interop->sharedResources.motionVector->uav;
+		if (upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kDLSS_RR)
+			uavs[2] = d3d12Mode ? globals::dx12Interop->sharedResources.motionVector->uav : motionVectorCopyTexture->uav.get();
 
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
@@ -1595,6 +1590,8 @@ void Upscaling::Upscale()
 			});
 
 			context->CopyResource(main.texture, upscaleOutput->resource11);
+
+			streamline.PostPresent();
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
 			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR);
 		}

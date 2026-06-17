@@ -266,6 +266,12 @@ void Streamline::PostDevice()
 	if (loadedFeatures & Features::kDLSS_RR)
 		SL_FEATURE_FUN_IMPORT(sl::kFeatureDLSS_RR, slDLSSDSetOptions);
 
+	// DX12
+	if (d3d12Mode) {
+		SL_FEATURE_FUN_IMPORT(sl::kFeatureCommon, slHookPresent);
+		SL_FEATURE_FUN_IMPORT(sl::kFeatureCommon, slHookAfterPresent);
+	}
+
 	slReflexGetState = nullptr;
 	slReflexSleep = nullptr;
 	slReflexSetOptions = nullptr;
@@ -767,6 +773,15 @@ void Streamline::EvaluateDLSSD(ID3D12GraphicsCommandList4* commandList, sl::View
 			logger::error("[Streamline] slEvaluateFeature failed result={}", (int)evalResult);
 		}
 	}
+}
+
+void Streamline::PostPresent() const 
+{
+	// Only Flags argument matter
+	const UINT flags = 0;
+	bool skip = false;
+	slHookPresent(nullptr, 0, flags, skip);
+	slHookAfterPresent(flags);
 }
 
 void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* colorOut, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)

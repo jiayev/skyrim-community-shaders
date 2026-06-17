@@ -776,37 +776,45 @@ void Raytracing::DrawExperimentalSettings()
 
 		auto label = (experimentalSettings.TextureCutOff == 0) ? neverShare : shareConditionLabel;
 		ImGui::SliderInt(T(TKEY("exclusive_mode_cutoff"), "Exclusive Mode Cutoff"), reinterpret_cast<int*>(&experimentalSettings.TextureCutOff), 0, 6, label.c_str());
-
-		DrawEnumCombo(
-			T(TKEY("texture_streaming_mode"), "Texture Streaming Mode"),
-			"TextureStreamingMode",
-			experimentalSettings.TextureStreamingMode,
-			std::array{
-				T(TKEY("texture_streaming_off"), "Off"),
-				T(TKEY("texture_streaming_conservative"), "Conservative"),
-				T(TKEY("texture_streaming_balanced"), "Balanced"),
-				T(TKEY("texture_streaming_aggressive"), "Aggressive"),
-			},
-			T(TKEY("texture_streaming_mode_tooltip"), "Reduces RT-side texture memory by dropping high mips for large Exclusive-mode textures."));
-
-		if (experimentalSettings.TextureStreamingMode != CreationEngineRaytracing::TextureStreamingMode::Off) {
-			int textureBudgetMB = static_cast<int>(experimentalSettings.TextureBudgetMB);
-			if (ImGui::InputInt(T(TKEY("texture_budget_mb"), "Texture Budget MB"), &textureBudgetMB))
-				experimentalSettings.TextureBudgetMB = static_cast<uint32_t>(std::clamp(textureBudgetMB, 0, 65536));
-
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("texture_budget_mb_tooltip"), "Reserved for future budget-driven streaming. 0 disables the budget limit for now."));
-
-			int maxMipBias = static_cast<int>(experimentalSettings.TextureMaxMipBias);
-			if (ImGui::SliderInt(T(TKEY("texture_max_mip_bias"), "Max Mip Bias"), &maxMipBias, 0, 4))
-				experimentalSettings.TextureMaxMipBias = static_cast<uint32_t>(std::clamp(maxMipBias, 0, 4));
-
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("texture_max_mip_bias_tooltip"), "Maximum number of top mips that can be skipped by the streaming MVP."));
-		}
-	} else {
-		experimentalSettings.TextureStreamingMode = CreationEngineRaytracing::TextureStreamingMode::Off;
 	}
+
+	const bool textureStreamingAvailable =
+		experimentalSettings.TextureMode == CreationEngineRaytracing::TextureMode::Exclusive ||
+		settings.CreationEngineRaytracingSettings.GeneralSettings.Mode == CreationEngineRaytracing::Mode::PathTracing;
+
+	if (!textureStreamingAvailable)
+		ImGui::BeginDisabled();
+
+	DrawEnumCombo(
+		T(TKEY("texture_streaming_mode"), "Texture Streaming Mode"),
+		"TextureStreamingMode",
+		experimentalSettings.TextureStreamingMode,
+		std::array{
+			T(TKEY("texture_streaming_off"), "Off"),
+			T(TKEY("texture_streaming_conservative"), "Conservative"),
+			T(TKEY("texture_streaming_balanced"), "Balanced"),
+			T(TKEY("texture_streaming_aggressive"), "Aggressive"),
+		},
+		T(TKEY("texture_streaming_mode_tooltip"), "Reduces texture memory by dropping high mips. In Share mode this is active only for Path Tracing and also affects game-side textures."));
+
+	if (experimentalSettings.TextureStreamingMode != CreationEngineRaytracing::TextureStreamingMode::Off) {
+		int textureBudgetMB = static_cast<int>(experimentalSettings.TextureBudgetMB);
+		if (ImGui::InputInt(T(TKEY("texture_budget_mb"), "Texture Budget MB"), &textureBudgetMB))
+			experimentalSettings.TextureBudgetMB = static_cast<uint32_t>(std::clamp(textureBudgetMB, 0, 65536));
+
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("texture_budget_mb_tooltip"), "Reserved for future budget-driven streaming. 0 disables the budget limit for now."));
+
+		int maxMipBias = static_cast<int>(experimentalSettings.TextureMaxMipBias);
+		if (ImGui::SliderInt(T(TKEY("texture_max_mip_bias"), "Max Mip Bias"), &maxMipBias, 0, 4))
+			experimentalSettings.TextureMaxMipBias = static_cast<uint32_t>(std::clamp(maxMipBias, 0, 4));
+
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("texture_max_mip_bias_tooltip"), "Maximum number of top mips that can be skipped by the streaming MVP."));
+	}
+
+	if (!textureStreamingAvailable)
+		ImGui::EndDisabled();
 
 	ImGui::PopID();
 
@@ -832,6 +840,15 @@ void Raytracing::DrawDebugSettings()
 
 	ImGui::Checkbox(T(TKEY("display_scenegraph_counters"), "Display SceneGraph Counters"), &settings.DisplaySceneGraphCounters);
 
+	if (initialized && creationEngineRaytracing && creationEngineRaytracing->LogTextureMemoryStats) {
+		if (ImGui::Button(T(TKEY("log_texture_memory_stats"), "Log Texture Memory Stats"))) {
+			creationEngineRaytracing->LogTextureMemoryStats();
+		}
+
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("log_texture_memory_stats_tooltip"), "Writes RT texture memory totals to log."));
+	}
+
 	const auto bufferViewerLabel = StableLabel(T(TKEY("buffer_viewer"), "Buffer Viewer"), "BufferViewer");
 	if (ImGui::TreeNode(bufferViewerLabel.c_str())) {
 		static float debugRescale = .3f;
@@ -843,8 +860,8 @@ void Raytracing::DrawDebugSettings()
 			ID3D11ShaderResourceView* srv = nullptr;
 
 			if (Mode() == CreationEngineRaytracing::Mode::PathTracing) {
-				ptDepthTexture->resource11->GetDesc(&desc);
-				srv = ptDepthTexture->srv;
+				depthTexture->resource11->GetDesc(&desc);
+				srv = depthTexture->srv;
 			} else {
 				const auto& mainDepth = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 				mainDepth.texture->GetDesc(&desc);
@@ -1191,10 +1208,14 @@ void Raytracing::SetupResources()
 
 		// Diffuse Albedo Texture
 		{
+			CreationEngineRaytracing::SharedTexture depth;
+			CreationEngineRaytracing::SharedTexture motionVector;
 			CreationEngineRaytracing::SharedTexture main;
 			CreationEngineRaytracing::SharedTexture diffuseAlbedo;
-			creationEngineRaytracing->GetSharedTextures(main, diffuseAlbedo);
+			creationEngineRaytracing->GetSharedTextures(depth, motionVector, main, diffuseAlbedo);
 
+			depthTexture = eastl::make_unique<WrappedResource>(depth.native, depth.shared);
+			motionVectorsTexture = eastl::make_unique<WrappedResource>(motionVector.native, motionVector.shared);
 			mainTexture = eastl::make_unique<WrappedResource>(main.native, main.shared);
 			diffuseAlbedoTexture = eastl::make_unique<WrappedResource>(diffuseAlbedo.native, diffuseAlbedo.shared);
 		}
@@ -1467,32 +1488,6 @@ void Raytracing::DeferredPasses()
 		context->CopyResource(physicalSkyTrLUT->resource11, physicalSky.texTrLut->resource.get());
 	}
 
-	bool resolutionChanged = UpdateResolution();
-
-	D3D11_TEXTURE2D_DESC desc{};
-	desc.Width = m_Resolution.x;
-	desc.Height = m_Resolution.y;
-	desc.MipLevels = 1;
-	desc.ArraySize = 1;
-	desc.SampleDesc.Count = 1;
-	desc.SampleDesc.Quality = 0;
-	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-	if (Mode() == CreationEngineRaytracing::Mode::PathTracing) {
-		if (!ptDepthTexture || resolutionChanged) {
-			desc.Format = DXGI_FORMAT_R32_FLOAT;
-			ptDepthTexture = eastl::make_unique<WrappedResource>(desc);
-		}
-		if (!ptMotionVectorsTexture || resolutionChanged) {
-			desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-			ptMotionVectorsTexture = eastl::make_unique<WrappedResource>(desc);
-		}
-		creationEngineRaytracing->SetPTOutputTargets(ptDepthTexture->GetResource(), ptMotionVectorsTexture->GetResource());
-	} else {
-		ptDepthTexture.reset();
-		ptMotionVectorsTexture.reset();
-	}
-
 	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination) {
 		ConvertTextures();
 
@@ -1581,7 +1576,7 @@ void Raytracing::DeferredPasses()
 
 			ID3D11ShaderResourceView* srvs[] = {
 				mainTexture->srv,
-				ptMotionVectorsTexture->srv
+				motionVectorsTexture->srv
 			};
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -1652,7 +1647,7 @@ void Raytracing::DeferredPasses()
 			// Set up pixel shader
 			context->PSSetShader(copyDepthPS.get(), nullptr, 0);
 
-			ID3D11ShaderResourceView* srvs[] = { ptDepthTexture->srv };
+			ID3D11ShaderResourceView* srvs[] = { depthTexture->srv };
 
 			context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
