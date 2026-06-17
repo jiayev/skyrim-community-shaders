@@ -12,8 +12,8 @@ RWStructuredBuffer<float> RWBufferAdaptation : register(u1);
 
 Texture2D<float4> TexColor : register(t0);
 
-const static float MinLogLum = -8;
-const static float LogLumRange = 21;
+const static float MinLogLum = -13;
+const static float LogLumRange = 31;
 const static float RcpLogLumRange = rcp(LogLumRange);
 const static uint HistogramBins = 256;
 const static uint FirstLuminanceBin = 1;

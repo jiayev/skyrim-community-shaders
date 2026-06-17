@@ -259,7 +259,7 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 	bool useGlobalExposure = exposure && exposure->enabled && exposure->GetAdaptationSRV();
 	float exposureCompensation = useGlobalExposure ? exp2(exposure->settings.ExposureCompensation) : 1.f;
 	float2 adaptationRange = useGlobalExposure ?
-	                             float2{ exp2(exposure->settings.AdaptationRange.x), exp2(exposure->settings.AdaptationRange.y) } :
+	                             float2{ exp2(exposure->settings.AdaptationRange.x - 3.0f), exp2(exposure->settings.AdaptationRange.y - 3.0f) } :
 	                             float2{ 1.f, 1.f };
 	// Update constant buffer
 	LocalExposureCB cbData = {

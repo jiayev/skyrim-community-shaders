@@ -150,8 +150,8 @@ RWTexture2D<float4> RWTexOutput : register(u0);
 
 	// Purkinje effect: applied on the final perceived (exposed + composited) image
 	if (PurkinjeStrength > 1e-3) {
-		float log_avgLuma = log2(avgLuma);
-		float mix_term = (log_avgLuma - PurkinjeMaxEV) / (PurkinjeStartEV - PurkinjeMaxEV);
+		float avgEV100 = log2(avgLuma) + 3.0;
+		float mix_term = (avgEV100 - PurkinjeMaxEV) / (PurkinjeStartEV - PurkinjeMaxEV);
 		float purkinjeMix = lerp(PurkinjeStrength, 0.0, saturate(mix_term));
 
 		if (purkinjeMix > 1e-3)
