@@ -1023,9 +1023,11 @@ void Raytracing::SetupResources()
 		creationEngineRaytracing->Initialize(GetSettings());
 
 		creationEngineRaytracing->SetResolution(mainDesc.Width, mainDesc.Height);
+
+		// Inputs for GI
 		creationEngineRaytracing->SetSharedTextures(albedoTexture.get(), normalRoughnessTexture->GetResource(), gnmaoTexture.get());
 
-		// Diffuse Albedo Texture
+		// Outputs from both PT and GI
 		{
 			CreationEngineRaytracing::SharedTexture depth;
 			CreationEngineRaytracing::SharedTexture motionVector;
