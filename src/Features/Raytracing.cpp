@@ -1328,12 +1328,24 @@ void Raytracing::DeferredPasses()
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		auto& BSImagespaceShaderISSAOBlurH = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISSAOBlurH;
 
-		// Toggle vanilla SSAO
+		// Toggle vanilla SSAO - Doesn't work for SE?
 		static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH.get()) + 0x50LL);
 		if (enableSSAO)
 			ssaoEnabled = true;
 
-		*enableSSAO = (globalIllumation || pathtracing) ? false : ssaoEnabled;	
+		const bool shouldEnableSSAO = (globalIllumation || pathtracing) ? false : ssaoEnabled;
+
+		*enableSSAO = shouldEnableSSAO;
+
+		// Toggle vanilla SSAO v2
+		if (auto iniSettingCollection = globals::game::iniPrefSettingCollection)
+		{
+			if (auto setting = iniSettingCollection->GetSetting("bSAOEnable:Display"))
+			{
+				if (setting->data.b != shouldEnableSSAO) 
+					setting->data.b = shouldEnableSSAO;		
+			}
+		}
 	}
 
 	auto* context = globals::d3d::context;
