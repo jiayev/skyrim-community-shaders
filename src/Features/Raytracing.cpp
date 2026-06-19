@@ -165,7 +165,7 @@ void Raytracing::DrawSettings()
 	if (forcedDisabledReason)
 		ImGui::BeginDisabled();
 
-	auto ceRTSettingsBefore = settings.CreationEngineRaytracingSettings;
+	auto ceRTSettingsBefore = GetSettings();
 
 	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.CreationEngineRaytracingSettings.Enabled);
 
@@ -230,7 +230,7 @@ void Raytracing::DrawSettings()
 	if (forcedDisabledReason)
 		ImGui::EndDisabled();
 
-	if (ceRTSettingsBefore != settings.CreationEngineRaytracingSettings)
+	if (ceRTSettingsBefore != GetSettings())
 		UpdateSettings();
 }
 
@@ -238,8 +238,7 @@ CreationEngineRaytracing::Settings Raytracing::GetSettings() const
 {
 	auto certSettings = settings.CreationEngineRaytracingSettings;
 
-	// Only if PIX is enabled (globals::dx12Interop.enablePIXCapture)
-	certSettings.DebugSettings.Markers = false;
+	certSettings.DebugSettings.Markers = globals::state->interopLoadPIX;
 	certSettings.DebugSettings.Timings = settings.PerfOverlay != OverlayMode::None;
 
 	return certSettings;
