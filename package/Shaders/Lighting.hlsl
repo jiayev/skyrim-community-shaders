@@ -2964,10 +2964,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
-#	if defined(RAYTRACING)
-	directionalAmbientColor *= SharedData::raytracingSettings.Ambient;
-#	endif
-
 #	if defined(SKYLIGHTING)
 	float skylightingDiffuse = 1;
 	float skylightingFadeOutFactor = 1.0;
@@ -3019,6 +3015,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 		}
 	}
+#	endif
+
+#	if defined(RAYTRACING) && defined(DEFERRED)
+	directionalAmbientColor *= SharedData::raytracingSettings.Ambient;
 #	endif
 
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
