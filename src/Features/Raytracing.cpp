@@ -1204,9 +1204,11 @@ void Raytracing::SetupResources()
 		creationEngineRaytracing->Initialize(GetSettings());
 
 		creationEngineRaytracing->SetResolution(mainDesc.Width, mainDesc.Height);
+
+		// Inputs for GI
 		creationEngineRaytracing->SetSharedTextures(albedoTexture.get(), normalRoughnessTexture->GetResource(), gnmaoTexture.get());
 
-		// Diffuse Albedo Texture
+		// Outputs from both PT and GI
 		{
 			CreationEngineRaytracing::SharedTexture depth;
 			CreationEngineRaytracing::SharedTexture motionVector;
@@ -1537,12 +1539,22 @@ void Raytracing::DeferredPasses()
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		auto& BSImagespaceShaderISSAOBlurH = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISSAOBlurH;
 
-		// Toggle vanilla SSAO
+		// Toggle vanilla SSAO - Doesn't work for SE?
 		static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH.get()) + 0x50LL);
 		if (enableSSAO)
 			ssaoEnabled = true;
 
-		*enableSSAO = (globalIllumation || pathtracing) ? false : ssaoEnabled;
+		const bool shouldEnableSSAO = (globalIllumation || pathtracing) ? false : ssaoEnabled;
+
+		*enableSSAO = shouldEnableSSAO;
+
+		// Toggle vanilla SSAO v2
+		if (auto iniSettingCollection = globals::game::iniPrefSettingCollection) {
+			if (auto setting = iniSettingCollection->GetSetting("bSAOEnable:Display")) {
+				if (setting->data.b != shouldEnableSSAO)
+					setting->data.b = shouldEnableSSAO;
+			}
+		}
 	}
 
 	if (globalIllumation) {
