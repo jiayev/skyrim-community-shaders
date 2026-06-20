@@ -387,9 +387,9 @@ jobs:
               # moves to a new minor, this branch stops being reconciled and
               # becomes the divergent older-line maintenance branch — correct.
               #
-              # Prerequisite: the release App must be allowed to bypass branch
-              # protection / force-push on hotfix/* (same bypass it already has
-              # for main and dev) — this is the only force-push to hotfix/*.
+              # hotfix/* is not branch-protected, so this force-push only needs
+              # the App's normal write access (no bypass entry required, unlike
+              # the FF pushes to main and dev).
               if: ${{ inputs.ff_target != '' && steps.semantic.outputs.new_release_published == 'true' && steps.validate.outputs.source != 'dev' }}
               env:
                   TOKEN: ${{ steps.app-token.outputs.token }}
