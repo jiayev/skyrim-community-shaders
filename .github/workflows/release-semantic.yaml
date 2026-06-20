@@ -4,10 +4,11 @@ name: "Release: Semantic Version"
 # (older line, only valid when main has shipped a newer minor/major).
 #
 # Promotion (ff_target on main): FF main to ff_target, run semantic-
-# release, then reconcile dev. Dev-source reconciles FF-only; hotfix-
-# staging source rebases dev onto the new main so the release tag
-# enters dev's ancestry — the only force-push this workflow performs.
-# Open PRs targeting dev will need a manual rebase by their authors.
+# release, then reconcile the source branch. Dev-source merges main into
+# dev (ancestry-only) and FF-reconciles dev. Hotfix-staging source resets
+# the maintenance branch (hotfix/X.Y.x) to the released main tip so the
+# NEXT current-line patch still fast-forwards main; dev is left untouched
+# and folds the hotfix in at the next minor/major promotion.
 
 on:
     workflow_dispatch:
@@ -131,9 +132,12 @@ jobs:
                     echo "::error::ff_target ${FF_TARGET} is not an ancestor of dev or any origin/hotfix/* branch — refusing to promote an unreviewed SHA."
                     exit 1
                   fi
-                  # hotfix-staging sources must be a clean fast-forward of main
-                  # (no reconcile pre-step runs for them). dev sources may have a
-                  # diverged main; the reconcile step merges it in first.
+                  # hotfix-staging sources must be a clean fast-forward of main.
+                  # The post-release reconcile step resets the maintenance branch
+                  # to main after every current-line patch, so the next staging
+                  # branch is built on main's tip and this check stays satisfiable.
+                  # dev sources may have a diverged main; the dev-reconcile
+                  # pre-step merges it in first.
                   if [[ "${SOURCE}" != "dev" ]]; then
                     if ! git merge-base --is-ancestor origin/main "${FF_TARGET}"; then
                       echo "::error::hotfix-staging ff_target ${FF_TARGET} is not a fast-forward of main."
@@ -370,3 +374,31 @@ jobs:
                   CURRENT_DEV=$(git rev-parse origin/dev)
                   git push --force-with-lease="dev:${CURRENT_DEV}" "${REMOTE}" "${NEW_MAIN}:refs/heads/dev"
                   echo "::notice::Reconciled dev to main ($NEW_MAIN)."
+
+            - name: Reconcile maintenance branch with release commit (hotfix-staging source)
+              # Current-line patches FF main to the staging tip, then semantic-
+              # release appends chore(release): on main. The maintenance branch
+              # still points at its PR merge commit (which main can't take —
+              # linear-history protection) and lacks that release commit, so it
+              # diverges from main and the NEXT patch's staging branch would no
+              # longer fast-forward main. Reset the maintenance branch to the
+              # released main tip so it stays in lockstep while it is the current
+              # line (the mirror of the dev reconcile above). When main later
+              # moves to a new minor, this branch stops being reconciled and
+              # becomes the divergent older-line maintenance branch — correct.
+              #
+              # Prerequisite: the release App must be allowed to bypass branch
+              # protection / force-push on hotfix/* (same bypass it already has
+              # for main and dev) — this is the only force-push to hotfix/*.
+              if: ${{ inputs.ff_target != '' && steps.semantic.outputs.new_release_published == 'true' && steps.validate.outputs.source != 'dev' }}
+              env:
+                  TOKEN: ${{ steps.app-token.outputs.token }}
+                  SOURCE: ${{ steps.validate.outputs.source }}
+              run: |
+                  set -euo pipefail
+                  git fetch origin main "${SOURCE}"
+                  NEW_MAIN=$(git rev-parse origin/main)
+                  CURRENT_HOTFIX=$(git rev-parse "origin/${SOURCE}")
+                  REMOTE="https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git"
+                  git push --force-with-lease="${SOURCE}:${CURRENT_HOTFIX}" "${REMOTE}" "${NEW_MAIN}:refs/heads/${SOURCE}"
+                  echo "::notice::Reconciled ${SOURCE} to main (${NEW_MAIN})."
