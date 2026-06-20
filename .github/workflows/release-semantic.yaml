@@ -394,11 +394,24 @@ jobs:
               env:
                   TOKEN: ${{ steps.app-token.outputs.token }}
                   SOURCE: ${{ steps.validate.outputs.source }}
+                  FF_TARGET: ${{ inputs.ff_target }}
               run: |
                   set -euo pipefail
                   git fetch origin main "${SOURCE}"
                   NEW_MAIN=$(git rev-parse origin/main)
                   CURRENT_HOTFIX=$(git rev-parse "origin/${SOURCE}")
+                  # Stale ff_target guard: validate only checks ff_target is an
+                  # ANCESTOR of the branch, so an old SHA can pass while newer
+                  # commits sit on the tip. NEW_MAIN is ff_target plus the release
+                  # commit, so resetting SOURCE to it would silently drop any
+                  # content the tip has beyond ff_target. The expected PR merge
+                  # commit carries no content, so an empty diff means the reset is
+                  # safe; a non-empty diff means the promotion is stale.
+                  if ! git diff --quiet "${FF_TARGET}" "${CURRENT_HOTFIX}"; then
+                    echo "::error::maintenance branch ${SOURCE} ($(git rev-parse --short=9 "${CURRENT_HOTFIX}")) carries content beyond the promoted ff_target ($(git rev-parse --short=9 "${FF_TARGET}")); refusing to reset it to main and drop those commits. Re-promote the current branch tip."
+                    git diff --name-only "${FF_TARGET}" "${CURRENT_HOTFIX}"
+                    exit 1
+                  fi
                   REMOTE="https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git"
                   git push --force-with-lease="${SOURCE}:${CURRENT_HOTFIX}" "${REMOTE}" "${NEW_MAIN}:refs/heads/${SOURCE}"
                   echo "::notice::Reconciled ${SOURCE} to main (${NEW_MAIN})."
