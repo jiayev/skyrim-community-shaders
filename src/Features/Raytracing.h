@@ -609,7 +609,10 @@ struct Raytracing : public OverlayFeature
 
 	// Functionality
 	virtual inline std::string_view GetShaderDefineName() override { return "RAYTRACING"; }
-	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override { return t == RE::BSShader::Type::Lighting || t == RE::BSShader::Type::Grass; };
+	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override
+	{
+		return t == RE::BSShader::Type::Lighting || t == RE::BSShader::Type::Grass || t == RE::BSShader::Type::Sky;
+	};
 
 	// Settings & UI
 	virtual void RestoreDefaultSettings() override;

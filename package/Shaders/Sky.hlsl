@@ -348,18 +348,29 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
 	psout.CloudShadows = float4(1, 1, 1, psout.Color.w);
 
-	// Keep sun behind scene depth to prevent halo leaks through geometry.
-	float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
-	if (depth < input.Position.z)
-		psout.Color.w = 0;
-
-#	else
-	// Even without cloud shadows enabled, sun disc should be occluded by scene depth (clouds, terrain, etc.)
-	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun)) {
+#		if defined(RAYTRACING)
+	if (!SharedData::raytracingSettings.PathTracing) {
+#		endif
+		// Keep sun behind scene depth to prevent halo leaks through geometry.
 		float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
 		if (depth < input.Position.z)
 			psout.Color.w = 0;
+#		if defined(RAYTRACING)
 	}
+#		endif
+#	else
+#		if defined(RAYTRACING)
+	if (!SharedData::raytracingSettings.PathTracing) {
+#		endif
+		// Even without cloud shadows enabled, sun disc should be occluded by scene depth (clouds, terrain, etc.)
+		if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun)) {
+			float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
+			if (depth < input.Position.z)
+				psout.Color.w = 0;
+		}
+#		if defined(RAYTRACING)
+	}
+#		endif
 #	endif
 
 	return psout;
