@@ -517,30 +517,36 @@ Texture2D<float4> TexMsLut : register(t113);
 
 	float3 CompositeAerialPerspective(float3 color, float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)
 	{
+		const float4 apSample = SampleAp(viewDir, pxCoord, dist, sampSv);
+		color = color * apSample.w + apSample.xyz;
+
 		if (SharedData::physSkyData.enableVolumetricClouds)
 			return CompositeVolumetricClouds(color, pxCoord);
 
-		const float4 apSample = SampleAp(viewDir, pxCoord, dist, sampSv);
-		return color * apSample.w + apSample.xyz;
+		return color;
 	}
 
 	float3 CompositeAerialPerspective(float3 color, float3 viewDir, float2 screenPos, float2 screenUv, float dist, SamplerState sampSv)
 	{
+		const float4 apSample = SampleAp(viewDir, uint2(screenPos), dist, sampSv);
+		color = color * apSample.w + apSample.xyz;
+
 		if (SharedData::physSkyData.enableVolumetricClouds)
 			return CompositeVolumetricCloudsUv(color, screenUv, sampSv);
 
-		const float4 apSample = SampleAp(viewDir, uint2(screenPos), dist, sampSv);
-		return color * apSample.w + apSample.xyz;
+		return color;
 	}
 
 #		ifndef PS_DEFERRED_RSRCS
 	float3 CompositeAerialPerspectiveReflection(float3 color, float3 viewDir, float dist, SamplerState sampSv)
 	{
+		const float4 apSample = SampleAp(viewDir, dist, 0.0, sampSv);
+		color = color * apSample.w + apSample.xyz;
+
 		if (SharedData::physSkyData.enableVolumetricClouds)
 			return CompositeVolumetricCloudsCube(color, viewDir, sampSv);
 
-		const float4 apSample = SampleAp(viewDir, dist, 0.0, sampSv);
-		return color * apSample.w + apSample.xyz;
+		return color;
 	}
 #		endif
 

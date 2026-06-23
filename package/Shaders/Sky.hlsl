@@ -316,11 +316,9 @@ PS_OUTPUT main(PS_INPUT input)
 		psout.Color.xyz = lerp(skyColor, psout.Color.xyz, SharedData::physSkyData.vanillaMix);
 
 #		elif defined(PS_CLOUDS)
-		if (!SharedData::physSkyData.enableVolumetricClouds) {
-			float apShadow = GetPhysSkyCloudShadow(viewDir, input.Position.xy);
-			float4 apColor = PhysSky::SampleAp(viewDir, psCloudDist, apShadow, PhysSky::SampSv);
-			psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
-		}
+		float apShadow = GetPhysSkyCloudShadow(viewDir, input.Position.xy);
+		float4 apColor = PhysSky::SampleAp(viewDir, psCloudDist, apShadow, PhysSky::SampSv);
+		psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
 #		elif defined(TEX) && defined(DEFERRED)
 		float3 sunDir = normalize(SharedData::physSkyData.sunDir);
 		float cosTheta = saturate(dot(normalize(input.WorldPosition.xyz), sunDir));
