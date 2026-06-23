@@ -434,6 +434,12 @@ float StabilizeVerticalProfileDensity(float dimensionProfile, float noiseComposi
 	return saturate((dimensionProfile - noiseComposite) / erosionWidth);
 }
 
+float sampleCoverage2D(float3 pos, CloudLayer cloud)
+{
+	const float2 uv = pos.xy * cloud.ndf_freq;
+	return TexCloudNDF.SampleLevel(TileableSampler, float3(uv, 2), 0);
+}
+
 struct NDFInfo
 {
 	bool in_layer;
@@ -668,65 +674,77 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	float weighted_depth = 0.0;
 
 	float stride = 0.003 / 1.428e-5f;
+	const float coarse_stride = stride * 6.0;
 
 	advanceRay(ray, stride, jitter);
-	[loop] for (ray.step = 0; ray.step < info.cloudMaxStep && ray.ray_dist < ray.march_dist; advanceRay(ray, stride, jitter))
+	[loop] for (; ray.step < info.cloudMaxStep && ray.ray_dist < ray.march_dist; advanceRay(ray, stride, jitter))
 	{
-		const float dt = ray.segment_dist - ray.last_segment_dist;
+		float coverage_2d = sampleCoverage2D(ray.pos, cloud);
 
-		NDFInfo ndf;
-		float cloud_density = sampleCloudDensity(ray.pos, ray.start_dist + ray.ray_dist, cloud, (ray.start_dist + ray.ray_dist) * 1.428e-5f, true, ndf);
-		float3 cloud_scatter = cloud_density * cloud.scatter;
-
-		const float3 extinction = cloud_density * (cloud.scatter + cloud.absorption);
-
-		// scattering
-		[branch] if (max(extinction.x, max(extinction.y, extinction.z)) > 1e-7)
+		[branch] if (coverage_2d < 1e-4)
 		{
-			// dir light
-			float3 scatter = cloud_scatter * cloud_phase;
-			float3 cloud_transmittance;
-			float3 sun_transmittance = sampleSunTransmittance(ray.pos, info.dirlightDir, seed + ray.step, jitter_frame, cloud_transmittance);
-			float3 in_scatter = scatter * sun_transmittance * info.dirlightColor;
-
-			sum_shadowing_weights += dt;
-			mean_shadowing += sun_transmittance * dt;
-
-			// multiscatter
-			float3 ms_volume = saturate((ndf.dimension_profile - 0.1) / (1.0 - 0.1)) * pow(ndf.coverage * ndf.cloud_type, 0.25);
-			ms_volume *= pow(cloud_transmittance, cloud.ms_transmittance_power);
-			ms_volume *= pow(saturate(ndf.height_fraction), cloud.ms_height_power);
-			ms_volume *= cloud.ms_mult;
-			in_scatter += (sun_transmittance / max(1e-8, cloud_transmittance)) * cloud_scatter * cloud_secondary_phase * ms_volume * info.dirlightColor;
-
-			// ambient
-			float3 ambient = SampleCloudAmbientSkyView(ray.ray_dir);
-			float profile_indirect = sqrt(1.0 - saturate(ndf.dimension_profile));
-			float vertical_transmittance = dot(TexTransmittance.SampleLevel(TransmittanceSampler, TrLutUvPlanet(ray.pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius), info.dirlightDir), 0).rgb, float3(0.2126, 0.7152, 0.0722));
-			float vertical_indirect = exp(vertical_transmittance);
-			in_scatter += cloud_scatter * profile_indirect * vertical_indirect * cloud.ambient_mult * ambient;
-
-			const float3 sample_transmittance = exp(-dt * extinction);
-			const float3 scatter_factor = (1 - sample_transmittance) / max(extinction, 1e-8);
-			const float3 scatter_integeral = in_scatter * scatter_factor;
-
-			// update
-			ray.lum += scatter_integeral * ray.transmittance;
-			ray.transmittance *= sample_transmittance;
+			// no 2D coverage: skip with coarse stride
+			ap_dist += stride;
+			stride = coarse_stride;
 		}
+		else
+		{
+			const float dt = ray.segment_dist - ray.last_segment_dist;
 
-		// stride
-		const bool empty_layer_sample = ndf.in_layer && ndf.dimension_profile <= 1e-8;
-		float rcp_step = (empty_layer_sample ? zero_density_stride_mult : 1.0) / (float)info.cloudMaxStep;
-		float march_prop = saturate((ray.start_dist + ray.segment_dist) / info.rayMarchRange);
-		stride = (pow(sqrt(march_prop) + rcp_step, 2) - march_prop) * info.rayMarchRange;
+			NDFInfo ndf;
+			float cloud_density = sampleCloudDensity(ray.pos, ray.start_dist + ray.ray_dist, cloud, (ray.start_dist + ray.ray_dist) * 1.428e-5f, true, ndf);
+			float3 cloud_scatter = cloud_density * cloud.scatter;
 
-		const float tr = max(ray.transmittance.x, max(ray.transmittance.y, ray.transmittance.z));
-		const float step_opacity = saturate(1.0 - tr);
-		scatter_weight += step_opacity * dt;
-		weighted_depth += step_opacity * dt * (ray.start_dist + ray.ray_dist);
-		ap_dist += tr * dt;
-		[branch] if (tr < 1e-3) break;
+			const float3 extinction = cloud_density * (cloud.scatter + cloud.absorption);
+
+			// scattering
+			[branch] if (max(extinction.x, max(extinction.y, extinction.z)) > 1e-7)
+			{
+				// dir light
+				float3 scatter = cloud_scatter * cloud_phase;
+				float3 cloud_transmittance;
+				float3 sun_transmittance = sampleSunTransmittance(ray.pos, info.dirlightDir, seed + ray.step, jitter_frame, cloud_transmittance);
+				float3 in_scatter = scatter * sun_transmittance * info.dirlightColor;
+
+				sum_shadowing_weights += dt;
+				mean_shadowing += sun_transmittance * dt;
+
+				// multiscatter
+				float3 ms_volume = saturate((ndf.dimension_profile - 0.1) / (1.0 - 0.1)) * pow(ndf.coverage * ndf.cloud_type, 0.25);
+				ms_volume *= pow(cloud_transmittance, cloud.ms_transmittance_power);
+				ms_volume *= pow(saturate(ndf.height_fraction), cloud.ms_height_power);
+				ms_volume *= cloud.ms_mult;
+				in_scatter += (sun_transmittance / max(1e-8, cloud_transmittance)) * cloud_scatter * cloud_secondary_phase * ms_volume * info.dirlightColor;
+
+				// ambient
+				float3 ambient = SampleCloudAmbientSkyView(ray.ray_dir);
+				float profile_indirect = sqrt(1.0 - saturate(ndf.dimension_profile));
+				float vertical_transmittance = dot(TexTransmittance.SampleLevel(TransmittanceSampler, TrLutUvPlanet(ray.pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius), info.dirlightDir), 0).rgb, float3(0.2126, 0.7152, 0.0722));
+				float vertical_indirect = exp(vertical_transmittance);
+				in_scatter += cloud_scatter * profile_indirect * vertical_indirect * cloud.ambient_mult * ambient;
+
+				const float3 sample_transmittance = exp(-dt * extinction);
+				const float3 scatter_factor = (1 - sample_transmittance) / max(extinction, 1e-8);
+				const float3 scatter_integeral = in_scatter * scatter_factor;
+
+				// update
+				ray.lum += scatter_integeral * ray.transmittance;
+				ray.transmittance *= sample_transmittance;
+			}
+
+			// stride
+			const bool empty_layer_sample = ndf.in_layer && ndf.dimension_profile <= 1e-8;
+			float rcp_step = (empty_layer_sample ? zero_density_stride_mult : 1.0) / (float)info.cloudMaxStep;
+			float march_prop = saturate((ray.start_dist + ray.segment_dist) / info.rayMarchRange);
+			stride = (pow(sqrt(march_prop) + rcp_step, 2) - march_prop) * info.rayMarchRange;
+
+			const float tr = max(ray.transmittance.x, max(ray.transmittance.y, ray.transmittance.z));
+			const float step_opacity = saturate(1.0 - tr);
+			scatter_weight += step_opacity * dt;
+			weighted_depth += step_opacity * dt * (ray.start_dist + ray.ray_dist);
+			ap_dist += tr * dt;
+			[branch] if (tr < 1e-3) break;
+		}
 	}
 
 	mean_shadowing = sum_shadowing_weights > 1e-8 ? mean_shadowing / sum_shadowing_weights : 1.0;
