@@ -752,26 +752,17 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	uint3 ap_dims;
 	TexAerialPerspective.GetDimensions(ap_dims.x, ap_dims.y, ap_dims.z);
 	float2 ap_uv = SkyViewLutUv(ray.ray_dir);
-	const float depth_slice = lerp(.5 / ap_dims.z, 1 - .5 / ap_dims.z, saturate(solid_dist / info.aerialPerspectiveMaxDist));
-	float4 ap_sample = TexAerialPerspective.SampleLevel(SkyViewSampler, float3(ap_uv, depth_slice), 0);
 	const float vol_depth_slice = lerp(.5 / ap_dims.z, 1 - .5 / ap_dims.z, saturate(ap_dist / info.aerialPerspectiveMaxDist));
 	float4 vol_ap_sample = TexAerialPerspective.SampleLevel(SkyViewSampler, float3(ap_uv, vol_depth_slice), 0);
 
 	const float ap_direct_visibility = 1.0 - saturate(ap_shadow);
 	const float vol_ap_direct_visibility = saturate(dot(mean_shadowing, float3(0.2126, 0.7152, 0.0722))) * ap_direct_visibility;
 	const float3 ap_multi_scatter = SampleApMultiScatter();
-	ap_sample.rgb *= GetApShadowedMultiScatterVisibility(1.0 - ap_direct_visibility, ap_multi_scatter);
 	vol_ap_sample.rgb *= GetApShadowedMultiScatterVisibility(1.0 - vol_ap_direct_visibility, ap_multi_scatter);
 
-	ap_sample = ApplyAerialPerspectiveSettings(ap_sample);
 	vol_ap_sample = ApplyAerialPerspectiveSettings(vol_ap_sample);
 
-	if (!is_sky) {
-		ray.lum += (ap_sample.rgb - vol_ap_sample.rgb) * ray.transmittance;
-		ray.transmittance *= ap_sample.a;
-	} else {
-		ray.transmittance *= vol_ap_sample.a;
-	}
+	ray.transmittance *= vol_ap_sample.a;
 	ray.lum = ray.lum * vol_ap_sample.a + vol_ap_sample.rgb;
 
 	VolumetricCloudResult result;
