@@ -311,6 +311,15 @@ void ThemeManager::ForceApplyDefaultTheme()
 	logger::info("ForceApplyDefaultTheme: Applied Default.json colors directly to ImGui");
 }
 
+void ThemeManager::InitDefaultFontConfig(ImFontConfig& config)
+{
+	config = {};
+	config.OversampleH = Constants::FCONF_OVERSAMPLE_H;
+	config.OversampleV = Constants::FCONF_OVERSAMPLE_V;
+	config.PixelSnapH = Constants::FCONF_PIXELSNAP_H;
+	config.RasterizerMultiply = Constants::FCONF_RASTERIZER_MULTIPLY;
+}
+
 bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 {
 	// Thread-safe reentrancy guard using atomic flag
@@ -362,14 +371,11 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 
 	// Clear existing fonts from the atlas
 	io.Fonts->Clear();
+	MenuFonts::InvalidatePreviewFonts();
 	io.Fonts->TexGlyphPadding = 1;
 
 	ImFontConfig font_config;
-
-	font_config.OversampleH = Constants::FCONF_OVERSAMPLE_H;
-	font_config.OversampleV = Constants::FCONF_OVERSAMPLE_V;
-	font_config.PixelSnapH = Constants::FCONF_PIXELSNAP_H;
-	font_config.RasterizerMultiply = Constants::FCONF_RASTERIZER_MULTIPLY;
+	InitDefaultFontConfig(font_config);
 
 	float fontSize = ResolveFontSize(menu);
 	auto fontsRoot = Util::PathHelpers::GetFontsPath();
@@ -534,6 +540,7 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 				logger::warn("[I18n] CJK locale '{}' active but no CJK font path candidates were available.", locale);
 			} else {
 				io.Fonts->Clear();
+				MenuFonts::InvalidatePreviewFonts();
 
 				std::unordered_map<std::string, ImFont*> cjkAtlasCache;
 				bool mergedAnyCJKFont = false;
@@ -618,12 +625,18 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 		}
 	}
 
+	if (menu.wantsFontPreviewAtlas) {
+		const float previewFontSize = menu.cachedFontPixelSizesByRole[static_cast<size_t>(Menu::FontRole::Body)];
+		MenuFonts::AddPreviewFontsToAtlas(previewFontSize);
+	}
+
 	// Build the font atlas - this bakes all fonts into the texture
 	if (!io.Fonts->Build()) {
 		logger::error("ReloadFont: Failed to build font atlas");
 
 		// Emergency fallback: try to restore with default font before giving up
 		io.Fonts->Clear();
+		MenuFonts::InvalidatePreviewFonts();
 		ImFont* fallbackFont = io.Fonts->AddFontDefault();
 		MergeFontAwesome5(io.Fonts, fallbackFont, fontSize);
 		if (fallbackFont && io.Fonts->Build()) {
@@ -658,6 +671,7 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 
 		// Emergency fallback: restore with default font and retry device objects
 		io.Fonts->Clear();
+		MenuFonts::InvalidatePreviewFonts();
 		ImFont* fallbackFont = io.Fonts->AddFontDefault();
 		MergeFontAwesome5(io.Fonts, fallbackFont, fontSize);
 
