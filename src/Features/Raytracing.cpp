@@ -679,8 +679,8 @@ void Raytracing::DrawDebugSettings()
 			ID3D11ShaderResourceView* srv = nullptr;
 
 			if (Mode() == CreationEngineRaytracing::Mode::PathTracing) {
-				depthTexture->resource11->GetDesc(&desc);
-				srv = depthTexture->srv;
+				depthTexture[currentFrame]->resource11->GetDesc(&desc);
+				srv = depthTexture[currentFrame]->srv;
 			} else {
 				const auto& mainDepth = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 				mainDepth.texture->GetDesc(&desc);
@@ -694,9 +694,9 @@ void Raytracing::DrawDebugSettings()
 		const auto mainLabel = StableLabel(T(TKEY("debug_main"), "Main"), "Main");
 		if (ImGui::TreeNode(mainLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
-			mainTexture->resource11->GetDesc(&desc);
+			mainTexture[currentFrame]->resource11->GetDesc(&desc);
 
-			ImGui::Image(mainTexture->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			ImGui::Image(mainTexture[currentFrame]->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
 			ImGui::TreePop();
 		}
 
@@ -712,9 +712,9 @@ void Raytracing::DrawDebugSettings()
 		const auto diffuseAlbedoLabel = StableLabel(T(TKEY("debug_diffuse_albedo"), "Diffuse Albedo"), "DiffuseAlbedo");
 		if (ImGui::TreeNode(diffuseAlbedoLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
-			diffuseAlbedoTexture->resource11->GetDesc(&desc);
+			diffuseAlbedoTexture[currentFrame]->resource11->GetDesc(&desc);
 
-			ImGui::Image(diffuseAlbedoTexture->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			ImGui::Image(diffuseAlbedoTexture[currentFrame]->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
 			ImGui::TreePop();
 		}
 
@@ -1029,16 +1029,18 @@ void Raytracing::SetupResources()
 
 		// Outputs from both PT and GI
 		{
-			CreationEngineRaytracing::SharedTexture depth;
-			CreationEngineRaytracing::SharedTexture motionVector;
-			CreationEngineRaytracing::SharedTexture main;
-			CreationEngineRaytracing::SharedTexture diffuseAlbedo;
+			CreationEngineRaytracing::SharedTexture depth[CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT];
+			CreationEngineRaytracing::SharedTexture motionVector[CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT];
+			CreationEngineRaytracing::SharedTexture main[CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT];
+			CreationEngineRaytracing::SharedTexture diffuseAlbedo[CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT];
 			creationEngineRaytracing->GetSharedTextures(depth, motionVector, main, diffuseAlbedo);
 
-			depthTexture = eastl::make_unique<WrappedResource>(depth.native, depth.shared);
-			motionVectorsTexture = eastl::make_unique<WrappedResource>(motionVector.native, motionVector.shared);
-			mainTexture = eastl::make_unique<WrappedResource>(main.native, main.shared);
-			diffuseAlbedoTexture = eastl::make_unique<WrappedResource>(diffuseAlbedo.native, diffuseAlbedo.shared);
+			for (size_t i = 0; i < CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT; i++) {
+				depthTexture[i] = eastl::make_unique<WrappedResource>(depth[i].native, depth[i].shared);
+				motionVectorsTexture[i] = eastl::make_unique<WrappedResource>(motionVector[i].native, motionVector[i].shared);
+				mainTexture[i] = eastl::make_unique<WrappedResource>(main[i].native, main[i].shared);
+				diffuseAlbedoTexture[i] = eastl::make_unique<WrappedResource>(diffuseAlbedo[i].native, diffuseAlbedo[i].shared);
+			}
 		}
 	}
 
@@ -1260,7 +1262,7 @@ void Raytracing::ConvertTextures()
 
 	ID3D11UnorderedAccessView* uavs[] = {
 		normalRoughnessTexture->uav,
-		diffuseAlbedoTexture->uav
+		diffuseAlbedoTexture[currentFrame]->uav
 	};
 
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
@@ -1286,11 +1288,38 @@ void Raytracing::DeferredPasses()
 			// Executes the render graph for Global Illumination, depends on gbuffer render targets so we call it late
 			creationEngineRaytracing->Execute();
 		});
+	} else if (Mode() == CreationEngineRaytracing::Mode::PathTracing) {
+		if (IsPathTracingCull()) {
+			auto renderer = globals::game::renderer;
+			auto context = globals::d3d::context;
+
+			// Clear Depth
+			{
+				auto depthStencils = renderer->GetDepthStencilData().depthStencils;
+				auto& mainDepth = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+				auto& mainDepthCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
+				auto& zPrePassCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
+				context->ClearDepthStencilView(mainDepth.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+				context->ClearDepthStencilView(mainDepthCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+				context->ClearDepthStencilView(zPrePassCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
+			}
+
+			// Clear Motion Vector
+			{
+				auto renderTargets = renderer->GetRuntimeData().renderTargets;
+				float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				context->ClearRenderTargetView(renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].RTV, clearColor);
+			}
+		}
+
+		globals::dx12Interop->Fence([&]() {
+			creationEngineRaytracing->Execute();
+		});
 	}
 
-	// Waits for execution to finish (blocks CPU)
-	// TODO: Implement double buffering to avoid stalling the CPU while waiting for GPU results
-	creationEngineRaytracing->WaitExecution();
+	// Returns current frame index
+	currentFrame = creationEngineRaytracing->PostExecution();
 
 	if (settings.PerfOverlay != OverlayMode::None)
 		creationEngineRaytracing->GetPassTimings(passTimings);
@@ -1359,7 +1388,7 @@ void Raytracing::DeferredPasses()
 			ID3D11Buffer* cb = screenCB->CB();
 			context->CSSetConstantBuffers(0, 1, &cb);
 
-			context->CSSetShaderResources(0, 1, &mainTexture->srv);
+			context->CSSetShaderResources(0, 1, &mainTexture[currentFrame]->srv);
 
 			ID3D11UnorderedAccessView* uav = main.UAV;
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
@@ -1381,8 +1410,8 @@ void Raytracing::DeferredPasses()
 			context->CSSetConstantBuffers(0, 1, &cb);
 
 			ID3D11ShaderResourceView* srvs[] = {
-				mainTexture->srv,
-				motionVectorsTexture->srv
+				mainTexture[currentFrame]->srv,
+				motionVectorsTexture[currentFrame]->srv
 			};
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -1453,7 +1482,7 @@ void Raytracing::DeferredPasses()
 			// Set up pixel shader
 			context->PSSetShader(copyDepthPS.get(), nullptr, 0);
 
-			ID3D11ShaderResourceView* srvs[] = { depthTexture->srv };
+			ID3D11ShaderResourceView* srvs[] = { depthTexture[currentFrame]->srv };
 
 			context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -1502,7 +1531,7 @@ void Raytracing::GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D
 	if (Mode() != CreationEngineRaytracing::Mode::GlobalIllumination && Mode() != CreationEngineRaytracing::Mode::PathTracing)
 		return;
 
-	diffuseAlbedo = diffuseAlbedoTexture->GetResource();
+	diffuseAlbedo = diffuseAlbedoTexture[currentFrame]->GetResource();
 	normalRoughness = normalRoughnessTexture->GetResource();
 
 	creationEngineRaytracing->GetRRInput(specularAlbedo, specHitDistance);
