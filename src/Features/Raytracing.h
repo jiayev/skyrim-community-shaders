@@ -40,7 +40,8 @@ struct CreationEngineRaytracing
 	{
 		None,
 		GlobalIllumination,
-		PathTracing
+		PathTracing,
+		Debug
 	};
 
 	enum class Denoiser
@@ -749,8 +750,9 @@ struct Raytracing : public OverlayFeature
 
 					rt.creationEngineRaytracing->UpdateCamera();
 
-					// Executes the render graph for path tracing, no dependecy on any game render target so we start as early as possible
-					if (rt.Mode() == CreationEngineRaytracing::Mode::PathTracing) {
+					// Executes the render graph, no dependecy on any game render target so we start as early as possible
+					const bool earlyExecute = rt.Mode() == CreationEngineRaytracing::Mode::PathTracing || rt.Mode() == CreationEngineRaytracing::Mode::Debug;
+					if (earlyExecute) {
 						if (rt.IsPathTracingCull()) {
 							auto renderer = globals::game::renderer;
 							auto context = globals::d3d::context;

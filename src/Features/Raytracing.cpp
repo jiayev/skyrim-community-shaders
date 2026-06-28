@@ -176,6 +176,7 @@ void Raytracing::DrawSettings()
 			T(TKEY("mode_none"), "None"),
 			T(TKEY("mode_global_illumination"), "Global Illumination"),
 			T(TKEY("mode_path_tracing"), "Path Tracing"),
+			T(TKEY("mode_path_debug"), "Debug"),
 		});
 
 	DrawEnumRadio(
@@ -1312,6 +1313,7 @@ void Raytracing::DeferredPasses()
 
 	const bool globalIllumation = (mode == CreationEngineRaytracing::Mode::GlobalIllumination);
 	const bool pathtracing = (mode == CreationEngineRaytracing::Mode::PathTracing);
+	const bool debug = (mode == CreationEngineRaytracing::Mode::Debug);
 
 	// Fog management
 	{
@@ -1332,7 +1334,7 @@ void Raytracing::DeferredPasses()
 		if (enableSSAO)
 			ssaoEnabled = true;
 
-		const bool shouldEnableSSAO = (globalIllumation || pathtracing) ? false : ssaoEnabled;
+		const bool shouldEnableSSAO = (globalIllumation || pathtracing || debug) ? false : ssaoEnabled;
 
 		*enableSSAO = shouldEnableSSAO;
 
@@ -1368,7 +1370,7 @@ void Raytracing::DeferredPasses()
 			uav = nullptr;
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		}
-	} else if (pathtracing) {
+	} else if (pathtracing || debug) {
 		// Blend pathtracing and sky (colors and motion vectors)
 		{
 			auto& mv = renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
