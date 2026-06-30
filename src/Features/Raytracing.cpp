@@ -787,31 +787,29 @@ void Raytracing::DrawOverlay()
 	const auto overlayTitle = StableLabel(T(TKEY("overlay_title"), "Raytracing Overlay"), "RaytracingOverlay");
 	ImGui::Begin(overlayTitle.c_str(), NULL, windowFlags);
 
-	auto DrawRow = [](const char* label, float gpums) {
+	auto DrawRow = [](const char* label, float cpuMS, float gpuMS) {
 		ImGui::TableNextRow();
 
 		ImGui::TableNextColumn();
 		ImGui::TextUnformatted(label);
 
 		ImGui::TableNextColumn();
-		ImGui::Text(T(TKEY("overlay_gpu_ms"), "%g ms"), gpums);
+		ImGui::Text(T(TKEY("overlay_cpu_ms"), "%g ms"), cpuMS);
+
+		ImGui::TableNextColumn();
+		ImGui::Text(T(TKEY("overlay_gpu_ms"), "%g ms"), gpuMS);
 	};
 
-	if (ImGui::BeginTable("Passes", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+	if (ImGui::BeginTable("Passes", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
 		ImGui::TableSetupColumn(T(TKEY("overlay_pass"), "Pass"));
+		ImGui::TableSetupColumn(T(TKEY("overlay_cpu"), "CPU"));
 		ImGui::TableSetupColumn(T(TKEY("overlay_gpu"), "GPU"));
 		ImGui::TableHeadersRow();
 
-		float totalTime = 0.0f;
-
 		for (const auto& passTiming : passTimings) {
 			if (settings.PerfOverlay == OverlayMode::Complete)
-				DrawRow(passTiming.name.c_str(), passTiming.timing);
-
-			totalTime += passTiming.timing;
+				DrawRow(passTiming.name.c_str(), passTiming.cpuTiming, passTiming.gpuTiming);
 		}
-
-		DrawRow(T(TKEY("overlay_total"), "Total"), totalTime);
 
 		ImGui::EndTable();
 	}
@@ -1288,38 +1286,12 @@ void Raytracing::DeferredPasses()
 			// Executes the render graph for Global Illumination, depends on gbuffer render targets so we call it late
 			creationEngineRaytracing->Execute();
 		});
-	} else if (Mode() == CreationEngineRaytracing::Mode::PathTracing) {
-		if (IsPathTracingCull()) {
-			auto renderer = globals::game::renderer;
-			auto context = globals::d3d::context;
-
-			// Clear Depth
-			{
-				auto depthStencils = renderer->GetDepthStencilData().depthStencils;
-				auto& mainDepth = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-				auto& mainDepthCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
-				auto& zPrePassCopy = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-
-				context->ClearDepthStencilView(mainDepth.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
-				context->ClearDepthStencilView(mainDepthCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
-				context->ClearDepthStencilView(zPrePassCopy.views[0], D3D11_CLEAR_DEPTH, 1.0f, 0u);
-			}
-
-			// Clear Motion Vector
-			{
-				auto renderTargets = renderer->GetRuntimeData().renderTargets;
-				float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-				context->ClearRenderTargetView(renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].RTV, clearColor);
-			}
-		}
-
-		globals::dx12Interop->Fence([&]() {
-			creationEngineRaytracing->Execute();
-		});
 	}
 
 	// Returns current frame index
-	currentFrame = creationEngineRaytracing->PostExecution();
+	globals::dx12Interop->FenceOut([&]() {
+		currentFrame = creationEngineRaytracing->PostExecution();
+	});
 
 	auto dx12Interop = globals::dx12Interop;
 	if (dx12Interop->pixCapture && dx12Interop->pixCaptureStarted) {
@@ -1327,7 +1299,6 @@ void Raytracing::DeferredPasses()
 		dx12Interop->pixCapture = false;
 		dx12Interop->pixCaptureStarted = false;
 	}
-
 
 	if (settings.PerfOverlay != OverlayMode::None)
 		creationEngineRaytracing->GetPassTimings(passTimings);

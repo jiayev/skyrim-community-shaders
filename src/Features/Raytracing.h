@@ -382,7 +382,8 @@ struct CreationEngineRaytracing
 	struct PassTiming
 	{
 		eastl::string name;
-		float timing;
+		float gpuTiming;
+		float cpuTiming;
 	};
 
 	struct Settings
@@ -757,9 +758,8 @@ struct Raytracing : public OverlayFeature
 						dx12Interop->ga->BeginCapture();
 					}
 
-					// Executes the render graph, no dependecy on any game render target so we start as early as possible
-					/*const bool earlyExecute = rt.Mode() == CreationEngineRaytracing::Mode::PathTracing || rt.Mode() == CreationEngineRaytracing::Mode::Debug;
-					if (earlyExecute) {
+					// Clear render targets 
+					if (rt.Mode() == CreationEngineRaytracing::Mode::PathTracing || rt.Mode() == CreationEngineRaytracing::Mode::Debug) {
 						if (rt.IsPathTracingCull()) {
 							auto renderer = globals::game::renderer;
 							auto context = globals::d3d::context;
@@ -785,7 +785,7 @@ struct Raytracing : public OverlayFeature
 						}
 
 						rt.creationEngineRaytracing->Execute();
-					}*/
+					}
 				}
 
 				func(a1);

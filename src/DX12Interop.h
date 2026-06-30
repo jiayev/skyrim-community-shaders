@@ -68,7 +68,7 @@ struct DX12Interop
 
 	UINT GetFrameContextIndex() const;
 
-	// Fences the GPU, waits for D3D11 to be idle, executes the provided function, then waits for D3D12 to be idle before returning.
+	// Fences the GPU, waits for D3D11 to be idle, executes the provided function, then waits for D3D12 to be idle before returning D3D11 execution.
 	template <typename Func>
 	void Fence(Func func)
 	{
@@ -76,6 +76,18 @@ struct DX12Interop
 		DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), ++currentFenceValue));
 		DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), currentFenceValue));
 
+		// Execute
+		func();
+
+		// Wait for D3D12 to finish
+		DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), ++currentFenceValue));
+		DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), currentFenceValue));
+	}
+
+	// Fences the GPU, makes D3D11 wait for D3D12 to finish before continuing.
+	template <typename Func>
+	void FenceOut(Func func)
+	{
 		// Execute
 		func();
 
