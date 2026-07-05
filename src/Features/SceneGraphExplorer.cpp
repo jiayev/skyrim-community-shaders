@@ -48,8 +48,12 @@ void SceneGraphExplorer::DrawOverlay()
 		return;
 
 	auto* sceneGraph = RE::Main::GetSingleton()->WorldRootNode();
-
 	DrawObject(sceneGraph, true);
+
+	auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
+	for (size_t i = 0; i < ARRAYSIZE(shaderManager.shadowSceneNode); i++) {
+		DrawObject(shaderManager.shadowSceneNode[i], true);
+	}
 }
 
 void SceneGraphExplorer::DrawObject(RE::NiAVObject* object, bool root)

@@ -41,7 +41,8 @@ struct CreationEngineRaytracing
 	{
 		None,
 		GlobalIllumination,
-		PathTracing
+		PathTracing,
+		Debug
 	};
 
 	enum class Denoiser
@@ -443,7 +444,8 @@ struct CreationEngineRaytracing
 	struct PassTiming
 	{
 		eastl::string name;
-		float timing;
+		float gpuTiming;
+		float cpuTiming;
 	};
 
 	struct Settings
@@ -486,6 +488,8 @@ struct CreationEngineRaytracing
 		ID3D12Resource* native = nullptr;
 		ID3D11Texture2D* shared = nullptr;
 	};
+	
+	static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 	HMODULE handle = nullptr;
 
@@ -493,8 +497,7 @@ struct CreationEngineRaytracing
 	using InitializeFn = void (*)(Settings);
 	using UpdateCameraFn = void (*)();
 	using ExecuteFn = void (*)();
-	using WaitExecutionFn = void (*)();
-	using PostExecutionFn = void (*)();
+	using PostExecutionFn = uint32_t (*)();
 	using GetResolutionFn = void (*)(uint32_t&, uint32_t&);
 	using SetResolutionFn = void (*)(uint32_t, uint32_t);
 	using UpdateFeatureDataFn = void (*)(void*, uint32_t);
@@ -505,7 +508,7 @@ struct CreationEngineRaytracing
 	using UpdateSettingsFn = void (*)(Settings);
 	using GetRRInputFn = void (*)(ID3D12Resource*&, ID3D12Resource*&);
 	using SetSharedTexturesFn = void (*)(ID3D12Resource*, ID3D12Resource*, ID3D12Resource*);
-	using GetSharedTexturesFn = void (*)(SharedTexture&, SharedTexture&, SharedTexture&, SharedTexture&);
+	using GetSharedTexturesFn = void (*)(SharedTexture*, SharedTexture*, SharedTexture*, SharedTexture*);
 	using UpdateJitterFn = void (*)(float2);
 	using SetSkinDetailNormalFn = void (*)(ID3D12Resource*);
 	using GetAccumulatedFrameCountFn = uint32_t (*)();
@@ -517,7 +520,6 @@ struct CreationEngineRaytracing
 	InitializeFn Initialize = nullptr;
 	UpdateCameraFn UpdateCamera = nullptr;
 	ExecuteFn Execute = nullptr;
-	WaitExecutionFn WaitExecution = nullptr;
 	PostExecutionFn PostExecution = nullptr;
 	SetResolutionFn SetResolution = nullptr;
 	UpdateFeatureDataFn UpdateFeatureData = nullptr;
@@ -552,7 +554,6 @@ struct CreationEngineRaytracing
 		LOAD_FN(Initialize);
 		LOAD_FN(UpdateCamera);
 		LOAD_FN(Execute);
-		LOAD_FN(WaitExecution);
 		LOAD_FN(PostExecution);
 		LOAD_FN(SetResolution);
 		LOAD_FN(UpdateFeatureData);
@@ -766,12 +767,12 @@ struct Raytracing : public OverlayFeature
 	winrt::com_ptr<ID3D11SamplerState> samplerState = nullptr;
 
 	// Available when Pathtracing
-	eastl::unique_ptr<WrappedResource> depthTexture = nullptr;
-	eastl::unique_ptr<WrappedResource> motionVectorsTexture = nullptr;
+	eastl::array<eastl::unique_ptr<WrappedResource>, CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT> depthTexture;
+	eastl::array<eastl::unique_ptr<WrappedResource>, CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT> motionVectorsTexture;
 
 	// Available for both GI and PT
-	eastl::unique_ptr<WrappedResource> mainTexture = nullptr;
-	eastl::unique_ptr<WrappedResource> diffuseAlbedoTexture = nullptr;
+	eastl::array<eastl::unique_ptr<WrappedResource>, CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT> mainTexture;
+	eastl::array<eastl::unique_ptr<WrappedResource>, CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT> diffuseAlbedoTexture;
 
 	winrt::com_ptr<ID3D12Resource> albedoTexture = nullptr;
 	eastl::unique_ptr<WrappedResource> normalRoughnessTexture = nullptr;
@@ -787,6 +788,8 @@ struct Raytracing : public OverlayFeature
 	eastl::unique_ptr<CreationEngineRaytracing> creationEngineRaytracing = nullptr;
 
 	eastl::vector<CreationEngineRaytracing::PassTiming> passTimings;
+
+	uint32_t currentFrame;
 
 	struct alignas(16) ScreenData
 	{
@@ -825,8 +828,14 @@ struct Raytracing : public OverlayFeature
 
 					rt.creationEngineRaytracing->UpdateCamera();
 
-					// Executes the render graph for path tracing, no dependecy on any game render target so we start as early as possible
-					if (rt.Mode() == CreationEngineRaytracing::Mode::PathTracing) {
+					auto dx12Interop = globals::dx12Interop;
+					if (dx12Interop->pixCapture && !dx12Interop->pixCaptureStarted) {
+						dx12Interop->pixCaptureStarted = true;
+						dx12Interop->ga->BeginCapture();
+					}
+
+					// Clear render targets 
+					if (rt.Mode() == CreationEngineRaytracing::Mode::PathTracing || rt.Mode() == CreationEngineRaytracing::Mode::Debug) {
 						if (rt.IsPathTracingCull()) {
 							auto renderer = globals::game::renderer;
 							auto context = globals::d3d::context;

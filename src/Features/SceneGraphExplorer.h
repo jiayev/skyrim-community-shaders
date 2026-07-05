@@ -32,7 +32,8 @@ struct SceneGraphExplorer : public OverlayFeature
 {
 	////////////////////////////////////////////////// Boilerplate
 	// Metadata
-	virtual inline std::string GetName() override { return "Scene GraphExplorer"; }
+	virtual inline std::string GetName() override { return "SceneGraph Explorer"; }
+	virtual inline std::string GetDisplayName() override { return "SceneGraph Explorer"; }
 	virtual inline std::string GetShortName() override { return "SceneGraphExplorer"; }
 	virtual inline std::string_view GetCategory() const override { return "Other"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL("999999"); }
