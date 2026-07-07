@@ -786,8 +786,6 @@ struct Raytracing : public OverlayFeature
 								context->ClearRenderTargetView(renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].RTV, clearColor);
 							}
 						}
-
-						rt.creationEngineRaytracing->Execute();
 					}
 				}
 
