@@ -1492,15 +1492,10 @@ void Raytracing::DeferredPasses()
 
 	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination) {
 		ConvertTextures();
-
-		globals::dx12Interop->Fence([&]() {
-			// Executes the render graph for Global Illumination, depends on gbuffer render targets so we call it late
-			creationEngineRaytracing->Execute();
-		});
 	}
 
-	// Returns current frame index
-	globals::dx12Interop->FenceOut([&]() {
+	globals::dx12Interop->Fence([&]() {
+		creationEngineRaytracing->Execute();
 		currentFrame = creationEngineRaytracing->PostExecution();
 	});
 
