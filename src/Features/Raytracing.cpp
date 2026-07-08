@@ -1227,6 +1227,31 @@ void Raytracing::SkyCubeToHemi() const
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 }
 
+void Raytracing::CopyWaterFlowap() const
+{
+	auto* context = globals::d3d::context;
+
+	auto clearFlowMap = [&]() {
+		const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		context->ClearRenderTargetView(waterFlowMap->rtv, clearColor);
+	};
+
+	REL::Relocation<RE::NiPointer<RE::NiSourceTexture>*> gFlowMapSourceTex{ REL::RelocationID(527694, 414616) };
+	auto* flowMapSourceTex = gFlowMapSourceTex.get();
+	if (!flowMapSourceTex) {
+		clearFlowMap();
+		return;
+	}
+
+	auto* sourceTexture = flowMapSourceTex->get();
+	if (!sourceTexture || !sourceTexture->rendererTexture || !sourceTexture->rendererTexture->texture) {
+		clearFlowMap();
+		return;
+	}
+
+	context->CopyResource(waterFlowMap->resource11, sourceTexture->rendererTexture->texture);
+}
+
 void Raytracing::ConvertTextures()
 {
 	auto renderer = globals::game::renderer;
@@ -1282,6 +1307,8 @@ void Raytracing::DeferredPasses()
 	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination) {
 		ConvertTextures();
 	}
+
+	CopyWaterFlowap();
 
 	globals::dx12Interop->Fence([&]() {
 		creationEngineRaytracing->Execute();
