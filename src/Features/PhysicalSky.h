@@ -254,19 +254,17 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ShaderResourceView> nubisNoiseSrv = nullptr;
 
 	TextureManager ndfTexManager{ "Cloud Map" };
-	NdfSettings ndfSettings = CumuliformNdfSettings{};
+	NdfSettings ndfSettings = HpGeneratedCloudMapSettings{};
 	NdfManager ndfManager;
 
 	// Volumetric cloud StructuredBuffer (compute-only)
 	struct VolumetricCloudSB
 	{
-		// Performance
 		float rayMarchRange;
 		float shadowVolumeRange;
 		uint cloudMaxStep;
 		uint fullResolution;
 
-		// Dynamic
 		float2 frameDim;
 		float2 rcpFrameDim;
 		float3 dirlightDir;
@@ -278,27 +276,106 @@ struct PhysicalSky final : public Feature
 		float atmosThickness;
 		float aerialPerspectiveMaxDist;
 
-		// Cloud layer (must match HLSL CloudLayer struct)
 		float cloudBottom;
 		float cloudThickness;
-		float2 ndfFreq;
-		float noiseFreq;
-		float3 noiseOffset;  // offset (computed from speed * time)
-		float power;
-		float3 cloudScatter;
-		float3 cloudAbsorption;
-		float averageDensity;
-		float msMult;
-		float msTransmittancePower;
-		float msHeightPower;
-		float ambientMult;
-		float densityErosionWeak;
-		float densityErosionStrong;
-		float noiseMipBiasWeak;
-		float noiseMipBiasStrong;
-		float hhfMinBlend;
-		float hhfProfileThreshold;
-		float2 _pad3;
+		float2 weatherCenter;
+		float weatherWorldSize;
+		float highCloudEnabled;
+		float2 noiseWindOffset;
+		float3 noiseScale;
+		float detailNoiseScale;
+		float3 noiseOffset;
+		float baseNoiseWindSpeed;
+		float detailNoiseWindSpeed;
+		float detailNoiseVerticalWindSpeed;
+		float billowyLow;
+		float billowyHigh;
+		float wispyLow;
+		float wispyHigh;
+		float detailStrengthCu;
+		float detailStrengthTcu;
+		float detailStrengthCb;
+		float densityThreshold;
+		float densityMultiplier;
+		float densityMultiplierCu;
+		float densityMultiplierTcu;
+		float densityMultiplierCb;
+		float bottomSmoothHeight;
+		float bottomSmoothPow;
+		float wispyEdgeWidth;
+		float wispyReach;
+		float wispyTopHeight;
+		float wispyTopHardness;
+		float coverageCoverIntensity;
+		float coverageCoverContrast;
+		float coverageHeightIntensity;
+		float coverageHeightContrast;
+		float coverTopStrength;
+		float coverTopMax;
+		float coverTopCurvePow;
+		float2 scCellScale;
+		float scWorleyStrength;
+		float scHeightScale;
+		float scDetailStrength;
+		float scCellThickPow;
+		float scCellThickStrength;
+		float scCellNoiseStrength;
+		float scCoverageIntensity;
+		float scCoverageContrast;
+		float2 highCellScale;
+		float highCellWindSpeed;
+		float2 highCellWarpScale;
+		float highCellWarpStrength;
+		float highCellThickStrength;
+		float highAsCellThickStrength;
+		float highCellThickPow;
+		float highCloudBottom;
+		float highCloudTop;
+		float highBottomCoverageScale;
+		float highHeightCurvePow;
+		float highDensityThreshold;
+		float highDensitySoftness;
+		float highCloudSoftness;
+		float2 highWispScale;
+		float highWispStrength;
+		float highHorizonDistanceStart;
+		float highHorizonDistanceEnd;
+		float highDensityMultiplier;
+		float highDensitySoftAIntensity;
+		float highDensitySoftAContrast;
+		float highDensityModAIntensity;
+		float highDensityModAContrast;
+		float3 scatterTint;
+		float forwardEccentricity;
+		float backwardEccentricity;
+		float ambientTopMultiplier;
+		float ambientBottomMultiplier;
+		float aoUpwardScale;
+		float msAttenuation;
+		float msContribution;
+		float msEccentricity;
+		float scatterSourceODScale;
+		float scatterSourceCurvePow;
+		float powderIntensity;
+		uint lightSteps;
+		uint primaryStepMultiplier;
+		float phiFwdIntensity;
+		float phiFwdDepthPow;
+		float phiFwdDepthBias;
+		float phiFwdBoundaryConfidence;
+		float phiFwdMSBuildScale;
+		float phiFwdCompress;
+		float highForwardEccentricity;
+		float highBackwardEccentricity;
+		float highAmbientTopMultiplier;
+		float highAmbientBottomMultiplier;
+		float highSkyBlendStrength;
+		float highMSAttenuation;
+		float highMSContribution;
+		float highMSEccentricity;
+		float highLightAbsorption;
+		float highViewAbsorption;
+		float highCoverAbsorptionStrength;
 
 		float2 lowFrameDim;
 		float2 rcpLowFrameDim;
