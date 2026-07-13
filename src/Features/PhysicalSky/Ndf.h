@@ -33,37 +33,184 @@ namespace nlohmann
 	void from_json(const json&, TextureManager&);
 }
 
-struct TexNdfSettings
+struct HpTextureOverrideSettings
 {
-	std::string texPath;
+	std::string lowWeatherPath;
+	std::string highWeatherPath;
+	std::string profilePath;
+	std::string scCellPath;
+	std::string highCellPath;
+	std::string highWarpPath;
+	std::string highWispPath;
 };
 
-struct CumuliformNdfSettings
+struct HpGeneratedCloudMapSettings
 {
-	DirectX::XMUINT2 scale0 = { 10, 10 };
-	float2 offset0 = { 3.f, 3.f };
-	DirectX::XMUINT2 scale1 = { 20, 20 };
-	float2 offset1 = { 6.f, 6.f };
-	DirectX::XMUINT2 scale2 = { 40, 40 };
-	float2 offset2 = { 24.f, 24.f };
-	float2 clipRange = { 0.4f, 1.f };
-	float power = 0.7f;
-	float wispiness = 0.1f;
-	float rot0 = 1.f;
-	float rot1 = 2.f;
-	float rot2 = 3.f;
-	float _pad = 0.f;
+	uint32_t weatherDim = 512;
+	uint32_t profileWidth = 256;
+	uint32_t profileHeight = 64;
+	float worldSize = 64.f;
+	float2 center = { 0.f, 0.f };
+	float lowCoverage = 0.62f;
+	float lowContrast = 1.25f;
+	float stratocumulus = 0.35f;
+	float highCoverage = 0.28f;
+	float highContrast = 1.1f;
+	HpTextureOverrideSettings overrides;
 };
 
-using NdfSettings = std::variant<TexNdfSettings, CumuliformNdfSettings>;
+using NdfSettings = HpGeneratedCloudMapSettings;
+
+struct HpLowCloudSettings
+{
+	float bottom = 0.5f;
+	float thickness = 2.5f;
+	float3 noiseScale = { 0.000045f, 0.00007f, 0.000045f };
+	float3 noiseOffset = { 0.f, 0.f, 0.f };
+	float detailNoiseScale = 0.00019f;
+	float2 windDirection = { 1.f, 0.2f };
+	float windSpeed = 12.f;
+	float baseNoiseWindSpeed = 1.f;
+	float detailNoiseWindSpeed = 1.5f;
+	float detailNoiseVerticalWindSpeed = 0.08f;
+	float billowyLow = 0.55f;
+	float billowyHigh = 0.45f;
+	float wispyLow = 0.45f;
+	float wispyHigh = 0.55f;
+	float detailStrengthCu = 0.35f;
+	float detailStrengthTcu = 0.55f;
+	float detailStrengthCb = 0.75f;
+	float densityThreshold = 0.05f;
+	float densityMultiplier = 0.09f;
+	float densityMultiplierCu = 0.85f;
+	float densityMultiplierTcu = 1.1f;
+	float densityMultiplierCb = 1.35f;
+	float bottomSmoothHeight = 0.08f;
+	float bottomSmoothPow = 2.f;
+	float wispyEdgeWidth = 0.25f;
+	float wispyReach = 0.18f;
+	float wispyTopHeight = 0.72f;
+	float wispyTopHardness = 0.25f;
+	float coverageCoverIntensity = 1.f;
+	float coverageCoverContrast = 1.f;
+	float coverageHeightIntensity = 1.f;
+	float coverageHeightContrast = 1.f;
+	float coverTopStrength = 0.65f;
+	float coverTopMax = 2.f;
+	float coverTopCurvePow = 1.f;
+};
+
+struct HpStratocumulusSettings
+{
+	float2 cellScale = { 6.f, 6.f };
+	float worleyStrength = 0.65f;
+	float heightScale = 0.28f;
+	float detailStrength = 0.32f;
+	float cellThickPow = 1.7f;
+	float cellThickStrength = 0.85f;
+	float cellNoiseStrength = 1.25f;
+	float coverageIntensity = 1.15f;
+	float coverageContrast = 1.25f;
+};
+
+struct HpHighCloudSettings
+{
+	bool enabled = true;
+	float2 cellScale = { 4.f, 4.f };
+	float cellWindSpeed = 1.35f;
+	float2 cellWarpScale = { 1.5f, 1.5f };
+	float cellWarpStrength = 0.12f;
+	float cellThickStrength = 0.75f;
+	float asCellThickStrength = 0.25f;
+	float cellThickPow = 1.6f;
+	float bottom = 0.58f;
+	float top = 0.92f;
+	float bottomCoverageScale = 0.35f;
+	float heightCurvePow = 0.85f;
+	float densityThreshold = 0.08f;
+	float densitySoftness = 0.22f;
+	float softness = 0.04f;
+	float2 wispScale = { 7.f, 7.f };
+	float wispStrength = 0.18f;
+	float horizonDistanceStart = 18000.f;
+	float horizonDistanceEnd = 65000.f;
+	float densityMultiplier = 0.35f;
+	float densitySoftAIntensity = 0.3f;
+	float densitySoftAContrast = 1.5f;
+	float densityModAIntensity = 0.25f;
+	float densityModAContrast = 1.5f;
+	float forwardEccentricity = 0.78f;
+	float backwardEccentricity = 0.22f;
+	float ambientTopMultiplier = 1.8f;
+	float ambientBottomMultiplier = 0.65f;
+	float skyBlendStrength = 0.35f;
+	float msAttenuation = 0.55f;
+	float msContribution = 0.5f;
+	float msEccentricity = 0.55f;
+	float lightAbsorption = 0.65f;
+	float viewAbsorption = 0.5f;
+	float coverAbsorptionStrength = 0.6f;
+};
+
+struct HpLightingSettings
+{
+	float3 scatterTint = { 1.f, 1.f, 1.f };
+	float forwardEccentricity = 0.85f;
+	float backwardEccentricity = 0.3f;
+	float ambientTopMultiplier = 1.6f;
+	float ambientBottomMultiplier = 0.75f;
+	float aoUpwardScale = 1.f;
+	float msAttenuation = 0.5f;
+	float msContribution = 0.5f;
+	float msEccentricity = 0.5f;
+	float scatterSourceODScale = 0.08f;
+	float scatterSourceCurvePow = 1.f;
+	float powderIntensity = 0.35f;
+	uint32_t lightSteps = 6;
+	uint32_t primaryStepMultiplier = 4;
+};
+
+struct HpPhiFwdSettings
+{
+	float intensity = 0.65f;
+	float depthPow = 1.f;
+	float depthBias = 0.05f;
+	float boundaryConfidence = 0.55f;
+	float msBuildScale = 1.4f;
+	float compress = 0.35f;
+};
+
+struct CloudLayer
+{
+	HpLowCloudSettings low;
+	HpStratocumulusSettings stratocumulus;
+	HpHighCloudSettings high;
+	HpLightingSettings lighting;
+	HpPhiFwdSettings phiFwd;
+};
+
+struct HpCloudTextureSet
+{
+	ID3D11ShaderResourceView* lowWeather = nullptr;
+	ID3D11ShaderResourceView* highWeather = nullptr;
+	ID3D11ShaderResourceView* profile = nullptr;
+	ID3D11ShaderResourceView* scCell = nullptr;
+	ID3D11ShaderResourceView* highCell = nullptr;
+	ID3D11ShaderResourceView* highWarp = nullptr;
+	ID3D11ShaderResourceView* highWisp = nullptr;
+};
 
 struct NdfManager
 {
 	constexpr static uint16_t kNdfDim = 256;
 
-	eastl::unique_ptr<Texture2D> texNdfOutput = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> cumuliformProgram = nullptr;
-	eastl::unique_ptr<ConstantBuffer> cumuliformCb = {};
+	eastl::unique_ptr<Texture2D> texLowWeather = nullptr;
+	eastl::unique_ptr<Texture2D> texHighWeather = nullptr;
+	eastl::unique_ptr<Texture2D> texProfile = nullptr;
+	eastl::unique_ptr<Texture2D> texScCell = nullptr;
+	eastl::unique_ptr<Texture2D> texHighCell = nullptr;
+	eastl::unique_ptr<Texture2D> texHighWarp = nullptr;
+	eastl::unique_ptr<Texture2D> texHighWisp = nullptr;
 
 	void SetupResources();
 	void CompileShaders();
@@ -73,37 +220,11 @@ struct NdfManager
 	static void DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texManager);
 	void UpdateNdf(const NdfSettings& ndfSettings);
 	ID3D11ShaderResourceView* GetNdf(const NdfSettings& ndfSettings, TextureManager& texManager);
-};
+	HpCloudTextureSet GetHpTextures(const NdfSettings& ndfSettings, TextureManager& texManager);
 
-struct CloudLayer
-{
-	// placement
-	float bottom = 0.2f;
-	float thickness = 0.3f;
-	// ndf
-	float2 ndfScale = { 16.f, 16.f };  // km
-	// noise
-	float noiseScale = 0.2f;                   // km
-	float3 noiseSpeed = { 0.f, -4.8f, 5.7f };  // m/s
-
-	float power = 1.0f;
-	float densityErosionWeak = 0.35f;
-	float densityErosionStrong = 0.18f;
-	float noiseMipBiasWeak = 0.75f;
-	float noiseMipBiasStrong = 0.15f;
-	float hhfMinBlend = 0.97f;
-	float hhfProfileThreshold = 0.12f;
-
-	// density
-	float3 scatter = { 85.f, 90.f, 95.f };
-	float3 absorption = { 15.f, 10.f, 5.f };
-
-	// visuals
-	float averageDensity = 0.02f;
-
-	float msMult = 10.0f;
-	float msTransmittancePower = 0.15f;
-	float msHeightPower = 0.7f;
-
-	float ambientMult = 1.0f;
+private:
+	uint32_t generatedWeatherDim = 0;
+	uint32_t generatedProfileWidth = 0;
+	uint32_t generatedProfileHeight = 0;
+	void GenerateDefaultTextures(const NdfSettings& ndfSettings);
 };

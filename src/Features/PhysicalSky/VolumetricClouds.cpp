@@ -275,8 +275,16 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		volHistoryHeight = textureH;
 	}
 
-	// Convert cloud layer settings to noise offset (speed * time)
-	float3 noiseOffset = settings.cloudLayer.noiseSpeed * (state->timer * 1e-3f);
+	auto& low = settings.cloudLayer.low;
+	auto& sc = settings.cloudLayer.stratocumulus;
+	auto& high = settings.cloudLayer.high;
+	auto& lighting = settings.cloudLayer.lighting;
+	auto& phi = settings.cloudLayer.phiFwd;
+
+	const float timeSeconds = state->timer * 1e-3f;
+	const float windLen = std::sqrt(low.windDirection.x * low.windDirection.x + low.windDirection.y * low.windDirection.y);
+	const float2 windDir = windLen > 1e-4f ? low.windDirection / windLen : float2{ 1.f, 0.f };
+	const float2 noiseWindOffset = windDir * (low.windSpeed * timeSeconds * 0.001f / 1.428e-5f);
 
 	// Aerial perspective max distance (same as LUT generation)
 	float apMaxDist = 40.f / 1.428e-5f;  // 40km in game units
@@ -301,26 +309,106 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.planetRadius = cbData.rPlanet,
 		.atmosThickness = cbData.rAtmosphere - cbData.rPlanet,
 		.aerialPerspectiveMaxDist = apMaxDist,
-		.cloudBottom = settings.cloudLayer.bottom / 1.428e-5f,
-		.cloudThickness = settings.cloudLayer.thickness / 1.428e-5f,
-		.ndfFreq = { 1.428e-5f / settings.cloudLayer.ndfScale.x, 1.428e-5f / settings.cloudLayer.ndfScale.y },
-		.noiseFreq = 1.428e-5f / settings.cloudLayer.noiseScale,
-		.noiseOffset = { -noiseOffset.x / 1.428e-5f, -noiseOffset.y / 1.428e-5f, -noiseOffset.z / 1.428e-5f },
-		.power = settings.cloudLayer.power,
-		.cloudScatter = settings.cloudLayer.scatter * 1.428e-5f,
-		.cloudAbsorption = settings.cloudLayer.absorption * 1.428e-5f,
-		.averageDensity = settings.cloudLayer.averageDensity,
-		.msMult = settings.cloudLayer.msMult,
-		.msTransmittancePower = settings.cloudLayer.msTransmittancePower,
-		.msHeightPower = settings.cloudLayer.msHeightPower,
-		.ambientMult = settings.cloudLayer.ambientMult,
-		.densityErosionWeak = settings.cloudLayer.densityErosionWeak,
-		.densityErosionStrong = settings.cloudLayer.densityErosionStrong,
-		.noiseMipBiasWeak = settings.cloudLayer.noiseMipBiasWeak,
-		.noiseMipBiasStrong = settings.cloudLayer.noiseMipBiasStrong,
-		.hhfMinBlend = settings.cloudLayer.hhfMinBlend,
-		.hhfProfileThreshold = settings.cloudLayer.hhfProfileThreshold,
-		._pad3 = { 0.0f, 0.0f },
+		.cloudBottom = low.bottom / 1.428e-5f,
+		.cloudThickness = low.thickness / 1.428e-5f,
+		.weatherCenter = { ndfSettings.center.x / 1.428e-5f, ndfSettings.center.y / 1.428e-5f },
+		.weatherWorldSize = ndfSettings.worldSize / 1.428e-5f,
+		.highCloudEnabled = high.enabled ? 1.0f : 0.0f,
+		.noiseWindOffset = noiseWindOffset,
+		.noiseScale = low.noiseScale,
+		.detailNoiseScale = low.detailNoiseScale,
+		.noiseOffset = low.noiseOffset,
+		.baseNoiseWindSpeed = low.baseNoiseWindSpeed,
+		.detailNoiseWindSpeed = low.detailNoiseWindSpeed,
+		.detailNoiseVerticalWindSpeed = low.detailNoiseVerticalWindSpeed,
+		.billowyLow = low.billowyLow,
+		.billowyHigh = low.billowyHigh,
+		.wispyLow = low.wispyLow,
+		.wispyHigh = low.wispyHigh,
+		.detailStrengthCu = low.detailStrengthCu,
+		.detailStrengthTcu = low.detailStrengthTcu,
+		.detailStrengthCb = low.detailStrengthCb,
+		.densityThreshold = low.densityThreshold,
+		.densityMultiplier = low.densityMultiplier,
+		.densityMultiplierCu = low.densityMultiplierCu,
+		.densityMultiplierTcu = low.densityMultiplierTcu,
+		.densityMultiplierCb = low.densityMultiplierCb,
+		.bottomSmoothHeight = low.bottomSmoothHeight,
+		.bottomSmoothPow = low.bottomSmoothPow,
+		.wispyEdgeWidth = low.wispyEdgeWidth,
+		.wispyReach = low.wispyReach,
+		.wispyTopHeight = low.wispyTopHeight,
+		.wispyTopHardness = low.wispyTopHardness,
+		.coverageCoverIntensity = low.coverageCoverIntensity,
+		.coverageCoverContrast = low.coverageCoverContrast,
+		.coverageHeightIntensity = low.coverageHeightIntensity,
+		.coverageHeightContrast = low.coverageHeightContrast,
+		.coverTopStrength = low.coverTopStrength,
+		.coverTopMax = low.coverTopMax,
+		.coverTopCurvePow = low.coverTopCurvePow,
+		.scCellScale = sc.cellScale,
+		.scWorleyStrength = sc.worleyStrength,
+		.scHeightScale = sc.heightScale,
+		.scDetailStrength = sc.detailStrength,
+		.scCellThickPow = sc.cellThickPow,
+		.scCellThickStrength = sc.cellThickStrength,
+		.scCellNoiseStrength = sc.cellNoiseStrength,
+		.scCoverageIntensity = sc.coverageIntensity,
+		.scCoverageContrast = sc.coverageContrast,
+		.highCellScale = high.cellScale,
+		.highCellWindSpeed = high.cellWindSpeed,
+		.highCellWarpScale = high.cellWarpScale,
+		.highCellWarpStrength = high.cellWarpStrength,
+		.highCellThickStrength = high.cellThickStrength,
+		.highAsCellThickStrength = high.asCellThickStrength,
+		.highCellThickPow = high.cellThickPow,
+		.highCloudBottom = high.bottom,
+		.highCloudTop = high.top,
+		.highBottomCoverageScale = high.bottomCoverageScale,
+		.highHeightCurvePow = high.heightCurvePow,
+		.highDensityThreshold = high.densityThreshold,
+		.highDensitySoftness = high.densitySoftness,
+		.highCloudSoftness = high.softness,
+		.highWispScale = high.wispScale,
+		.highWispStrength = high.wispStrength,
+		.highHorizonDistanceStart = high.horizonDistanceStart,
+		.highHorizonDistanceEnd = high.horizonDistanceEnd,
+		.highDensityMultiplier = high.densityMultiplier,
+		.highDensitySoftAIntensity = high.densitySoftAIntensity,
+		.highDensitySoftAContrast = high.densitySoftAContrast,
+		.highDensityModAIntensity = high.densityModAIntensity,
+		.highDensityModAContrast = high.densityModAContrast,
+		.scatterTint = lighting.scatterTint,
+		.forwardEccentricity = lighting.forwardEccentricity,
+		.backwardEccentricity = lighting.backwardEccentricity,
+		.ambientTopMultiplier = lighting.ambientTopMultiplier,
+		.ambientBottomMultiplier = lighting.ambientBottomMultiplier,
+		.aoUpwardScale = lighting.aoUpwardScale,
+		.msAttenuation = lighting.msAttenuation,
+		.msContribution = lighting.msContribution,
+		.msEccentricity = lighting.msEccentricity,
+		.scatterSourceODScale = lighting.scatterSourceODScale,
+		.scatterSourceCurvePow = lighting.scatterSourceCurvePow,
+		.powderIntensity = lighting.powderIntensity,
+		.lightSteps = lighting.lightSteps,
+		.primaryStepMultiplier = lighting.primaryStepMultiplier,
+		.phiFwdIntensity = phi.intensity,
+		.phiFwdDepthPow = phi.depthPow,
+		.phiFwdDepthBias = phi.depthBias,
+		.phiFwdBoundaryConfidence = phi.boundaryConfidence,
+		.phiFwdMSBuildScale = phi.msBuildScale,
+		.phiFwdCompress = phi.compress,
+		.highForwardEccentricity = high.forwardEccentricity,
+		.highBackwardEccentricity = high.backwardEccentricity,
+		.highAmbientTopMultiplier = high.ambientTopMultiplier,
+		.highAmbientBottomMultiplier = high.ambientBottomMultiplier,
+		.highSkyBlendStrength = high.skyBlendStrength,
+		.highMSAttenuation = high.msAttenuation,
+		.highMSContribution = high.msContribution,
+		.highMSEccentricity = high.msEccentricity,
+		.highLightAbsorption = high.lightAbsorption,
+		.highViewAbsorption = high.viewAbsorption,
+		.highCoverAbsorptionStrength = high.coverAbsorptionStrength,
 		.lowFrameDim = { static_cast<float>(lowW), static_cast<float>(lowH) },
 		.rcpLowFrameDim = { 1.0f / static_cast<float>(lowW), 1.0f / static_cast<float>(lowH) },
 		.historyValid = volMainHistoryValid ? 1u : 0u,
@@ -329,22 +417,27 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
 	// Shared SRVs for both passes
-	auto* ndfSrv = ndfManager.GetNdf(ndfSettings, ndfTexManager);
-	if (!ndfSrv)
+	auto hpTextures = ndfManager.GetHpTextures(ndfSettings, ndfTexManager);
+	if (!hpTextures.lowWeather || !hpTextures.highWeather || !hpTextures.profile || !hpTextures.scCell || !hpTextures.highCell || !hpTextures.highWarp || !hpTextures.highWisp)
 		return;
 
-	std::array<ID3D11ShaderResourceView*, 11> srvs = {
+	std::array<ID3D11ShaderResourceView*, 16> srvs = {
 		volCloudSb->SRV(),                                                                                             // t0
 		texTrLut->srv.get(),                                                                                           // t1
 		texMsLut->srv.get(),                                                                                           // t2
 		texApLut->srv.get(),                                                                                           // t3
 		renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV,  // t4
-		nubisNoiseSrv.get(),                                                                                           // t5
-		ndfSrv,                                                                                                        // t6
-		cloudTopLutSrv.get(),                                                                                          // t7
-		cloudBottomLutSrv.get(),                                                                                       // t8
+		nubisNoiseSrv.get(),                                                                                           // t5 base noise
+		nubisNoiseSrv.get(),                                                                                           // t6 detail noise
+		hpTextures.lowWeather,                                                                                         // t7
+		hpTextures.highWeather,                                                                                        // t8
 		texApShadow ? texApShadow->srv.get() : nullptr,                                                                // t9
 		texSvLut->srv.get(),                                                                                           // t10
+		hpTextures.profile,                                                                                            // t11
+		hpTextures.scCell,                                                                                             // t12
+		hpTextures.highCell,                                                                                           // t13
+		hpTextures.highWarp,                                                                                           // t14
+		hpTextures.highWisp,                                                                                           // t15
 	};
 	ID3D11ShaderResourceView* ambientShSrv = texVolCloudAmbientSH ? texVolCloudAmbientSH->srv.get() : nullptr;
 	if (a_pass == VolumetricCloudPass::kMainViewAndCubemap && texVolCloudAmbientSH) {
@@ -387,7 +480,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		std::array<ID3D11UnorderedAccessView*, 2> uavs = { texShadowVolume->uav.get(), nullptr };
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetShaderResources(11, 1, &ambientShSrv);
+		context->CSSetShaderResources(16, 1, &ambientShSrv);
 		context->CSSetShaderResources(20, (uint)shadowSrvs.size(), shadowSrvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(csVolShadowVolume.get(), nullptr, 0);
@@ -396,7 +489,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		float3 ray_px_dir = { -cbData.sunDir.x, -cbData.sunDir.y, -cbData.sunDir.z };
 		ray_px_dir.x *= kShadowVolW / (settings.shadowVolumeRange / 1.428e-5f);
 		ray_px_dir.y *= kShadowVolH / (settings.shadowVolumeRange / 1.428e-5f);
-		ray_px_dir.z *= kShadowVolD / (settings.cloudLayer.thickness / 1.428e-5f);
+		ray_px_dir.z *= kShadowVolD / (settings.cloudLayer.low.thickness / 1.428e-5f);
 		float dir_max_component = std::max(std::max(abs(ray_px_dir.x), abs(ray_px_dir.y)), abs(ray_px_dir.z));
 		uint32_t dispatch_size[2];
 		if (abs(ray_px_dir.x) == dir_max_component || abs(ray_px_dir.y) == dir_max_component) {
@@ -422,7 +515,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetShaderResources(11, 1, &ambientShSrv);
+		context->CSSetShaderResources(16, 1, &ambientShSrv);
 		context->CSSetShaderResources(20, (uint)shadowSrvs.size(), shadowSrvs.data());
 		context->CSSetShader(csVolMainView.get(), nullptr, 0);
 
@@ -516,7 +609,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-			context->CSSetShaderResources(11, 1, &ambientShSrv);
+			context->CSSetShaderResources(16, 1, &ambientShSrv);
 			context->CSSetShaderResources(20, (uint)shadowSrvs.size(), shadowSrvs.data());
 			context->CSSetShader(csVolCubemap.get(), nullptr, 0);
 
@@ -564,13 +657,13 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 	// Cleanup
 	{
-		ID3D11ShaderResourceView* nullSrvs[12] = {};
+		ID3D11ShaderResourceView* nullSrvs[17] = {};
 		ID3D11ShaderResourceView* nullShadowSrvs[4] = {};
 		ID3D11ShaderResourceView* nullHistorySrvs[11] = {};
 		ID3D11UnorderedAccessView* nullUavs[3] = {};
 		ID3D11Buffer* nullCb[1] = {};
 		ID3D11SamplerState* nullSamplers[3] = {};
-		context->CSSetShaderResources(0, 12, nullSrvs);
+		context->CSSetShaderResources(0, 17, nullSrvs);
 		context->CSSetShaderResources(20, 4, nullShadowSrvs);
 		context->CSSetShaderResources(24, 11, nullHistorySrvs);
 		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
