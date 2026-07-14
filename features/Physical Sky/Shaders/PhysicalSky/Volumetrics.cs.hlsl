@@ -1,3 +1,10 @@
+// Community Shaders
+// Authors: Profjack, Jiaye
+//
+// References:
+// HanPi Volume Cloud © AshenOneArt
+// https://github.com/AshenOneArt/HPVolumeCloud
+
 #define PHYSICAL_SKY_VOLUMETRICS
 #ifndef COMPUTESHADER
 #	define COMPUTESHADER
