@@ -623,6 +623,7 @@ void Raytracing::DrawExperimentalSettings()
 	auto& experimentalSettings = settings.CreationEngineRaytracingSettings.ExperimentalSettings;
 
 	ImGui::Checkbox(T(TKEY("path_tracing_cull"), "Path Tracing Cull"), &experimentalSettings.PathTracingCull);
+	ImGui::Checkbox(T(TKEY("global_lights"), "Global Lights"), &experimentalSettings.GlobalLights);
 
 	DrawEnumRadio(
 		T(TKEY("texture_mode"), "Texture Mode"),

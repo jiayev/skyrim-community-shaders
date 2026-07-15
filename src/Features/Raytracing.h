@@ -363,10 +363,11 @@ struct CreationEngineRaytracing
 		bool PathTracingCull = false;
 		TextureMode TextureMode = TextureMode::Share;
 		uint32_t TextureCutOff = 0;
+		bool GlobalLights = false;
 
 		bool operator==(const ExperimentalSettings&) const = default;
 
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ExperimentalSettings, PathTracingCull, TextureMode, TextureCutOff)
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ExperimentalSettings, PathTracingCull, TextureMode, TextureCutOff, GlobalLights)
 	};
 
 	struct DebugSettings
