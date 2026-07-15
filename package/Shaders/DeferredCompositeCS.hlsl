@@ -183,7 +183,11 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	float3 color = linDiffuseColor + specularColor;
 
 #if defined(DYNAMIC_CUBEMAPS)
-
+	
+#	if defined(RAYTRACING)
+	if (SharedData::raytracingSettings.Reflection > 0.5f) {
+#	endif	
+	
 	float3 reflectance = ReflectanceTexture[dispatchID.xy];
 
 	if (any(reflectance > 0.0)) {
@@ -288,6 +292,10 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 		color += reflectance * finalIrradiance;
 	}
 
+#	if defined(RAYTRACING)
+	}
+#	endif
+	
 #endif
 
 	color = Color::IrradianceToGamma(color);
