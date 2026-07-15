@@ -739,6 +739,18 @@ void Raytracing::DrawDebugSettings()
 			ImGui::TreePop();
 		}
 
+		const auto waterDisplacementLabel = StableLabel(T(TKEY("debug_displacement"), "Water Displacement"), "Water Displacement");
+		if (ImGui::TreeNode(waterDisplacementLabel.c_str())) {
+			auto renderer = globals::game::renderer;
+			auto displacement = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kWATER_DISPLACEMENT];
+
+			D3D11_TEXTURE2D_DESC desc;
+			displacement.texture->GetDesc(&desc);
+
+			ImGui::ImageWithBg(displacement.SRV, { desc.Width * debugRescale, desc.Height * debugRescale }, { 0, 0 }, { 1, 1 }, { 0, 0, 0, 1 });
+			ImGui::TreePop();
+		}
+
 		const auto skyHemisphereLabel = StableLabel(T(TKEY("debug_sky_hemisphere"), "Sky Hemisphere"), "SkyHemisphere");
 		if (ImGui::TreeNode(skyHemisphereLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
