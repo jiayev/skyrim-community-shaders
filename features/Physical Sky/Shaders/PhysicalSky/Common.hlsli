@@ -2,6 +2,7 @@
 #define COMMON_PHYS_SKY_HLSLI
 
 #include "Common/Color.hlsli"
+#include "Common/Game.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
@@ -53,10 +54,10 @@ Texture2D<unorm float> TexApShadow : register(t64);
 Texture2D<float4> TexMsLut : register(t113);
 #endif
 
-	static const float RCP_PI = 1 / Math::PI;         // PI
-	static const float AP_MAX_DIST = 40 / 1.428e-5f;  // 40 km
+	static const float RCP_PI = 1 / Math::PI;  // PI
+	static const float AP_MAX_DIST = 40000.0f / GAME_UNIT_TO_M;
 	static const uint3 CLOUD_DIM = uint3(512, 512, 64);
-	static const float3 CLOUD_RANGE = float3(4.f, 4.f, .5f) / 1.428e-5f;
+	static const float3 CLOUD_RANGE = float3(4000.f, 4000.f, 500.f) / GAME_UNIT_TO_M;
 	static const float3 CLOUD_RANGE_M = float3(4.f, 4.f, .5f) * 1e3;
 
 #ifndef ISNAN
@@ -468,15 +469,15 @@ Texture2D<float4> TexMsLut : register(t113);
 	}
 
 #	ifndef PS_PREPASS_RSRCS
-	// Volumetric cloud main-view result and shadow volume. Pixel shaders use t110-t112 to avoid feature texture conflicts.
+	// Volumetric cloud main-view result and shadow cookie. Pixel shaders use t110-t112 to avoid feature texture conflicts.
 #		if defined(PS_DEFERRED_RSRCS)
 	Texture2D<float3> TexVolTr : register(t18);
 	Texture2D<float3> TexVolLum : register(t19);
-	Texture3D<float> TexShadowVolume : register(t20);
+	Texture2D<float4> TexShadowVolume : register(t20);
 #		else
 	Texture2D<float3> TexVolTr : register(t110);
 	Texture2D<float3> TexVolLum : register(t111);
-	Texture3D<float> TexShadowVolume : register(t112);
+	Texture2D<float4> TexShadowVolume : register(t112);
 	TextureCube<float3> TexVolCubeTr : register(t114);
 	TextureCube<float3> TexVolCubeLum : register(t115);
 #		endif
@@ -554,34 +555,21 @@ Texture2D<float4> TexMsLut : register(t113);
 
 #endif
 
-#if !defined(PS_DEFERRED_RSRCS) && (!defined(PS_PREPASS_RSRCS) || defined(PS_ENABLE_DIRLIGHT_TRANSMITTANCE))
-	float3 GetShadowVolumeUvw(float3 posRelative, float3 sunDir)
+	void GetCloudShadowBasis(float3 sunDir, out float3 right, out float3 up)
 	{
-		SharedData::PhysSkyData data = SharedData::physSkyData;
-		float3 boundsMin = float3(FrameBuffer::CameraPosAdjust.xy - 0.5 * data.shadowVolumeRange, data.volCloudBottom);
-		float3 boundsMax = float3(FrameBuffer::CameraPosAdjust.xy + 0.5 * data.shadowVolumeRange, data.volCloudBottom + data.volCloudThickness);
-
-		float3 samplePos = posRelative;
-		if (any(posRelative < boundsMin) || any(posRelative > boundsMax)) {
-			float3 sunSign = float3(sunDir.x < 0 ? -1 : 1, sunDir.y < 0 ? -1 : 1, sunDir.z < 0 ? -1 : 1);
-			float3 safeSunDir = sunSign * max(abs(sunDir), 1e-6);
-			float3 tMin = (boundsMin - posRelative) / safeSunDir;
-			float3 tMax = (boundsMax - posRelative) / safeSunDir;
-			float3 t1 = min(tMin, tMax);
-			float3 t2 = max(tMin, tMax);
-			float tNear = max(max(t1.x, t1.y), t1.z);
-			float tFar = min(min(t2.x, t2.y), t2.z);
-			if (tNear > tFar || tFar < 0)
-				return -1;
-			samplePos += (max(tNear, 0) + 128) * sunDir;
-		}
-
-		float3 uvw = samplePos - float3(FrameBuffer::CameraPosAdjust.xy, data.volCloudBottom);
-		uvw /= float3(data.shadowVolumeRange.xx, data.volCloudThickness);
-		uvw.xy += 0.5;
-		return uvw;
+		const float3 reference = abs(sunDir.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
+		right = normalize(cross(reference, sunDir));
+		up = normalize(cross(sunDir, right));
 	}
 
+	float3 GetCloudShadowLightDirection()
+	{
+		const float3 direction = SharedData::DirLightDirection.xyz;
+		const float lengthSq = dot(direction, direction);
+		return lengthSq > 1e-6 ? direction * rsqrt(lengthSq) : SharedData::physSkyData.sunDir;
+	}
+
+#if !defined(PS_DEFERRED_RSRCS) && (!defined(PS_PREPASS_RSRCS) || defined(PS_ENABLE_DIRLIGHT_TRANSMITTANCE))
 	float3 GetDirlightTransmittance(float3 worldPosAbs, SamplerState samp)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
@@ -593,20 +581,33 @@ Texture2D<float4> TexMsLut : register(t113);
 		float3 posRelative = worldPosAbs;
 		posRelative.z -= data.zBottom;
 
-		float3 uvw = GetShadowVolumeUvw(posRelative, data.sunDir);
-		float cloudDensity = 0;
-		if (all(uvw > 0) && all(uvw < 1)) {
-			cloudDensity = TexShadowVolume.SampleLevel(samp, uvw, 0);
-		} else {
-			float3 posPlanet = posRelative + float3(-FrameBuffer::CameraPosAdjust.xy, data.rPlanet);
-			float rInner = data.rPlanet + data.volCloudBottom;
-			float rOuter = rInner + data.volCloudThickness;
-			float innerDist = max(RayIntersectSphere(posPlanet, data.sunDir, 0, rInner), 0);
-			float outerDist = max(RayIntersectSphere(posPlanet, data.sunDir, 0, rOuter), 0);
-			cloudDensity = abs(outerDist - innerDist) * data.volCloudAverageDensity;
-		}
+		const float3 shadowLightDir = GetCloudShadowLightDirection();
+		float3 right, up;
+		GetCloudShadowBasis(shadowLightDir, right, up);
+		const float3 camera = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, data.zBottom);
+		const float3 shadowOriginVec = posRelative - camera;
+		const float shadowWidth = max(data.shadowVolumeRange, 1.0);
+		const float2 uv = float2(dot(shadowOriginVec, right), dot(shadowOriginVec, up)) / shadowWidth + 0.5;
+		if (any(uv <= 0.0) || any(uv >= 1.0))
+			return 1.0;
 
-		return exp(-(data.volCloudScatter + data.volCloudAbsorption) * cloudDensity);
+		const float4 cloudShadow = TexShadowVolume.SampleLevel(samp, uv, 0);
+		if (cloudShadow.y == 1.0)
+			return 1.0;
+
+		const float3 posPlanet = posRelative + float3(-FrameBuffer::CameraPosAdjust.xy, data.rPlanet);
+		// The stored distances are measured upward from the lower cloud shell while
+		// the receiver intersection follows the light propagation direction. Keep
+		// the signed near root: receivers below the shell must remain fully shadowed.
+		const float3 lightForward = -shadowLightDir;
+		const float sphereRadius = data.rPlanet + data.volCloudBottom;
+		const float b = dot(posPlanet, lightForward);
+		const float c = dot(posPlanet, posPlanet) - sphereRadius * sphereRadius;
+		const float discriminant = b * b - c;
+		const float zCoord = discriminant >= 0.0 ? -b - sqrt(discriminant) : 0.0;
+		const float zCoordKm = zCoord * GAME_UNIT_TO_M * 0.001;
+		const float shadowRange = saturate((zCoordKm - cloudShadow.x) / max(cloudShadow.z - cloudShadow.x, 1e-5));
+		return lerp(cloudShadow.y, 1.0, shadowRange).xxx;
 	}
 #endif
 

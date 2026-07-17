@@ -9,6 +9,134 @@
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 
+#include <algorithm>
+#include <cmath>
+#include <vector>
+
+namespace
+{
+	constexpr float KilometersToGameUnits(float value) { return value / Util::Units::GAME_UNIT_TO_KM; }
+	constexpr float MetersToGameUnits(float value) { return value / Util::Units::GAME_UNIT_TO_M; }
+	constexpr float PerMeterToPerGameUnit(float value) { return value * Util::Units::GAME_UNIT_TO_M; }
+
+	uint32_t HashNoise3D(int x, int y, int z, uint32_t seed)
+	{
+		uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u +
+		             static_cast<uint32_t>(z) * 2246822519u + seed * 3266489917u;
+		h = (h ^ (h >> 13u)) * 1274126177u;
+		return h ^ (h >> 16u);
+	}
+
+	int WrapNoiseCoordinate(int value, int period)
+	{
+		value %= period;
+		return value < 0 ? value + period : value;
+	}
+
+	float PeriodicValueNoise3D(float x, float y, float z, int period, uint32_t seed)
+	{
+		const int ix = static_cast<int>(std::floor(x));
+		const int iy = static_cast<int>(std::floor(y));
+		const int iz = static_cast<int>(std::floor(z));
+		const float fx = x - static_cast<float>(ix);
+		const float fy = y - static_cast<float>(iy);
+		const float fz = z - static_cast<float>(iz);
+		const float sx = fx * fx * (3.0f - 2.0f * fx);
+		const float sy = fy * fy * (3.0f - 2.0f * fy);
+		const float sz = fz * fz * (3.0f - 2.0f * fz);
+		const auto sample = [&](int ox, int oy, int oz) {
+			const uint32_t h = HashNoise3D(
+				WrapNoiseCoordinate(ix + ox, period),
+				WrapNoiseCoordinate(iy + oy, period),
+				WrapNoiseCoordinate(iz + oz, period), seed);
+			return static_cast<float>(h) / 4294967295.0f;
+		};
+		const float z0 = std::lerp(
+			std::lerp(sample(0, 0, 0), sample(1, 0, 0), sx),
+			std::lerp(sample(0, 1, 0), sample(1, 1, 0), sx), sy);
+		const float z1 = std::lerp(
+			std::lerp(sample(0, 0, 1), sample(1, 0, 1), sx),
+			std::lerp(sample(0, 1, 1), sample(1, 1, 1), sx), sy);
+		return std::lerp(z0, z1, sz);
+	}
+
+	float PeriodicFbm3D(float u, float v, float w, int basePeriod, uint32_t seed)
+	{
+		float value = 0.0f;
+		float amplitude = 0.5f;
+		float amplitudeSum = 0.0f;
+		int period = std::max(basePeriod, 1);
+		for (uint32_t octave = 0; octave < 4; ++octave) {
+			value += PeriodicValueNoise3D(u * period, v * period, w * period, period, seed + octave * 17u) * amplitude;
+			amplitudeSum += amplitude;
+			amplitude *= 0.5f;
+			period *= 2;
+		}
+		return std::clamp(value / amplitudeSum, 0.0f, 1.0f);
+	}
+
+	winrt::com_ptr<ID3D11ShaderResourceView> CreateDetailErosionNoise(ID3D11Device* device)
+	{
+		constexpr uint32_t dimension = 32u;
+		std::vector<uint8_t> data(dimension * dimension * dimension * 4u);
+		for (uint32_t z = 0; z < dimension; ++z) {
+			for (uint32_t y = 0; y < dimension; ++y) {
+				for (uint32_t x = 0; x < dimension; ++x) {
+					const float u = (static_cast<float>(x) + 0.5f) / dimension;
+					const float v = (static_cast<float>(y) + 0.5f) / dimension;
+					const float w = (static_cast<float>(z) + 0.5f) / dimension;
+					const float wispyLow = PeriodicFbm3D(u, v, w, 3, 11u);
+					const float wispyHigh = PeriodicFbm3D(u, v, w, 7, 29u);
+					const float billowyLow = 1.0f - std::abs(PeriodicFbm3D(u, v, w, 4, 47u) * 2.0f - 1.0f);
+					const float billowyHigh = 1.0f - std::abs(PeriodicFbm3D(u, v, w, 9, 71u) * 2.0f - 1.0f);
+					const size_t index = ((static_cast<size_t>(z) * dimension + y) * dimension + x) * 4u;
+					data[index + 0] = static_cast<uint8_t>(std::clamp(wispyLow, 0.0f, 1.0f) * 255.0f + 0.5f);
+					data[index + 1] = static_cast<uint8_t>(std::clamp(wispyHigh, 0.0f, 1.0f) * 255.0f + 0.5f);
+					data[index + 2] = static_cast<uint8_t>(std::clamp(billowyLow, 0.0f, 1.0f) * 255.0f + 0.5f);
+					data[index + 3] = static_cast<uint8_t>(std::clamp(billowyHigh, 0.0f, 1.0f) * 255.0f + 0.5f);
+				}
+			}
+		}
+
+		D3D11_TEXTURE3D_DESC textureDesc{
+			.Width = dimension,
+			.Height = dimension,
+			.Depth = dimension,
+			.MipLevels = 1,
+			.Format = DXGI_FORMAT_R8G8B8A8_UNORM,
+			.Usage = D3D11_USAGE_IMMUTABLE,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE,
+			.CPUAccessFlags = 0,
+			.MiscFlags = 0
+		};
+		D3D11_SUBRESOURCE_DATA initialData{
+			.pSysMem = data.data(),
+			.SysMemPitch = dimension * 4u,
+			.SysMemSlicePitch = dimension * dimension * 4u
+		};
+		winrt::com_ptr<ID3D11Texture3D> texture;
+		DX::ThrowIfFailed(device->CreateTexture3D(&textureDesc, &initialData, texture.put()));
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{
+			.Format = textureDesc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D,
+			.Texture3D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		winrt::com_ptr<ID3D11ShaderResourceView> srv;
+		DX::ThrowIfFailed(device->CreateShaderResourceView(texture.get(), &srvDesc, srv.put()));
+		return srv;
+	}
+
+	bool IsVolumeTexture(ID3D11ShaderResourceView* srv)
+	{
+		if (!srv)
+			return false;
+		D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+		srv->GetDesc(&desc);
+		return desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE3D;
+	}
+}
+
 void PhysicalSky::LoadCloudTextures()
 {
 	auto device = globals::d3d::device;
@@ -21,9 +149,24 @@ void PhysicalSky::LoadCloudTextures()
 			logger::warn("Failed to load DDS texture: {}", std::filesystem::path(path).string());
 	};
 
-	loadDDS(L"Data\\Textures\\PhysicalSky\\top_lut.dds", cloudTopLutSrv);
-	loadDDS(L"Data\\Textures\\PhysicalSky\\bottom_lut.dds", cloudBottomLutSrv);
-	loadDDS(L"Data\\Textures\\PhysicalSky\\nubis.dds", nubisNoiseSrv);
+	loadDDS(L"Data\\Textures\\PhysicalSky\\nubis.dds", baseShapeNoiseSrv);
+	if (baseShapeNoiseSrv && !IsVolumeTexture(baseShapeNoiseSrv.get())) {
+		logger::warn("Ignoring base shape noise because it is not a 3D texture.");
+		baseShapeNoiseSrv = nullptr;
+	}
+
+	detailErosionNoiseSrv = nullptr;
+	const auto erosionPath = L"Data\\Textures\\PhysicalSky\\erosion_noise.dds";
+	const HRESULT erosionResult = DirectX::CreateDDSTextureFromFile(device, context, erosionPath, nullptr, detailErosionNoiseSrv.put());
+	if (SUCCEEDED(erosionResult) && !IsVolumeTexture(detailErosionNoiseSrv.get())) {
+		logger::warn("Ignoring detail erosion texture because it is not a 3D texture: {}", std::filesystem::path(erosionPath).string());
+		detailErosionNoiseSrv = nullptr;
+	}
+	if (!detailErosionNoiseSrv) {
+		detailErosionNoiseSrv = CreateDetailErosionNoise(device);
+		if (FAILED(erosionResult))
+			logger::info("Using generated detail erosion noise; {} was not found.", std::filesystem::path(erosionPath).string());
+	}
 }
 
 void PhysicalSky::SetupVolumetricResources()
@@ -50,7 +193,6 @@ void PhysicalSky::SetupVolumetricResources()
 	{
 		volCloudSb = eastl::make_unique<StructuredBuffer>(StructuredBufferDesc<VolumetricCloudSB>(), 1);
 		volCloudSb->CreateSRV();
-		volCubeHistoryCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<VolumetricCloudCubeHistoryCB>(), "PhysicalSky::VolumetricCubeHistoryCB");
 	}
 
 	{
@@ -119,23 +261,26 @@ void PhysicalSky::SetupVolumetricResources()
 		return texture;
 	};
 
-	// Nubis main-view cloud textures: 1/4-resolution raymarch, full-resolution resample, then full-resolution blur.
+	// Realtime layout: quarter-resolution trace, half-resolution temporal
+	// reprojection/history, then depth-aware full-resolution upscale.
 	{
 		const uint32_t lowW = std::max(1u, (mainDesc.Width + kVolCloudDownsample - 1u) / kVolCloudDownsample);
 		const uint32_t lowH = std::max(1u, (mainDesc.Height + kVolCloudDownsample - 1u) / kVolCloudDownsample);
+		const uint32_t intermediateW = std::max(1u, (mainDesc.Width + 1u) / 2u);
+		const uint32_t intermediateH = std::max(1u, (mainDesc.Height + 1u) / 2u);
 
 		texVolLowTr = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLowTr");
 		texVolLowLum = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLowLum");
 		texVolLowAux = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLowAux");
-		texVolUpscaleTr = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricUpscaleTr");
-		texVolUpscaleLum = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricUpscaleLum");
-		texVolUpscaleAux = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricUpscaleAux");
+		texVolUpscaleTr = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricIntermediateTr");
+		texVolUpscaleLum = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricIntermediateLum");
+		texVolUpscaleAux = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricIntermediateAux");
 		texVolTr = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricTr");
 		texVolLum = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLum");
 		texVolAux = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricAux");
-		texVolHistoryTr = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryTr");
-		texVolHistoryLum = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryLum");
-		texVolHistoryAux = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryAux");
+		texVolHistoryTr = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryTr");
+		texVolHistoryLum = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryLum");
+		texVolHistoryAux = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryAux");
 	}
 
 	// Low-resolution cubemap volumetric cloud textures for Dynamic Cubemaps inference.
@@ -171,50 +316,43 @@ void PhysicalSky::SetupVolumetricResources()
 		texVolCubeLum->CreateSRV(srv_desc);
 		texVolCubeLum->CreateUAV(uav_desc);
 
-		texVolCubeTrHistory = eastl::make_unique<Texture2D>(tex_desc, "PhysicalSky::VolumetricCubeTrHistory");
-		texVolCubeTrHistory->CreateSRV(srv_desc);
-		texVolCubeTrHistory->CreateUAV(uav_desc);
-
-		texVolCubeLumHistory = eastl::make_unique<Texture2D>(tex_desc, "PhysicalSky::VolumetricCubeLumHistory");
-		texVolCubeLumHistory->CreateSRV(srv_desc);
-		texVolCubeLumHistory->CreateUAV(uav_desc);
-
 		FLOAT trClr[4] = { 1.f, 1.f, 1.f, 1.f };
 		FLOAT lumClr[4] = { 0.f, 0.f, 0.f, 0.f };
 		context->ClearUnorderedAccessViewFloat(texVolCubeTr->uav.get(), trClr);
 		context->ClearUnorderedAccessViewFloat(texVolCubeLum->uav.get(), lumClr);
-		context->ClearUnorderedAccessViewFloat(texVolCubeTrHistory->uav.get(), trClr);
-		context->ClearUnorderedAccessViewFloat(texVolCubeLumHistory->uav.get(), lumClr);
-		volCubeHistoryValid = false;
 	}
 
-	// Shadow volume 3D texture
+	// Cloud shadow cookie and transient filter target.
 	{
-		D3D11_TEXTURE3D_DESC tex3d_desc = {
+		D3D11_TEXTURE2D_DESC tex_desc = {
 			.Width = kShadowVolW,
 			.Height = kShadowVolH,
-			.Depth = kShadowVolD,
 			.MipLevels = 1,
-			.Format = DXGI_FORMAT_R16_FLOAT,
+			.ArraySize = 1,
+			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+			.SampleDesc = { .Count = 1, .Quality = 0 },
 			.Usage = D3D11_USAGE_DEFAULT,
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
 			.CPUAccessFlags = 0,
 			.MiscFlags = 0
 		};
 		D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {
-			.Format = tex3d_desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D,
-			.Texture3D = { .MostDetailedMip = 0, .MipLevels = 1 }
+			.Format = tex_desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
 		};
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {
-			.Format = tex3d_desc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D,
-			.Texture3D = { .MipSlice = 0, .FirstWSlice = 0, .WSize = kShadowVolD }
+			.Format = tex_desc.Format,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
 		};
 
-		texShadowVolume = eastl::make_unique<Texture3D>(tex3d_desc);
+		texShadowVolume = eastl::make_unique<Texture2D>(tex_desc, "PhysicalSky::VolumetricCloudShadowCookie");
 		texShadowVolume->CreateSRV(srv_desc);
 		texShadowVolume->CreateUAV(uav_desc);
+		texShadowVolumeTemp = eastl::make_unique<Texture2D>(tex_desc, "PhysicalSky::VolumetricCloudShadowCookieTemp");
+		texShadowVolumeTemp->CreateSRV(srv_desc);
+		texShadowVolumeTemp->CreateUAV(uav_desc);
 	}
 
 	// Load textures and NDF
@@ -239,11 +377,11 @@ void PhysicalSky::CompileVolumetricShaders()
 	std::array shaderInfos = {
 		ShaderInfo{ &csVolAmbientSH, "Volumetrics.cs.hlsl", {}, "buildCloudAmbientSH" },
 		ShaderInfo{ &csVolMainView, "Volumetrics.cs.hlsl" },
-		ShaderInfo{ &csVolResample, "Volumetrics.cs.hlsl", {}, "resample" },
-		ShaderInfo{ &csVolBlur, "Volumetrics.cs.hlsl", {}, "blur" },
+		ShaderInfo{ &csVolReproject, "Volumetrics.cs.hlsl", {}, "reproject" },
+		ShaderInfo{ &csVolUpscale, "Volumetrics.cs.hlsl", {}, "upscale" },
 		ShaderInfo{ &csVolShadowVolume, "Volumetrics.cs.hlsl", {}, "renderShadowVolume" },
-		ShaderInfo{ &csVolCubemap, "Volumetrics.cs.hlsl", {}, "renderCubemap" },
-		ShaderInfo{ &csVolCubemapHistory, "Volumetrics.cs.hlsl", {}, "accumulateCubemap" }
+		ShaderInfo{ &csVolShadowFilter, "Volumetrics.cs.hlsl", {}, "filterShadowVolume" },
+		ShaderInfo{ &csVolCubemap, "Volumetrics.cs.hlsl", {}, "renderCubemap" }
 	};
 
 	for (auto& info : shaderInfos) {
@@ -257,14 +395,35 @@ void PhysicalSky::CompileVolumetricShaders()
 
 void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 {
-	if (!csVolMainView || !csVolResample || !csVolBlur || !csVolShadowVolume || !csVolCubemap || !csVolAmbientSH)
+	if (!csVolMainView || !csVolReproject || !csVolUpscale || !csVolShadowVolume || !csVolShadowFilter || !csVolCubemap || !csVolAmbientSH)
 		return;
-	if (!nubisNoiseSrv || !cloudTopLutSrv || !cloudBottomLutSrv)
+	if (!baseShapeNoiseSrv || !detailErosionNoiseSrv)
 		return;
 
 	auto state = globals::state;
 	auto context = globals::d3d::context;
 	auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+	float3 cloudLightDir = cbData.sunDir;
+	if (auto* shaderManager = globals::game::smState) {
+		if (auto* shadowSceneNode = shaderManager->shadowSceneNode[0]) {
+			auto shadowSunLight = shadowSceneNode->GetRuntimeData().sunLight;
+			if (shadowSunLight && shadowSunLight->light) {
+				if (auto* dirLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSunLight->light.get())) {
+					const auto& direction = dirLight->GetWorldDirection();
+					cloudLightDir = { -direction.x, -direction.y, -direction.z };
+					const float lengthSq = cloudLightDir.x * cloudLightDir.x + cloudLightDir.y * cloudLightDir.y + cloudLightDir.z * cloudLightDir.z;
+					if (lengthSq > 1e-6f) {
+						const float invLength = 1.0f / std::sqrt(lengthSq);
+						cloudLightDir.x *= invLength;
+						cloudLightDir.y *= invLength;
+						cloudLightDir.z *= invLength;
+					} else {
+						cloudLightDir = cbData.sunDir;
+					}
+				}
+			}
+		}
+	}
 	const uint32_t textureW = (uint32_t)cbData.texDim.x;
 	const uint32_t textureH = (uint32_t)cbData.texDim.y;
 	const uint32_t renderW = (uint32_t)cbData.frameDim.x;
@@ -274,6 +433,9 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		volHistoryWidth = textureW;
 		volHistoryHeight = textureH;
 	}
+	const float sunHistoryDot = volHistorySunDir.x * cloudLightDir.x + volHistorySunDir.y * cloudLightDir.y + volHistorySunDir.z * cloudLightDir.z;
+	if (sunHistoryDot < 0.999390827f)  // Invalidate history after a 2 degree sun change.
+		volMainHistoryValid = false;
 
 	auto& low = settings.cloudLayer.low;
 	auto& sc = settings.cloudLayer.stratocumulus;
@@ -281,42 +443,60 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	auto& lighting = settings.cloudLayer.lighting;
 	auto& phi = settings.cloudLayer.phiFwd;
 
+	// The previous defaults preserved the old engine-space frequencies after the
+	// unit conversion, which made both shape fields tens of times too small. Replace
+	// that legacy range with the kilometre-scale sampling frequencies used by the
+	// current density model. Custom values already in the new range are untouched.
+	const float maxNoiseScale = std::max(low.noiseScale.x, std::max(low.noiseScale.y, low.noiseScale.z));
+	// A short-lived generated-map default enlarged the horizontal distribution to
+	// 192 km without changing the physical layer thickness. Restore the compatible
+	// 64 km extent for configurations that received that exact transient default.
+	if (ndfSettings.generationVersion < 1u) {
+		if (std::abs(ndfSettings.worldSize - 192.0f) < 0.001f) {
+			ndfSettings.worldSize = 64.0f;
+			volMainHistoryValid = false;
+		}
+		ndfSettings.generationVersion = 1u;
+	}
+	if (maxNoiseScale > 0.001f || low.detailNoiseScale > 0.01f) {
+		low.noiseScale = float3{ 0.000045f, 0.00007f, 0.000045f };
+		low.detailNoiseScale = 0.00019f;
+		volMainHistoryValid = false;
+	}
+
 	const float timeSeconds = state->timer * 1e-3f;
 	const float windLen = std::sqrt(low.windDirection.x * low.windDirection.x + low.windDirection.y * low.windDirection.y);
 	const float2 windDir = windLen > 1e-4f ? low.windDirection / windLen : float2{ 1.f, 0.f };
-	const float2 noiseWindOffset = windDir * (low.windSpeed * timeSeconds * 0.001f / 1.428e-5f);
+	const float2 noiseWindOffset = windDir * MetersToGameUnits(low.windSpeed * timeSeconds);
+	const float highCloudBottom = std::clamp(high.bottom, 0.0f, 1.0f);
+	const float highCloudTop = std::clamp(std::max(high.top, highCloudBottom), highCloudBottom, 1.0f);
 
-	// Aerial perspective max distance (same as LUT generation)
-	float apMaxDist = 40.f / 1.428e-5f;  // 40km in game units
-
-	const bool fullResolutionMainView = settings.volCloudFullResolution;
-	uint32_t lowW = fullResolutionMainView ? renderW : (texVolLowTr ? texVolLowTr->desc.Width : std::max(1u, (textureW + kVolCloudDownsample - 1u) / kVolCloudDownsample));
-	uint32_t lowH = fullResolutionMainView ? renderH : (texVolLowTr ? texVolLowTr->desc.Height : std::max(1u, (textureH + kVolCloudDownsample - 1u) / kVolCloudDownsample));
+	constexpr bool fullResolutionMainView = false;
+	const uint32_t lowW = texVolLowTr->desc.Width;
+	const uint32_t lowH = texVolLowTr->desc.Height;
 
 	// Update StructuredBuffer
 	VolumetricCloudSB sbData = {
-		.rayMarchRange = settings.rayMarchRange / 1.428e-5f,  // km to game units
-		.shadowVolumeRange = settings.shadowVolumeRange / 1.428e-5f,
+		.rayMarchRange = KilometersToGameUnits(settings.rayMarchRange),
+		.shadowVolumeRange = KilometersToGameUnits(settings.shadowVolumeRange),
 		.cloudMaxStep = settings.cloudMaxStep,
 		.fullResolution = fullResolutionMainView ? 1u : 0u,
 		.frameDim = { cbData.texDim.x, cbData.texDim.y },
 		.rcpFrameDim = { cbData.rcpTexDim.x, cbData.rcpTexDim.y },
-		.dirlightDir = { cbData.sunDir.x, cbData.sunDir.y, cbData.sunDir.z },
+		.dirlightDir = cloudLightDir,
 		._pad1 = 0,
-		.dirlightColor = { cbData.sunlightColor.x, cbData.sunlightColor.y, cbData.sunlightColor.z },
-		._pad2 = 0,
 		.bottomZ = cbData.zBottom,
 		.planetRadius = cbData.rPlanet,
-		.atmosThickness = cbData.rAtmosphere - cbData.rPlanet,
-		.aerialPerspectiveMaxDist = apMaxDist,
-		.cloudBottom = low.bottom / 1.428e-5f,
-		.cloudThickness = low.thickness / 1.428e-5f,
-		.weatherCenter = { ndfSettings.center.x / 1.428e-5f, ndfSettings.center.y / 1.428e-5f },
-		.weatherWorldSize = ndfSettings.worldSize / 1.428e-5f,
+		.activeFrameDim = { static_cast<float>(renderW), static_cast<float>(renderH) },
+		.cloudBottom = KilometersToGameUnits(low.bottom),
+		.cloudThickness = KilometersToGameUnits(low.thickness),
+		.weatherCenter = { KilometersToGameUnits(ndfSettings.center.x), KilometersToGameUnits(ndfSettings.center.y) },
+		.weatherWorldSize = KilometersToGameUnits(ndfSettings.worldSize),
 		.highCloudEnabled = high.enabled ? 1.0f : 0.0f,
 		.noiseWindOffset = noiseWindOffset,
-		.noiseScale = low.noiseScale,
-		.detailNoiseScale = low.detailNoiseScale,
+		// Noise frequencies are authored in inverse metres; shader positions are game units.
+		.noiseScale = low.noiseScale * Util::Units::GAME_UNIT_TO_M,
+		.detailNoiseScale = PerMeterToPerGameUnit(low.detailNoiseScale),
 		.noiseOffset = low.noiseOffset,
 		.baseNoiseWindSpeed = low.baseNoiseWindSpeed,
 		.detailNoiseWindSpeed = low.detailNoiseWindSpeed,
@@ -362,8 +542,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.highCellThickStrength = high.cellThickStrength,
 		.highAsCellThickStrength = high.asCellThickStrength,
 		.highCellThickPow = high.cellThickPow,
-		.highCloudBottom = high.bottom,
-		.highCloudTop = high.top,
+		.highCloudBottom = highCloudBottom,
+		.highCloudTop = highCloudTop,
 		.highBottomCoverageScale = high.bottomCoverageScale,
 		.highHeightCurvePow = high.heightCurvePow,
 		.highDensityThreshold = high.densityThreshold,
@@ -371,8 +551,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.highCloudSoftness = high.softness,
 		.highWispScale = high.wispScale,
 		.highWispStrength = high.wispStrength,
-		.highHorizonDistanceStart = high.horizonDistanceStart,
-		.highHorizonDistanceEnd = high.horizonDistanceEnd,
+		.highHorizonDistanceStart = MetersToGameUnits(high.horizonDistanceStart),
+		.highHorizonDistanceEnd = MetersToGameUnits(high.horizonDistanceEnd),
 		.highDensityMultiplier = high.densityMultiplier,
 		.highDensitySoftAIntensity = high.densitySoftAIntensity,
 		.highDensitySoftAContrast = high.densitySoftAContrast,
@@ -391,7 +571,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.scatterSourceCurvePow = lighting.scatterSourceCurvePow,
 		.powderIntensity = lighting.powderIntensity,
 		.lightSteps = lighting.lightSteps,
-		.primaryStepMultiplier = lighting.primaryStepMultiplier,
+		._padPrimarySteps = 0u,
 		.phiFwdIntensity = phi.intensity,
 		.phiFwdDepthPow = phi.depthPow,
 		.phiFwdDepthBias = phi.depthBias,
@@ -409,10 +589,11 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.highLightAbsorption = high.lightAbsorption,
 		.highViewAbsorption = high.viewAbsorption,
 		.highCoverAbsorptionStrength = high.coverAbsorptionStrength,
-		.lowFrameDim = { static_cast<float>(lowW), static_cast<float>(lowH) },
-		.rcpLowFrameDim = { 1.0f / static_cast<float>(lowW), 1.0f / static_cast<float>(lowH) },
+		.lowFrameDim = { static_cast<float>((renderW + 3u) / 4u), static_cast<float>((renderH + 3u) / 4u) },
+		.rcpLowFrameDim = { 1.0f / static_cast<float>((renderW + 3u) / 4u), 1.0f / static_cast<float>((renderH + 3u) / 4u) },
 		.historyValid = volMainHistoryValid ? 1u : 0u,
-		.padding = { 0u, 0u, 0u },
+		.elapsedTimeSeconds = timeSeconds,
+		.padding = { 0u, 0u },
 	};
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
@@ -427,8 +608,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		texMsLut->srv.get(),                                                                                           // t2
 		texApLut->srv.get(),                                                                                           // t3
 		renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV,  // t4
-		nubisNoiseSrv.get(),                                                                                           // t5 base noise
-		nubisNoiseSrv.get(),                                                                                           // t6 detail noise
+		baseShapeNoiseSrv.get(),                                                                                       // t5 base shape noise
+		detailErosionNoiseSrv.get(),                                                                                   // t6 detail erosion noise
 		hpTextures.lowWeather,                                                                                         // t7
 		hpTextures.highWeather,                                                                                        // t8
 		texApShadow ? texApShadow->srv.get() : nullptr,                                                                // t9
@@ -466,7 +647,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		volumetricShadows.shadowView,                                                             // t20
 		directionalShadowLights,                                                                  // t21
 		terrainShadows.IsHeightMapReady() ? terrainShadows.texShadowHeight->srv.get() : nullptr,  // t22
-		nullptr,                                                                                  // t23 - shadow volume (set per pass)
+		nullptr,                                                                                  // t23 - shadow cookie (set per pass)
 	};
 
 	std::array<ID3D11SamplerState*, 3> samplers = { sampTileable.get(), sampTr.get(), sampSv.get() };
@@ -475,9 +656,11 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	context->CSSetSamplers(2, (uint)samplers.size(), samplers.data());
 
 	if (a_pass == VolumetricCloudPass::kShadowVolume) {
-		// ===== Pass 1: Shadow Volume =====
-		state->BeginPerfEvent("Volumetric Clouds: Shadow Volume");
+		// Shadow path: cookie trace followed by two 3x3 Gaussian filters.
+		state->BeginPerfEvent("Volumetric Clouds: Shadow Cookie");
 		std::array<ID3D11UnorderedAccessView*, 2> uavs = { texShadowVolume->uav.get(), nullptr };
+		ID3D11ShaderResourceView* nullPsShadowSrv = nullptr;
+		context->PSSetShaderResources(112, 1, &nullPsShadowSrv);
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetShaderResources(16, 1, &ambientShSrv);
@@ -485,28 +668,30 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(csVolShadowVolume.get(), nullptr, 0);
 
-		// Dispatch based on dominant sun direction component
-		float3 ray_px_dir = { -cbData.sunDir.x, -cbData.sunDir.y, -cbData.sunDir.z };
-		ray_px_dir.x *= kShadowVolW / (settings.shadowVolumeRange / 1.428e-5f);
-		ray_px_dir.y *= kShadowVolH / (settings.shadowVolumeRange / 1.428e-5f);
-		ray_px_dir.z *= kShadowVolD / (settings.cloudLayer.low.thickness / 1.428e-5f);
-		float dir_max_component = std::max(std::max(abs(ray_px_dir.x), abs(ray_px_dir.y)), abs(ray_px_dir.z));
-		uint32_t dispatch_size[2];
-		if (abs(ray_px_dir.x) == dir_max_component || abs(ray_px_dir.y) == dir_max_component) {
-			dispatch_size[0] = kShadowVolW;
-			dispatch_size[1] = kShadowVolD;
-		} else {
-			dispatch_size[0] = dispatch_size[1] = kShadowVolW;
-		}
-
-		globals::profiler->BeginPass("PhysicalSky::VolumetricShadowVolume");
-		context->Dispatch(dispatch_size[0], dispatch_size[1], 1);
+		globals::profiler->BeginPass("PhysicalSky::VolumetricShadowTrace");
+		context->Dispatch((kShadowVolW + 7u) >> 3, (kShadowVolH + 7u) >> 3, 1);
 		globals::profiler->EndPass();
+
+		ID3D11UnorderedAccessView* nullUav = nullptr;
+		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+		ID3D11ShaderResourceView* filterInput = texShadowVolume->srv.get();
+		context->CSSetShaderResources(35, 1, &filterInput);
+		uavs[0] = texShadowVolumeTemp->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, uavs.data(), nullptr);
+		context->CSSetShader(csVolShadowFilter.get(), nullptr, 0);
+		context->Dispatch((kShadowVolW + 7u) >> 3, (kShadowVolH + 7u) >> 3, 1);
+
+		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+		filterInput = texShadowVolumeTemp->srv.get();
+		context->CSSetShaderResources(35, 1, &filterInput);
+		uavs[0] = texShadowVolume->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, uavs.data(), nullptr);
+		context->Dispatch((kShadowVolW + 7u) >> 3, (kShadowVolH + 7u) >> 3, 1);
 		state->EndPerfEvent();
 	}
 
 	if (a_pass == VolumetricCloudPass::kMainViewAndCubemap) {
-		// ===== Pass 2: Nubis Main View Ray March =====
+		// Pass 1: quarter-resolution checkerboard ray trace.
 		state->BeginPerfEvent("Volumetric Clouds: Main View");
 		std::array<ID3D11UnorderedAccessView*, 3> uavs = fullResolutionMainView ?
 		                                                     std::array<ID3D11UnorderedAccessView*, 3>{ texVolUpscaleTr->uav.get(), texVolUpscaleLum->uav.get(), texVolUpscaleAux->uav.get() } :
@@ -524,72 +709,45 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		globals::profiler->EndPass();
 		state->EndPerfEvent();
 
-		if (!fullResolutionMainView) {
-			// ===== Pass 3: Nubis Resample/Upscale =====
-			state->BeginPerfEvent("Volumetric Clouds: Resample");
-			{
-				ID3D11UnorderedAccessView* nullUavs[3] = {};
-				context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
-
-				std::array<ID3D11ShaderResourceView*, 9> passSrvs = {
-					texVolHistoryTr->srv.get(),
-					texVolHistoryLum->srv.get(),
-					texVolHistoryAux->srv.get(),
-					texVolLowTr->srv.get(),
-					texVolLowLum->srv.get(),
-					texVolLowAux->srv.get(),
-					nullptr,
-					nullptr,
-					nullptr,
-				};
-				uavs = { texVolUpscaleTr->uav.get(), texVolUpscaleLum->uav.get(), texVolUpscaleAux->uav.get() };
-				context->CSSetShaderResources(26, (uint)passSrvs.size(), passSrvs.data());
-				context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-				context->CSSetShader(csVolResample.get(), nullptr, 0);
-				globals::profiler->BeginPass("PhysicalSky::VolumetricResample");
-				context->Dispatch((renderW + 7u) >> 3, (renderH + 7u) >> 3, 1);
-				globals::profiler->EndPass();
-			}
-			state->EndPerfEvent();
-		}
-
-		// ===== Pass 4: Nubis Blur =====
-		if (settings.volCloudPostBlur) {
-			state->BeginPerfEvent("Volumetric Clouds: Blur");
-			{
-				ID3D11UnorderedAccessView* nullUavs[3] = {};
-				ID3D11ShaderResourceView* nullSrvs[9] = {};
-				context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
-				context->CSSetShaderResources(26, 9, nullSrvs);
-
-				std::array<ID3D11ShaderResourceView*, 9> passSrvs = {
-					nullptr,
-					nullptr,
-					nullptr,
-					nullptr,
-					nullptr,
-					nullptr,
-					texVolUpscaleTr->srv.get(),
-					texVolUpscaleLum->srv.get(),
-					texVolUpscaleAux->srv.get(),
-				};
-				uavs = { texVolTr->uav.get(), texVolLum->uav.get(), texVolAux->uav.get() };
-				context->CSSetShaderResources(26, (uint)passSrvs.size(), passSrvs.data());
-				context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-				context->CSSetShader(csVolBlur.get(), nullptr, 0);
-				globals::profiler->BeginPass("PhysicalSky::VolumetricBlur");
-				context->Dispatch((renderW + 7u) >> 3, (renderH + 7u) >> 3, 1);
-				globals::profiler->EndPass();
-			}
-			state->EndPerfEvent();
-		} else {
+		// Pass 2: quarter-resolution trace -> half-resolution temporal reprojection.
+		{
 			ID3D11UnorderedAccessView* nullUavs[3] = {};
 			context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
-			context->CopyResource(texVolTr->resource.get(), texVolUpscaleTr->resource.get());
-			context->CopyResource(texVolLum->resource.get(), texVolUpscaleLum->resource.get());
-			context->CopyResource(texVolAux->resource.get(), texVolUpscaleAux->resource.get());
+
+			std::array<ID3D11ShaderResourceView*, 9> passSrvs = {
+				texVolHistoryTr->srv.get(), texVolHistoryLum->srv.get(), texVolHistoryAux->srv.get(),
+				texVolLowTr->srv.get(), texVolLowLum->srv.get(), texVolLowAux->srv.get(),
+				nullptr, nullptr, nullptr
+			};
+			uavs = { texVolUpscaleTr->uav.get(), texVolUpscaleLum->uav.get(), texVolUpscaleAux->uav.get() };
+			context->CSSetShaderResources(26, (uint)passSrvs.size(), passSrvs.data());
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			context->CSSetShader(csVolReproject.get(), nullptr, 0);
+			globals::profiler->BeginPass("PhysicalSky::VolumetricReproject");
+			context->Dispatch((texVolUpscaleTr->desc.Width + 7u) >> 3, (texVolUpscaleTr->desc.Height + 7u) >> 3, 1);
+			globals::profiler->EndPass();
 		}
 
+		// Pass 3: half-resolution accumulated result -> full-resolution bilateral upscale.
+		{
+			ID3D11UnorderedAccessView* nullUavs[3] = {};
+			ID3D11ShaderResourceView* nullSrvs[9] = {};
+			context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
+			context->CSSetShaderResources(26, 9, nullSrvs);
+			std::array<ID3D11ShaderResourceView*, 9> passSrvs = {
+				nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+				texVolUpscaleTr->srv.get(), texVolUpscaleLum->srv.get(), texVolUpscaleAux->srv.get()
+			};
+			uavs = { texVolTr->uav.get(), texVolLum->uav.get(), texVolAux->uav.get() };
+			context->CSSetShaderResources(26, (uint)passSrvs.size(), passSrvs.data());
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			context->CSSetShader(csVolUpscale.get(), nullptr, 0);
+			globals::profiler->BeginPass("PhysicalSky::VolumetricUpscale");
+			context->Dispatch((renderW + 7u) >> 3, (renderH + 7u) >> 3, 1);
+			globals::profiler->EndPass();
+		}
+
+		// Ping-pong is unnecessary because the previous history is consumed before these copies.
 		{
 			ID3D11UnorderedAccessView* nullUavs[3] = {};
 			ID3D11ShaderResourceView* nullSrvs[9] = {};
@@ -599,6 +757,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			context->CopyResource(texVolHistoryLum->resource.get(), texVolUpscaleLum->resource.get());
 			context->CopyResource(texVolHistoryAux->resource.get(), texVolUpscaleAux->resource.get());
 			volMainHistoryValid = true;
+			volHistorySunDir = cloudLightDir;
 		}
 
 		// ===== Cubemap Ray March =====
@@ -617,41 +776,6 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			context->Dispatch((kVolCubeSize + 7u) >> 3, (kVolCubeSize + 7u) >> 3, 6);
 			globals::profiler->EndPass();
 			state->EndPerfEvent();
-
-			if (csVolCubemapHistory && volCubeHistoryCb && texVolCubeTrHistory && texVolCubeLumHistory) {
-				state->BeginPerfEvent("Volumetric Clouds: Cubemap History");
-
-				const VolumetricCloudCubeHistoryCB historyCbData = {
-					.historyWeight = volCubeHistoryValid ? 0.875f : 0.0f,
-					._pad0 = { 0.0f, 0.0f, 0.0f }
-				};
-				volCubeHistoryCb->Update(historyCbData);
-
-				std::array<ID3D11ShaderResourceView*, 2> historySrvs = {
-					texVolCubeTrHistory->srv.get(),
-					texVolCubeLumHistory->srv.get()
-				};
-				auto* historyCb = volCubeHistoryCb->CB();
-
-				context->CSSetShaderResources(24, (uint)historySrvs.size(), historySrvs.data());
-				context->CSSetConstantBuffers(1, 1, &historyCb);
-				context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-				context->CSSetShader(csVolCubemapHistory.get(), nullptr, 0);
-
-				globals::profiler->BeginPass("PhysicalSky::VolumetricCubemapHistory");
-				context->Dispatch((kVolCubeSize + 7u) >> 3, (kVolCubeSize + 7u) >> 3, 6);
-				globals::profiler->EndPass();
-
-				ID3D11UnorderedAccessView* nullUavs[2] = {};
-				ID3D11ShaderResourceView* nullHistorySrvs[2] = {};
-				context->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
-				context->CSSetShaderResources(24, 2, nullHistorySrvs);
-				context->CopyResource(texVolCubeTrHistory->resource.get(), texVolCubeTr->resource.get());
-				context->CopyResource(texVolCubeLumHistory->resource.get(), texVolCubeLum->resource.get());
-				volCubeHistoryValid = true;
-
-				state->EndPerfEvent();
-			}
 		}
 	}
 
@@ -666,6 +790,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		context->CSSetShaderResources(0, 17, nullSrvs);
 		context->CSSetShaderResources(20, 4, nullShadowSrvs);
 		context->CSSetShaderResources(24, 11, nullHistorySrvs);
+		ID3D11ShaderResourceView* nullFilterSrv = nullptr;
+		context->CSSetShaderResources(35, 1, &nullFilterSrv);
 		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 		context->CSSetConstantBuffers(1, 1, nullCb);
 		context->CSSetSamplers(2, 3, nullSamplers);

@@ -46,9 +46,12 @@ struct HpTextureOverrideSettings
 
 struct HpGeneratedCloudMapSettings
 {
+	uint32_t generationVersion = 0;
 	uint32_t weatherDim = 512;
 	uint32_t profileWidth = 256;
 	uint32_t profileHeight = 64;
+	// Horizontal weather-map extent in kilometres. It is independent of the
+	// vertical shared cloud layer, but their default feature scales are paired.
 	float worldSize = 64.f;
 	float2 center = { 0.f, 0.f };
 	float lowCoverage = 0.62f;
@@ -63,8 +66,11 @@ using NdfSettings = HpGeneratedCloudMapSettings;
 
 struct HpLowCloudSettings
 {
+	// Kilometres. This is the shared physical shell used by low and high clouds.
 	float bottom = 0.5f;
 	float thickness = 2.5f;
+	// Inverse metres. The base field is intentionally kilometre-scale; the profile
+	// texture, rather than high-frequency 3D noise, defines the vertical silhouette.
 	float3 noiseScale = { 0.000045f, 0.00007f, 0.000045f };
 	float3 noiseOffset = { 0.f, 0.f, 0.f };
 	float detailNoiseScale = 0.00019f;
@@ -104,6 +110,7 @@ struct HpStratocumulusSettings
 {
 	float2 cellScale = { 6.f, 6.f };
 	float worleyStrength = 0.65f;
+	// Fraction of the shared physical shell occupied by stratocumulus profiles.
 	float heightScale = 0.28f;
 	float detailStrength = 0.32f;
 	float cellThickPow = 1.7f;
@@ -123,6 +130,7 @@ struct HpHighCloudSettings
 	float cellThickStrength = 0.75f;
 	float asCellThickStrength = 0.25f;
 	float cellThickPow = 1.6f;
+	// Normalized positions inside the shared physical shell, not kilometres.
 	float bottom = 0.58f;
 	float top = 0.92f;
 	float bottomCoverageScale = 0.35f;
@@ -167,7 +175,6 @@ struct HpLightingSettings
 	float scatterSourceCurvePow = 1.f;
 	float powderIntensity = 0.35f;
 	uint32_t lightSteps = 6;
-	uint32_t primaryStepMultiplier = 4;
 };
 
 struct HpPhiFwdSettings
@@ -226,5 +233,10 @@ private:
 	uint32_t generatedWeatherDim = 0;
 	uint32_t generatedProfileWidth = 0;
 	uint32_t generatedProfileHeight = 0;
+	float generatedLowCoverage = -1.0f;
+	float generatedLowContrast = -1.0f;
+	float generatedStratocumulus = -1.0f;
+	float generatedHighCoverage = -1.0f;
+	float generatedHighContrast = -1.0f;
 	void GenerateDefaultTextures(const NdfSettings& ndfSettings);
 };
