@@ -10,7 +10,7 @@
 #define CLOUD_SHADOW_REGISTER t4
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Random.hlsli"
-Texture3D<float> TexShadowVolume : register(t5);
+Texture2D<float4> TexShadowVolume : register(t5);
 #include "PhysicalSky/Common.hlsli"
 
 #if defined(HALF_RES)
@@ -100,6 +100,7 @@ float SampleShadow(float3 posWorldRel)
 	uv *= RES_MULT;
 
 	const float depth = TexDepth.SampleLevel(SampTr, uv, 0);
+	uv *= FrameBuffer::DynamicResolutionParams2.xy;
 	float4 posWorld = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
 	posWorld = mul(FrameBuffer::CameraViewProjInverse, posWorld);
 	posWorld.xyz /= posWorld.w;

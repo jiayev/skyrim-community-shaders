@@ -34,6 +34,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HpGeneratedCloudMapSettings,
+	generationVersion,
 	weatherDim,
 	profileWidth,
 	profileHeight,
@@ -148,8 +149,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	scatterSourceODScale,
 	scatterSourceCurvePow,
 	powderIntensity,
-	lightSteps,
-	primaryStepMultiplier)
+	lightSteps)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HpPhiFwdSettings,
@@ -212,8 +212,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	rayMarchRange,
 	shadowVolumeRange,
 	cloudMaxStep,
-	volCloudFullResolution,
-	volCloudPostBlur,
 	cloudLayer)
 
 namespace
@@ -630,83 +628,89 @@ void PhysicalSky::SettingsVolumetricClouds()
 	ImGui::SeparatorText(T(TKEY("performance"), "Performance"));
 	{
 		ImGui::SliderFloat(T(TKEY("ray_march_range"), "Ray March Range"), &settings.rayMarchRange, 1.f, 64.f, "%.1f km");
-		ImGui::SliderFloat(T(TKEY("shadow_volume_range"), "Shadow Volume Range"), &settings.shadowVolumeRange, 1.f, 16.f, "%.1f km");
+		ImGui::SliderFloat(T(TKEY("shadow_volume_range"), "Shadow Cookie Range"), &settings.shadowVolumeRange, 1.f, 16.f, "%.1f km");
 		uint32_t minStep = 1, maxStep = 200;
 		ImGui::SliderScalar(T(TKEY("cloud_max_steps"), "Cloud Max Steps"), ImGuiDataType_U32, &settings.cloudMaxStep, &minStep, &maxStep);
 		uint32_t minLightStep = 1, maxLightStep = 16;
-		ImGui::SliderScalar("Light Steps", ImGuiDataType_U32, &lighting.lightSteps, &minLightStep, &maxLightStep);
-		ImGui::Checkbox(T(TKEY("cloud_full_resolution"), "Full Resolution Main View"), &settings.volCloudFullResolution);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("cloud_full_resolution_tooltip"), "Ray march at full resolution and skip the temporal resample pass. Much more expensive, useful for isolating resample noise."));
-		ImGui::Checkbox(T(TKEY("cloud_post_blur"), "Post Blur"), &settings.volCloudPostBlur);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("cloud_post_blur_tooltip"), "Apply the final light blur after the main view pass. Disable for sharper debugging."));
+		ImGui::SliderScalar(T(TKEY("light_steps"), "Light Steps"), ImGuiDataType_U32, &lighting.lightSteps, &minLightStep, &maxLightStep);
 	}
 
 	ImGui::SeparatorText(T(TKEY("placement"), "Placement"));
 	{
-		ImGui::SliderFloat(T(TKEY("layer_bottom"), "Layer Bottom"), &low.bottom, 0.f, 8.f, "%.2f km");
-		ImGui::SliderFloat(T(TKEY("layer_thickness"), "Layer Thickness"), &low.thickness, 0.05f, 6.f, "%.2f km");
+		ImGui::SliderFloat(T(TKEY("cloud_bottom_altitude"), "Bottom Altitude"), &low.bottom, 0.f, 8.f, "%.2f km");
+		ImGui::SliderFloat(T(TKEY("cloud_altitude_range"), "Altitude Range"), &low.thickness, 0.05f, 6.f, "%.2f km");
 	}
 
 	ImGui::SeparatorText(T(TKEY("composition"), "Low Clouds"));
 	{
-		ImGui::SliderFloat3("Noise Scale", &low.noiseScale.x, 0.000005f, 0.0002f, "%.6f");
-		ImGui::SliderFloat("Detail Noise Scale", &low.detailNoiseScale, 0.00001f, 0.001f, "%.6f");
-		ImGui::SliderFloat2("Wind Direction", &low.windDirection.x, -1.f, 1.f, "%.2f");
-		ImGui::SliderFloat("Wind Speed", &low.windSpeed, 0.f, 80.f, "%.1f m/s");
-		ImGui::SliderFloat("Density Threshold", &low.densityThreshold, 0.f, 0.5f, "%.3f");
-		ImGui::SliderFloat("Density Multiplier", &low.densityMultiplier, 0.f, 1.f, "%.3f");
-		ImGui::SliderFloat("Cu Density", &low.densityMultiplierCu, 0.f, 4.f, "%.2f");
-		ImGui::SliderFloat("Tcu Density", &low.densityMultiplierTcu, 0.f, 4.f, "%.2f");
-		ImGui::SliderFloat("Cb Density", &low.densityMultiplierCb, 0.f, 4.f, "%.2f");
-		ImGui::SliderFloat("Cover Top Strength", &low.coverTopStrength, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat("Cover Top Max", &low.coverTopMax, 1.f, 4.f, "%.2f");
-		ImGui::SliderFloat("Bottom Smooth Height", &low.bottomSmoothHeight, 0.f, 0.5f, "%.3f");
+		bool noiseSettingsChanged = false;
+		noiseSettingsChanged |= ImGui::SliderFloat3(T(TKEY("base_noise_frequency"), "Base Noise Frequency"), &low.noiseScale.x, 0.00001f, 0.001f, "%.6f 1/m", ImGuiSliderFlags_Logarithmic);
+		noiseSettingsChanged |= ImGui::SliderFloat(T(TKEY("detail_noise_frequency"), "Detail Noise Frequency"), &low.detailNoiseScale, 0.00002f, 0.01f, "%.6f 1/m", ImGuiSliderFlags_Logarithmic);
+		noiseSettingsChanged |= ImGui::SliderFloat(T(TKEY("billowy_low"), "Billowy Low"), &low.billowyLow, 0.f, 2.f, "%.2f");
+		noiseSettingsChanged |= ImGui::SliderFloat(T(TKEY("billowy_high"), "Billowy High"), &low.billowyHigh, 0.f, 2.f, "%.2f");
+		noiseSettingsChanged |= ImGui::SliderFloat(T(TKEY("wispy_low"), "Wispy Low"), &low.wispyLow, 0.f, 2.f, "%.2f");
+		noiseSettingsChanged |= ImGui::SliderFloat(T(TKEY("wispy_high"), "Wispy High"), &low.wispyHigh, 0.f, 2.f, "%.2f");
+		noiseSettingsChanged |= ImGui::SliderFloat(T(TKEY("cu_detail_strength"), "Cu Detail Strength"), &low.detailStrengthCu, 0.f, 2.f, "%.2f");
+		noiseSettingsChanged |= ImGui::SliderFloat(T(TKEY("tcu_detail_strength"), "Tcu Detail Strength"), &low.detailStrengthTcu, 0.f, 2.f, "%.2f");
+		noiseSettingsChanged |= ImGui::SliderFloat(T(TKEY("cb_detail_strength"), "Cb Detail Strength"), &low.detailStrengthCb, 0.f, 2.f, "%.2f");
+		if (noiseSettingsChanged)
+			volMainHistoryValid = false;
+		ImGui::SliderFloat2(T(TKEY("wind_direction"), "Wind Direction"), &low.windDirection.x, -1.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("wind_speed"), "Wind Speed"), &low.windSpeed, 0.f, 80.f, "%.1f m/s");
+		ImGui::SliderFloat(T(TKEY("density_threshold"), "Density Threshold"), &low.densityThreshold, 0.f, 0.5f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("density_multiplier"), "Density Multiplier"), &low.densityMultiplier, 0.f, 1.f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cu_density"), "Cu Density"), &low.densityMultiplierCu, 0.f, 4.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("tcu_density"), "Tcu Density"), &low.densityMultiplierTcu, 0.f, 4.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("cb_density"), "Cb Density"), &low.densityMultiplierCb, 0.f, 4.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("cover_top_strength"), "Cover Top Strength"), &low.coverTopStrength, 0.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("cover_top_max"), "Cover Top Max"), &low.coverTopMax, 1.f, 4.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("bottom_smooth_height"), "Bottom Smooth Height"), &low.bottomSmoothHeight, 0.f, 0.5f, "%.3f");
 	}
 
-	ImGui::SeparatorText("Stratocumulus");
+	ImGui::SeparatorText(T(TKEY("stratocumulus"), "Stratocumulus"));
 	{
-		ImGui::SliderFloat2("Sc Cell Scale", &sc.cellScale.x, 0.1f, 32.f, "%.2f");
-		ImGui::SliderFloat("Sc Strength", &sc.worleyStrength, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat("Sc Height Scale", &sc.heightScale, 0.01f, 1.f, "%.2f");
-		ImGui::SliderFloat("Sc Detail Strength", &sc.detailStrength, 0.f, 2.f, "%.2f");
-		ImGui::SliderFloat("Sc Cell Thickness", &sc.cellThickStrength, 0.f, 1.f, "%.2f");
+		ImGui::SliderFloat2(T(TKEY("sc_cell_scale"), "Sc Cell Scale"), &sc.cellScale.x, 0.1f, 32.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("sc_strength"), "Sc Strength"), &sc.worleyStrength, 0.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("sc_height_scale"), "Sc Height Scale"), &sc.heightScale, 0.01f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("sc_detail_strength"), "Sc Detail Strength"), &sc.detailStrength, 0.f, 2.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("sc_cell_thickness"), "Sc Cell Thickness"), &sc.cellThickStrength, 0.f, 1.f, "%.2f");
 	}
 
-	ImGui::SeparatorText("High Clouds");
+	ImGui::SeparatorText(T(TKEY("high_clouds"), "High Clouds"));
 	{
-		ImGui::Checkbox("Enable High Clouds", &high.enabled);
-		ImGui::SliderFloat("High Bottom", &high.bottom, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat("High Top", &high.top, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat("High Density", &high.densityMultiplier, 0.f, 2.f, "%.2f");
-		ImGui::SliderFloat("High Softness", &high.softness, 0.001f, 0.25f, "%.3f");
-		ImGui::SliderFloat2("High Cell Scale", &high.cellScale.x, 0.1f, 32.f, "%.2f");
-		ImGui::SliderFloat("High Wisp Strength", &high.wispStrength, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat("High Sky Blend", &high.skyBlendStrength, 0.f, 1.f, "%.2f");
+		high.bottom = std::clamp(high.bottom, 0.0f, 1.0f);
+		high.top = std::clamp(std::max(high.top, high.bottom), high.bottom, 1.0f);
+		ImGui::Checkbox(T(TKEY("enable_high_clouds"), "Enable High Clouds"), &high.enabled);
+		ImGui::SliderFloat(T(TKEY("high_bottom_layer_fraction"), "High Bottom (Layer Fraction)"), &high.bottom, 0.f, high.top, "%.2f");
+		ImGui::SliderFloat(T(TKEY("high_top_layer_fraction"), "High Top (Layer Fraction)"), &high.top, high.bottom, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("high_density"), "High Density"), &high.densityMultiplier, 0.f, 2.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("high_softness"), "High Softness"), &high.softness, 0.001f, 0.25f, "%.3f");
+		ImGui::SliderFloat2(T(TKEY("high_cell_scale"), "High Cell Scale"), &high.cellScale.x, 0.1f, 32.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("high_wisp_strength"), "High Wisp Strength"), &high.wispStrength, 0.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("high_sky_blend"), "High Sky Blend"), &high.skyBlendStrength, 0.f, 1.f, "%.2f");
 	}
 
 	ImGui::SeparatorText(T(TKEY("lighting"), "Lighting"));
 	{
-		ImGui::ColorEdit3("Scatter Tint", &lighting.scatterTint.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-		ImGui::SliderFloat("Forward Eccentricity", &lighting.forwardEccentricity, 0.f, 0.95f, "%.2f");
-		ImGui::SliderFloat("Backward Eccentricity", &lighting.backwardEccentricity, 0.f, 0.8f, "%.2f");
-		ImGui::SliderFloat("Ambient Top", &lighting.ambientTopMultiplier, 0.f, 5.f, "%.2f");
-		ImGui::SliderFloat("Ambient Bottom", &lighting.ambientBottomMultiplier, 0.f, 5.f, "%.2f");
-		ImGui::SliderFloat("MS Attenuation", &lighting.msAttenuation, 0.01f, 1.f, "%.2f");
-		ImGui::SliderFloat("MS Contribution", &lighting.msContribution, 0.01f, 1.f, "%.2f");
-		ImGui::SliderFloat("MS Eccentricity", &lighting.msEccentricity, 0.01f, 1.f, "%.2f");
-		ImGui::SliderFloat("Upward AO", &lighting.aoUpwardScale, 0.f, 4.f, "%.2f");
+		ImGui::ColorEdit3(T(TKEY("scatter_tint"), "Scatter Tint"), &lighting.scatterTint.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::SliderFloat(T(TKEY("forward_eccentricity"), "Forward Eccentricity"), &lighting.forwardEccentricity, 0.f, 0.95f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("backward_eccentricity"), "Backward Eccentricity"), &lighting.backwardEccentricity, 0.f, 0.8f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ambient_top"), "Ambient Top"), &lighting.ambientTopMultiplier, 0.f, 5.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ambient_bottom"), "Ambient Bottom"), &lighting.ambientBottomMultiplier, 0.f, 5.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ms_attenuation"), "MS Attenuation"), &lighting.msAttenuation, 0.01f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ms_contribution"), "MS Contribution"), &lighting.msContribution, 0.01f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ms_eccentricity"), "MS Eccentricity"), &lighting.msEccentricity, 0.01f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("upward_ao"), "Upward AO"), &lighting.aoUpwardScale, 0.f, 4.f, "%.2f");
 	}
 
-	ImGui::SeparatorText("PhiFwd");
+	ImGui::SeparatorText(T(TKEY("phi_fwd"), "PhiFwd"));
 	{
-		ImGui::SliderFloat("PhiFwd Intensity", &phi.intensity, 0.f, 4.f, "%.2f");
-		ImGui::SliderFloat("PhiFwd Depth Pow", &phi.depthPow, 0.f, 4.f, "%.2f");
-		ImGui::SliderFloat("PhiFwd Depth Bias", &phi.depthBias, -1.f, 1.f, "%.2f");
-		ImGui::SliderFloat("PhiFwd Boundary", &phi.boundaryConfidence, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat("PhiFwd MS Build", &phi.msBuildScale, 0.f, 8.f, "%.2f");
-		ImGui::SliderFloat("PhiFwd Compress", &phi.compress, 0.f, 4.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("phi_fwd_intensity"), "PhiFwd Intensity"), &phi.intensity, 0.f, 4.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("phi_fwd_depth_pow"), "PhiFwd Depth Pow"), &phi.depthPow, 0.f, 4.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("phi_fwd_depth_bias"), "PhiFwd Depth Bias"), &phi.depthBias, -1.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("phi_fwd_boundary"), "PhiFwd Boundary"), &phi.boundaryConfidence, 0.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("phi_fwd_ms_build"), "PhiFwd MS Build"), &phi.msBuildScale, 0.f, 8.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("phi_fwd_compress"), "PhiFwd Compress"), &phi.compress, 0.f, 4.f, "%.2f");
 	}
 
 	ImGui::SeparatorText(T(TKEY("cloud_map"), "Cloud Map"));
@@ -714,7 +718,7 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ndfManager.DrawNdfSettings(ndfSettings, ndfTexManager);
 		if (ImGui::Button(T(TKEY("reload_cloud_textures"), "Reload Cloud Textures"), { -FLT_MIN, 0 }))
 			LoadCloudTextures();
-		if (cloudTopLutSrv && cloudBottomLutSrv && nubisNoiseSrv)
+		if (baseShapeNoiseSrv && detailErosionNoiseSrv)
 			ImGui::TextColored({ 0, 1, 0, 1 }, "%s", T(TKEY("cloud_textures_loaded"), "Cloud Textures: Loaded"));
 		else
 			ImGui::TextColored({ 1, 0, 0, 1 }, "%s", T(TKEY("cloud_textures_missing"), "Cloud Textures: Missing"));
@@ -910,10 +914,10 @@ bool PhysicalSky::ShadersOK()
 	bool baseShadersOk = csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum && csShadowAccumHalfRes &&
 	                     texTrLut && texSvLut && texApLut && texApShadow;
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
-	                           (csVolMainView && csVolResample && csVolBlur && csVolShadowVolume && csVolCubemap && csVolCubemapHistory && volCubeHistoryCb &&
+	                           (csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolShadowFilter && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
 								   texVolTr && texVolLum && texVolAux && texVolLowTr && texVolLowLum && texVolLowAux && texVolUpscaleTr && texVolUpscaleLum && texVolUpscaleAux &&
-								   texVolHistoryTr && texVolHistoryLum && texVolHistoryAux && texVolCubeTr && texVolCubeLum && texVolCubeTrHistory && texVolCubeLumHistory &&
-								   texShadowVolume && nubisNoiseSrv && ndfManager.texLowWeather && ndfManager.texHighWeather && ndfManager.texProfile);
+								   texVolHistoryTr && texVolHistoryLum && texVolHistoryAux && texVolCubeTr && texVolCubeLum &&
+								   texShadowVolume && texShadowVolumeTemp && baseShapeNoiseSrv && detailErosionNoiseSrv && ndfManager.texLowWeather && ndfManager.texHighWeather && ndfManager.texProfile);
 	return baseShadersOk && volumetricShadersOk;
 }
 
@@ -1061,7 +1065,7 @@ void PhysicalSky::ReflectionsPrepass()
 void PhysicalSky::Prepass()
 {
 	if (cbData.enabled) {
-		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolResample && csVolBlur && csVolShadowVolume && csVolCubemap && csVolCubemapHistory && csVolAmbientSH && volCubeHistoryCb && texVolCloudAmbientSH;
+		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolShadowFilter && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH;
 
 		if (renderVolumetricClouds) {
 			ndfManager.UpdateNdf(ndfSettings);
@@ -1104,13 +1108,10 @@ void PhysicalSky::Prepass()
 				context->ClearUnorderedAccessViewFloat(texVolCubeTr->uav.get(), trClr);
 			if (texVolCubeLum)
 				context->ClearUnorderedAccessViewFloat(texVolCubeLum->uav.get(), lumClr);
-			if (texVolCubeTrHistory)
-				context->ClearUnorderedAccessViewFloat(texVolCubeTrHistory->uav.get(), trClr);
-			if (texVolCubeLumHistory)
-				context->ClearUnorderedAccessViewFloat(texVolCubeLumHistory->uav.get(), lumClr);
 			if (texShadowVolume)
 				context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), lumClr);
-			volCubeHistoryValid = false;
+			if (texShadowVolumeTemp)
+				context->ClearUnorderedAccessViewFloat(texShadowVolumeTemp->uav.get(), lumClr);
 			volMainHistoryValid = false;
 			volHistoryWidth = 0;
 			volHistoryHeight = 0;
@@ -1121,7 +1122,7 @@ void PhysicalSky::Prepass()
 		ID3D11ShaderResourceView* msSrv = texMsLut ? texMsLut->srv.get() : nullptr;
 		globals::d3d::context->PSSetShaderResources(113, 1, &msSrv);
 
-		// Bind volumetric cloud results and shadow volume for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
+		// Bind volumetric cloud results and shadow cookie for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
 		if (texVolTr && texVolLum) {
 			std::array<ID3D11ShaderResourceView*, 3> volSrvs = { texVolTr->srv.get(), texVolLum->srv.get(), texShadowVolume ? texShadowVolume->srv.get() : nullptr };
 			globals::d3d::context->PSSetShaderResources(110, (uint)volSrvs.size(), volSrvs.data());
